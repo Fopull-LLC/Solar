@@ -1,0 +1,29 @@
+# Publishes the project as solar-demo.zip at a fixed URL on every push to main:
+#   https://github.com/Fopull-LLC/Solar/releases/download/demo/solar-demo.zip
+# The zip unpacks to a Solar/ folder that the Floptle Hub opens with
+# "Add existing project".
+name: demo zip
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: archive
+        run: git archive --format=zip --prefix=Solar/ -o solar-demo.zip HEAD
+      - name: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view demo >/dev/null 2>&1 || \
+            gh release create demo --title "Solar demo (current)" \
+              --notes "The Solar project as it is on main. Unzip, then add the Solar folder to the Floptle Hub with Add existing project."
+          gh release upload demo solar-demo.zip --clobber
