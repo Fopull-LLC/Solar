@@ -1,0 +1,23 @@
+# Terrain fields are streaming data, not source: bodies carry a genspec in the
+# scene and regenerate deterministically on approach. A single field can exceed
+# GitHub's 100 MB limit.
+*.cfield
+*.tfield
+terrain/*.meta
+
+# Written by the engine while the game runs.
+/save/
+/saves/
+/replays/
+.floptle/autosave/
+
+# The package registry records absolute paths on the machine that linked them.
+/packages.ron
+
+# Helper-script bytecode.
+__pycache__/
+*.pyc
+
+# Editor scratch.
+*.swp
+.DS_Store
