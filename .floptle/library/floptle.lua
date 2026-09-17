@@ -1,5 +1,5 @@
 ---@meta
---- Floptle engine scripting API (ADR-0003). Generated — do not edit.
+--- Floptle engine scripting API. Generated — do not edit.
 
 ---@class Node The node's transform, synced to/from the engine each frame.
 ---@field x number World X position.
@@ -252,7 +252,7 @@
 ---
 ---`cell` is an index into the node's Material spritesheet. To clear a square,
 ---pass `-1` (any negative works, as in Tiled, Godot and LDtk), `nil`, or the
----`EMPTY_TILE` global — the three are the same value (`floptle/0083`).
+---`EMPTY_TILE` global — the three are the same value.
 ---@class TilemapHandle
 ---@field EMPTY number The cell value meaning "no tile here". Same as the EMPTY_TILE global; -1 and nil mean it too.
 ---@field set fun(self: TilemapHandle, x: number, y: number, cell: number|nil, xform: table|nil) Set one square, 0-based from the TOP-LEFT. Outside the grid is a no-op, not a wrap. A negative or nil cell empties the square. The optional 4th argument turns it: { rot = 0|90|180|270, flipX = bool, flipY = bool }.
@@ -415,6 +415,21 @@ draw = {}
 ---@param r number 0..1 @param g number 0..1 @param b number 0..1
 ---@param a? number alpha, default 1
 function draw.line(x1, y1, z1, x2, y2, z2, r, g, b, a) end
+
+---One textured quad IN the world for this frame: depth-tested, alpha-blended,
+---both sides. Corners run around the quad; corner 0 is at (u0,v0), corner 2 at
+---(u1,v1); the UV rectangle defaults to the whole image. A ribbon is one quad
+---per segment with u walking along it.
+---e.g. `draw.quad("textures/streak.png", a.x,a.y,a.z, b.x,b.y,b.z, c.x,c.y,c.z, d.x,d.y,d.z, 1,1,1, 0.8, 0, 0, 0.5, 1)`
+---@param texture string Project-relative image path.
+---@param x0 number @param y0 number @param z0 number
+---@param x1 number @param y1 number @param z1 number
+---@param x2 number @param y2 number @param z2 number
+---@param x3 number @param y3 number @param z3 number
+---@param r number 0..1 @param g number 0..1 @param b number 0..1
+---@param a? number alpha, default 1
+---@param u0? number @param v0? number @param u1? number @param v1? number UV rectangle, default 0,0,1,1
+function draw.quad(texture, x0, y0, z0, x1, y1, z1, x2, y2, z2, x3, y3, z3, r, g, b, a, u0, v0, u1, v1) end
 
 ---Spawn a PREFAB instance (make one by dragging a node into the Assets panel).
 ---`"bullet"` finds `prefabs/bullet.prefab.ron`; subfolder names and full
@@ -1198,7 +1213,7 @@ function raycast(ox, oy, oz, dx, dy, dz, max, ignore) end
 ---@return table[]
 function findScripts(kind) end
 
----The player's accessibility settings (`floptle/0079`). A game's options menu
+---The player's accessibility settings. A game's options menu
 ---drives these; the engine honours the parts it owns (UI text sizes reflow, the
 ---colour filter is a post stage, UI transitions snap). Persist them with `save.*`.
 ---@class Access
