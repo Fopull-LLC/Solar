@@ -21,6 +21,7 @@
 ---@field up_y number Physics: body up (−gravity) Y.
 ---@field up_z number Physics: body up (−gravity) Z.
 ---@field visible boolean Show / hide this node's geometry (Inspector eye toggle).
+---@field castShadow boolean Whether this node casts sun shadows (default true).
 ---@field persistent boolean Carry this node — and everything under it — across a `scene.load` swap. Its scripts keep RUNNING (`start` does not re-fire), because the node never stopped existing.
 ---@field pos Vec3 The node's position as a vec3 (read/write: `node.pos = node.pos + dir * dt`). Accepts any {x=,y=,z=} value.
 ---@field vel Vec3 The body's velocity as a vec3 (read/write) — one write instead of vx/vy/vz: `node.vel = node.vel + node.up * jump`.
@@ -72,7 +73,7 @@
 ---@field script fun(self: Node, name: string): table|nil Short alias of getscript.
 ---@field scripts table[] Every script on this node as handles, in attach order — possibly empty, never nil. The plural of getScript, for when you do not yet know the name: `for _, s in ipairs(n.scripts) do print(s.kind) end` tells you what a node actually carries, which is the question a getScript that answered nil leaves you with.
 ---@field component fun(self: Node, name: string): RigidBodyHandle|PointLightHandle|LightHandle|CameraHandle|UiElementHandle|UiSliderHandle|UiLayerHandle|MaterialHandle|nil Short alias of getcomponent.
----@field animator fun(self: Node): table The animation handle for this node's Animation Controller (or a rigged model's embedded clips): :play / :restart / :crossfade / :stop / :setSpeed / :setLayerWeight / :seek, and :state / :time / :finished / :isPlaying.
+---@field animator fun(self: Node): table The animation handle for this node's Animation Controller (or a rigged model's embedded clips): :play / :restart / :crossfade / :stop / :setSpeed / :setLayerWeight / :seek / :setParam, per-frame bone writes :setBoneRot / :addBoneRot / :setBonePos / :addBonePos / :reach / :lookAt, and :state / :time / :finished / :isPlaying / :boneWorld.
 ---@field toWorld fun(self: Node, v: Vec3): Vec3 A point in this node's own frame converted to world space — position, rotation AND scale, composed up the whole parent chain. "Where is the muzzle?" is gun:toWorld(vec3(0, 0, -1.2)).
 ---@field toLocal fun(self: Node, v: Vec3): Vec3 The inverse of toWorld: a world point expressed in this node's frame.
 ---@field setWorldPos fun(self: Node, v: Vec3) Put this node at a WORLD point, whatever it is parented to, without deriving the parent inverse by hand.
@@ -170,6 +171,7 @@
 ---@field shadowQuantize number 0 = smooth penumbra; 2..8 = posterize it into that many bands (toon/retro).
 ---@field shadowDither number Bayer-dither the penumbra (1/0) — the classic PS1 dithered shadow edge.
 ---@field shadowDistance number Max world distance a shadow ray marches before giving up; far geometry stops casting past it.
+---@field shadowSteps number Most steps a sun-shadow ray takes (8..64, default 64). The cheapest quality lever for shadows: fewer steps cost less and thin out shadows behind long casters.
 ---@field fog number Depth fog on (1/0; assign true/false).
 ---@field contactShadows number Contact shadows (1/0): the small dark line where things touch, traced from the depth buffer so a mesh casts its real silhouette. Only what is ON SCREEN casts one.
 ---@field contactLength number How far a contact shadow traces, in world units.
@@ -421,6 +423,34 @@ draw = {}
 ---@param r number 0..1 @param g number 0..1 @param b number 0..1
 ---@param a? number alpha, default 1
 function draw.line(x1, y1, z1, x2, y2, z2, r, g, b, a) end
+
+---A connected line through every point, in one call. `points` is a flat
+---`{x1,y1,z1, x2,y2,z2, ...}` array or an array of vec3s.
+---e.g. `draw.polyline(orbitPoints, 0.3, 0.85, 1.0, 1, true)`
+---@param points number[]|vec3[]
+---@param r number 0..1 @param g number 0..1 @param b number 0..1
+---@param a? number alpha, default 1
+---@param closed? boolean join the last point back to the first
+function draw.polyline(points, r, g, b, a, closed) end
+
+---Draw script lines over the finished picture at the window's own resolution
+---(after post effects and any render-scale upscale), in exactly their colour,
+---instead of into the 3D scene. Persistent. Returns the setting.
+---@param on? boolean
+---@return boolean
+function draw.nativeLines(on) end
+
+---A Kepler orbit around the focus `center`, in the plane of `e1` (toward
+---periapsis) and `e2`: r(θ) = p / (1 + ecc·cos θ). Closed for ecc < 1; an
+---open arc cut where r reaches `maxR` (default 10·p) otherwise.
+---@param center vec3 @param e1 vec3 @param e2 vec3
+---@param p number semi-latus rectum, above 0
+---@param ecc number eccentricity
+---@param segs integer segments
+---@param r number 0..1 @param g number 0..1 @param b number 0..1
+---@param a? number alpha, default 1
+---@param maxR? number where an open orbit stops
+function draw.conic(center, e1, e2, p, ecc, segs, r, g, b, a, maxR) end
 
 ---One textured quad IN the world for this frame: depth-tested, alpha-blended,
 ---both sides. Corners run around the quad; corner 0 is at (u0,v0), corner 2 at
@@ -1212,6 +1242,16 @@ function camera.screenToRay(sx, sy) end
 ---@return { x: number, y: number, z: number, nx: number, ny: number, nz: number, distance: number, node: Node|nil }|nil
 function raycast(ox, oy, oz, dx, dy, dz, max, ignore) end
 
+---Many rays in one call. One origin and one dir per ray (vec3s, or flat
+---{x1,y1,z1, ...} arrays); `maxes` is one distance or one per ray; `opts` as
+---raycast's. One entry per ray, in order: a hit table, or false for a miss.
+---@param origins vec3[]|number[]
+---@param dirs vec3[]|number[]
+---@param maxes number|number[]
+---@param opts? {ignore?: table, layers?: string|string[]}
+---@return (table|false)[]
+function raycastMany(origins, dirs, maxes, opts) end
+
 ---EVERY node carrying script `kind`, as script handles in scene order — for
 ---picking among several instances (a camera finding the one third_person
 ---that is `net.isMine`, out of many player avatars).
@@ -1574,6 +1614,37 @@ function water.setFrozen(node, frozen) end
 ---@return Node[]
 function water.volumes() end
 
+---Pictures laid on the world's static surfaces: blood, scorch marks, bullet
+---holes, paint. Not nodes. A decal folds over edges and into corners and is lit
+---like the surface under it; every decal sharing a picture is one draw.
+---@class Decals
+decals = {}
+---Lay a picture on the static surfaces under a box standing at `pos`, facing
+---`normal`. nil when nothing under it can take a mark.
+---@param opts {texture: string, pos: vec3, normal: vec3, size: number, height?: number, depth?: number, up?: vec3, rotation?: number, color?: number[], alpha?: number, sheetCols?: number, sheetRows?: number, cell?: number, layers?: string|string[], maxAngle?: number}
+---@return number|nil id
+function decals.add(opts) end
+---Change a decal's alpha or tint; false if it has already gone.
+---@param id number
+---@param opts {alpha?: number, color?: number[]}
+---@return boolean
+function decals.set(id, opts) end
+---Take one decal off; false if it had already gone.
+---@param id number
+---@return boolean
+function decals.remove(id) end
+---Take every decal off the world.
+function decals.clear() end
+---How many decals are in the world.
+---@return number
+function decals.count() end
+---The budget: past `n` decals the oldest goes (1024 until set, at most 65536).
+---@param n number
+function decals.setMax(n) end
+---The budget `decals.setMax` set.
+---@return number
+function decals.max() end
+
 ---Runtime terrain editing + queries (Terrain 2.0). Edits queue and land the
 ---same tick (collision updates with the surface). World coordinates.
 ---In multiplayer, run edits on the SERVER and mirror them with an RPC that
@@ -1582,15 +1653,17 @@ function water.volumes() end
 terrain = {}
 ---Sculpt the nearest terrain at (x,y,z): mode "raise" (default), "lower"/"dig",
 ---"smooth", or "flatten". strength 0..1 (default 1). No-op when no terrain
----surface is near the point.
+---surface is near the point. "flatten" levels to the terrain's up, or on a
+---planet the radial up at the point; `opts.normal` names another plane.
 ---@param x number
 ---@param y number
 ---@param z number
 ---@param radius number
 ---@param strength? number
 ---@param mode? string
+---@param opts? {normal?: vec3}
 ---@return number id an id for the yield report this edit will produce
-function terrain.sculpt(x, y, z, radius, strength, mode) end
+function terrain.sculpt(x, y, z, radius, strength, mode, opts) end
 ---Dig a hole — sugar for `terrain.sculpt(x, y, z, radius, strength, "lower")`.
 ---@param x number
 ---@param y number
@@ -1648,6 +1721,12 @@ function terrain.saveDir(path) end
 ---positions of dynamic bodies, never the camera.
 ---@param bodyName string The body's node name (as in `space.bodies()`).
 function terrain.warm(bodyName) end
+---What terrain detail, the far-planet impostor switch and far-craft freezing
+---follow during Play, in place of the render camera (a map view anchors on
+---the ship). nil hands it back to the camera. Returns the anchor it replaced.
+---@param anchor? table|vec3 A node, a point, or nil.
+---@return table|vec3|nil
+function terrain.lodAnchor(anchor) end
 ---Is the background terrain worker already occupied? True while any field is
 ---generating or streaming in.
 ---
