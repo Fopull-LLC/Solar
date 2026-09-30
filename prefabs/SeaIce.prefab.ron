@@ -1,0 +1,58 @@
+// A generated world's sea (system_generator.lua spawns it under the body,
+// scale = the sea radius). The ROOT is the surface: a unit icosphere wearing
+// shaders/ocean.flsl (sea_ice.flsl here), driven by scripts/ocean.lua (sun, sky, spray, surf).
+// The CHILD is the engine's Water Volume — buoyancy, drag and the underwater
+// look — hidden, because the surface above is what should be seen of it.
+// Its radius is 1 so the root's scale makes it the same sphere. Its density is
+// in TONNES per cubic metre, because every mass in this game is in tonnes (a
+// small tank is 1.5 in a 1 m³ box): at 1025 the Archimedes push on a 1-tonne
+// astronaut was six hundred times their weight and threw them out of the sea.
+[
+    (
+        name: "SeaIce",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Mesh(
+            asset_path: "models/water/ocean_sphere.glb",
+        ),
+        material: Some((
+            color: (1.0, 1.0, 1.0),
+            alpha: 0.999,
+            shader: Some("shaders/sea_ice.flsl"),
+        )),
+        cast_shadow: false,
+        scripts: [
+            (
+                kind: "ocean",
+                enabled: true,
+                params: [],
+            ),
+        ],
+        tags: ["genbody", "sea"],
+    ),
+    (
+        name: "SeaIce Volume",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: WaterVolume(
+            pool: false,
+            radius: 1.0,
+            density: 1.03,
+            drag: 1.0,
+            angular_drag: 1.0,
+            frozen: true,
+            tint: (0.55, 0.70, 0.80),
+            visibility: 6.0,
+        ),
+        visible: false,
+        scripts: [],
+        parent: Some(0),
+        tags: ["genbody"],
+    ),
+]

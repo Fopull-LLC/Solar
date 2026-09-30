@@ -1,0 +1,45 @@
+// LOOP PROBE — a headless test rig for the game's own new-save flow.
+//
+// The smallest scene that can get into a REAL save: a camera and a script that
+// does what clicking "Create" on an empty slot does — wipe the slot's terrain,
+// select the slot, store the seed — then loads the system scene and RIDES THE
+// SWAP (node.persistent) so it can report on the loop from inside it.
+//
+//     floptle run . --scene loop_probe --seconds 120
+//
+// Nothing in the shipped game references this scene. It exists because the only
+// way into a save is the main menu, `run` presses nothing, and a loop that
+// cannot be tested headlessly is a loop that only ever gets tested by playing.
+(
+    nodes: [
+        (
+            name: "Camera",
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Camera(
+                fov_y: 1.1519173,
+                active: true,
+            ),
+            scripts: [],
+        ),
+        (
+            name: "Loop Probe",
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Empty,
+            scripts: [
+                (
+                    kind: "loop_probe",
+                    enabled: true,
+                    params: [],
+                ),
+            ],
+        ),
+    ],
+)

@@ -128,6 +128,47 @@ local REG = {
   cargo     = { prefab = "PartCargo",     label = "Cargo Bay",    h = 1.20, rx = 0.50, rz = 0.50, mass = 0.9,  cost = 300, top = true,  bottom = true,  kind = "structural", cargo = 250, side = true },
 }
 
+-- THE CATALOGUE, in the order the panel shows it. Grouped the way you build:
+-- the crew capsule and what brings it home, then what pushes it, then what it
+-- flies with, then what it does once it's there.
+--
+-- This list is the ONE place the order lives. It used to be spread across
+-- three: a parallel `IDS` array in `catalog_button.lua`, a `part` index on each
+-- of nineteen authored button nodes in `builder.ron`, and this registry — so
+-- adding a part meant editing a scene file and keeping two arrays in step, and
+-- getting an index wrong silently mislabelled a card. A part added to `REG` and
+-- named here now appears in the catalogue and nowhere else needs to know.
+local CATALOGUE = {
+  { "COMMAND",   { "pod", "nose", "chute", "battery", "dish", "solar" } },
+  { "PROPULSION",{ "engineS", "engineM", "skipper", "tankS", "tankM", "radialTank", "rcs" } },
+  { "STRUCTURE", { "decoupler", "radialDec", "legs", "fins" } },
+  { "PAYLOAD",   { "cargo", "dockPort" } },
+}
+
+-- Every part this builder knows how to spawn. The catalogue test compares this
+-- against what `catalogue()` lists, so a part added to `REG` and forgotten here
+-- is a build failure rather than a part nobody can buy.
+function registryIds()
+  local out = {}
+  for id in pairs(REG) do out[#out + 1] = id end
+  table.sort(out)
+  return out
+end
+
+-- The catalogue panel asks for this: sections, each with the parts it holds.
+-- Ids with no entry in `REG` are dropped rather than drawn as a broken card.
+function catalogue()
+  local out = {}
+  for _, section in ipairs(CATALOGUE) do
+    local ids = {}
+    for _, id in ipairs(section[2]) do
+      if REG[id] then ids[#ids + 1] = id end
+    end
+    if #ids > 0 then out[#out + 1] = { title = section[1], ids = ids } end
+  end
+  return out
+end
+
 -- ── State ───────────────────────────────────────────────────────────────────
 local parts = {}        -- uid -> { id, def, node, x,y,z, yaw,pitch,roll, parent (uid|nil) }
 local next_uid = 1
@@ -189,7 +230,7 @@ local function hint(msg, secs)
   hint_t = secs or 2.5
 end
 
-local HINT_IDLE = "click a part = select   ·   1 Move · 2 Rotate · 3 Stage · 4 Grab   ·   drag the gizmo to edit   ·   X symmetry   ·   G grab ship   ·   DEL scrap   ·   CTRL+Z undo · CTRL+S save   ·   RMB+WASD fly"
+local HINT_IDLE = "click a part to select   ·   1 move · 2 rotate · 3 stage · 4 grab   ·   drag the gizmo to edit   ·   X symmetry   ·   G grab ship   ·   DEL scrap   ·   CTRL+Z undo   ·   CTRL+S save   ·   RMB+WASD fly   ·   ESC leave"
 local HINT_GHOST = "click an attach node to place (green = stack, amber = radial)   ·   ALT = place free   ·   R yaw · T pitch · Y roll   ·   X symmetry ×N   ·   ESC cancel"
 local HINT_GRAB = "move the mouse to slide the whole ship   ·   click to set it down"
 
@@ -590,36 +631,73 @@ local function build_cost()
   return c
 end
 
+-- The header card (BuildTitle) holds a heading and this stats text. The text
+-- is "fit" tall in the scene, and the card grows to where the engine laid it
+-- out: the stats start 32 down and the card keeps a 10 bottom margin under them.
+local STATS_TOP, STATS_PAD = 32, 10
+local header_refs = {}
+local function set_stats(text)
+  stats_node.text = text
+end
+
+local function fit_header()
+  local r = header_refs
+  if not r.card and find then r.card = find("BuildTitle") end
+  if not (r.card and stats_node and stats_node.uiRect) then return end
+  local h = select(4, stats_node:uiRect())
+  local sh = camera and camera.screenSize and select(2, camera.screenSize())
+  if not (h and h > 0 and sh and sh > 0) then return end
+  local cel = r.card:getcomponent("UiElement")
+  local want = math.ceil(STATS_TOP + h * 720 / sh + STATS_PAD)
+  if cel and math.abs(cel.height - want) > 0.5 then cel.height = want end
+end
+
+-- What a first rocket is still missing, in the order you'd add it. A pod on
+-- its own sat on the pad with a readout of mass and money and nothing to say
+-- that it wasn't a rocket yet.
+local function next_step(has)
+  if not has.crewed then return "Next: add a Pod Mk1 — every craft needs a crew" end
+  if not has.tank then return "Next: add a fuel tank under the pod" end
+  if not has.engine then return "Next: add an engine under the tank" end
+  if not has.chute then return "Next: add a parachute on top of the pod" end
+  return "Ready to fly — press LAUNCH"
+end
+
 local function refresh_stats()
   paint_stages()
   if not stats_node then return end
   local mass, cost, thrust, n = 0.0, 0, 0.0, 0
+  local has = {}
   for _, p in pairs(parts) do
     n = n + 1
     mass = mass + p.def.mass
     cost = cost + p.def.cost
     if p.def.thrust then thrust = thrust + p.def.thrust end
+    has[p.def.kind] = true
+    if p.def.chute then has.chute = true end
   end
   if n == 0 then
-    stats_node.text = "empty pad — pick a part from the catalogue"
+    set_stats("empty pad — start with a Pod Mk1 from the catalogue")
     return
   end
   local twr = (mass > 0) and (thrust / (mass * 9.81)) or 0
-  local twr_s = (thrust > 0) and string.format("   TWR %.2f", twr) or ""
+  local twr_s = (thrust > 0) and string.format("  ·  TWR %.2f", twr) or ""
   -- The build cost against the company's actual balance: you should be able to
   -- see you can't afford it WHILE you're adding the part, not after you press
   -- LAUNCH. Over budget turns the figure red-flagged rather than hiding it.
   local co = company_ref()
   local bal = co and co.balance and co.balance() or nil
-  local money = string.format("$%d", cost)
+  -- "cost $400 of $1,170" read as a progress bar; it is a price and a budget.
+  local money = string.format("cost $%d", cost)
   if bal then
-    money = string.format("$%d / %s%s", cost, co.money(bal),
-      (cost > bal) and "  ⚠ OVER BUDGET" or "")
+    money = string.format("cost %s   ·   budget %s%s", co.money(cost), co.money(bal),
+      (cost > bal) and "   ⚠ OVER BUDGET" or "")
   end
-  stats_node.text = string.format("%d parts   %.2f t   %s%s%s   ⛭ %s%s",
-    n, mass, money, twr_s,
-    sym_n > 1 and ("   SYM ×" .. sym_n) or "",
-    TOOL_LABEL[tool] or "?", stage_lines())
+  set_stats(string.format("%d %s  ·  %.2f t%s\n%s\n%s\ntool: %s%s%s",
+    n, n == 1 and "part" or "parts", mass, twr_s, money, next_step(has),
+    TOOL_LABEL[tool] or "?",
+    sym_n > 1 and ("  ·  symmetry ×" .. sym_n) or "",
+    stage_lines()))
 end
 
 -- ── Undo (robust: ops that can't apply yet re-push and wait) ────────────────
@@ -1431,6 +1509,7 @@ end
 
 function update(node, dt)
   draw_engineering()
+  fit_header()
   -- One shared click edge for the whole frame.
   local lmb = input.button(0)
   local clicked = lmb and not lmb_prev and click_cool <= 0
@@ -1906,10 +1985,34 @@ function update(node, dt)
   if input.key("ctrl") and input.pressed("z") then undo() end
   if input.key("ctrl") and input.pressed("s") then save_blueprint() end
   if input.pressed("f5") then load_blueprint() end
+  -- ESC LEAVES, once it has nothing nearer to cancel. The two `escape` handlers
+  -- above this one take their turn first — a part on the cursor, a gizmo drag —
+  -- so the key backs out one level at a time and only reaches the door when
+  -- there is nothing else in front of it. Same ladder as the rest of the game.
+  if input.pressed("escape") and not ghost and not gizmo_drag and not grab_mode then
+    doLeave()
+  end
 end
 
 -- The HUD buttons call these too.
 function doSave() save_blueprint() end
+
+-- LEAVE WITHOUT BUYING ANYTHING.
+--
+-- There was no way out of here. The Vehicle Assembly is a whole scene, and the
+-- only two doors were SAVE (which stays) and LAUNCH (which charges you for a
+-- hull and puts it on the pad). Walk into the hangar to look at the parts, or
+-- open it by accident on the way past, and the game's answer was: buy a rocket.
+--
+-- The blueprint is kept, because leaving is not the same as discarding — you
+-- come back to the craft you were drawing.
+function doLeave()
+  save_blueprint()
+  save.set("shipyard.launch", false)
+  save.set("shipyard.pilot", 0)
+  save.flush()
+  scene.load("system")
+end
 function doLaunch()
   if partCount == 0 then hint("nothing to launch — build something first", 2.5) return end
   -- The hull is BOUGHT at rollout. Crash it and that money is gone; bring it
@@ -1918,7 +2021,7 @@ function doLaunch()
   local co = company_ref()
   local cost = build_cost()
   if co and co.afford and not co.afford(cost) then
-    hint(string.format("can't afford this build — %s of %s. Fly a contract first.",
+    hint(string.format("can't afford this build — it costs %s and the budget is %s. Sell ore at the depot or fly a contract.",
       co.money(cost), co.money(co.balance())), 4.0)
     return
   end

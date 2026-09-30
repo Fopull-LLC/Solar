@@ -7,27 +7,29 @@
 // stay open. You enter through the covered span between the two halves and turn
 // into either room.
 //
-// The scale is 4.2 rather than 3.0 for ONE reason: at 3.0 the way in was clear
-// to 1.6 m and the astronaut is a 2.0 m capsule — a doorway you cannot fit
-// through is a wall with a picture of a door on it. At 4.2 the opening clears
-// 2.2 m. Check it with:
+// The scale is 6.0. The floor was 4.2, set by the doorway: at 3.0 the way in
+// was clear to 1.6 m and the astronaut is a 2.0 m capsule, and a doorway you
+// cannot fit through is a wall with a picture of a door on it. 6.0 is the
+// HEADQUARTERS reading — the building reads as the thing the whole base is
+// arranged around instead of a shed you could miss from thirty metres, and the
+// opening clears 3.1 m with it. Check the opening after any change with:
 //
 //     python3 solar/tools/shell_collider.py models/space-kit/hangar_largeA.glb \
-//         --scale 4.2 --check
+//         --scale 6.0 --check
 //
-// and regenerate the boxes below (no --check) after any model/scale change. They
-// are in CENTRED MODEL units, so the node scale applies to them exactly as it
-// does to the mesh.
+// The boxes below do NOT need regenerating for a scale change — they are in
+// CENTRED MODEL units, so the node scale applies to them exactly as it does to
+// the mesh. Regenerate (no --check) only if the MODEL changes.
 //
 // Generated shell: 24 boxes, voxel cell 0.136 model units
-// (2.00 x 1.00 x 3.00 model → 8.4 x 4.2 x 12.6 world; seat 2.100).
+// (2.00 x 1.00 x 3.00 model → 12.0 x 6.0 x 18.0 world; seat 3.000).
 [
     (
         name: "FacCommand",
         transform: (
             translation: (0.0, 0.0, 0.0),
             rotation: (0.0, 0.0, 0.0, 1.0),
-            scale: (4.2, 4.2, 4.2),
+            scale: (6.0, 6.0, 6.0),
         ),
         matter: Mesh(
             asset_path: "models/space-kit/hangar_largeA.glb",
@@ -599,6 +601,135 @@
             color: (1.0, 0.92, 0.78),
             intensity: 2.6,
             range: 18.0,
+        ),
+        scripts: [],
+        parent: Some(0),
+    ),
+    (
+        // A floor. The shed is a Kenney hangar shell with no floor of its own,
+        // so the inside was bare planet, and wherever the levelling missed the
+        // ground humped up through it. A concrete slab, its top 10 cm over the
+        // seat and 30 cm deep, so what little relief is left stays under it —
+        // and a collider on it, so you walk ON the floor, not through it.
+        name: "Interior Floor",
+        transform: (
+            translation: (0.0, -0.5167, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.720, 0.0667, 2.900),
+        ),
+        matter: Primitive(
+            shape: Cube,
+            color: (0.46, 0.47, 0.5),
+        ),
+        scripts: [],
+        material: Some((
+            color: (0.46, 0.47, 0.5),
+            texture: Some("textures/hangar/floor_concrete.png"),
+            emissive: (0.0, 0.0, 0.0),
+            emissive_strength: 0.0,
+            specular: (1.0, 1.0, 1.0),
+            shininess: 24.0,
+            specular_strength: 0.2,
+            rim: (0.0, 0.0, 0.0),
+            rim_strength: 0.0,
+            unlit: false,
+            ambient: 1.0,
+            alpha: 1.0,
+            tiling: Some(Triplanar(
+                scale: 4.0,
+                blend: 4.0,
+            )),
+            sheet_cols: 1,
+            sheet_rows: 1,
+        )),
+        parent: Some(0),
+        rigidbody: Some((
+            boxed: true,
+            mode: Static,
+            radius: 0.5,
+            height: 1.0,
+            half_extents: (0.5, 0.5, 0.5),
+            restitution: 0.0,
+            friction: 0.9,
+            gravity: false,
+            lock_pos: (false, false, false),
+            lock_rot: (false, false, false),
+        )),
+    ),
+    (
+        name: "Ops Console A",
+        transform: (
+            translation: (0.250, -0.3241, 1.080),
+            rotation: (0.0, 1.0000, 0.0, 0.0000),
+            scale: (0.5000, 0.5000, 0.5000),
+        ),
+        matter: Mesh(
+            asset_path: "models/space-kit/desk_computerScreen.glb",
+        ),
+        scripts: [],
+        parent: Some(0),
+    ),
+    (
+        name: "Ops Console B",
+        transform: (
+            translation: (-0.350, -0.3241, 1.080),
+            rotation: (0.0, 1.0000, 0.0, 0.0000),
+            scale: (0.5000, 0.5000, 0.5000),
+        ),
+        matter: Mesh(
+            asset_path: "models/space-kit/desk_computerScreen.glb",
+        ),
+        scripts: [],
+        parent: Some(0),
+    ),
+    (
+        name: "Ops Chair A",
+        transform: (
+            translation: (0.250, -0.4098, 0.900),
+            rotation: (0.0, 0.0000, 0.0, 1.0000),
+            scale: (0.5000, 0.5000, 0.5000),
+        ),
+        matter: Mesh(
+            asset_path: "models/space-kit/desk_chair.glb",
+        ),
+        scripts: [],
+        parent: Some(0),
+    ),
+    (
+        name: "Ops Chair B",
+        transform: (
+            translation: (-0.350, -0.4098, 0.900),
+            rotation: (0.0, 0.0000, 0.0, 1.0000),
+            scale: (0.5000, 0.5000, 0.5000),
+        ),
+        matter: Mesh(
+            asset_path: "models/space-kit/desk_chair.glb",
+        ),
+        scripts: [],
+        parent: Some(0),
+    ),
+    (
+        name: "Corner Desk",
+        transform: (
+            translation: (0.550, -0.3896, -0.950),
+            rotation: (0.0, 0.7071, 0.0, 0.7071),
+            scale: (0.5000, 0.5000, 0.5000),
+        ),
+        matter: Mesh(
+            asset_path: "models/space-kit/desk_computerCorner.glb",
+        ),
+        scripts: [],
+        parent: Some(0),
+    ),
+    (
+        name: "Stores",
+        transform: (
+            translation: (-0.550, -0.4208, -0.950),
+            rotation: (0.0, 0.1736, 0.0, 0.9848),
+            scale: (0.5000, 0.5000, 0.5000),
+        ),
+        matter: Mesh(
+            asset_path: "models/space-kit/barrels.glb",
         ),
         scripts: [],
         parent: Some(0),

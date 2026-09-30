@@ -21,26 +21,31 @@
 defaults = {}
 
 -- id → { name, kg (per unit), value ($/unit at rep 0), tier, class }
+--
+-- Priced so a FULL SUIT PACK is worth a few hundred dollars (fifty units of
+-- regolith ≈ $200, a pack of iron ≈ $950) against a first rocket of about a
+-- thousand. At a third of this, a full pack of dirt paid $50 and walking to
+-- the depot with it was never worth the walk.
 -- class: "ore" | "ice" | "flora" | "liquid" | "refined"
 REG = {
-  regolith = { name = "Regolith",         kg = 1.8, value = 1,  tier = 0, class = "ore" },
-  silica   = { name = "Silica",           kg = 1.6, value = 6,  tier = 1, class = "ore" },
-  iron     = { name = "Iron Ore",         kg = 2.6, value = 9,  tier = 1, class = "ore" },
-  copper   = { name = "Copper Ore",       kg = 2.4, value = 14, tier = 1, class = "ore" },
-  ice      = { name = "Water Ice",        kg = 1.0, value = 4,  tier = 1, class = "ice" },
-  water    = { name = "Water",            kg = 1.0, value = 3,  tier = 1, class = "liquid" },
-  sulfur   = { name = "Sulfur",           kg = 1.4, value = 11, tier = 2, class = "ore" },
-  obsidian = { name = "Obsidian",         kg = 2.2, value = 19, tier = 2, class = "ore" },
-  crystal  = { name = "Resonant Crystal", kg = 1.1, value = 46, tier = 3, class = "ore" },
-  uranium  = { name = "Uranite",          kg = 3.2, value = 85, tier = 3, class = "ore" },
+  regolith = { name = "Regolith",         kg = 1.8, value = 4,   tier = 0, class = "ore" },
+  silica   = { name = "Silica",           kg = 1.6, value = 16,  tier = 1, class = "ore" },
+  iron     = { name = "Iron Ore",         kg = 2.6, value = 28,  tier = 1, class = "ore" },
+  copper   = { name = "Copper Ore",       kg = 2.4, value = 40,  tier = 1, class = "ore" },
+  ice      = { name = "Water Ice",        kg = 1.0, value = 12,  tier = 1, class = "ice" },
+  water    = { name = "Water",            kg = 1.0, value = 8,   tier = 1, class = "liquid" },
+  sulfur   = { name = "Sulfur",           kg = 1.4, value = 32,  tier = 2, class = "ore" },
+  obsidian = { name = "Obsidian",         kg = 2.2, value = 50,  tier = 2, class = "ore" },
+  crystal  = { name = "Resonant Crystal", kg = 1.1, value = 120, tier = 3, class = "ore" },
+  uranium  = { name = "Uranite",          kg = 3.2, value = 200, tier = 3, class = "ore" },
 
-  timber   = { name = "Timber",           kg = 1.2, value = 7,  tier = 1, class = "flora" },
-  fiber    = { name = "Plant Fiber",      kg = 0.3, value = 5,  tier = 1, class = "flora" },
-  biomass  = { name = "Biomass",          kg = 0.6, value = 3,  tier = 1, class = "flora" },
-  resin    = { name = "Resin",            kg = 0.9, value = 18, tier = 2, class = "flora" },
-  spores   = { name = "Spore Pods",       kg = 0.4, value = 26, tier = 2, class = "flora" },
-  kelp     = { name = "Kelp",             kg = 0.8, value = 12, tier = 2, class = "flora" },
-  glowsap  = { name = "Glow Sap",         kg = 0.7, value = 40, tier = 3, class = "flora" },
+  timber   = { name = "Timber",           kg = 1.2, value = 20,  tier = 1, class = "flora" },
+  fiber    = { name = "Plant Fiber",      kg = 0.3, value = 14,  tier = 1, class = "flora" },
+  biomass  = { name = "Biomass",          kg = 0.6, value = 9,   tier = 1, class = "flora" },
+  resin    = { name = "Resin",            kg = 0.9, value = 48,  tier = 2, class = "flora" },
+  spores   = { name = "Spore Pods",       kg = 0.4, value = 65,  tier = 2, class = "flora" },
+  kelp     = { name = "Kelp",             kg = 0.8, value = 34,  tier = 2, class = "flora" },
+  glowsap  = { name = "Glow Sap",         kg = 0.7, value = 110, tier = 3, class = "flora" },
 }
 
 -- Rock yields per planet archetype. `w` is the raw weight; `minDepth` gates a
@@ -106,7 +111,15 @@ function byId(id)
   return REG[id]
 end
 
-function name(id)
+-- The display name. Called `label` rather than `name` because for most of this
+-- project's life a script handle answered `name` itself, so `materials.name(id)`
+-- worked from inside this file and from nowhere else — every caller got the
+-- string "materials" back and died on the call, which broke the mining laser's
+-- readout, the pickup line, the depot's stock list and the research panel
+-- (floptle/0085). v0.33.0 gave `name` back to the game, so this could be renamed
+-- again; it is not, because `label` is the better name for what it returns and
+-- because a rename buys nothing a player can see.
+function label(id)
   local d = REG[id]
   return d and d.name or tostring(id)
 end

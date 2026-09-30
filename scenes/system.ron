@@ -13,9 +13,26 @@
         shadow_quantize: 0,
         shadow_dither: false,
         shadow_distance: 400.0,
-        fog_color: (0.6, 0.65, 0.72),
-        fog_start: 40.0,
-        fog_end: 200.0,
+        // FOG. This was 40 → 200, which is a corridor: on a world you can walk
+        // around in ten minutes, everything past a couple of hundred metres was
+        // a flat grey wall. It was doing real work — it hid the terrain
+        // streamer's pop-in (floptle/0067) — but it hid the planet with it, and
+        // a body whose horizon you cannot see has no scale.
+        //
+        // Pushed out to where it reads as distance rather than as a limit, and
+        // tinted toward the sky so the far ground meets the horizon instead of
+        // ending at it.
+        //
+        // It also has to BRACKET the rock field. The scattered rock draws to
+        // ~190 m (its residency is quadratic in that number — see
+        // mineral_field.lua), and in perfectly clear air the edge of the field
+        // is a circle you can see. The ramp starts well inside it so the last
+        // rocks are already hazing out. Fog is a per-fragment mix and nothing
+        // else — it is not a far plane and it culls nothing, so this is a look,
+        // not a budget.
+        fog_color: (0.52, 0.60, 0.72),
+        fog_start: 90.0,
+        fog_end: 480.0,
         fog_dither_strength: 0.5,
     ),
     nodes: [
@@ -61,7 +78,7 @@
                 star_color: (0.72, 0.82, 1.0),
                 occluder_radius: 0.0,
             )),
-            parent: Some(42),
+            parent: Some(24),
             tags: [
                 "genbody",
             ],
@@ -94,9 +111,9 @@
                 clouds: 0.06,
                 luminosity: 0.0,
                 star_color: (1.0, 0.97, 0.9),
-                occluder_radius: 0.0,
+                occluder_radius: 75.0,
             )),
-            parent: Some(42),
+            parent: Some(24),
             tags: [
                 "genbody",
             ],
@@ -129,9 +146,9 @@
                 clouds: 0.78,
                 luminosity: 0.0,
                 star_color: (1.0, 0.97, 0.9),
-                occluder_radius: 0.0,
+                occluder_radius: 92.3,
             )),
-            parent: Some(42),
+            parent: Some(24),
             tags: [
                 "genbody",
             ],
@@ -164,9 +181,9 @@
                 clouds: 0.58,
                 luminosity: 0.0,
                 star_color: (1.0, 0.97, 0.9),
-                occluder_radius: 0.0,
+                occluder_radius: 70.1,
             )),
-            parent: Some(42),
+            parent: Some(24),
             tags: [
                 "genbody",
             ],
@@ -199,9 +216,9 @@
                 clouds: 0.52,
                 luminosity: 0.0,
                 star_color: (1.0, 0.97, 0.9),
-                occluder_radius: 0.0,
+                occluder_radius: 88.5,
             )),
-            parent: Some(42),
+            parent: Some(24),
             tags: [
                 "genbody",
             ],
@@ -233,9 +250,9 @@
                 clouds: 0.0,
                 luminosity: 0.0,
                 star_color: (1.0, 0.97, 0.9),
-                occluder_radius: 0.0,
+                occluder_radius: 18.2,
             )),
-            parent: Some(42),
+            parent: Some(24),
             tags: [
                 "genbody",
             ],
@@ -419,8 +436,14 @@
                 vignette: true,
                 vignette_strength: 0.4,
                 vignette_radius: 0.5,
-                ao: Off,
-                ao_strength: 1.0,
+                // Screen-space, not Sdf: Sdf AO is the truer one but only SDF
+                // matter OCCLUDES in it, so every mesh in this game — the
+                // facilities, the ship, the crew — would cast no contact
+                // darkening at all and would sit on the ground like a decal.
+                // The whole scene is meshes standing on terrain, so the cheap
+                // pass is also the right one here.
+                ao: ScreenSpace,
+                ao_strength: 0.85,
                 ao_radius: 0.7,
                 posterize_bands: 0,
                 posterize_dither: false,
@@ -439,30 +462,36 @@
                 (
                     kind: "planet_walker",
                     enabled: true,
+                    // Only the two that are REAL overrides. The other five just
+                    // repeated the script's defaults, which is how a params list
+                    // quietly becomes a second, stale copy of the tuning.
                     params: [
-                        ("double_tap", 0.3),
-                        ("ground_ray", 1.6),
                         ("jump", 10.4),
                         ("run", 9.4),
-                        ("walk", 4.5),
-                        ("face_offset", 0.0),
-                        ("stride", 2.2),
                     ],
                 ),
+                // NO PARAMS. The list that used to be here pinned the laser to
+                // its ORIGINAL tuning — `laser_radius: 0.95`, `laser_rate: 0.3`,
+                // `laser_strength: 0.55`, plus a `laser_range` the script had
+                // stopped having at all — so every round of tuning done in the
+                // script was silently overridden in the only scene that matters.
+                //
+                // The damage was not just "it felt untuned". At 0.3 s between
+                // bites the bore advances 0.54 m, and a 0.95 x 0.55 brush carves
+                // a ball of radius 0.52: the balls DID NOT TOUCH. Holding the
+                // trigger left a string of separate pockets rather than a
+                // tunnel, and a collider full of gaps is what "the digging
+                // location alignment is incredibly glitchy and kind of offset"
+                // actually looks like from inside the game.
+                //
+                // Leave this empty. The script's `defaults` are the tuning, they
+                // carry the --@range annotations the Inspector needs, and the
+                // Inspector will write a params list back here the moment anyone
+                // deliberately overrides one.
                 (
                     kind: "tool_belt",
                     enabled: true,
-                    params: [
-                        ("laser_radius", 0.95),
-                        ("laser_rate", 0.3),
-                        ("laser_range", 26.0),
-                        ("laser_strength", 0.55),
-                        ("spade_radius", 1.4),
-                        ("spade_rate", 0.14),
-                        ("spade_strength", 0.6),
-                        ("cut_reach", 4.6),
-                        ("cut_cone", 0.55),
-                    ],
+                    params: [],
                 ),
             ],
             rigidbody: Some((
@@ -493,81 +522,9 @@
                 (
                     kind: "planet_camera",
                     enabled: true,
-                    params: [
-                        ("distance", 7.0),
-                        ("height", 1.2),
-                        ("max_distance", 14.0),
-                        ("min_distance", 1.5),
-                        ("sensitivity", 0.3),
-                        ("start_pitch", -0.3),
-                        ("zoom_speed", 1.0),
-                    ],
-                ),
-            ],
-        ),
-        (
-            name: "Ship",
-            transform: (
-                translation: (48.0, 191.8, -4738.7),
-                rotation: (0.0, 0.0, 0.0, 1.0),
-                scale: (1.6, 2.4, 1.6),
-            ),
-            matter: Primitive(
-                shape: Capsule,
-                color: (0.85, 0.87, 0.92),
-            ),
-            scripts: [
-                (
-                    kind: "ship_controller",
-                    enabled: true,
                     params: [],
                 ),
             ],
-            rigidbody: Some((
-                capsule: false,
-                radius: 2.0,
-                height: 4.0,
-                half_extents: (0.5, 0.5, 0.5),
-                restitution: 0.0,
-                friction: 0.05,
-                gravity: true,
-                lock_pos: (false, false, false),
-                lock_rot: (false, false, false),
-            )),
-        ),
-        (
-            name: "Ship Flame",
-            transform: (
-                translation: (0.0, -1.0, 0.0),
-                rotation: (1.0, 0.0, 0.0, 0.0),
-                scale: (0.625, 0.41667, 0.625),
-            ),
-            matter: PointLight(
-                color: (1.0, 0.62, 0.25),
-                intensity: 0.0,
-                range: 16.0,
-            ),
-            scripts: [],
-            particles: Some((
-                asset: "vfx/Flame",
-                play_on_start: false,
-            )),
-            parent: Some(15),
-        ),
-        (
-            name: "Landing Cam",
-            transform: (
-                translation: (0.0, -1.1, 0.0),
-                rotation: (-0.7071068, 0.0, 0.0, 0.7071068),
-                scale: (1.0, 1.0, 1.0),
-            ),
-            matter: Camera(
-                fov_y: 1.4,
-                active: false,
-                target: "landing",
-            ),
-            scripts: [],
-            parent: Some(15),
         ),
         (
             name: "Ship HUD",
@@ -598,20 +555,23 @@
             ),
             matter: Empty,
             scripts: [],
-            parent: Some(59),
+            parent: Some(40),
             ui: Some((
                 place: Free(
                     pos: (0.0, 0.0),
                 ),
-                size: (Fixed(652.0), Fit),
+                size: (Fixed(572.0), Fit),
                 text: Some((
                     text: "",
-                    size: 17.0,
-                    color: (0.72, 1.0, 0.82, 1.0),
+                    size: 13.0,
+                    color: (0.74, 0.96, 0.86, 1.0),
                     align: Start,
                     valign: Start,
                     fit: false,
+                    line_height: 1.3,
+                    wrap: true,
                 )),
+                style: "hud/readout",
                 visible: true,
                 opacity: 1.0,
             )),
@@ -625,13 +585,13 @@
             ),
             matter: Empty,
             scripts: [],
-            parent: Some(18),
+            parent: Some(15),
             ui: Some((
                 place: Pin(
                     anchor: Bottom,
                     offset: (0.0, -12.0),
                 ),
-                size: (Fixed(170.0), Fixed(170.0)),
+                size: (Fixed(172.0), Fixed(172.0)),
                 shader: "shaders/navball.flsl",
                 visible: false,
                 opacity: 0.95,
@@ -646,16 +606,16 @@
             ),
             matter: Empty,
             scripts: [],
-            parent: Some(18),
+            parent: Some(15),
             ui: Some((
                 place: Pin(
                     anchor: Bottom,
                     offset: (-128.0, -22.0),
                 ),
-                size: (Fixed(52.0), Fixed(180.0)),
+                size: (Fixed(46.0), Fixed(126.0)),
                 shader: "shaders/tape.flsl",
                 shader_params: {
-                    "accent": (0.45, 0.95, 0.6, 1.0),
+                    "accent": (0.28, 0.86, 0.74, 1.0),
                     "side": (0.0, 0.0, 0.0, 0.0),
                 },
                 visible: false,
@@ -671,16 +631,16 @@
             ),
             matter: Empty,
             scripts: [],
-            parent: Some(18),
+            parent: Some(15),
             ui: Some((
                 place: Pin(
                     anchor: Bottom,
                     offset: (128.0, -22.0),
                 ),
-                size: (Fixed(52.0), Fixed(180.0)),
+                size: (Fixed(46.0), Fixed(126.0)),
                 shader: "shaders/tape.flsl",
                 shader_params: {
-                    "accent": (1.0, 0.75, 0.3, 1.0),
+                    "accent": (0.28, 0.86, 0.74, 1.0),
                     "side": (1.0, 0.0, 0.0, 0.0),
                 },
                 visible: false,
@@ -696,7 +656,7 @@
             ),
             matter: Empty,
             scripts: [],
-            parent: Some(18),
+            parent: Some(15),
             ui: Some((
                 place: Pin(
                     anchor: Bottom,
@@ -707,10 +667,11 @@
                     text: "0",
                     size: 17.0,
                     color: (0.45, 0.95, 0.6, 1.0),
-                    align: End,
+                    align: Center,
                     valign: Center,
                     fit: false,
                 )),
+                style: "hud/window",
                 visible: false,
                 opacity: 0.95,
             )),
@@ -724,7 +685,7 @@
             ),
             matter: Empty,
             scripts: [],
-            parent: Some(18),
+            parent: Some(15),
             ui: Some((
                 place: Pin(
                     anchor: Bottom,
@@ -735,37 +696,11 @@
                     text: "0",
                     size: 17.0,
                     color: (1.0, 0.75, 0.3, 1.0),
-                    align: Start,
+                    align: Center,
                     valign: Center,
                     fit: false,
                 )),
-                visible: false,
-                opacity: 0.95,
-            )),
-        ),
-        (
-            name: "Landing Screen",
-            transform: (
-                translation: (0.0, 0.0, 0.0),
-                rotation: (0.0, 0.0, 0.0, 1.0),
-                scale: (1.0, 1.0, 1.0),
-            ),
-            matter: Empty,
-            scripts: [],
-            parent: Some(18),
-            ui: Some((
-                place: Pin(
-                    anchor: BottomRight,
-                    offset: (-14.0, -14.0),
-                ),
-                size: (Fixed(206.0), Fixed(116.0)),
-                image: Some((
-                    texture: "rt:landing",
-                    tint: (1.0, 1.0, 1.0, 1.0),
-                    cols: 1,
-                    rows: 1,
-                    cell: 0,
-                )),
+                style: "hud/window",
                 visible: false,
                 opacity: 0.95,
             )),
@@ -779,80 +714,25 @@
             ),
             matter: Empty,
             scripts: [],
-            parent: Some(18),
+            parent: Some(15),
             ui: Some((
                 place: Pin(
                     anchor: Bottom,
                     offset: (0.0, -188.0),
                 ),
-                size: (Fixed(120.0), Fixed(22.0)),
+                size: (Fixed(62.0), Fixed(20.0)),
                 text: Some((
-                    text: "HDG 000°",
+                    text: "000°",
                     size: 16.0,
                     color: (0.85, 0.95, 1.0, 1.0),
                     align: Center,
                     valign: Center,
                     fit: false,
                 )),
+                style: "hud/window",
                 visible: false,
                 opacity: 0.95,
             )),
-        ),
-        (
-            name: "Leg A",
-            transform: (
-                translation: (0.52, -0.6, 0.52),
-                rotation: (0.0, 0.0, 0.0, 1.0),
-                scale: (0.1, 0.5, 0.1),
-            ),
-            matter: Primitive(
-                shape: Cube,
-                color: (0.38, 0.4, 0.46),
-            ),
-            scripts: [],
-            parent: Some(15),
-        ),
-        (
-            name: "Leg B",
-            transform: (
-                translation: (-0.52, -0.6, 0.52),
-                rotation: (0.0, 0.0, 0.0, 1.0),
-                scale: (0.1, 0.5, 0.1),
-            ),
-            matter: Primitive(
-                shape: Cube,
-                color: (0.38, 0.4, 0.46),
-            ),
-            scripts: [],
-            parent: Some(15),
-        ),
-        (
-            name: "Leg C",
-            transform: (
-                translation: (0.52, -0.6, -0.52),
-                rotation: (0.0, 0.0, 0.0, 1.0),
-                scale: (0.1, 0.5, 0.1),
-            ),
-            matter: Primitive(
-                shape: Cube,
-                color: (0.38, 0.4, 0.46),
-            ),
-            scripts: [],
-            parent: Some(15),
-        ),
-        (
-            name: "Leg D",
-            transform: (
-                translation: (-0.52, -0.6, -0.52),
-                rotation: (0.0, 0.0, 0.0, 1.0),
-                scale: (0.1, 0.5, 0.1),
-            ),
-            matter: Primitive(
-                shape: Cube,
-                color: (0.38, 0.4, 0.46),
-            ),
-            scripts: [],
-            parent: Some(15),
         ),
         (
             name: "System Generator",
@@ -882,420 +762,6 @@
                     ],
                 ),
             ],
-        ),
-        (
-            name: "SAS Panel",
-            transform: (
-                translation: (0.0, 0.0, 0.0),
-                rotation: (0.0, 0.0, 0.0, 1.0),
-                scale: (1.0, 1.0, 1.0),
-            ),
-            matter: Empty,
-            scripts: [],
-            parent: Some(18),
-            ui: Some((
-                place: Pin(
-                    anchor: Left,
-                    offset: (14.0, 0.0),
-                ),
-                size: (Fit, Fit),
-                stack: Some((
-                    dir: Column,
-                    gap: 4.0,
-                    pad: 0.0,
-                    align: Center,
-                    justify: Start,
-                )),
-                visible: true,
-                opacity: 0.96,
-            )),
-        ),
-        (
-            name: "SAS OFF",
-            transform: (
-                translation: (0.0, 0.0, 0.0),
-                rotation: (0.0, 0.0, 0.0, 1.0),
-                scale: (1.0, 1.0, 1.0),
-            ),
-            matter: Empty,
-            scripts: [
-                (
-                    kind: "sas_button",
-                    enabled: true,
-                    params: [],
-                    strs: [
-                        ("mode", "off"),
-                    ],
-                ),
-            ],
-            parent: Some(32),
-            ui: Some((
-                place: Free(
-                    pos: (0.0, 0.0),
-                ),
-                size: (Fixed(60.0), Fixed(22.0)),
-                shape: Some((
-                    fill: (0.1, 0.14, 0.18, 0.82),
-                    radius: 4.0,
-                    border: 1.0,
-                    border_color: (0.4, 0.55, 0.65, 0.6),
-                )),
-                text: Some((
-                    text: "OFF",
-                    size: 12.0,
-                    color: (0.72, 0.86, 0.96, 1.0),
-                    align: Center,
-                    valign: Center,
-                    fit: false,
-                )),
-                button: true,
-                visible: false,
-                opacity: 1.0,
-            )),
-        ),
-        (
-            name: "SAS STAB",
-            transform: (
-                translation: (0.0, 0.0, 0.0),
-                rotation: (0.0, 0.0, 0.0, 1.0),
-                scale: (1.0, 1.0, 1.0),
-            ),
-            matter: Empty,
-            scripts: [
-                (
-                    kind: "sas_button",
-                    enabled: true,
-                    params: [],
-                    strs: [
-                        ("mode", "stability"),
-                    ],
-                ),
-            ],
-            parent: Some(32),
-            ui: Some((
-                place: Free(
-                    pos: (0.0, 0.0),
-                ),
-                size: (Fixed(60.0), Fixed(22.0)),
-                shape: Some((
-                    fill: (0.1, 0.14, 0.18, 0.82),
-                    radius: 4.0,
-                    border: 1.0,
-                    border_color: (0.4, 0.55, 0.65, 0.6),
-                )),
-                text: Some((
-                    text: "STAB",
-                    size: 12.0,
-                    color: (0.72, 0.86, 0.96, 1.0),
-                    align: Center,
-                    valign: Center,
-                    fit: false,
-                )),
-                button: true,
-                visible: false,
-                opacity: 1.0,
-            )),
-        ),
-        (
-            name: "SAS PRO",
-            transform: (
-                translation: (0.0, 0.0, 0.0),
-                rotation: (0.0, 0.0, 0.0, 1.0),
-                scale: (1.0, 1.0, 1.0),
-            ),
-            matter: Empty,
-            scripts: [
-                (
-                    kind: "sas_button",
-                    enabled: true,
-                    params: [],
-                    strs: [
-                        ("mode", "prograde"),
-                    ],
-                ),
-            ],
-            parent: Some(32),
-            ui: Some((
-                place: Free(
-                    pos: (0.0, 0.0),
-                ),
-                size: (Fixed(60.0), Fixed(22.0)),
-                shape: Some((
-                    fill: (0.1, 0.14, 0.18, 0.82),
-                    radius: 4.0,
-                    border: 1.0,
-                    border_color: (0.4, 0.55, 0.65, 0.6),
-                )),
-                text: Some((
-                    text: "PRO",
-                    size: 12.0,
-                    color: (0.72, 0.86, 0.96, 1.0),
-                    align: Center,
-                    valign: Center,
-                    fit: false,
-                )),
-                button: true,
-                visible: false,
-                opacity: 1.0,
-            )),
-        ),
-        (
-            name: "SAS RET",
-            transform: (
-                translation: (0.0, 0.0, 0.0),
-                rotation: (0.0, 0.0, 0.0, 1.0),
-                scale: (1.0, 1.0, 1.0),
-            ),
-            matter: Empty,
-            scripts: [
-                (
-                    kind: "sas_button",
-                    enabled: true,
-                    params: [],
-                    strs: [
-                        ("mode", "retrograde"),
-                    ],
-                ),
-            ],
-            parent: Some(32),
-            ui: Some((
-                place: Free(
-                    pos: (0.0, 0.0),
-                ),
-                size: (Fixed(60.0), Fixed(22.0)),
-                shape: Some((
-                    fill: (0.1, 0.14, 0.18, 0.82),
-                    radius: 4.0,
-                    border: 1.0,
-                    border_color: (0.4, 0.55, 0.65, 0.6),
-                )),
-                text: Some((
-                    text: "RET",
-                    size: 12.0,
-                    color: (0.72, 0.86, 0.96, 1.0),
-                    align: Center,
-                    valign: Center,
-                    fit: false,
-                )),
-                button: true,
-                visible: false,
-                opacity: 1.0,
-            )),
-        ),
-        (
-            name: "SAS NML",
-            transform: (
-                translation: (0.0, 0.0, 0.0),
-                rotation: (0.0, 0.0, 0.0, 1.0),
-                scale: (1.0, 1.0, 1.0),
-            ),
-            matter: Empty,
-            scripts: [
-                (
-                    kind: "sas_button",
-                    enabled: true,
-                    params: [],
-                    strs: [
-                        ("mode", "normal"),
-                    ],
-                ),
-            ],
-            parent: Some(32),
-            ui: Some((
-                place: Free(
-                    pos: (0.0, 0.0),
-                ),
-                size: (Fixed(60.0), Fixed(22.0)),
-                shape: Some((
-                    fill: (0.1, 0.14, 0.18, 0.82),
-                    radius: 4.0,
-                    border: 1.0,
-                    border_color: (0.4, 0.55, 0.65, 0.6),
-                )),
-                text: Some((
-                    text: "NML",
-                    size: 12.0,
-                    color: (0.72, 0.86, 0.96, 1.0),
-                    align: Center,
-                    valign: Center,
-                    fit: false,
-                )),
-                button: true,
-                visible: false,
-                opacity: 1.0,
-            )),
-        ),
-        (
-            name: "SAS ANML",
-            transform: (
-                translation: (0.0, 0.0, 0.0),
-                rotation: (0.0, 0.0, 0.0, 1.0),
-                scale: (1.0, 1.0, 1.0),
-            ),
-            matter: Empty,
-            scripts: [
-                (
-                    kind: "sas_button",
-                    enabled: true,
-                    params: [],
-                    strs: [
-                        ("mode", "antinormal"),
-                    ],
-                ),
-            ],
-            parent: Some(32),
-            ui: Some((
-                place: Free(
-                    pos: (0.0, 0.0),
-                ),
-                size: (Fixed(60.0), Fixed(22.0)),
-                shape: Some((
-                    fill: (0.1, 0.14, 0.18, 0.82),
-                    radius: 4.0,
-                    border: 1.0,
-                    border_color: (0.4, 0.55, 0.65, 0.6),
-                )),
-                text: Some((
-                    text: "ANML",
-                    size: 12.0,
-                    color: (0.72, 0.86, 0.96, 1.0),
-                    align: Center,
-                    valign: Center,
-                    fit: false,
-                )),
-                button: true,
-                visible: false,
-                opacity: 1.0,
-            )),
-        ),
-        (
-            name: "SAS R-IN",
-            transform: (
-                translation: (0.0, 0.0, 0.0),
-                rotation: (0.0, 0.0, 0.0, 1.0),
-                scale: (1.0, 1.0, 1.0),
-            ),
-            matter: Empty,
-            scripts: [
-                (
-                    kind: "sas_button",
-                    enabled: true,
-                    params: [],
-                    strs: [
-                        ("mode", "radialin"),
-                    ],
-                ),
-            ],
-            parent: Some(32),
-            ui: Some((
-                place: Free(
-                    pos: (0.0, 0.0),
-                ),
-                size: (Fixed(60.0), Fixed(22.0)),
-                shape: Some((
-                    fill: (0.1, 0.14, 0.18, 0.82),
-                    radius: 4.0,
-                    border: 1.0,
-                    border_color: (0.4, 0.55, 0.65, 0.6),
-                )),
-                text: Some((
-                    text: "R-IN",
-                    size: 12.0,
-                    color: (0.72, 0.86, 0.96, 1.0),
-                    align: Center,
-                    valign: Center,
-                    fit: false,
-                )),
-                button: true,
-                visible: false,
-                opacity: 1.0,
-            )),
-        ),
-        (
-            name: "SAS R-OUT",
-            transform: (
-                translation: (0.0, 0.0, 0.0),
-                rotation: (0.0, 0.0, 0.0, 1.0),
-                scale: (1.0, 1.0, 1.0),
-            ),
-            matter: Empty,
-            scripts: [
-                (
-                    kind: "sas_button",
-                    enabled: true,
-                    params: [],
-                    strs: [
-                        ("mode", "radialout"),
-                    ],
-                ),
-            ],
-            parent: Some(32),
-            ui: Some((
-                place: Free(
-                    pos: (0.0, 0.0),
-                ),
-                size: (Fixed(60.0), Fixed(22.0)),
-                shape: Some((
-                    fill: (0.1, 0.14, 0.18, 0.82),
-                    radius: 4.0,
-                    border: 1.0,
-                    border_color: (0.4, 0.55, 0.65, 0.6),
-                )),
-                text: Some((
-                    text: "R-OUT",
-                    size: 12.0,
-                    color: (0.72, 0.86, 0.96, 1.0),
-                    align: Center,
-                    valign: Center,
-                    fit: false,
-                )),
-                button: true,
-                visible: false,
-                opacity: 1.0,
-            )),
-        ),
-        (
-            name: "SAS NODE",
-            transform: (
-                translation: (0.0, 0.0, 0.0),
-                rotation: (0.0, 0.0, 0.0, 1.0),
-                scale: (1.0, 1.0, 1.0),
-            ),
-            matter: Empty,
-            scripts: [
-                (
-                    kind: "sas_button",
-                    enabled: true,
-                    params: [],
-                    strs: [
-                        ("mode", "node"),
-                    ],
-                ),
-            ],
-            parent: Some(32),
-            ui: Some((
-                place: Free(
-                    pos: (0.0, 0.0),
-                ),
-                size: (Fixed(60.0), Fixed(22.0)),
-                shape: Some((
-                    fill: (0.1, 0.14, 0.18, 0.82),
-                    radius: 4.0,
-                    border: 1.0,
-                    border_color: (0.4, 0.55, 0.65, 0.6),
-                )),
-                text: Some((
-                    text: "NODE",
-                    size: 12.0,
-                    color: (0.72, 0.86, 0.96, 1.0),
-                    align: Center,
-                    valign: Center,
-                    fit: false,
-                )),
-                button: true,
-                visible: false,
-                opacity: 1.0,
-            )),
         ),
         (
             name: "Athosil System",
@@ -1335,7 +801,7 @@
             ),
             matter: Empty,
             scripts: [],
-            parent: Some(18),
+            parent: Some(15),
             ui: Some((
                 place: Pin(
                     anchor: Center,
@@ -1361,16 +827,22 @@
             ),
             matter: Empty,
             scripts: [],
-            parent: Some(18),
+            parent: Some(15),
             ui: Some((
                 place: Pin(
                     anchor: Center,
                     offset: (0.0, 0.0),
                 ),
-                size: (Fixed(760.0), Fixed(60.0)),
+                // Five lines' worth, not one. game_manager writes what the
+                // loader is actually doing, how long it has been doing it, and
+                // — on a save's first entry — that this load is the slow one
+                // because the world is being made from its seed. At 60 px high
+                // everything under the headline was simply clipped away, which
+                // is how a two-minute first load came to look like a hang.
+                size: (Fixed(880.0), Fixed(240.0)),
                 text: Some((
                     text: "ENTERING GALAXY …",
-                    size: 26.0,
+                    size: 21.0,
                     color: (0.75, 0.88, 1.0, 1.0),
                     align: Center,
                     valign: Center,
@@ -1395,28 +867,23 @@
                     params: [],
                 ),
             ],
-            parent: Some(18),
+            parent: Some(15),
             ui: Some((
                 place: Pin(
                     anchor: TopRight,
-                    offset: (-14.0, 44.0),
+                    offset: (-16.0, 16.0),
                 ),
-                size: (Fixed(96.0), Fixed(26.0)),
-                shape: Some((
-                    fill: (0.1, 0.14, 0.18, 0.8),
-                    radius: 5.0,
-                    border: 1.0,
-                    border_color: (0.4, 0.55, 0.65, 0.55),
-                )),
+                size: (Fixed(112.0), Fixed(28.0)),
                 text: Some((
-                    text: "MENU",
-                    size: 13.0,
+                    text: "\u{2630}  MENU  \u{00B7}  ESC",
+                    size: 12.0,
                     color: (0.72, 0.86, 0.96, 1.0),
                     align: Center,
                     valign: Center,
                     fit: false,
                 )),
                 button: true,
+                style: "hud/button",
                 visible: false,
                 opacity: 1.0,
             )),
@@ -1438,33 +905,6 @@
             ],
         ),
         (
-            name: "Stage List",
-            transform: (
-                translation: (0.0, 0.0, 0.0),
-                rotation: (0.0, 0.0, 0.0, 1.0),
-                scale: (1.0, 1.0, 1.0),
-            ),
-            matter: Empty,
-            scripts: [],
-            parent: Some(60),
-            ui: Some((
-                place: Free(
-                    pos: (0.0, 0.0),
-                ),
-                size: (Fixed(272.0), Fit),
-                text: Some((
-                    text: "",
-                    size: 15.0,
-                    color: (0.85, 0.92, 1.0, 1.0),
-                    align: Start,
-                    valign: Start,
-                    fit: false,
-                )),
-                visible: true,
-                opacity: 1.0,
-            )),
-        ),
-        (
             name: "Vessel HUD",
             transform: (
                 translation: (0.0, 0.0, 0.0),
@@ -1473,16 +913,16 @@
             ),
             matter: Empty,
             scripts: [],
-            parent: Some(18),
+            parent: Some(15),
             ui: Some((
                 place: Pin(
                     anchor: Bottom,
-                    offset: (0.0, -46.0),
+                    offset: (0.0, -136.0),
                 ),
-                size: (Fixed(760.0), Fixed(30.0)),
+                size: (Fixed(560.0), Fixed(26.0)),
                 text: Some((
                     text: "",
-                    size: 17.0,
+                    size: 15.0,
                     color: (0.75, 0.95, 1.0, 1.0),
                     align: Center,
                     valign: Center,
@@ -1547,13 +987,20 @@
             ),
             matter: Empty,
             scripts: [],
-            parent: Some(18),
+            parent: Some(15),
             ui: Some((
                 place: Pin(
                     anchor: Bottom,
-                    offset: (0.0, -84.0),
+                    offset: (0.0, -92.0),
                 ),
-                size: (Fixed(360.0), Fixed(34.0)),
+                size: (Fit, Fixed(36.0)),
+                stack: Some((
+                    dir: Row,
+                    gap: 0.0,
+                    pad: 0.0,
+                    align: Center,
+                    justify: Start,
+                )),
                 shape: Some((
                     fill: (0.06, 0.09, 0.13, 0.88),
                     radius: 8.0,
@@ -1565,14 +1012,6 @@
                         blur: 16.0,
                         spread: 1.0,
                     )),
-                )),
-                text: Some((
-                    text: "",
-                    size: 15.0,
-                    color: (0.8, 0.92, 1.0, 1.0),
-                    align: Center,
-                    valign: Center,
-                    fit: false,
                 )),
                 visible: false,
                 opacity: 1.0,
@@ -1587,18 +1026,18 @@
             ),
             matter: Empty,
             scripts: [],
-            parent: Some(18),
+            parent: Some(15),
             ui: Some((
                 place: Pin(
                     anchor: Center,
                     offset: (0.0, 0.0),
                 ),
-                size: (Fixed(460.0), Fixed(364.0)),
+                size: (Fixed(480.0), Fit),
                 stack: Some((
                     dir: Column,
                     gap: 12.0,
                     pad: 22.0,
-                    align: Center,
+                    align: Start,
                     justify: Start,
                 )),
                 shape: Some((
@@ -1613,13 +1052,6 @@
                         spread: 3.0,
                     )),
                 )),
-                shader: "shaders/examples/ui/ui_frosted.flsl",
-                shader_params: {
-                    "alpha": (0.9, 0.0, 0.0, 0.0),
-                    "blur": (0.005, 0.0, 0.0, 0.0),
-                    "tint": (0.66, 0.78, 1.0, 1.0),
-                    "tintAmount": (0.22, 0.0, 0.0, 0.0),
-                },
                 visible: false,
                 opacity: 1.0,
             )),
@@ -1633,17 +1065,17 @@
             ),
             matter: Empty,
             scripts: [],
-            parent: Some(54),
+            parent: Some(35),
             ui: Some((
                 place: Free(
                     pos: (0.0, 0.0),
                 ),
-                size: (Fixed(420.0), Fixed(30.0)),
+                size: (Fixed(436.0), Fixed(22.0)),
                 text: Some((
                     text: "Facility",
                     size: 20.0,
                     color: (0.85, 0.95, 1.0, 1.0),
-                    align: Center,
+                    align: Start,
                     valign: Center,
                     fit: false,
                 )),
@@ -1660,12 +1092,13 @@
             ),
             matter: Empty,
             scripts: [],
-            parent: Some(54),
+            parent: Some(35),
             ui: Some((
                 place: Free(
                     pos: (0.0, 0.0),
                 ),
-                size: (Fixed(420.0), Fixed(184.0)),
+                size: (Fixed(436.0), Fit),
+                max_size: (0.0, 470.0),
                 text: Some((
                     text: "",
                     size: 14.0,
@@ -1673,6 +1106,8 @@
                     align: Start,
                     valign: Start,
                     fit: false,
+                    line_height: 1.35,
+                    wrap: true,
                 )),
                 visible: true,
                 opacity: 1.0,
@@ -1695,12 +1130,12 @@
                     ],
                 ),
             ],
-            parent: Some(54),
+            parent: Some(82),
             ui: Some((
                 place: Free(
                     pos: (0.0, 0.0),
                 ),
-                size: (Fixed(220.0), Fixed(34.0)),
+                size: (Fixed(300.0), Fixed(36.0)),
                 shape: Some((
                     fill: (0.12, 0.2, 0.28, 0.95),
                     radius: 5.0,
@@ -1737,12 +1172,12 @@
                     ],
                 ),
             ],
-            parent: Some(54),
+            parent: Some(82),
             ui: Some((
                 place: Free(
                     pos: (0.0, 0.0),
                 ),
-                size: (Fixed(220.0), Fixed(30.0)),
+                size: (Fixed(128.0), Fixed(36.0)),
                 shape: Some((
                     fill: (0.18, 0.1, 0.12, 0.95),
                     radius: 5.0,
@@ -1750,7 +1185,7 @@
                     border_color: (0.7, 0.45, 0.5, 0.7),
                 )),
                 text: Some((
-                    text: "Close",
+                    text: "Close  \u{00B7}  E",
                     size: 13.0,
                     color: (0.95, 0.85, 0.85, 1.0),
                     align: Center,
@@ -1771,13 +1206,13 @@
             ),
             matter: Empty,
             scripts: [],
-            parent: Some(18),
+            parent: Some(15),
             ui: Some((
                 place: Pin(
                     anchor: TopLeft,
-                    offset: (12.0, 44.0),
+                    offset: (16.0, 16.0),
                 ),
-                size: (Fixed(680.0), Fit),
+                size: (Fixed(600.0), Fit),
                 stack: Some((
                     dir: Column,
                     gap: 0.0,
@@ -1785,71 +1220,7 @@
                     align: Start,
                     justify: Start,
                 )),
-                shape: Some((
-                    fill: (0.02, 0.05, 0.07, 0.72),
-                    radius: 7.0,
-                    border: 1.2,
-                    border_color: (0.26, 0.82, 0.62, 0.7),
-                    shadow: Some((
-                        color: (0.0, 0.0, 0.0, 0.55),
-                        offset: (0.0, 8.0),
-                        blur: 22.0,
-                        spread: 1.0,
-                    )),
-                )),
-                shader: "shaders/examples/ui/ui_scanline.flsl",
-                shader_params: {
-                    "count": (150.0, 0.0, 0.0, 0.0),
-                    "speed": (3.0, 0.0, 0.0, 0.0),
-                    "strength": (0.06, 0.0, 0.0, 0.0),
-                    "tint": (0.2, 1.0, 0.62, 1.0),
-                },
-                visible: false,
-                opacity: 0.97,
-            )),
-        ),
-        (
-            name: "Stage Panel",
-            transform: (
-                translation: (0.0, 0.0, 0.0),
-                rotation: (0.0, 0.0, 0.0, 1.0),
-                scale: (1.0, 1.0, 1.0),
-            ),
-            matter: Empty,
-            scripts: [],
-            parent: Some(18),
-            ui: Some((
-                place: Pin(
-                    anchor: TopRight,
-                    offset: (-12.0, 44.0),
-                ),
-                size: (Fixed(300.0), Fit),
-                stack: Some((
-                    dir: Column,
-                    gap: 0.0,
-                    pad: 14.0,
-                    align: Start,
-                    justify: Start,
-                )),
-                shape: Some((
-                    fill: (0.02, 0.05, 0.09, 0.72),
-                    radius: 7.0,
-                    border: 1.2,
-                    border_color: (0.32, 0.66, 0.92, 0.7),
-                    shadow: Some((
-                        color: (0.0, 0.0, 0.0, 0.55),
-                        offset: (0.0, 8.0),
-                        blur: 22.0,
-                        spread: 1.0,
-                    )),
-                )),
-                shader: "shaders/examples/ui/ui_scanline.flsl",
-                shader_params: {
-                    "count": (150.0, 0.0, 0.0, 0.0),
-                    "speed": (3.0, 0.0, 0.0, 0.0),
-                    "strength": (0.06, 0.0, 0.0, 0.0),
-                    "tint": (0.35, 0.72, 1.0, 1.0),
-                },
+                style: "hud/instrument",
                 visible: false,
                 opacity: 0.97,
             )),
@@ -1875,13 +1246,13 @@
                     params: [],
                 ),
             ],
-            parent: Some(18),
+            parent: Some(15),
             ui: Some((
                 place: Pin(
-                    anchor: Right,
-                    offset: (-12.0, 40.0),
+                    anchor: TopRight,
+                    offset: (-16.0, 52.0),
                 ),
-                size: (Fixed(380.0), Fit),
+                size: (Fixed(360.0), Fit),
                 stack: Some((
                     dir: Column,
                     gap: 5.0,
@@ -1889,25 +1260,7 @@
                     align: Start,
                     justify: Start,
                 )),
-                shape: Some((
-                    fill: (0.02, 0.05, 0.09, 0.74),
-                    radius: 9.0,
-                    border: 1.2,
-                    border_color: (0.32, 0.66, 0.92, 0.75),
-                    shadow: Some((
-                        color: (0.0, 0.0, 0.0, 0.6),
-                        offset: (0.0, 10.0),
-                        blur: 26.0,
-                        spread: 2.0,
-                    )),
-                )),
-                shader: "shaders/examples/ui/ui_scanline.flsl",
-                shader_params: {
-                    "count": (150.0, 0.0, 0.0, 0.0),
-                    "speed": (3.0, 0.0, 0.0, 0.0),
-                    "strength": (0.05, 0.0, 0.0, 0.0),
-                    "tint": (0.35, 0.72, 1.0, 1.0),
-                },
+                style: "hud/instrument",
                 visible: false,
                 opacity: 0.97,
             )),
@@ -1921,20 +1274,23 @@
             ),
             matter: Empty,
             scripts: [],
-            parent: Some(61),
+            parent: Some(41),
             ui: Some((
                 place: Free(
                     pos: (0.0, 0.0),
                 ),
-                size: (Fixed(352.0), Fixed(52.0)),
+                size: (Fixed(332.0), Fit),
                 text: Some((
                     text: "PERIPHERALS",
-                    size: 14.0,
+                    size: 13.0,
                     color: (0.68, 0.9, 1.0, 1.0),
                     align: Start,
-                    valign: Center,
+                    valign: Start,
                     fit: false,
+                    line_height: 1.3,
+                    wrap: true,
                 )),
+                style: "hud/readout",
                 visible: true,
                 opacity: 1.0,
             )),
@@ -1956,12 +1312,12 @@
                     ],
                 ),
             ],
-            parent: Some(61),
+            parent: Some(41),
             ui: Some((
                 place: Free(
                     pos: (0.0, 0.0),
                 ),
-                size: (Fixed(352.0), Fixed(26.0)),
+                size: (Fixed(332.0), Fixed(28.0)),
                 shape: Some((
                     fill: (0.1, 0.14, 0.18, 0.9),
                     radius: 5.0,
@@ -1998,12 +1354,12 @@
                     ],
                 ),
             ],
-            parent: Some(61),
+            parent: Some(41),
             ui: Some((
                 place: Free(
                     pos: (0.0, 0.0),
                 ),
-                size: (Fixed(352.0), Fixed(26.0)),
+                size: (Fixed(332.0), Fixed(28.0)),
                 shape: Some((
                     fill: (0.1, 0.14, 0.18, 0.9),
                     radius: 5.0,
@@ -2040,12 +1396,12 @@
                     ],
                 ),
             ],
-            parent: Some(61),
+            parent: Some(41),
             ui: Some((
                 place: Free(
                     pos: (0.0, 0.0),
                 ),
-                size: (Fixed(352.0), Fixed(26.0)),
+                size: (Fixed(332.0), Fixed(28.0)),
                 shape: Some((
                     fill: (0.1, 0.14, 0.18, 0.9),
                     radius: 5.0,
@@ -2082,12 +1438,12 @@
                     ],
                 ),
             ],
-            parent: Some(61),
+            parent: Some(41),
             ui: Some((
                 place: Free(
                     pos: (0.0, 0.0),
                 ),
-                size: (Fixed(352.0), Fixed(26.0)),
+                size: (Fixed(332.0), Fixed(28.0)),
                 shape: Some((
                     fill: (0.1, 0.14, 0.18, 0.9),
                     radius: 5.0,
@@ -2116,15 +1472,15 @@
             ),
             matter: Empty,
             scripts: [],
-            parent: Some(61),
+            parent: Some(41),
             ui: Some((
                 place: Free(
                     pos: (0.0, 0.0),
                 ),
-                size: (Fixed(352.0), Fixed(22.0)),
+                size: (Fixed(332.0), Fixed(24.0)),
                 text: Some((
-                    text: "  DOCKING",
-                    size: 12.0,
+                    text: "DOCKING",
+                    size: 11.0,
                     color: (0.5, 0.68, 0.82, 1.0),
                     align: Start,
                     valign: Center,
@@ -2154,12 +1510,12 @@
                     ],
                 ),
             ],
-            parent: Some(61),
+            parent: Some(41),
             ui: Some((
                 place: Free(
                     pos: (0.0, 0.0),
                 ),
-                size: (Fixed(352.0), Fixed(26.0)),
+                size: (Fixed(332.0), Fixed(28.0)),
                 shape: Some((
                     fill: (0.1, 0.14, 0.18, 0.9),
                     radius: 5.0,
@@ -2199,12 +1555,12 @@
                     ],
                 ),
             ],
-            parent: Some(61),
+            parent: Some(41),
             ui: Some((
                 place: Free(
                     pos: (0.0, 0.0),
                 ),
-                size: (Fixed(352.0), Fixed(26.0)),
+                size: (Fixed(332.0), Fixed(28.0)),
                 shape: Some((
                     fill: (0.1, 0.14, 0.18, 0.9),
                     radius: 5.0,
@@ -2244,12 +1600,12 @@
                     ],
                 ),
             ],
-            parent: Some(61),
+            parent: Some(41),
             ui: Some((
                 place: Free(
                     pos: (0.0, 0.0),
                 ),
-                size: (Fixed(352.0), Fixed(26.0)),
+                size: (Fixed(332.0), Fixed(28.0)),
                 shape: Some((
                     fill: (0.1, 0.14, 0.18, 0.9),
                     radius: 5.0,
@@ -2289,12 +1645,12 @@
                     ],
                 ),
             ],
-            parent: Some(61),
+            parent: Some(41),
             ui: Some((
                 place: Free(
                     pos: (0.0, 0.0),
                 ),
-                size: (Fixed(352.0), Fixed(26.0)),
+                size: (Fixed(332.0), Fixed(28.0)),
                 shape: Some((
                     fill: (0.1, 0.14, 0.18, 0.9),
                     radius: 5.0,
@@ -2334,12 +1690,12 @@
                     ],
                 ),
             ],
-            parent: Some(61),
+            parent: Some(41),
             ui: Some((
                 place: Free(
                     pos: (0.0, 0.0),
                 ),
-                size: (Fixed(352.0), Fixed(26.0)),
+                size: (Fixed(332.0), Fixed(28.0)),
                 shape: Some((
                     fill: (0.10, 0.22, 0.34, 0.92),
                     radius: 5.0,
@@ -2379,12 +1735,12 @@
                     ],
                 ),
             ],
-            parent: Some(61),
+            parent: Some(41),
             ui: Some((
                 place: Free(
                     pos: (0.0, 0.0),
                 ),
-                size: (Fixed(352.0), Fixed(26.0)),
+                size: (Fixed(332.0), Fixed(28.0)),
                 shape: Some((
                     fill: (0.10, 0.20, 0.16, 0.92),
                     radius: 5.0,
@@ -2424,12 +1780,12 @@
                     ],
                 ),
             ],
-            parent: Some(61),
+            parent: Some(41),
             ui: Some((
                 place: Free(
                     pos: (0.0, 0.0),
                 ),
-                size: (Fixed(352.0), Fixed(26.0)),
+                size: (Fixed(332.0), Fixed(28.0)),
                 shape: Some((
                     fill: (0.1, 0.26, 0.34, 0.92),
                     radius: 5.0,
@@ -2469,12 +1825,12 @@
                     ],
                 ),
             ],
-            parent: Some(61),
+            parent: Some(41),
             ui: Some((
                 place: Free(
                     pos: (0.0, 0.0),
                 ),
-                size: (Fixed(352.0), Fixed(26.0)),
+                size: (Fixed(332.0), Fixed(28.0)),
                 shape: Some((
                     fill: (0.10, 0.24, 0.16, 0.92),
                     radius: 5.0,
@@ -2514,12 +1870,12 @@
                     ],
                 ),
             ],
-            parent: Some(61),
+            parent: Some(41),
             ui: Some((
                 place: Free(
                     pos: (0.0, 0.0),
                 ),
-                size: (Fixed(352.0), Fixed(26.0)),
+                size: (Fixed(332.0), Fixed(28.0)),
                 shape: Some((
                     fill: (0.16, 0.13, 0.3, 0.92),
                     radius: 5.0,
@@ -2548,14 +1904,14 @@
             ),
             matter: Empty,
             scripts: [],
-            parent: Some(61),
+            parent: Some(41),
             ui: Some((
                 place: Free(
                     pos: (0.0, 0.0),
                 ),
-                size: (Fixed(352.0), Fixed(20.0)),
+                size: (Fixed(332.0), Fixed(20.0)),
                 text: Some((
-                    text: "  P closes  ·  a latched port undocks on click",
+                    text: "P or Esc closes  ·  click a docked port to undock",
                     size: 11.0,
                     color: (0.45, 0.6, 0.72, 1.0),
                     align: Start,
@@ -2601,7 +1957,7 @@
         // ── OPS BOARD ─────────────────────────────────────────────────────────
         // The contracts panel at the Command Centre: balance, standing, the
         // contract on the books with its goals ticked, and every job you could
-        // sign next. Rows are generic (`ops_row` reads the catalogue), so a new
+        // sign next. The rows are described from the mission catalogue, so a new
         // contract is a table entry in missions.lua and nothing here changes.
         (
             name: "Ops Board",
@@ -2618,347 +1974,28 @@
                     params: [],
                 ),
             ],
-            parent: Some(18),
+            parent: Some(15),
+            // The FRAME only: where the board sits and how wide it is. Its
+            // contents — and its own glass, border and shadow — are described
+            // from Lua with `ui.make`, because the board shows however many
+            // contracts the mission catalogue is offering.
             ui: Some((
                 place: Pin(
                     anchor: Center,
                     offset: (0.0, 0.0),
                 ),
-                size: (Fixed(520.0), Fit),
+                size: (Fixed(560.0), Fit),
                 stack: Some((
                     dir: Column,
-                    gap: 6.0,
-                    pad: 20.0,
+                    gap: 0.0,
+                    pad: 0.0,
                     align: Start,
                     justify: Start,
                 )),
-                shape: Some((
-                    fill: (0.04, 0.06, 0.10, 0.80),
-                    radius: 12.0,
-                    border: 1.5,
-                    border_color: (0.42, 0.66, 0.88, 0.85),
-                    shadow: Some((
-                        color: (0.0, 0.0, 0.0, 0.6),
-                        offset: (0.0, 12.0),
-                        blur: 30.0,
-                        spread: 3.0,
-                    )),
-                )),
-                visible: false,
-                opacity: 0.98,
-            )),
-        ),
-        (
-            name: "Ops Title",
-            transform: (
-                translation: (0.0, 0.0, 0.0),
-                rotation: (0.0, 0.0, 0.0, 1.0),
-                scale: (1.0, 1.0, 1.0),
-            ),
-            matter: Empty,
-            scripts: [],
-            parent: Some(80),
-            ui: Some((
-                place: Free(
-                    pos: (0.0, 0.0),
-                ),
-                size: (Fixed(480.0), Fixed(118.0)),
-                text: Some((
-                    text: "OPS BOARD",
-                    size: 15.0,
-                    color: (0.72, 0.9, 1.0, 1.0),
-                    align: Start,
-                    valign: Start,
-                    fit: false,
-                )),
-                visible: true,
-                opacity: 1.0,
-            )),
-        ),
-        (
-            name: "Ops Row 1",
-            transform: (
-                translation: (0.0, 0.0, 0.0),
-                rotation: (0.0, 0.0, 0.0, 1.0),
-                scale: (1.0, 1.0, 1.0),
-            ),
-            matter: Empty,
-            scripts: [
-                (
-                    kind: "ops_row",
-                    enabled: true,
-                    params: [
-                        ("slot", 1.0),
-                    ],
-                ),
-            ],
-            parent: Some(80),
-            ui: Some((
-                place: Free(
-                    pos: (0.0, 0.0),
-                ),
-                size: (Fixed(480.0), Fixed(28.0)),
-                shape: Some((
-                    fill: (0.1, 0.14, 0.18, 0.9),
-                    radius: 5.0,
-                    border: 1.0,
-                    border_color: (0.35, 0.55, 0.7, 0.55),
-                )),
-                text: Some((
-                    text: "",
-                    size: 14.0,
-                    color: (0.72, 0.86, 0.96, 1.0),
-                    align: Start,
-                    valign: Center,
-                    fit: false,
-                )),
-                button: true,
                 visible: false,
                 opacity: 1.0,
             )),
         ),
-        (
-            name: "Ops Row 2",
-            transform: (
-                translation: (0.0, 0.0, 0.0),
-                rotation: (0.0, 0.0, 0.0, 1.0),
-                scale: (1.0, 1.0, 1.0),
-            ),
-            matter: Empty,
-            scripts: [
-                (
-                    kind: "ops_row",
-                    enabled: true,
-                    params: [
-                        ("slot", 2.0),
-                    ],
-                ),
-            ],
-            parent: Some(80),
-            ui: Some((
-                place: Free(
-                    pos: (0.0, 0.0),
-                ),
-                size: (Fixed(480.0), Fixed(28.0)),
-                shape: Some((
-                    fill: (0.1, 0.14, 0.18, 0.9),
-                    radius: 5.0,
-                    border: 1.0,
-                    border_color: (0.35, 0.55, 0.7, 0.55),
-                )),
-                text: Some((
-                    text: "",
-                    size: 14.0,
-                    color: (0.72, 0.86, 0.96, 1.0),
-                    align: Start,
-                    valign: Center,
-                    fit: false,
-                )),
-                button: true,
-                visible: false,
-                opacity: 1.0,
-            )),
-        ),
-        (
-            name: "Ops Row 3",
-            transform: (
-                translation: (0.0, 0.0, 0.0),
-                rotation: (0.0, 0.0, 0.0, 1.0),
-                scale: (1.0, 1.0, 1.0),
-            ),
-            matter: Empty,
-            scripts: [
-                (
-                    kind: "ops_row",
-                    enabled: true,
-                    params: [
-                        ("slot", 3.0),
-                    ],
-                ),
-            ],
-            parent: Some(80),
-            ui: Some((
-                place: Free(
-                    pos: (0.0, 0.0),
-                ),
-                size: (Fixed(480.0), Fixed(28.0)),
-                shape: Some((
-                    fill: (0.1, 0.14, 0.18, 0.9),
-                    radius: 5.0,
-                    border: 1.0,
-                    border_color: (0.35, 0.55, 0.7, 0.55),
-                )),
-                text: Some((
-                    text: "",
-                    size: 14.0,
-                    color: (0.72, 0.86, 0.96, 1.0),
-                    align: Start,
-                    valign: Center,
-                    fit: false,
-                )),
-                button: true,
-                visible: false,
-                opacity: 1.0,
-            )),
-        ),
-        (
-            name: "Ops Row 4",
-            transform: (
-                translation: (0.0, 0.0, 0.0),
-                rotation: (0.0, 0.0, 0.0, 1.0),
-                scale: (1.0, 1.0, 1.0),
-            ),
-            matter: Empty,
-            scripts: [
-                (
-                    kind: "ops_row",
-                    enabled: true,
-                    params: [
-                        ("slot", 4.0),
-                    ],
-                ),
-            ],
-            parent: Some(80),
-            ui: Some((
-                place: Free(
-                    pos: (0.0, 0.0),
-                ),
-                size: (Fixed(480.0), Fixed(28.0)),
-                shape: Some((
-                    fill: (0.1, 0.14, 0.18, 0.9),
-                    radius: 5.0,
-                    border: 1.0,
-                    border_color: (0.35, 0.55, 0.7, 0.55),
-                )),
-                text: Some((
-                    text: "",
-                    size: 14.0,
-                    color: (0.72, 0.86, 0.96, 1.0),
-                    align: Start,
-                    valign: Center,
-                    fit: false,
-                )),
-                button: true,
-                visible: false,
-                opacity: 1.0,
-            )),
-        ),
-        (
-            name: "Ops Row 5",
-            transform: (
-                translation: (0.0, 0.0, 0.0),
-                rotation: (0.0, 0.0, 0.0, 1.0),
-                scale: (1.0, 1.0, 1.0),
-            ),
-            matter: Empty,
-            scripts: [
-                (
-                    kind: "ops_row",
-                    enabled: true,
-                    params: [
-                        ("slot", 5.0),
-                    ],
-                ),
-            ],
-            parent: Some(80),
-            ui: Some((
-                place: Free(
-                    pos: (0.0, 0.0),
-                ),
-                size: (Fixed(480.0), Fixed(28.0)),
-                shape: Some((
-                    fill: (0.1, 0.14, 0.18, 0.9),
-                    radius: 5.0,
-                    border: 1.0,
-                    border_color: (0.35, 0.55, 0.7, 0.55),
-                )),
-                text: Some((
-                    text: "",
-                    size: 14.0,
-                    color: (0.72, 0.86, 0.96, 1.0),
-                    align: Start,
-                    valign: Center,
-                    fit: false,
-                )),
-                button: true,
-                visible: false,
-                opacity: 1.0,
-            )),
-        ),
-        (
-            name: "Ops Row 6",
-            transform: (
-                translation: (0.0, 0.0, 0.0),
-                rotation: (0.0, 0.0, 0.0, 1.0),
-                scale: (1.0, 1.0, 1.0),
-            ),
-            matter: Empty,
-            scripts: [
-                (
-                    kind: "ops_row",
-                    enabled: true,
-                    params: [
-                        ("slot", 6.0),
-                    ],
-                ),
-            ],
-            parent: Some(80),
-            ui: Some((
-                place: Free(
-                    pos: (0.0, 0.0),
-                ),
-                size: (Fixed(480.0), Fixed(28.0)),
-                shape: Some((
-                    fill: (0.1, 0.14, 0.18, 0.9),
-                    radius: 5.0,
-                    border: 1.0,
-                    border_color: (0.35, 0.55, 0.7, 0.55),
-                )),
-                text: Some((
-                    text: "",
-                    size: 14.0,
-                    color: (0.72, 0.86, 0.96, 1.0),
-                    align: Start,
-                    valign: Center,
-                    fit: false,
-                )),
-                button: true,
-                visible: false,
-                opacity: 1.0,
-            )),
-        ),
-        (
-            name: "Ops Hint",
-            transform: (
-                translation: (0.0, 0.0, 0.0),
-                rotation: (0.0, 0.0, 0.0, 1.0),
-                scale: (1.0, 1.0, 1.0),
-            ),
-            matter: Empty,
-            scripts: [],
-            parent: Some(80),
-            ui: Some((
-                place: Free(
-                    pos: (0.0, 0.0),
-                ),
-                size: (Fixed(480.0), Fixed(22.0)),
-                text: Some((
-                    text: "",
-                    size: 12.0,
-                    color: (0.5, 0.65, 0.78, 1.0),
-                    align: Start,
-                    valign: Start,
-                    fit: false,
-                )),
-                visible: true,
-                opacity: 1.0,
-            )),
-        ),
-        // ── MATERIAL ECONOMY ──────────────────────────────────────────────────
-        // The registry, the containers, the climate model, the flora generator
-        // and R&D are all plain managers: no transform, no UI, just state other
-        // scripts reach through findScript(). Every one of them keeps its data
-        // in save.* so it survives the builder ⇄ system scene hop.
         (
             name: "Materials",
             transform: (
@@ -2987,10 +2024,14 @@
                 (
                     kind: "inventory",
                     enabled: true,
-                    params: [
-                        ("suit_kg", 45.0),
-                        ("base_kg", 1000000.0),
-                    ],
+                    // NO PARAMS — same reason as the Astronaut's two scripts.
+                    // This list pinned `suit_kg` to 45, which is the number the
+                    // script's own comment records as the bug: a pack that fills
+                    // in three seconds of trigger, so the mining laser reads as
+                    // broken long before the hole is deep enough to stand in.
+                    // The tuning was moved to 90 in `defaults` and this copy
+                    // quietly held it back. `base_kg` just repeated the default.
+                    params: [],
                 ),
             ],
         ),
@@ -3040,18 +2081,11 @@
                 (
                     kind: "flora_field",
                     enabled: true,
-                    params: [
-                        ("near", 55.0),
-                        ("far", 115.0),
-                        ("cell", 20.0),
-                        ("spacing", 9.0),
-                        ("budget", 90.0),
-                        ("cells_per_tick", 1.0),
-                        ("interval", 0.25),
-                        ("regrow", 900.0),
-                        ("alt_max", 260.0),
-                        ("enabled", 1.0),
-                    ],
+                    // Every one of these echoed the script's own default except
+                    // `interval`, which pinned the field's update rate at the
+                    // OLD value and would have silently swallowed the frame-time
+                    // work below. See the note on tool_belt in this file.
+                    params: [],
                 ),
             ],
         ),
@@ -3082,27 +2116,26 @@
             ),
             matter: Empty,
             scripts: [],
-            parent: Some(18),
+            parent: Some(15),
             ui: Some((
                 place: Pin(
                     anchor: Bottom,
-                    offset: (0.0, -18.0),
+                    offset: (0.0, -16.0),
                 ),
-                size: (Fixed(620.0), Fixed(22.0)),
-                text: Some((
-                    text: "",
-                    size: 13.0,
-                    color: (0.78, 0.88, 0.98, 1.0),
+                size: (Fit, Fit),
+                stack: Some((
+                    dir: Column,
+                    gap: 6.0,
+                    pad: 0.0,
                     align: Center,
-                    valign: Center,
-                    fit: false,
+                    justify: End,
                 )),
                 visible: false,
                 opacity: 1.0,
             )),
         ),
         // ── INVENTORY PANEL ───────────────────────────────────────────────────
-        // I opens the suit pack. Rows are generic (inv_row reads the container),
+        // I opens the suit pack. The rows are described from the container,
         // so a new material is a registry entry and nothing here changes.
         (
             name: "Inventory Panel",
@@ -3121,65 +2154,30 @@
                     ],
                 ),
             ],
-            parent: Some(18),
+            parent: Some(15),
+            // The FRAME only: where the panel sits and how wide it is. Its
+            // contents — and its own glass, border and shadow — are described
+            // from Lua with `ui.make`, because the pack holds however many
+            // materials it holds. Same arrangement as the objectives card.
             ui: Some((
                 place: Pin(
                     anchor: Left,
-                    offset: (14.0, 30.0),
+                    offset: (16.0, 0.0),
                 ),
-                size: (Fixed(430.0), Fit),
+                size: (Fixed(440.0), Fit),
                 stack: Some((
                     dir: Column,
-                    gap: 5.0,
-                    pad: 14.0,
+                    gap: 0.0,
+                    pad: 0.0,
                     align: Start,
                     justify: Start,
                 )),
-                shape: Some((
-                    fill: (0.03, 0.06, 0.05, 0.78),
-                    radius: 9.0,
-                    border: 1.2,
-                    border_color: (0.42, 0.82, 0.6, 0.75),
-                    shadow: Some((
-                        color: (0.0, 0.0, 0.0, 0.6),
-                        offset: (0.0, 10.0),
-                        blur: 26.0,
-                        spread: 2.0,
-                    )),
-                )),
                 visible: false,
-                opacity: 0.97,
-            )),
-        ),
-        (
-            name: "Inventory Title",
-            transform: (
-                translation: (0.0, 0.0, 0.0),
-                rotation: (0.0, 0.0, 0.0, 1.0),
-                scale: (1.0, 1.0, 1.0),
-            ),
-            matter: Empty,
-            scripts: [],
-            parent: Some(96),
-            ui: Some((
-                place: Free(
-                    pos: (0.0, 0.0),
-                ),
-                size: (Fixed(402.0), Fixed(52.0)),
-                text: Some((
-                    text: "INVENTORY",
-                    size: 13.0,
-                    color: (0.72, 1.0, 0.86, 1.0),
-                    align: Start,
-                    valign: Start,
-                    fit: false,
-                )),
-                visible: true,
                 opacity: 1.0,
             )),
         ),
         (
-            name: "Inv Row 1",
+            name: "Objectives",
             transform: (
                 translation: (0.0, 0.0, 0.0),
                 rotation: (0.0, 0.0, 0.0, 1.0),
@@ -3188,374 +2186,405 @@
             matter: Empty,
             scripts: [
                 (
-                    kind: "inv_row",
-                    enabled: true,
-                    params: [
-                        ("slot", 1.0),
-                    ],
-                ),
-            ],
-            parent: Some(96),
-            ui: Some((
-                place: Free(
-                    pos: (0.0, 0.0),
-                ),
-                size: (Fixed(402.0), Fixed(24.0)),
-                shape: Some((
-                    fill: (0.08, 0.14, 0.11, 0.9),
-                    radius: 5.0,
-                    border: 1.0,
-                    border_color: (0.3, 0.6, 0.45, 0.55),
-                )),
-                text: Some((
-                    text: "",
-                    size: 13.0,
-                    color: (0.78, 0.86, 0.94, 1.0),
-                    align: Start,
-                    valign: Center,
-                    fit: false,
-                )),
-                button: true,
-                visible: false,
-                opacity: 1.0,
-            )),
-        ),
-        (
-            name: "Inv Row 2",
-            transform: (
-                translation: (0.0, 0.0, 0.0),
-                rotation: (0.0, 0.0, 0.0, 1.0),
-                scale: (1.0, 1.0, 1.0),
-            ),
-            matter: Empty,
-            scripts: [
-                (
-                    kind: "inv_row",
-                    enabled: true,
-                    params: [
-                        ("slot", 2.0),
-                    ],
-                ),
-            ],
-            parent: Some(96),
-            ui: Some((
-                place: Free(
-                    pos: (0.0, 0.0),
-                ),
-                size: (Fixed(402.0), Fixed(24.0)),
-                shape: Some((
-                    fill: (0.08, 0.14, 0.11, 0.9),
-                    radius: 5.0,
-                    border: 1.0,
-                    border_color: (0.3, 0.6, 0.45, 0.55),
-                )),
-                text: Some((
-                    text: "",
-                    size: 13.0,
-                    color: (0.78, 0.86, 0.94, 1.0),
-                    align: Start,
-                    valign: Center,
-                    fit: false,
-                )),
-                button: true,
-                visible: false,
-                opacity: 1.0,
-            )),
-        ),
-        (
-            name: "Inv Row 3",
-            transform: (
-                translation: (0.0, 0.0, 0.0),
-                rotation: (0.0, 0.0, 0.0, 1.0),
-                scale: (1.0, 1.0, 1.0),
-            ),
-            matter: Empty,
-            scripts: [
-                (
-                    kind: "inv_row",
-                    enabled: true,
-                    params: [
-                        ("slot", 3.0),
-                    ],
-                ),
-            ],
-            parent: Some(96),
-            ui: Some((
-                place: Free(
-                    pos: (0.0, 0.0),
-                ),
-                size: (Fixed(402.0), Fixed(24.0)),
-                shape: Some((
-                    fill: (0.08, 0.14, 0.11, 0.9),
-                    radius: 5.0,
-                    border: 1.0,
-                    border_color: (0.3, 0.6, 0.45, 0.55),
-                )),
-                text: Some((
-                    text: "",
-                    size: 13.0,
-                    color: (0.78, 0.86, 0.94, 1.0),
-                    align: Start,
-                    valign: Center,
-                    fit: false,
-                )),
-                button: true,
-                visible: false,
-                opacity: 1.0,
-            )),
-        ),
-        (
-            name: "Inv Row 4",
-            transform: (
-                translation: (0.0, 0.0, 0.0),
-                rotation: (0.0, 0.0, 0.0, 1.0),
-                scale: (1.0, 1.0, 1.0),
-            ),
-            matter: Empty,
-            scripts: [
-                (
-                    kind: "inv_row",
-                    enabled: true,
-                    params: [
-                        ("slot", 4.0),
-                    ],
-                ),
-            ],
-            parent: Some(96),
-            ui: Some((
-                place: Free(
-                    pos: (0.0, 0.0),
-                ),
-                size: (Fixed(402.0), Fixed(24.0)),
-                shape: Some((
-                    fill: (0.08, 0.14, 0.11, 0.9),
-                    radius: 5.0,
-                    border: 1.0,
-                    border_color: (0.3, 0.6, 0.45, 0.55),
-                )),
-                text: Some((
-                    text: "",
-                    size: 13.0,
-                    color: (0.78, 0.86, 0.94, 1.0),
-                    align: Start,
-                    valign: Center,
-                    fit: false,
-                )),
-                button: true,
-                visible: false,
-                opacity: 1.0,
-            )),
-        ),
-        (
-            name: "Inv Row 5",
-            transform: (
-                translation: (0.0, 0.0, 0.0),
-                rotation: (0.0, 0.0, 0.0, 1.0),
-                scale: (1.0, 1.0, 1.0),
-            ),
-            matter: Empty,
-            scripts: [
-                (
-                    kind: "inv_row",
-                    enabled: true,
-                    params: [
-                        ("slot", 5.0),
-                    ],
-                ),
-            ],
-            parent: Some(96),
-            ui: Some((
-                place: Free(
-                    pos: (0.0, 0.0),
-                ),
-                size: (Fixed(402.0), Fixed(24.0)),
-                shape: Some((
-                    fill: (0.08, 0.14, 0.11, 0.9),
-                    radius: 5.0,
-                    border: 1.0,
-                    border_color: (0.3, 0.6, 0.45, 0.55),
-                )),
-                text: Some((
-                    text: "",
-                    size: 13.0,
-                    color: (0.78, 0.86, 0.94, 1.0),
-                    align: Start,
-                    valign: Center,
-                    fit: false,
-                )),
-                button: true,
-                visible: false,
-                opacity: 1.0,
-            )),
-        ),
-        (
-            name: "Inv Row 6",
-            transform: (
-                translation: (0.0, 0.0, 0.0),
-                rotation: (0.0, 0.0, 0.0, 1.0),
-                scale: (1.0, 1.0, 1.0),
-            ),
-            matter: Empty,
-            scripts: [
-                (
-                    kind: "inv_row",
-                    enabled: true,
-                    params: [
-                        ("slot", 6.0),
-                    ],
-                ),
-            ],
-            parent: Some(96),
-            ui: Some((
-                place: Free(
-                    pos: (0.0, 0.0),
-                ),
-                size: (Fixed(402.0), Fixed(24.0)),
-                shape: Some((
-                    fill: (0.08, 0.14, 0.11, 0.9),
-                    radius: 5.0,
-                    border: 1.0,
-                    border_color: (0.3, 0.6, 0.45, 0.55),
-                )),
-                text: Some((
-                    text: "",
-                    size: 13.0,
-                    color: (0.78, 0.86, 0.94, 1.0),
-                    align: Start,
-                    valign: Center,
-                    fit: false,
-                )),
-                button: true,
-                visible: false,
-                opacity: 1.0,
-            )),
-        ),
-        (
-            name: "Inv Row 7",
-            transform: (
-                translation: (0.0, 0.0, 0.0),
-                rotation: (0.0, 0.0, 0.0, 1.0),
-                scale: (1.0, 1.0, 1.0),
-            ),
-            matter: Empty,
-            scripts: [
-                (
-                    kind: "inv_row",
-                    enabled: true,
-                    params: [
-                        ("slot", 7.0),
-                    ],
-                ),
-            ],
-            parent: Some(96),
-            ui: Some((
-                place: Free(
-                    pos: (0.0, 0.0),
-                ),
-                size: (Fixed(402.0), Fixed(24.0)),
-                shape: Some((
-                    fill: (0.08, 0.14, 0.11, 0.9),
-                    radius: 5.0,
-                    border: 1.0,
-                    border_color: (0.3, 0.6, 0.45, 0.55),
-                )),
-                text: Some((
-                    text: "",
-                    size: 13.0,
-                    color: (0.78, 0.86, 0.94, 1.0),
-                    align: Start,
-                    valign: Center,
-                    fit: false,
-                )),
-                button: true,
-                visible: false,
-                opacity: 1.0,
-            )),
-        ),
-        (
-            name: "Inv Row 8",
-            transform: (
-                translation: (0.0, 0.0, 0.0),
-                rotation: (0.0, 0.0, 0.0, 1.0),
-                scale: (1.0, 1.0, 1.0),
-            ),
-            matter: Empty,
-            scripts: [
-                (
-                    kind: "inv_row",
-                    enabled: true,
-                    params: [
-                        ("slot", 8.0),
-                    ],
-                ),
-            ],
-            parent: Some(96),
-            ui: Some((
-                place: Free(
-                    pos: (0.0, 0.0),
-                ),
-                size: (Fixed(402.0), Fixed(24.0)),
-                shape: Some((
-                    fill: (0.08, 0.14, 0.11, 0.9),
-                    radius: 5.0,
-                    border: 1.0,
-                    border_color: (0.3, 0.6, 0.45, 0.55),
-                )),
-                text: Some((
-                    text: "",
-                    size: 13.0,
-                    color: (0.78, 0.86, 0.94, 1.0),
-                    align: Start,
-                    valign: Center,
-                    fit: false,
-                )),
-                button: true,
-                visible: false,
-                opacity: 1.0,
-            )),
-        ),
-        (
-            name: "Inventory Action",
-            transform: (
-                translation: (0.0, 0.0, 0.0),
-                rotation: (0.0, 0.0, 0.0, 1.0),
-                scale: (1.0, 1.0, 1.0),
-            ),
-            matter: Empty,
-            scripts: [
-                (
-                    kind: "inv_action",
+                    kind: "objectives",
                     enabled: true,
                     params: [],
                 ),
             ],
-            parent: Some(96),
+            parent: Some(15),
             ui: Some((
-                place: Free(
-                    pos: (0.0, 0.0),
+                place: Pin(
+                    anchor: TopRight,
+                    offset: (-16.0, 52.0),   // BELOW the ☰ button, which shares this corner
                 ),
-                size: (Fixed(402.0), Fixed(28.0)),
-                shape: Some((
-                    fill: (0.10, 0.26, 0.18, 0.94),
-                    radius: 6.0,
-                    border: 1.2,
-                    border_color: (0.45, 0.9, 0.65, 0.8),
-                )),
-                text: Some((
-                    text: "  Transfer all  ▸",
-                    size: 13.0,
-                    color: (0.7, 1.0, 0.84, 1.0),
+                size: (Fixed(360.0), Fit),
+                stack: Some((
+                    dir: Column,
+                    gap: 0.0,
+                    pad: 0.0,
                     align: Start,
-                    valign: Center,
-                    fit: false,
+                    justify: Start,
                 )),
-                button: true,
                 visible: false,
                 opacity: 1.0,
             )),
         ),
+        // ── DEBUG BADGE ───────────────────────────────────────────────────────
+        // The testing keys (cheats.lua) and the pink badge that admits to them.
+        // Set the script's `enabled` param to 0 to ship a build without them.
         (
-            name: "Inventory Hint",
+            name: "Debug",
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Empty,
+            scripts: [
+                (
+                    kind: "cheats",
+                    enabled: true,
+                    params: [],
+                ),
+            ],
+            parent: Some(15),
+            ui: Some((
+                place: Pin(
+                    anchor: BottomRight,
+                    offset: (-16.0, -16.0),
+                ),
+                size: (Fixed(300.0), Fit),
+                stack: Some((
+                    dir: Column,
+                    gap: 0.0,
+                    pad: 0.0,
+                    align: End,
+                    justify: End,
+                )),
+                visible: false,
+                opacity: 1.0,
+            )),
+        ),
+        // ── MINING LASER ──────────────────────────────────────────────────────
+        // The tool is a THING THE ASTRONAUT HOLDS. It is bone-attached to
+        // `Hand.Right` on the rig, so it swings with the walk cycle and the beam
+        // leaves the barrel rather than a point in space near the shoulder.
+        //
+        // `attachment` targets the node's own parent, which has to be the MESH
+        // that carries the skeleton (AstroModel, not the Astronaut root).
+        (
+            name: "Laser Tool",
+            // The transform below is overwritten every frame by the bone
+            // resolve (it writes the whole local pose), so the scale has to
+            // ride the attachment OFFSET, which is composed on top of the bone.
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Mesh(
+                asset_path: "models/space-kit/weapon_rifle.glb",
+            ),
+            scripts: [],
+            material: Some((
+                color: (0.62, 0.68, 0.76),
+                emissive: (0.15, 0.55, 0.5),
+                emissive_strength: 0.6,
+                specular: (0.9, 0.95, 1.0),
+                shininess: 32.0,
+                specular_strength: 0.5,
+                rim: (0.2, 0.8, 0.7),
+                rim_strength: 0.35,
+                unlit: false,
+                ambient: 0.4,
+                alpha: 1.0,
+            )),
+            parent: Some(31),
+            attachment: Some((
+                bone: "Hand.Right",
+                offset: (
+                    translation: (0.0, 0.06, -0.08),
+                    rotation: (0.0, 0.0, 0.0, 1.0),
+                    scale: (1.4, 1.4, 1.4),
+                ),
+            )),
+        ),
+        // The barrel tip. Carries the BEAM effect; tool_belt aims it with
+        // `particles():setBeamEnd(hit)` so the ribbon ends on the rock.
+        (
+            name: "Laser Muzzle",
+            transform: (
+                translation: (0.0, 0.02, -0.32),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Empty,
+            scripts: [],
+            particles: Some((
+                asset: "vfx/MiningBeam",
+                play_on_start: false,
+            )),
+            parent: Some(71),
+        ),
+        // The contact patch: sparks, dust, and a real light. The PointLight is
+        // most of why the cut reads as HOT — without it the sparks are a decal
+        // on unlit ground. Its intensity is driven by the beam's charge.
+        (
+            name: "Laser Impact",
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: PointLight(
+                color: (1.0, 0.68, 0.32),
+                intensity: 0.0,
+                range: 14.0,
+            ),
+            scripts: [],
+            particles: Some((
+                asset: "vfx/MiningImpact",
+                play_on_start: false,
+            )),
+        ),
+        // ── FLIGHT OPS ────────────────────────────────────────────────────────
+        // How a flight ENDS: the card that comes up the moment a craft is down
+        // and stopped, offering RECOVER (you're home) or END FLIGHT (you're
+        // not). Bottom-left, because while you're flying every other corner is
+        // taken — telemetry top-left, stages top-right, peripherals right,
+        // navball and HUD line along the bottom.
+        (
+            name: "Flight Ops",
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Empty,
+            scripts: [
+                (
+                    kind: "flight_ops",
+                    enabled: true,
+                    params: [],
+                ),
+            ],
+            parent: Some(15),
+            ui: Some((
+                place: Pin(
+                    anchor: BottomLeft,
+                    offset: (16.0, -16.0),
+                ),
+                size: (Fixed(400.0), Fit),
+                stack: Some((
+                    dir: Column,
+                    gap: 0.0,
+                    pad: 0.0,
+                    align: Start,
+                    justify: End,
+                )),
+                visible: false,
+                opacity: 1.0,
+            )),
+        ),
+        // ── MINERAL FIELD ─────────────────────────────────────────────────────
+        // The rock lying on every world's surface, and the ore you break off it
+        // without digging. Entirely `scatter.*`: a rule per rock type, and the
+        // engine derives and draws every instance. No node in the scene but
+        // this one.
+        (
+            name: "Mineral Field",
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Empty,
+            scripts: [
+                (
+                    kind: "mineral_field",
+                    enabled: true,
+                    params: [],
+                ),
+            ],
+            parent: None,
+        ),
+        // ── ORBIT MAP ─────────────────────────────────────────────────────────
+        // The map screen (M). It has no presence in the world — it borrows the
+        // camera while it's open and paints into the flight HUD's text block —
+        // so it lives on an Empty of its own rather than riding a vehicle, which
+        // is what it used to do.
+        //
+        // Appended LAST on purpose: `parent` is a positional index into this
+        // list, so a node inserted anywhere else silently re-parents everything
+        // after it.
+        (
+            name: "Orbit Map",
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Empty,
+            scripts: [
+                (
+                    kind: "orbit_map",
+                    enabled: true,
+                    params: [],
+                ),
+            ],
+            parent: None,
+        ),
+        // ── STATUS ────────────────────────────────────────────────────────────
+        // Balance, standing, pack — top-left, on foot. That corner belongs to
+        // the flight HUD while you are flying and is empty the rest of the time,
+        // which is exactly when these three numbers were nowhere on screen.
+        (
+            name: "Status HUD",
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Empty,
+            scripts: [
+                (
+                    kind: "status_hud",
+                    enabled: true,
+                    params: [],
+                ),
+            ],
+            parent: Some(15),
+            ui: Some((
+                place: Pin(
+                    anchor: TopLeft,
+                    offset: (16.0, 16.0),
+                ),
+                size: (Fit, Fit),
+                stack: Some((
+                    dir: Row,
+                    gap: 0.0,
+                    pad: 0.0,
+                    align: Center,
+                    justify: Start,
+                )),
+                visible: false,
+                opacity: 1.0,
+            )),
+        ),
+        // ── PAUSE ─────────────────────────────────────────────────────────────
+        // Esc. The world stops (`physics.pause`), the pointer comes back, and
+        // the CONTROLS page lists every key the game has — which existed nowhere
+        // inside the game before this.
+        //
+        // The FRAME only: where it sits and how wide. Its contents are described
+        // from Lua with `ui.make`, because the controls list is a table and the
+        // menu changes shape between its two pages.
+        //
+        // Appended LAST, with the Orbit Map: `parent` is a positional index into
+        // this list, so a node inserted anywhere else silently re-parents
+        // everything after it.
+        (
+            name: "Pause Menu",
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Empty,
+            scripts: [
+                (
+                    kind: "pause_menu",
+                    enabled: true,
+                    params: [],
+                ),
+            ],
+            parent: Some(15),
+            ui: Some((
+                place: Pin(
+                    anchor: Center,
+                    offset: (0.0, 0.0),
+                ),
+                size: (Fixed(460.0), Fit),
+                stack: Some((
+                    dir: Column,
+                    gap: 0.0,
+                    pad: 0.0,
+                    align: Start,
+                    justify: Start,
+                )),
+                visible: false,
+                opacity: 1.0,
+            )),
+        ),
+        // ── The galaxy ──────────────────────────────────────────────────────
+        //
+        // Space past this system. `galaxy` hashes the void into sectors, rolls
+        // a star for the ones that get one, and builds a real system there when
+        // the ship comes near — so flying out far enough never runs out of
+        // world, and flying back finds the same stars where it left them.
+        //
+        // It is also the thing that stops the ship outrunning the generator:
+        // the warp ladder asks it for a ceiling every frame, and it lowers that
+        // ceiling while a system is being built. Generation is what warp is
+        // paced against, so the pacing lives with the generator.
+        //
+        // Appended LAST for the same reason the Pause Menu is: `parent` is a
+        // positional index into this list.
+        (
+            name: "Galaxy",
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Empty,
+            scripts: [
+                (
+                    kind: "galaxy",
+                    enabled: true,
+                    // Deliberately empty: the script's own `defaults` are the
+                    // tuning. A params list here pins whatever it held on the
+                    // day it was written, silently, even after the script stops
+                    // declaring the field (platform 0068).
+                    params: [],
+                ),
+            ],
+            parent: None,
+        ),
+        // ── The air ─────────────────────────────────────────────────────────
+        //
+        // Fog, driven from whatever body you are at and how high above it you
+        // are. Every world already has a rolled atmosphere that the sky shader
+        // draws as a halo from orbit; this is the inside of that same air, so
+        // an airless moon looks airless and a thick blue sky reads as one from
+        // the ground. In space it switches the pass off entirely.
+        //
+        // Appended LAST: `parent` is a positional index into this list.
+        (
+            name: "Atmosphere",
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Empty,
+            scripts: [
+                (
+                    kind: "atmosphere",
+                    enabled: true,
+                    params: [],
+                ),
+            ],
+            parent: None,
+        ),
+        // ── Graphics quality ────────────────────────────────────────────────
+        //
+        // The player's Low/Medium/High/Ultra choice (scripts/graphics.lua):
+        // render scale, sun-shadow distance, and whether atmosphere.lua may
+        // march volumetric fog. Remembered in the "settings" store slot.
+        (
+            name: "Graphics",
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Empty,
+            scripts: [
+                (
+                    kind: "graphics",
+                    enabled: true,
+                    params: [],
+                ),
+            ],
+            parent: None,
+        ),
+        // ── Facility panel buttons ──────────────────────────────────────────
+        //
+        // The action and Close side by side under the panel's text. Appended
+        // LAST: `parent` is a positional index into this list.
+        (
+            name: "Facility Buttons",
             transform: (
                 translation: (0.0, 0.0, 0.0),
                 rotation: (0.0, 0.0, 0.0, 1.0),
@@ -3563,21 +2592,129 @@
             ),
             matter: Empty,
             scripts: [],
-            parent: Some(96),
+            parent: Some(35),
             ui: Some((
                 place: Free(
                     pos: (0.0, 0.0),
                 ),
-                size: (Fixed(402.0), Fixed(20.0)),
-                text: Some((
-                    text: "",
-                    size: 11.0,
-                    color: (0.5, 0.72, 0.62, 1.0),
-                    align: Start,
-                    valign: Center,
-                    fit: false,
+                size: (Fixed(436.0), Fit),
+                stack: Some((
+                    dir: Row,
+                    gap: 8.0,
+                    pad: 0.0,
+                    align: Center,
+                    justify: Start,
                 )),
                 visible: true,
+                opacity: 1.0,
+            )),
+        ),
+        // ── Notices ─────────────────────────────────────────────────────────
+        //
+        // A few seconds of "this changed" (the graphics level lowering itself).
+        // pause_menu describes into it; it sits above the prompts and the
+        // hotbar, and above the navball in flight.
+        (
+            name: "Notice Toast",
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Empty,
+            scripts: [],
+            parent: Some(15),
+            ui: Some((
+                place: Pin(
+                    anchor: Bottom,
+                    offset: (0.0, -180.0),
+                ),
+                size: (Fixed(460.0), Fit),
+                stack: Some((
+                    dir: Column,
+                    gap: 0.0,
+                    pad: 0.0,
+                    align: Start,
+                    justify: Start,
+                )),
+                visible: false,
+                opacity: 1.0,
+            )),
+        ),
+        // ── Interface sounds ────────────────────────────────────────────────
+        //
+        // sfx.lua: the clicks, the cash clink, the contract jingle. Scripts
+        // reach it with findScript("sfx"). Appended LAST: `parent` elsewhere
+        // is a positional index into this list.
+        (
+            name: "Interface Sounds",
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Empty,
+            scripts: [
+                (
+                    kind: "sfx",
+                    enabled: true,
+                    params: [],
+                ),
+            ],
+        ),
+        // ── FLIGHT HUD ────────────────────────────────────────────────────────
+        // The cockpit (scripts/flight_hud.lua): orbit strip, annunciators,
+        // fuel and charge, the instrument console and the stage stack, all
+        // described from Lua into this one full-screen node. `order: -1` puts
+        // it UNDER the navball and tapes above, which it mounts on its console;
+        // the overlay after it draws OVER them (the tooltip).
+        (
+            name: "Flight HUD",
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Empty,
+            scripts: [
+                (
+                    kind: "flight_hud",
+                    enabled: true,
+                    params: [],
+                ),
+            ],
+            parent: Some(15),
+            ui: Some((
+                place: Stretch(
+                    min: (0.0, 0.0),
+                    max: (1.0, 1.0),
+                    margin: (0.0, 0.0, 0.0, 0.0),
+                ),
+                size: (Pct(1.0), Pct(1.0)),
+                order: -1,
+                visible: false,
+                opacity: 1.0,
+            )),
+        ),
+        (
+            name: "Flight HUD Overlay",
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Empty,
+            scripts: [],
+            parent: Some(15),
+            ui: Some((
+                place: Stretch(
+                    min: (0.0, 0.0),
+                    max: (1.0, 1.0),
+                    margin: (0.0, 0.0, 0.0, 0.0),
+                ),
+                size: (Pct(1.0), Pct(1.0)),
+                order: 1,
+                visible: false,
                 opacity: 1.0,
             )),
         ),

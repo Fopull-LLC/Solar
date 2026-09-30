@@ -3,13 +3,16 @@
 -- SETUP: attach to a Camera node and mark it Active. It finds the character
 -- automatically (the node running third_person.lua — or a node named "Player").
 --
---   RIGHT MOUSE (hold)  orbit around the character
---   SCROLL WHEEL        zoom in / out
---   SHIFT               toggle SHIFT LOCK: the cursor locks, the mouse steers
---                       the camera, and the character faces the camera's yaw
+--   Look       hold RIGHT MOUSE to orbit, or use the RIGHT STICK (always live)
+--   Zoom       the scroll wheel, or the pad's d-pad up/down
+--   ShiftLock  Shift / R3 toggles SHIFT LOCK: the cursor locks, the mouse
+--              steers the camera, and the character faces the camera's yaw
 --   zoom all the way in → FIRST PERSON: the camera sits at head height, the
---   character model hides, you free-look (always shift-locked); scroll back
+--   character model hides, you free-look (always shift-locked); zoom back
 --   out to return.
+--
+-- Every control is a NAMED ACTION from Project Settings → Input, so this works
+-- on a keyboard, on a gamepad, or on both at once.
 --
 -- The camera raycasts against the world so walls never cut between you and
 -- the character (it slides in closer instead of clipping through geometry).
@@ -27,8 +30,8 @@ defaults = {
   min_distance = 1.2,   -- zooming closer than this switches to first person
   max_distance = 14.0,
   height = 1.4,         -- look-at point above the character's origin
-  sensitivity = 0.3,
-  zoom_speed = 1.0,
+  sensitivity = 1.0,   -- look speed multiplier
+  zoom_speed = 4.0,
   start_pitch = -0.35,  -- initial down-tilt (radians)
 }
 
@@ -73,30 +76,34 @@ function lateUpdate(node, dt)
   end
   if not (target and target.valid) then return end
 
-  -- SHIFT toggles shift lock; first person forces it below.
-  if input.pressed("shift") then shiftlock = not shiftlock end
+  -- ShiftLock toggles shift lock; first person forces it below.
+  if input.justPressed("ShiftLock") then shiftlock = not shiftlock end
 
-  -- Scroll zooms. `params.distance` is two-way: the write persists across
-  -- frames and shows live in the Inspector. Crossing min_distance toggles
-  -- first person.
-  params.distance = params.distance - input.scroll() * params.zoom_speed
+  -- Zoom: the wheel, or the pad's d-pad. `params.distance` is two-way: the
+  -- write persists across frames and shows live in the Inspector. Crossing
+  -- min_distance toggles first person. The wheel arrives as a per-frame
+  -- impulse and the d-pad as a held direction, so `* dt` keeps a held d-pad
+  -- from depending on framerate while a single click still steps cleanly.
+  params.distance = params.distance - input.axis1("Zoom") * params.zoom_speed * dt
   if params.distance > params.max_distance then params.distance = params.max_distance end
   if params.distance < 0.0 then params.distance = 0.0 end
   firstPerson = params.distance < params.min_distance
 
-  -- The camera looks (and the cursor captures) while: first person, shift
-  -- lock, or the RIGHT mouse button is dragging. Otherwise the cursor is
-  -- free and the camera holds its angle.
-  local looking = firstPerson or shiftlock or input.button(1)
-  input.setMouseLocked(looking)
-  if looking then
-    local dx, dy = input.mouse_delta()
-    local s = params.sensitivity * 0.01
-    node.yaw = node.yaw - dx * s
-    node.pitch = node.pitch - dy * s
-    if node.pitch > PITCH_LIMIT then node.pitch = PITCH_LIMIT end
-    if node.pitch < -PITCH_LIMIT then node.pitch = -PITCH_LIMIT end
-  end
+  -- Capture the cursor while the MOUSE is steering: first person, shift lock,
+  -- or a right-button drag. A pad needs none of this — its stick recentres
+  -- itself, so the `Look` axis leaves the stick ungated and it is always live.
+  local mouseSteering = firstPerson or shiftlock or input.action("LookEnable")
+  input.setMouseLocked(mouseSteering)
+
+  -- One axis, both devices, both arriving as radians per second — so a single
+  -- `* dt` is correct for either and identical at any framerate. While we own
+  -- the cursor there is no free pointer to protect, so read the ungated
+  -- "LookFree" axis; otherwise "Look", whose mouse half needs the right button.
+  local lx, ly = input.axis2(mouseSteering and "LookFree" or "Look")
+  node.yaw = node.yaw - lx * params.sensitivity * dt
+  node.pitch = node.pitch - ly * params.sensitivity * dt
+  if node.pitch > PITCH_LIMIT then node.pitch = PITCH_LIMIT end
+  if node.pitch < -PITCH_LIMIT then node.pitch = -PITCH_LIMIT end
 
   -- Show/hide the character model when the view mode flips.
   if model and model.valid then
@@ -104,33 +111,26 @@ function lateUpdate(node, dt)
   end
 
   -- The point we look at / stand in: the character's head.
-  local hx = target.x
-  local hy = target.y + params.height
-  local hz = target.z
+  local head = target.pos + vec3(0, params.height, 0)
 
   if firstPerson then
     -- First person: sit at head height and free-look.
-    node.x, node.y, node.z = hx, hy, hz
+    node.pos = head
     return
   end
 
-  -- Orbit: back away from the head along the view direction (yaw/pitch),
-  -- engine forward = −Z. fy uses sin(pitch) so looking up raises the view.
-  local cp = math.cos(node.pitch)
-  local fx = -math.sin(node.yaw) * cp
-  local fy = math.sin(node.pitch)
-  local fz = -math.cos(node.yaw) * cp
+  -- Orbit: back away from the head along the view direction. `dirFromYaw` is
+  -- the yaw/pitch → direction pair, once and with the right signs.
+  local look = dirFromYaw(node.yaw, node.pitch)
 
   -- Don't clip through walls: cast from the head back toward the camera.
   -- `target` rides along as the ignore — rays hit physics bodies too, and the
   -- character's own capsule must never count as an obstruction.
   local back = params.distance
-  local hit = raycast(hx, hy, hz, -fx, -fy, -fz, params.distance + 0.3, target)
+  local hit = raycast(head, -look, params.distance + 0.3, target)
   if hit and hit.distance then
     back = math.max(params.min_distance, hit.distance - 0.3)
   end
 
-  node.x = hx - fx * back
-  node.y = hy - fy * back
-  node.z = hz - fz * back
+  node.pos = head - look * back
 end

@@ -1,0 +1,1083 @@
+-- ORBIT MAP — the 3D map screen: every body's conic, your own trajectory, and
+-- the maneuver node you plan on it.
+--
+-- `M` opens it, from the pod or on foot. Navigation is BLENDER-style, not
+-- KSP's: the mouse does nothing until you hold RIGHT-CLICK, and then dragging
+-- orbits the selection. CTRL+RIGHT-drag pans the view off the focus, scroll or
+-- ↑/↓ zooms, TAB cycles focus (you first, then every body). `1` `2` `3` toggle
+-- orbit lines, SOI rings and markers.
+--
+-- The engine's line layer draws the conics, so they are occluded by the bodies
+-- themselves rather than painted over them.
+--
+--   FLYING FROM THE MAP. A piloted craft keeps full control while the map is
+--   open — throttle, stick, SAS and staging all stay live, because watching the
+--   trajectory bend as you burn is the whole reason to fly on instruments.
+--
+--   PLANNING A BURN. `N` enters PLAN mode, which is a mode precisely because
+--   the flight stick and the burn tuner want the same six keys. In plan mode
+--   W/S/A/D/Q/E move ΔV instead of the craft, ←/→ slide the node along the
+--   orbit, and the vessel's stick is frozen (vessel_controller reads
+--   `planning`). Left-click the orbit line to place the node, X zeroes it, N
+--   leaves. The HUD says which mode you are in, every frame, because a mode
+--   you cannot see is a mode you will be surprised by.
+--
+-- This used to live inside the scout ship's controller, which meant the map
+-- only existed because a debug vehicle did, and a built vessel had to borrow
+-- it. The scout is gone; the map is its own screen now, and planning works for
+-- the craft you actually fly — which it never did before.
+--
+-- Cross-script:  local map = findScript("orbit_map")
+--                map.map_view   map.planning   map.toggle()   map.isOpen()
+
+defaults = {
+  --@header Planning
+  -- How often the patched-conic walk is recomputed, in seconds. The walk is
+  -- hundreds of two-body evaluations across SOI changes; the result is cached
+  -- and redrawn every frame (draw.line is immediate mode).
+  --@range 0.05 1.0 --@units s
+  recompute = 0.15,
+  -- Points per trajectory walk. More is smoother and costs linearly.
+  --@range 40 400
+  segments = 140,
+}
+
+-- Published: planet_camera stands down while the map owns the screen, and
+-- vessel_controller freezes its stick while `planning` is true.
+planning = false
+
+local astronaut
+
+local function norm(x, y, z)
+  local l = math.sqrt(x * x + y * y + z * z)
+  if l < 1e-6 then return 0, 0, 0 end
+  return x / l, y / l, z / l
+end
+
+local function cross(ax, ay, az, bx, by, bz)
+  return ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx
+end
+
+-- The map paints into the same HUD block the flight readout uses — one text
+-- panel, whoever owns the screen. `nil` hides the backing frame with it.
+local hud, hud_panel
+-- Orbits and trajectories hide behind the planets in front of them; markers
+-- (Pe/Ap, encounters) stay on top so they can always be found.
+local function depth(on)
+  if draw.depthTest then draw.depthTest(on) end
+end
+
+local function set_hud(_, text)
+  if not hud then hud = find("Ship HUD Text") end
+  if not hud_panel then hud_panel = find("HUD Panel") end
+  local panel = hud_panel or hud
+  if panel then
+    local el = panel:getcomponent("UiElement")
+    if el then el.visible = text ~= nil end
+  end
+  if hud and text then hud.text = text end
+end
+
+-- The instrument cluster stands down while the map owns the screen; closing
+-- hands it back to whatever craft is being flown (which repaints its own HUD).
+local instruments
+local function set_instruments(on)
+  if not instruments then
+    instruments = {}
+    for _, nm in ipairs({ "Navball", "Speed Tape", "Alt Tape", "Speed Readout",
+                          "Alt Readout", "Heading Readout" }) do
+      local n = find(nm)
+      if n then instruments[#instruments + 1] = n end
+    end
+  end
+  for _, inst in ipairs(instruments) do
+    local el = inst:getcomponent("UiElement")
+    if el then el.visible = on and 1 or 0 end
+  end
+end
+
+-- One-shot map diagnostics: if the subject hand-off ever breaks in the wild,
+-- the Console says WHICH link failed instead of the map silently going empty.
+local map_diag = false
+
+-- THE craft being flown, or nil. Every instance is scanned rather than taking
+-- findScript's first: once several craft are alive — landed stages, parked
+-- ships, satellites — "first in scene order" is arbitrary, and the map has to
+-- follow the one with a pilot in it. Cached per frame by the caller; the scan
+-- only runs while the map is open.
+local function subject_vessel()
+  for _, s in ipairs(findScripts("vessel_controller")) do
+    if s.piloting then
+      if s.node and s.node.valid then return s end
+      if not map_diag then
+        map_diag = true
+        print("map: a piloted vessel has an invalid node — showing the system view")
+      end
+      return nil
+    end
+  end
+  return nil
+end
+
+map_view = false -- published: planet_camera stands down while this is true
+local map_focus, map_zoom = 1, nil -- focus 1 = THE SHIP, 2.. = bodies
+local map_hud_t = -10.0
+local map_yaw2, map_pitch2 = 0.6, 0.45
+local map_offx, map_offy, map_offz = 0.0, 0.0, 0.0 -- CTRL-drag pan offset
+local map_show = { orbits = true, soi = true, markers = true }
+local cam_node
+-- Zoom eases toward where the wheel asked, in log space: a wheel tick is a
+-- 12% step that takes ~0.2 s to arrive, not a jump. Every jump landed the
+-- camera in a new terrain LOD state at once, which is most of what "laggy
+-- zoom" felt like.
+local zoom_target = nil
+local ZOOM_MAX = 3.0e6
+-- Parents re-inferred when the body list changes, or once a second (the SOI
+-- tree only changes when the galaxy streams a system in or out).
+local map_pidx, pidx_n, pidx_t = {}, -1, -10.0
+-- The craft being flown, re-scanned twice a second rather than every frame.
+local subj_cache, subj_t = nil, -10.0
+
+-- Maneuver node (KSP planning): a single planned burn at `t` seconds ahead of
+-- now, split into prograde / normal / radial ΔV. Nil until you press N in the
+-- map. Editing it re-projects the resulting orbit and re-walks the patched
+-- conic for SOI encounters, all game-side on top of `space.propagate`.
+local mnv = nil -- { t, pro, nor, rad }
+-- The patched-conic walk is heavy (hundreds of two-body evals across SOI
+-- changes), so it's recomputed at ~8 Hz and the resulting world polyline +
+-- encounter markers are cached here and redrawn every frame (draw.line is
+-- immediate mode). `traj_now` = the path you're on; `traj_mnv` = the post-burn
+-- path (nil unless a node exists).
+local traj_t = -10.0
+local traj_now, traj_mnv = nil, nil
+
+-- Orbital-plane basis + conic from a relative state vector: returns
+-- has_orbit, p, ecc, ê1 (periapsis dir), ê2 (in-plane, motion side).
+local function orbit_basis(rx, ry, rz, vx, vy, vz, mu)
+  local rlen = math.sqrt(rx * rx + ry * ry + rz * rz)
+  local hx, hy, hz = cross(rx, ry, rz, vx, vy, vz)
+  local h2 = hx * hx + hy * hy + hz * hz
+  if h2 < 1e-3 or rlen < 1e-3 then
+    return false, 0, 0, 1, 0, 0, 0, 0, 1
+  end
+  local p = h2 / mu
+  local cx2, cy2, cz2 = cross(vx, vy, vz, hx, hy, hz)
+  local evx = cx2 / mu - rx / rlen
+  local evy = cy2 / mu - ry / rlen
+  local evz = cz2 / mu - rz / rlen
+  local ecc = math.sqrt(evx * evx + evy * evy + evz * evz)
+  local e1x, e1y, e1z
+  if ecc > 1e-5 then
+    e1x, e1y, e1z = evx / ecc, evy / ecc, evz / ecc
+  else
+    e1x, e1y, e1z = rx / rlen, ry / rlen, rz / rlen
+  end
+  local hl = math.sqrt(h2)
+  local e2x, e2y, e2z = cross(hx / hl, hy / hl, hz / hl, e1x, e1y, e1z)
+  return true, p, ecc, e1x, e1y, e1z, e2x, e2y, e2z
+end
+
+-- Draw r = p/(1+e·cosθ) around a world center in the ê1/ê2 plane, in one
+-- engine call. Ellipses close; a hyperbola stops at 50·p, where the old
+-- per-segment loop gave up too.
+local function draw_conic(cx, cy, cz, e1x, e1y, e1z, e2x, e2y, e2z, p, ecc, r, g, b, a, segs)
+  draw.conic(vec3(cx, cy, cz), vec3(e1x, e1y, e1z), vec3(e2x, e2y, e2z),
+    p, ecc, segs or 128, r, g, b, a, p * 50)
+end
+
+local function draw_cross(x, y, z, s, r, g, b)
+  depth(false)
+  draw.line(x - s, y, z, x + s, y, z, r, g, b, 1)
+  draw.line(x, y - s, z, x, y + s, z, r, g, b, 1)
+  draw.line(x, y, z - s, x, y, z + s, r, g, b, 1)
+  depth(true)
+end
+
+-- Parent INDEX of every body: the OTHER body with the smallest SOI still
+-- containing it (patched conics — the same rule the engine uses for
+-- dominance), so the walkers can climb/descend the hierarchy by index.
+local function parent_indices(bodies)
+  local pidx = {}
+  for i, b in ipairs(bodies) do
+    local best, bs = nil, nil
+    for j, o in ipairs(bodies) do
+      if j ~= i then
+        local dx, dy, dz = b.x - o.x, b.y - o.y, b.z - o.z
+        local d = math.sqrt(dx * dx + dy * dy + dz * dz)
+        local soi = o.soi < 0 and math.huge or o.soi
+        if d <= soi and (bs == nil or soi < bs) then best, bs = j, soi end
+      end
+    end
+    pidx[i] = best
+  end
+  return pidx
+end
+
+-- World position AND velocity of body `i` at `tt` seconds from now — walk the
+-- parent chain, propagating each link about its parent's µ and summing (a moon
+-- rides its planet rides the star). The root is fixed. Exact, drift-free.
+local function body_state_at(bodies, pidx, i, tt)
+  local pi = pidx[i]
+  local b = bodies[i]
+  if not pi then return b.x, b.y, b.z, 0, 0, 0 end
+  local px, py, pz, pvx, pvy, pvz = body_state_at(bodies, pidx, pi, tt)
+  local par = bodies[pi]
+  local rx, ry, rz, rvx, rvy, rvz = space.propagate(
+    b.x - par.x, b.y - par.y, b.z - par.z,
+    b.vx - par.vx, b.vy - par.vy, b.vz - par.vz, par.mu, tt)
+  return px + rx, py + ry, pz + rz, pvx + rvx, pvy + rvy, pvz + rvz
+end
+
+-- A body's own orbital period around its parent (vis-viva), or nil if unbound
+-- or a root. Sets the transfer timescale for an escape burn's walk.
+local function body_period(bodies, pidx, i)
+  local pi = pidx[i]
+  if not pi then return nil end
+  local b, par = bodies[i], bodies[pi]
+  local rx, ry, rz = b.x - par.x, b.y - par.y, b.z - par.z
+  local vx, vy, vz = b.vx - par.vx, b.vy - par.vy, b.vz - par.vz
+  local rlen = math.sqrt(rx * rx + ry * ry + rz * rz)
+  local v2 = vx * vx + vy * vy + vz * vz
+  local a = 1.0 / (2.0 / rlen - v2 / par.mu)
+  if a <= 0 then return nil end
+  return 2 * math.pi * math.sqrt(a * a * a / par.mu)
+end
+
+-- The world state of the bodies at `tt` seconds from now, worked out LAZILY:
+-- indexing s[i] propagates body i once about its parent's (also lazy) state
+-- and keeps it. A walk step only ever reads the body it is in, that body's
+-- chain and its children, so a galaxy of a hundred streamed-in bodies costs a
+-- handful of Kepler solves per step instead of the whole galaxy re-walked.
+local function all_body_states(bodies, pidx, tt)
+  return setmetatable({}, { __index = function(s, i)
+    local b = bodies[i]
+    if not b then return nil end
+    local pi, st = pidx[i], nil
+    if not pi then
+      st = { x = b.x, y = b.y, z = b.z, vx = 0, vy = 0, vz = 0 }
+    else
+      local ps, par = s[pi], bodies[pi]
+      local rx, ry, rz, rvx, rvy, rvz = space.propagate(
+        b.x - par.x, b.y - par.y, b.z - par.z,
+        b.vx - par.vx, b.vy - par.vy, b.vz - par.vz, par.mu, tt)
+      st = { x = ps.x + rx, y = ps.y + ry, z = ps.z + rz,
+             vx = ps.vx + rvx, vy = ps.vy + rvy, vz = ps.vz + rvz }
+    end
+    rawset(s, i, st)
+    return st
+  end })
+end
+
+-- Walk a ship's future path as a real patched conic: advance the state within
+-- the current dominant body's frame, and when it leaves that SOI drop to the
+-- parent, or when it falls inside a child's SOI capture that child. Returns the
+-- world-space polyline and the SOI-change / impact events found along it. This
+-- is what turns "pretty orbit lines" into "you encounter Draol in 3m12s".
+local function walk_trajectory(bodies, pidx, wx, wy, wz, wvx, wvy, wvz, cur, t0, span, segs)
+  -- Points are stored RELATIVE TO their attractor + the attractor index, NOT in
+  -- absolute world space. Drawn at attractor.LIVE + rel, so the whole path lives
+  -- in the dominant body's REST FRAME (the KSP map): your orbit is a static
+  -- ellipse around the planet's CURRENT position, not smeared along the planet's
+  -- own orbit into wherever it will be in 180 s. That smear is what flung the
+  -- node way out across the system.
+  local rpts, anch, enc = {}, {}, {}
+  local step = span / segs
+  local tt = t0
+  local start_states = all_body_states(bodies, pidx, tt)
+  local s0 = start_states[cur]
+  rpts[1], rpts[2], rpts[3] = wx - s0.x, wy - s0.y, wz - s0.z
+  anch[1] = cur
+  for _ = 1, segs do
+    -- Ship relative to the current attractor at the START of this step.
+    local cs = start_states[cur]
+    local nrx, nry, nrz, nrvx, nrvy, nrvz = space.propagate(
+      wx - cs.x, wy - cs.y, wz - cs.z, wvx - cs.vx, wvy - cs.vy, wvz - cs.vz,
+      bodies[cur].mu, step)
+    tt = tt + step
+    -- One snapshot at the step END, reused for the recompose + every SOI test.
+    local es = all_body_states(bodies, pidx, tt)
+    local ec = es[cur]
+    wx, wy, wz = ec.x + nrx, ec.y + nry, ec.z + nrz
+    wvx, wvy, wvz = ec.vx + nrvx, ec.vy + nrvy, ec.vz + nrvz
+    -- store REL to the current attractor (nr* IS wx-ec.x) + which body it is
+    rpts[#rpts + 1] = nrx
+    rpts[#rpts + 1] = nry
+    rpts[#rpts + 1] = nrz
+    anch[#anch + 1] = cur
+    -- Capture a child SOI we've fallen into (deeper body wins).
+    for j, o in ipairs(bodies) do
+      if pidx[j] == cur and o.soi > 0 then
+        local d = es[j]
+        local dx, dy, dz = wx - d.x, wy - d.y, wz - d.z
+        if dx * dx + dy * dy + dz * dz < o.soi * o.soi then
+          enc[#enc + 1] = { t = tt, name = o.name, anchor = j, rx = dx, ry = dy, rz = dz, kind = "enter" }
+          cur = j
+          break
+        end
+      end
+    end
+    -- Or climb out of the current SOI into the parent's frame.
+    local pc = pidx[cur]
+    if pc and bodies[cur].soi > 0 then
+      local d = es[cur]
+      local dx, dy, dz = wx - d.x, wy - d.y, wz - d.z
+      if dx * dx + dy * dy + dz * dz > bodies[cur].soi * bodies[cur].soi then
+        enc[#enc + 1] = { t = tt, name = bodies[cur].name, anchor = cur, rx = dx, ry = dy, rz = dz, kind = "exit" }
+        cur = pc
+      end
+    end
+    -- Terrain impact ends the walk (the conic would dive underground).
+    local sb = bodies[cur]
+    local d = es[cur]
+    local dx, dy, dz = wx - d.x, wy - d.y, wz - d.z
+    if dx * dx + dy * dy + dz * dz < sb.radius * sb.radius then
+      enc[#enc + 1] = { t = tt, name = sb.name, anchor = cur, rx = dx, ry = dy, rz = dz, kind = "impact" }
+      break
+    end
+    start_states = es -- this step's END is the next step's START
+  end
+  return rpts, anch, enc
+end
+
+-- Walk the CURRENT patched conic forward to `t_target`, crossing every SOI in
+-- between, and return the ship's state THERE — the dominant body it's under plus
+-- its position AND velocity relative to that body (and the absolute world state).
+-- THIS is what makes a maneuver node placed BEYOND an SOI crossing land on the
+-- real path and apply its burn in the right frame: true across-SOI planning,
+-- not a single two-body arc around the starting planet.
+local function patched_state_at(bodies, pidx, wx, wy, wz, wvx, wvy, wvz, cur, t_start, t_target, steps)
+  steps = math.max(1, steps)
+  local step = (t_target - t_start) / steps
+  local tt = t_start
+  local start_states = all_body_states(bodies, pidx, tt)
+  for _ = 1, steps do
+    local cs = start_states[cur]
+    local nrx, nry, nrz, nrvx, nrvy, nrvz = space.propagate(
+      wx - cs.x, wy - cs.y, wz - cs.z, wvx - cs.vx, wvy - cs.vy, wvz - cs.vz,
+      bodies[cur].mu, step)
+    tt = tt + step
+    local es = all_body_states(bodies, pidx, tt)
+    local ec = es[cur]
+    wx, wy, wz = ec.x + nrx, ec.y + nry, ec.z + nrz
+    wvx, wvy, wvz = ec.vx + nrvx, ec.vy + nrvy, ec.vz + nrvz
+    for j, o in ipairs(bodies) do -- fall into a child SOI
+      if pidx[j] == cur and o.soi > 0 then
+        local d = es[j]
+        local dx, dy, dz = wx - d.x, wy - d.y, wz - d.z
+        if dx * dx + dy * dy + dz * dz < o.soi * o.soi then cur = j break end
+      end
+    end
+    local pc = pidx[cur] -- climb out to the parent
+    if pc and bodies[cur].soi > 0 then
+      local d = es[cur]
+      local dx, dy, dz = wx - d.x, wy - d.y, wz - d.z
+      if dx * dx + dy * dy + dz * dz > bodies[cur].soi * bodies[cur].soi then cur = pc end
+    end
+    start_states = es
+  end
+  local d = start_states[cur]
+  return {
+    anchor = cur, mu = bodies[cur].mu,
+    wx = wx, wy = wy, wz = wz, wvx = wvx, wvy = wvy, wvz = wvz,
+    rx = wx - d.x, ry = wy - d.y, rz = wz - d.z,
+    rvx = wvx - d.vx, rvy = wvy - d.vy, rvz = wvz - d.vz,
+  }
+end
+
+-- A stored (anchor, rel) → its LIVE world position (attractor's current pos + rel).
+local function rel_world(bodies, anchor, rx, ry, rz)
+  local b = bodies[anchor]
+  if not b then return nil end
+  return b.x + rx, b.y + ry, b.z + rz
+end
+
+-- Draw a rest-frame polyline: each point rides its own anchor body's live pos.
+-- A point whose anchor is gone breaks the line, so each unbroken run is one
+-- draw.polyline call.
+local function draw_rel_polyline(rpts, anch, bodies, r, g, b, a)
+  local n = math.floor(#rpts / 3)
+  local run, m = {}, 0
+  for k = 0, n - 1 do
+    local wx, wy, wz = rel_world(bodies, anch[k + 1], rpts[k * 3 + 1], rpts[k * 3 + 2], rpts[k * 3 + 3])
+    if wx then
+      run[m + 1], run[m + 2], run[m + 3] = wx, wy, wz
+      m = m + 3
+    else
+      if m >= 6 then draw.polyline(run, r, g, b, a) end
+      run, m = {}, 0
+    end
+  end
+  if m >= 6 then draw.polyline(run, r, g, b, a) end
+end
+
+-- The trajectory point nearest the cursor in SCREEN space (KSP click-on-line).
+-- Projects each rest-frame point at its anchor's LIVE position (so you click the
+-- orbit you SEE). Returns index k (0-based), the live world point, and its
+-- time-from-now, or nil if nothing is within the pixel threshold / no camera.
+local function pick_traj_point(traj, bodies)
+  if not traj or not camera or not camera.exists() then return nil end
+  local mx, my = input.mouse()
+  local n = math.floor(#traj.rpts / 3)
+  local bk, bd, bx, by, bz
+  for k = 0, n - 1 do
+    local px, py, pz = rel_world(bodies, traj.anch[k + 1],
+      traj.rpts[k * 3 + 1], traj.rpts[k * 3 + 2], traj.rpts[k * 3 + 3])
+    if px then
+      local sx, sy, _, on = camera.worldToScreen(px, py, pz)
+      if on then
+        local d = (sx - mx) ^ 2 + (sy - my) ^ 2
+        if not bd or d < bd then bd, bk, bx, by, bz = d, k, px, py, pz end
+      end
+    end
+  end
+  if bd and bd < (24 * 24) then
+    return bk, bx, by, bz, (traj.t0 or 0) + bk * (traj.step or 0)
+  end
+  return nil
+end
+
+-- A little 3D diamond marker (used for the node + encounter points).
+local function draw_diamond(x, y, z, s, r, g, b)
+  depth(false)
+  draw.line(x - s, y, z, x, y + s, z, r, g, b, 1)
+  draw.line(x, y + s, z, x + s, y, z, r, g, b, 1)
+  draw.line(x + s, y, z, x, y - s, z, r, g, b, 1)
+  draw.line(x, y - s, z, x - s, y, z, r, g, b, 1)
+  draw.line(x, y, z - s, x, y + s, z, r, g, b, 1)
+  draw.line(x, y + s, z, x, y, z + s, r, g, b, 1)
+  draw.line(x, y, z + s, x, y - s, z, r, g, b, 1)
+  draw.line(x, y - s, z, x, y, z - s, r, g, b, 1)
+  depth(true)
+end
+
+-- FROZEN COAST REFERENCE: while the ship coasts its orbit is analytically
+-- fixed, so every trajectory walk + the node projection starts from this
+-- frozen (state, time) — the walks sample the SAME absolute instants every
+-- recompute, so the drawn path and the maneuver node are rock-steady. (They
+-- used to re-derive from the live sim state every 0.15 s: sim noise + step
+-- re-quantization made the node hop and the post-burn path flicker even in a
+-- perfectly stable orbit.) Re-seeded when: thrusting or grounded, the
+-- dominant body changed, the live state drifted off the reference conic
+-- (RCS puffs, collisions, burns), or the ref aged past the walk window.
+local traj_ref = nil -- { t, rx..rz, rvx..rvz (dominant-frame), dbname, span }
+-- What the cached walks were computed from. While coasting the reference is
+-- frozen, so an unchanged key means the walks would come out identical — the
+-- recompute is skipped instead of re-solving thousands of conics to redraw
+-- the same line (it showed as a hitch every 0.15 s while zooming).
+local traj_key = nil
+
+-- Recompute the maneuver-node projection + both trajectory walks (throttled).
+-- `db` is the ship's dominant body; `o` its current conic (space.elements).
+local function recompute_trajectories(node, db, bodies, pidx, o, thr)
+  -- Find the dominant body's index for the walkers.
+  local dbi
+  for i, b in ipairs(bodies) do
+    if b.name == db.name then dbi = i break end
+  end
+  if not dbi then traj_now, traj_mnv = nil, nil return end
+
+  local now = space.time()
+  local rx0, ry0, rz0 = node.x - db.x, node.y - db.y, node.z - db.z
+  -- `thr` = the subject craft's throttle. Coasting is what lets the reference
+  -- conic be frozen; under thrust the orbit is changing and must be re-read.
+  local coasting = (thr or 0) < 0.005 and not node.grounded
+  local stale = not coasting or not traj_ref or traj_ref.dbname ~= db.name
+  if not stale then
+    local dtb = now - traj_ref.t
+    if dtb > traj_ref.span * 0.35 then
+      stale = true -- the walk window has drifted behind us: re-anchor
+    else
+      -- Drift gate: where the ref conic says we are now vs the live sim.
+      -- Catches anything that actually changed the orbit (RCS, a bump).
+      local prx, pry, prz = space.propagate(traj_ref.rx, traj_ref.ry, traj_ref.rz,
+        traj_ref.rvx, traj_ref.rvy, traj_ref.rvz, db.mu, dtb)
+      local ex, ey, ez = prx - rx0, pry - ry0, prz - rz0
+      local tol = math.max(4.0, (rx0 * rx0 + ry0 * ry0 + rz0 * rz0) * 4e-6)
+      if ex * ex + ey * ey + ez * ez > tol then stale = true end
+    end
+  end
+  if stale then
+    -- Timescale: your own year if bound, else the planet's year (transfer clock).
+    local span
+    if o and o.period then
+      span = o.period * 1.6
+    else
+      local yp = body_period(bodies, pidx, dbi)
+      span = (yp and yp * 1.2) or 20000.0
+    end
+    traj_ref = { t = now, rx = rx0, ry = ry0, rz = rz0,
+      rvx = node.vx, rvy = node.vy, rvz = node.vz, dbname = db.name, span = span }
+  end
+  local span = traj_ref.span
+  local segs = math.floor(params.segments)
+  local toff = traj_ref.t - now -- ≤ 0: walks start at the frozen ref instant
+  local key = mnv and string.format("%s|%.6f|%.6f|%.6f|%.6f", tostring(traj_ref), mnv.t0,
+    mnv.pro, mnv.nor, mnv.rad) or tostring(traj_ref)
+  if key == traj_key and traj_now and (traj_mnv ~= nil) == (mnv ~= nil) then
+    traj_now.t0 = toff -- the same path, one recompute later: only its clock moves
+    return
+  end
+  traj_key = key
+
+  -- Ship WORLD state AT THE REF INSTANT: the dominant body's state then + the
+  -- frozen relative state (node.vx/vy/vz are frame-relative by convention).
+  local dsx, dsy, dsz, dsvx, dsvy, dsvz = body_state_at(bodies, pidx, dbi, toff)
+  local swx, swy, swz = dsx + traj_ref.rx, dsy + traj_ref.ry, dsz + traj_ref.rz
+  local swvx, swvy, swvz = dsvx + traj_ref.rvx, dsvy + traj_ref.rvy, dsvz + traj_ref.rvz
+
+  local rpts, anch, enc = walk_trajectory(bodies, pidx, swx, swy, swz, swvx, swvy, swvz, dbi, toff, span, segs)
+  -- Rest-frame cache: rpts are RELATIVE to per-point anchor bodies (anch), drawn
+  -- at each anchor's LIVE position. `step`/`t0` give each point a TIME (offset
+  -- from now), which is what click-to-place reads to drop the node at the
+  -- right spot on the orbit.
+  traj_now = { rpts = rpts, anch = anch, enc = enc, t0 = toff, step = span / segs }
+
+  if mnv then
+    -- Walk the CURRENT patched conic to the node time, CROSSING any SOI between
+    -- now and then, so the node's state (position, velocity, and which body it
+    -- orbits) is the true one — not a single two-body arc around the start.
+    -- `mnv.t0` is an ABSOLUTE sim-time instant; the LEAD (seconds until the burn)
+    -- is `t0 − now`, which counts down ON ITS OWN as you coast — so the node stays
+    -- PINNED to its point on the orbit while you close on it. (It used to store a
+    -- fixed lead-from-now, so the walk always advanced the same span from an
+    -- ever-advancing start → the node marched forever ahead and you never reached it.)
+    -- Walk from the FROZEN ref instant to the node's absolute time: both ends
+    -- are constants while coasting, so the step count and every SOI-crossing
+    -- decision quantize identically each recompute — the node state (and the
+    -- whole post-burn path) is bit-stable instead of hopping every 0.15 s.
+    local t_node = math.max(mnv.t0 - now, 0)
+    local nsteps = math.max(8, math.ceil((t_node - toff) / (span / segs)))
+    local ns = patched_state_at(bodies, pidx, swx, swy, swz,
+      swvx, swvy, swvz, dbi, toff, t_node, nsteps)
+    local ndb = ns.anchor -- the body the node orbits (may DIFFER from the start db!)
+    local nrx, nry, nrz = ns.rx, ns.ry, ns.rz
+    local nvx, nvy, nvz = ns.rvx, ns.rvy, ns.rvz
+    -- Burn basis at the node, IN ITS dominant body's frame: prograde / normal /
+    -- radial-out (world axes — celestial frames only translate).
+    local px, py, pz = norm(nvx, nvy, nvz)
+    local hnx, hny, hnz = norm(cross(nrx, nry, nrz, nvx, nvy, nvz))
+    local rdx, rdy, rdz = cross(px, py, pz, hnx, hny, hnz)
+    local bx = px * mnv.pro + hnx * mnv.nor + rdx * mnv.rad
+    local by = py * mnv.pro + hny * mnv.nor + rdy * mnv.rad
+    local bz = pz * mnv.pro + hnz * mnv.nor + rdz * mnv.rad
+    -- Post-burn seed: node WORLD position unchanged, WORLD velocity += the burn.
+    local mwvx, mwvy, mwvz = ns.wvx + bx, ns.wvy + by, ns.wvz + bz
+    -- Post-burn timescale about the node's body (bound → its year; escape → the
+    -- transfer clock).
+    local bvx, bvy, bvz = nvx + bx, nvy + by, nvz + bz
+    local v2 = bvx * bvx + bvy * bvy + bvz * bvz
+    local rlen = math.sqrt(nrx * nrx + nry * nry + nrz * nrz)
+    local a2 = 1.0 / (2.0 / rlen - v2 / ns.mu)
+    local mspan
+    if a2 > 0 then
+      mspan = 2 * math.pi * math.sqrt(a2 * a2 * a2 / ns.mu) * 1.6
+    else
+      local yp = body_period(bodies, pidx, ndb)
+      mspan = (yp and yp * 1.2) or 20000.0
+    end
+    local mrpts, manch, menc =
+      walk_trajectory(bodies, pidx, ns.wx, ns.wy, ns.wz, mwvx, mwvy, mwvz, ndb, t_node, mspan, segs)
+    local dv = math.sqrt(mnv.pro ^ 2 + mnv.nor ^ 2 + mnv.rad ^ 2)
+    -- Cache the burn's WORLD direction so the SAS "node" hold can point at it in
+    -- flight (where recompute doesn't run).
+    if dv > 1e-4 then mnv.bwx, mnv.bwy, mnv.bwz = norm(bx, by, bz) else mnv.bwx = nil end
+    traj_mnv = {
+      rpts = mrpts, anch = manch, enc = menc,
+      m_anchor = ndb, m_rx = nrx, m_ry = nry, m_rz = nrz, -- node marker (its body's frame)
+      bx = bx, by = by, bz = bz,
+      dv = dv, t0 = t_node, step = mspan / segs,
+    }
+  else
+    traj_mnv = nil
+  end
+end
+
+local function update_map3d(node, dt)
+  if not map_view then return end
+  -- The map's SUBJECT is the craft being flown, and its kinematics come from
+  -- the SIM (assembly.info) — position, velocity AND grounded — never the
+  -- node-pose mirror, so the map can't go dark if the mirror lags or misses.
+  if time - subj_t > 0.5 or (subj_cache and not (subj_cache.node and subj_cache.node.valid)) then
+    subj_cache, subj_t = subject_vessel(), time
+  end
+  local vc = subj_cache
+  local craft_flying = vc ~= nil
+  if craft_flying then
+    local vi = assembly.info(vc.node)
+    if vi then
+      node = { x = vi.origin.x, y = vi.origin.y, z = vi.origin.z,
+               vx = vi.vel.x, vy = vi.vel.y, vz = vi.vel.z,
+               grounded = vi.grounded }
+    else
+      node = vc.node -- parts still assembling: the node pose is all there is
+      if not map_diag then
+        map_diag = true
+        print("map: piloted vessel has no physics assembly yet — showing its node pose")
+      end
+    end
+  elseif astronaut and astronaut.valid then
+    -- Nobody flying: the map is a system view centred on the crew.
+    node = astronaut
+  end
+  local subj_throttle = craft_flying and (vc.throttle or 0) or 0
+  if not cam_node then cam_node = find("Camera 1") end
+  local bodies = space.bodies()
+  local nf = #bodies + 1 -- focus slots: the SHIP first, then every body
+  if input.pressed("tab") then
+    map_focus = map_focus % nf + 1
+    zoom_target = nil -- re-fit, and ease there from where the view is now
+    map_offx, map_offy, map_offz = 0.0, 0.0, 0.0
+  end
+  if map_focus > nf then map_focus = 1 end
+  if input.pressed("1") then map_show.orbits = not map_show.orbits end
+  if input.pressed("2") then map_show.soi = not map_show.soi end
+  if input.pressed("3") then map_show.markers = not map_show.markers end
+
+  -- Focusing a body (TAB) streams ITS real terrain in (terrain.warm — loads it
+  -- if cold, keeps it resident while focused, however far the ship is). Every
+  -- other far world stays a cheap impostor sphere; the planet under the SHIP is
+  -- kept loaded by the ship's own physical presence, never by this camera.
+  if map_focus > 1 and bodies[map_focus - 1] then
+    terrain.warm(bodies[map_focus - 1].name)
+  end
+  local focus, fname, fradius
+  if map_focus == 1 then
+    if craft_flying or not astronaut then
+      focus = { x = node.x, y = node.y, z = node.z }
+      fname = "SHIP"
+    else
+      focus = { x = astronaut.x, y = astronaut.y, z = astronaut.z }
+      fname = "YOU"
+    end
+    fradius = 6
+  else
+    focus = bodies[map_focus - 1]
+    fname, fradius = focus.name, focus.radius
+  end
+  if not zoom_target then
+    -- Auto-fit: opening on the ship/astronaut frames the WHOLE current orbit
+    -- (apoapsis + body), not a close-up of the hull.
+    if map_focus == 1 then
+      local dn0 = space.dominant(focus.x, focus.y, focus.z)
+      local b0 = dn0 and space.body(dn0)
+      if b0 then
+        local rr = math.sqrt((focus.x - b0.x) ^ 2 + (focus.y - b0.y) ^ 2 + (focus.z - b0.z) ^ 2)
+        zoom_target = math.max(rr * 2.2, b0.radius * 3.5)
+        local o = space.elements(node.x, node.y, node.z, node.vx, node.vy, node.vz)
+        if o and o.apoapsis then zoom_target = math.max(zoom_target, o.apoapsis * 1.5) end
+      else
+        zoom_target = 400
+      end
+    else
+      zoom_target = math.max(fradius * 6, 80)
+    end
+    map_zoom = map_zoom or zoom_target -- opening: start framed, no fly-in
+  end
+
+  -- Blender-style navigation: the mouse is free (and does nothing) unless
+  -- RIGHT CLICK is held — drag then ORBITS the selection; CTRL+RIGHT-drag
+  -- PANS the view offset in the camera plane instead. Scroll / ↑↓ zooms.
+  local dragging = input.button(1)
+  input.setMouseLocked(dragging)
+  local cp, sp2 = math.cos(map_pitch2), math.sin(map_pitch2)
+  local cy3, sy3 = math.cos(map_yaw2), math.sin(map_yaw2)
+  if dragging then
+    local mdx, mdy = input.mouse_delta()
+    if input.key("ctrl") then
+      -- Pan: move the offset along the camera's right/up axes, scaled by zoom.
+      local rx3, rz3 = cy3, -sy3 -- camera right (horizontal)
+      local uxx = -sp2 * sy3
+      local uyy = cp
+      local uzz = -sp2 * cy3 -- camera up
+      local k = map_zoom * 0.0016
+      map_offx = map_offx + (-mdx * rx3 + mdy * uxx) * k
+      map_offy = map_offy + (mdy * uyy) * k
+      map_offz = map_offz + (-mdx * rz3 + mdy * uzz) * k
+    else
+      map_yaw2 = map_yaw2 - mdx * 0.0035
+      map_pitch2 = math.max(-1.45, math.min(1.45, map_pitch2 - mdy * 0.0035))
+      cp, sp2 = math.cos(map_pitch2), math.sin(map_pitch2)
+      cy3, sy3 = math.cos(map_yaw2), math.sin(map_yaw2)
+    end
+  end
+  local sc = input.scroll()
+  if sc and sc ~= 0 then zoom_target = zoom_target * math.exp(-sc * 0.12) end
+  if input.key("up") then zoom_target = zoom_target * math.exp(-1.5 * dt) end
+  if input.key("down") then zoom_target = zoom_target * math.exp(1.5 * dt) end
+  zoom_target = math.max(fradius * 1.6, math.min(zoom_target, ZOOM_MAX))
+  local lz0 = math.log(map_zoom)
+  map_zoom = math.exp(lz0 + (math.log(zoom_target) - lz0) * (1 - math.exp(-12 * dt)))
+  if cam_node then
+    local dx3, dy3, dz3 = cp * sy3, sp2, cp * cy3
+    local lx = focus.x + map_offx
+    local ly = focus.y + map_offy
+    local lz = focus.z + map_offz
+    cam_node.x = lx + dx3 * map_zoom
+    cam_node.y = ly + dy3 * map_zoom
+    cam_node.z = lz + dz3 * map_zoom
+    cam_node.yaw = math.atan2(dx3, dz3)
+    cam_node.pitch = -map_pitch2
+    cam_node.roll = 0
+  end
+
+  -- Everything below is sized and culled on SCREEN: a marker is so many
+  -- pixels wherever it sits, and an orbit too small to see is not drawn.
+  local ccx, ccy, ccz = cam_node and cam_node.x or focus.x, cam_node and cam_node.y or focus.y,
+    cam_node and cam_node.z or focus.z
+  local sh = 720
+  if camera and camera.screenSize then sh = select(2, camera.screenSize()) or 720 end
+  local function cam_dist(x, y, z)
+    return math.max(1e-3, math.sqrt((x - ccx) ^ 2 + (y - ccy) ^ 2 + (z - ccz) ^ 2))
+  end
+  -- World size of `px` screen pixels at a point (a ~60° vertical view).
+  local function px_at(x, y, z, px) return cam_dist(x, y, z) * px * 1.15 / sh end
+
+  if #bodies ~= pidx_n or time - pidx_t > 1.0 then
+    map_pidx, pidx_n, pidx_t = parent_indices(bodies), #bodies, time
+  end
+  -- The SOI rings worth seeing: the ones the subject is inside, and the focus.
+  local ring_for = {}
+  local dn0 = space.dominant(node.x, node.y, node.z)
+  for i, b in ipairs(bodies) do
+    if b.name == dn0 or i == map_focus - 1 then
+      local k = i
+      while k do ring_for[k] = true; k = map_pidx[k] end
+    end
+  end
+
+  -- Labels already placed this frame: a far pair of worlds projects to nearly
+  -- one point, and two names drawn over each other read as neither.
+  local placed = {}
+  -- Orbit lines around each body's parent, and the names of what's in view.
+  for i, b in ipairs(bodies) do
+    local pi = map_pidx[i]
+    local par = pi and bodies[pi]
+    local shown = false
+    if par then
+      local has, p, ecc, e1x, e1y, e1z, e2x, e2y, e2z = orbit_basis(
+        b.x - par.x, b.y - par.y, b.z - par.z,
+        b.vx - par.vx, b.vy - par.vy, b.vz - par.vz, par.mu)
+      if has then
+        local reach = ecc < 1 and p / (1 - ecc) or p * 2
+        local span_px = reach / cam_dist(par.x, par.y, par.z) * sh
+        shown = span_px > 4
+        if shown and map_show.orbits then
+          local segs = math.max(24, math.min(128, math.floor(span_px / 5)))
+          draw_conic(par.x, par.y, par.z, e1x, e1y, e1z, e2x, e2y, e2z,
+            p, ecc, 0.55, 0.62, 0.72, 0.8, segs)
+        end
+      end
+    else
+      shown = true -- a star
+    end
+    if map_show.soi and b.soi > 0 and ring_for[i] then
+      local vx, vy, vz = norm(ccx - b.x, ccy - b.y, ccz - b.z)
+      draw.ring(b.x, b.y, b.z, vx, vy, vz, b.soi, 0.35, 0.5, 0.62, 0.5)
+    end
+    if shown and map_show.markers and camera and camera.worldToScreen then
+      local sx, sy, _, on = camera.worldToScreen(b.x, b.y, b.z)
+      if on then
+        local rpx = b.radius / cam_dist(b.x, b.y, b.z) * sh
+        local ly = sy - math.max(10, rpx * 0.6) - 16
+        local clear = true
+        for _, q in ipairs(placed) do
+          if math.abs(q[1] - sx) < 70 and math.abs(q[2] - ly) < 16 then clear = false break end
+        end
+        if clear then
+          placed[#placed + 1] = { sx, ly }
+          draw.text(sx, ly, b.name, 13, 0.82, 0.91, 0.98, 0.9, "center")
+        end
+      end
+    end
+  end
+
+  -- The ship's own conic + Pe/Ap markers + a position cross.
+  local dn = space.dominant(node.x, node.y, node.z)
+  local db = dn and space.body(dn)
+  local info_orbit = nil
+  if db then
+    -- node velocity is ALREADY in the dominant body's carried frame (the
+    -- engine's SOI frame convention) — subtracting db's world velocity again
+    -- bent the drawn conic once the planet itself started orbiting the star.
+    local has, p, ecc, e1x, e1y, e1z, e2x, e2y, e2z = orbit_basis(
+      node.x - db.x, node.y - db.y, node.z - db.z,
+      node.vx, node.vy, node.vz, db.mu)
+    if has then
+      info_orbit = { body = db.name, p = p, ecc = ecc, radius = db.radius }
+      if map_show.orbits then
+        draw_conic(db.x, db.y, db.z, e1x, e1y, e1z, e2x, e2y, e2z,
+          p, ecc, 0.35, 0.85, 1.0, 1.0)
+      end
+      if map_show.markers then
+        local ms = px_at(db.x, db.y, db.z, 7)
+        local rpe = p / (1 + ecc)
+        draw_cross(db.x + e1x * rpe, db.y + e1y * rpe, db.z + e1z * rpe, ms, 1.0, 0.8, 0.25)
+        if ecc < 1 then
+          local rap = p / (1 - ecc)
+          draw_cross(db.x - e1x * rap, db.y - e1y * rap, db.z - e1z * rap, ms, 0.4, 1.0, 0.6)
+        end
+      end
+    end
+  end
+  if map_show.markers then
+    draw_cross(node.x, node.y, node.z, px_at(node.x, node.y, node.z, 6), 0.6, 1.0, 0.7)
+  end
+
+  -- ---- maneuver-node planning (KSP) --------------------------------------
+  -- Plan a burn and watch the resulting orbit — and where it drops you into
+  -- another body's sphere of influence.
+  local oe = db and space.elements(node.x, node.y, node.z, node.vx, node.vy, node.vz)
+  local hover_x, hover_y, hover_z -- the orbit point under the cursor (draw below)
+  if craft_flying and db and not node.grounded then
+    local pidx = parent_indices(bodies)
+    local vref = math.sqrt(node.vx ^ 2 + node.vy ^ 2 + node.vz ^ 2)
+    local dvrate = math.max(0.5, vref * 0.12)
+
+    -- PLANNING IS A MODE, and it has to be. A craft flies from the map — that
+    -- is the point of flying on instruments — so the stick owns W/S/A/D/Q/E,
+    -- and the burn tuner wants exactly those six keys. They cannot both have
+    -- them. `N` swaps which one is listening, `planning` says so out loud (the
+    -- vessel reads it and freezes), and the HUD prints the mode every frame.
+    --
+    -- The old answer was to give planning to the scout ship and nothing else,
+    -- which meant the craft you actually built could never plan a burn.
+    if planning then
+      -- CLICK-ON-ORBIT placement (KSP): hover the current-orbit line, LEFT-click or
+      -- drag to create/move the burn at that exact point (RMB is the camera, so LMB
+      -- is free). Picks against the cached forward path, whose points carry a time —
+      -- so the click lands the node at the right spot on the orbit.
+      local pk_k, px, py, pz, pk_t = pick_traj_point(traj_now, bodies)
+      if pk_k then hover_x, hover_y, hover_z = px, py, pz end
+      if pk_t and input.button(0) then
+        -- Store the node as an ABSOLUTE instant (now + the clicked point's lead) so it
+        -- stays fixed on the orbit as you coast toward it instead of running ahead.
+        local t0 = space.time() + pk_t
+        if mnv then mnv.t0, mnv.burned = t0, 0.0
+        else mnv = { t0 = t0, pro = 0.0, nor = 0.0, rad = 0.0, burned = 0.0 } end
+      end
+
+      -- Entering the mode with nothing planned puts a node a quarter-orbit
+      -- ahead, so plan mode always has something to tune. A mode that needs a
+      -- second, undiscoverable action before it does anything is a mode people
+      -- conclude is broken.
+      if not mnv then
+        local lead = (oe and oe.period and oe.period * 0.25) or 60.0
+        mnv = { t0 = space.time() + lead, pro = 0.0, nor = 0.0, rad = 0.0, burned = 0.0 }
+      end
+      -- BACKSPACE abandons the burn outright (X only zeroes its ΔV).
+      if input.pressed("backspace") then
+        mnv = nil
+        planning = false
+      end
+      if mnv then
+        -- ←/→ fine-tune the node time; W/S/A/D/Q/E tune the ΔV; X zeroes it.
+        local tref = (oe and oe.period) or 600.0
+        local horizon = (oe and oe.period and oe.period * 1.5) or (tref * 6)
+        local sliding = input.key("left") or input.key("right")
+        if input.key("left") then mnv.t0 = mnv.t0 - tref * 0.15 * dt end
+        if input.key("right") then mnv.t0 = mnv.t0 + tref * 0.15 * dt end
+        -- Clamp ONLY while actively sliding (keep the handle ahead of you and inside
+        -- the horizon) — never during the passive countdown, so the lead can fall to
+        -- 0 and past as you coast up to the node.
+        if sliding then
+          local now = space.time()
+          mnv.t0 = math.max(now + 1.0, math.min(mnv.t0, now + horizon))
+        end
+        if input.key("w") then mnv.pro = mnv.pro + dvrate * dt end
+        if input.key("s") then mnv.pro = mnv.pro - dvrate * dt end
+        if input.key("d") then mnv.rad = mnv.rad + dvrate * dt end
+        if input.key("a") then mnv.rad = mnv.rad - dvrate * dt end
+        if input.key("q") then mnv.nor = mnv.nor + dvrate * dt end
+        if input.key("e") then mnv.nor = mnv.nor - dvrate * dt end
+        if input.pressed("x") then mnv.pro, mnv.nor, mnv.rad = 0, 0, 0 end
+      end
+    end
+    if time - traj_t >= params.recompute then
+      traj_t = time
+      recompute_trajectories(node, db, bodies, pidx, oe, subj_throttle)
+    end
+  else
+    mnv = nil
+    traj_now, traj_mnv = nil, nil
+  end
+
+  -- Draw the cached walks in the dominant body's REST FRAME: every point rides
+  -- its anchor body's LIVE position, so the orbit is a static ellipse around the
+  -- planet where you SEE it, not smeared along the planet's own orbit.
+  local function enc_diamond(e, px, r, g, b)
+    local ex, ey, ez = rel_world(bodies, e.anchor, e.rx, e.ry, e.rz)
+    if ex then draw_diamond(ex, ey, ez, px_at(ex, ey, ez, px), r, g, b) end
+  end
+  if traj_now and map_show.markers then
+    for _, e in ipairs(traj_now.enc) do
+      if e.kind == "impact" then
+        enc_diamond(e, 8, 1.0, 0.4, 0.3)
+      else
+        enc_diamond(e, 8, 0.4, 0.9, 1.0)
+      end
+    end
+  end
+  -- The orbit point under the cursor (a soft ring) — where a click drops the node.
+  if hover_x and not mnv then
+    draw_diamond(hover_x, hover_y, hover_z, px_at(hover_x, hover_y, hover_z, 7), 0.7, 0.95, 1.0)
+  end
+  if traj_mnv then
+    if map_show.orbits then
+      draw_rel_polyline(traj_mnv.rpts, traj_mnv.anch, bodies, 1.0, 0.55, 0.15, 0.95) -- post-burn (amber)
+    end
+    local mx, my, mz = rel_world(bodies, traj_mnv.m_anchor, traj_mnv.m_rx, traj_mnv.m_ry, traj_mnv.m_rz)
+    if mx then
+      draw_diamond(mx, my, mz, px_at(mx, my, mz, 9), 1.0, 0.7, 0.2)
+      if traj_mnv.dv > 1e-4 then
+        local bnx, bny, bnz = norm(traj_mnv.bx, traj_mnv.by, traj_mnv.bz)
+        local bl = px_at(mx, my, mz, 36)
+        draw.line(mx, my, mz, mx + bnx * bl, my + bny * bl, mz + bnz * bl, 1.0, 0.85, 0.3, 1.0)
+      end
+    end
+    if map_show.markers then
+      for _, e in ipairs(traj_mnv.enc) do
+        if e.kind == "enter" then
+          enc_diamond(e, 10, 0.4, 1.0, 0.5)
+        elseif e.kind == "impact" then
+          enc_diamond(e, 10, 1.0, 0.4, 0.3)
+        else
+          enc_diamond(e, 10, 0.9, 0.9, 0.5)
+        end
+      end
+    end
+  end
+
+  -- Focused-body info panel (the flight HUD stands down while the map is open).
+  if time - map_hud_t >= 0.1 then
+    map_hud_t = time
+    local lines = {}
+    -- Which mode has the stick, said first and said plainly. In FLY the six
+    -- attitude keys move the craft; in PLAN they move the burn. Nothing else
+    -- on screen distinguishes them, so this line is the whole affordance.
+    lines[1] = string.format("MAP · %s · focus %s   [TAB] focus · [RMB] orbit · [Ctrl+RMB] pan · [scroll] zoom",
+      planning and "PLAN" or (craft_flying and "FLY" or "VIEW"), fname)
+    if map_focus > 1 then
+      local b = bodies[map_focus - 1]
+      local dx4, dy4, dz4 = node.x - b.x, node.y - b.y, node.z - b.z
+      local dd = math.sqrt(dx4 * dx4 + dy4 * dy4 + dz4 * dz4)
+      lines[2] = string.format("radius %.0f   µ %.3g   SOI %s", b.radius, b.mu,
+        b.soi < 0 and "∞" or string.format("%.0f", b.soi))
+      lines[3] = string.format("distance %.0f  (alt over it %+.0f)", dd, dd - b.radius)
+    end
+    if info_orbit then
+      local o = info_orbit
+      local who = craft_flying and "ORBIT" or "YOUR ORBIT"
+      if o.ecc < 1 then
+        lines[#lines + 1] = string.format("%s [%s]  pe %+.0f  ap %+.0f  e %.2f",
+          who, o.body, o.p / (1 + o.ecc) - o.radius, o.p / (1 - o.ecc) - o.radius, o.ecc)
+      else
+        lines[#lines + 1] = string.format("ESCAPE [%s]  pe %+.0f  e %.2f",
+          o.body, o.p / (1 + o.ecc) - o.radius, o.ecc)
+      end
+    end
+    -- Maneuver node + encounter readout.
+    if mnv then
+      local dv = math.sqrt(mnv.pro ^ 2 + mnv.nor ^ 2 + mnv.rad ^ 2)
+      local lead = mnv.t0 - space.time()
+      lines[#lines + 1] = string.format(
+        "NODE  T%s%.0fs  ΔV %.1f   pro %+.1f · rad %+.1f · nor %+.1f",
+        lead >= 0 and "-" or "+", math.abs(lead), dv, mnv.pro, mnv.rad, mnv.nor)
+      if traj_mnv and #traj_mnv.enc > 0 then
+        local e = traj_mnv.enc[1]
+        local verb = e.kind == "enter" and "ENCOUNTER" or (e.kind == "impact" and "IMPACT" or "exit")
+        lines[#lines + 1] = string.format("  => %s %s in %.0fs", verb, e.name, e.t)
+      end
+      lines[#lines + 1] = planning
+        and "  [LMB] move node · W/S pro · A/D rad · Q/E nor · ←→ slide · X zero · ⌫ drop · N fly"
+        or  "  [N] plan the burn — the stick flies the craft until you do"
+    elseif craft_flying and not node.grounded then
+      if traj_now and #traj_now.enc > 0 then
+        local e = traj_now.enc[1]
+        local verb = e.kind == "enter" and "ENCOUNTER" or (e.kind == "impact" and "IMPACT" or "SOI exit")
+        lines[#lines + 1] = string.format("%s: %s in %.0fs   ·   [N] to plan a burn", verb, e.name, e.t)
+      else
+        lines[#lines + 1] = "[N] plans a maneuver on this orbit"
+      end
+    end
+    lines[#lines + 1] = string.format(
+      "1 orbits %s · 2 SOIs %s · 3 markers %s · M close",
+      map_show.orbits and "ON" or "off",
+      map_show.soi and "ON" or "off",
+      map_show.markers and "ON" or "off")
+    set_hud(node, table.concat(lines, "\n"))
+  end
+end
+
+-- ── driver ──────────────────────────────────────────────────────────────────
+
+function isOpen() return map_view end
+
+-- The planned burn's WORLD direction, or nil when there is no burn to point
+-- at. `recompute_trajectories` caches it because it only knows the direction
+-- while the map is doing its walk, and the SAS that wants it runs in flight —
+-- where the walk isn't running at all. This is what the `node` hold aims down.
+function burnDirection()
+  if not (mnv and mnv.bwx) then return nil end
+  return mnv.bwx, mnv.bwy, mnv.bwz
+end
+
+-- Seconds until the planned burn (negative once it has passed), or nil.
+function burnLead()
+  if not mnv then return nil end
+  return mnv.t0 - space.time()
+end
+
+-- Ease the view to `z` metres from the focus, as the wheel does.
+function setZoom(z)
+  zoom_target = math.max(1, math.min(z, ZOOM_MAX))
+end
+
+-- Open or close. Called by the M key and by anything that needs the screen
+-- back (a scene change, ending a flight).
+function toggle()
+  if not astronaut or not astronaut.valid then astronaut = find("Astronaut") end
+  map_view = not map_view
+  map_zoom, zoom_target = nil, nil -- re-fit to the focus every time it opens
+  map_focus = 1    -- always open on yourself
+  map_offx, map_offy, map_offz = 0.0, 0.0, 0.0
+  map_diag = false -- each opening may report one subject anomaly
+  -- Terrain detail follows whoever you are while the map flies the camera
+  -- thousands of km off, so closing it finds the ground still meshed.
+  if terrain.lodAnchor then
+    local sv = map_view and subject_vessel()
+    local who = sv and sv.node or (map_view and astronaut and astronaut.valid and astronaut) or nil
+    terrain.lodAnchor(who)
+  end
+  -- Map lines at the window's own resolution, crisp at any render scale.
+  if draw.nativeLines then draw.nativeLines(map_view) end
+  if not map_view then
+    planning = false
+    -- Hand the instruments back to a craft that is still being flown; if
+    -- nobody is flying, the HUD block goes away with the map.
+    local flying = subject_vessel() ~= nil
+    set_instruments(flying)
+    if not flying then set_hud(nil, nil) end
+  else
+    set_instruments(false)
+  end
+end
+
+function start(_)
+  map_view = false
+  planning = false
+end
+
+-- The map runs in lateUpdate — the CAMERA pass. Driven from fixedUpdate it
+-- sampled tick poses while the world rendered interpolated ones, which showed
+-- as constant back-and-forth jitter on every line.
+function lateUpdate(node, dt)
+  if not astronaut or not astronaut.valid then astronaut = find("Astronaut") end
+  if input.pressed("m") then toggle() end
+  if not map_view then return end
+  -- N enters and leaves PLAN mode, but only for a craft that has a trajectory
+  -- to plan on: on foot there is nothing to burn.
+  if input.pressed("n") and subject_vessel() then planning = not planning end
+  depth(true)
+  update_map3d(node, dt)
+  depth(false)
+end

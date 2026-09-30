@@ -14,6 +14,15 @@
 
 local el, open, title
 
+-- Published, because the Esc ladder in `pause_menu` needs to know that this is
+-- the thing in front of the player. Everything that owns the screen answers
+-- this question; this one had no way to be asked.
+function isOpen() return open == true end
+
+-- Open it without the key (the UI probe; a future HUD button). It still closes
+-- itself the moment nobody is flying.
+function openPanel() open = true end
+
 -- The vessel whose console this is: the piloted BUILT vessel, if any. Vessels
 -- spawn and despawn at runtime (a lander undocks into its own craft), so this
 -- is re-fetched every frame across every instance — never cached.
@@ -24,6 +33,24 @@ function pilotedVessel()
   return nil
 end
 
+-- Cross-script singletons, resolved once and kept (floptle/0063).
+local refs = {}
+local function ref(kind)
+  local r = refs[kind]
+  if not r or not r.valid then r = findScript(kind); refs[kind] = r end
+  return r
+end
+
+-- The orbit map, resolved once (see floptle/0063 — findScript is a scene walk).
+local map_ref
+local function map()
+  if not map_ref or not map_ref.valid then map_ref = findScript("orbit_map") end
+  return map_ref
+end
+
+-- The time this panel last closed on Esc (see pause_menu's Esc ladder).
+escTakenAt = -1
+
 function start(node)
   el = node:getcomponent("UiElement")
   open = false
@@ -33,17 +60,25 @@ function update(node, dt)
   if not el then el = node:getcomponent("UiElement") end
   if not el then return end
   local v = pilotedVessel()
-  -- The map owns the screen while it's up (the map flag rides the scout script
-  -- whichever craft is being flown) — same rule the SAS cluster follows.
-  local sc = findScript("ship_controller")
-  local flying = (v and v.piloting and not (sc and sc.map_view)) or false
+  -- The map owns the screen while it's up — the same rule the SAS cluster
+  -- follows.
+  local m = map()
+  local flying = (v and v.piloting and not (m and m.map_view)) or false
   if flying and input.pressed("p") then open = not open end
   if not flying then open = false end
+  -- Esc closes it, like every other panel in the game. It used to be P-only, so
+  -- the one key a player reaches for to back out of a screen did nothing here.
+  if open and input.pressed("escape") then
+    open = false
+    escTakenAt = time -- pause_menu reads this: the same Esc must not also pause
+  end
   el.visible = open
   if not open then return end
 
   if not title then title = find("Peripherals Title") end
   if not title then return end
+  -- The title block wraps; its height is the text's (Fit), and status_hud's
+  -- layout pass places this panel under the fuel block.
   local d = v.dock
   local head = "PERIPHERALS"
   if d and d.target then
@@ -61,8 +96,8 @@ function update(node, dt)
   end
   -- The company line: what you're flying is worth money, and the contract you
   -- signed is the reason you're up here. Both belong where the pilot is looking.
-  local co = findScript("company")
-  local mi = findScript("missions")
+  local co = ref("company")
+  local mi = ref("missions")
   local tail = {}
   -- What we're carrying, when we're carrying anything: a hold is a peripheral
   -- like any other, and its number is the reason for the trip.

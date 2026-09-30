@@ -1,42 +1,51 @@
--- The HUD's ☰ MENU button: checkpoint the save slot and return to the main
--- menu. Hidden during direct editor play (no slot active — nothing to save,
--- nowhere to go back to).
+-- The HUD's ☰ button. It opens the PAUSE MENU, which is where quitting lives now
+-- along with the controls — and it wears the key that does the same thing, so a
+-- player who clicks it once knows Esc from then on. An affordance whose only job
+-- is to teach itself out of existence is a good affordance.
+--
+-- It used to quit straight to the main menu with no confirmation and no pause,
+-- one stray click from the end of your session, and it was pinned to the same
+-- corner as the objectives card — drawn straight over its title.
+--
+-- Hidden during direct editor play (no slot active — nothing to save, nowhere to
+-- go back to).
 
-local el, mgr, idle
+local el, mgr
 
+-- Cross-script singletons, resolved once and kept: `findScript` walks the whole
+-- scene (floptle/0063), and asking every frame is what made this project do a
+-- hundred scans a frame. A handle stays good until the scene changes, and
+-- `.valid` is how you find out that it has.
+local refs = {}
+local function ref(kind)
+  local r = refs[kind]
+  if not r or not r.valid then r = findScript(kind); refs[kind] = r end
+  return r
+end
+
+-- The look, hover included, is the "hud/button" style (ui/solar.uistyle.ron);
+-- it used to be a fill recomputed in Lua on every hover.
 function start(node)
   el = node:getcomponent("UiElement")
-end
-
-local function ensureIdle()
-  if idle or not el then return end
-  idle = { el.fillR or 0.1, el.fillG or 0.14, el.fillB or 0.18, el.fillA or 0.88 }
-end
-
-local function setFill(r, g, b, a)
-  if el then el.fillR = r; el.fillG = g; el.fillB = b; el.fillA = a end
+  node.style = "hud/button"
 end
 
 function update(node, dt)
   if not el then return end
-  if not mgr then mgr = findScript("game_manager") end
-  local show = (mgr and not mgr.loading and save.slot() ~= "main") or false
+  if not mgr then mgr = ref("game_manager") end
+  -- Shown in direct editor play too, which it never used to be: it opened a
+  -- main menu that was not there, and now it opens the controls, which are
+  -- exactly as useful whether or not there is a save slot behind you.
+  --
+  -- Not over the menu it opens.
+  local pm = ref("pause_menu")
+  local show = (mgr and not mgr.loading and not (pm and pm.open)) or false
   el.visible = show
 end
 
 function clicked(node)
-  if mgr and mgr.exitToMenu then mgr.exitToMenu() end
-end
-
-function hoverStart(node)
-  ensureIdle()
-  if not idle then return end
-  setFill(math.min(1.0, idle[1] * 1.5 + 0.08), math.min(1.0, idle[2] * 1.45 + 0.1),
-          math.min(1.0, idle[3] * 1.4 + 0.12), math.min(1.0, idle[4] + 0.06))
-  if el then el.border = 1.6 end
-end
-
-function hoverEnd(node)
-  if idle then setFill(idle[1], idle[2], idle[3], idle[4]) end
-  if el then el.border = 1.0 end
+  local fx = ref("sfx")
+  if fx then fx.play("click") end
+  local pm = ref("pause_menu")
+  if pm and pm.openMenu then pm.openMenu() end
 end

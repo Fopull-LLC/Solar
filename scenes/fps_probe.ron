@@ -1,0 +1,53 @@
+// FPS PROBE — plays a real save in a window and reports the frame rate.
+//
+// A camera and a script that does what clicking "Create" on an empty slot does
+// (wipe slot 9's terrain, select it, store the seed), then loads the system
+// scene and RIDES THE SWAP (node.persistent) to report the real frame rate, the
+// engine's cost buckets and the counts behind them every few seconds.
+//
+// Frames are only real in a window, so this reports under `floptle play` (point
+// a scratch copy's entry_scene here) or the editor's Play. Nothing in the
+// shipped game references this scene.
+(
+    nodes: [
+        (
+            name: "Camera",
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Camera(
+                fov_y: 1.1519173,
+                active: true,
+            ),
+            scripts: [],
+        ),
+        (
+            name: "Fps Probe",
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Empty,
+            scripts: [
+                (
+                    kind: "fps_probe",
+                    enabled: true,
+                    params: [
+                        ("slot", 7.0),
+                        ("quitAfter", 75.0),
+                        ("experimentsAt", 0.0),
+                        ("shore", 0.0),
+                        ("oceanDebug", 0.0),
+                        ("hideSea", 0.0),
+                        ("swimTest", 0.0),
+                        ("every", 10.0),
+                        ("noVsync", 1.0),
+                    ],
+                ),
+            ],
+        ),
+    ],
+)

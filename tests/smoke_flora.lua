@@ -67,7 +67,11 @@ local BODY = { name = "Verdance", x = 1000, y = 0, z = -500, radius = 424,
 local SURFACE = 400.0            -- the ground the stub raycast answers at
 API.space = {
   bodies = function() return { BODY } end,
-  body = function(n) return (n == BODY.name) and BODY or nil end,
+  body = function(n)
+    if n == BODY.name then return BODY end
+    -- A body the rails know about that may not have a world record yet.
+    return (LATE_BODY and n == LATE_BODY.name) and LATE_BODY or nil
+  end,
   dominant = function(x, y, z)
     local d = math.sqrt((x - BODY.x) ^ 2 + (y - BODY.y) ^ 2 + (z - BODY.z) ^ 2)
     return d < BODY.soi and BODY.name or nil
@@ -260,6 +264,28 @@ check("a sea puts kelp in the water and nowhere else", (function()
 end)())
 check("nothing grows on an airless world", #fg.speciesFor("Dead") == 0)
 
+-- …AND THAT ANSWER IS NOT REMEMBERED. `climate.worldOf` answers for a world it
+-- has no record of with an honest fallback — "barren, airless, no sea" — so a
+-- species roll that lands one frame before `system_generator` writes the world
+-- to the save sees an airless planet. Cache that and the world is bare for the
+-- rest of the session, silently, with nothing ever asking again.
+--
+-- Reported as "now im not seeing any plants", after an engine upgrade shifted
+-- when terrain and scripts come up relative to each other. The bug was always
+-- here; the timing just started losing.
+-- The body is on the RAILS already — the generator registered it — but its world
+-- record has not reached the save yet. That is the whole window: `worldOf` finds
+-- a body, cannot find its record, and honestly answers "barren, airless".
+local LATE = "LateWorld"
+LATE_BODY = { name = LATE, x = 9e5, y = 0, z = 0, radius = 180, soi = 4000 }
+local before = fg.speciesFor(LATE)          -- no record yet → nothing grows
+check("a world with no record yet grows nothing", #before == 0)
+store["world." .. LATE] = { name = LATE, kind = "canyon", seed = 42, radius = 180,
+                            relief = 12, atmo = 0.7, sea = 0, temp = 0.5, insol = 1.0 }
+local after = fg.speciesFor(LATE)           -- the record has arrived
+check("…and grows again once its world record arrives, rather than staying bare",
+  #after > 0)
+
 -- ── 3. building a plant ─────────────────────────────────────────────────────
 local tree = nil
 for _, s in ipairs(sp1) do if s.form == "tree" then tree = s end end
@@ -398,6 +424,62 @@ if aim then
   end)())
   local off = ff.nearestPlant(ASTRO.x, ASTRO.y, ASTRO.z, -dx / l, -dy / l, -dz / l, l + 1, 0.5)
   check("...and not what's behind you", off == nil or off.pid ~= aim.pid)
+
+  -- AIM AT THE PLANT, NOT AT ITS ROOT. The reason harvesting felt broken: you
+  -- stand a few metres off and look at the part of the plant you can SEE — the
+  -- trunk at chest height, the canopy above it — and the old test measured the
+  -- direction to a point on the ground at its base. Here is that shot, staged
+  -- exactly: from 3 m back, pointed at the plant a metre up its own axis. The
+  -- cone it subtends at the root is well outside 0.55, so the old code returned
+  -- nothing and the tool said "nothing in reach" while the player was staring
+  -- straight at a bush.
+  -- Pick the TALLEST plant standing nearby: the shot only defeats the old cone
+  -- when there is enough plant above the root to aim at, and a check that the
+  -- old code would also have passed pins nothing. The assertion below makes
+  -- that explicit rather than trusting the draw.
+  local tall = aim
+  for i = 0, 23 do
+    local a, b = i * 0.7853, i * 0.4363
+    local sd = ff.nearestPlant(ASTRO.x, ASTRO.y, ASTRO.z,
+      math.cos(a) * math.cos(b), math.sin(b), math.sin(a) * math.cos(b), 400, -1)
+    if sd and (sd.rec.sp.height or 0) > (tall.rec.sp.height or 0) then tall = sd end
+  end
+  aim = tall
+
+  local ux, uy, uz = aim.x - BODY.x, aim.y - BODY.y, aim.z - BODY.z
+  local ul = math.sqrt(ux * ux + uy * uy + uz * uz)
+  ux, uy, uz = ux / ul, uy / ul, uz / ul
+  -- Standing right at it — 1.2 m off the trunk, eyes 1.5 m up — and looking at
+  -- the top of it. This is the stance the complaint came from: you walk up to
+  -- something growing and point at the part of it you can see. Up close the
+  -- root falls out of the cone fastest, which is why the tool went quiet
+  -- exactly when you were closest to the thing you wanted.
+  local sx, sy, sz = 1 - ux * ux, -ux * uy, -ux * uz
+  local sl = math.sqrt(sx * sx + sy * sy + sz * sz)
+  if sl < 1e-3 then sx, sy, sz, sl = 0, 0, 1, 1 end
+  sx, sy, sz = sx / sl, sy / sl, sz / sl
+  local ex = aim.x + sx * 1.2 + ux * 1.5
+  local ey = aim.y + sy * 1.2 + uy * 1.5
+  local ez = aim.z + sz * 1.2 + uz * 1.5
+  -- Pointed nine tenths of the way up the trunk — i.e. at the plant.
+  local up_at = (aim.rec.sp.height or 1.0) * 0.9
+  local tx, ty, tz = aim.x + ux * up_at, aim.y + uy * up_at, aim.z + uz * up_at
+  local ax, ay, az = tx - ex, ty - ey, tz - ez
+  local al = math.sqrt(ax * ax + ay * ay + az * az)
+  ax, ay, az = ax / al, ay / al, az / al
+  local cone_dot = (function()
+    local rx, ry, rz = aim.x - ex, aim.y - ey, aim.z - ez
+    local rl = math.sqrt(rx * rx + ry * ry + rz * rz)
+    return (rx * ax + ry * ay + rz * az) / rl
+  end)()
+  check("...and the shot really is one the old cone rejected", cone_dot < 0.55,
+    string.format("root cone %.2f on a %.1f m plant", cone_dot, aim.rec.sp.height or 0))
+  local trunk = ff.nearestPlant(ex, ey, ez, ax, ay, az, 8.0, 0.55, 1.5)
+  check("aiming at a plant's TRUNK finds it, not just its root",
+    trunk ~= nil and trunk.pid == aim.pid,
+    string.format("root cone %.2f (the old test needed 0.55)", cone_dot))
+  check("...and it reports where on the plant to put the beam",
+    trunk ~= nil and trunk.ax ~= nil and trunk.height ~= nil)
 
   local n0 = ff.count
   local node = aim.rec.node

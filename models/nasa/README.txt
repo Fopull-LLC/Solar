@@ -16,3 +16,8 @@ science instruments (SC6); mobile_launcher / jsc_mission_control_room →
 facility dressing; eva_suit / advanced_crew_escape_suit → astronaut suit
 looks (SC5); hand tools (hammer, grease_gun, pistol_grip_tool) → inventory
 items (SC4+).
+
+Compression: most of these ship Draco-compressed (KHR_draco_mesh_compression),
+which Floptle refuses (`floptle check` names the file). The cubesat and the
+Canadarm have been decoded with tools/undraco.mjs; run it on any other one
+before putting it in a scene or prefab.

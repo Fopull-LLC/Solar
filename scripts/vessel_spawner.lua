@@ -17,6 +17,10 @@ defaults = {
   clear = 0.4,     -- gap between the lowest part and the deck at spawn
 }
 
+-- Radius of ground levelled under the pad: the deck is 5.1 × 4.3 m (half-
+-- diagonal 3.4), plus room to stand beside it.
+local PAD_FLAT = 6.0
+
 local pending = 0
 local vessel_node = nil
 local body_name = nil       -- the dominant body we spawned against
@@ -111,10 +115,9 @@ function start(node)
 end
 
 local function try_spawn()
-  -- Site reference read FRESH each attempt: the ASTRONAUT (the crew spawn —
-  -- the scout "Ship" node is a stashed debug tool now and may be parked in
-  -- deep space).
-  local pad = find("Astronaut") or find("Ship")
+  -- Site reference read FRESH each attempt: the crew's own position, which is
+  -- where a launch rolls out from.
+  local pad = find("Astronaut")
   local px, py, pz = 0, 20, 0
   if pad then px, py, pz = pad.x, pad.y, pad.z end
 
@@ -149,6 +152,20 @@ local function try_spawn()
   local gx = ax - ux * hit.distance
   local gy = ay - uy * hit.distance
   local gz = az - uz * hit.distance
+
+  -- Level the pad's ground first, the way base_facilities levels a building's:
+  -- on a slope the deck floated off the downhill side and the uphill rim
+  -- buried it, and a rocket standing on a tilted pad leans before it lifts.
+  -- Then probe again — the deck seats on the ground as it is now.
+  if terrain.sculpt then
+    -- Three passes, a few ms each. The flatten levels to the planet's up
+    -- right here, so the pad is level at any latitude.
+    for _ = 1, 3 do terrain.sculpt(gx, gy, gz, PAD_FLAT, 1.0, "flatten") end
+    local again = raycast(ax, ay, az, -ux, -uy, -uz, 260.0)
+    if again and again.distance then
+      gx, gy, gz = ax - ux * again.distance, ay - uy * again.distance, az - uz * again.distance
+    end
+  end
 
   -- Everything below is BODY-RELATIVE: the ground point as an offset from the
   -- planet's center right now. World positions recompute from the LIVE body

@@ -25,7 +25,11 @@
 --     inv.mass("astro"), inv.cap("astro")
 
 defaults = {
-  suit_kg = 45.0,     -- what an astronaut can carry in the suit pack
+  -- What an astronaut can carry in the suit pack. This number and the laser's
+  -- `yield` are one decision, not two: a pack should be about one good tunnel's
+  -- work. At 45 kg against the old cut rate it was three seconds of trigger, and
+  -- a mining tool that spends most of its time refusing to mine reads as broken.
+  suit_kg = 90.0,
   base_kg = 1000000,  -- the home warehouse: a number, but not one you'll hit
 }
 
@@ -150,7 +154,7 @@ function add(cid, mat, n)
     seen[mat] = true
     save.set("inv.seen", seen)
     local m = mats()
-    log("NEW MATERIAL: " .. ((m and m.name(mat)) or mat))
+    log("NEW MATERIAL: " .. ((m and m.label(mat)) or mat))
   end
   return take
 end

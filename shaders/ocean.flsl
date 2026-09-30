@@ -1,0 +1,108 @@
+// OCEAN — the sea surface of a generated world.
+//
+// Drawn on a unit icosphere (models/water/ocean_sphere.glb) scaled to the sea
+// radius, so `objectPos` is metres on the sea and `normalize(objectPos)` is the
+// exact local up. Bodies do not rotate, so object axes are world axes and the
+// normal built here is lit against world directions directly.
+//
+//   waves    a long swell and a short chop drifting different ways; their
+//            gradient (three samples, along the surface) bends the normal.
+//            FLSL has no vertex stage, so the waves are in the light.
+//   colour   surfaceGap() is how much water the eye looks through to the
+//            ground behind: shelves go clear turquoise, deep water navy.
+//   sky      the reflected ray sees a horizon-to-zenith gradient of the
+//            world's own air colour, weighted by Fresnel, plus a sun glint.
+//   surf     fieldDistance() at the surface is, in practice, how deep the
+//            water is over the bottom here. Where it shallows, bands of foam
+//            roll in toward the waterline (their phase advances as depth
+//            falls) and a swash line runs up the beach and draws back.
+//
+// Lighting is its own (sun term + sky) rather than litSurface: the engine's
+// lit path marches the terrain shadow for every fragment, and a sea covers a
+// lot of fragments. The sun is the engine's key light (lightDir, and the hue of
+// lightColor); skyColor is pushed by scripts/ocean.lua from the world's air.
+shader ocean {
+  stage fragment
+  blend alpha
+  uniform deepColor: color = #06263F
+  uniform shallowColor: color = #1B8E98
+  uniform skyColor: color = #9CC4E4
+  uniform foamColor: color = #EEF6FA
+  uniform waveScale: float = 0.34 range(0.02, 2)
+  uniform waveSpeed: float = 0.35 range(0, 3)
+  uniform bump: float = 0.32 range(0, 2)
+  uniform clarity: float = 3.5 range(0.5, 40)
+  uniform surfDepth: float = 0.5 range(0.1, 5)
+  uniform surfSpacing: float = 0.16 range(0.05, 2)
+  uniform surfSpeed: float = 0.3 range(0, 2)
+  uniform debugView: float = 0 range(0, 1)
+
+  let up = normalize(objectPos)
+  let sunDir = lightDir
+  let sunColor = lightColor / max(max(lightColor.x, max(lightColor.y, lightColor.z)), 0.001)
+  let tw = time * waveSpeed
+  let drift = vec3(tw * 0.9, tw * 0.3, tw * -0.6)
+  let chopDrift = drift * -1.9
+  let q = objectPos * waveScale
+
+  // Two tangents on the sea sphere; never parallel to `up` in practice.
+  let t1 = normalize(cross(up, vec3(0.37, 0.83, 0.42)))
+  let t2 = cross(up, t1)
+  let e = 0.35
+  let h0 = fbm(q + drift, octaves: 2) + noise(q * 3.3 + chopDrift) * 0.3
+  let h1 = fbm(q + t1 * e + drift, octaves: 2) + noise((q + t1 * e) * 3.3 + chopDrift) * 0.3
+  let h2 = fbm(q + t2 * e + drift, octaves: 2) + noise((q + t2 * e) * 3.3 + chopDrift) * 0.3
+  let slope = (t1 * (h1 - h0) + t2 * (h2 - h0)) / e
+  let nw = normalize(up - slope * bump)
+
+  // Seen from below (a swimmer looking up) the mesh's back face is what draws.
+  let side = mix(-1, 1, step(0, dot(up, viewDir)))
+  let n = nw * side
+  let ndv = saturate(dot(n, viewDir))
+  let fres = 0.02 + 0.98 * pow(1 - ndv, 5)
+
+  // Day on this side of the world, or night.
+  let sunUp = dot(sunDir, up)
+  let day = saturate(sunUp * 3 + 0.25)
+
+  // Through the water to the ground behind it.
+  let gap = surfaceGap(worldPos)
+  let deep = 1 - exp(-gap / clarity)
+  let body = mix(shallowColor.rgb, deepColor.rgb, deep)
+
+  // Surf, keyed to how shallow the water is here.
+  let sd = max(fieldDistance(worldPos), 0)
+  let shore = 1 - smoothstep(0, surfDepth, sd)
+  let jitter = noise(objectPos * 0.21 + drift * 0.2) * 0.35
+  let phase = sd / surfSpacing + time * surfSpeed + jitter
+  let crest = pow(saturate(sin(phase * 6.2832) * 0.5 + 0.5), 10)
+  let bubbles = smoothstep(-0.05, 0.6, noise(objectPos * 3.1 + drift * 2.5))
+  let swashReach = 0.05 + 0.15 * (sin(time * 1.1 + jitter * 6) * 0.5 + 0.5)
+  let swash = 1 - smoothstep(0, swashReach, sd)
+  let foam = saturate((crest * shore * shore * 0.9 + swash) * bubbles)
+
+  // Light: sun (wrapped a little, water scatters) + a sky-tinted ambient.
+  let diffuse = saturate(dot(nw, sunDir) * 0.8 + 0.2) * day
+  let albedo = mix(body, foamColor.rgb, foam)
+  let lit = albedo * (sunColor * diffuse + skyColor.rgb * (0.12 + 0.18 * day))
+
+  // The sky as the reflected ray sees it: the bright hazy horizon giving way to
+  // a darker zenith. A mirror of a flat sky is a flat sheet whatever the waves
+  // do; the gradient is what makes them read.
+  let rv = reflect(-viewDir, n)
+  let elev = saturate(dot(rv, up))
+  let zenith = skyColor.rgb * vec3(0.55, 0.66, 0.86)
+  let sky = mix(skyColor.rgb * 1.05, zenith, pow(elev, 0.45)) * (0.06 + 0.94 * day)
+  let glintDot = saturate(dot(rv, sunDir))
+  let glint = pow(glintDot, 420) * 7 + pow(glintDot, 48) * 0.18
+  let spec = sunColor * glint * day * (1 - foam) * step(0, side)
+  let reflected = min(fres, 0.6) * (1 - foam)
+  let col = mix(lit, sky, reflected) + spec
+
+  // Feathered where the water meets the ground, so the waterline is a soft
+  // wet edge instead of the terrain mesh's polygon outline.
+  let edge = smoothstep(0, 0.1, sd)
+  let alpha = saturate(mix(0.4, 0.93, deep) + fres * 0.4 + foam * 0.8) * edge
+  let dbg = vec3(shore, saturate(gap / 20), saturate(sd / 3))
+  output color = mix(vec4(col, alpha * instanceColor.a), vec4(dbg, 1), debugView)
+}

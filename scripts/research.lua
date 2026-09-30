@@ -73,7 +73,7 @@ function blockedBy(id)
   if t.mat then
     local inv, mats = findScript("inventory"), findScript("materials")
     if inv and not inv.seen(t.mat) then
-      return "needs a sample of " .. ((mats and mats.name(t.mat)) or t.mat)
+      return "needs a sample of " .. ((mats and mats.label(t.mat)) or t.mat)
     end
   end
   if t.rep then

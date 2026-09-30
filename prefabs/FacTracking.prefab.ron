@@ -3,15 +3,16 @@
     // Tracking Station menu reads the `comms.ships` registry through (roadmap
     // task 7): walk up to it, open it, and see every launched vessel that still
     // holds a comms link. satelliteDish_large is native 0.84x0.82x0.74 (centred,
-    // y -0.41..0.41); collider half = native × scale (4.0) → 1.68x1.64x1.48 world
-    // half-box. The "TrackingStation" tag lets the facilities menu find it.
+    // y -0.41..0.41); collider half = native × scale (6.0) → 2.52x2.46x2.22 world
+    // half-box (half_extents below are native — the engine scales them). The
+    // "TrackingStation" tag lets the facilities menu find it.
     (
         name: "FacTracking",
         tags: ["TrackingStation"],
         transform: (
             translation: (0.0, 0.0, 0.0),
             rotation: (0.0, 0.0, 0.0, 1.0),
-            scale: (4.0, 4.0, 4.0),
+            scale: (6.0, 6.0, 6.0),
         ),
         matter: Mesh(
             asset_path: "models/space-kit/satelliteDish_large.glb",

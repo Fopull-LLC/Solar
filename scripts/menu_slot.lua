@@ -8,6 +8,7 @@
 defaults = { slot = 1 }
 
 local el, me
+local tag, name, go -- the slot's three labels (children, looked up by name)
 
 -- Peek at another slot's store without losing the current one: save.slot()
 -- switches the active store (flushing first), so read and switch back.
@@ -19,23 +20,34 @@ local function peek(name, key)
   return v
 end
 
+-- An occupied slot leaves room on its right for the ✕ beside it (menu.ron
+-- lays the card out as 412 + 8 + 52); an empty one spans the whole row, so a
+-- hidden ✕ never leaves a hole.
+local W_FULL, W_WITH_DELETE = 472, 412
+
 local function refresh(node)
-  local name = "slot" .. math.floor(params.slot)
-  local seed = peek(name, "g_seed")
-  if seed and seed > 0 then
-    node.text = string.format("SLOT %d   ·   galaxy %d", params.slot, seed)
-  else
-    node.text = string.format("SLOT %d   ·   empty", params.slot)
-  end
+  local n = math.floor(params.slot)
+  local seed = peek("slot" .. n, "g_seed")
+  local used = seed ~= nil -- the same test menu_delete shows the ✕ on
+  if name then name.text = used and string.format("Galaxy %d", seed) or "Empty" end
+  if go then go.text = used and "CONTINUE  ▸" or "NEW GALAXY  +" end
+  if tag then tag.text = string.format("SLOT %d", n) end
+  if el then el.width = used and W_WITH_DELETE or W_FULL end
 end
 
 function start(node)
   el = node:getcomponent("UiElement")
   me = node
+  local n = math.floor(params.slot)
+  tag = find(string.format("Slot %d Tag", n))
+  name = find(string.format("Slot %d Name", n))
+  go = find(string.format("Slot %d Go", n))
   refresh(node)
 end
 
 function clicked(node)
+  local fx = findScript("sfx")
+  if fx then fx.play("click") end
   local name = "slot" .. math.floor(params.slot)
   if peek(name, "g_seed") then
     save.slot(name)
@@ -47,19 +59,8 @@ function clicked(node)
 end
 
 -- menu_delete calls this (node:getscript handle) after wiping the slot so the
--- label flips back to "empty" without a scene reload.
+-- label flips back to "empty" without a scene reload. Hover/press looks are
+-- the "menu/slot" style's.
 function relabel()
   if me then refresh(me) end
-end
-
-function hoverStart(node)
-  if el then
-    el.fillR, el.fillG, el.fillB, el.fillA = 0.18, 0.32, 0.45, 0.95
-  end
-end
-
-function hoverEnd(node)
-  if el then
-    el.fillR, el.fillG, el.fillB, el.fillA = 0.10, 0.14, 0.18, 0.88
-  end
 end

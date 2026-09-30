@@ -263,7 +263,23 @@ function speciesFor(worldName, w)
       end
     end
   end
-  cache[worldName] = list
+  -- ⚠ ONLY CACHE AN ANSWER, NEVER AN ABSENCE.
+  --
+  -- The gate above is `atmo > 0.15 or sea > 0`, and `climate.worldOf` answers
+  -- for a world it has no record of with an honest fallback — "barren, airless,
+  -- no sea". That fallback is CORRECT as a default and FATAL as a cache key: ask
+  -- one frame before `system_generator` has written `world.<name>` to the save
+  -- and this function memoises "nothing grows here" for the rest of the session.
+  -- The whole planet stays bare, silently, and nothing ever asks again.
+  --
+  -- That is exactly what happened — the plants worked, an engine upgrade shifted
+  -- when terrain and scripts come up relative to each other, and they stopped.
+  -- The bug was always here; the timing just started losing.
+  --
+  -- An empty list costs nothing to recompute (the gate fails on the first
+  -- comparison and the body is skipped), so a genuinely airless world re-rolls
+  -- nothing at all. There is no version of this worth the risk of the other way.
+  if #list > 0 then cache[worldName] = list end
   return list
 end
 
@@ -444,7 +460,7 @@ function describe(sp)
   local mats = findScript("materials")
   local parts = {}
   for _, y in ipairs(sp.yields or {}) do
-    parts[#parts + 1] = (mats and mats.name(y.mat)) or y.mat
+    parts[#parts + 1] = (mats and mats.label(y.mat)) or y.mat
   end
   return string.format("%s — %s%s", sp.name, sp.form,
     #parts > 0 and ("  ·  " .. table.concat(parts, ", ")) or "")

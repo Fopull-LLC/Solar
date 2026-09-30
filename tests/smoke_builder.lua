@@ -132,7 +132,7 @@ API.audio = {
 }
 
 -- ── load the builder ─────────────────────────────────────────────────────────
-make_node("BuildStats", 0, 0, 0)
+local stats_n = make_node("BuildStats", 0, 0, 0)
 make_node("BuildHint", 0, 0, 0)
 local stage_panel = make_node("StagePanel", 0, 0, 0)
 stage_panel.components["UiElement"] = { visible = false }
@@ -216,6 +216,10 @@ for _, n in ipairs(nodes) do
   if n.valid and n.name == "PartPod" then pod_x, pod_y, pod_z = n.x, n.y, n.z end
 end
 check(pod_x ~= nil, "pod node exists")
+-- A pod on its own is not a rocket, and the readout says what's next rather
+-- than leaving a first-time builder to guess.
+check((stats_n.text or ""):find("Next: add a fuel tank") ~= nil,
+  "with only a pod the readout says to add a tank, got: " .. tostring(stats_n.text))
 
 -- 2. A tank stack-snapped UNDER the pod (bottom node).
 env.pick("tankS")
@@ -228,6 +232,8 @@ for _, n in ipairs(nodes) do
   if n.valid and n.name == "PartTankS" then tank_x, tank_y, tank_z = n.x, n.y, n.z end
 end
 check(tank_y and tank_y < pod_y, "tank sits below the pod")
+check((stats_n.text or ""):find("Next: add an engine") ~= nil,
+  "pod + tank: the readout asks for an engine, got: " .. tostring(stats_n.text))
 
 -- 3. SYMMETRY ×4: three X presses (1→2→3→4), then one radial decoupler on
 --    the tank's flank → a ring of FOUR, evenly spaced, sharing a group.
@@ -442,9 +448,100 @@ for _, f in ipairs(fins) do
 end
 check(all_outward, "every fin blade points radially outward from its flank")
 
+-- ── the catalogue covers the registry ────────────────────────────────────────
+-- The catalogue used to live in three places that had to agree: this registry,
+-- a parallel id array inside `catalog_button.lua`, and a NUMBER on each of
+-- nineteen authored button nodes. A part could be added to the registry and be
+-- unbuyable, or a card could be labelled as the wrong part, and nothing said so.
+--
+-- One place now — `builder.catalogue()` — and this is the guard that keeps it
+-- honest: every part the builder can spawn must be reachable from the panel,
+-- and every id the panel names must be a real part.
+local sections = env.catalogue()
+check(#sections > 0, "the catalogue has sections")
+
+local listed, dupes = {}, {}
+for _, s in ipairs(sections) do
+  check(s.title and s.title ~= "", "every catalogue section is titled")
+  check(#s.ids > 0, "no catalogue section is empty: " .. tostring(s.title))
+  for _, id in ipairs(s.ids) do
+    if listed[id] then dupes[#dupes + 1] = id end
+    listed[id] = true
+    check(env.partInfo(id) ~= nil, "catalogue names a real part: " .. id)
+  end
+end
+check(#dupes == 0, "no part is listed twice: " .. table.concat(dupes, ", "))
+
+-- …and nothing in the registry is stranded. Discovered by asking the builder to
+-- price every id the panel found, then comparing against a spawn of each: any
+-- part that can be built but never picked is a part nobody can buy.
+local missing = {}
+for _, id in ipairs(env.registryIds()) do
+  if not listed[id] then missing[#missing + 1] = id end
+end
+check(#missing == 0,
+  "every part in the registry appears in the catalogue (missing: "
+  .. table.concat(missing, ", ") .. ")")
+
+-- Every card says what its part is FOR, under the name — "Sputter  $150" told
+-- a first-time builder nothing.
+do
+  local drawn
+  local cenv = setmetatable({}, { __index = function(_, k)
+    if k == "ui" then return { make = function(_, t) drawn = t end } end
+    if k == "findScript" then
+      return function(kind) if kind == "builder" then return env end end
+    end
+    return API[k] or _G[k]
+  end })
+  local cchunk = assert(loadfile("solar/scripts/catalog_panel.lua"))
+  setfenv(cchunk, cenv)
+  cchunk()
+  local cel = { visible = true }
+  cenv.update({ getcomponent = function() return cel end }, TICK)
+  local cards, roleless = 0, {}
+  for _, row in ipairs((drawn and drawn.items) or {}) do
+    if row[1] == "button" then
+      cards = cards + 1
+      local says = row[3] and row[3].text
+      if not (says and says ~= "") then roleless[#roleless + 1] = row.key end
+    end
+  end
+  check(cards > 10, "the catalogue draws its cards (" .. cards .. ")")
+  check(#roleless == 0, "every catalogue card has a role line (missing: "
+    .. table.concat(roleless, ", ") .. ")")
+end
+
+-- ── THERE IS A WAY OUT ──────────────────────────────────────────────────────
+--
+-- There was not. The Assembly is a whole scene, and its only two doors were
+-- SAVE (which stays here) and LAUNCH (which buys a hull and rolls it onto the
+-- pad). A player who walked into the hangar to look at the parts had to buy a
+-- rocket to get back to the base. Leaving must cost nothing and lose nothing.
+local scene_loaded = nil
+API.scene.load = function(n) scene_loaded = n end
+API.COMPANY = {
+  balance = function() return 12000 end,
+  afford = function() return true end,
+  money = function(v) return "$" .. tostring(v) end,
+  spend = function() error("leaving the builder must not spend money") end,
+  node = { valid = true },
+}
+save_store["shipyard.launch"] = 1
+save_store["shipyard.pilot"] = 1
+save_store["shipyard.blueprint"] = nil
+check(type(env.doLeave) == "function", "the builder has a way out that is not the pad")
+env.doLeave()
+check(scene_loaded == "system", "...and it goes back to the base")
+check(save_store["shipyard.blueprint"] ~= nil,
+  "...keeping the blueprint, because leaving is not discarding")
+-- The two flags that would otherwise put you in a pod you never paid for.
+check(not save_store["shipyard.launch"], "...without rolling anything out")
+check(save_store["shipyard.pilot"] == 0, "...and without seating the crew in it")
+
 -- ── verdict ──────────────────────────────────────────────────────────────────
 if #failures == 0 then
-  print("BUILDER SMOKE OK — select+tools, symmetry, auto-mirror, gizmo drag, stage reorder, side fins")
+  print("BUILDER SMOKE OK — select+tools, symmetry, auto-mirror, gizmo drag, stage reorder, side fins, catalogue covers the registry")
   os.exit(0)
 else
   print("BUILDER SMOKE FAILURES:")

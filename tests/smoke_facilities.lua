@@ -41,6 +41,11 @@ for _, nm in ipairs({ "Facility Prompt", "Facility Panel", "Facility Title", "Fa
 end
 
 _G.find = function(name) return nodes[name] end
+_G.findScripts = function() return {} end
+-- The walker is the ONE place that answers "is the crew out and about" — it
+-- watches the fleet and the loading flag and publishes `onFoot`, and every
+-- panel asks it. Modelled here so this test drives the real gate.
+local walker = { onFoot = true }
 _G.space = {
   dominant = function() return planet.name end,
   body = function(n) if n == planet.name then return planet end end,
@@ -60,6 +65,18 @@ SAVE["comms.ships"] = {
   v7 = { name = "Scout",   x = 4, y = 5, z = 6, alt = 84,   charge = 50,  cap = 100, t = 0 },
 }
 
+-- The prompt is a ui.make row; this keeps the last label each node was given.
+local made = {}
+_G.ui = { make = function(node, tree)
+  local function walk(t)
+    if type(t) ~= "table" then return end
+    if t[1] == "text" and t.text then made[node] = tostring(t.text) end
+    for _, item in ipairs(t.items or {}) do walk(item) end
+  end
+  walk(tree)
+end }
+local function prompt_text() return made[nodes["Facility Prompt"]] or "" end
+
 -- ── load both scripts under distinct script tables (findScript resolves them) ──
 local menu_env = {}
 local function load_into(path)
@@ -73,10 +90,29 @@ end
 
 -- facility_menu first (it defines start/update/openMenu/action/close as globals).
 local menu = load_into("solar/scripts/facility_menu.lua")
+-- A published value, read live from the script's globals.
+function menu_escTakenAt() return _G.escTakenAt end
 menu.params = { radius = 9.0 }
 _G.params = menu.params
+-- The command centre reads the company across a script handle. Stubbed because
+-- that reach ACROSS is the fragile part: it is the code most likely to raise
+-- while something reloads, and what the panel does when it raises is the last
+-- test in this file.
+local company
+company = {
+  valid = true,
+  money = function(v) return "$" .. tostring(v) end,
+  balance = function() return 4200 end,
+  rep = function() return 3 end,
+  ledgerLines = function() return {} end,
+  earned = 0,
+  earn = function(v) company.earned = company.earned + v end,
+  addRep = function() end,
+}
 _G.findScript = function(kind)
+  if kind == "planet_walker" then return walker end
   if kind == "facility_menu" then return menu end
+  if kind == "company" then return company end
   if kind == "game_manager" then return { exitToMenu = function() LOADED = "menu" end } end
   return nil
 end
@@ -88,7 +124,20 @@ assert(nodes["Facility Panel"].__el.visible == false, "panel should start hidden
 -- Tick once: astronaut is 4 m from FacTracking (< radius 9) → prompt shows.
 menu.update({}, 1 / 60)
 assert(nodes["Facility Prompt"].__el.visible == true, "prompt should show near a facility")
-assert(nodes["Facility Prompt"].text:find("Tracking Station"), "prompt should name the nearest facility, got: " .. nodes["Facility Prompt"].text)
+assert(prompt_text():find("Tracking Station"), "prompt should name the nearest facility, got: " .. prompt_text())
+
+-- The pause menu owns the screen: no prompt over it, and E does not open a panel.
+local pause = { open = true }
+local plain_find = _G.findScript
+_G.findScript = function(kind) if kind == "pause_menu" then return pause end return plain_find(kind) end
+KEYS["e"] = true
+menu.update({}, 1 / 60)
+KEYS["e"] = false
+assert(nodes["Facility Prompt"].__el.visible == false, "prompt should hide while the game is paused")
+assert(nodes["Facility Panel"].__el.visible == false, "E should not open a panel from under the pause menu")
+_G.findScript = plain_find
+menu.update({}, 1 / 60)
+assert(nodes["Facility Prompt"].__el.visible == true, "prompt should come back after unpausing")
 
 -- Press E → panel opens on the Tracking Station.
 KEYS["e"] = true
@@ -108,6 +157,19 @@ menu.update({}, 1 / 60)
 KEYS["e"] = false
 assert(nodes["Facility Panel"].__el.visible == false, "panel should close on E")
 
+-- Esc closes too — and says it spent that frame's Esc, so the pause menu does
+-- not open on the same keypress the panel closed on.
+KEYS["e"] = true
+menu.update({}, 1 / 60)
+KEYS["e"] = false
+_G.time = 12.5
+KEYS["escape"] = true
+menu.update({}, 1 / 60)
+KEYS["escape"] = false
+assert(nodes["Facility Panel"].__el.visible == false, "panel should close on Esc")
+assert(menu_escTakenAt() == 12.5, "closing on Esc should publish the frame it was spent, got: "
+  .. tostring(menu_escTakenAt()))
+
 -- Empty registry → friendly message, no crash.
 SAVE["comms.ships"] = {}
 menu.openMenu("FacTracking")
@@ -120,26 +182,249 @@ assert(nodes["Facility Action"].__el.visible == true, "hangar should show an act
 menu.action()
 assert(LOADED == "builder", "hangar action should load the builder scene, got: " .. tostring(LOADED))
 
--- Walking away hides the prompt; boarding (invisible astronaut) closes the panel.
+-- Walking away hides the prompt; BOARDING closes the panel.
+--
+-- "Boarding" is a vessel reporting `piloting`, not a hidden astronaut. Those got
+-- conflated, and the cost was real: planet_camera hides the body whenever the
+-- camera clips within 0.7 m of it, which happens on most headings once you are
+-- INSIDE the command centre — so the panel you had just opened closed itself and
+-- the prompt to reopen it was gone too.
+menu.openMenu("FacCommand")
+walker.onFoot = false   -- the walker's answer once a vessel reports `piloting`
+menu.update({}, 1 / 60)
+assert(nodes["Facility Panel"].__el.visible == false, "panel closes while a vessel is being piloted")
+walker.onFoot = true
+
+-- …and the camera hiding the body up close must NOT close it.
 menu.openMenu("FacCommand")
 astro.visible = false
 menu.update({}, 1 / 60)
-assert(nodes["Facility Panel"].__el.visible == false, "panel closes when the astronaut is hidden (piloting)")
+assert(nodes["Facility Panel"].__el.visible == true,
+  "panel stays open when only the CAMERA has hidden the astronaut (standing indoors)")
+menu.close()
 astro.visible = true
 astro.z = planet.z + 500 -- far from every facility
 menu.update({}, 1 / 60)
 assert(nodes["Facility Prompt"].__el.visible == false, "prompt hidden when far from all facilities")
 
+-- Reach scales with the BUILDING. The command centre is 12 x 18 m on the ground
+-- now, so its origin is nine metres from its own far wall: a reach tuned to the
+-- old 8.4 x 12.6 shed goes quiet while you are standing inside the doorway.
+astro.x, astro.y, astro.z = planet.x + 40, planet.y + planet.radius, planet.z + 18
+menu.update({}, 1 / 60)
+assert(nodes["Facility Prompt"].__el.visible == true,
+  "prompt should reach 18 m from the command centre's origin (the building is 18 m long)")
+assert(prompt_text():find("Enter the Command Centre"),
+  "18 m out should offer to enter the command centre, got: " .. prompt_text())
+-- Standing INSIDE it, "Enter the Command Centre" is the wrong thing to say.
+astro.z = planet.z + 3
+menu.update({}, 1 / 60)
+assert(prompt_text():find("console") and not prompt_text():find("Enter"),
+  "inside the command centre the prompt should offer its console, got: " .. prompt_text())
+-- …and still stop somewhere. A reach that never ends is not a reach.
+astro.z = planet.z + 34
+menu.update({}, 1 / 60)
+assert(nodes["Facility Prompt"].__el.visible == false,
+  "prompt should be gone 34 m from the command centre")
+astro.x, astro.y, astro.z = planet.x, planet.y + planet.radius, planet.z + 500
+
+-- The Power Plant is a machine with nothing to say: no prompt at all, rather
+-- than a panel that reads "Reactor ONLINE" and has no buttons.
+local plant = nodes["FacPower"]
+plant.parent = nil
+plant.x, plant.y, plant.z = astro.x + 3, astro.y, astro.z
+menu.update({}, 1 / 60)
+assert(nodes["Facility Prompt"].__el.visible == false,
+  "the power plant should not prompt, got: " .. prompt_text())
+plant.x = astro.x + 900
+
 -- A facility that never found its planet node is TOP-LEVEL, so its coordinates
 -- are already world. The prompt must read that correctly too — measuring it in
 -- the planet's frame puts it an orbit away and the prompt never fires.
-local orphan = nodes["FacPower"]
+local orphan = nodes["FacTracking"]
 orphan.parent = nil
 orphan.x, orphan.y, orphan.z = astro.x + 3, astro.y, astro.z
 menu.update({}, 1 / 60)
 assert(nodes["Facility Prompt"].__el.visible == true,
   "prompt should show next to an UNPARENTED facility (world coords)")
-assert(nodes["Facility Prompt"].text:find("Power Plant"),
-  "prompt should name the unparented facility, got: " .. nodes["Facility Prompt"].text)
+assert(prompt_text():find("Tracking Station"),
+  "prompt should name the unparented facility, got: " .. prompt_text())
 
-print("smoke_facilities OK — proximity (parented + world), open/close, tracking readout, hangar→builder, board/leave")
+-- ── ONE PANEL, FIVE BUILDINGS: never a blend of two ─────────────────────────
+-- Reported as "the facilities uis were often mixed up".
+--
+-- All five buildings share one Title/Body/Action. The title used to be written
+-- FIRST, the body computed SECOND and written LAST — and every line of that
+-- computation reaches across into another script (`co.balance()`, the depot's
+-- inventory walk, the missions list), which is the code most likely to raise
+-- while something is reloading. Anything that raised in the middle left the NEW
+-- building's name sitting above the OLD building's contents.
+astro.x, astro.y, astro.z = planet.x, planet.y + planet.radius, planet.z + 500
+menu.openMenu("FacTracking")
+local tracking_body = nodes["Facility Body"].text
+assert(nodes["Facility Title"].text == "Tracking Station", "baseline title")
+
+-- Make the NEXT building's content raise, exactly the way a half-loaded
+-- cross-script handle would.
+local real_balance = company.balance
+company.balance = function() error("company is mid-reload") end
+menu.openMenu("FacCommand")
+company.balance = real_balance
+
+local title, body = nodes["Facility Title"].text, nodes["Facility Body"].text
+assert(title == "Command Centre",
+  "the panel names the building you opened, got: " .. tostring(title))
+assert(body ~= tracking_body,
+  "a panel that cannot build its content must NOT keep the previous building's body")
+assert(body:find("not responding"),
+  "…it says so instead, got: " .. tostring(body))
+assert(nodes["Facility Action"].__el.visible == false,
+  "…and drops the previous building's action button with it")
+
+-- …and recovers by itself the moment the content works again.
+menu.openMenu("FacCommand")
+assert(nodes["Facility Body"].text:find("Base world"),
+  "the panel recovers once the content builds, got: " .. nodes["Facility Body"].text)
+menu.close()
+
+-- ── THE COMMERCE DEPOT, WITH CARGO IN IT ────────────────────────────────────
+-- Reported from a live session: the depot panel came up saying "This console is
+-- not responding", which is the atomic-write path above catching a raise inside
+-- the depot's own content. Every other facility's body is a few `save` reads;
+-- this one walks three registries and a landed craft's hold, so it is the one
+-- with somewhere to go wrong — and it only goes there once there is cargo,
+-- which is why an empty depot looked fine.
+add({ name = "FacDepot", parent = planet_node, x = 0, y = planet.radius, z = -40 })
+
+local BAGS = {
+  astro = { regolith = 12, silica = 3 },
+  base  = { iron = 40, crystal = 2 },
+  holdA = { regolith = 60 },
+}
+local MATS = {
+  regolith = { name = "Regolith", kg = 0.4, tier = 0, value = 3 },
+  silica   = { name = "Silica",   kg = 0.5, tier = 1, value = 11 },
+  iron     = { name = "Iron Ore", kg = 1.2, tier = 1, value = 18 },
+  crystal  = { name = "Resonant Crystal", kg = 0.8, tier = 3, value = 140 },
+}
+local ORDER = { "regolith", "silica", "iron", "crystal" }
+local materials = {
+  valid = true,
+  list = function() return ORDER end,
+  -- `label`, not `name`: a script handle's `.name` is reserved by the engine.
+  label = function(id) return MATS[id] and MATS[id].name or tostring(id) end,
+  tier = function(id) return MATS[id] and MATS[id].tier or 0 end,
+  valueOf = function(id, n) return (MATS[id] and MATS[id].value or 0) * (n or 1) end,
+}
+local inventory = {}
+inventory = {
+  valid = true,
+  mass = function(cid)
+    local t = 0
+    for m, n in pairs(BAGS[cid] or {}) do t = t + (MATS[m] and MATS[m].kg or 0) * n end
+    return t
+  end,
+  isEmpty = function(cid) return next(BAGS[cid] or {}) == nil end,
+  items = function(cid)
+    local out = {}
+    for _, m in ipairs(ORDER) do
+      local n = (BAGS[cid] or {})[m]
+      if n and n > 0 then
+        out[#out + 1] = { mat = m, n = n, kg = MATS[m].kg * n, value = MATS[m].value * n }
+      end
+    end
+    return out
+  end,
+  totalValue = function(cid)
+    local t = 0
+    for m, n in pairs(BAGS[cid] or {}) do t = t + (MATS[m] and MATS[m].value or 0) * n end
+    return t
+  end,
+  line = function(cid) return string.format("%.1f kg", inventory.mass(cid)) end,
+  remove = function(cid, m) if BAGS[cid] then BAGS[cid][m] = nil end end,
+  transferAll = function(from, to)
+    local moved = 0
+    for m, n in pairs(BAGS[from] or {}) do
+      BAGS[to] = BAGS[to] or {}
+      BAGS[to][m] = (BAGS[to][m] or 0) + n
+      moved = moved + n
+    end
+    BAGS[from] = {}
+    return moved
+  end,
+}
+-- A landed craft within crane reach, with something in its hold. `landedHolds`
+-- measures it against the depot in WORLD space and the craft is TOP-LEVEL, which
+-- is the frame mix this file already exists to police.
+local craft = add({ name = "Kestrel", valid = true, x = planet.x + 0,
+                    y = planet.y + planet.radius, z = planet.z - 30 })
+local VESSEL = { valid = true, node = craft, holdId = "holdA", craftName = "Kestrel",
+                 holdApplyMass = function() end }
+
+local prev_findScript, prev_findScripts = _G.findScript, _G.findScripts
+_G.findScript = function(kind)
+  if kind == "inventory" then return inventory end
+  if kind == "materials" then return materials end
+  return prev_findScript(kind)
+end
+_G.findScripts = function(kind)
+  if kind == "vessel_controller" then return { VESSEL } end
+  return prev_findScripts(kind)
+end
+
+astro.x, astro.y, astro.z = planet.x, planet.y + planet.radius, planet.z - 40
+menu.openMenu("FacDepot")
+local dbody = nodes["Facility Body"].text
+assert(nodes["Facility Title"].text == "Commerce Depot", "depot title")
+assert(not dbody:find("not responding"),
+  "the depot panel must BUILD with cargo in it, got: " .. dbody)
+assert(dbody:find("ON THE PAD") and dbody:find("Kestrel"),
+  "…listing the landed craft's hold, got: " .. dbody)
+assert(dbody:find("SUIT PACK") and dbody:find("Regolith"),
+  "…and the suit pack, got: " .. dbody)
+assert(dbody:find("WAREHOUSE") and dbody:find("Iron Ore"),
+  "…and the warehouse, got: " .. dbody)
+-- ONE press sells it. It used to be two — unload, then sell — and a player
+-- with a full pack pressed once, saw "12 units into the warehouse", and left
+-- with no money. The label names the whole haul's price: pad + pack + shed.
+-- (regolith 72×3 + silica 3×11 + iron 40×18 + crystal 2×140, standing +12%.)
+local want = math.floor((72 * 3 + 3 * 11 + 40 * 18 + 2 * 140) * 1.12)
+assert(nodes["Facility Action"].text:find("Sell everything"),
+  "…with a single sell action, got: " .. nodes["Facility Action"].text)
+assert(nodes["Facility Action"].text:find("$" .. want, 1, true),
+  "…priced at everything it will sell (" .. want .. "), got: " .. nodes["Facility Action"].text)
+assert(not dbody:find("STEP"), "…and no two-step instructions, got: " .. dbody)
+
+menu.action()
+assert(next(BAGS.astro) == nil and next(BAGS.holdA) == nil and next(BAGS.base) == nil,
+  "one press empties the pack, the hold and the warehouse")
+assert(company.earned >= want, "…and pays for all of it, got: " .. company.earned)
+assert(nodes["Facility Body"].text:find("sold for"),
+  "…and the panel says so, got: " .. nodes["Facility Body"].text)
+assert(nodes["Facility Action"].text:find("Nothing to sell"),
+  "…leaving nothing to sell, got: " .. nodes["Facility Action"].text)
+
+-- A delivery contract on the books keeps ITS material back: selling the ore a
+-- Prospector contract is waiting for would quietly un-do the job.
+BAGS.astro = { iron = 10, silica = 4 }
+local missions = { valid = true, reserves = function(m) return m == "iron" end }
+local with_contract = _G.findScript
+_G.findScript = function(kind)
+  if kind == "missions" then return missions end
+  return with_contract(kind)
+end
+menu.close(); menu.openMenu("FacDepot")
+assert(nodes["Facility Action"].text:find("Sell the rest"),
+  "with contract cargo aboard the sale says it sells the rest, got: " .. nodes["Facility Action"].text)
+menu.action()
+assert(BAGS.base.iron == 10 and not BAGS.base.silica,
+  "…the contract's iron goes into the warehouse and the silica is sold")
+assert(nodes["Facility Body"].text:find("kept"),
+  "…and the panel says what it kept, got: " .. nodes["Facility Body"].text)
+assert(nodes["Facility Action"].text:find("contract") or nodes["Facility Action"].text:find("Nothing"),
+  "…with nothing left to sell, got: " .. nodes["Facility Action"].text)
+_G.findScript = with_contract
+menu.close()
+_G.findScript, _G.findScripts = prev_findScript, prev_findScripts
+
+print("smoke_facilities OK — proximity (parented + world), open/close, tracking readout, hangar→builder, board/leave, atomic panel, depot with cargo")

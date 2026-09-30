@@ -30,7 +30,22 @@ API.input = { key = function() return false end, pressed = function() return fal
 
 -- One planet, one craft. The craft's altitude and grounded state are driven
 -- directly by the tests — this harness is about the LEDGER, not flight.
-local BODY = { name = "Golil", x = 0, y = 0, z = 0, radius = 600, mu = 3.5e6, soi = 1e6 }
+--
+-- THE NUMBERS ARE A REAL GENERATED WORLD, not a round-numbered stand-in. This
+-- planet is Umunquo out of a live save: 185 m body radius, a 1,422 m sphere of
+-- influence, so the highest altitude that exists above it is 1,237 m. The old
+-- stub said radius 600 and soi 1,000,000 — an Earth wearing a planet's name —
+-- and against that every altitude in the contract catalogue looked reachable.
+-- It was the harness agreeing with the bug: the first contract asked for 2,000
+-- m of a world with 1,237 m in it, and a player flew it perfectly and was never
+-- paid.
+--
+-- Anything the generator can produce must fit inside these proportions:
+-- `system_generator` rolls a 100–230 m radius and an SOI of at least twelve
+-- body radii, capped at 0.3 of the orbit.
+local BODY = { name = "Golil", x = 0, y = 0, z = 0, radius = 184.7, mu = 157533.4,
+               soi = 1421.6 }
+local CEILING = BODY.soi - BODY.radius     -- 1,236.9 m: all the room there is
 API.space = {
   bodies = function() return { BODY } end,
   body = function(n) return (n == BODY.name) and BODY or nil end,
@@ -114,23 +129,30 @@ local function check(desc, ok, detail)
 end
 
 -- 1. Seed capital, once and only once.
-check("a fresh company is funded", co.balance() == 12000, "$" .. co.balance())
-co.spend(2000, "test")
+-- A first rocket and a mistake, not four rockets: the ground game has to pay.
+check("a fresh company is funded", co.balance() == 3000, "$" .. co.balance())
+co.spend(1000, "test")
 co.start({})           -- a "scene load": the script reruns, the money must not
 tick()                 -- come back
-check("seed capital is not re-granted on a scene load", co.balance() == 10000,
+check("seed capital is not re-granted on a scene load", co.balance() == 2000,
   "$" .. co.balance())
 
 -- 2. Spending refuses rather than going negative.
 check("an affordable purchase goes through", co.spend(1000, "hull") == true)
-check("...and debits exactly", co.balance() == 9000, "$" .. co.balance())
+check("...and debits exactly", co.balance() == 1000, "$" .. co.balance())
 check("an unaffordable one is refused", co.spend(999999, "battlestar") == false)
-check("...and changes nothing", co.balance() == 9000, "$" .. co.balance())
-check("afford() agrees with spend()", co.afford(9000) and not co.afford(9001))
-co.earn(500, "scrap")
-check("earning credits", co.balance() == 9500, "$" .. co.balance())
+check("...and changes nothing", co.balance() == 1000, "$" .. co.balance())
+check("afford() agrees with spend()", co.afford(1000) and not co.afford(1001))
+co.earn(10450, "scrap")
+check("earning credits", co.balance() == 11450, "$" .. co.balance())
 check("the ledger records both directions", #co.ledgerLines(9) >= 4,
   "#" .. #co.ledgerLines(9))
+-- The ledger speaks the game's one money format: "+$10450" read as a typo.
+check("the ledger formats amounts like every other figure",
+  co.ledgerLines(1)[1]:find("+$10,450", 1, true) ~= nil, co.ledgerLines(1)[1])
+check("...debits included", co.ledgerLines(2)[2]:find("−$1,000", 1, true) ~= nil,
+  co.ledgerLines(2)[2])
+co.spend(10450, "back to the test's balance")
 
 -- 3. Reputation clamps rather than running away.
 co.addRep(20, "test")
@@ -154,14 +176,33 @@ check("...and it stops being offered", (function()
   return true
 end)())
 
--- 5. Goals latch across ONE flight, in any order, and pay out on completion.
+-- 5. A rocket still clamped to the pad has not LANDED anything. Sitting on
+-- the deck is grounded and stopped — exactly what a landing looks like — so
+-- the land goal waits for the craft to have flown (vessel_controller's
+-- `hasFlown`: clamps released and airborne).
+craft.piloting = true
+craft.hasFlown = false
+place(0, 0)
+ASM.grounded = true
+tick(3)
+check("a rocket on the pad has not landed", mi.goalLines()[2]:find("○") ~= nil,
+  mi.goalLines()[2])
+craft.piloting = false
+tick()
+craft.hasFlown = true
+
+-- Goals latch across ONE flight, in any order, and pay out on completion.
 local bal = co.balance()
 craft.piloting = true
 ASM.grounded = false
-place(2500, 0)
+place(CEILING * 0.20, 0)          -- the goal asks for 0.15 of the ceiling
 tick(3)
 check("the altitude goal latches in flight", mi.goalLines()[1]:find("✓") ~= nil,
   mi.goalLines()[1])
+-- The card quotes a round number ("Reach 150 m", not "Reach 185 m"), and the
+-- check is against the same rounded number, so the two can never disagree.
+check("the altitude target is a round number", mi.goalLines()[1]:find("Reach %d*50 m")
+  or mi.goalLines()[1]:find("Reach %d*00 m"), mi.goalLines()[1])
 check("...and the landing goal has not", mi.goalLines()[2]:find("○") ~= nil)
 check("the contract is still on the books", mi.active == "firstflight")
 
@@ -189,7 +230,7 @@ end)())
 -- 6. Goals do NOT latch across separate flights.
 mi.accept("highroad")
 ASM.grounded = false
-place(30000, 0)
+place(CEILING * 0.60, 0)          -- the goal asks for 0.55
 tick(3)
 check("the high-altitude goal latches", mi.goalLines()[1]:find("✓") ~= nil)
 craft.piloting = false          -- step out of the pod: the flight is over
@@ -214,13 +255,13 @@ end)())
 mi.accept("orbit")
 craft.piloting = true
 ASM.grounded = false
-place(30000, 0)                    -- 30 km up, straight up, zero horizontal
+place(CEILING * 0.20, 0)           -- high, straight up, zero horizontal
 tick(3)
 check("a ballistic lob does not count as an orbit", mi.active == "orbit",
   mi.goalLines()[1])
 -- Now a real circular orbit at the same altitude.
-local r = BODY.radius + 30000
-place(30000, math.sqrt(BODY.mu / r))
+local r = BODY.radius + CEILING * 0.20
+place(CEILING * 0.20, math.sqrt(BODY.mu / r))
 tick(3)
 check("a circular orbit does", mi.active == nil, mi.goalLines()[1] or "done")
 
@@ -273,6 +314,78 @@ check("a permanent goal survives stepping in and out of a craft", (function()
   tick(2)
   return mi.active == nil
 end)())
+
+-- ── 9. NO CONTRACT MAY ASK FOR SOMEWHERE THAT DOES NOT EXIST ────────────────
+--
+-- The bug that made this section necessary: the catalogue named its altitudes
+-- in metres — 2,000 for a first flight, 25,000 for the next, a 20 km periapsis
+-- for an orbit — and the system is GENERATED at 100–230 m radii. On a real save
+-- the first contract asked for 2,000 m of a planet with 1,237 m above it, and
+-- two of the eight were beyond reach on EVERY seed. Nothing errored. The goal
+-- simply sat unticked forever, and there was no way, from inside the game, to
+-- find out that the target was imaginary.
+--
+-- So: walk the whole catalogue and hold every flight goal against the room the
+-- world actually has. This is the check that could only ever have been written
+-- against a body of a realistic size, which is why the stub at the top of this
+-- file is a planet out of a live save rather than a round number.
+for _, id in ipairs({ "firstflight", "highroad", "orbit", "rendezvous",
+                      "prospect", "botany", "deepcore", "recovery" }) do
+  local m = mi.byId(id)
+  check("catalogue: " .. id .. " exists", m ~= nil)
+  for i, g in ipairs((m and m.goals) or {}) do
+    if g.kind == "altitude" or g.kind == "orbit" then
+      -- The label must quote a number, not a placeholder: a goal that cannot
+      -- name its own target cannot be flown toward.
+      local lbl = mi.goalLabel(g)
+      check(string.format("catalogue: %s goal %d names a target", id, i),
+        lbl:find("…") == nil, lbl)
+      -- And that number has to fit inside the sphere of influence, with room to
+      -- get back down again. 0.9 of the ceiling, not 1.0: a target you can only
+      -- meet by leaving the planet's pull is a target you cannot land after.
+      local frac = g.frac
+      check(string.format("catalogue: %s goal %d is reachable (%s of %s)",
+          id, i, tostring(frac), string.format("%.0f m", CEILING)),
+        frac ~= nil and frac > 0.0 and frac <= 0.9, lbl)
+    end
+  end
+end
+
+-- And the negative control, run against a DIFFERENT world: the same catalogue
+-- on the smallest planet the generator can roll must still be flyable. A target
+-- expressed in metres passes on one planet and fails on the next, which is
+-- exactly how the original bug reached a player.
+do
+  local r0, s0 = BODY.radius, BODY.soi
+  BODY.radius, BODY.soi = 103.5, 103.5 * 12      -- generator's floor
+  local small = BODY.soi - BODY.radius
+  local m = mi.byId("highroad")
+  local target = math.floor(small * m.goals[1].frac)
+  check("the tallest contract still fits the smallest world the generator rolls",
+    target < small, string.format("%d m of %.0f m", target, small))
+  check("...and it is still worth flying", target > small * 0.25,
+    string.format("%d m", target))
+  BODY.radius, BODY.soi = r0, s0
+end
+
+-- ── 10. THE LADDER IS VISIBLE, AND THE DEPOT KNOWS WHAT IS SPOKEN FOR ────────
+do
+  local saved = store["mission.done"]
+  store["mission.done"] = {}
+  local by = {}
+  for _, u in ipairs(mi.upcoming()) do by[u.m.id] = u.needs end
+  check("locked contracts are listed with what they are waiting for",
+    by.highroad == "First Flight" and by.orbit == "The High Road",
+    tostring(by.highroad) .. " / " .. tostring(by.orbit))
+  check("...and a contract you can sign is not among them", by.firstflight == nil)
+  store["mission.done"] = { firstflight = true }
+  mi.accept("prospect")
+  check("an open delivery holds its ore back from sale",
+    mi.reserves("iron") and not mi.reserves("fiber"))
+  mi.abandon()
+  check("...and lets it go once the contract is off the books", not mi.reserves("iron"))
+  store["mission.done"] = saved
+end
 
 -- ── report ──────────────────────────────────────────────────────────────────
 local bad = {}

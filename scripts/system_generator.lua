@@ -184,6 +184,14 @@ local function publishWorld(b, kind, insol, sea)
     relief = b.opts.relief or 6,
     sea = sea or 0,
     atmo = (b.cel.atmoDensity or 0),
+    -- The look of the air, not just how much there is. The sky shader already
+    -- has these; publishing them is what lets the FOG on the ground be the
+    -- same air as the halo seen from orbit, instead of a grey the artist
+    -- picked separately and that stops matching the moment a seed changes.
+    atmoHeight = (b.cel.atmoHeight or 0),
+    atmoR = b.cel.atmoColor and b.cel.atmoColor[1] or nil,
+    atmoG = b.cel.atmoColor and b.cel.atmoColor[2] or nil,
+    atmoB = b.cel.atmoColor and b.cel.atmoColor[3] or nil,
     insol = insol or 1.0,
   })
 end
@@ -192,30 +200,18 @@ end
 -- it wherever the ground is higher. That IS an ocean — basins fill, ridges
 -- become coastline, and the shoreline moves as the relief does, for free.
 --
--- It is deliberately not a collider (nothing to swim into, no raycast to catch
--- the flora scatter); `climate.isUnderwater` is the one rule everything asks,
--- and the swimmer, the splashdown check and the scatter all read it. Real
--- water — waves, refraction, buoyancy volumes — is an engine feature
--- (floptle/0038); this reads honestly at the retro fidelity the game is drawn
--- at, and the day the engine grows a water volume this node becomes it.
-local function makeSea(parent, name, sea, kind, temp)
+-- It is the `Sea` prefab (or `SeaIce` on a frozen world): a finely tessellated
+-- surface wearing shaders/ocean.flsl — waves, depth colour, surf that breaks on
+-- the shore — driven by scripts/ocean.lua (sun, sky, spray, surf sound), over a
+-- hidden engine Water Volume of the same radius, which floats what lands in it
+-- and turns the view murky underneath. `climate.seaDepth` answers from the same
+-- radius, so the swimmer, the scatter and the physics agree on where water is.
+local function makeSea(parent, b, sea, kind, temp)
   local frozen = (kind == "ice" or kind == "frost" or (temp or 0.5) < 0.2)
-  local col = frozen and { 0.72, 0.86, 0.94 } or { 0.10, 0.34, 0.62 }
-  createNode(name .. " Sea", parent, function(w)
-    w:setPrimitive("Sphere", col)
-    w:setMaterial {
-      color = col,
-      alpha = frozen and 1.0 or 0.86,
-      specular = { 0.9, 0.96, 1.0 },
-      specularStrength = frozen and 0.25 or 0.85,
-      shininess = 64,
-      ambient = 0.55,
-    }
-    w.x, w.y, w.z = 0, 0, 0
-    -- The Sphere primitive is radius 0.85 at scale 1.
-    w.scale = sea / 0.85
-    w.tags = { "genbody", "sea" }
-  end)
+  spawn(frozen and "SeaIce" or "Sea", vec3(b.pos[1], b.pos[2], b.pos[3]), function(w)
+    -- The mesh and the volume are both radius 1: the scale is the sea.
+    w.scale = sea
+  end, parent)
 end
 
 -- One body under the system group: node + celestial + core kernel. The body
@@ -241,7 +237,7 @@ local function makeBody(sys, b)
       core.scale = math.max(b.opts.coreR * 0.8, 4)
       core.tags = { "genbody" }
     end)
-    if (b.sea or 0) > 0 then makeSea(n, b.name, b.sea, b.kind, b.temp) end
+    if (b.sea or 0) > 0 then makeSea(n, b, b.sea, b.kind, b.temp) end
   end)
 end
 
@@ -252,18 +248,50 @@ end
 lastSeed, lastSpawnBody, lastSpawnRadius = 0, nil, 0
 lastSpawnX, lastSpawnY, lastSpawnZ = 0, 0, 0
 
-local function roll(p)
-  local r = (p.seed > 0) and rng(p.seed) or rng()
-  lastSeed = r.seed
-  print(string.format("SYSTEM GENERATOR — seed %d (set the seed param to reproduce)", r.seed))
+-- The rails ROOT and the galaxy-wide name set, published so `galaxy.lua` can
+-- hang its systems off the right star and never repeat a name. Both are set by
+-- `roll` — until home exists there is nothing for a neighbour to orbit.
+homeStar = nil
+homeTaken = {}
 
-  -- Clear our previous work: the whole system GROUP goes in one subtree
-  -- destroy (that's the point of generating into a clean hierarchy), plus any
-  -- stray top-level "genbody" nodes from the old flat format.
-  for _, n in ipairs(findTagged("gensystem")) do n:destroy() end
-  for _, n in ipairs(findTagged("genbody")) do n:destroy() end
+-- Build ONE star system from the rolled `r`. `cfg` says WHICH system it is, and
+-- everything that differs between the save's own system and one of the galaxy's
+-- neighbours is in there rather than in a second copy of this function:
+--
+--   home       this is the save's own system. Its star is the rails ROOT — the
+--              one parentless body, which `frames.rs` gives an infinite SOI —
+--              and its first planet is the spawn world. Exactly one system in a
+--              galaxy is home; every other star hangs off this one.
+--   idBase     the first terrain id this system may use. Terrain ids are
+--              SCENE-wide and they name the `.cfield` on disk, so two systems
+--              that both counted from 1 would stream each other's ground into
+--              each other's planets. `galaxy.lua` hands out a disjoint block.
+--   taken      the GALAXY-wide name set. Rails resolve `parent` BY NAME, so one
+--              repeated name across two systems cross-wires their orbits.
+--   starA / starM0 / starSoi / parentStar
+--              a NEIGHBOUR star's circular orbit about the home star, and the
+--              influence it holds. Absent for home.
+--   tag        an extra tag on the group node, so a streamer can find its own
+--              systems without touching the home one.
+--
+-- Returns the star's name.
+-- Where the rails will put a body at sim time `t`: the engine's Kepler solve
+-- (frames.rs) for lan = argPe = 0 — M = m0 + n·t, E − e·sin E = M, and the
+-- orbit plane tipped by `i` about X. Relative to the parent.
+local function kepler(a, e, i, m0, mu, t)
+  local M = m0 + math.sqrt(mu / (a * a * a)) * t
+  local E = M
+  for _ = 1, 8 do E = E - (E - e * math.sin(E) - M) / (1 - e * math.cos(E)) end
+  local xp = a * (math.cos(E) - e)
+  local yp = a * math.sqrt(1 - e * e) * math.sin(E)
+  return xp, math.sin(i) * yp, math.cos(i) * yp
+end
 
-  local taken = {}
+-- The home star's µ, kept for placing neighbour stars on their orbit about it.
+local homeMu = nil
+
+local function buildSystem(r, p, cfg)
+  local taken = cfg.taken
 
   -- The star: class → color + brightness; µ sets the year lengths.
   local classes = {
@@ -294,9 +322,13 @@ local function roll(p)
   -- (docs/galaxy-streaming-proposal.md) only the bodies near the camera hold
   -- RAM/GPU, and only the spawn planet generates up front — the cap is now
   -- just orbital real estate.
+  -- A neighbour is capped tighter than home: every planet it rolls is a scene
+  -- node and a genspec that lives for as long as the system is resident, and a
+  -- galaxy holds several systems at once. Home is the one you actually live in.
   local nPlanets = (p.planets > 0) and math.min(p.planets, 8) or (2 + r:int(0, 2))
+  if not cfg.home then nPlanets = math.min(nPlanets, 5) end
   local a = a1
-  local id = 1
+  local id = cfg.idBase
   local firstPos, firstR, firstRelief, firstName = nil, 0, 0, nil
   local lastKind = nil
   print(string.format("star %s: lum %.0f — %d planet(s)", starName, starLum, nPlanets))
@@ -368,7 +400,10 @@ local function roll(p)
     -- other body streams from its genspec on approach. A RESUMED save skips
     -- even this (pregen=false): the spawn planet streams back from the slot's
     -- saved field instead, so the player's digs survive the reload.
-    if pi == 1 and p.pregen ~= false then terrain.generatePlanet(id, opts) end
+    -- …and only HOME has one. A neighbour that pre-generated would spend four
+    -- to ten seconds of the background generator on a world nobody has arrived
+    -- at, while the world somebody is standing on waits behind it in the queue.
+    if pi == 1 and cfg.home and p.pregen ~= false then terrain.generatePlanet(id, opts) end
     print(string.format("  %s — %s, r %.0f, g %.1f, orbit %.0f", name, kind, radius, g, a))
     if pi == 1 then firstPos, firstR, firstRelief, firstName = pos, radius, opts.relief, name end
     id = id + 1
@@ -391,7 +426,7 @@ local function roll(p)
           mu = mmu, bodyRadius = mr + math.max(mr * 0.035, 4), soi = 0,
           occluderRadius = math.max((mr - mopts.relief - mopts.caveDepth) * 0.95, 0),
           parent = name, a = ma, e = r:range(0, 0.04), i = r:range(0, 0.25), m0 = mm0,
-        }, opts = mopts, kind = mkind, sea = 0 } -- moons stream from their genspec too
+        }, opts = mopts, kind = mkind, sea = 0, parentMu = mu } -- moons stream from their genspec too
         specs[#specs + 1] = mspec
         -- Moons are airless in this generator: no sea, nothing grows — but the
         -- record still publishes, because MINING reads the archetype from it.
@@ -405,21 +440,68 @@ local function roll(p)
     a = a * p.spacing * r:range(0.85, 1.15)
   end
 
+  -- A NEIGHBOUR appears mid-play, so every body is authored where the rails
+  -- will put it on its first tick. The engine carries free bodies (the crew, a
+  -- vessel) by how far their dominant body moved since last tick, and for a
+  -- body created this frame "last tick" is its authored position. Authored
+  -- about the ORIGIN, as this used to do, a neighbour's planets sat on top of
+  -- the home system for one tick: one of them caught the crew inside its SOI
+  -- and carried them 3.5 Mm across the galaxy, a minute and a half into play.
+  local starPos = { 0, 0, 0 }
+  if not cfg.home and homeMu then
+    local t = (space.time and space.time()) or 0
+    local sx, sy, sz = kepler(cfg.starA, 0, 0, cfg.starM0, homeMu, t)
+    starPos = { sx, sy, sz }
+    local placed = {}
+    for _, b in ipairs(specs) do
+      local c = b.cel
+      local par = (c.parent == starName) and starPos or placed[c.parent]
+      local pmu = (c.parent == starName) and starMu or (b.parentMu or starMu)
+      if par then
+        local x, y, z = kepler(c.a, c.e or 0, c.i or 0, c.m0 or 0, pmu, t)
+        b.pos = { par[1] + x, par[2] + y, par[3] + z }
+        placed[b.name] = b.pos
+      end
+    end
+  end
+  if cfg.home then homeMu = starMu end
+
   -- Build the hierarchy: ONE group node holds the star and every body, so the
   -- Hierarchy panel reads as a single tidy system and regeneration (or a hand
   -- delete of the group) cleans up everything at once. The group sits at the
   -- origin with no rotation/scale — bodies' positions stay world numbers.
+  local tags = { "gensystem" }
+  if cfg.tag then tags[#tags + 1] = cfg.tag end
   createNode(starName .. " System", function(sys)
     sys.x, sys.y, sys.z = 0, 0, 0
-    sys.tags = { "gensystem" }
+    sys.tags = tags
     createNode(starName, sys, function(star)
       star:setPrimitive("Sphere", cls[1])
       star:setMaterial { color = cls[1], emissive = cls[1], emissiveStrength = 2.0, unlit = true }
-      star:setCelestial {
+      -- HOME is the rails ROOT: parentless, `soi = 0`, which `frames.rs` reads
+      -- as infinite. Everything in the galaxy hangs off it, including the other
+      -- stars — a SECOND parentless body would be invisible to patched conics,
+      -- because `dominant` starts at the one root it found and only ever walks
+      -- down through children.
+      --
+      -- A NEIGHBOUR is a child of home on a flat circular orbit, and its SOI is
+      -- finite so that flying into it hands you over. It drifts (it is really
+      -- orbiting home), but at `sqrt(µ/a)` that is a few units a second against
+      -- a home planet's ~99 — slower than anything else in the sky.
+      local cel = {
         mu = starMu, bodyRadius = starR * 0.85, soi = 0,
         luminosity = starLum, starColor = cls[1],
       }
-      star.x, star.y, star.z = 0, 0, 0
+      if not cfg.home then
+        cel.parent = cfg.parentStar
+        cel.a, cel.m0 = cfg.starA, cfg.starM0
+        cel.e, cel.i, cel.lan, cel.argPe = 0, 0, 0, 0
+        cel.soi = cfg.starSoi
+      end
+      star:setCelestial(cel)
+      star.x = starPos[1]
+      star.y = 0
+      star.z = starPos[3]
       star.scale = starR
       star.tags = { "genbody" }
     end)
@@ -427,17 +509,14 @@ local function roll(p)
   end)
 
   -- Publish the spawn world (game_manager places the player + gates its
-  -- loading screen on this planet's terrain).
-  if firstPos then
+  -- loading screen on this planet's terrain). Only home has one.
+  if firstPos and cfg.home then
     lastSpawnBody, lastSpawnRadius = firstName, firstR + firstRelief
     lastSpawnX, lastSpawnY, lastSpawnZ = firstPos[1], firstPos[2], firstPos[3]
-  end
 
-  -- Move the crew to the first planet's north pole (daylit side varies —
-  -- summon the ship with L if it settles awkwardly).
-  if firstPos then
+    -- Move the crew to the first planet's north pole.
     local sy = firstPos[2] + firstR + firstRelief
-    local who = { { "Astronaut", 0, 6, 0 }, { "Camera 1", 0, 11, 8 }, { "Ship", 14, 4, 0 } }
+    local who = { { "Astronaut", 0, 6, 0 }, { "Camera 1", 0, 11, 8 } }
     for _, w in ipairs(who) do
       local n = find(w[1])
       if n then
@@ -447,8 +526,55 @@ local function roll(p)
       end
     end
   end
+  return starName, id
+end
 
+-- Roll the save's OWN system: clear whatever stood here and build home.
+local function roll(p)
+  local r = (p.seed > 0) and rng(p.seed) or rng()
+  lastSeed = r.seed
+  print(string.format("SYSTEM GENERATOR — seed %d (set the seed param to reproduce)", r.seed))
+
+  -- Clear our previous work: the whole system GROUP goes in one subtree
+  -- destroy (that's the point of generating into a clean hierarchy), plus any
+  -- stray top-level "genbody" nodes from the old flat format.
+  for _, n in ipairs(findTagged("gensystem")) do n:destroy() end
+  for _, n in ipairs(findTagged("genbody")) do n:destroy() end
+
+  homeStar, homeTaken = nil, {}
+  homeStar = buildSystem(r, p, { home = true, idBase = 1, taken = homeTaken })
   print("bodies placed — the spawn planet is generating in the background (Console shows progress); every other world streams in from its genspec when you first approach it. Save the scene once the spawn planet lands.")
+end
+
+-- Build ONE of the galaxy's other systems, in place, without disturbing home.
+-- `galaxy.lua` owns the decision of WHICH — this only knows how to build one.
+--
+--   seed    the sector's own seed (deterministic: the same sector always rolls
+--           the same system, on any machine, forever)
+--   a, m0   where its star sits, as a circular orbit about home (the galaxy is
+--           a disc in XZ, so `x = a·cos(m0)`, `z = a·sin(m0)` — the same
+--           relation every planet in this file already uses)
+--   soi     the influence it holds; `galaxy.lua` keeps these from overlapping
+--   idBase  its private block of terrain ids
+--   tag     so the streamer can evict exactly its own systems
+--
+-- Returns the star's name, or nil if home has not been rolled yet (a neighbour
+-- with nothing to orbit would be placed at the origin, on top of home).
+function buildNeighbour(seed, a, m0, soi, idBase, tag, opts)
+  if not homeStar then return nil end
+  local p = {}
+  for k, v in pairs(defaults) do p[k] = v end
+  if opts then
+    for k, v in pairs(opts) do
+      if v ~= nil then p[k] = v end
+    end
+  end
+  p.planets = 0 -- a neighbour rolls its own count; the save's home setting is home's
+  local r = rng(seed)
+  return (buildSystem(r, p, {
+    home = false, idBase = idBase, taken = homeTaken or {},
+    starA = a, starM0 = m0, starSoi = soi, parentStar = homeStar, tag = tag,
+  }))
 end
 
 -- ▶ Generate (the Inspector button): roll with the node's tuned params.

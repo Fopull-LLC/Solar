@@ -1,0 +1,40 @@
+// UI PROBE — loads the system on a fresh slot 9 and opens one screen, so
+// `floptle shot --after` can photograph each panel at each resolution. The
+// `panel` string picks the screen (see scripts/ui_probe.lua). Nothing in the
+// shipped game references this scene.
+(
+    nodes: [
+        (
+            name: "Camera",
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Camera(
+                fov_y: 1.1519173,
+                active: true,
+            ),
+            scripts: [],
+        ),
+        (
+            name: "Ui Probe",
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Empty,
+            scripts: [
+                (
+                    kind: "ui_probe",
+                    enabled: true,
+                    params: [],
+                    strs: [
+                        ("panel", "none"),
+                    ],
+                ),
+            ],
+        ),
+    ],
+)

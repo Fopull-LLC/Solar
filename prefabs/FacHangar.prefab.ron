@@ -11,14 +11,17 @@
 // below applies to them exactly as it does to the mesh.
 //
 // Generated shell: 42 boxes, voxel cell 0.045 model units
-// (1.00 x 1.00 x 1.00 model → 7.0 x 7.0 x 7.0 world; seat 3.500).
+// (1.00 x 1.00 x 1.00 model → 10.0 x 10.0 x 10.0 world; seat 5.000). The boxes
+// are in CENTRED MODEL units, so a scale change needs no regeneration — the
+// frame has to clear a rocket standing inside it, which is why it is the
+// tallest thing at the base.
 [
     (
         name: "FacHangar",
         transform: (
             translation: (0.0, 0.0, 0.0),
             rotation: (0.0, 0.0, 0.0, 1.0),
-            scale: (7.0, 7.0, 7.0),
+            scale: (10.0, 10.0, 10.0),
         ),
         matter: Mesh(
             asset_path: "models/space-kit/structure_detailed.glb",
@@ -1003,6 +1006,70 @@
             color: (0.86, 0.94, 1.0),
             intensity: 2.4,
             range: 16.0,
+        ),
+        scripts: [],
+        parent: Some(0),
+    ),
+    (
+        // A floor. The frame stands on bare planet, so the
+        // assembly bay was dirt, and wherever the levelling missed the
+        // ground humped up through it. A concrete slab, its top 10 cm over the
+        // seat and 30 cm deep, so what little relief is left stays under it —
+        // and a collider on it, so you walk ON the floor, not through it.
+        name: "Interior Floor",
+        transform: (
+            translation: (0.0, -0.5100, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (0.960, 0.0400, 0.960),
+        ),
+        matter: Primitive(
+            shape: Cube,
+            color: (0.46, 0.47, 0.5),
+        ),
+        scripts: [],
+        material: Some((
+            color: (0.46, 0.47, 0.5),
+            texture: Some("textures/hangar/floor_concrete.png"),
+            emissive: (0.0, 0.0, 0.0),
+            emissive_strength: 0.0,
+            specular: (1.0, 1.0, 1.0),
+            shininess: 24.0,
+            specular_strength: 0.2,
+            rim: (0.0, 0.0, 0.0),
+            rim_strength: 0.0,
+            unlit: false,
+            ambient: 1.0,
+            alpha: 1.0,
+            tiling: Some(Triplanar(
+                scale: 4.0,
+                blend: 4.0,
+            )),
+            sheet_cols: 1,
+            sheet_rows: 1,
+        )),
+        parent: Some(0),
+        rigidbody: Some((
+            boxed: true,
+            mode: Static,
+            radius: 0.5,
+            height: 1.0,
+            half_extents: (0.5, 0.5, 0.5),
+            restitution: 0.0,
+            friction: 0.9,
+            gravity: false,
+            lock_pos: (false, false, false),
+            lock_rot: (false, false, false),
+        )),
+    ),
+    (
+        name: "Fuel Drums",
+        transform: (
+            translation: (0.380, -0.4525, 0.380),
+            rotation: (0.0, 0.0000, 0.0, 1.0000),
+            scale: (0.3000, 0.3000, 0.3000),
+        ),
+        matter: Mesh(
+            asset_path: "models/space-kit/barrels.glb",
         ),
         scripts: [],
         parent: Some(0),

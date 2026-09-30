@@ -10,6 +10,17 @@ defaults = { slot = 1 }
 
 local el, entry
 
+-- Cross-script singletons, resolved once and kept: `findScript` walks the whole
+-- scene (floptle/0063), and asking every frame is what made this project do a
+-- hundred scans a frame. A handle stays good until the scene changes, and
+-- `.valid` is how you find out that it has.
+local refs = {}
+local function ref(kind)
+  local r = refs[kind]
+  if not r or not r.valid then r = findScript(kind); refs[kind] = r end
+  return r
+end
+
 function start(node)
   el = node:getcomponent("UiElement")
 end
@@ -17,7 +28,7 @@ end
 function update(node, dt)
   if not el then el = node:getcomponent("UiElement") end
   if not el then return end
-  local panel = findScript("peripheral_panel")
+  local panel = ref("peripheral_panel")
   local v = panel and panel.pilotedVessel and panel.pilotedVessel()
   local list = v and v.peripherals and v.peripherals()
   local d = list and list[math.floor(params.slot)]
@@ -51,7 +62,7 @@ function update(node, dt)
 end
 
 function clicked(node)
-  local panel = findScript("peripheral_panel")
+  local panel = ref("peripheral_panel")
   local v = panel and panel.pilotedVessel and panel.pilotedVessel()
   if v and v.setPeripheral and entry then v.setPeripheral(entry.id) end
 end

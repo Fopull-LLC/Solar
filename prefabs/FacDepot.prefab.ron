@@ -4,14 +4,15 @@
 // ends and stand at the counter rather than bumping into a box.
 //
 // Generated shell: 22 boxes, voxel cell 0.091 model units
-// (2.00 x 1.00 x 2.00 model → 5.0 x 2.5 x 5.0 world; seat 1.250).
+// (2.00 x 1.00 x 2.00 model → 8.0 x 4.0 x 8.0 world; seat 2.000). Model units,
+// so the scale change above needed no regeneration.
 [
     (
         name: "FacDepot",
         transform: (
             translation: (0.0, 0.0, 0.0),
             rotation: (0.0, 0.0, 0.0, 1.0),
-            scale: (2.5, 2.5, 2.5),
+            scale: (4.0, 4.0, 4.0),
         ),
         matter: Mesh(
             asset_path: "models/space-kit/hangar_smallB.glb",
@@ -537,6 +538,96 @@
             color: (1.0, 0.88, 0.66),
             intensity: 2.2,
             range: 11.0,
+        ),
+        scripts: [],
+        parent: Some(0),
+    ),
+    (
+        // A floor. The shed is a Kenney hangar shell with no floor of its own,
+        // so the inside was bare planet, and wherever the levelling missed the
+        // ground humped up through it. A concrete slab, its top 10 cm over the
+        // seat and 30 cm deep, so what little relief is left stays under it —
+        // and a collider on it, so you walk ON the floor, not through it.
+        name: "Interior Floor",
+        transform: (
+            translation: (0.0, -0.5250, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.700, 0.1000, 1.900),
+        ),
+        matter: Primitive(
+            shape: Cube,
+            color: (0.46, 0.47, 0.5),
+        ),
+        scripts: [],
+        material: Some((
+            color: (0.46, 0.47, 0.5),
+            texture: Some("textures/hangar/floor_concrete.png"),
+            emissive: (0.0, 0.0, 0.0),
+            emissive_strength: 0.0,
+            specular: (1.0, 1.0, 1.0),
+            shininess: 24.0,
+            specular_strength: 0.2,
+            rim: (0.0, 0.0, 0.0),
+            rim_strength: 0.0,
+            unlit: false,
+            ambient: 1.0,
+            alpha: 1.0,
+            tiling: Some(Triplanar(
+                scale: 4.0,
+                blend: 4.0,
+            )),
+            sheet_cols: 1,
+            sheet_rows: 1,
+        )),
+        parent: Some(0),
+        rigidbody: Some((
+            boxed: true,
+            mode: Static,
+            radius: 0.5,
+            height: 1.0,
+            half_extents: (0.5, 0.5, 0.5),
+            restitution: 0.0,
+            friction: 0.9,
+            gravity: false,
+            lock_pos: (false, false, false),
+            lock_rot: (false, false, false),
+        )),
+    ),
+    (
+        name: "Counter",
+        transform: (
+            translation: (-0.500, -0.3344, 0.500),
+            rotation: (0.0, 1.0000, 0.0, 0.0000),
+            scale: (0.7500, 0.7500, 0.7500),
+        ),
+        matter: Mesh(
+            asset_path: "models/space-kit/desk_computer.glb",
+        ),
+        scripts: [],
+        parent: Some(0),
+    ),
+    (
+        name: "Crates A",
+        transform: (
+            translation: (0.550, -0.3812, 0.500),
+            rotation: (0.0, 0.0000, 0.0, 1.0000),
+            scale: (0.7500, 0.7500, 0.7500),
+        ),
+        matter: Mesh(
+            asset_path: "models/space-kit/barrels.glb",
+        ),
+        scripts: [],
+        parent: Some(0),
+    ),
+    (
+        name: "Crates B",
+        transform: (
+            translation: (0.550, -0.3812, -0.800),
+            rotation: (0.0, 0.3007, 0.0, 0.9537),
+            scale: (0.7500, 0.7500, 0.7500),
+        ),
+        matter: Mesh(
+            asset_path: "models/space-kit/barrels.glb",
         ),
         scripts: [],
         parent: Some(0),

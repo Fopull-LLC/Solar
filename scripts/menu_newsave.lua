@@ -1,10 +1,11 @@
 -- NEW GALAXY panel (attached to the "NG Panel" node): shown when the player
 -- clicks an EMPTY save slot. Every system-generator knob is exposed on a
--- draggable slider inside the "NG Params" SCROLL VIEW (wheel to reach them
--- all), plus a galaxy seed typed on the keyboard (digits; backspace erases;
--- blank = random). CREATE stores the whole parameter set in the fresh slot
--- and enters the game — game_manager reads it back and hands it to the
--- generator, so the same save always regenerates the same galaxy. The
+-- draggable slider inside the "NG Params" box (all eleven fit on the page;
+-- it stays a scroll view so a twelfth knob would scroll rather than spill),
+-- plus a galaxy seed typed on the keyboard (digits; backspace erases;
+-- blank = random; ESC backs out). CREATE stores the whole parameter set in
+-- the fresh slot and enters the game — game_manager reads it back and hands
+-- it to the generator, so the same save always regenerates the same galaxy. The
 -- panel's buttons carry menu_ng_button, which routes clicks here (press).
 
 open = false -- published: menu_slot opens the panel, buttons check it
@@ -52,7 +53,7 @@ local function seed_label()
   if #seed_str > 0 then
     n.text = "SEED   " .. seed_str
   else
-    n.text = "SEED   random   (type digits)"
+    n.text = "SEED   random"
   end
 end
 
@@ -71,7 +72,7 @@ function openFor(n)
   seed_str = ""
   open = true
   local lbl = find("NG Slot Label")
-  if lbl then lbl.text = string.format("— creating save in slot %d —", n) end
+  if lbl then lbl.text = string.format("SAVE SLOT %d", n) end
   seed_label()
   local _, sc = ui_of("NG Params")
   if sc then sc.scrollY = 0 end
@@ -120,6 +121,10 @@ function update(node, dt)
       seed_str = seed_str .. d
       seed_label()
     end
+  end
+  if input.pressed("escape") then
+    close()
+    return
   end
   if input.pressed("backspace") and #seed_str > 0 then
     seed_str = seed_str:sub(1, -2)

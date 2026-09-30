@@ -44,6 +44,14 @@ podLX, podLY, podLZ = 0, 1.2, 0
 focusX, focusY, focusZ = nil, nil, nil
 focusHeight = 1.2
 sas_mode = "stability"
+-- Everything the flight HUD draws that isn't already one of these globals,
+-- measured at 10 Hz by fixedUpdate (see its telemetry block) and rendered by
+-- scripts/flight_hud.lua. nil until the first measurement.
+tele = nil
+-- Has this craft left the ground since the clamps let go? A craft that arrived
+-- any other way (a parked ship you walked up to) got where it is by flying.
+hasFlown = true
+flown = { air = 0.0, alt0 = nil }  -- the latch's own state (see fixedUpdate)
 -- Peripheral state (published: damage tolerance + HUD read it).
 gear_deployed = true
 -- Current reentry-heating rate (dmg/s at the nose; published for the HUD).
@@ -194,12 +202,23 @@ local elec = {
 }
 local boarding = false
 local astronaut, hud, hud_prompt
-local hud_panel, stage_panel  -- the digital backing frames the readouts sit inside
+local hud_panel  -- the backing frame the map's text block sits inside
 local hud_t = -10.0
 local navball, tape_spd, tape_alt, txt_spd, txt_alt, txt_hdg
-local stage_node
--- KSP-style warp ladder (matches the scout's).
+-- KSP-style warp ladder.
 local WARP_STEPS = { 1, 5, 10, 50, 100, 1000, 10000 }
+
+
+-- The orbit map, resolved ONCE. `findScript` walks every node in the scene
+-- comparing script names (floptle/0063), and this is asked for on every tick
+-- of every vessel — so it is cached, and only re-resolved if the handle dies
+-- (a scene change). The same shape is used for every cross-script singleton in
+-- this project.
+local map_ref
+local function map()
+  if not map_ref or not map_ref.valid then map_ref = findScript("orbit_map") end
+  return map_ref
+end
 
 -- ── math helpers (same conventions as the scout ship) ───────────────────────
 local function norm(x, y, z)
@@ -591,23 +610,6 @@ local function set_hud(text)
   if hud and text then hud.text = text end
 end
 
--- The FLIGHT STAGE LIST (left side): every remaining stage bottom-up with
--- its engines, the ACTIVE one marked — SPACE fires the next separation.
-local stage_last = nil
-local function set_stage_list(text)
-  if not stage_node then stage_node = find("Stage List") end
-  if not stage_panel then stage_panel = find("Stage Panel") end
-  local panel = stage_panel or stage_node
-  if panel then
-    local el = panel:getcomponent("UiElement")
-    if el then el.visible = text ~= nil end
-  end
-  if stage_node and text and text ~= stage_last then
-    stage_node.text = text
-    stage_last = text
-  end
-end
-
 local prompt_last = nil
 local function set_prompt(text)
   if not hud_prompt then hud_prompt = find("Vessel HUD") end
@@ -682,7 +684,7 @@ local function update_navball(node, nx, ny, nz, fx, fy, fz, tgtx, tgty, tgtz)
   if tape_alt then tape_alt:setShaderParam("tape", alt, 150, 25) end
   if txt_spd then txt_spd.text = string.format("%.0f", vl) end
   if txt_alt then txt_alt.text = string.format("%.0f", alt) end
-  if txt_hdg then txt_hdg.text = string.format("HDG %03.0f°", heading) end
+  if txt_hdg then txt_hdg.text = string.format("%03.0f°", heading) end
 end
 
 -- ── engine plumes ───────────────────────────────────────────────────────────
@@ -728,12 +730,7 @@ end
 local SAS_KEYS = {
   ["1"] = "stability", ["2"] = "prograde", ["3"] = "retrograde",
   ["4"] = "normal", ["5"] = "antinormal", ["6"] = "radialin",
-  ["7"] = "radialout", ["8"] = "dock",
-}
-local SAS_LABEL = {
-  off = "OFF", stability = "STAB", prograde = "PRO", retrograde = "RETRO",
-  normal = "NML", antinormal = "ANTI-NML", radialin = "RAD-IN",
-  radialout = "RAD-OUT", dock = "DOCK",
+  ["7"] = "radialout", ["8"] = "dock", ["9"] = "node",
 }
 
 function setSAS(m)
@@ -742,6 +739,15 @@ function setSAS(m)
 end
 
 local function sas_target_dir(node, db, mode)
+  -- The planned burn is the one hold that doesn't come from the state vector:
+  -- the map worked its direction out during the trajectory walk and cached it,
+  -- because the walk isn't running out here in flight. Answered first, and
+  -- without needing a dominant body — a burn direction is a burn direction.
+  if mode == "node" then
+    local m = map()
+    if not m or not m.burnDirection then return nil end
+    return m.burnDirection()
+  end
   if not db then return nil end
   local vx, vy, vz = node.vx, node.vy, node.vz
   local vl = math.sqrt(vx * vx + vy * vy + vz * vz)
@@ -1129,7 +1135,7 @@ end
 
 -- Kick a freshly-split wreck away from the impact with a consistent tumble.
 -- TWO fixes for "debris flies off weird": (1) the lift is along GRAVITY-UP
--- (radial on a planetoid — world +Y is sideways when you've landed on a
+-- (radial on a planet — world +Y is sideways when you've landed on a
 -- sphere's flank, which threw wreck out horizontally), and (2) the kick is a
 -- Δv scaled by the wreck's own mass (impulse = m·Δv) so a 0.15 t decoupler and
 -- a 0.8 t engine tumble away at the SAME speed instead of the light bits
@@ -1429,7 +1435,6 @@ function releaseControl()
   silence_loops()
   throttle_prev = 0.0
   set_hud(nil)
-  set_stage_list(nil)
   set_navball(false)
 end
 
@@ -2125,6 +2130,49 @@ function dockGuides()
   end
 end
 
+-- ── ending a flight ─────────────────────────────────────────────────────────
+
+-- STAND DOWN — the one teardown every way out of the pod goes through: stepping
+-- out at the hatch (F), recovering the craft at the base, ending the flight at
+-- the Tracking Station, and losing the pod in a breakup. Four places used to
+-- spell this out line by line and one of them was always a line short — the
+-- navball left up, the engine loop still humming, the crew still invisible.
+--
+-- `x,y,z` places the astronaut; omit it to leave them where they are. The
+-- velocity is worth passing when you're stepping out of something moving: an
+-- EVA that starts at rest beside a craft doing 4 m/s is a crew member being
+-- run over by their own rocket.
+function standDown(node, x, y, z, vx, vy, vz)
+  piloting = false
+  throttle = 0.0
+  throttle_prev = 0.0
+  set_flames(node, 0)
+  silence_loops()
+  set_hud(nil)
+  set_navball(false)
+  set_prompt("")
+  if not astronaut or not astronaut.valid then astronaut = find("Astronaut") end
+  if astronaut then
+    if x then
+      astronaut.x, astronaut.y, astronaut.z = x, y, z
+      astronaut.vx, astronaut.vy, astronaut.vz = vx or 0, vy or 0, vz or 0
+    end
+    astronaut.visible = true
+  end
+end
+
+-- Is this craft parked? (Landed and stopped — the precondition for every way of
+-- ending a flight except walking away from the wreck.) Published so the flight
+-- card can ask without duplicating the test.
+function parked()
+  local node = dock.node
+  if destroyed or not node or not node.valid then return false end
+  local info = assembly.info(node)
+  if not (info and info.grounded) then return false end
+  local v = info.vel
+  return math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z) < 1.5
+end
+
 -- ── recovery ────────────────────────────────────────────────────────────────
 -- Bring a craft home and you get most of its hardware value back. That is the
 -- other half of the money loop: a hull is BOUGHT at rollout, so the difference
@@ -2135,7 +2183,9 @@ end
 -- could plausibly go and get it. Damaged parts refund less; destroyed ones
 -- refund nothing, because they aren't there.
 local RECOVER_RANGE = 260.0   -- metres from the base site
-local RECOVER_RATE = 0.80     -- fraction of a pristine part's value returned
+-- Fraction of a pristine part's value returned. 0.8 made flying nearly free
+-- once mining paid properly: a flight should cost something to be worth planning.
+local RECOVER_RATE = 0.65
 
 -- Distance to the home base (the crew spawn), in the body-relative frame that
 -- survives the planet's orbit. nil when there's no base on this world.
@@ -2165,6 +2215,9 @@ end
 function recoverReady()
   local node = dock.node
   if destroyed or not node or not node.valid then return false, "no craft" end
+  -- A craft still clamped to the pad has not flown: "recovering" it would be a
+  -- refund for pressing Launch.
+  if hasFlown == false then return false, "not launched yet" end
   local info = assembly.info(node)
   if not info then return false, "no craft" end
   if not info.grounded then return false, "not landed" end
@@ -2199,21 +2252,9 @@ function recoverCraft()
   end
   save.set("mission.recovered", true)
   if piloting then
-    piloting = false
-    throttle = 0.0
-    set_flames(node, 0)
-    silence_loops()
-    set_hud(nil)
-    set_stage_list(nil)
-    set_navball(false)
-    if not astronaut or not astronaut.valid then astronaut = find("Astronaut") end
-    if astronaut then
-      local i2 = assembly.info(node)
-      local bx2, by2, bz2 = base_of(node, i2)
-      astronaut.x, astronaut.y, astronaut.z = bx2, by2 + 2.0, bz2
-      astronaut.vx, astronaut.vy, astronaut.vz = 0, 0, 0
-      astronaut.visible = true
-    end
+    local i2 = assembly.info(node)
+    local bx2, by2, bz2 = base_of(node, i2)
+    standDown(node, bx2, by2 + 2.0, bz2)
   end
   log(string.format("RECOVERED — %s   +$%d", node.name or "craft", value))
   destroy(node)
@@ -2472,19 +2513,10 @@ break_part = function(node, uid, d, c, hx, hy, hz, depth)
     destroyed = true
     silence_loops()
     if piloting then
-      piloting = false
-      if astronaut then
-        astronaut.visible = true
-        astronaut.x, astronaut.y, astronaut.z = hx, hy + 2.0, hz
-        local i2 = assembly.info(node)
-        if i2 then
-          astronaut.vx, astronaut.vy, astronaut.vz = i2.vel.x, i2.vel.y + 3.0, i2.vel.z
-        end
-      end
-      set_hud(nil)
-      set_navball(false)
-      set_stage_list(nil)
-      set_prompt("")
+      local i2 = assembly.info(node)
+      local v = i2 and i2.vel
+      standDown(node, hx, hy + 2.0, hz,
+        v and v.x, v and (v.y + 3.0), v and v.z)
     end
     log("the pod is gone — vessel lost")
     return
@@ -2516,25 +2548,27 @@ local function shatter(node, hx, hy, hz, spd, info)
   spawnEffect("Explosion", hx - 0.6, hy + 0.3, hz + 0.7, evx, evy, evz)
   sfx3(SFX.boom, hx, hy, hz, 1.0, 0.85)
   sfx3(SFX.explode, hx, hy, hz, 0.9, 1.05)
+  -- CAPTIONS. The engine draws these only while a player has them on, so they
+  -- are written beside the sound with no `if` around them (v0.33.0). Only the
+  -- sounds that CARRY something go here — the ones a player who cannot hear
+  -- them would otherwise learn about from the wreckage.
+  caption("the hull breaks up")
   spawnEffect("Explosion", hx + 0.2, hy + 1.4, hz + 0.3, evx, evy, evz) -- a secondary up high
   make_crater(hx, hy, hz, 4.8)
   silence_loops()
-  -- Throw the pilot clear of the wreck.
+  -- Put the pilot clear of the wreck — AT REST.
+  --
+  -- They used to be stood down carrying the wreck's own velocity plus a hop, and
+  -- the wreck's velocity at the moment of a breakup is by definition the worst
+  -- number in the whole flight. A crew ejected at it does not land near the
+  -- crash; they leave. Reported as *"I got sent flying off infinitely into the
+  -- void and got softlocked"* — an astronaut on an escape trajectory, on foot,
+  -- with nothing to fly and no way home.
+  --
+  -- Surviving a breakup is meant to cost you the ship, not the save. They come
+  -- to a stop beside the wreck; getting home from there is `flight_ops`.
   if piloting then
-    piloting = false
-    if astronaut then
-      astronaut.visible = true
-      astronaut.x, astronaut.y, astronaut.z = hx, hy + 2.0, hz
-      if info then
-        astronaut.vx = info.vel.x
-        astronaut.vy = info.vel.y + 3.0
-        astronaut.vz = info.vel.z
-      end
-    end
-    set_hud(nil)
-    set_navball(false)
-    set_stage_list(nil)
-    set_prompt("")
+    standDown(node, hx, hy + 2.0, hz, 0, 0, 0)
   end
   -- Shear every part loose (leave the last one so the compound stays valid).
   local live = {}
@@ -2552,10 +2586,36 @@ local function shatter(node, hx, hy, hz, spd, info)
   for uid in pairs(part_hp) do part_hp[uid] = 0 end
 end
 
--- TOTAL closing speed (m/s) above which a hit fails the whole airframe, not just
--- the parts it touched — a genuine lithobrake, not a hard landing. Judged on the
--- honest energy metric now (speedAbs), so a fast ram at ANY angle triggers it.
+-- Closing speed INTO THE SURFACE (m/s) above which a hit fails the whole
+-- airframe rather than just the parts it touched — a genuine lithobrake, not a
+-- hard landing.
+--
+-- ⚠ THIS IS THE NORMAL COMPONENT, AND IT HAS TO BE. It was judged on `speedAbs`,
+-- the TOTAL contact speed, which is the right metric for per-part wear and the
+-- wrong one for total destruction: total speed counts the part of your motion
+-- that is ALONG the ground. A touchdown with a few m/s of sink and twelve of
+-- lateral drift — which is most landings, on a planet, in wind, off a chute —
+-- summed past 13 and vaporised the whole ship the instant it made contact.
+-- Reported as *"I tried landing pretty softly with my parachute and a bit of
+-- thrust but as soon as it touched the ground it disintegrated"*.
+--
+-- A fast belly-slide still hurts, and hurts progressively: it feeds `speedAbs`
+-- into the per-part damage below, which scrapes, wounds and eventually shears
+-- parts off. What it no longer does is skip straight to the whole airframe.
 local SHATTER_SPEED = 13.0
+
+-- The most a single contact may claim beyond the craft's OWN speed before it is
+-- treated as a solver artifact rather than a crash.
+--
+-- A contact's reported speed is the velocity of the contact POINT, which is the
+-- body's velocity plus its rotation about that point — so on a real hit it can
+-- legitimately exceed the hull's speed, and this allowance covers a fast tumble.
+-- What it cannot legitimately be is forty when the ship is doing four. That is
+-- what a deep penetration resolving in one tick looks like, and terrain
+-- collision drifts out of step with the drawn surface often enough to produce
+-- them (floptle/0074): a spike like that used to shatter an intact ship and fire
+-- the crew off at the ejection velocity.
+local ARTIFACT_MARGIN = 9.0
 -- How fast a surviving-but-overloaded part loses HP, per second, at full
 -- overload (a hit just short of its crash tolerance). A brief bump chips; a
 -- sustained grind tears through in a fraction of a second. Fragile by design.
@@ -2563,8 +2623,11 @@ local DAMAGE_RATE = 3.0
 -- One-shot latch for the stale-engine warning (see damage_tick).
 local engine_version_warned = false
 -- Throttled crash diagnostics to the Console (contact count / worst speed / terrain
--- proximity). Leave on while tuning crashes; the log is rate-limited to twice a second.
-local DAMAGE_DEBUG = true
+-- proximity). Turn on while tuning crashes; the log is rate-limited to twice a
+-- second. OFF in the shipped game — it fires on every contact, so taxiing or
+-- resting on legs fills the Console with lines about nothing happening. The
+-- artifact report above is not gated by it: that one is a real diagnosis.
+local DAMAGE_DEBUG = false
 local dbg_t = 0
 
 local function damage_tick(node, info, dt)
@@ -2586,6 +2649,17 @@ local function damage_tick(node, info, dt)
   -- catastrophic blow fails the whole airframe even if it landed on the pod.
   local hits = {}
   local worst, wx, wy, wz = 0.0, nil, nil, nil
+  -- The airframe-failure test runs on the NORMAL component, tracked separately
+  -- from the energy metric that drives per-part wear. See SHATTER_SPEED.
+  local worst_normal = 0.0
+  -- What the craft is ACTUALLY doing, as the plausibility ceiling for anything a
+  -- contact claims. `info.vel` is the compound's velocity in the dominant body's
+  -- frame — the same frame the terrain collider is carried in — so on a landing
+  -- it is the sink-and-drift the pilot flew, not the planet's 99 m/s of orbit.
+  local ov = info.vel
+  local own = math.sqrt(ov.x * ov.x + ov.y * ov.y + ov.z * ov.z)
+  local ceiling = own + ARTIFACT_MARGIN
+  local artifacts = 0
   local raw = assembly.impacts(node)
   for _, h in ipairs(raw) do
     -- STALE-ENGINE GUARD: speedAbs is a NEW engine field. If it's missing, the
@@ -2605,11 +2679,28 @@ local function damage_tick(node, info, dt)
     if d and hp and hp > 0 then
       local nrm = h.speed or 0
       local energy = math.max(h.speedAbs or 0, nrm)             -- total closing speed
+      -- A contact the craft could not physically have delivered is a solver
+      -- artifact, not a crash. Clamp rather than discard: a real hit that merely
+      -- brushes the ceiling still lands at full plausible force, and the
+      -- clamping is counted so it can be reported instead of hidden.
+      if energy > ceiling then
+        artifacts = artifacts + 1
+        energy = ceiling
+        nrm = math.min(nrm, ceiling)
+      end
       local slide = math.sqrt(math.max(0.0, energy * energy - nrm * nrm))
       hits[#hits + 1] = { uid = uid, c = c, d = d, hp = hp,
                           e = energy, slide = slide, x = h.x, y = h.y, z = h.z }
       if energy > worst then worst, wx, wy, wz = energy, h.x, h.y, h.z end
+      if nrm > worst_normal then worst_normal = nrm end
     end
+  end
+  if artifacts > 0 and time - dbg_t > 1.0 then
+    dbg_t = time
+    log(string.format(
+      "CRASH: ignored %d contact(s) reporting more than the craft's own %.1f m/s "
+      .. "— collision is out of step with the surface here (floptle/0074)",
+      artifacts, own))
   end
   -- DIAGNOSTIC: when contacts arrive, report (throttled) what the crash model sees —
   -- contact count, the worst closing speed vs the shatter threshold, and whether the
@@ -2625,8 +2716,11 @@ local function damage_tick(node, info, dt)
       #raw, worst, SHATTER_SPEED, sd and string.format("%.2f", sd) or "nil (no ground here)"))
   end
   -- A genuinely violent strike fails the WHOLE airframe — the ship bursts apart.
-  if not destroyed and worst >= SHATTER_SPEED and wx then
-    shatter(node, wx, wy, wz, worst, info)
+  -- Gated on how fast it went INTO the ground, not on how fast it was going: a
+  -- ship sliding along the surface is a ship being torn up part by part, and the
+  -- loop below is what does that.
+  if not destroyed and worst_normal >= SHATTER_SPEED and wx then
+    shatter(node, wx, wy, wz, worst_normal, info)
     return
   end
   local spark = time - scrape_t > 0.10
@@ -2739,6 +2833,7 @@ function start(node)
     save.set("shipyard.pilot", 0)
     boarding = true
     launch_mode = true
+    hasFlown = false
   end
 end
 
@@ -2853,21 +2948,12 @@ function fixedUpdate(node, dt)
   -- ---- board / exit -------------------------------------------------------
   if input.pressed("f") and astronaut then
     if piloting then
-      piloting = false
-      throttle = 0.0
-      set_flames(node, 0)
-      silence_loops() -- engine/reentry/bed all stand down when you step out
-      throttle_prev = 0.0
-      astronaut.x = px + rx.x * 2.2 + up.x * 0.4
-      astronaut.y = py + rx.y * 2.2 + up.y * 0.4
-      astronaut.z = pz + rx.z * 2.2 + up.z * 0.4
-      if info then
-        astronaut.vx, astronaut.vy, astronaut.vz = info.vel.x, info.vel.y, info.vel.z
-      end
-      astronaut.visible = true
-      set_hud(nil)
-      set_navball(false)
-      set_stage_list(nil)
+      local v = info and info.vel
+      standDown(node,
+        px + rx.x * 2.2 + up.x * 0.4,
+        py + rx.y * 2.2 + up.y * 0.4,
+        pz + rx.z * 2.2 + up.z * 0.4,
+        v and v.x, v and v.y, v and v.z)
     elseif board_dist(node, astronaut, info) <= params.board_range then
       piloting = true
       astronaut.visible = false
@@ -2908,21 +2994,23 @@ function fixedUpdate(node, dt)
   end
   set_prompt("")
   if not info then
-    set_hud(part_total > 0 and string.format("assembling…  waiting for %d parts", part_total) or nil)
+    tele = { waiting = true, parts = 0, parts_total = part_total, stages = {} }
     return
   end
 
   -- ---- the map is a fly-on-instruments view for a built vessel -----------
-  -- KSP lets you FLY from the map (throttle up watching your trajectory bend,
-  -- steer, stage), so a piloted vessel keeps FULL control while the map is
-  -- open — throttle, stick, SAS, staging, gear all live. (Maneuver-node
-  -- PLANNING with WASD is the scout ship's job; ship_controller only takes the
-  -- keyboard for planning when the SCOUT is the subject, never a vessel — so
-  -- there's no key clash.) `map_open` now only suppresses our HUD text, which
-  -- the map repaints on the shared node.
-  local sc_map = findScript("ship_controller")
-  local map_open = (sc_map and sc_map.map_view) or false
+  -- KSP lets you FLY from the map — throttle up watching your trajectory bend,
+  -- steer, stage — so a piloted vessel keeps FULL control while the map is
+  -- open. (The cockpit stands down while it is; the map paints its own
+  -- readout.)
+  --
+  -- The exception is PLAN mode, where the map's burn tuner takes the same six
+  -- attitude keys. `planning` is the map saying so; `dock.plan` is us agreeing
+  -- to keep our hands off until it lets go.
+  local m = map()
+  local map_open = (m and m.map_view) or false
   dock.map = map_open
+  dock.plan = map_open and m and m.planning or false
   -- Flying from the map pulls the camera far back; keep this vessel exempt from
   -- distant-craft LOD while it's open so throttle/steering stay live and our
   -- orbital velocity keeps feeding the trajectory. Released when the map closes.
@@ -2933,6 +3021,51 @@ function fixedUpdate(node, dt)
 
   -- ---- time warp (compounds coast on their own Kepler rails now) ---------
   local warp = space.warp()
+  -- How fast the galaxy will let us go, and why.
+  --
+  -- Past this system, space is GENERATED as the ship reaches it. Warp is the
+  -- one control that can outrun that: at 10000× the ship crosses a sector in
+  -- the time the generator needs for a single world, so a fast enough warp
+  -- would ask for dozens of star systems at once and the machine would spend
+  -- the next minute building all of them. The ladder therefore has a ceiling,
+  -- the galaxy owns it, and it drops while a system is actually being built.
+  -- Inside the home system there is nothing to generate and the ceiling is
+  -- infinite, so this costs nothing where it does not apply.
+  --
+  -- Written INLINE against a script-env global rather than as a file-scope
+  -- helper on purpose: a local up there is an upvalue of this function, and
+  -- this function already sits one under LuaJIT's 60-upvalue ceiling — adding
+  -- one stopped the whole script loading (platform 0086). A global costs a
+  -- table lookup and no upvalue. `findScript` is a full scene scan (0063), so
+  -- the handle is cached and only re-resolved when it dies.
+  local warp_cap, warp_why = math.huge, nil
+  if not gx_ref or not gx_ref.valid then gx_ref = findScript("galaxy") end
+  if gx_ref and gx_ref.valid then
+    -- Plain calls, not method calls: an export on a script handle is a
+    -- function, not a method (`rs.unlock(id)` everywhere else in this project).
+    local ok, lim = pcall(gx_ref.maxWarp)
+    if ok and type(lim) == "number" then
+      warp_cap = lim
+      local ok2, why = pcall(gx_ref.warpNote)
+      if ok2 and type(why) == "string" then warp_why = why end
+    end
+  end
+  -- A ceiling that drops UNDER the warp we are already at takes it down with
+  -- it. This is the one that matters: the ceiling falls the instant the galaxy
+  -- starts building a system, which is exactly when the ship must not be
+  -- crossing a sector a second. Stepping down is silent unless there is a
+  -- reason to give.
+  if warp > warp_cap + 0.001 then
+    local down = 1
+    for _, w in ipairs(WARP_STEPS) do
+      if w <= warp_cap + 0.001 then down = w end
+    end
+    if down < warp then
+      space.warp(down)
+      if warp_why then log(string.format("warp %d× — %s", down, warp_why)) end
+      warp = down
+    end
+  end
   if input.pressed(".") or input.pressed(",") then
     local dir = input.pressed(".") and 1 or -1
     local idx = 1
@@ -2940,6 +3073,13 @@ function fixedUpdate(node, dt)
       if warp >= w - 0.5 then idx = i end
     end
     local nxt = WARP_STEPS[math.max(1, math.min(#WARP_STEPS, idx + dir))]
+    -- Refusing to go UP is not the same as being dragged down: say why, or the
+    -- key just stops working and that reads as a broken control.
+    if nxt > warp and nxt > warp_cap + 0.001 then
+      log(warp_why and ("warp limited: " .. warp_why)
+        or string.format("warp limited to %d× out here", math.floor(warp_cap)))
+      nxt = warp
+    end
     if nxt > warp then
       -- KSP rules: no thrust, and either parked or high enough that the
       -- conic can't clip terrain this instant.
@@ -3026,6 +3166,7 @@ function fixedUpdate(node, dt)
   if burning and throttle_prev <= 0.02 then
     -- The ignition crack fires at the base of the stack.
     sfx3(SFX.ignite, bx, by, bz, 0.9, 1.0)
+    caption("the engines light")
   end
   update_engine_audio(node, burning, throttle)
   throttle_prev = burning and throttle or 0.0
@@ -3035,6 +3176,10 @@ function fixedUpdate(node, dt)
   local gsd = terrain.query(bx, by, bz)
   local near_ground = info.grounded or (gsd ~= nil and gsd < 4.0)
   if info.grounded and not was_grounded then
+    -- Touching down is worth saying however gently it happened — the dust and
+    -- the thump below are gated on landing HARD, and a caption that only fires
+    -- on a bad landing would tell a player they had crashed and nothing else.
+    caption("touchdown")
     -- Only kick up dust for a real touchdown, not a creep onto the pad.
     local vv = info.vel
     local sp = math.sqrt(vv.x * vv.x + vv.y * vv.y + vv.z * vv.z)
@@ -3195,8 +3340,13 @@ function fixedUpdate(node, dt)
   if input.pressed("t") then
     sas_mode = (sas_mode ~= "off") and "off" or sas_last
   end
-  for k, m in pairs(SAS_KEYS) do
-    if input.pressed(k) then setSAS(m) end
+  -- `1` `2` `3` are the map's own indicator toggles while it is open, so the
+  -- SAS ladder stands down rather than firing on the same press. (It did both
+  -- before: toggling orbit lines also flipped you into a stability hold.)
+  if not dock.map then
+    for k, m in pairs(SAS_KEYS) do
+      if input.pressed(k) then setSAS(m) end
+    end
   end
   -- Peripherals: each device kind has its key (G = landing gear).
   for _, dev in pairs(DEVICES) do
@@ -3204,6 +3354,7 @@ function fixedUpdate(node, dt)
       dev.on = not dev.on
       local bx2, by2, bz2 = base_of(node, info)
       sfx3(SFX.gear, bx2, by2, bz2, 0.7, dev.on and 1.0 or 0.9)
+      caption(dev.label:lower() .. (dev.on and " deployed" or " retracted"))
       log(dev.label .. (dev.on and " deployed" or " retracted"))
     end
   end
@@ -3214,9 +3365,12 @@ function fixedUpdate(node, dt)
   rcsTick(node, info, dt)
   hullBump(node, info, dt)
   update_chutes(node, dt)
-  local p = (input.key("w") and 1 or 0) - (input.key("s") and 1 or 0)
-  local y = (input.key("a") and 1 or 0) - (input.key("d") and 1 or 0)
-  local r = (input.key("e") and 1 or 0) - (input.key("q") and 1 or 0)
+  -- In the map's PLAN mode these six keys are moving the burn, not the craft.
+  -- Reading them here as well would fly the ship every time you tuned a node.
+  local stick = not dock.plan
+  local p = stick and ((input.key("w") and 1 or 0) - (input.key("s") and 1 or 0)) or 0
+  local y = stick and ((input.key("a") and 1 or 0) - (input.key("d") and 1 or 0)) or 0
+  local r = stick and ((input.key("e") and 1 or 0) - (input.key("q") and 1 or 0)) or 0
   local rgx, rgy, rgz = cross(fx, fy, fz, nx, ny, nz) -- ship right
   local w = info.angVel
   local manual = (p ~= 0 or y ~= 0 or r ~= 0)
@@ -3300,6 +3454,7 @@ function fixedUpdate(node, dt)
         released = true
         assembly.setAnchored(node, false)
         sfx3(SFX.clamp, bx, by, bz, 0.9, 1.0) -- the clamps let go with a clank
+        caption("the launch clamps release")
         log("launch clamps released")
       else
         log(string.format("clamps hold: %d / %d parts assembled", #info.parts, part_total))
@@ -3321,6 +3476,7 @@ function fixedUpdate(node, dt)
       table.remove(events, 1)
       chutes_deployed = true
       sfx3(SFX.chute, bx, by, bz, 0.8, 1.0) -- the canopy cracks open
+      caption("the parachutes crack open")
       log("parachutes deployed")
     elseif #events > 0 and events[1].kind == "ring" then
       -- A BOOSTER RING: every branch in the ring kicks away laterally at
@@ -3349,6 +3505,7 @@ function fixedUpdate(node, dt)
           local n_away = #parts_nodes
           quench(parts_nodes)
           sfx3(SFX.boosters, bx, by, bz, 0.85, 1.0) -- the separation charge fires
+          caption("the boosters separate")
           assembly.split(node, parts_nodes, function(stage)
             local si = assembly.info(stage)
             if si then
@@ -3410,6 +3567,7 @@ function fixedUpdate(node, dt)
         local n_away = #parts_nodes
         quench(parts_nodes)
         sfx3(SFX.stage, bx, by, bz, 0.9, 1.0) -- the decoupler bangs
+        caption("a stage separates")
         assembly.split(node, parts_nodes, function(stage)
           local si = assembly.info(stage)
           if si then
@@ -3432,165 +3590,101 @@ function fixedUpdate(node, dt)
 
   update_navball(node, nx, ny, nz, fx, fy, fz, sasm_x, sasm_y, sasm_z)
 
-  -- ---- HUD (10 Hz, the scout ship's format) ------------------------------
+  -- ---- has this craft actually FLOWN? ------------------------------------
+  -- Released from the clamps AND then off the ground for a second or 5 m up.
+  -- Sitting on the pad is not a flight: the end-of-flight card offered to
+  -- RECOVER a rocket that had never left it, and "land intact" ticked there.
+  -- Latch state lives on the published `flown` table, not in locals — this
+  -- function is at LuaJIT's 60-upvalue ceiling and a global costs none.
+  if not hasFlown and not info.anchored then
+    local fd = space.dominant(node.x, node.y, node.z)
+    local fb = fd and space.body(fd)
+    local fr = fb and math.sqrt((bx - fb.x) ^ 2 + (by - fb.y) ^ 2 + (bz - fb.z) ^ 2) or 0
+    flown.alt0 = flown.alt0 or fr
+    flown.air = info.grounded and 0.0 or (flown.air + dt)
+    if flown.air >= 1.0 or fr - flown.alt0 > 5.0 then hasFlown = true end
+  end
+
+  -- ---- telemetry (10 Hz) → `tele`, drawn by scripts/flight_hud.lua ---------
+  -- This function only MEASURES. Everything the pilot reads is laid out by the
+  -- flight HUD from this one table, which is also what keeps the rendering out
+  -- of a function with no upvalues left to spend.
   if time - hud_t >= 0.1 then
     hud_t = time
-    -- The map owns the screen while it's open: its info panel IS the shared
-    -- "Ship HUD Text" node, repainted by the scout's map on its own 10 Hz
-    -- clock. We must NOT also write that node — a `set_hud(nil)` here every
-    -- 0.1 s fought the scout's `set_hud(text)` every 0.1 s, and the two
-    -- independent clocks flip-flopped the node's visibility (Ty's map-HUD
-    -- flicker). Leave the HUD to the scout; only hide OUR stage list.
-    if map_open then
-      set_stage_list(nil) -- the list must not stay painted over the map
-      return
-    end
+    local t = {
+      warp = warp, warp_cap = warp_cap, warp_why = warp_why,
+      anchored = info.anchored, grounded = info.grounded,
+      ready = assembly_ready(info), parts = #info.parts, parts_total = part_total,
+      twr = (info.mass > 0) and total_thrust / (info.mass * 9.81) or 0,
+      fuel_cap = fuel_cap, refueling = refueling,
+      ec = elec.charge, ec_cap = elec.cap, ec_gen = elec.gen,
+      comms = elec.comms, link = elec.link, dish_up = DEVICES.comms.on,
+      solar = elec.gen > 0 and DEVICES.solar.on and DEVICES.solar.anim > 0.5,
+      has_gear = #DEVICES.gear.parts > 0, has_rcs = #DEVICES.rcs.parts > 0,
+      rcs_on = DEVICES.rcs.on, rcs_blocks = #DEVICES.rcs.parts,
+      chute_open = chute_anim,
+    }
     local dom = space.dominant(node.x, node.y, node.z)
     local b = dom and space.body(dom)
-    local lines = {}
-    local bars = math.floor(throttle * 10 + 0.5)
-    local twr = (info.mass > 0) and total_thrust / (info.mass * 9.81) or 0
-    lines[1] = string.format("THR [%s%s] %3d%%   SAS %s   TWR %.2f%s%s%s",
-      string.rep("|", bars), string.rep("·", 10 - bars), throttle * 100,
-      SAS_LABEL[sas_mode] or "?", twr,
-      (info.anchored and "   CLAMPED" or (info.grounded and "   LANDED" or ""))
-        .. ((#DEVICES.gear.parts > 0 and not gear_deployed) and "   GEAR UP" or ""),
-      #events > 0 and string.format("   STAGES %d", #events) or "",
-      warp > 1.001 and string.format("   [WARP %d×]", warp) or "")
-    if fuel_cap > 0 then
-      local fbars = math.floor(fuel / fuel_cap * 10 + 0.5)
-      local ftag = ""
-      if refueling then ftag = "  REFUELING"
-      elseif fuel <= 0.0 then ftag = "  [TANK EMPTY]" end
-      lines[2] = string.format("FUEL [%s%s] %3d%%%s",
-        string.rep("|", fbars), string.rep("·", 10 - fbars), fuel / fuel_cap * 100, ftag)
-    end
-    -- POWER: only shown on an electrically-equipped craft. Bar = battery state;
-    -- tags call out solar charging, a live comms link, or a flat bus.
-    if elec.cap > 0 or elec.comms or elec.gen > 0 then
-      local frac = (elec.cap > 0) and (elec.charge / elec.cap) or 0
-      local ebars = math.floor(frac * 10 + 0.5)
-      local etag = ""
-      if elec.gen > 0 and DEVICES.solar.on and DEVICES.solar.anim > 0.5 then etag = "  [SOLAR]" end
-      if elec.link then etag = etag .. "  [LINK]"
-      elseif elec.comms and not DEVICES.comms.on then etag = etag .. "  (dish stowed — U)" end
-      if elec.cap > 0 and elec.charge <= 0.0 then etag = etag .. "  [BATTERY FLAT]" end
-      lines[#lines + 1] = string.format("PWR  [%s%s] %3d%%%s",
-        string.rep("|", ebars), string.rep("·", 10 - ebars), frac * 100, etag)
-    end
     if b then
       local dxr, dyr, dzr = node.x - b.x, node.y - b.y, node.z - b.z
       local rlen = math.sqrt(dxr * dxr + dyr * dyr + dzr * dzr)
-      local upx, upy, upz = dxr / rlen, dyr / rlen, dzr / rlen
       local spd = math.sqrt(node.vx ^ 2 + node.vy ^ 2 + node.vz ^ 2)
-      local vsp = node.vx * upx + node.vy * upy + node.vz * upz
-      local nose_deg = math.deg(math.asin(math.max(-1, math.min(1,
-        nx * upx + ny * upy + nz * upz))))
-      lines[#lines + 1] = string.format("ALT %6.0f   SPD %6.1f   VSPD %+6.1f   NOSE %+3.0f°",
-        rlen - b.radius, spd, vsp, nose_deg)
-      local vorb = math.sqrt(b.mu / rlen)
-      local vesc = vorb * 1.41421
-      local tag = ""
-      if spd >= vesc then tag = "  [ESCAPING]"
-      elseif spd >= vesc * 0.93 then tag = "  near escape" end
-      lines[#lines + 1] = string.format("V-ORBIT %5.1f   V-ESC %5.1f%s", vorb, vesc, tag)
+      t.alt, t.spd = rlen - b.radius, spd
+      t.vspd = (node.vx * dxr + node.vy * dyr + node.vz * dzr) / rlen
+      t.nose = math.deg(math.asin(math.max(-1, math.min(1,
+        (nx * dxr + ny * dyr + nz * dzr) / rlen))))
+      t.vorb = math.sqrt(b.mu / rlen)
+      t.vesc = t.vorb * 1.41421
       local o = space.elements(node.x, node.y, node.z, node.vx, node.vy, node.vz)
-      if o and o.apoapsis then
-        lines[#lines + 1] = string.format("ORBIT [%s]  pe %+.0f  ap %+.0f  T %.0fs",
-          o.body, o.periapsis - b.radius, o.apoapsis - b.radius, o.period)
-      elseif o then
-        lines[#lines + 1] = string.format("ESCAPE [%s]  pe %+.0f", o.body, o.periapsis - b.radius)
+      if o then
+        t.body, t.pe = o.body, o.periapsis - b.radius
+        if o.apoapsis then t.ap, t.period = o.apoapsis - b.radius, o.period end
       end
     end
-    if info.anchored then
-      if assembly_ready(info) then
-        lines[#lines + 1] = "> SPACE — release launch clamps"
-      else
-        lines[#lines + 1] = string.format("assembling…  %d / %d parts", #info.parts, part_total)
-      end
-    end
-    if heating > 0.02 then
-      lines[#lines + 1] = string.format("[HEAT] REENTRY %s— slow down or climb",
-        heating > 0.12 and "(SEVERE) " or "")
-    end
-    if chutes_deployed then
-      lines[#lines + 1] = string.format("[CHUTES OPEN]  %d%%", chute_anim * 100)
-    end
-    -- Damage report: the worst-off surviving part (the smoke tells you where).
-    local worst_uid, worst_hp
+    -- Damage: the worst-off surviving part (the smoke tells you where).
     for uid, hp in pairs(part_hp) do
-      if hp > 0 and hp < 1 and (not worst_hp or hp < worst_hp) then
-        worst_uid, worst_hp = uid, hp
+      if hp > 0 and hp < 1 and (not t.hp or hp < t.hp) then
+        local d = bp_by_uid[uid]
+        t.hp, t.hp_part = hp, (d and (d.label or d.id)) or "part"
       end
     end
-    if worst_hp then
-      local d = bp_by_uid[worst_uid]
-      lines[#lines + 1] = string.format("[DAMAGE]  %s %d%%",
-        (d and (d.label or d.id)) or "part", worst_hp * 100)
-    end
-    -- DOCKING: while a mating face is in reach this is the whole approach —
-    -- range, how square the two ports are, and the closing rate. Green numbers
-    -- in the panel; here it's one line you can fly off.
-    if dock.target then
-      local t = dock.target
-      -- ✓ marks each capture condition that's already satisfied, so the last
-      -- few metres are a checklist rather than four numbers to interpret.
-      lines[#lines + 1] = string.format(
-        "[DOCK]%s %s   %.2f m%s   align %3d%%%s   lat %.2f   %+.2f m/s%s",
-        t.locked and " ◎" or "", t.name,
-        t.range, t.range < dock.captureR and "✓" or "",
-        t.align * 100, t.align > dock.alignMin and "✓" or "",
-        t.lateral, t.closing, t.drift < dock.driftMax and "✓" or "")
-      lines[#lines + 1] = string.format("        %s%s%s",
-        dock.assist and "MAG " or "", dock.auto and "AUTO " or "",
-        (sas_mode == "dock") and "DOCK-ALIGN" or "[8] dock-align · [P] console")
-    elseif dock.latched > 0 then
-      lines[#lines + 1] = string.format("[DOCK]  %d port%s latched   [P] peripherals",
-        dock.latched, dock.latched == 1 and "" or "s")
-    end
-    if #DEVICES.rcs.parts > 0 then
-      lines[#lines + 1] = string.format(
-        "[RCS ]  %s  ×%d  %.0f kN%s   HN fore/aft · JL strafe · IK up/down",
-        DEVICES.rcs.on and "ON " or "OFF", #DEVICES.rcs.parts, rcs.thrust or 0,
-        rcs.firing and "  ▲" or "")
-    end
-    lines[#lines + 1] =
-      "[SPACE] stage · [T] SAS · [G] gear · [R] RCS · [P] peripherals · [.,] warp · [M] map · [F] exit"
-    set_hud(table.concat(lines, "\n"))
-
-    -- The stage list (right edge): SEPARATION EVENTS in the builder's
-    -- firing order, drawn bottom-up — the NEXT one sits at the bottom
-    -- marked ▶ (SPACE fires it); rows fall off as you stage. A header
-    -- shows what's burning right now.
+    -- The stage stack, in firing order: what each SPACE does, and what burns
+    -- after it. Burning now = the live axial stage + every attached booster.
     local n_act, th_act = 0, 0
     for _, e in ipairs(engines) do
-      if engine_active(e, cut) then
-        n_act = n_act + 1
-        th_act = th_act + e.thrust
-      end
+      if engine_active(e, cut) then n_act, th_act = n_act + 1, th_act + e.thrust end
     end
-    local sl = { "STAGES — SPACE fires next",
-      string.format("burning: %d engine%s  %d kN", n_act, n_act == 1 and "" or "s", th_act), "" }
-    for i = #events, 1, -1 do
-      local ev = events[i]
-      local tag = (i == 1) and "  «" or ""
+    t.eng, t.thrust = n_act, th_act
+    t.stages = {}
+    for i, ev in ipairs(events) do
+      local st = { kind = ev.kind, eng = 0, kn = 0 }
       if ev.kind == "ring" then
-        local n_eng, th = 0, 0
+        -- The boosters this ring throws away, engines and all.
+        st.n = #ev.branches
+        local mine = {}
+        for _, g in ipairs(ev.branches) do mine[g.uid] = true end
         for _, e in ipairs(engines) do
-          if e.branch then
-            n_eng = n_eng + 1
-            th = th + e.thrust
+          if e.branch and mine[e.branch] then st.eng, st.kn = st.eng + 1, st.kn + e.thrust end
+        end
+      elseif ev.kind == "chute" then
+        st.n = #ev.uids
+      else
+        -- The engines this cut uncovers: above it, below the next cut up.
+        local above = math.huge
+        for j = i + 1, #events do
+          local e2 = events[j]
+          if e2.kind == "axial" and e2.y > ev.y and e2.y < above then above = e2.y end
+        end
+        for _, e in ipairs(engines) do
+          if not e.branch and e.y >= ev.y and e.y < above - 0.01 then
+            st.eng, st.kn = st.eng + 1, st.kn + e.thrust
           end
         end
-        sl[#sl + 1] = string.format("BOOSTER RING ×%d   %d eng  %d kN%s",
-          #ev.branches, n_eng, th, tag)
-      elseif ev.kind == "chute" then
-        sl[#sl + 1] = string.format("CHUTES ×%d%s", #ev.uids, tag)
-      else
-        sl[#sl + 1] = string.format("STAGE SEP   (below y %.1f)%s", ev.y, tag)
       end
+      t.stages[i] = st
     end
-    set_stage_list(table.concat(sl, "\n"))
+    tele = t
   end
 end
 

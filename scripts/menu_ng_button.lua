@@ -1,28 +1,17 @@
--- A button INSIDE the New Galaxy panel: forwards its click to menu_newsave's
--- press(role) router and handles its own hover tint. role: "create" /
--- "cancel" / "seed" (the seed row — clicking clears back to random).
+-- A menu button that forwards its click to menu_newsave's press(role)
+-- router. role: "create" / "cancel" / "seed" (the seed field — clicking
+-- clears back to random), or "quit" on the title page. Hover and press looks
+-- come from the button's style (ui/solar.uistyle.ron, "menu/...").
 
 defaults = { role = "cancel" }
 
-local el
-
-function start(node)
-  el = node:getcomponent("UiElement")
-end
-
 function clicked(node)
+  local fx = findScript("sfx")
+  if fx then fx.play("click") end
+  if params.role == "quit" then
+    app.quit()
+    return
+  end
   local mgr = findScript("menu_newsave")
   if mgr then mgr.press(params.role) end
-end
-
-function hoverStart(node)
-  if el then
-    el.fillR, el.fillG, el.fillB, el.fillA = 0.18, 0.32, 0.45, 0.95
-  end
-end
-
-function hoverEnd(node)
-  if el then
-    el.fillR, el.fillG, el.fillB, el.fillA = 0.10, 0.14, 0.18, 0.88
-  end
 end

@@ -1,0 +1,759 @@
+// SOLAR'S STYLE SHEET — how the runtime-built HUD panels are painted.
+//
+// These paint the screens `ui.make` describes from Lua and the scene panels
+// that name a style. A style only ever paints an element that asks for it.
+//
+// One style per element. Where a style names a property it wins over the
+// element's own value (engine style.rs, `apply_styles`); what it doesn't name is
+// left as authored. So a number that changes colour with its state gets a style
+// per state rather than a `textColor` — the style would paint over that.
+// Everything here resolves through solar.tokens.ron.
+//
+// Styles that never change state (text, frames, chips) SNAP: `duration: 0`.
+// The engine's default is a 90 ms ease, and a described element that reuses a
+// destroyed one's id eases in from that element's look — a goal line growing
+// out of a heading's type size. A thing with no hover has nothing to animate.
+{
+    // The card the objectives HUD sits in: dark glass with a hairline edge,
+    // lifted off the world by a shadow rather than by being opaque.
+    "hud/card": (
+        base: (
+            fill: "panel",
+            radius: "md",
+            border: 1.0,
+            border_color: "edge",
+            shadow: ( color: (0.0, 0.0, 0.0, 0.55), offset: (0.0, 8.0), blur: 24.0, spread: 1.0 ),
+        ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+
+    // A section label: small, wide-tracked, quiet. It names the card without
+    // competing with the line you're supposed to read.
+    "hud/label": (
+        base: ( text_color: "muted", text_size: "micro", case: Upper, tracking: 2.0 ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+
+    // THE line — the one thing the player is meant to do next.
+    "hud/task": (
+        base: ( text_color: "ink", text_size: "body" ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+
+    // The sentence under it that says how.
+    "hud/hint": (
+        base: ( text_color: "muted", text_size: "caption", line_height: 1.35 ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+
+    // Where the thing is: distance and bearing, in the base's own teal.
+    "hud/where": (
+        base: ( text_color: "accent", text_size: "caption", tracking: 0.6 ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+
+    // Contract goals: open in instrument blue, ticked in green.
+    "hud/goal": (
+        base: ( text_color: "signal", text_size: "caption" ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    "hud/goalDone": (
+        base: ( text_color: "done", text_size: "caption" ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+
+    // Money earned, money owed. Ink, not amber: amber is a warning here, and a
+    // refund is not one.
+    "hud/pay": (
+        base: ( text_color: "ink", text_size: "caption", tracking: 0.6 ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+
+    // The testing account's badge. A pill in a colour the game uses nowhere
+    // else, because the point of it is to be impossible to forget you left on.
+    "hud/debugChip": (
+        base: (
+            fill: (0.20, 0.02, 0.10, 0.85),
+            radius: "pill",
+            border: 1.0,
+            border_color: "debug",
+            text_color: "debug",
+            text_size: "micro",
+            case: Upper,
+            tracking: 2.0,
+            pad: "sm",
+        ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    "hud/debugChipText": (
+        base: ( text_color: "debug", text_size: "micro", case: Upper, tracking: 2.0 ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    "hud/debugKeys": (
+        base: ( text_color: (1.0, 0.36, 0.66, 0.62), text_size: "micro", line_height: 1.5 ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+
+    // ── PANELS ───────────────────────────────────────────────────────────────
+    // The screens you open and stand at: the suit pack, the ops board, the
+    // device console. They used to be fixed rows authored into the scene with
+    // their colours written inline and their hover states written in Lua, one
+    // script per row. They are described from data now, and this is where they
+    // get their look.
+
+    // The frame. Same glass as the objectives card so the game reads as one
+    // thing, and the same rule: lifted off the world by a shadow rather than by
+    // being opaque, because you are meant to still see where you're standing.
+    "panel/frame": (
+        base: (
+            fill: "panel",
+            radius: "md",
+            border: 1.0,
+            border_color: "edge",
+            shadow: ( color: (0.0, 0.0, 0.0, 0.6), offset: (0.0, 10.0), blur: 26.0, spread: 2.0 ),
+        ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+
+    // The panel's name and whatever it wants to say about itself in one breath
+    // — a balance, a mass, what the ground here is made of.
+    "panel/title": (
+        base: ( text_color: "accent", text_size: "caption", line_height: 1.4 ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+
+    // A row you can click.
+    //
+    // NOTE: no `text_color` here, deliberately. The rows tint themselves by
+    // material tier and by whether a contract is affordable, and a style that
+    // named the colour would overwrite that silently, every frame, forever
+    // (docs/ui-styles.md — the style wins wherever it speaks).
+    "panel/row": (
+        base: (
+            fill: (0.06, 0.10, 0.13, 0.72),
+            radius: "sm",
+            border: 1.0,
+            border_color: (0.28, 0.86, 0.74, 0.22),
+            text_size: "caption",
+            pad: "sm",
+        ),
+        hover:    ( fill: (0.10, 0.18, 0.22, 0.92), border_color: (0.28, 0.86, 0.74, 0.7) ),
+        pressed:  ( scale: (0.995, 0.96) ),
+        focus:    ( border: 2.0, border_color: "accent" ),
+        disabled: ( opacity: 0.4 ),
+        transition: ( duration: 0.1, ease: OutCubic ),
+    ),
+
+    // The row that is already yours — the contract on the books, the tool in
+    // your hand. Filled rather than outlined, so "current" is legible at a
+    // glance instead of being a shade of the same thing.
+    "panel/rowActive": (
+        base: (
+            fill: (0.06, 0.24, 0.20, 0.92),
+            radius: "sm",
+            border: 1.2,
+            border_color: "accent",
+            text_size: "caption",
+            pad: "sm",
+        ),
+        hover:   ( fill: (0.09, 0.32, 0.26, 0.96) ),
+        pressed: ( scale: (0.995, 0.96) ),
+        focus:   ( border: 2.0, border_color: "ink" ),
+        transition: ( duration: 0.1, ease: OutCubic ),
+    ),
+
+    // The panel's one primary action ("transfer everything", "sign it").
+    "panel/action": (
+        base: (
+            fill: (0.10, 0.30, 0.26, 0.94),
+            radius: "sm",
+            border: 1.2,
+            border_color: (0.28, 0.86, 0.74, 0.85),
+            text_color: "accent",
+            text_size: "caption",
+            case: Upper,
+            tracking: 1.2,
+            pad: "sm",
+        ),
+        hover:    ( fill: (0.14, 0.40, 0.34, 0.98), glow: ( color: "accent", radius: 14.0 ) ),
+        pressed:  ( scale: (0.98, 0.94) ),
+        focus:    ( border: 2.0, border_color: "ink" ),
+        disabled: ( opacity: 0.35 ),
+        transition: ( duration: 0.09, ease: OutCubic ),
+    ),
+
+    // The line along the bottom that says what just happened, or what to do.
+    "panel/hint": (
+        base: ( text_color: "muted", text_size: "micro", line_height: 1.4 ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+
+    // The same line when it is reporting something that did NOT work — a hold
+    // that was full, a contract you can't afford. Warm, never red: nothing here
+    // is a failure, it just didn't fit.
+    "panel/hintWarn": (
+        base: ( text_color: "warn", text_size: "micro", line_height: 1.4 ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+
+    // A column heading inside a panel.
+    "panel/label": (
+        base: ( text_color: "muted", text_size: "micro", case: Upper, tracking: 2.0 ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+
+    // ── MAIN MENU ────────────────────────────────────────────────────────────
+    // The title screen's cards: the same teal-edged glass as the HUD, a
+    // larger radius because they float alone on the star field.
+    "menu/card": (
+        base: (
+            fill: (0.030, 0.055, 0.080, 0.90),
+            radius: "lg",
+            border: 1.2,
+            border_color: (0.28, 0.86, 0.74, 0.40),
+            shadow: ( color: (0.0, 0.0, 0.0, 0.6), offset: (0.0, 12.0), blur: 30.0, spread: 2.0 ),
+        ),
+    ),
+
+    // A save slot. No text colour: its labels are children that colour
+    // themselves (tag muted, name ink, action teal).
+    "menu/slot": (
+        base: (
+            fill: (0.05, 0.09, 0.12, 0.85),
+            radius: "md",
+            border: 1.0,
+            border_color: (0.28, 0.86, 0.74, 0.22),
+        ),
+        hover:   ( fill: (0.07, 0.17, 0.19, 0.95), border_color: (0.28, 0.86, 0.74, 0.8), glow: ( color: (0.28, 0.86, 0.74, 0.25), radius: 12.0 ) ),
+        pressed: ( scale: (0.99, 0.96) ),
+        focus:   ( border: 2.0, border_color: "accent" ),
+        transition: ( duration: 0.1, ease: OutCubic ),
+    ),
+
+    // The ✕ beside an occupied slot. `selected` is its armed ("sure?") state,
+    // set by menu_delete.lua for the three seconds the confirm stays open.
+    "menu/delete": (
+        base: (
+            fill: (0.09, 0.05, 0.06, 0.80),
+            radius: "md",
+            border: 1.0,
+            border_color: (1.0, 0.42, 0.36, 0.35),
+            text_color: (1.0, 0.55, 0.50, 1.0),
+        ),
+        hover:    ( fill: (0.28, 0.08, 0.08, 0.95), border_color: "danger" ),
+        pressed:  ( scale: (0.96, 0.96) ),
+        selected: ( fill: (0.55, 0.10, 0.09, 0.97), border_color: "danger", text_color: "ink" ),
+        transition: ( duration: 0.1, ease: OutCubic ),
+    ),
+
+    // The one primary action on a menu page (CREATE GALAXY).
+    "menu/primary": (
+        base: (
+            fill: (0.10, 0.30, 0.26, 0.94),
+            radius: "md",
+            border: 1.2,
+            border_color: (0.28, 0.86, 0.74, 0.85),
+            text_color: "accent",
+            tracking: 3.0,
+        ),
+        hover:   ( fill: (0.14, 0.40, 0.34, 0.98), text_color: "ink", glow: ( color: "accent", radius: 16.0 ) ),
+        pressed: ( scale: (0.98, 0.94) ),
+        focus:   ( border: 2.0, border_color: "ink" ),
+        transition: ( duration: 0.09, ease: OutCubic ),
+    ),
+
+    // Everything that backs out or leaves (CANCEL, QUIT).
+    "menu/secondary": (
+        base: (
+            fill: (0.03, 0.06, 0.08, 0.80),
+            radius: "md",
+            border: 1.0,
+            border_color: (0.46, 0.60, 0.70, 0.35),
+            text_color: "muted",
+            tracking: 3.0,
+        ),
+        hover:   ( fill: (0.06, 0.12, 0.15, 0.92), border_color: (0.28, 0.86, 0.74, 0.6), text_color: "ink" ),
+        pressed: ( scale: (0.98, 0.94) ),
+        focus:   ( border: 2.0, border_color: "accent" ),
+        transition: ( duration: 0.09, ease: OutCubic ),
+    ),
+
+    // A value you type into (the galaxy seed): sunken, not raised.
+    "menu/field": (
+        base: (
+            fill: "sunken",
+            radius: "md",
+            border: 1.0,
+            border_color: (0.28, 0.86, 0.74, 0.35),
+            text_color: "ink",
+        ),
+        hover: ( border_color: (0.28, 0.86, 0.74, 0.8) ),
+        focus: ( border: 2.0, border_color: "accent" ),
+        transition: ( duration: 0.1, ease: OutCubic ),
+    ),
+
+    // ── HUD PIECES ───────────────────────────────────────────────────────────
+    // The small always-on readouts: the status chips top-left, the tool
+    // hotbar bottom-centre, the walk-up prompt. Same glass as the cards, sized
+    // to what they say rather than stretched across the screen.
+
+    // One readout: a caption label and its value, on a dark chip.
+    "hud/chip": (
+        base: (
+            fill: (0.025, 0.05, 0.075, 0.86),
+            radius: "sm",
+            border: 1.0,
+            border_color: "rule",
+            shadow: ( color: (0.0, 0.0, 0.0, 0.45), offset: (0.0, 4.0), blur: 12.0, spread: 0.0 ),
+            pad: "sm",
+        ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    // The same chip when it is reporting something you need to act on.
+    "hud/chipWarn": (
+        base: (
+            fill: (0.16, 0.09, 0.03, 0.90),
+            radius: "sm",
+            border: 1.2,
+            border_color: "warn",
+            shadow: ( color: (0.0, 0.0, 0.0, 0.45), offset: (0.0, 4.0), blur: 12.0, spread: 0.0 ),
+            pad: "sm",
+        ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    "hud/chipLabel": (
+        base: ( text_color: "muted", text_size: "micro", case: Upper, tracking: 1.5 ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    "hud/chipValue": (
+        base: ( text_color: "ink", text_size: "caption", tracking: 0.3 ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    "hud/chipWarnText": (
+        base: ( text_color: "warn", text_size: "caption", tracking: 0.3 ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+
+    // A key, drawn as a key: the one thing on a hotbar or a prompt you are
+    // meant to press.
+    "hud/key": (
+        base: (
+            fill: (0.08, 0.16, 0.18, 0.95),
+            radius: "sm",
+            border: 1.0,
+            border_color: (0.28, 0.86, 0.74, 0.55),
+            text_color: "accent",
+            text_size: "caption",
+            tracking: 0.4,
+        ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    // The key of the tool in your hand: a bright numeral on a dark key with an
+    // accent rim. Dark text on the accent fill was the first try; at this size
+    // it anti-aliases into the fill and the number all but vanishes.
+    "hud/keyActive": (
+        base: (
+            fill: "space",
+            radius: "sm",
+            border: 1.6,
+            border_color: "accent",
+            text_color: (1.0, 1.0, 1.0, 1.0),
+            text_size: "caption",
+            tracking: 0.4,
+        ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+
+    // A hotbar slot. The one in your hand is lit; the others are there to be
+    // found, which is why they are shown at all.
+    "hud/slot": (
+        base: (
+            fill: (0.025, 0.05, 0.075, 0.82),
+            radius: "sm",
+            border: 1.0,
+            border_color: "rule",
+            text_color: "soft",
+            text_size: "caption",
+            pad: "sm",
+        ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    "hud/slotActive": (
+        base: (
+            fill: (0.05, 0.20, 0.17, 0.92),
+            radius: "sm",
+            border: 1.4,
+            border_color: "accent",
+            text_color: "ink",
+            text_size: "caption",
+            pad: "sm",
+            shadow: ( color: (0.0, 0.0, 0.0, 0.45), offset: (0.0, 4.0), blur: 12.0, spread: 0.0 ),
+        ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    // The line above the hotbar: the equipped tool's hint, what it is aimed
+    // at, or what just happened.
+    "hud/toolHint": (
+        base: (
+            fill: (0.025, 0.05, 0.075, 0.72),
+            radius: 13.0,
+            text_color: "soft",
+            text_size: "caption",
+            pad: "sm",
+        ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+
+    // The walk-up prompt ("Enter the Command Centre"), and the HUD's buttons.
+    "hud/prompt": (
+        base: (
+            fill: (0.03, 0.07, 0.09, 0.92),
+            radius: "sm",
+            border: 1.2,
+            border_color: "edge",
+            text_color: "ink",
+            text_size: "body",
+            shadow: ( color: (0.0, 0.0, 0.0, 0.5), offset: (0.0, 5.0), blur: 16.0, spread: 1.0 ),
+        ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    "hud/button": (
+        base: (
+            fill: (0.025, 0.05, 0.075, 0.86),
+            radius: "sm",
+            border: 1.0,
+            border_color: "rule",
+            text_color: "soft",
+            text_size: "micro",
+            tracking: 1.2,
+        ),
+        hover:   ( fill: (0.06, 0.16, 0.16, 0.94), border_color: "edge", text_color: "ink" ),
+        pressed: ( scale: (0.97, 0.94) ),
+        transition: ( duration: 0.1, ease: OutCubic ),
+    ),
+    // ── FLIGHT INSTRUMENTS ───────────────────────────────────────────────────
+    // The cockpit: the instrument console along the bottom, the orbit strip
+    // and annunciators along the top, fuel and power under the menu button,
+    // the stage stack bottom-right (scripts/flight_hud.lua), plus the device
+    // console and the map's text block.
+    //
+    // One plate, one hairline, one accent. Numbers are set in the mono face so
+    // they hold still while they change; labels are small tracked capitals so
+    // they read as engraving on the panel rather than as more data.
+
+    // The plate every flight instrument is mounted on.
+    "hud/instrument": (
+        base: (
+            fill: "glass",
+            radius: 7.0,
+            border: 1.0,
+            border_color: "edge",
+            shadow: ( color: (0.0, 0.0, 0.0, 0.5), offset: (0.0, 6.0), blur: 18.0, spread: 0.0 ),
+        ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    // Running text on a plate: the map's orbit and encounter readout.
+    "hud/readout": (
+        base: ( text_color: "soft", text_size: "caption", line_height: 1.35 ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    // The engraving: what a number is.
+    "hud/micro": (
+        base: ( text_color: "muted", text_size: 10.0, case: Upper, tracking: 1.4 ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    // Numbers, small, medium and large.
+    "hud/value": (
+        base: ( text_color: "ink", text_size: "caption", font: "mono" ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    // The same number when it is the one that's active, a caution or a warning.
+    "hud/valueAccent": (
+        base: ( text_color: "accent", text_size: "caption", font: "mono" ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    "hud/valueWarn": (
+        base: ( text_color: "warn", text_size: "caption", font: "mono" ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    "hud/valueDanger": (
+        base: ( text_color: "danger", text_size: "caption", font: "mono" ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    "hud/valueDim": (
+        base: ( text_color: "muted", text_size: "caption", font: "mono" ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    // Small print in numbers: tape scales, a stage's thrust.
+    "hud/valueMuted": (
+        base: ( text_color: "muted", text_size: 10.0, font: "mono" ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    "hud/valueLg": (
+        base: ( text_color: "ink", text_size: "readout", font: "mono" ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    // The value window in the middle of a tape, and the heading box on top of
+    // the ball: the numbers you actually fly by, so they get the bright edge.
+    "hud/window": (
+        base: (
+            fill: (0.01, 0.015, 0.022, 0.98),
+            radius: 4.0,
+            border: 1.2,
+            border_color: "accent",
+            text_color: "ink",
+            text_size: 17.0,
+            font: "mono",
+        ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    // The navball's rim.
+    "hud/bezel": (
+        base: (
+            fill: (0.005, 0.008, 0.012, 1.0),
+            radius: "pill",
+            border: 2.0,
+            border_color: (0.62, 0.74, 0.84, 0.30),
+            shadow: ( color: (0.0, 0.0, 0.0, 0.55), offset: (0.0, 4.0), blur: 14.0, spread: 0.0 ),
+        ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    // A meter's empty channel (throttle, vertical speed, fuel, charge).
+    "hud/track": (
+        base: (
+            fill: (0.0, 0.0, 0.0, 0.5),
+            radius: 2.0,
+            border: 1.0,
+            border_color: "rule",
+        ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+
+    // An autopilot hold. `selected` is the hold the craft is flying.
+    "hud/sas": (
+        base: (
+            fill: (0.045, 0.065, 0.085, 0.95),
+            radius: 4.0,
+            border: 1.0,
+            border_color: "rule",
+            text_color: "soft",
+            text_size: 15.0,
+        ),
+        hover:    ( fill: (0.07, 0.11, 0.14, 1.0), border_color: "edge", text_color: "ink" ),
+        pressed:  ( scale: (0.94, 0.94) ),
+        selected: ( fill: "accent", border_color: "accent", text_color: (0.02, 0.07, 0.07, 1.0) ),
+        disabled: ( opacity: 0.35 ),
+        transition: ( duration: 0.08, ease: OutCubic ),
+    ),
+    // The same button carrying a word (RCS, SAS) instead of a symbol.
+    "hud/sasWord": (
+        base: (
+            fill: (0.045, 0.065, 0.085, 0.95),
+            radius: 4.0,
+            border: 1.0,
+            border_color: "rule",
+            text_color: "muted",
+            text_size: 10.0,
+            tracking: 1.2,
+        ),
+        hover:    ( fill: (0.07, 0.11, 0.14, 1.0), border_color: "edge", text_color: "ink" ),
+        pressed:  ( scale: (0.94, 0.94) ),
+        selected: ( fill: (0.04, 0.20, 0.17, 0.98), border_color: "accent", text_color: "accent" ),
+        disabled: ( opacity: 0.35 ),
+        transition: ( duration: 0.08, ease: OutCubic ),
+    ),
+
+    // Annunciators: a fixed row of lamps, dark until something is true. The
+    // lamp that lights is always in the same place, so you learn where to look.
+    "hud/lamp": (
+        base: (
+            fill: (0.02, 0.03, 0.045, 0.80),
+            radius: 3.0,
+            border: 1.0,
+            border_color: "rule",
+            text_color: (0.46, 0.60, 0.70, 0.45),
+            text_size: 9.5,
+            tracking: 1.0,
+        ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    "hud/lampOn": (
+        base: (
+            fill: (0.03, 0.17, 0.15, 0.95),
+            radius: 3.0,
+            border: 1.0,
+            border_color: (0.28, 0.86, 0.74, 0.75),
+            text_color: "accent",
+            text_size: 9.5,
+            tracking: 1.0,
+        ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    "hud/lampWarn": (
+        base: (
+            fill: (0.22, 0.13, 0.03, 0.96),
+            radius: 3.0,
+            border: 1.0,
+            border_color: "warn",
+            text_color: "warn",
+            text_size: 9.5,
+            tracking: 1.0,
+        ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    "hud/lampDanger": (
+        base: (
+            fill: (0.30, 0.05, 0.04, 0.97),
+            radius: 3.0,
+            border: 1.0,
+            border_color: "danger",
+            text_color: (1.0, 0.62, 0.56, 1.0),
+            text_size: 9.5,
+            tracking: 1.0,
+        ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+
+    // One staging event. The NEXT one — what SPACE fires — wears the accent.
+    "hud/stage": (
+        base: (
+            fill: "glass",
+            radius: 5.0,
+            border: 1.0,
+            border_color: "edge",
+        ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    "hud/stageNext": (
+        base: (
+            fill: (0.02, 0.09, 0.085, 0.95),
+            radius: 5.0,
+            border: 1.4,
+            border_color: "accent",
+            shadow: ( color: (0.0, 0.0, 0.0, 0.5), offset: (0.0, 4.0), blur: 12.0, spread: 0.0 ),
+        ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    "hud/stageTitle": (
+        base: ( text_color: "ink", text_size: 12.0, case: Upper, tracking: 0.6 ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    "hud/stageTitleNext": (
+        base: ( text_color: "accent", text_size: 12.0, case: Upper, tracking: 0.6 ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+
+    // The warp indicator on the console's top edge.
+    "hud/warp": (
+        base: (
+            fill: "glass",
+            radius: "pill",
+            border: 1.0,
+            border_color: "edge",
+        ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+
+    // What a control is and which key does the same thing, on hover.
+    "hud/tooltip": (
+        base: (
+            fill: (0.01, 0.015, 0.022, 0.97),
+            radius: 4.0,
+            border: 1.0,
+            border_color: "edge",
+            text_color: "soft",
+            text_size: 12.0,
+            shadow: ( color: (0.0, 0.0, 0.0, 0.5), offset: (0.0, 4.0), blur: 10.0, spread: 0.0 ),
+        ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+
+    // A short-lived notice ("graphics lowered to Medium").
+    "hud/toast": (
+        base: (
+            fill: (0.04, 0.07, 0.09, 0.94),
+            radius: "md",
+            border: 1.2,
+            border_color: "warn",
+            shadow: ( color: (0.0, 0.0, 0.0, 0.6), offset: (0.0, 8.0), blur: 22.0, spread: 1.0 ),
+        ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+
+    // ── PANEL TYPE ───────────────────────────────────────────────────────────
+
+    // A panel's name: the one line on it set in capitals.
+    "panel/heading": (
+        base: ( text_color: "accent", text_size: "body", case: Upper, tracking: 2.0 ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    // Running text inside a panel.
+    "panel/body": (
+        base: ( text_color: "soft", text_size: "caption", line_height: 1.35 ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    // A cell inside a row. Deliberately no colour, so it inherits the row's
+    // (tier tints, affordability) — see "panel/row".
+    "panel/cell": (
+        base: ( text_size: "caption" ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    "panel/cellMuted": (
+        base: ( text_color: "muted", text_size: "caption" ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    "panel/cellStrong": (
+        base: ( text_color: "ink", text_size: "caption" ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    // A number worth reading at a glance: a balance, a reward.
+    "panel/figure": (
+        base: ( text_color: "ink", text_size: "title", tracking: 0.5 ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    // A key, named in text (the controls page's left column).
+    "panel/keys": (
+        base: ( text_color: "accent", text_size: "caption", tracking: 0.6 ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    // A thin rule between sections.
+    "panel/rule": (
+        base: ( fill: "rule" ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    // The quiet way out: Close, Back.
+    "panel/secondary": (
+        base: (
+            fill: (0.05, 0.08, 0.11, 0.80),
+            radius: "sm",
+            border: 1.0,
+            border_color: (0.46, 0.60, 0.70, 0.40),
+            text_color: "soft",
+            text_size: "caption",
+            pad: "sm",
+        ),
+        hover:    ( fill: (0.09, 0.13, 0.17, 0.92), border_color: (0.46, 0.60, 0.70, 0.75), text_color: "ink" ),
+        pressed:  ( scale: (0.98, 0.94) ),
+        focus:    ( border: 2.0, border_color: "accent" ),
+        disabled: ( opacity: 0.35 ),
+        transition: ( duration: 0.09, ease: OutCubic ),
+    ),
+    // One option of a segmented choice (graphics quality). `selected` is the
+    // one in force.
+    "panel/choice": (
+        base: (
+            fill: (0.05, 0.08, 0.11, 0.80),
+            radius: "sm",
+            border: 1.0,
+            border_color: "rule",
+            text_color: "soft",
+            text_size: "caption",
+            pad: "sm",
+        ),
+        hover:    ( fill: (0.09, 0.16, 0.18, 0.92), border_color: "edge", text_color: "ink" ),
+        pressed:  ( scale: (0.97, 0.94) ),
+        focus:    ( border: 2.0, border_color: "accent" ),
+        selected: ( fill: (0.06, 0.26, 0.21, 0.95), border: 1.4, border_color: "accent", text_color: "ink" ),
+        transition: ( duration: 0.1, ease: OutCubic ),
+    ),
+}

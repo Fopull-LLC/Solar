@@ -1,0 +1,22 @@
+// SEA ICE — a frozen world's sea (prefabs/SeaIce.prefab.ron).
+//
+// Pale, scratched, nearly opaque, with a cold sheen at grazing angles. Its own
+// shader rather than a branch of ocean.flsl: FLSL has no branches, so a frozen
+// switch there made every liquid sea pay for the ice noise too.
+shader sea_ice {
+  stage fragment
+  blend alpha
+  uniform iceColor: color = #B6D5E6
+  uniform frostColor: color = #E4F0F7
+  uniform skyColor: color = #9CC4E4
+
+  let up = normalize(objectPos)
+  let grain = fbm(objectPos * 0.35, octaves: 3) * 0.5 + 0.5
+  let cracks = smoothstep(0.02, 0.0, abs(noise(objectPos * 0.9))) * 0.35
+  let albedo = mix(iceColor.rgb, frostColor.rgb, grain) * (1 - cracks)
+  let lit = litSurface(albedo)
+  let fres = pow(1 - saturate(dot(up, viewDir)), 4)
+  let day = saturate(dot(lightDir, up) * 3 + 0.25)
+  let col = mix(lit, skyColor.rgb * (0.1 + 0.9 * day), fres * 0.35)
+  output color = vec4(col, 0.97 * instanceColor.a)
+}
