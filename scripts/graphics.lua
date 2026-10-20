@@ -35,9 +35,20 @@
 --   gx.level()           the current level's name
 --   gx.set("High")       apply + remember
 --   gx.describe(name)    one line for a settings screen
+--   gx.setDynamic(on)    engine dynamic resolution, capped at the level's scale
 --   gx.volumetric        read by atmosphere.lua: may it march volumetric fog?
 --   gx.shafts            … and the sun shafts through it?
 --   gx.notice            a sentence to show the player, or nil (+ gx.noticeAt)
+--   gx.shadowScale       the world-size factor on the level's shadow distance
+--
+-- SHADOW DISTANCE AND WORLD SIZE. The levels' distances were set on 250–400 m
+-- worlds. A scale-3 world is 600–950 m across: from a hill or low flight the
+-- ground in view runs out to many hundreds of metres, and past the shadow
+-- distance it went flat (no relief shading on the far ridges, which is half
+-- of what reads as haze). The distance is the level's, times the radius of
+-- the world under the camera over 320 m (never less than 1, at most 2.6), so
+-- a small world keeps exactly the distances that were measured above. With
+-- the shadow MAP (system.ron) a longer reach costs map texels, not frame time.
 
 LEVELS = { "Low", "Medium", "High", "Ultra" }
 
@@ -69,6 +80,8 @@ notice, noticeAt = nil, -1
 
 local current = nil
 local lit = nil
+shadowScale = 1.0
+local scale_t = -100
 local slow_for, lowered = 0, false
 local ema = nil            -- smoothed frame time, seconds
 local map_ref, bf_ref = nil, nil
@@ -93,6 +106,24 @@ local function with_settings(fn)
   return r
 end
 
+-- Dynamic resolution (the Settings screen's switch, settings.lua): the engine
+-- picks the render scale per frame from the GPU time. The level's own scale is
+-- its ceiling, so High never renders above native and Low never above 0.6;
+-- the floor is half of that. `app.setRenderScale` turns it off (a scale chosen
+-- outright is the game's decision), so it is switched back on after every
+-- apply.
+local dynamic = false
+
+local function apply_dynamic(p)
+  if not app.setDynamicResolution then return end
+  if dynamic then
+    pcall(app.setDynamicResolution, { min = math.max(0.25, p.scale * 0.5), max = p.scale })
+  else
+    pcall(app.setDynamicResolution, false)
+    if app.setRenderScale then app.setRenderScale(p.scale) end
+  end
+end
+
 local function apply(name)
   local p = PRESETS[name] or PRESETS[DEFAULT]
   current = PRESETS[name] and name or DEFAULT
@@ -101,14 +132,41 @@ local function apply(name)
   -- The upscale from a lowered scale sharpens edges (0.102); a bigger stretch
   -- wants a harder hand, and at 1.0 there is nothing to sharpen.
   if app.setRenderSharpness then app.setRenderSharpness(p.sharpen or 0.4) end
+  if dynamic then apply_dynamic(p) end
   local l = light()
   if l then
     l.shadows = p.shadows
-    l.shadowDistance = p.shadowDistance
+    l.shadowDistance = p.shadowDistance * shadowScale
   end
 end
 
+-- The world under the camera: its radius sets `shadowScale` (see the header).
+-- Once a second; nil-safe off every world.
+local cam_node = nil
+local function world_scale()
+  if time - scale_t < 1.0 then return end
+  scale_t = time
+  if not (cam_node and cam_node.valid) then cam_node = find and find("Camera 1") or nil end
+  local k = 1.0
+  if cam_node and cam_node.valid and space and space.dominant then
+    local d = space.dominant(cam_node.x, cam_node.y, cam_node.z)
+    local b = d and space.body(d)
+    if b and (b.soi or 0) >= 0 and b.radius then
+      k = math.max(1.0, math.min(2.6, b.radius / 320))
+    end
+  end
+  shadowScale = k
+end
+
 function level() return current or DEFAULT end
+
+-- Called by settings.lua when the player flips the switch (and at startup).
+function setDynamic(on)
+  on = on == true
+  if on == dynamic then return end
+  dynamic = on
+  apply_dynamic(PRESETS[level()] or PRESETS[DEFAULT])
+end
 
 function describe(name) return (PRESETS[name] or PRESETS[DEFAULT]).text end
 
@@ -121,7 +179,11 @@ function set(name)
 end
 
 function start(node)
-  local saved = with_settings(function() return save.get("gfx_level", nil) end)
+  local got = with_settings(function()
+    return { level = save.get("gfx_level", nil), dyn = save.get("opt_dynamic_res", false) }
+  end) or {}
+  local saved = got.level
+  dynamic = got.dyn == true
   pick_default = saved == nil
   apply(saved or DEFAULT)
 end
@@ -139,11 +201,13 @@ end
 function update(node, dt)
   -- Scene nodes can be rebuilt under us (a scene load keeps this script only
   -- if it rides the swap), so the light is re-asserted rather than trusted.
+  world_scale()
   local l = light()
   local p = PRESETS[level()]
-  if l and (l.shadowDistance ~= p.shadowDistance or l.shadows ~= p.shadows) then
+  local want = p.shadowDistance * shadowScale
+  if l and (math.abs((l.shadowDistance or 0) - want) > 0.5 or l.shadows ~= p.shadows) then
     l.shadows = p.shadows
-    l.shadowDistance = p.shadowDistance
+    l.shadowDistance = want
   end
 
   choose_default()
