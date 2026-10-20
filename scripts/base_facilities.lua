@@ -319,6 +319,20 @@ function resite()
   log("base: colony cleared — re-siting where you stand")
 end
 
+-- WHICH WORLDS HAVE A TRACKING STATION. A craft at rest on such a world can be
+-- RECOVERED from the Tracking Station screen, wherever on it it came down
+-- (scripts/tracking_station.lua). Today that is the home world only: the
+-- colony's own dish. Building a station on another world is meant to add that
+-- world here — set `otherStations[bodyName] = true` (and keep it in the save)
+-- and recovery opens up there with no change to the screen.
+otherStations = {}
+
+function trackingStationOn(body)
+  if not body then return false end
+  if sited and baseBody == body then return true end
+  return otherStations[body] == true
+end
+
 local function finish_siting()
   sited = true
   -- How far you are from your own front door, said out loud: a base that is

@@ -33,7 +33,7 @@ local behind = { id = "behind", x = 0, y = -600, z = 0, any = 100 }
 local silent = { id = "s", x = 0, y = 600, z = 0, any = 0, silent = "no power for its radio" }
 local st = E.solveNetwork({ home, far, behind, silent }, { world })
 check(not st.far.connected and st.far.why == "out of range: 31 km > 6.3 km", "out of reach says how far: " .. tostring(st.far.why))
-check(st.behind.why == "blocked by Vever", "behind a world says which: " .. tostring(st.behind.why))
+check(tostring(st.behind.why):find("^blocked by Vever") ~= nil, "behind a world says which: " .. tostring(st.behind.why))
 check(st.s.why == "no power for its radio", "a dead radio says so: " .. tostring(st.s.why))
 
 -- ── flight_ops.fleetList on saved records ───────────────────────────────────

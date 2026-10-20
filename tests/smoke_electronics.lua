@@ -234,6 +234,54 @@ local nextdoor = { id = "N", x = 30, y = 99, z = 0, any = 2000 }
 local st6 = E.solveNetwork({ home, nextdoor }, { world })
 check(st6.N.connected, "a craft landed next to the station has a link")
 
+-- ── the home world's horizon (scale 3: Vever, r 807, the base in a basin) ───
+-- A world with craft and a station ON its ground: the occluder sits under the
+-- lower end, less the grazing allowance, so near ground links and a ray that
+-- would run through the planet's body does not.
+do
+  local R = 807.6
+  local vever = { name = "Vever", x = 0, y = 0, z = 0, radius = R, mu = 4.48e6, soi = 9691 }
+  local rs = R - 21.8                                  -- the dish stands in a 26 m basin
+  local function ground(arc, r) local a = arc / rs; return r * math.sin(a), r * math.cos(a) end
+  local st = { id = "home", x = 0, y = rs, z = 0, home = true, power = E.COMMS.station }
+  check(near(E.grazeOf(R), 8.076, 1e-3), "grazing on Vever is 1 % of its radius")
+  check(E.grazeOf(100) == E.COMMS.grazeMin and E.grazeOf(1e6) == E.COMMS.grazeMax, "grazing is clamped")
+  local function solo(nd) return E.solveNetwork({ st, nd }, { vever })[nd.id] end
+  local px, py = ground(14, rs + 0.5)
+  local pad = solo({ id = "pad", x = px, y = py, z = 0, any = 100 })
+  check(pad.connected, "a probe core on the pad beside the base has a link")
+  local qx, qy = ground(200, rs)
+  local r200 = solo({ id = "r200", x = qx, y = qy, z = 0, any = 100 })
+  check(r200.connected, "a probe rover 200 m of ground away is in sight (the line dips 6 m: a grazing link)")
+  local wx, wy = ground(300, rs)
+  check(not solo({ id = "r300", x = wx, y = wy, z = 0, any = 100 }).connected,
+    "...300 m away the line runs 14 m under the ground: blocked")
+  -- the old rule (2 m under the lower end) cut that rover off
+  check(E.segmentBlocked(qx, qy, 0, 0, rs, 0, { vever }, E.COMMS.occlude) == "Vever",
+    "...where a 2 m allowance called it blocked")
+  local fx, fy = ground(1110, rs)
+  local far = solo({ id = "far", x = fx, y = fy, z = 0, any = 100 })
+  check(not far.connected, "a rover 1.1 km round the world (79°) is behind the planet")
+  check(far.why and far.why:find("below the horizon", 1, true) and far.why:find("1.1 km", 1, true),
+    "...and says the station is below its horizon, how far round: " .. tostring(far.why))
+  -- orbit 300 m up: the geometric horizon from the dish is acos(rs / (R + h))
+  local h = 300
+  local thh = math.acos(rs / (R + h))
+  local function orb(f) local a = thh * f; return (R + h) * math.sin(a), (R + h) * math.cos(a) end
+  local ax, ay = orb(0.9)
+  check(solo({ id = "up", x = ax, y = ay, z = 0, any = 2250 }).connected, "an orbiter above the base's horizon is linked")
+  local bx, by = orb(1.5)
+  local dn = solo({ id = "dn", x = bx, y = by, z = 0, any = 2250 })
+  check(not dn.connected and dn.why:find("blocked by Vever", 1, true), "an orbiter well below the horizon is blocked")
+  local cx, cy = orb(-1.6)
+  check(not solo({ id = "dn2", x = cx, y = cy, z = 0, any = 2250 }).connected, "...on either side")
+  -- the allowance is small: just under the horizon passes, far under doesn't
+  local tx, ty = orb(1.05)
+  check(solo({ id = "t", x = tx, y = ty, z = 0, any = 2250 }).connected, "5 % past the geometric horizon still grazes")
+  -- sunlight keeps its 2 m (a shadow is a shadow): same rover-to-dish line
+  check(E.segmentBlocked(qx, qy, 0, 0, rs, 0, { vever }, 1.0) == "Vever", "segmentBlocked without graze stays strict")
+end
+
 -- summary: what the builder quotes
 local sm = E.summary({ core, whip, { uid = 30, mods = { { type = "battery", ec = 100 } } },
   { uid = 31, mods = { { type = "solar", gen = 1.0 }, { type = "deploy", anim = "solar" } } } })

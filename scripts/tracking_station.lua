@@ -16,7 +16,8 @@
 --   FLY ▸        take its controls. A probe is flown from here, over the comms
 --                network; a crewed craft gets the crew (free over a link, else a
 --                shuttle flies them out — flight_ops.takeControlOf)
---   RECOVER      a craft landed at home goes to the crane, refund and all
+--   RECOVER      a craft at rest anywhere on a world with a tracking station
+--                (today: home): crew home, refund scaled by distance, gone
 --   END FLIGHT   write a craft off (twice to confirm; never one the crew is in)
 --   RENAME       what the board, the map and the HUD call it
 --   MAP          open the orbit map on it
@@ -62,7 +63,256 @@ end
 function selectCraft(id) selected = id; armed_end = nil; renaming = nil end
 function selectedId() return selected end
 
-local function say(text) msg, msg_t = text or "", time end
+local msg_dur = 6.0
+local function say(text, dur) msg, msg_t, msg_dur = text or "", time, dur or 6.0 end
+
+-- ── RECOVERY ────────────────────────────────────────────────────────────────
+--
+-- Any craft at rest (landed or splashed down) on a world with a Tracking
+-- Station can be recovered from here, wherever on that world it is: the crew
+-- come home to the base, the hardware is refunded, the cargo goes to the
+-- warehouse, and the craft leaves the world and the save. Which worlds have a
+-- station is base_facilities.trackingStationOn (today: the home world).
+--
+-- It used to need the craft within 260 m of the base — the same reach as
+-- holding ENTER on landing — so anything that came down over the hill sat
+-- greyed out for good. Now distance only costs money, as in KSP: the refund is
+-- full near the base and falls off with the distance over the ground, down to
+-- RECOVER_MIN of it on the far side of the world.
+local RECOVER_NEAR = 260.0   -- m over the ground: still "at the base", full refund
+local RECOVER_MIN = 0.10     -- the share of the refund left at the antipode
+local RECOVER_RATE = 0.65    -- a pristine part's refund (vessel_controller's rate)
+last_recovery = nil          -- published: the summary of the last recovery
+
+-- The share of the refund paid for a craft `arc` metres over the ground from
+-- the base, on a world of radius `radius`. Pure (smoke-tested).
+function recoveryFactor(arc, radius)
+  if not arc or arc <= RECOVER_NEAR then return 1.0 end
+  local far = math.pi * (radius or 0)
+  if far <= RECOVER_NEAR then return 1.0 end
+  local k = (arc - RECOVER_NEAR) / (far - RECOVER_NEAR)
+  return math.max(RECOVER_MIN, 1.0 - (1.0 - RECOVER_MIN) * math.min(1.0, k))
+end
+
+-- Can this board entry be recovered? Pure: `station_on(body)` answers whether
+-- that world has a tracking station. Returns (ok, why-not).
+--   e.rest      landed or splashed, and stopped
+--   e.crewAway  the record says the crew is aboard but the craft isn't back in
+--               the scene yet (they'd be recovered from nowhere)
+function recoverRule(e, station_on)
+  if not e or e.fid == "crew" then return false, "nothing to recover" end
+  if not e.rest then
+    local s = e.status or "in flight"
+    if s == "landed" or s:match("^flying") then s = "in flight" end
+    return false, s .. " — only a craft at rest on the ground or in the water can be recovered"
+  end
+  if not (station_on and station_on(e.body)) then
+    return false, "not on a planet with a tracking station"
+  end
+  if e.crewAway then return false, "the crew is aboard and it's not back in the scene yet" end
+  return true, nil
+end
+
+local function body_rel(bname, x, y, z)
+  local b = bname and space.body(bname)
+  if not b then return nil end
+  return x - b.x, y - b.y, z - b.z, b
+end
+
+-- Is a live craft at rest? Landed (vessel_controller.parked: grounded and
+-- stopped) or afloat and stopped.
+local function live_rest(v)
+  if v.parked and v.parked() then return true end
+  local n = v.node
+  local info = assembly and assembly.info and assembly.info(n)
+  if not info then return false end
+  local vel = info.vel
+  local spd = math.sqrt(vel.x * vel.x + vel.y * vel.y + vel.z * vel.z)
+  if spd > 1.5 then return false end
+  -- Frozen by the distant-craft LOD, a craft never reports grounded: stopped,
+  -- with the ground right under its base, it is down.
+  local o = info.origin
+  local bname = o and space.dominant(o.x, o.y, o.z)
+  local b = bname and space.body(bname)
+  if o and b and spd < 0.2 and raycast then
+    local ux, uy, uz = o.x - b.x, o.y - b.y, o.z - b.z
+    local ul = math.sqrt(ux * ux + uy * uy + uz * uz)
+    if ul > 1e-3 then
+      ux, uy, uz = ux / ul, uy / ul, uz / ul
+      local h = raycast(o.x + ux, o.y + uy, o.z + uz, -ux, -uy, -uz, 3.0, n)
+      if h and h.distance <= 2.0 then return true end
+    end
+  end
+  if water and water.at and vec3 then
+    local w = water.at(vec3(n.x, n.y, n.z))
+    if w and (w.depth or 0) > 0 then return true end
+  end
+  return false
+end
+
+-- The board entry, with what recovery needs to know added: at rest, where.
+local function recover_view(e)
+  if not e or e.fid == "crew" then return e end
+  local fo = ref("flight_ops")
+  local v = fo and fo.liveOf and fo.liveOf(e.fid)
+  e.rest = e.landed == true
+  if v and v.node and v.node.valid then
+    if not e.rest then e.rest = live_rest(v) end
+  else
+    local f = save and save.get and save.get("fleet.craft")
+    local rec = type(f) == "table" and f[e.fid] or nil
+    if rec and rec.crew then e.crewAway = true end
+  end
+  return e
+end
+
+function recoverCheck(e)
+  local bf = ref("base_facilities")
+  return recoverRule(recover_view(e), function(body)
+    return bf ~= nil and bf.trackingStationOn ~= nil and bf.trackingStationOn(body)
+  end)
+end
+
+-- Where the craft is, body-relative, and how far that is over the ground from
+-- the base. nil, nil when there is no base on its world.
+local function ground_distance(e, v)
+  local bf = ref("base_facilities")
+  if not (bf and bf.sited and bf.baseBody == e.body) then return nil end
+  local bx, by, bz, b = body_rel(e.body, bf.baseX, bf.baseY, bf.baseZ)
+  if not bx then return nil end
+  local cx, cy, cz
+  if v and v.node and v.node.valid then
+    cx, cy, cz = body_rel(e.body, v.node.x, v.node.y, v.node.z)
+  else
+    local f = save.get("fleet.craft")
+    local rec = type(f) == "table" and f[e.fid] or nil
+    if rec then cx, cy, cz = rec.x, rec.y, rec.z end
+  end
+  if not cx then return nil end
+  local lb = math.sqrt(bx * bx + by * by + bz * bz)
+  local lc = math.sqrt(cx * cx + cy * cy + cz * cz)
+  if lb < 1e-6 or lc < 1e-6 then return nil end
+  local c = math.max(-1, math.min(1, (bx * cx + by * cy + bz * cz) / (lb * lc)))
+  return math.acos(c) * b.radius, b.radius
+end
+
+-- What the craft is worth back before distance: the controller's own figure
+-- for a live craft (damage counted), the parts' list price for a saved one.
+local function base_value(e, v)
+  if v and v.recoverValue then return v.recoverValue() end
+  local f = save.get("fleet.craft")
+  local rec = type(f) == "table" and f[e.fid] or nil
+  local sum = 0
+  for _, d in ipairs((rec and rec.parts) or {}) do sum = sum + (tonumber(d.cost) or 0) end
+  return math.floor(sum * RECOVER_RATE)
+end
+
+-- Where the crew is set down: a few metres short of the Tracking Station, on
+-- the ground (flight_ops' own END FLIGHT spot).
+local function crew_home()
+  local bf = ref("base_facilities")
+  if not (bf and bf.sited and bf.baseBody) then return nil end
+  local b = space.body(bf.baseBody)
+  if not b then return nil end
+  local tx, ty, tz = bf.baseX, bf.baseY, bf.baseZ
+  local dish = find("FacTracking") or find("FacCommand")
+  if dish then
+    local dx, dy, dz = dish.worldX, dish.worldY, dish.worldZ
+    if not dx then  -- (planet-parented: its own coords are body-relative)
+      dx, dy, dz = dish.x, dish.y, dish.z
+      local p, guard = dish.parent, 0
+      while p and guard < 8 do dx, dy, dz = dx + p.x, dy + p.y, dz + p.z; p, guard = p.parent, guard + 1 end
+    end
+    local vx, vy, vz = dx - tx, dy - ty, dz - tz
+    local l = math.sqrt(vx * vx + vy * vy + vz * vz)
+    if l > 11 then
+      local k = (l - 11) / l
+      tx, ty, tz = tx + vx * k, ty + vy * k, tz + vz * k
+    end
+  end
+  local ux, uy, uz = tx - b.x, ty - b.y, tz - b.z
+  local ul = math.sqrt(ux * ux + uy * uy + uz * uz)
+  if ul < 1e-3 then return tx, ty + 2.0, tz end
+  ux, uy, uz = ux / ul, uy / ul, uz / ul
+  local h = raycast and raycast(tx + ux * 60, ty + uy * 60, tz + uz * 60, -ux, -uy, -uz, 130.0)
+  if h then return h.x + ux * 1.6, h.y + uy * 1.6, h.z + uz * 1.6 end
+  return tx + ux * 1.6, ty + uy * 1.6, tz + uz * 1.6
+end
+
+local function fmt_km(m)
+  if m >= 1000 then return string.format("%.1f km", m / 1000) end
+  return string.format("%.0f m", m)
+end
+
+-- What a recovery would pay now: { value, factor, dist, near }.
+function recoverQuote(e)
+  local fo = ref("flight_ops")
+  local v = fo and fo.liveOf and fo.liveOf(e.fid)
+  if v and not (v.node and v.node.valid) then v = nil end
+  local arc, radius = ground_distance(e, v)
+  local k = recoveryFactor(arc, radius)
+  return { value = math.floor(base_value(e, v) * k + 0.5), factor = k, dist = arc or 0,
+           near = arc == nil or arc <= RECOVER_NEAR }
+end
+
+-- RECOVER: refund, crew home, cargo to the warehouse, craft gone from the world
+-- and the save. Returns (ok, summary-or-why).
+function recoverFleet(fid)
+  local fo, co = ref("flight_ops"), ref("company")
+  if not fo then return false, "no flight ops" end
+  local e
+  for _, x in ipairs(fo.fleetList()) do if x.fid == fid then e = x end end
+  if not e then return false, "no such craft" end
+  local ok, why = recoverCheck(e)
+  if not ok then return false, why end
+  local v = fo.liveOf and fo.liveOf(fid)
+  if v and not (v.node and v.node.valid) then v = nil end
+  local q = recoverQuote(e)
+  local arc, k, value = (not q.near) and q.dist or nil, q.factor, q.value
+  local name = e.name or "the craft"
+  local crew, cargo = false, 0
+  if v then
+    -- The crew come home to the base; whatever it carried goes to the warehouse.
+    if v.crewAboard and v.standDown then
+      local hx, hy, hz = crew_home()
+      if hx then v.standDown(v.node, hx, hy, hz, 0, 0, 0) else v.standDown(v.node) end
+      crew = true
+    end
+    local inv = ref("inventory")
+    if inv and v.holdId and inv.isEmpty and not inv.isEmpty(v.holdId) then
+      cargo = inv.transferAll(v.holdId, "base") or 0
+    end
+    if v.piloting and v.releaseControl then
+      v.releaseControl()
+      if v.controlFallback then v.controlFallback(v.node.id) end
+    end
+    if v.r2Cleanup then v.r2Cleanup() end
+  end
+  -- Off the board, out of the save, out of the world.
+  local gone, gwhy = fo.terminateFleet(fid)
+  if not gone then return false, gwhy end
+  if co and co.earn and value > 0 then
+    co.earn(value, string.format("recovered %s%s", name,
+      arc and arc > RECOVER_NEAR and string.format(" (%s from the base, %d%%)", fmt_km(arc), math.floor(k * 100 + 0.5)) or ""))
+  end
+  save.set("mission.recovered", true)
+  local fx = ref("sfx"); if fx and fx.flightEnded then fx.flightEnded("recover") end
+  local money = (co and co.money) and co.money(value) or ("$" .. value)
+  local parts = { string.format("Recovered %s: +%s", name, money) }
+  if arc and arc > RECOVER_NEAR then
+    parts[#parts + 1] = string.format("%d%% of its value, %s from the base", math.floor(k * 100 + 0.5), fmt_km(arc))
+  else
+    parts[#parts + 1] = "full value, at the base"
+  end
+  if crew then parts[#parts + 1] = "the crew are home" end
+  if cargo > 0 then parts[#parts + 1] = string.format("%d cargo unit(s) to the warehouse", cargo) end
+  local summary = table.concat(parts, " · ")
+  last_recovery = { name = name, value = value, factor = k, dist = arc, crew = crew, cargo = cargo,
+                    text = summary, t = time }
+  log(string.format("RECOVERED (tracking station) — %s  +$%d  (%.0f%% at %s)", name, value, k * 100,
+    arc and fmt_km(arc) or "?"))
+  return true, summary
+end
 
 -- ── formatting ──────────────────────────────────────────────────────────────
 
@@ -218,15 +468,21 @@ local function detail(e, fo, co)
   add(line("ctl", "Control", ctl, (e.probe and not e.control and not e.crew) and "panel/hintWarn" or nil))
   add({ "box", key = "rule", style = "panel/rule", w = "100%", h = 1 })
   -- actions
-  local fly_label, fly_ok = "Fly  ▸", true
+  local fly_label, fly_ok, fly_why = "Fly  ▸", true, nil
   if e.piloted then fly_label, fly_ok = "You're flying it", false
   elseif not e.live then fly_label, fly_ok = "Not back yet", false
   elseif e.pod and not e.crew and not e.probe and (e.fee or 0) > 0 then
     fly_label = string.format("Send the crew  ·  %s  ▸", money_of(co, e.fee))
+    if co and co.afford and not co.afford(e.fee) then
+      fly_ok = false
+      fly_why = string.format("The shuttle out to %s costs %s — more than the balance (%s). "
+        .. "Recover or sell something first, or walk there.", e.name, money_of(co, e.fee),
+        money_of(co, co.balance and co.balance() or 0))
+    end
   elseif e.pod and not e.crew and not e.probe then fly_label = "Send the crew  ▸"
   elseif not (e.probe or e.crew or e.pod) then fly_label, fly_ok = "Nothing aboard to fly", false end
   add({ "button", key = "fly", style = "panel/action", w = "100%", h = 38, textAlign = "center",
-    textValign = "center", disabled = not fly_ok, text = fly_label,
+    textValign = "center", disabled = not fly_ok, text = fly_label, tooltip = fly_why,
     onClicked = function()
       local ok, why = fo.takeControlOf(e.fid)
       if ok then
@@ -237,15 +493,23 @@ local function detail(e, fo, co)
         say(why)
       end
     end })
+  if fly_why then add(wrapped("flywhy", "panel/hintWarn", fly_why)) end
   local armed = armed_end and armed_end.fid == e.fid and time < armed_end.t
+  local rec_ok, rec_why = recoverCheck(e)
+  local rec_text, rec_tip = "Recover", "Recover: " .. tostring(rec_why)
+  if rec_ok then
+    local q = recoverQuote(e)
+    rec_text = "Recover  ·  +" .. money_of(co, q.value)
+    rec_tip = q.near and "At the base: the crew come home and most of its hardware value is refunded"
+      or string.format("%s from the base: the crew come home, %d%% of the refund (it falls off with distance)",
+        fmt_km(q.dist), math.floor(q.factor * 100 + 0.5))
+  end
   add({ "row", key = "acts", w = "100%", h = 32, gap = 6, pad = 0,
     { "button", key = "rec", style = "panel/secondary", w = "grow", h = 32, textAlign = "center",
-      textValign = "center", text = "Recover", disabled = not (e.home and e.live and not e.piloted),
-      tooltip = e.home and "Landed at home: the crane strips it and refunds most of it"
-        or "Only a craft landed at the base can be recovered",
+      textValign = "center", text = rec_text, disabled = not rec_ok, tooltip = rec_tip,
       onClicked = function()
-        local ok, why = fo.recoverFleet(e.fid)
-        if ok then say("recovered " .. e.name); selected = nil else say(why) end
+        local ok, why = recoverFleet(e.fid)
+        if ok then sfx("click"); say(why, 15.0); selected = nil else say(why) end
       end },
     { "button", key = "map", style = "panel/secondary", w = "grow", h = 32, textAlign = "center",
       textValign = "center", text = "Map", disabled = not e.live,
@@ -271,6 +535,9 @@ local function detail(e, fo, co)
           armed_end = { fid = e.fid, t = time + 4.0 }
         end
       end } })
+  if not rec_ok then
+    add(wrapped("recwhy", "panel/hint", "Can't recover: " .. tostring(rec_why) .. "."))
+  end
   if armed then
     add(wrapped("warn", "panel/hintWarn", "Press again to write " .. e.name .. " off. It cannot be undone."))
   end
@@ -314,7 +581,7 @@ local function describe()
   local net = ref("comms")
   local linked = 0
   for _, e in ipairs(list) do if e.link then linked = linked + 1 end end
-  local hint = (msg ~= "" and time - msg_t < 6.0) and ("» " .. msg)
+  local hint = (msg ~= "" and time - msg_t < msg_dur) and ("» " .. msg)
     or "Click a craft for its details.   [ / ] switch between nearby craft in flight.   E or Esc to leave."
   return { "col", key = "ts", style = "panel/frame", w = "100%", dir = "col", gap = 12, pad = PAD, align = "start",
     { "row", key = "head", w = "100%", h = "fit", gap = 14, pad = 0, align = "center",
@@ -330,7 +597,7 @@ local function describe()
       { "col", key = "detail", w = "grow", h = "fit", gap = 8, pad = 0, align = "start",
         items = detail(sel, fo, co), function(x) return x end } },
     { "box", key = "rule2", style = "panel/rule", w = "100%", h = 1 },
-    { "text", key = "hint", style = (msg ~= "" and time - msg_t < 6.0) and "panel/hintWarn" or "panel/hint",
+    { "text", key = "hint", style = (msg ~= "" and time - msg_t < msg_dur) and "panel/hintWarn" or "panel/hint",
       w = "100%", h = "fit", wrap = true, text = hint },
   }
 end

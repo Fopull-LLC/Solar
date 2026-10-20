@@ -129,10 +129,13 @@ MODULES = {
   -- the group's key is held (a tap moves it one tick's worth … use a held
   -- key), `.center` puts it back to `center`. The flight drives the joint to
   -- the setpoint at the part's own speed and holds it there.
+  -- `presets` on an axis adds "go to" actions: `.max` / `.min` send the
+  -- setpoint straight to that end stop on a press (a hinge to +90°, a piston
+  -- all the way out), the way `.center` sends it home.
   hinge = {
     label = "Hinge",
     toggles = { { state = "locked", on = "Lock", off = "Unlock", toggle = "Lock / unlock", default = false } },
-    axes = { { id = "angle", label = "Angle", min = -90, max = 90, rate = 30, unit = "°" },
+    axes = { { id = "angle", label = "Angle", min = -90, max = 90, rate = 30, unit = "°", presets = true },
              { id = "speed", label = "Speed", min = 10, max = 100, rate = 50, unit = "%", default = 100, center = 100 } },
     readouts = { "angle" },
     pri = 4,
@@ -141,7 +144,7 @@ MODULES = {
     label = "Piston",
     toggles = { { state = "extended", on = "Extend", off = "Retract", toggle = "Extend / retract", default = false },
                 { state = "locked", on = "Lock", off = "Unlock", toggle = "Lock / unlock", default = false } },
-    axes = { { id = "extension", label = "Extension", min = 0, max = 0.8, rate = 0.3, unit = "m" },
+    axes = { { id = "extension", label = "Extension", min = 0, max = 0.8, rate = 0.3, unit = "m", presets = true },
              { id = "speed", label = "Speed", min = 10, max = 100, rate = 50, unit = "%", default = 100, center = 100 } },
     readouts = { "extension" },
     pri = 4,
@@ -150,7 +153,7 @@ MODULES = {
     label = "Rotor",
     toggles = { { state = "spin", on = "Motor on", off = "Motor off", toggle = "Motor on / off", default = false },
                 { state = "locked", on = "Lock", off = "Unlock", toggle = "Lock / unlock", default = false } },
-    axes = { { id = "rpm", label = "Speed", min = -60, max = 60, rate = 30, unit = "rpm", default = 20, center = 0 } },
+    axes = { { id = "rpm", label = "Speed", min = -60, max = 60, rate = 30, unit = "rpm", default = 20, center = 0, presets = true } },
     readouts = { "rpm" },
     pri = 4,
   },
@@ -202,8 +205,22 @@ CUSTOM_KEYS = { "1", "2", "3", "4", "5", "6", "7", "8", "9", "0" }
 COMMS = {
   station = 4.0e5,      -- the home ground station (base Tracking Station)
   occlude = 0.97,       -- bodies block a link inside this fraction of their radius
+  -- GRAZING: how far (as a fraction of the world's radius, held between the
+  -- two limits in metres) a link may dip below the LOWER of its two ends'
+  -- own ground before the world counts as in the way. Radio bends a little
+  -- round a horizon and the ground is not a polished sphere: a link that only
+  -- skims the surface is a link. On Vever (r 807) that is 8 m: a rover
+  -- talks to the base dish from ~0.25 km of ground away, an orbiter a few
+  -- degrees under the geometric horizon, and a ray through the planet's
+  -- body is still blocked.
+  graze = 0.01, grazeMin = 3.0, grazeMax = 40.0,
   refresh = 0.25,       -- seconds between network solves
 }
+
+-- The grazing allowance for a world of radius r (see COMMS.graze).
+function grazeOf(r)
+  return math.max(COMMS.grazeMin, math.min(COMMS.grazeMax, (r or 0) * COMMS.graze))
+end
 
 -- ── small helpers ───────────────────────────────────────────────────────────
 
@@ -316,7 +333,11 @@ function deriveMods(def, declared)
   end
   local function add(m) if not have[m.type] then have[m.type] = true; out[#out + 1] = m end end
   local function flag(k) return def[k] == true or def[k] == 1 end
-  if def.kind == "crewed" then
+  if def.kind == "crewed" and flag("seat") then
+    -- An OPEN SEAT commands like a pod (the crew in it is the pilot) but has
+    -- no reaction wheel and no battery of its own: it's a chair with a stick.
+    add({ type = "command", crew = 1, draw = 0.0, seat = true })
+  elseif def.kind == "crewed" then
     add({ type = "command", crew = 1, draw = 0.05 })
     add({ type = "wheel", torque = 1.0, draw = 0.5 })
     add({ type = "battery", ec = 40 })
@@ -411,6 +432,20 @@ function actionsOf(rec)
                             min = lim.min, max = lim.max, rate = lim.rate, center = lim.center }
           out[#out + 1] = { id = a.id .. ".center", label = a.label .. " centre", module = m.type, kind = "axis", axis = a.id, dir = 0,
                             min = lim.min, max = lim.max, rate = lim.rate, center = lim.center }
+          if a.presets then
+            -- "go to" a stop: dir 0 with the stop as its target, so the flight
+            -- (which sends a dir-0 axis to `center` on the press) needs nothing new.
+            local u = a.unit or ""
+            if u ~= "°" and u ~= "%" and u ~= "" then u = " " .. u end
+            local function fmt(v)
+              local m = math.abs(v)
+              return (v > 0 and "+" or (v < 0 and "−" or "")) .. string.format(m == math.floor(m) and "%d" or "%.1f", m) .. u
+            end
+            out[#out + 1] = { id = a.id .. ".max", label = a.label .. " → " .. fmt(a.max), module = m.type, kind = "axis", axis = a.id,
+                              dir = 0, preset = "max", min = lim.min, max = lim.max, rate = lim.rate, center = a.max }
+            out[#out + 1] = { id = a.id .. ".min", label = a.label .. " → " .. fmt(a.min), module = m.type, kind = "axis", axis = a.id,
+                              dir = 0, preset = "min", min = lim.min, max = lim.max, rate = lim.rate, center = a.min }
+          end
         end
       end
     end
@@ -619,7 +654,74 @@ function defaultGroups(parts)
       end
     end
   end
+  actuatorGroups(groups, list)
   return groups
+end
+
+-- ACTUATORS GET KEYS OF THEIR OWN. A piston, hinge, rotor, drill or claw on a
+-- craft nobody has set up used to have no key at all — "my action groups didn't
+-- show me the electronics to control". The standard set now hands them the
+-- custom groups 1–0 in build order, one per actuator (a symmetry ring is one
+-- actuator), named for what the key does:
+--
+--   piston   one key  Extend / retract
+--   hinge    two keys Hinge + and Hinge −, HELD to swing it (continuous)
+--   rotor    one key  Motor on / off
+--   drill    one key  Lower and run / raise and stop
+--   claw     one key  Arm / disarm
+--
+-- Anything left over when the ten keys run out simply isn't bound; the editor
+-- binds it by hand. `ACTUATOR_KEYS` is that plan, as data.
+ACTUATOR_KEYS = {
+  { module = "piston", keys = { { name = "Piston", acts = { "extended.toggle" } } } },
+  { module = "hinge",  keys = { { name = "Hinge +", acts = { "angle.inc" } }, { name = "Hinge −", acts = { "angle.dec" } } } },
+  { module = "rotor",  keys = { { name = "Rotor", acts = { "spin.toggle" } } } },
+  { module = "drill",  keys = { { name = "Drill", acts = { "deployed.toggle", "drilling.toggle" } } } },
+  { module = "claw",   keys = { { name = "Claw", acts = { "armed.toggle" } } } },
+}
+
+-- Is this record an actuator the player drives (rather than a switch)?
+function actuatorOf(rec)
+  for _, a in ipairs(ACTUATOR_KEYS) do
+    if modOf(rec, a.module) then return a end
+  end
+  return nil
+end
+
+-- Bind every actuator in `list` (records in build order) to the next free
+-- custom groups. Returns how many keys it used.
+function actuatorGroups(groups, list)
+  local free = {}
+  for _, k in ipairs(CUSTOM_KEYS) do
+    local g = groups[k]
+    if not g or #(g.binds or {}) == 0 then free[#free + 1] = k end
+  end
+  local used, rings, n = {}, {}, 0
+  for _, d in ipairs(list) do
+    local a = actuatorOf(d)
+    local ring = d.sym and d.sym ~= 0 and ("s" .. tostring(d.sym)) or nil
+    if a then
+      local slot = ring and rings[ring]
+      if not slot then
+        if n + #a.keys > #free then break end
+        slot = {}
+        for i, key in ipairs(a.keys) do
+          n = n + 1
+          slot[i] = free[n]
+          local g = group(groups, free[n], true)
+          g.name = key.name
+        end
+        if ring then rings[ring] = slot end
+      end
+      for i, key in ipairs(a.keys) do
+        for _, act in ipairs(key.acts) do
+          if actionOf(d, act) then bind(groups, slot[i], d.uid, act) end
+        end
+      end
+      used[#used + 1] = d.uid
+    end
+  end
+  return n
 end
 
 -- A group's ON/OFF state for display and for toggling it as one: its own flag
@@ -797,8 +899,11 @@ end
 -- holds an endpoint (the world a station stands on, a landed craft's planet)
 -- still block it — shrunk to `occlude` of their radius, so a line from the
 -- surface toward the sky clears its own ground and a line through it doesn't.
+-- `graze` (true, or metres) lets the line dip that far under the lower end's
+-- own ground before it counts — COMMS grazing (grazeOf the body's radius) for
+-- `true`, 2 m when absent (sunlight: a shadow is a shadow).
 -- Returns the blocking body's name, or nil.
-function segmentBlocked(ax, ay, az, bx, by, bz, bodies, shrink, skip)
+function segmentBlocked(ax, ay, az, bx, by, bz, bodies, shrink, skip, graze)
   shrink = shrink or COMMS.occlude
   local dx, dy, dz = bx - ax, by - ay, bz - az
   local L2 = dx * dx + dy * dy + dz * dz
@@ -809,12 +914,13 @@ function segmentBlocked(ax, ay, az, bx, by, bz, bodies, shrink, skip)
       -- below `shrink` of its nominal radius — a base in a basin, a craft at
       -- the bottom of a valley — and was then "blocked" by its own planet
       -- talking to a station 20 m away. The occluder never reaches above
-      -- either end (less 2 m), so a link between two points on the same
-      -- ground is blocked only when the ground between them rises: the
-      -- horizon, not the datum.
+      -- either end (less the grazing allowance), so a link between two points
+      -- on the same ground is blocked only when the line between them runs
+      -- meaningfully UNDER that ground: past the horizon, not the datum.
+      local g = graze == true and grazeOf(b.radius) or tonumber(graze) or 2.0
       local da = math.sqrt((ax - b.x) ^ 2 + (ay - b.y) ^ 2 + (az - b.z) ^ 2)
       local db = math.sqrt((bx - b.x) ^ 2 + (by - b.y) ^ 2 + (bz - b.z) ^ 2)
-      r = math.min(r, da - 2.0, db - 2.0)
+      r = math.min(r, da - g, db - g)
       local t = 0
       if L2 > 1e-12 then
         t = ((b.x - ax) * dx + (b.y - ay) * dy + (b.z - az) * dz) / L2
@@ -944,7 +1050,7 @@ function solveNetwork(nodes, bodies)
   local cost, parent, done = {}, {}, {}
   local edge = {} -- cache: i..":"..j -> strength (i child, j parent side)
   local function seg_ok(a, b)
-    return segmentBlocked(a.x, a.y, a.z, b.x, b.y, b.z, bodies, COMMS.occlude) == nil
+    return segmentBlocked(a.x, a.y, a.z, b.x, b.y, b.z, bodies, COMMS.occlude, nil, true) == nil
   end
   local blocked = {}
   local function pair_blocked(i, j)
@@ -1042,11 +1148,28 @@ function noLinkWhy(nd, nodes, bodies)
   if not home then return "no ground station" end
   local range = linkRange(nd.any, home.power or COMMS.station)
   local d = math.sqrt((nd.x - home.x) ^ 2 + (nd.y - home.y) ^ 2 + (nd.z - home.z) ^ 2)
-  local blk = segmentBlocked(nd.x, nd.y, nd.z, home.x, home.y, home.z, bodies, COMMS.occlude)
+  local blk = segmentBlocked(nd.x, nd.y, nd.z, home.x, home.y, home.z, bodies, COMMS.occlude, nil, true)
   if d > range then
     return string.format("out of range: %s > %s", fmt_km(d), fmt_km(range))
   end
-  if blk then return "blocked by " .. blk end
+  if blk then
+    -- On the station's own world, say how far round it the craft is: "blocked
+    -- by Vever" alone reads like a fault when it is the horizon.
+    for _, b in ipairs(bodies or {}) do
+      if b.name == blk and (b.radius or 0) > 0 then
+        local hx, hy, hz = home.x - b.x, home.y - b.y, home.z - b.z
+        local cx, cy, cz = nd.x - b.x, nd.y - b.y, nd.z - b.z
+        local hl = math.sqrt(hx * hx + hy * hy + hz * hz)
+        local cl = math.sqrt(cx * cx + cy * cy + cz * cz)
+        if hl < b.radius * 1.2 and hl > 0 and cl > 0 then
+          local c = math.max(-1, math.min(1, (hx * cx + hy * cy + hz * cz) / (hl * cl)))
+          return string.format("blocked by %s — the ground station is below the horizon (%s round the world)",
+            blk, fmt_km(math.acos(c) * b.radius))
+        end
+      end
+    end
+    return "blocked by " .. blk
+  end
   return "no path home"
 end
 
@@ -1121,58 +1244,170 @@ end
 
 -- ── fairing shells (shared geometry) ────────────────────────────────────────
 --
--- A fairing's shell is BUILT TO FIT its payload (builder.fairingEnvelope
--- measures it; the record carries r, hc, hn, y0): a cylinder of radius `r`
--- from the base ring's top (y0) up to `hc`, then an ogive nose `hn` tall, in
--- the base part's own frame. `half` 0 or 1 picks which half (the two split
--- apart on jettison). Returned as mesh.build's lists, outer skin and inner
--- lining both, UVs in metres of skin. The builder and the flight both build
--- from this, so the shell you fly is the one you saw.
-function fairingShell(r, y0, hc, hn, half, segs)
-  segs = segs or 24
-  local prof = { { r, y0 }, { r, hc } }
-  local nb = 8
-  for k = 1, nb do
-    local t = k / nb
-    -- tangent ogive: radius falls as the arc, apex at hc + hn
-    local yy = hc + hn * t
+-- A shell is a PROFILE lathed round the base ring's axis: a list of { r, y } in
+-- the base part's own frame, bottom to top (y never falls), r = 0 at a closed
+-- apex. It comes from one of two places:
+--
+--   fitted  no shape drawn: a cylinder of radius `r` from the ring's top `y0`
+--           up to `hc`, then an ogive nose `hn` tall, sized to the payload by
+--           builder.fairingEnvelope. Every fairing was this before shaping, and
+--           a record with only fr / fy0 / fhc / fhn still flies as it.
+--   shaped  the rings the player drew in the builder (each a radius and a
+--           height above the base ring), closed by `fairingNose`. The record
+--           carries it flat as `fprof` = { r1, y1, r2, y2, … }.
+--
+-- The builder and the flight both build from these, so the shell you fly is
+-- the one you saw.
+
+FAIRING_NOSE_K = 1.1     -- an ogive nose is this many times its ring's radius tall
+FAIRING_NOSE_SEGS = 8
+
+-- The ogive from a ring of radius r at height y up to its apex, appended.
+local function ogive(prof, r, y, hn)
+  for k = 1, FAIRING_NOSE_SEGS do
+    local t = k / FAIRING_NOSE_SEGS
     local rr = r * math.sqrt(math.max(0, 1 - t * t)) * (1 - 0.15 * t)
-    if k == nb then rr = 0.0 end
-    prof[#prof + 1] = { rr, yy }
+    if k == FAIRING_NOSE_SEGS then rr = 0.0 end
+    prof[#prof + 1] = { rr, y + hn * t }
   end
+  return prof
+end
+
+function fairingAutoProfile(r, y0, hc, hn)
+  return ogive({ { r, y0 }, { r, hc } }, r, hc, hn)
+end
+
+-- Close an open profile over the top: an ogive from its last ring. A profile
+-- that already ends in a point is left as it is.
+function fairingNose(prof)
+  local last = prof[#prof]
+  if not last or last[1] <= 0.02 then return prof end
+  return ogive(prof, last[1], last[2], math.max(0.15, last[1] * FAIRING_NOSE_K))
+end
+
+-- A drawn shape as a profile: the base ring (radius R0 at y0), then each
+-- section { r, h } (h above y0), then — once closed — the nose.
+function fairingSectionsProfile(R0, y0, secs, closed)
+  local prof = { { R0, y0 } }
+  for _, sc in ipairs(secs or {}) do
+    prof[#prof + 1] = { sc.r or sc[1], y0 + (sc.h or sc[2]) }
+  end
+  if closed then fairingNose(prof) end
+  return prof
+end
+
+-- Profile ↔ the flat number list a record carries (one table deep).
+function fairingFlat(prof)
+  local out = {}
+  for _, p in ipairs(prof or {}) do out[#out + 1] = p[1]; out[#out + 1] = p[2] end
+  return out
+end
+
+function fairingUnflat(flat)
+  local out = {}
+  if type(flat) ~= "table" then return out end
+  for i = 1, #flat - 1, 2 do out[#out + 1] = { flat[i], flat[i + 1] } end
+  return out
+end
+
+-- A record's shell profile: the drawn one, else the fitted one, else nil.
+function fairingProfileOf(d)
+  if type(d) ~= "table" then return nil end
+  if type(d.fprof) == "table" and #d.fprof >= 4 then return fairingUnflat(d.fprof) end
+  if (d.fr or 0) > 0 and (d.fhc or 0) > 0 then
+    return fairingAutoProfile(d.fr, d.fy0 or 0.1, d.fhc, d.fhn or d.fr * FAIRING_NOSE_K)
+  end
+  return nil
+end
+
+-- The shell's radius at height y (straight between rings); nil above or below it.
+function fairingRadiusAt(prof, y)
+  local n = #prof
+  if n < 2 or y < prof[1][2] - 1e-6 or y > prof[n][2] + 1e-6 then return nil end
+  for i = 1, n - 1 do
+    local a, b = prof[i], prof[i + 1]
+    if y <= b[2] + 1e-9 then
+      local dy = b[2] - a[2]
+      if dy <= 1e-9 then return math.min(a[1], b[1]) end
+      local t = math.max(0, math.min(1, (y - a[2]) / dy))
+      return a[1] + (b[1] - a[1]) * t
+    end
+  end
+  return prof[n][1]
+end
+
+-- Does the shell hold something reaching `rad` out from the axis between the
+-- heights y0 and y1? (Checked at both ends and at every ring in between —
+-- the radius is straight between rings, so that is exact.)
+function fairingHolds(prof, y0, y1, rad)
+  local n = #prof
+  if n < 2 or y0 < prof[1][2] - 0.05 or y1 > prof[n][2] + 1e-6 then return false end
+  local function fits(y)
+    local r = fairingRadiusAt(prof, math.max(prof[1][2], y))
+    return r ~= nil and r >= rad - 1e-3
+  end
+  if not (fits(y0) and fits(y1)) then return false end
+  for _, p in ipairs(prof) do
+    if p[2] > y0 and p[2] < y1 and p[1] < rad - 1e-3 then return false end
+  end
+  return true
+end
+
+-- Skin area (m², the outside), widest radius and height of a profile. The
+-- shell's mass is its area times the composite's tonnes per square metre, and
+-- its frontal area (π · rmax²) is what it shows the air.
+function fairingStats(prof)
+  local area, rmax = 0.0, 0.0
+  for i = 1, #prof - 1 do
+    local r1, y1, r2, y2 = prof[i][1], prof[i][2], prof[i + 1][1], prof[i + 1][2]
+    area = area + math.pi * (r1 + r2) * math.sqrt((r2 - r1) ^ 2 + (y2 - y1) ^ 2)
+  end
+  for _, p in ipairs(prof) do rmax = math.max(rmax, p[1]) end
+  local h = #prof > 0 and (prof[#prof][2] - prof[1][2]) or 0
+  return area, rmax, h
+end
+
+-- One CLAMSHELL piece: piece k (1-based) of n (2 or 3) round the axis, as
+-- mesh.build's lists, outer skin and inner lining both, UVs in metres of skin.
+-- Piece k spans the angles 2π(k−1)/n … 2πk/n (x = r·cos a, z = r·sin a).
+function fairingPiece(prof, k, n, segs)
+  n = math.max(2, math.min(3, n or 2))
+  segs = math.max(6, math.floor((segs or 24) * 2 / n + 0.5))
   local L = { 0 }
-  for k = 2, #prof do
-    L[k] = L[k - 1] + math.sqrt((prof[k][1] - prof[k - 1][1]) ^ 2 + (prof[k][2] - prof[k - 1][2]) ^ 2)
+  for i = 2, #prof do
+    L[i] = L[i - 1] + math.sqrt((prof[i][1] - prof[i - 1][1]) ^ 2 + (prof[i][2] - prof[i - 1][2]) ^ 2)
   end
+  local _, rmax = fairingStats(prof)
   local P, N, UV, I = {}, {}, {}, {}
-  local a0 = (half or 0) * math.pi
+  local span = 2 * math.pi / n
+  local a0 = (k - 1) * span
   local function vert(x, y, z, nx, ny, nz, u, v)
     P[#P + 1] = x; P[#P + 1] = y; P[#P + 1] = z
     N[#N + 1] = nx; N[#N + 1] = ny; N[#N + 1] = nz
     UV[#UV + 1] = u; UV[#UV + 1] = v
     return #P / 3
   end
+  local np = #prof
   for side = 1, 2 do                           -- 1 outer skin, 2 inner lining
     local sg = side == 1 and 1 or -1
     local base = #P / 3
     for i = 0, segs do
-      local a = a0 + math.pi * i / segs
+      local a = a0 + span * i / segs
       local c, s = math.cos(a), math.sin(a)
-      for k = 1, #prof do
-        local kk = math.max(1, math.min(#prof - 1, k))
-        local dr = prof[kk + 1][1] - prof[kk][1]
-        local dy = prof[kk + 1][2] - prof[kk][2]
-        local l = math.sqrt(dr * dr + dy * dy)
+      for j = 1, np do
+        local jj = math.max(1, math.min(np - 1, j))
+        local dr = prof[jj + 1][1] - prof[jj][1]
+        local dy = prof[jj + 1][2] - prof[jj][2]
+        local l = math.max(1e-9, math.sqrt(dr * dr + dy * dy))
         local nr, ny = dy / l, -dr / l
-        local rr = math.max(0, prof[k][1] - (side == 2 and 0.01 or 0))
-        vert(rr * c, prof[k][2], rr * s, nr * c * sg, ny * sg, nr * s * sg, (a - a0) * r, -L[k])
+        local rr = math.max(0, prof[j][1] - (side == 2 and 0.01 or 0))
+        vert(rr * c, prof[j][2], rr * s, nr * c * sg, ny * sg, nr * s * sg, (a - a0) * rmax, -L[j])
       end
     end
-    local np = #prof
     for i = 0, segs - 1 do
-      for k = 1, np - 1 do
-        local a = base + i * np + k
-        local b = base + (i + 1) * np + k
+      for j = 1, np - 1 do
+        local a = base + i * np + j
+        local b = base + (i + 1) * np + j
         if side == 1 then
           I[#I + 1] = a; I[#I + 1] = a + 1; I[#I + 1] = b + 1
           I[#I + 1] = a; I[#I + 1] = b + 1; I[#I + 1] = b
@@ -1183,6 +1418,39 @@ function fairingShell(r, y0, hc, hn, half, segs)
       end
     end
   end
-  -- the two cut edges, so a half is closed where it splits
   return { positions = P, normals = N, uvs = UV, indices = I }
+end
+
+-- Where piece k of n sits and how big a body it makes falling away, in the
+-- base frame: its centre (ox, oy, oz), the way it leaves (dx, dz, outward),
+-- box half-extents (hx along the base's X, hy, hz along its Z) and its share of
+-- the skin.
+function fairingPieceInfo(prof, k, n)
+  n = math.max(2, math.min(3, n or 2))
+  local area, rmax = fairingStats(prof)
+  local ac = (k - 0.5) * 2 * math.pi / n
+  local dx, dz = math.cos(ac), math.sin(ac)
+  local y0, y1 = prof[1][2], prof[#prof][2]
+  local reach = rmax * 0.5
+  local hx, hz = rmax * 0.8, rmax * 0.4
+  if n == 2 then
+    -- halves leave along ±Z: thin that way, wide across
+    hx, hz = rmax * 0.8, rmax * 0.4
+  else
+    hx, hz = rmax * 0.55, rmax * 0.55
+  end
+  return { ox = dx * reach, oy = (y0 + y1) * 0.5, oz = dz * reach, dx = dx, dz = dz,
+           hx = hx, hy = math.max(0.1, (y1 - y0) * 0.5), hz = hz, rmax = rmax, area = area / n }
+end
+
+-- The fitted shell's half (0 or 1), as before shaping existed.
+function fairingShell(r, y0, hc, hn, half, segs)
+  return fairingPiece(fairingAutoProfile(r, y0, hc, hn), (half or 0) + 1, 2, segs)
+end
+
+-- A record's piece k of its n (`fsplit`, default 2): what the flight builds.
+function fairingMeshOf(d, k, segs)
+  local prof = fairingProfileOf(d)
+  if not prof then return nil end
+  return fairingPiece(prof, k, d.fsplit or 2, segs)
 end

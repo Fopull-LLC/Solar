@@ -110,8 +110,17 @@ local FO = { valid = true,
   recoverFleet = function(fid) calls[#calls + 1] = "recover:" .. fid return true end,
   terminateFleet = function(fid) calls[#calls + 1] = "end:" .. fid return true end,
   renameFleet = function(fid, n) calls[#calls + 1] = "rename:" .. fid .. ":" .. tostring(n) return true end,
-  liveOf = function(fid) return { node = { id = 7, valid = true } } end,
+  liveOf = function(fid)
+    return { node = { id = 7, valid = true, x = 40, y = 301, z = 0 },
+             recoverValue = function() return 1000 end, parked = function() return fid == "c3" end }
+  end,
 }
+local EARNED = {}
+local CO = { valid = true, earn = function(v, why) EARNED[#EARNED + 1] = { v = v, why = why } end,
+             money = function(v) return "$" .. tostring(v) end }
+local BF = { valid = true, sited = true, baseBody = "Home", baseX = 0, baseY = 300, baseZ = 0,
+             trackingStationOn = function(b) return b == "Home" end }
+local SAVE = {}
 local MAP = { valid = true, focusNode = function() calls[#calls + 1] = "map" end }
 local tree = nil
 local panel_el = { visible = false, width = 0 }
@@ -125,8 +134,12 @@ local ts = load("solar/scripts/tracking_station.lua", {
     if k == "orbit_map" then return MAP end
     if k == "facility_menu" then return FM end
     if k == "comms" then return { valid = true, transmitters = 4, refreshNow = function() end } end
+    if k == "company" then return CO end
+    if k == "base_facilities" then return BF end
     return nil
   end,
+  save = { get = function(k) return SAVE[k] end, set = function(k, v) SAVE[k] = v end },
+  log = function() end,
   find = function(n) if n == "Astronaut" then return { x = 0, y = 310, z = 0 } end end,
   space = { dominant = function() return "Home" end,
             body = function() return { x = 0, y = 0, z = 0, radius = 300 } end },
@@ -163,7 +176,68 @@ ts.update(tnode, 0.016)
 check(by_key(tree, "rec").disabled == false, "a craft landed at home can be recovered")
 check(has_text(tree, "Relay One → Ground station"), "a relayed path is spelled out")
 by_key(tree, "rec").onClicked()
-check(calls[#calls] == "recover:c3", "RECOVER calls flight_ops")
+check(calls[#calls] == "end:c3" and #EARNED == 1 and EARNED[1].v == 1000 and SAVE["mission.recovered"] == true,
+  "RECOVER refunds the craft, ticks the recovery goal and takes it off the board")
+-- a landed craft far from the base: still recoverable, refund scaled down
+FLEET[3].home, FLEET[3].dist = false, 9000
+local far_live = FO.liveOf
+FO.liveOf = function(fid)
+  local v = far_live(fid)
+  v.node.x, v.node.y = 300, 0   -- a quarter of the way round the 300 m world
+  return v
+end
+ts.selectCraft("c3")
+ts.update(tnode, 0.016)
+check(by_key(tree, "rec").disabled == false, "a craft landed anywhere on the home world can be recovered")
+by_key(tree, "rec").onClicked()
+check(#EARNED == 2 and EARNED[2].v < 1000 and EARNED[2].v > 100,
+  "...and a far one refunds less (" .. tostring(EARNED[2] and EARNED[2].v) .. ")")
+FO.liveOf = far_live
+-- in orbit: greyed out, with the reason on the screen
+ts.selectCraft("c1")
+ts.update(tnode, 0.016)
+check(by_key(tree, "rec").disabled == true and has_text(tree, "in orbit"),
+  "a craft in orbit can't be recovered, and the screen says why")
+-- landed on a world with no tracking station
+FLEET[3].body = "Moon"
+ts.selectCraft("c3")
+ts.update(tnode, 0.016)
+check(by_key(tree, "rec").disabled == true and has_text(tree, "not on a planet with a tracking station"),
+  "a craft landed on another world can't be recovered, and the screen says why")
+FLEET[3].body = "Home"
+calls[#calls + 1] = "-"
+
+-- a crew transfer the account can't pay for: greyed out, and it says why
+FLEET[3].pod, FLEET[3].probe, FLEET[3].crew, FLEET[3].fee = true, false, false, 195
+CO.afford = function(v) return v <= 110 end
+CO.balance = function() return 110 end
+ts.selectCraft("c3")
+ts.update(tnode, 0.016)
+check(by_key(tree, "fly").disabled == true and has_text(tree, "more than the balance"),
+  "Send the crew is greyed out when the shuttle costs more than the balance, with the reason")
+CO.afford = function() return true end
+ts.update(tnode, 0.016)
+check(by_key(tree, "fly").disabled == false, "...and open again once it can be paid")
+FLEET[3].fee = 0
+
+-- the rules themselves (pure)
+local home = function(b) return b == "Home" end
+check(ts.recoverRule({ fid = "x", body = "Home", rest = true }, home) == true, "rule: at rest at home → yes")
+local okf, whyf = ts.recoverRule({ fid = "x", body = "Home", rest = false, status = "in orbit" }, home)
+check(okf == false and whyf:find("in orbit", 1, true), "rule: in orbit → no, says in orbit")
+local okl, whyl = ts.recoverRule({ fid = "x", body = "Home", rest = false, status = "flying — remote" }, home)
+check(okl == false and whyl:find("in flight", 1, true), "rule: flying → no, says in flight")
+local okm, whym = ts.recoverRule({ fid = "x", body = "Moon", rest = true }, home)
+check(okm == false and whym == "not on a planet with a tracking station", "rule: another world → no station")
+check(ts.recoverRule({ fid = "x", body = "Moon", rest = true }, function() return true end) == true,
+  "rule: a world that gets a station opens up (the hook)")
+check(ts.recoverRule({ fid = "x", body = "Home", rest = true, crewAway = true }, home) == false,
+  "rule: a crewed craft not back in the scene waits")
+check(ts.recoverRule({ fid = "crew" }, home) == false, "rule: the crew row is not a craft")
+check(ts.recoveryFactor(100, 30000) == 1.0 and ts.recoveryFactor(nil, 30000) == 1.0, "factor: full at the base")
+local f1, f2 = ts.recoveryFactor(5000, 30000), ts.recoveryFactor(40000, 30000)
+check(f1 < 1.0 and f2 < f1 and f2 > 0.1, "factor: falls off with distance")
+check(math.abs(ts.recoveryFactor(math.pi * 30000, 30000) - 0.1) < 1e-9, "factor: 10% at the antipode")
 ts.selectCraft("c3")
 ts.update(tnode, 0.016)
 by_key(tree, "end").onClicked()

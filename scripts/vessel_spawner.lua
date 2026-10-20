@@ -165,6 +165,14 @@ function start(node)
 end
 
 local function try_spawn()
+  -- Not while the loading screen is up: the crew is parked over the spawn
+  -- world's NORTH POLE then, and that is the first ground to answer the
+  -- terrain probe below — the pad went down there, a quarter of the world
+  -- (1.1 km on Vever) round from the base, out of the base dish's sight, so
+  -- every probe craft on it read "NO SIGNAL — blocked by Vever". The crew is
+  -- moved to the base (game_manager launch_site) the frame loading ends.
+  local gm = findScript("game_manager")
+  if gm and gm.loading then return false end
   -- Site reference read FRESH each attempt: the crew's own position, which is
   -- where a launch rolls out from.
   local pad = find("Astronaut")
