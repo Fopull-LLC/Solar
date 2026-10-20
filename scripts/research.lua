@@ -27,18 +27,33 @@ defaults = {}
 -- Anything NOT in this table ships unlocked. Keep the starter set (pod, nose,
 -- chute, small tank, small engine, fins, decoupler, legs) out of it on purpose:
 -- the first flight must be buildable with no research at all.
+--
+-- PRICED AGAINST THE CONTRACT LADDER. These used to cost $260–$1,250 against
+-- contracts paying $4,500–$30,000, so one contract bought most of the catalogue
+-- and research paced nothing. Now each rung of the ladder pays for the rocket it
+-- needs plus roughly the next one or two unlocks, in the order you want them:
+--
+--   First Flight $2,500 ……… FT-M Tank $600 (the High Road wants the fuel)
+--   High Road / Prospector … Anvil $1,400, Battery, Comms Dish, Cargo Bay
+--   Made Orbit $9,000 …………… Radial Tank / Decoupler, Solar Panel, RCS
+--   Trusted / Prime standing  Skipper, Docking Port (Rendezvous)
+--
+-- `rep` is a STANDING gate (company.lua): the parts that open interplanetary
+-- work are not sold to a company nobody has heard of.
 TECH = {
-  tankM      = { cost = 260,  label = "FT-M Tank" },
-  battery    = { cost = 320,  label = "Battery",        mat = "copper" },
-  engineM    = { cost = 480,  label = "Anvil Engine" },
-  dish       = { cost = 420,  label = "Comms Dish",     mat = "copper" },
-  radialDec  = { cost = 300,  label = "Radial Decoupler" },
-  radialTank = { cost = 340,  label = "Radial Tank",    after = "tankM" },
-  solar      = { cost = 640,  label = "Solar Panel",    mat = "silica",  after = "battery" },
-  cargo      = { cost = 520,  label = "Cargo Bay",      mat = "iron" },
-  skipper    = { cost = 1250, label = "Skipper Engine", mat = "iron",    after = "engineM" },
-  rcs        = { cost = 700,  label = "RCS Block",      after = "engineM" },
-  dockPort   = { cost = 950,  label = "Docking Port",   mat = "copper",  rep = 1, after = "rcs" },
+  tankM      = { cost = 600,  label = "FT-M Tank" },
+  battery    = { cost = 900,  label = "Battery",        mat = "copper" },
+  engineM    = { cost = 1400, label = "Anvil" },
+  dish       = { cost = 1100, label = "Relay Dish",     mat = "copper" },
+  probe      = { cost = 800,  label = "Probe Core",     mat = "copper" },
+  dishL      = { cost = 5200, label = "Deep Space Dish", mat = "silica", after = "dish", rep = 6 },
+  radialDec  = { cost = 900,  label = "Radial Decoupler" },
+  radialTank = { cost = 1200, label = "Radial Tank",    after = "tankM" },
+  solar      = { cost = 2200, label = "Solar Panel",    mat = "silica",  after = "battery" },
+  cargo      = { cost = 1800, label = "Cargo Bay",      mat = "iron" },
+  rcs        = { cost = 2600, label = "RCS Block",      after = "engineM", rep = 3 },
+  skipper    = { cost = 4500, label = "Skipper",        mat = "iron",    after = "engineM", rep = 8 },
+  dockPort   = { cost = 3800, label = "Docking Port",   mat = "copper",  rep = 6, after = "rcs" },
 }
 
 -- Published for panels.
@@ -79,7 +94,9 @@ function blockedBy(id)
   if t.rep then
     local co = findScript("company")
     if co and co.rep() < t.rep then
-      return string.format("needs reputation %+d", t.rep)
+      local st = co.standing and co.standing(t.rep)
+      return string.format("needs reputation %+d%s", t.rep,
+        st and (" (" .. st.name .. ")") or "")
     end
   end
   return nil
@@ -113,7 +130,8 @@ function unlock(id)
   save.set("res.spent", (save.get("res.spent") or 0) + cost)
   spent = save.get("res.spent")
   log("RESEARCH COMPLETE: " .. labelOf(id))
-  if co then co.addRep(1, "research: " .. labelOf(id)) end
+  -- No reputation for research any more: standing that money can buy is a
+  -- price, and it would let a rich company skip the contract tiers.
   return true, labelOf(id)
 end
 

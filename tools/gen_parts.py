@@ -17,7 +17,14 @@ AABB centre — those are the mesh-node translations used in PartLegs.prefab.ron
 Flat-shaded (per-face normals), single mesh/node, one baseColor material.
 No external deps — writes spec-compliant glTF 2.0 binary by hand.
 """
-import struct, json, math, os
+import struct, json, math, os, sys
+
+# SUPERSEDED: the fin and the three leg segments are now built, textured and
+# bound to their prefabs by tools/gen_part_meshes.py (same boxes, so the leg
+# pivots in PartLegs.prefab.ron still hold). Running this would overwrite the
+# leg meshes with the old untextured blocks, so it stops here unless asked.
+if "--legacy" not in sys.argv:
+    sys.exit("gen_parts.py is superseded by tools/gen_part_meshes.py (pass --legacy to run it anyway)")
 
 def rotz(p, a):
     c, s = math.cos(a), math.sin(a)

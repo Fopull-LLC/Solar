@@ -235,6 +235,30 @@ check(tank_y and tank_y < pod_y, "tank sits below the pod")
 check((stats_n.text or ""):find("Next: add an engine") ~= nil,
   "pod + tank: the readout asks for an engine, got: " .. tostring(stats_n.text))
 
+-- 2b. STRUCTURE (the launch-fling round, 2026-10): every part the builder
+--     saves carries the joint STRENGTH (kN) and dynamic-pressure limit the
+--     flight's stress model loads, and stacked parts sit FLUSH — the pod's
+--     bottom face exactly on the tank's top face, no gap and no clipping.
+do
+  local pod_bp, tank_bp
+  for _, d in ipairs(saved_parts()) do
+    if d.id == "pod" then pod_bp = d end
+    if d.id == "tankS" then tank_bp = d end
+  end
+  check(pod_bp and (pod_bp.strength or 0) > 0 and tank_bp and (tank_bp.strength or 0) > 0,
+    "the blueprint carries each part's joint strength")
+  check(pod_bp and pod_bp.maxq ~= nil, "...and its dynamic-pressure rating field")
+  if pod_bp and tank_bp then
+    local gap = (pod_bp.y - pod_bp.h * 0.5) - (tank_bp.y + tank_bp.h * 0.5)
+    check(math.abs(gap) < 1e-3, string.format(
+      "stacked parts sit flush — no clipping, no gap (pod bottom − tank top = %.4f)", gap))
+  end
+  for _, id in ipairs(env.registryIds()) do
+    local def = env.partInfo(id)
+    check(def and (def.strength or 0) > 0, "every catalogue part has a joint strength: " .. id)
+  end
+end
+
 -- 3. SYMMETRY ×4: three X presses (1→2→3→4), then one radial decoupler on
 --    the tank's flank → a ring of FOUR, evenly spaced, sharing a group.
 press("x") step(1)

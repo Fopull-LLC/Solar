@@ -1,0 +1,27 @@
+// A FAIRING HALF falling away (vessel_controller r2Jettison): a light tumbling
+// body that carries the half-shell mesh the flight built, gone after 25 s.
+[
+    (
+        name: "FairingHalf",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+        rigidbody: Some((
+            boxed: true,
+            radius: 0.5,
+            height: 2.0,
+            half_extents: (0.5, 1.0, 0.5),
+            restitution: 0.1,
+            friction: 0.6,
+            gravity: true,
+            rotates: true,
+            lock_pos: (false, false, false),
+            lock_rot: (false, false, false),
+            mass: 0.05,
+        )),
+    ),
+]

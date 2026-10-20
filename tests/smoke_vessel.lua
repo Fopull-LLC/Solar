@@ -37,6 +37,40 @@ local function make_node(name, x, y, z, parent)
     return out
   end
   n.getcomponent = function(self, kind) return self.components[kind] end
+  -- Whole-rotation setters (engine 0.117, floptle/0403). setAngles writes the
+  -- triple as given; setUp stands +Y on a WORLD direction (this harness has
+  -- no parent rotations), the heading taken from world X as nearly as it can.
+  n.setAngles = function(self, yaw, pitch, roll)
+    self.yaw, self.pitch, self.roll, self.up_set = yaw, pitch, roll, nil
+  end
+  n.setUp = function(self, u)
+    local l = math.sqrt(u.x * u.x + u.y * u.y + u.z * u.z)
+    self.up_set = { x = u.x / l, y = u.y / l, z = u.z / l }
+  end
+  local function axes(self)
+    local u = self.up_set
+    if u then
+      local rx, ry, rz = 1 - u.x * u.x, -u.x * u.y, -u.x * u.z
+      local rl = math.sqrt(rx * rx + ry * ry + rz * rz)
+      if rl < 1e-6 then rx, ry, rz, rl = 0, -u.z, u.y, math.sqrt(u.y * u.y + u.z * u.z) end
+      rx, ry, rz = rx / rl, ry / rl, rz / rl
+      -- Z = X × Y
+      local zx, zy, zz = ry * u.z - rz * u.y, rz * u.x - rx * u.z, rx * u.y - ry * u.x
+      return { x = rx, y = ry, z = rz }, { x = u.x, y = u.y, z = u.z }, { x = zx, y = zy, z = zz }
+    end
+    local cy, sy = math.cos(self.yaw or 0), math.sin(self.yaw or 0)
+    local cx, sx = math.cos(self.pitch or 0), math.sin(self.pitch or 0)
+    local cz, sz = math.cos(self.roll or 0), math.sin(self.roll or 0)
+    return { x = cy * cz + sy * sx * sz, y = cx * sz, z = -sy * cz + cy * sx * sz },
+           { x = -cy * sz + sy * sx * cz, y = cx * cz, z = sy * sz + cy * sx * cz },
+           { x = sy * cx, y = -sx, z = cy * cx }
+  end
+  n.worldRight = function(self) local r = axes(self) return r end
+  n.worldUp = function(self) local _, u = axes(self) return u end
+  n.worldForward = function(self)
+    local _, _, z = axes(self)
+    return { x = -z.x, y = -z.y, z = -z.z }
+  end
   n.setShaderParam = function(self, key, a, b, c) self.shader_params[key] = { a, b, c } end
   n.particles = function(self)
     if not self.particles_state then return nil end
@@ -182,7 +216,13 @@ API.draw = {
   end,
   sphere = function() end, box = function() end,
 }
-API.physics = { pause = function() end, isPaused = function() return false end }
+-- ignorePair (engine 0.112) is recorded: every piece that leaves the craft must
+-- pass through the hull it left for a moment rather than be shoved off it.
+API.IGNORED = {}
+API.physics = { pause = function() end, isPaused = function() return false end,
+  ignorePair = function(a, b, secs)
+    API.IGNORED[#API.IGNORED + 1] = { a = a, b = b, secs = secs }
+  end }
 
 -- Audio: record every clip played so we could assert on it; hand back a handle
 -- with the full SoundHandle/TrackHandle surface the real API exposes so the
@@ -229,11 +269,11 @@ API.assembly = {
     -- reporting the node pos PLUS this tick's carry delta — controllers must
     -- base force/pod math on it, never on the (stale) node coords.
     return {
-      mass = 8.0,
+      mass = asm.mass or 8.0,
       com = { x = node.x + asm.carry_dx, y = node.y, z = node.z },
       origin = { x = node.x + asm.carry_dx, y = node.y, z = node.z },
       vel = { x = asm.vel.x, y = asm.vel.y, z = asm.vel.z },
-      angVel = { x = 0, y = 0, z = 0 },
+      angVel = asm.angVel or { x = 0, y = 0, z = 0 },
       -- GROUNDED and ANCHORED are not the same thing and the harness used to
       -- say they were. Anchored is clamped to the pad; grounded is "there is
       -- ground under this craft", which is also true of one that has just
@@ -243,13 +283,15 @@ API.assembly = {
       grounded = (asm.grounded == nil) and asm.anchored or asm.grounded,
       anchored = asm.anchored,
       parts = asm.parts,
+      inertia = asm.inertia,
     }
   end,
-  rebuild = function(node)
+  rebuild = function(node, fn)
     local parts = {}
     for _, k in ipairs(node.kids) do parts[#parts + 1] = k.__id end
     asm = { root = node, parts = parts, anchored = false,
             vel = { x = 0, y = 0, z = 0 }, carry_dx = 0 }
+    if fn then fn(node) end
   end,
   setAnchored = function(node, on)
     assert(asm and asm.root == node, "setAnchored before rebuild")
@@ -269,6 +311,7 @@ API.assembly = {
   end,
   forceAt = function(node, force, at)
     force_calls = force_calls + 1
+    API.LAST_FORCE = { x = force.x, y = force.y, z = force.z } -- (chute drag pulls at the canopy)
     -- The application point must be PHYSICS-consistent: computed from
     -- info.origin (node pos + carry), never the stale node pose. An offset
     -- of a carry-delta here was the constant SAS torque bias of round 10.
@@ -290,8 +333,12 @@ API.assembly = {
     force_calls = force_calls + 1
     API.LAST_FORCE = { x = f.x, y = f.y, z = f.z } -- through-CoM (chute drag)
   end,
-  torque = function() torque_calls = torque_calls + 1 end,
-  impulseAt = function() end,
+  torque = function(_, t) torque_calls = torque_calls + 1; API.LAST_TORQUE = t end,
+  -- Recorded: the safety net brakes a spin with an equal-and-opposite PAIR.
+  impulseAt = function(node, imp, at)
+    API.IMPULSES = API.IMPULSES or {}
+    API.IMPULSES[#API.IMPULSES + 1] = { node = node, imp = imp, at = at }
+  end,
   -- Faithful split: departing nodes leave the root's children (the engine
   -- re-parents them under a fresh stage root) and the compound's part list.
   split = function(node, parts, cb)
@@ -313,13 +360,25 @@ API.assembly = {
       end
       asm.parts = keep
     end
+    -- Like the engine: the departing parts come away under a fresh root, and
+    -- the callback gets that root (the stub's assembly.info has nothing on it).
+    if cb then
+      local st = make_node("Vessel (stage)", node.x, node.y, node.z)
+      for _, pn in ipairs(parts) do
+        pn.parent = st
+        st.kids[#st.kids + 1] = pn
+      end
+      local ok, err = xpcall(cb, debug.traceback, st)
+      if not ok then error("split callback: " .. tostring(err)) end
+    end
   end,
   -- Injectable per-part contact loads (the engine's per-tick attribution):
   -- push { part=, impulse=, x=, y=, z= } into API.IMPACTS to simulate a slam.
+  -- Like the engine, this is LAST TICK's list and can be read more than once
+  -- in a tick (the park check reads it before the damage model); the harness
+  -- clears it at the end of each step.
   impacts = function(node)
-    local out = API.IMPACTS or {}
-    API.IMPACTS = {}
-    return out
+    return API.IMPACTS or {}
   end,
 }
 
@@ -390,9 +449,14 @@ local function deliver_spawns()
       x, y, z = x - pwx, y - pwy, z - pwz
     end
     local n = make_node(req.prefab, x, y, z, req.parent)
+    -- Every part carries a RigidBody whose mass the craft writes (0.117 rb.mass).
+    if req.prefab:find("^Part") then n.components["RigidBody"] = { mass = 1.0 } end
     -- The landing-leg prefab is a hierarchy: the gear device rolls the two
     -- EMPTY pivot nodes (hip → knee), so the harness must spawn them too.
     if req.prefab == "PartLegs" then
+      -- The real prefab's deployed-footprint collider reaches 0.4 m BELOW the
+      -- stack's y = 0 when mounted at y = 0.65: the spawner must seat on it.
+      n.components["RigidBody"] = { half_x = 0.95, half_y = 1.05, half_z = 0.45, mass = 1.0 }
       local up = make_node("LegUpperPivot", 0.12, 0.0, 0.0, n)
       make_node("LegKneePivot", 0.0, -0.84, 0.0, up)
     end
@@ -438,6 +502,7 @@ local function step(n)
     if controller_env then call(controller_env, "lateUpdate", controller_env.__node, TICK) end
     if map_env then call(map_env, "lateUpdate", map_env.__node, TICK) end
     API.KEYS.edge = {}
+    API.IMPACTS = {}
   end
 end
 
@@ -452,7 +517,8 @@ save_store["shipyard.blueprint"] = { parts = {
   { uid = 1, id = "pod", prefab = "PartPod", x = 0, y = 3.0, z = 0, yaw = 0,
     h = 0.8, mass = 1.2, cost = 400, kind = "crewed", thrust = 0, burn = 0, fuel = 0, decouple = 0, legs = 0 },
   { uid = 2, id = "tankS", prefab = "PartTankS", x = 0, y = 2.1, z = 0, yaw = 0, parent = 1,
-    h = 1.0, mass = 1.5, cost = 120, kind = "tank", thrust = 0, burn = 0, fuel = 60, decouple = 0, legs = 0 },
+    h = 1.0, mass = 1.5, cost = 120, kind = "tank", thrust = 0, burn = 0, fuel = 60, fuel_t = 0.01,
+    decouple = 0, legs = 0 },
   { uid = 3, id = "decoupler", prefab = "PartDecoupler", x = 0, y = 1.47, z = 0, yaw = 0, parent = 2,
     h = 0.25, mass = 0.15, cost = 60, kind = "structural", thrust = 0, burn = 0, fuel = 0, decouple = 1, legs = 0 },
   { uid = 4, id = "engineS", prefab = "PartEngineS", x = 0, y = 0.65, z = 0, yaw = 0, parent = 3,
@@ -484,11 +550,30 @@ save_store["shipyard.blueprint"] = { parts = {
   { uid = 9, id = "chute", prefab = "PartChute", x = 0, y = 3.7, z = 0, yaw = 0, parent = 1,
     h = 0.61, mass = 0.1, cost = 80, kind = "canvas", thrust = 0, burn = 0,
     fuel = 0, decouple = 0, legs = 0, chute = 1 },
+  -- A second TANK, higher up the stack: propellant has mass (fuel_t, tonnes per
+  -- unit) and the pool drains from the LOWEST tank first, so this one stays
+  -- full while the one below it feeds the engines.
+  { uid = 11, id = "tankS", prefab = "PartTankS", x = 0, y = 2.6, z = 0.9, yaw = 0, parent = 1,
+    h = 1.0, mass = 0.2, cost = 120, kind = "tank", thrust = 0, burn = 0, fuel = 40, fuel_t = 0.01,
+    decouple = 0, legs = 0 },
+  -- A SECOND chute on the pod's flank, so the over-pressure rip in the stress
+  -- section has a live canopy after the crash tests have used up the first.
+  { uid = 10, id = "chute", prefab = "PartChute", x = 0.8, y = 3.0, z = 0, yaw = 0, parent = 1,
+    h = 0.61, mass = 0.1, cost = 80, kind = "canvas", thrust = 0, burn = 0,
+    fuel = 0, decouple = 0, legs = 0, chute = 1, att = "radial" },
 } }
 save_store["shipyard.launch"] = 1
 save_store["shipyard.pilot"] = 1
 
-local astro = make_node("Astronaut", planet.x, planet.y + planet.radius + 6, planet.z)
+-- The crew stands 14 m short of the planet's top, so the pad (rolled out
+-- `offset` = 14 m along +X) lands ON the top, where up is +Y. The spawner aims
+-- the pad at the radial through its own ground point (a pad aimed by the crew's
+-- radial leaned 18° on a small world); this harness re-expresses spawned
+-- parts as parent-local without rotation, so an untilted pad keeps it honest.
+local astro = make_node("Astronaut", planet.x - 14, planet.y + planet.radius + 6, planet.z)
+-- A dynamic body, like the scene's. Seated, it must ride as KINEMATIC: a live
+-- capsule parked inside the hull every tick is what flung launches (2026-10).
+astro.components["RigidBody"] = { kinematic = 0 }
 local map_node = make_node("Orbit Map", 0, 0, 0)
 for _, nm in ipairs({ "Ship HUD Text", "Vessel HUD", "Navball", "Speed Tape",
                       "Alt Tape", "Speed Readout", "Alt Readout", "Heading Readout" }) do
@@ -502,8 +587,8 @@ end
 -- consumer that needs THE piloted vessel must scan findScripts (the
 -- multi-craft world: landed ships, satellites, dropped stages).
 local decoy_node = make_node("Vessel (parked)", planet.x + 40, planet.y + planet.radius, planet.z)
-register_script("vessel_controller", { __node = decoy_node, __kind = "vessel_controller",
-                                       piloting = false })
+local decoy_env = { __node = decoy_node, __kind = "vessel_controller", piloting = false }
+register_script("vessel_controller", decoy_env)
 
 local sp_node = make_node("Vessel Spawner", 0, 0, 0)
 spawner_env = load_script("solar/scripts/vessel_spawner.lua", "vessel_spawner", sp_node)
@@ -522,6 +607,15 @@ check(asm and asm.anchored, "vessel is CLAMPED after assembly")
 check(controller_env and controller_env.piloting, "pilot auto-boarded from launch")
 check(save_store["shipyard.pilot"] == 0, "pilot handoff flag consumed")
 check(astro.visible == false, "astronaut rides hidden in the pod")
+check(astro.components["RigidBody"].kinematic == 1,
+  "...as a KINEMATIC passenger, not a body inside the hull (the launch fling)")
+local seated_log = false
+for _, l in ipairs(logs) do
+  if l:find("lowest collider 0.40 m below the origin", 1, true) then seated_log = true end
+end
+check(seated_log, "the clamp seats the craft on its LOWEST COLLIDER (the legs' footprint), not on y = 0")
+check(type(controller_env.releaseClamps) == "function",
+  "the clamp release is one published function (SPACE and probes share it)")
 
 -- The pad must be planet-parented and physically UNDER the vessel in WORLD
 -- coordinates (round 7: its local position had the planet offset added twice,
@@ -534,6 +628,18 @@ if pad and asm then
   local vwx, vwy, vwz = world_of(asm.root)
   local d = math.sqrt((pwx - vwx) ^ 2 + (pwy - vwy) ^ 2 + (pwz - vwz) ^ 2)
   check(d < 12, string.format("launchpad sits under the vessel (d=%.1f)", d))
+  -- The pad is aimed at the radial through ITS OWN ground point (here the
+  -- planet's top, so upright), not the crew's: 14 m away on a small world the
+  -- crew's radial is several degrees off, and a leaning pad launched the
+  -- First Flight sideways into a near-orbit.
+  local rx, ry, rz = pwx - planet.x, pwy - planet.y, pwz - planet.z
+  local rl = math.sqrt(rx * rx + ry * ry + rz * rz)
+  -- (Stood up with node:setUp, floptle/0403: no Euler angles to get wrong.)
+  local pu = pad:worldUp()
+  local dot = (pu.x * rx + pu.y * ry + pu.z * rz) / rl
+  check(dot > 1 - 1e-6, string.format("the pad stands on its own local vertical (cos %.7f)", dot))
+  local vu = asm.root:worldUp()
+  check((vu.x * rx + vu.y * ry + vu.z * rz) / rl > 1 - 1e-6, "...and so does the vessel")
 end
 
 -- The cockpit is drawn by flight_hud from the controller's `tele` table.
@@ -565,6 +671,56 @@ check(force_calls > 0, "throttle produced engine forceAt calls")
 check(force_calls >= 50 and force_calls <= 70,
   string.format("core + booster burn, upper stays cold (forceAt ×%d over 30 ticks)", force_calls))
 check(torque_calls > 0, "attitude loop produced torque calls")
+-- PROPELLANT: the burn came out of the LOWER tank only, the pool is the sum of
+-- the tanks, the craft's mass is the dry hull plus what they hold, and every
+-- push is scaled to that wet mass.
+do
+  local c = controller_env
+  local l2, l11 = c.tankLeft(2), c.tankLeft(11)
+  check(l2 and l2 < 60 and l11 == 40,
+    string.format("the lowest tank feeds the engines first (low %.2f / 60, high %s / 40)", l2 or -1, tostring(l11)))
+  check(l2 and math.abs(c.fuel - (l2 + l11)) < 1e-9, "the pool is what the tanks hold")
+  local fm = c.fuelMass()
+  check(math.abs(fm - (l2 + l11) * 0.01) < 1e-9, string.format("propellant has mass: %.3f t", fm))
+  -- The TRUE mass is the blueprint's dry parts + propellant, and it is what
+  -- the physics flies: every part's RigidBody carries its own dry mass plus
+  -- what its tank still holds (massSync, floptle/0406 — no push is rescaled).
+  local dry, wet = c.trueMass()
+  check(math.abs(dry - 6.07) < 1e-9 and math.abs(wet - (6.07 + fm)) < 1e-9,
+    string.format("true mass: the blueprint's dry parts + propellant (%.3f / %.3f t)", dry, wet))
+  check(c.massK == nil, "no push is rescaled to a 'true' mass any more (massK is gone)")
+  local function part_at(px, py, pz)
+    local root = c.dock and c.dock.node
+    for _, n in ipairs(nodes) do
+      if n.valid and n.parent and n.parent.name == "Vessel" and n.name:find("^Part")
+        and math.abs(n.x - px) < 0.05 and math.abs(n.y - py) < 0.05 and math.abs(n.z - pz) < 0.05 then
+        return n
+      end
+    end
+  end
+  local tk2, tk11, pod = part_at(0, 2.1, 0), part_at(0, 2.6, 0.9), part_at(0, 3.0, 0)
+  -- (written at the top of each tick, before that tick's burn: one tick behind)
+  local m2 = tk2 and tk2.components.RigidBody.mass
+  local m11 = tk11 and tk11.components.RigidBody.mass
+  check(m2 and math.abs(m2 - (1.5 + c.tankLeft(2) * 0.01)) < 1e-3,
+    string.format("the burning tank's rigidbody weighs its shell + what it still holds (%s t)", tostring(m2)))
+  check(m11 and math.abs(m11 - (0.2 + 40 * 0.01)) < 1e-6,
+    string.format("...and the full one its shell + 0.4 t (%s t)", tostring(m11)))
+  check(pod and math.abs(pod.components.RigidBody.mass - 1.2) < 1e-9,
+    "a part with no tank weighs its blueprint dry mass")
+  step(6)   -- let the 10 Hz telemetry catch up
+  local tm = tele()
+  check(tm.mass and math.abs(tm.mass - (6.07 + c.fuelMass())) < 0.02,
+    string.format("the HUD's mass is the true wet mass (%.2f t)", tm.mass or -1))
+  check((tm.dv or 0) > 0 and (tm.burn_s or 0) > 0, "the HUD knows the Δv and burn time left")
+  -- Pour it back and draw it again: the pool fills top-down and drains bottom-up.
+  local was = c.fuel
+  c.fuelFill(50)
+  check(c.tankLeft(11) == 40 and math.abs(c.tankLeft(2) - 10) < 1e-9, "a refill tops up the upper tank first")
+  c.fuelDraw(15)
+  check(c.tankLeft(2) == 0 and math.abs(c.tankLeft(11) - 35) < 1e-9, "...and a burn empties the lower one first")
+  c.fuelFill(was)
+end
 check(controller_env.throttle > 0, "throttle climbed under SHIFT")
 local flame_lo, flame_hi, flame_boost
 for _, n in ipairs(nodes) do
@@ -625,6 +781,11 @@ press("space")
 step(2)
 check(#split_calls == 1 and split_calls[1] == 2,
   string.format("boosters away as one 2-part branch (splits: %d)", #split_calls))
+local ig = API.IGNORED[#API.IGNORED]
+check(ig ~= nil and ig.b == asm.root and ig.a ~= asm.root and (ig.secs or 0) > 0,
+  "the booster branch passes through the hull for a moment as it leaves (physics.ignorePair)")
+check(type(controller_env.stageNext) == "function",
+  "staging is one published function (SPACE and probes share it)")
 force_calls = 0
 step(30)
 check(force_calls >= 20 and force_calls <= 35,
@@ -652,15 +813,66 @@ check(legs_after ~= nil and legs_after.parent ~= nil,
 -- ship in a descent and check the drag force opposes the fall.
 check(controller_env.chutes_deployed == false, "chutes start packed")
 asm.vel = { x = 0, y = -40, z = 0 } -- falling toward the planet (which is +X)
+controller_env.throttle = 0.0        -- engines off: any upward force now is the canopy
 API.LAST_FORCE = nil
 press("space")
 step(2)
 check(controller_env.chutes_deployed == true, "SPACE deploys the parachutes")
-step(30) -- canopy fills, drag builds
+-- A canopy per chute part, spawned at the deploy (scripts/parachute.lua draws
+-- it): each knows its chute by `canopy`.
+local canopies = 0
+for _, n in ipairs(nodes) do if n.name == "Parachute" then canopies = canopies + 1 end end
+local claimed = 0
+for _, c in ipairs(controller_env.chutes) do if c.canopy then claimed = claimed + 1 end end
+check(canopies == #controller_env.chutes and claimed == canopies,
+  string.format("one canopy spawned and claimed per chute (%d canopies, %d chutes, %d claimed)",
+    canopies, #controller_env.chutes, claimed))
+-- THE DEPLOY SEQUENCE: lines pay out first (only the pilot chute drags), then
+-- the canopy fills through a reefed stage to full.
+local fill = controller_env.chute_fill
+check(fill.stretch > 0 and fill.stretch < 1 and fill.area <= 0.011,
+  string.format("lines paying out, pilot chute only (stretch %.2f, area %.3f)", fill.stretch, fill.area))
+step(14) -- 40 m/s: line stretch at ~0.2 s
+fill = controller_env.chute_fill
+check(fill.stretch == 1, "the lines are taut a quarter of a second after the mortar at 40 m/s")
 check(API.LAST_FORCE ~= nil and API.LAST_FORCE.y > 0,
   string.format("chute drag opposes the fall (Fy=%s)",
     API.LAST_FORCE and string.format("%.1f", API.LAST_FORCE.y) or "nil"))
-check((tele().chute_open or 0) > 0.5, "telemetry reports the canopy opening")
+step(10)
+local reef_area = controller_env.chute_fill.area
+check(reef_area > 0.05 and reef_area <= 0.2 + 1e-6,
+  string.format("the canopy holds its reefed area first (%.3f)", reef_area))
+local fy_reef = API.LAST_FORCE and API.LAST_FORCE.y or 0
+step(150)
+check((tele().chute_open or 0) > 0.9, string.format("disreefed, it fills to full (%.2f)", tele().chute_open or 0))
+check((API.LAST_FORCE and API.LAST_FORCE.y or 0) > fy_reef * 3,
+  "drag ramps with the inflated area (full ≫ reefed)")
+-- The air stops (landed, hovering): the canopy spills and collapses.
+asm.vel = { x = 0, y = -0.2, z = 0 }
+step(75)
+check(controller_env.chute_fill.area < 0.05,
+  string.format("no air through it: the canopy collapses (area %.3f)", controller_env.chute_fill.area))
+asm.vel = { x = 0, y = -40, z = 0 }
+step(120)
+check(controller_env.chute_fill.area > 0.9, "moving air fills it again")
+-- CUT: the canopies part from their risers (their canvas flies free) and
+-- nothing drags any more.
+local ids = {}
+for i, c in ipairs(controller_env.chutes) do ids[i] = c.canopy end
+check(controller_env.cutChutes() == true, "cutChutes() cuts open chutes")
+API.LAST_FORCE = nil
+step(3)
+local released = true
+for _, c in ipairs(controller_env.chutes) do if c.canopy ~= nil then released = false end end
+check(released and controller_env.chute_fill.area == 0,
+  "...every canopy is released and the drag area is gone")
+check(API.LAST_FORCE == nil or API.LAST_FORCE.y <= 0, "...so nothing pulls up on the craft")
+check(captioned("cut away"), "...and the cut is captioned")
+check(controller_env.cutChutes() == false, "...a second cut does nothing")
+-- (re-rig them for the drag-cap and over-pressure tests below)
+controller_env.chute_fill.cut = nil
+for i, c in ipairs(controller_env.chutes) do c.canopy = ids[i] end
+step(150)
 asm.vel = { x = 0, y = 0, z = 0 } -- settle before the EVA checks
 
 -- EVA: F steps out (flames off, HUD hides); board again FROM THE GROUND —
@@ -668,6 +880,7 @@ asm.vel = { x = 0, y = 0, z = 0 } -- settle before the EVA checks
 press("f")
 step(2)
 check(controller_env.piloting == false, "F exits the pod")
+check(astro.components["RigidBody"].kinematic == 0, "stepping out hands the crew back to physics")
 check(astro.visible == true, "astronaut visible after EVA exit")
 check(flame_lo and flame_lo.particles_state.playing == false, "plume stops on EVA exit")
 check(flame_hi and flame_hi.particles_state.playing == false, "upper plume off on EVA exit")
@@ -680,6 +893,7 @@ controller_env.tele = nil
 press("f")
 step(2)
 check(controller_env.piloting == true, "F re-boards from the ground (spine reach)")
+check(astro.components["RigidBody"].kinematic == 1, "...and re-boarding seats them as a passenger again")
 step(10)
 check(controller_env.tele ~= nil, "telemetry resumes after re-board")
 
@@ -709,11 +923,22 @@ check(astro.visible == true and astro.x == hx and astro.y == hy and astro.z == h
 check(astro.vx == 0 and astro.vy == 0 and astro.vz == 0,
   "...at rest, not still doing the landing's speed")
 check(controller_env.throttle == 0.0, "...with the throttle shut")
+-- PARKING is the engine's (floptle/0385): a resting assembly sleeps on its own
+-- and wakes on any push. The controller no longer re-anchors a parked craft,
+-- so nothing can mistake a park-anchor for the launch clamps.
+step(150)
+check(asm.anchored == false, "a craft left parked is left to the engine's sleep (never re-anchored)")
+local parked_log = false
+for _, l in ipairs(logs) do if l:find("vessel: parked", 1, true) then parked_log = true end end
+check(not parked_log, "...and no stop-gap says it parked it")
 -- Back in the pod for the map/breakup sections below.
 astro.x, astro.y, astro.z = asm.root.x + 2.0, asm.root.y, asm.root.z
 press("f")
 step(2)
 check(controller_env.piloting == true, "...and you can climb back in afterwards")
+check(asm.anchored == false, "boarding a parked craft leaves it unclamped")
+step(12)
+check(tele().anchored == false, "...and the cockpit does not read it as clamped")
 
 -- ── THE MAP flies the piloted vessel (round 11) ─────────────────────────────
 -- Put the piloted vessel "in flight" with a real orbital velocity (the engine
@@ -740,7 +965,7 @@ for _, l in ipairs(tick_lines) do
 end
 check(conic_drawn, string.format(
   "map draws the piloted vessel's orbit conic (%d lines drawn this tick)", #tick_lines))
-check(hudn.text:find("MAP") ~= nil and hudn.text:find("ORBIT") ~= nil,
+check(hudn.text:find("FLYING") ~= nil and hudn.text:find("Orbiting") ~= nil,
   "map info panel reads the vessel's orbit (got: " .. tostring(hudn.text) .. ")")
 press("m")
 step(9) -- the vessel HUD repaints on its own 10 Hz clock
@@ -789,24 +1014,6 @@ check(scraped and sparked, "a sustained survivable grind throws sparks + kicks u
 check(tele().hp and tele().hp < 1 and tele().hp_part ~= nil,
   "telemetry reports the damaged part (got: " .. tostring(tele().hp_part) .. ")")
 
--- A killing blow on the tank (>= tol 3.5, < shatter 13): it explodes, shears off
--- as its own single-part wreck, and — a fuel tank against the ground — craters.
--- (The tank's blast concusses neighbours but doesn't destroy them here, so it's
--- still exactly one split.)
-local n_split = #split_calls
-local n_crater = #API.CRATERS
-API.IMPACTS = { { part = tank_node.id, impulse = 0.0, speed = 8.0, speedAbs = 8.0,
-                  x = tank_node.x, y = tank_node.y, z = tank_node.z } }
-step(2)
-local exploded = false
-for _, e in ipairs(API.EFFECTS) do
-  if e.name == "Explosion" then exploded = true end
-end
-check(exploded, "a full-strength hit explodes the part")
-check(#split_calls == n_split + 1 and split_calls[#split_calls] == 1,
-  "the broken part shears off as its own wreck")
-check(#API.CRATERS > n_crater, "a tank blast against the ground digs a crater")
-
 -- ── THE LANDING THAT DISINTEGRATED ─────────────────────────────────────────
 -- Reported after a chute-and-thrust touchdown: *"as soon as it touched the
 -- ground it like dicintigrated and i got sent flying off infinitely into the
@@ -852,6 +1059,10 @@ check(#split_calls - n_split_land <= 1, string.format(
 -- of the same report. A contact claiming far more than the craft's own speed is
 -- an artifact, and is clamped to what the craft could actually have done.
 asm.vel = { x = 0, y = -3, z = 0 }         -- three metres a second, straight down
+-- ...for a couple of ticks first: the crash ceiling also remembers LAST tick's
+-- speed (the impact tick has already eaten most of a real crash's speed by the
+-- time a script reads it), and this harness changes speed instantly.
+step(2)
 local n_split_art, n_logs_art = #split_calls, #logs
 API.IMPACTS = { { part = chute_node.id, impulse = 0.0, speed = 40.0, speedAbs = 40.0,
                   x = chute_node.x, y = chute_node.y, z = chute_node.z } }
@@ -865,6 +1076,153 @@ for i = n_logs_art + 1, #logs do
   if tostring(logs[i]):find("out of step with the surface") then said = true end
 end
 check(said, "...and says what it ignored, rather than silently swallowing it")
+
+-- ── STRESS AND THE SAFETY NET (the launch-fling round, 2026-10) ────────────
+-- A SPIN no rocket should have is braked back with a pure couple — a pair of
+-- equal and opposite impulses, so it slows the tumble without shoving the hull
+-- — and it is LOGGED, never silent.
+API.IMPULSES = {}
+asm.vel = { x = 0, y = 0, z = 0 }
+step(2)
+asm.angVel = { x = 0, y = 30, z = 0 }
+step(1)
+asm.angVel = nil
+local couple = #API.IMPULSES >= 2
+if couple then
+  local a, b = API.IMPULSES[#API.IMPULSES - 1].imp, API.IMPULSES[#API.IMPULSES].imp
+  couple = math.abs(a.x + b.x) < 1e-6 and math.abs(a.y + b.y) < 1e-6 and math.abs(a.z + b.z) < 1e-6
+end
+check(couple, "a 30 rad/s tumble is braked by an equal-and-opposite impulse pair (a pure couple)")
+check((controller_env.integrity().spin or 0) >= 1, "...and the safety net counts it")
+local spin_logged = false
+for _, l in ipairs(logs) do if l:find("SAFETY: spin clamp", 1, true) then spin_logged = true end end
+check(spin_logged, "...and says so in the log")
+-- With the solver's inertia tensor (assembly.info, floptle/0393) the couple is
+-- EXACT: its angular impulse is I·Δω, taking the spin straight back to the
+-- ceiling in one tick (no halved floor, no overshoot).
+do
+  API.IMPULSES = {}
+  asm.inertia = { { x = 2, y = 0, z = 0 }, { x = 0, y = 3, z = 0 }, { x = 0, y = 0, z = 4 } }
+  asm.angVel = { x = 0, y = 30, z = 0 }
+  step(1)
+  asm.angVel = nil
+  local n = #API.IMPULSES
+  local Lx, Ly, Lz = 0, 0, 0
+  if n >= 2 then
+    local c = asm.root
+    for k = n - 1, n do
+      local e = API.IMPULSES[k]
+      local rx, ry, rz = e.at.x - (c.x + asm.carry_dx), e.at.y - c.y, e.at.z - c.z
+      Lx = Lx + ry * e.imp.z - rz * e.imp.y
+      Ly = Ly + rz * e.imp.x - rx * e.imp.z
+      Lz = Lz + rx * e.imp.y - ry * e.imp.x
+    end
+  end
+  local want = 3 * (12.0 - 30) -- (vessel_controller SPIN_MAX)
+  check(n >= 2 and math.abs(Ly - want) < 1e-6 and math.abs(Lx) < 1e-6 and math.abs(Lz) < 1e-6,
+    string.format("...sized by the solver's inertia tensor: ΔL = I·Δω exactly (%.3f, want %.3f)", Ly, want))
+  -- THE WHEELS' GAIN never outruns a light craft's inertia: weighing what it
+  -- really weighs, a pod-and-tank stack has so little that the full gain
+  -- overshot every tick and span it up to 20 rad/s on the ground. Capped so a
+  -- tick takes out at most half the rate error about the lightest axis.
+  local was_mode = controller_env.sas_mode
+  controller_env.setSAS("stability")
+  asm.inertia = { { x = 0.05, y = 0, z = 0 }, { x = 0, y = 0.08, z = 0 }, { x = 0, y = 0, z = 0.06 } }
+  asm.angVel = { x = 0, y = 2, z = 0 }
+  API.LAST_TORQUE = nil
+  step(1)
+  local T1 = API.LAST_TORQUE
+  local cap = 0.5 * 0.05 / TICK * 2
+  check(T1 and math.abs(math.sqrt(T1.x ^ 2 + T1.y ^ 2 + T1.z ^ 2) - cap) < 1e-6,
+    string.format("the reaction wheels' gain is capped by the lightest axis (|T| %.3f, cap %.3f)",
+      T1 and math.sqrt(T1.x ^ 2 + T1.y ^ 2 + T1.z ^ 2) or -1, cap))
+  asm.inertia = { { x = 50, y = 0, z = 0 }, { x = 0, y = 60, z = 0 }, { x = 0, y = 0, z = 70 } }
+  API.LAST_TORQUE = nil
+  step(1)
+  local T2 = API.LAST_TORQUE
+  check(T2 and math.abs(math.sqrt(T2.x ^ 2 + T2.y ^ 2 + T2.z ^ 2) - controller_env.params.torque * 2) < 1e-6,
+    "...and a heavy craft feels the full gain")
+  asm.angVel = nil
+  controller_env.setSAS(was_mode or "stability")
+  asm.inertia = nil
+end
+-- A one-tick speed GAIN no force on board explains (this harness teleports the
+-- velocity, exactly like a depenetration kick does) is clamped back and logged.
+check((controller_env.integrity().kick or 0) >= 1, "an unexplained one-tick speed gain is caught and counted")
+
+-- DRAG NEVER REVERSES THE CRAFT: an open canopy on a LIGHT craft at speed used
+-- to integrate to a Δv bigger than v itself and fire the ship back up. It is
+-- capped at half the speed per tick.
+asm.mass = 0.5
+asm.grounded = false
+asm.vel = { x = 0, y = -100, z = 0 }
+API.LAST_FORCE = nil
+step(3)
+local cap = 0.5 * 0.5 * 100 / TICK
+local fy = API.LAST_FORCE and API.LAST_FORCE.y or 0
+check(fy > 0 and fy <= cap * 1.001, string.format(
+  "chute drag is capped at half the speed per tick (Fy=%.0f, cap %.0f)", fy, cap))
+asm.mass = nil
+
+-- PRESSURE: an open canopy dragged at 150 m/s through thick air (12.8 kPa,
+-- twice its safe 6.5) tears away — as its OWN body, velocity kept, while the
+-- craft keeps flying and stops counting it as a chute.
+local n_split_rip, n_logs_rip = #split_calls, #logs
+local n_chutes_rip = #controller_env.chutes
+asm.vel = { x = 0, y = -150, z = 0 }
+step(4)
+local ripped, shed = false, false
+for i = n_logs_rip + 1, #logs do
+  if logs[i]:find("chute ripped", 1, true) then ripped = true end
+  if logs[i]:find("STRESS:", 1, true) then shed = true end
+end
+check(ripped and shed, "an open chute far past its safe pressure tears off (STRESS + chute ripped)")
+check(#split_calls == n_split_rip + 1 and split_calls[#split_calls] == 1,
+  "...as one part, its own body")
+local ig2 = API.IGNORED[#API.IGNORED]
+check(ig2 ~= nil and ig2.b == asm.root and (ig2.secs or 0) > 0,
+  "...and passes through the hull for a moment instead of being shoved off it")
+check(#controller_env.chutes == n_chutes_rip - 1,
+  "...and the craft stops dragging a canopy it no longer has")
+check(controller_env.piloting == true, "...while the craft (pod and all) keeps flying")
+asm.vel = { x = 0, y = 0, z = 0 }
+step(2)
+
+-- (After the landing tests: those need the legs, which hang off this tank.)
+-- A killing blow on the tank (>= tol 3.5, < shatter 13): it explodes, shears off
+-- as its own single-part wreck, and — a fuel tank against the ground — craters.
+-- (The tank's blast concusses neighbours but doesn't destroy them here, so it's
+-- still exactly one split.)
+local n_split = #split_calls
+local n_crater = #API.CRATERS
+local legs_aboard = false -- (the drift landing above may already have cost the legs)
+for _, n in ipairs(nodes) do
+  if n.parent == asm.root and n.name == "PartLegs" then legs_aboard = true end
+end
+API.IMPACTS = { { part = tank_node.id, impulse = 0.0, speed = 8.0, speedAbs = 8.0,
+                  x = tank_node.x, y = tank_node.y, z = tank_node.z } }
+step(2)
+local exploded = false
+for _, e in ipairs(API.EFFECTS) do
+  if e.name == "Explosion" then exploded = true end
+end
+check(exploded, "a full-strength hit explodes the part")
+-- The tank goes as its own one-part wreck — and the landing legs BOLTED TO IT
+-- (uid 8, parent = the tank) have nothing holding them any more, so they come
+-- away too, as a body of their own. A part's mount breaking used to leave its
+-- children welded in mid-air to the craft by nothing.
+local want = legs_aboard and 2 or 1
+check(#split_calls == n_split + want and split_calls[n_split + 1] == 1
+    and (not legs_aboard or split_calls[n_split + 2] == 1),
+  string.format("the broken part shears off as its own wreck%s (splits: %d)",
+    legs_aboard and ", and the legs it carried come away separately" or "",
+    #split_calls - n_split))
+local legs_gone = true
+for _, n in ipairs(nodes) do
+  if n.parent == asm.root and n.name == "PartLegs" then legs_gone = false end
+end
+check(legs_gone, "the legs bolted to the broken tank are no longer part of the craft")
+check(#API.CRATERS > n_crater, "a tank blast against the ground digs a crater")
 
 asm.vel = { x = 47, y = 0, z = 0 }         -- back to orbital speed for the ram
 

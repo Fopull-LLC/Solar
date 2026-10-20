@@ -28,7 +28,12 @@ defaults = {
 }
 
 -- Published (walker/camera defer & follow; SAS buttons read/drive these).
+-- `piloting` = this is the craft you are controlling; `crewAboard` = the crew
+-- is riding in it. They differ for a PROBE: you fly it from the ground (the
+-- crew stays where they are), and for a crewed craft you've switched away
+-- from (the crew stays in their seat while you fly something else).
 piloting = false
+crewAboard = false
 throttle = 0.0
 fuel = 0.0
 -- True while we've asked the engine to keep this vessel out of distant-craft
@@ -60,9 +65,14 @@ local heat_fx_t = -10.0
 -- Parachutes: armed in staging, deployed on their stage; while open + in
 -- atmosphere they drag hard against velocity (a soft descent). Ripped off if
 -- opened too fast/high (they only bite in thick air).
-chutes = {}                -- { {x,y,z, uid} } from the blueprint
+chutes = {}                -- { {x,y,z, h, uid, canopy} } from the blueprint
 chutes_deployed = false    -- published for the HUD
-local chute_anim = 0.0     -- 0 packed … 1 fully open (canopy grows)
+local chute_anim = 0.0     -- the canopies' inflated area, 0 packed … 1 full (drag ∝ it)
+-- The deploy sequence's state (update_chutes), published for the canopies
+-- scripts/parachute.lua draws: lines paying out (stretch 0 → 1), then the
+-- inflated area through a reefed stage to full. A global, so fixedUpdate
+-- spends no upvalue on it.
+chute_fill = { t = 0.0, stretch = 0.0, area = 0.0, dens = 0.0, spd = 0.0 }
 local sas_last = "stability"
 
 -- ── ship peripherals ────────────────────────────────────────────────────────
@@ -75,88 +85,101 @@ local GEAR_DEP_U, GEAR_STOW_U = 0.5, 3.0   -- upper strut (hip)
 local GEAR_DEP_K, GEAR_STOW_K = 0.4, -2.4  -- lower strut (knee)
 local function gear_lerp(a, b, f) return a + (b - a) * f end
 
--- Attached DEVICES the pilot can actuate, detected from the blueprint by
--- part capability. Each device kind carries its key, its part set and its
--- actuation (an animation applied to the live child nodes). Adding a new
--- peripheral (lights, solar panels, wheels…) is one more registry entry —
--- the detection, keybind, HUD tag and per-tick actuation all come along.
-local DEVICES = {
-  gear = {
-    key = "g", label = "GEAR", order = 1,
-    detect = function(d) return (d.legs or 0) == 1 end,
-    parts = {},      -- blueprint uids, filled by load_bp
-    on = true,       -- legs spawn deployed (the pad handshake needs them)
-    anim = 1.0,      -- 0 tucked … 1 deployed
-    speed = 2.0,     -- anim units per second
-    pose = {},       -- uid → cached authored child pose
-    -- MULTI-JOINTED fold: each leg part is a hierarchy (PartLegs.prefab.ron) —
-    -- LegUpperPivot rolls at the hip, LegKneePivot (its child) rolls at the knee.
-    -- We drive BOTH so the leg folds up + jack-knifes (retracted) and swings
-    -- out + down with the knee unfolding (deployed). f: 0 stowed … 1 deployed.
-    -- The whole symmetry ring folds together (one device drives every leg).
-    apply = function(dev, child, pose, f)
-      -- Find + cache the two pivot nodes under this leg part (once per leg).
-      local j = pose.joints
-      if not j then
-        j = {}
-        for _, c in ipairs(child:children()) do
-          if c.name == "LegUpperPivot" then
-            j.upper = c
-            for _, gc in ipairs(c:children()) do
-              if gc.name == "LegKneePivot" then j.knee = gc end
-            end
+-- PART ANIMATIONS, by the `anim` a part's deploy module names
+-- (scripts/electronics.lua). Every folding part now moves ON ITS OWN — its own
+-- state in `rec.st.deployed`, its own fold in `panim[uid]` — so one panel can be
+-- out while another is stowed, and an action group can move any set of them.
+-- f: 0 stowed … 1 deployed. `pose` is the child's authored pose, cached once.
+local ANIMS = {
+  -- MULTI-JOINTED fold: each leg part is a hierarchy (PartLegs.prefab.ron) —
+  -- LegUpperPivot rolls at the hip, LegKneePivot (its child) rolls at the knee.
+  -- We drive BOTH so the leg folds up + jack-knifes (retracted) and swings
+  -- out + down with the knee unfolding (deployed).
+  legs = function(child, pose, f)
+    local j = pose.joints
+    if not j then
+      j = {}
+      for _, c in ipairs(child:children()) do
+        if c.name == "LegUpperPivot" then
+          j.upper = c
+          for _, gc in ipairs(c:children()) do
+            if gc.name == "LegKneePivot" then j.knee = gc end
           end
         end
-        pose.joints = j
       end
-      if j.upper then j.upper.roll = gear_lerp(GEAR_STOW_U, GEAR_DEP_U, f) end
-      if j.knee then j.knee.roll = gear_lerp(GEAR_STOW_K, GEAR_DEP_K, f) end
-    end,
+      pose.joints = j
+    end
+    if j.upper then j.upper.roll = gear_lerp(GEAR_STOW_U, GEAR_DEP_U, f) end
+    if j.knee then j.knee.roll = gear_lerp(GEAR_STOW_K, GEAR_DEP_K, f) end
+  end,
+  -- A DISH folds flat for launch and, deployed, swings its boresight onto
+  -- whoever it is talking to (`pose.aim`, set by the comms pass): the authored
+  -- frame turned toward the target by up to 80°, eased in with the fold.
+  dish = function(child, pose, f)
+    local a = pose.aim
+    if a and f > 0 then
+      local yaw, pitch, roll = aim_euler(pose, a, f)
+      child.yaw, child.pitch, child.roll = yaw, pitch, roll
+    else
+      child.yaw, child.pitch, child.roll = pose.yaw or 0, (pose.pitch or 0) - (1 - f) * 1.4, pose.roll or 0
+    end
+    child.scale_y = pose.sy * (0.5 + 0.5 * f)
+  end,
+  -- SOLAR PANELS fold down to a stub and unfold to full span.
+  solar = function(child, pose, f)
+    child.scale_x = (pose.sx or 1.0) * (0.18 + 0.82 * f)  -- unfold the span
+    child.pitch = (pose.pitch or 0) - (1 - f) * 0.5       -- tip toward the sky
+  end,
+  -- The WHIP telescopes: a third of its height stowed, its foot kept on the
+  -- mount (the mesh is centred, so the centre drops as it shortens).
+  whip = function(child, pose, f)
+    local k = 0.3 + 0.7 * f
+    child.scale_y = pose.sy * k
+    child.y = pose.y - (1 - k) * (pose.h or 0.9) * 0.5
+  end,
+}
+
+-- The device KINDS the peripherals console and the old per-kind calls see:
+-- each is a SET of parts (by module), switched together by `setPeripheral` and
+-- shown as one row. The keys are the standard action groups' (G, U, Y, R) and
+-- are fired through the groups now (`groupKeysTick`), not read here.
+local DEVICES = {
+  gear = {
+    key = "g", label = "GEAR", order = 1, state = "deployed",
+    detect = function(d, E) local m = E and E.modOf(d, "deploy") return (m and m.anim == "legs") or (not E and (d.legs or 0) == 1) end,
+    parts = {}, on = true, anim = 1.0, speed = 2.0, pose = {}, nodes = {},
   },
   comms = {
-    key = "u", label = "COMMS DISH", order = 2,
-    detect = function(d) return (d.comms or 0) == 1 end,
-    parts = {},
-    on = false,      -- dishes stow for launch, deploy in space (U)
-    anim = 0.0,
-    speed = 1.2,
-    pose = {},
-    -- Tip the dish up to point at the sky when deployed.
-    apply = function(dev, child, pose, f)
-      child.pitch = (pose.pitch or 0) - (1 - f) * 1.4
-      child.scale_y = pose.sy * (0.5 + 0.5 * f)
-    end,
+    key = "u", label = "ANTENNAS", order = 2, state = "deployed",
+    detect = function(d, E) local m = E and E.modOf(d, "deploy") return (m and (m.anim == "dish" or m.anim == "whip")) or (not E and (d.comms or 0) == 1) end,
+    parts = {}, on = false, anim = 0.0, speed = 1.2, pose = {}, nodes = {},
   },
-  -- SOLAR PANELS deploy on the SAME "U" key as the dish (utilities), so one
-  -- press extends the whole telemetry-and-power kit. Stowed they fold down to a
-  -- stub; deployed they unfold to full span and tip up to catch the sun. Power
-  -- generation (only while deployed AND sunlit) lives in power_tick.
   solar = {
-    key = "u", label = "SOLAR PANELS", order = 3,
-    detect = function(d) return (d.solar or 0) == 1 end,
-    parts = {},
-    on = false,
-    anim = 0.0,
-    speed = 0.8,
-    pose = {},
-    apply = function(dev, child, pose, f)
-      child.scale_x = (pose.sx or 1.0) * (0.18 + 0.82 * f)  -- unfold the span
-      child.pitch = (pose.pitch or 0) - (1 - f) * 0.5       -- tip toward the sky
-    end,
+    key = "u", label = "SOLAR PANELS", order = 3, state = "deployed",
+    detect = function(d, E) local m = E and E.modOf(d, "deploy") return (m and m.anim == "solar") or (not E and (d.solar or 0) == 1) end,
+    parts = {}, on = false, anim = 0.0, speed = 0.8, pose = {}, nodes = {},
   },
-  -- RCS: not a folding device — the "state" is simply whether the thruster bus
-  -- is live. It rides the registry anyway so the keybind, the HUD tag and the
-  -- peripherals row all come along for free, which is the whole point of the
-  -- registry. `launch = false` because thrusters idle on the pad; the fold
-  -- animation is a no-op and `rcsTick` drives the plumes off the live command.
+  lights = {
+    key = "y", label = "LIGHTS", order = 4, state = "lit", verb_on = "ON", verb_off = "OFF",
+    detect = function(d, E) return E and E.modOf(d, "light") ~= nil end,
+    parts = {}, on = false, anim = 0.0, speed = 8.0, pose = {}, nodes = {},
+  },
+  -- RCS: the "state" is the thruster bus MASTER (R, like SAS's T); each block
+  -- also has its own on/off (`rec.st.rcs`) for the groups. `launch = false`
+  -- because thrusters idle on the pad.
   rcs = {
     key = "r", label = "RCS", order = 0, launch = false,
     verb_on = "ON", verb_off = "OFF",
     detect = function(d) return (d.rcs or 0) == 1 end,
-    parts = {}, on = false, anim = 0.0, speed = 8.0, pose = {},
-    apply = function() end,
+    parts = {}, on = false, anim = 0.0, speed = 8.0, pose = {}, nodes = {},
   },
 }
+
+-- Per-part fold (uid → 0..1) and the per-part pose cache / child handles.
+local panim, ppose, pnode = {}, {}, {}
+
+-- The fold of one part, for the stress model and the comms pass.
+function partAnim(uid) return panim[uid] or 0 end
 
 -- Translation state, published for the HUD and the peripherals console.
 rcs = { thrust = 0.0, firing = false, cmd = 0.0 }
@@ -184,6 +207,35 @@ local axial_set_cache = {} -- dec uid → set of uids that DEPART when it fires 
 local eid_uid = {}     -- part entity id → blueprint uid (resolved once, then stable)
 local part_hp = {}     -- uid → 1.0 pristine … 0.0 destroyed
 local destroyed = false -- the POD is gone: the vessel is lost
+-- PHYSICS INTEGRITY state (the seat, the clamps, joint stress, breakup and the
+-- safety net — see the section of that name above `fixedUpdate`). One table, so
+-- the whole subsystem costs the file one local and `fixedUpdate` no upvalue.
+local integ = {
+  gone = {},        -- uid → true once that part has left this craft (staged, shed, broken off)
+  gen = 0,          -- bumped whenever the craft's part set changes (invalidates the caches)
+  seated = false,   -- THIS controller made the crew kinematic (and must hand them back)
+  seat_t = -10.0,   -- last time the seat's kinematic flag was re-asserted
+  box = {},         -- uid → { cx,cy,cz, ex,ey,ez, m } collider box in the vessel frame
+  strain = {},      -- uid → accumulated overload·seconds at that part's joint
+  prev = nil,       -- last tick's state for the safety net { vx,vy,vz, rx,ry,rz, dom }
+  af = nil,         -- smoothed proper acceleration (world, m/s²) for the stress model
+  wprev = nil, alpha = nil,
+  release_t = nil,  -- when the launch clamps let go
+  fired = {},       -- safety-net kind → count (published via `integrity()`)
+  note_t = {},      -- safety-net kind → last log time (rate-limits the log)
+}
+-- Separation and seating knobs, published so a probe can A/B them on a live
+-- craft (`vc.physTune.clear = false`). The defaults are what the game ships:
+--   clear   move a departing piece out of any collider OVERLAP with the hull
+--           before it is released (a split piece starts where it was, and an
+--           overlap is resolved by the engine as a shove on both halves)
+--   ignore  seconds a departing piece and the hull pass through each other
+--           (`physics.ignorePair`, engine 0.112), so pieces that merely TOUCH
+--           at the seam can't knock each other as they part; 0 = off
+--   seatKinematic  the seated crew rides as a kinematic passenger
+-- (A craft left parked needs nothing from here: since floptle/0385 the engine
+-- puts a resting assembly to sleep and wakes it on any push.)
+physTune = { clear = true, ignore = 0.5, seatKinematic = true }
 local smoke_t = 0.0
 local scrape_t = 0.0    -- rate-limits topple/belly-slide grinding damage
 local part_total = 0
@@ -426,29 +478,25 @@ local function load_bp(override)
     dev.on = dev.launch ~= false
     dev.anim, dev.anim_applied = dev.on and 1.0 or 0.0, nil
   end
+  panim, ppose, pnode = {}, {}, {}
   for _, d in pairs(bp.parts) do
     part_total = part_total + 1
-    for _, dev in pairs(DEVICES) do
-      if dev.detect(d) then dev.parts[#dev.parts + 1] = d.uid end
-    end
     if (d.thrust or 0) > 0 then
       local ax, ay, az = part_axis(d)
       engines[#engines + 1] = { x = d.x, y = d.y, z = d.z, dx = ax, dy = ay, dz = az,
                                 thrust = d.thrust, burn = d.burn or 1,
-                                branch = in_branch[d.uid], uid = d.uid }
+                                branch = in_branch[d.uid], uid = d.uid, rec = d }
     end
     if (d.fuel or 0) > 0 then
-      tanks[#tanks + 1] = { y = d.y, fuel = d.fuel, branch = in_branch[d.uid], uid = d.uid }
+      -- `left` is what this tank still holds; `ft` its propellant's tonnes per
+      -- unit (0 for a build saved before propellant had mass).
+      tanks[#tanks + 1] = { y = d.y, fuel = d.fuel, left = d.fuel, ft = d.fuel_t or 0,
+                            branch = in_branch[d.uid], uid = d.uid }
       fuel_cap = fuel_cap + d.fuel
     end
     if (d.decouple or 0) == 1 and (d.radial or 0) ~= 1 then
       decouplers[#decouplers + 1] = { uid = d.uid, y = d.y }
     end
-    -- Electrical parts: batteries add capacity, panels add generation, a dish
-    -- flags that this vessel can hold a telemetry link (feeds the tracker).
-    if (d.power or 0) == 1 then elec.cap = elec.cap + (d.ec or 0) end
-    if (d.solar or 0) == 1 then elec.gen = elec.gen + (d.gen or 0) end
-    if (d.comms or 0) == 1 then elec.comms = true end
   end
   -- THE COMMAND POD. A stack can carry MORE THAN ONE crewed part — a lander
   -- riding its mothership through a docking seam is exactly that — and `pairs`
@@ -458,8 +506,14 @@ local function load_bp(override)
   -- lander. Pick the crewed part nearest the tree root (the primary craft's
   -- pod), tie-broken by uid so the same blueprint always flies the same way.
   local best_pod, best_rank
+  -- (no crewed part: the PROBE CORE nearest the root commands the craft)
+  local want_kind = nil
   for _, d in pairs(bp.parts) do
-    if d.kind == "crewed" then
+    if d.kind == "crewed" then want_kind = "crewed" break end
+    if d.kind == "probe" then want_kind = "probe" end
+  end
+  for _, d in pairs(bp.parts) do
+    if d.kind == want_kind then
       local depth, u, guard = 0, d.uid, 0
       while by_uid[u] and (by_uid[u].parent or 0) ~= 0 and guard < 64 do
         u = by_uid[u].parent
@@ -473,6 +527,7 @@ local function load_bp(override)
     pod = { x = best_pod.x, y = best_pod.y, z = best_pod.z }
     pod_uid = best_pod.uid
   end
+  podCrewed = best_pod ~= nil and best_pod.kind == "crewed"
   table.sort(decouplers, function(a, b) return a.y < b.y end)
   -- Build the ordered EVENT list: booster branches group into ring events by
   -- symmetry group (a lone radial decoupler is its own ring), axial cuts are
@@ -507,7 +562,7 @@ local function load_bp(override)
   local chute_stage = 1e9
   for _, d in pairs(bp.parts) do
     if (d.chute or 0) == 1 then
-      chutes[#chutes + 1] = { x = d.x, y = d.y, z = d.z, uid = d.uid }
+      chutes[#chutes + 1] = { x = d.x, y = d.y, z = d.z, h = d.h, uid = d.uid }
       chute_uids[#chute_uids + 1] = d.uid
       local st = d.stage or 0
       if st > 0 and st < chute_stage then chute_stage = st end
@@ -516,6 +571,13 @@ local function load_bp(override)
   if #chutes > 0 then
     events[#events + 1] = { kind = "chute", uids = chute_uids,
                             stage = chute_stage < 1e9 and chute_stage or 2e9 }
+  end
+  -- FAIRINGS: each one's jettison is its own event (and its own action).
+  for _, d in pairs(bp.parts) do
+    if (d.fairing or 0) > 0 and (d.fr or 0) > 0 and not (type(d.st) == "table" and d.st.jettisoned) then
+      local st = d.stage or 0
+      events[#events + 1] = { kind = "fairing", uid = d.uid, y = d.y, stage = st > 0 and st or 1e9 }
+    end
   end
   for _, ev in ipairs(events) do
     if ev.stage >= 1e9 then
@@ -528,8 +590,21 @@ local function load_bp(override)
     end
   end
   table.sort(events, function(a, b) return a.stage < b.stage end)
-  fuel = fuel_cap
-  elec.charge = elec.cap   -- batteries roll out of the VAB topped up
+  fuelSort()
+  fuelSync()
+  -- Electronics: every part's live state (batteries roll out of the VAB topped
+  -- up, legs down, panels and antennas stowed — or whatever a restored craft's
+  -- records say), the device sets, and the action groups.
+  do
+    local E = elib()
+    if E then for _, d in pairs(bp.parts) do E.stateOf(d) end end
+  end
+  bp_by_uid = by_uid
+  integ.gone = {}
+  part_hp = {}
+  for _, d in pairs(bp.parts) do part_hp[d.uid] = 1.0 end
+  elecRescan()
+  groupsReset(bp.groups)
   focusHeight = pod.y
   podLX, podLY, podLZ = pod.x, pod.y, pod.z
   -- Damage model state: every part starts pristine.
@@ -540,8 +615,11 @@ local function load_bp(override)
   eid_uid = {}              -- clear the part-entity → uid cache
   part_hp = {}
   for _, d in pairs(bp.parts) do part_hp[d.uid] = 1.0 end
+  integ.gone, integ.box, integ.strain = {}, {}, {}
+  integ.gen = integ.gen + 1
   destroyed = false
   chutes_deployed = false
+  chute_fill = { t = 0.0, stretch = 0.0, area = 0.0, dens = 0.0, spd = 0.0 }
   -- Docking ports are peripherals, not staging events — they're rescanned here
   -- and again after every dock/undock rewrites the tree.
   dock.ports, dock.latched, dock.pending, dock.target = {}, 0, nil, nil
@@ -554,6 +632,13 @@ end
 -- + every still-attached side booster (boosters light with stage 1 and burn
 -- until their radial decoupler fires).
 local function engine_active(e, cut)
+  -- Its own switch first: an engine shut down by action stays down; one
+  -- activated by action burns whatever stage it sits in.
+  local st = e.rec and e.rec.st
+  if st then
+    if st.running == false then return false end
+    if st.forced then return true end
+  end
   if e.branch then return true end -- attached booster (dropped at separation)
   return e.y < cut - 0.01
 end
@@ -680,11 +765,23 @@ local function update_navball(node, nx, ny, nz, fx, fy, fz, tgtx, tgty, tgtz)
   local heading = (math.deg(math.atan2(he, hn)) + 360) % 360
   local dxr, dyr, dzr = node.x - b.x, node.y - b.y, node.z - b.z
   local alt = math.sqrt(dxr * dxr + dyr * dyr + dzr * dzr) - b.radius
-  if tape_spd then tape_spd:setShaderParam("tape", vl, 40, 5) end
-  if tape_alt then tape_alt:setShaderParam("tape", alt, 150, 25) end
+  local tk_v, tk_a = worldScaleK()
+  if tape_spd then tape_spd:setShaderParam("tape", vl, tk_v > 1.2 and 60 or 40, 5) end
+  if tape_alt then tape_alt:setShaderParam("tape", alt, tk_a > 1.5 and 300 or 150, tk_a > 1.5 and 50 or 25) end
   if txt_spd then txt_spd.text = string.format("%.0f", vl) end
-  if txt_alt then txt_alt.text = string.format("%.0f", alt) end
+  -- (never "-0": a craft sitting on the pad wobbles either side of zero)
+  if txt_alt then txt_alt.text = string.format("%.0f", math.abs(alt) < 0.5 and 0 or alt) end
   if txt_hdg then txt_hdg.text = string.format("%03.0f°", heading) end
+end
+
+-- ── effects director ────────────────────────────────────────────────────────
+-- vfx.lua fires every physical effect in the planet's own frame (see its
+-- header). Resolved lazily and re-resolved if it goes; nil in a harness, where
+-- each call site falls back to its plain spawnEffect.
+local fx_ref = nil
+local function fxd()
+  if not (fx_ref and fx_ref.valid) then fx_ref = findScript and findScript("vfx") or nil end
+  return fx_ref
 end
 
 -- ── engine plumes ───────────────────────────────────────────────────────────
@@ -720,6 +817,8 @@ local function set_flames(node, pct, cut)
           end
           local light = f:getcomponent("PointLight")
           if light then light.intensity = live and (0.8 + pct * 4.0) or 0.0 end
+          local fx = fxd()
+          if fx then fx.flame(f, live, pct) end
         end
       end
     end
@@ -812,6 +911,9 @@ end
 -- tree whether that uid is on the departing side.
 local function child_departs_axial(child, dec_uid)
   local set = axial_departing(dec_uid)
+  -- By entity first: a part an actuator has moved is not at its blueprint spot.
+  local known = eid_uid[child.id]
+  if known then return set[known] == true end
   for uid, q in pairs(bp_by_uid) do
     if math.abs((child.x or 0) - q.x) < 0.06 and math.abs((child.y or 0) - q.y) < 0.06
       and math.abs((child.z or 0) - q.z) < 0.06 then
@@ -825,9 +927,15 @@ end
 -- the pooled fuel and forgets those engines — decided by the departing SET
 -- (tree membership), so branch (booster) engines/tanks leave exactly when their
 -- subtree does, with no per-part y guessing.
-local function drop_departing(dec_uid)
-  local set = axial_departing(dec_uid)
-  local frac = (fuel_cap > 0) and (fuel / fuel_cap) or 0
+--
+-- `drop_set` is the one place a set of parts LEAVES this craft, whatever took
+-- them (a decoupler, a booster ring, a joint that failed under load, a part
+-- that broke): their engines and tanks leave the pools, and they are marked
+-- GONE, which takes them out of every per-part pass — heating, smoke, hull
+-- contact, the stress model. (Before, a staged-away part stayed in those passes
+-- as a ghost at its old blueprint spot: a spent stage could still "burn up on
+-- reentry" from inside the craft that had dropped it.)
+local function drop_set(set)
   local keep_e, keep_t, cap = {}, {}, 0.0
   for _, e in ipairs(engines) do
     if not set[e.uid] then keep_e[#keep_e + 1] = e end
@@ -839,25 +947,158 @@ local function drop_departing(dec_uid)
     end
   end
   engines, tanks, fuel_cap = keep_e, keep_t, cap
-  fuel = cap * frac
+  fuelSync()   -- departing tanks take exactly what is left in them
+  for u in pairs(set) do
+    integ.gone[u] = true
+    part_hp[u] = nil
+  end
+  integ.gen = integ.gen + 1
+end
+
+-- ── PROPELLANT ──────────────────────────────────────────────────────────────
+-- The pool is the sum of what every tank still holds (`t.left`), and it is
+-- drunk from the tanks that will LEAVE SOONEST first: side boosters, then the
+-- bottom stage, upward — `tanks` is kept in that order (fuelSort). So a stage
+-- that separates dry throws away its empty tanks and nothing else, and its Δv
+-- is what the builder quotes. Propellant has mass (`t.ft` tonnes per unit, from
+-- the blueprint): each tank part's RigidBody carries what it still holds
+-- (massSync), so the craft flies as heavy as the builder says and lightens as
+-- it burns.
+-- Globals, so fixedUpdate reaches them without spending an upvalue.
+function fuelSort()
+  table.sort(tanks, function(a, b)
+    local ab, bb = a.branch and 0 or 1, b.branch and 0 or 1
+    if ab ~= bb then return ab < bb end
+    if math.abs(a.y - b.y) > 1e-3 then return a.y < b.y end
+    return (a.uid or 0) < (b.uid or 0)
+  end)
+end
+
+function fuelSync()
+  local s = 0.0
+  for _, t in ipairs(tanks) do s = s + (t.left or 0) end
+  fuel = s
+  return s
+end
+
+-- Draw `units` (tanks that leave soonest first). Returns what it got.
+function fuelDraw(units)
+  local need = units or 0
+  for _, t in ipairs(tanks) do
+    if need <= 0 then break end
+    local l = t.left or 0
+    if l > 0 then
+      local take = math.min(l, need)
+      t.left = l - take
+      need = need - take
+    end
+  end
+  fuelSync()
+  return (units or 0) - math.max(0, need)
+end
+
+-- Set the pool to `total` units, filling the tanks that leave LAST first.
+function fuelFill(total)
+  local left = math.max(0, total or 0)
+  for i = #tanks, 1, -1 do
+    local t = tanks[i]
+    local f = math.min(t.fuel or 0, left)
+    t.left = f
+    left = left - f
+  end
+  fuelSync()
+end
+
+-- Tonnes of propellant aboard.
+function fuelMass()
+  local m = 0.0
+  for _, t in ipairs(tanks) do m = m + (t.left or 0) * (t.ft or 0) end
+  return m
+end
+
+-- Tonnes of propellant in the tank part `uid` (0 for anything else).
+function tankFuelT(uid)
+  for _, t in ipairs(tanks) do
+    if t.uid == uid then return (t.left or 0) * (t.ft or 0) end
+  end
+  return 0.0
+end
+
+-- Units still in tank part `uid`, or nil when it isn't a live tank.
+function tankLeft(uid)
+  for _, t in ipairs(tanks) do
+    if t.uid == uid then return t.left or 0 end
+  end
+  return nil
+end
+
+-- THE CRAFT'S TRUE MASS: the blueprint's dry parts still aboard, plus what the
+-- tanks hold, plus the hold's load (`holdT`, set by holdApplyMass). It is what
+-- massSync gives the physics, part by part, so assembly.info(node).mass reads
+-- the same number a tick later. Returns dry, wet (tonnes).
+holdT = 0.0
+function trueMass()
+  local dry = 0.0
+  for u, d in pairs(bp_by_uid or {}) do
+    if not integ.gone[u] and (part_hp[u] or 1) > 0 then dry = dry + (d.mass or 0) end
+  end
+  dry = dry + (holdT or 0)
+  return dry, dry + fuelMass()
+end
+
+-- Δv left, stage by stage, the way the builder quotes it: each remaining axial
+-- stage burns its OWN tanks (they drain first) on its own engines, under
+-- everything still above it; boosters ride with the bottom stage. True masses.
+function stagedDv()
+  local cuts = {}
+  for _, ev in ipairs(events) do
+    if ev.kind == "axial" then cuts[#cuts + 1] = ev.y end
+  end
+  table.sort(cuts)
+  local total = 0.0
+  for k = 0, #cuts do
+    local lo = (k == 0) and -math.huge or cuts[k]
+    local hi = cuts[k + 1] or math.huge
+    local m0, own, th, burn = 0.0, 0.0, 0.0, 0.0
+    for u, d in pairs(bp_by_uid or {}) do
+      if not integ.gone[u] and (part_hp[u] or 1) > 0 and (d.y or 0) > lo + 0.01 then
+        m0 = m0 + (d.mass or 0)
+      end
+    end
+    for _, t in ipairs(tanks) do
+      if t.y > lo + 0.01 then
+        local f = (t.left or 0) * (t.ft or 0)
+        m0 = m0 + f
+        if t.y < hi - 0.01 or (k == 0 and t.branch) then own = own + f end
+      end
+    end
+    for _, e in ipairs(engines) do
+      if (e.y > lo + 0.01 and e.y < hi - 0.01) or (k == 0 and e.branch) then
+        th, burn = th + e.thrust, burn + (e.burn or 0)
+      end
+    end
+    if k == 0 then m0 = m0 + (holdT or 0) end
+    local ft = 0.0
+    for _, t in ipairs(tanks) do if (t.ft or 0) > 0 then ft = t.ft break end end
+    if th > 0 and burn > 0 and ft > 0 and own > 0 and m0 > own then
+      total = total + th / (burn * ft) * math.log(m0 / (m0 - own))
+    end
+  end
+  return total
+end
+
+local function drop_departing(dec_uid)
+  drop_set(axial_departing(dec_uid))
 end
 
 -- Booster separation bookkeeping: the branch's engines and tanks leave with
 -- it (its tanks take their pooled-fuel share along).
 local function drop_branch(root_uid)
-  local frac = (fuel_cap > 0) and (fuel / fuel_cap) or 0
-  local keep_e, keep_t, cap = {}, {}, 0.0
-  for _, e in ipairs(engines) do
-    if e.branch ~= root_uid then keep_e[#keep_e + 1] = e end
+  local set = { [root_uid] = true }
+  for u, r in pairs(bp_in_branch) do
+    if r == root_uid then set[u] = true end
   end
-  for _, t in ipairs(tanks) do
-    if t.branch ~= root_uid then
-      keep_t[#keep_t + 1] = t
-      cap = cap + t.fuel
-    end
-  end
-  engines, tanks, fuel_cap = keep_e, keep_t, cap
-  fuel = cap * frac
+  drop_set(set)
 end
 
 -- ── damage / destruction ────────────────────────────────────────────────────
@@ -875,8 +1116,19 @@ end
 -- a careless bump should HURT, not bounce off. These are low crash speeds, so
 -- flying clean matters. Damage starts well under the tolerance (see damage_tick)
 -- and a part that's already beaten up breaks far easier.
-local TOLERANCE = { crewed = 5, tank = 3.5, engine = 4.5, structural = 6, canvas = 2.5 }
+-- The ENGINE is the landing gear of every stack that comes down on its chutes:
+-- the bell touches first. At 4.5 m/s the starter rocket's own textbook chute
+-- landing (measured 5.1 m/s on engine 0.116) crushed the bell, and the bell's
+-- blast took the tank and the pod with it. 7 m/s is a firm landing, still
+-- well short of a drop.
+-- The CREWED pod is built to come home: a real capsule shrugs off a 4.5 m/s
+-- chute touchdown (First Flight's landing broke a 5 m/s pod and lost the
+-- contract), so 9 m/s — still well short of a drop.
+local TOLERANCE = { crewed = 9, tank = 3.5, engine = 7.0, structural = 6, canvas = 2.5 }
 local function part_tolerance(d)
+  -- A wheel's tyre and suspension are made to take the ground (a rover set
+  -- down off a lander, a drop off a ledge): like deployed legs.
+  if (d.wheel or "") ~= "" then return 10 end
   if (d.legs or 0) == 1 then
     -- Legs exist to hit the ground — but only DEPLOYED ones absorb it.
     return gear_deployed and 9 or 3
@@ -893,24 +1145,89 @@ local damage_arm = 0.0
 -- old 0.05 threshold and silently drop its impact — so a deflected, grinding
 -- or already-wounded part took no further damage. Nearest-match + cache fixes
 -- that (the entity id is stable, so one resolve holds for the part's life).
+local function uid_of_node(c)
+  local eid = c.id
+  local uid = eid_uid[eid]
+  if not uid then
+    local best, bd = nil, 1e9
+    for u, d in pairs(bp_by_uid) do
+      local dx, dy, dz = (c.x or 0) - d.x, (c.y or 0) - d.y, (c.z or 0) - d.z
+      local dd = dx * dx + dy * dy + dz * dz
+      if dd < bd then bd, best = dd, u end
+    end
+    uid = best
+    eid_uid[eid] = uid
+  end
+  return uid
+end
+
 local function uid_of_child(node, eid)
   for _, c in ipairs(node:children()) do
     if c.id == eid then
-      local uid = eid_uid[eid]
-      if not uid then
-        local best, bd = nil, 1e9
-        for u, d in pairs(bp_by_uid) do
-          local dx, dy, dz = (c.x or 0) - d.x, (c.y or 0) - d.y, (c.z or 0) - d.z
-          local dd = dx * dx + dy * dy + dz * dz
-          if dd < bd then bd, best = dd, u end
-        end
-        uid = best
-        eid_uid[eid] = uid
-      end
+      local uid = uid_of_node(c)
       if uid then return uid, c end
     end
   end
   return nil
+end
+
+-- THE CRAFT WEIGHS WHAT IT CARRIES (floptle/0406: `rb.mass` is live). Each
+-- part's RigidBody is given its blueprint dry mass, plus the propellant its
+-- tank still holds, plus its share of the hold's cargo (`holdT`); the engine
+-- re-derives the compound's mass, centre of mass and inertia on the next tick,
+-- with no rebuild and no kick. So thrust, RCS, drag, contacts and torques all
+-- act on the craft the builder quoted, lightening as it burns. A part's mass is
+-- written only when it moves (a tank that is burning, a hold that was loaded);
+-- the part list is re-read when the craft changes, and once a second.
+local mass_sync = { gen = -1, t = -10.0, list = {}, bays = 0, last = {} }
+function massSync(node)
+  local ms = mass_sync
+  if ms.gen ~= integ.gen or time - ms.t >= 1.0 then
+    ms.gen, ms.t = integ.gen, time
+    local list, bays = {}, 0
+    for _, c in ipairs(node:children()) do
+      -- parts only (a part node carries its prefab's name): never a passenger
+      local nm = c.name or ""
+      local u = nm:sub(1, 4) == "Part" and uid_of_node(c)
+      local d = u and bp_by_uid[u]
+      local rb = d and not integ.gone[u] and c:getcomponent("RigidBody")
+      if rb then
+        list[#list + 1] = { rb = rb, uid = u, d = d, eid = c.id }
+        if (d.cargo or 0) > 0 then bays = bays + 1 end
+      end
+    end
+    ms.list, ms.bays = list, bays
+  end
+  local share = (ms.bays > 0) and (holdT or 0) / ms.bays or 0.0
+  local total = 0.0
+  for _, e in ipairs(ms.list) do
+    local d = e.d
+    local m = math.max(0.001, (d.mass or 0) + tankFuelT(e.uid)
+      + (((d.cargo or 0) > 0) and share or 0.0))
+    -- a powered wheel whose tyre is out: the tyre body carries its share
+    if R2.live and (d.wheel or "") ~= "" then m = math.max(0.001, m * (1 - TYRE_SHARE)) end
+    local was = ms.last[e.eid]
+    if not was or math.abs(m - was) > 1e-6 then
+      e.rb.mass = m
+      ms.last[e.eid] = m
+    end
+    total = total + m
+  end
+  -- A craft restored in flight (fleet handoff `vel`): pushed to its orbital
+  -- velocity the first tick its compound weighs what the parts now say, so
+  -- the push is the right size and lands through the right centre of mass.
+  local push = integ.push
+  if push and #ms.list > 0 then
+    local i = assembly.info(node)
+    if i and (i.mass or 0) > 0 and math.abs(i.mass - total) < 1e-3 * math.max(1, total) then
+      integ.push = nil
+      local v0, c = i.vel, i.com or i.origin
+      assembly.impulseAt(node, vec3((push.x - v0.x) * i.mass, (push.y - v0.y) * i.mass,
+        (push.z - v0.z) * i.mass), c)
+      integ.handoff_t = time + 1.0 -- (the safety net reads the jump a tick late)
+      log(string.format("vessel: back on its orbit at %.1f m/s", math.sqrt(push.x ^ 2 + push.y ^ 2 + push.z ^ 2)))
+    end
+  end
 end
 
 -- Push a part's visible battle damage to its hull shader (the `damage` uniform
@@ -918,10 +1235,55 @@ end
 -- straight off the part's remaining HP so the hull visibly deteriorates as you
 -- scrape and crash it, exactly what Ty couldn't see before.
 local diag_dmg_logged = false
+MESH_KIDS = { Body = true, Mount = true, Tyre = true, Base = true, Head = true, Stage = true,
+              Hub = true, Fingers = true, Housing = true, Bit = true }
 local function set_part_damage(c, hp)
   if c and c.valid then
     local dmg = 1.0 - math.max(0.0, math.min(1.0, hp or 1.0))
-    c:setShaderParam("damage", dmg)
+    -- Parts wearing the hullPanels shader take the uniform. The textured
+    -- parts (tools/gen_part_meshes.py) have NO node Material — their look is
+    -- per-part `object_materials`, all on hullPanels.flsl now — and
+    -- node:material() RAISES on such a node, which took this whole controller
+    -- down on the first scrape. So: ask for the component first; a part
+    -- without one gets the `damage` param through setShaderParam (which fans
+    -- out to every child's materials: scorch, gouges, dents), and a soot TINT
+    -- only when that call isn't there or fails.
+    -- Round-two parts carry their meshes as named children (the root is the
+    -- collider): the wear goes on those.
+    local kids = nil
+    for _, k in ipairs(c.children and c:children() or {}) do
+      if MESH_KIDS[k.name or ""] then kids = kids or {}; kids[#kids + 1] = k end
+    end
+    if kids then
+      for _, k in ipairs(kids) do pcall(k.setShaderParam, k, "damage", dmg) end
+      return
+    end
+    local getc = c.getcomponent or c.getComponent
+    local has_mat = false
+    if getc then
+      local okc, comp = pcall(getc, c, "Material")
+      has_mat = okc and comp ~= nil
+    end
+    local own = nil
+    if has_mat and c.material then
+      local okm, m = pcall(c.material, c)
+      own = okm and m or nil
+    end
+    local painted = false
+    if own and own.shader and own.shader ~= "" then
+      pcall(c.setShaderParam, c, "damage", dmg)
+      painted = true
+    elseif not has_mat and c.setShaderParam then
+      painted = pcall(c.setShaderParam, c, "damage", dmg)
+    end
+    if painted then
+      -- (the shader draws the wear; no tint on top)
+    elseif c.setTint and dmg > 0.02 then
+      local v = math.sqrt(dmg)
+      pcall(c.setTint, c, { 1 - 0.55 * v, 1 - 0.6 * v, 1 - 0.64 * v })
+    elseif c.setTint then
+      pcall(c.setTint, c)
+    end
     if not diag_dmg_logged and dmg > 0.05 then
       diag_dmg_logged = true
       log(string.format(
@@ -932,11 +1294,16 @@ local function set_part_damage(c, hp)
   end
 end
 
+-- Published for tests/smoke_part_damage.lua: paint a part's wear by hand.
+function paintDamage(c, hp) set_part_damage(c, hp) end
+
 -- The live child node for a blueprint uid (position match) — used to paint
 -- damage on parts wounded by a chain reaction they weren't directly hit by.
 local function child_of_uid(node, uid)
   local d = bp_by_uid[uid]
   if not d then return nil end
+  local known = R2 and R2.node[uid]
+  if known and known.valid then return known end
   for _, c in ipairs(node:children()) do
     if math.abs((c.x or 0) - d.x) < 0.06 and math.abs((c.y or 0) - d.y) < 0.06
       and math.abs((c.z or 0) - d.z) < 0.06 then
@@ -948,7 +1315,6 @@ end
 
 -- A destroyed part's engines/tanks leave the pools (its fuel share with it).
 local function drop_part(uid)
-  local frac = (fuel_cap > 0) and (fuel / fuel_cap) or 0
   local keep_e, keep_t, cap = {}, {}, 0.0
   for _, e in ipairs(engines) do
     if e.uid ~= uid then keep_e[#keep_e + 1] = e end
@@ -960,161 +1326,777 @@ local function drop_part(uid)
     end
   end
   engines, tanks, fuel_cap = keep_e, keep_t, cap
-  fuel = cap * frac
+  fuelSync()
 end
 
--- Per-tick peripheral actuation: ease each device toward its on/off state and
--- drive its live child nodes (leg struts fold out/in). VISUAL fold only — the
--- leg's COLLISION uses a stable always-on deployed-footprint box on PartLegs.
--- (An earlier version re-posed the colliders to follow the fold via
--- assembly.syncColliders, but a gear-up craft then had no footprint and slid /
--- bounced — reverted; fold-tracking colliders need a stability floor first.)
-local function update_peripherals(node, dt)
-  for _, dev in pairs(DEVICES) do
-    local target = dev.on and 1.0 or 0.0
-    if dev.anim ~= target then
-      local step = dev.speed * dt
-      dev.anim = (dev.anim < target) and math.min(target, dev.anim + step)
-        or math.max(target, dev.anim - step)
+-- ══ ELECTRONICS ══════════════════════════════════════════════════════════════
+--
+-- Everything electrical about this craft, by its parts' MODULES
+-- (scripts/electronics.lua holds the rules; this is where they meet the hull):
+--
+--   devices   every folding part eases toward its own `st.deployed`, lights
+--             follow `st.lit` (update_peripherals)
+--   power     supply (sunlit panels, running engines' alternators), storage
+--             (each battery's own charge in `st.charge`) and loads (command
+--             parts, reaction wheels by how hard they are working, radios,
+--             lights), stepped at 10 Hz (power_tick)
+--   comms     what our antennas add up to, handed to the network
+--             (scripts/comms.lua), and the path home it hands back
+--   control   who may fly this: the crew if they are aboard; a probe core only
+--             with power AND a link home (controlTick)
+--   actions   every part action and the action groups that fire them
+--             (partAction, fireGroup, groupKeysTick)
+--
+-- All of it is reached from fixedUpdate through globals or the `elec` table:
+-- that function sits at LuaJIT's 60-upvalue ceiling.
+
+-- The rulebook, resolved once (nil in a harness without it — the craft then
+-- flies the way it did before electronics: always powered, always in contact).
+-- (A global, not a local: load_bp, far above, asks for it too.)
+local elib_ref = nil
+function elib()
+  if not elib_ref or not elib_ref.valid then
+    elib_ref = findScript and findScript("electronics") or nil
+  end
+  return elib_ref
+end
+
+-- The comms network (scripts/comms.lua), resolved once.
+local comms_ref = nil
+local function comms_net()
+  if not comms_ref or not comms_ref.valid then
+    comms_ref = findScript and findScript("comms") or nil
+  end
+  return comms_ref
+end
+
+-- Is this part still aboard and in one piece?
+local function aboard(uid)
+  return bp_by_uid[uid] ~= nil and not integ.gone[uid] and (part_hp[uid] or 1) > 0
+end
+
+-- The craft's parts that are still aboard, uid → record (what every electronics
+-- question is asked about).
+function aboardRecs()
+  local out = {}
+  for u, d in pairs(bp_by_uid) do
+    if aboard(u) then out[u] = d end
+  end
+  return out
+end
+
+-- Re-sort the parts into device sets and electrical roles. Cheap; run whenever
+-- the part list changes (rollout, docking, undocking, staging, breakage).
+function elecRescan()
+  local E = elib()
+  elec.parts = {}       -- uids with any electrical module
+  elec.crewPart, elec.probePart = nil, nil
+  for _, dev in pairs(DEVICES) do dev.parts = {} end
+  local list = {}
+  for u, d in pairs(bp_by_uid) do list[#list + 1] = d end
+  table.sort(list, function(a, b) return (a.uid or 0) < (b.uid or 0) end)
+  for _, d in ipairs(list) do
+    local u = d.uid
+    if aboard(u) then
+      for _, dev in pairs(DEVICES) do
+        if dev.detect(d, E) then dev.parts[#dev.parts + 1] = u end
+      end
+      if E then
+        E.stateOf(d)
+        for _, m in ipairs(E.modsOf(d)) do
+          if m.type == "command" then
+            if (m.crew or 0) > 0 then elec.crewPart = elec.crewPart or u
+            else elec.probePart = elec.probePart or u end
+          end
+        end
+        if #E.modsOf(d) > 0 then elec.parts[#elec.parts + 1] = u end
+        local dm = E.modOf(d, "deploy")
+        if panim[u] == nil then panim[u] = (dm and d.st and d.st.deployed) and 1.0 or 0.0 end
+      elseif d.kind == "crewed" then
+        elec.crewPart = elec.crewPart or u
+      end
     end
-    if #dev.parts > 0 and dev.anim_applied ~= dev.anim then
-      dev.anim_applied = dev.anim
+  end
+  elec.gen_seen = integ.gen
+  -- A device kind is "on" when most of its parts are (without the rulebook the
+  -- parts carry no state and the kind's own switch stands).
+  for id, dev in pairs(DEVICES) do
+    if E and id ~= "rcs" and dev.state and #dev.parts > 0 then
+      local on = 0
+      for _, u in ipairs(dev.parts) do
+        local st = bp_by_uid[u] and bp_by_uid[u].st
+        if st and st[dev.state] then on = on + 1 end
+      end
+      dev.on = on * 2 >= #dev.parts
+    end
+  end
+end
+
+-- The authored frame of a part turned toward `a` (vessel frame, unit) by up to
+-- 80°, eased by f. Returns the YXZ Euler angles a child node takes.
+function aim_euler(pose, a, f)
+  local cy, sy = math.cos(pose.yaw or 0), math.sin(pose.yaw or 0)
+  local cx, sx = math.cos(pose.pitch or 0), math.sin(pose.pitch or 0)
+  local cz, sz = math.cos(pose.roll or 0), math.sin(pose.roll or 0)
+  local X = { cy * cz + sy * sx * sz, cx * sz, -sy * cz + cy * sx * sz }
+  local Y = { -cy * sz + sy * sx * cz, cx * cz, sy * sz + cy * sx * cz }
+  local Z = { sy * cx, -sx, cy * cx }
+  local kx, ky, kz = cross(Y[1], Y[2], Y[3], a.x, a.y, a.z)
+  local s = math.sqrt(kx * kx + ky * ky + kz * kz)
+  local c = Y[1] * a.x + Y[2] * a.y + Y[3] * a.z
+  if s > 1e-6 then
+    local th = math.min(math.atan2(s, c), math.rad(80)) * f
+    kx, ky, kz = kx / s, ky / s, kz / s
+    local ct, st = math.cos(th), math.sin(th)
+    local function rot(v)
+      local d = kx * v[1] + ky * v[2] + kz * v[3]
+      local qx, qy, qz = cross(kx, ky, kz, v[1], v[2], v[3])
+      return { v[1] * ct + qx * st + kx * d * (1 - ct), v[2] * ct + qy * st + ky * d * (1 - ct),
+               v[3] * ct + qz * st + kz * d * (1 - ct) }
+    end
+    X, Y, Z = rot(X), rot(Y), rot(Z)
+  end
+  local pitch = math.asin(math.max(-1, math.min(1, -Z[2])))
+  return math.atan2(Z[1], Z[3]), pitch, math.atan2(X[2], Y[2])
+end
+
+-- Per-tick actuation: ease every folding part toward its own state and pose
+-- its live child (legs fold, panels unfold, whips telescope, dishes swing onto
+-- their link); lamps follow their switch (and go dark with no power). VISUAL
+-- only — a leg's COLLISION is a stable always-on footprint box on PartLegs (a
+-- fold-tracking collider made a gear-up craft slide; see the history in git).
+local function update_peripherals(node, dt)
+  local E = elib()
+  if (elec.gen_seen or -1) ~= integ.gen then elecRescan() end
+  local function child_for(uid, d)
+    local ch = pnode[uid]
+    if ch and ch.valid then return ch end
+    ch = R2 and R2.node[uid]
+    if ch and ch.valid then pnode[uid] = ch return ch end
+    ch = nil
+    for _, c in ipairs(node:children()) do
+      if math.abs((c.x or 0) - d.x) < 0.05 and math.abs((c.z or 0) - d.z) < 0.05
+        and math.abs((c.y or 0) - d.y) < 0.45 then
+        ch = c
+        break
+      end
+    end
+    pnode[uid] = ch
+    return ch
+  end
+  for id, dev in pairs(DEVICES) do
+    local maxa = 0
+    if id ~= "rcs" then
       for _, uid in ipairs(dev.parts) do
-        local ch = dev.nodes[uid]
-        if not (ch and ch.valid) then
-          ch = nil
-          local d = bp_by_uid[uid]
-          if d then
-            for _, c in ipairs(node:children()) do
-              if math.abs((c.x or 0) - d.x) < 0.05 and math.abs((c.z or 0) - d.z) < 0.05
-                and math.abs((c.y or 0) - d.y) < 0.45 then
-                ch = c
-                break
+        local d = bp_by_uid[uid]
+        if d then
+          -- the part's own switch; a part that has none follows its kind's
+          local st = d.st or {}
+          local on = st[dev.state]
+          if on == nil then on = dev.on end
+          if id == "lights" then
+            local lit = on == true and (elec.served == nil or (elec.served[uid] or 1) > 0.5)
+            local ch = child_for(uid, d)
+            if ch then
+              local lamp = ppose[uid]
+              if lamp == nil then
+                lamp = false
+                for _, c in ipairs(ch:children()) do if c.name == "Lamp" then lamp = c end end
+                ppose[uid] = lamp
+              end
+              if lamp and lamp.valid then
+                local l = lamp:getcomponent("PointLight")
+                if l then
+                  local want = lit and 2.6 or 0.0
+                  if math.abs((l.intensity or 0) - want) > 0.01 then l.intensity = want end
+                end
+              end
+            end
+            panim[uid] = lit and 1.0 or 0.0
+          else
+            local target = on and 1.0 or 0.0
+            local a = panim[uid] or target
+            local moved = a ~= target
+            if moved then
+              local step = dev.speed * dt
+              a = (a < target) and math.min(target, a + step) or math.max(target, a - step)
+              panim[uid] = a
+            end
+            local m = E and E.modOf(d, "deploy")
+            local kind = (m and m.anim) or (id == "gear" and "legs") or (id == "solar" and "solar") or "dish"
+            local ch = child_for(uid, d)
+            if ch then
+              local pose = ppose[uid]
+              if not pose then
+                pose = { x = ch.x, y = ch.y, z = ch.z, sy = ch.scale_y or 1.0, sx = ch.scale_x or 1.0,
+                         pitch = ch.pitch or 0, roll = ch.roll or 0, yaw = ch.yaw or 0, h = d.h }
+                ppose[uid] = pose
+                moved = true
+              end
+              -- a dish re-poses when its target moves; everything else only while it folds
+              local aim = (kind == "dish") and elec.aim or nil
+              if aim ~= pose.aim then pose.aim = aim; moved = true end
+              if moved or pose.applied ~= a then
+                pose.applied = a
+                local fn = ANIMS[kind]
+                if fn then fn(ch, pose, a) end
               end
             end
           end
-          dev.nodes[uid] = ch
-        end
-        if ch then
-          local pose = dev.pose[uid]
-          if not pose then
-            pose = { x = ch.x, y = ch.y, z = ch.z, sy = ch.scale_y or 1.0,
-                     sx = ch.scale_x or 1.0,
-                     pitch = ch.pitch or 0, roll = ch.roll or 0, yaw = ch.yaw or 0 }
-            dev.pose[uid] = pose
-          end
-          dev.apply(dev, ch, pose, dev.anim)
+          if (panim[uid] or 0) > maxa then maxa = panim[uid] end
         end
       end
+      dev.anim = maxa
+    end
+  end
+  gear_deployed = DEVICES.gear.on
+end
+
+-- One part action, by id (electronics actionsOf: "deployed.on", "decouple",
+-- "lit.toggle" …). `force` sets a toggle rather than flipping it (a group
+-- toggled as one). Returns true if it did something.
+function partAction(uid, act_id, force, amount)
+  local E = elib()
+  local d = bp_by_uid[uid]
+  if not (E and d and aboard(uid)) then return false end
+  local act = type(act_id) == "table" and act_id or E.actionOf(d, act_id)
+  if not act then return false end
+  local st = E.stateOf(d)
+  if act.kind == "trigger" then
+    if act.id == "decouple" then return fireSeparation(uid) end
+    if act.id == "chute" then return fireSeparation(uid) end
+    if act.id == "cutChute" then
+      if chutes_deployed then cutChutes() return true end
+      return false
+    end
+    if act.id == "undock" then return undock(uid) end
+    if act.id == "jettison" then return fireSeparation(uid) end
+    if act.id == "release" then return r2ClawRelease(uid) end
+    return false
+  end
+  -- An AXIS (an actuator's setpoint) moves while its key is HELD, by the
+  -- `amount` the hold gives (rate × tick: groupKeysTick); a press on its own
+  -- only does `.center`.
+  if act.kind == "axis" then
+    if act.dir ~= 0 and not amount then return false end
+    local _, ch = E.applyAction(st, act, nil, act.dir ~= 0 and amount or nil)
+    if ch and act.axis == "extension" then st.extended = (st.extension or 0) > 0.4 end
+    return true
+  end
+  local was = act.state and st[act.state]
+  local v, changed = E.applyAction(st, act, force, 1.0)
+  if act.state == "extended" and changed then
+    -- Extend / Retract run the piston to its end stop.
+    local m = E.modOf(d, "piston")
+    st.extension = v and 0.8 or 0.0
+  end
+  if act.state == "armed" and changed and v == false then r2ClawRelease(uid) end
+  if act.state == "running" and changed then
+    -- An engine switched ON by hand runs whatever the staging says; one
+    -- switched OFF stays off until switched on again.
+    st.forced = v == true
+  end
+  if changed then elecRescanDevices() end
+  return changed or was == v
+end
+
+-- A device set's `on` follows its parts (cheap; after any action).
+function elecRescanDevices()
+  for id, dev in pairs(DEVICES) do
+    if id ~= "rcs" and dev.state and #dev.parts > 0 then
+      local on = 0
+      for _, u in ipairs(dev.parts) do
+        local st = bp_by_uid[u] and bp_by_uid[u].st
+        if st and st[dev.state] then on = on + 1 end
+      end
+      dev.on = on * 2 >= #dev.parts
+    end
+  end
+  gear_deployed = DEVICES.gear.on
+end
+
+-- Fire the separation event a decoupler / chute part belongs to, out of the
+-- staging order: the event moves to the front of the stack and fires, exactly
+-- as SPACE would have fired it. Nothing about staging is locked.
+function fireSeparation(uid)
+  for i, ev in ipairs(events) do
+    local mine = false
+    if ev.kind == "axial" or ev.kind == "fairing" then mine = ev.uid == uid
+    elseif ev.kind == "chute" then
+      for _, u in ipairs(ev.uids or {}) do if u == uid then mine = true end end
+    elseif ev.kind == "ring" then
+      for _, g in ipairs(ev.branches or {}) do if g.uid == uid then mine = true end end
+    end
+    if mine then
+      table.remove(events, i)
+      table.insert(events, 1, ev)
+      return stageNext()
+    end
+  end
+  return false
+end
+
+-- THE ACTION GROUPS this craft flies with (gid → { name, binds, on }).
+-- From the blueprint if the player edited them, else the standard set.
+ctlGroups = {}
+
+function groupsReset(packed)
+  local E = elib()
+  if not E then ctlGroups = {} return end
+  if packed then
+    ctlGroups = E.unpackGroups(packed)
+  else
+    ctlGroups = E.defaultGroups(aboardRecs())
+  end
+end
+
+-- Fire one group: every bound action, toggles moving as one. Returns the count.
+function fireGroup(gid)
+  local E = elib()
+  if not E then return 0 end
+  local n = E.fireGroup(ctlGroups, gid, aboardRecs(), function(uid, act, force)
+    return partAction(uid, act, force)
+  end)
+  return n
+end
+
+-- The groups for the HUD strip: { id, key, label, n, on } for every group with
+-- anything in it (the standard ones that act by themselves — SAS, RCS, Abort —
+-- always).
+function groupStrip()
+  local E = elib()
+  if not E then return {} end
+  local recs = aboardRecs()
+  E.pruneGroups(ctlGroups, recs)
+  local out = {}
+  for _, g in ipairs(E.groupList()) do
+    local gg = ctlGroups[g.id]
+    local n = gg and #gg.binds or 0
+    if n > 0 then
+      out[#out + 1] = { id = g.id, key = g.key, label = (gg and gg.name) or g.label, n = n,
+                        on = E.groupState(ctlGroups, g.id, recs), standard = g.standard }
+    end
+  end
+  return out
+end
+
+-- THE KEYS. Each group's key fires it; SAS (T) and RCS (R) are also the
+-- autopilot and thruster MASTER switches, as they always were; Abort
+-- (Backspace) cuts the throttle and then fires whatever you put in it. ALT+1…9
+-- pick an autopilot hold (the numbers themselves are the custom groups, as in
+-- KSP). The digits stand down while the map is open (they toggle its layers),
+-- and Backspace while a burn is being planned (it deletes the burn).
+local DIGIT = { ["1"] = true, ["2"] = true, ["3"] = true, ["4"] = true, ["5"] = true,
+                ["6"] = true, ["7"] = true, ["8"] = true, ["9"] = true, ["0"] = true }
+function groupKeysTick(node, info)
+  local E = elib()
+  local alt = input.key("alt")
+  if alt and not dock.map then
+    for k, m in pairs(SAS_KEYS) do
+      if input.pressed(k) and elec.control ~= false then setSAS(m) end
+    end
+  end
+  local list = E and E.groupList() or {
+    { id = "gear", key = "g" }, { id = "deploy", key = "u" }, { id = "rcs", key = "r" }, { id = "sas", key = "t" } }
+  for _, g in ipairs(list) do
+    local k = g.key
+    local skip = (DIGIT[k] and (dock.map or alt)) or (k == "backspace" and dock.plan)
+    if not skip and input.pressed(k) then activateGroup(g.id) end
+    -- Actuator setpoints ride a HELD key: angle, extension, rotor speed.
+    if not skip and E and input.key(k) and elec.control ~= false then holdGroupAxes(g.id, node) end
+  end
+end
+
+-- Every axis action bound to a group, moved by one tick of its rate (the key
+-- is held). Toggles and triggers fire on the press (activateGroup).
+function holdGroupAxes(gid, node)
+  local E = elib()
+  local g = ctlGroups[gid]
+  if not (E and g and #g.binds > 0) then return end
+  local dt = 1.0 / 60.0
+  for _, b in ipairs(g.binds) do
+    local d = bp_by_uid[b.uid]
+    local act = d and E.actionOf(d, b.act)
+    if act and act.kind == "axis" and act.dir ~= 0 then
+      partAction(b.uid, act, nil, (act.rate or 1) * dt)
     end
   end
 end
 
--- The brightest body in the system = the star (highest µ). Cached briefly since
--- space.bodies() allocates a fresh table each call.
-local function brightest_sun()
-  if elec.sun and time - elec.sun_t < 2.0 then return elec.sun end
-  local best, bmu = nil, -1
-  for _, b in ipairs(space.bodies() or {}) do
-    if (b.mu or 0) > bmu then bmu, best = b.mu or 0, b end
+-- Fire one group as its key would: the masters first (SAS, RCS, abort's
+-- throttle cut), then everything bound to it. The HUD's group rows call this
+-- too. Refused, and said, with no control.
+function activateGroup(gid)
+  local E = elib()
+  local node = dock.node
+  if destroyed or not (node and node.valid) then return false end
+  if elec.control == false then
+    caption("no control — " .. (elec.why or "no signal"))
+    return false
   end
-  elec.sun, elec.sun_t = best, time
-  return best
+  local note = nil
+  if gid == "sas" then
+    sas_mode = (sas_mode ~= "off") and "off" or sas_last
+    note = "SAS " .. (sas_mode == "off" and "off" or "on")
+  elseif gid == "rcs" then
+    if #DEVICES.rcs.parts > 0 then
+      DEVICES.rcs.on = not DEVICES.rcs.on
+      note = "RCS " .. (DEVICES.rcs.on and "on" or "off")
+    end
+  elseif gid == "abort" then
+    throttle = 0.0
+    note = "ABORT"
+  end
+  local n = E and fireGroup(gid) or 0
+  if not E and (gid == "gear" or gid == "deploy") then
+    for _, id in ipairs(gid == "gear" and { "gear" } or { "comms", "solar" }) do
+      if #DEVICES[id].parts > 0 then setPeripheral(id) end
+    end
+  end
+  if n > 0 or note then
+    local gg = ctlGroups[gid]
+    local info2 = E and E.groupInfo(gid)
+    local label = (gg and gg.name) or (info2 and info2.label) or gid
+    local i = assembly.info(node)
+    local bx2, by2, bz2 = base_of(node, i)
+    sfx3(SFX.gear, bx2, by2, bz2, 0.6, 1.0)
+    local say = note or label:lower()
+    if n > 0 and note then say = note .. " · " .. label:lower() end
+    caption(say)
+    log(string.format("group %s: %d action%s%s", label, n, n == 1 and "" or "s", note and (" · " .. note) or ""))
+  end
+  return true
 end
 
--- Post this live vessel to the shared tracker registry (save key "comms.ships",
--- id → {name,x,y,z,alt,charge,t}) so a future Tracking Station can list every
--- craft that still has a POWERED comms link. Cleared when the link drops.
-local function tracker_heartbeat(node, info, alt, live)
-  local key = "v" .. tostring(node.id or 0)
-  local ships = save.get("comms.ships") or {}
-  if live then
-    ships[key] = { name = node.name or "Vessel", x = node.x, y = node.y, z = node.z,
-                   alt = alt or 0, charge = elec.charge, cap = elec.cap, t = time }
+-- The light the panels see is measured against the home world's orbit: 1 at
+-- the base's distance from its star.
+local function ref_flux(E, bodies)
+  if elec.ref then return elec.ref end
+  local name = save.get("base.body")
+  local b = type(name) == "string" and space.body(name) or nil
+  if not b then return nil end
+  local sun = E.sunOf(b.x, b.y, b.z, bodies, nil)
+  if not sun or sun.name == b.name then return nil end
+  local d2 = (sun.x - b.x) ^ 2 + (sun.y - b.y) ^ 2 + (sun.z - b.z) ^ 2
+  elec.ref = sun.mu / math.max(d2, 1)
+  return elec.ref
+end
+
+-- Where a part sits in the world, and an axis of it.
+local function part_world(node, info, d, ax, ay, az)
+  local rx, up, rz = basis(node)
+  local bx, by, bz = base_of(node, info)
+  local x = bx + rx.x * d.x + up.x * d.y + rz.x * d.z
+  local y = by + rx.y * d.x + up.y * d.y + rz.y * d.z
+  local z = bz + rx.z * d.x + up.z * d.y + rz.z * d.z
+  if not ax then return x, y, z end
+  return x, y, z, rx.x * ax + up.x * ay + rz.x * az, rx.y * ax + up.y * ay + rz.y * az,
+    rx.z * ax + up.z * ay + rz.z * az
+end
+
+-- WHO MAY FLY THIS. Published on `elec` (fixedUpdate reads it for free):
+--   control  true/false     mode "crew" | "probe" | nil
+--   why      the reason there's no control, in the HUD's words
+function controlTick()
+  local can, mode, why = false, nil, nil
+  local st = elec.probePart and bp_by_uid[elec.probePart] and bp_by_uid[elec.probePart].st
+  if crewAboard then
+    can, mode = true, "crew"
+  elseif not elib() then
+    can, mode = true, "crew"            -- no rulebook: fly as before
+  elseif not elec.probePart then
+    why = elec.crewPart and "NO CREW — the pod is empty" or "NO COMMAND PART"
+  elseif st and st.hibernate then
+    why = "PROBE CORE OFF — hibernating"
+  elseif elec.served and (elec.served[elec.probePart] or 1) < 0.5 then
+    why = "NO POWER — the probe core is dark"
+  elseif not elec.link then
+    why = "NO SIGNAL — " .. (elec.linkWhy or "no path home")
   else
-    ships[key] = nil
+    can, mode = true, "probe"
   end
-  save.set("comms.ships", ships)
+  elec.control, elec.mode, elec.why = can, mode, why
 end
 
--- ELECTRICAL tick: solar panels (deployed + sunlit) charge the batteries, a
--- deployed comms dish sips EC to hold its telemetry link, and the vessel is
--- posted to / pulled from the tracker as its link comes up or dies. Runs piloted
--- or derelict — a dead-stick probe on panels keeps talking home.
+-- ELECTRICAL tick, 10 Hz: supply, demand, the batteries, the radios, the link,
+-- and who has control. Runs piloted or derelict — a dead-stick probe on panels
+-- keeps its radio up and stays on the network.
 local function power_tick(node, info, dt)
-  if elec.cap <= 0 and elec.gen <= 0 and not elec.comms then
-    elec.link = false
+  elec.acc = (elec.acc or 0) + dt
+  if elec.acc < 0.1 then return end
+  dt, elec.acc = elec.acc, 0
+  local E = elib()
+  if (elec.gen_seen or -1) ~= integ.gen then elecRescan() end
+  if not E then
+    elec.link, elec.control = true, true
     return
   end
-  -- Generation: deployed panels, scaled by how squarely they face the sun and
-  -- whether we're on the lit side of the body we're near.
-  local gen = 0.0
-  if elec.gen > 0 and DEVICES.solar.on and DEVICES.solar.anim > 0.5 then
-    local lit, sun = 1.0, brightest_sun()
-    if sun then
-      local sx, sy, sz = sun.x - node.x, sun.y - node.y, sun.z - node.z
-      local sl = math.sqrt(sx * sx + sy * sy + sz * sz)
-      if sl > 1e-6 then sx, sy, sz = sx / sl, sy / sl, sz / sl end
-      local dom = space.dominant(node.x, node.y, node.z)
-      local db = dom and space.body(dom)
-      if db and db.name ~= sun.name then
-        local ux, uy, uz = node.x - db.x, node.y - db.y, node.z - db.z
-        local ul = math.sqrt(ux * ux + uy * uy + uz * uz)
-        if ul > 1e-6 then
-          local d = (ux * sx + uy * sy + uz * sz) / ul  -- 1 = noon, <0 = night
-          lit = math.max(0.0, math.min(1.0, d * 1.5 + 0.35))
+  local now = time
+  if not elec.bodies or now - (elec.bodies_t or -10) > 0.5 then
+    elec.bodies, elec.bodies_t = space.bodies() or {}, now
+  end
+  local bodies = elec.bodies
+  local ref = ref_flux(E, bodies)
+  local supply, loads, cells, batts = 0.0, {}, {}, {}
+  local sunlit, panels = false, 0
+  local wheels = {}
+  local cut = math.huge
+  for _, ev in ipairs(events) do
+    if ev.kind == "axial" and ev.y < cut then cut = ev.y end
+  end
+  local burning = throttle > 0.02 and fuel > 0 and not info.anchored
+  for _, u in ipairs(elec.parts) do
+    local d = bp_by_uid[u]
+    if d and aboard(u) then
+      local st = E.stateOf(d)
+      for _, m in ipairs(E.modsOf(d)) do
+        local ty = m.type
+        if ty == "battery" then
+          local c = { cap = m.ec or 0, charge = math.min(m.ec or 0, st.charge or 0), on = st.flow ~= false, st = st }
+          cells[#cells + 1] = c
+        elseif ty == "solar" then
+          if (panim[u] or 0) > 0.9 then
+            local ax, ay, az = part_axis_x(d)
+            local x, y, z, wx, wy, wz = part_world(node, info, d, ax, ay, az)
+            local out = E.solarOutput(m.gen or 0, x, y, z, wx, wy, wz, bodies, ref)
+            supply = supply + out
+            panels = panels + 1
+            if out > 0 then sunlit = true end
+          end
+        elseif ty == "rtg" then
+          supply = supply + (m.gen or 0)
+        elseif ty == "engine" then
+          if burning and st.running ~= false then
+            for _, e in ipairs(engines) do
+              if e.uid == u and engine_active(e, cut) then supply = supply + (m.alt or 0) * throttle end
+            end
+          end
+        elseif ty == "command" then
+          loads[#loads + 1] = { id = u, rate = (m.draw or 0) * (st.hibernate and 0.1 or 1), pri = 9 }
+        elseif ty == "wheel" then
+          if st.wheel ~= false then
+            local use = math.min(1, elec.wheel_use or 0)
+            loads[#loads + 1] = { id = "w" .. u, rate = (m.draw or 0) * (0.05 + 0.95 * use), pri = 6 }
+            wheels[#wheels + 1] = { id = "w" .. u, torque = m.torque or 1 }
+          end
+        elseif ty == "antenna" then
+          local folds = E.modOf(d, "deploy") ~= nil
+          if not folds or (st.deployed and (panim[u] or 0) > 0.9) then
+            loads[#loads + 1] = { id = "a" .. u, rate = m.draw or 0, pri = 7 }
+          end
+        elseif ty == "light" then
+          if st.lit then loads[#loads + 1] = { id = u, rate = m.draw or 0, pri = 2 } end
         end
       end
     end
-    gen = elec.gen * lit
   end
-  -- Draw: a live comms link costs EC (a passive battery-only ship draws nothing).
-  local dish_up = elec.comms and DEVICES.comms.on and DEVICES.comms.anim > 0.5
-  local draw = dish_up and 1.5 or 0.0
-  elec.charge = math.max(0.0, math.min(elec.cap, elec.charge + (gen - draw) * dt))
-  -- The link is live only while the dish is out AND the bus isn't flat.
-  elec.link = dish_up and (elec.charge > 0.0 or draw == 0.0)
-  -- Tracker heartbeat (throttled): altitude above the dominant body.
-  if time - elec.ptime > 1.0 then
-    elec.ptime = time
-    local alt = 0.0
-    local dom = space.dominant(node.x, node.y, node.z)
-    local db = dom and space.body(dom)
-    if db then
-      local ax, ay, az = node.x - db.x, node.y - db.y, node.z - db.z
-      alt = math.sqrt(ax * ax + ay * ay + az * az) - db.radius
+  -- Motors (round two): wheels, actuators, the claw and the drill draw what
+  -- they asked for this tick (R2.draw, by load id).
+  for id, rate in pairs(R2.draw) do
+    if rate > 0 then loads[#loads + 1] = { id = id, rate = rate, pri = 4 } end
+  end
+  local rep = E.powerStep({ supply = supply, loads = loads, cells = cells }, dt)
+  for _, c in ipairs(cells) do c.st.charge = c.charge end
+  -- isolated batteries still count toward what's aboard
+  local cap, charge = 0, 0
+  for _, c in ipairs(cells) do cap, charge = cap + c.cap, charge + c.charge end
+  elec.cap, elec.charge = cap, charge
+  elec.supply, elec.demand, elec.net = rep.supply, rep.demand, rep.net
+  elec.brownout = rep.brownout
+  elec.served = rep.served
+  elec.sunlit, elec.panels = sunlit, panels
+  elec.gen = supply
+  local tk = 0
+  for _, w in ipairs(wheels) do tk = tk + w.torque * (rep.served[w.id] or 0) end
+  elec.torque_k = math.min(1.5, tk)
+  -- The radios: the ones with power, folded out where they fold.
+  local skip = {}
+  for u in pairs(integ.gone) do skip[u] = true end
+  for u, d in pairs(bp_by_uid) do
+    if (part_hp[u] or 1) <= 0 then skip[u] = true end
+    if E.modOf(d, "antenna") then
+      local s = rep.served["a" .. u]
+      if s == nil or s < 0.5 then skip[u] = true end
+      -- a craft whose command part is dark can't key its radio either
+      if elec.probePart and not crewAboard and (rep.served[elec.probePart] or 1) < 0.5 then skip[u] = true end
     end
-    tracker_heartbeat(node, info, alt, elec.link)
+  end
+  local ant = E.antennaSummary(bp_by_uid, skip, true)
+  elec.antenna = ant
+  elec.comms = ant.n > 0
+  local px, py, pz = pod_world(node, info)
+  local silent = nil
+  if ant.n == 0 then
+    silent = E.antennaSummary(bp_by_uid, integ.gone, true).n == 0 and "no antenna aboard"
+      or "no power for its radio"
+  end
+  elec.node = { x = px, y = py, z = pz, any = ant.any, relay = ant.relay, rate = ant.rate, silent = silent }
+  -- The path home, from the network's last solve.
+  local net = comms_net()
+  local cs = net and net.statusOf and net.statusOf(node.id) or nil
+  if cs then
+    elec.link, elec.signal, elec.hops = cs.connected == true, cs.strength or 0, cs.hops or 0
+    elec.linkWhy = cs.why
+    elec.path = cs.names
+    elec.bandwidth = cs.bandwidth or 0
+    -- the dishes swing onto whoever we talk to
+    if cs.parentPos and cs.connected then
+      local rx, up, rz = basis(node)
+      local dx, dy, dz = cs.parentPos.x - px, cs.parentPos.y - py, cs.parentPos.z - pz
+      local l = math.sqrt(dx * dx + dy * dy + dz * dz)
+      if l > 1e-3 then
+        dx, dy, dz = dx / l, dy / l, dz / l
+        local a = { x = dx * rx.x + dy * rx.y + dz * rx.z, y = dx * up.x + dy * up.y + dz * up.z,
+                    z = dx * rz.x + dy * rz.y + dz * rz.z }
+        local o = elec.aim
+        if not o or math.abs(o.x - a.x) + math.abs(o.y - a.y) + math.abs(o.z - a.z) > 0.02 then elec.aim = a end
+      end
+    else
+      elec.aim = nil
+    end
+  elseif not net then
+    -- No network in this scene (a harness): a craft with a radio is in contact.
+    elec.link, elec.signal, elec.hops = ant.n > 0, ant.n > 0 and 1 or 0, ant.n > 0 and 1 or 0
+  end
+  controlTick()
+  -- Tracker heartbeat (1 Hz): the comms.ships registry the Command Centre counts.
+  if now - (elec.ptime or -10) > 1.0 then
+    elec.ptime = now
+    local key = "v" .. tostring(node.id or 0)
+    local ships = save.get("comms.ships") or {}
+    local was = ships[key] ~= nil
+    if elec.link then
+      ships[key] = { name = node.name or "Vessel", x = node.x, y = node.y, z = node.z,
+                     charge = elec.charge, cap = elec.cap, t = now }
+      save.set("comms.ships", ships)
+    elseif was then
+      ships[key] = nil
+      save.set("comms.ships", ships)
+    end
   end
 end
 
--- Canopy visual: an open chute node balloons out (scale up); packed it sits
--- flush. Advances chute_anim whenever deployed and scales the chute nodes.
-local chute_nodes = nil
+-- Share `total` EC across the batteries by capacity (an old record's pooled
+-- charge; a probe that sets a craft's charge).
+function elecSetCharge(total)
+  local E = elib()
+  if not E then elec.charge = total return end
+  local cap = 0
+  for u, d in pairs(bp_by_uid) do
+    local m = E.modOf(d, "battery")
+    if m and aboard(u) then cap = cap + (m.ec or 0) end
+  end
+  if cap <= 0 then return end
+  local k = math.max(0, math.min(1, (total or 0) / cap))
+  for u, d in pairs(bp_by_uid) do
+    local m = E.modOf(d, "battery")
+    if m and aboard(u) then E.stateOf(d).charge = (m.ec or 0) * k end
+  end
+  elec.charge = math.min(cap, total or 0)
+end
+
+-- What this craft offers the comms network (comms.lua asks every craft).
+function commsNode()
+  if destroyed then return nil end
+  return elec.node
+end
+
+-- One line of the electrical state (probes and the console).
+function elecDebug()
+  local s = {}
+  for k, v in pairs(elec.served or {}) do s[#s + 1] = tostring(k) .. "=" .. string.format("%.2f", v) end
+  return string.format("supply %.2f demand %.2f charge %.1f/%.1f served{%s} probe=%s link=%s ctl=%s why=%s parts=%d",
+    elec.supply or -1, elec.demand or -1, elec.charge or -1, elec.cap or -1, table.concat(s, ","),
+    tostring(elec.probePart), tostring(elec.link), tostring(elec.control), tostring(elec.why), #(elec.parts or {}))
+end
+
+-- The control state, for the HUD, the tracking station and the switcher.
+function controlState()
+  return { can = elec.control ~= false, mode = elec.mode, why = elec.why, crew = crewAboard == true,
+           probe = elec.probePart ~= nil, pod = elec.crewPart ~= nil, lost = destroyed == true,
+           charge = elec.charge, cap = elec.cap, linkWhy = elec.linkWhy }
+end
+
+
+-- PARACHUTE DEPLOYMENT, tick by tick: the physics the drag uses and the
+-- canopies (scripts/parachute.lua) draw, so what you see is what slows you.
+--   1. the mortar pops the lid and the pilot chute drags the bagged canopy
+--      out into the airflow: the lines pay out faster than the craft falls
+--      (the mortar's own ~10 m/s in still air); nothing drags yet;
+--   2. at line stretch the canopy fills to its REEFED area and holds it a
+--      moment (the reefing line keeps the opening shock down);
+--   3. disreefed, it fills to full over a few canopy diameters of travel
+--      (fill time ∝ D/v, as real canopies do): about 1 s from line stretch at
+--      60 m/s, 2 s at 20 m/s; thin air fills slower, and cannot hold the
+--      canopy fully open at all.
+--   The whole opening, mortar to full, runs 1-3 s. (This world's atmospheres
+--   are ~70 m deep: a real canopy's 8-diameter fill would still be opening
+--   when a late deploy hit the ground.)
+--   4. with no air through it (landed, stopped, or out of the atmosphere) it
+--      spills and collapses in a third of a second.
+-- chute_anim is the inflated area fraction: the drag and the over-pressure
+-- tear both read it.
 local function update_chutes(node, dt)
-  if not chutes_deployed then return end
-  chute_anim = math.min(1.0, chute_anim + dt / 0.8)
-  if not chute_nodes then
-    chute_nodes = {}
-    for _, c in ipairs(chutes) do
-      for _, ch in ipairs(node:children()) do
-        if math.abs((ch.x or 0) - c.x) < 0.05 and math.abs((ch.y or 0) - c.y) < 0.05
-          and math.abs((ch.z or 0) - c.z) < 0.05 then
-          chute_nodes[#chute_nodes + 1] = { node = ch,
-            sx = ch.scale_x or 1.0, sy = ch.scale_y or 1.0, sz = ch.scale_z or 1.0 }
-          break
-        end
-      end
+  local f = chute_fill
+  if not chutes_deployed or f.cut then
+    if not chutes_deployed and f.t > 0 then
+      f.t, f.stretch, f.area, f.ls = 0.0, 0.0, 0.0, nil
+    end
+    f.area = 0.0
+    chute_anim = 0.0
+    return
+  end
+  local info = assembly.info(node)
+  if not info then return end
+  local v = info.vel
+  local spd = math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z)
+  local dens = 0.0 -- the same band model as the drag and heating
+  local dom = space.dominant(node.x, node.y, node.z)
+  local db = dom and space.body(dom)
+  if db and db.radius then
+    local dx, dy, dz = node.x - db.x, node.y - db.y, node.z - db.z
+    local alt = math.sqrt(dx * dx + dy * dy + dz * dz) - db.radius
+    local band = db.radius * 0.35
+    dens = (alt <= 0) and 1.0 or math.max(0.0, 1.0 - alt / band)
+  end
+  f.t, f.dens, f.spd, f.grounded = f.t + dt, dens, spd, info.grounded or false
+  local PACK_LEN = 12.5   -- riser + lines + canopy, m (models/parts/parachute.glb)
+  local FILL_D = 7.1      -- the inflated canopy's diameter, m
+  local REEF_S, REEF_AREA = 0.4, 0.2
+  if f.stretch < 1.0 then
+    f.stretch = math.min(1.0, f.stretch + dt * math.max(10.0, 1.5 * spd) / PACK_LEN)
+    -- Only the pilot chute pulls (a drag too small to count), so the canopy's
+    -- over-pressure tear comes at line stretch — the opening shock — when
+    -- chute_anim first rises above zero.
+    f.area = 0.0
+    if f.stretch >= 1.0 then f.ls = f.t end
+  else
+    local reefed = f.t - (f.ls or 0) < REEF_S
+    -- Thin air cannot hold a canopy open: it stays partly collapsed.
+    local hold = 0.3 + 0.7 * math.min(1.0, math.max(0.0, (dens - 0.03) / 0.37))
+    local air = dens > 0 and spd > 1.2 and not info.grounded
+    local target = air and math.min(reefed and REEF_AREA or 1.0, hold) or 0.0
+    if target > f.area then
+      local rate = math.min(6.0, math.max(0.8,
+        spd / (2.5 * FILL_D) * (0.2 + 0.8 * math.sqrt(dens))))
+      f.area = math.min(target, f.area + (target - f.area) * math.min(1.0, dt * rate * 2.2) + dt * 0.02)
+    else
+      f.area = f.area + (target - f.area) * math.min(1.0, dt * 3.0)
     end
   end
-  local grow = 1.0 + chute_anim * 2.2 -- canopy blooms to ~3× when full
-  for _, c in ipairs(chute_nodes) do
-    if c.node.valid then
-      c.node.scale_x = c.sx * grow
-      c.node.scale_y = c.sy * (1.0 + chute_anim * 0.6)
-      c.node.scale_z = c.sz * grow
-    end
-  end
+  chute_anim = f.area
+end
+
+-- CUT THE CHUTES: the canopies part from their risers and fly free (the
+-- canisters stay). Nothing drags after this. Returns true if any were open.
+function cutChutes()
+  if not chutes_deployed or chute_fill.cut or #chutes == 0 then return false end
+  chute_fill.cut = true
+  for _, c in ipairs(chutes) do c.canopy = nil end
+  chute_anim = 0.0
+  caption("the chutes are cut away")
+  log("parachutes cut")
+  return true
 end
 
 -- Departing parts take their plumes with them: stop any engine flame on the
@@ -1123,7 +2105,7 @@ end
 local function quench(parts_nodes)
   for _, pn in ipairs(parts_nodes) do
     for _, f in ipairs(pn:children()) do
-      if f.name == "Engine Flame" then
+      if f.name == "Engine Flame" or f.name == "Engine Flame Vac" then
         local ps = f:particles()
         if ps and ps:isPlaying() then ps:stop() end
         local light = f:getcomponent("PointLight")
@@ -1140,7 +2122,29 @@ end
 -- Δv scaled by the wreck's own mass (impulse = m·Δv) so a 0.15 t decoupler and
 -- a 0.8 t engine tumble away at the SAME speed instead of the light bits
 -- rocketing off. `dv` is metres/second.
-local function debris_kick(junk, hx, hy, hz, dv)
+-- Gravity-up (radial from the dominant body) at a world point; world +Y only
+-- when there is no body. "Up" on a round planet is never world +Y in general.
+local function radial_up(x, y, z)
+  local dom = space.dominant(x, y, z)
+  local b = dom and space.body(dom)
+  if b then
+    local ax, ay, az = x - b.x, y - b.y, z - b.z
+    local al = math.sqrt(ax * ax + ay * ay + az * az)
+    if al > 1e-3 then return ax / al, ay / al, az / al end
+  end
+  return 0, 1, 0
+end
+
+-- `clear` (m, optional) first moves the wreck that far straight out from the
+-- impact, so it starts clear of the hull it just left: overlapping colliders
+-- are resolved by the engine as a collision, which is a kick of its own on top
+-- of this one (and the trigger of the engine's depenetration runaway).
+-- `away` (optional) = { gap, x, y, z }: how far, and along which world unit
+-- direction, the wreck must move to clear the hull it left (from clearAway —
+-- AWAY FROM WHAT STAYS, which is not the same as away from the impact: for a
+-- crushed engine bell the impact is below it, and "away from the impact"
+-- moved the bell up through the tank and pod above it).
+local function debris_kick(junk, hx, hy, hz, dv, away, hull, also)
   local ji = assembly.info(junk)
   if not ji then return end
   local cx, cy, cz = ji.com.x, ji.com.y, ji.com.z
@@ -1148,19 +2152,18 @@ local function debris_kick(junk, hx, hy, hz, dv)
   local ol = math.sqrt(ox * ox + oy * oy + oz * oz)
   if ol < 1e-3 then ox, oy, oz, ol = 0, 1, 0, 1 end
   ox, oy, oz = ox / ol, oy / ol, oz / ol
-  local ux, uy, uz = 0, 1, 0                        -- gravity-up (radial)
-  local dom = space.dominant(cx, cy, cz)
-  local b = dom and space.body(dom)
-  if b then
-    local ax, ay, az = cx - b.x, cy - b.y, cz - b.z
-    local al = math.sqrt(ax * ax + ay * ay + az * az)
-    if al > 1e-3 then ux, uy, uz = ax / al, ay / al, az / al end
-  end
+  local ux, uy, uz = radial_up(cx, cy, cz)          -- gravity-up (radial)
+  -- Out of any overlap and passing through the hull (and the other pieces of
+  -- the same breakup) for a moment: see releasePiece.
+  local a = away or { gap = 0, x = ox, y = oy, z = oz }
+  releasePiece(junk, hull, a.x, a.y, a.z, a.gap, also)
+  if dv <= 0 then return end -- velocity kept exactly: no impulse at all
+  local g = physTune.clear and (a.gap or 0) or 0
   local m = (ji.mass and ji.mass > 0) and ji.mass or 0.2
   assembly.impulseAt(junk, vec3(
     (ox + ux * 0.5) * dv * m,
     (oy + uy * 0.5) * dv * m,
-    (oz + uz * 0.5) * dv * m), ji.com)
+    (oz + uz * 0.5) * dv * m), vec3(cx + a.x * g, cy + a.y * g, cz + a.z * g))
 end
 
 -- ── docking ─────────────────────────────────────────────────────────────────
@@ -1401,7 +2404,9 @@ function dockManifest(port_uid)
   local parts = {}
   for _, c in ipairs(node:children()) do
     local best, bd = nil, 1e9
-    for u, d in pairs(bp_by_uid) do
+    local known = eid_uid[c.id]
+    if known and bp_by_uid[known] then best, bd = known, 0 end
+    for u, d in pairs(known and {} or bp_by_uid) do
       local dx, dy, dz = (c.x or 0) - d.x, (c.y or 0) - d.y, (c.z or 0) - d.z
       local dd = dx * dx + dy * dy + dz * dz
       if dd < bd then bd, best = dd, u end
@@ -1411,14 +2416,35 @@ function dockManifest(port_uid)
                             hp = part_hp[best] or 1.0 }
     end
   end
+  local E = elib()
   return { name = node.name or "Module", parts = parts, portUid = port_uid,
-           fuel = fuel, charge = elec.charge, piloted = piloting }
+           fuel = fuel, charge = elec.charge, piloted = piloting, crew = crewAboard,
+           groups = E and E.packGroups(ctlGroups) or nil }
+end
+
+-- The craft as it is NOW, for the fleet record flight_ops saves (a craft left
+-- somewhere is rebuilt from it next session): every blueprint part still
+-- aboard, plus the pooled fuel and charge. Unlike dockManifest it doesn't match
+-- scene children by position, so nothing a staging or a rebuild re-based is
+-- dropped from the list.
+function fleetParts()
+  if destroyed then return nil end
+  local out = {}
+  for u, d in pairs(bp_by_uid) do
+    if not integ.gone[u] and (part_hp[u] or 1) > 0 then out[#out + 1] = d end
+  end
+  table.sort(out, function(a, b) return (a.uid or 0) < (b.uid or 0) end)
+  local E = elib()
+  return { parts = out, fuel = fuel, charge = elec.charge, pod = podCrewed == true,
+           probe = elec.probePart ~= nil, crew = crewAboard == true,
+           groups = E and E.packGroups(ctlGroups) or nil }
 end
 
 -- Stand down: our root is about to be retired by the merge. Release the pilot's
 -- instruments so the absorbing craft owns the screen cleanly.
 function dockAbsorbed()
   piloting = false
+  crewAboard = false   -- they ride the craft that absorbs us now (it reads `crew`)
   throttle = 0.0
   silence_loops()
   dock.msg = "absorbed"
@@ -1430,6 +2456,7 @@ end
 function releaseControl()
   if not piloting then return end
   piloting = false
+  -- (the crew, if aboard, stay in their seat: you're only looking elsewhere)
   throttle = 0.0
   if dock.node and dock.node.valid then set_flames(dock.node, 0) end
   silence_loops()
@@ -1441,20 +2468,68 @@ end
 function takeControl()
   local node = dock.node
   if destroyed or not node or not node.valid then return false end
-  if not pod_uid then
-    dock.msg = "no pod aboard — this craft can't be crewed"
+  if not podCrewed then
+    dock.msg = "no crew pod aboard — this craft can't be crewed"
     return false
   end
   for _, v in ipairs(findScripts("vessel_controller")) do
-    if v.releaseControl and v.node and v.node.id ~= node.id then v.releaseControl() end
+    if v.node and v.node.id ~= node.id then
+      if v.releaseControl then v.releaseControl() end
+      -- The crew can only be in one seat: they leave the other craft's.
+      if v.crewAboard and v.crewLeave then v.crewLeave() end
+    end
   end
   if not astronaut or not astronaut.valid then astronaut = find("Astronaut") end
   if astronaut then astronaut.visible = false end
   piloting = true
+  crewAboard = true
   set_navball(true)
   sas_mode, sas_last = "stability", "stability"
   log("control transferred to " .. (node.name or "vessel"))
   return true
+end
+
+-- FLY IT FROM HERE. Take the controls of this craft WITHOUT moving the crew:
+-- a probe flown over its comms link, or a look at any craft you own. Whether
+-- the controls actually answer is `controlState()` — a probe needs power and a
+-- path home; a pod needs its crew in it. The crew stay wherever they are (on
+-- foot at the base, or in another craft's seat).
+function remoteControl()
+  local node = dock.node
+  if destroyed or not node or not node.valid then return false end
+  for _, v in ipairs(findScripts("vessel_controller")) do
+    if v.releaseControl and v.node and v.node.id ~= node.id then v.releaseControl() end
+  end
+  piloting = true
+  set_navball(true)
+  sas_mode, sas_last = "stability", "stability"
+  hud_t = -10.0
+  log("remote control: " .. (node.name or "vessel") .. (crewAboard and " (crew aboard)" or ""))
+  return true
+end
+
+-- The crew are leaving this craft's seat for another one (a transfer): they
+-- are no longer ours to carry.
+function crewLeave()
+  crewAboard = false
+  if dock.node and dock.node.valid then seatCrew(dock.node, false) end
+end
+
+-- When the craft you were flying is gone (lost, recovered, absorbed), control
+-- falls back: to the craft the crew is sitting in, or to the crew on foot.
+function controlFallback(except_id)
+  for _, v in ipairs(findScripts("vessel_controller")) do
+    if v.node and v.node.valid and v.node.id ~= except_id and v.piloting then return v end
+  end
+  for _, v in ipairs(findScripts("vessel_controller")) do
+    if v.node and v.node.valid and v.node.id ~= except_id and v.crewAboard and v.remoteControl then
+      v.remoteControl()
+      return v
+    end
+  end
+  if not astronaut or not astronaut.valid then astronaut = find("Astronaut") end
+  if astronaut then astronaut.visible = true end
+  return nil
 end
 
 -- ── capture ────────────────────────────────────────────────────────────────
@@ -1483,12 +2558,19 @@ local function dock_absorb(node)
       local u = dock.next_uid
       dock.next_uid = u + 1
       remap[p.uid] = u
-      local rec = {}
-      for k, val in pairs(p.rec) do rec[k] = val end
+      local E = elib()
+      local rec = E and E.deepCopy(p.rec) or {}
+      if not E then for k, val in pairs(p.rec) do rec[k] = val end end
       rec.uid = u
       rec.x, rec.y, rec.z = c.x or 0, c.y or 0, c.z or 0
       rec.yaw, rec.pitch, rec.roll = c.yaw or 0, c.pitch or 0, c.roll or 0
       rec.stage = 0                -- staging order is the host's business now
+      -- A module's actuators arrive where they stood: that pose is now the
+      -- part's rest pose (read off the live nodes above), so their joint
+      -- positions start from zero here.
+      if type(rec.st) == "table" and (rec.robo or "") ~= "" then
+        rec.st.cur, rec.st.angle, rec.st.extension = 0, 0, 0
+      end
       bp_by_uid[u] = rec
       part_hp[u] = p.hp
       eid_uid[p.eid] = u           -- exact, so the damage model needs no guess
@@ -1527,22 +2609,27 @@ local function dock_absorb(node)
     if (d.thrust or 0) > 0 then
       local ax, ay, az = part_axis(d)
       engines[#engines + 1] = { x = d.x, y = d.y, z = d.z, dx = ax, dy = ay, dz = az,
-                                thrust = d.thrust, burn = d.burn or 1, uid = u }
+                                thrust = d.thrust, burn = d.burn or 1, uid = u, rec = d }
     end
     if (d.fuel or 0) > 0 then
-      tanks[#tanks + 1] = { y = d.y, fuel = d.fuel, uid = u }
+      tanks[#tanks + 1] = { y = d.y, fuel = d.fuel, left = 0.0, ft = d.fuel_t or 0, uid = u }
       fuel_cap = fuel_cap + d.fuel
     end
-    if (d.power or 0) == 1 then elec.cap = elec.cap + (d.ec or 0) end
-    if (d.solar or 0) == 1 then elec.gen = elec.gen + (d.gen or 0) end
-    if (d.comms or 0) == 1 then elec.comms = true end
-    for _, dev in pairs(DEVICES) do
-      if dev.detect(d) then dev.parts[#dev.parts + 1] = u end
+  end
+  fuelSort()
+  fuelFill(math.min(fuel_cap, fuel + (man.fuel or 0)))
+  -- Electronics: the module's parts carry their own state (each battery its own
+  -- charge), so its devices, power and radios simply join ours; its action
+  -- groups fold into ours (its group 1 fires with our group 1).
+  integ.gen = integ.gen + 1
+  elecRescan()
+  do
+    local E = elib()
+    if E and man.groups then
+      E.mergeGroups(ctlGroups, E.remapGroups(E.unpackGroups(man.groups), remap))
     end
   end
-  for _, dev in pairs(DEVICES) do dev.anim_applied = nil end -- re-pose the newcomers
-  fuel = math.min(fuel_cap, fuel + (man.fuel or 0))
-  elec.charge = math.min(elec.cap, elec.charge + (man.charge or 0))
+  if man.crew then crewAboard = true end
   -- The rescan pairs the seam for us: we just hung the module's port off ours
   -- in the tree, which is the same shape as a pair stacked in the VAB, so one
   -- rule covers both and there's no second place for latch state to go stale.
@@ -1574,6 +2661,7 @@ function undock(port_uid)
   end
   local info = assembly.info(node)
   if not info then return false end
+  r2Before(node)
   -- The seam sits BETWEEN the two mated ports, and each keeps its own half —
   -- so the cut anchor is whichever of the pair hangs off the other, whichever
   -- row you clicked. Anchoring on the near side instead would send our own
@@ -1592,12 +2680,20 @@ function undock(port_uid)
   -- The departing half's own blueprint, in OUR frame for now; the split
   -- callback re-bases it onto the new craft's origin once physics has placed it.
   local sub, n = { parts = {} }, 0
+  local E = elib()
+  local sub_charge = 0
   for u in pairs(dep) do
     local d = bp_by_uid[u]
     if d then
       n = n + 1
-      local rec = {}
-      for k, val in pairs(d) do rec[k] = val end
+      if type(d.st) == "table" and d.st.charge then sub_charge = sub_charge + d.st.charge end
+      -- A copy for the save (handed over through save.set): the record's live
+      -- state (`st` — a battery's charge, a panel's fold) and its modules ride
+      -- along packed (electronics packRecord), no longer shared with ours.
+      -- (save.set holds 16 levels since floptle/0422; the packing stays the
+      -- one record format the fleet and the dock both read.)
+      local rec = E and E.packRecord(d) or {}
+      if not E then for k, val in pairs(d) do rec[k] = val end end
       rec.stage = 0
       if not dep[rec.parent or 0] then rec.parent = 0 end -- the seam is its new root
       sub.parts[n] = rec
@@ -1607,7 +2703,7 @@ function undock(port_uid)
   -- the module out of the blueprint, the devices and the electrical system.
   -- What the module takes with it is what `drop_departing` stops counting as
   -- ours — it flies away with its own propellant, not a full set of tanks.
-  local fuel_before, cap_before = fuel, elec.cap
+  local fuel_before = fuel
   drop_departing(anchor)
   sub.fuel = math.max(0.0, fuel_before - fuel)
   -- The departing half gets the SAME re-capture lockout we do. The lockout is
@@ -1629,28 +2725,30 @@ function undock(port_uid)
   for u in pairs(dep) do
     local d = bp_by_uid[u]
     if d then
-      if (d.power or 0) == 1 then elec.cap = math.max(0.0, elec.cap - (d.ec or 0)) end
-      if (d.solar or 0) == 1 then elec.gen = math.max(0.0, elec.gen - (d.gen or 0)) end
       part_total = math.max(0, part_total - 1)
       bp_by_uid[u], part_hp[u] = nil, nil
+      panim[u], ppose[u], pnode[u] = nil, nil, nil
     end
   end
-  -- Charge splits by battery capacity: the module leaves with the share its own
-  -- batteries were holding, and our bus keeps the rest.
-  local charge_before = elec.charge
-  elec.charge = (cap_before > 0) and (charge_before * elec.cap / cap_before) or 0.0
-  sub.charge = math.max(0.0, charge_before - elec.charge)
-  elec.comms = false
-  for _, d in pairs(bp_by_uid) do
-    if (d.comms or 0) == 1 then elec.comms = true end
+  -- Charge splits by battery: each battery's charge rides in its own record, so
+  -- the module leaves with exactly what ITS batteries hold. Its action groups
+  -- go with the parts they name; ours keep the rest.
+  sub.charge = sub_charge
+  if E then
+    local dset = {}
+    for u in pairs(dep) do dset[u] = true end
+    sub.groups = E.packGroups(E.subsetGroups(ctlGroups, dset))
+    E.pruneGroups(ctlGroups, aboardRecs())
   end
+  integ.gen = integ.gen + 1
+  elecRescan()
   for eid, u in pairs(eid_uid) do
     if dep[u] then eid_uid[eid] = nil end
   end
   -- The seam's world pose, captured BEFORE the split (the closure pushes the
   -- module out along the port's own axis, so it leaves squarely, not sideways).
   local sx, sy, sz, sax, say, saz = dock_world(node, info, p)
-  local name = (node.name or "Vessel") .. " module"
+  local name = (craftName ~= "Vessel" and craftName or (node.name or "Vessel")) .. " module"
   quench(parts_nodes)
   sfx3(SFX.clamp, sx, sy, sz, 0.7, 1.25)
   assembly.split(node, parts_nodes, function(stage)
@@ -1670,6 +2768,7 @@ function undock(port_uid)
       for _, rec in ipairs(sub.parts) do
         rec.x, rec.y, rec.z = rec.x - lx, rec.y - ly, rec.z - lz
       end
+      sub.name = name
       save.set("dock.handoff." .. tostring(stage.id or 0), sub)
       -- A gentle spring push ALONG the port axis — enough to open a gap the
       -- solver won't immediately re-close, nowhere near enough to tumble it.
@@ -1685,7 +2784,8 @@ function undock(port_uid)
                                     si.origin.y + ay * 0.18,
                                     si.origin.z + az * 0.18))
       assembly.impulseAt(stage, vec3(ax * dv * m, ay * dv * m, az * dv * m), si.com)
-      spawnEffect("SepPuff", si.com.x, si.com.y, si.com.z)
+      local fx = fxd()
+      if fx then fx.separate(si.com.x, si.com.y, si.com.z) else spawnEffect("SepPuff", si.com.x, si.com.y, si.com.z) end
     end
     stage.name = name
     log(string.format("UNDOCKED — %s away (%d parts)", name, n))
@@ -1834,13 +2934,17 @@ function dockTick(node, info, dt)
     and time > dock.arm and dock_is_master(node, best.v) then
     local man = best.v.dockManifest and best.v.dockManifest(best.q.uid)
     if man and #man.parts > 0 then
+      -- No tyre joint may hang off either hull through the weld.
+      r2Before(node)
+      if best.v.r2Before then best.v.r2Before(best.v.node) end
       best.v.dockAbsorbed()
       assembly.merge(node, best.v.node)
       dock.pending = { port = best.m.p, manifest = man, t = time }
       dock.target = nil
       add_shake(0.12)
       sfx3(SFX.clamp, best.m.x, best.m.y, best.m.z, 0.85, 1.15)
-      spawnEffect("SepPuff", best.m.x, best.m.y, best.m.z)
+      local fx = fxd()
+      if fx then fx.separate(best.m.x, best.m.y, best.m.z) else spawnEffect("SepPuff", best.m.x, best.m.y, best.m.z) end
       dock.msg = "capture — latching"
     end
   end
@@ -1864,12 +2968,16 @@ local rcs_plumes = nil  -- uid → the block's plume node, resolved once
 -- Every fitted block's world position + its share of the push, plus the pooled
 -- thrust. Also where the plume nodes get cached.
 local function rcs_total()
-  local t = 0.0
+  local t, n = 0.0, 0
   for _, u in ipairs(DEVICES.rcs.parts) do
     local d = bp_by_uid[u]
-    if d then t = t + (d.rcs_thrust or 0) end
+    -- each block's own switch (an action) as well as the bus master
+    if d and not (d.st and d.st.rcs == false) then
+      t = t + (d.rcs_thrust or 0)
+      n = n + 1
+    end
   end
-  return t
+  return t, n
 end
 
 -- Light or stop every block's plume together. The blocks fire as a set, so one
@@ -1952,10 +3060,11 @@ function rcsTick(node, info, dt)
     rcs.firing, rcs.cmd = false, 0.0
     return
   end
-  rcs.thrust = rcs_total()
+  local n_on
+  rcs.thrust, n_on = rcs_total()
   -- Vessel-frame command: (right, FORE along the nose, up out of the seat).
   local tx, ty, tz = 0, 0, 0
-  if piloting and not dock.map then
+  if piloting and not dock.map and elec.control ~= false then
     tx = (input.key("l") and 1 or 0) - (input.key("j") and 1 or 0)
     ty = (input.key("h") and 1 or 0) - (input.key("n") and 1 or 0)
     tz = (input.key("i") and 1 or 0) - (input.key("k") and 1 or 0)
@@ -1986,9 +3095,10 @@ function rcsTick(node, info, dt)
   local wx = rgx * tx + up.x * ty + fx * tz
   local wy = rgy * tx + up.y * ty + fy * tz
   local wz = rgz * tx + up.z * ty + fz * tz
+  -- The physics weighs the craft wet (massSync): a full craft translates slower.
   local f = rcs.thrust * mag
   assembly.force(node, vec3(wx * f, wy * f, wz * f))
-  fuel = math.max(0.0, fuel - #dev.parts * RCS_BURN * mag * dt)
+  fuelDraw((n_on or #dev.parts) * RCS_BURN * mag * dt)
   rcs_plume(node, true, mag)
 end
 
@@ -2144,6 +3254,7 @@ end
 -- run over by their own rocket.
 function standDown(node, x, y, z, vx, vy, vz)
   piloting = false
+  crewAboard = false
   throttle = 0.0
   throttle_prev = 0.0
   set_flames(node, 0)
@@ -2152,6 +3263,8 @@ function standDown(node, x, y, z, vx, vy, vz)
   set_navball(false)
   set_prompt("")
   if not astronaut or not astronaut.valid then astronaut = find("Astronaut") end
+  -- Out of the seat: a body again (it rode as a kinematic passenger).
+  seatCrew(node, false)
   if astronaut then
     if x then
       astronaut.x, astronaut.y, astronaut.z = x, y, z
@@ -2168,7 +3281,7 @@ function parked()
   local node = dock.node
   if destroyed or not node or not node.valid then return false end
   local info = assembly.info(node)
-  if not (info and info.grounded) then return false end
+  if not (info and (info.grounded or R2.onWheels)) then return false end
   local v = info.vel
   return math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z) < 1.5
 end
@@ -2220,7 +3333,7 @@ function recoverReady()
   if hasFlown == false then return false, "not launched yet" end
   local info = assembly.info(node)
   if not info then return false, "no craft" end
-  if not info.grounded then return false, "not landed" end
+  if not (info.grounded or R2.onWheels) then return false, "not landed" end
   local sp = math.sqrt(info.vel.x ^ 2 + info.vel.y ^ 2 + info.vel.z ^ 2)
   if sp > 1.5 then return false, "still moving" end
   local d = base_distance(node)
@@ -2251,12 +3364,16 @@ function recoverCraft()
     if n > 0 then log(string.format("  cargo: %d unit(s) into the warehouse", n)) end
   end
   save.set("mission.recovered", true)
-  if piloting then
+  if crewAboard then
     local i2 = assembly.info(node)
     local bx2, by2, bz2 = base_of(node, i2)
     standDown(node, bx2, by2 + 2.0, bz2)
+  elseif piloting then
+    releaseControl()
+    controlFallback(node.id)
   end
   log(string.format("RECOVERED — %s   +$%d", node.name or "craft", value))
+  r2Cleanup()
   destroy(node)
   destroyed = true
   return true
@@ -2268,11 +3385,10 @@ end
 -- inventory panel's transfer), the Commerce Depot empties it at home, and a
 -- recovered craft brings its load in with it.
 --
--- What's inside is REAL MASS: `holdApplyMass` writes the manifest back onto the
--- bays' rigidbodies and rebuilds the compound, so the loaded return trip climbs
--- worse than the empty outbound one did. It only runs when the manifest
--- actually changed — loading and unloading are both things you do parked, and a
--- per-tick rebuild would be a per-tick rebuild.
+-- What's inside is REAL MASS: `holdApplyMass` reads the manifest into `holdT`,
+-- and massSync spreads it over the bays' rigidbodies (the engine re-derives the
+-- compound's mass, CoM and inertia, no rebuild), so the loaded return trip
+-- climbs worse than the empty outbound one did.
 --
 -- Two craft with the SAME NAME share a hold. That's a consequence of keying on
 -- something the player chose and can recognise, and it's the honest trade: a
@@ -2281,7 +3397,6 @@ holdId = nil          -- published: the inventory container, nil = no bays
 holdCap = 0.0         -- published: kilograms
 craftName = "Vessel"  -- published
 local hold_parts = {}
-local hold_applied = -1.0
 local CARGO_T_PER_KG = 0.001   -- game mass units per kilogram of cargo
 
 function holdRegister(node)
@@ -2292,11 +3407,13 @@ function holdRegister(node)
       holdCap = holdCap + d.cargo
     end
   end
-  if node and node.valid and node.name then craftName = node.name end
+  -- (the engine's node names can't be written from Lua — every craft's root
+  -- is "Vessel" — so the craft's NAME lives here, in `craftName`)
+  if craftName == "Vessel" and node and node.valid and node.name then craftName = node.name end
   holdId = (holdCap > 0) and ("hold:" .. craftName) or nil
-  hold_applied = -1.0
   local inv = findScript("inventory")
   if inv and holdId then inv.setCap(holdId, holdCap) end
+  holdT = holdMass() * CARGO_T_PER_KG -- a hold that comes back loaded weighs it
 end
 
 function holdMass()
@@ -2305,38 +3422,11 @@ function holdMass()
   return inv.mass(holdId)
 end
 
--- The bay part's live node: matched by its blueprint offset, the same way the
--- peripheral animator finds legs and panels.
-local function part_node(node, d)
-  if not (node and node.valid and d) then return nil end
-  for _, c in ipairs(node:children()) do
-    if math.abs((c.x or 0) - d.x) < 0.05 and math.abs((c.z or 0) - d.z) < 0.05
-      and math.abs((c.y or 0) - d.y) < 0.45 then
-      return c
-    end
-  end
-  return nil
-end
-
--- Push the manifest's mass into the physics. Call after any transfer.
+-- Push the manifest's mass into the physics. Call after any transfer: the
+-- bays take their share on the next tick (massSync).
 function holdApplyMass(node)
-  node = node or dock.node
-  local m = holdMass()
-  if math.abs(m - hold_applied) < 0.5 then return false end
-  hold_applied = m
-  if #hold_parts == 0 then return false end
-  local share = m / #hold_parts * CARGO_T_PER_KG
-  local changed = false
-  for _, hp in ipairs(hold_parts) do
-    local ch = part_node(node, bp_by_uid[hp.uid])
-    local rb = ch and ch:getcomponent("RigidBody")
-    if rb then
-      rb.mass = hp.dry + share
-      changed = true
-    end
-  end
-  if changed then assembly.rebuild(node) end
-  return changed
+  holdT = holdMass() * CARGO_T_PER_KG
+  return #hold_parts > 0
 end
 
 -- What the HUD / panels say about the hold. nil when the craft has no bays —
@@ -2378,9 +3468,24 @@ end
 function setPeripheral(id, on)
   local dev = DEVICES[id]
   if not dev or #dev.parts == 0 then return false end
+  -- A probe out of contact (or dark) takes no commands, from the console either.
+  if elec.control == false then
+    dock.msg = "no control — " .. (elec.why or "no signal")
+    return false
+  end
   if on == nil then on = not dev.on end
   if dev.on == on then return true end
   dev.on = on
+  -- Every part of the kind follows (the RCS bus is a master switch on its own).
+  if dev.state then
+    for _, u in ipairs(dev.parts) do
+      local d = bp_by_uid[u]
+      if d then
+        d.st = d.st or {}
+        d.st[dev.state] = on
+      end
+    end
+  end
   if id == "gear" then gear_deployed = on end
   local node = dock.node
   if node and node.valid then
@@ -2435,13 +3540,19 @@ local break_part
 local diag_fx_logged = false
 
 break_part = function(node, uid, d, c, hx, hy, hz, depth)
+  -- A part that has already left this craft (shed, staged, split by an earlier
+  -- link of this same chain) is not ours to break, and splitting its node a
+  -- second time would split a node that is no longer our child.
+  if integ.gone[uid] then return end
   depth = (depth or 0) + 1
   part_hp[uid] = 0
   -- Ship velocity so the blast's embers/sparks/smoke carry its momentum.
   local _iv = assembly.info(node)
   local evx, evy, evz = 0.0, 0.0, 0.0
   if _iv and _iv.vel then evx, evy, evz = _iv.vel.x, _iv.vel.y, _iv.vel.z end
-  spawnEffect("Explosion", hx, hy, hz, evx, evy, evz)
+  local is_boom = (d.fuel or 0) > 0 or d.kind == "engine"
+  local fx = fxd()
+  if fx then fx.explode(hx, hy, hz, evx, evy, evz, is_boom) else spawnEffect("Explosion", hx, hy, hz) end
   if not diag_fx_logged then
     diag_fx_logged = true
     log(string.format(
@@ -2450,14 +3561,31 @@ break_part = function(node, uid, d, c, hx, hy, hz, depth)
   end
   -- Fuel tanks AND engines are EXPLOSIVE: they detonate, jolt harder, and can
   -- set off their neighbours (the chain reaction below).
-  local is_tank = (d.fuel or 0) > 0
-  local is_explosive = is_tank or (d.kind == "engine")
+  -- Explosive means there is something to burn: a tank while IT holds more
+  -- than dregs (tanks drain bottom-up, so a spent lower tank is just a can), an engine only while it is LIT. A cold, dry engine
+  -- bell crushed on landing is a broken part, not a bomb (it used to detonate
+  -- and set off the tank and the pod above it).
+  local is_tank = (d.fuel or 0) > 0 and (tankLeft(uid) or 0) > d.fuel * 0.05
+  local is_explosive = is_tank or (d.kind == "engine" and throttle > 0.05 and fuel > 0)
   add_shake(is_explosive and 0.8 or 0.45)
   -- A boom at the break, spatial through the SFX bus; explosive parts go off
   -- deeper and louder. Slight per-part pitch spread so a chain doesn't machine-gun.
   sfx3(is_explosive and SFX.boom or SFX.explode, hx, hy, hz,
     is_explosive and 1.0 or 0.8, 0.92 + (uid % 5) * 0.03)
   drop_part(uid)
+  -- A destroyed chute stops dragging (it stayed in the pool and kept pulling,
+  -- canopy and all, from a part that was no longer there), and a destroyed
+  -- device stops being driven.
+  local live_chutes = {}
+  for _, ch in ipairs(chutes) do
+    if ch.uid ~= uid then live_chutes[#live_chutes + 1] = ch end
+  end
+  if #live_chutes ~= #chutes then chutes = live_chutes end
+  for _, dev in pairs(DEVICES) do
+    for i = #dev.parts, 1, -1 do
+      if dev.parts[i] == uid then table.remove(dev.parts, i); dev.nodes[uid] = nil end
+    end
+  end
   -- Any part failing against the ground leaves a scar; a fuel tank tears a real
   -- crater (bigger with more fuel), an engine a modest one, a strut a scuff.
   local crater_r = is_tank and (2.6 + math.min(4.0, (d.fuel or 0) / 55))
@@ -2474,11 +3602,20 @@ break_part = function(node, uid, d, c, hx, hy, hz, depth)
   if depth <= 6 then
     local blast, power
     if is_explosive then
-      spawnEffect("Explosion", hx + 0.7, hy + 0.5, hz - 0.4, evx, evy, evz)
-      spawnEffect("Explosion", hx - 0.5, hy + 0.9, hz + 0.6, evx, evy, evz)
+      if fx then
+        fx.explode(hx + 0.7, hy + 0.5, hz - 0.4, evx, evy, evz, false)
+        fx.explode(hx - 0.5, hy + 0.9, hz + 0.6, evx, evy, evz, false)
+      else
+        spawnEffect("Explosion", hx + 0.7, hy + 0.5, hz - 0.4)
+        spawnEffect("Explosion", hx - 0.5, hy + 0.9, hz + 0.6)
+      end
       local i0 = assembly.info(node)
       if i0 then
-        assembly.impulseAt(node, vec3(0, i0.mass * 1.5, 0), vec3(hx, hy, hz))
+        -- The blast shoves the hull along the local UP (radial), not world +Y:
+        -- on a planet's flank world +Y is sideways.
+        local ux, uy, uz = radial_up(hx, hy, hz)
+        local j = i0.mass * 1.5
+        assembly.impulseAt(node, vec3(ux * j, uy * j, uz * j), vec3(hx, hy, hz))
       end
       blast, power = crater_r, 0.9
     else
@@ -2486,7 +3623,7 @@ break_part = function(node, uid, d, c, hx, hy, hz, depth)
     end
     for u2, d2 in pairs(bp_by_uid) do
       local hp2 = part_hp[u2]
-      if u2 ~= uid and hp2 and hp2 > 0 then
+      if u2 ~= uid and hp2 and hp2 > 0 and not integ.gone[u2] then
         local dx2, dy2, dz2 = d2.x - d.x, d2.y - d.y, d2.z - d.z
         local dist = math.sqrt(dx2 * dx2 + dy2 * dy2 + dz2 * dz2)
         if dist < blast then
@@ -2508,27 +3645,68 @@ break_part = function(node, uid, d, c, hx, hy, hz, depth)
       end
     end
   end
-  if d.kind == "crewed" then
-    -- The POD is the ship. Its pilot is thrown clear of the wreck.
+  if d.kind == "crewed" or uid == pod_uid then
+    -- The POD is the ship. Its pilot is put clear of the wreck AT REST, for the
+    -- reason `shatter` gives: the wreck's velocity at the moment it fails is the
+    -- worst number of the flight, and a crew ejected at it (plus a 3 m/s hop
+    -- along world +Y, sideways on a planet's flank) leaves the planet.
+    -- (A PROBE core is the ship too; its crew, if any, were never in it — they
+    -- stay where they are and the controls go back to them.)
     destroyed = true
     silence_loops()
-    if piloting then
-      local i2 = assembly.info(node)
-      local v = i2 and i2.vel
-      standDown(node, hx, hy + 2.0, hz,
-        v and v.x, v and (v.y + 3.0), v and v.z)
+    local was_piloting = piloting
+    if crewAboard then
+      local ux, uy, uz = radial_up(hx, hy, hz)
+      standDown(node, hx + ux * 2.0, hy + uy * 2.0, hz + uz * 2.0, 0, 0, 0)
+    elseif piloting then
+      releaseControl()
+      controlFallback(node.id)
     end
     log("the pod is gone — vessel lost")
+    local fx_s = findScript("sfx") -- the sting and the VESSEL LOST caption
+    if fx_s and fx_s.vesselLost then fx_s.vesselLost(was_piloting, craftName) end
     return
   end
-  -- The broken part shears off as its own tumbling wreck, kicked outward
-  -- from the impact point.
+  -- The broken part shears off as its own wreck. It keeps its velocity; only an
+  -- EXPLOSIVE part (fuel, a lit engine) adds a blast of its own — a crushed
+  -- strut does not fling itself away. It is moved clear of the hull first.
   local i2 = assembly.info(node)
   if c and c.valid and i2 and #i2.parts > 1 then
+    local away = clearAway(node, { [uid] = true })
+    integ.gone[uid] = true
+    integ.gen = integ.gen + 1
     quench({ c })
     assembly.split(node, { c }, function(junk)
-      debris_kick(junk, hx, hy, hz, 5.0)
+      debris_kick(junk, hx, hy, hz, is_explosive and 3.0 or 0.0, away, node)
     end)
+    -- What hung off the part that broke has nothing holding it any more: every
+    -- piece of the attachment tree the break cut off from the pod comes away as
+    -- its own body (the engine under a tank that blew, a booster whose mount
+    -- went). The pod's piece is the craft that keeps flying.
+    local pieces = {}
+    for _, k in ipairs(bp_kids[uid] or {}) do
+      local set, queue = {}, { k }
+      while #queue > 0 do
+        local u = table.remove(queue)
+        if not set[u] and not integ.gone[u] then
+          set[u] = true
+          for _, kk in ipairs(bp_kids[u] or {}) do queue[#queue + 1] = kk end
+        end
+      end
+      pieces[#pieces + 1] = set
+    end
+    local below = {}
+    for _, set in ipairs(pieces) do for u in pairs(set) do below[u] = true end end
+    local above = {}
+    for u in pairs(bp_by_uid) do
+      if u ~= uid and not below[u] and not integ.gone[u] then above[u] = true end
+    end
+    pieces[#pieces + 1] = above
+    for _, set in ipairs(pieces) do
+      if next(set) and not (pod_uid and set[pod_uid]) then
+        shedSet(node, set, "its mount broke", 1.0, false)
+      end
+    end
   end
 end
 
@@ -2543,9 +3721,16 @@ local function shatter(node, hx, hy, hz, spd, info)
   add_shake(1.4) -- the whole airframe failing is a hard jolt
   local evx, evy, evz = 0.0, 0.0, 0.0
   if info and info.vel then evx, evy, evz = info.vel.x, info.vel.y, info.vel.z end
-  spawnEffect("Explosion", hx, hy, hz, evx, evy, evz)
-  spawnEffect("Explosion", hx + 0.8, hy + 0.6, hz - 0.5, evx, evy, evz)
-  spawnEffect("Explosion", hx - 0.6, hy + 0.3, hz + 0.7, evx, evy, evz)
+  local fx = fxd()
+  if fx then
+    fx.explode(hx, hy, hz, evx, evy, evz, true)
+    fx.explode(hx + 0.8, hy + 0.6, hz - 0.5, evx, evy, evz, false)
+    fx.explode(hx - 0.6, hy + 0.3, hz + 0.7, evx, evy, evz, false)
+  else
+    spawnEffect("Explosion", hx, hy, hz)
+    spawnEffect("Explosion", hx + 0.8, hy + 0.6, hz - 0.5)
+    spawnEffect("Explosion", hx - 0.6, hy + 0.3, hz + 0.7)
+  end
   sfx3(SFX.boom, hx, hy, hz, 1.0, 0.85)
   sfx3(SFX.explode, hx, hy, hz, 0.9, 1.05)
   -- CAPTIONS. The engine draws these only while a player has them on, so they
@@ -2553,7 +3738,10 @@ local function shatter(node, hx, hy, hz, spd, info)
   -- sounds that CARRY something go here — the ones a player who cannot hear
   -- them would otherwise learn about from the wreckage.
   caption("the hull breaks up")
-  spawnEffect("Explosion", hx + 0.2, hy + 1.4, hz + 0.3, evx, evy, evz) -- a secondary up high
+  local fx_s = findScript("sfx") -- the sting and the VESSEL LOST caption
+  if fx_s and fx_s.vesselLost then fx_s.vesselLost(piloting, craftName) end
+  if fx then fx.explode(hx + 0.2, hy + 1.4, hz + 0.3, evx, evy, evz, true) -- a secondary up high
+  else spawnEffect("Explosion", hx + 0.2, hy + 1.4, hz + 0.3) end
   make_crater(hx, hy, hz, 4.8)
   silence_loops()
   -- Put the pilot clear of the wreck — AT REST.
@@ -2567,22 +3755,46 @@ local function shatter(node, hx, hy, hz, spd, info)
   --
   -- Surviving a breakup is meant to cost you the ship, not the save. They come
   -- to a stop beside the wreck; getting home from there is `flight_ops`.
-  if piloting then
+  if crewAboard then
     standDown(node, hx, hy + 2.0, hz, 0, 0, 0)
+  elseif piloting then
+    releaseControl()
+    controlFallback(node.id)
   end
   -- Shear every part loose (leave the last one so the compound stays valid).
   local live = {}
   for _, ch in ipairs(node:children()) do live[#live + 1] = ch end
-  local kick = math.min(11.0, spd * 0.22)
+  -- The kick is the airframe failing — real energy, but a hull that hit at
+  -- 50 m/s does not throw its parts at 11 m/s straight up: capped at 8, and
+  -- every piece is first moved clear of the parts around it so the engine has
+  -- no overlap to "resolve" on top of it.
+  local kick = math.min(8.0, spd * 0.18)
+  local shards = {}
+  local rx, up, rz = basis(node)
+  local bx, by, bz = base_of(node, info)
   for i = 1, #live - 1 do
     local ch = live[i]
     if ch and ch.valid then
+      local u
+      for uu, dd in pairs(bp_by_uid) do
+        if not integ.gone[uu] and math.abs((ch.x or 0) - dd.x) < 0.06
+          and math.abs((ch.y or 0) - dd.y) < 0.06 and math.abs((ch.z or 0) - dd.z) < 0.06 then
+          u = uu
+          break
+        end
+      end
+      local away = u and clearAway(node, { [u] = true }) or nil
+      if u then integ.gone[u] = true end
       quench({ ch })
       assembly.split(node, { ch }, function(junk)
-        debris_kick(junk, hx, hy, hz, kick)
+        -- Every shard passes through the hull AND the shards before it for a
+        -- moment: they were one body a tick ago, touching at every seam.
+        debris_kick(junk, hx, hy, hz, kick, away, node, shards)
+        shards[#shards + 1] = junk
       end)
     end
   end
+  integ.gen = integ.gen + 1
   for uid in pairs(part_hp) do part_hp[uid] = 0 end
 end
 
@@ -2658,6 +3870,11 @@ local function damage_tick(node, info, dt)
   -- it is the sink-and-drift the pilot flew, not the planet's 99 m/s of orbit.
   local ov = info.vel
   local own = math.sqrt(ov.x * ov.x + ov.y * ov.y + ov.z * ov.z)
+  -- ...and what it was doing a tick ago: by the time a script reads it, the
+  -- impact tick has already taken most of the speed away (an 87 m drop that
+  -- arrived at 25 m/s read 4 m/s here, which capped a real lithobrake at 13).
+  -- The safety net keeps last tick's speed.
+  own = math.max(own, integ.spd_before or 0)
   local ceiling = own + ARTIFACT_MARGIN
   local artifacts = 0
   local raw = assembly.impacts(node)
@@ -2755,8 +3972,12 @@ local function damage_tick(node, info, dt)
           -- A part grinding on the surface throws hot sparks and kicks up gritty
           -- dust (not soft smoke) — both inherit the ship's velocity so they streak
           -- along the scrape instead of puffing straight up.
-          spawnEffect("Sparks", h.x, h.y, h.z, vx, vy, vz)
-          spawnEffect("ScrapeDust", h.x, h.y, h.z, vx, vy, vz)
+          local fx = fxd()
+          if fx then fx.scrape(h.x, h.y, h.z, vx, vy, vz)
+          else
+            spawnEffect("Sparks", h.x, h.y, h.z)
+            spawnEffect("ScrapeDust", h.x, h.y, h.z)
+          end
           add_shake(math.min(0.4, 0.1 + over * 0.3))
           sfx3(SFX.stage, h.x, h.y, h.z, math.min(0.6, 0.25 + over * 0.4), 1.2)
         end
@@ -2796,11 +4017,19 @@ local function damage_tick(node, info, dt)
           -- Keep the visible damage in sync (a part wounded by a CHAIN reaction
           -- it wasn't directly hit by still shows its scars).
           set_part_damage(child_of_uid(node, uid), hp)
-          spawnEffect("Smoke",
-            bx + rx.x * d.x + up.x * d.y + rz.x * d.z,
-            by + rx.y * d.x + up.y * d.y + rz.y * d.z,
-            bz + rx.z * d.x + up.z * d.y + rz.z * d.z,
-            info.vel.x, info.vel.y, info.vel.z)
+          local fx = fxd()
+          if fx then
+            fx.smolder(uid,
+              bx + rx.x * d.x + up.x * d.y + rz.x * d.z,
+              by + rx.y * d.x + up.y * d.y + rz.y * d.z,
+              bz + rx.z * d.x + up.z * d.y + rz.z * d.z,
+              info.vel.x, info.vel.y, info.vel.z)
+          else
+            spawnEffect("Smoke",
+              bx + rx.x * d.x + up.x * d.y + rz.x * d.z,
+              by + rx.y * d.x + up.y * d.y + rz.y * d.z,
+              bz + rx.z * d.x + up.z * d.y + rz.z * d.z)
+          end
         end
       end
     end
@@ -2809,6 +4038,12 @@ end
 
 
 -- ── lifecycle ───────────────────────────────────────────────────────────────
+-- Rename this craft (the Tracking Station; a restored or undocked craft wakes
+-- with its name). Node names can't be written from Lua, so this is the name.
+function renamed(name)
+  if type(name) == "string" and name ~= "" then craftName = name end
+end
+
 function start(node)
   dock.node = node
   -- A craft that just UNDOCKED wakes up with the blueprint the vessel it left
@@ -2818,12 +4053,27 @@ function start(node)
   local handoff = save.get(hk)
   if handoff and handoff.parts then
     save.set(hk, false)
+    if handoff.name then craftName = handoff.name end
+    local had_state = false
+    for _, d in pairs(handoff.parts) do if d.st ~= nil then had_state = true end end
     load_bp(handoff)
     -- `load_bp` rolls a fresh build out of the VAB with full tanks; an undocked
     -- module arrives with exactly what it was carrying at the seam.
-    fuel = math.min(fuel_cap, handoff.fuel or fuel_cap)
-    elec.charge = math.min(elec.cap, handoff.charge or elec.cap)
+    fuelFill(math.min(fuel_cap, handoff.fuel or fuel_cap))
+    -- Each battery's charge rides in its record now; a record from before that
+    -- has only the pooled figure, shared out by capacity.
+    if not had_state and handoff.charge then elecSetCharge(handoff.charge) end
     dock.arm = time + (handoff.lockout or 0.0)   -- drift clear before re-latching
+    -- A craft rebuilt in flight (flight_ops fleet restore) is pushed to its
+    -- orbital velocity in the rebuild's callback: one tick's jump from rest
+    -- the safety net must not read as a solver kick and take back.
+    integ.handoff_t = time + 3.0
+    -- ...and the velocity it is restored at, given by massSync once the parts
+    -- weigh what they carry (so the push is sized for the real craft).
+    if type(handoff.vel) == "table" then integ.push = handoff.vel end
+    -- The crew was in this seat when the game was saved: they still are, and
+    -- they're flying it (the boarding handoff seats them on the first tick).
+    if handoff.crew and podCrewed then boarding = true end
     log(string.format("%s: undocked module online (%d parts, %.0f fuel)",
       node.name or "vessel", part_total, fuel))
   else
@@ -2831,6 +4081,17 @@ function start(node)
   end
   if (save.get("shipyard.pilot") or 0) == 1 then
     save.set("shipyard.pilot", 0)
+    -- A fresh rollout gets a name of its own (the builder's, if it gave one).
+    if craftName == "Vessel" then
+      local n = (save.get("names.n") or 0) + 1
+      save.set("names.n", n)
+      craftName = (bp and bp.name) or string.format("%s %d", podCrewed and "Craft" or "Probe", n)
+      holdId = (holdCap > 0) and ("hold:" .. craftName) or nil
+      if holdId then
+        local inv = findScript("inventory")
+        if inv then inv.setCap(holdId, holdCap) end
+      end
+    end
     boarding = true
     launch_mode = true
     hasFlown = false
@@ -2849,6 +4110,2272 @@ local function assembly_ready(info)
     parts_seen, parts_t = #info.parts, time
   end
   return #info.parts > 0 and time - parts_t > 2.0
+end
+
+-- ── physics integrity: the seat, the clamps, joint stress, breakup, safety ──
+--
+-- THE LAUNCH BUG (Ty, 2026-10-01: "when i pressed space to launch my ship i
+-- immidiately glitched out absolutely crazily being sent absolutely flying").
+-- Measured on engine 0.111.1 with the default contract craft, launched through
+-- the builder → spawner path and released the way SPACE does:
+--
+--   * The seated crew is a live DYNAMIC capsule (r 0.33, 2 m tall) that this
+--     script parks at the pod every tick. Since engine 0.104 ("Vessels collide")
+--     bodies and assemblies push each other apart — so the pilot sat INSIDE the
+--     hull, overlapping the pod, the tank and the chute. While clamped nothing
+--     happens (an anchored compound is never moved); the moment the clamps let
+--     go, every tick resolved that overlap again.
+--   * The overlap pushes the hull by POSITION only (the pilot is handed the
+--     ship's velocity, so there is no closing speed and no impulse), so the
+--     craft hung on its own pilot while gravity piled up velocity: -0.9 m/s
+--     after 0.25 s while it had not moved at all, -8 m/s after 1.7 s.
+--   * Then the engine's per-step correction budget ran away (pairs.rs: once the
+--     budget rounds a hair below zero, every further correction is scaled by a
+--     NEGATIVE factor and the budget doubles): the hull jumped 26 m sideways in
+--     one tick, off the pad, and fell 9 m onto bare terrain with the stored
+--     velocity. In a stand-alone repro the same thing flips the stack 102° in a
+--     single step. That is "sent flying / glitched into the terrain".
+--
+-- The fix here is that a seated pilot is a passenger, not a body: KINEMATIC
+-- while seated (kinematic bodies take no part in body-vs-assembly contacts),
+-- handed back to physics when they stand down. With that alone the same launch
+-- measures 0.40 m of drop onto the deck and v = 0, every time; the spawner now
+-- also seats the craft 2 cm over the deck instead of 40 cm.
+--
+-- The rest of this section makes the craft behave like a physical object that
+-- can fail rather than a rigid brick that either bounces or vaporises:
+--
+--   STRESS. Every attachment (a part to its parent in the builder's tree) has a
+--   strength in kN. Each tick the craft's PROPER acceleration (what the hull
+--   feels: thrust, contact, drag — gravity excluded) is smoothed over ~0.1 s,
+--   and every joint carries the mass outboard of it times the acceleration at
+--   that mass's centre, spin included (ω×(ω×r) + α×r). A joint over its limit
+--   accumulates strain and lets go; more than twice its limit, it lets go at
+--   once. Dynamic pressure (½ρv²) has its own limit per part — tiny for a
+--   deployed solar panel or dish, very large for the hull — and an open
+--   parachute tears off above its safe deploy pressure.
+--
+--   BREAKUP. What fails is the side of the joint WITHOUT the pod (the same tree
+--   cut a decoupler makes). It leaves as its own body with the velocity it had
+--   (the engine's split conserves point velocity), its engines/tanks leave the
+--   pools, the craft's mass and centre of mass are recomputed by the engine, and
+--   staging events that rode with it go too. A heavily overloaded fuelled tank
+--   or a lit engine goes off as it tears away (the existing explosion hooks).
+--
+--   NO DEPENETRATION KICKS. A split piece starts exactly where it was: touching
+--   its old neighbours, and sometimes overlapping them (a leg's footprint box
+--   sits inside the hull). Left alone the engine resolves that overlap as a
+--   collision on the next step — a kick nobody asked for, and the trigger for
+--   the budget runaway above. So every piece that leaves is first moved clear
+--   of what stays behind, along the direction it is leaving in, by exactly the
+--   overlap of their collider boxes plus 3 cm, and gets NO impulse of its own.
+--   (There is no way to switch collision off between two assemblies from a
+--   script — no runtime layer matrix, and project.ron is not this script's — so
+--   "suppressed briefly" is done geometrically, which also costs nothing.)
+--
+--   SAFETY NET. Whatever is left over is caught and LOGGED, never hidden: a
+--   spin past 12 rad/s is braked back to it with an exact angular impulse
+--   (inertia from the part boxes), a one-tick speed GAIN that no force on board
+--   explains is clamped back, a one-tick jump of the hull is reported, and a
+--   NaN anywhere stops the controller from feeding it back into the sim.
+--   `integrity()` reports how often each fired.
+
+-- Joint strength (kN) by part kind: the load the attachment to the parent part
+-- takes before it starts to give. A part may carry its own `strength` in the
+-- blueprint (builder.lua's registry); this is the fallback for older builds.
+-- Scale: the starter rocket's pod (1.3 t with its chute) leaves the tank at
+-- ~46 g, a launch is ~1.5 g, a hard chute opening ~15 g, a 10 rad/s tumble
+-- with the pod 1.5 m out ~15 g.
+local JOINT_KN = { crewed = 600, tank = 450, engine = 500, structural = 350, canvas = 150 }
+-- Dynamic pressure (kPa) any part takes; deployed fragile kit takes far less.
+local QMAX_KPA = 80
+local AIR_RHO = 1.2           -- sea-level air density (kg/m³) at band density 1
+-- An open canopy tears above this dynamic pressure (≈ 104 m/s in sea-level
+-- air, ≈ 147 m/s where the air is half as thick) — KSP's "safe to deploy"
+-- speed, as a pressure so it follows the air. Rated by pressure rather than by
+-- load so a heavy craft isn't arbitrarily unable to use chutes at all; its
+-- heavier snatch still loads every OTHER joint through the g-load above.
+local CHUTE_SAFE_KPA = 6.5
+local SPIN_MAX = 12.0         -- rad/s: past this the safety net brakes the tumble
+local KICK_TOL = 6.0          -- m/s of unexplained one-tick speed gain tolerated
+local JUMP_TOL = 3.0          -- m of unexplained one-tick hull movement reported
+local STRESS_SAMPLE_MAX = 400 -- m/s²: the most one tick's Δv may say about a SUSTAINED load
+
+local function integ_note(kind, msg)
+  integ.fired[kind] = (integ.fired[kind] or 0) + 1
+  if time - (integ.note_t[kind] or -10) > 1.0 then
+    integ.note_t[kind] = time
+    log(msg)
+  end
+end
+
+-- Published: how often each safety-net clamp fired this flight, plus the stress
+-- state (the probes and the HUD can read it).
+function integrity()
+  local out = {}
+  for k, n in pairs(integ.fired) do out[k] = n end
+  return out
+end
+
+-- THE SEAT. The crew rides as a passenger: kinematic while seated, dynamic
+-- again when they stand down. Idempotent and cheap — the piloting vessel calls
+-- it every tick (it re-asserts the flag twice a second in case anything else
+-- flipped it), every other vessel only acts if it was the one that seated them.
+function seatCrew(node, on)
+  if not astronaut or not astronaut.valid then astronaut = find("Astronaut") end
+  local a = astronaut
+  if not a then return end
+  if on and physTune.seatKinematic == false then return end -- probe A/B only
+  if on then
+    if integ.seated and time - integ.seat_t < 0.5 then return end
+  else
+    if not integ.seated then return end
+    -- The crew may be in another craft's seat now: it keeps them seated.
+    for _, v in ipairs(findScripts("vessel_controller")) do
+      if v.crewAboard and v.node and node and v.node.id ~= node.id then
+        integ.seated = false
+        return
+      end
+    end
+  end
+  local getc = a.getComponent or a.getcomponent
+  local rb = getc and getc(a, "RigidBody")
+  if rb then
+    -- Written only when it differs (the read answers true/false or 1/0).
+    local is = rb.kinematic == true or rb.kinematic == 1
+    if is ~= on then rb.kinematic = on and 1 or 0 end
+  end
+  integ.seated, integ.seat_t = on, time
+end
+
+-- Is this point within a few ticks of any sphere-of-influence boundary? At an
+-- SOI seam the engine steps the craft's velocity by the difference of the two
+-- frames (a planet's whole orbital speed) with no force at all — and the node
+-- position the dominant body is judged from lags a tick, so a one-tick spike
+-- right there is a frame change, not a load and not a solver artifact.
+local function near_soi_seam(x, y, z, spd, dt)
+  local margin = math.max(50.0, spd * dt * 4.0)
+  for _, b in ipairs(space.bodies() or {}) do
+    if (b.soi or 0) > 0 then
+      local d = math.sqrt((x - b.x) ^ 2 + (y - b.y) ^ 2 + (z - b.z) ^ 2)
+      if math.abs(d - b.soi) < margin then return true end
+    end
+  end
+  return false
+end
+
+-- THE CLAMPS. SPACE on the pad comes here, and so do probes (a headless run
+-- cannot press keys). Releases only a fully assembled craft; returns true when
+-- the clamps actually let go.
+function releaseClamps()
+  local node = dock.node
+  if not node or not node.valid then return false end
+  local info = assembly.info(node)
+  if not info then return false end
+  if info.anchored then
+    if not assembly_ready(info) then
+      log(string.format("clamps hold: %d / %d parts assembled", #info.parts, part_total))
+      return false
+    end
+  elseif not (launch_mode and not released) then
+    return false -- already flying
+  end
+  -- The crew must already be a passenger when the hull starts to move.
+  if piloting then seatCrew(node, true) end
+  released = true
+  integ.release_t, integ.prev, integ.af = time, nil, nil
+  assembly.setAnchored(node, false)
+  r2Rollout(node, info)
+  local bx, by, bz = base_of(node, info)
+  sfx3(SFX.clamp, bx, by, bz, 0.9, 1.0) -- the clamps let go with a clank
+  caption("the launch clamps release")
+  log("launch clamps released")
+  return true
+end
+
+-- A part's collider box in the VESSEL frame: centre and axis-aligned half
+-- extents of the turned box, from the live part's RigidBody (what the physics
+-- compound is made of) or the blueprint's footprint when it can't be read.
+local function part_box(node, uid)
+  local b = integ.box[uid]
+  if b then return b end
+  local d = bp_by_uid[uid]
+  if not d then return nil end
+  local hx, hy, hz = d.rx or 0.5, (d.h or 1.0) * 0.5, d.rz or 0.5
+  if hx <= 0 then hx = 0.5 end
+  if hz <= 0 then hz = 0.5 end
+  local c = child_of_uid(node, uid)
+  local getc = c and (c.getComponent or c.getcomponent)
+  local rb = getc and getc(c, "RigidBody")
+  if rb and rb.half_y and rb.half_y > 0 then
+    -- The engine builds the box as half_extents × the part node's scale
+    -- (floptle-physics build_assemblies); the component reports the unscaled
+    -- prefab numbers. Read the scale off the live part at first sight (before
+    -- a chute's canopy grows it).
+    hx = (rb.half_x or hx) * math.abs(c.scale_x or 1)
+    hy = rb.half_y * math.abs(c.scale_y or 1)
+    hz = (rb.half_z or hz) * math.abs(c.scale_z or 1)
+  end
+  local Xx, Xy, Xz = part_axis_x(d)
+  local Yx, Yy, Yz = part_axis(d)
+  local Zx, Zy, Zz = Xy * Yz - Xz * Yy, Xz * Yx - Xx * Yz, Xx * Yy - Xy * Yx
+  b = { cx = d.x, cy = d.y, cz = d.z, m = math.max(0.01, d.mass or 0.5),
+        ex = math.abs(Xx) * hx + math.abs(Yx) * hy + math.abs(Zx) * hz,
+        ey = math.abs(Xy) * hx + math.abs(Yy) * hy + math.abs(Zy) * hz,
+        ez = math.abs(Xz) * hx + math.abs(Yz) * hy + math.abs(Zz) * hz,
+        hx = hx, hy = hy, hz = hz }
+  integ.box[uid] = b
+  return b
+end
+
+-- How far the hull reaches out along the vessel's +X (where the crew steps out),
+-- from the part boxes; never less than the old fixed 1.6 m.
+function hullReach()
+  local node = dock.node
+  local r = 1.6
+  if not node or not node.valid then return r end
+  for u in pairs(bp_by_uid) do
+    local b = not integ.gone[u] and part_box(node, u)
+    if b and b.cx + b.ex > r then r = b.cx + b.ex end
+  end
+  return r
+end
+
+-- Mass and centre (vessel frame) of a set of uids still aboard.
+local function set_mass(node, set)
+  local m, x, y, z = 0.0, 0.0, 0.0, 0.0
+  for u in pairs(set) do
+    if not integ.gone[u] then
+      local b = part_box(node, u)
+      if b then
+        local bm = b.m + tankFuelT(u)   -- a tank weighs what it still holds
+        m = m + bm
+        x, y, z = x + b.cx * bm, y + b.cy * bm, z + b.cz * bm
+      end
+    end
+  end
+  if m <= 0 then return 0, 0, 0, 0 end
+  return m, x / m, y / m, z / m
+end
+
+-- How far (m) the departing set must move along vessel-frame unit `d` so that
+-- none of its boxes overlaps a box that stays — plus a 3 cm air gap. Boxes that
+-- merely touch count as overlapping (the solver treats a zero gap as contact).
+local function clearance(node, set, dx, dy, dz)
+  local need = 0.0
+  local stay = {}
+  for u in pairs(bp_by_uid) do
+    if not set[u] and not integ.gone[u] then stay[#stay + 1] = part_box(node, u) end
+  end
+  local adx, ady, adz = math.abs(dx), math.abs(dy), math.abs(dz)
+  for u in pairs(set) do
+    local a = not integ.gone[u] and part_box(node, u)
+    if a then
+      for _, b in ipairs(stay) do
+        if math.abs(a.cx - b.cx) <= a.ex + b.ex + 0.01
+          and math.abs(a.cy - b.cy) <= a.ey + b.ey + 0.01
+          and math.abs(a.cz - b.cz) <= a.ez + b.ez + 0.01 then
+          local ca = a.cx * dx + a.cy * dy + a.cz * dz
+          local cb = b.cx * dx + b.cy * dy + b.cz * dz
+          local ea = adx * a.ex + ady * a.ey + adz * a.ez
+          local eb = adx * b.ex + ady * b.ey + adz * b.ez
+          local s = (cb + eb) - (ca - ea)
+          if s > need then need = s end
+        end
+      end
+    end
+  end
+  -- Deeper than this and the piece was built buried in the hull; move it what
+  -- is sane and let the solver take the rest over a few bounded steps.
+  return math.min(need, 1.2) + 0.03
+end
+
+-- The way a set of parts leaves the hull — from the centre of what STAYS
+-- toward the centre of what goes (vessel frame) — and how far along it the set
+-- must move to clear every box that stays: { gap, x, y, z } in world terms.
+-- Measure before the set is marked gone (gone parts don't count).
+function clearAway(node, set)
+  local _, kx, ky, kz = set_mass(node, set)
+  local keep = {}
+  for u in pairs(bp_by_uid) do if not set[u] then keep[u] = true end end
+  local _, sx, sy, sz = set_mass(node, keep)
+  local dx, dy, dz = kx - sx, ky - sy, kz - sz
+  local dl = math.sqrt(dx * dx + dy * dy + dz * dz)
+  if dl < 1e-4 then dx, dy, dz, dl = 0, -1, 0, 1 end
+  dx, dy, dz = dx / dl, dy / dl, dz / dl
+  local gap = clearance(node, set, dx, dy, dz)
+  local rx, up, rz = basis(node)
+  return { gap = gap,
+           x = rx.x * dx + up.x * dy + rz.x * dz,
+           y = rx.y * dx + up.y * dy + rz.y * dz,
+           z = rx.z * dx + up.z * dy + rz.z * dz,
+           lx = kx, ly = ky, lz = kz }
+end
+
+-- Let a piece that has just been split off go cleanly: out of any collider
+-- overlap with the hull (`gap` metres along world unit (wx,wy,wz), from
+-- `clearance`), and passing through the hull for `physTune.ignore` seconds so
+-- the two faces that were bolted together can't knock each other apart. Any
+-- push the caller then gives it (a decoupler's charge, a blast) is the only
+-- energy in the separation. `also` lists other fresh pieces of the same event
+-- (a breakup) that should pass through this one too.
+function releasePiece(piece, hull, wx, wy, wz, gap, also)
+  local pi = assembly.info(piece)
+  if physTune.clear and gap and gap > 0 and pi and pi.origin then
+    assembly.teleport(piece, vec3(pi.origin.x + wx * gap, pi.origin.y + wy * gap,
+      pi.origin.z + wz * gap))
+  end
+  local secs = physTune.ignore or 0
+  if secs > 0 and physics and physics.ignorePair then
+    if hull and hull.valid ~= false then physics.ignorePair(piece, hull, secs) end
+    for _, other in ipairs(also or {}) do
+      if other.valid ~= false then physics.ignorePair(piece, other, secs) end
+    end
+  end
+end
+
+-- SHED a set of parts as ONE new body: the general form of "this much of the
+-- craft just came off". The pod never leaves this way (a set holding it is
+-- refused — losing the pod is break_part's job). Returns true if it split.
+--   why      a few words for the log ("g-load", "dynamic pressure", …)
+--   blast    true = it goes off as it leaves (explosion hooks + a light kick)
+function shedSet(node, set, why, sev, blast)
+  if destroyed or not node or not node.valid then return false end
+  if pod_uid and set[pod_uid] then return false end
+  local nodes, n_set = {}, 0
+  for u in pairs(set) do
+    if not integ.gone[u] then
+      n_set = n_set + 1
+      local c = child_of_uid(node, u)
+      if c and c.valid then nodes[#nodes + 1] = c end
+    end
+  end
+  if #nodes == 0 then return false end
+  local info = assembly.info(node)
+  if not info or #info.parts <= #nodes then return false end -- never split off everything
+  r2Before(node)
+  -- Which way it leaves: from what stays toward what goes.
+  local away = clearAway(node, set)
+  local gap, wx, wy, wz = away.gap, away.x, away.y, away.z
+  local kx, ky, kz = away.lx, away.ly, away.lz
+  local rx, up, rz = basis(node)
+  -- Bookkeeping before the split, so this tick's passes already see the new craft.
+  -- Named after the part at the torn joint: the lowest-uid part whose parent
+  -- stays behind (deterministic, unlike pairs() order).
+  local label, lu = "part", nil
+  for u in pairs(set) do
+    local d = bp_by_uid[u]
+    if d and not set[d.parent or 0] and (not lu or u < lu) then
+      lu, label = u, d.label or d.id or "part"
+    end
+  end
+  drop_set(set)
+  local keep_ev = {}
+  for _, ev in ipairs(events) do
+    if ev.kind == "axial" or ev.kind == "fairing" then
+      if not set[ev.uid] then keep_ev[#keep_ev + 1] = ev end
+    elseif ev.kind == "chute" then
+      local us = {}
+      for _, u in ipairs(ev.uids) do if not set[u] then us[#us + 1] = u end end
+      if #us > 0 then ev.uids = us; keep_ev[#keep_ev + 1] = ev end
+    else
+      local bs = {}
+      for _, g in ipairs(ev.branches) do
+        if not set[g.uid] then bs[#bs + 1] = g end
+      end
+      if #bs > 0 then ev.branches = bs; keep_ev[#keep_ev + 1] = ev end
+    end
+  end
+  events = keep_ev
+  local live_chutes = {}
+  for _, c in ipairs(chutes) do
+    if not set[c.uid] then live_chutes[#live_chutes + 1] = c end
+  end
+  if #live_chutes ~= #chutes then chutes = live_chutes end
+  for _, dev in pairs(DEVICES) do
+    local keep_p = {}
+    for _, u in ipairs(dev.parts) do
+      if not set[u] then keep_p[#keep_p + 1] = u else dev.nodes[u] = nil end
+    end
+    dev.parts = keep_p
+  end
+  quench(nodes)
+  log(string.format("STRESS: %s tore away (%s, %.0f%% of its limit) — %d part(s) leave "
+    .. "as their own body, %.2f m clear, velocity kept", label, why, (sev or 1) * 100,
+    #nodes, gap))
+  local bx, by, bz = base_of(node, info)
+  local px = bx + rx.x * kx + up.x * ky + rz.x * kz
+  local py = by + rx.y * kx + up.y * ky + rz.y * kz
+  local pz = bz + rx.z * kx + up.z * ky + rz.z * kz
+  sfx3(blast and SFX.boom or SFX.stage, px, py, pz, blast and 1.0 or 0.8, 0.9)
+  caption(blast and "a part explodes and tears away" or "a part tears away")
+  add_shake(blast and 0.8 or 0.35)
+  if blast then
+    local v = info.vel
+    local fx = fxd()
+    if fx then
+      fx.explode(px, py, pz, v.x, v.y, v.z, true)
+      fx.explode(px + wx * 0.6, py + wy * 0.6, pz + wz * 0.6, v.x, v.y, v.z, false)
+    else
+      spawnEffect("Explosion", px, py, pz)
+      spawnEffect("Explosion", px + wx * 0.6, py + wy * 0.6, pz + wz * 0.6)
+    end
+  else
+    -- A structural tear: the joint snapping — a puff, sparks and loose bolts.
+    local fx = fxd()
+    if fx then fx.separate(px, py, pz, info.vel.x, info.vel.y, info.vel.z) end
+  end
+  assembly.split(node, nodes, function(junk)
+    -- Clear of the hull, at the velocity it had: no impulse from overlap.
+    releasePiece(junk, node, wx, wy, wz, gap)
+    local ji = assembly.info(junk)
+    if ji and ji.origin then
+      if blast and ji.com then
+        -- An explosion is real energy: a light, mass-scaled push off the hull,
+        -- through the centre of mass where the clear-out has put it (the
+        -- teleport is applied before this impulse; pushing at the old spot
+        -- would add a spin of gap × push for nothing).
+        local m = math.max(0.05, ji.mass or 0.2)
+        local g = physTune.clear and gap or 0
+        assembly.impulseAt(junk, vec3(wx * 2.5 * m, wy * 2.5 * m, wz * 2.5 * m),
+          vec3(ji.com.x + wx * g, ji.com.y + wy * g, ji.com.z + wz * g))
+      end
+    end
+  end)
+  return true
+end
+
+-- A JOINT fails: the part `uid` comes off its parent, and with it everything
+-- on its side of that joint (away from the pod).
+function shedJoint(node, uid, why, sev, blast)
+  if integ.gone[uid] then return false end
+  return shedSet(node, axial_departing(uid), why, sev, blast)
+end
+
+-- The joints to load-check, rebuilt whenever the craft's part set changes:
+-- one per part that has a parent and is still aboard, with its departing set.
+local function joints(node)
+  local key = integ.joints
+  if key and key.gen == integ.gen and key.tree == axial_set_cache then return key.list end
+  local list = {}
+  for u, d in pairs(bp_by_uid) do
+    if (d.parent or 0) ~= 0 and not integ.gone[u] and u ~= pod_uid then
+      local set = axial_departing(u)
+      if not set[pod_uid or -1] then list[#list + 1] = { uid = u, set = set, d = d } end
+    end
+  end
+  table.sort(list, function(a, b) return a.uid < b.uid end) -- deterministic order
+  integ.joints = { gen = integ.gen, tree = axial_set_cache, list = list }
+  return list
+end
+
+local function joint_strength(d, hp)
+  local s = (d.strength or 0) > 0 and d.strength
+    or ((d.legs or 0) == 1 and 300)
+    or ((d.decouple or 0) == 1 and 400)
+    or JOINT_KN[d.kind or "structural"] or 350
+  -- A wounded part is a weaker anchor: damage and stress compound.
+  return s * (0.4 + 0.6 * math.max(0, math.min(1, hp or 1)))
+end
+
+local function part_qmax(d)
+  -- inside a fairing the air never reaches it
+  if (d.faired or 0) ~= 0 and r2Faired(d) then return 1e9 end
+  local q = (d.maxq or 0) > 0 and d.maxq or QMAX_KPA
+  -- An extended panel, dish or whip is a sail: it tears off at low pressure.
+  local m = elib() and elib().modOf(d, "deploy")
+  if m and m.anim ~= "legs" and (panim[d.uid] or 0) > 0.3 then
+    q = math.min(q, m.anim == "solar" and 4 or 6)
+  elseif not m and (d.solar or 0) == 1 and DEVICES.solar.anim > 0.3 then q = math.min(q, 4)
+  elseif not m and (d.comms or 0) == 1 and DEVICES.comms.anim > 0.3 then q = math.min(q, 6) end
+  return q
+end
+
+-- THE WORLD'S SCALE (system_generator SCALES, frozen per save). Speeds and
+-- heights on a bigger world are bigger in proportion: orbital speed goes as
+-- sqrt(g·r), so the reentry glow, the heating onset, the aero gate and the HUD
+-- tapes all ride `speed` (1 on the original worlds, 1.4 on scale 2) and
+-- `alt`. Globals on purpose — fixedUpdate sits at Lua's upvalue ceiling.
+function worldScaleK()
+  local g = vc_scale_gen
+  if not (g and g.valid) then
+    g = findScript and findScript("system_generator") or nil
+    vc_scale_gen = g
+  end
+  local sc = g and g.scale
+  return (sc and sc.speed) or 1.0, (sc and sc.alt) or 1.0
+end
+
+-- Air density factor (0 … 1, the same band model as drag and heating) and the
+-- dominant body, at the craft.
+local function air_at(node)
+  local dom = space.dominant(node.x, node.y, node.z)
+  local db = dom and space.body(dom)
+  if not db or not db.radius then return 0.0, db end
+  local dx, dy, dz = node.x - db.x, node.y - db.y, node.z - db.z
+  local alt = math.sqrt(dx * dx + dy * dy + dz * dz) - db.radius
+  local band = db.radius * 0.35
+  if alt <= 0 or alt >= band then return (alt <= 0) and 1.0 or 0.0, db end
+  return 1.0 - alt / band, db
+end
+
+-- STRESS: load every joint, fail the ones past their limit. Runs piloted or not
+-- (a derelict hit hard breaks the same), never while clamped or in the settle
+-- window after release.
+function stressTick(node, info, dt)
+  if destroyed or info.anchored or (launch_mode and not released) or dt <= 0 then
+    integ.af, integ.wprev, integ.vprev = nil, nil, nil
+    return
+  end
+  local v, w = info.vel, info.angVel
+  -- A spin past the safety net's ceiling is being braked this very tick (see
+  -- safetyTick); load the joints with the spin the craft is allowed to have,
+  -- not with a solver artifact's 300 rad/s.
+  local wl = math.sqrt(w.x * w.x + w.y * w.y + w.z * w.z)
+  if wl > SPIN_MAX then
+    local f = SPIN_MAX / wl
+    w = { x = w.x * f, y = w.y * f, z = w.z * f }
+  end
+  local dom = space.dominant(node.x, node.y, node.z)
+  -- Proper acceleration = dv/dt − gravity. A frame change (SOI seam) steps the
+  -- velocity without any force: restart the filter instead of reading a spike.
+  local vp = integ.vprev
+  integ.vprev = { x = v.x, y = v.y, z = v.z, dom = dom }
+  if not vp or vp.dom ~= dom or space.warp() > 1.001 then
+    integ.af, integ.wprev = nil, nil
+    return
+  end
+  local gx, gy, gz = 0, 0, 0
+  if space.gravity then
+    local o = info.com or info.origin
+    gx, gy, gz = space.gravity(o.x, o.y, o.z)
+    gx, gy, gz = gx or 0, gy or 0, gz or 0
+  end
+  local ax = (v.x - vp.x) / dt - gx
+  local ay = (v.y - vp.y) / dt - gy
+  local az = (v.z - vp.z) / dt - gz
+  -- One tick's sample is capped at ~40 g: a bigger instantaneous Δv is a
+  -- contact (the impact model above judges those, part by part) or a solver
+  -- artifact (the safety net's business) — this model is for SUSTAINED loads:
+  -- thrust, drag, a canopy, a tumble, a grinding slide.
+  local am = math.sqrt(ax * ax + ay * ay + az * az)
+  if am > STRESS_SAMPLE_MAX and near_soi_seam(node.x, node.y, node.z,
+      math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z), dt) then
+    return -- a frame change, not a load (see near_soi_seam)
+  end
+  if am > STRESS_SAMPLE_MAX then
+    local f = STRESS_SAMPLE_MAX / am
+    ax, ay, az = ax * f, ay * f, az * f
+  end
+  local k = math.min(1.0, dt / 0.08)
+  local af = integ.af or { x = ax, y = ay, z = az }
+  af.x, af.y, af.z = af.x + (ax - af.x) * k, af.y + (ay - af.y) * k, af.z + (az - af.z) * k
+  integ.af = af
+  local wp = integ.wprev or { x = w.x, y = w.y, z = w.z }
+  local al = integ.alpha or { x = 0, y = 0, z = 0 }
+  al.x = al.x + ((w.x - wp.x) / dt - al.x) * k
+  al.y = al.y + ((w.y - wp.y) / dt - al.y) * k
+  al.z = al.z + ((w.z - wp.z) / dt - al.z) * k
+  integ.alpha, integ.wprev = al, { x = w.x, y = w.y, z = w.z }
+  -- Settle window after release, shared with the damage model: the pad
+  -- handshake is not a load case.
+  if time - damage_arm < 1.0 then return end
+  local rx, up, rz = basis(node)
+  local bx, by, bz = base_of(node, info)
+  local cm = info.com or info.origin
+  local spd = math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z)
+  local dens = air_at(node)
+  local q_kpa = 0.5 * AIR_RHO * dens * spd * spd / 1000.0
+  local worst, worst_j, worst_sev, worst_why = 0.0, nil, 0.0, nil
+  for _, j in ipairs(joints(node)) do
+    if not integ.gone[j.uid] then
+      local m, lx, ly, lz = set_mass(node, j.set)
+      if m > 0 then
+        -- Acceleration at the outboard mass's centre: a + α×r + ω×(ω×r).
+        local px = bx + rx.x * lx + up.x * ly + rz.x * lz - cm.x
+        local py = by + rx.y * lx + up.y * ly + rz.y * lz - cm.y
+        local pz = bz + rx.z * lx + up.z * ly + rz.z * lz - cm.z
+        local wrx, wry, wrz = w.y * pz - w.z * py, w.z * px - w.x * pz, w.x * py - w.y * px
+        local cx = af.x + (al.y * pz - al.z * py) + (w.y * wrz - w.z * wry)
+        local cy = af.y + (al.z * px - al.x * pz) + (w.z * wrx - w.x * wrz)
+        local cz = af.z + (al.x * py - al.y * px) + (w.x * wry - w.y * wrx)
+        local load = m * math.sqrt(cx * cx + cy * cy + cz * cz) -- kN (t · m/s²)
+        local sev = load / joint_strength(j.d, part_hp[j.uid])
+        local why = string.format("%.0f kN at %.1f g", load,
+          math.sqrt(cx * cx + cy * cy + cz * cz) / 9.81)
+        -- Dynamic pressure on the part itself.
+        local qs = q_kpa / part_qmax(j.d)
+        if qs > sev then sev, why = qs, string.format("%.1f kPa dynamic pressure", q_kpa) end
+        -- An open canopy: the air it can take before the lines part.
+        if (j.d.chute or 0) == 1 and chutes_deployed and chute_anim > 0 then
+          local cs = q_kpa / CHUTE_SAFE_KPA
+          if cs > sev then
+            sev, why = cs, string.format("canopy opened into %.1f kPa (%.0f m/s)", q_kpa, spd)
+          end
+        end
+        if sev > 1.0 then
+          integ.strain[j.uid] = (integ.strain[j.uid] or 0) + (sev - 1.0) * dt
+        else
+          integ.strain[j.uid] = math.max(0, (integ.strain[j.uid] or 0) - dt * 0.05)
+        end
+        -- Past 2× it goes at once; past 1× it goes once the overload has lasted
+        -- (0.04 overload·s: 40 % over for 0.1 s, 10 % over for 0.4 s).
+        local fails = sev > 2.0 or (integ.strain[j.uid] or 0) > 0.04
+        -- A canopy's lines part at the opening shock, not after a while:
+        -- over its safe pressure while open is a tear at once.
+        if (j.d.chute or 0) == 1 and chutes_deployed and chute_anim > 0
+          and q_kpa > CHUTE_SAFE_KPA then
+          fails = true
+        end
+        if fails and sev > worst then
+          worst, worst_j, worst_sev, worst_why = sev, j, sev, why
+        end
+      end
+    end
+  end
+  -- One failure per tick, the worst: the craft is a different shape afterwards
+  -- and every load is re-read next tick against the new one.
+  if worst_j then
+    local d = worst_j.d
+    local fuelled = false
+    for u in pairs(worst_j.set) do
+      local dd = bp_by_uid[u]
+      if dd and not integ.gone[u] and (((dd.fuel or 0) > 0 and (tankLeft(u) or 0) > dd.fuel * 0.25)
+        or (dd.kind == "engine" and throttle > 0.05)) then
+        fuelled = true
+      end
+    end
+    -- A fuelled tank or a lit engine torn off HARD goes off as it leaves.
+    local blast = fuelled and worst_sev > 1.6
+    integ.strain[worst_j.uid] = 0
+    shedJoint(node, worst_j.uid, worst_why, worst_sev, blast)
+    if (d.chute or 0) == 1 then log("chute ripped: " .. worst_why) end
+  end
+end
+
+-- A LOWER BOUND on the craft's moment of inertia, about any axis: the sum of
+-- each live part's smallest principal moment about its own centre (a box's is
+-- m/3·(a²+b²) for its two smallest half-extents), with no parallel-axis terms.
+-- The true tensor is always at least this, so an angular impulse sized with it
+-- can only ever SLOW each component of a spin, never reverse or amplify it.
+-- (The first version estimated the full tensor from the blueprint; after a
+-- breakup it still counted parts that had left, overestimated a one-part wreck
+-- ~18×, and the "brake" span the wreck up until its state went NaN.)
+local function inertia_floor(node, info)
+  local live = {}
+  for _, c in ipairs(node:children()) do
+    if c.valid ~= false then
+      for u, d in pairs(bp_by_uid) do
+        if not integ.gone[u] and math.abs((c.x or 0) - d.x) < 0.06
+          and math.abs((c.y or 0) - d.y) < 0.06 and math.abs((c.z or 0) - d.z) < 0.06 then
+          live[u] = true
+          break
+        end
+      end
+    end
+  end
+  local I, m = 0.0, 0.0
+  for u in pairs(live) do
+    local b = part_box(node, u)
+    if b then
+      local h = { b.hx, b.hy, b.hz }
+      table.sort(h)
+      I = I + b.m / 3.0 * (h[1] * h[1] + h[2] * h[2])
+      m = m + b.m
+    end
+  end
+  if I <= 0 or m <= 0 then return nil end
+  -- And half of it again: the bound is only as good as the box sizes it was
+  -- built from, and a brake that overestimates inertia AMPLIFIES a spin (the
+  -- first version read unscaled collider boxes, took a lone 0.55-scale
+  -- parachute for 3× its real inertia, and span a wreck up to NaN). A brake
+  -- built on half the floor just takes a couple more ticks.
+  I = I * 0.5
+  -- Never scale UP (that could break the bound); scale down if the engine
+  -- says the craft is lighter than its parts' listed masses.
+  if info.mass and info.mass > 0 and info.mass < m then I = I * info.mass / m end
+  return I
+end
+
+-- The smallest principal moment of the inertia tensor the solver turns this
+-- craft with (assembly.info, floptle/0393), t·m²; nil on an engine without it.
+-- The eigenvalues of a symmetric 3×3 in closed form.
+function inertiaMin(info)
+  local I = info and info.inertia
+  if not (I and I[1] and I[2] and I[3]) then return nil end
+  local a, b, c = I[1].x, I[2].y, I[3].z
+  local d, e, f = I[1].y, I[1].z, I[2].z
+  local p1 = d * d + e * e + f * f
+  if p1 < 1e-18 then return math.min(a, b, c) end
+  local q = (a + b + c) / 3
+  local p = math.sqrt(((a - q) ^ 2 + (b - q) ^ 2 + (c - q) ^ 2 + 2 * p1) / 6)
+  if p < 1e-12 then return q end
+  local A, B, C = (a - q) / p, (b - q) / p, (c - q) / p
+  local D, E, F = d / p, e / p, f / p
+  local r = (A * (B * C - F * F) - D * (D * C - F * E) + E * (D * F - B * E)) / 2
+  local phi = math.acos(math.max(-1, math.min(1, r))) / 3
+  return q + 2 * p * math.cos(phi + 2 * math.pi / 3)
+end
+
+-- THE REACTION WHEELS. The attitude law asks for a torque of `tk` per rad/s of
+-- rate error on every axis. That gain was set for craft weighing their prefabs;
+-- weighing what they really weigh (massSync) a light stack — a pod and a tank
+-- once its engine has broken off — has so little inertia that one tick of it
+-- overshot the error, and the next overshot further: a craft resting on the
+-- ground span itself up to 20 rad/s and broke. The gain is capped so a tick
+-- takes out at most half the error about the craft's lightest axis (the
+-- solver's own tensor says which); a heavy craft feels exactly `tk`.
+function wheelTorque(node, info, ex, ey, ez, tk, dt)
+  local k = tk
+  local lam = inertiaMin(info)
+  if lam and lam > 0 and dt and dt > 0 then k = math.min(k, 0.5 * lam / dt) end
+  assembly.torque(node, vec3(ex * k, ey * k, ez * k))
+end
+
+-- THE SAFETY NET. Never the thing that makes the craft behave — the things above
+-- are — but whatever slips past them is caught here and logged.
+function safetyTick(node, info, dt)
+  if info.anchored or dt <= 0 then integ.prev = nil return end
+  local v, w, o = info.vel, info.angVel, info.origin
+  if v.x ~= v.x or v.y ~= v.y or v.z ~= v.z or w.x ~= w.x or w.y ~= w.y or w.z ~= w.z
+    or not o or o.x ~= o.x then
+    throttle = 0.0
+    integ_note("nan", "SAFETY: the physics state of this craft is NaN — throttle cut; "
+      .. "please report this line")
+    integ.prev = nil
+    return
+  end
+  local warp = space.warp()
+  local dom = space.dominant(node.x, node.y, node.z)
+  local db = dom and space.body(dom)
+  local spd = math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z)
+  local m = math.max(0.05, info.mass or 1)
+  local cm = info.com or o
+  -- 1. SPIN. Brake anything past SPIN_MAX back to it with an exact angular
+  -- impulse (a pure couple: two equal and opposite pushes, no net shove).
+  local wl = math.sqrt(w.x * w.x + w.y * w.y + w.z * w.z)
+  if wl > SPIN_MAX and warp <= 1.001 and physTune.spinBrake ~= false then
+    -- ΔL = I·Δω with Δω = s·ω, s ∈ [-1, 0): the spin scaled straight back to
+    -- the ceiling in one tick. I is the tensor the solver turns this craft
+    -- with (assembly.info, floptle/0393), so the brake can't over- or
+    -- undershoot. Without it (an older engine), the inertia floor: a lower
+    -- bound that only ever slows each component, over a few ticks.
+    local s = SPIN_MAX / wl - 1.0
+    local LX, LY, LZ
+    local It = info.inertia
+    if It and It[1] and It[2] and It[3] then
+      local ox, oy, oz = w.x * s, w.y * s, w.z * s
+      LX = It[1].x * ox + It[1].y * oy + It[1].z * oz
+      LY = It[2].x * ox + It[2].y * oy + It[2].z * oz
+      LZ = It[3].x * ox + It[3].y * oy + It[3].z * oz
+    else
+      local I = inertia_floor(node, info)
+      if I then LX, LY, LZ = I * w.x * s, I * w.y * s, I * w.z * s end
+    end
+    if LX and LX == LX then
+      local Ll = math.sqrt(LX * LX + LY * LY + LZ * LZ)
+      if Ll > 1e-9 then
+        -- A pure couple: J = (L × e)/2 at cm ± e (e ⟂ L, unit) gives 2·e×J = L.
+        local ex, ey, ez = LY, -LX, 0
+        if math.abs(LZ) > math.abs(LX) and math.abs(LZ) > math.abs(LY) then ex, ey, ez = LZ, 0, -LX end
+        local el = math.sqrt(ex * ex + ey * ey + ez * ez)
+        ex, ey, ez = ex / el, ey / el, ez / el
+        local jx = (LY * ez - LZ * ey) * 0.5
+        local jy = (LZ * ex - LX * ez) * 0.5
+        local jz = (LX * ey - LY * ex) * 0.5
+        assembly.impulseAt(node, vec3(jx, jy, jz), vec3(cm.x + ex, cm.y + ey, cm.z + ez))
+        assembly.impulseAt(node, vec3(-jx, -jy, -jz), vec3(cm.x - ex, cm.y - ey, cm.z - ez))
+        integ_note("spin", string.format("SAFETY: spin clamp — %.1f rad/s, braking toward %.0f", wl, SPIN_MAX))
+      end
+    end
+  end
+  local p = integ.prev
+  integ.spd_before = p and p.spd or nil -- last tick's speed (damage_tick reads it)
+  integ.prev = { vx = v.x, vy = v.y, vz = v.z, spd = spd, dom = dom,
+                 rx = db and o.x - db.x, ry = db and o.y - db.y, rz = db and o.z - db.z }
+  if not p or p.dom ~= dom or warp > 1.001 then return end
+  -- 2. ENERGY. A one-tick speed GAIN beyond what gravity, the engines and a
+  -- generous allowance for collisions can deliver is a solver artifact: take
+  -- the speed back to what was possible, keeping the new direction.
+  local g = 0
+  if space.gravity then
+    local gx, gy, gz = space.gravity(cm.x, cm.y, cm.z)
+    g = math.sqrt((gx or 0) ^ 2 + (gy or 0) ^ 2 + (gz or 0) ^ 2)
+  end
+  local thrust = 0
+  for _, e in ipairs(engines) do thrust = thrust + (e.thrust or 0) end
+  local allow = (g + thrust * math.max(throttle, 0) / m + 5.0) * dt + KICK_TOL
+  if spd > p.spd + allow and spd > 1e-3 and time > (integ.handoff_t or -1)
+    and not near_soi_seam(node.x, node.y, node.z, spd, dt) then
+    local want = (p.spd + allow) / spd
+    assembly.impulseAt(node, vec3(v.x * (want - 1) * m, v.y * (want - 1) * m,
+      v.z * (want - 1) * m), cm)
+    integ_note("kick", string.format("SAFETY: velocity clamp — %.1f m/s gained in one tick "
+      .. "(%.1f → %.1f m/s, %.1f possible); taken back", spd - p.spd, p.spd, spd, p.spd + allow))
+  end
+  -- 3. JUMP. A hull that moved much further than its velocity carries it in a
+  -- tick (body-relative, so the planet's orbit doesn't count) is reported.
+  if db and p.rx then
+    local ex = (o.x - db.x) - (p.rx + p.vx * dt)
+    local ey = (o.y - db.y) - (p.ry + p.vy * dt)
+    local ez = (o.z - db.z) - (p.rz + p.vz * dt)
+    local jl = math.sqrt(ex * ex + ey * ey + ez * ez)
+    if jl > JUMP_TOL then
+      integ_note("jump", string.format("SAFETY: the hull jumped %.1f m in one tick with "
+        .. "nothing to move it (engine depenetration?)", jl))
+    end
+  end
+end
+
+-- CHUTE DRAG at the canopy. Through the centre of mass a parachute only slows
+-- the craft; it never rights it, so a craft that had drifted onto its side
+-- came down on its side and landed on its pod (First Flight: nose −54°, the
+-- pod crushed). A canopy pulls from above the craft: the pull acts at the
+-- chutes' mean position, which hangs the stack pod-up under them like a
+-- pendulum (the SAS rate damper then settles the swing).
+--   The lever is capped so that swing can never be stiffer than the tick can
+-- integrate — ω_n·dt ≤ 0.3 with ω_n² = F·L/I, I the craft's smallest
+-- principal moment (the solver's tensor; the inertia floor, a lower bound, on
+-- an engine without one), so the cap is conservative. That only bites in the first
+-- ticks of a fast opening; at terminal speed the full lever applies.
+function chuteDrag(node, info, fx, fy, fz, dt)
+  local f = math.sqrt(fx * fx + fy * fy + fz * fz)
+  local cm = info.com or info.origin
+  if f < 1e-6 or #chutes == 0 or not cm then
+    assembly.force(node, vec3(fx, fy, fz))
+    return
+  end
+  local rx, up, rz = basis(node)
+  local bx, by, bz = base_of(node, info)
+  local px, py, pz = 0, 0, 0
+  for _, c in ipairs(chutes) do
+    px = px + bx + rx.x * c.x + up.x * c.y + rz.x * c.z
+    py = py + by + rx.y * c.x + up.y * c.y + rz.y * c.z
+    pz = pz + bz + rx.z * c.x + up.z * c.y + rz.z * c.z
+  end
+  px, py, pz = px / #chutes - cm.x, py / #chutes - cm.y, pz / #chutes - cm.z
+  local lever = math.sqrt(px * px + py * py + pz * pz)
+  local I = inertiaMin(info) or inertia_floor(node, info)
+  if lever < 1e-3 or not I then
+    assembly.force(node, vec3(fx, fy, fz))
+    return
+  end
+  local wn_dt = 0.3
+  local max_lever = (wn_dt / math.max(dt, 1e-4)) ^ 2 * I / f
+  local k = math.min(1.0, max_lever / lever)
+  assembly.forceAt(node, vec3(fx, fy, fz), vec3(cm.x + px * k, cm.y + py * k, cm.z + pz * k))
+end
+
+
+-- ── a stage that can fly itself ─────────────────────────────────────────────
+-- Does this departing set carry a command part (a pod, a probe core, a rover
+-- body)?
+function r2DepartsWithCommand(dep)
+  local E = elib()
+  if not E then return false end
+  for u in pairs(dep) do
+    local d = bp_by_uid[u]
+    if d and not integ.gone[u] and u ~= pod_uid and E.modOf(d, "command") then return true end
+  end
+  return false
+end
+
+-- Split `dep` off as its own live craft (the Vessel prefab, its own
+-- controller), the way `undock` does at a docking seam: its blueprint, fuel,
+-- charge and action groups go with it, pushed gently away along the stack.
+function r2SplitCraft(node, info, dec_uid, dep, parts_nodes, nx, ny, nz)
+  local E = elib()
+  local sub, n = { parts = {} }, 0
+  local sub_charge = 0
+  for u in pairs(dep) do
+    local d = bp_by_uid[u]
+    if d and not integ.gone[u] then
+      n = n + 1
+      if type(d.st) == "table" and d.st.charge then sub_charge = sub_charge + d.st.charge end
+      local rec = E and E.packRecord(d) or {}
+      rec.stage = 0
+      if not dep[rec.parent or 0] then rec.parent = 0 end
+      sub.parts[n] = rec
+    end
+  end
+  local fuel_before = fuel
+  -- (events that rode with it leave; the same pruning a plain staging does)
+  local keep = {}
+  for _, e2 in ipairs(events) do
+    if e2.kind == "axial" or e2.kind == "fairing" then
+      if not dep[e2.uid] then keep[#keep + 1] = e2 end
+    elseif e2.kind == "chute" then
+      local us = {}
+      for _, u in ipairs(e2.uids) do if not dep[u] then us[#us + 1] = u end end
+      if #us > 0 then e2.uids = us; keep[#keep + 1] = e2 end
+    else
+      local bs = {}
+      for _, g in ipairs(e2.branches) do if not dep[g.uid] then bs[#bs + 1] = g end end
+      if #bs > 0 then e2.branches = bs; keep[#keep + 1] = e2 end
+    end
+  end
+  events = keep
+  -- it leaves AWAY FROM WHAT STAYS (a rover under a lander drops, a probe
+  -- on a rover's back falls off behind it), measured before it is gone
+  local away = clearAway(node, dep)
+  local gap = away.gap
+  drop_departing(dec_uid)
+  sub.fuel = math.max(0.0, fuel_before - fuel)
+  sub.charge = sub_charge
+  sub.lockout = 2.0
+  for _, dev in pairs(DEVICES) do
+    local kp = {}
+    for _, u in ipairs(dev.parts) do if not dep[u] then kp[#kp + 1] = u end end
+    dev.parts = kp
+  end
+  if E then
+    local dset = {}
+    for u in pairs(dep) do dset[u] = true end
+    sub.groups = E.packGroups(E.subsetGroups(ctlGroups, dset))
+  end
+  for u in pairs(dep) do
+    if bp_by_uid[u] then
+      part_total = math.max(0, part_total - 1)
+      bp_by_uid[u], part_hp[u] = nil, nil
+      panim[u], ppose[u], pnode[u] = nil, nil, nil
+    end
+  end
+  if E then E.pruneGroups(ctlGroups, aboardRecs()) end
+  for eid, u in pairs(eid_uid) do if dep[u] then eid_uid[eid] = nil end end
+  integ.gen = integ.gen + 1
+  elecRescan()
+  dock_retree()
+  dockRescan()
+  quench(parts_nodes)
+  local name = (craftName ~= "Vessel" and craftName or (node.name or "Vessel")) .. " " .. ((sub.parts[1] and sub.parts[1].label) or "stage")
+  for _, r in ipairs(sub.parts) do
+    if E and E.modOf(r, "command") then name = (craftName ~= "Vessel" and craftName or "Craft") .. " · " .. (r.label or "craft") end
+  end
+  local bx, by, bz = base_of(node, info)
+  sfx3(SFX.stage, bx, by, bz, 0.9, 1.0)
+  caption("a stage separates — it can be flown on its own")
+  assembly.split(node, parts_nodes, function(stage)
+    if not stage then return end
+    releasePiece(stage, node, away.x, away.y, away.z, gap)
+    local si = assembly.info(stage)
+    if si and si.origin then
+      local rx, up, rz = basis(node)
+      local bx2, by2, bz2 = base_of(node, assembly.info(node) or si)
+      local dx, dy, dz = si.origin.x - bx2, si.origin.y - by2, si.origin.z - bz2
+      local lx = dx * rx.x + dy * rx.y + dz * rx.z
+      local ly = dx * up.x + dy * up.y + dz * up.z
+      local lz = dx * rz.x + dy * rz.y + dz * rz.z
+      for _, rec in ipairs(sub.parts) do rec.x, rec.y, rec.z = rec.x - lx, rec.y - ly, rec.z - lz end
+      sub.name = name
+      save.set("dock.handoff." .. tostring(stage.id or 0), sub)
+      local m = math.max(0.1, si.mass or 1)
+      assembly.impulseAt(stage, vec3(away.x * 1.5 * m, away.y * 1.5 * m, away.z * 1.5 * m), si.com)
+    end
+    stage.name = name
+    log(string.format("STAGED — %s away as its own craft (%d parts)", name, n))
+  end, "Vessel")
+  return true
+end
+
+-- STAGING: what SPACE does once the clamps are off — the next event in the
+-- builder's firing order (chutes, a booster ring, or an axial cut). Published so
+-- probes can stage a headless flight (no key can be pressed there), and so the
+-- SPACE handler in fixedUpdate stays one line. Returns true if something fired.
+function stageNext()
+  local node = dock.node
+  if destroyed or not node or not node.valid or #events == 0 then return false end
+  local info = assembly.info(node)
+  if not info or info.anchored then return false end
+  if events[1].kind ~= "chute" and events[1].kind ~= "fairing" then r2Before(node) end
+  local bx, by, bz = base_of(node, info)
+  local rx, up, rz = basis(node)
+  local nx, ny, nz = up.x, up.y, up.z
+  if events[1].kind == "chute" then
+    -- PARACHUTES: pop them open. They start dragging (see the drag pass
+    -- below) as soon as they're in thick enough air.
+    table.remove(events, 1)
+    chutes_deployed = true
+    chute_fill = { t = 0.0, stretch = 0.0, area = 0.0, dens = 0.0, spd = 0.0 }
+    sfx3(SFX.chute, bx, by, bz, 0.8, 1.0) -- the canopy cracks open
+    -- One canopy per chute part (prefabs/Parachute.prefab.ron): it finds its
+    -- chute by `canopy` and draws chute_fill from the canister up.
+    for _, c in ipairs(chutes) do
+      local wx = bx + rx.x * c.x + up.x * c.y + rz.x * c.z
+      local wy = by + rx.y * c.x + up.y * c.y + rz.y * c.z
+      local wz = bz + rx.z * c.x + up.z * c.y + rz.z * c.z
+      spawn("Parachute", vec3(wx, wy, wz), function(n)
+        n.visible = false -- shown once its bones are placed (no rest-pose frame)
+        c.canopy = n.id
+      end)
+    end
+    do -- the mortar's puff out of each chute canister
+      local fx = fxd()
+      if fx then
+        local crx, cup, crz = basis(node)
+        for _, c in ipairs(chutes) do
+          fx.chute(bx + crx.x * c.x + cup.x * c.y + crz.x * c.z, by + crx.y * c.x + cup.y * c.y + crz.y * c.z,
+            bz + crx.z * c.x + cup.z * c.y + crz.z * c.z, info.vel.x, info.vel.y, info.vel.z)
+        end
+      end
+    end
+    caption("the parachutes crack open")
+    log("parachutes deployed")
+  elseif events[1].kind == "fairing" then
+    local ev = table.remove(events, 1)
+    r2Jettison(node, ev.uid)
+  elseif events[1].kind == "ring" then
+    -- A BOOSTER RING: every branch in the ring kicks away laterally at
+    -- once (symmetric pairs leave together, so the ship stays balanced).
+    local ev = table.remove(events, 1)
+    for _, g in ipairs(ev.branches) do
+      local parts_nodes = {}
+      for _, child in ipairs(node:children()) do
+        local known = eid_uid[child.id]
+        if known and g.uids and g.uids[known] then
+          parts_nodes[#parts_nodes + 1] = child
+        else
+        for _, q in ipairs(g.pos) do
+          if math.abs((child.x or 0) - q.x) < 0.05 and math.abs((child.y or 0) - q.y) < 0.05
+            and math.abs((child.z or 0) - q.z) < 0.05 then
+            parts_nodes[#parts_nodes + 1] = child
+            break
+          end
+        end
+        end
+      end
+      if #parts_nodes > 0 then
+        -- Kick OUTWARD: the branch's radial direction in the vessel frame.
+        local ol = math.sqrt(g.x * g.x + g.z * g.z)
+        local ox, oz = 1, 0
+        if ol > 1e-4 then ox, oz = g.x / ol, g.z / ol end
+        -- Measured BEFORE the branch is marked gone (clearance skips gone parts).
+        local gap = clearance(node, g.uids or { [g.uid] = true }, ox, 0, oz)
+        drop_branch(g.uid)
+        local kx = rx.x * ox + rz.x * oz
+        local ky = rx.y * ox + rz.y * oz
+        local kz = rx.z * ox + rz.z * oz
+        local n_away = #parts_nodes
+        quench(parts_nodes)
+        sfx3(SFX.boosters, bx, by, bz, 0.85, 1.0) -- the separation charge fires
+        caption("the boosters separate")
+        assembly.split(node, parts_nodes, function(stage)
+          releasePiece(stage, node, kx, ky, kz, gap)
+          local si = assembly.info(stage)
+          if si then
+            -- Mass-scaled Δv: a FLAT impulse gave a heavy booster almost no
+            -- push (Δv = impulse/mass), so close-mounted rings clung to the
+            -- hull and looked stuck. Multiply by mass for a consistent ~4.5
+            -- m/s lateral kick whatever the stage weighs. And nudge the origin
+            -- a hair OUTWARD first to clear the contact the solver would
+            -- otherwise immediately re-close — the actual "won't detach" cause.
+            -- (It used to be nudged a flat 35 cm outward to stop it re-closing
+            -- the contact it was split from — a visible pop. Now it moves only
+            -- out of any real overlap, and passes through the hull for a
+            -- moment; the charge below is the only energy in the separation.)
+            local dv, m = 4.5, math.max(0.1, si.mass)
+            local g2 = physTune.clear and gap or 0
+            assembly.impulseAt(stage, vec3(kx * dv * m, ky * dv * m, kz * dv * m),
+              vec3(si.com.x + kx * g2, si.com.y + ky * g2, si.com.z + kz * g2))
+            local fx = fxd()
+            if fx then fx.separate(si.com.x, si.com.y, si.com.z, info.vel.x, info.vel.y, info.vel.z)
+            else spawnEffect("SepPuff", si.com.x, si.com.y, si.com.z) end
+          end
+          log("boosters away: " .. n_away .. " parts")
+        end)
+      end
+    end
+  else
+    local dec = table.remove(events, 1) -- an AXIAL cut
+    -- The dropped set is TOPOLOGICAL: the decoupler's whole subtree by the
+    -- attachment tree (pod side stays), including any radial branches bolted
+    -- to the discarded stack — a separate booster stage on the survivor stays.
+    local dep = axial_departing(dec.uid)
+    local parts_nodes = {}
+    for _, child in ipairs(node:children()) do
+      if child_departs_axial(child, dec.uid) then parts_nodes[#parts_nodes + 1] = child end
+    end
+    if #parts_nodes > 0 and r2DepartsWithCommand(dep) then
+      -- The stage that leaves carries a command part of its own (a rover
+      -- under a lander, a probe on top of a booster): it goes as a LIVE craft
+      -- you can switch to and fly, like an undocked module.
+      r2SplitCraft(node, info, dec.uid, dep, parts_nodes, nx, ny, nz)
+    elseif #parts_nodes > 0 then
+      -- Measured BEFORE the stage is marked gone (clearance skips gone parts):
+      -- which way the stage leaves (from the kept mass toward its own), and
+      -- how far it must move along that to be out of the hull.
+      local away = clearAway(node, dep)
+      local gap = away.gap
+      drop_departing(dec.uid)
+      -- Events ride away with the parts they act on: an axial cut or a ring
+      -- whose decoupler sat in the discarded subtree leaves; events on the
+      -- surviving pod side stay. Purely by tree membership now.
+      local keep = {}
+      for _, e2 in ipairs(events) do
+        if e2.kind == "axial" or e2.kind == "fairing" then
+          if not dep[e2.uid] then keep[#keep + 1] = e2 end
+        elseif e2.kind == "chute" then
+          keep[#keep + 1] = e2 -- chutes ride the surviving stack
+        else
+          local bs = {}
+          for _, g in ipairs(e2.branches) do
+            if not branch_departs(g.uid, dec.uid) then
+              bs[#bs + 1] = g
+            else
+              drop_branch(g.uid) -- its mount left with the stack
+            end
+          end
+          if #bs > 0 then
+            e2.branches = bs
+            keep[#keep + 1] = e2
+          end
+        end
+      end
+      events = keep
+      local n_away = #parts_nodes
+      quench(parts_nodes)
+      sfx3(SFX.stage, bx, by, bz, 0.9, 1.0) -- the decoupler bangs
+      caption("a stage separates")
+      assembly.split(node, parts_nodes, function(stage)
+        releasePiece(stage, node, away.x, away.y, away.z, gap)
+        local si = assembly.info(stage)
+        if si then
+          -- Mass-scaled Δv (see the ring case) + a small downward nudge so a
+          -- heavy spent stage actually falls clear of the surviving stack
+          -- instead of riding along in contact.
+          -- (A flat 30 cm downward nudge used to do the clearing — a visible
+          -- pop at every staging. See the ring case.)
+          local dv, m = 3.5, math.max(0.1, si.mass)
+          local g2 = physTune.clear and gap or 0
+          assembly.impulseAt(stage, vec3(nx * -dv * m, ny * -dv * m, nz * -dv * m),
+            vec3(si.com.x - nx * g2, si.com.y - ny * g2, si.com.z - nz * g2))
+          local fx = fxd()
+          if fx then fx.separate(si.com.x, si.com.y, si.com.z, info.vel.x, info.vel.y, info.vel.z)
+          else spawnEffect("SepPuff", si.com.x, si.com.y, si.com.z) end
+        end
+        log("stage away: " .. n_away .. " parts")
+      end)
+    end
+  end
+  return true
+end
+
+-- ══ ROUND TWO: ROVERS, ROBOTICS, FAIRINGS, THE CLAW AND THE DRILL ════════════
+--
+-- Everything that MOVES inside a craft, by its parts' modules (electronics):
+--
+--   wheels    `drive`   the tyre is a live body hung from the chassis on the
+--             engine's wheel joint (floptle/0420): suspension, motor, brake,
+--             grip by the load it carries. W/S drive, A/D steer (skid: the
+--             two sides run at different speeds), B the brakes. A rover that
+--             stops is held by a PARKING GRIP (assembly.grip) — the wheel
+--             brake alone creeps 1–3 cm/s on a 20° voxel slope (engine 0.117).
+--   robotics  `hinge` `piston` `rotor`  KINEMATIC: the moving half of the
+--             part and everything built onto it are re-posed inside the one
+--             compound each tick (node poses + assembly.syncColliders) and
+--             the motor's torque against the load decides whether it moves.
+--             Engine joints between two assemblies don't hold their pivot on
+--             an orbiting planet (0.117.0-rc2: a hinged arm's pivot drifts
+--             0.3–2.8 m under its own servo — reported on 0420), and a craft
+--             of several assemblies is not one vessel in info, rails or saves
+--             (0420 "not yet"). Kept in one compound, the craft stays ONE
+--             vessel for all of those, its joint state is the parts' own `st`
+--             (saved with the record, re-applied on load), and staging,
+--             docking and breakage split it like any other.
+--   fairings  `fairing` a shell built to fit the payload (electronics
+--             fairingShell) that keeps the air and heat off what is inside,
+--             and jettisons in two halves by action or staging event.
+--   claw      `claw`    armed, it grips whatever its fingers touch
+--             (assembly.grip) and holds until released.
+--   drill     `drill`   lowered and running on a landed or gripped craft, it
+--             bores the ground (terrain.dig, small bites) and lifts what it
+--             cuts into the hold (the same rock survey the mining laser uses).
+--
+-- ARTICULATED PARTS LIVE ONLY IN THE ACTIVE BUBBLE: the tyres exist while the
+-- craft is piloted, at 1× warp, on (or right over) the ground; otherwise the
+-- wheels are rigid parts of the hull (their box takes the craft's weight), so
+-- rails, distant-craft LOD, warp and saves only ever see one assembly.
+--
+-- All of it is reached through globals: fixedUpdate sits at LuaJIT's
+-- 60-upvalue ceiling. State lives in the one `R2` table.
+
+TYRE_SHARE = 0.6
+R2 = {
+  gen = -1,           -- integ.gen the part lists were built for
+  wheels = {},        -- { uid, d, m (drive module), r, tx, side, node, tyre, seat }
+  robo = {},          -- robotic parts in pod-out order
+  chain = {},         -- uid → { robotic uids moving it, innermost first }
+  node = {},          -- uid → live part node (resolved at rest, kept by entity id)
+  rest = {},          -- uid → { x,y,z, X,Y,Z } rest pose, vessel frame
+  live = false,       -- tyres are out
+  driving = false,    -- WASD is driving the wheels this tick (attitude stands down)
+  drive = 0.0, steer = 0.0,
+  hold_t = 0.0, park = false, parkGrip = false,
+  claws = {}, drills = {}, fairings = {},
+  shells = {},        -- fairing uid → { meshes, nodes } (kept across rescans)
+  holdoff = 0.0,      -- time before which the tyres may not come out (a split just happened)
+  last_cap = nil,
+  draw = {},          -- load id → EC/s wanted this tick (power_tick reads it)
+  speed = 0.0,
+}
+
+local function r2_basis(yaw, pitch, roll)
+  local cy, sy = math.cos(yaw or 0), math.sin(yaw or 0)
+  local cx, sx = math.cos(pitch or 0), math.sin(pitch or 0)
+  local cz, sz = math.cos(roll or 0), math.sin(roll or 0)
+  return { cy * cz + sy * sx * sz, cx * sz, -sy * cz + cy * sx * sz },
+         { -cy * sz + sy * sx * cz, cx * cz, sy * sz + cy * sx * cz },
+         { sy * cx, -sx, cy * cx }
+end
+
+local function r2_euler(X, Y, Z)
+  local pitch = math.asin(math.max(-1, math.min(1, -Z[2])))
+  return math.atan2(Z[1], Z[3]), pitch, math.atan2(X[2], Y[2])
+end
+
+-- Rotate vector v about unit axis k by angle a.
+local function r2_rot(v, k, a)
+  local c, s = math.cos(a), math.sin(a)
+  local d = v[1] * k[1] + v[2] * k[2] + v[3] * k[3]
+  local cx = k[2] * v[3] - k[3] * v[2]
+  local cy = k[3] * v[1] - k[1] * v[3]
+  local cz = k[1] * v[2] - k[2] * v[1]
+  return { v[1] * c + cx * s + k[1] * d * (1 - c), v[2] * c + cy * s + k[2] * d * (1 - c),
+           v[3] * c + cz * s + k[3] * d * (1 - c) }
+end
+
+-- The live node of part `uid`: resolved by entity id while the craft is at
+-- rest (uid_of_node caches it for the part's life), so a part a hinge has
+-- swung away from its blueprint spot is still found.
+function r2NodeOf(node, uid)
+  local c = R2.node[uid]
+  if c and c.valid then return c end
+  for _, ch in ipairs(node:children()) do
+    local nm = ch.name or ""
+    if nm:sub(1, 4) == "Part" and uid_of_node(ch) == uid then
+      R2.node[uid] = ch
+      return ch
+    end
+  end
+  return nil
+end
+
+local function child_named(n, name)
+  if not (n and n.valid) then return nil end
+  for _, c in ipairs(n:children()) do if c.name == name then return c end end
+  return nil
+end
+
+-- ── the part lists ──────────────────────────────────────────────────────────
+-- Rebuilt whenever the craft's part set changes (integ.gen). Every part node
+-- is resolved to its uid here, BEFORE anything moves: later lookups go by
+-- entity id.
+local function r2_scan(node)
+  local E = elib()
+  R2.gen = integ.gen
+  R2.wheels, R2.robo, R2.chain, R2.claws, R2.drills, R2.fairings = {}, {}, {}, {}, {}, {}
+  for _, ch in ipairs(node:children()) do
+    local nm = ch.name or ""
+    if nm:sub(1, 4) == "Part" then
+      local u = uid_of_node(ch)
+      if u and not R2.node[u] then R2.node[u] = ch end
+    end
+  end
+  if not E then return end
+  -- the rover's front: a rover body's +X, as the vessel frame sees it
+  R2.front = 1
+  for u, d in pairs(bp_by_uid) do
+    if not integ.gone[u] and (d.front or 0) == 1 then
+      local X = r2_basis(d.yaw, d.pitch, d.roll)
+      if math.abs(X[1]) > 0.5 then R2.front = X[1] > 0 and 1 or -1 end
+    end
+  end
+  local depth = {}
+  local function depth_of(u)
+    if depth[u] then return depth[u] end
+    local n, cur, guard = 0, u, 0
+    while bp_by_uid[cur] and (bp_by_uid[cur].parent or 0) ~= 0 and guard < 64 do
+      cur = bp_by_uid[cur].parent
+      n, guard = n + 1, guard + 1
+    end
+    depth[u] = n
+    return n
+  end
+  for u, d in pairs(bp_by_uid) do
+    if not integ.gone[u] and (part_hp[u] or 1) > 0 then
+      local X, Y, Z = r2_basis(d.yaw, d.pitch, d.roll)
+      R2.rest[u] = { x = d.x, y = d.y, z = d.z, X = X, Y = Y, Z = Z, yaw = d.yaw or 0, pitch = d.pitch or 0, roll = d.roll or 0 }
+      local dm = E.modOf(d, "drive")
+      if dm then
+        local r = dm.r or 0.4
+        local w = { uid = u, d = d, m = dm, r = r, size = d.wheel or "M" }
+        -- the tyre's centre: out along the part's +X (its axle) from the part centre
+        local half = (d.rx or 0.2)
+        local tyre_w = ({ S = 0.18, M = 0.26, L = 0.38 })[w.size] or 0.26
+        w.tx = half - tyre_w / 2
+        w.cx, w.cy, w.cz = d.x + X[1] * w.tx, d.y + X[2] * w.tx, d.z + X[3] * w.tx
+        w.axle = X
+        w.side = (w.cz >= 0) and 1 or -1
+        R2.wheels[#R2.wheels + 1] = w
+      end
+      for _, kind in ipairs({ "hinge", "piston", "rotor" }) do
+        local m = E.modOf(d, kind)
+        if m then R2.robo[#R2.robo + 1] = { uid = u, d = d, m = m, kind = kind, depth = depth_of(u) } end
+      end
+      if E.modOf(d, "claw") then
+        R2.clawState = R2.clawState or {}
+        local c = R2.clawState[u] or { uid = u }
+        c.d, c.m = d, E.modOf(d, "claw")
+        R2.clawState[u] = c
+        R2.claws[#R2.claws + 1] = c
+      end
+      if E.modOf(d, "drill") then
+        local old = R2.drillState and R2.drillState[u]
+        local dr = old or { uid = u, lower = 0, prog = 0 }
+        dr.d, dr.m = d, E.modOf(d, "drill")
+        R2.drills[#R2.drills + 1] = dr
+        R2.drillState = R2.drillState or {}
+        R2.drillState[u] = dr
+      end
+      if (d.fairing or 0) > 0 and (d.fr or 0) > 0 then R2.fairings[#R2.fairings + 1] = { uid = u, d = d } end
+    end
+  end
+  table.sort(R2.robo, function(a, b) if a.depth ~= b.depth then return a.depth < b.depth end return a.uid < b.uid end)
+  table.sort(R2.wheels, function(a, b) return a.uid < b.uid end)
+  -- Each robotic part's MOVING SET: the side of it away from the command
+  -- part, by the attachment tree; and which of its halves carries that side.
+  for _, r in ipairs(R2.robo) do
+    local set = axial_departing(r.uid)
+    local inverted = set[r.uid] == nil
+    local mv = {}
+    for u in pairs(set) do if u ~= r.uid and not integ.gone[u] then mv[u] = true end end
+    r.set = mv
+    -- head side (+Y of the part) or base side?
+    local d = r.d
+    local head = true
+    if inverted then
+      head = (d.att or "") == "bottom"      -- hung under its parent: the parent is at its top
+    else
+      local up, dn = 0, 0
+      for _, k in ipairs(bp_kids[r.uid] or {}) do
+        local q = bp_by_uid[k]
+        if q then
+          if q.att == "top" then up = up + 1
+          elseif q.att == "bottom" then dn = dn + 1
+          else
+            local Y = R2.rest[r.uid].Y
+            local h = (q.x - d.x) * Y[1] + (q.y - d.y) * Y[2] + (q.z - d.z) * Y[3]
+            if h >= 0 then up = up + 1 else dn = dn + 1 end
+          end
+        end
+      end
+      head = up >= dn
+    end
+    r.head = head
+    r.sign = head and 1 or -1
+    local st = E.stateOf(d)
+    r.cur = st.cur or 0
+  end
+  -- Per part, the robotic parts that move it, innermost (nearest the part) first.
+  for _, r in ipairs(R2.robo) do
+    for u in pairs(r.set) do
+      local c = R2.chain[u]
+      if not c then c = {}; R2.chain[u] = c end
+      table.insert(c, 1, r)    -- R2.robo is pod-out: later = nearer the part
+    end
+  end
+  -- wheels on a moving robotic part ride rigid (their mount moves)
+  for _, w in ipairs(R2.wheels) do w.onRobo = R2.chain[w.uid] ~= nil end
+  R2.posed = false
+end
+
+-- ── kinematic robotics ──────────────────────────────────────────────────────
+
+-- A robotic part's motion as a function of a rest-frame point and basis.
+local function robo_apply(r, p, B)
+  local rest = R2.rest[r.uid]
+  if r.kind == "piston" then
+    local e = r.cur * r.sign
+    local a = rest.Y
+    return { p[1] + a[1] * e, p[2] + a[2] * e, p[3] + a[3] * e }, B
+  end
+  local axis = (r.kind == "hinge") and rest.Z or rest.Y
+  local ang = math.rad(r.cur) * r.sign
+  local q = { rest.x, rest.y, rest.z }
+  local v = r2_rot({ p[1] - q[1], p[2] - q[2], p[3] - q[3] }, axis, ang)
+  local nb = B and { r2_rot(B[1], axis, ang), r2_rot(B[2], axis, ang), r2_rot(B[3], axis, ang) } or nil
+  return { q[1] + v[1], q[2] + v[2], q[3] + v[3] }, nb
+end
+
+-- Where part `u` is now: its rest pose through every robotic part moving it.
+local function robo_pose(u)
+  local rest = R2.rest[u]
+  if not rest then return nil end
+  local p = { rest.x, rest.y, rest.z }
+  local B = { rest.X, rest.Y, rest.Z }
+  for _, r in ipairs(R2.chain[u] or {}) do p, B = robo_apply(r, p, B) end
+  return p, B
+end
+
+-- Write the moved poses onto the live nodes, then re-pose the compound's
+-- shapes and have it re-weigh (the centre of mass moved with the arm).
+local function robo_write(node)
+  local moved = false
+  for u, ch in pairs(R2.chain) do
+    local n = r2NodeOf(node, u)
+    if n and not integ.gone[u] then
+      local p, B = robo_pose(u)
+      if p then
+        n.x, n.y, n.z = p[1], p[2], p[3]
+        n:setAngles(r2_euler(B[1], B[2], B[3]))
+        moved = true
+      end
+    end
+  end
+  -- the parts' own moving halves (Head / Base, a piston's Stage)
+  for _, r in ipairs(R2.robo) do
+    local n = r2NodeOf(node, r.uid)
+    if n and not integ.gone[r.uid] then
+      local mv = child_named(n, r.head and "Head" or "Base")
+      local pose = r.pose0
+      if not pose and mv then
+        pose = {}
+        for _, nm in ipairs({ "Head", "Base", "Stage" }) do
+          local c = child_named(n, nm)
+          if c then pose[nm] = { x = c.x, y = c.y, z = c.z } end
+        end
+        r.pose0 = pose
+      end
+      if mv and pose then
+        local p0 = pose[mv.name]
+        if r.kind == "piston" then
+          local e = r.cur * r.sign
+          mv.y = p0.y + e
+          local stg = child_named(n, "Stage")
+          if stg and pose.Stage then stg.y = pose.Stage.y + e * 0.5 end
+        else
+          local ang = math.rad(r.cur) * r.sign
+          if r.kind == "hinge" then
+            local c, s = math.cos(ang), math.sin(ang)
+            mv.x, mv.y = p0.x * c - p0.y * s, p0.x * s + p0.y * c
+            mv:setAngles(0, 0, ang)
+          else
+            local c, s = math.cos(ang), math.sin(ang)
+            mv.x, mv.z = p0.x * c + p0.z * s, -p0.x * s + p0.z * c
+            mv:setAngles(ang, 0, 0)
+          end
+        end
+      end
+    end
+  end
+  if moved then
+    assembly.syncColliders(node)
+    -- re-derive mass, centre of mass and inertia (floptle/0406): nudge one
+    -- part's mass by a hair and back on the next sync
+    local any = R2.robo[1] and r2NodeOf(node, R2.robo[1].uid)
+    local rb = any and any:getcomponent("RigidBody")
+    if rb then
+      R2.nudge = not R2.nudge
+      rb.mass = math.max(0.001, (rb.mass or 0.05) + (R2.nudge and 1e-5 or -1e-5))
+    end
+  end
+end
+
+-- The gravity torque (about a hinge's or rotor's axis) or force (along a
+-- piston) the moving set puts on the motor, vessel frame: what it has to
+-- beat to move the load AGAINST gravity.
+local function robo_load(node, info, r)
+  if not space.gravity then return 0 end
+  local cm = info.com or info.origin
+  local gx, gy, gz = space.gravity(cm.x, cm.y, cm.z)
+  if not gx then return 0 end
+  local rx, up, rz = basis(node)
+  local g = { gx * rx.x + gy * rx.y + gz * rx.z, gx * up.x + gy * up.y + gz * up.z, gx * rz.x + gy * rz.y + gz * rz.z }
+  local rest = R2.rest[r.uid]
+  local q, B = robo_pose(r.uid)
+  if not q then q, B = { rest.x, rest.y, rest.z }, { rest.X, rest.Y, rest.Z } end
+  local total = 0
+  if r.kind == "piston" then
+    local a = B[2]
+    for u in pairs(r.set) do
+      local d = bp_by_uid[u]
+      if d then total = total + ((d.mass or 0) + tankFuelT(u)) * (g[1] * a[1] + g[2] * a[2] + g[3] * a[3]) end
+    end
+    return total * r.sign
+  end
+  local a = (r.kind == "hinge") and B[3] or B[2]
+  for u in pairs(r.set) do
+    local d = bp_by_uid[u]
+    local p = d and robo_pose(u)
+    if p then
+      local m = (d.mass or 0) + tankFuelT(u)
+      local vx, vy, vz = p[1] - q[1], p[2] - q[2], p[3] - q[3]
+      -- (v × m g) · a
+      local tx = vy * g[3] - vz * g[2]
+      local ty = vz * g[1] - vx * g[3]
+      local tz = vx * g[2] - vy * g[1]
+      total = total + m * (tx * a[1] + ty * a[2] + tz * a[3])
+    end
+  end
+  return total * r.sign
+end
+
+local function robo_tick(node, info, dt)
+  local E = elib()
+  if not E or #R2.robo == 0 then return end
+  local changed = not R2.posed
+  for _, r in ipairs(R2.robo) do
+    local d = r.d
+    local st = E.stateOf(d)
+    local served = (elec.served and elec.served["r" .. r.uid]) or 1
+    local want, rate = r.cur, 0
+    local spd = math.max(0.1, (st.speed or 100) / 100)
+    -- the setpoint inside the joint's own travel (whoever wrote it)
+    if r.kind == "hinge" then
+      st.angle = math.max(-90, math.min(90, st.angle or 0))
+      want, rate = st.angle, (r.m.rate or 30) * spd
+    elseif r.kind == "piston" then
+      st.extension = math.max(0, math.min(0.8, st.extension or 0))
+      want, rate = st.extension, (r.m.rate or 0.3) * spd
+    end
+    local moving = false
+    r.stalled = false
+    if not st.locked and served > 0.5 then
+      if r.kind == "rotor" then
+        if st.spin then
+          local w = (st.rpm or 0) * 6.0        -- deg/s
+          if math.abs(w) > 0.01 then
+            r.cur = (r.cur + w * dt) % 360
+            moving = true
+          end
+        end
+      elseif math.abs(want - r.cur) > 1e-4 then
+        local step = math.min(math.abs(want - r.cur), rate * dt)
+        local dir = (want > r.cur) and 1 or -1
+        -- the motor against the load: a hinge that cannot lift what it
+        -- carries stalls (it never lets go — it holds)
+        local load = robo_load(node, info, r)
+        local cap = (r.kind == "piston") and (r.m.force or 8) or (r.m.torque or 3)
+        -- `load` > 0: gravity pulls the setpoint UP (it helps a move up);
+        -- a move against it needs the motor to beat it
+        if dir * load >= 0 or math.abs(load) < cap then
+          r.cur = r.cur + dir * step
+          moving = true
+        else
+          r.stalled = true
+        end
+      end
+    end
+    if moving then changed = true end
+    R2.draw["r" .. r.uid] = (r.m.draw or 0.5) * (moving and 1.0 or 0.05)
+    st.cur = r.cur
+  end
+  if changed then
+    robo_write(node)
+    R2.posed = true
+  end
+end
+
+-- ── wheels ──────────────────────────────────────────────────────────────────
+
+-- Vessel-frame point → world, from the physics-fresh base.
+local function v2w(node, info, x, y, z)
+  local rx, up, rz = basis(node)
+  local bx, by, bz = base_of(node, info)
+  return bx + rx.x * x + up.x * y + rz.x * z, by + rx.y * x + up.y * y + rz.y * z, bz + rx.z * x + up.z * y + rz.z * z
+end
+
+-- The part's own collider: the whole wheel (rigid), or a stub in the bracket
+-- (live: the tyre body carries the craft).
+local function wheel_collider(node, w, live)
+  local n = r2NodeOf(node, w.uid)
+  local rb = n and n:getcomponent("RigidBody")
+  if not rb then return end
+  if live then
+    rb.half_x, rb.half_y, rb.half_z = 0.05, 0.05, 0.05
+  else
+    -- a hair short of the tyre: a rover going rigid on its suspension
+    -- settles a few centimetres onto its wheel boxes instead of finding them
+    -- buried in the ground (a depenetration kick the damage model reads as a
+    -- crash)
+    rb.half_x, rb.half_y, rb.half_z = w.d.rx or 0.2, w.r - 0.04, w.r - 0.04
+  end
+  local t = child_named(n, "Tyre")
+  if t then t.visible = not live end
+end
+
+-- Should the tyres be out? The active bubble only: piloted, at 1× warp, not
+-- clamped, the craft assembled, on or just over the ground, not too fast.
+local function wheels_wanted(node, info)
+  if #R2.wheels == 0 or destroyed or not piloting then return false, "unpiloted" end
+  if info.anchored or space.warp() > 1.001 or time < R2.holdoff then return false, "clamped/warp" end
+  if not assembly_ready(info) or integ.push then return false, "assembling" end
+  local v = info.vel
+  if math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z) > 30 then return false, "fast" end
+  if R2.live then
+    -- out: they stay out while any tyre is on the ground, and for a couple
+    -- of seconds of air (a bump, a hop) before they fold back into the hull
+    for _, w in ipairs(R2.wheels) do
+      if w.tyre and w.tyre.valid and w.tyre.grounded then R2.air_t = time return true end
+    end
+    if info.grounded then R2.air_t = time return true end
+    return time - (R2.air_t or time) < 2.5, "airborne"
+  end
+  if info.grounded then return true end
+  -- just over the ground: a rover set down by a lander, a hop
+  local w = R2.wheels[1]
+  local x, y, z = v2w(node, info, w.cx, w.cy, w.cz)
+  local _, up = basis(node)
+  local h = raycast(x, y, z, -up.x, -up.y, -up.z, w.r + 1.5, node)
+  return h ~= nil
+end
+
+local function tyres_out(node, info)
+  local any = false
+  for _, w in ipairs(R2.wheels) do
+    local faired = (w.d.faired or 0) ~= 0 and r2Faired(w.d)
+    if not w.onRobo and not faired then
+      wheel_collider(node, w, true)
+      any = true
+      w.want = true
+    end
+  end
+  if not any then return end
+  R2.rebuild = true
+  damage_arm = math.max(damage_arm, time - 1.5)   -- the swap is not a crash
+  R2.hold_t, R2.drive, R2.steer = 0, 0, 0
+  R2.live = true
+  R2.air_t = time
+  R2.seat = 0
+  for _, w in ipairs(R2.wheels) do
+    if w.want then
+      w.want = nil
+      local x, y, z = v2w(node, info, w.cx, w.cy, w.cz)
+      spawn("WheelTyre" .. (w.size or "M"), vec3(x, y, z), function(t)
+        if not R2.live or not (node and node.valid) then destroy(t) return end
+        w.tyre = t
+        w.seat = 0
+        w.jointed = false
+      end)
+    end
+  end
+  log(string.format("rover: %d wheel(s) on the ground", #R2.wheels))
+end
+
+local function tyres_in(node)
+  if not R2.live then return end
+  R2.live = false
+  -- STAGED, a frame apart: the joints let go now, the tyres go next frame,
+  -- and the hull is rebuilt the frame after. Destroying a jointed tyre and
+  -- rebuilding its chassis in one frame panics the engine (0.117.0-rc2:
+  -- sim.rs link_owner, a joint naming a compound index the rebuild removed —
+  -- reported on 0420).
+  R2.dying = R2.dying or {}
+  for _, w in ipairs(R2.wheels) do
+    if w.tyre and w.tyre.valid then
+      w.tyre:removeJoint()
+      local rb = w.tyre:getcomponent("RigidBody")
+      if rb then rb.kinematic = 1 end
+      R2.dying[#R2.dying + 1] = w.tyre
+    end
+    w.tyre, w.jointed = nil, false
+    wheel_collider(node, w, false)
+  end
+  R2.stow = 1
+  damage_arm = math.max(damage_arm, time - 1.5)   -- the swap is not a crash
+  if R2.parkGrip and node and node.valid then assembly.release(node); R2.parkGrip = false end
+  R2.driving = false
+  R2.hold_t = 0
+end
+
+-- A fresh body on an orbiting planet lands one tick of the planet's orbital
+-- motion away from where it was asked for (0.117.0-rc2: ~4 m on the home
+-- world — reported on 0420), and a joint built then keeps that error as its
+-- anchor. So a tyre is spawned KINEMATIC and SEATED on its mount from this
+-- tick's physics pose (fixedUpdate: info.origin is this tick's) for a few
+-- ticks, and only then hung on its joint and let go. Written here, a
+-- kinematic tyre rides the same carry as the hull: no lead is needed.
+local function seat_tyres(node, info, dt)
+  local lx, ly, lz = 0, 0, 0
+  local rx, up, rz = basis(node)
+  for _, w in ipairs(R2.wheels) do
+    local t = w.tyre
+    if t and t.valid and not w.jointed then
+      local x, y, z = v2w(node, info, w.cx, w.cy, w.cz)
+      t.x, t.y, t.z = x + lx, y + ly, z + lz
+      local yaw, pitch, roll = r2_euler({ rx.x, rx.y, rx.z }, { up.x, up.y, up.z }, { rz.x, rz.y, rz.z })
+      t:setAngles(yaw, pitch, roll)
+      w.seat = (w.seat or 0) + 1
+      if w.seat >= 3 then
+        local m = w.m
+        -- THE SPRING. The joint's stiffness is a frequency on the joint's
+        -- effective mass — the light tyre's, not the hull's — so it is sized
+        -- here from what each wheel carries under this craft on this world.
+        -- The tyre, hub and motor are most of a powered wheel's mass (60 %; the
+        -- bracket keeps the rest, massSync): a tyre feather-light against the
+        -- hull it carries spins on a slope instead of gripping.
+        local mt = math.max(0.005, (w.d.mass or 0.12) * TYRE_SHARE)
+        local g = 7.0
+        if space.gravity then
+          local gx, gy, gz = space.gravity(info.com.x, info.com.y, info.com.z)
+          if gx then g = math.sqrt(gx * gx + gy * gy + gz * gz) end
+        end
+        local load = (info.mass or 1) * g / math.max(1, #R2.wheels)
+        -- (sized for 1 cm in this simple model; the joint's soft step gives
+        -- about three times that, and a heavy end a little more)
+        local sag = 0.01 * w.r / 0.4
+        local f = math.sqrt(load / (sag * mt)) / (2 * math.pi)
+        f = math.max(4.0, math.min(45.0, f))
+        t:setJoint{ kind = "wheel", to = node, axis = vec3(0, 1, 0),
+                    stiffness = f, damping = 0.7, motorSpeed = 0, maxForce = (m.torque or 0.6) }
+        local rb = t:getcomponent("RigidBody")
+        if rb then rb.kinematic = 0; rb.mass = mt end
+        w.jointed = true
+        w.joint_t = time
+      end
+    end
+  end
+end
+
+-- STABILITY ASSIST while driving (SAS on): the reaction wheels damp the
+-- rover's pitch and roll RATES — a wheelie, a roll over a ridge — and leave
+-- its yaw to the wheels. Rates, not attitude: on a slope it still settles to
+-- the ground under it.
+function r2Steady(node, info, tk, dt)
+  local w = info.angVel
+  local _, up = basis(node)
+  -- no steering asked: hold the heading too (a wheel that slips on a hill
+  -- must not slew the rover across it)
+  local yr = (math.abs(R2.steer or 0) > 0.05) and (w.x * up.x + w.y * up.y + w.z * up.z) or 0
+  wheelTorque(node, info, up.x * yr - w.x, up.y * yr - w.y, up.z * yr - w.z, tk, dt)
+end
+
+-- Drive, steer, brake and park, every tick the tyres are out.
+local function drive_tick(node, info, dt)
+  local E = elib()
+  local ctl = piloting and elec.control ~= false and not dock.plan
+  local dcmd = ctl and ((input.key("w") and 1 or 0) - (input.key("s") and 1 or 0)) or 0
+  local scmd = ctl and ((input.key("a") and 1 or 0) - (input.key("d") and 1 or 0)) or 0
+  -- A headless run cannot press keys: a probe drives through R2.cmd.
+  if ctl and R2.cmd then dcmd, scmd = R2.cmd.drive or 0, R2.cmd.steer or 0 end
+  -- the stick eases in and out like a throttle (no wheelspin from a key tap)
+  local function ease(cur, want, up, down)
+    if want > cur then return math.min(want, cur + up * dt) end
+    return math.max(want, cur - down * dt)
+  end
+  R2.drive = ease(R2.drive, dcmd, 0.8, 3.0)
+  R2.steer = ease(R2.steer, scmd, 3.0, 4.0)
+  local grounded = 0
+  for _, w in ipairs(R2.wheels) do
+    if w.jointed and w.tyre and w.tyre.valid and w.tyre.grounded then grounded = grounded + 1 end
+  end
+  R2.onWheels = grounded > 0
+  R2.driving = ctl and grounded > 0
+  R2.ctl = ctl
+  local v = info.vel
+  local spd = math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z)
+  R2.speed = spd
+  -- top speed and torque for this world: the catalogue rated the motors for
+  -- home (builder finishBlueprint); on a lighter world a wheel grips less,
+  -- and a rover that turns at speed there rolls — the top speed comes down
+  -- with sqrt(g) (the speed a curve of the same radius holds).
+  local gk = 1.0
+  if space.gravity then
+    local cm = info.com or info.origin
+    local gx, gy, gz = space.gravity(cm.x, cm.y, cm.z)
+    if gx then gk = math.sqrt(gx * gx + gy * gy + gz * gz) / 7.0 end
+  end
+  local vk = math.max(0.6, math.min(1.25, math.sqrt(gk)))
+  local any_input = math.abs(dcmd) + math.abs(scmd) > 0
+  if any_input then R2.hold_t = 0 end
+  -- PARKING: stopped with no input → the wheels brake, and after a moment a
+  -- parking grip holds the craft exactly (released by the next input).
+  if not any_input and spd < 0.25 and grounded >= math.min(3, #R2.wheels) then
+    R2.hold_t = R2.hold_t + dt
+  elseif any_input or spd > 0.6 then
+    R2.hold_t = 0
+  end
+  local seated = true
+  for _, w in ipairs(R2.wheels) do
+    if not w.onRobo and (not w.jointed or time - (w.joint_t or 0) < 0.6) then seated = false end
+  end
+  if R2.hold_t > 0.8 and seated and not R2.parkGrip and not info.gripped then
+    local _, up = basis(node)
+    local w = R2.wheels[1]
+    local x, y, z = v2w(node, info, w.cx, w.cy, w.cz)
+    assembly.grip(node, vec3(x - up.x * w.r * 0.9, y - up.y * w.r * 0.9, z - up.z * w.r * 0.9))
+    R2.parkGrip = true
+  elseif R2.parkGrip and (any_input or (spd > 0.6 and not info.gripped)) then
+    if not r2ClawHolding() then assembly.release(node) end
+    R2.parkGrip = false
+  end
+  -- TRACTION CONTROL: the motors may push the craft no harder than 0.3 g on
+  -- the level — more on a hill, by the slope they are climbing — and back off
+  -- by half while one axle is off the ground (a wheelie, a crest). A tall
+  -- rover with its weight aft tips over backwards long before 1 g.
+  local rxv, upv = basis(node)
+  local gdir = { x = 0, y = 0, z = 0 }
+  local gmag = gk * 7.0
+  if space.gravity then
+    local cm = info.com or info.origin
+    local gx, gy, gz = space.gravity(cm.x, cm.y, cm.z)
+    if gx then gdir = { x = gx, y = gy, z = gz } end
+  end
+  local fx = rxv.x * (R2.front or 1)
+  local fy = rxv.y * (R2.front or 1)
+  local fz = rxv.z * (R2.front or 1)
+  local climb = math.abs(fx * gdir.x + fy * gdir.y + fz * gdir.z)   -- g · sin(slope)
+  local front_up, rear_up = 0, 0
+  for _, w in ipairs(R2.wheels) do
+    if w.tyre and w.tyre.valid and w.tyre.grounded then
+      if w.cx * (R2.front or 1) > 0 then front_up = front_up + 1 else rear_up = rear_up + 1 end
+    end
+  end
+  local accel = 0.3 * gmag + climb
+  if (front_up == 0) ~= (rear_up == 0) then accel = accel * 0.5 end
+  local n_drive = math.max(1, #R2.wheels)
+  local power = 0
+  for _, w in ipairs(R2.wheels) do
+    local t = w.tyre
+    local j = w.jointed and time - (w.joint_t or 0) > 0.05 and t and t.valid and t:getcomponent("Joint")
+    if j then
+      local st = E and E.stateOf(w.d) or {}
+      local served = (elec.served and elec.served["d" .. w.uid]) or 1
+      local m = w.m
+      local vmax = (m.speed or 7) * vk
+      local brakes = st.brakes == true
+      local torque = math.min(m.torque or 0.6, accel * (info.mass or 1) * w.r / n_drive)
+      -- skid steering: turning left (A) runs the right-hand wheels faster;
+      -- right is +Z when the front is +X
+      local right = w.side * (R2.front or 1)
+      local want = R2.drive + R2.steer * right * (math.abs(R2.drive) > 0.05 and 0.6 or 1.0)
+      want = math.max(-1, math.min(1, want))
+      if brakes or R2.hold_t > 0.3 then
+        j.motor = 1
+        j.motorSpeed = 0
+        j.maxForce = (m.torque or 0.6) * 2.0
+      elseif st.motor == false or served < 0.3 or math.abs(want) < 0.02 then
+        -- off the stick: the motors hold the wheels (regenerating), so a
+        -- rover let go of on a hill comes to a stop rather than rolling to
+        -- the bottom of it; the parking grip then takes over
+        j.motor = 1
+        j.motorSpeed = 0
+        j.maxForce = (m.torque or 0.6) * 1.2
+      else
+        local vt = want * vmax * (R2.front or 1)
+        j.motor = 1
+        j.motorSpeed = -vt / w.r * 57.29578
+        j.maxForce = torque * served
+        power = power + (m.draw or 0.8) * math.abs(want)
+      end
+      R2.draw["d" .. w.uid] = (m.draw or 0.8) * (brakes and 0 or math.abs(want)) + 0.01
+    end
+  end
+  R2.power = power
+end
+
+-- ── claw ───────────────────────────────────────────────────────────────────
+function r2ClawHolding()
+  local E = elib()
+  if not E then return false end
+  for _, c in ipairs(R2.claws) do
+    local st = E.stateOf(c.d)
+    if st.armed and c.gripped then return true end
+  end
+  return false
+end
+
+function r2ClawRelease(uid)
+  local node = dock.node
+  local E = elib()
+  if not (node and node.valid and E) then return false end
+  local released = false
+  for _, c in ipairs(R2.claws) do
+    if c.uid == uid or uid == nil then
+      if c.gripped then released = true end
+      c.gripped = false
+      E.stateOf(c.d).armed = false
+    end
+  end
+  assembly.release(node)
+  R2.parkGrip = false
+  if released then caption("the claw lets go"); log("claw: released") end
+  return true
+end
+
+local function claw_tick(node, info, dt)
+  local E = elib()
+  if not E then return end
+  for _, c in ipairs(R2.claws) do
+    local st = E.stateOf(c.d)
+    local n = r2NodeOf(node, c.uid)
+    -- the fingers: open while armed and empty, shut when holding or stowed
+    local f = child_named(n, "Fingers")
+    local open = st.armed and not c.gripped
+    c.open = (c.open or 0) + ((open and 1 or 0) - (c.open or 0)) * math.min(1, dt * 4)
+    if f then
+      local k = 0.82 + 0.38 * c.open
+      if math.abs((f.scale_x or 1) - k) > 0.005 then f.scale_x, f.scale_z = k, k end
+    end
+    R2.draw["c" .. c.uid] = st.armed and ((c.m.draw or 0.05)) or 0
+    if st.armed and not c.gripped then
+      -- the tip: the part's −Y end, the way its fingers point
+      local p, B = robo_pose(c.uid)
+      if not p then local r = R2.rest[c.uid]; p, B = { r.x, r.y, r.z }, { r.X, r.Y, r.Z } end
+      local Y = B[2]
+      local tx, ty, tz = p[1] - Y[1] * 0.32, p[2] - Y[2] * 0.32, p[3] - Y[3] * 0.32
+      local wx, wy, wz = v2w(node, info, tx, ty, tz)
+      local rx, up, rz = basis(node)
+      local dx = -(rx.x * Y[1] + up.x * Y[2] + rz.x * Y[3])
+      local dy = -(rx.y * Y[1] + up.y * Y[2] + rz.y * Y[3])
+      local dz = -(rx.z * Y[1] + up.z * Y[2] + rz.z * Y[3])
+      local hit = raycast(wx, wy, wz, dx, dy, dz, 0.35, node)
+      local served = (elec.served and elec.served["c" .. c.uid]) or 1
+      if hit and served > 0.5 then
+        -- another craft's part grips that craft; the ground grips the ground
+        local target = nil
+        if hit.node and hit.node.valid ~= false then
+          local par = hit.node.parent
+          if par and assembly.info(par) then target = hit.node end
+        end
+        assembly.grip(node, vec3(hit.x, hit.y, hit.z), target, (c.m.hold or 400))
+        c.gripped = true
+        c.grip_t = time
+        caption("the claw bites")
+        log(string.format("claw: gripped %s at %.2f m", target and "a craft" or "the ground", hit.distance or 0))
+      end
+    elseif c.gripped and time - (c.grip_t or 0) > 0.5 and not info.gripped then
+      -- torn loose (past its hold)
+      c.gripped = false
+      st.armed = false
+      caption("the claw is torn loose")
+    end
+  end
+end
+
+-- ── drill ──────────────────────────────────────────────────────────────────
+local function drill_tick(node, info, dt)
+  local E = elib()
+  if not E then return end
+  for _, dr in ipairs(R2.drills) do
+    local st = E.stateOf(dr.d)
+    local n = r2NodeOf(node, dr.uid)
+    local bit = child_named(n, "Bit")
+    if bit and not dr.bit0 then dr.bit0 = { x = bit.x, y = bit.y, z = bit.z } end
+    local target = st.deployed and 1 or 0
+    dr.lower = dr.lower + math.max(-dt * 0.8, math.min(dt * 0.8, target - dr.lower))
+    local served = (elec.served and elec.served["q" .. dr.uid]) or 1
+    local on = st.drilling and st.deployed and dr.lower > 0.95
+    local ok_ground = info.grounded or info.gripped or R2.onWheels
+    local working = false
+    local why = nil
+    if on then
+      if not ok_ground then why = "the drill needs the craft landed or gripped"
+      elseif served < 0.5 then why = "the drill has no power"
+      elseif not holdId then why = "no cargo bay aboard — the cores have nowhere to go" end
+    end
+    if bit and dr.bit0 then
+      bit.y = dr.bit0.y - 0.5 * dr.lower
+      if on and not why then
+        dr.spin = ((dr.spin or 0) + dt * 14) % (2 * math.pi)
+        bit:setAngles(dr.spin, 0, 0)
+      end
+    end
+    if on and not why then
+      -- the bit's tip, and the ground under it (straight down the part's −Y)
+      local p, B = robo_pose(dr.uid)
+      if not p then local r = R2.rest[dr.uid]; p, B = { r.x, r.y, r.z }, { r.X, r.Y, r.Z } end
+      local Y = B[2]
+      local tipd = 0.6 + 0.5 * dr.lower
+      local wx, wy, wz = v2w(node, info, p[1] - Y[1] * 0.1, p[2] - Y[2] * 0.1, p[3] - Y[3] * 0.1)
+      local rx, up, rz = basis(node)
+      local dx = -(rx.x * Y[1] + up.x * Y[2] + rz.x * Y[3])
+      local dy = -(rx.y * Y[1] + up.y * Y[2] + rz.y * Y[3])
+      local dz = -(rx.z * Y[1] + up.z * Y[2] + rz.z * Y[3])
+      local hit = raycast(wx, wy, wz, dx, dy, dz, tipd + (dr.m.reach or 0.9), node)
+      if not hit then
+        why = "the drill can't reach the ground — set down closer"
+      else
+        working = true
+        dr.prog = dr.prog + dt * (dr.m.rate or 4) / 60.0 -- units a minute → per tick
+        if time - (dr.dig_t or -10) > 1.2 then
+          dr.dig_t = time
+          -- a small bite at the face: the bore deepens as it goes
+          terrain.dig(hit.x + dx * 0.15, hit.y + dy * 0.15, hit.z + dz * 0.15, 0.22, 0.6)
+          local fx = fxd()
+          if fx and fx.dig then fx.dig(hit.x, hit.y, hit.z, false) end
+        end
+        while dr.prog >= 1.0 do
+          dr.prog = dr.prog - 1.0
+          local inv = findScript("inventory")
+          local tb = findScript("tool_belt")
+          local mat = tb and tb.survey and tb.survey(hit.x, hit.y, hit.z)
+          if inv and mat then
+            local took = inv.add(holdId, mat, 1)
+            if took and took > 0 then
+              holdApplyMass(node)
+              dr.cores = (dr.cores or 0) + took
+              local mats = findScript("materials")
+              caption(string.format("core: %s  ·  %s", mats and mats.label and mats.label(mat) or mat,
+                inv.line and inv.line(holdId) or ""))
+              log(string.format("drill: +1 %s into %s", mat, holdId))
+            else
+              why = "the hold is full"
+              st.drilling = false
+            end
+          end
+        end
+      end
+    end
+    if why and why ~= dr.why then caption(why) end
+    dr.why = why
+    dr.working = working
+    R2.draw["q" .. dr.uid] = working and (dr.m.draw or 1.2) or 0
+  end
+end
+
+-- ── fairings ───────────────────────────────────────────────────────────────
+local function fairing_build(node)
+  local E = elib()
+  if not (E and E.fairingShell and mesh and mesh.build) then return end
+  for _, f in ipairs(R2.fairings) do
+    local d = f.d
+    local st = E.stateOf(d)
+    local n = r2NodeOf(node, f.uid)
+    if n and not st.jettisoned and not R2.shells[f.uid] then
+      local sh = { meshes = {}, nodes = {} }
+      R2.shells[f.uid] = sh
+      for half = 0, 1 do
+        local name = mesh.build(E.fairingShell(d.fr, d.fy0 or 0.1, d.fhc, d.fhn, half, 24))
+        sh.meshes[half + 1] = name
+        createNode("Fairing Shell", n, function(c)
+          c.model = name
+          c:setMaterial{ texture = "textures/parts/paint_albedo.png", normalMap = "textures/parts/paint_normal.png",
+                         roughnessMap = "textures/parts/paint_orm.png", occlusionMap = "textures/parts/paint_orm.png",
+                         shading = "physical", roughness = 0.75, metallic = 0.25 }
+          sh.nodes[half + 1] = c
+        end)
+      end
+    end
+  end
+end
+
+-- Is the payload part `d` still inside its (un-jettisoned) fairing?
+function r2Faired(d)
+  local fu = d and (d.faired or 0)
+  if not fu or fu == 0 then return false end
+  local f = bp_by_uid[fu]
+  if not f or integ.gone[fu] or (part_hp[fu] or 1) <= 0 then return false end
+  return not (type(f.st) == "table" and f.st.jettisoned)
+end
+
+-- Split the shell: the two halves come away as debris, pushed out sideways.
+-- Each half is a fresh FairingHalf body carrying a copy of its shell mesh;
+-- it is spawned KINEMATIC and seated on the hull for a few ticks from the
+-- physics pose (a body spawned free on an orbiting planet lands one tick of
+-- the orbit behind — ~6 m at scale 3, reported on 0420), then let go with
+-- the hull's velocity and the springs' push. The shell on the base hides as
+-- it leaves.
+function r2Jettison(node, uid)
+  local E = elib()
+  local d = bp_by_uid[uid]
+  if not (E and d and node and node.valid) then return false end
+  local st = E.stateOf(d)
+  if st.jettisoned then return false end
+  st.jettisoned = true
+  local sh = R2.shells[uid]
+  local shellm = d.shellm or 0
+  local cy = ((d.fy0 or 0.1) + d.fhc + d.fhn) * 0.5
+  local hh = (d.fhc + d.fhn - (d.fy0 or 0.1)) * 0.5
+  local X, Y, Z = r2_basis(d.yaw, d.pitch, d.roll)
+  R2.debris = R2.debris or {}
+  for half = 0, 1 do
+    local sgn = (half == 0) and 1 or -1
+    local zo = d.fr * 0.5
+    local deb = { half = half, sgn = sgn, seat = 0, mesh = sh and sh.meshes[half + 1], shell = sh and sh.nodes[half + 1],
+                  lx = d.x + Y[1] * cy + Z[1] * sgn * zo, ly = d.y + Y[2] * cy + Z[2] * sgn * zo,
+                  lz = d.z + Y[3] * cy + Z[3] * sgn * zo, Z = Z, part = { d.yaw or 0, d.pitch or 0, d.roll or 0 },
+                  m = math.max(0.005, shellm * 0.5) }
+    R2.debris[#R2.debris + 1] = deb
+    local info = assembly.info(node)
+    local wx, wy, wz = v2w(node, info, deb.lx, deb.ly, deb.lz)
+    spawn("FairingHalf", vec3(wx, wy, wz), function(h)
+      local rb = h:getcomponent("RigidBody")
+      if rb then
+        rb.kinematic = 1
+        rb.half_x, rb.half_y, rb.half_z = d.fr * 0.8, math.max(0.1, hh), d.fr * 0.4
+        rb.mass = deb.m
+      end
+      if deb.mesh then
+        createNode("Shell", h, function(c)
+          c.model = deb.mesh
+          c:setMaterial{ texture = "textures/parts/paint_albedo.png", normalMap = "textures/parts/paint_normal.png",
+                         roughnessMap = "textures/parts/paint_orm.png", shading = "physical", roughness = 0.75, metallic = 0.25 }
+          c.x, c.y, c.z = 0, -cy, -sgn * zo
+        end)
+      end
+      deb.node = h
+    end)
+  end
+  -- the shells' mass leaves with them
+  d.mass = math.max(0.01, (d.mass or 0) - shellm)
+  d.shellm = 0
+  integ.gen = integ.gen + 1
+  local bx, by, bz = base_of(node, assembly.info(node))
+  sfx3(SFX.stage, bx, by, bz, 0.8, 1.3)
+  caption("the fairing splits away")
+  log("fairing jettisoned")
+  return true
+end
+
+-- Seat the leaving halves on the hull, then let them go (fixedUpdate).
+local function debris_tick(node, info, dt)
+  if not R2.debris or #R2.debris == 0 then return end
+  local keep = {}
+  local rx, up, rz = basis(node)
+  local yaw, pitch, roll = r2_euler({ rx.x, rx.y, rx.z }, { up.x, up.y, up.z }, { rz.x, rz.y, rz.z })
+  for _, deb in ipairs(R2.debris) do
+    local h = deb.node
+    if not h then
+      keep[#keep + 1] = deb
+    elseif h.valid then
+      local wx, wy, wz = v2w(node, info, deb.lx, deb.ly, deb.lz)
+      h.x, h.y, h.z = wx, wy, wz
+      -- the hull's turn, then the part's own (the half's frame is the base's)
+      local Xp, Yp, Zp = r2_basis(deb.part[1], deb.part[2], deb.part[3])
+      local function w(v) return { rx.x * v[1] + up.x * v[2] + rz.x * v[3], rx.y * v[1] + up.y * v[2] + rz.y * v[3],
+                                   rx.z * v[1] + up.z * v[2] + rz.z * v[3] } end
+      h:setAngles(r2_euler(w(Xp), w(Yp), w(Zp)))
+      deb.seat = deb.seat + 1
+      if deb.seat >= 3 then
+        local rb = h:getcomponent("RigidBody")
+        if rb then rb.kinematic = 0 end
+        local o = w(deb.Z)
+        local v = info.vel
+        h.vx = v.x + o[1] * deb.sgn * 3.0 + up.x * 0.5
+        h.vy = v.y + o[2] * deb.sgn * 3.0 + up.y * 0.5
+        h.vz = v.z + o[3] * deb.sgn * 3.0 + up.z * 0.5
+        physics.ignorePair(h, node, 1.5)
+        if deb.shell and deb.shell.valid then deb.shell.visible = false end
+        after(25.0, function() if h.valid then destroy(h) end end)
+      else
+        keep[#keep + 1] = deb
+      end
+    end
+  end
+  R2.debris = keep
+end
+
+-- ── rollout ────────────────────────────────────────────────────────────────
+-- A ROVER (wheels, no engines) leaves the launch clamps beside the pad, on
+-- the levelled ground, not on a deck 2.5 m up with nothing to drive down.
+function r2Rollout(node, info)
+  if #R2.wheels == 0 or #engines > 0 then return end
+  local rx, up, rz = basis(node)
+  local bx, by, bz = base_of(node, info)
+  local out = 7.0
+  local qx, qy, qz = bx + rx.x * out + up.x * 4, by + rx.y * out + up.y * 4, bz + rx.z * out + up.z * 4
+  local h = raycast(qx, qy, qz, -up.x, -up.y, -up.z, 20, node)
+  if not h then return end
+  -- the lowest point of the craft sits on the ground (its wheels' bottoms)
+  local low = 0
+  for _, w in ipairs(R2.wheels) do low = math.min(low, w.cy - w.r) end
+  local ox, oy, oz = info.origin.x - bx, info.origin.y - by, info.origin.z - bz
+  local lift = -low + 0.05
+  assembly.teleport(node, vec3(h.x + up.x * lift + ox, h.y + up.y * lift + oy, h.z + up.z * lift + oz))
+  integ.handoff_t = time + 1.0   -- (the safety net: this jump is ours)
+  integ.prev = nil
+  R2.holdoff = time + 0.5
+  log("rover: rolled out beside the pad")
+end
+
+-- ── the tick ───────────────────────────────────────────────────────────────
+function r2Tick(node, info, dt)
+  if R2.gen ~= integ.gen then
+    if R2.live then tyres_in(node); R2.holdoff = time + 0.5 end
+    r2_scan(node)
+    fairing_build(node)
+  end
+  robo_tick(node, info, dt)
+  debris_tick(node, info, dt)
+  claw_tick(node, info, dt)
+  drill_tick(node, info, dt)
+  local want, why = wheels_wanted(node, info)
+  if want and not R2.live and not R2.stow and not R2.rebuild then tyres_out(node, info)
+  elseif not want and R2.live then
+    log("rover: wheels stowed (" .. tostring(why) .. ")")
+    tyres_in(node)
+  end
+  if R2.live then
+    seat_tyres(node, info, dt)
+    drive_tick(node, info, dt)
+  else
+    R2.driving, R2.onWheels = false, false
+  end
+end
+
+-- Before the craft is cut (staging, undocking, a part tearing off, docking):
+-- the tyres come in, so no joint is left hanging off a piece that leaves.
+function r2Before(node)
+  if R2.live then tyres_in(node) end
+  R2.holdoff = time + 1.0
+end
+
+-- THE COLLIDER SWAP'S REBUILD runs in the camera pass, never in fixedUpdate:
+-- there the nodes stand one tick of the planet's orbit behind the physics
+-- (the carry), and a compound rebuilt from them lands that far away — ~6 m
+-- at scale 3, a jump straight into the ground (0.117.0-rc2, reported on
+-- 0420). In lateUpdate the nodes are this frame's physics poses.
+function r2Late(node)
+  if R2.stow == 1 then
+    for _, t in ipairs(R2.dying or {}) do if t.valid then destroy(t) end end
+    R2.dying = {}
+    R2.stow = 2
+  elseif R2.stow == 2 then
+    R2.stow = nil
+    R2.rebuild = true
+  end
+  if R2.rebuild and not R2.stow and node and node.valid then
+    R2.rebuild = false
+    assembly.rebuild(node)
+  end
+end
+
+function r2Cleanup()
+  for _, t in ipairs(R2.dying or {}) do if t.valid then destroy(t) end end
+  R2.dying = {}
+  for _, w in ipairs(R2.wheels) do
+    if w.tyre and w.tyre.valid then destroy(w.tyre) end
+    w.tyre = nil
+  end
+  R2.live = false
+  for _, sh in pairs(R2.shells) do
+    for _, m in ipairs(sh.meshes or {}) do if mesh and mesh.free then mesh.free(m) end end
+  end
+  R2.shells = {}
+end
+
+function onDestroy(node) r2Cleanup() end
+
+-- Standing on its own tyres counts as on the ground (the hull's compound is
+-- not touching anything: the tyre bodies carry it). flight_ops and the
+-- landing checks ask this.
+function r2OnWheels() return R2.onWheels == true end
+
+-- What the HUD and probes read: the rover, the robots, the claw, the drill.
+function roundTwoState()
+  local out = { live = R2.live, driving = R2.driving, speed = R2.speed, parked = R2.parkGrip,
+                wheels = #R2.wheels, grounded = 0, robo = {}, claws = {}, drills = {} }
+  for _, w in ipairs(R2.wheels) do
+    if w.tyre and w.tyre.valid and w.tyre.grounded then out.grounded = out.grounded + 1 end
+  end
+  for _, r in ipairs(R2.robo) do
+    out.robo[#out.robo + 1] = { uid = r.uid, kind = r.kind, cur = r.cur, stalled = r.stalled, n = 0 }
+  end
+  for _, c in ipairs(R2.claws) do out.claws[#out.claws + 1] = { uid = c.uid, gripped = c.gripped == true } end
+  for _, d in ipairs(R2.drills) do
+    out.drills[#out.drills + 1] = { uid = d.uid, working = d.working == true, cores = d.cores or 0, why = d.why, lower = d.lower }
+  end
+  return out
 end
 
 function fixedUpdate(node, dt)
@@ -2883,10 +6410,14 @@ function fixedUpdate(node, dt)
   if boarding and astronaut then
     boarding = false
     piloting = true
-    astronaut.visible = false
+    -- A crewed craft takes the crew; a PROBE is flown from the ground, and the
+    -- crew stands at the base and watches it go.
+    crewAboard = podCrewed == true
+    astronaut.visible = not crewAboard
     set_navball(true)
     sas_mode, sas_last = "stability", "stability"
-    log("vessel: you're in the pod — SHIFT throttle, SPACE releases the clamps")
+    log(crewAboard and "vessel: you're in the pod — SHIFT throttle, SPACE releases the clamps"
+      or "vessel: probe on the pad, flown from the ground — SHIFT throttle, SPACE releases the clamps")
   end
 
   -- Runaway diagnostic (an uncontrolled vessel past 50 u/s = report data).
@@ -2904,12 +6435,22 @@ function fixedUpdate(node, dt)
   -- ---- damage: what did each part hit last tick, and how hard? -----------
   -- Runs piloted OR derelict — a parked ship hit by falling wreckage breaks
   -- all the same. (While clamped/anchored the sim makes no contacts.)
+  -- The safety net reads this tick's state first (and logs what it clamps);
+  -- then contact damage, then the joint-stress model. All three are globals or
+  -- were already upvalues: this function sits at LuaJIT's 60-upvalue ceiling.
+  -- The parts weigh what they carry (fuel, cargo) before anything pushes.
+  if info then massSync(node) end
+  if info then safetyTick(node, info, dt) end
   if info then damage_tick(node, info, dt) end
+  if info then stressTick(node, info, dt) end
   -- DOCKING runs piloted or not — a station module has to keep its ports live
   -- so a lander can find them, and the soft-capture magnetism is mutual. Global
   -- call: `fixedUpdate` is at Lua's 60-upvalue ceiling and a global costs it
   -- nothing (same reason `power_tick` was exiled to lateUpdate).
   if info and not destroyed then dockTick(node, info, dt) end
+  -- Wheels, actuators, the claw, the drill, fairings (round two): global, so
+  -- this function spends no upvalue on them.
+  if info and not destroyed then r2Tick(node, info, dt) end
   -- (Electrical power_tick runs in lateUpdate — fixedUpdate is at Lua's upvalue
   -- ceiling, so the power system lives in the post-writeback pass instead.)
   if destroyed then
@@ -2947,15 +6488,27 @@ function fixedUpdate(node, dt)
 
   -- ---- board / exit -------------------------------------------------------
   if input.pressed("f") and astronaut then
-    if piloting then
+    if piloting and not crewAboard then
+      -- Flying a probe from the ground: there is no hatch to step out of.
+    elseif piloting then
       local v = info and info.vel
+      -- Out past the hull's widest reach on that side, never inside it: a crew
+      -- capsule stepping out INTO a side booster is a body overlapping the
+      -- hull, which the engine resolves as a collision (the launch fling).
+      local reach = hullReach() + 0.6
       standDown(node,
-        px + rx.x * 2.2 + up.x * 0.4,
-        py + rx.y * 2.2 + up.y * 0.4,
-        pz + rx.z * 2.2 + up.z * 0.4,
+        px + rx.x * reach + up.x * 0.4,
+        py + rx.y * reach + up.y * 0.4,
+        pz + rx.z * reach + up.z * 0.4,
         v and v.x, v and v.y, v and v.z)
-    elseif board_dist(node, astronaut, info) <= params.board_range then
+    elseif podCrewed and not crewAboard and astronaut.visible
+      and board_dist(node, astronaut, info) <= params.board_range then
+      -- Climbing in takes the controls from whatever you were flying.
+      for _, ov in ipairs(findScripts("vessel_controller")) do
+        if ov.releaseControl and ov.node and ov.node.id ~= node.id then ov.releaseControl() end
+      end
       piloting = true
+      crewAboard = true
       astronaut.visible = false
       set_navball(true)
       -- Board in a stability hold — never inherit a velocity-pointing mode
@@ -2965,8 +6518,11 @@ function fixedUpdate(node, dt)
     end
   end
 
-  -- The seated astronaut rides the pod (bodies don't push each other).
-  if piloting and astronaut then
+  -- The seated astronaut rides the pod as a KINEMATIC passenger. "Bodies don't
+  -- push each other" stopped being true in engine 0.104: a dynamic crew capsule
+  -- parked inside the hull every tick was the launch fling (see seatCrew).
+  if crewAboard and astronaut then
+    seatCrew(node, true)
     astronaut.x, astronaut.y, astronaut.z = px, py, pz
     if info then
       astronaut.vx, astronaut.vy, astronaut.vz = info.vel.x, info.vel.y, info.vel.z
@@ -2976,6 +6532,9 @@ function fixedUpdate(node, dt)
   end
 
   if not piloting then
+    -- hand the crew back to physics if we were seating them — unless they're
+    -- still in our seat while you fly something else
+    if not crewAboard then seatCrew(node, false) end
     -- Handed off (EVA, lost, staged): rejoin the LOD if we were kept live.
     if kept_live then
       assembly.keepLive(node, false)
@@ -2984,7 +6543,7 @@ function fixedUpdate(node, dt)
     -- (The hatch RING is drawn in lateUpdate — the camera pass — where the
     -- node pose matches what this frame renders; drawing it here put it a
     -- rails-carry beside the visible ship.)
-    if astronaut and astronaut.visible
+    if astronaut and astronaut.visible and podCrewed and not crewAboard
       and board_dist(node, astronaut, info) <= params.board_range + 1.4 then
       set_prompt("F — board")
     else
@@ -3083,7 +6642,7 @@ function fixedUpdate(node, dt)
     if nxt > warp then
       -- KSP rules: no thrust, and either parked or high enough that the
       -- conic can't clip terrain this instant.
-      local alt_ok = info.grounded or info.anchored
+      local alt_ok = info.grounded or info.anchored or R2.onWheels
       local d0 = space.dominant(node.x, node.y, node.z)
       local b0 = d0 and space.body(d0)
       if not alt_ok and b0 then
@@ -3117,10 +6676,16 @@ function fixedUpdate(node, dt)
   end
 
   -- ---- throttle + pooled fuel (live in the map too) ----------------------
-  if input.key("shift") then throttle = throttle + params.throttle_rate * dt end
-  if input.key("ctrl") then throttle = throttle - params.throttle_rate * dt end
-  if input.key("x") then throttle = 0.0 end
-  if input.key("z") then throttle = 1.0 end
+  -- No control (a probe out of contact or dark): the throttle stays where it
+  -- was left, except that a dark probe's engines have nobody to keep them lit.
+  if elec.control ~= false then
+    if input.key("shift") then throttle = throttle + params.throttle_rate * dt end
+    if input.key("ctrl") then throttle = throttle - params.throttle_rate * dt end
+    if input.key("x") then throttle = 0.0 end
+    if input.key("z") then throttle = 1.0 end
+  elseif elec.why and elec.why:sub(1, 8) == "NO POWER" then
+    throttle = 0.0
+  end
   throttle = math.max(0.0, math.min(1.0, throttle))
   if fuel <= 0.0 then throttle = 0.0 end
   local burn_total = 0.0
@@ -3129,10 +6694,10 @@ function fixedUpdate(node, dt)
   end
   local refueling = false
   if info.anchored and fuel < fuel_cap then
-    fuel = math.min(fuel_cap, fuel + params.refuel_rate * dt)
+    fuelFill(math.min(fuel_cap, fuel + params.refuel_rate * dt))
     refueling = true
   elseif throttle > 0 and not info.anchored then
-    fuel = math.max(0.0, fuel - throttle * burn_total * dt)
+    fuelDraw(throttle * burn_total * dt)
   end
 
   -- ---- thrust at every ACTIVE engine's offset, along ITS OWN axis --------
@@ -3184,7 +6749,8 @@ function fixedUpdate(node, dt)
     local vv = info.vel
     local sp = math.sqrt(vv.x * vv.x + vv.y * vv.y + vv.z * vv.z)
     if sp > 1.5 then
-      spawnEffect("TouchDust", bx, by, bz)
+      local fx = fxd()
+      if fx then fx.touchdown(bx, by, bz, sp) else spawnEffect("TouchDust", bx, by, bz) end
       sfx3(SFX.clamp, bx, by, bz, math.min(0.9, 0.3 + sp * 0.05), 0.8)
       add_shake(math.min(0.5, sp * 0.03)) -- a firm touchdown thuds the view
     end
@@ -3192,7 +6758,9 @@ function fixedUpdate(node, dt)
   was_grounded = info.grounded or false
   if burning and near_ground and time - launch_dust_t > 0.16 then
     launch_dust_t = time
-    spawnEffect("LaunchDust", bx, by, bz)
+    -- The ground blast under the engines is vfx.lua's (it follows each
+    -- plume down to the ground); this one-shot is the harness fallback.
+    if not fxd() then spawnEffect("LaunchDust", bx, by, bz) end
   end
 
   -- ---- reentry / atmospheric heating -------------------------------------
@@ -3209,21 +6777,29 @@ function fixedUpdate(node, dt)
     -- or space.body(nil) throws every frame and aborts the rest of the update.
     local dom2 = space.dominant(node.x, node.y, node.z)
     local db2 = dom2 and space.body(dom2)
-    if db2 and not info.anchored and not info.grounded then
+    if db2 and not info.anchored and not info.grounded and not R2.onWheels then
       local dxh, dyh, dzh = node.x - db2.x, node.y - db2.y, node.z - db2.z
       local alt = math.sqrt(dxh * dxh + dyh * dyh + dzh * dzh) - db2.radius
       local band = db2.radius * 0.35
       local v = info.vel
       local spd = math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z)
       -- Wind + drag live across the WHOLE band (not just when hot).
-      if alt < band and alt > 0 then
-        local dens = 1.0 - alt / band
+      -- ALTITUDE IS ABOVE THE BODY'S NOMINAL RADIUS, and real ground can lie
+      -- BELOW it (Golilil's pad sits 7.6 m under its datum). Every air effect
+      -- used to be gated on alt > 0, so the last metres above any low ground
+      -- had no air at all: a craft slowed to 5.8 m/s under its chute fell the
+      -- rest of the way unbraked and broke at 9.6 m/s. Below the datum the
+      -- air is simply sea-level air.
+      if alt < band then
+        local dens = math.min(1.0, 1.0 - alt / band)
         wind_intensity = dens * math.min(1.4, math.max(0.0, (spd - 8.0) / 80.0))
         -- Aero drag opposes velocity through the CoM (∝ density · v²). Gated to
         -- fast UNPOWERED flight: coasting/reentry is where "slow down" bites,
         -- and it leaves powered ascent (and the tuned smoke force counts) alone.
-        if spd > 45.0 and throttle < 0.02 then
-          local dk = 0.0045
+        local vk = worldScaleK()
+        if spd > 45.0 * vk and throttle < 0.02 then
+          -- Same half-the-speed-per-tick ceiling as the chute drag below.
+          local dk = math.min(0.0045, 0.5 * info.mass / (dt * spd * dens + 1e-9))
           assembly.force(node, vec3(
             -v.x * spd * dens * dk, -v.y * spd * dens * dk, -v.z * spd * dens * dk))
         end
@@ -3232,8 +6808,11 @@ function fixedUpdate(node, dt)
         -- hot even though the part-cooking DAMAGE pass below only bites past 90 m/s.
         -- (Previously the Heat effect only ever spawned inside the >90 damage gate, so
         -- ordinary reentries showed nothing.) Streams off the nose, riding ship velocity.
-        local glow = math.max(0.0, (spd - 45.0) / 130.0) * dens
-        if glow > 0.04 and time - heat_fx_t > (0.30 - math.min(0.18, glow * 0.2)) then
+        local glow = math.max(0.0, (spd - 45.0 * vk) / (130.0 * vk)) * dens
+        local hfx = glow > 0.04 and fxd()
+        if hfx then
+          hfx.heat(node, glow, v.x, v.y, v.z)
+        elseif glow > 0.04 and time - heat_fx_t > (0.30 - math.min(0.18, glow * 0.2)) then
           heat_fx_t = time
           local gs = math.max(spd, 1e-3)
           local gvx, gvy, gvz = v.x / gs, v.y / gs, v.z / gs
@@ -3242,18 +6821,18 @@ function fixedUpdate(node, dt)
           spawnEffect("Heat",
             gbx + gvx * 1.2 + gup.x * 0.8,
             gby + gvy * 1.2 + gup.y * 0.8,
-            gbz + gvz * 1.2 + gup.z * 0.8,
-            v.x, v.y, v.z)
+            gbz + gvz * 1.2 + gup.z * 0.8)
         end
       end
-      if alt < band and alt > 0 and spd > 90.0 then
+      local vk2 = worldScaleK()
+      if alt < band and spd > 90.0 * vk2 then
         -- Heating only bites at genuinely reckless speed now. The old curve
         -- (onset 35 m/s, (spd/40)³·0.06) cooked a normal ascent/descent — a
         -- ~146 m/s craft burned up in a second, which made the ship untestable.
         -- Onset 90 m/s, a gentler cube and coefficient: you can fly fast, but a
         -- screaming-fast reentry (250+ m/s) still lights you up over a few s.
-        local density = (1.0 - alt / band)
-        heating = density ^ 1.5 * (spd / 130.0) ^ 3 * 0.03 -- dmg/sec at the nose
+        local density = math.min(1.0, 1.0 - alt / band)
+        heating = density ^ 1.5 * (spd / (130.0 * vk2)) ^ 3 * 0.03 -- dmg/sec at the nose
         local ivx, ivy, ivz = v.x / spd, v.y / spd, v.z / spd
         local rx2, up2, rz2 = basis(node)
         -- Rank parts by how far forward they sit along the velocity.
@@ -3269,7 +6848,8 @@ function fixedUpdate(node, dt)
         end
         for uid2, d2 in pairs(bp_by_uid) do
           local hp2 = part_hp[uid2]
-          if hp2 and hp2 > 0 then
+          -- (a payload inside its fairing takes no heat: the shell does)
+          if hp2 and hp2 > 0 and not ((d2.faired or 0) ~= 0 and r2Faired(d2)) then
             local wx = rx2.x * d2.x + up2.x * d2.y + rz2.x * d2.z
             local wy = rx2.y * d2.x + up2.y * d2.y + rz2.y * d2.z
             local wz = rx2.z * d2.x + up2.z * d2.y + rz2.z * d2.z
@@ -3301,18 +6881,31 @@ function fixedUpdate(node, dt)
       -- An open canopy in thick air drags HARD against velocity, opposing
       -- your fall — a soft touchdown instead of a lithobraking. Drag scales
       -- with air density and v² (real aero), pooled across every open chute,
-      -- applied through the CoM so it just decelerates (no tumble).
-      if chutes_deployed and #chutes > 0 and alt < band and alt > 0 then
+      -- and it pulls at the CANOPY, so a craft hangs pod-up under it (see
+      -- chuteDrag).
+      if chutes_deployed and #chutes > 0 and alt < band then
         -- Drag ∝ air density · v² (real aero), pooled across every open chute
         -- and scaled by how full the canopy is (chute_anim, driven by
         -- update_chutes). Through the CoM so it decelerates without tumbling.
-        local density = 1.0 - alt / band
-        local drag_k = 0.9 * #chutes * chute_anim
+        local density = math.min(1.0, 1.0 - alt / band)
+        -- Terminal speed under the canopies is sqrt(m·g / (k·density)). At 0.9
+        -- the starter rocket (3.6 t) came down at 5.8 m/s on an 8.4 g world —
+        -- a hard landing for a first flight; 1.3 gives 4.8 m/s there and
+        -- 3.7 m/s on Bryolru (g 4.9).
+        local drag_k = 1.3 * #chutes * chute_anim
+        -- NEVER more than half the speed in one tick. Drag ∝ v² with a canopy
+        -- this size is ~5,000 m/s² at 150 m/s: integrated explicitly that is a
+        -- Δv bigger than v itself, which REVERSED the craft and fired it back
+        -- up the way it came. Real drag can only ever slow you to rest. (A
+        -- canopy opened that fast tears off anyway — see stressTick.)
+        local cap = (spd * density * drag_k > 0)
+          and math.min(1.0, 0.5 * info.mass / (dt * spd * density * drag_k)) or 1.0
+        drag_k = drag_k * cap
         local fx3 = -v.x * spd * density * drag_k
         local fy3 = -v.y * spd * density * drag_k
         local fz3 = -v.z * spd * density * drag_k
         if not info.anchored then
-          assembly.force(node, vec3(fx3, fy3, fz3))
+          chuteDrag(node, info, fx3, fy3, fz3, dt)
         end
       end
     else
@@ -3337,28 +6930,10 @@ function fixedUpdate(node, dt)
   publish_shake(base)
 
   -- ---- attitude: rate-commanded, the KSP feel ----------------------------
-  if input.pressed("t") then
-    sas_mode = (sas_mode ~= "off") and "off" or sas_last
-  end
-  -- `1` `2` `3` are the map's own indicator toggles while it is open, so the
-  -- SAS ladder stands down rather than firing on the same press. (It did both
-  -- before: toggling orbit lines also flipped you into a stability hold.)
-  if not dock.map then
-    for k, m in pairs(SAS_KEYS) do
-      if input.pressed(k) then setSAS(m) end
-    end
-  end
-  -- Peripherals: each device kind has its key (G = landing gear).
-  for _, dev in pairs(DEVICES) do
-    if #dev.parts > 0 and input.pressed(dev.key) then
-      dev.on = not dev.on
-      local bx2, by2, bz2 = base_of(node, info)
-      sfx3(SFX.gear, bx2, by2, bz2, 0.7, dev.on and 1.0 or 0.9)
-      caption(dev.label:lower() .. (dev.on and " deployed" or " retracted"))
-      log(dev.label .. (dev.on and " deployed" or " retracted"))
-    end
-  end
-  gear_deployed = DEVICES.gear.on
+  -- THE KEYS: T (SAS), R (RCS), G U Y B, Backspace (abort) and 1–0 are the
+  -- action groups now (groupKeysTick, a global — this function has no upvalues
+  -- to spare); ALT+1…9 pick the autopilot hold. With no control, none answer.
+  groupKeysTick(node, info)
   update_peripherals(node, dt)
   -- Translation + hull contact. Both are globals so `fixedUpdate` spends no
   -- upvalue on them (it sits at Lua's 60-upvalue ceiling; see `power_tick`).
@@ -3367,7 +6942,7 @@ function fixedUpdate(node, dt)
   update_chutes(node, dt)
   -- In the map's PLAN mode these six keys are moving the burn, not the craft.
   -- Reading them here as well would fly the ship every time you tuned a node.
-  local stick = not dock.plan
+  local stick = not dock.plan and elec.control ~= false and not R2.driving
   local p = stick and ((input.key("w") and 1 or 0) - (input.key("s") and 1 or 0)) or 0
   local y = stick and ((input.key("a") and 1 or 0) - (input.key("d") and 1 or 0)) or 0
   local r = stick and ((input.key("e") and 1 or 0) - (input.key("q") and 1 or 0)) or 0
@@ -3439,152 +7014,34 @@ function fixedUpdate(node, dt)
       dwx, dwy, dwz = 0, 0, 0
     end
   end
-  if not info.anchored and warp <= 1.001 then
-    assembly.torque(node, vec3(
-      (dwx - w.x) * params.torque,
-      (dwy - w.y) * params.torque,
-      (dwz - w.z) * params.torque
-    ))
+  -- Authority is the REACTION WHEELS', and only the powered ones (torque_k: 1
+  -- for a pod's, less for a probe core's, 0 flat). The wheels' draw follows
+  -- how hard they're working (wheel_use).
+  local tk = (elec.torque_k or 1.0) * params.torque
+  -- (A rover on its wheels steers with them: WASD is the drive, not the
+  -- stick; with SAS on, the reaction wheels only steady its pitch and roll.)
+  if not info.anchored and warp <= 1.001 and R2.driving then
+    if sas_mode ~= "off" then r2Steady(node, info, tk, dt) end
+    elec.wheel_use = 0.2
+  elseif not info.anchored and warp <= 1.001 then
+    wheelTorque(node, info, dwx - w.x, dwy - w.y, dwz - w.z, tk, dt)
+    elec.wheel_use = math.min(1, math.sqrt((dwx - w.x) ^ 2 + (dwy - w.y) ^ 2 + (dwz - w.z) ^ 2) * 2.0)
+  else
+    elec.wheel_use = 0
   end
 
   -- ---- SPACE: clamps first, then boosters, then axial stages (live in map) -
-  if input.pressed("space") then
-    if info.anchored then
-      if assembly_ready(info) then
-        released = true
-        assembly.setAnchored(node, false)
-        sfx3(SFX.clamp, bx, by, bz, 0.9, 1.0) -- the clamps let go with a clank
-        caption("the launch clamps release")
-        log("launch clamps released")
-      else
-        log(string.format("clamps hold: %d / %d parts assembled", #info.parts, part_total))
-      end
-    elseif launch_mode and not released then
-      -- SELF-HEAL: a mid-launch sim rebuild (terrain streaming on loaded saves)
-      -- can clear the compound's anchored flag before we ever released. Without
-      -- this, SPACE would fall through to staging and `released` never latches —
-      -- leaving damage_tick disarmed forever (the "ship bounces, never crashes
-      -- on a loaded save" bug). The Rust rebuild_sim fix keeps us anchored so we
-      -- normally take the branch above; this catches any residual un-anchor.
-      released = true
-      assembly.setAnchored(node, false)
-      sfx3(SFX.clamp, bx, by, bz, 0.9, 1.0)
-      log("launch clamps released")
-    elseif #events > 0 and events[1].kind == "chute" then
-      -- PARACHUTES: pop them open. They start dragging (see the drag pass
-      -- below) as soon as they're in thick enough air.
-      table.remove(events, 1)
-      chutes_deployed = true
-      sfx3(SFX.chute, bx, by, bz, 0.8, 1.0) -- the canopy cracks open
-      caption("the parachutes crack open")
-      log("parachutes deployed")
-    elseif #events > 0 and events[1].kind == "ring" then
-      -- A BOOSTER RING: every branch in the ring kicks away laterally at
-      -- once (symmetric pairs leave together, so the ship stays balanced).
-      local ev = table.remove(events, 1)
-      for _, g in ipairs(ev.branches) do
-        local parts_nodes = {}
-        for _, child in ipairs(node:children()) do
-          for _, q in ipairs(g.pos) do
-            if math.abs((child.x or 0) - q.x) < 0.05 and math.abs((child.y or 0) - q.y) < 0.05
-              and math.abs((child.z or 0) - q.z) < 0.05 then
-              parts_nodes[#parts_nodes + 1] = child
-              break
-            end
-          end
-        end
-        if #parts_nodes > 0 then
-          drop_branch(g.uid)
-          -- Kick OUTWARD: the branch's radial direction in the vessel frame.
-          local ol = math.sqrt(g.x * g.x + g.z * g.z)
-          local ox, oz = 1, 0
-          if ol > 1e-4 then ox, oz = g.x / ol, g.z / ol end
-          local kx = rx.x * ox + rz.x * oz
-          local ky = rx.y * ox + rz.y * oz
-          local kz = rx.z * ox + rz.z * oz
-          local n_away = #parts_nodes
-          quench(parts_nodes)
-          sfx3(SFX.boosters, bx, by, bz, 0.85, 1.0) -- the separation charge fires
-          caption("the boosters separate")
-          assembly.split(node, parts_nodes, function(stage)
-            local si = assembly.info(stage)
-            if si then
-              -- Mass-scaled Δv: a FLAT impulse gave a heavy booster almost no
-              -- push (Δv = impulse/mass), so close-mounted rings clung to the
-              -- hull and looked stuck. Multiply by mass for a consistent ~4.5
-              -- m/s lateral kick whatever the stage weighs. And nudge the origin
-              -- a hair OUTWARD first to clear the contact the solver would
-              -- otherwise immediately re-close — the actual "won't detach" cause.
-              local dv, m = 4.5, math.max(0.1, si.mass)
-              if si.origin then
-                assembly.teleport(stage, vec3(
-                  si.origin.x + kx * 0.35, si.origin.y + ky * 0.35, si.origin.z + kz * 0.35))
-              end
-              assembly.impulseAt(stage, vec3(kx * dv * m, ky * dv * m, kz * dv * m), si.com)
-              spawnEffect("SepPuff", si.com.x, si.com.y, si.com.z)
-            end
-            log("boosters away: " .. n_away .. " parts")
-          end)
-        end
-      end
+  if input.pressed("space") and elec.control == false then
+    caption("no control — " .. (elec.why or "no signal"))
+  elseif input.pressed("space") then
+    if info.anchored or (launch_mode and not released) then
+      -- The clamps (and the SELF-HEAL for a mid-launch sim rebuild that cleared
+      -- the anchored flag before we ever released — `released` must latch or
+      -- damage stays disarmed forever) live in ONE place, `releaseClamps`,
+      -- which probes call too since a headless run cannot press SPACE.
+      releaseClamps()
     elseif #events > 0 then
-      local dec = table.remove(events, 1) -- an AXIAL cut
-      -- The dropped set is TOPOLOGICAL: the decoupler's whole subtree by the
-      -- attachment tree (pod side stays), including any radial branches bolted
-      -- to the discarded stack — a separate booster stage on the survivor stays.
-      local dep = axial_departing(dec.uid)
-      local parts_nodes = {}
-      for _, child in ipairs(node:children()) do
-        if child_departs_axial(child, dec.uid) then parts_nodes[#parts_nodes + 1] = child end
-      end
-      if #parts_nodes > 0 then
-        drop_departing(dec.uid)
-        -- Events ride away with the parts they act on: an axial cut or a ring
-        -- whose decoupler sat in the discarded subtree leaves; events on the
-        -- surviving pod side stay. Purely by tree membership now.
-        local keep = {}
-        for _, e2 in ipairs(events) do
-          if e2.kind == "axial" then
-            if not dep[e2.uid] then keep[#keep + 1] = e2 end
-          elseif e2.kind == "chute" then
-            keep[#keep + 1] = e2 -- chutes ride the surviving stack
-          else
-            local bs = {}
-            for _, g in ipairs(e2.branches) do
-              if not branch_departs(g.uid, dec.uid) then
-                bs[#bs + 1] = g
-              else
-                drop_branch(g.uid) -- its mount left with the stack
-              end
-            end
-            if #bs > 0 then
-              e2.branches = bs
-              keep[#keep + 1] = e2
-            end
-          end
-        end
-        events = keep
-        local n_away = #parts_nodes
-        quench(parts_nodes)
-        sfx3(SFX.stage, bx, by, bz, 0.9, 1.0) -- the decoupler bangs
-        caption("a stage separates")
-        assembly.split(node, parts_nodes, function(stage)
-          local si = assembly.info(stage)
-          if si then
-            -- Mass-scaled Δv (see the ring case) + a small downward nudge so a
-            -- heavy spent stage actually falls clear of the surviving stack
-            -- instead of riding along in contact.
-            local dv, m = 3.5, math.max(0.1, si.mass)
-            if si.origin then
-              assembly.teleport(stage, vec3(
-                si.origin.x - nx * 0.3, si.origin.y - ny * 0.3, si.origin.z - nz * 0.3))
-            end
-            assembly.impulseAt(stage, vec3(nx * -dv * m, ny * -dv * m, nz * -dv * m), si.com)
-            spawnEffect("SepPuff", si.com.x, si.com.y, si.com.z)
-          end
-          log("stage away: " .. n_away .. " parts")
-        end)
-      end
+      stageNext()
     end
   end
 
@@ -3601,7 +7058,7 @@ function fixedUpdate(node, dt)
     local fb = fd and space.body(fd)
     local fr = fb and math.sqrt((bx - fb.x) ^ 2 + (by - fb.y) ^ 2 + (bz - fb.z) ^ 2) or 0
     flown.alt0 = flown.alt0 or fr
-    flown.air = info.grounded and 0.0 or (flown.air + dt)
+    flown.air = (info.grounded or R2.onWheels) and 0.0 or (flown.air + dt)
     if flown.air >= 1.0 or fr - flown.alt0 > 5.0 then hasFlown = true end
   end
 
@@ -3613,13 +7070,20 @@ function fixedUpdate(node, dt)
     hud_t = time
     local t = {
       warp = warp, warp_cap = warp_cap, warp_why = warp_why,
-      anchored = info.anchored, grounded = info.grounded,
+      anchored = info.anchored, grounded = info.grounded or R2.onWheels,
       ready = assembly_ready(info), parts = #info.parts, parts_total = part_total,
-      twr = (info.mass > 0) and total_thrust / (info.mass * 9.81) or 0,
+      -- TWR is finished below, once the local gravity is known (not 9.81).
+      mass = info.mass,
       fuel_cap = fuel_cap, refueling = refueling,
       ec = elec.charge, ec_cap = elec.cap, ec_gen = elec.gen,
+      ec_net = elec.net or 0, ec_supply = elec.supply or 0, ec_demand = elec.demand or 0,
+      brownout = elec.brownout, sunlit = elec.sunlit, panels = elec.panels or 0,
       comms = elec.comms, link = elec.link, dish_up = DEVICES.comms.on,
-      solar = elec.gen > 0 and DEVICES.solar.on and DEVICES.solar.anim > 0.5,
+      signal = elec.signal or 0, hops = elec.hops or 0, path = elec.path,
+      bandwidth = elec.bandwidth or 0,
+      control = elec.control ~= false, ctl_mode = elec.mode, ctl_why = elec.why,
+      crew = crewAboard == true, probe = elec.probePart ~= nil,
+      solar = (elec.panels or 0) > 0 and (elec.gen or 0) > 0,
       has_gear = #DEVICES.gear.parts > 0, has_rcs = #DEVICES.rcs.parts > 0,
       rcs_on = DEVICES.rcs.on, rcs_blocks = #DEVICES.rcs.parts,
       chute_open = chute_anim,
@@ -3635,6 +7099,7 @@ function fixedUpdate(node, dt)
       t.nose = math.deg(math.asin(math.max(-1, math.min(1,
         (nx * dxr + ny * dyr + nz * dzr) / rlen))))
       t.vorb = math.sqrt(b.mu / rlen)
+      t.g = b.mu / (rlen * rlen)
       t.vesc = t.vorb * 1.41421
       local o = space.elements(node.x, node.y, node.z, node.vx, node.vy, node.vz)
       if o then
@@ -3651,11 +7116,33 @@ function fixedUpdate(node, dt)
     end
     -- The stage stack, in firing order: what each SPACE does, and what burns
     -- after it. Burning now = the live axial stage + every attached booster.
-    local n_act, th_act = 0, 0
+    local n_act, th_act, b_act = 0, 0, 0
     for _, e in ipairs(engines) do
-      if engine_active(e, cut) then n_act, th_act = n_act + 1, th_act + e.thrust end
+      if engine_active(e, cut) then
+        n_act, th_act, b_act = n_act + 1, th_act + e.thrust, b_act + (e.burn or 0)
+      end
     end
     t.eng, t.thrust = n_act, th_act
+    -- The TRUE wet mass (blueprint dry parts + propellant + hold), and what
+    -- the fuel aboard is worth on the engines lit now:
+    -- Δv by Tsiolkovsky, and seconds at full throttle.
+    local fm = fuelMass()
+    local dry_t, wet_t = trueMass()
+    t.fuel_t, t.mass, t.dry = fm, wet_t, dry_t
+    local ft = (fuel > 0) and fm / fuel or 0
+    -- Staged like the builder's TOTAL (equal to the plain Tsiolkovsky figure
+    -- for a single stage); `dv_now` is the whole pool on the engines lit now.
+    t.dv_now = (b_act > 0 and ft > 0 and dry_t > 0)
+      and th_act / (b_act * ft) * math.log(wet_t / dry_t) or 0
+    t.dv = stagedDv()
+    t.burn_s = (b_act > 0) and fuel / b_act or 0
+    -- What the engines are PRODUCING (0 on the clamps, at idle or with dry
+    -- tanks) and the TWR of that, in the local gravity; `twr_max` is the
+    -- full-throttle figure, which is what the builder quotes at the pad.
+    local gl = t.g or 0
+    t.thrust_now = (info.anchored or fuel <= 0) and 0 or th_act * throttle
+    t.twr = (t.mass > 0 and gl > 0) and t.thrust_now / (t.mass * gl) or 0
+    t.twr_max = (t.mass > 0 and gl > 0) and th_act / (t.mass * gl) or 0
     t.stages = {}
     for i, ev in ipairs(events) do
       local st = { kind = ev.kind, eng = 0, kn = 0 }
@@ -3669,6 +7156,8 @@ function fixedUpdate(node, dt)
         end
       elseif ev.kind == "chute" then
         st.n = #ev.uids
+      elseif ev.kind == "fairing" then
+        st.n = 1
       else
         -- The engines this cut uncovers: above it, below the next cut up.
         local above = math.huge
@@ -3692,6 +7181,11 @@ end
 -- (lateUpdate reads post-writeback poses) — drawn from fixedUpdate it floats
 -- a rails-carry beside the hull on any orbiting world.
 function lateUpdate(node, dt)
+  r2Late(node)
+  -- A craft nobody is flying still folds and points what it's told to (the
+  -- Tracking Station, a docked partner's groups) — the piloted one does this in
+  -- its fixed tick.
+  if not piloting and not destroyed and (elec.gen_seen or -1) >= 0 then update_peripherals(node, dt) end
   -- Electrical system runs here (post-writeback): solar charge, comms draw and
   -- the tracker heartbeat. It lives in lateUpdate, not fixedUpdate, purely
   -- because fixedUpdate is at Lua's 60-upvalue ceiling. Runs piloted OR derelict.

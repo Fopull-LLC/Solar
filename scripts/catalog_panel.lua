@@ -36,13 +36,37 @@ end
 -- "Sputter  $150" asked a new player to already know what a Sputter is; the
 -- numbers are the registry's own, so a card can't quote a stat the part lacks.
 local function role(def)
-  if def.thrust then return string.format("engine · thrust %d · %.1f t", def.thrust, def.mass) end
-  if def.fuel then return string.format("fuel tank · %d fuel · %.1f t", def.fuel, def.mass) end
-  if def.kind == "crewed" then return "crew pod — every craft needs one" end
+  -- A part that says what it is for in its own words (builder REG `desc`).
+  if def.desc then return def.desc end
+  -- ve (exhaust velocity) is what Δv is made of: Δv = ve · ln(full / empty).
+  if def.thrust then
+    return def.ve and string.format("engine · %.0f kN · ve %.0f m/s · %.2f t", def.thrust, def.ve, def.mass)
+      or string.format("engine · %.0f kN · %.2f t", def.thrust, def.mass)
+  end
+  -- Full and empty: the propellant is most of a tank's mass.
+  if def.fuel then
+    local ft = def.fuel_t or 0.01
+    return string.format("fuel tank · %d fuel · %.2f t full, %.2f empty",
+      def.fuel, def.mass + def.fuel * ft, def.mass)
+  end
+  if def.kind == "crewed" then return "crew pod — flies anywhere, with you in it" end
+  if def.kind == "probe" then return "probe core — flies with power + a link home" end
+  -- Electronics read from the part's modules (scripts/electronics.lua).
+  for _, m in ipairs(def.mods or {}) do
+    if m.type == "antenna" and (m.power or 0) >= 1000 then
+      -- How far it reaches the ground station (two antennas reach sqrt(P1·P2)).
+      local E = ref("electronics")
+      local home = math.sqrt(m.power * ((E and E.COMMS and E.COMMS.station) or 4e5))
+      local reach = home >= 1e6 and string.format("%.1f Mm", home / 1e6) or string.format("%.0f km", home / 1000)
+      return string.format("%s · home %s%s · −%.2f/s", m.dish and "dish" or "omni", reach,
+        m.relay and " · relay" or "", m.draw or 0)
+    end
+    if m.type == "light" then return string.format("floodlight · −%.2f power/s while lit", m.draw or 0) end
+  end
   if def.chute then return "parachute — slows the landing" end
   if def.cargo then return string.format("cargo hold · carries %d kg", def.cargo) end
-  if def.legs then return "landing legs — stand up on arrival" end
-  if def.solar then return string.format("solar panel · +%d power/s in light", def.gen or 0) end
+  if def.legs then return string.format("landing legs · %.0f kg — stand up on arrival", def.mass * 1000) end
+  if def.solar then return string.format("solar panel · +%.1f power/s in sunlight", def.gen or 0) end
   if def.power then return string.format("battery · stores %d power", def.ec or 0) end
   if def.comms then return "comms dish — tracked from the base" end
   if def.dock then return "docking port — join two craft in flight" end
@@ -74,9 +98,20 @@ local function describe()
     -- at 720 the list overflowed the screen by a card and a half.
     for _, id in ipairs(section.ids) do
       local def = b.partInfo(id)
+      -- The thrust and ve a card quotes are the ones this save's catalogue is
+      -- built with (builder.liveDef) — exactly what the part flies with.
+      def = def and b.liveDef and b.liveDef(id) or def
       if def then   -- an id with no registry entry is skipped, not drawn broken
         local locked = (rs and not rs.isUnlocked(id)) or false
         local price = locked and ((rs and rs.costOf(id)) or 0) or def.cost
+        -- What stands in the way, ON the card: the Skipper used to show $1,250
+        -- and nothing else, though it can't be bought before the Anvil.
+        local needs = locked and rs and rs.blockedBy and rs.blockedBy(id) or nil
+        local armed = locked and b.researchPending and b.researchPending(id) or false
+        local price_text = locked and ("unlock " .. money(price)) or money(price)
+        if armed then price_text = "confirm " .. money(price) .. "?" end
+        local role_text = role(def)
+        if needs then role_text = "locked · " .. needs end
         -- Name left, price right: two runs in a row (a single string padded
         -- with `%-18s` only lined prices up in a monospace font). What the
         -- part is for goes under both, full width, so it never runs into the
@@ -92,11 +127,12 @@ local function describe()
               textSize = 13, textAlign = "start",
               textColor = locked and "#9fb3c2" or "#d1e8fa" },
             { "text", key = "p", w = "fit", h = 16,
-              text = locked and ("unlock " .. money(price)) or money(price),
+              text = price_text,
               textSize = 12, textAlign = "end",
-              textColor = locked and "#ffb852" or "#47dbbd" } },
-          { "text", key = "r", w = "100%", h = 14, text = role(def),
-            textSize = 10.5, textAlign = "start", textColor = "#7f97aa" },
+              textColor = armed and "#ff6b5b" or (locked and "#ffb852" or "#47dbbd") } },
+          { "text", key = "r", w = "100%", h = 14, text = role_text,
+            textSize = 10.5, textAlign = "start",
+            textColor = needs and "#c9a46a" or "#7f97aa" },
           onClicked = function() if b.pick then b.pick(id) end end,
           -- What a locked part needs, on the builder's own hint bar — the one
           -- place every other explanation in this scene appears. Focus says it

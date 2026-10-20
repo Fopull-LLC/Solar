@@ -171,6 +171,10 @@ function clicked(node)
   elseif kind == "recover" then
     if v.recoverCraft then v.recoverCraft() end
   elseif kind == "switch" then
+    -- The same step as `]` (scripts/vessel_switcher.lua): the controls move,
+    -- the crew stay in their seat.
+    local sw = findScript("vessel_switcher")
+    if sw and sw.step then sw.step(1) return end
     -- Step to the craft after the one being flown, wrapping around.
     local craft = crewedCraft()
     if #craft < 2 then return end

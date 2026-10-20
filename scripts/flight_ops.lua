@@ -39,6 +39,24 @@
 -- would do. While flying, the card is down — the cockpit owns the screen and
 -- the contract's goals are on the objectives card.
 --
+-- ABORT FLIGHT (ESC ▸ pause menu) is the fourth, and it is the one that is
+-- ALWAYS there. END FLIGHT needs the craft down and stopped, so a craft that
+-- will never be down — out of fuel in an orbit, or leaving the world entirely —
+-- had no way to end at all. Abort brings the crew home from anywhere for a fee
+-- (pay what you can, like the pickup), and the craft stays where it is: still
+-- flying its orbit, still on the Tracking Station's board.
+--
+-- THE FLEET. A craft you leave behind is written to the save (`fleet.craft`)
+-- and rebuilt where you left it the next time the world loads — which is what
+-- makes "fly back out to it whenever you like" true. Before this, any parked
+-- craft was gone the moment the scene changed: one trip to the Vehicle Assembly
+-- and the board was empty. The Tracking Station lists the fleet and TAKES
+-- CONTROL of any crewed craft on it (`takeControlOf`).
+--
+-- THE LAUNCH WORLD. The builder has no planets in its scene, so the base
+-- world's radius, gravity and sphere of influence are published from here
+-- (`launch.world`) for it to rate the engines and quote TWR against.
+--
 --   ENTER      the end-of-flight action (whichever one applies). Not R: R is
 --              the RCS toggle, and a key that arms thrusters half the time is
 --              not a key you press to finish. RECOVER is a HOLD: it scraps the
@@ -77,12 +95,27 @@ defaults = {
   -- fee proportional to a solar system is a fee nobody can pay.
   --@range 0 100000
   pickup_max = 6000.0,
+
+  --@header Abort flight
+  -- Bringing the crew home from a flight that cannot end on its own: the
+  -- call-out, plus the same per-km as a pickup, capped. Charged as far as the
+  -- account goes — the rest is written off, never refused.
+  --@range 0 5000
+  abort_base = 400.0,
+  --@range 0 100000
+  abort_max = 2500.0,
+  -- Taking control of a craft with no live comms link means flying a crew out
+  -- to it: this much per km from the base, on top of the call-out.
+  --@range 0 5000
+  transfer_base = 150.0,
 }
 
 -- Published for the HUD / smoke harness.
 mode = nil        -- nil | "prelaunch" | "flying" | "recover" | "leave" | "pickup"
 value = 0         -- what a recovery would pay, right now
 fee = 0           -- what a pickup would cost, right now
+abortArmedAt = nil  -- the first press of Abort flight, waiting for its confirm
+ABORT_CONFIRM = 5.0
 
 local el
 local msg, msg_t = "", -100
@@ -269,6 +302,15 @@ end
 -- NOT written off: it stays a parked craft you can fly home later, which is the
 -- difference between "I left it there" and "I lost it".
 local function do_leave(st)
+  -- A probe flown from the ground: there's nobody to bring home. Letting go of
+  -- it is all END FLIGHT means; the controls go back to the crew.
+  if st.v.crewAboard == false and st.v.releaseControl then
+    st.v.releaseControl()
+    switchToCrew()
+    log("FLIGHT ENDED — " .. tostring(st.v.craftName or "the probe") .. " stays where it is")
+    msg, msg_t = "", -100
+    return true
+  end
   local hx, hy, hz = crew_home()
   if not hx then
     msg, msg_t = "no base to return to yet", time
@@ -332,13 +374,674 @@ local function do_pickup(st)
   return true
 end
 
+-- ── ABORT FLIGHT ────────────────────────────────────────────────────────────
+
+-- The craft's distance from the base, or nil when it is not on the base's world
+-- (a solar orbit, a moon) — which prices at the cap.
+local function craft_distance(v)
+  local cx, cy, cz, body = base_world()
+  if not (cx and v and v.node and v.node.valid) then return nil end
+  local n = v.node
+  if space.dominant and space.dominant(n.x, n.y, n.z) ~= body.name then return nil end
+  return len(n.x - cx, n.y - cy, n.z - cz)
+end
+
+function abortFee(dist)
+  if not dist then return math.floor(params.abort_max) end
+  return math.floor(math.min(params.abort_max,
+    params.abort_base + (dist / 1000.0) * params.pickup_per_km))
+end
+
+-- What Abort would do right now, or nil when there is nothing to abort (no
+-- craft in flight and nobody stranded, or no base to come home to).
+--   { kind = "abort", v, fee, dist }   a crewed flight, anywhere
+--   { kind = "pickup", fee, dist }     on foot, far from home (same as the card)
+function abortQuote()
+  if not base_world() then return nil end
+  local v = piloted()
+  if v then
+    -- Never flown: you are standing on your own pad. F gets you out.
+    if v.hasFlown == false then return nil end
+    -- A probe flown from the ground has no crew to fetch: [ ] goes back to them.
+    if v.crewAboard == false then return nil end
+    local d = craft_distance(v)
+    return { kind = "abort", v = v, dist = d, fee = abortFee(d) }
+  end
+  local st = survey()
+  if st and st.mode == "pickup" then return { kind = "pickup", dist = st.dist, fee = st.fee } end
+  return nil
+end
+
+-- Charge what can be charged; never refuse. Returns what was taken.
+local function bill(amount, why)
+  local co = ref("company")
+  if not co or amount <= 0 then return 0 end
+  if co.spend(amount, why) then return amount end
+  local b = co.balance and co.balance() or 0
+  if b > 0 and co.spend(b, why .. " (part paid)") then return b end
+  return 0
+end
+
+function abortFlight()
+  local q = abortQuote()
+  abortArmedAt = nil
+  if not q then return false end
+  if q.kind == "pickup" then return endFlight() end
+  local hx, hy, hz = crew_home()
+  if not hx then
+    msg, msg_t = "no base to return to yet", time
+    return false
+  end
+  local name = (q.v.craftName ~= "" and q.v.craftName) or "the craft"
+  -- Throttle off and out of the seat; the craft keeps flying whatever it was
+  -- flying. The fleet sync below keeps it on the board.
+  q.v.standDown(q.v.node, hx, hy, hz, 0, 0, 0)
+  local paid = bill(q.fee, "flight abort — crew recovery")
+  local co = ref("company")
+  log(string.format("FLIGHT ABORTED — crew home at the base; %s left where it is. Billed %s%s",
+    name, co and co.money(paid) or paid,
+    paid < q.fee and string.format(" of %s (the rest written off)", co and co.money(q.fee) or q.fee) or ""))
+  msg, msg_t = "", -100
+  return true
+end
+
+-- For the pause menu: its row text, or nil when there is nothing to abort.
+function abortLabel()
+  local q = abortQuote()
+  if not q then abortArmedAt = nil return nil end
+  local co = ref("company")
+  local fee = co and co.money(q.fee) or ("$" .. q.fee)
+  local armed = abortArmedAt and time - abortArmedAt <= ABORT_CONFIRM
+  if q.kind == "pickup" then
+    return armed and ("Confirm: call the shuttle home — " .. fee)
+      or ("Call for pickup — return the crew to base (" .. fee .. ")")
+  end
+  return armed and ("Confirm abort — the craft stays where it is, crew home — " .. fee)
+    or ("Abort flight — return the crew to base (" .. fee .. ")")
+end
+
+-- The pause menu's click: the first arms, the second (within ABORT_CONFIRM s)
+-- fires. Returns true when the crew is home.
+function abortClick()
+  if not abortQuote() then return false end
+  if abortArmedAt and time - abortArmedAt <= ABORT_CONFIRM then
+    return abortFlight()
+  end
+  abortArmedAt = time
+  return false
+end
+
+-- ── THE FLEET ───────────────────────────────────────────────────────────────
+--
+-- save `fleet.craft` = { [fid] = record }, one per craft that has flown:
+--   name, body, x y z (origin, body-relative), vx vy vz (body-relative),
+--   pitch yaw roll, landed, fuel, charge, parts = { blueprint records }
+--
+-- Kept current once a second from the live craft; a craft that disappears
+-- while the scene is running (recovered, destroyed, docked into another) leaves
+-- the record with it. A record with no live craft at scene start is a craft to
+-- rebuild.
+local FLEET_KEY = "fleet.craft"
+local fleet_live = {}      -- node id → fid, for craft alive in this scene
+local fleet_born = {}      -- node id → when we rebuilt it (its controller starts later)
+local fleet_t = -100
+local restore = nil        -- fid → { tries, wait } while rebuilding
+
+local function fleet()
+  local f = save.get(FLEET_KEY)
+  return type(f) == "table" and f or {}
+end
+
+local function next_fid()
+  local n = (save.get("fleet.next") or 0) + 1
+  save.set("fleet.next", n)
+  return "c" .. n
+end
+
+-- A live craft as a record. nil when it can't be described (no manifest, no
+-- body under it, mid-assembly).
+local function describe_craft(v)
+  local n = v.node
+  if not (n and n.valid and (v.fleetParts or v.dockManifest)) then return nil end
+  -- fleetParts is the controller's own part list; dockManifest (matched by
+  -- child position, for docking) is the fallback for an older controller.
+  local man
+  if v.fleetParts then
+    local fp = v.fleetParts()
+    if fp then
+      man = { name = n.name, parts = {}, fuel = fp.fuel, charge = fp.charge, groups = fp.groups,
+              probe = fp.probe, crew = fp.crew }
+      for i, d in ipairs(fp.parts) do man.parts[i] = { rec = d } end
+    end
+  else
+    man = v.dockManifest(nil)
+  end
+  if not (man and man.parts and #man.parts > 0) then return nil end
+  local info = assembly and assembly.info and assembly.info(n)
+  local ox, oy, oz = n.x, n.y, n.z
+  if info and info.origin then ox, oy, oz = info.origin.x, info.origin.y, info.origin.z end
+  local bname = space.dominant(ox, oy, oz)
+  local b = bname and space.body(bname)
+  if not b then return nil end
+  -- Deep copies: a part's live state (`st` — a battery's charge, a panel's
+  -- fold) must be the record's own, not shared with the craft still flying.
+  local function dcopy(t)
+    if type(t) ~= "table" then return t end
+    local o = {}
+    for k, val in pairs(t) do o[k] = dcopy(val) end
+    return o
+  end
+  -- ...and save.set holds four tables deep at most, which a fleet record
+  -- already is at a part's fields: modules and state go in as strings.
+  local E = ref("electronics")
+  local recs = {}
+  for i, p in ipairs(man.parts) do
+    if E and E.packRecord then recs[i] = E.packRecord(p.rec or {})
+    else
+      local r = {}
+      for k, val in pairs(p.rec or {}) do if type(val) ~= "table" then r[k] = val end end
+      recs[i] = r
+    end
+  end
+  -- Velocity in the dominant body's frame (what the HUD and space.elements
+  -- read). assembly.info's, when there is one: for a craft coasting in the
+  -- distant-craft LOD it is the rails velocity (floptle/0402), while the
+  -- node's own vx/vy/vz read 0 there (0.117.0-rc2).
+  local vx, vy, vz = n.vx or 0, n.vy or 0, n.vz or 0
+  if info and info.vel then vx, vy, vz = info.vel.x, info.vel.y, info.vel.z end
+  -- LANDED means down and stopped. `grounded` alone is not enough: a craft
+  -- coasting unpiloted in orbit was reported grounded once nobody was flying
+  -- it, and a record that says "landed" is rebuilt on the ground.
+  -- So "landed" also needs the ground to be near: within the world's relief
+  -- band of its surface, on a body that has a surface. (A craft in the
+  -- engine's distant-craft LOD reports its real rails state since 0.117,
+  -- floptle/0402: coasting, not grounded, at its orbital velocity.)
+  local ralt = len(ox - b.x, oy - b.y, oz - b.z) - b.radius
+  -- (a rover stands on its tyre bodies, not its hull: r2OnWheels)
+  local on_ground = info and (info.grounded or (v.r2OnWheels and v.r2OnWheels()))
+  local landed = on_ground and math.sqrt(vx * vx + vy * vy + vz * vz) < 1.5
+    and (b.soi or -1) > 0 and ralt < math.max(30, b.radius * 0.25)
+  if landed and space.elements then
+    local o = space.elements(ox, oy, oz, vx, vy, vz)
+    if o and o.periapsis and o.periapsis > b.radius then landed = false end
+  end
+  return {
+    -- (the craft's own name: node names can't be written from Lua)
+    name = (v.craftName ~= nil and v.craftName ~= "Vessel" and v.craftName) or man.name or "Vessel", body = bname,
+    x = ox - b.x, y = oy - b.y, z = oz - b.z,
+    vx = vx, vy = vy, vz = vz,
+    pitch = n.pitch or 0, yaw = n.yaw or 0, roll = n.roll or 0,
+    landed = landed and true or false,
+    fuel = man.fuel or 0, charge = man.charge or 0,
+    groups = dcopy(man.groups), probe = man.probe == true, crew = man.crew == true,
+    stime = space.time and space.time() or 0,
+    pod = (function()
+      for _, r in ipairs(recs) do if r.kind == "crewed" or r.id == "pod" then return true end end
+      return false
+    end)(),
+    comms = (function()
+      for _, r in ipairs(recs) do if (r.comms or 0) == 1 then return true end end
+      return false
+    end)(),
+    parts = recs, t = time,
+  }
+end
+
+function fleetSync()
+  local f = fleet()
+  local alive = {}
+  for _, v in ipairs(findScripts("vessel_controller")) do
+    local n = v.node
+    if n and n.valid and v.hasFlown ~= false and not v.destroyed then
+      local fid = fleet_live[n.id]
+      local rec = describe_craft(v)
+      if rec then
+        if not fid then fid = next_fid(); fleet_live[n.id] = fid end
+        rec.fid = fid
+        f[fid] = rec
+      end
+      if fid then alive[fid] = true end
+    end
+  end
+  -- A craft that was alive in this scene and isn't now is gone for good.
+  for id, fid in pairs(fleet_live) do
+    if not alive[fid] and time - (fleet_born[id] or -100) > 10.0 then
+      f[fid] = nil
+      fleet_live[id] = nil
+    end
+  end
+  save.set(FLEET_KEY, f)
+  return f
+end
+
+-- Is this record's craft alive in the scene? → its controller handle.
+local function live_of(fid)
+  for _, v in ipairs(findScripts("vessel_controller")) do
+    if v.node and v.node.valid and fleet_live[v.node.id] == fid then return v end
+  end
+  return nil
+end
+
+-- The vessel frame from Euler angles (YXZ — the same as vessel_controller).
+local function basis_of(pitch, yaw, roll)
+  local cy, sy = math.cos(yaw), math.sin(yaw)
+  local cx, sx = math.cos(pitch), math.sin(pitch)
+  local cz, sz = math.cos(roll), math.sin(roll)
+  return { cy * cz + sy * sx * sz, cx * sz, -sy * cz + cy * sx * sz },
+         { -cy * sz + sy * sx * cz, cx * cz, sy * sz + cy * sx * cz },
+         { sy * cx, -sx, cy * cx }
+end
+
+-- The parachute canister was redrawn to sit on the pod's collar: 0.61 → 0.34 m
+-- tall, 0.28 → 0.22 m half-wide (builder.lua refit_chutes does the same for a
+-- saved build). A craft recorded before keeps the old centre, which would
+-- leave the new canister floating above its mount: sit it back down.
+local CHUTE_H, CHUTE_R = 0.34, 0.22
+local function refit_chutes(list)
+  local by, kids = {}, {}
+  for _, d in pairs(list) do
+    by[d.uid] = d
+    local pu = d.parent or 0
+    if pu ~= 0 then kids[pu] = kids[pu] or {}; kids[pu][#kids[pu] + 1] = d end
+  end
+  local function move(d, dx, dy, dz, root)
+    d.x, d.y, d.z = (d.x or 0) + dx, (d.y or 0) + dy, (d.z or 0) + dz
+    for _, k in ipairs(kids[d.uid] or {}) do
+      if not (root and k.att == "bottom") then move(k, dx, dy, dz, false) end
+    end
+  end
+  for _, d in pairs(list) do
+    if (d.chute or 0) == 1 and d.prefab == "PartChute" and d.h and math.abs(d.h - CHUTE_H) > 1e-3 then
+      local par = by[d.parent or 0]
+      if d.att == "radial" and par then
+        local ox, oz = (d.x or 0) - (par.x or 0), (d.z or 0) - (par.z or 0)
+        local l = math.sqrt(ox * ox + oz * oz)
+        local pull = (d.rx or 0.28) - CHUTE_R
+        if l > 1e-3 then move(d, -ox / l * pull, 0, -oz / l * pull, true) end
+      else
+        -- down along the part's own up (YXZ, as everywhere in this project)
+        local cy, sy = math.cos(d.yaw or 0), math.sin(d.yaw or 0)
+        local cx, sx = math.cos(d.pitch or 0), math.sin(d.pitch or 0)
+        local cz, sz = math.cos(d.roll or 0), math.sin(d.roll or 0)
+        local dh = (d.h - CHUTE_H) * 0.5
+        move(d, -(-cy * sz + sy * sx * cz) * dh, -(cx * cz) * dh, -(sy * sz + cy * sx * cz) * dh, true)
+      end
+      d.h, d.rx, d.rz = CHUTE_H, CHUTE_R, CHUTE_R
+    end
+  end
+end
+
+-- Rebuild one record as a live craft. Returns true once the spawn is under way.
+local function respawn(fid, rec)
+  local b = space.body(rec.body)
+  if not (b and spawn and assembly) then return false end
+  if rec.parts then refit_chutes(rec.parts) end
+  local wx, wy, wz = b.x + rec.x, b.y + rec.y, b.z + rec.z
+  if rec.landed then
+    -- The ground has to be there first, or a landed craft falls through a
+    -- world that hasn't streamed in yet (the launch pad waits the same way).
+    local ux, uy, uz = rec.x, rec.y, rec.z
+    local ul = len(ux, uy, uz)
+    if ul < 1e-3 then return false end
+    ux, uy, uz = ux / ul, uy / ul, uz / ul
+    if terrain and terrain.warm then terrain.warm(rec.body) end
+    local hit = raycast(wx + ux * 40, wy + uy * 40, wz + uz * 40, -ux, -uy, -uz, 120.0)
+    if not hit then return false end
+    -- Set down a hand's width above where it stood.
+    wx, wy, wz = wx + ux * 0.25, wy + uy * 0.25, wz + uz * 0.25
+  end
+  -- In flight, the record is carried along its conic to NOW: where the craft
+  -- has got to since it was written, and how fast it is going there.
+  local fvx, fvy, fvz = rec.vx or 0, rec.vy or 0, rec.vz or 0
+  if not rec.landed and space.propagate and space.time and rec.stime and (b.mu or 0) > 0 then
+    local dt = space.time() - rec.stime
+    if dt > 0 and dt < 1e7 then
+      local px, py, pz, pvx, pvy, pvz = space.propagate(rec.x, rec.y, rec.z, fvx, fvy, fvz, b.mu, dt)
+      if pvx then
+        wx, wy, wz = b.x + px, b.y + py, b.z + pz
+        fvx, fvy, fvz = pvx, pvy, pvz
+      end
+    end
+  end
+  local rx, up, rz = basis_of(rec.pitch or 0, rec.yaw or 0, rec.roll or 0)
+  local total, landed = #rec.parts, 0
+  spawn("Vessel", vec3(wx, wy, wz), function(v)
+    v:setAngles(rec.yaw or 0, rec.pitch or 0, rec.roll or 0)
+    v.name = rec.name
+    fleet_live[v.id] = fid
+    fleet_born[v.id] = time
+    -- vessel_controller's start reads this (the undock handoff): the craft
+    -- wakes with these parts, this fuel and this charge, not the shipyard's.
+    -- In flight, the velocity rides in the handoff too: the craft's controller
+    -- gives it once its parts weigh what they carry (vessel_controller
+    -- massSync). Pushed any earlier, the push is sized for the prefabs' dry
+    -- masses and lands on the fuelled craft — a 44 m/s orbit restored at 32,
+    -- and spun up, because the centre of mass moved under it.
+    save.set("dock.handoff." .. tostring(v.id or 0),
+      { parts = rec.parts, fuel = rec.fuel, charge = rec.charge, lockout = 2.0, groups = rec.groups,
+        crew = rec.crew, name = rec.name,
+        vel = (not rec.landed) and { x = fvx, y = fvy, z = fvz } or nil })
+    for _, d in ipairs(rec.parts) do
+      local px = wx + rx[1] * d.x + up[1] * d.y + rz[1] * d.z
+      local py = wy + rx[2] * d.x + up[2] * d.y + rz[2] * d.z
+      local pz = wz + rx[3] * d.x + up[3] * d.y + rz[3] * d.z
+      spawn(d.prefab, vec3(px, py, pz), function(part)
+        part:setAngles(d.yaw or 0, d.pitch or 0, d.roll or 0)
+        landed = landed + 1
+        if landed == total then
+          -- Back on its orbit: a spawned compound starts at rest in its body's
+          -- frame, and the record's velocity (in that frame) is the handoff's
+          -- `vel`, which the controller pushes once (see above). A push also
+          -- wakes a craft the distant-craft LOD had taken, and the LOD then
+          -- carries it on its rails at its real velocity (floptle/0402): no
+          -- keep-alive hold, no top-up over frames.
+          assembly.rebuild(v)
+          log(string.format("fleet: %s is back where you left it (%s, %s)", rec.name,
+            rec.body, rec.landed and "landed" or "in flight"))
+        end
+      end, v)
+    end
+  end)
+  return true
+end
+
+local function fleet_restore()
+  local gm = ref("game_manager")
+  if gm and gm.loading then return end
+  -- A launch is waiting to seat the crew: the FIRST vessel_controller to start
+  -- takes that handoff, so nothing of ours may start before the new rocket.
+  if (save.get("shipyard.pilot") or 0) == 1 or (save.get("shipyard.launch") or 0) == 1 then return end
+  if not restore then
+    restore = {}
+    local alive = {}
+    for _, fid in pairs(fleet_live) do alive[fid] = true end
+    for fid, rec in pairs(fleet()) do
+      if not alive[fid] and type(rec) == "table" and rec.parts then
+        restore[fid] = { tries = 0 }
+      end
+    end
+  end
+  local f = fleet()
+  for fid, st in pairs(restore) do
+    local rec = f[fid]
+    if not rec then
+      restore[fid] = nil
+    elseif respawn(fid, rec) then
+      restore[fid] = nil
+    else
+      st.tries = st.tries + 1
+      if st.tries > 3600 then
+        restore[fid] = nil
+        log("fleet: " .. tostring(rec.name) .. " could not be put back — its ground never loaded")
+      end
+    end
+  end
+end
+
+-- Does this craft have a live link home? (the comms.ships heartbeat a powered,
+-- deployed dish posts; vessel_controller's tracker_heartbeat)
+local function linked(v)
+  -- The comms network's answer (scripts/comms.lua): a powered antenna with a
+  -- path home, relays included.
+  local net = ref("comms")
+  if net and net.statusOf and v and v.node then
+    local s = net.statusOf(v.node.id)
+    return s ~= nil and s.connected == true, s
+  end
+  local ships = save.get("comms.ships")
+  if not (v and v.node and type(ships) == "table") then return false end
+  local s = ships["v" .. tostring(v.node.id or 0)]
+  -- (the registry outlives the scene; an entry from an earlier session can
+  -- carry a node id that has since been reused)
+  return type(s) == "table" and s.name == v.node.name
+end
+
+-- Fleet records with no live craft in the scene (not rebuilt yet, or waiting
+-- for their ground): where they are in the world now, for the comms network.
+function fleetOffline()
+  local out = {}
+  for fid, rec in pairs(fleet()) do
+    if type(rec) == "table" and not live_of(fid) then
+      local b = rec.body and space.body(rec.body)
+      if b then
+        out[#out + 1] = { fid = fid, name = rec.name, parts = rec.parts, charge = rec.charge,
+                          wx = b.x + (rec.x or 0), wy = b.y + (rec.y or 0), wz = b.z + (rec.z or 0) }
+      end
+    end
+  end
+  return out
+end
+
+-- What the Tracking Station shows: every craft in the fleet, live or waiting
+-- to be rebuilt. Sorted by name so rows don't jump between refreshes.
+function fleetList()
+  local out = {}
+  local E = ref("electronics")
+  for fid, rec in pairs(fleet()) do
+    if type(rec) == "table" then
+      local v = live_of(fid)
+      local link, ls = linked(v)
+      if not v then
+        -- off the scene: the network solved it from its record
+        local net = ref("comms")
+        ls = net and net.statusOf and net.statusOf("f:" .. tostring(fid)) or nil
+        link = ls ~= nil and ls.connected == true
+      end
+      local e = { fid = fid, name = rec.name or "Vessel", body = rec.body, pod = rec.pod,
+                  comms = rec.comms, live = v ~= nil, piloted = v and v.piloting or false,
+                  landed = rec.landed, link = link,
+                  probe = rec.probe == true, crew = (v and v.crewAboard) or false,
+                  nodeId = v and v.node and v.node.id or nil,
+                  signal = ls and ls.strength or 0, hops = ls and ls.hops or 0,
+                  path = ls and ls.names or nil }
+      -- POWER: the batteries' charge as the records hold it (each battery's
+      -- own, synced once a second), or the live bus for a craft in the scene.
+      -- (a saved record holds each part's state as a string: decode it, never
+      -- index it — `("…").charge` is nil, which once read as "full")
+      local cap, charge, core_off = 0, 0, false
+      if E then
+        for _, d in ipairs(rec.parts or {}) do
+          local st = (type(d.st) == "string" and E.decodeState(d.st)) or (type(d.st) == "table" and d.st) or {}
+          local m = E.modOf(d, "battery")
+          if m then
+            cap = cap + (m.ec or 0)
+            charge = charge + math.max(0, math.min(m.ec or 0, st.charge or (m.ec or 0)))
+          end
+          if E.modOf(d, "command") and st.hibernate then core_off = true end
+        end
+      end
+      e.linkWhy = ls and ls.why or nil
+      if v and v.controlState then
+        -- a craft in the scene answers for itself, live
+        local cs = v.controlState()
+        e.control, e.why, e.crew = cs.can, cs.why, cs.crew
+        if cs.cap then cap, charge = cs.cap, cs.charge or charge end
+        e.linkWhy = cs.linkWhy or e.linkWhy
+      elseif e.probe then
+        -- a saved craft off the scene: the same rules, from its record
+        if core_off then e.control, e.why = false, "PROBE CORE OFF — hibernating"
+        elseif cap > 0 and charge <= 0 then e.control, e.why = false, "NO POWER — the batteries are flat"
+        elseif not link then e.control, e.why = false, "NO SIGNAL — " .. (e.linkWhy or "no path home")
+        else e.control = true end
+      end
+      e.cap, e.charge = cap, charge
+      local b = rec.body and space.body(rec.body)
+      if b then
+        e.alt = len(rec.x, rec.y, rec.z) - b.radius
+        if not rec.landed and space.elements then
+          local o = space.elements(b.x + rec.x, b.y + rec.y, b.z + rec.z, rec.vx, rec.vy, rec.vz)
+          if o then
+            e.pe = o.periapsis and (o.periapsis - b.radius) or nil
+            e.ap = o.apoapsis and (o.apoapsis - b.radius) or nil
+            e.escaping = o.apoapsis == nil
+          end
+        end
+      end
+      if e.piloted then e.status = e.crew and "flying — you're aboard" or "flying — remote"
+      elseif rec.landed then e.status = "landed"
+      elseif e.escaping then e.status = "escaping"
+      elseif e.pe and e.pe > 0 then e.status = "in orbit"
+      else e.status = "in flight" end
+      e.dist = (function()
+        local cx, cy, cz, hb = base_world()
+        if not (cx and b and hb.name == b.name) then return nil end
+        return len(b.x + rec.x - cx, b.y + rec.y - cy, b.z + rec.z - cz)
+      end)()
+      e.home = e.landed and e.dist ~= nil and e.dist <= params.home_range
+      e.fee = (e.link or not e.pod or e.crew) and 0
+        or math.floor(math.min(params.abort_max, params.transfer_base
+          + ((e.dist or 1e6) / 1000.0) * params.pickup_per_km))
+      out[#out + 1] = e
+    end
+  end
+  table.sort(out, function(a, b) return a.name < b.name or (a.name == b.name and a.fid < b.fid) end)
+  return out
+end
+
+local function entry(fid)
+  for _, x in ipairs(fleetList()) do if x.fid == fid then return x end end
+  return nil
+end
+
+-- SWITCHING. A craft nobody was flying has been coasting in the engine's
+-- distant-craft LOD, which carries it on its rails and reports that state
+-- (floptle/0402), so taking its controls needs nothing more than taking them:
+-- the first push (throttle, SAS, RCS) wakes it at the velocity it has.
+
+-- TAKE CONTROL from the Tracking Station.
+--   a PROBE (no crew pod): flown from here, over its link — free; whether it
+--     answers is its link and power (it can still be selected to look at)
+--   a CREWED craft: the crew goes to it. Free over a live comms link (the dish
+--     is the remote control); otherwise a shuttle flies them out, and that is
+--     billed — and refused if the account can't cover it.
+function takeControlOf(fid)
+  local e = entry(fid)
+  if not e then return false, "no such craft" end
+  local v = live_of(fid)
+  if not v then return false, "still being put back on " .. tostring(e.body) end
+  if v.piloting then return false, "you're already flying it" end
+  fleetSync()   -- the record is the truth we fall back on: make it current first
+  if not e.pod or e.crew then
+    if not (e.probe or e.crew) then return false, "no command part aboard — it can't be flown" end
+    if not (v.remoteControl and v.remoteControl()) then return false, "it would not answer" end
+    log(string.format("TAKE CONTROL — %s (%s)", e.name, e.crew and "crew aboard" or "remote, over the comms network"))
+    return true, e.name
+  end
+  local co = ref("company")
+  if e.fee > 0 then
+    if co and co.afford and not co.afford(e.fee) then
+      return false, "the shuttle out costs " .. co.money(e.fee) .. " — more than the balance"
+    end
+  end
+  if not (v.takeControl and v.takeControl()) then return false, "it would not accept a pilot" end
+  if e.fee > 0 then bill(e.fee, "crew transfer to " .. e.name) end
+  log(string.format("TAKE CONTROL — %s%s", e.name,
+    e.fee > 0 and (" (crew transfer " .. (co and co.money(e.fee) or e.fee) .. ")")
+      or " (remote, over the comms link)"))
+  return true, e.name
+end
+
+-- Switch to a LIVE craft by its controller (the in-flight [ ] switcher): the
+-- crew stay where they are; a crewed craft whose crew is elsewhere is looked
+-- at, not flown (its controls read NO CREW).
+function switchToVessel(v)
+  if not (v and v.node and v.node.valid and v.remoteControl) then return false end
+  fleetSync()
+  if not v.remoteControl() then return false end
+  return true
+end
+
+-- Back to the crew: whatever you're flying is let go (it keeps coasting or
+-- sitting where it is). If the crew is in a craft's seat, that craft is it.
+function switchToCrew()
+  fleetSync()
+  local seat = nil
+  for _, v in ipairs(findScripts("vessel_controller")) do
+    if v.crewAboard and v.node and v.node.valid then seat = v end
+  end
+  if seat then
+    if not seat.piloting and seat.remoteControl then seat.remoteControl() end
+    return true, seat
+  end
+  for _, v in ipairs(findScripts("vessel_controller")) do
+    if v.piloting and v.releaseControl then v.releaseControl() end
+  end
+  local astro = find("Astronaut")
+  if astro then astro.visible = true end
+  return true, nil
+end
+
+-- RECOVER from the Tracking Station: a craft landed at home goes to the crane
+-- (the same recovery as landing and holding ENTER). Anywhere else, no.
+function recoverFleet(fid)
+  local e = entry(fid)
+  if not e then return false, "no such craft" end
+  local v = live_of(fid)
+  if not v then return false, "not back in the scene yet" end
+  if not (v.recoverReady and v.recoverCraft) then return false, "it can't be recovered" end
+  local ok, why = v.recoverReady()
+  if not ok then return false, why end
+  v.recoverCraft()
+  local fx = ref("sfx"); if fx and fx.flightEnded then fx.flightEnded("recover") end
+  return true
+end
+
+-- END FLIGHT from the Tracking Station: the craft is written off — gone from
+-- the world and from the board, no refund (KSP's "terminate"). Never the one
+-- the crew is sitting in.
+function terminateFleet(fid)
+  local e = entry(fid)
+  if not e then return false, "no such craft" end
+  if e.crew then return false, "the crew is aboard — bring them home first" end
+  local v = live_of(fid)
+  local f = fleet()
+  f[fid] = nil
+  save.set(FLEET_KEY, f)
+  if v and v.node and v.node.valid then
+    if v.piloting and v.releaseControl then v.releaseControl() end
+    for id, x in pairs(fleet_live) do if x == fid then fleet_live[id] = nil end end
+    destroy(v.node)
+  end
+  if restore then restore[fid] = nil end
+  log("FLIGHT ENDED — " .. tostring(e.name) .. " written off")
+  return true
+end
+
+-- RENAME: the craft's node and its record.
+function renameFleet(fid, name)
+  name = tostring(name or ""):gsub("^%s+", ""):gsub("%s+$", "")
+  if name == "" then return false, "a craft needs a name" end
+  if #name > 32 then name = name:sub(1, 32) end
+  local f = fleet()
+  if not f[fid] then return false, "no such craft" end
+  f[fid].name = name
+  save.set(FLEET_KEY, f)
+  local v = live_of(fid)
+  if v and v.renamed then v.renamed(name) end
+  return true
+end
+
+-- The controller of a fleet craft that's in the scene (for the map's focus).
+function liveOf(fid) return live_of(fid) end
+
+-- Look at the saved fleet again and rebuild anything not in the scene (the
+-- restore list is otherwise drawn up once per scene load). For a record
+-- written from outside the flight: a probe, a future "rescue" contract.
+function fleetRescan() restore = nil end
+
 -- Global so a button (or the harness) can fire it as well as the key.
+-- The way out that worked gets its sound (sfx.lua): only once it has.
+local function sounded(how, ok, ...)
+  if ok then local fx = ref("sfx"); if fx and fx.flightEnded then fx.flightEnded(how) end end
+  return ok, ...
+end
+
 function endFlight()
   local st = survey()
   if not st or st.mode == "flying" or st.mode == "prelaunch" then return false end
-  if st.mode == "recover" then return do_recover(st) end
-  if st.mode == "pickup" then return do_pickup(st) end
-  return do_leave(st)
+  if st.mode == "recover" then return sounded("recover", do_recover(st)) end
+  if st.mode == "pickup" then return sounded("pickup", do_pickup(st)) end
+  return sounded("leave", do_leave(st))
 end
 
 -- ── the card ────────────────────────────────────────────────────────────────
@@ -407,6 +1110,12 @@ local function describe(st)
       -- printing a distance of nil: this is the thrown-clear-of-a-breakup case.
       row("where", "hud/where", "› off the map — no world beneath you")
     end
+  elseif st.v and st.v.crewAboard == false then
+    row("label", "hud/label", "DOWN")
+    row("task", "hud/task", "[ENTER]   END FLIGHT — leave the probe here")
+    row("hint", "hud/hint",
+      "It stays exactly where it is, on the Tracking Station's board, and you can fly it\n" ..
+      "again from there while it has a link. The controls go back to the crew.", true)
   else
     row("label", "hud/label", "DOWN")
     row("task", "hud/task", "[ENTER]   END FLIGHT — leave the craft here")
@@ -422,7 +1131,7 @@ local function describe(st)
   if msg ~= "" and time - msg_t < 5.0 then
     row("msg", "hud/where", "» " .. msg, true)
   end
-  if st.mode == "recover" or st.mode == "leave" then
+  if (st.mode == "recover" or st.mode == "leave") and not (st.v and st.v.crewAboard == false) then
     row("eva", "hud/hint", "[F] step out and walk around instead")
   end
 
@@ -436,8 +1145,87 @@ function start(node)
   if el then el.visible = false end
 end
 
+-- ── THE PAD NO LONGER RE-RATES ──────────────────────────────────────────────
+--
+-- This used to re-solve a blueprint's burn rate at the pad so the starter hopped
+-- exactly to a target from wherever the pad stood — a hidden per-launch tweak
+-- of the engines. The catalogue is now built ONCE per save for the home world
+-- (builder.lua, BALANCE) and flies exactly as the builder quotes it, so all the
+-- pad does is remember its true radius: the builder's predictions (TWR, apex)
+-- are quoted for the ground the rocket actually stands on.
+--
+-- Returns nil: the blueprint is never changed. (vessel_spawner still calls it.)
+function rerateAtPad(bp, bodyName, px, py, pz)
+  local b = bodyName and space.body(bodyName)
+  if not (b and (b.mu or 0) > 0) then return nil end
+  local R = len(px - b.x, py - b.y, pz - b.z)
+  if R < 1 then return nil end
+  save.set("launch.pad", { body = b.name or bodyName, r = R })
+  return nil
+end
+
+-- The base world, for the builder (see the header). Written only on change.
+local world_said = nil
+local function publish_world()
+  local bf = ref("base_facilities")
+  local name = (bf and bf.baseBody) or save.get("base.body")
+  local b = type(name) == "string" and space.body(name) or nil
+  if not (b and (b.radius or 0) > 0 and (b.mu or 0) > 0) then return end
+  -- The radius is the PAD's, not the body's nominal one: `radius` is the
+  -- terrain radius plus a margin for relief (about 3.5 %), and gravity at the
+  -- ground the rocket actually stands on is 7 % stronger than at that sphere —
+  -- the builder quoted TWR 1.34 for a rocket the pad read as 1.27.
+  --
+  -- And it is the GROUND's radius, found by a ray: the colony's published centre
+  -- is not on the surface (on the review seeds it sat 3–5 m under the pad), and
+  -- on a 130 m world that 4 % of radius is 8 % of gravity — the hop the
+  -- builder promised at 330 m went to 1,400.
+  local r = b.radius
+  local cx, cy, cz, hb = base_world()
+  if cx and hb.name == b.name then
+    local ux, uy, uz = cx - b.x, cy - b.y, cz - b.z
+    local d = len(ux, uy, uz)
+    if d > b.radius * 0.5 and d < b.radius * 1.5 then
+      r = d
+      ux, uy, uz = ux / d, uy / d, uz / d
+      local h = raycast(cx + ux * 60, cy + uy * 60, cz + uz * 60, -ux, -uy, -uz, 160.0)
+      if h then
+        local gr = len(h.x - b.x, h.y - b.y, h.z - b.z)
+        -- A rocket starts from its centre of mass on the pad's deck, ~3.5 m
+        -- above the ground (deck 2.5 m + the stack's CoM): on a 200 m world
+        -- that is 3.5 % of gravity and a 15 % taller hop, so quote from there
+        -- until the pad itself has been measured (below).
+        if gr > b.radius * 0.5 and gr < b.radius * 1.5 then r = gr + 3.5 end
+      end
+    end
+  end
+  -- Best of all is the pad itself: a craft sitting in the clamps stands at
+  -- exactly the radius every launch starts from. Remembered per body.
+  local v = piloted()
+  if v and v.hasFlown == false and v.tele and v.tele.anchored and v.node and v.node.valid then
+    local pr = len(v.node.x - b.x, v.node.y - b.y, v.node.z - b.z)
+    if pr > b.radius * 0.5 and pr < b.radius * 1.5 then
+      save.set("launch.pad", { body = b.name or name, r = pr })
+    end
+  end
+  local pad = save.get("launch.pad")
+  if type(pad) == "table" and pad.body == (b.name or name) and (pad.r or 0) > 0 then r = pad.r end
+  local g = b.mu / (r * r)
+  local key = string.format("%s/%.3f/%.1f/%.1f", b.name or name, g, r, b.soi or -1)
+  if key == world_said then return end
+  world_said = key
+  save.set("launch.world", { name = b.name or name, g = g, r = r,
+                             soi = (b.soi or -1) > r and b.soi or nil })
+end
+
 function update(node, dt)
   if not el then el = node:getcomponent("UiElement") end
+  if time - fleet_t >= 1.0 then
+    fleet_t = time
+    publish_world()
+    fleetSync()
+  end
+  fleet_restore()
   local st = (params.enabled >= 0.5) and survey() or nil
   mode = st and st.mode or nil
   value = (st and st.value) or 0

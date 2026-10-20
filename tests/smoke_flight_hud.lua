@@ -130,7 +130,7 @@ local function pad_tele()
   return {
     warp = 1, warp_cap = 1107, warp_why = "charting ahead of you",
     anchored = true, grounded = true, ready = true, parts = 6, parts_total = 6,
-    twr = 1.38, fuel_cap = 60, refueling = true, ec = 0, ec_cap = 0, ec_gen = 0,
+    twr = 0, twr_max = 1.31, thrust_now = 0, fuel_cap = 60, refueling = true, ec = 0, ec_cap = 0, ec_gen = 0,
     has_gear = true, has_rcs = false, rcs_on = false, rcs_blocks = 0, chute_open = 0,
     alt = 22, spd = 0, vspd = 0, nose = 64, vorb = 30.3, vesc = 42.9,
     body = "Golil", pe = -207, ap = 22, period = 17,
@@ -187,9 +187,29 @@ check(made["Flight HUD Overlay"] and made["Flight HUD Overlay"].tooltipBox == tr
   "the overlay carries the layer's tooltip box")
 check(nodes["Navball"].__el.posY < 0, "the navball is mounted on the console")
 
+-- THRUST AND TWR ARE WHAT THE ENGINES ARE DOING (review, 2026-10): the console
+-- printed "TWR 1.38 / THRUST 55 kN" at 0% throttle with empty tanks. On the
+-- clamps they read zero, and the full-throttle TWR — the builder's figure, in
+-- this world's gravity — is on the Launch card.
+check(by_key(tree, "fv1") and by_key(tree, "fv1").text == "0.00", "TWR reads 0.00 on the clamps, got "
+  .. tostring(by_key(tree, "fv1") and by_key(tree, "fv1").text))
+check(by_key(tree, "fv2") and by_key(tree, "fv2").text == "0 kN", "THRUST reads 0 kN on the clamps")
+check(has_text(by_key(tree, "clamps"), "TWR 1.31"), "the Launch card quotes the lift-off TWR")
+-- Nothing on the cockpit ever reads "-0": a pitch or an altitude that wobbles
+-- either side of zero prints as 0.
+V.tele.nose = -0.3
+V.node.y = 300            -- 100 m up: the altitude tape's zero tick is ceil(-0.4)·125 = -0
+tree = frame()
+local minus_zero = nil
+for _, e in ipairs(each(tree)) do
+  if type(e.text) == "string" and (e.text == "-0" or e.text:find("^%-0[^%.%d]") ) then minus_zero = e.text end
+end
+check(minus_zero == nil, "no \"-0\" anywhere on the cockpit, got " .. tostring(minus_zero))
+V.tele.nose, V.node.y = 64, 222
+
 -- ── 2. the autopilot is a control, not a readout ───────────────────────────
 local pro = by_key(tree, "prograde")
-check(pro and pro.onClicked and pro.tooltip:find("[2]", 1, true), "prograde hold: button + key hint")
+check(pro and pro.onClicked and pro.tooltip:find("[ALT+2]", 1, true), "prograde hold: button + key hint (ALT+2 — the bare digits are action groups)")
 pro.onClicked()
 check(V.sas_mode == "prograde", "clicking a hold engages it")
 tree = frame()
@@ -229,6 +249,47 @@ check(has_text(tree, "Boosters ×2") and has_text(tree, "drops 2 eng"), "a boost
 check(by_key(tree, "dockline") and has_text(by_key(tree, "dockline"), "Port A"), "the docking checklist")
 check(by_key(tree, "x").style == "hud/valueAccent", "warp above ×1 is lit")
 V.dock.target = nil
+
+-- ── 3b. LEAVING <BODY> ──────────────────────────────────────────────────────
+-- The review flew Z + SPACE and left the world in seventeen seconds with
+-- nothing on screen louder than the period readout. The warning is a pure
+-- function of the telemetry and the body, so every band is checked directly.
+do
+  local B = { name = "Bryolru", radius = 200, soi = 1500, mu = 208000 }
+  local function tele(ap, pe) return { body = "Bryolru", ap = ap, pe = pe } end
+  check(env.leaveWarning(tele(400, -150), B, 1, 10) == nil,
+    "a hop to 600 m from the centre (40% of the SOI) is not a warning")
+  local w = env.leaveWarning(tele(700, -150), B, 1, 10)
+  check(w and w.level == 2 and w.head:find("HIGH ARC"), "past half the SOI is a caution")
+  w = env.leaveWarning(tele(1200, -150), B, 1, 10)
+  check(w and w.level == 3 and w.head == "LEAVING BRYOLRU — CUT THROTTLE",
+    "past 85% with the engines lit: LEAVING <BODY> — CUT THROTTLE, got " .. tostring(w and w.head))
+  w = env.leaveWarning(tele(nil, -150), B, 0, 0)
+  check(w and w.level == 3 and w.head == "LEAVING BRYOLRU" and w.sub:find("Abort flight"),
+    "escaping with dry tanks points at Abort flight, got " .. tostring(w and w.sub))
+  w = env.leaveWarning(tele(nil, -150), B, 0, 20)
+  check(w and w.sub:find("retrograde"), "escaping with fuel left says to burn retrograde")
+  local landed = tele(1200, -150); landed.grounded = true
+  check(env.leaveWarning(landed, B, 1, 10) == nil, "nothing to warn about on the ground")
+  check(env.leaveWarning(tele(1200, -150), { name = "Sun", radius = 50, soi = -1 }, 1, 10) == nil,
+    "and nothing about leaving a star (it has no edge)")
+  -- Drawn: a banner under the lamps, and the cards below it make room for it.
+  local real_body = body
+  body = { name = "Golil", x = 0, y = 0, z = 0, radius = 200, mu = 4.9e5, soi = 1500 }
+  local tl = pad_tele()
+  tl.anchored, tl.grounded, tl.ap = false, false, 1250
+  V.tele, V.throttle, V.fuel = tl, 1.0, 30
+  local plain_top = (function() local tt = pad_tele(); tt.anchored, tt.grounded, tt.ap = false, false, 100
+    V.tele = tt; frame(); return env.layout.topBottom end)()
+  V.tele = tl
+  tree = frame()
+  validate(tree, "leaving")
+  check(by_key(tree, "leaving") and has_text(by_key(tree, "leaving"), "LEAVING GOLIL — CUT THROTTLE"),
+    "the LEAVING banner is drawn")
+  check(env.layout.topBottom > plain_top, "...and the top stack's bottom moves down to make room")
+  body = real_body
+  V.tele, V.throttle = pad_tele(), 0.4
+end
 
 -- ── 4. 5:4 — the console makes room for the stage stack ─────────────────────
 SW, SH = 1350, 1080

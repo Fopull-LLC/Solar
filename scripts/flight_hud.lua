@@ -41,12 +41,13 @@ defaults = {
 }
 
 layout = nil
+warning = nil     -- the LEAVING banner's description while it's up (leaveWarning)
 
 -- ── geometry (design units: the layer is 720 tall) ──────────────────────────
 local M = 16                          -- screen margin
 local CW, CH, CB = 612, 172, 12       -- console plate: width, height, lift
 local LAMP_W, LAMP_H, LAMP_GAP = 52, 18, 4
-local STRIP_W, STRIP_H = 11 * LAMP_W + 10 * LAMP_GAP, 40   -- as wide as the lamp row
+local STRIP_W, STRIP_H = 12 * LAMP_W + 11 * LAMP_GAP, 40   -- as wide as the lamp row
 local RES_W = 232                     -- fuel / charge block
 local STAGE_W = 168                   -- stage stack
 
@@ -68,18 +69,19 @@ local P = {
 }
 
 -- The autopilot, as a 2 × 5 grid of holds in the navball's own symbols, the
--- way KSP pairs them. `key` is the number that selects it (vessel_controller's
--- SAS_KEYS); the last cell is the RCS bus.
+-- way KSP pairs them. `key` is the chord that selects it (ALT + the number in
+-- vessel_controller's SAS_KEYS — the bare numbers are the action groups); the
+-- last cell is the RCS bus.
 local HOLDS = {
-  { mode = "stability",  glyph = "◎", name = "Stability — hold this attitude", key = "1" },
-  { mode = "node",       glyph = "◆", name = "Maneuver — point down the planned burn", key = "9" },
-  { mode = "prograde",   glyph = "⊕", name = "Prograde — along the direction of travel", key = "2" },
-  { mode = "retrograde", glyph = "⊗", name = "Retrograde — against it (slow down)", key = "3" },
-  { mode = "normal",     glyph = "△", name = "Normal — up out of the orbit plane", key = "4" },
-  { mode = "antinormal", glyph = "▽", name = "Anti-normal — down out of the orbit plane", key = "5" },
-  { mode = "radialout",  glyph = "⇡", name = "Radial out — away from the planet", key = "7" },
-  { mode = "radialin",   glyph = "⇣", name = "Radial in — toward the planet", key = "6" },
-  { mode = "dock",       glyph = "⊡", name = "Dock align — square up to the target port", key = "8" },
+  { mode = "stability",  glyph = "◎", name = "Stability — hold this attitude", key = "ALT+1" },
+  { mode = "node",       glyph = "◆", name = "Maneuver — point down the planned burn", key = "ALT+9" },
+  { mode = "prograde",   glyph = "⊕", name = "Prograde — along the direction of travel", key = "ALT+2" },
+  { mode = "retrograde", glyph = "⊗", name = "Retrograde — against it (slow down)", key = "ALT+3" },
+  { mode = "normal",     glyph = "△", name = "Normal — up out of the orbit plane", key = "ALT+4" },
+  { mode = "antinormal", glyph = "▽", name = "Anti-normal — down out of the orbit plane", key = "ALT+5" },
+  { mode = "radialout",  glyph = "⇡", name = "Radial out — away from the planet", key = "ALT+7" },
+  { mode = "radialin",   glyph = "⇣", name = "Radial in — toward the planet", key = "ALT+6" },
+  { mode = "dock",       glyph = "⊡", name = "Dock align — square up to the target port", key = "ALT+8" },
   { rcs = true },
 }
 
@@ -158,6 +160,7 @@ end
 
 -- A tape's scale number: short enough to fit beside the ticks.
 local function tick_label(v)
+  v = whole(v)   -- a tape's zero tick is computed as ceil(-x)·major: "-0"
   if math.abs(v) >= 10000 then return string.format("%.1fk", v / 1000) end
   return string.format("%.0f", v)
 end
@@ -330,8 +333,15 @@ local function console(v, t, lv, shift)
   }
   for _, k in ipairs(sas_block(v, t)) do kids[#kids + 1] = k end
   if lv then
-    for _, k in ipairs(tape_scale("s", P.spd, lv.spd, 40, 25, true)) do kids[#kids + 1] = k end
-    for _, k in ipairs(tape_scale("a", P.alt, lv.alt, 150, 125, false)) do kids[#kids + 1] = k end
+    -- The tapes' windows follow the world's scale (system_generator SCALES):
+    -- the same spans vessel_controller hands the tape shader.
+    local sk, ak = 1.0, 1.0
+    if v.worldScaleK then sk, ak = v.worldScaleK() end
+    local sspan = sk > 1.2 and 60 or 40
+    local aspan, amaj = 150, 125
+    if ak > 1.5 then aspan, amaj = 300, 250 end
+    for _, k in ipairs(tape_scale("s", P.spd, lv.spd, sspan, 25, true)) do kids[#kids + 1] = k end
+    for _, k in ipairs(tape_scale("a", P.alt, lv.alt, aspan, amaj, false)) do kids[#kids + 1] = k end
   end
 
   -- Vertical speed: a centred meter on a log scale (1, 10, 100 m/s all read),
@@ -345,10 +355,15 @@ local function console(v, t, lv, shift)
     hot and "warn" or nil)
 
   -- Thrust figures, right column: what the stack can do and where it points.
+  -- These are what the engines are DOING: 0 on the clamps, at idle and with
+  -- dry tanks. The HUD used to print the stack's full-throttle figures at all
+  -- times ("TWR 1.38 / THRUST 55 kN" at 0% with empty tanks), against 9.81
+  -- rather than this world's gravity. The full-throttle TWR is on the Launch
+  -- card while the clamps hold, where it matches the builder's figure.
   local rows = {
     { "TWR", string.format("%.2f", t.twr or 0) },
-    { "THRUST", string.format("%d kN", math.floor((t.thrust or 0) + 0.5)) },
-    { "PITCH", string.format("%+.0f°", t.nose or 0) },
+    { "THRUST", string.format("%d kN", math.floor((t.thrust_now or 0) + 0.5)) },
+    { "PITCH", string.format("%+.0f°", whole(t.nose or 0)) },
   }
   for i, r in ipairs(rows) do
     local y = 12 + (i - 1) * 46
@@ -436,8 +451,17 @@ local function lamps(v, t, lv, tx)
       fuel_f and (fuel_f <= 0 and "Tanks empty" or string.format("Fuel %d%%", pct(fuel_f)))
         or "No tanks" },
     { "BATT", ec_f and (ec_f <= 0 and 3 or (ec_f < 0.15 and 2 or 0)) or 0,
-      ec_f and (ec_f <= 0 and "Battery flat — comms are down" or string.format("Charge %d%%", pct(ec_f)))
+      ec_f and (ec_f <= 0 and "Battery flat — probe cores, reaction wheels and radios go dark"
+        or string.format("Charge %d%%%s", pct(ec_f), t.brownout and " — not enough power for everything" or ""))
         or "No batteries" },
+    -- The comms link home: lit while there is one; amber for a crewed craft out
+    -- of contact (it flies on), red for a probe out of contact (it can't).
+    { "LINK", t.link and 1 or ((t.comms or t.probe) and ((t.probe and not t.crew) and 3 or 2) or 0),
+      t.link and string.format("Link home %d%% · %s", pct(t.signal or 0),
+        (t.hops or 1) <= 1 and "direct" or string.format("%d hops via %s", t.hops,
+          table.concat(t.path or {}, " → ")))
+        or ((t.comms or t.probe) and "No path home — extend an antenna, or put a relay overhead"
+          or "No antenna aboard") },
     { "ESCAPE", (not t.ap and t.pe) and 2 or 0,
       (not t.ap and t.pe) and ("On an escape trajectory from " .. (t.body or "this body"))
         or "Bound to " .. (t.body or "the body below") },
@@ -463,7 +487,8 @@ local function dock_line(v, tx)
   local d = v.dock
   local tg = d and d.target
   if not tg then return nil end
-  local function ok(b) return b and " ✓" or "" end
+  -- (" ok", not a tick: this line is in the mono face, which has no ✓)
+  local function ok(b) return b and " ok" or "" end
   local text = string.format("%s%s   %.2f m%s   align %d%%%s   lateral %.2f   %+.2f m/s%s%s",
     tg.locked and "◎ " or "", tg.name,
     tg.range, ok(tg.range < d.captureR),
@@ -479,6 +504,143 @@ local function dock_line(v, tx)
            { "box", key = "r", w = 2, h = 1 } }
 end
 
+-- ── LEAVING <BODY> ───────────────────────────────────────────────────────────
+--
+-- The worlds here are a couple of hundred metres across and their pull ends a
+-- kilometre or so out, so the difference between a high hop and never coming
+-- back is a few seconds of throttle. The orbit strip did say ESCAPE, in the
+-- same small type as the period — after the fact. This is the shout before it:
+--
+--   caution   apoapsis past half of the way to the edge of this world's pull
+--   warning   apoapsis past 85 % of it, or already on an escape trajectory
+--
+-- It says what to do about it: cut the throttle while the engines are lit, burn
+-- retrograde if there's fuel to come back with, and if there isn't, the pause
+-- menu's Abort Flight brings the crew home.
+LEAVE_CAUTION, LEAVE_WARNING = 0.5, 0.85
+
+-- Global and pure (a telemetry table and a body in, a description out) so the
+-- smoke test can ask it directly. nil = nothing to say.
+function leaveWarning(t, b, throttle, fuel)
+  if not (t and b) or t.grounded or t.anchored then return nil end
+  local soi = b.soi or 0
+  if not (soi > (b.radius or 0)) or soi > 1e9 then return nil end
+  local frac, escaping
+  if t.ap then
+    frac = (t.ap + b.radius) / soi
+  elseif t.pe then
+    escaping, frac = true, math.huge
+  else
+    return nil
+  end
+  if frac < LEAVE_CAUTION then return nil end
+  local name = string.upper(t.body or b.name or "THIS WORLD")
+  local burning = (throttle or 0) > 0.02 and (fuel or 0) > 0
+  local level = (escaping or frac >= LEAVE_WARNING) and 3 or 2
+  local head, sub
+  if level == 3 then
+    head = "LEAVING " .. name .. (burning and " — CUT THROTTLE" or "")
+  else
+    head = "HIGH ARC" .. (burning and " — EASE OFF THE THROTTLE" or "")
+  end
+  local pct_out = math.floor(math.min(frac, 9.99) * 100 + 0.5)
+  if burning then
+    sub = escaping and "Already past escape speed: X cuts the engines, then burn retrograde (SAS 3)."
+      or string.format("Apoapsis %d%% of the way to the edge of %s's pull.  X cuts the engines.",
+        pct_out, t.body or "this world")
+  elseif escaping then
+    sub = (fuel or 0) > 0 and "On an escape trajectory — burn retrograde (SAS 3) to stay."
+      or "No fuel to turn back with — ESC ▸ Abort flight brings the crew home."
+  else
+    sub = string.format("Apoapsis %d%% of the way out — it falls back. Chutes before you land.", pct_out)
+  end
+  return { level = level, head = head, sub = sub, frac = frac, escaping = escaping or false }
+end
+
+local LEAVE_H = 52
+local function leave_banner(w, tx, y)
+  local danger = w.level >= 3
+  local edge = danger and DANGER or WARN
+  return { "col", key = "leaving", pin = "top", x = tx, y = y, w = STRIP_W, h = LEAVE_H,
+           pad = 6, gap = 2, align = "center", justify = "center", radius = 7, border = 2,
+           borderColor = edge,
+           fill = danger and { 0.30, 0.05, 0.04, 0.94 } or { 0.24, 0.14, 0.03, 0.92 },
+           { "text", key = "h", w = "100%", h = 22, text = w.head, textAlign = "center",
+             textSize = 19, tracking = 1.5, textColor = danger and { 1.0, 0.78, 0.74, 1 } or WARN },
+           { "text", key = "s", w = "100%", h = 14, text = w.sub, textAlign = "center",
+             textSize = 11.5, textColor = { 0.92, 0.88, 0.84, 1 } } }
+end
+
+-- Signal bars 0–4 (electronics.bars, kept here so a harness needs no rulebook).
+local function bars_of(s)
+  if not s or s <= 0 then return 0 end
+  if s > 0.75 then return 4 end
+  if s > 0.45 then return 3 end
+  if s > 0.2 then return 2 end
+  return 1
+end
+
+-- NO CONTROL: a probe out of contact or dark, a pod with nobody in it. Said
+-- across the top in the same place as the LEAVING banner, with what to do.
+function controlWarning(t)
+  if not t or t.control ~= false then return nil end
+  local why = t.ctl_why or "NO CONTROL"
+  local sub
+  if why:find("SIGNAL", 1, true) then
+    sub = "Out of contact: no command reaches it. Extend an antenna (U) or bring a relay overhead.  [ / ] back to the crew."
+  elseif why:find("POWER", 1, true) then
+    sub = "The batteries are flat. Panels charge them in sunlight — the controls come back with the power."
+  elseif why:find("CREW", 1, true) then
+    sub = "Nobody in the seat. Walk over and climb in (F), or send the crew from the Tracking Station."
+  elseif why:find("OFF", 1, true) then
+    sub = "The probe core is asleep. Its Wake action (an action group) brings it back."
+  else
+    sub = "[ / ] switch to something you can fly."
+  end
+  return { level = 3, head = why, sub = sub }
+end
+
+-- THE ACTION GROUPS, mid-left: every group with something in it, its key, and
+-- whether it's on. Click a row to fire it, same as the key.
+local function group_strip(v, t)
+  local list = v.groupStrip and v.groupStrip() or {}
+  local rows = {}
+  local mode = t.crew and "CREW ABOARD" or (t.probe and (t.control and "PROBE · REMOTE" or "PROBE · NO CONTROL")) or nil
+  local craft = (v.craftName and v.craftName ~= "Vessel") and v.craftName or nil
+  for _, g in ipairs(list) do
+    local key = g.key == "backspace" and "⌫" or tostring(g.key):upper()
+    rows[#rows + 1] = { "row", key = "g" .. g.id, w = "100%", h = 20, pad = 0, gap = 6, align = "center",
+      button = true, tooltip = string.format("%s — %d action%s · %s", g.label, g.n, g.n == 1 and "" or "s",
+        g.on and "on" or "off"),
+      onClicked = function() if v.activateGroup then v.activateGroup(g.id) end end,
+      { "box", key = "k", style = g.on and "hud/keyActive" or "hud/key", w = 22, h = 18, text = key,
+        textAlign = "center", textValign = "center" },
+      { "text", key = "l", style = "hud/value", w = "grow", h = 14, text = g.label, maxLines = 1,
+        overflow = "ellipsis" },
+      { "text", key = "o", style = g.on and "hud/valueAccent" or "hud/valueMuted", w = 26, h = 14,
+        text = g.on and "ON" or "off", textAlign = "end" } }
+  end
+  if #rows == 0 and not mode then return nil end
+  local kids = {
+    { "text", key = "hd", style = "hud/micro", w = "100%", h = 12, text = "ACTION GROUPS", textAlign = "start" },
+  }
+  if craft then
+    kids[#kids + 1] = { "text", key = "craft", style = "hud/value", w = "100%", h = 14, text = craft,
+      maxLines = 1, overflow = "ellipsis" }
+  end
+  if mode then
+    kids[#kids + 1] = { "text", key = "mode", style = t.control and "hud/valueAccent" or "hud/valueDanger",
+      w = "100%", h = 14, text = mode, maxLines = 1, overflow = "ellipsis" }
+  end
+  for _, r in ipairs(rows) do kids[#kids + 1] = r end
+  if #rows == 0 then
+    kids[#kids + 1] = { "text", key = "none", style = "hud/valueMuted", w = "100%", h = 14,
+      text = "none — set them in the builder (5)" }
+  end
+  return { "col", key = "groups", style = "hud/instrument", pin = "left", x = M, y = 0, w = 196, h = "fit",
+           pad = 10, gap = 4, items = kids, function(k) return k end }
+end
+
 -- Fuel and charge, top right.
 local function resources(v, t)
   local rows = {}
@@ -487,8 +649,13 @@ local function resources(v, t)
     rows[#rows + 1] = { key = "fuel", label = "FUEL", frac = f,
       color = f <= 0 and DANGER or (f < 0.15 and WARN or ACCENT),
       tone = f <= 0 and "danger" or (f < 0.15 and "warn" or nil),
-      tip = t.refueling and "Refuelling from the pad" or string.format("%.0f / %.0f units",
-        v.fuel or 0, t.fuel_cap) }
+      -- What the fuel is WORTH: Δv on the engines lit now (Tsiolkovsky, the
+      -- builder's figure) and how long it lasts at full throttle.
+      tip = t.refueling and "Refuelling from the pad" or (string.format("%.0f / %.0f units",
+        v.fuel or 0, t.fuel_cap)
+        .. (((t.fuel_t or 0) > 0) and string.format(" (%.2f t)", t.fuel_t) or "")
+        .. (((t.dv or 0) > 0) and string.format(" · Δv %.0f m/s · %.1f s at full throttle",
+          t.dv, t.burn_s or 0) or "")) }
   end
   if (t.ec_cap or 0) > 0 or t.comms or (t.ec_gen or 0) > 0 then
     local f = (t.ec_cap or 0) > 0 and t.ec / t.ec_cap or 0
@@ -496,11 +663,31 @@ local function resources(v, t)
     if t.solar then notes[#notes + 1] = "solar charging" end
     if t.link then notes[#notes + 1] = "comms link up"
     elseif t.comms and not t.dish_up then notes[#notes + 1] = "dish stowed — U deploys it" end
+    -- The flow: what comes in, what goes out, and where that leaves you.
+    local net = t.ec_net or 0
+    local flow = string.format("in +%.2f/s · out −%.2f/s", t.ec_supply or 0, t.ec_demand or 0)
+    if net < -1e-3 and (t.ec or 0) > 0 then
+      flow = flow .. string.format(" · flat in %s", duration((t.ec or 0) / -net))
+    elseif net > 1e-3 and (t.ec_cap or 0) > (t.ec or 0) then
+      flow = flow .. string.format(" · full in %s", duration(((t.ec_cap or 0) - (t.ec or 0)) / net))
+    end
+    if (t.panels or 0) > 0 and not t.sunlit then notes[#notes + 1] = "panels in shadow" end
     rows[#rows + 1] = { key = "ec", label = "CHARGE", frac = f,
       color = f <= 0 and DANGER or (f < 0.15 and WARN or ACCENT),
       tone = f <= 0 and "danger" or (f < 0.15 and "warn" or nil),
-      tip = string.format("%.0f / %.0f EC", t.ec or 0, t.ec_cap or 0)
+      tip = string.format("%.0f / %.0f EC · %s", t.ec or 0, t.ec_cap or 0, flow)
         .. (#notes > 0 and (" · " .. table.concat(notes, " · ")) or "") }
+  end
+  if t.comms or t.probe then
+    local sgl = t.link and (t.signal or 0) or 0
+    rows[#rows + 1] = { key = "sig", label = "SIGNAL", frac = sgl,
+      color = sgl <= 0 and DANGER or (sgl < 0.25 and WARN or ACCENT),
+      tone = sgl <= 0 and "danger" or (sgl < 0.25 and "warn" or nil),
+      value = t.link and (string.rep("▮", bars_of(sgl)) .. string.rep("▯", 4 - bars_of(sgl))) or "none",
+      tip = t.link and string.format("%d%% · %s · via %s", pct(sgl),
+          (t.hops or 1) <= 1 and "direct to the ground station" or string.format("%d hops", t.hops),
+          table.concat(t.path or { "Ground station" }, " → "))
+        or "No path home — extend an antenna (U), or get a relay overhead" }
   end
   if #rows == 0 then return nil, 0 end
   local BAR = RES_W - 20 - 50 - 44 - 12
@@ -517,7 +704,7 @@ local function resources(v, t)
                         { "box", key = "f", x = 1, y = 1, w = len, h = 6, radius = 1,
                           fill = r.color } },
                       { "text", key = "v", style = TONE[r.tone] or "hud/value", w = 44, h = 16,
-                        text = string.format("%d%%", pct(r.frac)), textAlign = "end" } }
+                        text = r.value or string.format("%d%%", pct(r.frac)), textAlign = "end" } }
            end }, h
 end
 
@@ -535,6 +722,8 @@ local function stage_stack(t, lift)
     elseif st.kind == "chute" then
       title = string.format("Chutes ×%d", st.n or 0)
       sub = "deploy"
+    elseif st.kind == "fairing" then
+      title, sub = "Fairing", "jettison"
     else
       title = "Decouple"
       sub = st.eng > 0 and string.format("then %d eng · %d kN", st.eng, st.kn) or "then coast"
@@ -544,7 +733,8 @@ local function stage_stack(t, lift)
   end
   if t.anchored then
     cards[#cards + 1] = { key = "clamps", num = 0, title = "Launch",
-      sub = t.ready and string.format("clamps off · %d kN", t.thrust or 0)
+      -- The builder's two figures, as the pad measures them (wet mass, local g).
+      sub = t.ready and string.format("TWR %.2f · Δv %.0f m/s", t.twr_max or 0, t.dv or 0)
         or string.format("assembling %d / %d", t.parts or 0, t.parts_total or 0),
       next = true, blocked = not t.ready }
   end
@@ -620,7 +810,7 @@ function update(node, dt)
   local t = v and v.tele
   if not t or (om and om.map_view) or (gm and gm.loading) then
     show(false)
-    layout = nil
+    layout, warning = nil, nil
     return
   end
   show(true)
@@ -658,6 +848,15 @@ function update(node, dt)
     console(v, t, lv, shift),
   }
   if dline then tree[#tree + 1] = dline end
+  local below = M + STRIP_H + 6 + LAMP_H + (dline and (6 + 24) or 0)
+  local lw = controlWarning(t) or leaveWarning(t, t.body and space.body(t.body), v.throttle, v.fuel)
+  warning = lw
+  if lw then
+    tree[#tree + 1] = leave_banner(lw, tx, below + 8)
+    below = below + 8 + LEAVE_H
+  end
+  local gs = group_strip(v, t)
+  if gs then tree[#tree + 1] = gs end
   if res then tree[#tree + 1] = res end
   local stack = stage_stack(t, lift)
   if stack then tree[#tree + 1] = stack end
@@ -677,7 +876,7 @@ function update(node, dt)
   layout = {
     consoleLeft = left, consoleRight = left + CW,
     consoleTop = 720 - CB - CH + P.hdgWin[2],   -- the heading box is the highest point
-    topBottom = M + STRIP_H + 6 + LAMP_H + (dline and (6 + 24) or 0),
+    topBottom = below,
     topLeft = top_left,
     rightBottom = M + 28 + 8 + res_h,
   }

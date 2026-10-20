@@ -48,6 +48,14 @@ planning = false
 
 local astronaut
 
+-- "860 m", "1.4 km", "2,300 km" — a distance a person reads.
+local function fmt_dist(m)
+  m = math.abs(m or 0)
+  if m < 1000 then return string.format("%.0f m", m) end
+  if m < 100000 then return string.format("%.1f km", m / 1000) end
+  return string.format("%.0f km", m / 1000)
+end
+
 local function norm(x, y, z)
   local l = math.sqrt(x * x + y * y + z * z)
   if l < 1e-6 then return 0, 0, 0 end
@@ -122,16 +130,50 @@ end
 map_view = false -- published: planet_camera stands down while this is true
 local map_focus, map_zoom = 1, nil -- focus 1 = THE SHIP, 2.. = bodies
 local map_hud_t = -10.0
+-- The SOI ring that is on but bigger than the view this frame (the legend says so).
+local soi_off = nil
 local map_yaw2, map_pitch2 = 0.6, 0.45
 local map_offx, map_offy, map_offz = 0.0, 0.0, 0.0 -- CTRL-drag pan offset
-local map_show = { orbits = true, soi = true, markers = true }
+local map_show = { orbits = true, soi = true, markers = true, links = true }
+-- The map can be opened ON a craft other than the one being flown (the
+-- Tracking Station's MAP button): focus slot 1 follows this node while it lives.
+local focus_override = nil
 local cam_node
+-- THE MAP'S LENS. The game camera is a wide 66° (vertical) — right for walking,
+-- wrong for a map: a sphere near the edge of a wide rectilinear view is drawn
+-- stretched along the radius, and the star came out as an egg. While the map is
+-- open the camera narrows to this, and every auto-fit distance is scaled by
+-- FOV_K so the framing stays what it was. The old lens is put back on close.
+local MAP_FOV = 0.70
+local TANH = math.tan(MAP_FOV * 0.5)
+local FOV_K = math.tan(1.1519173 * 0.5) / TANH
+local saved_fov = nil
+local function map_lens(on)
+  cam_node = cam_node or find("Camera 1")
+  local c = cam_node and cam_node.getcomponent and cam_node:getcomponent("Camera")
+  if not c then return end
+  if on then
+    if not saved_fov then saved_fov = c.fovY end
+    c.fovY = MAP_FOV
+  elseif saved_fov then
+    c.fovY = saved_fov
+    saved_fov = nil
+  end
+end
 -- Zoom eases toward where the wheel asked, in log space: a wheel tick is a
 -- 12% step that takes ~0.2 s to arrive, not a jump. Every jump landed the
 -- camera in a new terrain LOD state at once, which is most of what "laggy
 -- zoom" felt like.
 local zoom_target = nil
 local ZOOM_MAX = 3.0e6
+-- …times the save's galaxy sector scale (system_generator SCALES): a bigger
+-- universe puts the neighbour stars further out, and the map must reach them.
+local zoom_gen = nil
+local function zoom_max()
+  if not (zoom_gen and zoom_gen.valid) then zoom_gen = findScript("system_generator") end
+  local sc = zoom_gen and zoom_gen.scale
+  return ZOOM_MAX * ((sc and sc.sector) or 1.0)
+end
 -- Parents re-inferred when the body list changes, or once a second (the SOI
 -- tree only changes when the galaxy streams a system in or out).
 local map_pidx, pidx_n, pidx_t = {}, -1, -10.0
@@ -594,6 +636,7 @@ end
 
 local function update_map3d(node, dt)
   if not map_view then return end
+  soi_off = nil
   -- The map's SUBJECT is the craft being flown, and its kinematics come from
   -- the SIM (assembly.info) — position, velocity AND grounded — never the
   -- node-pose mirror, so the map can't go dark if the mirror lags or misses.
@@ -632,6 +675,7 @@ local function update_map3d(node, dt)
   if input.pressed("1") then map_show.orbits = not map_show.orbits end
   if input.pressed("2") then map_show.soi = not map_show.soi end
   if input.pressed("3") then map_show.markers = not map_show.markers end
+  if input.pressed("4") then map_show.links = not map_show.links end
 
   -- Focusing a body (TAB) streams ITS real terrain in (terrain.warm — loads it
   -- if cold, keeps it resident while focused, however far the ship is). Every
@@ -641,7 +685,12 @@ local function update_map3d(node, dt)
     terrain.warm(bodies[map_focus - 1].name)
   end
   local focus, fname, fradius
-  if map_focus == 1 then
+  if focus_override and not focus_override.valid then focus_override = nil end
+  if map_focus == 1 and focus_override then
+    focus = { x = focus_override.x, y = focus_override.y, z = focus_override.z }
+    fname = focus_override.name or "CRAFT"
+    fradius = 6
+  elseif map_focus == 1 then
     if craft_flying or not astronaut then
       focus = { x = node.x, y = node.y, z = node.z }
       fname = "SHIP"
@@ -665,12 +714,19 @@ local function update_map3d(node, dt)
         zoom_target = math.max(rr * 2.2, b0.radius * 3.5)
         local o = space.elements(node.x, node.y, node.z, node.vx, node.vy, node.vz)
         if o and o.apoapsis then zoom_target = math.max(zoom_target, o.apoapsis * 1.5) end
+        -- On foot there is no orbit to frame: show the world whole, inside its
+        -- sphere of influence. (Framed on the planet alone, the SOI ring — on
+        -- by default — sat entirely off screen and looked like it never drew.)
+        if not craft_flying and b0.soi and b0.soi > 0 then
+          zoom_target = math.max(zoom_target, b0.soi * 1.2 / TANH / FOV_K)
+        end
       else
         zoom_target = 400
       end
     else
       zoom_target = math.max(fradius * 6, 80)
     end
+    zoom_target = zoom_target * FOV_K
     map_zoom = map_zoom or zoom_target -- opening: start framed, no fly-in
   end
 
@@ -704,7 +760,7 @@ local function update_map3d(node, dt)
   if sc and sc ~= 0 then zoom_target = zoom_target * math.exp(-sc * 0.12) end
   if input.key("up") then zoom_target = zoom_target * math.exp(-1.5 * dt) end
   if input.key("down") then zoom_target = zoom_target * math.exp(1.5 * dt) end
-  zoom_target = math.max(fradius * 1.6, math.min(zoom_target, ZOOM_MAX))
+  zoom_target = math.max(fradius * 1.6, math.min(zoom_target, zoom_max()))
   local lz0 = math.log(map_zoom)
   map_zoom = math.exp(lz0 + (math.log(zoom_target) - lz0) * (1 - math.exp(-12 * dt)))
   if cam_node then
@@ -729,8 +785,10 @@ local function update_map3d(node, dt)
   local function cam_dist(x, y, z)
     return math.max(1e-3, math.sqrt((x - ccx) ^ 2 + (y - ccy) ^ 2 + (z - ccz) ^ 2))
   end
-  -- World size of `px` screen pixels at a point (a ~60° vertical view).
-  local function px_at(x, y, z, px) return cam_dist(x, y, z) * px * 1.15 / sh end
+  -- World size of `px` screen pixels at a point (the map's lens, MAP_FOV).
+  local function px_at(x, y, z, px) return cam_dist(x, y, z) * px * 2 * TANH / sh end
+  -- Screen pixels per world unit at a distance.
+  local function ppu(d) return sh / (2 * TANH * d) end
 
   if #bodies ~= pidx_n or time - pidx_t > 1.0 then
     map_pidx, pidx_n, pidx_t = parent_indices(bodies), #bodies, time
@@ -748,6 +806,33 @@ local function update_map3d(node, dt)
   -- Labels already placed this frame: a far pair of worlds projects to nearly
   -- one point, and two names drawn over each other read as neither.
   local placed = {}
+  local lk = sh / 720
+  -- The screen the map does not own: the legend panel top-left and the menu
+  -- button top-right. A label that lands under either is skipped — a far
+  -- system's name used to float in the middle of the legend.
+  local blocked = {}
+  for _, nm in ipairs({ "HUD Panel", "Menu Btn" }) do
+    local n = find(nm)
+    if n and n.uiRect then
+      local x, y, w, h = n:uiRect()
+      if x then blocked[#blocked + 1] = { x - 6, y - 6, w + 12, h + 12 } end
+    end
+  end
+  local function covered(x, y, w, h)
+    for _, r in ipairs(blocked) do
+      if x < r[1] + r[3] and x + w > r[1] and y < r[2] + r[4] and y + h > r[2] then return true end
+    end
+    return false
+  end
+  local function name_w(text, fs)
+    local _, n = text:gsub("[^\128-\191]", "")
+    return n * fs * 0.56 + fs
+  end
+  local function label(x, y, text, fs)
+    local w, h = name_w(text, fs), fs * 1.5
+    draw.rect(x - w / 2, y - h / 2, w, h, 0.01, 0.02, 0.04, 0.72, fs * 0.35)
+    draw.text(x, y - fs * 0.62, text, fs, 0.86, 0.93, 1.0, 1.0, "center")
+  end
   -- Orbit lines around each body's parent, and the names of what's in view.
   for i, b in ipairs(bodies) do
     local pi = map_pidx[i]
@@ -772,20 +857,33 @@ local function update_map3d(node, dt)
     end
     if map_show.soi and b.soi > 0 and ring_for[i] then
       local vx, vy, vz = norm(ccx - b.x, ccy - b.y, ccz - b.z)
-      draw.ring(b.x, b.y, b.z, vx, vy, vz, b.soi, 0.35, 0.5, 0.62, 0.5)
+      -- Drawn through the planets in front of it: a ring is a boundary, not an
+      -- object, and depth-testing it against a world it encloses lost it.
+      depth(false)
+      draw.ring(b.x, b.y, b.z, vx, vy, vz, b.soi, 0.45, 0.78, 0.95, 0.85)
+      depth(true)
+      -- Bigger than the view: say so in the legend rather than show nothing.
+      local spx = b.soi * ppu(cam_dist(b.x, b.y, b.z))
+      if spx > sh * 0.55 and b.name == dn0 then soi_off = b end
     end
     if shown and map_show.markers and camera and camera.worldToScreen then
       local sx, sy, _, on = camera.worldToScreen(b.x, b.y, b.z)
       if on then
-        local rpx = b.radius / cam_dist(b.x, b.y, b.z) * sh
-        local ly = sy - math.max(10, rpx * 0.6) - 16
-        local clear = true
+        -- Just above the body's disc, on a dark backing so a name reads over
+        -- the star's white glare as well as over black sky.
+        local rpx = b.radius * ppu(cam_dist(b.x, b.y, b.z))
+        local fs = 15 * lk
+        local ly = sy - math.max(8 * lk, rpx) - fs * 1.1
+        local tw = name_w(b.name, fs)
+        local clear = not covered(sx - tw / 2, ly - fs * 0.75, tw, fs * 1.5)
         for _, q in ipairs(placed) do
-          if math.abs(q[1] - sx) < 70 and math.abs(q[2] - ly) < 16 then clear = false break end
+          if math.abs(q[1] - sx) < (q[3] + tw) / 2 and math.abs(q[2] - ly) < fs * 1.5 then
+            clear = false break
+          end
         end
         if clear then
-          placed[#placed + 1] = { sx, ly }
-          draw.text(sx, ly, b.name, 13, 0.82, 0.91, 0.98, 0.9, "center")
+          placed[#placed + 1] = { sx, ly, tw }
+          label(sx, ly, b.name, fs)
         end
       end
     end
@@ -822,6 +920,9 @@ local function update_map3d(node, dt)
   if map_show.markers then
     draw_cross(node.x, node.y, node.z, px_at(node.x, node.y, node.z, 6), 0.6, 1.0, 0.7)
   end
+  -- The COMMS NETWORK: every craft, the ground station, and every usable link,
+  -- coloured by its strength (bright where a path home runs through it).
+  mapComms(node, px_at, label, lk, map_show)
 
   -- ---- maneuver-node planning (KSP) --------------------------------------
   -- Plan a burn and watch the resulting orbit — and where it drops you into
@@ -954,25 +1055,33 @@ local function update_map3d(node, dt)
     -- Which mode has the stick, said first and said plainly. In FLY the six
     -- attitude keys move the craft; in PLAN they move the burn. Nothing else
     -- on screen distinguishes them, so this line is the whole affordance.
-    lines[1] = string.format("MAP · %s · focus %s   [TAB] focus · [RMB] orbit · [Ctrl+RMB] pan · [scroll] zoom",
-      planning and "PLAN" or (craft_flying and "FLY" or "VIEW"), fname)
+    -- A legend, not a status dump: what you are looking at, how to move the
+    -- view, and what the number keys switch. (It read "MAP · VIEW · focus YOU
+    -- [TAB]… 1 orbits ON", which is a debug line.)
+    local focus_name = map_focus == 1 and (craft_flying and "your craft" or "you") or fname
+    local mode = planning and "PLANNING A BURN" or (craft_flying and "FLYING" or "ORBIT MAP")
+    lines[1] = string.format("%s  —  centred on %s", mode, focus_name)
+    lines[2] = "Right-drag  turn   ·   Ctrl + right-drag  pan   ·   Scroll  zoom   ·   Tab  next world   ·   M  close"
     if map_focus > 1 then
       local b = bodies[map_focus - 1]
       local dx4, dy4, dz4 = node.x - b.x, node.y - b.y, node.z - b.z
       local dd = math.sqrt(dx4 * dx4 + dy4 * dy4 + dz4 * dz4)
-      lines[2] = string.format("radius %.0f   µ %.3g   SOI %s", b.radius, b.mu,
-        b.soi < 0 and "∞" or string.format("%.0f", b.soi))
-      lines[3] = string.format("distance %.0f  (alt over it %+.0f)", dd, dd - b.radius)
+      lines[#lines + 1] = string.format("%s   ·   radius %s   ·   SOI %s   ·   %s from you",
+        b.name, fmt_dist(b.radius), b.soi < 0 and "the whole system" or fmt_dist(b.soi),
+        fmt_dist(dd))
     end
-    if info_orbit then
+    -- The orbit, only for a craft in the air: on foot the "orbit" is the
+    -- ground you are standing on, and a periapsis two hundred metres under it
+    -- is true and useless.
+    if info_orbit and craft_flying and not node.grounded then
       local o = info_orbit
-      local who = craft_flying and "ORBIT" or "YOUR ORBIT"
+      local pe = o.p / (1 + o.ecc) - o.radius
       if o.ecc < 1 then
-        lines[#lines + 1] = string.format("%s [%s]  pe %+.0f  ap %+.0f  e %.2f",
-          who, o.body, o.p / (1 + o.ecc) - o.radius, o.p / (1 - o.ecc) - o.radius, o.ecc)
+        lines[#lines + 1] = string.format("Orbiting %s   ·   Pe %s   ·   Ap %s",
+          o.body, (pe < 0 and "−" or "") .. fmt_dist(pe), fmt_dist(o.p / (1 - o.ecc) - o.radius))
       else
-        lines[#lines + 1] = string.format("ESCAPE [%s]  pe %+.0f  e %.2f",
-          o.body, o.p / (1 + o.ecc) - o.radius, o.ecc)
+        lines[#lines + 1] = string.format("Escaping %s   ·   Pe %s",
+          o.body, (pe < 0 and "−" or "") .. fmt_dist(pe))
       end
     end
     -- Maneuver node + encounter readout.
@@ -980,30 +1089,42 @@ local function update_map3d(node, dt)
       local dv = math.sqrt(mnv.pro ^ 2 + mnv.nor ^ 2 + mnv.rad ^ 2)
       local lead = mnv.t0 - space.time()
       lines[#lines + 1] = string.format(
-        "NODE  T%s%.0fs  ΔV %.1f   pro %+.1f · rad %+.1f · nor %+.1f",
-        lead >= 0 and "-" or "+", math.abs(lead), dv, mnv.pro, mnv.rad, mnv.nor)
+        "Burn %s %.0f s   ·   ΔV %.1f m/s   (prograde %+.1f · radial %+.1f · normal %+.1f)",
+        lead >= 0 and "in" or "overdue by", math.abs(lead), dv, mnv.pro, mnv.rad, mnv.nor)
       if traj_mnv and #traj_mnv.enc > 0 then
         local e = traj_mnv.enc[1]
         local verb = e.kind == "enter" and "ENCOUNTER" or (e.kind == "impact" and "IMPACT" or "exit")
-        lines[#lines + 1] = string.format("  => %s %s in %.0fs", verb, e.name, e.t)
+        lines[#lines + 1] = string.format("   then %s %s in %.0f s", verb, e.name, e.t)
       end
       lines[#lines + 1] = planning
-        and "  [LMB] move node · W/S pro · A/D rad · Q/E nor · ←→ slide · X zero · ⌫ drop · N fly"
-        or  "  [N] plan the burn — the stick flies the craft until you do"
+        and "Click the orbit  move it  ·  W/S prograde  ·  A/D radial  ·  Q/E normal  ·  ← →  slide  ·  X  zero  ·  ⌫  delete  ·  N  fly"
+        or  "N  plan the burn — until you do, the stick flies the craft"
     elseif craft_flying and not node.grounded then
       if traj_now and #traj_now.enc > 0 then
         local e = traj_now.enc[1]
         local verb = e.kind == "enter" and "ENCOUNTER" or (e.kind == "impact" and "IMPACT" or "SOI exit")
-        lines[#lines + 1] = string.format("%s: %s in %.0fs   ·   [N] to plan a burn", verb, e.name, e.t)
+        lines[#lines + 1] = string.format("%s %s in %.0f s   ·   N  plan a burn", verb, e.name, e.t)
       else
-        lines[#lines + 1] = "[N] plans a maneuver on this orbit"
+        lines[#lines + 1] = "N  plan a burn on this orbit"
       end
     end
-    lines[#lines + 1] = string.format(
-      "1 orbits %s · 2 SOIs %s · 3 markers %s · M close",
-      map_show.orbits and "ON" or "off",
-      map_show.soi and "ON" or "off",
-      map_show.markers and "ON" or "off")
+    local function sw(on) return on and "●" or "○" end
+    lines[#lines + 1] = string.format("1 %s orbits     2 %s SOI rings     3 %s labels & markers     4 %s comms links",
+      sw(map_show.orbits), sw(map_show.soi), sw(map_show.markers), sw(map_show.links))
+    -- The comms network, in a line: how many craft can hear home.
+    if map_show.links then
+      local net = findScript("comms")
+      if net and net.linkLines then
+        local n_used = 0
+        for _, l in ipairs(net.linkLines()) do if l.used then n_used = n_used + 1 end end
+        lines[#lines + 1] = string.format("Comms: %d transmitter%s · %d link%s in use   (green strong · amber weak · red at the edge)",
+          net.transmitters or 0, (net.transmitters or 0) == 1 and "" or "s", n_used, n_used == 1 and "" or "s")
+      end
+    end
+    if soi_off then
+      lines[#lines + 1] = string.format("   %s's SOI ring is %s across — scroll out to see it",
+        soi_off.name, fmt_dist(soi_off.soi * 2))
+    end
     set_hud(node, table.concat(lines, "\n"))
   end
 end
@@ -1029,12 +1150,81 @@ end
 
 -- Ease the view to `z` metres from the focus, as the wheel does.
 function setZoom(z)
-  zoom_target = math.max(1, math.min(z, ZOOM_MAX))
+  zoom_target = math.max(1, math.min(z, zoom_max()))
+  -- Asked before the map's first frame (no view yet to ease from): start there.
+  if not map_zoom then map_zoom = zoom_target end
+end
+
+-- THE COMMS LAYER (key 4): each link a line from red (at the edge of range) to
+-- green, solid where it carries someone's path home and faint where it is only
+-- possible; every other craft a small diamond with its name; the ground station
+-- a ring at the base. Global so `update_map3d` spends no upvalue on it.
+local comms_ref = nil
+function mapComms(subject, px_at, label, lk, show)
+  if not show.links and not show.markers then return end
+  if not comms_ref or not comms_ref.valid then comms_ref = findScript("comms") end
+  local net = comms_ref
+  if not net then return end
+  local E = findScript("electronics")
+  -- live craft move between solves: put line ends where the craft are now
+  local live, flown, names = {}, {}, {}
+  for _, v in ipairs(findScripts("vessel_controller")) do
+    if v.node and v.node.valid then
+      live[v.node.id] = v.node
+      names[v.node.id] = v.craftName
+      if v.piloting then flown[v.node.id] = true end
+    end
+  end
+  local function at(id, x, y, z)
+    local n = live[id]
+    if n then return n.x, n.y, n.z end
+    return x, y, z
+  end
+  if show.links and net.linkLines then
+    depth(false)
+    for _, l in ipairs(net.linkLines()) do
+      local r, g, b = 0.4, 0.8, 0.5
+      if E and E.strengthColor then r, g, b = E.strengthColor(l.strength) end
+      local ax, ay, az = at(l.a, l.ax, l.ay, l.az)
+      local bx, by, bz = at(l.b, l.bx, l.by, l.bz)
+      draw.line(ax, ay, az, bx, by, bz, r, g, b, l.used and 0.95 or 0.28)
+    end
+    depth(true)
+  end
+  if show.markers and camera and camera.worldToScreen then
+    local sx, sy, sz = net.station and net.station()
+    if sx then
+      draw.ring(sx, sy, sz, 0, 1, 0, px_at(sx, sy, sz, 7), 0.35, 0.95, 0.85, 1.0)
+    end
+    for id, n in pairs(live) do
+      if not flown[id] then
+        local s = px_at(n.x, n.y, n.z, 5)
+        local st = net.statusOf and net.statusOf(id)
+        local c = (st and st.connected) and { 0.55, 0.95, 0.85 } or { 1.0, 0.55, 0.45 }
+        draw.line(n.x - s, n.y, n.z, n.x, n.y + s, n.z, c[1], c[2], c[3], 1)
+        draw.line(n.x, n.y + s, n.z, n.x + s, n.y, n.z, c[1], c[2], c[3], 1)
+        draw.line(n.x + s, n.y, n.z, n.x, n.y - s, n.z, c[1], c[2], c[3], 1)
+        draw.line(n.x, n.y - s, n.z, n.x - s, n.y, n.z, c[1], c[2], c[3], 1)
+        local px, py, _, on = camera.worldToScreen(n.x, n.y, n.z)
+        if on and label then label(px, py - 18 * (lk or 1), names[id] or n.name or "craft", 12 * (lk or 1)) end
+      end
+    end
+  end
+end
+
+-- Open the map on a particular craft (the Tracking Station's MAP button).
+function focusNode(n)
+  if not map_view then toggle() end
+  focus_override = n
+  map_focus = 1
+  zoom_target = nil
+  map_offx, map_offy, map_offz = 0.0, 0.0, 0.0
 end
 
 -- Open or close. Called by the M key and by anything that needs the screen
 -- back (a scene change, ending a flight).
 function toggle()
+  focus_override = nil
   if not astronaut or not astronaut.valid then astronaut = find("Astronaut") end
   map_view = not map_view
   map_zoom, zoom_target = nil, nil -- re-fit to the focus every time it opens
@@ -1050,6 +1240,7 @@ function toggle()
   end
   -- Map lines at the window's own resolution, crisp at any render scale.
   if draw.nativeLines then draw.nativeLines(map_view) end
+  map_lens(map_view)
   if not map_view then
     planning = false
     -- Hand the instruments back to a craft that is still being flown; if

@@ -2,12 +2,16 @@
 -- "⏎ Enter … [E]" prompt appears; press E (or click it) to open that facility's
 -- panel. Press E or Esc (or the ✕ button) to leave.
 --
---   Command Centre    → the company: balance, standing, the contract on the
---                       books — and the OPS BOARD, where contracts are signed.
---   Vehicle Assembly  → jump to the ship builder.
---   Tracking Station  → lists every launched vessel still holding a comms link
---                       (the `comms.ships` registry vessel_controller's power_tick
---                       writes — name / altitude / battery).
+--   Command Centre    → E opens the OPS BOARD, where contracts are signed;
+--                       its "Overview" button shows the company: balance,
+--                       reputation, the contract on the books, the ledger.
+--   Vehicle Assembly  → E opens the builder directly.
+--   Tracking Station  → the FLEET board: every craft you have left somewhere
+--                       (flight_ops keeps it, in the save), where it is and what
+--                       it's doing, and TAKE CONTROL of the selected one (↑ ↓).
+--                       A craft with a powered comms dish reports live and is
+--                       flown remotely for free; without one the board shows
+--                       where you left it and a crew transfer is billed.
 --   Commerce Depot    → one press unloads everything and sells it.
 --
 -- The Power Plant has no panel. It had one that said "Reactor ONLINE" and
@@ -42,9 +46,9 @@ local FAC = {
   -- `use` is what the prompt says instead. The dish is a machine — you stand
   -- beside it, so it only ever names itself.
   FacCommand  = { label = "Command Centre",   kind = "command",  near = 20.0,
-                  inside = 6.5, use = "Use the Ops console" },
+                  inside = 6.5, use = "Use the Ops console", direct = "Ops Board" },
   FacHangar   = { label = "Vehicle Assembly", kind = "hangar",   near = 17.0,
-                  inside = 5.0, use = "Open the builder" },
+                  inside = 5.0, use = "Open the builder", direct = "builder" },
   FacTracking = { label = "Tracking Station", kind = "tracking", near = 13.0 },
   FacDepot    = { label = "Commerce Depot",   kind = "depot",    near = 15.0,
                   inside = 4.0, use = "Use the depot counter" },
@@ -212,30 +216,86 @@ end
 
 local function fmt_alt(m)
   m = m or 0
+  if math.abs(m) < 0.5 then m = 0 end   -- never "-0 m"
   if math.abs(m) >= 1000 then return string.format("%.1f km", m / 1000) end
   return string.format("%.0f m", m)
 end
 
--- The Tracking Station body: read the shared comms.ships registry live.
-local function tracking_body()
-  local ships = save.get("comms.ships")
-  local list = {}
-  if type(ships) == "table" then
-    for _, s in pairs(ships) do if type(s) == "table" then list[#list + 1] = s end end
-  end
-  if #list == 0 then
-    return "No vessels are transmitting.\n\nLaunch a craft carrying a comms dish and keep it powered — it will appear here with live telemetry."
-  end
-  -- Stable order (UX: rows never jump around between refreshes).
-  table.sort(list, function(a, b) return (a.name or "") < (b.name or "") end)
-  local lines = { string.format("%d vessel(s) transmitting", #list), "" }
-  for _, s in ipairs(list) do
-    local pct = 0
-    if (s.cap or 0) > 0 then pct = math.floor((s.charge or 0) / s.cap * 100 + 0.5) end
-    lines[#lines + 1] = string.format("•  %s   ·   %s   ·   bat %d%%", (s.name or "Vessel"), fmt_alt(s.alt), pct)
-  end
-  return table.concat(lines, "\n")
+-- ── THE TRACKING STATION ────────────────────────────────────────────────────
+--
+-- It used to list only craft carrying a powered comms dish — a $420 part locked
+-- behind copper — and offer nothing to do about any of them, so for most of a
+-- save it said "No vessels are transmitting" while craft sat parked all over
+-- the world. It is the fleet board now: EVERY craft you've left (flight_ops'
+-- `fleet.craft`), with TAKE CONTROL. The dish still means something: it is the
+-- remote control. Over a live link the board's numbers are live and taking
+-- control is free; without one it's "last seen", and a crew transfer is billed.
+local track_sel = 1        -- which row the action button acts on
+local track_msg, track_msg_t = "", -100
+
+local function fleet_rows()
+  local fo = ref("flight_ops")
+  return (fo and fo.fleetList) and fo.fleetList() or {}
 end
+
+local function tracking_body()
+  local rows = fleet_rows()
+  if #rows == 0 then
+    return "No craft out there yet.\n\nAnything you leave behind — END FLIGHT away from the base, or an "
+      .. "abort from orbit — stays where it is and appears here, and you can take control of it again.", nil
+  end
+  track_sel = math.max(1, math.min(track_sel, #rows))
+  local co = ref("company")
+  local lines = { string.format("%d craft in the field   ·   ↑ ↓ select", #rows), "" }
+  for i, e in ipairs(rows) do
+    local where = e.body or "?"
+    local h = e.alt and fmt_alt(e.alt) or "—"
+    local orbit = ""
+    if e.status == "in orbit" and e.pe and e.ap then
+      orbit = string.format("   pe %s · ap %s", fmt_alt(e.pe), fmt_alt(e.ap))
+    end
+    local link = e.link and "live link" or (e.comms and "dish down — last seen" or "last seen")
+    lines[#lines + 1] = string.format("%s %s   ·   %s   ·   %s   ·   %s%s   ·   %s",
+      i == track_sel and "▸" or "  ", e.name, where, h, e.status, orbit, link)
+  end
+  local e = rows[track_sel]
+  lines[#lines + 1] = ""
+  if not e.pod then
+    lines[#lines + 1] = e.name .. " has no crew pod — it can be tracked, not flown."
+  elseif e.piloted then
+    lines[#lines + 1] = "You're flying " .. e.name .. "."
+  elseif e.fee > 0 then
+    lines[#lines + 1] = string.format("No comms link: a shuttle takes the crew out to %s — %s.",
+      e.name, co and co.money(e.fee) or ("$" .. e.fee))
+  else
+    lines[#lines + 1] = "Comms link up: take control from here, free."
+  end
+  if track_msg ~= "" and time - track_msg_t < 6.0 then
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = "» " .. track_msg
+  end
+  local act = nil
+  if e.pod and not e.piloted then
+    act = (e.fee > 0)
+      and string.format("Take control  ·  %s  ▸", co and co.money(e.fee) or ("$" .. e.fee))
+      or "Take control  ▸"
+  end
+  return table.concat(lines, "\n"), act
+end
+
+-- The board's action: take control of the selected craft.
+function trackingAction()
+  local rows = fleet_rows()
+  local e = rows[track_sel]
+  local fo = ref("flight_ops")
+  if not (e and fo and fo.takeControlOf) then return false end
+  local ok, why = fo.takeControlOf(e.fid)
+  if ok then return true end
+  track_msg, track_msg_t = why or "can't take control", time
+  return false
+end
+
+function trackingSelect(i) track_sel = i end
 
 -- Is a facility panel up? The tool belt asks, so holding E at the depot digs a
 -- hole in the floor instead of… well, exactly that.
@@ -296,21 +356,45 @@ local function kept_back(mat)
   return mi ~= nil and mi.reserves ~= nil and mi.reserves(mat) == true
 end
 
+-- The depot's price for one material right now: list × standing.
+local function price_mult(co)
+  if co and co.priceMult then return co.priceMult() end
+  return 1.0 + 0.04 * ((co and co.rep()) or 0)
+end
+
+-- Has this material ever been sold? Its FIRST sale is a discovery: a premium
+-- (materials.discoveryBonus — more for rarer stuff), and for a rare material
+-- a point of standing. The panel marks the ones still waiting NEW, because
+-- "sell everything" used to be the only button and nothing said which crate
+-- was about to be worth ten times its weight.
+local function first_sale(mat)
+  local sold = save.get("depot.sold") or {}
+  return not sold[mat]
+end
+
+local function bonus_of(mats, mat)
+  if mats.discoveryBonus then return mats.discoveryBonus(mat) end
+  return 150 * (1 + mats.tier(mat))
+end
+
 -- Sell: the warehouse, at the registry's prices, nudged by standing — except
--- what the contract on the books is waiting for. A first sale of a material is
--- a DISCOVERY — the moment the science half of the game starts paying, and the
--- one time a single crate is worth real money.
-function depotSell()
+-- what the contract on the books is waiting for. `only` sells just that one
+-- material (the depot's per-material rows); nil sells everything. A first sale
+-- of a material is a DISCOVERY — the moment the science half of the game starts
+-- paying, and the one time a single crate is worth real money.
+function depotSell(only)
   local inv, co, mats = ref("inventory"), ref("company"), ref("materials")
   local rs = ref("research")
   if not (inv and co and mats) then return "no depot systems" end
   local items = inv.items("base")
   if #items == 0 then return "the warehouse is empty" end
-  local mult = 1.0 + 0.04 * co.rep()
-  local total, bonus, firsts, kept = 0, 0, {}, 0
+  local mult = price_mult(co)
+  local total, bonus, firsts, kept, rare = 0, 0, {}, 0, 0
   local sold = save.get("depot.sold") or {}
   for _, it in ipairs(items) do
-    if kept_back(it.mat) then
+    if only and it.mat ~= only then
+      -- not this press
+    elseif kept_back(it.mat) then
       kept = kept + it.n
     else
       total = total + it.value * mult
@@ -318,7 +402,8 @@ function depotSell()
         sold[it.mat] = true
         firsts[#firsts + 1] = mats.label(it.mat)
         -- The discovery premium: tier-scaled, paid once, ever.
-        bonus = bonus + 150 * (1 + mats.tier(it.mat))
+        bonus = bonus + bonus_of(mats, it.mat)
+        if mats.tier(it.mat) >= 2 then rare = rare + 1 end
       end
       inv.remove("base", it.mat, it.n)
     end
@@ -328,10 +413,11 @@ function depotSell()
   if total <= 0 and bonus <= 0 then return keep or "nothing to sell" end
   save.set("depot.sold", sold)
   total = math.floor(total)
-  co.earn(total, "materials sold")
+  co.earn(total, only and ("sold " .. mats.label(only)) or "materials sold")
   if bonus > 0 then
     co.earn(bonus, "discovery premium")
-    co.addRep(1, "first sale of " .. table.concat(firsts, ", "))
+    -- Standing for finding something rare, not for selling dirt.
+    if rare > 0 then co.addRep(rare, "first sale of " .. table.concat(firsts, ", ")) end
     if rs and rs.noteDiscovery then rs.noteDiscovery() end
   end
   return string.format("sold for %s%s%s", co.money(total),
@@ -340,21 +426,50 @@ function depotSell()
     keep and ("  ·  " .. keep) or "")
 end
 
--- What one press would do: the sale value of everything on the pad, in the
--- pack and in the warehouse, and how many units stay behind for a contract.
-local function depot_plan()
-  local inv, co = ref("inventory"), ref("company")
+-- Everything one press could sell, merged by material across the pad, the
+-- pack and the warehouse: { mat, n, value, kept, first, bonus }, in the
+-- registry's order.
+local function depot_stock()
+  local inv, co, mats = ref("inventory"), ref("company"), ref("materials")
+  if not (inv and mats) then return {} end
   local ids = { "astro", "base" }
   for _, h in ipairs(landedHolds()) do ids[#ids + 1] = h.id end
-  local worth, kept, units = 0, 0, 0
+  local by = {}
   for _, cid in ipairs(ids) do
     for _, it in ipairs(inv.items(cid)) do
-      units = units + it.n
-      if kept_back(it.mat) then kept = kept + it.n else worth = worth + it.value end
+      local e = by[it.mat] or { mat = it.mat, n = 0, value = 0 }
+      e.n, e.value = e.n + it.n, e.value + it.value
+      by[it.mat] = e
     end
   end
-  local mult = 1.0 + 0.04 * ((co and co.rep()) or 0)
-  return math.floor(worth * mult), kept, units
+  local mult = price_mult(co)
+  local out = {}
+  for _, mat in ipairs(mats.list()) do
+    local e = by[mat]
+    if e then
+      e.value = math.floor(e.value * mult)
+      e.kept = kept_back(mat)
+      e.first = first_sale(mat)
+      e.bonus = e.first and bonus_of(mats, mat) or 0
+      out[#out + 1] = e
+    end
+  end
+  return out
+end
+
+-- Published for the harness (and any panel that wants the goods as data).
+function depotStock() return depot_stock() end
+
+-- What one press would do: the sale value of everything on the pad, in the
+-- pack and in the warehouse (discovery premiums included), and how many units
+-- stay behind for a contract.
+local function depot_plan()
+  local worth, kept, units = 0, 0, 0
+  for _, e in ipairs(depot_stock()) do
+    units = units + e.n
+    if e.kept then kept = kept + e.n else worth = worth + e.value + e.bonus end
+  end
+  return worth, kept, units
 end
 
 -- WHAT THE BUTTON DOES, and what it pays. ONE press: the cargo comes off the
@@ -364,7 +479,8 @@ end
 -- pressed once, read "12 units into the warehouse", and walked away with no
 -- money and no idea there was a second step. The warehouse is still where
 -- things go (a delivery contract counts it), it just isn't a stop you have to
--- make yourself.
+-- make yourself. Each material also has its own row (see `depot_rows`), for
+-- selling one thing and keeping the rest.
 --
 -- The label carries the MONEY because "Sell everything — $1,240" is a
 -- decision, and there is always a label: "nothing to sell yet" is an answer.
@@ -375,53 +491,103 @@ function depotAction()
   if units == 0 then return "Nothing to sell yet" end
   local money = (co and co.money(worth)) or ("$" .. worth)
   if worth > 0 then
-    return string.format("%s — %s  ▸", kept > 0 and "Sell the rest" or "Sell everything", money)
+    return string.format("%s — %s", kept > 0 and "Sell the rest" or "Sell everything", money)
   end
-  return "Store it for the contract  ▸"
+  return "Store it for the contract"
 end
 
--- The depot body: what's in the warehouse, what it's worth, and what's still
--- sitting in a hold out on the pad.
+-- One press on a material's row: unload, then sell just that.
+function depotSellOne(mat)
+  depotUnload()
+  depot_msg = depotSell(mat)
+  depot_msg_t = time
+  sfx("click")
+end
+
+-- THE PER-MATERIAL ROWS. Described into the panel (ui.make leaves the authored
+-- title, body and buttons alone) while the depot is open, and emptied for every
+-- other building. A row is a button: what it is, how many, what it fetches,
+-- and NEW with the premium when its first sale is still to come.
+local rows_shown = nil
+local function depot_rows(show)
+  local panel = find("Facility Panel")
+  if not (panel and ui and ui.make) then return end
+  if not show then
+    if rows_shown ~= false then ui.make(panel, {}) end
+    rows_shown = false
+    return
+  end
+  rows_shown = true
+  local co, mats = ref("company"), ref("materials")
+  local stock = depot_stock()
+  local function money(v) return (co and co.money(v)) or ("$" .. v) end
+  local items = {}
+  for _, e in ipairs(stock) do items[#items + 1] = e end
+  ui.make(panel, {
+    { "col", key = "depotRows", w = "100%", h = "fit", gap = 3, pad = 0, order = 2,
+      items = items, function(e)
+        local label = string.format("%d × %s", e.n, (mats and mats.label(e.mat)) or e.mat)
+        local tail
+        if e.kept then
+          tail = "for the contract"
+        elseif e.first then
+          tail = string.format("NEW · first sale +%s", money(e.bonus))
+        else
+          tail = ""
+        end
+        return {
+          "button", key = "sell_" .. e.mat, style = "panel/row", w = "100%", h = 28,
+          dir = "row", gap = 8, align = "center", disabled = e.kept or nil,
+          opacity = e.kept and 0.55 or nil,
+          tooltip = e.kept and "Kept back — the contract on the books needs it in the warehouse."
+            or (e.first and "Never sold before: the first sale pays a discovery premium." or nil),
+          { "text", key = "what", style = "panel/cell", w = "grow", h = "fit", text = label },
+          { "text", key = "first", style = e.first and "panel/cellStrong" or "panel/cellMuted",
+            w = "fit", h = "fit", text = tail },
+          { "text", key = "pay", style = "panel/cellStrong", w = 70, h = "fit", textAlign = "end",
+            text = e.kept and "" or money(e.value) },
+          { "text", key = "go", style = "panel/cellMuted", w = 34, h = "fit", textAlign = "end",
+            text = e.kept and "" or "sell" },
+          onClicked = function() if not e.kept then depotSellOne(e.mat) end end,
+        }
+      end },
+  })
+end
+
+-- The depot body: what's on the pad and in the pack, the warehouse's weight,
+-- and what the prices are worth to you today. The goods themselves are the
+-- rows under it.
 local function depot_body()
   local inv, co, mats = ref("inventory"), ref("company"), ref("materials")
   if not (inv and co and mats) then return "Depot systems offline." end
   local lines = {}
   local holds = landedHolds()
   if #holds > 0 then
-    lines[#lines + 1] = "ON THE PAD"
-    for _, h in ipairs(holds) do
-      lines[#lines + 1] = string.format("•  %s   ·   %.1f kg", h.name, h.kg)
-    end
-    lines[#lines + 1] = ""
+    local parts = {}
+    for _, h in ipairs(holds) do parts[#parts + 1] = string.format("%s %.0f kg", h.name, h.kg) end
+    lines[#lines + 1] = "ON THE PAD — " .. table.concat(parts, "  ·  ")
   end
   local pack = inv.mass("astro")
   if pack > 0.05 then
-    lines[#lines + 1] = string.format("IN YOUR SUIT PACK — %s", inv.line("astro"))
-    for _, it in ipairs(inv.items("astro")) do
-      lines[#lines + 1] = string.format("•  %d × %s   ·   %s", it.n, mats.label(it.mat),
-        co.money(it.value))
-    end
-    lines[#lines + 1] = ""
+    lines[#lines + 1] = string.format("SUIT PACK — %s", inv.line("astro"))
   end
-  local items = inv.items("base")
   lines[#lines + 1] = string.format("WAREHOUSE — %.1f kg", inv.mass("base"))
-  if #items == 0 then
+  local worth, kept, units = depot_plan()
+  if units == 0 then
     lines[#lines + 1] = "Empty. Mine rock with the laser, cut flora with the harvester, or fly it home in a Cargo Bay."
   else
-    for _, it in ipairs(items) do
-      lines[#lines + 1] = string.format("•  %d × %s   ·   %s%s", it.n, mats.label(it.mat),
-        co.money(it.value), kept_back(it.mat) and "   (for the contract)" or "")
+    local any_first = false
+    for _, e in ipairs(depot_stock()) do if e.first and not e.kept then any_first = true end end
+    local pct = math.floor((price_mult(co) - 1.0) * 100 + 0.5)
+    lines[#lines + 1] = string.format("Worth %s   ·   reputation %+d%% on prices", co.money(worth), pct)
+    if any_first then
+      lines[#lines + 1] = "NEW — never sold before: its first sale pays a discovery premium."
     end
-  end
-  local worth, kept, units = depot_plan()
-  if units > 0 then
-    lines[#lines + 1] = ""
-    lines[#lines + 1] = string.format("Sale value %s   ·   standing %+d%%",
-      co.money(worth), math.floor(co.rep() * 4))
     if kept > 0 then
       lines[#lines + 1] = string.format("%d unit%s kept back — your contract needs %s in the warehouse.",
         kept, kept == 1 and "" or "s", kept == 1 and "it" or "them")
     end
+    lines[#lines + 1] = "Click a row to sell one material; the button sells it all."
   end
   if depot_msg ~= "" and time - depot_msg_t < 8.0 then
     lines[#lines + 1] = ""
@@ -434,11 +600,12 @@ end
 -- two can be made ATOMIC — see `refresh`.
 local function panel_content(f)
   local body, act = "", nil
+  depot_rows(f.kind == "depot")
   if f.kind == "tracking" then
-    body = tracking_body()
+    body, act = tracking_body()
   elseif f.kind == "hangar" then
     body = "Assemble and launch a new vessel from your saved parts."
-    act = "Open Builder  ▸"
+    act = "Open the builder  ▸"
   elseif f.kind == "command" then
     local astro = find("Astronaut")
     local where = astro and space.dominant(astro.x, astro.y, astro.z) or "?"
@@ -535,11 +702,48 @@ local function refresh()
   if action_el then action_el.visible = act ~= nil end
 end
 
+-- THE DIM BEHIND A PANEL. One scrim for every panel you stop to read — this
+-- one, the Ops Board, the pause menu. It cannot be a panel's own child (a child
+-- draws over its parent's fill, and inside a stacked panel it takes part in the
+-- flow), so it is described into the HUD layer itself, ordered behind
+-- everything else there: the world goes quiet, the panel and the HUD stay crisp.
+-- One owner, because two scripts describing into one container would each
+-- delete what the other made.
+local scrim_on = nil
+local function scrim(on)
+  if scrim_on == on or not (ui and ui.make) then return end
+  local layer = find("Ship HUD")
+  if not layer then return end
+  scrim_on = on
+  ui.make(layer, on and { { "box", key = "panelScrim", style = "panel/scrim", pin = "center",
+                            w = 4000, h = 2400, order = -100 } } or {})
+end
+
+local function sync_scrim()
+  local pm, ob = ref("pause_menu"), ref("ops_board")
+  scrim(open_fac ~= nil or (pm ~= nil and pm.open == true)
+    or (ob ~= nil and ob.isOpen ~= nil and ob.isOpen() == true))
+end
+
+-- The Tracking Station has a screen of its own (scripts/tracking_station.lua):
+-- the whole fleet with its power, signal and control, and the actions on it.
+-- This menu still owns "a facility is open" (E/Esc, walking away, the scrim);
+-- the station only draws.
+local function station()
+  local ts = ref("tracking_station")
+  return (ts and ts.open and ts.close) and ts or nil
+end
+
 -- Called by the panel's ✕ button and by pressing E/Esc while open.
 function close()
   if open_fac then sfx("close") end
+  if open_fac and FAC[open_fac].kind == "tracking" then
+    local ts = station()
+    if ts then ts.close() end
+  end
   open_fac = nil
   if panel_el then panel_el.visible = false end
+  sync_scrim()
 end
 
 function openMenu(name)
@@ -547,7 +751,15 @@ function openMenu(name)
   open_fac = name
   sfx("open")
   if prompt_el then prompt_el.visible = false end
+  local ts = FAC[name].kind == "tracking" and station() or nil
+  if ts then
+    if panel_el then panel_el.visible = false end
+    ts.open()
+    scrim(true)
+    return
+  end
   if panel_el then panel_el.visible = true end
+  scrim(true)
   refresh()
 end
 
@@ -583,6 +795,9 @@ function action()
     local ob = ref("ops_board")
     close()
     if ob and ob.openBoard then ob.openBoard() end
+  elseif kind == "tracking" then
+    -- Flying it now: the cockpit takes the screen.
+    if trackingAction() then close() else refresh() end
   elseif kind == "depot" then
     depotUnload()
     depot_msg = depotSell()
@@ -593,7 +808,18 @@ function action()
   end
 end
 
+-- Past a facility's prompt reach, with a few metres' grace so a step back
+-- from the counter doesn't slam the panel shut. A building that is gone counts
+-- as left.
+local LEAVE_SLACK = 4.0
+local function beyond(astro, name)
+  local f = find(name)
+  if not (f and astro) then return true end
+  return apart(astro, f) > (FAC[name].near or params.radius) + LEAVE_SLACK
+end
+
 function update(node, dt)
+  sync_scrim()
   if not panel_el then grab() end
   if not panel_el then
     diag("no \"Facility Panel\" node in this scene — nothing can open")
@@ -644,17 +870,28 @@ function update(node, dt)
   elseif near_fac then
     diag(string.format("%d standing · at %s", standing, FAC[near_fac].label))
   else
-    diag(string.format("%d standing · nearest %s, %.0f m away", standing,
-      nearest_n and FAC[nearest_n].label or "?", nearest_d or 0))
+    -- No distance in it: the line is only logged when it CHANGES, and a
+    -- distance changes every metre you walk (a log line a step, 0.116).
+    diag(string.format("%d standing · nearest %s", standing,
+      nearest_n and FAC[nearest_n].label or "?"))
   end
 
   if open_fac then
     if prompt_el then prompt_el.visible = false end
-    refresh() -- keep telemetry live while the panel is up
+    -- Walk away and it closes: a counter you have left is not one you are
+    -- standing at, and a panel that followed you round the planet hid the
+    -- world and kept the belt's keys for as long as you forgot it was up.
+    if beyond(astro, open_fac) then close() return end
+    local ts = FAC[open_fac].kind == "tracking" and station() or nil
+    if FAC[open_fac].kind == "tracking" and not ts then
+      if input.pressed("up") then track_sel = math.max(1, track_sel - 1) end
+      if input.pressed("down") then track_sel = track_sel + 1 end
+    end
+    if not ts then refresh() end -- keep telemetry live while the panel is up
     if input.pressed("escape") then
       escTakenAt = time
       close()
-    elseif interact_pressed() then
+    elseif interact_pressed() and not (ts and ts.typing and ts.typing()) then
       close()
     end
     return
@@ -663,7 +900,8 @@ function update(node, dt)
   local ob = ref("ops_board")
   if ob and ob.isOpen and ob.isOpen() then
     if prompt_el then prompt_el.visible = false end
-    if interact_pressed() then ob.closeBoard() end
+    -- The board is the Command Centre's console: it stays in the building.
+    if interact_pressed() or beyond(astro, "FacCommand") then ob.closeBoard() end
     return
   end
   if near_fac then
@@ -672,10 +910,26 @@ function update(node, dt)
     if f.inside then
       say = (best_in < f.inside) and f.use or ("Enter the " .. f.label)
     end
+    -- E goes straight to the screen you came for: the Ops Board at the
+    -- Command Centre, the builder at the Vehicle Assembly. Both used to open
+    -- an overview panel first whose only real content was a button to the
+    -- screen you wanted. (The Command Centre's overview is one click from the
+    -- board's own "Overview" button.)
+    if f.direct and say == ("Enter the " .. f.label) then say = say .. " — " .. f.direct end
     say = say .. "   ·   E"
     show_prompt(say)
     if prompt_el then prompt_el.visible = true end
-    if interact_pressed() then openMenu(near_fac) end
+    if interact_pressed() then
+      if f.kind == "command" and ob and ob.openBoard then
+        if prompt_el then prompt_el.visible = false end
+        ob.openBoard()
+      elseif f.kind == "hangar" then
+        sfx("open")
+        fade_to("builder")
+      else
+        openMenu(near_fac)
+      end
+    end
   elseif prompt_el then
     prompt_el.visible = false
   end

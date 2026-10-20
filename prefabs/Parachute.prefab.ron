@@ -1,0 +1,25 @@
+[
+    (
+        // The canopy of one chute part: spawned by vessel_controller when the
+        // chutes are staged and driven by scripts/parachute.lua. One skinned
+        // mesh (tools/gen_parachute.py) — canopy, lines, riser, pilot chute
+        // and lid in a single draw. Its node sits at the riser foot with no
+        // rotation; the script places every bone.
+        name: "Parachute",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Mesh(
+            asset_path: "models/parts/parachute.glb",
+        ),
+        scripts: [
+            (
+                kind: "parachute",
+                enabled: true,
+                params: [],
+            ),
+        ],
+    ),
+]

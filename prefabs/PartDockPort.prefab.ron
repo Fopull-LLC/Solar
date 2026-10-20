@@ -1,7 +1,7 @@
-// DOCKING PORT — the androgynous latch every craft mates through. Built on the
-// decoupler's proven collar geometry (a short, wide disc that sits flush in a
-// stack) so it stacks and collides exactly like one, but finished in a bright
-// guidance blue so you can pick the mating face out from across an orbit.
+// DOCKING PORT — the androgynous latch every craft mates through. A short, wide
+// collar that sits flush in a stack and collides like the decoupler, with a
+// capture ring, three guide petals and latch hooks on top (mesh and materials:
+// tools/gen_part_meshes.py).
 //
 // The "Dock Light" child is the capture indicator the vessel controller drives:
 // dark when nothing's near, amber while a target is inside the soft-capture
@@ -16,28 +16,80 @@
             scale: (1.06, 0.34, 1.06),
         ),
         matter: Mesh(
-            asset_path: "models/space-kit/rocket_fuelA.glb",
+            asset_path: "models/parts/dock_port.glb",
         ),
-        material: Some((
-            color: (0.42, 0.6, 0.78),
-            shader: Some("shaders/hullPanels.flsl"),
-            shader_params: {
-                "baseColor": (0.42, 0.6, 0.78, 1.0),
-            },
-        )),
+        object_materials: {
+            "Dark": (
+                color: (0.3, 0.3, 0.32),
+                texture: Some("textures/parts/metal_albedo.png"),
+                normal_map: Some("textures/parts/metal_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/parts/metal_orm.png"),
+                roughness: 1.2,
+                metallic_map: Some("textures/parts/metal_orm.png"),
+                metallic: 0.4,
+                ao_map: Some("textures/parts/metal_orm.png"),
+                shader: Some("shaders/hullPanels.flsl"),
+                shader_params: {
+                    "tint": (0.3, 0.3, 0.32, 1.0),
+                },
+                shading: Physical,
+            ),
+            "Metal": (
+                color: (1, 1, 1),
+                texture: Some("textures/parts/metal_albedo.png"),
+                normal_map: Some("textures/parts/metal_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/parts/metal_orm.png"),
+                roughness: 1.0,
+                metallic_map: Some("textures/parts/metal_orm.png"),
+                metallic: 0.55,
+                ao_map: Some("textures/parts/metal_orm.png"),
+                shader: Some("shaders/hullPanels.flsl"),
+                shader_params: {
+                    "tint": (1, 1, 1, 1.0),
+                },
+                shading: Physical,
+            ),
+            "Paint": (
+                color: (1, 1, 1),
+                texture: Some("textures/parts/paint_albedo.png"),
+                normal_map: Some("textures/parts/paint_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/parts/paint_orm.png"),
+                roughness: 1.0,
+                metallic_map: Some("textures/parts/paint_orm.png"),
+                metallic: 1.0,
+                ao_map: Some("textures/parts/paint_orm.png"),
+                shader: Some("shaders/hullPanels.flsl"),
+                shader_params: {
+                    "tint": (1, 1, 1, 1.0),
+                },
+                shading: Physical,
+            ),
+            "Stencil": (
+                color: (0.06, 0.06, 0.07),
+                texture: Some("textures/parts/markings.png"),
+                roughness: 0.6,
+                metallic: 0.0,
+                shading: Physical,
+            ),
+        },
         scripts: [],
         rigidbody: Some((
             boxed: true,
             mode: Kinematic,
             radius: 0.5,
             height: 2.0,
-            half_extents: (0.53, 0.09, 0.53),
+            // The engine scales a collider by its node's scale: × the prefab's
+            // (1.06, 0.34, 1.06) scale: (0.53, 0.14, 0.53) m — the 0.28 m collar it stacks as.
+            half_extents: (0.5, 0.412, 0.5),
             restitution: 0.05,
             friction: 0.6,
             gravity: true,
             lock_pos: (false, false, false),
             lock_rot: (false, false, false),
-            mass: 0.18,
+            mass: 0.1,
         )),
     ),
     (

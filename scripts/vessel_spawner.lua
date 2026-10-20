@@ -14,7 +14,14 @@
 
 defaults = {
   offset = 14.0,   -- sideways distance from the pad
-  clear = 0.4,     -- gap between the lowest part and the deck at spawn
+  -- Gap between the lowest COLLIDER and the deck at spawn. It used to be 0.4 m
+  -- under the assumption that the stack's lowest point was the blueprint's
+  -- y = 0, so every release dropped the craft 40 cm onto the pad (and a craft
+  -- standing on landing legs, whose collider reaches 0.4 m below that, was
+  -- clamped half-buried in the deck instead). The real lowest collider point is
+  -- now measured once the parts have spawned (see `lowest_collider`), so this
+  -- is a true hairline: release sets the craft down 2 cm, at rest.
+  clear = 0.02,
 }
 
 -- Radius of ground levelled under the pad: the deck is 5.1 × 4.3 m (half-
@@ -42,28 +49,58 @@ local function dominant_at(x, y, z)
   return best
 end
 
--- Vessel basis for up alignment: yaw = 0, R = Rx(pitch)·Rz(roll); the +Y
--- column is (−sin r, cos r·cos p, cos r·sin p), so a target up solves to
--- roll = asin(−ux), pitch = atan2(uz, uy).
-local function up_angles(ux, uy, uz)
-  local roll = math.asin(math.max(-1, math.min(1, -ux)))
-  local pitch = math.atan2(uz, uy)
-  return pitch, roll
+-- Standing on the ground: the pad and the vessel are turned with
+-- `node:setUp(up)` (engine 0.117, floptle/0403), which puts +Y along a WORLD
+-- direction whatever the hemisphere and whatever the parent's rotation. (It
+-- replaced a solve for canonical Euler angles: written one field at a time, a
+-- pad in the planet's lower hemisphere came out 20–70° off vertical.) The
+-- vessel frame the parts are laid out in is then read back off the node.
+local function basis_of(node)
+  local f = node:worldForward()
+  return node:worldRight(), node:worldUp(), vec3(-f.x, -f.y, -f.z)
 end
 
-local function basis(pitch, roll)
-  local cx, sx = math.cos(pitch), math.sin(pitch)
-  local cz, sz = math.cos(roll), math.sin(roll)
-  local rx = vec3(cz, cx * sz, sx * sz)
-  local up = vec3(-sz, cx * cz, sx * cz)
-  local rz = vec3(0, -sx, cx)
-  return rx, up, rz
+-- How far below the vessel origin the craft's lowest COLLIDER reaches, in the
+-- vessel frame (so a negative number is below the origin). Each part's box is
+-- read off its live RigidBody (the prefab's half-extents, which is what the
+-- physics compound is built from) and turned by the part's blueprint rotation,
+-- so a sideways tank or a splayed leg counts at its real reach. Parts without a
+-- readable box fall back to the blueprint's stack height, which is what the
+-- builder used to put y = 0 at the bottom of the stack in the first place.
+local function lowest_collider(placed)
+  local low = nil
+  for _, e in ipairs(placed) do
+    local part, d = e.part, e.d
+    local hx, hy, hz = d.rx or 0.5, (d.h or 1.0) * 0.5, d.rz or 0.5
+    local getc = part.getComponent or part.getcomponent
+    local rb = getc and getc(part, "RigidBody")
+    if rb and rb.half_y and rb.half_y > 0 then
+      -- The engine scales the box by the part node's scale; the component
+      -- reports the unscaled prefab numbers.
+      hx = (rb.half_x or hx) * math.abs(part.scale_x or 1)
+      hy = rb.half_y * math.abs(part.scale_y or 1)
+      hz = (rb.half_z or hz) * math.abs(part.scale_z or 1)
+    end
+    -- The part's local X/Y/Z axes in the vessel frame (YXZ, as everywhere in
+    -- this project); only their vessel-up (y) components matter here.
+    local cy, sy = math.cos(d.yaw or 0), math.sin(d.yaw or 0)
+    local cx, sx = math.cos(d.pitch or 0), math.sin(d.pitch or 0)
+    local cz, sz = math.cos(d.roll or 0), math.sin(d.roll or 0)
+    local Xx, Xy, Xz = cy * cz + sy * sx * sz, cx * sz, -sy * cz + cy * sx * sz
+    local Yx, Yy, Yz = -cy * sz + sy * sx * cz, cx * cz, sy * sz + cy * sx * cz
+    local Zy = Xz * Yx - Xx * Yz
+    local reach = math.abs(Xy) * hx + math.abs(Yy) * hy + math.abs(Zy) * hz
+    local bottom = (d.y or 0) - reach
+    if not low or bottom < low then low = bottom end
+  end
+  return low or 0.0
 end
 
-local function spawn_parts(vessel, bp, pitch, roll)
-  local rxv, upv, rzv = basis(pitch, roll)
+local function spawn_parts(vessel, bp)
+  local rxv, upv, rzv = basis_of(vessel)
   local vx, vy, vz = vessel.x, vessel.y, vessel.z
   local total = 0
+  local placed = {}
   for _, d in pairs(bp.parts) do
     total = total + 1
     pending = pending + 1
@@ -76,7 +113,8 @@ local function spawn_parts(vessel, bp, pitch, roll)
       -- the part's local rotation (the "misrotated parts" of every sloped
       -- launch). Parts are authored in the VESSEL frame: overwrite with the
       -- blueprint's exact local rotation (v1.2 builds sideways parts too).
-      part.pitch, part.roll, part.yaw = d.pitch or 0, d.roll or 0, d.yaw or 0
+      part:setAngles(d.yaw or 0, d.pitch or 0, d.roll or 0)
+      placed[#placed + 1] = { part = part, d = d }
       pending = pending - 1
       if pending == 0 and vessel_node then
         rebuilt = true
@@ -85,7 +123,19 @@ local function spawn_parts(vessel, bp, pitch, roll)
         -- contacts, rides the planet's frame) until the pilot releases —
         -- nothing can fling a vessel that is not yet simulating.
         assembly.setAnchored(vessel_node, true)
-        log("vessel assembled: " .. total .. " parts — clamped to the pad")
+        -- SEAT IT ON THE DECK. The origin was placed `clear` above the deck on
+        -- the assumption that nothing reaches below y = 0; lift (or lower) the
+        -- clamp pin by however far the real lowest collider is from that, so
+        -- the craft is clamped a hairline above the deck — never inside it
+        -- (a release from inside the pad is a depenetration kick) and never
+        -- 40 cm over it (a release from up there is a drop).
+        local low = lowest_collider(placed)
+        if relv and math.abs(low) > 1e-3 then
+          relv.x, relv.y, relv.z = relv.x - upv.x * low, relv.y - upv.y * low, relv.z - upv.z * low
+        end
+        log(string.format("vessel assembled: %d parts — clamped to the pad "
+          .. "(lowest collider %.2f m below the origin, seated %.2f m above the deck)",
+          total, -low + 0.0, params.clear)) -- (+0.0: never print "-0.00")
       end
     end, vessel)
   end
@@ -137,27 +187,79 @@ local function try_spawn()
   if sl < 1e-3 then sx, sy, sz, sl = 0, 0, 1, 1 end
   sx, sy, sz = sx / sl, sy / sl, sz / sl
 
-  -- Ground check beside the pad; WAIT (warming) until it answers.
-  local ax = px + sx * params.offset + ux * 8
-  local ay = py + sy * params.offset + uy * 8
-  local az = pz + sz * params.offset + uz * 8
-  local hit = raycast(ax, ay, az, -ux, -uy, -uz, 260.0)
-  if not (hit and hit.distance) then
+  -- THE SITE. Candidates ring the crew — `offset` metres out first, then
+  -- further, eight bearings each — and the first whose DECK would stand clear
+  -- of any sea wins. A pad in the shallows put the engine skirt half a metre
+  -- under water: buoyancy on that box (36 kN against the starter's 32 kN of
+  -- weight on Ryiaeth) floated the rocket off the deck before it lit, an extra
+  -- 2–5 m/s at release that the flight plan could not explain. UP IS UP AT
+  -- THE SITE too: the pad, its seating and the vessel are aimed at the radial
+  -- through the site's own ground point, not the crew's — 14 m away on a
+  -- small world that is 3.9° (Bryolru, r 207), and a pad tilted that much (18°
+  -- in one First Flight) launched the rocket off sideways into a near-orbit.
+  local tx, ty, tz = uy * sz - uz * sy, uz * sx - ux * sz, ux * sy - uy * sx -- up × side
+  local deck_top = 2.0 * 1.24 + 0.05
+  local function site(dist, bearing)
+    local c, sn = math.cos(bearing), math.sin(bearing)
+    local dx, dy, dz = sx * c + tx * sn, sy * c + ty * sn, sz * c + tz * sn
+    local qx = px + dx * dist + ux * 8
+    local qy = py + dy * dist + uy * 8
+    local qz = pz + dz * dist + uz * 8
+    local h = raycast(qx, qy, qz, -ux, -uy, -uz, 260.0)
+    if not (h and h.distance) then return nil end
+    local g = { x = qx - ux * h.distance, y = qy - uy * h.distance, z = qz - uz * h.distance }
+    g.ux, g.uy, g.uz = ux, uy, uz
+    if body then
+      local rx, ry, rz = g.x - body.x, g.y - body.y, g.z - body.z
+      local rl = math.sqrt(rx * rx + ry * ry + rz * rz)
+      if rl > 1e-3 then g.ux, g.uy, g.uz = rx / rl, ry / rl, rz / rl end
+    end
+    local w = water and water.at and water.at(vec3(g.x + g.ux * deck_top,
+      g.y + g.uy * deck_top, g.z + g.uz * deck_top))
+    g.wet = w and (w.depth or 0) or 0
+    return g
+  end
+  -- The first candidate doubles as the terrain-ready check; WAIT (warming)
+  -- until it answers.
+  local best = site(params.offset, 0)
+  if not best then
     if wait_t - (last_note or 0) > 5.0 then
       last_note = wait_t
       log(string.format("launch: waiting for terrain… (%.0fs)", wait_t))
     end
     return false
   end
-  local gx = ax - ux * hit.distance
-  local gy = ay - uy * hit.distance
-  local gz = az - uz * hit.distance
+  local lifted = false
+  if best.wet > 0 then
+    local first = best
+    best = nil
+    for _, dist in ipairs({ params.offset, params.offset + 8, params.offset + 16 }) do
+      for k = 0, 7 do
+        local g = site(dist, k * math.pi / 4)
+        if g and g.wet <= 0 then best = g break end
+      end
+      if best then break end
+    end
+    if best then
+      log("launch: the first pad site was awash — moved to dry ground")
+    else
+      -- Nowhere dry within reach: stand the pad up out of the water.
+      best = first
+      local lift = best.wet + 0.3
+      best.x, best.y, best.z = best.x + best.ux * lift, best.y + best.uy * lift, best.z + best.uz * lift
+      lifted = true
+      log(string.format("launch: no dry ground near — the pad stands %.1f m up out of the sea", lift))
+    end
+  end
+  local gx, gy, gz = best.x, best.y, best.z
+  ux, uy, uz = best.ux, best.uy, best.uz
+  local ax, ay, az = gx + ux * 8, gy + uy * 8, gz + uz * 8
 
   -- Level the pad's ground first, the way base_facilities levels a building's:
   -- on a slope the deck floated off the downhill side and the uphill rim
   -- buried it, and a rocket standing on a tilted pad leans before it lifts.
   -- Then probe again — the deck seats on the ground as it is now.
-  if terrain.sculpt then
+  if terrain.sculpt and not lifted then -- (a lifted pad stands on its own height)
     -- Three passes, a few ms each. The flatten levels to the planet's up
     -- right here, so the pad is level at any latitude.
     for _ = 1, 3 do terrain.sculpt(gx, gy, gz, PAD_FLAT, 1.0, "flatten") end
@@ -172,8 +274,27 @@ local function try_spawn()
   -- each time they're needed — the planet is orbiting while we work.
   local relg = body and { x = gx - body.x, y = gy - body.y, z = gz - body.z } or nil
   body_name = body and body.name or nil
-  local pitch, roll = up_angles(ux, uy, uz)
   local deck = 1.24
+
+  -- Rate the engines for THIS pad (flight_ops.rerateAtPad): the builder only
+  -- had an estimate of the launch radius. Before the vessel exists, because its
+  -- controller reads the blueprint when it starts.
+  local fo = findScript("flight_ops")
+  if fo and fo.rerateAtPad and body then
+    -- Rated at the craft's CENTRE OF MASS, not the deck: on a 130 m world a
+    -- full-burn hop is near escape energy and every metre of launch radius is
+    -- 10–13 % of apex. Rated at the deck, the starter (CoM 1.9 m up the stack)
+    -- felt 5 % less gravity than the solve assumed and flew 244–308 m against
+    -- a 230 m quote on four seeds.
+    local cm, mt = 0.0, 0.0
+    for _, d in pairs(bp.parts or {}) do
+      local m = d.mass or 0
+      cm, mt = cm + m * (d.y or 0), mt + m
+    end
+    local h = deck * 2.0 + params.clear + (mt > 0 and math.max(0, cm / mt) or 0)
+    local rb = fo.rerateAtPad(bp, body.name, gx + ux * h, gy + uy * h, gz + uz * h)
+    if rb then bp = rb; save.set("shipyard.blueprint", bp) end
+  end
 
   -- The LAUNCHPAD spawns PARENTED to the planet node: it rides the orbit
   -- through the transform hierarchy, and the engine keeps its baked static
@@ -181,7 +302,7 @@ local function try_spawn()
   -- the callback (body-relative — no tick-of-drift error).
   local planet_node = body_name and find(body_name) or nil
   spawn("Launchpad", vec3(gx + ux * deck, gy + uy * deck, gz + uz * deck), function(lp)
-    lp.pitch, lp.roll, lp.yaw = pitch, roll, 0
+    lp:setUp(vec3(ux, uy, uz))
     if planet_node and relg then
       -- Node coordinates are PARENT-LOCAL: for a pad parented to its planet,
       -- local IS the body-relative offset. (Adding the planet position here
@@ -202,9 +323,9 @@ local function try_spawn()
     local vz = bz + uz * (deck * 2.0 + params.clear)
     if b2 then relv = { x = vx - b2.x, y = vy - b2.y, z = vz - b2.z } end
     spawn("Vessel", vec3(vx, vy, vz), function(v)
-      v.pitch, v.roll, v.yaw = pitch, roll, 0
+      v:setUp(vec3(ux, uy, uz))
       vessel_node = v
-      spawn_parts(v, bp, pitch, roll)
+      spawn_parts(v, bp)
     end)
   end, planet_node)
   log("launch: pad down, vessel assembling")

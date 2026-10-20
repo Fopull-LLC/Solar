@@ -812,7 +812,7 @@
                 ),
                 size: (Fixed(600.0), Fixed(34.0)),
                 text: Some((
-                    text: "click a part to select   ·   1 move · 2 rotate · 3 stage · 4 grab   ·   X symmetry   ·   G grab ship   ·   DEL scrap   ·   CTRL+Z undo   ·   CTRL+S save   ·   RMB+WASD fly   ·   ESC leave",
+                    text: "click a part to select   ·   1 move · 2 rotate · 3 stage · 4 grab · 5 action groups   ·   X symmetry   ·   G grab ship   ·   DEL scrap   ·   CTRL+Z undo   ·   CTRL+S save   ·   RMB+WASD fly   ·   ESC leave",
                     size: 12.0,
                     color: (0.62, 0.74, 0.82, 1.0),
                     align: Start,
@@ -1773,6 +1773,81 @@
                     tracking: 2.5,
                 )),
                 visible: true,
+                opacity: 1.0,
+            )),
+        ),
+        // settings.lua: the engine resets the mixer on every scene load, so the
+        // player's volumes (and vsync, frame cap, accessibility) are applied
+        // again here. Appended LAST: `parent` is positional.
+        (
+            name: "Settings",
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Empty,
+            scripts: [
+                (
+                    kind: "settings",
+                    enabled: true,
+                    params: [],
+                ),
+            ],
+        ),
+        // ── ELECTRONICS ───────────────────────────────────────────────────────
+        // scripts/electronics.lua: the rulebook for parts' modules, actions,
+        // action groups, power and comms — reached with findScript("electronics").
+        // Appended LAST: `parent` is positional.
+        (
+            name: "Electronics",
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Empty,
+            scripts: [
+                (
+                    kind: "electronics",
+                    enabled: true,
+                    params: [],
+                ),
+            ],
+        ),
+        // The ACTION GROUPS editor (tool 5): its frame only; the contents are
+        // described by scripts/groups_panel.lua. Left of the catalogue.
+        (
+            name: "GroupsPanel",
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Empty,
+            scripts: [
+                (
+                    kind: "groups_panel",
+                    enabled: true,
+                    params: [],
+                ),
+            ],
+            parent_id: Some(38),
+            parent: Some(37),
+            ui: Some((
+                place: Pin(
+                    anchor: TopRight,
+                    offset: (-260.0, 16.0),
+                ),
+                size: (Fixed(300.0), Fit),
+                stack: Some((
+                    dir: Column,
+                    gap: 0.0,
+                    pad: 0.0,
+                    align: Start,
+                    justify: Start,
+                )),
+                visible: false,
                 opacity: 1.0,
             )),
         ),

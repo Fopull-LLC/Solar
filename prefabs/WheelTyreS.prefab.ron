@@ -1,0 +1,86 @@
+// LIVE TYRE S — spawned by vessel_controller under a powered wheel in flight
+// and hung from the chassis on a wheel joint. Written by tools/gen_part_meshes.py.
+[
+    (
+        name: "WheelTyreS",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+        rigidbody: Some((
+            mode: Kinematic,
+            radius: 0.25,
+            height: 2.0,
+            half_extents: (0.25, 0.25, 0.25),
+            restitution: 0.0,
+            friction: 1.0,
+            gravity: true,
+            rotates: true,
+            lock_pos: (false, false, false),
+            lock_rot: (false, false, false),
+            mass: 0.012,
+        )),
+    ),
+    (
+        name: "TyreMesh",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, -0.7071068, 0.0, 0.7071068),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Mesh(
+            asset_path: "models/parts/wheel_s_tyre.glb",
+        ),
+        object_materials: {
+            "Dark": (
+                color: (0.3, 0.3, 0.32),
+                texture: Some("textures/parts/metal_albedo.png"),
+                normal_map: Some("textures/parts/metal_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/parts/metal_orm.png"),
+                roughness: 1.2,
+                metallic_map: Some("textures/parts/metal_orm.png"),
+                metallic: 0.4,
+                ao_map: Some("textures/parts/metal_orm.png"),
+                shader: Some("shaders/hullPanels.flsl"),
+                shader_params: {
+                    "tint": (0.3, 0.3, 0.32, 1.0),
+                },
+                shading: Physical,
+            ),
+            "Metal": (
+                color: (1, 1, 1),
+                texture: Some("textures/parts/metal_albedo.png"),
+                normal_map: Some("textures/parts/metal_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/parts/metal_orm.png"),
+                roughness: 1.0,
+                metallic_map: Some("textures/parts/metal_orm.png"),
+                metallic: 0.55,
+                ao_map: Some("textures/parts/metal_orm.png"),
+                shader: Some("shaders/hullPanels.flsl"),
+                shader_params: {
+                    "tint": (1, 1, 1, 1.0),
+                },
+                shading: Physical,
+            ),
+            "Rubber": (
+                color: (1, 1, 1),
+                texture: Some("textures/parts/rubber_albedo.png"),
+                normal_map: Some("textures/parts/rubber_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/parts/rubber_orm.png"),
+                roughness: 1.0,
+                metallic_map: Some("textures/parts/rubber_orm.png"),
+                metallic: 0.0,
+                ao_map: Some("textures/parts/rubber_orm.png"),
+                shading: Physical,
+            ),
+        },
+        scripts: [],
+        parent: Some(0),
+    ),
+]

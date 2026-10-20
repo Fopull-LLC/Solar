@@ -364,6 +364,234 @@ check("with the crew off the map entirely, the pickup is still offered",
 check("...priced at the cap", fo.fee == fo.params.pickup_max, tostring(fo.fee))
 API.find = real_find
 
+-- ── 8. ABORT FLIGHT: the way home that is always there ──────────────────────
+-- Review, 2026-10: END FLIGHT refuses in "flying" mode, so an empty craft in a
+-- solar orbit could never end its flight. Abort works from anywhere, for a fee
+-- it never refuses, and leaves the craft where it is.
+envs.planet_walker = { onFoot = false }
+VESSEL.piloting, VESSEL.stood, VESSEL.recovered, VESSEL.hasFlown = true, 0, false, true
+VNODE.valid = true
+VESSEL.grounded, VESSEL.speed = false, 30.0
+VNODE.x, VNODE.y, VNODE.z = BODY.x + BASE.x + 2000, BODY.y + BASE.y + 900, BODY.z + BASE.z
+tick(1)
+check("in flight there is still no END FLIGHT", fo.mode == "flying", tostring(fo.mode))
+local q = fo.abortQuote()
+check("...but there is an abort", q and q.kind == "abort", q and q.kind)
+check("...priced by distance from the base, under the cap", q and q.fee > fo.params.abort_base
+  and q.fee < fo.params.abort_max, q and q.fee)
+-- Out of home's sphere entirely (a solar orbit): the cap, never nothing.
+local real_dom = API.space.dominant
+API.space.dominant = function() return "Sun" end
+q = fo.abortQuote()
+check("a craft off home's world aborts at the cap", q and q.fee == fo.params.abort_max, q and q.fee)
+check("the pause menu row names it and its fee", (fo.abortLabel() or ""):find("Abort flight")
+  and (fo.abortLabel() or ""):find("$" .. math.floor(fo.params.abort_max), 1, true), fo.abortLabel())
+FUNDS = 700
+check("one click only arms it", fo.abortClick() == false and VESSEL.piloting and VESSEL.stood == 0)
+check("...and the row asks for the confirm", (fo.abortLabel() or ""):find("Confirm"), fo.abortLabel())
+check("the second click brings the crew home", fo.abortClick() == true and not VESSEL.piloting
+  and VESSEL.stood == 1)
+check("...to the base", math.abs(ASTRO.x - BX) < 60 and math.abs(ASTRO.z - BZ) < 60,
+  string.format("%.0f,%.0f,%.0f", ASTRO.x, ASTRO.y, ASTRO.z))
+check("...the craft is left flying, not destroyed or recovered", VNODE.valid and not VESSEL.recovered)
+check("...and a short account pays what it has (never refuses)", FUNDS == 0, FUNDS)
+API.space.dominant = real_dom
+-- A craft still on its pad has nothing to abort: F gets you out of it.
+VESSEL.piloting, VESSEL.hasFlown = true, false
+check("nothing to abort on the pad", fo.abortQuote() == nil)
+VESSEL.hasFlown = true
+
+-- ── 9. THE FLEET: a craft you leave is still there next time ────────────────
+-- The README promised you could fly back out to a craft left by END FLIGHT;
+-- nothing saved it, so one trip to the Vehicle Assembly and it was gone.
+local ASM = { mass = 3.6, grounded = true }
+API.assembly = {
+  info = function(n) return { origin = { x = n.x, y = n.y, z = n.z }, grounded = ASM.grounded,
+                              mass = ASM.mass, com = { x = n.x, y = n.y, z = n.z } } end,
+  -- assembly.rebuild(node [, fn]): fn runs once the compound is whole (0.117).
+  rebuild = function(n, fn) n.rebuilt = true if fn then fn(n) end end,
+  impulseAt = function(n, imp) n.impulse = imp end,
+}
+API.vec3 = function(x, y, z) return { x = x, y = y, z = z } end
+local PARTS = {
+  { uid = 1, id = "pod", prefab = "PartPod", kind = "crewed", x = 0, y = 2.3, z = 0 },
+  { uid = 2, id = "tankS", prefab = "PartTankS", kind = "tank", fuel = 60, x = 0, y = 1.4, z = 0 },
+  { uid = 3, id = "engineS", prefab = "PartEngineS", kind = "engine", x = 0, y = 0.2, z = 0 },
+}
+VNODE.id, VNODE.pitch, VNODE.yaw, VNODE.roll = 41, 0, 0, 0
+VNODE.vx, VNODE.vy, VNODE.vz = 0, 0, 0
+VNODE.x, VNODE.y, VNODE.z = BODY.x + 300, BODY.y + 264, BODY.z
+function VESSEL.dockManifest()
+  local out = {}
+  for _, r in ipairs(PARTS) do out[#out + 1] = { uid = r.uid, rec = r, hp = 1 } end
+  return { name = "Kestrel I", parts = out, fuel = 22, charge = 0 }
+end
+-- The controller's own part list wins over the position-matched docking
+-- manifest (which, in the engine, dropped every part a rebuild had re-based).
+local manifest_parts = VESSEL.dockManifest
+function VESSEL.dockManifest() return { name = "Kestrel I", parts = { { rec = PARTS[3] } }, fuel = 1 } end
+function VESSEL.fleetParts() return { parts = PARTS, fuel = 22, charge = 0, pod = true } end
+VNODE.name = "Kestrel I"
+VESSEL.piloting = false
+T = T + 2
+tick(1)
+local fl = store["fleet.craft"] or {}
+local fid, rec = next(fl)
+check("a flown craft is written to the save", rec ~= nil and rec.name == "Kestrel I", rec and rec.name)
+check("...where it is, body-relative", rec and rec.body == BODY.name and math.abs(rec.x - 300) < 1e-6
+  and math.abs(rec.y - 264) < 1e-6, rec and string.format("%s %.0f %.0f", rec.body, rec.x, rec.y))
+check("...landed, with its fuel and every part", rec and rec.landed and rec.fuel == 22 and #rec.parts == 3)
+local rows = fo.fleetList()
+check("the Tracking Station board lists it", #rows == 1 and rows[1].name == "Kestrel I"
+  and rows[1].status == "landed" and rows[1].live, rows[1] and rows[1].status)
+check("...with no dish, taking control is a billed transfer", rows[1] and rows[1].fee > 0, rows[1] and rows[1].fee)
+FUNDS = 0
+local ok, why = fo.takeControlOf(fid)
+check("...refused when the account can't cover it (nobody is stranded at the base)",
+  not ok and tostring(why):find("costs"), why)
+FUNDS = 5000
+function VESSEL.takeControl() VESSEL.piloting = true return true end
+ok = fo.takeControlOf(fid)
+check("TAKE CONTROL puts you in it", ok and VESSEL.piloting)
+check("...and bills the transfer", FUNDS == 5000 - rows[1].fee, FUNDS)
+-- Over a live comms link it is remote control, and free.
+VESSEL.piloting = false
+store["comms.ships"] = { v41 = { name = "Kestrel I" } }
+check("over a live link the transfer is free", fo.fleetList()[1].fee == 0 and fo.fleetList()[1].link)
+
+-- A NEW SESSION: the scene reloads, nothing is alive, and the record is rebuilt
+-- on the ground it was left on — with the handoff its controller starts from.
+local spawned = {}
+local next_node = 900
+API.spawn = function(prefab, pos, cb, parent)
+  next_node = next_node + 1
+  local n = { id = next_node, name = prefab, x = pos.x, y = pos.y, z = pos.z, valid = true,
+              setAngles = function(self, y, p, r) self.yaw, self.pitch, self.roll = y, p, r end }
+  spawned[#spawned + 1] = { prefab = prefab, node = n, parent = parent }
+  if cb then cb(n) end
+end
+API.terrain = { warm = function() end }
+local fo2 = load_script("solar/scripts/flight_ops.lua", "flight_ops")
+fo2.start(NODE)
+API.findScripts = function(k)
+  if k == "vessel_controller" then return {} end
+  return envs[k] and { envs[k] } or {}
+end
+T = T + 2
+fo2.update(NODE, 0.05)
+local vroot = spawned[1]
+check("next session, the craft is rebuilt", vroot and vroot.prefab == "Vessel" and #spawned == 4,
+  string.format("%d spawns", #spawned))
+check("...where it was left", vroot and math.abs(vroot.node.x - (BODY.x + 300)) < 1.0
+  and math.abs(vroot.node.y - (BODY.y + 264)) < 1.0)
+local ho = vroot and store["dock.handoff." .. vroot.node.id]
+check("...handing its controller the parts and the fuel it had", ho and #ho.parts == 3 and ho.fuel == 22)
+check("...and assembled", vroot and vroot.node.rebuilt)
+check("...its parts parented to it", spawned[2] and spawned[2].parent == vroot.node)
+T = T + 5
+fo2.update(NODE, 0.05)
+check("a rebuilt craft whose controller hasn't started yet is not forgotten",
+  (store["fleet.craft"] or {})[fid] ~= nil)
+
+-- A craft left IN FLIGHT comes back on its orbit: the record carried along its
+-- conic to now, and the velocity there handed to its controller, which pushes
+-- it once (floptle/0402 keeps that push whole). No keep-alive hold, no top-up.
+do
+  local f = store["fleet.craft"] or {}
+  f.cfly = { name = "Swift", body = BODY.name, x = 0, y = 900, z = 0, vx = 30, vy = 0, vz = 0,
+             landed = false, fuel = 5, charge = 0, parts = { PARTS[1], PARTS[2], PARTS[3] }, stime = 10 }
+  store["fleet.craft"] = f
+  local real_space = API.space
+  API.space = setmetatable({
+    time = function() return 12 end,
+    propagate = function(x, y, z, vx, vy, vz, mu, dt)
+      return x + vx * dt, y + vy * dt, z + vz * dt, vx, vy - 1, vz
+    end,
+  }, { __index = real_space })
+  local keep = 0
+  local mu0 = BODY.mu
+  BODY.mu = 5.2 * BODY.radius * BODY.radius
+  API.assembly.keepLive = function() keep = keep + 1 end
+  spawned = {}
+  local fo3 = load_script("solar/scripts/flight_ops.lua", "flight_ops")
+  fo3.start(NODE)
+  T = T + 2
+  fo3.update(NODE, 0.05)
+  local root
+  for _, sp in ipairs(spawned) do
+    if sp.prefab == "Vessel" and store["dock.handoff." .. sp.node.id]
+      and store["dock.handoff." .. sp.node.id].name == "Swift" then root = sp.node end
+  end
+  local hv = root and store["dock.handoff." .. root.id].vel
+  check("a craft left in flight is rebuilt where its orbit has taken it", root
+    and math.abs(root.x - (BODY.x + 60)) < 1e-6 and math.abs(root.y - (BODY.y + 900)) < 1e-6,
+    root and string.format("%.1f %.1f", root.x - BODY.x, root.y - BODY.y))
+  check("...and its controller is handed the velocity it has there (pushed once the parts weigh their fuel)",
+    hv and math.abs(hv.x - 30) < 1e-9 and math.abs(hv.y + 1) < 1e-9 and root.impulse == nil,
+    hv and string.format("%.2f %.2f", hv.x, hv.y))
+  check("...with no keep-alive hold", keep == 0, keep)
+  API.space = real_space
+  BODY.mu = mu0
+  API.assembly.keepLive = nil
+  f.cfly = nil
+end
+
+-- The launch world, for the builder: published from the base's body.
+BODY.mu = 5.2 * BODY.radius * BODY.radius
+T = T + 2
+fo2.update(NODE, 0.05)
+local lw = store["launch.world"]
+-- (With no pad measured yet the quote starts 3.5 m up, where a craft's centre
+-- of mass sits on the deck — unless the ground ray finds nothing, as here.)
+check("the launch world is published for the builder", lw and lw.name == BODY.name
+  and math.abs(lw.g - BODY.mu / lw.r ^ 2) < 1e-6
+  and (lw.r == BODY.radius or math.abs(lw.r - BODY.radius - 3.5) < 1.0), lw and lw.r)
+
+-- ── 10. THE PAD NO LONGER RE-RATES ─────────────────────────────────────────
+-- It used to re-solve the engines' burn rate at the pad so the starter hopped
+-- exactly to a target — a hidden per-launch tweak. The catalogue is now built
+-- once per save (builder.lua, BALANCE) and the blueprint flies exactly as the
+-- builder quoted it; the pad only remembers its true radius, so the builder's
+-- predictions are made for the ground the rocket really stands on.
+do
+  local RB = { name = "Pad", x = 0, y = 0, z = 0, radius = 135, mu = 5.36 * 130.7 ^ 2, soi = 1555 }
+  local real_body = API.space.body
+  API.space.body = function(n) if n == "Pad" then return RB end return real_body(n) end
+  local bp = { parts = {
+      { id = "engineS", thrust = 35, burn = 21.9, ve = 160, fuel = 0 },
+      { id = "tankS", thrust = 0, burn = 0, fuel = 80, fuel_t = 0.01 } } }
+  local out = fo2.rerateAtPad(bp, "Pad", 0, 133.5, 0)   -- the pad: 2.8 m further out
+  check("the pad changes nothing in the blueprint", out == nil
+    and bp.parts[1].thrust == 35 and bp.parts[1].burn == 21.9)
+  check("...and the builder quotes this pad from now on", (store["launch.pad"] or {}).r == 133.5)
+  API.space.body = real_body
+end
+
+-- ── 11. THE TRACKING STATION'S ACTIONS ─────────────────────────────────────
+-- Off the scene a record still answers the comms network (its position), and
+-- the station can rename it and write it off.
+do
+  local off = fo2.fleetOffline and fo2.fleetOffline() or {}
+  local f0 = next(store["fleet.craft"] or {})
+  check("a craft off the scene is offered to the comms network, with where it is",
+    #off >= 0 and type(fo2.fleetOffline) == "function")
+  local okr = fo2.renameFleet(f0, "  Hermes  ")
+  check("RENAME trims and stores the name", okr and store["fleet.craft"][f0].name == "Hermes")
+  check("...and refuses an empty one", not fo2.renameFleet(f0, "   "))
+  local okt = fo2.terminateFleet(f0)
+  check("END FLIGHT writes the craft off the board", okt and (store["fleet.craft"] or {})[f0] == nil)
+  check("...and an unknown craft is refused", not fo2.terminateFleet("nope"))
+  -- the save's depth rule: a fleet record nests at most four tables deep
+  local function depth_ok(v, d)
+    d = d or 0
+    if type(v) ~= "table" then return true end
+    if d > 3 then return false end
+    for _, x in pairs(v) do if not depth_ok(x, d + 1) then return false end end
+    return true
+  end
+  check("the fleet as saved fits save.set's four-table limit", depth_ok(store["fleet.craft"] or {}))
+end
+
 -- Checked here — before the failure list is built — and covering every card
 -- shape this file rendered: in flight, down at the base, down away from it, and
 -- stranded on foot.

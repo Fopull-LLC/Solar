@@ -1,9 +1,9 @@
 [
-    // RADIAL TANK — a strap-on booster fuel tank in the SAME proven geometry as
-    // the FT-S tank (rocket_fuelB, identical collider), but radial_orient mounts it
-    // on a flank like a fin/solar panel so you can ring boosters around a core and
-    // feed them through a radial decoupler. Amber hull marks it as a drop-tank; the
-    // hullPanels shader keeps it panelled, not flat.
+    // RADIAL TANK — a strap-on booster fuel tank with the FT-S tank's collider,
+    // but radial_orient mounts it on a flank like a fin/solar panel so you can
+    // ring boosters around a core and feed them through a radial decoupler. It
+    // reads as a spherical tank in gold insulation on a strut cradle (the hull is
+    // at −X). Mesh and materials: tools/gen_part_meshes.py.
     (
         name: "PartRadialTank",
         transform: (
@@ -12,15 +12,42 @@
             scale: (1.0, 1.0, 1.0),
         ),
         matter: Mesh(
-            asset_path: "models/space-kit/rocket_fuelB.glb",
+            asset_path: "models/parts/radial_tank.glb",
         ),
-        material: Some((
-            color: (0.62, 0.42, 0.2),
-            shader: Some("shaders/hullPanels.flsl"),
-            shader_params: {
-                "baseColor": (0.62, 0.42, 0.2, 1.0),
-            },
-        )),
+        object_materials: {
+            "Foil": (
+                color: (1, 1, 1),
+                texture: Some("textures/parts/foil_albedo.png"),
+                normal_map: Some("textures/parts/foil_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/parts/foil_orm.png"),
+                roughness: 1.0,
+                metallic_map: Some("textures/parts/foil_orm.png"),
+                metallic: 0.7,
+                ao_map: Some("textures/parts/foil_orm.png"),
+                shader: Some("shaders/hullPanels.flsl"),
+                shader_params: {
+                    "tint": (1, 1, 1, 1.0),
+                },
+                shading: Physical,
+            ),
+            "Metal": (
+                color: (1, 1, 1),
+                texture: Some("textures/parts/metal_albedo.png"),
+                normal_map: Some("textures/parts/metal_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/parts/metal_orm.png"),
+                roughness: 1.0,
+                metallic_map: Some("textures/parts/metal_orm.png"),
+                metallic: 0.55,
+                ao_map: Some("textures/parts/metal_orm.png"),
+                shader: Some("shaders/hullPanels.flsl"),
+                shader_params: {
+                    "tint": (1, 1, 1, 1.0),
+                },
+                shading: Physical,
+            ),
+        },
         scripts: [],
         rigidbody: Some((
             boxed: true,
@@ -33,7 +60,7 @@
             gravity: true,
             lock_pos: (false, false, false),
             lock_rot: (false, false, false),
-            mass: 1.4,
+            mass: 0.15,
         )),
     ),
 ]
