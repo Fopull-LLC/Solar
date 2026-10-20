@@ -468,28 +468,23 @@ ok(after and math.abs(after.intensity - Ia) < 1e-9, "a loaded save carries on fr
 ok(after and after.type == W.derive(pv, Ia, 1, select(3, W.at(seedv, pv, clock_saved, 360)), false, pv.temp).type
   or false, "...with the same weather")
 
--- The bolt from the engine's lightning geometry (weather.bolt): drawn as
--- ribbons for the flash's span, instead of the Lightning beam effect.
+-- The bolt is the Lightning effect (jittered beams since engine 0.117), sized
+-- to the cloud base, with the cloud base lit where it leaves it; nothing is
+-- drawn by the script.
 local quads = 0
-weather_api.bolt = function(from, to, o)
-  return { { points = { from.x, from.y, from.z, (from.x + to.x) / 2 + 1, (from.y + to.y) / 2, (from.z + to.z) / 2,
-                        to.x, to.y, to.z }, width = 1 },
-           { points = { from.x, from.y + 5, from.z, from.x + 3, from.y + 9, from.z }, width = 0.5, parent = 1 } }
-end
 API.draw = { quad = function() quads = quads + 1 end }
 effects = {}
-ok(W.strikeNow(true), "a strike with the engine's bolt")
-W.lateUpdate({}, 1 / 60)
-local beam = 0
-for _, e in ipairs(effects) do if e.key == "Lightning" then beam = beam + 1 end end
-ok(quads == 2 * (2 + 1), "...draws its channel and fork as ribbons, a core and a glow (" .. quads .. " quads)")
-ok(beam == 0, "...instead of the Lightning beam effect")
-quads = 0
-for _ = 1, 30 do T = T + 1 / 60; W.lateUpdate({}, 1 / 60) end
-quads = 0
-W.lateUpdate({}, 1 / 60)
-ok(quads == 0, "...and is gone once the flash is over")
-API.draw, weather_api.bolt = nil, nil
+ok(W.strikeNow(true), "a strike")
+local beam, glow = nil, nil
+for _, e in ipairs(effects) do
+  if e.key == "Lightning" then beam = e end
+  if e.key == "LightningGlow" then glow = e end
+end
+ok(beam and beam.opts.scale and beam.opts.scale > 0.05 and beam.opts.normal ~= nil,
+  "...is the Lightning beam effect, scaled to the cloud base (" .. tostring(beam and beam.opts.scale) .. ")")
+ok(glow ~= nil, "...with the cloud base lit")
+ok(quads == 0, "...and no ribbons drawn by the script")
+API.draw = nil
 
 -- ── 7. cheap ────────────────────────────────────────────────────────────────
 W.force("thunderstorm", 1)

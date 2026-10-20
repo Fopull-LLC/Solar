@@ -45,17 +45,19 @@
 --     by tools/gen_vfx.py), drifting with the wind; never indoors (a ray
 --     straight up finds a roof), in the cockpit, under the sea, on the orbit
 --     map, or at speed
---   * lightning: a bolt (the engine's forked, jagged channel, weather.bolt,
---     drawn as glowing ribbons; the Lightning beam effect without it), a
---     flash of real light, the haze lit up, and the thunder after it, late by
---     the distance over the speed of sound
+--   * lightning: a bolt (vfx/Lightning, a jagged channel of jittered beams,
+--     engine 0.117, core and glow on one seed so they line up), the cloud
+--     base lit where it leaves it, a flash of real light, the haze lit up,
+--     and the thunder after it, late by the distance over the speed of sound
 --   * soundscape.lua reads `current()` for the rain, hail and dust beds
 --
 -- The wind is declared to the engine (weather.addWind, v0.117): a cell
 -- around the camera in the world's own frame, blowing the speed and heading
 -- worked out here, with gusts and eddies that grow with the storm. Anything
--- may read it with weather.windAt(point); the precipitation patches take it
--- as their velocity, gusts included.
+-- may read it with weather.windAt(point). The precipitation patches start
+-- with it as their velocity, and their tracks (like the game's smoke and
+-- dust) opt into the engine's wind (`Wind(coupling)` in the .vfx.ron), so a
+-- gust carries what is already falling.
 --
 -- Cross-script:
 --   local wx = findScript("weather")
@@ -81,9 +83,6 @@ defaults = {
   particles = true,
   --- Lightning in thunderstorms and ash storms.
   lightning = true,
-  --- Draw each bolt from the engine's lightning geometry (weather.bolt, a
-  --- forked, jagged channel) instead of the Lightning beam effect.
-  boltGeometry = true,
   --- Strikes a minute at the height of a storm.
   --@range 0 30
   strikeRate = 6.0,
@@ -643,10 +642,22 @@ local cam_fwd = { 0, 0, 0 }   -- the camera's facing, flattened onto the ground
 local day_light = 1.0         -- the light rain and snow are seen by, 0..1
 local spawned = 0
 
+local astro_ref = nil
 local function sheltered(x, y, z, up)
   if time - shelter.t < 0.3 then return shelter.on end
   shelter.t = time
-  local a = find("Astronaut")
+  -- A camera chasing a craft (fast, or in the cockpit) is under no roof, and
+  -- no precipitation is drawn round it anyway (particles_ok): no ray. Up
+  -- there the ray crosses ground the collision has not meshed, and one cost
+  -- 3 ms a frame in flight.
+  local v = cam_vel
+  local pc = ref("planet_camera")
+  if (pc and pc.cockpit) or v[1] * v[1] + v[2] * v[2] + v[3] * v[3] > 15 * 15 then
+    shelter.on = false
+    return false
+  end
+  if not (astro_ref and astro_ref.valid) then astro_ref = find("Astronaut") end
+  local a = astro_ref
   local hit = raycast and raycast(vec3(x, y, z), vec3(up[1], up[2], up[3]), 30, a and { ignore = a } or nil)
   shelter.on = hit ~= nil
   return shelter.on
@@ -734,7 +745,6 @@ end
 
 -- ── lightning ───────────────────────────────────────────────────────────────
 local thunder = {}       -- { at, dist }
-local bolts = {}         -- { t0, strands (weather.bolt), w } being drawn
 local flash = { t0 = -100, k = 0 }
 local strike_next = nil
 strikes = 0              -- published for probes
@@ -775,22 +785,14 @@ local function strike(o, x, y, z, b, w, ahead)
   else sx, sy, sz = b.x + gx * b.radius, b.y + gy * b.radius, b.z + gz * b.radius end
   local len = sqrt((cx - sx) ^ 2 + (cy - sy) ^ 2 + (cz - sz) ^ 2)
   strikes = strikes + 1
-  local drawn = false
-  if params.boltGeometry ~= false and weather and weather.bolt and draw and draw.quad and len > 2 then
-    local okb, strands = pcall(weather.bolt, vec3(sx, sy, sz), vec3(cx, cy, cz),
-      { seed = math.random(1, 1000000), branches = 3, jag = 0.12 })
-    if okb and strands and strands[1] then
-      bolts[#bolts + 1] = { t0 = time, strands = strands, w = len / 40 }
-      drawn = true
-    end
-  end
   if spawnEffect and len > 2 then
-    -- No two channels alike: each leans its own way off the vertical.
+    -- No two channels alike: each leans its own way off the vertical, and
+    -- each spawn throws its own jitter (the instance seeds the beam), so the
+    -- channel is new every strike. The effect is 40 m tall, scaled to the
+    -- cloud base; its jitter scales with it.
     local lx, ly, lz = gx + (math.random() - 0.5) * 0.45, gy + (math.random() - 0.5) * 0.45,
       gz + (math.random() - 0.5) * 0.45
-    if not drawn then
-      spawnEffect("Lightning", vec3(sx, sy, sz), { normal = vec3(lx, ly, lz):normalized(), scale = len / 40 })
-    end
+    spawnEffect("Lightning", vec3(sx, sy, sz), { normal = vec3(lx, ly, lz):normalized(), scale = len / 40 })
     spawnEffect("LightningGlow", vec3(cx, cy, cz), { normal = vec3(gx, gy, gz), scale = 0.6 + len / 80 })
   end
   local fx = ref("vfx")
@@ -826,53 +828,6 @@ local function flash_now()
   local a = floor(i)
   local f = i - a
   return flash.k * (FLICK[a + 1] + (FLICK[a + 2] - FLICK[a + 1]) * f)
-end
-
--- A bolt from weather.bolt, drawn as camera-facing ribbons for the flash's
--- span: a white-violet core and a wide soft glow, both flickering with the
--- return stroke; forks thinner, as the engine weights them.
-local CORE, GLOW = "textures/vfx/beam/core.png", "textures/vfx/beam/glow.png"
-local function ribbon(tex, pts, ex, ey, ez, half, r, g, b, a)
-  for i = 1, #pts - 5, 3 do
-    local x0, y0, z0, x1, y1, z1 = pts[i], pts[i + 1], pts[i + 2], pts[i + 3], pts[i + 4], pts[i + 5]
-    local dx, dy, dz = x1 - x0, y1 - y0, z1 - z0
-    local vx, vy, vz = (x0 + x1) * 0.5 - ex, (y0 + y1) * 0.5 - ey, (z0 + z1) * 0.5 - ez
-    -- Across the segment and the view: side = d × v.
-    local sx, sy, sz = dy * vz - dz * vy, dz * vx - dx * vz, dx * vy - dy * vx
-    local sl = sqrt(sx * sx + sy * sy + sz * sz)
-    if sl > 1e-6 then
-      sx, sy, sz = sx / sl * half, sy / sl * half, sz / sl * half
-      draw.quad(tex, x0 - sx, y0 - sy, z0 - sz, x0 + sx, y0 + sy, z0 + sz,
-        x1 + sx, y1 + sy, z1 + sz, x1 - sx, y1 - sy, z1 - sz, r, g, b, a)
-    end
-  end
-end
-
-local function draw_bolts()
-  if #bolts == 0 then return end
-  local ex, ey, ez = eye()
-  local i = 1
-  while i <= #bolts do
-    local bt = bolts[i]
-    local u = (time - bt.t0) / 0.42
-    if u >= 1 or not ex then
-      table.remove(bolts, i)
-    else
-      local f = u * (#FLICK - 1)
-      local a0 = floor(f)
-      local k = FLICK[a0 + 1] + (FLICK[a0 + 2] - FLICK[a0 + 1]) * (f - a0)
-      for _, st in ipairs(bt.strands) do
-        local w = bt.w * (st.width or 1)
-        ribbon(GLOW, st.points, ex, ey, ez, 2.0 * w, 1.2, 1.3, 2.0, 0.7 * k)
-        ribbon(CORE, st.points, ex, ey, ez, 0.45 * w + 0.06, 3.0, 3.1, 3.8, k)
-      end
-      i = i + 1
-    end
-  end
-end
-
-function lateUpdate(node, dt)
-  draw_bolts()
 end
 
 local function play_thunder(dt)

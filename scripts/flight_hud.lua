@@ -38,7 +38,13 @@ defaults = {
   --@header HUD
   --@range 0 1
   enabled = 1,
+  --- Most times a second the HUD is re-described in flight (0 = every frame).
+  --- ui.make keeps what it built, so between rebuilds the HUD stays as it
+  --- was; re-describing it every frame cost 2.4 ms a frame while flying.
+  rate = 30,
 }
+
+local made_t, made_v = -1, nil
 
 layout = nil
 warning = nil     -- the LEAVING banner's description while it's up (leaveWarning)
@@ -380,8 +386,8 @@ end
 -- The orbit strip: what the orbit IS, as label-over-value pairs.
 local function strip(t, tx)
   local cells
-  if t.grounded or t.anchored then
-    -- Standing on the ground the conic is the planet's rotation read as an
+  if t.grounded or t.anchored or t.splashed then
+    -- Standing on the ground (or afloat) the conic is the planet's rotation read as an
     -- orbit (apoapsis -1 m, periapsis deep underground): true, and noise.
     cells = {
       { "BODY", t.body or "—" },
@@ -434,7 +440,8 @@ local function lamps(v, t, lv, tx)
       t.anchored and (t.ready and "Launch clamps holding — SPACE releases them"
         or string.format("Clamps hold while the craft assembles (%d / %d parts)",
           t.parts or 0, t.parts_total or 0)) or "Launch clamps" },
-    { "LANDED", (t.grounded and not t.anchored) and 1 or 0, "On the ground" },
+    t.splashed and { "SPLASHED", 1, "Afloat on the water" }
+      or { "LANDED", (t.grounded and not t.anchored) and 1 or 0, "On the ground" },
     { "GEAR", t.has_gear and (v.gear_deployed and 1 or
         ((lv and lv.vspd < -2 and lv.alt < 300) and 2 or 0)) or 0,
       t.has_gear and ("Landing gear " .. (v.gear_deployed and "down" or "up") .. " — G")
@@ -810,10 +817,16 @@ function update(node, dt)
   local t = v and v.tele
   if not t or (om and om.map_view) or (gm and gm.loading) then
     show(false)
-    layout, warning = nil, nil
+    layout, warning, made_v = nil, nil, nil
     return
   end
   show(true)
+  -- At most `rate` rebuilds a second; a new craft is drawn at once.
+  local rate = params.rate or 0
+  -- (By the craft's node id: each findScripts call hands out a new handle.)
+  local vid = v.node and v.node.id
+  if rate > 0 and vid and vid == made_v and time > made_t and time - made_t < 1 / rate - 0.002 then return end
+  made_t, made_v = time, vid
   -- The old text block is the map's now; in flight it stays down.
   local hp = comp("HUD Panel")
   if hp and hp.visible then hp.visible = false end
