@@ -991,13 +991,15 @@ check(tank_node ~= nil and pod_node ~= nil, "tank + pod children located")
 -- closing speed (assembly.impacts .speedAbs) — the energy, not just the normal
 -- component — and surviving-but-overloaded parts WEAR at a dt-scaled rate, so a
 -- real hit is a SUSTAINED contact (many ticks), not one frame. Simulate a
--- ~20-tick low-speed GRIND on the tank (mostly tangential slide: normal 0.5,
--- total 1.5 — under the wounded tolerance floor, so it wears via the dt-scaled
--- path and never instant-breaks): it smoulders and shows on the HUD, survives.
+-- ~20-tick low-speed GRIND on the tank (mostly tangential slide: normal 0.8,
+-- total 2.0 — a part feels its normal speed and two thirds of its slide, 1.4
+-- here: over the tank's wear floor, under its tolerance, so it wears via the
+-- dt-scaled path and never instant-breaks): it smoulders and shows on the
+-- HUD, survives.
 step(160)
 local n_fx = #API.EFFECTS
 for _ = 1, 20 do
-  API.IMPACTS = { { part = tank_node.id, impulse = 0.0, speed = 0.5, speedAbs = 1.5,
+  API.IMPACTS = { { part = tank_node.id, impulse = 0.0, speed = 0.8, speedAbs = 2.0,
                     x = tank_node.x, y = tank_node.y, z = tank_node.z } }
   step(1)
 end

@@ -544,11 +544,9 @@ local function describe_craft(v)
     end
   end
   -- Velocity in the dominant body's frame (what the HUD and space.elements
-  -- read). assembly.info's, when there is one: for a craft coasting in the
-  -- distant-craft LOD it is the rails velocity (floptle/0402), while the
-  -- node's own vx/vy/vz read 0 there (0.117.0-rc2).
+  -- read). For a craft coasting in the distant-craft LOD the node reads its
+  -- rails velocity, the same as assembly.info (floptle/0402, 0.117.0-rc3).
   local vx, vy, vz = n.vx or 0, n.vy or 0, n.vz or 0
-  if info and info.vel then vx, vy, vz = info.vel.x, info.vel.y, info.vel.z end
   -- LANDED means down and stopped. `grounded` alone is not enough: a craft
   -- coasting unpiloted in orbit was reported grounded once nobody was flying
   -- it, and a record that says "landed" is rebuilt on the ground.
@@ -559,19 +557,37 @@ local function describe_craft(v)
   local ralt = len(ox - b.x, oy - b.y, oz - b.z) - b.radius
   -- (a rover stands on its tyre bodies, not its hull: r2OnWheels)
   local on_ground = info and (info.grounded or (v.r2OnWheels and v.r2OnWheels()))
+  -- A craft the distant-craft LOD holds is frozen where it stood and never
+  -- reports grounded: stopped, with the ground right under its base, it is down.
+  if info and not on_ground and len(vx, vy, vz) < 0.2 and (b.soi or -1) > 0 then
+    local ux, uy, uz = ox - b.x, oy - b.y, oz - b.z
+    local ul = len(ux, uy, uz)
+    if ul > 1e-3 then
+      ux, uy, uz = ux / ul, uy / ul, uz / ul
+      local h = raycast(ox + ux, oy + uy, oz + uz, -ux, -uy, -uz, 3.0, n)
+      on_ground = h ~= nil and h.distance <= 2.0
+    end
+  end
   local landed = on_ground and math.sqrt(vx * vx + vy * vy + vz * vz) < 1.5
     and (b.soi or -1) > 0 and ralt < math.max(30, b.radius * 0.25)
   if landed and space.elements then
     local o = space.elements(ox, oy, oz, vx, vy, vz)
     if o and o.periapsis and o.periapsis > b.radius then landed = false end
   end
+  -- SPLASHED: floating, and as good as stopped. Kept like a landed craft
+  -- (where it is, not along a conic from the sea's surface, which runs into
+  -- the planet), and brought back at the surface it floated on, not set down
+  -- on the seabed.
+  local splashed = info ~= nil and v.isSplashed ~= nil and v.isSplashed() == true
+    and len(vx, vy, vz) < 1.5
+  if splashed then landed = true end
   return {
     -- (the craft's own name: node names can't be written from Lua)
     name = (v.craftName ~= nil and v.craftName ~= "Vessel" and v.craftName) or man.name or "Vessel", body = bname,
     x = ox - b.x, y = oy - b.y, z = oz - b.z,
     vx = vx, vy = vy, vz = vz,
     pitch = n.pitch or 0, yaw = n.yaw or 0, roll = n.roll or 0,
-    landed = landed and true or false,
+    landed = landed and true or false, splashed = splashed or nil,
     fuel = man.fuel or 0, charge = man.charge or 0,
     groups = dcopy(man.groups), probe = man.probe == true, crew = man.crew == true,
     stime = space.time and space.time() or 0,
@@ -592,7 +608,9 @@ function fleetSync()
   local alive = {}
   for _, v in ipairs(findScripts("vessel_controller")) do
     local n = v.node
-    if n and n.valid and v.hasFlown ~= false and not v.destroyed then
+    -- (a lost craft — its pod gone — is a wreck, not a craft to fly or recover;
+    -- `v.destroyed` is the controller's local and always read nil)
+    if n and n.valid and v.hasFlown ~= false and not (v.isLost and v.isLost()) then
       local fid = fleet_live[n.id]
       local rec = describe_craft(v)
       if rec then
@@ -677,7 +695,7 @@ local function respawn(fid, rec)
   if not (b and spawn and assembly) then return false end
   if rec.parts then refit_chutes(rec.parts) end
   local wx, wy, wz = b.x + rec.x, b.y + rec.y, b.z + rec.z
-  if rec.landed then
+  if rec.landed and not rec.splashed then
     -- The ground has to be there first, or a landed craft falls through a
     -- world that hasn't streamed in yet (the launch pad waits the same way).
     local ux, uy, uz = rec.x, rec.y, rec.z
@@ -687,7 +705,15 @@ local function respawn(fid, rec)
     if terrain and terrain.warm then terrain.warm(rec.body) end
     local hit = raycast(wx + ux * 40, wy + uy * 40, wz + uz * 40, -ux, -uy, -uz, 120.0)
     if not hit then return false end
-    -- Set down a hand's width above where it stood.
+    -- Set down a hand's width above where it stood, on the ground as it is
+    -- NOW. The record's height and the streamed ground can disagree by metres;
+    -- a craft left hanging is frozen in the air by the distant-craft LOD and
+    -- drops when it wakes (a crew sent to it found a wreck), and a buried one
+    -- is thrown out of the ground.
+    local above = (wx - hit.x) * ux + (wy - hit.y) * uy + (wz - hit.z) * uz
+    if math.abs(above) > 1.0 then
+      wx, wy, wz = wx - ux * above, wy - uy * above, wz - uz * above
+    end
     wx, wy, wz = wx + ux * 0.25, wy + uy * 0.25, wz + uz * 0.25
   end
   -- In flight, the record is carried along its conic to NOW: where the craft
@@ -878,6 +904,7 @@ function fleetList()
         end
       end
       if e.piloted then e.status = e.crew and "flying — you're aboard" or "flying — remote"
+      elseif rec.splashed then e.status = "splashed"
       elseif rec.landed then e.status = "landed"
       elseif e.escaping then e.status = "escaping"
       elseif e.pe and e.pe > 0 then e.status = "in orbit"
@@ -888,7 +915,14 @@ function fleetList()
         return len(b.x + rec.x - cx, b.y + rec.y - cy, b.z + rec.z - cz)
       end)()
       e.home = e.landed and e.dist ~= nil and e.dist <= params.home_range
-      e.fee = (e.link or not e.pod or e.crew) and 0
+      -- No shuttle for a crew already standing near the craft: they walk over.
+      local afoot = (function()
+        local astro = find and find("Astronaut")
+        local pw = ref("planet_walker")
+        if not (v and v.node and v.node.valid and astro and pw and pw.onFoot) then return false end
+        return len(astro.x - v.node.x, astro.y - v.node.y, astro.z - v.node.z) <= params.pickup_range
+      end)()
+      e.fee = (e.link or not e.pod or e.crew or afoot) and 0
         or math.floor(math.min(params.abort_max, params.transfer_base
           + ((e.dist or 1e6) / 1000.0) * params.pickup_per_km))
       out[#out + 1] = e

@@ -93,6 +93,15 @@ local REG = {
   pod       = { prefab = "PartPod",       label = "Pod Mk1",      h = 0.80, rx = 0.50, rz = 0.50, mass = 1.3,  cost = 400, top = true,  bottom = true,  kind = "crewed", side = true, strength = 600,
                 mods = { { type = "command", crew = 1, draw = 0.05 }, { type = "wheel", torque = 1.0, draw = 0.5 },
                          { type = "battery", ec = 40 } } },
+  -- COMMAND SEAT: an open chair for one, KSP's external seat. It commands the
+  -- craft like a pod (the crew in it IS the pilot) when it is the only crewed
+  -- part aboard, with no reaction wheel and no battery of its own — the craft
+  -- brings those. Bolt it to a rover deck, a lander's flank, anywhere; walk up
+  -- and press F to sit, F again to get off. The crew stays in view, seated.
+  -- It faces its +X (a rover's front). h is the whole chair: base plate to
+  -- headrest; its centre is where the rider's hips sit.
+  seat      = { prefab = "PartSeat",      label = "Command Seat", h = 1.30, rx = 0.45, rz = 0.30, mass = 0.05, cost = 160, top = false, bottom = true,  kind = "crewed", seat = true, strength = 320,
+                mods = { { type = "command", crew = 1, draw = 0.0, seat = true } } },
   -- PROBE CORE: an uncrewed command part. It flies a craft with nobody aboard —
   -- but only while it has POWER and a comms PATH home (its own little internal
   -- antenna reaches the ground station from around the home world and its
@@ -217,11 +226,11 @@ local REG = {
   -- world like engine thrust), top speed (m/s), draw at full power (EC/s) and
   -- the tyre radius. A tyre this size on a world this small grips by the load
   -- it carries — the flight hangs it on the engine's wheel joint.
-  wheelS    = { prefab = "PartWheelS",    label = "Wheel S",      h = 0.50, rx = 0.14, rz = 0.25, mass = 0.05, cost = 110, top = false, bottom = false, radial_orient = true, kind = "structural", strength = 180, wheel = "S",
+  wheelS    = { prefab = "PartWheelS",    label = "Wheel S",      h = 0.50, rx = 0.14, rz = 0.25, mass = 0.05, cost = 110, top = false, bottom = false, radial_orient = true, kind = "structural", strength = 180, wheel = "S", travel = 0.10,
                 mods = { { type = "drive", torque = 0.2, speed = 5.0, draw = 0.12, r = 0.25 } } },
-  wheelM    = { prefab = "PartWheelM",    label = "Wheel M",      h = 0.80, rx = 0.20, rz = 0.40, mass = 0.12, cost = 190, top = false, bottom = false, radial_orient = true, kind = "structural", strength = 300, wheel = "M",
+  wheelM    = { prefab = "PartWheelM",    label = "Wheel M",      h = 0.80, rx = 0.20, rz = 0.40, mass = 0.12, cost = 190, top = false, bottom = false, radial_orient = true, kind = "structural", strength = 300, wheel = "M", travel = 0.15,
                 mods = { { type = "drive", torque = 0.5, speed = 7.0, draw = 0.25, r = 0.40 } } },
-  wheelL    = { prefab = "PartWheelL",    label = "Wheel L",      h = 1.20, rx = 0.28, rz = 0.60, mass = 0.25, cost = 320, top = false, bottom = false, radial_orient = true, kind = "structural", strength = 520, wheel = "L",
+  wheelL    = { prefab = "PartWheelL",    label = "Wheel L",      h = 1.20, rx = 0.28, rz = 0.60, mass = 0.25, cost = 320, top = false, bottom = false, radial_orient = true, kind = "structural", strength = 520, wheel = "L", travel = 0.20,
                 mods = { { type = "drive", torque = 1.1, speed = 9.0, draw = 0.5, r = 0.60 } } },
   -- FAIRINGS: a base ring that grows a shell to enclose whatever is stacked
   -- on it (the shell is built to fit — scripts measure the payload), keeps the
@@ -263,9 +272,11 @@ local DESC = {
   plate = "tread-plate deck · 60 kg · a floor to build on", hub = "strut hub · a node on all six faces",
   adapter = "stack adapter · 1.0 m to 0.5 m",
   roverBody = "rover body · probe core, battery, lights · front = +X",
+  seat = "open seat · F to sit and drive · faces +X · no wheel or battery",
   wheelS = "powered wheel · r 0.25 m · 5 m/s · −0.12 power/s", wheelM = "powered wheel · r 0.4 m · 7 m/s · −0.25 power/s",
   wheelL = "powered wheel · r 0.6 m · 9 m/s · −0.5 power/s",
-  fairingS = "fairing · shell fits its payload · jettisons", fairingM = "fairing · shell fits its payload · jettisons",
+  fairingS = "fairing · B draws its shell (or it fits the payload) · jettisons",
+  fairingM = "fairing · B draws its shell (or it fits the payload) · jettisons",
   hinge = "servo hinge · ±90° · holds where it stops", piston = "piston · extends 0.8 m · holds where it stops",
   rotor = "rotor · spins what's on it · up to 60 rpm", claw = "landing claw · arm it to grip the ground",
   drill = "core drill · bores while landed · fills the hold",
@@ -283,7 +294,7 @@ for id, d in pairs(DESC) do if REG[id] then REG[id].desc = d end end
 -- getting an index wrong silently mislabelled a card. A part added to `REG` and
 -- named here now appears in the catalogue and nowhere else needs to know.
 local CATALOGUE = {
-  { "COMMAND",   { "pod", "probe", "nose", "chute" } },
+  { "COMMAND",   { "pod", "probe", "seat", "nose", "chute" } },
   { "ELECTRICAL",{ "battery", "solar", "light", "antenna", "dish", "dishL" } },
   { "PROPULSION",{ "engineS", "engineM", "skipper", "tankS", "tankM", "radialTank", "rcs" } },
   { "STRUCTURE", { "decoupler", "radialDec", "legs", "fins" } },
@@ -422,7 +433,7 @@ end
 -- The full key list is on the pause menu's Controls page; the idle line only
 -- has to say how to start and how to leave (this scene has no pause menu: ESC
 -- leaves it).
-local HINT_IDLE = "click a part to select   ·   1 move · 2 rotate · 3 stage · 4 grab · 5 action groups   ·   ESC leave"
+local HINT_IDLE = "click a part to select   ·   1 move · 2 rotate · 3 stage · 4 grab · 5 action groups   ·   B shape a selected fairing   ·   ESC leave"
 local HINT_GHOST = "click a node or any surface to place   ·   ALT = place free   ·   R yaw/spin · T pitch · Y roll   ·   X symmetry ×N · M mirror   ·   ESC cancel"
 local HINT_GRAB = "move the mouse to slide the whole ship   ·   click to set it down"
 
@@ -1383,6 +1394,11 @@ local function undo()
                  d.att, d.sym, d.mir)
       if d.uid >= next_uid then next_uid = d.uid + 1 end
     end
+  elseif op.type == "wcfg" then
+    wcfgs = op.prev or {}
+  elseif op.type == "shape" then
+    -- a whole shaping session (or a cleared shape) un-done as one
+    fshapes[op.uid] = op.prev
   elseif op.type == "move" then
     for _, m in ipairs(op.moved) do
       local p = parts[m.uid]
@@ -2051,6 +2067,8 @@ end
 -- ── The catalogue calls this (findScript("builder").pick) ───────────────────
 function pick(id)
   if ghost or not REG[id] then return end
+  -- reaching for a part ends shaping (the shape closes itself)
+  if shapingUid() then shapeStop(true) end
   -- A LOCKED part's click IS its research purchase — or the sentence saying
   -- what it wants first. The catalogue never holds a card you can't act on,
   -- and you never have to go somewhere else to open one.
@@ -2276,6 +2294,110 @@ function fairingEnvelope(uid)
   return { r = R, hc = hc, hn = hn, y0 = base_top, mass = area * SHELL_T_PER_M2, load = load, n = n }
 end
 
+-- ── SHAPED FAIRINGS ──────────────────────────────────────────────────────────
+-- A fairing base can carry a SHAPE the player draws (B with the base selected,
+-- or its SHAPE button): rings stacked up its axis, each a radius and a height
+-- above the base ring, closed over the top with a nose. Without one it grows
+-- the fitted shell above (what every fairing did before, and what an old craft
+-- still gets). Kept per uid, apart from `parts`, so a scrap + CTRL+Z brings a
+-- base back with its shape:
+--
+--   fshapes[uid] = { secs = { { r =, h = }, … }, closed = bool, split = 2 | 3 }
+fshapes = {}
+
+function copy_wcfg(w)
+  local c = {}
+  for k, v in pairs(w or {}) do c[k] = v end
+  return c
+end
+
+local function copy_shape(sh)
+  if not sh then return nil end
+  local out = { secs = {}, closed = sh.closed, split = sh.split or 2 }
+  for i, sc in ipairs(sh.secs or {}) do out.secs[i] = { r = sc.r, h = sc.h } end
+  return out
+end
+
+-- Everything that stands on the base's top node (and everything built onto
+-- that), with each part's reach in the base frame: its height range above the
+-- base centre and how far it reaches out from the axis.
+local function fairing_payload(uid)
+  local b = parts[uid]
+  local X, Y, Z = rot_basis(b.yaw, b.pitch, b.roll)
+  local load = {}
+  for u, q in pairs(parts) do
+    if q.parent == uid and (q.att == "top" or q.att == "surface") then
+      local up = (q.x - b.x) * Y.x + (q.y - b.y) * Y.y + (q.z - b.z) * Y.z
+      if up > 0 then for v in pairs(subtree(u)) do load[v] = true end end
+    end
+  end
+  local out = {}
+  for u in pairs(load) do
+    local q = parts[u]
+    if q then
+      local ex, ey, ez = part_extents(q)
+      local dx, dy, dz = q.x - b.x, q.y - b.y, q.z - b.z
+      local h = dx * Y.x + dy * Y.y + dz * Y.z
+      local reach = math.abs(Y.x) * ex + math.abs(Y.y) * ey + math.abs(Y.z) * ez
+      local rx = dx * X.x + dy * X.y + dz * X.z
+      local rz = dx * Z.x + dy * Z.y + dz * Z.z
+      local wx = math.abs(X.x) * ex + math.abs(X.y) * ey + math.abs(X.z) * ez
+      local wz = math.abs(Z.x) * ex + math.abs(Z.y) * ey + math.abs(Z.z) * ez
+      out[u] = { lo = h - reach, hi = h + reach,
+                 rad = math.sqrt((math.abs(rx) + wx) ^ 2 + (math.abs(rz) + wz) ^ 2) }
+    end
+  end
+  return out
+end
+
+-- THE SHELL A FAIRING BASE WILL FLY WITH: its profile (base frame, { r, y }
+-- bottom to top), skin area and mass, the payload it encloses (`load`, uid →
+-- true) and what sticks out of it (`out`), how many pieces it splits into, and
+-- whether it was drawn (`shaped`) or fitted. nil = no shell at all (a fitted
+-- base with nothing on it, or a drawn shape with no rings yet).
+function fairingFit(uid)
+  local b = parts[uid]
+  if not (b and b.def.fairing) then return nil end
+  local E = elib()
+  local sh = fshapes[uid]
+  local y0 = b.def.h * 0.5
+  local prof, shaped
+  if sh and #sh.secs > 0 and E then
+    prof = E.fairingSectionsProfile(b.def.fairing, y0, sh.secs, sh.closed)
+    shaped = true
+  else
+    local env = fairingEnvelope(uid)
+    if not env then return nil end
+    if E then prof = E.fairingAutoProfile(env.r, env.y0, env.hc, env.hn) end
+    if not prof then
+      return { env = env, load = env.load, out = {}, mass = env.mass, split = 2, shaped = false, y0 = y0 }
+    end
+  end
+  local area, rmax, height = E.fairingStats(prof)
+  local load, out, nin, nout = {}, {}, 0, 0
+  local closed = (not shaped) or (sh and sh.closed)
+  for u, pl in pairs(fairing_payload(uid)) do
+    if closed and E.fairingHolds(prof, pl.lo, pl.hi, pl.rad) then load[u] = true; nin = nin + 1
+    else out[u] = true; nout = nout + 1 end
+  end
+  return { prof = prof, area = area, rmax = rmax, height = height, mass = area * SHELL_T_PER_M2,
+           load = load, out = out, nin = nin, nout = nout, split = (sh and sh.split) or 2,
+           shaped = shaped == true, closed = closed, y0 = y0 }
+end
+
+-- The shape's rings as a flat list for the blueprint (r1, h1, r2, h2 …) and back.
+local function secs_flat(sh)
+  local out = {}
+  for _, sc in ipairs(sh and sh.secs or {}) do out[#out + 1] = sc.r; out[#out + 1] = sc.h end
+  return out
+end
+local function secs_unflat(flat)
+  local out = {}
+  if type(flat) ~= "table" then return out end
+  for i = 1, #flat - 1, 2 do out[#out + 1] = { r = flat[i], h = flat[i + 1] } end
+  return out
+end
+
 -- The craft's wheels, by the way their axles point (vessel frame). A rover
 -- needs them all on ONE axle line: the engine's wheel joint turns a wheel
 -- about the chassis's Z (floptle/0420), so at rollout the build is turned
@@ -2301,11 +2423,38 @@ end
 function finishBlueprint(bp)
   local by = {}
   for _, d in ipairs(bp.parts) do by[d.uid] = d end
-  -- fairings
+  -- fairings: the fitted or drawn shell, its mass, and who rides inside
+  local E = elib()
   for _, d in ipairs(bp.parts) do
     if (d.fairing or 0) > 0 then
-      local env = fairingEnvelope(d.uid)
-      if env then
+      local fit = fairingFit(d.uid)
+      local sh = fshapes[d.uid]
+      if sh and #sh.secs > 0 then
+        -- the drawn rings ride along so the builder can open the shape again
+        d.fsec = secs_flat(sh)
+        d.fclosed = sh.closed and 1 or 0
+      end
+      if fit and fit.prof and fit.closed then
+        local p = fit.prof
+        -- fr / fy0 / fhc / fhn describe the fitted shell, and stand in for a
+        -- drawn one wherever the flight only knows those (a widest-radius
+        -- cylinder and nose), so an older flight still flies a sensible shell.
+        local top = p[#p][2]
+        local hn = math.max(0.15, fit.rmax * 1.1)
+        if fit.shaped then
+          d.fr, d.fy0, d.fhc, d.fhn = fit.rmax, fit.y0, math.max(fit.y0 + 0.05, top - hn), hn
+          d.fprof = E.fairingFlat(p)
+        else
+          d.fr, d.fy0, d.fhc, d.fhn = fit.env and fit.env.r or fit.rmax, fit.y0,
+            fit.env and fit.env.hc or (top - hn), fit.env and fit.env.hn or hn
+        end
+        d.fsplit = fit.split or 2
+        d.farea = math.pi * fit.rmax * fit.rmax   -- frontal area the shell shows the air
+        d.mass = (d.mass or 0) + fit.mass
+        d.shellm = fit.mass
+        for u in pairs(fit.load) do if by[u] then by[u].faired = d.uid end end
+      elseif fit and fit.env then
+        local env = fit.env
         d.fr, d.fhc, d.fhn, d.fy0 = env.r, env.hc, env.hn, env.y0
         d.mass = (d.mass or 0) + env.mass
         d.shellm = env.mass
@@ -2389,6 +2538,10 @@ local function save_blueprint()
       -- base radius (and the shell it grew, see fairingShell), a robotic
       -- joint's kind, a claw, and a mirror pair's plane.
       front = d.front and 1 or 0, wheel = d.wheel or "", fairing = d.fairing or 0,
+      -- an OPEN SEAT commands like a pod but keeps its rider in view
+      seat = d.seat and 1 or 0,
+      -- a wheel's settings, defaults left out (WHEEL SETTINGS)
+      wcfg = (d.wheel and wcfgs[uid] and next(wcfgs[uid])) and copy_wcfg(wcfgs[uid]) or nil,
       robo = d.robo or "", claw = d.claw and 1 or 0, mir = p.mir or "",
       -- ELECTRONICS: every module the part carries (declared + implied by its
       -- flags), so the flight never has to know a part by name to power it,
@@ -2481,8 +2634,18 @@ local function load_blueprint()
   for uid in pairs(parts) do remove_part(uid) end
   undo_stack = {}
   stage_order, saved_stage = {}, {}
+  fshapes = {}
+  wcfgs = {}
+  if shapeStop then shapeStop(false) end
   for _, d in pairs(bp.parts) do
     if (d.stage or 0) > 0 then saved_stage[d.uid] = d.stage end
+    if type(d.wcfg) == "table" and next(d.wcfg) then wcfgs[d.uid] = copy_wcfg(d.wcfg) end
+    -- a drawn fairing comes back drawn (a craft from before shaping has no
+    -- `fsec` and keeps its fitted shell)
+    if (d.fairing or 0) > 0 and type(d.fsec) == "table" and #d.fsec >= 2 then
+      fshapes[d.uid] = { secs = secs_unflat(d.fsec), closed = (d.fclosed or 1) ~= 0,
+                         split = (d.fsplit == 3) and 3 or 2 }
+    end
     spawn_part(d.id, d.x, d.y + params.floor_y, d.z, d.yaw,
                d.parent ~= 0 and d.parent or nil, d.uid, d.pitch, d.roll,
                d.att ~= "" and d.att or nil,
@@ -2567,6 +2730,26 @@ function groupsToggle(gid, uid, act)
   return on
 end
 
+-- Give every actuator that has no key yet keys of its own on the free custom
+-- groups (electronics.actuatorGroups: a piston on one, a hinge on two held
+-- keys, a rotor, drill or claw on one). The groups panel's one-click setup.
+function groupsAutoActuators()
+  local E = elib()
+  local g = groups_own()
+  if not (E and g) then return 0 end
+  local recs = craft_records()
+  local list = {}
+  for uid, r in pairs(recs) do
+    if E.actuatorOf(r) and #E.bindsOfPart(g, uid) == 0 then list[#list + 1] = r end
+  end
+  table.sort(list, function(a, b) return a.uid < b.uid end)
+  local n = E.actuatorGroups(g, list)
+  ui("tool", 0.7)
+  hint(n > 0 and string.format("actuators on keys — %d custom group%s set up", n, n == 1 and "" or "s")
+    or "no free custom group left (1–0) — clear one first", 3.0)
+  return n
+end
+
 -- Empty one group, or put every group back to the standard set.
 function groupsClear(gid)
   local g = groups_own()
@@ -2594,8 +2777,9 @@ end
 -- panel so a click on a checkbox never deselects the part it's editing.
 local groups_panel_node = nil
 function groupsPanelTick(clicked)
-  if tool ~= "groups" then return false end
-  local E = elib()
+  local groups_on = tool == "groups"
+  if not groups_on and not wheelSelected() then return false end
+  local E = groups_on and elib()
   if E then
     local g = groupsNow()
     local gg = g and g[groups_state.gid]
@@ -2662,6 +2846,269 @@ local function draw_engineering()
 end
 
 
+-- ── WHEEL SETTINGS (SCRATCH wheel_spec.md; the flight reads them) ──────────
+-- Every wheel can be told how to steer and drive and how its suspension and
+-- tyre behave. Kept per uid like fairing shapes, written to the wheel's craft
+-- record as `wcfg` with the defaults left out (so an old craft, which has
+-- none, drives on the defaults — and `wheel` stays the size string):
+--
+--   steer     "auto" (steers if it is ahead of the centre of mass) | "on" |
+--             "off" | "invert"            steerMax  degrees (25)
+--   drive     "auto" (pushes the craft forward; the sign comes from its
+--             mount) | "on" | "off" | "invert"
+--   motor, brake   0..1 (1)              spring, damper  0.25..4 (1)
+--   travel    suspension travel, m (the part's)   friction 0.5..2 (1)
+--   skid      skid-steer torque on top of steering (false)
+--
+-- In the builder each wheel shows the way it will roll when you press W (an
+-- arrow, green = drives, orange = inverted, grey = free) and, if it steers,
+-- the arc it can swing through — so a wheel mounted the wrong way round is
+-- visible before launch. Select a wheel and the Wheel settings panel (scripts/
+-- groups_panel.lua) edits it, its symmetry partners, or every wheel.
+WCFG_DEFAULTS = { steer = "auto", steerMax = 25, drive = "auto", motor = 1, brake = 1,
+                  spring = 1, damper = 1, friction = 1, skid = false }
+WCFG_RANGES = { steerMax = { 0, 45 }, motor = { 0, 1 }, brake = { 0, 1 }, spring = { 0.25, 4 },
+                damper = { 0.25, 4 }, travel = { 0.03, 0.5 }, friction = { 0.5, 2 } }
+local WCFG_MODES = { auto = true, on = true, off = true, invert = true }
+wcfgs = {}
+
+-- A wheel's settings, every field filled in (travel: the part's own).
+function wheelCfg(uid)
+  local p = parts[uid]
+  if not (p and p.def.wheel) then return nil end
+  local w = wcfgs[uid] or {}
+  local out = {}
+  for k, v in pairs(WCFG_DEFAULTS) do out[k] = v end
+  for k, v in pairs(w) do out[k] = v end
+  if out.travel == nil then out.travel = p.def.travel or 0.15 end
+  return out
+end
+
+-- Set one field (clamped, a mode checked); a value equal to its default is
+-- dropped, so the record only ever carries what was changed.
+local function wcfg_put(uid, key, v)
+  local p = parts[uid]
+  if not (p and p.def.wheel) then return end
+  local w = wcfgs[uid] or {}
+  if key == "steer" or key == "drive" then
+    if not WCFG_MODES[v] then return end
+  elseif key == "skid" then
+    v = v == true
+  else
+    local r = WCFG_RANGES[key]
+    v = tonumber(v)
+    if not (r and v) then return end
+    v = math.max(r[1], math.min(r[2], v))
+    v = math.floor(v * 100 + 0.5) / 100
+  end
+  local def = WCFG_DEFAULTS[key]
+  if key == "travel" then def = p.def.travel end
+  if v == def then w[key] = nil else w[key] = v end
+  wcfgs[uid] = next(w) and w or nil
+end
+
+local function wcfg_undo()
+  local snap = {}
+  for u, w in pairs(wcfgs) do
+    local c = {}
+    for k, v in pairs(w) do c[k] = v end
+    snap[u] = c
+  end
+  push_undo({ type = "wcfg", prev = snap })
+end
+
+function wheelSet(uid, key, v, quiet)
+  if not wheelCfg(uid) then return false end
+  -- one undo step per field drag (a slider fires every frame it moves)
+  local top = undo_stack[#undo_stack]
+  if not (top and top.type == "wcfg" and top.key == key and top.uid == uid) then
+    wcfg_undo()
+    undo_stack[#undo_stack].key, undo_stack[#undo_stack].uid = key, uid
+  end
+  wcfg_put(uid, key, v)
+  if not quiet then ui("tool", 0.5) end
+  return true
+end
+
+-- Flip which way it pushes: auto/on ↔ invert.
+function wheelFlip(uid)
+  local c = wheelCfg(uid)
+  if not c then return end
+  wheelSet(uid, "drive", c.drive == "invert" and "auto" or "invert")
+  hint(c.drive == "invert" and "wheel drives the normal way again" or "wheel flipped — it pushes the other way now", 2.5)
+end
+
+-- Copy this wheel's settings onto its symmetry partners ("sym") or onto every
+-- wheel on the craft ("all").
+function wheelApply(uid, scope)
+  local p = parts[uid]
+  if not (p and p.def.wheel) then return 0 end
+  wcfg_undo()
+  local src = wcfgs[uid]
+  local n = 0
+  for u, q in pairs(parts) do
+    if u ~= uid and q.def.wheel and (scope == "all" or (p.sym and q.sym == p.sym)) then
+      local c = nil
+      if src then c = {} for k, v in pairs(src) do c[k] = v end end
+      -- a travel set on a different-sized wheel goes back to that wheel's own
+      if c and q.def.travel ~= p.def.travel then c.travel = nil end
+      wcfgs[u] = c
+      n = n + 1
+    end
+  end
+  ui("place", 0.7)
+  hint(string.format("wheel settings copied to %d other wheel%s", n, n == 1 and "" or "s"), 2.5)
+  return n
+end
+
+function wheelReset(uid)
+  if not (parts[uid] and parts[uid].def.wheel) then return end
+  wcfg_undo()
+  wcfgs[uid] = nil
+  ui("scrap", 0.6)
+end
+
+-- The wheel the settings panel is for: the selection, when it's a wheel and
+-- nothing else (a part in hand, shaping, the stage or groups tool) has the
+-- right-hand panel.
+function wheelSelected()
+  if ghost or shapingUid() or tool == "groups" or tool == "stage" then return nil end
+  local p = selected_uid and parts[selected_uid]
+  if p and p.def.wheel then return selected_uid end
+  return nil
+end
+
+-- The craft's front on the stand, level (x, z): a rover body or a command
+-- seat faces its +X; failing those, the command part's +X; failing that, +X.
+-- The same rule as the flight's (vessel_controller r2FrontOf).
+function craftFront()
+  local function level(p)
+    local X = rot_basis(p.yaw, p.pitch, p.roll)
+    local l = math.sqrt(X.x * X.x + X.z * X.z)
+    if l < 0.5 then return nil end
+    return X.x / l, X.z / l
+  end
+  local best, bu
+  for u, p in pairs(parts) do
+    if (p.def.front or p.def.seat) and (not bu or u < bu) then
+      local fx, fz = level(p)
+      if fx then best, bu = { fx, fz }, u end
+    end
+  end
+  if best then return best[1], best[2] end
+  local cu
+  for u, p in pairs(parts) do
+    if (p.def.kind == "crewed" or p.def.kind == "probe") and (not cu or u < cu) then cu = u end
+  end
+  if cu then
+    local fx, fz = level(parts[cu])
+    if fx then return fx, fz end
+  end
+  return 1, 0
+end
+
+-- Each wheel as the flight will treat it: which way it rolls the craft when W
+-- is pressed (`roll` x, z, or nil when it can't push forward or back — its
+-- axle lies along the travel), whether it drives and steers, and where.
+function wheelPlan()
+  local fx, fz = craftFront()
+  local m, cx, cz = 0, 0, 0
+  for _, p in pairs(parts) do
+    local dm = math.max(0.001, p.def.mass or 0.1)
+    m, cx, cz = m + dm, cx + p.x * dm, cz + p.z * dm
+  end
+  if m > 0 then cx, cz = cx / m, cz / m end
+  local out, amin, amax = {}, math.huge, -math.huge
+  for u, p in pairs(parts) do
+    if p.def.wheel then
+      local c = wheelCfg(u)
+      local X = rot_basis(p.yaw, p.pitch, p.roll)
+      local al = math.sqrt(X.x * X.x + X.z * X.z)
+      local w = { uid = u, p = p, cfg = c, ax = X, a = (p.x - cx) * fx + (p.z - cz) * fz }
+      if al > 0.3 then
+        -- the rolling direction: level, square to the axle, toward the front
+        local dx, dz = -X.z / al, X.x / al
+        local along = dx * fx + dz * fz
+        if math.abs(along) > 0.3 then
+          local sg = along > 0 and 1 or -1
+          if c.drive == "invert" then sg = -sg end
+          w.roll = { dx * sg, dz * sg }
+        else
+          w.sideways = true
+        end
+      else
+        w.upright = true
+      end
+      w.drives = w.roll ~= nil and c.drive ~= "off"
+      amin, amax = math.min(amin, w.a), math.max(amax, w.a)
+      out[#out + 1] = w
+    end
+  end
+  local span = (#out > 0) and (amax - amin) or 0
+  for _, w in ipairs(out) do
+    local c = w.cfg
+    if c.steer == "off" or c.steerMax <= 0 then w.steers = false
+    elseif c.steer == "on" or c.steer == "invert" then w.steers = true
+    else w.steers = span > 0.3 and w.a > 0.2 * span end
+  end
+  return out, fx, fz
+end
+
+-- The front arrow on the pad and, at every wheel, its roll arrow and steer arc.
+function wheelArrows()
+  local any = false
+  for _, p in pairs(parts) do if p.def.wheel then any = true break end end
+  if not any then return end
+  local plan, fx, fz = wheelPlan()
+  local y = params.floor_y + 0.03
+  draw.line(centerX, y, centerZ, centerX + fx * 1.6, y, centerZ + fz * 1.6, 0.35, 0.95, 0.55, 1.0)
+  draw.cone(centerX + fx * 1.6, y, centerZ + fz * 1.6, fx, 0, fz, 0.16, 0.36, 0.35, 0.95, 0.55, 1.0)
+  local sel = wheelSelected()
+  for _, w in ipairs(plan) do
+    local p, X = w.p, w.ax
+    -- just outside the tyre, at hub height: out along the axle, away from the hull
+    local ox, oz = X.x, X.z
+    local ol = math.sqrt(ox * ox + oz * oz)
+    if ol > 1e-3 then ox, oz = ox / ol, oz / ol end
+    if (p.x - centerX) * ox + (p.z - centerZ) * oz < 0 then ox, oz = -ox, -oz end
+    local reach = (p.def.rx or 0.2) + 0.08
+    local bx, by, bz = p.x + ox * reach, p.y, p.z + oz * reach
+    local hot = sel == w.uid or (sel and parts[sel] and parts[sel].sym and parts[sel].sym == p.sym)
+    local L = 0.55 + (p.def.rz or 0.3)
+    if w.roll then
+      local r, g, b = 0.35, 0.95, 0.55
+      if not w.drives then r, g, b = 0.6, 0.65, 0.7
+      elseif w.cfg.drive == "invert" then r, g, b = 1.0, 0.62, 0.2 end
+      local ex, ez = bx + w.roll[1] * L, bz + w.roll[2] * L
+      draw.line(bx, by, bz, ex, by, ez, r, g, b, hot and 1.0 or 0.8)
+      draw.cone(ex, by, ez, w.roll[1], 0, w.roll[2], 0.07, 0.18, r, g, b, hot and 1.0 or 0.8)
+      if w.steers then
+        -- the arc it swings through, about the vertical, either side of ahead
+        local pts, m = {}, math.rad(w.cfg.steerMax)
+        local rr = L * 0.75
+        for k = 0, 12 do
+          local a = -m + 2 * m * k / 12
+          local ca, sa = math.cos(a), math.sin(a)
+          local dx = w.roll[1] * ca - w.roll[2] * sa
+          local dz = w.roll[1] * sa + w.roll[2] * ca
+          pts[#pts + 1] = bx + dx * rr; pts[#pts + 1] = by; pts[#pts + 1] = bz + dz * rr
+        end
+        draw.polyline(pts, 0.4, 0.85, 1.0, hot and 1.0 or 0.7)
+        local ca, sa = math.cos(m), math.sin(m)
+        for _, s2 in ipairs({ -1, 1 }) do
+          local dx = w.roll[1] * ca - w.roll[2] * sa * s2
+          local dz = w.roll[1] * sa * s2 + w.roll[2] * ca
+          draw.line(bx, by, bz, bx + dx * rr, by, bz + dz * rr, 0.4, 0.85, 1.0, 0.45)
+        end
+      end
+    else
+      -- it can't roll the craft forward: its axle lies along the travel (or stands up)
+      draw.sphere(bx, by, bz, 0.12, 1.0, 0.3, 0.25, 1.0)
+      draw.line(bx - fx * 0.4, by, bz - fz * 0.4, bx + fx * 0.4, by, bz + fz * 0.4, 1.0, 0.3, 0.25, 1.0)
+    end
+  end
+end
+
 -- ── ROUND TWO, every frame: rover FRONT arrow, fairing shells ───────────────
 -- A rover drives toward its FRONT (a rover body's +X, else the build's +X):
 -- an arrow on the pad says which way W goes. A fairing base with a payload on
@@ -2677,24 +3124,8 @@ local function free_shell(uid)
 end
 
 function roundTwoTick()
-  -- the rover's front
-  local front, wheels = nil, false
-  for _, p in pairs(parts) do
-    if p.def.wheel then wheels = true end
-    if p.def.front then front = p end
-  end
-  if wheels and partCount > 0 then
-    local fx, fz = 1, 0
-    if front then
-      local X = rot_basis(front.yaw, front.pitch, front.roll)
-      local l = math.sqrt(X.x * X.x + X.z * X.z)
-      if l > 0.3 then fx, fz = X.x / l, X.z / l end
-    end
-    local y = params.floor_y + 0.03
-    local r = 1.6
-    draw.line(centerX, y, centerZ, centerX + fx * r, y, centerZ + fz * r, 0.35, 0.95, 0.55, 1.0)
-    draw.cone(centerX + fx * r, y, centerZ + fz * r, fx, 0, fz, 0.16, 0.36, 0.35, 0.95, 0.55, 1.0)
-  end
+  -- the rover's front and every wheel's roll and steer (wheelArrows)
+  if partCount > 0 then wheelArrows() end
   -- fairing shells
   local E = elib()
   if not (E and E.fairingShell and mesh and mesh.build) then return end
@@ -2703,24 +3134,37 @@ function roundTwoTick()
   end
   for uid, p in pairs(parts) do
     if p.def.fairing and p.node and p.node.valid then
-      local env = fairingEnvelope(uid)
-      local sig = env and string.format("%.3f/%.3f/%.3f", env.r, env.hc, env.hn) or "none"
+      local fit = fairingFit(uid)
+      local prof = fit and fit.prof
+      local editing = shapingUid and shapingUid() == uid
+      local sig = "none"
+      if prof then
+        local bits = { fit.split or 2, editing and "e" or "" }
+        for _, q in ipairs(prof) do bits[#bits + 1] = string.format("%.3f,%.3f", q[1], q[2]) end
+        sig = table.concat(bits, "/")
+      end
       local sh = shells[uid]
       if not sh or sh.sig ~= sig or sh.node ~= p.node.id then
         free_shell(uid)
         sh = { sig = sig, nodes = {}, meshes = {}, node = p.node.id }
         shells[uid] = sh
-        if env then
-          for half = 0, 1 do
-            local m = E.fairingShell(env.r, env.y0, env.hc, env.hn, half, 24)
-            local name = mesh.build(m)
+        if prof and #prof >= 2 then
+          local n = fit.split or 2
+          for k = 1, n do
+            local name = mesh.build(E.fairingPiece(prof, k, n, 24))
             sh.meshes[#sh.meshes + 1] = name
-            createNode("Fairing Shell", p.node, function(n)
-              n.model = name
-              n:setMaterial{ texture = "textures/parts/paint_albedo.png", normalMap = "textures/parts/paint_normal.png",
+            createNode("Fairing Shell", p.node, function(c)
+              c.model = name
+              -- A drawn shell's pieces part by a hair, so the clamshell seams
+              -- show where it will split.
+              if n == 3 or fit.shaped then
+                local ac = (k - 0.5) * 2 * math.pi / n
+                c.x, c.z = math.cos(ac) * 0.012, math.sin(ac) * 0.012
+              end
+              c:setMaterial{ texture = "textures/parts/paint_albedo.png", normalMap = "textures/parts/paint_normal.png",
                              roughnessMap = "textures/parts/paint_orm.png", shading = "physical",
-                             roughness = 0.8, metallic = 0.2, alpha = 0.28 }
-              if shells[uid] == sh then sh.nodes[#sh.nodes + 1] = n else destroy(n) end
+                             roughness = 0.8, metallic = 0.2, alpha = editing and 0.18 or 0.28 }
+              if shells[uid] == sh then sh.nodes[#sh.nodes + 1] = c else destroy(c) end
             end)
           end
         end
@@ -2729,7 +3173,319 @@ function roundTwoTick()
   end
 end
 
--- The STAGING panel (STAGE tool): draw the numbered decoupler badges, then
+-- ── SHAPING A FAIRING (KSP-style) ────────────────────────────────────────────
+-- Select a fairing base and press B (or click the SHAPE FAIRING button under
+-- it). The mouse then drives a RING around the base's axis — out from the axis
+-- is its radius, up the axis its height — drawn live with the wireframe it
+-- would add. Each click lays a ring there; the shell is lathed through them,
+-- translucent, as you go. C closes it over the top with a nose (so does
+-- ENTER/ESC on the way out), BACKSPACE (or CTRL+Z) takes the last ring back,
+-- DEL clears the shape (back to the shell that fits itself to the payload),
+-- V splits it into 2 or 3 clamshell pieces. SHIFT turns off the snapping
+-- (5 cm steps, and a ring near the last one's radius makes a straight wall).
+-- Parts the closed shell would hold outline green, parts sticking out red.
+local shaping = nil       -- { uid, prev } while a fairing is being shaped
+shapeCursor = nil         -- { r =, h = } overrides the mouse (probes)
+
+function shapingUid() return shaping and shaping.uid or nil end
+
+local function shape_frame(uid)
+  local b = parts[uid]
+  local X, Y, Z = rot_basis(b.yaw, b.pitch, b.roll)
+  return b, X, Y, Z, b.def.h * 0.5
+end
+
+-- A point at radius r, angle a (about the axis, from the base's X toward its
+-- Z: the profile's own convention) and height y in the base frame.
+local function shape_pt(b, X, Y, Z, r, a, y)
+  local c, s = math.cos(a) * r, math.sin(a) * r
+  return b.x + X.x * c + Y.x * y + Z.x * s, b.y + X.y * c + Y.y * y + Z.y * s, b.z + X.z * c + Y.z * y + Z.z * s
+end
+
+local function shape_ring(b, Y, r, y, cr, cg, cb, ca)
+  draw.ring(b.x + Y.x * y, b.y + Y.y * y, b.z + Y.z * y, Y.x, Y.y, Y.z, math.max(0.01, r), cr, cg, cb, ca)
+end
+
+-- The profile's rings and `n` meridians through them: the wireframe shell.
+local function shape_wire(b, X, Y, Z, prof, n, cr, cg, cb, ca, rings)
+  for k = 0, n - 1 do
+    local a = k * 2 * math.pi / n
+    local pts = {}
+    for _, q in ipairs(prof) do
+      local x, y, z = shape_pt(b, X, Y, Z, q[1], a, q[2])
+      pts[#pts + 1] = x; pts[#pts + 1] = y; pts[#pts + 1] = z
+    end
+    if #pts >= 6 then draw.polyline(pts, cr, cg, cb, ca) end
+  end
+  if rings then
+    for _, q in ipairs(prof) do if q[1] > 0.01 then shape_ring(b, Y, q[1], q[2], cr, cg, cb, ca) end end
+  end
+end
+
+-- The mouse as a (radius, height-above-the-ring) pair: its ray meets the plane
+-- through the base's axis that faces the camera.
+local function shape_cursor(b, X, Y, Z, y0)
+  if shapeCursor then return shapeCursor.r, shapeCursor.h end
+  local mx, my = input.mouse()
+  local ox, oy, oz, dx, dy, dz = camera.screenToRay(mx, my)
+  local cx, cy, cz = b.x + Y.x * y0, b.y + Y.y * y0, b.z + Y.z * y0
+  local vx, vy, vz = ox - cx, oy - cy, oz - cz
+  local d = vx * Y.x + vy * Y.y + vz * Y.z
+  local nx, ny, nz = unit(vx - Y.x * d, vy - Y.y * d, vz - Y.z * d)
+  if nx == 0 and ny == 0 and nz == 0 then return nil end
+  local den = dx * nx + dy * ny + dz * nz
+  if math.abs(den) < 1e-6 then return nil end
+  local t = ((cx - ox) * nx + (cy - oy) * ny + (cz - oz) * nz) / den
+  if t <= 0 then return nil end
+  local px, py, pz = ox + dx * t - cx, oy + dy * t - cy, oz + dz * t - cz
+  local h = px * Y.x + py * Y.y + pz * Y.z
+  local wx, wy, wz = px - Y.x * h, py - Y.y * h, pz - Y.z * h
+  return math.sqrt(wx * wx + wy * wy + wz * wz), h
+end
+
+-- Snap a cursor ring (5 cm steps; near the last ring's radius = a straight
+-- wall) and say whether it can go there. Pure, so the smoke test asks it.
+function shapeSnap(secs, R0, r, h, free)
+  local last = secs[#secs]
+  local lr, lh = last and last.r or R0, last and last.h or 0
+  if not free then
+    r = math.floor(r / 0.05 + 0.5) * 0.05
+    h = math.floor(h / 0.05 + 0.5) * 0.05
+    if math.abs(r - lr) < 0.08 then r = lr end
+  end
+  r = math.max(0.05, math.min(6.0, r))
+  if h < lh + 0.05 - 1e-6 then
+    return r, h, false, "each ring goes ABOVE the last one — move the mouse up the axis"
+  end
+  return r, h, true
+end
+
+function shapeStart(uid)
+  if not (parts[uid] and parts[uid].def.fairing) then return false end
+  if shaping then shapeStop(true) end
+  local prev = copy_shape(fshapes[uid])
+  local sh = fshapes[uid] or { secs = {}, closed = false, split = 2 }
+  sh.closed = false
+  fshapes[uid] = sh
+  shaping = { uid = uid, prev = prev }
+  selected_uid = uid
+  click_cool = 0.15
+  ui("tool", 0.8)
+  hint("SHAPING THE FAIRING — click to lay a ring at the cursor  ·  C close it over the top  ·  ENTER done", 6.0)
+  return true
+end
+
+-- Leave shaping. The shape closes itself over the top (a shell must be closed
+-- to hold anything); one with no rings goes back to the fitted shell. `commit`
+-- false leaves no undo step (a reload).
+function shapeStop(commit)
+  if not shaping then return end
+  local uid = shaping.uid
+  local sh = fshapes[uid]
+  if sh then
+    if #sh.secs == 0 then fshapes[uid] = nil
+    elseif not sh.closed then sh.closed = true end
+  end
+  local prev = shaping.prev
+  shaping = nil
+  click_cool = 0.15
+  if commit == false or not parts[uid] then return end
+  push_undo({ type = "shape", uid = uid, prev = prev })
+  local fit = fairingFit(uid)
+  if fshapes[uid] and fit and fit.prof then
+    hint(string.format("fairing shaped — %d ring%s · %.0f kg shell · %d piece%s · holds %d of %d parts%s  (CTRL+Z undoes it)",
+      #fshapes[uid].secs, #fshapes[uid].secs == 1 and "" or "s", fit.mass * 1000, fit.split, fit.split == 1 and "" or "s",
+      fit.nin, fit.nin + fit.nout, fit.nout > 0 and "  ⚠ some stick out" or ""), 5.0)
+  else
+    hint("fairing: no shape drawn — its shell fits whatever stands on it", 3.0)
+  end
+  ui("place", 0.9)
+  refresh_stats()
+end
+
+local function screen_k()
+  local sh = camera.screenSize and select(2, camera.screenSize()) or nil
+  return (sh and sh > 1) and sh / 720.0 or 1.0, sh or 720
+end
+
+-- Screen-space drawing that a host without it (the smoke harness) skips.
+local function srect(...) if draw.rect then draw.rect(...) end end
+local function sframe(...) if draw.rectOutline then draw.rectOutline(...) end end
+local function stext(...) if draw.text then draw.text(...) end end
+
+-- The key card while shaping, bottom-centre over the hangar.
+local function shape_hud(sh, cur, pv, nin, nout)
+  local k, shh = screen_k()
+  local sw = camera.screenSize and select(1, camera.screenSize()) or 1280
+  local w, hgt = 552 * k, 112 * k
+  local x, y = (sw - w) * 0.5, shh - hgt - 52 * k
+  srect(x, y, w, hgt, 0.035, 0.08, 0.10, 0.9, 8 * k)
+  sframe(x, y, w, hgt, 0.35, 0.9, 0.75, 0.9, 1.5 * k)
+  local ts, lx, rx = 13 * k, x + 14 * k, x + w * 0.5 + 4 * k
+  stext(lx, y + 9 * k, string.format("SHAPING THE FAIRING  ·  %d ring%s  ·  %d pieces", #sh.secs,
+    #sh.secs == 1 and "" or "s", sh.split or 2), 15 * k, 0.55, 1.0, 0.85, 1.0)
+  if cur then
+    stext(x + w - 14 * k, y + 10 * k, string.format("ring  r %.2f m · h %.2f m", cur.r, cur.h), ts,
+      0.62, 0.78, 0.8, 1.0, "right")
+  end
+  local L = {
+    { "CLICK", "lay a ring at the cursor", "BACKSPACE", "take the last ring back" },
+    { "C", "close it over the top", "DEL", "clear (fit to payload)" },
+    { "V", "2 or 3 pieces", "ENTER · ESC", "done" },
+  }
+  for i, l in ipairs(L) do
+    local yy = y + (14 + 20 * i) * k
+    stext(lx, yy, l[1], ts, 1.0, 0.82, 0.4, 1.0)
+    stext(lx + 56 * k, yy, l[2], ts, 0.85, 0.9, 0.95, 1.0)
+    stext(rx, yy, l[3], ts, 1.0, 0.82, 0.4, 1.0)
+    stext(rx + 92 * k, yy, l[4], ts, 0.85, 0.9, 0.95, 1.0)
+  end
+  local s
+  if pv then
+    s = string.format("closed: %.2f m wide · %.2f m tall · %.0f kg · holds %d of %d parts", pv.rmax * 2,
+      pv.height, pv.mass * 1000, nin, nin + nout)
+    if nout > 0 then s = s .. "  ⚠ red = sticks out" end
+  else
+    s = "the base ring is where the shell starts — lay the first ring above it"
+  end
+  stext(lx, y + 90 * k, s, ts, (nout or 0) > 0 and 1.0 or 0.62, (nout or 0) > 0 and 0.7 or 0.78,
+    (nout or 0) > 0 and 0.55 or 0.8, 1.0)
+end
+
+-- The SHAPE FAIRING button under a selected base; true = it took the click.
+local function shape_button(clicked, cam_busy)
+  local uid = selected_uid
+  local b, X, Y, Z, y0 = shape_frame(uid)
+  local sx, sy, on = screen_of(b.x - Y.x * y0, b.y - Y.y * y0, b.z - Y.z * y0)
+  if not on then return false end
+  local k = screen_k()
+  local w, h = 210 * k, 30 * k
+  local bx, by = sx - w * 0.5, sy + 36 * k
+  local mx, my = input.mouse()
+  local hot = mx >= bx and mx <= bx + w and my >= by and my <= by + h
+  srect(bx, by, w, h, 0.05, 0.16, 0.19, hot and 0.97 or 0.86, 6 * k)
+  sframe(bx, by, w, h, 0.4, 0.95, 0.8, 1.0, (hot and 2.0 or 1.2) * k)
+  stext(bx + w * 0.5, by + 7 * k, (fshapes[uid] and "✎  RESHAPE FAIRING   [B]" or "✎  SHAPE FAIRING   [B]"),
+    14 * k, 0.75, 1.0, 0.9, 1.0, "center")
+  if hot and clicked and not cam_busy then return shapeStart(uid) end
+  return false
+end
+
+-- Every frame, before anything else in `update` takes input. Returns true when
+-- shaping (or the SHAPE button) owns this frame's input.
+function shapeTick(clicked, cam_busy)
+  if not shaping then
+    local sel = selected_uid and parts[selected_uid]
+    if ghost or not (sel and sel.def.fairing) or tool == "stage" or tool == "groups" or gizmo_drag then return false end
+    if input.pressed("b") and not input.key("ctrl") then return shapeStart(selected_uid) end
+    return shape_button(clicked, cam_busy)
+  end
+  local uid = shaping.uid
+  local b = parts[uid]
+  local E = elib()
+  if not (b and E) then shaping = nil return false end
+  local sh = fshapes[uid]
+  if not sh then sh = { secs = {}, closed = false, split = 2 }; fshapes[uid] = sh end
+  local _, X, Y, Z, y0 = shape_frame(uid)
+  local R0 = b.def.fairing
+  -- keys
+  if input.pressed("enter") or input.pressed("escape") then shapeStop(true) return true end
+  if input.pressed("c") then
+    if #sh.secs > 0 then sh.closed = true; shapeStop(true)
+    else hint("lay at least one ring first — click where the shell should reach", 2.5) end
+    return true
+  end
+  if input.pressed("backspace") or (input.key("ctrl") and input.pressed("z")) then
+    if #sh.secs > 0 then table.remove(sh.secs); ui("pickup", 0.7)
+    else hint("no rings to take back — ENTER leaves shaping", 2.0) end
+    return true
+  end
+  if input.pressed("delete") or input.pressed("del") then
+    sh.secs = {}
+    ui("scrap", 0.7)
+    hint("shape cleared — click to start again, or ENTER to keep the shell that fits itself", 3.0)
+    return true
+  end
+  if input.pressed("v") then
+    sh.split = (sh.split == 3) and 2 or 3
+    ui("tool", 0.7)
+    hint(string.format("the shell splits into %d pieces at staging", sh.split), 2.0)
+  end
+  -- the cursor ring
+  local r, h = shape_cursor(b, X, Y, Z, y0)
+  local ok, why
+  if r then r, h, ok, why = shapeSnap(sh.secs, R0, r, h, input.key("shift")) end
+  -- what's drawn: the base ring, the rings laid, the nose C would add, and the
+  -- ring under the cursor tied to the last one
+  local open = E.fairingSectionsProfile(R0, y0, sh.secs, false)
+  shape_ring(b, Y, R0, y0, 0.9, 0.95, 1.0, 0.9)
+  if #sh.secs > 0 then
+    shape_wire(b, X, Y, Z, open, 12, 0.35, 0.95, 0.85, 0.95, true)
+    local nose = E.fairingNose(E.fairingSectionsProfile(R0, y0, sh.secs, false))
+    local tail = {}
+    for i = #open, #nose do tail[#tail + 1] = nose[i] end
+    shape_wire(b, X, Y, Z, tail, 12, 0.6, 0.7, 0.75, 0.45, false)
+  end
+  if r then
+    local cr, cg, cb = 0.35, 1.0, 0.45
+    if not ok then cr, cg, cb = 1.0, 0.3, 0.25 end
+    shape_ring(b, Y, r, y0 + h, cr, cg, cb, 1.0)
+    local last = open[#open]
+    shape_wire(b, X, Y, Z, { last, { r, y0 + h } }, 12, cr, cg, cb, 0.55, false)
+    -- a spoke from the axis to the cursor, so the radius reads
+    local ax, ay, az = shape_pt(b, X, Y, Z, 0, 0, y0 + h)
+    local px, py, pz = shape_pt(b, X, Y, Z, r, 0, y0 + h)
+    draw.line(ax, ay, az, px, py, pz, cr, cg, cb, 0.8)
+  end
+  -- the payload: green if the closed shell would hold it, red if it sticks out
+  local pv, nin, nout = nil, 0, 0
+  if #sh.secs > 0 then
+    local closed = E.fairingSectionsProfile(R0, y0, sh.secs, true)
+    local area, rmax, height = E.fairingStats(closed)
+    pv = { rmax = rmax, height = height, mass = area * SHELL_T_PER_M2 }
+    for u, pl in pairs(fairing_payload(uid)) do
+      local q = parts[u]
+      if E.fairingHolds(closed, pl.lo, pl.hi, pl.rad) then
+        nin = nin + 1
+        if q then outline(q, 0.35, 1.0, 0.5, 0.55) end
+      else
+        nout = nout + 1
+        if q then outline(q, 1.0, 0.3, 0.25, 0.95) end
+      end
+    end
+  end
+  shape_hud(sh, r and { r = r, h = h } or nil, pv, nin, nout)
+  if clicked and not cam_busy and r then
+    if ok then
+      sh.secs[#sh.secs + 1] = { r = r, h = h }
+      ui("place", 0.7)
+    elseif why then
+      hint(why, 2.0)
+    end
+  end
+  return true
+end
+
+-- PROBE: run the shaping sequence on fairing `uid` up to `step` (shots).
+--   0 selected (the SHAPE button)   1 shaping, cursor ring only
+--   2 one ring laid, cursor up the side   3 two rings, cursor toward the top
+--   4 closed (2 pieces)   5 closed, 3 pieces, cursor shape re-opened
+function fairingProbe(uid, step)
+  selected_uid = uid
+  if step <= 0 then return end
+  shapeStart(uid)
+  local sh = fshapes[uid]
+  shapeCursor = { r = 0.78, h = 0.3 }
+  if step >= 2 then sh.secs[#sh.secs + 1] = { r = 0.75, h = 0.25 }; shapeCursor = { r = 0.82, h = 2.05 } end
+  if step >= 3 then sh.secs[#sh.secs + 1] = { r = 0.75, h = 2.1 }; shapeCursor = { r = 0.42, h = 2.55 } end
+  if step >= 4 then
+    sh.secs[#sh.secs + 1] = { r = 0.45, h = 2.5 }
+    if step >= 5 then sh.split = 3 end
+    sh.closed = true
+    shapeCursor = nil
+    shapeStop(true)
+  end
+end
 -- hit-test the panel against its REAL solved rect (node:uiRect — physical px,
 -- the mouse's space) and drag rows to reorder the firing sequence. Returns true
 -- when the panel owns the mouse this frame. Lives OUTSIDE `update` so that huge
@@ -2816,6 +3572,8 @@ function update(node, dt)
     end
   end
   local cam_busy = input.button(1) -- RMB = the camera's; never build through it
+  -- Shaping a fairing (or its SHAPE button) takes the frame's input first.
+  if shapeTick(clicked, cam_busy) then return end
 
   -- TOOL switch (1 Move · 2 Rotate · 3 Stage · 4 Grab) — never while placing
   -- a part or holding a gizmo. The active tool decides what the SELECTION's
@@ -3041,6 +3799,9 @@ function update(node, dt)
         -- to face. A single port welded into a stack is just a spacer and the
         -- flight panel will (correctly) refuse to separate it, so say which one
         -- you've just built the moment it's placed rather than in orbit.
+        if placed and parts[placed] and parts[placed].def.fairing and not ghost then
+          hint("fairing base placed — stack the payload on it, then B (or SHAPE FAIRING under it) draws its shell", 5.0)
+        end
         if placed and parts[placed] and parts[placed].def.dock then
           local host = host_uid and parts[host_uid]
           if host and host.def.dock then
