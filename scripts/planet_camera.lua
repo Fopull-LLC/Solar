@@ -107,6 +107,171 @@ function face(dx, dy, dz, p)
 end
 
 local was_piloting = false
+local was_vessel = nil      -- the piloted craft's node id (a switch is a new subject)
+
+-- ── which way is up ─────────────────────────────────────────────────────────
+-- Straight out from the centre of the world the subject is on, worked out from
+-- where that world IS — never read off the subject's body. `node.up` is the
+-- body's −gravity, and on 0.117.0-rc3 it is wrong for one tick every few
+-- seconds: when the floating origin recentres, the planets' µ/r² centres are
+-- not shifted with everything else, so that tick's gravity points at a spot
+-- ~4 km away. Measured on a standing crew and a parked rover: 12–76° off the
+-- vertical for one tick, every 4–17 s — the "split second where it's confused
+-- about which way is up, then corrects itself". Before the first tick it is
+-- also the default +Y, which rolled the view through 60° at every spawn.
+--
+-- The world is chosen with HYSTERESIS: patched conics hand you from a planet
+-- to its moon (or back) at a sharp sphere, and a craft skimming that sphere
+-- would have its up flip between two centres frame by frame. A new world has
+-- to stay dominant for `SOI_HOLD` before the view changes frame, and then the
+-- turn is eased and RATE-LIMITED (`UP_RATE_*`), so no single frame ever turns
+-- the horizon by more than a fraction of a degree. The view only SNAPS where
+-- it cuts anyway: the first frame, a switch to a craft somewhere else, a
+-- teleport, or coming back from the map or the pilot's seat.
+local SOI_HOLD = 0.5
+local UP_RATE_FOOT, UP_RATE_FLY = math.rad(120), math.rad(40)   -- most a second
+local up_body, up_cand, up_cand_t = nil, nil, 0.0
+local placed_t = nil        -- when the orbit view was last placed
+local placed_rel = nil      -- the subject, from its world's centre, then
+local placed_body = nil
+
+local function world_up(p, dt)
+  if not (space and space.dominant) then return nil end
+  local d = space.dominant(p.x, p.y, p.z)
+  if d ~= up_body then
+    if not up_body or not space.body(up_body) then
+      up_body, up_cand = d, nil
+    elseif d ~= nil and d == up_cand then
+      up_cand_t = up_cand_t + dt
+      if up_cand_t >= SOI_HOLD then up_body, up_cand = d, nil end
+    else
+      up_cand, up_cand_t = d, 0.0
+    end
+  else
+    up_cand = nil
+  end
+  local b = up_body and space.body(up_body)
+  if not b then return nil end
+  local r = p - vec3(b.x, b.y, b.z)
+  if r:length() < 1e-3 then return nil end
+  return r:normalized(), r, up_body
+end
+
+-- Turn `cur` toward `want` by an eased step of at most `max_step` radians.
+local function slew(cur, want, rate, max_step, dt)
+  local a = cur:angleTo(want)
+  if a < 1e-6 then return want end
+  local step = math.min(a * (1 - math.exp(-rate * dt)), max_step)
+  local axis = cur:cross(want)
+  if axis:length() < 1e-9 then
+    -- Opposite: any axis across them will do.
+    axis = cur:cross(vec3(1, 0, 0))
+    if axis:length() < 1e-6 then axis = cur:cross(vec3(0, 0, 1)) end
+  end
+  return cur:rotatedAround(axis:normalized(), step):normalized()
+end
+
+-- ── a craft's own hull, for the chase view ──────────────────────────────────
+-- Rays and sphere sweeps do not see an assembly's parts (0.117.0-rc3: queries
+-- return terrain, static colliders and single bodies — the crew parked in the
+-- pod, the rover's tyres — never a compound's shapes), so the camera cannot
+-- sweep its way out of the craft it is chasing. It keeps the craft's parts as
+-- balls instead: each part's collision box (its RigidBody half extents times
+-- the part's scale, as the engine builds it) wrapped in a sphere, re-read when
+-- the craft gains or loses parts, placed each frame from the parts' local
+-- poses (so a hinge that moves its arm moves its balls). The rover's tyres
+-- hang off it as bodies of their own and join them.
+local HULL_MARGIN = 0.45    -- the view's near plane and a little air
+local hull_cache = { id = nil, n = -1, parts = {} }
+local function hull_balls(vessel)
+  local out = {}
+  local vn = vessel.node
+  if vn and vn.valid and vn.children then
+    local kids = vn:children()
+    if hull_cache.id ~= vn.id or hull_cache.n ~= #kids then
+      local parts = {}
+      for _, c in ipairs(kids) do
+        local getc = c.getcomponent or c.getComponent
+        local rb = getc and getc(c, "RigidBody")
+        if rb then
+          local hx = (rb.half_x or 0) * math.abs(c.scale_x or 1)
+          local hy = (rb.half_y or 0) * math.abs(c.scale_y or 1)
+          local hz = (rb.half_z or 0) * math.abs(c.scale_z or 1)
+          local r = math.sqrt(hx * hx + hy * hy + hz * hz)
+          parts[#parts + 1] = { node = c, r = (r > 0.05) and r or 0.6 }
+        end
+      end
+      hull_cache = { id = vn.id, n = #kids, parts = parts }
+    end
+    if #hull_cache.parts > 0 then
+      local o = vn:toWorld(vec3(0, 0, 0))
+      local ex = vn:toWorld(vec3(1, 0, 0)) - o
+      local ey = vn:toWorld(vec3(0, 1, 0)) - o
+      local ez = vn:toWorld(vec3(0, 0, 1)) - o
+      for _, p in ipairs(hull_cache.parts) do
+        local c = p.node
+        if c.valid then
+          local w = o + ex * (c.x or 0) + ey * (c.y or 0) + ez * (c.z or 0)
+          out[#out + 1] = { x = w.x, y = w.y, z = w.z, r = p.r }
+        end
+      end
+    end
+  end
+  if #out == 0 and vessel.hullSpheres then
+    for _, b in ipairs(vessel.hullSpheres() or {}) do out[#out + 1] = b end
+  end
+  local r2 = vessel.R2
+  for _, w in ipairs((r2 and r2.wheels) or {}) do
+    local t = w.tyre
+    if t and t.valid then out[#out + 1] = { x = t.x, y = t.y, z = t.z, r = (w.r or 0.4) + 0.05 } end
+  end
+  return out
+end
+
+-- How far back along `dir` from `o` the view must sit to be outside every
+-- one of those spheres the line passes through (0 = none in the way).
+-- Also: how far the whole craft reaches from `o` (the farthest ball's far
+-- side), which the view keeps clear of too, up to the closest orbit: the view
+-- tucked in BETWEEN a rover's wheels is outside every part and still inside
+-- the craft.
+local function hull_exit(balls, o, dir)
+  local far, reach = 0.0, 0.0
+  for _, b in ipairs(balls) do
+    local r = (b.r or 0.5) + HULL_MARGIN
+    local cx, cy, cz = b.x - o.x, b.y - o.y, b.z - o.z
+    local dc = math.sqrt(cx * cx + cy * cy + cz * cz) + r
+    if dc > reach then reach = dc end
+    local t = cx * dir.x + cy * dir.y + cz * dir.z
+    local d2 = cx * cx + cy * cy + cz * cz - t * t
+    if d2 < r * r then
+      local e = t + math.sqrt(r * r - d2)
+      if e > far then far = e end
+    end
+  end
+  return far, reach
+end
+
+-- The sphere sweep the view backs out along, passing THROUGH the crew and
+-- the craft's tyres (the subject, not walls) and stopping at anything else.
+-- The old sweep stopped at the first thing it met, found the crew sitting at
+-- the pivot, threw the whole result away — and so while flying the camera
+-- never saw the ground at all.
+local function sweep(from, dir, maxd, passes)
+  local o, gone, ign = from, 0.0, nil
+  for _ = 1, 6 do
+    local hit = spherecast(o, dir, 0.25, maxd - gone, { ignore = ign, ignoreStart = true })
+    if not (hit and hit.distance) then return nil end
+    local n = hit.node
+    if n and n.valid and passes[n.id] then
+      local step = hit.distance + 0.05
+      gone, o, ign = gone + step, o + dir * step, n
+      if gone >= maxd then return nil end
+    else
+      return gone + hit.distance, hit
+    end
+  end
+  return nil
+end
 
 -- Cross-script singletons, resolved once and kept (floptle/0063 — findScript is
 -- a scene walk).
@@ -259,6 +424,63 @@ local function acquire()
   return (w and w.node) or find("Astronaut") or find("Player")
 end
 
+-- ── the chase view: outside the craft, above the ground ────────────────────
+-- Driving a rover the view kept ending up INSIDE it. The sweep that keeps the
+-- camera out of walls ignored the craft, as it had to — but the craft's parts
+-- are invisible to sweeps anyway, so it was the crew parked at the pivot and
+-- the rover's own tyres that it met: the crew threw the sweep away (so the
+-- ground was never seen, and the camera sank into hills behind the rover), and
+-- a crewless rover's tyre pulled the view in to a metre from the pod, in among
+-- its parts.
+--
+-- Now: the view backs out along its line, passing through the crew and the
+-- tyres, and may come in for the ground or a wall — but never closer than the
+-- far side of the craft's own hull along that line (`hull_exit`). Where the
+-- ground leaves no room outside the hull (a rover on a slope, the view low
+-- behind it), the view RISES over it instead, a few degrees at a time, the way
+-- a boom camera lifts over a wall: quickly up, slowly back down.
+local LIFT_STEP, LIFT_STEPS = 0.06, 16
+local CHASE_MIN = 5.0       -- the closest orbit while flying (see `mind`)
+local lift_now, lift_t = 0.0, -10.0
+function chase_clip(vessel, head, up, room_d, dt)
+  if time - lift_t > 0.25 then lift_now = 0.0 end   -- a new chase starts level
+  lift_t = time
+  local balls = hull_balls(vessel)
+  local passes = {}
+  local astro = find("Astronaut")
+  if astro then passes[astro.id] = true end
+  for _, w in ipairs((vessel.R2 and vessel.R2.wheels) or {}) do
+    if w.tyre and w.tyre.valid then passes[w.tyre.id] = true end
+  end
+  local function trial(lift)
+    local lp = math.max(-PITCH_LIMIT, pitch - lift)
+    local f = (ref * math.cos(lp) + up * math.sin(lp)):normalized()
+    local need, reach = hull_exit(balls, head, f * -1)
+    need = math.max(need, math.min(reach, CHASE_MIN))
+    local want = math.max(room_d, need)
+    local hd = sweep(head, f * -1, want + 0.3, passes)
+    local room = hd and math.max(0.0, hd - 0.1) or want
+    return f, need, math.min(want, room), room >= need, lp <= -PITCH_LIMIT
+  end
+  -- The least lift that leaves room outside the hull.
+  local want_lift = nil
+  for k = 0, LIFT_STEPS do
+    local _, _, _, ok, top = trial(k * LIFT_STEP)
+    if ok then want_lift = k * LIFT_STEP break end
+    if top then break end
+  end
+  want_lift = want_lift or LIFT_STEPS * LIFT_STEP
+  if want_lift > lift_now then
+    lift_now = lift_now + (want_lift - lift_now) * (1 - math.exp(-15 * dt))
+  else
+    lift_now = lift_now + (want_lift - lift_now) * (1 - math.exp(-2 * dt))
+  end
+  local f, need, back = trial(lift_now)
+  -- Outside the hull comes first: a frame of ground in the corner of the view
+  -- while the lift catches up is a lesser thing than a frame inside the craft.
+  return math.max(back, need), need, f
+end
+
 local function place_camera(node, dt)
   -- Map mode: the orbit map owns the camera while it's open — orbiting the
   -- focused body, not the player. Stand down entirely.
@@ -274,13 +496,19 @@ local function place_camera(node, dt)
   local piloting = vessel ~= nil
   -- Swap on the TRANSITION, not by handle comparison (handles are fresh tables
   -- per access — equality never matches, which stuck the camera on the craft
-  -- after exit).
-  if piloting ~= was_piloting then
-    was_piloting = piloting
+  -- after exit). Switching from one craft to another (the [ ] switcher, the
+  -- Tracking Station) is a transition too, by the node's id: `piloting` never
+  -- goes false in between, and the view used to stay on the craft you left.
+  local vid = piloting and vessel.node.id or nil
+  local swapped = false
+  if piloting ~= was_piloting or vid ~= was_vessel then
+    was_piloting, was_vessel = piloting, vid
     target = (piloting and vessel.node) or acquire()
+    swapped = true
   end
   if not (target and target.valid) then
     target = acquire()
+    swapped = true
     if not target then return end
   end
   if pitch == nil then pitch = params.start_pitch end
@@ -344,25 +572,28 @@ local function place_camera(node, dt)
     clip_back = nil
   end
 
-  -- Desired local up from the body (−gravity). Fallback: away from the origin
-  -- (the planet sits at 0,0,0) if the body state isn't available yet.
-  local want_up = target.up
-  if not want_up or want_up:length() == 0 then
-    want_up = target.pos:normalized()
-    if want_up:length() == 0 then want_up = vec3(0, 1, 0) end
+  -- Desired local up: out from the centre of the subject's world (see
+  -- `world_up`). Only with no world at all (a flat level) the body's own up.
+  local want_up, rel, rel_body = world_up(target.pos, dt)
+  if not want_up then
+    want_up = target.up
+    if not want_up or want_up:length() == 0 then want_up = vec3(0, 1, 0) end
   end
-  -- Slew-limit the up so a gravity/SOI transfer can't SNAP the view. Crossing an
-  -- SOI boundary flips −gravity to point at a DIFFERENT body (the field is
-  -- patched-conic — only the dominant body pulls), a discontinuous jump. FLYING
-  -- uses a GENTLE rate: flying around a planet turns the local vertical only
-  -- slowly (the orbital rate), so the camera tracks it near-perfectly and never
-  -- ends up upside-down on the far side — but the instantaneous SOI flip is spread
-  -- over ~a second into a smooth reorient instead of a snap. ON FOOT it tracks
-  -- fast so the horizon stays level as you walk around the planet.
-  if not cup then cup = want_up end
-  if cup:angleTo(want_up) > 1e-4 then
-    cup = ease(cup, want_up, piloting and 1.5 or 8.0, dt):normalized()
+  -- Slew-limit the up so a hand-off between worlds can't SNAP the view.
+  -- FLYING uses a GENTLE rate: flying around a planet turns the local vertical
+  -- only slowly (the orbital rate), so the camera tracks it near-perfectly and
+  -- never ends up upside-down on the far side — but the change of frame at an
+  -- SOI hand-off is spread over a second or two into a smooth reorient. ON
+  -- FOOT it tracks fast so the horizon stays level as you walk round the world.
+  -- Either way no frame turns it by more than its rate limit allows.
+  local cut = cup == nil or swapped or (placed_t and time - placed_t > 0.3)
+    or (rel and placed_rel and rel_body == placed_body and (rel - placed_rel):length() > 50)
+  if cut then
+    cup = want_up
+  else
+    cup = slew(cup, want_up, piloting and 1.5 or 8.0, (piloting and UP_RATE_FLY or UP_RATE_FOOT) * dt, dt)
   end
+  placed_t, placed_rel, placed_body = time, rel, rel_body
   local up = cup
 
   -- Parallel-transport the yaw reference: project the previous reference onto
@@ -505,30 +736,34 @@ local function place_camera(node, dt)
   -- player. A ball, not a ray: the view is a volume, and a ray slips through
   -- the gap at a door frame or a rock's edge that the near plane then cuts.
   local back = firstPerson and 0.0 or room_d
-  local hit = (not firstPerson) and spherecast(head, -fwd, 0.25, room_d + 0.3, target) or nil
-  -- The wall clip must see WALLS only. The astronaut is not a wall — parked
-  -- inside a pod while flying, it is directly between the camera and the
-  -- craft, and clipping on it glued the view to the hull.
-  if hit and hit.node then
-    local astro = find("Astronaut")
-    if astro and hit.node.id == astro.id then hit = nil end
-  end
-  if hit and hit.distance then
-    -- Never past the contact: a 0.3 m floor here put the camera INSIDE a wall
-    -- the pivot was within 0.35 m of. Closer than 0.7 hides the body anyway.
-    back = math.max(0.0, hit.distance - 0.05)
+  local hull_floor = 0.0
+  if piloting and not firstPerson then
+    back, hull_floor, fwd = chase_clip(vessel, head, up, room_d, dt)
+  else
+    local hit = (not firstPerson) and spherecast(head, -fwd, 0.25, room_d + 0.3, target) or nil
+    -- The wall clip must see WALLS only. The astronaut is not a wall.
+    if hit and hit.node then
+      local astro = find("Astronaut")
+      if astro and hit.node.id == astro.id then hit = nil end
+    end
+    if hit and hit.distance then
+      -- Never past the contact: a 0.3 m floor here put the camera INSIDE a wall
+      -- the pivot was within 0.35 m of. Closer than 0.7 hides the body anyway.
+      back = math.max(0.0, hit.distance - 0.05)
+    end
   end
 
   -- SNAP IN, EASE OUT. A camera may never spend a frame inside a wall, so a
   -- closer answer is taken immediately — but popping back to full orbit the
   -- instant a doorway clears is what made walking around the base feel like the
-  -- view was flinching. Coming out is a glide.
+  -- view was flinching. Coming out is a glide. (Chasing a craft it never comes
+  -- in past the craft's own hull.)
   if clip_back == nil or back <= clip_back then
     clip_back = back
   else
     clip_back = clip_back + (back - clip_back) * math.min(1.0, dt * 6.0)
   end
-  back = firstPerson and 0.0 or clip_back
+  back = firstPerson and 0.0 or math.max(clip_back, hull_floor)
 
   -- Don't draw a body we are standing inside — first person, or a wall that has
   -- pushed the view into the character's shoulders. (While piloting, the vessel

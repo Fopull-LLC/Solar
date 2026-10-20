@@ -451,9 +451,9 @@ end
 -- frame, turned by its yaw and then the astronaut's.
 -- MaleArm, the armature root, is where the walker finds the soles' plane: its
 -- rest height over them, plus what the walker has moved it by so far this
--- frame — or, before this frame has made any pose call, last frame's drawn
--- pose with last frame's writes (what 0.117.0-rc2 does, card 0413). Here
--- the soles ride 6 cm over the capsule's bottom, as they do in the game.
+-- frame; before this frame has made any pose call, the animator's own pose,
+-- never last frame's writes (0.117.0-rc3, card 0413). Here the soles ride
+-- 6 cm over the capsule's bottom, as they do in the game.
 local BONES = { ["Foot.Left"] = vec3(0.1389, -0.868, -0.0858), ["Foot.Right"] = vec3(-0.1389, -0.868, -0.0858),
                 ["Thigh.Left"] = vec3(0.1, -0.03, 0), ["Thigh.Right"] = vec3(-0.1, -0.03, 0),
                 Head = vec3(0, 0.6, 0), MaleArm = vec3(0, -0.94 + 1.61496, 0) }
@@ -461,7 +461,7 @@ function animator:boneWorld(b)
   local l = BONES[b]
   if not l then return nil end
   if b == "MaleArm" then
-    l = l + ((self.queued and self.pos.MaleArm or (not self.queued and self.last_pos.MaleArm)) or vec3(0, 0, 0))
+    l = l + (self.pos.MaleArm or vec3(0, 0, 0))
   end
   local c, s = math.cos(MODEL.yaw), math.sin(MODEL.yaw)
   return ASTRO:toWorld(vec3(l.x * c + l.z * s, l.y, -l.x * s + l.z * c))

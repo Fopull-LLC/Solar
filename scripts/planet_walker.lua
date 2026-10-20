@@ -419,46 +419,134 @@ end
 -- MaleArm, which no clip moves, less what we moved it by last frame; the soles'
 -- plane is found the same way. (The constant that guessed it was 8 cm out, and
 -- a straight leg can't stretch 8 cm.)
+--
+-- THE GROUND UNDER A FOOT IS A PLANE, NOT A RAY. Terrain is a surface-nets
+-- mesh, and a foot standing on one of its creases had its single ray land on
+-- one face one frame and the other face the next — 53° apart on a measured
+-- spot — so the sole flipped between them and the ankle hopped 7 cm, every
+-- other frame, for as long as you stood there (the "shivering" legs). Each
+-- foot now casts three rays (heel, toe, outside edge) and stands on the plane
+-- through them, and what it stands on is held in the frame of the world under
+-- it and eased, so a sample that does move moves the foot smoothly. Held in
+-- the PLANET's frame, not the crew's: the planet carries both, and a foot
+-- planted there stays planted whatever the body above it does.
 
-local ZERO3 = vec3(0, 0, 0)
 local STANCE = { Left = vec3(0.1389, -1.5428, -0.0858), Right = vec3(-0.1389, -1.5428, -0.0858) }
+local SIDES = { "Left", "Right" }          -- a fixed order; pairs() has none
+-- Where each foot's three rays land around its centre: metres along the
+-- foot's forward and out to its side (heel, toe, outside edge).
+local PROBE = { { -0.08, 0.0 }, { 0.13, 0.0 }, { 0.02, 0.07 } }
+local FOOT_EASE = 14.0                     -- 1/s: how fast a held foot follows the ground
+local foot_s = {}                          -- side → { p, n } in the ground's frame
+local foot_frame, foot_frame_name = nil, nil
+local foot_here = nil                      -- the body, in that frame, last frame
+
+-- The ground under one foot: the plane through three rays, as a point under
+-- the foot's centre and a normal. One ray missing (a ledge) falls back to the
+-- centre's own ray and its normal.
+local function foot_ground(node, over, up, fwd, out_dir)
+  local pts = {}
+  for i, o in ipairs(PROBE) do
+    local q = over + fwd * o[1] + out_dir * o[2]
+    local h = raycast(q + up * REACH_UP, -up, REACH_UP + REACH_DOWN, node)
+    if not (h and h.x) then pts = nil break end
+    pts[i] = vec3(h.x, h.y, h.z)
+  end
+  if pts then
+    local n = (pts[2] - pts[1]):cross(pts[3] - pts[1])
+    if n:dot(up) < 0 then n = -n end
+    n = n:normalized()
+    local nu = n:dot(up)
+    if nu > 0.5 then
+      return over + up * (n:dot(pts[1] - over) / nu), n
+    end
+  end
+  local h = raycast(over + up * REACH_UP, -up, REACH_UP + REACH_DOWN, node)
+  if not h then return nil end
+  local n = vec3(h.nx or 0, h.ny or 0, h.nz or 0)
+  if n:dot(up) < 0.5 then n = up end
+  return over + up * (REACH_UP - h.distance), n
+end
+
+-- The node of the world we stand on (its frame holds the planted feet), or
+-- nil for the world frame (a flat level, a test).
+local function ground_frame(node)
+  local d = space and space.dominant and space.dominant(node.x, node.y, node.z)
+  if d ~= foot_frame_name or not (foot_frame and foot_frame.valid) then
+    foot_frame_name = d
+    foot_frame = d and find and find(d) or nil
+    foot_s = {}
+  end
+  if foot_frame and foot_frame.valid and foot_frame.toLocal then return foot_frame end
+  return nil
+end
+
 local function plant(node, dt, up, want)
+  local fresh = plant_w < 0.02
   plant_w = plant_w + (want - plant_w) * (1 - math.exp(-(want < plant_w and 12 or 6) * dt))
-  if plant_w < 0.01 then plant_drop = 0.0 return end
+  if plant_w < 0.01 then plant_drop = 0.0 foot_s = {} return end
   local fwd = model_forward(node)
   local left = up:cross(fwd)
   -- Where the clips alone put it. `boneWorld` reads the animator's pose plus
-  -- the writes this node queued so far this frame (0.117, card 0413) — but
-  -- only once it has queued one: with none yet it answers last frame's DRAWN
-  -- pose, last frame's writes included (measured on 0.117.0-rc2). A zero write
-  -- first makes it always the former, so only this frame's `ma_dy` comes off.
-  anim:addBonePos("MaleArm", ZERO3)
+  -- the writes this node queued so far this frame, never last frame's
+  -- (0.117.0-rc3, card 0413), so only this frame's `ma_dy` comes off.
   local ma = anim:boneWorld("MaleArm")
   if not ma then return end
   ma = ma - up * ma_dy
   local base = node.pos + up * ((ma - node.pos):dot(up) - MA_UP)
+  local frame = ground_frame(node)
+  local k = 1 - math.exp(-FOOT_EASE * dt)
+  -- A body shoved along the ground (a contact pushing it out of a slope) takes
+  -- its feet with it at once: easing them after it leaves them in the ground.
+  local here = frame and frame:toLocal(node.pos) or node.pos
+  if foot_here and (here - foot_here):length() > 0.03 then fresh = true end
+  foot_here = here
   local hits, low = {}, 0.0
-  for side, st in pairs(STANCE) do
+  for _, side in ipairs(SIDES) do
+    local st = STANCE[side]
     local p = ma + left * st.x + fwd * st.z
     local over = base + (p - base) - up * (p - base):dot(up)
-    local hit = raycast(over + up * REACH_UP, -up, REACH_UP + REACH_DOWN, node)
-    if hit then
-      local n = vec3(hit.nx or 0, hit.ny or 0, hit.nz or 0)
-      if n:dot(up) < 0.5 then n = up end
-      local gap = math.clamp(REACH_UP - hit.distance, -HIP_DROP_MAX, HIP_DROP_MAX)
-      hits[side] = { pos = over + up * gap, n = n }
-      low = math.min(low, gap)
+    local gp, gn = foot_ground(node, over, up, fwd, left * (st.x >= 0 and 1 or -1))
+    if gp then
+      gp = over + up * math.clamp((gp - over):dot(up), -HIP_DROP_MAX, HIP_DROP_MAX)
+      -- Held in the ground's frame and eased; a fresh plant (or a foot that
+      -- has moved off where it was) takes the new ground as it is.
+      local lp, ln = gp, gn
+      if frame then
+        lp = frame:toLocal(gp)
+        ln = frame:toLocal(gp + gn) - lp
+      end
+      local fs = foot_s[side]
+      if fresh or not fs or (lp - fs.p):length() > 0.25 then
+        fs = { p = lp, n = ln }
+        foot_s[side] = fs
+      else
+        fs.p = fs.p + (lp - fs.p) * k
+        fs.n = (fs.n + (ln - fs.n) * k):normalized()
+      end
+      local pos, n = fs.p, fs.n
+      if frame then
+        pos = frame:toWorld(fs.p)
+        n = (frame:toWorld(fs.p + fs.n) - pos):normalized()
+      end
+      hits[side] = { pos = pos, n = n }
+      low = math.min(low, (pos - over):dot(up))
+    else
+      foot_s[side] = nil
     end
   end
   plant_drop = plant_drop + (-low - plant_drop) * (1 - math.exp(-10 * dt))
   anim:addBonePos("MaleArm", vec3(0, -plant_drop * plant_w, 0))
   ma_dy = ma_dy - plant_drop * plant_w
-  for side, h in pairs(hits) do
-    local ankle = h.pos + h.n * ANKLE
-    anim:reach("Foot." .. side, ankle, { pole = ankle + fwd * 0.5 + up * 0.5, weight = plant_w })
-    local along = (fwd - h.n * fwd:dot(h.n)):normalized()
-    anim:lookAt({ "Foot." .. side }, ankle + along * TOE.z + h.n * TOE.y,
-      { axis = TOE, limit = 35, weight = plant_w })
+  for _, side in ipairs(SIDES) do
+    local h = hits[side]
+    if h then
+      local ankle = h.pos + h.n * ANKLE
+      anim:reach("Foot." .. side, ankle, { pole = ankle + fwd * 0.5 + up * 0.5, weight = plant_w })
+      local along = (fwd - h.n * fwd:dot(h.n)):normalized()
+      anim:lookAt({ "Foot." .. side }, ankle + along * TOE.z + h.n * TOE.y,
+        { axis = TOE, limit = 35, weight = plant_w })
+    end
   end
 end
 
@@ -655,6 +743,47 @@ local function pose(node, dt, up, spd, on_ground, standing)
   end
 end
 
+-- LOCAL UP: straight out from the centre of the world under us — worked out
+-- from where that world IS, every frame, not read off the body.
+--
+-- `node.up` is the body's −gravity, and on 0.117.0-rc3 it is wrong for one
+-- tick every few seconds: the floating origin recentres after the rails have
+-- rebuilt gravity, and `World::rebase` shifts the old point sources but not the
+-- planets' µ/r² centres, so that tick pulls toward a spot ~4 km away (measured
+-- 12–76° off the vertical, once every 4–17 s while standing on a moving world).
+-- Read as "up", that tilted the walk, swung the feet's rays sideways and rolled
+-- the camera for a split second. The geometry has no such tick. (No world
+-- under us at all — a flat level, a test — and the body's up is all there is.)
+function local_up(node)
+  local d = space and space.dominant and space.dominant(node.x, node.y, node.z)
+  local b = d and space.body(d)
+  if b then
+    local x, y, z = norm(node.x - b.x, node.y - b.y, node.z - b.z)
+    if x ~= 0 or y ~= 0 or z ~= 0 then return x, y, z end
+  end
+  local ux, uy, uz = node.up_x, node.up_y, node.up_z
+  if not ux or (ux == 0 and uy == 0 and uz == 0) then
+    ux, uy, uz = norm(node.x, node.y, node.z)
+    if ux == 0 and uy == 0 and uz == 0 then ux, uy, uz = 0, 1, 0 end
+  end
+  return ux, uy, uz
+end
+
+-- STANDING UP STRAIGHT. The engine keeps the astronaut node upright by turning
+-- it a third of the way toward the body's up at each writeback — so on that
+-- bad tick (see `local_up`) the whole crew leaned up to 20° for a few frames
+-- and stood back up: a shiver of the entire body. After the writeback, before
+-- the frame is drawn, the node is stood along the true vertical; on every
+-- other frame that is the turn the engine made anyway. Rotation only — the
+-- capsule's collision shape follows the body's up, not the node's.
+function lateUpdate(node, dt)
+  if not onFoot or not (node.worldUp and node.setUp) then return end
+  local ux, uy, uz = local_up(node)
+  local u = vec3(ux, uy, uz)
+  local cur = node:worldUp()
+  if cur and cur:dot(u) < 0.999999 then node:setUp(u) end
+end
+
 function update(node, dt)
   if not cam then cam = ref("planet_camera") end
   -- The character model rides as a child; keep its visibility mirrored to us so
@@ -688,12 +817,7 @@ function update(node, dt)
   if not node.visible and not cam_hides then node.visible = true end
   if model then model.visible = node.visible end
 
-  -- Local up: the body's −gravity axis (fallback: radially out from origin).
-  local ux, uy, uz = node.up_x, node.up_y, node.up_z
-  if not ux or (ux == 0 and uy == 0 and uz == 0) then
-    ux, uy, uz = norm(node.x, node.y, node.z)
-    if ux == 0 and uy == 0 and uz == 0 then ux, uy, uz = 0, 1, 0 end
-  end
+  local ux, uy, uz = local_up(node)
 
   -- Forward = the camera's view, flattened against THIS BODY's up. The camera
   -- publishes a flat view too, but against its own slewed up, which trails the
