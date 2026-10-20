@@ -2,114 +2,68 @@
 -- break off it without digging a hole.
 --
 -- Between the colony buildings, every world in this game used to be a bare
--- shell: terrain, and nothing standing on it. That reads as unfinished long
--- before a player can say why — there is no sense of scale on ground with
--- nothing on it, and nothing to walk toward.
+-- shell: terrain, and nothing standing on it. This puts gravel, stones,
+-- boulder fields and the odd crystal outcrop on every rocky world, with the
+-- engine's GPU-instanced `scatter` — no scene node per rock — and lets the
+-- mining laser break them for ore.
 --
--- This is the engine's `scatter` system doing the whole job. A source is a RULE
--- — seed, region, density, meshes — and the engine derives every instance from
--- `hash(seed, chunk, index)` and draws them GPU-instanced, with no scene node
--- anywhere in it. Which is why this file is two hundred lines and puts rock to
--- the horizon, while the flora field beside it is nine hundred and manages
--- ninety plants inside a fifty-five-metre bubble. (Flora can't move over yet:
--- its plants are generated from primitives, and a scatter prototype has to be a
--- mesh file — floptle/0065.)
+-- HOW IT IS LAID OUT (the same scheme as flora_field, and for the same
+-- reasons). The surface is cut into square PATCHES on a cube-face grid; each
+-- patch is one small node, a child of the planet, lying in the tangent plane at
+-- its centre and squared to the grid. Each rock kind is one Ground-region
+-- scatter source per patch near you, whose density grid is the kind's own
+-- placement rule sampled across the patch. The engine drops every rock onto
+-- the real terrain below the plane.
 --
--- BREAKING ROCK. Scattered props have no colliders, so a raycast will never hit
--- one; `scatter.near` is the aim test, which is exactly what the API intends.
--- The mining laser asks this script what its beam is touching, and a hit pays
--- out through the same material registry everything else in the game uses.
+-- WHY NOT ONE SPHERE SOURCE PER KIND (as this file once did). Engine 0.117
+-- (card 0424) fixed the sphere region's face decode and made ids exact, so a
+-- sphere source would place rocks correctly now. Patches stay because they
+-- are what the flora uses too (one scheme, one set of seams), because a
+-- sphere's density grid would have to cover the whole planet at declare time,
+-- and because a patch that nobody walks near is never built. With `parent`,
+-- a region's `center` is in the PARENT's frame: (0,0,0) here, the patch node.
 --
--- WHAT'S GONE STAYS GONE — and costs almost nothing to remember. An instance id
--- is derived from (seed, chunk, index), so `scatter.removed` is a handful of
--- numbers rather than the position of every rock you ever broke. That is what
--- makes permanence storable at all: save values are capped around a kilobyte,
--- and the flora field regrows on a timer precisely because it could not store
--- its own losses. This one can.
+-- BREAKING A ROCK is `scatter.remove(source, id)`: one instance, by its exact
+-- id; the engine re-resolves that one chunk. The source's `scatter.removed()`
+-- list is the save (per patch and kind), re-applied whenever the source is
+-- declared again, and restored after `regrow` seconds. Saves from before kept
+-- "holes" (positions in the patch plane); those become ids the first time the
+-- patch is built, and the old record is deleted.
 --
 -- Cross-script:  local mf = findScript("mineral_field")
 --                mf.nearest(x, y, z, radius)   mf.breakAt(hit, "astro")
 
--- ⚠ THE COST OF THIS FIELD IS ROUGHLY QUADRATIC IN `far / chunk`, up to the
--- size of the planet. Read this before touching either number.
---
--- Residency is a sweep around the camera whose reach is the OUTERMOST `lod`
--- distance, walked to decide which chunks stay loaded, and every prop in a
--- newly loaded chunk is raycast onto the real ground so it settles rather than
--- floats. So `far` is not "how far you can see rock" — it is the budget.
---
--- The first version of this file shipped `far = 700, chunk = 22` and swept
--- 4,489 chunks per source, four sources: the game froze on arrival and hitched
--- every time the player turned to look. That is floptle/0071, filed from this
--- file, and the engine answered it in v0.31.0 — residency now stops at the body
--- (700 m of reach on a 214 m world is 700 m of nothing), ground arrives nearest
--- first over several frames instead of all in one, and the count is no longer
--- recomputed while you stand still.
---
--- WHICH MEANS THE NUMBER IS ASKABLE NOW. `fit_far` below asks `scatter.cost`
--- what a source actually wants and pulls `far` in until the answer fits
--- `max_chunks`. This file used to restate the engine's arithmetic in Lua to get
--- that number, and the restatement was WRONG in the safe direction — it said 225
--- chunks where the engine keeps between 81 and 225 depending on how big the
--- planet is, because it knew nothing about the body clamp or the corner cull.
--- Do not put that formula back. Ask.
 defaults = {
   --@header Density
-  -- Props rolled per chunk, before each kind's own multiplier. This is how
-  -- CLUTTERED the ground looks — not how far it reaches.
-  --@range 0 60
-  per_chunk = 14,
-  -- Chunk size in metres. BIGGER is cheaper: it divides `far` in the sweep
-  -- above, so halving this quadruples the number of resident chunks.
-  --@range 16 64 --@units m
-  chunk = 34.0,
+  -- Multiplies every kind's rocks per square metre. This is how CLUTTERED the
+  -- ground looks.
+  --@range 0 3
+  density = 1.0,
 
   --@header Look
-  -- How far the detailed mesh is used before the cheap one takes over.
-  --@range 20 200 --@units m
-  near = 60.0,
-  -- How far anything is drawn at all — and, because residency follows the
-  -- outermost band, the number that sets the whole field's cost. Asked for, not
-  -- guaranteed: `fit_far` pulls it in if the engine says it costs too much.
-  --
-  -- THIS IS THE ONE TO TURN DOWN if the surface ever hitches again.
-  --
-  -- 190 was the number that made the game playable again after this file broke
-  -- it, and it was deliberately short. v0.31.0 pays for some of it back: ground
-  -- now arrives nearest-first over several frames instead of all on the one
-  -- frame a patch appears, and residency stops recomputing while you stand
-  -- still. Where you can SEE this far is from the air — the horizon on a 214 m
-  -- world is under thirty metres on foot but two hundred and fifty from a
-  -- landing approach, which is the shot this game keeps putting you in.
-  --
-  -- It costs less than it reads: residency saturates at the body, so on a 100 m
-  -- moon 240 is identical to 190 (81 chunks either way) and only the largest
-  -- worlds pay, at 225 → 289. `scatter.cost` is what says so, per world, in the
-  -- Console line at the bottom of `build`.
-  --@range 50 400 --@units m
-  far = 240.0,
-  -- Metres over which one LOD band cross-dissolves into the next. The pop at a
-  -- band boundary is the thing everyone notices about scatter and nothing else.
+  -- Multiplies every kind's draw distance. Residency follows the outermost
+  -- band; a resident rock costs ~0.1–0.2 µs a frame on engine 0.117 (was
+  -- 1–4 µs on 0.116.1), so this is a look knob more than a budget now.
+  --@range 0.3 1.5
+  reach = 0.8,
+  -- Metres over which one LOD band cross-dissolves into the next.
   --@range 0 40 --@units m
-  fade = 16.0,
-
-  --@header Budget
-  -- The most chunks one source may keep resident, checked against what
-  -- `scatter.cost` says it will actually be. A configuration over this is pulled
-  -- in and says so, rather than freezing the game — which is exactly what the
-  -- first version of this file did.
-  --
-  -- The honest ceiling for the settings above is 225, on the largest world the
-  -- generator makes (radius 230); the smallest comes to 81. 320 is therefore
-  -- slack for a bigger `far`, and still bites long before anything hitches.
-  --@range 25 2000
-  max_chunks = 320,
+  fade = 10.0,
+  -- Patch size as a fraction of the planet's radius (clamped to 150..260 m).
+  --@range 0.3 0.9
+  patch = 0.6,
+  -- Density-grid resolution per patch side.
+  --@range 6 24
+  rows = 12,
+  -- Above this height nothing new is laid out.
+  --@range 100 1000 --@units m
+  alt_max = 450.0,
 
   --@header Harvest
   -- How close the beam has to pass to a rock to break it.
   --@range 0.5 6 --@units m
   grab = 2.2,
-  -- Seconds before a broken field grows back. Long, because a base's
+  -- Seconds before a broken rock grows back. Long, because a base's
   -- surroundings SHOULD strip out — that's the reason to fly somewhere else.
   --@range 0 100000 --@units s
   regrow = 2400.0,
@@ -120,32 +74,25 @@ defaults = {
 -- Published for the HUD and the smoke harness.
 bodyName = nil
 sources = 0
+patchCount = 0
+anchored = false
+count = 0
 
--- ── what grows where ────────────────────────────────────────────────────────
+-- ── what lies where ─────────────────────────────────────────────────────────
+-- One source per rock KIND per patch, because a scatter source draws one LOD
+-- chain and nothing else. `area` is rocks per square metre at full density —
+-- the same numbers the old field used (14 per 34 m chunk × the kind's share) —
+-- and `chunk` is chosen so a chunk holds only a few: the engine drops a whole
+-- chunk onto the ground at once, a raycast per rock, and a chunk of many is a
+-- visible hitch as you walk.
 --
--- One source per rock TYPE, because a scatter source draws one prototype (or
--- one LOD chain) and nothing else. They overlap on the same ground with
--- different seeds, which is what gives a mixed field: boulders sparse, gravel
--- common, crystal rare and only where the crust is right.
---
--- `density` is what makes a field a PLACE rather than a texture: it returns
--- 0..1 for a point on the unit sphere, and zero means the prop is never
--- generated — so it is a look and a cost at the same time. Rock confined to a
--- few outcrops is a fraction of the props of rock everywhere, and it is also
--- the only version that reads as geology.
---
--- These rules are PURE functions of position, and have to be: the engine samples
--- them once, at declare time, and placement has to stay derivable or walking
--- away and coming back regrows a different world. Nothing in here reads the
--- climate script, the time, or anything else that could answer twice.
---
--- (This is floptle/0064, filed from this project and shipped in engine v0.29.0.
--- Before it, every source was even across the whole planet and the only knob
--- was how much of it there was.)
+-- `density` is a PURE function of the point on the unit sphere — the engine
+-- samples it into the grid, and placement has to stay derivable.
 local KINDS = {
   {
-    id = "gravel", mat = "regolith", per = 1.0, scale = { 0.5, 1.1 },
-    lod = { "models/space-kit/rocks_smallA.glb", "models/space-kit/rocks_smallB.glb" },
+    id = "gravel", mat = "regolith", area = 14 * 1.0 / (34 * 34), chunk = 18, far = 60,
+    scale = { 0.5, 1.1 },
+    lod = { "models/flora/rock_pebbles_l0.gltf", "models/flora/rock_pebbles_l1.gltf" },
     yield = 1,
     -- Everywhere, thinning a little on the flats — loose surface material is
     -- the reason the ground stops reading as a bare shell.
@@ -154,18 +101,19 @@ local KINDS = {
     end,
   },
   {
-    id = "stone", mat = "silica", per = 0.55, scale = { 0.8, 1.6 },
-    lod = { "models/space-kit/rock.glb", "models/space-kit/rocks_smallA.glb" },
+    id = "stone", mat = "silica", area = 14 * 0.55 / (34 * 34), chunk = 22, far = 95,
+    scale = { 0.8, 1.6 },
+    lod = { "models/flora/rock_stone_l0.gltf", "models/flora/rock_stone_l1.gltf" },
     yield = 2,
-    -- Broken ground: patchy at a coarser scale than the gravel, so the two
-    -- don't share a silhouette.
+    -- Broken ground: patchy at a coarser scale than the gravel.
     density = function(x, y, z)
       return math.saturate(math.fbm(x * 1.7 + 11.0, y * 1.7, z * 1.7, 3) * 1.6)
     end,
   },
   {
-    id = "boulder", mat = "iron", per = 0.22, scale = { 1.1, 2.4 },
-    lod = { "models/space-kit/rock_largeA.glb", "models/space-kit/rock_largeB.glb" },
+    id = "boulder", mat = "iron", area = 14 * 0.22 / (34 * 34), chunk = 32, far = 170,
+    scale = { 1.1, 2.4 },
+    lod = { "models/flora/rock_boulder_l0.gltf", "models/flora/rock_boulder_l1.gltf" },
     yield = 3,
     -- Boulder fields, with real gaps between them.
     density = function(x, y, z)
@@ -174,22 +122,54 @@ local KINDS = {
     end,
   },
   {
-    id = "crystal", mat = "crystal", per = 0.05, scale = { 0.7, 1.4 },
-    lod = { "models/space-kit/rock_crystalsLargeA.glb", "models/space-kit/rock_crystals.glb" },
+    id = "crystal", mat = "crystal", area = 14 * 0.05 / (34 * 34), chunk = 40, far = 170,
+    scale = { 0.7, 1.4 },
+    lod = { "models/flora/rock_crystal_l0.gltf", "models/flora/rock_crystal_l1.gltf" },
     yield = 2,
-    -- The good stuff, and now genuinely a PLACE: a handful of outcrops per
-    -- world rather than an even sprinkle. Finding one should be an event, and
-    -- it is the one surface material worth flying home for on its own.
+    -- The good stuff, and genuinely a PLACE: a handful of outcrops per world.
     density = function(x, y, z)
       local n = math.fbm(x * 2.3 + 77.0, y * 2.3, z * 2.3, 2)
       return math.saturate((n - 0.52) * 6.0)
     end,
   },
 }
+KIND_LIST = KINDS
 
--- Cross-script singletons, resolved once and kept: `findScript` walks the whole
--- scene (floptle/0063), and asking every frame is what made this project do a
--- hundred scans a frame.
+-- ── colour ──────────────────────────────────────────────────────────────────
+-- The rock meshes (tools/gen_flora.py: faceted, stratified stone with normal
+-- and roughness maps) are painted in a neutral ramp; each kind's source is
+-- tinted to the world's own geology — the strata colour its world record
+-- publishes (`bio.palette.rock`), the ground colour on an older record. Gravel
+-- leans to the low ground, boulders to the high, so the three never read as
+-- one flat colour; crystals take a hue of their own per world and a faint
+-- glow through their emissive map. The engine's per-prop roll shades each
+-- rock ±15 % on top.
+local ROCK_NEUTRAL = 0.42
+local CRYSTAL_HUES = {
+  { 0.35, 0.85, 0.75 }, { 0.62, 0.45, 0.95 }, { 0.95, 0.70, 0.35 }, { 0.95, 0.50, 0.70 }, { 0.65, 0.85, 1.00 },
+}
+local function rgb3(c) return type(c) == "table" and { c[1] or c.r, c[2] or c.g, c[3] or c.b } or nil end
+local function mix3(a, b, t)
+  if not b then return a end
+  return { a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t, a[3] + (b[3] - a[3]) * t }
+end
+function lookOf(k, w)
+  local pal = type(w.bio) == "table" and type(w.bio.palette) == "table" and w.bio.palette or {}
+  local rock = rgb3(pal.rock) or rgb3(w.ground) or { 0.5, 0.45, 0.4 }
+  -- keep it rock-coloured: no darker than dark basalt, no brighter than chalk
+  local l = (rock[1] + rock[2] + rock[3]) / 3
+  if l < 0.18 then rock = mix3(rock, { 0.25, 0.24, 0.23 }, 0.5) end
+  local c
+  if k.id == "gravel" then c = mix3(rock, rgb3(pal.low) or rgb3(w.ground), 0.45)
+  elseif k.id == "boulder" then c = mix3(rock, rgb3(pal.high), 0.3)
+  elseif k.id == "crystal" then
+    local r = rng(((w.seed or 1) % 1000003) + 313)
+    c = CRYSTAL_HUES[r:int(1, #CRYSTAL_HUES)]
+    return { tint = { c[1] / 0.55, c[2] / 0.55, c[3] / 0.55 }, emissive = c, emissiveStrength = 0.25 }
+  else c = rock end
+  return { tint = { c[1] / ROCK_NEUTRAL, c[2] / ROCK_NEUTRAL, c[3] / ROCK_NEUTRAL } }
+end
+
 local refs = {}
 local function ref(kind)
   local r = refs[kind]
@@ -197,225 +177,267 @@ local function ref(kind)
   return r
 end
 
--- Live sources on the body we're standing on: kind id → { id, kind }.
-local live = {}
+local patches = {}  -- key → patch
+local srcs = {}     -- scatter id → { patch = key, kind = k, fill = 0..1 }
+local breaks = {}   -- "patch|kind" → { {id, t}, ... }, oldest first
+local convert = {}  -- "patch|kind" → old hole positions to turn into ids
+local swept = false
 local cur_body = nil
-local next_regrow = 0
+local next_t = 0
+local frame_checked = false
 
--- A SCATTER SOURCE RIDES ITS WORLD, and every world here moves.
---
--- `scatter.create{ center = ... }` fixes the region in WORLD space at the moment
--- you declare it. On a planet orbiting at 99 units per second — which the spawn
--- world does — a field of reach 240 is entirely behind the planet two and a half
--- seconds after it is declared, and the rocks stay where the planet was. This
--- shipped, and was reported as the props being left behind by the planet.
---
--- `parent` (floptle/0073, filed from this file, engine v0.32.0) is the fix, and
--- it is the good version of it: placement moved into the BODY's frame rather
--- than the props being moved through the world. Every instance id, every settled
--- ground height and the whole removal set are expressed relative to the anchor,
--- so following its planet costs one transform per source per frame — no
--- reseeding, no re-settling, nothing harvested forgotten.
---
--- `anchored` is still published and still checked, because a field with no
--- anchor on a body that moves is the bug above, and it must not be able to come
--- back silently.
-bodyMotion = 0.0
-anchored = false
--- nil = not yet asked, true/false = this editor build takes `parent` or doesn't.
-local anchor_ok = nil
+local function len(x, y, z) return math.sqrt(x * x + y * y + z * z) end
 
--- How much drift a source may see and still be trusted unanchored. Half a chunk
--- over a second: below that a source outlives its own LOD fade, above it the
--- props visibly swim.
-local DRIFT_LIMIT = 0.5
+-- ── patch geometry (mirrors flora_field; see its notes) ─────────────────────
+local AX = { { 1, 2, 3 }, { 2, 3, 1 }, { 3, 1, 2 } }
+local function comp(v, i) return v[i] end
 
--- Published so the HUD and the smoke harness can read the budget rather than
--- trust it. These are what the ENGINE says, not what this file predicted.
-chunksPerSource = 0
-propsPerSource = 0
-farUsed = 0
-
--- Declare one source, ask what it costs, and pull `far` in until the answer
--- fits — the whole point of floptle/0071, which this file is the reason for.
---
--- `declare(far)` builds a source and hands back its id; every kind shares the
--- same geometry (chunk, radius, reach), so measuring the first one measures all
--- four and the rest are built at whatever `far` survived.
---
--- Shrinking by 0.7 rather than solving for a reach: the relationship between
--- `far` and the count is not a formula this file gets to know any more — the
--- engine culls corners and stops at the body — so the honest move is to ask
--- again. It converges in two or three tries from anything sane, and the attempt
--- cap means a pathological setting still ends up with a field rather than a
--- hang.
-local function fit_far(declare)
-  local cap = math.max(25, math.floor(params.max_chunks))
-  local floor_far = math.max(params.chunk, 20.0)
-  local far = math.max(floor_far, params.far)
-  for attempt = 1, 6 do
-    local id = declare(far)
-    local cost = scatter.cost(id)
-    local chunks = (cost and cost.chunks) or 0
-    if chunks <= cap or attempt == 6 or far <= floor_far then
-      chunksPerSource, propsPerSource, farUsed = chunks, (cost and cost.props) or 0, far
-      return id, far
-    end
-    -- Over budget: this source never draws a frame.
-    scatter.destroy(id)
-    local next_far = math.max(floor_far, far * 0.7)
-    print(string.format(
-      "mineral field: far=%.0f at chunk=%.0f keeps %d chunks resident (cap %d) — retrying at far=%.0f",
-      far, params.chunk, chunks, cap, next_far))
-    far = next_far
-  end
+local function project(rx, ry, rz, R)
+  local v = { rx, ry, rz }
+  local face, best = 1, math.abs(rx)
+  if math.abs(ry) > best then face, best = 2, math.abs(ry) end
+  if math.abs(rz) > best then face, best = 3, math.abs(rz) end
+  local a = AX[face]
+  local sgn = comp(v, a[1]) >= 0 and 1 or -1
+  local t = R / math.max(1e-6, math.abs(comp(v, a[1])))
+  return face, sgn, comp(v, a[2]) * t, comp(v, a[3]) * t
 end
 
--- The save key for a body's losses. Per SLOT already, because `save.*` is.
-local function loss_key(body, kind)
-  return string.format("rocks.%s.%s", body, kind)
+local function unproject(face, sgn, u, v, R)
+  local a = AX[face]
+  local q = { 0, 0, 0 }
+  q[a[1]] = sgn * R
+  q[a[2]] = u
+  q[a[3]] = v
+  local l = len(q[1], q[2], q[3])
+  return q[1] / l, q[2] / l, q[3] / l
+end
+
+-- Up = radial, X along the face's u axis, Z = X × Y; as R = Ry·Rx·Rz angles.
+local function patch_frame(face, ux, uy, uz)
+  local a = AX[face][2]
+  local tx, ty, tz = (a == 1) and 1 or 0, (a == 2) and 1 or 0, (a == 3) and 1 or 0
+  local d = tx * ux + ty * uy + tz * uz
+  tx, ty, tz = tx - ux * d, ty - uy * d, tz - uz * d
+  local tl = len(tx, ty, tz)
+  local ex = { tx / tl, ty / tl, tz / tl }
+  local ey = { ux, uy, uz }
+  local ez = { ex[2] * ey[3] - ex[3] * ey[2], ex[3] * ey[1] - ex[1] * ey[3], ex[1] * ey[2] - ex[2] * ey[1] }
+  local pitch = math.asin(math.max(-1, math.min(1, -ez[2])))
+  local roll = math.atan2(ex[2], ey[2])
+  local yaw = math.atan2(ez[1], ez[3])
+  return yaw, pitch, roll, ex, ey, ez
+end
+
+local function pkey(face, sgn, i, j)
+  return string.format("%d%s%d,%d", face, sgn > 0 and "p" or "n", i, j)
+end
+
+local function hash(...)
+  local s = 2166136261
+  for _, v in ipairs({ ... }) do
+    s = (s * 16777619 + math.floor(v) % 2147483647) % 4294967296
+  end
+  return s % 2147483647 + 1
+end
+
+-- Where the engine put a rock: dropped from its rolled place (on the patch's
+-- plane) along the patch's -Y, sphere-traced with the cheap signed distance.
+local function ground_along(body, px, py, pz, dx, dy, dz)
+  local t = 0
+  for _ = 1, 8 do
+    local q = terrain.query(body.x + px + dx * t, body.y + py + dy * t, body.z + pz + dz * t)
+    if not q then break end
+    t = t + q
+    if math.abs(q) < 0.02 then break end
+  end
+  return px + dx * t, py + dy * t, pz + dz * t
+end
+
+local function patch_dist(p, rx, ry, rz)
+  local dx, dy, dz = rx - p.cx, ry - p.cy, rz - p.cz
+  local lx = dx * p.ex[1] + dy * p.ex[2] + dz * p.ex[3]
+  local lz = dx * p.ez[1] + dy * p.ez[2] + dz * p.ez[3]
+  local ox = math.max(0, math.abs(lx) - p.half)
+  local oz = math.max(0, math.abs(lz) - p.half)
+  return math.sqrt(ox * ox + oz * oz)
+end
+
+-- ── sources ─────────────────────────────────────────────────────────────────
+
+-- Save keys: "rocks2.<body>.<patch>.<kind>" holds the source's removed ids;
+-- "rocks.<…>" is the old hole format (x, z pairs in the patch plane).
+local function save_key(pk, kid)
+  return string.format("rocks2.%s.%s.%s", cur_body or "?", pk, kid)
+end
+local function old_key(pk, kid)
+  return string.format("rocks.%s.%s.%s", cur_body or "?", pk, kid)
+end
+
+-- Save values are capped near a kilobyte.
+local MAX_BREAKS = 40
+
+local function drop_source(id)
+  local s = srcs[id]
+  if not s then return end
+  scatter.destroy(id)
+  local p = patches[s.patch]
+  if p and p.srcs[s.kind.id] == id then p.srcs[s.kind.id] = nil end
+  srcs[id] = nil
+end
+
+local function drop_patch(key)
+  local p = patches[key]
+  if not p then return end
+  for _, id in pairs(p.srcs) do if id then drop_source(id) end end
+  if p.node and p.node.valid then p.node:destroy() end
+  patches[key] = nil
 end
 
 local function tear_down()
-  for _, s in pairs(live) do scatter.destroy(s.id) end
-  live, sources, cur_body, bodyName = {}, 0, nil, nil
+  for key in pairs(patches) do drop_patch(key) end
+  for id in pairs(srcs) do drop_source(id) end
+  patches, srcs, breaks, convert = {}, {}, {}, {}
+  sources, patchCount, count, cur_body, bodyName = 0, 0, 0, nil, nil
 end
 
--- Stand a body's fields up. Placement is a pure function of the seed, so this
--- is idempotent in the only sense that matters: the same world always grows the
--- same rocks, on every machine and in every session.
-local function build(body, w, anchor)
-  local seed = math.floor(w.seed or 1)
-  -- A world with no crust to speak of gets nothing: a gas body's "surface" is
-  -- not somewhere rocks lie on.
-  local rocky = (w.kind ~= "gas")
-  if not rocky then return end
-  -- A density of zero is how you turn the field off from the Inspector without
-  -- unloading the script; below one, nothing would round up to a prop anyway.
-  if params.per_chunk < 1 then return end
+function clearAll() tear_down() end
 
-  local R = w.radius or body.radius or 100
+local function breaks_of(pk, kid)
+  local hk = pk .. "|" .. kid
+  local list = breaks[hk]
+  if list then return list end
+  list = {}
+  local saved = save.get(save_key(pk, kid))
+  if type(saved) == "table" then
+    for i = 1, #saved do
+      local id = tonumber(saved[i])
+      if id then list[#list + 1] = { id = id, t = time } end
+    end
+  end
+  breaks[hk] = list
+  local old = save.get(old_key(pk, kid))
+  if type(old) == "table" and #old >= 2 then
+    convert[hk] = { pk = pk, kid = kid, xz = old }
+  elseif old ~= nil then
+    save.set(old_key(pk, kid), nil)
+  end
+  return list
+end
 
-  -- One kind's source, at a given reach. Pulled out of the loop below because
-  -- `fit_far` has to be able to build the first one MORE THAN ONCE, throwing
-  -- away any that costs too much.
-  local function declare(ki, k, far)
-    local near = math.min(params.near, far * 0.6)
-    local per = math.max(1, math.floor(params.per_chunk * k.per + 0.5))
-    local opts = {
-        -- Distinct seeds per kind, or every source puts its prop in exactly the
-        -- same places and the "field" is four meshes in a stack.
-        --
-        -- This offset is the kind's INDEX. It was `#k.id` — the length of the
-        -- name — which collides the moment two names are the same length, and
-        -- "boulder" and "crystal" are both seven. Every crystal outcrop in the
-        -- game grew inside a boulder, and breaking one left the other standing
-        -- in the same spot.
-        seed = seed * 31 + ki * 7919,
-        center = vec3(body.x, body.y, body.z),
-        radius = R,
-        perChunk = per,
-        chunk = params.chunk,
-        align = "surface",   -- a hillside's rocks lean with the hill
-        scaleMin = k.scale[1], scaleMax = k.scale[2],
-        fade = params.fade,
-        lod = {
-          { asset = k.lod[1], distance = near },
-          { asset = k.lod[2], distance = far },
-        },
-        -- WHERE IT GROWS, at last. `density` returns 0..1 and zero means the
-        -- instance is never generated — so this is a look AND a cost: crystal
-        -- confined to a few outcrops is a tenth of the props of crystal
-        -- everywhere, as well as being the right answer.
-        --
-        -- The rule is sampled once, at declare time, into a grid — so it must
-        -- be a pure function of position. Nothing in here reads game state or
-        -- another script, deliberately: placement has to stay derivable, or
-        -- walking away and coming back regrows a different world.
-        density = k.density and function(x, y, z)
-          return k.density((x - body.x) / R, (y - body.y) / R, (z - body.z) / R)
-        end or nil,
-    }
-    -- ANCHORED to the planet node, so the field rides the orbit instead of being
-    -- left behind by it (floptle/0073). `center` is still the world point the
-    -- region is built around; `parent` is what carries it afterwards.
-    --
-    -- ASKED FOR BY TRYING, because `scatter.create` refuses an option it does
-    -- not know (v0.29.0) and an editor built before v0.32.0 does not know this
-    -- one. Declaring it blind against an older binary is not a warning, it is a
-    -- runtime error every frame per source — four thousand of them in one
-    -- session — and no field. So: offer it once, read the refusal, and carry on
-    -- without it, saying so.
-    if anchor_ok ~= false then
-      opts.parent = anchor.name
-      local ok, id = pcall(scatter.create, opts)
-      if ok then
-        anchor_ok = true
-        return id
+local function save_breaks(pk, kid)
+  local list = breaks[pk .. "|" .. kid] or {}
+  local p = patches[pk]
+  local id = p and p.srcs[kid]
+  local ids = (id and scatter.removed) and scatter.removed(id) or nil
+  if not ids or #ids ~= #list then
+    ids = {}
+    for _, c in ipairs(list) do ids[#ids + 1] = c.id end
+  end
+  save.set(save_key(pk, kid), #ids > 0 and ids or nil)
+end
+
+-- The kind's placement rule across a patch, as a rows² grid (once per patch
+-- and kind). Outside the patch's own cube cell the neighbour lays it.
+local function base_grid(p, k, R)
+  p.base = p.base or {}
+  if p.base[k.id] then return p.base[k.id] end
+  local rows, half = p.rows, p.half
+  local data = {}
+  for r = 0, rows - 1 do
+    for c = 0, rows - 1 do
+      local x = (c / (rows - 1) - 0.5) * 2 * half
+      local z = (r / (rows - 1) - 0.5) * 2 * half
+      local px = p.cx + p.ex[1] * x + p.ez[1] * z
+      local py = p.cy + p.ex[2] * x + p.ez[2] * z
+      local pz = p.cz + p.ex[3] * x + p.ez[3] * z
+      local f2, g2, u2, v2 = project(px, py, pz, R)
+      local d = 0
+      if f2 == p.face and g2 == p.sgn and math.floor(u2 / p.P) == p.i and math.floor(v2 / p.P) == p.j then
+        local l = len(px, py, pz)
+        d = math.max(0, math.min(1, k.density(px / l, py / l, pz / l)))
       end
-      anchor_ok = false
-      print("mineral field: this editor build has no `scatter.create{ parent = }` "
-        .. "(engine v0.32.0) — the field cannot follow its planet's orbit and "
-        .. "will be left behind. Rebuild the editor. " .. tostring(id))
-      opts.parent = nil
-    end
-    return scatter.create(opts)
-  end
-
-  -- Adopt a built source: file it, and put back what this save has already
-  -- broken off it. `scatter.removed` stored the losses as instance ids, so this
-  -- is a handful of integers rather than the position of every rock.
-  local function adopt(k, id)
-    live[k.id] = { id = id, kind = k }
-    local gone = save.get(loss_key(body.name, k.id))
-    if type(gone) == "table" then
-      for _, inst in ipairs(gone) do scatter.remove(id, inst) end
+      data[r * rows + c + 1] = d
     end
   end
+  p.base[k.id] = data
+  return data
+end
 
-  -- The first kind is what the budget is measured on; the rest follow at
-  -- whatever reach survived.
-  local first_id, far = fit_far(function(f) return declare(1, KINDS[1], f) end)
-  adopt(KINDS[1], first_id)
-  for ki = 2, #KINDS do
-    adopt(KINDS[ki], declare(ki, KINDS[ki], far))
+local function make_source(p, k, w, R)
+  local rows = p.rows
+  local data = base_grid(p, k, R)
+  local sum = 0
+  for i = 1, rows * rows do sum = sum + data[i] end
+  if sum <= 0.01 then return false end
+  local list = breaks_of(p.key, k.id)
+  local look = lookOf(k, w)
+  local far = k.far * params.reach
+  local per = math.max(1, math.floor(k.area * k.chunk * k.chunk * params.density + 0.5))
+  local ok, id = pcall(scatter.create, {
+    seed = hash(w.seed or 1, p.face, p.sgn + 2, p.i + 50000, p.j + 50000, #k.id * 131 + k.chunk),
+    center = vec3(0, 0, 0), halfX = p.half, halfZ = p.half,
+    perChunk = per, chunk = k.chunk, align = "surface",
+    scaleMin = k.scale[1], scaleMax = k.scale[2], fade = params.fade,
+    lod = { { asset = k.lod[1], distance = far * 0.35 }, { asset = k.lod[2], distance = far } },
+    density = data, densityRows = rows, parent = p.name,
+    tint = look.tint, emissive = look.emissive, emissiveStrength = look.emissiveStrength,
+  })
+  if not ok then
+    print("mineral field: scatter.create refused: " .. tostring(id))
+    return false
   end
-
-  sources = 0
-  for _ in pairs(live) do sources = sources + 1 end
-  cur_body, bodyName = body.name, body.name
-  -- One line per arrival, with the engine's numbers in it. A field that is
-  -- costing more than you meant should be findable in the Console, not in a
-  -- playtest — that lesson cost this project a release.
-  print(string.format(
-    "mineral field: %s (r=%.0f) — %d sources, %d chunks each at far=%.0f",
-    body.name, R, sources, chunksPerSource, farUsed))
+  -- What was broken here stays broken: the same id is the same rock in every
+  -- declaration of this source.
+  for _, c in ipairs(list) do scatter.remove(id, c.id) end
+  srcs[id] = { patch = p.key, kind = k, fill = sum / (rows * rows), made = time }
+  return id
 end
 
 -- ── the tool-facing API ─────────────────────────────────────────────────────
 
--- The rock nearest a point, within `radius` — or nil. Returns everything the
--- caller needs to break it and to draw a highlight on it.
---
--- Scattered props have no colliders and a raycast will not hit one, so this
--- proximity query IS the aim test. The laser drives a cut point along its beam
--- and asks here at that point, which means pointing at a boulder breaks the
--- boulder rather than the ground behind it.
+-- The rock nearest a point, within `radius` — or nil. Scattered props have no
+-- colliders, so this proximity query IS the aim test: the laser drives a cut
+-- point along its beam and asks here. Measured to where the rock actually
+-- lies on the ground (the engine's settle, reproduced), not to where it was
+-- rolled on the patch plane above it.
 function nearest(x, y, z, radius)
+  radius = radius or params.grab
+  local body = cur_body and space.body(cur_body)
+  if not body then return nil end
+  local rx, ry, rz = x - body.x, y - body.y, z - body.z
   local best = nil
-  for _, s in pairs(live) do
-    local hits = scatter.near(s.id, vec3(x, y, z), radius or params.grab)
-    local h = hits and hits[1]
-    if h and (not best or h.distance < best.distance) then
-      best = { source = s.id, kind = s.kind, id = h.id,
-               pos = h.pos, distance = h.distance, scale = h.scale }
+  for id, s in pairs(srcs) do
+    local p = patches[s.patch]
+    if p and patch_dist(p, rx, ry, rz) <= radius + 3 then
+      local dx, dy, dz = rx - p.cx, ry - p.cy, rz - p.cz
+      local lx = dx * p.ex[1] + dy * p.ex[2] + dz * p.ex[3]
+      local lz = dx * p.ez[1] + dy * p.ez[2] + dz * p.ez[3]
+      local qx = body.x + p.cx + p.ex[1] * lx + p.ez[1] * lz
+      local qy = body.y + p.cy + p.ex[2] * lx + p.ez[2] * lz
+      local qz = body.z + p.cz + p.ex[3] * lx + p.ez[3] * lz
+      local hits = scatter.near(id, vec3(qx, qy, qz), radius + 1.0)
+      for n = 1, math.min(#hits, 8) do
+        local h = hits[n]
+        local hx, hy, hz = h.pos.x - body.x, h.pos.y - body.y, h.pos.z - body.z
+        local gx, gy, gz = ground_along(body, hx, hy, hz, -p.ey[1], -p.ey[2], -p.ey[3])
+        local d = len(gx - rx, gy - ry, gz - rz)
+        if d <= radius and (not best or d < best.distance) then
+          local hdx, hdy, hdz = hx - p.cx, hy - p.cy, hz - p.cz
+          best = { source = id, kind = s.kind, id = h.id, patch = s.patch,
+                   lx = hdx * p.ex[1] + hdy * p.ex[2] + hdz * p.ex[3],
+                   lz = hdx * p.ez[1] + hdy * p.ez[2] + hdz * p.ez[3],
+                   pos = vec3(body.x + gx, body.y + gy, body.z + gz),
+                   distance = d, scale = h.scale }
+        end
+      end
     end
   end
   return best
 end
 
--- Break it: the yield goes to `cid`, the instance goes away for good, and the
--- loss is written to the save as a number rather than a position.
+-- Break it: the yield goes to `cid`, the rock goes (`scatter.remove` by its
+-- id, saved), and the field grows back on its timer.
 --
 -- Returns the material id and how many units were actually taken (0 when the
 -- pack is full, and the rock is left standing — a break that pays nothing must
@@ -428,13 +450,13 @@ function breakAt(hit, cid)
   local units = k.yield or 1
   local took = inv.add(cid or "astro", k.mat, units)
   if took <= 0 then return k.mat, 0 end
-
   scatter.remove(hit.source, hit.id)
-  -- Remember the loss. `scatter.removed` is the sorted id list for the whole
-  -- source — a handful of integers, which is the entire reason permanence is
-  -- storable here and was not for the flora field.
-  if cur_body then
-    save.set(loss_key(cur_body, k.id), scatter.removed(hit.source))
+  local p = patches[hit.patch]
+  if p then
+    local list = breaks_of(hit.patch, k.id)
+    list[#list + 1] = { id = hit.id, t = time }
+    while #list > MAX_BREAKS do scatter.restore(hit.source, table.remove(list, 1).id) end
+    save_breaks(hit.patch, k.id)
   end
   return k.mat, took
 end
@@ -451,13 +473,66 @@ local function observer()
   return astro
 end
 
+local function regrow()
+  if params.regrow <= 0 then return end
+  for hk, list in pairs(breaks) do
+    local keep = {}
+    local pk, kid = hk:match("^(.*)|(%a+)$")
+    local p = patches[pk]
+    for _, c in ipairs(list) do
+      if time - c.t < params.regrow then
+        keep[#keep + 1] = c
+      elseif p and p.srcs[kid] then
+        scatter.restore(p.srcs[kid], c.id)
+      end
+    end
+    if #keep ~= #list then
+      breaks[hk] = keep
+      save_breaks(pk, kid)
+    end
+  end
+end
+
+-- Old saves' holes → ids: the rock nearest each saved position (in the patch
+-- plane, where `near` measures) is the one that was broken. A tick after the
+-- source is declared: a new source answers `near` in its parent's frame only
+-- from its first drawn frame on.
+local function convert_holes(body)
+  for hk, c in pairs(convert) do
+    local p = patches[c.pk]
+    local id = p and p.srcs[c.kid]
+    if id and srcs[id] and time - (srcs[id].made or 0) > 0.05 then
+      local list = breaks[hk]
+      for i = 1, #c.xz - 1, 2 do
+        local x, z = c.xz[i], c.xz[i + 1]
+        local q = vec3(body.x + p.cx + p.ex[1] * x + p.ez[1] * z, body.y + p.cy + p.ex[2] * x + p.ez[2] * z,
+                       body.z + p.cz + p.ex[3] * x + p.ez[3] * z)
+        local h = scatter.near(id, q, 0.35)[1]
+        if h then
+          scatter.remove(id, h.id)
+          list[#list + 1] = { id = h.id, t = time }
+        end
+      end
+      while #list > MAX_BREAKS do table.remove(list, 1) end
+      save.set(old_key(c.pk, c.kid), nil)
+      save_breaks(c.pk, c.kid)
+      convert[hk] = nil
+    elseif not p then
+      convert[hk], breaks[hk] = nil, nil
+    end
+  end
+end
+
 function update(node, dt)
   if params.enabled == 0 then
     if cur_body then tear_down() end
     return
   end
+  if time < next_t then return end
+  next_t = time + 0.2
   local gm = ref("game_manager")
   if gm and gm.loading then return end
+  if not (scatter and scatter.create) then return end
 
   local obs = observer()
   if not obs then return end
@@ -468,48 +543,140 @@ function update(node, dt)
     if cur_body then tear_down() end
     return
   end
-  -- The map's camera or a climbing rocket can be kilometres up. The engine
-  -- keeps no chunks resident for a camera that far above the field, so the
-  -- fields stay declared and there is nothing to rebuild on the way down.
-
-  -- Changed worlds: drop the old planet's sources and stand the new one's up,
-  -- ANCHORED to the body. `find(bname)` is the planet's own scene node, which is
-  -- what the rails move — hand that to `scatter.create{ parent = }` and the whole
-  -- field rides the orbit for one transform a frame.
   if bname ~= cur_body then
     tear_down()
-    local anchor = find(bname)
-    anchored = anchor ~= nil and anchor.valid == true
-    if not anchored then
-      -- A field with no anchor on a world that moves is the bug this file
-      -- shipped once. It must not be able to come back quietly.
-      print(string.format(
-        "mineral field: no scene node named %s to anchor to — no surface rock "
-        .. "here, because an unanchored field slides off an orbiting world "
-        .. "(floptle/0073)", bname))
-      cur_body, bodyName = bname, bname
-      return
+    cur_body, bodyName = bname, bname
+  end
+  local w = cl.worldOf(bname)
+  -- A world with no crust to speak of gets nothing: a gas body's "surface" is
+  -- not somewhere rocks lie on.
+  if not w or w.kind == "gas" or params.density <= 0 then return end
+  local planet = find(bname)
+  anchored = planet ~= nil and planet.valid == true
+  if not anchored then return end
+  -- A hot reload frees this script's sources (engine 0.117) but not its patch
+  -- nodes: clear them once, or each patch would be made twice under one name.
+  if not swept then
+    swept = true
+    for _, n in ipairs(findTagged("rocks") or {}) do
+      if n.valid and n.name:sub(1, 6) == "Rocks " then n:destroy() end
     end
-    local w = cl.worldOf(bname)
-    if w then build(body, w, anchor) end
-    return
   end
 
-  -- Regrowth. A field that never came back would strand a save whose base has
-  -- been stripped bare, and `scatter.restore` puts a whole source back in one
-  -- call — so this is a timer and two lines rather than a bookkeeping problem.
-  if params.regrow > 0 and time >= next_regrow then
-    next_regrow = time + params.regrow
-    for kid, s in pairs(live) do
-      local n = scatter.restore(s.id)
-      if n and n > 0 then
-        save.set(loss_key(cur_body, kid), nil)
-        print(string.format("mineral field: %d %s regrew on %s", n, kid, cur_body))
+  local rx, ry, rz = obs.x - body.x, obs.y - body.y, obs.z - body.z
+  local rl = len(rx, ry, rz)
+  if rl < 1e-3 then return end
+  local R = w.radius or body.radius or 100
+  if rl - R > params.alt_max then return end
+
+  local maxFar = 0
+  for _, k in ipairs(KINDS) do maxFar = math.max(maxFar, k.far * params.reach) end
+  local P = math.max(150, math.min(260, R * params.patch))
+
+  -- Patches near the observer (sampled in the tangent plane, so face seams
+  -- take care of themselves), nearest first.
+  local ux, uy, uz = rx / rl, ry / rl, rz / rl
+  local _, _, _, t1, _, t2 = patch_frame(select(1, project(rx, ry, rz, R)), ux, uy, uz)
+  local want, order = {}, {}
+  local reachR = maxFar + P * 0.5
+  local steps = math.ceil(reachR / (P * 0.5))
+  for a = -steps, steps do
+    for b = -steps, steps do
+      local ox, oz = a * P * 0.5, b * P * 0.5
+      if ox * ox + oz * oz <= reachR * reachR then
+        local face, sgn, u, v = project(ux * R + t1[1] * ox + t2[1] * oz, uy * R + t1[2] * ox + t2[2] * oz,
+          uz * R + t1[3] * ox + t2[3] * oz, R)
+        local i, j = math.floor(u / P), math.floor(v / P)
+        local key = pkey(face, sgn, i, j)
+        if not want[key] then
+          want[key] = { face, sgn, i, j }
+          if not patches[key] then
+            local cx, cy, cz = unproject(face, sgn, (i + 0.5) * P, (j + 0.5) * P, R)
+            order[#order + 1] = { key = key, f = want[key], d = len(cx * R - rx, cy * R - ry, cz * R - rz) }
+          end
+        end
       end
     end
   end
-end
+  table.sort(order, function(a, b) return a.d < b.d end)
+  local o = order[1]
+  if o then
+    local face, sgn, i, j = o.f[1], o.f[2], o.f[3], o.f[4]
+    local cx, cy, cz = unproject(face, sgn, (i + 0.5) * P, (j + 0.5) * P, R)
+    local yaw, pitch, roll, ex, ey, ez = patch_frame(face, cx, cy, cz)
+    local ax, ay, az = unproject(face, sgn, i * P, (j + 0.5) * P, R)
+    local bx, by, bz = unproject(face, sgn, (i + 1) * P, (j + 0.5) * P, R)
+    local half = len(ax - bx, ay - by, az - bz) * R * 0.5 * 1.15
+    local p = { key = o.key, face = face, sgn = sgn, i = i, j = j, P = P, rows = math.floor(params.rows),
+                cx = cx * R, cy = cy * R, cz = cz * R, ex = ex, ey = ey, ez = ez, half = half, srcs = {},
+                name = "Rocks " .. bname .. " " .. o.key }
+    patches[o.key] = p
+    createNode(p.name, planet, function(n)
+      n.x, n.y, n.z = p.cx, p.cy, p.cz
+      n.pitch, n.roll, n.yaw = pitch, roll, yaw
+      n.tags = { "rocks" }
+      p.node = n
+    end)
+  end
 
-function start(node)
-  next_regrow = time + params.regrow
+  -- A patch whose node went (the planet was rebuilt under it — a scene
+  -- reload, or the system generator re-running) is dropped and made again:
+  -- its sources would otherwise follow a parent that no longer exists.
+  for key, p in pairs(patches) do
+    if p.node and not p.node.valid then drop_patch(key) end
+  end
+  -- Sources: nearest patch first, one new one a tick (declaration is cheap,
+  -- but every new source's chunks are settled onto the ground over the next
+  -- frames — staggering them spreads that out).
+  local near = {}
+  for _, p in pairs(patches) do
+    p.dist = patch_dist(p, rx, ry, rz)
+    near[#near + 1] = p
+  end
+  table.sort(near, function(a, b) return a.dist < b.dist end)
+  local built = 0
+  for _, p in ipairs(near) do
+    -- No terrain answering under it yet: lay nothing (a rock settled onto
+    -- missing ground keeps that height for good).
+    if p.node and built < 1 and terrain.query(body.x + p.cx, body.y + p.cy, body.z + p.cz) then
+      for _, k in ipairs(KINDS) do
+        local far = k.far * params.reach
+        local id = p.srcs[k.id]
+        if id == nil and p.dist < far + 5 and built < 1 then
+          p.srcs[k.id] = make_source(p, k, w, R)
+          built = built + 1
+        elseif id and p.dist > far + 40 then
+          drop_source(id)
+          p.srcs[k.id] = nil
+        end
+      end
+    end
+  end
+  local n = 0
+  for key, p in pairs(patches) do
+    if (p.dist or 0) > maxFar + 80 and not want[key] then drop_patch(key) else n = n + 1 end
+  end
+  patchCount = n
+  local ns, props = 0, 0
+  for id, s in pairs(srcs) do
+    ns = ns + 1
+    local c = scatter.cost(id)
+    props = props + ((c and c.props) or 0) * (s.fill or 1)
+  end
+  sources, count = ns, math.floor(props)
+  convert_holes(body)
+  regrow()
+
+  if not frame_checked then
+    for _, p in pairs(patches) do
+      if p.node and p.node.valid and p.node.toWorld then
+        frame_checked = true
+        local o0 = p.node:toWorld(vec3(0, 0, 0))
+        local x1 = p.node:toWorld(vec3(1, 0, 0))
+        local err = len(x1.x - o0.x - p.ex[1], x1.y - o0.y - p.ex[2], x1.z - o0.z - p.ex[3])
+        if err > 0.02 then print(string.format("mineral field: PATCH FRAME MISMATCH %.3f", err)) end
+        break
+      end
+    end
+  end
 end

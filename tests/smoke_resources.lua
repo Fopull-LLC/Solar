@@ -39,6 +39,7 @@ function API.spawnEffect(key) effects[#effects + 1] = key end
 local rings = {}
 API.draw = {
   line = function() end,
+  disc = function() end,   -- the sight's fill and band (vfx overhaul)
   ring = function(cx, cy, cz, nx, ny, nz, r)
     rings[#rings + 1] = { x = cx, y = cy, z = cz, r = r }
   end,
@@ -448,8 +449,8 @@ end
 
 check("the belt starts on the mining laser", tb.toolId() == "laser", tb.toolId())
 buttons[0] = true
-set_depth(0.4)
-tick(14)                    -- a short burst: the bore stays in the topsoil
+set_depth(0.2)
+tick(22)                    -- a short burst: the bore stays in the topsoil
 buttons[0] = false
 check("holding the laser cuts rock", digs > 0, digs)
 check("...a short burst stays shallow", tb.aimDepth < 2.0, tb.aimDepth)
@@ -612,16 +613,36 @@ check("the crosshair ring is drawn on what the beam hit, at the cut radius",
   ring_a ~= nil, last_ring() and last_ring().r)
 check("holding the beam on one spot builds focus", tb.focus > 0.3, tb.focus)
 
--- THE POINTER IS NOT THE AIM. Shove the OS cursor right across the view: the
--- beam must not move a millimetre. It used to follow, which meant the tool fired
--- through whatever corner the last menu had left the pointer in — no ring, no
--- beam, no message, and a belt that looked exactly like a broken one.
+-- WHILE THE MOUSE TURNS THE VIEW, THE POINTER IS NOT THE AIM. A grabbed
+-- cursor sits hidden wherever the OS left it; the beam must not move.
+envs.planet_camera.mouseLooking = true
 cursor.x = 780
 tick(4)
 local ring_stay = outer_ring(tb.params.laser_radius * tb.params.laser_strength)
-check("the OS cursor does not steer the beam",
+check("with the mouse grabbed, the OS cursor does not steer the beam",
   ring_stay ~= nil and math.abs(ring_stay.z - ring_a.z) < 0.25,
   ring_stay and string.format("%.2f → %.2f", ring_a.z, ring_stay.z))
+
+-- WITH THE POINTER FREE, IT IS THE AIM: the tool goes where you point.
+envs.planet_camera.mouseLooking = false
+cursor.x = 560
+API.terrain.dig = function() end
+buttons[0] = false
+tick(2)
+buttons[0] = true
+tick(6)
+local ring_cur = outer_ring(tb.params.laser_radius * tb.params.laser_strength)
+check("with the mouse free, the beam follows the cursor",
+  ring_cur ~= nil and ring_cur.z - ring_a.z > 0.5,
+  ring_cur and string.format("%.2f → %.2f", ring_a.z, ring_cur.z))
+-- …but a pointer outside the view is not pointing at anything in it.
+cursor.x = 900
+tick(6)
+local ring_out = outer_ring(tb.params.laser_radius * tb.params.laser_strength)
+check("a cursor outside the view aims down the middle",
+  ring_out ~= nil and math.abs(ring_out.z - ring_a.z) < 0.25,
+  ring_out and string.format("%.2f → %.2f", ring_a.z, ring_out.z))
+envs.planet_camera.mouseLooking = nil
 cursor.x = 400
 
 look.yaw = 0.45                      -- LOOK somewhere else
@@ -782,7 +803,8 @@ for _ = 1, 40 do
 end
 buttons[0] = false
 check("the beam is drawn on the moved planet, where the bite is", (function()
-  if #drawn_vs_bite < 10 then return false end
+  -- Two seconds of trigger at `laser_rate` 0.24 is eight bites.
+  if #drawn_vs_bite < 6 then return false end
   for _, d in ipairs(drawn_vs_bite) do if d > 1.0 then return false end end
   return true
 end)(), #drawn_vs_bite .. " frames, first gap " .. tostring(drawn_vs_bite[1]))
@@ -862,7 +884,12 @@ msg = fm.depotSell()
 check("selling empties the warehouse", inv.isEmpty("base"), msg)
 check("...and pays for it", co.balance() > bal0 + worth,   -- price + discovery premium
   string.format("%d → %d (goods %d)", bal0, co.balance(), worth))
-check("...and a first sale is a discovery", co.rep() > rep0, string.format("%d → %d", rep0, co.rep()))
+check("...and a first sale is a discovery", msg:find("NEW DISCOVERY") ~= nil, msg)
+-- Standing comes from discovering something RARE, not from selling dirt.
+check("...which earns standing only for a rare material",
+  (co.rep() > rep0) == (msg:find("Resonant") ~= nil or msg:find("Sulfur") ~= nil
+    or msg:find("Obsidian") ~= nil or msg:find("Uranite") ~= nil or msg:find("Resin") ~= nil),
+  string.format("%d → %d · %s", rep0, co.rep(), msg))
 
 -- Selling the same material again is just money: the premium is paid once.
 inv.add("base", "iron", 4)
@@ -910,7 +937,12 @@ fm.openMenu("FacDepot")
 check("a full pack makes the button SELL, with the money on it",
   ACT.text:find("Sell everything") ~= nil and ACT.text:find("%$") ~= nil, ACT.text)
 check("...and the panel lists what's in the pack, priced",
-  BODY_N.text:find("SUIT PACK") ~= nil and BODY_N.text:find("Regolith") ~= nil)
+  BODY_N.text:find("SUIT PACK") ~= nil and (function()
+    for _, e in ipairs(fm.depotStock()) do
+      if e.mat == "regolith" and e.n == 9 and e.value > 0 then return true end
+    end
+    return false
+  end)())
 check("...and there is no two-step instruction to read",
   BODY_N.text:find("STEP") == nil, BODY_N.text)
 
@@ -978,6 +1010,27 @@ check("the pending list explains everything still locked", (function()
   for _, l in ipairs(lines) do if not l:find("LOCKED") then return false end end
   return true
 end)(), #rs.pendingLines() .. " locked")
+
+-- ── ore seams are fixed to the ground ───────────────────────────────────────
+-- The planet orbits at tens of metres a second. `survey` reads its noise in the
+-- planet's own frame, so the same rock reads the same however far the planet
+-- has travelled — in world coordinates the seams slid past at orbital speed.
+do
+  local px, py, pz = BODY.x, BODY.y, BODY.z
+  local same, total = 0, 0
+  for i = 1, 24 do
+    local lx, ly, lz = BODY.radius * math.cos(i), (i % 5) * 3.0, BODY.radius * math.sin(i)
+    BODY.x, BODY.y, BODY.z = px, py, pz
+    local a = tb.survey(px + lx, py + ly, pz + lz)
+    BODY.x, BODY.y, BODY.z = px + 873.5, py - 41.2, pz + 1290.7   -- the planet moved on
+    local b = tb.survey(BODY.x + lx, BODY.y + ly, BODY.z + lz)
+    total = total + 1
+    if a == b then same = same + 1 end
+  end
+  BODY.x, BODY.y, BODY.z = px, py, pz
+  check("an ore seam stays put on the ground as the planet orbits", same == total,
+    string.format("%d/%d spots read the same", same, total))
+end
 
 -- ── report ──────────────────────────────────────────────────────────────────
 local bad = {}

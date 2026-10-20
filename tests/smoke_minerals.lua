@@ -1,497 +1,429 @@
--- SMOKE HARNESS for mineral_field.lua — the rock lying on a planet's surface.
---
--- This is the first thing in the project built on `scatter.*` rather than on
--- scene nodes, so what it guards is mostly the contract with that API:
---
---   * a source per rock type, each with its OWN seed. One seed for all of them
---     would stack four meshes in the same place and call it a field.
---   * placement is declared, not built: no `createNode` anywhere in it.
---   * `scatter.near` is the aim test, because scattered props have no colliders
---     and a raycast goes straight through them.
---   * a break that pays NOTHING must not also destroy the rock — a full pack
---     costs you the swing, not the boulder.
---   * losses are saved as INSTANCE IDS. That is the whole reason permanence is
---     affordable here and isn't for the flora field: save values are capped
---     around a kilobyte, and an id list is integers.
---   * changing worlds tears the old planet's sources down. A source left
---     standing is a planet's worth of rock drawn around a body you left.
+-- SMOKE HARNESS for mineral_field.lua — the rock lying on a planet's surface,
+-- and the ore the mining laser breaks off it.
 --
 --   luajit solar/tests/smoke_minerals.lua
+--
+-- The stubbed engine is flora's (tests/smoke_flora.lua): Ground regions in
+-- the PARENT node's frame, bilinear density grids, 64-bit ids that come back
+-- as lossy doubles, every scattered mesh checked on disk. What it pins:
+--  * rock is laid on patches around the crew, anchored to the planet, with
+--    every kind (gravel, stone, boulder, crystal) present somewhere;
+--  * `nearest` finds a rock lying ON the ground (where the engine drops it),
+--    and `breakAt` pays its material and makes it GONE — not just paid for;
+--  * a full pack breaks nothing and the rock stays;
+--  * a broken rock stays broken when the field is rebuilt (a reload), and the
+--    field grows back after `regrow`.
 
-local checks = 0
-local failures = {}
-local function ok(cond, msg)
-  checks = checks + 1
-  if not cond then failures[#failures + 1] = msg end
+local T = 0.0
+
+-- ── engine API ──────────────────────────────────────────────────────────────
+local API, store, logs = {}, {}, {}
+API.save = {
+  get = function(k) return store[k] end,
+  set = function(k, v) store[k] = v end,
+  flush = function() end,
+}
+function API.log(m) logs[#logs + 1] = tostring(m) end
+function API.print(m) logs[#logs + 1] = tostring(m) end
+function API.vec3(x, y, z) return { x = x, y = y, z = z } end
+
+local function make_rng(seed)
+  local s = (seed or 12345) % 2147483647
+  if s <= 0 then s = s + 2147483646 end
+  local r = { seed = seed or 12345 }
+  function r:next()
+    s = (s * 16807) % 2147483647
+    return (s - 1) / 2147483646
+  end
+  function r:range(a, b) return a + (b - a) * r:next() end
+  function r:int(a, b) return a + math.floor(r:next() * (b - a + 1) - 1e-9) end
+  function r:pick(t) return t[1 + math.floor(r:next() * #t - 1e-9)] end
+  return r
 end
+function API.rng(seed) return make_rng(seed or 98765) end
 
-_G.time = 0.0
-_G.vec3 = function(x, y, z) return { x = x, y = y, z = z } end
--- The engine's own noise, near enough for a density rule to be exercised.
-_G.math.saturate = function(v) return math.max(0, math.min(1, v)) end
-_G.math.fbm = function(x, y, z, _)
-  return (math.sin(x * 1.7) + math.cos(y * 2.3) + math.sin(z * 1.1)) / 3.0
+local function noise(x, y, z, seed)
+  seed = seed or 0
+  local a = math.sin(x * 1.7 + seed * 0.13) * math.cos(y * 1.3 - seed * 0.21)
+  local b = math.sin(z * 2.1 - seed * 0.07) * math.cos(x * 0.9 + y * 0.5)
+  return math.max(-1, math.min(1, (a + b) * 0.5))
 end
+math.noise = noise
+math.fbm = function(x, y, z, oct) return noise(x * 3.1, y * 2.7, z * 3.3, 3) * 0.9 end
+math.saturate = function(v) return math.max(0, math.min(1, v)) end
 
--- `scatter.create` rejects an option it doesn't recognise (v0.29.0), and that
--- is load-bearing: it is the only reason a dead option could not hide. The stub
--- enforces the same list, so a typo here fails the test rather than the game.
-local KNOWN = {
-  asset = true, lod = true, seed = true, center = true, radius = true,
-  halfX = true, halfZ = true, perChunk = true, chunk = true, align = true,
-  scaleMin = true, scaleMax = true, range = true, fade = true,
-  density = true, densityRows = true, parent = true,
+-- ── the world ───────────────────────────────────────────────────────────────
+local BODY = { name = "Verdance", x = 1000, y = 0, z = -500, radius = 412,
+               mu = 6.0 * 400 * 400, soi = 60000 }
+local SURFACE = 400.0
+local LATE_BODY
+API.space = {
+  bodies = function() return { BODY } end,
+  body = function(n)
+    if n == BODY.name then return BODY end
+    if LATE_BODY and n == LATE_BODY.name then return LATE_BODY end
+    if n == "Other" or n == "Dead" or (n and n:match("^W%d+$")) then
+      return { name = n, x = 0, y = 0, z = 0, radius = 300, mu = 5 * 300 * 300, soi = 1 }
+    end
+    return nil
+  end,
+  dominant = function(x, y, z)
+    local d = math.sqrt((x - BODY.x) ^ 2 + (y - BODY.y) ^ 2 + (z - BODY.z) ^ 2)
+    return d < BODY.soi and BODY.name or nil
+  end,
 }
 
--- ── a stubbed scatter engine ────────────────────────────────────────────────
--- Faithful to the documented contract: instances are derived from the seed, an
--- id is stable, `removed` returns the sorted loss list, `restore` puts them all
--- back and answers how many.
-local next_source = 0
-local SOURCES = {}
-local created = {}
-
--- The engine's rule, as of v0.31.0: a square sweep whose side follows the
--- outermost LOD distance, and which STOPS AT THE BODY — because 700 metres of
--- reach on a 214-metre world is 700 metres of nothing. (The real one also culls
--- the square's corners; this doesn't, which only makes the harness pessimistic.)
-function _G.cost_model(far, chunk, radius)
-  local n = math.ceil((far + chunk) / chunk)
-  local lim = math.ceil(radius / chunk) + 1
-  local side = 2 * math.min(n, lim) + 1
-  return side * side
+local ray_count = 0
+function API.raycast(ox, oy, oz, dx, dy, dz, maxd)
+  ray_count = ray_count + 1
+  local rx, ry, rz = ox - BODY.x, oy - BODY.y, oz - BODY.z
+  local r = math.sqrt(rx * rx + ry * ry + rz * rz)
+  local dot = (rx * dx + ry * dy + rz * dz) / math.max(1e-9, r)
+  if dot > -0.2 then return nil end
+  -- March the ray to the sphere (the stub is a sphere of radius SURFACE).
+  local b = rx * dx + ry * dy + rz * dz
+  local c = r * r - SURFACE * SURFACE
+  local disc = b * b - c
+  if disc < 0 then return nil end
+  local t = -b - math.sqrt(disc)
+  if t < 0 or t > (maxd or 0) then return nil end
+  local hx, hy, hz = rx + dx * t, ry + dy * t, rz + dz * t
+  return { x = BODY.x + hx, y = BODY.y + hy, z = BODY.z + hz,
+           nx = hx / SURFACE, ny = hy / SURFACE, nz = hz / SURFACE, distance = t }
 end
-_G.scatter = {
-  create = function(opts)
-    for k in pairs(opts) do
-      if not KNOWN[k] then
-        error("scatter.create: unknown option `" .. tostring(k) .. "`", 2)
+API.terrain = {
+  query = function(x, y, z)
+    local d = math.sqrt((x - BODY.x) ^ 2 + (y - BODY.y) ^ 2 + (z - BODY.z) ^ 2)
+    return d - SURFACE
+  end,
+}
+
+-- ── nodes ───────────────────────────────────────────────────────────────────
+local by_name = {}
+local next_id = 100
+local function make_node(name, parent)
+  next_id = next_id + 1
+  local n = { __id = next_id, name = name, valid = true, x = 0, y = 0, z = 0,
+              yaw = 0, pitch = 0, roll = 0, scale_x = 1, scale_y = 1, scale_z = 1,
+              tags = {}, kids = {}, parent = parent, visible = true }
+  function n:setPrimitive(shape, color) self.shape = shape end
+  function n:setMaterial(m) self.material = m end
+  function n:destroy() self.valid = false; if by_name[self.name] == self then by_name[self.name] = nil end end
+  by_name[name] = n
+  return n
+end
+local nodes_made = 0
+function API.createNode(name, a, b)
+  local parent, cb = nil, nil
+  for _, v in ipairs({ a, b }) do
+    if type(v) == "function" then cb = v elseif type(v) == "table" then parent = v end
+  end
+  nodes_made = nodes_made + 1
+  local n = make_node(name, parent)
+  if cb then cb(n) end
+  return n
+end
+local PLANET = make_node(BODY.name, nil)
+local ASTRO = make_node("Astronaut", nil)
+function API.find(name) return by_name[name] end
+function API.findTagged() return {} end
+
+-- ── scatter (Ground regions, as the engine builds them) ─────────────────────
+-- R = Ry(yaw)·Rx(pitch)·Rz(roll), the engine's order; its columns are the
+-- node's X, Y, Z axes in the parent's frame.
+local function axes_of(n)
+  local cr, sr, cp, sp = math.cos(n.roll), math.sin(n.roll), math.cos(n.pitch), math.sin(n.pitch)
+  local cy, sy = math.cos(n.yaw), math.sin(n.yaw)
+  local function ry(v) return { v[1] * cy + v[3] * sy, v[2], -v[1] * sy + v[3] * cy } end
+  return ry({ cr, sr * cp, sr * sp }), ry({ -sr, cr * cp, cr * sp }), ry({ 0, -sp, cp })
+end
+local function mix32(a)
+  a = (a * 1103515245 + 12345) % 2147483648
+  a = (a * 1103515245 + 12345) % 2147483648
+  return a
+end
+local SRC, next_src = {}, 0
+local function density_at(src, u, v)
+  local d = src.density
+  if not d then return 1 end
+  local rows = src.densityRows
+  local fu, fv = math.max(0, math.min(1, u)) * (rows - 1), math.max(0, math.min(1, v)) * (rows - 1)
+  local c0, r0 = math.min(rows - 2, math.floor(fu)), math.min(rows - 2, math.floor(fv))
+  local tu, tv = fu - c0, fv - r0
+  local function at(r, c) return d[r * rows + c + 1] end
+  local top = at(r0, c0) + (at(r0, c0 + 1) - at(r0, c0)) * tu
+  local bot = at(r0 + 1, c0) + (at(r0 + 1, c0 + 1) - at(r0 + 1, c0)) * tu
+  return top + (bot - top) * tv
+end
+local function instances(src)
+  if src.cache then return src.cache end
+  local out = {}
+  local n = math.ceil(src.halfX / src.chunk)
+  for ci = -n, n - 1 do
+    for cj = -n, n - 1 do
+      for k = 0, src.perChunk - 1 do
+        local h = mix32(src.seed * 7 + (ci + 1000) * 7919 + (cj + 1000) * 104729 + k * 13)
+        local fx = (h % 10007) / 10007
+        local fz = (mix32(h) % 10009) / 10009
+        local keep = (mix32(h + 5) % 10037) / 10037
+        local lx, lz = (ci + fx) * src.chunk, (cj + fz) * src.chunk
+        if math.abs(lx) <= src.halfX and math.abs(lz) <= src.halfZ then
+          local d = density_at(src, lx / (2 * src.halfX) + 0.5, lz / (2 * src.halfZ) + 0.5)
+          if keep < d then
+            -- a 53-bit id (exact in a double), from (seed, chunk, index)
+            out[#out + 1] = { id = h * 1048576 + k * 4099 + 17, lx = lx, lz = lz,
+                              scale = src.scaleMin + (src.scaleMax - src.scaleMin) * keep }
+          end
+        end
       end
     end
-    next_source = next_source + 1
-    local id = next_source
-    -- Derived, not stored — POSITION as well as id, exactly as the real one is
-    -- (`hash(seed, chunk, index)`). Two sources sharing a seed are therefore
-    -- indistinguishable, which is the mistake this harness exists to catch:
-    -- if positions were fixed here, a seed collision would look fine.
-    local inst = {}
-    for i = 1, 8 do
-      local jitter = (opts.seed % 97) * 0.31
-      inst[i] = { id = (opts.seed % 1000) * 100 + i,
-                  pos = { x = i * 3.0 + jitter, y = 0, z = 0 }, scale = 1.0 }
+  end
+  src.cache = out
+  return out
+end
+local function live(src)
+  local out = {}
+  for _, i in ipairs(instances(src)) do
+    if not src.removed[i.id] then out[#out + 1] = i end
+  end
+  return out
+end
+API.scatter = {
+  create = function(o)
+    for k in pairs(o) do
+      local okk = ({ asset = 1, lod = 1, range = 1, seed = 1, center = 1, radius = 1, halfX = 1, halfZ = 1,
+        align = 1, perChunk = 1, chunk = 1, scaleMin = 1, scaleMax = 1, fade = 1, density = 1,
+        densityRows = 1, parent = 1, tint = 1, emissive = 1, emissiveStrength = 1 })[k]
+      if not okk then error("scatter.create: unknown option " .. k) end
     end
-    SOURCES[id] = { opts = opts, inst = inst, gone = {} }
-    created[#created + 1] = opts
-    return id
+    assert(o.center and o.center.x == 0 and o.center.y == 0 and o.center.z == 0,
+      "an anchored region's centre is in its parent's frame (0,0,0)")
+    assert(o.halfX and o.parent, "surface props use Ground regions anchored to a patch node")
+    assert(by_name[o.parent], "parent node exists: " .. tostring(o.parent))
+    if type(o.density) == "table" then
+      assert(#o.density >= o.densityRows * o.densityRows, "density grid has rows² values")
+    end
+    for _, b in ipairs(o.lod or {}) do
+      local f = io.open("solar/" .. b.asset, "r")
+      assert(f, "scatter asset exists on disk: " .. b.asset)
+      f:close()
+    end
+    next_src = next_src + 1
+    o.id = next_src
+    o.removed = {}
+    SRC[next_src] = o
+    return next_src
   end,
-  destroy = function(id)
-    local had = SOURCES[id] ~= nil
-    SOURCES[id] = nil
-    return had
-  end,
-  -- scatter.cost(id) — v0.31.0, and floptle/0071, which was filed FROM this
-  -- game after the field it guards made the game unplayable.
-  --
-  -- The oracle below is the harness's, not the script's. That is the point: the
-  -- script is not allowed to know how a chunk count is arrived at any more, only
-  -- to ask and to obey. `cost_model` is swappable so a test can hand the script
-  -- an answer it has to react to, and the script's published numbers are checked
-  -- against what this returned — so if it ever goes back to computing its own,
-  -- the two diverge and the test says so.
+  destroy = function(id) local had = SRC[id] ~= nil; SRC[id] = nil; return had end,
   cost = function(id)
-    local s = SOURCES[id]
+    local s = SRC[id]
     if not s then return {} end
-    local far = s.opts.lod[#s.opts.lod].distance
-    local chunks = _G.cost_model(far, s.opts.chunk, s.opts.radius)
-    return { chunks = chunks, props = chunks * s.opts.perChunk,
-             far = far, chunkSize = s.opts.chunk, perChunk = s.opts.perChunk }
+    -- Like the engine: what is RESIDENT, i.e. within the outermost band of
+    -- the eye (the astronaut stands in for the camera).
+    local node = by_name[s.parent]
+    local ex, _, ez = axes_of(node)
+    local far = s.lod[#s.lod].distance
+    local n = 0
+    for _, i in ipairs(instances(s)) do
+      local wx = BODY.x + node.x + ex[1] * i.lx + ez[1] * i.lz
+      local wy = BODY.y + node.y + ex[2] * i.lx + ez[2] * i.lz
+      local wz = BODY.z + node.z + ex[3] * i.lx + ez[3] * i.lz
+      if math.sqrt((wx - ASTRO.x) ^ 2 + (wy - ASTRO.y) ^ 2 + (wz - ASTRO.z) ^ 2) <= far then n = n + 1 end
+    end
+    return { props = n, chunks = 1 }
   end,
-  near = function(id, point, radius)
-    local s = SOURCES[id]
+  near = function(id, p, radius)
+    local s = SRC[id]
     if not s then return {} end
+    local node = by_name[s.parent]
+    local ex, _, ez = axes_of(node)
     local out = {}
-    for _, it in ipairs(s.inst) do
-      if not s.gone[it.id] then
-        local d = math.sqrt((it.pos.x - point.x) ^ 2 + (it.pos.y - point.y) ^ 2
-                          + (it.pos.z - point.z) ^ 2)
-        if d <= (radius or 1) then
-          out[#out + 1] = { id = it.id, pos = it.pos, distance = d, scale = it.scale }
-        end
+    for _, i in ipairs(live(s)) do
+      local wx = BODY.x + node.x + ex[1] * i.lx + ez[1] * i.lz
+      local wy = BODY.y + node.y + ex[2] * i.lx + ez[2] * i.lz
+      local wz = BODY.z + node.z + ex[3] * i.lx + ez[3] * i.lz
+      local d = math.sqrt((wx - p.x) ^ 2 + (wy - p.y) ^ 2 + (wz - p.z) ^ 2)
+      if d <= radius then
+        out[#out + 1] = { id = i.id, pos = { x = wx, y = wy, z = wz }, distance = d, scale = i.scale, param = 0.5 }
       end
     end
     table.sort(out, function(a, b) return a.distance < b.distance end)
     return out
   end,
   remove = function(id, inst)
-    local s = SOURCES[id]
-    if s then s.gone[inst] = true end
+    local s = SRC[id]
+    if not s then return false end
+    local had = s.removed[inst]
+    s.removed[inst] = true
+    return not had
+  end,
+  restore = function(id, inst)
+    local s = SRC[id]
+    if not s then return 0 end
+    if inst == nil then
+      local n = 0
+      for _ in pairs(s.removed) do n = n + 1 end
+      s.removed = {}
+      return n
+    end
+    local had = s.removed[inst]
+    s.removed[inst] = nil
+    return had and 1 or 0
   end,
   removed = function(id)
-    local s = SOURCES[id]
-    if not s then return {} end
+    local s = SRC[id]
     local out = {}
-    for k in pairs(s.gone) do out[#out + 1] = k end
+    if s then for k in pairs(s.removed) do out[#out + 1] = k end end
     table.sort(out)
     return out
   end,
-  restore = function(id)
-    local s = SOURCES[id]
-    if not s then return 0 end
-    local n = 0
-    for k in pairs(s.gone) do s.gone[k] = nil; n = n + 1 end
-    return n
-  end,
 }
--- If the field ever reaches for createNode, that is the bug this whole file
--- exists to prevent: it would be building a forest of scene nodes again.
-local node_builds = 0
-_G.createNode = function() node_builds = node_builds + 1 end
-_G.spawn = function() node_builds = node_builds + 1 end
+local preload_calls = 0
+API.assets = { preload = function(list, cb) preload_calls = preload_calls + 1; cb({}) end }
+API.decals = nil
 
--- ── the world ───────────────────────────────────────────────────────────────
-local planet = { name = "Ryilex", x = 4800, y = 0, z = -1200, radius = 214 }
-local moon   = { name = "Pelia",  x = 9000, y = 0, z = -1200, radius = 45 }
-local WORLDS = {
-  Ryilex = { kind = "rock", seed = 7, radius = 214 },
-  Pelia  = { kind = "rock", seed = 91, radius = 45 },
-}
-local here = planet
+-- ── script loading ──────────────────────────────────────────────────────────
+local envs = {}
+local function load_script(path, kind)
+  local env = setmetatable({}, { __index = function(_, k)
+    if k == "time" then return T end
+    return API[k] or _G[k]
+  end })
+  local chunk = assert(loadfile(path))
+  setfenv(chunk, env)
+  chunk()
+  env.params = {}
+  for k, v in pairs(env.defaults or {}) do env.params[k] = v end
+  envs[kind] = env
+  return env
+end
+function API.findScript(kind) return envs[kind] end
+function API.findScripts(kind)
+  if kind == "vessel_controller" then return {} end
+  return envs[kind] and { envs[kind] } or {}
+end
 
-local astro = { name = "Astronaut", valid = true,
-                x = planet.x, y = planet.y + planet.radius, z = planet.z }
--- The planets have SCENE NODES, because that is what a field anchors to: the
--- node the orbital rails move. A body without one gets no field at all, which is
--- the last test in this file.
-local PNODES = {
-  Astronaut = astro,
-  Ryilex = { name = "Ryilex", valid = true },
-  Pelia = { name = "Pelia", valid = true },
-}
-_G.find = function(n) return PNODES[n] end
-_G.space = {
-  dominant = function() return here.name end,
-  body = function(n)
-    if n == "Ryilex" then return planet end
-    if n == "Pelia" then return moon end
-  end,
-}
-local report = print
-_G.print = function() end
+load_script("solar/scripts/materials.lua", "materials")
+local inv = load_script("solar/scripts/inventory.lua", "inventory")
+load_script("solar/scripts/climate.lua", "climate")
+local mf = load_script("solar/scripts/mineral_field.lua", "mineral_field")
 
--- ── the scripts it reads ────────────────────────────────────────────────────
-local walker = { onFoot = true }
-local climate = { worldOf = function(n) return WORLDS[n] end }
-local mats = { name = function(m) return m end }
-local pack_full = false
-local added = {}
-local inv = {
-  add = function(_, mat, n)
-    if pack_full then return 0 end
-    added[#added + 1] = { mat = mat, n = n }
-    return n
-  end,
-}
-local refs = { planet_walker = walker, climate = climate, inventory = inv,
-               materials = mats }
-_G.findScript = function(k) return refs[k] end
-_G.findScripts = function() return {} end
-
-local SAVE = {}
-_G.save = {
-  get = function(k) return SAVE[k] end,
-  set = function(k, v) SAVE[k] = v end,
+store["world." .. BODY.name] = {
+  name = BODY.name, kind = "canyon", seed = 20260728, radius = SURFACE,
+  relief = 24.0, sea = 0, atmo = 0.7, insol = 1.0,
 }
 
--- ── load ────────────────────────────────────────────────────────────────────
-local chunk = assert(loadfile("solar/scripts/mineral_field.lua"))
-chunk()
-_G.params = {}
-for k, v in pairs(_G.defaults) do _G.params[k] = v end
-local node = { name = "Mineral Field" }
-start(node)
+local checks = {}
+local function check(desc, ok, detail)
+  checks[#checks + 1] = { desc = desc, ok = ok and true or false, detail = detail }
+end
 
+ASTRO.x, ASTRO.y, ASTRO.z = BODY.x + SURFACE + 1.0, BODY.y, BODY.z
 local function tick(n)
-  for _ = 1, (n or 1) do
-    _G.time = _G.time + 1 / 60
-    update(node, 1 / 60)
+  for _ = 1, n or 1 do
+    T = T + 0.25
+    mf.update({}, 0.25)
   end
 end
+tick(120)
+check("rock is laid out around the crew", mf.patchCount > 0 and mf.sources > 0,
+  mf.patchCount .. " patches, " .. mf.sources .. " sources")
+check("…anchored to the world it lies on", mf.anchored == true and mf.bodyName == BODY.name)
+check("…with rocks in it", mf.count > 10, mf.count)
+local kinds = {}
+for _, s in pairs(SRC) do kinds[s.lod[1].asset] = true end
+check("every rock kind is laid somewhere", (function()
+  for _, k in ipairs(mf.KIND_LIST) do if not kinds[k.lod[1]] then return false, k.id end end
+  return true
+end)())
 
--- 1. STANDING UP A WORLD. One source per rock type, and nothing built by hand.
-tick(2)
-ok(_G.sources == 4, "four rock types get a source each — got " .. tostring(_G.sources))
-ok(_G.bodyName == "Ryilex", "the field names the world it's on")
-ok(node_builds == 0, "nothing is built with createNode — the engine draws it")
-
--- 2. EVERY SOURCE HAS ITS OWN SEED. Sharing one would put every prototype at
--- the same place and the "field" would be four meshes in a stack.
-local seeds = {}
-local seed_dupes = 0
-for _, o in ipairs(created) do
-  if seeds[o.seed] then seed_dupes = seed_dupes + 1 end
-  seeds[o.seed] = true
-end
-ok(seed_dupes == 0, "each rock type is seeded differently")
-
--- 3. …and each declares a real region and a LOD chain, nearest band first.
-local well_formed = true
-for _, o in ipairs(created) do
-  if not (o.center and o.radius and o.perChunk and o.perChunk > 0) then well_formed = false end
-  if not (o.lod and #o.lod == 2 and o.lod[1].distance < o.lod[2].distance) then
-    well_formed = false
-  end
-  if not (o.fade and o.fade > 0) then well_formed = false end
-end
-ok(well_formed, "every source declares a region, a density and a near→far LOD chain")
-
--- 3b. EVERY MESH IT NAMES IS ON DISK. A mistyped asset path costs nothing at
--- load and draws nothing at all — a field that is simply, silently absent. This
--- is the one part of "does it look right" that can be answered offline.
-local missing_assets = {}
-for _, o in ipairs(created) do
-  for _, band in ipairs(o.lod) do
-    local fh = io.open("solar/" .. band.asset, "r")
-    if fh then fh:close() else missing_assets[#missing_assets + 1] = band.asset end
-  end
-end
-ok(#missing_assets == 0,
-  "every scattered mesh exists: " .. table.concat(missing_assets, ", "))
-
--- 3c. THE RESIDENCY BUDGET. This is the one that matters most, because getting
--- it wrong does not look like a bug — it looks like the engine being slow.
---
--- The first version of this field shipped far = 700 at chunk = 22 and swept
--- 4,489 chunks per source, four sources: about 211,000 props settled onto the
--- ground with a ray. The game froze on arrival and hitched whenever the player
--- turned the camera, because orbiting one drags new chunks in.
---
--- What is asserted here is NOT arithmetic — the script no longer does any. It
--- is that the field asks `scatter.cost`, believes the answer, and stays inside
--- its declared cap.
-local worst, total_props = 0, 0
-for _, o in ipairs(created) do
-  local c = _G.cost_model(o.lod[#o.lod].distance, o.chunk, o.radius)
-  worst = math.max(worst, c)
-  total_props = total_props + c * o.perChunk
-end
-ok(worst <= _G.params.max_chunks,
-  string.format("no source exceeds the chunk budget (%d resident, cap %d)",
-    worst, _G.params.max_chunks))
-ok(_G.chunksPerSource == worst,
-  string.format("the field publishes the residency the ENGINE reported (%d vs %d)",
-    _G.chunksPerSource, worst))
-ok(_G.farUsed == _G.params.far,
-  "a field that fits keeps the reach it asked for")
-ok(total_props < 20000,
-  string.format("the whole field stays under 20k props — got %d", total_props))
-
--- 3d. …AND IT OBEYS AN ANSWER IT DOESN'T LIKE. Hand the script a world where
--- the reach it wants costs three times the cap, and it has to pull `far` in and
--- ask again rather than ship the field that froze the game.
---
--- This is the negative control for the whole section above: without `fit_far`
--- the cap is never consulted and this fails on the first assertion.
---
--- (Via the moon and back, because a field is only rebuilt when the world under
--- you changes — which is the other thing this proves.)
-local honest = _G.cost_model
-here = moon
-tick(2)
-
-local greedy = 0
-_G.cost_model = function(far, chunk, radius)
-  greedy = greedy + 1
-  return honest(far, chunk, radius) * 3   -- every chunk costs three of anyone else's
-end
-here = planet
-created = {}
-tick(2)
-ok(_G.chunksPerSource <= _G.params.max_chunks,
-  string.format("an over-budget field is pulled in until it fits (%d, cap %d)",
-    _G.chunksPerSource, _G.params.max_chunks))
-ok(_G.farUsed < _G.params.far,
-  string.format("…by shortening the reach (%.0f, asked for %.0f)",
-    _G.farUsed, _G.params.far))
-ok(greedy > 1, "…which means it asked more than once")
-ok(_G.sources == 4, "…and there is still a field afterwards")
--- Every rejected attempt must be destroyed, or the retries pile up invisible
--- sources that cost exactly what the retry was avoiding.
-local live_sources = 0
-for _ in pairs(SOURCES) do live_sources = live_sources + 1 end
-ok(live_sources == 4,
-  string.format("…with no abandoned source left running (%d live)", live_sources))
--- The LIVE sources, not `created` — which also holds the attempts that were
--- measured and thrown away, and those are supposed to be at a longer reach.
-local all_at_fitted_reach = true
-for _, s in pairs(SOURCES) do
-  if s.opts.lod[#s.opts.lod].distance ~= _G.farUsed then all_at_fitted_reach = false end
-end
-ok(all_at_fitted_reach, "…and every kind was built at the reach that survived")
-
--- 3e. AND IT GIVES UP RATHER THAN SPINS. On a body smaller than the reach,
--- residency has already saturated at the planet — so shortening `far` buys
--- nothing, and no amount of retrying will get under a cap set below what the
--- whole moon costs. That is not a bug to solve, it is a moon: the field has to
--- stop asking and build something.
---
--- The failure this guards against is the retry loop that never converges, which
--- on a real arrival is a hang at exactly the moment the player lands.
-_G.cost_model = function(far, chunk, radius) return honest(far, chunk, radius) * 40 end
-here = moon
-created = {}
-tick(2)
-ok(_G.sources == 4, "an impossible budget still ends up with a field, not a hang")
-ok(#created <= 4 + 6, "…after a bounded number of attempts, not an unbounded one")
-
--- Back to the honest oracle and the home world for the rest of the file.
-_G.cost_model = honest
-here = planet
-created = {}
-tick(2)
-
--- 3d. DENSITY IS A PURE FUNCTION OF POSITION. The engine samples it once, at
--- declare time, so a rule that read game state would regrow a different world
--- on the second visit. Calling one twice with the same point must agree.
-local stable = true
-for _, o in ipairs(created) do
-  if o.density then
-    local a1 = o.density(0.3, 0.5, -0.2)
-    local a2 = o.density(0.3, 0.5, -0.2)
-    if a1 ~= a2 then stable = false end
-    if type(a1) ~= "number" or a1 < 0 or a1 > 1 then stable = false end
-  end
-end
-ok(stable, "every density rule is pure and returns 0..1")
-
--- 4. AIMING. `scatter.near` is the aim test — a raycast would not hit a prop.
--- Aim at where a rock actually is: with placement derived from each source's
--- own seed, "x = 3" is no longer a place any particular rock stands.
-local function some_rock_pos()
-  for _, s in pairs(SOURCES) do
-    for _, it in ipairs(s.inst) do
-      if not s.gone[it.id] then return it.pos.x, it.pos.y, it.pos.z end
+-- Find a rock: sweep the ground around the crew.
+local function find_rock(kind_id)
+  for r = 1, 60 do
+    for i = 0, 23 do
+      local a = i * math.pi / 12
+      local dir = { 0, math.cos(a), math.sin(a) }
+      local px = BODY.x + SURFACE
+      local py, pz = BODY.y + dir[2] * r, BODY.z + dir[3] * r
+      -- back onto the sphere
+      local dx, dy, dz = px - BODY.x, py - BODY.y, pz - BODY.z
+      local l = math.sqrt(dx * dx + dy * dy + dz * dz)
+      px, py, pz = BODY.x + dx / l * SURFACE, BODY.y + dy / l * SURFACE, BODY.z + dz / l * SURFACE
+      local h = mf.nearest(px, py, pz, 3.0)
+      if h and (not kind_id or h.kind.id == kind_id) then return h end
     end
   end
 end
-local rx, ry, rz = some_rock_pos()
-local hit = nearest(rx, ry, rz, 1.0)
-ok(hit ~= nil, "a rock near the beam is found")
-ok(hit and hit.kind and hit.kind.mat, "…and it knows what it's made of")
+local rock = find_rock()
+check("the laser can find a rock", rock ~= nil)
+if rock then
+  local r = math.sqrt((rock.pos.x - BODY.x) ^ 2 + (rock.pos.y - BODY.y) ^ 2 + (rock.pos.z - BODY.z) ^ 2)
+  check("…lying on the ground, not on the patch plane above it", math.abs(r - SURFACE) < 0.05, r - SURFACE)
+  local at = rock.pos
+  local hit = mf.nearest(at.x, at.y, at.z, 1.0)
+  check("aiming at it finds it", hit ~= nil and hit.distance < 0.05)
+  local mat, took = mf.breakAt(hit, "astro")
+  check("breaking it pays its material", mat == rock.kind.mat and took == rock.kind.yield, tostring(mat) .. " x" .. tostring(took))
+  check("…into the pack", inv.count("astro", mat) >= took)
+  local again = mf.nearest(at.x, at.y, at.z, 0.3)
+  check("…and the rock is GONE", again == nil)
+  check("the break is saved", (function()
+    for k, v in pairs(store) do
+      if k:match("^rocks2%.") and type(v) == "table" and #v >= 1 and v[1] == hit.id then return true end
+    end
+    return false
+  end)())
+  mf.clearAll()
+  tick(120)
+  check("a broken rock stays broken when the field is rebuilt", mf.nearest(at.x, at.y, at.z, 0.3) == nil)
+  T = T + mf.params.regrow + 10
+  tick(8)
+  check("…and the field grows back after `regrow`", mf.nearest(at.x, at.y, at.z, 0.3) ~= nil)
 
--- 5. BREAKING IT pays out through the ordinary material registry.
-local mat, took = breakAt(hit, "astro")
-ok(took and took > 0, "breaking a rock yields material")
-ok(#added == 1 and added[1].mat == mat, "…into the pack, through inventory.add")
-ok(nearest(rx, ry, rz, 0.4) == nil, "…and the rock is gone")
+  -- An old save's hole (a position in the patch plane) becomes an id.
+  local rk = find_rock()
+  if rk then
+    local okey = string.format("rocks.%s.%s.%s", BODY.name, rk.patch, rk.kind.id)
+    local nkey = string.format("rocks2.%s.%s.%s", BODY.name, rk.patch, rk.kind.id)
+    store[okey] = { math.floor(rk.lx * 100 + 0.5) / 100, math.floor(rk.lz * 100 + 0.5) / 100 }
+    store[nkey] = nil
+    mf.clearAll()
+    tick(120)
+    check("an old hole save is converted: the rock stays broken", mf.nearest(rk.pos.x, rk.pos.y, rk.pos.z, 0.3) == nil)
+    check("…the old record is deleted and the id saved", store[okey] == nil and type(store[nkey]) == "table"
+      and store[nkey][1] == rk.id)
+  end
 
--- 6. THE LOSS IS SAVED AS IDS. Integers, not positions — which is what makes
--- permanence storable at all inside a ~1 KB save value.
-local key
-for k, v in pairs(SAVE) do
-  if k:find("^rocks%.Ryilex%.") and type(v) == "table" and #v > 0 then key = k end
+  -- A full pack: the rock stays standing.
+  local rock2 = find_rock()
+  if rock2 then
+    inv.add("astro", "iron", 1e6)
+    inv.add("astro", "silica", 1e6)
+    inv.add("astro", "regolith", 1e6)
+    inv.add("astro", "crystal", 1e6)
+    local p2 = rock2.pos
+    local h2 = mf.nearest(p2.x, p2.y, p2.z, 1.0)
+    local _, took2 = mf.breakAt(h2, "astro")
+    check("a full pack breaks nothing…", took2 == 0)
+    check("…and the rock is still standing", mf.nearest(p2.x, p2.y, p2.z, 0.3) ~= nil)
+  end
 end
-ok(key ~= nil, "the loss is written to the save")
-ok(key and type(SAVE[key][1]) == "number", "…as an instance id, not a position")
 
--- 7. A FULL PACK COSTS YOU THE SWING, NOT THE BOULDER.
-pack_full = true
-local x2, y2, z2 = some_rock_pos()
-local hit2 = nearest(x2, y2, z2, 1.0)
-ok(hit2 ~= nil, "there is another rock to try")
-local _, took2 = breakAt(hit2, "astro")
-ok(took2 == 0, "a full pack takes nothing")
-ok(nearest(x2, y2, z2, 0.4) ~= nil, "…and the rock is still standing")
-pack_full = false
+-- Airless crust still gets rock; a gas body gets none.
+store["world." .. BODY.name].kind = "gas"
+mf.clearAll()
+tick(10)
+check("a gas body has no rock on it", mf.sources == 0, mf.sources)
 
--- 8. CHANGING WORLDS tears the old planet's sources down and stands the new
--- one's up. A source left behind draws a planet's worth of rock around a body
--- you have flown away from.
-local before = next_source
-here = moon
-astro.x, astro.y, astro.z = moon.x, moon.y + moon.radius, moon.z
-tick(2)
-ok(_G.bodyName == "Pelia", "arriving at a moon re-sites the field")
-ok(next_source > before, "…with new sources")
-local alive = 0
-for _ in pairs(SOURCES) do alive = alive + 1 end
-ok(alive == 4, "…and exactly four sources are live, not eight — got " .. alive)
-
--- 8b. UP AND AWAY. The engine unloads a field's chunks itself while the
--- camera is far above it (0.102), so a camera kilometres up — the orbit map,
--- a climbing rocket — leaves the fields declared. Tearing them down cost a
--- rebuild hitch on the way back down.
-local cam = { valid = true, x = here.x, y = here.y + here.radius + 2, z = here.z }
-local plain_find = _G.find
-_G.find = function(n) if n == "Camera 1" then return cam end return plain_find(n) end
-tick(2)
-local function live_count()
-  local n = 0
-  for _ in pairs(SOURCES) do n = n + 1 end
-  return n
+local bad = {}
+for _, c in ipairs(checks) do
+  if not c.ok then bad[#bad + 1] = "  ✗ " .. c.desc .. (c.detail and ("   [" .. tostring(c.detail) .. "]") or "") end
 end
-ok(live_count() == 4, "a camera at the surface keeps the field — got " .. live_count())
-cam.y = here.y + here.radius + 5000
-tick(2)
-ok(live_count() == 4, "a camera 5 km up leaves the field declared — got " .. live_count())
-cam.valid = false
-_G.find = plain_find
-
--- 9. REGROWTH. `scatter.restore` puts a whole source back in one call, so the
--- timer is the entire mechanism — and the save's loss list is dropped with it.
-here = planet
-astro.x, astro.y, astro.z = planet.x, planet.y + planet.radius, planet.z
-tick(2)
-local x3, y3, z3 = some_rock_pos()
-local h3 = nearest(x3, y3, z3, 1.0)
-if h3 then breakAt(h3, "astro") end
-ok(nearest(x3, y3, z3, 0.4) == nil, "…broken again")
-_G.time = _G.time + _G.params.regrow + 1
-tick(1)
-ok(nearest(x3, y3, z3, 0.4) ~= nil, "a broken field grows back on its timer")
-
--- 10. EVERY SOURCE IS ANCHORED TO ITS WORLD. `scatter.create` fixes its region
--- in WORLD space, and every world in this game orbits on rails at ~99 units/s —
--- so an UNANCHORED field is entirely behind its planet within three seconds.
--- That shipped, and was reported as the props being left behind.
---
--- `parent` (floptle/0073, filed from this file, engine v0.32.0) moves placement
--- into the body's frame instead. What is asserted is that the field always uses
--- it, and refuses to build at all when it cannot.
--- The LIVE sources: `created` still holds everything ever declared, including
--- the moon's from the world-change test and the attempts the budget rejected.
-local anchored_all, anchored_n = true, 0
-for _, s in pairs(SOURCES) do
-  anchored_n = anchored_n + 1
-  if s.opts.parent ~= _G.bodyName then anchored_all = false end
-end
-ok(anchored_n == 4 and anchored_all,
-  "every live source is parented to the world it is scattered on")
-ok(_G.anchored == true, "…and the field says so")
-
--- …and a world with no scene node to anchor to gets NOTHING, loudly. An
--- unanchored field on a moving world is the original bug, and it must not be
--- able to come back by simply failing to find its planet.
-local orphan = { name = "Rails", x = 0, y = 0, z = 0, radius = 180 }
-WORLDS.Rails = { kind = "rock", seed = 5, radius = 180 }
-local prev_body, prev_find = _G.space.body, _G.find
-_G.space.body = function(n) if n == "Rails" then return orphan end return prev_body(n) end
-_G.find = function(n) if n == "Rails" then return nil end return prev_find(n) end
-here = orphan
-astro.x, astro.y, astro.z = 0, 180, 0
-created = {}
-tick(2)
-ok(_G.anchored == false, "a world with no scene node cannot be anchored to")
-local rails_live = 0
-for _ in pairs(SOURCES) do rails_live = rails_live + 1 end
-ok(rails_live == 0, "…so no rock is scattered onto it — got " .. rails_live .. " sources")
-ok(_G.bodyName == "Rails", "…and the field still says which world it is on")
-_G.find = prev_find
-
-if #failures == 0 then
-  report("MINERAL SMOKE OK — " .. checks .. " checks passed")
+if #bad == 0 then
+  print(string.format("MINERAL SMOKE OK — %d checks passed  (%d rocks resident, %d sources)", #checks, mf.count, mf.sources))
   os.exit(0)
-else
-  report("MINERAL SMOKE FAILURES:")
-  for _, f in ipairs(failures) do report("  \xe2\x9c\x97 " .. f) end
-  os.exit(1)
 end
+print("MINERAL SMOKE FAILURES:")
+for _, b in ipairs(bad) do print(b) end
+for i = math.max(1, #logs - 10), #logs do print("  " .. tostring(logs[i])) end
+os.exit(1)

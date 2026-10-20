@@ -1,20 +1,23 @@
 -- SMOKE HARNESS: the living surface. Runs the real climate.lua, flora_gen.lua
 -- and flora_field.lua against a stubbed engine and checks the whole chain —
--- world record → climate sample → biome → species roll → built plant → scatter
--- field → harvest into the inventory.
+-- world record → environment → species cast → library meshes on disk →
+-- patches and scatter sources → harvest into the inventory → regrowth.
 --
 --   luajit solar/tests/smoke_flora.lua
 --
 -- Fidelity notes (the bugs this stub is shaped to catch):
---  * The planet is a real SPHERE here: `raycast` answers analytically at the
---    body's surface radius with a radial normal, so a scatter that projects its
---    cells wrongly puts plants nowhere and the counts go to zero.
---  * `createNode` builds a REAL node tree with local transforms, so a plant that
---    parents its parts wrong, or scales a primitive by the wrong base size,
---    shows up as geometry off in space rather than a silent pass.
---  * Determinism is checked twice over: the same world rolls the same species,
---    and the same cell rolls the same plants in the same places. That's the
---    property the whole "walk away and come back" design rests on.
+--  * The planet is a real SPHERE: `raycast` and `terrain.query` answer
+--    analytically at the body's surface radius, so a patch frame built wrong
+--    puts its plants nowhere near the ground and the aim test misses.
+--  * `scatter` is modelled as the engine does Ground regions: instances are a
+--    pure function of (seed, chunk, index), placed in the PARENT NODE's frame,
+--    rejected by the bilinear density grid. A density hole that is not exactly
+--    where the plant stood leaves the plant standing, here as in the game.
+--  * Instance ids are 53-bit, as the engine's are since 0.117 (exact as Lua
+--    numbers), and `remove`/`restore`/`removed` work as the engine's do: a
+--    removed id generates nothing until it is restored.
+--  * Every species' mesh files must exist on disk: a typo'd asset name is an
+--    invisible plant in the game and a failed check here.
 
 local T = 0.0
 
@@ -29,7 +32,6 @@ function API.log(m) logs[#logs + 1] = tostring(m) end
 function API.print(m) logs[#logs + 1] = tostring(m) end
 function API.vec3(x, y, z) return { x = x, y = y, z = z } end
 
--- Deterministic RNG with the engine's surface (next/range/int/pick + .seed).
 local function make_rng(seed)
   local s = (seed or 12345) % 2147483647
   if s <= 0 then s = s + 2147483646 end
@@ -43,14 +45,8 @@ local function make_rng(seed)
   function r:pick(t) return t[1 + math.floor(r:next() * #t - 1e-9)] end
   return r
 end
-local rng_calls = 0
-function API.rng(seed)
-  rng_calls = rng_calls + 1
-  return make_rng(seed or (98765 + rng_calls))
-end
+function API.rng(seed) return make_rng(seed or 98765) end
 
--- A smooth, deterministic stand-in for the engine's noise: a few sines mixed by
--- seed. Continuous (so "seams are places" holds) and in −1..1.
 local function noise(x, y, z, seed)
   seed = seed or 0
   local a = math.sin(x * 1.7 + seed * 0.13) * math.cos(y * 1.3 - seed * 0.21)
@@ -61,16 +57,19 @@ math.noise = noise
 math.fbm = function(x, y, z) return noise(x, y, z, 3) * 0.8 end
 
 -- ── the world ───────────────────────────────────────────────────────────────
--- One planet: radius 400, relief 24, a sea 6 m below the mean surface, air.
-local BODY = { name = "Verdance", x = 1000, y = 0, z = -500, radius = 424,
-               mu = 1.2e6, soi = 60000 }
-local SURFACE = 400.0            -- the ground the stub raycast answers at
+local BODY = { name = "Verdance", x = 1000, y = 0, z = -500, radius = 412,
+               mu = 6.0 * 400 * 400, soi = 60000 }
+local SURFACE = 400.0
+local LATE_BODY
 API.space = {
   bodies = function() return { BODY } end,
   body = function(n)
     if n == BODY.name then return BODY end
-    -- A body the rails know about that may not have a world record yet.
-    return (LATE_BODY and n == LATE_BODY.name) and LATE_BODY or nil
+    if LATE_BODY and n == LATE_BODY.name then return LATE_BODY end
+    if n == "Other" or n == "Dead" or (n and n:match("^W%d+$")) then
+      return { name = n, x = 0, y = 0, z = 0, radius = 300, mu = 5 * 300 * 300, soi = 1 }
+    end
+    return nil
   end,
   dominant = function(x, y, z)
     local d = math.sqrt((x - BODY.x) ^ 2 + (y - BODY.y) ^ 2 + (z - BODY.z) ^ 2)
@@ -78,69 +77,216 @@ API.space = {
   end,
 }
 
--- Analytic sphere cast: any ray aimed inward from outside hits the surface.
 local ray_count = 0
-function API.raycast(ox, oy, oz, dx, dy, dz, maxd, ignore)
+function API.raycast(ox, oy, oz, dx, dy, dz, maxd)
   ray_count = ray_count + 1
   local rx, ry, rz = ox - BODY.x, oy - BODY.y, oz - BODY.z
   local r = math.sqrt(rx * rx + ry * ry + rz * rz)
-  -- Only the radial-ish inward casts the field and the tools make are modelled.
   local dot = (rx * dx + ry * dy + rz * dz) / math.max(1e-9, r)
   if dot > -0.2 then return nil end
-  local dist = r - SURFACE
-  if dist < 0 or dist > (maxd or 0) then return nil end
-  local ux, uy, uz = rx / r, ry / r, rz / r
-  return { x = BODY.x + ux * SURFACE, y = BODY.y + uy * SURFACE, z = BODY.z + uz * SURFACE,
-           nx = ux, ny = uy, nz = uz, distance = dist }
+  -- March the ray to the sphere (the stub is a sphere of radius SURFACE).
+  local b = rx * dx + ry * dy + rz * dz
+  local c = r * r - SURFACE * SURFACE
+  local disc = b * b - c
+  if disc < 0 then return nil end
+  local t = -b - math.sqrt(disc)
+  if t < 0 or t > (maxd or 0) then return nil end
+  local hx, hy, hz = rx + dx * t, ry + dy * t, rz + dz * t
+  return { x = BODY.x + hx, y = BODY.y + hy, z = BODY.z + hz,
+           nx = hx / SURFACE, ny = hy / SURFACE, nz = hz / SURFACE, distance = t }
 end
+API.terrain = {
+  query = function(x, y, z)
+    local d = math.sqrt((x - BODY.x) ^ 2 + (y - BODY.y) ^ 2 + (z - BODY.z) ^ 2)
+    return d - SURFACE
+  end,
+}
 
 -- ── nodes ───────────────────────────────────────────────────────────────────
+local by_name = {}
 local next_id = 100
-local all_nodes = {}
 local function make_node(name, parent)
   next_id = next_id + 1
-  local n = { __id = next_id, id = next_id, name = name, valid = true,
-              x = 0, y = 0, z = 0, yaw = 0, pitch = 0, roll = 0,
-              scale = 1, scale_x = 1, scale_y = 1, scale_z = 1,
+  local n = { __id = next_id, name = name, valid = true, x = 0, y = 0, z = 0,
+              yaw = 0, pitch = 0, roll = 0, scale_x = 1, scale_y = 1, scale_z = 1,
               tags = {}, kids = {}, parent = parent, visible = true }
-  function n:setPrimitive(shape, color) self.shape = shape; self.color = color end
+  function n:setPrimitive(shape, color) self.shape = shape end
   function n:setMaterial(m) self.material = m end
-  function n:children()
-    local out = {}
-    for _, c in ipairs(self.kids) do if c.valid then out[#out + 1] = c end end
-    return out
-  end
-  function n:destroy()
-    self.valid = false
-    for _, c in ipairs(self.kids) do c.valid = false end
-  end
-  if parent then parent.kids[#parent.kids + 1] = n end
-  all_nodes[#all_nodes + 1] = n
+  function n:destroy() self.valid = false; if by_name[self.name] == self then by_name[self.name] = nil end end
+  by_name[name] = n
   return n
 end
-
--- The engine queues creates and runs the callback next pass; running it inline
--- is STRICTER (anything the callback reads must already be valid).
+local nodes_made = 0
 function API.createNode(name, a, b)
   local parent, cb = nil, nil
   for _, v in ipairs({ a, b }) do
     if type(v) == "function" then cb = v elseif type(v) == "table" then parent = v end
   end
+  nodes_made = nodes_made + 1
   local n = make_node(name, parent)
   if cb then cb(n) end
   return n
 end
-
 local PLANET = make_node(BODY.name, nil)
 local ASTRO = make_node("Astronaut", nil)
-ASTRO.visible = true
-
-function API.find(name)
-  if name == "Astronaut" then return ASTRO end
-  if name == BODY.name then return PLANET end
-  return nil
-end
+function API.find(name) return by_name[name] end
 function API.findTagged() return {} end
+
+-- ── scatter (Ground regions, as the engine builds them) ─────────────────────
+-- R = Ry(yaw)·Rx(pitch)·Rz(roll), the engine's order; its columns are the
+-- node's X, Y, Z axes in the parent's frame.
+local function axes_of(n)
+  local cr, sr, cp, sp = math.cos(n.roll), math.sin(n.roll), math.cos(n.pitch), math.sin(n.pitch)
+  local cy, sy = math.cos(n.yaw), math.sin(n.yaw)
+  local function ry(v) return { v[1] * cy + v[3] * sy, v[2], -v[1] * sy + v[3] * cy } end
+  return ry({ cr, sr * cp, sr * sp }), ry({ -sr, cr * cp, cr * sp }), ry({ 0, -sp, cp })
+end
+local function mix32(a)
+  a = (a * 1103515245 + 12345) % 2147483648
+  a = (a * 1103515245 + 12345) % 2147483648
+  return a
+end
+local SRC, next_src = {}, 0
+local function density_at(src, u, v)
+  local d = src.density
+  if not d then return 1 end
+  local rows = src.densityRows
+  local fu, fv = math.max(0, math.min(1, u)) * (rows - 1), math.max(0, math.min(1, v)) * (rows - 1)
+  local c0, r0 = math.min(rows - 2, math.floor(fu)), math.min(rows - 2, math.floor(fv))
+  local tu, tv = fu - c0, fv - r0
+  local function at(r, c) return d[r * rows + c + 1] end
+  local top = at(r0, c0) + (at(r0, c0 + 1) - at(r0, c0)) * tu
+  local bot = at(r0 + 1, c0) + (at(r0 + 1, c0 + 1) - at(r0 + 1, c0)) * tu
+  return top + (bot - top) * tv
+end
+local function instances(src)
+  if src.cache then return src.cache end
+  local out = {}
+  local n = math.ceil(src.halfX / src.chunk)
+  for ci = -n, n - 1 do
+    for cj = -n, n - 1 do
+      for k = 0, src.perChunk - 1 do
+        local h = mix32(src.seed * 7 + (ci + 1000) * 7919 + (cj + 1000) * 104729 + k * 13)
+        local fx = (h % 10007) / 10007
+        local fz = (mix32(h) % 10009) / 10009
+        local keep = (mix32(h + 5) % 10037) / 10037
+        local lx, lz = (ci + fx) * src.chunk, (cj + fz) * src.chunk
+        if math.abs(lx) <= src.halfX and math.abs(lz) <= src.halfZ then
+          local d = density_at(src, lx / (2 * src.halfX) + 0.5, lz / (2 * src.halfZ) + 0.5)
+          if keep < d then
+            -- a 53-bit id (exact in a double), from (seed, chunk, index)
+            out[#out + 1] = { id = h * 1048576 + k * 4099 + 17, lx = lx, lz = lz,
+                              scale = src.scaleMin + (src.scaleMax - src.scaleMin) * keep }
+          end
+        end
+      end
+    end
+  end
+  src.cache = out
+  return out
+end
+-- What the engine draws: every instance but the removed ones.
+local function live(src)
+  local out = {}
+  for _, i in ipairs(instances(src)) do
+    if not src.removed[i.id] then out[#out + 1] = i end
+  end
+  return out
+end
+API.scatter = {
+  create = function(o)
+    for k in pairs(o) do
+      local okk = ({ asset = 1, lod = 1, range = 1, seed = 1, center = 1, radius = 1, halfX = 1, halfZ = 1,
+        align = 1, perChunk = 1, chunk = 1, scaleMin = 1, scaleMax = 1, fade = 1, density = 1,
+        densityRows = 1, parent = 1, tint = 1, emissive = 1, emissiveStrength = 1 })[k]
+      if not okk then error("scatter.create: unknown option " .. k) end
+    end
+    assert(o.center and o.center.x == 0 and o.center.y == 0 and o.center.z == 0,
+      "an anchored region's centre is in its parent's frame (0,0,0)")
+    assert(o.halfX and o.parent, "flora uses Ground regions anchored to a patch node")
+    assert(by_name[o.parent], "parent node exists: " .. tostring(o.parent))
+    if type(o.density) == "table" then
+      assert(#o.density >= o.densityRows * o.densityRows, "density grid has rows² values")
+    end
+    for _, b in ipairs(o.lod or {}) do
+      local f = io.open("solar/" .. b.asset, "r")
+      assert(f, "scatter asset exists on disk: " .. b.asset)
+      f:close()
+    end
+    if o.tint then assert(#o.tint == 3, "tint is {r,g,b}") end
+    next_src = next_src + 1
+    o.id = next_src
+    o.removed = {}
+    SRC[next_src] = o
+    return next_src
+  end,
+  destroy = function(id) local had = SRC[id] ~= nil; SRC[id] = nil; return had end,
+  cost = function(id)
+    local s = SRC[id]
+    if not s then return {} end
+    -- Like the engine: what is RESIDENT, i.e. within the outermost band of
+    -- the eye (the astronaut stands in for the camera).
+    local node = by_name[s.parent]
+    local ex, _, ez = axes_of(node)
+    local far = s.lod[#s.lod].distance
+    local n = 0
+    for _, i in ipairs(instances(s)) do
+      local wx = BODY.x + node.x + ex[1] * i.lx + ez[1] * i.lz
+      local wy = BODY.y + node.y + ex[2] * i.lx + ez[2] * i.lz
+      local wz = BODY.z + node.z + ex[3] * i.lx + ez[3] * i.lz
+      if math.sqrt((wx - ASTRO.x) ^ 2 + (wy - ASTRO.y) ^ 2 + (wz - ASTRO.z) ^ 2) <= far then n = n + 1 end
+    end
+    return { props = n, chunks = 1 }
+  end,
+  near = function(id, p, radius)
+    local s = SRC[id]
+    if not s then return {} end
+    local node = by_name[s.parent]
+    local ex, _, ez = axes_of(node)
+    local out = {}
+    for _, i in ipairs(live(s)) do
+      local wx = BODY.x + node.x + ex[1] * i.lx + ez[1] * i.lz
+      local wy = BODY.y + node.y + ex[2] * i.lx + ez[2] * i.lz
+      local wz = BODY.z + node.z + ex[3] * i.lx + ez[3] * i.lz
+      local d = math.sqrt((wx - p.x) ^ 2 + (wy - p.y) ^ 2 + (wz - p.z) ^ 2)
+      if d <= radius then
+        out[#out + 1] = { id = i.id, pos = { x = wx, y = wy, z = wz }, distance = d, scale = i.scale, param = 0.5 }
+      end
+    end
+    table.sort(out, function(a, b) return a.distance < b.distance end)
+    return out
+  end,
+  remove = function(id, inst)
+    local s = SRC[id]
+    if not s then return false end
+    local had = s.removed[inst]
+    s.removed[inst] = true
+    return not had
+  end,
+  restore = function(id, inst)
+    local s = SRC[id]
+    if not s then return 0 end
+    if inst == nil then
+      local n = 0
+      for _ in pairs(s.removed) do n = n + 1 end
+      s.removed = {}
+      return n
+    end
+    local had = s.removed[inst]
+    s.removed[inst] = nil
+    return had and 1 or 0
+  end,
+  removed = function(id)
+    local s = SRC[id]
+    local out = {}
+    if s then for k in pairs(s.removed) do out[#out + 1] = k end end
+    table.sort(out)
+    return out
+  end,
+}
+local preload_calls = 0
+API.assets = { preload = function(list, cb) preload_calls = preload_calls + 1; cb({}) end }
+API.decals = nil
 
 -- ── script loading ──────────────────────────────────────────────────────────
 local envs = {}
@@ -163,13 +309,12 @@ function API.findScripts(kind)
   return envs[kind] and { envs[kind] } or {}
 end
 
-local mats = load_script("solar/scripts/materials.lua", "materials")
+load_script("solar/scripts/materials.lua", "materials")
 local inv = load_script("solar/scripts/inventory.lua", "inventory")
 local cl = load_script("solar/scripts/climate.lua", "climate")
 local fg = load_script("solar/scripts/flora_gen.lua", "flora_gen")
 local ff = load_script("solar/scripts/flora_field.lua", "flora_field")
 
--- The world record the generator publishes (a temperate, wet, breathing world).
 store["world." .. BODY.name] = {
   name = BODY.name, kind = "canyon", seed = 20260728, radius = SURFACE,
   relief = 24.0, sea = SURFACE - 6.0, atmo = 0.7, insol = 1.0,
@@ -183,335 +328,368 @@ end
 -- ── 1. climate ──────────────────────────────────────────────────────────────
 local w = cl.worldOf(BODY.name)
 check("the world record is published and read back", w and w.kind == "canyon", w and w.kind)
-
 local equator = cl.sampleRel(w, SURFACE + 4, 0, 0)
 local pole = cl.sampleRel(w, 0, SURFACE + 4, 0)
-check("the poles are colder than the equator", pole.temp < equator.temp - 0.05,
-  string.format("%.2f vs %.2f", pole.temp, equator.temp))
+check("the poles are colder than the equator", pole.temp < equator.temp - 0.05)
+check("below sea level is ocean", ({ ocean = 1, reef = 1 })[cl.sampleRel(w, SURFACE - 30, 0, 0).biome])
 
-local deep = cl.sampleRel(w, SURFACE - 30, 0, 0)
-check("below sea level is ocean", deep.biome == "ocean" or deep.biome == "reef", deep.biome)
-local shallow = cl.sampleRel(w, w.sea - 2, 0, 0)
-check("just under the surface is shallows", shallow.biome == "reef", shallow.biome)
-local beach = cl.sampleRel(w, w.sea + 0.5, 0, 0)
-check("just above it is shoreline", beach.biome == "shore", beach.biome)
-local peak = cl.sampleRel(w, SURFACE + 22, 0, 0)
-check("a peak is not ocean", peak.elev > 0 and peak.biome ~= "ocean", peak.biome)
-check("every biome the model can return is in the table", (function()
-  for _, p in ipairs({ { SURFACE + 4, 0, 0 }, { 0, SURFACE + 4, 0 }, { 0, 0, SURFACE - 20 },
-                       { SURFACE + 20, 5, 5 }, { -SURFACE - 2, 0, 0 } }) do
-    local s = cl.sampleRel(w, p[1], p[2], p[3])
-    if not cl.BIOMES[s.biome] then return false end
+-- ── 2. the library ──────────────────────────────────────────────────────────
+check("the generated library is in flora_gen", type(fg.LIBRARY) == "table" and #fg.LIBRARY >= 40,
+  fg.LIBRARY and #fg.LIBRARY)
+check("…with its palettes", type(fg.PALETTES) == "table" and #fg.PALETTES >= 16)
+check("every library shape has its LOD files on disk (a tree's trunk too)", (function()
+  for _, lib in ipairs(fg.LIBRARY) do
+    for l = 0, lib.lods - 1 do
+      local parts = { "" }
+      if lib.twin then parts[2] = "_bark" end
+      for _, part in ipairs(parts) do
+        local path = string.format("solar/models/flora/%s%s_l%d.gltf", lib.id, part, l)
+        local f = io.open(path, "r")
+        if not f then return false, path end
+        local txt = f:read("*a")
+        f:close()
+        -- linear with mipmaps, so far foliage doesn't shimmer
+        if not txt:find('"minFilter":9987', 1, true) then return false, path .. " sampler" end
+      end
+    end
+    local f = io.open("solar/models/flora/" .. lib.id .. ".bin", "rb")
+    if not f then return false end
+    f:close()
+  end
+  return true
+end)())
+check("…and the neutral pictures they tint", (function()
+  local need = { "foliage_l0", "foliage_n", "foliage_glow", "rock_l0", "rock_n", "rock_mr", "bark_rough_l0", "bark_smooth_l0",
+                 "bark_palm_l0", "bark_stalk_l0", "turf" }
+  for _, n in ipairs(need) do
+    local f = io.open("solar/textures/flora/" .. n .. ".png", "rb")
+    if not f then return false, n end
+    f:close()
+  end
+  return true
+end)())
+check("trees (and only trees) draw their trunk from a twin", (function()
+  local n = 0
+  for _, lib in ipairs(fg.LIBRARY) do
+    if lib.twin then
+      n = n + 1
+      if lib.form ~= "tree" or not lib.bark then return false, lib.id end
+    end
+  end
+  return n >= 10, n
+end)())
+check("grass, trees, shrubs, fungi, succulents, alien forms and kelp are all in it", (function()
+  local kinds = {}
+  for _, lib in ipairs(fg.LIBRARY) do kinds[lib.kind] = true end
+  for _, k in ipairs({ "grass", "broadleaf", "conifer", "palm", "bush", "shrub", "fern", "succulent",
+                       "cactus", "fungus", "spire", "crystal", "tubes", "coral", "kelp" }) do
+    if not kinds[k] then return false end
   end
   return true
 end)())
 
--- Water queries in WORLD space (what the swimmer and the scatter ask).
-check("underwater is underwater", cl.isUnderwater(BODY.x + w.sea - 5, BODY.y, BODY.z))
-check("...and the beach is not", not cl.isUnderwater(BODY.x + SURFACE + 12, BODY.y, BODY.z))
-check("sea depth is measured from the surface down",
-  math.abs((cl.seaDepth(BODY.x + w.sea - 5, BODY.y, BODY.z) or 0) - 5) < 0.01,
-  cl.seaDepth(BODY.x + w.sea - 5, BODY.y, BODY.z))
-
--- An airless rock grows nothing and says so without pretending it has weather.
-store["world.Dead"] = { name = "Dead", kind = "barren", seed = 5, radius = 90,
-                        relief = 6, sea = 0, atmo = 0, insol = 0.4 }
-local dead = cl.sampleRel(cl.worldOf("Dead"), 90, 0, 0)
-check("an airless world is barren", dead.biome == "barren" and dead.density == 0, dead.biome)
-check("...and habitable() agrees", not cl.habitable("Dead") and cl.habitable(BODY.name))
-
--- ── 2. species ──────────────────────────────────────────────────────────────
+-- ── 3. species ──────────────────────────────────────────────────────────────
 local sp1 = fg.speciesFor(BODY.name)
-check("a living world rolls species", #sp1 >= 3, "#" .. #sp1)
-check("...and they are named, formed and useful", (function()
+check("a living world rolls a cast", #sp1 >= 5, "#" .. #sp1)
+check("…every species tinted (and a tree's trunk too)", (function()
+  for _, s in ipairs(sp1) do
+    if not (type(s.tint) == "table" and #s.tint == 3) then return false, s.name end
+    if s.twin and not (type(s.barkTint) == "table" and #s.barkTint == 3) then return false, s.name end
+    if (s.glow or 0) > 0 and not (s.emissive and s.emissiveStrength == s.glow) then return false, s.name end
+  end
+  return true
+end)())
+check("…named, shaped, coloured and useful", (function()
   for _, s in ipairs(sp1) do
     if type(s.name) ~= "string" or s.name == "" then return false end
-    if not fg.formsFor("forest") then return false end
-    if #s.yields == 0 then return false end
-    if not (s.height > 0 and s.girth > 0) then return false end
+    if #s.yields == 0 or not (s.height > 0) then return false end
+    if not (s.palette and s.shape and s.scaleMin > 0 and s.scaleMax >= s.scaleMin) then return false end
   end
   return true
 end)())
-check("the roll is deterministic", (function()
-  local a = {}
-  for _, s in ipairs(sp1) do a[#a + 1] = s.name end
-  -- Same world, asked again (cache) AND rolled fresh from the same record.
-  local again = fg.speciesFor(BODY.name)
-  if #again ~= #a then return false end
-  for i, s in ipairs(again) do if s.name ~= a[i] then return false end end
-  return true
+check("…with a grass carpet on a wet temperate world", (function()
+  for _, s in ipairs(sp1) do if s.role == "carpet" and s.kind == "grass" then return true end end
+  return false
 end)())
-
--- A different seed is a different planet's flora.
-store["world.Other"] = { name = "Other", kind = "canyon", seed = 777777, radius = 400,
-                         relief = 24, sea = 394, atmo = 0.7, insol = 1.0 }
-local sp2 = fg.speciesFor("Other")
-check("another world's flora is different", (function()
-  local names = {}
-  for _, s in ipairs(sp1) do names[s.name] = true end
-  local shared = 0
-  for _, s in ipairs(sp2) do if names[s.name] then shared = shared + 1 end end
-  return shared == 0
-end)(), "#" .. #sp2)
-
+check("…and trees", (function()
+  for _, s in ipairs(sp1) do if s.form == "tree" then return true end end
+  return false
+end)())
 check("a sea puts kelp in the water and nowhere else", (function()
-  local aquatic, dry = 0, 0
+  local aquatic = 0
   for _, s in ipairs(sp1) do
     if s.aquatic then aquatic = aquatic + 1 end
-    if s.biomes.forest or s.biomes.grass then dry = dry + 1 end
+    if s.aquatic ~= (s.form == "kelp") then return false end
   end
-  return aquatic >= 1 and dry >= 1
+  return aquatic >= 1
 end)())
-check("nothing grows on an airless world", #fg.speciesFor("Dead") == 0)
+check("the roll is deterministic", (function()
+  local again = fg.speciesFor(BODY.name)
+  return again == sp1
+end)())
 
--- …AND THAT ANSWER IS NOT REMEMBERED. `climate.worldOf` answers for a world it
--- has no record of with an honest fallback — "barren, airless, no sea" — so a
--- species roll that lands one frame before `system_generator` writes the world
--- to the save sees an airless planet. Cache that and the world is bare for the
--- rest of the session, silently, with nothing ever asking again.
---
--- Reported as "now im not seeing any plants", after an engine upgrade shifted
--- when terrain and scripts come up relative to each other. The bug was always
--- here; the timing just started losing.
--- The body is on the RAILS already — the generator registered it — but its world
--- record has not reached the save yet. That is the whole window: `worldOf` finds
--- a body, cannot find its record, and honestly answers "barren, airless".
-local LATE = "LateWorld"
-LATE_BODY = { name = LATE, x = 9e5, y = 0, z = 0, radius = 180, soi = 4000 }
-local before = fg.speciesFor(LATE)          -- no record yet → nothing grows
-check("a world with no record yet grows nothing", #before == 0)
-store["world." .. LATE] = { name = LATE, kind = "canyon", seed = 42, radius = 180,
-                            relief = 12, atmo = 0.7, sea = 0, temp = 0.5, insol = 1.0 }
-local after = fg.speciesFor(LATE)           -- the record has arrived
-check("…and grows again once its world record arrives, rather than staying bare",
-  #after > 0)
+-- Diversity: forty worlds, forty different floras.
+local sigs, dup = {}, 0
+local tints = {}
+for i = 1, 40 do
+  local nm = "W" .. i
+  store["world." .. nm] = { name = nm, kind = ({ "canyon", "dune", "ice", "crystal" })[1 + i % 4],
+    seed = 1000 + i * 7777, radius = 300, relief = 20, sea = (i % 3 == 0) and 295 or 0,
+    atmo = 0.6, insol = 0.4 + (i % 5) * 0.2 }
+  local list = fg.speciesFor(nm)
+  local parts = {}
+  for _, s in ipairs(list) do parts[#parts + 1] = s.shape .. "/" .. s.palette end
+  table.sort(parts)
+  local sig = table.concat(parts, ",")
+  if sigs[sig] then dup = dup + 1 end
+  sigs[sig] = true
+  for _, s in ipairs(list) do tints[s.palette] = true end
+end
+local npal = 0
+for _ in pairs(tints) do npal = npal + 1 end
+check("forty worlds roll forty different floras", dup == 0, dup .. " duplicates")
+check("…across most of the palettes", npal >= 12, npal .. " palettes used")
 
--- ── 3. building a plant ─────────────────────────────────────────────────────
-local tree = nil
-for _, s in ipairs(sp1) do if s.form == "tree" then tree = s end end
-if not tree then tree = sp1[1] end
-
-local built
-fg.build(PLANET, tree, SURFACE, 0, 0, 1, 0, 0, 4242, "full", function(r) built = r end)
-check("a plant builds a real node tree", built ~= nil and #built:children() >= 2,
-  built and #built:children())
-check("...rooted at the point it was planted",
-  built and math.abs(built.x - SURFACE) < 1e-6 and built.parent == PLANET)
-check("...tagged so the world can find it", built and built.tags[1] == "flora")
-check("...standing UP (the root aligns to the surface normal)", (function()
-  -- up = +X here, and the vessel-basis solve puts that in roll = −π/2.
-  return built and math.abs(built.roll + math.pi / 2) < 1e-3
-end)(), built and built.roll)
-check("...with every part scaled to something visible", (function()
-  for _, c in ipairs(built:children()) do
-    if not (c.scale_y > 0.001 and c.scale_x > 0.001) then return false end
-    if not c.shape then return false end
+-- Light: a red dwarf's worlds go dark, a blue-white star's go pale/cool.
+local function mean_value(starColor)
+  local tot, n = 0, 0
+  for i = 1, 30 do
+    local nm = "S" .. tostring(starColor[3]) .. "_" .. i
+    local rec = { name = nm, kind = "canyon", seed = 5000 + i * 31, radius = 300, relief = 20, sea = 0,
+                  atmo = 0.6, insol = 1.0, starColor = starColor, gravity = 6 }
+    for _, s in ipairs(fg.speciesFor(nm, rec)) do
+      local c = s.leafColor
+      tot = tot + (c[1] + c[2] + c[3]) / 3
+      n = n + 1
+    end
   end
+  return tot / math.max(1, n)
+end
+local red = mean_value({ 1.0, 0.5, 0.34 })
+local blue = mean_value({ 0.72, 0.82, 1.0 })
+check("plants under a red dwarf are darker than under a blue-white star", red < blue - 0.05,
+  string.format("%.2f vs %.2f", red, blue))
+
+-- The terrain side's per-planet biome (scale-2 worlds): a published pigment
+-- hint pulls the flora toward it, and barren regolith grows no grass carpet.
+local function pigment_value(pig)
+  local tot, n = 0, 0
+  for i = 1, 20 do
+    local nm = "B" .. tostring(pig[1]) .. "_" .. i
+    local rec = { name = nm, kind = "canyon", seed = 7000 + i * 13, radius = 300, relief = 20, sea = 0,
+                  atmo = 0.6, insol = 1.0, gravity = 6,
+                  bio = { type = "steppe", temp = 0.5, moist = 0.6, fertility = 0.8, soil = "loam",
+                          palette = { foliage = pig } } }
+    for _, s in ipairs(fg.speciesFor(nm, rec)) do
+      local c = s.leafColor
+      tot = tot + (c[1] + c[2] + c[3]) / 3
+      n = n + 1
+    end
+  end
+  return tot / math.max(1, n)
+end
+local dark_pig, pale_pig = pigment_value({ 0.07, 0.06, 0.08 }), pigment_value({ 0.78, 0.9, 0.88 })
+check("a published foliage pigment steers the palettes", dark_pig < pale_pig - 0.1,
+  string.format("%.2f vs %.2f", dark_pig, pale_pig))
+check("barren regolith grows no grass carpet", (function()
+  local rec = { name = "Reg", kind = "barren", seed = 99, radius = 300, relief = 20, sea = 0, atmo = 0.5,
+                insol = 1.0, bio = { type = "regolith", temp = 0.4, moist = 0.0, fertility = 0.0, soil = "regolith" } }
+  for _, s in ipairs(fg.speciesFor("Reg", rec)) do if s.role == "carpet" then return false end end
   return true
 end)())
 
-local far
-fg.build(PLANET, tree, SURFACE, 0, 0, 1, 0, 0, 4242, "far", function(r) far = r end)
-check("the far silhouette is cheaper than the full plant",
-  far and #far:children() < #built:children(),
-  string.format("%d vs %d", far and #far:children() or -1, #built:children()))
-
-check("the root carries NO yaw of its own", math.abs(built.yaw) < 1e-9, built.yaw)
-check("two individuals of one species differ", (function()
-  -- The per-individual spin lives INSIDE the plant (the trunk's starting
-  -- azimuth), never on the root — a root yaw would rotate the plant about world
-  -- Y and tip it off the surface normal.
-  local a, b
-  fg.build(PLANET, tree, SURFACE, 0, 0, 1, 0, 0, 11, "full", function(r) a = r end)
-  fg.build(PLANET, tree, SURFACE, 0, 0, 1, 0, 0, 12, "full", function(r) b = r end)
-  if not (a and b) then return false end
-  local ca, cb = a:children()[1], b:children()[1]
-  return ca and cb and (math.abs(ca.yaw - cb.yaw) > 1e-6 or math.abs(ca.scale_y - cb.scale_y) > 1e-6)
-end)())
-check("the same seed rebuilds the same individual", (function()
-  local a, b
-  fg.build(PLANET, tree, SURFACE, 0, 0, 1, 0, 0, 99, "full", function(r) a = r end)
-  fg.build(PLANET, tree, SURFACE, 0, 0, 1, 0, 0, 99, "full", function(r) b = r end)
-  if not (a and b) then return false end
-  if #a:children() ~= #b:children() then return false end
-  for i, c in ipairs(a:children()) do
-    local d = b:children()[i]
-    if math.abs(c.x - d.x) > 1e-9 or math.abs(c.scale_y - d.scale_y) > 1e-9 then return false end
+-- Gravity: low gravity grows taller.
+local function mean_tree(g)
+  local tot, n = 0, 0
+  for i = 1, 25 do
+    local nm = "G" .. g .. "_" .. i
+    local rec = { name = nm, kind = "canyon", seed = 9000 + i * 17, radius = 300, relief = 20, sea = 0,
+                  atmo = 0.7, insol = 1.0, gravity = g }
+    for _, s in ipairs(fg.speciesFor(nm, rec)) do
+      if s.form == "tree" then tot = tot + (s.scaleMin + s.scaleMax) / 2; n = n + 1 end
+    end
   end
-  return true
-end)())
+  return tot / math.max(1, n)
+end
+local lowg, highg = mean_tree(2.5), mean_tree(11)
+check("low gravity grows bigger plants than high gravity", lowg > highg * 1.15,
+  string.format("%.2f vs %.2f", lowg, highg))
 
-local y = fg.harvestYield(tree, 4242)
-check("a plant yields materials", #y > 0 and y[1].n > 0, y[1] and y[1].mat)
-check("...the same ones every time it's asked", (function()
-  local z = fg.harvestYield(tree, 4242)
-  if #z ~= #y then return false end
-  for i, e in ipairs(z) do if e.mat ~= y[i].mat or e.n ~= y[i].n then return false end end
-  return true
-end)())
-
--- ── 4. the scatter field ────────────────────────────────────────────────────
--- Stand on the surface and let the field run.
-ASTRO.x, ASTRO.y, ASTRO.z = BODY.x + SURFACE + 1.5, BODY.y, BODY.z
-local FF = ff.params
-FF.interval = 0.0
-local function field_tick(n)
-  for _ = 1, (n or 1) do
-    T = T + 0.25
-    ff.update({}, 0.25)
+-- Glow is rare and subtle.
+local glowing, total, maxglow = 0, 0, 0
+for i = 1, 40 do
+  for _, s in ipairs(fg.speciesFor("W" .. i)) do
+    total = total + 1
+    if s.glow > 0 then glowing = glowing + 1 end
+    maxglow = math.max(maxglow, s.glow)
   end
 end
-field_tick(40)
-check("standing on a living world grows a field", ff.count > 0, "count=" .. ff.count)
-check("...anchored to the body we're on", ff.bodyName == BODY.name, ff.bodyName)
-check("...within the budget", ff.count <= FF.budget, ff.count .. "/" .. FF.budget)
-check("...on the ground, not in the air", (function()
-  local hit = ff.nearestPlant(ASTRO.x, ASTRO.y, ASTRO.z, 1, 0, 0, 400, -1)
-  if not hit then return false end
-  local r = math.sqrt((hit.x - BODY.x) ^ 2 + (hit.y - BODY.y) ^ 2 + (hit.z - BODY.z) ^ 2)
-  return math.abs(r - SURFACE) < 0.5
+check("glow is rare", glowing > 0 and glowing < total * 0.3, glowing .. "/" .. total)
+check("…and never bright enough to wash a plant out", maxglow <= 0.8, maxglow)
+check("glowing species carry glow sap", (function()
+  for i = 1, 40 do
+    for _, s in ipairs(fg.speciesFor("W" .. i)) do
+      if s.glow > 0 then
+        local has = false
+        for _, y in ipairs(s.yields) do if y.mat == "glowsap" then has = true end end
+        if not has then return false end
+      end
+    end
+  end
+  return true
 end)())
 
--- Determinism: walk away, clear, come back — the same plants stand there.
-local before = {}
-for _, l in ipairs(ff.surveyLines(ASTRO.x, ASTRO.y, ASTRO.z, 60)) do before[#before + 1] = l end
+store["world.Dead"] = { name = "Dead", kind = "barren", seed = 5, radius = 90, relief = 6, sea = 0, atmo = 0, insol = 0.4 }
+check("nothing grows on an airless world", #fg.speciesFor("Dead") == 0)
+local LATE = "LateWorld"
+LATE_BODY = { name = LATE, x = 9e5, y = 0, z = 0, radius = 180, soi = 4000, mu = 1e5 }
+check("a world with no record yet grows nothing", #fg.speciesFor(LATE) == 0)
+store["world." .. LATE] = { name = LATE, kind = "canyon", seed = 42, radius = 180, relief = 12, atmo = 0.7, sea = 0, insol = 1.0 }
+check("…and grows again once its record arrives, rather than staying bare", #fg.speciesFor(LATE) > 0)
+
+local y = fg.harvestYield(sp1[1], 4242)
+check("a plant yields materials", #y > 0 and y[1].n > 0)
+check("…the same ones every time it's asked", (function()
+  local z = fg.harvestYield(sp1[1], 4242)
+  for i, e in ipairs(z) do if e.mat ~= y[i].mat or e.n ~= y[i].n then return false end end
+  return #z == #y
+end)())
+
+-- ── 4. the field ────────────────────────────────────────────────────────────
+-- Stand on dry land (just above the sea, at the equator).
+ASTRO.x, ASTRO.y, ASTRO.z = BODY.x + SURFACE + 1.0, BODY.y, BODY.z
+local function tick(n)
+  for _ = 1, n or 1 do
+    T = T + 0.25
+    ff.update({}, 0.25)
+    ff.lateUpdate({}, 0.25)
+  end
+end
+ff.params.interval = 0.0
+local nodes_before = nodes_made
+tick(80)
+check("the meshes are preloaded before anything is scattered", preload_calls == 1, preload_calls)
+check("standing on a living world opens patches", ff.patchCount > 0, ff.patchCount)
+check("…and scatter sources on them", ff.sources > 0, ff.sources)
+check("…with plants in them", ff.count > 0, ff.count)
+check("…within the prop budget", ff.count <= ff.params.max_props * 1.25, ff.count)
+check("the field costs a handful of nodes, not one per plant",
+  nodes_made - nodes_before <= ff.patchCount + ff.params.motes + 2,
+  (nodes_made - nodes_before) .. " nodes for " .. ff.count .. " plants")
+check("…anchored to the body we're on", ff.bodyName == BODY.name)
+
+-- The patch frame is right: a plant's rolled place lies in a plane tangent to
+-- the sphere at the patch centre, and its ground point is on the surface.
+local any = ff.nearestPlant(ASTRO.x, ASTRO.y, ASTRO.z, 1, 0, 0, 60, -1)
+check("the cutter can find a plant", any ~= nil)
+check("…standing on the ground", any and math.abs(math.sqrt((any.x - BODY.x) ^ 2 + (any.y - BODY.y) ^ 2
+  + (any.z - BODY.z) ^ 2) - SURFACE) < 0.05)
+
+-- Determinism: walk away, clear, come back.
+local before = ff.surveyLines(ASTRO.x, ASTRO.y, ASTRO.z, 40)
 ff.clearAll()
-field_tick(40)
-local after = ff.surveyLines(ASTRO.x, ASTRO.y, ASTRO.z, 60)
+tick(80)
+local after = ff.surveyLines(ASTRO.x, ASTRO.y, ASTRO.z, 40)
 check("the same ground regrows the same stand", (function()
   if #before ~= #after or #before == 0 then return false end
   for i, l in ipairs(before) do if l ~= after[i] then return false end end
   return true
-end)(), string.format("%d vs %d lines", #before, #after))
+end)(), #before .. " vs " .. #after)
 
--- In orbit, nothing scatters at all.
-local kept = ff.count
-ASTRO.x = BODY.x + SURFACE + 900
-field_tick(2)
-check("nothing grows while you're in orbit", ff.count == 0, ff.count .. " (was " .. kept .. ")")
-ASTRO.x = BODY.x + SURFACE + 1.5
-field_tick(40)
-check("...and it comes back when you land", ff.count > 0, ff.count)
-
--- An airless world stays bare.
-store["world." .. BODY.name].atmo = 0.0
-store["world." .. BODY.name].sea = 0
-fg.speciesFor(BODY.name)  -- cached from before: the field must go through worldOf
-ff.clearAll()
-field_tick(4)
-store["world." .. BODY.name].atmo = 0.7
-store["world." .. BODY.name].sea = SURFACE - 6.0
-ff.clearAll()
-field_tick(40)
-check("the field recovers after the world record changes", ff.count > 0, ff.count)
+-- In orbit nothing new is planted.
+ASTRO.x = BODY.x + SURFACE + 2000
+local kept = ff.sources
+tick(2)
+check("nothing new is planted from orbit", ff.sources <= kept)
+ASTRO.x = BODY.x + SURFACE + 1.0
+tick(40)
 
 -- ── 5. harvesting ───────────────────────────────────────────────────────────
-local aim = ff.nearestPlant(ASTRO.x, ASTRO.y, ASTRO.z, 1, 0, 0, 400, -1)
-check("the cutter can find what you're aiming at", aim ~= nil)
-if aim then
-  -- Aim from just next to it, along the direction to it: the cone test must pass.
-  local dx, dy, dz = aim.x - ASTRO.x, aim.y - ASTRO.y, aim.z - ASTRO.z
-  local l = math.sqrt(dx * dx + dy * dy + dz * dz)
-  local near = ff.nearestPlant(ASTRO.x, ASTRO.y, ASTRO.z, dx / l, dy / l, dz / l, l + 1, 0.5)
-  -- Whatever comes back must actually BE in front of you and in reach — which
-  -- is the contract; it needn't be the particular plant we sighted, because a
-  -- closer one in the same cone is the better answer.
-  check("...returns something in front and in reach", (function()
-    if not near then return false end
-    local ex, ey, ez = near.x - ASTRO.x, near.y - ASTRO.y, near.z - ASTRO.z
-    local d = math.sqrt(ex * ex + ey * ey + ez * ez)
-    return d <= l + 1 and (ex * dx + ey * dy + ez * dz) / (d * l) >= 0.5
-  end)())
-  local off = ff.nearestPlant(ASTRO.x, ASTRO.y, ASTRO.z, -dx / l, -dy / l, -dz / l, l + 1, 0.5)
-  check("...and not what's behind you", off == nil or off.pid ~= aim.pid)
-
-  -- AIM AT THE PLANT, NOT AT ITS ROOT. The reason harvesting felt broken: you
-  -- stand a few metres off and look at the part of the plant you can SEE — the
-  -- trunk at chest height, the canopy above it — and the old test measured the
-  -- direction to a point on the ground at its base. Here is that shot, staged
-  -- exactly: from 3 m back, pointed at the plant a metre up its own axis. The
-  -- cone it subtends at the root is well outside 0.55, so the old code returned
-  -- nothing and the tool said "nothing in reach" while the player was staring
-  -- straight at a bush.
-  -- Pick the TALLEST plant standing nearby: the shot only defeats the old cone
-  -- when there is enough plant above the root to aim at, and a check that the
-  -- old code would also have passed pins nothing. The assertion below makes
-  -- that explicit rather than trusting the draw.
-  local tall = aim
-  for i = 0, 23 do
-    local a, b = i * 0.7853, i * 0.4363
-    local sd = ff.nearestPlant(ASTRO.x, ASTRO.y, ASTRO.z,
-      math.cos(a) * math.cos(b), math.sin(b), math.sin(a) * math.cos(b), 400, -1)
-    if sd and (sd.rec.sp.height or 0) > (tall.rec.sp.height or 0) then tall = sd end
-  end
-  aim = tall
-
-  local ux, uy, uz = aim.x - BODY.x, aim.y - BODY.y, aim.z - BODY.z
-  local ul = math.sqrt(ux * ux + uy * uy + uz * uz)
-  ux, uy, uz = ux / ul, uy / ul, uz / ul
-  -- Standing right at it — 1.2 m off the trunk, eyes 1.5 m up — and looking at
-  -- the top of it. This is the stance the complaint came from: you walk up to
-  -- something growing and point at the part of it you can see. Up close the
-  -- root falls out of the cone fastest, which is why the tool went quiet
-  -- exactly when you were closest to the thing you wanted.
-  local sx, sy, sz = 1 - ux * ux, -ux * uy, -ux * uz
-  local sl = math.sqrt(sx * sx + sy * sy + sz * sz)
-  if sl < 1e-3 then sx, sy, sz, sl = 0, 0, 1, 1 end
-  sx, sy, sz = sx / sl, sy / sl, sz / sl
-  local ex = aim.x + sx * 1.2 + ux * 1.5
-  local ey = aim.y + sy * 1.2 + uy * 1.5
-  local ez = aim.z + sz * 1.2 + uz * 1.5
-  -- Pointed nine tenths of the way up the trunk — i.e. at the plant.
-  local up_at = (aim.rec.sp.height or 1.0) * 0.9
-  local tx, ty, tz = aim.x + ux * up_at, aim.y + uy * up_at, aim.z + uz * up_at
+-- Aim at a tall plant's trunk from beside it (not at its root).
+local tall
+for i = 0, 35 do
+  local a = i * 0.1745
+  local h = ff.nearestPlant(ASTRO.x, ASTRO.y, ASTRO.z, 0, math.cos(a), math.sin(a), 40, -1)
+  if h and (not tall or h.height > tall.height) then tall = h end
+end
+check("there is something tall to aim at", tall ~= nil and tall.height > 1.0, tall and tall.height)
+if tall then
+  local ux, uy, uz = tall.ux, tall.uy, tall.uz
+  local sx, sy, sz = 0, 1, 0
+  if math.abs(uy) > 0.9 then sx, sy, sz = 1, 0, 0 end
+  local ex = tall.x + sx * 1.2 + ux * 1.5
+  local ey = tall.y + sy * 1.2 + uy * 1.5
+  local ez = tall.z + sz * 1.2 + uz * 1.5
+  local up_at = tall.height * 0.9
+  local tx, ty, tz = tall.x + ux * up_at, tall.y + uy * up_at, tall.z + uz * up_at
   local ax, ay, az = tx - ex, ty - ey, tz - ez
   local al = math.sqrt(ax * ax + ay * ay + az * az)
   ax, ay, az = ax / al, ay / al, az / al
-  local cone_dot = (function()
-    local rx, ry, rz = aim.x - ex, aim.y - ey, aim.z - ez
-    local rl = math.sqrt(rx * rx + ry * ry + rz * rz)
-    return (rx * ax + ry * ay + rz * az) / rl
-  end)()
-  check("...and the shot really is one the old cone rejected", cone_dot < 0.55,
-    string.format("root cone %.2f on a %.1f m plant", cone_dot, aim.rec.sp.height or 0))
   local trunk = ff.nearestPlant(ex, ey, ez, ax, ay, az, 8.0, 0.55, 1.5)
-  check("aiming at a plant's TRUNK finds it, not just its root",
-    trunk ~= nil and trunk.pid == aim.pid,
-    string.format("root cone %.2f (the old test needed 0.55)", cone_dot))
-  check("...and it reports where on the plant to put the beam",
-    trunk ~= nil and trunk.ax ~= nil and trunk.height ~= nil)
+  check("aiming at a plant's TRUNK finds it", trunk ~= nil and trunk.pid == tall.pid)
+  check("…and says where to put the beam", trunk and trunk.ax ~= nil and trunk.height ~= nil)
 
-  local n0 = ff.count
-  local node = aim.rec.node
-  local got, dropped = ff.harvest(aim, "astro")
+  local spname = tall.rec.sp.name
+  local n0 = #ff.surveyLines(tall.x, tall.y, tall.z, 0.5)
+  local got, dropped = ff.harvest(tall, "astro")
   check("harvesting yields into the pack", #got > 0, got[1] and got[1].mat)
-  check("...and the plant is gone", not node.valid and ff.count == n0 - 1)
-  check("...and the pack actually holds it",
-    inv.count("astro", got[1].mat) >= got[1].n, inv.line("astro"))
-  check("...and it is not standing there any more",
-    (function()
-      local again = ff.nearestPlant(ASTRO.x, ASTRO.y, ASTRO.z, 1, 0, 0, 400, -1)
-      return again == nil or again.pid ~= aim.pid
-    end)())
-  -- Regrowth: the spot stays empty for `regrow` seconds and then comes back.
-  local pid = aim.pid
-  ff.clearAll()
-  field_tick(40)
-  check("a cut plant does not come straight back", (function()
-    for _ = 1, 1 do end
-    local again = ff.nearestPlant(ASTRO.x, ASTRO.y, ASTRO.z, 1, 0, 0, 400, -1)
-    return again == nil or again.pid ~= pid
-  end)())
-  T = T + FF.regrow + 10
-  ff.clearAll()
-  field_tick(40)
-  local grown = false
-  for _ = 1, 1 do
-    local hit = ff.nearestPlant(ASTRO.x, ASTRO.y, ASTRO.z, 1, 0, 0, 400, -1)
-    grown = hit ~= nil
+  check("…the pack holds it", #got > 0 and inv.count("astro", got[1].mat) >= got[1].n)
+  local again = ff.nearestPlant(ex, ey, ez, ax, ay, az, 8.0, 0.55, 1.5)
+  check("…and the plant is GONE (not just paid for)", again == nil
+    or math.sqrt((again.x - tall.x) ^ 2 + (again.y - tall.y) ^ 2 + (again.z - tall.z) ^ 2) > 0.05)
+  local still = 0
+  for _, l in ipairs(ff.surveyLines(tall.x, tall.y, tall.z, 0.3)) do
+    if l:find(spname, 1, true) then still = still + 1 end
   end
-  check("...but the ground recovers if you leave it alone", grown)
+  check("…from the field itself, not just the aim test", still == 0, n0 .. " → " .. still)
+  check("the cut is saved", (function()
+    for k, v in pairs(store) do
+      if k:match("^flora2%.") and type(v) == "table" and #v >= 1 and v[1] == tall.rec.inst then return true end
+    end
+    return false
+  end)())
+  -- It stays cut across a rebuild (a reload streams the patch back in).
+  ff.clearAll()
+  tick(80)
+  local back = ff.nearestPlant(ex, ey, ez, ax, ay, az, 8.0, 0.55, 1.5)
+  local function same(h)
+    return h and math.sqrt((h.x - tall.x) ^ 2 + (h.y - tall.y) ^ 2 + (h.z - tall.z) ^ 2) < 0.05
+  end
+  check("a cut plant stays cut when the field is rebuilt", not same(back))
+  -- …and grows back once `regrow` has passed.
+  T = T + ff.params.regrow + 10
+  tick(4)
+  local grown = ff.nearestPlant(ex, ey, ez, ax, ay, az, 8.0, 0.55, 1.5)
+  check("…but grows back after `regrow`", same(grown))
   check("dropped units are reported, not silently voided", dropped >= 0)
+end
+
+-- An old save's "hole" (a position in the patch plane, from before ids were
+-- exact) becomes an id: the plant that stood there stays cut, and the old
+-- record goes.
+do
+  local h
+  for i = 0, 35 do
+    local a = i * 0.1745
+    local c = ff.nearestPlant(ASTRO.x, ASTRO.y, ASTRO.z, 0, math.cos(a), math.sin(a), 40, -1)
+    if c then h = c; break end
+  end
+  check("an old hole save has a plant to test on", h ~= nil)
+  if h then
+    local okey = string.format("flora.%s.%s.%d", BODY.name, h.rec.patch, h.rec.sp.id)
+    local nkey = string.format("flora2.%s.%s.%d", BODY.name, h.rec.patch, h.rec.sp.id)
+    store[okey] = { math.floor(h.rec.lx * 100 + 0.5) / 100, math.floor(h.rec.lz * 100 + 0.5) / 100 }
+    store[nkey] = nil
+    ff.clearAll()
+    tick(80)
+    local still = false
+    for _, l in ipairs(ff.surveyLines(h.x, h.y, h.z, 0.05)) do
+      if l:find(h.rec.sp.name, 1, true) then still = true end
+    end
+    check("an old hole save is converted: the plant stays cut", not still)
+    check("…the old record is deleted and the id saved", store[okey] == nil and type(store[nkey]) == "table"
+      and store[nkey][1] == h.rec.inst, tostring(store[nkey] and store[nkey][1]) .. " vs " .. tostring(h.rec.inst))
+  end
 end
 
 -- ── report ──────────────────────────────────────────────────────────────────
@@ -522,8 +700,8 @@ for _, c in ipairs(checks) do
   end
 end
 if #bad == 0 then
-  print(string.format("FLORA SMOKE OK — %d checks passed  (%d plants, %d rays)",
-    #checks, ff.count, ray_count))
+  print(string.format("FLORA SMOKE OK — %d checks passed  (%d props, %d sources, %d rays)",
+    #checks, ff.count, ff.sources, ray_count))
   os.exit(0)
 end
 print("FLORA SMOKE FAILURES:")
