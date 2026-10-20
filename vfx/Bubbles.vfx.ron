@@ -1,0 +1,28 @@
+// Air escaping a swimmer under water; rises toward the surface.
+(
+    name: "Bubbles",
+    lifetime: 1.6,
+    playback: OneShot,
+    end: Destroy,
+    tracks: [
+        (
+            name: "Bubbles",
+            render: Billboard(texture: Some("textures/vfx/water/bubble.png")),
+            blend: Alpha,
+            space: Local,
+            clips: [(start: 0.0, end: 1.6, lifetime_jitter: 0.4, emit: Some(Burst(count: 5, count_jitter: 0.5, pulses: 1, interval: 0.0, interval_jitter: 0.2)))],
+            automation: [],
+            shape: Sphere(radius: 0.2, shell: false),
+            velocity: Range(Vec3((-0.15, -0.15, -0.15)), Vec3((0.15, 0.15, 0.15))),
+            size: Range(F32(0.03), F32(0.08)),
+            rotation: Const(Vec3((0.0, 0.0, 0.0))),
+            angular_velocity: Const(Vec3((0.0, 0.0, 0.0))),
+            color: Curve((keys: [(t: 0.0, v: Rgba((0.85, 0.95, 1.0, 0.85)), interp: Linear), (t: 0.85, v: Rgba((0.85, 0.95, 1.0, 0.7)), interp: Linear), (t: 1.0, v: Rgba((0.85, 0.95, 1.0, 0.0)), interp: Linear)], extrapolate: Clamp)),
+            gravity: -0.12,
+            drag: 1.5,
+            forces: [Turbulence(frequency: 2.0, strength: 1.2)],
+        ),
+    ],
+    seed: 1,
+    gravity_mode: Field,
+)
