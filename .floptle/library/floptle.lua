@@ -9,8 +9,8 @@
 ---@field scale_x number Scale along X.
 ---@field scale_y number Scale along Y.
 ---@field scale_z number Scale along Z.
----@field yaw number Heading about Y, in radians.
----@field pitch number Pitch about X, in radians.
+---@field yaw number Heading about Y, in radians. One-field writes re-read the other two angles in canonical form; node:setAngles sets all three, node:setUp stands the node on a normal.
+---@field pitch number Pitch about X, in radians (reads back within ±pi/2).
 ---@field roll number Roll about Z, in radians.
 ---@field grounded boolean Physics (rigidbody nodes): resting on a surface this frame.
 ---@field dropThrough number|boolean Physics: fall through one-way platforms for this many seconds (true = 0.25). Write-only.
@@ -38,6 +38,7 @@
 ---@field tickZ number Physics: the body's world Z at the start of this tick (read/write).
 ---@field tickPos Vec3 Physics: the body's tick pose as a vec3 (read/write). Build hurtboxes from THIS, and move a fighter with `node.tickPos = node.tickPos + vec3(d, 0, 0)` — `node.x = node.x + d` inside fixedUpdate teleports the body onto its VISUAL position, so the model slides and the hitbox doesn't.
 ---@field layer string Collision/query layer, by project-defined NAME ("Default" when unset). Assigning a name the project doesn't define is an ERROR — add layers in Project Settings.
+---@field name string The node's name. Assign a string to rename it; the handle reads the new name at once and find() answers to it from the next pass.
 ---@field tags string[] The node's tags (a fresh array each read). Assign a whole array to replace; use addTag/removeTag for single edits.
 ---@field hasTag fun(self: Node, tag: string): boolean Whether the node carries this exact tag.
 ---@field destroy fun(self: Node) Remove this node and its whole subtree (queued; applied after the pass). Same as `destroy(node)`.
@@ -49,7 +50,7 @@
 ---@field getComponent fun(self: Node, name: string): RigidBodyHandle|PointLightHandle|LightHandle|CameraHandle|UiElementHandle|UiSliderHandle|UiLayerHandle|MaterialHandle|nil Live component handle (RigidBody / PointLight / Light / Camera / ParticleSystem / AudioSource / UiElement / UiSlider / UiLayer / Material), nil if the node lacks it.
 ---@field particles fun(self: Node): ParticleSystemHandle The particle handle for this node's Particle System: play / stop / restart the effect and read its live state.
 ---@field setShaderParam fun(self: Node, name: string, x: number, y?: number, z?: number, w?: number) Drive a `.flsl` uniform on this node every tick (a GPU uniform write, never a recompile): the node's Material shader, or its UI element's `stage ui` shader (instruments like the navball). Unset lanes are 0.
----@field setCelestial fun(self: Node, t: table) Construction API: set (and create if absent) the node's CelestialBody. Fields (camelCase): mu, bodyRadius, soi, parent (name string), a, e, i, lan, argPe, m0, atmoColor {r,g,b}, atmoHeight, atmoDensity, clouds, luminosity, starColor, occluderRadius (occlusion culling: radius of the solid core geometry never pierces — chunks fully behind it skip their draws; keep it BELOW the deepest cave/dig; 0 = off).
+---@field setCelestial fun(self: Node, t: table) Construction API: set (and create if absent) the node's CelestialBody. Fields (camelCase): mu, bodyRadius, soi, parent (name string), a, e, i, lan, argPe, m0, atmoColor {r,g,b}, atmoHeight, atmoDensity, clouds, cloudColor {r,g,b}, cloudDarkness (0..1, 1 = storm), cloudHeight (share of atmoHeight), aureole, aureoleSize (the star's glow: strength, spread; 1 = natural), luminosity, starColor, occluderRadius (occlusion culling: radius of the solid core geometry never pierces — chunks fully behind it skip their draws; keep it BELOW the deepest cave/dig; 0 = off).
 ---@field setShaderTexture fun(self: Node, slot: string, ref: string) Point one of this node's `.flsl` shader texture SLOTS somewhere else, at runtime. `slot` is the name the shader declares (`texture ramp` gives "ramp"); `ref` is a project-relative image path, an `rt:<name>` render target (what another camera sees, live), or "" to clear the slot. A shader can declare up to 8 slots.
 ---@field setMaterial fun(self: Node, t: table) Construction API — SETUP-TIME, not per-frame: set (and create if absent) the node's Material. It inserts the component and queues a deferred write, so call it on transitions and use `setShaderParam` for values that change every tick. Fields: color/emissive/specular/rim (a colour takes {r,g,b}, {x,y,z}, {1,0.5,0.2} or vec3), emissiveStrength, shininess, specularStrength, rimStrength, unlit (bool), ambient, alpha, texture (path or "rt:<name>"), sheetCols/sheetRows/cell (spritesheet grid + which cell draws — `cell` is also a live mirror field, see MaterialHandle).
 ---@field setTerrain fun(self: Node, id: number) Construction API: make this node a Terrain volume with the given id (generate its field with `terrain.generatePlanet`).
@@ -79,7 +80,7 @@
 ---@field script fun(self: Node, name: string): table|nil Short alias of getscript.
 ---@field scripts table[] Every script on this node as handles, in attach order — possibly empty, never nil. The plural of getScript, for when you do not yet know the name: `for _, s in ipairs(n.scripts) do print(s.kind) end` tells you what a node actually carries, which is the question a getScript that answered nil leaves you with.
 ---@field component fun(self: Node, name: string): RigidBodyHandle|PointLightHandle|LightHandle|CameraHandle|UiElementHandle|UiSliderHandle|UiLayerHandle|MaterialHandle|nil Short alias of getcomponent.
----@field animator fun(self: Node): table The animation handle for this node's Animation Controller (or a rigged model's embedded clips): :play / :restart / :crossfade / :stop / :setSpeed / :setLayerWeight / :seek / :setParam, per-frame bone writes :setBoneRot / :addBoneRot / :setBonePos / :addBonePos / :reach / :lookAt, and :state / :time / :finished / :isPlaying / :boneWorld.
+---@field animator fun(self: Node): table The animation handle for this node's Animation Controller (or a rigged model's embedded clips): :play / :restart / :crossfade / :stop / :setSpeed / :setLayerWeight / :seek / :setParam, per-frame bone writes :setBoneRot / :addBoneRot / :setBonePos / :addBonePos / :reach / :lookAt (a bone by name or by its :boneIndex number), many at once with :setBones, kept with :holdPose, and :state / :time / :finished / :isPlaying / :boneWorld.
 ---@field toWorld fun(self: Node, v: Vec3): Vec3 A point in this node's own frame converted to world space — position, rotation AND scale, composed up the whole parent chain. "Where is the muzzle?" is gun:toWorld(vec3(0, 0, -1.2)).
 ---@field toLocal fun(self: Node, v: Vec3): Vec3 The inverse of toWorld: a world point expressed in this node's frame.
 ---@field setWorldPos fun(self: Node, v: Vec3) Put this node at a WORLD point, whatever it is parented to, without deriving the parent inverse by hand.
@@ -90,6 +91,8 @@
 ---@field distanceFlat fun(self: Node, other: Node|Vec3, up?: Vec3): number Distance ignoring the up axis (default +Y): the "have I arrived?" test for anything walking on ground it does not control the height of. Pass an up for a planet.
 ---@field setParent fun(self: Node, parent: Node|nil, opts?: table) Move under another node (nil = top level). Keeps the world pose unless { keepWorld = false }, which keeps the local numbers.
 ---@field lookAt fun(self: Node, target: Node|Vec3, up?: Vec3) Point this node at another node or a world point. Sets yaw + pitch and leaves roll alone; pass an up and it sets roll too.
+---@field setUp fun(self: Node, up: Vec3, forward?: Vec3) Turn so +Y lies along a world direction (a surface normal), any hemisphere; with a forward, -Z faces it as nearly as the up allows.
+---@field setAngles fun(self: Node, yaw: number, pitch: number, roll: number) Set all three angles at once, composed exactly as given, canonical or not.
 ---@field turnTowards fun(self: Node, target: Node|Vec3, maxRadians: number) Turn toward something by at most that much, the SHORT way round. Pass rate * dt for a frame-rate-independent turn.
 ---@field moveTowards fun(self: Node, target: Node|Vec3, maxDelta: number) The method spelling of moveTowards(node, ...). World-space and placed through the parent inverse, so a node under a container arrives where you pointed.
 ---@field setTint fun(self: Node, color?: Color|table, alpha?: number) A colour MULTIPLIED over everything this node draws — its own textures and each part's own colour are kept. The easy "same model, but red": a hit flash, a team colour, a ghosted preview. The table form `node:setTint{ color =, alpha =, rim =, rimStrength =, ambient = }` adds the two knobs a multiply cannot do — an ADDITIVE rim and an ambient lift — and fields you leave out keep their value. `node:setTint()` with nothing clears it. Different from a Material, which REPLACES the model's own materials.
@@ -127,6 +130,10 @@
 ---@field half_x number Box half-extent X.
 ---@field half_y number Box half-extent Y.
 ---@field half_z number Box half-extent Z.
+---@field mass number Mass (live). On an assembly part, its share of the vessel: mass, centre of mass and inertia follow next tick.
+---@field worldHalfX number Read-only: half_x times the node's world scale, the box the physics builds.
+---@field worldHalfY number Read-only: half_y times the node's world scale.
+---@field worldHalfZ number Read-only: half_z times the node's world scale.
 ---@field lock_x number Freeze world X translation (1/0).
 ---@field lock_y number Freeze world Y translation (1/0).
 ---@field lock_z number Freeze world Z translation (1/0).
@@ -365,12 +372,27 @@
 ---@field position fun(self: SoundHandle): number Playhead in seconds.
 
 ---A mixer track handle from `audio.track(name)` — live control of the
----project mixer (reverts to the saved mixer when Play stops).
+---project mixer. Changes hold for the whole play session, across
+---`scene.load`, and revert to the saved mixer when Play stops.
 ---@class AudioTrackHandle
 ---@field setVolume fun(self: AudioTrackHandle, db: number) Fader gain in dB (0 = unity, −60 = silent).
 ---@field setPan fun(self: AudioTrackHandle, pan: number) Stereo pan −1..1.
 ---@field setMuted fun(self: AudioTrackHandle, muted: boolean) Mute / unmute the track.
 ---@field setSoloed fun(self: AudioTrackHandle, soloed: boolean) Solo the track (mutes everything else).
+---@field setLowpass fun(self: AudioTrackHandle, hz: number) Muffle the whole bus above that many Hz (underwater); 0 = off.
+---@field setBypass fun(self: AudioTrackHandle, slot: integer, on: boolean) Bypass effect `slot` (from 1, as the Mixer tab lists the chain).
+---@field info fun(self: AudioTrackHandle): AudioTrackInfo? The track as it stands, or nil.
+
+---One mixer track as `audio.tracks()` lists it.
+---@class AudioTrackInfo
+---@field name string
+---@field gainDb number Fader gain in dB, script changes included.
+---@field pan number
+---@field muted boolean
+---@field soloed boolean
+---@field output string? The track it feeds ("Master" for a top-level track; nil for Master itself).
+---@field lowpass number The bus low-pass in Hz, 0 when off.
+---@field effects integer How many effects its chain holds.
 
 ---Options for `audio.play`. All fields optional.
 ---@class AudioPlayOpts
@@ -392,7 +414,8 @@
 ---@class audio
 ---@field play fun(clip: string, a?: Node|number, b?: number|AudioPlayOpts, c?: number, opts?: AudioPlayOpts): SoundHandle Play a clip: `audio.play("audio/ding.ogg")` (flat) · `audio.play("audio/hit.ogg", x, y, z, opts)` (at a point) · `audio.play("audio/engine.ogg", carNode, {loop=true})` (follows the node).
 ---@field stopAll fun() Stop every playing sound (sources and one-shots).
----@field track fun(name: string): AudioTrackHandle A mixer track handle ("Master" or a track name from the Mixer tab).
+---@field track fun(name: string): AudioTrackHandle? A mixer track handle ("Master" or a track name from the Mixer tab); nil when the mixer has no such track.
+---@field tracks fun(): AudioTrackInfo[] Every mixer track, Master first, as this play session has it.
 audio = {}
 
 ---This instance's tunables, seeded from the script's `defaults` table.
@@ -718,6 +741,16 @@ function ui.unbind(node, property) end
 ---@param container Node
 ---@param tree table
 function ui.make(container, tree) end
+
+---The engine's Controls or Accessibility page, built into `container` with
+---ui.make and styled by the slots you name (`page`, `row`, `label`, `value`,
+---`button`). Call `panel:update()` every frame while it is open so a rebind is
+---committed; `onChanged(key, value)` fires after each change so you can save it.
+---@param container Node
+---@param page string controls or accessibility
+---@param opts? { styles?: table, onChanged?: fun(key: string, value: any), filter?: string }
+---@return table panel
+function ui.engineSettings(container, page, opts) end
 
 ---A colour: `color(r, g, b [, a])`, `color(gray [, a])`, or `color(other, a)`
 ---to copy with a new alpha. Channels are 0..1 and alpha defaults to 1, so
@@ -1250,6 +1283,8 @@ function camera.screenRect() end
 function camera.pixelsPerUnit(distance) end
 ---Project a world point to the game view: `sx, sy, depth, onscreen`. `onscreen`
 ---is false for points behind the camera or outside the frustum — skip those.
+---Uses the camera node as it stands when called (this frame's motion so far),
+---so a label placed in `lateUpdate` sits on its object this frame.
 ---@param x number
 ---@param y number
 ---@param z number
@@ -1402,6 +1437,7 @@ function findTagged(tag) end
 ---@field roughnessMap string
 ---@field metallicMap string
 ---@field occlusionMap string
+---@field emissiveMap string Where it glows and in what colour (× emissive). `""` clears it.
 ---@field shader string The `.flsl` surface shader it draws with, project-relative. `""` when it has none, or to clear it.
 ---@field color Color The tint, multiplied into the texture.
 ---@field emissive Color Light this surface gives off (scaled by emissiveStrength).
@@ -1628,7 +1664,7 @@ scatter = {}
 ---per instance and never while chunks build — placement has to stay a pure
 ---function of the seed, or walking away and back would regrow a different
 ---world. Density 0 generates no instance at all.
----@param opts { asset?: string, lod?: { asset: string, distance: number }[], seed?: number, center?: Vec3, radius?: number, halfX?: number, halfZ?: number, perChunk?: number, chunk?: number, align?: string, scaleMin?: number, scaleMax?: number, range?: number, fade?: number, density?: fun(x: number, y: number, z: number): number | number[], densityRows?: number }
+---@param opts { tint?: number[], emissive?: number[], emissiveStrength?: number, asset?: string, lod?: { asset: string, distance: number }[], seed?: number, center?: Vec3, radius?: number, halfX?: number, halfZ?: number, perChunk?: number, chunk?: number, align?: string, scaleMin?: number, scaleMax?: number, range?: number, fade?: number, density?: fun(x: number, y: number, z: number): number | number[], densityRows?: number }
 ---@return integer
 function scatter.create(opts) end
 ---Instances within `radius` of a point, nearest first. What a harvest verb aims
@@ -1636,7 +1672,7 @@ function scatter.create(opts) end
 ---@param id integer
 ---@param point Vec3
 ---@param radius? number
----@return { id: integer, distance: number, pos: Vec3, scale: number, param: number }[]
+---@return { id: number, distance: number, pos: Vec3, scale: number, param: number, up: Vec3, yaw: number }[]
 function scatter.near(id, point, radius) end
 ---Remove one instance, permanently. By ID, so it survives the chunk streaming
 ---out and back in.
@@ -1658,6 +1694,39 @@ function scatter.removed(id) end
 ---@param id integer
 ---@return boolean
 function scatter.destroy(id) end
+
+---Wind: one field that particles and props are moved by. Declared by the game,
+---read back with `weather.windAt`. A wind blows in the frame of the body it
+---rides; one with a `radius` is a local cell that adds to the winds under it.
+---@class Weather
+weather = {}
+---Declare a wind; returns its id. `velocity` in metres a second; `gust` swings
+---the speed by that fraction every `gustPeriod` seconds, travelling downwind;
+---`turbulence` adds eddies `scale` metres across. `parent` names the node it
+---blows in the frame of; `center` + `radius` makes a local cell.
+---@param opts { velocity?: Vec3, gust?: number, gustPeriod?: number, turbulence?: number, scale?: number, parent?: string, center?: Vec3, radius?: number, seed?: number }
+---@return integer
+function weather.addWind(opts) end
+---Change the options it names and keep the rest. False when there is no such wind.
+---@param id integer
+---@param opts { velocity?: Vec3, gust?: number, gustPeriod?: number, turbulence?: number, scale?: number, parent?: string, center?: Vec3, radius?: number, seed?: number }
+---@return boolean
+function weather.setWind(id, opts) end
+---The wind stops. True if there was one.
+---@param id integer
+---@return boolean
+function weather.removeWind(id) end
+---The wind at a point, in world space: every wind there added up.
+---@param point Vec3
+---@return Vec3
+function weather.windAt(point) end
+---A lightning bolt's strands to draw, the main channel from `from` to `to`
+---first; forks name it as `parent`. The same seed is the same bolt everywhere.
+---@param from Vec3
+---@param to Vec3
+---@param opts? { seed?: number, branches?: number, jag?: number }
+---@return { points: number[], width: number, parent?: integer }[]
+function weather.bolt(from, to, opts) end
 
 ---The scene's bodies of water. The engine floats things and drags them; what
 ---being WET means — swimming, drowning, a flooded engine, a gauge going red —
@@ -1781,10 +1850,31 @@ function terrain.paintTexture(x, y, z, radius, slot) end
 ---craterMin, craterMax, craterDust, surfaceA, surfaceB, patchBias, patchThr,
 ---subsoil, subsoilDepth, strata, strataDepth, deep,
 ---pockets {slot,color,threshold,minDepth}, seam {slot,color,minDepth,center,width},
----iceCaps {lat,slot,color}, seed.
+---iceCaps {lat,slot,color}, seed. Relief layers, each a table of optional
+---keys: mountains {height,scale,sharpness,coverage,octaves}, warp
+---{strength,scale}, plateau {height,smooth}, terrace {step,sharpness},
+---overhangs {depth,scale,strength}, ravines {count,depth,width,length,meander},
+---rivers {count,depth,width,seaLevel,meander}; biomes, a list of
+---{slot,color,latitude,altitude,slope,moisture,nearRiver} rules (ranges are
+---{min,max}; the first match paints the surface); moistureScale;
+---deferCaves (leave the buried cave zone ungenerated until a dig reaches it).
 ---@param id number The terrain id (a node with that Terrain id shows the result).
 ---@param opts? table
 function terrain.generatePlanet(id, opts) end
+---The rivers and ravines `terrain.generatePlanet` carves with these opts,
+---without generating: { {river=, depth=, points={x1,y1,z1, ...}, widths={...}}, ... }.
+---Points are planet-local, on the sphere of the planet's radius.
+---@param opts table The same opts table `terrain.generatePlanet` takes.
+---@return table[]
+function terrain.planetRivers(opts) end
+---The lakes the planet's basins hold, without generating: every basin filled to
+---the height it spills at. { {level=, center=, reach=, area=, depth=}, ... },
+---largest first; `center` is planet-local, on the lake's surface. Ground below
+---`seaLevel` is sea, not a lake.
+---@param opts table The same opts table `terrain.generatePlanet` takes.
+---@param query? { cell?: number, minDepth?: number, seaLevel?: number }
+---@return { level: number, center: Vec3, reach: number, area: number, depth: number }[]
+function terrain.planetLakes(opts, query) end
 ---Set (or read, with no argument) the game's SAVE-SLOT directory for
 ---player-edited terrain, relative to the project root (e.g.
 ---"saves/slot1/terrain"). While set, streaming loads a body's field from here
@@ -1970,9 +2060,25 @@ function math.fbm(x, y, z, octaves, seed) end
 ---@return Rng
 function rng(seed) end
 
+---Meshes a script builds at runtime. A built mesh is a name like `mesh:3`,
+---usable anywhere a model path is (node.model, scatter.create{ asset = }).
+---@class MeshApi
+mesh = {}
+---Build a mesh from flat number lists: positions (x, y, z per vertex),
+---indices (three per triangle, vertices numbered from 1), and optionally
+---normals, uvs (u, v) and colors (r, g, b, a, 0..1). Answers its name at once;
+---it draws from the next frame. Kept until mesh.free or Stop.
+---@param spec { positions: number[], indices: integer[], normals?: number[], uvs?: number[], colors?: number[] }
+---@return string name
+function mesh.build(spec) end
+---Give a built mesh back. True if it was one.
+---@param name string
+---@return boolean
+function mesh.free(name) end
+
 ---Persistent game data: a per-slot key→value store that survives Play
----sessions, editor restarts, and ships with exported builds. Values take the
----synced-var guardrails (numbers/strings/bools/tables ≤ depth 4, ≤ 1 KB).
+---sessions, editor restarts, and ships with exported builds. Values are plain
+---data (numbers/strings/bools/tables nested up to 16 deep), within the slot cap.
 ---Flushes on Stop + every few seconds during Play; `save.flush()` forces it.
 ---Multiplayer: LOCAL storage — for server-authoritative progress call save.*
 ---on the server and hand results to clients via synced/RPC.
