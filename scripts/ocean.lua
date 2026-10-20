@@ -42,6 +42,13 @@ local shore_t, shore_x, shore_y, shore_z, shore_d = 0, nil, nil, nil, 1e9
 local crew_depth = nil
 local pc_ref
 
+-- The effects director (cached: findScript walks the whole scene).
+local vfx_ref = nil
+local function vfx_dir()
+  if not (vfx_ref and vfx_ref.valid) then vfx_ref = findScript and findScript("vfx") or nil end
+  return vfx_ref
+end
+
 local function len(x, y, z) return math.sqrt(x * x + y * y + z * z) end
 
 local function resolve(node)
@@ -98,22 +105,76 @@ local function push_sky(node)
   if sky_set then return end
   sky_set = true
   local atmo = world and world.atmo or 0
-  local r = world and world.atmoR or 0.55
-  local g = world and world.atmoG or 0.7
-  local b = world and world.atmoB or 0.9
-  -- Thin air reflects a darker sky; none reflects space.
-  local k = math.min(1, atmo * 1.6)
-  node:setShaderParam("skyColor", 0.03 + r * k, 0.04 + g * k, 0.07 + b * k, 1)
+  -- The sky as the engine draws it, horizon and zenith (climate.waterSky):
+  -- thin air reflects a darker sky; none reflects space.
+  local cl = findScript("climate")
+  if cl and cl.waterSky then
+    local hr, hg, hb, zr, zg, zb = cl.waterSky(world)
+    node:setShaderParam("skyColor", hr, hg, hb, 1)
+    node:setShaderParam("zenithColor", zr, zg, zb, 1)
+  else
+    local k = math.min(1, atmo * 1.6)
+    node:setShaderParam("skyColor", 0.03 + (world and world.atmoR or 0.55) * k,
+      0.04 + (world and world.atmoG or 0.7) * k, 0.07 + (world and world.atmoB or 0.9) * k, 1)
+  end
+  -- The WATER ITSELF, by the world's chemistry (system_generator's geology
+  -- publishes `world.water`): a clear tropical sea, an algal green one, a
+  -- tannin-brown bog sea, milky glacial flour, iron-red, or a hydrocarbon
+  -- lake. Its absorption (climate.waterAbsorb) sets how far the eye sees down to the shelf, and the
+  -- air's thickness sets the chop (no wind, no waves: a methane sea under a
+  -- still sky is a mirror).
+  local wt = world and world.water
+  if wt and not frozen then
+    if wt.deep then node:setShaderParam("deepColor", wt.deep[1], wt.deep[2], wt.deep[3], 1) end
+    if wt.shallow then node:setShaderParam("shallowColor", wt.shallow[1], wt.shallow[2], wt.shallow[3], 1) end
+    if cl and cl.waterLight then node:setShaderParam("bodyLight", cl.waterLight(wt)) end
+    if cl and cl.waterAbsorb then node:setShaderParam("absorb", cl.waterAbsorb(wt)) end
+    local calm = (wt.state == "methane") and 0.25 or 1.0
+    node:setShaderParam("bump", (0.14 + 0.26 * math.min(1, atmo)) * calm)
+  elseif frozen then
+    -- Sea ice is blue-white: old ice is blue where it is clear and white
+    -- where it is crazed with air, and only a hint of the water it froze
+    -- from. A warm star lights it peach; with the water's own tint mixed in
+    -- as well (an iron sea's ice was a pinkish grey), it read as a sand flat.
+    local s = wt and wt.shallow or { 0.2, 0.5, 0.6 }
+    node:setShaderParam("iceColor", 0.36 + s[1] * 0.06, 0.58 + s[2] * 0.06, 0.82 + s[3] * 0.05, 1)
+    node:setShaderParam("frostColor", 0.80, 0.88, 0.96, 1)
+  end
+end
+
+-- How far the eye is above this sea, as the shader's 0..1 far fade.
+local far_set = -1
+local function push_far(node, alt)
+  local f = math.max(0, math.min(1, (alt - 120) / math.max(R * 1.2, 1)))
+  if math.abs(f - far_set) > 0.02 then
+    far_set = f
+    node:setShaderParam("farFade", f)
+  end
+end
+
+-- The wind on the sea (weather.lua, the camera's world), twice a second: the
+-- shader runs its waves downwind and breaks whitecaps past a fresh breeze.
+local wind_t, wx_ref = -100, nil
+local function push_wind(node)
+  if frozen or time - wind_t < 0.5 then return end
+  wind_t = time
+  if not (wx_ref and wx_ref.valid) then wx_ref = findScript("weather") end
+  local c = wx_ref and wx_ref.current and wx_ref.current()
+  if not (c and body and c.body == body.name) then return end
+  node:setShaderParam("windDir", c.windX or 0, c.windY or 0, c.windZ or 1)
+  node:setShaderParam("wind", c.windNow or c.wind or 0)
 end
 
 function update(node, dt)
   if not resolve(node) then return end
   push_sky(node)
+  push_wind(node)
 
   local ex, ey, ez = eye()
   if not ex then return end
   local rx, ry, rz = ex - body.x, ey - body.y, ez - body.z
   local dc = len(rx, ry, rz)
+  if not frozen then push_far(node, dc - R) end
   local near = (not frozen) and dc - R < params.near and dc > 1
   if not near then
     if surf then surf:stop(); surf, surf_level = nil, 0 end
@@ -132,7 +193,11 @@ function update(node, dt)
     if px then
       spray_acc = spray_acc - 1
       local v = 2.2 + math.random() * 2.6
-      spawnEffect("SeaSpray", px + dx * 0.2, py + dy * 0.2, pz + dz * 0.2, dx * v, dy * v, dz * v)
+      -- vfx.lua adds the planet's own velocity, so the spray stays on the shore
+      -- instead of streaking off at orbital speed.
+      local fx = vfx_dir()
+      if fx then fx.spray(px + dx * 0.2, py + dy * 0.2, pz + dz * 0.2, dx * v, dy * v, dz * v)
+      else spawnEffect("SeaSpray", px + dx * 0.2, py + dy * 0.2, pz + dz * 0.2, dx * v, dy * v, dz * v) end
     end
   end
   if spray_acc > 2 then spray_acc = 2 end
@@ -182,7 +247,8 @@ function update(node, dt)
         local nx, ny, nz = ax / al, ay / al, az / al
         local px, py, pz = body.x + nx * R, body.y + ny * R, body.z + nz * R
         local v = math.min(6, 1.5 - vr * 0.5)
-        spawnEffect("SeaSpray", px, py, pz, nx * v, ny * v, nz * v)
+        local fx = vfx_dir()
+        if fx then fx.splash(px, py, pz, math.min(2.5, -vr * 0.3)) else spawnEffect("SeaSpray", px, py, pz, nx * v, ny * v, nz * v) end
         audio.play("audio/water/splash_" .. math.random(1, 3), px, py, pz,
           { track = "SFX", volume = math.min(1, 0.35 - vr * 0.08), maxDistance = 60 })
       end

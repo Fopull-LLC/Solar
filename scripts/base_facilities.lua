@@ -98,26 +98,6 @@ local function dominant_at(x, y, z)
   return best
 end
 
--- A building's full orientation: +Y along the local up `u`, +Z along `f`
--- (made tangent here), as the engine's YXZ Euler angles — R = Ry(yaw)·Rx(pitch)
--- ·Rz(roll), in radians. The old solve took only pitch and roll (valid for yaw
--- = 0) and then set a yaw of `215` besides: a YXZ yaw spins about WORLD Y after
--- the tilt, and 215 radians is not 215°, so away from the pole every building
--- stood tipped over at an arbitrary angle.
-local function basis_angles(ux, uy, uz, fx, fy, fz)
-  local d = fx * ux + fy * uy + fz * uz
-  fx, fy, fz = fx - ux * d, fy - uy * d, fz - uz * d
-  local fl = math.sqrt(fx * fx + fy * fy + fz * fz)
-  if fl < 1e-6 then return math.atan2(uz, uy), math.asin(math.max(-1, math.min(1, -ux))), 0 end
-  fx, fy, fz = fx / fl, fy / fl, fz / fl
-  -- right = up × forward (x = y × z)
-  local rx, ry = uy * fz - uz * fy, uz * fx - ux * fz
-  local pitch = math.asin(math.max(-1, math.min(1, -fy)))
-  local yaw = math.atan2(fx, fz)
-  local roll = math.atan2(ry, uy)
-  return pitch, roll, yaw
-end
-
 -- Ground each building stands on is levelled first: without it a 12 m shed on
 -- a slope floats off the downhill side and buries the uphill one.
 --
@@ -301,9 +281,12 @@ local function try_place()
         local kx, ky, kz = ny * cz - nz * cy, nz * cx - nx * cz, nx * cy - ny * cx
         local cyaw, syaw = math.cos(ya), math.sin(ya)
         local fx, fy, fz = cx * cyaw + kx * syaw, cy * cyaw + ky * syaw, cz * cyaw + kz * syaw
-        local pitch, roll, fyaw = basis_angles(nx, ny, nz, fx, fy, fz)
         spawn(f.prefab, vec3(ox, oy, oz), function(inst)
-          inst.pitch, inst.roll, inst.yaw = pitch, roll, fyaw
+          -- +Y on the local up, +Z toward `f` (setUp's forward is the node's
+          -- -Z). One whole-rotation write: Euler angles solved for a normal
+          -- were written field by field and re-canonicalised in between,
+          -- which tipped buildings on a planet's lower half (engine 0403).
+          inst:setUp(vec3(nx, ny, nz), vec3(-fx, -fy, -fz))
           -- Parent-local coords: for a facility parented to its planet, local IS
           -- the body-relative offset (never add the body position — that flings
           -- it to the far side of the system).

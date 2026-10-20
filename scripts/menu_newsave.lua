@@ -26,6 +26,10 @@ local PARAMS = {
   { node = "NG Star",     save = "g_star",       opt = "starScale",  fmt = "x" },
 }
 
+-- The world scale a new save is created at — system_generator's CURRENT_SCALE
+-- (the menu scene has no generator to ask). Bump the two together.
+WORLD_SCALE = 3
+
 local slot_n = 1
 local seed_str = ""
 
@@ -108,6 +112,10 @@ function press(role)
       if v[p.save] then save.set(p.save, v[p.save]) end
     end
     if #seed_str > 0 then save.set("g_seed", tonumber(seed_str)) end
+    -- A new galaxy is made at the CURRENT world scale, and keeps it for life
+    -- (system_generator SCALES; game_manager reads it back). The sliders above
+    -- are already in that scale's units.
+    save.set("g_scale", WORLD_SCALE)
     scene.load("system")
   end
 end

@@ -1,0 +1,32 @@
+(
+    name: "far",
+    lighting: (direction: (0.3, 0.8, 0.5), color: (1.0, 1.0, 1.0), ambient: (0.3, 0.3, 0.3), intensity: 1.0, shadows: false, fog: false),
+    nodes: [
+        (
+            name: "Gravity",
+            transform: (translation: (0.0, 4900000.0, 0.0), rotation: (0.0, 0.0, 0.0, 1.0), scale: (1.0, 1.0, 1.0)),
+            matter: GravityVolume(radial: false, strength: 9.81, radius: 1000.0),
+            scripts: [],
+        ),
+        (
+            name: "Floor",
+            transform: (translation: (0.0, 4899999.5, 0.0), rotation: (0.0, 0.0, 0.0, 1.0), scale: (20.0, 1.0, 20.0)),
+            matter: Primitive(shape: Cube, color: (0.2, 0.25, 0.3)),
+            scripts: [],
+            rigidbody: Some((boxed: true, mode: Static, half_extents: (0.5, 0.5, 0.5), restitution: 0.0, friction: 1.0, gravity: false)),
+        ),
+        (
+            name: "Camera",
+            transform: (translation: (0.0, 4900000.12, 3.0), rotation: (0.0, 0.0, 0.0, 1.0), scale: (1.0, 1.0, 1.0)),
+            matter: Camera(fov_y: 0.6, active: true),
+            scripts: [],
+        ),
+        (
+            name: "Fx",
+            transform: (translation: (0.0, 4900001.0, 0.0), rotation: (0.0, 0.0, 0.0, 1.0), scale: (1.0, 1.0, 1.0)),
+            matter: Empty,
+            scripts: [(kind: "restprobe", enabled: true, params: [])],
+            particles: Some((asset: "vfx/Rest200", play_on_start: true)),
+        ),
+    ],
+)

@@ -1,0 +1,27 @@
+(
+    name: "Rest200",
+    lifetime: 14.0,
+    playback: OneShot,
+    end: Destroy,
+    tracks: [
+        (
+            name: "Pebbles",
+            render: Billboard(texture: Some("textures/vfx/glow/tight.png")),
+            blend: Alpha,
+            space: World,
+            clips: [(start: 0.0, end: 14.0, emit: Some(Burst(count: 200, count_jitter: 0.0, pulses: 1, interval: 0.0, interval_jitter: 0.0)))],
+            automation: [],
+            shape: Box(size: (4.0, 0.5, 4.0)),
+            velocity: Const(Vec3((0.0, 0.0, 0.0))),
+            size: Const(F32(0.12)),
+            rotation: Const(Vec3((0.0, 0.0, 0.0))),
+            angular_velocity: Const(Vec3((0.0, 0.0, 0.0))),
+            color: Const(Rgba((1.0, 0.2, 0.1, 1.0))),
+            gravity: 1.0,
+            drag: 0.0,
+            collide: Some((bounce: 0.0, friction: 1.0, die: false)),
+        ),
+    ],
+    seed: 3,
+    gravity_mode: Field,
+)

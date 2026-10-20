@@ -78,6 +78,8 @@ end
 _G.spawn = function(prefab, pos, cb, parent)
   local inst = { __id = next_id, name = prefab, valid = true,
     x = pos.x, y = pos.y, z = pos.z, pitch = 0, roll = 0, yaw = 0, parent = parent }
+  -- node:setUp(up, forward): +Y along `up` (world), -Z toward `forward`.
+  function inst:setUp(up, fwd) self.up_set, self.fwd_set = up, fwd end
   next_id = next_id + 1
   nodes[#nodes + 1] = inst
   if cb then cb(inst) end
@@ -173,10 +175,25 @@ for _, s in ipairs(spawned) do
   -- way the engine applies it: +Y through R = Ry(yaw)·Rx(pitch)·Rz(roll)
   -- (glam's EulerRot::YXZ, radians), so a yaw that swings the building off its
   -- up — the old bug, a `215` "degrees" yaw on top of a yaw-free tilt — fails.
-  local p, r2, y = s.inst.pitch or 0, s.inst.roll or 0, s.inst.yaw or 0
-  local bx = -math.sin(r2) * math.cos(y) + math.cos(r2) * math.sin(p) * math.sin(y)
-  local by = math.cos(r2) * math.cos(p)
-  local bz = math.sin(r2) * math.sin(y) + math.cos(r2) * math.sin(p) * math.cos(y)
+  -- Since engine 0.117 (card 0403) the building is stood with node:setUp,
+  -- one whole-rotation write: its +Y is exactly the vector it was given.
+  local bx, by, bz
+  if s.inst.up_set then
+    local u = s.inst.up_set
+    local ul = math.sqrt(u.x ^ 2 + u.y ^ 2 + u.z ^ 2)
+    bx, by, bz = u.x / ul, u.y / ul, u.z / ul
+    -- …and it faces somewhere along the ground, not up or down it.
+    local w = s.inst.fwd_set
+    assert(w, s.prefab .. " was stood up with no facing")
+    local wl = math.sqrt(w.x ^ 2 + w.y ^ 2 + w.z ^ 2)
+    assert(wl > 1e-3 and math.abs((w.x * bx + w.y * by + w.z * bz) / wl) < 0.999,
+      s.prefab .. "'s facing runs along its own up")
+  else
+    local p, r2, y = s.inst.pitch or 0, s.inst.roll or 0, s.inst.yaw or 0
+    bx = -math.sin(r2) * math.cos(y) + math.cos(r2) * math.sin(p) * math.sin(y)
+    by = math.cos(r2) * math.cos(p)
+    bz = math.sin(r2) * math.sin(y) + math.cos(r2) * math.sin(p) * math.cos(y)
+  end
   local lean = math.deg(math.acos(math.max(-1, math.min(1, bx * fx + by * fy + bz * fz))))
   assert(lean < 0.01,
     string.format("%s leans %.2f degrees off its own local up", s.prefab, lean))

@@ -1,0 +1,11 @@
+(
+    name: "planet_rest",
+    nodes: [
+        (
+            name: "PlanetRest",
+            transform: (translation: (0.0, 0.0, 0.0), rotation: (0.0, 0.0, 0.0, 1.0), scale: (1.0, 1.0, 1.0)),
+            matter: Empty,
+            scripts: [(kind: "planet_rest", enabled: true, params: [])],
+        ),
+    ],
+)

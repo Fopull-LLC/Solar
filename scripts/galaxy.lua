@@ -350,7 +350,10 @@ function update(node, dt)
   if not (gen and gen.homeStar) then return end
   local a = anchor()
   if not a then return end
-  local S = math.max(1e5, params.sector or 2400000.0)
+  -- The sector grows with the save's WORLD SCALE (system_generator SCALES):
+  -- bigger systems need the stars further apart, and an old save keeps the
+  -- spacing — and so the neighbours — it was made with.
+  local S = math.max(1e5, (params.sector or 2400000.0) * ((gen.scale and gen.scale.sector) or 1.0))
   local seed = save.get("g_seed") or 0
 
   -- Speed over the last interval, in game metres per second. Measured rather

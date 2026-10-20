@@ -1,0 +1,121 @@
+// RIVER — the running water of a scale-3 world (scripts/climate.lua builds the
+// ribbons along each carved bed and dresses them with this).
+//
+// The ribbon is a mesh in the planet's own frame, under the body, so
+// `objectPos` is metres from the planet's centre and `normalize(objectPos)` is
+// the local up — as on the sea (ocean.flsl), whose look this shares: the
+// water's own per-channel absorption over its depth (Beer–Lambert), the
+// world's sky reflected by Fresnel, a sun glint. What a river adds is FLOW:
+//
+//   uv       climate.lua writes uv.x = across the stream (−1 one bank, 0 the
+//            middle, +1 the other) and uv.y = TRAVEL TIME in seconds from the
+//            source (Manning's speed from the bed's slope). A pattern at
+//            uv.y − time therefore moves at the water's real local speed.
+//   speed    ∂(position)/∂(uv.y), from the screen derivatives (a cotangent
+//            frame), IS the velocity: its direction is downstream and its
+//            length the speed in m/s. No per-vertex tangent is needed.
+//   ripples  a ripple height field (noise; a normal-map texture slot is what
+//            this wants, but on 0.117 one texture slot on a material that
+//            also reads surfaceGap overflows the GPU's 16 sampled textures
+//            and the pipeline fails — see the look3 report) advected
+//            downstream in TWO PHASES half a cycle apart and
+//            cross-faded (Vlachos, "Water Flow in Portal 2"): each phase
+//            jumps to a fresh offset while its weight is zero, so the
+//            pattern keeps renewing instead of riding a conveyor belt.
+//            Faster water stretches it into streaks and bends it harder.
+//   rapids   above ~2.5 m/s the surface breaks: white water in the fast
+//            stretches, foam threads along the banks where the current drags.
+//   edges    the ribbon fades toward its sides and where the ground behind
+//            comes up through it.
+shader river {
+  stage fragment
+  blend alpha
+  uniform deepColor: color = #06263F
+  uniform shallowColor: color = #1B8E98
+  uniform skyColor: color = #9CC4E4
+  uniform zenithColor: color = #4F7FB8
+  uniform foamColor: color = #E6EEF2
+  uniform absorb: vec3 = vec3(0.45, 0.09, 0.06)
+  uniform bodyLight: float = 1 range(0.1, 2)
+  uniform flowSpeed: float = 1 range(0, 6)
+  uniform bump: float = 0.35 range(0, 2)
+  uniform wind: float = 4 range(0, 40)
+  uniform debugView: float = 0 range(0, 1)
+
+  let up = normalize(objectPos)
+  let sunDir = lightDir
+  let sunColor = lightColor / max(max(lightColor.x, max(lightColor.y, lightColor.z)), 0.001)
+
+  // Velocity in the world, from the screen derivatives: ∂p/∂τ.
+  let dpx = dpdx(objectPos)
+  let dpy = dpdy(objectPos)
+  let dux = dpdx(uv)
+  let duy = dpdy(uv)
+  let det = duy.y * dux.x - dux.y * duy.x
+  let vel = (dpy * dux.x - dpx * duy.x) / (det + sign(det) * 0.000001 + 0.0000001)
+  let velf = vel - up * dot(vel, up)
+  let speed = clamp(length(velf), 0, 8)
+  let flow = normalize(velf + cross(up, vec3(0.37, 0.83, 0.42)) * 0.0001)
+  let across = cross(up, flow)
+
+  // Two flow phases half a cycle apart, each renewed while it is invisible.
+  let period = 2.2
+  let c0 = time / period
+  let c1 = c0 + 0.5
+  let w0 = 1 - abs(fract(c0) * 2 - 1)
+  let w1 = 1 - w0
+  let j0 = floor(c0)
+  let j1 = floor(c1)
+  let o0 = vec2(fract(sin(j0 * 12.9898) * 43758.5), fract(sin(j0 * 78.233) * 43758.5))
+  let o1 = vec2(fract(sin(j1 * 12.9898 + 4.1) * 43758.5), fract(sin(j1 * 78.233 + 4.1) * 43758.5))
+  let along = (uv.y - time * flowSpeed) * 0.45
+  let tc = vec2(uv.x * 0.6, along)
+  // Each phase: a ripple height field (noise, streaked along the flow) and
+  // its slope by finite differences.
+  let q0 = vec3((tc.x + o0.x * 7) * 7.0, (tc.y + o0.y * 7) * 4.5, 1.7)
+  let q1 = vec3((tc.x + o1.x * 7) * 7.0, (tc.y + o1.y * 7) * 4.5, 5.3)
+  let ee = 0.08
+  let a0 = noise(q0)
+  let n0 = vec3(noise(q0 + vec3(ee, 0, 0)) - a0, noise(q0 + vec3(0, ee, 0)) - a0, 0) / ee
+  let a1 = noise(q1)
+  let n1 = vec3(noise(q1 + vec3(ee, 0, 0)) - a1, noise(q1 + vec3(0, ee, 0)) - a1, 0) / ee
+  let nt = (n0 * w0 + n1 * w1) * 0.18
+  let rough = bump * (0.7 + 0.25 * speed)
+  let n = normalize(up + (across * nt.x + flow * nt.y) * rough)
+
+  let ndv = saturate(dot(n, viewDir))
+  let fres = 0.02 + 0.98 * pow(1 - ndv, 5)
+  let sunUp = dot(sunDir, up)
+  let day = saturate(sunUp * 3 + 0.25)
+
+  // Through the water to the bed: per-channel absorption (a stream is never
+  // quite clear: some depth of its own even over the bed).
+  let gap = surfaceGap(worldPos)
+  let trans = exp(-absorb * (min(gap, 60) + 0.8))
+  let deep = 1 - (trans.x + trans.y + trans.z) / 3
+  let body = (shallowColor.rgb * trans + deepColor.rgb * (1 - trans)) * bodyLight
+
+  // White water: rapids where it runs fast, threads where the banks drag.
+  let side = abs(uv.x) + noise(vec3(uv.y * 0.25, 0.5, 2.0)) * 0.12
+  let edge = smoothstep(0, 0.1, gap) * (1 - smoothstep(0.55, 0.98, side))
+  let streak = smoothstep(0.45, 0.75, a0 * w0 + a1 * w1 + 0.5)
+  let rapids = smoothstep(2.2, 3.3, speed)
+  let drag = (1 - smoothstep(0.0, 0.3, gap)) * 0.5 + smoothstep(0.45, 0.85, side) * 0.5
+  let foam = saturate(drag * drag * streak * 0.4 + rapids * streak * 0.8)
+
+  let diffuse = saturate(dot(n, sunDir) * 0.8 + 0.2) * day
+  let albedo = mix(body, foamColor.rgb, foam)
+  let lit = albedo * (sunColor * diffuse + skyColor.rgb * (0.12 + 0.18 * day))
+
+  let rv = reflect(-viewDir, n)
+  let elev = saturate(dot(rv, up))
+  let sky = mix(skyColor.rgb, zenithColor.rgb, pow(elev, 0.45)) * (0.06 + 0.94 * day)
+  let gd = saturate(dot(rv, sunDir))
+  let spec = sunColor * (pow(gd, 220) * 3 + pow(gd, 30) * 0.12) * day * (1 - foam)
+  let reflected = min(fres, 0.6) * (1 - foam)
+  let col = mix(lit, sky, reflected) + spec
+
+  let alpha = saturate(0.45 + deep * 0.5 + fres * 0.35 + foam * 0.6) * edge
+  let dbg = vec3(saturate(speed / 4), fract(uv.y * 0.1), saturate(gap / 6))
+  output color = mix(vec4(col, alpha * instanceColor.a), vec4(dbg, 1), debugView)
+}

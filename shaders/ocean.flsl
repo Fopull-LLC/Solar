@@ -7,13 +7,32 @@
 //
 //   waves    a long swell and a short chop drifting different ways; their
 //            gradient (three samples, along the surface) bends the normal.
-//            FLSL has no vertex stage, so the waves are in the light.
+//            They are in the light, normals only: `output offset` could
+//            move the mesh, but this sphere's vertices are ~28 m apart at
+//            scale 3 — far too coarse to carry a wave.
 //   colour   surfaceGap() is how much water the eye looks through to the
 //            ground behind: shelves go clear turquoise, deep water navy.
 //   sky      the reflected ray sees a horizon-to-zenith gradient of the
 //            world's own air colour, weighted by Fresnel, plus a sun glint.
-//   surf     fieldDistance() at the surface is, in practice, how deep the
-//            water is over the bottom here. Where it shallows, bands of foam
+//            The two ends are the sky as the engine DRAWS it (skyColor the
+//            pale horizon, zenithColor the deep overhead, pushed by
+//            scripts/ocean.lua and climate.lua from atmosphere.lua's air):
+//            a mirror of the rolled pastel was paler than the real sky, and
+//            at a grazing look the water became a flat sheet of it.
+//   body     Beer–Lambert, per channel: the water's own absorption per metre
+//            (`absorb`, from the chemistry, climate.waterAbsorb: clear water
+//            eats red first, tea-brown water blue first) over the view ray's
+//            path through the water (surfaceGap). What comes through is the
+//            lit bed (shallowColor stands for it); what is lost is replaced
+//            by the column's own scattered light (deepColor). Clear shallows
+//            go turquoise, then blue, then navy as they deepen, each world's
+//            water in its own order. `bodyLight` darkens dark water (tannin,
+//            iron, methane), whose lit tint read as sand.
+//   wind     the weather's wind at the eye (scripts, weather.current): waves
+//            run downwind and grow with it, and past a fresh breeze their
+//            crests break into whitecaps.
+//   surf     the vertical depth (surfaceGap × the look's steepness) is how
+//            deep the water is over the bottom here. Where it shallows, bands of foam
 //            roll in toward the waterline (their phase advances as depth
 //            falls) and a swash line runs up the beach and draws back.
 //
@@ -27,22 +46,37 @@ shader ocean {
   uniform deepColor: color = #06263F
   uniform shallowColor: color = #1B8E98
   uniform skyColor: color = #9CC4E4
-  uniform foamColor: color = #EEF6FA
+  uniform zenithColor: color = #4F7FB8
+  uniform bodyLight: float = 1 range(0.1, 2)
   uniform waveScale: float = 0.34 range(0.02, 2)
   uniform waveSpeed: float = 0.35 range(0, 3)
   uniform bump: float = 0.32 range(0, 2)
-  uniform clarity: float = 3.5 range(0.5, 40)
   uniform surfDepth: float = 0.5 range(0.1, 5)
   uniform surfSpacing: float = 0.16 range(0.05, 2)
   uniform surfSpeed: float = 0.3 range(0, 2)
   uniform debugView: float = 0 range(0, 1)
+  // 0 at the shore, 1 from high orbit (scripts/ocean.lua, by the eye's height):
+  // metre-scale waves are sub-pixel from orbit and only shimmer there, so they
+  // smooth out and the sun's glint spreads into the broad sunglint a whole
+  // ocean shows from space.
+  uniform farFade: float = 0 range(0, 1)
+  // Absorption per metre, per channel (scripts: climate.waterAbsorb).
+  uniform absorb: vec3 = vec3(0.45, 0.09, 0.06)
+  // The wind: the direction it blows TOWARD (planet frame = world axes) and
+  // its speed, m/s.
+  uniform windDir: vec3 = vec3(0.6, 0, 0.8)
+  uniform wind: float = 4 range(0, 40)
 
   let up = normalize(objectPos)
   let sunDir = lightDir
   let sunColor = lightColor / max(max(lightColor.x, max(lightColor.y, lightColor.z)), 0.001)
-  let tw = time * waveSpeed
-  let drift = vec3(tw * 0.9, tw * 0.3, tw * -0.6)
-  let chopDrift = drift * -1.9
+  // Waves run downwind, faster and taller as it freshens; the chop crosses
+  // them at an angle.
+  let wdir = normalize(windDir - up * dot(windDir, up) + cross(up, vec3(0.37, 0.83, 0.42)) * 0.001)
+  let windK = saturate(wind / 12)
+  let tw = time * waveSpeed * (0.7 + 0.9 * windK)
+  let drift = wdir * tw * 1.1
+  let chopDrift = (cross(up, wdir) * 0.6 - wdir) * tw * 1.7
   let q = objectPos * waveScale
 
   // Two tangents on the sea sphere; never parallel to `up` in practice.
@@ -53,7 +87,7 @@ shader ocean {
   let h1 = fbm(q + t1 * e + drift, octaves: 2) + noise((q + t1 * e) * 3.3 + chopDrift) * 0.3
   let h2 = fbm(q + t2 * e + drift, octaves: 2) + noise((q + t2 * e) * 3.3 + chopDrift) * 0.3
   let slope = (t1 * (h1 - h0) + t2 * (h2 - h0)) / e
-  let nw = normalize(up - slope * bump)
+  let nw = normalize(up - slope * bump * (0.85 + 0.6 * windK) * (1 - farFade * 0.92))
 
   // Seen from below (a swimmer looking up) the mesh's back face is what draws.
   let side = mix(-1, 1, step(0, dot(up, viewDir)))
@@ -67,11 +101,17 @@ shader ocean {
 
   // Through the water to the ground behind it.
   let gap = surfaceGap(worldPos)
-  let deep = 1 - exp(-gap / clarity)
-  let body = mix(shallowColor.rgb, deepColor.rgb, deep)
+  let trans = exp(-absorb * min(gap, 200))
+  let deep = 1 - (trans.x + trans.y + trans.z) / 3
+  let body = shallowColor.rgb * trans + deepColor.rgb * (1 - trans)
 
   // Surf, keyed to how shallow the water is here.
-  let sd = max(fieldDistance(worldPos), 0)
+  // How deep the water is here: the view ray's path through it (surfaceGap,
+  // read from the drawn depth, so it follows the TRUE terrain outline)
+  // turned vertical by the angle of the look, held at grazing angles. This
+  // was fieldDistance(), which reads the coarse field atlas (7–9 m cells at
+  // scale 3): the foam, swash and waterline followed a stair-stepped outline.
+  let sd = min(gap * max(abs(dot(viewDir, up)), 0.15), 1000)
   let shore = 1 - smoothstep(0, surfDepth, sd)
   let jitter = noise(objectPos * 0.21 + drift * 0.2) * 0.35
   let phase = sd / surfSpacing + time * surfSpeed + jitter
@@ -79,11 +119,14 @@ shader ocean {
   let bubbles = smoothstep(-0.05, 0.6, noise(objectPos * 3.1 + drift * 2.5))
   let swashReach = 0.05 + 0.15 * (sin(time * 1.1 + jitter * 6) * 0.5 + 0.5)
   let swash = 1 - smoothstep(0, swashReach, sd)
-  let foam = saturate((crest * shore * shore * 0.9 + swash) * bubbles)
+  // Whitecaps: past a fresh breeze (~6 m/s) the tallest crests break.
+  let capAt = 1 - smoothstep(5, 16, wind) * 0.55
+  let caps = smoothstep(capAt, capAt + 0.12, h0 * 0.5 + 0.5) * smoothstep(5, 9, wind) * (1 - farFade)
+  let foam = saturate((crest * shore * shore * 0.9 + swash) * bubbles + caps * bubbles * 0.8)
 
   // Light: sun (wrapped a little, water scatters) + a sky-tinted ambient.
   let diffuse = saturate(dot(nw, sunDir) * 0.8 + 0.2) * day
-  let albedo = mix(body, foamColor.rgb, foam)
+  let albedo = mix(body * bodyLight, vec3(0.93, 0.965, 0.98), foam)
   let lit = albedo * (sunColor * diffuse + skyColor.rgb * (0.12 + 0.18 * day))
 
   // The sky as the reflected ray sees it: the bright hazy horizon giving way to
@@ -91,17 +134,20 @@ shader ocean {
   // do; the gradient is what makes them read.
   let rv = reflect(-viewDir, n)
   let elev = saturate(dot(rv, up))
-  let zenith = skyColor.rgb * vec3(0.55, 0.66, 0.86)
-  let sky = mix(skyColor.rgb * 1.05, zenith, pow(elev, 0.45)) * (0.06 + 0.94 * day)
+  let sky = mix(skyColor.rgb, zenithColor.rgb, pow(elev, 0.45)) * (0.06 + 0.94 * day)
   let glintDot = saturate(dot(rv, sunDir))
-  let glint = pow(glintDot, 420) * 7 + pow(glintDot, 48) * 0.18
+  let glint = pow(glintDot, mix(420, 90, farFade)) * mix(7, 2.2, farFade) + pow(glintDot, mix(48, 12, farFade)) * mix(0.18, 0.3, farFade)
   let spec = sunColor * glint * day * (1 - foam) * step(0, side)
   let reflected = min(fres, 0.6) * (1 - foam)
   let col = mix(lit, sky, reflected) + spec
 
   // Feathered where the water meets the ground, so the waterline is a soft
   // wet edge instead of the terrain mesh's polygon outline.
-  let edge = smoothstep(0, 0.1, sd)
+  // (and by the depth behind, so a mesh edge over a dip fades, not cuts).
+  // A lake mesh (climate.lua) marks its vertices uv = (fade, 7); the sea's
+  // own uvs never reach 7. A lake's outermost ring over open water fades.
+  let lakeEdge = mix(1, saturate(uv.x), step(6.5, uv.y))
+  let edge = smoothstep(0, 0.1, sd) * lakeEdge
   let alpha = saturate(mix(0.4, 0.93, deep) + fres * 0.4 + foam * 0.8) * edge
   let dbg = vec3(shore, saturate(gap / 20), saturate(sd / 3))
   output color = mix(vec4(col, alpha * instanceColor.a), vec4(dbg, 1), debugView)

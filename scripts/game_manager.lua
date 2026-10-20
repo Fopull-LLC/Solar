@@ -85,6 +85,26 @@ function exitToMenu()
   scene.load("menu")
 end
 
+-- THE SAVE'S WORLD SCALE (system_generator SCALES): written once, when a save
+-- first enters play, and never again — a world keeps the size it was made at.
+--
+-- The new-save panel writes it on CREATE. A slot without one is either from
+-- before scale versions existed — it has played, or has a base, a fleet, a
+-- frozen parts catalogue — and is version 1, or it is genuinely fresh (a probe
+-- or a tool that only stored a seed) and gets the current scale.
+function worldScale()
+  local v = save.get("g_scale")
+  if v then return v end
+  local gen = findScript("system_generator")
+  local current = (gen and gen.CURRENT_SCALE) or 3
+  local old = save.get("g_played") ~= nil or save.get("base.body") ~= nil
+    or save.get("parts.rating") ~= nil or save.get("fleet.next") ~= nil
+    or save.get("system.home") ~= nil
+  v = old and 1 or current
+  save.set("g_scale", v)
+  return v
+end
+
 function start(node)
   local s = save.slot()
   if s == "main" then return end -- direct editor play: stay out of the way
@@ -115,6 +135,7 @@ function start(node)
   -- so digs survive; a brand-new save generates it first — and alone.
   first_load = save.get("g_played") == nil
   gen.regenerate(seed, {
+    scale = worldScale(),
     pregen = first_load,
     planets = save.get("g_planets"),
     moonChance = save.get("g_moonchance"),
@@ -152,11 +173,24 @@ end
 -- WHERE A NEW SAVE STARTS. It used to be the spawn world's north pole, always,
 -- and the colony is sited wherever the crew is first put down — so on a world
 -- whose pole was under its sea, the player and all five buildings started in
--- the water. Now the pole is only the preference: the search walks directions
--- spread evenly over the world, nearest the pole first, and takes the first
--- one standing clear of the sea with a colony's worth of dry, not-too-steep
--- ground around it (the buildings sit 30–40 m out). A world with no sea uses
--- the same search to stay off cliffs and out of pits.
+-- the water. Then the pole became only a preference: the first direction,
+-- pole-first, standing clear of the sea with a colony's worth of dry,
+-- not-too-steep ground around it (the buildings sit 30–40 m out).
+--
+-- THE POLE WAS THE WRONG PREFERENCE. It is the coldest place on the world:
+-- climate.lua reads it as Snowfield (flora ×0.08), so a new save started with
+-- nothing to harvest in sight — and on a dune world, under a "Snowfield −30 °C"
+-- label over red sand, because the terrain only paints ice caps on ice and
+-- frost worlds. Now every candidate is scored by the CLIMATE the player will
+-- stand in (climate.sampleRel, the same model the flora field grows from):
+-- how much grows there, how temperate it is, and a penalty for high latitude.
+-- The dry-and-flat ring test then runs on the best-scored directions first, and
+-- the pole-first order survives only as the tie-break and the fallback.
+--
+-- This only ever runs for a save with NO base: a loaded save puts the crew back
+-- where they were, and a save whose crew position is missing but whose colony
+-- is sited goes home to the colony (see `base_spawn`) — an existing base is
+-- never re-sited and never re-flattened by this.
 
 -- Ground radius along the direction (dx,dy,dz) from the centre: marched down
 -- the terrain's distance field from above the tallest relief. The field is a
@@ -189,71 +223,241 @@ local function arc_dir(dx, dy, dz, r, arc, ang)
   return ox / l, oy / l, oz / l
 end
 
+-- How good a place to live this is, by the climate: what grows, how mild it
+-- is, how far from the pole. nil when there is no climate model to ask.
+local function climate_score(cl, w, dx, dy, dz, g)
+  if not (cl and w and cl.sampleRel) then return nil end
+  local ok, s = pcall(cl.sampleRel, w, dx * g, dy * g, dz * g)
+  if not ok or not s then return nil end
+  local mild = 1.0 - math.min(1.0, math.abs((s.temp or 0.5) - 0.55) / 0.35)
+  local polar = math.max(0, (s.lat or 0) - 0.6) * 2.5
+  return (s.density or 0) * 1.6 + mild * 0.8 - polar
+end
+
 -- Returns the chosen up direction, the ground radius there, and the sea radius.
 local function dry_site(cx, cy, cz)
   local cl = findScript("climate")
   local sea = (cl and spawn_body) and cl.seaRadius(spawn_body) or 0
+  local w = (cl and spawn_body and cl.worldOf) and cl.worldOf(spawn_body) or nil
   local floor = sea > 0 and sea or -1e9
   local top = math.max(spawn_r, sea) + 12
-  -- Fibonacci directions, sorted pole-first.
+  -- Fibonacci directions, pole-first (the tie-break and the fallback order).
   local N, dirs = 180, {}
   local ga = math.pi * (3 - math.sqrt(5))
   for i = 0, N - 1 do
     local y = 1 - (i + 0.5) / N * 2
     local rr = math.sqrt(1 - y * y)
-    dirs[#dirs + 1] = { math.cos(ga * i) * rr, y, math.sin(ga * i) * rr }
+    dirs[#dirs + 1] = { math.cos(ga * i) * rr, y, math.sin(ga * i) * rr, order = i }
   end
-  local best, best_score = nil, -1e9
+  -- Pass 1: the ground under each direction, and the climate there. Cheap —
+  -- one march per direction — and it drops the drowned ones up front.
+  local cands = {}
   for _, d in ipairs(dirs) do
     local g = ground_r(cx, cy, cz, d[1], d[2], d[3], top)
-    if g and g - floor > 2.5 then
-      -- The colony ring: every sample dry, and the ground not a cliff.
-      local worst, spread = g - floor, 0
-      for ring = 1, 2 do
-        local arc = ring == 1 and 22 or 42
-        for k = 0, 7 do
-          local ox, oy, oz = arc_dir(d[1], d[2], d[3], g, arc, k * math.pi / 4)
-          local gg = ground_r(cx, cy, cz, ox, oy, oz, top)
-          if not gg then worst = -1; break end
-          worst = math.min(worst, gg - floor)
-          spread = math.max(spread, math.abs(gg - g))
-        end
-        if worst < 1.0 then break end
-      end
-      local ok = worst >= 1.0 and spread < 14
-      -- Pole-first among the good ones; the least-bad otherwise.
-      local score = (ok and 1000 or 0) + math.min(worst, 20) - spread * 0.5 + d[2] * 40
-      if ok then return d[1], d[2], d[3], g, sea end
-      if score > best_score then best, best_score = { d[1], d[2], d[3], g }, score end
+    -- A lake (scale 3) is water too, though its surface is not built yet.
+    local wl = g and cl and cl.waterLevelAt and cl.waterLevelAt(spawn_body, d[1], d[2], d[3], g)
+    if g and g - floor > 2.5 and not (wl and g - wl < 2.5) then
+      d.g = g
+      d.climate = climate_score(cl, w, d[1], d[2], d[3], g) or 0
+      cands[#cands + 1] = d
     end
+  end
+  table.sort(cands, function(a, b)
+    if math.abs(a.climate - b.climate) > 1e-6 then return a.climate > b.climate end
+    return a.order < b.order
+  end)
+  -- Pass 2: the colony ring, best climate first. Bounded: a world where the
+  -- first sixty good-climate spots are all cliffs or coastline settles for the
+  -- least-bad one rather than marching the whole sphere twice.
+  local best, best_score = nil, -1e9
+  for i, d in ipairs(cands) do
+    if i > 60 then break end
+    local g = d.g
+    -- The colony ring: every sample dry, and the ground not a cliff.
+    local worst, spread = g - floor, 0
+    for ring = 1, 2 do
+      local arc = ring == 1 and 22 or 42
+      for k = 0, 7 do
+        local ox, oy, oz = arc_dir(d[1], d[2], d[3], g, arc, k * math.pi / 4)
+        local gg = ground_r(cx, cy, cz, ox, oy, oz, top)
+        if not gg then worst = -1; break end
+        local wl2 = cl and cl.waterLevelAt and cl.waterLevelAt(spawn_body, ox, oy, oz, gg)
+        worst = math.min(worst, gg - math.max(floor, wl2 or -1e9))
+        spread = math.max(spread, math.abs(gg - g))
+      end
+      if worst < 1.0 then break end
+    end
+    local ok = worst >= 1.0 and spread < 14
+    if ok then
+      print(string.format("spawn: site climate score %.2f (candidate %d of %d)", d.climate, i, #cands))
+      return d[1], d[2], d[3], g, sea
+    end
+    local score = math.min(worst, 20) - spread * 0.5 + d.climate * 10
+    if score > best_score then best, best_score = { d[1], d[2], d[3], g }, score end
   end
   if best then return best[1], best[2], best[3], best[4], sea end
   return 0, 1, 0, spawn_r, sea
 end
 
+-- A save whose colony is already sited, but with no crew position to restore
+-- (an older save, or one whose crew record went missing): go home to the
+-- colony rather than running the new-site search, which would put the crew
+-- somewhere the base is not. Returns a world position, or nil.
+local function base_spawn()
+  local name = save.get("base.body")
+  local bx, by, bz = save.get("base.x"), save.get("base.y"), save.get("base.z")
+  if not (type(name) == "string" and bx and by and bz) then return nil end
+  local b = space.body(name)
+  if not b then return nil end
+  local l = math.sqrt(bx * bx + by * by + bz * bz)
+  if l < 1e-3 then return nil end
+  return b.x + bx + bx / l * 2.5, b.y + by + by / l * 2.5, b.z + bz + bz / l * 2.5
+end
+
+-- Where a crew with no saved position is put down: home to an EXISTING colony
+-- if there is one (whatever world it is on — the new-site search must never
+-- move a base that already stands), else the best new site on the spawn world.
+-- Global so tests/smoke_siting.lua can hold it to that.
+function spawnPoint(sx, sy, sz, body, radius)
+  -- (A harness names the world; the game has it from the generator already.)
+  if body then spawn_body, spawn_r = body, radius or spawn_r end
+  local hx, hy, hz = base_spawn()
+  if hx then
+    print("spawn: back at the colony on " .. tostring(save.get("base.body")))
+    return hx, hy, hz
+  end
+  local ux, uy, uz, g, sea = dry_site(sx, sy, sz)
+  print(string.format("spawn: %s, %.0f° from the pole",
+    sea > 0 and string.format("%.1f m above the sea", g - sea) or "no sea",
+    math.deg(math.acos(math.max(-1, math.min(1, uy))))))
+  return sx + ux * (g + 2.5), sy + uy * (g + 2.5), sz + uz * (g + 2.5)
+end
+
+
 -- The loading screen's words. `surface` is the step in progress (nil once the
 -- ground is done, when the colony is what is being waited for).
 local REVEAL_MAX = 12.0   -- seconds the curtain may wait on the colony
 
-local function loading_text(el, surface)
+-- Is the spawn world's ground there yet? `elapsed` is seconds on the loading
+-- screen, `d` the signed distance terrain.query gives at the spawn world's
+-- (live) north-pole surface point — small only once ITS field has collision —
+-- and `r` that world's radius. `busy` is terrain.busy(): something is being
+-- generated or streamed in right now. "ready" ends the screen; "stalled" means
+-- the ground has kept us waiting long enough, with NOTHING on its way, to try
+-- the fallback (a big slot file still reading in is not a stall); else "wait".
+-- Global so tests/smoke_reload.lua can hold it to that.
+STALL_FREE = 20.0
+local stall_freed = false
+function loadGate(elapsed, d, r, busy)
+  if d and math.abs(d) < (r or 0) * 0.5 and elapsed > 1.0 then return "ready" end
+  if elapsed > STALL_FREE and not busy then return "stalled" end
+  return "wait"
+end
+
+-- Something to read while the world is made: how to play, not lore. One at a
+-- time, changing every few seconds.
+local TIPS = {
+  "The objectives card (top right) always says what to do next and which way to walk. O hides it.",
+  "Press E at the Command Centre to sign a contract on the Ops Board.",
+  "The first sale of any material at the Commerce Depot pays a discovery premium.",
+  "Hold LEFT MOUSE with the Mining Laser (1) to bore into rock — the deeper, the better the ore.",
+  "The Harvest Cutter (2) takes plants; walk up to one and hold LEFT MOUSE on it.",
+  "TAB or I opens your suit pack. It holds 90 kg — sell at the depot when it fills.",
+  "M opens the orbit map from anywhere — on foot or in flight.",
+  "Land near the base and hold ENTER to recover the craft: most of its cost comes back.",
+  "ESC backs out of one thing at a time. Its CONTROLS page lists every key.",
+  "A pod, a tank, an engine and a parachute make a rocket. Build one at the Vehicle Assembly.",
+}
+local TIP_TIME = 7.0
+
+-- How far along the load is, 0..1. The engine has no percentage to give, so it
+-- is the checklist's step plus an eased guess inside the step — and it never
+-- goes backwards.
+local shown_progress = 0.0
+local function progress_of(el, surface)
+  local p
+  if surface then
+    local tau = first_load and 25.0 or 5.0
+    p = 0.12 + 0.68 * (1 - math.exp(-el / tau))
+  else
+    local since = ready_t and (time - ready_t) or 0
+    p = 0.80 + 0.19 * math.min(1, since / 3.0)
+  end
+  shown_progress = math.max(shown_progress, p)
+  return shown_progress
+end
+
+local LOAD_W = 560
+
+-- The loading screen, described: where you are going, a bar, the checklist
+-- (left-aligned, so the ✓ and › line up — each line used to be centred on its
+-- own), and a tip. The dots after the headline sit in a fixed-width box, so the
+-- headline no longer shuffles sideways as they count.
+local function loading_tree(el, surface)
   local launch = (save.get("shipyard.pilot") or 0) == 1
-  local dots = string.rep(".", 1 + math.floor(el * 2) % 3)
   local where = spawn_body or "a new world"
-  local lines = {
-    (launch and ("Rolling out to the pad on " .. where) or ("Landing on " .. where)) .. dots,
-    "",
-    "✓  Charting the system",
-    surface and ("›  " .. surface) or "✓  The surface",
-    surface and "    Raising the colony" or "›  Raising the colony",
+  local head = launch and ("Rolling out to the pad on " .. where) or ("Landing on " .. where)
+  local dots = string.rep(".", 1 + math.floor(el * 2) % 3)
+  local frac = progress_of(el, surface)
+  local steps = {
+    { done = true, text = "Charting the system" },
+    { done = surface == nil, now = surface ~= nil, text = surface or "The surface" },
+    { done = false, now = surface == nil, text = "Raising the colony" },
+  }
+  local check = {}
+  for i, st in ipairs(steps) do
+    check[#check + 1] = { "row", key = "s" .. i, w = "100%", h = "fit", gap = 10, pad = 0, align = "center",
+      { "text", key = "m", w = 18, h = "fit", textSize = 15,
+        textColor = st.done and { 0.36, 0.88, 0.52 } or (st.now and { 0.28, 0.86, 0.74 } or { 0.30, 0.38, 0.46 }),
+        text = st.done and "✓" or (st.now and "›" or "·") },
+      { "text", key = "t", w = "grow", h = "fit", textSize = 15,
+        textColor = st.done and { 0.62, 0.72, 0.80 } or (st.now and { 0.86, 0.93, 1.0 } or { 0.40, 0.48, 0.56 }),
+        text = st.text } }
+  end
+  local tip = TIPS[1 + math.floor(el / TIP_TIME) % #TIPS]
+  local rows = {
+    { "row", key = "head", w = "fit", h = "fit", gap = 0, pad = 0, align = "end",
+      { "text", key = "h", w = "fit", h = "fit", textSize = 24, textColor = { 0.86, 0.93, 1.0 }, text = head },
+      { "text", key = "d", w = 30, h = "fit", textSize = 24, textColor = { 0.86, 0.93, 1.0 }, text = dots } },
+    { "box", key = "gap1", w = 1, h = 6 },
+    { "row", key = "bar", w = LOAD_W, h = 4, pad = 0, gap = 0, radius = 2, fill = { 0.10, 0.16, 0.22 },
+      { "box", key = "f", w = math.max(4, math.floor(LOAD_W * frac + 0.5)), h = 4, radius = 2,
+        fill = { 0.28, 0.86, 0.74 } } },
+    { "box", key = "gap2", w = 1, h = 4 },
+    { "col", key = "check", w = 300, h = "fit", gap = 6, pad = 0, align = "start",
+      items = check, function(x) return x end },
   }
   if first_load then
-    lines[#lines + 1] = ""
-    lines[#lines + 1] = "A world is built from scratch the first time you land — give it a minute."
+    rows[#rows + 1] = { "text", key = "first", w = LOAD_W, h = "fit", wrap = true, textSize = 13,
+      textAlign = "center", textColor = { 0.46, 0.60, 0.70 },
+      text = "A world is built from scratch the first time you land — give it a minute." }
   end
-  if el > 10 then
-    lines[#lines + 1] = string.format("%d:%02d", math.floor(el / 60), math.floor(el) % 60)
+  rows[#rows + 1] = { "box", key = "gap3", w = 1, h = 14 }
+  rows[#rows + 1] = { "text", key = "tipL", w = LOAD_W, h = "fit", textSize = 11, tracking = 2.0,
+    textAlign = "center", textColor = { 0.46, 0.60, 0.70 }, text = "TIP" }
+  rows[#rows + 1] = { "text", key = "tip", w = LOAD_W, h = "fit", wrap = true, textSize = 15,
+    textAlign = "center", textColor = { 0.70, 0.80, 0.89 }, text = tip }
+  rows[#rows + 1] = { "text", key = "clock", w = LOAD_W, h = "fit", textSize = 12, textAlign = "center",
+    textColor = { 0.36, 0.46, 0.55 },
+    text = el > 10 and string.format("%d:%02d", math.floor(el / 60), math.floor(el) % 60) or " " }
+  return { "col", key = "load", w = "100%", h = "fit", gap = 10, pad = 0, align = "center",
+           items = rows, function(x) return x end }
+end
+
+-- Paint it into the "Loading Text" node (its own one-line text is cleared: the
+-- described tree is the screen now).
+local function paint_loading(el, surface)
+  local n, e = ui_of("Loading Text")
+  if not n then return end
+  -- The curtain: deep navy falling to black rather than one flat black.
+  local bg = find("Loading Screen")
+  if bg and bg.style ~= "load/backdrop" then bg.style = "load/backdrop" end
+  if n.text ~= "" then n.text = "" end
+  if e then
+    if e.width ~= 720 then e.width = 720 end
+    if e.height ~= 460 then e.height = 460 end
   end
-  return table.concat(lines, "\n")
+  if ui and ui.make then ui.make(n, loading_tree(el, surface)) end
 end
 
 -- Is the colony still going up where the crew is? The loading screen waits for
@@ -323,6 +527,18 @@ function update(node, dt)
       n.x, n.y, n.z = sx, hover, sz
       n.vx, n.vy, n.vz = 0, 0, 0
     end
+    -- ASK FOR THE GROUND BY NAME. The engine streams a cold world in when a
+    -- dynamic body comes near it, and that is the crew we just parked here —
+    -- except that, under physics.pause, the hover is a script write the engine
+    -- never moves the body to: residency still sees the astronaut where the
+    -- scene authored it, 60 km off in empty space, and nothing streams.
+    -- A brand-new save never noticed (`terrain.generatePlanet` fills the world
+    -- wherever anyone is), but every RESUMED one — Continue, a save loaded
+    -- from the menu, back from the Vehicle Assembly — streams its world back
+    -- from the slot and sat on the loading screen forever, the base "waiting
+    -- for terrain". Warming the spawn world keeps it resident whatever the
+    -- anchors say, for exactly as long as the curtain is up.
+    if spawn_body and terrain.warm then terrain.warm(spawn_body) end
     -- WHAT IS IT DOING. This screen used to be the galaxy number and three
     -- cycling dots, held for as long as the work took — and on a BRAND NEW
     -- save the work is a whole planet generated from nothing, which is over a
@@ -333,17 +549,25 @@ function update(node, dt)
     -- So it names the place, and shows the steps as a checklist: the engine
     -- has no percentage to give, but a list that ticks is progress you can see.
     -- The first load of a save says it is the slow one, once, in plain words.
-    local ttl = find("Loading Text")
-    if ttl then
-      local el = time - load_t
-      local busy = terrain.busy and terrain.busy() or false
-      ttl.text = loading_text(el, busy and "Shaping the surface" or "Bringing the surface in")
-    end
+    local busy = terrain.busy and terrain.busy() or false
+    paint_loading(time - load_t, busy and "Shaping the surface" or "Bringing the surface in")
     -- Ready = the spawn planet's SURFACE answers: the signed distance at its
     -- (live) north-pole surface point is small only once ITS field has
     -- collision.
     local d = terrain.query(sx, sy + spawn_r, sz)
-    if d and math.abs(d) < spawn_r * 0.5 and time - load_t > 1.0 then
+    local gate = loadGate(time - load_t, d, spawn_r, busy)
+    if gate == "stalled" and not stall_freed then
+      -- Belt and braces: the surface has not answered in STALL_FREE seconds
+      -- and nothing is streaming it in.
+      -- Let the physics tick run so the parked crew is where the engine
+      -- thinks it is too (the hover is re-pinned with zero velocity every
+      -- frame, so nothing falls), and the world streams in around them.
+      stall_freed = true
+      physics.pause(false)
+      print(string.format("game_manager: %s's surface has not answered in %.0f s — letting physics run so it streams in around the crew",
+        tostring(spawn_body), time - load_t))
+    end
+    if gate == "ready" then
       loading = false
       physics.pause(false)
       local astro = find("Astronaut")
@@ -368,12 +592,8 @@ function update(node, dt)
           astro.vx, astro.vy, astro.vz = 0, 0, 0
         end
       elseif astro and not restore_pos_of(astro, "p") then
-        local ux, uy, uz, g, sea = dry_site(sx, sy, sz)
-        astro.x, astro.y, astro.z = sx + ux * (g + 2.5), sy + uy * (g + 2.5), sz + uz * (g + 2.5)
+        astro.x, astro.y, astro.z = spawnPoint(sx, sy, sz)
         astro.vx, astro.vy, astro.vz = 0, 0, 0
-        print(string.format("spawn: %s, %.0f° from the pole",
-          sea > 0 and string.format("%.1f m above the sea", g - sea) or "no sea",
-          math.deg(math.acos(math.max(-1, math.min(1, uy))))))
       end
       -- The overlay stays up until the colony stands: the frames right after
       -- the world goes live are the ones where the base, the flora and the rock
@@ -390,8 +610,7 @@ function update(node, dt)
   end
 
   if reveal_by and not revealing then
-    local ttl = find("Loading Text")
-    if ttl then ttl.text = loading_text(time - load_t, nil) end
+    paint_loading(time - load_t, nil)
     -- A beat after ready at the least (the scatter hitch), then as soon as the
     -- colony is up.
     if time >= reveal_by or (time - ready_t > 1.0 and not base_pending(find("Astronaut"))) then

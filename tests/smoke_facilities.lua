@@ -109,7 +109,23 @@ company = {
   earn = function(v) company.earned = company.earned + v end,
   addRep = function() end,
 }
+-- The fleet board reads flight_ops' fleet. Two craft: one parked on the ground
+-- with no dish (last seen, a transfer is billed), one in orbit over a live link.
+local taken = {}
+local flight_ops = {
+  valid = true,
+  fleetList = function()
+    return {
+      { fid = "c1", name = "Odyssey", body = "Tarn", alt = 1250, status = "in orbit",
+        pe = 300, ap = 1400, pod = true, comms = true, link = true, fee = 0, landed = false },
+      { fid = "c2", name = "Scout", body = "Tarn", alt = -0.2, status = "landed",
+        pod = true, comms = false, link = false, fee = 330, landed = true },
+    }
+  end,
+  takeControlOf = function(fid) taken[#taken + 1] = fid return true, fid end,
+}
 _G.findScript = function(kind)
+  if kind == "flight_ops" then return flight_ops end
   if kind == "planet_walker" then return walker end
   if kind == "facility_menu" then return menu end
   if kind == "company" then return company end
@@ -147,9 +163,30 @@ assert(nodes["Facility Panel"].__el.visible == true, "panel should open on E")
 assert(nodes["Facility Prompt"].__el.visible == false, "prompt hidden while panel open")
 assert(nodes["Facility Title"].text == "Tracking Station", "title should be the facility")
 local body = nodes["Facility Body"].text
-assert(body:find("2 vessel"), "tracking body should count 2 vessels, got: " .. body)
-assert(body:find("Odyssey") and body:find("Scout"), "tracking body should list both ships")
-assert(body:find("bat 100%", 1, true) and body:find("bat 50%", 1, true), "tracking body should show battery %, got: " .. body)
+-- THE FLEET BOARD (review, 2026-10): it listed only dish-carrying craft and
+-- offered no action. Every parked craft is on it now, with where it is and what
+-- it's doing, and the panel's button takes control of the selected one.
+assert(body:find("2 craft"), "tracking body should count 2 craft, got: " .. body)
+assert(body:find("Odyssey") and body:find("Scout"), "tracking body should list both craft")
+assert(body:find("in orbit") and body:find("landed"), "each row says what the craft is doing, got: " .. body)
+assert(body:find("live link") and body:find("last seen"), "the dish is what makes a row live, got: " .. body)
+assert(not body:find("-0 m", 1, true), "an altitude that wobbles under zero never prints \"-0 m\", got: " .. body)
+assert(nodes["Facility Action"].text:find("Take control"), "the board's action takes control, got: "
+  .. tostring(nodes["Facility Action"].text))
+-- ↓ selects the next craft; without a link, the button says what the transfer costs.
+KEYS["down"] = true
+menu.update({}, 1 / 60)
+KEYS["down"] = false
+assert(nodes["Facility Body"].text:find("▸ Scout"), "↓ moves the selection, got: " .. nodes["Facility Body"].text)
+assert(nodes["Facility Action"].text:find("$330", 1, true), "a billed transfer names its price, got: "
+  .. tostring(nodes["Facility Action"].text))
+menu.action()
+assert(taken[1] == "c2", "the action takes control of the SELECTED craft, got: " .. tostring(taken[1]))
+assert(nodes["Facility Panel"].__el.visible == false, "taking control closes the board (the cockpit takes over)")
+KEYS["e"] = true
+menu.update({}, 1 / 60)
+KEYS["e"] = false
+assert(nodes["Facility Panel"].__el.visible == true, "...and E opens it again")
 
 -- Press E again → closes.
 KEYS["e"] = true
@@ -170,11 +207,15 @@ assert(nodes["Facility Panel"].__el.visible == false, "panel should close on Esc
 assert(menu_escTakenAt() == 12.5, "closing on Esc should publish the frame it was spent, got: "
   .. tostring(menu_escTakenAt()))
 
--- Empty registry → friendly message, no crash.
-SAVE["comms.ships"] = {}
+-- Empty fleet → a message that says how a craft gets on the board, no button.
+local full_list = flight_ops.fleetList
+flight_ops.fleetList = function() return {} end
 menu.openMenu("FacTracking")
-assert(nodes["Facility Body"].text:find("No vessels"), "empty registry should show the empty message")
+assert(nodes["Facility Body"].text:find("No craft out there"), "an empty fleet says so, got: "
+  .. nodes["Facility Body"].text)
+assert(nodes["Facility Action"].__el.visible == false, "...with no action to press")
 menu.close()
+flight_ops.fleetList = full_list
 
 -- Hangar action → jumps to the builder.
 menu.openMenu("FacHangar")
@@ -195,7 +236,10 @@ menu.update({}, 1 / 60)
 assert(nodes["Facility Panel"].__el.visible == false, "panel closes while a vessel is being piloted")
 walker.onFoot = true
 
--- …and the camera hiding the body up close must NOT close it.
+-- …and the camera hiding the body up close must NOT close it. (Standing in
+-- the command centre: a panel left behind by walking off closes on its own.)
+local was_x, was_z = astro.x, astro.z
+astro.x, astro.z = planet.x + 40, planet.z + 3
 menu.openMenu("FacCommand")
 astro.visible = false
 menu.update({}, 1 / 60)
@@ -203,6 +247,7 @@ assert(nodes["Facility Panel"].__el.visible == true,
   "panel stays open when only the CAMERA has hidden the astronaut (standing indoors)")
 menu.close()
 astro.visible = true
+astro.x = was_x
 astro.z = planet.z + 500 -- far from every facility
 menu.update({}, 1 / 60)
 assert(nodes["Facility Prompt"].__el.visible == false, "prompt hidden when far from all facilities")
@@ -226,6 +271,51 @@ astro.z = planet.z + 34
 menu.update({}, 1 / 60)
 assert(nodes["Facility Prompt"].__el.visible == false,
   "prompt should be gone 34 m from the command centre")
+
+-- WALK AWAY AND IT CLOSES. A panel opened at the console and left up followed
+-- you round the planet, hiding the world, for as long as you forgot it.
+astro.z = planet.z + 3
+menu.openMenu("FacCommand")
+menu.update({}, 1 / 60)
+assert(nodes["Facility Panel"].__el.visible == true, "the panel stays up while you stand at it")
+astro.z = planet.z + 22        -- a step back from the counter: still in reach + grace
+menu.update({}, 1 / 60)
+assert(nodes["Facility Panel"].__el.visible == true, "a step back does not slam it shut")
+astro.z = planet.z + 34
+menu.update({}, 1 / 60)
+assert(nodes["Facility Panel"].__el.visible == false, "walking away from the building closes its panel")
+astro.x, astro.y, astro.z = planet.x, planet.y + planet.radius, planet.z + 500
+
+-- E GOES WHERE YOU CAME FOR. The Command Centre's E opens the Ops Board and the
+-- Vehicle Assembly's E opens the builder — no overview panel whose only real
+-- content is a button to the screen you wanted.
+local board = { opened = 0, open = false }
+board.openBoard = function() board.opened = board.opened + 1; board.open = true end
+board.isOpen = function() return board.open end
+board.closeBoard = function() board.open = false end
+local plain_fs = _G.findScript
+_G.findScript = function(kind) if kind == "ops_board" then return board end return plain_fs(kind) end
+astro.x, astro.y, astro.z = planet.x + 40, planet.y + planet.radius, planet.z + 3
+menu.update({}, 1 / 60)
+KEYS["e"] = true
+menu.update({}, 1 / 60)
+KEYS["e"] = false
+assert(board.opened == 1 and board.open, "E at the Command Centre opens the Ops Board directly")
+assert(nodes["Facility Panel"].__el.visible == false, "…not the overview panel")
+KEYS["e"] = true
+menu.update({}, 1 / 60)
+KEYS["e"] = false
+assert(board.open == false, "E again closes the board")
+_G.findScript = plain_fs
+LOADED = nil
+astro.x, astro.y, astro.z = planet.x, planet.y + planet.radius, planet.z + 40 + 6
+menu.update({}, 1 / 60)
+assert(prompt_text():find("builder"), "the assembly's prompt says E opens the builder, got: " .. prompt_text())
+KEYS["e"] = true
+menu.update({}, 1 / 60)
+KEYS["e"] = false
+assert(LOADED == "builder", "E at the Vehicle Assembly opens the builder, got: " .. tostring(LOADED))
+assert(nodes["Facility Panel"].__el.visible == false, "…with no overview panel in between")
 astro.x, astro.y, astro.z = planet.x, planet.y + planet.radius, planet.z + 500
 
 -- The Power Plant is a machine with nothing to say: no prompt at all, rather
@@ -380,15 +470,25 @@ assert(not dbody:find("not responding"),
   "the depot panel must BUILD with cargo in it, got: " .. dbody)
 assert(dbody:find("ON THE PAD") and dbody:find("Kestrel"),
   "…listing the landed craft's hold, got: " .. dbody)
-assert(dbody:find("SUIT PACK") and dbody:find("Regolith"),
-  "…and the suit pack, got: " .. dbody)
-assert(dbody:find("WAREHOUSE") and dbody:find("Iron Ore"),
-  "…and the warehouse, got: " .. dbody)
+assert(dbody:find("SUIT PACK"), "…and the suit pack, got: " .. dbody)
+assert(dbody:find("WAREHOUSE"), "…and the warehouse, got: " .. dbody)
+-- The goods themselves are ROWS, one per material, merged across the pad, the
+-- pack and the warehouse — each one its own sale.
+local stock = {}
+for _, e in ipairs(depotStock()) do stock[e.mat] = e end
+assert(stock.regolith and stock.regolith.n == 72 and stock.iron and stock.iron.n == 40,
+  "…one row per material, merged across pad, pack and warehouse")
+-- Nothing has been sold yet, so every row is a first sale and says so.
+assert(stock.crystal.first and stock.crystal.bonus > stock.regolith.bonus,
+  "…marking a first sale, with the rarer premium bigger")
+assert(dbody:find("NEW"), "…and the body explains the NEW mark, got: " .. dbody)
 -- ONE press sells it. It used to be two — unload, then sell — and a player
 -- with a full pack pressed once, saw "12 units into the warehouse", and left
 -- with no money. The label names the whole haul's price: pad + pack + shed.
 -- (regolith 72×3 + silica 3×11 + iron 40×18 + crystal 2×140, standing +12%.)
-local want = math.floor((72 * 3 + 3 * 11 + 40 * 18 + 2 * 140) * 1.12)
+-- Plus the discovery premiums, because every one of these is a first sale.
+local want = math.floor(72 * 3 * 1.12) + math.floor(3 * 11 * 1.12) + math.floor(40 * 18 * 1.12)
+  + math.floor(2 * 140 * 1.12) + 150 * (1 + 0) + 150 * (1 + 1) * 2 + 150 * (1 + 3)
 assert(nodes["Facility Action"].text:find("Sell everything"),
   "…with a single sell action, got: " .. nodes["Facility Action"].text)
 assert(nodes["Facility Action"].text:find("$" .. want, 1, true),

@@ -640,7 +640,7 @@
             ],
             parent: Some(3),
             ui: Some((
-                place: Pin(anchor: Top, offset: (0.0, 560.0)),
+                place: Pin(anchor: Top, offset: (98.0, 560.0)),
                 size: (Fixed(180.0), Fixed(38.0)),
                 shape: Some((
                     fill: (0.03, 0.06, 0.08, 0.8),
@@ -1346,7 +1346,7 @@
                     border: 1.0,
                     border_color: (0.28, 0.86, 0.74, 0.25),
                 )),
-                slider: Some((min: 3000.0, max: 12000.0, value: 5000.0, dir: Row, flip: false, interact: true)),
+                slider: Some((min: 30000.0, max: 150000.0, value: 60000.0, dir: Row, flip: false, interact: true)),
             )),
         ),
         (
@@ -1570,7 +1570,7 @@
                     border: 1.0,
                     border_color: (0.28, 0.86, 0.74, 0.25),
                 )),
-                slider: Some((min: 60.0, max: 200.0, value: 100.0, dir: Row, flip: false, interact: true)),
+                slider: Some((min: 400.0, max: 900.0, value: 600.0, dir: Row, flip: false, interact: true)),
             )),
         ),
         (
@@ -1682,7 +1682,7 @@
                     border: 1.0,
                     border_color: (0.28, 0.86, 0.74, 0.25),
                 )),
-                slider: Some((min: 150.0, max: 400.0, value: 230.0, dir: Row, flip: false, interact: true)),
+                slider: Some((min: 600.0, max: 1100.0, value: 950.0, dir: Row, flip: false, interact: true)),
             )),
         ),
         (
@@ -1794,7 +1794,7 @@
                     border: 1.0,
                     border_color: (0.28, 0.86, 0.74, 0.25),
                 )),
-                slider: Some((min: 2.0, max: 8.0, value: 4.5, dir: Row, flip: false, interact: true)),
+                slider: Some((min: 1.5, max: 6.0, value: 3.5, dir: Row, flip: false, interact: true)),
             )),
         ),
         (
@@ -1906,7 +1906,7 @@
                     border: 1.0,
                     border_color: (0.28, 0.86, 0.74, 0.25),
                 )),
-                slider: Some((min: 6.0, max: 16.0, value: 10.0, dir: Row, flip: false, interact: true)),
+                slider: Some((min: 5.0, max: 12.0, value: 8.5, dir: Row, flip: false, interact: true)),
             )),
         ),
         (
@@ -2214,6 +2214,107 @@
                     kind: "sfx",
                     enabled: true,
                     params: [],
+                ),
+            ],
+        ),
+        // ── Settings ────────────────────────────────────────────────────────
+        //
+        // The SETTINGS button beside QUIT, the page it opens (menu_settings.lua,
+        // drawing settings.lua's rows), and the node that applies the player's
+        // settings and plays the menu's music (settings + soundscape). Appended
+        // LAST, like everything since the slots: `parent` is positional.
+        (
+            name: "Menu Settings",
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Empty,
+            scripts: [
+                (
+                    kind: "menu_ng_button",
+                    enabled: true,
+                    params: [
+                    ],
+                    strs: [
+                        ("role", "settings"),
+                    ],
+                ),
+            ],
+            parent: Some(3),
+            ui: Some((
+                place: Pin(anchor: Top, offset: (-98.0, 560.0)),
+                size: (Fixed(180.0), Fixed(38.0)),
+                shape: Some((
+                    fill: (0.03, 0.06, 0.08, 0.8),
+                    radius: 9.0,
+                    border: 1.0,
+                    border_color: (0.46, 0.6, 0.7, 0.35),
+                )),
+                text: Some((
+                    text: "SETTINGS",
+                    size: 13.0,
+                    color: (0.46, 0.6, 0.7, 1.0),
+                    align: Center,
+                    valign: Center,
+                    fit: false,
+                    tracking: 3.0,
+                )),
+                button: true,
+                style: "menu/secondary",
+            )),
+        ),
+        (
+            name: "Settings Panel",
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Empty,
+            scripts: [
+                (
+                    kind: "menu_settings",
+                    enabled: true,
+                    params: [],
+                ),
+            ],
+            parent: Some(2),
+            ui: Some((
+                place: Pin(anchor: Center, offset: (0.0, 0.0)),
+                size: (Fixed(580.0), Fit),
+                stack: Some((
+                    dir: Column,
+                    gap: 0.0,
+                    pad: 0.0,
+                    align: Start,
+                    justify: Start,
+                )),
+                visible: false,
+                opacity: 1.0,
+            )),
+        ),
+        (
+            name: "Sound and Settings",
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Empty,
+            scripts: [
+                (
+                    kind: "settings",
+                    enabled: true,
+                    params: [],
+                ),
+                (
+                    kind: "soundscape",
+                    enabled: true,
+                    params: [
+                        ("menu", 1.0),
+                    ],
                 ),
             ],
         ),

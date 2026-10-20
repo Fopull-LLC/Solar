@@ -3,20 +3,42 @@
 // Pale, scratched, nearly opaque, with a cold sheen at grazing angles. Its own
 // shader rather than a branch of ocean.flsl: FLSL has no branches, so a frozen
 // switch there made every liquid sea pay for the ice noise too.
+//
+// What makes it read as ICE and not as a sand flat (scale 3, 2026-10: under a
+// warm star a matte grey-white sheet was beige from every height):
+//   * two surfaces: wind-packed SNOW in drifts (white, matte) and bare
+//     CLEAR ice between them (blue, the colour of the water it froze from
+//     seen through it), at the scale of a few tens of metres
+//   * pressure CRACKS, dark blue lines where the floes ground together
+//   * a GLOSS on the bare ice: the sky reflected (horizon to zenith, pushed by
+//     scripts/ocean.lua) by Fresnel, and a broad sun glint
 shader sea_ice {
   stage fragment
   blend alpha
-  uniform iceColor: color = #B6D5E6
+  uniform iceColor: color = #7FA8CC
   uniform frostColor: color = #E4F0F7
   uniform skyColor: color = #9CC4E4
+  uniform zenithColor: color = #4F7FB8
 
   let up = normalize(objectPos)
   let grain = fbm(objectPos * 0.35, octaves: 3) * 0.5 + 0.5
-  let cracks = smoothstep(0.02, 0.0, abs(noise(objectPos * 0.9))) * 0.35
-  let albedo = mix(iceColor.rgb, frostColor.rgb, grain) * (1 - cracks)
+  let drift = smoothstep(0.52, 0.85, fbm(objectPos * 0.045 + vec3(3.1, 0, 1.7), octaves: 3) * 0.5 + 0.5 + grain * 0.15)
+  let crackLine = smoothstep(0.03, 0.0, abs(noise(objectPos * 0.09))) * (1 - drift)
+  let fine = smoothstep(0.02, 0.0, abs(noise(objectPos * 0.9))) * 0.3
+  let bare = mix(iceColor.rgb * (0.62 + 0.15 * grain), iceColor.rgb * vec3(0.4, 0.55, 0.75), crackLine)
+  let albedo = mix(bare, frostColor.rgb * (0.92 + 0.08 * grain), drift) * (1 - fine * (1 - drift))
   let lit = litSurface(albedo)
-  let fres = pow(1 - saturate(dot(up, viewDir)), 4)
+
+  let ndv = saturate(dot(up, viewDir))
+  let fres = 0.03 + 0.97 * pow(1 - ndv, 5)
   let day = saturate(dot(lightDir, up) * 3 + 0.25)
-  let col = mix(lit, skyColor.rgb * (0.1 + 0.9 * day), fres * 0.35)
+  let rv = reflect(-viewDir, up)
+  let elev = saturate(dot(rv, up))
+  let sky = mix(skyColor.rgb, zenithColor.rgb, pow(elev, 0.45)) * (0.1 + 0.9 * day)
+  let sunColor = lightColor / max(max(lightColor.x, max(lightColor.y, lightColor.z)), 0.001)
+  let gd = saturate(dot(rv, lightDir))
+  let gloss = (1 - drift) * (0.75 + 0.25 * grain)
+  let glint = (pow(gd, 90) * 1.6 + pow(gd, 14) * 0.12) * day * gloss
+  let col = mix(lit, sky, min(fres, 0.55) * (0.25 + 0.75 * gloss)) + sunColor * glint
   output color = vec4(col, 0.97 * instanceColor.a)
 }
