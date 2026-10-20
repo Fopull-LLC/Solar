@@ -493,15 +493,15 @@ local function regrow()
   end
 end
 
--- Old saves' holes → ids: the rock nearest each saved position (in the patch
--- plane, where `near` measures) is the one that was broken. A tick after the
--- source is declared: a new source answers `near` in its parent's frame only
--- from its first drawn frame on.
+-- Old saves' holes → ids: the rock nearest each saved position (in the
+-- patch plane, where `near` measures) is the one that was broken. Runs as
+-- soon as the source is declared: since engine 0.117.0-rc3 a parented source
+-- answers `near` in its parent's frame from the frame it is created.
 local function convert_holes(body)
   for hk, c in pairs(convert) do
     local p = patches[c.pk]
     local id = p and p.srcs[c.kid]
-    if id and srcs[id] and time - (srcs[id].made or 0) > 0.05 then
+    if id and srcs[id] then
       local list = breaks[hk]
       for i = 1, #c.xz - 1, 2 do
         local x, z = c.xz[i], c.xz[i + 1]

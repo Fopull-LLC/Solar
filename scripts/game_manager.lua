@@ -527,17 +527,14 @@ function update(node, dt)
       n.x, n.y, n.z = sx, hover, sz
       n.vx, n.vy, n.vz = 0, 0, 0
     end
-    -- ASK FOR THE GROUND BY NAME. The engine streams a cold world in when a
-    -- dynamic body comes near it, and that is the crew we just parked here —
-    -- except that, under physics.pause, the hover is a script write the engine
-    -- never moves the body to: residency still sees the astronaut where the
-    -- scene authored it, 60 km off in empty space, and nothing streams.
-    -- A brand-new save never noticed (`terrain.generatePlanet` fills the world
-    -- wherever anyone is), but every RESUMED one — Continue, a save loaded
-    -- from the menu, back from the Vehicle Assembly — streams its world back
-    -- from the slot and sat on the loading screen forever, the base "waiting
-    -- for terrain". Warming the spawn world keeps it resident whatever the
-    -- anchors say, for exactly as long as the curtain is up.
+    -- ASK FOR THE GROUND BY NAME. Under physics.pause a script's hover never
+    -- reached the engine before 0.117.0-rc3, so residency still saw the crew
+    -- where the scene authored it, 60 km off, and every RESUMED save sat on
+    -- this screen forever. The engine now streams a cold world in around a
+    -- body moved while paused (floptle/0450): Continue, a loaded save and the
+    -- trip back from the Vehicle Assembly reach the base in ~1 s without this
+    -- warm or the stall fallback below. Both stay as belt and braces (and
+    -- tests/smoke_reload.lua holds the warm to it).
     if spawn_body and terrain.warm then terrain.warm(spawn_body) end
     -- WHAT IS IT DOING. This screen used to be the galaxy number and three
     -- cycling dots, held for as long as the work took — and on a BRAND NEW

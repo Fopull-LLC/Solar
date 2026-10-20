@@ -59,11 +59,15 @@ defaults = {
   -- says), so a dense world costs a known amount. The engine draws at most
   -- 20,000 scatter instances a frame across ALL sources (rocks included).
   --
-  -- Measured on engine 0.117 (card 0424): the scatter walks a resident prop
-  -- for ~0.1–0.2 µs a frame and settles arriving ones a few at a time inside
-  -- 1 ms, so this is a look budget more than a frame budget now.
+  -- Measured on engine 0.117.0-rc3 (card 0424, Kail, walking at 6 m/s): a
+  -- resident prop costs ~0.15 µs a frame (2,900 flora + rocks: scatter 0.43 ms
+  -- mean), and arriving chunks are rolled and settled inside a 1 ms slice, so
+  -- this is a look budget more than a frame budget. 6,000 flora plus a
+  -- world's ~1,400 rocks is about 1.1 ms. At reach 1 no world tried so far
+  -- reaches it (Kail peaks near 2,100); it caps a dense world, and `reach`
+  -- above 1 (4,400 flora at 1.5 cost 1.4–2.2 ms under load).
   --@range 1000 18000
-  max_props = 2800,
+  max_props = 6000,
   -- Multiplies every species' reach. Turn it down if the surface ever hitches.
   --@range 0.4 1.5
   reach = 1.0,
@@ -72,8 +76,18 @@ defaults = {
   regrow = 900.0,   -- seconds before a cut plant grows back
   -- Seconds after a patch is planted at which its sources are re-declared
   -- once, so every prop is dropped again onto ground that has finished
-  -- streaming in at full detail (0 = never).
-  resettle = 25.0,
+  -- streaming in at full detail (0 = never). Off since engine 0.117.0-rc3: a
+  -- settle ray meshes the collision cells it reaches (card 0452), so props
+  -- land on full-detail ground the first time, and on Kail a re-settle moved
+  -- nothing on screen (frames before and after differ no more than two
+  -- frames of a still camera do). It was also the plants' flicker: every
+  -- stand near the base blinked out once while its new source settled in.
+  resettle = 0.0,
+  -- Seconds the old source of a re-settled stand keeps drawing beside the new
+  -- one. The new source's props arrive a few a frame (the engine settles them
+  -- inside a 1 ms slice), so dropping the old one first blinked the whole
+  -- stand out for a few frames: the "flicker" on plants near the base.
+  resettle_hold = 2.0,
 
   --@header Ground wash
   -- Grass fields lay a tinted decal on the ground under themselves, so a
@@ -118,12 +132,13 @@ local last_diag = ""
 local motes, mote_t = {}, 0
 local washes = {}   -- "patch:i,j" → decal id (or false: nothing grows there)
 local wash_n = 0
-local wash_info = {}  -- key → { x, y, z (body-rel), base alpha }
+local wash_info = {}  -- key → { x, y, z (body-rel), base alpha, ground probes }
 local wash_fade_t = 0
 local frame_checked = false
-local wash   -- defined below update (ground wash)
+local wash, wash_probes   -- defined below update (ground wash)
 local preload_t = 0
 local swept = false
+local retiring = {} -- { id, pk, spid, t }: re-settled stands' old sources, still drawn until t
 
 local AX = { { 1, 2, 3 }, { 2, 3, 1 }, { 3, 1, 2 } }
 
@@ -254,6 +269,19 @@ end
 -- species (the oldest grows back early).
 local MAX_CUTS = 40
 
+-- Destroy retiring sources whose hold is over (or all of a patch's, or all).
+local function sweep_retiring(pk, all)
+  local keep = {}
+  for _, r in ipairs(retiring) do
+    if all or r.pk == pk or time >= r.t then
+      if scatter and scatter.destroy then scatter.destroy(r.id) end
+    else
+      keep[#keep + 1] = r
+    end
+  end
+  retiring = keep
+end
+
 local function drop_source(id)
   local s = srcs[id]
   if not s then return end
@@ -281,11 +309,13 @@ local function drop_patch(key)
   if not p then return end
   for spid in pairs(p.srcs) do drop_species(p, spid) end
   for spid in pairs(p.bark) do drop_species(p, spid) end
+  sweep_retiring(key)
   if p.node and p.node.valid then p.node:destroy() end
   patches[key] = nil
 end
 
 function clearAll()
+  sweep_retiring(nil, true)
   for key in pairs(patches) do drop_patch(key) end
   for id in pairs(srcs) do drop_source(id) end
   for _, m in ipairs(motes) do if m and m.valid then m:destroy() end end
@@ -512,8 +542,17 @@ end
 
 -- Re-declare one species' sources on one patch (the late re-settle): same
 -- seed, so every plant stands where it stood, and the cuts are re-applied.
+-- The old sources keep drawing for `resettle_hold` seconds while the new
+-- ones' props settle in, then go (sweep_retiring): drop-then-declare left the
+-- stand missing for the frames its props took to arrive.
 local function redeclare(p, sp)
-  drop_species(p, sp.id)
+  for _, id in ipairs({ p.srcs[sp.id], p.bark[sp.id] }) do
+    if id then
+      retiring[#retiring + 1] = { id = id, pk = p.key, spid = sp.id, t = time + params.resettle_hold }
+      srcs[id] = nil
+    end
+  end
+  p.srcs[sp.id], p.bark[sp.id] = nil, nil
   local cl, fg = ref("climate"), ref("flora_gen")
   local w = cl and cl.worldOf(cur_body)
   if not (fg and w) then return end
@@ -521,15 +560,15 @@ local function redeclare(p, sp)
 end
 
 -- Old saves' holes → ids: the plant nearest each saved position (in the
--- patch plane, where `near` measures) is the one that was cut. Run a tick
--- after the source is declared: a new source answers `near` in its parent's
--- frame only from its first drawn frame on.
+-- patch plane, where `near` measures) is the one that was cut. Runs as soon
+-- as the source is declared: since engine 0.117.0-rc3 a parented source
+-- answers `near` in its parent's frame from the frame it is created.
 local function convert_holes()
   for ck, c in pairs(convert) do
     local p = patches[c.pk]
     local id = p and p.srcs[c.spid]
     local body = cur_body and space.body(cur_body)
-    if id and body and srcs[id] and time - (srcs[id].made or 0) > 0.05 then
+    if id and body and srcs[id] then
       local list = cuts[ck]
       local n = 0
       for i = 1, #c.xz - 1, 2 do
@@ -586,6 +625,7 @@ function update(node, dt)
   end
   if time < next_t then return end
   next_t = time + params.interval
+  if #retiring > 0 then sweep_retiring() end
   if not (scatter and scatter.create) then diag("this engine has no scatter") return end
 
   local gm = ref("game_manager")
@@ -833,6 +873,42 @@ end
 -- `tint_alt` every wash is lifted, so from the air nothing has an edge.
 
 
+-- A decal is laid once on the collider under it and never follows the ground
+-- (floptle decal_api), so a wash over ground that is later dug, sculpted or
+-- re-generated hangs in the air. Five points under each wash (its centre and
+-- four round it) remember their distance to the ground when it was laid; once
+-- a second they are read again, and a wash whose ground moved is taken off,
+-- to be laid again on the new ground by the pass that lays new ones.
+local WASH_MOVED = 0.12
+wash_probes = function(body, gx, gy, gz, reach)
+  local l = len(gx, gy, gz)
+  if l < 1e-6 then return nil end
+  local ux, uy, uz = gx / l, gy / l, gz / l
+  local ax, ay, az = 1, 0, 0
+  if math.abs(ux) > 0.9 then ax, ay, az = 0, 1, 0 end
+  local d = ax * ux + ay * uy + az * uz
+  ax, ay, az = ax - ux * d, ay - uy * d, az - uz * d
+  local al = len(ax, ay, az); ax, ay, az = ax / al, ay / al, az / al
+  local bx, by, bz = uy * az - uz * ay, uz * ax - ux * az, ux * ay - uy * ax
+  local pts = {}
+  for _, o in ipairs({ { 0, 0 }, { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }) do
+    local px = gx + (ax * o[1] + bx * o[2]) * reach
+    local py = gy + (ay * o[1] + by * o[2]) * reach
+    local pz = gz + (az * o[1] + bz * o[2]) * reach
+    pts[#pts + 1] = { px, py, pz, terrain.query(body.x + px, body.y + py, body.z + pz) or 0 }
+  end
+  return pts
+end
+
+local function wash_moved(body, pts)
+  if not pts then return false end
+  for _, p in ipairs(pts) do
+    local q = terrain.query(body.x + p[1], body.y + p[2], body.z + p[3])
+    if q and math.abs(q - p[4]) > WASH_MOVED then return true end
+  end
+  return false
+end
+
 wash = function(body, rx, ry, rz, species, fg, alt, w)
   if params.tint == 0 or not (decals and decals.add) or (alt or 0) > params.tint_alt then
     if wash_n > 0 or next(washes) then
@@ -891,7 +967,7 @@ wash = function(body, rx, ry, rz, species, fg, alt, w)
                   if ok and id then
                     washes[key] = id
                     wash_n = wash_n + 1
-                    wash_info[key] = { gx, gy, gz, base }
+                    wash_info[key] = { gx, gy, gz, base, wash_probes(body, gx, gy, gz, S * 0.6) }
                   end
                 end
               end
@@ -915,7 +991,12 @@ wash = function(body, rx, ry, rz, species, fg, alt, w)
     wash_fade_t = time + 1.0
     for key, id in pairs(washes) do
       local inf = id and wash_info[key]
-      if inf then
+      if inf and wash_moved(body, inf[5]) then
+        decals.remove(id)
+        wash_n = wash_n - 1
+        washes[key] = nil      -- pairs() allows clearing the current key
+        wash_info[key] = nil
+      elseif inf then
         local d = len(inf[1] - rx, inf[2] - ry, inf[3] - rz)
         decals.set(id, { alpha = inf[4] * math.max(0, math.min(1, (range - d) / (range * 0.4))) })
       end
@@ -1103,6 +1184,10 @@ function harvest(hitrec, cid)
   local p = patches[rec.patch]
   if p then
     if p.bark[rec.sp.id] then scatter.remove(p.bark[rec.sp.id], rec.inst) end
+    -- …and from a re-settled stand's old sources while they still draw.
+    for _, r in ipairs(retiring) do
+      if r.pk == rec.patch and r.spid == rec.sp.id then scatter.remove(r.id, rec.inst) end
+    end
     local list = cuts_of(rec.patch, rec.sp.id)
     list[#list + 1] = { id = rec.inst, t = time }
     while #list > MAX_CUTS do

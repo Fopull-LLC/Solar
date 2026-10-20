@@ -118,16 +118,16 @@ defaults = {
   laser_radius = 2.4,
   --@range 0.05 1
   laser_strength = 0.85,   -- × radius = the ball each bite subtracts
-  -- Seconds between terrain bites. EVERY bite remeshes the chunks it touches and
-  -- rebuilds their collider (about 5 ms a bite on 0.116, engine card 0357; on
-  -- 0.117-rc2, with the collider built off-thread, still 2.5–7 ms), so
-  -- this is the tool's whole cost to the frame budget. At `bore_speed` a bite
-  -- every 0.24 s steps ~0.43 m against a 2.0 m ball: the ridge between two balls
-  -- is under 3 cm, a fiftieth of a voxel, so the bore is as clean as at 0.12 —
-  -- and half as many frames carry a remesh. Yield is paced by time (`yield`),
-  -- not by bites, so the pack fills exactly as fast.
+  -- Seconds between terrain bites. Every bite remeshes the chunks it touches and
+  -- rebuilds their collider. That cost 5–9 ms of main thread a bite up to
+  -- 0.117-rc2 (engine card 0357), and this was 0.24 to halve it; on rc3 the
+  -- remesh and collider are off the main thread and a 2.4 m bite costs ~0.8 ms
+  -- (headless release bench, 48 bites: median +0.79 ms over the 3 frames after
+  -- it, vs +7.9 ms on rc2). At `bore_speed` a bite every 0.12 s steps ~0.22 m
+  -- against a 2.0 m ball. Yield is paced by time (`yield`), not by bites, so the
+  -- pack fills exactly as fast at any rate.
   --@range 0.02 0.5 --@units s
-  laser_rate = 0.24,
+  laser_rate = 0.12,
   --@range 0.2 6 --@units m/s
   bore_speed = 1.8,        -- how fast the cut eats forward into rock
   --@range 0.3 4 --@units m
@@ -157,7 +157,7 @@ defaults = {
   --@range 0.2 4 --@units m
   spade_radius = 1.4,
   --@range 0.02 0.5 --@units s
-  spade_rate = 0.14,
+  spade_rate = 0.12,
   --@range 0.05 1
   spade_strength = 0.6,
   --@range 1 12 --@units m
@@ -1063,7 +1063,7 @@ local function fire_spade(node, mode, h)
   -- the wait, and on a planet that orbits at ~90 m/s the world-space hit point
   -- "moves" a metre or more every frame — so the spade sculpted EVERY frame
   -- (40–60 a second), each with a remesh and a collider rebuild: 3–6 ms of
-  -- physics a frame, against ~1 ms at the intended seven a second.
+  -- physics a frame (on 0.116), against ~1 ms at the intended eight a second.
   if (time - last_t) < params.spade_rate then return end
   last_x, last_y, last_z, last_t = h.x, h.y, h.z, time
   terrain.sculpt(h.x, h.y, h.z, params.spade_radius, params.spade_strength, mode)
