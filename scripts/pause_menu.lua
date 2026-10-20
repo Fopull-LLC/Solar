@@ -412,7 +412,9 @@ function update(node, dt)
 
   toast()
 
-  if input.pressed("escape") then
+  -- (an Esc that calls off a rebind on the Controls tab is the rebind's)
+  local st = open and page == "settings" and ref("settings") or nil
+  if input.pressed("escape") and not (st and st.rebinding and st.rebinding()) then
     if open then
       -- Esc backs out of a page first, then out of the menu.
       if page ~= "menu" then page = "menu" else close() end

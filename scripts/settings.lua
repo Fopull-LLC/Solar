@@ -31,6 +31,8 @@
 --   st.lookScale, st.invertY              read by planet_camera every frame
 --   st.rows(w)                            the settings screen's rows
 --   st.flush()                            write anything pending now
+--   st.resetAllBindings()                 every input action back to input.ron's key
+--   st.rebinding()                        a rebind is waiting for its key (Esc is its)
 
 -- The mixer's buses, in the order the screen shows them, and each one's fader
 -- in project.ron. A volume slider is an OFFSET from that fader, not a
@@ -60,7 +62,8 @@ local DEFAULTS = {
   invert_y = false,
 }
 -- …and the ones whose default is "leave it alone" (a nil can't sit in a table).
-local OPTIONAL = { "fullscreen", "display", "text_scale", "captions", "reduced_motion", "color_filter" }
+local OPTIONAL = { "fullscreen", "display", "text_scale", "captions", "reduced_motion", "color_filter",
+                   "bindings" }
 local KEYS = {}
 for k in pairs(DEFAULTS) do KEYS[#KEYS + 1] = k end
 for _, k in ipairs(OPTIONAL) do KEYS[#KEYS + 1] = k end
@@ -123,6 +126,7 @@ function flush()
   with_settings(function()
     for k in pairs(keys) do
       if k == "gfx_level" then save.set("gfx_level", values[k])
+      elseif values[k] == nil then save.delete("opt_" .. k)
       else save.set("opt_" .. k, values[k]) end
     end
     save.flush()
@@ -263,6 +267,15 @@ local APPLY = {
     local v = get("color_filter")
     if v and access and access.setColorFilter then pcall(access.setColorFilter, v) end
   end,
+  -- The player's rebinds (input.saveBindings text). Actions input.ron no
+  -- longer has are skipped, and ones the text leaves out keep input.ron's.
+  bindings = function()
+    local v = get("bindings")
+    if type(v) == "string" and input and input.loadBindings then
+      local ok, err = input.loadBindings(v)
+      if not ok then print("settings: bindings " .. tostring(err)) end
+    end
+  end,
 }
 for _, b in ipairs(BUSES) do APPLY["vol_" .. b] = function() apply_bus(b) end end
 
@@ -378,13 +391,7 @@ end
 local function mode_rows(out)
   local mons = {}
   if app and app.monitors and app.displayModes and app.setDisplayMode then
-    -- (0.117.0-rc2 lists every monitor twice, the copies indexed after the
-    -- originals: one entry per name and place is kept)
-    local seen = {}
-    for _, m in ipairs(app.monitors()) do
-      local k = string.format("%s@%s,%s", tostring(m.name), tostring(m.x), tostring(m.y))
-      if not seen[k] then seen[k], mons[#mons + 1] = true, m end
-    end
+    mons = app.monitors()
   end
   if #mons == 0 then
     out[#out + 1] = hint("resn", "Resolution follows the window here (the editor, or a run with no window).")
@@ -496,74 +503,113 @@ end
 
 -- ── the engine's own pages ──────────────────────────────────────────────────
 -- Controls (press-to-bind, one row per input action) and Accessibility are the
--- engine's (ui.engineSettings), in Solar's styles. The page needs a container
--- no description owns: a description replaces the made elements under any
--- container it names, the page's rows included, and this screen is described
--- every frame. So the page lives in a one-row repeater
--- (prefabs/SettingsHost.prefab.ron), whose row the description leaves alone.
-local ENGINE_STYLES = { label = "panel/body", button = "panel/choice", value = "panel/cell" }
+-- engine's (ui.engineSettings), in Solar's styles. This screen is described
+-- every frame, so the page is built with no container of its own and its
+-- description (`panel:tree()`) is placed among this tab's rows (0.117.0-rc3).
+-- A slot takes ui.make properties as well as a style, so the page is laid out
+-- the way every other row here is: a label column, then the value.
+local ENGINE_STYLES = {
+  page = { gap = 9, pad = 0, w = "100%", h = "fit", align = "start" },
+  row = { gap = 10, pad = 0, w = "100%", h = "fit", align = "center" },
+  label = { style = "panel/body", w = LABEL_W, h = "fit" },
+  button = { style = "panel/choice", w = "grow", h = 30 },
+  value = { style = "panel/cell", inset = 0, textAlign = "center", textValign = "center" },
+}
 -- The engine's names for what it changed → this store's keys.
 local ENGINE_KEY = { textScale = "text_scale", colorFilter = "color_filter",
                      reducedMotion = "reduced_motion", captions = "captions" }
-local eng = { page = nil, panel = nil, host = nil, missed = nil }
+local eng = { page = nil, panel = nil }
 
--- A style paints but does not size, and the page's elements are sized to fit:
--- its labels and buttons are given this screen's column and button size here,
--- the way every other row of it is laid out (a label column, then the value).
-local function dress(host)
-  for _, page in ipairs(host:children()) do
-    for _, row in ipairs(page:children()) do
-      for _, el in ipairs(row:children()) do
-        local ue = el:getcomponent("UiElement")
-        if ue then
-          local want_w, want_h = nil, nil
-          if el.name == "label" then want_w = LABEL_W
-          elseif el.name == "value" then want_w, want_h = 240, 30 end
-          if want_w and ue.width ~= want_w then ue.width = want_w end
-          if want_h and ue.height ~= want_h then ue.height = want_h end
-          if el.name == "value" then
-            -- its text: inset the way a choice button's own text sits
-            for _, t in ipairs(el:children()) do
-              local te = t:getcomponent("UiElement")
-              if te and (te.posX ~= 10 or te.posY ~= 7) then te.posX, te.posY = 10, 7 end
-            end
-          end
-        end
-      end
-    end
-  end
+-- The player's bindings, as input.saveBindings() wrote them, are kept in the
+-- store with everything else; `start` puts them back. A rebind on the page, or
+-- Reset, writes them (Reset forgets them, so a later input.ron is followed).
+local function keep_bindings()
+  if not (input and input.saveBindings) then return end
+  values.bindings = input.saveBindings()
+  pending.bindings = true
+  pending_at = clock
 end
 
-local function engine_host()
-  return { "col", key = "engineHost", w = "100%", h = "fit", gap = 0, pad = 0,
-           template = "SettingsHost", count = 1 }
+-- The rebind page told us an action changed (published for a test probe too).
+function bindingsChanged(action) keep_bindings() end
+
+-- Every action back to input.ron's binding.
+function resetAllBindings()
+  if not (input and input.resetBindings) then return end
+  input.resetBindings()
+  values.bindings = nil
+  pending.bindings = true
+  pending_at = clock
+  if eng.panel and eng.panel.refresh then eng.panel:refresh() end
 end
 
--- The page this tab wants, built into the host once the repeater has made it.
-local function engine_page(page)
-  if not eng.panel or eng.page ~= page or not (eng.host and eng.host.valid) then
-    eng.panel, eng.page = nil, page
-    -- (the repeater makes its row a frame after the description asks for it)
-    if eng.missed and clock - eng.missed < 0.1 then return end
-    eng.host = find and find("Settings Host") or nil
-    if not (eng.host and ui and ui.engineSettings) then eng.host, eng.missed = nil, clock return end
-    eng.missed = nil
-    eng.panel = ui.engineSettings(eng.host, page, {
-      styles = ENGINE_STYLES,
-      filter = page == "controls" and "keyboard" or nil,
-      onChanged = function(key, value)
-        local k = ENGINE_KEY[key]
-        if k then values[k] = value; pending[k] = true; pending_at = clock end
-      end,
-    })
-  end
+function storedBindings() return values.bindings end
+
+-- Is a rebind waiting for its key (or did Esc just call one off)? The screens
+-- that close on Esc ask, so the Esc that cancels a rebind doesn't also shut
+-- the settings screen. (A rebind cancelled by Esc is seen by the page a frame
+-- later, so the frame it was last seen waiting counts too.)
+local waited_at = -1
+function rebinding()
+  return (eng.panel ~= nil and eng.panel.waiting ~= nil) or clock - waited_at < 0.1
 end
+
+-- The page this tab wants (made once; its rows are described every frame).
+local function engine_panel(page)
+  if eng.panel and eng.page == page then return eng.panel end
+  eng.panel, eng.page = nil, page
+  if not (ui and ui.engineSettings) then return nil end
+  local ok, p = pcall(ui.engineSettings, nil, page, {
+    styles = ENGINE_STYLES,
+    filter = page == "controls" and "keyboard" or nil,
+    onChanged = function(key, value)
+      if key == "binding" then keep_bindings() return end
+      local k = ENGINE_KEY[key]
+      if k then values[k] = value; pending[k] = true; pending_at = clock end
+    end,
+  })
+  if not ok then print("settings: " .. tostring(p)) return nil end
+  eng.panel = p
+  return p
+end
+
+-- The engine page's rows, or nil when this build has none.
+local function engine_rows(page)
+  local p = engine_panel(page)
+  if not (p and p.tree) then return nil end
+  return p:tree()
+end
+
+-- Actions Solar's scripts read (input.ron also carries the template's fighting
+-- motions — qcf, dp… — which nothing here uses and nobody should rebind).
+local REBINDABLE = { Jump = true, Interact = true, Sprint = true, Crouch = true, Fire = true,
+                     Pause = true, LookEnable = true, ShiftLock = true, Zoom = true }
 
 local function controls_rows(out)
-  out[#out + 1] = engine_host()
-  out[#out + 1] = hint("kh", "Click an action, then press its new key; Esc cancels. This reaches "
-    .. "the input actions only: most of Solar's keys are fixed for now, and the Controls page "
-    .. "of the pause menu lists them. A new key is added beside the old one, for this session.")
+  local page = engine_rows("controls")
+  if not page then
+    out[#out + 1] = hint("kn", "Rebinding is not available on this engine build.")
+    return
+  end
+  local kept = {}
+  for i = 2, #page do
+    local r = page[i]
+    if type(r) == "table" and REBINDABLE[r.key] then kept[#kept + 1] = r end
+  end
+  for i = #page, 2, -1 do page[i] = nil end
+  for _, r in ipairs(kept) do page[#page + 1] = r end
+  out[#out + 1] = page
+  out[#out + 1] = line("kreset", {
+    label(""),
+    { "button", key = "reset", style = "panel/choice", w = "grow", h = 30, textAlign = "center",
+      text = "Reset to defaults", disabled = values.bindings == nil, onClicked = function()
+        local fx = ref("sfx"); if fx then fx.play("click") end
+        resetAllBindings()
+      end },
+  })
+  out[#out + 1] = hint("kh", "Click an action, then press its new key; Esc cancels. The new key "
+    .. "replaces the old one and is kept for next time. This reaches the input actions only: "
+    .. "most of Solar's keys are fixed for now, and the Controls page of the pause menu lists them.")
 end
 
 local function access_rows(out)
@@ -571,8 +617,9 @@ local function access_rows(out)
     out[#out + 1] = hint("na", "Accessibility options are not available on this engine build.")
     return
   end
-  if ui and ui.engineSettings then
-    out[#out + 1] = engine_host()
+  local page = engine_rows("accessibility")
+  if page then
+    out[#out + 1] = page
     out[#out + 1] = hint("xh", "Click a value to step through it. Captions name the sounds a "
       .. "flight tells you by ear alone; reduced motion stills the camera shake; the colour "
       .. "filter corrects for protanopia, deuteranopia or tritanopia.")
@@ -604,11 +651,7 @@ end
 local TABS = {
   { id = "display", label = "Display", build = display_rows },
   { id = "camera", label = "Camera", build = camera_rows },
-  -- Hidden from the tab bar until rebinding can stick: the engine's page adds a
-  -- binding instead of replacing it, there is no Lua call to restore a saved
-  -- one, and Solar's scripts don't read input actions yet (card 0391).
-  -- `showTab("controls")` still opens it.
-  { id = "controls", label = "Controls", build = controls_rows, engine = "controls", hidden = true },
+  { id = "controls", label = "Controls", build = controls_rows, engine = "controls" },
   { id = "audio", label = "Audio", build = audio_rows },
   { id = "access", label = "Accessibility", build = access_rows, engine = "accessibility" },
 }
@@ -656,22 +699,19 @@ end
 
 function update(node, dt)
   clock = clock + (dt or 0)
-  -- The engine page of the open tab: built once its host is there, polled
-  -- every frame (a key pressed to bind arrives between frames), let go when
-  -- the screen closes or the tab changes.
+  -- The engine page of the open tab is polled every frame (a key pressed to
+  -- bind arrives between frames) and let go when the screen closes or the tab
+  -- changes; a rebind still waiting for its key is called off then.
   local want = nil
   if clock - rows_at < 0.25 then
     for _, t in ipairs(TABS) do if t.id == tab then want = t.engine end end
   end
-  if want == "accessibility" and not access then want = nil end
-  if want then
-    engine_page(want)
-    if eng.panel then
-      eng.panel:update()
-      if eng.host and eng.host.valid and eng.host.children then dress(eng.host) end
-    end
-  elseif eng.panel or eng.host then
-    eng.panel, eng.host, eng.page = nil, nil, nil
+  if eng.panel and eng.page == want then
+    if eng.panel.waiting then waited_at = clock end
+    eng.panel:update()
+  elseif eng.panel then
+    if eng.panel.waiting and input and input.cancelRebind then input.cancelRebind() end
+    eng.panel, eng.page = nil, nil
   end
   -- A slider fires every frame it moves; the store is written once it rests.
   if pending_at and clock - pending_at > 0.5 then flush() end

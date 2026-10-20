@@ -67,7 +67,8 @@ end
 
 function update(node, dt)
   if not open then return end
-  if input.pressed("escape") then
+  local st = ref("settings")
+  if input.pressed("escape") and not (st and st.rebinding and st.rebinding()) then
     local fx = ref("sfx"); if fx then fx.play("close") end
     closePanel()
     return

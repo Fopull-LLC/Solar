@@ -28,6 +28,7 @@ local save = {
   slot = function(name) if name then active = name; slots[name] = slots[name] or {} end return active end,
   get = function(k, d) local v = slots[active][k]; if v == nil then return d end return v end,
   set = function(k, v) slots[active][k] = v end,
+  delete = function(k) local had = slots[active][k] ~= nil; slots[active][k] = nil; return had end,
   flush = function() flushes = flushes + 1; return true end,
 }
 
@@ -282,11 +283,9 @@ end
 -- ── 6b. RESOLUTION AND MONITOR (0.117: app.monitors / displayModes) ─────────
 local modes_set = {}
 app.monitors = function()
-  -- (as 0.117.0-rc2 answers on a two-monitor desktop: each one twice)
+  -- (a two-monitor desktop; since 0.117.0-rc3 the engine lists each once)
   return { { index = 1, name = "DP-1", x = 0, y = 0, width = 2560, height = 1440, refresh = 144, current = true },
-           { index = 2, name = "HDMI-A-1", x = 2560, y = 0, width = 1920, height = 1080, refresh = 60 },
-           { index = 3, name = "DP-1", x = 0, y = 0, width = 2560, height = 1440, refresh = 144, current = true },
-           { index = 4, name = "HDMI-A-1", x = 2560, y = 0, width = 1920, height = 1080, refresh = 60 } }
+           { index = 2, name = "HDMI-A-1", x = 2560, y = 0, width = 1920, height = 1080, refresh = 60 } }
 end
 app.displayModes = function(mon)
   if mon == 2 then return { { width = 1920, height = 1080, refresh = 60, monitor = 2 },
@@ -311,7 +310,7 @@ ok(res ~= nil, "the Display tab has a Resolution row when there is a window")
 ok(find_el(st5.rows(580), "mon") ~= nil, "...and a Monitor choice with two monitors")
 local nmon = 0
 walk(find_el(st5.rows(580), "mon"), function(e) if e[1] == "button" then nmon = nmon + 1 end end)
-ok(nmon == 2, "...each monitor once, though the engine lists each twice (" .. nmon .. ")")
+ok(nmon == 2, "...one choice per monitor (" .. nmon .. ")")
 local function res_text() local v = find_el(st5.rows(580), "res"); local t; walk(v, function(e) if e.key == "v" then t = e.text end end); return t end
 ok(res_text():find("2560 × 1440") and res_text():find("144 Hz"), "...showing the size in use, at its highest refresh: " .. res_text())
 find_el(st5.rows(580), "dn").onClicked()
@@ -341,38 +340,91 @@ ok(find_el(st5.rows(580), "res") == nil and find_el(st5.rows(580), "resn") ~= ni
   "no window (floptle run): no Resolution row, a line saying it follows the window")
 app.monitors, app.displayModes, app.setDisplayMode, _G.camera = nil, nil, nil, nil
 
--- ── 6c. THE ENGINE'S PAGES (0.117: ui.engineSettings) in a repeater host ─────
+-- ── 6c. THE ENGINE'S PAGES (0.117: ui.engineSettings) in the described screen ─
+-- Built with no container (0.117.0-rc3) and placed by its description, polled
+-- every frame; the Controls page keeps the player's rebinds in the store.
 local built, polled = {}, 0
-local host = { valid = true }
 _G.ui = { engineSettings = function(container, page, opts)
-  built[#built + 1] = { container = container, page = page, opts = opts }
-  return { update = function() polled = polled + 1 end }
+  local p = { container = container, page = page, opts = opts, waiting = nil }
+  function p:tree()
+    if page == "controls" then
+      return { "col", key = "controls",
+        { "row", key = "Jump", { "text", key = "label", text = "Jump" },
+          { "button", key = "value", onClicked = function() p.waiting = "Jump" end } },
+        { "row", key = "qcf", { "text", key = "label", text = "qcf" } } }
+    end
+    return { "col", key = "accessibility", { "row", key = "textScale" } }
+  end
+  function p:update() polled = polled + 1 end
+  function p:refresh() end
+  built[#built + 1] = p
+  return p
 end }
+local binds = { text = "JUMP=Space", loaded = {}, resets = 0, cancels = 0 }
+_G.input = {
+  saveBindings = function() return binds.text end,
+  loadBindings = function(t) binds.loaded[#binds.loaded + 1] = t; return true end,
+  resetBindings = function() binds.resets = binds.resets + 1; binds.text = "JUMP=Space"; return true end,
+  cancelRebind = function() binds.cancels = binds.cancels + 1 end,
+}
 local st7 = load_settings()
 st7.start({})
-rawset(st7, "find", function(name) if name == "Settings Host" then return host end end)
+ok(#binds.loaded == 0, "no rebinds kept yet: nothing is loaded over input.ron's")
 st7.showTab("controls")
 local crow = st7.rows(580)
-ok(find_el(crow, "engineHost") and find_el(crow, "engineHost").template == "SettingsHost",
-  "the Controls tab hosts the engine's page in a one-row repeater")
+ok(#built == 1 and built[1].page == "controls" and built[1].container == nil,
+  "the Controls tab is the engine's page, built with no container of its own")
+ok(type(built[1].opts.styles.button) == "table" and built[1].opts.styles.button.style == "panel/choice",
+  "...in Solar's styles, with this screen's sizes")
+ok(find_el(crow, "controls") and find_el(crow, "Jump"), "...and its description is among the tab's rows")
+ok(find_el(crow, "qcf") == nil, "...without the template's fighting-game motions")
+ok(find_el(crow, "reset") and find_el(crow, "reset").disabled == true,
+  "...with a Reset to defaults button, idle while nothing is rebound")
 st7.update({}, 1 / 60)
-ok(#built == 1 and built[1].page == "controls" and built[1].container == host,
-  "...and builds the engine's Controls page into it")
-ok(built[1].opts.styles.button == "panel/choice", "...in Solar's styles")
 st7.rows(580); st7.update({}, 1 / 60)
-ok(#built == 1 and polled >= 1, "...once, then polls it every frame (press-to-bind)")
+ok(#built == 1 and polled >= 2, "...made once, then polled every frame (press-to-bind)")
+-- a rebind: the page says so, and the bindings are kept in the settings store
+find_el(st7.rows(580), "Jump")[3].onClicked()
+ok(st7.rebinding() == true, "while a rebind waits for its key, Esc is the rebind's, not the screen's")
+built[1].waiting = nil
+binds.text = "JUMP=J"
+built[1].opts.onChanged("binding", "Jump")
+run(st7, 1.0)
+ok(slots.settings.opt_bindings == "JUMP=J", "a rebind is kept in the settings store")
+ok(slots.slot11.opt_bindings == nil, "...never in the game's slot")
+ok(st7.rebinding() == false, "...and the screen has its Esc back")
+local st8 = load_settings()
+st8.start({})
+ok(binds.loaded[#binds.loaded] == "JUMP=J", "a restart puts the player's bindings back")
+st8.showTab("controls")
+local rbtn = find_el(st8.rows(580), "reset")
+ok(rbtn and rbtn.disabled == false, "Reset is live once something is rebound")
+rbtn.onClicked()
+run(st8, 1.0)
+ok(binds.resets == 1 and slots.settings.opt_bindings == nil,
+  "Reset to defaults returns input.ron's bindings and forgets the kept ones")
+local n_loaded = #binds.loaded
+load_settings().start({})
+ok(#binds.loaded == n_loaded, "...so the next launch loads none")
+-- accessibility
 st7.showTab("access")
-st7.rows(580); st7.update({}, 1 / 60)
-ok(#built == 2 and built[2].page == "accessibility", "the Accessibility tab is the engine's page")
-built[2].opts.onChanged("textScale", 1.5)
-built[2].opts.onChanged("captions", false)
+local arow = st7.rows(580); st7.update({}, 1 / 60)
+ok(built[#built].page == "accessibility" and find_el(arow, "textScale"),
+  "the Accessibility tab is the engine's page, placed the same way")
+built[#built].opts.onChanged("textScale", 1.5)
+built[#built].opts.onChanged("captions", false)
 run(st7, 1.0)
 ok(slots.settings.opt_text_scale == 1.5 and slots.settings.opt_captions == false,
   "a change made on the engine's page is kept in the settings store")
 local n_before = #built
 run(st7, 0.5)
 ok(#built == n_before, "the screen closed (no rows asked for): the page is let go, not rebuilt")
-_G.ui = nil
+-- leaving with a rebind armed calls it off
+st7.showTab("controls"); st7.rows(580); st7.update({}, 1 / 60)
+built[#built].waiting = "Jump"
+run(st7, 0.5)
+ok(binds.cancels == 1, "closing the screen mid-rebind calls the rebind off")
+_G.ui, _G.input = nil, nil
 
 -- ── 7. NO ENGINE CALLS AVAILABLE: still no error ────────────────────────────
 local bare = load_settings({ bare = true })
