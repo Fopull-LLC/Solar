@@ -14,19 +14,29 @@
 //   speed    ∂(position)/∂(uv.y), from the screen derivatives (a cotangent
 //            frame), IS the velocity: its direction is downstream and its
 //            length the speed in m/s. No per-vertex tangent is needed.
-//   ripples  a ripple height field (noise; a normal-map texture slot is what
-//            this wants, but on 0.117 one texture slot on a material that
-//            also reads surfaceGap overflows the GPU's 16 sampled textures
-//            and the pipeline fails — see the look3 report) advected
-//            downstream in TWO PHASES half a cycle apart and
+//   ripples  a ripple height map (textures/water/river_ripples.png, a
+//            tileable sum of waves made by a script: more small ripples
+//            than big, sharp crests) read three times a phase for its
+//            slope, advected downstream in TWO PHASES half a cycle apart and
 //            cross-faded (Vlachos, "Water Flow in Portal 2"): each phase
 //            jumps to a fresh offset while its weight is zero, so the
 //            pattern keeps renewing instead of riding a conveyor belt.
 //            Faster water stretches it into streaks and bends it harder.
+//            (Until engine 0.117 rc3 this was noise: a texture slot on a
+//            material that also reads the scene overflowed the GPU's 16
+//            sampled textures and the pipeline failed — card 0456.)
+//   behind   the water is SEE-THROUGH (card 0454): the bed as the engine
+//            drew it (sceneColor), seen where the ripple-tilted ray meets it,
+//            dimmed per channel by the water the view ray crosses
+//            (sceneDepth − the surface's own distance).
 //   rapids   above ~2.5 m/s the surface breaks: white water in the fast
 //            stretches, foam threads along the banks where the current drags.
 //   edges    the ribbon fades toward its sides and where the ground behind
 //            comes up through it.
+//
+// What the bed looks like through the water is the bed: the old look
+// (shallowColor standing for a lit bed under an alpha-blended sheet) is
+// replaced by the real one, so the water only adds what water adds.
 shader river {
   stage fragment
   blend alpha
@@ -41,6 +51,9 @@ shader river {
   uniform bump: float = 0.35 range(0, 2)
   uniform wind: float = 4 range(0, 40)
   uniform debugView: float = 0 range(0, 1)
+  // How far the ripples bend the look at the bed, per metre of water.
+  uniform refractK: float = 0.5 range(0, 2)
+  texture ripples = "textures/water/river_ripples.png"
 
   let up = normalize(objectPos)
   let sunDir = lightDir
@@ -68,18 +81,16 @@ shader river {
   let j1 = floor(c1)
   let o0 = vec2(fract(sin(j0 * 12.9898) * 43758.5), fract(sin(j0 * 78.233) * 43758.5))
   let o1 = vec2(fract(sin(j1 * 12.9898 + 4.1) * 43758.5), fract(sin(j1 * 78.233 + 4.1) * 43758.5))
-  let along = (uv.y - time * flowSpeed) * 0.45
-  let tc = vec2(uv.x * 0.6, along)
-  // Each phase: a ripple height field (noise, streaked along the flow) and
-  // its slope by finite differences.
-  let q0 = vec3((tc.x + o0.x * 7) * 7.0, (tc.y + o0.y * 7) * 4.5, 1.7)
-  let q1 = vec3((tc.x + o1.x * 7) * 7.0, (tc.y + o1.y * 7) * 4.5, 5.3)
-  let ee = 0.08
-  let a0 = noise(q0)
-  let n0 = vec3(noise(q0 + vec3(ee, 0, 0)) - a0, noise(q0 + vec3(0, ee, 0)) - a0, 0) / ee
-  let a1 = noise(q1)
-  let n1 = vec3(noise(q1 + vec3(ee, 0, 0)) - a1, noise(q1 + vec3(0, ee, 0)) - a1, 0) / ee
-  let nt = (n0 * w0 + n1 * w1) * 0.18
+  let along = (uv.y - time * flowSpeed) * 0.2
+  // Each phase: the ripple heights and their slope, three reads of the map.
+  let ta = vec2(uv.x * 0.22 + o0.x, along + o0.y)
+  let tb = vec2(uv.x * 0.22 + o1.x + 0.5, along + o1.y + 0.5)
+  let ee = 0.004
+  let a0 = sample(ripples, ta).r
+  let n0 = vec2(sample(ripples, ta + vec2(ee, 0)).r - a0, sample(ripples, ta + vec2(0, ee)).r - a0) / ee
+  let a1 = sample(ripples, tb).r
+  let n1 = vec2(sample(ripples, tb + vec2(ee, 0)).r - a1, sample(ripples, tb + vec2(0, ee)).r - a1) / ee
+  let nt = (n0 * w0 + n1 * w1) * 0.012
   let rough = bump * (0.7 + 0.25 * speed)
   let n = normalize(up + (across * nt.x + flow * nt.y) * rough)
 
@@ -88,24 +99,39 @@ shader river {
   let sunUp = dot(sunDir, up)
   let day = saturate(sunUp * 3 + 0.25)
 
-  // Through the water to the bed: per-channel absorption (a stream is never
-  // quite clear: some depth of its own even over the bed).
-  let gap = surfaceGap(worldPos)
-  let trans = exp(-absorb * (min(gap, 60) + 0.8))
+  // Through the water to the bed: the scene behind, bent by the ripples,
+  // dimmed per channel by the water crossed (a stream is never quite clear:
+  // some depth of its own even over the bed).
+  let dist = length(worldPos)
+  let suv0 = screenUv(worldPos)
+  let gap = max(sceneDepth(suv0) - dist, 0)
+  let tilt = n - up * dot(n, up)
+  let suv1 = screenUv(worldPos - tilt * refractK * min(gap, 4))
+  let fore = step(sceneDepth(suv1), dist + 0.05)
+  let suv = mix(suv1, suv0, fore)
+  // From under the surface (a swimmer) the water is between the eye and it.
+  let thick = mix(dist, max(sceneDepth(suv) - dist, 0), step(0, dot(up, viewDir)))
+  let behind = sceneColor(suv).rgb
+  // (+1.5 m: running water carries silt, and a clear film over the bed
+  // read as no river at all from a hillside.)
+  let trans = exp(-absorb * (min(thick, 60) + 1.5))
   let deep = 1 - (trans.x + trans.y + trans.z) / 3
-  let body = (shallowColor.rgb * trans + deepColor.rgb * (1 - trans)) * bodyLight
+  let column = mix(shallowColor.rgb * 0.55, deepColor.rgb, saturate(deep * 1.4)) * bodyLight
 
   // White water: rapids where it runs fast, threads where the banks drag.
   let side = abs(uv.x) + noise(vec3(uv.y * 0.25, 0.5, 2.0)) * 0.12
   let edge = smoothstep(0, 0.1, gap) * (1 - smoothstep(0.55, 0.98, side))
-  let streak = smoothstep(0.45, 0.75, a0 * w0 + a1 * w1 + 0.5)
+  let streak = smoothstep(0.55, 0.8, a0 * w0 + a1 * w1)
   let rapids = smoothstep(2.2, 3.3, speed)
   let drag = (1 - smoothstep(0.0, 0.3, gap)) * 0.5 + smoothstep(0.45, 0.85, side) * 0.5
   let foam = saturate(drag * drag * streak * 0.4 + rapids * streak * 0.8)
 
   let diffuse = saturate(dot(n, sunDir) * 0.8 + 0.2) * day
-  let albedo = mix(body, foamColor.rgb, foam)
-  let lit = albedo * (sunColor * diffuse + skyColor.rgb * (0.12 + 0.18 * day))
+  let light = sunColor * diffuse + skyColor.rgb * (0.12 + 0.18 * day)
+  // Silt: a third of what comes back is the stream's own colour whatever is
+  // under it, so a river reads as water from a hillside, not as wet rock.
+  let water = mix(behind * trans + column * light * (1 - trans), column * light, 0.35)
+  let lit = mix(water, foamColor.rgb * light, foam)
 
   let rv = reflect(-viewDir, n)
   let elev = saturate(dot(rv, up))
@@ -115,7 +141,8 @@ shader river {
   let reflected = min(fres, 0.6) * (1 - foam)
   let col = mix(lit, sky, reflected) + spec
 
-  let alpha = saturate(0.45 + deep * 0.5 + fres * 0.35 + foam * 0.6) * edge
+  // Drawn whole (the bed behind is already in its colour): only the banks fade.
+  let alpha = edge
   let dbg = vec3(saturate(speed / 4), fract(uv.y * 0.1), saturate(gap / 6))
   output color = mix(vec4(col, alpha * instanceColor.a), vec4(dbg, 1), debugView)
 }

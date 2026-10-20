@@ -279,8 +279,8 @@ end
 -- lake's depth below them (so the water never spills down the far side of its
 -- own spill point), plus one ring of shore that tucks under the terrain.
 -- `lakeDepth` reads the same lattice, so the swimmer, the flora and the HUD
--- agree with what is drawn. (Buoyancy needs an engine volume that fits a lake:
--- see the world-117 report.)
+-- agree with what is drawn, and the engine's water volumes for it (buoyancy,
+-- swimming, a river's current) are laid over the same lattice cells.
 
 -- The water of a lake, by the world's type when it has no sea of its own.
 local FRESH = {
@@ -298,7 +298,31 @@ local LAKE_FAR = 1100       -- …and give it back past this
 local RIVER_NEAR = 600      -- river ribbons within this of the eye
 local MAX_LAKE_N = 96       -- lattice points across a lake
 
-local water = { body = nil, lakes = {}, rivers = {}, hydro = nil, t = 0 }
+-- The engine's water (water.addVolume, 0.117 rc3): captured here, before the
+-- local `water` below (this script's own bookkeeping) shadows the name.
+local engine_water = water
+-- Lakes and river stretches built near the eye are declared to the engine as
+-- real water (card 0417 a), so they float things, let the crew swim and carry
+-- what floats down the current. Each is a set of "lake" discs on the sphere
+-- of its own surface, each as wide as the bit of water it stands for: the
+-- engine's lake is a disc out to its farthest shore, which past a spill point
+-- would stand over the lower ground beyond it, and its heightfield is flat
+-- in its node's frame, so its "up" leans off the radial by a degree per
+-- radius/57 metres — a floating crate is pushed sideways by that lean.
+--
+-- OFF for now (engine 0.117 rc3): the engine poses declared water once a
+-- frame, before the 60 Hz ticks that move the planet on its rails, so on an
+-- orbiting world the water the physics floats things in is (ticks this frame
+-- × the planet's step) away from the water drawn — measured on Rymiru
+-- (280 m/s): a 20 kg crate dropped on a lake rose to 13 m above it, and one
+-- dropped in a river sank to its bed. Declared near a shore that would lift
+-- the crew off the bank. Turn it on when the engine carries declared water
+-- per tick; everything else here is ready (and was verified: a crate rides a
+-- river's current at 0.80 m/s of 0.93 within 6 s where the lag happened to
+-- miss it).
+local VOLUMES = false
+local water = { body = nil, lakes = {}, rivers = {}, hydro = nil, t = 0,
+  stats = { rows = 0, knot = 0, nog = 0, under = 0, turn = 0, drop = 0, short = 0 } }
 local gen_ref
 local eye_x, eye_y, eye_z = nil, nil, nil
 
@@ -732,7 +756,83 @@ local function build_lake(b, w, L)
   if #idx == 0 then return nil end
   local ok, name = pcall(mesh.build, { positions = pos, indices = idx, uvs = uvs })
   if not ok then return nil end
-  local lake = { mesh = name, node = nil, level = L.level, Rl = Rl, ux = ux, uy = uy, uz = uz,
+  -- The engine's water for it (card 0417 a), on the sphere the mesh is
+  -- drawn on. One disc over the whole lake when the disc would hold no air
+  -- that is not this lake's (no lower ground past a spill point inside it);
+  -- otherwise one disc per block of lattice cells holding water, centred on
+  -- them and reaching just past the farthest.
+  local vols = {}
+  if VOLUMES and engine_water and engine_water.addVolume then
+    local Rv = Rl - 0.12
+    local function disc(cx, cy, cz, reach)
+      vols[#vols + 1] = { shape = "lake", parent = water.body,
+        center = vec3(cx * Rv, cy * Rv, cz * Rv), radius = Rv, reach = reach }
+    end
+    local function ang(ax, ay, az, bx, by, bz)
+      return math.acos(math.max(-1, math.min(1, ax * bx + ay * by + az * bz)))
+    end
+    -- The whole lake: centred on its water, out to its farthest water cell.
+    local sx, sy, sz, nw = 0, 0, 0, 0
+    for k, st in pairs(state) do
+      if st == 1 then
+        local dx, dy, dz = dir(k % N, math.floor(k / N))
+        sx, sy, sz, nw = sx + dx, sy + dy, sz + dz, nw + 1
+      end
+    end
+    local l = len(sx, sy, sz)
+    local cx, cy, cz = sx / l, sy / l, sz / l
+    local far = 0
+    for k, st in pairs(state) do
+      if st == 1 then
+        local dx, dy, dz = dir(k % N, math.floor(k / N))
+        far = math.max(far, ang(dx, dy, dz, cx, cy, cz) * Rv)
+      end
+    end
+    local reach = far + s * 0.75
+    -- Would that disc stand over air that is not this lake? (every other
+    -- lattice point inside it: open at the water's height and not water)
+    local leak = false
+    for j = 0, N - 1 do
+      for i = 0, N - 1 do
+        if not leak and state[key(i, j)] ~= 1 then
+          local dx, dy, dz = dir(i, j)
+          if ang(dx, dy, dz, cx, cy, cz) * Rv <= reach then
+            local qa = open_qa[key(i, j)]
+            if qa == nil then qa = terrain.query(b.x + dx * Rv, b.y + dy * Rv, b.z + dz * Rv) end
+            if qa and qa > 0.05 then leak = true end
+          end
+        end
+      end
+    end
+    if not leak then
+      disc(cx, cy, cz, reach)
+    else
+      local B = math.max(1, math.ceil(math.max(16, L.reach / 3) / s))
+      for bj = 0, N - 1, B do
+        for bi = 0, N - 1, B do
+          local cells, bx2, by2, bz2 = {}, 0, 0, 0
+          for j = bj, math.min(N - 1, bj + B - 1) do
+            for i = bi, math.min(N - 1, bi + B - 1) do
+              if state[key(i, j)] == 1 then
+                local dx, dy, dz = dir(i, j)
+                cells[#cells + 1] = { dx, dy, dz }
+                bx2, by2, bz2 = bx2 + dx, by2 + dy, bz2 + dz
+              end
+            end
+          end
+          if #cells > 0 then
+            local lb = len(bx2, by2, bz2)
+            local ux2, uy2, uz2 = bx2 / lb, by2 / lb, bz2 / lb
+            local fb = 0
+            for _, c in ipairs(cells) do fb = math.max(fb, ang(c[1], c[2], c[3], ux2, uy2, uz2) * Rv) end
+            disc(ux2, uy2, uz2, fb + s * 0.75)
+          end
+        end
+      end
+    end
+  end
+  local lake = { mesh = name, node = nil, level = L.level, vspec = vols, vx = ux * Rl, vy = uy * Rl, vz = uz * Rl,
+    vr = L.reach * 1.2 + 10, Rl = Rl, ux = ux, uy = uy, uz = uz,
     t1 = { t1x, t1y, t1z }, t2 = { t2x, t2y, t2z }, s = s, N = N, off = off, state = state,
     cx = b.x + ux * Rl, cy = b.y + uy * Rl, cz = b.z + uz * Rl, reach = L.reach, wet = nwet,
     provisional = unknown > 0 or (terrain.busy and terrain.busy()) or false, built_t = water.t_total or 0 }
@@ -784,6 +884,21 @@ function river_tau(b, w, rv, top, bottom)
   end
   tau_cache[rv] = tau
   return tau
+end
+
+-- Is ground at radius g under planet-local direction d already under the sea
+-- or one of the world's lakes? A river crosses a basin at the height it fills
+-- to (engine 0.117 rc3), so its line runs on through the lake it feeds; the
+-- lake's own surface is the water there, and a ribbon laid on the bed showed
+-- through it as a pale stripe.
+local function under_standing_water(w, h, dx, dy, dz, g)
+  if (w.sea or 0) > 0 and g < w.sea - 0.2 then return true end
+  for _, L in ipairs(h and h.lakes or {}) do
+    local ll = len(L.x, L.y, L.z)
+    local c = (dx * L.x + dy * L.y + dz * L.z) / ll
+    if c > 0.5 and math.acos(math.min(1, c)) * w.radius <= L.reach + 4 and g < w.radius + L.level - 0.2 then return true end
+  end
+  return false
 end
 
 local function build_river(b, w, rv, i0, i1)
@@ -862,10 +977,13 @@ local function build_river(b, w, rv, i0, i1)
     o = o / 9
     if sm.nx then sm[1], sm[2], sm[3] = sm[1] + sm.nx * o, sm[2] + sm.ny * o, sm[3] + sm.nz * o end
   end
-  -- Where the tracer wandered round a basin (it walks a river round and
-  -- round where it cannot leave), the line knots: over six samples the path
-  -- runs much further than it gets. No ribbon is laid there — a knot of
-  -- ribbon is a heap of folded planks, not water.
+  -- Where the line doubles back on itself within a few samples (a hairpin
+  -- tighter than the ribbon is wide), a ribbon would fold over itself: over
+  -- six samples the path runs much further than it gets. No ribbon is laid
+  -- there. (Before engine 0.117 rc3 this was mostly the tracer walking a
+  -- river round and round a basin it could not leave; rc3's rivers never
+  -- loop, and this now trims only hairpins and tight wiggles of the thinned
+  -- line: 8 of 330 rows on Rymiru, 26 of 156 on Draunol.)
   local knot = {}
   for si = 1, n_s do
     local a0, a1 = math.max(1, si - 3), math.min(n_s, si + 3)
@@ -880,7 +998,7 @@ local function build_river(b, w, rv, i0, i1)
   end
   local prev, lx, ly, lz
   local prev_ax, prev_ay, prev_az, last_g
-  local rows, runs = 0, {}
+  local rows, runs, rowinfo = 0, {}, {}
   for si, sm in ipairs(samples) do
     local x, y, z = sm[1], sm[2], sm[3]
     local l = len(x, y, z)
@@ -906,11 +1024,18 @@ local function build_river(b, w, rv, i0, i1)
     if prev_ax then
       local d = (ax * prev_ax + ay * prev_ay + az * prev_az) / math.max(len(ax, ay, az) * len(prev_ax, prev_ay, prev_az), 1e-9)
       fold = d < 0.2
+      if fold then water.stats.turn = water.stats.turn + 1 end
     end
     prev_ax, prev_ay, prev_az = ax, ay, az
-    if g and last_g and math.abs(g - last_g) > 3.5 then fold = true end
+    -- (A steep stretch is rapids, drawn down its slope: engine 0.117 rc3's
+    -- rivers run from the highest ground, and breaking the ribbon at every
+    -- 3.5 m step left alpine rivers as dashes. Only a real fall breaks it.)
+    if g and last_g and math.abs(g - last_g) > 8 then fold = true; water.stats.drop = water.stats.drop + 1 end
     last_g = g
-    if knot[si] then g = nil end
+    if knot[si] then g = nil; water.stats.knot = water.stats.knot + 1 end
+    if not g then water.stats.nog = water.stats.nog + 1 end
+    if g and under_standing_water(w, water.hydro, dx, dy, dz, g) then g = nil; water.stats.under = water.stats.under + 1 end
+    water.stats.rows = water.stats.rows + 1
     if not g or fold then
       -- No ground answer here (a cold chunk), or a fold: end this run of
       -- ribbon and start a new one after it, rather than dropping the piece.
@@ -935,14 +1060,16 @@ local function build_river(b, w, rv, i0, i1)
         pos[#pos + 1], pos[#pos + 2], pos[#pos + 3] = dx * r + nx * half * side, dy * r + ny * half * side, dz * r + nz * half * side
         uvs[#uvs + 1], uvs[#uvs + 2] = side, along
       end
+      rowinfo[#rowinfo + 1] = { dx * r, dy * r, dz * r, r, half, along }
       rows = rows + 1
-      if rows == 1 then runs[#runs + 1] = { first = #pos / 3 - 2, n = 0 } end
+      if rows == 1 then runs[#runs + 1] = { first = #pos / 3 - 2, n = 0, row0 = #rowinfo } end
       runs[#runs].n = rows
     end
   end
   -- Triangles for every run long enough to read as a stretch of river (a
   -- run of two or three rows between folds is a stray plank).
   for _, run in ipairs(runs) do
+    if run.n < 5 then water.stats.short = water.stats.short + run.n end
     if run.n >= 5 then
       for rr = 0, run.n - 2 do
         local a = run.first + rr * 3   -- this row's left vertex (1-based)
@@ -960,7 +1087,41 @@ local function build_river(b, w, rv, i0, i1)
   if #idx == 0 then return nil end
   local ok, name = pcall(mesh.build, { positions = pos, indices = idx, uvs = uvs })
   if not ok then return nil end
-  local river = { mesh = name }
+  -- The engine's water for it: a disc on the water's own sphere at every
+  -- row, as wide as the ribbon (and reaching the next row), carrying the
+  -- current — downstream, at the speed the ripples are drawn moving (uv.y is
+  -- travel time, so speed = metres between rows over seconds between them).
+  local vols = {}
+  if VOLUMES and engine_water and engine_water.addVolume then
+    for _, run in ipairs(runs) do
+      if run.n >= 5 then
+        -- every second row, each disc reaching the next one's
+        for rr = 0, run.n - 1, 2 do
+          local k = run.row0 + rr
+          local a, c = rowinfo[k], rowinfo[math.min(run.row0 + run.n - 1, k + 1)]
+          local p0 = rowinfo[math.max(run.row0, k - 1)]
+          local fx, fy, fz = c[1] - p0[1], c[2] - p0[2], c[3] - p0[3]
+          local ds, dt = len(fx, fy, fz), c[6] - p0[6]
+          local ux, uy, uz = a[1] / a[4], a[2] / a[4], a[3] / a[4]
+          local fu = fx * ux + fy * uy + fz * uz
+          fx, fy, fz = fx - ux * fu, fy - uy * fu, fz - uz * fu
+          local fl = len(fx, fy, fz)
+          local v = (dt > 1e-4) and math.min(3.2, ds / dt) or 0
+          local cur = fl > 1e-6 and vec3(fx / fl * v, fy / fl * v, fz / fl * v) or vec3(0, 0, 0)
+          local c2 = rowinfo[math.min(run.row0 + run.n - 1, k + 2)]
+          local step = len(c2[1] - a[1], c2[2] - a[2], c2[3] - a[3])
+          vols[#vols + 1] = { shape = "lake", parent = water.body,
+            center = vec3(a[1], a[2], a[3]), radius = a[4], reach = math.max(a[5] * 1.05, step * 0.6), current = cur }
+        end
+      end
+    end
+  end
+  local mx, my, mz = 0, 0, 0
+  for _, a in ipairs(rowinfo) do mx, my, mz = mx + a[1], my + a[2], mz + a[3] end
+  mx, my, mz = mx / #rowinfo, my / #rowinfo, mz / #rowinfo
+  local vr = 0
+  for _, a in ipairs(rowinfo) do vr = math.max(vr, len(a[1] - mx, a[2] - my, a[3] - mz)) end
+  local river = { mesh = name, vspec = vols, vx = mx, vy = my, vz = mz, vr = vr + 5 }
   createNode("River", b.node or find(water.body), function(n)
     -- Local (0,0,0) under the body: the mesh is in the planet's own frame.
     -- (This was `n.x, n.y, n.z = b.x, b.y, b.z`, which a child takes as a
@@ -974,7 +1135,30 @@ local function build_river(b, w, rv, i0, i1)
   return river
 end
 
+-- A lake's or river stretch's engine water is declared only while the eye
+-- is within VOL_NEAR of it (and taken back past VOL_FAR): every declared
+-- volume costs every body in the world a test each physics step (measured
+-- 139 discs: physics 0.03 → 2.55 ms a frame), and nothing out of sight is
+-- floating in it.
+local VOL_NEAR, VOL_FAR = 250, 350
+local function vols_on(t)
+  if t.vols or not t.vspec or not (engine_water and engine_water.addVolume) then return end
+  t.vols = {}
+  for _, o in ipairs(t.vspec) do
+    local ok, id = pcall(engine_water.addVolume, o)
+    if ok and id then t.vols[#t.vols + 1] = id end
+  end
+end
+local function vols_off(t)
+  if not t.vols then return end
+  if engine_water and engine_water.removeVolume then
+    for _, id in ipairs(t.vols) do pcall(engine_water.removeVolume, id) end
+  end
+  t.vols = nil
+end
+
 local function free(t)
+  vols_off(t)
   if t.node and t.node.valid then t.node:destroy() end
   if t.mesh then pcall(mesh.free, t.mesh) end
 end
@@ -1012,12 +1196,13 @@ function lakeDepth(name, x, y, z)
 end
 
 -- The lakes and river water standing near the eye right now (for the HUD and
--- the probes): { lakes = n, rivers = n, body = name }.
+-- the probes): { lakes = n, rivers = n, volumes = n, body = name } — volumes
+-- is how many engine water discs they declared.
 function waterNear()
-  local nl, nr = 0, 0
-  for _, l in pairs(water.lakes) do if l then nl = nl + 1 end end
-  for _, r in pairs(water.rivers) do if r then nr = nr + 1 end end
-  return { lakes = nl, rivers = nr, body = water.body }
+  local nl, nr, nv = 0, 0, 0
+  for _, l in pairs(water.lakes) do if l then nl = nl + 1; nv = nv + #(l.vols or {}) end end
+  for _, r in pairs(water.rivers) do if r then nr = nr + 1; nv = nv + #(r.vols or {}) end end
+  return { lakes = nl, rivers = nr, volumes = nv, body = water.body, stats = water.stats }
 end
 
 function update(node, dt)
@@ -1039,7 +1224,14 @@ function update(node, dt)
   if alt > w.radius * 1.5 then clear_water(); water.body = name; return end
   -- Only once the ground is here to fit the water to.
   if not terrain.query(b.x, b.y + w.radius, b.z) then return end
-  if not water.hydro then water.hydro = hydroOf(name) or { lakes = {}, rivers = {} } end
+  if not water.hydro then
+    -- The home world's rivers and lakes are being worked out off the script
+    -- thread (system_generator hydroWarm): wait for them rather than asking
+    -- the same question again on this one.
+    if not (gen_ref and gen_ref.valid) then gen_ref = findScript and findScript("system_generator") end
+    if gen_ref and gen_ref.hydroPending and gen_ref.hydroPending(name) then return end
+    water.hydro = hydroOf(name) or { lakes = {}, rivers = {} }
+  end
   local h = water.hydro
   b.node = b.node or find(name)
   -- The wind on the water (weather.lua): lakes are sheltered, so they feel
@@ -1078,6 +1270,15 @@ function update(node, dt)
       water.lakes[i] = nil
     end
   end
+  -- Engine water for what the eye is near.
+  local function near_vols(t)
+    if t and t.vspec then
+      local d = len(ex - b.x - t.vx, ey - b.y - t.vy, ez - b.z - t.vz) - t.vr
+      if d < VOL_NEAR then vols_on(t) elseif d > VOL_FAR then vols_off(t) end
+    end
+  end
+  for _, l in pairs(water.lakes) do near_vols(l) end
+  for _, r in pairs(water.rivers) do near_vols(r) end
   -- Rivers: the stretch of each river near the eye, in pieces of 24 points.
   for ri, rv in ipairs(h.rivers or {}) do
     if rv.river then

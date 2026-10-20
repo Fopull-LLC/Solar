@@ -1341,26 +1341,88 @@ end
 -- once per world per save and kept in `hydro.<name>`:
 --
 --   { seed, v, rivers = { {river = true|false, depth, length, points = {x,y,z,…},
---       widths = {…}, part = n, mouth = "sea"|"lake"|"on"|"open"}, … },
+--       widths = {…}}, … },
 --     lakes = { {level, x, y, z, reach, area, depth}, … } }
 --
 -- Points and lake centres are planet-local (add the body's position); a lake's
--- `level` is metres above the radius, its centre on its surface. A river is
--- one or more parts (`part` 1, 2, … source first; "on" = it carries on in the
--- next part), each thinned to at most HYDRO_POINTS points; a ravine is a
--- channel with river = false. Read it through hydroOf (or
--- climate.hydroOf) — flora, missions, the HUD and the lake surfaces do.
+-- `level` is metres above the radius, its centre on its surface. A river runs
+-- from its spring the way water drains, across any basin on its way at the
+-- height the basin fills to, to the sea, the world's lowest ground or another
+-- river (engine 0.117 rc3: it never runs round in circles any more, so the
+-- old split of a river into the parts the tracer had not lapped, and the
+-- "ran to the step cap, so it ends in a lake" guess, are gone). Each is
+-- thinned to at most HYDRO_POINTS points; a ravine is a channel with
+-- river = false. Read it through hydroOf (or climate.hydroOf) — flora,
+-- missions, the HUD and the lake surfaces do.
 --
--- COST: planetLakes rebuilds the planet's relief grid on the calling thread;
--- at the genspec's own voxel and with rivers that is seconds (r 800: 5–8 s,
--- the engine's river tracer runs every river to its 4000-step cap in a basin),
--- which the script watchdog stops at 2 s. Asked on a coarse grid it is ~0.5 s,
--- and it is asked once per save: the home world during its first load (while
--- the background fill runs), any other world the first time it is needed.
+-- COST: the river tracer is quick now (~0.4 s at r 630), but planetLakes
+-- rebuilds the planet's relief grid, which at the genspec's own voxel is
+-- seconds; asked on a coarse grid it is ~0.5 s. Both run OFF the script
+-- thread when given a callback (rc3): `hydroWarm` asks that way while the
+-- home world's terrain fills, so the loading screen never stops for it.
+-- `hydroOf` still answers at once — from the save, or, if nobody warmed it
+-- (or the warm-up has not landed yet), by asking on this thread.
 GENSPEC = {}
-HYDRO_V = 1
+-- 2: rivers traced by engine 0.117 rc3 (a save made earlier kept rc2's rivers,
+-- which no longer match the valleys the generator carves).
+HYDRO_V = 2
 local HYDRO_POINTS = 200
 local MAX_LAKES = 24
+local hydro_wait = {}
+
+local function hydro_valid(cached, o)
+  return type(cached) == "table" and cached.seed == o.seed and cached.v == HYDRO_V
+end
+
+-- What planetLakes is asked: the coarse grid and the sea it drains to.
+local function lake_query(gs)
+  local o = gs.opts
+  local R = o.radius
+  local q = { cell = math.max(4, R / 110), minDepth = 1.0 }
+  if gs.seaAlt then q.seaLevel = gs.seaAlt elseif o.rivers then q.seaLevel = o.rivers.seaLevel end
+  -- The lake finder rebuilds the relief grid at the genspec's voxel (up to
+  -- 1024² a face: seconds). At ~2R/112 a cell — 14 m on an 800 m world —
+  -- the same lakes come back to a few decimetres (measured r 800: biggest
+  -- six identical in level, reach within 2 m) in a fifteenth of the time.
+  local o2 = {}
+  for k, v in pairs(o) do o2[k] = v end
+  o2.voxel = math.max(o.voxel or 1.5, 2 * R / 112)
+  return o2, q
+end
+
+-- The hydro record from the engine's answers.
+local function hydro_assemble(o, chs, lakes, q)
+  local out = { seed = o.seed, v = HYDRO_V, rivers = {}, lakes = {} }
+  for _, ch in ipairs(chs or {}) do
+    local pts, wid = ch.points, ch.widths
+    local m = math.floor(#pts / 3)
+    if m >= 2 then
+      local step = math.max(1, math.ceil(m / HYDRO_POINTS))
+      local p2, w2, len = {}, {}, 0
+      local px, py, pz
+      for i = 1, m, step do
+        local x, y, z = pts[i * 3 - 2], pts[i * 3 - 1], pts[i * 3]
+        if px then len = len + math.sqrt((x - px) ^ 2 + (y - py) ^ 2 + (z - pz) ^ 2) end
+        px, py, pz = x, y, z
+        p2[#p2 + 1], p2[#p2 + 2], p2[#p2 + 3] = x, y, z
+        w2[#w2 + 1] = wid[i] or wid[#wid]
+      end
+      out.rivers[#out.rivers + 1] = { river = ch.river, depth = ch.depth, length = len, points = p2, widths = w2 }
+    end
+  end
+  if lakes then
+    local minArea = q.cell * q.cell * 6
+    for _, l in ipairs(lakes) do
+      if #out.lakes >= MAX_LAKES then break end
+      if l.area >= minArea then
+        local c = l.center
+        out.lakes[#out.lakes + 1] = { level = l.level, x = c.x, y = c.y, z = c.z,
+          reach = l.reach, area = l.area, depth = l.depth }
+      end
+    end
+  end
+  return out
+end
 
 function hydroOf(name)
   if not name then return nil end
@@ -1368,80 +1430,56 @@ function hydroOf(name)
   local gs = GENSPEC[name]
   if not gs then return cached end
   local o = gs.opts
-  if type(cached) == "table" and cached.seed == o.seed and cached.v == HYDRO_V then return cached end
+  if hydro_valid(cached, o) then return cached end
   if not (terrain and terrain.planetLakes and terrain.planetRivers) then return nil end
-  local R = o.radius
-  local out = { seed = o.seed, v = HYDRO_V, rivers = {}, lakes = {} }
-  if o.rivers or o.ravines then
-    for _, ch in ipairs(terrain.planetRivers(o)) do
-      local pts, wid = ch.points, ch.widths
-      local n = math.floor(#pts / 3)
-      -- The tracer walks a river round and round a basin it cannot leave (to
-      -- its 4000-step cap), so a point the river has already passed within
-      -- half a width of is dropped, and the river is split where that leaves
-      -- a gap: what is kept is each stretch of bed once.
-      local cellw = math.max(2, (wid[#wid] or 8) * 0.6)
-      local seen, parts, cur = {}, {}, nil
-      local function hk(x, y, z) return math.floor(x / cellw) .. ":" .. math.floor(y / cellw) .. ":" .. math.floor(z / cellw) end
-      for i = 1, n do
-        local x, y, z = pts[i * 3 - 2], pts[i * 3 - 1], pts[i * 3]
-        local k = hk(x, y, z)
-        if seen[k] and i - seen[k] > 3 then
-          if cur and #cur.points >= 6 then parts[#parts + 1] = cur end
-          cur = nil
-        else
-          seen[k] = seen[k] or i
-          cur = cur or { points = {}, widths = {} }
-          local p2 = cur.points
-          p2[#p2 + 1], p2[#p2 + 2], p2[#p2 + 3] = x, y, z
-          cur.widths[#cur.widths + 1] = wid[i] or wid[#wid]
-        end
-      end
-      if cur and #cur.points >= 6 then parts[#parts + 1] = cur end
-      local mouth = (not ch.river) and "open" or ((n >= 4000) and "lake" or "sea")
-      for pi, part in ipairs(parts) do
-        local m = math.floor(#part.points / 3)
-        local step = math.max(1, math.ceil(m / HYDRO_POINTS))
-        local p2, w2, len = {}, {}, 0
-        local px, py, pz
-        for i = 1, m, step do
-          local x, y, z = part.points[i * 3 - 2], part.points[i * 3 - 1], part.points[i * 3]
-          if px then len = len + math.sqrt((x - px) ^ 2 + (y - py) ^ 2 + (z - pz) ^ 2) end
-          px, py, pz = x, y, z
-          p2[#p2 + 1], p2[#p2 + 2], p2[#p2 + 3] = x, y, z
-          w2[#w2 + 1] = part.widths[i]
-        end
-        out.rivers[#out.rivers + 1] = { river = ch.river, depth = ch.depth, length = len,
-          points = p2, widths = w2, mouth = (pi == #parts) and mouth or "on", part = pi }
-      end
-    end
-  end
+  local chs = (o.rivers or o.ravines) and terrain.planetRivers(o) or {}
+  local lakes, q
   if gs.wet then
-    local q = { cell = math.max(4, R / 110), minDepth = 1.0 }
-    if gs.seaAlt then q.seaLevel = gs.seaAlt elseif o.rivers then q.seaLevel = o.rivers.seaLevel end
-    -- The lake finder rebuilds the relief grid at the genspec's voxel (up to
-    -- 1024² a face: seconds, and over the engine's 2 s script watchdog with
-    -- rivers). At ~2R/112 a cell — 14 m on an 800 m world — the same lakes
-    -- come back to a few decimetres (measured r 800: biggest six identical in
-    -- level, reach within 2 m) in a fifteenth of the time (0.5 s).
-    local o2 = {}
-    for k, v in pairs(o) do o2[k] = v end
-    o2.voxel = math.max(o.voxel or 1.5, 2 * R / 112)
-    local ok, lakes = pcall(terrain.planetLakes, o2, q)
-    if ok and lakes then
-      local minArea = q.cell * q.cell * 6
-      for _, l in ipairs(lakes) do
-        if #out.lakes >= MAX_LAKES then break end
-        if l.area >= minArea then
-          local c = l.center
-          out.lakes[#out.lakes + 1] = { level = l.level, x = c.x, y = c.y, z = c.z,
-            reach = l.reach, area = l.area, depth = l.depth }
-        end
-      end
-    end
+    local o2
+    o2, q = lake_query(gs)
+    local ok, l = pcall(terrain.planetLakes, o2, q)
+    lakes = ok and l or nil
   end
+  local out = hydro_assemble(o, chs, lakes, q)
   save.set("hydro." .. name, out)
   return out
+end
+
+-- Is a warm-up of this world's rivers and lakes still out? (climate waits
+-- for it rather than asking the same question on its own thread.)
+function hydroPending(name)
+  return name ~= nil and hydro_wait[name] ~= nil
+end
+
+-- Ask for a world's rivers and lakes OFF the script thread (engine 0.117 rc3
+-- callbacks); the answer lands in the save a few frames later. Does nothing
+-- when the save already has them, or a warm-up is already out.
+function hydroWarm(name)
+  local gs = name and GENSPEC[name]
+  if not gs or hydro_wait[name] then return end
+  local o = gs.opts
+  if hydro_valid(save.get("hydro." .. name), o) then return end
+  if not (terrain and terrain.planetLakes and terrain.planetRivers) then return end
+  local job = { gs = gs, slot = save.slot and save.slot() or nil }
+  hydro_wait[name] = job
+  local o2, q = lake_query(gs)
+  local function done()
+    if job.rivers == nil or job.lakes == nil or job.finished then return end
+    job.finished = true
+    if hydro_wait[name] == job then hydro_wait[name] = nil end
+    -- A galaxy rolled again, or another save loaded, while it was out.
+    if GENSPEC[name] ~= gs or (save.slot and save.slot() ~= job.slot) then return end
+    if hydro_valid(save.get("hydro." .. name), o) then return end
+    save.set("hydro." .. name, hydro_assemble(o, job.rivers, job.lakes ~= false and job.lakes or nil, q))
+  end
+  local function ask(fn, args, field)
+    args[#args + 1] = function(v) job[field] = v or {}; done() end
+    local ok = pcall(fn, (table.unpack or unpack)(args))
+    if not ok then job[field] = (field == "lakes") and false or {}; done() end
+  end
+  if o.rivers or o.ravines then ask(terrain.planetRivers, { o }, "rivers") else job.rivers = {} end
+  if gs.wet then ask(terrain.planetLakes, { o2, q }, "lakes") else job.lakes = false end
+  done()
 end
 
 -- The sea: a sphere of water at a fixed radius, with the terrain poking through
@@ -1725,9 +1763,12 @@ local function buildSystem(r, p, cfg)
     -- at, while the world somebody is standing on waits behind it in the queue.
     if pi == 1 and cfg.home and p.pregen ~= false then
       terrain.generatePlanet(id, opts)
-      -- While that fills in the background: where the home world's rivers and
-      -- lakes are (seconds on this thread, once per save; see hydroOf).
-      if spec.shape then hydroOf(name) end
+    end
+    -- Where the home world's rivers and lakes are, asked off the script thread
+    -- while its terrain fills or streams back (see hydroWarm): a resumed save
+    -- made before engine 0.117 rc3 needs them asked again too (HYDRO_V).
+    if pi == 1 and cfg.home and spec.shape then
+      hydroWarm(name)
     end
     print(string.format("  %s — %s, r %.0f, g %.1f, orbit %.0f", name, kind, radius, g, a))
     if pi == 1 then

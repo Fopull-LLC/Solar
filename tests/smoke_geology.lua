@@ -17,8 +17,10 @@
 --     canyon terraces and ravines, river worlds' rivers ending at their sea),
 --     every biome rule paints a textured slot with valid ranges, and no two
 --     worlds of a type share a layer recipe;
---   * RIVERS AND LAKES: hydroOf publishes them in the documented shape, drops
---     the tracer's basin loops, and asks the engine once per world per save;
+--   * RIVERS AND LAKES: hydroOf publishes them in the documented shape, thins
+--     them, asks the engine once per world per save (again for a save made
+--     before engine 0.117 rc3's rivers), and hydroWarm asks the same off the
+--     script thread (callbacks) into the same record, never into another save;
 --   * determinism (same seed, same worlds) and scales 1 and 2 untouched (no
 --     geology, no layers).
 --
@@ -339,43 +341,50 @@ do
   for t in pairs(want) do check((hit[t] or 0) > 0, "40 seeds roll a " .. t .. " world to check") end
 end
 
--- RIVERS AND LAKES: hydroOf over a stub engine that answers like 0.117 does —
--- one river that reaches its sea, one the tracer ran round a basin to its
--- 4000-step cap, a ravine, and three lakes (one too small to keep).
+-- RIVERS AND LAKES: hydroOf over a stub engine that answers like 0.117 rc3
+-- does — two rivers that run down to their sea (one 450 points long), a
+-- ravine, and three lakes (one too small to keep) — synchronously, or later
+-- through a callback when given one.
 do
-  local asked = 0
-  env.terrain.planetRivers = function(o)
-    asked = asked + 1
+  local asked, later = 0, {}
+  local function rivers_of(o)
     local R = o.radius
-    local a, b = { R, 0, 0 }, {}
+    local a, b = {}, {}
     for i = 0, 99 do
       local t = i * 0.02
       a[i * 3 + 1], a[i * 3 + 2], a[i * 3 + 3] = R * math.cos(t), R * math.sin(t), 0
     end
     local wa = {}
     for i = 1, 100 do wa[i] = 6 + i * 0.05 end
-    -- 4000 points: 60 down the slope, then round and round a 30 m pit.
     local wb = {}
-    for i = 0, 3999 do
-      local x, y
-      if i < 60 then x, y = i * 9, 0 else local t = (i - 60) * 0.7; x, y = 540 + 15 * math.cos(t), 15 * math.sin(t) end
-      local d = { 0.2 + x / R, 0.9, y / R }
+    for i = 0, 449 do
+      local d = { 0.2 + i * 2 / R, 0.9, 0.1 }
       local l = math.sqrt(d[1] ^ 2 + d[2] ^ 2 + d[3] ^ 2)
       b[i * 3 + 1], b[i * 3 + 2], b[i * 3 + 3] = d[1] / l * R, d[2] / l * R, d[3] / l * R
-      wb[i + 1] = 10
+      wb[i + 1] = 4 + i * 0.01
     end
-    return { { river = true, depth = 5, points = a, widths = wa }, { river = true, depth = 5, points = b, widths = wb },
+    return { { river = true, depth = 5, points = a, widths = wa }, { river = true, depth = 4, points = b, widths = wb },
       { river = false, depth = 30, points = { 0, R, 0, 1, R, 0, 2, R, 0, 3, R, 0, 4, R, 0, 5, R, 0, 6, R, 0 }, widths = { 9, 9, 9, 9, 9, 9, 9 } } }
   end
-  env.terrain.planetLakes = function(o, q)
-    asked = asked + 1
+  local function lakes_of(o, q)
     check(q and q.cell and q.minDepth and o.voxel >= 2 * o.radius / 112 - 1e-6,
-      "lakes are asked on the coarse relief grid (one script call stays under the watchdog)")
+      "lakes are asked on the coarse relief grid")
     local R = o.radius
     return { { level = 12.5, center = { x = 0, y = 0, z = R + 12.5 }, reach = 80, area = 9000, depth = 6 },
       { level = 30, center = { x = R + 30, y = 0, z = 0 }, reach = 30, area = 1800, depth = 3 },
       { level = 2, center = { x = 0, y = -R - 2, z = 0 }, reach = 2, area = 9, depth = 1.1 } }
   end
+  env.terrain.planetRivers = function(o, cb)
+    asked = asked + 1
+    if cb then later[#later + 1] = function() cb(rivers_of(o)) end return end
+    return rivers_of(o)
+  end
+  env.terrain.planetLakes = function(o, q, cb)
+    asked = asked + 1
+    if cb then later[#later + 1] = function() cb(lakes_of(o, q)) end return end
+    return lakes_of(o, q)
+  end
+  local function deliver() local l = later; later = {} for _, f in ipairs(l) do f() end end
   -- A wet world with rivers.
   local name, wet
   for seed = 1, 60 do
@@ -387,25 +396,54 @@ do
   end
   check(name ~= nil, "a world with rivers to ask about")
   if name then
+    -- roll() warmed the home world's: let those answers land first.
+    deliver()
     asked = 0
     store["hydro." .. name] = nil
     local h = env.hydroOf(name)
     check(asked == 2 and h and h.v == env.HYDRO_V and h.seed == wet.seed, "hydroOf asks the engine for rivers and lakes")
+    check(env.HYDRO_V >= 2, "rivers traced by engine 0.117 rc3 are a new hydro version")
     check(env.hydroOf(name) == h and asked == 2, "…once: the answer is kept in the save")
     check(store["hydro." .. name] == h, "…under hydro.<name>")
-    local rivers, ravines, lake_mouth, maxpts = 0, 0, 0, 0
+    local rivers, ravines, maxpts = 0, 0, 0
     for _, r in ipairs(h.rivers) do
       check(type(r.points) == "table" and #r.points % 3 == 0 and #r.widths == #r.points / 3 and r.length > 0,
-        "a river part is x,y,z points with a width each and a length")
+        "a river is x,y,z points with a width each and a length")
       maxpts = math.max(maxpts, #r.points / 3)
       if r.river then rivers = rivers + 1 else ravines = ravines + 1 end
-      if r.mouth == "lake" then lake_mouth = lake_mouth + 1 end
     end
-    check(rivers >= 2 and ravines == 1, "two rivers and a ravine come back")
-    check(lake_mouth == 1, "the river the tracer ran round its basin ends in a lake")
-    check(maxpts <= 200, "…and its 3940 laps of the pit are dropped (" .. maxpts .. " points kept)")
+    check(rivers == 2 and ravines == 1, "each channel comes back once: two rivers and a ravine")
+    check(maxpts <= 200 and maxpts >= 150, "…a long river thinned to at most 200 points (" .. maxpts .. " kept)")
     check(#h.lakes == 2 and h.lakes[1].level == 12.5 and h.lakes[1].reach == 80 and h.lakes[1].z == wet.radius + 12.5,
       "the lakes come back (the puddle is not one), level and centre as the engine said")
+    -- A save that kept the rivers of an older engine asks again.
+    asked = 0
+    store["hydro." .. name] = { seed = wet.seed, v = 1, rivers = {}, lakes = {} }
+    check(env.hydroOf(name).v == env.HYDRO_V and asked == 2, "a save with an older hydro version asks again")
+    -- Off the script thread: the same record, once both answers are in.
+    local sync = ser(store["hydro." .. name])
+    store["hydro." .. name] = nil
+    asked = 0
+    env.hydroWarm(name)
+    check(asked == 2 and #later == 2 and store["hydro." .. name] == nil and env.hydroPending(name),
+      "hydroWarm asks both questions with callbacks and holds nothing yet")
+    env.hydroWarm(name)
+    check(asked == 2, "…and does not ask twice while they are out")
+    deliver()
+    check(not env.hydroPending(name) and store["hydro." .. name] ~= nil and ser(store["hydro." .. name]) == sync,
+      "…and their answers make exactly the record hydroOf makes")
+    asked = 0
+    env.hydroWarm(name)
+    check(asked == 0, "a warm save is not asked again")
+    -- Answers that land after another save was loaded are dropped.
+    local slot = "a"
+    env.save.slot = function() return slot end
+    store["hydro." .. name] = nil
+    env.hydroWarm(name)
+    slot = "b"
+    deliver()
+    check(store["hydro." .. name] == nil and not env.hydroPending(name), "answers for a save that is no longer loaded are dropped")
+    env.save.slot = nil
   end
   env.terrain.planetRivers, env.terrain.planetLakes = nil, nil
 end

@@ -10,8 +10,12 @@
 //            They are in the light, normals only: `output offset` could
 //            move the mesh, but this sphere's vertices are ~28 m apart at
 //            scale 3 — far too coarse to carry a wave.
-//   colour   surfaceGap() is how much water the eye looks through to the
-//            ground behind: shelves go clear turquoise, deep water navy.
+//   behind   the sea is SEE-THROUGH (engine 0.117 rc3, card 0454): the
+//            scene behind the surface (sceneColor), looked at where the
+//            wave-tilted ray meets it (refraction), and the length of water
+//            the view ray crosses to get there (sceneDepth − the surface's
+//            own distance). A look that bends onto something in FRONT of the
+//            water keeps the straight look instead.
 //   sky      the reflected ray sees a horizon-to-zenith gradient of the
 //            world's own air colour, weighted by Fresnel, plus a sun glint.
 //            The two ends are the sky as the engine DRAWS it (skyColor the
@@ -22,16 +26,17 @@
 //   body     Beer–Lambert, per channel: the water's own absorption per metre
 //            (`absorb`, from the chemistry, climate.waterAbsorb: clear water
 //            eats red first, tea-brown water blue first) over the view ray's
-//            path through the water (surfaceGap). What comes through is the
-//            lit bed (shallowColor stands for it); what is lost is replaced
-//            by the column's own scattered light (deepColor). Clear shallows
-//            go turquoise, then blue, then navy as they deepen, each world's
+//            path through the water. What comes through is the REAL bed as
+//            the engine lit it; what is lost is replaced by the column's own
+//            scattered light (deepColor, a little of shallowColor where the
+//            water is thin). Clear shallows show their pebbles tinted
+//            turquoise, then blue, then navy as they deepen, each world's
 //            water in its own order. `bodyLight` darkens dark water (tannin,
 //            iron, methane), whose lit tint read as sand.
 //   wind     the weather's wind at the eye (scripts, weather.current): waves
 //            run downwind and grow with it, and past a fresh breeze their
 //            crests break into whitecaps.
-//   surf     the vertical depth (surfaceGap × the look's steepness) is how
+//   surf     the vertical depth (the water crossed × the look's steepness) is how
 //            deep the water is over the bottom here. Where it shallows, bands of foam
 //            roll in toward the waterline (their phase advances as depth
 //            falls) and a swash line runs up the beach and draws back.
@@ -66,6 +71,8 @@ shader ocean {
   // its speed, m/s.
   uniform windDir: vec3 = vec3(0.6, 0, 0.8)
   uniform wind: float = 4 range(0, 40)
+  // How far the waves bend the look at the bed, per metre of water (to 3 m).
+  uniform refractK: float = 0.2 range(0, 2)
 
   let up = normalize(objectPos)
   let sunDir = lightDir
@@ -99,19 +106,33 @@ shader ocean {
   let sunUp = dot(sunDir, up)
   let day = saturate(sunUp * 3 + 0.25)
 
-  // Through the water to the ground behind it.
-  let gap = surfaceGap(worldPos)
-  let trans = exp(-absorb * min(gap, 200))
+  // Through the water to the scene behind it. worldPos is measured from the
+  // camera, so its length is the surface's own distance; sceneDepth is the
+  // solid scene's (water and glass are not in it).
+  let dist = length(worldPos)
+  let suv0 = screenUv(worldPos)
+  let thick0 = max(sceneDepth(suv0) - dist, 0)
+  // Refraction: the bed where the wave-tilted ray meets it — the point pushed
+  // along the normal's tilt, further through more water (to 3 m).
+  let tilt = nw - up * dot(nw, up)
+  let suv1 = screenUv(worldPos - tilt * refractK * min(thick0, 3) * (1 - farFade))
+  let fore = step(sceneDepth(suv1), dist + 0.05)
+  let suv = mix(suv1, suv0, fore)
+  // From under the surface the water is between the eye and the surface
+  // (the air beyond absorbs nothing): the light crosses `dist` of it.
+  let thick = mix(dist, max(sceneDepth(suv) - dist, 0), step(0, side))
+  let behind = sceneColor(suv).rgb
+  let trans = exp(-absorb * min(thick, 400))
   let deep = 1 - (trans.x + trans.y + trans.z) / 3
-  let body = shallowColor.rgb * trans + deepColor.rgb * (1 - trans)
+  // The column's own light where the bed is lost: navy in deep water, a
+  // touch of the shallow tint while it is thin.
+  let column = mix(shallowColor.rgb * 0.55, deepColor.rgb, saturate(deep * 1.4)) * bodyLight
 
   // Surf, keyed to how shallow the water is here.
-  // How deep the water is here: the view ray's path through it (surfaceGap,
-  // read from the drawn depth, so it follows the TRUE terrain outline)
-  // turned vertical by the angle of the look, held at grazing angles. This
-  // was fieldDistance(), which reads the coarse field atlas (7–9 m cells at
-  // scale 3): the foam, swash and waterline followed a stair-stepped outline.
-  let sd = min(gap * max(abs(dot(viewDir, up)), 0.15), 1000)
+  // How deep the water is here: the view ray's path through it (read from
+  // the drawn depth, so it follows the TRUE terrain outline) turned vertical
+  // by the angle of the look, held at grazing angles.
+  let sd = min(thick0 * max(abs(dot(viewDir, up)), 0.15), 1000) + (1 - step(0, side)) * 1000
   let shore = 1 - smoothstep(0, surfDepth, sd)
   let jitter = noise(objectPos * 0.21 + drift * 0.2) * 0.35
   let phase = sd / surfSpacing + time * surfSpeed + jitter
@@ -124,10 +145,12 @@ shader ocean {
   let caps = smoothstep(capAt, capAt + 0.12, h0 * 0.5 + 0.5) * smoothstep(5, 9, wind) * (1 - farFade)
   let foam = saturate((crest * shore * shore * 0.9 + swash) * bubbles + caps * bubbles * 0.8)
 
-  // Light: sun (wrapped a little, water scatters) + a sky-tinted ambient.
+  // Light on the column and the foam: sun (wrapped a little, water
+  // scatters) + a sky-tinted ambient. The bed behind is already lit.
   let diffuse = saturate(dot(nw, sunDir) * 0.8 + 0.2) * day
-  let albedo = mix(body * bodyLight, vec3(0.93, 0.965, 0.98), foam)
-  let lit = albedo * (sunColor * diffuse + skyColor.rgb * (0.12 + 0.18 * day))
+  let light = sunColor * diffuse + skyColor.rgb * (0.12 + 0.18 * day)
+  let water = behind * trans + column * light * (1 - trans)
+  let lit = mix(water, vec3(0.93, 0.965, 0.98) * light, foam)
 
   // The sky as the reflected ray sees it: the bright hazy horizon giving way to
   // a darker zenith. A mirror of a flat sky is a flat sheet whatever the waves
@@ -148,7 +171,9 @@ shader ocean {
   // own uvs never reach 7. A lake's outermost ring over open water fades.
   let lakeEdge = mix(1, saturate(uv.x), step(6.5, uv.y))
   let edge = smoothstep(0, 0.1, sd) * lakeEdge
-  let alpha = saturate(mix(0.4, 0.93, deep) + fres * 0.4 + foam * 0.8) * edge
-  let dbg = vec3(shore, saturate(gap / 20), saturate(sd / 3))
+  // The water is drawn whole (what is behind it is already in its colour):
+  // only the waterline and a lake mesh's open edge fade.
+  let alpha = edge
+  let dbg = vec3(shore, saturate(thick / 20), saturate(sd / 3))
   output color = mix(vec4(col, alpha * instanceColor.a), vec4(dbg, 1), debugView)
 }
