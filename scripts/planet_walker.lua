@@ -59,6 +59,21 @@ defaults = {
   -- The climb rate SPACE / CTRL give you against the buoyant bob.
   --@range 0 20 --@units m/s
   swim_climb = 3.2,
+  -- How hard a swimmer chases the speed asked for (as `accel`, 1/s). Water
+  -- is thick: a stroke takes a moment to get you going and you glide to a
+  -- stop, which is what lets the strokes read as the thing moving you.
+  --@range 1 40 --@units 1/s
+  swim_accel = 4.0,
+  -- The share of the swim speed you get backing up or swimming sideways
+  -- while you face the view (aiming): a back-scull and a side stroke are
+  -- slower than a crawl.
+  --@range 0 1
+  swim_back = 0.5,
+  --@range 0 1
+  swim_side = 0.7,
+  -- How fast a swimmer turns to face where they are going (as `turn`).
+  --@range 1 40 --@units 1/s
+  swim_turn = 5.0,
 }
 
 -- IS THE CREW OUT AND ABOUT? Published, and the answer every interaction gate in
@@ -111,10 +126,12 @@ local FOOTSTEPS = "audio/kenney/impact/footstep_concrete_00"
 
 -- Scripted steering, for test rigs and cutscenes: while set, it replaces the
 -- keys. `f`/`s` are forward and right (−1..1) in the camera's frame; `jump`
--- jumps once, the next time the feet are down.
-local steer_f, steer_s, steer_sprint, steer_jump = nil, 0.0, false, false
-function steer(f, s, sprint, jump)
+-- jumps once, the next time the feet are down; `climb` is SPACE (+1) or CTRL
+-- (−1) in the water.
+local steer_f, steer_s, steer_sprint, steer_jump, steer_climb = nil, 0.0, false, false, 0
+function steer(f, s, sprint, jump, climb)
   steer_f, steer_s, steer_sprint, steer_jump = f, s or 0.0, sprint == true, jump == true
+  steer_climb = climb or 0
 end
 
 -- Cross-script singletons, resolved once and kept: `findScript` walks the whole
@@ -179,6 +196,12 @@ local gait_amt = 0.0       -- 0 = standing (Base shows), 1 = a gait owns the bod
 local gait_sent = nil      -- the last `gait` written, so an unchanged one isn't re-sent
 local layer_w = {}         -- last weights written, so unchanged ones aren't re-sent
 local land_dip = 0.0
+-- Swimming (see SWIMMING, below): whether the swim layers own the body, and
+-- how far they have faded in. `swimming` is published (the tool belt puts the
+-- laser away: both hands are stroking).
+swimming = false
+local swim_anim = false
+local swim_w = 0.0
 
 local function set_weight(layer, w)
   if math.abs((layer_w[layer] or -1) - w) > 0.004 then
@@ -194,9 +217,12 @@ local function gait_at(spd)
 end
 
 -- Footstep at each heel strike: the phase crossing 0 (left) or 0.5 (right).
+local vfx_ref = nil   -- the effects director: a dust scuff per footfall
 local function footstep(node, from, to)
   local crossed = math.floor(to * 2) ~= math.floor(from * 2) or to < from
   if not crossed then return end
+  if not (vfx_ref and vfx_ref.valid) then vfx_ref = findScript and findScript("vfx") end
+  if vfx_ref then vfx_ref.step(node.x, node.y, node.z) end
   local n = math.floor(time * 137.0) % 5
   audio.play(FOOTSTEPS .. n .. ".ogg", node,
     { track = "SFX", volume = 0.5, mode = "spatial", falloff = "inverse",
@@ -225,9 +251,10 @@ local function animate(node, dt, spd, on_ground, jumped, swimming, landed_at)
     end
   end
 
-  -- Gaits: in on the ground (or in the water) as soon as the body moves, out
-  -- quickly when it leaves the ground.
-  local want_amt = ((on_ground or swimming) and smoothstep(0.15, 0.6, spd)) or 0.0
+  -- Gaits: in on the ground (or wading) as soon as the body moves, out
+  -- quickly when it leaves the ground. Swimming is the swim layers' business:
+  -- the gait lets go as they come in and takes back over as you climb out.
+  local want_amt = ((on_ground or swimming) and not swim_anim and smoothstep(0.15, 0.6, spd)) or 0.0
   gait_amt = gait_amt + (want_amt - gait_amt) * (1 - math.exp(-(want_amt < gait_amt and 14 or 8) * dt))
   local g = gait_at(spd)
   local stride = g < 1 and STRIDE.walk + (STRIDE.run - STRIDE.walk) * g
@@ -298,7 +325,7 @@ local bank_s, pitch_s, twist_s = 0.0, 0.0, 0.0
 local accel_s, last_spd = 0.0, 0.0
 local look_w, look_dir = 0.0, nil
 local plant_w, plant_drop = 0.0, 0.0
-local ma_dy, ma_dy_last = 0.0, 0.0   -- how far this / last frame's writes moved MaleArm up
+local ma_dy = 0.0   -- how far this frame's writes have moved MaleArm up so far
 
 -- The model's forward (+Z, the way the rig faces), as a world vector.
 local function model_forward(node)
@@ -316,8 +343,8 @@ local function look(node, dt, up)
   if head and cam and cam.fwd_x then
     local f = vec3(cam.fwd_x, cam.fwd_y, cam.fwd_z)
     local tb = ref("tool_belt")
-    if tb and tb.inUse == true and tb.aimDist and cam.cam_x then
-      dir = (vec3(cam.cam_x, cam.cam_y, cam.cam_z) + f * tb.aimDist - head):normalized()
+    if tb and tb.inUse == true and tb.aimX then
+      dir = (vec3(tb.aimX, tb.aimY, tb.aimZ) - head):normalized()
     else
       local fu = f:dot(up)
       local flat = (f - up * fu):normalized()
@@ -365,7 +392,7 @@ local function lean(dt, spd, on_ground)
     anim:addBonePos("MaleArm", vec3(-MA_UP * math.sin(b), MA_UP * (math.cos(b) - 1), 0))
     ma_dy = ma_dy + MA_UP * (math.cos(b) - 1)
   end
-  local r, p, y = bank_s * 0.3, pitch_s, twist_s
+  local r, p, y = bank_s * 0.3, pitch_s, twist_s * (1 - swim_w)
   if math.abs(r) + math.abs(p) + math.abs(y) > 1e-4 then
     anim:addBoneRot("Back", -y, p, -r)
     anim:addBoneRot("Hip", y, -p, r)
@@ -385,23 +412,30 @@ end
 -- the slope. Only while standing — a stride owns its own feet — and faded,
 -- never snapped.
 --
--- Where the feet ARE is not read off the foot bones: `boneWorld` answers last
--- frame's pose, which this already bent, and reading it back walks the feet
+-- Where the feet ARE is not read off the foot bones: `boneWorld` answers a pose
+-- this already bent (see below), and reading it back walks the feet
 -- down a slope a little further every frame. The idle stance is fixed in the
 -- rig's space (tools/gen_astronaut_anims.py), so the feet are placed from
 -- MaleArm, which no clip moves, less what we moved it by last frame; the soles'
 -- plane is found the same way. (The constant that guessed it was 8 cm out, and
 -- a straight leg can't stretch 8 cm.)
 
+local ZERO3 = vec3(0, 0, 0)
 local STANCE = { Left = vec3(0.1389, -1.5428, -0.0858), Right = vec3(-0.1389, -1.5428, -0.0858) }
 local function plant(node, dt, up, want)
   plant_w = plant_w + (want - plant_w) * (1 - math.exp(-(want < plant_w and 12 or 6) * dt))
   if plant_w < 0.01 then plant_drop = 0.0 return end
   local fwd = model_forward(node)
   local left = up:cross(fwd)
+  -- Where the clips alone put it. `boneWorld` reads the animator's pose plus
+  -- the writes this node queued so far this frame (0.117, card 0413) — but
+  -- only once it has queued one: with none yet it answers last frame's DRAWN
+  -- pose, last frame's writes included (measured on 0.117.0-rc2). A zero write
+  -- first makes it always the former, so only this frame's `ma_dy` comes off.
+  anim:addBonePos("MaleArm", ZERO3)
   local ma = anim:boneWorld("MaleArm")
   if not ma then return end
-  ma = ma - up * ma_dy_last                     -- where the clips alone put it
+  ma = ma - up * ma_dy
   local base = node.pos + up * ((ma - node.pos):dot(up) - MA_UP)
   local hits, low = {}, 0.0
   for side, st in pairs(STANCE) do
@@ -428,15 +462,196 @@ local function plant(node, dt, up, want)
   end
 end
 
+-- ── SWIMMING ────────────────────────────────────────────────────────────────
+-- The swim clips (tools/gen_astronaut_anims.py) are authored UPRIGHT — +Y the
+-- way the head points, +Z the way the chest faces — on three layers over the
+-- gaits (animation_controllers/character.actl.ron):
+--   Swim      along the body, by `swimF`: back-scull −1, tread 0, stroke +1.
+--             The stroke is a front crawl at the surface and a breaststroke
+--             under it: two states, crossfaded by depth.
+--   SwimSide  the side stroke, by `swimS` (−1 to your right, +1 to your left).
+--   SwimVert  the vertical strokes, by `swimV` (+1 hauling up, −1 diving).
+-- All of it is read off the body's REAL velocity in the model's own frame, so
+-- the stroke is the one you are doing: speed blends a tread into a stroke, a
+-- sideways or vertical share of the motion fades its layer in, and each
+-- layer's playback rate is the speed along its axis over the metres one cycle
+-- covers (STROKE, the generator's) — the swimmer's version of the gait's
+-- stride, so a pulling hand holds the water instead of slipping through it.
+--
+-- The ATTITUDE is not in the clips: the whole rig is turned about the body's
+-- middle by a bone write on MaleArm, the root no clip keys — level for a
+-- crawl, tipped back for a back-scull, head-down for a dive, upright to tread
+-- — and banked into a turn. One clip then serves every attitude, two clips
+-- blend without limbs swinging through each other, and the capsule, the
+-- physics and the camera (which follows the capsule, never a bone) don't
+-- feel it.
+local SWIM_T = { tread = 2.4, hover = 3.0, crawl = 1.4, breast = 1.8, back = 2.0, side = 1.8, vert = 1.6 }
+local STROKE = { crawl = 3.0, breast = 2.6, back = 2.0, side = 2.4, ascend = 2.2, descend = 2.4 }
+-- MaleArm's origin over the body's middle — the capsule's centre, 0.94 m over
+-- the soles — which is what the body turns about. Skeleton space.
+local SWIM_PIVOT = MA_UP - 0.94
+local swim_out_t = 0.0
+local swim_under = false
+local sw_f, sw_s, sw_v = 0.0, 0.0, 0.0          -- the blend parameters, eased
+local sw_side, sw_vert = 0.0, 0.0               -- those layers' shares, eased
+local sw_vf, sw_vs, sw_vu = 0.0, 0.0, 0.0       -- velocity in the model's frame
+local sw_vu_att = 0.0                           -- the vertical part you are swimming
+local sw_rate = { Swim = 1.0, SwimSide = 1.0, SwimVert = 1.0 }
+local sw_sent = {}
+local sw_pitch, sw_bank, sw_lift = 0.0, 0.0, 0.0
+local depth_s = 0.0
+-- What the swim is doing, for probes and tests (updated in place).
+swimState = { w = 0, f = 0, s = 0, v = 0, side = 0, vert = 0, pitch = 0, bank = 0, lift = 0,
+              under = false, rate = 1, vf = 0, vs = 0, vu = 0 }
+
+local function ease(cur, want, rate, dt)
+  return cur + (want - cur) * (1 - math.exp(-rate * dt))
+end
+
+local function send(kind, key, v, eps)
+  if not sw_sent[key] or math.abs(sw_sent[key] - v) > eps then
+    if kind == "param" then anim:setParam(key, v) else anim:setSpeed(v, key) end
+    sw_sent[key] = v
+  end
+end
+
+-- In or out of the water, and the layers. Called every frame from `update`.
+local function swim_drive(node, dt, up, in_water, depth, feet_down, climb)
+  -- Feet on the bottom is wading — the gait's. Off it, in water deep enough
+  -- to float, is swimming. A beat of grace on the way out, so a trough or a
+  -- toe brushing a rock doesn't flick the body upright and back.
+  local want = in_water and not feet_down
+  swim_out_t = want and 0.0 or swim_out_t + dt
+  if want then swim_anim = true elseif swim_out_t > 0.3 then swim_anim = false end
+  swimming = swim_anim
+  swim_w = ease(swim_w, swim_anim and 1 or 0, swim_anim and 3.0 or 5.0, dt)
+  if depth then depth_s = ease(depth_s, depth, 4.0, dt) end
+
+  if not (in_water or swim_anim or swim_w > 0.002) then
+    sw_vf, sw_vs, sw_vu, sw_vu_att = 0.0, 0.0, 0.0, 0.0
+    sw_f, sw_side, sw_vert = 0.0, 0.0, 0.0
+    local ss = swimState
+    ss.w, ss.f, ss.side, ss.vert, ss.vf, ss.vs, ss.vu = 0, 0, 0, 0, 0, 0, 0
+    if anim then set_weight("Swim", 0.0); set_weight("SwimSide", 0.0); set_weight("SwimVert", 0.0) end
+    return
+  end
+  local v = vec3(node.vx or 0, node.vy or 0, node.vz or 0)
+  local fwd = model_forward(node)
+  fwd = (fwd - up * fwd:dot(up)):normalized()
+  local left = up:cross(fwd)
+  sw_vf, sw_vs, sw_vu = v:dot(fwd), v:dot(left), v:dot(up)
+  -- Only a stroke you are making turns you over. Sinking after a jump in is
+  -- feet-first and the buoyant float back up is a tread: vertical motion you
+  -- are not swimming (SPACE / CTRL) counts for a third in the strokes and not
+  -- at all in the attitude.
+  if (climb > 0 and sw_vu > 0) or (climb < 0 and sw_vu < 0) then
+    sw_vu_att = sw_vu
+  else
+    sw_vu, sw_vu_att = sw_vu * 0.3, 0.0
+  end
+  local mag = math.abs(sw_vf) + math.abs(sw_vs) + math.abs(sw_vu) + 0.05
+  sw_f = ease(sw_f, math.clamp(sw_vf / 1.4, -1, 1), 5.0, dt)
+  if math.abs(sw_vs) > 0.05 then sw_s = ease(sw_s, sw_vs > 0 and 1 or -1, 6.0, dt) end
+  if math.abs(sw_vu) > 0.05 then sw_v = ease(sw_v, sw_vu > 0 and 1 or -1, 6.0, dt) end
+  sw_side = ease(sw_side, smoothstep(0.25, 0.9, math.abs(sw_vs)) * smoothstep(0.3, 0.7, math.abs(sw_vs) / mag), 4.0, dt)
+  sw_vert = ease(sw_vert, smoothstep(0.5, 1.4, math.abs(sw_vu)) * smoothstep(0.35, 0.75, math.abs(sw_vu) / mag), 4.0, dt)
+  -- A crawl needs air. With some slack, so the chop doesn't flick it.
+  if depth then
+    if swim_under and depth < 1.4 then swim_under = false
+    elseif not swim_under and depth > 1.9 then swim_under = true end
+  end
+
+  -- Cycles a second: the speed along each axis over a cycle's metres, never
+  -- quite stalling; a tread at its own easy pace. Each layer's clock is its
+  -- state's own clip (crawl / breaststroke / side / ascend), hence the × T.
+  local t_move = swim_under and SWIM_T.breast or SWIM_T.crawl
+  local idle = 1 / (swim_under and SWIM_T.hover or SWIM_T.tread)
+  local move
+  if sw_vf >= 0 then
+    move = math.max(sw_vf / (swim_under and STROKE.breast or STROKE.crawl), 0.55 / t_move)
+  else
+    move = math.max(-sw_vf / STROKE.back, 0.55 / SWIM_T.back)
+  end
+  local hz = idle + (move - idle) * math.abs(sw_f)
+  sw_rate.Swim = ease(sw_rate.Swim, hz * t_move, 4.0, dt)
+  hz = math.max(math.abs(sw_vs) / STROKE.side, 0.5 / SWIM_T.side)
+  sw_rate.SwimSide = ease(sw_rate.SwimSide, hz * SWIM_T.side, 4.0, dt)
+  hz = math.max(math.abs(sw_vu) / (sw_vu > 0 and STROKE.ascend or STROKE.descend), 0.5 / SWIM_T.vert)
+  sw_rate.SwimVert = ease(sw_rate.SwimVert, hz * SWIM_T.vert, 4.0, dt)
+
+  local ss = swimState
+  ss.w, ss.f, ss.s, ss.v, ss.side, ss.vert = swim_w, sw_f, sw_s, sw_v, sw_side, sw_vert
+  ss.under, ss.rate, ss.vf, ss.vs, ss.vu = swim_under, sw_rate.Swim, sw_vf, sw_vs, sw_vu
+  if not anim then return end
+  set_weight("Swim", swim_w)
+  set_weight("SwimSide", swim_w * sw_side)
+  set_weight("SwimVert", swim_w * sw_vert)
+  if swim_w < 0.002 then return end
+  local st = swim_under and "swim_under" or "swim_surface"
+  if anim:state("Swim") ~= st then anim:crossfade(st, 0.6, "Swim") end
+  send("param", "swimF", sw_f, 0.002)
+  send("param", "swimS", sw_s, 0.002)
+  send("param", "swimV", sw_v, 0.002)
+  for l, r in pairs(sw_rate) do send("speed", l, r, 0.01) end
+end
+
+-- The swimmer's attitude, as a bone write (see above). Level at speed, upright
+-- to tread, the body's long axis along the way it moves through the water —
+-- up a climb, head-down into a dive — tipped back to back-scull; banked into
+-- a turn; and near the surface lifted so a treader's chin and a crawler's back
+-- are at the waterline (the capsule floats with its middle 0.7 m down).
+local function swim_pose(dt)
+  local tp, tb, tl = 0.0, 0.0, 0.0
+  if swim_anim then
+    local fwd = math.max(sw_vf, 0.0)
+    local vu = sw_vu_att
+    local sag = math.sqrt(fwd * fwd + vu * vu)
+    local travel = math.pi / 2 - math.atan2(vu, fwd)      -- 0 straight up, π/2 level, π straight down
+    if not swim_under then travel = travel - 0.1 end      -- a crawl rides a touch head-up
+    local m = smoothstep(0.35, 1.6, sag)
+    local rest = swim_under and 0.26 or 0.14
+    tp = rest + (travel - rest) * m - 0.38 * smoothstep(0.3, 1.2, -sw_vf) * (1 - m)
+    tp = math.clamp(tp, -0.6, 2.8)
+    -- Water is softer than gravity: a swimmer rolls into a turn more than a
+    -- runner leans, and leans a touch into a sideways swim.
+    local h = math.sqrt(sw_vf * sw_vf + sw_vs * sw_vs)
+    tb = math.clamp(-math.atan(h * yaw_rate / 4.0) * 0.8 - 0.06 * sw_vs, -0.6, 0.6)
+    -- (Not while diving: a duck-dive passes through level on its way down.)
+    local level = smoothstep(0.6, 1.4, sw_pitch) * (1 - smoothstep(2.0, 2.6, sw_pitch))
+      * (1 - smoothstep(0.3, 1.0, -vu))
+    local surf = 1 - smoothstep(1.0, 1.8, depth_s)
+    tl = surf * math.max(0.0, depth_s - (0.55 + (0.12 - 0.55) * level))
+  end
+  -- Slow to turn over, quicker to stand back up on climbing out.
+  sw_pitch = ease(sw_pitch, tp, swim_anim and 2.5 or 5.0, dt)
+  sw_bank = ease(sw_bank, tb, 3.0, dt)
+  sw_lift = ease(sw_lift, tl, 3.0, dt)
+  swimState.pitch, swimState.bank, swimState.lift = sw_pitch, sw_bank, sw_lift
+  if math.abs(sw_pitch) + math.abs(sw_bank) + math.abs(sw_lift) < 1e-4 then return end
+  -- MaleArm's axes are the skeleton's turned 90° about X, so a pitch about the
+  -- skeleton's left is MaleArm's pitch and a bank about its forward is
+  -- MaleArm's yaw: one write is a bank of the pitched body. Then MaleArm is
+  -- moved so the turn is about the body's middle rather than its own origin.
+  local p, b, L = sw_pitch, sw_bank, SWIM_PIVOT
+  anim:addBoneRot("MaleArm", b, p, 0)
+  local dy = L * math.cos(p) * math.cos(b) - L + sw_lift
+  anim:addBonePos("MaleArm", vec3(-L * math.cos(p) * math.sin(b), dy, L * math.sin(p)))
+  ma_dy = ma_dy + dy
+end
+
 -- The whole pose, in the order the engine applies it: bone writes (the lean,
 -- the hips' drop), then the legs' reach, then the head's look.
 local function pose(node, dt, up, spd, on_ground, standing)
-  ma_dy_last, ma_dy = ma_dy, 0.0
+  ma_dy = 0.0
   local head = look(node, dt, up)
   lean(dt, spd, on_ground)
+  swim_pose(dt)
   plant(node, dt, up, standing)
+  -- Swimming, the head keeps its stroke (a crawl's breath, a dive's tuck) and
+  -- only leans a little toward where you look.
   if head and look_dir and look_w > 0.01 then
-    anim:lookAt({ "Head" }, head + look_dir * 10, { limit = 75, weight = 0.9 * look_w })
+    anim:lookAt({ "Head" }, head + look_dir * 10,
+      { limit = 75 - 40 * swim_w, weight = 0.9 * look_w * (1 - 0.7 * swim_w) })
   end
 end
 
@@ -546,9 +761,22 @@ function update(node, dt)
   -- more gently, so a jump is committed but a landing can still be steered.
   -- Re-flattened every frame: the tangent plane turns under you as you walk.
   local tx, ty, tz = (fx * f + rx * s) * speed, (fy * f + ry * s) * speed, (fz * f + rz * s) * speed
+  if swimming and model then
+    -- A swimmer is fastest the way they face: backing up is a scull and
+    -- sideways a side stroke. (Not aiming, the body turns to face the way you
+    -- swim, so this is only the moment of turning round.)
+    local mf = model_forward(node)
+    local mfx, mfy, mfz = norm(mf.x, mf.y, mf.z)
+    local along = tx * mfx + ty * mfy + tz * mfz
+    local k_along = along < 0 and params.swim_back or 1.0
+    local lx, ly, lz = tx - mfx * along, ty - mfy * along, tz - mfz * along
+    tx = mfx * along * k_along + lx * params.swim_side
+    ty = mfy * along * k_along + ly * params.swim_side
+    tz = mfz * along * k_along + lz * params.swim_side
+  end
   local md = mvx * ux + mvy * uy + mvz * uz
   mvx, mvy, mvz = mvx - ux * md, mvy - uy * md, mvz - uz * md
-  local rate = (on_ground or swimming) and params.accel or params.air_accel
+  local rate = swimming and params.swim_accel or (on_ground and params.accel or params.air_accel)
   local k = 1 - math.exp(-rate * dt)
   mvx, mvy, mvz = mvx + (tx - mvx) * k, mvy + (ty - mvy) * k, mvz + (tz - mvz) * k
 
@@ -574,8 +802,8 @@ function update(node, dt)
     -- Buoyancy pulls you toward the surface, hard when you're deep and gently
     -- as you reach it, so floating is the resting state rather than a fight.
     local want = math.min(2.2, math.max(0.0, depth - 0.7) * 1.1)
-    if input.key("space") then want = params.swim_climb end
-    if input.key("ctrl") then want = -params.swim_climb end
+    if input.key("space") or (steer_f and steer_climb > 0) then want = params.swim_climb end
+    if input.key("ctrl") or (steer_f and steer_climb < 0) then want = -params.swim_climb end
     -- Eased from THIS controller's own last value, not from the body's: the
     -- sea is an engine Water Volume now, and its Archimedes push lands on the
     -- capsule between frames. Easing from the body's velocity folded that push
@@ -609,6 +837,7 @@ function update(node, dt)
       jump_t = time
       jumped = true
       slope = 0.0
+      local fx = ref("sfx"); if fx and fx.playAt then fx.playAt("jump", node) end
     else
       vup = slope + math.min(vup - slope_vup, params.step_pop)
     end
@@ -648,14 +877,19 @@ function update(node, dt)
     local aiming = cam ~= nil and (cam.firstPerson == true or cam.shiftlock == true)
       or (tb ~= nil and tb.inUse == true)
     local want
-    if aiming then
+    if aiming and tb ~= nil and tb.inUse == true and tb.aimX then
+      -- The tool aims through the cursor, which need not be the middle of the
+      -- view: face the point it is working.
+      want = local_yaw(node, tb.aimX - node.x, tb.aimY - node.y, tb.aimZ - node.z)
+    elseif aiming then
       want = local_yaw(node, fx, fy, fz)
     elseif spd > 0.3 then
       want = local_yaw(node, bvx, bvy, bvz)
     end
     local before = face_yaw
     if want then
-      face_yaw = face_yaw + wrap(want - face_yaw) * (1 - math.exp(-params.turn * dt))
+      local turn = swim_anim and params.swim_turn or params.turn
+      face_yaw = face_yaw + wrap(want - face_yaw) * (1 - math.exp(-turn * dt))
     end
     yaw_rate = yaw_rate + (wrap(face_yaw - before) / math.max(dt, 1e-4) - yaw_rate) * math.min(1, dt * 10)
   end
@@ -671,8 +905,16 @@ function update(node, dt)
     -- harder landing, springing back. The land clip does the same while you
     -- stand; this is what shows it while a gait owns the legs.
     land_dip = math.min(0.12, math.max(0.0, impact) * 0.012 + 0.03)
+    -- (Not on the jump's own frame, which also reads as `landed` here.)
+    local fx = not jumped and ref("sfx")
+    if fx and fx.playAt then fx.playAt("land", node, math.min(1.0, 0.3 + math.max(0.0, impact) * 0.07)) end
   end
   land_dip = land_dip * math.exp(-9 * dt)
+  local feet_down = contact or (ground_hit ~= nil and ground_hit.distance < 1.15)
+  local climb = 0
+  if input.key("space") or (steer_f and steer_climb > 0) then climb = 1 end
+  if input.key("ctrl") or (steer_f and steer_climb < 0) then climb = -1 end
+  swim_drive(node, dt, vec3(ux, uy, uz), swimming, depth, feet_down, climb)
   animate(node, dt, spd, not airborne, jumped, swimming, landed)
   if anim then
     pose(node, dt, vec3(ux, uy, uz), spd, not airborne and not swimming,

@@ -22,31 +22,49 @@ defaults = {}
 
 -- id → { name, kg (per unit), value ($/unit at rep 0), tier, class }
 --
--- Priced so a FULL SUIT PACK is worth a few hundred dollars (fifty units of
--- regolith ≈ $200, a pack of iron ≈ $950) against a first rocket of about a
--- thousand. At a third of this, a full pack of dirt paid $50 and walking to
--- the depot with it was never worth the walk.
+-- PRICED BY THE KILOGRAM, because the suit pack is limited by mass (90 kg) and
+-- a trip home is one pack. The old table paid $590 for a pack of shallow canyon
+-- rock and $1,500 for a pack of timber — against a $1,100 rocket, one minute of
+-- harvest cutter bought a launch and the contract ladder stopped mattering.
+--
+-- Now a pack of common stuff is worth about $150–300 at reputation 0, a trip
+-- (fill + walk + sell) takes two or three minutes, and the money that makes the
+-- first five minutes feel earned is the DISCOVERY premium on each first sale
+-- (facility_menu's depot). What's worth flying for is dense in $/kg: crystal,
+-- uranite and glow sap, and the off-world materials the haul contracts ask for.
+--
+--   $/kg  regolith 1.1 · silica/iron 3.1 · copper 5 · ice 4 · sulfur/obsidian 10
+--         crystal 55 · uranite 34 · timber/fiber/biomass 3.3 · kelp 6 · resin 9
+--         spores 15 · glow sap 43
 -- class: "ore" | "ice" | "flora" | "liquid" | "refined"
 REG = {
-  regolith = { name = "Regolith",         kg = 1.8, value = 4,   tier = 0, class = "ore" },
-  silica   = { name = "Silica",           kg = 1.6, value = 16,  tier = 1, class = "ore" },
-  iron     = { name = "Iron Ore",         kg = 2.6, value = 28,  tier = 1, class = "ore" },
-  copper   = { name = "Copper Ore",       kg = 2.4, value = 40,  tier = 1, class = "ore" },
-  ice      = { name = "Water Ice",        kg = 1.0, value = 12,  tier = 1, class = "ice" },
-  water    = { name = "Water",            kg = 1.0, value = 8,   tier = 1, class = "liquid" },
-  sulfur   = { name = "Sulfur",           kg = 1.4, value = 32,  tier = 2, class = "ore" },
-  obsidian = { name = "Obsidian",         kg = 2.2, value = 50,  tier = 2, class = "ore" },
-  crystal  = { name = "Resonant Crystal", kg = 1.1, value = 120, tier = 3, class = "ore" },
-  uranium  = { name = "Uranite",          kg = 3.2, value = 200, tier = 3, class = "ore" },
+  regolith = { name = "Regolith",         kg = 1.8, value = 2,   tier = 0, class = "ore" },
+  silica   = { name = "Silica",           kg = 1.6, value = 5,   tier = 1, class = "ore" },
+  iron     = { name = "Iron Ore",         kg = 2.6, value = 8,   tier = 1, class = "ore" },
+  copper   = { name = "Copper Ore",       kg = 2.4, value = 12,  tier = 1, class = "ore" },
+  ice      = { name = "Water Ice",        kg = 1.0, value = 4,   tier = 1, class = "ice" },
+  water    = { name = "Water",            kg = 1.0, value = 3,   tier = 1, class = "liquid" },
+  sulfur   = { name = "Sulfur",           kg = 1.4, value = 14,  tier = 2, class = "ore" },
+  obsidian = { name = "Obsidian",         kg = 2.2, value = 22,  tier = 2, class = "ore" },
+  crystal  = { name = "Resonant Crystal", kg = 1.1, value = 60,  tier = 3, class = "ore" },
+  uranium  = { name = "Uranite",          kg = 3.2, value = 110, tier = 3, class = "ore" },
 
-  timber   = { name = "Timber",           kg = 1.2, value = 20,  tier = 1, class = "flora" },
-  fiber    = { name = "Plant Fiber",      kg = 0.3, value = 14,  tier = 1, class = "flora" },
-  biomass  = { name = "Biomass",          kg = 0.6, value = 9,   tier = 1, class = "flora" },
-  resin    = { name = "Resin",            kg = 0.9, value = 48,  tier = 2, class = "flora" },
-  spores   = { name = "Spore Pods",       kg = 0.4, value = 65,  tier = 2, class = "flora" },
-  kelp     = { name = "Kelp",             kg = 0.8, value = 34,  tier = 2, class = "flora" },
-  glowsap  = { name = "Glow Sap",         kg = 0.7, value = 110, tier = 3, class = "flora" },
+  timber   = { name = "Timber",           kg = 1.2, value = 4,   tier = 1, class = "flora" },
+  fiber    = { name = "Plant Fiber",      kg = 0.3, value = 1,   tier = 1, class = "flora" },
+  biomass  = { name = "Biomass",          kg = 0.6, value = 2,   tier = 1, class = "flora" },
+  resin    = { name = "Resin",            kg = 0.9, value = 8,   tier = 2, class = "flora" },
+  spores   = { name = "Spore Pods",       kg = 0.4, value = 6,   tier = 2, class = "flora" },
+  kelp     = { name = "Kelp",             kg = 0.8, value = 5,   tier = 2, class = "flora" },
+  glowsap  = { name = "Glow Sap",         kg = 0.7, value = 30,  tier = 3, class = "flora" },
 }
+
+-- The DISCOVERY PREMIUM: what the depot adds the first time a material is ever
+-- sold. Paid once per material per company, so it is the opening's money — six
+-- or seven common materials on the home world are about $1,800 between them —
+-- and the reason a strange rock from another world is worth a special trip.
+function discoveryBonus(id)
+  return 100 * (1 + 2 * tier(id))
+end
 
 -- Rock yields per planet archetype. `w` is the raw weight; `minDepth` gates a
 -- material to below that depth (metres under the surface) and `deep` multiplies

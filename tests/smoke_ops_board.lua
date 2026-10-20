@@ -1,4 +1,4 @@
--- SMOKE HARNESS: the Ops Board — signing, the two-click abandon, the ladder of
+-- SMOKE HARNESS: the Ops Board — select, then SIGN; the armed ABANDON; the ladder of
 -- contracts you can't sign yet, and the Esc handshake with the pause menu.
 --
 --   luajit solar/tests/smoke_ops_board.lua
@@ -49,11 +49,17 @@ end
 local CAT = {
   firstflight = { id = "firstflight", title = "First Flight", reward = 4500, rep = 1, brief = "Fly." },
   highroad = { id = "highroad", title = "The High Road", reward = 9000, rep = 1, brief = "Higher." },
+  prospect = { id = "prospect", title = "Prospector", reward = 8000, rep = 1, brief = "Dig." },
 }
+local extra = false
 local abandoned, accepted = 0, nil
 local mi = { valid = true, active = nil }
 function mi.byId(id) return CAT[id] end
-function mi.offers() return mi.active and {} or { CAT.firstflight } end
+function mi.offers()
+  local out = mi.active and {} or { CAT.firstflight }
+  if extra then out[#out + 1] = CAT.prospect end
+  return out
+end
 function mi.upcoming() return { { m = CAT.highroad, needs = "First Flight" } } end
 function mi.goalLines() return { "○ Reach 150 m" } end
 function mi.accept(id) mi.active = id; accepted = id; return true end
@@ -82,38 +88,68 @@ env.openBoard()
 local function tick() env.update(node, 1 / 60); presses = {}; T = T + 1 / 60 end
 tick()
 
--- 1. Signing is one click.
+-- 1. Clicking a row SELECTS it; the SIGN button signs. Signing used to be a
+-- single click on the row, so reading a contract and taking it were the same act.
 ok(button("firstflight") ~= nil, "the offer is drawn as a button")
+ok(env.selectedId() == "firstflight", "the first contract you could sign is selected on opening")
+ok(says("Fly."), "…and its brief is in the detail pane")
 button("firstflight").onClicked()
-ok(accepted == "firstflight", "one click signs a contract")
+tick()
+ok(accepted == nil, "clicking a row does NOT sign it")
+ok(button("sign") ~= nil and not button("sign").disabled, "the detail pane has a SIGN button")
+button("sign").onClicked()
+ok(accepted == "firstflight", "SIGN signs the selected contract")
 ok(played[#played] == "sign", "…and it sounds like it")
 tick()
+ok(says("On the books"), "the signed contract is on the books")
+ok(button("sign") == nil, "…and its detail offers no SIGN")
 
--- 2. Abandoning is two. One stray click on your own contract used to throw it
--- away, and it costs standing.
+-- 2. Abandoning is an explicit button that arms, then acts. It used to be a
+-- second click on the row — a double-click nothing on screen mentioned.
+ok(button("abandon") ~= nil, "the contract on the books has an ABANDON button")
 button("firstflight").onClicked()
-ok(abandoned == 0, "the first click on the active contract does NOT abandon it")
+ok(abandoned == 0, "clicking the active row never abandons it")
+button("abandon").onClicked()
+ok(abandoned == 0, "the first ABANDON press does NOT abandon")
 tick()
-ok(says("abandon?"), "…it arms, and the row says so")
-button("firstflight").onClicked()
-ok(abandoned == 1, "the second click abandons it")
+ok(says("Confirm") and button("abandon").selected == true, "…it arms, and the button says so")
+button("abandon").onClicked()
+ok(abandoned == 1, "the second press abandons it")
 
 -- …and an armed abandon disarms itself if you walk away from the decision.
 mi.accept("firstflight")
 tick()
-button("firstflight").onClicked()
+button("abandon").onClicked()
 T = T + 5.0
 tick()
-button("firstflight").onClicked()
-ok(abandoned == 1, "a second click long after the first only re-arms")
+button("abandon").onClicked()
+ok(abandoned == 1, "a second press long after the first only re-arms")
 ok(mi.active == "firstflight", "…and the contract stays on the books")
+
+-- One contract at a time: another offer's SIGN is shown, disabled, with why.
+-- (missions.accept would quietly REPLACE the one on the books, progress and all.)
+extra = true
+tick()
+button("prospect").onClicked()
+tick()
+ok(button("sign") ~= nil and button("sign").disabled == true,
+  "with a contract on the books, another offer's SIGN is disabled")
+ok(says("One contract at a time"), "…and the pane says why")
+button("sign").onClicked()
+ok(mi.active == "firstflight", "…and pressing it anyway changes nothing")
+extra = false
 
 -- 3. The ladder: what you can't sign yet is shown, with what it waits for.
 tick()
 ok(says("Coming up"), "the board lists the contracts still to come")
-ok(says("The High Road") and says("after First Flight"),
-  "…each with the contract that unlocks it")
-ok(button("highroad") == nil, "…and they are not clickable")
+ok(button("highroad") ~= nil, "…selectable, so you can read what it is")
+button("highroad").onClicked()
+tick()
+ok(says("Unlocks after First Flight"), "…and its detail says what unlocks it")
+ok(button("sign") == nil and button("abandon") == nil, "…with nothing to press")
+
+-- The way back to the company overview, now that E opens the board directly.
+ok(button("overview") ~= nil, "the board offers the Command Centre overview")
 
 -- 4. Esc closes the board and marks the frame, so the pause menu leaves it be.
 presses["escape"] = true

@@ -16,11 +16,43 @@
 --     if co.spend(1200, "hull: Kestrel I") then ... end
 --     co.balance()   co.rep()   co.ledgerLines(6)
 
--- Enough for a first rocket and one mistake, not enough to skip the ground
--- game: at $12,000 the mining laser and the depot were pointless, because the
--- opening balance already bought four rockets.
+-- NOT quite enough for a first rocket, on purpose. At $12,000 the mining laser
+-- and the depot were pointless, because the opening balance already bought four
+-- rockets; at $3,000 it still bought two and a half, and the first five minutes
+-- never touched the ground game at all. The cheapest thing that flies is about
+-- $750 and a sensible first hopper about $1,100, so the opening is: sign the
+-- First Flight, then mine and harvest for a few minutes — the first sale of each
+-- material pays a discovery premium — and launch with money you earned. The
+-- economy run in the agent report puts that launch at about six minutes in.
 defaults = {
-  start_funds = 3000,    -- a fresh company's opening balance
+  start_funds = 500,     -- a fresh company's opening balance
+}
+
+-- ── STANDING ────────────────────────────────────────────────────────────────
+-- Reputation used to clamp at 10 and do one thing: +4% on sale prices. Now it is
+-- the company's track record, and it is what the rest of the game asks before it
+-- offers you more:
+--
+--   * contract TIERS (missions.lua): survey work round your own moons opens at
+--     Contractor, interplanetary work at Trusted, landings and hauls on other
+--     planets at Prime;
+--   * how many generated contracts the Ops Board holds at once;
+--   * what a generated contract pays (`rewardMult`);
+--   * what the depot pays (`priceMult`);
+--   * the late catalogue (research.lua: RCS, Skipper, Docking Port).
+--
+-- It comes from finishing contracts (+1 to +5, scaled by difficulty), the first
+-- sale of a rare material (+1), and is lost by walking away from a signed
+-- contract (−1). Research no longer buys it: standing that money can buy is a
+-- price, not a reputation.
+REP_MIN, REP_MAX = -10, 30
+STANDING = {
+  { at = -10, name = "Blacklisted" },
+  { at = 0,   name = "Unknown" },
+  { at = 3,   name = "Contractor" },
+  { at = 8,   name = "Trusted" },
+  { at = 15,  name = "Prime" },
+  { at = 25,  name = "Legend" },
 }
 
 -- Published so panels can render without a call.
@@ -133,15 +165,59 @@ function earn(amount, why)
   if s and s.play then s.play("cash") end
 end
 
--- Reputation moves slowly and clamps: it gates the catalogue later (SC6), so
+-- Reputation moves slowly and clamps: it gates contracts and the catalogue, so
 -- it must never run away on a lucky streak or bottom out unrecoverably.
 function addRep(d, why)
-  local r = math.max(-5, math.min(10, rep() + (d or 0)))
+  local before = rep()
+  local r = math.max(REP_MIN, math.min(REP_MAX, before + (d or 0)))
   save.set("co.rep", r)
   reputation = r
   if d and d ~= 0 then
     log(string.format("company: reputation %+d → %d  (%s)", d, r, why or "—"))
+    local a, b = standing(before), standing(r)
+    if a.name ~= b.name then
+      log(string.format("company: standing is now %s", b.name))
+      save.set("co.standingNews", { name = b.name, up = r > before, t = time or 0 })
+    end
   end
+end
+
+-- The standing a reputation adds up to: { name, at, level, nextAt, nextName }.
+-- `level` counts from 1 = Unknown (Blacklisted is 0), so "tier ≥ 3" reads as
+-- "Trusted or better" wherever it is asked.
+function standing(r)
+  r = r or rep()
+  local idx = 1
+  for i, s in ipairs(STANDING) do
+    if r >= s.at then idx = i end
+  end
+  local s, nx = STANDING[idx], STANDING[idx + 1]
+  return { name = s.name, at = s.at, level = idx - 1,
+           nextAt = nx and nx.at or nil, nextName = nx and nx.name or nil }
+end
+
+-- "Contractor · 5 (Trusted at 8)" — the one line a panel shows.
+function standingLine(r)
+  r = r or rep()
+  local s = standing(r)
+  if s.nextAt then
+    return string.format("%s · %+d  (%s at %d)", s.name, r, s.nextName, s.nextAt)
+  end
+  return string.format("%s · %+d", s.name, r)
+end
+
+-- What the depot pays against list price: +1.5% a point, so a Legend sells for
+-- about +40% and a blacklisted company takes a 15% haircut.
+function priceMult(r)
+  r = math.max(REP_MIN, math.min(REP_MAX, r or rep()))
+  return 1.0 + 0.015 * r
+end
+
+-- What a GENERATED contract pays against its base: +2% a point of standing,
+-- never below list. The fixed ladder pays what it says.
+function rewardMult(r)
+  r = math.max(0, math.min(REP_MAX, r or rep()))
+  return 1.0 + 0.02 * r
 end
 
 -- The most recent `n` transactions, newest first, formatted for a panel. The

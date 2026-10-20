@@ -129,13 +129,17 @@ local function check(desc, ok, detail)
 end
 
 -- 1. Seed capital, once and only once.
--- A first rocket and a mistake, not four rockets: the ground game has to pay.
-check("a fresh company is funded", co.balance() == 3000, "$" .. co.balance())
+-- Not quite a first rocket: the opening sends you to the ground game first.
+local SEED = co.defaults.start_funds
+check("a fresh company is funded", co.balance() == 500, "$" .. co.balance())
+check("...with less than a sensible first rocket", SEED < 1100 and SEED > 0, SEED)
+co.earn(2500, "test top-up")
 co.spend(1000, "test")
 co.start({})           -- a "scene load": the script reruns, the money must not
 tick()                 -- come back
-check("seed capital is not re-granted on a scene load", co.balance() == 2000,
+check("seed capital is not re-granted on a scene load", co.balance() == SEED + 1500,
   "$" .. co.balance())
+co.spend(co.balance() - 2000, "to a round balance")
 
 -- 2. Spending refuses rather than going negative.
 check("an affordable purchase goes through", co.spend(1000, "hull") == true)
@@ -154,12 +158,23 @@ check("...debits included", co.ledgerLines(2)[2]:find("−$1,000", 1, true) ~= n
   co.ledgerLines(2)[2])
 co.spend(10450, "back to the test's balance")
 
--- 3. Reputation clamps rather than running away.
-co.addRep(20, "test")
-check("reputation clamps high", co.rep() == 10, tostring(co.rep()))
-co.addRep(-40, "test")
-check("reputation clamps low", co.rep() == -5, tostring(co.rep()))
-co.addRep(5, "test")
+-- 3. Reputation clamps rather than running away — and now means something.
+co.addRep(50, "test")
+check("reputation clamps high", co.rep() == 30, tostring(co.rep()))
+check("...at the top standing", co.standing().name == "Legend", co.standing().name)
+check("a Legend sells dearer", co.priceMult() > 1.4 and co.priceMult() < 1.5, co.priceMult())
+check("...and is paid more for generated work", co.rewardMult() > 1.5, co.rewardMult())
+co.addRep(-80, "test")
+check("reputation clamps low", co.rep() == -10, tostring(co.rep()))
+check("...where the depot pays under list", co.priceMult() < 1.0, co.priceMult())
+check("...and generated rewards never fall under list", co.rewardMult() == 1.0)
+co.addRep(10, "test")
+check("standing has named levels with a next step",
+  co.standing(0).name == "Unknown" and co.standing(3).name == "Contractor"
+  and co.standing(8).name == "Trusted" and co.standing(0).nextAt == 3,
+  co.standingLine(0))
+check("...and a change of level is news", store["co.standingNews"] ~= nil)
+co.addRep(-co.rep(), "back to zero")
 
 -- 4. Contracts: only what's actually available is offered.
 local offers = mi.offers()
@@ -211,7 +226,7 @@ place(0, 0)
 ASM.grounded = true
 tick(3)
 check("landing completes the contract", mi.active == nil, tostring(mi.active))
-check("...and Ops pays out", co.balance() == bal + 4500,
+check("...and Ops pays out", co.balance() == bal + 2500,
   string.format("%d → %d", bal, co.balance()))
 check("...and it never pays twice", (function()
   local b2 = co.balance()
@@ -286,7 +301,7 @@ inv.add("base", "iron", 20)          -- 32 units of ore in the warehouse
 tick(2)
 check("delivering the ore completes it on the ground, with nobody flying",
   mi.active == nil, tostring(mi.active))
-check("...and pays", co.balance() == bal3 + 8000, co.balance() - bal3)
+check("...and pays", co.balance() == bal3 + 2800, co.balance() - bal3)
 
 -- Selling what you delivered can't un-deliver it.
 mi.accept("botany")
@@ -385,6 +400,32 @@ do
   mi.abandon()
   check("...and lets it go once the contract is off the books", not mi.reserves("iron"))
   store["mission.done"] = saved
+end
+
+-- ── 11. THE LADDER PAYS BY DIFFICULTY ───────────────────────────────────────
+-- "Bring It Home" (land by the base and recover) paid $12,000 against "The
+-- High Road"'s $9,000. Each harder rung must pay more than the one it needs.
+do
+  local function R(id) return mi.byId(id).reward end
+  check("recovering at the base pays less than climbing the High Road",
+    R("recovery") < R("highroad"), R("recovery") .. " vs " .. R("highroad"))
+  for _, pair in ipairs({ { "firstflight", "highroad" }, { "highroad", "orbit" },
+                          { "orbit", "rendezvous" }, { "prospect", "deepcore" },
+                          { "recovery", "firstflight" } }) do
+    check(string.format("%s pays less than %s", pair[1], pair[2]), R(pair[1]) < R(pair[2]),
+      R(pair[1]) .. " vs " .. R(pair[2]))
+  end
+  -- A recovery from BEFORE the contract was signed is not this contract's.
+  store["mission.done"] = { firstflight = true }
+  store["mission.recovered"] = true
+  mi.accept("recovery")
+  craft.piloting = false
+  tick(3)
+  check("an old recovery doesn't pay Bring It Home on signing", mi.active == "recovery",
+    tostring(mi.active))
+  store["mission.recovered"] = true
+  tick(3)
+  check("...a new one does", mi.active == nil, tostring(mi.active))
 end
 
 -- ── report ──────────────────────────────────────────────────────────────────

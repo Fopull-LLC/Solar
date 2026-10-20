@@ -92,7 +92,9 @@ function missions.goalLines()
   local m = missions.active and missions.byId(missions.active)
   if not m then return {} end
   local out = {}
-  for _, g in ipairs(m.goals) do out[#out + 1] = "○ " .. g.label end
+  for i, g in ipairs(m.goals) do
+    out[#out + 1] = ((missions.ticked or {})[i] and "✓ " or "○ ") .. g.label
+  end
   return out
 end
 function missions.completed() return missions.done end
@@ -155,6 +157,34 @@ update(card, 1 / 60)
 ok(says("directly behind you"), "the bearing must follow where you're looking: " ..
   table.concat(lines(), " | "))
 cam.fwd_z = 1
+
+-- LEFT AND RIGHT. The engine is right-handed and Y-up: a camera looking down
+-- -Z has +X on the right of the screen, so screen-right is FORWARD × UP. The
+-- card used UP × FORWARD — screen-left — and told a new player the Command
+-- Centre was "ahead and to your left" while it stood on the right of the
+-- screen. Facing +X, the centre (+Z of us) is on the right; facing -X, the left.
+cam.fwd_x, cam.fwd_z = 1, 0
+update(card, 1 / 60)
+ok(says("to your right") and not says("left"),
+  "facing +X the command centre at +Z is on your RIGHT: " .. table.concat(lines(), " | "))
+cam.fwd_x = -1
+update(card, 1 / 60)
+ok(says("to your left") and not says("right"),
+  "facing -X the command centre at +Z is on your LEFT: " .. table.concat(lines(), " | "))
+-- Half-way round: ahead-and-right, then behind-and-left.
+cam.fwd_x, cam.fwd_z = 1, 1
+update(card, 1 / 60)
+ok(says("ahead and to your right"), "45° off, to the right: " .. table.concat(lines(), " | "))
+cam.fwd_x, cam.fwd_z = -1, -1
+update(card, 1 / 60)
+ok(says("behind you, to the left"), "135° off, to the left: " .. table.concat(lines(), " | "))
+-- The bearing has its own row: run on after the distance it wrapped, and the
+-- last word of it sat alone on a line.
+local where_row
+for _, r in ipairs((drawn or {}).items or {}) do if r.key == "where" then where_row = r.text end end
+ok(where_row and not where_row:find("behind", 1, true),
+  "the name-and-distance row carries no bearing: " .. tostring(where_row))
+cam.fwd_x, cam.fwd_z = 0, 1
 
 -- 3. Standing at it: stop giving directions, start giving the verb.
 astro.z = planet.z + 30
@@ -309,5 +339,62 @@ update(card, 1 / 60)
 ok(not says("CONTRACT COMPLETE"), "...then stands down and the card carries on")
 ok(says("Sign your next contract"), "...back to the next step: " ..
   table.concat(lines(), " | "))
+
+-- ── CONTRACTS THAT NAME ANOTHER WORLD ───────────────────────────────────────
+-- Generated contracts (missions.lua genSpec) send you to a named body. The card
+-- used to answer every delivery with "Mine ore for the contract" — wrong when
+-- the crystal a haul wants grows on Nami and not under your feet.
+missions.lastPaid = nil
+missions.catalogue["g1-haul-Nami"] = { id = "g1-haul-Nami", gen = true, kind = "haul", body = "Nami",
+  title = "Haul: Crystal from Nami", reward = 9000, brief = "Nami has crystal.",
+  goals = { { kind = "flag", body = "Nami", label = "Set foot on Nami" },
+            { kind = "deliver", mat = "crystal", kg = 40, after = 1,
+              label = "40 kg of Crystal in the warehouse" } } }
+missions.catalogue["g2-survey-Nami"] = { id = "g2-survey-Nami", gen = true, kind = "survey", body = "Nami",
+  title = "Survey: Nami", reward = 2600, brief = "Fly by.",
+  goals = { { kind = "soi", body = "Nami", label = "Enter Nami's sphere of influence" } } }
+_G.findScript = (function(prev)
+  local mats = { label = function(m) return m == "crystal" and "Crystal" or m end }
+  return function(kind) if kind == "materials" then return mats end return prev(kind) end
+end)(_G.findScript)
+local held = 0
+inv.count = function(_, mat) return mat == "crystal" and held or 0 end
+pack = 0.0
+missions.ticked = {}
+fleet = { { node = { valid = true } } }
+
+missions.active = "g2-survey-Nami"
+update(card, 1 / 60)
+ok(says("Fly to Nami"), "a survey says where to fly: " .. table.concat(lines(), " | "))
+
+missions.active = "g1-haul-Nami"
+update(card, 1 / 60)
+ok(says("Land on Nami and step out"), "a haul starts with getting there: " .. table.concat(lines(), " | "))
+ok(not says("Mine ore"), "...not with mining at home")
+
+missions.ticked = { true }
+update(card, 1 / 60)
+ok(says("Bring 40 kg of Crystal from Nami"), "then it names what to bring and from where: "
+  .. table.concat(lines(), " | "))
+
+local plain_dominant = space.dominant
+space.dominant = function() return "Nami" end
+update(card, 1 / 60)
+ok(says("Collect Crystal here on Nami"), "standing on Nami, it says to collect it: "
+  .. table.concat(lines(), " | "))
+space.dominant = plain_dominant
+
+held = 12
+update(card, 1 / 60)
+ok(says("Sell the Crystal at the depot") and says("Commerce Depot"),
+  "home with it, it sends you to the depot: " .. table.concat(lines(), " | "))
+held = 0
+
+fleet = {}
+missions.ticked = {}
+update(card, 1 / 60)
+ok(says("Build a craft that can reach Nami") and says("Vehicle Assembly"),
+  "with no craft, it sends you to build one that can get there: " .. table.concat(lines(), " | "))
+missions.active = nil
 
 print(string.format("OBJECTIVES SMOKE OK — %d checks passed", checks))

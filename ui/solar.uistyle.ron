@@ -101,17 +101,34 @@
     // script per row. They are described from data now, and this is where they
     // get their look.
 
-    // The frame. Same glass as the objectives card so the game reads as one
-    // thing, and the same rule: lifted off the world by a shadow rather than by
-    // being opaque, because you are meant to still see where you're standing.
+    // The frame. A panel you stop to READ is opaque: it used to be the same
+    // glass as the objectives card, and over the white interior of the command
+    // centre or the depot every line on it sat on a grey wash of wall. The
+    // card you read at a glance while walking stays glass ("hud/card"); the
+    // world behind a panel is dimmed instead ("panel/scrim").
     "panel/frame": (
         base: (
-            fill: "panel",
+            fill: "panelSolid",
             radius: "md",
             border: 1.0,
             border_color: "edge",
             shadow: ( color: (0.0, 0.0, 0.0, 0.6), offset: (0.0, 10.0), blur: 26.0, spread: 2.0 ),
         ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+
+    // The loading screen's curtain: deep navy at the top falling to black.
+    "load/backdrop": (
+        base: (
+            fill: (0.030, 0.058, 0.095, 1.0),
+            gradient: ( kind: Linear, to: (0.004, 0.008, 0.016, 1.0), angle: 90.0 ),
+        ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+
+    // The dim behind an open panel: a full-screen box under the frame.
+    "panel/scrim": (
+        base: ( fill: "scrim" ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
 
@@ -140,6 +157,8 @@
         hover:    ( fill: (0.10, 0.18, 0.22, 0.92), border_color: (0.28, 0.86, 0.74, 0.7) ),
         pressed:  ( scale: (0.995, 0.96) ),
         focus:    ( border: 2.0, border_color: "accent" ),
+        // The row whose detail is open beside the list (the Ops Board).
+        selected: ( fill: (0.08, 0.17, 0.20, 0.98), border: 1.4, border_color: "accent" ),
         disabled: ( opacity: 0.4 ),
         transition: ( duration: 0.1, ease: OutCubic ),
     ),
@@ -159,6 +178,7 @@
         hover:   ( fill: (0.09, 0.32, 0.26, 0.96) ),
         pressed: ( scale: (0.995, 0.96) ),
         focus:   ( border: 2.0, border_color: "ink" ),
+        selected: ( border: 2.0, border_color: "ink" ),
         transition: ( duration: 0.1, ease: OutCubic ),
     ),
 
@@ -179,6 +199,27 @@
         pressed:  ( scale: (0.98, 0.94) ),
         focus:    ( border: 2.0, border_color: "ink" ),
         disabled: ( opacity: 0.35 ),
+        transition: ( duration: 0.09, ease: OutCubic ),
+    ),
+
+    // The action that costs you something (abandoning a contract). Warm and
+    // quiet until hovered; `selected` is its armed "are you sure?" state.
+    "panel/danger": (
+        base: (
+            fill: (0.10, 0.05, 0.05, 0.85),
+            radius: "sm",
+            border: 1.0,
+            border_color: (1.00, 0.42, 0.36, 0.45),
+            text_color: (1.00, 0.62, 0.56, 1.0),
+            text_size: "caption",
+            case: Upper,
+            tracking: 1.2,
+            pad: "sm",
+        ),
+        hover:    ( fill: (0.22, 0.07, 0.06, 0.95), border_color: "danger" ),
+        pressed:  ( scale: (0.98, 0.94) ),
+        focus:    ( border: 2.0, border_color: "ink" ),
+        selected: ( fill: (0.50, 0.10, 0.08, 0.97), border_color: "danger", text_color: "ink" ),
         transition: ( duration: 0.09, ease: OutCubic ),
     ),
 

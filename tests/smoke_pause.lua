@@ -52,6 +52,9 @@ local function lines()
   local function walk(t)
     if type(t) ~= "table" then return end
     if t.text then out[#out + 1] = tostring(t.text) end
+    -- Positional children too: the menu is described as a LIST (the scrim
+    -- behind it, then the card), and a card has rows written in place.
+    for _, c in ipairs(t) do if type(c) == "table" then walk(c) end end
     for _, item in ipairs(t.items or {}) do
       -- `items` + a passthrough builder: the builder is the last positional
       -- entry, so run it to get the row it would draw.
@@ -75,6 +78,7 @@ local function button(needle)
       found = t
       return
     end
+    for _, c in ipairs(t) do if type(c) == "table" then walk(c) end end
     for _, item in ipairs(t.items or {}) do
       local build = t[1] and t[#t]
       if type(build) == "function" then walk(build(item)) else walk(item) end

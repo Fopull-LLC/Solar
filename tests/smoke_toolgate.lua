@@ -44,26 +44,58 @@ local BODY = { name = "Golil", x = 3000, y = 0, z = 0, radius = 200 }
 API.space = { dominant = function() return BODY.name end,
               body = function(n) return n == BODY.name and BODY or nil end,
               bodies = function() return { BODY } end }
-API.vec3 = function(x, y, z) return { x = x, y = y, z = z } end
-API.raycast = function() return { x = 0, y = 0, z = 0, distance = 1.0 } end
+-- vec3, enough of it for the walker's swim (it reads its facing in the water).
+local V = {}
+V.__index = V
+local function vec3(x, y, z) return setmetatable({ x = x or 0, y = y or 0, z = z or 0 }, V) end
+function V.__add(a, b) return vec3(a.x + b.x, a.y + b.y, a.z + b.z) end
+function V.__sub(a, b) return vec3(a.x - b.x, a.y - b.y, a.z - b.z) end
+function V.__mul(a, b)
+  if type(b) == "number" then return vec3(a.x * b, a.y * b, a.z * b) end
+  return vec3(a * b.x, a * b.y, a * b.z)
+end
+function V:dot(o) return self.x * o.x + self.y * o.y + self.z * o.z end
+function V:length() return math.sqrt(self:dot(self)) end
+function V:normalized()
+  local l = self:length()
+  return l < 1e-9 and vec3(0, 0, 0) or vec3(self.x / l, self.y / l, self.z / l)
+end
+function V:cross(o)
+  return vec3(self.y * o.z - self.z * o.y, self.z * o.x - self.x * o.z, self.x * o.y - self.y * o.x)
+end
+API.vec3 = vec3
+-- Ground under the crew, unless section 8 puts them out of their depth.
+local seabed = true
+-- The hit is the ground a metre under the crew: what the walker's probe finds,
+-- and in laser reach, so the aim ring has something to sit on.
+API.raycast = function()
+  if not seabed then return nil end
+  local a = API.find and API.find("Astronaut")
+  if not a then return { x = 0, y = 0, z = 0, distance = 1.0 } end
+  return { x = a.x, y = a.y - 1.0, z = a.z, nx = 0, ny = 1, nz = 0, distance = 1.0 }
+end
 API.audio = { play = function() return { stop = function() end, setVolume = function() end,
                                          setPitch = function() end } end }
 API.terrain = { query = function() return 0.5 end, dig = function() end,
                 paint = function() end, warm = function() end }
-API.draw = { line = function() end, ring = function() end, sphere = function() end }
+-- The aim ring is drawn every frame it shows; counted so a test can ask.
+local rings = 0
+API.draw = { line = function() end, ring = function() rings = rings + 1 end, sphere = function() end,
+             disc = function() rings = rings + 1 end }
 API.spawnEffect = function() end
 API.destroy = function() end
 API.physics = { pause = function() end }
 -- The belt and the status chips are described with `ui.make`; what they say is
 -- read back from their published text (`hudText`, `line`), so the tree itself
 -- is not kept.
-API.ui = { make = function() end }
+local MADE = {}
+API.ui = { make = function(n, tree) MADE[n] = tree end }
 
 local KEYS = {}
 API.input = {
   key = function(k) return KEYS[k] == true end,
   pressed = function(k) return KEYS["!" .. k] == true end,
-  button = function() return false end,
+  button = function(b) return b == 0 and KEYS.lmb == true end,
   aimYaw = function() return 0.0 end,
   mouse = function() return 0, 0 end,
   setMouseLocked = function() end,
@@ -108,8 +140,14 @@ local function make_node(name)
 end
 
 local ASTRO = make_node("Astronaut")
+-- Its frame (unturned) — the walker reads the body's facing in the water.
+function ASTRO:toWorld(v) return vec3(self.x + v.x, self.y + v.y, self.z + v.z) end
+function ASTRO:toLocal(v) return vec3(v.x - self.x, v.y - self.y, v.z - self.z) end
 local TOOLHUD = make_node("Tool HUD")
-local NODES = { Astronaut = ASTRO, ["Tool HUD"] = TOOLHUD }
+-- The tool in the astronaut's hand (scenes/system.ron: bone-attached to
+-- Hand.Right). Authored visible, so anything that skips the holster leaves it out.
+local LASER = make_node("Laser Tool")
+local NODES = { Astronaut = ASTRO, ["Tool HUD"] = TOOLHUD, ["Laser Tool"] = LASER }
 API.find = function(n) return NODES[n] end
 
 -- ── the vessel, as `planet_walker` sees it ──────────────────────────────────
@@ -156,7 +194,8 @@ envs.company = { valid = true, balance = function() return 12450 end,
                  rep = function() return 3 end,
                  money = function(v) return "$" .. tostring(math.floor(v)) end }
 envs.game_manager = { valid = true, loading = false }
-envs.climate = { valid = true, seaDepth = function() return nil end,
+local sea_depth = nil
+envs.climate = { valid = true, seaDepth = function() return sea_depth end,
                  worldOf = function() return { kind = "rock", seed = 1, radius = BODY.radius } end }
 -- The camera publishes the view basis the belt aims with; without it the belt
 -- bails before it ever gets to the gate, which would make every check below
@@ -181,6 +220,7 @@ local function tick(n)
     T = T + 1 / 60
     walker.update(ASTRO, 1 / 60)
     belt.update(TOOLHUD, 1 / 60)
+    if belt.lateUpdate then belt.lateUpdate(TOOLHUD, 1 / 60) end   -- the aim ring draws here
     status.update(STATUS, 1 / 60)
     for k in pairs(KEYS) do if k:sub(1, 1) == "!" then KEYS[k] = nil end end
   end
@@ -340,6 +380,58 @@ ok(refuses_with(function() VESSEL.piloting = true end,
   function() VESSEL.piloting = false end,
   "aboard a craft"), "being aboard says so")
 
+-- ── 8. THE TOOL IN THE HAND, AND SWIMMING ───────────────────────────────────
+-- The laser is the only hand-held model; the other tools work bare-handed. It
+-- has to be away whenever it isn't the tool picked — including while the aim
+-- gates hold the belt (the loading sweep, the orbit map), which used to return
+-- before the holster ran and leave it in your hand with the spade picked.
+store["tool.equipped"] = 1
+belt.start(TOOLHUD)
+tick(2)
+ok(LASER.visible == true, "the laser picked: it is in your hand")
+store["tool.equipped"] = 3
+belt.start(TOOLHUD)
+LASER.visible = true
+tick(2)
+ok(LASER.visible == false, "the spade picked: the laser is put away")
+LASER.visible = true                       -- as authored, before the belt has run
+envs.planet_camera.cam_x = 0               -- the camera still swinging in from the sweep
+tick(2)
+ok(LASER.visible == false, "...even while the aim gates hold the belt")
+envs.planet_camera.cam_x = BODY.x
+VESSEL.piloting = true
+store["tool.equipped"] = 1
+belt.start(TOOLHUD)
+tick(2)
+ok(LASER.visible == false, "aboard a craft, the laser is put away")
+VESSEL.piloting = false
+tick(2)
+ok(LASER.visible == true, "...and back in hand on stepping out")
+
+-- In the water out of your depth: no firing, no aim ring, no beam.
+KEYS.lmb = true
+tick(2)
+ok(belt.inUse == true and rings > 0, "on foot, the trigger fires and the aim ring draws ["
+  .. tostring(belt.inUse) .. " " .. rings .. " " .. tostring(belt.gate) .. "]")
+sea_depth, seabed, ASTRO.grounded = 3.0, false, false
+tick(30)
+ok(walker.swimming == true, "out of their depth, the crew is swimming")
+rings = 0
+tick(5)
+ok(belt.gate == "swimming", "swimming gates the belt, and says so [" .. tostring(belt.gate) .. "]")
+ok(belt.inUse == false, "...the trigger does nothing")
+ok(rings == 0, "...no aim ring is drawn")
+ok(LASER.visible == false, "...and the laser is put away")
+ok(TOOLHUD.els.ui ~= nil and TOOLHUD.els.ui.visible == true and belt.hudText:find("swimming") ~= nil,
+  "...while the belt still says why [" .. tostring(belt.hudText) .. "]")
+sea_depth, seabed, ASTRO.grounded = nil, true, true
+tick(40)
+ok(walker.swimming == false and belt.gate == "in hand" and belt.inUse == true,
+  "ashore again, the tools are back [" .. tostring(belt.gate) .. "]")
+ok(LASER.visible == true, "...laser in hand")
+KEYS.lmb = nil
+tick(2)
+
 -- ── THE NUMBERS YOU ARE PLAYING FOR ─────────────────────────────────────────
 -- Balance, standing and pack lived inside two buildings — the Ops Board and the
 -- Commerce Depot — so you could mine for five minutes, walk back with a full
@@ -366,6 +458,34 @@ ok(STATUS.els.ui.visible == false,
 VESSEL.piloting = false
 tick(2)
 ok(STATUS.els.ui.visible == true, "...and comes back when you get out")
+
+-- ── THE READOUT IS SHOWN ─────────────────────────────────────────────────────
+-- The hotbar's hint line is where the belt says what it is pointed at and why
+-- it refuses. It was described at the TOP of update, from a `prompt` cleared one
+-- line earlier and only filled in by the firing code below — so "no target",
+-- "no plant in reach" and the laser's material readout were computed every
+-- frame and never once drawn. Read back the tree the HUD was actually given.
+local function hint_text()
+  local tree = MADE[TOOLHUD]
+  local function walk(t, under)
+    if type(t) ~= "table" then return nil end
+    if under and t.key == "t" then return t.text end
+    for _, c in ipairs(t) do
+      local r = walk(c, under or (type(c) == "table" and c.key == "hint"))
+      if r then return r end
+    end
+    return nil
+  end
+  return walk(tree, false)
+end
+belt.tool = 2                      -- the harvest cutter, with no flora field in this scene
+tick(2)
+ok(belt.prompt ~= "" and (hint_text() or ""):find(belt.prompt, 1, true) ~= nil,
+  "the cutter's refusal reaches the HUD [" .. tostring(hint_text()) .. " / " .. tostring(belt.prompt) .. "]")
+belt.tool = 1
+tick(2)
+ok((hint_text() or "") == belt.prompt and belt.prompt ~= "",
+  "the laser's aim readout reaches the HUD [" .. tostring(hint_text()) .. "]")
 
 if #failures == 0 then
   print("TOOL GATE SMOKE OK — " .. checks .. " checks passed")

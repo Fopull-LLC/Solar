@@ -102,6 +102,9 @@ end
 local msg, msg_t, msg_bad = "", -100, false
 local function say(text, bad)
   msg, msg_t, msg_bad = text, time, bad or false
+  -- Every line here is the result of a move: a stack landing, or a refusal.
+  local fx = ref("sfx")
+  if fx and fx.play then fx.play(bad and "denied" or "bag_move") end
 end
 
 -- ── moving cargo ────────────────────────────────────────────────────────────
@@ -159,18 +162,18 @@ local function hint_line(inv)
   -- nothing on your back, the panel used to say "click a row to move that
   -- stack" above no rows at all.
   if inv and inv.isEmpty("astro") then
-    return "Empty — mine rock with the laser [1], harvest flora with the cutter [2].", false
+    return "Empty — mine rock with the laser [1], cut plants with [2].", false
   end
   if targetId then
-    return "Click a row to move that stack.   I or Esc to close.", false
+    return "Click a row to move that stack.", false
   end
-  return "Stand by a craft with a Cargo Bay, or at the Commerce Depot, to unload.   I or Esc to close.", false
+  return "Unload at a craft's Cargo Bay or the Commerce Depot.", false
 end
 
 -- Sizes are the styles' (ui/solar.uistyle.ron); the one row that can wrap —
 -- the hint — is full width and "fit" tall.
 local W, PAD = 440, 16                       -- the Inventory Panel node's width; the pad
-local METER_W = W - PAD * 2
+local METER_W = W - (PAD + 2) * 2
 
 local function wrapped(key, style, text)
   return { "text", key = key, style = style, w = "100%", h = "fit", wrap = true, text = text }
@@ -255,10 +258,15 @@ local function describe(astro)
   end
 
   rows[#rows + 1] = { "box", key = "rule", style = "panel/rule", w = "100%", h = 1 }
-  rows[#rows + 1] = wrapped("hint", bad and "panel/hintWarn" or "panel/hint", hint)
+  -- The hint wraps in its own column and the way out sits beside it, so the
+  -- close keys never end up as a stray "close." on a line of their own.
+  rows[#rows + 1] = { "row", key = "foot", w = "100%", h = "fit", gap = 12, pad = 0, align = "start",
+    { "text", key = "hint", style = bad and "panel/hintWarn" or "panel/hint", w = "grow", h = "fit",
+      wrap = true, text = hint },
+    { "text", key = "close", style = "panel/hint", w = "fit", h = "fit", text = "I / Esc  close" } }
 
   return { "col", key = "panel", style = "panel/frame", w = "100%",
-           dir = "col", gap = 8, pad = PAD, align = "start",
+           dir = "col", gap = 8, pad = PAD + 2, align = "start",
            items = rows, function(row) return row end }
 end
 

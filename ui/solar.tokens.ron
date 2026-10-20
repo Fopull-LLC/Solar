@@ -17,6 +17,12 @@
         // Surfaces
         "space":  (0.010, 0.025, 0.040, 0.94),
         "panel":  (0.035, 0.065, 0.095, 0.88),
+        // A panel you stop to read (the Ops Board, the depot, the pause menu).
+        // Practically opaque: at 0.88 a white interior wall behind the board
+        // came through as a grey wash under every line of text.
+        "panelSolid": (0.026, 0.048, 0.070, 0.985),
+        // The dim laid over the world behind such a panel.
+        "scrim":  (0.0, 0.01, 0.02, 0.55),
         "sunken": (0.005, 0.020, 0.030, 0.55),
         // The flight instruments' plate. Nearly opaque on purpose: at 0.72 the
         // orange sky of a desert world came through every panel and turned

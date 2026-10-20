@@ -1,16 +1,17 @@
 -- OPS BOARD — the contracts panel at the Command Centre, and the one screen
--- that tells you what the company is actually doing: balance, standing, the
+-- that tells you what the company is actually doing: balance, reputation, the
 -- contract on the books with its goals ticked off, and every job you could
 -- sign next.
 --
--- Opened from the Command Centre's facility panel. One row per contract, the
--- active one first and marked; clicking signs. Abandoning the active one takes
--- two clicks — the first arms it, the second (within a few seconds) confirms —
--- because it costs standing, and one stray click on your own contract used to
--- throw it away. Contracts you can't sign yet are listed greyed underneath,
--- each with what it is waiting for.
--- Hovering a contract puts its brief on the hint line, so the list stays
--- scannable and the detail is one mouse-move away.
+-- Opened by pressing E at the Command Centre. Two panes: the list on the left
+-- (the contract on the books first, then what you can sign, then — greyed —
+-- what is still to come and what unlocks it), and on the right the DETAIL of
+-- whichever one is selected: its brief, its goals, what it pays, and the one
+-- button that acts on it. Clicking a row only selects it. Signing is the SIGN
+-- button; abandoning is the ABANDON button, which arms on the first press and
+-- acts on the second, because it costs reputation. (Signing used to be a single
+-- click on the row, and abandoning a second click on the same row — a hidden
+-- double-click that nothing on screen admitted to.)
 --
 -- THE SCREEN IS DESCRIBED, NOT AUTHORED. It was six fixed row nodes carrying an
 -- `ops_row` script each, which meant the board could show at most five offers
@@ -20,7 +21,7 @@
 -- and its keyboard focus.
 --
 --   E / Esc    leave
---   ↑ ↓ Enter  the rows are focusable, so the board works without a mouse
+--   ↑ ↓ Enter  the rows and buttons are focusable, so it works without a mouse
 
 local el
 
@@ -64,9 +65,13 @@ end
 -- an Esc on, which the pause menu then leaves alone.
 escTakenAt = -1
 
--- Abandon is armed by the first click and done by a second before this time.
+-- Abandon is armed by the first press and done by a second before this time.
 local ARM_TIME = 3.0
 local abandon_armed_until = -1
+
+-- The contract whose detail is open (an id), and the panel's design width.
+local selected = nil
+local W, PAD, LIST_W = 840, 18, 330
 
 function isOpen()
   return (el and el.visible) or false
@@ -75,6 +80,7 @@ end
 function openBoard()
   if el then el.visible = true end
   abandon_armed_until = -1
+  selected = nil
   sfx("open")
 end
 
@@ -86,33 +92,9 @@ function toggle()
   if el then el.visible = not el.visible end
 end
 
--- The brief of whatever row the pointer is over, shown on the hint line.
-local hovered = nil
-
-local function hint_line(mi, n_offers)
-  if hovered then return (hovered.brief or ""):gsub("\n", "  ") end
-  if mi and mi.active and time < abandon_armed_until then
-    return "Click it again to ABANDON the contract — it costs 1 reputation."
-  end
-  if mi and mi.active then
-    return "Click the contract on the books twice to abandon it (costs standing).   E or Esc to leave."
-  end
-  if n_offers > 0 then
-    return "Click a contract to sign it. Hover one to read its brief.   E or Esc to leave."
-  end
-  return "No contracts available — complete the ones you have."
-end
-
--- Every contract the board can show: the active one first, marked, then the
--- offers in catalogue order. However many there are.
-local function contracts(mi)
-  local out = {}
-  if not mi then return out end
-  local active = mi.active and mi.byId(mi.active) or nil
-  if active then out[#out + 1] = { m = active, active = true } end
-  for _, m in ipairs(mi.offers()) do out[#out + 1] = { m = m, active = false } end
-  return out
-end
+-- Published for the probe and the tests: which contract the detail shows.
+function selectedId() return selected end
+function selectContract(id) selected = id; abandon_armed_until = -1 end
 
 -- ── the board ───────────────────────────────────────────────────────────────
 --
@@ -122,105 +104,217 @@ local function wrapped(key, style, text)
   return { "text", key = key, style = style, w = "100%", h = "fit", wrap = true, text = text }
 end
 
-local function contract_row(c, co, mi)
-  local money = (co and co.money) and co.money(c.m.reward) or ("$" .. tostring(c.m.reward))
-  local armed = c.active and time < abandon_armed_until
+local function money_of(co, v)
+  return (co and co.money) and co.money(v) or ("$" .. tostring(v))
+end
+
+-- Everything on the board, in list order: { m, state = "active"|"offer"|"locked", needs }.
+local function entries(mi)
+  local out = {}
+  if not mi then return out end
+  local active = mi.active and mi.byId(mi.active) or nil
+  if active then out[#out + 1] = { m = active, state = "active" } end
+  for _, m in ipairs(mi.offers()) do out[#out + 1] = { m = m, state = "offer" } end
+  for _, u in ipairs((mi.upcoming and mi.upcoming()) or {}) do
+    out[#out + 1] = { m = u.m, state = "locked", needs = u.needs }
+  end
+  return out
+end
+
+-- The selection falls back to the contract on the books, else the first one you
+-- could sign — so the detail pane is never empty while there is anything to say.
+local function current(list)
+  for _, c in ipairs(list) do if c.m.id == selected then return c end end
+  for _, c in ipairs(list) do if c.state ~= "locked" then return c end end
+  return list[1]
+end
+
+-- A tier or the Charter is a goal on the horizon, not a contract you can sign:
+-- it says "goal" or "from $X" rather than a price that reads like a fee ($0).
+local function pay_label(co, m)
+  if m.charter then return "GOAL" end
+  if m.tier then return (m.reward or 0) > 0 and ("from " .. money_of(co, m.reward)) or "—" end
+  return money_of(co, m.reward)
+end
+
+local function list_row(c, co, sel)
+  local is_sel = sel and sel.m.id == c.m.id
+  local locked = c.state == "locked"
   return {
     "button", key = c.m.id,
-    style = c.active and "panel/rowActive" or "panel/row",
-    w = "100%", h = 34, dir = "row", gap = 10, align = "center",
-    { "text", key = "mark", style = "panel/cell", w = 12, h = "fit",
-      text = c.active and "◆" or "›" },
-    { "text", key = "title", style = "panel/cellStrong", w = "grow", h = "fit", text = c.m.title },
-    { "text", key = "pay", style = "panel/cellStrong", w = 84, h = "fit", textAlign = "end",
-      text = money },
-    { "text", key = "rep", style = "panel/cellMuted", w = 56, h = "fit", textAlign = "end",
-      text = armed and "abandon?" or string.format("rep %+d", c.m.rep or 0) },
+    style = c.state == "active" and "panel/rowActive" or "panel/row",
+    selected = is_sel,
+    w = "100%", h = locked and 30 or 34, dir = "row", gap = 10, align = "center",
+    opacity = locked and (is_sel and 0.85 or 0.55) or 1.0,
+    { "text", key = "mark", style = locked and "panel/cellMuted" or "panel/cell", w = 12, h = "fit",
+      text = c.state == "active" and "◆" or (locked and "·" or "›") },
+    { "text", key = "title", style = locked and "panel/cellMuted" or "panel/cellStrong",
+      w = "grow", h = "fit", maxLines = 1, overflow = "ellipsis", text = c.m.title },
+    { "text", key = "pay", style = locked and "panel/cellMuted" or "panel/cellStrong",
+      w = 104, h = "fit", textAlign = "end", text = pay_label(co, c.m) },
     onClicked = function()
-      if not mi then return end
-      if not c.active then
-        if mi.accept(c.m.id) then sfx("sign") end
-      elseif time < abandon_armed_until then
-        abandon_armed_until = -1
-        mi.abandon()
-        sfx("close")
-      else
-        abandon_armed_until = time + ARM_TIME
-        sfx("arm")
-      end
+      if selected ~= c.m.id then sfx("click") end
+      selected = c.m.id
+      abandon_armed_until = -1
     end,
-    -- The brief on hover: the list stays scannable, the detail is one
-    -- mouse-move away. Focus does it too, so a pad gets the same reading.
-    onHoverStart  = function() hovered = c.m end,
-    onHoverEnd    = function() if hovered == c.m then hovered = nil end end,
-    onFocusEnter  = function() hovered = c.m end,
-    onFocusExit   = function() if hovered == c.m then hovered = nil end end,
   }
 end
 
--- A contract you can't sign yet: not a button, dimmed, and saying what it is
--- waiting for so the ladder is visible before you are on it.
-local function locked_row(u, co)
-  local money = (co and co.money) and co.money(u.m.reward) or ("$" .. tostring(u.m.reward))
-  return {
-    "row", key = "up" .. u.m.id, w = "100%", h = 30, gap = 10, pad = 0, align = "center",
-    opacity = 0.55,
-    { "text", key = "mark", style = "panel/cellMuted", w = 12, h = "fit", text = "·" },
-    { "text", key = "title", style = "panel/cellMuted", w = "grow", h = "fit",
-      text = u.m.title .. "  —  after " .. u.needs },
-    { "text", key = "pay", style = "panel/cellMuted", w = 84, h = "fit", textAlign = "end",
-      text = money },
-  }
+-- The goals of the selected contract: ticked live for the one on the books,
+-- as plain labels for the rest.
+local function goal_lines(mi, c)
+  if c.state == "active" and mi.goalLines then return mi.goalLines() end
+  local out = {}
+  for _, g in ipairs(c.m.goals or {}) do
+    local label = (mi.goalLabel and mi.goalLabel(g)) or g.label or g.kind
+    out[#out + 1] = "○ " .. tostring(label)
+  end
+  return out
+end
+
+local function detail(mi, co, c)
+  local rows = {}
+  if not c then
+    rows[#rows + 1] = wrapped("none", "panel/body",
+      "No contracts on the board right now. Finish the one you have, and more open up.")
+    return rows
+  end
+  local m = c.m
+  local status = ({
+    active = "On the books",
+    offer = "Available to sign",
+    locked = "Unlocks after " .. tostring(c.needs or "?"),
+  })[c.state]
+  rows[#rows + 1] = { "text", key = "status", style = "panel/label", w = "100%", h = "fit", text = status }
+  rows[#rows + 1] = { "text", key = "dtitle", style = "panel/heading", w = "100%", h = "fit",
+                      wrap = true, text = m.title }
+  rows[#rows + 1] = wrapped("brief", "panel/body", ((m.brief or ""):gsub("\n", " ")))
+  local goals = goal_lines(mi, c)
+  if #goals > 0 then
+    rows[#rows + 1] = { "text", key = "goalsL", style = "panel/label", w = "100%", h = "fit", text = "Goals" }
+    for i, l in ipairs(goals) do
+      rows[#rows + 1] = wrapped("goal" .. i, l:sub(1, 3) == "✓" and "hud/goalDone" or "hud/goal", l)
+    end
+  end
+  rows[#rows + 1] = { "row", key = "pays", w = "100%", h = "fit", gap = 10, pad = 0, align = "center",
+    { "text", key = "payL", style = "panel/label", w = "fit", h = "fit", text = "Pays" },
+    { "text", key = "pay", style = "panel/figure", w = "fit", h = "fit", text = money_of(co, m.reward) },
+    { "text", key = "rep", style = "panel/cellMuted", w = "grow", h = "fit",
+      text = string.format("%+d reputation", m.rep or 0) } }
+  rows[#rows + 1] = { "box", key = "drule", style = "panel/rule", w = "100%", h = 1 }
+
+  if c.state == "offer" then
+    local busy = mi.active and mi.byId(mi.active) or nil
+    rows[#rows + 1] = { "button", key = "sign", style = "panel/action", w = "100%", h = 38,
+      textAlign = "center", disabled = busy ~= nil, text = "Sign contract",
+      onClicked = function()
+        if mi.active then return end
+        if mi.accept(m.id) then
+          selected = m.id
+          sfx("sign")
+        end
+      end }
+    if busy then
+      rows[#rows + 1] = wrapped("busy", "panel/hintWarn", string.format(
+        "One contract at a time — finish or abandon %s first.", busy.title))
+    end
+  elseif c.state == "active" then
+    local armed = time < abandon_armed_until
+    rows[#rows + 1] = { "button", key = "abandon", style = "panel/danger", w = "100%", h = 34,
+      textAlign = "center", selected = armed,
+      text = armed and "Confirm — abandon it" or "Abandon contract",
+      onClicked = function()
+        if time < abandon_armed_until then
+          abandon_armed_until = -1
+          mi.abandon()
+          selected = nil
+          sfx("close")
+        else
+          abandon_armed_until = time + ARM_TIME
+          sfx("arm")
+        end
+      end }
+    rows[#rows + 1] = wrapped("cost", armed and "panel/hintWarn" or "panel/hint", armed
+      and "Press again to abandon. It costs 1 reputation, and its progress is lost."
+      or  "Abandoning costs 1 reputation.")
+  else
+    rows[#rows + 1] = wrapped("lockedH", "panel/hint",
+      "Complete " .. tostring(c.needs or "the contract before it") .. " to unlock this one.")
+  end
+  return rows
 end
 
 local function describe()
   local co, mi = ref("company"), ref("missions")
-  local list = contracts(mi)
-  local n_offers = mi and #mi.offers() or 0
+  local list = entries(mi)
+  local sel = current(list)
+  if sel then selected = sel.m.id end
 
-  -- The heading: the board's name, and the two numbers it is about.
-  local rows = {
-    { "row", key = "head", w = "100%", h = "fit", gap = 12, pad = 0, align = "center",
-      { "text", key = "title", style = "panel/heading", w = "grow", h = "fit", text = "Ops Board" },
-      { "text", key = "bal", style = "panel/figure", w = "fit", h = "fit",
-        text = (co and co.money) and co.money(co.balance()) or "" },
-      { "text", key = "rep", style = "panel/cellMuted", w = "fit", h = "fit",
-        text = co and string.format("reputation %+d", co.rep()) or "" } },
-    { "box", key = "rule", style = "panel/rule", w = "100%", h = 1 },
-  }
-
-  local active = list[1] and list[1].active and list[1] or nil
-  if active then
-    rows[#rows + 1] = { "text", key = "booksL", style = "panel/label", w = "100%", h = "fit",
-                        text = "On the books" }
-    rows[#rows + 1] = contract_row(active, co, mi)
-    for i, l in ipairs(mi.goalLines()) do
-      rows[#rows + 1] = wrapped("goal" .. i, l:sub(1, 3) == "✓" and "hud/goalDone" or "hud/goal",
-                                "   " .. l)
+  -- The list: three labelled groups.
+  local left = {}
+  local function group(state, label, empty)
+    local any = false
+    for _, c in ipairs(list) do
+      if c.state == state then
+        if not any then
+          left[#left + 1] = { "text", key = "L" .. state, style = "panel/label", w = "100%", h = "fit",
+                              text = label }
+          any = true
+        end
+        left[#left + 1] = list_row(c, co, sel)
+      end
+    end
+    if not any and empty then
+      left[#left + 1] = { "text", key = "L" .. state, style = "panel/label", w = "100%", h = "fit",
+                          text = label }
+      left[#left + 1] = { "text", key = "E" .. state, style = "panel/cellMuted", w = "100%", h = "fit",
+                          text = empty }
     end
   end
+  group("active", "On the books", nil)
+  group("offer", "Available", (mi and mi.active) and "Nothing else to sign yet." or "None right now.")
+  group("locked", "Coming up", nil)
 
-  local offers = {}
-  for _, c in ipairs(list) do if not c.active then offers[#offers + 1] = c end end
-  rows[#rows + 1] = { "text", key = "offersL", style = "panel/label", w = "100%", h = "fit",
-                      text = #offers > 0 and "Available contracts" or "Available contracts — none right now" }
-  rows[#rows + 1] = { "col", key = "contracts", w = "100%", h = "fit", gap = 4, pad = 0,
-    items = offers, function(c) return contract_row(c, co, mi) end }
-  local later = (mi and mi.upcoming) and mi.upcoming() or {}
-  if #later > 0 then
-    rows[#rows + 1] = { "text", key = "laterL", style = "panel/label", w = "100%", h = "fit",
-                        text = "Coming up" }
-    rows[#rows + 1] = { "col", key = "later", w = "100%", h = "fit", gap = 2, pad = 0,
-      items = later, function(u) return locked_row(u, co) end }
+  local board = { "col", key = "board", style = "panel/frame", w = "100%",
+    dir = "col", gap = 12, pad = PAD, align = "start",
+    -- Heading: the board's name and the two numbers it is about, and the way
+    -- back to the company overview (the Command Centre's other screen).
+    { "row", key = "head", w = "100%", h = "fit", gap = 14, pad = 0, align = "center",
+      { "text", key = "title", style = "panel/heading", w = "grow", h = "fit", text = "Ops Board" },
+      { "text", key = "bal", style = "panel/figure", w = "fit", h = "fit",
+        text = co and money_of(co, co.balance()) or "" },
+      { "text", key = "rep", style = "panel/cellMuted", w = "fit", h = "fit",
+        -- The tier name when the company has one ("Contractor · +5 (Trusted
+        -- at 8)"): it is what decides which contracts the board offers.
+        text = co and ("Reputation  " .. ((co.standingLine and co.standingLine())
+          or string.format("%+d", co.rep()))) or "" },
+      { "button", key = "overview", style = "panel/secondary", w = 108, h = 30,
+        textAlign = "center", text = "Overview",
+        onClicked = function()
+          local fm = ref("facility_menu")
+          closeBoard()
+          if fm and fm.openMenu then fm.openMenu("FacCommand") end
+        end } },
+    { "box", key = "rule", style = "panel/rule", w = "100%", h = 1 },
+    { "row", key = "panes", w = "100%", h = "fit", gap = 24, pad = 0, align = "start",
+      { "col", key = "list", w = LIST_W, h = "fit", gap = 4, pad = 0, align = "start",
+        items = left, function(x) return x end },
+      { "col", key = "detail", w = "grow", h = "fit", gap = 8, pad = 0, align = "start",
+        items = detail(mi, co, sel), function(x) return x end } },
+    { "box", key = "rule2", style = "panel/rule", w = "100%", h = 1 },
+    wrapped("hint", "panel/hint", "Click a contract to read it.   E or Esc to leave."),
+  }
+  -- The world behind is dimmed rather than shown through the panel — by the
+  -- shared scrim facility_menu lays under every reading panel.
+  return board
+end
+
+local function design_width()
+  if camera and camera.screenSize then
+    local w, h = camera.screenSize()
+    if w and h and h > 0 then return 720 * w / h end
   end
-
-  local hint = hint_line(mi, n_offers)
-  rows[#rows + 1] = { "box", key = "rule2", style = "panel/rule", w = "100%", h = 1 }
-  rows[#rows + 1] = wrapped("hint", "panel/hint", hint)
-
-  return { "col", key = "board", style = "panel/frame", w = "100%",
-           dir = "col", gap = 8, pad = PAD, align = "start",
-           items = rows, function(row) return row end }
+  return 1280
 end
 
 function start(node)
@@ -236,17 +330,17 @@ function update(node, dt)
   -- follows you across the map is a panel you fight.
   if not crew_afoot() then
     el.visible = false
-    hovered = nil
     return
   end
   if input.pressed("escape") then
     escTakenAt = time
     el.visible = false
-    hovered = nil
     sfx("close")
     return
   end
   -- The pointer belongs to the board while the board is up.
   input.setMouseLocked(false)
+  local w = math.min(W, design_width() - 32)
+  if el.width ~= w then el.width = w end
   ui.make(node, describe())
 end

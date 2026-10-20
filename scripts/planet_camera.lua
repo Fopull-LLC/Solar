@@ -42,6 +42,10 @@ defaults = {
   sensitivity = 0.3,
   zoom_speed = 1.0,
   start_pitch = -0.3,
+  -- OVER THE SHOULDER: while a tool is in use the pivot slides this far to the
+  -- crew's right, so the body stops standing between the camera and the rock
+  -- face or plant being worked. Eased in and out; 0 = never.
+  shoulder = 0.6,
 }
 
 shiftlock = false
@@ -56,6 +60,9 @@ shiftlock = false
 -- game read as broken in exactly the places you spend the most time. First
 -- person is now a MODE you scroll into, not a distance that happens to you.
 firstPerson = false
+-- Published: the mouse is grabbed to turn the view this frame (first person,
+-- shift lock, a held right button). While it is not, the cursor is the aim.
+mouseLooking = false
 -- Is the camera the reason the body isn't drawing? The walker self-heals the
 -- astronaut's visibility (a vessel that seated the crew and then died leaves it
 -- hidden with nobody to undo it) and that heal used to run every frame, against
@@ -67,6 +74,8 @@ hidesBody = false
 fwd_x, fwd_y, fwd_z = 0.0, 0.0, -1.0
 flat_x, flat_y, flat_z = 0.0, 0.0, -1.0
 cam_x, cam_y, cam_z = 0.0, 0.0, 0.0
+-- The point the view orbits (the crew's chest, or eyes in first person).
+pivot_x, pivot_y, pivot_z = 0.0, 0.0, 0.0
 
 local target
 local pitch = nil
@@ -84,6 +93,8 @@ local clip_back = nil
 -- and the most the orbit may pull out to, eased toward the indoor limit.
 local pivot_r = nil
 local room_cap = nil
+-- The over-the-shoulder offset now (eased), and when a tool was last fired.
+local shoulder_now, shoulder_t = 0.0, -100.0
 
 local PITCH_LIMIT = math.pi * 0.5 - 0.08
 
@@ -128,6 +139,118 @@ local function panel_open()
   return false
 end
 
+-- ── the pilot's seat ────────────────────────────────────────────────────────
+-- While flying, `V` (or scrolling in past the closest orbit) puts the view in
+-- the commander's seat, looking out of the pod's window. The pod prefab carries
+-- the cabin as a disabled "Pod Interior" subtree (seat, console, the crew's legs
+-- and gloves, a lamp): it is switched on only while we are in here, so it costs
+-- nothing the rest of the time. The exterior hull has a real window opening and
+-- a dark liner, so nothing has to be hidden or cut away.
+--
+-- Published: `cockpit` is a rung on the Esc ladder (pause_menu.lua) just like
+-- `firstPerson` is on foot.
+cockpit = false
+-- The eye in the POD's frame (metres): the seat faces the window on −Z.
+local SEAT_EYE = vec3(0.0, 0.0, 0.06)
+-- How far the head turns: a helmet in a couch, not an owl.
+local SEAT_YAW, SEAT_UP, SEAT_DOWN = math.rad(110), math.rad(60), math.rad(55)
+local seat = nil            -- { pod =, interior = } of the piloted vessel
+local seat_yaw, seat_pitch = 0.0, -0.08
+
+-- The piloted vessel's command pod: the part carrying a "Pod Interior", the
+-- one nearest the published pod offset when a craft has several.
+local function find_seat(vessel)
+  local vn = vessel and vessel.node
+  if not (vn and vn.valid and vn.children) then return nil end
+  local best, bd = nil, nil
+  for _, c in ipairs(vn:children()) do
+    for _, g in ipairs(c:children()) do
+      if g.name == "Pod Interior" then
+        local dx = (c.x or 0) - (vessel.podLX or 0)
+        local dy = (c.y or 0) - (vessel.podLY or 0)
+        local dz = (c.z or 0) - (vessel.podLZ or 0)
+        local d = dx * dx + dy * dy + dz * dz
+        if not bd or d < bd then best, bd = { pod = c, interior = g, vessel = vn }, d end
+        break
+      end
+    end
+  end
+  return best
+end
+
+-- Enter or leave the seat. Entering needs a pod with a cabin; a craft without
+-- one (its pod lost to a crash) stays in third person.
+function setCockpit(on, vessel)
+  if on then
+    local s = find_seat(vessel)
+    if not s then cockpit = false return false end
+    seat = s
+    seat.interior.enabled = true
+    seat_yaw, seat_pitch = 0.0, -0.08
+    cockpit = true
+  else
+    if seat and seat.interior and seat.interior.valid then seat.interior.enabled = false end
+    seat = nil
+    cockpit = false
+  end
+  return cockpit
+end
+
+-- The seat view, once per frame. Returns false if the pod has gone (staged
+-- away, destroyed) and the view must fall back to the orbit.
+local function seat_view(node, dt, blocked)
+  local pod, vn = seat and seat.pod, seat and seat.vessel
+  if not (pod and pod.valid and vn and vn.valid) then setCockpit(false) return false end
+  -- Compose through the VESSEL's pose, not the pod's own toWorld: a child's
+  -- world transform is a frame behind its moving parent in the camera pass,
+  -- and at 10 m/s that left the eye 18 cm down by the cabin floor. The pod's
+  -- local pose (the blueprint's; YXZ like everywhere in this project) is
+  -- exact, so parent ∘ local is this frame's seat.
+  local cy, sy = math.cos(pod.yaw or 0), math.sin(pod.yaw or 0)
+  local cx, sx = math.cos(pod.pitch or 0), math.sin(pod.pitch or 0)
+  local cz, sz = math.cos(pod.roll or 0), math.sin(pod.roll or 0)
+  local lx = vec3(cy * cz + sy * sx * sz, cx * sz, -sy * cz + cy * sx * sz)
+  local ly = vec3(-cy * sz + sy * sx * cz, cx * cz, sy * sz + cy * sx * cz)
+  local lz = lx:cross(ly)
+  local lp = vec3(pod.x or 0, pod.y or 0, pod.z or 0)
+  local o = vn:toWorld(lp)
+  local ex = (vn:toWorld(lp + lx) - o):normalized()
+  local ey = (vn:toWorld(lp + ly) - o):normalized()
+  local ez = (vn:toWorld(lp + lz) - o):normalized()
+  -- The mouse always turns the head in here (a panel takes the pointer back).
+  local looking = not blocked
+  input.setMouseLocked(looking)
+  mouseLooking = looking
+  if looking then
+    local dx, dy = input.mouse_delta()
+    local st = script_ref("settings")
+    local sens = params.sensitivity * 0.01 * ((st and st.lookScale) or 1.0)
+    if st and st.invertY then dy = -dy end
+    seat_yaw = math.clamp(seat_yaw + dx * sens, -SEAT_YAW, SEAT_YAW)
+    seat_pitch = math.clamp(seat_pitch - dy * sens, -SEAT_DOWN, SEAT_UP)
+  end
+  local cp = math.cos(seat_pitch)
+  local fwd = (ex * (math.sin(seat_yaw) * cp) + ey * math.sin(seat_pitch)
+    + ez * (-math.cos(seat_yaw) * cp)):normalized()
+  local place = o + ex * SEAT_EYE.x + ey * SEAT_EYE.y + ez * SEAT_EYE.z
+  -- The same shake the orbit takes, scaled to a head strapped into a couch:
+  -- the cabin rattles round you by centimetres, not metres.
+  local sh = save.get("cam.shake") or 0.0
+  if access.reducedMotion() then sh = 0.0 end
+  if sh > 0.002 then
+    local amp = sh * sh * 0.012
+    place = place + ex * ((math.random() * 2 - 1) * amp) + ey * ((math.random() * 2 - 1) * amp)
+  end
+  node.pos = place
+  node:lookAt(place + fwd, ey)
+  fwd_x, fwd_y, fwd_z = fwd.x, fwd.y, fwd.z
+  cam_x, cam_y, cam_z = place.x, place.y, place.z
+  local flat = fwd:flatten(ey)
+  if flat:length() == 0 then flat = ez * -1 end
+  flat_x, flat_y, flat_z = flat.x, flat.y, flat.z
+  return true
+end
+
 local function acquire()
   for _, s in ipairs(findScripts("planet_walker")) do
     if net.isMine(s.node) then return s.node end
@@ -136,7 +259,7 @@ local function acquire()
   return (w and w.node) or find("Astronaut") or find("Player")
 end
 
-function lateUpdate(node, dt)
+local function place_camera(node, dt)
   -- Map mode: the orbit map owns the camera while it's open — orbiting the
   -- focused body, not the player. Stand down entirely.
   local m = map()
@@ -176,12 +299,26 @@ function lateUpdate(node, dt)
   local blocked = panel_open()
   local dz = input.scroll() * params.zoom_speed   -- + is toward the character
   local maxd = piloting and math.max(params.max_distance, 40.0) or params.max_distance
-  -- Flying: never zoom INSIDE the hull (the ship visual spans ~2 units), and
-  -- there is no first person in a cockpit this game does not model.
+  -- Flying: never zoom INSIDE the hull (the ship visual spans ~2 units). One
+  -- more click in from the closest orbit is the pilot's seat (as on foot, one
+  -- click past the closest orbit is the eyes), and one click out leaves it.
   local mind = piloting and math.max(params.min_distance, 5.0) or params.min_distance
+  if cockpit and not piloting then setCockpit(false) end
   if piloting then
     firstPerson = false
-    params.distance = math.clamp(params.distance - dz, mind, maxd)
+    if cockpit then
+      if dz < -0.01 then
+        setCockpit(false)
+        params.distance = mind
+      end
+    elseif dz > 0.01 and params.distance <= mind + 0.001 then
+      setCockpit(true, vessel)
+    else
+      params.distance = math.clamp(params.distance - dz, mind, maxd)
+    end
+    if not blocked and input.pressed("v") then setCockpit(not cockpit, vessel) end
+    if cockpit and not blocked and input.pressed("escape") then setCockpit(false) end
+    if cockpit and seat_view(node, dt, blocked) then return end
   elseif firstPerson then
     if dz < -0.01 then
       firstPerson = false
@@ -249,9 +386,13 @@ function lateUpdate(node, dt)
   -- none, so the panels take the cursor back for as long as they are up.
   local looking = (not blocked) and (firstPerson or shiftlock or input.button(1))
   input.setMouseLocked(looking)
+  mouseLooking = looking
   if looking then
     local dx, dy = input.mouse_delta()
-    local sens = params.sensitivity * 0.01
+    -- The player's sensitivity and invert-Y (Settings ▸ Camera, settings.lua).
+    local st = script_ref("settings")
+    local sens = params.sensitivity * 0.01 * ((st and st.lookScale) or 1.0)
+    if st and st.invertY then dy = -dy end
     -- Yaw spins the reference about the LOCAL up, not about world +Y — which
     -- is the whole reason this camera exists.
     ref = ref:rotatedAround(up, -dx * sens)
@@ -325,6 +466,39 @@ function lateUpdate(node, dt)
       base = base + up * (pivot_r - r)
     end
     head = base + up * (firstPerson and params.eye_height or params.height)
+    -- The pivot itself must be in the open. Under a low roof — a bore the
+    -- laser cuts is 2.2–4 m tall (2.4 × 0.85 × charge) and the pivot sits 2.2 m
+    -- over the floor — it was inside the rock, and the wall clip below sweeps
+    -- FROM the pivot, so it never fired and the view looked out from inside
+    -- the terrain. Sweep the same ball up from the crew's centre and stop
+    -- short of whatever is overhead.
+    local lift = (head - target.pos):dot(up)
+    if lift > 0.05 then
+      local roofhit = spherecast(target.pos, up, 0.25, lift, target)
+      if roofhit and roofhit.distance and not (roofhit.node and roofhit.node.id == target.id) then
+        head = head - up * (lift - math.max(0.0, roofhit.distance - 0.05))
+      end
+    end
+  end
+
+  -- OVER THE SHOULDER. In third person the crew stands dead centre — exactly
+  -- between the camera and the face the laser is cutting or the plant the
+  -- cutter is on. While a tool is firing (and for a beat after, so bursts do
+  -- not bob the view) the pivot eases to the right. A wall at your right
+  -- shoulder caps it, so the pivot never ends up inside one.
+  if not piloting then
+    local tb = script_ref("tool_belt")
+    if tb and tb.inUse then shoulder_t = time end
+  end
+  local want = (not piloting and not firstPerson and time - shoulder_t < 1.5)
+    and (params.shoulder or 0) or 0.0
+  shoulder_now = shoulder_now + (want - shoulder_now) * (1 - math.exp(-5 * dt))
+  if shoulder_now > 0.01 and not piloting then
+    local right = fwd:cross(up):normalized()
+    local side = shoulder_now
+    local wall = spherecast(head, right, 0.2, side + 0.3, target)
+    if wall and wall.distance then side = math.min(side, math.max(0.0, wall.distance - 0.3)) end
+    head = head + right * side
   end
 
   -- Wall clip: sweep a ball from the head back toward the camera, ignoring the
@@ -340,7 +514,9 @@ function lateUpdate(node, dt)
     if astro and hit.node.id == astro.id then hit = nil end
   end
   if hit and hit.distance then
-    back = math.max(0.3, hit.distance - 0.05)
+    -- Never past the contact: a 0.3 m floor here put the camera INSIDE a wall
+    -- the pivot was within 0.35 m of. Closer than 0.7 hides the body anyway.
+    back = math.max(0.0, hit.distance - 0.05)
   end
 
   -- SNAP IN, EASE OUT. A camera may never spend a frame inside a wall, so a
@@ -388,9 +564,21 @@ function lateUpdate(node, dt)
   -- Publish the basis for the walker + dig tool.
   fwd_x, fwd_y, fwd_z = fwd.x, fwd.y, fwd.z
   cam_x, cam_y, cam_z = place.x, place.y, place.z
+  pivot_x, pivot_y, pivot_z = head.x, head.y, head.z
   -- Flat against the BODY's up, not the camera's slewed one: this is the
   -- walker's forward, and it has to lie in the plane the crew walks on.
   local flat = fwd:flatten(want_up)
   if flat:length() == 0 then flat = ref end
   flat_x, flat_y, flat_z = flat.x, flat.y, flat.z
+end
+
+-- The haze (atmosphere.lua) reads where the camera is, so it is told the
+-- moment the camera is placed — every frame, whichever way this one went (the
+-- map, the cockpit, on foot). Two nodes' lateUpdates run in load order, which
+-- is not something to rely on, so this is a call rather than an ordering.
+local atmo_ref
+function lateUpdate(node, dt)
+  place_camera(node, dt)
+  if not atmo_ref or not atmo_ref.valid then atmo_ref = findScript("atmosphere") end
+  if atmo_ref and atmo_ref.valid and atmo_ref.follow then atmo_ref.follow(dt) end
 end

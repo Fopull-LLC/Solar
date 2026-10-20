@@ -34,6 +34,13 @@
 --   or a run; the head following the view and the tool's target, and letting
 --   go of a view behind its back; a lean into a turn and a speed-up.
 --
+--   "swimming animations that reflect the way im actually moving"
+--   Section 7. In the sea the astronaut stood upright in the idle pose. Now
+--   three swim layers (stroke, side, vertical) are blended from the body's
+--   real velocity in its own frame and played at a rate matched to its speed;
+--   the whole rig is tipped level for a crawl, head-down for a dive, upright to
+--   tread, and banked into turns; the feet stop planting and the look softens.
+--
 --   luajit solar/tests/smoke_walker.lua
 
 local T, TICK = 0.0, 1 / 60
@@ -130,6 +137,12 @@ local slope = 0.0
 local function ground_y(x) return slope * x end
 
 function API.spherecast(origin, dir, radius, dist)
+  -- Straight up is the roof (the camera keeps its pivot under it), anything
+  -- else the wall behind.
+  if dir.y > 0.9 then
+    if roof_at and roof_at <= dist then return { node = { id = 98 }, distance = roof_at } end
+    return nil
+  end
   if wall_at and wall_at <= dist then
     return { node = { id = 99 }, distance = wall_at }
   end
@@ -214,7 +227,9 @@ envs.ops_board = { isOpen = function() return ops_open end, node = { valid = tru
 envs.inventory_panel = { open = false, node = { valid = true } }
 envs.orbit_map = { map_view = false, node = { valid = true } }
 envs.game_manager = { loading = false, node = { valid = true } }
-envs.climate = { seaDepth = function() return nil end, node = { valid = true } }
+-- The sea: nil (dry land) until section 7 floods the patch to `sea_y`.
+local sea_y = nil
+envs.climate = { seaDepth = function(x, y, z) return sea_y and (sea_y - y) or nil end, node = { valid = true } }
 
 walker.start(ASTRO)
 
@@ -225,6 +240,7 @@ local function tick(n)
     if animator then
       animator.last_pos = animator.pos
       animator.rot, animator.pos, animator.reaches, animator.looks, animator.set = {}, {}, {}, {}, {}
+      animator.queued = false
     end
     walker.update(ASTRO, TICK)
     cam.lateUpdate(CAMNODE, TICK)
@@ -405,26 +421,38 @@ animator = { weights = {}, seeks = {}, params = {}, base = "idle", base_t = 0,
              rot = {}, pos = {}, last_pos = {}, reaches = {}, looks = {}, set = {} }
 function animator:clips() return { "idle", "walk", "run", "sprint", "jump", "fall", "land" } end
 function animator:duration(n) return DUR[n] end
-function animator:state() return self.base end
+animator.layer_state, animator.speeds = {}, {}
+function animator:state(layer)
+  if layer and layer ~= "Base" then return self.layer_state[layer] end
+  return self.base
+end
 function animator:time() return T - self.base_t end
 function animator:restart(n) self.base, self.base_t = n, T end
-function animator:crossfade(n) if self.base ~= n then self.base, self.base_t = n, T end end
+function animator:crossfade(n, f, layer)
+  if layer and layer ~= "Base" then self.layer_state[layer] = n return end
+  if self.base ~= n then self.base, self.base_t = n, T end
+end
+function animator:setSpeed(v, layer) self.speeds[layer or ""] = v end
 function animator:setLayerWeight(l, w) self.weights[l] = w end
 function animator:seek(t, l) self.seeks[l] = t end
 function animator:setParam(k, v) self.params[k] = v end
 -- The per-frame pose calls, as the last frame made them (cleared each tick).
-function animator:addBoneRot(b, y, p, r, w) self.rot[b] = { y = y, p = p, r = r } end
-function animator:setBoneRot(b, y, p, r, w) self.set[b] = { y = y, p = p, r = r, w = w or 1 } end
-function animator:addBonePos(b, v) self.pos[b] = (self.pos[b] or vec3(0, 0, 0)) + v end
-function animator:reach(b, t, o) self.reaches[b] = { t = t, pole = o and o.pole, w = o and o.weight or 1 } end
+-- `queued`: whether this frame has made any pose call yet (see boneWorld).
+function animator:addBoneRot(b, y, p, r, w) self.queued = true; self.rot[b] = { y = y, p = p, r = r } end
+function animator:setBoneRot(b, y, p, r, w) self.queued = true; self.set[b] = { y = y, p = p, r = r, w = w or 1 } end
+function animator:addBonePos(b, v) self.queued = true; self.pos[b] = (self.pos[b] or vec3(0, 0, 0)) + v end
+function animator:reach(b, t, o) self.queued = true; self.reaches[b] = { t = t, pole = o and o.pole, w = o and o.weight or 1 } end
 function animator:lookAt(bones, t, o)
+  self.queued = true
   self.looks[bones[#bones]] = { t = t, w = o and o.weight or 1, limit = o and o.limit }
 end
 -- Where the posed bones are: the idle stance's ankles 14 cm either side of the
 -- centre (the model's +X is its left), the head 0.6 m up — in the model's
 -- frame, turned by its yaw and then the astronaut's.
 -- MaleArm, the armature root, is where the walker finds the soles' plane: its
--- rest height over them, plus whatever the walker moved it by last frame. Here
+-- rest height over them, plus what the walker has moved it by so far this
+-- frame — or, before this frame has made any pose call, last frame's drawn
+-- pose with last frame's writes (what 0.117.0-rc2 does, card 0413). Here
 -- the soles ride 6 cm over the capsule's bottom, as they do in the game.
 local BONES = { ["Foot.Left"] = vec3(0.1389, -0.868, -0.0858), ["Foot.Right"] = vec3(-0.1389, -0.868, -0.0858),
                 ["Thigh.Left"] = vec3(0.1, -0.03, 0), ["Thigh.Right"] = vec3(-0.1, -0.03, 0),
@@ -432,7 +460,9 @@ local BONES = { ["Foot.Left"] = vec3(0.1389, -0.868, -0.0858), ["Foot.Right"] = 
 function animator:boneWorld(b)
   local l = BONES[b]
   if not l then return nil end
-  if b == "MaleArm" then l = l + (self.last_pos.MaleArm or vec3(0, 0, 0)) end
+  if b == "MaleArm" then
+    l = l + ((self.queued and self.pos.MaleArm or (not self.queued and self.last_pos.MaleArm)) or vec3(0, 0, 0))
+  end
   local c, s = math.cos(MODEL.yaw), math.sin(MODEL.yaw)
   return ASTRO:toWorld(vec3(l.x * c + l.z * s, l.y, -l.x * s + l.z * c))
 end
@@ -583,6 +613,12 @@ tick(120)
 check("under a roof the orbit comes in", math.abs(camera_back() - cam.params.indoor_distance) < 0.1,
   string.format("%.2f m", camera_back()))
 check("...without touching your zoom", cam.params.distance == 7.0)
+-- A bore lower than the pivot (the laser at low charge cuts 2.2 m): the
+-- pivot drops under the rock instead of looking out from inside it.
+roof_at = 0.8
+tick(5)
+check("a roof lower than the pivot brings the pivot under it",
+  cam.pivot_y - ASTRO.y < 0.8, string.format("pivot %.2f m above the crew, roof at 0.8", cam.pivot_y - ASTRO.y))
 roof_at = nil
 tick(120)
 check("stepping outside, it goes back out", math.abs(camera_back() - 7.0) < 0.1,
@@ -692,14 +728,35 @@ check("a view behind the back lets the head go", w < 0.05, string.format("w %.2f
 cam.face(0, -0.5, -1)
 envs.tool_belt = { inUse = true, aimDist = 12.0, node = { valid = true } }
 tick(60)
+-- The belt publishes the point it is cutting (`aimX/Y/Z`): twelve metres down
+-- the camera's ray. (The camera slides over the shoulder while a tool runs, so
+-- that point is no longer straight ahead of the head — the head has to look at
+-- the published point, not along the view.)
+local spot = vec3(cam.cam_x, cam.cam_y, cam.cam_z) + vec3(cam.fwd_x, cam.fwd_y, cam.fwd_z) * 12.0
+envs.tool_belt.aimX, envs.tool_belt.aimY, envs.tool_belt.aimZ = spot.x, spot.y, spot.z
+tick(60)
 d, w = look_dir()
-local aim = (vec3(cam.cam_x, cam.cam_y, cam.cam_z) + vec3(cam.fwd_x, cam.fwd_y, cam.fwd_z) * 12.0
-  - animator:boneWorld("Head")):normalized()
+local aim = (spot - animator:boneWorld("Head")):normalized()
 check("mining, the head looks at the rock being cut", d and d:angleTo(aim) < math.rad(3) and w > 0.8,
   d and string.format("%.1f deg off, w %.2f", math.deg(d:angleTo(aim)), w))
+
+-- OVER THE SHOULDER. With the crew dead centre, the body hides the face the
+-- laser is cutting; while a tool runs the camera eases ~0.6 m to the right of
+-- the crew (screen-right = forward × up), and back once it stops.
+local function side_offset()
+  local f = vec3(cam.fwd_x, cam.fwd_y, cam.fwd_z)
+  local right = f:cross(vec3(0, 1, 0)):normalized()
+  return (vec3(cam.cam_x, cam.cam_y, cam.cam_z) - ASTRO.pos):dot(right)
+end
+check("a tool in use puts the camera over the right shoulder",
+  side_offset() > 0.45 and side_offset() < 0.7, string.format("%.2f m", side_offset()))
 envs.tool_belt = nil
 cam.face(0, 0, -1)
 tick(60)
+check("...not the instant the trigger lets go", side_offset() > 0.3, string.format("%.2f m", side_offset()))
+tick(120)
+check("...and back behind the crew once the tool has rested", math.abs(side_offset()) < 0.05,
+  string.format("%.2f m", side_offset()))
 
 -- LEAN. Setting off leans the chest forward; stopping sits it back.
 keys.w = true
@@ -726,6 +783,145 @@ tick(120)
 check("...and standing it comes back upright",
   not animator.rot.MaleArm or math.abs(animator.rot.MaleArm.y) < 0.01,
   animator.rot.MaleArm and string.format("%.3f", animator.rot.MaleArm.y))
+
+
+-- ── 7. SWIMMING ─────────────────────────────────────────────────────────────
+-- The patch floods: the sea's surface 0.75 m over the crew's middle (where
+-- the float rests), nothing underfoot. The harness does not move the body, so
+-- depth is whatever we set; velocities are the walker's own.
+local function rot(b) return animator.rot[b] or { y = 0, p = 0, r = 0 } end
+local function swim_state() return walker.swimState end
+cam.face(0, 0, -1)
+keys = {}
+ground_under, ASTRO.grounded, ASTRO.vy = false, false, 0
+sea_y = ASTRO.y + 0.75
+tick(1)
+check("in the water the swim layers start to come in — faded, not snapped",
+  (animator.weights.Swim or 0) > 0.01 and (animator.weights.Swim or 0) < 0.5, tostring(animator.weights.Swim))
+tick(120)
+check("treading water, the Swim layer owns the body", (animator.weights.Swim or 0) > 0.95,
+  tostring(animator.weights.Swim))
+check("...on the surface state", animator.layer_state.Swim == "swim_surface", tostring(animator.layer_state.Swim))
+check("...blended to the tread (swimF 0)", math.abs(animator.params.swimF or 1) < 0.05, tostring(animator.params.swimF))
+check("...the gait lets go", (animator.weights.Gait or 0) < 0.05, tostring(animator.weights.Gait))
+check("...upright, leaning a touch into the water", rot("MaleArm").p > 0.05 and rot("MaleArm").p < 0.3,
+  string.format("%.2f rad", rot("MaleArm").p))
+check("...lifted so the head clears the water", animator.pos.MaleArm and animator.pos.MaleArm.y > 0.1,
+  animator.pos.MaleArm and string.format("%.2f", animator.pos.MaleArm.y))
+local lw = animator.reaches["Foot.Left"]
+check("...and the feet no longer reach for a ground that isn't there", not lw or lw.w < 0.02,
+  lw and tostring(lw.w))
+check("the walker says so (the tool belt holsters the laser)", walker.swimming == true)
+
+-- Forward: the stroke takes over as the speed builds — not on the key.
+keys.w = true
+tick(1)
+check("setting off, a swimmer picks up speed slowly (water is thick)",
+  speed() < walker.params.swim * 0.1, string.format("%.2f m/s", speed()))
+check("...and the stroke blends in with it, not on the key", (animator.params.swimF or 0) < 0.2,
+  tostring(animator.params.swimF))
+tick(180)
+check("swimming forward, the blend is the stroke (swimF +1)", (animator.params.swimF or 0) > 0.95,
+  tostring(animator.params.swimF))
+-- Rate: speed / the metres a crawl cycle covers, times the clock clip's length.
+local want_rate = walker.params.swim / 3.0 * 1.4
+check("...played at the rate the speed asks for (no slipping hands)",
+  math.abs((animator.speeds.Swim or 0) - want_rate) < 0.08,
+  string.format("%.2f, want %.2f", animator.speeds.Swim or -1, want_rate))
+check("...the body level in the water", rot("MaleArm").p > 1.3 and rot("MaleArm").p < 1.6,
+  string.format("%.2f rad", rot("MaleArm").p))
+check("...riding at the surface", animator.pos.MaleArm and animator.pos.MaleArm.y > -0.3,
+  animator.pos.MaleArm and string.format("%.2f", animator.pos.MaleArm.y))
+local look = animator.looks.Head
+check("...the head only leans toward the view, so the stroke keeps its breath",
+  look and look.w < 0.35 and look.limit <= 40, look and string.format("w %.2f limit %.0f", look.w, look.limit))
+keys.shift = true
+tick(120)
+check("faster is a faster stroke", (animator.speeds.Swim or 0) > want_rate * 1.3,
+  string.format("%.2f", animator.speeds.Swim or -1))
+keys.shift = nil
+
+-- A turn rolls the swimmer into it: the view swings right, the body follows.
+local turned = 0
+for i = 1, 30 do
+  cam.face(math.sin(i * 0.03), 0, -math.cos(i * 0.03))
+  tick(1)
+  turned = math.max(turned, rot("MaleArm").y)
+end
+check("turning right, the swimmer banks right (+ roll tips right)", turned > 0.05 and turned < 0.65,
+  string.format("%.2f rad", turned))
+cam.face(0, 0, -1)
+tick(120)
+
+-- Under the surface, the stroke is a breaststroke.
+sea_y = ASTRO.y + 3.0
+tick(2)
+check("deeper, the Swim layer crossfades to the underwater state",
+  animator.layer_state.Swim == "swim_under", tostring(animator.layer_state.Swim))
+tick(60)
+
+-- Dive: CTRL. Straight down turns the swimmer head-first.
+keys.w = nil
+keys.ctrl = true
+tick(150)
+check("diving straight down, the vertical layer comes in", (animator.weights.SwimVert or 0) > 0.8,
+  tostring(animator.weights.SwimVert))
+check("...blended to the dive (swimV -1)", (animator.params.swimV or 0) < -0.9, tostring(animator.params.swimV))
+check("...and the body goes over, head-first", rot("MaleArm").p > 2.3, string.format("%.2f rad", rot("MaleArm").p))
+keys.ctrl = nil
+keys.space = true
+tick(150)
+check("climbing (SPACE), the haul up (swimV +1)", (animator.params.swimV or 0) > 0.9, tostring(animator.params.swimV))
+check("...upright", math.abs(rot("MaleArm").p) < 0.3, string.format("%.2f rad", rot("MaleArm").p))
+keys.space = nil
+tick(120)
+
+-- Aiming (the look lock), a strafe is a side stroke and S is a back-scull.
+clicks[2] = true
+tick(1)
+keys.d = true
+tick(150)
+check("aiming, swimming sideways is the side stroke", (animator.weights.SwimSide or 0) > 0.8,
+  tostring(animator.weights.SwimSide))
+check("...toward the right (swimS -1)", (animator.params.swimS or 0) < -0.9, tostring(animator.params.swimS))
+check("...leaning into it", rot("MaleArm").y > 0.02, string.format("%.2f rad", rot("MaleArm").y))
+check("...and slower than a crawl", speed() < walker.params.swim * 0.8, string.format("%.2f m/s", speed()))
+keys.d = nil
+keys.s = true
+tick(150)
+check("aiming, backing up is the back-scull (swimF -1)", (animator.params.swimF or 0) < -0.9,
+  tostring(animator.params.swimF))
+check("...tipped back", rot("MaleArm").p < 0.0, string.format("%.2f rad", rot("MaleArm").p))
+keys.s = nil
+press("alt")
+tick(120)
+
+-- Falling in is not a dive: sinking from the splash stays feet-first.
+sea_y = ASTRO.y - 3
+tick(30)
+ASTRO.vy = -8
+tick(3)
+sea_y = ASTRO.y + 1.5
+local worst = 0
+for _ = 1, 40 do tick(1); worst = math.max(worst, rot("MaleArm").p) end
+check("sinking after a fall in stays feet-first (only a dive turns you over)", worst < 0.7,
+  string.format("%.2f rad at most", worst))
+sea_y = ASTRO.y + 0.75
+tick(120)
+
+-- Out: feet on the bottom in the shallows, walking up the beach.
+keys.w = true
+tick(60)
+ground_under, ASTRO.grounded = true, true
+sea_y = ASTRO.y + 0.3
+tick(90)
+check("climbing out, the swim lets go", (animator.weights.Swim or 1) < 0.05, tostring(animator.weights.Swim))
+check("...and the gait takes the legs back", (animator.weights.Gait or 0) > 0.9, tostring(animator.weights.Gait))
+check("...standing up straight", math.abs(rot("MaleArm").p) < 0.05, string.format("%.2f rad", rot("MaleArm").p))
+check("...and the walker says so", walker.swimming == false)
+keys.w = nil
+sea_y = nil
+tick(60)
 
 -- ── report ──────────────────────────────────────────────────────────────────
 local bad = {}

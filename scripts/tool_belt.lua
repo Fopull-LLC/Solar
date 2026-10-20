@@ -38,8 +38,9 @@
 --     along the slope and jitters it as you move. The beam went somewhere near
 --     where you pointed, differently every frame.
 --
--- So the aim is the ray through the centre of the view, full stop, and the
--- muzzle is only where the beam is drawn FROM. Range is measured from the
+-- So the aim is ONE ray from the camera — through the cursor while it is free,
+-- through the middle of the view while the mouse turns it (see `aim_pixel`) —
+-- and the muzzle is only where the beam is drawn FROM. Range is measured from the
 -- player, not the camera, so zooming changes nothing.
 --
 -- ── AND IT BORES: THE CUT POINT IS DRIVEN, NOT RE-DERIVED ───────────────────
@@ -117,13 +118,16 @@ defaults = {
   laser_radius = 2.4,
   --@range 0.05 1
   laser_strength = 0.85,   -- × radius = the ball each bite subtracts
-  -- Seconds between terrain bites. EVERY bite remeshes the chunks it touches, so
-  -- this is the tool's whole cost to the frame budget. At `bore_speed` it still
-  -- steps only ~0.22 m between bites against a 2.0 m ball — an order of magnitude
-  -- more overlap than a clean bore needs — so halving the rate from 0.06 halves
-  -- the terrain churn while mining and changes nothing you can see.
+  -- Seconds between terrain bites. EVERY bite remeshes the chunks it touches and
+  -- rebuilds their collider (about 5 ms a bite on 0.116, engine card 0357; on
+  -- 0.117-rc2, with the collider built off-thread, still 2.5–7 ms), so
+  -- this is the tool's whole cost to the frame budget. At `bore_speed` a bite
+  -- every 0.24 s steps ~0.43 m against a 2.0 m ball: the ridge between two balls
+  -- is under 3 cm, a fiftieth of a voxel, so the bore is as clean as at 0.12 —
+  -- and half as many frames carry a remesh. Yield is paced by time (`yield`),
+  -- not by bites, so the pack fills exactly as fast.
   --@range 0.02 0.5 --@units s
-  laser_rate = 0.12,
+  laser_rate = 0.24,
   --@range 0.2 6 --@units m/s
   bore_speed = 1.8,        -- how fast the cut eats forward into rock
   --@range 0.3 4 --@units m
@@ -135,7 +139,11 @@ defaults = {
   -- pack has to be roughly one good tunnel's work, and at the old 0.18 s it was
   -- three seconds of trigger — you hit PACK FULL before the hole was deep enough
   -- to stand in, which is most of what "it barely mines anything" was.
-  yield = 0.42,
+  -- And at 0.42 it overshot the other way: 37 → 90 kg in about ten seconds,
+  -- $300 a fill, and a rocket every minute and a half. At 1.0 a pack of shallow
+  -- rock is about a minute of bursts (≈ $190 at the depot, ≈ $175/min with the
+  -- walk), so the first rocket is two trips in — see materials.lua's prices.
+  yield = 1.0,
   --@range 0.5 10 --@units s
   focus_time = 3.0,        -- how long on one spot for the full bonus
   --@range 0.2 6 --@units m
@@ -171,6 +179,7 @@ focus = 0.0      -- 0..1 how long the beam has stayed on one spot
 aimMat = nil     -- what the crosshair is over, if it's rock
 aimDepth = 0.0
 aimDist = nil    -- metres to the aim point (nil = nothing in reach)
+aimX, aimY, aimZ = nil, nil, nil -- the aim point itself, world (nil with aimDist)
 bored = 0.0      -- metres the current bore has eaten into the rock
 inUse = false    -- the trigger is held on a tool in hand (any of the three): the walker faces the aim
 atReach = false  -- the bore has run out to arm's length: walk in to go deeper
@@ -269,6 +278,9 @@ local function on_foot(node)
     why(GATE_ABOARD)
     return false
   end
+  -- Swimming: both hands are stroking. No firing, no aim ring, no beam, and
+  -- the laser put away (the not-carrying path holsters it).
+  if pw.swimming == true then why("swimming") return false end
   local pm = ref("pause_menu")
   if pm and pm.open then why("the game is paused") return false end
   local fm = ref("facility_menu")
@@ -285,6 +297,11 @@ end
 
 -- The world position of the surface directly above a point, and therefore how
 -- far under the crust that point is.
+--
+-- Asked every frame with the laser in hand, one 124 m raycast each time. That
+-- used to be the costliest line in the belt (1.5–2 ms a frame just hovering)
+-- and sat behind a half-metre cache; since engine 0.117 (card 0386) a ray this
+-- long costs about 0.02 ms, so it is simply asked.
 local function depth_at(body, x, y, z)
   local dx, dy, dz = x - body.x, y - body.y, z - body.z
   local r = math.sqrt(dx * dx + dy * dy + dz * dz)
@@ -316,8 +333,11 @@ function survey(x, y, z)
   local w = cl and cl.worldOf(body.name)
   local depth = depth_at(body, x, y, z)
   local seed = (w and w.seed or 1) % 4096
-  local n1 = math.noise(x * 0.035, y * 0.035, z * 0.035, seed)
-  local n2 = math.noise(x * 0.19, y * 0.19, z * 0.19, seed + 3)
+  -- In the planet's own frame: in world coordinates the field slid past the
+  -- ground at orbital speed, and a seam was never in the same place twice.
+  local lx, ly, lz = x - body.x, y - body.y, z - body.z
+  local n1 = math.noise(lx * 0.035, ly * 0.035, lz * 0.035, seed)
+  local n2 = math.noise(lx * 0.19, ly * 0.19, lz * 0.19, seed + 3)
   local mix = (n1 * 0.62 + n2 * 0.38) * 2.5 + 0.5
   local roll = mix - math.floor(mix)
   -- The rich-pocket bonus rides the same fine octave the vein does, so a
@@ -333,24 +353,23 @@ local function nodes()
   if not impact_n then impact_n = find("Laser Impact") end
 end
 
--- THE PIXEL THE TOOL SHOOTS THROUGH: the middle of the view. Always.
+-- THE PIXEL THE TOOL SHOOTS THROUGH. While the mouse turns the view (first
+-- person, shift lock, a held right button) the cursor is hidden at the centre,
+-- so the aim is the middle of the view. The rest of the time the pointer is
+-- free and on screen, and the tool goes where it points — the view is not
+-- where you are pointing then, the cursor is.
 --
--- It used to be the OS cursor whenever the mouse was free — and the mouse is
--- free almost all the time, because you walk with WASD and only grab it to
--- turn. So the belt fired through wherever the pointer had last been left,
--- which after any menu, any panel, any alt-tab is a corner of the screen: at
--- the sky. `ray_hit` found nothing, `fire_laser` set no target, `draw_ring`
--- drew no ring, and the HUD went on saying what was in your pack. Every part of
--- the tool worked and the tool did nothing, with no crosshair anywhere on
--- screen to show you where it thought you were pointing. "I cannot use my tools
--- for digging."
---
--- A game with a beam weapon aims down the middle of the view. The panels take
--- the belt's keys away while they are up (see `on_foot`), so there is no case
--- where the cursor is the aim and the tool is live at the same time.
+-- (This aimed down the middle always for a while, because a cursor left in a
+-- corner after a menu shot at the sky. A visible pointer you are moving is a
+-- different thing from a stale one: a cursor outside the view still falls back
+-- to the middle, and the panels take the belt's keys away while they are up.)
 local function aim_pixel()
   local vx, vy, vw, vh = camera.screenRect()
   if not vw or vw <= 0 then return nil end   -- no live view: caller falls back
+  if cam and cam.mouseLooking == false and input.mouse then
+    local mx, my = input.mouse()
+    if mx and mx >= vx and mx <= vx + vw and my >= vy and my <= vy + vh then return mx, my end
+  end
   return vx + vw * 0.5, vy + vh * 0.5
 end
 
@@ -513,6 +532,10 @@ local function apply_beam(hit, power)
       -- The ground actually lights up. This is most of why the cut reads as
       -- hot rather than as a decal.
       if light then light.intensity = 2.0 + power * 7.0 end
+      -- The rest of the cut's look — molten core, spalled chips, burns, a
+      -- light that whitens with heat — is the effects director's.
+      local fx = ref("vfx")
+      if fx and tool == 1 then fx.laserHit(impact_n, hit, power, heat, focus) end
     else
       if ps:isPlaying() then ps:stop() end
       if light then light.intensity = 0.0 end
@@ -594,10 +617,16 @@ local function paint_ring(hit, firing, full)
   -- sight that lies, and the whole point of this crosshair is that it can't.
   local r = params.laser_radius * params.laser_strength
 
+  -- A faint fill and a soft outer band make the sight read as a projected
+  -- instrument mark rather than a wire: the fill says "this is the bite".
+  draw.disc(cx, cy, cz, nx, ny, nz, 0.0, r, c[1], c[2], c[3], 0.10)
+  draw.disc(cx, cy, cz, nx, ny, nz, r, r * 1.05, c[1], c[2], c[3], 0.35)
   draw.ring(cx, cy, cz, nx, ny, nz, r, c[1], c[2], c[3], 0.9)
   -- The inner ring is the cut counting out the next unit: it grows from the
   -- middle to the rim, so a unit never arrives as a surprise.
   if firing and cut_progress > 0.02 then
+    draw.disc(cx, cy, cz, nx, ny, nz, 0.0, r * cut_progress,
+      RING.hot[1], RING.hot[2], RING.hot[3], 0.16)
     draw.ring(cx, cy, cz, nx, ny, nz, r * cut_progress,
       RING.hot[1], RING.hot[2], RING.hot[3], 0.85)
   end
@@ -687,7 +716,13 @@ local function field_normal(x, y, z)
   return gx / l, gy / l, gz / l
 end
 
+-- The screen crosshair, when `update` wants one this frame (see `draw_reticle`
+-- at the end of the file). Drawn here, in the camera pass, like every draw.*.
+local reticle_draw = nil
+
 function lateUpdate(node, dt)
+  if reticle_draw then reticle_draw() end
+  reticle_draw = nil
   if beam_req ~= nil then
     if beam_req then apply_beam(to_world(beam_req.h), beam_req.p) else apply_beam(nil, 0) end
     beam_req = nil
@@ -742,7 +777,9 @@ local function pop_unit(node, hit)
     if rock then
       local rmat, rtook = mf.breakAt(rock, "astro")
       if rtook and rtook > 0 then
-        spawnEffect("OreBreak", hit.x, hit.y, hit.z)
+        local fx = ref("vfx")
+        if fx then fx.oreBreak(hit.x, hit.y, hit.z, hit.nx, hit.ny, hit.nz)
+        else spawnEffect("OreBreak", hit.x, hit.y, hit.z) end
         audio.play(SFX.ore .. tostring(math.floor(math.random() * 5)) .. ".ogg",
           hit.x, hit.y, hit.z,
           { track = "SFX", volume = 0.7, pitch = 0.75 + math.random() * 0.25,
@@ -769,7 +806,9 @@ local function pop_unit(node, hit)
     end
     return
   end
-  spawnEffect("OreBreak", hit.x, hit.y, hit.z)
+  local fx = ref("vfx")
+  if fx then fx.oreBreak(hit.x, hit.y, hit.z, hit.nx, hit.ny, hit.nz)
+  else spawnEffect("OreBreak", hit.x, hit.y, hit.z) end
   audio.play(SFX.ore .. tostring(math.floor(math.random() * 5)) .. ".ogg",
     hit.x, hit.y, hit.z,
     { track = "SFX", volume = 0.55, pitch = 0.9 + math.random() * 0.3,
@@ -821,8 +860,10 @@ local function fire_laser(node, dt, firing)
     aimDist = hit.range
       or math.sqrt((hit.x - node.x) ^ 2 + (hit.y - node.y) ^ 2 + (hit.z - node.z) ^ 2)
     aimMat, aimDepth = survey(hit.x, hit.y, hit.z)
+    aimX, aimY, aimZ = hit.x, hit.y, hit.z
   else
     aimDist, aimMat, aimDepth = nil, nil, 0
+    aimX, aimY, aimZ = nil, nil, nil
   end
 
   if firing and hit then
@@ -854,8 +895,8 @@ local function fire_laser(node, dt, firing)
     -- The bite. `terrain.dig` subtracts a ball of radius × strength at this
     -- point — so what carves a tunnel is not this call, it's that the point
     -- MOVED since the last one. Spaced by `laser_rate` because remeshing is the
-    -- expensive half; at `bore_speed` that leaves consecutive balls about a
-    -- tenth of a metre apart, which unions into a clean bore with no ridges.
+    -- expensive half; at `bore_speed` that leaves consecutive balls under half
+    -- a metre apart against a 2 m radius, which unions into a clean bore.
     if time - last_t >= params.laser_rate then
       last_t = time
       terrain.dig(hit.x, hit.y, hit.z, params.laser_radius,
@@ -909,8 +950,9 @@ local function fire_laser(node, dt, firing)
       head = string.format("%.1f m in  ·  AT ARM'S LENGTH — step into the tunnel to cut deeper",
         bored)
     elseif aimMat then
-      local bar = string.rep("▮", math.floor(cut_progress * 6 + 0.5))
-        .. string.rep("▯", 6 - math.floor(cut_progress * 6 + 0.5))
+      -- How close the next unit is, as a number: a ▮▮▯▯▯▯ bar read as six
+      -- missing-glyph boxes whenever it was mostly empty.
+      local bar = string.format("next unit %d%%", math.floor(cut_progress * 100 + 0.5))
       local where = aimDepth >= 1.0 and string.format("%.0f m down", aimDepth)
         or string.format("%.0f m out", aimDist or 0)
       head = string.format("%s  ·  %s  ·  %s%s%s",
@@ -987,6 +1029,8 @@ local function fire_cutter(node, dt, firing)
   if firing then
     cut_work = cut_work + dt
     show_beam(tip, 0.5)
+    local fx = ref("vfx")
+    if fx then fx.cut(tip.x, tip.y, tip.z) end
   else
     show_beam(nil, 0)
   end
@@ -1004,24 +1048,27 @@ local function fire_cutter(node, dt, firing)
     end
     say(#parts > 0 and table.concat(parts, ", ") .. (dropped > 0 and "  (pack full)" or "")
       or "pack full — nothing taken")
-    spawnEffect("ScrapeDust", hit.x, hit.y, hit.z)
+    local fx = ref("vfx")
+    if fx then fx.harvest(hit.x, hit.y, hit.z, hit.height) else spawnEffect("ScrapeDust", hit.x, hit.y, hit.z) end
     cut_target, cut_work, progress = nil, 0, 0
   end
 end
 
 -- ── the spade ───────────────────────────────────────────────────────────────
 
-local function fire_spade(node, mode)
-  local h = laser_shot(node)
+local function fire_spade(node, mode, h)
+  h = h or laser_shot(node)   -- the caller's shot this frame, when it has one
   if not h then return end
-  local moved = true
-  if last_x then
-    local ddx, ddy, ddz = h.x - last_x, h.y - last_y, h.z - last_z
-    moved = (ddx * ddx + ddy * ddy + ddz * ddz) >= (params.spade_radius * 0.45) ^ 2
-  end
-  if not moved and (time - last_t) < params.spade_rate then return end
+  -- `spade_rate` holds whether or not the aim moved. A moved aim used to skip
+  -- the wait, and on a planet that orbits at ~90 m/s the world-space hit point
+  -- "moves" a metre or more every frame — so the spade sculpted EVERY frame
+  -- (40–60 a second), each with a remesh and a collider rebuild: 3–6 ms of
+  -- physics a frame, against ~1 ms at the intended seven a second.
+  if (time - last_t) < params.spade_rate then return end
   last_x, last_y, last_z, last_t = h.x, h.y, h.z, time
   terrain.sculpt(h.x, h.y, h.z, params.spade_radius, params.spade_strength, mode)
+  local fx = ref("vfx")
+  if fx then fx.dig(h.x, h.y, h.z, mode == "raise") end
 end
 
 -- ── driver ──────────────────────────────────────────────────────────────────
@@ -1040,28 +1087,12 @@ local function trigger_down()
   return input.button(0) == true
 end
 
-function update(node, dt)
-  inUse = false
-  prompt = ""
-  if not hud then hud = find("Tool HUD") end
-  local carrying = on_foot(node)
-  if hud then
-    -- The HUD line lives here rather than in its own script: the belt already
-    -- knows everything it says, and one writer means one place to change it.
-    --
-    -- It stays up when the belt is gated, and says what is holding it. Hiding
-    -- it was the worst of the options: a player whose tools had been taken saw
-    -- no tools, no belt, and no reason — and the belt is also the only place the
-    -- game ever mentions that a harvester and a spade exist.
-    local el = hud:getcomponent("UiElement")
-    -- Not while paused, and not over the map: both own the whole screen.
-    local pm, om = ref("pause_menu"), ref("orbit_map")
-    local up = (carrying or gate ~= GATE_ABOARD) and not (pm and pm.open)
-      and not (om and om.isOpen and om.isOpen())
-    if el then el.visible = up end
-    hudText = carrying and hudLine() or ("tools stowed  ·  " .. gate)
-    if up and ui and ui.make then ui.make(hud, hotbar(carrying)) end
-  end
+-- One frame of the belt: aim, fire, and set `prompt`. The HUD is drawn AFTER
+-- this (see `update` at the end of the file) — it used to be drawn first, from
+-- a `prompt` that had just been cleared, so the aim readout and every refusal
+-- the tools make ("no target", "no plant in reach", "AT ARM'S LENGTH") were
+-- computed every frame and never once shown.
+local function tick(node, dt, carrying)
   if not carrying then
     cut_target, cut_work, progress = nil, 0, 0
     charge, focus = 0.0, 0.0
@@ -1073,6 +1104,11 @@ function update(node, dt)
     holster(true)
     return
   end
+  -- In hand only if it's the tool you picked — decided HERE, before the aim
+  -- gates below can return. They used to skip the holster altogether, and a
+  -- camera still swinging in from the loading sweep (or off on the orbit map)
+  -- left the laser in your hand with the spade picked.
+  holster(toolId() ~= "laser")
   -- THE AIM. Everything below fires along the camera's published view ray, and
   -- both of these bail-outs used to be silent — with the HUD already shown,
   -- because that is written above this line. So the belt looked completely
@@ -1121,7 +1157,8 @@ function update(node, dt)
   local id = toolId()
   local firing = trigger_down()
   inUse = firing
-  -- The tool is only in your hand when it's the tool you picked.
+  -- The tool is only in your hand when it's the tool you picked (again: the
+  -- keys above may just have changed it).
   holster(id ~= "laser")
   local inv = ref("inventory")
   if id == "laser" then
@@ -1136,9 +1173,9 @@ function update(node, dt)
     show_beam(nil, 0)
     local h = laser_shot(node)
     if firing then
-      fire_spade(node, "lower")
+      fire_spade(node, "lower", h)
     elseif input.key("q") then
-      fire_spade(node, "raise")
+      fire_spade(node, "raise", h)
     else
       last_x, last_t = nil, -10
     end
@@ -1167,7 +1204,13 @@ hudText = ""
 -- the tool is pointed at, else how to use it.
 local function hint_line()
   local t = TOOLS[tool] or TOOLS[1]
-  if time - msg_t < 3.0 and msg ~= "" then return msg end
+  local recent = time - msg_t < 3.0 and msg ~= ""
+  -- While the trigger is held the readout is the point (what, how deep, how
+  -- close the next unit is); what just came loose rides along at the end.
+  if inUse and prompt ~= "" then
+    return recent and (prompt .. "   ·   " .. msg) or prompt
+  end
+  if recent then return msg end
   if prompt ~= "" then return prompt end
   return t.hint
 end
@@ -1223,4 +1266,62 @@ function hudLine()
   end
   if prompt ~= "" then return head .. "   ·   " .. prompt end
   return head .. "   ·   " .. (inv and inv.line("astro") or t.hint)
+end
+
+-- ── the frame ───────────────────────────────────────────────────────────────
+
+-- The crosshair: a small ring on the pixel the tool actually shoots through —
+-- the cursor while the mouse is free, the middle of the view while it turns the
+-- view. Teal with a target in reach, grey without one, amber with a full pack.
+local function draw_reticle()
+  if not (draw and draw.circleOutline and camera and camera.screenRect) then return end
+  local ax, ay = aim_pixel()
+  if not ax then return end
+  local _, _, _, vh = camera.screenRect()
+  local k = (vh or 720) / 720
+  local r, g, b, a = 0.28, 0.86, 0.74, 0.9
+  if prompt:sub(1, 3) == "no " then r, g, b, a = 0.75, 0.80, 0.86, 0.55 end
+  if prompt:sub(1, 9) == "PACK FULL" then r, g, b, a = 1.0, 0.72, 0.32, 0.95 end
+  draw.circleOutline(ax, ay, 9 * k, 0.0, 0.0, 0.0, a * 0.45, 3.5 * k)
+  draw.circleOutline(ax, ay, 9 * k, r, g, b, a, 1.6 * k)
+  draw.circle(ax, ay, 1.6 * k, r, g, b, a)
+end
+
+local function draw_hud(carrying)
+  if not hud then hud = find("Tool HUD") end
+  if not hud then return end
+  -- The HUD line lives here rather than in its own script: the belt already
+  -- knows everything it says, and one writer means one place to change it.
+  --
+  -- It stays up when the belt is gated, and says what is holding it. Hiding
+  -- it was the worst of the options: a player whose tools had been taken saw
+  -- no tools, no belt, and no reason — and the belt is also the only place the
+  -- game ever mentions that a harvester and a spade exist.
+  local el = hud:getcomponent("UiElement")
+  -- Not while paused, and not over the map: both own the whole screen.
+  local pm, om = ref("pause_menu"), ref("orbit_map")
+  local up = (carrying or gate ~= GATE_ABOARD) and not (pm and pm.open)
+    and not (om and om.isOpen and om.isOpen())
+  if el then el.visible = up end
+  -- The engine draws captions (access.captions) bottom-centre, on a plate that
+  -- sat right across the hint line and the slots. With captions on, the belt
+  -- stands a caption's height higher. (The scene pins it 16 up from the bottom.)
+  if el then
+    local y = (access and access.captions and access.captions()) and -84 or -16
+    if el.posY ~= y then el.posY = y end
+  end
+  -- In hand but stopped short of aiming (the camera is elsewhere, or has not
+  -- started following yet): the reason is the readout.
+  if carrying and prompt == "" and gate ~= "in hand" then prompt = gate end
+  hudText = carrying and hudLine() or ("tools stowed  ·  " .. gate)
+  if up and ui and ui.make then ui.make(hud, hotbar(carrying)) end
+  reticle_draw = (up and carrying and gate == "in hand") and draw_reticle or nil
+end
+
+function update(node, dt)
+  inUse = false
+  prompt = ""
+  local carrying = on_foot(node)
+  tick(node, dt, carrying)
+  draw_hud(carrying)
 end

@@ -77,5 +77,88 @@
             transitions: [
             ],
         ),
+        (
+            name: "Swim",
+            weight: 0.0,
+            states: [
+                (
+                    name: "swim_surface",
+                    clip: "animations/astronaut_male/crawl",
+                    speed: 1.0,
+                    looped: true,
+                    blend: Some((params: ["swimF"], points: [
+                        (clip: "animations/astronaut_male/back_scull", at: (-1.0, 0.0)),
+                        (clip: "animations/astronaut_male/tread", at: (0.0, 0.0)),
+                        (clip: "animations/astronaut_male/crawl", at: (1.0, 0.0)),
+                    ])),
+                    pos: (300.0, 300.0),
+                ),
+                (
+                    name: "swim_under",
+                    clip: "animations/astronaut_male/breast",
+                    speed: 1.0,
+                    looped: true,
+                    blend: Some((params: ["swimF"], points: [
+                        (clip: "animations/astronaut_male/back_scull", at: (-1.0, 0.0)),
+                        (clip: "animations/astronaut_male/hover", at: (0.0, 0.0)),
+                        (clip: "animations/astronaut_male/breast", at: (1.0, 0.0)),
+                    ])),
+                    pos: (300.0, 300.0),
+                ),
+            ],
+            default_state: Some("swim_surface"),
+            transitions: [
+                (
+                    from: "swim_surface",
+                    to: "swim_under",
+                    fade: 0.60,
+                ),
+                (
+                    from: "swim_under",
+                    to: "swim_surface",
+                    fade: 0.60,
+                ),
+            ],
+        ),
+        (
+            name: "SwimSide",
+            weight: 0.0,
+            states: [
+                (
+                    name: "swim_side",
+                    clip: "animations/astronaut_male/side_left",
+                    speed: 1.0,
+                    looped: true,
+                    blend: Some((params: ["swimS"], points: [
+                        (clip: "animations/astronaut_male/side_right", at: (-1.0, 0.0)),
+                        (clip: "animations/astronaut_male/side_left", at: (1.0, 0.0)),
+                    ])),
+                    pos: (300.0, 300.0),
+                ),
+            ],
+            default_state: Some("swim_side"),
+            transitions: [
+            ],
+        ),
+        (
+            name: "SwimVert",
+            weight: 0.0,
+            states: [
+                (
+                    name: "swim_vert",
+                    clip: "animations/astronaut_male/ascend",
+                    speed: 1.0,
+                    looped: true,
+                    blend: Some((params: ["swimV"], points: [
+                        (clip: "animations/astronaut_male/descend", at: (-1.0, 0.0)),
+                        (clip: "animations/astronaut_male/ascend", at: (1.0, 0.0)),
+                    ])),
+                    pos: (300.0, 300.0),
+                ),
+            ],
+            default_state: Some("swim_vert"),
+            transitions: [
+            ],
+        ),
     ],
 )

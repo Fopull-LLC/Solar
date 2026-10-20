@@ -24,6 +24,13 @@ Layers the walker drives (see planet_walker.lua):
           (0 walk, 1 run, 2 sprint), frozen (speed 0) and SCRUBBED by the
           walker to its phase; every clip in a blend plays at the same
           normalised time, so a walk blending into a run keeps its feet in step
+  Swim      back-scull / tread / stroke by `swimF` (-1, 0, +1): a crawl at
+          the surface (swim_surface), a breaststroke under it (swim_under)
+  SwimSide  side stroke right / left by `swimS` (-1, +1)
+  SwimVert  dive / haul up by `swimV` (-1, +1)
+          The swim layers play free; the walker sets their weights from how
+          the body really moves and their speed from SWIMS' metres a cycle.
+          The clips are authored upright; the walker tips the whole rig.
 Leaning, looking and planting the feet are not clips: the walker writes them
 onto the bones each frame (anim:addBoneRot, anim:lookAt, anim:reach).
 Gait phase 0 is the LEFT heel strike and 0.5 the right one, in every gait.
@@ -124,6 +131,20 @@ class Pose:
         self.foot_pitch = {s: 0.0 for s in SIDES}
         self.hip = {s: 0.0 for s in SIDES}      # forward flex, for hanging legs
         self.knee = {s: 0.0 for s in SIDES}
+        # Hanging legs can also open sideways (`leg_out`, abduction) and turn
+        # out about their own length (`leg_yaw`); `foot_rel`, when set, points
+        # the foot relative to the SHIN (a swimmer's pointed toes) instead of
+        # keeping it level in the character's frame.
+        self.leg_out = {s: 0.0 for s in SIDES}
+        self.leg_yaw = {s: 0.0 for s in SIDES}
+        self.foot_rel = {s: None for s in SIDES}
+        # Arms by IK instead of angles (the swims: a stroke is a path the HAND
+        # draws). `hand` is the wrist's target from the shoulder, in the torso's
+        # frame; `pole` the way the elbow points; `palm` the way the palm faces.
+        # All three in the torso's frame, so a body roll carries the stroke.
+        self.hand = {s: None for s in SIDES}
+        self.pole = {s: None for s in SIDES}
+        self.palm = {s: None for s in SIDES}
 
 def rest_ankle(side, narrow=0.0):
     p = P0["Foot." + side]
@@ -149,50 +170,142 @@ def solve(pose):
     W["Head"] = qmul(pose.head, W0["Head"])
     for side, sg in SIDES.items():
         a = pose.arm[side]
-        # Lower from the T-pose (about Z), open out, swing forward (about X),
-        # then the elbow hinge — which the lowering has turned into the
-        # character's lateral axis, so a bend carries the hand forward.
-        qa = qmul(rx(-a["swing"]), qmul(rz(sg * a["out"]), rz(-sg * a["lower"])))
-        up = qmul(T, qa)
-        W["Upperarm." + side] = qmul(up, W0["Upperarm." + side])
-        fore = qmul(up, ry(-sg * a["elbow"]))
-        W["Forearm." + side] = qmul(fore, W0["Forearm." + side])
-        # Wrist and fingers flex toward the palm, which faces down in the
-        # T-pose and so faces the thigh once the arm is lowered.
-        hand = qmul(fore, rz(-sg * a["wrist"]))
-        W["Hand." + side] = qmul(hand, W0["Hand." + side])
-        W["Fingers1." + side] = qmul(qmul(hand, rz(-sg * a["curl"] * D(50))), W0["Fingers1." + side])
-        W["Fingers2." + side] = qmul(qmul(hand, rz(-sg * a["curl"] * D(115))), W0["Fingers2." + side])
-        # Legs.
-        th = add(hip, qrot(pose.pelvis, sub(P0["Thigh." + side], P0["Hip"])))
-        rest_th = qrot(pose.pelvis, sub(P0["Shin." + side], P0["Thigh." + side]))
-        if pose.ankle[side] is not None:
-            tgt = pose.ankle[side]
-            v = sub(tgt, th); d = length(v)
-            d = max(0.2, min(d, LEN_THIGH + LEN_SHIN - 1e-4))
-            vn = unit(v)
-            a1 = (LEN_THIGH ** 2 - LEN_SHIN ** 2 + d * d) / (2 * d)
-            h = math.sqrt(max(0.0, LEN_THIGH ** 2 - a1 * a1))
-            # The knee bends forward: the hint is the character's +Z, bent a
-            # touch outward with the hip's rotation so it tracks the toes.
-            hint = qrot(pose.pelvis, (sg * 0.08, 0.0, 1.0))
-            pk = unit(sub(hint, mul(vn, dot(hint, vn))))
-            knee = add(add(th, mul(vn, a1)), mul(pk, h))
-            ankle = add(th, mul(vn, d))
+        if pose.hand[side] is not None:
+            arm_ik(pose, side, sg, P["Back"], T, W)
         else:
-            qd = qmul(pose.pelvis, rx(-pose.hip[side]))
-            knee = add(th, mul(unit(qrot(qd, sub(P0["Shin." + side], P0["Thigh." + side]))), LEN_THIGH))
-            kd = qmul(qd, rx(pose.knee[side]))
-            ankle = add(knee, mul(unit(qrot(kd, sub(P0["Foot." + side], P0["Shin." + side]))), LEN_SHIN))
-        dq = qmul(arc(rest_th, sub(knee, th)), pose.pelvis)
-        W["Thigh." + side] = qmul(dq, W0["Thigh." + side])
-        rest_sh = qrot(dq, sub(P0["Foot." + side], P0["Shin." + side]))
-        sq = qmul(arc(rest_sh, sub(ankle, knee)), dq)
-        W["Shin." + side] = qmul(sq, W0["Shin." + side])
-        # The foot keeps to the character frame (flat on the ground unless
-        # pitched), turned only with the pelvis.
+            arm_angles(pose, side, sg, a, T, W)
+        # Legs.
+        leg(pose, side, sg, hip, W)
+    return to_local(W, P)
+
+def arm_angles(pose, side, sg, a, T, W):
+    # Lower from the T-pose (about Z), open out, swing forward (about X),
+    # then the elbow hinge — which the lowering has turned into the
+    # character's lateral axis, so a bend carries the hand forward.
+    qa = qmul(rx(-a["swing"]), qmul(rz(sg * a["out"]), rz(-sg * a["lower"])))
+    up = qmul(T, qa)
+    W["Upperarm." + side] = qmul(up, W0["Upperarm." + side])
+    fore = qmul(up, ry(-sg * a["elbow"]))
+    W["Forearm." + side] = qmul(fore, W0["Forearm." + side])
+    # Wrist and fingers flex toward the palm, which faces down in the
+    # T-pose and so faces the thigh once the arm is lowered.
+    hand = qmul(fore, rz(-sg * a["wrist"]))
+    W["Hand." + side] = qmul(hand, W0["Hand." + side])
+    W["Fingers1." + side] = qmul(qmul(hand, rz(-sg * a["curl"] * D(50))), W0["Fingers1." + side])
+    W["Fingers2." + side] = qmul(qmul(hand, rz(-sg * a["curl"] * D(115))), W0["Fingers2." + side])
+
+LEN_UPPER = length(sub(P0["Forearm.Left"], P0["Upperarm.Left"]))
+LEN_FORE = length(sub(P0["Hand.Left"], P0["Forearm.Left"]))
+
+def perp(v, axis):
+    """v with its component along the unit `axis` taken out, normalised."""
+    return unit(sub(v, mul(axis, dot(v, axis))))
+
+def frame_rot(a0, b0, a1, b1):
+    """The rotation taking the orthonormal pair (a0, b0) onto (a1, b1)."""
+    c0, c1 = cross(a0, b0), cross(a1, b1)
+    m = [[a1[i] * a0[j] + b1[i] * b0[j] + c1[i] * c0[j] for j in range(3)] for i in range(3)]
+    tr = m[0][0] + m[1][1] + m[2][2]
+    if tr > 0:
+        k = math.sqrt(tr + 1.0) * 2
+        q = ((m[2][1] - m[1][2]) / k, (m[0][2] - m[2][0]) / k, (m[1][0] - m[0][1]) / k, 0.25 * k)
+    elif m[0][0] > m[1][1] and m[0][0] > m[2][2]:
+        k = math.sqrt(1.0 + m[0][0] - m[1][1] - m[2][2]) * 2
+        q = (0.25 * k, (m[0][1] + m[1][0]) / k, (m[0][2] + m[2][0]) / k, (m[2][1] - m[1][2]) / k)
+    elif m[1][1] > m[2][2]:
+        k = math.sqrt(1.0 + m[1][1] - m[0][0] - m[2][2]) * 2
+        q = ((m[0][1] + m[1][0]) / k, 0.25 * k, (m[1][2] + m[2][1]) / k, (m[0][2] - m[2][0]) / k)
+    else:
+        k = math.sqrt(1.0 + m[2][2] - m[0][0] - m[1][1]) * 2
+        q = ((m[0][2] + m[2][0]) / k, (m[1][2] + m[2][1]) / k, 0.25 * k, (m[1][0] - m[0][1]) / k)
+    return qnorm(q)
+
+def arm_ik(pose, side, sg, back, T, W):
+    """An arm placed by where its hand goes: two-bone IK from the shoulder to
+    the wrist target, the elbow toward its pole, then the forearm and hand
+    rolled about the forearm so the palm faces where it is told to. A stroke
+    is a path drawn by the hand, and this is how one is drawn without the
+    angle chain's 180° flip of the upper arm at the top of a crawl."""
+    a = pose.arm[side]
+    sh = add(back, qrot(T, sub(P0["Upperarm." + side], P0["Back"])))
+    tgt = add(sh, qrot(T, pose.hand[side]))
+    hint = qrot(T, pose.pole[side] or (sg * 1.0, 0.0, -0.4))
+    v = sub(tgt, sh); d = max(0.08, min(length(v), LEN_UPPER + LEN_FORE - 1e-4))
+    vn = unit(v)
+    a1 = (LEN_UPPER ** 2 - LEN_FORE ** 2 + d * d) / (2 * d)
+    h = math.sqrt(max(0.0, LEN_UPPER ** 2 - a1 * a1))
+    pk = perp(hint, vn)
+    elbow = add(add(sh, mul(vn, a1)), mul(pk, h))
+    wrist = add(sh, mul(vn, d))
+    # Rest: the upper arm along a0, bending (as the angle chain bends it)
+    # toward the character's front, b0. The hinge's axis is kept through the
+    # bend, so the forearm's frame is its direction plus that axis.
+    a0 = unit(sub(P0["Forearm." + side], P0["Upperarm." + side]))
+    b0 = perp((0.0, 0.0, 1.0), a0)
+    f0 = unit(sub(P0["Hand." + side], P0["Forearm." + side]))
+    au = unit(sub(elbow, sh))
+    fu = unit(sub(wrist, elbow))
+    bu = sub(fu, mul(au, dot(fu, au)))
+    bu = unit(bu) if length(bu) > 1e-4 else perp(mul(pk, -1.0), au)
+    up = frame_rot(a0, b0, au, bu)
+    n0 = cross(a0, b0)
+    n1 = cross(au, bu)
+    fore = frame_rot(f0, perp(n0, f0), fu, perp(n1, fu))
+    # Palm: in the T-pose it faces down (−Y). Roll it about the forearm toward
+    # the asked-for facing — half in the forearm, all of it at the hand, so the
+    # wrist doesn't wring.
+    roll = 0.0
+    if pose.palm[side] is not None:
+        want = perp(qrot(T, pose.palm[side]), fu)
+        have = perp(qrot(fore, (0.0, -1.0, 0.0)), fu)
+        roll = math.atan2(dot(cross(have, want), fu), dot(have, want))
+    W["Upperarm." + side] = qmul(up, W0["Upperarm." + side])
+    W["Forearm." + side] = qmul(qmul(qaxis(fu, roll * 0.5), fore), W0["Forearm." + side])
+    hand = qmul(qaxis(fu, roll), qmul(fore, rz(-sg * a["wrist"])))
+    W["Hand." + side] = qmul(hand, W0["Hand." + side])
+    W["Fingers1." + side] = qmul(qmul(hand, rz(-sg * a["curl"] * D(50))), W0["Fingers1." + side])
+    W["Fingers2." + side] = qmul(qmul(hand, rz(-sg * a["curl"] * D(115))), W0["Fingers2." + side])
+
+def leg(pose, side, sg, hip, W):
+    th = add(hip, qrot(pose.pelvis, sub(P0["Thigh." + side], P0["Hip"])))
+    rest_th = qrot(pose.pelvis, sub(P0["Shin." + side], P0["Thigh." + side]))
+    if pose.ankle[side] is not None:
+        tgt = pose.ankle[side]
+        v = sub(tgt, th); d = length(v)
+        d = max(0.2, min(d, LEN_THIGH + LEN_SHIN - 1e-4))
+        vn = unit(v)
+        a1 = (LEN_THIGH ** 2 - LEN_SHIN ** 2 + d * d) / (2 * d)
+        h = math.sqrt(max(0.0, LEN_THIGH ** 2 - a1 * a1))
+        # The knee bends forward: the hint is the character's +Z, bent a
+        # touch outward with the hip's rotation so it tracks the toes.
+        hint = qrot(pose.pelvis, (sg * 0.08, 0.0, 1.0))
+        pk = unit(sub(hint, mul(vn, dot(hint, vn))))
+        knee = add(add(th, mul(vn, a1)), mul(pk, h))
+        ankle = add(th, mul(vn, d))
+    else:
+        # Flex forward, open sideways, then turn out: the order a hip
+        # takes them in, so an open, bent leg (eggbeater, frog kick) opens
+        # the knee to the side rather than spinning the thigh.
+        qd = qmul(pose.pelvis, qmul(ry(sg * pose.leg_yaw[side]),
+                                    qmul(rz(sg * pose.leg_out[side]), rx(-pose.hip[side]))))
+        knee = add(th, mul(unit(qrot(qd, sub(P0["Shin." + side], P0["Thigh." + side]))), LEN_THIGH))
+        kd = qmul(qd, rx(pose.knee[side]))
+        ankle = add(knee, mul(unit(qrot(kd, sub(P0["Foot." + side], P0["Shin." + side]))), LEN_SHIN))
+    dq = qmul(arc(rest_th, sub(knee, th)), pose.pelvis)
+    W["Thigh." + side] = qmul(dq, W0["Thigh." + side])
+    rest_sh = qrot(dq, sub(P0["Foot." + side], P0["Shin." + side]))
+    sq = qmul(arc(rest_sh, sub(ankle, knee)), dq)
+    W["Shin." + side] = qmul(sq, W0["Shin." + side])
+    # The foot keeps to the character frame (flat on the ground unless
+    # pitched), turned only with the pelvis — or, for a swimmer, rides the
+    # shin with the toes pointed.
+    if pose.foot_rel[side] is not None:
+        W["Foot." + side] = qmul(qmul(sq, rx(-pose.foot_rel[side])), W0["Foot." + side])
+    else:
         W["Foot." + side] = qmul(qmul(pose.pelvis, rx(-pose.foot_pitch[side])), W0["Foot." + side])
-    # World → local.
+
+def to_local(W, P):
+    """World rotations (and Back's position) → the bones' local TRS."""
     out = {}
     Wn = {"MaleArm": RIG["MaleArm"]["W"]}
     for name in ["Back", "Hip", "Head", "Upperarm.Left", "Upperarm.Right", "Forearm.Left",
@@ -361,6 +474,295 @@ def crouch_pose(depth, lean, arms_fwd):
         a["elbow"] = D(28)
     return p
 
+# ── swimming ────────────────────────────────────────────────────────────────
+# Every swim is authored UPRIGHT, in the same frame as the walk: +Y is the way
+# the head points, +Z the way the chest faces. The walker tips the whole rig
+# at run time (MaleArm, the root no clip keys) — level for a crawl, head-down
+# for a dive, upright to tread — so one clip serves every attitude and two
+# clips blend without the body swinging through each other. In the crawl's
+# frame that means: "overhead" (+Y) is the way you swim, and "in front" (+Z)
+# is the sea floor under a swimmer lying face down.
+#
+# A stroke is the path the HAND draws (`arm_ik`), keyed at a few phases and
+# run through a closed Catmull-Rom spline, so it has no corners. The legs hang
+# from angles. Everything is keyed against the cycle's phase, and limbs are
+# offset in phase from each other (overlapping action): the hips roll after
+# the chest, the head after the hips, the knee whips after the thigh.
+#
+# STROKE (metres a full cycle covers) is what the walker reads to scale each
+# layer's playback rate to the speed you are really moving — the swim's
+# equivalent of the gaits' stride, so a hand that is pulling holds the water
+# instead of sliding through it.
+SWIMS = {
+    # name: (seconds per cycle, metres a cycle covers — 0 for a hold)
+    "tread": (2.4, 0.0), "hover": (3.0, 0.0),
+    "crawl": (1.4, 3.0), "breast": (1.8, 2.6), "back_scull": (2.0, 2.0),
+    "side_left": (1.8, 2.4), "side_right": (1.8, 2.4),
+    "ascend": (1.6, 2.2), "descend": (1.6, 2.4),
+}
+
+def cr(p0, p1, p2, p3, u):
+    u2, u3 = u * u, u * u * u
+    return tuple(0.5 * (2 * b + (c - a) * u + (2 * a - 5 * b + 4 * c - d) * u2 + (3 * b - a - 3 * c + d) * u3)
+                 for a, b, c, d in zip(p0, p1, p2, p3))
+
+def loop(keys, ph):
+    """A closed Catmull-Rom spline through [(phase, value-tuple)], phases in
+    [0, 1) ascending: no corner anywhere, the end flowing into the start."""
+    n = len(keys); ph %= 1.0
+    i = n - 1
+    for j in range(n):
+        if keys[j][0] <= ph: i = j
+    t0 = keys[i][0]
+    t1 = keys[(i + 1) % n][0] + (1.0 if i + 1 >= n else 0.0)
+    if ph < t0: ph += 1.0
+    u = (ph - t0) / max(1e-6, t1 - t0)
+    return cr(keys[(i - 1) % n][1], keys[i][1], keys[(i + 1) % n][1], keys[(i + 2) % n][1], u)
+
+def mirror_x(v, sg): return (v[0] * sg, v[1], v[2])
+
+def bump(ph, a, b, edge=0.08):
+    """1 between phases a and b, eased in and out over `edge`, 0 elsewhere."""
+    ph %= 1.0
+    return smooth((ph - a + edge) / edge) * (1 - smooth((ph - b) / edge))
+
+def stroke(p, side, sg, ph, hand, pole, palm, wrist=D(8), curl=0.2):
+    """Key one arm from spline tables written for the LEFT arm (+X); the right
+    is its mirror."""
+    p.hand[side] = mirror_x(loop(hand, ph), sg)
+    p.pole[side] = mirror_x(loop(pole, ph), sg)
+    p.palm[side] = mirror_x(loop(palm, ph), sg)
+    p.arm[side]["wrist"], p.arm[side]["curl"] = wrist, curl
+
+def hang(p, side, hip, knee, out=0.0, yaw=0.0, foot=-D(60)):
+    p.hip[side], p.knee[side] = hip, knee
+    p.leg_out[side], p.leg_yaw[side], p.foot_rel[side] = out, yaw, foot
+    p.ankle[side] = None
+
+def tread_pose(ph, under=False):
+    """Treading water: sculling hands drawing a flat figure-eight in front of
+    the chest, palms tilted into each sweep; an eggbeater kick, the legs
+    circling half a cycle apart, so the body bobs twice a cycle. Underwater
+    (`hover`) it is wider and lower and the legs paddle slowly."""
+    p = Pose()
+    w = 2 * math.pi * ph
+    bob = math.cos(2 * w)
+    p.pelvis_off = (0.008 * math.sin(w), 0.016 * bob, 0.0)
+    lean = D(14) if under else D(9)
+    p.torso = qmul(ry(D(4) * math.sin(w + 0.7)), rx(lean + D(1.5) * math.cos(2 * w - 0.6)))
+    p.pelvis = qmul(ry(-D(3) * math.sin(w + 0.3)), rx(D(4) if under else 0.0))
+    # The head holds level (the torso leans forward under it), glances about,
+    # and nods with the bob a beat after it.
+    p.head = qmul(ry(D(9) * math.sin(w + 1.3)), rx((D(6) if under else -D(2)) + D(1.5) * math.cos(2 * w - 1.2)))
+    for side, sg in SIDES.items():
+        a = w + (0.18 if side == "Right" else 0.0)       # the right a beat behind
+        sweep = math.sin(a)
+        if under:
+            hand = (sg * (0.34 + 0.15 * sweep), -0.30 + 0.025 * math.cos(2 * a), 0.20 + 0.05 * math.cos(a))
+        else:
+            hand = (sg * (0.28 + 0.13 * sweep), -0.24 + 0.03 * math.cos(2 * a), 0.27 + 0.05 * math.cos(a))
+        p.hand[side] = hand
+        p.pole[side] = (sg * 1.0, -0.25, -0.55)
+        # The palm faces down, tipped toward where the hand is going (its
+        # leading edge up) — the pitch that makes a scull lift.
+        p.palm[side] = (sg * 0.65 * math.cos(a), -1.0, 0.15)
+        p.arm[side]["wrist"], p.arm[side]["curl"] = D(4), 0.15
+        l = w + (math.pi if side == "Right" else 0.0)
+        if under:
+            hang(p, side, D(22) + D(10) * math.sin(l), D(32) + D(24) * (0.5 + 0.5 * math.sin(l + 1.3)),
+                 D(8) + D(3) * math.cos(l), D(4), -D(48) + D(10) * math.sin(l + 0.8))
+        else:
+            hang(p, side, D(52) + D(9) * math.sin(l), D(78) + D(26) * math.sin(l + 1.2),
+                 D(24) + D(7) * math.cos(l), -D(16), D(2) + D(12) * math.sin(l + 0.6))
+    return p
+
+# The crawl's left hand, from the shoulder in the torso's frame (the right is
+# its mirror, half a cycle later): enter in front of the head, reach, catch
+# with the elbow high, pull under the chest, push past the hip, slice out by
+# the thigh, then swing forward ABOVE the back (−Z) with the elbow leading.
+CRAWL_HAND = [(0.00, (0.11, 0.44, 0.08)), (0.10, (0.08, 0.53, 0.10)), (0.22, (0.13, 0.41, 0.27)),
+              (0.36, (0.03, 0.09, 0.33)), (0.50, (0.10, -0.31, 0.21)), (0.60, (0.16, -0.46, 0.02)),
+              (0.70, (0.34, -0.22, -0.10)), (0.82, (0.35, 0.12, -0.12)), (0.92, (0.22, 0.38, -0.02))]
+CRAWL_POLE = [(0.00, (0.7, 0.0, -0.7)), (0.22, (1.0, 0.1, -0.3)), (0.40, (1.0, -0.2, -0.2)),
+              (0.56, (0.7, -0.3, -0.6)), (0.70, (1.0, 0.0, -0.8)), (0.86, (0.8, 0.2, -0.8))]
+CRAWL_PALM = [(0.00, (0.5, 0.2, 1.0)), (0.22, (0.1, -0.6, 1.0)), (0.36, (0.0, -1.0, 0.4)),
+              (0.50, (0.2, -1.0, 0.0)), (0.62, (-1.0, -0.2, 0.0)), (0.75, (-0.6, 0.2, -0.6)),
+              (0.88, (0.2, 0.0, 1.0))]
+
+def crawl_pose(ph):
+    """Front crawl. A six-beat flutter kick, the body rolling ~40° onto the
+    pulling arm's side with the hips following, and a breath to the right
+    every cycle: the head turns out with the roll as the right arm recovers
+    and is back down before that hand enters."""
+    p = Pose()
+    roll = -D(38) * math.sin(2 * math.pi * (ph - 0.11))         # − : left shoulder down
+    hroll = -D(26) * math.sin(2 * math.pi * (ph - 0.15))
+    p.torso = qmul(ry(roll), rx(-D(3)))
+    p.pelvis = ry(hroll)
+    breath = bump(ph, 0.24, 0.44, 0.1)
+    p.head = qmul(ry(lerp(roll * 0.55, roll - D(42), breath)), rx(lerp(-D(16), -D(4), breath)))
+    for side, sg in SIDES.items():
+        sp = ph + (0.0 if side == "Left" else 0.5)
+        under = bump(sp, 0.0, 0.6, 0.06)
+        stroke(p, side, sg, sp, CRAWL_HAND, CRAWL_POLE, CRAWL_PALM,
+               wrist=D(10) * under + D(18) * (1 - under), curl=0.12 * under + 0.4 * (1 - under))
+        th = 6 * 2 * math.pi * ph + (math.pi if side == "Right" else 0.0)
+        # Hip drives the kick; the knee bends at the top of the upkick and
+        # whips straight through the downkick; the ankle trails, floppy.
+        hang(p, side, D(3) + D(10) * math.sin(th),
+             D(5) + D(24) * (0.5 + 0.5 * math.cos(th + math.pi / 2)) ** 2,
+             -D(2), -D(5), -D(62) + D(9) * math.sin(th - 0.9))
+    return p
+
+# Breaststroke, underwater: pull — breathe — kick — glide. Hands sweep out
+# into a wide catch, scull in under the chin, and shoot forward together; the
+# heels draw up as the hands come in, the kick fires as they reach, and then
+# nothing moves for the glide.
+BREAST_HAND = [(0.00, (0.05, 0.53, 0.06)), (0.06, (0.16, 0.51, 0.08)), (0.16, (0.36, 0.34, 0.16)),
+               (0.25, (0.22, 0.04, 0.27)), (0.31, (0.07, -0.06, 0.24)), (0.39, (0.05, 0.28, 0.16)),
+               (0.47, (0.05, 0.53, 0.06)), (0.75, (0.05, 0.535, 0.05))]
+BREAST_POLE = [(0.00, (0.7, 0.0, -0.7)), (0.16, (1.0, 0.1, -0.4)), (0.27, (0.8, -0.5, 0.2)),
+               (0.35, (0.5, -0.6, 0.3)), (0.47, (0.7, 0.0, -0.7))]
+BREAST_PALM = [(0.00, (0.0, 0.0, 1.0)), (0.10, (0.8, -0.2, 0.5)), (0.20, (0.4, -0.8, 0.4)),
+               (0.27, (-0.6, -0.8, 0.2)), (0.33, (-0.5, 0.0, 1.0)), (0.40, (0.0, 0.2, 1.0)),
+               (0.47, (0.0, 0.0, 1.0))]
+# Frog kick: (hip flex, knee, out, yaw, foot) — heels to the seat with the
+# feet hooked and turned out, a whip out, back and together, toes pointed.
+FROG = [(0.00, (0, 3, 2, 0, -70)), (0.28, (0, 3, 2, 0, -70)), (0.36, (22, 70, 10, -8, -40)),
+        (0.44, (38, 112, 14, -20, 12)), (0.50, (24, 62, 26, -14, 0)), (0.56, (5, 14, 16, -4, -50)),
+        (0.64, (0, 2, 2, 0, -72))]
+
+def frog(p, ph):
+    for side in SIDES:
+        h, k, o, y, f = (D(c) for c in loop(FROG, ph))
+        hang(p, side, h, k, o, y, f)
+
+def breast_pose(ph):
+    p = Pose()
+    lift = bump(ph, 0.14, 0.34, 0.1)                 # the chest rises on the in-sweep
+    kick = bump(ph, 0.38, 0.52, 0.06)
+    p.torso = rx(-D(9) * lift + D(3) * kick)
+    p.pelvis = rx(D(7) * bump(ph, 0.34, 0.48, 0.06))
+    p.pelvis_off = (0.0, 0.0, -0.02 * kick)
+    p.head = rx(lerp(-D(6), -D(20), lift) + D(4) * kick)
+    for side, sg in SIDES.items():
+        under = 1 - bump(ph, 0.3, 0.42, 0.05)
+        stroke(p, side, sg, ph, BREAST_HAND, BREAST_POLE, BREAST_PALM, wrist=D(6), curl=0.12 + 0.1 * (1 - under))
+    frog(p, ph)
+    return p
+
+# Swimming backwards, facing forward: an upright back-scull. The hands press
+# forward from the chest, palms leading, open out and slice back in; the legs
+# flutter gently from a seated hip.
+BACK_HAND = [(0.00, (0.14, -0.20, 0.12)), (0.30, (0.22, -0.27, 0.45)), (0.48, (0.42, -0.24, 0.32)),
+             (0.70, (0.34, -0.22, 0.10)), (0.88, (0.20, -0.18, 0.07))]
+BACK_POLE = [(0.00, (1.0, -0.3, -0.6)), (0.30, (1.0, -0.4, -0.1)), (0.60, (1.0, -0.1, -0.6))]
+BACK_PALM = [(0.00, (0.0, -0.3, 1.0)), (0.30, (0.2, -0.3, 1.0)), (0.48, (1.0, -0.4, 0.2)),
+             (0.70, (0.6, -1.0, -0.2)), (0.88, (0.0, -0.6, 0.8))]
+
+def back_pose(ph):
+    p = Pose()
+    w = 2 * math.pi * ph
+    push = bump(ph, 0.05, 0.4, 0.1)
+    p.torso = rx(-D(5) + D(5) * push)
+    p.head = rx(D(8) - D(3) * push)
+    p.pelvis_off = (0.0, 0.012 * math.cos(2 * w), 0.0)
+    for side, sg in SIDES.items():
+        stroke(p, side, sg, ph + (0.03 if side == "Right" else 0.0), BACK_HAND, BACK_POLE, BACK_PALM,
+               wrist=D(-12) * push + D(6), curl=0.12)
+        l = 2 * w + (math.pi if side == "Right" else 0.0)
+        hang(p, side, D(26) + D(10) * math.sin(l), D(34) + D(18) * (0.5 + 0.5 * math.cos(l + 1.4)),
+             D(5), -D(4), -D(42) + D(8) * math.sin(l - 0.8))
+    return p
+
+# Sideways (toward the character's LEFT; side_right is its mirror): the
+# leading hand reaches out and hauls down to the hip, the trailing hand pushes
+# from the chest out the other way, and the legs scissor open sideways during
+# the reach and snap shut for the glide. The body leans into the way it goes.
+SIDE_LEAD = [(0.00, (0.50, 0.08, 0.06)), (0.30, (0.36, -0.30, 0.10)), (0.48, (0.18, -0.40, 0.12)),
+             (0.66, (0.16, -0.08, 0.20)), (0.84, (0.34, 0.08, 0.14))]
+SIDE_LEAD_PALM = [(0.00, (-0.6, -0.5, 0.3)), (0.30, (-1.0, -0.3, 0.0)), (0.48, (-0.6, 0.2, 0.4)),
+                  (0.66, (0.0, -0.4, 1.0)), (0.84, (0.2, -0.8, 0.5))]
+SIDE_TRAIL = [(0.00, (0.12, -0.05, 0.22)), (0.35, (0.46, -0.30, 0.06)), (0.50, (0.30, -0.42, 0.02)),
+              (0.75, (0.14, -0.20, 0.18))]
+SIDE_TRAIL_PALM = [(0.00, (1.0, -0.2, 0.3)), (0.35, (1.0, -0.4, 0.0)), (0.50, (0.3, -0.5, 0.6)),
+                   (0.75, (0.0, -0.5, 1.0))]
+SIDE_POLE = [(0.00, (1.0, -0.2, -0.5)), (0.50, (1.0, -0.5, -0.3))]
+
+def side_pose(ph, dsg):
+    p = Pose()
+    open_ = smooth((ph - 0.45) / 0.35) * (1 - smooth((ph - 0.86) / 0.12))
+    p.torso = qmul(rz(-dsg * D(9)), qmul(ry(dsg * D(5) * math.sin(2 * math.pi * ph)), rx(D(6))))
+    p.pelvis = rz(dsg * D(4) * (1 - open_))
+    p.pelvis_off = (0.0, 0.01 * math.cos(4 * math.pi * ph), 0.0)
+    p.head = qmul(ry(dsg * D(24)), rx(D(2)))
+    for side, sg in SIDES.items():
+        lead = (sg == dsg)
+        stroke(p, side, sg, ph, SIDE_LEAD if lead else SIDE_TRAIL, SIDE_POLE,
+               SIDE_LEAD_PALM if lead else SIDE_TRAIL_PALM, wrist=D(6), curl=0.14)
+        # Never standing: the hips stay soft and the knees bent, and the legs
+        # drift a little between kicks.
+        drift = D(4) * math.sin(2 * math.pi * ph * 2 + (0.0 if lead else math.pi))
+        if lead:
+            hang(p, side, D(16) + D(10) * open_ + drift, D(24) + D(38) * open_, D(28) * open_ + D(3), D(8) * open_,
+                 -D(50) + D(25) * open_)
+        else:
+            hang(p, side, D(12) - D(16) * open_ - drift, D(22) + D(24) * open_, -D(4) * open_ + D(2), 0.0, -D(55))
+    return p
+
+# Going UP: both hands reach overhead and haul down to the hips (palms
+# pressing the water down), recover close along the front, while a frog kick
+# drives on the reach. The head looks up to the light.
+UP_HAND = [(0.00, (0.16, 0.52, 0.04)), (0.14, (0.40, 0.30, 0.08)), (0.32, (0.36, -0.20, 0.06)),
+           (0.42, (0.20, -0.46, 0.04)), (0.60, (0.12, -0.12, 0.20)), (0.80, (0.10, 0.30, 0.16))]
+UP_POLE = [(0.00, (1.0, 0.0, -0.5)), (0.40, (1.0, -0.2, -0.3)), (0.60, (0.7, -0.5, 0.4)), (0.85, (0.8, 0.0, -0.2))]
+UP_PALM = [(0.00, (0.3, -0.6, 0.6)), (0.14, (0.4, -1.0, 0.0)), (0.32, (0.2, -1.0, 0.0)),
+           (0.45, (-0.8, -0.2, 0.0)), (0.60, (-1.0, 0.0, 0.4)), (0.80, (-0.4, 0.4, 0.8))]
+
+def ascend_pose(ph):
+    p = Pose()
+    haul = bump(ph, 0.1, 0.42, 0.08)
+    p.torso = rx(-D(4) + D(6) * haul)
+    p.head = rx(-D(26) + D(6) * haul)
+    p.pelvis_off = (0.0, 0.02 * haul, 0.0)
+    for side, sg in SIDES.items():
+        stroke(p, side, sg, ph, UP_HAND, UP_POLE, UP_PALM, wrist=D(8), curl=0.14)
+    frog(p, ph - 0.46)
+    return p
+
+# Going DOWN, head first (the walker turns the body over for it): a duck-dive
+# — a keyhole pull right through to the thighs, the hands sliding back up
+# under the body to a streamline, and a dolphin kick, the hips piking and the
+# wave running down to the toes.
+DOWN_HAND = [(0.00, (0.06, 0.53, 0.06)), (0.12, (0.30, 0.38, 0.14)), (0.26, (0.16, 0.02, 0.30)),
+             (0.38, (0.14, -0.44, 0.14)), (0.48, (0.14, -0.46, 0.06)), (0.62, (0.10, -0.05, 0.24)),
+             (0.76, (0.06, 0.40, 0.14))]
+DOWN_POLE = [(0.00, (0.7, 0.0, -0.7)), (0.20, (1.0, 0.0, -0.3)), (0.40, (0.8, -0.3, -0.5)),
+             (0.62, (0.6, -0.5, 0.4)), (0.80, (0.7, 0.0, -0.6))]
+DOWN_PALM = [(0.00, (0.0, 0.0, 1.0)), (0.12, (0.6, -0.6, 0.5)), (0.26, (0.0, -1.0, 0.4)),
+             (0.40, (-0.6, -0.6, 0.0)), (0.55, (-1.0, 0.0, 0.2)), (0.70, (0.0, 0.0, 1.0))]
+
+def descend_pose(ph):
+    p = Pose()
+    w = 2 * math.pi * ph
+    wave = 2 * w
+    p.pelvis = rx(D(10) * math.sin(wave))
+    p.torso = rx(-D(6) * math.sin(wave - 1.0) + D(4))
+    p.head = rx(D(10) - D(5) * math.sin(wave - 1.6))
+    for side, sg in SIDES.items():
+        stroke(p, side, sg, ph, DOWN_HAND, DOWN_POLE, DOWN_PALM, wrist=D(8), curl=0.12)
+        hang(p, side, D(6) + D(16) * math.sin(wave + 0.6),
+             D(6) + D(34) * (0.5 + 0.5 * math.cos(wave + 0.6 + math.pi / 2)) ** 2,
+             D(1), -D(4), -D(66) + D(12) * math.sin(wave - 0.3))
+    return p
+
+SWIM_POSES = {
+    "tread": lambda ph: tread_pose(ph), "hover": lambda ph: tread_pose(ph, True),
+    "crawl": crawl_pose, "breast": breast_pose, "back_scull": back_pose,
+    "side_left": lambda ph: side_pose(ph, 1.0), "side_right": lambda ph: side_pose(ph, -1.0),
+    "ascend": ascend_pose, "descend": descend_pose,
+}
+
 # ── writing RON ─────────────────────────────────────────────────────────────
 def fmt(v): return "(" + ", ".join("%.6f" % c for c in v) + ")"
 
@@ -478,12 +880,15 @@ def main():
     # The first key is airborne; key the others' legs by IK from the ground.
     write_clip("land", keys, False)
 
+    for name, (period, _) in SWIMS.items():
+        cycle(name, SWIM_POSES[name], period, 32, fix=False)
+
     write_controller()
 
 def write_controller():
-    def state(name, speed, looped, fade=None, blend=None):
+    def state(name, speed, looped, fade=None, blend=None, clip=None):
         s = ["                (", '                    name: "%s",' % name,
-             '                    clip: "%s/%s",' % (OUT, name),
+             '                    clip: "%s/%s",' % (OUT, clip or name),
              "                    speed: %.1f," % speed,
              "                    looped: %s," % ("true" if looped else "false")]
         if fade is not None: s.append("                    fade_in: Some(%.2f)," % fade)
@@ -514,6 +919,24 @@ def write_controller():
     # sprint (2) by ground speed; the run clip is the state's clock.
     lines += layer("Gait", 0.0, [("run", 0.0, True, None,
                                   ("gait", [("walk", 0.0), ("run", 1.0), ("sprint", 2.0)]))], "run")
+    # Swimming: three layers over the gaits, all at weight 0 until the walker
+    # puts you in the water. Their clocks run free (unlike the Gait's), and the
+    # walker sets each layer's SPEED from how fast you are really going along
+    # its axis, so a stroke covers the water it should (SWIMS' metres).
+    #   Swim      along the body: back-scull (-1) · tread (0) · stroke (+1) by
+    #             `swimF`; a crawl at the surface, breaststroke under it.
+    #   SwimSide  across it: side_right (-1) · side_left (+1) by `swimS`,
+    #             weighted by how much of the motion is sideways.
+    #   SwimVert  up and down: descend (-1) · ascend (+1) by `swimV`,
+    #             weighted by how much of it is vertical.
+    lines += layer("Swim", 0.0, [
+        ("swim_surface", 1.0, True, None, ("swimF", [("back_scull", -1.0), ("tread", 0.0), ("crawl", 1.0)]), "crawl"),
+        ("swim_under", 1.0, True, None, ("swimF", [("back_scull", -1.0), ("hover", 0.0), ("breast", 1.0)]), "breast"),
+    ], "swim_surface", [("swim_surface", "swim_under", 0.6), ("swim_under", "swim_surface", 0.6)])
+    lines += layer("SwimSide", 0.0, [
+        ("swim_side", 1.0, True, None, ("swimS", [("side_right", -1.0), ("side_left", 1.0)]), "side_left")], "swim_side")
+    lines += layer("SwimVert", 0.0, [
+        ("swim_vert", 1.0, True, None, ("swimV", [("descend", -1.0), ("ascend", 1.0)]), "ascend")], "swim_vert")
     lines += ["    ],", ")", ""]
     open(os.path.join(ROOT, "animation_controllers/character.actl.ron"), "w").write("\n".join(lines))
 
@@ -521,3 +944,5 @@ if __name__ == "__main__":
     main()
     for name, g in GAITS.items():
         print("%-7s stride %.2f m per cycle, %.2f s, authored at %.1f m/s" % (name, g["speed"] * g["period"], g["period"], g["speed"]))
+    for name, (period, metres) in SWIMS.items():
+        print("%-10s %.1f s a cycle%s" % (name, period, ", %.1f m" % metres if metres else ""))

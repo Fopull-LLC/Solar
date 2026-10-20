@@ -1,0 +1,31 @@
+[
+    (
+        // The host of an engine settings page (ui.engineSettings) inside a
+        // screen settings.lua describes with ui.make. The screen is described
+        // every frame, and a description replaces whatever made elements sit
+        // under a container it names — the engine's page included. A repeater's
+        // row is not a made element, so the page lives in this, a one-row
+        // repeater, and the description leaves it alone.
+        name: "Settings Host",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+        ui: Some((
+            place: Free(pos: (0.0, 0.0)),
+            size: (Pct(1.0), Fit),
+            stack: Some((
+                dir: Column,
+                gap: 6.0,
+                pad: 0.0,
+                align: Start,
+                justify: Start,
+            )),
+            visible: true,
+            opacity: 1.0,
+        )),
+    ),
+]

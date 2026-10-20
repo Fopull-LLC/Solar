@@ -13,6 +13,13 @@
         shadow_quantize: 0,
         shadow_dither: false,
         shadow_distance: 400.0,
+        // SHADOW MAP for the home star. Without it every lit pixel marches a
+        // ray through the distance field, and a pixel's cost grew with the box
+        // colliders around it. Inside the command centre that was the whole
+        // frame (25 ms of lighting against 9 outside). The map is drawn once
+        // from the star (about 0.3 ms), and every pixel then costs the same
+        // indoors or out. Stars mode reads it for star 0 only (engine 0.109.1).
+        shadow_map: true,
         // FOG. This was 40 → 200, which is a corridor: on a world you can walk
         // around in ten minutes, everything past a couple of hundred metres was
         // a flat grey wall. It was doing real work — it hid the terrain
@@ -34,6 +41,12 @@
         fog_start: 90.0,
         fog_end: 480.0,
         fog_dither_strength: 0.5,
+        // The sky inside an atmosphere is the engine's (0.116.1); the fog only
+        // seats the far ground into its horizon, and atmosphere.lua fades how
+        // much of the horizon it takes (fogSky) with the air, so a climb out
+        // of the air is a fade. Fog heights are altitudes over the planet.
+        fog_sky: 0.0,
+        fog_follows_body: true,
     ),
     nodes: [
         (
@@ -431,8 +444,12 @@
             matter: PostProcess(
                 enabled: true,
                 bloom: true,
-                bloom_threshold: 0.3,
-                bloom_intensity: 0.3,
+                // Only what is really brighter than white blooms: the star,
+                // emissives, a lightning bolt. At 0.3 the whole daytime sky
+                // was over the threshold, and its blurred copy laid over the
+                // frame was a veil of glare that washed every view out.
+                bloom_threshold: 1.0,
+                bloom_intensity: 0.25,
                 vignette: true,
                 vignette_strength: 0.4,
                 vignette_radius: 0.5,
@@ -447,6 +464,7 @@
                 ao_radius: 0.7,
                 posterize_bands: 0,
                 posterize_dither: false,
+                screen_shaders: [],
             ),
             scripts: [],
         ),
@@ -2717,6 +2735,164 @@
                 visible: false,
                 opacity: 1.0,
             )),
+        ),
+        // ── Effects director ─────────────────────────────────────────────────
+        //
+        // vfx.lua: explosions, engine plumes, dust, the laser's impact — every
+        // physical effect, fired in the planet's own frame (it orbits at ~90 m/s
+        // and a particle born at rest in world space is left behind by it).
+        // Scripts reach it with findScript("vfx"). Appended LAST: `parent`
+        // elsewhere is a positional index into this list.
+        (
+            name: "Effects",
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Empty,
+            scripts: [
+                (
+                    kind: "vfx",
+                    enabled: true,
+                    params: [],
+                ),
+            ],
+        ),
+        // ── Sound and settings ──────────────────────────────────────────────
+        //
+        // settings.lua re-applies the player's settings (volumes, FOV, mouse,
+        // vsync, frame cap, accessibility) — the engine resets the mixer on
+        // every scene load. soundscape.lua: wind by air density, the sea from
+        // inside it, and sparse music. big_caption.lua: "VESSEL LOST", drawn
+        // into this node's own UI layer (under the HUD layer's 120, so the
+        // pause menu covers it). Appended LAST: `parent` is positional.
+        (
+            name: "Sound and Settings",
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Empty,
+            scripts: [
+                (
+                    kind: "settings",
+                    enabled: true,
+                    params: [],
+                ),
+                (
+                    kind: "soundscape",
+                    enabled: true,
+                    params: [],
+                ),
+                (
+                    kind: "big_caption",
+                    enabled: true,
+                    params: [],
+                ),
+            ],
+            ui_layer: Some((
+                design_height: 720.0,
+                reference_width: 1280.0,
+                scale_mode: MatchHeight,
+                match_wh: 0.5,
+                z: 115,
+                enabled: true,
+                space: Screen,
+                canvas_scale: 0.009,
+            )),
+        ),
+        // ── ELECTRONICS ───────────────────────────────────────────────────────
+        // electronics.lua: the rulebook (part modules, actions, action groups,
+        // power, the link budget). comms.lua: the comms network — every craft's
+        // path home, solved a few times a second. vessel_switcher.lua: [ and ]
+        // between nearby craft and the crew. Appended LAST: `parent` is positional.
+        (
+            name: "Electronics",
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Empty,
+            scripts: [
+                (
+                    kind: "electronics",
+                    enabled: true,
+                    params: [],
+                ),
+                (
+                    kind: "comms",
+                    enabled: true,
+                    params: [],
+                ),
+                (
+                    kind: "vessel_switcher",
+                    enabled: true,
+                    params: [],
+                ),
+            ],
+        ),
+        // ── TRACKING STATION ──────────────────────────────────────────────────
+        // The fleet screen at the Tracking Station (scripts/tracking_station.lua):
+        // the frame only — the contents are described from Lua, like the Ops
+        // Board's. facility_menu opens it.
+        (
+            name: "Tracking Station",
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Empty,
+            scripts: [
+                (
+                    kind: "tracking_station",
+                    enabled: true,
+                    params: [],
+                ),
+            ],
+            parent: Some(15),
+            ui: Some((
+                place: Pin(
+                    anchor: Center,
+                    offset: (0.0, 0.0),
+                ),
+                size: (Fixed(900.0), Fit),
+                stack: Some((
+                    dir: Column,
+                    gap: 0.0,
+                    pad: 0.0,
+                    align: Start,
+                    justify: Start,
+                )),
+                visible: false,
+                opacity: 1.0,
+            )),
+        ),
+        // ── WEATHER ───────────────────────────────────────────────────────────
+        // scripts/weather.lua: each world's weather from its climate (rain and
+        // thunderstorms, snow, hail, dust, ash), deterministic from the seed
+        // and the weather clock. Drives the cloud deck, the haze (through
+        // atmosphere.lua), precipitation around the camera, lightning and
+        // thunder. Appended LAST: `parent` is positional.
+        (
+            name: "Weather",
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Empty,
+            scripts: [
+                (
+                    kind: "weather",
+                    enabled: true,
+                    params: [],
+                ),
+            ],
+            parent: None,
         ),
     ],
 )

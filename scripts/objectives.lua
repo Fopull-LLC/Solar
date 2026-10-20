@@ -44,6 +44,9 @@ local FAC_LABEL = {
 }
 
 local shown = true
+-- The facility the card is sending you to, while the card is up on foot: the
+-- world-space waypoint is drawn over it (see `lateUpdate`).
+local marker_at = nil
 
 -- IS THE CREW OUT AND ABOUT? Deliberately NOT `astro.visible`: planet_camera
 -- hides the body whenever the camera lands within 0.7 m of it, which includes
@@ -101,7 +104,10 @@ end
 -- Which way to turn, in words. A distance alone sends you walking in circles on
 -- a round planet; a bearing relative to WHERE YOU ARE LOOKING is the thing a
 -- person can act on without a compass rose.
-local function bearing_to(astro, target)
+-- The signed angle, in degrees, from where you are looking to the target, in
+-- the ground plane: positive is to your right. nil if there is no camera or no
+-- world under you.
+local function bearing_angle(astro, target)
   local cam = ref("planet_camera")
   if not (cam and cam.fwd_x) then return nil end
   local d = space.dominant(astro.x, astro.y, astro.z)
@@ -126,12 +132,19 @@ local function bearing_to(astro, target)
   local gx, gy, gz = flat(tx - ax, ty - ay, tz - az)
   local fx, fy, fz = flat(cam.fwd_x, cam.fwd_y, cam.fwd_z)
   if not (gx and fx) then return nil end
-  -- Right-handed screen-right, so a positive angle really is to your right.
-  local rx = uy * fz - uz * fy
-  local ry = uz * fx - ux * fz
-  local rz = ux * fy - uy * fx
-  local ang = math.deg(math.atan2(gx * rx + gy * ry + gz * rz,
-                                  gx * fx + gy * fy + gz * fz))
+  -- Screen-right is FORWARD × UP. (It was up × forward, which is screen-LEFT
+  -- in this engine's right-handed frame: the card said the Command Centre was
+  -- "ahead and to your left" while it stood on the right of the screen.)
+  local rx = fy * uz - fz * uy
+  local ry = fz * ux - fx * uz
+  local rz = fx * uy - fy * ux
+  return math.deg(math.atan2(gx * rx + gy * ry + gz * rz,
+                             gx * fx + gy * fy + gz * fz))
+end
+
+local function bearing_to(astro, target)
+  local ang = bearing_angle(astro, target)
+  if not ang then return nil end
   local side = ang < 0 and "left" or "right"
   local a = math.abs(ang)
   if a < 22 then return "straight ahead" end
@@ -205,6 +218,96 @@ local function open_delivery(m, lines)
   return nil
 end
 
+-- ── contracts that name another world ──────────────────────────────────────
+--
+-- Generated contracts (missions.lua `genSpec`) send you somewhere: a flyby, an
+-- orbit, a landing, a beacon, a haul, a recovery, a supply run. Each goal names
+-- its `body`. The card's generic "mine ore for the contract" was wrong for every
+-- one of them — the crystal a haul wants is on Nami, not under your feet — so
+-- these get a step of their own, read off the first goal not yet ticked.
+
+-- The first goal not ticked yet, with its index.
+local function next_goal(m, lines)
+  for i, g in ipairs(m.goals or {}) do
+    if (lines[i] or ""):sub(1, 3) ~= "✓" then return g, i end
+  end
+  return nil
+end
+
+local function names_a_world(m)
+  if m.gen then return true end
+  for _, g in ipairs(m.goals or {}) do if g.body then return true end end
+  return false
+end
+
+local function mat_label(mat)
+  local mats = ref("materials")
+  return (mats and mat and mats.label(mat)) or mat or "it"
+end
+
+-- Which world the crew is on (or in the grip of) right now.
+local function world_here(astro)
+  return astro and space.dominant(astro.x, astro.y, astro.z) or nil
+end
+
+local function offworld_step(m, goals, astro, label, pays)
+  local g = next_goal(m, goals)
+  if not g then return nil end
+  local X = g.body or m.body
+  local here = world_here(astro)
+  local inv = ref("inventory")
+  local function step(t)
+    t.label, t.goals, t.pay = label, goals, pays
+    return t
+  end
+  if g.kind == "deliver" or g.kind == "sample" then
+    local from = X or m.body
+    local carried = inv and g.mat and inv.count and inv.count("astro", g.mat) or 0
+    if carried > 0 and here and here ~= from then
+      return step({ key = "haulhome", at = "FacDepot",
+        task = string.format("Sell the %s at the depot.", mat_label(g.mat)),
+        hint = "The depot stores what the contract needs in the warehouse." })
+    end
+    if from and here == from then
+      return step({ key = "haulget",
+        task = string.format("Collect %s here on %s.", mat_label(g.mat), from),
+        hint = MINE_HINT .. " A Cargo Bay holds more than the suit." })
+    end
+    return step({ key = "haul", at = has_vessel(astro) and nil or "FacHangar",
+      task = string.format("Bring %s%s from %s.",
+        g.kg and string.format("%d kg of ", g.kg) or "", mat_label(g.mat), from or "another world"),
+      hint = "Fly there, dig or cut it, and fly it home to the depot." })
+  end
+  if g.kind == "recover" then
+    return step({ key = "recover", task = "Fly it home and recover it at the base.",
+      hint = "Land near the base and hold ENTER." })
+  end
+  -- Everything else is a flight to X.
+  if not has_vessel(astro) and here ~= X then
+    return step({ key = "build", at = "FacHangar",
+      task = string.format("Build a craft that can reach %s.", X or "it"),
+      hint = "The orbit map (M) shows where it is and plans the burn." })
+  end
+  local task = ({
+    soi = "Fly to %s.",
+    orbit = "Put a craft in orbit of %s.",
+    land = "Land on %s.",
+    flag = "Land on %s and step out.",
+    cargo = "Orbit %s with the cargo aboard.",
+  })[g.kind] or "Fly to %s."
+  local hint = ({
+    soi = "A flyby is enough — enter its sphere of influence. M opens the map.",
+    orbit = "Keep the periapsis clear of the ground.",
+    land = "Intact and stopped counts.",
+    flag = "Standing on it plants the company beacon.",
+    cargo = "Load the Cargo Bay from your suit pack at the craft.",
+  })[g.kind] or "M opens the orbit map."
+  if g.kind == "flag" and here == X then
+    task, hint = "Step out onto " .. X .. ".", "F gets you out of the craft."
+  end
+  return step({ key = "go", task = string.format(task, X or "the target"), hint = hint })
+end
+
 -- The step, as a table the card renders. `at` is the facility to walk to.
 -- Hints are ONE short sentence: the card is read at a glance while walking.
 local function current_step(astro)
@@ -241,6 +344,10 @@ local function current_step(astro)
     local goals = mi.goalLines()
     local pays = co and ("Pays " .. co.money(m.reward)) or nil
     local label = "Contract · " .. m.title
+    if names_a_world(m) then
+      local st = offworld_step(m, goals, astro, label, pays)
+      if st then return st end
+    end
     if needs_flight(m) and not has_vessel(astro) then
       -- No rocket, and not the money for one: the ground game is the way back.
       if co and co.balance and co.balance() < ROCKET_MIN then
@@ -280,7 +387,7 @@ local function current_step(astro)
            task = first and "Sign your first contract."
                         or  "Sign your next contract.",
            hint = first
-             and "Press E at the Command Centre and pick one on the Ops Board."
+             and "Press E at the Command Centre to open the Ops Board."
              or  "The Ops Board in the Command Centre has more work." }
 end
 
@@ -333,9 +440,13 @@ local function describe(step, astro)
     local d = apart(astro, target)
     local name = FAC_LABEL[step.at] or step.at
     if d > params.arrived then
+      -- Name and distance on one line, the bearing on its own: run together
+      -- they wrapped at the card's width and left "right" alone on a line.
+      rows[#rows + 1] = row("where", "hud/where", string.format("› %s — %s", name, fmt_m(d)))
       local way = bearing_to(astro, target)
-      rows[#rows + 1] = row("where", "hud/where",
-        string.format("› %s — %s%s", name, fmt_m(d), way and ("  ·  " .. way) or ""))
+      if way then
+        rows[#rows + 1] = row("way", "hud/where", "   " .. way)
+      end
     else
       rows[#rows + 1] = row("where", "hud/where",
         string.format("› You're at the %s — press E", name))
@@ -431,11 +542,13 @@ function update(node, dt)
   local paid = (params.enabled >= 0.5 and shown and not panel_up()) and banner() or nil
   if not paid and not should_show(astro) then
     if el then el.visible = false end
+    marker_at = nil
     return
   end
 
   local step = paid or (crew_afoot() and current_step(astro) or flight_step())
   headline, targetName = step.task, step.at
+  marker_at = crew_afoot() and step.at or nil
   if el then el.visible = true end
 
   -- Described every frame on purpose: the bearing line changes with every step
@@ -443,4 +556,125 @@ function update(node, dt)
   -- table walk, not a screen that flickers and forgets. Every row carries a
   -- `key`, so a row that stays is the same entity from frame to frame.
   ui.make(node, describe(step, astro))
+end
+
+-- ── in the world ────────────────────────────────────────────────────────────
+--
+-- The card says "Vehicle Assembly — 73 m, behind you", which is a sentence to
+-- act on; a marker over the building is the same answer you can steer by. The
+-- objective's facility carries a small diamond with its name and distance, and
+-- when it is off screen or behind you it sits on the screen edge on the side to
+-- turn to. Every building also names itself once you are close enough to read
+-- it, because five grey sheds look like five grey sheds.
+
+-- How close a building has to be before it names itself.
+local LABEL_NEAR = 48.0
+-- How far above a building's origin its marker floats (clears the roofs).
+local MARK_UP = { FacCommand = 9.0, FacHangar = 12.0, FacDepot = 7.0,
+                  FacTracking = 10.0, FacPower = 8.0 }
+
+-- The screen the HUD already uses: a label that would land on the card, the
+-- status chips, the menu button or the tool belt is not drawn there.
+local BLOCKERS = { "Objectives", "Menu Btn", "Status HUD", "Tool HUD" }
+local function blocked_rects()
+  local out = {}
+  for _, nm in ipairs(BLOCKERS) do
+    local n = find(nm)
+    local e = n and n.getcomponent and n:getcomponent("UiElement")
+    if n and n.uiRect and (not e or e.visible ~= false) then
+      local x, y, w, h = n:uiRect()
+      if x and w > 0 then out[#out + 1] = { x - 8, y - 8, w + 16, h + 16 } end
+    end
+  end
+  return out
+end
+local function hits(rects, x, y, w, h)
+  for _, r in ipairs(rects) do
+    if x < r[1] + r[3] and x + w > r[1] and y < r[2] + r[4] and y + h > r[2] then return true end
+  end
+  return false
+end
+
+-- A UTF-8 string's length in characters, for sizing the backing behind it.
+local function chars(s)
+  local _, n = s:gsub("[^\128-\191]", "")
+  return n
+end
+
+-- Text on a dark backing, so it reads over a white wall or a bright sky.
+local function tag(x, y, text, size, r, g, b, a, rects)
+  local w = chars(text) * size * 0.5 + size
+  local h = size * 1.5
+  if rects and hits(rects, x - w / 2, y - h / 2, w, h) then return false end
+  draw.rect(x - w / 2, y - h / 2, w, h, 0.02, 0.04, 0.06, 0.62 * a, size * 0.35)
+  draw.text(x, y - size * 0.62, text, size, r, g, b, a, "center")
+  return true
+end
+
+local function up_at(x, y, z)
+  local d = space.dominant(x, y, z)
+  local b = d and space.body(d)
+  if not b then return 0, 1, 0 end
+  local ux, uy, uz = x - b.x, y - b.y, z - b.z
+  local l = math.sqrt(ux * ux + uy * uy + uz * uz)
+  if l < 1e-6 then return 0, 1, 0 end
+  return ux / l, uy / l, uz / l
+end
+
+-- Drawn in the camera pass, after the camera has moved, so a marker sits on
+-- the building the frame shows rather than a frame behind it. worldToScreen
+-- projects through the camera as it stands now (0.117), so a planet-fixed
+-- point holds still on screen while the planet moves along its rails.
+function lateUpdate(node, dt)
+  if not (camera and camera.worldToScreen and camera.screenRect and draw and draw.text) then return end
+  local astro = find("Astronaut")
+  if not astro then return end
+  if params.enabled < 0.5 or not crew_afoot() or panel_up() then return end
+  local vx, vy, vw, vh = camera.screenRect()
+  if not vw or vw <= 0 then return end
+  local k = vh / 720
+  local rects = blocked_rects()
+  for name, label in pairs(FAC_LABEL) do
+    local f = find(name)
+    if f then
+      local d = apart(astro, f)
+      local target = shown and name == marker_at and d > params.arrived
+      if target or d < LABEL_NEAR then
+        local wx, wy, wz = world_of(f)
+        local ux, uy, uz = up_at(wx, wy, wz)
+        local h = MARK_UP[name] or 12.0
+        local sx, sy, dep, on = camera.worldToScreen(wx + ux * h, wy + uy * h, wz + uz * h)
+        if target then
+          local text = string.format("%s  ·  %s", label, fmt_m(d))
+          -- In front of you and across the view, but above its top edge (a
+          -- tall building close up): held just inside the top rather than
+          -- called off screen.
+          local front = sx and ((dep and dep > 0) or on)
+          if front and sx >= vx + 40 * k and sx <= vx + vw - 40 * k then
+            sy = math.max(vy + 70 * k, math.min(sy, vy + vh - 130 * k))
+            on = true
+          end
+          if on and sx and sy >= vy + 40 * k and sy <= vy + vh - 120 * k then
+            if tag(sx, sy - 26 * k, text, 14 * k, 0.82, 0.95, 0.90, 1.0, rects) then
+              draw.circle(sx, sy, 5 * k, 0.28, 0.86, 0.74, 0.95)
+              draw.circleOutline(sx, sy, 10 * k, 0.28, 0.86, 0.74, 0.8, 2 * k)
+            end
+          else
+            -- Off screen: pinned to the edge on the side to turn to.
+            local ang = bearing_angle(astro, f) or 0
+            local right = ang >= 0
+            local ex = right and (vx + vw - 150 * k) or (vx + 150 * k)
+            local ey = vy + vh * 0.5
+            tag(ex, ey, right and (text .. "  ›") or ("‹  " .. text), 14 * k,
+                0.82, 0.95, 0.90, 1.0)
+          end
+        elseif on and sx then
+          -- Fades in as you approach, so the base does not shout its names
+          -- from across the plain.
+          local a = math.max(0, math.min(1, (LABEL_NEAR - d) / 12))
+          tag(sx, sy, label, 13 * k, 0.82, 0.91, 0.98, 0.9 * a, rects)
+        end
+      end
+    end
+  end
 end

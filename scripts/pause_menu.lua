@@ -25,8 +25,9 @@
 --   ESC        open / back out
 --   ↑ ↓ ⏎      the rows are focusable, so it works without a mouse
 --
--- SETTINGS holds the graphics quality (graphics.lua), and this script also
--- shows graphics.lua's `notice` as a toast when the game lowers it by itself.
+-- SETTINGS is settings.lua's screen (display, camera, controls, audio, accessibility),
+-- framed here; this script also shows graphics.lua's `notice` as a toast when
+-- the game lowers the quality by itself.
 
 -- Published: everything that owns the pointer asks this.
 open = false
@@ -53,42 +54,65 @@ end
 -- `keys` is what the test checks. `shown` is what the player reads, when the two
 -- differ (a range, a mouse button, a chord).
 local CONTROLS = {
-  { group = "On foot", rows = {
+  { group = "On foot", col = 1, rows = {
     { keys = { "w", "a", "s", "d" }, shown = "W A S D", what = "walk" },
     { keys = { "shift" }, shown = "SHIFT", what = "hold to sprint" },
     { keys = { "space" }, shown = "SPACE", what = "jump  ·  swim up in water" },
     { keys = { "ctrl" }, shown = "CTRL", what = "dive, in water" },
     { keys = {}, shown = "RIGHT MOUSE", what = "hold to look around" },
-    { keys = { "alt" }, shown = "MIDDLE MOUSE  or  ALT", what = "keep the mouse looking without holding it" },
+    { keys = { "alt" }, shown = "MMB / ALT", what = "keep looking without holding a button" },
     { keys = {}, shown = "SCROLL", what = "zoom  ·  all the way in is first person" },
-    { keys = { "e" }, shown = "E  or  ⏎", what = "enter the building you are standing at" },
+    { keys = { "e" }, shown = "E  or  ⏎", what = "go into the building you are at" },
   } },
-  { group = "Tools", rows = {
-    { keys = { "1", "2", "3" }, shown = "1  2  3", what = "mining laser  ·  harvest cutter  ·  terrain spade" },
-    { keys = {}, shown = "LEFT MOUSE", what = "use the tool in your hand, on what the crosshair is over" },
+  { group = "Tools", col = 1, rows = {
+    { keys = { "1", "2", "3" }, shown = "1  2  3", what = "laser  ·  harvest cutter  ·  spade" },
+    { keys = {}, shown = "LEFT MOUSE", what = "use the tool on what the crosshair is over" },
     { keys = { "q" }, shown = "Q", what = "raise ground (the spade lowers it)" },
     { keys = { "tab", "i" }, shown = "TAB  or  I", what = "the suit pack" },
   } },
-  { group = "Flying", rows = {
+  { group = "Everywhere", col = 1, rows = {
+    { keys = { "m" }, shown = "M", what = "the orbit map" },
+    { keys = { "o" }, shown = "O", what = "hide the objectives card" },
+    { keys = { "escape" }, shown = "ESC", what = "back out of whatever is in front of you" },
+  } },
+  { group = "Flying", col = 2, rows = {
     { keys = { "shift", "ctrl" }, shown = "SHIFT / CTRL", what = "throttle up / down" },
     { keys = { "z", "x" }, shown = "Z  /  X", what = "full throttle  /  cut" },
     { keys = { "w", "a", "s", "d" }, shown = "W A S D", what = "pitch and yaw" },
     { keys = { "q", "e" }, shown = "Q  /  E", what = "roll" },
     { keys = { "h", "j", "k", "l", "i", "n" }, shown = "H J K L I N", what = "RCS translation" },
-    { keys = { "space" }, shown = "SPACE", what = "fire the next stage  ·  release the launch clamps" },
-    { keys = { "t" }, shown = "T", what = "SAS on / off  ·  1–9 pick a hold" },
-    { keys = { "g" }, shown = "G", what = "landing gear" },
+    { keys = { "space" }, shown = "SPACE", what = "next stage  ·  release the launch clamps" },
+    { keys = { "t", "alt" }, shown = "T  ·  ALT 1–9", what = "SAS on / off  ·  pick a hold" },
+    { keys = { "g", "u", "y", "b" }, shown = "G  U  Y  B", what = "gear  ·  deploy (panels, antennas)  ·  lights  ·  brakes" },
+    { keys = { "1", "2", "3", "4", "5", "6", "7", "8", "9" }, shown = "1 … 0", what = "your action groups (builder, tool 5)" },
+    { keys = { "backspace" }, shown = "⌫", what = "abort: cut the throttle, fire the Abort group" },
     { keys = { "r" }, shown = "R", what = "RCS thrusters" },
-    { keys = { "u" }, shown = "U", what = "comms dish and solar panels" },
+    { keys = { "[", "]" }, shown = "[  /  ]", what = "switch to the next craft nearby, or the crew" },
     { keys = { "p" }, shown = "P", what = "peripherals and docking console" },
     { keys = { ",", "." }, shown = ",  /  .", what = "time warp down / up" },
+    { keys = { "v" }, shown = "V", what = "the pilot's seat, at the window" },
     { keys = { "f" }, shown = "F", what = "get out and stand on the ground" },
-    { keys = { "enter" }, shown = "⏎", what = "end the flight, when you are down and stopped" },
+    { keys = { "enter" }, shown = "⏎", what = "end the flight, once down and stopped" },
   } },
-  { group = "Everywhere", rows = {
-    { keys = { "m" }, shown = "M", what = "the orbit map" },
-    { keys = { "o" }, shown = "O", what = "hide the objectives card" },
-    { keys = { "escape" }, shown = "ESC", what = "back out of whatever is in front of you" },
+  { group = "Orbit map", col = 3, rows = {
+    { keys = {}, shown = "RIGHT DRAG", what = "orbit the view  ·  with CTRL, pan" },
+    { keys = { "up", "down" }, shown = "SCROLL  ↑ ↓", what = "zoom" },
+    { keys = { "tab" }, shown = "TAB", what = "focus the next world" },
+    { keys = { "1", "2", "3", "4" }, shown = "1  2  3  4", what = "orbits  ·  SOI rings  ·  labels  ·  comms links" },
+    { keys = { "n" }, shown = "N", what = "plan a burn (in flight)  ·  N again to fly" },
+    { keys = { "w", "s", "a", "d", "q", "e" }, shown = "W S  A D  Q E", what = "in plan: prograde  ·  radial  ·  normal" },
+    { keys = { "left", "right" }, shown = "← →", what = "in plan: slide the burn along the orbit" },
+    { keys = { "x", "backspace" }, shown = "X  /  ⌫", what = "in plan: zero the burn  /  delete it" },
+  } },
+  { group = "Builder", col = 3, rows = {
+    { keys = {}, shown = "CLICK", what = "select a part, or add one" },
+    { keys = {}, shown = "1  2  3  4  5", what = "move  ·  rotate  ·  stage  ·  grab  ·  action groups" },
+    { keys = { "r", "t", "y" }, shown = "R  T  Y", what = "turn the held part" },
+    { keys = { "x" }, shown = "X", what = "symmetry" },
+    { keys = { "g" }, shown = "G", what = "move the whole ship" },
+    { keys = { "del" }, shown = "DEL", what = "scrap the selected part" },
+    { keys = { "ctrl", "z", "s" }, shown = "CTRL Z  /  S", what = "undo  /  save the blueprint" },
+    { keys = {}, shown = "RMB + W A S D", what = "fly the view" },
   } },
 }
 
@@ -113,8 +137,9 @@ local function something_else_is_up()
   -- First person is a level too: the first Esc puts you back on the shoulder,
   -- the second opens this. Backing out one thing at a time is the whole
   -- convention, and skipping a rung is how a menu ambushes you.
+  -- So is the pilot's seat (V while flying): Esc leaves it first.
   local pc = ref("planet_camera")
-  if pc and pc.firstPerson then return true end
+  if pc and (pc.firstPerson or pc.cockpit) then return true end
   -- A panel that shut on THIS frame's Esc before we ran: it is closed now, but
   -- the press was its, not ours. (Otherwise leaving the depot on Esc opened the
   -- pause menu underneath whenever the depot's script happened to run first.)
@@ -150,7 +175,8 @@ end
 local M = 16                                  -- screen margin
 local PAD = 18                                -- the frame's pad
 local NARROW_W = 460                          -- the menu and settings pages
-local KEY_W = 118                              -- the key column on the controls page
+local KEY_W = 112                              -- the key column on the controls page
+local COLS = 3                                 -- the controls page's columns
 
 local function design_width()
   if camera and camera.screenSize then
@@ -187,6 +213,15 @@ local function menu_page()
     row_button("settings", "Settings", function() page = "settings" end),
     row_button("controls", "Controls", function() page = "controls" end),
   }
+  -- ABORT FLIGHT — the way home that is always there (flight_ops owns it: the
+  -- fee, the two-click confirm, and leaving the craft on the fleet board).
+  local fo = ref("flight_ops")
+  local abort = fo and fo.abortLabel and fo.abortLabel()
+  if abort then
+    rows[#rows + 1] = row_button("abort", abort, function()
+      if fo.abortClick() then close() end
+    end)
+  end
   -- Only when there is a slot to go back to. Playing straight out of the editor
   -- there is no main menu and nothing to save, which is exactly when a "Save and
   -- quit" button would be a button that lies.
@@ -207,19 +242,23 @@ end
 local function control_row(key, r, desc_w)
   return { "row", key = key, w = "100%", h = "fit", gap = 10, pad = 0, align = "start",
     items = {
-      { "text", key = "k", style = "panel/keys", w = KEY_W, h = 18, text = r.shown },
+      -- Wraps rather than running under the description: "MIDDLE MOUSE or
+      -- ALT" overflowed a fixed one-line key cell at every resolution.
+      { "text", key = "k", style = "panel/keys", w = KEY_W, h = "fit", wrap = true, text = r.shown },
       { "text", key = "d", style = "panel/body", w = desc_w, h = "fit", wrap = true, text = r.what },
     }, function(x) return x end }
 end
 
--- The controls in two columns: on foot and tools on the left, flying and the
--- rest on the right. One column of thirty rows was taller than the screen.
+-- The controls in three columns: walking and tools, flying, and the two
+-- screens with keys of their own (the map and the builder). One column of
+-- thirty rows was taller than the screen.
 local function controls_page(w)
-  local col_w = math.floor((w - PAD * 2 - 24) / 2)
+  local col_w = math.floor((w - PAD * 2 - 24 * (COLS - 1)) / COLS)
   local desc_w = col_w - KEY_W - 10
-  local cols = { {}, {} }
+  local cols = {}
+  for i = 1, COLS do cols[i] = {} end
   for gi, g in ipairs(CONTROLS) do
-    local c = cols[(gi <= 2) and 1 or 2]
+    local c = cols[math.min(COLS, g.col or 1)]
     if #c > 0 then c[#c + 1] = { "box", key = "sp" .. gi, w = 1, h = 6 } end
     c[#c + 1] = { "text", key = "g" .. gi, style = "panel/label", w = "100%", h = "fit",
                   text = g.group }
@@ -235,7 +274,8 @@ local function controls_page(w)
     heading("CONTROLS"),
     rule(),
     { "row", key = "cols", w = "100%", h = "fit", gap = 24, pad = 0, align = "start",
-      items = { column("c1", cols[1]), column("c2", cols[2]) }, function(x) return x end },
+      items = { column("c1", cols[1]), column("c2", cols[2]), column("c3", cols[3]) },
+      function(x) return x end },
     rule("rule2"),
     { "row", key = "foot", w = "100%", h = "fit", gap = 12, pad = 0, align = "center",
       items = {
@@ -247,45 +287,64 @@ local function controls_page(w)
   }
 end
 
--- Graphics quality: four levels, the one in force lit, and what it means.
-local function settings_page()
-  local gx = ref("graphics")
-  local rows = { heading("SETTINGS"), rule(),
-    { "text", key = "gl", style = "panel/label", w = "100%", h = "fit", text = "Graphics quality" } }
-  if gx and gx.LEVELS then
-    local cur = gx.level()
-    local opts = {}
-    for _, name in ipairs(gx.LEVELS) do
-      opts[#opts + 1] = { "button", key = name, style = "panel/choice", w = "grow", h = 34,
-        textAlign = "center", selected = (name == cur), text = name,
-        onClicked = function() gx.set(name) end }
-    end
-    rows[#rows + 1] = { "row", key = "levels", w = "100%", h = "fit", gap = 6, pad = 0,
-                        items = opts, function(x) return x end }
-    local d = gx.describe(cur) or ""
-    rows[#rows + 1] = { "text", key = "desc", style = "panel/body", w = "100%",
-                        h = "fit", wrap = true, text = d }
+-- SETTINGS: settings.lua describes the whole screen (display, camera, controls, audio,
+-- accessibility — the same rows the main menu shows); this frames it. Without
+-- a settings node in the scene it falls back to the graphics level alone.
+local SETTINGS_W = 580
+
+local function back_to_menu()
+  local st = ref("settings")
+  if st and st.flush then st.flush() end
+  page = "menu"
+end
+
+local function settings_page(w)
+  local st = ref("settings")
+  local rows = { heading("SETTINGS"), rule() }
+  if st and st.rows then
+    for _, r in ipairs(st.rows(w)) do rows[#rows + 1] = r end
   else
-    rows[#rows + 1] = { "text", key = "desc", style = "panel/body", w = "100%", h = "fit",
-                        text = "Graphics settings are not available in this scene." }
+    local gx = ref("graphics")
+    rows[#rows + 1] = { "text", key = "gl", style = "panel/label", w = "100%", h = "fit",
+                        text = "Graphics quality" }
+    if gx and gx.LEVELS then
+      local cur = gx.level()
+      local opts = {}
+      for _, name in ipairs(gx.LEVELS) do
+        opts[#opts + 1] = { "button", key = name, style = "panel/choice", w = "grow", h = 34,
+          textAlign = "center", selected = (name == cur), text = name,
+          onClicked = function() gx.set(name) end }
+      end
+      rows[#rows + 1] = { "row", key = "levels", w = "100%", h = "fit", gap = 6, pad = 0,
+                          items = opts, function(x) return x end }
+      rows[#rows + 1] = { "text", key = "desc", style = "panel/body", w = "100%",
+                          h = "fit", wrap = true, text = gx.describe(cur) or "" }
+    end
   end
   rows[#rows + 1] = rule("rule2")
-  rows[#rows + 1] = hint("Remembered across every save. If the game stutters it steps down one level on its own and says so.")
-  rows[#rows + 1] = { "button", key = "back", style = "panel/secondary", w = 120, h = 32,
-                      textAlign = "center", text = "Back", onClicked = function() page = "menu" end }
+  rows[#rows + 1] = { "row", key = "foot", w = "100%", h = "fit", gap = 12, pad = 0, align = "center",
+    items = {
+      { "button", key = "back", style = "panel/secondary", w = 120, h = 32,
+        textAlign = "center", text = "Back", onClicked = back_to_menu },
+      { "text", key = "hint", style = "panel/hint", w = "grow", h = "fit",
+        text = "Esc goes back." },
+    }, function(x) return x end }
   return rows
 end
 
 local function page_width()
-  if page == "controls" then return math.min(880, design_width() - M * 2) end
+  if page == "controls" then return math.min(1200, design_width() - M * 2) end
+  if page == "settings" then return math.min(SETTINGS_W, design_width() - M * 2) end
   return NARROW_W
 end
 
 local function describe(w)
   local rows
   if page == "controls" then rows = controls_page(w)
-  elseif page == "settings" then rows = settings_page()
+  elseif page == "settings" then rows = settings_page(w)
   else rows = menu_page() end
+  -- (The world behind is dimmed by facility_menu's scrim, which every
+  -- reading panel shares.)
   return { "col", key = "pause", style = "panel/frame", w = "100%",
            dir = "col", gap = 8, pad = PAD, align = "start",
            items = rows, function(row) return row end }

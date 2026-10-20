@@ -69,8 +69,8 @@ local BLUEPRINT = { parts = {
     h = 1.3, mass = 0.8, cost = 150, kind = "engine", thrust = 55, burn = 0.9, fuel = 0, decouple = 0, legs = 0 },
   { uid = 8, id = "legs", prefab = "PartLegs", x = 0, y = 0.65, z = 0.8, yaw = 0, parent = 2,
     h = 0.7, mass = 0.3, cost = 90, kind = "structural", thrust = 0, burn = 0, fuel = 0, decouple = 0, legs = 1 },
-  { uid = 9, id = "chute", prefab = "PartChute", x = 0, y = 3.7, z = 0, yaw = 0, parent = 1,
-    h = 0.61, mass = 0.1, cost = 80, kind = "canvas", thrust = 0, burn = 0, fuel = 0, decouple = 0, legs = 0, chute = 1 },
+  { uid = 9, id = "chute", prefab = "PartChute", x = 0, y = 3.57, z = 0, yaw = 0, parent = 1,
+    h = 0.34, rx = 0.22, rz = 0.22, mass = 0.1, cost = 80, kind = "canvas", thrust = 0, burn = 0, fuel = 0, decouple = 0, legs = 0, chute = 1 },
 } }
 
 local function piloted()
@@ -96,6 +96,13 @@ local function stock()
   end
 end
 
+-- Panels close when the crew walks off (facility_menu `beyond`), so a probe
+-- that opens one stands the crew at the building first.
+local function stand_at(fac)
+  local f, a = find(fac), find("Astronaut")
+  if f and a and f.worldX then a.x, a.y, a.z = f.worldX, f.worldY, f.worldZ end
+end
+
 local function open(which)
   print("ui probe: opening " .. which)
   if which == "pause" then
@@ -112,6 +119,7 @@ local function open(which)
     gx.noticeAt = (gx.time or time) + (params.toastLead or 0)
     print(string.format("ui probe: notice set (probe t=%.1f, graphics t=%s)", time, tostring(gx.time)))
   elseif which == "ops" then
+    stand_at("FacCommand")
     findScript("ops_board").openBoard()
   elseif which == "inventory" then
     findScript("inventory_panel").open = true
@@ -127,6 +135,7 @@ local function open(which)
       a.x, a.y, a.z = f.worldX, f.worldY, f.worldZ
     end
   elseif which:sub(1, 4) == "fac:" then
+    stand_at(which:sub(5))
     findScript("facility_menu").openMenu(which:sub(5))
   end
 end

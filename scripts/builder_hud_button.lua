@@ -14,7 +14,7 @@ local builder
 local HOVER = {
   "save the blueprint   ·   CTRL+S",
   "buy the hull and roll it out to the pad   ·   the cost is in the header",
-  "leave the Assembly   ·   keeps the blueprint, buys nothing   ·   ESC",
+  "leave the Vehicle Assembly   ·   keeps the blueprint, buys nothing   ·   ESC",
 }
 
 local function b()
