@@ -1,18 +1,36 @@
 # fonts
 
-`SolarUI.ttf` is the game's UI font (`ui_font` in `project.ron`): Roboto
-Regular with the arrows, geometric shapes, check marks and dingbats that Roboto
-lacks copied in from DejaVu Sans. Without it every ☰ ✓ ✕ ▸ ● ⚠ → drew as an
-empty box. Rebuild it with `python3 tools/build_ui_font.py`.
+Solar's type kit ("flight hardware", see `docs/ui-style.md`). Four faces, all
+built by `python3 tools/build_ui_font.py`, which fetches the sources from the
+google/fonts repository at a pinned commit, checks their SHA-256, and copies in
+the symbols the HUD prints (arrows, ✓ ✕ ▸ ● ⚠, Greek Δ) from DejaVu, because a
+face that lacks a glyph would otherwise draw it from a different font.
 
-Roboto is licensed under the Apache License 2.0. DejaVu Sans glyphs are under
-the Bitstream Vera Fonts licence (with public-domain DejaVu changes), which
-permits modification and redistribution provided the result is not named
-"Bitstream", "Vera" or "DejaVu"; the merged font is named "Solar UI".
+| File | Built from | Token | Used for |
+|---|---|---|---|
+| `SolarUI.ttf` | Barlow Semi Condensed Medium | `ui` (and `ui_font` in `project.ron`) | running text |
+| `SolarLabel.ttf` | Barlow Semi Condensed SemiBold | `label` | printed capitals, keys, numbers on plates, headings |
+| `SolarMono.ttf` | Share Tech Mono | `mono` | numbers on a CRT display only |
+| `SolarStencil.ttf` | Saira Stencil One | `stencil` | the title, panel names, warning placards, signage |
 
-`NotoSansMono-Medium.ttf` is the flight instruments' number face (the `mono`
-font token in `ui/solar.tokens.ron`): every digit is the same width, so a
-readout that ticks from 99 to 100 does not shuffle the numbers beside it.
-Copied unmodified from Noto Sans Mono. It is licensed under the SIL Open Font
-License 1.1 (https://scripts.sil.org/OFL, also quoted in the font's own name
-table), which permits bundling it with software, modified or not.
+Licences:
+
+- **Barlow Semi Condensed** — Copyright 2017 The Barlow Project Authors
+  (https://github.com/jpt/barlow). SIL Open Font License 1.1.
+- **Share Tech Mono** — Copyright (c) 2012 Carrois Type Design, Ralph du
+  Carrois, with Reserved Font Name "Share". SIL Open Font License 1.1. The
+  modified font is therefore named "Solar Mono", not "Share…".
+- **Saira Stencil One** — Copyright 2019 The Saira Stencil Project Authors
+  (https://github.com/Omnibus-Type/Saira). SIL Open Font License 1.1.
+- **DejaVu Sans / Sans Bold / Sans Mono** (the borrowed symbols) — Bitstream
+  Vera Fonts licence with public-domain DejaVu changes, which permits
+  modification and redistribution provided the result is not named
+  "Bitstream", "Vera" or "DejaVu".
+
+The OFL (https://openfontlicense.org) permits bundling, modifying and
+redistributing the fonts with software, provided they are not sold on their own
+and modified versions do not use a Reserved Font Name. Each built font keeps
+the original copyright and licence strings in its name table.
+
+`NotoSansMono-Medium.ttf` was the previous `mono` face (Noto Sans Mono, SIL OFL
+1.1). Nothing refers to it any more; it can be deleted.

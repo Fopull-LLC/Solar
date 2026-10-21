@@ -49,16 +49,10 @@ function update(node, dt)
   local text = string.format("  %s  ×%d      %s   [%s]",
     d.label, d.count, state, string.upper(d.key or "?"))
   if node.text ~= text then node.text = text end
-  if moving and not d.instant then
-    el.fillR, el.fillG, el.fillB, el.fillA = 0.30, 0.26, 0.10, 0.92
-    el.textR, el.textG, el.textB = 1.0, 0.86, 0.5
-  elseif d.on then
-    el.fillR, el.fillG, el.fillB, el.fillA = 0.10, 0.30, 0.19, 0.92
-    el.textR, el.textG, el.textB = 0.62, 1.0, 0.78
-  else
-    el.fillR, el.fillG, el.fillB, el.fillA = 0.10, 0.14, 0.18, 0.9
-    el.textR, el.textG, el.textB = 0.68, 0.8, 0.9
-  end
+  -- The state is a style ("crt/*", ui/solar.uistyle.ron): a line on the
+  -- console's CRT, lit phosphor when deployed, caution yellow while moving.
+  local style = (moving and not d.instant) and "crt/rowBusy" or (d.on and "crt/rowOn" or "crt/row")
+  if node.style ~= style then node.style = style end
 end
 
 function clicked(node)
@@ -67,10 +61,4 @@ function clicked(node)
   if v and v.setPeripheral and entry then v.setPeripheral(entry.id) end
 end
 
-function hoverStart(node)
-  if el then el.opacity = 0.85; el.border = 1.6 end
-end
-
-function hoverEnd(node)
-  if el then el.opacity = 1.0; el.border = 1.0 end
-end
+-- Hover is the style's own `hover` block.

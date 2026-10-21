@@ -242,10 +242,12 @@ local function describe(astro)
   if inv and inv.cap then
     local cap = inv.cap("astro")
     local frac = cap > 0 and math.max(0, math.min(1, inv.mass("astro") / cap)) or 0
-    rows[#rows + 1] = { "row", key = "meter", w = "100%", h = 4, radius = 2, pad = 0, gap = 0,
-      fill = { 0.10, 0.16, 0.20 },
-      { "box", key = "f", w = math.max(2, math.floor(METER_W * frac + 0.5)), h = 4, radius = 2,
-        fill = frac > 0.85 and { 1.0, 0.72, 0.32 } or { 0.28, 0.86, 0.74 } } }
+    -- A gauge: a dark groove with an ink bar, caution yellow
+    -- when nearly full.
+    rows[#rows + 1] = { "row", key = "meter", w = "100%", h = 6, radius = 1, pad = 0, gap = 0,
+      fill = { 0.02, 0.03, 0.025 }, border = 1, borderColor = { 0, 0, 0, 0.8 },
+      { "box", key = "f", w = math.max(2, math.floor(METER_W * frac + 0.5)), h = 6, radius = 1,
+        fill = frac > 0.85 and { 1.0, 0.80, 0.28 } or { 0.77, 0.75, 0.68 } } }
   end
   -- Where you are, and what the load would fetch.
   local facts = {}

@@ -1,58 +1,86 @@
-// SOLAR'S STYLE SHEET — how the runtime-built HUD panels are painted.
+// SOLAR'S STYLE SHEET — "flight hardware" (docs/ui-style.md).
 //
-// These paint the screens `ui.make` describes from Lua and the scene panels
-// that name a style. A style only ever paints an element that asks for it.
+// Every screen is a piece of equipment: an ENAMEL PLATE (flat warm fill, the
+// engine's grain, a light-from-above gradient) inside a FRAME sprite from
+// textures/ui/hardware.png (tools/gen_ui_textures.py). Buttons are KEYCAPS
+// that physically press in (the frame swaps to the pressed cell and the face
+// darkens); live numbers sit in CRT WELLS in green phosphor; words are
+// PRINTED INK in Barlow, with a one-pixel shadow so they sit on the plate.
+//
+// How a frame works (engine style.rs / lib.rs): it is drawn over the fill and
+// multiplied by `border_color` — so the white edges of the art take the bezel
+// paint ("bezel"), a lit orange rim on hover ("bezelLit"), and black stays
+// black. Frames come from two sheets (tools/gen_ui_textures.py):
+//
+//   textures/ui/plates.png — 768 × 256, three 256-px cells whose middles carry
+//   a soft worn-enamel mottling (low-contrast, linear-filtered, never pixels):
+//     plate     (0.0,     0, 0.33333, 1)  slice 0.0390625   screws; panels
+//     plateBare (0.33333, 0, 0.66667, 1)  slice 0.0234375   the HUD card
+//     screen    (0.66667, 0, 1.0,     1)  slice 0.03125     CRT displays
+//   textures/ui/hardware.png — 128 × 64, 32-px cells, flat middles, for parts
+//   too small to carry a surface:
+//     plateBare (0.25, 0.0, 0.50, 0.5)  slice 0.1875   rows, chips, stages
+//     key       (0.50, 0.0, 0.75, 0.5)  slice 0.1875   ≥ 12 units
+//     keyDown   (0.75, 0.0, 1.00, 0.5)  slice 0.1875
+//     well      (0.00, 0.5, 0.25, 1.0)  slice 0.1875   save slots, fields
+//     tag       (0.75, 0.5, 1.00, 1.0)  slice 0.25     rivets; prompt, toast
+// The fine grain on every surface is the engine's per-pixel `grain` (scale
+// 0.5 → one physical pixel; amount 0.003): film grain, not blocks.
+// An element smaller than twice its corner gets a plain `border` instead.
 //
 // One style per element. Where a style names a property it wins over the
-// element's own value (engine style.rs, `apply_styles`); what it doesn't name is
-// left as authored. So a number that changes colour with its state gets a style
-// per state rather than a `textColor` — the style would paint over that.
-// Everything here resolves through solar.tokens.ron.
+// element's own value; what it doesn't name is left as authored. So a number
+// that changes colour with its state gets a style per state.
 //
 // Styles that never change state (text, frames, chips) SNAP: `duration: 0`.
-// The engine's default is a 90 ms ease, and a described element that reuses a
-// destroyed one's id eases in from that element's look — a goal line growing
-// out of a heading's type size. A thing with no hover has nothing to animate.
+// A described element that reuses a destroyed one's id would otherwise ease
+// in from that element's look. Keys that DO change state move quickly and
+// without overshoot — hardware clicks, it does not bounce.
 {
-    // The card the objectives HUD sits in: dark glass with a hairline edge,
-    // lifted off the world by a shadow rather than by being opaque.
+    // ── HUD CARD ─────────────────────────────────────────────────────────────
+    // The objectives card: a bare enamel plate, read at a glance while walking.
     "hud/card": (
         base: (
             fill: "panel",
-            radius: "md",
-            border: 1.0,
-            border_color: "edge",
-            shadow: ( color: (0.0, 0.0, 0.0, 0.55), offset: (0.0, 8.0), blur: 24.0, spread: 1.0 ),
+            gradient: ( kind: Linear, to: (0.082, 0.085, 0.076, 0.93), angle: 90.0 ),
+            grain: ( amount: 0.003, scale: 0.5 ),
+            radius: "sm",
+            border: 0.0,
+            border_color: "bezel",
+            frame: ( texture: "textures/ui/plates.png", uv: (0.33333, 0.0, 0.66667, 1.0), slice: (0.0234375, 0.0234375, 0.0234375, 0.0234375) ),
+            shadow: ( color: (0.0, 0.0, 0.0, 0.45), offset: (0.0, 3.0), blur: 8.0, spread: 0.0 ),
         ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
 
-    // A section label: small, wide-tracked, quiet. It names the card without
-    // competing with the line you're supposed to read.
+    // A section label: printed capitals, wide-tracked, quiet.
     "hud/label": (
-        base: ( text_color: "muted", text_size: "micro", case: Upper, tracking: 2.0 ),
+        base: ( text_color: "muted", text_size: "micro", font: "label", case: Upper, tracking: 2.0,
+                text_shadow: ( color: (0.0, 0.0, 0.0, 0.6), offset: (0.0, 1.0) ) ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
 
     // THE line — the one thing the player is meant to do next.
     "hud/task": (
-        base: ( text_color: "ink", text_size: "body" ),
+        base: ( text_color: "ink", text_size: "body", font: "label",
+                text_shadow: ( color: (0.0, 0.0, 0.0, 0.6), offset: (0.0, 1.0) ) ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
 
     // The sentence under it that says how.
     "hud/hint": (
-        base: ( text_color: "muted", text_size: "caption", line_height: 1.35 ),
+        base: ( text_color: "soft", text_size: "caption", line_height: 1.3,
+                text_shadow: ( color: (0.0, 0.0, 0.0, 0.5), offset: (0.0, 1.0) ) ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
 
-    // Where the thing is: distance and bearing, in the base's own teal.
+    // Where the thing is: distance and bearing, read off the nav set.
     "hud/where": (
-        base: ( text_color: "accent", text_size: "caption", tracking: 0.6 ),
+        base: ( text_color: "accent", text_size: "caption", font: "label", tracking: 0.3 ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
 
-    // Contract goals: open in instrument blue, ticked in green.
+    // Contract goals: open in the quiet instrument tint, ticked in green.
     "hud/goal": (
         base: ( text_color: "signal", text_size: "caption" ),
         transition: ( duration: 0.0, ease: Linear ),
@@ -62,23 +90,22 @@
         transition: ( duration: 0.0, ease: Linear ),
     ),
 
-    // Money earned, money owed. Ink, not amber: amber is a warning here, and a
-    // refund is not one.
+    // Money earned, money owed. Ink: amber/yellow is a warning here.
     "hud/pay": (
-        base: ( text_color: "ink", text_size: "caption", tracking: 0.6 ),
+        base: ( text_color: "ink", text_size: "caption", font: "label", tracking: 0.3 ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
 
-    // The testing account's badge. A pill in a colour the game uses nowhere
-    // else, because the point of it is to be impossible to forget you left on.
+    // The testing account's badge. A colour the game uses nowhere else.
     "hud/debugChip": (
         base: (
-            fill: (0.20, 0.02, 0.10, 0.85),
+            fill: (0.20, 0.02, 0.10, 0.90),
             radius: "pill",
             border: 1.0,
             border_color: "debug",
             text_color: "debug",
             text_size: "micro",
+            font: "label",
             case: Upper,
             tracking: 2.0,
             pad: "sm",
@@ -86,7 +113,7 @@
         transition: ( duration: 0.0, ease: Linear ),
     ),
     "hud/debugChipText": (
-        base: ( text_color: "debug", text_size: "micro", case: Upper, tracking: 2.0 ),
+        base: ( text_color: "debug", text_size: "micro", font: "label", case: Upper, tracking: 2.0 ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
     "hud/debugKeys": (
@@ -96,33 +123,36 @@
 
     // ── PANELS ───────────────────────────────────────────────────────────────
     // The screens you open and stand at: the suit pack, the ops board, the
-    // device console. They used to be fixed rows authored into the scene with
-    // their colours written inline and their hover states written in Lua, one
-    // script per row. They are described from data now, and this is where they
-    // get their look.
+    // device console, settings, pause. A console plate with four screws.
 
-    // The frame. A panel you stop to READ is opaque: it used to be the same
-    // glass as the objectives card, and over the white interior of the command
-    // centre or the depot every line on it sat on a grey wash of wall. The
-    // card you read at a glance while walking stays glass ("hud/card"); the
-    // world behind a panel is dimmed instead ("panel/scrim").
     "panel/frame": (
         base: (
             fill: "panelSolid",
-            radius: "md",
-            border: 1.0,
-            border_color: "edge",
-            shadow: ( color: (0.0, 0.0, 0.0, 0.6), offset: (0.0, 10.0), blur: 26.0, spread: 2.0 ),
+            gradient: ( kind: Linear, to: (0.092, 0.095, 0.085, 0.99), angle: 90.0 ),
+            grain: ( amount: 0.003, scale: 0.5 ),
+            radius: "sm",
+            border: 0.0,
+            border_color: "bezel",
+            frame: ( texture: "textures/ui/plates.png", uv: (0.0, 0.0, 0.33333, 1.0), slice: (0.0390625, 0.0390625, 0.0390625, 0.0390625) ),
+            shadow: ( color: (0.0, 0.0, 0.0, 0.55), offset: (0.0, 4.0), blur: 12.0, spread: 1.0 ),
         ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
 
-    // The loading screen's curtain: deep navy at the top falling to black.
+    // The loading screen's curtain: dark enamel falling to black.
     "load/backdrop": (
         base: (
-            fill: (0.030, 0.058, 0.095, 1.0),
-            gradient: ( kind: Linear, to: (0.004, 0.008, 0.016, 1.0), angle: 90.0 ),
+            fill: (0.070, 0.072, 0.064, 1.0),
+            gradient: ( kind: Linear, to: (0.016, 0.017, 0.014, 1.0), angle: 90.0 ),
+            grain: ( amount: 0.003, scale: 0.5 ),
         ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+
+    // The loading screen's line ("ENTERING GALAXY …"), stencilled.
+    "load/text": (
+        base: ( text_color: "ink", font: "stencil", tracking: 4.0,
+                text_shadow: ( color: (0.0, 0.0, 0.0, 0.7), offset: (0.0, 2.0) ) ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
 
@@ -135,92 +165,108 @@
     // The panel's name and whatever it wants to say about itself in one breath
     // — a balance, a mass, what the ground here is made of.
     "panel/title": (
-        base: ( text_color: "accent", text_size: "caption", line_height: 1.4 ),
+        base: ( text_color: "accent", text_size: "caption", font: "label", line_height: 1.35, tracking: 0.4,
+                text_shadow: ( color: (0.0, 0.0, 0.0, 0.6), offset: (0.0, 1.0) ) ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
 
-    // A row you can click.
+    // A row you can click: a flat strip let into the plate that lifts into a
+    // key under the cursor.
     //
     // NOTE: no `text_color` here, deliberately. The rows tint themselves by
     // material tier and by whether a contract is affordable, and a style that
-    // named the colour would overwrite that silently, every frame, forever
-    // (docs/ui-styles.md — the style wins wherever it speaks).
+    // named the colour would overwrite that silently, every frame, forever.
     "panel/row": (
         base: (
-            fill: (0.06, 0.10, 0.13, 0.72),
+            fill: (0.150, 0.152, 0.138, 0.92),
+            gradient: ( kind: Linear, to: (0.122, 0.124, 0.112, 0.92), angle: 90.0 ),
+            grain: ( amount: 0.003, scale: 0.5 ),
             radius: "sm",
-            border: 1.0,
-            border_color: (0.28, 0.86, 0.74, 0.22),
+            border: 0.0,
+            border_color: "bezelLo",
+            frame: ( texture: "textures/ui/hardware.png", uv: (0.25, 0.0, 0.5, 0.5), slice: (0.1875, 0.1875, 0.1875, 0.1875) ),
             text_size: "caption",
             pad: "sm",
         ),
-        hover:    ( fill: (0.10, 0.18, 0.22, 0.92), border_color: (0.28, 0.86, 0.74, 0.7) ),
-        pressed:  ( scale: (0.995, 0.96) ),
-        focus:    ( border: 2.0, border_color: "accent" ),
+        hover:    ( fill: (0.200, 0.200, 0.182, 0.97), border_color: "bezelLit",
+                    frame: ( texture: "textures/ui/hardware.png", uv: (0.5, 0.0, 0.75, 0.5), slice: (0.1875, 0.1875, 0.1875, 0.1875) ) ),
+        pressed:  ( fill: (0.110, 0.112, 0.100, 0.97),
+                    frame: ( texture: "textures/ui/hardware.png", uv: (0.75, 0.0, 1.0, 0.5), slice: (0.1875, 0.1875, 0.1875, 0.1875) ) ),
+        focus:    ( border_color: "accent" ),
         // The row whose detail is open beside the list (the Ops Board).
-        selected: ( fill: (0.08, 0.17, 0.20, 0.98), border: 1.4, border_color: "accent" ),
-        disabled: ( opacity: 0.4 ),
-        transition: ( duration: 0.1, ease: OutCubic ),
+        selected: ( fill: (0.205, 0.150, 0.100, 0.98), border_color: "accent" ),
+        disabled: ( opacity: 0.45 ),
+        transition: ( duration: 0.06, ease: OutQuad ),
     ),
 
     // The row that is already yours — the contract on the books, the tool in
-    // your hand. Filled rather than outlined, so "current" is legible at a
-    // glance instead of being a shade of the same thing.
+    // your hand: latched in, with an orange lamp rim.
     "panel/rowActive": (
         base: (
-            fill: (0.06, 0.24, 0.20, 0.92),
+            fill: (0.215, 0.155, 0.100, 0.97),
+            grain: ( amount: 0.003, scale: 0.5 ),
             radius: "sm",
-            border: 1.2,
+            border: 0.0,
             border_color: "accent",
+            frame: ( texture: "textures/ui/hardware.png", uv: (0.75, 0.0, 1.0, 0.5), slice: (0.1875, 0.1875, 0.1875, 0.1875) ),
             text_size: "caption",
             pad: "sm",
         ),
-        hover:   ( fill: (0.09, 0.32, 0.26, 0.96) ),
-        pressed: ( scale: (0.995, 0.96) ),
-        focus:   ( border: 2.0, border_color: "ink" ),
-        selected: ( border: 2.0, border_color: "ink" ),
-        transition: ( duration: 0.1, ease: OutCubic ),
+        hover:   ( fill: (0.250, 0.180, 0.115, 0.98) ),
+        focus:   ( border_color: "ink" ),
+        selected: ( border_color: "ink" ),
+        transition: ( duration: 0.06, ease: OutQuad ),
     ),
 
-    // The panel's one primary action ("transfer everything", "sign it").
+    // The panel's one primary action ("transfer everything", "sign it"): an
+    // orange enamel key with a dark printed legend.
     "panel/action": (
         base: (
-            fill: (0.10, 0.30, 0.26, 0.94),
+            fill: (0.86, 0.47, 0.18, 1.0),
+            gradient: ( kind: Linear, to: (0.70, 0.36, 0.13, 1.0), angle: 90.0 ),
+            grain: ( amount: 0.003, scale: 0.5 ),
             radius: "sm",
-            border: 1.2,
-            border_color: (0.28, 0.86, 0.74, 0.85),
-            text_color: "accent",
+            border: 0.0,
+            border_color: (1.0, 0.92, 0.80, 1.0),
+            frame: ( texture: "textures/ui/hardware.png", uv: (0.5, 0.0, 0.75, 0.5), slice: (0.1875, 0.1875, 0.1875, 0.1875) ),
+            text_color: "onAccent",
             text_size: "caption",
+            font: "label",
             case: Upper,
-            tracking: 1.2,
+            tracking: 1.4,
             pad: "sm",
         ),
-        hover:    ( fill: (0.14, 0.40, 0.34, 0.98), glow: ( color: "accent", radius: 14.0 ) ),
-        pressed:  ( scale: (0.98, 0.94) ),
-        focus:    ( border: 2.0, border_color: "ink" ),
-        disabled: ( opacity: 0.35 ),
-        transition: ( duration: 0.09, ease: OutCubic ),
+        hover:    ( fill: (0.96, 0.56, 0.24, 1.0) ),
+        pressed:  ( fill: (0.74, 0.39, 0.14, 1.0),
+                    frame: ( texture: "textures/ui/hardware.png", uv: (0.75, 0.0, 1.0, 0.5), slice: (0.1875, 0.1875, 0.1875, 0.1875) ) ),
+        focus:    ( border_color: "ink" ),
+        disabled: ( opacity: 0.4 ),
+        transition: ( duration: 0.06, ease: OutQuad ),
     ),
 
-    // The action that costs you something (abandoning a contract). Warm and
-    // quiet until hovered; `selected` is its armed "are you sure?" state.
+    // The action that costs you something (abandoning a contract). A dark key
+    // with a red legend; `selected` is its armed "are you sure?" state — the
+    // key goes red.
     "panel/danger": (
         base: (
-            fill: (0.10, 0.05, 0.05, 0.85),
+            fill: (0.165, 0.120, 0.108, 0.97),
+            grain: ( amount: 0.003, scale: 0.5 ),
             radius: "sm",
-            border: 1.0,
-            border_color: (1.00, 0.42, 0.36, 0.45),
-            text_color: (1.00, 0.62, 0.56, 1.0),
+            border: 0.0,
+            border_color: (0.85, 0.62, 0.55, 1.0),
+            frame: ( texture: "textures/ui/hardware.png", uv: (0.5, 0.0, 0.75, 0.5), slice: (0.1875, 0.1875, 0.1875, 0.1875) ),
+            text_color: (1.00, 0.55, 0.46, 1.0),
             text_size: "caption",
+            font: "label",
             case: Upper,
-            tracking: 1.2,
+            tracking: 1.4,
             pad: "sm",
         ),
-        hover:    ( fill: (0.22, 0.07, 0.06, 0.95), border_color: "danger" ),
-        pressed:  ( scale: (0.98, 0.94) ),
-        focus:    ( border: 2.0, border_color: "ink" ),
-        selected: ( fill: (0.50, 0.10, 0.08, 0.97), border_color: "danger", text_color: "ink" ),
-        transition: ( duration: 0.09, ease: OutCubic ),
+        hover:    ( fill: (0.26, 0.12, 0.10, 0.98), border_color: "danger" ),
+        pressed:  ( frame: ( texture: "textures/ui/hardware.png", uv: (0.75, 0.0, 1.0, 0.5), slice: (0.1875, 0.1875, 0.1875, 0.1875) ) ),
+        focus:    ( border_color: "ink" ),
+        selected: ( fill: (0.62, 0.15, 0.10, 1.0), border_color: (1.0, 0.8, 0.7, 1.0), text_color: "ink" ),
+        transition: ( duration: 0.06, ease: OutQuad ),
     ),
 
     // The line along the bottom that says what just happened, or what to do.
@@ -229,190 +275,222 @@
         transition: ( duration: 0.0, ease: Linear ),
     ),
 
-    // The same line when it is reporting something that did NOT work — a hold
-    // that was full, a contract you can't afford. Warm, never red: nothing here
-    // is a failure, it just didn't fit.
+    // The same line when it is reporting something that did NOT work.
     "panel/hintWarn": (
         base: ( text_color: "warn", text_size: "micro", line_height: 1.4 ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
 
-    // A column heading inside a panel.
+    // A column heading inside a panel: printed capitals.
     "panel/label": (
-        base: ( text_color: "muted", text_size: "micro", case: Upper, tracking: 2.0 ),
+        base: ( text_color: "muted", text_size: "micro", font: "label", case: Upper, tracking: 1.8 ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
 
     // ── MAIN MENU ────────────────────────────────────────────────────────────
-    // The title screen's cards: the same teal-edged glass as the HUD, a
-    // larger radius because they float alone on the star field.
+    // The title screen's cards: the console plate, screws and all.
     "menu/card": (
         base: (
-            fill: (0.030, 0.055, 0.080, 0.90),
-            radius: "lg",
-            border: 1.2,
-            border_color: (0.28, 0.86, 0.74, 0.40),
-            shadow: ( color: (0.0, 0.0, 0.0, 0.6), offset: (0.0, 12.0), blur: 30.0, spread: 2.0 ),
+            fill: "panelSolid",
+            gradient: ( kind: Linear, to: (0.092, 0.095, 0.085, 0.99), angle: 90.0 ),
+            grain: ( amount: 0.003, scale: 0.5 ),
+            radius: "sm",
+            border: 0.0,
+            border_color: "bezel",
+            frame: ( texture: "textures/ui/plates.png", uv: (0.0, 0.0, 0.33333, 1.0), slice: (0.0390625, 0.0390625, 0.0390625, 0.0390625) ),
+            shadow: ( color: (0.0, 0.0, 0.0, 0.6), offset: (0.0, 6.0), blur: 16.0, spread: 1.0 ),
         ),
     ),
 
-    // A save slot. No text colour: its labels are children that colour
-    // themselves (tag muted, name ink, action teal).
+    // A save slot: a CRT window you press — it lifts to a key under the cursor.
+    // No text colour: its labels colour themselves (tag muted, name ink,
+    // action accent).
     "menu/slot": (
         base: (
-            fill: (0.05, 0.09, 0.12, 0.85),
-            radius: "md",
-            border: 1.0,
-            border_color: (0.28, 0.86, 0.74, 0.22),
+            fill: "sunken",
+            gradient: ( kind: Linear, to: (0.020, 0.028, 0.022, 0.97), angle: 90.0 ),
+            grain: ( amount: 0.003, scale: 0.5 ),
+            radius: "sm",
+            border: 0.0,
+            border_color: "bezel",
+            frame: ( texture: "textures/ui/hardware.png", uv: (0.0, 0.5, 0.25, 1.0), slice: (0.1875, 0.1875, 0.1875, 0.1875) ),
         ),
-        hover:   ( fill: (0.07, 0.17, 0.19, 0.95), border_color: (0.28, 0.86, 0.74, 0.8), glow: ( color: (0.28, 0.86, 0.74, 0.25), radius: 12.0 ) ),
-        pressed: ( scale: (0.99, 0.96) ),
-        focus:   ( border: 2.0, border_color: "accent" ),
-        transition: ( duration: 0.1, ease: OutCubic ),
+        hover:   ( fill: (0.060, 0.080, 0.062, 0.98), border_color: "bezelLit" ),
+        pressed: ( fill: (0.020, 0.028, 0.022, 0.98) ),
+        focus:   ( border_color: "accent" ),
+        transition: ( duration: 0.06, ease: OutQuad ),
     ),
 
-    // The ✕ beside an occupied slot. `selected` is its armed ("sure?") state,
-    // set by menu_delete.lua for the three seconds the confirm stays open.
+    // The ✕ beside an occupied slot: a dark key with a red legend. `selected`
+    // is its armed ("sure?") state, set by menu_delete.lua.
     "menu/delete": (
         base: (
-            fill: (0.09, 0.05, 0.06, 0.80),
-            radius: "md",
-            border: 1.0,
-            border_color: (1.0, 0.42, 0.36, 0.35),
-            text_color: (1.0, 0.55, 0.50, 1.0),
+            fill: (0.165, 0.120, 0.108, 0.97),
+            grain: ( amount: 0.003, scale: 0.5 ),
+            radius: "sm",
+            border: 0.0,
+            border_color: (0.85, 0.62, 0.55, 1.0),
+            frame: ( texture: "textures/ui/hardware.png", uv: (0.5, 0.0, 0.75, 0.5), slice: (0.1875, 0.1875, 0.1875, 0.1875) ),
+            text_color: (1.0, 0.55, 0.46, 1.0),
         ),
-        hover:    ( fill: (0.28, 0.08, 0.08, 0.95), border_color: "danger" ),
-        pressed:  ( scale: (0.96, 0.96) ),
-        selected: ( fill: (0.55, 0.10, 0.09, 0.97), border_color: "danger", text_color: "ink" ),
-        transition: ( duration: 0.1, ease: OutCubic ),
+        hover:    ( fill: (0.26, 0.12, 0.10, 0.98), border_color: "danger" ),
+        pressed:  ( frame: ( texture: "textures/ui/hardware.png", uv: (0.75, 0.0, 1.0, 0.5), slice: (0.1875, 0.1875, 0.1875, 0.1875) ) ),
+        selected: ( fill: (0.62, 0.15, 0.10, 1.0), border_color: (1.0, 0.8, 0.7, 1.0), text_color: "ink" ),
+        transition: ( duration: 0.06, ease: OutQuad ),
     ),
 
-    // The one primary action on a menu page (CREATE GALAXY).
+    // The one primary action on a menu page (CREATE GALAXY): the orange key.
     "menu/primary": (
         base: (
-            fill: (0.10, 0.30, 0.26, 0.94),
-            radius: "md",
-            border: 1.2,
-            border_color: (0.28, 0.86, 0.74, 0.85),
-            text_color: "accent",
+            fill: (0.86, 0.47, 0.18, 1.0),
+            gradient: ( kind: Linear, to: (0.70, 0.36, 0.13, 1.0), angle: 90.0 ),
+            grain: ( amount: 0.003, scale: 0.5 ),
+            radius: "sm",
+            border: 0.0,
+            border_color: (1.0, 0.92, 0.80, 1.0),
+            frame: ( texture: "textures/ui/hardware.png", uv: (0.5, 0.0, 0.75, 0.5), slice: (0.1875, 0.1875, 0.1875, 0.1875) ),
+            text_color: "onAccent",
+            font: "label",
             tracking: 3.0,
         ),
-        hover:   ( fill: (0.14, 0.40, 0.34, 0.98), text_color: "ink", glow: ( color: "accent", radius: 16.0 ) ),
-        pressed: ( scale: (0.98, 0.94) ),
-        focus:   ( border: 2.0, border_color: "ink" ),
-        transition: ( duration: 0.09, ease: OutCubic ),
+        hover:   ( fill: (0.96, 0.56, 0.24, 1.0) ),
+        pressed: ( fill: (0.74, 0.39, 0.14, 1.0),
+                   frame: ( texture: "textures/ui/hardware.png", uv: (0.75, 0.0, 1.0, 0.5), slice: (0.1875, 0.1875, 0.1875, 0.1875) ) ),
+        focus:   ( border_color: "ink" ),
+        transition: ( duration: 0.06, ease: OutQuad ),
     ),
 
-    // Everything that backs out or leaves (CANCEL, QUIT).
+    // Everything that backs out or leaves (CANCEL, QUIT): an enamel key.
     "menu/secondary": (
         base: (
-            fill: (0.03, 0.06, 0.08, 0.80),
-            radius: "md",
-            border: 1.0,
-            border_color: (0.46, 0.60, 0.70, 0.35),
-            text_color: "muted",
+            fill: "plateHi",
+            gradient: ( kind: Linear, to: (0.150, 0.152, 0.138, 0.99), angle: 90.0 ),
+            grain: ( amount: 0.003, scale: 0.5 ),
+            radius: "sm",
+            border: 0.0,
+            border_color: "bezel",
+            frame: ( texture: "textures/ui/hardware.png", uv: (0.5, 0.0, 0.75, 0.5), slice: (0.1875, 0.1875, 0.1875, 0.1875) ),
+            text_color: "soft",
+            font: "label",
             tracking: 3.0,
+            text_shadow: ( color: (0.0, 0.0, 0.0, 0.6), offset: (0.0, 1.0) ),
         ),
-        hover:   ( fill: (0.06, 0.12, 0.15, 0.92), border_color: (0.28, 0.86, 0.74, 0.6), text_color: "ink" ),
-        pressed: ( scale: (0.98, 0.94) ),
-        focus:   ( border: 2.0, border_color: "accent" ),
-        transition: ( duration: 0.09, ease: OutCubic ),
+        hover:   ( fill: (0.235, 0.232, 0.210, 0.99), border_color: "bezelLit", text_color: "ink" ),
+        pressed: ( fill: (0.140, 0.140, 0.128, 0.99), text_color: "ink",
+                   frame: ( texture: "textures/ui/hardware.png", uv: (0.75, 0.0, 1.0, 0.5), slice: (0.1875, 0.1875, 0.1875, 0.1875) ) ),
+        focus:   ( border_color: "accent" ),
+        transition: ( duration: 0.06, ease: OutQuad ),
     ),
 
-    // A value you type into (the galaxy seed): sunken, not raised.
+    // A value you type into (the galaxy seed): a CRT well, phosphor text.
     "menu/field": (
         base: (
             fill: "sunken",
-            radius: "md",
-            border: 1.0,
-            border_color: (0.28, 0.86, 0.74, 0.35),
-            text_color: "ink",
+            grain: ( amount: 0.003, scale: 0.5 ),
+            radius: "sm",
+            border: 0.0,
+            border_color: "bezel",
+            frame: ( texture: "textures/ui/hardware.png", uv: (0.0, 0.5, 0.25, 1.0), slice: (0.1875, 0.1875, 0.1875, 0.1875) ),
+            text_color: "phos",
+            font: "mono",
         ),
-        hover: ( border_color: (0.28, 0.86, 0.74, 0.8) ),
-        focus: ( border: 2.0, border_color: "accent" ),
-        transition: ( duration: 0.1, ease: OutCubic ),
+        hover: ( border_color: "bezelLit" ),
+        focus: ( border_color: "accent" ),
+        transition: ( duration: 0.06, ease: OutQuad ),
     ),
 
     // ── HUD PIECES ───────────────────────────────────────────────────────────
     // The small always-on readouts: the status chips top-left, the tool
-    // hotbar bottom-centre, the walk-up prompt. Same glass as the cards, sized
-    // to what they say rather than stretched across the screen.
+    // hotbar bottom-centre, the walk-up prompt. Each is a small CRT readout
+    // or an enamel tag, sized to what it says.
 
-    // One readout: a caption label and its value, on a dark chip.
+    // One readout: a printed label and its phosphor value, on a small plate.
     "hud/chip": (
         base: (
-            fill: (0.025, 0.05, 0.075, 0.86),
+            fill: "panel",
+            gradient: ( kind: Linear, to: (0.082, 0.085, 0.076, 0.93), angle: 90.0 ),
+            grain: ( amount: 0.003, scale: 0.5 ),
             radius: "sm",
-            border: 1.0,
-            border_color: "rule",
-            shadow: ( color: (0.0, 0.0, 0.0, 0.45), offset: (0.0, 4.0), blur: 12.0, spread: 0.0 ),
+            border: 0.0,
+            border_color: "bezelLo",
+            frame: ( texture: "textures/ui/hardware.png", uv: (0.25, 0.0, 0.5, 0.5), slice: (0.1875, 0.1875, 0.1875, 0.1875) ),
+            shadow: ( color: (0.0, 0.0, 0.0, 0.4), offset: (0.0, 2.0), blur: 5.0, spread: 0.0 ),
             pad: "sm",
         ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
-    // The same chip when it is reporting something you need to act on.
+    // The same chip when it is reporting something you need to act on: a
+    // caution-yellow placard.
     "hud/chipWarn": (
         base: (
-            fill: (0.16, 0.09, 0.03, 0.90),
+            fill: (0.27, 0.20, 0.06, 0.95),
+            grain: ( amount: 0.003, scale: 0.5 ),
             radius: "sm",
-            border: 1.2,
+            border: 0.0,
             border_color: "warn",
-            shadow: ( color: (0.0, 0.0, 0.0, 0.45), offset: (0.0, 4.0), blur: 12.0, spread: 0.0 ),
+            frame: ( texture: "textures/ui/hardware.png", uv: (0.25, 0.0, 0.5, 0.5), slice: (0.1875, 0.1875, 0.1875, 0.1875) ),
+            shadow: ( color: (0.0, 0.0, 0.0, 0.4), offset: (0.0, 2.0), blur: 5.0, spread: 0.0 ),
             pad: "sm",
         ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
     "hud/chipLabel": (
-        base: ( text_color: "muted", text_size: "micro", case: Upper, tracking: 1.5 ),
+        base: ( text_color: "muted", text_size: "micro", font: "label", case: Upper, tracking: 1.5 ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
     "hud/chipValue": (
-        base: ( text_color: "ink", text_size: "caption", tracking: 0.3 ),
+        base: ( text_color: "ink", text_size: "caption", font: "label", tracking: 0.3 ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
     "hud/chipWarnText": (
-        base: ( text_color: "warn", text_size: "caption", tracking: 0.3 ),
+        base: ( text_color: "warn", text_size: "caption", font: "label", tracking: 0.3 ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
 
     // A key, drawn as a key: the one thing on a hotbar or a prompt you are
-    // meant to press.
+    // meant to press. An enamel keycap with a printed legend.
     "hud/key": (
         base: (
-            fill: (0.08, 0.16, 0.18, 0.95),
+            fill: "plateHi",
+            gradient: ( kind: Linear, to: (0.140, 0.142, 0.130, 0.99), angle: 90.0 ),
             radius: "sm",
-            border: 1.0,
-            border_color: (0.28, 0.86, 0.74, 0.55),
-            text_color: "accent",
+            border: 0.0,
+            border_color: "bezel",
+            frame: ( texture: "textures/ui/hardware.png", uv: (0.5, 0.0, 0.75, 0.5), slice: (0.1875, 0.1875, 0.1875, 0.1875) ),
+            text_color: "ink",
             text_size: "caption",
-            tracking: 0.4,
+            font: "label",
+            tracking: 0.2,
         ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
-    // The key of the tool in your hand: a bright numeral on a dark key with an
-    // accent rim. Dark text on the accent fill was the first try; at this size
-    // it anti-aliases into the fill and the number all but vanishes.
+    // The key of the tool in your hand: latched in, legend lit orange.
     "hud/keyActive": (
         base: (
-            fill: "space",
+            fill: (0.215, 0.155, 0.100, 0.99),
             radius: "sm",
-            border: 1.6,
+            border: 0.0,
             border_color: "accent",
-            text_color: (1.0, 1.0, 1.0, 1.0),
+            frame: ( texture: "textures/ui/hardware.png", uv: (0.75, 0.0, 1.0, 0.5), slice: (0.1875, 0.1875, 0.1875, 0.1875) ),
+            text_color: (1.0, 0.72, 0.42, 1.0),
             text_size: "caption",
-            tracking: 0.4,
+            font: "label",
+            tracking: 0.2,
         ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
 
-    // A hotbar slot. The one in your hand is lit; the others are there to be
-    // found, which is why they are shown at all.
+    // A hotbar slot. The one in your hand is latched; the others are there to
+    // be found, which is why they are shown at all.
     "hud/slot": (
         base: (
-            fill: (0.025, 0.05, 0.075, 0.82),
+            fill: "panel",
+            gradient: ( kind: Linear, to: (0.082, 0.085, 0.076, 0.93), angle: 90.0 ),
+            grain: ( amount: 0.003, scale: 0.5 ),
             radius: "sm",
-            border: 1.0,
-            border_color: "rule",
+            border: 0.0,
+            border_color: "bezelLo",
+            frame: ( texture: "textures/ui/hardware.png", uv: (0.25, 0.0, 0.5, 0.5), slice: (0.1875, 0.1875, 0.1875, 0.1875) ),
             text_color: "soft",
             text_size: "caption",
             pad: "sm",
@@ -421,23 +499,27 @@
     ),
     "hud/slotActive": (
         base: (
-            fill: (0.05, 0.20, 0.17, 0.92),
+            fill: (0.215, 0.155, 0.100, 0.96),
+            grain: ( amount: 0.003, scale: 0.5 ),
             radius: "sm",
-            border: 1.4,
+            border: 0.0,
             border_color: "accent",
+            frame: ( texture: "textures/ui/hardware.png", uv: (0.25, 0.0, 0.5, 0.5), slice: (0.1875, 0.1875, 0.1875, 0.1875) ),
             text_color: "ink",
             text_size: "caption",
             pad: "sm",
-            shadow: ( color: (0.0, 0.0, 0.0, 0.45), offset: (0.0, 4.0), blur: 12.0, spread: 0.0 ),
+            shadow: ( color: (0.0, 0.0, 0.0, 0.45), offset: (0.0, 2.0), blur: 5.0, spread: 0.0 ),
         ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
     // The line above the hotbar: the equipped tool's hint, what it is aimed
-    // at, or what just happened.
+    // at, or what just happened. A strip of dark glass, no frame (it is short).
     "hud/toolHint": (
         base: (
-            fill: (0.025, 0.05, 0.075, 0.72),
-            radius: 13.0,
+            fill: (0.060, 0.064, 0.056, 0.82),
+            radius: "sm",
+            border: 1.0,
+            border_color: "rule",
             text_color: "soft",
             text_size: "caption",
             pad: "sm",
@@ -445,32 +527,43 @@
         transition: ( duration: 0.0, ease: Linear ),
     ),
 
-    // The walk-up prompt ("Enter the Command Centre"), and the HUD's buttons.
+    // The walk-up prompt ("Enter the Command Centre"): a riveted placard.
     "hud/prompt": (
         base: (
-            fill: (0.03, 0.07, 0.09, 0.92),
-            radius: "sm",
-            border: 1.2,
-            border_color: "edge",
+            fill: "panel",
+            gradient: ( kind: Linear, to: (0.082, 0.085, 0.076, 0.93), angle: 90.0 ),
+            grain: ( amount: 0.003, scale: 0.5 ),
+            radius: 0.0,
+            border: 0.0,
+            border_color: "bezel",
+            frame: ( texture: "textures/ui/hardware.png", uv: (0.75, 0.5, 1.0, 1.0), slice: (0.25, 0.25, 0.25, 0.25) ),
             text_color: "ink",
             text_size: "body",
-            shadow: ( color: (0.0, 0.0, 0.0, 0.5), offset: (0.0, 5.0), blur: 16.0, spread: 1.0 ),
+            font: "label",
+            text_shadow: ( color: (0.0, 0.0, 0.0, 0.6), offset: (0.0, 1.0) ),
+            shadow: ( color: (0.0, 0.0, 0.0, 0.45), offset: (0.0, 3.0), blur: 8.0, spread: 0.0 ),
         ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
+    // The HUD's small buttons (☰ MENU · ESC).
     "hud/button": (
         base: (
-            fill: (0.025, 0.05, 0.075, 0.86),
+            fill: "plateHi",
+            gradient: ( kind: Linear, to: (0.140, 0.142, 0.130, 0.97), angle: 90.0 ),
+            grain: ( amount: 0.003, scale: 0.5 ),
             radius: "sm",
-            border: 1.0,
-            border_color: "rule",
+            border: 0.0,
+            border_color: "bezel",
+            frame: ( texture: "textures/ui/hardware.png", uv: (0.5, 0.0, 0.75, 0.5), slice: (0.1875, 0.1875, 0.1875, 0.1875) ),
             text_color: "soft",
             text_size: "micro",
-            tracking: 1.2,
+            font: "label",
+            tracking: 1.4,
         ),
-        hover:   ( fill: (0.06, 0.16, 0.16, 0.94), border_color: "edge", text_color: "ink" ),
-        pressed: ( scale: (0.97, 0.94) ),
-        transition: ( duration: 0.1, ease: OutCubic ),
+        hover:   ( fill: (0.235, 0.232, 0.210, 0.99), border_color: "bezelLit", text_color: "ink" ),
+        pressed: ( fill: (0.140, 0.140, 0.128, 0.99),
+                   frame: ( texture: "textures/ui/hardware.png", uv: (0.75, 0.0, 1.0, 0.5), slice: (0.1875, 0.1875, 0.1875, 0.1875) ) ),
+        transition: ( duration: 0.06, ease: OutQuad ),
     ),
     // ── FLIGHT INSTRUMENTS ───────────────────────────────────────────────────
     // The cockpit: the instrument console along the bottom, the orbit strip
@@ -478,34 +571,37 @@
     // the stage stack bottom-right (scripts/flight_hud.lua), plus the device
     // console and the map's text block.
     //
-    // One plate, one hairline, one accent. Numbers are set in the mono face so
-    // they hold still while they change; labels are small tracked capitals so
-    // they read as engraving on the panel rather than as more data.
+    // Each instrument is a CRT DISPLAY in its own enamel bezel (the `screen`
+    // cell): dark green glass, phosphor numbers in the mono face, labels
+    // printed small in capitals. One accent, used for what is active.
 
-    // The plate every flight instrument is mounted on.
+    // The display every flight instrument is mounted in.
     "hud/instrument": (
         base: (
-            fill: "glass",
-            radius: 7.0,
-            border: 1.0,
-            border_color: "edge",
-            shadow: ( color: (0.0, 0.0, 0.0, 0.5), offset: (0.0, 6.0), blur: 18.0, spread: 0.0 ),
+            fill: (0.040, 0.058, 0.046, 0.96),
+            gradient: ( kind: Radial, to: (0.018, 0.026, 0.020, 0.96), radius: 1.0 ),
+            grain: ( amount: 0.003, scale: 0.5 ),
+            radius: "sm",
+            border: 0.0,
+            border_color: "bezel",
+            frame: ( texture: "textures/ui/plates.png", uv: (0.66667, 0.0, 1.0, 1.0), slice: (0.03125, 0.03125, 0.03125, 0.03125) ),
+            shadow: ( color: (0.0, 0.0, 0.0, 0.45), offset: (0.0, 3.0), blur: 8.0, spread: 0.0 ),
         ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
-    // Running text on a plate: the map's orbit and encounter readout.
+    // Running text on a display: the map's orbit and encounter readout.
     "hud/readout": (
-        base: ( text_color: "soft", text_size: "caption", line_height: 1.35 ),
+        base: ( text_color: "phos", text_size: "caption", font: "mono", line_height: 1.35 ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
-    // The engraving: what a number is.
+    // The legend: what a number is.
     "hud/micro": (
-        base: ( text_color: "muted", text_size: 10.0, case: Upper, tracking: 1.4 ),
+        base: ( text_color: "phosDim", text_size: 10.5, font: "label", case: Upper, tracking: 1.4 ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
-    // Numbers, small, medium and large.
+    // Numbers, small, medium and large — phosphor.
     "hud/value": (
-        base: ( text_color: "ink", text_size: "caption", font: "mono" ),
+        base: ( text_color: "phos", text_size: "caption", font: "mono" ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
     // The same number when it is the one that's active, a caution or a warning.
@@ -522,210 +618,238 @@
         transition: ( duration: 0.0, ease: Linear ),
     ),
     "hud/valueDim": (
-        base: ( text_color: "muted", text_size: "caption", font: "mono" ),
+        base: ( text_color: "phosDim", text_size: "caption", font: "mono" ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
     // Small print in numbers: tape scales, a stage's thrust.
     "hud/valueMuted": (
-        base: ( text_color: "muted", text_size: 10.0, font: "mono" ),
+        base: ( text_color: "phosDim", text_size: 10.5, font: "mono" ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
     "hud/valueLg": (
-        base: ( text_color: "ink", text_size: "readout", font: "mono" ),
+        base: ( text_color: "phos", text_size: "readout", font: "mono" ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
     // The value window in the middle of a tape, and the heading box on top of
-    // the ball: the numbers you actually fly by, so they get the bright edge.
+    // the ball: the numbers you actually fly by, so they get the lit rim.
     "hud/window": (
         base: (
-            fill: (0.01, 0.015, 0.022, 0.98),
-            radius: 4.0,
-            border: 1.2,
+            fill: (0.012, 0.020, 0.014, 0.99),
+            radius: 2.0,
+            border: 1.0,
             border_color: "accent",
-            text_color: "ink",
+            text_color: (0.80, 1.0, 0.72, 1.0),
             text_size: 17.0,
             font: "mono",
         ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
-    // The navball's rim.
+    // The navball's rim: a thick enamel ring.
     "hud/bezel": (
         base: (
-            fill: (0.005, 0.008, 0.012, 1.0),
+            fill: (0.010, 0.012, 0.010, 1.0),
             radius: "pill",
-            border: 2.0,
-            border_color: (0.62, 0.74, 0.84, 0.30),
-            shadow: ( color: (0.0, 0.0, 0.0, 0.55), offset: (0.0, 4.0), blur: 14.0, spread: 0.0 ),
+            border: 3.0,
+            border_color: (0.26, 0.26, 0.235, 1.0),
+            shadow: ( color: (0.0, 0.0, 0.0, 0.55), offset: (0.0, 3.0), blur: 8.0, spread: 0.0 ),
         ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
-    // A meter's empty channel (throttle, vertical speed, fuel, charge).
+    // A meter's empty channel (throttle, vertical speed, fuel, charge): a
+    // groove cut into the glass.
     "hud/track": (
         base: (
-            fill: (0.0, 0.0, 0.0, 0.5),
-            radius: 2.0,
+            fill: (0.0, 0.0, 0.0, 0.55),
+            radius: 1.0,
             border: 1.0,
-            border_color: "rule",
+            border_color: (0.64, 0.93, 0.56, 0.16),
         ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
 
-    // An autopilot hold. `selected` is the hold the craft is flying.
+    // An autopilot hold: a square keycap. `selected` is the hold the craft is
+    // flying — latched in, lit orange.
     "hud/sas": (
         base: (
-            fill: (0.045, 0.065, 0.085, 0.95),
-            radius: 4.0,
-            border: 1.0,
-            border_color: "rule",
+            fill: "plateHi",
+            gradient: ( kind: Linear, to: (0.140, 0.142, 0.130, 0.99), angle: 90.0 ),
+            radius: "sm",
+            border: 0.0,
+            border_color: "bezel",
+            frame: ( texture: "textures/ui/hardware.png", uv: (0.5, 0.0, 0.75, 0.5), slice: (0.1875, 0.1875, 0.1875, 0.1875) ),
             text_color: "soft",
             text_size: 15.0,
         ),
-        hover:    ( fill: (0.07, 0.11, 0.14, 1.0), border_color: "edge", text_color: "ink" ),
-        pressed:  ( scale: (0.94, 0.94) ),
-        selected: ( fill: "accent", border_color: "accent", text_color: (0.02, 0.07, 0.07, 1.0) ),
-        disabled: ( opacity: 0.35 ),
-        transition: ( duration: 0.08, ease: OutCubic ),
+        hover:    ( fill: (0.235, 0.232, 0.210, 0.99), border_color: "bezelLit", text_color: "ink" ),
+        pressed:  ( frame: ( texture: "textures/ui/hardware.png", uv: (0.75, 0.0, 1.0, 0.5), slice: (0.1875, 0.1875, 0.1875, 0.1875) ) ),
+        selected: ( fill: (0.86, 0.47, 0.18, 1.0), border_color: (1.0, 0.92, 0.80, 1.0), text_color: "onAccent",
+                    frame: ( texture: "textures/ui/hardware.png", uv: (0.75, 0.0, 1.0, 0.5), slice: (0.1875, 0.1875, 0.1875, 0.1875) ) ),
+        disabled: ( opacity: 0.4 ),
+        transition: ( duration: 0.05, ease: OutQuad ),
     ),
     // The same button carrying a word (RCS, SAS) instead of a symbol.
     "hud/sasWord": (
         base: (
-            fill: (0.045, 0.065, 0.085, 0.95),
-            radius: 4.0,
-            border: 1.0,
-            border_color: "rule",
+            fill: "plateHi",
+            gradient: ( kind: Linear, to: (0.140, 0.142, 0.130, 0.99), angle: 90.0 ),
+            radius: "sm",
+            border: 0.0,
+            border_color: "bezel",
+            frame: ( texture: "textures/ui/hardware.png", uv: (0.5, 0.0, 0.75, 0.5), slice: (0.1875, 0.1875, 0.1875, 0.1875) ),
             text_color: "muted",
-            text_size: 10.0,
+            text_size: 10.5,
+            font: "label",
             tracking: 1.2,
         ),
-        hover:    ( fill: (0.07, 0.11, 0.14, 1.0), border_color: "edge", text_color: "ink" ),
-        pressed:  ( scale: (0.94, 0.94) ),
-        selected: ( fill: (0.04, 0.20, 0.17, 0.98), border_color: "accent", text_color: "accent" ),
-        disabled: ( opacity: 0.35 ),
-        transition: ( duration: 0.08, ease: OutCubic ),
+        hover:    ( fill: (0.235, 0.232, 0.210, 0.99), border_color: "bezelLit", text_color: "ink" ),
+        pressed:  ( frame: ( texture: "textures/ui/hardware.png", uv: (0.75, 0.0, 1.0, 0.5), slice: (0.1875, 0.1875, 0.1875, 0.1875) ) ),
+        selected: ( fill: (0.215, 0.155, 0.100, 0.99), border_color: "accent", text_color: (1.0, 0.72, 0.42, 1.0),
+                    frame: ( texture: "textures/ui/hardware.png", uv: (0.75, 0.0, 1.0, 0.5), slice: (0.1875, 0.1875, 0.1875, 0.1875) ) ),
+        disabled: ( opacity: 0.4 ),
+        transition: ( duration: 0.05, ease: OutQuad ),
     ),
 
     // Annunciators: a fixed row of lamps, dark until something is true. The
     // lamp that lights is always in the same place, so you learn where to look.
+    // Unlit, the legend is just readable through the dark lens.
     "hud/lamp": (
         base: (
-            fill: (0.02, 0.03, 0.045, 0.80),
-            radius: 3.0,
+            fill: (0.070, 0.072, 0.064, 0.92),
+            radius: 1.0,
             border: 1.0,
-            border_color: "rule",
-            text_color: (0.46, 0.60, 0.70, 0.45),
+            border_color: (0.0, 0.0, 0.0, 0.8),
+            text_color: (0.56, 0.55, 0.50, 0.55),
             text_size: 9.5,
+            font: "label",
             tracking: 1.0,
         ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
     "hud/lampOn": (
         base: (
-            fill: (0.03, 0.17, 0.15, 0.95),
-            radius: 3.0,
+            fill: (0.30, 0.48, 0.26, 0.97),
+            gradient: ( kind: Radial, to: (0.16, 0.28, 0.14, 0.97), radius: 1.0 ),
+            radius: 1.0,
             border: 1.0,
-            border_color: (0.28, 0.86, 0.74, 0.75),
-            text_color: "accent",
+            border_color: (0.0, 0.0, 0.0, 0.8),
+            text_color: (0.90, 1.0, 0.86, 1.0),
             text_size: 9.5,
+            font: "label",
             tracking: 1.0,
         ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
     "hud/lampWarn": (
         base: (
-            fill: (0.22, 0.13, 0.03, 0.96),
-            radius: 3.0,
+            fill: (0.72, 0.55, 0.14, 0.98),
+            gradient: ( kind: Radial, to: (0.48, 0.34, 0.07, 0.98), radius: 1.0 ),
+            radius: 1.0,
             border: 1.0,
-            border_color: "warn",
-            text_color: "warn",
+            border_color: (0.0, 0.0, 0.0, 0.8),
+            text_color: (0.14, 0.09, 0.02, 1.0),
             text_size: 9.5,
+            font: "label",
             tracking: 1.0,
         ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
     "hud/lampDanger": (
         base: (
-            fill: (0.30, 0.05, 0.04, 0.97),
-            radius: 3.0,
+            fill: (0.72, 0.16, 0.10, 0.98),
+            gradient: ( kind: Radial, to: (0.46, 0.08, 0.05, 0.98), radius: 1.0 ),
+            radius: 1.0,
             border: 1.0,
-            border_color: "danger",
-            text_color: (1.0, 0.62, 0.56, 1.0),
+            border_color: (0.0, 0.0, 0.0, 0.8),
+            text_color: (1.0, 0.90, 0.84, 1.0),
             text_size: 9.5,
+            font: "label",
             tracking: 1.0,
         ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
 
-    // One staging event. The NEXT one — what SPACE fires — wears the accent.
+    // One staging event: a small plate. The NEXT one — what SPACE fires — is
+    // latched with the orange rim.
     "hud/stage": (
         base: (
-            fill: "glass",
-            radius: 5.0,
-            border: 1.0,
-            border_color: "edge",
+            fill: "panel",
+            gradient: ( kind: Linear, to: (0.082, 0.085, 0.076, 0.93), angle: 90.0 ),
+            grain: ( amount: 0.003, scale: 0.5 ),
+            radius: "sm",
+            border: 0.0,
+            border_color: "bezelLo",
+            frame: ( texture: "textures/ui/hardware.png", uv: (0.25, 0.0, 0.5, 0.5), slice: (0.1875, 0.1875, 0.1875, 0.1875) ),
         ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
     "hud/stageNext": (
         base: (
-            fill: (0.02, 0.09, 0.085, 0.95),
-            radius: 5.0,
-            border: 1.4,
+            fill: (0.215, 0.155, 0.100, 0.96),
+            grain: ( amount: 0.003, scale: 0.5 ),
+            radius: "sm",
+            border: 0.0,
             border_color: "accent",
-            shadow: ( color: (0.0, 0.0, 0.0, 0.5), offset: (0.0, 4.0), blur: 12.0, spread: 0.0 ),
+            frame: ( texture: "textures/ui/hardware.png", uv: (0.25, 0.0, 0.5, 0.5), slice: (0.1875, 0.1875, 0.1875, 0.1875) ),
+            shadow: ( color: (0.0, 0.0, 0.0, 0.45), offset: (0.0, 2.0), blur: 5.0, spread: 0.0 ),
         ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
     "hud/stageTitle": (
-        base: ( text_color: "ink", text_size: 12.0, case: Upper, tracking: 0.6 ),
+        base: ( text_color: "ink", text_size: 12.0, font: "label", case: Upper, tracking: 0.6 ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
     "hud/stageTitleNext": (
-        base: ( text_color: "accent", text_size: 12.0, case: Upper, tracking: 0.6 ),
+        base: ( text_color: (1.0, 0.72, 0.42, 1.0), text_size: 12.0, font: "label", case: Upper, tracking: 0.6 ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
 
-    // The warp indicator on the console's top edge.
+    // The warp indicator on the console's top edge: a small placard.
     "hud/warp": (
         base: (
-            fill: "glass",
-            radius: "pill",
+            fill: (0.040, 0.058, 0.046, 0.97),
+            radius: "sm",
             border: 1.0,
-            border_color: "edge",
+            border_color: (0.0, 0.0, 0.0, 0.8),
         ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
 
-    // What a control is and which key does the same thing, on hover.
+    // What a control is and which key does the same thing, on hover: a paper
+    // tag of printed ink on enamel.
     "hud/tooltip": (
         base: (
-            fill: (0.01, 0.015, 0.022, 0.97),
-            radius: 4.0,
+            fill: (0.200, 0.198, 0.180, 0.99),
+            radius: "sm",
             border: 1.0,
-            border_color: "edge",
-            text_color: "soft",
+            border_color: (0.0, 0.0, 0.0, 0.85),
+            text_color: "ink",
             text_size: 12.0,
-            shadow: ( color: (0.0, 0.0, 0.0, 0.5), offset: (0.0, 4.0), blur: 10.0, spread: 0.0 ),
+            shadow: ( color: (0.0, 0.0, 0.0, 0.5), offset: (0.0, 3.0), blur: 6.0, spread: 0.0 ),
         ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
 
-    // A short-lived notice ("graphics lowered to Medium").
+    // A short-lived notice ("graphics lowered to Medium"): a caution placard.
     "hud/toast": (
         base: (
-            fill: (0.04, 0.07, 0.09, 0.94),
-            radius: "md",
-            border: 1.2,
+            fill: "panelSolid",
+            gradient: ( kind: Linear, to: (0.092, 0.095, 0.085, 0.99), angle: 90.0 ),
+            grain: ( amount: 0.003, scale: 0.5 ),
+            radius: 0.0,
+            border: 0.0,
             border_color: "warn",
-            shadow: ( color: (0.0, 0.0, 0.0, 0.6), offset: (0.0, 8.0), blur: 22.0, spread: 1.0 ),
+            frame: ( texture: "textures/ui/hardware.png", uv: (0.75, 0.5, 1.0, 1.0), slice: (0.25, 0.25, 0.25, 0.25) ),
+            shadow: ( color: (0.0, 0.0, 0.0, 0.55), offset: (0.0, 4.0), blur: 10.0, spread: 1.0 ),
         ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
 
     // ── PANEL TYPE ───────────────────────────────────────────────────────────
 
-    // A panel's name: the one line on it set in capitals.
+    // A panel's name: stencilled on, the one line on it in the stencil face.
     "panel/heading": (
-        base: ( text_color: "accent", text_size: "body", case: Upper, tracking: 2.0 ),
+        base: ( text_color: "ink", text_size: 17.0, font: "stencil", case: Upper, tracking: 2.2,
+                text_shadow: ( color: (0.0, 0.0, 0.0, 0.7), offset: (0.0, 1.0) ) ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
     // Running text inside a panel.
@@ -744,57 +868,313 @@
         transition: ( duration: 0.0, ease: Linear ),
     ),
     "panel/cellStrong": (
-        base: ( text_color: "ink", text_size: "caption" ),
+        base: ( text_color: "ink", text_size: "caption", font: "label" ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
-    // A number worth reading at a glance: a balance, a reward.
+    // A number worth reading at a glance: a balance, a reward. Mono, ink.
     "panel/figure": (
-        base: ( text_color: "ink", text_size: "title", tracking: 0.5 ),
+        base: ( text_color: "ink", text_size: "title", font: "label", tracking: 0.3 ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
     // A key, named in text (the controls page's left column).
     "panel/keys": (
-        base: ( text_color: "accent", text_size: "caption", tracking: 0.6 ),
+        base: ( text_color: "accent", text_size: "caption", font: "label", tracking: 0.6 ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
-    // A thin rule between sections.
+    // A groove between sections: a dark cut over a lit lip reads as stamped
+    // into the plate. (Drawn as a 1-unit box: dark fill, a lit bottom border.)
     "panel/rule": (
-        base: ( fill: "rule" ),
+        base: ( fill: (0.0, 0.0, 0.0, 0.45), border: (0.0, 0.0, 0.0, 1.0), border_color: (1.0, 0.95, 0.85, 0.10) ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
-    // The quiet way out: Close, Back.
+    // The quiet way out: Close, Back. An enamel key.
     "panel/secondary": (
         base: (
-            fill: (0.05, 0.08, 0.11, 0.80),
+            fill: "plateHi",
+            gradient: ( kind: Linear, to: (0.150, 0.152, 0.138, 0.99), angle: 90.0 ),
+            grain: ( amount: 0.003, scale: 0.5 ),
             radius: "sm",
-            border: 1.0,
-            border_color: (0.46, 0.60, 0.70, 0.40),
+            border: 0.0,
+            border_color: "bezel",
+            frame: ( texture: "textures/ui/hardware.png", uv: (0.5, 0.0, 0.75, 0.5), slice: (0.1875, 0.1875, 0.1875, 0.1875) ),
             text_color: "soft",
             text_size: "caption",
+            font: "label",
+            tracking: 0.6,
             pad: "sm",
+            text_shadow: ( color: (0.0, 0.0, 0.0, 0.6), offset: (0.0, 1.0) ),
         ),
-        hover:    ( fill: (0.09, 0.13, 0.17, 0.92), border_color: (0.46, 0.60, 0.70, 0.75), text_color: "ink" ),
-        pressed:  ( scale: (0.98, 0.94) ),
-        focus:    ( border: 2.0, border_color: "accent" ),
-        disabled: ( opacity: 0.35 ),
-        transition: ( duration: 0.09, ease: OutCubic ),
+        hover:    ( fill: (0.235, 0.232, 0.210, 0.99), border_color: "bezelLit", text_color: "ink" ),
+        pressed:  ( fill: (0.140, 0.140, 0.128, 0.99), text_color: "ink",
+                    frame: ( texture: "textures/ui/hardware.png", uv: (0.75, 0.0, 1.0, 0.5), slice: (0.1875, 0.1875, 0.1875, 0.1875) ) ),
+        focus:    ( border_color: "accent" ),
+        disabled: ( opacity: 0.4 ),
+        transition: ( duration: 0.06, ease: OutQuad ),
     ),
-    // One option of a segmented choice (graphics quality). `selected` is the
-    // one in force.
+    // One option of a segmented choice (graphics quality, a settings tab). A
+    // row of keys; `selected` is the one latched in — pressed, legend lit.
     "panel/choice": (
         base: (
-            fill: (0.05, 0.08, 0.11, 0.80),
+            fill: "plateHi",
+            gradient: ( kind: Linear, to: (0.150, 0.152, 0.138, 0.99), angle: 90.0 ),
+            grain: ( amount: 0.003, scale: 0.5 ),
             radius: "sm",
-            border: 1.0,
-            border_color: "rule",
+            border: 0.0,
+            border_color: "bezel",
+            frame: ( texture: "textures/ui/hardware.png", uv: (0.5, 0.0, 0.75, 0.5), slice: (0.1875, 0.1875, 0.1875, 0.1875) ),
             text_color: "soft",
             text_size: "caption",
+            font: "label",
+            tracking: 0.4,
             pad: "sm",
+            text_shadow: ( color: (0.0, 0.0, 0.0, 0.6), offset: (0.0, 1.0) ),
         ),
-        hover:    ( fill: (0.09, 0.16, 0.18, 0.92), border_color: "edge", text_color: "ink" ),
-        pressed:  ( scale: (0.97, 0.94) ),
-        focus:    ( border: 2.0, border_color: "accent" ),
-        selected: ( fill: (0.06, 0.26, 0.21, 0.95), border: 1.4, border_color: "accent", text_color: "ink" ),
-        transition: ( duration: 0.1, ease: OutCubic ),
+        hover:    ( fill: (0.235, 0.232, 0.210, 0.99), border_color: "bezelLit", text_color: "ink" ),
+        pressed:  ( fill: (0.140, 0.140, 0.128, 0.99),
+                    frame: ( texture: "textures/ui/hardware.png", uv: (0.75, 0.0, 1.0, 0.5), slice: (0.1875, 0.1875, 0.1875, 0.1875) ) ),
+        focus:    ( border_color: "accent" ),
+        selected: ( fill: (0.215, 0.155, 0.100, 0.99), border_color: "accent", text_color: (1.0, 0.74, 0.46, 1.0),
+                    frame: ( texture: "textures/ui/hardware.png", uv: (0.75, 0.0, 1.0, 0.5), slice: (0.1875, 0.1875, 0.1875, 0.1875) ) ),
+        disabled: ( opacity: 0.4 ),
+        transition: ( duration: 0.06, ease: OutQuad ),
+    ),
+
+    // ── CONTROLS ─────────────────────────────────────────────────────────────
+    // A slider is a fader: a groove cut into the plate, an orange enamel
+    // strip for the value, and a light cap you drag.
+    "ctl/track": (
+        base: (
+            fill: (0.030, 0.034, 0.030, 0.97),
+            radius: 1.0,
+            border: 1.0,
+            border_color: (0.0, 0.0, 0.0, 0.85),
+            shadow: ( color: (0.0, 0.0, 0.0, 0.7), offset: (0.0, 2.0), blur: 3.0, spread: 0.0, inset: true ),
+        ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    "ctl/fill": (
+        base: (
+            fill: (0.70, 0.38, 0.14, 0.96),
+            gradient: ( kind: Linear, to: (0.52, 0.27, 0.09, 0.96), angle: 90.0 ),
+            radius: 1.0,
+        ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    // A control's number (a slider's value): ink, in the mono face.
+    "ctl/value": (
+        base: ( text_color: "ink", text_size: "caption", font: "label" ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    "ctl/handle": (
+        base: (
+            fill: (0.84, 0.81, 0.72, 1.0),
+            gradient: ( kind: Linear, to: (0.58, 0.56, 0.49, 1.0), angle: 90.0 ),
+            radius: 1.0,
+            border: 1.0,
+            border_color: (0.0, 0.0, 0.0, 0.85),
+            shadow: ( color: (0.0, 0.0, 0.0, 0.5), offset: (0.0, 2.0), blur: 3.0, spread: 0.0 ),
+        ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+
+    // ── MAIN MENU TYPE ───────────────────────────────────────────────────────
+    // The maker's mark above the title.
+    "menu/overline": (
+        base: ( text_color: "accent", text_size: 13.0, font: "label", tracking: 12.0,
+                text_shadow: ( color: (0.0, 0.0, 0.0, 0.6), offset: (0.0, 1.0) ) ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    // SOLAR, stencilled.
+    "menu/title": (
+        base: ( text_color: "ink", text_size: 84.0, font: "stencil", tracking: 16.0,
+                text_shadow: ( color: (0.0, 0.0, 0.0, 0.6), offset: (0.0, 3.0) ) ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    "menu/subtitle": (
+        base: ( text_color: "soft", text_size: 15.5, tracking: 0.6,
+                text_shadow: ( color: (0.0, 0.0, 0.0, 0.6), offset: (0.0, 1.0) ) ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    // A page's own name (NEW GALAXY), stencilled on the plate.
+    "menu/heading": (
+        base: ( text_color: "ink", text_size: 24.0, font: "stencil", tracking: 6.0,
+                text_shadow: ( color: (0.0, 0.0, 0.0, 0.7), offset: (0.0, 2.0) ) ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    // Printed capitals on the plate (SAVED GALAXIES, SAVE SLOT 2).
+    "menu/label": (
+        base: ( text_color: "muted", text_size: 11.0, font: "label", case: Upper, tracking: 2.5,
+                text_shadow: ( color: (0.0, 0.0, 0.0, 0.6), offset: (0.0, 1.0) ) ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    // Inside a slot's CRT window: the slot number, the galaxy, the action.
+    "menu/slotTag": (
+        base: ( text_color: "phosDim", text_size: 11.0, font: "mono", tracking: 2.0 ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    "menu/slotName": (
+        base: ( text_color: "phos", text_size: 18.0, font: "mono" ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    "menu/slotGo": (
+        base: ( text_color: "accent", text_size: 13.0, font: "label", tracking: 1.6 ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    // The small print along the bottom of the title page.
+    "menu/footer": (
+        base: ( text_color: "muted", text_size: 11.5, tracking: 0.3,
+                text_shadow: ( color: (0.0, 0.0, 0.0, 0.6), offset: (0.0, 1.0) ) ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    // The new-galaxy knobs: a recessed area of the plate, labels and values.
+    "menu/inset": (
+        base: (
+            fill: (0.085, 0.088, 0.079, 0.97),
+            radius: 1.0,
+            border: 1.0,
+            border_color: (0.0, 0.0, 0.0, 0.7),
+            shadow: ( color: (0.0, 0.0, 0.0, 0.55), offset: (0.0, 3.0), blur: 5.0, spread: 0.0, inset: true ),
+        ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    "menu/paramLabel": (
+        base: ( text_color: "soft", text_size: 13.5 ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    "menu/paramVal": (
+        base: ( text_color: "ink", text_size: 13.5, font: "label" ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+
+    // ── PARTS CATALOGUE (scripts/catalog_panel.lua) ──────────────────────────
+    "cat/name": (
+        base: ( text_color: "ink", text_size: 13.0, font: "label" ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    "cat/nameLocked": (
+        base: ( text_color: "muted", text_size: 13.0, font: "label" ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    "cat/price": (
+        base: ( text_color: "ink", text_size: 12.0, font: "label" ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    "cat/priceLocked": (
+        base: ( text_color: "accent", text_size: 12.0, font: "label" ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    "cat/priceArmed": (
+        base: ( text_color: "danger", text_size: 12.0, font: "label" ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    "cat/role": (
+        base: ( text_color: "muted", text_size: 10.5 ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    "cat/roleNeeds": (
+        base: ( text_color: (0.80, 0.66, 0.42, 1.0), text_size: 10.5 ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+
+    // ── BIG CAPTION (scripts/big_caption.lua) ────────────────────────────────
+    // CRASHED, OUT OF CONTACT: a warning placard across the top of the screen.
+    "hud/caption": (
+        base: (
+            fill: (0.105, 0.085, 0.078, 0.94),
+            gradient: ( kind: Linear, to: (0.070, 0.056, 0.052, 0.94), angle: 90.0 ),
+            grain: ( amount: 0.003, scale: 0.5 ),
+            radius: 0.0,
+            border: 0.0,
+            border_color: "danger",
+            frame: ( texture: "textures/ui/hardware.png", uv: (0.75, 0.5, 1.0, 1.0), slice: (0.25, 0.25, 0.25, 0.25) ),
+            shadow: ( color: (0.0, 0.0, 0.0, 0.5), offset: (0.0, 4.0), blur: 10.0, spread: 0.0 ),
+        ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    "hud/captionTitle": (
+        base: ( text_color: (1.0, 0.46, 0.36, 1.0), text_size: 40.0, font: "stencil", tracking: 8.0,
+                text_shadow: ( color: (0.0, 0.0, 0.0, 0.7), offset: (0.0, 2.0) ) ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    "hud/captionSub": (
+        base: ( text_color: "ink", text_size: 15.5,
+                text_shadow: ( color: (0.0, 0.0, 0.0, 0.6), offset: (0.0, 1.0) ) ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+
+    // ── CRT LINES (peripheral_row.lua, dock_row.lua) ─────────────────────────
+    // A switchable line on a device console's screen: phosphor text on the
+    // glass, a faint ruled box; lit (a phosphor wash) when on, caution while
+    // a leg is moving, dim when it can't be used, orange for the one action
+    // that takes you somewhere else (switch craft).
+    "crt/row": (
+        base: (
+            fill: (0.035, 0.050, 0.040, 0.90),
+            radius: 1.0,
+            border: 1.0,
+            border_color: (0.64, 0.93, 0.56, 0.16),
+            text_color: "phosDim",
+            text_size: "caption",
+            font: "mono",
+        ),
+        hover:   ( fill: (0.06, 0.09, 0.065, 0.95) ),
+        pressed: ( scale: (0.995, 0.96) ),
+        transition: ( duration: 0.05, ease: OutQuad ),
+    ),
+    "crt/rowOn": (
+        base: (
+            fill: (0.10, 0.20, 0.10, 0.94),
+            radius: 1.0,
+            border: 1.0,
+            border_color: (0.64, 0.93, 0.56, 0.55),
+            text_color: "phos",
+            text_size: "caption",
+            font: "mono",
+        ),
+        hover:   ( fill: (0.13, 0.25, 0.12, 0.96) ),
+        pressed: ( scale: (0.995, 0.96) ),
+        transition: ( duration: 0.05, ease: OutQuad ),
+    ),
+    "crt/rowBusy": (
+        base: (
+            fill: (0.22, 0.17, 0.05, 0.94),
+            radius: 1.0,
+            border: 1.0,
+            border_color: (1.0, 0.80, 0.28, 0.55),
+            text_color: "warn",
+            text_size: "caption",
+            font: "mono",
+        ),
+        hover:   ( fill: (0.26, 0.20, 0.06, 0.96) ),
+        pressed: ( scale: (0.995, 0.96) ),
+        transition: ( duration: 0.05, ease: OutQuad ),
+    ),
+    "crt/rowDim": (
+        base: (
+            fill: (0.03, 0.04, 0.035, 0.75),
+            radius: 1.0,
+            border: 1.0,
+            border_color: (0.64, 0.93, 0.56, 0.08),
+            text_color: (0.38, 0.56, 0.34, 0.55),
+            text_size: "caption",
+            font: "mono",
+        ),
+        hover:   ( fill: (0.03, 0.04, 0.035, 0.80) ),
+        pressed: ( scale: (0.995, 0.96) ),
+        transition: ( duration: 0.05, ease: OutQuad ),
+    ),
+    "crt/rowAlt": (
+        base: (
+            fill: (0.20, 0.12, 0.05, 0.94),
+            radius: 1.0,
+            border: 1.0,
+            border_color: (0.97, 0.55, 0.22, 0.55),
+            text_color: "accent",
+            text_size: "caption",
+            font: "mono",
+        ),
+        hover:   ( fill: (0.25, 0.15, 0.06, 0.96) ),
+        pressed: ( scale: (0.995, 0.96) ),
+        transition: ( duration: 0.05, ease: OutQuad ),
     ),
 }

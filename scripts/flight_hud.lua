@@ -93,11 +93,15 @@ local HOLDS = {
 
 local WARP_STEPS = { 1, 5, 10, 50, 100, 1000, 10000 }
 
--- Colours the styles can't carry, because they depend on the value.
-local ACCENT = { 0.28, 0.86, 0.74 }
-local WARN = { 1.0, 0.72, 0.32 }
-local DANGER = { 1.0, 0.42, 0.36 }
-local NEUTRAL = { 0.62, 0.74, 0.84 }
+-- Colours the styles can't carry, because they depend on the value. They are
+-- the tokens' (ui/solar.tokens.ron): a meter is a phosphor bar on the CRT, the
+-- accent is signal orange, and the state colours are caution yellow and red.
+local ACCENT = { 0.97, 0.55, 0.22 }
+local PHOS = { 0.55, 0.86, 0.48 }
+local WARN = { 1.0, 0.80, 0.28 }
+local DANGER = { 0.97, 0.34, 0.25 }
+local NEUTRAL = { 0.64, 0.93, 0.56 }
+local DIM = { 0.56, 0.55, 0.50 }
 
 -- ── plumbing ────────────────────────────────────────────────────────────────
 
@@ -302,8 +306,8 @@ local function warp_pill(t)
     local capped = WARP_STEPS[i] > (t.warp_cap or math.huge) + 0.001
     kids[#kids + 1] = { "text", key = "c" .. i, w = 8, h = 14, text = "▸", textSize = 14,
       textAlign = "center", textValign = "center",
-      textColor = i <= idx and ACCENT or (capped and { 0.46, 0.60, 0.70, 0.18 }
-        or { 0.46, 0.60, 0.70, 0.55 }) }
+      textColor = i <= idx and ACCENT or (capped and { DIM[1], DIM[2], DIM[3], 0.18 }
+        or { DIM[1], DIM[2], DIM[3], 0.55 }) }
   end
   kids[#kids + 1] = { "text", key = "x", style = w > 1.001 and "hud/valueAccent" or "hud/value",
     w = 52, h = 14, text = string.format("×%d", math.floor(w + 0.5)), textAlign = "end",
@@ -328,7 +332,7 @@ local function console(v, t, lv, shift)
   local kids = {
     -- Throttle.
     micro("thrL", "THR", 12, 12, 40),
-    vmeter("thr", P.thr, thr, ACCENT),
+    vmeter("thr", P.thr, thr, PHOS),
     value("thrV", string.format("%d%%", pct(thr)), 8, 144, 48),
     -- Speed / altitude captions (the tapes and their windows are scene nodes).
     micro("spdL", "SPEED", 160, 12, 78),
@@ -356,7 +360,7 @@ local function console(v, t, lv, shift)
   local vfrac = math.min(1, math.log10(1 + math.abs(vs)) / math.log10(301)) * (vs < 0 and -1 or 1)
   local hot = lv and vs < -8 and lv.alt < 400
   kids[#kids + 1] = micro("vsL", "V/S", 490, 12, 44)
-  kids[#kids + 1] = vmeter("vs", P.vs, vfrac, hot and WARN or (vs >= 0 and ACCENT or NEUTRAL), true)
+  kids[#kids + 1] = vmeter("vs", P.vs, vfrac, hot and WARN or (vs >= 0 and PHOS or { 0.38, 0.56, 0.34 }), true)
   kids[#kids + 1] = value("vsV", string.format("%+.0f", whole(vs)), 486, 144, 52, "center",
     hot and "warn" or nil)
 
@@ -569,11 +573,12 @@ local function leave_banner(w, tx, y)
   local danger = w.level >= 3
   local edge = danger and DANGER or WARN
   return { "col", key = "leaving", pin = "top", x = tx, y = y, w = STRIP_W, h = LEAVE_H,
-           pad = 6, gap = 2, align = "center", justify = "center", radius = 7, border = 2,
+           pad = 6, gap = 2, align = "center", justify = "center", radius = 2, border = 2,
            borderColor = edge,
            fill = danger and { 0.30, 0.05, 0.04, 0.94 } or { 0.24, 0.14, 0.03, 0.92 },
            { "text", key = "h", w = "100%", h = 22, text = w.head, textAlign = "center",
-             textSize = 19, tracking = 1.5, textColor = danger and { 1.0, 0.78, 0.74, 1 } or WARN },
+             textSize = 19, tracking = 1.5, font = "fonts/SolarStencil.ttf",
+             textColor = danger and { 1.0, 0.78, 0.74, 1 } or WARN },
            { "text", key = "s", w = "100%", h = 14, text = w.sub, textAlign = "center",
              textSize = 11.5, textColor = { 0.92, 0.88, 0.84, 1 } } }
 end
@@ -654,7 +659,7 @@ local function resources(v, t)
   if (t.fuel_cap or 0) > 0 then
     local f = (v.fuel or 0) / t.fuel_cap
     rows[#rows + 1] = { key = "fuel", label = "FUEL", frac = f,
-      color = f <= 0 and DANGER or (f < 0.15 and WARN or ACCENT),
+      color = f <= 0 and DANGER or (f < 0.15 and WARN or PHOS),
       tone = f <= 0 and "danger" or (f < 0.15 and "warn" or nil),
       -- What the fuel is WORTH: Δv on the engines lit now (Tsiolkovsky, the
       -- builder's figure) and how long it lasts at full throttle.
@@ -680,7 +685,7 @@ local function resources(v, t)
     end
     if (t.panels or 0) > 0 and not t.sunlit then notes[#notes + 1] = "panels in shadow" end
     rows[#rows + 1] = { key = "ec", label = "CHARGE", frac = f,
-      color = f <= 0 and DANGER or (f < 0.15 and WARN or ACCENT),
+      color = f <= 0 and DANGER or (f < 0.15 and WARN or PHOS),
       tone = f <= 0 and "danger" or (f < 0.15 and "warn" or nil),
       tip = string.format("%.0f / %.0f EC · %s", t.ec or 0, t.ec_cap or 0, flow)
         .. (#notes > 0 and (" · " .. table.concat(notes, " · ")) or "") }
@@ -688,7 +693,7 @@ local function resources(v, t)
   if t.comms or t.probe then
     local sgl = t.link and (t.signal or 0) or 0
     rows[#rows + 1] = { key = "sig", label = "SIGNAL", frac = sgl,
-      color = sgl <= 0 and DANGER or (sgl < 0.25 and WARN or ACCENT),
+      color = sgl <= 0 and DANGER or (sgl < 0.25 and WARN or PHOS),
       tone = sgl <= 0 and "danger" or (sgl < 0.25 and "warn" or nil),
       value = t.link and (string.rep("▮", bars_of(sgl)) .. string.rep("▯", 4 - bars_of(sgl))) or "none",
       tip = t.link and string.format("%d%% · %s · via %s", pct(sgl),
@@ -741,14 +746,16 @@ local function stage_stack(t, lift)
   if t.anchored then
     cards[#cards + 1] = { key = "clamps", num = 0, title = "Launch",
       -- The builder's two figures, as the pad measures them (wet mass, local g).
-      sub = t.ready and string.format("TWR %.2f · Δv %.0f m/s", t.twr_max or 0, t.dv or 0)
+      -- Short enough for the card beside its SPACE key at 168 units wide.
+      sub = t.ready and string.format("TWR %.2f  Δv %.0f", t.twr_max or 0, t.dv or 0)
         or string.format("assembling %d / %d", t.parts or 0, t.parts_total or 0),
       next = true, blocked = not t.ready }
   end
   if #cards == 0 then return nil end
   return { "col", key = "stages", pin = "bottomRight", x = -M, y = -lift, w = STAGE_W, h = "fit",
            pad = 0, gap = 6, align = "stretch",
-           { "text", key = "hd", style = "hud/micro", w = "100%", h = 12, text = "STAGES",
+           -- Over the world, not on a display: printed ink with a shadow.
+           { "text", key = "hd", style = "hud/label", w = "100%", h = 12, text = "STAGES",
              textAlign = "end" },
            { "col", key = "list", w = "100%", h = "fit", pad = 0, gap = 6, items = cards,
              function(c)
@@ -758,9 +765,9 @@ local function stage_stack(t, lift)
                    textValign = "center" },
                  { "col", key = "t", w = "grow", h = "fit", pad = 0, gap = 1,
                    { "text", key = "a", style = c.next and "hud/stageTitleNext" or "hud/stageTitle",
-                     w = "100%", h = 14, text = c.title },
+                     w = "100%", h = 14, text = c.title, maxLines = 1, overflow = "ellipsis" },
                    { "text", key = "b", style = "hud/valueMuted", w = "100%", h = 12,
-                     text = c.sub } },
+                     text = c.sub, maxLines = 1, overflow = "ellipsis" } },
                }
                if c.next then
                  kids[#kids + 1] = { "box", key = "k", style = c.blocked and "hud/key" or "hud/keyActive",

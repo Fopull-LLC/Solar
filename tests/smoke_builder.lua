@@ -524,6 +524,8 @@ do
   local cel = { visible = true }
   cenv.update({ getcomponent = function() return cel end }, TICK)
   local cards, roleless = 0, {}
+  -- The panel describes its catalogue and a hidden font primer side by side.
+  if drawn and type(drawn[1]) == "table" then drawn = drawn[1] end
   for _, row in ipairs((drawn and drawn.items) or {}) do
     if row[1] == "button" then
       cards = cards + 1

@@ -41,17 +41,20 @@ local function crewedCraft()
   return out
 end
 
-function start(node)
-  el = node:getcomponent("UiElement")
+-- A row's state is a style ("crt/*", ui/solar.uistyle.ron): a line on the
+-- device console's CRT — lit phosphor when on, dim when it can't be used.
+local me
+local function paint(style)
+  if me and me.style ~= style then me.style = style end
 end
 
-local function paint(fill, text)
-  if not el then return end
-  el.fillR, el.fillG, el.fillB, el.fillA = fill[1], fill[2], fill[3], fill[4]
-  el.textR, el.textG, el.textB = text[1], text[2], text[3]
+function start(node)
+  el = node:getcomponent("UiElement")
+  me = node
 end
 
 function update(node, dt)
+  me = me or node
   if not el then el = node:getcomponent("UiElement") end
   if not el then return end
   local v = vessel()
@@ -68,9 +71,9 @@ function update(node, dt)
     local text = "  MAGNETIC CAPTURE ASSIST      " .. (on and "ON" or "OFF")
     if node.text ~= text then node.text = text end
     if on then
-      paint({ 0.10, 0.26, 0.34, 0.92 }, { 0.62, 0.94, 1.0 })
+      paint("crt/rowOn")
     else
-      paint({ 0.10, 0.14, 0.18, 0.9 }, { 0.66, 0.78, 0.88 })
+      paint("crt/row")
     end
     return
   end
@@ -84,9 +87,9 @@ function update(node, dt)
     if on and not has then text = "  DOCKING AUTOPILOT (RCS)     ON · no target" end
     if node.text ~= text then node.text = text end
     if on then
-      paint({ 0.10, 0.30, 0.19, 0.92 }, { 0.62, 1.0, 0.78 })
+      paint("crt/rowOn")
     else
-      paint({ 0.10, 0.14, 0.18, 0.9 }, { 0.66, 0.78, 0.88 })
+      paint("crt/row")
     end
     return
   end
@@ -100,10 +103,10 @@ function update(node, dt)
     if locked then
       text = string.format("  ◎ TARGET LOCKED  %s      release",
         (t and t.name) or "craft")
-      paint({ 0.10, 0.22, 0.34, 0.92 }, { 0.66, 0.9, 1.0 })
+      paint("crt/rowOn")
     else
       text = string.format("  ○ lock target      %s", (t and t.name) or "")
-      paint({ 0.10, 0.14, 0.18, 0.9 }, { 0.66, 0.78, 0.88 })
+      paint("crt/row")
     end
     if node.text ~= text then node.text = text end
     return
@@ -117,10 +120,10 @@ function update(node, dt)
     local text
     if ok then
       text = string.format("  ⌂ RECOVER CRAFT      +$%d", value)
-      paint({ 0.10, 0.30, 0.19, 0.92 }, { 0.62, 1.0, 0.78 })
+      paint("crt/rowOn")
     else
       text = string.format("  ⌂ recover      %s", why or "unavailable")
-      paint({ 0.09, 0.1, 0.12, 0.75 }, { 0.45, 0.5, 0.56 })
+      paint("crt/rowDim")
     end
     if node.text ~= text then node.text = text end
     return
@@ -132,7 +135,7 @@ function update(node, dt)
     target = nil
     local text = string.format("  ⇄  SWITCH CRAFT      %d in flight", #craft)
     if node.text ~= text then node.text = text end
-    paint({ 0.16, 0.13, 0.30, 0.92 }, { 0.84, 0.8, 1.0 })
+    paint("crt/rowAlt")
     return
   end
 
@@ -144,16 +147,16 @@ function update(node, dt)
   local text
   if p.mate then
     text = string.format("  PORT %d      ● DOCKED        UNDOCK", math.floor(params.slot))
-    paint({ 0.10, 0.30, 0.19, 0.92 }, { 0.62, 1.0, 0.78 })
+    paint("crt/rowOn")
   elseif p.buried then
     -- A port with hardware on BOTH faces and no partner is a spacer, not a
     -- seam. Say why, or it reads as a broken button.
     text = string.format("  PORT %d      ▪ blocked — needs a second port",
       math.floor(params.slot))
-    paint({ 0.09, 0.1, 0.12, 0.75 }, { 0.45, 0.5, 0.56 })
+    paint("crt/rowDim")
   else
     text = string.format("  PORT %d      ○ open — ready to mate", math.floor(params.slot))
-    paint({ 0.10, 0.14, 0.18, 0.9 }, { 0.68, 0.8, 0.9 })
+    paint("crt/row")
   end
   if node.text ~= text then node.text = text end
 end
@@ -191,10 +194,4 @@ function clicked(node)
   end
 end
 
-function hoverStart(node)
-  if el then el.opacity = 0.85; el.border = 1.6 end
-end
-
-function hoverEnd(node)
-  if el then el.opacity = 1.0; el.border = 1.0 end
-end
+-- Hover is the style's own `hover` block.

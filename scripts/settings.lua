@@ -304,7 +304,6 @@ end
 
 local LABEL_W = 150
 local VALUE_W = 58
-local ACCENT = { 0.28, 0.86, 0.74 }
 
 local function label(text)
   return { "text", key = "l", style = "panel/body", w = LABEL_W, h = "fit", text = text }
@@ -339,22 +338,22 @@ local function on_off(key, text, cur, pick)
     cur == true, pick)
 end
 
--- A draggable slider and its value. `show` formats the number.
+-- A draggable slider and its value. `show` formats the number. A fader: a
+-- groove, an orange strip for the value and a light cap to drag ("ctl/*"
+-- styles); the number is set in the mono face so it holds still as it moves.
 local function slider(key, text, lo, hi, cur, show, pick)
   return line(key, {
     label(text),
-    { "slider", key = "s", w = "grow", h = 22, min = lo, max = hi, value = cur, interact = true,
-      fill = { 0.05, 0.08, 0.11, 0.85 }, radius = 4, border = 1, borderColor = { 0.46, 0.60, 0.70, 0.35 },
+    { "slider", key = "s", style = "ctl/track", w = "grow", h = 14, min = lo, max = hi, value = cur,
+      interact = true,
       onChanged = function(n)
         local sl = n and n:getcomponent("UiSlider")
         if sl and sl.value then pick(sl.value) end
       end,
-      { "box", key = "f", part = "fill", w = "100%", h = "100%", radius = 4,
-        fill = { ACCENT[1] * 0.55, ACCENT[2] * 0.55, ACCENT[3] * 0.55, 0.85 } },
-      { "box", key = "h", part = "handle", w = 10, h = "100%", radius = 3,
-        fill = { 0.85, 0.97, 0.94 } },
+      { "box", key = "f", style = "ctl/fill", part = "fill", w = "100%", h = "100%" },
+      { "box", key = "h", style = "ctl/handle", part = "handle", w = 12, h = 22 },
     },
-    { "text", key = "v", style = "panel/cell", w = VALUE_W, h = "fit", textAlign = "end",
+    { "text", key = "v", style = "ctl/value", w = VALUE_W, h = "fit", textAlign = "end",
       text = show(cur) },
   })
 end

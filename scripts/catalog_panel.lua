@@ -122,17 +122,16 @@ local function describe()
           -- Locked cards read as unavailable-but-live: dimmer and cooler,
           -- never invisible — you're supposed to want them.
           opacity = locked and 0.7 or 1.0,
+          -- Colours are styles ("cat/*", ui/solar.uistyle.ron): the name
+          -- printed in ink, the price in the mono face — orange for an
+          -- unlock, red for one waiting on a second click.
           { "row", key = "top", w = "100%", h = 16, gap = 6, pad = 0, align = "center",
-            { "text", key = "n", w = "grow", h = 16, text = def.label,
-              textSize = 13, textAlign = "start",
-              textColor = locked and "#9fb3c2" or "#d1e8fa" },
-            { "text", key = "p", w = "fit", h = 16,
-              text = price_text,
-              textSize = 12, textAlign = "end",
-              textColor = armed and "#ff6b5b" or (locked and "#ffb852" or "#47dbbd") } },
-          { "text", key = "r", w = "100%", h = 14, text = role_text,
-            textSize = 10.5, textAlign = "start",
-            textColor = needs and "#c9a46a" or "#7f97aa" },
+            { "text", key = "n", style = locked and "cat/nameLocked" or "cat/name",
+              w = "grow", h = 16, text = def.label, textAlign = "start", maxLines = 1, overflow = "ellipsis" },
+            { "text", key = "p", style = armed and "cat/priceArmed" or (locked and "cat/priceLocked" or "cat/price"),
+              w = "fit", h = 16, text = price_text, textAlign = "end" } },
+          { "text", key = "r", style = needs and "cat/roleNeeds" or "cat/role",
+            w = "100%", h = 14, text = role_text, textAlign = "start", maxLines = 1, overflow = "ellipsis" },
           onClicked = function() if b.pick then b.pick(id) end end,
           -- What a locked part needs, on the builder's own hint bar — the one
           -- place every other explanation in this scene appears. Focus says it
@@ -160,8 +159,18 @@ local function describe()
            items = rows, function(row) return row end }
 end
 
+-- The faces the builder's styles name. A font only a style asks for is never
+-- loaded (the engine registers fonts that scene elements name themselves), so
+-- one hidden element per face names it — see status_hud.lua's FONT_PRIMER.
+local FONTS = { "fonts/SolarLabel.ttf", "fonts/SolarMono.ttf", "fonts/SolarStencil.ttf" }
+local function primer()
+  return { "box", key = "fontprimer", visible = false, w = 1, h = 1, pad = 0, gap = 0,
+           items = FONTS, function(f, i) return { "text", key = "f" .. i, font = f, text = "0" } end }
+end
+
 function start(node)
   el = node:getcomponent("UiElement")
+  ui.make(node, { primer() })
 end
 
 function update(node, dt)
@@ -172,5 +181,5 @@ function update(node, dt)
   -- rebuilds, so the cost is one table walk and the card you're hovering stays
   -- the card you're hovering.
   local tree = describe()
-  if tree then ui.make(node, tree) end
+  if tree then ui.make(node, { tree, primer() }) end
 end

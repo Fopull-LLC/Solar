@@ -308,15 +308,15 @@ end
 local function wslider(B, uid, key, label, cur, lo, hi, show)
   return { "row", key = "s" .. key, w = "100%", h = 24, gap = 6, pad = 0, align = "center",
     { "text", key = "l", style = "panel/cell", w = 70, h = "fit", text = label },
-    { "slider", key = "s", w = "grow", h = 18, min = lo, max = hi, value = cur, interact = true,
-      fill = { 0.05, 0.08, 0.11, 0.85 }, radius = 4, border = 1, borderColor = { 0.46, 0.60, 0.70, 0.35 },
+    -- A fader ("ctl/*" styles): groove, orange strip, light cap.
+    { "slider", key = "s", style = "ctl/track", w = "grow", h = 12, min = lo, max = hi, value = cur, interact = true,
       onChanged = function(n)
         local sl = n and n:getcomponent("UiSlider")
         if sl and sl.value then B.wheelSet(uid, key, sl.value, true) end
       end,
-      { "box", key = "f", part = "fill", w = "100%", h = "100%", radius = 4, fill = { 0.2, 0.5, 0.45, 0.85 } },
-      { "box", key = "h", part = "handle", w = 10, h = "100%", radius = 3, fill = { 0.85, 0.97, 0.94 } } },
-    { "text", key = "v", style = "panel/cellStrong", w = 52, h = "fit", textAlign = "end", text = show(cur) } }
+      { "box", key = "f", style = "ctl/fill", part = "fill", w = "100%", h = "100%" },
+      { "box", key = "h", style = "ctl/handle", part = "handle", w = 10, h = 18 } },
+    { "text", key = "v", style = "ctl/value", w = 52, h = "fit", textAlign = "end", text = show(cur) } }
 end
 
 local function pct(v) return string.format("%d%%", math.floor(v * 100 + 0.5)) end

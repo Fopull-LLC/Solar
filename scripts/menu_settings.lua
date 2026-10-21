@@ -60,9 +60,19 @@ local function describe()
            pad = 18, align = "start", items = rows, function(r) return r end }
 end
 
+-- The faces the menu's styles name. A font only a style asks for is never
+-- loaded (the engine registers fonts that scene elements name themselves), so
+-- one hidden element per face names it — see status_hud.lua's FONT_PRIMER.
+local FONTS = { "fonts/SolarLabel.ttf", "fonts/SolarMono.ttf", "fonts/SolarStencil.ttf" }
+local function primer()
+  return { "box", key = "fontprimer", visible = false, w = 1, h = 1, pad = 0, gap = 0,
+           items = FONTS, function(f, i) return { "text", key = "f" .. i, font = f, text = "0" } end }
+end
+
 function start(node)
   el = node:getcomponent("UiElement")
   show(false)
+  ui.make(node, { primer() })
 end
 
 function update(node, dt)
@@ -74,5 +84,5 @@ function update(node, dt)
     return
   end
   if el and el.width ~= W then el.width = W end
-  ui.make(node, describe())
+  ui.make(node, { describe(), primer() })
 end

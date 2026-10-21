@@ -93,6 +93,7 @@
                     fit: false,
                     tracking: 12.0,
                 )),
+                style: "menu/overline",
             )),
         ),
         (
@@ -118,6 +119,7 @@
                     tracking: 30.0,
                     shadow: Some((color: (0.0, 0.0, 0.0, 0.55), offset: (0.0, 3.0))),
                 )),
+                style: "menu/title",
             )),
         ),
         (
@@ -142,6 +144,7 @@
                     fit: false,
                     tracking: 0.4,
                 )),
+                style: "menu/subtitle",
             )),
         ),
         (
@@ -194,6 +197,7 @@
                     fit: false,
                     tracking: 2.5,
                 )),
+                style: "menu/label",
             )),
         ),
         (
@@ -249,6 +253,7 @@
                     fit: false,
                     tracking: 2.0,
                 )),
+                style: "menu/slotTag",
             )),
         ),
         (
@@ -272,6 +277,7 @@
                     valign: Center,
                     fit: false,
                 )),
+                style: "menu/slotName",
             )),
         ),
         (
@@ -296,6 +302,7 @@
                     fit: false,
                     tracking: 1.5,
                 )),
+                style: "menu/slotGo",
             )),
         ),
         (
@@ -351,6 +358,7 @@
                     fit: false,
                     tracking: 2.0,
                 )),
+                style: "menu/slotTag",
             )),
         ),
         (
@@ -374,6 +382,7 @@
                     valign: Center,
                     fit: false,
                 )),
+                style: "menu/slotName",
             )),
         ),
         (
@@ -398,6 +407,7 @@
                     fit: false,
                     tracking: 1.5,
                 )),
+                style: "menu/slotGo",
             )),
         ),
         (
@@ -453,6 +463,7 @@
                     fit: false,
                     tracking: 2.0,
                 )),
+                style: "menu/slotTag",
             )),
         ),
         (
@@ -476,6 +487,7 @@
                     valign: Center,
                     fit: false,
                 )),
+                style: "menu/slotName",
             )),
         ),
         (
@@ -500,6 +512,7 @@
                     fit: false,
                     tracking: 1.5,
                 )),
+                style: "menu/slotGo",
             )),
         ),
         (
@@ -683,6 +696,7 @@
                     fit: false,
                     tracking: 0.3,
                 )),
+                style: "menu/footer",
             )),
         ),
         (
@@ -743,6 +757,7 @@
                     fit: false,
                     tracking: 8.0,
                 )),
+                style: "menu/heading",
             )),
         ),
         (
@@ -767,6 +782,7 @@
                     fit: false,
                     tracking: 2.5,
                 )),
+                style: "menu/label",
             )),
         ),
         (
@@ -832,6 +848,7 @@
                     valign: Center,
                     fit: false,
                 )),
+                style: "menu/footer",
             )),
         ),
         (
@@ -854,6 +871,7 @@
                     border_color: (0.28, 0.86, 0.74, 0.16),
                 )),
                 scroll: Some((offset: 0.0, speed: 40.0)),
+                style: "menu/inset",
             )),
         ),
         (
@@ -877,6 +895,7 @@
                     valign: Center,
                     fit: false,
                 )),
+                style: "menu/paramLabel",
             )),
         ),
         (
@@ -899,6 +918,7 @@
                     border_color: (0.28, 0.86, 0.74, 0.25),
                 )),
                 slider: Some((min: 2.0, max: 8.0, value: 3.0, dir: Row, flip: false, interact: true)),
+                style: "ctl/track",
             )),
         ),
         (
@@ -921,6 +941,7 @@
                     border_color: (0.0, 0.0, 0.0, 0.0),
                 )),
                 part: Some(Fill),
+                style: "ctl/fill",
             )),
         ),
         (
@@ -943,6 +964,7 @@
                     border_color: (0.28, 0.86, 0.74, 0.9),
                 )),
                 part: Some(Handle),
+                style: "ctl/handle",
             )),
         ),
         (
@@ -966,6 +988,7 @@
                     valign: Center,
                     fit: false,
                 )),
+                style: "menu/paramVal",
             )),
         ),
         (
@@ -989,6 +1012,7 @@
                     valign: Center,
                     fit: false,
                 )),
+                style: "menu/paramLabel",
             )),
         ),
         (
@@ -1011,6 +1035,7 @@
                     border_color: (0.28, 0.86, 0.74, 0.25),
                 )),
                 slider: Some((min: 0.0, max: 1.0, value: 0.6, dir: Row, flip: false, interact: true)),
+                style: "ctl/track",
             )),
         ),
         (
@@ -1033,6 +1058,7 @@
                     border_color: (0.0, 0.0, 0.0, 0.0),
                 )),
                 part: Some(Fill),
+                style: "ctl/fill",
             )),
         ),
         (
@@ -1055,6 +1081,7 @@
                     border_color: (0.28, 0.86, 0.74, 0.9),
                 )),
                 part: Some(Handle),
+                style: "ctl/handle",
             )),
         ),
         (
@@ -1078,6 +1105,7 @@
                     valign: Center,
                     fit: false,
                 )),
+                style: "menu/paramVal",
             )),
         ),
         (
@@ -1101,6 +1129,7 @@
                     valign: Center,
                     fit: false,
                 )),
+                style: "menu/paramLabel",
             )),
         ),
         (
@@ -1123,6 +1152,7 @@
                     border_color: (0.28, 0.86, 0.74, 0.25),
                 )),
                 slider: Some((min: 0.0, max: 1.0, value: 0.8, dir: Row, flip: false, interact: true)),
+                style: "ctl/track",
             )),
         ),
         (
@@ -1145,6 +1175,7 @@
                     border_color: (0.0, 0.0, 0.0, 0.0),
                 )),
                 part: Some(Fill),
+                style: "ctl/fill",
             )),
         ),
         (
@@ -1167,6 +1198,7 @@
                     border_color: (0.28, 0.86, 0.74, 0.9),
                 )),
                 part: Some(Handle),
+                style: "ctl/handle",
             )),
         ),
         (
@@ -1190,6 +1222,7 @@
                     valign: Center,
                     fit: false,
                 )),
+                style: "menu/paramVal",
             )),
         ),
         (
@@ -1213,6 +1246,7 @@
                     valign: Center,
                     fit: false,
                 )),
+                style: "menu/paramLabel",
             )),
         ),
         (
@@ -1235,6 +1269,7 @@
                     border_color: (0.28, 0.86, 0.74, 0.25),
                 )),
                 slider: Some((min: 0.25, max: 2.0, value: 1.0, dir: Row, flip: false, interact: true)),
+                style: "ctl/track",
             )),
         ),
         (
@@ -1257,6 +1292,7 @@
                     border_color: (0.0, 0.0, 0.0, 0.0),
                 )),
                 part: Some(Fill),
+                style: "ctl/fill",
             )),
         ),
         (
@@ -1279,6 +1315,7 @@
                     border_color: (0.28, 0.86, 0.74, 0.9),
                 )),
                 part: Some(Handle),
+                style: "ctl/handle",
             )),
         ),
         (
@@ -1302,6 +1339,7 @@
                     valign: Center,
                     fit: false,
                 )),
+                style: "menu/paramVal",
             )),
         ),
         (
@@ -1325,6 +1363,7 @@
                     valign: Center,
                     fit: false,
                 )),
+                style: "menu/paramLabel",
             )),
         ),
         (
@@ -1347,6 +1386,7 @@
                     border_color: (0.28, 0.86, 0.74, 0.25),
                 )),
                 slider: Some((min: 30000.0, max: 150000.0, value: 60000.0, dir: Row, flip: false, interact: true)),
+                style: "ctl/track",
             )),
         ),
         (
@@ -1369,6 +1409,7 @@
                     border_color: (0.0, 0.0, 0.0, 0.0),
                 )),
                 part: Some(Fill),
+                style: "ctl/fill",
             )),
         ),
         (
@@ -1391,6 +1432,7 @@
                     border_color: (0.28, 0.86, 0.74, 0.9),
                 )),
                 part: Some(Handle),
+                style: "ctl/handle",
             )),
         ),
         (
@@ -1414,6 +1456,7 @@
                     valign: Center,
                     fit: false,
                 )),
+                style: "menu/paramVal",
             )),
         ),
         (
@@ -1437,6 +1480,7 @@
                     valign: Center,
                     fit: false,
                 )),
+                style: "menu/paramLabel",
             )),
         ),
         (
@@ -1459,6 +1503,7 @@
                     border_color: (0.28, 0.86, 0.74, 0.25),
                 )),
                 slider: Some((min: 1.6, max: 3.2, value: 2.2, dir: Row, flip: false, interact: true)),
+                style: "ctl/track",
             )),
         ),
         (
@@ -1481,6 +1526,7 @@
                     border_color: (0.0, 0.0, 0.0, 0.0),
                 )),
                 part: Some(Fill),
+                style: "ctl/fill",
             )),
         ),
         (
@@ -1503,6 +1549,7 @@
                     border_color: (0.28, 0.86, 0.74, 0.9),
                 )),
                 part: Some(Handle),
+                style: "ctl/handle",
             )),
         ),
         (
@@ -1526,6 +1573,7 @@
                     valign: Center,
                     fit: false,
                 )),
+                style: "menu/paramVal",
             )),
         ),
         (
@@ -1549,6 +1597,7 @@
                     valign: Center,
                     fit: false,
                 )),
+                style: "menu/paramLabel",
             )),
         ),
         (
@@ -1571,6 +1620,7 @@
                     border_color: (0.28, 0.86, 0.74, 0.25),
                 )),
                 slider: Some((min: 400.0, max: 900.0, value: 600.0, dir: Row, flip: false, interact: true)),
+                style: "ctl/track",
             )),
         ),
         (
@@ -1593,6 +1643,7 @@
                     border_color: (0.0, 0.0, 0.0, 0.0),
                 )),
                 part: Some(Fill),
+                style: "ctl/fill",
             )),
         ),
         (
@@ -1615,6 +1666,7 @@
                     border_color: (0.28, 0.86, 0.74, 0.9),
                 )),
                 part: Some(Handle),
+                style: "ctl/handle",
             )),
         ),
         (
@@ -1638,6 +1690,7 @@
                     valign: Center,
                     fit: false,
                 )),
+                style: "menu/paramVal",
             )),
         ),
         (
@@ -1661,6 +1714,7 @@
                     valign: Center,
                     fit: false,
                 )),
+                style: "menu/paramLabel",
             )),
         ),
         (
@@ -1683,6 +1737,7 @@
                     border_color: (0.28, 0.86, 0.74, 0.25),
                 )),
                 slider: Some((min: 600.0, max: 1100.0, value: 950.0, dir: Row, flip: false, interact: true)),
+                style: "ctl/track",
             )),
         ),
         (
@@ -1705,6 +1760,7 @@
                     border_color: (0.0, 0.0, 0.0, 0.0),
                 )),
                 part: Some(Fill),
+                style: "ctl/fill",
             )),
         ),
         (
@@ -1727,6 +1783,7 @@
                     border_color: (0.28, 0.86, 0.74, 0.9),
                 )),
                 part: Some(Handle),
+                style: "ctl/handle",
             )),
         ),
         (
@@ -1750,6 +1807,7 @@
                     valign: Center,
                     fit: false,
                 )),
+                style: "menu/paramVal",
             )),
         ),
         (
@@ -1773,6 +1831,7 @@
                     valign: Center,
                     fit: false,
                 )),
+                style: "menu/paramLabel",
             )),
         ),
         (
@@ -1795,6 +1854,7 @@
                     border_color: (0.28, 0.86, 0.74, 0.25),
                 )),
                 slider: Some((min: 1.5, max: 6.0, value: 3.5, dir: Row, flip: false, interact: true)),
+                style: "ctl/track",
             )),
         ),
         (
@@ -1817,6 +1877,7 @@
                     border_color: (0.0, 0.0, 0.0, 0.0),
                 )),
                 part: Some(Fill),
+                style: "ctl/fill",
             )),
         ),
         (
@@ -1839,6 +1900,7 @@
                     border_color: (0.28, 0.86, 0.74, 0.9),
                 )),
                 part: Some(Handle),
+                style: "ctl/handle",
             )),
         ),
         (
@@ -1862,6 +1924,7 @@
                     valign: Center,
                     fit: false,
                 )),
+                style: "menu/paramVal",
             )),
         ),
         (
@@ -1885,6 +1948,7 @@
                     valign: Center,
                     fit: false,
                 )),
+                style: "menu/paramLabel",
             )),
         ),
         (
@@ -1907,6 +1971,7 @@
                     border_color: (0.28, 0.86, 0.74, 0.25),
                 )),
                 slider: Some((min: 5.0, max: 12.0, value: 8.5, dir: Row, flip: false, interact: true)),
+                style: "ctl/track",
             )),
         ),
         (
@@ -1929,6 +1994,7 @@
                     border_color: (0.0, 0.0, 0.0, 0.0),
                 )),
                 part: Some(Fill),
+                style: "ctl/fill",
             )),
         ),
         (
@@ -1951,6 +2017,7 @@
                     border_color: (0.28, 0.86, 0.74, 0.9),
                 )),
                 part: Some(Handle),
+                style: "ctl/handle",
             )),
         ),
         (
@@ -1974,6 +2041,7 @@
                     valign: Center,
                     fit: false,
                 )),
+                style: "menu/paramVal",
             )),
         ),
         (
@@ -1997,6 +2065,7 @@
                     valign: Center,
                     fit: false,
                 )),
+                style: "menu/paramLabel",
             )),
         ),
         (
@@ -2019,6 +2088,7 @@
                     border_color: (0.28, 0.86, 0.74, 0.25),
                 )),
                 slider: Some((min: 0.5, max: 2.0, value: 1.0, dir: Row, flip: false, interact: true)),
+                style: "ctl/track",
             )),
         ),
         (
@@ -2041,6 +2111,7 @@
                     border_color: (0.0, 0.0, 0.0, 0.0),
                 )),
                 part: Some(Fill),
+                style: "ctl/fill",
             )),
         ),
         (
@@ -2063,6 +2134,7 @@
                     border_color: (0.28, 0.86, 0.74, 0.9),
                 )),
                 part: Some(Handle),
+                style: "ctl/handle",
             )),
         ),
         (
@@ -2086,6 +2158,7 @@
                     valign: Center,
                     fit: false,
                 )),
+                style: "menu/paramVal",
             )),
         ),
         (

@@ -49,13 +49,14 @@ function update(node, dt)
   local still = access and access.reducedMotion and access.reducedMotion()
   local lift = still and 0 or math.floor((1 - math.min(1, age / FADE_IN)) * 10)
   ui.make(node, {
-    { "col", key = "big", pin = "top", y = 150 + lift, w = 680, h = "fit", pad = 18, gap = 6,
-      align = "center", fill = { 0.03, 0.02, 0.025, 0.78 }, radius = 10, border = 1,
-      borderColor = { 1.0, 0.42, 0.36, 0.55 }, opacity = a,
-      { "text", key = "t", w = "100%", h = "fit", textAlign = "center", textSize = 40,
-        tracking = 8, textColor = { 1.0, 0.50, 0.42 }, text = title },
-      sub and { "text", key = "s", w = "100%", h = "fit", textAlign = "center", textSize = 15,
-        wrap = true, textColor = { 0.86, 0.90, 0.93 }, text = sub } or nil,
+    -- A warning placard: riveted enamel with a red rim, the word stencilled
+    -- ("hud/caption*" styles).
+    { "col", key = "big", style = "hud/caption", pin = "top", y = 150 + lift, w = 680, h = "fit",
+      pad = 18, gap = 6, align = "center", opacity = a,
+      { "text", key = "t", style = "hud/captionTitle", w = "100%", h = "fit", textAlign = "center",
+        text = title },
+      sub and { "text", key = "s", style = "hud/captionSub", w = "100%", h = "fit", textAlign = "center",
+        wrap = true, text = sub } or nil,
     },
   })
   drawn = true

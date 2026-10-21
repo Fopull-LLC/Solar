@@ -1,65 +1,91 @@
-// SOLAR'S DESIGN TOKENS — the project's colour, spacing, radius and type
-// scales. Anywhere a style takes a colour or a number, the token NAME can be
-// written instead (`fill: "panel"`), so changing the game's accent is one edit
-// here rather than forty in the scene.
+// SOLAR'S DESIGN TOKENS — "flight hardware" (docs/ui-style.md).
 //
-// The palette: deep space navy behind glass, neutral hairlines, ONE cold
-// teal accent for whatever is on, selected or next, and warm colours reserved
-// for state — never for decoration. Amber and red MEAN something here, which
-// is why money is not amber.
+// The UI is built like the equipment in the game: enamel-painted console
+// plates with screwed bezels, raised keycaps that press in, and recessed CRT
+// windows where the numbers live. Anywhere a style takes a colour or a number,
+// the token NAME can be written instead (`fill: "plate"`), so a change here
+// repaints every screen.
+//
+// The palette is the hardware's, not a screen's:
+//   * warm grey-olive ENAMEL for every surface, never pure black or navy, so a
+//     panel sits inside the game's lighting instead of punching a hole in it;
+//   * off-white PRINTED INK for words (labels are printed on the panel);
+//   * green PHOSPHOR for live numbers, and only inside a CRT well;
+//   * ONE signal-orange ACCENT for whatever is on, selected or next — the
+//     colour of a lit pushbutton and of NASA's own "international orange";
+//   * caution yellow and warning red for state, and state only.
 //
 // Scale discipline: five spacing steps, four type steps (plus two for numbers
-// in the mono face), four radii. Deviating
-// from a scale on purpose is what makes a screen look designed; having no scale
-// is what makes one look generated. Resist adding more steps.
+// in the mono face), small radii (cut metal is square; a 3 px chamfer is
+// drawn by the frame art). Deviating from a scale on purpose is what makes a
+// screen look designed; having no scale is what makes one look generated.
 (
     colors: {
-        // Surfaces
-        "space":  (0.010, 0.025, 0.040, 0.94),
-        "panel":  (0.035, 0.065, 0.095, 0.88),
+        // Surfaces — enamel plate
+        "space":  (0.052, 0.055, 0.050, 0.96),
+        // The card you read at a glance while walking (objectives, chips).
+        "panel":  (0.112, 0.116, 0.104, 0.93),
         // A panel you stop to read (the Ops Board, the depot, the pause menu).
-        // Practically opaque: at 0.88 a white interior wall behind the board
-        // came through as a grey wash under every line of text.
-        "panelSolid": (0.026, 0.048, 0.070, 0.985),
+        // Practically opaque: a white wall behind it must not wash the text.
+        "panelSolid": (0.120, 0.124, 0.112, 0.99),
+        // The same enamel catching more light: the top of a plate's gradient,
+        // a raised key.
+        "plateHi": (0.190, 0.192, 0.176, 0.99),
+        "plateLo": (0.084, 0.087, 0.078, 0.99),
         // The dim laid over the world behind such a panel.
-        "scrim":  (0.0, 0.01, 0.02, 0.55),
-        "sunken": (0.005, 0.020, 0.030, 0.55),
-        // The flight instruments' plate. Nearly opaque on purpose: at 0.72 the
-        // orange sky of a desert world came through every panel and turned
-        // them brown.
-        "glass":  (0.016, 0.024, 0.036, 0.92),
-        // Hairlines: a panel's edge, and the quieter edge of a row inside it.
-        // Neutral, not teal — a teal outline on every box spent the accent on
-        // decoration and left nothing to mark what is actually active.
-        "edge":   (0.62, 0.74, 0.84, 0.22),
-        "rule":   (0.62, 0.74, 0.84, 0.12),
+        "scrim":  (0.010, 0.010, 0.008, 0.58),
+        // A recessed window (fields, CRT readouts): near-black green glass.
+        "sunken": (0.028, 0.040, 0.032, 0.97),
+        // The flight instruments' plate.
+        "glass":  (0.100, 0.104, 0.094, 0.95),
+        // Bezel paint: the tint every frame sprite is multiplied by. Warm
+        // white so the lit edges read as light on painted metal.
+        "bezel":  (0.93, 0.89, 0.79, 1.00),
+        // …a quieter bezel for small parts (rows, chips) …
+        "bezelLo": (0.70, 0.67, 0.59, 1.00),
+        // …and a lit one: the edge of the key under the cursor.
+        "bezelLit": (1.00, 0.80, 0.58, 1.00),
+        // Hairlines, where an element is too small for a frame: a panel's
+        // edge, and the quieter edge of a row inside it. Warm, like the ink.
+        "edge":   (0.90, 0.86, 0.74, 0.24),
+        "rule":   (0.90, 0.86, 0.74, 0.13),
 
-        // Type
-        "ink":    (0.82, 0.91, 0.98, 1.00),
-        "muted":  (0.46, 0.60, 0.70, 1.00),
+        // Type — printed ink
+        "ink":    (0.92, 0.89, 0.81, 1.00),
         // Body copy: quieter than ink, far easier to read than muted.
-        "soft":   (0.70, 0.80, 0.89, 1.00),
+        "soft":   (0.77, 0.75, 0.68, 1.00),
+        "muted":  (0.56, 0.55, 0.50, 1.00),
+        // Text printed ON the accent (a lit key's legend).
+        "onAccent": (0.10, 0.07, 0.04, 1.00),
 
-        // THE accent: what is on, selected or next. The one hue that is not
-        // state.
-        "accent": (0.28, 0.86, 0.74, 1.00),
-        // Instrument blue: open contract goals. Kept off frames and edges.
-        "signal": (0.42, 0.72, 1.00, 1.00),
+        // THE accent: what is on, selected or next. Signal orange.
+        "accent": (0.97, 0.55, 0.22, 1.00),
+        "accentDim": (0.42, 0.24, 0.11, 1.00),
+        // Phosphor: live numbers in a CRT well, and where-to-go bearings.
+        "phos":   (0.64, 0.93, 0.56, 1.00),
+        "phosDim": (0.38, 0.56, 0.34, 1.00),
+        // Open contract goals: a cool, quiet instrument tint.
+        "signal": (0.66, 0.80, 0.86, 1.00),
 
         // State, and state only.
-        "done":   (0.36, 0.88, 0.52, 1.00),
-        "warn":   (1.00, 0.72, 0.32, 1.00),
-        "danger": (1.00, 0.42, 0.36, 1.00),
+        "done":   (0.55, 0.85, 0.42, 1.00),
+        "warn":   (1.00, 0.80, 0.28, 1.00),
+        "danger": (0.97, 0.34, 0.25, 1.00),
 
         // The testing account. Deliberately a colour nothing else in the game
         // uses, so a cheated screenshot is obviously a cheated screenshot.
         "debug":  (1.00, 0.36, 0.66, 1.00),
     },
     spacing: { "xs": 4.0, "sm": 8.0, "md": 14.0, "lg": 22.0, "xl": 34.0 },
-    radii:   { "sm": 4.0, "md": 9.0, "lg": 16.0, "pill": 999.0 },
+    // Square-cut metal. The frames draw their own 2 px chamfer; a fill's
+    // radius only has to stay inside it.
+    radii:   { "sm": 2.0, "md": 2.0, "lg": 3.0, "pill": 999.0 },
     // `readout` and `display` are for numbers only, set in the mono face: the
     // value you fly by, and the one big number on an instrument.
-    text:    { "micro": 11.0, "caption": 13.0, "body": 15.0, "title": 19.0,
-               "readout": 20.0, "display": 26.0 },
-    fonts:   { "mono": "fonts/NotoSansMono-Medium.ttf" },
+    text:    { "micro": 11.0, "caption": 13.5, "body": 15.5, "title": 20.0,
+               "readout": 21.0, "display": 28.0 },
+    // ui: running text (also project.ron's ui_font). label: printed capitals,
+    // keys, headings. mono: CRT numerals. stencil: the title and big placards.
+    fonts:   { "ui": "fonts/SolarUI.ttf", "label": "fonts/SolarLabel.ttf",
+               "mono": "fonts/SolarMono.ttf", "stencil": "fonts/SolarStencil.ttf" },
 )

@@ -835,10 +835,13 @@ local function update_map3d(node, dt)
     local _, n = text:gsub("[^\128-\191]", "")
     return n * fs * 0.56 + fs
   end
+  -- A name on the map is a small enamel tag (docs/ui-style.md): a dark cut
+  -- edge, the plate, and the name printed in the label face in warm ink.
   local function label(x, y, text, fs)
     local w, h = name_w(text, fs), fs * 1.5
-    draw.rect(x - w / 2, y - h / 2, w, h, 0.01, 0.02, 0.04, 0.72, fs * 0.35)
-    draw.text(x, y - fs * 0.62, text, fs, 0.86, 0.93, 1.0, 1.0, "center")
+    draw.rect(x - w / 2 - 1, y - h / 2 - 1, w + 2, h + 2, 0.0, 0.0, 0.0, 0.7, fs * 0.15)
+    draw.rect(x - w / 2, y - h / 2, w, h, 0.12, 0.124, 0.112, 0.86, fs * 0.12)
+    draw.text(x, y - fs * 0.62, text, fs, 0.92, 0.89, 0.81, 1.0, "center", "fonts/SolarLabel.ttf")
   end
   -- Orbit lines around each body's parent, and the names of what's in view.
   for i, b in ipairs(bodies) do

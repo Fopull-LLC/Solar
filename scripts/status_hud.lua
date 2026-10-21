@@ -47,7 +47,25 @@ local function blocked()
   if pm and pm.open then return true end
   local om = ref("orbit_map")
   if om and om.isOpen and om.isOpen() then return true end
+  -- The full-height consoles carry their own balance in their header, and the
+  -- chips sat on top of it.
+  for _, k in ipairs({ "ops_board", "facility_menu", "tracking_station" }) do
+    local s = ref(k)
+    if s and s.isOpen and s.isOpen() then return true end
+  end
   return false
+end
+
+-- The UI faces a STYLE names (ui/solar.tokens.ron: label, mono, stencil).
+-- The engine loads a font only when an element in the scene names it itself —
+-- a font that only a style asks for is never loaded and the text falls back
+-- to the project font (engine ui_game.rs ensure_ui_fonts scans the ECS specs;
+-- styles are applied to copies). So one hidden element per face names it.
+-- Remove when the engine registers style fonts.
+FONT_PRIMER = { "fonts/SolarLabel.ttf", "fonts/SolarMono.ttf", "fonts/SolarStencil.ttf" }
+local function primer()
+  return { "box", key = "fontprimer", visible = false, w = 1, h = 1, pad = 0, gap = 0,
+           items = FONT_PRIMER, function(f, i) return { "text", key = "f" .. i, font = f, text = "0" } end }
 end
 
 -- The three readouts as data: what the chips show, and the one-line text the
@@ -109,10 +127,12 @@ local function chip(r)
   }
   if r.frac and not r.warn then
     local hot = r.frac > 0.85
-    kids[#kids + 1] = { "row", key = "m", w = METER_W, h = 4, radius = 2, pad = 0, gap = 0,
-      fill = { 0.10, 0.16, 0.20 },
-      { "box", key = "f", w = math.max(2, math.floor(METER_W * r.frac + 0.5)), h = 4, radius = 2,
-        fill = hot and { 1.0, 0.72, 0.32 } or { 0.28, 0.86, 0.74 } } }
+    -- A gauge: a dark groove, an ink bar (caution yellow when
+    -- nearly full).
+    kids[#kids + 1] = { "row", key = "m", w = METER_W, h = 5, radius = 1, pad = 0, gap = 0,
+      fill = { 0.02, 0.03, 0.025 }, border = 1, borderColor = { 0, 0, 0, 0.8 },
+      { "box", key = "f", w = math.max(2, math.floor(METER_W * r.frac + 0.5)), h = 5, radius = 1,
+        fill = hot and { 1.0, 0.80, 0.28 } or { 0.77, 0.75, 0.68 } } }
   end
   return { "row", key = r.key, style = r.warn and "hud/chipWarn" or "hud/chip",
            w = "fit", h = 28, gap = 7, align = "center", items = kids,
@@ -231,6 +251,7 @@ end
 function start(node)
   el = node:getcomponent("UiElement")
   if el then el.visible = false end
+  ui.make(node, { primer() })
 end
 
 function update(node, dt)
@@ -242,6 +263,6 @@ function update(node, dt)
   if not show then return end
   local rs = readouts()
   line = text_of(rs)
-  ui.make(node, { "row", key = "chips", w = "fit", h = "fit", gap = 6, pad = 0, align = "center",
-                  items = rs, function(r) return chip(r) end })
+  ui.make(node, { { "row", key = "chips", w = "fit", h = "fit", gap = 6, pad = 0, align = "center",
+                    items = rs, function(r) return chip(r) end }, primer() })
 end
