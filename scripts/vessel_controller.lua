@@ -34,6 +34,9 @@ defaults = {
 -- from (the crew stays in their seat while you fly something else).
 piloting = false
 crewAboard = false
+-- When the crew last stepped out of this craft (standDown), published so the
+-- craft next to it doesn't seat them again on the same F press (crewOnFoot).
+leftAt = -100.0
 throttle = 0.0
 fuel = 0.0
 -- True while we've asked the engine to keep this vessel out of distant-craft
@@ -2498,7 +2501,8 @@ function takeControl()
     end
   end
   if not astronaut or not astronaut.valid then astronaut = find("Astronaut") end
-  if astronaut then astronaut.visible = false end
+  -- Into a pod they vanish; an open COMMAND SEAT keeps its rider in view.
+  if astronaut then astronaut.visible = podSeat == true end
   piloting = true
   crewAboard = true
   set_navball(true)
@@ -3277,6 +3281,7 @@ function isLost() return destroyed == true end
 function standDown(node, x, y, z, vx, vy, vz)
   piloting = false
   crewAboard = false
+  leftAt = time or 0.0
   throttle = 0.0
   throttle_prev = 0.0
   set_flames(node, 0)
@@ -4251,6 +4256,29 @@ function integrity()
   return out
 end
 
+-- IS THE CREW ON FOOT? Not `astronaut.visible`, which used to stand in for
+-- it: planet_camera hides the body in first person and whenever a wall pushes
+-- the view into the shoulders (so F refused to board from there), and an open
+-- COMMAND SEAT keeps its rider in view (so a craft parked beside it offered
+-- "F — board" to someone already sitting in another one). On foot = aboard no
+-- craft, and not this very moment stepping out of ANOTHER one: the F that
+-- stands you up from one craft must not seat you in the craft parked beside
+-- it (`except_id` = the asking craft's node id; climbing back into the craft
+-- you just left is fine). Global: no upvalue spent in fixedUpdate, and a
+-- probe or the HUD can ask it too.
+function crewOnFoot(except_id)
+  if not astronaut or not astronaut.valid then astronaut = find("Astronaut") end
+  if not astronaut then return false end
+  local now = time or 0.0
+  for _, v in ipairs(findScripts("vessel_controller")) do
+    if v.crewAboard then return false end
+    if now - (v.leftAt or -100.0) < 0.3 and not (except_id and v.node and v.node.id == except_id) then
+      return false
+    end
+  end
+  return true
+end
+
 -- BOARD: the crew climbs in (F beside the craft, within board_range of its
 -- spine). Into a pod they vanish; into an open COMMAND SEAT they stay in view,
 -- seated (podSeat; scripts/command_seat.lua poses them). Global so a probe or a
@@ -4260,8 +4288,8 @@ function boardNow(node, info)
   if destroyed or not (node and node.valid) then return false end
   info = info or assembly.info(node)
   if not astronaut or not astronaut.valid then astronaut = find("Astronaut") end
-  if not (podCrewed and not crewAboard and astronaut and astronaut.visible
-          and board_dist(node, astronaut, info) <= params.board_range) then
+  if not (podCrewed and not crewAboard and astronaut
+          and board_dist(node, astronaut, info) <= params.board_range and crewOnFoot(node.id)) then
     return false
   end
   -- Climbing in takes the controls from whatever you were flying.
@@ -7032,8 +7060,8 @@ function fixedUpdate(node, dt)
     -- (The hatch RING is drawn in lateUpdate — the camera pass — where the
     -- node pose matches what this frame renders; drawing it here put it a
     -- rails-carry beside the visible ship.)
-    if astronaut and astronaut.visible and podCrewed and not crewAboard
-      and board_dist(node, astronaut, info) <= params.board_range + 1.4 then
+    if astronaut and podCrewed and not crewAboard
+      and board_dist(node, astronaut, info) <= params.board_range + 1.4 and crewOnFoot(node.id) then
       set_prompt("F — board")
     else
       set_prompt("")
@@ -7687,9 +7715,10 @@ function lateUpdate(node, dt)
     if einfo then power_tick(node, einfo, dt) end
   end
   if piloting then dockGuides() end
-  if piloting or not astronaut or not astronaut.visible then return end
+  if piloting or crewAboard or not podCrewed or not astronaut then return end
   local info = assembly.info(node)
   if board_dist(node, astronaut, info) > params.board_range + 1.4 then return end
+  if not crewOnFoot(node.id) then return end
   local rx, up, rz = basis(node)
   local px = node.x + rx.x * pod.x + up.x * pod.y + rz.x * pod.z
   local py = node.y + rx.y * pod.x + up.y * pod.y + rz.y * pod.z
