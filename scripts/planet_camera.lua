@@ -111,14 +111,12 @@ local was_vessel = nil      -- the piloted craft's node id (a switch is a new su
 
 -- ── which way is up ─────────────────────────────────────────────────────────
 -- Straight out from the centre of the world the subject is on, worked out from
--- where that world IS — never read off the subject's body. `node.up` is the
--- body's −gravity, and on 0.117.0-rc3 it is wrong for one tick every few
--- seconds: when the floating origin recentres, the planets' µ/r² centres are
--- not shifted with everything else, so that tick's gravity points at a spot
--- ~4 km away. Measured on a standing crew and a parked rover: 12–76° off the
--- vertical for one tick, every 4–17 s — the "split second where it's confused
--- about which way is up, then corrects itself". Before the first tick it is
--- also the default +Y, which rolled the view through 60° at every spawn.
+-- where that world IS. Since 0.117.0-rc6 the subject's own `node.up` agrees
+-- with it on every tick (a floating-origin recentre no longer leaves gravity
+-- pointing off to one side; measured within 0.01° walking and standing), but
+-- it is still the default +Y before a body's first tick and on the frame a
+-- body is teleported, and it is gravity, not the world the VIEW belongs to —
+-- so the camera keeps its own.
 --
 -- The world is chosen with HYSTERESIS: patched conics hand you from a planet
 -- to its moon (or back) at a sharp sphere, and a craft skimming that sphere
@@ -172,11 +170,14 @@ local function slew(cur, want, rate, max_step, dt)
 end
 
 -- ── a craft's own hull, for the chase view ──────────────────────────────────
--- Rays and sphere sweeps do not see an assembly's parts (0.117.0-rc3: queries
--- return terrain, static colliders and single bodies — the crew parked in the
--- pod, the rover's tyres — never a compound's shapes), so the camera cannot
--- sweep its way out of the craft it is chasing. It keeps the craft's parts as
--- balls instead: each part's collision box (its RigidBody half extents times
+-- How far back the view must sit to be clear of the craft it is chasing. Rays
+-- and sweeps see a craft's parts since 0.117.0-rc6, but they answer "the first
+-- thing in the way", not "where the hull ends", and a query takes one node to
+-- ignore — not the ground, the crew and the craft at once. Casting back in
+-- from beyond the craft to find its far side was tried on rc6 and was worse
+-- (the view in the ground 27 frames a rover test against 7, see the rc6
+-- notes), so the camera keeps the craft's parts as balls: each part's
+-- collision box (its RigidBody half extents times
 -- the part's scale, as the engine builds it) wrapped in a sphere, re-read when
 -- the craft gains or loses parts, placed each frame from the parts' local
 -- poses (so a hinge that moves its arm moves its balls). The rover's tyres
@@ -251,20 +252,30 @@ local function hull_exit(balls, o, dir)
   return far, reach
 end
 
--- The sphere sweep the view backs out along, passing THROUGH the crew and
--- the craft's tyres (the subject, not walls) and stopping at anything else.
--- The old sweep stopped at the first thing it met, found the crew sitting at
--- the pivot, threw the whole result away — and so while flying the camera
--- never saw the ground at all.
-local function sweep(from, dir, maxd, passes)
-  local o, gone, ign = from, 0.0, nil
-  for _ = 1, 6 do
-    local hit = spherecast(o, dir, 0.25, maxd - gone, { ignore = ign, ignoreStart = true })
+-- The sphere sweep the view backs out along, passing THROUGH the craft's own
+-- parts, its crew and its tyres (the subject, not walls) and stopping at
+-- anything else. The old sweep stopped at the first thing it met, found the
+-- crew sitting at the pivot, threw the whole result away — and so while
+-- flying the camera never saw the ground at all.
+--
+-- Since 0.117.0-rc6 the sweep meets the craft's parts too (it starts inside
+-- the pod), so it begins ignoring the whole craft and steps past the crew and
+-- tyres one at a time. No `ignoreStart`: on rc6 it shrinks the ball for the
+-- whole sweep to the gap to whatever is nearest at the start (the crew), which
+-- let the view sink 0.15 m from the ground on a slope; and a ball that starts
+-- INSIDE a body still meets it at 0, so a hit at the start steps a ball's
+-- width on.
+local function sweep(from, dir, maxd, passes, craft)
+  local o, gone, ign = from, 0.0, craft
+  for _ = 1, 12 do
+    local hit = spherecast(o, dir, 0.25, maxd - gone, { ignore = ign })
     if not (hit and hit.distance) then return nil end
     local n = hit.node
-    if n and n.valid and passes[n.id] then
-      local step = hit.distance + 0.05
-      gone, o, ign = gone + step, o + dir * step, n
+    local par = n and n.valid and n.parent
+    local part = craft and par and par.valid and par.id == craft.id
+    if n and n.valid and (part or passes[n.id]) then
+      local step = hit.distance + ((hit.distance < 0.01) and 0.25 or 0.05)
+      gone, o, ign = gone + step, o + dir * step, part and craft or n
       if gone >= maxd then return nil end
     else
       return gone + hit.distance, hit
@@ -426,15 +437,15 @@ end
 
 -- ── the chase view: outside the craft, above the ground ────────────────────
 -- Driving a rover the view kept ending up INSIDE it. The sweep that keeps the
--- camera out of walls ignored the craft, as it had to — but the craft's parts
--- are invisible to sweeps anyway, so it was the crew parked at the pivot and
--- the rover's own tyres that it met: the crew threw the sweep away (so the
+-- camera out of walls ignored the craft, as it had to — but on 0.117.0-rc3 the
+-- craft's parts were invisible to sweeps anyway, so it was the crew parked at
+-- the pivot and the rover's own tyres that it met: the crew threw the sweep away (so the
 -- ground was never seen, and the camera sank into hills behind the rover), and
 -- a crewless rover's tyre pulled the view in to a metre from the pod, in among
 -- its parts.
 --
--- Now: the view backs out along its line, passing through the crew and the
--- tyres, and may come in for the ground or a wall — but never closer than the
+-- Now: the view backs out along its line, passing through the craft, its crew
+-- and its tyres, and may come in for the ground or a wall — but never closer than the
 -- far side of the craft's own hull along that line (`hull_exit`). Where the
 -- ground leaves no room outside the hull (a rover on a slope, the view low
 -- behind it), the view RISES over it instead, a few degrees at a time, the way
@@ -458,7 +469,7 @@ function chase_clip(vessel, head, up, room_d, dt)
     local need, reach = hull_exit(balls, head, f * -1)
     need = math.max(need, math.min(reach, CHASE_MIN))
     local want = math.max(room_d, need)
-    local hd = sweep(head, f * -1, want + 0.3, passes)
+    local hd = sweep(head, f * -1, want + 0.3, passes, vessel.node)
     local room = hd and math.max(0.0, hd - 0.1) or want
     return f, need, math.min(want, room), room >= need, lp <= -PITCH_LIMIT
   end
