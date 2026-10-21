@@ -80,7 +80,7 @@ end
 function mass(cid)
   local total = 0
   for mat, n in pairs(bag(cid)) do total = total + kg_of(mat) * n end
-  return total
+  return total + gearMass(cid)
 end
 
 function free(cid)
@@ -209,6 +209,93 @@ function seenList()
     if s[id] then out[#out + 1] = id end
   end
   return out
+end
+
+-- ── gear ────────────────────────────────────────────────────────────────────
+-- EQUIPMENT, not cargo: things the crew carries to USE (a relay beacon to plant
+-- on the ground), kept apart from the material bag so the depot never sells
+-- them and a "transfer all" never posts them into a cargo hold. They weigh in
+-- the same pack, so a beacon on your back is 6 kg less room for ore.
+--
+--     inv.gearCount("astro", "beacon")      inv.addGear("astro", "beacon", 1)
+--     inv.buyGear("astro", "beacon", 1)     -- spends company money, mass-checked
+
+GEAR = {
+  beacon = { name = "Relay Beacon", kg = 6.0, cost = 80,
+             about = "a cheap ground relay: plant it with [4], pick it up with Q" },
+}
+
+local function gear_bag(cid)
+  return save.get("inv.gear." .. cid) or {}
+end
+
+local function gear_put(cid, b)
+  local out = {}
+  for k, v in pairs(b) do if (v or 0) > 0 then out[k] = math.floor(v) end end
+  save.set("inv.gear." .. cid, out)
+end
+
+function gearMass(cid)
+  local t = 0
+  for id, n in pairs(gear_bag(cid)) do
+    local g = GEAR[id]
+    t = t + (g and g.kg or 1.0) * n
+  end
+  return t
+end
+
+function gearCount(cid, id)
+  return gear_bag(cid)[id] or 0
+end
+
+-- { { id, name, n, kg } } in GEAR's id order.
+function gearItems(cid)
+  local b, out, ids = gear_bag(cid), {}, {}
+  for id in pairs(GEAR) do ids[#ids + 1] = id end
+  table.sort(ids)
+  for _, id in ipairs(ids) do
+    local n = b[id] or 0
+    if n > 0 then out[#out + 1] = { id = id, name = GEAR[id].name, n = n, kg = GEAR[id].kg * n } end
+  end
+  return out
+end
+
+-- Add up to n (mass permitting). Returns how many went in.
+function addGear(cid, id, n)
+  local g = GEAR[id]
+  n = math.floor(n or 1)
+  if not g or n <= 0 then return 0 end
+  local fit = g.kg > 0 and math.min(n, math.floor(free(cid) / g.kg + 1e-9)) or n
+  if fit <= 0 then return 0 end
+  local b = gear_bag(cid)
+  b[id] = (b[id] or 0) + fit
+  gear_put(cid, b)
+  return fit
+end
+
+function removeGear(cid, id, n)
+  n = math.floor(n or 1)
+  local b = gear_bag(cid)
+  local took = math.min(b[id] or 0, n)
+  if took <= 0 then return 0 end
+  b[id] = b[id] - took
+  gear_put(cid, b)
+  return took
+end
+
+-- Buy n of a gear item into a container: all or nothing. Returns ok, why.
+function buyGear(cid, id, n)
+  local g = GEAR[id]
+  n = math.floor(n or 1)
+  if not g or n <= 0 then return false, "nothing to buy" end
+  if free(cid) + 1e-6 < g.kg * n then return false, "no room in the pack" end
+  local co = findScript and findScript("company")
+  local price = g.cost * n
+  if co and co.spend then
+    if not co.spend(price, "gear: " .. g.name) then return false, "not enough money" end
+  end
+  addGear(cid, id, n)
+  return true, nil
 end
 
 -- A one-line summary for HUDs: "12.4 / 45 kg".

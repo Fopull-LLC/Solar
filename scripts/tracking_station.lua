@@ -22,6 +22,10 @@
 --   RENAME       what the board, the map and the HUD call it
 --   MAP          open the orbit map on it
 --
+-- RELAYS: every relay beacon planted on the ground (scripts/comms.lua) is
+-- listed under its own heading with its link home, and the header carries the
+-- network's size and the home world's ground coverage.
+--
 -- Switching between craft in flight without coming here is `[` / `]` (the
 -- vessel switcher, scripts/vessel_switcher.lua).
 
@@ -358,7 +362,7 @@ local function row(e, sel)
   return { "button", key = "r" .. tostring(e.fid), style = e.piloted and "panel/rowActive" or "panel/row",
     selected = sel == e.fid, w = "100%", h = 34, dir = "row", gap = 10, align = "center",
     { "text", key = "m", style = "panel/cell", w = 12, h = "fit",
-      text = e.fid == "crew" and "◉" or (e.probe and not e.pod and "◇" or "◆") },
+      text = e.fid == "crew" and "◉" or (e.relay and "▲") or (e.probe and not e.pod and "◇" or "◆") },
     { "col", key = "nm", w = "grow", h = "fit", gap = 0, pad = 0,
       { "text", key = "t", style = "panel/cellStrong", w = "100%", h = "fit", maxLines = 1,
         overflow = "ellipsis", text = e.name },
@@ -382,6 +386,39 @@ local function wrapped(key, style, text)
   return { "text", key = key, style = style, w = "100%", h = "fit", wrap = true, text = text }
 end
 
+-- ── relays ──────────────────────────────────────────────────────────────────
+
+-- Every planted relay beacon, as a board entry (fid "b:<id>").
+function relay_entries()
+  local net = ref("comms")
+  local out = {}
+  if not (net and net.beaconList) then return out end
+  local bf = ref("base_facilities")
+  for _, b in ipairs(net.beaconList()) do
+    local st = net.statusOf and net.statusOf("b:" .. tostring(b.id))
+    local dist
+    if bf and bf.baseX and b.gx then
+      dist = math.sqrt((b.gx - bf.baseX) ^ 2 + (b.gy - bf.baseY) ^ 2 + (b.gz - bf.baseZ) ^ 2)
+    end
+    out[#out + 1] = { fid = "b:" .. tostring(b.id), relay = true, beacon = b, name = b.name, body = b.body,
+                      status = b.linked and (b.hops <= 1 and "relay · direct" or string.format("relay · %d hops", b.hops))
+                        or "relay · no link",
+                      link = b.linked, signal = b.strength, hops = b.hops, path = b.names, dist = dist,
+                      why = st and st.why or nil, landed = true }
+  end
+  return out
+end
+
+-- "  ·  4 relays · home ground 31%"
+function relay_summary(net, relays)
+  if not (net and #relays > 0) then return "" end
+  local bf = ref("base_facilities")
+  local home = bf and bf.baseBody
+  local cov = (home and net.coverage) and net.coverage(home) or nil
+  return string.format("  ·  %d relay%s%s", #relays, #relays == 1 and "" or "s",
+    cov and string.format("  ·  %s ground %d%%", home, math.floor(cov.ground * 100 + 0.5)) or "")
+end
+
 -- ── the detail pane ─────────────────────────────────────────────────────────
 
 local function detail(e, fo, co)
@@ -393,6 +430,27 @@ local function detail(e, fo, co)
     return rows
   end
   local E = ref("electronics")
+  if e.relay then
+    local b = e.beacon
+    add({ "text", key = "st", style = "panel/label", w = "100%", h = "fit", text = "Relay beacon" })
+    add({ "text", key = "nm", style = "panel/heading", w = "100%", h = "fit", text = e.name })
+    add(line("where", "Where", string.format("on the ground, %s", e.body or "?")))
+    if e.dist then add(line("home", "From base", fmt_alt(e.dist))) end
+    if e.link then
+      local n = E and E.bars(e.signal) or 0
+      local path = (e.path and #e.path > 0) and table.concat(e.path, " → ") or "Ground station"
+      add(line("sig", "Signal", string.format("%s  %d%%  ·  %s", bars_text(n), math.floor((e.signal or 0) * 100 + 0.5),
+        (e.hops or 1) <= 1 and "direct" or string.format("%d hops", e.hops)), "panel/keys"))
+      add(line("path", "Path", "via " .. path, "panel/cellMuted"))
+    else
+      add(line("sig", "Signal", e.why or "no path home", "panel/hintWarn"))
+    end
+    add(line("pwr", "Power", "always on (long-life cell)", "panel/cellMuted"))
+    add(wrapped("about", "panel/hint",
+      "A relay beacon passes every signal it hears on toward home. Plant more with the tool belt's [4] "
+      .. "to carry the network round the world; walk up to one and press Q with [4] in hand to take it back."))
+    return rows
+  end
   if e.fid == "crew" then
     add({ "text", key = "st", style = "panel/label", w = "100%", h = "fit", text = "Your crew" })
     add({ "text", key = "nm", style = "panel/heading", w = "100%", h = "fit", text = "Crew" })
@@ -551,6 +609,8 @@ local function describe()
   local all = {}
   if crew then all[#all + 1] = crew end
   for _, e in ipairs(list) do all[#all + 1] = e end
+  local relays = relay_entries()
+  for _, e in ipairs(relays) do all[#all + 1] = e end
   local sel = nil
   for _, e in ipairs(all) do if e.fid == selected then sel = e end end
   if not sel then
@@ -572,12 +632,13 @@ local function describe()
     end
   end
   group("Crew", function(e) return e.fid == "crew" end)
-  group("In flight", function(e) return e.fid ~= "crew" and not e.landed end)
-  group("Landed", function(e) return e.fid ~= "crew" and e.landed end)
+  group("In flight", function(e) return e.fid ~= "crew" and not e.relay and not e.landed end)
+  group("Landed", function(e) return e.fid ~= "crew" and not e.relay and e.landed end)
   if #list == 0 then
     left[#left + 1] = { "text", key = "empty", style = "panel/cellMuted", w = "100%", h = "fit", wrap = true,
       text = "No craft in the field." }
   end
+  group("Relays", function(e) return e.relay == true end)
   local net = ref("comms")
   local linked = 0
   for _, e in ipairs(list) do if e.link then linked = linked + 1 end end
@@ -587,8 +648,8 @@ local function describe()
     { "row", key = "head", w = "100%", h = "fit", gap = 14, pad = 0, align = "center",
       { "text", key = "title", style = "panel/heading", w = "grow", h = "fit", text = "Tracking Station" },
       { "text", key = "n", style = "panel/cellMuted", w = "fit", h = "fit",
-        text = string.format("%d craft  ·  %d in contact  ·  %d transmitters", #list, linked,
-          net and net.transmitters or 0) } },
+        text = string.format("%d craft  ·  %d in contact  ·  %d transmitters%s", #list, linked,
+          net and net.transmitters or 0, relay_summary(net, relays)) } },
     { "box", key = "rule", style = "panel/rule", w = "100%", h = 1 },
     { "row", key = "panes", w = "100%", h = "fit", gap = 24, pad = 0, align = "start",
       { "scroll", key = "listS", w = LIST_W, h = "fit", maxH = 470, gap = 0, pad = 0,

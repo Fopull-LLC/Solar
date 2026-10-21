@@ -7,6 +7,10 @@
 --   next to the Commerce Depot               → the warehouse
 --
 -- Click a row to move that one stack; the button moves everything that fits.
+--
+-- GEAR (inventory.GEAR — the Relay Beacon) is listed under the cargo. At the
+-- base the panel sells it: "Buy a Relay Beacon" spends company money and puts
+-- one in the pack, ready for the tool belt's [4].
 -- Whatever doesn't fit stays in the pack — a transfer never destroys anything,
 -- and a full hold says so rather than silently eating the rest.
 --
@@ -27,6 +31,7 @@
 
 defaults = {
   reach = 11.0,   -- how close a craft has to be to load it from the ground
+  shop_reach = 90.0, -- how near the base centre gear can be bought
 }
 
 -- Published.
@@ -90,6 +95,16 @@ local function find_target(astro)
   return nil, nil
 end
 
+-- At the base? (Gear is sold there.) Within `shop_reach` of the colony's
+-- centre, on its world.
+local function at_base(astro)
+  local bf = ref("base_facilities")
+  if not (bf and bf.sited and bf.baseX) then return false end
+  local dx, dy, dz = astro.x - bf.baseX, astro.y - bf.baseY, astro.z - bf.baseZ
+  local r = params.shop_reach or 90.0
+  return dx * dx + dy * dy + dz * dz < r * r
+end
+
 -- The vessel script owning a hold id (so a transfer can re-apply its mass).
 local function vessel_of(hold)
   for _, v in ipairs(findScripts("vessel_controller")) do
@@ -105,6 +120,19 @@ local function say(text, bad)
   -- Every line here is the result of a move: a stack landing, or a refusal.
   local fx = ref("sfx")
   if fx and fx.play then fx.play(bad and "denied" or "bag_move") end
+end
+
+-- Buy one piece of gear at the base (the panel's Buy button).
+function buyGear(id)
+  local inv = ref("inventory")
+  if not (inv and inv.buyGear) then return end
+  local g = inv.GEAR and inv.GEAR[id]
+  local ok, why = inv.buyGear("astro", id, 1)
+  if ok then
+    say(string.format("bought a %s — %d in the pack", g and g.name or id, inv.gearCount("astro", id)))
+  else
+    say(string.format("can't buy a %s: %s", g and g.name or id, why or "?"), true)
+  end
 end
 
 -- ── moving cargo ────────────────────────────────────────────────────────────
@@ -161,7 +189,7 @@ local function hint_line(inv)
   -- An EMPTY pack wins over a target in reach. Standing at the depot with
   -- nothing on your back, the panel used to say "click a row to move that
   -- stack" above no rows at all.
-  if inv and inv.isEmpty("astro") then
+  if inv and inv.isEmpty("astro") and #(inv.gearItems and inv.gearItems("astro") or {}) == 0 then
     return "Empty — mine rock with the laser [1], cut plants with [2].", false
   end
   if targetId then
@@ -249,6 +277,33 @@ local function describe(astro)
   -- were hovering or had focused.
   rows[#rows + 1] = { "col", key = "stacks", w = "100%", h = "fit", gap = 4, pad = 0,
     items = items, function(entry) return stack_row(entry, mats, co) end }
+
+  -- GEAR: what the crew carries to use, not to sell.
+  local gear = (inv and inv.gearItems) and inv.gearItems("astro") or {}
+  if #gear > 0 then
+    rows[#rows + 1] = { "text", key = "gearH", style = "panel/label", w = "100%", h = "fit", text = "Gear" }
+    for _, g in ipairs(gear) do
+      local about = inv.GEAR[g.id] and inv.GEAR[g.id].about or ""
+      rows[#rows + 1] = { "row", key = "gear_" .. g.id, style = "panel/row", w = "100%", h = 32,
+        dir = "row", gap = 10, align = "center",
+        { "text", key = "n", style = "panel/cell", w = 34, h = "fit", textAlign = "end",
+          text = string.format("%d ×", g.n) },
+        { "text", key = "name", style = "panel/cell", w = "grow", h = "fit", maxLines = 1, overflow = "ellipsis",
+          text = g.name .. "  ·  " .. about },
+        { "text", key = "kg", style = "panel/cell", w = 64, h = "fit", textAlign = "end",
+          text = string.format("%.1f kg", g.kg) } }
+    end
+  end
+  if inv and inv.GEAR and at_base(astro) then
+    local g = inv.GEAR.beacon
+    local price = (co and co.money) and co.money(g.cost) or ("$" .. g.cost)
+    rows[#rows + 1] = { "button", key = "buyBeacon", style = "panel/secondary", w = "100%", h = 32,
+      textAlign = "center", textValign = "center",
+      text = string.format("Buy a %s  ·  %s  ·  %.0f kg", g.name, price, g.kg),
+      tooltip = "A cheap ground relay. Plant it with the tool belt's [4]; each one carries the "
+        .. "ground station's signal a few hundred metres further.",
+      onClicked = function() buyGear("beacon") end }
+  end
 
   -- The one primary action, and only when there is somewhere for it to go.
   if targetId then

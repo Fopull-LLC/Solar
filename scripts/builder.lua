@@ -143,6 +143,11 @@ local REG = {
   dishL     = { prefab = "PartDishL",     label = "Deep Space Dish", h = 1.20, rx = 0.60, rz = 0.60, mass = 0.25, cost = 1200, top = true, bottom = true, kind = "structural", comms = true, side = true, strength = 160,
                 mods = { { type = "antenna", power = 1.44e7, relay = true, dish = true, rate = 40, draw = 1.6 },
                          { type = "deploy", anim = "dish" } } },
+  -- RELAY BEACON (comms, electronics.COMMS.beacon): the cheap ground relay the
+  -- crew plants by hand, as a part. A low-power relay that is always on: on a
+  -- lander it carries the network a few hundred metres over the ground.
+  beacon    = { prefab = "PartBeacon",    label = "Relay Beacon", h = 4.20, rx = 0.35, rz = 0.35, mass = 0.02, cost = 80, top = false, bottom = true,  kind = "structural", strength = 60,
+                mods = { { type = "antenna", power = 1500, relay = true, rate = 2, draw = 0.0, omni = true } } },
   -- FLOODLIGHT: a lamp for landing at night and for working in a shadow. It is
   -- what the Lights group (Y) switches; it draws power while it's on.
   light     = { prefab = "PartLight",     label = "Floodlight",   h = 0.30, rx = 0.15, rz = 0.15, mass = 0.01, cost = 40,  top = false, bottom = false, kind = "structural", radial_orient = true, strength = 60,
@@ -280,6 +285,7 @@ local DESC = {
   hinge = "servo hinge · ±90° · holds where it stops", piston = "piston · extends 0.8 m · holds where it stops",
   rotor = "rotor · spins what's on it · up to 60 rpm", claw = "landing claw · arm it to grip the ground",
   drill = "core drill · bores while landed · fills the hold",
+  beacon = "relay beacon · always on · relays a few hundred m over the ground",
 }
 for id, d in pairs(DESC) do if REG[id] then REG[id].desc = d end end
 
@@ -295,7 +301,7 @@ for id, d in pairs(DESC) do if REG[id] then REG[id].desc = d end end
 -- named here now appears in the catalogue and nowhere else needs to know.
 local CATALOGUE = {
   { "COMMAND",   { "pod", "probe", "seat", "nose", "chute" } },
-  { "ELECTRICAL",{ "battery", "solar", "light", "antenna", "dish", "dishL" } },
+  { "ELECTRICAL",{ "battery", "solar", "light", "antenna", "beacon", "dish", "dishL" } },
   { "PROPULSION",{ "engineS", "engineM", "skipper", "tankS", "tankM", "radialTank", "rcs" } },
   { "STRUCTURE", { "decoupler", "radialDec", "legs", "fins" } },
   { "FRAME",     { "strut1", "strut2", "strut3", "beam1", "beam2", "ibeam2", "ibeam3",

@@ -215,6 +215,27 @@ COMMS = {
   -- body is still blocked.
   graze = 0.01, grazeMin = 3.0, grazeMax = 40.0,
   refresh = 0.25,       -- seconds between network solves
+  -- THE RELAY BEACON: the cheap ground relay the crew carries and plants
+  -- (scripts/comms.lua keeps them, tool_belt places them). Its one antenna
+  -- both relays and reaches with `power`. Sized to the home world (r ~800 m):
+  -- the horizon (occlude + graze, above, with the grazing measured from the
+  -- GROUND under the mast — segmentBlocked's `ha`/`hb`) stops one beacon
+  -- seeing another past ~430 m of ground at the datum and ~270 m in a basin
+  -- 30 m deep; at 1500 two beacons 400 m apart still link at ~80 %, and a
+  -- probe core's own antenna (100) hears one from sqrt(100·1500) ≈ 390 m
+  -- (over gentle ground the horizon, 250-415 m, comes first). The 4 m mast
+  -- is worth ~20 m of reach over a 2 m one. It runs ALWAYS ON: a long-life cell and a solar
+  -- trickle are the story, but these worlds don't turn, so a beacon on the
+  -- night side would never charge — an outage nobody could fix. `mast` is
+  -- how far above the ground its antenna stands (the model is `height` tall).
+  -- (Its price and weight in the pack are inventory.GEAR.beacon.)
+  beacon = { power = 1500, rate = 2, mast = 4.0, height = 4.2 },
+  -- COVERAGE (comms.coverage): a body's surface is sampled on a fixed grid
+  -- of `coverSamples` points, each a reference receiver `coverLift` m above
+  -- the ground with a probe core's antenna (`coverRx`): a point is covered
+  -- when that receiver could link straight to a relay with a path home (or
+  -- to the ground station).
+  coverSamples = 200, coverRx = 100, coverLift = 1.0,
 }
 
 -- The grazing allowance for a world of radius r (see COMMS.graze).
@@ -902,8 +923,12 @@ end
 -- `graze` (true, or metres) lets the line dip that far under the lower end's
 -- own ground before it counts — COMMS grazing (grazeOf the body's radius) for
 -- `true`, 2 m when absent (sunlight: a shadow is a shadow).
+-- `ha`, `hb` (metres, optional): how far each end's antenna stands above its
+-- own ground — a relay beacon's mast. The grazing is measured from the GROUND
+-- under that end, so a mast lifts the antenna over the horizon by its height;
+-- an end without one (a craft, the station) is its own ground, as before.
 -- Returns the blocking body's name, or nil.
-function segmentBlocked(ax, ay, az, bx, by, bz, bodies, shrink, skip, graze)
+function segmentBlocked(ax, ay, az, bx, by, bz, bodies, shrink, skip, graze, ha, hb)
   shrink = shrink or COMMS.occlude
   local dx, dy, dz = bx - ax, by - ay, bz - az
   local L2 = dx * dx + dy * dy + dz * dz
@@ -920,7 +945,7 @@ function segmentBlocked(ax, ay, az, bx, by, bz, bodies, shrink, skip, graze)
       local g = graze == true and grazeOf(b.radius) or tonumber(graze) or 2.0
       local da = math.sqrt((ax - b.x) ^ 2 + (ay - b.y) ^ 2 + (az - b.z) ^ 2)
       local db = math.sqrt((bx - b.x) ^ 2 + (by - b.y) ^ 2 + (bz - b.z) ^ 2)
-      r = math.min(r, da - g, db - g)
+      r = math.min(r, da - (ha or 0) - g, db - (hb or 0) - g)
       local t = 0
       if L2 > 1e-12 then
         t = ((b.x - ax) * dx + (b.y - ay) * dy + (b.z - az) * dz) / L2
@@ -1050,7 +1075,7 @@ function solveNetwork(nodes, bodies)
   local cost, parent, done = {}, {}, {}
   local edge = {} -- cache: i..":"..j -> strength (i child, j parent side)
   local function seg_ok(a, b)
-    return segmentBlocked(a.x, a.y, a.z, b.x, b.y, b.z, bodies, COMMS.occlude, nil, true) == nil
+    return segmentBlocked(a.x, a.y, a.z, b.x, b.y, b.z, bodies, COMMS.occlude, nil, true, a.agl, b.agl) == nil
   end
   local blocked = {}
   local function pair_blocked(i, j)
@@ -1148,7 +1173,7 @@ function noLinkWhy(nd, nodes, bodies)
   if not home then return "no ground station" end
   local range = linkRange(nd.any, home.power or COMMS.station)
   local d = math.sqrt((nd.x - home.x) ^ 2 + (nd.y - home.y) ^ 2 + (nd.z - home.z) ^ 2)
-  local blk = segmentBlocked(nd.x, nd.y, nd.z, home.x, home.y, home.z, bodies, COMMS.occlude, nil, true)
+  local blk = segmentBlocked(nd.x, nd.y, nd.z, home.x, home.y, home.z, bodies, COMMS.occlude, nil, true, nd.agl, home.agl)
   if d > range then
     return string.format("out of range: %s > %s", fmt_km(d), fmt_km(range))
   end
@@ -1171,6 +1196,97 @@ function noLinkWhy(nd, nodes, bodies)
     return "blocked by " .. blk
   end
   return "no path home"
+end
+
+-- ── ground relays and coverage ──────────────────────────────────────────────
+
+-- A relay beacon as a network node (solveNetwork's shape), from where its
+-- antenna stands in the world.
+function beaconNode(id, name, x, y, z)
+  local b = COMMS.beacon
+  return { id = id, name = name, x = x, y = y, z = z, any = b.power, relay = b.power, rate = b.rate,
+           beacon = true, agl = b.mast }
+end
+
+-- `n` unit vectors spread evenly over a sphere (a Fibonacci lattice): the
+-- fixed grid coverage is sampled on. Deterministic, so a body's samples are
+-- the same points every time and a coverage number moves only when the
+-- network does.
+local grid_cache = {}
+function surfaceGrid(n)
+  n = n or COMMS.coverSamples
+  local g = grid_cache[n]
+  if g then return g end
+  g = {}
+  local ga = math.pi * (3 - math.sqrt(5))
+  for i = 0, n - 1 do
+    local y = 1 - (i + 0.5) * 2 / n
+    local r = math.sqrt(math.max(0, 1 - y * y))
+    local a = ga * i
+    g[#g + 1] = { math.cos(a) * r, y, math.sin(a) * r }
+  end
+  grid_cache[n] = g
+  return g
+end
+
+-- Can a receiver at P (antenna power `rx`) link straight to any of `relays`
+-- ({ x,y,z, power [, agl] }, each already known to have a path home)? Range by the
+-- link budget, line of sight by segmentBlocked with grazing. Returns the
+-- strongest such link's strength (0 = none). `rxAgl`: the receiver's own
+-- mast, if it has one (a probe receiver doesn't).
+function hears(px, py, pz, rx, relays, bodies, rxAgl)
+  local best = 0
+  for _, r in ipairs(relays) do
+    local range = linkRange(rx, r.power or 0)
+    local d = math.sqrt((px - r.x) ^ 2 + (py - r.y) ^ 2 + (pz - r.z) ^ 2)
+    if d < range then
+      local s = linkStrength(d, range)
+      if s > math.max(best, 1e-4)
+        and segmentBlocked(px, py, pz, r.x, r.y, r.z, bodies, COMMS.occlude, nil, true, rxAgl, r.agl) == nil then
+        best = s
+      end
+    end
+  end
+  return best
+end
+
+-- The fraction (0..1) of `points` ({ {x,y,z}… } in world space) that hear one
+-- of `relays`. The coverage number.
+function coverageFraction(points, relays, bodies, rx)
+  if #points == 0 then return 0 end
+  if #relays == 0 then return 0 end
+  rx = rx or COMMS.coverRx
+  local n = 0
+  for _, p in ipairs(points) do
+    if hears(p[1], p[2], p[3], rx, relays, bodies) > 0 then n = n + 1 end
+  end
+  return n / #points
+end
+
+-- How far over the ground (metres of arc) a receiver of power `rx` standing
+-- `lift` m up hears an antenna `mast` m up, both on a world of radius `r` at
+-- its datum: the smaller of the link budget's range and the horizon. What the
+-- placement ring draws. Pure; `bodyR` names the sphere the horizon is
+-- measured against (defaults to r).
+function groundReach(r, mast, lift, rx, power)
+  local range = linkRange(rx, power)
+  if range <= 0 or r <= 0 then return 0 end
+  local body = { { name = "w", x = 0, y = 0, z = 0, radius = r } }
+  local ra, rb = r + mast, r + lift
+  local function ok(arc)
+    local th = arc / r
+    local bx, by = math.sin(th) * rb, math.cos(th) * rb
+    local d = math.sqrt(bx * bx + (by - ra) ^ 2)
+    if d >= range then return false end
+    return segmentBlocked(0, ra, 0, bx, by, 0, body, COMMS.occlude, nil, true, mast, 0) == nil
+  end
+  local lo, hi = 0, math.min(range * 1.05, math.pi * r)
+  if ok(hi) then return hi end
+  for _ = 1, 30 do
+    local mid = (lo + hi) * 0.5
+    if ok(mid) then lo = mid else hi = mid end
+  end
+  return lo
 end
 
 -- Signal bars (0–4) from a path strength.

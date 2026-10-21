@@ -703,6 +703,13 @@ local function update_map3d(node, dt)
     focus = bodies[map_focus - 1]
     fname, fradius = focus.name, focus.radius
   end
+  -- The world the comms coverage tint is drawn on: the focused body, else the
+  -- one the focus (you, your craft) is in.
+  if map_focus > 1 then
+    cov_body = fname
+  else
+    cov_body = space.dominant(focus.x, focus.y, focus.z)
+  end
   if not zoom_target then
     -- Auto-fit: opening on the ship/astronaut frames the WHOLE current orbit
     -- (apoapsis + body), not a close-up of the hull.
@@ -1160,6 +1167,37 @@ end
 -- possible; every other craft a small diamond with its name; the ground station
 -- a ring at the base. Global so `update_map3d` spends no upvalue on it.
 local comms_ref = nil
+cov_body = nil   -- set by update_map3d: the world the coverage tint is drawn on
+
+-- COVERAGE TINT: the comms coverage grid (comms.coverageGrid) on the chosen
+-- world, one small disc per sample lying on the ground — teal where the ground
+-- network (station + relay beacons) reaches, blue where only a satellite does,
+-- a faint red where nothing does. Depth-tested, so the far side hides.
+local function map_coverage(net, px_at)
+  if not (cov_body and net.coverageGrid) then return nil end
+  local g = net.coverageGrid(cov_body)
+  local b = space.body(cov_body)
+  if not (g and b) then return nil end
+  local n = #g.dirs
+  local spot = (b.radius or 100) * math.sqrt(4 * math.pi / math.max(1, n)) * 0.28
+  local was = draw.depthTest()
+  draw.depthTest(true)
+  for i, u in ipairs(g.dirs) do
+    local r = (g.r and g.r[i] or b.radius) + 2
+    local x, y, z = b.x + u[1] * r, b.y + u[2] * r, b.z + u[3] * r
+    local c = g.cov[i]
+    if c == 2 then
+      draw.disc(x, y, z, u[1], u[2], u[3], 0, spot, 0.25, 0.95, 0.78, 0.55)
+    elseif c == 1 then
+      draw.disc(x, y, z, u[1], u[2], u[3], 0, spot, 0.35, 0.62, 1.0, 0.5)
+    else
+      draw.disc(x, y, z, u[1], u[2], u[3], 0, spot * 0.45, 1.0, 0.35, 0.3, 0.35)
+    end
+  end
+  draw.depthTest(was and true or false)
+  return g
+end
+
 function mapComms(subject, px_at, label, lk, show)
   if not show.links and not show.markers then return end
   if not comms_ref or not comms_ref.valid then comms_ref = findScript("comms") end
@@ -1191,8 +1229,43 @@ function mapComms(subject, px_at, label, lk, show)
     end
     depth(true)
   end
+  local cov = show.links and map_coverage(net, px_at) or nil
+  if cov and label and camera and camera.screenSize then
+    local sw, sh = camera.screenSize()
+    if sw then
+      label(sw * 0.5, (sh or 720) - 64 * (lk or 1), string.format(
+        "%s coverage  ·  ground network %d%%  ·  with satellites %d%%   (teal ground · blue sky · red none)",
+        cov_body, math.floor(cov.ground * 100 + 0.5), math.floor(cov.sky * 100 + 0.5)), 13 * (lk or 1))
+    end
+  end
+  -- RELAY BEACONS: a small upright triangle each, teal with a path home,
+  -- red without, and its name.
+  if (show.markers or show.links) and net.beaconList and camera and camera.worldToScreen then
+    for _, e in ipairs(net.beaconList()) do
+      if e.x then
+        local s = px_at(e.x, e.y, e.z, 6)
+        local gb = space.body(e.body)
+        local ux, uy, uz = 0, 1, 0
+        if gb then
+          ux, uy, uz = e.x - gb.x, e.y - gb.y, e.z - gb.z
+          local l = math.sqrt(ux * ux + uy * uy + uz * uz)
+          ux, uy, uz = ux / l, uy / l, uz / l
+        end
+        local c = e.linked and { 0.35, 1.0, 0.8 } or { 1.0, 0.45, 0.35 }
+        draw.ring(e.x, e.y, e.z, ux, uy, uz, s, c[1], c[2], c[3], 1)
+        draw.line(e.x, e.y, e.z, e.x + ux * s * 2.2, e.y + uy * s * 2.2, e.z + uz * s * 2.2, c[1], c[2], c[3], 1)
+        if show.markers and label then
+          local px, py, _, on = camera.worldToScreen(e.x, e.y, e.z)
+          if on then label(px, py - 16 * (lk or 1), e.name, 11 * (lk or 1)) end
+        end
+      end
+    end
+  end
   if show.markers and camera and camera.worldToScreen then
-    local sx, sy, sz = net.station and net.station()
+    -- (Not `net.station and net.station()`: an `and` keeps only the first of
+    -- the three values, and the ring was drawn at (x, nil, nil).)
+    local sx, sy, sz
+    if net.station then sx, sy, sz = net.station() end
     if sx then
       draw.ring(sx, sy, sz, 0, 1, 0, px_at(sx, sy, sz, 7), 0.35, 0.95, 0.85, 1.0)
     end

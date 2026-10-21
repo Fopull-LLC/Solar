@@ -65,9 +65,9 @@ local CONTROLS = {
     { keys = { "e" }, shown = "E  or  ⏎", what = "go into the building you are at" },
   } },
   { group = "Tools", col = 1, rows = {
-    { keys = { "1", "2", "3" }, shown = "1  2  3", what = "laser  ·  harvest cutter  ·  spade" },
+    { keys = { "1", "2", "3", "4" }, shown = "1  2  3  4", what = "laser  ·  harvest cutter  ·  spade  ·  relay beacon" },
     { keys = {}, shown = "LEFT MOUSE", what = "use the tool on what the crosshair is over" },
-    { keys = { "q" }, shown = "Q", what = "raise ground (the spade lowers it)" },
+    { keys = { "q" }, shown = "Q", what = "raise ground (spade)  ·  pick up a beacon (relay beacon)" },
     { keys = { "tab", "i" }, shown = "TAB  or  I", what = "the suit pack" },
   } },
   { group = "Everywhere", col = 1, rows = {

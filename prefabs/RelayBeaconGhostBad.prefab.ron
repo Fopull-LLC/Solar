@@ -1,0 +1,25 @@
+// RELAY BEACON GHOST, red — the placement preview where it can't (scripts/tool_belt.lua).
+// Written by tools/gen_beacon.py — edit the generator, not this file.
+// One flat translucent glow over the whole model (no per-part materials: a
+// node material over the parts' hull shader drew black).
+[
+    (
+        name: "RelayBeaconGhostBad",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Mesh(
+            asset_path: "models/parts/beacon.glb",
+        ),
+        material: Some((
+            color: (1.0, 0.38, 0.3),
+            emissive: (1.0, 0.38, 0.3),
+            emissive_strength: 0.8,
+            unlit: true,
+            alpha: 0.5,
+        )),
+        scripts: [],
+    ),
+]

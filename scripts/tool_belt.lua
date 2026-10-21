@@ -5,6 +5,11 @@
 --   2  HARVEST CUTTER  hold LMB: takes down the plant you're facing
 --   3  TERRAIN SPADE   hold LMB to lower ground, Q to raise it — shaping
 --                      only, it yields nothing (that's the laser's job now)
+--   4  RELAY BEACON    plant a relay beacon from the pack (LMB) or pick one
+--                      back up (Q). Before you commit: a ghost where it will
+--                      stand, the ring of ground a probe can hear it from,
+--                      and lines to everything it would link to ("links
+--                      to: …"). The network lives in scripts/comms.lua.
 --
 --   TAB / I  inventory   (the panel; it also handles ship/warehouse transfers)
 --
@@ -188,6 +193,7 @@ TOOLS = {
   { id = "laser", label = "Mining Laser", hint = "hold LMB to cut rock" },
   { id = "cutter", label = "Harvest Cutter", hint = "hold LMB to harvest" },
   { id = "spade", label = "Terrain Spade", hint = "LMB lower · Q raise" },
+  { id = "beacon", label = "Relay Beacon", hint = "LMB plant a relay beacon · Q pick one up" },
 }
 
 -- Sounds. The hum is a LOOP started when the trigger goes down and stopped when
@@ -198,6 +204,8 @@ local SFX = {
   ore    = "audio/kenney/impact/impactMining_00",   -- + 0..4
   denied = "audio/kenney/interface/error_003.ogg",
   swap   = "audio/kenney/interface/pluck_001.ogg",
+  plant  = "audio/kenney/interface/confirmation_002.ogg",
+  pickup = "audio/kenney/interface/drop_002.ogg",
 }
 
 local cam
@@ -669,6 +677,8 @@ end
 -- exact.
 local beam_req, ring_req, plant_req = nil, nil, nil
 local paint_plant                       -- the cutter's marker, defined with the cutter
+local beacon_req = nil                  -- the beacon preview this frame (planet frame)
+local paint_beacon                      -- draws it, defined with the beacon tool
 local ring_s = nil                      -- the smoothed sight, planet frame
 
 local function to_body(hit)
@@ -758,6 +768,9 @@ function lateUpdate(node, dt)
 
   if plant_req then paint_plant(to_world(plant_req.h), plant_req.ready) end
   plant_req = nil
+
+  paint_beacon(beacon_req)
+  beacon_req = nil
 end
 
 -- ── the laser ───────────────────────────────────────────────────────────────
@@ -1073,6 +1086,208 @@ end
 
 -- ── driver ──────────────────────────────────────────────────────────────────
 
+-- ── the relay beacon ────────────────────────────────────────────────────────
+--
+-- Planting is a decision about WHERE, so everything that decides it is on the
+-- ground before the click: the ghost (teal: good ground; red: too steep, too
+-- close to another beacon, or none in the pack), the ring of ground a probe
+-- core's antenna can hear it from (electronics.groundReach: the link budget or
+-- the horizon, whichever is nearer), and a line to each relay it would link to,
+-- named in the hint. Aim at a planted beacon and Q picks it back up.
+
+local BEACON = {
+  slope = 0.74,       -- cos of the steepest ground it stands on (~42°)
+  spacing = 4.0,      -- m: no closer than this to another beacon
+  grab = 3.5,         -- m from the aim point to a beacon's foot to pick it up
+}
+local trig_was = false
+local preview = nil   -- { body, x,y,z (planet frame), links, connected, t }
+local reach_cache = {}
+
+local function beacon_reach(R)
+  local E = ref("electronics")
+  if not E then return 0 end
+  local k = math.floor(R + 0.5)
+  local v = reach_cache[k]
+  if not v then
+    local C = E.COMMS
+    v = E.groundReach(R, C.beacon.mast, C.coverLift, C.coverRx, C.beacon.power)
+    reach_cache[k] = v
+  end
+  return v
+end
+
+function fire_beacon(node, dt, firing)
+  local net, inv = ref("comms"), ref("inventory")
+  local pressed = firing and not trig_was
+  trig_was = firing
+  inUse = false -- the walker doesn't turn to face a plant
+  local h = laser_shot(node)
+  if not (net and inv and net.placeBeacon) then
+    prompt = "no comms network in this scene"
+    return
+  end
+  if not h then
+    prompt = string.format("no ground within %.0f m of the crosshair", params.laser_reach)
+    return
+  end
+  local bname = space.dominant(h.x, h.y, h.z)
+  local body = bname and space.body(bname)
+  if not body then prompt = "no world under the crosshair" return end
+  -- A planted beacon under the aim: Q picks it up.
+  local near = net.beaconNear(h.x, h.y, h.z, BEACON.grab)
+  if near then
+    prompt = string.format("Q  pick up %s  (%s)", near.name,
+      near.linked and string.format("linked, %d%%", math.floor((near.strength or 0) * 100 + 0.5)) or "no link")
+    beacon_req = { pick = true, body = bname, x = near.gx - body.x, y = near.gy - body.y, z = near.gz - body.z }
+    if input.pressed("q") then
+      if inv.addGear("astro", "beacon", 1) < 1 then
+        say("PACK FULL — no room to carry the beacon")
+        audio.play(SFX.denied, { track = "UI", volume = 0.5 })
+      else
+        net.removeBeacon(near.id)
+        say(near.name .. " picked up")
+        audio.play(SFX.pickup, { track = "UI", volume = 0.5 })
+      end
+    end
+    return
+  end
+  -- Where it would stand, and whether it can.
+  local ux, uy, uz = h.x - body.x, h.y - body.y, h.z - body.z
+  local R = math.sqrt(ux * ux + uy * uy + uz * uz)
+  ux, uy, uz = ux / R, uy / R, uz / R
+  local nx, ny, nz = field_normal(h.x, h.y, h.z)
+  if not nx then nx, ny, nz = h.nx or ux, h.ny or uy, h.nz or uz end
+  local carried = inv.gearCount("astro", "beacon")
+  local bad = nil
+  if carried < 1 then bad = "no beacons in the pack — buy them at the base (I)"
+  elseif nx * ux + ny * uy + nz * uz < BEACON.slope then bad = "too steep to stand a beacon on"
+  elseif net.beaconNear(h.x, h.y, h.z, BEACON.spacing) then bad = "too close to another beacon" end
+  -- What it would link to: asked again only when the spot moves or 0.3 s on.
+  local lx, ly, lz = h.x - body.x, h.y - body.y, h.z - body.z
+  local p = preview
+  if not p or p.body ~= bname or time - p.t > 0.3
+    or (lx - p.x) ^ 2 + (ly - p.y) ^ 2 + (lz - p.z) ^ 2 > 0.25 then
+    local links, connected = net.previewLinks(h.x, h.y, h.z)
+    -- link ends kept in the planet frame (the ones on this world are fixed to it)
+    for _, l in ipairs(links) do l.x, l.y, l.z = l.x - body.x, l.y - body.y, l.z - body.z end
+    p = { body = bname, x = lx, y = ly, z = lz, links = links, connected = connected, t = time }
+    preview = p
+  end
+  local names = {}
+  for i, l in ipairs(p.links) do
+    if i > 3 then names[#names + 1] = string.format("+%d more", #p.links - 3) break end
+    names[#names + 1] = string.format("%s %d%%", l.name, math.floor(l.hop * 100 + 0.5))
+  end
+  local links_txt = #names > 0 and ("links to: " .. table.concat(names, ", "))
+    or "links to: nothing — no relay with a path home in sight"
+  prompt = bad and (bad .. "   ·   " .. links_txt) or ("LMB plant   ·   " .. links_txt)
+  beacon_req = { body = bname, x = lx, y = ly, z = lz, R = R, ok = bad == nil, linked = p.connected,
+                 links = p.links }
+  if pressed then
+    if bad then
+      say(bad)
+      audio.play(SFX.denied, { track = "UI", volume = 0.5 })
+    elseif inv.removeGear("astro", "beacon", 1) == 1 then
+      local id = net.placeBeacon(bname, h.x, h.y, h.z)
+      if id then
+        say(string.format("Relay %d planted — %s", id, p.connected and links_txt or "no link home yet"))
+        audio.play(SFX.plant, { track = "UI", volume = 0.5 })
+        preview = nil
+      else
+        inv.addGear("astro", "beacon", 1)
+      end
+    end
+  end
+end
+
+-- The ghost: two preview nodes, teal (it can stand here) and red (it can't),
+-- one shown at a time. Each prefab carries its own flat translucent glow —
+-- a node material laid over the real beacon's hull shader drew it black.
+local ghosts = {}      -- prefab → node | "spawning"
+local function ghost_node(prefab, x, y, z)
+  local g = ghosts[prefab]
+  if g == "spawning" then return nil end
+  if g and g.valid then return g end
+  ghosts[prefab] = "spawning"
+  spawn(prefab, vec3(x, y, z), function(n) ghosts[prefab] = n; n.visible = false end)
+  return nil
+end
+local function ghost(show, x, y, z, ux, uy, uz, ok)
+  for _, k in ipairs({ "RelayBeaconGhost", "RelayBeaconGhostBad" }) do
+    local g = ghosts[k]
+    local want = show and ((k == "RelayBeaconGhost") == (ok == true))
+    if want then g = ghost_node(k, x, y, z) end
+    if g and g ~= "spawning" and g.valid then
+      if want then
+        local E = ref("electronics")
+        local half = ((E and E.COMMS.beacon.height) or 4.2) * 0.5
+        local fx, fy, fz = 1 - ux * ux, -ux * uy, -ux * uz
+        if fx * fx + fy * fy + fz * fz < 1e-4 then fx, fy, fz = 0, 0, 1 end
+        g:setUp(vec3(ux, uy, uz), vec3(fx, fy, fz))
+        g.x, g.y, g.z = x + ux * half, y + uy * half, z + uz * half
+      end
+      if g.visible ~= want then g.visible = want end
+    end
+  end
+end
+
+paint_beacon = function(req)
+  if not req then ghost(false) return end
+  local b = space.body(req.body or "")
+  if not b then ghost(false) return end
+  local x, y, z = b.x + req.x, b.y + req.y, b.z + req.z
+  local r = math.sqrt(req.x * req.x + req.y * req.y + req.z * req.z)
+  if r < 1e-3 then ghost(false) return end
+  local ux, uy, uz = req.x / r, req.y / r, req.z / r
+  if req.pick then
+    ghost(false)
+    -- the beacon you'd pick up: an amber ring at its foot
+    draw.ring(x + ux * 0.1, y + uy * 0.1, z + uz * 0.1, ux, uy, uz, 1.2, 1.0, 0.78, 0.35, 0.95)
+    draw.ring(x + ux * 0.1, y + uy * 0.1, z + uz * 0.1, ux, uy, uz, 1.35, 1.0, 0.78, 0.35, 0.5)
+    return
+  end
+  ghost(true, x, y, z, ux, uy, uz, req.ok)
+  local E = ref("electronics")
+  local c = req.ok and (req.linked and { 0.30, 0.95, 0.80 } or { 1.0, 0.78, 0.35 }) or { 1.0, 0.38, 0.30 }
+  -- the foot
+  draw.ring(x + ux * 0.08, y + uy * 0.08, z + uz * 0.08, ux, uy, uz, 0.6, c[1], c[2], c[3], 0.9)
+  -- THE RANGE RING: the ground a probe core hears this beacon from, drawn as a
+  -- small circle on the sphere through the beacon's foot (it is hundreds of
+  -- metres across on a world a few km round: a flat ring would float).
+  local reach = beacon_reach(r)
+  if reach > 1 then
+    local sx, sy, sz = 1 - ux * ux, -ux * uy, -ux * uz
+    local sl = math.sqrt(sx * sx + sy * sy + sz * sz)
+    if sl < 1e-3 then sx, sy, sz, sl = 0, 0, 1, 1 end
+    sx, sy, sz = sx / sl, sy / sl, sz / sl
+    local tx, ty, tz = uy * sz - uz * sy, uz * sx - ux * sz, ux * sy - uy * sx
+    local th = reach / r
+    local ct, st = math.cos(th), math.sin(th)
+    local rr = r + 1.0
+    local pts = {}
+    for i = 0, 71 do
+      local a = i / 72 * 2 * math.pi
+      local ca, sa = math.cos(a), math.sin(a)
+      local dx = ux * ct + (sx * ca + tx * sa) * st
+      local dy = uy * ct + (sy * ca + ty * sa) * st
+      local dz = uz * ct + (sz * ca + tz * sa) * st
+      pts[#pts + 1] = b.x + dx * rr
+      pts[#pts + 1] = b.y + dy * rr
+      pts[#pts + 1] = b.z + dz * rr
+    end
+    draw.polyline(pts, c[1], c[2], c[3], 0.75, true)
+  end
+  -- "links to": a line from the ghost's antenna to each relay it would reach
+  local m = (E and E.COMMS.beacon.mast) or 2.2
+  local ax, ay, az = x + ux * m, y + uy * m, z + uz * m
+  for _, l in ipairs(req.links or {}) do
+    local lr, lg, lb = 0.4, 0.9, 0.6
+    if E and E.strengthColor then lr, lg, lb = E.strengthColor(l.hop or l.strength or 0) end
+    draw.line(ax, ay, az, b.x + l.x, b.y + l.y, b.z + l.z, lr, lg, lb, 0.9)
+  end
+end
+
 function start(node)
   cam = ref("planet_camera")
   tool = save.get("tool.equipped") or 1
@@ -1168,6 +1383,11 @@ local function tick(node, dt, carrying)
   elseif id == "cutter" then
     fire_cutter(node, dt, firing)
     aimMat, aimDist = nil, nil
+  elseif id == "beacon" then
+    hum_off()
+    show_beam(nil, 0)
+    fire_beacon(node, dt, firing)
+    aimMat, aimDist = nil, nil
   else
     hum_off()
     show_beam(nil, 0)
@@ -1192,6 +1412,16 @@ local function tick(node, dt, carrying)
 end
 
 -- ── the hotbar ──────────────────────────────────────────────────────────────
+
+-- A slot's label: the beacon slot says how many are in the pack.
+function tool_label(tl)
+  if tl.id == "beacon" then
+    local inv = ref("inventory")
+    local n = (inv and inv.gearCount) and inv.gearCount("astro", "beacon") or 0
+    return string.format("%s ×%d", tl.label, n)
+  end
+  return tl.label
+end
 --
 -- Drawn, not written: three slots with their keys, the one in your hand lit,
 -- and one line above them for the hint, the aim readout or the last thing that
@@ -1239,7 +1469,7 @@ function hotbar(carrying)
       w = "fit", h = 34, gap = 8, align = "center",
       { "text", key = "k", style = on and "hud/keyActive" or "hud/key", w = 20, h = 20,
         textAlign = "center", textValign = "center", text = tostring(i) },
-      { "text", key = "l", w = "fit", h = "fit", textSize = 13, text = tl.label } }
+      { "text", key = "l", w = "fit", h = "fit", textSize = 13, text = tool_label(tl) } }
   end
   return { "col", key = "belt", w = "fit", h = "fit", gap = 6, pad = 0, align = "center",
     pill("hint", hint_line()),
@@ -1258,7 +1488,7 @@ function hudLine()
   -- even harvest the plants" was partly never finding out that [2] was a key.
   local belt = {}
   for i, tl in ipairs(TOOLS) do
-    belt[#belt + 1] = string.format("%s%d %s", i == tool and "▸" or " ", i, tl.label)
+    belt[#belt + 1] = string.format("%s%d %s", i == tool and "▸" or " ", i, tool_label(tl))
   end
   local head = table.concat(belt, "   ")
   if time - msg_t < 3.0 and msg ~= "" then
