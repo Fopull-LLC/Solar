@@ -308,9 +308,152 @@ local function offworld_step(m, goals, astro, label, pays)
   return step({ key = "go", task = string.format(task, X or "the target"), hint = hint })
 end
 
+-- ── the programme ──────────────────────────────────────────────────────────
+--
+-- The company's milestones (missions.lua PROGRAMME): First Steps, Rare Finds,
+-- the Relay Network, Eyes in the Sky, Beyond. Nothing to sign — they count as
+-- they happen — so the card shows the next one whenever no contract is on the
+-- books, and a short line of it under a contract when one is.
+
+-- "about 350 m, ahead and to your left" — rough on purpose: a survey report,
+-- not a waypoint. nil without a position.
+local function rough_way(astro, wx, wy, wz)
+  if not (astro and wx) then return nil end
+  local t = { worldX = wx, worldY = wy, worldZ = wz }
+  local ax, ay, az = world_of(astro)
+  local d = math.sqrt((wx - ax) ^ 2 + (wy - ay) ^ 2 + (wz - az) ^ 2)
+  local way = bearing_to(astro, t)
+  if d < 60 then return "close by — look for the glow" end
+  local r = math.floor(d / 50 + 0.5) * 50
+  return string.format("about %s%s", fmt_m(r), way and (", " .. way) or "")
+end
+
+-- The nearest of a list of body-relative points on `bname`, as a world point.
+local function nearest_of(astro, bname, list, skip)
+  local b = bname and space.body(bname)
+  if not (astro and b) then return nil end
+  local ax, ay, az = world_of(astro)
+  local best, bd = nil, math.huge
+  for _, p in ipairs(list or {}) do
+    if not skip(p) then
+      local x, y, z = b.x + p.x, b.y + p.y, b.z + p.z
+      local d = (x - ax) ^ 2 + (y - ay) ^ 2 + (z - az) ^ 2
+      if d < bd then best, bd = { x, y, z }, d end
+    end
+  end
+  return best
+end
+
+local RARE_HINT = {
+  cave = "They grow in the dark under rock shelves, where a cliff leans out over the ground, and in hollows just under it — the Terrain Spade (3) opens a way in.",
+  peak = "They grow on the highest ground, above the snow line where there is one.",
+  ravine = "They grow on the floors of the deep cuts in the ground — walk the bottom, not the rim.",
+  lake = "They grow right at the water's edge, never in it.",
+  river = "They grow on the banks, a step up from the water.",
+}
+
+-- What to do about one programme goal: task, hint.
+local function prog_guidance(mi, astro, m, g, niche)
+  local home = mi.homeName and mi.homeName() or nil
+  local net = mi.progNet or {}
+  local pct = function(v) return string.format("%d%%", math.floor((v or 0) * 100 + 1e-6)) end
+  if g.kind == "sample" and g.class == "flora" then
+    return "Cut a plant.", CUT_HINT
+  elseif g.kind == "sample" and g.class == "ore" then
+    return "Mine some ore.", MINE_HINT
+  elseif g.kind == "sample" and g.mat == "geode" then
+    local hint = "Geode pockets sit 7–14 m down. With the Mining Laser out, a pulsing ring on the ground marks one within 35 m."
+    local mf = ref("mineral_field")
+    local list = (mf and mf.pockets and home) and mf.pockets(home) or nil
+    local at = list and nearest_of(astro, home, list, function(p) return (p.left or 1) <= 0 end)
+    local way = at and rough_way(astro, at[1], at[2], at[3])
+    if way then hint = hint .. " Nearest signal: " .. way .. "." end
+    return "Dig out a Star Geode.", hint
+  elseif g.kind == "rare" then
+    local where = (mi.PROG_NICHE_WHERE or {})[niche] or "somewhere hard to reach"
+    local hint = (RARE_HINT[niche] or "") .. " Rare plants glow, so look for the light."
+    local ff = ref("flora_field")
+    local list = (ff and ff.rarePlants and home) and ff.rarePlants(home) or {}
+    if #list == 0 then
+      hint = hint .. " The survey is still mapping " .. (home or "the planet") .. "."
+    else
+      local at = nearest_of(astro, home, list, function(p) return p.cut or p.niche ~= niche end)
+      local way = at and rough_way(astro, at[1], at[2], at[3])
+      if way then hint = hint .. " Nearest report: " .. way .. "." end
+    end
+    return "Find a rare plant " .. where .. ".", hint .. " " .. CUT_HINT
+  elseif g.kind == "groundcov" then
+    local hint = "Each Relay Beacon only has to see one that is already linked: put them on high ground, a few hundred metres apart."
+    if net.api then
+      hint = string.format("%s of the ground has a link home. %s", pct(net.ground), hint)
+    end
+    return string.format("Spread Relay Beacons across %s.", home or "the planet"), hint
+  elseif g.kind == "orbitrelay" then
+    return "Put a relay satellite in orbit.",
+      string.format("A probe core, a Relay Dish and power, in any stable orbit of %s.", home or "home")
+  elseif g.kind == "skycov" then
+    return "Close the gaps in the sky.", string.format(
+      "%sSatellites spaced evenly round the orbit cover the sky between them; three in one plane cover most of it.",
+      net.api and (pct(net.sky) .. " of the sky is covered. ") or "")
+  elseif g.kind == "linked" and g.class == "moon" then
+    return "Link a moon to the network.", "A relay on or around a moon, in sight of one of yours."
+  elseif g.kind == "linked" then
+    return "Link another planet to the network.", "Across the system it takes a Deep Space Dish at one end at least."
+  end
+  return m.title, first_sentence(m.brief)
+end
+
+-- Goals met from a cockpit (a satellite, a link to another world).
+local FLOWN = { orbitrelay = true, skycov = true, linked = true }
+
+-- The programme's step for the card, or nil when it has nothing open. In
+-- flight, only a goal you meet by flying.
+local function prog_step(astro, flying)
+  local mi = ref("missions")
+  if not (mi and mi.progActive) then return nil end
+  local act = mi.progActive()
+  for _, m in ipairs(act) do
+    local g, i, niche = mi.progNextGoal(m.id)
+    if g and (not flying or FLOWN[g.kind]) then
+      local task, hint = prog_guidance(mi, astro, m, g, niche)
+      local others = {}
+      for _, o in ipairs(act) do if o ~= m then others[#others + 1] = o.title end end
+      local foot = nil
+      if not flying then
+        foot = (#others > 0 and ("Also open: " .. table.concat(others, ", ") .. ".  ") or "")
+          .. "Paid contracts: the Ops Board at the Command Centre."
+      end
+      return { key = "prog:" .. m.id .. ":" .. i, label = "Programme · " .. m.title,
+               task = task, hint = hint, goals = mi.progGoalLines(m.id),
+               pay = "Completes for " .. mi.progRewardLine(m), foot = foot, prog = m.id }
+    end
+  end
+  return nil
+end
+
+-- The short form under a contract: the milestone and its open goals.
+local function prog_brief()
+  local mi = ref("missions")
+  if not (mi and mi.progActive) then return nil end
+  local m = mi.progActive()[1]
+  if not m then return nil end
+  local open = {}
+  for _, l in ipairs(mi.progGoalLines(m.id)) do
+    if l:sub(1, 3) ~= "✓" and #open < 2 then open[#open + 1] = l end
+  end
+  return { label = "Programme · " .. m.title, lines = open }
+end
+
 -- The step, as a table the card renders. `at` is the facility to walk to.
 -- Hints are ONE short sentence: the card is read at a glance while walking.
+local current_step_inner
 local function current_step(astro)
+  local st = current_step_inner(astro)
+  if st and not st.prog and st.key ~= "siting" then st.progBrief = prog_brief() end
+  return st
+end
+
+current_step_inner = function(astro)
   local bf = ref("base_facilities")
   local mi = ref("missions")
   local co = ref("company")
@@ -332,7 +475,10 @@ local function current_step(astro)
   -- the contract's guidance outright with "sell what you're carrying".
   local carried = inv and inv.mass("astro") or 0
   local cap = (inv and inv.cap and inv.cap("astro")) or 90
-  if carried > 0.05 and (not m or carried >= cap * 0.6) then
+  -- …and the programme is something to follow too: a pack with a plant and a
+  -- rock in it from First Steps is not a reason to drop the next milestone.
+  local follow = m or prog_step(astro)
+  if carried > 0.05 and (not follow or carried >= cap * 0.6) then
     local worth = co and co.money(inv.totalValue("astro")) or ""
     return { key = "sell", label = "Cargo", at = "FacDepot",
              task = "Sell what you're carrying.",
@@ -380,8 +526,12 @@ local function current_step(astro)
              goals = goals, pay = pays }
   end
 
-  -- No contract on the books. The first one is the whole point of the game's
-  -- opening; every later one is just "go and sign the next".
+  -- No contract on the books: the programme's next milestone, if it has one.
+  local ps = prog_step(astro)
+  if ps then return ps end
+
+  -- No contract and no milestone open. The first contract is the whole point
+  -- of the game's opening; every later one is just "go and sign the next".
   local first = not (mi and #mi.completed() > 0)
   return { key = first and "first" or "next", label = "Ops", at = "FacCommand",
            task = first and "Sign your first contract."
@@ -410,12 +560,13 @@ local function banner()
   if type(p) ~= "table" or not p.at then return nil end
   if time - p.at > BANNER_TIME then return nil end
   local co = ref("company")
+  local prog = p.id == "prog"
   return {
-    key = "paid", label = "CONTRACT COMPLETE",
+    key = "paid", label = p.label or "CONTRACT COMPLETE",
     task = p.title or "Contract",
     pay = co and ("+" .. co.money(p.reward or 0) .. " paid into the company account")
       or string.format("+$%d paid into the company account", p.reward or 0),
-    hint = "Sign the next one at the Ops Board.",
+    hint = prog and "The programme's next step is on this card." or "Sign the next one at the Ops Board.",
   }
 end
 
@@ -466,6 +617,17 @@ local function describe(step, astro)
     rows[#rows + 1] = row("pay", "hud/pay", step.pay)
   end
 
+  if step.progBrief then
+    rows[#rows + 1] = row("plabel", "hud/label", step.progBrief.label)
+    for i, l in ipairs(step.progBrief.lines) do
+      rows[#rows + 1] = row("pgoal" .. i, "hud/goal", l)
+    end
+  end
+
+  if step.foot then
+    rows[#rows + 1] = row("foot", "hud/hint", step.foot)
+  end
+
   -- `items` + a passthrough function is how a container takes a LIST of
   -- children: a bare array as a positional child would be read as one nameless
   -- element wrapping the lot, and the rows would stack on top of each other.
@@ -504,6 +666,17 @@ local function in_cockpit()
   return fh ~= nil and fh.layout ~= nil
 end
 
+-- Is the programme's open goal one you meet from a cockpit (a satellite, a
+-- link to another world)? Then the card stays up in flight.
+local function prog_flown(mi)
+  if not mi.progActive then return false end
+  for _, m in ipairs(mi.progActive()) do
+    local g = mi.progNextGoal(m.id)
+    if g and FLOWN[g.kind] then return true end
+  end
+  return false
+end
+
 -- Nothing is up while the world is loading or while a panel you opened is in
 -- front of you. In flight the card is the CONTRACT and nothing else: it used to
 -- stand down entirely, and the flight HUD printed the goals into its text dump
@@ -515,7 +688,7 @@ local function should_show(astro)
   -- loading check to make here.
   if not crew_afoot() then
     local mi = ref("missions")
-    if not (in_cockpit() and mi and mi.active) then return false end
+    if not (in_cockpit() and mi and (mi.active or prog_flown(mi))) then return false end
   end
   return not panel_up()
 end
@@ -524,6 +697,10 @@ end
 -- pays. No directions and no brief — you are already doing it.
 local function flight_step()
   local mi, co = ref("missions"), ref("company")
+  if mi and not mi.active then
+    local ps = prog_step(find("Astronaut"), true)
+    if ps then ps.hint = nil; return ps end
+  end
   local m = mi and mi.byId and mi.byId(mi.active)
   return { key = "flight", label = "Contract",
            task = m and m.title or (mi and mi.activeLine and mi.activeLine()) or "",

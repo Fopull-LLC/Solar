@@ -114,6 +114,19 @@ local function entries(mi)
   if not mi then return out end
   local active = mi.active and mi.byId(mi.active) or nil
   if active then out[#out + 1] = { m = active, state = "active" } end
+  -- The programme (missions.lua PROGRAMME): the milestones in progress, then
+  -- the next one still waiting on another. Done ones are a line at the foot.
+  if mi.programme then
+    local next_locked = false
+    for _, e in ipairs(mi.programme()) do
+      if e.state == "active" then
+        out[#out + 1] = { m = e.m, state = "prog", prog = true }
+      elseif e.state == "locked" and not next_locked then
+        next_locked = true
+        out[#out + 1] = { m = e.m, state = "proglocked", prog = true, needs = e.needs }
+      end
+    end
+  end
   for _, m in ipairs(mi.offers()) do out[#out + 1] = { m = m, state = "offer" } end
   for _, u in ipairs((mi.upcoming and mi.upcoming()) or {}) do
     out[#out + 1] = { m = u.m, state = "locked", needs = u.needs }
@@ -125,7 +138,7 @@ end
 -- could sign — so the detail pane is never empty while there is anything to say.
 local function current(list)
   for _, c in ipairs(list) do if c.m.id == selected then return c end end
-  for _, c in ipairs(list) do if c.state ~= "locked" then return c end end
+  for _, c in ipairs(list) do if c.state ~= "locked" and c.state ~= "proglocked" then return c end end
   return list[1]
 end
 
@@ -139,7 +152,7 @@ end
 
 local function list_row(c, co, sel)
   local is_sel = sel and sel.m.id == c.m.id
-  local locked = c.state == "locked"
+  local locked = c.state == "locked" or c.state == "proglocked"
   return {
     "button", key = c.m.id,
     style = c.state == "active" and "panel/rowActive" or "panel/row",
@@ -147,7 +160,7 @@ local function list_row(c, co, sel)
     w = "100%", h = locked and 30 or 34, dir = "row", gap = 10, align = "center",
     opacity = locked and (is_sel and 0.85 or 0.55) or 1.0,
     { "text", key = "mark", style = locked and "panel/cellMuted" or "panel/cell", w = 12, h = "fit",
-      text = c.state == "active" and "◆" or (locked and "·" or "›") },
+      text = c.state == "active" and "◆" or (c.state == "prog" and "★" or (locked and "·" or "›")) },
     { "text", key = "title", style = locked and "panel/cellMuted" or "panel/cellStrong",
       w = "grow", h = "fit", maxLines = 1, overflow = "ellipsis", text = c.m.title },
     { "text", key = "pay", style = locked and "panel/cellMuted" or "panel/cellStrong",
@@ -163,6 +176,7 @@ end
 -- The goals of the selected contract: ticked live for the one on the books,
 -- as plain labels for the rest.
 local function goal_lines(mi, c)
+  if c.prog and mi.progGoalLines then return mi.progGoalLines(c.m.id) end
   if c.state == "active" and mi.goalLines then return mi.goalLines() end
   local out = {}
   for _, g in ipairs(c.m.goals or {}) do
@@ -184,6 +198,8 @@ local function detail(mi, co, c)
     active = "On the books",
     offer = "Available to sign",
     locked = "Unlocks after " .. tostring(c.needs or "?"),
+    prog = "Programme milestone · in progress",
+    proglocked = "Programme milestone · after " .. tostring(c.needs or "?"),
   })[c.state]
   rows[#rows + 1] = { "text", key = "status", style = "panel/label", w = "100%", h = "fit", text = status }
   rows[#rows + 1] = { "text", key = "dtitle", style = "panel/heading", w = "100%", h = "fit",
@@ -195,6 +211,23 @@ local function detail(mi, co, c)
     for i, l in ipairs(goals) do
       rows[#rows + 1] = wrapped("goal" .. i, l:sub(1, 3) == "✓" and "hud/goalDone" or "hud/goal", l)
     end
+  end
+  if c.prog then
+    rows[#rows + 1] = { "text", key = "payL", style = "panel/label", w = "100%", h = "fit", text = "Completes for" }
+    rows[#rows + 1] = wrapped("pay", "panel/body",
+      (mi.progRewardLine and mi.progRewardLine(m)) or money_of(co, m.reward))
+    rows[#rows + 1] = { "box", key = "drule", style = "panel/rule", w = "100%", h = 1 }
+    rows[#rows + 1] = wrapped("progH", "panel/hint", c.state == "prog"
+      and "Nothing to sign: milestones count as they happen, alongside any contract, and each stage pays as it ticks."
+      or ("Opens once " .. tostring(c.needs or "the milestone before it") .. " is complete."))
+    local net = mi.progNet
+    if net and (m.id == "relay_net" or m.id == "sky" or m.id == "beyond") then
+      rows[#rows + 1] = wrapped("net", "panel/cellMuted", net.api and string.format(
+        "Network: ground %d%% · sky %d%% · relays in orbit %d · worlds linked %d",
+        math.floor((net.ground or 0) * 100), math.floor((net.sky or 0) * 100), net.orbit or 0, #(net.linked or {}))
+        or "Network: not reporting yet.")
+    end
+    return rows
   end
   rows[#rows + 1] = { "row", key = "pays", w = "100%", h = "fit", gap = 10, pad = 0, align = "center",
     { "text", key = "payL", style = "panel/label", w = "fit", h = "fit", text = "Pays" },
@@ -272,8 +305,21 @@ local function describe()
     end
   end
   group("active", "On the books", nil)
+  group("prog", "Programme", nil)
+  group("proglocked", (function()
+    for _, c in ipairs(list) do if c.state == "prog" then return "Programme · next" end end
+    return "Programme"
+  end)(), nil)
   group("offer", "Available", (mi and mi.active) and "Nothing else to sign yet." or "None right now.")
   group("locked", "Coming up", nil)
+  if mi and mi.programme then
+    local done = {}
+    for _, e in ipairs(mi.programme()) do if e.state == "done" then done[#done + 1] = e.m.title end end
+    if #done > 0 then
+      left[#left + 1] = { "text", key = "progdone", style = "panel/cellMuted", w = "100%", h = "fit", wrap = true,
+                          text = "Milestones done: " .. table.concat(done, ", ") }
+    end
+  end
 
   local board = { "col", key = "board", style = "panel/frame", w = "100%",
     dir = "col", gap = 12, pad = PAD, align = "start",

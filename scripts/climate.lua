@@ -1300,3 +1300,469 @@ function update(node, dt)
     end
   end
 end
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- RARE NICHES — where a world's rare plants and ore pockets are.
+-- ════════════════════════════════════════════════════════════════════════════
+--
+-- A rare plant is rare because of WHERE it grows: in the dark under a rock
+-- shelf, on the highest ground above the snow line, on the floor of a ravine,
+-- at a lake's edge, on a riverbank. This finds those places on the real
+-- ground, from the terrain's own distance field (`sdf`, body-relative: a
+-- wrapper round terrain.query) and the world's rivers, ravines and lakes
+-- (`hydro`), and picks a handful of each. Rare ore pockets are the same pass:
+-- a few spots 7–14 m down in solid rock.
+--
+-- It is its own seeded pass. It reads the generated ground and the world
+-- record and rolls its own stream (`rare_rng`, salted off the world seed), so
+-- the generator's random streams — and so every world already in a save —
+-- are untouched. Pure Lua with the field handed in, so the smoke harness runs
+-- it against an analytic planet.
+--
+--     local sc = cl.rareScan(w, hydro, sdf)    -- sdf(rx, ry, rz) → metres | nil
+--     sc.step(2000)   → "running" | "done" | "fail"   (2000 field reads a call)
+--     sc.result       → { v, seed, plants = { {niche, x, y, z, s} }, ores = { {x, y, z, d, r} } }
+--
+-- "fail" means the field did not answer where the world says ground is (not
+-- generated yet, or still streaming in): ask again later. The caller keeps the
+-- answer (flora_field stores it in the save), so a hole dug later never moves
+-- a plant.
+
+RARE_NICHES = { "cave", "peak", "ravine", "lake", "river" }
+RARE_SCAN_V = 1
+
+local function rare_rng(seed)
+  local s = math.floor(seed or 1) % 2147483647
+  if s <= 0 then s = s + 2147483646 end
+  return function()
+    s = (s * 48271) % 2147483647
+    return s / 2147483647
+  end
+end
+
+local function rare_hash(a, b)
+  local h = (math.floor(a or 0) % 2147483647) * 16807 + math.floor(b or 0) * 48271 + 11
+  return (h % 2147483647) / 2147483647
+end
+
+-- Rotate (x,y,z) by yaw a, pitch b (a fixed per-world twist of the grid).
+local function rare_rot(x, y, z, ca, sa, cb, sb)
+  local x1, z1 = x * ca - z * sa, x * sa + z * ca
+  local y2, z2 = y * cb - z1 * sb, y * sb + z1 * cb
+  return x1, y2, z2
+end
+
+local function tangent_of(ux, uy, uz)
+  local ax, ay, az = 0, 1, 0
+  if math.abs(uy) > 0.9 then ax, ay, az = 1, 0, 0 end
+  local tx, ty, tz = uy * az - uz * ay, uz * ax - ux * az, ux * ay - uy * ax
+  local l = len(tx, ty, tz)
+  tx, ty, tz = tx / l, ty / l, tz / l
+  return tx, ty, tz, uy * tz - uz * ty, uz * tx - ux * tz, ux * ty - uy * tx
+end
+
+-- The niche rules as numbers, for the probes and the harness.
+RARE_RULES = {
+  grid = 38,          -- metres between grid samples
+  peakQ = 0.965,      -- a peak is above this share of the world's ground…
+  peakRel = 0.6,      -- …and this share of the way from the middle to the top
+  peakSlope = 0.9,    -- …and not a cliff (rise over run across 5 m)
+  ravineWall = 3.0,   -- a ravine floor has walls at least this high on both sides
+  ravineDeep = 5.0,   -- …and this high on one
+  shoreMin = 0.15,    -- a lake shore is this far above the water…
+  shoreMax = 2.5,     -- …and no further
+  bankMin = 0.4,      -- a riverbank stands this far above the bed…
+  bankMax = 6.0,
+  voidMin = 2.0,      -- an overhang shelters a void at least this tall…
+  voidDepth = 16,     -- …whose floor is no deeper than this under the ground above
+  openReach = 10,     -- a shelter open to the side within this reach is preferred
+  sep = { cave = 110, peak = 160, ravine = 140, lake = 120, river = 140 },
+  keep = { cave = 3, peak = 3, ravine = 3, lake = 3, river = 3 },
+  ores = 6, oreSep = 160, oreR = 2.5,
+}
+
+function rareScan(w, hydro, sdf, opts)
+  opts = opts or {}
+  local RR = RARE_RULES
+  local R = w.radius or 100
+  local shape = w.shape or {}
+  local top = R + (shape.peak or (w.relief or R * 0.06) * 3) + 12
+  local bottom = R - (shape.low or (w.relief or R * 0.06) * 2) - 30
+  local sea = w.sea or 0
+  local seed = math.floor(w.seed or 1)
+  local budget, used = 0, 0
+  local co
+  local sc = { result = nil, reads = 0, status = "running" }
+
+  -- Every field read goes through here, and the coroutine yields once the
+  -- call's budget is spent.
+  local function q(x, y, z)
+    used = used + 1
+    sc.reads = sc.reads + 1
+    if used >= budget and co then coroutine.yield("running") end
+    return sdf(x, y, z)
+  end
+
+  -- Ground radius along unit (ux,uy,uz), marched down from `from`. The first
+  -- surface met from above: on an overhang that is its roof.
+  local function ground(ux, uy, uz, from)
+    local r = from or top
+    for _ = 1, 160 do
+      local d = q(ux * r, uy * r, uz * r)
+      if not d then return nil, "cold" end
+      if d < 0.12 then
+        if d < -0.5 and r >= top - 0.01 then return nil, "buried" end
+        return r - math.max(d, 0)
+      end
+      r = r - math.max(d * 0.9, 0.08)
+      if r < bottom then return nil, "deep" end
+    end
+    return nil, "slow"
+  end
+  -- Starting close above a known nearby height, falling back to the top.
+  local function ground_near(ux, uy, uz, near)
+    if near then
+      local from = near + 14
+      local d = q(ux * from, uy * from, uz * from)
+      if d and d > 0.12 then return ground(ux, uy, uz, from) end
+    end
+    return ground(ux, uy, uz, top)
+  end
+
+  local lakes = (hydro and hydro.lakes) or {}
+  local function in_water(ux, uy, uz, g)
+    if sea > 0 and g < sea + 0.3 then return true end
+    for _, L in ipairs(lakes) do
+      local ll = len(L.x, L.y, L.z)
+      local c = (L.x * ux + L.y * uy + L.z * uz) / ll
+      local d = math.acos(math.max(-1, math.min(1, c))) * R
+      if d < L.reach * 1.1 and g < R + L.level + 0.1 then return true end
+    end
+    return false
+  end
+
+  -- How steep the ground is round a grid point: rise over run, 5 m out.
+  local function slope_at(ux, uy, uz, g)
+    local t1x, t1y, t1z, t2x, t2y, t2z = tangent_of(ux, uy, uz)
+    local worst = 0
+    for k = 1, 2 do
+      local tx, ty, tz = (k == 1) and t1x or t2x, (k == 1) and t1y or t2y, (k == 1) and t1z or t2z
+      local px, py, pz = ux * g + tx * 5, uy * g + ty * 5, uz * g + tz * 5
+      local pl = len(px, py, pz)
+      local g2 = ground_near(px / pl, py / pl, pz / pl, g)
+      if not g2 then return nil end
+      worst = math.max(worst, math.abs(g2 - g) / 5)
+    end
+    return worst
+  end
+
+  -- A void under the surface met from above: the floor of an overhang's
+  -- shelter or a cave mouth. → floor radius, void height
+  local function void_under(ux, uy, uz, g)
+    local r = g - 0.9
+    local inrock, top_of_void = true, nil
+    for _ = 1, math.floor(RR.voidDepth / 0.9) do
+      local d = q(ux * r, uy * r, uz * r)
+      if not d then return nil end
+      if inrock and d > 0.15 then
+        inrock, top_of_void = false, r
+      elseif not inrock and d < 0.1 then
+        -- Back up onto the floor itself: the step went a little into it.
+        for _ = 1, 6 do
+          if d < -0.05 then r = r - d
+          elseif d > 0.12 then r = r - d * 0.9
+          else break end
+          d = q(ux * r, uy * r, uz * r)
+          if not d then return nil end
+        end
+        local h = top_of_void - r
+        if h >= RR.voidMin then return r - math.max(d, 0), h, g - top_of_void end
+        inrock, top_of_void = true, nil
+      end
+      r = r - 0.9
+    end
+    return nil
+  end
+
+  -- From the middle of a void, can you walk out sideways? Six directions,
+  -- air all the way out to `openReach`.
+  local function shelter_open(ux, uy, uz, fl, h)
+    local t1x, t1y, t1z, t2x, t2y, t2z = tangent_of(ux, uy, uz)
+    local rm = fl + math.min(h * 0.5, 1.2)
+    for k = 0, 5 do
+      local a = k * math.pi / 3
+      local dx = t1x * math.cos(a) + t2x * math.sin(a)
+      local dy = t1y * math.cos(a) + t2y * math.sin(a)
+      local dz = t1z * math.cos(a) + t2z * math.sin(a)
+      local clear = true
+      for st = 1, 4 do
+        local f = RR.openReach * st / 4
+        local d = q(ux * rm + dx * f, uy * rm + dy * f, uz * rm + dz * f)
+        if not d or d < 0.2 then clear = false break end
+      end
+      if clear then return true end
+    end
+    return false
+  end
+
+  local cands = { cave = {}, peak = {}, ravine = {}, lake = {}, river = {} }
+  local function add(niche, ux, uy, uz, g, score, extra)
+    local c = { niche = niche, x = ux * g, y = uy * g, z = uz * g, s = score }
+    if extra then for k, v in pairs(extra) do c[k] = v end end
+    cands[niche][#cands[niche] + 1] = c
+  end
+
+  local function run()
+    -- 1. THE GRID: a Fibonacci sphere, twisted per world.
+    local rnd = rare_rng(seed * 7 + 90917)
+    local a, b = rnd() * math.pi * 2, rnd() * math.pi
+    local ca, sa, cb, sb = math.cos(a), math.sin(a), math.cos(b), math.sin(b)
+    local N = math.floor(4 * math.pi * R * R / (RR.grid * RR.grid))
+    N = math.max(400, math.min(opts.maxGrid or 9000, N))
+    local grid = {}
+    local ga = math.pi * (3 - math.sqrt(5))
+    local hasOver = (not w.shape) or (shape.layers and shape.layers.overhangs) or opts.caves
+    for i = 0, N - 1 do
+      local y = 1 - (i + 0.5) / N * 2
+      local rr = math.sqrt(math.max(0, 1 - y * y))
+      local th = ga * i
+      local ux, uy, uz = rare_rot(math.cos(th) * rr, y, math.sin(th) * rr, ca, sa, cb, sb)
+      local g, why = ground(ux, uy, uz, top)
+      if not g then
+        -- A world's ground has to be everywhere: a hole in it is a field
+        -- that is not all here yet.
+        sc.why = why
+        return "fail"
+      end
+      grid[#grid + 1] = { ux, uy, uz, g }
+      if hasOver then
+        -- Shelters are small: the grid point and two more round it, so the
+        -- search is about twice as fine as the grid.
+        local t1x, t1y, t1z, t2x, t2y, t2z = tangent_of(ux, uy, uz)
+        local off = RR.grid * 0.34
+        for k = 0, 2 do
+          local vx, vy, vz = ux, uy, uz
+          if k > 0 then
+            local a = (k == 1) and 0.5 or 3.6
+            local px = ux * g + (t1x * math.cos(a) + t2x * math.sin(a)) * off
+            local py = uy * g + (t1y * math.cos(a) + t2y * math.sin(a)) * off
+            local pz = uz * g + (t1z * math.cos(a) + t2z * math.sin(a)) * off
+            vx, vy, vz = px / len(px, py, pz), py / len(px, py, pz), pz / len(px, py, pz)
+          end
+          local gk = (k == 0) and g or ground_near(vx, vy, vz, g)
+          local fl, h, roof = nil, nil, nil
+          if gk then fl, h, roof = void_under(vx, vy, vz, gk) end
+          if fl and not in_water(vx, vy, vz, fl) then
+            -- Open to the side (a shelter you can walk into) beats a sealed
+            -- hollow you have to dig to; a thin roof beats a thick one.
+            local open = shelter_open(vx, vy, vz, fl, h)
+            add("cave", vx, vy, vz, fl, (open and 20 or 0) + h - roof * 0.3 + rare_hash(seed, i * 3 + k) * 0.01,
+                { h = h, open = open })
+          end
+        end
+      end
+    end
+    sc.grid = #grid
+
+    -- 2. PEAKS: the highest ground, above the snow line where the world has
+    -- one, and not a cliff face.
+    local hs = {}
+    for i, p in ipairs(grid) do hs[i] = p[4] end
+    table.sort(hs)
+    -- The altitude line: the top few percent of the ground, and high above
+    -- the world's middle — on a world of rolling hills and one range, only
+    -- the range.
+    local line = hs[math.max(1, math.floor(#hs * RR.peakQ))]
+    local mid = hs[math.max(1, math.floor(#hs * 0.5))]
+    line = math.max(line, mid + (hs[#hs] - mid) * RR.peakRel)
+    if shape.snowline and R + shape.snowline > line and R + shape.snowline < hs[#hs] - 2 then
+      line = R + shape.snowline
+    end
+    sc.peakLine = line - R
+    for i, p in ipairs(grid) do
+      if p[4] >= line and not in_water(p[1], p[2], p[3], p[4]) then
+        local sl = slope_at(p[1], p[2], p[3], p[4])
+        if sl and sl <= RR.peakSlope then
+          add("peak", p[1], p[2], p[3], p[4], (p[4] - line) + rare_hash(seed, i + 7) * 0.01, { slope = sl })
+        end
+      end
+    end
+
+    -- 3. CHANNELS: ravine floors and riverbanks, along the carved channels.
+    for ci, ch in ipairs((hydro and hydro.rivers) or {}) do
+      local pts, wid = ch.points or {}, ch.widths or {}
+      local n = math.floor(#pts / 3)
+      local acc, last = 0, nil
+      for i = 1, n - 1 do
+        local ax, ay, az = pts[i * 3 - 2], pts[i * 3 - 1], pts[i * 3]
+        local bx, by, bz = pts[i * 3 + 1], pts[i * 3 + 2], pts[i * 3 + 3]
+        local seg = len(bx - ax, by - ay, bz - az)
+        acc = acc + seg
+        if not last or acc - last >= (ch.river and 22 or 16) then
+          last = acc
+          local al = len(ax, ay, az)
+          local ux, uy, uz = ax / al, ay / al, az / al
+          -- Across the channel: the segment's direction × up.
+          local dx, dy, dz = bx - ax, by - ay, bz - az
+          local px, py, pz = dy * uz - dz * uy, dz * ux - dx * uz, dx * uy - dy * ux
+          local pl = len(px, py, pz)
+          if pl > 1e-6 then
+            px, py, pz = px / pl, py / pl, pz / pl
+            local half = (wid[i] or 10) * 0.5
+            local gc = ground(ux, uy, uz, top)
+            if gc then
+              local function side(k, off)
+                local sx, sy, sz = ux * gc + px * off * k, uy * gc + py * off * k, uz * gc + pz * off * k
+                local sl = len(sx, sy, sz)
+                local g = ground_near(sx / sl, sy / sl, sz / sl, gc + 30)
+                return g, sx / sl, sy / sl, sz / sl
+              end
+              if not ch.river then
+                local gl = side(1, half + 8)
+                local gr = side(-1, half + 8)
+                if gl and gr and not in_water(ux, uy, uz, gc) then
+                  local lo, hi = math.min(gl, gr) - gc, math.max(gl, gr) - gc
+                  if lo >= RR.ravineWall and hi >= RR.ravineDeep then
+                    add("ravine", ux, uy, uz, gc, lo + rare_hash(ci * 1000 + i, seed) * 0.01,
+                        { depth = lo, ch = ci })
+                  end
+                end
+              else
+                for _, k in ipairs({ 1, -1 }) do
+                  local gb, bx_, by_, bz_ = side(k, half + 2.5)
+                  if gb then
+                    local rise = gb - gc
+                    local go = side(k, half + 6.5)
+                    if rise >= RR.bankMin and rise <= RR.bankMax and go and math.abs(go - gb) < 3
+                       and not in_water(bx_, by_, bz_, gb) then
+                      add("river", bx_, by_, bz_, gb, 3 - math.abs(rise - 1.2) + rare_hash(ci * 1000 + i, seed + k) * 0.01,
+                          { rise = rise, ch = ci })
+                    end
+                  end
+                end
+              end
+            end
+          end
+        end
+      end
+    end
+
+    -- 4. LAKE SHORES: round each lake, just above its water.
+    for li, L in ipairs(lakes) do
+      local ll = len(L.x, L.y, L.z)
+      local ux, uy, uz = L.x / ll, L.y / ll, L.z / ll
+      local t1x, t1y, t1z, t2x, t2y, t2z = tangent_of(ux, uy, uz)
+      local level = R + L.level
+      for k = 0, 23 do
+        local ang = k * math.pi / 12
+        local found = false
+        for _, f in ipairs({ 0.85, 1.0, 1.15, 1.3, 1.5 }) do
+          if found then break end
+          local d = L.reach * f
+          local cx = ux * R + (t1x * math.cos(ang) + t2x * math.sin(ang)) * d
+          local cy = uy * R + (t1y * math.cos(ang) + t2y * math.sin(ang)) * d
+          local cz = uz * R + (t1z * math.cos(ang) + t2z * math.sin(ang)) * d
+          local cl_ = len(cx, cy, cz)
+          local vx, vy, vz = cx / cl_, cy / cl_, cz / cl_
+          local g = ground_near(vx, vy, vz, level)
+          if g then
+            local above = g - level
+            if above >= RR.shoreMin and above <= RR.shoreMax and not (sea > 0 and g < sea + 0.3) then
+              found = true
+              add("lake", vx, vy, vz, g, 3 - math.abs(above - 0.6) + rare_hash(li * 100 + k, seed) * 0.01,
+                  { above = above, lake = li })
+            end
+          end
+        end
+      end
+    end
+
+    -- 5. PICK a handful of each, spread out.
+    local plants = {}
+    for _, niche in ipairs(RARE_NICHES) do
+      local list = cands[niche]
+      table.sort(list, function(p, q2)
+        if p.s ~= q2.s then return p.s > q2.s end
+        return (p.x + p.y * 3 + p.z * 7) < (q2.x + q2.y * 3 + q2.z * 7)
+      end)
+      local kept = {}
+      local sep = RR.sep[niche]
+      for _, c in ipairs(list) do
+        if #kept >= RR.keep[niche] then break end
+        local ok = true
+        for _, k in ipairs(kept) do
+          if len(c.x - k.x, c.y - k.y, c.z - k.z) < sep then ok = false break end
+        end
+        if ok then kept[#kept + 1] = c end
+      end
+      sc[niche] = #list
+      for _, c in ipairs(kept) do
+        plants[#plants + 1] = { niche = niche, x = c.x, y = c.y, z = c.z, s = c.s }
+      end
+    end
+
+    -- 6. ORE POCKETS: grid points in a seeded order, a pocket some metres
+    -- under each, wholly inside rock.
+    local order = {}
+    for i = 1, #grid do order[i] = i end
+    local orng = rare_rng(seed * 13 + 4441)
+    for i = #order, 2, -1 do
+      local j = math.floor(orng() * i) + 1
+      order[i], order[j] = order[j], order[i]
+    end
+    local ores = {}
+    for _, i in ipairs(order) do
+      if #ores >= RR.ores then break end
+      local p = grid[i]
+      local depth = 7 + rare_hash(seed + 3, i) * 7
+      local rc = p[4] - depth
+      local cx, cy, cz = p[1] * rc, p[2] * rc, p[3] * rc
+      local ok = not in_water(p[1], p[2], p[3], p[4])
+      for _, o in ipairs(ores) do
+        if ok and len(cx - o.x, cy - o.y, cz - o.z) < RR.oreSep then ok = false end
+      end
+      if ok then
+        local d0 = q(cx, cy, cz)
+        ok = d0 ~= nil and d0 <= -1.0
+        local r = RR.oreR
+        local offs = { { r, 0, 0 }, { -r, 0, 0 }, { 0, r, 0 }, { 0, -r, 0 }, { 0, 0, r }, { 0, 0, -r } }
+        for _, o in ipairs(offs) do
+          if ok then
+            local d = q(cx + o[1], cy + o[2], cz + o[3])
+            ok = d ~= nil and d <= -0.3
+          end
+        end
+      end
+      if ok then ores[#ores + 1] = { x = cx, y = cy, z = cz, d = depth, r = RR.oreR } end
+    end
+
+    local function round(v) return math.floor(v * 100 + 0.5) / 100 end
+    for _, p in ipairs(plants) do p.x, p.y, p.z, p.s = round(p.x), round(p.y), round(p.z), round(p.s) end
+    for _, o in ipairs(ores) do o.x, o.y, o.z, o.d = round(o.x), round(o.y), round(o.z), round(o.d) end
+    sc.result = { v = RARE_SCAN_V, seed = seed, plants = plants, ores = ores }
+    return "done"
+  end
+
+  co = coroutine.create(run)
+  function sc.step(n)
+    if sc.status ~= "running" then return sc.status end
+    budget, used = math.max(50, n or 2000), 0
+    local ok, st = coroutine.resume(co)
+    if not ok then
+      sc.status, sc.why = "fail", tostring(st)
+    elseif coroutine.status(co) == "dead" then
+      sc.status = st or "done"
+    end
+    return sc.status
+  end
+  return sc
+end
+
+-- What each niche is called on a card and in a hint.
+RARE_NICHE_TEXT = {
+  cave = { where = "under an overhang", short = "overhang" },
+  peak = { where = "on a high peak", short = "peak" },
+  ravine = { where = "on a ravine floor", short = "ravine" },
+  lake = { where = "on a lake shore", short = "lake shore" },
+  river = { where = "on a riverbank", short = "riverbank" },
+}

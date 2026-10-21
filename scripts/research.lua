@@ -44,9 +44,13 @@ TECH = {
   tankM      = { cost = 600,  label = "FT-M Tank" },
   battery    = { cost = 900,  label = "Battery",        mat = "copper" },
   engineM    = { cost = 1400, label = "Anvil" },
-  dish       = { cost = 1100, label = "Relay Dish",     mat = "copper" },
+  -- The relay dish is what a SATELLITE relay is made of: it opens once the
+  -- ground network is up (the Relay Network milestone grants it outright), so
+  -- the order is ground first, then the sky (missions.lua PROGRAMME).
+  dish       = { cost = 1100, label = "Relay Dish",     mat = "copper", prog = "relay_net", progLabel = "Relay Network" },
   probe      = { cost = 800,  label = "Probe Core",     mat = "copper" },
-  dishL      = { cost = 5200, label = "Deep Space Dish", mat = "silica", after = "dish", rep = 6 },
+  dishL      = { cost = 5200, label = "Deep Space Dish", mat = "silica", after = "dish", rep = 6,
+                 prog = "sky", progLabel = "Eyes in the Sky" },
   radialDec  = { cost = 900,  label = "Radial Decoupler" },
   radialTank = { cost = 1200, label = "Radial Tank",    after = "tankM" },
   solar      = { cost = 2200, label = "Solar Panel",    mat = "silica",  after = "battery" },
@@ -58,6 +62,47 @@ TECH = {
 
 -- Published for panels.
 spent = 0
+
+-- ── rare samples ────────────────────────────────────────────────────────────
+-- What the rare finds are, as materials: one specimen per niche (flora_gen
+-- `rareFor`, flora_field cuts them) and the geode the ore pockets hold
+-- (mineral_field). They are registered into the materials table at start, from
+-- here because this script is mounted in every scene that weighs, lists or
+-- prices a material (the system scene and the builder). Their first sight is
+-- what the programme's Rare Finds milestone asks for (`sample`), and the depot
+-- pays the tier-3 discovery premium on each.
+RARE_MATS = {
+  rare_cave   = { name = "Gloamcap Spores",   kg = 0.3, value = 40,  tier = 3, class = "flora" },
+  rare_peak   = { name = "Frostbloom Petals", kg = 0.2, value = 40,  tier = 3, class = "flora" },
+  rare_ravine = { name = "Ravine Ember Pods", kg = 0.4, value = 40,  tier = 3, class = "flora" },
+  rare_lake   = { name = "Shore Pearls",      kg = 0.3, value = 40,  tier = 3, class = "flora" },
+  rare_river  = { name = "Silkspire Fronds",  kg = 0.3, value = 40,  tier = 3, class = "flora" },
+  geode       = { name = "Star Geode",        kg = 1.4, value = 120, tier = 3, class = "ore" },
+}
+
+local registered = nil
+-- Idempotent; safe to call every frame (it does the work once per materials
+-- script). Returns true once the materials table holds them.
+function registerMaterials()
+  local m = findScript and findScript("materials")
+  if not (m and m.REG) then return false end
+  if registered == m and m.REG.geode then return true end
+  for id, def in pairs(RARE_MATS) do
+    if not m.REG[id] then
+      m.REG[id] = { name = def.name, kg = def.kg, value = def.value, tier = def.tier, class = def.class }
+    end
+  end
+  registered = m
+  return m.REG.geode ~= nil
+end
+
+function start(node)
+  registerMaterials()
+end
+
+function update(node, dt)
+  if registered == nil or not registered.valid then registerMaterials() end
+end
 
 local function done()
   return save.get("res.done") or {}
@@ -84,6 +129,12 @@ function blockedBy(id)
   if not t or isUnlocked(id) then return nil end
   if t.after and not isUnlocked(t.after) then
     return "needs " .. labelOf(t.after)
+  end
+  -- A programme milestone (missions.lua PROGRAMME). Read from the save, not
+  -- from missions: the builder has no missions script, and the answer must be
+  -- the same in both scenes.
+  if t.prog and not (save.get("prog.done") or {})[t.prog] then
+    return "needs the " .. (t.progLabel or t.prog) .. " milestone"
   end
   if t.mat then
     local inv, mats = findScript("inventory"), findScript("materials")
@@ -133,6 +184,17 @@ function unlock(id)
   -- No reputation for research any more: standing that money can buy is a
   -- price, and it would let a rich company skip the contract tiers.
   return true, labelOf(id)
+end
+
+-- Given, not bought: a programme milestone's reward (missions.lua). No money,
+-- no gates — the milestone was the gate. Returns true if it was new.
+function grant(id, why)
+  if not TECH[id] or isUnlocked(id) then return false end
+  local d = done()
+  d[id] = true
+  save.set("res.done", d)
+  log("RESEARCH GRANTED: " .. labelOf(id) .. (why and ("  (" .. why .. ")") or ""))
+  return true
 end
 
 -- Called by the depot when a first sale lands: a discovery can turn a "needs a

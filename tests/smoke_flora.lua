@@ -117,11 +117,13 @@ local function make_node(name, parent)
   return n
 end
 local nodes_made = 0
+local rare_nodes = 0   -- the handful of rare plants (and their glow) per world
 function API.createNode(name, a, b)
   local parent, cb = nil, nil
   for _, v in ipairs({ a, b }) do
     if type(v) == "function" then cb = v elseif type(v) == "table" then parent = v end
   end
+  if name:sub(1, 5) == "Rare " then rare_nodes = rare_nodes + 1 end
   nodes_made = nodes_made + 1
   local n = make_node(name, parent)
   if cb then cb(n) end
@@ -566,7 +568,7 @@ local function tick(n)
   end
 end
 ff.params.interval = 0.0
-local nodes_before = nodes_made
+local nodes_before = nodes_made - rare_nodes
 tick(80)
 check("the meshes are preloaded before anything is scattered", preload_calls == 1, preload_calls)
 check("standing on a living world opens patches", ff.patchCount > 0, ff.patchCount)
@@ -574,8 +576,8 @@ check("…and scatter sources on them", ff.sources > 0, ff.sources)
 check("…with plants in them", ff.count > 0, ff.count)
 check("…within the prop budget", ff.count <= ff.params.max_props * 1.25, ff.count)
 check("the field costs a handful of nodes, not one per plant",
-  nodes_made - nodes_before <= ff.patchCount + ff.params.motes + 2,
-  (nodes_made - nodes_before) .. " nodes for " .. ff.count .. " plants")
+  nodes_made - rare_nodes - nodes_before <= ff.patchCount + ff.params.motes + 2,
+  (nodes_made - rare_nodes - nodes_before) .. " nodes for " .. ff.count .. " plants")
 check("…anchored to the body we're on", ff.bodyName == BODY.name)
 
 -- The patch frame is right: a plant's rolled place lies in a plane tangent to

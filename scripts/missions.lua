@@ -161,6 +161,108 @@ local CATALOGUE = {
   },
 }
 
+-- ════════════════════════════════════════════════════════════════════════════
+-- THE PROGRAMME — the company's milestones, KSP-career style
+-- ════════════════════════════════════════════════════════════════════════════
+--
+-- Contracts are work you SIGN, one at a time. The programme is the company's
+-- own direction, and it runs alongside whatever is on the books: nothing to
+-- sign, nothing to abandon, it counts as it happens. One arc:
+--
+--   1  First Steps     cut a plant, mine some ore                     (home)
+--   2  Rare Finds      a plant from a ravine floor, one from a peak,
+--                      a Star Geode from an underground pocket         (home)
+--   3  Relay Network   ground relays until 25 / 50 / 80 % of the home
+--                      planet's ground has a link home                 → Relay Dish
+--   4  Eyes in the Sky relay satellites in orbit; 95 % sky coverage   → Deep Space Dish
+--   5  Beyond          link a moon, then another planet
+--
+-- Each goal can pay on its own (`pay`, `grant`) — a staged goal is a reward
+-- per stage — and the milestone pays its own reward when the last goal ticks.
+-- Every programme goal LATCHES: coverage that dips after a beacon is picked up
+-- never takes a paid stage back.
+--
+-- Goal kinds (on top of the contract kinds `sample` and friends):
+--
+--   sample   class=     have held ANY material of this class (flora, ore)
+--   rare     niche=     a rare plant from that niche (its specimen in the
+--            alt={…}    discovery set). If the home world has none in that
+--                       niche, the first `alt` niche it does have stands in.
+--   groundcov frac      comms.coverage(home).ground ≥ frac
+--   skycov   frac       comms.coverage(home).sky ≥ frac
+--   orbitrelay n        comms.relayStats().orbit[home] ≥ n
+--   linked   class=     a body of that class (moon / planet) is in
+--                       comms.linkedBodies()
+--
+-- The comms numbers come from the relay network (comms.lua); they are polled
+-- once a second, guarded, and a network that does not report yet is a goal
+-- that waits, never an error.
+--
+-- State: `prog.done` (milestone → true), `prog.perm` (milestone → goal index →
+-- true), `prog.paidAt` (the last announcement, for the card).
+
+PROGRAMME = {
+  {
+    id = "first_steps", title = "First Steps",
+    brief = "Before the board signs off anything that flies, it wants to know the\n" ..
+            "colony can feed itself: something cut, something mined.",
+    reward = 400, rep = 0,
+    goals = {
+      { kind = "sample", class = "flora", label = "Cut a plant (Harvest Cutter, key 2)" },
+      { kind = "sample", class = "ore", label = "Mine some ore (Mining Laser, key 1)" },
+    },
+  },
+  {
+    id = "rare_finds", title = "Rare Finds", requires = "first_steps",
+    brief = "The survey flagged plants that grow in one kind of place only, and a\n" ..
+            "ringing in the rock that means geodes. The labs want a specimen of each.\n" ..
+            "Rare plants glow faintly: look for the light.",
+    reward = 1200, rep = 1, grants = { "battery" },
+    goals = {
+      { kind = "rare", niche = "ravine", alt = { "river", "lake", "cave" }, pay = 500 },
+      { kind = "rare", niche = "peak", alt = { "cave", "lake", "river" }, pay = 500 },
+      { kind = "sample", mat = "geode", pay = 700, label = "A Star Geode from an underground pocket" },
+    },
+  },
+  {
+    id = "relay_net", title = "Relay Network", requires = "first_steps",
+    brief = "A craft past the horizon is a craft nobody can talk to. Ring the planet\n" ..
+            "with Relay Beacons — cheap, and each one only has to see the last —\n" ..
+            "until most of the ground has a link home.",
+    reward = 3000, rep = 2, grants = { "dish" },
+    goals = {
+      { kind = "groundcov", frac = 0.25, pay = 1200, label = "25% of the ground covered" },
+      { kind = "groundcov", frac = 0.50, pay = 2000, grant = "probe", label = "50% of the ground covered" },
+      { kind = "groundcov", frac = 0.80, pay = 3500, label = "80% of the ground covered" },
+    },
+  },
+  {
+    id = "sky", title = "Eyes in the Sky", requires = "relay_net",
+    brief = "Ground relays need hills and line of sight. Satellites don't: put relays\n" ..
+            "in orbit until every point of the sky over home can reach the network.",
+    reward = 12000, rep = 3, grants = { "dishL" },
+    goals = {
+      { kind = "orbitrelay", n = 1, pay = 3000, label = "A relay satellite in orbit" },
+      { kind = "skycov", frac = 0.60, pay = 3000, label = "60% sky coverage" },
+      { kind = "skycov", frac = 0.95, pay = 5000, label = "95% sky coverage" },
+    },
+  },
+  {
+    id = "beyond", title = "Beyond", requires = "sky",
+    brief = "A network that ends at home's sky is a local one. Put a relay on or\n" ..
+            "around another world and close the link back.",
+    reward = 30000, rep = 4,
+    goals = {
+      { kind = "linked", class = "moon", pay = 8000, label = "Link a moon to the network" },
+      { kind = "linked", class = "planet", pay = 15000, label = "Link another planet to the network" },
+    },
+  },
+}
+
+-- Published for the card and the board: the network numbers as last polled.
+-- { api = bool, ground = 0..1, sky = 0..1, orbit = n, linked = { names }, t }
+progNet = { api = false, ground = 0, sky = 0, orbit = 0, linked = {}, t = -1 }
+
 -- Published for the panels.
 active = nil       -- the accepted contract's id
 progress = ""      -- one-line summary of the active contract
@@ -821,6 +923,324 @@ function tierLine()
 end
 
 -- ════════════════════════════════════════════════════════════════════════════
+-- THE PROGRAMME, running (the table is at the top of the file)
+-- ════════════════════════════════════════════════════════════════════════════
+
+local NICHE_WHERE = {
+  cave = "under an overhang", peak = "on a high peak", ravine = "on a ravine floor",
+  lake = "on a lake shore", river = "on a riverbank",
+}
+PROG_NICHE_WHERE = NICHE_WHERE
+
+local function prog_done() return save.get("prog.done") or {} end
+local function prog_perm() return save.get("prog.perm") or {} end
+
+function progById(id)
+  for _, m in ipairs(PROGRAMME) do if m.id == id then return m end end
+  return nil
+end
+
+-- The world the programme's home goals are about: the base's.
+function homeName()
+  local hb = home_body()
+  if hb then return hb.name end
+  local b = save.get("base.body")
+  if type(b) == "string" then return b end
+  return here_name
+end
+
+-- ── the network, polled ─────────────────────────────────────────────────────
+-- comms.lua (the relay network) answers three questions; each is asked
+-- through a guard, so a comms script that does not have them yet — or throws —
+-- leaves `progNet.api` false and the relay goals waiting.
+local net_hooked = nil
+local net_dirty = false
+local function net_poll()
+  local net = ref("comms")
+  local out = { api = false, ground = 0, sky = 0, orbit = 0, groundN = 0, total = 0, linked = {}, t = time or 0 }
+  local home = homeName()
+  if net and net.coverage then
+    out.api = true
+    if home then
+      local ok, c = pcall(net.coverage, home)
+      if ok and type(c) == "table" then
+        out.ground, out.sky = tonumber(c.ground) or 0, tonumber(c.sky) or 0
+      end
+    end
+  end
+  if net and net.relayStats then
+    local ok, st = pcall(net.relayStats)
+    if ok and type(st) == "table" then
+      out.orbit = (home and type(st.orbit) == "table" and st.orbit[home]) or 0
+      out.groundN = (home and type(st.ground) == "table" and st.ground[home]) or 0
+      out.total = st.total or 0
+    end
+  end
+  if net and net.linkedBodies then
+    local ok, l = pcall(net.linkedBodies)
+    if ok and type(l) == "table" then out.linked = l end
+  end
+  -- Hear about changes as they happen, where the network offers it.
+  if net and net.onNetworkChanged and net_hooked ~= net then
+    net_hooked = net
+    pcall(net.onNetworkChanged, function() net_dirty = true end)
+  end
+  progNet = out
+end
+
+-- ── rare niches on the home world ───────────────────────────────────────────
+-- Which niches the home world has rare plants in, read from the save
+-- (flora_field writes `rare.<home>` once the world has been scanned). nil
+-- before the scan; an empty set on an airless home.
+local function home_niches()
+  local home = homeName()
+  if not home then return nil end
+  local d = save.get("rare." .. home)
+  if type(d) ~= "table" or type(d.plants) ~= "table" then return nil end
+  local w = save.get("world." .. home)
+  if type(w) == "table" and (w.atmo or 0) <= 0.15 then return {} end
+  local set = {}
+  for _, p in ipairs(d.plants) do set[p.niche] = true end
+  return set
+end
+
+-- The niche each `rare` goal of a milestone resolves to on this home world:
+-- its own, else the first alternative the world has that no earlier goal
+-- took. false = the world has none of them (the goal is waived).
+local function rare_niches(m)
+  local set = home_niches()
+  local out, taken = {}, {}
+  for i, g in ipairs(m.goals) do
+    if g.kind == "rare" then
+      local pick = nil
+      if not set then
+        pick = g.niche
+      else
+        local tries = { g.niche }
+        for _, a in ipairs(g.alt or {}) do tries[#tries + 1] = a end
+        for _, n in ipairs(tries) do
+          if set[n] and not taken[n] then pick = n break end
+        end
+        pick = pick or false
+      end
+      if pick then taken[pick] = true end
+      out[i] = pick
+    end
+  end
+  return out
+end
+
+function progNiche(id, i)
+  local m = progById(id)
+  if not m then return nil end
+  return rare_niches(m)[i]
+end
+
+local function body_class(name)
+  local R = roster()
+  local home = R and home_entry(R)
+  local b = R and R.by[name]
+  if not (home and b) then return nil end
+  local c = class_of(R, home, b)
+  if c == "far" then return "moon" end
+  return c
+end
+
+local function pct(v) return string.format("%d%%", math.floor((v or 0) * 100 + 1e-6)) end
+
+-- Is goal i of milestone m met right now? (The tick latches it.)
+local function prog_goal_now(m, i, g, niches)
+  if g.kind == "sample" then
+    local inv = ref("inventory")
+    if not inv then return false end
+    if g.mat then return inv.seen(g.mat) == true end
+    local mats = ref("materials")
+    for mat, yes in pairs(save.get("inv.seen") or {}) do
+      if yes and (not g.class or (mats and mats.class(mat) == g.class)) then return true end
+    end
+    return false
+  elseif g.kind == "rare" then
+    local n = (niches or rare_niches(m))[i]
+    if n == false then return true end
+    local inv = ref("inventory")
+    return inv ~= nil and inv.seen("rare_" .. n) == true
+  elseif g.kind == "groundcov" then
+    return progNet.api and (progNet.ground or 0) >= g.frac - 1e-6
+  elseif g.kind == "skycov" then
+    return progNet.api and (progNet.sky or 0) >= g.frac - 1e-6
+  elseif g.kind == "orbitrelay" then
+    return (progNet.orbit or 0) >= (g.n or 1)
+  elseif g.kind == "linked" then
+    local home = homeName()
+    for _, name in ipairs(progNet.linked or {}) do
+      if name ~= home and body_class(name) == g.class then return true end
+    end
+    return false
+  end
+  return false
+end
+
+function progGoalLabel(m, i, g, niches)
+  if g.kind == "rare" then
+    local n = (niches or rare_niches(m))[i]
+    if n == false then return "No rare plants of that kind here (waived)" end
+    return "A rare plant " .. (NICHE_WHERE[n] or "from somewhere hard to reach")
+  end
+  return g.label or g.kind
+end
+
+-- The live tail of an unmet goal: how close the network is.
+local function prog_tail(g)
+  if g.kind == "groundcov" or g.kind == "skycov" then
+    if not progNet.api then return "   (network not reporting yet)" end
+    return "   (now " .. pct(g.kind == "groundcov" and progNet.ground or progNet.sky) .. ")"
+  elseif g.kind == "orbitrelay" then
+    return string.format("   (%d in orbit)", progNet.orbit or 0)
+  end
+  return ""
+end
+
+local function money_s(v)
+  local c = company()
+  return (c and c.money) and c.money(v) or ("$" .. tostring(v))
+end
+
+-- One line per goal, ✓ once met, with what it pays while it is still open.
+function progGoalLines(id)
+  local m = progById(id)
+  if not m then return {} end
+  local pm = prog_perm()[id] or {}
+  local niches = rare_niches(m)
+  local out = {}
+  for i, g in ipairs(m.goals) do
+    local ok = pm[i] or pm[tostring(i)]
+    local pay = (not ok and g.pay) and ("  · " .. money_s(g.pay)) or ""
+    out[#out + 1] = string.format("%s %s%s%s", ok and "✓" or "○", progGoalLabel(m, i, g, niches),
+      ok and "" or prog_tail(g), pay)
+  end
+  return out
+end
+
+-- The first goal of a milestone not met yet: g, i, the niche (rare goals).
+function progNextGoal(id)
+  local m = progById(id)
+  if not m then return nil end
+  local pm = prog_perm()[id] or {}
+  local niches = rare_niches(m)
+  for i, g in ipairs(m.goals) do
+    if not (pm[i] or pm[tostring(i)]) then return g, i, niches[i] end
+  end
+  return nil
+end
+
+-- What finishing it pays, in words: "$1,200 · +1 rep · unlocks Battery".
+function progRewardLine(m)
+  if type(m) == "string" then m = progById(m) end
+  if not m then return "" end
+  local parts = { money_s(m.reward or 0) }
+  if (m.rep or 0) > 0 then parts[#parts + 1] = string.format("%+d reputation", m.rep) end
+  local rs = ref("research")
+  for _, t in ipairs(m.grants or {}) do
+    parts[#parts + 1] = "unlocks " .. ((rs and rs.labelOf and rs.labelOf(t)) or t)
+  end
+  return table.concat(parts, " · ")
+end
+
+-- Every milestone with its state: { m, state = "done"|"active"|"locked", needs }.
+function programme()
+  local done = prog_done()
+  local out = {}
+  for _, m in ipairs(PROGRAMME) do
+    local st = done[m.id] and "done" or ((not m.requires or done[m.requires]) and "active" or "locked")
+    local r = m.requires and progById(m.requires)
+    out[#out + 1] = { m = m, state = st, needs = r and r.title or nil }
+  end
+  return out
+end
+
+-- The milestones in progress, in programme order.
+function progActive()
+  local out = {}
+  for _, e in ipairs(programme()) do
+    if e.state == "active" then out[#out + 1] = e.m end
+  end
+  return out
+end
+
+function progLine()
+  local a = progActive()[1]
+  if not a then return nil end
+  local pm = prog_perm()[a.id] or {}
+  local n = 0
+  for i = 1, #a.goals do if pm[i] or pm[tostring(i)] then n = n + 1 end end
+  return string.format("%s  %d/%d", a.title, n, #a.goals)
+end
+
+local function prog_announce(title, reward, label)
+  lastPaid = { id = "prog", title = title, reward = reward, at = time, label = label }
+  log(string.format("%s — %s   +$%d", label or "MILESTONE", title, reward or 0))
+end
+
+local function prog_grant(id, why)
+  local rs = ref("research")
+  if rs and rs.grant then return rs.grant(id, why) end
+  -- No research script in this scene: the save is the truth either way.
+  local d = save.get("res.done") or {}
+  d[id] = true
+  save.set("res.done", d)
+  return true
+end
+
+local function prog_tick()
+  net_poll()
+  net_dirty = false
+  local done, perm = prog_done(), prog_perm()
+  for _, m in ipairs(PROGRAMME) do
+    if not done[m.id] and (not m.requires or done[m.requires]) then
+      local pm = perm[m.id] or {}
+      local niches = rare_niches(m)
+      local all = true
+      for i, g in ipairs(m.goals) do
+        if not (pm[i] or pm[tostring(i)]) then
+          if prog_goal_now(m, i, g, niches) then
+            pm[i] = true
+            perm[m.id] = pm
+            -- Written before anything is paid: a payout can never repeat.
+            save.set("prog.perm", perm)
+            local label = progGoalLabel(m, i, g, niches)
+            log("  ✓ " .. m.title .. ": " .. label)
+            -- A waived goal (no such place on this world) pays nothing.
+            local pay = (g.kind == "rare" and niches[i] == false) and 0 or (g.pay or 0)
+            local c = company()
+            if pay > 0 and c and c.earn then c.earn(pay, m.title .. ": " .. label) end
+            if g.grant then prog_grant(g.grant, m.title) end
+            if pay > 0 then prog_announce(label, pay, m.title:upper()) end
+          else
+            all = false
+          end
+        end
+      end
+      if all then
+        done[m.id] = true
+        save.set("prog.done", done)
+        local fx = ref("sfx")
+        if fx and fx.play then fx.play("jingle") end
+        local c = company()
+        if c then
+          if c.earn and (m.reward or 0) > 0 then c.earn(m.reward, "milestone: " .. m.title) end
+          if c.addRep and (m.rep or 0) > 0 then c.addRep(m.rep, "milestone: " .. m.title) end
+        end
+        for _, t in ipairs(m.grants or {}) do prog_grant(t, m.title) end
+        prog_announce(m.title, m.reward or 0, "MILESTONE")
+      end
+    end
+  end
+end
+
+-- Tick the programme now (harness, probes); the game ticks it once a second.
+function progTick() prog_tick() end
+
+-- ════════════════════════════════════════════════════════════════════════════
 -- THE API
 -- ════════════════════════════════════════════════════════════════════════════
 
@@ -1160,7 +1580,15 @@ local function goal_now(g, v, info)
     return delivered(g) >= (g.kg or g.value or 1)
   elseif g.kind == "sample" then
     local inv = ref("inventory")
-    return inv ~= nil and inv.seen(g.mat) == true
+    if not inv then return false end
+    if g.mat then return inv.seen(g.mat) == true end
+    -- Any material of a class: the discovery set, read through the registry.
+    local mats = ref("materials")
+    local seen = save.get("inv.seen") or {}
+    for mat, yes in pairs(seen) do
+      if yes and (not g.class or (mats and mats.class(mat) == g.class)) then return true end
+    end
+    return false
   end
   return false
 end
@@ -1320,10 +1748,11 @@ local refill_t = -1
 function update(node, dt)
   here_name = space.dominant(node.x, node.y, node.z) or here_name
   -- The board and the charter, once a second: neither changes faster.
-  if (time or 0) - refill_t >= 1.0 or refill_t < 0 then
+  if (time or 0) - refill_t >= 1.0 or refill_t < 0 or net_dirty then
     refill_t = time or 0
     refill()
     charter_tick()
+    prog_tick()
   end
   local m = active and byId(active)
   if not m then

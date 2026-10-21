@@ -111,6 +111,22 @@ defaults = {
   motes = 12,
   --@range 5 60 --@units m
   mote_range = 28.0,
+
+  --@header Rare plants
+  -- The handful of rare plants per world (climate.rareScan finds their
+  -- places, flora_gen.rareFor their look). 0 = off.
+  rare = 1,
+  -- Milliseconds a frame the rare-niche scan may take (once per world per
+  -- save, the first seconds after landing; the answer is kept in the save).
+  --@range 0.2 8 --@units ms
+  rare_ms = 1.0,
+  -- Terrain reads a frame instead, where the clock is not available.
+  --@range 200 20000
+  rare_budget = 800,
+  -- Within this range a rare plant lights the ground round it (the two
+  -- nearest; scene lights are a shared budget of sixteen).
+  --@range 10 150 --@units m
+  rare_light = 70.0,
   enabled = 1,
 }
 
@@ -617,7 +633,10 @@ local function regrow()
   end
 end
 
+local rare_tick   -- defined below (rare plants)
+
 function update(node, dt)
+  if params.rare > 0 then rare_tick(dt) end
   if params.enabled == 0 then
     if cur_body then clearAll(); cur_body = nil end
     diag("switched off (enabled = 0)")
@@ -1093,6 +1112,323 @@ function lateUpdate(node, dt)
   end
 end
 
+-- ── rare plants ─────────────────────────────────────────────────────────────
+--
+-- A few per world, each in its own niche (climate RARE NICHES): under an
+-- overhang, on a high peak, on a ravine floor, at a lake's edge, on a
+-- riverbank. Unlike the scatter they are placed one by one, so each is a scene
+-- node (a model, tinted, glowing, with a small light that wakes when you are
+-- near) — a handful per world is nothing next to the scatter's thousands.
+--
+-- WHERE is worked out ONCE per world per save: climate.rareScan reads the
+-- generated ground (terrain.query) a few thousand reads a frame, and the answer
+-- goes in the save (`rare.<body>`), so a hole dug next to a plant later never
+-- moves it, and a reload finds the same plants. Cut ones are `rare.cut.<body>`.
+-- They do not grow back: a rare find is a find.
+--
+-- Published: `rareStatus` (what the scan is doing), `lastRare` (the find just
+-- made: { name, niche, mat, at }), and rarePlants(body) for the objectives
+-- card's directions.
+
+rareStatus = "idle"
+lastRare = nil
+
+local rare = { body = nil, scan = nil, retry_t = 0, quiet_t = nil, nodes = {}, made = nil,
+               swept = false, bx = 0, by = 0, bz = 0, lights = {} }
+
+local function rare_valid(d, w, cl)
+  return type(d) == "table" and d.v == (cl and cl.RARE_SCAN_V or 1)
+    and d.seed == math.floor((w and w.seed) or 1) and type(d.plants) == "table"
+end
+
+local function rare_clear()
+  for _, r in pairs(rare.nodes) do
+    if r.node and r.node.valid then r.node:destroy() end
+  end
+  rare.nodes, rare.made, rare.lights = {}, nil, {}
+end
+
+-- The world's rare plants: { key, niche, name, sp, x, y, z (body-relative),
+-- ux, uy, uz, cut }. Empty until the world has been scanned.
+function rarePlants(bname)
+  local cl, fg = ref("climate"), ref("flora_gen")
+  local w = cl and bname and cl.worldOf(bname)
+  local d = bname and save.get("rare." .. bname)
+  if not (w and fg and rare_valid(d, w, cl)) then return {} end
+  -- Plants want air: an airless world keeps only its ore pockets.
+  if cl.habitable and not cl.habitable(bname) then return {} end
+  local sps = fg.rareFor and fg.rareFor(bname, w) or {}
+  local cut = save.get("rare.cut." .. bname) or {}
+  local out, count = {}, {}
+  for _, p in ipairs(d.plants) do
+    local sp = sps[p.niche]
+    if sp then
+      count[p.niche] = (count[p.niche] or 0) + 1
+      local key = p.niche .. count[p.niche]
+      local l = len(p.x, p.y, p.z)
+      out[#out + 1] = { key = key, niche = p.niche, name = sp.name, sp = sp, x = p.x, y = p.y, z = p.z,
+                        ux = p.x / l, uy = p.y / l, uz = p.z / l, cut = cut[key] == true }
+    end
+  end
+  return out
+end
+
+-- Which niches this world has rare plants in (a set), or nil before its scan.
+function rareNiches(bname)
+  local cl = ref("climate")
+  local w = cl and bname and cl.worldOf(bname)
+  local d = bname and save.get("rare." .. bname)
+  if not rare_valid(d, w, cl) then return nil end
+  local out = {}
+  for _, p in ipairs(d.plants) do out[p.niche] = true end
+  return out
+end
+
+local function rare_make(bname, planet)
+  local list = rarePlants(bname)
+  rare.made = bname
+  for _, p in ipairs(list) do
+    local sp = p.sp
+    local r = { p = p, node = nil }
+    rare.nodes[p.key] = r
+    if not p.cut then
+      local fg = ref("flora_gen")
+      createNode("Rare " .. p.key, planet, function(n)
+        n.model = fg.assetFor(sp, 0)
+        n.x, n.y, n.z = p.x, p.y, p.z
+        if n.setUp then n:setUp(vec3(p.ux, p.uy, p.uz)) end
+        local s = sp.scale or 1
+        n.scale_x, n.scale_y, n.scale_z = s, s, s
+        local t, gc = sp.tint, sp.glowColor
+        local leaf = { texture = "textures/flora/foliage_l0.png", normalMap = "textures/flora/foliage_n.png",
+                       color = { t[1], t[2], t[3] }, emissive = { gc[1], gc[2], gc[3] },
+                       emissiveStrength = sp.glow or 1.2, emissiveMap = "textures/flora/foliage_glow.png" }
+        if sp.stalk then
+          -- Two parts (a cap on a stalk): each its own override, so the stalk
+          -- keeps a stalk's picture and only the cap is the species' colour.
+          local ok = pcall(function()
+            local m = n:material("leaf")
+            for k2, v in pairs(leaf) do m[k2] = v end
+            local b = n:material("bark")
+            b.texture, b.normalMap = "textures/flora/bark_stalk_l0.png", "textures/flora/bark_stalk_n.png"
+            b.color = { 0.75 + t[1] * 0.25, 0.75 + t[2] * 0.25, 0.75 + t[3] * 0.25 }
+            b.emissive, b.emissiveStrength = { gc[1], gc[2], gc[3] }, (sp.glow or 1.2) * 0.25
+          end)
+          if not ok then n:setMaterial(leaf) end
+        else
+          n:setMaterial(leaf)
+        end
+        n.tags = { "flora", "rare" }
+        r.node = n
+        -- The glow you spot it by: a small soft orb over the crown, drawn
+        -- clear of the fog so it reads from a hill away, and two motes.
+        local k = 1 / math.max(s, 0.05)
+        local crown = (sp.height or 1.5) * 1.08 * k
+        for m = 1, 3 do
+          createNode("Rare Orb", n, function(o)
+            o:setPrimitive("Sphere")
+            local sz = (m == 1 and 0.2 or 0.08) * k
+            o.scale_x, o.scale_y, o.scale_z = sz, sz, sz
+            local ang = m * 2.1
+            o.x = (m == 1) and 0 or math.cos(ang) * 0.45 * k
+            o.z = (m == 1) and 0 or math.sin(ang) * 0.45 * k
+            o.y = crown + (m == 1 and 0.15 or -0.35 * m) * k
+            o:setMaterial { color = { gc[1], gc[2], gc[3] }, emissive = { gc[1], gc[2], gc[3] },
+                            emissiveStrength = (m == 1) and 1.4 or 1.8, unlit = true, fog = false,
+                            alpha = (m == 1) and 0.8 or 0.9 }
+            o.tags = { "flora", "rare" }
+            r.orbs = r.orbs or {}
+            r.orbs[#r.orbs + 1] = o
+          end)
+        end
+        -- The light: a child a little above the plant, dark until you are near.
+        createNode("Rare Light", n, function(l)
+          l.y = 0.6 / math.max(s, 0.05)
+          if l.setPointLight then l:setPointLight { color = { gc[1], gc[2], gc[3] }, intensity = 0, range = 7 } end
+          l.tags = { "flora", "rare" }
+          r.light = l
+        end)
+      end)
+    end
+  end
+end
+
+-- The two nearest uncut plants within range light up; the rest give their
+-- light slot back (intensity 0).
+local function rare_lights(obs, body)
+  local near = {}
+  for _, r in pairs(rare.nodes) do
+    if r.light and r.light.valid and r.node and r.node.valid and r.node.visible ~= false then
+      local d = len(obs.x - body.x - r.p.x, obs.y - body.y - r.p.y, obs.z - body.z - r.p.z)
+      near[#near + 1] = { r = r, d = d }
+    end
+  end
+  table.sort(near, function(a, b) return a.d < b.d end)
+  for i, e in ipairs(near) do
+    local want = (i <= 2 and e.d < params.rare_light) and 2.2 * math.min(1, (params.rare_light - e.d) / 15) or 0
+    if math.abs((e.r.lit or -1) - want) > 0.05 then
+      e.r.lit = want
+      if e.r.light.setPointLight then e.r.light:setPointLight { intensity = want } end
+    end
+  end
+end
+
+rare_tick = function(dt)
+  local gm = ref("game_manager")
+  if gm and gm.loading then rareStatus = "waiting for the world"; return end
+  if not (terrain and terrain.query) then return end
+  local obs = observer()
+  if not obs then return end
+  local bname = space.dominant(obs.x, obs.y, obs.z)
+  local body = bname and space.body(bname)
+  if not body then return end
+  rare.bx, rare.by, rare.bz = body.x, body.y, body.z
+  if not rare.swept then
+    rare.swept = true
+    for _, n in ipairs(findTagged("rare") or {}) do
+      if n.valid and n.name:sub(1, 5) == "Rare " then n:destroy() end
+    end
+  end
+  if rare.body ~= bname then
+    rare_clear()
+    rare.scan, rare.body, rare.quiet_t = nil, bname, nil
+  end
+  local cl, fg = ref("climate"), ref("flora_gen")
+  local w = cl and cl.worldOf(bname)
+  if not (w and cl.rareScan and fg and fg.rareFor) then return end
+  -- Too far up for the ground to be the one we are standing over: nothing.
+  local alt = len(obs.x - body.x, obs.y - body.y, obs.z - body.z) - (w.radius or body.radius)
+  local d = save.get("rare." .. bname)
+  if not rare_valid(d, w, cl) then
+    if alt > (w.radius or 300) * 2 then return end
+    if time < rare.retry_t then return end
+    -- The whole field has to be in: wait for the terrain worker to go quiet.
+    if terrain.busy and terrain.busy() then rare.quiet_t = nil; rareStatus = "waiting for the terrain"; return end
+    rare.quiet_t = rare.quiet_t or time
+    if time - rare.quiet_t < 2.0 then return end
+    if not rare.scan then
+      -- Rivers, lakes AND ravines: a world of ravines alone has no `hydro`
+      -- flag on its record (that marks water), but its channels are there.
+      local hydro = nil
+      local layers = w.shape and w.shape.layers
+      if w.hydro or (layers and (layers.ravines or layers.rivers)) then
+        local sg = ref("system_generator")
+        if sg and sg.hydroWarm then sg.hydroWarm(bname) end
+        if sg and sg.hydroPending and sg.hydroPending(bname) then rareStatus = "waiting for the rivers"; return end
+        hydro = cl.hydroOf(bname)
+      end
+      rare.scan = cl.rareScan(w, hydro, function(x, y, z)
+        return terrain.query(rare.bx + x, rare.by + y, rare.bz + z)
+      end)
+      rare.scan_t0 = time
+    end
+    -- A slice of time a frame, not a count: a field read costs 1–5 µs
+    -- depending on the world and the machine's load.
+    local c0 = os and os.clock and os.clock()
+    local st
+    if c0 then
+      repeat st = rare.scan.step(200) until st ~= "running" or (os.clock() - c0) * 1000 >= params.rare_ms
+    else
+      st = rare.scan.step(params.rare_budget)
+    end
+    if c0 then
+      local ms = (os.clock() - c0) * 1000
+      rare.ms, rare.frames = (rare.ms or 0) + ms, (rare.frames or 0) + 1
+      rare.worst = math.max(rare.worst or 0, ms)
+    end
+    rareStatus = string.format("scanning %s (%d reads)", bname, rare.scan.reads)
+    if st == "done" then
+      local res = rare.scan.result
+      save.set("rare." .. bname, res)
+      local tally = {}
+      for _, p in ipairs(res.plants) do tally[p.niche] = (tally[p.niche] or 0) + 1 end
+      local parts = {}
+      for _, n in ipairs(cl.RARE_NICHES or {}) do parts[#parts + 1] = string.format("%s %d", n, tally[n] or 0) end
+      log(string.format("rare: %s scanned in %.1f s over %d frames (%.2f ms a frame, worst %.2f; %d reads, grid %d, peak line %+.0f m): %s; %d ore pockets",
+        bname, time - (rare.scan_t0 or time), rare.frames or 0, (rare.ms or 0) / math.max(1, rare.frames or 1),
+        rare.worst or 0, rare.scan.reads, rare.scan.grid or 0, rare.scan.peakLine or 0,
+        table.concat(parts, ", "), #res.ores))
+      rare.ms, rare.frames, rare.worst = 0, 0, 0
+      rare.scan = nil
+    elseif st == "fail" then
+      log(string.format("rare: %s scan stopped (%s) — trying again shortly", bname, tostring(rare.scan.why)))
+      rare.scan, rare.retry_t = nil, time + 6
+      rareStatus = "retrying"
+    end
+    return
+  end
+  rareStatus = "ready"
+  if rare.made ~= bname then
+    local planet = find(bname)
+    if planet then rare_make(bname, planet) end
+  end
+  rare_lights(obs, body)
+end
+
+-- The rare plant on the aim ray, scored like a scattered one.
+local function rare_aim(body, x, y, z, dx, dy, dz, reach, cone, grab)
+  local best, bestScore = nil, -1
+  for key, r in pairs(rare.nodes) do
+    if r.node and r.node.valid and r.node.visible ~= false and not r.p.cut then
+      local p = r.p
+      local wx, wy, wz = body.x + p.x, body.y + p.y, body.z + p.z
+      local ex, ey, ez = wx - x, wy - y, wz - z
+      local d = len(ex, ey, ez)
+      if d > 0.01 and d <= reach then
+        local dot = (ex * dx + ey * dy + ez * dz) / d
+        local hgt = math.max(0.5, p.sp.height or 1)
+        local near_, nx, ny, nz = math.huge, wx, wy, wz
+        for i = 0, 4 do
+          local f = hgt * (i / 4)
+          local px, py, pz = wx + p.ux * f, wy + p.uy * f, wz + p.uz * f
+          local t = (px - x) * dx + (py - y) * dy + (pz - z) * dz
+          if t > 0 then
+            local qd = len(px - (x + dx * t), py - (y + dy * t), pz - (z + dz * t))
+            if qd < near_ then near_, nx, ny, nz = qd, px, py, pz end
+          end
+        end
+        if (near_ <= grab * 1.3 and dot > 0) or dot >= cone then
+          -- A rare plant wins a tie with the grass round it.
+          local score = (grab * 1.3 - math.min(near_, grab * 1.3)) * 2.0 - d / reach + 0.5
+          if score > bestScore then
+            bestScore = score
+            best = { pid = "rare:" .. key, dist = d, x = wx, y = wy, z = wz, ax = nx, ay = ny, az = nz,
+                     height = hgt, ux = p.ux, uy = p.uy, uz = p.uz,
+                     rec = { sp = p.sp, rare = key, body = rare.body } }
+          end
+        end
+      end
+    end
+  end
+  return best, bestScore
+end
+
+local function rare_harvest(rec, cid)
+  local r = rare.nodes[rec.rare]
+  if not r or r.p.cut then return {}, 0 end
+  local inv, fg, rs = ref("inventory"), ref("flora_gen"), ref("research")
+  if rs and rs.registerMaterials then rs.registerMaterials() end
+  local got, dropped = {}, 0
+  local took_specimen = 0
+  for _, y in ipairs(fg and fg.harvestYield(rec.sp, #rec.rare * 977 + 13) or {}) do
+    local took = inv and inv.add(cid or "astro", y.mat, y.n) or 0
+    if y.mat == rec.sp.mat then took_specimen = took end
+    if took > 0 then got[#got + 1] = { mat = y.mat, n = took } end
+    dropped = dropped + (y.n - took)
+  end
+  -- No room for the specimen itself: the plant stays where it is.
+  if took_specimen <= 0 then return got, dropped end
+  r.p.cut = true
+  local cut = save.get("rare.cut." .. rare.body) or {}
+  cut[rec.rare] = true
+  save.set("rare.cut." .. rare.body, cut)
+  if r.node and r.node.valid then r.node.visible = false end
+  if r.light and r.light.valid and r.light.setPointLight then r.light:setPointLight { intensity = 0 } end
+  lastRare = { name = rec.sp.name, niche = rec.sp.niche, mat = rec.sp.mat, at = time, body = rare.body }
+  log(string.format("RARE FIND: %s (%s) on %s", rec.sp.name, rec.sp.niche, tostring(rare.body)))
+  return got, dropped
+end
+
 -- ── harvest API (the tool belt calls these) ─────────────────────────────────
 
 -- The plant someone is aiming at. Scattered plants have no colliders, so this
@@ -1105,8 +1441,12 @@ function nearestPlant(x, y, z, dx, dy, dz, reach, cone, grab)
   cone = cone or 0.55
   grab = grab or 1.4
   local body = cur_body and space.body(cur_body)
+  if not body and rare.body then body = space.body(rare.body) end
   if not body then return nil end
   local best, bestScore = nil, -1
+  if rare.body and next(rare.nodes) then
+    best, bestScore = rare_aim(space.body(rare.body) or body, x, y, z, dx, dy, dz, reach, cone, grab)
+  end
   local rx, ry, rz = x - body.x, y - body.y, z - body.z
   for id, s in pairs(srcs) do
     local p = patches[s.patch]
@@ -1169,6 +1509,7 @@ end
 -- {mat, n} actually taken and how many units were dropped for want of room.
 function harvest(hitrec, cid)
   local rec = hitrec and hitrec.rec
+  if rec and rec.rare then return rare_harvest(rec, cid) end
   if not (rec and srcs[rec.src]) then return {}, 0 end
   local fg = ref("flora_gen")
   local inv = ref("inventory")

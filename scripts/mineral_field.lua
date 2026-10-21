@@ -68,6 +68,16 @@ defaults = {
   --@range 0 100000 --@units s
   regrow = 2400.0,
 
+  --@header Ore pockets
+  -- The rare pockets underground (climate.rareScan places them; flora_field
+  -- keeps the answer in the save). Units of Star Geode each one holds.
+  --@range 1 20
+  pocket_units = 6,
+  -- With the Mining Laser out, ground within this range of a pocket shows a
+  -- faint pulsing ring and how deep it lies: the suit's resonance sensor.
+  --@range 0 80 --@units m
+  pocket_hint = 35.0,
+
   enabled = 1,
 }
 
@@ -394,6 +404,81 @@ local function make_source(p, k, w, R)
   return id
 end
 
+-- ── ore pockets ─────────────────────────────────────────────────────────────
+--
+-- A handful of pockets per world, 7–14 m down in solid rock, each a few units
+-- of Star Geode. Where they are is climate.rareScan's answer, kept in the save
+-- (`rare.<body>`.ores, body-relative centres); what has been taken out of each
+-- is `rare.ore.<body>`. Nothing marks them on the surface: you find one by
+-- digging, and the suit's resonance sensor (a ring on the ground above, while
+-- the Mining Laser is out) says when you are standing over one.
+--
+-- The laser asks `nearest` at its cut point before it asks the rock what it
+-- is (tool_belt pop_unit), so a cut point inside a pocket answers here — and
+-- `breakAt` pays it out a unit at a time. No change to the tool.
+
+local POCKET_MAT = "geode"
+
+local function pocket_list(bname)
+  local d = bname and save.get("rare." .. bname)
+  if type(d) ~= "table" or type(d.ores) ~= "table" then return nil end
+  return d.ores
+end
+
+local function pocket_taken(bname)
+  return save.get("rare.ore." .. bname) or {}
+end
+
+-- The world's pockets: { i, x, y, z (body-relative), r, depth, left }.
+function pockets(bname)
+  local out = {}
+  local list = pocket_list(bname)
+  if not list then return out end
+  local taken = pocket_taken(bname)
+  for i, o in ipairs(list) do
+    out[#out + 1] = { i = i, x = o.x, y = o.y, z = o.z, r = o.r or 2.5, depth = o.d or 0,
+                      left = math.max(0, params.pocket_units - (taken[i] or taken[tostring(i)] or 0)) }
+  end
+  return out
+end
+
+local function pocket_at(x, y, z, slack)
+  local bname = space.dominant(x, y, z)
+  local body = bname and space.body(bname)
+  local list = body and pocket_list(bname)
+  if not list then return nil end
+  local taken = pocket_taken(bname)
+  local rx, ry, rz = x - body.x, y - body.y, z - body.z
+  for i, o in ipairs(list) do
+    local d = len(rx - o.x, ry - o.y, rz - o.z)
+    if d <= (o.r or 2.5) + (slack or 0.6) and (taken[i] or 0) < params.pocket_units then
+      return { pocket = i, body = bname, kind = { id = "pocket", mat = POCKET_MAT, yield = 1 },
+               pos = vec3(body.x + o.x, body.y + o.y, body.z + o.z), distance = d }
+    end
+  end
+  return nil
+end
+
+-- Published for the HUD: the last pocket unit taken ({ body, i, left, at }).
+lastPocket = nil
+
+local function pocket_break(hit, cid)
+  local inv, rs = ref("inventory"), ref("research")
+  if rs and rs.registerMaterials then rs.registerMaterials() end
+  if not inv then return nil, 0 end
+  local took = inv.add(cid or "astro", POCKET_MAT, 1)
+  if took <= 0 then return POCKET_MAT, 0 end
+  local taken = pocket_taken(hit.body)
+  taken[hit.pocket] = (taken[hit.pocket] or 0) + took
+  save.set("rare.ore." .. hit.body, taken)
+  local left = math.max(0, params.pocket_units - taken[hit.pocket])
+  lastPocket = { body = hit.body, i = hit.pocket, left = left, at = time }
+  if taken[hit.pocket] == took then
+    log(string.format("RARE FIND: an ore pocket on %s (pocket %d)", hit.body, hit.pocket))
+  end
+  return POCKET_MAT, took
+end
+
 -- ── the tool-facing API ─────────────────────────────────────────────────────
 
 -- The rock nearest a point, within `radius` — or nil. Scattered props have no
@@ -403,6 +488,9 @@ end
 -- rolled on the patch plane above it.
 function nearest(x, y, z, radius)
   radius = radius or params.grab
+  -- Inside an ore pocket the pocket is what the beam is cutting.
+  local pk = pocket_at(x, y, z)
+  if pk then return pk end
   local body = cur_body and space.body(cur_body)
   if not body then return nil end
   local rx, ry, rz = x - body.x, y - body.y, z - body.z
@@ -444,6 +532,7 @@ end
 -- not also destroy the rock).
 function breakAt(hit, cid)
   if not hit then return nil, 0 end
+  if hit.pocket then return pocket_break(hit, cid) end
   local inv, mats = ref("inventory"), ref("materials")
   if not (inv and mats) then return nil, 0 end
   local k = hit.kind
@@ -676,6 +765,61 @@ function update(node, dt)
         local err = len(x1.x - o0.x - p.ex[1], x1.y - o0.y - p.ex[2], x1.z - o0.z - p.ex[3])
         if err > 0.02 then print(string.format("mineral field: PATCH FRAME MISMATCH %.3f", err)) end
         break
+      end
+    end
+  end
+end
+
+-- ── the resonance sensor ─────────────────────────────────────────────────────
+-- With the Mining Laser in hand and on foot, a pocket within `pocket_hint`
+-- metres shows as a faint ring on the ground above it, pulsing, with how far
+-- down it lies. Drawn in the camera pass like every draw.*.
+function lateUpdate(node, dt)
+  if params.pocket_hint <= 0 or not (draw and draw.ring) then return end
+  local pw = ref("planet_walker")
+  if not (pw and pw.onFoot) then return end
+  local tb = ref("tool_belt")
+  if not (tb and tb.tool == 1) then return end
+  local a = find("Astronaut")
+  if not a then return end
+  local bname = space.dominant(a.x, a.y, a.z)
+  local body = bname and space.body(bname)
+  local list = body and pocket_list(bname)
+  if not list then return end
+  local taken = pocket_taken(bname)
+  local rx, ry, rz = a.x - body.x, a.y - body.y, a.z - body.z
+  local rl = len(rx, ry, rz)
+  for i, o in ipairs(list) do
+    if (taken[i] or 0) < params.pocket_units then
+      local ol = len(o.x, o.y, o.z)
+      local ux, uy, uz = o.x / ol, o.y / ol, o.z / ol
+      -- Along the ground: the angle between the two radials, at your radius.
+      local c = (rx * ux + ry * uy + rz * uz) / rl
+      local d = math.acos(math.max(-1, math.min(1, c))) * rl
+      if d < params.pocket_hint then
+        -- The ground over the pocket, found from where its centre is.
+        local gr = ol + (o.d or 8)
+        for _ = 1, 6 do
+          local q = terrain.query(body.x + ux * gr, body.y + uy * gr, body.z + uz * gr)
+          if not q then break end
+          gr = gr - q
+          if math.abs(q) < 0.05 then break end
+        end
+        local gx, gy, gz = body.x + ux * (gr + 0.15), body.y + uy * (gr + 0.15), body.z + uz * (gr + 0.15)
+        local k = 1 - d / params.pocket_hint
+        local pulse = 0.5 + 0.5 * math.sin((time or 0) * 3.0 + i)
+        local col = { 0.55, 0.85, 1.0 }
+        draw.ring(gx, gy, gz, ux, uy, uz, 1.2 + pulse * 1.4, col[1], col[2], col[3], (0.25 + 0.55 * k) * (0.6 + 0.4 * pulse))
+        draw.ring(gx, gy, gz, ux, uy, uz, 0.5, col[1], col[2], col[3], 0.35 + 0.5 * k)
+        if camera and camera.worldToScreen and draw.text then
+          local sx, sy, dep, on = camera.worldToScreen(gx + ux * 1.6, gy + uy * 1.6, gz + uz * 1.6)
+          if on and sx and d < params.pocket_hint * 0.7 then
+            local vx, vy, vw, vh = camera.screenRect()
+            local s = (vh or 720) / 720
+            draw.text(sx, sy, string.format("resonance · %.0f m down", math.max(1, gr - ol - (o.r or 2.5))),
+              13 * s, col[1], col[2], col[3], 0.5 + 0.5 * k, "center")
+          end
+        end
       end
     end
   end
