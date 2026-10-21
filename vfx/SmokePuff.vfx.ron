@@ -22,7 +22,8 @@
             angular_velocity: Range(Vec3((0.0, 0.0, -0.6)), Vec3((0.0, 0.0, 0.6))),
             color: CurveRange((keys: [(t: 0.0, v: Rgba((0.2, 0.19, 0.18, 0.0)), interp: Linear), (t: 0.08, v: Rgba((0.22, 0.21, 0.2, 0.75)), interp: Linear), (t: 1.0, v: Rgba((0.4, 0.4, 0.4, 0.0)), interp: Linear)], extrapolate: Clamp), (keys: [(t: 0.0, v: Rgba((0.164, 0.1558, 0.1476, 0.0)), interp: Linear), (t: 0.08, v: Rgba((0.1804, 0.1722, 0.164, 0.75)), interp: Linear), (t: 1.0, v: Rgba((0.328, 0.328, 0.328, 0.0)), interp: Linear)], extrapolate: Clamp)),
             gravity: -0.12,
-            drag: 1.0,
+            drag: 0.0,
+            forces: [Wind(coupling: 1.0)],
         ),
         (
             name: "Ember",

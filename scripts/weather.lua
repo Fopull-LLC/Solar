@@ -46,9 +46,10 @@
 --     straight up finds a roof), in the cockpit, under the sea, on the orbit
 --     map, or at speed
 --   * lightning: a bolt (vfx/Lightning, a jagged channel of jittered beams,
---     engine 0.117, core and glow on one seed so they line up), the cloud
---     base lit where it leaves it, a flash of real light, the haze lit up,
---     and the thunder after it, late by the distance over the speed of sound
+--     engine 0.117, core and glow on one seed so they line up, thrown once
+--     and held), the cloud base lit where it leaves it, a flash of real
+--     light, the sky and haze lit up, all on ONE smooth envelope (FLASH), and
+--     the thunder after it, late by the distance over the speed of sound
 --   * soundscape.lua reads `current()` for the rain, hail and dust beds
 --
 -- The wind is declared to the engine (weather.addWind, v0.117): a cell
@@ -745,7 +746,28 @@ end
 
 -- ── lightning ───────────────────────────────────────────────────────────────
 local thunder = {}       -- { at, dist }
-local flash = { t0 = -100, k = 0 }
+-- A strike's light over time (seconds, peak 1): a faint leader, the return
+-- stroke, a steady decay, one restrike surge down the same channel and an
+-- afterglow. The bolt and cloud-glow effects are authored on these same keys
+-- (tools/gen_vfx.py FLASH: change both together), and so are the point light
+-- and the sky here, so nothing pulses out of step with the bolt and nothing
+-- strobes: the only dip is the small one before the restrike.
+FLASH = { { 0.0, 0.0 }, { 0.03, 0.16 }, { 0.05, 0.2 }, { 0.067, 1.0 }, { 0.15, 0.85 }, { 0.25, 0.58 },
+  { 0.31, 0.5 }, { 0.35, 0.8 }, { 0.45, 0.6 }, { 0.6, 0.3 }, { 0.8, 0.1 }, { 1.0, 0.0 } }
+local function flash_at(dt)
+  if dt <= 0 or dt >= FLASH[#FLASH][1] then return 0 end
+  for i = 2, #FLASH do
+    local b = FLASH[i]
+    if dt < b[1] then
+      local a = FLASH[i - 1]
+      return a[2] + (b[2] - a[2]) * (dt - a[1]) / (b[1] - a[1])
+    end
+  end
+  return 0
+end
+-- Live strikes' flashes ({ t0, k }); two strikes close together overlap
+-- rather than the second cutting the first off.
+local flashes = {}
 local strike_next = nil
 strikes = 0              -- published for probes
 local THUNDER = { "audio/weather/thunder_1.ogg", "audio/weather/thunder_2.ogg", "audio/weather/thunder_3.ogg" }
@@ -798,11 +820,12 @@ local function strike(o, x, y, z, b, w, ahead)
   local fx = ref("vfx")
   if fx and fx.flash then
     fx.flash(cx * 0.5 + sx * 0.5, cy * 0.5 + sy * 0.5, cz * 0.5 + sz * 0.5, 0.75, 0.8, 1.0,
-      9.0, dist * 1.3 + 40, 0.35)
+      9.0, dist * 1.3 + 40, FLASH[#FLASH][1], FLASH)
   end
   -- The sky lights up: a near strike more than a far one.
   local d = sqrt((sx - x) ^ 2 + (sy - y) ^ 2 + (sz - z) ^ 2)
-  flash.t0, flash.k = time, clamp01(1.0 / (1 + d / max(R * 0.3, 40)))
+  if #flashes >= 4 then table.remove(flashes, 1) end
+  flashes[#flashes + 1] = { t0 = time, k = clamp01(1.0 / (1 + d / max(R * 0.3, 40))) }
   -- The thunder, late by the distance over the speed of sound in air.
   thunder[#thunder + 1] = { at = time + d / 343, dist = d }
 end
@@ -819,15 +842,20 @@ function strikeNow(ahead)
   return true
 end
 
--- The flash's shape over time: the return stroke flickers.
-local FLICK = { 1.0, 0.3, 1.0, 0.45, 0.8, 0.2, 0.0 }
+-- The sky's flash now: the brightest live strike on the FLASH envelope.
 local function flash_now()
-  local u = (time - flash.t0) / 0.42
-  if u < 0 or u >= 1 then return 0 end
-  local i = u * (#FLICK - 1)
-  local a = floor(i)
-  local f = i - a
-  return flash.k * (FLICK[a + 1] + (FLICK[a + 2] - FLICK[a + 1]) * f)
+  local f, i = 0, 1
+  while i <= #flashes do
+    local e = flashes[i]
+    local dt = time - e.t0
+    if dt >= FLASH[#FLASH][1] then
+      table.remove(flashes, i)
+    else
+      f = max(f, e.k * flash_at(dt))
+      i = i + 1
+    end
+  end
+  return f
 end
 
 local function play_thunder(dt)

@@ -22,8 +22,8 @@
             angular_velocity: Range(Vec3((0.0, 0.0, -0.5)), Vec3((0.0, 0.0, 0.5))),
             color: CurveRange((keys: [(t: 0.0, v: Rgba((0.55, 0.5, 0.45, 0.0)), interp: Linear), (t: 0.05, v: Rgba((0.55, 0.5, 0.45, 0.5)), interp: Linear), (t: 1.0, v: Rgba((0.5, 0.48, 0.45, 0.0)), interp: Linear)], extrapolate: Clamp), (keys: [(t: 0.0, v: Rgba((0.451, 0.41, 0.369, 0.0)), interp: Linear), (t: 0.05, v: Rgba((0.451, 0.41, 0.369, 0.5)), interp: Linear), (t: 1.0, v: Rgba((0.41, 0.3936, 0.369, 0.0)), interp: Linear)], extrapolate: Clamp)),
             gravity: 0.0,
-            drag: 2.4,
-            forces: [Directional(dir: (0.0, 1.0, 0.0), strength: 1.0)],
+            drag: 0.0,
+            forces: [Wind(coupling: 2.4), Directional(dir: (0.0, 1.0, 0.0), strength: 1.0)],
         ),
         (
             name: "Ring",

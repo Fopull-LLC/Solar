@@ -38,7 +38,8 @@
             angular_velocity: Range(Vec3((0.0, 0.0, -1.0)), Vec3((0.0, 0.0, 1.0))),
             color: CurveRange((keys: [(t: 0.0, v: Rgba((0.85, 0.85, 0.87, 0.0)), interp: Linear), (t: 0.05, v: Rgba((0.85, 0.85, 0.87, 0.4)), interp: Linear), (t: 1.0, v: Rgba((0.8, 0.8, 0.82, 0.0)), interp: Linear)], extrapolate: Clamp), (keys: [(t: 0.0, v: Rgba((0.697, 0.697, 0.7134, 0.0)), interp: Linear), (t: 0.05, v: Rgba((0.697, 0.697, 0.7134, 0.4)), interp: Linear), (t: 1.0, v: Rgba((0.656, 0.656, 0.6724, 0.0)), interp: Linear)], extrapolate: Clamp)),
             gravity: 0.0,
-            drag: 4.0,
+            drag: 0.0,
+            forces: [Wind(coupling: 4.0)],
         ),
         (
             name: "Sparks",

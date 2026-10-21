@@ -89,8 +89,8 @@
             angular_velocity: Range(Vec3((0.0, 0.0, -0.3)), Vec3((0.0, 0.0, 0.3))),
             color: CurveRange((keys: [(t: 0.0, v: Rgba((0.08, 0.07, 0.06, 0.0)), interp: Linear), (t: 0.07, v: Rgba((0.1, 0.09, 0.08, 0.92)), interp: Linear), (t: 0.45, v: Rgba((0.2, 0.19, 0.18, 0.7)), interp: Linear), (t: 1.0, v: Rgba((0.34, 0.33, 0.32, 0.0)), interp: Linear)], extrapolate: Clamp), (keys: [(t: 0.0, v: Rgba((0.0656, 0.0574, 0.0492, 0.0)), interp: Linear), (t: 0.07, v: Rgba((0.082, 0.0738, 0.0656, 0.92)), interp: Linear), (t: 0.45, v: Rgba((0.164, 0.1558, 0.1476, 0.7)), interp: Linear), (t: 1.0, v: Rgba((0.2788, 0.2706, 0.2624, 0.0)), interp: Linear)], extrapolate: Clamp)),
             gravity: -0.16,
-            drag: 1.2,
-            forces: [Turbulence(frequency: 0.15, strength: 1.0)],
+            drag: 0.0,
+            forces: [Wind(coupling: 1.2), Turbulence(frequency: 0.15, strength: 1.0)],
         ),
         (
             name: "Smoke2",
@@ -109,7 +109,8 @@
             angular_velocity: Range(Vec3((0.0, 0.0, -0.25)), Vec3((0.0, 0.0, 0.25))),
             color: CurveRange((keys: [(t: 0.0, v: Rgba((0.12, 0.11, 0.1, 0.0)), interp: Linear), (t: 0.1, v: Rgba((0.14, 0.13, 0.12, 0.8)), interp: Linear), (t: 1.0, v: Rgba((0.36, 0.35, 0.34, 0.0)), interp: Linear)], extrapolate: Clamp), (keys: [(t: 0.0, v: Rgba((0.0984, 0.0902, 0.082, 0.0)), interp: Linear), (t: 0.1, v: Rgba((0.1148, 0.1066, 0.0984, 0.8)), interp: Linear), (t: 1.0, v: Rgba((0.2952, 0.287, 0.2788, 0.0)), interp: Linear)], extrapolate: Clamp)),
             gravity: -0.3,
-            drag: 0.8,
+            drag: 0.0,
+            forces: [Wind(coupling: 0.8)],
         ),
         (
             name: "Underglow",

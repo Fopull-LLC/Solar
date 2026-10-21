@@ -138,6 +138,19 @@ local function fire(key, x, y, z, o)
 end
 
 -- ── light flashes: a few PointLight nodes per planet, parented to it ────────
+-- A keyed envelope { {t, v}, ... } at time `t`, linear between keys, 0 outside.
+local function envelope(keys, t)
+  if t <= keys[1][1] or t >= keys[#keys][1] then return 0 end
+  for i = 2, #keys do
+    local b = keys[i]
+    if t < b[1] then
+      local a = keys[i - 1]
+      return a[2] + (b[2] - a[2]) * (t - a[1]) / (b[1] - a[1])
+    end
+  end
+  return 0
+end
+
 local function light_pool(name)
   local p = lightpool[name]
   if p then return p end
@@ -160,7 +173,10 @@ local function place_on(n, name, x, y, z)
   n.x, n.y, n.z = x - w.x, y - w.y, z - w.z
 end
 
-function flash(x, y, z, r, g, b, intensity, range, life)
+-- `shape`, if given, is the light's envelope over its life: keys
+-- { {seconds, 0..1}, ... } played linearly (weather.lua's lightning FLASH);
+-- without it the light starts at full and falls off over `life`.
+function flash(x, y, z, r, g, b, intensity, range, life, shape)
   local name = body_at(x, y, z)
   local p = name and light_pool(name)
   if not p or #p.nodes == 0 then return end
@@ -171,7 +187,8 @@ function flash(x, y, z, r, g, b, intensity, range, life)
   local l = n:getcomponent("PointLight")
   if not l then return end
   l.r, l.g, l.b, l.range, l.intensity = r, g, b, range, intensity
-  lights[n] = { n = n, l = l, i0 = intensity, t0 = now, life = life }
+  lights[n] = { n = n, l = l, i0 = intensity, t0 = now, life = life, shape = shape }
+  if shape then l.intensity = 0 end
 end
 
 -- ── burn marks ──────────────────────────────────────────────────────────────
@@ -790,7 +807,7 @@ function lateUpdate(node, dt)
       if f.l then f.l.intensity = 0 end
       lights[k] = nil
     else
-      f.l.intensity = f.i0 * (1 - u) * (1 - u)
+      f.l.intensity = f.i0 * (f.shape and envelope(f.shape, now - f.t0) or (1 - u) * (1 - u))
     end
   end
 end

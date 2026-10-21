@@ -22,8 +22,8 @@
             angular_velocity: Range(Vec3((0.0, 0.0, -0.6)), Vec3((0.0, 0.0, 0.6))),
             color: CurveRange((keys: [(t: 0.0, v: Rgba((0.8, 0.74, 0.66, 0.0)), interp: Linear), (t: 0.06, v: Rgba((0.78, 0.72, 0.64, 0.58)), interp: Linear), (t: 1.0, v: Rgba((0.74, 0.7, 0.64, 0.0)), interp: Linear)], extrapolate: Clamp), (keys: [(t: 0.0, v: Rgba((0.656, 0.6068, 0.5412, 0.0)), interp: Linear), (t: 0.06, v: Rgba((0.6396, 0.5904, 0.5248, 0.58)), interp: Linear), (t: 1.0, v: Rgba((0.6068, 0.574, 0.5248, 0.0)), interp: Linear)], extrapolate: Clamp)),
             gravity: 0.0,
-            drag: 2.0,
-            forces: [Directional(dir: (0.0, 1.0, 0.0), strength: 0.8)],
+            drag: 0.0,
+            forces: [Wind(coupling: 2.0), Directional(dir: (0.0, 1.0, 0.0), strength: 0.8)],
         ),
         (
             name: "Skirt",
@@ -42,8 +42,9 @@
             rotation: Range(Vec3((0.0, 0.0, 0.0)), Vec3((0.0, 0.0, 6.283))),
             angular_velocity: Const(Vec3((0.0, 0.0, 0.0))),
             color: CurveRange((keys: [(t: 0.0, v: Rgba((0.7, 0.62, 0.52, 0.4)), interp: Linear), (t: 1.0, v: Rgba((0.66, 0.6, 0.52, 0.0)), interp: Linear)], extrapolate: Clamp), (keys: [(t: 0.0, v: Rgba((0.574, 0.5084, 0.4264, 0.4)), interp: Linear), (t: 1.0, v: Rgba((0.5412, 0.492, 0.4264, 0.0)), interp: Linear)], extrapolate: Clamp)),
-            gravity: 0.0,
-            drag: 3.0,
+            gravity: 0.05,
+            drag: 0.0,
+            forces: [Wind(coupling: 3.0)],
         ),
         (
             name: "Grit",
