@@ -195,18 +195,32 @@ check("no ravines: the ravine goal falls back to its first alternative that exis
 check("the peak goal keeps its own niche", mi.progNiche("rare_finds", 2) == "peak")
 check("the goal line says where", (mi.progGoalLines("rare_finds")[1] or ""):find("riverbank", 1, true) ~= nil,
   mi.progGoalLines("rare_finds")[1])
+-- Programme goals count HOME finds only (flora_field `rare.cut.<home>`,
+-- mineral_field `rare.ore.<home>`); a find anywhere else is a discovery.
 local f1 = co.balance()
 inv.add("astro", "rare_lake", 1)
+store["rare.cut.Umunquo"] = { lake1 = true }
 second()
 check("a specimen from another niche does not count", not ticked("rare_finds", 1))
 inv.add("astro", "rare_river", 1)
+store["rare.cut.Ryethos"] = { river1 = true }
 second()
-check("the riverbank specimen ticks goal 1", ticked("rare_finds", 1))
+check("a riverbank plant cut on a MOON does not tick the home goal", not ticked("rare_finds", 1))
+check("…nor pay its stage", co.balance() == f1, co.balance() - f1)
+store["rare.cut.Umunquo"] = { lake1 = true, river2 = true }
+second()
+check("the home world's riverbank plant ticks goal 1", ticked("rare_finds", 1))
 check("…and pays the goal's stage", co.balance() == f1 + 500, co.balance() - f1)
 inv.add("astro", "rare_peak", 1)
+store["rare.cut.Umunquo"].peak1 = true
 inv.add("astro", "geode", 1)
+store["rare.ore.Ryethos"] = { [2] = 1 }
 second()
-check("peak + geode finish Rare Finds", state_of("rare_finds") == "done", state_of("rare_finds"))
+check("a Star Geode dug on a moon does not tick the home geode goal", not ticked("rare_finds", 3)
+  and state_of("rare_finds") == "active", mi.progGoalLines("rare_finds")[3])
+store["rare.ore.Umunquo"] = { [4] = 2 }
+second()
+check("peak + a home geode finish Rare Finds", state_of("rare_finds") == "done", state_of("rare_finds"))
 check("…paying both stages and the milestone", co.balance() == f1 + 500 + 500 + 700 + 1200, co.balance() - f1)
 check("…and granting the Battery", rs.isUnlocked("battery"))
 -- An airless home waives the plant goals rather than stranding them.

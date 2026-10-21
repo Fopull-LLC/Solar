@@ -1254,6 +1254,464 @@ function geoOpts3(g, radius, caveScale, sc, seed)
   return o, shape
 end
 
+-- ── THE HOME WORLD (homeGen 2, scale 3) ─────────────────────────────────────
+--
+-- The save's first planet is where the campaign happens: the programme sends
+-- you after rare plants on ravine floors, high peaks, under overhangs, at lake
+-- shores and on riverbanks, and after Star Geodes underground. A rolled world
+-- can be airless, or dry, or have no ravines (seed 1815586866 rolled an
+-- airless regolith ball), so from homeGen 2 the home world is BUILT, not
+-- rolled:
+--
+--   * habitable: air, a temperate climate, a sea, rivers and lakes
+--   * mountainous north and south polar caps, peaks above a snow line
+--   * several long ravines and overhangs (shelters, undercut cliffs)
+--   * elsewhere rolling lowland, and a flat equatorial plain for the base,
+--     published as `lastBaseDir` (the base agent's siting contract)
+--
+-- THE VERSION. A save keeps the home recipe it was made with (`g_homeGen`):
+-- a save from before has none and is 1 — its home is the rolled world, which
+-- must regenerate exactly (tests/smoke_world_scale.lua). A new save is
+-- HOME_GEN. Scale 1 and 2 saves are never anything but 1.
+--
+-- THE STREAMS. The home world's numbers come from its own rng (seeded off the
+-- terrain seed the main roll drew for it), and the main roll draws exactly what
+-- it drew before, so every other body in the system is the world it always
+-- was for that seed: only home changes.
+--
+-- WHY A SEARCH. Engine 0.117 has no latitude mask on any relief layer: the
+-- mountain ranges stand "where a slow mask is high" (relief.rs Layers::height:
+-- smoothstep of a 3-octave fbm at 0.3 × the range scale), and every other
+-- layer is laid without regard to latitude. Lua's math.noise / math.fbm are
+-- the generator's own noise, bit for bit, so the mask can be evaluated here
+-- before anything generates: the home roll tries a few thousand (terrain seed,
+-- range scale) pairs, keeps the one whose mask stands highest over both poles
+-- and lowest over the equator, and sets the coverage threshold between them.
+-- ~20k math.fbm calls (~6 ms). Without the engine's noise (the offline
+-- harness) the first candidate is taken.
+HOME_GEN = 2
+
+-- The home recipe a roll runs: explicit (`p.homeGen`), else the save's
+-- `g_homeGen`, else 1 for a save that has already been played and HOME_GEN for
+-- a fresh one (written back so it never changes). Only scale 3+ has one.
+function homeGenFor(p)
+  local sc = scaleOf(p.scale)
+  if not sc.layers then return 1 end
+  if p.homeGen then return tonumber(p.homeGen) or 1 end
+  if not (save and save.get) then return 1 end
+  local v = save.get("g_homeGen")
+  if v ~= nil then return tonumber(v) or 1 end
+  local old = save.get("g_played") ~= nil or save.get("base.body") ~= nil
+    or save.get("system.home") ~= nil or save.get("parts.rating") ~= nil
+    or save.get("fleet.next") ~= nil
+  v = old and 1 or HOME_GEN
+  if save.set then save.set("g_homeGen", v) end
+  return v
+end
+
+-- The home world's latitude targets (degrees).
+HOME_POLAR = 62       -- the caps: ranges wanted above this
+HOME_EQUATOR = 32     -- the lowland: no ranges wanted below this
+HOME_SEARCH = 3000    -- (seed, scale) pairs the mask search tries
+HOME_SITE_R = 250     -- the flat zone kept round the base site (arc metres)
+HOME_RELIEF = { 0.010, 0.0135 }   -- the rolling lowland's fbm relief, × radius
+HOME_BUMP = { 1.4, 2.0 }          -- …and its frequency (× √(radius / 310))
+
+local function hrot(x, y, z)
+  return 0.36 * x - 0.80 * y + 0.48 * z, 0.80 * x + 0.52 * y + 0.30 * z, -0.48 * x + 0.30 * y + 0.82 * z
+end
+
+-- The engine's ridged noise from math.noise (floptle-core noise.rs `ridged`).
+local function ridged(x, y, z, oct, sharp, seed)
+  local amp, sum, norm = 1, 0, 0
+  for i = 0, oct - 1 do
+    local o = i * 19.19
+    local n = math.min(1, math.abs(math.noise(x + o, y + o, z + o, seed)))
+    sum = sum + (1 - n) ^ sharp * amp
+    norm = norm + amp
+    amp = amp * 0.5
+    x, y, z = hrot(x, y, z)
+    x, y, z = x * 2.03, y * 2.03, z * 2.03
+  end
+  return sum / math.max(norm, 1e-6)
+end
+
+local function sstep(a, b, x)
+  local t = math.max(0, math.min(1, (x - a) / math.max(b - a, 1e-6)))
+  return t * t * (3 - 2 * t)
+end
+
+-- Can this Lua see the generator's noise?
+local function has_noise() return math.fbm ~= nil and math.noise ~= nil end
+
+-- The raw range-mask field (before its threshold) in unit direction d.
+local function mask_raw(seed, scale, dx, dy, dz)
+  local s = scale * 0.3
+  return 0.5 + 0.5 * math.fbm(dx * s + 241, dy * s + 241, dz * s + 241, 3, seed)
+end
+
+-- The ground's height above the radius in unit direction d, as relief.rs
+-- Layers::height works it out for the home opts (no warp, plateau or terrace),
+-- before the channels are carved; with `lean`, moved by the overhang layer as
+-- procgen.rs ground_with does at the surface (body + strength · fbm).
+function homeHeight(o, dx, dy, dz, lean)
+  if not has_noise() then return 0 end
+  local seed = o.seed or 1
+  local h = math.fbm(dx * o.bumpFreq, dy * o.bumpFreq, dz * o.bumpFreq, 5, seed) * o.relief
+  local m = o.mountains
+  if m then
+    local edge = 1 - math.max(0, math.min(1, m.coverage))
+    local mask = sstep(edge - 0.12, edge + 0.12, mask_raw(seed, m.scale, dx, dy, dz))
+    if mask > 0 then
+      h = h + m.height * mask * ridged(dx * m.scale + 57, dy * m.scale + 57, dz * m.scale + 57,
+        math.max(1, math.min(8, m.octaves or 5)), math.max(0.1, m.sharpness), seed)
+    end
+  end
+  local oh = o.overhangs
+  if lean and oh and oh.strength ~= 0 then
+    local r, sc_ = o.radius + h, oh.scale
+    h = h - oh.strength * math.fbm(dx * r * sc_ + 431, dy * r * sc_ + 431, dz * r * sc_ + 431, 3, seed)
+  end
+  return h
+end
+
+-- Fibonacci directions, optionally only those inside a latitude test.
+local function fib_dirs(n, keep)
+  local out, ga = {}, math.pi * (3 - math.sqrt(5))
+  for i = 0, n - 1 do
+    local y = 1 - (i + 0.5) / n * 2
+    local rr = math.sqrt(math.max(0, 1 - y * y))
+    local lat = math.deg(math.asin(y))
+    if not keep or keep(lat) then out[#out + 1] = { math.cos(ga * i) * rr, y, math.sin(ga * i) * rr, lat = lat } end
+  end
+  return out
+end
+
+local function quant(t, f)
+  table.sort(t)
+  return t[math.max(1, math.min(#t, math.floor(#t * f + 0.5)))]
+end
+
+-- Score a (seed, scale): the polar caps' median mask field against the
+-- equator band's 90th percentile. → gap, the threshold between them.
+local function mask_gap(seed, scale, dirs)
+  local pn, ps, pe = {}, {}, {}
+  for _, d in ipairs(dirs) do
+    local f = mask_raw(seed, scale, d[1], d[2], d[3])
+    if d.lat > HOME_POLAR then pn[#pn + 1] = f
+    elseif d.lat < -HOME_POLAR then ps[#ps + 1] = f
+    else pe[#pe + 1] = f end
+  end
+  if #pn == 0 or #ps == 0 or #pe == 0 then return -1, 0.5 end
+  local lo = math.min(quant(pn, 0.5), quant(ps, 0.5))
+  local hi = quant(pe, 0.9)
+  return lo - hi, (lo + hi) * 0.5
+end
+
+-- The mountain ranges for the home world: the best of HOME_SEARCH (seed,
+-- scale) pairs. Returns seed, scale, coverage, and the stats it was picked by.
+local function home_ranges(q)
+  local cands = {}
+  for k = 1, HOME_SEARCH do cands[k] = { seed = q:int(1, 1e9), scale = q:range(3.2, 6.0) } end
+  if not has_noise() then
+    local c = cands[1]
+    return c.seed, c.scale, 0.5, { gap = 0, searched = 0 }
+  end
+  -- A coarse look at everything (both caps and the equator band, 30 points),
+  -- then a fine one at the best few.
+  local coarse = fib_dirs(160, function(lat) return math.abs(lat) > HOME_POLAR or math.abs(lat) < HOME_EQUATOR end)
+  local pre = {}
+  for _, d in ipairs(coarse) do
+    if math.abs(d.lat) > HOME_POLAR or (#pre < 40 and math.abs(d.lat) < HOME_EQUATOR) then pre[#pre + 1] = d end
+  end
+  for _, c in ipairs(cands) do c.g = mask_gap(c.seed, c.scale, pre) end
+  table.sort(cands, function(a, b) if a.g ~= b.g then return a.g > b.g end return a.seed < b.seed end)
+  local fine = fib_dirs(1200, function(lat) return math.abs(lat) > HOME_POLAR or math.abs(lat) < HOME_EQUATOR end)
+  local best, bestS = nil, -1e9
+  for i = 1, math.min(48, #cands) do
+    local c = cands[i]
+    local g, thr = mask_gap(c.seed, c.scale, fine)
+    -- The mask the threshold makes: wanted high over the caps, low elsewhere.
+    local edge = thr
+    local cap, eq, nc, ne, eqHigh = { 0, 0 }, 0, { 0, 0 }, 0, 0
+    for _, d in ipairs(fine) do
+      local m = sstep(edge - 0.12, edge + 0.12, mask_raw(c.seed, c.scale, d[1], d[2], d[3]))
+      if d.lat > HOME_POLAR then cap[1] = cap[1] + m; nc[1] = nc[1] + 1
+      elseif d.lat < -HOME_POLAR then cap[2] = cap[2] + m; nc[2] = nc[2] + 1
+      else
+        eq = eq + m; ne = ne + 1
+        if m > 0.5 then eqHigh = eqHigh + 1 end
+      end
+    end
+    local cn, cs, ce = cap[1] / math.max(nc[1], 1), cap[2] / math.max(nc[2], 1), eq / math.max(ne, 1)
+    eqHigh = eqHigh / math.max(ne, 1)
+    -- Both caps high (the weaker one counts), the lowland low, and as few
+    -- ranges standing in it as possible.
+    local s = math.min(cn, cs) * 2 - ce * 4 - eqHigh * 6 + g
+    if s > bestS then
+      bestS = s
+      best = { seed = c.seed, scale = c.scale, cov = 1 - edge, gap = g, capN = cn, capS = cs, eq = ce, eqHigh = eqHigh }
+    end
+  end
+  best.searched = #cands
+  return best.seed, best.scale, best.cov, best
+end
+
+-- The home world's terrain opts and shape. `g` its geology (rolled from the
+-- home stream), `q` the home stream.
+function homeOpts3(g, radius, caveScale, sc, q)
+  local relief = radius * q:range(HOME_RELIEF[1], HOME_RELIEF[2])
+  local seaFrac = q:range(0.32, 0.5)
+  local mH = radius * q:range(0.11, 0.135)
+  local sharp = q:range(2.2, 2.9)
+  local seed, mscale, cov, stats = home_ranges(q)
+  local o = {
+    seed = seed,
+    radius = radius,
+    relief = relief,
+    -- Broad rolling lowland: a few big swells across the sphere.
+    bumpFreq = q:range(HOME_BUMP[1], HOME_BUMP[2]) * math.sqrt(radius / 310),
+    caveDepth = math.min(radius * g.cave, sc.caveMax or 1e9) * (caveScale or 1),
+    deferCaves = true,
+    coreR = math.max(radius * 0.07, 5),
+    surfaceA = g.high, surfaceB = g.low,
+    subsoil = g.subsoil, subsoilDepth = g.subsoilDepth,
+    strata = g.strata, strataDepth = g.strataDepth,
+    deep = g.deep,
+    craterDust = g.dust,
+    moistureScale = q:range(2.5, 5),
+    patchBias = g.band and g.band.bias or (g.bias or 0.45),
+    patchThr = g.band and (g.band.bias * g.band.alt) or (g.thr or 0.08),
+    mountains = { height = mH, scale = mscale, sharpness = sharp, coverage = cov, octaves = 5 },
+    -- Several long ravines, wherever they fall (the base site avoids them).
+    ravines = { count = q:int(5, 7), depth = q:range(20, 30), width = q:range(12, 18),
+      length = radius * q:range(1.1, 1.7), meander = q:range(0.8, 1.4) },
+    -- Undercut cliffs and shelters on every steep face: the cave niche.
+    overhangs = { depth = q:range(12, 16), scale = q:range(0.05, 0.07), strength = q:range(3.0, 3.8) },
+  }
+  local seaAlt = -relief * seaFrac
+  o.rivers = { count = q:int(5, 7), width = q:range(9, 13), depth = q:range(4, 6),
+    meander = q:range(1.0, 1.8), seaLevel = seaAlt }
+  -- The snow line: well up the ranges, so their crests stand white over
+  -- bare rock and scree.
+  local snow = relief * 0.5 + mH * q:range(0.3, 0.4)
+  local rock = g.strata
+  local beach = M(q, q:pick({ "sand", "sand", "scree" }), 0.1, 0.05, 0.7)
+  local scree = M(q, "scree", 0.08, 0.04, 0.62)
+  local snowP = M(q, "snow", 0.58, 0.03, 0.74)
+  local glacier = M(q, "glacier", 0.55, 0.05, 0.68)
+  local tundra = M(q, "tundra", 0.15, 0.06, 0.64)
+  local meadow = M(q, q:pick({ "moss", "litter" }), 0.2, 0.08, 0.64)
+  local polar = q:range(70, 76)
+  o.biomes = {
+    rule(rock, { altitude = { -9999, seaAlt - 2.5 } }),
+    rule(beach, { altitude = { seaAlt - 2.5, seaAlt + q:range(1.5, 3) } }),
+    rule(rock, { slope = { q:range(36, 42), 90 } }),
+    rule(snowP, { altitude = { snow, 9999 } }),
+    rule(glacier, { latitude = { polar, 90 } }),
+    rule(scree, { altitude = { snow * 0.72, snow } }),
+    rule(tundra, { latitude = { polar - 12, polar } }),
+    rule(meadow, { nearRiver = q:range(18, 32) }),
+    rule(g.high, { moisture = { q:range(-0.3, 0.1), 1 } }),
+  }
+  -- No ice-cap paint: it also frosts low patch-noise spots at any latitude.
+  if g.patch then o.iceCaps = { lat = 1.01, slot = g.patch.slot, color = g.patch.color } end
+  o.corePaint = { slot = 6, color = { 0.98, 0.82, 0.6 } }
+  o.pockets = { slot = 7, color = hsv(0.75, 0.3, 0.9), threshold = g.pocketThr, minDepth = 8 }
+  o.seam = { slot = 5, color = hsv(0.08, 0.3, 0.8), minDepth = o.caveDepth * 0.5, center = 0.32, width = 0.04 }
+  o.voxel = math.max(1.5, math.min(sc.voxelMax or 2.4, radius / (sc.voxelSpan or 470)))
+  -- The subsoil under the overhangs' reach and 1.5 atlas cells down (geoOpts3).
+  local lean = o.overhangs.strength
+  local cell = (2 * (radius + relief) + 84 * o.voxel) / 192
+  o.subsoilDepth = math.max(o.subsoilDepth or 0, 2 * o.voxel, lean + o.voxel, 1.5 * cell)
+  o.strataDepth = math.max(o.strataDepth or 0, o.subsoilDepth + 4)
+  local hi = relief + mH + lean
+  local cut = math.max(o.ravines.depth, o.rivers.depth)
+  local shape = { seaAlt = seaAlt, peak = hi, low = relief + cut + lean, rivers = true, snowline = snow,
+    home = { gen = HOME_GEN, mask = stats } }
+  return o, shape
+end
+
+-- Turn the rolled first planet into the home world. `spec` is what the main
+-- roll built (its numbers stay drawn); returns it rewritten.
+local function homeWorld(spec, p, sc, radius)
+  local q = rng(((spec.opts.seed or 1) * 31 + 70001) % 4294967291 + 1)
+  local Tk = q:range(281, 297)
+  local density = q:range(0.62, 0.85)
+  local types = { "verdant", "steppe", "archipelago", "alpine" }
+  local geo = rollGeology(q, { type = q:pick(types), Tk = Tk, air = true, spawn = true })
+  -- The home climate is mild and wet whatever its type: rivers, lakes, life.
+  geo.moist = math.max(geo.moist or 0.5, 0.6)
+  geo.fertility = math.max(geo.fertility or 0.5, 0.65)
+  if not geo.sea then geo.sea = { alt = -0.4, water = "ocean", state = "liquid" } end
+  geo.sea.state = "liquid"
+  geo.sea.waterTable = WATERS[geo.sea.water] or WATERS.ocean
+  local opts, shape = homeOpts3(geo, radius, p.caveScale, sc, q)
+  geo.sea.alt = shape.seaAlt / math.max(opts.relief, 1e-6)
+  geo.home = true
+  local cel = spec.cel
+  local ga = geo.air or { hue = 0.58, sat = 0.4, clouds = 0.4 }
+  cel.atmoColor = hsv(ga.hue, ga.sat, 0.85)
+  cel.atmoHeight = radius * q:range(0.28, 0.4)
+  cel.atmoDensity = density
+  cel.clouds = math.max(0.3, ga.clouds or 0.3)
+  cel.occluderRadius = math.max((radius - shape.low - opts.caveDepth) * 0.95, 0)
+  spec.geo, spec.opts, spec.shape = geo, opts, shape
+  spec.kind = geo.family
+  spec.sea = radius + shape.seaAlt
+  spec.temp = tempNorm(Tk)
+  print(string.format("    HOME (homeGen %d): %s, %.0f K, ranges seed %d scale %.2f coverage %.2f (mask gap %.2f, caps %.2f/%.2f, equator %.2f, %d tried)",
+    HOME_GEN, geo.label, Tk, opts.seed, opts.mountains.scale, opts.mountains.coverage, shape.home.mask.gap or 0,
+    shape.home.mask.capN or 0, shape.home.mask.capS or 0, shape.home.mask.eq or 0, shape.home.mask.searched or 0))
+  return spec
+end
+
+-- Arc distance (metres on radius R) from unit u to the nearest point of a
+-- channel's polyline, minus its half-width.
+local function channel_gap(ux, uy, uz, chs, R)
+  local best = math.huge
+  local near = math.cos(math.min(math.pi, 1200 / R))
+  for _, ch in ipairs(chs or {}) do
+    local pts, wid = ch.points or {}, ch.widths or {}
+    local l = R
+    for i = 1, math.floor(#pts / 3) do
+      local x, y, z = pts[i * 3 - 2], pts[i * 3 - 1], pts[i * 3]
+      local c = (x * ux + y * uy + z * uz) / (l or math.sqrt(x * x + y * y + z * z))
+      -- Only the points within reach are worth an acos.
+      if c > near then
+        local d = math.acos(math.min(1, c)) * R - (wid[i] or 10) * 0.5
+        if d < best then best = d end
+      end
+    end
+  end
+  return best
+end
+
+-- THE BASE SITE: the flattest dry spot of the equatorial lowland with no
+-- range, river, ravine or lake within the flat zone. Planet-local unit vector
+-- + what it was picked by. Reads the world's channels and lakes (hydroOf,
+-- which keeps them in the save), so it is worked out once per save and kept
+-- in `home.site`.
+function homeSite(name, o, shape, hyd)
+  local cached = save.get("home.site")
+  if type(cached) == "table" and cached.seed == o.seed and cached.v == HOME_GEN then return cached end
+  local c0 = os and os.clock and os.clock()
+  local R = o.radius
+  -- Channel points lie on the sphere of the radius: one length for all.
+  local chs = hyd and hyd.rivers or {}
+  local lakes = hyd and hyd.lakes or {}
+  local sea = shape.seaAlt or -1e9
+  local best, bestS = nil, -1e9
+  local function tangent(ux, uy, uz)
+    local ax, ay, az = 0, 1, 0
+    if math.abs(uy) > 0.9 then ax, ay, az = 1, 0, 0 end
+    local tx, ty, tz = uy * az - uz * ay, uz * ax - ux * az, ux * ay - uy * ax
+    local l = math.sqrt(tx * tx + ty * ty + tz * tz)
+    tx, ty, tz = tx / l, ty / l, tz / l
+    return tx, ty, tz, uy * tz - uz * ty, uz * tx - ux * tz, ux * ty - uy * tx
+  end
+  for _, lat in ipairs({ 0, 4, -4, 8, -8, 12, -12 }) do
+    for k = 0, 89 do
+      if home_site_yield then home_site_yield() end
+      local lon = k * math.pi / 45
+      local cy = math.sin(math.rad(lat))
+      local cr = math.cos(math.rad(lat))
+      local ux, uy, uz = math.cos(lon) * cr, cy, math.sin(lon) * cr
+      local h0 = homeHeight(o, ux, uy, uz, true)
+      local gap = channel_gap(ux, uy, uz, chs, R)
+      local wet = false
+      for _, L in ipairs(lakes) do
+        local ll = math.sqrt(L.x * L.x + L.y * L.y + L.z * L.z)
+        local c = (L.x * ux + L.y * uy + L.z * uz) / ll
+        if math.acos(math.max(-1, math.min(1, c))) * R < (L.reach or 0) + HOME_SITE_R then wet = true end
+      end
+      if h0 > sea + 4 and gap > HOME_SITE_R - 20 and not wet then
+        -- Flatness: the ground over the zone (the overhangs' lean included:
+        -- they move flat ground by up to their strength), ring by ring.
+        local t1x, t1y, t1z, t2x, t2y, t2z = tangent(ux, uy, uz)
+        local dev, lo = 0, h0
+        for _, rr in ipairs({ 45, 90, 135, 180, HOME_SITE_R }) do
+          local a = rr / R
+          for j = 0, 11 do
+            local th = j * math.pi / 6
+            local px = ux * math.cos(a) + (t1x * math.cos(th) + t2x * math.sin(th)) * math.sin(a)
+            local py = uy * math.cos(a) + (t1y * math.cos(th) + t2y * math.sin(th)) * math.sin(a)
+            local pz = uz * math.cos(a) + (t1z * math.cos(th) + t2z * math.sin(th)) * math.sin(a)
+            local h = homeHeight(o, px, py, pz, true)
+            if rr <= 180 then dev = math.max(dev, math.abs(h - h0)) end
+            if dev > 12 then break end
+            lo = math.min(lo, h)
+          end
+        end
+        local s = -dev * 2 - math.abs(lat) * 0.15 + math.min(gap, 600) * 0.004
+          + math.min(lo - sea, 10) * 0.3
+        if lo < sea + 1 then s = s - 20 end
+        if s > bestS then
+          bestS = s
+          best = { x = ux, y = uy, z = uz, lat = lat, h = h0, dev = dev, gap = gap, score = s }
+        end
+      end
+    end
+  end
+  if not best then
+    best = { x = 1, y = 0, z = 0, lat = 0, h = 0, dev = -1, gap = -1, score = -1e9 }
+  end
+  best.seed, best.v, best.r = o.seed, HOME_GEN, HOME_SITE_R
+  save.set("home.site", best)
+  print(string.format("    HOME base site: lat %+.0f, ground %+.1f m, ±%.1f m over 180 m, nearest channel %.0f m (%.0f ms)",
+    best.lat, best.h, best.dev, best.gap, c0 and (os.clock() - c0) * 1000 or -1))
+  return best
+end
+
+-- The site waits for the world's rivers and lakes, which hydroWarm asks for
+-- OFF the script thread while the terrain fills (asking here, on the loading
+-- screen's own call, ran past the engine's 2 s script watchdog on a big
+-- world). `update` publishes it the frame they land — seconds before the
+-- terrain does, so long before the crew is set down.
+local site_wait = nil
+homeSitePending = false
+
+local function site_publish(site)
+  lastBaseDir = { site.x, site.y, site.z }
+  lastHomeSite = site
+  homeSitePending = false
+end
+
+local function site_try()
+  local w = site_wait
+  if not w then return end
+  local cached = save.get("home.site")
+  local hyd = save.get("hydro." .. w.name)
+  local ready = type(cached) == "table" and cached.seed == w.o.seed and cached.v == HOME_GEN
+  if not ready and not (hyd and (type(hyd) == "table" and hyd.seed == w.o.seed and hyd.v == HYDRO_V)) and not (terrain and terrain.planetRivers) then
+    hyd = {}   -- no engine to ask (the offline harness): the site from the ground alone
+  elseif not ready and not (hyd and (type(hyd) == "table" and hyd.seed == w.o.seed and hyd.v == HYDRO_V)) then
+    return
+  end
+  if ready or not (coroutine and os and os.clock) or not w.async then
+    site_wait = nil
+    site_publish(homeSite(w.name, w.o, w.shape, hyd))
+    return
+  end
+  -- A few milliseconds a frame: the search reads the ground ~40k times.
+  w.co = w.co or coroutine.create(function() return homeSite(w.name, w.o, w.shape, hyd) end)
+  local t0 = os.clock()
+  home_site_yield = function() if os.clock() - t0 > 0.004 then coroutine.yield() end end
+  local ok, site = coroutine.resume(w.co)
+  home_site_yield = nil
+  if not ok then
+    print("system_generator: base site search failed: " .. tostring(site))
+    site_wait, homeSitePending = nil, false
+  elseif coroutine.status(w.co) == "dead" then
+    site_wait = nil
+    site_publish(site)
+  end
+end
+
+function update(node, dt)
+  if site_wait then site_try() end
+end
+
 -- What the flora, climate and FX read about a world's ground and life: the
 -- `bio` table on its world record (see publishWorld).
 local function bioOf(g, starClass)
@@ -1312,7 +1770,7 @@ local function publishWorld(b, kind, insol, sea)
     -- chemistry (ocean.lua) and the climate's anchors (climate.lua). nil on a
     -- scale-1 world, whose readers fall back to `kind`.
     geo = b.geo and { type = b.geo.type, label = b.geo.label, family = b.geo.family,
-      future = b.geo.future } or nil,
+      future = b.geo.future, home = b.geo.home } or nil,
     bio = b.geo and bioOf(b.geo, b.starClass) or nil,
     water = (b.geo and b.geo.sea) and { state = b.geo.sea.state,
       deep = b.geo.sea.waterTable.deep, shallow = b.geo.sea.waterTable.shallow,
@@ -1324,6 +1782,8 @@ local function publishWorld(b, kind, insol, sea)
     -- `hydro.<name>`, see hydroOf — too big to rewrite on every roll).
     shape = b.shape and { peak = b.shape.peak, low = b.shape.low, seaAlt = b.shape.seaAlt,
       snowline = b.shape.snowline, voxel = b.opts.voxel,
+      -- The built home world (homeGen): its recipe version, else nil.
+      home = b.shape.home and b.shape.home.gen or nil,
       layers = { mountains = b.opts.mountains ~= nil, warp = b.opts.warp ~= nil,
         plateau = b.opts.plateau ~= nil, terrace = b.opts.terrace ~= nil,
         overhangs = b.opts.overhangs ~= nil, ravines = b.opts.ravines ~= nil,
@@ -1536,6 +1996,13 @@ end
 -- gate its loading screen on the spawn planet's terrain).
 lastSeed, lastSpawnBody, lastSpawnRadius = 0, nil, 0
 lastSpawnX, lastSpawnY, lastSpawnZ = 0, 0, 0
+-- homeGen 2: the base site on the home world's equatorial plain, as a
+-- planet-local unit vector { x, y, z } (nil for an older save, whose base is
+-- sited by game_manager's own search), and the record it was picked by
+-- ({ x, y, z, lat, h, dev, gap, r }; `r` the flat zone's radius in metres).
+lastBaseDir, lastHomeSite = nil, nil
+-- The home recipe the last roll ran (see homeGenFor).
+lastHomeGen = 1
 
 -- The rails ROOT and the galaxy-wide name set, published so `galaxy.lua` can
 -- hang its systems off the right star and never repeat a name. Both are set by
@@ -1735,6 +2202,13 @@ local function buildSystem(r, p, cfg)
       spec = { name = name, id = id, pos = pos, cel = cel, opts = opts,
                kind = kind, sea = sea, temp = temp, geo = geo, starClass = cls[3], shape = shape }
       print(string.format("    %s: %.0f K, %s", geo.label, Tk, air and "air" or "airless"))
+      -- homeGen 2: the first planet of a new save is the built home world
+      -- (everything above is still drawn, so the rest of the system is the
+      -- same as the save would have rolled).
+      if pi == 1 and cfg.home and sc.layers and (p.homeGen or 1) >= 2 then
+        spec = homeWorld(spec, p, sc, radius)
+        kind, sea, temp, opts, cel = spec.kind, spec.sea, spec.temp, spec.opts, spec.cel
+      end
     end
     specs[#specs + 1] = spec
     if spec.shape then
@@ -1768,7 +2242,15 @@ local function buildSystem(r, p, cfg)
     -- while its terrain fills or streams back (see hydroWarm): a resumed save
     -- made before engine 0.117 rc3 needs them asked again too (HYDRO_V).
     if pi == 1 and cfg.home and spec.shape then
+      -- The built home world picks its base site now (it reads the rivers,
+      -- ravines and lakes, which hydroOf asks for here and keeps in the save,
+      -- so the warm-up below finds them already there).
       hydroWarm(name)
+      if spec.shape.home then
+        site_wait = { name = name, o = opts, shape = spec.shape, async = terrain and terrain.planetRivers ~= nil }
+        homeSitePending = true
+        site_try()
+      end
     end
     print(string.format("  %s — %s, r %.0f, g %.1f, orbit %.0f", name, kind, radius, g, a))
     if pi == 1 then
@@ -1968,6 +2450,9 @@ local function roll(p)
 
   homeStar, homeTaken = nil, {}
   GENSPEC = {}
+  lastBaseDir, lastHomeSite = nil, nil
+  site_wait, homeSitePending = nil, false
+  lastHomeGen = tonumber(p.homeGen) or 1
   homeScale = tonumber(p.scale) or 1
   scaleVersion, scale = homeScale, scaleOf(homeScale)
   homeStar = buildSystem(r, p, { home = true, idBase = 1, taken = homeTaken })
@@ -2018,5 +2503,6 @@ end
 function regenerate(seed, opts)
   local p = resolve((opts and opts.scale) or 1, opts)
   p.seed = (seed and seed > 0) and seed or 0
+  p.homeGen = homeGenFor(p)
   roll(p)
 end

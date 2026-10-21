@@ -383,6 +383,170 @@ end
 -- seed and grid, so the two always stand together. Returns the id, or false
 -- when the species has nothing to grow there (an all-zero density is never
 -- declared).
+-- The base's paving, pad and building lots grow nothing (base_facilities'
+-- `keepClear` / `footprint`, the base agent's siting contract): true to keep
+-- this body-relative ground point clear.
+local function kept_clear(x, y, z)
+  local bf = ref("base_facilities")
+  local fp = bf and bf.footprint
+  if type(fp) ~= "table" or fp.body ~= cur_body or type(fp.x) ~= "number" then return false end
+  if len(x - fp.x, y - fp.y, z - fp.z) > (fp.radius or 200) + 4 then return false end
+  if bf.keepClear then
+    local ok, v = pcall(bf.keepClear, cur_body, x, y, z)
+    if ok then return v == true end
+  end
+  return true
+end
+
+-- THE BASE'S GROUND, PLANT BY PLANT. The density grid is ~35 m a cell, far
+-- too coarse to keep a tree out of a building, so once a source near the base
+-- is declared each of its props is checked against the base's layout
+-- (base_facilities' frame, lots, strips, runway and taxiway, read from the
+-- save, so an old save's base is cleared too): nothing stands on the paving or
+-- a lot, a margin round them grows with the plant's height, and past it the
+-- stand thins out over FADE metres (a deterministic share per prop id), so the
+-- edge of the clearing looks grown, not cut. Trees and bushes stay out of the
+-- fenced compound altogether. Placement only; the ground is untouched.
+-- (homeworld_spec.md, Footprint: every building lot +6 m clear; nothing over
+-- ~1 m tall inside the footprint radius; low grass between the strips.)
+local BASE_CLEAR = { fade = 14.0, margin = 2.0, lot = 6.0, perM = 0.8, tall = 1.0, reach = 40.0 }
+local base_l = { key = nil }
+
+local function base_layout()
+  local bf = ref("base_facilities")
+  if not (bf and bf.frameOf and bf.uvOf and bf.FACILITIES) then return nil end
+  if save.get("base.body") ~= cur_body then return nil end
+  local bx, by, bz = save.get("base.x"), save.get("base.y"), save.get("base.z")
+  if type(bx) ~= "number" or type(by) ~= "number" or type(bz) ~= "number" then return nil end
+  local R = save.get("base.r") or len(bx, by, bz)
+  local hd = save.get("base.heading") or 0
+  local key = table.concat({ cur_body, bx, by, bz, hd, R, tostring(save.get("base.runway")) }, ",")
+  if base_l.key ~= key then
+    local ok, F = pcall(bf.frameOf, { x = bx, y = by, z = bz }, hd, R)
+    if not ok then return nil end
+    base_l = { key = key, F = F, bf = bf, x = bx, y = by, z = bz,
+               r = (bf.FOOTPRINT_RADIUS or 175) + BASE_CLEAR.reach }
+  end
+  return base_l
+end
+
+-- Distance along the ground from the nearest built thing (negative inside
+-- one), and from the fenced compound.
+local function base_clearance(L, rx, ry, rz)
+  local bf = L.bf
+  local u, v = bf.uvOf(L.F, { x = rx, y = ry, z = rz })
+  local best = math.huge
+  local function rect(cu, cv, hw, hd)
+    local du, dv = math.abs(u - cu) - hw, math.abs(v - cv) - hd
+    return math.sqrt(math.max(du, 0) ^ 2 + math.max(dv, 0) ^ 2) + math.min(math.max(du, dv), 0)
+  end
+  local function seg(u0, v0, u1, v1, half)
+    local du, dv = u1 - u0, v1 - v0
+    local L2 = du * du + dv * dv
+    local t = L2 > 0 and math.max(0, math.min(1, ((u - u0) * du + (v - v0) * dv) / L2)) or 0
+    return math.sqrt((u0 + du * t - u) ^ 2 + (v0 + dv * t - v) ^ 2) - half
+  end
+  -- A building's lot counts as BASE_CLEAR.lot bigger than it is.
+  for _, f in ipairs(bf.FACILITIES or {}) do
+    local w, d = f.lot[1] / 2, f.lot[2] / 2
+    if f.face == "E" or f.face == "W" then w, d = d, w end
+    best = math.min(best, rect(f.u, f.v, w, d) - BASE_CLEAR.lot)
+  end
+  for _, st in ipairs(bf.STRIPS or {}) do best = math.min(best, seg(st[2], st[3], st[4], st[5], st[6])) end
+  local RW, TW = bf.RUNWAY, bf.TAXIWAY
+  if RW and save.get("base.runway") ~= false then
+    best = math.min(best, seg(RW.u0 - (RW.blast or 0), RW.v, RW.u1 + (RW.blast or 0), RW.v, RW.half + (RW.shoulder or 0)))
+  end
+  if TW then best = math.min(best, seg(TW.u, TW.v0, TW.u, TW.v1, TW.half)) end
+  local fence = math.huge
+  local FN = bf.FENCE
+  if FN then fence = rect((FN.u0 + FN.u1) / 2, (FN.v0 + FN.v1) / 2, (FN.u1 - FN.u0) / 2, (FN.v1 - FN.v0) / 2) end
+  return best, fence
+end
+
+-- How much of a stand of plants `h` metres tall keeps growing here, 0..1.
+function baseKeep(rx, ry, rz, h)
+  local L = base_layout()
+  if not L then return 1 end
+  if len(rx - L.x, ry - L.y, rz - L.z) > L.r + 20 then return 1 end
+  local clr, fence = base_clearance(L, rx, ry, rz)
+  local C = BASE_CLEAR
+  local margin = C.margin + math.min(h or 1, 14) * C.perM
+  local keep = math.max(0, math.min(1, (clr - margin) / C.fade))
+  if (h or 1) > C.tall then
+    -- Trees and bushes: out of the fenced compound, and out of the whole
+    -- footprint, thinning back in past its rim.
+    keep = math.min(keep, math.max(0, math.min(1, (fence - margin) / C.fade)))
+    local rim = (L.bf.FOOTPRINT_RADIUS or 175) + 4
+    local d = len(rx - L.x, ry - L.y, rz - L.z)
+    keep = math.min(keep, math.max(0, math.min(1, (d - rim) / C.fade)))
+  end
+  return keep
+end
+
+-- Take a freshly declared source's props off the base's ground (see above).
+local function clear_base(id, p, sp)
+  local L = base_layout()
+  local body = cur_body and space.body(cur_body)
+  if not (L and body and scatter.near) then return 0 end
+  -- Only a patch that reaches the base.
+  if len(p.cx - L.x, p.cy - L.y, p.cz - L.z) > p.half * 1.5 + L.r then return 0 end
+  local hits = scatter.near(id, vec3(body.x + L.x, body.y + L.y, body.z + L.z), L.r) or {}
+  local h = (sp.height or 1) * (sp.scaleMax or 1)
+  local n = 0
+  for _, it in ipairs(hits) do
+    local px, py, pz = it.pos.x - body.x, it.pos.y - body.y, it.pos.z - body.z
+    local keep = baseKeep(px, py, pz, h)
+    if keep < 1 then
+      local roll = (((it.id % 2147483647) * 48271 + 11) % 2147483647) / 2147483647
+      if roll >= keep then
+        scatter.remove(id, it.id)
+        if p.bark[sp.id] then scatter.remove(p.bark[sp.id], it.id) end
+        n = n + 1
+      end
+    end
+  end
+  return n
+end
+
+-- Sources declared before the base was sited (a new save's first patches):
+-- cleared once the layout appears, or when it changes.
+local function base_sweep()
+  local L = base_layout()
+  if not L or L.swept then return end
+  L.swept = true
+  local n = 0
+  for id, sr in pairs(srcs) do
+    local p = patches[sr.patch]
+    if p and sr.part ~= "bark" and sr.sp and p.srcs[sr.sp.id] == id then n = n + clear_base(id, p, sr.sp) end
+  end
+  if n > 0 then diag(string.format("base sited: %d plants kept off its ground", n)) end
+end
+
+-- What stands on the base's ground now (probes, the debug console): props of
+-- every resident source within its reach, by how clear the spot should be.
+-- → { total, onBuilt (clearance < 0), inMargin (keep = 0), fading (0 < keep < 1) }
+function baseSurvey()
+  local L = base_layout()
+  local body = cur_body and space.body(cur_body)
+  local out = { total = 0, onBuilt = 0, inMargin = 0, fading = 0 }
+  if not (L and body and scatter.near) then return out end
+  for id, sr in pairs(srcs) do
+    if sr.part ~= "bark" and sr.sp then
+      local h = (sr.sp.height or 1) * (sr.sp.scaleMax or 1)
+      for _, it in ipairs(scatter.near(id, vec3(body.x + L.x, body.y + L.y, body.z + L.z), L.r) or {}) do
+        local px, py, pz = it.pos.x - body.x, it.pos.y - body.y, it.pos.z - body.z
+        out.total = out.total + 1
+        local clr = base_clearance(L, px, py, pz)
+        local keep = baseKeep(px, py, pz, h)
+        if clr < 0 then out.onBuilt = out.onBuilt + 1 end
+        if keep <= 0 then out.inMargin = out.inMargin + 1 elseif keep < 1 then out.fading = out.fading + 1 end
+      end
+    end
+  end
+  return out
+end
+
 local function make_source(p, sp, fg, w)
   local rows = p.rows
   local data, any = {}, false
@@ -390,6 +554,7 @@ local function make_source(p, sp, fg, w)
   for i = 1, rows * rows do
     local s = p.samples[i]
     local d = s and fg.densityAt(sp, s, s.x, s.y, s.z, w.radius) or 0
+    if d > 0 and kept_clear(s.x, s.y, s.z) then d = 0 end
     data[i] = d
     sum = sum + d
     if d > 0.01 then any = true end
@@ -445,6 +610,8 @@ local function make_source(p, sp, fg, w)
   local id = declare(nil)
   if not id then return false end
   if sp.twin then p.bark[sp.id] = declare("bark") or nil end
+  local nb = clear_base(id, p, sp)
+  if nb > 0 then diag(string.format("kept %d %s off the base on %s", nb, sp.name or "plants", p.key)) end
   return id
 end
 
@@ -664,6 +831,7 @@ function update(node, dt)
     clearAll()
     cur_body, bodyName = bname, bname
   end
+  base_sweep()
   local w = cl.worldOf(bname)
   local species = w and fg.speciesFor(bname) or {}
   if not w or #species == 0 then
@@ -1273,6 +1441,57 @@ local function rare_lights(obs, body)
   end
 end
 
+-- THE HOME WORLD'S GUARANTEE (climate RARE_HOME_V). The base's ground, which
+-- nothing rare is put on: base_facilities' footprint, else the sited base,
+-- else (a new save before siting) the generator's base site.
+local function home_avoid(bname, w)
+  local bf = ref("base_facilities")
+  local fp = bf and bf.footprint
+  if type(fp) == "table" and fp.body == bname and fp.x then
+    return { x = fp.x, y = fp.y, z = fp.z, r = math.max(200, (fp.radius or 180) + 20) }
+  end
+  if save.get("base.body") == bname and type(save.get("base.x")) == "number" then
+    return { x = save.get("base.x"), y = save.get("base.y"), z = save.get("base.z"), r = 200 }
+  end
+  local sg = ref("system_generator")
+  local d = sg and sg.lastBaseDir
+  if type(d) == "table" and sg.lastSpawnBody == bname then
+    local R = w.radius or 600
+    return { x = d[1] * R, y = d[2] * R, z = d[3] * R, r = 200 }
+  end
+  return nil
+end
+
+-- Step a scan for a slice of this frame. → its status
+local function rare_drive(scan)
+  local c0 = os and os.clock and os.clock()
+  local st
+  if c0 then
+    repeat st = scan.step(200) until st ~= "running" or (os.clock() - c0) * 1000 >= params.rare_ms
+  else
+    st = scan.step(params.rare_budget)
+  end
+  if c0 then
+    local ms = (os.clock() - c0) * 1000
+    rare.ms, rare.frames = (rare.ms or 0) + ms, (rare.frames or 0) + 1
+    rare.worst = math.max(rare.worst or 0, ms)
+  end
+  return st
+end
+
+-- The world's channels and lakes for a scan, or nil while they are still
+-- being worked out (→ "wait").
+local function rare_hydro(bname, w, cl)
+  local layers = w.shape and w.shape.layers
+  if w.hydro or (layers and (layers.ravines or layers.rivers)) then
+    local sg = ref("system_generator")
+    if sg and sg.hydroWarm then sg.hydroWarm(bname) end
+    if sg and sg.hydroPending and sg.hydroPending(bname) then return nil, "wait" end
+    return cl.hydroOf(bname)
+  end
+  return nil
+end
+
 rare_tick = function(dt)
   local gm = ref("game_manager")
   if gm and gm.loading then rareStatus = "waiting for the world"; return end
@@ -1291,7 +1510,7 @@ rare_tick = function(dt)
   end
   if rare.body ~= bname then
     rare_clear()
-    rare.scan, rare.body, rare.quiet_t = nil, bname, nil
+    rare.scan, rare.ens, rare.body, rare.quiet_t = nil, nil, bname, nil
   end
   local cl, fg = ref("climate"), ref("flora_gen")
   local w = cl and cl.worldOf(bname)
@@ -1309,33 +1528,18 @@ rare_tick = function(dt)
     if not rare.scan then
       -- Rivers, lakes AND ravines: a world of ravines alone has no `hydro`
       -- flag on its record (that marks water), but its channels are there.
-      local hydro = nil
-      local layers = w.shape and w.shape.layers
-      if w.hydro or (layers and (layers.ravines or layers.rivers)) then
-        local sg = ref("system_generator")
-        if sg and sg.hydroWarm then sg.hydroWarm(bname) end
-        if sg and sg.hydroPending and sg.hydroPending(bname) then rareStatus = "waiting for the rivers"; return end
-        hydro = cl.hydroOf(bname)
-      end
+      local hydro, wait = rare_hydro(bname, w, cl)
+      if wait then rareStatus = "waiting for the rivers"; return end
+      -- On the home world nothing rare goes on the base's ground.
+      local home = cl.homeWorldName and cl.homeWorldName() == bname
       rare.scan = cl.rareScan(w, hydro, function(x, y, z)
         return terrain.query(rare.bx + x, rare.by + y, rare.bz + z)
-      end)
+      end, { avoid = home and home_avoid(bname, w) or nil })
       rare.scan_t0 = time
     end
     -- A slice of time a frame, not a count: a field read costs 1–5 µs
     -- depending on the world and the machine's load.
-    local c0 = os and os.clock and os.clock()
-    local st
-    if c0 then
-      repeat st = rare.scan.step(200) until st ~= "running" or (os.clock() - c0) * 1000 >= params.rare_ms
-    else
-      st = rare.scan.step(params.rare_budget)
-    end
-    if c0 then
-      local ms = (os.clock() - c0) * 1000
-      rare.ms, rare.frames = (rare.ms or 0) + ms, (rare.frames or 0) + 1
-      rare.worst = math.max(rare.worst or 0, ms)
-    end
+    local st = rare_drive(rare.scan)
     rareStatus = string.format("scanning %s (%d reads)", bname, rare.scan.reads)
     if st == "done" then
       local res = rare.scan.result
@@ -1353,6 +1557,69 @@ rare_tick = function(dt)
     elseif st == "fail" then
       log(string.format("rare: %s scan stopped (%s) — trying again shortly", bname, tostring(rare.scan.why)))
       rare.scan, rare.retry_t = nil, time + 6
+      rareStatus = "retrying"
+    end
+    return
+  end
+  -- The home world's guarantee: every niche and the geodes, topped up once
+  -- (an old save too — by placement only; a new save may dig a grotto).
+  if cl.homeWorldName and cl.homeWorldName() == bname and (d.home or 0) < (cl.RARE_HOME_V or 1) then
+    -- Already enough of everything: nothing to top up.
+    local tally = {}
+    for _, p in ipairs(d.plants) do tally[p.niche] = (tally[p.niche] or 0) + 1 end
+    local short = #(d.ores or {}) < (cl.RARE_HOME_ORES or 3)
+    for _, n in ipairs(cl.RARE_NICHES or {}) do
+      if (tally[n] or 0) < (cl.RARE_HOME_KEEP or 3) then short = true end
+    end
+    if not short then
+      d.home = cl.RARE_HOME_V or 1
+      save.set("rare." .. bname, d)
+      log(string.format("rare: %s home guarantee: every niche already has %d, %d pockets", bname,
+        cl.RARE_HOME_KEEP or 3, #(d.ores or {})))
+      return
+    end
+    if alt > (w.radius or 300) * 2 then return end
+    if time < rare.retry_t then return end
+    if not rare.ens then
+      if terrain.busy and terrain.busy() then rare.quiet_t = nil; rareStatus = "waiting for the terrain"; return end
+      rare.quiet_t = rare.quiet_t or time
+      if time - rare.quiet_t < 2.0 then return end
+      local hydro, wait = rare_hydro(bname, w, cl)
+      if wait then rareStatus = "waiting for the rivers"; return end
+      local dig = nil
+      if (tonumber(save.get("g_homeGen")) or 1) >= 2 and terrain.dig then
+        dig = function(x, y, z, r) terrain.dig(rare.bx + x, rare.by + y, rare.bz + z, r) end
+      end
+      rare.ens = cl.rareScan(w, hydro, function(x, y, z)
+        return terrain.query(rare.bx + x, rare.by + y, rare.bz + z)
+      end, { rules = cl.RARE_RELAXED, have = d, fallback = true, caves = true, dig = dig,
+             avoid = home_avoid(bname, w), ores = cl.RARE_HOME_ORES, now = function() return time end })
+      rare.scan_t0 = time
+    end
+    local st = rare_drive(rare.ens)
+    rareStatus = string.format("securing %s's rare finds (%d reads)", bname, rare.ens.reads)
+    if st == "done" then
+      local res = rare.ens.result
+      for _, p in ipairs(res.plants) do d.plants[#d.plants + 1] = p end
+      d.ores = d.ores or {}
+      for _, o in ipairs(res.ores) do d.ores[#d.ores + 1] = o end
+      d.home = cl.RARE_HOME_V or 1
+      d.forced = rare.ens.forced
+      save.set("rare." .. bname, d)
+      if (rare.ens.dug or 0) > 0 and terrain.flush then pcall(terrain.flush) end
+      local tally = {}
+      for _, p in ipairs(d.plants) do tally[p.niche] = (tally[p.niche] or 0) + 1 end
+      local parts = {}
+      for _, n in ipairs(cl.RARE_NICHES or {}) do parts[#parts + 1] = string.format("%s %d", n, tally[n] or 0) end
+      log(string.format("rare: %s home guarantee in %.1f s: +%d plants (%s forced: %s), +%d pockets, %d grottoes dug → %s; %d ore pockets",
+        bname, time - (rare.scan_t0 or time), #res.plants, #(rare.ens.forced or {}),
+        table.concat(rare.ens.forced or {}, ", "), #res.ores, rare.ens.dug or 0, table.concat(parts, ", "), #d.ores))
+      rare.ms, rare.frames, rare.worst = 0, 0, 0
+      rare.ens = nil
+      rare_clear()
+    elseif st == "fail" then
+      log(string.format("rare: %s home guarantee stopped (%s) — trying again shortly", bname, tostring(rare.ens.why)))
+      rare.ens, rare.retry_t = nil, time + 6
       rareStatus = "retrying"
     end
     return

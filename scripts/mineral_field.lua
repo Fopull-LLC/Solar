@@ -349,6 +349,21 @@ end
 
 -- The kind's placement rule across a patch, as a rows² grid (once per patch
 -- and kind). Outside the patch's own cube cell the neighbour lays it.
+-- The base's paving, pad and building lots grow nothing (base_facilities'
+-- `keepClear` / `footprint`, the base agent's siting contract): true to keep
+-- this body-relative ground point clear.
+local function kept_clear(x, y, z)
+  local bf = ref("base_facilities")
+  local fp = bf and bf.footprint
+  if type(fp) ~= "table" or fp.body ~= cur_body or type(fp.x) ~= "number" then return false end
+  if len(x - fp.x, y - fp.y, z - fp.z) > (fp.radius or 200) + 4 then return false end
+  if bf.keepClear then
+    local ok, v = pcall(bf.keepClear, cur_body, x, y, z)
+    if ok then return v == true end
+  end
+  return true
+end
+
 local function base_grid(p, k, R)
   p.base = p.base or {}
   if p.base[k.id] then return p.base[k.id] end
@@ -366,6 +381,7 @@ local function base_grid(p, k, R)
       if f2 == p.face and g2 == p.sgn and math.floor(u2 / p.P) == p.i and math.floor(v2 / p.P) == p.j then
         local l = len(px, py, pz)
         d = math.max(0, math.min(1, k.density(px / l, py / l, pz / l)))
+        if d > 0 and kept_clear(px / l * R, py / l * R, pz / l * R) then d = 0 end
       end
       data[r * rows + c + 1] = d
     end
@@ -401,6 +417,20 @@ local function make_source(p, k, w, R)
   -- declaration of this source.
   for _, c in ipairs(list) do scatter.remove(id, c.id) end
   srcs[id] = { patch = p.key, kind = k, fill = sum / (rows * rows), made = time }
+  -- Rocks off the base's paving and lots, thinning at the edge (flora_field
+  -- baseKeep: the same clearing the plants keep).
+  local ff = ref("flora_field")
+  local body = cur_body and space.body(cur_body)
+  local bx, by, bz = save.get("base.x"), save.get("base.y"), save.get("base.z")
+  if ff and ff.baseKeep and body and scatter.near and save.get("base.body") == cur_body and type(bx) == "number"
+     and len(p.cx - bx, p.cy - by, p.cz - bz) < p.half * 1.5 + 260 then
+    for _, it in ipairs(scatter.near(id, vec3(body.x + bx, body.y + by, body.z + bz), 230) or {}) do
+      local keep = ff.baseKeep(it.pos.x - body.x, it.pos.y - body.y, it.pos.z - body.z, 0.6)
+      if keep < 1 and (((it.id % 2147483647) * 48271 + 7) % 2147483647) / 2147483647 >= keep then
+        scatter.remove(id, it.id)
+      end
+    end
+  end
   return id
 end
 

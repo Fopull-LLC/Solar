@@ -127,9 +127,12 @@ end
 
 local FAMILIES = { canyon = true, dune = true, ice = true, frost = true, lava = true, crystal = true, barren = true }
 
+-- The ROLLED worlds (homeGen 1: every save made before the built home world,
+-- and every world but a new save's home). The built home world (homeGen 2) is
+-- tests/smoke_homeworld.lua's.
 local function roll(seed, scale)
   store, generated, nodes = {}, {}, {}
-  env.regenerate(seed, { scale = scale or 3, pregen = true })
+  env.regenerate(seed, { scale = scale or 3, pregen = true, homeGen = 1 })
   return store
 end
 

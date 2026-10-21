@@ -345,7 +345,7 @@ local function nearest_of(astro, bname, list, skip)
 end
 
 local RARE_HINT = {
-  cave = "They grow in the dark under rock shelves, where a cliff leans out over the ground, and in hollows just under it — the Terrain Spade (3) opens a way in.",
+  cave = "They grow in the dark under rock shelves, where a cliff leans out over the ground, in grottoes at the foot of ravine walls and cliffs, and in hollows just under the ground — the Terrain Spade (3) opens a way in.",
   peak = "They grow on the highest ground, above the snow line where there is one.",
   ravine = "They grow on the floors of the deep cuts in the ground — walk the bottom, not the rim.",
   lake = "They grow right at the water's edge, never in it.",
@@ -355,6 +355,9 @@ local RARE_HINT = {
 -- What to do about one programme goal: task, hint.
 local function prog_guidance(mi, astro, m, g, niche)
   local home = mi.homeName and mi.homeName() or nil
+  -- Rare Finds are the HOME world's (missions progHome): that is where the
+  -- goals count, and where every niche and the geodes are guaranteed.
+  local rhome = (mi.progHome and mi.progHome()) or home
   local net = mi.progNet or {}
   local pct = function(v) return string.format("%d%%", math.floor((v or 0) * 100 + 1e-6)) end
   if g.kind == "sample" and g.class == "flora" then
@@ -364,24 +367,24 @@ local function prog_guidance(mi, astro, m, g, niche)
   elseif g.kind == "sample" and g.mat == "geode" then
     local hint = "Geode pockets sit 7–14 m down. With the Mining Laser out, a pulsing ring on the ground marks one within 35 m."
     local mf = ref("mineral_field")
-    local list = (mf and mf.pockets and home) and mf.pockets(home) or nil
-    local at = list and nearest_of(astro, home, list, function(p) return (p.left or 1) <= 0 end)
+    local list = (mf and mf.pockets and rhome) and mf.pockets(rhome) or nil
+    local at = list and nearest_of(astro, rhome, list, function(p) return (p.left or 1) <= 0 end)
     local way = at and rough_way(astro, at[1], at[2], at[3])
     if way then hint = hint .. " Nearest signal: " .. way .. "." end
-    return "Dig out a Star Geode.", hint
+    return rhome and ("Dig out a Star Geode on " .. rhome .. ".") or "Dig out a Star Geode.", hint
   elseif g.kind == "rare" then
     local where = (mi.PROG_NICHE_WHERE or {})[niche] or "somewhere hard to reach"
     local hint = (RARE_HINT[niche] or "") .. " Rare plants glow, so look for the light."
     local ff = ref("flora_field")
-    local list = (ff and ff.rarePlants and home) and ff.rarePlants(home) or {}
+    local list = (ff and ff.rarePlants and rhome) and ff.rarePlants(rhome) or {}
     if #list == 0 then
-      hint = hint .. " The survey is still mapping " .. (home or "the planet") .. "."
+      hint = hint .. " The survey is still mapping " .. (rhome or "the planet") .. "."
     else
-      local at = nearest_of(astro, home, list, function(p) return p.cut or p.niche ~= niche end)
+      local at = nearest_of(astro, rhome, list, function(p) return p.cut or p.niche ~= niche end)
       local way = at and rough_way(astro, at[1], at[2], at[3])
       if way then hint = hint .. " Nearest report: " .. way .. "." end
     end
-    return "Find a rare plant " .. where .. ".", hint .. " " .. CUT_HINT
+    return "Find a rare plant " .. where .. (rhome and (" on " .. rhome) or "") .. ".", hint .. " " .. CUT_HINT
   elseif g.kind == "groundcov" then
     local hint = "Each Relay Beacon only has to see one that is already linked: put them on high ground, a few hundred metres apart."
     if net.api then

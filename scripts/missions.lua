@@ -185,9 +185,11 @@ local CATALOGUE = {
 -- Goal kinds (on top of the contract kinds `sample` and friends):
 --
 --   sample   class=     have held ANY material of this class (flora, ore)
---   rare     niche=     a rare plant from that niche (its specimen in the
---            alt={…}    discovery set). If the home world has none in that
+--   rare     niche=     a rare plant from that niche cut ON THE HOME WORLD
+--            alt={…}    (`rare.cut.<home>`). If the home world has none in that
 --                       niche, the first `alt` niche it does have stands in.
+--   sample   home=true  (mat = "geode") a Star Geode out of one of the home
+--                       world's pockets (`rare.ore.<home>`), not just held.
 --   groundcov frac      comms.coverage(home).ground ≥ frac
 --   skycov   frac       comms.coverage(home).sky ≥ frac
 --   orbitrelay n        comms.relayStats().orbit[home] ≥ n
@@ -221,7 +223,7 @@ PROGRAMME = {
     goals = {
       { kind = "rare", niche = "ravine", alt = { "river", "lake", "cave" }, pay = 500 },
       { kind = "rare", niche = "peak", alt = { "cave", "lake", "river" }, pay = 500 },
-      { kind = "sample", mat = "geode", pay = 700, label = "A Star Geode from an underground pocket" },
+      { kind = "sample", mat = "geode", home = true, pay = 700, label = "A Star Geode from an underground pocket" },
     },
   },
   {
@@ -989,11 +991,43 @@ local function net_poll()
 end
 
 -- ── rare niches on the home world ───────────────────────────────────────────
+-- The programme's Rare Finds are the HOME world's: the save's own first planet
+-- (the generator's roster), where every niche and the geodes are guaranteed
+-- (climate RARE_HOME_V). A find on another world is a discovery — it pays as
+-- one — but it does not tick a programme goal.
+function progHome()
+  local h = save.get("system.home")
+  local b1 = type(h) == "table" and type(h.bodies) == "table" and h.bodies[1]
+  if type(b1) == "table" and type(b1.name) == "string" then return b1.name end
+  return homeName()
+end
+
+-- Has a rare plant of this niche been cut on the home world? (`rare.cut.<home>`
+-- keys are niche .. n, flora_field rarePlants.)
+local function home_cut(niche)
+  local home = progHome()
+  if not home then return false end
+  for k, v in pairs(save.get("rare.cut." .. home) or {}) do
+    if v and type(k) == "string" and k:sub(1, #niche) == niche and tonumber(k:sub(#niche + 1)) then return true end
+  end
+  return false
+end
+
+-- Has a Star Geode come out of one of the home world's pockets?
+local function home_geode()
+  local home = progHome()
+  if not home then return false end
+  for _, n in pairs(save.get("rare.ore." .. home) or {}) do
+    if (tonumber(n) or 0) > 0 then return true end
+  end
+  return false
+end
+
 -- Which niches the home world has rare plants in, read from the save
 -- (flora_field writes `rare.<home>` once the world has been scanned). nil
 -- before the scan; an empty set on an airless home.
 local function home_niches()
-  local home = homeName()
+  local home = progHome()
   if not home then return nil end
   local d = save.get("rare." .. home)
   if type(d) ~= "table" or type(d.plants) ~= "table" then return nil end
@@ -1051,6 +1085,8 @@ local function pct(v) return string.format("%d%%", math.floor((v or 0) * 100 + 1
 -- Is goal i of milestone m met right now? (The tick latches it.)
 local function prog_goal_now(m, i, g, niches)
   if g.kind == "sample" then
+    -- A home goal counts the home world's pockets, not the discovery set.
+    if g.home and g.mat == "geode" then return home_geode() end
     local inv = ref("inventory")
     if not inv then return false end
     if g.mat then return inv.seen(g.mat) == true end
@@ -1062,8 +1098,7 @@ local function prog_goal_now(m, i, g, niches)
   elseif g.kind == "rare" then
     local n = (niches or rare_niches(m))[i]
     if n == false then return true end
-    local inv = ref("inventory")
-    return inv ~= nil and inv.seen("rare_" .. n) == true
+    return home_cut(n)
   elseif g.kind == "groundcov" then
     return progNet.api and (progNet.ground or 0) >= g.frac - 1e-6
   elseif g.kind == "skycov" then

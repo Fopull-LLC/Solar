@@ -1381,9 +1381,66 @@ RARE_RULES = {
   ores = 6, oreSep = 160, oreR = 2.5,
 }
 
+-- ── THE HOME WORLD'S GUARANTEE ──────────────────────────────────────────────
+--
+-- The programme's Rare Finds are campaign goals, so the HOME world (the save's
+-- first planet) must have every niche: at least RARE_HOME_KEEP plants in each
+-- and RARE_HOME_ORES geode pockets. After the home world's scan, a second pass
+-- (`rareScan` with the relaxed rules below, `have` = what the first found,
+-- `fallback` = true) tops each niche up:
+--
+--   1. the same niches, judged less strictly (RARE_RELAXED);
+--   2. FORCED placements in the best place the world has for that niche: a
+--      grotto dug into a ravine wall or a cliff foot for a cave plant (only
+--      where terrain edits are allowed, `dig`: a new save's world), else the
+--      foot of the highest wall; the highest dry ground for a peak; the lowest
+--      cut between walls for a ravine; a lake shore, else the sea's, else a
+--      riverbank, else the lowest dry ground for a lake or river plant;
+--   3. pockets anywhere 7–20 m down in rock for the geodes.
+--
+-- Nothing already placed moves: the pass only appends, so an old save's
+-- plants keep their keys (a cut plant stays cut) and its terrain is only
+-- edited when `dig` is given. The answer is marked `home = RARE_HOME_V`.
+RARE_HOME_V = 1
+RARE_HOME_KEEP = 3
+RARE_HOME_ORES = 3
+RARE_RELAXED = {
+  peakQ = 0.93, peakRel = 0.45, peakSlope = 1.3,
+  ravineWall = 1.6, ravineDeep = 2.5,
+  shoreMin = 0.05, shoreMax = 4.5,
+  bankMin = 0.15, bankMax = 10,
+  voidMin = 1.3, voidDepth = 24,
+  sep = { cave = 70, peak = 90, ravine = 80, lake = 70, river = 80 },
+  keep = { cave = RARE_HOME_KEEP, peak = RARE_HOME_KEEP, ravine = RARE_HOME_KEEP,
+           lake = RARE_HOME_KEEP, river = RARE_HOME_KEEP },
+  ores = RARE_HOME_ORES + 3, oreSep = 100, oreWet = true,
+}
+
+-- The save's home world: its own system's first planet (the generator's
+-- roster), else the base's world.
+function homeWorldName()
+  local h = save and save.get and save.get("system.home")
+  local b1 = type(h) == "table" and type(h.bodies) == "table" and h.bodies[1]
+  if type(b1) == "table" and type(b1.name) == "string" then return b1.name end
+  local b = save and save.get and save.get("base.body")
+  if type(b) == "string" then return b end
+  return nil
+end
+
 function rareScan(w, hydro, sdf, opts)
   opts = opts or {}
   local RR = RARE_RULES
+  if opts.rules then
+    RR = {}
+    for k, v in pairs(RARE_RULES) do RR[k] = v end
+    for k, v in pairs(opts.rules) do RR[k] = v end
+  end
+  -- A zone nothing is placed in (the base: { x, y, z body-relative, r }).
+  local avoid = opts.avoid
+  local function avoided(x, y, z)
+    if not avoid then return false end
+    return len(x - avoid.x, y - avoid.y, z - avoid.z) < (avoid.r or 200)
+  end
   local R = w.radius or 100
   local shape = w.shape or {}
   local top = R + (shape.peak or (w.relief or R * 0.06) * 3) + 12
@@ -1506,7 +1563,11 @@ function rareScan(w, hydro, sdf, opts)
   end
 
   local cands = { cave = {}, peak = {}, ravine = {}, lake = {}, river = {} }
+  -- Everything the channel and lake passes looked at, kept for the forced
+  -- placements (`fallback`): ravine floors, riverbank and lake-shore samples.
+  local floors, banks, shores = {}, {}, {}
   local function add(niche, ux, uy, uz, g, score, extra)
+    if avoided(ux * g, uy * g, uz * g) then return end
     local c = { niche = niche, x = ux * g, y = uy * g, z = uz * g, s = score }
     if extra then for k, v in pairs(extra) do c[k] = v end end
     cands[niche][#cands[niche] + 1] = c
@@ -1622,6 +1683,8 @@ function rareScan(w, hydro, sdf, opts)
                 local gr = side(-1, half + 8)
                 if gl and gr and not in_water(ux, uy, uz, gc) then
                   local lo, hi = math.min(gl, gr) - gc, math.max(gl, gr) - gc
+                  floors[#floors + 1] = { ux = ux, uy = uy, uz = uz, g = gc, px = px, py = py, pz = pz,
+                    half = half, lo = lo, hi = hi, k = (gl >= gr) and 1 or -1, ch = ci, i = i }
                   if lo >= RR.ravineWall and hi >= RR.ravineDeep then
                     add("ravine", ux, uy, uz, gc, lo + rare_hash(ci * 1000 + i, seed) * 0.01,
                         { depth = lo, ch = ci })
@@ -1633,6 +1696,10 @@ function rareScan(w, hydro, sdf, opts)
                   if gb then
                     local rise = gb - gc
                     local go = side(k, half + 6.5)
+                    if not in_water(bx_, by_, bz_, gb) then
+                      banks[#banks + 1] = { ux = bx_, uy = by_, uz = bz_, g = gb, rise = rise,
+                        flat = go and math.abs(go - gb) or 99, ch = ci, i = i, k = k }
+                    end
                     if rise >= RR.bankMin and rise <= RR.bankMax and go and math.abs(go - gb) < 3
                        and not in_water(bx_, by_, bz_, gb) then
                       add("river", bx_, by_, bz_, gb, 3 - math.abs(rise - 1.2) + rare_hash(ci * 1000 + i, seed + k) * 0.01,
@@ -1667,6 +1734,9 @@ function rareScan(w, hydro, sdf, opts)
           local g = ground_near(vx, vy, vz, level)
           if g then
             local above = g - level
+            if above >= -0.05 and above <= 8 and not (sea > 0 and g < sea + 0.3) then
+              shores[#shores + 1] = { ux = vx, uy = vy, uz = vz, g = g, above = above, lake = li, k = k }
+            end
             if above >= RR.shoreMin and above <= RR.shoreMax and not (sea > 0 and g < sea + 0.3) then
               found = true
               add("lake", vx, vy, vz, g, 3 - math.abs(above - 0.6) + rare_hash(li * 100 + k, seed) * 0.01,
@@ -1677,8 +1747,17 @@ function rareScan(w, hydro, sdf, opts)
       end
     end
 
-    -- 5. PICK a handful of each, spread out.
+    -- 5. PICK a handful of each, spread out. A top-up pass (`have`) counts
+    -- what is already placed and keeps clear of it; only new ones are added.
+    local have = opts.have or {}
     local plants = {}
+    local kept_by = {}
+    local function far_from(list, x, y, z, sep)
+      for _, k in ipairs(list) do
+        if len(x - k.x, y - k.y, z - k.z) < sep then return false end
+      end
+      return true
+    end
     for _, niche in ipairs(RARE_NICHES) do
       local list = cands[niche]
       table.sort(list, function(p, q2)
@@ -1686,18 +1765,263 @@ function rareScan(w, hydro, sdf, opts)
         return (p.x + p.y * 3 + p.z * 7) < (q2.x + q2.y * 3 + q2.z * 7)
       end)
       local kept = {}
+      for _, p in ipairs(have.plants or {}) do
+        if p.niche == niche then kept[#kept + 1] = { x = p.x, y = p.y, z = p.z, old = true } end
+      end
       local sep = RR.sep[niche]
       for _, c in ipairs(list) do
         if #kept >= RR.keep[niche] then break end
-        local ok = true
-        for _, k in ipairs(kept) do
-          if len(c.x - k.x, c.y - k.y, c.z - k.z) < sep then ok = false break end
-        end
-        if ok then kept[#kept + 1] = c end
+        if far_from(kept, c.x, c.y, c.z, sep) then kept[#kept + 1] = c end
       end
       sc[niche] = #list
+      kept_by[niche] = kept
       for _, c in ipairs(kept) do
-        plants[#plants + 1] = { niche = niche, x = c.x, y = c.y, z = c.z, s = c.s }
+        if not c.old then plants[#plants + 1] = { niche = niche, x = c.x, y = c.y, z = c.z, s = c.s } end
+      end
+    end
+
+    -- 5b. FORCED placements (`fallback`): what a niche still lacks, in the
+    -- best place this world has for it. See RARE_HOME_V.
+    if opts.fallback then
+      sc.forced = {}
+      local function dry_ok(ux, uy, uz, g)
+        return g and not in_water(ux, uy, uz, g) and not avoided(ux * g, uy * g, uz * g)
+      end
+      local function force(niche, list, sep, how)
+        local kept = kept_by[niche]
+        for _, c in ipairs(list) do
+          if #kept >= RR.keep[niche] then break end
+          local x, y, z = c.ux * c.g, c.uy * c.g, c.uz * c.g
+          -- Apart from its own niche's plants, and from every other plant
+          -- too (two forced niches can fall back to the same ground).
+          if dry_ok(c.ux, c.uy, c.uz, c.g) and far_from(kept, x, y, z, sep)
+             and far_from(plants, x, y, z, 30) and far_from(have.plants or {}, x, y, z, 30) then
+            local pl = { niche = niche, x = x, y = y, z = z, s = c.s or 0, forced = c.how or how }
+            kept[#kept + 1] = pl
+            plants[#plants + 1] = pl
+            sc.forced[#sc.forced + 1] = niche .. ":" .. (c.how or how)
+          end
+        end
+      end
+      local function by(list, key, desc)
+        table.sort(list, function(a, b)
+          local x, y = a[key] or 0, b[key] or 0
+          if x ~= y then if desc then return x > y end return x < y end
+          return (a.ux + a.uy * 3 + a.uz * 7) < (b.ux + b.uy * 3 + b.uz * 7)
+        end)
+        return list
+      end
+      local function short(niche) return #kept_by[niche] < RR.keep[niche] end
+      -- The grid as fallback candidates: highest, lowest, nearest the sea.
+      local function grid_list(score)
+        local out = {}
+        for i, p in ipairs(grid) do
+          local s = score(p, i)
+          if s then out[#out + 1] = { ux = p[1], uy = p[2], uz = p[3], g = p[4], s = s } end
+        end
+        return by(out, "s", true)
+      end
+      local function lowest() return grid_list(function(p) return -p[4] end) end
+      local function coast()
+        if sea <= 0 then return {} end
+        return grid_list(function(p)
+          local a = p[4] - sea
+          if a > 0.2 and a < 6 then return -a end
+        end)
+      end
+      local function shore_list()
+        local out = {}
+        for _, c in ipairs(shores) do
+          out[#out + 1] = { ux = c.ux, uy = c.uy, uz = c.uz, g = c.g, s = -math.abs(c.above - 0.6) }
+        end
+        return by(out, "s", true)
+      end
+      local function bank_list()
+        local out = {}
+        for _, c in ipairs(banks) do
+          if c.rise > -0.2 and c.rise < 14 then
+            out[#out + 1] = { ux = c.ux, uy = c.uy, uz = c.uz, g = c.g, s = -math.abs(c.rise - 1.2) - c.flat * 0.2 }
+          end
+        end
+        return by(out, "s", true)
+      end
+      -- Walk across a ravine floor at knee height to its wall: the wall's
+      -- face, the direction into it, and how high the rock stands over it.
+      local function wall_of(f)
+        local k = f.k
+        local hr = f.g + 2.0
+        local bx, by_, bz = f.ux * hr, f.uy * hr, f.uz * hr
+        local ax, ay, az = f.px * k, f.py * k, f.pz * k
+        for st = 0, math.ceil(f.half + 14) do
+          local d = q(bx + ax * st, by_ + ay * st, bz + az * st)
+          if not d then return nil end
+          if d < 0.15 then
+            local wx, wy, wz = bx + ax * st, by_ + ay * st, bz + az * st
+            local wl = len(wx, wy, wz)
+            local tg = ground(wx / wl, wy / wl, wz / wl, top)
+            return wx, wy, wz, ax, ay, az, tg and (tg - f.g) or 0, st
+          end
+        end
+        return nil
+      end
+      -- CAVES. Dig a grotto into a wall where edits are allowed; else the
+      -- foot of the highest wall.
+      if short("cave") then
+        local walls = {}
+        local fl = by(floors, "hi", true)
+        for n = 1, math.min(#fl, 80) do
+          local f = fl[n]
+          if f.hi >= 4 and dry_ok(f.ux, f.uy, f.uz, f.g) then
+            -- Both walls: the higher first.
+            for _, side in ipairs({ f.k, -f.k }) do
+              local fs = { ux = f.ux, uy = f.uy, uz = f.uz, g = f.g, px = f.px, py = f.py, pz = f.pz,
+                           half = f.half, hi = f.hi, k = side }
+              local wx, wy, wz, ax, ay, az, over, st = wall_of(fs)
+              if wx and over >= 6 then
+                walls[#walls + 1] = { f = fs, wx = wx, wy = wy, wz = wz, ax = ax, ay = ay, az = az, over = over, st = st }
+              end
+            end
+          end
+        end
+        -- Steep ground off the grid (cliffs), when there are few ravines.
+        if #walls < 12 then
+          local tried = 0
+          for _, i in ipairs(grid_list(function(p) return rare_hash(seed + 17, math.floor(p[4] * 10)) end)) do
+            if tried > 220 or #walls >= 12 then break end
+            tried = tried + 1
+            if dry_ok(i.ux, i.uy, i.uz, i.g) then
+              local t1x, t1y, t1z, t2x, t2y, t2z = tangent_of(i.ux, i.uy, i.uz)
+              local lowg, lowd = i.g, nil
+              for kk = 0, 5 do
+                local a = kk * math.pi / 3
+                local dx = t1x * math.cos(a) + t2x * math.sin(a)
+                local dy = t1y * math.cos(a) + t2y * math.sin(a)
+                local dz = t1z * math.cos(a) + t2z * math.sin(a)
+                local px_, py_, pz_ = i.ux * i.g + dx * 8, i.uy * i.g + dy * 8, i.uz * i.g + dz * 8
+                local pl = len(px_, py_, pz_)
+                local g2 = ground_near(px_ / pl, py_ / pl, pz_ / pl, i.g)
+                if g2 and g2 < lowg - 5 then lowg, lowd = g2, { px_ / pl, py_ / pl, pz_ / pl, -dx, -dy, -dz } end
+              end
+              if lowd then
+                -- A foot 8 m downhill, the wall back toward the grid point.
+                local f = { ux = lowd[1], uy = lowd[2], uz = lowd[3], g = lowg, px = lowd[4], py = lowd[5], pz = lowd[6],
+                            k = 1, half = 0, hi = i.g - lowg }
+                local wx, wy, wz, ax, ay, az, over, st = wall_of(f)
+                if wx and over >= 6 and dry_ok(f.ux, f.uy, f.uz, f.g) then
+                  walls[#walls + 1] = { f = f, wx = wx, wy = wy, wz = wz, ax = ax, ay = ay, az = az, over = over, st = st }
+                end
+              end
+            end
+          end
+        end
+        table.sort(walls, function(a, b)
+          if a.over ~= b.over then return a.over > b.over end
+          return a.f.ux < b.f.ux
+        end)
+        local kept = kept_by.cave
+        for _, wl in ipairs(walls) do
+          if #kept >= RR.keep.cave then break end
+          local f = wl.f
+          local fx, fy, fz = f.ux * f.g, f.uy * f.g, f.uz * f.g
+          if far_from(kept, wl.wx, wl.wy, wl.wz, RR.sep.cave) and far_from(plants, wl.wx, wl.wy, wl.wz, 30)
+             and far_from(have.plants or {}, wl.wx, wl.wy, wl.wz, 30) then
+            if opts.dig then
+              -- The grotto: two bites into the wall at knee-to-head height,
+              -- the inner one bigger, so a shelter opens off the floor with
+              -- rock over it.
+              local function at(d) return wl.wx + wl.ax * d, wl.wy + wl.ay * d, wl.wz + wl.az * d end
+              local x1, y1, z1 = at(0.8)
+              local x2, y2, z2 = at(3.2)
+              opts.dig(x1, y1, z1, 2.2)
+              opts.dig(x2, y2, z2, 2.6)
+              -- Let the edits land (a few frames when the caller says what
+              -- time it is) before reading the field again.
+              sc.hold = opts.now and (opts.now() + 0.2) or nil
+              coroutine.yield("running")
+              -- The floor under the inner bite, and the roof over it.
+              local cl_ = len(x2, y2, z2)
+              local ux, uy, uz = x2 / cl_, y2 / cl_, z2 / cl_
+              local r = cl_
+              local floor_r = nil
+              for _ = 1, 40 do
+                local d = q(ux * r, uy * r, uz * r)
+                if not d then break end
+                if d < 0.12 then floor_r = r - math.max(d, 0) break end
+                r = r - math.max(d * 0.9, 0.08)
+              end
+              local roof = q(ux * (cl_ + 3.5), uy * (cl_ + 3.5), uz * (cl_ + 3.5))
+              if floor_r and roof and roof < 0.2 then
+                local pl = { niche = "cave", x = ux * floor_r, y = uy * floor_r, z = uz * floor_r, s = wl.over,
+                             forced = "grotto" }
+                kept[#kept + 1] = pl
+                plants[#plants + 1] = pl
+                sc.forced[#sc.forced + 1] = "cave:grotto"
+                sc.dug = (sc.dug or 0) + 1
+              end
+            else
+              -- No edits: the foot of the wall, a step out from it.
+              local px_, py_, pz_ = wl.wx - wl.ax * 1.3, wl.wy - wl.ay * 1.3, wl.wz - wl.az * 1.3
+              local pl_ = len(px_, py_, pz_)
+              local g = ground_near(px_ / pl_, py_ / pl_, pz_ / pl_, f.g)
+              if g and dry_ok(px_ / pl_, py_ / pl_, pz_ / pl_, g) then
+                local pl = { niche = "cave", x = px_ / pl_ * g, y = py_ / pl_ * g, z = pz_ / pl_ * g, s = wl.over,
+                             forced = "wallfoot" }
+                kept[#kept + 1] = pl
+                plants[#plants + 1] = pl
+                sc.forced[#sc.forced + 1] = "cave:wallfoot"
+              end
+            end
+          end
+        end
+        -- A world with no wall anywhere: its lowest dry ground.
+        if short("cave") then force("cave", lowest(), RR.sep.cave, "lowland") end
+      end
+      if short("peak") then force("peak", grid_list(function(p) return p[4] end), RR.sep.peak, "highest") end
+      if short("ravine") then
+        local fl = {}
+        for _, f in ipairs(floors) do
+          if f.lo >= 0.8 then fl[#fl + 1] = { ux = f.ux, uy = f.uy, uz = f.uz, g = f.g, s = f.lo, how = "shallow" } end
+        end
+        force("ravine", by(fl, "s", true), RR.sep.ravine, "shallow")
+        if short("ravine") then
+          -- Gullies: the grid's lowest points with ground standing up round
+          -- them.
+          local gl = {}
+          local low = lowest()
+          for n = 1, math.min(#low, 300) do
+            local c = low[n]
+            if dry_ok(c.ux, c.uy, c.uz, c.g) then
+              local t1x, t1y, t1z, t2x, t2y, t2z = tangent_of(c.ux, c.uy, c.uz)
+              local rim = 0
+              for kk = 0, 3 do
+                local a = kk * math.pi / 2
+                local px_ = c.ux * c.g + (t1x * math.cos(a) + t2x * math.sin(a)) * 15
+                local py_ = c.uy * c.g + (t1y * math.cos(a) + t2y * math.sin(a)) * 15
+                local pz_ = c.uz * c.g + (t1z * math.cos(a) + t2z * math.sin(a)) * 15
+                local pl = len(px_, py_, pz_)
+                local g2 = ground_near(px_ / pl, py_ / pl, pz_ / pl, c.g)
+                rim = rim + ((g2 or c.g) - c.g) / 4
+              end
+              if rim > 0.5 then gl[#gl + 1] = { ux = c.ux, uy = c.uy, uz = c.uz, g = c.g, s = rim, how = "gully" } end
+            end
+          end
+          force("ravine", by(gl, "s", true), RR.sep.ravine, "gully")
+        end
+        if short("ravine") then force("ravine", lowest(), RR.sep.ravine, "lowland") end
+      end
+      for _, niche in ipairs({ "lake", "river" }) do
+        if short(niche) then
+          local order = (niche == "lake") and { shore_list, coast, bank_list } or { bank_list, shore_list, coast }
+          local names = (niche == "lake") and { "shore", "coast", "bank" } or { "bank", "shore", "coast" }
+          for n, fn in ipairs(order) do
+            if short(niche) then
+              local l = fn()
+              for _, c in ipairs(l) do c.how = names[n] end
+              force(niche, l, RR.sep[niche] * 0.6, names[n])
+            end
+          end
+          if short(niche) then force(niche, lowest(), RR.sep[niche] * 0.6, "lowland") end
+        end
       end
     end
 
@@ -1711,15 +2035,19 @@ function rareScan(w, hydro, sdf, opts)
       order[i], order[j] = order[j], order[i]
     end
     local ores = {}
-    for _, i in ipairs(order) do
-      if #ores >= RR.ores then break end
+    local olds = {}
+    for _, o in ipairs(have.ores or {}) do olds[#olds + 1] = { x = o.x, y = o.y, z = o.z } end
+    local want = RR.ores
+    local function pocket_try(i, depth, wet_ok, sep)
       local p = grid[i]
-      local depth = 7 + rare_hash(seed + 3, i) * 7
       local rc = p[4] - depth
       local cx, cy, cz = p[1] * rc, p[2] * rc, p[3] * rc
-      local ok = not in_water(p[1], p[2], p[3], p[4])
+      local ok = (wet_ok or not in_water(p[1], p[2], p[3], p[4])) and not avoided(p[1] * p[4], p[2] * p[4], p[3] * p[4])
       for _, o in ipairs(ores) do
-        if ok and len(cx - o.x, cy - o.y, cz - o.z) < RR.oreSep then ok = false end
+        if ok and len(cx - o.x, cy - o.y, cz - o.z) < sep then ok = false end
+      end
+      for _, o in ipairs(olds) do
+        if ok and len(cx - o.x, cy - o.y, cz - o.z) < sep then ok = false end
       end
       if ok then
         local d0 = q(cx, cy, cz)
@@ -1735,6 +2063,18 @@ function rareScan(w, hydro, sdf, opts)
       end
       if ok then ores[#ores + 1] = { x = cx, y = cy, z = cz, d = depth, r = RR.oreR } end
     end
+    for _, i in ipairs(order) do
+      if #ores + #olds >= want then break end
+      pocket_try(i, 7 + rare_hash(seed + 3, i) * 7, RR.oreWet, RR.oreSep)
+    end
+    -- Forced: deeper, closer together, under water too.
+    if opts.fallback then
+      local need = math.max(RARE_HOME_ORES, opts.ores or 0)
+      for _, i in ipairs(order) do
+        if #ores + #olds >= need then break end
+        pocket_try(i, 9 + rare_hash(seed + 5, i) * 11, true, RR.oreSep * 0.5)
+      end
+    end
 
     local function round(v) return math.floor(v * 100 + 0.5) / 100 end
     for _, p in ipairs(plants) do p.x, p.y, p.z, p.s = round(p.x), round(p.y), round(p.z), round(p.s) end
@@ -1746,6 +2086,8 @@ function rareScan(w, hydro, sdf, opts)
   co = coroutine.create(run)
   function sc.step(n)
     if sc.status ~= "running" then return sc.status end
+    if sc.hold and opts.now and opts.now() < sc.hold then return "running" end
+    sc.hold = nil
     budget, used = math.max(50, n or 2000), 0
     local ok, st = coroutine.resume(co)
     if not ok then
