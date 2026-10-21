@@ -1,0 +1,2 @@
+// grass_low_l0: leaf, 0.3 m tall, tip travels 0.09 m in a 10 m/s wind. tools/gen_flora_prefabs.py
+[(name: "grass_low_l0", transform: (translation: (0.0, 0.0, 0.0)), matter: Mesh(asset_path: "models/flora/grass_low_l0.gltf"), material: Some((texture: Some("textures/flora/foliage_l0.png"), normal_map: Some("textures/flora/foliage_n.png"), sway: 1.0000, backlight: 0.50)))]

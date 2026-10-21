@@ -1,0 +1,2 @@
+// fern_tall_l1: leaf, 1.6 m tall, tip travels 0.55 m in a 10 m/s wind. tools/gen_flora_prefabs.py
+[(name: "fern_tall_l1", transform: (translation: (0.0, 0.0, 0.0)), matter: Mesh(asset_path: "models/flora/fern_tall_l1.gltf"), material: Some((texture: Some("textures/flora/foliage_l0.png"), normal_map: Some("textures/flora/foliage_n.png"), sway: 0.2242, backlight: 0.50)))]

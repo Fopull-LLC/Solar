@@ -1,0 +1,2 @@
+// jungle_giant_bark_l0: bark, 22.0 m tall, tip travels 3.30 m in a 10 m/s wind. tools/gen_flora_prefabs.py
+[(name: "jungle_giant_bark_l0", transform: (translation: (0.0, 0.0, 0.0)), matter: Mesh(asset_path: "models/flora/jungle_giant_bark_l0.gltf"), material: Some((texture: Some("textures/flora/bark_smooth_l0.png"), normal_map: Some("textures/flora/bark_smooth_n.png"), sway: 0.0068)))]

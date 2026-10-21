@@ -1231,16 +1231,14 @@ function geoOpts3(g, radius, caveScale, sc, seed)
   -- Two voxels down the splat shows it at 0.5% of undug ground (offline
   -- emulation of the 0.117 splat on Golun, terrain-fidelity agent: 1.6% at
   -- one voxel, 0.06% at 3.4).
-  -- But that fix only holds while an atlas cell is smaller than the field's
-  -- ±4-voxel band. Here a cell is 7.6–8.8 m, past the band: a cell centre
-  -- beyond it reads a zero gradient and falls back to its own voxel, so the
-  -- subsoil showed through undug ground as a lattice of 9–15 m blotches (the
-  -- player's "subtle grid"; seams agent 2026-10-20: 17% of a nadir frame on
-  -- seed 1, 3.8% with the subsoil 12 m down). So the scale-2 floor of 1.5
-  -- atlas cells is back until the engine splats from the voxel (card 0425).
+  -- A cell of the atlas (7.6–8.8 m here) is past the field's ±4-voxel band,
+  -- and on 0.117.0-rc3 the subsoil showed through undug ground as a lattice
+  -- of 9–15 m blotches, so the subsoil was held 1.5 atlas cells down. Since
+  -- 0.117.0-rc6 (card 0425) a triangle whose corners carry one slot draws
+  -- from that slot alone: with no atlas floor the red-subsoil test world
+  -- shows 0.19% red from 250 m (rc3: 11.4%), and the floor goes.
   local lean = o.overhangs and o.overhangs.strength or 0
-  local cell = (2 * (radius + relief) + 84 * o.voxel) / 192
-  o.subsoilDepth = math.max(o.subsoilDepth or 0, 2 * o.voxel, lean + o.voxel, 1.5 * cell)
+  o.subsoilDepth = math.max(o.subsoilDepth or 0, 2 * o.voxel, lean + o.voxel)
   o.strataDepth = math.max(o.strataDepth or 0, o.subsoilDepth + 4)
   -- What the layers can do to the height, for the spawn, the occluder and the
   -- published relief: peaks stand up to the fbm plus the ranges (a plateau
@@ -1520,10 +1518,9 @@ function homeOpts3(g, radius, caveScale, sc, q)
   o.pockets = { slot = 7, color = hsv(0.75, 0.3, 0.9), threshold = g.pocketThr, minDepth = 8 }
   o.seam = { slot = 5, color = hsv(0.08, 0.3, 0.8), minDepth = o.caveDepth * 0.5, center = 0.32, width = 0.04 }
   o.voxel = math.max(1.5, math.min(sc.voxelMax or 2.4, radius / (sc.voxelSpan or 470)))
-  -- The subsoil under the overhangs' reach and 1.5 atlas cells down (geoOpts3).
+  -- The subsoil under the overhangs' reach (geoOpts3).
   local lean = o.overhangs.strength
-  local cell = (2 * (radius + relief) + 84 * o.voxel) / 192
-  o.subsoilDepth = math.max(o.subsoilDepth or 0, 2 * o.voxel, lean + o.voxel, 1.5 * cell)
+  o.subsoilDepth = math.max(o.subsoilDepth or 0, 2 * o.voxel, lean + o.voxel)
   o.strataDepth = math.max(o.strataDepth or 0, o.subsoilDepth + 4)
   local hi = relief + mH + lean
   local cut = math.max(o.ravines.depth, o.rivers.depth)

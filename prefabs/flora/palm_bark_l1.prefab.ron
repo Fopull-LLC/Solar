@@ -1,0 +1,2 @@
+// palm_bark_l1: bark, 11.7 m tall, tip travels 1.75 m in a 10 m/s wind. tools/gen_flora_prefabs.py
+[(name: "palm_bark_l1", transform: (translation: (0.0, 0.0, 0.0)), matter: Mesh(asset_path: "models/flora/palm_bark_l1.gltf"), material: Some((texture: Some("textures/flora/bark_palm_l1.png"), normal_map: Some("textures/flora/bark_palm_n.png"), sway: 0.0129)))]

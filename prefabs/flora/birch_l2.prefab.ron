@@ -1,0 +1,2 @@
+// birch_l2: leaf, 15.5 m tall, tip travels 2.33 m in a 10 m/s wind. tools/gen_flora_prefabs.py
+[(name: "birch_l2", transform: (translation: (0.0, 0.0, 0.0)), matter: Mesh(asset_path: "models/flora/birch_l2.gltf"), material: Some((texture: Some("textures/flora/foliage_l0.png"), sway: 0.0097, backlight: 0.50)))]

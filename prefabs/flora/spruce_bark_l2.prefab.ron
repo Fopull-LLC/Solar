@@ -1,0 +1,2 @@
+// spruce_bark_l2: bark, 13.4 m tall, tip travels 2.01 m in a 10 m/s wind. tools/gen_flora_prefabs.py
+[(name: "spruce_bark_l2", transform: (translation: (0.0, 0.0, 0.0)), matter: Mesh(asset_path: "models/flora/spruce_bark_l2.gltf"), material: Some((texture: Some("textures/flora/bark_rough_l1.png"), sway: 0.0112)))]

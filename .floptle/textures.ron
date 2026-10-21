@@ -1,0 +1,13 @@
+{
+    "textures/flora/bark_palm_l0.png": (filter: SmoothMipmaps, wrap: Repeat),
+    "textures/flora/bark_palm_l1.png": (filter: SmoothMipmaps, wrap: Repeat),
+    "textures/flora/bark_palm_n.png": (filter: SmoothMipmaps, wrap: Repeat),
+    "textures/flora/bark_rough_l0.png": (filter: SmoothMipmaps, wrap: Repeat),
+    "textures/flora/bark_rough_l1.png": (filter: SmoothMipmaps, wrap: Repeat),
+    "textures/flora/bark_rough_n.png": (filter: SmoothMipmaps, wrap: Repeat),
+    "textures/flora/bark_smooth_l0.png": (filter: SmoothMipmaps, wrap: Repeat),
+    "textures/flora/bark_smooth_l1.png": (filter: SmoothMipmaps, wrap: Repeat),
+    "textures/flora/bark_smooth_n.png": (filter: SmoothMipmaps, wrap: Repeat),
+    "textures/flora/foliage_l0.png": (filter: SmoothMipmaps, wrap: Clamp),
+    "textures/flora/foliage_n.png": (filter: SmoothMipmaps, wrap: Clamp),
+}

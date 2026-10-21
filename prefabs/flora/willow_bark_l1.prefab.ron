@@ -1,0 +1,2 @@
+// willow_bark_l1: bark, 10.1 m tall, tip travels 1.52 m in a 10 m/s wind. tools/gen_flora_prefabs.py
+[(name: "willow_bark_l1", transform: (translation: (0.0, 0.0, 0.0)), matter: Mesh(asset_path: "models/flora/willow_bark_l1.gltf"), material: Some((texture: Some("textures/flora/bark_rough_l1.png"), normal_map: Some("textures/flora/bark_rough_n.png"), sway: 0.0148)))]

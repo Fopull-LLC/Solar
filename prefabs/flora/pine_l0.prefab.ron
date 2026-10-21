@@ -1,0 +1,2 @@
+// pine_l0: needle, 12.8 m tall, tip travels 1.92 m in a 10 m/s wind. tools/gen_flora_prefabs.py
+[(name: "pine_l0", transform: (translation: (0.0, 0.0, 0.0)), matter: Mesh(asset_path: "models/flora/pine_l0.gltf"), material: Some((texture: Some("textures/flora/foliage_l0.png"), normal_map: Some("textures/flora/foliage_n.png"), sway: 0.0117, backlight: 0.25)))]

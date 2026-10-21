@@ -635,9 +635,35 @@ function densityAt(sp, s, x, y, z, radius)
 end
 
 -- The mesh file for a species at an LOD; `part` = "bark" for a tree's trunk.
+-- A plant that moves in the wind is drawn from its prefab (prefabs/flora,
+-- tools/gen_flora_prefabs.py): the same model wearing a Material with sway
+-- and backlight, which a scattered prefab carries (engine 0.117.0-rc6, card
+-- 0466). The wind is weather.lua's (weather.addWind). Stiff plants, sea
+-- plants and two-material models have no prefab and draw the model as it is.
+local swaying = {}
+local function prefab_or(model)
+  local hit = swaying[model]
+  if hit == nil then
+    local p = "prefabs/flora/" .. model .. ".prefab.ron"
+    hit = (assets and assets.getFile and assets.getFile(p)) and p or false
+    swaying[model] = hit
+  end
+  return hit or ("models/flora/" .. model .. ".gltf")
+end
+
+local function model_name(sp, lod, part)
+  return string.format(part == "bark" and "%s_bark_l%d" or "%s_l%d", sp.shape, lod or 0)
+end
+
+-- What a scatter field draws: the prefab when there is one.
 function assetFor(sp, lod, part)
-  if part == "bark" then return string.format("models/flora/%s_bark_l%d.gltf", sp.shape, lod or 0) end
-  return string.format("models/flora/%s_l%d.gltf", sp.shape, lod or 0)
+  return prefab_or(model_name(sp, lod, part))
+end
+
+-- The model file itself: for a node's `model` and for assets.preload, which
+-- take a mesh, not a prefab.
+function modelFor(sp, lod, part)
+  return "models/flora/" .. model_name(sp, lod, part) .. ".gltf"
 end
 
 -- What cutting one down gives you, rolled per individual so a stand of trees

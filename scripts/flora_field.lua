@@ -148,10 +148,10 @@ local last_diag = ""
 local motes, mote_t = {}, 0
 local washes = {}   -- "patch:i,j" → decal id (or false: nothing grows there)
 local wash_n = 0
-local wash_info = {}  -- key → { x, y, z (body-rel), base alpha, ground probes }
+local wash_info = {}  -- key → { x, y, z (body-rel), base alpha }
 local wash_fade_t = 0
 local frame_checked = false
-local wash, wash_probes   -- defined below update (ground wash)
+local wash                -- defined below update (ground wash)
 local preload_t = 0
 local swept = false
 local retiring = {} -- { id, pk, spid, t }: re-settled stands' old sources, still drawn until t
@@ -863,7 +863,7 @@ function update(node, dt)
     if preload[bname] == nil then
       local list = {}
       for _, sp in ipairs(species) do
-        for l = 0, (sp.lods or 1) - 1 do list[#list + 1] = fg.assetFor(sp, l) end
+        for l = 0, (sp.lods or 1) - 1 do list[#list + 1] = fg.modelFor(sp, l) end
       end
       preload[bname] = "pending"
       preload_t = time
@@ -1060,42 +1060,11 @@ end
 -- `tint_alt` every wash is lifted, so from the air nothing has an edge.
 
 
--- A decal is laid once on the collider under it and never follows the ground
--- (floptle decal_api), so a wash over ground that is later dug, sculpted or
--- re-generated hangs in the air. Five points under each wash (its centre and
--- four round it) remember their distance to the ground when it was laid; once
--- a second they are read again, and a wash whose ground moved is taken off,
--- to be laid again on the new ground by the pass that lays new ones.
-local WASH_MOVED = 0.12
-wash_probes = function(body, gx, gy, gz, reach)
-  local l = len(gx, gy, gz)
-  if l < 1e-6 then return nil end
-  local ux, uy, uz = gx / l, gy / l, gz / l
-  local ax, ay, az = 1, 0, 0
-  if math.abs(ux) > 0.9 then ax, ay, az = 0, 1, 0 end
-  local d = ax * ux + ay * uy + az * uz
-  ax, ay, az = ax - ux * d, ay - uy * d, az - uz * d
-  local al = len(ax, ay, az); ax, ay, az = ax / al, ay / al, az / al
-  local bx, by, bz = uy * az - uz * ay, uz * ax - ux * az, ux * ay - uy * ax
-  local pts = {}
-  for _, o in ipairs({ { 0, 0 }, { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }) do
-    local px = gx + (ax * o[1] + bx * o[2]) * reach
-    local py = gy + (ay * o[1] + by * o[2]) * reach
-    local pz = gz + (az * o[1] + bz * o[2]) * reach
-    pts[#pts + 1] = { px, py, pz, terrain.query(body.x + px, body.y + py, body.z + pz) or 0 }
-  end
-  return pts
-end
-
-local function wash_moved(body, pts)
-  if not pts then return false end
-  for _, p in ipairs(pts) do
-    local q = terrain.query(body.x + p[1], body.y + p[2], body.z + p[3])
-    if q and math.abs(q - p[4]) > WASH_MOVED then return true end
-  end
-  return false
-end
-
+-- The engine keeps a wash on the ground: dig, sculpt or re-generate the
+-- ground under it and it is laid again on the surface there, or goes if
+-- nothing is left (engine 0.117.0-rc6, card 0464). A wash the engine took
+-- is forgotten at the next re-fade and laid again by the pass that lays new
+-- ones.
 wash = function(body, rx, ry, rz, species, fg, alt, w)
   if params.tint == 0 or not (decals and decals.add) or (alt or 0) > params.tint_alt then
     if wash_n > 0 or next(washes) then
@@ -1154,7 +1123,7 @@ wash = function(body, rx, ry, rz, species, fg, alt, w)
                   if ok and id then
                     washes[key] = id
                     wash_n = wash_n + 1
-                    wash_info[key] = { gx, gy, gz, base, wash_probes(body, gx, gy, gz, S * 0.6) }
+                    wash_info[key] = { gx, gy, gz, base }
                   end
                 end
               end
@@ -1178,14 +1147,13 @@ wash = function(body, rx, ry, rz, species, fg, alt, w)
     wash_fade_t = time + 1.0
     for key, id in pairs(washes) do
       local inf = id and wash_info[key]
-      if inf and wash_moved(body, inf[5]) then
-        decals.remove(id)
-        wash_n = wash_n - 1
-        washes[key] = nil      -- pairs() allows clearing the current key
-        wash_info[key] = nil
-      elseif inf then
+      if inf then
         local d = len(inf[1] - rx, inf[2] - ry, inf[3] - rz)
-        decals.set(id, { alpha = inf[4] * math.max(0, math.min(1, (range - d) / (range * 0.4))) })
+        if not decals.set(id, { alpha = inf[4] * math.max(0, math.min(1, (range - d) / (range * 0.4))) }) then
+          wash_n = wash_n - 1
+          washes[key] = nil      -- pairs() allows clearing the current key
+          wash_info[key] = nil
+        end
       end
     end
   end
@@ -1362,7 +1330,7 @@ local function rare_make(bname, planet)
     if not p.cut then
       local fg = ref("flora_gen")
       createNode("Rare " .. p.key, planet, function(n)
-        n.model = fg.assetFor(sp, 0)
+        n.model = fg.modelFor(sp, 0)
         n.x, n.y, n.z = p.x, p.y, p.z
         if n.setUp then n:setUp(vec3(p.ux, p.uy, p.uz)) end
         local s = sp.scale or 1

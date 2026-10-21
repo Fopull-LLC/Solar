@@ -192,28 +192,18 @@ function flash(x, y, z, r, g, b, intensity, range, life, shape)
 end
 
 -- ── burn marks ──────────────────────────────────────────────────────────────
--- A decal is laid ONCE, on the collider faces that were under it at that
--- moment, and the engine never re-lays it (floptle decal_api `lay`). So a
--- burn on ground that is later dug away (the laser bites under its own
--- scorches; a crash crater opens under the blast mark; the spade), or seen
--- from far enough that the drawn ground is a coarser LOD than the collider it
--- was laid on, hangs in the air. Every mark is therefore kept here and:
---   * checked against the ground (terrain.query, the true surface) a few a
---     frame, and at once near a dig or a laser cut: a gap of more than
---     MARK_TOL takes it off, and once the collider has caught up it is laid
---     again on the new surface (a crater keeps its scorch); ground gone far
---     from it drops it for good;
---   * faded out with distance before the drawn terrain coarsens;
---   * given a lifetime, and faded at its end.
-local MARK_TOL = 0.08         -- metres the ground may move under a mark before it is re-laid
--- A decal lies on the collider's drawn faces, which stand up to half a voxel
--- off the field terrain.query reads (2.15 m voxels at scale 3), so a mark
--- keeps the field distance it was laid at (`sd0`) and is judged by how far
--- that has CHANGED, not by how far it is from zero.
-local MARK_DRAWN = 1.2
+-- A mark is a decal (decals.add). The engine keeps it on the ground: dig or
+-- re-mesh the ground under it and it is laid again on the surface there, or
+-- goes if nothing is left to lie on (engine 0.117.0-rc6, card 0464), and it
+-- rides its planet. What is left for this script:
+--   * a fade with distance, before the drawn terrain coarsens: a decal lies
+--     on the collider's full-detail faces, and from far enough the drawn
+--     ground is a coarser LOD, so the mark would float over or sink under
+--     it. Faded by its alpha only; a mark is never lifted and laid again, so
+--     it stays where the engine re-laid it;
+--   * a lifetime, faded at its end.
 local MARK_MAX = 160          -- tracked marks; the oldest goes first
-local marks = {}              -- array of mark records (see mark_lay)
-local mark_rr = 0             -- round-robin cursor for the ground checks
+local marks = {}              -- array of { id, body, ox, oy, oz, size, alpha, t0, life, vis }
 local mark_fade_t = 0
 local cam_x, cam_y, cam_z = nil, nil, nil
 
@@ -227,32 +217,21 @@ end
 -- range grows with the mark (a crater scar is seen further than a laser burn)
 -- but stays inside the full-detail terrain ring.
 local function mark_vis(m, x, y, z)
-  if not cam_x then return 1 end
-  local d = len(x - cam_x, y - cam_y, z - cam_z)
-  local near = math.min(140, 35 + m.size * 9)
-  local far = near * 1.5
-  local v = 1 - math.max(0, math.min(1, (d - near) / (far - near)))
+  local v = 1
+  if cam_x then
+    local d = len(x - cam_x, y - cam_y, z - cam_z)
+    local near = math.min(140, 35 + m.size * 9)
+    local far = near * 1.5
+    v = 1 - math.max(0, math.min(1, (d - near) / (far - near)))
+  end
   local age = now - m.t0
   if m.life and age > m.life - 15 then v = v * math.max(0, (m.life - age) / 15) end
   return math.floor(v * 8 + 0.5) / 8   -- in eighths: a set only when it steps
 end
 
-local function mark_lay(m, x, y, z)
-  local vis = mark_vis(m, x, y, z)
-  m.vis = vis
-  if vis <= 0 then return false end   -- laid when it comes back into range
-  local ok, id = pcall(decals.add, { texture = m.tex, pos = vec3(x, y, z), normal = vec3(m.nx, m.ny, m.nz),
-    size = m.size, rotation = m.rot, alpha = m.alpha * vis })
-  m.id = ok and id or nil
-  return m.id ~= nil
-end
-
-local function mark_lift(m)
-  if m.id then decals.remove(m.id); m.id = nil end
-end
-
 local function mark_drop(i)
-  mark_lift(marks[i])
+  local m = marks[i]
+  if m.id then decals.remove(m.id) end
   table.remove(marks, i)
 end
 
@@ -263,92 +242,21 @@ local function scorch(x, y, z, nx, ny, nz, radius, strength, tex, life)
   elseif mode == 1 and decals and decals.add then
     local name, b = body_at(x, y, z)
     if not b then return end
-    local sd = terrain and terrain.query and terrain.query(x, y, z)
-    local m = { tex = tex or "textures/vfx/decal/scorch.png", body = name, ox = x - b.x, oy = y - b.y, oz = z - b.z,
-      nx = nx, ny = ny, nz = nz, size = radius * 2, rot = math.random() * 6.283, alpha = strength or 0.8,
-      t0 = now, life = life or params.scorch_life,
-      -- On the ground (not a building or a hull): only these follow the terrain.
-      ground = sd ~= nil and math.abs(sd) < MARK_DRAWN, sd0 = sd or 0, tries = 0 }
+    local m = { body = name, ox = x - b.x, oy = y - b.y, oz = z - b.z, size = radius * 2,
+      alpha = strength or 0.8, t0 = now, life = life or params.scorch_life }
     if (m.life or 0) <= 0 then m.life = nil end
-    if not mark_lay(m, x, y, z) and m.vis > 0 then return end   -- nothing there to take it
+    m.vis = mark_vis(m, x, y, z)
+    local ok, id = pcall(decals.add, { texture = tex or "textures/vfx/decal/scorch.png", pos = vec3(x, y, z),
+      normal = vec3(nx, ny, nz), size = m.size, rotation = math.random() * 6.283, alpha = m.alpha * m.vis })
+    if not (ok and id) then return end   -- nothing there to take it
+    m.id = id
     while #marks >= MARK_MAX do mark_drop(1) end
     marks[#marks + 1] = m
   end
 end
 
--- Ground changed around (x, y, z) within r: check every mark there now.
-function groundChanged(x, y, z, r)
-  for _, m in ipairs(marks) do
-    if m.ground then
-      local mx, my, mz = mark_world(m)
-      if mx and len(mx - x, my - y, mz - z) < r + m.size * 0.5 + 0.5 then m.check = true end
-    end
-  end
-end
-
--- One mark against the ground. Returns false when it should be dropped.
-local function mark_check(m)
-  local x, y, z, b = mark_world(m)
-  if not x then return false end
-  local sd = terrain.query(x, y, z)
-  if not sd then return true end
-  if m.id and math.abs(sd - m.sd0) <= MARK_TOL then m.check = nil; return true end
-  -- The ground moved from under it (or over it): off now, never floating.
-  if m.id then
-    mark_lift(m)
-    m.relay_t = now + 0.4   -- the collision re-mesh lands a few frames after the edit
-    return true
-  end
-  if now < (m.relay_t or 0) then return true end
-  -- Gone far (a crater much deeper than the mark is wide): not the same place.
-  if math.abs(sd) > math.max(1.5, m.size) or m.tries >= 6 then return false end
-  m.tries = m.tries + 1
-  -- Onto the field's surface along the planet's up, then down onto the
-  -- collider's faces (what a decal is laid on) with a ray.
-  local ux, uy, uz = norm(x - b.x, y - b.y, z - b.z)
-  for _ = 1, 8 do
-    x, y, z = x - ux * sd, y - uy * sd, z - uz * sd
-    sd = terrain.query(x, y, z) or 0
-    if math.abs(sd) < 0.02 then break end
-  end
-  local h = raycast(x + ux * 2.0, y + uy * 2.0, z + uz * 2.0, -ux, -uy, -uz, 4.0)
-  local hq = h and h.x and terrain.query(h.x, h.y, h.z)
-  -- A hit further from the field than the drawn surface ever stands is the
-  -- old collider, not yet re-meshed: try again in a moment.
-  if not (hq and math.abs(hq) < MARK_DRAWN) then
-    m.relay_t = now + 0.4
-    return true
-  end
-  m.ox, m.oy, m.oz, m.sd0 = h.x - b.x, h.y - b.y, h.z - b.z, hq
-  if h.nx then m.nx, m.ny, m.nz = h.nx, h.ny, h.nz end
-  mark_lay(m, h.x, h.y, h.z)
-  m.check, m.relay_t = nil, nil
-  return true
-end
-
 local function marks_tick()
-  local n = #marks
-  if n == 0 or not (decals and decals.add) then return end
-  -- Ground checks: anything flagged, plus a few in turn every frame (so an
-  -- edit nobody reported — a pad being flattened, a re-generated chunk — is
-  -- still caught within a couple of seconds).
-  local budget = 4
-  local i = 1
-  while i <= #marks do
-    local m = marks[i]
-    local keep = true
-    if m.ground and (m.check or not m.id and m.relay_t) and terrain and terrain.query then keep = mark_check(m) end
-    if keep then i = i + 1 else mark_drop(i) end
-  end
-  n = #marks
-  for _ = 1, math.min(budget, n) do
-    mark_rr = mark_rr % #marks + 1
-    local m = marks[mark_rr]
-    if m and m.ground and m.id and not m.check and terrain and terrain.query then
-      if not mark_check(m) then mark_drop(mark_rr) end
-    end
-    if #marks == 0 then break end
-  end
+  if #marks == 0 or not (decals and decals.set) then return end
   -- Distance and age fade, four times a second: a set only when a mark's
   -- eighth changes (each set re-packs that picture's batch).
   if now - mark_fade_t < 0.25 then return end
@@ -358,48 +266,43 @@ local function marks_tick()
     local ok2, ox, oy, oz = pcall(camera.screenToRay, w * 0.5, hh * 0.5)
     if ok2 and ox then cam_x, cam_y, cam_z = ox, oy, oz end
   end
-  i = 1
+  local i = 1
   while i <= #marks do
     local m = marks[i]
-    if m.life and now - m.t0 > m.life then
+    local x, y, z = mark_world(m)
+    if (m.life and now - m.t0 > m.life) or not x then
       mark_drop(i)
     else
-      local x, y, z = mark_world(m)
-      if x and not (m.relay_t and not m.id) then
-        local v = mark_vis(m, x, y, z)
-        if v ~= m.vis then
-          if v <= 0 then
-            mark_lift(m)
-          elseif not m.id then
-            if not (m.ground and m.check) then mark_lay(m, x, y, z) end
-          elseif not decals.set(m.id, { alpha = m.alpha * v }) then
-            m.id = nil
-          end
-          m.vis = v
-        end
+      local v = mark_vis(m, x, y, z)
+      -- false: the engine took it (the ground under it dug away, or the
+      -- decal budget pushed it out). Forget it.
+      if v ~= m.vis and not decals.set(m.id, { alpha = m.alpha * v }) then
+        table.remove(marks, i)
+      else
+        m.vis = v
+        i = i + 1
       end
-      i = i + 1
     end
   end
 end
 
 -- What the marks are doing, for probes.
 function markStats()
-  local laid, ground, hidden = 0, 0, 0
+  local laid, hidden = 0, 0
   for _, m in ipairs(marks) do
     if m.id then laid = laid + 1 end
-    if m.ground then ground = ground + 1 end
     if (m.vis or 1) <= 0 then hidden = hidden + 1 end
   end
-  return { tracked = #marks, laid = laid, ground = ground, hidden = hidden }
+  return { tracked = #marks, laid = laid, hidden = hidden }
 end
 
--- Every tracked mark's world centre and whether it is laid, for probes.
+-- Every tracked mark's centre where it was LAID, for probes (the engine may
+-- since have re-laid it lower, on ground dug from under it).
 function markList()
   local out = {}
   for _, m in ipairs(marks) do
     local x, y, z = mark_world(m)
-    if x then out[#out + 1] = { x = x, y = y, z = z, laid = m.id ~= nil, size = m.size, ground = m.ground } end
+    if x then out[#out + 1] = { x = x, y = y, z = z, laid = m.id ~= nil, size = m.size } end
   end
   return out
 end
@@ -425,8 +328,6 @@ function explode(x, y, z, vx, vy, vz, big)
     local gx, gy, gz = x - ux * sd, y - uy * sd, z - uz * sd
     fire("GroundShock", gx + ux * 0.3, gy + uy * 0.3, gz + uz * 0.3, { intensity = big and 1.3 or 0.7, dust = true })
     scorch(gx, gy, gz, ux, uy, uz, big and 4.5 or 2.4, big and 0.9 or 0.7)
-    -- The crash digs its crater after this: look at the marks there again.
-    groundChanged(gx, gy, gz, big and 6 or 4)
   end
 end
 
@@ -482,7 +383,6 @@ end
 function dig(x, y, z, raise)
   local _, _, ux, uy, uz = frame(x, y, z)
   fire("DigClods", x + ux * 0.2, y + uy * 0.2, z + uz * 0.2, { intensity = raise and 0.7 or 1.2, dust = true })
-  groundChanged(x, y, z, 1.5)
 end
 
 -- The cutter biting into a stem (every frame while cutting is fine — gated).
@@ -735,11 +635,6 @@ function laserHit(impact, hit, power, hotness, focus)
   if power > 0.6 and now - laser.scorch_t > 0.45 then
     laser.scorch_t = now
     scorch(hit.x, hit.y, hit.z, nx, ny, nz, 0.35 + 0.4 * (hotness or 0), 0.5, "textures/vfx/decal/scorch_b.png", 240)
-  end
-  -- The beam bites the rock away under its own burns: re-check those.
-  if power > 0.15 and now - (laser.ground_t or 0) > 0.2 then
-    laser.ground_t = now
-    groundChanged(hit.x, hit.y, hit.z, 1.2)
   end
 end
 
