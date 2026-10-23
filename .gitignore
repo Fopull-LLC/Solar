@@ -21,3 +21,4 @@ __pycache__/
 # Editor scratch.
 *.swp
 .DS_Store
+.floptle/library/
