@@ -2828,5 +2828,22 @@
             ],
             id: Some(92),
         ),
+        (
+            name: "Far Bodies",
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Empty,
+            scripts: [
+                (
+                    kind: "far_bodies",
+                    enabled: true,
+                    params: [],
+                ),
+            ],
+            id: Some(479),
+        ),
     ],
 )
