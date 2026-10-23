@@ -7,13 +7,15 @@
 --
 --   net.relayStats()       { ground = { [body] = n }, orbit = { [body] = n }, total = n,
 --                            linked = { ground = { [body] = n }, orbit = { [body] = n }, total = n } }
---                          ground = relay beacons planted on that body; orbit = relay-capable
---                          craft (a relay dish, or a beacon part) off the ground round that
---                          body; `linked` counts only those with a path home.
+--                          ground = relay beacons planted on that body AND relay-capable craft
+--                          (a relay dish, or a beacon part) standing on its ground — a relay
+--                          rover is a ground relay like a beacon; orbit = relay craft off the
+--                          ground round that body; `linked` counts only those with a path home.
 --   net.coverage(body)     { ground = 0..1, sky = 0..1, samples = n, ready }: the share of the body's
 --                          surface (a fixed grid of electronics.COMMS.coverSamples points, a
 --                          probe core's antenna 1 m off the ground) that links home through
---                          the ground station and ground relay beacons only (`ground`), and
+--                          the ground station, relay beacons and landed relay craft only
+--                          (`ground`), and
 --                          through any relay at all, satellites included (`sky`). `ready` is
 --                          false until that world's ground under the grid has been measured
 --                          once (its terrain resident; then kept in the save) — before that the
@@ -320,16 +322,81 @@ end
 
 local last_sig = ""
 
+-- ── one instant ─────────────────────────────────────────────────────────────
+-- EVERY position the network uses is kept RELATIVE TO ITS WORLD (`frame` =
+-- the body's name, `rx..rz` = the offset) and turned into world space against
+-- ONE read of space.bodies() at the moment it is used. These worlds move a
+-- few hundred metres a second on their rails: the ground station read in one
+-- frame and a rover read a tenth of a second earlier, or a relay remembered
+-- from the last solve set against the planet where it is now, put antennas
+-- tens of metres into the ground or up in the air. That made links blink and
+-- swung the coverage map between ~0 and ~45 % of the world from one recompute
+-- to the next — which is how a relay rover parked on a mountain (whose moving
+-- relay made coverage recompute every few seconds) seemed to drive coverage
+-- to zero (2026-10-23).
+local function body_index(bodies)
+  local by = {}
+  for _, b in ipairs(bodies or {}) do by[b.name] = b end
+  return by
+end
+
+local function finite(v) return type(v) == "number" and v == v and v > -math.huge and v < math.huge end
+
+-- The world a point belongs to (the smallest sphere of influence holding it),
+-- from the same read.
+local function frame_of(x, y, z, bodies)
+  local best, bs = nil, math.huge
+  for _, b in ipairs(bodies or {}) do
+    local soi = (b.soi or -1) < 0 and math.huge or b.soi
+    local d = math.sqrt((x - b.x) ^ 2 + (y - b.y) ^ 2 + (z - b.z) ^ 2)
+    if d <= soi and soi < bs then best, bs = b, soi end
+  end
+  return best
+end
+
+-- Pin a node (world x,y,z as of `by`'s read) to its world.
+local function pin(nd, by, bodies, name)
+  local b = (name and by[name]) or frame_of(nd.x, nd.y, nd.z, bodies)
+  if b then
+    nd.frame, nd.rx, nd.ry, nd.rz = b.name, nd.x - b.x, nd.y - b.y, nd.z - b.z
+  end
+  return nd
+end
+
+-- Where a pinned node is in the read `by` (unpinned: where it was).
+local function place(nd, by)
+  local b = nd.frame and by[nd.frame]
+  if b then return b.x + nd.rx, b.y + nd.ry, b.z + nd.rz end
+  return nd.x, nd.y, nd.z
+end
+
+-- Copies of `list` placed at the read `bodies` (the nodes themselves untouched).
+local function placed(list, bodies)
+  local by = body_index(bodies)
+  local out = {}
+  for i, nd in ipairs(list) do
+    local c = {}
+    for k, v in pairs(nd) do c[k] = v end
+    c.x, c.y, c.z = place(nd, by)
+    out[i] = c
+  end
+  return out
+end
+
 local function solve()
   local E = ref("electronics")
   if not E then return end
   if not beacons then load_beacons() end
+  -- the one read every position below is taken against
+  local bodies = space.bodies() or {}
+  local by = body_index(bodies)
   local list = {}
   local sx, sy, sz = station()
-  if sx then
+  if sx and finite(sx) and finite(sy) and finite(sz) then
     station_pos = { x = sx, y = sy, z = sz }
-    list[#list + 1] = { id = "home", name = "Ground station", x = sx, y = sy, z = sz, home = true,
-                        power = E.COMMS.station, body = station_body() }
+    local sb = station_body()
+    list[#list + 1] = pin({ id = "home", name = "Ground station", x = sx, y = sy, z = sz, home = true,
+                            power = E.COMMS.station, body = sb }, by, bodies, sb)
   else
     station_pos = nil
   end
@@ -340,7 +407,7 @@ local function solve()
     if x then
       local nd = E.beaconNode("b:" .. tostring(id), b.name, x, y, z)
       nd.body = b.body
-      list[#list + 1] = nd
+      list[#list + 1] = pin(nd, by, bodies, b.body)
     end
   end
   for _, v in ipairs(findScripts("vessel_controller")) do
@@ -348,48 +415,83 @@ local function solve()
     if n and n.valid and v.commsNode then
       local cn = v.commsNode()
       if cn and cn.x and (cn.any or 0) <= 0 then
-        cn = { x = cn.x, y = cn.y, z = cn.z, any = 0, relay = 0, rate = 0, silent = cn.silent }
+        cn = { x = cn.x, y = cn.y, z = cn.z, ox = cn.ox, oy = cn.oy, oz = cn.oz, any = 0, relay = 0, rate = 0,
+               silent = cn.silent }
       end
       if cn and cn.x then
-        list[#list + 1] = { id = n.id, name = v.craftName or n.name or "Vessel", x = cn.x, y = cn.y, z = cn.z,
-                            any = cn.any or 0, relay = cn.relay or 0, rate = cn.rate or 1, silent = cn.silent }
+        -- The craft where it is NOW (its root node, read in this frame like
+        -- the bodies) plus its antenna's offset from the root; a craft that
+        -- doesn't publish the offset is taken where it last said it was.
+        local x, y, z = cn.x, cn.y, cn.z
+        local rx, ry, rz = n.worldX or n.x, n.worldY or n.y, n.worldZ or n.z
+        if cn.ox and finite(rx) and finite(ry) and finite(rz) then
+          x, y, z = rx + cn.ox, ry + cn.oy, rz + cn.oz
+        end
+        if finite(x) and finite(y) and finite(z) then
+          local nd = pin({ id = n.id, name = v.craftName or n.name or "Vessel", x = x, y = y, z = z,
+                           any = cn.any or 0, relay = cn.relay or 0, rate = cn.rate or 1, silent = cn.silent,
+                           craft = true }, by, bodies)
+          list[#list + 1] = nd
+        end
       end
     end
   end
   -- Craft off the scene barely move between solves and reading the fleet is a
-  -- save read (a copy of every record): refreshed every two seconds.
+  -- save read (a copy of every record): refreshed every two seconds — and
+  -- pinned to their worlds as read then, so a two-second-old record is placed
+  -- where its world is NOW (a landed rover 480 m behind its planet, before).
   local fo = ref("flight_ops")
   if fo and fo.fleetOffline and (not offline or now() - offline_t > 2.0) then
     offline, offline_t = fo.fleetOffline(), now()
+    local ob = space.bodies() or {}
+    local oby = body_index(ob)
+    for _, r in ipairs(offline) do
+      if finite(r.wx) and finite(r.wy) and finite(r.wz) then
+        local p = pin({ x = r.wx, y = r.wy, z = r.wz }, oby, ob, r.body)
+        r.frame, r.rx, r.ry, r.rz = p.frame, p.rx, p.ry, p.rz
+      end
+    end
   end
   if offline then
     for _, r in ipairs(offline) do
-      local powered = (r.charge or 0) > 0
-      local ant = E.antennaSummary(r.parts or {}, nil, powered)
-      local any = E.antennaSummary(r.parts or {}, nil, true)
-      list[#list + 1] = { id = "f:" .. tostring(r.fid), name = r.name or "Vessel", x = r.wx, y = r.wy, z = r.wz,
-                          any = ant.any, relay = ant.relay, rate = ant.rate, offline = true,
-                          silent = (any.n == 0) and "no antenna aboard" or (not powered and "no power for its radio") or nil }
+      if finite(r.wx) and finite(r.wy) and finite(r.wz) then
+        local powered = (r.charge or 0) > 0
+        local ant = E.antennaSummary(r.parts or {}, nil, powered)
+        local any = E.antennaSummary(r.parts or {}, nil, true)
+        local nd = { id = "f:" .. tostring(r.fid), name = r.name or "Vessel", x = r.wx, y = r.wy, z = r.wz,
+                     any = ant.any, relay = ant.relay, rate = ant.rate, offline = true, craft = true,
+                     frame = r.frame, rx = r.rx, ry = r.ry, rz = r.rz,
+                     silent = (any.n == 0) and "no antenna aboard" or (not powered and "no power for its radio") or nil }
+        nd.x, nd.y, nd.z = place(nd, by)
+        list[#list + 1] = nd
+      end
     end
   end
-  local bodies = space.bodies() or {}
+  -- A relay craft standing on a world (a rover with a relay beacon or a dish
+  -- parked on a ridge) is a GROUND relay, exactly like a planted beacon: it
+  -- carries the ground network, not just the sky number.
+  for _, nd in ipairs(list) do
+    if nd.craft and (nd.relay or 0) > 0 and nd.frame then
+      nd.landed = not aloft(nd.x, nd.y, nd.z, nd.frame)
+    end
+  end
   local st, links = E.solveNetwork(list, bodies)
-  local by = {}
-  for _, nd in ipairs(list) do by[nd.id] = nd end
+  local byid = {}
+  for _, nd in ipairs(list) do byid[nd.id] = nd end
   -- Names along each path, and where the next hop is (the dishes point at it).
   for id, s in pairs(st) do
     local names = {}
     for i, pid in ipairs(s.path or {}) do
-      if i > 1 then names[#names + 1] = by[pid] and by[pid].name or tostring(pid) end
+      if i > 1 then names[#names + 1] = byid[pid] and byid[pid].name or tostring(pid) end
     end
     s.names = names
-    local p = s.parent and by[s.parent]
+    local p = s.parent and byid[s.parent]
     if p then s.parentPos = { x = p.x, y = p.y, z = p.z } end
   end
-  status, nodes, list_last = st, by, list
+  status, nodes, list_last = st, byid, list
   local ls = {}
   for _, l in ipairs(links) do
-    local a, b = by[l.a], by[l.b]
+    local a, b = byid[l.a], byid[l.b]
     if a and b then
       ls[#ls + 1] = { a = l.a, b = l.b, strength = l.strength, used = l.used,
                       ax = a.x, ay = a.y, az = a.z, bx = b.x, by = b.y, bz = b.z }
@@ -425,9 +527,17 @@ function statusOf(id)
   return status[id]
 end
 
--- Every usable link at the last solve, endpoints in world space as of then.
--- The map moves the ends of live craft onto where they are now.
+-- Every usable link at the last solve, its ends placed where their worlds
+-- are NOW (the map also moves the ends of live craft onto the craft).
 function linkLines()
+  local by = body_index(space.bodies() or {})
+  for _, l in ipairs(lines) do
+    local a, b = nodes[l.a], nodes[l.b]
+    if a and b then
+      l.ax, l.ay, l.az = place(a, by)
+      l.bx, l.by, l.bz = place(b, by)
+    end
+  end
   return lines
 end
 
@@ -456,7 +566,7 @@ function previewLinks(gx, gy, gz)
   local p = E.COMMS.beacon.power
   local bodies = space.bodies() or {}
   local out, connected = {}, false
-  for _, nd in ipairs(list_last) do
+  for _, nd in ipairs(placed(list_last, bodies)) do
     local up = nd.home and (nd.power or E.COMMS.station) or (nd.relay or 0)
     local st = status[nd.id]
     if up > 0 and st and st.connected then
@@ -497,12 +607,18 @@ function relayStats()
   end
   for _, nd in ipairs(list_last) do
     if not nd.home and not nd.beacon and (nd.relay or 0) > 0 then
-      local bn = dominant(nd.x, nd.y, nd.z)
-      if bn and aloft(nd.x, nd.y, nd.z, bn) then
+      local bn = nd.frame or dominant(nd.x, nd.y, nd.z)
+      local st = status[nd.id]
+      local linked = st and st.connected
+      if bn and nd.landed then
+        -- a relay craft standing on the ground counts as a ground relay
+        add(s.ground, bn)
+        s.total = s.total + 1
+        if linked then add(s.linked.ground, bn); s.linked.total = s.linked.total + 1 end
+      elseif bn and aloft(nd.x, nd.y, nd.z, bn) then
         add(s.orbit, bn)
         s.total = s.total + 1
-        local st = status[nd.id]
-        if st and st.connected then add(s.linked.orbit, bn); s.linked.total = s.linked.total + 1 end
+        if linked then add(s.linked.orbit, bn); s.linked.total = s.linked.total + 1 end
       end
     end
   end
@@ -516,7 +632,7 @@ function linkedBodies()
   for _, nd in ipairs(list_last) do
     local st = status[nd.id]
     if st and st.connected and (nd.home or (nd.relay or 0) > 0) then
-      local bn = nd.body or dominant(nd.x, nd.y, nd.z)
+      local bn = nd.body or nd.frame or dominant(nd.x, nd.y, nd.z)
       if bn then set[bn] = true end
     end
   end
@@ -528,24 +644,29 @@ function linkedBodies()
 end
 
 -- The relays with a path home, split: those the GROUND network alone carries
--- (the station and beacons that reach it through beacons only), and all of them.
+-- (the station, beacons and relay craft standing on the ground, reaching it
+-- through each other only), and all of them. Kept pinned to their worlds
+-- (`frame`, `rx..rz`): coverage places them against its own read.
+local function is_ground(nd) return nd.home or nd.beacon or nd.landed end
 local function relay_sets()
   if derived.relays then return derived.relays.ground, derived.relays.all end
   local E = ref("electronics")
+  local bodies = space.bodies() or {}
+  local now_list = placed(list_last, bodies)
   local ground_nodes = {}
-  for _, nd in ipairs(list_last) do
-    if nd.home or nd.beacon then ground_nodes[#ground_nodes + 1] = nd end
+  for _, nd in ipairs(now_list) do
+    if is_ground(nd) then ground_nodes[#ground_nodes + 1] = nd end
   end
-  local gst = (E and #ground_nodes > 0) and E.solveNetwork(ground_nodes, space.bodies() or {}) or {}
+  local gst = (E and #ground_nodes > 0) and E.solveNetwork(ground_nodes, bodies) or {}
   local ground, all = {}, {}
   for _, nd in ipairs(list_last) do
     local up = nd.home and (nd.power or (E and E.COMMS.station) or 0) or (nd.relay or 0)
     if up > 0 then
       local st = status[nd.id]
       local r = { id = nd.id, x = nd.x, y = nd.y, z = nd.z, power = up, beacon = nd.beacon, home = nd.home,
-                  agl = nd.agl }
+                  agl = nd.agl, landed = nd.landed, frame = nd.frame, rx = nd.rx, ry = nd.ry, rz = nd.rz }
       if st and st.connected then all[#all + 1] = r end
-      if (nd.home or nd.beacon) and gst[nd.id] and gst[nd.id].connected then ground[#ground + 1] = r end
+      if is_ground(nd) and gst[nd.id] and gst[nd.id].connected then ground[#ground + 1] = r end
     end
   end
   derived.relays = { ground = ground, all = all }
@@ -618,14 +739,29 @@ local function ground_radii(name, body, grid)
 end
 
 local cover = {}      -- body → { t, version, ground, sky, flags, r }
+local cover_err = false
 
 local function compute_cover(name)
   local E = ref("electronics")
-  local body = space.body(name or "")
+  -- one read of the bodies: the samples and every relay are placed against it
+  local bodies = space.bodies() or {}
+  local by = body_index(bodies)
+  local body = by[name or ""]
   if not (E and body) then return nil end
   local grid = E.surfaceGrid(E.COMMS.coverSamples)
   local radii = ground_radii(name, body, grid)
   local ground, all = relay_sets()
+  local function at_now(list)
+    local out = {}
+    for i, r in ipairs(list) do
+      local c = {}
+      for k, v in pairs(r) do c[k] = v end
+      c.x, c.y, c.z = place(r, by)
+      out[i] = c
+    end
+    return out
+  end
+  ground, all = at_now(ground), at_now(all)
   -- Only relays near enough to matter: the ground set's on this body, and any
   -- relay within reach of its surface (a satellite overhead, a moon's beacon).
   local rx = E.COMMS.coverRx
@@ -638,7 +774,6 @@ local function compute_cover(name)
     return out
   end
   local g_rel, a_rel = near(ground), near(all)
-  local bodies = space.bodies() or {}
   local lift = E.COMMS.coverLift
   local flags, rs = {}, {}
   local ng, ns = 0, 0
@@ -674,7 +809,17 @@ local function cover_of(name)
       or ((c.moving or not c.radiiDone) and age >= ((params and params.cover_max) or 10.0))
     if not stale then return c end
   end
-  return compute_cover(name) or c
+  -- A failure here must never leave the map at zero: keep the last answer.
+  local ok, fresh = pcall(compute_cover, name)
+  if not ok then
+    if not cover_err then
+      cover_err = true
+      log("comms: coverage of " .. tostring(name) .. " failed: " .. tostring(fresh))
+    end
+    if c then c.t = now() end
+    return c
+  end
+  return fresh or c
 end
 
 function coverage(name)

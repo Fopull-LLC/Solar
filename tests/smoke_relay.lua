@@ -202,6 +202,98 @@ check((net.relayStats().orbit.Vever or 0) == 1, "relayStats counts the orbiter")
 VESSELS[2] = nil
 tick()
 
+-- ── relay CRAFT on the ground (the playtest, 2026-10-23) ────────────────────
+-- "drove a vehicle with a relay beacon and antenna on it on top of a mountain
+-- … my signal coverage actually went DOWN to zero". A rover carrying a relay
+-- beacon part (relay 1500, like a planted one) is a ground relay like any
+-- other: linked, it extends the network; unlinked, it changes nothing.
+do
+  local VERBOSE = os.getenv("RELAY_VERBOSE")
+  local base = net.coverage("Vever")
+  -- far round the world, out of everyone's reach: unlinked
+  local fx, fy, fz = surf(2400, 45, 2.5)
+  VESSELS[2] = { node = { id = 91, valid = true, name = "Relay Rover" }, craftName = "Relay Rover",
+    commsNode = function() return { x = fx, y = fy, z = fz, any = 1500, relay = 1500, rate = 2 } end }
+  tick()
+  local s3 = net.statusOf(91)
+  local c1 = net.coverage("Vever")
+  check(s3 and not s3.connected, "a relay rover far round the world has no link")
+  check(c1.ground >= base.ground - 1e-12 and c1.sky >= base.sky - 1e-12, string.format(
+    "an UNLINKED relay rover never lowers coverage (ground %.3f → %.3f, sky %.3f → %.3f)", base.ground, c1.ground, base.sky, c1.sky))
+  -- on a mountain 40 m high, 300 m past the last beacon: chained in
+  local mx, my, mz = surf(1500, 40)
+  fx, fy, fz = mx, my, mz
+  tick()
+  s3 = net.statusOf(91)
+  local c2 = net.coverage("Vever")
+  check(s3 and s3.connected and s3.hops >= 5, "the mountain-top relay rover links home through the beacon chain")
+  check(c2.ground > c1.ground + 0.01, string.format(
+    "...and the ground coverage goes UP with it (%.3f → %.3f)", c1.ground, c2.ground))
+  check(c2.sky >= c2.ground, "...sky still includes ground")
+  local rs3 = net.relayStats()
+  check(rs3.ground.Vever == 5 and rs3.linked.ground.Vever == 5 and next(rs3.orbit) == nil,
+    "relayStats counts a landed relay rover as a ground relay, not an orbiter")
+  if VERBOSE then
+    print(string.format("  relay rover: base %.3f · unlinked on the far side %.3f · chained on a mountain %.3f (ground)",
+      base.ground, c1.ground, c2.ground))
+  end
+
+  -- THE MOVING WORLD. Vever runs ~240 m/s on its rails. The station is read
+  -- in this frame, the rover's last report is a tenth of a second old, and
+  -- coverage is asked for later still; nothing may come out of where its
+  -- world is. Coverage stays put while the world moves.
+  local VV = body("Vever")
+  local vz0, bz0 = VV.z, BF.baseZ
+  local node = VESSELS[2].node
+  local ox, oy, oz = 0.0, 0.6, 0.0 -- the antenna's offset from the craft root
+  local function at_rover() return mx - ox, my - oy, mz - oz end
+  node.worldX, node.worldY, node.worldZ = at_rover()
+  local stale = { mx, my, mz }
+  VESSELS[2].commsNode = function()
+    return { x = stale[1], y = stale[2], z = stale[3], ox = ox, oy = oy, oz = oz, any = 1500, relay = 1500, rate = 2 }
+  end
+  tick()
+  local ref = net.coverage("Vever")
+  local worst = 0
+  local seen = {}
+  for k = 1, 8 do
+    -- the world moves 60 m (a quarter second); the rover's report lags 24 m
+    -- behind it; the base and the rover root move with the world
+    local d = 60
+    stale = { mx, my, mz + d * k - 24 }
+    VV.z = VV.z + d
+    mz = mz + d
+    BF.baseZ = BF.baseZ + d
+    node.worldX, node.worldY, node.worldZ = at_rover()
+    tick()
+    -- asked again after the world moved on (no solve in between)
+    VV.z = VV.z + 30
+    mz = mz + 30
+    BF.baseZ = BF.baseZ + 30
+    node.worldX, node.worldY, node.worldZ = at_rover()
+    net.time = net.time + 11 -- past cover_max: a fresh recompute
+    local c = net.coverage("Vever")
+    seen[#seen + 1] = string.format("%.3f", c.ground)
+    worst = math.max(worst, math.abs(c.ground - ref.ground), math.abs(c.sky - ref.sky))
+    local st = net.statusOf(91)
+    check(st and st.connected, "the rover stays linked while its world moves (step " .. k .. ")")
+    -- the link lines sit where their worlds are now
+    for _, l in ipairs(net.linkLines()) do
+      if l.a == "home" or l.b == "home" then
+        local hx, hy, hz = l.a == "home" and l.ax or l.bx, l.a == "home" and l.ay or l.by, l.a == "home" and l.az or l.bz
+        check(math.abs(hz - (BF.baseZ + (hz - BF.baseZ))) < 1e-9 and math.abs(hz - BF.baseZ) < 1e-6,
+          "a link line's station end is at the station now")
+        break
+      end
+    end
+  end
+  if VERBOSE then print("  coverage as the world moves: " .. table.concat(seen, " ")) end
+  check(worst < 1e-9, string.format("coverage holds still while the world moves (worst change %.4f)", worst))
+  VESSELS[2] = nil
+  VV.z, BF.baseZ = vz0, bz0
+  tick()
+end
+
 -- ── save round trip ────────────────────────────────────────────────────────
 check(type(STORE["comms.beacons"]) == "table" and #STORE["comms.beacons"] == 4, "the beacon index is in the save")
 for _, id in ipairs(ids) do

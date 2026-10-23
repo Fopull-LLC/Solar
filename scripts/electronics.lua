@@ -982,27 +982,227 @@ function sunOf(x, y, z, bodies, ref)
   return best, k
 end
 
+-- How squarely a panel's CELLS face the sun: max(0, cos(incidence)), the
+-- incidence measured between the sun and the cells' normal IN THE WORLD.
+--   `ax..az`    the panel's long axis in world space — the mount's outward axis
+--               (the part's +X after the part's own rotation AND the craft's).
+--   `deployed`  0..1, how far the wing is open (nil = open).
+-- OPEN, the wing TRACKS about its long axis (it turns its cells to the sun
+-- the way a real array's drive does), so the best normal it can reach is
+-- the sun direction with its along-axis part removed: cos(incidence) =
+-- sqrt(1 − (a·s)²) — full when the sun is square to the axis, nothing when
+-- the axis points straight at the sun or straight away from it.
+-- STOWED, the wing lies flat along the hull with its cells OUT (the prefab's
+-- folded pose): a fixed plate whose normal is the mount's outward axis, so
+-- cos(incidence) = max(0, a·s) — lit from outside, dark from behind.
+-- Part-way, a blend of the two.
+function panelExposure(ax, ay, az, sx, sy, sz, deployed)
+  local f = deployed
+  if f == nil then f = 1 end
+  if f < 0 then f = 0 elseif f > 1 then f = 1 end
+  local c = (ax or 0) * sx + (ay or 0) * sy + (az or 0) * sz
+  local open = math.sqrt(math.max(0, 1 - c * c))
+  local stowed = math.max(0, c)
+  return f * open + (1 - f) * stowed
+end
+
 -- Output of one panel: `gen` EC/s at reference sunlight, scaled by
---   exposure  how squarely the panel faces the sun. Panels TRACK about their
---             own long axis (the mount's outward axis, `ax`), so only the angle
---             between that axis and the sun costs anything: sqrt(1 − (a·s)²);
+--   exposure  how squarely the cells face the sun (panelExposure, above);
 --   flux      the inverse square of the distance to the star, relative to the
 --             home world's orbit (capped at 4× in close);
---   shadow    0 when a planet or moon stands between the panel and the star.
+--   shadow    0 when a planet or moon stands between the panel and the star
+--             (its full radius, less 2 m of grazing from the panel's own ground).
+-- Every position must be from the SAME instant: these worlds move hundreds of
+-- metres a second on their rails, and a panel set against where its planet
+-- was half a second ago sits tens of metres off its own ground (a shadow at
+-- noon, sunshine after dark — see powerTick's notes).
 -- Returns output, exposure, flux, blocker.
-function solarOutput(gen, x, y, z, ax, ay, az, bodies, ref)
+function solarOutput(gen, x, y, z, ax, ay, az, bodies, ref, deployed)
   local sun, flux = sunOf(x, y, z, bodies, ref)
   if not sun then return 0, 0, 0, nil end
   local sx, sy, sz = sun.x - x, sun.y - y, sun.z - z
   local sl = math.sqrt(sx * sx + sy * sy + sz * sz)
-  if sl < 1e-6 then return 0, 0, 0, nil end
+  if sl < 1e-6 or sl ~= sl then return 0, 0, 0, nil end
   sx, sy, sz = sx / sl, sy / sl, sz / sl
-  local c = (ax or 0) * sx + (ay or 0) * sy + (az or 0) * sz
-  local exposure = math.sqrt(math.max(0, 1 - c * c))
+  local exposure = panelExposure(ax, ay, az, sx, sy, sz, deployed)
   local blocker = segmentBlocked(x, y, z, sun.x, sun.y, sun.z, bodies, 1.0, sun.name)
   flux = math.min(4.0, flux)
-  local out = blocker and 0 or gen * exposure * flux
+  local out = blocker and 0 or (gen or 0) * exposure * flux
   return out, exposure, flux, blocker
+end
+
+-- ── sunlight over a time step (warp) ────────────────────────────────────────
+--
+-- The electrical tick runs ten times a REAL second; under time warp each one
+-- spans warp/10 seconds of the world's time. Two things follow:
+--
+--   1. The step is GAME time (space.time()'s advance), not the frame's dt —
+--      at 100× a battery must fill 100× as fast per real second. gameStep.
+--   2. Over a long step the light changes: a non-rotating world's "day" is its
+--      year round its star (Vever's is under half an hour), so at 1000× a
+--      tick is a fifth of a day; an orbiting probe can circle its world
+--      several times inside one. Sampling the sun once per tick would hand the
+--      whole step to whatever the light was at its start. solarOverStep
+--      integrates the output over the step instead: the craft's and its
+--      world's motion on their two-body conics (exact, drift-free), the light
+--      sampled at enough points to resolve both (midpoint rule, ≤ 64).
+
+-- Seconds of game time an electrical tick covers. `t0`, `t1`: space.time() at
+-- the last tick and now; `realDt`, `warp`: the fallback when the clock jumped
+-- (a scene load restarts it) or isn't there. Never negative.
+function gameStep(t0, t1, realDt, warp)
+  realDt = math.max(0, realDt or 0)
+  warp = math.max(1, warp or 1)
+  local guess = realDt * warp
+  if type(t0) == "number" and type(t1) == "number" then
+    local d = t1 - t0
+    -- the clock is believed unless it ran backwards or ran away from what
+    -- the frame and the warp could possibly account for (a scene load)
+    if d >= 0 and d <= guess * 4 + 1.0 then return d end
+  end
+  return guess
+end
+
+-- Two-body propagation: the state (x,y,z, vx,vy,vz) relative to a point mass
+-- `mu`, `dt` seconds on. Universal variables (elliptic, parabolic and
+-- hyperbolic alike); a non-finite input or no mass coasts in a straight line.
+-- (space.propagate does this in the engine; this copy keeps the rulebook
+-- pure and testable.)
+local function stumpff(z)
+  if z > 1e-6 then
+    local s = math.sqrt(z)
+    return (1 - math.cos(s)) / z, (s - math.sin(s)) / (s * s * s)
+  elseif z < -1e-6 then
+    local s = math.sqrt(-z)
+    return (math.cosh(s) - 1) / -z, (math.sinh(s) - s) / (s * s * s)
+  end
+  return 0.5 - z / 24, 1 / 6 - z / 120
+end
+function kepler(x, y, z, vx, vy, vz, mu, dt)
+  local r0 = math.sqrt(x * x + y * y + z * z)
+  if not mu or mu <= 0 or r0 < 1e-9 or r0 ~= r0 or dt == 0 then
+    return x + vx * dt, y + vy * dt, z + vz * dt, vx, vy, vz
+  end
+  local v2 = vx * vx + vy * vy + vz * vz
+  local vr0 = (x * vx + y * vy + z * vz) / r0
+  local alpha = 2 / r0 - v2 / mu
+  local sq = math.sqrt(mu)
+  local chi = sq * math.abs(alpha) * dt
+  if alpha <= 1e-12 or chi ~= chi then chi = sq * dt / r0 end
+  for _ = 1, 60 do
+    local zz = alpha * chi * chi
+    local C, S = stumpff(zz)
+    local F = r0 * vr0 / sq * chi * chi * C + (1 - alpha * r0) * chi ^ 3 * S + r0 * chi - sq * dt
+    local dF = r0 * vr0 / sq * chi * (1 - zz * S) + (1 - alpha * r0) * chi * chi * C + r0
+    if dF == 0 or dF ~= dF then break end
+    local step = F / dF
+    chi = chi - step
+    if math.abs(step) < 1e-9 * math.max(1, math.abs(chi)) then break end
+  end
+  local zz = alpha * chi * chi
+  local C, S = stumpff(zz)
+  local f = 1 - chi * chi / r0 * C
+  local g = dt - chi ^ 3 / sq * S
+  local nx, ny, nz = f * x + g * vx, f * y + g * vy, f * z + g * vz
+  local r = math.sqrt(nx * nx + ny * ny + nz * nz)
+  if r < 1e-9 or r ~= r then return x + vx * dt, y + vy * dt, z + vz * dt, vx, vy, vz end
+  local fd = sq / (r * r0) * (zz * S - 1) * chi
+  local gd = 1 - chi * chi / r * C
+  return nx, ny, nz, fd * x + gd * vx, fd * y + gd * vy, fd * z + gd * vz
+end
+
+-- The body a point is bound to: the smallest sphere of influence holding it
+-- (soi < 0 = the star's, infinite). nil in empty space with no star.
+function boundBody(x, y, z, bodies)
+  local best, bs = nil, math.huge
+  for _, b in ipairs(bodies or {}) do
+    local soi = (b.soi or -1) < 0 and math.huge or b.soi
+    local d = math.sqrt((x - b.x) ^ 2 + (y - b.y) ^ 2 + (z - b.z) ^ 2)
+    if d <= soi and (soi < bs or (soi == bs and not best)) then best, bs = b, soi end
+  end
+  return best
+end
+
+-- The mean output of a set of panels over a step of `dt` game seconds that
+-- STARTS now. `panels` = { { gen, ax, ay, az, deployed, ox, oy, oz } }: each
+-- panel's axis in the world and its offset from the craft point (both held
+-- fixed through the step — a craft on the rails keeps its attitude, and a
+-- landed one turns with a world that doesn't turn). `S` describes the craft:
+--   x,y,z, vx,vy,vz   where it is and how it moves now (world space)
+--   landed            true: it rides its world (its offset from the world's
+--                     centre is fixed); false: it coasts on its own conic
+--   bodies            space.bodies() read THIS tick (positions from the same
+--                     instant as x,y,z); `ref` the home-orbit flux
+-- Returns the mean EC/s, the share of the step in sunlight (0..1) and the
+-- number of samples it took. A step under ~2 s is one sample at its middle
+-- (normal play): nothing moves far enough in it to matter.
+function solarOverStep(panels, S, dt, ref)
+  local bodies = S.bodies or {}
+  if #panels == 0 then return 0, 0, 0 end
+  local x0, y0, z0 = S.x, S.y, S.z
+  local function at_once(bl, x, y, z)
+    local sum, lit = 0, false
+    for _, p in ipairs(panels) do
+      local o = solarOutput(p.gen or p[1] or 0, x + (p.ox or 0), y + (p.oy or 0), z + (p.oz or 0),
+        p.ax, p.ay, p.az, bl, ref, p.deployed)
+      sum = sum + o
+      if o > 0 then lit = true end
+    end
+    return sum, lit
+  end
+  dt = math.max(0, dt or 0)
+  local home = boundBody(x0, y0, z0, bodies)
+  local sun = sunOf(x0, y0, z0, bodies, nil)
+  if dt <= 2.0 or not home or not sun or home == sun then
+    local s, lit = at_once(bodies, x0, y0, z0)
+    return s, lit and 1 or 0, 1
+  end
+  -- How fast the light can change: the world round its star, and the craft
+  -- round its world (a landed craft rides its world). One sample per 1/96 of
+  -- a turn of the faster of the two, at least one, at most 64.
+  local function rate(rx, ry, rz, wx, wy, wz)
+    local r2 = rx * rx + ry * ry + rz * rz
+    if r2 < 1e-9 then return 0 end
+    -- |r × v| / r²
+    local cx, cy, cz = ry * wz - rz * wy, rz * wx - rx * wz, rx * wy - ry * wx
+    return math.sqrt(cx * cx + cy * cy + cz * cz) / r2
+  end
+  local hx, hy, hz = home.x - sun.x, home.y - sun.y, home.z - sun.z
+  local hvx, hvy, hvz = (home.vx or 0) - (sun.vx or 0), (home.vy or 0) - (sun.vy or 0), (home.vz or 0) - (sun.vz or 0)
+  local cx, cy, cz = x0 - home.x, y0 - home.y, z0 - home.z
+  local cvx, cvy, cvz = (S.vx or 0) - (home.vx or 0), (S.vy or 0) - (home.vy or 0), (S.vz or 0) - (home.vz or 0)
+  local w = rate(hx, hy, hz, hvx, hvy, hvz)
+  if not S.landed then w = math.max(w, rate(cx, cy, cz, cvx, cvy, cvz)) end
+  local n = math.max(1, math.min(64, math.ceil(dt * w / (2 * math.pi / 96))))
+  local sum, litn = 0, 0
+  -- each sample: the bodies as they are now, the world (and anything bound to
+  -- it — its moons) moved to where its conic has it, the craft with it
+  local kids = {}
+  for i, b in ipairs(bodies) do
+    if b ~= sun and (b == home or boundBody(b.x, b.y, b.z, bodies) == home) then kids[i] = true end
+  end
+  for k = 1, n do
+    local t = (k - 0.5) / n * dt
+    local px, py, pz = kepler(hx, hy, hz, hvx, hvy, hvz, sun.mu or 0, t)
+    local sxt, syt, szt = sun.x + (sun.vx or 0) * t, sun.y + (sun.vy or 0) * t, sun.z + (sun.vz or 0) * t
+    local dx, dy, dz = sxt + px - home.x, syt + py - home.y, szt + pz - home.z
+    local bl = {}
+    for i, b in ipairs(bodies) do
+      if kids[i] then
+        bl[i] = { name = b.name, x = b.x + dx, y = b.y + dy, z = b.z + dz, radius = b.radius, mu = b.mu, soi = b.soi, star = b.star }
+      elseif b == sun then
+        bl[i] = { name = b.name, x = sxt, y = syt, z = szt, radius = b.radius, mu = b.mu, soi = b.soi, star = b.star }
+      else
+        bl[i] = b
+      end
+    end
+    local qx, qy, qz = cx, cy, cz
+    if not S.landed then qx, qy, qz = kepler(cx, cy, cz, cvx, cvy, cvz, home.mu or 0, t) end
+    local s, lit = at_once(bl, home.x + dx + qx, home.y + dy + qy, home.z + dz + qz)
+    sum = sum + s
+    if lit then litn = litn + 1 end
+  end
+  return sum / n, litn / n, n
 end
 
 -- ── comms ───────────────────────────────────────────────────────────────────

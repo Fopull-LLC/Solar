@@ -181,6 +181,136 @@ check(blk == "P" and out == 0, "in the planet's shadow: no power")
 out = E.solarOutput(1.0, 2000, 500, 0, 0, 0, 1, bodies, ref)
 check(near(out, 0.25, 0.02), "inverse square: twice as far, a quarter of the power")
 
+-- ── sunlight on a Vever-like world: incidence, occlusion, warp ──────────────
+-- The playtest's home (2026-10-23): a non-rotating world r 807 m, 66 km from
+-- its star, on a circular orbit at ~242 m/s (its "day" is its ~29 min year).
+do
+  local VERBOSE = os.getenv("ELEC_VERBOSE")
+  local smu = 3.88e9
+  local D = 66000
+  local vorb = math.sqrt(smu / D)
+  local S0 = { name = "Sol", x = 0, y = 0, z = 0, vx = 0, vy = 0, vz = 0, radius = 6934, mu = smu, soi = -1 }
+  local W0 = { name = "Vever", x = D, y = 0, z = 0, vx = 0, vy = 0, vz = vorb, radius = 807.6, mu = 5.97e6, soi = 9691 }
+  local BL = { S0, W0 }
+  local ref0 = smu / (D * D)
+  local R = 780
+  -- a point on the ground at sun elevation `el` (radians) in the x–y plane
+  local function ground(el)
+    -- the sun lies along −X from the world: up = (−sin el, cos el, 0) puts
+    -- it `el` over the local horizon
+    local ux, uy = -math.sin(el), math.cos(el)
+    return D + ux * R, uy * R, 0, ux, uy, 0
+  end
+  -- noon: sun straight overhead
+  local x, y, z, ux, uy, uz = ground(math.pi / 2)
+  -- panel on a flank: mount axis horizontal (+Z), square to the sun
+  local out, ex, fx, blk = E.solarOutput(1.0, x, y, z, 0, 0, 1, BL, ref0)
+  check(near(ex, 1, 1e-6) and blk == nil and near(out, 1, 0.03), "noon, an open panel square to the sun: full output")
+  -- the same panel's axis pointing straight AWAY from the sun: a tracking wing
+  -- turned edge-on can't face it
+  out, ex = E.solarOutput(1.0, x, y, z, -ux, -uy, -uz, BL, ref0)
+  check(near(out, 0, 1e-9), "an open panel whose axis points away from the sun: nothing")
+  -- folded (cells out along the mount axis): facing the sun = full, facing away = 0
+  out = E.solarOutput(1.0, x, y, z, ux, uy, uz, BL, ref0, 0)
+  check(near(out, 1, 0.03), "a folded panel with its cells up at noon: full output")
+  out = E.solarOutput(1.0, x, y, z, -ux, -uy, -uz, BL, ref0, 0)
+  check(near(out, 0, 1e-9), "a folded panel with its cells facing away: nothing")
+  -- 60° incidence on a folded panel: cos 60 = half
+  out = E.solarOutput(1.0, x, y, z, ux * 0.5, uy * 0.5 + 0.8660254, uz, BL, ref0, 0)
+  check(near(out, 0.5, 0.015), "a folded panel at 60° incidence: half output (cos)")
+  -- the world's orientation, not the part's: the same local panel on a craft
+  -- rolled upside down faces the ground
+  out = E.solarOutput(1.0, x, y, z, -ux, -uy, -uz, BL, ref0, 0)
+  check(out == 0, "the world orientation decides (a roof panel on an upturned craft faces the ground)")
+  -- night side
+  local nx, ny, nz = ground(-math.pi / 2)
+  out, ex, fx, blk = E.solarOutput(1.0, nx, ny, nz, 0, 0, 1, BL, ref0)
+  check(out == 0 and blk == "Vever", "midnight: the world is in the way, nothing")
+  -- low sun, 5° over the horizon: lit; 5° under it: the world is in the way
+  local lx, ly, lz = ground(math.rad(5))
+  out, ex, fx, blk = E.solarOutput(1.0, lx, ly, lz, 0, 0, 1, BL, ref0)
+  check(out > 0.9 and blk == nil, "sun 5° up: lit")
+  lx, ly, lz = ground(math.rad(-5))
+  out, ex, fx, blk = E.solarOutput(1.0, lx, ly, lz, 0, 0, 1, BL, ref0)
+  check(out == 0 and blk == "Vever", "sun 5° down: dark")
+
+  -- GAME TIME: ten ticks of a tenth of a real second, at 1× and at 10×.
+  check(near(E.gameStep(100, 101, 0.1, 10), 1.0), "gameStep: the clock's advance at 10× (1 s per 0.1 s tick)")
+  check(near(E.gameStep(100, 40, 0.1, 10), 1.0), "gameStep: a clock that ran backwards (a load) falls back to dt × warp")
+  check(near(E.gameStep(nil, nil, 0.1, 1), 0.1), "gameStep: no clock, 1×: the frame's dt")
+  check(near(E.gameStep(0, 5000, 0.1, 10), 1.0), "gameStep: a runaway clock jump is not believed")
+  local panels = { { gen = 1.0, ax = 0, ay = 0, az = 1, deployed = 1 } }
+  local function run(warp, ticks)
+    local cells = { { cap = 400, charge = 10 } }
+    local t = 0
+    local st0 = 0
+    for _ = 1, ticks do
+      local st1 = st0 + 0.1 * warp
+      local dt = E.gameStep(st0, st1, 0.1, warp)
+      st0 = st1
+      local sun = E.solarOverStep(panels, { x = x, y = y, z = z, landed = true, bodies = BL }, dt, ref0)
+      E.powerStep({ supply = sun, loads = { { id = "core", rate = 0.2, pri = 9 } }, cells = cells }, dt)
+      t = t + 0.1
+    end
+    return cells[1].charge - 10, t
+  end
+  local g1, real1 = run(1, 10)
+  local g10, real10 = run(10, 10)
+  if VERBOSE then
+    print(string.format("  noon, 1 panel (1 EC/s) − 0.2 EC/s core: 1× +%.3f EC per real second, 10× +%.3f EC per real second (%.2f×)",
+      g1 / real1, g10 / real10, g10 / g1))
+  end
+  check(near(g10 / g1, 10, 0.05), string.format("10× warp charges 10× as much per real second (%.3f vs %.3f EC)", g10, g1))
+
+  -- CLOSED FORM over a long step: the mean output over a step equals the
+  -- light integrated finely along the world's orbit (and the craft's).
+  local P = 2 * math.pi * D / vorb
+  local function brute(pnl, S, dt, N)
+    local sum = 0
+    for k = 1, N do
+      local t = (k - 0.5) / N * dt
+      local hx, hy, hz = E.kepler(W0.x, W0.y, W0.z, W0.vx, W0.vy, W0.vz, smu, t)
+      local W = { name = "Vever", x = hx, y = hy, z = hz, radius = W0.radius, mu = W0.mu, soi = W0.soi }
+      local cx, cy, cz = S.x - W0.x, S.y - W0.y, S.z - W0.z
+      if not S.landed then
+        cx, cy, cz = E.kepler(cx, cy, cz, S.vx - W0.vx, S.vy - W0.vy, S.vz - W0.vz, W0.mu, t)
+      end
+      for _, p in ipairs(pnl) do
+        sum = sum + E.solarOutput(p.gen, hx + cx, hy + cy, hz + cz, p.ax, p.ay, p.az, { S0, W }, ref0, p.deployed)
+      end
+    end
+    return sum / N
+  end
+  -- landed at noon, a whole year (= a whole day) in one step: half of it dark
+  local Sl = { x = x, y = y, z = z, vx = W0.vx, vy = W0.vy, vz = W0.vz, landed = true, bodies = BL }
+  local m1, lit1, n1 = E.solarOverStep(panels, Sl, P, ref0)
+  local b1 = brute(panels, Sl, P, 4000)
+  check(near(lit1, 0.5, 0.04), string.format("a whole day in one step: the craft is lit about half of it (%.3f; a little over, from its height over the horizon)", lit1))
+  check(math.abs(m1 - b1) < 0.03 * math.max(b1, 0.1), string.format(
+    "...and the step's mean output matches a fine integration (%.3f vs %.3f EC/s, %d samples)", m1, b1, n1))
+  -- a quarter-day step from noon: still all daylight, but the sun sinks
+  local m2 = E.solarOverStep(panels, Sl, P / 4, ref0)
+  local b2 = brute(panels, Sl, P / 4, 2000)
+  check(m2 > 0 and math.abs(m2 - b2) < 0.03 * b2, string.format("a quarter-day step: %.3f vs fine %.3f EC/s", m2, b2))
+  -- a probe in a low orbit (~70 s period): a 10-minute warp step spans
+  -- several orbits, each with a pass through the world's shadow
+  local ro = 900
+  local vo = math.sqrt(W0.mu / ro)
+  local So = { x = D - ro, y = 0, z = 0, vx = W0.vx, vy = vo, vz = W0.vz, landed = false, bodies = BL }
+  local pr = { { gen = 1.0, ax = 0, ay = 0, az = 1, deployed = 1 } }
+  local m3, lit3 = E.solarOverStep(pr, So, 600, ref0)
+  local b3 = brute(pr, So, 600, 6000)
+  check(lit3 > 0.55 and lit3 < 0.85, string.format("an orbiter is in sunlight for most of each orbit (%.2f of the step)", lit3))
+  check(math.abs(m3 - b3) < 0.05 * b3, string.format("...and the long step's mean matches a fine integration (%.3f vs %.3f)", m3, b3))
+  if VERBOSE then
+    print(string.format("  landed, one whole day: mean %.3f EC/s (fine %.3f), lit %.2f · quarter day %.3f (fine %.3f) · orbiter 600 s: %.3f (fine %.3f), lit %.2f",
+      m1, b1, lit1, m2, b2, m3, b3, lit3))
+  end
+  -- the propagator itself: a circular orbit comes home after one period
+  local kx, ky, kz = E.kepler(D, 0, 0, 0, 0, vorb, smu, P)
+  check(math.abs(kx - D) < 1e-3 and math.abs(ky) < 1e-3 and math.abs(kz) < 1e-3, "kepler: a circular orbit closes after one period")
+end
+
 -- ── comms ───────────────────────────────────────────────────────────────────
 check(near(E.linkRange(100, 400), 200), "range = sqrt(P1·P2)")
 check(E.linkStrength(0, 100) == 1 and E.linkStrength(100, 100) == 0 and near(E.linkStrength(50, 100), 0.5),
