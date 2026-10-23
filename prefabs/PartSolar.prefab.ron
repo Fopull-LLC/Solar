@@ -1,19 +1,82 @@
+// SOLAR PANEL — a radial blade (+X out off the flank, like a fin): a Yoke on the hull and a cell Wing hinged to it (SolarWingPivot). Flight folds the wing flat along the hull for launch and swings it open on Deploy (U).
+// Written by tools/gen_part_meshes.py (write_prefab) — edit the generator, not this file.
 [
     (
         name: "PartSolar",
         transform: (
             translation: (0.0, 0.0, 0.0),
             rotation: (0.0, 0.0, 0.0, 1.0),
-            scale: (1.3, 0.12, 1.0),
+            scale: (1.0, 1.0, 1.0),
         ),
-        // A SOLAR PANEL: a cell array on a yoke (models/parts/solar.glb, authored
-        // at 1/scale so this node's scale, which also sizes the collider, holds)
-        // that radial_orient yaws +X outward off a
-        // flank, exactly like a fin/leg. It DEPLOYS in flight (U-group with the
-        // dish) and trickles EC into the batteries while it faces the sun. The deep
-        // blue photovoltaic material reads it apart from a grey aero fin.
+        matter: Empty,
+        scripts: [],
+        rigidbody: Some((
+            boxed: true,
+            mode: Kinematic,
+            radius: 0.45,
+            height: 0.68,
+            half_extents: (0.45, 0.34, 0.05),
+            restitution: 0.05,
+            friction: 0.6,
+            gravity: true,
+            lock_pos: (false, false, false),
+            lock_rot: (false, false, false),
+            mass: 0.05,
+        )),
+    ),
+    (
+        name: "SolarYoke",
+        transform: (
+            translation: (-0.364, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
         matter: Mesh(
             asset_path: "models/parts/solar.glb",
+        ),
+        object_materials: {
+            "Metal": (
+                color: (1, 1, 1),
+                texture: Some("textures/parts/metal_albedo.png"),
+                normal_map: Some("textures/parts/metal_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/parts/metal_orm.png"),
+                roughness: 1.0,
+                metallic_map: Some("textures/parts/metal_orm.png"),
+                metallic: 0.55,
+                ao_map: Some("textures/parts/metal_orm.png"),
+                shader: Some("shaders/hullPanels.flsl"),
+                shader_params: {
+                    "tint": (1, 1, 1, 1.0),
+                },
+                shading: Physical,
+            ),
+        },
+        scripts: [],
+        parent: Some(0),
+    ),
+    (
+        name: "SolarWingPivot",
+        transform: (
+            translation: (-0.3, 0.0, 0.0),
+            // Deployed (yaw 0). Flight folds it to yaw +90° — the wing flat
+            // along the hull, cells out — and swings it open (vessel_controller).
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+        parent: Some(0),
+    ),
+    (
+        name: "SolarWing",
+        transform: (
+            translation: (0.375, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Mesh(
+            asset_path: "models/parts/solar_wing.glb",
         ),
         object_materials: {
             "Foil": (
@@ -62,18 +125,6 @@
             ),
         },
         scripts: [],
-        rigidbody: Some((
-            boxed: true,
-            mode: Kinematic,
-            radius: 0.4,
-            height: 1.0,
-            half_extents: (0.52, 0.06, 0.4),
-            restitution: 0.05,
-            friction: 0.6,
-            gravity: true,
-            lock_pos: (false, false, false),
-            lock_rot: (false, false, false),
-            mass: 0.05,
-        )),
+        parent: Some(2),
     ),
 ]

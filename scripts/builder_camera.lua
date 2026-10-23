@@ -69,9 +69,15 @@ function update(node, dt)
   local function key(k, v)
     if input.key(k) then move = move + v; flying = true end
   end
-  key("w", f); key("s", vec3(-f.x, -f.y, -f.z))
-  key("d", r); key("a", vec3(-r.x, -r.y, -r.z))
-  key("e", vec3(0, 1, 0)); key("q", vec3(0, -1, 0))
+  -- W/A/S/D/Q/E ROTATE a part in hand (or the selection in the rotate tool)
+  -- — the builder says when (`rotKeysBusy`); holding RMB takes them back.
+  if not builder then builder = findScript("builder") end
+  local keys_free = rmb or not (builder and builder.rotKeysBusy)
+  if keys_free then
+    key("w", f); key("s", vec3(-f.x, -f.y, -f.z))
+    key("d", r); key("a", vec3(-r.x, -r.y, -r.z))
+    key("e", vec3(0, 1, 0)); key("q", vec3(0, -1, 0))
+  end
   if flying then focusing = false end
 
   -- F = focus the ship (also useful on an empty pad: frames the work floor).

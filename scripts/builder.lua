@@ -7,17 +7,19 @@
 --     click            place — ONLY on a highlighted attach node (green tie
 --                      line); hold ALT to place free (red halo = overlapping,
 --                      refused). The first part places freely on the pad.
---     R / SHIFT+R      rotate 15° / 5° (yaw)
---     T / SHIFT+T      pitch 90° / 15°     Y / SHIFT+Y  roll 90° / 15°
---                      (build sideways — a pitched pod is a rocket car's nose)
---     X / SHIFT+X      SYMMETRY ×1 ×2 ×3 ×4 ×6 ×8 — a radial placement
---                      repeats around the host's axis (boosters in one click)
+--     W/S A/D Q/E      pitch / yaw / roll 90° (SHIFT 15°), about the CAMERA's
+--                      view or the PART's own axes (C switches; see ROTATING)
+--     R / SHIFT+R      spin 15° / 5° about the face it mounts on
+--     SPACE            reset its turn to how the mount stands it
+--     X / SHIFT+X      SYMMETRY off ×2 ×3 ×4 ×6 ×8 — a radial placement
+--                      repeats around the host's axis (boosters in one click);
+--                      the mode is always on screen, bottom centre
 --     ESC              put the part back
 --   click a placed part      pick it (and everything stacked on it) back up
 --                            (a SYMMETRY member brings its whole ring)
 --   hover a placed part      arrows nudge it (SHIFT = fine; ↑/↓ vertical,
 --                            ←/→ screen-horizontal, ALT+←/→ depth)
---                            R/T/Y rotate it in place
+--                            R / SPACE (and W/A/S/D/Q/E in the rotate tool)
 --   DEL (hovering)           scrap a part + its stack (a symmetry member
 --                            scraps the whole ring)
 --   G                        grab the WHOLE ship; click sets it down
@@ -30,11 +32,12 @@
 -- (parent links) kicks away laterally.
 --
 -- SYMMETRY: with ×N up, one radial placement rings N copies around the host
--- (ghost previews show all of them). Anything you then stack ON a symmetry
--- member — a tank on one radial decoupler, an engine under one booster —
--- AUTO-MIRRORS onto every other member of that ring, however deep the stack
--- goes. Rings are edited as one: pick one up and the ring comes with it,
--- scrap one and the ring goes.
+-- (ghost previews show all of them). With symmetry ON, anything stacked ON a
+-- symmetry member — a tank on one radial decoupler, an engine under one
+-- booster — goes onto every other member of that ring too; with it OFF it is
+-- just one part (symCopies: it depends on the mode NOW, not on how the host
+-- was placed). Rings are edited as one: pick one up and the ring comes with
+-- it, scrap one and the ring goes, turn one and they all turn.
 --
 -- All clicks are edge-detected IN-SCRIPT (input snapshots can serve two
 -- frames at uneven fps — raw `input.clicked` double-fires a pickup into an
@@ -440,7 +443,7 @@ end
 -- has to say how to start and how to leave (this scene has no pause menu: ESC
 -- leaves it).
 local HINT_IDLE = "click a part to select   ·   1 move · 2 rotate · 3 stage · 4 grab · 5 action groups   ·   B shape a selected fairing   ·   ESC leave"
-local HINT_GHOST = "click a node or any surface to place   ·   ALT = place free   ·   R yaw/spin · T pitch · Y roll   ·   X symmetry ×N · M mirror   ·   ESC cancel"
+local HINT_GHOST = "click a node or any surface to place   ·   ALT = place free   ·   W/S A/D Q/E rotate · R spin · SPACE reset   ·   X symmetry · M mirror   ·   ESC cancel"
 local HINT_GRAB = "move the mouse to slide the whole ship   ·   click to set it down"
 
 local function publish_center()
@@ -556,14 +559,6 @@ local function group_hub(gid, depth)
   if pp and pp.sym then return group_hub(pp.sym, depth) end
   return nil
 end
-
--- The outward self-orientation for a radial decoupler at direction (ux,uy,uz).
-local function outward_orient(ux, uy, uz)
-  local roll = math.asin(math.max(-1, math.min(1, -ux)))
-  local pitch = math.atan2(uz, uy)
-  return pitch, roll
-end
-
 
 -- The EDIT SET for a part: its subtree — and, for a symmetry-ring member,
 -- every member's subtree. Rings pick up, scrap and highlight as ONE.
@@ -1286,15 +1281,39 @@ local function elec_lines()
   return out
 end
 
+-- WHERE THE CRAFT ROLLS OUT: the spaceport's PAD (Launch Complex 1) or its
+-- RUNWAY (the threshold, facing down it — rovers and planes). L switches;
+-- until it is pressed a craft on wheels goes to the runway and anything
+-- else to the pad. vessel_spawner reads `shipyard.site`.
+launchSiteChoice = nil
+function launchSite()
+  if launchSiteChoice then return launchSiteChoice end
+  for _, p in pairs(parts) do
+    if p.def and p.def.wheel then return "runway" end
+  end
+  return "pad"
+end
+function toggleLaunchSite()
+  launchSiteChoice = launchSite() == "pad" and "runway" or "pad"
+  hint(launchSiteChoice == "runway"
+    and "launch site: RUNWAY — the craft rolls out at the threshold, facing down it   ·   L for the pad"
+    or "launch site: PAD — Launch Complex 1, on the hold-downs   ·   L for the runway", 3.0)
+end
+
 local launch_btn_el = nil
+local launch_btn_n = nil
 local function paint_launch_button(chk)
   if not launch_btn_el then
-    local n = find and find("LaunchBtn")
-    launch_btn_el = n and n:getcomponent("UiElement") or false
+    launch_btn_n = find and find("LaunchBtn")
+    launch_btn_el = launch_btn_n and launch_btn_n:getcomponent("UiElement") or false
   end
   if launch_btn_el then
     local want = chk.block and 1 or 0
     if launch_btn_el.disabled ~= want then launch_btn_el.disabled = want end
+  end
+  if launch_btn_n and launch_btn_n.valid ~= false then
+    local label = launchSite() == "runway" and "RUNWAY  ▸" or "PAD  ▸"
+    if launch_btn_n.text ~= label then launch_btn_n.text = label end
   end
 end
 
@@ -1364,6 +1383,7 @@ local function spawn_part(id, x, y, z, yaw, parent, uid, pitch, roll, att, sym, 
     parts[u] = { id = id, def = def, node = node, x = x, y = y, z = z,
                  yaw = yaw or 0, pitch = pitch or 0, roll = roll or 0,
                  parent = parent, att = att, sym = sym, mir = mir }
+    if copyNormal[u] then parts[u].an = copyNormal[u]; copyNormal[u] = nil end
     pending_spawns = pending_spawns - 1
     publish_center(); refresh_stats()
   end)
@@ -1375,7 +1395,7 @@ local function remove_part(uid)
   if not p then return nil end
   local data = { uid = uid, id = p.id, x = p.x, y = p.y, z = p.z, yaw = p.yaw,
                  pitch = p.pitch, roll = p.roll, parent = p.parent,
-                 att = p.att, sym = p.sym, mir = p.mir }
+                 att = p.att, sym = p.sym, mir = p.mir, an = p.an }
   if p.node then destroy(p.node) end
   parts[uid] = nil
   for _, q in pairs(parts) do
@@ -1396,6 +1416,7 @@ local function undo()
     for _, u in ipairs(op.uids) do remove_part(u) end
   elseif op.type == "scrap" then
     for _, d in ipairs(op.parts) do
+      if d.an then copyNormal[d.uid] = d.an end
       spawn_part(d.id, d.x, d.y, d.z, d.yaw, d.parent, d.uid, d.pitch, d.roll,
                  d.att, d.sym, d.mir)
       if d.uid >= next_uid then next_uid = d.uid + 1 end
@@ -1412,6 +1433,7 @@ local function undo()
         set_part_pos(p, m.x, m.y, m.z)
         if m.yaw then set_part_rot(p, m.yaw, m.pitch or 0, m.roll or 0) end
         p.parent = m.parent
+        if m.has_an then p.an = m.an end
       end
     end
   end
@@ -1449,9 +1471,10 @@ end
 -- In-game telegraphs (draw.* — always visible, unlike the editor's debug
 -- gizmo layer). Rings mark attach nodes; boxes outline parts.
 local function outline(p, r, g, b, a)
-  local ex, ey, ez = part_extents(p)
-  draw.box(p.x, p.y, p.z, ex + 0.06, ey + 0.06, ez + 0.06,
-           p.yaw or 0, r, g, b, a or 1.0)
+  -- An ORIENTED box: the part's own axes, its mesh's half-extents (drawObb).
+  local hx, hy, hz = visHalf(p.id, p.def)
+  drawObb(p.x, p.y, p.z, basisOf(p.yaw, p.pitch, p.roll), hx + 0.05, hy + 0.05, hz + 0.05,
+          r, g, b, a or 1.0)
 end
 
 -- Every free attach node of part `p` for the current ghost: axial top/bottom
@@ -1602,29 +1625,6 @@ local function wrap_angle(a)
   return a
 end
 
--- Shared rotation keys: R yaw 15° (SHIFT 5°), T pitch and Y roll in 90°
--- quarter-turns (SHIFT 15°) — the same grammar for the ghost in hand and a
--- placed part under the cursor. Returns true if anything turned.
-local function rot_input(obj)
-  local turned = false
-  if input.pressed("r") then
-    local step = input.key("shift") and (math.pi / 36) or (math.pi / 12)
-    obj.yaw = wrap_angle((obj.yaw or 0) + step)
-    turned = true
-  end
-  if input.pressed("t") then
-    local step = input.key("shift") and (math.pi / 12) or (math.pi / 2)
-    obj.pitch = wrap_angle((obj.pitch or 0) + step)
-    turned = true
-  end
-  if input.pressed("y") then
-    local step = input.key("shift") and (math.pi / 12) or (math.pi / 2)
-    obj.roll = wrap_angle((obj.roll or 0) + step)
-    turned = true
-  end
-  return turned
-end
-
 -- ── ROUND TWO: outward snapping, SURFACE attach and MIRROR symmetry ─────────
 -- SURFACE ATTACH: away from every attach node, a part in hand snaps onto the
 -- surface of whatever placed part is under the cursor, standing out of it
@@ -1648,7 +1648,7 @@ end
 -- A basis (columns X, Y, Z) as the engine's YXZ Euler angles.
 function eulerOf(X, Y, Z)
   local pitch = math.asin(math.max(-1, math.min(1, -Z.y)))
-  if math.abs(Z.y) > 0.9999 then
+  if math.abs(Z.y) > 1 - 1e-10 then
     -- Z straight up or down: yaw and roll turn about the same axis, so put
     -- the whole turn in yaw (roll 0 keeps X level: X = (cos yaw, 0, −sin yaw)).
     return math.atan2(-X.z, X.x), pitch, 0
@@ -1665,6 +1665,13 @@ end
 local function cross3(a, b)
   return { x = a.y * b.z - a.z * b.y, y = a.z * b.x - a.x * b.z, z = a.x * b.y - a.y * b.x }
 end
+local function dot3(a, b) return a.x * b.x + a.y * b.y + a.z * b.z end
+local function norm3(v)
+  local l = math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z)
+  if l < 1e-12 then return { x = 0, y = 0, z = 0 } end
+  return { x = v.x / l, y = v.y / l, z = v.z / l }
+end
+local function neg3(v) return { x = -v.x, y = -v.y, z = -v.z } end
 
 -- v turned about unit axis k by angle a (Rodrigues).
 local function turn_about(v, k, a)
@@ -1675,29 +1682,13 @@ local function turn_about(v, k, a)
            z = v.z * c + kx.z * s + k.z * d * (1 - c) }
 end
 
--- The orientation that stands `def` out of a face with outward unit normal n:
--- a flank part's +X along n (upright: its +Y as near world up as it can be),
--- anything else +Y along n. `spin` turns it about n.
+-- The orientation that stands `def` out of a face with outward unit normal n
+-- on a world-aligned host (see attachBasis), spun by `spin` about n.
 function attachOrient(def, nx, ny, nz, spin)
   local n = { x = nx, y = ny, z = nz }
-  local X, Y
-  if def.radial_orient then
-    X = n
-    local r = (math.abs(ny) > 0.95) and { x = -1, y = 0, z = 0 } or { x = 0, y = 1, z = 0 }
-    local d = r.x * nx + r.y * ny + r.z * nz
-    local yx, yy, yz = unit(r.x - nx * d, r.y - ny * d, r.z - nz * d)
-    Y = { x = yx, y = yy, z = yz }
-  else
-    Y = n
-    local r = (math.abs(nx) < 0.9) and { x = 1, y = 0, z = 0 } or { x = 0, y = 0, z = 1 }
-    local d = r.x * nx + r.y * ny + r.z * nz
-    local xx, xy, xz = unit(r.x - nx * d, r.y - ny * d, r.z - nz * d)
-    X = { x = xx, y = xy, z = xz }
-  end
-  if spin and spin ~= 0 then
-    X, Y = turn_about(X, n, spin), turn_about(Y, n, spin)
-  end
-  return eulerOf(X, Y, cross3(X, Y))
+  local B = attachBasis(def, "surface", n, IDENT)
+  if spin and spin ~= 0 then B = basisMul(basisRot(norm3(n), spin), B) end
+  return basisEuler(B)
 end
 
 -- How far a part's centre stands off the face it is attached to.
@@ -1712,6 +1703,26 @@ end
 function surfaceUnderCursor(exclude)
   local mx, my = input.mouse()
   local ox, oy, oz, dx, dy, dz = camera.screenToRay(mx, my)
+  -- The part's REAL shape first (rayPart: round hulls are round), nearest
+  -- along the ray; the box colliders only if no shape is under the cursor.
+  do
+    local o, d = { x = ox, y = oy, z = oz }, norm3({ x = dx, y = dy, z = dz })
+    local carried = {}
+    if ghost and ghost.carried then
+      for _, m in ipairs(ghost.carried) do carried[m.uid] = true end
+    end
+    local best, bt = nil, math.huge
+    for uid, p in pairs(parts) do
+      if not (exclude and exclude[uid]) and not carried[uid] then
+        local t, P, n = rayPart(p, o, d)
+        if t and t < bt then
+          bt = t
+          best = { uid = uid, side = "surface", x = P.x, y = P.y, z = P.z, dx = n.x, dy = n.y, dz = n.z }
+        end
+      end
+    end
+    if best then return best end
+  end
   local skip = ghost and (ghost.node or (ghost.carried and parts[ghost.from_uid] and parts[ghost.from_uid].node)) or nil
   local travelled = 0
   for _ = 1, 6 do
@@ -1734,37 +1745,26 @@ function surfaceUnderCursor(exclude)
   return nil
 end
 
--- Where the ghost goes for a snap, and how it is turned. Returns x, y, z and
--- sets ghost.yaw/pitch/roll. R spins a surface or outward placement about its
--- normal (the yaw R wrote last frame is read back as a spin).
+-- Where the ghost goes for a snap, and how it is turned: the mount's ATTACH
+-- FRAME (attachBasis) times the player's own turn (`ghost.off`, kept in that
+-- frame — so a fin tipped 15° stays tipped 15° relative to the hull wherever it
+-- is dropped next). The centre stands off the face by the part's extent along
+-- the normal. Returns x, y, z and sets ghost.B and ghost.yaw/pitch/roll.
 function snapPlace(snap)
   local g = ghost
   local def = g.def
-  if g.yset and g.yaw ~= g.yset then
-    g.spin = (g.spin or 0) + (g.yaw - g.yset)
-  end
-  g.yset = nil
-  if snap.side == "radial" and def.radial then
-    -- A RADIAL DECOUPLER self-orients on a flank: its disc axis turns to
-    -- face outward. Yaw is zeroed: the disc is rotationally symmetric.
-    g.yaw = 0
-    g.roll = math.asin(math.max(-1, math.min(1, -snap.dx)))
-    g.pitch = math.atan2(snap.dz, snap.dy)
-  elseif snap.side == "radial" and def.radial_orient then
-    -- A fin: yaw its blade to face outward (horizontal), upright, re-seat.
-    g.yaw = math.atan2(-snap.dz, snap.dx)
-    g.pitch, g.roll = 0, 0
-  elseif snap.side == "surface" or (snap.side == "radial" and def.axial_out) then
-    g.yaw, g.pitch, g.roll = attachOrient(def, snap.dx, snap.dy, snap.dz, g.spin or 0)
-    g.yset = g.yaw
-    local r = attach_reach(def)
-    return snap.x + snap.dx * r, snap.y + snap.dy * r, snap.z + snap.dz * r
-  else
-    return snap.cx, snap.cy, snap.cz
-  end
-  local gex, gey, gez = eff_extents(def, g.yaw, g.pitch, g.roll)
-  local r = math.abs(snap.dx) * gex + math.abs(snap.dy) * gey + math.abs(snap.dz) * gez
-  return snap.x + snap.dx * r, snap.y + snap.dy * r, snap.z + snap.dz * r
+  local host = parts[snap.uid]
+  local hostB = host and basisOf(host.yaw, host.pitch, host.roll) or IDENT
+  local n
+  if snap.side == "top" then n = hostB.Y
+  elseif snap.side == "bottom" then n = neg3(hostB.Y)
+  else n = norm3({ x = snap.dx or 0, y = snap.dy or 1, z = snap.dz or 0 }) end
+  local A = attachBasis(def, snap.side, n, hostB)
+  local B = basisClean(basisMul(A, g.off or IDENT))
+  g.A, g.n, g.B = A, n, B
+  g.yaw, g.pitch, g.roll = basisEuler(B)
+  local r = supportAlong(def, B, n)
+  return snap.x + n.x * r, snap.y + n.y * r, snap.z + n.z * r
 end
 
 -- The mirror plane for a placement on `host` facing (dx,dy,dz): the host's
@@ -1805,40 +1805,74 @@ function mirrorOrient(A, yaw, pitch, roll)
   return eulerOf(X2, Y2, cross3(X2, Y2))
 end
 
--- The extra copies a placement makes: a mirror pair (M) or a ×N ring (X), for
--- a flank or surface placement on a host that is not itself in a group.
--- Each slot: { x, y, z, yaw, pitch, roll [, mir] }. nil = just the one part.
-function symSlots(host, snap, x, y, z)
-  if not (host and snap) or host.sym then return nil end
+-- The mirror image of a basis as a proper rotation (see mirrorOrient).
+function mirrorBasis(A, B)
+  local X2, Y2 = reflect_vec(A, B.X), reflect_vec(A, B.Y)
+  return { X = X2, Y = Y2, Z = cross3(X2, Y2) }
+end
+
+-- Symmetry is ON when the player has it on NOW: X (×2…×8) or M (mirror).
+function symActive() return sym_mirror or sym_n > 1 end
+function symMode() return sym_mirror and "mirror" or sym_n end
+
+-- The COPIES a placement at (x, y, z) turned B makes, if symmetry is on now —
+-- and only then (2026-10-23: placing on a part that was itself placed in a
+-- ring used to copy round the ring whatever the mode said, "fighting
+-- symmetry"). Each copy: { x, y, z, B, parent [, mir] }. Kinds:
+--   "follow"  the host is a ring/mirror member: one copy on every OTHER member
+--             (boosters: an engine under one goes under all)
+--   "ring"    a ×N ring about a plain host's axis (radial/surface placements)
+--   "mirror"  a mirrored pair across the host's X or Z plane
+-- A copy is the placed pose ROTATED about the hub's axis (or reflected), the
+-- whole frame with it — so a fin's tilt and roll come round the ring exactly.
+function symCopies(snap, x, y, z, B, n)
+  if not snap or not symActive() then return nil end
+  local host = parts[snap.uid]
+  if not host then return nil end
+  if host.sym then
+    local hub = group_hub(host.sym)
+    if not hub then return nil end
+    local out = {}
+    if host.mir then
+      local A = axis_of(hub, host.mir)
+      for _, m in ipairs(group_members(host.sym)) do
+        if m ~= snap.uid and parts[m] then
+          local mx, my, mz = reflect_pt(hub, A, x, y, z)
+          out[#out + 1] = { x = mx, y = my, z = mz, B = mirrorBasis(A, B), parent = m, mir = host.mir,
+                            n = n and reflect_vec(A, n) }
+        end
+      end
+      return out, "follow"
+    end
+    local hubB = basisOf(hub.yaw, hub.pitch, hub.roll)
+    local a0 = angle_about(hub, host)
+    for _, m in ipairs(group_members(host.sym)) do
+      if m ~= snap.uid and parts[m] then
+        -- angle_about runs X → Z, which is a NEGATIVE turn about the hub's +Y
+        local da = angle_about(hub, parts[m]) - a0
+        local px, py, pz, Bm = rotatePose(hub, hubB.Y, -da, x, y, z, B)
+        out[#out + 1] = { x = px, y = py, z = pz, B = Bm, parent = m, n = n and turn_about(n, hubB.Y, -da) }
+      end
+    end
+    return out, "follow"
+  end
   if snap.side ~= "radial" and snap.side ~= "surface" then return nil end
-  local g = ghost
   if sym_mirror then
     local A, name = mirror_axis(host, snap.dx, snap.dy, snap.dz)
     if not A then return nil end
     local mx, my, mz = reflect_pt(host, A, x, y, z)
     if (mx - x) ^ 2 + (my - y) ^ 2 + (mz - z) ^ 2 < 0.01 then return nil end
-    local yaw2, pitch2, roll2 = mirrorOrient(A, g.yaw, g.pitch, g.roll)
-    return { { x = mx, y = my, z = mz, yaw = yaw2, pitch = pitch2, roll = roll2, mir = name } }, name
+    return { { x = mx, y = my, z = mz, B = mirrorBasis(A, B), parent = snap.uid, mir = name,
+               n = n and reflect_vec(A, n) } }, "mirror"
   end
-  if sym_n <= 1 then return nil end
+  local hostB = basisOf(host.yaw, host.pitch, host.roll)
   local out = {}
-  local _, ax = rot_basis(host.yaw, host.pitch, host.roll)
   for k = 1, sym_n - 1 do
     local a = k * (2 * math.pi / sym_n)
-    local vx, vy, vz = rot_about(host, x - host.x, y - host.y, z - host.z, a)
-    local s = { x = host.x + vx, y = host.y + vy, z = host.z + vz, yaw = wrap_angle(g.yaw + a), pitch = g.pitch, roll = g.roll }
-    if g.def.radial and snap.side == "radial" then
-      local ol = math.sqrt(vx * vx + vy * vy + vz * vz)
-      if ol > 1e-4 then s.pitch, s.roll = outward_orient(vx / ol, vy / ol, vz / ol); s.yaw = 0 end
-    elseif snap.side == "surface" or (g.def.axial_out and snap.side == "radial") then
-      local n = turn_about({ x = snap.dx, y = snap.dy, z = snap.dz }, ax, a)
-      s.yaw, s.pitch, s.roll = attachOrient(g.def, n.x, n.y, n.z, g.spin or 0)
-    elseif g.def.radial_orient then
-      s.yaw, s.pitch, s.roll = math.atan2(-vz, vx), 0, 0
-    end
-    out[#out + 1] = s
+    local px, py, pz, Bm = rotatePose(host, hostB.Y, a, x, y, z, B)
+    out[#out + 1] = { x = px, y = py, z = pz, B = Bm, parent = snap.uid, n = n and turn_about(n, hostB.Y, a) }
   end
-  return out, nil
+  return out, "ring"
 end
 
 -- A mirror group's partner pose for a member pose (position + orientation).
@@ -1853,6 +1887,260 @@ function mirrorVec(host, mir, dx, dy, dz)
   return v.x, v.y, v.z
 end
 
+-- ── ORIENTATION AS MATRICES (2026-10-23 playtest) ───────────────────────────
+-- Every turn the builder makes is a ROTATION MATRIX — three world columns
+-- {X, Y, Z}, a part's local axes — composed and only then written back as the
+-- engine's YXZ euler. Adding angles to yaw/pitch/roll (what the rotate tool
+-- used to do) turns about the wrong axis as soon as a part is tipped: a pitch
+-- of a yawed part came out as a roll, which read as "inverted, and never the
+-- direction I want".
+local EX, EY, EZ = { x = 1, y = 0, z = 0 }, { x = 0, y = 1, z = 0 }, { x = 0, y = 0, z = 1 }
+IDENT = { X = EX, Y = EY, Z = EZ }
+
+
+function basisOf(yaw, pitch, roll)
+  local X, Y, Z = rot_basis(yaw, pitch, roll)
+  return { X = X, Y = Y, Z = Z }
+end
+-- B·v (local → world) and Bᵀ·v (world → local).
+function basisApply(B, v)
+  return { x = B.X.x * v.x + B.Y.x * v.y + B.Z.x * v.z,
+           y = B.X.y * v.x + B.Y.y * v.y + B.Z.y * v.z,
+           z = B.X.z * v.x + B.Y.z * v.y + B.Z.z * v.z }
+end
+function basisApplyT(B, v) return { x = dot3(B.X, v), y = dot3(B.Y, v), z = dot3(B.Z, v) } end
+function basisMul(A, B) return { X = basisApply(A, B.X), Y = basisApply(A, B.Y), Z = basisApply(A, B.Z) } end
+function basisT(B)
+  return { X = { x = B.X.x, y = B.Y.x, z = B.Z.x }, Y = { x = B.X.y, y = B.Y.y, z = B.Z.y },
+           Z = { x = B.X.z, y = B.Y.z, z = B.Z.z } }
+end
+-- Rotation by angle a about the unit axis k (right-handed).
+function basisRot(k, a)
+  return { X = turn_about(EX, k, a), Y = turn_about(EY, k, a), Z = turn_about(EZ, k, a) }
+end
+-- Re-square a basis that has been multiplied many times (keeps eulerOf exact).
+function basisClean(B)
+  local X = norm3(B.X)
+  local d = dot3(B.Y, X)
+  local Y = norm3({ x = B.Y.x - X.x * d, y = B.Y.y - X.y * d, z = B.Y.z - X.z * d })
+  return { X = X, Y = Y, Z = cross3(X, Y) }
+end
+function basisEuler(B)
+  local C = basisClean(B)
+  return eulerOf(C.X, C.Y, C.Z)
+end
+-- The reflection-conjugate M·Q·M of a rotation (what a mirror partner does
+-- when its twin turns by Q): reflect each column of Q applied to reflected axes.
+function basisMirror(A, Q)
+  local function M(v) return reflect_vec(A, v) end
+  return { X = M(basisApply(Q, M(EX))), Y = M(basisApply(Q, M(EY))), Z = M(basisApply(Q, M(EZ))) }
+end
+
+-- The half-extents a part's OUTLINE is drawn with: what the mesh really
+-- occupies. The registry's rx is sometimes an attach/overlap figure instead
+-- (an engine's 0.9 clears its plume), which drew boxes half again too wide.
+local VIS = {
+  engineS = { 0.60, 0.65, 0.60 }, engineM = { 0.51, 0.80, 0.51 }, skipper = { 0.51, 0.80, 0.51 },
+}
+function visHalf(id, def)
+  local v = VIS[id]
+  if v then return v[1], v[2], v[3] end
+  return def.rx, def.h * 0.5, def.rz
+end
+
+-- The 8 corners of a part's oriented box (centre, basis, half-extents).
+function obbCorners(x, y, z, B, hx, hy, hz)
+  local out = {}
+  for _, s in ipairs({ { -1, -1, -1 }, { 1, -1, -1 }, { 1, -1, 1 }, { -1, -1, 1 },
+                       { -1, 1, -1 }, { 1, 1, -1 }, { 1, 1, 1 }, { -1, 1, 1 } }) do
+    local a, b, c = s[1] * hx, s[2] * hy, s[3] * hz
+    out[#out + 1] = { x = x + B.X.x * a + B.Y.x * b + B.Z.x * c,
+                      y = y + B.X.y * a + B.Y.y * b + B.Z.y * c,
+                      z = z + B.X.z * a + B.Y.z * b + B.Z.z * c }
+  end
+  return out
+end
+local OBB_EDGES = { { 1, 2 }, { 2, 3 }, { 3, 4 }, { 4, 1 }, { 5, 6 }, { 6, 7 }, { 7, 8 }, { 8, 5 },
+                    { 1, 5 }, { 2, 6 }, { 3, 7 }, { 4, 8 } }
+-- A wireframe box turned with the part on ALL THREE axes. draw.box only takes
+-- a yaw, and it was being handed an extent that had ALREADY been rotated into
+-- a world AABB — the yaw applied twice — so a part turned 90° drew its bounds
+-- 90° off the mesh (1.png: the seat on a beam).
+function drawObb(x, y, z, B, hx, hy, hz, r, g, b, a)
+  local c = obbCorners(x, y, z, B, hx, hy, hz)
+  for _, e in ipairs(OBB_EDGES) do
+    local p, q = c[e[1]], c[e[2]]
+    draw.line(p.x, p.y, p.z, q.x, q.y, q.z, r, g, b, a or 1.0)
+  end
+end
+
+-- ── The SHAPE of a part, for surface attach ─────────────────────────────────
+-- The hull colliders are all boxes, so the old surface attach took a BOX
+-- face's normal on a round tank: a fin dropped anywhere but dead on a flank
+-- node stood out along one of four box normals (and off the hull at the box's
+-- corners) — "facing the wrong direction other than the first one". Round
+-- parts are now surfaces of revolution: radius profiles measured off their
+-- meshes, bottom → top at evenly spaced heights (tools/gen_part_meshes.py
+-- shapes; re-measure if a mesh changes). Everything else is its box.
+local ROUND = {
+  pod = { 0.50, 0.50, 0.44, 0.41, 0.37, 0.34, 0.27, 0.20 },
+  probe = { 0.42, 0.40, 0.38, 0.38, 0.38, 0.38, 0.40, 0.42 },
+  nose = { 0.51, 0.50, 0.48, 0.44, 0.38, 0.32, 0.20, 0.04 },
+  chute = { 0.22 },
+  tankS = { 0.50 }, tankM = { 0.50 }, battery = { 0.50 }, cargo = { 0.50 },
+  decoupler = { 0.51 }, radialDec = { 0.51 },
+  engineS = { 0.41, 0.33, 0.27, 0.21, 0.12, 0.47, 0.50, 0.51 },
+  engineM = { 0.49, 0.42, 0.35, 0.28, 0.19, 0.28, 0.28, 0.51 },
+  skipper = { 0.39, 0.36, 0.33, 0.30, 0.27, 0.39, 0.47, 0.51 },
+  radialTank = { 0.16, 0.30, 0.49, 0.44, 0.44, 0.49, 0.30, 0.16 },
+  dockPort = { 0.53, 0.52, 0.45, 0.38, 0.38, 0.39, 0.37, 0.37 },
+  adapter = { 0.51, 0.45, 0.43, 0.40, 0.36, 0.32, 0.28, 0.25 },
+  strut1 = { 0.07 }, strut2 = { 0.07 }, strut3 = { 0.07 },
+  fairingS = { 0.625 }, fairingM = { 1.25 },
+  piston = { 0.16, 0.15, 0.15, 0.15, 0.14, 0.14, 0.12, 0.11 }, rotor = { 0.31 },
+}
+function roundProfile(id) return ROUND[id] end
+
+-- Ray (o, d in the part's LOCAL frame) against a surface of revolution about
+-- local Y, radius profile `prof` over y ∈ [-hh, hh]. → t, local normal.
+local function ray_round(prof, hh, o, d)
+  local n = #prof
+  local ys, rs = { -hh }, { prof[1] }
+  for i = 1, n do ys[#ys + 1] = -hh + (i - 0.5) / n * 2 * hh; rs[#rs + 1] = prof[i] end
+  ys[#ys + 1], rs[#rs + 1] = hh, prof[n]
+  local best, bn = math.huge, nil
+  local function take(t, nx, ny, nz)
+    if t > 1e-4 and t < best then best, bn = t, norm3({ x = nx, y = ny, z = nz }) end
+  end
+  for i = 1, #ys - 1 do
+    local y0, y1 = ys[i], ys[i + 1]
+    if y1 - y0 > 1e-6 then
+      local b = (rs[i + 1] - rs[i]) / (y1 - y0)
+      local a = rs[i] - b * y0
+      -- (ox + t dx)² + (oz + t dz)² = (a + b (oy + t dy))²
+      local ry = a + b * o.y
+      local A = d.x * d.x + d.z * d.z - (b * d.y) ^ 2
+      local B2 = 2 * (o.x * d.x + o.z * d.z - ry * b * d.y)
+      local C = o.x * o.x + o.z * o.z - ry * ry
+      local roots = {}
+      if math.abs(A) < 1e-9 then
+        if math.abs(B2) > 1e-9 then roots[1] = -C / B2 end
+      else
+        local disc = B2 * B2 - 4 * A * C
+        if disc >= 0 then
+          local sq = math.sqrt(disc)
+          roots[1], roots[2] = (-B2 - sq) / (2 * A), (-B2 + sq) / (2 * A)
+        end
+      end
+      for _, t in ipairs(roots) do
+        local y = o.y + t * d.y
+        local r = a + b * y
+        if y >= y0 - 1e-6 and y <= y1 + 1e-6 and r > 0 then
+          take(t, o.x + t * d.x, -b * r, o.z + t * d.z)
+        end
+      end
+    end
+  end
+  -- the end caps
+  for _, s in ipairs({ -1, 1 }) do
+    if math.abs(d.y) > 1e-9 then
+      local t = (s * hh - o.y) / d.y
+      local x, z = o.x + t * d.x, o.z + t * d.z
+      local r = (s < 0) and prof[1] or prof[n]
+      if x * x + z * z <= r * r then take(t, 0, s, 0) end
+    end
+  end
+  if bn then return best, bn end
+  return nil
+end
+
+-- Ray against an axis-aligned box (half-extents h) in the local frame (slabs).
+local function ray_box(hx, hy, hz, o, d)
+  local tmin, tmax, nmin = -math.huge, math.huge, nil
+  for _, ax in ipairs({ { "x", hx, EX }, { "y", hy, EY }, { "z", hz, EZ } }) do
+    local k, h = ax[1], ax[2]
+    if math.abs(d[k]) < 1e-12 then
+      if math.abs(o[k]) > h then return nil end
+    else
+      local t1, t2 = (-h - o[k]) / d[k], (h - o[k]) / d[k]
+      local s = -1
+      if t1 > t2 then t1, t2 = t2, t1; s = 1 end
+      if t1 > tmin then
+        tmin = t1
+        nmin = { x = 0, y = 0, z = 0 }
+        nmin[k] = s
+      end
+      if t2 < tmax then tmax = t2 end
+      if tmin > tmax then return nil end
+    end
+  end
+  if tmin > 1e-4 and nmin then return tmin, nmin end
+  return nil
+end
+
+-- Where a world ray (o, d) first meets part `p`'s real shape: t, world point,
+-- world outward normal. nil = a miss.
+function rayPart(p, o, d)
+  local B = basisOf(p.yaw, p.pitch, p.roll)
+  local rel = { x = o.x - p.x, y = o.y - p.y, z = o.z - p.z }
+  local ol, dl = basisApplyT(B, rel), basisApplyT(B, d)
+  local prof = ROUND[p.id]
+  local t, nl
+  if prof then
+    t, nl = ray_round(prof, p.def.h * 0.5, ol, dl)
+  else
+    local hx, hy, hz = visHalf(p.id, p.def)
+    t, nl = ray_box(hx, hy, hz, ol, dl)
+  end
+  if not t then return nil end
+  local nw = norm3(basisApply(B, nl))
+  return t, { x = o.x + d.x * t, y = o.y + d.y * t, z = o.z + d.z * t }, nw
+end
+
+-- ── Attach frames ───────────────────────────────────────────────────────────
+-- The frame a part is mounted in, before the player's own turn is applied:
+--   a stack node (top/bottom) or a booster on a flank node: the HOST's frame,
+--     so a stack continues along a tipped host and a booster hangs parallel;
+--   a fin-like part (radial_orient) on a face: +X out along the normal n,
+--     +Y along the host's own axis — every fin round a tank comes out with the
+--     same roll, wherever on the hull it is dropped;
+--   anything else on a face (radial decoupler, a strut, a panel): +Y out
+--     along n, +X along the host's axis;
+--   nothing under it: the world.
+local function perp_ref(n, refs)
+  for _, r in ipairs(refs) do
+    local d = dot3(r, n)
+    if math.abs(d) < 0.95 then
+      return norm3({ x = r.x - n.x * d, y = r.y - n.y * d, z = r.z - n.z * d })
+    end
+  end
+  return nil
+end
+function attachBasis(def, side, n, hostB)
+  hostB = hostB or IDENT
+  if side == "top" or side == "bottom" then return hostB end
+  if not n then return IDENT end
+  if side == "radial" and not (def.radial_orient or def.radial or def.axial_out) then return hostB end
+  n = norm3(n)
+  if def.radial_orient then
+    local Y = perp_ref(n, { hostB.Y, hostB.Z, EY })
+    return { X = n, Y = Y, Z = cross3(n, Y) }
+  end
+  local X = perp_ref(n, { hostB.Y, hostB.X, EX })
+  return { X = X, Y = n, Z = cross3(X, n) }
+end
+-- How far the centre of a part turned B stands off a face with normal n.
+function supportAlong(def, B, n)
+  return math.abs(dot3(n, B.X)) * def.rx + math.abs(dot3(n, B.Y)) * def.h * 0.5
+       + math.abs(dot3(n, B.Z)) * def.rz
+end
+-- Rotate a pose (position + basis) about the axis through c along k by a.
+function rotatePose(c, k, a, x, y, z, B)
+  local v = turn_about({ x = x - c.x, y = y - c.y, z = z - c.z }, k, a)
+  local R = basisRot(k, a)
+  return c.x + v.x, c.y + v.y, c.z + v.z, basisMul(R, B)
+end
+
 -- The part a precise-edit undo op is already open for (one op per streak,
 -- shared by the arrow keys AND the drag gizmo).
 local nudge_uid = nil
@@ -1861,9 +2149,8 @@ local nudge_uid = nil
 -- ring rules (a symmetry member edits every member, displacement rotated to
 -- each angle) and ONE undo op per editing streak. The keybinds and the drag
 -- gizmo both land here.
-local function apply_edit(uid, ddx, ddy, ddz, dyaw, dpitch, droll)
-  local p = parts[uid]
-  if not p then return end
+-- Open (once per editing streak) the undo op an edit of `uid` lands in.
+local function edit_begin(uid)
   if nudge_uid ~= uid then
     nudge_uid = uid
     local moved = {}
@@ -1874,6 +2161,12 @@ local function apply_edit(uid, ddx, ddy, ddz, dyaw, dpitch, droll)
     end
     push_undo({ type = "move", moved = moved })
   end
+end
+
+local function apply_edit(uid, ddx, ddy, ddz, dyaw, dpitch, droll)
+  local p = parts[uid]
+  if not p then return end
+  edit_begin(uid)
   local turned = dyaw ~= 0 or dpitch ~= 0 or droll ~= 0
   local hub = p.sym and group_hub(p.sym) or nil
   if hub and p.mir then
@@ -1935,6 +2228,270 @@ local function apply_edit(uid, ddx, ddy, ddz, dyaw, dpitch, droll)
   refresh_stats()
 end
 
+-- ── ROTATING (2026-10-23: "the rotation tool feels limiting … inverted") ────
+-- KSP's keys: W/S pitch, A/D yaw, Q/E roll — 90° a press, SHIFT 15° — R spins
+-- the part about the face it is mounted on (15°, SHIFT 5°), SPACE puts it back
+-- to how its mount stands it, and C switches what all of them (and the rotate
+-- gizmo's rings) turn about:
+--   CAMERA  world axes picked by the view: W always tips the part's top AWAY
+--           from you and D always turns its near face to your right
+--   PART    the part's own axes, however it is already turned
+-- The keys work on a part in hand, and on the selection in the ROTATE tool
+-- (the camera's own W/A/S/D/Q/E fly yields to them then; hold RMB to fly).
+ROT_FRAME = "camera"
+ROT_SNAP = math.pi / 12   -- the rotate gizmo's notch (SHIFT drags free)
+rotKeysBusy = false       -- read by builder_camera
+
+-- The pitch / yaw / roll axes (world unit vectors) for a part turned B.
+function rotAxes(B)
+  if ROT_FRAME == "part" and B then return B.X, B.Y, B.Z end
+  local sx, sy, sw, sh = 0, 0, 1920, 1080
+  if camera.screenRect then
+    local a, b, c, d = camera.screenRect()
+    if c and c > 0 and d and d > 0 then sx, sy, sw, sh = a, b, c, d end
+  end
+  local cx, cy = sx + sw * 0.5, sy + sh * 0.5
+  local _, _, _, d1x, _, d1z = camera.screenToRay(cx, cy)
+  local _, _, _, d2x, _, d2z = camera.screenToRay(cx + 40, cy)
+  local rx, rz = d2x - d1x, d2z - d1z
+  local right
+  if math.abs(rx) >= math.abs(rz) then right = { x = (rx >= 0) and 1 or -1, y = 0, z = 0 }
+  else right = { x = 0, y = 0, z = (rz >= 0) and 1 or -1 } end
+  return right, EY, cross3(EY, right) -- (up × right = straight away from you)
+end
+
+-- One frame of rotation keys as a world rotation Q (nil = none). B is what is
+-- being turned, n the face it is mounted on; `wasd` = the W/A/S/D/Q/E set too.
+function rotKeysQ(B, n, wasd)
+  local fine = input.key("shift")
+  local big = fine and ROT_SNAP or math.pi / 2
+  local P, Yw, Rl = rotAxes(B)
+  local Q = nil
+  local function turn(k, a)
+    local R = basisRot(k, a)
+    Q = Q and basisMul(R, Q) or R
+  end
+  if wasd then
+    if input.pressed("w") then turn(P, -big) end
+    if input.pressed("s") then turn(P, big) end
+    if input.pressed("a") then turn(Yw, -big) end
+    if input.pressed("d") then turn(Yw, big) end
+    if input.pressed("q") then turn(Rl, -big) end
+    if input.pressed("e") then turn(Rl, big) end
+  end
+  if input.pressed("r") then turn(n or (B and B.Y) or EY, fine and (math.pi / 36) or (math.pi / 12)) end
+  if input.pressed("t") then turn(P, big) end -- the old pitch / roll keys
+  if input.pressed("y") then turn(Rl, big) end
+  return Q
+end
+
+-- The face a placed part is mounted on, as a world normal (+ its host's
+-- basis): the host-local normal stored at placement, else read off where the
+-- part sits on its host. nil for a part with no host.
+function mountNormal(uid)
+  local p = parts[uid]
+  local h = p and p.parent and parts[p.parent]
+  if not h then return nil end
+  local hB = basisOf(h.yaw, h.pitch, h.roll)
+  if p.att == "top" then return hB.Y, hB end
+  if p.att == "bottom" then return neg3(hB.Y), hB end
+  if p.an then return norm3(basisApply(hB, p.an)), hB end
+  local rel = basisApplyT(hB, { x = p.x - h.x, y = p.y - h.y, z = p.z - h.z })
+  local nl
+  local prof = ROUND[h.id]
+  if prof then
+    local rr = math.sqrt(rel.x * rel.x + rel.z * rel.z)
+    if rr < 1e-6 or math.abs(rel.y) / (h.def.h * 0.5) > rr / math.max(prof[1], 1e-3) then
+      nl = { x = 0, y = (rel.y >= 0) and 1 or -1, z = 0 }
+    else
+      nl = { x = rel.x / rr, y = 0, z = rel.z / rr }
+    end
+  else
+    local hx, hy, hz = visHalf(h.id, h.def)
+    local ax, ay, az = math.abs(rel.x) / hx, math.abs(rel.y) / hy, math.abs(rel.z) / hz
+    if ax >= ay and ax >= az then nl = { x = (rel.x >= 0) and 1 or -1, y = 0, z = 0 }
+    elseif ay >= az then nl = { x = 0, y = (rel.y >= 0) and 1 or -1, z = 0 }
+    else nl = { x = 0, y = 0, z = (rel.z >= 0) and 1 or -1 } end
+  end
+  return norm3(basisApply(hB, nl)), hB
+end
+-- How the part's mount stands it, before any turn of the player's: the frame
+-- SPACE resets to (the world's, for a part on nothing).
+function mountFrame(uid)
+  local p = parts[uid]
+  if not p then return IDENT end
+  local n, hB = mountNormal(uid)
+  if not n then return IDENT end
+  return attachBasis(p.def, p.att or "top", n, hB)
+end
+
+-- Turn a placed part by the world rotation Q about its own centre, carrying
+-- everything stacked on it. A symmetry member turns its whole ring, each
+-- counterpart by Q carried round to it (a ring: conjugated by the ring angle;
+-- a mirror pair: the reflection M·Q·M) — so a fin tipped one way tips every
+-- fin the same way RELATIVE TO THE HULL, mirrored where it should be.
+function rotateSelection(uid, Q)
+  local p = parts[uid]
+  if not p then return end
+  edit_begin(uid)
+  local function turn_tree(root_uid, Qm)
+    local c = parts[root_uid]
+    if not c then return end
+    local cx, cy, cz = c.x, c.y, c.z
+    for u in pairs(subtree(root_uid)) do
+      local q = parts[u]
+      if q then
+        local v = basisApply(Qm, { x = q.x - cx, y = q.y - cy, z = q.z - cz })
+        set_part_pos(q, cx + v.x, cy + v.y, cz + v.z)
+        set_part_rot(q, basisEuler(basisMul(Qm, basisOf(q.yaw, q.pitch, q.roll))))
+      end
+    end
+  end
+  local hub = p.sym and group_hub(p.sym) or nil
+  if hub and p.mir then
+    local Qm = basisMirror(axis_of(hub, p.mir), Q)
+    for _, m in ipairs(group_members(p.sym)) do turn_tree(m, (m == uid) and Q or Qm) end
+  elseif hub then
+    local hubB = basisOf(hub.yaw, hub.pitch, hub.roll)
+    local a0 = angle_about(hub, p)
+    for _, m in ipairs(group_members(p.sym)) do
+      if parts[m] then
+        local R = basisRot(hubB.Y, -(angle_about(hub, parts[m]) - a0))
+        turn_tree(m, basisMul(R, basisMul(Q, basisT(R))))
+      end
+    end
+  else
+    turn_tree(uid, Q)
+  end
+  publish_center()
+  refresh_stats()
+end
+
+-- SPACE on a placed part: back to its mount's frame (and its ring with it).
+function resetSelection(uid)
+  local p = parts[uid]
+  if not p then return end
+  local Q = basisMul(mountFrame(uid), basisT(basisOf(p.yaw, p.pitch, p.roll)))
+  rotateSelection(uid, basisClean(Q))
+end
+
+-- A turn of the part in hand: Q is a WORLD rotation; the ghost keeps it in its
+-- attach frame (ghost.off), so it rides along to the next face it snaps to.
+function ghostRotate(Q)
+  local g = ghost
+  if not g then return end
+  local A = g.A or IDENT
+  g.off = basisClean(basisMul(basisT(A), basisMul(Q, basisMul(A, g.off or IDENT))))
+end
+
+-- The rotation keys, every frame (cam_busy = RMB, the camera's).
+function rotKeysTick(cam_busy)
+  local sel = selected_uid and parts[selected_uid]
+  rotKeysBusy = (ghost ~= nil) or (sel ~= nil and tool == "rotate")
+  if cam_busy then return end
+  if input.pressed("c") and not input.key("ctrl") then
+    ROT_FRAME = (ROT_FRAME == "camera") and "part" or "camera"
+    ui("tool", 0.7)
+    hint(ROT_FRAME == "camera"
+      and "rotate relative to the CAMERA — W tips the part away from you, D turns it to your right   ·   C: the part's own axes"
+      or "rotate about the PART's own axes   ·   C: relative to the camera", 3.0)
+  end
+  if ghost then
+    if input.pressed("space") then
+      ghost.off = IDENT
+      hint("rotation reset — the part stands the way its mount holds it", 2.0)
+    end
+    local Q = rotKeysQ(ghost.B, ghost.n, true)
+    if Q then ghostRotate(Q) end
+    return
+  end
+  if sel and tool ~= "stage" and tool ~= "groups" then
+    if input.pressed("space") then
+      resetSelection(selected_uid)
+      hint("rotation reset", 1.5)
+    end
+    local Q = rotKeysQ(basisOf(sel.yaw, sel.pitch, sel.roll), mountNormal(selected_uid), tool == "rotate")
+    if Q then rotateSelection(selected_uid, Q) end
+  end
+end
+
+-- The part in hand follows the cursor: snapped (snapPlace) or free, then
+-- posed — a carried stack moves RIGIDLY with its root, turns included.
+-- Returns snap, x, y, z.
+function ghostFollow()
+  local snap = find_snap()
+  local x, y, z
+  if snap then
+    x, y, z = snapPlace(snap)
+  else
+    ghost.A, ghost.n = IDENT, nil
+    ghost.B = basisClean(ghost.off or IDENT)
+    ghost.yaw, ghost.pitch, ghost.roll = basisEuler(ghost.B)
+    x, y, z = free_pos()
+  end
+  if ghost.carried then
+    for _, m in ipairs(ghost.carried) do
+      local p = parts[m.uid]
+      if p and m.rel then
+        local v = basisApply(ghost.B, m.rel)
+        set_part_pos(p, x + v.x, y + v.y, z + v.z)
+        set_part_rot(p, basisEuler(basisMul(ghost.B, m.relB)))
+      end
+    end
+  elseif ghost.node then
+    ghost.node.x, ghost.node.y, ghost.node.z = x, y, z
+    ghost.node.yaw, ghost.node.pitch, ghost.node.roll = ghost.yaw, ghost.pitch, ghost.roll
+  end
+  return snap, x, y, z
+end
+
+-- Preview every copy symmetry would make (amber boxes, the part's own turn).
+function drawCopies(copies)
+  if not (copies and ghost) then return end
+  local hx, hy, hz = visHalf(ghost.id, ghost.def)
+  for _, c in ipairs(copies) do
+    drawObb(c.x, c.y, c.z, c.B, hx, hy, hz, 1.0, 0.75, 0.3, 0.75)
+    local Xa = c.B.X
+    draw.line(c.x, c.y, c.z, c.x + Xa.x * 0.35, c.y + Xa.y * 0.35, c.z + Xa.z * 0.35, 1.0, 0.75, 0.3, 0.75)
+  end
+end
+
+-- Place the copies a symmetric placement makes (after the ghost itself went
+-- down as `placed`): one symmetry group, ONE undo op for the lot.
+function placeCopies(placed, copies, kind, n)
+  local root = parts[placed]
+  if not root then return end
+  next_sym = next_sym + 1
+  local gid = next_sym
+  root.sym = gid
+  if kind == "mirror" then root.mir = copies[1].mir
+  elseif kind == "follow" and copies[1] and copies[1].mir then root.mir = copies[1].mir end
+  local uids = { placed }
+  for _, c in ipairs(copies) do
+    local yaw, pitch, roll = basisEuler(c.B)
+    local u = spawn_part(root.id, c.x, c.y, c.z, yaw, c.parent, nil, pitch, roll, root.att, gid, c.mir)
+    uids[#uids + 1] = u
+    if c.n and parts[c.parent] then
+      local h = parts[c.parent]
+      copyNormal[u] = basisApplyT(basisOf(h.yaw, h.pitch, h.roll), c.n)
+    end
+  end
+  if #undo_stack > 0 and undo_stack[#undo_stack].type == "place"
+    and undo_stack[#undo_stack].uid == placed then
+    table.remove(undo_stack)
+  end
+  push_undo({ type = "place_group", uids = uids })
+  if kind == "follow" then
+    hint(string.format("symmetry: copied onto all %d of the ring — X off to place just one", #uids), 2.5)
+  elseif kind == "mirror" then
+    hint("mirrored pair placed — CTRL+Z removes both", 2.0)
+  else
+    hint(string.format("×%d ring placed — CTRL+Z removes it all", #uids), 2.5)
+  end
+end
+-- Mount normals for copies whose spawn has not landed yet (spawn is async).
+copyNormal = {}
+
 -- ── Transform gizmos (editor-style, tool-specific) ──────────────────────────
 -- ONE gizmo at a time, on the SELECTED part, for the ACTIVE tool: the MOVE
 -- tool shows three solid arrows (world X/Y/Z, filled cone heads); the ROTATE
@@ -1957,15 +2514,30 @@ local function gizmo_dims(p)
 end
 
 -- Two unit vectors spanning the plane ⊥ to axis `a` (for the rotate ring).
+-- (Any axis now: the rings follow the part in the PART rotation frame.)
 local function ring_basis(a)
-  local ux, uy, uz = a.z, a.x, a.y
-  return ux, uy, uz, a.y, a.z, a.x
+  local u = perp_ref(a, { EY, EX })
+  local v = cross3(a, u)
+  return u.x, u.y, u.z, v.x, v.y, v.z
+end
+
+-- The rotate gizmo's three rings: world X/Y/Z in the CAMERA frame, the
+-- part's own axes in the PART frame (C). Same colours either way.
+function gizmoAxes(p, tool)
+  if tool ~= "rotate" or ROT_FRAME ~= "part" then return GIZ_AXES end
+  local B = basisOf(p.yaw, p.pitch, p.roll)
+  local out = {}
+  for i, k in ipairs({ B.X, B.Y, B.Z }) do
+    local c = GIZ_AXES[i]
+    out[i] = { x = k.x, y = k.y, z = k.z, r = c.r, g = c.g, b = c.b }
+  end
+  return out
 end
 
 local function draw_gizmo(p, tool)
   local len, rad = gizmo_dims(p)
   if tool == "rotate" then
-    for _, a in ipairs(GIZ_AXES) do
+    for _, a in ipairs(gizmoAxes(p, tool)) do
       -- A solid band (filled annulus) reads as a real ring, not a thin line.
       draw.disc(p.x, p.y, p.z, a.x, a.y, a.z, rad * 0.9, rad, a.r, a.g, a.b, 0.7)
     end
@@ -1994,8 +2566,9 @@ local GIZ_HIT_PX = 22
 local function gizmo_hit(p, tool, len, rad)
   local mx, my = input.mouse()
   local best, best_kind, best_d = nil, nil, GIZ_HIT_PX * GIZ_HIT_PX
+  local best_pt = nil
   if tool == "rotate" then
-    for ai, a in ipairs(GIZ_AXES) do
+    for ai, a in ipairs(gizmoAxes(p, tool)) do
       local ux, uy, uz, vx2, vy2, vz2 = ring_basis(a)
       for k = 0, 47 do
         local t = k * (2 * math.pi / 48)
@@ -2005,7 +2578,7 @@ local function gizmo_hit(p, tool, len, rad)
         local sx, sy, on = screen_of(cx, cy2, cz)
         if on then
           local d = (sx - mx) ^ 2 + (sy - my) ^ 2
-          if d < best_d then best, best_kind, best_d = ai, "turn", d end
+          if d < best_d then best, best_kind, best_d = ai, "turn", d; best_pt = { x = cx, y = cy2, z = cz } end
         end
       end
     end
@@ -2023,8 +2596,47 @@ local function gizmo_hit(p, tool, len, rad)
       end
     end
   end
-  if best then return best_kind, best end
+  if best then return best_kind, best, best_pt end
   return nil
+end
+
+-- One frame of a rotate-ring drag: the mouse moved (dmx, dmy) to (mx, my).
+-- A ring that FACES you turns like a dial — the part follows the cursor round
+-- the centre; a ring seen edge-on turns as the cursor slides along the way
+-- the ring travels where you grabbed it. Either way it goes the way the mouse
+-- goes. ROT_SNAP notches (15°) unless SHIFT is held. Returns the total turn.
+function gizmoTurn(p, gd, mx, my, dmx, dmy)
+  local k = gd.k
+  local csx, csy = screen_of(p.x, p.y, p.z)
+  local ox, oy, oz = camera.screenToRay(csx, csy)
+  local f = norm3({ x = p.x - ox, y = p.y - oy, z = p.z - oz })
+  local facing = dot3(k, f)
+  local dth = 0
+  if math.abs(facing) > 0.3 then
+    local a1 = math.atan2(my - dmy - csy, mx - dmx - csx)
+    local a2 = math.atan2(my - csy, mx - csx)
+    local da = wrap_angle(a2 - a1)
+    -- y runs DOWN the screen, so a turn that looks counter-clockwise has a
+    -- falling screen angle; +about k looks counter-clockwise from k's tip.
+    if (mx - csx) ^ 2 + (my - csy) ^ 2 > 64 then dth = (facing < 0) and -da or da end
+  else
+    local P = gd.P or { x = p.x, y = p.y + 1, z = p.z }
+    local t = norm3(cross3(k, { x = P.x - p.x, y = P.y - p.y, z = P.z - p.z }))
+    local e = 0.05 * (gd.rad or 1)
+    local s0x, s0y = screen_of(P.x, P.y, P.z)
+    local s1x, s1y = screen_of(P.x + t.x * e, P.y + t.y * e, P.z + t.z * e)
+    local vx, vy = (s1x - s0x) / 0.05, (s1y - s0y) / 0.05 -- px per radian
+    local l2 = vx * vx + vy * vy
+    if l2 > 25 then dth = (dmx * vx + dmy * vy) / l2 end
+  end
+  gd.acc = (gd.acc or 0) + dth
+  local target = input.key("shift") and gd.acc or math.floor(gd.acc / ROT_SNAP + 0.5) * ROT_SNAP
+  local delta = target - (gd.applied or 0)
+  if math.abs(delta) > 1e-9 then
+    gd.applied = target
+    rotateSelection(gd.uid, basisRot(k, delta))
+  end
+  return gd.applied or 0
 end
 
 -- The screen-space bounding radius of the selection's gizmo (center + max
@@ -2113,7 +2725,7 @@ function pick(id)
     ui("save", 0.9)
   end
   local def = REG[id]
-  ghost = { id = id, def = def, yaw = 0, pitch = 0, roll = 0, node = nil }
+  ghost = { id = id, def = def, yaw = 0, pitch = 0, roll = 0, node = nil, off = IDENT, B = IDENT }
   click_cool = 0.15
   hint(HINT_GHOST, 6.0)
   spawn(def.prefab, vec3(0, -80, 0), function(node)
@@ -2128,14 +2740,23 @@ end
 local function pickup(uid)
   local grab = edit_set(uid) -- a ring member brings its whole ring
   local moved = {}
+  local root = parts[uid]
+  -- The carried set moves RIGIDLY with its root (turns included): each part's
+  -- pose is kept in the root's frame. The root's own turn is kept relative to
+  -- the mount it came off, so it re-attaches the same way round elsewhere.
+  local Rr = basisOf(root.yaw, root.pitch, root.roll)
   for u in pairs(grab) do
     local p = parts[u]
     moved[#moved + 1] = { uid = u, id = p.id, x = p.x, y = p.y, z = p.z,
-                          yaw = p.yaw, pitch = p.pitch, roll = p.roll, parent = p.parent }
+                          yaw = p.yaw, pitch = p.pitch, roll = p.roll, parent = p.parent,
+                          has_an = true, an = p.an,
+                          rel = basisApplyT(Rr, { x = p.x - root.x, y = p.y - root.y, z = p.z - root.z }),
+                          relB = basisMul(basisT(Rr), basisOf(p.yaw, p.pitch, p.roll)) }
   end
-  local root = parts[uid]
+  local A0 = mountFrame(uid)
   ghost = { id = root.id, def = root.def, yaw = root.yaw, pitch = root.pitch or 0,
-            roll = root.roll or 0, node = root.node, carried = moved, from_uid = uid }
+            roll = root.roll or 0, node = root.node, carried = moved, from_uid = uid,
+            off = basisClean(basisMul(basisT(A0), Rr)), B = Rr }
   root.parent = nil
   push_undo({ type = "move", moved = moved })
   click_cool = 0.18
@@ -2145,6 +2766,11 @@ end
 
 local function place_ghost(x, y, z, parent, att, sym)
   local placed_uid = nil
+  local an = nil
+  if parent and parts[parent] and ghost.n then
+    local h = parts[parent]
+    an = basisApplyT(basisOf(h.yaw, h.pitch, h.roll), ghost.n)
+  end
   if ghost.carried then
     local root = parts[ghost.from_uid]
     if root then
@@ -2155,6 +2781,7 @@ local function place_ghost(x, y, z, parent, att, sym)
       end
       root.parent = parent
       root.att = att
+      root.an = an
       placed_uid = ghost.from_uid
     end
   else
@@ -2168,7 +2795,7 @@ local function place_ghost(x, y, z, parent, att, sym)
     ghost.node.yaw, ghost.node.pitch, ghost.node.roll = ghost.yaw, ghost.pitch, ghost.roll
     parts[u] = { id = ghost.id, def = ghost.def, node = ghost.node,
                  x = x, y = y, z = z, yaw = ghost.yaw, pitch = ghost.pitch,
-                 roll = ghost.roll, parent = parent, att = att, sym = sym }
+                 roll = ghost.roll, parent = parent, att = att, sym = sym, an = an }
     push_undo({ type = "place", uid = u })
     placed_uid = u
   end
@@ -2181,69 +2808,7 @@ local function place_ghost(x, y, z, parent, att, sym)
 end
 
 -- ── Symmetry placement ──────────────────────────────────────────────────────
--- (A fresh ×N ring or mirror pair is laid out by `symSlots`, above.)
-
--- Mirror a just-placed part from ring member `host` onto every OTHER member
--- of its ring — the stacked-children rule that makes ×N boosters build in
--- N clicks total, not N × parts. The copies form their own (chained) ring.
-local function mirror_onto_ring(host_uid, placed_uid)
-  local host = parts[host_uid]
-  local src = parts[placed_uid]
-  if not (host and host.sym and src) then return end
-  local hub = group_hub(host.sym)
-  if not hub then return end
-  local a0 = angle_about(hub, host)
-  next_sym = next_sym + 1
-  local gid = next_sym
-  src.sym = gid
-  local uids = { placed_uid }
-  if host.mir then
-    -- A MIRROR pair: the copy is the reflection, across the same plane.
-    src.mir = host.mir
-    for _, m in ipairs(group_members(host.sym)) do
-      if m ~= host_uid then
-        local px, py, pz, yaw2, pitch2, roll2 = mirrorPose(hub, host.mir, src.x, src.y, src.z,
-          src.yaw, src.pitch, src.roll)
-        uids[#uids + 1] = spawn_part(src.id, px, py, pz, yaw2, m, nil, pitch2, roll2, src.att, gid, host.mir)
-      end
-    end
-    if #undo_stack > 0 and undo_stack[#undo_stack].type == "place"
-      and undo_stack[#undo_stack].uid == placed_uid then
-      table.remove(undo_stack)
-    end
-    push_undo({ type = "place_group", uids = uids })
-    hint("mirrored to the other side", 2.0)
-    return
-  end
-  for _, m in ipairs(group_members(host.sym)) do
-    if m ~= host_uid then
-      local da = angle_about(hub, parts[m]) - a0
-      local vx, vy, vz = rot_about(hub, src.x - hub.x, src.y - hub.y, src.z - hub.z, da)
-      local px, py, pz = hub.x + vx, hub.y + vy, hub.z + vz
-      local yaw2, pitch2, roll2 = wrap_angle(src.yaw + da), src.pitch, src.roll
-      if src.def.radial and src.att == "radial" then
-        local ox, oy, oz = px - parts[m].x, py - parts[m].y, pz - parts[m].z
-        local ol = math.sqrt(ox * ox + oy * oy + oz * oz)
-        if ol > 1e-4 then
-          pitch2, roll2 = outward_orient(ox / ol, oy / ol, oz / ol)
-          yaw2 = 0
-        end
-      elseif src.def.radial_orient and src.att == "radial" then
-        -- A fin mirrored onto another flank: re-face its blade outward there.
-        yaw2, pitch2, roll2 = math.atan2(-(pz - parts[m].z), px - parts[m].x), 0, 0
-      end
-      uids[#uids + 1] = spawn_part(src.id, px, py, pz, yaw2, m, nil,
-                                   pitch2, roll2, src.att, gid)
-    end
-  end
-  -- One undo op covers the whole mirrored set (replace the single-place op).
-  if #undo_stack > 0 and undo_stack[#undo_stack].type == "place"
-    and undo_stack[#undo_stack].uid == placed_uid then
-    table.remove(undo_stack)
-  end
-  push_undo({ type = "place_group", uids = uids })
-  hint(string.format("mirrored ×%d across the ring", #uids), 2.0)
-end
+-- (Copies are laid out by `symCopies` and placed by `placeCopies`, above.)
 
 local function cancel_ghost()
   if not ghost then return end
@@ -2549,6 +3114,8 @@ local function save_blueprint()
       -- a wheel's settings, defaults left out (WHEEL SETTINGS)
       wcfg = (d.wheel and wcfgs[uid] and next(wcfgs[uid])) and copy_wcfg(wcfgs[uid]) or nil,
       robo = d.robo or "", claw = d.claw and 1 or 0, mir = p.mir or "",
+      -- the face it is mounted on, in its host's frame (what SPACE resets to)
+      anx = p.an and p.an.x or nil, any = p.an and p.an.y or nil, anz = p.an and p.an.z or nil,
       -- ELECTRONICS: every module the part carries (declared + implied by its
       -- flags), so the flight never has to know a part by name to power it,
       -- link it or offer its actions.
@@ -2619,6 +3186,10 @@ local function refit_chutes(list)
 end
 
 local function load_blueprint()
+  -- Spawns are asynchronous: a second load (F5 seen twice at uneven frame
+  -- pacing) before the first one's parts land can't remove them yet, and the
+  -- craft came back doubled — two of every part, one of them not in `parts`.
+  if pending_spawns > 0 then return end
   local bp = save.get("shipyard.blueprint")
   if not bp or not bp.parts then return end
   refit_chutes(bp.parts)
@@ -2652,6 +3223,7 @@ local function load_blueprint()
       fshapes[d.uid] = { secs = secs_unflat(d.fsec), closed = (d.fclosed or 1) ~= 0,
                          split = (d.fsplit == 3) and 3 or 2 }
     end
+    if d.anx and d.any and d.anz then copyNormal[d.uid] = { x = d.anx, y = d.any, z = d.anz } end
     spawn_part(d.id, d.x, d.y + params.floor_y, d.z, d.yaw,
                d.parent ~= 0 and d.parent or nil, d.uid, d.pitch, d.roll,
                d.att ~= "" and d.att or nil,
@@ -3562,8 +4134,52 @@ local function handle_staging(clicked, lmb, grab_mode)
   return stage_drag or in_panel
 end
 
+-- THE MODES, always on screen (bottom centre): symmetry as a row of chips —
+-- OFF ×2 ×3 ×4 ×6 ×8 and MIRROR, the live one lit (X / SHIFT+X, M) — and what
+-- the rotation keys turn about (C), with the keys themselves while they work.
+function drawModes()
+  if not draw.rect then return end
+  local k, sh = screen_k()
+  local sw = (camera.screenSize and camera.screenSize()) or 1280
+  local chips = { { "OFF", not sym_mirror and sym_n == 1 } }
+  for _, n in ipairs(SYM_STEPS) do
+    if n > 1 then chips[#chips + 1] = { "×" .. n, not sym_mirror and sym_n == n } end
+  end
+  chips[#chips + 1] = { "MIRROR", sym_mirror }
+  local cw, ch, gap = 44 * k, 22 * k, 4 * k
+  local wide = 64 * k
+  local total = 0
+  for _, c in ipairs(chips) do total = total + ((#c[1] > 3) and wide or cw) + gap end
+  local label_w = 112 * k
+  local x = sw * 0.5 - (total + label_w) * 0.5
+  local y = sh - 98 * k
+  srect(x - 8 * k, y - 6 * k, total + label_w + 12 * k, ch + 12 * k, 0.05, 0.07, 0.09, 0.78, 6 * k)
+  stext(x, y + 4 * k, "SYMMETRY  X", 13 * k, 0.75, 0.82, 0.88, 1.0)
+  x = x + label_w
+  for _, c in ipairs(chips) do
+    local w = (#c[1] > 3) and wide or cw
+    if c[2] then
+      srect(x, y, w, ch, 1.0, 0.62, 0.22, 0.95, 4 * k)
+      stext(x + w * 0.5, y + 4 * k, c[1], 13 * k, 0.08, 0.06, 0.04, 1.0, "center")
+    else
+      srect(x, y, w, ch, 0.22, 0.25, 0.28, 0.85, 4 * k)
+      stext(x + w * 0.5, y + 4 * k, c[1], 13 * k, 0.75, 0.78, 0.8, 1.0, "center")
+    end
+    x = x + w + gap
+  end
+  local sel = selected_uid and parts[selected_uid]
+  local rot = "ROTATE about the " .. ((ROT_FRAME == "camera") and "CAMERA" or "PART") .. "  (C)"
+  if ghost or (sel and tool == "rotate") then
+    rot = rot .. "   ·   W/S pitch  A/D yaw  Q/E roll  (SHIFT 15°)   R spin   SPACE reset"
+  elseif sel then
+    rot = rot .. "   ·   R spin   SPACE reset   ·   2 = rotate tool"
+  end
+  stext(sw * 0.5, y + ch + 12 * k, rot, 12 * k, 0.7, 0.78, 0.86, 0.95, "center")
+end
+
 function update(node, dt)
   draw_engineering()
+  drawModes()
   roundTwoTick()
   fit_header()
   -- One shared click edge for the whole frame.
@@ -3607,8 +4223,8 @@ function update(node, dt)
     sym_n = SYM_STEPS[idx]
     sym_mirror = false
     hint(sym_n > 1
-      and ("symmetry ×" .. sym_n .. " — a radial placement rings the hull")
-      or "symmetry off", 2.0)
+      and ("symmetry ×" .. sym_n .. " — a placement on a flank or face rings the hull, and one on a ring member copies to the whole ring")
+      or "symmetry OFF — every placement is a single part", 2.5)
     refresh_stats()
   end
 
@@ -3622,6 +4238,8 @@ function update(node, dt)
   if handle_staging(clicked, lmb, grab_mode) then return end
   -- The ACTION GROUPS tool's panel: same rule (a global, for the same reason).
   if groupsPanelTick(clicked) then return end
+  -- W/A/S/D/Q/E · R · SPACE · C: the part in hand, or the selection.
+  rotKeysTick(cam_busy)
 
   -- Self-heal: never let a bad ghost wedge the builder.
   if ghost then
@@ -3639,24 +4257,8 @@ function update(node, dt)
 
   -- ── Ghost follows the cursor ──
   if ghost and (ghost.node or ghost.carried) then
-    local snap = find_snap()
-    local x, y, z
-    if snap then
-      x, y, z = snapPlace(snap) -- the ghost-centre (and turn) this snap implies
-    else
-      x, y, z = free_pos()
-    end
-    if ghost.carried then
-      local root = parts[ghost.from_uid]
-      local dx, dy, dz = x - root.x, y - root.y, z - root.z
-      for _, m in ipairs(ghost.carried) do
-        local p = parts[m.uid]
-        if p then set_part_pos(p, p.x + dx, p.y + dy, p.z + dz) end
-      end
-    elseif ghost.node then
-      ghost.node.x, ghost.node.y, ghost.node.z = x, y, z
-      ghost.node.yaw, ghost.node.pitch, ghost.node.roll = ghost.yaw, ghost.pitch, ghost.roll
-    end
+    -- snapped or free, turned by its mount and the player's keys (ghostFollow)
+    local snap, x, y, z = ghostFollow()
 
     -- Telegraphs (in-game draw.* layer): EVERY free attach node shows as a
     -- ring while a part is in hand; the captured one goes bright green with a
@@ -3697,9 +4299,8 @@ function update(node, dt)
     local free_ok = (partCount == 0) or (ghost.carried and #ghost.carried >= partCount)
         or input.key("alt")
     local can_place, why
-    -- Symmetry ring this placement would make: a fresh ×N ring on a plain
-    -- radial snap (never on a ring member — those AUTO-mirror instead).
-    local sym_slots = nil
+    -- The copies symmetry would make — only while symmetry is ON (symCopies).
+    local sym_slots, sym_kind = nil, nil
     if snap then
       local ex2 = { [snap.uid] = true }
       if exclude then for u in pairs(exclude) do ex2[u] = true end end
@@ -3717,14 +4318,8 @@ function update(node, dt)
         draw.ring(snap.x, snap.y, snap.z, snap.dx or 0, snap.dy or 1, snap.dz or 0, 0.4, 0.3, 1.0, 0.4, 1.0)
       end
       if can_place and not ghost.carried then
-        sym_slots = symSlots(parts[snap.uid], snap, x, y, z)
-        if sym_slots then
-          for _, s in ipairs(sym_slots) do
-            -- Radial ring copies hug the hull too — preview only, no gate.
-            local bx3, by3, bz3 = eff_extents(ghost.def, s.yaw, s.pitch, s.roll)
-            draw.box(s.x, s.y, s.z, bx3, by3, bz3, s.yaw, 1.0, 0.75, 0.3, 0.55)
-          end
-        end
+        sym_slots, sym_kind = symCopies(snap, x, y, z, ghost.B or IDENT, ghost.n)
+        drawCopies(sym_slots) -- a ghost preview of every copy
       end
     elseif free_ok then
       if overlaps(ghost.def, x, y, z, exclude, ghost.yaw, ghost.pitch, ghost.roll) then
@@ -3759,47 +4354,15 @@ function update(node, dt)
       return
     end
 
-    if rot_input(ghost) then
-      local gn = ghost.carried and parts[ghost.from_uid].node or ghost.node
-      if gn then gn.yaw, gn.pitch, gn.roll = ghost.yaw, ghost.pitch, ghost.roll end
-      if ghost.carried then
-        local r = parts[ghost.from_uid]
-        if r then r.yaw, r.pitch, r.roll = ghost.yaw, ghost.pitch, ghost.roll end
-      end
-    end
     if input.pressed("escape") then cancel_ghost() return end
     if not cam_busy and clicked then
       if can_place then
         local host_uid = snap and snap.uid or nil
-        local host = host_uid and parts[host_uid]
-        -- Placing ON a ring member auto-mirrors across its whole ring;
-        -- sym_slots means a fresh ×N ring around a plain host.
-        local on_ring = (host and host.sym and not ghost.carried) or false
-        local gdata = sym_slots and { id = ghost.id } or nil
-        local gid = nil
-        if sym_slots then
-          next_sym = next_sym + 1
-          gid = next_sym
-        end
-        local placed = place_ghost(x, y, z, host_uid, snap and snap.side or nil, gid)
+        local n_mount = ghost.n
+        local placed = place_ghost(x, y, z, host_uid, snap and snap.side or nil, nil)
         selected_uid = placed -- the freshly placed part becomes the selection
-        if sym_slots and placed then
-          local uids = { placed }
-          local mir = sym_slots[1] and sym_slots[1].mir
-          if mir and parts[placed] then parts[placed].mir = mir end
-          for _, s in ipairs(sym_slots) do
-            uids[#uids + 1] = spawn_part(gdata.id, s.x, s.y, s.z, s.yaw,
-                                         host_uid, nil, s.pitch, s.roll, snap.side, gid, s.mir)
-          end
-          -- The ring un-places as ONE undo op.
-          if #undo_stack > 0 and undo_stack[#undo_stack].type == "place"
-            and undo_stack[#undo_stack].uid == placed then
-            table.remove(undo_stack)
-          end
-          push_undo({ type = "place_group", uids = uids })
-          hint(string.format("×%d ring placed — CTRL+Z removes it all", #uids), 2.5)
-        elseif on_ring and placed then
-          mirror_onto_ring(host_uid, placed)
+        if sym_slots and #sym_slots > 0 and placed then
+          placeCopies(placed, sym_slots, sym_kind, n_mount)
         end
         -- DOCKING SEAM: ports work in PAIRS — one on each craft, stacked face
         -- to face. A single port welded into a stack is just a spacer and the
@@ -3894,25 +4457,10 @@ function update(node, dt)
         end
         hint("MOVE — drag the arrow  ·  SHIFT fine  ·  release to set", 1.0)
       else
-        -- Ring turn: horizontal+vertical drag turns about the ring's axis;
-        -- SHIFT snaps the accumulated angle to 15° notches.
-        local dang = (dmx - dmy) * 0.01
-        if dang ~= 0 then
-          if input.key("shift") then
-            gizmo_drag.acc = (gizmo_drag.acc or 0) + dang
-            local notch = math.pi / 12
-            local steps = math.floor(gizmo_drag.acc / notch + 0.5)
-            dang = steps * notch - (gizmo_drag.snapped or 0)
-            gizmo_drag.snapped = steps * notch
-          end
-          if dang ~= 0 then
-            local dy2 = (gizmo_drag.axis == 2) and dang or 0
-            local dp2 = (gizmo_drag.axis == 1) and dang or 0
-            local dr2 = (gizmo_drag.axis == 3) and dang or 0
-            apply_edit(gizmo_drag.uid, 0, 0, 0, dy2, dp2, dr2)
-          end
-        end
-        hint("ROTATE — drag the ring  ·  SHIFT snaps 15°  ·  release to set", 1.0)
+        -- Ring turn: the part follows the mouse round the ring (gizmoTurn).
+        local total = gizmoTurn(p, gizmo_drag, mx, my, dmx, dmy)
+        hint(string.format("ROTATE %+.0f°  ·  snaps %d°, SHIFT turns free  ·  release to set",
+          math.deg(total), math.floor(math.deg(ROT_SNAP) + 0.5)), 1.0)
       end
     end
     return
@@ -3936,10 +4484,12 @@ function update(node, dt)
     if tool == "move" or tool == "rotate" then
       giz_len, giz_rad = draw_gizmo(sel, tool)
       if clicked and not cam_busy then
-        local kind, ai = gizmo_hit(sel, tool, giz_len, giz_rad)
+        local kind, ai, gpt = gizmo_hit(sel, tool, giz_len, giz_rad)
         if kind then
           local mx, my = input.mouse()
-          gizmo_drag = { uid = selected_uid, kind = kind, axis = ai, lmx = mx, lmy = my }
+          local ka = gizmoAxes(sel, tool)[ai]
+          gizmo_drag = { uid = selected_uid, kind = kind, axis = ai, lmx = mx, lmy = my,
+                         k = { x = ka.x, y = ka.y, z = ka.z }, P = gpt, rad = giz_rad }
           return -- a gizmo grab never re-selects
         end
       end
@@ -3999,13 +4549,9 @@ function update(node, dt)
         ddz = (rzz >= 0 and 1 or -1) * h * step
       end
     end
-    local rot = { yaw = p.yaw or 0, pitch = p.pitch or 0, roll = p.roll or 0 }
-    local turned = rot_input(rot)
-    if ddx ~= 0 or ddy ~= 0 or ddz ~= 0 or turned then
-      apply_edit(selected_uid, ddx, ddy, ddz,
-        turned and (rot.yaw - (p.yaw or 0)) or 0,
-        turned and (rot.pitch - (p.pitch or 0)) or 0,
-        turned and (rot.roll - (p.roll or 0)) or 0)
+    -- (rotation keys: rotKeysTick, above)
+    if ddx ~= 0 or ddy ~= 0 or ddz ~= 0 then
+      apply_edit(selected_uid, ddx, ddy, ddz, 0, 0, 0)
     end
     -- DEL scraps the selection + its stack (a ring member takes the ring).
     if input.pressed("delete") or input.pressed("del") then
@@ -4028,6 +4574,7 @@ function update(node, dt)
   if input.key("ctrl") and input.pressed("z") then undo() end
   if input.key("ctrl") and input.pressed("s") then save_blueprint() end
   if input.pressed("f5") then load_blueprint() end
+  if input.pressed("l") and not input.key("ctrl") then toggleLaunchSite(); refresh_stats() end
   -- ESC LEAVES, once it has nothing nearer to cancel. The two `escape` handlers
   -- above this one take their turn first — a part on the cursor, a gizmo drag —
   -- so the key backs out one level at a time and only reaches the door when
@@ -4090,6 +4637,7 @@ function doLaunch()
   save_blueprint()
   ui("launch", 1.0)
   save.set("shipyard.launch", 1)
+  save.set("shipyard.site", launchSite())
   save.set("shipyard.pilot", 1) -- you launch IN the pod, not beside it
   save.flush()
   scene.load("system")

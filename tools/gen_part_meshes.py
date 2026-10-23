@@ -1102,25 +1102,35 @@ def part_fin():
     return m, (1, 1, 1)
 
 
+# The wing's hinge: where it folds against the hull for launch (part frame).
+SOLAR_HINGE_X = -0.30
+
+
 def part_solar():
-    """Solar array wing: a yoke at the hull (−X) and a cell blanket panel in
-    the X–Y plane. Real size 0.9 × 0.66 × 0.06 inside the builder's box."""
-    m = Model()
-    box(m, "Metal", (-0.41, 0, 0), (0.08, 0.16, 0.1), uv_m=4.0)
-    tube(m, "Metal", (-0.37, 0, 0), (-0.28, 0, 0), 0.02, segs=10)
-    # frame
-    x0, x1, yh = -0.28, 0.44, 0.33
-    box(m, "Metal", ((x0 + x1) / 2, yh, 0), (x1 - x0, 0.02, 0.025), uv_m=3.0)
-    box(m, "Metal", ((x0 + x1) / 2, -yh, 0), (x1 - x0, 0.02, 0.025), uv_m=3.0)
-    box(m, "Metal", (x0, 0, 0), (0.02, 2 * yh, 0.025), uv_m=3.0)
-    box(m, "Metal", (x1, 0, 0), (0.02, 2 * yh, 0.025), uv_m=3.0)
-    box(m, "Metal", ((x0 + x1) / 2, 0, 0), (0.012, 2 * yh, 0.02), uv_m=3.0)
-    # cell blankets both faces (front cells, back foil)
+    """Solar array wing on a yoke. Returns (yoke, wing): the yoke in the part
+    frame (hull at −X), the wing in its HINGE frame (the pin at the origin,
+    the panel out along +X in the X–Y plane, cells facing +Z). Real size
+    0.9 × 0.66 × 0.06 deployed, inside the builder's box. Uniform scale: the
+    old node scale (1.3, 0.12, 1.0) is gone, and the flight folds the wing
+    about its pin (SolarWingPivot yaw) instead of squashing the part flat
+    along X ("the solar panels are squished", 2026-10-23)."""
+    yoke = Model()
+    box(yoke, "Metal", (-0.41, 0, 0), (0.08, 0.16, 0.1), uv_m=4.0)
+    tube(yoke, "Metal", (-0.37, 0, 0), (SOLAR_HINGE_X - 0.012, 0, 0), 0.02, segs=10)
+    tube(yoke, "Metal", (SOLAR_HINGE_X, -0.07, 0), (SOLAR_HINGE_X, 0.07, 0), 0.022, segs=12)  # hinge knuckle
+    wing = Model()
+    x0, x1, yh = 0.02, 0.74, 0.33
+    box(wing, "Metal", (0.01, 0, 0), (0.02, 0.12, 0.03), uv_m=4.0)                           # hinge leaf
+    box(wing, "Metal", ((x0 + x1) / 2, yh, 0), (x1 - x0, 0.02, 0.025), uv_m=3.0)
+    box(wing, "Metal", ((x0 + x1) / 2, -yh, 0), (x1 - x0, 0.02, 0.025), uv_m=3.0)
+    box(wing, "Metal", (x0, 0, 0), (0.02, 2 * yh, 0.025), uv_m=3.0)
+    box(wing, "Metal", (x1, 0, 0), (0.02, 2 * yh, 0.025), uv_m=3.0)
+    box(wing, "Metal", ((x0 + x1) / 2, 0, 0), (0.012, 2 * yh, 0.02), uv_m=3.0)
     for sgn, mat in ((1, "Solar"), (-1, "Foil")):
         P = [(x0, yh, sgn * 0.006), (x1, yh, sgn * 0.006), (x1, -yh, sgn * 0.006), (x0, -yh, sgn * 0.006)]
         UV = [(0, 0), ((x1 - x0) * 4, 0), ((x1 - x0) * 4, 2 * yh * 4), (0, 2 * yh * 4)]
-        m.add(mat, P, [(0, 0, sgn)] * 4, UV, [(0, 1, 2), (0, 2, 3)])
-    return m, (1.3, 0.12, 1.0)
+        wing.add(mat, P, [(0, 0, sgn)] * 4, UV, [(0, 1, 2), (0, 2, 3)])
+    return yoke, wing
 
 
 def part_dish():
@@ -1336,7 +1346,6 @@ PARTS = {
     "cargo":      (part_cargo, "PartCargo"),
     "radial_tank": (part_radial_tank, "PartRadialTank"),
     "aero_fin":   (part_fin, "PartFins"),
-    "solar":      (part_solar, "PartSolar"),
     "dish":       (part_dish, "PartDish"),
     "chute":      (part_chute, "PartChute"),
     "probe_core": (part_probe, "PartProbe"),
@@ -2245,12 +2254,36 @@ def build_new_parts(dry=False, only=()):
             write_prefab("PartDrill", "CORE DRILL — on a flank (+X out); the Bit lowers 0.5 m and spins.",
                          None, (0.2, 0.6, 0.2), 0.12,
                          children=[("Housing", "drill_body", dm, dc), ("Bit", "drill_bit", bm, bc)])
+    if want("solar"):
+        yoke, wing = part_solar()
+        ym, yc = mesh("solar", yoke)
+        wm, wc = mesh("solar_wing", wing)
+        if not dry:
+            pivot = f"""    (
+        name: "SolarWingPivot",
+        transform: (
+            translation: ({SOLAR_HINGE_X}, 0.0, 0.0),
+            // Deployed (yaw 0). Flight folds it to yaw +90° — the wing flat
+            // along the hull, cells out — and swings it open (vessel_controller).
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+        parent: Some(0),
+    ),
+{prefab_node("SolarWing", "solar_wing", wm, wc, 2)}"""
+            write_prefab("PartSolar", "SOLAR PANEL — a radial blade (+X out off the flank, like a fin): a Yoke on"
+                         " the hull and a cell Wing hinged to it (SolarWingPivot). Flight folds the wing"
+                         " flat along the hull for launch and swings it open on Deploy (U).",
+                         None, (0.45, 0.34, 0.05), 0.05,
+                         children=[("SolarYoke", "solar", ym, yc)], tail_nodes=pivot)
     return ok
 
 
 ROUND2_KEYS = ("strut1", "strut2", "strut3", "beam1", "beam2", "ibeam2", "ibeam3", "panel1", "panel2",
                "panel3", "plate", "hub", "adapter", "rover_body", "fairing_s", "fairing_m", "wheel_s",
-               "wheel_m", "wheel_l", "hinge", "piston", "rotor", "claw", "drill")
+               "wheel_m", "wheel_l", "hinge", "piston", "rotor", "claw", "drill", "solar")
 
 
 def main():
