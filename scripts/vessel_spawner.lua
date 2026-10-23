@@ -5,6 +5,13 @@
 -- and CLAMPS it (anchored) until the pilot releases. The blueprint is
 -- self-contained — no builder registry here.
 --
+-- WHERE. A save with a spaceport (base_facilities layout 2) launches from
+-- it: `shipyard.site` (the builder's choice) is "pad" — Launch Complex 1's
+-- mount, where the hold-down posts (PadClamps) go down on the deck — or
+-- "runway" — the threshold of the runway, the craft's front turned down it,
+-- standing on the ground. A save without one (or a launch from anywhere the
+-- base is not) keeps the old way: a Launchpad dropped beside the crew.
+--
 -- Planets are ROUND and they ORBIT: everything here is positioned RELATIVE to
 -- the dominant body's live rails position. The launchpad spawns PARENTED to
 -- the planet node (it rides the orbit through the transform hierarchy; the
@@ -146,6 +153,7 @@ end
 -- be streamed in yet — spawning early drops the vessel through the world.
 local want_spawn = false
 local bp = nil
+local site_kind = "pad"
 local wait_t = 0.0
 local last_note = 0.0
 
@@ -155,6 +163,7 @@ function start(node)
     return
   end
   save.set("shipyard.launch", 0)
+  site_kind = save.get("shipyard.site") == "runway" and "runway" or "pad"
   bp = save.get("shipyard.blueprint")
   if not bp or not bp.parts then
     save.set("shipyard.pilot", 0)
@@ -162,6 +171,136 @@ function start(node)
   end
   want_spawn = true
   log("launch: vessel blueprint aboard — waiting for the pad terrain…")
+end
+
+
+-- The craft's FRONT in its own frame (level, x–z), the rule vessel_controller
+-- drives by (r2FrontOf): a rover body's or a seat's +X, else the command
+-- part's +X, else the vessel's +X.
+local function craft_front(parts)
+  local best, bu
+  local function level(d)
+    local cy, sy = math.cos(d.yaw or 0), math.sin(d.yaw or 0)
+    local cx, sx = math.cos(d.pitch or 0), math.sin(d.pitch or 0)
+    local cz, sz = math.cos(d.roll or 0), math.sin(d.roll or 0)
+    local X1, X3 = cy * cz + sy * sx * sz, -sy * cz + cy * sx * sz
+    local l = math.sqrt(X1 * X1 + X3 * X3)
+    if l < 0.5 then return nil end
+    return X1 / l, X3 / l
+  end
+  for _, d in pairs(parts or {}) do
+    if (d.front or 0) == 1 or (d.seat or 0) == 1 or d.seat == true then
+      if not bu or (d.uid or 0) < bu then
+        local fx, fz = level(d)
+        if fx then best, bu = { fx, fz }, d.uid or 0 end
+      end
+    end
+  end
+  if best then return best[1], best[2] end
+  for _, d in pairs(parts or {}) do
+    if d.kind == "pod" or d.kind == "probe" or d.kind == "command" then
+      local fx, fz = level(d)
+      if fx then return fx, fz end
+    end
+  end
+  return 1, 0
+end
+
+-- The node's −Z (setUp's forward) that turns a craft whose front is (fx, fz)
+-- in its own frame to face world direction D, standing on `up`: the vessel's
+-- +X goes along D rotated back by the front's own angle about up.
+local function facing_for(up, D, fx, fz)
+  local a = math.atan2(fz, fx)            -- the front's angle from +X toward +Z
+  -- in the vessel frame +Z = X × up; a world direction rotated about `up` by
+  -- −a from D is where +X must point
+  local ux, uy, uz = up.x, up.y, up.z
+  local function rot(vx, vy, vz, ang)
+    local c, s = math.cos(ang), math.sin(ang)
+    local kx, ky, kz = uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx
+    local k = ux * vx + uy * vy + uz * vz
+    return vx * c + kx * s + ux * k * (1 - c), vy * c + ky * s + uy * k * (1 - c), vz * c + kz * s + uz * k * (1 - c)
+  end
+  for _, sg in ipairs({ 1, -1 }) do
+    local xx, xy, xz = rot(D.x, D.y, D.z, sg * a)
+    -- +Z = X × up
+    local zx, zy, zz = xy * uz - xz * uy, xz * ux - xx * uz, xx * uy - xy * ux
+    local fwx, fwy, fwz = xx * fx + zx * fz, xy * fx + zy * fz, xz * fx + zz * fz
+    if fwx * D.x + fwy * D.y + fwz * D.z > 0.999 then
+      return vec3(-zx, -zy, -zz)          -- setUp's forward is the node's −Z
+    end
+  end
+  return vec3(-D.x, -D.y, -D.z)
+end
+
+-- LAUNCH FROM THE SPACEPORT. Returns true once the craft is on its way, false
+-- to wait (terrain not in yet), nil when this save has no spaceport here.
+local function try_spaceport()
+  local bf = findScript("base_facilities")
+  local st = bf and bf.launchSite and bf.launchSite(site_kind)
+  if not st then return nil end
+  local body = space.body(st.body)
+  if not body then return nil end
+  local crew = find("Astronaut")
+  if crew then
+    local dx, dy, dz = crew.x - body.x, crew.y - body.y, crew.z - body.z
+    if dx * dx + dy * dy + dz * dz > (body.soi or 1e9) ^ 2 then return nil end
+  end
+  terrain.warm(st.body)
+  local up = st.up
+  -- The terrain must be in: a ray down at the site from 40 m up.
+  local gx, gy, gz = body.x + st.x, body.y + st.y, body.z + st.z
+  local hit = raycast(gx + up.x * 40, gy + up.y * 40, gz + up.z * 40, -up.x, -up.y, -up.z, 120.0)
+  if not (hit and hit.distance) then
+    if wait_t - (last_note or 0) > 5.0 then
+      last_note = wait_t
+      log(string.format("launch: waiting for the %s's ground… (%.0fs)", st.kind, wait_t))
+    end
+    return false
+  end
+  body_name = st.body
+  local planet_node = find(body_name)
+  local deck = st.deck and 1.24 or 0.0
+  local relg = { x = st.x, y = st.y, z = st.z }
+  local fo = findScript("flight_ops")
+  if fo and fo.rerateAtPad then
+    local cm, mt = 0.0, 0.0
+    for _, d in pairs(bp.parts or {}) do
+      local m = d.mass or 0
+      cm, mt = cm + m * (d.y or 0), mt + m
+    end
+    local h = deck * 2.0 + params.clear + (mt > 0 and math.max(0, cm / mt) or 0)
+    local rb = fo.rerateAtPad(bp, body_name, gx + up.x * h, gy + up.y * h, gz + up.z * h)
+    if rb then bp = rb; save.set("shipyard.blueprint", bp) end
+  end
+  local fwd = nil
+  if st.kind == "runway" then
+    local fx, fz = craft_front(bp.parts)
+    fwd = facing_for(up, st.fwd, fx, fz)
+  end
+  local function vessel()
+    local b2 = space.body(body_name) or body
+    local h = deck * 2.0 + params.clear
+    local vx, vy, vz = b2.x + relg.x + up.x * h, b2.y + relg.y + up.y * h, b2.z + relg.z + up.z * h
+    relv = { x = vx - b2.x, y = vy - b2.y, z = vz - b2.z }
+    spawn("Vessel", vec3(vx, vy, vz), function(v)
+      if fwd then v:setUp(vec3(up.x, up.y, up.z), fwd) else v:setUp(vec3(up.x, up.y, up.z)) end
+      vessel_node = v
+      spawn_parts(v, bp)
+    end)
+  end
+  if st.deck then
+    -- the hold-down posts on the mount: the same deck box the Launchpad had
+    spawn("PadClamps", vec3(gx + up.x * deck, gy + up.y * deck, gz + up.z * deck), function(lp)
+      lp:setUp(vec3(up.x, up.y, up.z), vec3(-st.fwd.x, -st.fwd.y, -st.fwd.z))
+      if planet_node then lp.x, lp.y, lp.z = relg.x + up.x * deck, relg.y + up.y * deck, relg.z + up.z * deck end
+      vessel()
+    end, planet_node)
+    log("launch: Launch Complex 1 — the hold-downs are on, vessel assembling")
+  else
+    vessel()
+    log("launch: rolled out to the runway threshold, vessel assembling")
+  end
+  return true
 end
 
 local function try_spawn()
@@ -173,6 +312,8 @@ local function try_spawn()
   -- moved to the base (game_manager launch_site) the frame loading ends.
   local gm = findScript("game_manager")
   if gm and gm.loading then return false end
+  local sp = try_spaceport()
+  if sp ~= nil then return sp end
   -- Site reference read FRESH each attempt: the crew's own position, which is
   -- where a launch rolls out from.
   local pad = find("Astronaut")

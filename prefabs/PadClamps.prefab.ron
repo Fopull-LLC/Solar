@@ -1,0 +1,54 @@
+// PAD CLAMPS — the hold-down posts vessel_spawner drops on Launch Complex 1's mount for a launch.
+// The root collider is the old Launchpad deck box: its top is 1.245 over the origin (deck = 1.24).
+// Written by tools/gen_base.py — edit the generator, not this file.
+[
+    (
+        name: "PadClamps",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+        rigidbody: Some((
+            boxed: true,
+            mode: Static,
+            radius: 0.5,
+            height: 1.0,
+            half_extents: (2.5500, 1.2450, 2.1700),
+            restitution: 0.0,
+            friction: 0.9,
+            gravity: false,
+            lock_pos: (false, false, false),
+            lock_rot: (false, false, false),
+        )),
+    ),
+    (
+        name: "Clamp Posts",
+        transform: (
+            translation: (0.0, 1.495, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Mesh(
+            asset_path: "models/base/pad_clamps.glb",
+        ),
+        object_materials: {
+            "Steel": (
+                color: (1.0, 1.0, 1.0),
+                texture: Some("textures/base/steel_albedo.png"),
+                normal_map: Some("textures/base/steel_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/base/steel_orm.png"),
+                roughness: 1.0,
+                metallic_map: Some("textures/base/steel_orm.png"),
+                metallic: 1.0,
+                ao_map: Some("textures/base/steel_orm.png"),
+                shading: Physical,
+            ),
+        },
+        scripts: [],
+        parent: Some(0),
+    ),
+]

@@ -35,23 +35,23 @@
 defaults = { radius = 16.0 }
 
 local FAC = {
-  -- near = prompt reach in metres, from the ORIGIN — so it has to clear the
-  -- building's own half-diagonal before it clears any ground. At the current
-  -- scales the command centre is 12 × 18 m on the ground (half-diagonal 10.8),
-  -- the assembly frame 10 × 10, the depot 8 × 8; the plant and the dish are
-  -- machines you stand beside.
+  -- near = prompt reach in metres, from the prefab ORIGIN — which the engine
+  -- puts at the middle of each model's box, so it stands well up in the air
+  -- (13.9 m in the 21 m VAB) and off the lot centre where a stair tower or a
+  -- crane makes the box lopsided (tools/gen_base.py prints both). The reach
+  -- has to clear the building's half-diagonal AND that height.
   --
-  -- inside = the building's own half-width: closer than this you are standing
-  -- IN it, and "Enter the Command Centre" is an odd thing to be told there.
-  -- `use` is what the prompt says instead. The dish is a machine — you stand
-  -- beside it, so it only ever names itself.
-  FacCommand  = { label = "Command Centre",   kind = "command",  near = 20.0,
-                  inside = 6.5, use = "Use the Ops console", direct = "Ops Board" },
-  FacHangar   = { label = "Vehicle Assembly", kind = "hangar",   near = 17.0,
-                  inside = 5.0, use = "Open the builder", direct = "builder" },
-  FacTracking = { label = "Tracking Station", kind = "tracking", near = 13.0 },
-  FacDepot    = { label = "Commerce Depot",   kind = "depot",    near = 15.0,
-                  inside = 4.0, use = "Use the depot counter" },
+  -- inside = closer than this you are standing IN it, and "Enter the …" is
+  -- an odd thing to be told there; `use` is what the prompt says instead.
+  -- Measured from the origin too: at the VAB's floor you are never nearer
+  -- than 12.9 m to it. The dish is a machine — it only names itself.
+  FacCommand  = { label = "Command Centre",   kind = "command",  near = 22.0,
+                  inside = 9.2, use = "Use the Ops console", direct = "Ops Board" },
+  FacHangar   = { label = "Vehicle Assembly", kind = "hangar",   near = 26.0,
+                  inside = 15.5, use = "Open the builder", direct = "builder" },
+  FacTracking = { label = "Tracking Station", kind = "tracking", near = 18.0 },
+  FacDepot    = { label = "Commerce Depot",   kind = "depot",    near = 18.0,
+                  inside = 7.6, use = "Use the depot counter" },
 }
 
 -- A node's WORLD position: its own coordinates plus every ancestor's. The

@@ -1,0 +1,19 @@
+// BASE FLOOD — an apron floodlight's light (scripts/base_facilities.lua aims it with lookAt).
+// Written by tools/gen_base.py — edit the generator, not this file.
+[
+    (
+        name: "BaseFlood",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: PointLight(
+            color: (1.0, 0.88, 0.70),
+            intensity: 5.0,
+            range: 70.0,
+            spot: Some((angle: 42.0, softness: 0.4)),
+        ),
+        scripts: [],
+    ),
+]

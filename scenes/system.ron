@@ -13,38 +13,28 @@
         shadow_quantize: 0,
         shadow_dither: false,
         shadow_distance: 400.0,
-        // SHADOW MAP for the home star. Without it every lit pixel marches a
-        // ray through the distance field, and a pixel's cost grew with the box
-        // colliders around it. Inside the command centre that was the whole
-        // frame (25 ms of lighting against 9 outside). The map is drawn once
-        // from the star (about 0.3 ms), and every pixel then costs the same
-        // indoors or out. Stars mode reads it for star 0 only (engine 0.109.1).
         shadow_map: true,
-        // FOG. This was 40 → 200, which is a corridor: on a world you can walk
-        // around in ten minutes, everything past a couple of hundred metres was
-        // a flat grey wall. It was doing real work — it hid the terrain
-        // streamer's pop-in (floptle/0067) — but it hid the planet with it, and
-        // a body whose horizon you cannot see has no scale.
-        //
-        // Pushed out to where it reads as distance rather than as a limit, and
-        // tinted toward the sky so the far ground meets the horizon instead of
-        // ending at it.
-        //
-        // It also has to BRACKET the rock field. The scattered rock draws to
-        // ~190 m (its residency is quadratic in that number — see
-        // mineral_field.lua), and in perfectly clear air the edge of the field
-        // is a circle you can see. The ramp starts well inside it so the last
-        // rocks are already hazing out. Fog is a per-fragment mix and nothing
-        // else — it is not a far plane and it culls nothing, so this is a look,
-        // not a budget.
-        fog_color: (0.52, 0.60, 0.72),
+        contact_length: 0.35,
+        contact_steps: 12,
+        contact_strength: 0.9,
+        reflection_distance: 30.0,
+        reflection_steps: 32,
+        reflection_thickness: 0.5,
+        reflection_clamp: 8.0,
+        refraction_layers: 2,
+        fog_color: (0.52, 0.6, 0.72),
         fog_start: 90.0,
         fog_end: 480.0,
         fog_dither_strength: 0.5,
-        // The sky inside an atmosphere is the engine's (0.116.1); the fog only
-        // seats the far ground into its horizon, and atmosphere.lua fades how
-        // much of the horizon it takes (fogSky) with the air, so a climb out
-        // of the air is a fade. Fog heights are altitudes over the planet.
+        fog_density: 0.02,
+        fog_height: 6.0,
+        fog_falloff: 8.0,
+        fog_noise: 0.5,
+        fog_noise_scale: 24.0,
+        fog_light: 1.0,
+        fog_anisotropy: 0.6,
+        fog_steps: 16,
+        fog_shafts: true,
         fog_sky: 0.0,
         fog_follows_body: true,
     ),
@@ -91,6 +81,8 @@
                 star_color: (0.72, 0.82, 1.0),
                 occluder_radius: 0.0,
             )),
+            id: Some(1),
+            parent_id: Some(25),
             parent: Some(24),
             tags: [
                 "genbody",
@@ -126,6 +118,8 @@
                 star_color: (1.0, 0.97, 0.9),
                 occluder_radius: 75.0,
             )),
+            id: Some(2),
+            parent_id: Some(25),
             parent: Some(24),
             tags: [
                 "genbody",
@@ -161,6 +155,8 @@
                 star_color: (1.0, 0.97, 0.9),
                 occluder_radius: 92.3,
             )),
+            id: Some(3),
+            parent_id: Some(25),
             parent: Some(24),
             tags: [
                 "genbody",
@@ -196,6 +192,8 @@
                 star_color: (1.0, 0.97, 0.9),
                 occluder_radius: 70.1,
             )),
+            id: Some(4),
+            parent_id: Some(25),
             parent: Some(24),
             tags: [
                 "genbody",
@@ -231,6 +229,8 @@
                 star_color: (1.0, 0.97, 0.9),
                 occluder_radius: 88.5,
             )),
+            id: Some(5),
+            parent_id: Some(25),
             parent: Some(24),
             tags: [
                 "genbody",
@@ -265,6 +265,8 @@
                 star_color: (1.0, 0.97, 0.9),
                 occluder_radius: 18.2,
             )),
+            id: Some(6),
+            parent_id: Some(25),
             parent: Some(24),
             tags: [
                 "genbody",
@@ -295,6 +297,8 @@
                 ambient: 1.0,
                 alpha: 1.0,
             )),
+            id: Some(7),
+            parent_id: Some(2),
             parent: Some(1),
             tags: [
                 "genbody",
@@ -325,6 +329,8 @@
                 ambient: 1.0,
                 alpha: 1.0,
             )),
+            id: Some(8),
+            parent_id: Some(3),
             parent: Some(2),
             tags: [
                 "genbody",
@@ -355,6 +361,8 @@
                 ambient: 1.0,
                 alpha: 1.0,
             )),
+            id: Some(9),
+            parent_id: Some(4),
             parent: Some(3),
             tags: [
                 "genbody",
@@ -385,6 +393,8 @@
                 ambient: 1.0,
                 alpha: 1.0,
             )),
+            id: Some(10),
+            parent_id: Some(5),
             parent: Some(4),
             tags: [
                 "genbody",
@@ -415,6 +425,8 @@
                 ambient: 1.0,
                 alpha: 1.0,
             )),
+            id: Some(11),
+            parent_id: Some(6),
             parent: Some(5),
             tags: [
                 "genbody",
@@ -433,6 +445,7 @@
                 tint: (0.004, 0.005, 0.012),
             ),
             scripts: [],
+            id: Some(12),
         ),
         (
             name: "Post Processing",
@@ -444,29 +457,20 @@
             matter: PostProcess(
                 enabled: true,
                 bloom: true,
-                // Only what is really brighter than white blooms: the star,
-                // emissives, a lightning bolt. At 0.3 the whole daytime sky
-                // was over the threshold, and its blurred copy laid over the
-                // frame was a veil of glare that washed every view out.
                 bloom_threshold: 1.0,
                 bloom_intensity: 0.25,
                 vignette: true,
                 vignette_strength: 0.4,
                 vignette_radius: 0.5,
-                // Screen-space, not Sdf: Sdf AO is the truer one but only SDF
-                // matter OCCLUDES in it, so every mesh in this game — the
-                // facilities, the ship, the crew — would cast no contact
-                // darkening at all and would sit on the ground like a decal.
-                // The whole scene is meshes standing on terrain, so the cheap
-                // pass is also the right one here.
                 ao: ScreenSpace,
                 ao_strength: 0.85,
                 ao_radius: 0.7,
                 posterize_bands: 0,
                 posterize_dither: false,
-                screen_shaders: [],
+                posterize_chroma: false,
             ),
             scripts: [],
+            id: Some(13),
         ),
         (
             name: "Astronaut",
@@ -480,32 +484,11 @@
                 (
                     kind: "planet_walker",
                     enabled: true,
-                    // Only the two that are REAL overrides. The other five just
-                    // repeated the script's defaults, which is how a params list
-                    // quietly becomes a second, stale copy of the tuning.
                     params: [
                         ("jump", 10.4),
                         ("run", 9.4),
                     ],
                 ),
-                // NO PARAMS. The list that used to be here pinned the laser to
-                // its ORIGINAL tuning — `laser_radius: 0.95`, `laser_rate: 0.3`,
-                // `laser_strength: 0.55`, plus a `laser_range` the script had
-                // stopped having at all — so every round of tuning done in the
-                // script was silently overridden in the only scene that matters.
-                //
-                // The damage was not just "it felt untuned". At 0.3 s between
-                // bites the bore advances 0.54 m, and a 0.95 x 0.55 brush carves
-                // a ball of radius 0.52: the balls DID NOT TOUCH. Holding the
-                // trigger left a string of separate pockets rather than a
-                // tunnel, and a collider full of gaps is what "the digging
-                // location alignment is incredibly glitchy and kind of offset"
-                // actually looks like from inside the game.
-                //
-                // Leave this empty. The script's `defaults` are the tuning, they
-                // carry the --@range annotations the Inspector needs, and the
-                // Inspector will write a params list back here the moment anyone
-                // deliberately overrides one.
                 (
                     kind: "tool_belt",
                     enabled: true,
@@ -521,9 +504,11 @@
                 friction: 0.3,
                 gravity: true,
                 lock_pos: (false, false, false),
+                two_d: false,
                 lock_rot: (false, false, false),
                 align_up: true,
             )),
+            id: Some(14),
         ),
         (
             name: "Camera 1",
@@ -543,6 +528,7 @@
                     params: [],
                 ),
             ],
+            id: Some(15),
         ),
         (
             name: "Ship HUD",
@@ -553,6 +539,7 @@
             ),
             matter: Empty,
             scripts: [],
+            id: Some(16),
             ui_layer: Some((
                 design_height: 720.0,
                 reference_width: 1280.0,
@@ -573,6 +560,8 @@
             ),
             matter: Empty,
             scripts: [],
+            id: Some(17),
+            parent_id: Some(41),
             parent: Some(40),
             ui: Some((
                 place: Free(
@@ -603,6 +592,8 @@
             ),
             matter: Empty,
             scripts: [],
+            id: Some(18),
+            parent_id: Some(16),
             parent: Some(15),
             ui: Some((
                 place: Pin(
@@ -624,6 +615,8 @@
             ),
             matter: Empty,
             scripts: [],
+            id: Some(19),
+            parent_id: Some(16),
             parent: Some(15),
             ui: Some((
                 place: Pin(
@@ -649,6 +642,8 @@
             ),
             matter: Empty,
             scripts: [],
+            id: Some(20),
+            parent_id: Some(16),
             parent: Some(15),
             ui: Some((
                 place: Pin(
@@ -674,6 +669,8 @@
             ),
             matter: Empty,
             scripts: [],
+            id: Some(21),
+            parent_id: Some(16),
             parent: Some(15),
             ui: Some((
                 place: Pin(
@@ -703,6 +700,8 @@
             ),
             matter: Empty,
             scripts: [],
+            id: Some(22),
+            parent_id: Some(16),
             parent: Some(15),
             ui: Some((
                 place: Pin(
@@ -732,6 +731,8 @@
             ),
             matter: Empty,
             scripts: [],
+            id: Some(23),
+            parent_id: Some(16),
             parent: Some(15),
             ui: Some((
                 place: Pin(
@@ -780,6 +781,7 @@
                     ],
                 ),
             ],
+            id: Some(24),
         ),
         (
             name: "Athosil System",
@@ -790,6 +792,7 @@
             ),
             matter: Empty,
             scripts: [],
+            id: Some(25),
             tags: [
                 "gensystem",
             ],
@@ -809,6 +812,7 @@
                     params: [],
                 ),
             ],
+            id: Some(26),
         ),
         (
             name: "Loading Screen",
@@ -819,6 +823,8 @@
             ),
             matter: Empty,
             scripts: [],
+            id: Some(27),
+            parent_id: Some(16),
             parent: Some(15),
             ui: Some((
                 place: Pin(
@@ -845,18 +851,14 @@
             ),
             matter: Empty,
             scripts: [],
+            id: Some(28),
+            parent_id: Some(16),
             parent: Some(15),
             ui: Some((
                 place: Pin(
                     anchor: Center,
                     offset: (0.0, 0.0),
                 ),
-                // Five lines' worth, not one. game_manager writes what the
-                // loader is actually doing, how long it has been doing it, and
-                // — on a save's first entry — that this load is the slow one
-                // because the world is being made from its seed. At 60 px high
-                // everything under the headline was simply clipped away, which
-                // is how a two-minute first load came to look like a hang.
                 size: (Fixed(880.0), Fixed(240.0)),
                 text: Some((
                     text: "ENTERING GALAXY …",
@@ -885,6 +887,8 @@
                     params: [],
                 ),
             ],
+            id: Some(29),
+            parent_id: Some(16),
             parent: Some(15),
             ui: Some((
                 place: Pin(
@@ -893,7 +897,7 @@
                 ),
                 size: (Fixed(112.0), Fixed(28.0)),
                 text: Some((
-                    text: "\u{2630}  MENU  \u{00B7}  ESC",
+                    text: "☰  MENU  ·  ESC",
                     size: 12.0,
                     color: (0.72, 0.86, 0.96, 1.0),
                     align: Center,
@@ -921,6 +925,7 @@
                     params: [],
                 ),
             ],
+            id: Some(30),
         ),
         (
             name: "Vessel HUD",
@@ -931,6 +936,8 @@
             ),
             matter: Empty,
             scripts: [],
+            id: Some(31),
+            parent_id: Some(16),
             parent: Some(15),
             ui: Some((
                 place: Pin(
@@ -962,6 +969,8 @@
             ),
             scripts: [],
             anim_controller: Some("animation_controllers/character"),
+            id: Some(32),
+            parent_id: Some(14),
             parent: Some(13),
         ),
         (
@@ -979,6 +988,7 @@
                     params: [],
                 ),
             ],
+            id: Some(33),
         ),
         (
             name: "Facilities Menu",
@@ -995,6 +1005,7 @@
                     params: [],
                 ),
             ],
+            id: Some(34),
         ),
         (
             name: "Facility Prompt",
@@ -1005,6 +1016,8 @@
             ),
             matter: Empty,
             scripts: [],
+            id: Some(35),
+            parent_id: Some(16),
             parent: Some(15),
             ui: Some((
                 place: Pin(
@@ -1029,6 +1042,7 @@
                         offset: (0.0, 5.0),
                         blur: 16.0,
                         spread: 1.0,
+                        inset: false,
                     )),
                 )),
                 visible: false,
@@ -1044,6 +1058,8 @@
             ),
             matter: Empty,
             scripts: [],
+            id: Some(36),
+            parent_id: Some(16),
             parent: Some(15),
             ui: Some((
                 place: Pin(
@@ -1068,6 +1084,7 @@
                         offset: (0.0, 12.0),
                         blur: 30.0,
                         spread: 3.0,
+                        inset: false,
                     )),
                 )),
                 visible: false,
@@ -1083,6 +1100,8 @@
             ),
             matter: Empty,
             scripts: [],
+            id: Some(37),
+            parent_id: Some(36),
             parent: Some(35),
             ui: Some((
                 place: Free(
@@ -1110,6 +1129,8 @@
             ),
             matter: Empty,
             scripts: [],
+            id: Some(38),
+            parent_id: Some(36),
             parent: Some(35),
             ui: Some((
                 place: Free(
@@ -1148,6 +1169,8 @@
                     ],
                 ),
             ],
+            id: Some(39),
+            parent_id: Some(83),
             parent: Some(82),
             ui: Some((
                 place: Free(
@@ -1190,6 +1213,8 @@
                     ],
                 ),
             ],
+            id: Some(40),
+            parent_id: Some(83),
             parent: Some(82),
             ui: Some((
                 place: Free(
@@ -1203,7 +1228,7 @@
                     border_color: (0.7, 0.45, 0.5, 0.7),
                 )),
                 text: Some((
-                    text: "Close  \u{00B7}  E",
+                    text: "Close  ·  E",
                     size: 13.0,
                     color: (0.95, 0.85, 0.85, 1.0),
                     align: Center,
@@ -1224,6 +1249,8 @@
             ),
             matter: Empty,
             scripts: [],
+            id: Some(41),
+            parent_id: Some(16),
             parent: Some(15),
             ui: Some((
                 place: Pin(
@@ -1243,12 +1270,6 @@
                 opacity: 0.97,
             )),
         ),
-        // ── PERIPHERALS CONSOLE (P while flying) ──────────────────────────────
-        // The ship's device console: every fitted peripheral and every docking
-        // port, each with its live state and a control you can click. The rows
-        // are generic — `peripheral_row` draws whatever the vessel reports as
-        // fitted, `dock_row` whatever ports it carries — so new hardware shows
-        // up here without touching this scene.
         (
             name: "Peripherals Panel",
             transform: (
@@ -1264,6 +1285,8 @@
                     params: [],
                 ),
             ],
+            id: Some(42),
+            parent_id: Some(16),
             parent: Some(15),
             ui: Some((
                 place: Pin(
@@ -1292,6 +1315,8 @@
             ),
             matter: Empty,
             scripts: [],
+            id: Some(43),
+            parent_id: Some(42),
             parent: Some(41),
             ui: Some((
                 place: Free(
@@ -1330,6 +1355,8 @@
                     ],
                 ),
             ],
+            id: Some(44),
+            parent_id: Some(42),
             parent: Some(41),
             ui: Some((
                 place: Free(
@@ -1372,6 +1399,8 @@
                     ],
                 ),
             ],
+            id: Some(45),
+            parent_id: Some(42),
             parent: Some(41),
             ui: Some((
                 place: Free(
@@ -1414,6 +1443,8 @@
                     ],
                 ),
             ],
+            id: Some(46),
+            parent_id: Some(42),
             parent: Some(41),
             ui: Some((
                 place: Free(
@@ -1456,6 +1487,8 @@
                     ],
                 ),
             ],
+            id: Some(47),
+            parent_id: Some(42),
             parent: Some(41),
             ui: Some((
                 place: Free(
@@ -1490,6 +1523,8 @@
             ),
             matter: Empty,
             scripts: [],
+            id: Some(48),
+            parent_id: Some(42),
             parent: Some(41),
             ui: Some((
                 place: Free(
@@ -1528,6 +1563,8 @@
                     ],
                 ),
             ],
+            id: Some(49),
+            parent_id: Some(42),
             parent: Some(41),
             ui: Some((
                 place: Free(
@@ -1573,6 +1610,8 @@
                     ],
                 ),
             ],
+            id: Some(50),
+            parent_id: Some(42),
             parent: Some(41),
             ui: Some((
                 place: Free(
@@ -1618,6 +1657,8 @@
                     ],
                 ),
             ],
+            id: Some(51),
+            parent_id: Some(42),
             parent: Some(41),
             ui: Some((
                 place: Free(
@@ -1663,6 +1704,8 @@
                     ],
                 ),
             ],
+            id: Some(52),
+            parent_id: Some(42),
             parent: Some(41),
             ui: Some((
                 place: Free(
@@ -1708,6 +1751,8 @@
                     ],
                 ),
             ],
+            id: Some(53),
+            parent_id: Some(42),
             parent: Some(41),
             ui: Some((
                 place: Free(
@@ -1715,7 +1760,7 @@
                 ),
                 size: (Fixed(332.0), Fixed(28.0)),
                 shape: Some((
-                    fill: (0.10, 0.22, 0.34, 0.92),
+                    fill: (0.1, 0.22, 0.34, 0.92),
                     radius: 5.0,
                     border: 1.0,
                     border_color: (0.4, 0.7, 0.86, 0.7),
@@ -1753,6 +1798,8 @@
                     ],
                 ),
             ],
+            id: Some(54),
+            parent_id: Some(42),
             parent: Some(41),
             ui: Some((
                 place: Free(
@@ -1760,7 +1807,7 @@
                 ),
                 size: (Fixed(332.0), Fixed(28.0)),
                 shape: Some((
-                    fill: (0.10, 0.20, 0.16, 0.92),
+                    fill: (0.1, 0.2, 0.16, 0.92),
                     radius: 5.0,
                     border: 1.0,
                     border_color: (0.4, 0.8, 0.6, 0.7),
@@ -1798,6 +1845,8 @@
                     ],
                 ),
             ],
+            id: Some(55),
+            parent_id: Some(42),
             parent: Some(41),
             ui: Some((
                 place: Free(
@@ -1843,6 +1892,8 @@
                     ],
                 ),
             ],
+            id: Some(56),
+            parent_id: Some(42),
             parent: Some(41),
             ui: Some((
                 place: Free(
@@ -1850,7 +1901,7 @@
                 ),
                 size: (Fixed(332.0), Fixed(28.0)),
                 shape: Some((
-                    fill: (0.10, 0.24, 0.16, 0.92),
+                    fill: (0.1, 0.24, 0.16, 0.92),
                     radius: 5.0,
                     border: 1.0,
                     border_color: (0.4, 0.78, 0.6, 0.7),
@@ -1888,6 +1939,8 @@
                     ],
                 ),
             ],
+            id: Some(57),
+            parent_id: Some(42),
             parent: Some(41),
             ui: Some((
                 place: Free(
@@ -1922,6 +1975,8 @@
             ),
             matter: Empty,
             scripts: [],
+            id: Some(58),
+            parent_id: Some(42),
             parent: Some(41),
             ui: Some((
                 place: Free(
@@ -1952,9 +2007,13 @@
                 (
                     kind: "company",
                     enabled: true,
-                    params: [],
+                    params: [
+                        ("start_funds", 99999.0),
+                    ],
+                    pinned_bools: Some([]),
                 ),
             ],
+            id: Some(59),
         ),
         (
             name: "Missions",
@@ -1971,12 +2030,8 @@
                     params: [],
                 ),
             ],
+            id: Some(60),
         ),
-        // ── OPS BOARD ─────────────────────────────────────────────────────────
-        // The contracts panel at the Command Centre: balance, standing, the
-        // contract on the books with its goals ticked, and every job you could
-        // sign next. The rows are described from the mission catalogue, so a new
-        // contract is a table entry in missions.lua and nothing here changes.
         (
             name: "Ops Board",
             transform: (
@@ -1992,11 +2047,9 @@
                     params: [],
                 ),
             ],
+            id: Some(61),
+            parent_id: Some(16),
             parent: Some(15),
-            // The FRAME only: where the board sits and how wide it is. Its
-            // contents — and its own glass, border and shadow — are described
-            // from Lua with `ui.make`, because the board shows however many
-            // contracts the mission catalogue is offering.
             ui: Some((
                 place: Pin(
                     anchor: Center,
@@ -2029,6 +2082,7 @@
                     params: [],
                 ),
             ],
+            id: Some(62),
         ),
         (
             name: "Inventory",
@@ -2042,16 +2096,10 @@
                 (
                     kind: "inventory",
                     enabled: true,
-                    // NO PARAMS — same reason as the Astronaut's two scripts.
-                    // This list pinned `suit_kg` to 45, which is the number the
-                    // script's own comment records as the bug: a pack that fills
-                    // in three seconds of trigger, so the mining laser reads as
-                    // broken long before the hole is deep enough to stand in.
-                    // The tuning was moved to 90 in `defaults` and this copy
-                    // quietly held it back. `base_kg` just repeated the default.
                     params: [],
                 ),
             ],
+            id: Some(63),
         ),
         (
             name: "Climate",
@@ -2068,6 +2116,7 @@
                     params: [],
                 ),
             ],
+            id: Some(64),
         ),
         (
             name: "Flora Gen",
@@ -2084,9 +2133,8 @@
                     params: [],
                 ),
             ],
+            id: Some(65),
         ),
-        // The scatter field. `budget` is the hard cap on live plant nodes —
-        // raise it on a strong machine, drop it if a forest ever costs frames.
         (
             name: "Flora Field",
             transform: (
@@ -2099,13 +2147,10 @@
                 (
                     kind: "flora_field",
                     enabled: true,
-                    // Every one of these echoed the script's own default except
-                    // `interval`, which pinned the field's update rate at the
-                    // OLD value and would have silently swallowed the frame-time
-                    // work below. See the note on tool_belt in this file.
                     params: [],
                 ),
             ],
+            id: Some(66),
         ),
         (
             name: "Research",
@@ -2122,9 +2167,8 @@
                     params: [],
                 ),
             ],
+            id: Some(67),
         ),
-        // The tool belt's one HUD line: what's equipped, what it's pointed at,
-        // and how full the pack is. Written by tool_belt itself.
         (
             name: "Tool HUD",
             transform: (
@@ -2134,6 +2178,8 @@
             ),
             matter: Empty,
             scripts: [],
+            id: Some(68),
+            parent_id: Some(16),
             parent: Some(15),
             ui: Some((
                 place: Pin(
@@ -2152,9 +2198,6 @@
                 opacity: 1.0,
             )),
         ),
-        // ── INVENTORY PANEL ───────────────────────────────────────────────────
-        // I opens the suit pack. The rows are described from the container,
-        // so a new material is a registry entry and nothing here changes.
         (
             name: "Inventory Panel",
             transform: (
@@ -2172,11 +2215,9 @@
                     ],
                 ),
             ],
+            id: Some(69),
+            parent_id: Some(16),
             parent: Some(15),
-            // The FRAME only: where the panel sits and how wide it is. Its
-            // contents — and its own glass, border and shadow — are described
-            // from Lua with `ui.make`, because the pack holds however many
-            // materials it holds. Same arrangement as the objectives card.
             ui: Some((
                 place: Pin(
                     anchor: Left,
@@ -2209,11 +2250,13 @@
                     params: [],
                 ),
             ],
+            id: Some(70),
+            parent_id: Some(16),
             parent: Some(15),
             ui: Some((
                 place: Pin(
                     anchor: TopRight,
-                    offset: (-16.0, 52.0),   // BELOW the ☰ button, which shares this corner
+                    offset: (-16.0, 52.0),
                 ),
                 size: (Fixed(360.0), Fit),
                 stack: Some((
@@ -2227,9 +2270,6 @@
                 opacity: 1.0,
             )),
         ),
-        // ── DEBUG BADGE ───────────────────────────────────────────────────────
-        // The testing keys (cheats.lua) and the pink badge that admits to them.
-        // Set the script's `enabled` param to 0 to ship a build without them.
         (
             name: "Debug",
             transform: (
@@ -2245,6 +2285,8 @@
                     params: [],
                 ),
             ],
+            id: Some(71),
+            parent_id: Some(16),
             parent: Some(15),
             ui: Some((
                 place: Pin(
@@ -2263,18 +2305,8 @@
                 opacity: 1.0,
             )),
         ),
-        // ── MINING LASER ──────────────────────────────────────────────────────
-        // The tool is a THING THE ASTRONAUT HOLDS. It is bone-attached to
-        // `Hand.Right` on the rig, so it swings with the walk cycle and the beam
-        // leaves the barrel rather than a point in space near the shoulder.
-        //
-        // `attachment` targets the node's own parent, which has to be the MESH
-        // that carries the skeleton (AstroModel, not the Astronaut root).
         (
             name: "Laser Tool",
-            // The transform below is overwritten every frame by the bone
-            // resolve (it writes the whole local pose), so the scale has to
-            // ride the attachment OFFSET, which is composed on top of the bone.
             transform: (
                 translation: (0.0, 0.0, 0.0),
                 rotation: (0.0, 0.0, 0.0, 1.0),
@@ -2297,6 +2329,8 @@
                 ambient: 0.4,
                 alpha: 1.0,
             )),
+            id: Some(72),
+            parent_id: Some(32),
             parent: Some(31),
             attachment: Some((
                 bone: "Hand.Right",
@@ -2307,8 +2341,6 @@
                 ),
             )),
         ),
-        // The barrel tip. Carries the BEAM effect; tool_belt aims it with
-        // `particles():setBeamEnd(hit)` so the ribbon ends on the rock.
         (
             name: "Laser Muzzle",
             transform: (
@@ -2322,11 +2354,10 @@
                 asset: "vfx/MiningBeam",
                 play_on_start: false,
             )),
+            id: Some(73),
+            parent_id: Some(72),
             parent: Some(71),
         ),
-        // The contact patch: sparks, dust, and a real light. The PointLight is
-        // most of why the cut reads as HOT — without it the sparks are a decal
-        // on unlit ground. Its intensity is driven by the beam's charge.
         (
             name: "Laser Impact",
             transform: (
@@ -2344,13 +2375,8 @@
                 asset: "vfx/MiningImpact",
                 play_on_start: false,
             )),
+            id: Some(74),
         ),
-        // ── FLIGHT OPS ────────────────────────────────────────────────────────
-        // How a flight ENDS: the card that comes up the moment a craft is down
-        // and stopped, offering RECOVER (you're home) or END FLIGHT (you're
-        // not). Bottom-left, because while you're flying every other corner is
-        // taken — telemetry top-left, stages top-right, peripherals right,
-        // navball and HUD line along the bottom.
         (
             name: "Flight Ops",
             transform: (
@@ -2366,6 +2392,8 @@
                     params: [],
                 ),
             ],
+            id: Some(75),
+            parent_id: Some(16),
             parent: Some(15),
             ui: Some((
                 place: Pin(
@@ -2384,11 +2412,6 @@
                 opacity: 1.0,
             )),
         ),
-        // ── MINERAL FIELD ─────────────────────────────────────────────────────
-        // The rock lying on every world's surface, and the ore you break off it
-        // without digging. Entirely `scatter.*`: a rule per rock type, and the
-        // engine derives and draws every instance. No node in the scene but
-        // this one.
         (
             name: "Mineral Field",
             transform: (
@@ -2404,17 +2427,8 @@
                     params: [],
                 ),
             ],
-            parent: None,
+            id: Some(76),
         ),
-        // ── ORBIT MAP ─────────────────────────────────────────────────────────
-        // The map screen (M). It has no presence in the world — it borrows the
-        // camera while it's open and paints into the flight HUD's text block —
-        // so it lives on an Empty of its own rather than riding a vehicle, which
-        // is what it used to do.
-        //
-        // Appended LAST on purpose: `parent` is a positional index into this
-        // list, so a node inserted anywhere else silently re-parents everything
-        // after it.
         (
             name: "Orbit Map",
             transform: (
@@ -2430,12 +2444,8 @@
                     params: [],
                 ),
             ],
-            parent: None,
+            id: Some(77),
         ),
-        // ── STATUS ────────────────────────────────────────────────────────────
-        // Balance, standing, pack — top-left, on foot. That corner belongs to
-        // the flight HUD while you are flying and is empty the rest of the time,
-        // which is exactly when these three numbers were nowhere on screen.
         (
             name: "Status HUD",
             transform: (
@@ -2451,6 +2461,8 @@
                     params: [],
                 ),
             ],
+            id: Some(78),
+            parent_id: Some(16),
             parent: Some(15),
             ui: Some((
                 place: Pin(
@@ -2469,18 +2481,6 @@
                 opacity: 1.0,
             )),
         ),
-        // ── PAUSE ─────────────────────────────────────────────────────────────
-        // Esc. The world stops (`physics.pause`), the pointer comes back, and
-        // the CONTROLS page lists every key the game has — which existed nowhere
-        // inside the game before this.
-        //
-        // The FRAME only: where it sits and how wide. Its contents are described
-        // from Lua with `ui.make`, because the controls list is a table and the
-        // menu changes shape between its two pages.
-        //
-        // Appended LAST, with the Orbit Map: `parent` is a positional index into
-        // this list, so a node inserted anywhere else silently re-parents
-        // everything after it.
         (
             name: "Pause Menu",
             transform: (
@@ -2496,6 +2496,8 @@
                     params: [],
                 ),
             ],
+            id: Some(79),
+            parent_id: Some(16),
             parent: Some(15),
             ui: Some((
                 place: Pin(
@@ -2514,20 +2516,6 @@
                 opacity: 1.0,
             )),
         ),
-        // ── The galaxy ──────────────────────────────────────────────────────
-        //
-        // Space past this system. `galaxy` hashes the void into sectors, rolls
-        // a star for the ones that get one, and builds a real system there when
-        // the ship comes near — so flying out far enough never runs out of
-        // world, and flying back finds the same stars where it left them.
-        //
-        // It is also the thing that stops the ship outrunning the generator:
-        // the warp ladder asks it for a ceiling every frame, and it lowers that
-        // ceiling while a system is being built. Generation is what warp is
-        // paced against, so the pacing lives with the generator.
-        //
-        // Appended LAST for the same reason the Pause Menu is: `parent` is a
-        // positional index into this list.
         (
             name: "Galaxy",
             transform: (
@@ -2540,24 +2528,11 @@
                 (
                     kind: "galaxy",
                     enabled: true,
-                    // Deliberately empty: the script's own `defaults` are the
-                    // tuning. A params list here pins whatever it held on the
-                    // day it was written, silently, even after the script stops
-                    // declaring the field (platform 0068).
                     params: [],
                 ),
             ],
-            parent: None,
+            id: Some(80),
         ),
-        // ── The air ─────────────────────────────────────────────────────────
-        //
-        // Fog, driven from whatever body you are at and how high above it you
-        // are. Every world already has a rolled atmosphere that the sky shader
-        // draws as a halo from orbit; this is the inside of that same air, so
-        // an airless moon looks airless and a thick blue sky reads as one from
-        // the ground. In space it switches the pass off entirely.
-        //
-        // Appended LAST: `parent` is a positional index into this list.
         (
             name: "Atmosphere",
             transform: (
@@ -2573,13 +2548,8 @@
                     params: [],
                 ),
             ],
-            parent: None,
+            id: Some(81),
         ),
-        // ── Graphics quality ────────────────────────────────────────────────
-        //
-        // The player's Low/Medium/High/Ultra choice (scripts/graphics.lua):
-        // render scale, sun-shadow distance, and whether atmosphere.lua may
-        // march volumetric fog. Remembered in the "settings" store slot.
         (
             name: "Graphics",
             transform: (
@@ -2595,12 +2565,8 @@
                     params: [],
                 ),
             ],
-            parent: None,
+            id: Some(82),
         ),
-        // ── Facility panel buttons ──────────────────────────────────────────
-        //
-        // The action and Close side by side under the panel's text. Appended
-        // LAST: `parent` is a positional index into this list.
         (
             name: "Facility Buttons",
             transform: (
@@ -2610,6 +2576,8 @@
             ),
             matter: Empty,
             scripts: [],
+            id: Some(83),
+            parent_id: Some(36),
             parent: Some(35),
             ui: Some((
                 place: Free(
@@ -2627,11 +2595,6 @@
                 opacity: 1.0,
             )),
         ),
-        // ── Notices ─────────────────────────────────────────────────────────
-        //
-        // A few seconds of "this changed" (the graphics level lowering itself).
-        // pause_menu describes into it; it sits above the prompts and the
-        // hotbar, and above the navball in flight.
         (
             name: "Notice Toast",
             transform: (
@@ -2641,6 +2604,8 @@
             ),
             matter: Empty,
             scripts: [],
+            id: Some(84),
+            parent_id: Some(16),
             parent: Some(15),
             ui: Some((
                 place: Pin(
@@ -2659,11 +2624,6 @@
                 opacity: 1.0,
             )),
         ),
-        // ── Interface sounds ────────────────────────────────────────────────
-        //
-        // sfx.lua: the clicks, the cash clink, the contract jingle. Scripts
-        // reach it with findScript("sfx"). Appended LAST: `parent` elsewhere
-        // is a positional index into this list.
         (
             name: "Interface Sounds",
             transform: (
@@ -2679,13 +2639,8 @@
                     params: [],
                 ),
             ],
+            id: Some(85),
         ),
-        // ── FLIGHT HUD ────────────────────────────────────────────────────────
-        // The cockpit (scripts/flight_hud.lua): orbit strip, annunciators,
-        // fuel and charge, the instrument console and the stage stack, all
-        // described from Lua into this one full-screen node. `order: -1` puts
-        // it UNDER the navball and tapes above, which it mounts on its console;
-        // the overlay after it draws OVER them (the tooltip).
         (
             name: "Flight HUD",
             transform: (
@@ -2701,6 +2656,8 @@
                     params: [],
                 ),
             ],
+            id: Some(86),
+            parent_id: Some(16),
             parent: Some(15),
             ui: Some((
                 place: Stretch(
@@ -2709,9 +2666,9 @@
                     margin: (0.0, 0.0, 0.0, 0.0),
                 ),
                 size: (Pct(1.0), Pct(1.0)),
-                order: -1,
                 visible: false,
                 opacity: 1.0,
+                order: -1,
             )),
         ),
         (
@@ -2723,6 +2680,8 @@
             ),
             matter: Empty,
             scripts: [],
+            id: Some(87),
+            parent_id: Some(16),
             parent: Some(15),
             ui: Some((
                 place: Stretch(
@@ -2731,18 +2690,11 @@
                     margin: (0.0, 0.0, 0.0, 0.0),
                 ),
                 size: (Pct(1.0), Pct(1.0)),
-                order: 1,
                 visible: false,
                 opacity: 1.0,
+                order: 1,
             )),
         ),
-        // ── Effects director ─────────────────────────────────────────────────
-        //
-        // vfx.lua: explosions, engine plumes, dust, the laser's impact — every
-        // physical effect, fired in the planet's own frame (it orbits at ~90 m/s
-        // and a particle born at rest in world space is left behind by it).
-        // Scripts reach it with findScript("vfx"). Appended LAST: `parent`
-        // elsewhere is a positional index into this list.
         (
             name: "Effects",
             transform: (
@@ -2758,15 +2710,8 @@
                     params: [],
                 ),
             ],
+            id: Some(88),
         ),
-        // ── Sound and settings ──────────────────────────────────────────────
-        //
-        // settings.lua re-applies the player's settings (volumes, FOV, mouse,
-        // vsync, frame cap, accessibility) — the engine resets the mixer on
-        // every scene load. soundscape.lua: wind by air density, the sea from
-        // inside it, and sparse music. big_caption.lua: "VESSEL LOST", drawn
-        // into this node's own UI layer (under the HUD layer's 120, so the
-        // pause menu covers it). Appended LAST: `parent` is positional.
         (
             name: "Sound and Settings",
             transform: (
@@ -2792,6 +2737,7 @@
                     params: [],
                 ),
             ],
+            id: Some(89),
             ui_layer: Some((
                 design_height: 720.0,
                 reference_width: 1280.0,
@@ -2803,11 +2749,6 @@
                 canvas_scale: 0.009,
             )),
         ),
-        // ── ELECTRONICS ───────────────────────────────────────────────────────
-        // electronics.lua: the rulebook (part modules, actions, action groups,
-        // power, the link budget). comms.lua: the comms network — every craft's
-        // path home, solved a few times a second. vessel_switcher.lua: [ and ]
-        // between nearby craft and the crew. Appended LAST: `parent` is positional.
         (
             name: "Electronics",
             transform: (
@@ -2833,11 +2774,8 @@
                     params: [],
                 ),
             ],
+            id: Some(90),
         ),
-        // ── TRACKING STATION ──────────────────────────────────────────────────
-        // The fleet screen at the Tracking Station (scripts/tracking_station.lua):
-        // the frame only — the contents are described from Lua, like the Ops
-        // Board's. facility_menu opens it.
         (
             name: "Tracking Station",
             transform: (
@@ -2853,6 +2791,8 @@
                     params: [],
                 ),
             ],
+            id: Some(91),
+            parent_id: Some(16),
             parent: Some(15),
             ui: Some((
                 place: Pin(
@@ -2871,12 +2811,6 @@
                 opacity: 1.0,
             )),
         ),
-        // ── WEATHER ───────────────────────────────────────────────────────────
-        // scripts/weather.lua: each world's weather from its climate (rain and
-        // thunderstorms, snow, hail, dust, ash), deterministic from the seed
-        // and the weather clock. Drives the cloud deck, the haze (through
-        // atmosphere.lua), precipitation around the camera, lightning and
-        // thunder. Appended LAST: `parent` is positional.
         (
             name: "Weather",
             transform: (
@@ -2892,7 +2826,7 @@
                     params: [],
                 ),
             ],
-            parent: None,
+            id: Some(92),
         ),
     ],
 )

@@ -1,242 +1,358 @@
--- SMOKE HARNESS for base_facilities.lua: runs the real script against a stubbed
--- engine API (a round, offset planet + a crew node on its surface) and drives the
--- placement to completion. Catches Lua runtime errors and the classic sins this
--- kind of surface-anchoring code commits:
---   * writing WORLD coords into a planet-parented node (the round-7 far-side bug):
---     every facility's local coords must be BODY-RELATIVE, not absolute.
---   * facilities seated off the ground / flung away by a bad raycast.
---   * not all facilities placed (an angle that never finds ground).
---   * the base MOVING between sessions — it is sited once, saved body-relative,
---     and rebuilt on the same ground however far the crew has wandered.
---   * anything sited while the loading screen is still up (the crew is parked
---     over the north pole then, not standing where they live).
---   * the ring drawn on a FLAT MAP. Planets are round: a facility 36 m from the
---     base on a 200 m world is 10 degrees round the curve, so it has its own
---     local up. A ring laid across the tangent plane leans every building by
---     that angle and probes for ground from a point that is already inside the
---     hill on any world with real relief. Assertion 6 is the guard.
+-- SMOKE HARNESS for base_facilities.lua — the spaceport. Runs the real script
+-- against a stubbed engine (an offset round planet, a crew node on it, a
+-- terrain field whose ground the flattens really move) and drives the siting
+-- to completion. It holds the layout to its contracts:
+--
+--   1. nothing is sited while the loading screen is up;
+--   2. every structure is parented to the planet, in BODY-RELATIVE local
+--      coords, stood on its OWN radial up (the layout is drawn on the sphere),
+--      its origin `seat` over the graded ground;
+--   3. the tracking dish is within 80 m of the base centre (comms.station);
+--      the launch pad is ≥ 80 m from every building and on the far side of
+--      the compound from the runway;
+--   4. the runway is straight AND follows the curve: every centreline vertex
+--      of the paving lies on one great circle, at the graded radius;
+--   5. the ground is graded to that radius (flatten discs centred ON it), and
+--      a reload only checks it — no second grading;
+--   6. the launch sites: the pad's deck point, and the runway threshold facing
+--      down the runway; a base whose runway was left out answers the pad;
+--   7. keepClear: true on the paving and the lots, false out in the field;
+--   8. an OLD save (a base sited before this layout) is laid out where it
+--      stands, never moved.
 --
 --   luajit solar/tests/smoke_base.lua
 
 local TICK = 1 / 60
+local function approx(a, b, e) return math.abs(a - b) <= e end
+local function len(x, y, z) return math.sqrt(x * x + y * y + z * z) end
 
--- Planet OFFSET from the origin so a "local == world" bug can't accidentally pass.
-local planet = { name = "Athosil", x = 300, y = -120, z = 80, radius = 200, mu = 4.0e5, soi = 5000 }
-local planet_node = { __id = 1, name = planet.name, x = planet.x, y = planet.y, z = planet.z, valid = true }
-
--- Crew on the +Y-ish surface of the planet (a point at radius on the surface).
-local up0 = { x = 0.12, y = 0.97, z = 0.21 }
-local ul = math.sqrt(up0.x^2 + up0.y^2 + up0.z^2)
-up0.x, up0.y, up0.z = up0.x / ul, up0.y / ul, up0.z / ul
-local crew = {
-  __id = 2, name = "Astronaut", valid = true,
-  x = planet.x + up0.x * planet.radius,
-  y = planet.y + up0.y * planet.radius,
-  z = planet.z + up0.z * planet.radius,
-}
-
-local nodes = { planet_node, crew }
-local spawned = {}
-local next_id = 100
-
-_G.vec3 = function(x, y, z) return { x = x, y = y, z = z } end
-_G.log = function(_) end
-_G.find = function(name)
-  for _, n in ipairs(nodes) do if n.name == name then return n end end
-  return nil
+local planet = { name = "Athosil", x = 3000, y = -1200, z = 800, radius = 640, mu = 4.0e5, soi = 50000 }
+local planet_node = { __id = 1, name = planet.name, valid = true }
+-- Ground: the sphere plus a gentle swell, until the flattens level it.
+local graded = {}            -- list of { dir, R, r }: discs that have landed
+local HILL = nil            -- { x, y, z (unit), arc, height }: a hill the grade must cut
+local function ground_r(dx, dy, dz)
+  local g = planet.radius + 1.2 * math.sin(dx * 9) * math.cos(dz * 7)
+  if HILL then
+    local c = dx * HILL.x + dy * HILL.y + dz * HILL.z
+    local a = math.acos(math.max(-1, math.min(1, c))) * planet.radius
+    if a < HILL.arc then g = g + HILL.height * (1 - a / HILL.arc) end
+  end
+  for _, d in ipairs(graded) do
+    local c = dx * d.x + dy * d.y + dz * d.z
+    local arc = math.acos(math.max(-1, math.min(1, c))) * d.R
+    if arc < d.r * 0.6 then g = d.R end
+  end
+  return g
 end
--- Every flatten the siting asks for, in order: (radius, mode).
-local sculpts = {}
-_G.terrain = { warm = function() end,
-  sculpt = function(x, y, z, radius, strength, mode)
-    -- Body-relative, as the planet stood when the op was SENT.
-    sculpts[#sculpts + 1] = { x = x - planet.x, y = y - planet.y, z = z - planet.z,
-                              r = radius, mode = mode }
-  end }
+
+local up0 = { x = 0.31, y = 0.62, z = 0.72 }
+do local l = len(up0.x, up0.y, up0.z); up0.x, up0.y, up0.z = up0.x / l, up0.y / l, up0.z / l end
+local crew = { __id = 2, name = "Astronaut", valid = true }
+local function put_crew(u)
+  local g = ground_r(u.x, u.y, u.z) + 1.0
+  crew.x, crew.y, crew.z = planet.x + u.x * g, planet.y + u.y * g, planet.z + u.z * g
+end
+put_crew(up0)
+
+local nodes, spawned, created, meshes = {}, {}, {}, {}
+local queries, worst_frame = 0, 0
+local cutfill = {}
+local sculpts, paints = 0, 0
+local STORE = {}
+_G.vec3 = function(x, y, z) return { x = x, y = y, z = z } end
+_G.log = function() end
+_G.time = 0
+_G.find = function(name)
+  if name == planet.name then return planet_node end
+  if name == "Astronaut" then return crew end
+  for _, n in ipairs(nodes) do if n.name == name and n.valid then return n end end
+end
+_G.findScript = function(kind) if kind == "game_manager" then return _G.GM end end
+_G.GM = { loading = false }
 _G.space = {
   bodies = function() return { planet } end,
-  body = function(name) if name == planet.name then return planet end end,
+  body = function(n) if n == planet.name then return planet end end,
 }
-local STORE = {}
-_G.save = { get = function(k) return STORE[k] end, set = function(k, v) STORE[k] = v end }
--- The loading screen: while `loading` is true nothing may be sited.
-local gm = { loading = false }
-_G.findScript = function(kind) if kind == "game_manager" then return gm end end
-
--- Faithful ray/sphere intersection against the planet.
-_G.raycast = function(ox, oy, oz, dx, dy, dz, maxd)
-  local ocx, ocy, ocz = ox - planet.x, oy - planet.y, oz - planet.z
-  local b = 2 * (dx * ocx + dy * ocy + dz * ocz)
-  local c = ocx^2 + ocy^2 + ocz^2 - planet.radius^2
-  local disc = b * b - 4 * c
-  if disc < 0 then return nil end
-  local t = (-b - math.sqrt(disc)) / 2
-  if t < 0 or t > (maxd or 1e9) then return nil end
-  return { distance = t }
+_G.save = { get = function(k) local v = STORE[k]; if v == false then return nil end return v end,
+            set = function(k, v) STORE[k] = v end }
+_G.terrain = {
+  warm = function() end,
+  query = function(x, y, z)
+    queries = queries + 1
+    local dx, dy, dz = x - planet.x, y - planet.y, z - planet.z
+    local r = len(dx, dy, dz)
+    return r - ground_r(dx / r, dy / r, dz / r)
+  end,
+  sculpt = function(x, y, z, radius, strength, mode)
+    assert(mode == "flatten" or mode == "smooth" or mode == "lower" or mode == "raise", "unexpected sculpt " .. tostring(mode))
+    if mode ~= "flatten" then sculpts = sculpts + 1; cutfill[mode] = (cutfill[mode] or 0) + 1 return end
+    local dx, dy, dz = x - planet.x, y - planet.y, z - planet.z
+    local r = len(dx, dy, dz)
+    if strength >= 0.99 then graded[#graded + 1] = { x = dx / r, y = dy / r, z = dz / r, R = r, r = radius } end
+    sculpts = sculpts + 1
+  end,
+  paint = function() paints = paints + 1 end,
+}
+_G.mesh = {
+  build = function(t)
+    local nv = #t.positions / 3
+    assert(nv == math.floor(nv) and nv > 0, "positions not in threes")
+    assert(#t.normals == #t.positions and #t.uvs / 2 == nv and #t.colors / 4 == nv, "uneven lists")
+    assert(#t.indices % 3 == 0, "indices not in threes")
+    for _, i in ipairs(t.indices) do assert(i >= 1 and i <= nv, "index out of range " .. i) end
+    for _, v in ipairs(t.positions) do assert(v == v and math.abs(v) < 1e6, "non-finite position") end
+    local name = "mesh:" .. (#meshes + 1)
+    meshes[#meshes + 1] = { name = name, t = t }
+    return name
+  end,
+  free = function() end,
+}
+local function new_node(name, parent)
+  local n = { name = name, valid = true, parent = parent, x = 0, y = 0, z = 0 }
+  function n:setUp(u, f) self.up_set, self.fwd_set = u, f end
+  function n:setMaterial(m) self.mat = m end
+  function n:lookAt(t, u) self.look = t end
+  function n:destroy() self.valid = false end
+  nodes[#nodes + 1] = n
+  return n
+end
+_G.createNode = function(name, parent, fn)
+  local n = new_node(name, parent)
+  created[#created + 1] = n
+  if fn then fn(n) end
+end
+_G.spawn = function(prefab, pos, fn, parent)
+  local n = new_node(prefab, parent)
+  n.x, n.y, n.z = pos.x, pos.y, pos.z
+  n.world = { x = pos.x, y = pos.y, z = pos.z }
+  spawned[#spawned + 1] = n
+  if fn then fn(n) end
 end
 
-_G.spawn = function(prefab, pos, cb, parent)
-  local inst = { __id = next_id, name = prefab, valid = true,
-    x = pos.x, y = pos.y, z = pos.z, pitch = 0, roll = 0, yaw = 0, parent = parent }
-  -- node:setUp(up, forward): +Y along `up` (world), -Z toward `forward`.
-  function inst:setUp(up, fwd) self.up_set, self.fwd_set = up, fwd end
-  next_id = next_id + 1
-  nodes[#nodes + 1] = inst
-  if cb then cb(inst) end
-  spawned[#spawned + 1] = { prefab = prefab, world = { x = pos.x, y = pos.y, z = pos.z }, inst = inst }
-  return inst
-end
-
--- ── run ─────────────────────────────────────────────────────────────────────
-local function run_session(host_name, limit)
+local BF
+local function session(limit)
+  local env = setmetatable({}, { __index = _G })
   local chunk = assert(loadfile("solar/scripts/base_facilities.lua"))
-  chunk() -- fresh script state (its `done`/`placed` locals reset)
-  assert(type(start) == "function", "base_facilities must define start()")
-  assert(type(update) == "function", "base_facilities must define update()")
-  start(crew)
-  local host = { __id = 3, name = host_name }
+  setfenv(chunk, env)
+  chunk()
+  BF = env
+  env.start({})
   for _ = 1, (limit or 6000) do
-    update(host, TICK)
-    if #spawned >= 5 then return true end
+    queries = 0
+    time = time + TICK
+    env.update({}, TICK)
+    worst_frame = math.max(worst_frame, queries)
+    if env.sited then return true end
   end
   return false
 end
 
--- Session 1, still loading: the crew is parked over the pole, nothing goes up.
-gm.loading = true
-assert(not run_session("Base Facilities", 240), "sited during the loading screen")
-assert(#spawned == 0, "expected nothing sited while loading, got " .. #spawned)
-assert(STORE["base.body"] == nil, "the base site must not be recorded while loading")
+-- ── 1. not while loading ────────────────────────────────────────────────────
+GM.loading = true
+assert(not session(120), "sited during the loading screen")
+assert(#spawned == 0 and STORE["base.body"] == nil, "nothing may be sited while loading")
+GM.loading = false
 
--- Session 1, loaded: the colony goes up around the crew and is remembered.
-gm.loading = false
-assert(run_session("Base Facilities"), "base placement never completed (100s of ticks)")
-
--- ── assertions ────────────────────────────────────────────────────────────
-assert(#spawned == 5, "expected 5 facilities, got " .. #spawned)
-
--- The ground is levelled out to every CORNER. The command centre is 12 × 18 m
--- — corners 10.8 m from its middle — and an 11 m brush (which falls off toward
--- its rim) left them humped up through the floor. Half-diagonal + 4 m, and
--- enough passes to actually get there.
-do
-  local by_r = {}
-  for _, c in ipairs(sculpts) do
-    assert(c.mode == "flatten", "siting only flattens, got " .. tostring(c.mode))
-    by_r[c.r] = (by_r[c.r] or 0) + 1
-  end
-  local biggest = 0
-  for r, n in pairs(by_r) do
-    biggest = math.max(biggest, r)
-    assert(n >= 3, string.format("a %.1f m flatten ran only %d passes", r, n))
-  end
-  assert(biggest >= 14.5, string.format(
-    "the command centre's flatten must reach its corners (≥ 14.5 m), got %.1f m", biggest))
-end
-
--- FEW terrain ops. Every op costs the frame a collider rebuild (about a
--- quarter of a second each on a real planet): a grid of ~500 small levelling
--- patches froze the landing for half a minute. Siting a colony is the big
--- flattens and nothing else, and the colony counts as sited the frame after.
-do
-  local before = #sculpts
-  for _ = 1, 3 do update({ __id = 3, name = "Base Facilities" }, TICK) end
-  assert(sited, "the colony is sited the frame after its ground is flattened")
-  assert(#sculpts == before, "nothing more is sculpted after siting, got " .. (#sculpts - before))
-  assert(#sculpts <= 30, "siting sent " .. #sculpts .. " terrain ops — a few big passes, never a grid")
-end
-
-local seen = {}
-for _, s in ipairs(spawned) do
-  seen[s.prefab] = true
-  -- 1. Parented to the planet node.
-  assert(s.inst.parent == planet_node, s.prefab .. " must be parented to the planet")
-  -- 2. Local coords are BODY-RELATIVE, not world. World pos ≈ body + local.
-  local lx, ly, lz = s.inst.x, s.inst.y, s.inst.z
-  local wx, wy, wz = planet.x + lx, planet.y + ly, planet.z + lz
-  local dw = math.sqrt((wx - s.world.x)^2 + (wy - s.world.y)^2 + (wz - s.world.z)^2)
-  assert(dw < 1e-3, s.prefab .. " local coords are NOT body-relative (far-side bug): off by " .. dw)
-  -- 3. Seated near the surface (origin within a few units above ground).
-  local r = math.sqrt((wx - planet.x)^2 + (wy - planet.y)^2 + (wz - planet.z)^2)
-  local above = r - planet.radius
-  assert(above > 0.2 and above < 6.0, s.prefab .. " badly seated: " .. above .. " above surface")
-  -- 4. Near the base, not flung across the system.
-  local db = math.sqrt((wx - crew.x)^2 + (wy - crew.y)^2 + (wz - crew.z)^2)
-  assert(db < 60, s.prefab .. " sited too far from base: " .. db)
-  -- 5. Ringed at a sane ARC distance round the surface (not a chord across a
-  -- tangent plane, which reads short and climbs as the radius grows).
-  local fx, fy, fz = (wx - planet.x) / r, (wy - planet.y) / r, (wz - planet.z) / r
-  local dot = math.max(-1, math.min(1, fx * up0.x + fy * up0.y + fz * up0.z))
-  local arc = math.acos(dot) * planet.radius
-  assert(arc > 24 and arc < 46,
-    string.format("%s is %.0f m round the surface from the base — off the ring", s.prefab, arc))
-  -- 6. Standing on ITS OWN local up. A building that inherited the BASE's
-  -- normal leans by the arc angle — ten degrees at this radius. Checked the
-  -- way the engine applies it: +Y through R = Ry(yaw)·Rx(pitch)·Rz(roll)
-  -- (glam's EulerRot::YXZ, radians), so a yaw that swings the building off its
-  -- up — the old bug, a `215` "degrees" yaw on top of a yaw-free tilt — fails.
-  -- Since engine 0.117 (card 0403) the building is stood with node:setUp,
-  -- one whole-rotation write: its +Y is exactly the vector it was given.
-  local bx, by, bz
-  if s.inst.up_set then
-    local u = s.inst.up_set
-    local ul = math.sqrt(u.x ^ 2 + u.y ^ 2 + u.z ^ 2)
-    bx, by, bz = u.x / ul, u.y / ul, u.z / ul
-    -- …and it faces somewhere along the ground, not up or down it.
-    local w = s.inst.fwd_set
-    assert(w, s.prefab .. " was stood up with no facing")
-    local wl = math.sqrt(w.x ^ 2 + w.y ^ 2 + w.z ^ 2)
-    assert(wl > 1e-3 and math.abs((w.x * bx + w.y * by + w.z * bz) / wl) < 0.999,
-      s.prefab .. "'s facing runs along its own up")
-  else
-    local p, r2, y = s.inst.pitch or 0, s.inst.roll or 0, s.inst.yaw or 0
-    bx = -math.sin(r2) * math.cos(y) + math.cos(r2) * math.sin(p) * math.sin(y)
-    by = math.cos(r2) * math.cos(p)
-    bz = math.sin(r2) * math.sin(y) + math.cos(r2) * math.sin(p) * math.cos(y)
-  end
-  local lean = math.deg(math.acos(math.max(-1, math.min(1, bx * fx + by * fy + bz * fz))))
-  assert(lean < 0.01,
-    string.format("%s leans %.2f degrees off its own local up", s.prefab, lean))
-end
-for _, want in ipairs({ "FacCommand", "FacHangar", "FacPower", "FacTracking", "FacDepot" }) do
-  assert(seen[want], "missing facility: " .. want)
-end
-
--- 7. The site is remembered BODY-RELATIVE (absolute coords go stale on an orbit).
-assert(STORE["base.body"] == planet.name, "the base site's body was not saved")
+-- ── session 1: a new base ───────────────────────────────────────────────────
+assert(session(), "the spaceport never finished siting")
+local R = STORE["base.r"]
+assert(STORE["base.layout"] == BF.LAYOUT_VERSION and R and STORE["base.heading"], "layout not saved")
+assert(math.abs(R - planet.radius) < 2.0, string.format("graded radius %.1f is not the ground's", R))
 local hx, hy, hz = STORE["base.x"], STORE["base.y"], STORE["base.z"]
-assert(hx and hy and hz, "the base site offset was not saved")
-local hr = math.sqrt(hx * hx + hy * hy + hz * hz)
-assert(math.abs(hr - planet.radius) < 2.0,
-  string.format("the saved site is not on the surface (r = %.1f)", hr))
-local first = { x = planet.x + hx, y = planet.y + hy, z = planet.z + hz }
-
--- ── session 2: reload, crew 300 m away, the base must NOT follow them ───────
-local before = #spawned
--- The planet has moved on its orbit AND the crew wakes up somewhere else.
-planet.x, planet.y, planet.z = planet.x + 5000, planet.y - 800, planet.z + 1200
-planet_node.x, planet_node.y, planet_node.z = planet.x, planet.y, planet.z
-local away = { x = 0.62, y = 0.70, z = 0.35 }
-local al = math.sqrt(away.x^2 + away.y^2 + away.z^2)
-crew.x = planet.x + away.x / al * planet.radius
-crew.y = planet.y + away.y / al * planet.radius
-crew.z = planet.z + away.z / al * planet.radius
-spawned = {}
-assert(run_session("Base Facilities"), "the base never rebuilt in session 2")
-assert(#spawned == 5, "session 2 expected 5 facilities, got " .. #spawned)
-
--- Same ground, moved only by the planet's own orbit: the saved offset is what
--- carries the colony, so it must be UNCHANGED and the buildings must land on it.
-assert(STORE["base.x"] == hx and STORE["base.y"] == hy and STORE["base.z"] == hz,
-  "session 2 overwrote the saved base site")
-local site2 = { x = planet.x + hx, y = planet.y + hy, z = planet.z + hz }
-for _, s in ipairs(spawned) do
-  local d = math.sqrt((s.world.x - site2.x)^2 + (s.world.y - site2.y)^2 + (s.world.z - site2.z)^2)
-  assert(d < 60, s.prefab .. " rebuilt " .. math.floor(d) .. " m from the saved site")
+assert(approx(len(hx, hy, hz), R, 1e-6), "the saved centre is not on the graded sphere")
+local c = { x = hx / R, y = hy / R, z = hz / R }
+assert(c.x * up0.x + c.y * up0.y + c.z * up0.z > 0.99999, "the base is not where the crew stood")
+local sculpts1 = sculpts
+assert(sculpts1 > 150 and sculpts1 < 2400, "grading sent " .. sculpts1 .. " ops")
+for _, d in ipairs(graded) do
+  assert(approx(d.R, R, 1e-6), "a flatten disc not centred on the graded sphere")
 end
-local crew_d = math.sqrt((crew.x - site2.x)^2 + (crew.y - site2.y)^2 + (crew.z - site2.z)^2)
-assert(crew_d > 100, "the test crew should be far from home (got " .. math.floor(crew_d) .. " m)")
 
-print(string.format(
-  "smoke_base OK — 5 facilities sited, body-relative, seated; base stayed home across a reload (crew %.0f m away)",
-  crew_d))
+assert(not cutfill.lower and not cutfill.raise, "a flat site needs no cut or fill")
+
+-- 0. time-sliced: no frame does more than its budget of field queries (the
+-- engine stops a script that runs 2 s; a loaded machine got there)
+assert(worst_frame <= BF.WORK_BUDGET + 40,
+  string.format("one frame made %d field queries (budget %d)", worst_frame, BF.WORK_BUDGET))
+
+-- 2. structures
+local want = {}
+for _, f in ipairs(BF.FACILITIES) do want[f.prefab] = f end
+local seen, pos = {}, {}
+for _, n in ipairs(spawned) do
+  local f = want[n.name]
+  if f then
+    seen[n.name] = true
+    assert(n.parent == planet_node, n.name .. " is not parented to the planet")
+    local wx, wy, wz = planet.x + n.x, planet.y + n.y, planet.z + n.z
+    assert(approx(wx, n.world.x, 1e-6) and approx(wy, n.world.y, 1e-6) and approx(wz, n.world.z, 1e-6),
+      n.name .. " local coords are not body-relative")
+    local r = len(n.x, n.y, n.z)
+    local want_r = math.sqrt((R + f.seat + (f.lift or 0)) ^ 2 + f.ox ^ 2 + f.oz ^ 2)
+    assert(approx(r, want_r, 0.05), string.format("%s seated at r %.2f, want %.2f", n.name, r, want_r))
+    local u = n.up_set
+    local ul = len(u.x, u.y, u.z)
+    local gx, gy, gz = n.x - u.x / ul * f.seat, n.y - u.y / ul * f.seat, n.z - u.z / ul * f.seat  -- (unused)
+    local gl = len(gx, gy, gz)
+    local fx, fy, fz = n.fwd_set.x, n.fwd_set.y, n.fwd_set.z
+    assert(math.abs((fx * u.x + fy * u.y + fz * u.z) / len(fx, fy, fz) / ul) < 1e-6, n.name .. " faces up or down")
+    pos[n.name] = { x = n.x / r, y = n.y / r, z = n.z / r }
+  end
+end
+for name in pairs(want) do assert(seen[name], "missing structure " .. name) end
+local floods = 0
+for _, n in ipairs(spawned) do if n.name == "BaseFlood" then floods = floods + 1; assert(n.look, "a flood not aimed") end end
+assert(floods == 2, "expected 2 apron floods, got " .. floods)
+
+-- 3. distances (arc metres from the centre)
+local function arc(a, b) return math.acos(math.max(-1, math.min(1, a.x * b.x + a.y * b.y + a.z * b.z))) * R end
+local dish = arc(pos.FacTracking, c)
+assert(dish < 80, string.format("the tracking dish is %.0f m from the base centre (comms needs < 80)", dish))
+local Fr = BF.frameOf(c, STORE["base.heading"], R)
+local pad = BF.dirAt(Fr, BF.PAD.u, BF.PAD.v)
+for name, p in pairs(pos) do
+  if name ~= "BasePad" and name ~= "BaseFuel" then
+    assert(arc(p, pad) >= 80, string.format("%s is only %.0f m from the pad", name, arc(p, pad)))
+  end
+end
+
+-- 4. the runway: straight on the sphere, at the graded radius
+local A = nil
+for _, mm in ipairs(meshes) do if not A then A = mm end end
+local S = BF.stripOf(Fr, BF.RUNWAY.u0, BF.RUNWAY.v, BF.RUNWAY.u1, BF.RUNWAY.v)
+assert(approx(S.L, BF.RUNWAY.u1 - BF.RUNWAY.u0, 2.0), string.format("runway %.1f m long", S.L))
+local O = { x = c.x * R, y = c.y * R, z = c.z * R }
+local onc, worst_r, worst_plane = 0, 0, 0
+local P = A.t.positions
+for i = 1, #P, 3 do
+  local x, y, z = P[i] + O.x, P[i + 1] + O.y, P[i + 2] + O.z
+  local r = len(x, y, z)
+  local d = { x = x / r, y = y / r, z = z / r }
+  local w = math.asin(math.max(-1, math.min(1, d.x * S.n.x + d.y * S.n.y + d.z * S.n.z))) * R
+  if math.abs(w) < 0.5 then
+    local top = math.abs(r - (R + BF.PAVE_H)) < 0.05
+    if top then
+      onc = onc + 1
+      worst_r = math.max(worst_r, math.abs(r - (R + BF.PAVE_H)))
+      worst_plane = math.max(worst_plane, math.abs(w))
+    end
+  end
+end
+assert(onc > 100, "few runway centreline vertices found: " .. onc)
+assert(worst_plane <= 0.451, string.format("the centreline leaves its great circle by %.3f m", worst_plane))
+local n1, n2 = BF.runwayNumbers(BF.frameOf(c, 0, R))
+assert(n1 == "09" and n2 == "27", "an east–west runway is 09/27, got " .. n1 .. "/" .. n2)
+
+-- 6. launch sites
+local ps = BF.launchSite("pad")
+assert(ps and ps.kind == "pad" and ps.deck, "no pad site")
+assert(approx(len(ps.x, ps.y, ps.z), R + BF.PAD.hs, 1e-6), "the pad site is not the hardstand top")
+assert(arc({ x = ps.up.x, y = ps.up.y, z = ps.up.z }, pad) < 0.01, "the pad site is not at the mount")
+local rs = BF.launchSite("runway")
+assert(rs and rs.kind == "runway" and not rs.deck, "no runway site")
+assert(approx(len(rs.x, rs.y, rs.z), R, 1e-6), "the runway site is not on the ground")
+local t0 = { x = S.b.x - S.a.x, y = S.b.y - S.a.y, z = S.b.z - S.a.z }
+local tl = len(t0.x, t0.y, t0.z)
+assert((rs.fwd.x * t0.x + rs.fwd.y * t0.y + rs.fwd.z * t0.z) / tl > 0.97, "the runway site does not face down the runway")
+local d_th = arc(rs.up, S.a)
+assert(d_th > 10 and d_th < 30, string.format("the runway site is %.0f m from the threshold end", d_th))
+
+-- 7. keepClear
+local function rel(u, v) local d = BF.dirAt(Fr, u, v); return d.x * R, d.y * R, d.z * R end
+assert(BF.keepClear(planet.name, rel(0, BF.RUNWAY.v)), "the runway centre must be kept clear")
+assert(BF.keepClear(planet.name, rel(0, -10)), "the apron must be kept clear")
+assert(BF.keepClear(planet.name, rel(0, 17)), "the VAB lot must be kept clear")
+assert(BF.keepClear(planet.name, rel(0, 125)), "the pad must be kept clear")
+assert(not BF.keepClear(planet.name, rel(120, 40)), "open ground NE of the compound is not paved")
+assert(not BF.keepClear(planet.name, rel(0, -110)), "open ground south of the runway is not paved")
+assert(not BF.keepClear("Elsewhere", rel(0, 0)), "another world's ground is never the base's")
+
+-- the grade is checked once it has landed and recorded: a resume sends nothing
+for _ = 1, 400 do time = time + TICK; BF.update({}, TICK) end
+assert(STORE["base.graded"] == BF.LAYOUT_VERSION, "a grade that holds is recorded in the save")
+
+-- ── session 2: reload; the ground holds, nothing is graded again ───────────
+spawned, created, meshes = {}, {}, {}
+planet.x, planet.y, planet.z = planet.x + 9000, planet.y - 400, planet.z + 2500
+assert(session(), "the base never rebuilt in session 2")
+assert(sculpts == sculpts1, "a reload re-graded ground that holds (" .. (sculpts - sculpts1) .. " ops)")
+assert(STORE["base.x"] == hx and STORE["base.r"] == R, "a reload moved the base")
+local n = 0
+for _, s2 in ipairs(spawned) do if want[s2.name] then n = n + 1 end end
+assert(n == #BF.FACILITIES, "session 2 rebuilt " .. n .. " structures")
+
+-- ── session 3: an OLD save (layout 1) is laid out where it stands ──────────
+for _, k in ipairs({ "base.r", "base.heading", "base.layout", "base.runway" }) do STORE[k] = nil end
+local old = { x = 0.5, y = 0.5, z = -math.sqrt(0.5) }
+STORE["base.x"], STORE["base.y"], STORE["base.z"] = old.x * 641.3, old.y * 641.3, old.z * 641.3
+put_crew(old)
+spawned, created, meshes = {}, {}, {}
+assert(session(), "an old save's base never laid out")
+local bx, by, bz = STORE["base.x"], STORE["base.y"], STORE["base.z"]
+local bl = len(bx, by, bz)
+assert((bx * old.x + by * old.y + bz * old.z) / bl > 0.999999, "an old save's base moved")
+assert(STORE["base.layout"] == BF.LAYOUT_VERSION, "an old save was not upgraded to the new layout")
+
+-- ── session 3b: the crew is far round the world when the ground needs
+-- grading — it waits for them, then grades when they come home ──────────
+do
+  for _, k in ipairs({ "base.r", "base.heading", "base.layout", "base.runway" }) do STORE[k] = nil end
+  local home = { x = STORE["base.x"], y = STORE["base.y"], z = STORE["base.z"] }
+  local hl = len(home.x, home.y, home.z)
+  local away = { x = -home.y / hl, y = home.x / hl, z = 0 }
+  local al = len(away.x, away.y, away.z)
+  away = { x = away.x / al, y = away.y / al, z = away.z / al }
+  put_crew(away)
+  spawned, created, meshes = {}, {}, {}
+  local before = sculpts
+  assert(session(), "a base with the crew away never stood")
+  assert(sculpts == before, "graded with the crew " .. math.floor(planet.radius * 1.5) .. " m away")
+  put_crew({ x = home.x / hl, y = home.y / hl, z = home.z / hl })
+  for _ = 1, 400 do time = time + TICK; BF.update({}, TICK) end
+  assert(sculpts > before + 100, "the grade never ran once the crew came home")
+end
+
+-- ── session 4: a hill under the pad — the grade must CUT it, not roof it ──
+for _, k in ipairs({ "base.r", "base.heading", "base.layout", "base.runway" }) do STORE[k] = nil end
+local hb = { x = STORE["base.x"], y = STORE["base.y"], z = STORE["base.z"] }
+do
+  local F4 = BF.frameOf(hb, 0, len(hb.x, hb.y, hb.z))
+  local d = BF.dirAt(F4, 0, 125)
+  HILL = { x = d.x, y = d.y, z = d.z, arc = 70, height = 14 }
+end
+graded, cutfill = {}, {}
+spawned, created, meshes = {}, {}, {}
+assert(session(), "the base on a hill never laid out")
+do
+  -- Either the fit turned the layout off the hill, or the grade cut it: the
+  -- ground left above the grade anywhere on the paving is what counts.
+  local F5 = BF.frameOf(hb, STORE["base.heading"], STORE["base.r"])
+  local worst = 0
+  for _, f in ipairs(BF.FACILITIES) do
+    local d = BF.dirAt(F5, f.u, f.v)
+    local hh = ground_r(d.x, d.y, d.z) - STORE["base.r"]
+    if hh > 1.5 then
+      worst = math.max(worst, hh)
+    end
+  end
+  assert(worst == 0 or (cutfill.lower or 0) > 10,
+    string.format("ground %.1f m over the grade on a lot, %d cuts", worst, cutfill.lower or 0))
+  print(string.format("  hill: heading %.0f°, %d cuts, %d fills", math.deg(STORE["base.heading"]), cutfill.lower or 0, cutfill.raise or 0))
+end
+-- and a hill the layout cannot dodge: one under the whole site's north half
+do
+  for _, k in ipairs({ "base.r", "base.heading", "base.layout", "base.runway" }) do STORE[k] = nil end
+  local d = BF.dirAt(BF.frameOf(hb, 0, len(hb.x, hb.y, hb.z)), 0, 40)
+  HILL = { x = d.x, y = d.y, z = d.z, arc = 400, height = 30 }
+  graded, cutfill = {}, {}
+  spawned, created, meshes = {}, {}, {}
+  assert(session(), "the base on a big hill never laid out")
+  assert((cutfill.lower or 0) > 0 and (cutfill.raise or 0) > 0,
+    string.format("a sloping site needs cut and fill (%d cuts, %d fills)", cutfill.lower or 0, cutfill.raise or 0))
+  print(string.format("  slope: %d cuts, %d fills", cutfill.lower or 0, cutfill.raise or 0))
+end
+HILL = nil
+
+print(string.format("smoke_base OK — sliced (worst frame %d queries), %d structures, graded with %d ops, runway %.0f m %s, dish %.0f m from the centre",
+  worst_frame, #BF.FACILITIES, sculpts1, S.L, n1 .. "/" .. n2, dish))

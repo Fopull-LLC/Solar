@@ -588,12 +588,24 @@ def part_pod_interior():
     # Liner UVs map into the atlas's wall quadrant (u, v ∈ [0, 0.5]).
     wx, wy, ww, wh = [c / 1024 for c in INTERIOR["wall"]]
     sub = Model()
-    lathe(sub, "Cabin", liner, segs=segs, uv_m=1.0, u_tiles=1, skip=lambda i, k: lo <= i < hi and b0 <= k < b1, inward=True)
-    # squeeze UVs into the wall quadrant (wrapping 3× around)
-    for mat, (Ps, Ns, UVs, Is, _) in sub.parts.items():
-        for UV in UVs:
-            UV[:, 0] = wx + (UV[:, 0] * 3 % 1.0) * ww * 0.999
-            UV[:, 1] = wy + ((-UV[:, 1] * 1.6) % 1.0) * wh * 0.999
+    # The liner is laid in three panels round the cabin, each its own strip
+    # of the wall quadrant: UVs are squeezed into the quadrant LINEARLY, never
+    # wrapped per vertex (a triangle whose corners wrapped from 0.98 to 0.02
+    # smeared the whole quadrant across one cell — the glitchy streaks in the
+    # cabin).
+    for third in range(3):
+        a0, a1 = TAU * third / 3, TAU * (third + 1) / 3
+        n3 = segs // 3
+        part = Model()
+        lathe(part, "Cabin", liner, segs=n3, uv_m=1.0, u_tiles=1, a0=a0, a1=a1, inward=True,
+              skip=lambda i, k, t=third: lo <= i + t * n3 < hi and b0 <= k < b1)
+        for mat, (Ps, Ns, UVs, Is, _) in part.parts.items():
+            for UV in UVs:
+                vv = -UV[:, 1] * 1.6
+                vv = (vv - vv.min()) / max(vv.max() - vv.min(), 1e-6)
+                UV[:, 0] = wx + np.clip(UV[:, 0], 0, 1) * ww * 0.995 + ww * 0.0025
+                UV[:, 1] = wy + vv * wh * 0.995 + wh * 0.0025
+        sub.merge(part)
     m.merge(sub)
     # Floor (over the heat shield) and ceiling with the hatch tunnel.
     disk(m, "Dark", liner[0][0], liner[0][1], segs=segs, up=True, uv_m=3.0)
@@ -644,8 +656,10 @@ def part_pod_interior():
         box(sub, "Cabin", (0, 0, 0), size, None, uv_m=1.0)
         for mat, (Ps, Ns, UVs, Is, _) in sub.parts.items():
             for UV in UVs:
-                UV[:, 0] = sx_ + (UV[:, 0] * 1.4 % 1.0) * sw_ * 0.999
-                UV[:, 1] = sy_ + (UV[:, 1] * 1.4 % 1.0) * sh_ * 0.999
+                # box UVs are centred on 0 (negative half the face): shift,
+                # never wrap
+                UV[:, 0] = sx_ + np.clip(UV[:, 0] * 1.4 + 0.5, 0, 1) * sw_ * 0.995
+                UV[:, 1] = sy_ + np.clip(UV[:, 1] * 1.4 + 0.5, 0, 1) * sh_ * 0.995
         m.merge(sub, M, center)
     seat_box((0.0, -0.02, 0.2), (0.24, 0.32, 0.05), seatM)   # back rest
     seat_box((0.0, 0.17, 0.25), (0.14, 0.08, 0.05), seatM)   # head rest
@@ -660,8 +674,9 @@ def part_pod_interior():
         tube(sub, "Cabin", a, b, r, segs=12, uv_m=1.0)
         for mat, (Ps, Ns, UVs, Is, _) in sub.parts.items():
             for UV in UVs:
-                UV[:, 0] = ux + (UV[:, 0] % 1.0) * uw * 0.999
-                UV[:, 1] = uy + ((UV[:, 1] * 2.0) % 0.7) * uh * 0.999
+                vv = np.abs(UV[:, 1]) * 2.0
+                UV[:, 0] = ux + np.clip(UV[:, 0], 0, 1) * uw * 0.995
+                UV[:, 1] = uy + np.clip(vv, 0, 0.7) * uh * 0.995
         m.merge(sub)
     for side in (-1, 1):
         hip = np.array([side * 0.05, -0.2, 0.06])

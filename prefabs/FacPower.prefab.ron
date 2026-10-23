@@ -1,26 +1,117 @@
+// POWER YARD — switch house, transformers, solar tables.
+// Ground frame → origin: seat 2.570 m, lot offset ox 0.013, oz 0.000 (base_facilities FACILITIES).
+// Written by tools/gen_base.py — edit the generator, not this file.
 [
-    // POWER PLANT — the base generator. machine_generatorLarge is native
-    // 1x0.68x1.3 (centred, y -0.34..0.34); collider half = native × scale (4.5) →
-    // 2.25x1.53x2.93 world half-box (the engine multiplies half_extents by the
-    // node scale, so the box below stays native). Surface-anchored +
-    // planet-parented by base_facilities.lua.
     (
         name: "FacPower",
         transform: (
             translation: (0.0, 0.0, 0.0),
             rotation: (0.0, 0.0, 0.0, 1.0),
-            scale: (4.5, 4.5, 4.5),
+            scale: (1.0, 1.0, 1.0),
         ),
         matter: Mesh(
-            asset_path: "models/space-kit/machine_generatorLarge.glb",
+            asset_path: "models/base/power.glb",
         ),
+        object_materials: {
+            "Clad": (
+                color: (1.0, 1.0, 1.0),
+                texture: Some("textures/base/cladding_albedo.png"),
+                normal_map: Some("textures/base/cladding_normal.png"),
+                normal_strength: 1.2,
+                roughness_map: Some("textures/base/cladding_orm.png"),
+                roughness: 1.0,
+                metallic_map: Some("textures/base/cladding_orm.png"),
+                metallic: 1.0,
+                ao_map: Some("textures/base/cladding_orm.png"),
+                shading: Physical,
+            ),
+            "Concrete": (
+                color: (1.0, 1.0, 1.0),
+                texture: Some("textures/base/concrete_albedo.png"),
+                normal_map: Some("textures/base/concrete_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/base/concrete_orm.png"),
+                roughness: 1.0,
+                metallic_map: Some("textures/base/concrete_orm.png"),
+                metallic: 1.0,
+                ao_map: Some("textures/base/concrete_orm.png"),
+                shading: Physical,
+            ),
+            "Glass": (
+                color: (0.16, 0.20, 0.24),
+                roughness: 0.06,
+                metallic: 0.5,
+                shading: Physical,
+            ),
+            "Lamp": (
+                color: (1.0, 1.0, 1.0),
+                texture: Some("textures/base/lens.png"),
+                unlit: true,
+                fog: false,
+            ),
+            "Sign": (
+                color: (1.0, 1.0, 1.0),
+                texture: Some("textures/base/signs.png"),
+                roughness: 0.62,
+                metallic: 0.05,
+                shading: Physical,
+            ),
+            "Steel": (
+                color: (1.0, 1.0, 1.0),
+                texture: Some("textures/base/steel_albedo.png"),
+                normal_map: Some("textures/base/steel_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/base/steel_orm.png"),
+                roughness: 1.0,
+                metallic_map: Some("textures/base/steel_orm.png"),
+                metallic: 1.0,
+                ao_map: Some("textures/base/steel_orm.png"),
+                shading: Physical,
+            ),
+        },
         scripts: [],
+    ),
+    (
+        name: "Shell 1",
+        transform: (
+            translation: (-5.5125, -0.6700, -3.2500),
+            rotation: (0.00000, 0.00000, 0.00000, 1.00000),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+        parent: Some(0),
+        cast_shadow: false,
         rigidbody: Some((
             boxed: true,
             mode: Static,
-            radius: 2.0,
-            height: 2.0,
-            half_extents: (0.5, 0.34, 0.65),
+            radius: 0.5,
+            height: 1.0,
+            half_extents: (3.0000, 2.3000, 2.2500),
+            restitution: 0.0,
+            friction: 0.9,
+            gravity: false,
+            lock_pos: (false, false, false),
+            lock_rot: (false, false, false),
+        )),
+    ),
+    (
+        name: "Shell 2",
+        transform: (
+            translation: (3.3875, -1.1700, -3.6000),
+            rotation: (0.00000, 0.00000, 0.00000, 1.00000),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+        parent: Some(0),
+        cast_shadow: false,
+        rigidbody: Some((
+            boxed: true,
+            mode: Static,
+            radius: 0.5,
+            height: 1.0,
+            half_extents: (4.6000, 1.3000, 1.4000),
             restitution: 0.0,
             friction: 0.9,
             gravity: false,

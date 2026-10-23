@@ -22,6 +22,10 @@ defaults = {
 
 -- Published: the menu button + other scripts read/act on these.
 loading = false
+-- Is the loading curtain still up (true from the start of a slot's load to
+-- the end of the reveal)? base_facilities grades the spaceport's ground
+-- flat out behind it, and gently once the world can be seen.
+curtain = false
 
 local gen, overlay, overlay_text
 local slot = nil
@@ -118,6 +122,7 @@ function start(node)
   end
   seed = save.get("g_seed") or 0
   loading = true
+  curtain = true
   load_t = time
   -- Nothing simulates until the world is actually there: physics is paused
   -- for the whole loading screen (scripts, rails and terrain streaming keep
@@ -270,6 +275,7 @@ local function dry_site(cx, cy, cz)
   -- first sixty good-climate spots are all cliffs or coastline settles for the
   -- least-bad one rather than marching the whole sphere twice.
   local best, best_score = nil, -1e9
+  local first_ok = nil
   for i, d in ipairs(cands) do
     if i > 60 then break end
     local g = d.g
@@ -288,13 +294,32 @@ local function dry_site(cx, cy, cz)
       if worst < 1.0 then break end
     end
     local ok = worst >= 1.0 and spread < 14
+    -- THE SPACEPORT'S RING: the runway and the pad reach ~150 m out
+    -- (base_facilities FOOTPRINT_RADIUS). A site whose far ring is dry and
+    -- not much higher or lower wins outright; one that is not is only kept
+    -- as a fallback (base_facilities turns the layout to dodge what it can).
+    local far_ok = true
     if ok then
+      for ring = 1, 2 do
+        local arc = ring == 1 and 90 or 150
+        for k = 0, 11 do
+          local ox, oy, oz = arc_dir(d[1], d[2], d[3], g, arc, k * math.pi / 6)
+          local gg = ground_r(cx, cy, cz, ox, oy, oz, top)
+          local wl2 = gg and cl and cl.waterLevelAt and cl.waterLevelAt(spawn_body, ox, oy, oz, gg)
+          if not gg or gg - math.max(floor, wl2 or -1e9) < 1.0 or math.abs(gg - g) > 10 then far_ok = false; break end
+        end
+        if not far_ok then break end
+      end
+    end
+    if ok and far_ok then
       print(string.format("spawn: site climate score %.2f (candidate %d of %d)", d.climate, i, #cands))
       return d[1], d[2], d[3], g, sea
     end
+    if ok and not first_ok then first_ok = { d[1], d[2], d[3], g } end
     local score = math.min(worst, 20) - spread * 0.5 + d.climate * 10
     if score > best_score then best, best_score = { d[1], d[2], d[3], g }, score end
   end
+  if first_ok then return first_ok[1], first_ok[2], first_ok[3], first_ok[4], sea end
   if best then return best[1], best[2], best[3], best[4], sea end
   return 0, 1, 0, spawn_r, sea
 end
@@ -326,6 +351,24 @@ function spawnPoint(sx, sy, sz, body, radius)
     print("spawn: back at the colony on " .. tostring(save.get("base.body")))
     return hx, hy, hz
   end
+  -- A home world BUILT for it (homeGen 2) has a flat equatorial plain made
+  -- for the spaceport: system_generator publishes its centre. Use it when it
+  -- stands dry.
+  local sg = findScript("system_generator")
+  local bd = sg and sg.lastBaseDir
+  if bd and bd[1] then
+    local l = math.sqrt(bd[1] ^ 2 + bd[2] ^ 2 + bd[3] ^ 2)
+    if l > 1e-6 then
+      local dx, dy, dz = bd[1] / l, bd[2] / l, bd[3] / l
+      local cl = findScript("climate")
+      local sea = (cl and spawn_body and cl.seaRadius) and cl.seaRadius(spawn_body) or 0
+      local g = ground_r(sx, sy, sz, dx, dy, dz, math.max(spawn_r, sea) + 40)
+      if g and (sea <= 0 or g > sea + 1.5) then
+        print(string.format("spawn: the spaceport plain, %.0f° from the pole", math.deg(math.acos(math.max(-1, math.min(1, dy))))))
+        return sx + dx * (g + 2.5), sy + dy * (g + 2.5), sz + dz * (g + 2.5)
+      end
+    end
+  end
   local ux, uy, uz, g, sea = dry_site(sx, sy, sz)
   print(string.format("spawn: %s, %.0f° from the pole",
     sea > 0 and string.format("%.1f m above the sea", g - sea) or "no sea",
@@ -337,6 +380,7 @@ end
 -- The loading screen's words. `surface` is the step in progress (nil once the
 -- ground is done, when the colony is what is being waited for).
 local REVEAL_MAX = 12.0   -- seconds the curtain may wait on the colony
+local REVEAL_GRADE = 45.0 -- …or on a NEW spaceport's ground being graded
 
 -- Is the spawn world's ground there yet? `elapsed` is seconds on the loading
 -- screen, `d` the signed distance terrain.query gives at the spawn world's
@@ -466,7 +510,9 @@ end
 -- on some OTHER world has no base to wait for.
 local function base_pending(astro)
   local bf = findScript("base_facilities")
-  if not bf or bf.sited then return false end
+  if not bf then return false end
+  -- the ground under it is being graded: also behind the curtain
+  if bf.sited and not (bf.grading and bf.grading()) then return false end
   local home = save.get("base.body")
   if home and astro and space.dominant(astro.x, astro.y, astro.z) ~= home then return false end
   return true
@@ -480,6 +526,7 @@ local function reveal()
   local function hide()
     for _, e in ipairs({ bg, tx }) do if e then e.visible = false; e.opacity = 1.0 end end
     revealing = false
+    curtain = false
   end
   if not tween then hide() return end
   tween(0.25, function(a)
@@ -499,6 +546,14 @@ end
 -- launchpad at the pole instead, hundreds of metres from every building in the
 -- game. "im still struggling to enter buildings after launching a ship."
 local function launch_site()
+  -- The spaceport's own pad or runway (base_facilities), 3 m over it.
+  local bf = findScript("base_facilities")
+  local kind = save.get("shipyard.site") == "runway" and "runway" or "pad"
+  local st = bf and bf.launchSite and bf.launchSite(kind)
+  local sb = st and space.body(st.body)
+  if sb then
+    return sb.x + st.x + st.up.x * 3.0, sb.y + st.y + st.up.y * 3.0, sb.z + st.z + st.up.z * 3.0
+  end
   local name = save.get("base.body")
   local bx, by, bz = save.get("base.x"), save.get("base.y"), save.get("base.z")
   if not (name and bx and by and bz) then return nil end
@@ -610,6 +665,8 @@ function update(node, dt)
     paint_loading(time - load_t, nil)
     -- A beat after ready at the least (the scatter hitch), then as soon as the
     -- colony is up.
+    local bf = findScript("base_facilities")
+    if bf and bf.grading and bf.grading() and time < ready_t + REVEAL_GRADE then reveal_by = math.max(reveal_by, time + 0.5) end
     if time >= reveal_by or (time - ready_t > 1.0 and not base_pending(find("Astronaut"))) then
       reveal()
     end
