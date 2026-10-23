@@ -247,10 +247,21 @@ local function try_spaceport()
   end
   terrain.warm(st.body)
   local up = st.up
-  -- The terrain must be in: a ray down at the site from 40 m up.
+  -- The terrain must be in: a ray down at the site from 40 m up that strikes
+  -- something other than the crew, AND the terrain's own field answering
+  -- there (it reads ~6 m, its ceiling, where no ground has streamed in; the
+  -- pad's deck point stands 2 m over its ground). The crew is set
+  -- down on the launch site before its ground has streamed in (the runway
+  -- threshold is 127 m from the base centre): a bare ray hit the astronaut,
+  -- the craft was put together over no ground, and on release it fell through
+  -- to the sea and floated there until the terrain came in.
   local gx, gy, gz = body.x + st.x, body.y + st.y, body.z + st.z
-  local hit = raycast(gx + up.x * 40, gy + up.y * 40, gz + up.z * 40, -up.x, -up.y, -up.z, 120.0)
-  if not (hit and hit.distance) then
+  -- `ignore` takes ONE node on rc6 (a list is silently dropped: floptle/0473).
+  local crew0 = find("Astronaut")
+  local hit = raycast(gx + up.x * 40, gy + up.y * 40, gz + up.z * 40, -up.x, -up.y, -up.z, 120.0,
+                      crew0 and { ignore = crew0 } or nil)
+  local q = terrain.query(gx, gy, gz)
+  if not (hit and hit.distance and q and q < (st.deck and 4.0 or 2.5)) then
     if wait_t - (last_note or 0) > 5.0 then
       last_note = wait_t
       log(string.format("launch: waiting for the %s's ground… (%.0fs)", st.kind, wait_t))

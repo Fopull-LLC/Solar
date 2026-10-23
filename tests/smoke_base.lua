@@ -354,5 +354,31 @@ do
 end
 HILL = nil
 
+-- ── session 5: a low plain just over the sea — graded SEA_MARGIN over it ──
+-- (seed 1911564384's lowland stands 2–6 m over its sea: the plain must never
+-- be graded down at the water, where a rover floats instead of driving.)
+do
+  local sea = planet.radius - 1.0          -- the ground is 0–2 m over the sea
+  STORE["world." .. planet.name] = { sea = sea }
+  for _, k in ipairs({ "base.r", "base.heading", "base.layout", "base.runway" }) do STORE[k] = nil end
+  graded, cutfill = {}, {}
+  spawned, created, meshes = {}, {}, {}
+  assert(session(), "the base by the sea never laid out")
+  local Rs = STORE["base.r"]
+  assert(Rs >= sea + BF.SEA_MARGIN - 1e-9,
+    string.format("the plain is graded %.2f m over the sea (want ≥ %.1f)", Rs - sea, BF.SEA_MARGIN))
+  local low = math.huge
+  for _, d in ipairs(graded) do low = math.min(low, d.R) end
+  assert(#graded > 0 and low >= sea + BF.SEA_MARGIN - 1e-6,
+    string.format("a flatten disc landed %.2f m over the sea", low - sea))
+  -- a base already laid out keeps its radius, whatever the sea says now
+  STORE["world." .. planet.name] = { sea = Rs + 2.0 }
+  spawned, created, meshes = {}, {}, {}
+  assert(session(), "the sea-side base did not come back")
+  assert(STORE["base.r"] == Rs, "a sited base was regraded to a new sea")
+  STORE["world." .. planet.name] = nil
+  print(string.format("  by the sea: graded %.1f m over it (ground %.1f m over it)", Rs - sea, planet.radius - sea))
+end
+
 print(string.format("smoke_base OK — sliced (worst frame %d queries), %d structures, graded with %d ops, runway %.0f m %s, dish %.0f m from the centre",
   worst_frame, #BF.FACILITIES, sculpts1, S.L, n1 .. "/" .. n2, dish))

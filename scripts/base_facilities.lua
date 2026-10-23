@@ -103,6 +103,9 @@ FOOTPRINT_RADIUS = 175.0
 -- overlapping discs leave it within a few cm of the sphere.
 GRADE = { r = 20.0, step = 13.0, passes = 2, margin = 6.0, perFrame = 10, curtainFrame = 60,
           probe = { 36.0, 32.0, 28.0, 24.0, 20.0, 16.0, 12.0, 8.0, 4.0 }, cutR = 8.5, fillR = 6.0, near = 450.0 }
+-- How far over the sea the graded plain stands at the least (m): a rover on
+-- the runway must be on dry land, clear of the water's reach.
+SEA_MARGIN = 4.0
 -- Paving height over the graded ground.
 PAVE_H = 0.14
 
@@ -415,6 +418,15 @@ local function fit_samples()
   return out
 end
 
+-- The sea's radius on this body (the world record's, as climate.seaRadius
+-- reads it), or nil for a dry world.
+local function seaRadiusOf(body)
+  local w = save.get("world." .. (body.name or ""))
+  local sea = w and w.sea
+  if type(sea) == "number" and sea > 0 then return sea end
+  return nil
+end
+
 local function water_at(body, d, g)
   local cl = ref("climate")
   if not (cl and cl.waterLevelAt) then return nil end
@@ -441,6 +453,13 @@ function fitLayout(body, c)
   local R = core[math.floor((#core + 1) / 2)]
   local wl = water_at(body, c, R)
   if wl and R < wl + 1.5 then R = wl + 1.5 end
+  -- Never down at the sea: the plain is graded SEA_MARGIN over it at least
+  -- (water_at only answers once the ground is already UNDER the water, so a
+  -- core 0.1 m over the sea passed), the grade filling up where the ground is
+  -- lower and the edge discs ramping it back down. A base already laid out
+  -- keeps its saved radius.
+  local sea = seaRadiusOf(body)
+  if sea and R < sea + SEA_MARGIN then R = sea + SEA_MARGIN end
   -- Heading: 24 candidates, cost = earthwork + 400 per wet sample.
   local samples = fit_samples()
   top = R + 40.0       -- the footprint's ground is near R; a shorter march
