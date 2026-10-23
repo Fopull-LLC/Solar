@@ -218,7 +218,8 @@ PROGRAMME = {
     id = "rare_finds", title = "Rare Finds", requires = "first_steps",
     brief = "The survey flagged plants that grow in one kind of place only, and a\n" ..
             "ringing in the rock that means geodes. The labs want a specimen of each.\n" ..
-            "Rare plants glow faintly: look for the light.",
+            "Each rare plant stands under a beam of light. Open the Tracking Station\n" ..
+            "at the base to survey the planet: it maps them all.",
     reward = 1200, rep = 1, grants = { "battery" },
     goals = {
       { kind = "rare", niche = "ravine", alt = { "river", "lake", "cave" }, pay = 500 },

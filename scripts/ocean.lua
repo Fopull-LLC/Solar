@@ -180,6 +180,89 @@ local function push_wind(node)
   node:setShaderParam("wind", c.windNow or c.wind or 0)
 end
 
+-- ── dry caves ──────────────────────────────────────────────────────────────
+-- The engine's Sea Volume (the prefab's hidden child) gives the view its
+-- underwater look anywhere inside the sea's sphere — so every cave below sea
+-- level was murky water, "all caves / underground treated as underwater".
+-- Water is a CONNECTED body (climate.seaDepth: open to the sea's surface, or a
+-- flooded cave), so whenever the eye is under the sea's radius somewhere that
+-- rule calls dry, the volume is frozen (a frozen volume has no inside: no look,
+-- no state) and thawed again the moment the eye is in real water.
+--
+-- And in a dry cave the sea's surface sphere runs through the rock and
+-- would show as a sheet of water across a grotto that spans sea level, so it
+-- is hidden while the eye is roofed over and walled in on every side (a cave,
+-- not an overhang on a beach, where the sea is in view).
+local vol, vol_frozen = nil, false
+local look_t, surf_hidden = 0, false
+caveDry = false      -- published: the eye is in a dry spot under the sea's level
+
+local function sea_volume(node)
+  if vol and vol.valid then return vol end
+  vol = nil
+  local kids = node.children and node:children() or {}
+  for _, k in ipairs(kids) do
+    if k.valid and k.name == "Sea Volume" then vol = k end
+  end
+  return vol
+end
+
+local function walled(ex, ey, ez, ux, uy, uz)
+  -- Horizontal sphere-traces in six directions: all hit rock within 40 m?
+  local ax, ay, az = 0, 1, 0
+  if math.abs(uy) > 0.9 then ax, ay, az = 1, 0, 0 end
+  local t1x, t1y, t1z = uy * az - uz * ay, uz * ax - ux * az, ux * ay - uy * ax
+  local l = len(t1x, t1y, t1z)
+  t1x, t1y, t1z = t1x / l, t1y / l, t1z / l
+  local t2x, t2y, t2z = uy * t1z - uz * t1y, uz * t1x - ux * t1z, ux * t1y - uy * t1x
+  for k = 0, 5 do
+    local a = k * math.pi / 3
+    local dx = t1x * math.cos(a) + t2x * math.sin(a)
+    local dy = t1y * math.cos(a) + t2y * math.sin(a)
+    local dz = t1z * math.cos(a) + t2z * math.sin(a)
+    local t, hit = 0.5, false
+    for _ = 1, 14 do
+      local q = terrain.query(ex + dx * t, ey + dy * t, ez + dz * t)
+      if q == nil then return false end
+      if q < 0.1 then hit = true break end
+      t = t + math.max(q, 0.5)
+      if t > 40 then break end
+    end
+    if not hit then return false end
+  end
+  return true
+end
+
+local function look_tick(node, ex, ey, ez, dc, dt)
+  if frozen then return end
+  look_t = look_t - dt
+  if look_t > 0 then return end
+  look_t = 0.15
+  local cl = findScript("climate")
+  local v = sea_volume(node)
+  local dry = false
+  local hide = false
+  if dc < R + 4 and cl and cl.isUnderwater and terrain and terrain.query then
+    local wet = cl.isUnderwater(ex, ey, ez)
+    dry = (dc < R) and not wet
+    if not wet and cl.columnOpen then
+      local rx, ry, rz = ex - body.x, ey - body.y, ez - body.z
+      if cl.columnOpen(body.x, body.y, body.z, rx, ry, rz, R + 30) == false then
+        hide = walled(ex, ey, ez, rx / dc, ry / dc, rz / dc)
+      end
+    end
+  end
+  caveDry = dry
+  if v and water and water.setFrozen and dry ~= vol_frozen then
+    vol_frozen = dry
+    water.setFrozen(v, dry)
+  end
+  if hide ~= surf_hidden then
+    surf_hidden = hide
+    node.visible = not hide
+  end
+end
+
 function update(node, dt)
   if not resolve(node) then return end
   push_sky(node)
@@ -189,6 +272,7 @@ function update(node, dt)
   if not ex then return end
   local rx, ry, rz = ex - body.x, ey - body.y, ez - body.z
   local dc = len(rx, ry, rz)
+  look_tick(node, ex, ey, ez, dc, dt)
   if not frozen then push_far(node, dc - R) end
   local near = (not frozen) and dc - R < params.near and dc > 1
   if not near then
@@ -256,6 +340,11 @@ function update(node, dt)
     local ax, ay, az = a.x - body.x, a.y - body.y, a.z - body.z
     local al = len(ax, ay, az)
     local depth = R - al
+    -- In a dry cave under the sea's level there is no water to hit.
+    if depth >= 0 then
+      local cl = findScript("climate")
+      if cl and cl.isUnderwater and not cl.isUnderwater(a.x, a.y, a.z) then depth = -1 end
+    end
     if crew_depth and crew_depth < 0 and depth >= 0 then
       local vr = ((a.vx or 0) * ax + (a.vy or 0) * ay + (a.vz or 0) * az) / math.max(al, 1e-6)
       if vr < -2.0 then

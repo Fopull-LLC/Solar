@@ -923,6 +923,93 @@ keys.w = nil
 sea_y = nil
 tick(60)
 
+-- ── 8. BREATH ───────────────────────────────────────────────────────────────
+-- "when youre underwater your oxygen bar will go down and if it hits 0 you
+-- die. of course being inside a craft gives you oxygen". The tank drains with
+-- the HELMET under water, fills in air, and at empty the crew blacks out and
+-- wakes at the base.
+local caption = nil
+envs.big_caption = { show = function(t) caption = t end, node = { valid = true } }
+walker.params.o2_secs = 4.0
+walker.params.o2_refill = 2.0
+walker.params.o2_blackout = 0.5
+walker.setOxygen(1)
+-- Wading: the water at the chest leaves the helmet in air.
+sea_y = ASTRO.y + 0.2
+tick(60)
+check("wading with the head above water uses no air", walker.oxygen >= 0.999 and walker.headUnder == false,
+  string.format("%.3f", walker.oxygen))
+-- Under: 1 s of a 4 s tank.
+sea_y = ASTRO.y + 3.0
+tick(60)
+check("with the helmet under water the tank drains", math.abs(walker.oxygen - 0.75) < 0.03 and walker.headUnder,
+  string.format("%.3f", walker.oxygen))
+check("...and o2Left says how many seconds are left", math.abs(walker.o2Left - 3.0) < 0.15,
+  string.format("%.2f s", walker.o2Left))
+-- Up for air: refills at o2_refill seconds from empty.
+sea_y = ASTRO.y - 3
+tick(30)
+check("in air it fills again", walker.oxygen > 0.99, string.format("%.3f", walker.oxygen))
+-- Aboard a craft is air, even under water.
+sea_y = ASTRO.y + 3.0
+walker.setOxygen(0.5)
+envs.vessel_controller = { piloting = true, node = ASTRO }
+tick(30)
+check("aboard a craft (a submarine) the tank refills under water", walker.oxygen > 0.7,
+  string.format("%.3f", walker.oxygen))
+envs.vessel_controller = nil
+-- Empty: black out, then wake up out of the water.
+-- The colony, 20 m over the water (the rescue wakes the crew there).
+local base_y = ASTRO.y + 20
+local save_get = API.save.get
+API.save.get = function(k)
+  if k == "base.body" then return "Ground" end
+  if k == "base.x" or k == "base.z" then return 0 end
+  if k == "base.y" then return base_y + 1000 end
+  return save_get(k)
+end
+walker.setOxygen(0.05)
+local before = walker.drowned
+tick(20)
+check("an empty tank blacks the crew out", walker.downed == true and walker.drowned == before + 1)
+keys.space = true
+local y0 = ASTRO.y
+tick(5)
+keys.space = nil
+check("...and the keys do nothing while out", ASTRO.vy <= 2.3, string.format("%.2f m/s", ASTRO.vy))
+tick(40)
+check("...then the crew wakes, with a full tank", walker.downed == false and walker.oxygen > 0.99)
+check("...at the base, out of the water", math.abs(ASTRO.y - (base_y + 2.5)) < 0.5 and (sea_y - ASTRO.y) < 0,
+  string.format("%.2f m from the base, %.2f m under", ASTRO.y - base_y, sea_y - ASTRO.y))
+API.save.get = save_get
+check("...and the screen says what happened", caption == "CREW LOST", tostring(caption))
+sea_y = nil
+tick(30)
+
+-- ── 9. TRUNKS AND ROCKS ─────────────────────────────────────────────────────
+-- "i should be able to collide with rocks and bump into trees": a trunk
+-- right ahead (W walks −z) stops the crew; one off to the side is slid past.
+local bx0, by0, bz0 = ASTRO.x, ASTRO.y + 1000, ASTRO.z
+envs.flora_field = { obstaclesBody = "Ground", node = { valid = true }, obstacles = {
+  { x = bx0, y = by0 - 1.0, z = bz0 - 0.55, ux = 0, uy = 1, uz = 0, r = 0.3, h = 3.0 } } }
+keys.w = true
+tick(30)
+check("walking into a trunk, the crew does not go on into it", ASTRO.vz >= -0.05,
+  string.format("vz %.2f m/s", ASTRO.vz))
+check("...and the walker says it is touching", walker.bumped == 1)
+-- Off to the side: the speed along the trunk's flank is kept.
+envs.flora_field.obstacles[1].x = bx0 + 0.45
+tick(30)
+check("brushing a trunk's side slides past it", ASTRO.vz < -1.0 and ASTRO.vx < 0.01,
+  string.format("v (%.2f, %.2f)", ASTRO.vx, ASTRO.vz))
+-- A rock is a ball: stepped round at its middle, nothing over its top.
+envs.flora_field.obstacles[1] = { x = bx0, y = by0 + 0.0, z = bz0 - 0.6, ux = 0, uy = 1, uz = 0, r = 0.5, h = 0 }
+tick(30)
+check("a rock in the way stops the crew too", ASTRO.vz >= -0.05, string.format("vz %.2f m/s", ASTRO.vz))
+keys.w = nil
+envs.flora_field = nil
+tick(30)
+
 -- ── report ──────────────────────────────────────────────────────────────────
 local bad = {}
 for _, c in ipairs(checks) do

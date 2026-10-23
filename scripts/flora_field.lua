@@ -71,6 +71,27 @@ defaults = {
   -- Multiplies every species' reach. Turn it down if the surface ever hitches.
   --@range 0.4 1.5
   reach = 1.0,
+  --@header Touch
+  -- Plants bend away as the crew walks through them; trunks and rocks stop
+  -- the crew (see "touch"). 0 = off.
+  touch = 1,
+  -- How near (m) a plant starts to lean, and how far it leans (radians).
+  --@range 0.4 3 --@units m
+  touch_r = 1.1,
+  --@range 0 1.2 --@units rad
+  touch_bend = 0.75,
+  -- Most plants bent at once.
+  --@range 0 40
+  touch_cap = 14,
+  -- Trunks and rocks stop the crew (planet_walker reads `obstacles`), and
+  -- how far round the crew they are gathered.
+  touch_bump = 1,
+  --@range 3 30 --@units m
+  touch_reach = 9.0,
+
+  -- Dissolve every layer out at the edge of its reach instead of cutting it
+  -- (flora_gen.fadeBands). 0 = the old hard edge.
+  fade_out = 1,
 
   --@header Harvest
   regrow = 900.0,   -- seconds before a cut plant grows back
@@ -127,6 +148,17 @@ defaults = {
   -- nearest; scene lights are a shared budget of sixteen).
   --@range 10 150 --@units m
   rare_light = 70.0,
+  -- The beam over each rare plant (0 = none, 1 = full strength), how far it
+  -- shows before the world is surveyed (or the plant spotted), and after.
+  --@range 0 1.5
+  rare_beam = 1.0,
+  --@range 50 2000 --@units m
+  rare_beam_near = 450.0,
+  --@range 200 8000 --@units m
+  rare_beam_far = 4000.0,
+  -- Walk this close to a rare plant and it is spotted: its beam stays lit.
+  --@range 20 600 --@units m
+  rare_spot = 220.0,
   enabled = 1,
 }
 
@@ -331,6 +363,7 @@ local function drop_patch(key)
 end
 
 function clearAll()
+  if touchClear then touchClear() end
   sweep_retiring(nil, true)
   for key in pairs(patches) do drop_patch(key) end
   for id in pairs(srcs) do drop_source(id) end
@@ -465,13 +498,23 @@ local function base_clearance(L, rx, ry, rz)
 end
 
 -- How much of a stand of plants `h` metres tall keeps growing here, 0..1.
-function baseKeep(rx, ry, rz, h)
+-- `foot`: how far the plant's leaves reach from its root (flora_gen.footprint
+-- × its scale). A LOW plant (grass, ground cover) is kept that far plus a hand
+-- off every strip and lot, and comes back in over CARPET_FADE metres — a clean
+-- verge, not the ragged bites the 14 m thinning took out of the carpet at the
+-- paving's edge.
+local CARPET_FADE = 2.5
+function baseKeep(rx, ry, rz, h, foot)
   local L = base_layout()
   if not L then return 1 end
   if len(rx - L.x, ry - L.y, rz - L.z) > L.r + 20 then return 1 end
   local clr, fence = base_clearance(L, rx, ry, rz)
   local C = BASE_CLEAR
   local margin = C.margin + math.min(h or 1, 14) * C.perM
+  if (h or 1) <= C.tall and foot then
+    return math.max(0, math.min(1, (clr - foot - 0.4) / CARPET_FADE))
+  end
+  if foot then margin = math.max(margin, foot + 0.4) end
   local keep = math.max(0, math.min(1, (clr - margin) / C.fade))
   if (h or 1) > C.tall then
     -- Trees and bushes: out of the fenced compound, and out of the whole
@@ -493,10 +536,32 @@ local function clear_base(id, p, sp)
   if len(p.cx - L.x, p.cy - L.y, p.cz - L.z) > p.half * 1.5 + L.r then return 0 end
   local hits = scatter.near(id, vec3(body.x + L.x, body.y + L.y, body.z + L.z), L.r) or {}
   local h = (sp.height or 1) * (sp.scaleMax or 1)
+  -- Grass and ground cover are the verge, however tall a blade: a clean edge.
+  if sp.role == "carpet" or sp.kind == "grass" or sp.kind == "moss" then h = math.min(h, BASE_CLEAR.tall) end
+  local fg = ref("flora_gen")
+  local foot0 = fg and fg.footprint and fg.footprint(sp) or nil
   local n = 0
   for _, it in ipairs(hits) do
     local px, py, pz = it.pos.x - body.x, it.pos.y - body.y, it.pos.z - body.z
-    local keep = baseKeep(px, py, pz, h)
+    local foot = foot0 and foot0 * (it.scale or 1)
+    -- A prop not yet dropped answers on its patch's PLANE, which off the
+    -- patch's centre stands metres over the ground; the engine drops it along
+    -- the patch's -Y. Near an edge, where a metre decides it, drop it here
+    -- the same way (a few signed-distance steps) before judging it.
+    if not it.settled and foot then
+      local clr = select(1, base_clearance(L, px, py, pz))
+      if clr < foot + 0.4 + CARPET_FADE + 4 then
+        local t = 0
+        for _ = 1, 8 do
+          local q = terrain.query(body.x + px - p.ey[1] * t, body.y + py - p.ey[2] * t, body.z + pz - p.ey[3] * t)
+          if not q then break end
+          t = t + q
+          if math.abs(q) < 0.03 then break end
+        end
+        px, py, pz = px - p.ey[1] * t, py - p.ey[2] * t, pz - p.ey[3] * t
+      end
+    end
+    local keep = baseKeep(px, py, pz, h, foot)
     if keep < 1 then
       local roll = (((it.id % 2147483647) * 48271 + 11) % 2147483647) / 2147483647
       if roll >= keep then
@@ -529,16 +594,24 @@ end
 function baseSurvey()
   local L = base_layout()
   local body = cur_body and space.body(cur_body)
-  local out = { total = 0, onBuilt = 0, inMargin = 0, fading = 0 }
+  -- overPaving: settled props whose leaves (flora_gen.footprint × scale)
+  -- reach over a strip or lot.
+  local out = { total = 0, onBuilt = 0, inMargin = 0, fading = 0, overPaving = 0, settled = 0 }
   if not (L and body and scatter.near) then return out end
+  local fg = ref("flora_gen")
   for id, sr in pairs(srcs) do
     if sr.part ~= "bark" and sr.sp then
       local h = (sr.sp.height or 1) * (sr.sp.scaleMax or 1)
+      local foot0 = fg and fg.footprint and fg.footprint(sr.sp) or 0.6
       for _, it in ipairs(scatter.near(id, vec3(body.x + L.x, body.y + L.y, body.z + L.z), L.r) or {}) do
         local px, py, pz = it.pos.x - body.x, it.pos.y - body.y, it.pos.z - body.z
         out.total = out.total + 1
         local clr = base_clearance(L, px, py, pz)
         local keep = baseKeep(px, py, pz, h)
+        if it.settled then
+          out.settled = out.settled + 1
+          if clr < foot0 * (it.scale or 1) then out.overPaving = out.overPaving + 1 end
+        end
         if clr < 0 then out.onBuilt = out.onBuilt + 1 end
         if keep <= 0 then out.inMargin = out.inMargin + 1 elseif keep < 1 then out.fading = out.fading + 1 end
       end
@@ -564,18 +637,19 @@ local function make_source(p, sp, fg, w)
   local seed = hash(w.seed or 1, p.face, p.sgn + 2, p.i + 50000, p.j + 50000, sp.id)
   local list = cuts_of(p.key, sp.id)
   local function declare(part)
-    local lod = {}
+    -- Every band cross-dissolves into the next, and the last into nothing
+    -- (flora_gen.fadeBands): nothing pops in or out at the edge of its reach.
+    local bands = {}
     for l = 0, (sp.lods or 1) - 1 do
-      local frac = sp.lodAt[l + 1] or 1.0
-      lod[#lod + 1] = { asset = fg.assetFor(sp, l, part), distance = far * frac }
+      bands[#bands + 1] = { asset = fg.assetFor(sp, l, part), at = sp.lodAt[l + 1] or 1.0 }
     end
-    lod[#lod].distance = far
+    local lod, fade = fg.fadeBands(bands, far, params.fade_out > 0 and fg.emptyAsset and fg.emptyAsset() or nil)
     local opts = {
       seed = seed,
       center = vec3(0, 0, 0), halfX = p.half, halfZ = p.half,
       perChunk = sp.per, chunk = sp.chunk, align = sp.upright and "world" or "surface",
       scaleMin = sp.scaleMin, scaleMax = sp.scaleMax,
-      fade = math.max(3.0, far * 0.08), lod = lod,
+      fade = fade, lod = lod,
       density = data, densityRows = rows,
       parent = p.name,
     }
@@ -604,7 +678,7 @@ local function make_source(p, sp, fg, w)
     -- What was cut here stays cut: ids are (seed, chunk, index), so the same
     -- id names the same plant in every declaration of this source.
     for _, c in ipairs(list) do scatter.remove(id, c.id) end
-    srcs[id] = { patch = p.key, sp = sp, fill = sum / (rows * rows), part = part, made = time }
+    srcs[id] = { patch = p.key, sp = sp, fill = sum / (rows * rows), part = part, made = time, tint = opts.tint }
     return id
   end
   local id = declare(nil)
@@ -802,8 +876,226 @@ end
 
 local rare_tick   -- defined below (rare plants)
 
+-- ── touch: plants that bend, trunks and rocks that stop you ─────────────────
+--
+-- Scattered props are instanced draws with no node and no collider, and the
+-- engine's sway is one wind for the whole field (a single uniform: weather's
+-- wind at the camera), so neither "the grass parts round my legs" nor "I
+-- bumped into that tree" could happen. Both are done here, near the crew only:
+--
+-- BENDING. The grass, ferns, reeds and bushes within `touch_r` of the crew are
+-- SWAPPED for nodes wearing the same model, look and place (scatter.near gives
+-- each one's ground point, up, spin and scale), the instance is taken out
+-- (scatter.remove — a cheap retain on its chunk, not a re-settle), and the
+-- node is tipped away from the crew about its root, eased in as you push
+-- through and springing back after. Once upright and clear it is handed back
+-- (scatter.restore) and the node goes. At most `touch_cap` at once. The
+-- removals are never saved: save_cuts falls back to its own list whenever the
+-- engine's removed list holds more than the cuts.
+--
+-- BUMPING. The tree trunks (a tree's bark source) and rocks
+-- (mineral_field.rocksNear) within `touch_reach` of the crew are published as
+-- `obstacles`, a few times a second, and planet_walker keeps the crew out of
+-- them: you walk into a trunk and stop, and slide round a boulder.
+
+local BEND_KIND = { grass = true, fern = true, reed = true, bush = true, shrub = true, moss = true }
+local touch = { bent = {}, n = 0, t = 0, ct = 0 }
+touchStats = { bent = 0, obstacles = 0, trunks = 0, rocks = 0 }
+
+local function touch_release(key, b)
+  if b.restored == nil and srcs[b.src] then pcall(scatter.restore, b.src, b.inst) end
+  if b.node and b.node.valid then b.node:destroy() end
+  touch.bent[key] = nil
+  touch.n = touch.n - 1
+end
+
+function touchClear()
+  for key, b in pairs(touch.bent) do touch_release(key, b) end
+  touch.bent, touch.n = {}, 0
+  obstacles = {}
+end
+
+-- New bends: what is within reach of the crew's feet.
+local function touch_find(astro, body, fg, planet)
+  local ax, ay, az = astro.x, astro.y, astro.z
+  local rx, ry, rz = ax - body.x, ay - body.y, az - body.z
+  local reach = params.touch_r + 1.2
+  for id, s in pairs(srcs) do
+    local sp = s.sp
+    if s.part ~= "bark" and sp and BEND_KIND[sp.kind] and touch.n < params.touch_cap then
+      local p = patches[s.patch]
+      if p and patch_dist(p, rx, ry, rz) <= reach then
+        for _, h in ipairs(scatter.near(id, vec3(ax, ay, az), reach) or {}) do
+          local key = id .. ":" .. tostring(h.id)
+          if not touch.bent[key] and touch.n < params.touch_cap and h.settled ~= false then
+            local hx, hy, hz = h.pos.x - body.x, h.pos.y - body.y, h.pos.z - body.z
+            local u = h.up or vec3(p.ey[1], p.ey[2], p.ey[3])
+            local yaw = h.yaw or 0
+            -- The instance's facing: spin about the patch's +Y, then tilt to
+            -- its up (scatter's own order); setUp keeps the forward as near
+            -- as the up allows.
+            local fx = -math.sin(yaw) * p.ex[1] - math.cos(yaw) * p.ez[1]
+            local fy = -math.sin(yaw) * p.ex[2] - math.cos(yaw) * p.ez[2]
+            local fz = -math.sin(yaw) * p.ex[3] - math.cos(yaw) * p.ez[3]
+            local b = { src = id, inst = h.id, x = hx, y = hy, z = hz, ux = u.x, uy = u.y, uz = u.z,
+                        fx = fx, fy = fy, fz = fz, w = 0, born = time, sp = sp }
+            touch.bent[key] = b
+            touch.n = touch.n + 1
+            local t = s.tint or sp.tint or { 1, 1, 1 }
+            local k = 0.85 + 0.3 * (h.param or 0.5)
+            createNode("Flora Bend", planet, function(n)
+              n.model = fg.modelFor(sp, 0)
+              n.x, n.y, n.z = hx, hy, hz
+              local sc = h.scale or 1
+              n.scale_x, n.scale_y, n.scale_z = sc, sc, sc
+              if n.setUp then n:setUp(vec3(u.x, u.y, u.z), vec3(fx, fy, fz)) end
+              local col = { t[1] * k, t[2] * k, t[3] * k }
+              if tostring(fg.assetFor(sp, 0)):sub(-11) == ".prefab.ron" then
+                -- A swaying plant's prefab is one leaf material (tools/gen_flora_prefabs.py).
+                n:setMaterial { texture = "textures/flora/foliage_l0.png", normalMap = "textures/flora/foliage_n.png",
+                                color = col, sway = 0.5, backlight = 0.5 }
+              else
+                -- A model drawn as it is: its own parts, each shaded by the source's tint.
+                local ok, mats = pcall(n.materials, n)
+                for _, m in ipairs(ok and type(mats) == "table" and mats or {}) do
+                  local ok2, mm = pcall(n.material, n, m.material or m.object)
+                  if ok2 and mm then mm.color = col end
+                end
+              end
+              n.tags = { "flora" }
+              b.node = n
+            end)
+          end
+        end
+      end
+    end
+  end
+end
+
+-- The bends this frame: lean away from the crew, spring back, hand back.
+local function touch_drive(astro, body, dt)
+  local rx, ry, rz = astro.x - body.x, astro.y - body.y, astro.z - body.z
+  for key, b in pairs(touch.bent) do
+    if not srcs[b.src] then
+      if b.node and b.node.valid then b.node:destroy() end
+      touch.bent[key] = nil
+      touch.n = touch.n - 1
+    elseif b.node and b.node.valid then
+      -- The node is drawing: take the instance out (one frame of both is
+      -- invisible; one frame of neither is a blink).
+      if not b.removed then b.removed = true; scatter.remove(b.src, b.inst) end
+      local dx, dy, dz = b.x - rx, b.y - ry, b.z - rz
+      local du = dx * b.ux + dy * b.uy + dz * b.uz
+      dx, dy, dz = dx - b.ux * du, dy - b.uy * du, dz - b.uz * du
+      local d = len(dx, dy, dz)
+      local want = math.max(0, math.min(1, 1 - (d - 0.25) / params.touch_r))
+      if math.abs(du) > 2.5 then want = 0 end
+      if d > 1e-3 then b.ax, b.ay, b.az = dx / d, dy / d, dz / d end
+      local rate = want > b.w and 9.0 or 2.2
+      b.w = b.w + (want - b.w) * (1 - math.exp(-rate * dt))
+      if b.ax then
+        local tilt = math.tan(b.w * params.touch_bend)
+        local nx, ny, nz = b.ux + b.ax * tilt, b.uy + b.ay * tilt, b.uz + b.az * tilt
+        local l = len(nx, ny, nz)
+        if math.abs(b.w - (b.w_set or -1)) > 0.004 then
+          b.w_set = b.w
+          b.node:setUp(vec3(nx / l, ny / l, nz / l), vec3(b.fx, b.fy, b.fz))
+        end
+      end
+      if want <= 0 and b.w < 0.02 and time - b.born > 0.4 then
+        -- Upright and clear: the instance back, the node a moment later.
+        if b.restored == nil then
+          b.restored = time
+          pcall(scatter.restore, b.src, b.inst)
+        elseif time - b.restored > 0.25 then
+          b.node:destroy()
+          touch.bent[key] = nil
+          touch.n = touch.n - 1
+        end
+      elseif b.restored then
+        -- Walked back into it before it went: take it out again.
+        b.restored = nil
+        scatter.remove(b.src, b.inst)
+      end
+    elseif time - b.born > 3.0 then
+      touch.bent[key] = nil       -- the node never came
+      touch.n = touch.n - 1
+    end
+  end
+end
+
+-- The trunks and rocks round the crew, for planet_walker to bump into:
+-- `obstacles` = { { x, y, z (body-relative ground point / rock centre), ux,
+-- uy, uz (its up), r (radius), h (a trunk's height; 0 for a rock), key } },
+-- refreshed a few times a second. (Not engine colliders: a Static or
+-- Kinematic body spawned under a planet node and moved by script did not stop
+-- the crew on rc6 — see the report — so the walker keeps the crew out of
+-- them itself, the way it already owns its own up axis.)
+obstacles = {}
+obstaclesBody = nil
+local function touch_obstacles(astro, body)
+  local want = {}
+  local ax, ay, az = astro.x, astro.y, astro.z
+  local rx, ry, rz = ax - body.x, ay - body.y, az - body.z
+  local R = params.touch_reach
+  local nt, nr = 0, 0
+  for id, s in pairs(srcs) do
+    if s.part == "bark" then
+      local p = patches[s.patch]
+      if p and patch_dist(p, rx, ry, rz) <= R + 2 then
+        for _, h in ipairs(scatter.near(id, vec3(ax, ay, az), R) or {}) do
+          if h.settled ~= false then
+            local sc = h.scale or 1
+            local u = h.up or vec3(p.ey[1], p.ey[2], p.ey[3])
+            want[#want + 1] = { key = "t" .. id .. ":" .. tostring(h.id), x = h.pos.x - body.x, y = h.pos.y - body.y,
+                                z = h.pos.z - body.z, ux = u.x, uy = u.y, uz = u.z,
+                                r = math.max(0.15, math.min(0.6, 0.28 * sc)), h = 3.2 * sc }
+            nt = nt + 1
+          end
+        end
+      end
+    end
+  end
+  local mf = ref("mineral_field")
+  if mf and mf.rocksNear then
+    for _, rk in ipairs(mf.rocksNear(ax, ay, az, R)) do
+      local x, y, z = rk.x - body.x, rk.y - body.y, rk.z - body.z
+      local l = len(x, y, z)
+      want[#want + 1] = { key = rk.key, x = x, y = y, z = z, ux = x / l, uy = y / l, uz = z / l, r = rk.r, h = 0 }
+      nr = nr + 1
+    end
+  end
+  obstacles, obstaclesBody = want, cur_body
+  touchStats.obstacles, touchStats.trunks, touchStats.rocks = #want, nt, nr
+end
+
+local function touch_tick(dt)
+  local pw = ref("planet_walker")
+  local astro = find("Astronaut")
+  local body = cur_body and space.body(cur_body)
+  if not (pw and pw.onFoot and astro and body) then
+    if touch.n > 0 then for key, b in pairs(touch.bent) do touch_release(key, b) end end
+    return
+  end
+  touch_drive(astro, body, dt)
+  touch.t = touch.t - dt
+  if touch.t <= 0 then
+    touch.t = 0.1
+    local fg = ref("flora_gen")
+    local planet = find(cur_body)
+    if fg and planet then touch_find(astro, body, fg, planet) end
+  end
+  touch.ct = touch.ct - dt
+  if touch.ct <= 0 and params.touch_bump > 0 then
+    touch.ct = 0.2
+    touch_obstacles(astro, body)
+  end
+  touchStats.bent = touch.n
+end
+
 function update(node, dt)
   if params.rare > 0 then rare_tick(dt) end
+  if params.touch > 0 and params.enabled ~= 0 and scatter and scatter.near then touch_tick(dt) end
   if params.enabled == 0 then
     if cur_body then clearAll(); cur_body = nil end
     diag("switched off (enabled = 0)")
@@ -1065,6 +1357,15 @@ end
 -- nothing is left (engine 0.117.0-rc6, card 0464). A wash the engine took
 -- is forgotten at the next re-fade and laid again by the pass that lays new
 -- ones.
+-- NOTHING POPS: a wash is laid at nothing and fades up over WASH_IN seconds,
+-- fades with distance at the rim, and fades out with height over the last
+-- third of `tint_alt` (it was lifted all at once on the way up).
+local WASH_IN = 1.5
+local function wash_alpha(inf, d, range, kalt)
+  local kd = math.max(0, math.min(1, (range - d) / (range * 0.4)))
+  local ki = math.max(0, math.min(1, (time - (inf[5] or 0)) / WASH_IN))
+  return inf[4] * kd * ki * kalt
+end
 wash = function(body, rx, ry, rz, species, fg, alt, w)
   if params.tint == 0 or not (decals and decals.add) or (alt or 0) > params.tint_alt then
     if wash_n > 0 or next(washes) then
@@ -1103,7 +1404,16 @@ wash = function(body, rx, ry, rz, species, fg, alt, w)
               local smp = p.samples[r * rows + c + 1]
               local dens = smp and fg.densityAt(grass, smp, smp.x, smp.y, smp.z, 1e9) or 0
               washes[key] = false
-              if dens > 0.25 then
+              -- No turf washes anywhere on the base: a decal lays on every
+              -- static collider face under it, and the buildings' invisible
+              -- collider boxes (stair ramps, tank and pedestal boxes) took the
+              -- grass tint as floating translucent panes ("the yellow
+              -- semi-transparent box on the tracking station").
+              local bf = ref("base_facilities")
+              local fp = bf and bf.footprint
+              local on_base = type(fp) == "table" and fp.body == cur_body and type(fp.x) == "number"
+                and len(px - fp.x, py - fp.y, pz - fp.z) < (fp.radius or 175) + S
+              if dens > 0.25 and not on_base then
                 local gx, gy, gz, nx, ny, nz = ground_under(body, px, py, pz)
                 local hit = { x = body.x + gx, y = body.y + gy, z = body.z + gz, nx = nx, ny = ny, nz = nz }
                 if hit then
@@ -1117,13 +1427,14 @@ wash = function(body, rx, ry, rz, species, fg, alt, w)
                     size = S * 1.6,
                     color = { (col[1] + (gr[1] or col[1])) * 0.5, (col[2] + (gr[2] or col[2])) * 0.5,
                               (col[3] + (gr[3] or col[3])) * 0.5 },
-                    alpha = base * fade,
+                    alpha = 0.0,
                     rotation = ((i * 7 + j * 13) % 12) * 0.52,
                   })
                   if ok and id then
                     washes[key] = id
                     wash_n = wash_n + 1
-                    wash_info[key] = { gx, gy, gz, base }
+                    wash_info[key] = { gx, gy, gz, base, time, 0.0 }
+                    wash_fade_t = math.min(wash_fade_t, time + 0.1)
                   end
                 end
               end
@@ -1143,19 +1454,28 @@ wash = function(body, rx, ry, rz, species, fg, alt, w)
   end
   -- Re-fade by distance once a second, so the edge of the wash moves with you
   -- and never shows as a rim.
+  -- (A quarter second while anything is still fading in or the height is
+  -- changing the look, a second otherwise.)
   if time >= wash_fade_t and decals.set then
-    wash_fade_t = time + 1.0
+    local kalt = math.max(0, math.min(1, (params.tint_alt - (alt or 0)) / (params.tint_alt * 0.35)))
+    local busy = (alt or 0) > params.tint_alt * 0.5
     for key, id in pairs(washes) do
       local inf = id and wash_info[key]
       if inf then
         local d = len(inf[1] - rx, inf[2] - ry, inf[3] - rz)
-        if not decals.set(id, { alpha = inf[4] * math.max(0, math.min(1, (range - d) / (range * 0.4))) }) then
-          wash_n = wash_n - 1
-          washes[key] = nil      -- pairs() allows clearing the current key
-          wash_info[key] = nil
+        local a = wash_alpha(inf, d, range, kalt)
+        if time - inf[5] < WASH_IN or kalt < 1 then busy = true end
+        if math.abs(a - (inf[6] or -1)) > 0.004 then
+          inf[6] = a
+          if not decals.set(id, { alpha = a }) then
+            wash_n = wash_n - 1
+            washes[key] = nil      -- pairs() allows clearing the current key
+            wash_info[key] = nil
+          end
         end
       end
     end
+    wash_fade_t = time + (busy and 0.25 or 1.0)
   end
 end
 
@@ -1320,6 +1640,93 @@ function rareNiches(bname)
   return out
 end
 
+-- ── finding them: the beam and the survey ──────────────────────────────────
+-- "Struggling to find the rare plants even after hours of wandering": a glow
+-- the size of a lamp, on a world of a few square kilometres, is found by
+-- tripping over it. So every rare plant stands under a BEAM — a tall column of
+-- its own glow colour, drawn clear of the fog, fading out at its foot and its
+-- top — that reads from far off, and two things make it reach further:
+--
+--   * the SURVEY: opening the Tracking Station at the base maps the base
+--     world's rare plants (`rare.survey.<body>`). Surveyed, every beam on that
+--     world is visible from kilometres away, and the objectives card gives the
+--     distance and bearing of the nearest one of the kind it wants.
+--   * SPOTTING: walk within `rare_spot` metres of one and it is marked
+--     (`rare.seen.<body>`) — its beam stays lit for you from then on.
+--
+-- Unsurveyed and unspotted, a beam still shows within `rare_beam_near`, so a
+-- player exploring finds them by their light. Close up (inside ~20 m) the beam
+-- fades away so it never stands in the way of the plant itself.
+local BEAM_H, BEAM_R, BEAM_SEG = 140.0, 1.4, 10
+local beam_mesh = nil
+local function beam()
+  if beam_mesh ~= nil then return beam_mesh or nil end
+  beam_mesh = false
+  if not (mesh and mesh.build) then return nil end
+  local pos, col, nrm, idx = {}, {}, {}, {}
+  local rings = { { 0.0, 0.0 }, { 0.12, 1.0 }, { 0.55, 0.6 }, { 1.0, 0.0 } }
+  for ri, rg in ipairs(rings) do
+    local y, a = rg[1] * BEAM_H, rg[2]
+    -- Narrowing to a point at the top, so the column ends as a fading ray
+    -- rather than a cut-off pole (the engine draws vertex alpha as colour
+    -- only, so the taper is what shows the fade).
+    local rr = BEAM_R * (ri == #rings and 0.08 or (1.0 - rg[1] * 0.6))
+    for k = 0, BEAM_SEG - 1 do
+      local ang = k / BEAM_SEG * math.pi * 2
+      local cx, cz = math.cos(ang), math.sin(ang)
+      pos[#pos + 1], pos[#pos + 2], pos[#pos + 3] = cx * rr, y, cz * rr
+      nrm[#nrm + 1], nrm[#nrm + 2], nrm[#nrm + 3] = cx, 0, cz
+      col[#col + 1], col[#col + 2], col[#col + 3], col[#col + 4] = 1, 1, 1, a
+    end
+  end
+  for ri = 0, #rings - 2 do
+    for k = 0, BEAM_SEG - 1 do
+      local a0 = ri * BEAM_SEG + k + 1
+      local a1 = ri * BEAM_SEG + (k + 1) % BEAM_SEG + 1
+      local b0, b1 = a0 + BEAM_SEG, a1 + BEAM_SEG
+      -- Both windings: the column is seen from inside as well as out.
+      for _, t in ipairs({ { a0, b0, a1 }, { a1, b0, b1 }, { a0, a1, b0 }, { a1, b1, b0 } }) do
+        idx[#idx + 1], idx[#idx + 2], idx[#idx + 3] = t[1], t[2], t[3]
+      end
+    end
+  end
+  local ok, name = pcall(mesh.build, { positions = pos, indices = idx, normals = nrm, colors = col })
+  if ok and name then beam_mesh = name end
+  return beam_mesh or nil
+end
+
+-- Has the base world's survey mapped `bname`'s rare plants?
+function surveyed(bname)
+  return bname ~= nil and save.get("rare.survey." .. bname) == true
+end
+
+-- Which rare plants of `bname` the crew has spotted (a set of keys).
+function spotted(bname)
+  local t = bname and save.get("rare.seen." .. bname)
+  return type(t) == "table" and t or {}
+end
+
+-- Run the survey of `bname` (the Tracking Station does this). Returns how
+-- many rare plants it mapped, or nil when there was nothing to survey yet.
+function survey(bname, quiet)
+  if not bname or surveyed(bname) then return nil end
+  local list = rarePlants(bname)
+  if #list == 0 then return nil end
+  save.set("rare.survey." .. bname, true)
+  local n = 0
+  for _, p in ipairs(list) do if not p.cut then n = n + 1 end end
+  log(string.format("rare: survey of %s mapped %d rare plants", bname, n))
+  if not quiet then
+    local bc = ref("big_caption")
+    if bc and bc.show then
+      bc.show("SURVEY COMPLETE", string.format(
+        "The Tracking Station mapped %d rare plants on %s. Look for the beams of light; the objectives card has the nearest.",
+        n, bname), 6.0)
+    end
+  end
+  return n
+end
+
 local function rare_make(bname, planet)
   local list = rarePlants(bname)
   rare.made = bname
@@ -1384,6 +1791,21 @@ local function rare_make(bname, planet)
           l.tags = { "flora", "rare" }
           r.light = l
         end)
+        -- The beam (see "finding them"): built in metres, so scaled back out
+        -- of the plant's own scale; dark until rare_lights sets its alpha.
+        local bm = beam()
+        if bm then
+          createNode("Rare Beam", n, function(bn)
+            bn.model = bm
+            bn.y = crown + 1.5 * k
+            bn.scale_x, bn.scale_y, bn.scale_z = k, k, k
+            bn:setMaterial { color = { gc[1], gc[2], gc[3] }, emissive = { gc[1], gc[2], gc[3] },
+                             emissiveStrength = 1.3, unlit = true, fog = false, alpha = 0.0 }
+            bn.visible = false
+            bn.tags = { "flora", "rare" }
+            r.beam = bn
+          end)
+        end
       end)
     end
   end
@@ -1407,6 +1829,44 @@ local function rare_lights(obs, body)
       if e.r.light.setPointLight then e.r.light:setPointLight { intensity = want } end
     end
   end
+  -- The beams, and spotting.
+  local bname = rare.body
+  local mapped = surveyed(bname)
+  local seen = spotted(bname)
+  local seen_new = false
+  for _, e in ipairs(near) do
+    local r = e.r
+    if e.d < params.rare_spot and not seen[r.p.key] then
+      seen[r.p.key] = true
+      seen_new = true
+    end
+    if r.beam and r.beam.valid then
+      local reach = (mapped or seen[r.p.key]) and params.rare_beam_far or params.rare_beam_near
+      local a = 0
+      if params.rare_beam > 0 then
+        a = math.max(0, math.min(1, (e.d - 18) / 30)) * math.max(0, math.min(1, (reach - e.d) / (reach * 0.3)))
+        a = a * params.rare_beam
+      end
+      a = math.floor(a * 50 + 0.5) / 50
+      if a ~= r.beam_a then
+        r.beam_a = a
+        r.beam.visible = a > 0
+        if a > 0 then
+          local ok, m = pcall(r.beam.material, r.beam)
+          if ok and m then m.alpha = 0.24 * a end
+        end
+      end
+    end
+  end
+  if seen_new then save.set("rare.seen." .. bname, seen) end
+end
+
+-- The survey: the Tracking Station, open at the base, maps the base world.
+local function rare_survey_tick()
+  local ts = ref("tracking_station")
+  if not (ts and ts.isOpen and ts.isOpen()) then return end
+  local home = save.get("base.body")
+  if type(home) == "string" and not surveyed(home) then survey(home) end
 end
 
 -- THE HOME WORLD'S GUARANTEE (climate RARE_HOME_V). The base's ground, which
@@ -1597,6 +2057,7 @@ rare_tick = function(dt)
     local planet = find(bname)
     if planet then rare_make(bname, planet) end
   end
+  rare_survey_tick()
   rare_lights(obs, body)
 end
 

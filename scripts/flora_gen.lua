@@ -655,6 +655,62 @@ local function model_name(sp, lod, part)
   return string.format(part == "bark" and "%s_bark_l%d" or "%s_l%d", sp.shape, lod or 0)
 end
 
+-- NOTHING, as a scatter prototype: one triangle with no area. A scatter
+-- source's last LOD band used to end in a hard cut — the engine cross-dissolves
+-- between bands but drops a prop the moment it passes the outermost one — so
+-- grass, bushes and rocks snapped in and out of existence at their reach.
+-- Ending every source's list with a band of this (flora_field, mineral_field)
+-- turns that edge into one more cross-dissolve: the plant dissolves into
+-- nothing over the last fade window instead of vanishing.
+local empty_name = nil
+function emptyAsset()
+  if empty_name then return empty_name end
+  if not (mesh and mesh.build) then return nil end
+  local ok, name = pcall(mesh.build, { positions = { 0, 0, 0, 0, 0, 0, 0, 0, 0 }, indices = { 1, 2, 3 },
+                                       normals = { 0, 1, 0, 0, 1, 0, 0, 1, 0 } })
+  if ok and name then empty_name = name end
+  return empty_name
+end
+
+-- The LOD list a scatter source of `far` metres reach is declared with: the
+-- given bands (asset, fraction of far), ending in a dissolve to nothing, and
+-- the fade window. The window is a quarter of the reach (most of it, for a
+-- short-reach layer like grass, so the edge is soft), but never more than half
+-- the narrowest band, or a prop would be mid-dissolve across a whole band.
+-- Pure, so the smoke harness can hold it to that.
+function fadeBands(list, far, empty)
+  local lod, prev, narrow = {}, 0, math.huge
+  for i, b in ipairs(list) do
+    local d = (i == #list) and far or far * b.at
+    lod[#lod + 1] = { asset = b.asset, distance = d }
+    narrow = math.min(narrow, d - prev)
+    prev = d
+  end
+  local fade = math.max(2.5, math.min(far * 0.28, narrow * 0.5))
+  if empty then
+    -- Just past the reach: the dissolve happens inside [far - fade, far], and
+    -- the empty band costs a chunk ring a few metres wide.
+    lod[#lod + 1] = { asset = empty, distance = far + 0.5 }
+  end
+  return lod, fade
+end
+
+-- How far a low plant's leaves reach from its root (m, at scale 1): the
+-- l0 models' measured xz reach (tools: max |xz| over the mesh). The base keeps
+-- a plant's ROOT this far plus a hand off its paving, or a grass tuft rooted
+-- two metres off the apron lays its blades over the edge.
+local FOOT = {
+  grass_low = 1.35, grass_seed = 1.41, grass_tall = 1.45, grass_tuft = 1.39, meadow = 1.37,
+  cushion = 1.04, cushion_bloom = 0.79, fern_a = 1.54, fern_tall = 1.52, horsetail = 0.75, reeds = 0.69,
+  rosette = 1.07, rosette_big = 1.64, pads = 1.3, cactus_barrel = 0.64, cactus_col = 0.7,
+  bush_round = 1.74, bush_bloom = 1.83, bush_broad = 2.23, shrub_twig = 1.62, shrub_heath = 1.03,
+  shrub_needle = 1.26, shroom_cluster = 0.88, toadstool = 0.75, tubes = 1.17, sea_tubes = 1.13,
+  crystals = 1.52, parasol = 1.49,
+}
+function footprint(sp)
+  return (sp and FOOT[sp.shape]) or math.max(0.6, ((sp and sp.height) or 1) * 0.6)
+end
+
 -- What a scatter field draws: the prefab when there is one.
 function assetFor(sp, lod, part)
   return prefab_or(model_name(sp, lod, part))

@@ -49,6 +49,8 @@ defaults = {
   -- Metres over which one LOD band cross-dissolves into the next.
   --@range 0 40 --@units m
   fade = 10.0,
+  -- Dissolve rocks out at the edge of their reach (1) or cut them (0).
+  fade_out = 1,
   -- Patch size as a fraction of the planet's radius (clamped to 150..260 m).
   --@range 0.3 0.9
   patch = 0.6,
@@ -400,12 +402,23 @@ local function make_source(p, k, w, R)
   local look = lookOf(k, w)
   local far = k.far * params.reach
   local per = math.max(1, math.floor(k.area * k.chunk * k.chunk * params.density + 0.5))
+  -- The bands cross-dissolve, and the last dissolves into nothing (an empty
+  -- band just past the reach, flora_gen.emptyAsset): a rock never snaps in or
+  -- out at the edge of its reach.
+  local lod = { { asset = k.lod[1], distance = far * 0.35 }, { asset = k.lod[2], distance = far } }
+  local fade = params.fade
+  local fg = ref("flora_gen")
+  local empty = params.fade_out > 0 and fg and fg.emptyAsset and fg.emptyAsset() or nil
+  if empty then
+    lod[#lod + 1] = { asset = empty, distance = far + 0.5 }
+    fade = math.max(fade, math.min(far * 0.22, far * 0.65 * 0.5))
+  end
   local ok, id = pcall(scatter.create, {
     seed = hash(w.seed or 1, p.face, p.sgn + 2, p.i + 50000, p.j + 50000, #k.id * 131 + k.chunk),
     center = vec3(0, 0, 0), halfX = p.half, halfZ = p.half,
     perChunk = per, chunk = k.chunk, align = "surface",
-    scaleMin = k.scale[1], scaleMax = k.scale[2], fade = params.fade,
-    lod = { { asset = k.lod[1], distance = far * 0.35 }, { asset = k.lod[2], distance = far } },
+    scaleMin = k.scale[1], scaleMax = k.scale[2], fade = fade,
+    lod = lod,
     density = data, densityRows = rows, parent = p.name,
     tint = look.tint, emissive = look.emissive, emissiveStrength = look.emissiveStrength,
   })
@@ -552,6 +565,33 @@ function nearest(x, y, z, radius)
     end
   end
   return best
+end
+
+-- The rocks big enough to bump into within `radius` of a WORLD point, for
+-- flora_field's collider pool: { { x, y, z (world, where it settled), r
+-- (collider sphere radius), key }, ... }. Gravel is stepped over; only
+-- settled props are listed (one not near a camera yet has no place).
+local BUMP_R = { stone = 0.5, boulder = 0.88, crystal = 0.72 }
+function rocksNear(x, y, z, radius)
+  local out = {}
+  local body = cur_body and space.body(cur_body)
+  if not (body and scatter and scatter.near) then return out end
+  local rx, ry, rz = x - body.x, y - body.y, z - body.z
+  for id, s in pairs(srcs) do
+    local k = s.kind
+    local br = k and BUMP_R[k.id]
+    local p = patches[s.patch]
+    if br and p and patch_dist(p, rx, ry, rz) <= radius + 3 then
+      for _, h in ipairs(scatter.near(id, vec3(x, y, z), radius) or {}) do
+        local r = br * (h.scale or 1)
+        if h.settled ~= false and r >= 0.3 then
+          out[#out + 1] = { x = h.pos.x, y = h.pos.y, z = h.pos.z, r = r, d = h.distance,
+                            key = "r" .. id .. ":" .. tostring(h.id) }
+        end
+      end
+    end
+  end
+  return out
 end
 
 -- Break it: the yield goes to `cid`, the rock goes (`scatter.remove` by its

@@ -74,6 +74,20 @@ defaults = {
   -- How fast a swimmer turns to face where they are going (as `turn`).
   --@range 1 40 --@units 1/s
   swim_turn = 5.0,
+
+  --@header Breath
+  -- Seconds of air in the suit with the head under water (a full tank).
+  --@range 5 300 --@units s
+  o2_secs = 60.0,
+  -- Seconds to refill an empty tank in air, or aboard any craft.
+  --@range 0.5 60 --@units s
+  o2_refill = 5.0,
+  -- Seconds between running out of air and waking at the base.
+  --@range 0.5 10 --@units s
+  o2_blackout = 2.5,
+  -- What the rescue costs the company, when it can pay.
+  --@range 0 5000
+  o2_fee = 250,
 }
 
 -- IS THE CREW OUT AND ABOUT? Published, and the answer every interaction gate in
@@ -143,6 +157,141 @@ local function ref(kind)
   local r = refs[kind]
   if not r or not r.valid then r = findScript(kind); refs[kind] = r end
   return r
+end
+
+-- ── breath ──────────────────────────────────────────────────────────────────
+-- The suit carries a tank of air that drains while the HEAD is under water
+-- (climate.seaDepth at the helmet, which is the connected-water rule: a dry
+-- cave below sea level is air) and fills again in air or aboard any craft —
+-- a craft counts as air, so a sealed one is a submarine. Empty, the crew
+-- blacks out: control goes, and a moment later they wake at the base (the
+-- company's rescue, the suit pack's contents lost to the water, a fee when
+-- the books can stand it). `oxygen` is 0..1, `o2Left` seconds of air left,
+-- `headUnder` whether the helmet is under water; status_hud shows a chip
+-- while the tank is not full.
+oxygen = 1.0
+o2Left = 60.0
+headUnder = false
+downed = false            -- blacked out, waiting for the rescue
+drowned = 0               -- times the crew has run out of air (probes)
+local down_t = 0.0
+
+-- Where the crew wakes: the colony, else straight up out of the water.
+local function rescue_point(node, ux, uy, uz)
+  local name = save.get("base.body")
+  local bx, by, bz = save.get("base.x"), save.get("base.y"), save.get("base.z")
+  local b = type(name) == "string" and space.body(name)
+  if b and bx and by and bz then
+    local l = math.sqrt(bx * bx + by * by + bz * bz)
+    if l > 1e-3 then
+      return b.x + bx + bx / l * 2.5, b.y + by + by / l * 2.5, b.z + bz + bz / l * 2.5
+    end
+  end
+  local cl = ref("climate")
+  local d = space.dominant(node.x, node.y, node.z)
+  local bb = d and space.body(d)
+  local sea = (cl and d and cl.seaRadius and cl.seaRadius(d)) or 0
+  if bb and sea > 0 then
+    return bb.x + ux * (sea + 1.5), bb.y + uy * (sea + 1.5), bb.z + uz * (sea + 1.5)
+  end
+  return node.x + ux * 3, node.y + uy * 3, node.z + uz * 3
+end
+
+local function blackout_end(node, ux, uy, uz)
+  local x, y, z = rescue_point(node, ux, uy, uz)
+  node.x, node.y, node.z = x, y, z
+  node.vx, node.vy, node.vz = 0, 0, 0
+  downed = false
+  oxygen, o2Left = 1.0, params.o2_secs
+  local inv = ref("inventory")
+  local lost = inv and inv.mass and inv.mass("astro") or 0
+  if inv and inv.clear and lost > 0 then inv.clear("astro") end
+  local co = ref("company")
+  local fee = math.floor(params.o2_fee or 0)
+  local paid = fee > 0 and co and co.afford and co.afford(fee) and co.spend(fee, "crew rescue") or false
+  local bc = ref("big_caption")
+  if bc and bc.show then
+    local why = "Out of air. The company brought the crew back to the base"
+    if lost > 0.05 then why = why .. string.format("; the suit pack (%.0f kg) went with the water", lost) end
+    if paid then why = why .. string.format(". Rescue: $%d", fee) end
+    bc.show("CREW LOST", why .. ".", 5.0)
+  end
+  log(string.format("breath: the crew ran out of air and woke at the base (pack %.1f kg lost, fee %s)",
+    lost, paid and ("$" .. fee) or "none"))
+end
+
+-- One frame of breath. `under`: the helmet is in water; `aboard`: in a craft.
+-- Returns true while blacked out (the controller hands the body to the water).
+local function breathe(node, dt, under, aboard, ux, uy, uz)
+  local secs = math.max(1, params.o2_secs)
+  headUnder = under and not aboard
+  if downed then
+    down_t = down_t + dt
+    if down_t >= params.o2_blackout then blackout_end(node, ux, uy, uz) end
+    return downed
+  end
+  if headUnder then
+    oxygen = math.max(0, oxygen - dt / secs)
+  else
+    oxygen = math.min(1, oxygen + dt / math.max(0.1, params.o2_refill))
+  end
+  o2Left = oxygen * secs
+  if oxygen <= 0 then
+    downed, down_t = true, 0.0
+    drowned = drowned + 1
+    local fx = ref("sfx")
+    if fx and fx.caption then fx.caption("out of air") end
+    log("breath: out of air — blacking out")
+    return true
+  end
+  return false
+end
+
+-- Probes and cheats: set the tank (0..1).
+function setOxygen(v) oxygen = math.max(0, math.min(1, v or 1)); o2Left = oxygen * params.o2_secs end
+
+-- ── trunks and rocks ────────────────────────────────────────────────────────
+-- Scattered trees and rocks have no colliders, so the crew walked through
+-- them. flora_field publishes the ones round the crew as `obstacles` (a
+-- trunk: ground point, up, radius, height; a rock: centre and radius), and
+-- the walker keeps its capsule out of them on the ground plane: the speed
+-- into one is taken away (walk into a trunk and you stop; at an angle you
+-- slide round it), and a crew already inside is eased out.
+local CREW_R = 0.35
+bumped = 0          -- obstacles touched this frame (probes)
+function bump(node, dt, ux, uy, uz)
+  bumped = 0
+  local ff = ref("flora_field")
+  local list = ff and ff.obstacles
+  if not (list and #list > 0 and ff.obstaclesBody) then return end
+  local b = space.body(ff.obstaclesBody)
+  if not b then return end
+  local px, py, pz = node.x - b.x, node.y - b.y, node.z - b.z
+  for _, o in ipairs(list) do
+    local dx, dy, dz = px - o.x, py - o.y, pz - o.z
+    local k = dx * o.ux + dy * o.uy + dz * o.uz
+    local reach = (o.h or 0) > 0 and (k > -1.0 and k < o.h + 0.5) or (math.abs(k) < o.r + 1.0)
+    if reach then
+      -- On the crew's ground plane, from the prop's axis (or centre) out.
+      local qx, qy, qz = dx - o.ux * k, dy - o.uy * k, dz - o.uz * k
+      local qu = qx * ux + qy * uy + qz * uz
+      qx, qy, qz = qx - ux * qu, qy - uy * qu, qz - uz * qu
+      local d = math.sqrt(qx * qx + qy * qy + qz * qz)
+      local rr = o.r + CREW_R
+      if (o.h or 0) <= 0 then
+        -- A rock is a ball: narrower above and below its middle.
+        rr = math.sqrt(math.max(0, o.r * o.r - k * k)) + CREW_R
+      end
+      if d < rr and d > 1e-4 then
+        bumped = bumped + 1
+        local nx, ny, nz = qx / d, qy / d, qz / d
+        local vin = mvx * nx + mvy * ny + mvz * nz
+        if vin < 0 then mvx, mvy, mvz = mvx - nx * vin, mvy - ny * vin, mvz - nz * vin end
+        local push = math.min((rr - d) * 10, 3.0)
+        mvx, mvy, mvz = mvx + nx * push, mvy + ny * push, mvz + nz * push
+      end
+    end
+  end
 end
 
 local function resolve_model(node)
@@ -794,10 +943,11 @@ function update(node, dt)
   -- Hands off while a craft is flying us: it parks and carries this body
   -- itself. Fetched fresh with EVERY instance scanned, because several craft
   -- can be alive and only one of them has a pilot in it.
+  -- (Aboard a craft is air: the tank refills there.)
   for _, vessel in ipairs(findScripts("vessel_controller")) do
-    if vessel.piloting then onFoot = false return end
+    if vessel.piloting then onFoot = false; breathe(node, dt, false, true) return end
   end
-  if (save.get("shipyard.pilot") or 0) == 1 then onFoot = false return end
+  if (save.get("shipyard.pilot") or 0) == 1 then onFoot = false; breathe(node, dt, false, true) return end
   -- Nor while the world is still streaming in: the crew is parked in the sky
   -- over the spawn planet then, not standing anywhere they could interact with.
   local gm = ref("game_manager")
@@ -879,6 +1029,16 @@ function update(node, dt)
     speed = sprint and params.swim_fast or params.swim
   end
 
+  -- BREATH: the helmet sits ~0.75 m above the capsule's centre. Out of air,
+  -- the keys go dead and the body drifts until the rescue.
+  -- (Depth is radial, so the helmet's is the body's less that height.)
+  local head_r = (node.height or 2.0) * 0.5 - 0.25
+  local hd = depth and (depth - head_r) or nil
+  if breathe(node, dt, hd ~= nil and hd > 0.05, false, ux, uy, uz) then
+    f, s, sprint = 0, 0, false
+    speed = 0
+  end
+
   -- ── the tangent velocity ────────────────────────────────────────────────────
   -- Eased toward what the keys ask for rather than set to it, so a start has a
   -- step or two of pick-up and a stop a step of run-out — and in the air far
@@ -926,8 +1086,8 @@ function update(node, dt)
     -- Buoyancy pulls you toward the surface, hard when you're deep and gently
     -- as you reach it, so floating is the resting state rather than a fight.
     local want = math.min(2.2, math.max(0.0, depth - 0.7) * 1.1)
-    if input.key("space") or (steer_f and steer_climb > 0) then want = params.swim_climb end
-    if input.key("ctrl") or (steer_f and steer_climb < 0) then want = -params.swim_climb end
+    if not downed and (input.key("space") or (steer_f and steer_climb > 0)) then want = params.swim_climb end
+    if not downed and (input.key("ctrl") or (steer_f and steer_climb < 0)) then want = -params.swim_climb end
     -- Eased from THIS controller's own last value, not from the body's: the
     -- sea is an engine Water Volume now, and its Archimedes push lands on the
     -- capsule between frames. Easing from the body's velocity folded that push
@@ -955,7 +1115,7 @@ function update(node, dt)
       if gap > 0.02 then slope = math.min(slope, -math.min(8.0, gap / math.max(dt, 1e-3))) end
     end
     swim_vup = vup
-    if input.pressed("space") or (steer_f and steer_jump) then
+    if not downed and (input.pressed("space") or (steer_f and steer_jump)) then
       steer_jump = false
       vup = params.jump
       jump_t = time
@@ -972,6 +1132,7 @@ function update(node, dt)
     slope_vup = 0.0
   end
   was_contact = contact
+  bump(node, dt, ux, uy, uz)
   node.vx = mvx + ux * vup
   node.vy = mvy + uy * vup
   node.vz = mvz + uz * vup

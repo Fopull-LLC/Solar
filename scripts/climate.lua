@@ -187,11 +187,169 @@ function sampleAt(name, x, y, z)
 end
 
 -- ── water ───────────────────────────────────────────────────────────────────
--- One rule, used by the swimmer, the splashdown check and the flora scatter:
--- you are underwater when you are inside the sea sphere of the body you're at.
+-- One rule, used by the swimmer, the splashdown check, the oxygen, the sound,
+-- the underwater look and the flora scatter: WATER IS A CONNECTED BODY.
+--
+-- The sea is a sphere at a fixed radius, but a point under that radius is in
+-- the sea only when the sea can reach it:
+--
+--   * OPEN WATER — the column straight up from the point to the sea's surface
+--     is open (no rock over it), and the surface there is open sea, not a hole
+--     in the land (the ring of the surface 8 m round it is mostly water).
+--   * A FLOODED CAVE — the column is roofed, but the cave the point is in
+--     reaches open water through passages that stay below the sea's level.
+--     Found by a bounded flood fill over 2 m cells of the terrain's own
+--     distance field (`flood_*` below), run a slice a frame in `update`, and
+--     kept per cave for a while. Until a cave has been looked at it reads
+--     DRY, so a roofed point is never wet by default.
+--
+-- Everything else under the sea's radius — a cave under a mountain, a dry
+-- grotto under the seabed sealed by rock, a pit dug below sea level from dry
+-- land — is air. (Before, the sea was the whole sphere, and the engine's sea
+-- volume turned every cave below sea level into murky water: ocean.lua now
+-- switches that volume's look off whenever the eye is somewhere this says is
+-- dry.)
 
--- How deep below the surface of the sea, in metres. Negative = above it; nil
--- when this body has no sea (or there's no body).
+local COL_STEPS = 40      -- sphere-trace steps up a column
+local FLOOD_CELL = 1.5    -- flood-fill cell (m)
+local FLOOD_MAX = 3200    -- cells one cave may visit before it is called dry
+local FLOOD_KEEP = 25.0   -- seconds a cave's answer is kept (digging changes it)
+local FLOOD_SLICE = 400   -- field reads a frame the flood may spend (1–5 µs each)
+
+-- Is the column from body-relative point (px,py,pz) straight up to radius
+-- `top` open? true / false, or nil when the field is not answering there.
+function columnOpen(bx, by, bz, px, py, pz, top)
+  if not (terrain and terrain.query) then return nil end
+  local r = len(px, py, pz)
+  if r < 1e-6 then return nil end
+  local ux, uy, uz = px / r, py / r, pz / r
+  local t = r
+  for _ = 1, COL_STEPS do
+    if t >= top then return true end
+    local q = terrain.query(bx + ux * t, by + uy * t, bz + uz * t)
+    if q == nil then return nil end
+    if q < 0.05 then return false end
+    t = t + math.max(q, 0.3)
+  end
+  -- A very deep column still being marched is open water (the sea floor
+  -- is far below): only rock stops it.
+  return true
+end
+
+-- Is the sea's surface over unit direction (ux,uy,uz) open sea? (The ring
+-- of the surface 8 m round it: open sea is open there, a hole in the land is
+-- ringed with rock.)
+local function surface_open(bx, by, bz, ux, uy, uz, sea)
+  local ax, ay, az = 0, 1, 0
+  if math.abs(uy) > 0.9 then ax, ay, az = 1, 0, 0 end
+  local t1x, t1y, t1z = uy * az - uz * ay, uz * ax - ux * az, ux * ay - uy * ax
+  local l = len(t1x, t1y, t1z)
+  t1x, t1y, t1z = t1x / l, t1y / l, t1z / l
+  local t2x, t2y, t2z = uy * t1z - uz * t1y, uz * t1x - ux * t1z, ux * t1y - uy * t1x
+  local open, n = 0, 0
+  for k = 0, 7 do
+    local a = k * math.pi / 4
+    local ca, sa = math.cos(a) * 8, math.sin(a) * 8
+    local q = terrain.query(bx + ux * sea + t1x * ca + t2x * sa, by + uy * sea + t1y * ca + t2y * sa,
+      bz + uz * sea + t1z * ca + t2z * sa)
+    if q then
+      n = n + 1
+      if q > 0 then open = open + 1 end
+    end
+  end
+  if n == 0 then return nil end
+  return open * 2 >= n
+end
+
+-- ── flooded caves ───────────────────────────────────────────────────────────
+-- flood.cells["i,j,k"] = { wet = bool, t = time } for every cell a finished
+-- fill visited (the whole cave, as far as it went); flood.jobs are fills
+-- under way, keyed by their start cell.
+local flood = { cells = {}, jobs = {}, n = 0, body = nil, clock = 0 }
+local function fkey(i, j, k) return i .. "," .. j .. "," .. k end
+local function fcell(px, py, pz)
+  return math.floor(px / FLOOD_CELL + 0.5), math.floor(py / FLOOD_CELL + 0.5), math.floor(pz / FLOOD_CELL + 0.5)
+end
+
+-- Answer for a roofed point under the sea: true (flooded), false (dry), or
+-- nil (not known yet: a fill is queued from here).
+local function cave_wet(name, b, px, py, pz, sea)
+  if flood.body ~= name then flood.cells, flood.jobs, flood.n, flood.body = {}, {}, 0, name end
+  local i, j, k = fcell(px, py, pz)
+  local key = fkey(i, j, k)
+  local c = flood.cells[key]
+  if c and flood.clock - c.t < FLOOD_KEEP then return c.wet end
+  if not flood.jobs[key] then
+    local n = 0
+    for _ in pairs(flood.jobs) do n = n + 1 end
+    if n < 4 then
+      flood.jobs[key] = { body = name, sea = sea, queue = { { i, j, k } }, head = 1,
+        seen = { [key] = true }, list = { key }, wet = false }
+    end
+  end
+  return nil
+end
+
+-- One slice of every fill under way. A cell is passable when the field at its
+-- centre is no deeper than a fifth of a cell into rock (a passage about a
+-- metre wide gets through; a two-metre roof does not leak) and its centre is
+-- below the sea's level; a fill that reaches a
+-- passable cell whose column is open to open sea floods the cave.
+local function flood_step(budget)
+  local b = flood.body and space.body(flood.body)
+  if not b then flood.jobs = {} return end
+  for key, J in pairs(flood.jobs) do
+    if budget <= 0 then return end
+    local sea = J.sea
+    while J.head <= #J.queue and budget > 0 and not J.done do
+      local c = J.queue[J.head]
+      J.head = J.head + 1
+      local px, py, pz = c[1] * FLOOD_CELL, c[2] * FLOOD_CELL, c[3] * FLOOD_CELL
+      -- Open to the sea from here? (Cheap first: a cell well clear of rock.)
+      local r = len(px, py, pz)
+      local col = columnOpen(b.x, b.y, b.z, px, py, pz, sea)
+      budget = budget - 4
+      if col then
+        local so = surface_open(b.x, b.y, b.z, px / r, py / r, pz / r, sea)
+        budget = budget - 8
+        if so ~= false then J.wet, J.done = true, true end
+      end
+      if not J.done then
+        local N6 = { { 1, 0, 0 }, { -1, 0, 0 }, { 0, 1, 0 }, { 0, -1, 0 }, { 0, 0, 1 }, { 0, 0, -1 } }
+        for _, d in ipairs(N6) do
+          local ni, nj, nk = c[1] + d[1], c[2] + d[2], c[3] + d[3]
+          local nkey = fkey(ni, nj, nk)
+          if not J.seen[nkey] then
+            J.seen[nkey] = true
+            local qx, qy, qz = ni * FLOOD_CELL, nj * FLOOD_CELL, nk * FLOOD_CELL
+            if len(qx, qy, qz) < sea - 0.3 then
+              local q = terrain.query(b.x + qx, b.y + qy, b.z + qz)
+              budget = budget - 1
+              if q and q > -FLOOD_CELL * 0.2 then
+                J.queue[#J.queue + 1] = { ni, nj, nk }
+                J.list[#J.list + 1] = nkey
+              end
+            end
+          end
+        end
+        if #J.list >= FLOOD_MAX then J.done = true end
+      end
+    end
+    if J.done or J.head > #J.queue then
+      for _, k2 in ipairs(J.list) do flood.cells[k2] = { wet = J.wet, t = flood.clock } end
+      flood.n = flood.n + 1
+      flood.jobs[key] = nil
+      floodStats = { cells = #J.list, wet = J.wet, at = key }
+    end
+  end
+end
+floodStats = nil
+
+-- Published for the probes: how many cave fills have finished.
+function floodCount() return flood.n end
+
+-- How deep below the surface of the sea, in metres. Negative = above it (or
+-- in a dry cave: -1); nil when this body has no sea (or there's no body).
 function seaDepth(x, y, z)
   local d = space.dominant(x, y, z)
   if not d then return nil end
@@ -199,32 +357,16 @@ function seaDepth(x, y, z)
   local b = space.body(d)
   if not b then return nil end
   local depth = (sea > 0) and (sea - len(x - b.x, y - b.y, z - b.z)) or nil
-  -- The sea is a sphere, so a pit dug below sea level from dry land is
-  -- "under" it too, and the crew swam in a dry hole. Water only stands where
-  -- the sea can reach: ask the ring of the sea's surface 8 m round the point —
-  -- open sea is open there, a hole in the land is ringed with rock.
   if depth and depth > 0 and terrain and terrain.query then
     local px, py, pz = x - b.x, y - b.y, z - b.z
     local r = len(px, py, pz)
-    local ux, uy, uz = px / r, py / r, pz / r
-    local ax, ay, az = 0, 1, 0
-    if math.abs(uy) > 0.9 then ax, ay, az = 1, 0, 0 end
-    local t1x, t1y, t1z = uy * az - uz * ay, uz * ax - ux * az, ux * ay - uy * ax
-    local l = len(t1x, t1y, t1z)
-    t1x, t1y, t1z = t1x / l, t1y / l, t1z / l
-    local t2x, t2y, t2z = uy * t1z - uz * t1y, uz * t1x - ux * t1z, ux * t1y - uy * t1x
-    local open, n = 0, 0
-    for k = 0, 7 do
-      local a = k * math.pi / 4
-      local ox, oy, oz = (t1x * math.cos(a) + t2x * math.sin(a)) * 8, (t1y * math.cos(a) + t2y * math.sin(a)) * 8,
-        (t1z * math.cos(a) + t2z * math.sin(a)) * 8
-      local q = terrain.query(b.x + ux * sea + ox, b.y + uy * sea + oy, b.z + uz * sea + oz)
-      if q then
-        n = n + 1
-        if q > 0 then open = open + 1 end
-      end
+    local col = columnOpen(b.x, b.y, b.z, px, py, pz, sea)
+    if col == false then
+      -- Roofed: a cave. Wet only if it is a flooded one.
+      if cave_wet(d, b, px, py, pz, sea) ~= true then depth = -1 end
+    elseif col == true then
+      if surface_open(b.x, b.y, b.z, px / r, py / r, pz / r, sea) == false then depth = -1 end
     end
-    if n > 0 and open * 2 < n then depth = -1 end
   end
   -- A lake (scale 3) is water too, wherever one is standing near you.
   if not depth or depth <= 0 then
@@ -762,11 +904,24 @@ local function build_lake(b, w, L)
   -- otherwise one disc per block of lattice cells holding water, centred on
   -- them and reaching just past the farthest.
   local vols = {}
-  if VOLUMES and engine_water and engine_water.addVolume then
+  if engine_water and engine_water.addVolume then
     local Rv = Rl - 0.12
+    -- `depth`: the lake's bed (engine 0.117 rc6), so a cave under a lake is
+    -- dry rather than "under" it. With VOLUMES off the discs are the
+    -- underwater LOOK only, like the sea's own volume (no buoyancy, no drag:
+    -- the crew swims in planet_walker, craft float in vessel_controller).
+    local bed = (L.depth or 4) + 4
+    local look = water_look(w)
     local function disc(cx, cy, cz, reach)
-      vols[#vols + 1] = { shape = "lake", parent = water.body,
-        center = vec3(cx * Rv, cy * Rv, cz * Rv), radius = Rv, reach = reach }
+      local o = { shape = "lake", parent = water.body,
+        center = vec3(cx * Rv, cy * Rv, cz * Rv), radius = Rv, reach = reach, depth = bed }
+      if not VOLUMES then
+        o.density, o.drag, o.angularDrag = 0.001, 0.0, 0.0
+        local d = look.deep or { 0.04, 0.2, 0.3 }
+        o.tint = { math.min(1, d[1] * 1.4 + 0.02), math.min(1, d[2] * 1.4 + 0.02), math.min(1, d[3] * 1.4 + 0.02) }
+        o.visibility = 4 + (look.clarity or 3) * 3
+      end
+      vols[#vols + 1] = o
     end
     local function ang(ax, ay, az, bx, by, bz)
       return math.acos(math.max(-1, math.min(1, ax * bx + ay * by + az * bz)))
@@ -1187,6 +1342,9 @@ function lakeDepth(name, x, y, z)
         local i, j = math.floor(a / l.s + l.off + 0.5), math.floor(c / l.s + l.off + 0.5)
         if i >= 0 and j >= 0 and i < l.N and j < l.N and l.state[j * l.N + i] == 1 then
           local d = l.Rl - r
+          -- Under rock (a cave below the lake's bed or beside it) is not in
+          -- the lake: the column up to its surface has to be open.
+          if d > 0 and columnOpen(b.x, b.y, b.z, px, py, pz, l.Rl) == false then d = -2.5 end
           if d > -2 then return d end
         end
       end
@@ -1206,6 +1364,8 @@ function waterNear()
 end
 
 function update(node, dt)
+  flood.clock = flood.clock + dt
+  if next(flood.jobs) then flood_step(FLOOD_SLICE) end
   water.t = water.t + dt
   water.t_total = (water.t_total or 0) + dt
   if water.t < 0.5 then return end

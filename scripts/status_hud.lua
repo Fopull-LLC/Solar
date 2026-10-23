@@ -73,6 +73,16 @@ end
 local function readouts()
   local co, inv = ref("company"), ref("inventory")
   local out = {}
+  -- AIR, first and only while the tank is not full (planet_walker's breath):
+  -- the suit's tank drains with the head under water. A gauge that turns
+  -- caution yellow under half and warning red under a quarter.
+  local pw = ref("planet_walker")
+  if pw and pw.oxygen and (pw.oxygen < 0.995 or pw.downed) then
+    local o = math.max(0, math.min(1, pw.oxygen))
+    out[#out + 1] = { key = "o2", label = pw.downed and "Out of air" or "Air",
+                      value = pw.downed and "—" or string.format("%d s", math.floor((pw.o2Left or 0) + 0.5)),
+                      frac = o, warn = pw.downed or o < 0.25, gauge = "air" }
+  end
   if co and co.money then
     out[#out + 1] = { key = "funds", label = "Funds", value = co.money(co.balance()) }
     out[#out + 1] = { key = "rep", label = "Rep", value = string.format("%+d", co.rep()) }
@@ -102,7 +112,8 @@ end
 local function text_of(rs)
   local parts = {}
   for _, r in ipairs(rs) do
-    if r.key == "rep" then parts[#parts + 1] = "rep " .. r.value
+    if r.key == "o2" then parts[#parts + 1] = "air " .. r.value
+    elseif r.key == "rep" then parts[#parts + 1] = "rep " .. r.value
     elseif r.warn then parts[#parts + 1] = "PACK FULL  " .. r.value
     elseif r.key == "pack" then parts[#parts + 1] = "pack " .. r.value
     else parts[#parts + 1] = r.value end
@@ -125,14 +136,20 @@ local function chip(r)
     { "text", key = "v", style = r.warn and "hud/chipWarnText" or "hud/chipValue",
       w = "fit", h = "fit", text = r.value },
   }
-  if r.frac and not r.warn then
+  if r.frac and (not r.warn or r.gauge == "air") then
     local hot = r.frac > 0.85
+    local fillc = hot and { 1.0, 0.80, 0.28 } or { 0.77, 0.75, 0.68 }
+    if r.gauge == "air" then
+      -- Air runs the other way: low is the danger (warn yellow, danger red).
+      fillc = (r.frac < 0.25 and { 0.97, 0.34, 0.25 }) or (r.frac < 0.5 and { 1.0, 0.80, 0.28 })
+        or { 0.77, 0.75, 0.68 }
+    end
     -- A gauge: a dark groove, an ink bar (caution yellow when
     -- nearly full).
     kids[#kids + 1] = { "row", key = "m", w = METER_W, h = 5, radius = 1, pad = 0, gap = 0,
       fill = { 0.02, 0.03, 0.025 }, border = 1, borderColor = { 0, 0, 0, 0.8 },
       { "box", key = "f", w = math.max(2, math.floor(METER_W * r.frac + 0.5)), h = 5, radius = 1,
-        fill = hot and { 1.0, 0.80, 0.28 } or { 0.77, 0.75, 0.68 } } }
+        fill = fillc } }
   end
   return { "row", key = r.key, style = r.warn and "hud/chipWarn" or "hud/chip",
            w = "fit", h = 28, gap = 7, align = "center", items = kids,

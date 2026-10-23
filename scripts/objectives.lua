@@ -345,7 +345,7 @@ local function nearest_of(astro, bname, list, skip)
 end
 
 local RARE_HINT = {
-  cave = "They grow in the dark under rock shelves, where a cliff leans out over the ground, in grottoes at the foot of ravine walls and cliffs, and in hollows just under the ground — the Terrain Spade (3) opens a way in.",
+  cave = "They grow in the dark under rock shelves, where a cliff leans out over the ground, in grottoes at the foot of ravine walls and cliffs, and in hollows just under the ground — the Terrain Laser opens a way in.",
   peak = "They grow on the highest ground, above the snow line where there is one.",
   ravine = "They grow on the floors of the deep cuts in the ground — walk the bottom, not the rim.",
   lake = "They grow right at the water's edge, never in it.",
@@ -374,15 +374,26 @@ local function prog_guidance(mi, astro, m, g, niche)
     return rhome and ("Dig out a Star Geode on " .. rhome .. ".") or "Dig out a Star Geode.", hint
   elseif g.kind == "rare" then
     local where = (mi.PROG_NICHE_WHERE or {})[niche] or "somewhere hard to reach"
-    local hint = (RARE_HINT[niche] or "") .. " Rare plants glow, so look for the light."
+    local hint = (RARE_HINT[niche] or "") .. " Each one stands under a beam of light."
     local ff = ref("flora_field")
     local list = (ff and ff.rarePlants and rhome) and ff.rarePlants(rhome) or {}
     if #list == 0 then
       hint = hint .. " The survey is still mapping " .. (rhome or "the planet") .. "."
     else
-      local at = nearest_of(astro, rhome, list, function(p) return p.cut or p.niche ~= niche end)
+      -- Surveyed (the Tracking Station maps the base world), every one of the
+      -- kind is reported; before that, only the ones you have spotted.
+      local mapped = ff.surveyed and ff.surveyed(rhome)
+      local seen = (ff.spotted and ff.spotted(rhome)) or {}
+      local at = nearest_of(astro, rhome, list, function(p)
+        return p.cut or p.niche ~= niche or not (mapped or seen[p.key])
+      end)
       local way = at and rough_way(astro, at[1], at[2], at[3])
-      if way then hint = hint .. " Nearest report: " .. way .. "." end
+      if way then
+        hint = hint .. " Nearest report: " .. way .. "."
+      elseif not mapped then
+        hint = hint .. " Open the Tracking Station at the base to survey " .. (rhome or "the planet")
+          .. ": it maps every rare plant, and their beams show from kilometres away."
+      end
     end
     return "Find a rare plant " .. where .. (rhome and (" on " .. rhome) or "") .. ".", hint .. " " .. CUT_HINT
   elseif g.kind == "groundcov" then
