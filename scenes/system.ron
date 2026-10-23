@@ -485,7 +485,6 @@
                     kind: "planet_walker",
                     enabled: true,
                     params: [
-                        ("jump", 10.4),
                         ("run", 9.4),
                     ],
                 ),

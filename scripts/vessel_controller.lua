@@ -18,6 +18,47 @@
 -- the vessel CLAMPED (anchored) to the launchpad until you release. Fuel pools
 -- across every tank on board; staging away tanks takes their share with them.
 
+
+-- THE FREE CAMERA (planet_camera, F5) has the keyboard and mouse while it
+-- flies: W A S D, SPACE, CTRL and SHIFT move the camera, so this script must
+-- not also read them. One proxy over `input` (this script's own global; the
+-- engine's table is untouched) rather than a test at every key.
+if type(input) == "table" then
+  local raw, pc, pc_miss = input, nil, -10.0
+  local function free()
+    if not (pc and pc.valid) then
+      local now = time or 0
+      if now - pc_miss < 2.0 then return false end
+      pc = findScript and findScript("planet_camera") or nil
+      if not pc then pc_miss = now return false end
+    end
+    return pc.freecam == true
+  end
+  local function key_gate(name)
+    return function(...) if free() then return false end return raw[name](...) end
+  end
+  input = setmetatable({
+    key = key_gate("key"), pressed = key_gate("pressed"), released = key_gate("released"),
+    button = key_gate("button"), clicked = key_gate("clicked"),
+    scroll = function() if free() then return 0 end return raw.scroll() end,
+    mouse_delta = function() if free() then return 0, 0 end return raw.mouse_delta() end,
+    setMouseLocked = function(on) if free() then return end return raw.setMouseLocked(on) end,
+  }, { __index = raw })
+end
+
+-- Cinematic mode (planet_camera, F4 / F5): the boarding ring and the docking
+-- guides are interface, and hide with it. Global, so no function here gains an
+-- upvalue (lateUpdate and fixedUpdate sit at LuaJIT's ceiling).
+local cine_pc, cine_miss = nil, -10.0
+function cinematicUp()
+  if not (cine_pc and cine_pc.valid) then
+    if (time or 0) - cine_miss < 2.0 then return false end
+    cine_pc = findScript("planet_camera")
+    if not cine_pc then cine_miss = time or 0 return false end
+  end
+  return cine_pc.cinematic == true
+end
+
 defaults = {
   torque = 60.0,        -- attitude authority per axis (vs the compound inertia)
   max_rate = 1.0,       -- commanded turn rate cap, rad/s
@@ -145,10 +186,23 @@ local ANIMS = {
     end
     child.scale_y = pose.sy * (0.5 + 0.5 * f)
   end,
-  -- SOLAR PANELS fold down to a stub and unfold to full span.
+  -- SOLAR PANELS: the wing folds about its hinge (PartSolar's SolarWingPivot)
+  -- — flat along the hull, cells out, for launch — and swings open on Deploy.
+  -- (It used to squash the whole part along X about its centre, which drew a
+  -- thin strip floating off the hull: "the solar panels are squished".)
   solar = function(child, pose, f)
-    child.scale_x = (pose.sx or 1.0) * (0.18 + 0.82 * f)  -- unfold the span
-    child.pitch = (pose.pitch or 0) - (1 - f) * 0.5       -- tip toward the sky
+    if pose.wing == nil then
+      pose.wing = false
+      for _, c in ipairs(child:children()) do
+        if c.name == "SolarWingPivot" then pose.wing = c end
+      end
+    end
+    if pose.wing and pose.wing.valid ~= false then
+      pose.wing.yaw = (1 - f) * (math.pi / 2)
+      return
+    end
+    child.scale_x = (pose.sx or 1.0) * (0.18 + 0.82 * f)  -- an old panel with no hinge
+    child.pitch = (pose.pitch or 0) - (1 - f) * 0.5
   end,
   -- The WHIP telescopes: a third of its height stowed, its foot kept on the
   -- mount (the mesh is centred, so the centre drops as it shortens).
@@ -1932,13 +1986,27 @@ local function power_tick(node, info, dt)
     return
   end
   local now = time
-  if not elec.bodies or now - (elec.bodies_t or -10) > 0.5 then
-    elec.bodies, elec.bodies_t = space.bodies() or {}, now
-  end
+  -- The bodies are read EVERY tick, never cached: these worlds move hundreds
+  -- of metres a second on their rails, and a craft (read now) set against
+  -- where its planet was even half a second ago sits tens of metres off its
+  -- own ground — the sun "set" at noon and shone after dark (2026-10-23).
+  elec.bodies, elec.bodies_t = space.bodies() or {}, now
   local bodies = elec.bodies
   local ref = ref_flux(E, bodies)
+  -- The step in GAME seconds: time warp runs the world (and the batteries)
+  -- warp× faster than the frame's dt (2026-10-23: panels charged at 1× speed
+  -- under any warp).
+  local st_now = space.time and space.time() or nil
+  local warp_now = space.warp and space.warp() or 1
+  if E.gameStep then
+    dt = E.gameStep(elec.st_last, st_now, dt, warp_now)
+  else
+    dt = dt * math.max(1, warp_now)
+  end
+  elec.st_last, elec.game_dt = st_now, dt
   local supply, loads, cells, batts = 0.0, {}, {}, {}
   local sunlit, panels = false, 0
+  local plist = {}
   local wheels = {}
   local cut = math.huge
   for _, ev in ipairs(events) do
@@ -1955,14 +2023,14 @@ local function power_tick(node, info, dt)
           local c = { cap = m.ec or 0, charge = math.min(m.ec or 0, st.charge or 0), on = st.flow ~= false, st = st }
           cells[#cells + 1] = c
         elseif ty == "solar" then
-          if (panim[u] or 0) > 0.9 then
-            local ax, ay, az = part_axis_x(d)
-            local x, y, z, wx, wy, wz = part_world(node, info, d, ax, ay, az)
-            local out = E.solarOutput(m.gen or 0, x, y, z, wx, wy, wz, bodies, ref)
-            supply = supply + out
-            panels = panels + 1
-            if out > 0 then sunlit = true end
-          end
+          -- Every panel counts, open or folded (a folded wing lies along the
+          -- hull with its cells out: electronics.panelExposure). Its mount
+          -- axis in the WORLD (the part's rotation, then the craft's).
+          local ax, ay, az = part_axis_x(d)
+          local x, y, z, wx, wy, wz = part_world(node, info, d, ax, ay, az)
+          plist[#plist + 1] = { gen = m.gen or 0, ax = wx, ay = wy, az = wz, deployed = panim[u] or 0,
+                                x = x, y = y, z = z }
+          panels = panels + 1
         elseif ty == "rtg" then
           supply = supply + (m.gen or 0)
         elseif ty == "engine" then
@@ -1994,6 +2062,30 @@ local function power_tick(node, info, dt)
   -- they asked for this tick (R2.draw, by load id).
   for id, rate in pairs(R2.draw) do
     if rate > 0 then loads[#loads + 1] = { id = id, rate = rate, pri = 4 } end
+  end
+  -- SUNLIGHT over the step: integrated along the craft's and its world's
+  -- motion (a long warp step spans a good part of a day, or several orbits).
+  if #plist > 0 then
+    local cx, cy, cz = base_of(node, info)
+    for _, p in ipairs(plist) do p.ox, p.oy, p.oz = p.x - cx, p.y - cy, p.z - cz end
+    local v = info.vel
+    local landed = info.anchored or info.grounded or R2.onWheels or false
+    local sun_out, lit
+    if E.solarOverStep then
+      sun_out, lit = E.solarOverStep(plist, { x = cx, y = cy, z = cz, vx = v and v.x or 0, vy = v and v.y or 0,
+        vz = v and v.z or 0, landed = landed, bodies = bodies }, dt, ref)
+    else
+      sun_out, lit = 0, 0
+      for _, p in ipairs(plist) do
+        if (p.deployed or 0) > 0.9 then
+          local o = E.solarOutput(p.gen, p.x, p.y, p.z, p.ax, p.ay, p.az, bodies, ref)
+          sun_out = sun_out + o
+          if o > 0 then lit = 1 end
+        end
+      end
+    end
+    supply = supply + sun_out
+    sunlit = sun_out > 0 or (lit or 0) > 0
   end
   local rep = E.powerStep({ supply = supply, loads = loads, cells = cells }, dt)
   for _, c in ipairs(cells) do c.st.charge = c.charge end
@@ -2030,7 +2122,12 @@ local function power_tick(node, info, dt)
     silent = E.antennaSummary(bp_by_uid, integ.gone, true).n == 0 and "no antenna aboard"
       or "no power for its radio"
   end
-  elec.node = { x = px, y = py, z = pz, any = ant.any, relay = ant.relay, rate = ant.rate, silent = silent }
+  -- `ox..oz`: the pod's offset from the craft's root node, so the network
+  -- (comms.lua) can place the antenna at the root's position AT ITS OWN SOLVE
+  -- — px is a tenth of a second old by then, which on a world moving 240 m/s
+  -- is a rover 24 m into the hillside.
+  elec.node = { x = px, y = py, z = pz, any = ant.any, relay = ant.relay, rate = ant.rate, silent = silent,
+                ox = px - (node.worldX or node.x), oy = py - (node.worldY or node.y), oz = pz - (node.worldZ or node.z) }
   -- The path home, from the network's last solve.
   local net = comms_net()
   local cs = net and net.statusOf and net.statusOf(node.id) or nil
@@ -2235,6 +2332,108 @@ local function radial_up(x, y, z)
   return 0, 1, 0
 end
 
+-- ── DEBRIS THAT HANGS IN THE AIR ───────────────────────────────────────────
+-- "debris often left floating" (playtest 2026-10-23, 1.png: wreckage in the
+-- sky over a crash). A piece that comes off — wreck, spent stage, booster,
+-- sheared part — is a bare assembly with no script of its own, so nothing
+-- ever looks at it again. Two engine paths can leave one hanging, both
+-- outside its own physics: the distant-craft LOD (floptle-editor space.rs)
+-- freezes a compound that is "slow" (grounded, anchored or under 0.5 m/s) on
+-- an ANCHOR the moment the camera — or the map's lodAnchor — is 700 m off,
+-- which catches a piece at the top of its arc or the moment it was split off
+-- at rest, and it hangs there until the camera comes within 500 m; and a
+-- compound put to sleep where it rested stays where it slept if what it
+-- rested on goes some other way than the engine checks. So every piece is
+-- watched by the craft it came from (this script keeps running when the
+-- craft is lost): kept out of the LOD (assembly.keepLive) until it has come
+-- to rest on the ground, and if it is ever still in the air — no contact,
+-- under 0.2 m/s for a second and a half, which nothing falling ever is — it
+-- is let go (unanchored, woken) and nudged down. Measured on 0.117.0-rc6: a
+-- 4-piece breakup settles in ~8 s and every piece falls when the ground is
+-- dug from under it.
+DEBRIS = {}
+function debrisTrack(junk)
+  if not (junk and junk.valid ~= false and assembly.info(junk)) then return end
+  if assembly.keepLive then assembly.keepLive(junk, true) end
+  DEBRIS[#DEBRIS + 1] = { node = junk, t = 0, still = 0, rest = 0, kicks = 0 }
+end
+
+function debrisTick(dt)
+  for k = #DEBRIS, 1, -1 do
+    local d = DEBRIS[k]
+    local n = d.node
+    local inf = n and n.valid ~= false and assembly.info(n)
+    if not inf then
+      table.remove(DEBRIS, k)
+    else
+      d.t = d.t + dt
+      local v = inf.vel
+      local spd = math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z)
+      if inf.grounded and spd < 0.3 then d.rest = d.rest + dt else d.rest = 0 end
+      local cm = inf.com or inf.origin
+      local ux, uy, uz = radial_up(cm.x, cm.y, cm.z)
+      if d.kicks >= 4 or d.t > 900 then
+        if assembly.keepLive then assembly.keepLive(n, false) end
+        table.remove(DEBRIS, k)
+      elseif d.settled then
+        -- SETTLED: every 2 s, is the ground still where it came to rest? The
+        -- terrain's collider is rebuilt as its detail changes (the craft LOD
+        -- and the terrain detail follow the camera, or the map's anchor), and
+        -- digging moves it: a piece asleep on ground that has since dropped
+        -- away is woken.
+        d.chk = d.chk + dt
+        if d.chk > 2.0 then
+          d.chk = 0
+          local h = raycast(cm.x, cm.y, cm.z, -ux, -uy, -uz, 60, n)
+          local gap = h and h.distance or 60
+          -- …and against the terrain's own field, which does not change with
+          -- its collider's detail: far from the camera (or the map's anchor)
+          -- the collider is coarse, a piece comes to rest on it metres off
+          -- the ground you see, and a fast one goes through it (0.117.0-rc6:
+          -- with the anchor 3 km off, the hull of a breakup fell 200 m into
+          -- the planet and the others came to rest 1.5-2.5 m up in the air).
+          local q = terrain.query and terrain.query(cm.x, cm.y, cm.z)
+          if q and q < -1.0 then
+            -- inside the ground: back out onto it
+            local o = inf.origin or cm
+            local up_by = -q + 1.0
+            assembly.teleport(n, vec3(o.x + ux * up_by, o.y + uy * up_by, o.z + uz * up_by))
+            n.asleep = false
+            d.settled, d.rest, d.kicks = false, 0, d.kicks + 1
+            log(string.format("debris: %s was %.1f m inside the ground — put back on it", tostring(n.name), -q))
+          elseif (q and q > 2.5) or gap > d.h0 + 0.6 then
+            n.asleep = false
+            if inf.anchored then assembly.setAnchored(n, false) end
+            d.settled, d.rest, d.kicks = false, 0, d.kicks + 1
+            local m = math.max(0.01, inf.mass or 0.1)
+            assembly.impulseAt(n, vec3(-ux * m * 0.5, -uy * m * 0.5, -uz * m * 0.5), vec3(cm.x, cm.y, cm.z))
+            log(string.format("debris: %s rests %.1f m off the ground (ray %.1f, rested at %.1f) — woken",
+              tostring(n.name), q or -1, gap, d.h0))
+          end
+        end
+      elseif d.rest > 3 then
+        -- at rest on the ground: the LOD may have it now; remember how far
+        -- the ground is below its centre
+        if assembly.keepLive then assembly.keepLive(n, false) end
+        local h = raycast(cm.x, cm.y, cm.z, -ux, -uy, -uz, 60, n)
+        d.settled, d.chk, d.h0 = true, 0, h and h.distance or 60
+      elseif not inf.grounded and spd < 0.2 then
+        d.still = d.still + dt
+        if d.still > 1.5 then
+          d.still, d.kicks = 0, d.kicks + 1
+          if inf.anchored then assembly.setAnchored(n, false) end
+          n.asleep = false
+          local m = math.max(0.01, inf.mass or 0.1)
+          assembly.impulseAt(n, vec3(-ux * m * 0.5, -uy * m * 0.5, -uz * m * 0.5), vec3(cm.x, cm.y, cm.z))
+          log(string.format("debris: %s was hanging in the air — let go", tostring(n.name)))
+        end
+      else
+        d.still = 0
+      end
+    end
+  end
+end
+
 -- `clear` (m, optional) first moves the wreck that far straight out from the
 -- impact, so it starts clear of the hull it just left: overlapping colliders
 -- are resolved by the engine as a collision, which is a kick of its own on top
@@ -2257,6 +2456,7 @@ local function debris_kick(junk, hx, hy, hz, dv, away, hull, also)
   -- the same breakup) for a moment: see releasePiece.
   local a = away or { gap = 0, x = ox, y = oy, z = oz }
   releasePiece(junk, hull, a.x, a.y, a.z, a.gap, also)
+  debrisTrack(junk)
   if dv <= 0 then return end -- velocity kept exactly: no impulse at all
   local g = physTune.clear and (a.gap or 0) or 0
   local m = (ji.mass and ji.mass > 0) and ji.mass or 0.2
@@ -3312,7 +3512,7 @@ end
 -- condition is met, so the last second of a dock needs no HUD at all.
 function dockGuides()
   local t = dock.target
-  if not t or not t.mx or dock.map then return end
+  if not t or not t.mx or dock.map or cinematicUp() then return end
   local ok = t.range < dock.captureR and t.align > dock.alignMin
     and t.drift < dock.driftMax
   local r, g, b = 1.0, 0.72, 0.2
@@ -3813,6 +4013,7 @@ break_part = function(node, uid, d, c, hx, hy, hz, depth)
       controlFallback(node.id)
     end
     log("the pod is gone — vessel lost")
+    debrisTrack(node)   -- what is left of the hull is wreckage now
     local fx_s = findScript("sfx") -- the sting and the VESSEL LOST caption
     if fx_s and fx_s.vesselLost then fx_s.vesselLost(was_piloting, craftName) end
     return
@@ -3946,6 +4147,7 @@ local function shatter(node, hx, hy, hz, spd, info)
   end
   integ.gen = integ.gen + 1
   for uid in pairs(part_hp) do part_hp[uid] = 0 end
+  debrisTrack(node)   -- the last piece is wreckage too
 end
 
 -- Closing speed INTO THE SURFACE (m/s) above which a hit fails the whole
@@ -4749,6 +4951,7 @@ function shedSet(node, set, why, sev, blast)
   assembly.split(node, nodes, function(junk)
     -- Clear of the hull, at the velocity it had: no impulse from overlap.
     releasePiece(junk, node, wx, wy, wz, gap)
+    debrisTrack(junk)
     local ji = assembly.info(junk)
     if ji and ji.origin then
       if blast and ji.com then
@@ -5625,6 +5828,7 @@ function stageNext()
         caption("the boosters separate")
         assembly.split(node, parts_nodes, function(stage)
           releasePiece(stage, node, kx, ky, kz, gap)
+          debrisTrack(stage)
           local si = assembly.info(stage)
           if si then
             -- Mass-scaled Δv: a FLAT impulse gave a heavy booster almost no
@@ -5702,6 +5906,7 @@ function stageNext()
       caption("a stage separates")
       assembly.split(node, parts_nodes, function(stage)
         releasePiece(stage, node, away.x, away.y, away.z, gap)
+        debrisTrack(stage)
         local si = assembly.info(stage)
         if si then
           -- Mass-scaled Δv (see the ring case) + a small downward nudge so a
@@ -5777,7 +5982,7 @@ R2 = {
   hold_t = 0.0, park = false,
   claws = {}, drills = {}, fairings = {},
   shells = {},        -- fairing uid → { meshes, nodes } (kept across rescans)
-  holdoff = 0.0,      -- time before which the tyres may not come out (a split just happened)
+  holdoff = 0.0,      -- seconds of fixed ticks before the tyres may come out (a split, a rollout)
   last_cap = nil,
   draw = {},          -- load id → EC/s wanted this tick (power_tick reads it)
   speed = 0.0,
@@ -5867,6 +6072,63 @@ function r2WheelCfg(d)
            travel = tonumber(w.travel), friction = num(w.friction, 1, 0.5, 2), skid = w.skid == true }
 end
 
+-- ── how fast a wheel rolls and how hard it pushes (playtest 2026-10-23) ─────
+-- "its equally as fast to traverse with a rover / car i built as it is with a
+-- astronaut". The catalogue's hub motors topped out at 5 / 7 / 9 m/s (S/M/L),
+-- the traction control let them push at 0.3 g, and the steering eased off
+-- past 4.5 m/s, so a rover ran at a jog. A wheel now rolls at what its size
+-- makes sensible for a light electric rover — a medium wheel (r 0.4 m) at
+-- 22 m/s, 525 rpm — and pushes hard enough to get there in a few seconds.
+-- Floors, so a craft saved with the old figures (its records carry `mods`)
+-- drives on the new ones too; a catalogue that rates higher wins.
+R2_WHEEL_TOP = { S = 14.0, M = 22.0, L = 28.0 }      -- m/s on the level, full stick
+R2_WHEEL_TORQUE = { S = 0.35, M = 0.9, L = 2.0 }     -- kN·m, rated like thrust (× parts.rating)
+R2_TC = 0.55          -- traction control: g the motors may push the craft at on the level
+R2_LAT_MU = 0.6       -- the share of the tyres' grip a turn may use, sideways
+R2_LAT_SSF = 0.45     -- …and the share of the rollover threshold (half track / CoM height)
+R2_ANTIROLL = 2.0     -- anti-roll bar: × m·g·track of roll torque per radian of lean
+R2_TYRES_VMAX = 45.0  -- m/s: faster than this the tyres fold back into the hull
+-- The tyre's friction (× the wheel's Grip setting). It is the one limit the
+-- engine's wheel always honours (see drive_tick: its motor cap does not cap
+-- the drive), so it is set where a rover should live: 0.7 g of push, braking
+-- and cornering — a loose-surface tyre, enough to climb 30° and hold there,
+-- and under the rollover threshold of any rover that is not a tower.
+R2_TYRE_MU = 0.7
+R2_G_REF = 9.8        -- the gravity the figures are for (a lighter world slows them)
+
+-- A wheel's top speed (m/s) on a world of gravity g: its size's figure or the
+-- catalogue's, whichever is higher, and slower on a light world, where the
+-- same tyre grips less (the speed a curve of the same radius holds goes as
+-- the square root of g).
+function r2TopSpeed(w, g)
+  local m = w.m or {}
+  local top = math.max(tonumber(m.speed) or 0, R2_WHEEL_TOP[w.size or "M"] or 0)
+  if top <= 0 then top = 7 end
+  local vk = math.max(0.6, math.min(1.0, math.sqrt(math.max(g or R2_G_REF, 0) / R2_G_REF)))
+  return top * vk
+end
+
+-- A wheel's full motor torque (kN·m): the catalogue's (already rated for the
+-- home world) or its size's floor rated the same way (`rk` = parts.rating thrust).
+function r2FullTorque(w, rk)
+  local m = w.m or {}
+  return math.max(tonumber(m.torque) or 0.6, (R2_WHEEL_TORQUE[w.size or "M"] or 0) * (rk or 1))
+end
+
+-- How hard (m/s²) the rover may turn on a world of gravity g: the lesser of
+-- the tyres' sideways grip (friction mu) and the acceleration that would lift
+-- its inside wheels (g · half track / CoM height — the static stability
+-- factor), each with a margin. Never under 0.15 g: a rover must still turn.
+function r2Lateral(g, plan, mu)
+  g = g or R2_G_REF
+  local grip = R2_LAT_MU * (mu or 1)
+  local ssf = 1.0
+  if plan and (plan.hcg or 0) > 0.05 and (plan.track or 0) > 0.05 then
+    ssf = 0.5 * plan.track / plan.hcg
+  end
+  return g * math.max(0.15, math.min(grip, R2_LAT_SSF * ssf))
+end
+
 -- The craft's front in the vessel frame, level: { x, z } (unit). A part
 -- marked `front` (a rover body) or a command seat faces its +X; failing
 -- those, the command part's +X; failing that, the vessel's +X.
@@ -5952,6 +6214,24 @@ function r2SteerPlan(wheels, F, bp, gone)
     if not w.steers then piv_n, piv = piv_n + 1, piv + w.a end
   end
   local plan = { pivot = piv_n > 0 and piv / piv_n or 0 }
+  -- how wide it stands and how tall its centre of mass sits over the
+  -- ground the tyres touch (r2Lateral)
+  local lmin, lmax, gy = math.huge, -math.huge, math.huge
+  for _, w in ipairs(wheels) do
+    lmin, lmax = math.min(lmin, w.l or 0), math.max(lmax, w.l or 0)
+    gy = math.min(gy, (w.cy or 0) - (w.r or 0.4))
+  end
+  if #wheels > 0 then
+    local my, mm = 0, 0
+    for u, d in pairs(bp or {}) do
+      if not (gone and gone[u]) then
+        local dm = math.max(0.001, d.mass or 0.1)
+        my, mm = my + (d.y or 0) * dm, mm + dm
+      end
+    end
+    plan.track = lmax - lmin
+    plan.hcg = mm > 0 and (my / mm - gy) or 0
+  end
   local best = 0
   for _, w in ipairs(wheels) do
     if w.steers and math.abs(w.a - plan.pivot) > best then
@@ -5967,15 +6247,28 @@ end
 -- Ackermann: every steering wheel points across the turn's centre, which
 -- lies on the pivot line (the wheels that don't steer); each wheel's speed
 -- is its own distance from that centre. The steering eases off with speed.
+--
+-- SPEED-SENSITIVE STEERING. Given `alat` (m/s², the sideways acceleration the
+-- craft may turn at: drive_tick sizes it from the grip and how tall the rover
+-- stands, r2Lateral), the lock is held to the turn that pulls exactly that at
+-- this speed — tan δ = wheelbase · alat / v² — so full lock at a crawl, a
+-- gentle arc at 20 m/s, and never a turn that rolls the rover. Without it
+-- (an old caller) the lock eases as R2_STEER_EASE / speed.
 R2_STEER_EASE = 4.5   -- m/s: full lock up to here, then lock × this / speed
-function r2WheelCmd(wheels, plan, drive, steer, spd)
+function r2WheelCmd(wheels, plan, drive, steer, spd, alat)
   plan = plan or { pivot = 0 }
   local out = {}
   local ref = plan.ref
   local R = nil                    -- the turn centre's offset to the left (m)
   if ref and math.abs(steer or 0) > 1e-3 then
+    local lock = ref.cfg and ref.cfg.steerMax or 25
     local k = math.min(1, R2_STEER_EASE / math.max(spd or 0, 1e-3))
-    local d = math.rad(steer * k * (ref.cfg and ref.cfg.steerMax or 25))
+    local arm = math.abs((ref.a or 0) - (plan.pivot or 0))
+    if alat and alat > 0 and arm > 1e-3 and lock > 0 then
+      local v2 = math.max((spd or 0) * (spd or 0), 1e-6)
+      k = math.min(1, math.deg(math.atan(arm * alat / v2)) / lock)
+    end
+    local d = math.rad(steer * k * lock)
     if math.abs(d) > 1e-4 then
       -- the centre that puts the most-turned wheel (the inside one) at the
       -- commanded angle; every other steering wheel turns less
@@ -6353,10 +6646,12 @@ end
 -- clamped, the craft assembled, on or just over the ground, not too fast.
 local function wheels_wanted(node, info)
   if #R2.wheels == 0 or destroyed or not piloting then return false, "unpiloted" end
-  if info.anchored or space.warp() > 1.001 or time < R2.holdoff then return false, "clamped/warp" end
+  if info.anchored then return false, "clamped" end
+  if space.warp() > 1.001 then return false, "warp" end
+  if R2.holdoff > 0 then return false, "holdoff" end
   if not assembly_ready(info) or integ.push then return false, "assembling" end
   local v = info.vel
-  if math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z) > 30 then return false, "fast" end
+  if math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z) > R2_TYRES_VMAX then return false, "fast" end
   if R2.live then
     -- out: they stay out while any tyre is on the ground, and for a couple
     -- of seconds of air (a bump, a hop) before they fold back into the hull
@@ -6460,7 +6755,7 @@ function hang_tyre(node, w, info)
   local c = w.cfg or r2WheelCfg(w.d)
   f = f * math.sqrt(c.spring or 1)
   local rb = t:getcomponent("RigidBody")
-  if rb then rb.kinematic = 0; rb.mass = mt; rb.friction = c.friction or 1 end
+  if rb then rb.kinematic = 0; rb.mass = mt; rb.friction = R2_TYRE_MU * (c.friction or 1) end
   -- The mount is named (otherAnchor, hull space), not left at "where the
   -- tyre stands now": the engine re-derives an unnamed anchor every time any
   -- joint or compound in the scene changes, which bakes whatever sag the
@@ -6470,7 +6765,8 @@ function hang_tyre(node, w, info)
               stiffness = f, damping = 0.7 * (c.damper or 1), motorSpeed = 0, maxForce = (m.torque or 0.6),
               steer = w.steer0 or 0 }
   w.jointed = true
-  w.joint_t = time
+  w.joint_age = 0   -- ticks since it was hung, counted in drive_tick (a spawn
+                    -- callback's `time` is not the tick clock's)
 end
 
 -- THE TYRES AS DRAWN. The live tyre is a ball to the physics, held to spin
@@ -6517,7 +6813,10 @@ function r2Steady(node, info, tk, dt)
   -- no steering asked: hold the heading too (a wheel that slips on a hill
   -- must not slew the rover across it)
   local yr = (math.abs(R2.steer or 0) > 0.05) and (w.x * up.x + w.y * up.y + w.z * up.z) or 0
-  wheelTorque(node, info, up.x * yr - w.x, up.y * yr - w.y, up.z * yr - w.z, tk, dt)
+  -- ANTI-ROLL: lean the body back level over its own tyres (drive_tick
+  -- measures the lean from the suspension, so a sidehill is not fought)
+  local ar = R2.antiroll or { x = 0, y = 0, z = 0 }
+  wheelTorque(node, info, up.x * yr - w.x + ar.x, up.y * yr - w.y + ar.y, up.z * yr - w.z + ar.z, tk, dt)
 end
 
 -- Drive, steer, brake and park, every tick the tyres are out
@@ -6556,13 +6855,17 @@ local function drive_tick(node, info, dt)
   -- with sqrt(g) (the speed a curve of the same radius holds).
   local rxv, upv, rzv = basis(node)
   local gdir = { x = 0, y = 0, z = 0 }
-  local gk = 1.0
+  local gl = R2_G_REF
   if space.gravity then
     local cm = info.com or info.origin
     local gx, gy, gz = space.gravity(cm.x, cm.y, cm.z)
-    if gx then gdir = { x = gx, y = gy, z = gz }; gk = math.sqrt(gx * gx + gy * gy + gz * gz) / 7.0 end
+    if gx then gdir = { x = gx, y = gy, z = gz }; gl = math.sqrt(gx * gx + gy * gy + gz * gz) end
   end
-  local vk = math.max(0.6, math.min(1.25, math.sqrt(gk)))
+  -- the catalogue's rating (motors are rated like thrust, for the home world)
+  if not R2.rk then
+    local rt = save and save.get and save.get("parts.rating")
+    R2.rk = type(rt) == "table" and tonumber(rt.thrust) or 1
+  end
   -- PARKING: next to stopped with no drive asked → the wheel brakes hold it
   -- (floptle/0420: a braked wheel holds the spot it stopped on). Above a
   -- walking pace the wheels roll free off the stick; below it the brakes
@@ -6573,10 +6876,11 @@ local function drive_tick(node, info, dt)
   elseif dcmd ~= 0 or spd > 1.2 then
     R2.hold_t = 0
   end
-  -- TRACTION CONTROL: the motors may push the craft no harder than 0.3 g on
-  -- the level — more on a hill, by the slope they are climbing — and back off
-  -- by half while one axle is off the ground (a wheelie, a crest). A tall
-  -- rover with its weight aft tips over backwards long before 1 g.
+  -- TRACTION CONTROL: the motors may push the craft no harder than R2_TC g
+  -- on the level — more on a hill, by the slope they are climbing — and back
+  -- off by half while one axle is off the ground (a wheelie, a crest). A tall
+  -- rover with its weight aft tips over backwards long before 1 g. The wheel's
+  -- Motor setting (wcfg.motor) scales what it may push with.
   local F = R2.fwd or { x = 1, z = 0 }
   local fx = rxv.x * F.x + rzv.x * F.z
   local fy = rxv.y * F.x + rzv.y * F.z
@@ -6588,7 +6892,7 @@ local function drive_tick(node, info, dt)
       if (w.a or 0) > 0 then front_up = front_up + 1 else rear_up = rear_up + 1 end
     end
   end
-  local accel = 0.3 * gk * 7.0 + climb
+  local accel = R2_TC * gl + climb
   if (front_up == 0) ~= (rear_up == 0) then accel = accel * 0.5 end
   -- STALL: driven but barely moving (parked in a dip or a rut, nose against
   -- a bump the chassis slope doesn't see) → after half a second let the
@@ -6614,47 +6918,136 @@ local function drive_tick(node, info, dt)
   local hill_a = hill_hold and (downhill + 0.15 * gmag) or 0
   -- signed forward speed, for the steering's speed limit
   local vf = v.x * fx + v.y * fy + v.z * fz
-  local cmds = r2WheelCmd(R2.wheels, R2.plan, R2.drive, R2.steer, math.abs(vf))
+  local mu = 1
+  for _, w in ipairs(R2.wheels) do if w.cfg and w.cfg.friction then mu = math.min(mu, w.cfg.friction) end end
+  local cmds = r2WheelCmd(R2.wheels, R2.plan, R2.drive, R2.steer, math.abs(vf), r2Lateral(gl, R2.plan, mu * R2_TYRE_MU))
   local power = 0
+  local limited, lmot = nil, 1   -- did the traction control hold a wheel back this tick (and which way)
+  local smin = 1                  -- the worst-served motor (published: R2.served)
   for k, w in ipairs(R2.wheels) do
     local t = w.tyre
-    local j = w.jointed and time - (w.joint_t or 0) > 0.05 and t and t.valid and t:getcomponent("Joint")
+    if w.jointed then w.joint_age = (w.joint_age or 0) + dt end
+    local j = w.jointed and (w.joint_age or 0) > 0.05 and t and t.valid and t:getcomponent("Joint")
     if j then
       local c = w.cfg or {}
       local cmd = cmds[k]
       local st = E and E.stateOf(w.d) or {}
       local served = (elec.served and elec.served["d" .. w.uid]) or 1
+      smin = math.min(smin, served)
       local m = w.m
-      local vmax = (m.speed or 7) * vk
+      local vmax = r2TopSpeed(w, gl)
       local brakes = st.brakes == true
       j.steer = (w.steer0 or 0) + R2_STEER_SIGN * cmd.steer
       w.steerNow = cmd.steer
-      local full = (m.torque or 0.6) * (c.motor or 1)
+      local full = r2FullTorque(w, R2.rk)
       local torque = math.min(full, accel * (info.mass or 1) * w.r / n_drive)
-      torque = torque + (full - torque) * stall_k
+      torque = (torque + (full - torque) * stall_k) * (c.motor or 1)
       local want = cmd.drive          -- −1…1 of this wheel's top speed, signed along the front
+      -- THE RIM SPEED IS RATE-LIMITED, not just the torque. On 0.117.0-rc6
+      -- the wheel joint's motor cap (maxForce) does not cap the drive: the
+      -- tyre's grip pushes the chassis through the mount to match the rim
+      -- speed the motor spun the light tyre up to, limited only by friction
+      -- (floptle-physics joints.rs tyre_grip; measured 0 → 22 m/s in 2.3 s,
+      -- ~1 g, with the traction control asking for 0.55 g). So the speed the
+      -- motor turns at leads the craft's own by at most what the traction
+      -- control (or the brakes) allow this tick, and the grip can only
+      -- deliver that.
+      local sk = (math.abs(R2.drive) > 0.02) and (cmd.drive / R2.drive) or 1   -- Ackermann / skid share
+      local cur = vf * sk                                                      -- this wheel's ground speed now
       if brakes or R2.hold_t > 0.15 then
         j.motor = 1
-        j.motorSpeed = 0
-        j.maxForce = (m.torque or 0.6) * 2.0 * (c.brake or 1)
+        -- at speed the brakes stop it at up to 0.8 g (a hard stop that
+        -- doesn't stand it on its nose); at a crawl they hold with all they have
+        local bf = full * 2.0 * (c.brake or 1)
+        if spd > 1.5 then
+          bf = math.min(bf, 0.8 * gl * (info.mass or 1) * w.r / math.max(1, grounded))
+          local dv = 0.8 * gl * (c.brake or 1) * dt
+          local tgt = cur > 0 and math.max(0, cur - dv) or math.min(0, cur + dv)
+          j.motorSpeed = w.rs * tgt / w.r * 57.29578
+        else
+          j.motorSpeed = 0
+        end
+        j.maxForce = bf
       elseif hill_hold and w.tyre.grounded then
         j.motor = 1
         j.motorSpeed = 0
-        j.maxForce = math.min((m.torque or 0.6) * 2.0 * (c.brake or 1), hill_a * (info.mass or 1) * w.r / grounded)
+        j.maxForce = math.min(full * 2.0 * (c.brake or 1), hill_a * (info.mass or 1) * w.r / grounded)
       elseif (w.rs or 0) == 0 or st.motor == false or served < 0.3 or math.abs(want) < 0.02 then
         -- off the stick (or an undriven wheel): it rolls free
         j.motor = 0
         j.motorSpeed = 0
       else
         j.motor = 1
-        j.motorSpeed = w.rs * want * vmax / w.r * 57.29578
-        j.maxForce = torque * served
+        -- the traction control's push this tick, as the lead the rim may
+        -- run ahead of (or, slowing, behind) the ground speed it has now
+        -- (stalled in a rut: up to a further 1 g to crawl out)
+        local lead = (accel + stall_k * gl) * (c.motor or 1) * served * dt * (R2.lk or 1.5)
+        local tgt = want * vmax
+        if math.abs(tgt - cur) > lead then
+          limited = (tgt > cur) and 1 or -1
+          lmot = math.min(lmot, (c.motor or 1) * served)
+        end
+        tgt = math.max(cur - lead, math.min(cur + lead, tgt))
+        j.motorSpeed = w.rs * tgt / w.r * 57.29578
+        j.maxForce = full * (c.motor or 1) * served   -- the motor at full; the lead above is the traction control
         power = power + (m.draw or 0.8) * math.abs(want)
       end
       R2.draw["d" .. w.uid] = (m.draw or 0.8) * (brakes and 0 or math.abs(want)) + 0.01
     end
   end
   R2.power = power
+  R2.served = smin
+  -- ANTI-ROLL (r2Steady applies it): how far the body leans over its tyres —
+  -- the left tyres hanging lower on their springs than the right ones means
+  -- the left side has risen — asked back level at 3 rad/s per rad, about the
+  -- craft's front. A turn leans a tall rover outward on soft springs (18° on
+  -- a pod rover at 16 m/s); the reaction wheels hold most of that off.
+  local hl, nl, hr, nr = 0, 0, 0, 0
+  for _, w in ipairs(R2.wheels) do
+    local t = w.tyre
+    if t and t.valid and w.jointed then
+      local mx, my, mz = v2w(node, info, w.cx, w.cy, w.cz)
+      local h = (t.x - mx) * upv.x + (t.y - my) * upv.y + (t.z - mz) * upv.z
+      if (w.l or 0) > 0.05 then hl, nl = hl + h, nl + 1 elseif (w.l or 0) < -0.05 then hr, nr = hr + h, nr + 1 end
+    end
+  end
+  local tr = R2.plan and R2.plan.track or 0
+  if nl > 0 and nr > 0 and tr > 0.2 and grounded >= 2 then
+    local phi = math.atan((hr / nr - hl / nl) / tr)
+    R2.phi = phi
+    local k = -3.0 * phi
+    R2.antiroll = { x = fx * k, y = fy * k, z = fz * k }
+    -- …and an anti-roll BAR: what a real one does through the springs (it
+    -- loads the outside spring and lifts the inside one), as a roll torque on
+    -- the body: R2_ANTIROLL × m·g·track per radian of lean over the tyres,
+    -- never more than the craft's own righting moment (m·g·track/2), plus a
+    -- damper on the roll rate. On the tyres' springs alone a light rover
+    -- leaned 23° in a 0.5 g turn, put its body on the ground at 20 m/s and
+    -- the engine's depenetration threw it about at 2400 rad/s.
+    local m = info.mass or 1
+    local mgt = m * gl * tr
+    local wr = info.angVel.x * fx + info.angVel.y * fy + info.angVel.z * fz
+    local I = (inertiaMin and inertiaMin(info)) or (m * tr * tr / 12)
+    local tq = -R2_ANTIROLL * mgt * phi - 4.0 * I * wr
+    tq = math.max(-0.5 * mgt, math.min(0.5 * mgt, tq))
+    assembly.torque(node, vec3(fx * tq, fy * tq, fz * tq))
+  else
+    R2.antiroll = nil
+  end
+  -- THE LEAD ADAPTS. How much acceleration a given rim-speed lead buys
+  -- depends on the craft (its mass, how high its centre sits over the tyres,
+  -- how many wheels drive): measured, a light rover made the traction
+  -- control's 0.55 g from a lead of 0.55 g·dt, one with a pod on top barely
+  -- 0.1 g. So the lead is scaled until the craft's own acceleration along
+  -- its front matches what the traction control allows.
+  local am = (vf - (R2.vf_prev or vf)) / math.max(dt, 1e-3)
+  R2.vf_prev = vf
+  R2.a_s = (R2.a_s or 0) + (am - (R2.a_s or 0)) * math.min(1, dt * 6)
+  if limited and grounded > 0 then
+    local want_a = R2_TC * gl * lmot
+    local e = (want_a - limited * R2.a_s) / math.max(want_a, 0.1)
+    R2.lk = math.max(1, math.min(8, (R2.lk or 1.5) * math.exp(math.max(-1, math.min(1, e)) * dt * 6)))
+  end
 end
 
 -- ── claw ───────────────────────────────────────────────────────────────────
@@ -6955,14 +7348,48 @@ function r2Rollout(node, info)
   assembly.teleport(node, vec3(h.x + up.x * lift + ox, h.y + up.y * lift + oy, h.z + up.z * lift + oz))
   integ.handoff_t = time + 1.0   -- (the safety net: this jump is ours)
   integ.prev = nil
-  R2.holdoff = time + 0.5
+  R2.holdoff = math.max(R2.holdoff, 0.5)
   log("rover: rolled out beside the pad")
 end
 
 -- ── the tick ───────────────────────────────────────────────────────────────
+-- THE HOLD-OFF COUNTS DOWN IN TICKS. It used to be an absolute `time`, set
+-- wherever it was set and compared here, in fixedUpdate. But `time` is the
+-- PASS's clock: an update-pass caller (the release, a probe, a UI button)
+-- stamps frame time, and the tick clock here can trail it by many seconds
+-- after a load, a hitch or a warp (it does not catch up dropped ticks).
+-- Measured on 0.117.0-rc6: a rover released after a 39 s load kept its
+-- tyres in for 11 s; one warped while clamped never put them out at all.
+-- PARKED ROVERS AND WARP. A rover standing on its live tyres is held up by
+-- jointed bodies, so the engine never counts its chassis `grounded`, and it
+-- creeps a few tenths of a m/s on its springs: the warp gate (floptle-editor
+-- space.rs, "anchored || grounded || vel² < 0.01") put it on a Kepler conic,
+-- found the conic inside the planet and dropped warp to 1× the same tick —
+-- a parked rover could not warp at all. So a craft on its wheels (or just
+-- off them) is pinned where it stands for the warp, the way a floating
+-- craft is (waterTick), and let go the tick warp ends.
+function r2WarpPin(node, info)
+  if R2.warp_pin or not info or info.anchored then return end
+  if not (R2.live or R2.onWheels) or #R2.wheels == 0 then return end
+  local v = info.vel
+  if math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z) > 3.0 then return end
+  assembly.setAnchored(node, true)
+  R2.warp_pin = true
+  log("rover: pinned for time warp")
+end
+
 function r2Tick(node, info, dt)
+  R2.holdoff = math.max(0, (R2.holdoff or 0) - (dt or 0))
+  if space.warp() > 1.001 then
+    r2WarpPin(node, info)   -- warp asked for from elsewhere (the map, a probe)
+  elseif R2.warp_pin then
+    R2.warp_pin = false
+    assembly.setAnchored(node, false)
+    R2.holdoff = math.max(R2.holdoff, 0.3)
+    log("rover: warp over, unpinned")
+  end
   if R2.gen ~= integ.gen then
-    if R2.live then tyres_in(node); R2.holdoff = time + 0.5 end
+    if R2.live then tyres_in(node); R2.holdoff = math.max(R2.holdoff, 0.5) end
     r2_scan(node)
     fairing_build(node)
   end
@@ -6970,6 +7397,7 @@ function r2Tick(node, info, dt)
   claw_tick(node, info, dt)
   drill_tick(node, info, dt)
   local want, why = wheels_wanted(node, info)
+  R2.why = want and "out" or why   -- published: why the tyres are in (HUD, probes)
   if want and not R2.live then tyres_out(node, info)
   elseif not want and R2.live then
     log("rover: wheels stowed (" .. tostring(why) .. ")")
@@ -6986,7 +7414,7 @@ end
 -- the tyres come in, so no joint is left hanging off a piece that leaves.
 function r2Before(node)
   if R2.live then tyres_in(node) end
-  R2.holdoff = time + 1.0
+  R2.holdoff = math.max(R2.holdoff, 1.0)
 end
 
 function r2Cleanup()
@@ -7099,6 +7527,7 @@ function fixedUpdate(node, dt)
   -- Wheels, actuators, the claw, the drill, fairings (round two): global, so
   -- this function spends no upvalue on them.
   if info and not destroyed then r2Tick(node, info, dt) end
+  if #DEBRIS > 0 then debrisTick(dt) end   -- the pieces it shed (global: no upvalue)
   -- (Electrical power_tick runs in lateUpdate — fixedUpdate is at Lua's upvalue
   -- ceiling, so the power system lives in the post-writeback pass instead.)
   if destroyed then
@@ -7294,6 +7723,10 @@ function fixedUpdate(node, dt)
       end
     end
     if nxt ~= warp then
+      -- a rover on its tyres is held by them, not grounded to the engine,
+      -- which then puts its creeping chassis on a conic and drops warp
+      -- ("surface proximity"): it is pinned first (r2WarpPin)
+      if nxt > 1.001 then r2WarpPin(node, info) end
       space.warp(nxt)
       warp = nxt
     end
@@ -7860,5 +8293,5 @@ function lateUpdate(node, dt)
   local px = node.x + rx.x * q.x + up.x * q.y + rz.x * q.z
   local py = node.y + rx.y * q.x + up.y * q.y + rz.y * q.z
   local pz = node.z + rx.z * q.x + up.z * q.y + rz.z * q.z
-  draw.ring(px, py, pz, up.x, up.y, up.z, 0.75, 0.3, 0.95, 1.0, 0.9)
+  if not cinematicUp() then draw.ring(px, py, pz, up.x, up.y, up.z, 0.75, 0.3, 0.95, 1.0, 0.9) end
 end

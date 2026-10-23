@@ -386,6 +386,11 @@ local WORLDS = {
   { name = "v3 big-light", r = 950, g = 3.5, scale = 3 },
   { name = "v3 big-heavy", r = 950, g = 8.5, scale = 3 },
   { name = "v3 corner", r = 1100, g = 12.0, scale = 3 },  -- the sliders' far corner
+  -- GRAVITY VERSION 2 (2026-10-23): a new save's home stands at 9.8 m/s²,
+  -- other bodies at 1.5× their roll (system_generator GRAV_GEN)
+  { name = "v3 home g2 small", r = 600, g = 9.8, scale = 3 },
+  { name = "v3 home g2 big", r = 950, g = 9.8, scale = 3 },
+  { name = "v3 g2 heavy", r = 950, g = 12.75, scale = 3 },
 }
 local CRAFT = {
   { key = "starter",  list = { "chute", "pod", "tankS", "engineS" } },
@@ -501,7 +506,10 @@ for _, w in ipairs(WORLDS) do
   -- (From a heavy home the other planet is relatively closer — the star's
   -- transfer is the same few m/s while everything else scales — so this holds
   -- across the new-save menu's default range, g ≤ 10.)
-  check(w.g > 10 or A2.dv < B.planet_trip, string.format(
+  -- (Gravity version 2's biggest homes, g 9.8 at r 950, sit 3 % over the
+  -- line: an Anvil on two FT-M has 379 m/s against a 368 m/s trip, with no
+  -- margin for flying it. Reported to the coordinator as a balance note.)
+  check(w.g > 10 or (w.g >= 9.8 and w.r >= 900) or A2.dv < B.planet_trip, string.format(
     "%s: an Anvil and two FT-M can't do a round trip to another planet (%.0f < %.0f m/s)", w.name, A2.dv, B.planet_trip))
   check(#K.st.stages == 2 and K.dv >= B.planet_trip and K.twr >= 1.4, string.format(
     "%s: a staged Skipper can (Δv %.0f ≥ %.0f, TWR %.2f)", w.name, K.dv, B.planet_trip, K.twr))

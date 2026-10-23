@@ -286,6 +286,52 @@ check(n_planets >= 12 and n_bodies > n_planets, string.format("rolled %d planets
 -- The spawn planet is generated at its own voxel.
 check(generated[1] and generated[1].o.voxel and generated[1].o.voxel >= 1.5, "the spawn fill carries its voxel")
 
+-- ── 3c. gravity versions (playtest 2026-10-23: "gravity is pretty floaty") ──
+-- Version 2 changes µ and nothing else: the same seed rolls the same bodies
+-- on the same orbits with the same spheres of influence and moons; home
+-- pulls 9.8 m/s² at its radius, everything else 1.5× its roll. A save that
+-- has been played and carries no version is version 1 for life.
+do
+  local function snapshot()
+    local out = {}
+    for _, n in ipairs(nodes) do
+      if n.valid and n.gen and n.cel then
+        out[#out + 1] = { name = n.name, r = n.gen.radius, a = n.cel.a, soi = n.cel.soi, mu = n.cel.mu,
+                          parent = n.cel.parent, atmo = n.cel.atmoDensity or 0, seed = n.gen.seed }
+      end
+    end
+    return out
+  end
+  for _, seed in ipairs({ 1911564384, 31337, 1902723835 }) do
+    nodes = {}
+    regen(seed, { gravGen = 1 }, 3)
+    local v1 = snapshot()
+    nodes = {}
+    regen(seed, {}, 3)
+    local v2 = snapshot()
+    local home = store["system.home"]
+    check(#v1 == #v2 and #v1 > 2, string.format("seed %d: the same %d bodies at both gravity versions", seed, #v1))
+    local same, ratio_ok = true, true
+    for k, b in ipairs(v1) do
+      local c = v2[k]
+      if not c or c.name ~= b.name or c.r ~= b.r or c.a ~= b.a or c.soi ~= b.soi or c.parent ~= b.parent
+        or c.atmo ~= b.atmo or c.seed ~= b.seed then same = false end
+      if c then
+        local want = (b.name == home.bodies[1].name) and (env.GRAV_HOME * b.r * b.r) or (b.mu * env.GRAV_MULT)
+        if math.abs(c.mu - want) > 1e-6 * want then ratio_ok = false end
+      end
+    end
+    check(same, seed .. ": gravity version 2 keeps every body, orbit, SOI, air and terrain seed")
+    check(ratio_ok, seed .. ": version 2 is home at 9.8 m/s², the rest ×1.5")
+  end
+  -- an existing save with no version keeps version 1
+  store = { ["base.body"] = "X" }
+  check(env.gravGenFor({ scale = 3 }) == 1 and store["g_gravGen"] == 1, "a played save with no version stays gravity version 1")
+  store = {}
+  check(env.gravGenFor({ scale = 3 }) == 2 and store["g_gravGen"] == 2, "a fresh save is written gravity version 2")
+  check(env.gravGenFor({ scale = 2 }) == 1, "scale 2 saves are always gravity version 1")
+end
+
 -- ── 3b. a scale-3 world ────────────────────────────────────────────────────
 local S3 = env.SCALES[3]
 local n3, np3, worst_vox, spawn_ok = 0, 0, 0, 0
@@ -323,8 +369,16 @@ for _, seed in ipairs({ 1911564384, 31337, 424242, 777001, 99, 1902723835, 7, 23
         np3 = np3 + 1
         check(o.radius >= S3.radiusMin and o.radius <= S3.radiusMax,
           string.format("seed %d: planet %s r %.0f in %d–%d", seed, n.name, o.radius, S3.radiusMin, S3.radiusMax))
+        -- a fresh save is gravity version 2 (system_generator GRAV_GEN): home
+        -- at 9.8 m/s², every other body at GRAV_MULT × its roll
         local g = c.mu / (o.radius * o.radius)
-        check(g >= S3.gravityMin - 1e-9 and g <= S3.gravityMax + 1e-9, string.format("seed %d: g %.2f", seed, g))
+        check(store["g_gravGen"] == 2, seed .. ": a fresh save is gravity version 2")
+        if n.name == home.bodies[1].name then
+          check(math.abs(g - env.GRAV_HOME) < 1e-6, string.format("seed %d: home g %.2f is %.1f", seed, g, env.GRAV_HOME))
+        else
+          check(g >= S3.gravityMin * env.GRAV_MULT - 1e-9 and g <= S3.gravityMax * env.GRAV_MULT + 1e-9,
+            string.format("seed %d: g %.2f", seed, g))
+        end
         check(c.a >= S3.minOrbit * 0.9, string.format("seed %d: %s orbits at %.0f m", seed, n.name, c.a))
         check(c.soi >= 12 * o.radius, string.format("seed %d: %s's SOI %.0f ≥ 12 radii", seed, n.name, c.soi))
         if (c.atmoHeight or 0) > 0 then

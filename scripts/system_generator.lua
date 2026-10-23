@@ -1307,6 +1307,51 @@ function homeGenFor(p)
   return v
 end
 
+-- ── GRAVITY VERSION (`g_gravGen`) ───────────────────────────────────────────
+-- "feels like all gravity in general is pretty floaty right now lets increase
+-- the strength" (playtest 2026-10-23). Version 1 rolls every body's surface
+-- gravity straight from the scale table (home 3.5–8.5 m/s² at scale 3, ~6 on
+-- average: a fall took 1.3× as long as on Earth, a jump went 1.6× as high).
+-- Version 2 pulls harder: the HOME world stands at Earth's 9.8 m/s², every
+-- other planet and moon at 1.5× its roll. Only µ changes: the rolls are drawn
+-- exactly as before (the same planets, seas, air and moons for a seed) and
+-- each sphere of influence keeps the size the raw roll gave it (a little
+-- inside the physical one), so an old save's system is the same layout and a
+-- new save's is the same layout pulling harder.
+--
+-- The catalogue follows on its own: builder.lua rates thrust by g_home / 7 and
+-- solves ve for the starter's hop on the home world, so a new save's starter
+-- has the same TWR and still makes its hop and orbit (smoke_balance flies it
+-- at g 9.8). A save keeps the version it was made with, like g_homeGen: an
+-- existing save is 1 for life (its craft are in orbits of the old µ), a
+-- fresh one is GRAV_GEN. Scale 1 and 2 saves are always 1.
+GRAV_GEN = 2
+GRAV_HOME = 9.8      -- version 2: home's surface gravity, m/s²
+GRAV_MULT = 1.5      -- version 2: every other body's rolled gravity ×
+
+function gravGenFor(p)
+  local sc = scaleOf(p.scale)
+  if not sc.layers then return 1 end
+  if p.gravGen then return tonumber(p.gravGen) or 1 end
+  if not (save and save.get) then return 1 end
+  local v = save.get("g_gravGen")
+  if v ~= nil then return tonumber(v) or 1 end
+  local old = save.get("g_played") ~= nil or save.get("base.body") ~= nil
+    or save.get("system.home") ~= nil or save.get("parts.rating") ~= nil
+    or save.get("fleet.next") ~= nil
+  v = old and 1 or GRAV_GEN
+  if save.set then save.set("g_gravGen", v) end
+  return v
+end
+
+-- The factor a body's rolled µ is published at: `g` its rolled surface
+-- gravity, `home` true for the spawn planet of the home system.
+function gravK(gen, g, home)
+  if (tonumber(gen) or 1) < 2 then return 1 end
+  if home and g and g > 0 then return GRAV_HOME / g end
+  return GRAV_MULT
+end
+
 -- The home world's latitude targets (degrees).
 HOME_POLAR = 62       -- the caps: ranges wanted above this
 HOME_EQUATOR = 32     -- the lowland: no ranges wanted below this
@@ -2177,7 +2222,9 @@ local function buildSystem(r, p, cfg)
       local bodyR = radius + math.max(radius * 0.035, 4)
       local laplace = a * (mu / starMu) ^ 0.4
       cel = {
-        mu = mu, bodyRadius = bodyR,
+        -- published at the save's gravity version (gravK); the SOI stays the
+        -- raw roll's, so the system's layout never moves with it
+        mu = mu * gravK(p.gravGen, g, pi == 1 and cfg.home), bodyRadius = bodyR,
         soi = math.min(math.max(laplace, bodyR * sc.soiFloor), a * 0.3),
         occluderRadius = math.max((radius - (shape and shape.low or opts.relief) - opts.caveDepth) * 0.95, 0),
         parent = starName,
@@ -2249,7 +2296,7 @@ local function buildSystem(r, p, cfg)
         site_try()
       end
     end
-    print(string.format("  %s — %s, r %.0f, g %.1f, orbit %.0f", name, kind, radius, g, a))
+    print(string.format("  %s — %s, r %.0f, g %.1f, orbit %.0f", name, kind, radius, cel.mu / (radius * radius), a))
     if pi == 1 then
       firstPos, firstR, firstName = pos, radius, name
       firstRelief = spec.shape and spec.shape.peak or opts.relief
@@ -2290,10 +2337,10 @@ local function buildSystem(r, p, cfg)
         end
         if not mshape then mopts.seed = r:int(1, 1e9) end
         local mspec = { name = mname, id = id, pos = mpos, cel = {
-          mu = mmu, bodyRadius = mr + math.max(mr * 0.035, 4), soi = 0,
+          mu = mmu * gravK(p.gravGen, nil, false), bodyRadius = mr + math.max(mr * 0.035, 4), soi = 0,
           occluderRadius = math.max((mr - (mshape and mshape.low or mopts.relief) - mopts.caveDepth) * 0.95, 0),
           parent = name, a = ma, e = r:range(0, 0.04), i = r:range(0, 0.25), m0 = mm0,
-        }, opts = mopts, kind = mkind, sea = 0, parentMu = mu, geo = mgeo, starClass = cls[3], shape = mshape } -- moons stream from their genspec too
+        }, opts = mopts, kind = mkind, sea = 0, parentMu = cel.mu, geo = mgeo, starClass = cls[3], shape = mshape } -- moons stream from their genspec too
         specs[#specs + 1] = mspec
         if mshape then GENSPEC[mname] = { opts = mopts, seaAlt = nil, wet = false } end
         -- Moons are airless in this generator: no sea, nothing grows — but the
@@ -2417,6 +2464,7 @@ end
 -- The scale table is what makes an old save's unset sliders mean what they
 -- meant when it was made.
 homeScale = nil
+homeGravGen = 1   -- the resident home system's gravity version (neighbours follow it)
 function resolve(v, opts)
   local p = {}
   for k, x in pairs(defaults) do p[k] = x end
@@ -2450,6 +2498,7 @@ local function roll(p)
   lastBaseDir, lastHomeSite = nil, nil
   site_wait, homeSitePending = nil, false
   lastHomeGen = tonumber(p.homeGen) or 1
+  homeGravGen = tonumber(p.gravGen) or 1
   homeScale = tonumber(p.scale) or 1
   scaleVersion, scale = homeScale, scaleOf(homeScale)
   homeStar = buildSystem(r, p, { home = true, idBase = 1, taken = homeTaken })
@@ -2475,6 +2524,7 @@ function buildNeighbour(seed, a, m0, soi, idBase, tag, opts)
   -- A neighbour is built at HOME's world scale (a galaxy is one universe),
   -- from the generator's stock knobs rather than the save's sliders.
   local p = resolve(homeScale or 1, opts)
+  p.gravGen = homeGravGen or 1   -- one universe, one gravity version
   p.planets = 0 -- a neighbour rolls its own count; the save's home setting is home's
   local r = rng(seed)
   return (buildSystem(r, p, {
@@ -2501,5 +2551,6 @@ function regenerate(seed, opts)
   local p = resolve((opts and opts.scale) or 1, opts)
   p.seed = (seed and seed > 0) and seed or 0
   p.homeGen = homeGenFor(p)
+  p.gravGen = gravGenFor(p)
   roll(p)
 end

@@ -25,9 +25,13 @@ defaults = {
   -- you can still steer a landing.
   --@range 0 20 --@units 1/s
   air_accel = 2.5,
-  -- Upward speed SPACE gives you, along the surface's up.
+  -- Upward speed SPACE gives you, along the surface's up. 5.2 m/s is a
+  -- 1.4 m hop at Earth's 9.8 m/s² (a new save's home, gravity version 2),
+  -- 1.9 m at 7 and 3.4 m on a 4 m/s² moon: a jump commits you, it doesn't
+  -- float you (playtest 2026-10-23, "gravity is pretty floaty": 10.4 m/s
+  -- jumped 7.7 m and hung 3 s in the air at g 7).
   --@range 0 20 --@units m/s
-  jump = 7.0,
+  jump = 5.2,
   -- How far down to look for ground (a capsule's feet plus slack).
   --@range 0.2 5 --@units m
   ground_ray = 1.6,
