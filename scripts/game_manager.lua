@@ -666,7 +666,10 @@ function update(node, dt)
     -- A beat after ready at the least (the scatter hitch), then as soon as the
     -- colony is up.
     local bf = findScript("base_facilities")
-    if bf and bf.grading and bf.grading() and time < ready_t + REVEAL_GRADE then reveal_by = math.max(reveal_by, time + 0.5) end
+    -- a new spaceport being sited, graded and paved holds the curtain longer
+    if bf and ((bf.grading and bf.grading()) or base_pending(find("Astronaut"))) and time < ready_t + REVEAL_GRADE then
+      reveal_by = math.max(reveal_by, time + 0.5)
+    end
     if time >= reveal_by or (time - ready_t > 1.0 and not base_pending(find("Astronaut"))) then
       reveal()
     end

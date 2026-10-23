@@ -125,6 +125,8 @@ local grade_later = nil  -- a grade put off until the crew comes home
 local recheck_at = nil   -- when to look at the ground again after grading
 local regrades = 0
 local grade_job = nil
+local pave_pending = nil  -- paving waiting for the grade under it
+local pave_job = nil
 local F = nil         -- the layout frame once known
 
 -- Cross-script singletons, resolved once and kept: `findScript` walks the whole
@@ -147,9 +149,14 @@ end
 -- process's CPU across threads, ~10× wall time while the world generates.
 WORK_BUDGET = 250
 local job, job_active, units = nil, false, 0
+-- Behind the loading curtain a frame may take far more (nobody sees it; the
+-- watchdog's 2 s is the only limit).
+WORK_BUDGET_CURTAIN = 2500
 function work(n)
   units = units + (n or 1)
-  if job_active and units >= WORK_BUDGET then
+  local gm = job_active and refs.game_manager
+  local budget = (gm and gm.valid ~= false and gm.curtain) and WORK_BUDGET_CURTAIN or WORK_BUDGET
+  if job_active and units >= budget then
     units = 0
     coroutine.yield()
   end
@@ -492,6 +499,29 @@ function gradeDiscs(Fr, runway)
   return out
 end
 
+-- The paint discs along every paved strip (centre line, radius half + 2.5).
+SUBBASE = { asphalt = { 0.24, 0.24, 0.25 }, concrete = { 0.50, 0.50, 0.48 } }
+function paveDiscs(Fr, runway)
+  local out = {}
+  local function strip(S, half, col)
+    local r = half + 2.5
+    local rows = half > 10 and 3 or 1
+    local n = math.max(1, math.ceil(S.L / (r * 0.9)))
+    for i = 0, n do
+      for j = 1, rows do
+        local w = rows == 1 and 0 or (-half * 0.6 + half * 1.2 * (j - 1) / (rows - 1))
+        out[#out + 1] = { d = stripDir(S, S.L * i / n, w), r = rows == 1 and r or r * 0.6, col = col }
+      end
+    end
+  end
+  if runway then strip(runway_strip(Fr), RUNWAY.half + RUNWAY.shoulder, SUBBASE.asphalt) end
+  strip(stripOf(Fr, TAXIWAY.u, TAXIWAY.v0, TAXIWAY.u, TAXIWAY.v1), TAXIWAY.half, SUBBASE.asphalt)
+  for _, st in ipairs(STRIPS) do
+    strip(stripOf(Fr, st[2], st[3], st[4], st[5]), st[6], st[7] == "road" and SUBBASE.asphalt or SUBBASE.concrete)
+  end
+  return out
+end
+
 -- THE EDGES. Outside the graded reach the natural ground can sit metres
 -- above or below the sphere (±2–5 m over a home plain's 180 m, more on an
 -- old save's site); a hard edge there is a step with the paving's kerb
@@ -618,9 +648,20 @@ local function grade(body, Fr, runway)
   for _, d in ipairs(blendDiscs(Fr, runway)) do
     list[#list + 1] = { "flatten", d.x * Fr.R, d.y * Fr.R, d.z * Fr.R, GRADE.r * 1.25, 0.45 }
   end
+  -- …and the ground under and beside the paving is painted as its sub-base
+  -- (dark grey under asphalt, light grey under concrete), so wherever it
+  -- meets the kerb it reads as a shoulder, not as meadow.
+  if terrain.paint then
+    for _, pd in ipairs(paveDiscs(Fr, runway)) do
+      local d = pd.d
+      list[#list + 1] = { "paint", d.x * Fr.R, d.y * Fr.R, d.z * Fr.R, pd.r, pd.col }
+    end
+  end
   grade_q = { body = body.name, list = list, i = 1 }
   local n = 0
   for _, e in ipairs(list) do if e[1] ~= "paint" then n = n + 1 end end
+  local np = #list - n
+  if np > 0 then log(string.format("base: %d paint ops lay the sub-base under the paving", np)) end
   return n
 end
 
@@ -647,7 +688,11 @@ local function grade_step()
   local sent = 0
   while q.i <= #q.list and sent < grade_n do
     local e = q.list[q.i]
-    terrain.sculpt(b.x + e[2], b.y + e[3], b.z + e[4], e[5], e[6], e[1])
+    if e[1] == "paint" then
+      terrain.paint(b.x + e[2], b.y + e[3], b.z + e[4], e[5], e[6][1], e[6][2], e[6][3], 1.0)
+    else
+      terrain.sculpt(b.x + e[2], b.y + e[3], b.z + e[4], e[5], e[6], e[1])
+    end
     q.i, sent = q.i + 1, sent + 1
   end
   if q.i > #q.list then grade_q = nil end
@@ -964,9 +1009,42 @@ end
 -- Lay a strip: cells between the breakpoints, one colour each, runs of the
 -- same colour merged across (up to `maxw`), a kerb skirt down the sides and
 -- ends so no lip shows against the ground.
+-- THE PAVING SITS ON THE GROUND AS GRADED, not on the ideal sphere. The
+-- grade lands within ~±0.2 m of the sphere, and where it stood higher than
+-- the paving's 0.14 m the ground's own texture came up through the aprons and
+-- roads in ragged patches, plain from the air. So every paving vertex asks
+-- the field where the ground really is there (a short march down the
+-- radial from 1 m over the grade) and stands PAVE_H over THAT; the kerb
+-- skirts hang 1.2 m from it. `pave_body` is the body the meshes are built for.
+local pave_body = nil
+local function ground_off(d, R)
+  local b = pave_body and space.body(pave_body)
+  if not (b and terrain.query) then return 0 end
+  local r = R + 1.0
+  for _ = 1, 8 do
+    work(1)
+    b = space.body(pave_body) or b
+    local q = terrain.query(b.x + d.x * r, b.y + d.y * r, b.z + d.z * r)
+    if not q then return 0 end
+    if abs(q) < 0.01 then break end
+    r = r - q
+  end
+  return clamp(r - R, -0.5, 0.8)
+end
+
 local function lay_strip(M, O, S, sb, wb, paint, h, tile, maxw, ends)
   local R = S.R
-  local function P(s, w, hh) return add(mul(stripDir(S, s, w), R + hh), O, -1) end
+  local gcache = {}
+  local function P(s, w, hh)
+    local d = stripDir(S, s, w)
+    local key = string.format("%.3f:%.3f", s, w)
+    local g = gcache[key]
+    if not g then
+      g = ground_off(d, R)
+      gcache[key] = g
+    end
+    return add(mul(d, R + g + hh), O, -1)
+  end
   for i = 1, #sb - 1 do
     work(math.max(1, math.floor(#wb / 3)))
     local s0, s1 = sb[i], sb[i + 1]
@@ -1170,11 +1248,13 @@ local function build_meshes(Fr, runway)
 
   -- THE TAXIWAY (asphalt, a yellow centreline and edges, blue edge lights)
   do
-    local Tx = stripOf(Fr, TAXIWAY.u, TAXIWAY.v0, TAXIWAY.u, TAXIWAY.v1)
+    -- (it starts 0.6 m inside the runway's shoulder and 2 cm above it, so the
+    -- junction is one surface with no strip of ground showing between)
+    local Tx = stripOf(Fr, TAXIWAY.u, TAXIWAY.v0 - 0.6, TAXIWAY.u, TAXIWAY.v1)
     local half = TAXIWAY.half
     local sb = breaks(0, Tx.L, 4.0)
     local wb = breaks(-half, half, 6.0, { -0.15, 0.15, -half + 0.3, half - 0.3 })
-    lay_strip(A, O, Tx, sb, wb, strip_paint("taxi", Tx.L, half), PAVE_H, 8.0, 6.0)
+    lay_strip(A, O, Tx, sb, wb, strip_paint("taxi", Tx.L, half), PAVE_H + 0.02, 8.0, 6.0)
     for s = 3.0, Tx.L - 1, 7.0 do
       for _, w in ipairs({ half + 0.6, -half - 0.6 }) do
         fitting(X, Lm, O, stripDir(Tx, s, w), R, LIGHT.blue, 0.06)
@@ -1308,6 +1388,25 @@ local function show_meshes(B, planet_node)
   end
 end
 
+-- Build (or rebuild) the paving, fittings and signs.
+function lay_paving(Fr, runway, planet_node)
+  if built then
+    for _, n in ipairs(built.nodes) do if n.valid then n:destroy() end end
+    if mesh and mesh.free then for _, m in ipairs(built.meshes) do mesh.free(m) end end
+    built = nil
+  end
+  local ok, B = pcall(build_meshes, Fr, runway)
+  if ok then
+    show_meshes(B, planet_node)
+    lastBuild = B.stats
+    local v = B.stats.verts
+    log(string.format("base: paving and fittings built — %d + %d + %d + %d vertices%s", v.asphalt, v.concrete,
+      v.fixtures, v.lamps, B.stats.numbers and (", runway " .. B.stats.numbers) or ""))
+  else
+    log("base: could not build the paving — " .. tostring(B))
+  end
+end
+
 local function try_place()
   -- Nothing is sited while the loading screen is up: the crew is parked over
   -- the north pole then, not standing where they live.
@@ -1405,15 +1504,19 @@ local function try_place()
     end
   end
   place_floods(body, F, planet_node)
-  local ok, B = pcall(build_meshes, F, runway)
-  if ok then
-    show_meshes(B, planet_node)
-    lastBuild = B.stats
-    local v = B.stats.verts
-    log(string.format("base: paving and fittings built — %d + %d + %d + %d vertices%s", v.asphalt, v.concrete,
-      v.fixtures, v.lamps, B.stats.numbers and (", runway " .. B.stats.numbers) or ""))
+  pave_body = body.name
+  -- The paving is laid on the ground as it stands, so it waits for a grade
+  -- that is still on its way (`update` lays it the frame the grade is done).
+  -- A save that has played streams its saved (graded) ground back in after
+  -- the world loads: laid before that lands, the paving followed the ground
+  -- as GENERATED and the graded ground then came up over all of it. Wait.
+  local streaming = save.get("g_played") ~= nil and terrain.busy and terrain.busy()
+  if grade_q or streaming then
+    pave_pending = { runway = runway, node = planet_node, t = time }
   else
-    log("base: could not build the paving — " .. tostring(B))
+    lay_paving(F, runway, planet_node)
+    -- (a grade still waiting for the crew re-lays it when it has landed)
+    if grade_later then pave_pending = { runway = runway, node = planet_node } end
   end
   return true
 end
@@ -1438,6 +1541,7 @@ function resite()
     save.set(k, false)
   end
   done, placed, sited, footprint, F = {}, 0, false, nil, nil
+  pave_pending, pave_job = nil, nil
   want_spawn, wait_t, last_note = true, 0.0, 0.0
   log("base: spaceport cleared — re-siting where you stand")
 end
@@ -1457,6 +1561,7 @@ end
 -- Is ground work still owed or under way? (probes and the loading screen)
 function grading()
   return grade_q ~= nil or grade_job ~= nil or (grade_later ~= nil and grade_later.streaming == true)
+    or (pave_pending ~= nil and grade_later == nil)
 end
 
 local function finish_siting()
@@ -1485,7 +1590,7 @@ function update(node, dt)
       if not grade_step() then recheck_at = time + 3.0 end
       return
     end
-    if grade_wait > 0 then grade_wait = grade_wait - 1 else finish_siting() end
+    if grade_wait > 0 then grade_wait = grade_wait - 1 elseif not (pave_pending and not grade_later) then finish_siting() end
   end
   -- A grade that waited for the crew: start it when they are back in range,
   -- as its own sliced job, then send it like any other.
@@ -1508,6 +1613,23 @@ function update(node, dt)
         if not ok then log("base: grading failed — " .. tostring(err)) end
         grade_job, grade_later = nil, nil
       end
+    end
+  end
+  -- Paving that waited for its grade: laid (as a sliced job) once the ground
+  -- is done.
+  if not want_spawn and pave_pending and not grade_q and not grade_later and not grade_job and F
+     and (pave_job or save.get("g_played") == nil or not (terrain.busy and terrain.busy())
+          or time - (pave_pending.t or time) > 25.0) then
+    if not pave_job then
+      local pp = pave_pending
+      pave_job = coroutine.create(function() lay_paving(F, pp.runway, pp.node) end)
+    end
+    job_active, units = true, 0
+    local ok, err = coroutine.resume(pave_job)
+    job_active = false
+    if coroutine.status(pave_job) == "dead" then
+      if not ok then log("base: paving failed — " .. tostring(err)) end
+      pave_job, pave_pending = nil, nil
     end
   end
   if not want_spawn and sited and not grade_later and grade_q then
