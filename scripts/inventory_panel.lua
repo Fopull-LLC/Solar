@@ -8,9 +8,15 @@
 --
 -- Click a row to move that one stack; the button moves everything that fits.
 --
--- GEAR (inventory.GEAR — the Relay Beacon) is listed under the cargo. At the
--- base the panel sells it: "Buy a Relay Beacon" spends company money and puts
--- one in the pack, ready for the tool belt's [4].
+-- GEAR (inventory.GEAR) is listed under the cargo: the tools you carry and the
+-- consumables (a Relay Beacon) that ride the tool belt until they are used.
+--
+-- THE DEPOT'S COUNTERS. Gear is bought in one place: standing at the Commerce
+-- Depot, the panel is its two counters — BUY (the gear the depot stocks:
+-- company money, into the pack, onto the belt) and SELL (the pack, the
+-- warehouse and any landed hold, a row per material, through the depot's own
+-- sale so prices, standing and discovery premiums are its). There is no buy
+-- button anywhere else: a beacon is something you walk home for.
 -- Whatever doesn't fit stays in the pack — a transfer never destroys anything,
 -- and a full hold says so rather than silently eating the rest.
 --
@@ -31,7 +37,7 @@
 
 defaults = {
   reach = 11.0,   -- how close a craft has to be to load it from the ground
-  shop_reach = 90.0, -- how near the base centre gear can be bought
+  counter_reach = 15.0, -- how close to the Commerce Depot its counters serve you
 }
 
 -- Published.
@@ -89,20 +95,10 @@ local function find_target(astro)
   -- position and never fires (see facility_menu). The reach matches the depot's
   -- own prompt, so the row you can click is the row the building answers to.
   local dep = find("FacDepot")
-  if dep and astro:distanceTo(dep) < 15.0 then
+  if dep and astro:distanceTo(dep) < params.counter_reach then
     return "base", "warehouse"
   end
   return nil, nil
-end
-
--- At the base? (Gear is sold there.) Within `shop_reach` of the colony's
--- centre, on its world.
-local function at_base(astro)
-  local bf = ref("base_facilities")
-  if not (bf and bf.sited and bf.baseX) then return false end
-  local dx, dy, dz = astro.x - bf.baseX, astro.y - bf.baseY, astro.z - bf.baseZ
-  local r = params.shop_reach or 90.0
-  return dx * dx + dy * dy + dz * dz < r * r
 end
 
 -- The vessel script owning a hold id (so a transfer can re-apply its mass).
@@ -122,17 +118,42 @@ local function say(text, bad)
   if fx and fx.play then fx.play(bad and "denied" or "bag_move") end
 end
 
--- Buy one piece of gear at the base (the panel's Buy button).
+-- Buy one piece of gear at the depot's BUY counter. Refused anywhere else:
+-- the counter is the only place gear is sold.
+atCounter = false
+counter = "buy"     -- the counter the depot panel shows: "buy" | "sell"
 function buyGear(id)
   local inv = ref("inventory")
   if not (inv and inv.buyGear) then return end
+  if not atCounter then
+    say("gear is sold at the Commerce Depot's BUY counter", true)
+    return false
+  end
   local g = inv.GEAR and inv.GEAR[id]
   local ok, why = inv.buyGear("astro", id, 1)
   if ok then
-    say(string.format("bought a %s — %d in the pack", g and g.name or id, inv.gearCount("astro", id)))
+    say(string.format("bought a %s — %d in the pack, on the tool belt", g and g.name or id, inv.gearCount("astro", id)))
   else
     say(string.format("can't buy a %s: %s", g and g.name or id, why or "?"), true)
   end
+  return ok
+end
+
+-- Sell at the SELL counter: the depot's own sale (facility_menu), so prices,
+-- standing, contracts kept back and discovery premiums are the depot's.
+function sellOne(mat)
+  local fm = ref("facility_menu")
+  if not (atCounter and fm and fm.depotSellOne) then return end
+  fm.depotSellOne(mat)
+  local mats = ref("materials")
+  say(string.format("%s sold", (mats and mats.label(mat)) or mat))
+end
+
+function sellAll()
+  local fm = ref("facility_menu")
+  if not (atCounter and fm and fm.depotSell) then return end
+  if fm.depotUnload then fm.depotUnload() end
+  say(fm.depotSell() or "sold")
 end
 
 -- ── moving cargo ────────────────────────────────────────────────────────────
@@ -190,7 +211,11 @@ local function hint_line(inv)
   -- nothing on your back, the panel used to say "click a row to move that
   -- stack" above no rows at all.
   if inv and inv.isEmpty("astro") and #(inv.gearItems and inv.gearItems("astro") or {}) == 0 then
-    return "Empty — mine rock with the laser [1], cut plants with [2].", false
+    return "Empty — dig rock with the Terrain Laser, uproot plants with the Gravity Gun.", false
+  end
+  if atCounter then
+    return counter == "buy" and "Bought gear goes in the pack and onto the tool belt."
+      or "Click a row to sell that material; the button sells the lot.", false
   end
   if targetId then
     return "Click a row to move that stack.", false
@@ -225,6 +250,67 @@ local function stack_row(entry, mats, co)
       text = money },
     onClicked = function() moveStack(entry.mat) end,
   }
+end
+
+-- THE COUNTERS, at the depot. Two keys pick the counter; the one in force is
+-- latched. BUY lists what the depot stocks; SELL lists everything one press
+-- could sell (the depot's own stock list: pack, warehouse, landed holds).
+local function counter_rows(inv, co, mats)
+  local out = {}
+  local function money(v) return (co and co.money) and co.money(v) or ("$" .. v) end
+  out[#out + 1] = { "box", key = "crule", style = "panel/rule", w = "100%", h = 1 }
+  out[#out + 1] = { "row", key = "counters", w = "100%", h = "fit", gap = 6, pad = 0, align = "center",
+    { "text", key = "at", style = "panel/label", w = "grow", h = "fit", text = "COMMERCE DEPOT" },
+    { "button", key = "buy", style = "panel/choice", w = 120, h = 28, selected = counter == "buy",
+      textAlign = "center", textValign = "center", text = "Buy counter",
+      onClicked = function() counter = "buy" end },
+    { "button", key = "sell", style = "panel/choice", w = 120, h = 28, selected = counter == "sell",
+      textAlign = "center", textValign = "center", text = "Sell counter",
+      onClicked = function() counter = "sell" end } }
+  if counter == "buy" then
+    local bal = (co and co.balance) and co.balance() or nil
+    for _, g in ipairs(inv and inv.shopList and inv.shopList() or {}) do
+      local room = inv.free("astro") + 1e-6 >= g.kg
+      local cash = not bal or bal >= g.cost
+      local why = (not cash and "not enough money") or (not room and "no room in the pack") or nil
+      out[#out + 1] = { "button", key = "buy_" .. g.id, style = "panel/row", w = "100%", h = 34,
+        dir = "row", gap = 10, align = "center", disabled = why and true or nil, opacity = why and 0.55 or nil,
+        tooltip = g.about,
+        { "text", key = "name", style = "panel/cell", w = "grow", h = "fit", text = g.name },
+        { "text", key = "have", style = "panel/cellMuted", w = "fit", h = "fit",
+          text = why or string.format("%d carried", inv.gearCount("astro", g.id)) },
+        { "text", key = "kg", style = "panel/cell", w = 56, h = "fit", textAlign = "end",
+          text = string.format("%.0f kg", g.kg) },
+        { "text", key = "pay", style = "panel/cellStrong", w = 64, h = "fit", textAlign = "end", text = money(g.cost) },
+        { "text", key = "go", style = "panel/cellMuted", w = 30, h = "fit", textAlign = "end", text = "buy" },
+        onClicked = function() buyGear(g.id) end }
+    end
+  else
+    local fm = ref("facility_menu")
+    local stock = (fm and fm.depotStock) and fm.depotStock() or {}
+    if #stock == 0 then
+      out[#out + 1] = { "text", key = "nosell", style = "panel/cellMuted", w = "100%", h = 34,
+        textAlign = "center", text = "— nothing to sell: not in the pack, the warehouse or a landed hold —" }
+    end
+    for _, e in ipairs(stock) do
+      local tail = e.kept and "for the contract" or (e.first and string.format("NEW · +%s", money(e.bonus)) or "")
+      out[#out + 1] = { "button", key = "sell_" .. e.mat, style = "panel/row", w = "100%", h = 30,
+        dir = "row", gap = 10, align = "center", disabled = e.kept or nil, opacity = e.kept and 0.55 or nil,
+        { "text", key = "n", style = "panel/cell", w = 34, h = "fit", textAlign = "end", text = string.format("%d ×", e.n) },
+        { "text", key = "name", style = "panel/cell", w = "grow", h = "fit",
+          text = (mats and mats.label(e.mat)) or e.mat },
+        { "text", key = "first", style = e.first and "panel/cellStrong" or "panel/cellMuted", w = "fit", h = "fit", text = tail },
+        { "text", key = "pay", style = "panel/cellStrong", w = 64, h = "fit", textAlign = "end",
+          text = e.kept and "" or money(e.value) },
+        { "text", key = "go", style = "panel/cellMuted", w = 30, h = "fit", textAlign = "end", text = e.kept and "" or "sell" },
+        onClicked = function() if not e.kept then sellOne(e.mat) end end }
+    end
+    if #stock > 0 and fm and fm.depotAction then
+      out[#out + 1] = { "button", key = "sellall", style = "panel/action", w = "100%", h = 34,
+        text = fm.depotAction() or "Sell everything", onClicked = function() sellAll() end }
+    end
+  end
+  return out
 end
 
 local function describe(astro)
@@ -280,35 +366,29 @@ local function describe(astro)
   rows[#rows + 1] = { "col", key = "stacks", w = "100%", h = "fit", gap = 4, pad = 0,
     items = items, function(entry) return stack_row(entry, mats, co) end }
 
-  -- GEAR: what the crew carries to use, not to sell.
+  -- GEAR: what the crew carries to use, not to sell — the tool belt's slots.
   local gear = (inv and inv.gearItems) and inv.gearItems("astro") or {}
   if #gear > 0 then
-    rows[#rows + 1] = { "text", key = "gearH", style = "panel/label", w = "100%", h = "fit", text = "Gear" }
+    rows[#rows + 1] = { "text", key = "gearH", style = "panel/label", w = "100%", h = "fit", text = "GEAR  ·  ON THE TOOL BELT" }
     for _, g in ipairs(gear) do
       local about = inv.GEAR[g.id] and inv.GEAR[g.id].about or ""
       rows[#rows + 1] = { "row", key = "gear_" .. g.id, style = "panel/row", w = "100%", h = 32,
         dir = "row", gap = 10, align = "center",
         { "text", key = "n", style = "panel/cell", w = 34, h = "fit", textAlign = "end",
-          text = string.format("%d ×", g.n) },
+          text = g.tool and "" or string.format("%d ×", g.n) },
         { "text", key = "name", style = "panel/cell", w = "grow", h = "fit", maxLines = 1, overflow = "ellipsis",
           text = g.name .. "  ·  " .. about },
         { "text", key = "kg", style = "panel/cell", w = 64, h = "fit", textAlign = "end",
-          text = string.format("%.1f kg", g.kg) } }
+          text = g.tool and "tool" or string.format("%.1f kg", g.kg) } }
     end
   end
-  if inv and inv.GEAR and at_base(astro) then
-    local g = inv.GEAR.beacon
-    local price = (co and co.money) and co.money(g.cost) or ("$" .. g.cost)
-    rows[#rows + 1] = { "button", key = "buyBeacon", style = "panel/secondary", w = "100%", h = 32,
-      textAlign = "center", textValign = "center",
-      text = string.format("Buy a %s  ·  %s  ·  %.0f kg", g.name, price, g.kg),
-      tooltip = "A cheap ground relay. Plant it with the tool belt's [4]; each one carries the "
-        .. "ground station's signal a few hundred metres further.",
-      onClicked = function() buyGear("beacon") end }
+
+  if atCounter then
+    for _, r in ipairs(counter_rows(inv, co, mats)) do rows[#rows + 1] = r end
   end
 
   -- The one primary action, and only when there is somewhere for it to go.
-  if targetId then
+  if targetId and not atCounter then
     rows[#rows + 1] = { "button", key = "all", style = "panel/action", w = "100%",
       h = 34, text = string.format("Transfer all  →  %s", targetLabel or "hold"),
       onClicked = function() moveAll() end }
@@ -328,6 +408,12 @@ local function describe(astro)
 end
 
 -- ── driver ──────────────────────────────────────────────────────────────────
+
+-- Open the pack at a counter (the depot panel's "Buy & sell counters" key).
+function openCounters(which)
+  open = true
+  if which == "sell" or which == "buy" then counter = which end
+end
 
 -- The time this panel last closed on Esc (see pause_menu's Esc ladder).
 escTakenAt = -1
@@ -365,7 +451,7 @@ function update(node, dt)
   if pm and pm.open then open = false end
   el.visible = open
   if not open then
-    targetId, targetLabel = nil, nil
+    targetId, targetLabel, atCounter = nil, nil, false
     -- A closed panel costs nothing: no target search, no screen described.
     return
   end
@@ -374,6 +460,7 @@ function update(node, dt)
   input.setMouseLocked(false)
 
   targetId, targetLabel = find_target(astro)
+  atCounter = targetId == "base"
   -- Described every frame: the heading carries a live mass and a live valuation
   -- and both change as you mine. `ui.make` RECONCILES rather than rebuilds, so
   -- the cost is one table walk and the rows keep their hover and focus.

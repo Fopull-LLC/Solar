@@ -36,7 +36,7 @@
 --
 -- RELAY BEACONS (the cheap ground relay, electronics.COMMS.beacon): the crew
 -- carries them (inventory gear "beacon", bought at the base from the I panel)
--- and plants them with the tool belt's [4]. They are kept HERE, in the save
+-- and plants them from the tool belt (a beacon is on it while one is carried). They are kept HERE, in the save
 -- ("comms.beacons" = the id list, "comms.beacon.<id>" = one each, body-relative),
 -- and spawned as RelayBeacon nodes parented to their planet.
 --

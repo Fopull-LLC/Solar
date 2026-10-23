@@ -184,7 +184,7 @@ end
 -- ── load ────────────────────────────────────────────────────────────────────
 local chunk = assert(loadfile("solar/scripts/inventory_panel.lua"))
 chunk()
-_G.params = { reach = 11.0 }
+_G.params = { reach = 11.0, counter_reach = 15.0 }
 start(panel)
 ok(panel.__el.visible == false, "the panel starts closed")
 
@@ -211,7 +211,7 @@ ok(panel.__el.visible == true, "…and the frame becomes visible")
 
 -- 3. AN EMPTY PACK SAYS SO, and says what to do about it.
 ok(says("nothing in the pack"), "an empty pack says it is empty")
-ok(says("mine rock"), "…and points at the tools that fill it")
+ok(says("dig rock"), "…and points at the tools that fill it")
 
 -- 4. NINE MATERIALS ALL APPEAR. This is the whole reason for the rewrite: the
 -- panel it replaced had eight row nodes, so a ninth stack was invisible.
@@ -285,7 +285,56 @@ ok(#pack == n_before, "a refused transfer destroys nothing")
 ok(says("nothing fits"), "…and the panel says why: " .. table.concat((screen()), " | "))
 hold_full = false
 
--- 10. ESC CLOSES IT, and so does walking away — the pack is on your back, but
+-- 10. THE DEPOT'S COUNTERS. Gear is bought at the BUY counter and nowhere
+-- else; the SELL counter sells through the depot's own sale. (The pack is
+-- emptied first so the counter rows are the only rows.)
+pack = {}
+craft_node.x = astro.x + 200
+local bought, sold_one, gear = {}, {}, {}
+inv.shopList = function() return { { id = "beacon", name = "Relay Beacon", cost = 80, kg = 6, about = "a cheap ground relay" } } end
+inv.free = function() return 50 end
+inv.gearCount = function(_, id) return gear[id] or 0 end
+inv.gearItems = function() return {} end
+inv.GEAR = { beacon = { name = "Relay Beacon", cost = 80, kg = 6 } }
+inv.buyGear = function(_, id, n) bought[#bought + 1] = id; gear[id] = (gear[id] or 0) + n; return true end
+co.balance = function() return 1000 end
+refs.facility_menu = {
+  depotStock = function() return { { mat = "ore", n = 4, value = 32, kept = false, first = false, bonus = 0 } } end,
+  depotSellOne = function(mat) sold_one[#sold_one + 1] = mat end,
+  depotAction = function() return "Sell everything — $32" end,
+  depotSell = function() return "sold for $32" end,
+  depotUnload = function() end,
+}
+tick(1)
+ok(_G.atCounter == true, "standing at the depot, the panel is its counters")
+ok(says("Buy counter") and says("Sell counter"), "…with a BUY and a SELL counter")
+local function button_with(needle)
+  local _, bb = screen()
+  for _, b in ipairs(bb) do if b.text and b.text:find(needle, 1, true) then return b end end
+end
+local buy_row = button_with("Relay Beacon")
+ok(buy_row ~= nil, "the BUY counter lists the relay beacon, priced")
+ok(says("$80"), "…at its price")
+buy_row.onClicked()
+ok(#bought == 1 and bought[1] == "beacon", "clicking it buys one into the pack")
+tick(1)
+ok(says("on the tool belt"), "…and says where it went")
+button_with("Sell counter").onClicked()
+tick(1)
+local sell_row = button_with("Iron Ore")
+ok(sell_row ~= nil, "the SELL counter lists what there is to sell")
+sell_row.onClicked()
+ok(sold_one[1] == "ore", "…and a row sells that material through the depot")
+ok(says("Sell everything"), "…with the depot's sell-everything key")
+-- Away from the depot there is no shop at all.
+nodes.FacDepot.x = 400
+tick(1)
+ok(_G.atCounter == false, "away from the depot there are no counters")
+ok(not says("Buy counter") and not button_with("Relay Beacon"), "…and no buy button anywhere else")
+ok(buyGear("beacon") == false and #bought == 1, "…and buying is refused off the counter")
+nodes.FacDepot.x = 8
+
+-- 11. ESC CLOSES IT, and so does walking away — the pack is on your back, but
 -- the panel is not something that follows you into a cockpit.
 press("escape"); tick(1)
 ok(_G.open == false, "Esc closes the panel")

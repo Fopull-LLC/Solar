@@ -43,6 +43,14 @@ local function ref(kind)
   return r
 end
 
+-- The interface's design height: 720 at an interface size of 100%, 847 at
+-- 85% (settings.lua `designHeight`, Settings ▸ Display ▸ Interface size).
+-- Screen pixels turn into design units through this, never through 720.
+function uiDesignH()
+  local st = ref("settings")
+  return (st and st.designHeight and st.designHeight()) or 720
+end
+
 -- ── the controls ────────────────────────────────────────────────────────────
 --
 -- Data, not prose, because `smoke_controls.lua` reads it: every `keys` entry is
@@ -65,10 +73,12 @@ local CONTROLS = {
     { keys = { "e" }, shown = "E  or  ⏎", what = "go into the building you are at" },
   } },
   { group = "Tools", col = 1, rows = {
-    { keys = { "1", "2", "3", "4" }, shown = "1  2  3  4", what = "laser  ·  harvest cutter  ·  spade  ·  relay beacon" },
-    { keys = {}, shown = "LEFT MOUSE", what = "use the tool on what the crosshair is over" },
-    { keys = { "q" }, shown = "Q", what = "raise ground (spade)  ·  pick up a beacon (relay beacon)" },
-    { keys = { "tab", "i" }, shown = "TAB  or  I", what = "the suit pack" },
+    { keys = { "1", "2", "3" }, shown = "1  2  3", what = "the tool belt: gravity gun  ·  terrain laser  ·  anything you carry (a beacon)" },
+    { keys = {}, shown = "LEFT MOUSE", what = "hold to use the tool on what the crosshair is over" },
+    { keys = {}, shown = "SCROLL", what = "gravity gun: hold what you grabbed nearer / further" },
+    { keys = { "r" }, shown = "R", what = "gravity gun: throw what you are holding" },
+    { keys = { "q" }, shown = "Q", what = "terrain laser: DIG / FILL  ·  relay beacon: pick one up" },
+    { keys = { "tab", "i" }, shown = "TAB  or  I", what = "the suit pack  ·  at the depot, its buy and sell counters" },
   } },
   { group = "Everywhere", col = 1, rows = {
     { keys = { "m" }, shown = "M", what = "the orbit map" },
@@ -103,6 +113,12 @@ local CONTROLS = {
     { keys = { "w", "s", "a", "d", "q", "e" }, shown = "W S  A D  Q E", what = "in plan: prograde  ·  radial  ·  normal" },
     { keys = { "left", "right" }, shown = "← →", what = "in plan: slide the burn along the orbit" },
     { keys = { "x", "backspace" }, shown = "X  /  ⌫", what = "in plan: zero the burn  /  delete it" },
+  } },
+  { group = "Pictures", col = 3, rows = {
+    { keys = { "f4" }, shown = "F4", what = "hide the interface (cinematic mode)" },
+    { keys = { "f5" }, shown = "F5", what = "free camera  ·  W A S D, SPACE / CTRL, SHIFT, SCROLL speed" },
+    { keys = { "t" }, shown = "T", what = "in the free camera: freeze time" },
+    { keys = { "f12" }, shown = "F12", what = "screenshot, to the screenshots folder" },
   } },
   { group = "Builder", col = 3, rows = {
     { keys = {}, shown = "CLICK", what = "select a part, or add one" },
@@ -140,6 +156,9 @@ local function something_else_is_up()
   -- So is the pilot's seat (V while flying): Esc leaves it first.
   local pc = ref("planet_camera")
   if pc and (pc.firstPerson or pc.cockpit) then return true end
+  -- Cinematic mode and the free camera (F4 / F5): Esc leaves them first,
+  -- and an Esc they took this frame was theirs.
+  if pc and (pc.cinematic or pc.escTakenAt == time) then return true end
   -- A panel that shut on THIS frame's Esc before we ran: it is closed now, but
   -- the press was its, not ours. (Otherwise leaving the depot on Esc opened the
   -- pause menu underneath whenever the depot's script happened to run first.)
@@ -181,9 +200,9 @@ local COLS = 3                                 -- the controls page's columns
 local function design_width()
   if camera and camera.screenSize then
     local w, h = camera.screenSize()
-    if w and h and h > 0 then return 720 * w / h end
+    if w and h and h > 0 then return uiDesignH() * w / h end
   end
-  return 1280
+  return 1280 * uiDesignH() / 720
 end
 
 local function row_button(key, text, onClicked)
@@ -273,9 +292,13 @@ local function controls_page(w)
   return {
     heading("CONTROLS"),
     rule(),
-    { "row", key = "cols", w = "100%", h = "fit", gap = 24, pad = 0, align = "start",
-      items = { column("c1", cols[1]), column("c2", cols[2]), column("c3", cols[3]) },
-      function(x) return x end },
+    -- In a scroll: at a large interface size (Settings ▸ Display) the three
+    -- columns are taller than the screen.
+    { "scroll", key = "colsS", w = "100%", h = "fit", maxH = uiDesignH() - 2 * M - 150, gap = 0, pad = 0,
+      dir = "col",
+      { "row", key = "cols", w = "100%", h = "fit", gap = 24, pad = 0, align = "start",
+        items = { column("c1", cols[1]), column("c2", cols[2]), column("c3", cols[3]) },
+        function(x) return x end } },
     rule("rule2"),
     { "row", key = "foot", w = "100%", h = "fit", gap = 12, pad = 0, align = "center",
       items = {
@@ -379,7 +402,7 @@ local function toast()
   if not up then return end
   -- The node is pinned bottom-centre in the scene; placed from there.
   local x = design_width() / 2 - M - MENU_BTN_W - 10 - TOAST_W / 2
-  local y = -(720 - M - TOAST_H)
+  local y = -(uiDesignH() - M - TOAST_H)
   if toast_el.posX ~= x then toast_el.posX = x end
   if toast_el.posY ~= y then toast_el.posY = y end
   if toast_el.width ~= TOAST_W then toast_el.width = TOAST_W end

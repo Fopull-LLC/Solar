@@ -260,6 +260,17 @@ local PANEL = {
   ["Facility Exit"] = ui_node("Facility Exit", "Close"),
 }
 
+-- Prefab spawns (the tool models) land at once, as plain nodes.
+SPAWNED = {}
+function API.spawn(prefab, _, cb)
+  local n = { name = prefab, valid = true, visible = true, x = 0, y = 0, z = 0 }
+  function n:setParent(p) self.parent_ = p end
+  function n:setAngles() end
+  function n:toWorld(v) return { x = ASTRO.x + v.x, y = ASTRO.y + v.y, z = ASTRO.z + v.z } end
+  SPAWNED[#SPAWNED + 1] = n
+  if cb then cb(n) end
+end
+
 function API.find(name)
   if name == "Astronaut" then return ASTRO end
   if name == "FacDepot" then return DEPOT end
@@ -447,7 +458,12 @@ local function tick(n)
   end
 end
 
-check("the belt starts on the mining laser", tb.toolId() == "laser", tb.toolId())
+check("the belt starts on the gravity gun", tb.toolId() == "gravgun", tb.toolId())
+check("...and both tools are issued with the suit",
+  inv.gearCount("astro", "gravgun") == 1 and inv.gearCount("astro", "laser") == 1)
+press("2")
+tick(1)
+check("2 picks the Terrain Laser", tb.toolId() == "laser", tb.toolId())
 buttons[0] = true
 set_depth(0.2)
 tick(22)                    -- a short burst: the bore stays in the topsoil
@@ -512,25 +528,40 @@ check("a full pack refuses more and says so",
   inv.mass("astro") <= inv.cap("astro") + 1e-9 and tb.hudLine():find("full") ~= nil,
   tb.hudLine())
 
--- The spade shapes ground and yields NOTHING (free digging died with SC4).
+-- FILL: the spade's raise, now a mode of the laser — and it is PAID for in
+-- rubble from the pack, a unit for `fill_bites` bites.
 inv.clear("astro")
-press("3")
+inv.add("astro", "regolith", 2)
+set_depth(0.0)
+ASTRO.x = ASTRO.x + 4.0                      -- back from the face: fill won't bury you
+set_camera(ASTRO.x + 4.0)
+press("q")
 tick(1)
-check("the belt switches tools on the number keys", tb.toolId() == "spade", tb.toolId())
+check("Q switches the laser to FILL", tb.laserMode == "fill", tb.laserMode)
 local d0 = digs
 buttons[0] = true
 tick(30)
 buttons[0] = false
-check("the spade still moves ground", digs > d0)
-check("...but pays nothing for it", inv.isEmpty("astro"), inv.line("astro"))
-press("1")
+check("fill lays ground", digs > d0, digs - d0)
+check("...out of the pack's rubble", inv.count("astro", "regolith") < 2, inv.count("astro", "regolith"))
+inv.clear("astro")
+d0 = digs
+tb.update(ASTRO, 0.05)
+local credit = tb.fillCredit()
+buttons[0] = true
+tick(40)
+buttons[0] = false
+check("...and an empty canister lays nothing more than it had", digs - d0 <= credit, digs - d0)
+check("...and says why", tb.prompt:find("empty") ~= nil, tb.prompt)
+press("q")
 tick(1)
-check("...and switching back is one key", tb.toolId() == "laser")
+check("...and Q goes back to DIG", tb.laserMode == "dig")
+set_depth(0.0)
 
 -- ── 3b. the mining laser ────────────────────────────────────────────────────
 -- Everything the rewrite added, and everything it fixed.
 inv.clear("astro")
-press("1")
+press("2")
 tick(1)
 inv.clear("astro")
 set_depth(6.0)
@@ -577,8 +608,11 @@ check("...aimed at what it hit", MUZZLE.beam ~= nil)
 -- The muzzle is the barrel tip of a rifle bone-attached to the hand: the rig
 -- puts it where it goes. A script writing world coordinates into its
 -- parent-local .x/.y/.z is what threw the beam's origin kilometres into the sky.
-check("...and the script never moves the bone-attached muzzle itself",
-  not MUZZLE.moved)
+-- It may be PLACED in its parent's frame (the barrel tip of the model in the
+-- hand, a few tenths of a metre), never written a world coordinate.
+check("...and the script never writes a world coordinate into the bone-attached muzzle",
+  not MUZZLE.moved or (math.abs(MUZZLE.x) < 1 and math.abs(MUZZLE.y) < 1 and math.abs(MUZZLE.z) < 1),
+  string.format("%.2f %.2f %.2f", MUZZLE.x or 0, MUZZLE.y or 0, MUZZLE.z or 0))
 check("...with sparks and a light on the rock", IMPACT.playing and IMPACT.light.intensity > 0)
 check("...and one looping hum, not a one-shot a frame", (function()
   local n = 0
@@ -824,14 +858,17 @@ check("a hit beyond the tool's reach reads as out of range",
 tb.params.laser_reach = reach0
 
 -- THE TOOL IS A THING IN YOUR HAND, and only while it's the tool you picked.
+local function held(prefab)
+  for _, n in ipairs(SPAWNED) do if n.name == prefab and n.parent_ == TOOLNODE then return n end end
+end
 tick(1)
-check("the laser is in the astronaut's hand when it's equipped", TOOLNODE.visible)
-press("3")
-tick(1)
-check("...and holstered when it isn't", not TOOLNODE.visible)
+check("the laser is in the astronaut's hand when it's equipped", held("ToolLaser") and held("ToolLaser").visible)
 press("1")
 tick(1)
-check("...and back out when it is", TOOLNODE.visible)
+check("...and holstered when it isn't", not held("ToolLaser").visible and held("ToolGravGun").visible)
+press("2")
+tick(1)
+check("...and back out when it is", held("ToolLaser").visible)
 
 -- HEAT THROTTLES, IT NEVER STOPS. Twenty seconds of unbroken fire: heat pegs,
 -- and the tool is still mining. A cooldown lockout was written here and thrown

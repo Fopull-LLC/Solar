@@ -212,9 +212,9 @@ end
 local ROCKET_MIN = 750
 
 -- How to get the stuff a delivery contract wants, in one sentence: plants
--- come off with the cutter, everything else out of the rock with the laser.
-local MINE_HINT = "Press 1 for the Mining Laser and hold LEFT MOUSE on a rock."
-local CUT_HINT = "Press 2 for the Harvest Cutter and hold LEFT MOUSE on a plant."
+-- come up with the gravity gun, everything else out of the rock with the laser.
+local MINE_HINT = "Press 2 for the Terrain Laser and hold LEFT MOUSE on rock."
+local CUT_HINT = "Press 1 for the Gravity Gun and hold LEFT MOUSE on a plant to uproot it."
 
 -- A contract's brief is a paragraph for the Ops Board; the card gets its first
 -- sentence. (The brief is hard-wrapped, so its first LINE can stop mid-clause.)

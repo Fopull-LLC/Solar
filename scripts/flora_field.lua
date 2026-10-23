@@ -182,6 +182,10 @@ local washes = {}   -- "patch:i,j" → decal id (or false: nothing grows there)
 local wash_n = 0
 local wash_info = {}  -- key → { x, y, z (body-rel), base alpha }
 local wash_fade_t = 0
+-- Washes lifted round a terrain edit (liftWash): key → when it may come back,
+-- and the regions no new wash is laid in until then (body-relative).
+local wash_lifted = {}
+local wash_holds = {}   -- { x, y, z, r, t }
 local frame_checked = false
 local wash                -- defined below update (ground wash)
 local preload_t = 0
@@ -1397,7 +1401,14 @@ wash = function(body, rx, ry, rz, species, fg, alt, w)
           local key = p.key .. ":" .. i .. "," .. j
           if d < range then
             live[key] = true
-            if washes[key] == nil and added < 2 and wash_n < params.tint_max then
+            if washes[key] == false and wash_lifted[key] and time >= wash_lifted[key] then
+              washes[key], wash_lifted[key] = nil, nil
+            end
+            local held = false
+            for _, hr in ipairs(wash_holds) do
+              if time < hr.t and len(px - hr.x, py - hr.y, pz - hr.z) < hr.r then held = true break end
+            end
+            if washes[key] == nil and not held and added < 2 and wash_n < params.tint_max then
               local rows = p.rows
               local c = math.floor((lx / (2 * p.half) + 0.5) * (rows - 1) + 0.5)
               local r = math.floor((lz / (2 * p.half) + 0.5) * (rows - 1) + 0.5)
@@ -2125,6 +2136,42 @@ local function rare_harvest(rec, cid)
   return got, dropped
 end
 
+-- ── terrain edits: keep the wash out of the way ─────────────────────────────
+-- The engine lays every decal whose ground an edit touches again, and repacks
+-- and re-uploads that picture's whole batch, OUTSIDE every perf bucket. A
+-- turf wash is 29 m across, so every laser bite on a meadow re-laid several
+-- of them against full-detail collision and rebuilt all ~150: measured in play
+-- on rc6, 120–980 ms a frame while the trigger was held, against 1–2 ms with
+-- the wash gone (tools agent, 2026-10-23). The tool belt calls this once per
+-- place it starts cutting or filling: the washes within `r` of the point are
+-- lifted (one batch rebuild), none is laid there for `hold` seconds after the
+-- LAST call, and then the normal pass lays them again on the new ground.
+function liftWash(x, y, z, r, hold)
+  local body = cur_body and space.body(cur_body)
+  if not body then return 0 end
+  r, hold = r or 36.0, hold or 8.0
+  local bx, by, bz = x - body.x, y - body.y, z - body.z
+  local until_t = time + hold
+  local kept = false
+  for _, hr in ipairs(wash_holds) do
+    if len(bx - hr.x, by - hr.y, bz - hr.z) < 6.0 then hr.t, kept = until_t, true end
+  end
+  if not kept then wash_holds[#wash_holds + 1] = { x = bx, y = by, z = bz, r = r, t = until_t } end
+  for i = #wash_holds, 1, -1 do if time >= wash_holds[i].t then table.remove(wash_holds, i) end end
+  local n = 0
+  for key, id in pairs(washes) do
+    local inf = wash_info[key]
+    if id and inf and len(inf[1] - bx, inf[2] - by, inf[3] - bz) < r then
+      decals.remove(id)
+      washes[key], wash_info[key] = false, nil
+      wash_lifted[key] = until_t   -- may be laid again once the region's hold is over
+      wash_n = wash_n - 1
+      n = n + 1
+    end
+  end
+  return n
+end
+
 -- ── harvest API (the tool belt calls these) ─────────────────────────────────
 
 -- The plant someone is aiming at. Scattered plants have no colliders, so this
@@ -2155,10 +2202,25 @@ function nearestPlant(x, y, z, dx, dy, dz, reach, cone, grab)
       local qx = body.x + p.cx + p.ex[1] * lx + p.ez[1] * lz
       local qy = body.y + p.cy + p.ex[2] * lx + p.ez[2] * lz
       local qz = body.z + p.cz + p.ex[3] * lx + p.ez[3] * lz
-      local hits = scatter.near(id, vec3(qx, qy, qz), reach + 1.0)
+      -- PHANTOM PLANTS (playtest 2026-10-23, "Ulmash Blade" harvested off bare
+      -- rock). `near` answers instances that are not drawn: ones never
+      -- settled (`settled = false`, at the region's nominal surface), and —
+      -- engine side — ones whose re-settle after a dig found no ground, which
+      -- keep their OLD landed place. Lua's own `settle_point` cache was older
+      -- still: it never forgot a plant's ground after the ground was dug
+      -- away. So: only settled plants, at the engine's landed place (which
+      -- follows a re-settle), and only where there is still ground at its
+      -- root — not floating over a hole, not buried under a fill.
+      local hits = scatter.near(id, vec3(x, y, z), reach + 1.0)
       for k = 1, math.min(#hits, 24) do
         local h = hits[k]
-        local g = settle_point(id, h, p)
+        local g = nil
+        if h.settled then
+          local gx, gy, gz = h.pos.x - body.x, h.pos.y - body.y, h.pos.z - body.z
+          local q = terrain and terrain.query and terrain.query(h.pos.x, h.pos.y, h.pos.z)
+          if q and q < 0.7 and q > -1.2 then g = { gx, gy, gz } end
+        end
+        if g then
         local hdx, hdy, hdz = h.pos.x - body.x - p.cx, h.pos.y - body.y - p.cy, h.pos.z - body.z - p.cz
         local hl = { x = hdx * p.ex[1] + hdy * p.ex[2] + hdz * p.ex[3],
                      z = hdx * p.ez[1] + hdy * p.ez[2] + hdz * p.ez[3] }
@@ -2195,6 +2257,7 @@ function nearestPlant(x, y, z, dx, dy, dz, reach, cone, grab)
           end
         end
       end
+        end -- if g (a drawn plant, on ground)
     end
   end
   return best

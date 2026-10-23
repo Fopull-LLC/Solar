@@ -13,6 +13,10 @@
 --    pure function of (seed, chunk, index), placed in the PARENT NODE's frame,
 --    rejected by the bilinear density grid. A density hole that is not exactly
 --    where the plant stood leaves the plant standing, here as in the game.
+--  * `near` answers as the engine does: once the draw driver has run, a prop is
+--    `settled` and stands where it was dropped onto the sphere along the
+--    patch's up, and `distance` measures to that landed place; before then it
+--    answers `settled = false` on the patch plane, 20-30 m above the ground.
 --  * Instance ids are 53-bit, as the engine's are since 0.117 (exact as Lua
 --    numbers), and `remove`/`restore`/`removed` work as the engine's do: a
 --    removed id generates nothing until it is restored.
@@ -149,6 +153,9 @@ local function mix32(a)
   return a
 end
 local SRC, next_src = {}, 0
+-- Frames the engine's draw driver has run (it runs after the scripts' update
+-- each frame, and is what drops props onto the ground).
+local DRAWN = 0
 local function density_at(src, u, v)
   local d = src.density
   if not d then return 1 end
@@ -219,6 +226,7 @@ API.scatter = {
     next_src = next_src + 1
     o.id = next_src
     o.removed = {}
+    o.born = DRAWN   -- settles once the draw driver has run after this
     SRC[next_src] = o
     return next_src
   end,
@@ -244,15 +252,31 @@ API.scatter = {
     local s = SRC[id]
     if not s then return {} end
     local node = by_name[s.parent]
-    local ex, _, ez = axes_of(node)
+    local ex, ey, ez = axes_of(node)
     local out = {}
     for _, i in ipairs(live(s)) do
       local wx = BODY.x + node.x + ex[1] * i.lx + ez[1] * i.lz
       local wy = BODY.y + node.y + ex[2] * i.lx + ez[2] * i.lz
       local wz = BODY.z + node.z + ex[3] * i.lx + ez[3] * i.lz
-      local d = math.sqrt((wx - p.x) ^ 2 + (wy - p.y) ^ 2 + (wz - p.z) ^ 2)
+      -- Where it stands. Like the engine (scatter_draw.rs `settle`): once the
+      -- draw driver has run since the source was declared, a prop is dropped
+      -- onto the ground ALONG THE REGION'S OWN UP (the patch normal, not the
+      -- radial) — cast from 60 m above, 150 m long — so its patch-plane x,z
+      -- are unchanged and only its height moves. Until then, or with no
+      -- ground under it, it answers `settled = false` at the nominal plane.
+      -- `distance` and the radius test measure to wherever it stands.
+      local px, py, pz, ux, uy, uz, settled = wx, wy, wz, ey[1], ey[2], ey[3], false
+      if DRAWN > s.born then
+        local hit = API.raycast(wx + ey[1] * 60, wy + ey[2] * 60, wz + ey[3] * 60, -ey[1], -ey[2], -ey[3], 150)
+        ray_count = ray_count - 1   -- the engine's ray, not the script's
+        if hit then
+          px, py, pz, ux, uy, uz, settled = hit.x, hit.y, hit.z, hit.nx, hit.ny, hit.nz, true
+        end
+      end
+      local d = math.sqrt((px - p.x) ^ 2 + (py - p.y) ^ 2 + (pz - p.z) ^ 2)
       if d <= radius then
-        out[#out + 1] = { id = i.id, pos = { x = wx, y = wy, z = wz }, distance = d, scale = i.scale, param = 0.5 }
+        out[#out + 1] = { id = i.id, pos = { x = px, y = py, z = pz }, up = { x = ux, y = uy, z = uz },
+                          distance = d, scale = i.scale, param = 0.5, settled = settled }
       end
     end
     table.sort(out, function(a, b) return a.distance < b.distance end)
@@ -565,6 +589,7 @@ local function tick(n)
     T = T + 0.25
     ff.update({}, 0.25)
     ff.lateUpdate({}, 0.25)
+    DRAWN = DRAWN + 1
   end
 end
 ff.params.interval = 0.0

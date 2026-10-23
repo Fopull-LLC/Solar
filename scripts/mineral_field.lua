@@ -865,7 +865,9 @@ function lateUpdate(node, dt)
   local pw = ref("planet_walker")
   if not (pw and pw.onFoot) then return end
   local tb = ref("tool_belt")
-  if not (tb and tb.tool == 1) then return end
+  -- The suit's resonance sensor rides the Terrain Laser (the belt is built
+  -- from the pack now, so its slot number says nothing).
+  if not (tb and tb.toolId and tb.toolId() == "laser") then return end
   local a = find("Astronaut")
   if not a then return end
   local bname = space.dominant(a.x, a.y, a.z)

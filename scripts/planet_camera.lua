@@ -545,6 +545,12 @@ local function place_camera(node, dt)
   -- puts you straight back on the shoulder — no mush in between.
   local blocked = panel_open()
   local dz = input.scroll() * params.zoom_speed   -- + is toward the character
+  -- The gravity gun uses the wheel for its hold distance while it holds
+  -- something (tool_belt.wantsScroll): the view must not zoom with it.
+  do
+    local tb = script_ref("tool_belt")
+    if tb and tb.wantsScroll == true and not piloting then dz = 0.0 end
+  end
   local maxd = piloting and math.max(params.max_distance, 40.0) or params.max_distance
   -- Flying: never zoom INSIDE the hull (the ship visual spans ~2 units). One
   -- more click in from the closest orbit is the pilot's seat (as on foot, one

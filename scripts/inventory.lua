@@ -212,18 +212,40 @@ function seenList()
 end
 
 -- ── gear ────────────────────────────────────────────────────────────────────
--- EQUIPMENT, not cargo: things the crew carries to USE (a relay beacon to plant
--- on the ground), kept apart from the material bag so the depot never sells
--- them and a "transfer all" never posts them into a cargo hold. They weigh in
--- the same pack, so a beacon on your back is 6 kg less room for ore.
+-- EQUIPMENT, not cargo: what the crew carries to USE, kept apart from the
+-- material bag so the depot never sells it and a "transfer all" never posts
+-- it into a cargo hold. THE TOOL BELT IS BUILT FROM THIS: every gear item the
+-- pack holds is a slot on the hotbar (tool_belt.TOOL_ORDER), so a beacon is
+-- on the belt while you carry one and gone when the last is planted.
+--
+--   tools        the Gravity Gun and the Terrain Laser: suit-mounted, so they
+--                weigh nothing against the pack and are never sold. Every
+--                crew starts with both (`ensureKit`).
+--   consumables  the Relay Beacon: bought at the Commerce Depot's BUY
+--                counter (inventory_panel), carried until planted, and it
+--                weighs in the pack — a beacon on your back is 6 kg less ore.
 --
 --     inv.gearCount("astro", "beacon")      inv.addGear("astro", "beacon", 1)
 --     inv.buyGear("astro", "beacon", 1)     -- spends company money, mass-checked
 
 GEAR = {
-  beacon = { name = "Relay Beacon", kg = 6.0, cost = 80,
-             about = "a cheap ground relay: plant it with [4], pick it up with Q" },
+  gravgun = { name = "Gravity Gun", kg = 0.0, tool = true,
+              about = "grabs anything loose and throws it; uproots plants" },
+  laser   = { name = "Terrain Laser", kg = 0.0, tool = true,
+              about = "digs rock into the pack, or lays it back down (Q)" },
+  beacon  = { name = "Relay Beacon", kg = 6.0, cost = 80, shop = true,
+              about = "a cheap ground relay: carries the ground station's signal a few hundred metres further" },
 }
+
+-- What the depot's BUY counter stocks, in a stable order.
+function shopList()
+  local out = {}
+  for id, g in pairs(GEAR) do
+    if g.shop and g.cost then out[#out + 1] = { id = id, name = g.name, cost = g.cost, kg = g.kg, about = g.about } end
+  end
+  table.sort(out, function(a, b) return a.cost < b.cost end)
+  return out
+end
 
 local function gear_bag(cid)
   return save.get("inv.gear." .. cid) or {}
@@ -233,6 +255,19 @@ local function gear_put(cid, b)
   local out = {}
   for k, v in pairs(b) do if (v or 0) > 0 then out[k] = math.floor(v) end end
   save.set("inv.gear." .. cid, out)
+end
+
+-- The crew's issue kit: one of each tool, once per save. (Tools are not
+-- dropped or sold, so this only ever fills a gap — a save from before the
+-- belt was built from the pack, or a new game.)
+function ensureKit(cid)
+  local b = gear_bag(cid)
+  local changed = false
+  for id, g in pairs(GEAR) do
+    if g.tool and (b[id] or 0) < 1 then b[id] = 1; changed = true end
+  end
+  if changed then gear_put(cid, b) end
+  return changed
 end
 
 function gearMass(cid)
@@ -248,14 +283,16 @@ function gearCount(cid, id)
   return gear_bag(cid)[id] or 0
 end
 
--- { { id, name, n, kg } } in GEAR's id order.
+-- { { id, name, n, kg, tool } } in GEAR's id order.
 function gearItems(cid)
   local b, out, ids = gear_bag(cid), {}, {}
   for id in pairs(GEAR) do ids[#ids + 1] = id end
   table.sort(ids)
   for _, id in ipairs(ids) do
     local n = b[id] or 0
-    if n > 0 then out[#out + 1] = { id = id, name = GEAR[id].name, n = n, kg = GEAR[id].kg * n } end
+    if n > 0 then
+      out[#out + 1] = { id = id, name = GEAR[id].name, n = n, kg = GEAR[id].kg * n, tool = GEAR[id].tool == true }
+    end
   end
   return out
 end
@@ -287,7 +324,7 @@ end
 function buyGear(cid, id, n)
   local g = GEAR[id]
   n = math.floor(n or 1)
-  if not g or n <= 0 then return false, "nothing to buy" end
+  if not g or n <= 0 or not g.cost then return false, "nothing to buy" end
   if free(cid) + 1e-6 < g.kg * n then return false, "no room in the pack" end
   local co = findScript and findScript("company")
   local price = g.cost * n

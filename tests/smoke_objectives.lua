@@ -212,7 +212,7 @@ missions.active = "prospect"
 update(card, 1 / 60)
 ok(not says("Build a craft"), "a delivery contract is not a reason to build a rocket")
 ok(says("30 units of ore"), "a delivery contract should show its delivery goal")
-ok(says("Mining Laser") and says("LEFT MOUSE"),
+ok(says("Terrain Laser") and says("LEFT MOUSE"),
   "a delivery contract should say how to mine: " .. table.concat(lines(), " | "))
 
 -- …and once there is ore in the pack, where to take it.
@@ -247,7 +247,7 @@ missions.active = "firstflight"
 fleet = {}
 co.balance = function() return 200 end
 update(card, 1 / 60)
-ok(says("Raise money") and says("Mining Laser"),
+ok(says("Raise money") and says("Terrain Laser"),
   "broke with no rocket, the card should send you mining: " .. table.concat(lines(), " | "))
 co.balance = nil
 missions.active = nil

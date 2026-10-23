@@ -523,7 +523,22 @@ local function depot_rows(show)
   local function money(v) return (co and co.money(v)) or ("$" .. v) end
   local items = {}
   for _, e in ipairs(stock) do items[#items + 1] = e end
+  -- The BUY counter (gear: relay beacons) is the suit pack's panel at the
+  -- depot (inventory_panel's counters): gear is bought here and nowhere else.
+  local function counters(which)
+    close()
+    local ip = ref("inventory_panel")
+    if ip and ip.openCounters then ip.openCounters(which) end
+  end
   ui.make(panel, {
+    { "row", key = "depotCounters", w = "100%", h = "fit", gap = 6, pad = 0, order = 1,
+      { "button", key = "buyCounter", style = "panel/secondary", w = "grow", h = 30,
+        textAlign = "center", textValign = "center", text = "Buy counter  ·  gear",
+        tooltip = "Relay beacons and other gear, into the pack and onto the tool belt.",
+        onClicked = function() counters("buy") end },
+      { "button", key = "sellCounter", style = "panel/secondary", w = "grow", h = 30,
+        textAlign = "center", textValign = "center", text = "Sell counter  ·  materials",
+        onClicked = function() counters("sell") end } },
     { "col", key = "depotRows", w = "100%", h = "fit", gap = 3, pad = 0, order = 2,
       items = items, function(e)
         local label = string.format("%d × %s", e.n, (mats and mats.label(e.mat)) or e.mat)

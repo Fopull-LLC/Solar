@@ -202,7 +202,7 @@ tick(1)
 ok(says("CONTROLS"), "clicking it opens the controls page")
 ok(says("W A S D"), "...which names how to walk")
 ok(says("first person"), "...and how to get to first person, which nothing else says")
-ok(says("harvest cutter"), "...and what the number keys are")
+ok(says("gravity gun"), "...and what the number keys are")
 ok(says("TAB"), "...and how to open the bag")
 
 -- Esc backs out of the page before it backs out of the menu. One level at a

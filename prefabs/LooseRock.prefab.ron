@@ -1,0 +1,64 @@
+// LOOSE ROCK — a chunk the Terrain Laser knocks loose; the Gravity Gun lifts and
+// throws it (scripts/tool_belt.lua). A one-part assembly, so a pull at a grab
+// point torques it like any craft.
+// Written by tools/gen_tools.py — edit the generator, not this file.
+[
+    (
+        name: "LooseRock",
+        tags: ["loose_rock"],
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+        rigidbody: Some((
+            mode: Dynamic,
+            radius: 0.3,
+            height: 0.6,
+            half_extents: (0.277, 0.164, 0.243),
+            restitution: 0.15,
+            friction: 0.8,
+            gravity: true,
+            lock_pos: (false, false, false),
+            lock_rot: (false, false, false),
+            assembly: true,
+        )),
+    ),
+    (
+        name: "Rock",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Mesh(
+            asset_path: "models/tools/loose_rock.glb",
+        ),
+        object_materials: {
+            "Rock": (
+                color: (0.78, 0.74, 0.68),
+                texture: Some("textures/terrain/geo_granite.png"),
+                roughness: 0.92,
+                metallic: 0.0,
+                shading: Physical,
+            ),
+        },
+        scripts: [],
+        rigidbody: Some((
+            boxed: true,
+            mode: Kinematic,
+            radius: 0.3,
+            height: 0.6,
+            half_extents: (0.277, 0.164, 0.243),
+            restitution: 0.15,
+            friction: 0.8,
+            gravity: true,
+            lock_pos: (false, false, false),
+            lock_rot: (false, false, false),
+            mass: 0.09,
+        )),
+        parent: Some(0),
+    ),
+]

@@ -185,7 +185,10 @@ envs.ops_board = { valid = true, isOpen = function() return ops_open end,
                    closeBoard = function() ops_open = false end }
 envs.inventory_panel = { valid = true, open = false }
 local pack_kg = 0.0
+local GEAR = { gravgun = 1, laser = 1, beacon = 0 }
 envs.inventory = { valid = true, add = function() return 0 end,
+                   gearCount = function(_, id) return GEAR[id] or 0 end,
+                   ensureKit = function() end,
                    countOf = function() return 0 end,
                    mass = function() return pack_kg end,
                    cap = function() return 90.0 end,
@@ -204,6 +207,26 @@ envs.planet_camera = { valid = true,
   cam_x = BODY.x, cam_y = BODY.y + BODY.radius + 2, cam_z = BODY.z,
   fwd_x = 0, fwd_y = -1, fwd_z = 0,
   flat_x = 1, flat_y = 0, flat_z = 0 }
+
+-- Prefab spawns land at once (the held tools are spawned on first use).
+local SPAWNED = {}
+API.spawn = function(prefab, _, cb)
+  local n = make_node(prefab)
+  n.parent_ = nil
+  function n:setParent(p) self.parent_ = p end
+  function n:setAngles() end
+  function n:toWorld(v) return vec3(self.x + v.x, self.y + v.y, self.z + v.z) end
+  function n:hasTag() return false end
+  SPAWNED[#SPAWNED + 1] = n
+  NODES[prefab] = n
+  if cb then cb(n) end
+end
+-- The held model of a tool, in the hand (third person) or in front of the eye.
+local function held(prefab, where)
+  for _, n in ipairs(SPAWNED) do
+    if n.name == prefab and ((where == "eye") == (n.parent_ ~= nil and n.parent_.name == "Camera")) then return n end
+  end
+end
 
 local walker = load_script("solar/scripts/planet_walker.lua", "planet_walker")
 local belt = load_script("solar/scripts/tool_belt.lua", "tool_belt")
@@ -380,33 +403,56 @@ ok(refuses_with(function() VESSEL.piloting = true end,
   function() VESSEL.piloting = false end,
   "aboard a craft"), "being aboard says so")
 
--- ── 8. THE TOOL IN THE HAND, AND SWIMMING ───────────────────────────────────
--- The laser is the only hand-held model; the other tools work bare-handed. It
--- has to be away whenever it isn't the tool picked — including while the aim
--- gates hold the belt (the loading sweep, the orbit map), which used to return
--- before the holster ran and leave it in your hand with the spade picked.
-store["tool.equipped"] = 1
-belt.start(TOOLHUD)
+-- ── 8. THE BELT IS THE PACK, AND THE TOOL IN THE HAND ───────────────────────
+-- No hard-coded slots: the hotbar is the gear the pack holds, tools first.
+-- The tool picked is a real model in the hand; the others are put away —
+-- including while the aim gates hold the belt (the loading sweep, the orbit
+-- map), which used to return before the holster ran.
+local function slots()
+  local out = {}
+  for _, b in ipairs(belt.belt()) do out[#out + 1] = b.id end
+  return table.concat(out, ",")
+end
+ok(slots() == "gravgun,laser", "with no beacon in the pack the belt is the two tools [" .. slots() .. "]")
+GEAR.beacon = 2
+tick(1)
+ok(slots() == "gravgun,laser,beacon", "a beacon in the pack puts it on the belt [" .. slots() .. "]")
+ok(belt.hudLine():find("Relay Beacon ×2", 1, true) ~= nil, "...with how many [" .. belt.hudLine() .. "]")
+KEYS["!3"] = true
 tick(2)
-ok(LASER.visible == true, "the laser picked: it is in your hand")
-store["tool.equipped"] = 3
-belt.start(TOOLHUD)
-LASER.visible = true
+ok(belt.toolId() == "beacon", "its number key picks it")
+GEAR.beacon = 0
 tick(2)
-ok(LASER.visible == false, "the spade picked: the laser is put away")
-LASER.visible = true                       -- as authored, before the belt has run
+ok(belt.toolId() == "gravgun" and slots() == "gravgun,laser",
+  "planting the last one takes it off the belt and the hand goes back to the gravity gun")
+
+store["tool.id"] = "gravgun"
+belt.start(TOOLHUD)
+tick(3)
+ok(LASER.model == "models/tools/socket.glb", "the hand node wears the socket, not the old rifle")
+ok(held("ToolGravGun") and held("ToolGravGun").visible == true, "the gravity gun picked: it is in your hand")
+ok(not (held("ToolLaser") and held("ToolLaser").visible), "...and the laser is not")
+store["tool.id"] = "laser"
+belt.start(TOOLHUD)
+tick(3)
+ok(held("ToolLaser") and held("ToolLaser").visible == true, "the laser picked: it is in your hand")
+ok(held("ToolGravGun").visible == false, "...and the gravity gun is put away")
 envs.planet_camera.cam_x = 0               -- the camera still swinging in from the sweep
 tick(2)
-ok(LASER.visible == false, "...even while the aim gates hold the belt")
+ok(held("ToolLaser").visible == false, "...the aim gates holding the belt put it away")
 envs.planet_camera.cam_x = BODY.x
 VESSEL.piloting = true
-store["tool.equipped"] = 1
-belt.start(TOOLHUD)
 tick(2)
-ok(LASER.visible == false, "aboard a craft, the laser is put away")
+ok(held("ToolLaser").visible == false and held("ToolGravGun").visible == false, "aboard a craft, every tool is put away")
 VESSEL.piloting = false
 tick(2)
-ok(LASER.visible == true, "...and back in hand on stepping out")
+ok(held("ToolLaser").visible == true, "...and back in hand on stepping out")
+-- Old saves picked a slot by NUMBER: they still land on a real tool.
+store["tool.id"] = nil
+store["tool.equipped"] = 3                 -- the old Terrain Spade
+belt.start(TOOLHUD)
+tick(2)
+ok(belt.toolId() == "laser", "an old save's spade slot opens on the Terrain Laser [" .. belt.toolId() .. "]")
 
 -- In the water out of your depth: no firing, no aim ring, no beam.
 KEYS.lmb = true
@@ -421,14 +467,14 @@ tick(5)
 ok(belt.gate == "swimming", "swimming gates the belt, and says so [" .. tostring(belt.gate) .. "]")
 ok(belt.inUse == false, "...the trigger does nothing")
 ok(rings == 0, "...no aim ring is drawn")
-ok(LASER.visible == false, "...and the laser is put away")
+ok(held("ToolLaser").visible == false, "...and the laser is put away")
 ok(TOOLHUD.els.ui ~= nil and TOOLHUD.els.ui.visible == true and belt.hudText:find("swimming") ~= nil,
   "...while the belt still says why [" .. tostring(belt.hudText) .. "]")
 sea_depth, seabed, ASTRO.grounded = nil, true, true
 tick(40)
 ok(walker.swimming == false and belt.gate == "in hand" and belt.inUse == true,
   "ashore again, the tools are back [" .. tostring(belt.gate) .. "]")
-ok(LASER.visible == true, "...laser in hand")
+ok(held("ToolLaser").visible == true, "...laser in hand")
 KEYS.lmb = nil
 tick(2)
 
@@ -478,12 +524,12 @@ local function hint_text()
   end
   return walk(tree, false)
 end
-belt.tool = 2                      -- the harvest cutter, with no flora field in this scene
-tick(2)
-ok(belt.prompt ~= "" and (hint_text() or ""):find(belt.prompt, 1, true) ~= nil,
-  "the cutter's refusal reaches the HUD [" .. tostring(hint_text()) .. " / " .. tostring(belt.prompt) .. "]")
-belt.tool = 1
-tick(2)
+KEYS["!1"] = true                  -- the gravity gun, with nothing loose in this scene
+tick(200)                          -- past the "picked the gravity gun" line
+ok(belt.toolId() == "gravgun" and belt.prompt ~= "" and (hint_text() or ""):find(belt.prompt, 1, true) ~= nil,
+  "the gravity gun's refusal reaches the HUD [" .. tostring(hint_text()) .. " / " .. tostring(belt.prompt) .. "]")
+KEYS["!2"] = true
+tick(200)
 ok((hint_text() or "") == belt.prompt and belt.prompt ~= "",
   "the laser's aim readout reaches the HUD [" .. tostring(hint_text()) .. "]")
 

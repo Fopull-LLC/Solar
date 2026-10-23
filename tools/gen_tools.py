@@ -1,0 +1,374 @@
+#!/usr/bin/env python3
+"""Generate the on-foot TOOLS and the loose rock they throw around.
+
+    python3 tools/gen_tools.py
+
+Writes
+    models/tools/gravity_gun.glb     the Gravity Gun: a graphite receiver, a
+                                     rear power cell, three signal-orange
+                                     claws round a glowing emitter
+    models/tools/terrain_laser.glb   the Terrain Laser: an enamel receiver, a
+                                     finned barrel shroud, a lens head and the
+                                     yellow fill canister it places rock from
+    models/tools/socket.glb          a few millimetres of nothing the hand
+                                     node wears, so only the tool shows
+    models/tools/loose_rock.glb      a chunk knocked loose by the laser
+    prefabs/ToolGravGun, ToolLaser   the held tools (object_materials, no body)
+    prefabs/LooseRock                a one-part assembly the gravity gun lifts
+
+Every tool is modelled barrel down -Z with the grip under the receiver. The
+engine recentres a model on its bounding box, so each model is shifted to be
+centred and the GRIP and MUZZLE are printed relative to that centre — those
+are the numbers `scripts/tool_belt.lua` keeps in `RIG`.
+
+Built from tools/gen_part_meshes.py's primitives and textures, so a tool in
+the hand wears the same paint and metal as the craft it stands beside.
+"""
+import math
+import os
+import sys
+
+import numpy as np
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from gen_part_meshes import (PREFABS, ROOT, TAU, Model, box, disk, flange, frame_to,  # noqa: E402
+                             lathe, mat_ron, rot_x, rot_z, tube, write_glb)
+
+MODELS = os.path.join(ROOT, "models", "tools")
+
+
+def glow(r, g, b, s=2.6):
+    return (f'(\n                color: ({r}, {g}, {b}),\n                emissive: ({r}, {g}, {b}),\n'
+            f'                emissive_strength: {s},\n                roughness: 0.3,\n'
+            f'                metallic: 0.0,\n                shading: Physical,\n            )')
+
+
+TOOL_MATS = {
+    "GunBody":   lambda: mat_ron("metal", color=(0.26, 0.27, 0.29), rough=1.1, metal=0.45, hull=False),
+    "GunPaint":  lambda: mat_ron("paint", color=(0.97, 0.52, 0.18), hull=False),
+    "Enamel":    lambda: mat_ron("paint", color=(0.86, 0.84, 0.78), hull=False),
+    "Anodised":  lambda: mat_ron("metal", color=(0.42, 0.47, 0.55), rough=0.85, metal=0.5, hull=False),
+    "Chrome":    lambda: mat_ron("metal", color=(1.0, 1.0, 1.0), rough=0.4, metal=0.85, hull=False),
+    "Dark":      lambda: mat_ron("metal", color=(0.16, 0.16, 0.17), rough=1.3, metal=0.3, hull=False),
+    "Rubber":    lambda: mat_ron("rubber", metal=0.0, hull=False),
+    "Hazard":    lambda: mat_ron("paint", color=(0.95, 0.72, 0.12), hull=False),
+    "Lens":      lambda: ('(\n                color: (0.20, 0.30, 0.34),\n                roughness: 0.05,\n'
+                          '                metallic: 0.2,\n                alpha: 0.85,\n'
+                          '                shading: Physical,\n            )'),
+    "GlowTeal":  lambda: glow(0.45, 0.95, 1.0, 3.2),
+    "GlowAmber": lambda: glow(1.0, 0.62, 0.25, 2.6),
+    "Rock":      lambda: ('(\n                color: (0.78, 0.74, 0.68),\n'
+                          '                texture: Some("textures/terrain/geo_granite.png"),\n'
+                          '                roughness: 0.92,\n                metallic: 0.0,\n'
+                          '                shading: Physical,\n            )'),
+}
+
+
+def along_z(m, mat, z0, z1, r, y=0.0, x=0.0, segs=16, r1=None, caps=True):
+    """A tube on the Z axis (the barrel axis) from z0 to z1."""
+    tube(m, mat, (x, y, z0), (x, y, z1), r, segs=segs, caps=caps, r1=r1)
+
+
+def ring_z(m, mat, z, r_in, r_out, w, y=0.0, x=0.0, segs=24):
+    """A flange ring round the Z axis: a short fat tube with a bore."""
+    sub = Model()
+    flange(sub, mat, -w / 2, w / 2, r_in, r_out, segs=segs, uv_m=4.0, chamfer=min(0.003, w / 4))
+    m.merge(sub, rot_x(math.pi / 2), (x, y, z))
+
+
+def lathe_z(m, mat, prof, z_at, y=0.0, segs=24, smooth=True):
+    """A lathe about +Z: profile (r, t) with t measured along -Z from z_at."""
+    sub = Model()
+    lathe(sub, mat, prof, segs=segs, smooth=smooth, uv_m=4.0)
+    m.merge(sub, rot_x(-math.pi / 2), (0.0, y, z_at))
+
+
+def centred(m):
+    mn, mx = m.bounds()
+    c = (mn + mx) / 2
+    out = Model()
+    out.merge(m, None, -c)
+    return out, c
+
+
+# ── the gravity gun ─────────────────────────────────────────────────────────
+
+def gravity_gun():
+    m = Model()
+    Y = 0.045                         # the barrel axis, above the grip
+    # Receiver: a bevelled graphite block, a darker spine on top.
+    box(m, "GunBody", (0.0, Y, -0.02), (0.115, 0.125, 0.30), bevel=0.012)
+    box(m, "Dark", (0.0, Y + 0.068, -0.03), (0.06, 0.016, 0.24))
+    # Cooling fins down the spine.
+    for k in range(7):
+        box(m, "Chrome", (0.0, Y + 0.082, -0.13 + k * 0.032), (0.075, 0.014, 0.006))
+    # Side armour plates in signal orange, with a recessed vent.
+    for s in (-1, 1):
+        box(m, "GunPaint", (s * 0.061, Y + 0.004, -0.04), (0.010, 0.085, 0.20), bevel=0.004)
+        box(m, "Dark", (s * 0.067, Y + 0.004, -0.075), (0.004, 0.04, 0.07))
+    # The rear power cell: a fat drum with a hazard band and a lit gauge.
+    along_z(m, "Anodised", 0.13, 0.25, 0.058, y=Y + 0.01, segs=20)
+    ring_z(m, "Hazard", 0.165, 0.057, 0.062, 0.022, y=Y + 0.01)
+    ring_z(m, "Chrome", 0.245, 0.04, 0.06, 0.012, y=Y + 0.01)
+    box(m, "GlowTeal", (0.0, Y + 0.066, 0.20), (0.018, 0.006, 0.05))
+    # Emitter housing: a flared bell round the barrel axis.
+    lathe_z(m, "GunBody", [(0.068, 0.0), (0.072, 0.02), (0.064, 0.06), (0.05, 0.075)], -0.17, y=Y)
+    ring_z(m, "Chrome", -0.18, 0.06, 0.075, 0.014, y=Y)
+    ring_z(m, "Chrome", -0.215, 0.055, 0.069, 0.010, y=Y)
+    # The emitter core, glowing, inside a dark throat.
+    along_z(m, "Dark", -0.245, -0.215, 0.04, y=Y, segs=18)
+    lathe_z(m, "GlowTeal", [(0.0, -0.012), (0.024, 0.0), (0.03, 0.018), (0.018, 0.034), (0.0, 0.04)], -0.235, y=Y,
+            segs=18)
+    # Three claws: out from the bell, then hooking in at the tip.
+    for k in range(3):
+        a = math.pi / 2 + k * TAU / 3
+        c, s = math.cos(a), math.sin(a)
+        p0 = np.array([c * 0.058, Y + s * 0.058, -0.20])
+        p1 = np.array([c * 0.098, Y + s * 0.098, -0.30])
+        p2 = np.array([c * 0.072, Y + s * 0.072, -0.385])
+        tube(m, "GunPaint", p0, p1, 0.013, segs=8)
+        tube(m, "GunPaint", p1, p2, 0.011, segs=8, r1=0.007)
+        tube(m, "Chrome", p1 - (p1 - p0) * 0.08, p1 + (p2 - p1) * 0.08, 0.016, segs=8)
+        # a lit tip on each claw
+        tube(m, "GlowTeal", p2, p2 + (p2 - p1) * 0.12, 0.007, segs=6)
+    # Pistol grip, raked back, with a trigger guard.
+    rake = rot_x(-0.32)
+    box(m, "Rubber", (0.0, -0.055, 0.045), (0.042, 0.13, 0.055), M=rake, bevel=0.01)
+    box(m, "Dark", (0.0, -0.012, -0.012), (0.012, 0.012, 0.07))
+    box(m, "Dark", (0.0, -0.035, -0.045), (0.012, 0.05, 0.010))
+    box(m, "Chrome", (0.0, -0.005, 0.012), (0.008, 0.03, 0.01))
+    # A fore-grip under the bell for the other hand.
+    tube(m, "Rubber", (0.0, Y - 0.06, -0.12), (0.0, Y - 0.12, -0.13), 0.018, segs=10)
+    grip = np.array([0.0, -0.04, 0.05])
+    muzzle = np.array([0.0, Y, -0.30])
+    return m, grip, muzzle
+
+
+# ── the terrain laser ───────────────────────────────────────────────────────
+
+def terrain_laser():
+    m = Model()
+    Y = 0.05
+    # Receiver in off-white enamel, a dark top rail.
+    box(m, "Enamel", (0.0, Y, 0.02), (0.095, 0.11, 0.30), bevel=0.01)
+    box(m, "Dark", (0.0, Y + 0.062, 0.0), (0.04, 0.014, 0.26))
+    for k in range(9):
+        box(m, "Dark", (0.0, Y + 0.071, -0.11 + k * 0.026), (0.046, 0.006, 0.010))
+    # The barrel shroud: anodised, ringed with heat-sink fins.
+    along_z(m, "Anodised", -0.13, -0.46, 0.034, y=Y, segs=18)
+    for k in range(10):
+        ring_z(m, "Chrome", -0.16 - k * 0.028, 0.033, 0.05, 0.007, y=Y)
+    # The lens head: a stepped bell with an amber glass and a lit ring.
+    lathe_z(m, "GunBody", [(0.036, 0.0), (0.048, 0.015), (0.052, 0.05), (0.046, 0.07)], -0.46, y=Y)
+    ring_z(m, "GlowAmber", -0.52, 0.036, 0.044, 0.006, y=Y)
+    disk_m = Model()
+    disk(disk_m, "Lens", 0.04, 0.0, segs=20, up=True)
+    m.merge(disk_m, rot_x(-math.pi / 2), (0.0, Y, -0.529))
+    # Under-barrel emitter coil housing.
+    along_z(m, "Dark", -0.10, -0.30, 0.018, y=Y - 0.05, segs=10)
+    # The fill canister on the left: yellow, with a window and two clamps.
+    along_z(m, "Hazard", -0.07, 0.14, 0.034, y=Y + 0.01, x=-0.075, segs=16)
+    ring_z(m, "Chrome", -0.04, 0.033, 0.038, 0.012, y=Y + 0.01, x=-0.075)
+    ring_z(m, "Chrome", 0.11, 0.033, 0.038, 0.012, y=Y + 0.01, x=-0.075)
+    box(m, "GlowAmber", (-0.108, Y + 0.01, 0.035), (0.004, 0.02, 0.07))
+    # Power tap on the right and a sight on top.
+    box(m, "GunBody", (0.058, Y - 0.01, 0.06), (0.02, 0.05, 0.12), bevel=0.004)
+    tube(m, "Dark", (0.0, Y + 0.08, -0.02), (0.0, Y + 0.08, -0.09), 0.012, segs=10)
+    # Stock, raked down, with a rubber butt.
+    box(m, "GunBody", (0.0, Y - 0.01, 0.22), (0.05, 0.08, 0.12), M=rot_x(0.12), bevel=0.008)
+    box(m, "Rubber", (0.0, Y - 0.02, 0.285), (0.055, 0.095, 0.02), M=rot_x(0.12))
+    # Pistol grip and guard.
+    box(m, "Rubber", (0.0, -0.05, 0.075), (0.04, 0.12, 0.052), M=rot_x(-0.3), bevel=0.01)
+    box(m, "Dark", (0.0, -0.01, 0.015), (0.012, 0.012, 0.07))
+    box(m, "Dark", (0.0, -0.03, -0.018), (0.012, 0.045, 0.01))
+    grip = np.array([0.0, -0.035, 0.08])
+    muzzle = np.array([0.0, Y, -0.535])
+    return m, grip, muzzle
+
+
+def socket():
+    m = Model()
+    box(m, "Dark", (0.0, 0.0, 0.0), (0.004, 0.004, 0.004))
+    return m
+
+
+# ── a loose rock ────────────────────────────────────────────────────────────
+
+def ico(sub=2):
+    t = (1 + 5 ** 0.5) / 2
+    V = [(-1, t, 0), (1, t, 0), (-1, -t, 0), (1, -t, 0), (0, -1, t), (0, 1, t), (0, -1, -t), (0, 1, -t),
+         (t, 0, -1), (t, 0, 1), (-t, 0, -1), (-t, 0, 1)]
+    V = [np.array(v, float) / np.linalg.norm(v) for v in V]
+    F = [(0, 11, 5), (0, 5, 1), (0, 1, 7), (0, 7, 10), (0, 10, 11), (1, 5, 9), (5, 11, 4), (11, 10, 2), (10, 7, 6),
+         (7, 1, 8), (3, 9, 4), (3, 4, 2), (3, 2, 6), (3, 6, 8), (3, 8, 9), (4, 9, 5), (2, 4, 11), (6, 2, 10),
+         (8, 6, 7), (9, 8, 1)]
+    for _ in range(sub):
+        mid = {}
+        NF = []
+
+        def m_(a, b):
+            k = (min(a, b), max(a, b))
+            if k not in mid:
+                p = V[a] + V[b]
+                V.append(p / np.linalg.norm(p))
+                mid[k] = len(V) - 1
+            return mid[k]
+        for a, b, c in F:
+            ab, bc, ca = m_(a, b), m_(b, c), m_(c, a)
+            NF += [(a, ab, ca), (b, bc, ab), (c, ca, bc), (ab, bc, ca)]
+        F = NF
+    return np.array(V), F
+
+
+def loose_rock(seed=7, size=(0.62, 0.42, 0.5)):
+    rng = np.random.default_rng(seed)
+    V, F = ico(2)
+    # lumpy: a few random planes shaved off, plus low-frequency bumps
+    P = V.copy()
+    for _ in range(6):
+        n = rng.normal(size=3)
+        n /= np.linalg.norm(n)
+        d = rng.uniform(0.55, 0.8)
+        dist = P @ n
+        over = dist > d
+        P[over] -= np.outer(dist[over] - d, n)
+    bump = 1 + 0.08 * np.sin(P[:, 0] * 5.1 + 1.3) * np.cos(P[:, 1] * 4.3) + 0.05 * np.sin(P[:, 2] * 7.7)
+    P = P * bump[:, None] * np.asarray(size) / 2
+    m = Model()
+    # flat-shaded facets, triplanar-ish UVs per face
+    for a, b, c in F:
+        pa, pb, pc = P[a], P[b], P[c]
+        n = np.cross(pb - pa, pc - pa)
+        ln = np.linalg.norm(n)
+        if ln < 1e-12:
+            continue
+        n /= ln
+        ax = int(np.argmax(np.abs(n)))
+        u_ax, v_ax = [(1, 2), (0, 2), (0, 1)][ax]
+        UV = [(p[u_ax] * 1.6, p[v_ax] * 1.6) for p in (pa, pb, pc)]
+        m.add("Rock", [pa, pb, pc], [n, n, n], UV, [(0, 1, 2)])
+    return m
+
+
+# ── prefabs ─────────────────────────────────────────────────────────────────
+
+def mats_block(model, indent="        "):
+    names = sorted(model.parts.keys())
+    body = ",\n".join(f'{indent}    "{n}": {TOOL_MATS[n]()}' for n in names)
+    return f"{indent}object_materials: {{\n{body},\n{indent}}},\n"
+
+
+def tool_prefab(name, glb, model, about):
+    return f'''// {about}
+// Written by tools/gen_tools.py — edit the generator, not this file.
+[
+    (
+        name: "{name}",
+        tags: ["tool"],
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Mesh(
+            asset_path: "models/tools/{glb}",
+        ),
+{mats_block(model)}        scripts: [],
+    ),
+]
+'''
+
+
+def rock_prefab(model, half, mass):
+    hx, hy, hz = half
+    return f'''// LOOSE ROCK — a chunk the Terrain Laser knocks loose; the Gravity Gun lifts and
+// throws it (scripts/tool_belt.lua). A one-part assembly, so a pull at a grab
+// point torques it like any craft.
+// Written by tools/gen_tools.py — edit the generator, not this file.
+[
+    (
+        name: "LooseRock",
+        tags: ["loose_rock"],
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+        rigidbody: Some((
+            mode: Dynamic,
+            radius: 0.3,
+            height: 0.6,
+            half_extents: ({hx}, {hy}, {hz}),
+            restitution: 0.15,
+            friction: 0.8,
+            gravity: true,
+            lock_pos: (false, false, false),
+            lock_rot: (false, false, false),
+            assembly: true,
+        )),
+    ),
+    (
+        name: "Rock",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Mesh(
+            asset_path: "models/tools/loose_rock.glb",
+        ),
+{mats_block(model)}        scripts: [],
+        rigidbody: Some((
+            boxed: true,
+            mode: Kinematic,
+            radius: 0.3,
+            height: 0.6,
+            half_extents: ({hx}, {hy}, {hz}),
+            restitution: 0.15,
+            friction: 0.8,
+            gravity: true,
+            lock_pos: (false, false, false),
+            lock_rot: (false, false, false),
+            mass: {mass},
+        )),
+        parent: Some(0),
+    ),
+]
+'''
+
+
+def main():
+    os.makedirs(MODELS, exist_ok=True)
+    rig = {}
+    for name, fn, glb, prefab, about in (
+        ("gravgun", gravity_gun, "gravity_gun.glb", "ToolGravGun",
+         "GRAVITY GUN — the crew's multi-purpose tool, held (scripts/tool_belt.lua)."),
+        ("laser", terrain_laser, "terrain_laser.glb", "ToolLaser",
+         "TERRAIN LASER — digs and places ground, held (scripts/tool_belt.lua)."),
+    ):
+        m, grip, muzzle = fn()
+        m, c = centred(m)
+        mn, mx = m.bounds()
+        write_glb(m, os.path.join(MODELS, glb))
+        with open(os.path.join(PREFABS, prefab + ".prefab.ron"), "w") as f:
+            f.write(tool_prefab(prefab, glb, m, about))
+        rig[name] = (grip - c, muzzle - c, mx - mn, m.tris())
+    write_glb(socket(), os.path.join(MODELS, "socket.glb"))
+    r = loose_rock()
+    r, _ = centred(r)
+    mn, mx = r.bounds()
+    write_glb(r, os.path.join(MODELS, "loose_rock.glb"))
+    half = np.round((mx - mn) / 2 * 0.92, 3)
+    with open(os.path.join(PREFABS, "LooseRock.prefab.ron"), "w") as f:
+        f.write(rock_prefab(r, half, 0.09))
+    print("RIG (relative to each model's centre, metres):")
+    for k, (g, mz, size, tris) in rig.items():
+        print(f"  {k:8s} grip {np.round(g, 3).tolist()} muzzle {np.round(mz, 3).tolist()} "
+              f"size {np.round(size, 3).tolist()} tris {tris}")
+    print(f"  rock     half {half.tolist()} tris {r.tris()}")
+
+
+if __name__ == "__main__":
+    main()
