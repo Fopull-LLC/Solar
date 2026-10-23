@@ -65,6 +65,21 @@ local function ref(kind)
   return r
 end
 
+-- The interface's design height: 720 at an interface size of 100%, 847 at
+-- 85% (settings.lua `designHeight`, Settings ▸ Display ▸ Interface size).
+-- Screen pixels turn into design units through this, never through 720.
+function uiDesignH()
+  local st = ref("settings")
+  return (st and st.designHeight and st.designHeight()) or 720
+end
+
+-- Cinematic mode (planet_camera, F4 / F5): the interface is hidden, and the
+-- markers this script paints straight onto the screen go with it.
+function cinematicUp()
+  local pc = ref("planet_camera")
+  return pc ~= nil and pc.cinematic == true
+end
+
 -- `planet_walker.onFoot` is always published (declared at load), so the
 -- three-scan fallback chain that used to sit under this could never run.
 local function crew_afoot()
@@ -818,12 +833,13 @@ end
 -- point holds still on screen while the planet moves along its rails.
 function lateUpdate(node, dt)
   if not (camera and camera.worldToScreen and camera.screenRect and draw and draw.text) then return end
+  if cinematicUp() then return end
   local astro = find("Astronaut")
   if not astro then return end
   if params.enabled < 0.5 or not crew_afoot() or panel_up() then return end
   local vx, vy, vw, vh = camera.screenRect()
   if not vw or vw <= 0 then return end
-  local k = vh / 720
+  local k = vh / uiDesignH()
   local rects = blocked_rects()
   for name, label in pairs(FAC_LABEL) do
     local f = find(name)

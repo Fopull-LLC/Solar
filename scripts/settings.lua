@@ -33,6 +33,8 @@
 --   st.flush()                            write anything pending now
 --   st.resetAllBindings()                 every input action back to input.ron's key
 --   st.rebinding()                        a rebind is waiting for its key (Esc is its)
+--   st.uiScale, st.designHeight()         the interface size (see below): every screen
+--                                         layer spans designHeight() units, not 720
 
 -- The mixer's buses, in the order the screen shows them, and each one's fader
 -- in project.ron. A volume slider is an OFFSET from that fader, not a
@@ -63,7 +65,7 @@ local DEFAULTS = {
 }
 -- …and the ones whose default is "leave it alone" (a nil can't sit in a table).
 local OPTIONAL = { "fullscreen", "display", "text_scale", "captions", "reduced_motion", "color_filter",
-                   "bindings" }
+                   "bindings", "ui_scale" }
 local KEYS = {}
 for k in pairs(DEFAULTS) do KEYS[#KEYS + 1] = k end
 for _, k in ipairs(OPTIONAL) do KEYS[#KEYS + 1] = k end
@@ -72,6 +74,43 @@ for _, k in ipairs(OPTIONAL) do KEYS[#KEYS + 1] = k end
 lookScale = 1.0
 invertY = false
 dynamicRes = false
+
+-- ── the interface size ──────────────────────────────────────────────────────
+-- The engine has no global UI scale (0.117.0-rc6): each screen layer is
+-- MatchHeight, so `designHeight` design units span the window's height, and
+-- every layout in Solar was written for 720 of them. The interface size is
+-- that number moved: at 85% a layer is 720 / 0.85 = 847 units tall, so every
+-- plate, key and line of text is 85% of the size it was, and the layouts —
+-- pinned to the edges, sized in design units — keep working unchanged.
+--
+-- Scripts that turn screen pixels into design units (a block stacked under
+-- another by its uiRect, a width from the window's aspect) read the height
+-- from here: `designHeight()` instead of 720.
+--
+-- AUTO (nothing chosen yet) follows the window: 100% at 720 lines, falling to
+-- 85% at 1080 and 80% from 1260 up. At 720p a smaller interface puts the
+-- smallest print (11 design units) under 11 pixels; at 1080p and above the
+-- interface was simply too big, which is what the playtest said.
+--
+-- The top end is where the screens still fit. A layer at 125% is 576 units
+-- tall; the tallest panel (the pause menu's settings page, ~550 with its
+-- margins) needs about that. At 133% it ran off the top and bottom of the
+-- screen (measured, 0.117.0-rc6), so the slider stops at 125%.
+UI_MIN, UI_MAX = 0.70, 1.25
+uiScale = 1.0
+LAYERS = { "Ship HUD", "Sound and Settings", "Menu UI", "Builder UI" }
+
+function autoUiScale(h)
+  if not h or h <= 0 then return 1.0 end
+  return math.max(0.80, math.min(1.0, 1.0 - (h - 720) * (0.15 / 360)))
+end
+
+-- The scale the layers are given: the player's (or auto), inside the range.
+function effectiveUiScale(want)
+  return math.max(UI_MIN, math.min(want, UI_MAX))
+end
+
+function designHeight() return 720 / uiScale end
 
 local values = {}
 local pending = {}            -- keys changed but not yet written
@@ -219,7 +258,40 @@ local function apply_fov()
   end
 end
 
+-- Every screen layer this scene has, handles kept (a scene has one or two).
+local layer_cache = {}
+local function apply_ui_scale()
+  local want = get("ui_scale")
+  if type(want) ~= "number" then
+    local _, sh = screen_size()
+    want = autoUiScale(sh)
+  end
+  uiScale = effectiveUiScale(want)
+  if not find then return end
+  local dh = 720 / uiScale
+  for _, nm in ipairs(LAYERS) do
+    local c = layer_cache[nm]
+    -- "Sound and Settings" is a layer only in the system scene (the menu has a
+    -- plain node by that name, and asking it for a layer is a Console line).
+    if nm == "Sound and Settings" and not layer_cache["Ship HUD"] then
+      c = false
+    elseif c == nil or (c and c.node.valid == false) then
+      -- (A miss is kept as false: the layers are the scene's own, there from
+      -- the first frame, and `find` walks the scene.)
+      local n = find(nm)
+      c = n and { node = n, layer = n.getcomponent and n:getcomponent("UiLayer") } or false
+      layer_cache[nm] = c
+    end
+    local l = c and c.layer
+    if l and math.abs((l.designHeight or 0) - dh) > 0.01 then l.designHeight = dh end
+  end
+end
+-- A slider fires every frame it moves, and resizing the interface moves the
+-- slider under the pointer, so a drag is applied when the button comes up.
+local ui_scale_dirty = false
+
 local APPLY = {
+  ui_scale = function() ui_scale_dirty = true end,
   vsync = function()
     if app and app.setVsync then pcall(app.setVsync, get("vsync")) end
   end,
@@ -448,11 +520,29 @@ local function mode_rows(out)
   })
 end
 
+-- Interface size: a fader from 70% to 125% and an Auto key.
+function ui_scale_rows(out)
+  local chosen = get("ui_scale")
+  local auto = type(chosen) ~= "number"
+  local cur = auto and uiScale or chosen
+  out[#out + 1] = slider("uis", "Interface size", UI_MIN, UI_MAX, cur, pct, function(v)
+    set("ui_scale", math.floor(v * 20 + 0.5) / 20)
+  end)
+  local row = out[#out]
+  -- The Auto key sits after the value.
+  row.items[#row.items + 1] = { "button", key = "auto", style = "panel/choice", w = 58, h = 30,
+    textAlign = "center", selected = auto, text = "Auto", onClicked = function()
+      local fx = ref("sfx"); if fx then fx.play("click") end
+      set("ui_scale", nil)
+    end }
+end
+
 local function display_rows(out)
   local gx = ref("graphics")
   local cur = (gx and gx.level and gx.level()) or values.gfx_level or "Medium"
   local opts = {}
   for _, n in ipairs((gx and gx.LEVELS) or LEVELS) do opts[#opts + 1] = { label = n, value = n } end
+  ui_scale_rows(out)
   out[#out + 1] = choice("gfx", "Graphics quality", opts, cur, function(v) set("gfx_level", v) end)
   if gx and gx.describe then out[#out + 1] = hint("gfxd", gx.describe(cur)) end
 
@@ -694,6 +784,7 @@ function start(node)
   values, pending, pending_at = {}, {}, nil
   load_all()
   applyAll(buses_held())
+  apply_ui_scale()
 end
 
 function update(node, dt)
@@ -714,6 +805,14 @@ function update(node, dt)
   end
   -- A slider fires every frame it moves; the store is written once it rests.
   if pending_at and clock - pending_at > 0.5 then flush() end
+  -- The interface size: a drag lands when the button comes up; and twice a
+  -- second it is re-asserted, which follows a window resized under Auto and a
+  -- layer the scene rebuilt.
+  local held = input and input.button and input.button(0)
+  if not held and (ui_scale_dirty or math.floor(clock * 2) ~= math.floor((clock - (dt or 0)) * 2)) then
+    ui_scale_dirty = false
+    apply_ui_scale()
+  end
   -- The scene camera can be rebuilt under us (a craft's own camera taking
   -- over and handing back); re-assert the field of view now and then.
   if math.floor(clock * 2) ~= math.floor((clock - (dt or 0)) * 2) then apply_fov() end

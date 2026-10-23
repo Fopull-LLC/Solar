@@ -138,6 +138,9 @@ local map_show = { orbits = true, soi = true, markers = true, links = true }
 -- The map can be opened ON a craft other than the one being flown (the
 -- Tracking Station's MAP button): focus slot 1 follows this node while it lives.
 local focus_override = nil
+-- far_bodies (the far-world impostors), told which world the map frames
+-- (looked up once; false when the scene has none).
+local fb_ref = nil
 local cam_node
 -- THE MAP'S LENS. The game camera is a wide 66° (vertical) — right for walking,
 -- wrong for a map: a sphere near the edge of a wide rectilinear view is drawn
@@ -225,6 +228,130 @@ end
 local function draw_conic(cx, cy, cz, e1x, e1y, e1z, e2x, e2y, e2z, p, ecc, r, g, b, a, segs)
   draw.conic(vec3(cx, cy, cz), vec3(e1x, e1y, e1z), vec3(e2x, e2y, e2z),
     p, ecc, segs or 128, r, g, b, a, p * 50)
+end
+
+-- ── EVERY CRAFT'S TRAJECTORY ────────────────────────────────────────────────
+-- The playtest: "show trajectory of your crafts when looking at them on the
+-- map". Every craft gets the conic it is on about its dominant body, worked
+-- out from its own state (position and velocity relative to that body), and
+-- drawn as what it means for that craft:
+--
+--   landed       nothing (the map's marker says where it is)
+--   orbit        the whole ellipse, with its periapsis and apoapsis marked
+--   suborbital   the arc from the craft forward to where it meets the
+--                ground, with an impact mark (and its apoapsis, if still ahead)
+--   escape       the open arc out to the edge of the body's sphere of
+--                influence, periapsis marked if still ahead
+--
+-- One two-body conic per craft — cheap enough for every craft every frame.
+-- The piloted craft's patched-conic walk (SOI changes, encounters, the
+-- maneuver node) is drawn on top of its own, as before.
+--
+-- Plain maths, global (TRAJ), so tests/smoke_trajectory.lua can hold it.
+TRAJ = { HOP_MIN = 50.0 }
+
+-- Orbital elements in the body's frame: has, p, e, ê1 (towards periapsis),
+-- ê2 (in-plane, the way the craft moves). The same as `orbit_basis`.
+function TRAJ.basis(rx, ry, rz, vx, vy, vz, mu)
+  return orbit_basis(rx, ry, rz, vx, vy, vz, mu)
+end
+
+-- r(ν) on the conic.
+function TRAJ.radius(p, e, nu) return p / (1 + e * math.cos(nu)) end
+
+-- The positive true anomaly where the conic is `R` from the focus, or nil
+-- when it never is (a circle at another radius, an ellipse entirely inside
+-- or outside R).
+function TRAJ.anomalyAt(p, e, R)
+  if e < 1e-9 or R <= 0 then return nil end
+  local c = (p / R - 1) / e
+  if c > 1 or c < -1 then return nil end
+  return math.acos(c)
+end
+
+-- What the craft at relative state (r, v) is doing about a body of `mu`,
+-- radius `R`, sphere of influence `soi` (≤ 0: unbounded). Returns
+--   { kind = "landed"|"orbit"|"suborbital"|"escape"|"falling",
+--     p, e, e1 = {x,y,z}, e2 = {x,y,z}, nu0,
+--     closed = true            (orbit: the whole ellipse)
+--     a0, a1                   (an arc, true anomalies, a1 > a0, may pass π)
+--     pe, ap, impact           (true anomalies of the marks to draw, or nil)
+--     peR, apR                 (their distances from the centre) }
+function TRAJ.track(rx, ry, rz, vx, vy, vz, mu, R, soi, grounded)
+  if grounded then return { kind = "landed" } end
+  local r = math.sqrt(rx * rx + ry * ry + rz * rz)
+  if r < 1e-6 or not mu or mu <= 0 then return { kind = "landed" } end
+  if R and r < R * 0.999 then return { kind = "landed" } end
+  local has, p, e, e1x, e1y, e1z, e2x, e2y, e2z = orbit_basis(rx, ry, rz, vx, vy, vz, mu)
+  if not has then
+    -- No angular momentum: straight up or straight down. Falling (or about
+    -- to) is a line to the ground below.
+    return { kind = "falling", r = r }
+  end
+  local t = { p = p, e = e, e1 = { e1x, e1y, e1z }, e2 = { e2x, e2y, e2z } }
+  t.nu0 = math.atan2(rx * e2x + ry * e2y + rz * e2z, rx * e1x + ry * e1y + rz * e1z)
+  local lim = (soi and soi > 0) and soi or p * 50
+  local rpe = p / (1 + e)
+  local rap = e < 1 and p / (1 - e) or nil
+  t.peR, t.apR = rpe, rap
+  local nlim = TRAJ.anomalyAt(p, e, lim)          -- where the path leaves the SOI
+  if rpe > (R or 0) then
+    if rap and rap < lim then
+      t.kind, t.closed, t.pe, t.ap = "orbit", true, 0.0, math.pi
+      return t
+    end
+    -- Leaving: from here out to the edge of the sphere of influence.
+    t.kind = "escape"
+    t.a0, t.a1 = t.nu0, nlim or t.nu0
+    if t.nu0 < 1e-6 then t.pe = 0.0 end
+    return t
+  end
+  -- Periapsis under the ground: the path meets the surface at ±nc.
+  local nc = TRAJ.anomalyAt(p, e, R)
+  if not nc then return { kind = "landed" } end
+  if t.nu0 >= nc then
+    if e >= 1 then
+      t.kind, t.a0, t.a1 = "escape", t.nu0, nlim or t.nu0   -- outbound on a hyperbola
+      return t
+    end
+    t.a0, t.a1 = t.nu0, 2 * math.pi - nc                    -- up over the apoapsis and down
+  elseif t.nu0 <= -nc then
+    t.a0, t.a1 = t.nu0, -nc                                 -- coming down
+  else
+    return { kind = "landed" }                              -- below the surface
+  end
+  -- An arc that leaves the sphere of influence first is an escape, not a fall.
+  if nlim and t.a0 < nlim and t.a1 > nlim then
+    t.kind, t.a1 = "escape", nlim
+    return t
+  end
+  t.kind, t.impact = "suborbital", t.a1
+  if e < 1 and t.a0 < math.pi and t.a1 > math.pi then t.ap = math.pi end
+  -- A hop that never gets HOP_MIN off the ground (a rover over a bump, a
+  -- craft settling on its legs) is not worth an arc and an impact mark on a
+  -- map drawn in kilometres.
+  local top = t.ap and rap or r
+  if top - R < TRAJ.HOP_MIN then return { kind = "landed" } end
+  return t
+end
+
+-- The point at true anomaly ν, relative to the body's centre.
+function TRAJ.point(t, nu)
+  local r = TRAJ.radius(t.p, t.e, nu)
+  local c, s = math.cos(nu), math.sin(nu)
+  return (t.e1[1] * c + t.e2[1] * s) * r, (t.e1[2] * c + t.e2[2] * s) * r, (t.e1[3] * c + t.e2[3] * s) * r
+end
+
+-- An arc as a flat point list in WORLD space about a body centre (cx,cy,cz).
+function TRAJ.arc(t, cx, cy, cz, segs)
+  local out = {}
+  local n = math.max(2, segs or 48)
+  for i = 0, n do
+    local nu = t.a0 + (t.a1 - t.a0) * i / n
+    local x, y, z = TRAJ.point(t, nu)
+    out[#out + 1], out[#out + 2], out[#out + 3] = cx + x, cy + y, cz + z
+  end
+  return out
 end
 
 local function draw_cross(x, y, z, s, r, g, b)
@@ -677,13 +804,17 @@ local function update_map3d(node, dt)
   if input.pressed("3") then map_show.markers = not map_show.markers end
   if input.pressed("4") then map_show.links = not map_show.links end
 
-  -- Focusing a body (TAB) streams ITS real terrain in (terrain.warm — loads it
-  -- if cold, keeps it resident while focused, however far the ship is). Every
-  -- other far world stays a cheap impostor sphere; the planet under the SHIP is
-  -- kept loaded by the ship's own physical presence, never by this camera.
-  if map_focus > 1 and bodies[map_focus - 1] then
-    terrain.warm(bodies[map_focus - 1].name)
-  end
+  -- Focusing a body (TAB) used to stream ITS real terrain in (terrain.warm),
+  -- a full background generation for a look. far_bodies' impostor now draws
+  -- the framed world as one mesh in its own shape and colours, so the map no
+  -- longer warms anything. (The comms coverage tint does not need it either:
+  -- its ground radii fall back to the nominal radius until that world has
+  -- been resident once, and are kept in the save after.)
+  local fbody = (map_focus > 1 and bodies[map_focus - 1]) and bodies[map_focus - 1].name or nil
+  -- far_bodies draws a far world as one mesh in its own shape and colours;
+  -- the world the map frames gets its finest one.
+  if fb_ref == nil then fb_ref = findScript("far_bodies") or false end
+  if fb_ref and fb_ref.valid ~= false and fb_ref.focus then fb_ref.focus(fbody) end
   local focus, fname, fradius
   if focus_override and not focus_override.valid then focus_override = nil end
   if map_focus == 1 and focus_override then
@@ -813,7 +944,7 @@ local function update_map3d(node, dt)
   -- Labels already placed this frame: a far pair of worlds projects to nearly
   -- one point, and two names drawn over each other read as neither.
   local placed = {}
-  local lk = sh / 720
+  local lk = sh / uiDesignH()   -- name tags follow the interface size
   -- The screen the map does not own: the legend panel top-left and the menu
   -- button top-right. A label that lands under either is skipped — a far
   -- system's name used to float in the middle of the legend.
@@ -838,6 +969,7 @@ local function update_map3d(node, dt)
   -- A name on the map is a small enamel tag (docs/ui-style.md): a dark cut
   -- edge, the plate, and the name printed in the label face in warm ink.
   local function label(x, y, text, fs)
+    if cineHidden() then return end   -- cinematic mode (F4): lines only, no tags
     local w, h = name_w(text, fs), fs * 1.5
     draw.rect(x - w / 2 - 1, y - h / 2 - 1, w + 2, h + 2, 0.0, 0.0, 0.0, 0.7, fs * 0.15)
     draw.rect(x - w / 2, y - h / 2, w, h, 0.12, 0.124, 0.112, 0.86, fs * 0.12)
@@ -912,21 +1044,11 @@ local function update_map3d(node, dt)
       node.vx, node.vy, node.vz, db.mu)
     if has then
       info_orbit = { body = db.name, p = p, ecc = ecc, radius = db.radius }
-      if map_show.orbits then
-        draw_conic(db.x, db.y, db.z, e1x, e1y, e1z, e2x, e2y, e2z,
-          p, ecc, 0.35, 0.85, 1.0, 1.0)
-      end
-      if map_show.markers then
-        local ms = px_at(db.x, db.y, db.z, 7)
-        local rpe = p / (1 + ecc)
-        draw_cross(db.x + e1x * rpe, db.y + e1y * rpe, db.z + e1z * rpe, ms, 1.0, 0.8, 0.25)
-        if ecc < 1 then
-          local rap = p / (1 - ecc)
-          draw_cross(db.x - e1x * rap, db.y - e1y * rap, db.z - e1z * rap, ms, 0.4, 1.0, 0.6)
-        end
-      end
     end
   end
+  -- Every craft's own conic: the one flown (or opened from the Tracking
+  -- Station) bright, the rest dimmed.
+  drawCraftTracks(craft_flying and vc or nil, focus_override, px_at, label, lk, map_show)
   if map_show.markers then
     draw_cross(node.x, node.y, node.z, px_at(node.x, node.y, node.z, 6), 0.6, 1.0, 0.7)
   end
@@ -1086,7 +1208,11 @@ local function update_map3d(node, dt)
     if info_orbit and craft_flying and not node.grounded then
       local o = info_orbit
       local pe = o.p / (1 + o.ecc) - o.radius
-      if o.ecc < 1 then
+      if pe < 0 and o.ecc < 1 then
+        -- Periapsis underground: not an orbit, a hop. Say so, and where.
+        lines[#lines + 1] = string.format("Suborbital over %s   ·   Ap %s   ·   comes down at the red mark",
+          o.body, fmt_dist(o.p / (1 - o.ecc) - o.radius))
+      elseif o.ecc < 1 then
         lines[#lines + 1] = string.format("Orbiting %s   ·   Pe %s   ·   Ap %s",
           o.body, (pe < 0 and "−" or "") .. fmt_dist(pe), fmt_dist(o.p / (1 - o.ecc) - o.radius))
       else
@@ -1288,6 +1414,104 @@ function mapComms(subject, px_at, label, lk, show)
   end
 end
 
+-- The interface's design height (settings.lua: 720 at 100%, 847 at 85%).
+local set_ref, set_miss = nil, -10.0
+function uiDesignH()
+  if not (set_ref and set_ref.valid) then
+    if time - set_miss < 2.0 then return 720 end
+    set_ref = findScript("settings")
+    if not set_ref then set_miss = time return 720 end
+  end
+  return (set_ref.designHeight and set_ref.designHeight()) or 720
+end
+
+-- Cinematic mode hides the map's name tags (planet_camera, F4). Cached handle,
+-- asked again at most every two seconds when the scene has no such camera.
+local cine_ref, cine_miss = nil, -10.0
+function cineHidden()
+  if not (cine_ref and cine_ref.valid) then
+    if time - cine_miss < 2.0 then return false end
+    cine_ref = findScript("planet_camera")
+    if not cine_ref then cine_miss = time return false end
+  end
+  return cine_ref.cinematic == true
+end
+
+-- Draw one craft's track (TRAJ.track) about body `b`. `hi` = emphasised.
+local TRACK_HI = { 0.35, 0.85, 1.0, 1.0 }       -- the craft you fly: the map's own trajectory cyan
+local TRACK_LO = { 0.55, 0.68, 0.74, 0.38 }     -- every other craft: a quiet grey-blue
+function drawTrack(t, b, hi, px_at, label, lk, show, name)
+  if not t or t.kind == "landed" then return end
+  local c = hi and TRACK_HI or TRACK_LO
+  local cx, cy, cz = b.x, b.y, b.z
+  if t.kind == "falling" then return end
+  if show.orbits then
+    if t.closed then
+      local reach = t.apR or t.p
+      local segs = math.max(32, math.min(160, math.floor(reach / px_at(cx, cy, cz, 1) / 6)))
+      draw.conic(vec3(cx, cy, cz), vec3(t.e1[1], t.e1[2], t.e1[3]), vec3(t.e2[1], t.e2[2], t.e2[3]),
+        t.p, t.e, segs, c[1], c[2], c[3], c[4], t.p * 50)
+    elseif t.a1 > t.a0 then
+      local span = t.a1 - t.a0
+      draw.polyline(TRAJ.arc(t, cx, cy, cz, math.max(12, math.floor(span / (2 * math.pi) * 128))),
+        c[1], c[2], c[3], c[4])
+    end
+  end
+  if not show.markers then return end
+  local a = hi and 1.0 or 0.45
+  local function mark(nu, px, r, g, bb, text)
+    local x, y, z = TRAJ.point(t, nu)
+    x, y, z = cx + x, cy + y, cz + z
+    if depth then depth(false) end
+    draw_cross(x, y, z, px_at(x, y, z, px), r * a, g * a, bb * a)
+    if hi and text and label and camera and camera.worldToScreen then
+      local sx, sy, _, on = camera.worldToScreen(x, y, z)
+      if on then label(sx, sy - 16 * (lk or 1), text, 11 * (lk or 1)) end
+    end
+  end
+  local alt = function(r) return fmt_dist(r - (b.radius or 0)) end
+  if t.pe then mark(t.pe, hi and 7 or 5, 1.0, 0.8, 0.25, "Pe " .. alt(t.peR)) end
+  if t.ap then mark(t.ap, hi and 7 or 5, 0.4, 1.0, 0.6, "Ap " .. alt(t.apR)) end
+  if t.impact then
+    local x, y, z = TRAJ.point(t, t.impact)
+    x, y, z = cx + x, cy + y, cz + z
+    draw_diamond(x, y, z, px_at(x, y, z, hi and 8 or 6), 1.0 * a, 0.4 * a, 0.3 * a)
+    if hi and label and camera and camera.worldToScreen then
+      local sx, sy, _, on = camera.worldToScreen(x, y, z)
+      if on then label(sx, sy - 16 * (lk or 1), "Impact", 11 * (lk or 1)) end
+    end
+  end
+end
+
+-- Every live craft's track. `flown` is the piloted vessel's script (or nil),
+-- `picked` a craft node the map was opened on (the Tracking Station).
+function drawCraftTracks(flown, picked, px_at, label, lk, show)
+  if not (show.orbits or show.markers) then return end
+  for _, v in ipairs(findScripts("vessel_controller")) do
+    local n = v.node
+    if n and n.valid then
+      local info = assembly and assembly.info and assembly.info(n)
+      local px, py, pz, vx, vy, vz, gr
+      if info and info.origin then
+        px, py, pz = info.origin.x, info.origin.y, info.origin.z
+        vx, vy, vz, gr = info.vel.x, info.vel.y, info.vel.z, info.grounded
+      else
+        px, py, pz, vx, vy, vz, gr = n.x, n.y, n.z, n.vx or 0, n.vy or 0, n.vz or 0, n.grounded
+      end
+      local dn = space.dominant(px, py, pz)
+      local b = dn and space.body(dn)
+      if b then
+        -- (velocity is already in the dominant body's carried frame — the
+        -- engine's convention, see the subject's own conic above)
+        local t = TRAJ.track(px - b.x, py - b.y, pz - b.z, vx, vy, vz, b.mu, b.radius, b.soi, gr)
+        local hi = (flown ~= nil and flown.node and flown.node.id == n.id)
+          or (picked ~= nil and picked.valid and picked.id == n.id)
+        drawTrack(t, b, hi, px_at, label, lk, show, v.craftName)
+      end
+    end
+  end
+end
+
 -- Open the map on a particular craft (the Tracking Station's MAP button).
 function focusNode(n)
   if not map_view then toggle() end
@@ -1319,6 +1543,7 @@ function toggle()
   map_lens(map_view)
   if not map_view then
     planning = false
+    if fb_ref and fb_ref.valid ~= false and fb_ref.focus then fb_ref.focus(nil) end
     -- Hand the instruments back to a craft that is still being flown; if
     -- nobody is flying, the HUD block goes away with the map.
     local flying = subject_vessel() ~= nil

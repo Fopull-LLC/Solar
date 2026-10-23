@@ -49,7 +49,7 @@ local made_t, made_v = -1, nil
 layout = nil
 warning = nil     -- the LEAVING banner's description while it's up (leaveWarning)
 
--- ── geometry (design units: the layer is 720 tall) ──────────────────────────
+-- ── geometry (design units: the layer is 720 tall at 100%, settings.designHeight) ──
 local M = 16                          -- screen margin
 local CW, CH, CB = 612, 172, 12       -- console plate: width, height, lift
 local LAMP_W, LAMP_H, LAMP_GAP = 52, 18, 4
@@ -139,12 +139,20 @@ local function set(e, k, v)
   if e and math.abs((e[k] or -1e9) - v) > 0.25 then e[k] = v end
 end
 
+-- The layer's height in design units: 720 at an interface size of 100%,
+-- 847 at 85% (settings.lua `designHeight`). Everything here is laid out in
+-- design units, so only the screen-to-design conversions ask.
+local function design_h()
+  local st = ref("settings")
+  return (st and st.designHeight and st.designHeight()) or 720
+end
+
 local function design_width()
   if camera and camera.screenSize then
     local w, h = camera.screenSize()
-    if w and h and h > 0 then return 720 * w / h end
+    if w and h and h > 0 then return design_h() * w / h end
   end
-  return 1280
+  return 1280 * design_h() / 720
 end
 
 -- ── formatting ──────────────────────────────────────────────────────────────
@@ -852,7 +860,7 @@ function update(node, dt)
   if dbg and dbg.visible and nodes["Debug"].uiRect and camera and camera.screenSize then
     local _, _, _, bh = nodes["Debug"]:uiRect()
     local _, sh = camera.screenSize()
-    if bh and bh > 1 and sh and sh > 0 then lift = M + bh * 720 / sh + 8 end
+    if bh and bh > 1 and sh and sh > 0 then lift = M + bh * design_h() / sh + 8 end
   end
 
   -- The top stack centres too, unless the fuel block in the corner needs the
@@ -895,7 +903,8 @@ function update(node, dt)
   local left = dw / 2 + shift - CW / 2
   layout = {
     consoleLeft = left, consoleRight = left + CW,
-    consoleTop = 720 - CB - CH + P.hdgWin[2],   -- the heading box is the highest point
+    consoleTop = design_h() - CB - CH + P.hdgWin[2],   -- the heading box is the highest point
+    consoleRise = CB + CH - P.hdgWin[2],                -- …and how far that is above the bottom
     topBottom = below,
     topLeft = top_left,
     rightBottom = M + 28 + 8 + res_h,

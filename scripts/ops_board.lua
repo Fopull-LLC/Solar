@@ -41,6 +41,14 @@ local function ref(kind)
   return r
 end
 
+-- The interface's design height: 720 at an interface size of 100%, 847 at
+-- 85% (settings.lua `designHeight`, Settings ▸ Display ▸ Interface size).
+-- Screen pixels turn into design units through this, never through 720.
+function uiDesignH()
+  local st = ref("settings")
+  return (st and st.designHeight and st.designHeight()) or 720
+end
+
 -- IS THE CREW OUT AND ABOUT? Deliberately NOT `astro.visible`: planet_camera
 -- hides the body whenever the camera lands within 0.7 m of it, which includes
 -- every time the wall-clip ray finds a wall behind you — i.e. constantly, while
@@ -358,9 +366,9 @@ end
 local function design_width()
   if camera and camera.screenSize then
     local w, h = camera.screenSize()
-    if w and h and h > 0 then return 720 * w / h end
+    if w and h and h > 0 then return uiDesignH() * w / h end
   end
-  return 1280
+  return 1280 * uiDesignH() / 720
 end
 
 function start(node)

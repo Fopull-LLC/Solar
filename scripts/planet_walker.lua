@@ -159,6 +159,33 @@ local function ref(kind)
   return r
 end
 
+-- THE FREE CAMERA (planet_camera, F5) has the keyboard and mouse while it
+-- flies: W A S D, SPACE, CTRL and SHIFT move the camera, so this script must
+-- not also read them. One proxy over `input` (this script's own global; the
+-- engine's table is untouched) rather than a test at every key.
+if type(input) == "table" then
+  local raw, pc, pc_miss = input, nil, -10.0
+  local function free()
+    if not (pc and pc.valid) then
+      local now = time or 0
+      if now - pc_miss < 2.0 then return false end
+      pc = findScript and findScript("planet_camera") or nil
+      if not pc then pc_miss = now return false end
+    end
+    return pc.freecam == true
+  end
+  local function key_gate(name)
+    return function(...) if free() then return false end return raw[name](...) end
+  end
+  input = setmetatable({
+    key = key_gate("key"), pressed = key_gate("pressed"), released = key_gate("released"),
+    button = key_gate("button"), clicked = key_gate("clicked"),
+    scroll = function() if free() then return 0 end return raw.scroll() end,
+    mouse_delta = function() if free() then return 0, 0 end return raw.mouse_delta() end,
+    setMouseLocked = function(on) if free() then return end return raw.setMouseLocked(on) end,
+  }, { __index = raw })
+end
+
 -- ── breath ──────────────────────────────────────────────────────────────────
 -- The suit carries a tank of air that drains while the HEAD is under water
 -- (climate.seaDepth at the helmet, which is the connected-water rule: a dry

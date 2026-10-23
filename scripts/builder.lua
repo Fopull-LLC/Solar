@@ -1140,7 +1140,7 @@ local function fit_header()
   local sh = camera and camera.screenSize and select(2, camera.screenSize())
   if not (h and h > 0 and sh and sh > 0) then return end
   local cel = r.card:getcomponent("UiElement")
-  local want = math.ceil(STATS_TOP + h * 720 / sh + STATS_PAD)
+  local want = math.ceil(STATS_TOP + h * uiDesignH() / sh + STATS_PAD)
   if cel and math.abs(cel.height - want) > 0.5 then cel.height = want end
 end
 
@@ -3881,9 +3881,17 @@ function shapeStop(commit)
   refresh_stats()
 end
 
+-- The interface's design height: 720 at an interface size of 100%
+-- (settings.lua `designHeight`, Settings ▸ Display ▸ Interface size).
+local dh_ref = nil
+function uiDesignH()
+  if not (dh_ref and dh_ref.valid) then dh_ref = findScript and findScript("settings") or nil end
+  return (dh_ref and dh_ref.designHeight and dh_ref.designHeight()) or 720
+end
+
 local function screen_k()
   local sh = camera.screenSize and select(2, camera.screenSize()) or nil
-  return (sh and sh > 1) and sh / 720.0 or 1.0, sh or 720
+  return (sh and sh > 1) and sh / uiDesignH() or 1.0, sh or 720
 end
 
 -- Screen-space drawing that a host without it (the smoke harness) skips.
@@ -4105,7 +4113,7 @@ local function handle_staging(clicked, lmb, grab_mode)
           local gel = stage_ghost:getcomponent("UiElement")
           if gel then
             local _, sh = camera.screenSize()
-            local scale = (sh and sh > 1) and (sh / 720.0) or 1.0
+            local scale = (sh and sh > 1) and (sh / uiDesignH()) or 1.0
             gel.posY = (my - stage_drag.grab_dy) / scale
           end
         end

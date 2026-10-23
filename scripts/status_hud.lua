@@ -36,6 +36,14 @@ local function ref(kind)
   return r
 end
 
+-- The interface's design height: 720 at an interface size of 100%, 847 at
+-- 85% (settings.lua `designHeight`, Settings ▸ Display ▸ Interface size).
+-- Screen pixels turn into design units through this, never through 720.
+function uiDesignH()
+  local st = ref("settings")
+  return (st and st.designHeight and st.designHeight()) or 720
+end
+
 local function crew_afoot()
   local pw = ref("planet_walker")
   return pw ~= nil and pw.onFoot == true
@@ -159,8 +167,8 @@ end
 
 -- ── the HUD's layout at this screen size ────────────────────────────────────
 --
--- The layer is MatchHeight at 720: the design height never changes and the
--- design WIDTH is 720 × aspect — 900 at 5:4, 1280 at 16:9, 1680 at 21:9. The
+-- The layer is MatchHeight at uiDesignH() (720 at an interface size of 100%)
+-- and the design WIDTH is that × aspect — 900 at 5:4, 1280 at 16:9, 1680 at 21:9. The
 -- scene-authored blocks were laid out for one width, so at 5:4 they ran into
 -- each other.
 --
@@ -200,9 +208,9 @@ end
 function designWidth()
   if camera and camera.screenSize then
     local w, h = camera.screenSize()
-    if w and h and h > 0 then return 720 * w / h end
+    if w and h and h > 0 then return uiDesignH() * w / h end
   end
-  return 1280
+  return 1280 * uiDesignH() / 720
 end
 
 function layout()
@@ -253,7 +261,7 @@ function layout()
     local w, posY = CARD_W, -M
     if cockpit then
       w = FLIGHT_CARD_W
-      if M + w + GAP > cockpit.consoleLeft then posY = -(720 - cockpit.consoleTop + GAP) end
+      if M + w + GAP > cockpit.consoleLeft then posY = -((cockpit.consoleRise or (uiDesignH() - cockpit.consoleTop)) + GAP) end
     elseif crew_afoot() and dw / 2 - HOTBAR_HALF - GAP - M < w then
       posY = -(HOTBAR_TOP + GAP)
     end
@@ -262,7 +270,7 @@ function layout()
   end
 
   -- The notice toast rides above the console in flight rather than across it.
-  set(comp(nd("Notice Toast")), "posY", cockpit and -(720 - cockpit.consoleTop + GAP) or TOAST_Y)
+  set(comp(nd("Notice Toast")), "posY", cockpit and -((cockpit.consoleRise or (uiDesignH() - cockpit.consoleTop)) + GAP) or TOAST_Y)
 end
 
 function start(node)

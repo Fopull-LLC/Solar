@@ -189,6 +189,21 @@ local function ref(kind)
   return r
 end
 
+-- The interface's design height: 720 at an interface size of 100%, 847 at
+-- 85% (settings.lua `designHeight`, Settings ▸ Display ▸ Interface size).
+-- Screen pixels turn into design units through this, never through 720.
+function uiDesignH()
+  local st = ref("settings")
+  return (st and st.designHeight and st.designHeight()) or 720
+end
+
+-- Cinematic mode (planet_camera, F4 / F5): the interface is hidden, and the
+-- markers this script paints straight onto the screen go with it.
+function cinematicUp()
+  local pc = ref("planet_camera")
+  return pc ~= nil and pc.cinematic == true
+end
+
 local patches = {}  -- key → patch
 local srcs = {}     -- scatter id → { patch = key, kind = k, fill = 0..1 }
 local breaks = {}   -- "patch|kind" → { {id, t}, ... }, oldest first
@@ -846,6 +861,7 @@ end
 -- down it lies. Drawn in the camera pass like every draw.*.
 function lateUpdate(node, dt)
   if params.pocket_hint <= 0 or not (draw and draw.ring) then return end
+  if cinematicUp() then return end
   local pw = ref("planet_walker")
   if not (pw and pw.onFoot) then return end
   local tb = ref("tool_belt")
@@ -885,7 +901,7 @@ function lateUpdate(node, dt)
           local sx, sy, dep, on = camera.worldToScreen(gx + ux * 1.6, gy + uy * 1.6, gz + uz * 1.6)
           if on and sx and d < params.pocket_hint * 0.7 then
             local vx, vy, vw, vh = camera.screenRect()
-            local s = (vh or 720) / 720
+            local s = (vh or 720) / uiDesignH()
             draw.text(sx, sy, string.format("resonance · %.0f m down", math.max(1, gr - ol - (o.r or 2.5))),
               13 * s, col[1], col[2], col[3], 0.5 + 0.5 * k, "center")
           end

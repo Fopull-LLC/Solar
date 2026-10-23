@@ -8,6 +8,12 @@
 --
 --   RIGHT MOUSE (hold)  orbit    SCROLL  zoom    MIDDLE MOUSE / ALT  toggle lock
 --
+-- CINEMATIC MODE (see the section near the end):
+--   F4   hide the interface        F5   free camera        T    freeze time (free camera)
+--   F12  screenshot (user://screenshots)                  ESC  leave cinematic mode
+-- (Not F1–F3: the editor keeps those for Play, Pause and Step, and a game
+-- running in it never sees them.)
+--
 -- Exposes its view basis (env globals) for the walker and the tool belt:
 --   fwd_x/fwd_y/fwd_z     the exact view direction (world space)
 --   flat_x/flat_y/flat_z  that direction projected onto the tangent plane
@@ -826,7 +832,253 @@ end
 -- is not something to rely on, so this is a call rather than an ordering.
 local atmo_ref
 function lateUpdate(node, dt)
-  place_camera(node, dt)
+  if cinematic_tick(node, dt) then
+    -- the free camera placed the view itself
+  else
+    place_camera(node, dt)
+  end
   if not atmo_ref or not atmo_ref.valid then atmo_ref = findScript("atmosphere") end
   if atmo_ref and atmo_ref.valid and atmo_ref.follow then atmo_ref.follow(dt) end
 end
+
+-- ── CINEMATIC MODE ──────────────────────────────────────────────────────────
+-- The playtest asked for "the ui toggleable for cinematic mode, which also lets
+-- you do a freecam and get pictures". Three keys and a shutter:
+--
+--   F4  hides every screen layer (the HUD, the objectives card, prompts,
+--       toasts, the flight instruments). Published as `cinematic`; the scripts
+--       that paint markers straight onto the screen (draw.*) ask it and stand
+--       down too. The game goes on underneath: you can still walk and fly.
+--   F5  the FREE CAMERA. It takes the keyboard and mouse — W A S D fly along
+--       the view, SPACE / CTRL rise and sink, SHIFT is five times faster, the
+--       scroll wheel sets the speed, the mouse looks — and hides the interface
+--       while it flies. `freecam` is published: the walker, the craft and the
+--       tool belt leave the keys alone while it is true, so W does not also
+--       walk the crew off a cliff. The world keeps simulating.
+--   T   (in the free camera) freezes time: the gameplay tick stops, the
+--       camera does not. T again, or leaving the free camera, lets it go.
+--   F12 a screenshot of the window, to user://screenshots/solar_NNNN.png. It
+--       is what you see: with the interface when it is up, without it when not.
+--
+-- The free camera is kept RELATIVE TO THE WORLD it started over: its position
+-- is stored from that body's centre and recomposed every frame in this, the
+-- camera pass, from where the body is now. The planets move on rails, so a
+-- camera held in world coordinates would watch the ground slide away under it
+-- at orbital speed.
+--
+-- ESC leaves cinematic mode before it opens anything (`escTakenAt`, the way the
+-- panels hand the pause menu an Esc that was theirs), and leaving restores
+-- every layer exactly as it was found.
+cinematic = false      -- the interface is hidden (F4, or the free camera)
+freecam = false        -- the free camera has the keyboard and mouse
+timeFrozen = false     -- T in the free camera
+escTakenAt = -1
+local CINE_LAYERS = { "Ship HUD", "Sound and Settings" }
+local cine_ui = false            -- F4's own switch (the free camera hides on its own)
+local cine_layers = nil          -- { {layer=, was=} } switched off by us
+local fc = nil                   -- the free camera: { body, rel, ref, pitch, speed }
+local shot_n, shot_msg, shot_msg_t = nil, nil, -10.0
+local self_node = nil            -- this camera (for setFreecam from a probe)
+FREECAM_SPEED = { start = 8.0, min = 0.5, max = 20000.0, fast = 5.0, step = 1.25 }
+
+local function cine_hide(on)
+  if on and not cine_layers then
+    cine_layers = {}
+    for _, nm in ipairs(CINE_LAYERS) do
+      local n = find(nm)
+      local l = n and n:getcomponent("UiLayer")
+      if l then
+        cine_layers[#cine_layers + 1] = { layer = l, was = l.enabled }
+        l.enabled = false
+      end
+    end
+  elseif not on and cine_layers then
+    for _, c in ipairs(cine_layers) do c.layer.enabled = c.was ~= false and c.was ~= 0 end
+    cine_layers = nil
+  end
+end
+
+-- Hold the layers off while hidden: a scene script that switches its own
+-- layer on (a loading screen ending) must not bring the HUD back mid-shot.
+local function cine_hold()
+  if not cine_layers then return end
+  for _, c in ipairs(cine_layers) do
+    if c.layer.enabled == true or c.layer.enabled == 1 then c.layer.enabled = false end
+  end
+end
+
+local function set_freeze(on)
+  if on == timeFrozen then return end
+  timeFrozen = on
+  if physics and physics.pause then physics.pause(on) end
+end
+
+local function body_pos(name)
+  local b = name and space and space.body and space.body(name)
+  if not b then return nil end
+  return vec3(b.x, b.y, b.z)
+end
+
+local function freecam_enter(node)
+  local m = map()
+  if m and m.map_view and m.toggle then m.toggle() end
+  if cockpit then setCockpit(false) end
+  firstPerson = false
+  local p = node.pos
+  local d = space and space.dominant and space.dominant(p.x, p.y, p.z)
+  local bp = body_pos(d)
+  local up = bp and (p - bp):normalized() or vec3(0, 1, 0)
+  local f = vec3(fwd_x, fwd_y, fwd_z)
+  local r = f:flatten(up)
+  if r:length() < 1e-6 then r = up:cross(vec3(1, 0, 0)) end
+  if r:length() < 1e-6 then r = up:cross(vec3(0, 0, 1)) end
+  fc = { body = bp and d or nil, rel = bp and (p - bp) or p, ref = r:normalized(),
+         pitch = math.asin(math.clamp(f:dot(up), -1, 1)), speed = FREECAM_SPEED.start }
+  -- Nobody should be invisible in a picture of them.
+  if target and target.valid and target.visible == false then
+    local piloting = false
+    for _, s in ipairs(findScripts("vessel_controller")) do if s.piloting then piloting = true end end
+    if not piloting then target.visible = true end
+  end
+  freecam = true
+end
+
+local function freecam_leave()
+  freecam = false
+  fc = nil
+  set_freeze(false)
+end
+
+-- One frame of the free camera. Pure motion: no collision, no follow.
+function freecamStep(node, dt, keys, mdx, mdy, scroll)
+  local bp = body_pos(fc.body)
+  if fc.body and not bp then
+    -- The world it was over has gone (a far system streamed out): carry on
+    -- from where the camera is, in plain world space.
+    fc.body = nil
+  end
+  local pos = bp and (bp + fc.rel) or fc.rel
+  local up = bp and fc.rel:normalized() or vec3(0, 1, 0)
+  if fc.rel:length() < 1e-3 then up = vec3(0, 1, 0) end
+  fc.ref = fc.ref:flatten(up)
+  if fc.ref:length() < 1e-6 then
+    fc.ref = up:cross(vec3(1, 0, 0))
+    if fc.ref:length() < 1e-6 then fc.ref = up:cross(vec3(0, 0, 1)) end
+  end
+  fc.ref = fc.ref:normalized()
+  local st = script_ref("settings")
+  local sens = params.sensitivity * 0.01 * ((st and st.lookScale) or 1.0)
+  if st and st.invertY then mdy = -mdy end
+  fc.ref = fc.ref:rotatedAround(up, -mdx * sens)
+  fc.pitch = math.clamp(fc.pitch - mdy * sens, -PITCH_LIMIT, PITCH_LIMIT)
+  if scroll and scroll ~= 0 then
+    fc.speed = math.clamp(fc.speed * FREECAM_SPEED.step ^ scroll, FREECAM_SPEED.min, FREECAM_SPEED.max)
+  end
+  local fwd = (fc.ref * math.cos(fc.pitch) + up * math.sin(fc.pitch)):normalized()
+  local right = fwd:cross(up):normalized()
+  local mv = vec3(0, 0, 0)
+  if keys.w then mv = mv + fwd end
+  if keys.s then mv = mv - fwd end
+  if keys.d then mv = mv + right end
+  if keys.a then mv = mv - right end
+  if keys.space then mv = mv + up end
+  if keys.ctrl then mv = mv - up end
+  if mv:length() > 1e-6 then
+    local k = fc.speed * (keys.shift and FREECAM_SPEED.fast or 1.0) * dt
+    pos = pos + mv:normalized() * k
+  end
+  fc.rel = bp and (pos - bp) or pos
+  return pos, fwd, up
+end
+
+local function screenshot()
+  if not (camera and camera.capture) then print("camera: this build cannot take a screenshot") return end
+  local sw, sh = 1920, 1080
+  if camera.screenSize then sw, sh = camera.screenSize() end
+  sw, sh = math.max(1, math.min(4096, sw or 1920)), math.max(1, math.min(4096, sh or 1080))
+  if not shot_n then
+    shot_n = 0
+    local ok, list = pcall(assets.getContents, "user://screenshots")
+    if ok and type(list) == "table" then
+      for _, path in ipairs(list) do
+        local k = tonumber(tostring(path):match("solar_(%d+)%.png$"))
+        if k and k > shot_n then shot_n = k end
+      end
+    end
+  end
+  shot_n = shot_n + 1
+  local path = string.format("user://screenshots/solar_%04d.png", shot_n)
+  local show = not cinematic
+  local ok, err = pcall(camera.capture, { w = sw, h = sh, ui = show, draws = show }, function(bytes, why)
+    if not bytes then print("camera: screenshot failed — " .. tostring(why)) return end
+    local wok, werr = assets.writeBytes(path, bytes)
+    if wok then
+      print("camera: screenshot " .. path)
+      shot_msg, shot_msg_t = "Screenshot saved — " .. path:gsub("^user://", ""), time
+    else
+      print("camera: screenshot not written — " .. tostring(werr))
+    end
+  end)
+  if not ok then print("camera: screenshot " .. tostring(err)) end
+end
+
+-- The cinematic keys, every frame; returns true when the free camera placed
+-- the view (and place_camera must not).
+function cinematic_tick(node, dt)
+  self_node = node
+  local blocked = panel_open()
+  local m = map()
+  if input.pressed("f12") then screenshot() end
+  if not blocked then
+    if input.pressed("f4") then cine_ui = not cine_ui end
+    if input.pressed("f5") then
+      if freecam then freecam_leave() else freecam_enter(node) end
+    end
+    if freecam and input.pressed("t") then set_freeze(not timeFrozen) end
+    if (cine_ui or freecam) and input.pressed("escape") then
+      escTakenAt = time
+      cine_ui = false
+      if freecam then freecam_leave() end
+    end
+  end
+  -- The map takes the camera back (M is the map's own key): the free camera ends.
+  if freecam and m and m.map_view then freecam_leave() end
+  local want = cine_ui or freecam
+  if want ~= cinematic then cinematic = want; cine_hide(want) end
+  cine_hold()
+  -- The "saved" line, after the picture was taken (never in it).
+  if shot_msg and time - shot_msg_t < 2.0 and draw and draw.text and camera and camera.screenSize then
+    local sw, sh = camera.screenSize()
+    if sw and sh then
+      local k = sh / 1080
+      draw.text(sw * 0.5, sh - 48 * k, shot_msg, 18 * k, 0.92, 0.89, 0.81, 0.9, "center")
+    end
+  end
+  if not freecam then return false end
+  if blocked then
+    input.setMouseLocked(false)
+    mouseLooking = false
+    return true
+  end
+  input.setMouseLocked(true)
+  mouseLooking = true
+  local mdx, mdy = input.mouse_delta()
+  local keys = { w = input.key("w"), a = input.key("a"), s = input.key("s"), d = input.key("d"),
+                 space = input.key("space"), ctrl = input.key("ctrl"), shift = input.key("shift") }
+  local pos, fwd, up = freecamStep(node, dt, keys, mdx or 0, mdy or 0, input.scroll())
+  node.pos = pos
+  node:lookAt(pos + fwd, up)
+  fwd_x, fwd_y, fwd_z = fwd.x, fwd.y, fwd.z
+  cam_x, cam_y, cam_z = pos.x, pos.y, pos.z
+  return true
+end
+
+-- For a probe (and the pause menu's "leave"): switch the modes from a script.
+function setCinematic(on) cine_ui = on == true end
+function setFreecam(on)
+  if on and not freecam and self_node then freecam_enter(self_node)
+  elseif not on and freecam then freecam_leave() end
+end
+function freecamState() return fc end
+-- The shutter, for a probe (F12 is the player's).
+function takeScreenshot() screenshot() end

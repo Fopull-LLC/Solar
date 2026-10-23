@@ -9,6 +9,13 @@
 --   none  pause  controls  settings  ops  inventory  map  prompt  debug
 --   toast  fac:FacCommand  fac:FacDepot  fac:FacTracking  fac:FacHangar
 --   flight  flightperiph  flightmap   (a small rocket is launched and flown)
+--   cine  freecam                     (cinematic mode: interface hidden / free camera)
+--
+-- `uiScale` sets the interface size first (settings.lua; 0 leaves Auto).
+-- `traj` puts the flown rocket on a path before "flightmap" opens the map:
+-- "orbit" (a circular orbit 0.6 radii up), "sub" (a suborbital hop),
+-- and `release = 1` then lets go of the controls, so the craft is drawn as an
+-- unflown one (dimmed) and the map is centred on the crew.
 
 defaults = {
   slot = 9,
@@ -28,6 +35,18 @@ defaults = {
   zoomSweep = 0,
   --- Quit this many seconds after the screen opened (0 = never; for `play`).
   quitAfter = 0,
+  --- Interface size to set before opening (0 = leave it on Auto).
+  uiScale = 0,
+  --- flightmap: let go of the controls after placing the craft (dimmed track).
+  release = 0,
+  --- freecam: fly the free camera up this many metres per second (a drift check).
+  freeRise = 0,
+  --- flightmap with `traj`: place the craft on this frame of the whole run
+  --- (0 = a second after the crew is aboard), so `shot --after` can catch a
+  --- short suborbital arc in the air. The map opens 60 frames later.
+  atFrame = 0,
+  --- map / flightmap: hold the view this many metres from the focus (0 = auto-fit).
+  mapZoom = 0,
 }
 
 local jumped, ready_t, opened = false, nil, false
@@ -80,6 +99,87 @@ local function piloted()
   return nil
 end
 
+-- ── trajectory fixtures ──────────────────────────────────────────────────────
+-- The flown rocket, off its clamps and moved onto a path about the world it
+-- is on: 0.6 radii up at circular speed ("orbit"), or 0.3 radii up going
+-- 0.6 and 0.15 of circular speed along and up ("sub": it comes down a
+-- quarter of the way round the world, half a minute later). Position by teleport, velocity by one impulse
+-- (the craft's velocity is in the world's carried frame, so it is relative).
+local placed, released_ctl = false, false
+local push = nil      -- { node, want (relative velocity), body } while it is being given
+function place_on_path(kind)
+  local v = piloted()
+  if not v then return end
+  if v.releaseClamps then v.releaseClamps() end
+  local info = assembly.info(v.node)
+  if not info or info.anchored then return end
+  local o = info.origin
+  local d = space.dominant(o.x, o.y, o.z)
+  local b = d and space.body(d)
+  if not b then return end
+  local up = vec3(o.x - b.x, o.y - b.y, o.z - b.z):normalized()
+  local east = up:cross(vec3(0, 1, 0))
+  if east:length() < 1e-3 then east = up:cross(vec3(1, 0, 0)) end
+  east = east:normalized()
+  -- Sized from the world (Solar's are small: a kilometre or so across).
+  local r = kind == "orbit" and b.radius * 1.6 or b.radius * 1.3
+  if b.soi and b.soi > 0 then r = math.min(r, b.soi * 0.5) end
+  assembly.teleport(v.node, vec3(b.x, b.y, b.z) + up * r)
+  local vc = math.sqrt(b.mu / r)
+  local want = kind == "orbit" and east * vc or (east * (vc * 0.6) + up * (vc * 0.15))
+  push = { node = v.node, want = want, body = d, t0 = time }
+  placed = true
+  print(string.format("ui probe: placed on a %s path, %.0f m up, giving it %.1f m/s (body %s, R %.0f m, SOI %.0f m)",
+    kind, r - b.radius, want:length(), d, b.radius, b.soi or -1))
+end
+
+-- The velocity goes in a few m/s a tick, at the centre of mass where the craft
+-- IS now: the vessel's safety clamp takes back more than it could have gained
+-- in one tick, and an impulse at last frame's centre of mass is a spin.
+function push_tick()
+  -- Not on the teleport's own frame: the new place is read from the next pass.
+  if not push or time - push.t0 < 0.1 then return end
+  local info = push.node.valid and assembly.info(push.node)
+  if not info then push = nil return end
+  local have = vec3(info.vel.x, info.vel.y, info.vel.z)
+  local dv = push.want - have
+  if dv:length() < 0.3 then
+    print(string.format("ui probe: on the path at %.1f m/s", have:length()))
+    push = nil
+    return
+  end
+  if dv:length() > 4.0 then dv = dv:normalized() * 4.0 end
+  assembly.impulseAt(push.node, dv * info.mass, info.com)
+end
+
+-- The free camera, watched: where it sits from the world's centre, each
+-- second (it must not drift as the world moves on its rails), and — with
+-- `freeRise` — moved up at that rate, the way W or SPACE would move it.
+local fw_t = 0
+function freecam_watch(dt, since)
+  if (params.panel or "") ~= "freecam" then return end
+  local pc = findScript("planet_camera")
+  local fc = pc and pc.freecamState and pc.freecamState()
+  if not fc then return end
+  if (params.freeRise or 0) ~= 0 and since < 6 then
+    fc.rel = fc.rel + fc.rel:normalized() * (params.freeRise * dt)
+  end
+  if since > 7 and not shot_taken and pc.takeScreenshot then
+    shot_taken = true
+    pc.takeScreenshot()
+  end
+  if time - fw_t >= 1.0 then
+    fw_t = time
+    local b = space.body(fc.body or "")
+    local cam = pc.node
+    if b and cam then
+      local rel = vec3(cam.x - b.x, cam.y - b.y, cam.z - b.z)
+      print(string.format("ui probe: freecam %.1fs  |rel| %.2f  rel (%.2f %.2f %.2f)  body at (%.0f %.0f %.0f)  cinematic %s",
+        since, rel:length(), rel.x, rel.y, rel.z, b.x, b.y, b.z, tostring(pc.cinematic)))
+    end
+  end
+end
+
 local function stock()
   local inv, co, mi = findScript("inventory"), findScript("company"), findScript("missions")
   if co and co.earn and co.balance() < 12000 then co.earn(12000 - co.balance(), "probe") end
@@ -104,7 +204,7 @@ local function stand_at(fac)
 end
 
 local function open(which)
-  print("ui probe: opening " .. which)
+  print(string.format("ui probe: opening %s at %.1fs", which, time))
   if which == "pause" then
     findScript("pause_menu").openMenu()
   elseif which == "controls" or which == "settings" then
@@ -127,6 +227,10 @@ local function open(which)
     findScript("peripheral_panel").openPanel()
   elseif which == "map" or which == "flightmap" then
     findScript("orbit_map").toggle()
+  elseif which == "cine" then
+    findScript("planet_camera").setCinematic(true)
+  elseif which == "freecam" then
+    findScript("planet_camera").setFreecam(true)
   elseif which == "debug" then
     save.set("debug.rich", true)
   elseif which == "prompt" then
@@ -140,7 +244,9 @@ local function open(which)
   end
 end
 
+local frame_n = 0
 function update(node, dt)
+  frame_n = frame_n + 1
   if not jumped then
     jumped = true
     local s = "slot" .. math.floor(params.slot or 9)
@@ -155,6 +261,11 @@ function update(node, dt)
   if opened then
     frames, acc, worst = frames + 1, acc + dt, math.max(worst, dt)
     local since = time - opened_t
+    freecam_watch(dt, since)
+    if (params.mapZoom or 0) > 0 then
+      local map = findScript("orbit_map")
+      if map and map.setZoom then map.setZoom(params.mapZoom) end
+    end
     if (params.zoomSweep or 0) > 0 then
       -- 300 m → 3,000 km over 12 s, and back over the next 12.
       local u = math.min(1, since / 12)
@@ -192,9 +303,34 @@ function update(node, dt)
     ready_t = time
     print(string.format("ui probe: on foot at %.1fs", time))
     stock()
+    if (params.uiScale or 0) > 0 then
+      local st = findScript("settings")
+      if st then st.set("ui_scale", params.uiScale) end
+      print(string.format("ui probe: interface size %.0f%%", params.uiScale * 100))
+    end
     return
   end
-  if time - ready_t < (params.openAfter or 4.0) then return end
+  if time - ready_t < (params.openAfter or 4.0) then
+    if flying_mode() and (params.traj or "") ~= "" and not placed and time - ready_t > 1.0
+       and (params.atFrame or 0) <= 0 then
+      place_on_path(params.traj)
+    end
+    push_tick()
+    return
+  end
+  if (params.atFrame or 0) > 0 then
+    if not placed then
+      if frame_n >= params.atFrame then place_on_path(params.traj) placed_frame = frame_n end
+      return
+    end
+    push_tick()
+    if frame_n < (placed_frame or 0) + 60 then return end
+  end
+  if params.release == 1 and not released_ctl then
+    released_ctl = true
+    local v = piloted()
+    if v then v.releaseControl(); print("ui probe: let go of the controls") end
+  end
   opened = true
   opened_t, report_t = time, time
   if (params.perfEvery or 0) > 0 then perf.enable(true) end
