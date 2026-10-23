@@ -8,6 +8,11 @@
 --
 --   RIGHT MOUSE (hold)  orbit    SCROLL  zoom    MIDDLE MOUSE / ALT  toggle lock
 --
+-- FLYING (see "the craft's extent" and "the flight camera's modes" below):
+--   MIDDLE DRAG  slide the pivot over the craft   ALT + SCROLL  slide it along the craft
+--   HOME  pivot back to the middle   C  camera mode (auto · free orbit · chase · horizon)
+--   F6    photo orbit (on foot too)  V  the pilot's seat
+--
 -- CINEMATIC MODE (see the section near the end):
 --   F4   hide the interface        F5   free camera        T    freeze time (free camera)
 --   F12  screenshot (user://screenshots)                  ESC  leave cinematic mode
@@ -52,6 +57,9 @@ defaults = {
   -- crew's right, so the body stops standing between the camera and the rock
   -- face or plant being worked. Eased in and out; 0 = never.
   shoulder = 0.6,
+  -- The view's vertical field of view (radians; the system scene's Camera),
+  -- for framing a whole craft (`zoomRange`).
+  fov_y = 1.1519173,
 }
 
 shiftlock = false
@@ -189,10 +197,8 @@ end
 -- poses (so a hinge that moves its arm moves its balls). The rover's tyres
 -- hang off it as bodies of their own and join them.
 local HULL_MARGIN = 0.45    -- the view's near plane and a little air
-local hull_cache = { id = nil, n = -1, parts = {} }
-local function hull_balls(vessel)
-  local out = {}
-  local vn = vessel.node
+local hull_cache = { id = nil, n = -1, parts = {}, gen = 0 }
+local function hull_parts(vn)
   if vn and vn.valid and vn.children then
     local kids = vn:children()
     if hull_cache.id ~= vn.id or hull_cache.n ~= #kids then
@@ -208,8 +214,16 @@ local function hull_balls(vessel)
           parts[#parts + 1] = { node = c, r = (r > 0.05) and r or 0.6 }
         end
       end
-      hull_cache = { id = vn.id, n = #kids, parts = parts }
+      hull_cache = { id = vn.id, n = #kids, parts = parts, gen = hull_cache.gen + 1 }
     end
+  end
+  return hull_cache.parts
+end
+local function hull_balls(vessel)
+  local out = {}
+  local vn = vessel.node
+  if vn and vn.valid and vn.children then
+    hull_parts(vn)
     if #hull_cache.parts > 0 then
       local o = vn:toWorld(vec3(0, 0, 0))
       local ex = vn:toWorld(vec3(1, 0, 0)) - o
@@ -256,6 +270,106 @@ local function hull_exit(balls, o, dir)
     end
   end
   return far, reach
+end
+
+-- ── the craft's extent, the pivot over it, and the zoom it needs ───────────
+-- "you are stuck to the pod position but it would be nice if somehow i could
+-- move the camera up or down the span of the craft too as well as left or
+-- right when it's a larger craft". The view used to orbit the crew's pod: on
+-- a 20 m rocket the pod is at the very top, and the rest of the stack hung off
+-- the bottom of the screen. Now the view orbits a PIVOT that starts at the
+-- middle of the craft's bounds and can be slid anywhere over it:
+--
+--   MIDDLE MOUSE (hold, drag)  slide the pivot over the craft, in the plane
+--                              of the screen (up/down the stack, side to side)
+--   ALT + SCROLL               slide it along the craft's long axis
+--   HOME                       back to the middle of the craft
+--
+-- The pivot is kept in the CRAFT'S frame (a slid pivot rides the craft as it
+-- turns) and clamped to the box its parts' centres span, so it can never be
+-- dragged off into empty air. The zoom range comes from the craft's size: a
+-- 60 m rocket can be framed whole, and a probe core still filled.
+--
+-- Pure: tests/smoke_flightcam.lua holds these.
+
+-- The box a craft's parts span, in the craft's own frame. `parts` is a list
+-- of { x, y, z, r } (a part's local centre and the radius of the ball round
+-- it). Returns nil for no parts, else
+--   lo/hi    the box round the parts' balls (how big the craft LOOKS)
+--   clo/chi  the box of the part centres (where the pivot may go)
+--   centre   the middle of lo..hi;  radius  half its diagonal
+--   axis     "x" | "y" | "z", the box's longest side (the craft's main axis)
+function craftBounds(parts)
+  if not parts or #parts == 0 then return nil end
+  local huge = math.huge
+  local lx, ly, lz, hx, hy, hz = huge, huge, huge, -huge, -huge, -huge
+  local clx, cly, clz, chx, chy, chz = huge, huge, huge, -huge, -huge, -huge
+  for _, p in ipairs(parts) do
+    local x, y, z, r = p.x or 0, p.y or 0, p.z or 0, p.r or 0
+    if x - r < lx then lx = x - r end
+    if y - r < ly then ly = y - r end
+    if z - r < lz then lz = z - r end
+    if x + r > hx then hx = x + r end
+    if y + r > hy then hy = y + r end
+    if z + r > hz then hz = z + r end
+    if x < clx then clx = x end
+    if y < cly then cly = y end
+    if z < clz then clz = z end
+    if x > chx then chx = x end
+    if y > chy then chy = y end
+    if z > chz then chz = z end
+  end
+  local sx, sy, sz = hx - lx, hy - ly, hz - lz
+  local axis = "y"
+  if sx > sy and sx >= sz then axis = "x" elseif sz > sy and sz > sx then axis = "z" end
+  return {
+    lo = vec3(lx, ly, lz), hi = vec3(hx, hy, hz),
+    clo = vec3(clx, cly, clz), chi = vec3(chx, chy, chz),
+    centre = vec3((lx + hx) * 0.5, (ly + hy) * 0.5, (lz + hz) * 0.5),
+    radius = 0.5 * math.sqrt(sx * sx + sy * sy + sz * sz),
+    size = vec3(sx, sy, sz), axis = axis,
+  }
+end
+
+-- A local point held inside the box of part centres.
+function clampPivot(b, p)
+  if not b then return p end
+  return vec3(math.clamp(p.x, b.clo.x, b.chi.x), math.clamp(p.y, b.clo.y, b.chi.y),
+    math.clamp(p.z, b.clo.z, b.chi.z))
+end
+
+-- The pivot slid `d` metres along the craft's main axis (clamped).
+function slideAlongAxis(b, p, d)
+  if not b then return p end
+  local q = vec3(p.x + (b.axis == "x" and d or 0), p.y + (b.axis == "y" and d or 0),
+    p.z + (b.axis == "z" and d or 0))
+  return clampPivot(b, q)
+end
+
+-- The orbit's zoom limits for a craft of bounding radius `radius` and a
+-- camera of vertical field of view `fov_y` (radians):
+--   mind  the closest orbit (a probe is still filled; a big craft's closest
+--         orbit grows with it, but slowly: slide the pivot to get close)
+--   maxd  the farthest (the whole craft small in the frame)
+--   fit   the distance that frames the whole craft, top to bottom
+ZOOM = { floor = 3.0, ceil = 40.0, near_k = 0.15, near_base = 8.0, far_k = 2.5, fit_pad = 1.15 }
+function zoomRange(radius, fov_y)
+  radius = math.max(0.1, radius or 1.0)
+  local half = math.tan(math.clamp((fov_y or 1.15) * 0.5, 0.1, 1.4))
+  local fit = radius / half * ZOOM.fit_pad
+  local mind = math.max(ZOOM.floor, math.min(radius + 1.0, ZOOM.near_base + ZOOM.near_k * radius))
+  local maxd = math.max(ZOOM.ceil, fit * ZOOM.far_k)
+  fit = math.clamp(fit, mind, maxd)
+  return mind, maxd, fit
+end
+
+-- The craft's axes in the world, from its node's rendered pose.
+local function craft_basis(vn)
+  local o = vn:toWorld(vec3(0, 0, 0))
+  local ex = (vn:toWorld(vec3(1, 0, 0)) - o):normalized()
+  local ey = (vn:toWorld(vec3(0, 1, 0)) - o):normalized()
+  local ez = (vn:toWorld(vec3(0, 0, 1)) - o):normalized()
+  return o, ex, ey, ez
 end
 
 -- The sphere sweep the view backs out along, passing THROUGH the craft's own
@@ -459,7 +573,9 @@ end
 -- behind it), the view RISES over it instead, a few degrees at a time, the way
 -- a boom camera lifts over a wall: quickly up, slowly back down.
 local LIFT_STEP, LIFT_STEPS = 0.06, 16
-local CHASE_MIN = 5.0       -- the closest orbit while flying (see `mind`)
+-- The closest the view may come to the pivot while flying: the craft's
+-- closest orbit (`zoomRange`), set each frame.
+local CHASE_MIN = 5.0
 local lift_now, lift_t = 0.0, -10.0
 function chase_clip(vessel, head, up, room_d, dt)
   if time - lift_t > 0.25 then lift_now = 0.0 end   -- a new chase starts level
@@ -498,6 +614,201 @@ function chase_clip(vessel, head, up, room_d, dt)
   -- Outside the hull comes first: a frame of ground in the corner of the view
   -- while the lift catches up is a lesser thing than a frame inside the craft.
   return math.max(back, need), need, f
+end
+
+-- ── the flight camera's modes ───────────────────────────────────────────────
+-- "a better solution that lets people admire their crafts more". C cycles how
+-- the orbit follows the craft you are flying, and says so on screen:
+--
+--   Auto     in air (or near the ground), moving: the orbit swings round
+--            behind the way you are going, like a chase car; drag with the
+--            right button and it waits a moment before taking over again.
+--            In space: a free orbit (the craft turns, the view does not).
+--   Free orbit    the view stays where you put it; the horizon stays level.
+--   Chase    LOCKED to the craft: it turns, rolls and pitches with it, as if
+--            on a boom bolted to the hull.
+--   Horizon  the horizon stays level, and the view turns as the craft yaws:
+--            always the same side of the craft, the sky always up.
+--
+--   F6  PHOTO ORBIT: the view circles slowly round the pivot, for admiring
+--       (F4 hides the interface for the picture; F12 takes it). F6 or Esc
+--       stops it; the mouse and the zoom still work while it turns.
+CAM_MODES = { "auto", "free", "chase", "horizon" }
+CAM_MODE_NAMES = { auto = "Auto", free = "Free orbit", chase = "Chase (locked to the craft)",
+                   horizon = "Locked to the horizon" }
+camMode = "auto"           -- published
+photoOrbit = false         -- published
+PHOTO_ORBIT_RATE = math.rad(9)
+ZOOM_STEP = 1.15           -- one scroll click while flying zooms by this factor
+-- Published, for probes and the HUD: the piloted craft's extent and pivot.
+--   { radius, axis, mind, maxd, fit, pivot = local vec3, centre = local vec3 }
+craftFrame = nil
+local craft = { id = nil, b = nil, t = -10.0, gen = -1, off = vec3(0, 0, 0), now = nil,
+                lock = nil, axes = nil, look_t = -10.0, air = false, air_t = -10.0, zoomed = false,
+                fit_r = nil }
+local mode_msg, mode_msg_t = nil, -10.0
+local last_up = vec3(0, 1, 0)
+
+local function say(msg) mode_msg, mode_msg_t = msg, time end
+
+-- The craft's bounds, refreshed when its parts change and twice a second (a
+-- hinge swings an arm). A craft with no parts to read (a test rig, the frame
+-- a craft is still being built) falls back to its pod.
+local function craft_update(vessel, vn, swapped)
+  if swapped or craft.id ~= vn.id then
+    craft = { id = vn.id, b = nil, t = -10.0, gen = -1, off = vec3(0, 0, 0), now = nil,
+              lock = nil, axes = nil, look_t = -10.0, air = false, air_t = -10.0, zoomed = false,
+              fit_r = nil }
+  end
+  local parts = hull_parts(vn)
+  if craft.gen ~= hull_cache.gen or time - craft.t > 0.5 or not craft.b then
+    craft.gen, craft.t = hull_cache.gen, time
+    local list = {}
+    for _, p in ipairs(parts) do
+      local c = p.node
+      if c.valid then list[#list + 1] = { x = c.x or 0, y = c.y or 0, z = c.z or 0, r = p.r } end
+    end
+    if #list == 0 then
+      list[1] = { x = vessel.podLX or 0, y = vessel.podLY or 1.2, z = vessel.podLZ or 0, r = 1.0 }
+    end
+    craft.b = craftBounds(list)
+  end
+  local b = craft.b
+  local mind, maxd, fit = zoomRange(b.radius, params.fov_y)
+  -- Frame the whole craft when you take it, and again while it is still
+  -- being put together, until you zoom yourself.
+  if not craft.zoomed and (craft.fit_r == nil or math.abs(craft.fit_r - b.radius) > 0.25) then
+    craft.fit_r = b.radius
+    params.distance = fit
+  end
+  CHASE_MIN = mind
+  craftFrame = { radius = b.radius, axis = b.axis, mind = mind, maxd = maxd, fit = fit,
+                 centre = b.centre, pivot = craft.now or b.centre, off = craft.off }
+  return b, mind, maxd, fit
+end
+
+-- The pivot this frame, in the craft's frame: the middle of the bounds plus
+-- your slide, held on the craft, eased so a slide or a reset glides.
+local function craft_pivot(dt)
+  local b = craft.b
+  local want = clampPivot(b, b.centre + craft.off)
+  craft.off = want - b.centre          -- a slide past the end stops there
+  if not craft.now then craft.now = want
+  else craft.now = craft.now + (want - craft.now) * (1 - math.exp(-10 * dt)) end
+  if craftFrame then craftFrame.pivot = craft.now end
+  return craft.now
+end
+
+-- A world direction in the craft's frame and back (its axes are unit and
+-- square: a craft node is never scaled).
+local function to_local(d, ex, ey, ez) return vec3(d:dot(ex), d:dot(ey), d:dot(ez)) end
+local function to_world(l, ex, ey, ez) return ex * l.x + ey * l.y + ez * l.z end
+
+-- Slide the pivot by a mouse drag of (dx, dy) pixels, in the plane of the
+-- screen, at a rate that keeps the craft under the cursor.
+function panPivot(dx, dy)
+  local vn = target
+  if not (craft.b and vn and vn.valid) then return end
+  local f = vec3(fwd_x, fwd_y, fwd_z)
+  local right = f:cross(last_up)
+  if right:length() < 1e-6 then return end
+  right = right:normalized()
+  local sup = right:cross(f):normalized()
+  local k = math.max(params.distance or 10, 2.0) * 0.0011
+  local d = right * (dx * k) - sup * (dy * k)
+  local _, ex, ey, ez = craft_basis(vn)
+  craft.off = craft.off + to_local(d, ex, ey, ez)
+  craft.off = clampPivot(craft.b, craft.b.centre + craft.off) - craft.b.centre
+end
+
+-- Slide the pivot along the craft's long axis by `clicks` of the wheel:
+-- toward whichever end is higher on the screen for a positive scroll.
+function slidePivot(clicks)
+  local vn = target
+  local b = craft.b
+  if not (b and vn and vn.valid) then return end
+  local _, ex, ey, ez = craft_basis(vn)
+  local ax = (b.axis == "x" and ex) or (b.axis == "z" and ez) or ey
+  local f = vec3(fwd_x, fwd_y, fwd_z)
+  local sup = f:cross(last_up):cross(f)
+  local sign = (sup:length() > 1e-6 and ax:dot(sup) < 0) and -1 or 1
+  local len = (b.axis == "x" and b.size.x) or (b.axis == "z" and b.size.z) or b.size.y
+  local step = math.max(0.5, len * 0.08)
+  local p = slideAlongAxis(b, b.centre + craft.off, clicks * step * sign)
+  craft.off = p - b.centre
+end
+
+function resetPivot()
+  craft.off = vec3(0, 0, 0)
+  say("Pivot: middle of the craft")
+end
+
+function setCamMode(m)
+  if not CAM_MODE_NAMES[m] then return end
+  camMode = m
+  craft.lock = nil
+  say("Camera: " .. CAM_MODE_NAMES[m])
+end
+
+function cycleCamMode()
+  for i, m in ipairs(CAM_MODES) do
+    if m == camMode then setCamMode(CAM_MODES[i % #CAM_MODES + 1]) return camMode end
+  end
+  setCamMode("auto")
+  return camMode
+end
+
+function setPhotoOrbit(on)
+  photoOrbit = on == true
+  say(photoOrbit and "Photo orbit — F6 or Esc to stop" or "Photo orbit off")
+end
+
+-- Is the craft somewhere a chase view makes sense: in a world's air, or near
+-- its ground? Checked twice a second.
+local function craft_in_air(p)
+  if time - craft.air_t < 0.5 then return craft.air end
+  craft.air_t = time
+  craft.air = false
+  local d = space and space.dominant and space.dominant(p.x, p.y, p.z)
+  local b = d and space.body(d)
+  if not b then return false end
+  local alt = (p - vec3(b.x, b.y, b.z)):length() - (b.radius or 0)
+  local w = save.get("world." .. d)
+  local top = 0
+  if w and (w.atmo or 0) > 0.01 then
+    top = w.atmoHeight or 0
+    if top <= 0 then top = (b.radius or 100) * 0.35 end
+  end
+  craft.air = alt < math.max(top, 1500.0)
+  return craft.air
+end
+
+-- The craft's velocity over the world it is in. A node's velocity is already
+-- that (a craft clamped to the pad reads 0 while its planet runs along its
+-- rails at 240 m/s), so the body's own is NOT taken off: doing so swung the
+-- chase round to follow the planet's orbit.
+local function craft_vel(vn)
+  return vec3(vn.vx or 0, vn.vy or 0, vn.vz or 0)
+end
+
+-- How far the craft has turned about `up` since the last frame (radians),
+-- read off whichever of its axes lies flattest (a rocket standing on its
+-- tail turns about its own long axis; its side does the telling).
+local function craft_yaw_step(ex, ey, ez, up)
+  local now = { ex, ey, ez }
+  local prev = craft.axes
+  craft.axes = now
+  if not prev then return 0.0 end
+  local best, bl = nil, 0.3
+  for i = 1, 3 do
+    local l = 1 - now[i]:dot(up) ^ 2
+    if l > bl then best, bl = i, l end
+  end
+  if not best then return 0.0 end
+  local a = prev[best] - up * prev[best]:dot(up)
+  local b = now[best] - up * now[best]:dot(up)
+  if a:length() < 0.3 or b:length() < 0.3 then return 0.0 end
+  return math.atan2(a:cross(b):dot(up), a:dot(b))
 end
 
 local function place_camera(node, dt)
@@ -551,11 +862,20 @@ local function place_camera(node, dt)
     local tb = script_ref("tool_belt")
     if tb and tb.wantsScroll == true and not piloting then dz = 0.0 end
   end
-  local maxd = piloting and math.max(params.max_distance, 40.0) or params.max_distance
-  -- Flying: never zoom INSIDE the hull (the ship visual spans ~2 units). One
-  -- more click in from the closest orbit is the pilot's seat (as on foot, one
-  -- click past the closest orbit is the eyes), and one click out leaves it.
-  local mind = piloting and math.max(params.min_distance, 5.0) or params.min_distance
+  local maxd, mind = params.max_distance, params.min_distance
+  -- Flying: the range comes from the craft's size (`zoomRange`), and a click
+  -- is a FACTOR, so the wheel crosses a 130 m range as quickly as a 14 m one.
+  -- One more click in from the closest orbit is the pilot's seat (as on foot,
+  -- one click past the closest orbit is the eyes), and one click out leaves it.
+  -- ALT + the wheel slides the pivot along the craft instead.
+  if piloting then
+    local _
+    _, mind, maxd = craft_update(vessel, vessel.node, swapped)
+    if dz ~= 0 and not cockpit and not blocked and input.key("alt") then
+      slidePivot(dz / math.max(params.zoom_speed, 1e-3))
+      dz = 0.0
+    end
+  end
   if cockpit and not piloting then setCockpit(false) end
   if piloting then
     firstPerson = false
@@ -567,10 +887,15 @@ local function place_camera(node, dt)
     elseif dz > 0.01 and params.distance <= mind + 0.001 then
       setCockpit(true, vessel)
     else
-      params.distance = math.clamp(params.distance - dz, mind, maxd)
+      if math.abs(dz) > 0.01 then craft.zoomed = true end
+      params.distance = math.clamp(params.distance * ZOOM_STEP ^ (-dz), mind, maxd)
     end
     if not blocked and input.pressed("v") then setCockpit(not cockpit, vessel) end
     if cockpit and not blocked and input.pressed("escape") then setCockpit(false) end
+    if not blocked and not cockpit then
+      if input.pressed("c") then cycleCamMode() end
+      if input.pressed("home") then resetPivot() end
+    end
     if cockpit and seat_view(node, dt, blocked) then return end
   elseif firstPerson then
     if dz < -0.01 then
@@ -595,6 +920,17 @@ local function place_camera(node, dt)
     firstPerson = false
     params.distance = mind
     clip_back = nil
+  end
+  -- PHOTO ORBIT (F6). Not in first person or the seat: there is nothing to
+  -- circle. Esc stops it before it opens anything (see `escTakenAt`).
+  if not blocked and not cockpit and input.pressed("f6") then
+    if firstPerson then firstPerson = false; params.distance = mind; clip_back = nil end
+    setPhotoOrbit(not photoOrbit)
+  end
+  if photoOrbit and (cockpit or firstPerson) then photoOrbit = false end
+  if photoOrbit and not blocked and input.pressed("escape") then
+    setPhotoOrbit(false)
+    escTakenAt = time
   end
 
   -- Desired local up: out from the centre of the subject's world (see
@@ -621,6 +957,24 @@ local function place_camera(node, dt)
   placed_t, placed_rel, placed_body = time, rel, rel_body
   local up = cup
 
+  -- CHASE, LOCKED TO THE CRAFT: the view's up and heading are held in the
+  -- craft's own frame, captured from the view as it is when the mode starts
+  -- (so nothing jumps), and carried round with the craft. Leaving the mode,
+  -- the up eases back to the world's at the usual rate.
+  local ex, ey, ez
+  if piloting then
+    local _o
+    _o, ex, ey, ez = craft_basis(target)
+  end
+  if piloting and camMode == "chase" then
+    if not craft.lock then
+      craft.lock = { up = to_local(up, ex, ey, ez), ref = to_local(ref, ex, ey, ez) }
+    end
+    up = to_world(craft.lock.up, ex, ey, ez):normalized()
+    cup = up
+    ref = to_world(craft.lock.ref, ex, ey, ez)
+  end
+
   -- Parallel-transport the yaw reference: project the previous reference onto
   -- the new tangent plane. Walking around the planet turns the frame WITH the
   -- surface, so the camera never rolls wildly or flips at the equator.
@@ -631,6 +985,30 @@ local function place_camera(node, dt)
     if ref:length() == 0 then ref = up:cross(vec3(0, 0, 1)):normalized() end
   end
 
+  -- LOCKED TO THE HORIZON: the view turns as the craft yaws. (The step is
+  -- measured every frame, so the mode starts without a jump.)
+  if piloting then
+    local yaw = craft_yaw_step(ex, ey, ez, up)
+    if camMode == "horizon" and math.abs(yaw) < 1.0 then ref = ref:rotatedAround(up, yaw) end
+  end
+  -- AUTO: in the air and moving, the orbit swings round behind the way the
+  -- craft is going — gently, faster the faster it goes, and not for a moment
+  -- after you have turned the view yourself.
+  if piloting and camMode == "auto" and not photoOrbit and time - craft.look_t > 1.5
+    and craft_in_air(target.pos) then
+    local v = craft_vel(target)
+    local hv = v - up * v:dot(up)
+    local hs = hv:length()
+    if hs > 3.0 then
+      local dir = hv * (1 / hs)
+      local ang = math.atan2(ref:cross(dir):dot(up), ref:dot(dir))
+      if math.abs(ang) < math.rad(120) then
+        ref = ref:rotatedAround(up, ang * (1 - math.exp(-1.5 * math.min(1, hs / 15) * dt)))
+      end
+    end
+  end
+  if photoOrbit then ref = ref:rotatedAround(up, PHOTO_ORBIT_RATE * dt) end
+
   -- Mouse steers while looking (RMB / shift lock); yaw rotates the reference
   -- around up (Rodrigues, u ⊥ r so it's just cos/sin), pitch is clamped.
   --
@@ -640,10 +1018,17 @@ local function place_camera(node, dt)
   -- hold a button to move is a view you are fighting. The one exception is a
   -- panel — the depot's Sell button needs a pointer, and a grabbed mouse has
   -- none, so the panels take the cursor back for as long as they are up.
-  local looking = (not blocked) and (firstPerson or shiftlock or input.button(1))
+  -- Flying, the MIDDLE button held slides the pivot over the craft instead
+  -- (`panPivot`): drag up and the view climbs the stack.
+  local panning = piloting and not blocked and input.button(2) == true
+  local looking = (not blocked) and (firstPerson or shiftlock or input.button(1) or panning)
   input.setMouseLocked(looking)
   mouseLooking = looking
-  if looking then
+  last_up = up
+  if panning then
+    local dx, dy = input.mouse_delta()
+    if (dx or 0) ~= 0 or (dy or 0) ~= 0 then panPivot(dx or 0, dy or 0) end
+  elseif looking then
     local dx, dy = input.mouse_delta()
     -- The player's sensitivity and invert-Y (Settings ▸ Camera, settings.lua).
     local st = script_ref("settings")
@@ -653,13 +1038,17 @@ local function place_camera(node, dt)
     -- is the whole reason this camera exists.
     ref = ref:rotatedAround(up, -dx * sens)
     pitch = math.clamp(pitch - dy * sens, -PITCH_LIMIT, PITCH_LIMIT)
+    if (dx or 0) ~= 0 or (dy or 0) ~= 0 then craft.look_t = time end
+  end
+  if piloting and camMode == "chase" and craft.lock then
+    craft.lock.ref = to_local(ref, ex, ey, ez)
   end
 
   -- FOLLOW. Walking without holding the view, the orbit drifts round behind
   -- where you are going, so a long walk sideways turns into a walk away from
   -- the camera instead of a circle round it. Never while you back toward the
   -- camera — following that would spin the view round to face you.
-  if not looking and not piloting and params.follow_yaw > 0 then
+  if not looking and not piloting and not photoOrbit and params.follow_yaw > 0 then
     local vel = vec3(target.vx or 0, target.vy or 0, target.vz or 0)
     local tv = vel - up * vel:dot(up)
     local sp = tv:length()
@@ -696,11 +1085,14 @@ local function place_camera(node, dt)
   -- pass it sits exactly on the ship this frame draws — a fixedUpdate world
   -- position lags the rails carry (offset + jitter), and a gravity-up height
   -- guess slides off the hull the moment the vessel pitches.
+  --
+  -- The craft's pivot (see `craftBounds`) is in the craft's frame for the same
+  -- reason: the middle of the craft by default, wherever you slid it after.
   local head
-  if piloting and vessel and vessel.podLY and target then
+  if piloting and vessel and target and craft.b then
     -- `toWorld` composes the vessel's own rotation for us — the nine-term
     -- YXZ expansion this used to spell out by hand.
-    head = target:toWorld(vec3(vessel.podLX or 0, vessel.podLY, vessel.podLZ or 0))
+    head = target:toWorld(craft_pivot(dt))
   else
     -- Third person orbits a point at chest height; first person sits at the
     -- EYES, which is higher. Pivoting first person around the chest is what
@@ -842,6 +1234,17 @@ function lateUpdate(node, dt)
     -- the free camera placed the view itself
   else
     place_camera(node, dt)
+  end
+  -- The camera mode / pivot line, for a couple of seconds after a change
+  -- (never in cinematic mode: that is for pictures).
+  if mode_msg and time - mode_msg_t < 2.2 and not cinematic and draw and draw.text
+    and camera and camera.screenSize then
+    local sw, sh = camera.screenSize()
+    if sw and sh then
+      local k = sh / 1080
+      local a = math.min(1.0, (2.2 - (time - mode_msg_t)) * 2.5) * 0.92
+      draw.text(sw * 0.5, sh * 0.14, mode_msg, 22 * k, 0.92, 0.89, 0.81, a, "center")
+    end
   end
   if not atmo_ref or not atmo_ref.valid then atmo_ref = findScript("atmosphere") end
   if atmo_ref and atmo_ref.valid and atmo_ref.follow then atmo_ref.follow(dt) end
@@ -1086,5 +1489,7 @@ function setFreecam(on)
   elseif not on and freecam then freecam_leave() end
 end
 function freecamState() return fc end
+-- T, for a probe: freeze time (only while the free camera flies, as the key).
+function setTimeFreeze(on) if freecam then set_freeze(on == true) end end
 -- The shutter, for a probe (F12 is the player's).
 function takeScreenshot() screenshot() end
