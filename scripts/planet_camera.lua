@@ -338,6 +338,8 @@ local seat_yaw, seat_pitch = 0.0, -0.08
 local function find_seat(vessel)
   local vn = vessel and vessel.node
   if not (vn and vn.valid and vn.children) then return nil end
+  -- Riding an open Command Seat: there is no cabin to look out of.
+  if vessel.podSeat then return nil end
   local best, bd = nil, nil
   for _, c in ipairs(vn:children()) do
     for _, g in ipairs(c:children()) do

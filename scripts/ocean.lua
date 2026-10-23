@@ -51,6 +51,21 @@ end
 
 local function len(x, y, z) return math.sqrt(x * x + y * y + z * z) end
 
+-- Is the crew ON FOOT (aboard no craft)? vessel_controller's `crewOnFoot` says
+-- so; `astronaut.visible` used to stand in for it, and stopped meaning it once
+-- the camera hid the body in first person and an open Command Seat kept its
+-- rider in view (a rider driving through a ford splashed as if swimming). Any
+-- controller answers for every craft; with none in the scene, nobody is aboard.
+local vc_ref, vc_t = nil, -10.0
+local function crew_on_foot()
+  if not (vc_ref and vc_ref.valid) and time - vc_t > 0.5 then
+    vc_t = time
+    vc_ref = findScript("vessel_controller")
+  end
+  if vc_ref and vc_ref.valid and vc_ref.crewOnFoot then return vc_ref.crewOnFoot() == true end
+  return true
+end
+
 local function resolve(node)
   if body and body.valid then return true end
   body = node.parent
@@ -237,7 +252,7 @@ function update(node, dt)
 
   -- The crew hitting the water.
   local a = find("Astronaut")
-  if a and a.visible ~= false then
+  if a and crew_on_foot() then
     local ax, ay, az = a.x - body.x, a.y - body.y, a.z - body.z
     local al = len(ax, ay, az)
     local depth = R - al

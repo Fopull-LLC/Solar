@@ -247,7 +247,9 @@ function survey()
   if v then
     -- `hasFlown` is false only for a craft rolled out this session that has
     -- not yet left the pad; anything else got where it is by flying.
-    if v.hasFlown == false then
+    -- A rover driven off its spot (`leftPad`) is past the pad even though
+    -- it never flew.
+    if v.hasFlown == false and v.leftPad ~= true then
       local t = v.tele
       return { v = v, mode = "prelaunch", clamped = t == nil or t.anchored,
                ready = t ~= nil and t.ready }
@@ -401,7 +403,7 @@ function abortQuote()
   local v = piloted()
   if v then
     -- Never flown: you are standing on your own pad. F gets you out.
-    if v.hasFlown == false then return nil end
+    if v.hasFlown == false and v.leftPad ~= true then return nil end
     -- A probe flown from the ground has no crew to fetch: [ ] goes back to them.
     if v.crewAboard == false then return nil end
     local d = craft_distance(v)
@@ -486,6 +488,7 @@ local fleet_live = {}      -- node id → fid, for craft alive in this scene
 local fleet_born = {}      -- node id → when we rebuilt it (its controller starts later)
 local fleet_t = -100
 local restore = nil        -- fid → { tries, wait } while rebuilding
+restore_t0 = nil           -- when this scene's restore began (bounds the wait for the base)
 
 local function fleet()
   local f = save.get(FLEET_KEY)
@@ -510,7 +513,7 @@ local function describe_craft(v)
     local fp = v.fleetParts()
     if fp then
       man = { name = n.name, parts = {}, fuel = fp.fuel, charge = fp.charge, groups = fp.groups,
-              probe = fp.probe, crew = fp.crew }
+              probe = fp.probe, crew = fp.crew, station = fp.station, flown = fp.flown }
       for i, d in ipairs(fp.parts) do man.parts[i] = { rec = d } end
     end
   else
@@ -590,6 +593,8 @@ local function describe_craft(v)
     landed = landed and true or false, splashed = splashed or nil,
     fuel = man.fuel or 0, charge = man.charge or 0,
     groups = dcopy(man.groups), probe = man.probe == true, crew = man.crew == true,
+    -- the crew position they sit in (a pod or a seat), and whether it ever flew
+    station = man.station, flown = man.flown ~= false,
     stime = space.time and space.time() or 0,
     pod = (function()
       for _, r in ipairs(recs) do if r.kind == "crewed" or r.id == "pod" then return true end end
@@ -610,7 +615,11 @@ function fleetSync()
     local n = v.node
     -- (a lost craft — its pod gone — is a wreck, not a craft to fly or recover;
     -- `v.destroyed` is the controller's local and always read nil)
-    if n and n.valid and v.hasFlown ~= false and not (v.isLost and v.isLost()) then
+    -- A craft is kept once it has LEFT ITS LAUNCH SPOT (`leftPad`: the clamps
+    -- let go, or it moved off), not only once it has flown: a rover never
+    -- leaves the ground, so `hasFlown` alone dropped every rover driven off the
+    -- pad from the save. Only a rollout still standing in its clamps is skipped.
+    if n and n.valid and (v.hasFlown ~= false or v.leftPad == true) and not (v.isLost and v.isLost()) then
       local fid = fleet_live[n.id]
       local rec = describe_craft(v)
       if rec then
@@ -689,6 +698,26 @@ local function refit_chutes(list)
   end
 end
 
+-- The surface a landed craft stood on, under its record's base point (world
+-- wx, wy, wz; u = the body's up there): the pad's deck, a hardstand, a roof or
+-- the ground — whatever is THERE, static colliders and meshes as well as the
+-- terrain (raycast answers all of them). Rays come down from 40 m up; a hit
+-- more than 1.5 m above the record (a service tower's arm, a mast, a roof the
+-- craft was parked beside) is something overhead, so the next ray starts just
+-- under it. The first surface at or below the record's height + 1.5 m wins.
+-- Global so tests and probes can ask it.
+function landing_surface(wx, wy, wz, ux, uy, uz)
+  local ox, oy, oz = wx + ux * 40, wy + uy * 40, wz + uz * 40
+  for _ = 1, 8 do
+    local hit = raycast(ox, oy, oz, -ux, -uy, -uz, 160.0)
+    if not hit then return nil end
+    local above = (hit.x - wx) * ux + (hit.y - wy) * uy + (hit.z - wz) * uz
+    if above <= 1.5 then return hit end
+    ox, oy, oz = hit.x - ux * 0.05, hit.y - uy * 0.05, hit.z - uz * 0.05
+  end
+  return nil
+end
+
 -- Rebuild one record as a live craft. Returns true once the spawn is under way.
 local function respawn(fid, rec)
   local b = space.body(rec.body)
@@ -703,15 +732,28 @@ local function respawn(fid, rec)
     if ul < 1e-3 then return false end
     ux, uy, uz = ux / ul, uy / ul, uz / ul
     if terrain and terrain.warm then terrain.warm(rec.body) end
-    local hit = raycast(wx + ux * 40, wy + uy * 40, wz + uz * 40, -ux, -uy, -uz, 120.0)
+    -- A craft left at the base stands on what the base built (the pad's
+    -- deck, an apron): wait for the base to be standing before looking for
+    -- it, or the ray finds the bare ground under the pad and the craft is
+    -- rebuilt INSIDE the pad when it goes up round it. (Bounded: a base that
+    -- never finishes doesn't hold the fleet back for good.)
+    local bf = ref("base_facilities")
+    if bf and not bf.sited and (restore_t0 or 0) > 0 and time - restore_t0 < 30.0 then
+      local bx, by, bz = save.get("base.x"), save.get("base.y"), save.get("base.z")
+      if save.get("base.body") == rec.body and bx
+        and len(rec.x - bx, rec.y - by, rec.z - bz) < (bf.FOOTPRINT_RADIUS or 175.0) + 50.0 then
+        return false
+      end
+    end
+    local hit = landing_surface(wx, wy, wz, ux, uy, uz)
     if not hit then return false end
-    -- Set down a hand's width above where it stood, on the ground as it is
+    -- Set down a hand's width above where it stood, on the surface as it is
     -- NOW. The record's height and the streamed ground can disagree by metres;
     -- a craft left hanging is frozen in the air by the distant-craft LOD and
     -- drops when it wakes (a crew sent to it found a wreck), and a buried one
     -- is thrown out of the ground.
     local above = (wx - hit.x) * ux + (wy - hit.y) * uy + (wz - hit.z) * uz
-    if math.abs(above) > 1.0 then
+    if above > 1.0 or above < -0.05 then
       wx, wy, wz = wx - ux * above, wy - uy * above, wz - uz * above
     end
     wx, wy, wz = wx + ux * 0.25, wy + uy * 0.25, wz + uz * 0.25
@@ -745,7 +787,7 @@ local function respawn(fid, rec)
     -- and spun up, because the centre of mass moved under it.
     save.set("dock.handoff." .. tostring(v.id or 0),
       { parts = rec.parts, fuel = rec.fuel, charge = rec.charge, lockout = 2.0, groups = rec.groups,
-        crew = rec.crew, name = rec.name,
+        crew = rec.crew, name = rec.name, station = rec.station, flown = rec.flown,
         vel = (not rec.landed) and { x = fvx, y = fvy, z = fvz } or nil })
     for _, d in ipairs(rec.parts) do
       local px = wx + rx[1] * d.x + up[1] * d.y + rz[1] * d.z
@@ -779,6 +821,7 @@ local function fleet_restore()
   if (save.get("shipyard.pilot") or 0) == 1 or (save.get("shipyard.launch") or 0) == 1 then return end
   if not restore then
     restore = {}
+    restore_t0 = time
     local alive = {}
     for _, fid in pairs(fleet_live) do alive[fid] = true end
     for fid, rec in pairs(fleet()) do
@@ -803,6 +846,9 @@ local function fleet_restore()
     end
   end
 end
+
+-- One restore pass (update runs it every frame); global for tests and probes.
+function fleetRestore() fleet_restore() end
 
 -- Does this craft have a live link home? (the comms.ships heartbeat a powered,
 -- deployed dish posts; vessel_controller's tracker_heartbeat)

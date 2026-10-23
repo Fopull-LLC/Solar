@@ -14,7 +14,9 @@
 --
 -- Nothing happens anywhere else: in the builder the seat has no vessel above
 -- it, and in flight it acts only while the craft is crewed FROM this seat (the
--- vessel publishes podSeat and the command part's offset, podLX/Y/Z).
+-- vessel publishes podSeat and the crew position's offset, podLX/Y/Z: the
+-- station they boarded, which on a craft with a pod as well is not always the
+-- command part — vessel_controller `setStation`).
 --
 -- The numbers are the astronaut rig's (measured on foot under 0.117: hip
 -- joints 0.04 m below the capsule origin, knees 0.40 m below them, ankles 0.48

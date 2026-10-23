@@ -60,6 +60,23 @@ tele = nil
 -- any other way (a parked ship you walked up to) got where it is by flying.
 hasFlown = true
 flown = { air = 0.0, alt0 = nil }  -- the latch's own state (see fixedUpdate)
+-- Has this craft LEFT ITS LAUNCH SPOT: clamps released, or moved more than a
+-- few metres from where it rolled out? Not the same as `hasFlown`. A rover never
+-- leaves the ground, so it never "flies", but one driven off the pad is a craft
+-- somewhere in the world, and flight_ops' fleet record must keep it (a rover
+-- parked 100 m out used to be gone after a reload). A craft that arrived any
+-- other way (restored, undocked) has left it by definition.
+leftPad = true
+-- WHERE THE CREW SITS, apart from what COMMANDS the craft. `pod_uid` (below) is
+-- the command part: the keep-side of every staging cut, the part whose loss
+-- loses the craft, the rover's front. The crew can sit in any crewed part
+-- aboard (a pod, or an open Command Seat), whichever they climbed into: F
+-- boards the one nearest them. `crewSeats` lists every crewed part
+-- { uid, x, y, z, seat }; `stationUid` is the one they are in, or would be put
+-- in (the command pod by default). `pod`, `podSeat` and podLX/Y/Z describe that
+-- station, so the seat pose, the camera and the hatch ring follow it.
+crewSeats = {}
+stationUid = nil
 -- Peripheral state (published: damage tolerance + HUD read it).
 gear_deployed = true
 -- Current reentry-heating rate (dmg/s at the nose; published for the HUD).
@@ -536,6 +553,10 @@ local function load_bp(override)
   -- An OPEN SEAT (the builder's `seat`): its rider stays in view, seated
   -- (scripts/command_seat.lua poses them); a pod hides its crew.
   podSeat = podCrewed and (best_pod.seat or 0) == 1
+  -- Every place the crew can sit (see `crewSeats`); they start in the command
+  -- pod, which a real pod wins over a seat (the rank above).
+  stationUid = podCrewed and best_pod.uid or nil
+  rescanSeats(bp.parts)
   table.sort(decouplers, function(a, b) return a.y < b.y end)
   -- Build the ordered EVENT list: booster branches group into ring events by
   -- symmetry group (a lone radial decoupler is its own ring), axial cuts are
@@ -681,20 +702,77 @@ end
 -- does not. Measured raw, a crew member standing 2.4 m from a parked hull read
 -- 5.5 m away (a 4 m carry on Vever), so neither F nor the "F — board" prompt
 -- answered beside it. Carry the astronaut by the same lag first.
+--
+-- A craft with more than one crew position (a pod AND a Command Seat) answers
+-- the one NEAREST the astronaut: walk up to the seat and F sits you in it, walk
+-- to the pod's hatch and F climbs into the pod. Returns the distance and that
+-- station ({ uid, x, y, z, seat }; nil on a craft with no crewed part, when the
+-- distance is to the current `pod`). For a seat the reach is to the seat itself
+-- (an open seat has no ladder up the stack); for a pod, to the spine below it.
 local function board_dist(node, a, info)
-  local px, py, pz = pod_world(node, info)
   local sx, sy, sz = base_of(node, info) -- spine base (stack bottom)
   local ax, ay, az = a.x + (sx - node.x), a.y + (sy - node.y), a.z + (sz - node.z)
-  local dx, dy, dz = px - sx, py - sy, pz - sz
-  local len2 = dx * dx + dy * dy + dz * dz
-  local t = 0.0
-  if len2 > 1e-9 then
-    t = ((ax - sx) * dx + (ay - sy) * dy + (az - sz) * dz) / len2
-    t = math.max(0.0, math.min(1.0, t))
+  local rx, up, rz = basis(node)
+  local function to(lx, ly, lz, spine)
+    local px = sx + rx.x * lx + up.x * ly + rz.x * lz
+    local py = sy + rx.y * lx + up.y * ly + rz.y * lz
+    local pz = sz + rx.z * lx + up.z * ly + rz.z * lz
+    local dx, dy, dz = px - sx, py - sy, pz - sz
+    local len2 = dx * dx + dy * dy + dz * dz
+    local t = 1.0
+    if spine and len2 > 1e-9 then
+      t = ((ax - sx) * dx + (ay - sy) * dy + (az - sz) * dz) / len2
+      t = math.max(0.0, math.min(1.0, t))
+    end
+    local cx, cy, cz = sx + dx * t, sy + dy * t, sz + dz * t
+    return math.sqrt((ax - cx) ^ 2 + (ay - cy) ^ 2 + (az - cz) ^ 2)
   end
-  local cx, cy, cz = sx + dx * t, sy + dy * t, sz + dz * t
-  return math.sqrt((ax - cx) ^ 2 + (ay - cy) ^ 2 + (az - cz) ^ 2)
+  local best, bd = nil, nil
+  for _, st in ipairs(crewSeats) do
+    if not integ.gone[st.uid] and (part_hp[st.uid] or 1) > 0 then
+      local d = to(st.x, st.y, st.z, not st.seat)
+      if not bd or d < bd then best, bd = st, d end
+    end
+  end
+  if best then return bd, best end
+  return to(pod.x, pod.y, pod.z, true), nil
 end
+
+-- Rebuild `crewSeats` from a part list (the blueprint; after a docking, the
+-- merged craft). The current station stays if it is still aboard.
+function rescanSeats(parts)
+  crewSeats = {}
+  for _, d in pairs(parts or bp_by_uid) do
+    if d.kind == "crewed" then
+      crewSeats[#crewSeats + 1] = { uid = d.uid, x = d.x, y = d.y, z = d.z, seat = (d.seat or 0) == 1 }
+    end
+  end
+  table.sort(crewSeats, function(a, b) return a.uid < b.uid end)
+end
+
+-- Put the crew's place at this station (a crewSeats entry or its uid): the
+-- seated pose, the camera's centre, the hatch ring and the exit all follow.
+-- The COMMAND part (`pod_uid`) does not change. Returns true if it exists.
+function setStation(st)
+  if type(st) ~= "table" then
+    local uid = st
+    st = nil
+    for _, s in ipairs(crewSeats) do if s.uid == uid then st = s end end
+  end
+  if not st then return false end
+  stationUid = st.uid
+  pod = { x = st.x, y = st.y, z = st.z }
+  podSeat = st.seat == true
+  podLX, podLY, podLZ = st.x, st.y, st.z
+  focusHeight = st.y
+  return true
+end
+
+-- Where the crew sits (or would): the station's uid, and whether it is an open seat.
+function crewStation() return stationUid, podSeat end
+-- The COMMAND part's uid (staging keep-side, damage, the rover's front),
+-- whichever crew position the crew is in.
+function commandUid() return pod_uid end
 
 -- ── instruments (the scout ship's cluster, reused verbatim) ─────────────────
 local function set_hud(text)
@@ -712,6 +790,7 @@ end
 
 local prompt_last = nil
 local function set_prompt(text)
+  promptText = text   -- published (probes read what the prompt says)
   if not hud_prompt then hud_prompt = find("Vessel HUD") end
   if hud_prompt and text ~= prompt_last then
     hud_prompt.text = text
@@ -2458,6 +2537,7 @@ function fleetParts()
   local E = elib()
   return { parts = out, fuel = fuel, charge = elec.charge, pod = podCrewed == true,
            probe = elec.probePart ~= nil, crew = crewAboard == true,
+           station = stationUid, flown = hasFlown ~= false,
            groups = E and E.packGroups(ctlGroups) or nil }
 end
 
@@ -2652,6 +2732,7 @@ local function dock_absorb(node)
     end
   end
   if man.crew then crewAboard = true end
+  rescanSeats()
   -- The rescan pairs the seam for us: we just hung the module's port off ours
   -- in the tree, which is the same shape as a pair stacked in the VAB, so one
   -- rule covers both and there's no second place for latch state to go stale.
@@ -3277,6 +3358,48 @@ end
 -- Is this craft lost (its pod gone)? `destroyed` is a local, so a handle can't
 -- read it: flight_ops' fleet sync asks this instead.
 function isLost() return destroyed == true end
+
+-- WHERE THE CREW STEPS OUT: beside the crew position (px, py, pz, world), past
+-- the hull's widest reach, 0.4 m up — on the craft's right first, then its
+-- left, front, back and the diagonals, a metre further out on a second pass.
+-- The first spot where the crew's capsule (r 0.33, 2 m tall; its middle is
+-- tested) overlaps nothing but themselves wins: a crew put down INSIDE something (the pad's hardstand, a
+-- hold-down clamp, a building, another craft, this hull) is a body overlapping
+-- a collider, which the engine resolves by shoving it out — the "thrown 8 m on
+-- stepping out" report. Nothing clear anywhere: the first spot, as before.
+-- Global: fixedUpdate has no upvalue to spare.
+function exitSpot(node, info, px, py, pz)
+  local rx, up, rz = basis(node)
+  local reach = hullReach() + 0.6
+  if not astronaut or not astronaut.valid then astronaut = find("Astronaut") end
+  local s = 0.70710678
+  local dirs = { { 1, 0 }, { -1, 0 }, { 0, -1 }, { 0, 1 }, { s, -s }, { -s, -s }, { s, s }, { -s, s } }
+  local first = nil
+  for pass = 0, 1 do
+    local r = reach + pass * 1.0
+    for _, d in ipairs(dirs) do
+      local ox, oz = d[1] * r, d[2] * r
+      local cx = px + rx.x * ox + rz.x * oz + up.x * 0.4
+      local cy = py + rx.y * ox + rz.y * oz + up.y * 0.4
+      local cz = pz + rx.z * ox + rz.z * oz + up.z * 0.4
+      first = first or { cx, cy, cz }
+      if not overlapSphere then return cx, cy, cz end
+      local clear = true
+      -- (the capsule's middle 1.3 m: its feet may touch the ground they land on)
+      for _, k in ipairs({ -0.32, 0.32 }) do
+        local hits = overlapSphere(vec3(cx + up.x * k, cy + up.y * k, cz + up.z * k), 0.33,
+          astronaut and { ignore = astronaut } or nil)
+        for _, h in ipairs(hits or {}) do
+          if not (astronaut and h.node and h.node.id == astronaut.id) then clear = false break end
+        end
+        if not clear then break end
+      end
+      if clear then return cx, cy, cz end
+    end
+  end
+  log("vessel: no clear spot to step out on — out on the right as before")
+  return first[1], first[2], first[3]
+end
 
 function standDown(node, x, y, z, vx, vy, vz)
   piloting = false
@@ -4112,6 +4235,11 @@ function start(node)
     -- The crew was in this seat when the game was saved: they still are, and
     -- they're flying it (the boarding handoff seats them on the first tick).
     if handoff.crew and podCrewed then boarding = true end
+    -- ...in the crew position they were sitting in (a pod, or the seat).
+    if handoff.station then setStation(handoff.station) end
+    -- A craft saved before it ever flew (released on the pad, a rover driven
+    -- off it) is still one that hasn't: no recovery refund for a launch.
+    if handoff.flown == false then hasFlown = false end
     log(string.format("%s: undocked module online (%d parts, %.0f fuel)",
       node.name or "vessel", part_total, fuel))
   else
@@ -4133,6 +4261,7 @@ function start(node)
     boarding = true
     launch_mode = true
     hasFlown = false
+    leftPad = false
   end
 end
 
@@ -4288,10 +4417,11 @@ function boardNow(node, info)
   if destroyed or not (node and node.valid) then return false end
   info = info or assembly.info(node)
   if not astronaut or not astronaut.valid then astronaut = find("Astronaut") end
-  if not (podCrewed and not crewAboard and astronaut
-          and board_dist(node, astronaut, info) <= params.board_range and crewOnFoot(node.id)) then
-    return false
-  end
+  if not (podCrewed and not crewAboard and astronaut and crewOnFoot(node.id)) then return false end
+  -- The crew position NEAREST them: the seat they walked up to, or the pod.
+  local d, st = board_dist(node, astronaut, info)
+  if d > params.board_range then return false end
+  if st then setStation(st) end
   -- Climbing in takes the controls from whatever you were flying.
   for _, ov in ipairs(findScripts("vessel_controller")) do
     if ov.releaseControl and ov.node and ov.node.id ~= node.id then ov.releaseControl() end
@@ -4373,6 +4503,7 @@ function releaseClamps()
   -- The crew must already be a passenger when the hull starts to move.
   if piloting then seatCrew(node, true) end
   released = true
+  leftPad = true   -- off the clamps: a craft in the world (the fleet keeps it)
   integ.release_t, integ.prev, integ.af = time, nil, nil
   assembly.setAnchored(node, false)
   r2Rollout(node, info)
@@ -6586,22 +6717,10 @@ local function claw_tick(node, info, dt)
         log(string.format("claw: gripped %s at %.2f m", target and "a craft" or "the ground", hit.distance or 0))
       end
     elseif c.gripped and time - (c.grip_t or 0) > 0.5 and not info.gripped then
-      local v = info.vel
-      local spd = math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z)
+      -- torn loose (past its hold)
       c.gripped = false
-      if spd < 1.0 and (c.regrips or 0) < 30 then
-        -- Let go while sitting still: not torn loose. On 0.117.0-rc3 a grip
-        -- on the ground lets go when the terrain under it is re-meshed (the
-        -- chunk collider it held is replaced as the world streams in round a
-        -- craft that has just arrived); the claw, still armed, bites again
-        -- on the next tick.
-        c.regrips = (c.regrips or 0) + 1
-        log("claw: the ground under it changed — biting again")
-      else
-        -- torn loose (past its hold)
-        st.armed = false
-        caption("the claw is torn loose")
-      end
+      st.armed = false
+      caption("the claw is torn loose")
     end
   end
 end
@@ -7024,12 +7143,10 @@ function fixedUpdate(node, dt)
       -- Out past the hull's widest reach on that side, never inside it: a crew
       -- capsule stepping out INTO a side booster is a body overlapping the
       -- hull, which the engine resolves as a collision (the launch fling).
-      local reach = hullReach() + 0.6
-      standDown(node,
-        px + rx.x * reach + up.x * 0.4,
-        py + rx.y * reach + up.y * 0.4,
-        pz + rx.z * reach + up.z * 0.4,
-        v and v.x, v and v.y, v and v.z)
+      -- ...and never into anything else either (exitSpot tries the sides in
+      -- turn for one clear of the pad, its clamps, a wall or the hull).
+      local ex, ey, ez = exitSpot(node, info, px, py, pz)
+      standDown(node, ex, ey, ez, v and v.x, v and v.y, v and v.z)
     else
       boardNow(node, info)
     end
@@ -7060,9 +7177,11 @@ function fixedUpdate(node, dt)
     -- (The hatch RING is drawn in lateUpdate — the camera pass — where the
     -- node pose matches what this frame renders; drawing it here put it a
     -- rails-carry beside the visible ship.)
-    if astronaut and podCrewed and not crewAboard
-      and board_dist(node, astronaut, info) <= params.board_range + 1.4 and crewOnFoot(node.id) then
-      set_prompt("F — board")
+    -- The prompt names the crew position F will put them in (the nearest).
+    local bd, bst = nil, nil
+    if astronaut and podCrewed and not crewAboard then bd, bst = board_dist(node, astronaut, info) end
+    if bd and bd <= params.board_range + 1.4 and crewOnFoot(node.id) then
+      set_prompt((bst and bst.seat) and "F — sit in the seat" or "F — board the pod")
     else
       set_prompt("")
     end
@@ -7577,6 +7696,14 @@ function fixedUpdate(node, dt)
     flown.alt0 = flown.alt0 or fr
     flown.air = (info.grounded or R2.onWheels) and 0.0 or (flown.air + dt)
     if flown.air >= 1.0 or fr - flown.alt0 > 5.0 then hasFlown = true end
+    -- Left the launch spot (see `leftPad`): more than 4 m from it, in the
+    -- body's frame (the planet moves on rails under us).
+    if fb and not leftPad then
+      local ox, oy, oz = bx - fb.x, by - fb.y, bz - fb.z
+      flown.p0 = flown.p0 or { ox, oy, oz }
+      local q = flown.p0
+      if (ox - q[1]) ^ 2 + (oy - q[2]) ^ 2 + (oz - q[3]) ^ 2 > 16.0 then leftPad = true end
+    end
   end
 
   -- ---- telemetry (10 Hz) → `tele`, drawn by scripts/flight_hud.lua ---------
@@ -7715,13 +7842,23 @@ function lateUpdate(node, dt)
     if einfo then power_tick(node, einfo, dt) end
   end
   if piloting then dockGuides() end
+  -- A seat whose part has gone (shed, staged) can't hold its rider: they move
+  -- to the command pod if there is one (a lost pod loses the craft anyway).
+  if crewAboard and stationUid and stationUid ~= pod_uid
+    and (integ.gone[stationUid] or (part_hp[stationUid] or 1) <= 0) and pod_uid then
+    setStation(pod_uid)
+    if astronaut then astronaut.visible = podSeat == true end
+  end
   if piloting or crewAboard or not podCrewed or not astronaut then return end
   local info = assembly.info(node)
-  if board_dist(node, astronaut, info) > params.board_range + 1.4 then return end
+  local bd, st = board_dist(node, astronaut, info)
+  if bd > params.board_range + 1.4 then return end
   if not crewOnFoot(node.id) then return end
+  -- the ring marks the crew position F will board (the nearest one)
+  local q = st or pod
   local rx, up, rz = basis(node)
-  local px = node.x + rx.x * pod.x + up.x * pod.y + rz.x * pod.z
-  local py = node.y + rx.y * pod.x + up.y * pod.y + rz.y * pod.z
-  local pz = node.z + rx.z * pod.x + up.z * pod.y + rz.z * pod.z
+  local px = node.x + rx.x * q.x + up.x * q.y + rz.x * q.z
+  local py = node.y + rx.y * q.x + up.y * q.y + rz.y * q.z
+  local pz = node.z + rx.z * q.x + up.z * q.y + rz.z * q.z
   draw.ring(px, py, pz, up.x, up.y, up.z, 0.75, 0.3, 0.95, 1.0, 0.9)
 end

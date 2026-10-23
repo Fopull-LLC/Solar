@@ -639,9 +639,25 @@ function laserHit(impact, hit, power, hotness, focus)
 end
 
 -- ── swimming: bubbles under, wake on top ────────────────────────────────────
+-- Is the crew ON FOOT? vessel_controller's `crewOnFoot` (aboard no craft), not
+-- `astronaut.visible`: the camera hides the body in first person (no wake
+-- while swimming in first person) and an open Command Seat keeps its rider in
+-- view (a rover in a ford trailed swim bubbles). Any controller answers for
+-- every craft; with none in the scene, nobody is aboard.
+local onfoot = { ref = nil, t = -10.0 }
+local function crew_on_foot()
+  if not (onfoot.ref and onfoot.ref.valid) and time - onfoot.t > 0.5 then
+    onfoot.t = time
+    onfoot.ref = findScript("vessel_controller")
+  end
+  local r = onfoot.ref
+  if r and r.valid and r.crewOnFoot then return r.crewOnFoot() == true end
+  return true
+end
+
 local function swim_tick()
   local a = find("Astronaut")
-  if not (a and a.visible ~= false) then return end
+  if not (a and crew_on_foot()) then return end
   local name, b = body_at(a.x, a.y, a.z)
   if not b then return end
   if not (climate_ref and climate_ref.valid) then climate_ref = findScript("climate") end
