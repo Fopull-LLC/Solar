@@ -685,7 +685,17 @@ local G_REF = 7.0
 -- the contract, and well short of The High Road (3.7× the First Flight).
 HOP_MULT = 1.8
 HOP_MIN = 220.0
-RATING_VERSION = 2
+-- RATING VERSIONS. A save is rated once, at the version current then, and keeps
+-- it: its catalogue (and so every craft it builds) never changes under it.
+--   2  every engine the same in air and vacuum (REG's own thrust and ve)
+--   3  (2026-10-24) ENGINE NICHES: vacuum figures and a sea-level share per
+--      engine (parts_registry RATED / `nozzle`) — Sputter the lander, Anvil
+--      the upper stage, Skipper the lifter. A blueprint carries `asl`, and
+--      vessel_controller scales its thrust by the air it is flying in.
+-- A save rated at any version listed in RATING_KEEP keeps it; anything older
+-- (or unrated) is rated at RATING_VERSION.
+RATING_VERSION = 3
+RATING_KEEP = { [2] = true, [3] = true }
 local STARTER = { "pod", "chute", "tankS", "engineS" }
 
 function launchWorld()
@@ -711,7 +721,14 @@ end
 function orbitAlt(w)
   w = w or launchWorld()
   local body_r = w.r + math.max(w.r * 0.035, 4)
-  return 0.10 * math.max(1, w.soi - body_r)
+  local alt = 0.10 * math.max(1, w.soi - body_r)
+  -- …and never inside the air (missions.lua target_of): a deep-air world
+  -- (scale 4) has air up to a radius high.
+  local rec = w.name and save.get("world." .. w.name)
+  if type(rec) == "table" and (rec.atmo or 0) > 0.01 and (rec.atmoHeight or 0) * 1.08 > alt then
+    alt = rec.atmoHeight * 1.08
+  end
+  return alt
 end
 
 -- Δv to that orbit from the pad, FLOWN WELL: the ideal two-burn climb (a
@@ -776,14 +793,29 @@ function escapeSpeed(w)
   return math.sqrt(math.max(0, 2 * mu * (1 / w.r - 1 / w.soi)))
 end
 
--- The stock starter on the reference figures: wet mass, propellant, thrust, ve.
-function starter_numbers()
+-- An engine's reference figures at rating version v (parts_registry
+-- `engineAt`; REG's own for a version with none, or a registry without it).
+local function engine_at(d, v)
+  local R = registry()
+  if R and R.engineAt then
+    local f = R.engineAt(d, v)
+    if f then return f end
+  end
+  return { thrust = d.thrust, ve = d.ve or 160, asl = 1 }
+end
+
+-- The stock starter on the reference figures (VACUUM — the hop is solved in
+-- vacuum, exactly as before nozzles): wet mass, propellant, thrust, ve.
+function starter_numbers(v)
   local m0, mf, T, ve = 0.0, 0.0, 0.0, 0.0
   for _, id in ipairs(STARTER) do
     local d = REG[id]
     local f = (d.fuel or 0) * FUEL_T_PER_UNIT
     m0, mf = m0 + d.mass + f, mf + f
-    if d.thrust then T, ve = d.thrust, d.ve end
+    if d.thrust then
+      local e = engine_at(d, v or RATING_VERSION)
+      T, ve = e.thrust, e.ve
+    end
   end
   return m0, mf, T, ve
 end
@@ -799,12 +831,12 @@ function rating(w)
   if key == memo_key then return memo_val end
   local saved = w.name and save.get("parts.rating")
   local hit
-  if type(saved) == "table" and saved.name == w.name and saved.v == RATING_VERSION
+  if type(saved) == "table" and saved.name == w.name and RATING_KEEP[saved.v]
     and (saved.thrust or 0) > 0 and (saved.ve or 0) > 0 then
     hit = saved
   else
     local kT = w.g / G_REF
-    local m0, mf, T, ve = starter_numbers()
+    local m0, mf, T, ve = starter_numbers(RATING_VERSION)
     local target = hopTarget(w)
     local lo, hi = 0.05, 20.0
     for _ = 1, 48 do
@@ -820,8 +852,10 @@ function rating(w)
 end
 
 -- A part as this save builds it: the registry entry with thrust and ve built
--- for the home world, the burn rate that follows from them (units/s), and a
--- tank's propellant density. Everything else is REG's.
+-- for the home world at the save's rating version (VACUUM figures), its
+-- nozzle's sea-level share `asl` (version 3 on; nil = the same everywhere),
+-- the burn rate that follows (units/s), and a tank's propellant density.
+-- Everything else is REG's.
 local eff_cache = setmetatable({}, { __mode = "k" })
 function liveDef(id)
   local d = type(id) == "table" and id or REG[id]
@@ -829,17 +863,41 @@ function liveDef(id)
   if not (d.thrust or d.fuel) then return d end
   local k = rating()
   local c = eff_cache[d]
-  if c and c.kT == k.thrust and c.kV == k.ve then return c.def end
+  if c and c.kT == k.thrust and c.kV == k.ve and c.v == k.v then return c.def end
   local out = {}
   for key, v in pairs(d) do out[key] = v end
   if d.thrust then
-    out.thrust = d.thrust * k.thrust
-    out.ve = (d.ve or 160) * k.ve
+    local e = engine_at(d, k.v)
+    out.thrust = e.thrust * k.thrust
+    out.ve = (e.ve or 160) * k.ve
+    out.asl = (e.asl and e.asl < 1) and e.asl or nil
+    if e.desc then out.desc = e.desc end
     out.burn = out.thrust / (out.ve * FUEL_T_PER_UNIT)
   end
   if d.fuel then out.fuel_t = FUEL_T_PER_UNIT end
-  eff_cache[d] = { kT = k.thrust, kV = k.ve, def = out }
+  eff_cache[d] = { kT = k.thrust, kV = k.ve, v = k.v, def = out }
   return out
+end
+
+-- The air at the pad, as σ (density over reference sea level, aero.lua
+-- RHO0): the launch world's record (`world.<name>` atmo, as aero.lua `airAt`
+-- reads it at the datum), 1 until a base exists, 0 on an airless home.
+function padAir(w)
+  w = w or launchWorld()
+  local rec = w.name and save.get("world." .. w.name)
+  if type(rec) == "table" and rec.atmo ~= nil then
+    return (rec.atmo or 0) > 0.005 and (rec.atmo / 0.75) or 0.0
+  end
+  return 1.0
+end
+
+-- An engine's share of its vacuum thrust and ve in air σ (parts_registry
+-- `nozzle`; 1 for an engine with no asl).
+local function nozzle_k(asl, sigma)
+  local R = registry()
+  if R and R.nozzle then return R.nozzle(asl, sigma) end
+  if not asl then return 1.0 end
+  return math.max(0.05, 1 - (1 - asl) * math.max(0, sigma or 0))
 end
 
 -- Δv of a burn from m0 down to m1 tonnes on engines totalling `th` kN and
@@ -865,6 +923,10 @@ end
 function stageStats()
   local w = launchWorld()
   local U = FUEL_T_PER_UNIT
+  -- SEA LEVEL: the same burn in the pad's air (padAir), where a vacuum
+  -- nozzle gives less thrust and ve. `th`, `dv`, `twr` stay the VACUUM
+  -- figures; `th_sl`, `dv_sl`, `twr_sl` are the pad's.
+  local sig = padAir(w)
   local booster_uids = {}
   local n_boost = 0
   for uid, p in pairs(parts) do
@@ -875,7 +937,7 @@ function stageStats()
       for u in pairs(separation_of(uid)) do booster_uids[u] = true end
     end
   end
-  local out = { stages = {}, world = w, dv = 0.0 }
+  local out = { stages = {}, world = w, dv = 0.0, dv_sl = 0.0, air = sig }
   local cuts = {}
   for _, p in pairs(parts) do
     if p.def.decouple and not p.def.radial then cuts[#cuts + 1] = p.y end
@@ -885,7 +947,7 @@ function stageStats()
   for k = 0, #cuts do
     local lo = (k == 0) and -math.huge or cuts[k]
     local hi = cuts[k + 1] or math.huge
-    local s = { m = 0.0, th = 0.0, burn = 0.0, fu = 0 }
+    local s = { m = 0.0, th = 0.0, th_sl = 0.0, burn = 0.0, fu = 0 }
     for uid, p in pairs(parts) do
       if not booster_uids[uid] and p.y > lo + 0.01 then
         local d = liveDef(p.def)
@@ -894,6 +956,7 @@ function stageStats()
           s.fu = s.fu + (d.fuel or 0)
           if (d.thrust or 0) > 0 then
             s.th = s.th + d.thrust
+            s.th_sl = s.th_sl + d.thrust * nozzle_k(d.asl, sig)
             s.burn = s.burn + (d.burn or 0)
           end
         end
@@ -903,7 +966,7 @@ function stageStats()
     raw[k] = s
   end
   local s1 = raw[0]
-  local bm, bth, bburn, bfu = 0.0, 0.0, 0.0, 0
+  local bm, bth, bth_sl, bburn, bfu = 0.0, 0.0, 0.0, 0.0, 0
   if n_boost > 0 then
     for u in pairs(booster_uids) do
       local p = parts[u]
@@ -912,6 +975,7 @@ function stageStats()
         bm = bm + d.mass + (d.fuel or 0) * U
         bfu = bfu + (d.fuel or 0)
         bth = bth + (d.thrust or 0)
+        bth_sl = bth_sl + (d.thrust or 0) * nozzle_k(d.asl, sig)
         bburn = bburn + (d.burn or 0)
       end
     end
@@ -919,11 +983,15 @@ function stageStats()
     -- first (the flight drains the tanks that leave soonest first).
     local m0 = s1.m + bm
     local th, burn = bth + s1.th, bburn + s1.burn
+    local th_sl = bth_sl + s1.th_sl
     out.boosters = { n = n_boost, m = bm, th = bth, fu = bfu, m0 = m0,
                      dv = burn_dv(th, burn, m0, m0 - bfu * U),
                      twr = (th > 0) and th / (m0 * w.g) or 0,
+                     dv_sl = burn_dv(th_sl, burn, m0, m0 - bfu * U),
+                     twr_sl = (th_sl > 0) and th_sl / (m0 * w.g) or 0,
                      tb = (burn > 0) and bfu / burn or 0 }
     out.dv = out.dv + out.boosters.dv
+    out.dv_sl = out.dv_sl + out.boosters.dv_sl
     fu_all = fu_all + bfu
   end
   for k = 0, #cuts do
@@ -934,13 +1002,22 @@ function stageStats()
       local st = { k = k + 1, m = s.m, th = s.th, burn = s.burn, fu = s.fu,
                    dv = burn_dv(s.th, s.burn, s.m, s.m - s.fu * U),
                    twr = (s.m > 0 and s.th > 0) and s.th / (s.m * w.g) or 0,
+                   th_sl = s.th_sl,
+                   dv_sl = burn_dv(s.th_sl, s.burn, s.m, s.m - s.fu * U),
+                   twr_sl = (s.m > 0 and s.th_sl > 0) and s.th_sl / (s.m * w.g) or 0,
                    tb = (s.burn > 0) and s.fu / s.burn or 0 }
       out.stages[#out.stages + 1] = st
       out.dv = out.dv + st.dv
+      out.dv_sl = out.dv_sl + st.dv_sl
     end
   end
   local T, burn, m0 = s1.th + bth, s1.burn + bburn, s1.m + bm
   out.twr = (T > 0 and m0 > 0) and T / (m0 * w.g) or 0
+  -- lift-off is AT the pad: this is the TWR that says whether it leaves
+  local T_sl = s1.th_sl + bth_sl
+  out.twr_sl = (T_sl > 0 and m0 > 0) and T_sl / (m0 * w.g) or 0
+  -- any engine aboard that gives less at sea level than in vacuum
+  out.nozzles = math.abs(T_sl - T) > 1e-6 or math.abs(out.dv_sl - out.dv) > 1e-6
   -- Z + SPACE, straight up, never staging: stage 1's engines (and any boosters)
   -- burn the whole pool, upper stages' tanks included.
   if T > 0 and burn > 0 and fu_all > 0 then
@@ -959,17 +1036,26 @@ function stage_lines()
   local s = stageStats()
   local out = ""
   local function dv_s(v) return v > 0 and string.format("%.0f m/s", v) or "—" end
+  -- With a nozzle that cares about the air aboard, each figure reads SEA
+  -- LEVEL / VACUUM (the pad's air and space); otherwise just the one.
+  local both = s.nozzles
+  local function twr2(a, b) return both and string.format("%.2f / %.2f", a or 0, b or 0) or string.format("%.2f", b or 0) end
+  local function dv2(a, b)
+    if not both then return dv_s(b) end
+    return (b or 0) > 0 and string.format("%.0f / %.0f m/s", a or 0, b) or "—"
+  end
+  if both then out = out .. "\n(sea level / vacuum)" end
   if s.boosters then
     local b = s.boosters
-    out = out .. string.format("\nBOOSTERS ×%d:  TWR %.2f   Δv %s   burn %.1f s   %.2f t",
-      b.n, b.twr, dv_s(b.dv), b.tb, b.m)
+    out = out .. string.format("\nBOOSTERS ×%d:  TWR %s   Δv %s   burn %.1f s   %.2f t",
+      b.n, twr2(b.twr_sl, b.twr), dv2(b.dv_sl, b.dv), b.tb, b.m)
   end
   for _, st in ipairs(s.stages) do
-    out = out .. string.format("\nSTAGE %d:  TWR %.2f   Δv %s   burn %.1f s   %.2f t",
-      st.k, st.twr, dv_s(st.dv), st.tb, st.m)
+    out = out .. string.format("\nSTAGE %d:  TWR %s   Δv %s   burn %.1f s   %.2f t",
+      st.k, twr2(st.twr_sl, st.twr), dv2(st.dv_sl, st.dv), st.tb, st.m)
   end
   if #s.stages > 1 or s.boosters then
-    out = out .. string.format("\nTOTAL  Δv %s", dv_s(s.dv))
+    out = out .. string.format("\nTOTAL  Δv %s", dv2(s.dv_sl, s.dv))
   end
   -- What that Δv MEANS here. Δv alone misleads on a world this small: gravity
   -- eats a large share of a short, steep climb, so the starter's ~55 m/s peaks
@@ -983,7 +1069,8 @@ function stage_lines()
   -- if the craft can't leave the pad.
   local need = orbitNeed(w)
   local verdict
-  if (s.twr or 0) > 0 and s.twr < 1.0 then
+  local lift = s.nozzles and s.twr_sl or s.twr
+  if (lift or 0) > 0 and lift < 1.0 then
     verdict = "too heavy to lift off — add thrust or lose mass"
   elseif s.dv >= need * 1.6 then
     verdict = "orbit with plenty to spare"
@@ -1270,9 +1357,11 @@ function launchCheck()
     warn[#warn + 1] = "no engine — it will sit on the pad"
   else
     local s = stageStats()
-    if (s.twr or 0) > 0 and s.twr < 1.0 then
-      warn[#warn + 1] = string.format("TWR %.2f — too heavy to lift off %s", s.twr,
-        s.world.name or "this world")
+    -- lift-off happens in the pad's air: the sea-level TWR decides it
+    local lift = s.nozzles and s.twr_sl or s.twr
+    if (lift or 0) > 0 and lift < 1.0 then
+      warn[#warn + 1] = string.format("TWR %.2f%s — too heavy to lift off %s", lift,
+        s.nozzles and " at the pad" or "", s.world.name or "this world")
     end
     if s.hop == math.huge then
       warn[#warn + 1] = "full throttle straight up escapes " .. (s.world.name or "this world")
@@ -1431,6 +1520,10 @@ function refreshStatsNow()
   -- figure at the pad.
   local st = stageStats()
   local twr_s = ((st.twr or 0) > 0) and string.format("  ·  TWR %.2f", st.twr) or ""
+  -- (with air-sensitive nozzles aboard: the pad's TWR first, vacuum after)
+  if st.nozzles and (st.twr or 0) > 0 then
+    twr_s = string.format("  ·  TWR %.2f pad / %.2f vac", st.twr_sl or 0, st.twr)
+  end
   -- The build cost against the company's actual balance: you should be able to
   -- see you can't afford it WHILE you're adding the part, not after you press
   -- LAUNCH. Over budget turns the figure red-flagged rather than hiding it.
@@ -3825,6 +3918,9 @@ local function make_blueprint()
       -- flight gives the propellant its mass (absent = an older, massless build).
       thrust = d.thrust or 0, burn = d.burn or 0, fuel = d.fuel or 0,
       ve = d.ve or 0, fuel_t = d.fuel_t or 0,
+      -- the nozzle's sea-level share (rating version 3 on): vessel_controller
+      -- scales thrust by the air; absent = the same in air and vacuum
+      asl = d.asl,
       decouple = d.decouple and 1 or 0, legs = d.legs and 1 or 0,
       radial = d.radial and 1 or 0, chute = d.chute and 1 or 0,
       comms = d.comms and 1 or 0, aero = d.aero and 1 or 0,
@@ -6182,6 +6278,23 @@ function doLaunch()
     return false
   end
   launchArmedAt = nil
+  -- THE SITE MUST BE CLEAR. A craft left on the pad (or the runway), its
+  -- debris or the crew: the launch is refused here, before the hull is
+  -- charged, with what is in the way and what to do about it
+  -- (vessel_spawner.launchBlockedWhy; it checks again as it rolls out).
+  local vs = findScript and findScript("vessel_spawner") or nil
+  if vs and vs.valid ~= false and vs.launchBlockedWhy then
+    save_blueprint() -- (the check sizes the footprint from the craft on the stand)
+    local why = vs.launchBlockedWhy(launchSite())
+    if why then
+      -- a short placard so it is seen, the whole sentence on the hint bar
+      local kind = launchSite() == "runway" and "RUNWAY BLOCKED" or "PAD BLOCKED"
+      if placard then placard(kind, "error", 4.0) end
+      hint("can't launch — " .. why, 8.0)
+      ui("tool", 0.7)
+      return false
+    end
+  end
   -- The hull is BOUGHT at rollout. Crash it and that money is gone; bring it
   -- home and recover it and most of it comes back. That's the whole loop, and
   -- it only means anything if the pad refuses a build you can't pay for.
@@ -6323,6 +6436,7 @@ function stats()
   local out = {
     parts = n, mass = mass, dry = dry, cost = cost, thrust = thrust,
     dv = st and st.dv or 0, twr = st and st.twr or 0, hop = st and st.hop or 0,
+    dv_sl = st and st.dv_sl or 0, twr_sl = st and st.twr_sl or 0, nozzles = st and st.nozzles or false,
     stages = st and st.stages or {},
     com = (mass > 0) and { x = wx / mass, y = wy / mass, z = wz / mass } or nil,
     comDry = (dry > 0) and { x = dx / dry, y = dy / dry, z = dz / dry } or nil,

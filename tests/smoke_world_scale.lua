@@ -21,6 +21,9 @@
 --     (radius / voxel ≤ voxelSpan, never under 1.5 m or over voxelMax), caves
 --     capped and deferred, every length × 2.5 and µ × 6.25 against scale 2, the
 --     sphere of influence at 12 radii, relief layers on, spawn above the peaks;
+--   * a scale-4 roll is scale 3's system draw for draw under deeper air
+--     (0.70–1.00 radii, a published scale height), every orbit and moon's
+--     influence above it;
 --   * neighbour systems inherit home's scale.
 --
 --   luajit solar/tests/smoke_world_scale.lua
@@ -233,7 +236,9 @@ gm_store = { g_scale = 2, g_played = 4 }
 check(genv.worldScale() == 2, "…whatever else the save holds")
 gm_store = { g_scale = 3 }
 check(genv.worldScale() == 3, "…a scale-3 one too")
-check(env.CURRENT_SCALE == 3, "scale 3 is current")
+gm_store = { g_scale = 4 }
+check(genv.worldScale() == 4, "…and a scale-4 one")
+check(env.CURRENT_SCALE == 4, "scale 4 (deep air) is current")
 -- The menu creates saves at the same version the generator calls current.
 local menv = setmetatable({ save = { get = function() end, set = function() end } }, { __index = _G })
 local mchunk = assert(loadfile("solar/scripts/menu_newsave.lua"))
@@ -400,6 +405,102 @@ end
 check(np3 >= 16 and n3 > np3, string.format("scale 3 rolled %d planets and %d bodies", np3, n3))
 check(spawn_ok == 8, "the spawn radius clears the peaks on every seed")
 
+-- ── 3d. a scale-4 world: scale 3's bodies under deeper air ─────────────────
+-- Scale 4 changes the AIR and nothing else: the same seed rolls the same
+-- bodies, orbits, SOIs, moons, terrain and air density as scale 3, draw for
+-- draw; only each air world's top is mapped from the same draw (0.25–0.45
+-- radii) onto 0.70–1.00 radii (home 0.28–0.40 → 0.745–0.925), and the world
+-- record carries the density scale height. The physics of that air (plane
+-- ceilings, ascent Δv, re-entry) is tests/smoke_air_depth.lua.
+local S4 = env.SCALES[4]
+do
+  check(S4 and S4.airTop and S4.airScaleH, "scale 4 has an air band and a scale height")
+  local same_k = true
+  for k, v in pairs(S3) do if S4[k] ~= v then same_k = false end end
+  for k in pairs(S4) do if S3[k] == nil and k ~= "airTop" and k ~= "airScaleH" then same_k = false end end
+  check(same_k, "scale 4 is scale 3's table plus the air")
+  local function snap()
+    local out = {}
+    for _, n in ipairs(nodes) do
+      if n.valid and n.gen and n.cel then
+        out[#out + 1] = { name = n.name, n = n }
+      end
+    end
+    return out
+  end
+  local n_air, n4, worst_top = 0, 0, 0
+  for _, seed in ipairs({ 1911564384, 31337, 424242, 777001, 99, 1902723835, 7, 23, 5150, 8675309 }) do
+    nodes = {}
+    regen(seed, {}, 3)
+    local a3, home3 = snap(), store["system.home"]
+    local rec3 = {}
+    for _, b in ipairs(a3) do rec3[b.name] = store["world." .. b.name] end
+    nodes = {}
+    regen(seed, {}, 4)
+    local a4, home4 = snap(), store["system.home"]
+    check(env.scaleVersion == 4 and env.scale == S4 and home4.scale == 4, seed .. ": the generator publishes scale 4")
+    check(#a3 == #a4 and #a4 > 2, string.format("seed %d: the same %d bodies at scales 3 and 4", seed, #a4))
+    for i, b in ipairs(a4) do
+      local o4, c4 = b.n.gen, b.n.cel
+      local p3 = a3[i] and a3[i].n
+      local o3, c3 = p3 and p3.gen, p3 and p3.cel
+      n4 = n4 + 1
+      check(p3 and p3.name == b.name and o3.radius == o4.radius and o3.seed == o4.seed and o3.voxel == o4.voxel
+        and o3.relief == o4.relief and c3.a == c4.a and c3.soi == c4.soi and c3.mu == c4.mu and c3.e == c4.e
+        and c3.parent == c4.parent and (c3.atmoDensity or 0) == (c4.atmoDensity or 0) and c3.clouds == c4.clouds,
+        string.format("seed %d: %s is the same body at scale 4", seed, b.name))
+      local w3, w4 = rec3[b.name], store["world." .. b.name]
+      if (c4.atmoHeight or 0) > 0 then
+        n_air = n_air + 1
+        local r = o4.radius
+        local f = c3.atmoHeight / r
+        check(near(c4.atmoHeight, r * (0.70 + 0.30 * (f - 0.25) / 0.20), 1e-9),
+          string.format("seed %d: %s's air top %.0f m is scale 3's draw (%.3f R) mapped onto 0.70–1.00 R", seed, b.name, c4.atmoHeight, f))
+        check(c4.atmoHeight >= r * 0.70 - 1e-6 and c4.atmoHeight <= r * 1.00 + 1e-6,
+          seed .. ": the deep air is 0.70–1.00 radii")
+        check(w4 and near(w4.atmoScaleH, c4.atmoHeight * S4.airScaleH) and w3 and w3.atmoScaleH == nil,
+          seed .. ": " .. b.name .. " publishes its scale height at scale 4 only")
+        check(near(w4.atmoHeight, c4.atmoHeight), seed .. ": the world record carries the deep top")
+        worst_top = math.max(worst_top, c4.atmoHeight / r)
+        -- Orbits sit above it: the Made Orbit contract's periapsis (10 % of
+        -- the room to the SOI) and every moon's sphere of influence.
+        local body_r = c4.bodyRadius
+        if c4.soi > 0 then
+          local orbit_alt = 0.10 * (c4.soi - body_r)
+          check(orbit_alt > c4.atmoHeight * 1.08, string.format(
+            "seed %d: %s's contract orbit %.0f m clears its air (%.0f m)", seed, b.name, orbit_alt, c4.atmoHeight))
+          for _, m in ipairs(a4) do
+            local mc = m.n.cel
+            if mc.parent == b.name then
+              local msoi = mc.a * (mc.mu / c4.mu) ^ 0.4
+              local low = mc.a * (1 - (mc.e or 0)) - msoi
+              check(low > r + c4.atmoHeight, string.format(
+                "seed %d: moon %s's influence (from r %.0f) stays above %s's air (to r %.0f)",
+                seed, m.name, low, b.name, r + c4.atmoHeight))
+            end
+          end
+        end
+      else
+        check(w4 == nil or w4.atmoScaleH == nil, seed .. ": an airless world has no scale height")
+      end
+    end
+    local first = home4.bodies[1]
+    check(store["world." .. first.name].atmoHeight >= first.radius * 0.745 - 1e-6
+      and store["world." .. first.name].atmoHeight <= first.radius * 0.925 + 1e-6,
+      seed .. ": home's air is 0.745–0.925 radii deep")
+  end
+  check(n_air >= 12, string.format("scale 4 rolled %d air worlds (of %d bodies)", n_air, n4))
+  -- Scale 3 stays as it was: the draw IS the top.
+  nodes = {}
+  regen(31337, {}, 3)
+  for _, n in ipairs(nodes) do
+    if n.valid and n.cel and (n.cel.atmoHeight or 0) > 0 then
+      local w = store["world." .. n.name]
+      check(w.atmoScaleH == nil and n.cel.atmoHeight <= n.gen.radius * 0.45 + 1e-9, "scale 3 keeps its shallow air")
+    end
+  end
+end
+
 -- ── 4. neighbours inherit home's scale ──────────────────────────────────────
 regen(31337, {}, 2)
 local before = #nodes
@@ -427,6 +528,16 @@ for i = before + 1, #nodes do
   local n = nodes[i]
   if n.gen and n.cel and n.cel.parent == name then
     check(n.gen.radius <= 230 and n.gen.voxel == nil, "a scale-1 home's neighbour is the original recipe")
+  end
+end
+
+regen(31337, {}, 4)
+before = #nodes
+name = env.buildNeighbour(4242, 1.5e8, 0.5, 7.5e6, 64, "galaxysystem")
+for i = before + 1, #nodes do
+  local n = nodes[i]
+  if n.gen and n.cel and n.cel.parent == name and (n.cel.atmoHeight or 0) > 0 then
+    check(n.cel.atmoHeight >= n.gen.radius * 0.70 - 1e-6, "a scale-4 home's neighbour has deep air")
   end
 end
 

@@ -29,7 +29,7 @@ defaults = {
   atmoChance = 0.8,  -- chance a planet has an atmosphere
   caveScale = 1.0,   -- multiplies cave-zone depth on every body
   starScale = 1.0,   -- multiplies the star's brightness
-  scale = 3,         -- WORLD SCALE version (see SCALES); a save keeps its own
+  scale = 4,         -- WORLD SCALE version (see SCALES); a save keeps its own
 }
 
 -- ── WORLD SCALE ─────────────────────────────────────────────────────────────
@@ -116,8 +116,47 @@ SCALES = {
     speed = 2.2,
     alt = 5.0,
   },
+  -- 4  (2026-10-24) DEEP AIR: scale 3's bodies, orbits, moons and terrain,
+  --    draw for draw, under an atmosphere ~2.5× as deep with a real density
+  --    scale height. Every number but the air is scale 3's (built below from
+  --    it), so the same seed rolls the same system at either scale.
+  --
+  --    Scale 3's air was 0.25–0.45 radii deep and thinned as the engine's sky
+  --    does, (1 − h/H)², so it was already half gone ~0.3·H up: a jet that
+  --    needs about half the ground's air to hold its weight (less gravity
+  --    helps a little up there) topped out at 70–100 m, at the cloud deck.
+  --    Scale 4 maps the SAME draw (0.25–0.45) onto a top of 0.70–1.00 radii
+  --    (home's 0.28–0.40 onto 0.745–0.925), still under the lowest orbit a
+  --    contract asks for (10 % of the room to a 12-radius SOI ≈ 1.14 radii;
+  --    missions.lua also never asks for a periapsis inside the air), and the
+  --    aero air (aero.lua airAt) falls off EXPONENTIALLY with a scale height
+  --    of `airScaleH` × that top, tapered to exactly nothing at it. Same air
+  --    on the ground; jet ceilings ~200–400 m by world (home 260–350 m)
+  --    instead of 60–130 (smoke_air_depth's estimate, checked in the engine
+  --    by the aero probe). The engine's sky still fades as (1 − h/H)² over
+  --    the deeper shell — within ~0.04 of the tapered e-folding at every
+  --    height for this ratio — so the sky, the haze, the cloud deck (0.35 of
+  --    the way up, now ~250 m on home) and the rain under it all rise with it.
+  --    (tests/smoke_air_depth.lua: ceilings, ascent Δv, re-entry, orbits.)
+  [4] = {
+    airTop = { 0.70, 1.00 },  -- the air's top, in radii, for draws 0.25…0.45
+    airScaleH = 0.45,         -- the density scale height, as a share of the top
+  },
 }
-CURRENT_SCALE = 3
+for k, v in pairs(SCALES[3]) do
+  if SCALES[4][k] == nil then SCALES[4][k] = v end
+end
+CURRENT_SCALE = 4
+
+-- The height of a world's air from its roll `f` (a share of the radius,
+-- drawn 0.25–0.45, or 0.28–0.40 on home). Scales 1–3 take the draw as it
+-- is; scale 4 maps the same draw onto its deeper band (see SCALES[4]) — the
+-- draw itself is untouched, so the roll's sequence never moves.
+function airTopOf(sc, radius, f)
+  local t = sc and sc.airTop
+  if not t then return radius * f end
+  return radius * (t[1] + (t[2] - t[1]) * (f - 0.25) / 0.20)
+end
 
 -- The scale table for version `v` (nil or unknown = 1, the pre-version worlds).
 function scaleOf(v)
@@ -1594,7 +1633,8 @@ local function homeWorld(spec, p, sc, radius)
   local cel = spec.cel
   local ga = geo.air or { hue = 0.58, sat = 0.4, clouds = 0.4 }
   cel.atmoColor = hsv(ga.hue, ga.sat, 0.85)
-  cel.atmoHeight = radius * q:range(0.28, 0.4)
+  cel.atmoHeight = airTopOf(sc, radius, q:range(0.28, 0.4))
+  spec.airScaleH = sc.airScaleH and cel.atmoHeight * sc.airScaleH or nil
   cel.atmoDensity = density
   cel.clouds = math.max(0.3, ga.clouds or 0.3)
   cel.occluderRadius = math.max((radius - shape.low - opts.caveDepth) * 0.95, 0)
@@ -1802,6 +1842,10 @@ local function publishWorld(b, kind, insol, sea)
     -- same air as the halo seen from orbit, instead of a grey the artist
     -- picked separately and that stops matching the moment a seed changes.
     atmoHeight = (b.cel.atmoHeight or 0),
+    -- Scale 4+: the air's density scale height (m). Present, the aero air
+    -- (aero.lua airAt) falls off as e^(−h/H) tapered to nothing at the top;
+    -- absent (scale 1–3), as the engine's sky does, (1 − h/top)².
+    atmoScaleH = b.airScaleH,
     atmoR = b.cel.atmoColor and b.cel.atmoColor[1] or nil,
     atmoG = b.cel.atmoColor and b.cel.atmoColor[2] or nil,
     atmoB = b.cel.atmoColor and b.cel.atmoColor[3] or nil,
@@ -2236,7 +2280,7 @@ local function buildSystem(r, p, cfg)
       if air then
         local ga = geo.air or { hue = 0.58, sat = 0.4, clouds = 0.3 }
         cel.atmoColor = hsv(ga.hue, ga.sat, 0.85)
-        cel.atmoHeight = radius * r:range(0.25, 0.45)
+        cel.atmoHeight = airTopOf(sc, radius, r:range(0.25, 0.45))
         cel.atmoDensity = density
         cel.clouds = ga.clouds
       end
@@ -2245,6 +2289,7 @@ local function buildSystem(r, p, cfg)
       temp = tempNorm(Tk)
       spec = { name = name, id = id, pos = pos, cel = cel, opts = opts,
                kind = kind, sea = sea, temp = temp, geo = geo, starClass = cls[3], shape = shape }
+      if air and sc.airScaleH then spec.airScaleH = cel.atmoHeight * sc.airScaleH end
       print(string.format("    %s: %.0f K, %s", geo.label, Tk, air and "air" or "airless"))
       -- homeGen 2: the first planet of a new save is the built home world
       -- (everything above is still drawn, so the rest of the system is the

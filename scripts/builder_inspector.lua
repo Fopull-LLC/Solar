@@ -220,6 +220,38 @@ local function controls_rows(B, rec, uids, out)
   end
 end
 
+-- ── performance: SEA LEVEL and VACUUM ───────────────────────────────────────
+-- Rating version 3 gives each engine a nozzle that loses thrust and exhaust
+-- velocity in thick air (parts_registry ENGINE NICHES). Every figure that
+-- depends on it reads both ways: the craft's at the launch pad's air ("pad"),
+-- an engine's at reference sea level ("sea"), and both in vacuum ("vac"). A
+-- save rated before nozzles (or a craft with no such engine) shows one figure.
+-- `s` is builder.stats(): dv, twr (vacuum), and dv_sl, twr_sl, nozzles.
+function pairText(air, vac, fmt, unit, tag)
+  unit = unit or ""
+  if air == nil or math.abs(air - vac) < 1e-6 then return string.format(fmt, vac) .. unit end
+  return string.format(fmt .. " %s · " .. fmt .. " vac", air, tag or "pad", vac) .. unit
+end
+local function perf_rows(s, out)
+  if (s.twr or 0) <= 0 and (s.dv or 0) <= 0 then return end
+  local both = s.nozzles and s.twr_sl ~= nil
+  out[#out + 1] = figure("ct", "TWR", pairText(both and s.twr_sl or nil, s.twr or 0, "%.2f"))
+  out[#out + 1] = figure("cd", "Δv", pairText(both and s.dv_sl or nil, s.dv or 0, "%.0f", " m/s"))
+  if both and (s.twr_sl or 0) > 0 and s.twr_sl < 1 and (s.twr or 0) >= 1 then
+    out[#out + 1] = { "text", key = "cw", style = "panel/hint", w = "100%", h = "fit", wrap = true,
+      text = "Too heavy to lift off in this air — it only flies in vacuum. Put a lifter (Skipper) under it." }
+  end
+end
+-- One engine's own figures as this save builds it (liveDef: vacuum thrust
+-- and ve, its sea-level share asl). `def` is the RAW registry entry.
+local function engine_rows(B, def, out)
+  local d = (B.liveDef and B.liveDef(def)) or def
+  if not d.thrust then return end
+  local k = d.asl or 1
+  out[#out + 1] = figure("et", "THRUST", pairText(d.asl and d.thrust * k or nil, d.thrust, "%.0f", " kN", "sea"))
+  if d.ve then out[#out + 1] = figure("ev", "EXHAUST", pairText(d.asl and d.ve * k or nil, d.ve, "%.0f", " m/s", "sea")) end
+end
+
 -- ── INSPECT ─────────────────────────────────────────────────────────────────
 local function inspect(B, out)
   local sel = B.selection and B.selection() or {}
@@ -233,13 +265,17 @@ local function inspect(B, out)
       out[#out + 1] = figure("cp", "PARTS", tostring(s.parts))
       out[#out + 1] = figure("cm", "MASS", mass_text(s.mass or 0))
       out[#out + 1] = figure("cc", "COST", money(s.cost))
+      perf_rows(s, out)
     end
     return
   end
   local uid = (B.selectionPrimary and B.selectionPrimary()) or sel[#sel]
   local rec = B.partRec(uid)
   if not rec then return end
-  local def = rec.def or {}
+  local raw = rec.def or {}
+  local def = raw
+  -- an engine's job line is the save's rating version's (liveDef)
+  if raw.thrust and B.liveDef then def = B.liveDef(raw) or raw end
   local mass, cost, n = 0, 0, 0
   for _, u in ipairs(sel) do
     local r = (u == uid) and rec or B.partRec(u)
@@ -258,6 +294,7 @@ local function inspect(B, out)
     text = (n > 1 and (n .. " parts selected") or role_line(def)) .. (ring and ("  ·  " .. ring) or "") }
   out[#out + 1] = figure("m", "MASS", mass_text(mass))
   out[#out + 1] = figure("c", "COST", money(cost))
+  if raw.thrust and n == 1 then engine_rows(B, raw, out) end
   out[#out + 1] = rule("r1")
 
   -- Where it is, in metres in the build frame; ENTER moves it there.

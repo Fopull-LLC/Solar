@@ -28,7 +28,7 @@ local PARAMS = {
 
 -- The world scale a new save is created at — system_generator's CURRENT_SCALE
 -- (the menu scene has no generator to ask). Bump the two together.
-WORLD_SCALE = 3
+WORLD_SCALE = 4
 
 local slot_n = 1
 local seed_str = ""

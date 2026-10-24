@@ -309,6 +309,8 @@ local function budgets(w)
     moon_trip = m.ascent + m.out + m.capture + m.down + m.up + m.back,
     planet_orbit = p.ascent + p.out + p.capture,
     planet_trip = p.ascent + p.out + p.capture + p.down + p.up + p.back,
+    -- the two climbs through air (off home, and back up off the sister world)
+    planet_climbs = p.ascent + (p.up or 0),
   }
 end
 
@@ -518,8 +520,14 @@ for _, w in ipairs(WORLDS) do
   -- (Gravity version 2's biggest homes, g 9.8 at r 950, sit 3 % over the
   -- line: an Anvil on two FT-M has 379 m/s against a 368 m/s trip, with no
   -- margin for flying it. Reported to the coordinator as a balance note.)
-  check(w.g > 10 or (w.g >= 9.8 and w.r >= 900) or A2.dv < B.planet_trip, string.format(
-    "%s: an Anvil and two FT-M can't do a round trip to another planet (%.0f < %.0f m/s)", w.name, A2.dv, B.planet_trip))
+  -- (RATING 3, ENGINE NICHES: the Anvil is a vacuum engine, so its two climbs
+  -- through air are flown at its nozzle's mean over a climb — σ̄ 0.5, k 0.8 —
+  -- and cost its vacuum-rated Δv 1/k as much. Its vacuum Δv alone would pass
+  -- the trip on the heaviest worlds; flown, it can't.)
+  local kA = REGENV.nozzle(env.liveDef("engineM").asl, 0.5)
+  local A2_need = B.planet_trip + B.planet_climbs * (1 / kA - 1)
+  check(w.g > 10 or (w.g >= 9.8 and w.r >= 900) or A2.dv < A2_need, string.format(
+    "%s: an Anvil and two FT-M can't do a round trip to another planet (%.0f < %.0f m/s)", w.name, A2.dv, A2_need))
   check(#K.st.stages == 2 and K.dv >= B.planet_trip and K.twr >= 1.4, string.format(
     "%s: a staged Skipper can (Δv %.0f ≥ %.0f, TWR %.2f)", w.name, K.dv, B.planet_trip, K.twr))
   -- Staging is honest: each stage is its own tanks under everything above.
@@ -614,7 +622,10 @@ check(s1 and math.abs(s1.twr - eng.thrust / (m0 * 5.2)) < 1e-9,
   string.format("TWR in the launch world's gravity, wet, not 9.81 (%.2f)", s1 and s1.twr or -1))
 check(st.hop and math.abs(st.hop - env.hopTarget(W)) < 3,
   string.format("full throttle straight up peaks ≈ %.0f m (built for %.0f)", st.hop or -1, env.hopTarget(W)))
-check(stats_n.text:find("TWR 1.7", 1, true) and stats_n.text:find("Bryolru", 1, true)
+-- (rating 3: the Sputter gives 92 % at sea level, so the header reads the
+-- pad's TWR and then the vacuum one, and every stage both ways)
+check(stats_n.text:find("TWR 1.63 pad / 1.77 vac", 1, true) and stats_n.text:find("Bryolru", 1, true)
+  and stats_n.text:find("sea level / vacuum", 1, true)
   and stats_n.text:find("peaks", 1, true) and stats_n.text:find("dry", 1, true)
   and stats_n.text:find("burn", 1, true), "the readout says it: " .. stats_n.text)
 check(#env.launchCheck().warn == 0, "the stock starter launches without a warning")

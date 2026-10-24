@@ -40,7 +40,9 @@
 --     supersonic).
 --
 --   * AIR is the world's own: its density (`atmo`) and height (`atmoHeight`)
---     from the world record, thinning as the engine's sky does, (1 − h/H)²;
+--     from the world record, thinning as the engine's sky does, (1 − h/H)²
+--     — or, on a deep-air world (scale 4+, `atmoScaleH`), exponentially with
+--     that scale height, tapered to nothing at the top (see airShare);
 --     the wind (weather.windAt) is subtracted from the craft's velocity by the
 --     caller; and OXYGEN (for jets) from what the world is.
 --
@@ -152,8 +154,27 @@ function airAt(w, alt, g, R)
   -- real ground lies below the datum in places: the air there is a little
   -- thicker, never unbounded
   local h = max(alt or 0, -0.25 * H)
+  if (w.atmoScaleH or 0) > 0 then
+    return RHO0 * (w.atmo / ATMO_REF) * airShare(h, H, w.atmoScaleH), a, oxygen(w)
+  end
   local f = (1 - h / H)
   return RHO0 * (w.atmo / ATMO_REF) * f * f, a, oxygen(w)
+end
+
+-- The air's density at height h as a share of the ground's, under a shell of
+-- top H. With no scale height (world scales 1–3) it is the engine's sky
+-- curve, (1 − h/H)². With one (scale 4+, the world record's `atmoScaleH`) it
+-- is the real atmosphere's e^(−h/Hs), tapered so it reaches exactly nothing
+-- at the top: (e^(−h/Hs) − e^(−H/Hs)) / (1 − e^(−H/Hs)). Both are 1 at the
+-- ground, a little over 1 below it, and 0 at and above H.
+function airShare(h, H, Hs)
+  if not H or H <= 0 or h >= H then return 0.0 end
+  if Hs and Hs > 0 then
+    local e0 = exp(-H / Hs)
+    return (exp(-h / Hs) - e0) / (1 - e0)
+  end
+  local f = 1 - h / H
+  return f * f
 end
 
 -- The transonic drag rise: ×1 below Mach 0.75, ×3 at 1.05, easing to ×2 by Mach 2.

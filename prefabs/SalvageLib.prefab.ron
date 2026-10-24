@@ -1,0 +1,22 @@
+// SALVAGE LIBRARY — scripts/salvage.lua: the suit packs the sea keeps when the
+// crew runs out of air (planet_walker drops one; the crew swims down and takes
+// it back). Spawned by planet_walker when the scene carries no node running
+// it; reached with findScript("salvage").
+[
+    (
+        name: "SalvageLib",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [
+            (
+                kind: "salvage",
+                enabled: true,
+                params: [],
+            ),
+        ],
+    ),
+]

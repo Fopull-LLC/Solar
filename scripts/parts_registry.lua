@@ -40,7 +40,8 @@
 -- `fuel` units of FUEL_T_PER_UNIT tonnes each, so a full tank is heavy and an
 -- empty one light, and the craft lightens as it burns (builder.lua BALANCE).
 -- thrust (kN) and ve (exhaust velocity, m/s) are an engine's figures on the
--- REFERENCE world; the catalogue is built once per save for its home world
+-- REFERENCE world as rating version 2 built them (version 3's vacuum figures
+-- and sea-level share are in RATED, below the registry); the catalogue is built once per save for its home world
 -- (builder.lua `rating`) and every card, readout and flight uses those numbers.
 -- strength = the load (kN) this part's attachment to its parent takes before it
 -- gives — the joint the flight's stress model loads with the mass hanging off
@@ -132,8 +133,9 @@ REG = {
   -- sandwich — bolt three or four around the base and they splay out to land.
   legs      = { prefab = "PartLegs",      label = "Landing Legs", h = 0.90, rx = 0.40, rz = 0.18, mass = 0.015, cost = 40,  top = false, bottom = false, kind = "structural", legs = true, radial_orient = true, strength = 300 },
   -- SKIPPER: a heavier, punchier engine in the Anvil's exact footprint (same
-  -- proven collider) — twice the Anvil's thrust and the best exhaust velocity
-  -- on the list: the first stage of anything going to another planet.
+  -- proven collider) — twice the Anvil's thrust: the first stage of anything
+  -- going to another planet. (Rating version 3 gives the three engines their
+  -- jobs, sea level against vacuum: see ENGINE NICHES below.)
   skipper    = { prefab = "PartSkipper",    label = "Skipper",      h = 1.60, rx = 0.90, rz = 0.90, mass = 1.6,  cost = 520, top = true,  bottom = true,  kind = "engine", thrust = 170, ve = 184, strength = 1000 },
   -- RADIAL TANK: a strap-on drop-tank. radial_orient mounts it on a flank like a
   -- fin (ring it with symmetry); its fuel joins the shared pool, and a radial
@@ -251,7 +253,84 @@ REG = {
                 mods = { { type = "drill", rate = 24.0, draw = 1.2, reach = 0.9 } } },
 }
 
+-- ── ENGINE NICHES: sea level and vacuum (rating version 3) ─────────────────
+--
+-- A real nozzle is shaped for one outside pressure. The same propellant flow
+-- leaves at a lower exhaust velocity into thick air than into vacuum, and so
+-- pushes less: thrust and ve both scale by
+--
+--     k(σ) = 1 − (1 − asl) · σ        (never under NOZZLE_FLOOR)
+--
+-- where σ is the air's density as a share of reference sea level (aero.lua
+-- `airAt` / RHO0: 1 on a home of atmo 0.75 at its datum, 0 in vacuum, over 1
+-- on a thick world) and `asl` is the engine's sea-level share of its vacuum
+-- figures. A nozzle built for vacuum (a big bell, low asl) loses the most.
+-- The burn rate (propellant per second) does not change, so a vacuum engine
+-- fired at sea level wastes its fuel.
+--
+-- Each engine has a JOB, so none of them is simply the best:
+--   SPUTTER  the lander and small-probe engine. Light and cheap, decent at
+--            any pressure (asl 0.92), tiny thrust. The starter rocket's engine
+--            and still the right one for anything small.
+--   ANVIL    the upper stage. The best ve in vacuum (195), but a vacuum bell:
+--            at sea level it keeps 60 % (asl 0.6), so a big Anvil-only stack
+--            can't leave the pad. Light for its thrust.
+--   SKIPPER  the lifter. Big thrust that holds up at sea level (asl 0.92),
+--            but heavy and only middling in vacuum (ve 168).
+-- So the classic two-stage rocket, Skipper below and Anvil above, is the way
+-- to orbit and beyond (tests/smoke_engine_niches.lua flies the arithmetic).
+--
+-- THESE FIGURES ARE RATING VERSION 3. A save's catalogue is frozen at the
+-- rating version it was first built with (builder.lua `rating`, save key
+-- `parts.rating`): a save rated at version 2 keeps the plain REG figures above
+-- (no asl, the same in air and vacuum), so its catalogue, readouts and every
+-- craft it has built fly exactly as before. A blueprint carries the figures it
+-- was built with (thrust, burn, ve and, from version 3, asl), so even a v3
+-- engine's behaviour is frozen into the craft that carries it. A new version is
+-- a new entry here; nothing in an existing entry may ever change.
+NOZZLE_FLOOR = 0.05
+RATED = {
+  [3] = {
+    engineS = { thrust = 35,  ve = 160, asl = 0.92,
+                desc = "lander / probe engine · light, cheap · fine in air or vacuum" },
+    engineM = { thrust = 85,  ve = 195, asl = 0.60,
+                desc = "upper stage · best in vacuum · weak at sea level" },
+    skipper = { thrust = 180, ve = 168, asl = 0.92,
+                desc = "lifter · huge thrust at sea level · heavy, so-so in vacuum" },
+  },
+}
+RATING_LATEST = 3
+for v, t in pairs(RATED) do
+  for id, f in pairs(t) do
+    if REG[id] then
+      REG[id].rated = REG[id].rated or {}
+      REG[id].rated[v] = f
+    end
+  end
+end
+
+-- An engine's figures at rating version v: { thrust, ve, asl, desc } (asl 1
+-- and the plain REG figures for a version with no entry). Pure.
+function engineAt(def, v)
+  if type(def) == "string" then def = REG[def] end
+  if not (def and def.thrust) then return nil end
+  local f = def.rated and def.rated[v]
+  if f then return { thrust = f.thrust, ve = f.ve, asl = f.asl or 1, desc = f.desc } end
+  return { thrust = def.thrust, ve = def.ve or 160, asl = 1, desc = nil }
+end
+
+-- The nozzle factor at air σ (density / reference sea level): what share of
+-- its vacuum thrust and ve an engine of sea-level share `asl` gives there.
+-- asl nil (a part rated before nozzles) is 1 everywhere. Pure.
+function nozzle(asl, sigma)
+  if not asl or asl >= 1 then return 1.0 end
+  sigma = math.max(0.0, math.min(2.5, sigma or 0))
+  return math.max(NOZZLE_FLOOR, 1.0 - (1.0 - asl) * sigma)
+end
+
 -- What the round-two parts are for, under their names on the catalogue card.
+-- (The ENGINES' lines — what each one is for — ride with their rating, in
+-- RATED above: a save rated before the niches keeps its figures on the card.)
 DESC = {
   strut1 = "square strut · 12 kg · nodes on every face", strut2 = "square strut · 24 kg · nodes on every face",
   strut3 = "square strut · 36 kg · nodes on every face", beam1 = "box beam · 20 kg · stiffer than a strut",

@@ -110,11 +110,20 @@ function proc_lib()
   return proc_ref
 end
 
+-- EVERY PART A LAUNCH PUTS DOWN CARRIES TWO TAGS: `CRAFT_TAG` (a part of some
+-- craft — what a pad check finds lying about, whatever split it off) and its
+-- flight's own tag (what a revert takes away). A split keeps the part nodes, so
+-- a spent stage or a wing torn off still says where it came from. (flight_ops
+-- tags a craft it rebuilds from the fleet with CRAFT_TAG too.)
+CRAFT_TAG = "craftpart"
+local spawn_tag = nil       -- the flight tag the parts being spawned now get
+
 local function spawn_parts(vessel, bp)
   local rxv, upv, rzv = basis_of(vessel)
   local vx, vy, vz = vessel.x, vessel.y, vessel.z
   local total = 0
   local placed = {}
+  local tag = spawn_tag
   for _, d in pairs(bp.parts) do
     total = total + 1
     pending = pending + 1
@@ -128,6 +137,10 @@ local function spawn_parts(vessel, bp)
       -- launch). Parts are authored in the VESSEL frame: overwrite with the
       -- blueprint's exact local rotation (v1.2 builds sideways parts too).
       part:setAngles(d.yaw or 0, d.pitch or 0, d.roll or 0)
+      if part.addTag then
+        part:addTag(CRAFT_TAG)
+        if tag then part:addTag(tag) end
+      end
       -- DRAWN PARTS (builder overhaul WP3): a drawn member, panel or brace is
       -- one prefab for every size. builder_proc gives it the mesh for its
       -- blueprint `size` and writes its collider's half-extents NOW, before
@@ -178,6 +191,534 @@ local bp = nil
 local site_kind = "pad"
 local wait_t = 0.0
 local last_note = 0.0
+local force_site = false    -- this launch skips the site check (a revert cleared it)
+local pins = {}             -- earlier in-place rollouts still in their clamps (see launchNow)
+local pad_clamps = {}       -- every PadClamps a pad launch has put down (taken up when the pad is next used)
+
+local refs = {}
+local function ref(kind)
+  local r = refs[kind]
+  if not r or r.valid == false then r = findScript and findScript(kind) or nil; refs[kind] = r end
+  return r
+end
+
+local function deep(t)
+  if type(t) ~= "table" then return t end
+  local o = {}
+  for k, v in pairs(t) do o[k] = deep(v) end
+  return o
+end
+
+-- ═══ IS THE SITE CLEAR? ═════════════════════════════════════════════════════
+--
+-- A launch used to go wherever the site was, whatever was standing there: the
+-- new craft assembled INSIDE the one left on the pad, and the two blew each
+-- other apart on the first physics tick. A launch now looks first, and when
+-- the pad (or the runway threshold) is taken it is called off with a notice
+-- that names what is in the way. Nothing is deleted for you: the craft you
+-- left there may be the one you wanted.
+--
+-- What counts: any craft (a controller, live, or a fleet record not rebuilt
+-- yet), any piece a craft shed (a part carrying CRAFT_TAG whose root is not a
+-- craft), and the crew on foot. Within the site's footprint — `SITE_R`, or the
+-- new craft's own reach, whichever is wider — and from a little under the
+-- deck to well over the new craft's top: a craft flying high over the pad is
+-- not in the way. The pad and the runway threshold are 100 m apart, so a
+-- craft parked on one never blocks the other.
+local SITE_R = { pad = 7.0, runway = 10.0 }
+
+-- The blueprint's reach from its own axis (horizontal) and its height.
+local function bp_size(b)
+  local reach, top = 0.0, 0.0
+  for _, d in pairs((b and b.parts) or {}) do
+    local r = math.sqrt((d.x or 0) ^ 2 + (d.z or 0) ^ 2) + math.max(d.rx or 0.5, d.rz or 0.5)
+    if r > reach then reach = r end
+    local t = (d.y or 0) + (d.h or 1) * 0.5
+    if t > top then top = t end
+  end
+  return reach, top
+end
+
+local function wpos(n)
+  local w = n.worldPos
+  if w then return w.x, w.y, w.z end
+  return n.x, n.y, n.z
+end
+
+-- The site in world space: centre, up, the radius and height window to test.
+local function site_box(kind, b)
+  local bf = ref("base_facilities")
+  local st = bf and bf.launchSite and bf.launchSite(kind)
+  local body = st and space.body(st.body)
+  if not body then return nil end
+  local reach, top = bp_size(b)
+  return { kind = st.kind, body = st.body,
+           cx = body.x + st.x, cy = body.y + st.y, cz = body.z + st.z,
+           ux = st.up.x, uy = st.up.y, uz = st.up.z,
+           r = math.max(SITE_R[st.kind] or 8.0, reach + 1.5),
+           lo = -4.0, hi = math.max(25.0, top + 8.0) }
+end
+
+local function in_box(S, x, y, z, pad)
+  local rx, ry, rz = x - S.cx, y - S.cy, z - S.cz
+  local h = rx * S.ux + ry * S.uy + rz * S.uz
+  if h < S.lo or h > S.hi then return false end
+  local hx, hy, hz = rx - S.ux * h, ry - S.uy * h, rz - S.uz * h
+  return hx * hx + hy * hy + hz * hz <= (S.r + (pad or 0)) ^ 2
+end
+
+local tag_names = {}        -- flight tag → the craft's name, for naming its debris
+
+local function tag_name(n)
+  for _, t in ipairs(n.tags or {}) do
+    if tag_names[t] then return tag_names[t] end
+  end
+  return nil
+end
+
+-- What is on the launch site, or nil when it is clear:
+--   { what = "craft" | "parked" | "debris" | "crew", name = …, dist = m }
+-- `ignore` is a set of node ids to look past (a revert's own craft, going).
+-- Global: the builder asks before it charges for a hull, and probes ask.
+function siteBlocker(kind, b, ignore)
+  local S = site_box(kind == "runway" and "runway" or "pad", b or save.get("shipyard.blueprint"))
+  if not S then return nil end
+  ignore = ignore or {}
+  local craft_ids = {}
+  -- Craft in the scene: any of its parts in the box.
+  for _, v in ipairs(findScripts("vessel_controller")) do
+    local n = v.node
+    if n and n.valid ~= false then
+      craft_ids[n.id] = true
+      if not ignore[n.id] then
+        local hit = in_box(S, wpos(n))
+        if not hit and n.children then
+          for _, c in ipairs(n:children()) do
+            if in_box(S, wpos(c)) then hit = true break end
+          end
+        end
+        if hit then
+          local lost = v.isLost and v.isLost()
+          local nm = v.craftName
+          if not nm or nm == "" or nm == "Vessel" then nm = tag_name(n) or "a craft" end
+          return { what = lost and "debris" or "craft", name = nm, node = n }
+        end
+      end
+    end
+  end
+  -- Pieces shed by any craft (spent stages, a wing that came off, a wreck).
+  if findTagged then
+    for _, p in ipairs(findTagged(CRAFT_TAG)) do
+      local root = p.parent
+      local rid = root and root.id
+      if p.valid ~= false and not (rid and (craft_ids[rid] or ignore[rid])) and not ignore[p.id]
+         and in_box(S, wpos(p)) then
+        return { what = "debris", name = tag_name(p), node = root or p }
+      end
+    end
+  end
+  -- Craft the fleet will rebuild here (a scene that has just loaded puts the
+  -- fleet back only after a launch has seated its crew).
+  local fo = ref("flight_ops")
+  if fo and fo.fleetOffline then
+    for _, r in ipairs(fo.fleetOffline()) do
+      local reach = 0.0
+      for _, d in ipairs(r.parts or {}) do
+        local q = math.sqrt((d.x or 0) ^ 2 + (d.z or 0) ^ 2)
+        if q > reach then reach = q end
+      end
+      if in_box(S, r.wx, r.wy, r.wz, reach) then
+        return { what = "parked", name = r.name or "a craft" }
+      end
+    end
+  end
+  -- The crew, out on foot on the site (not the one being sent out to board).
+  local a = find("Astronaut")
+  local pw = ref("planet_walker")
+  if a and a.visible ~= false and pw and pw.onFoot and (save.get("shipyard.pilot") or 0) ~= 1
+     and in_box(S, wpos(a)) then
+    return { what = "crew", name = "the crew" }
+  end
+  return nil
+end
+
+local function site_label(kind)
+  return kind == "runway" and "the runway" or "Launch Complex 1"
+end
+
+-- The notice, as one sentence the player can act on.
+function blockSentence(kind, info)
+  local where = site_label(kind)
+  if not info then return nil end
+  if info.what == "debris" then
+    return string.format("Debris%s is lying on %s. Move it off (the gravity gun can shift it) and launch again.",
+      info.name and (" from " .. info.name) or "", where)
+  elseif info.what == "crew" then
+    return string.format("The crew is standing on %s. Walk clear and launch again.", where)
+  end
+  return string.format("%s is standing on %s. Recover it at the Tracking Station, or fly or drive it off, then launch again.",
+    info.name or "A craft", where)
+end
+
+-- For the builder's LAUNCH: nil when the site is clear, else the sentence.
+function launchBlockedWhy(kind, b)
+  kind = (kind == "runway") and "runway" or "pad"
+  local info = siteBlocker(kind, b)
+  return info and blockSentence(kind, info) or nil, info
+end
+
+local function caption(title, text, secs)
+  local bc = ref("big_caption")
+  if bc and bc.show then bc.show(title, text, secs or 6.0) end
+end
+
+-- CALLED OFF. Nothing was launched, so the hull that was charged at rollout
+-- comes back, and the crew who were sent out to board are brought home.
+local function refuse(kind, info)
+  local msg = blockSentence(kind, info) or "The launch site is blocked."
+  log("launch: REFUSED — " .. msg)
+  caption(kind == "runway" and "RUNWAY BLOCKED" or "PAD BLOCKED", msg, 7.0)
+  local spent = save.get("shipyard.spent") or 0
+  local co = ref("company")
+  if spent > 0 and co and co.earn then
+    co.earn(spent, "rollout called off — " .. site_label(kind) .. " is blocked")
+  end
+  save.set("shipyard.spent", 0)
+  save.set("shipyard.pilot", 0)
+  save.set("shipyard.launch", 0)
+  local a = find("Astronaut")
+  if a and a.visible == false then
+    local fo = ref("flight_ops")
+    local hx, hy, hz
+    if fo and fo.crewHome then hx, hy, hz = fo.crewHome() end
+    if hx then a.x, a.y, a.z = hx, hy, hz end
+    a.vx, a.vy, a.vz = 0, 0, 0
+    a.visible = true
+  end
+  lastRefusal = { kind = kind, what = info and info.what, name = info and info.name, text = msg, t = time }
+end
+lastRefusal = nil   -- published for probes and the builder: the last launch called off
+
+-- ═══ REVERT ═════════════════════════════════════════════════════════════════
+--
+-- KSP's "Revert to launch": the flight you are on is undone and you are back
+-- in the seat on the pad as you rolled out — the same design, the same money,
+-- the same hold and contracts — so a mission that went wrong is a restart, not
+-- a recovery run. And "Revert to the builder", which also hands back the hull.
+--
+-- What is snapshotted at the launch is the small game state that a flight can
+-- change (REVERT_KEYS, the inventories, the design), not the save: dug
+-- terrain runs to hundreds of MB and the ground you dug stays dug. Every craft
+-- and piece the flight put in the world carries its flight's tag, and a revert
+-- takes away exactly those.
+--
+-- FRESH. Revert is only there while the flight is still the one you launched
+-- (KSP takes it away once you go back to the space centre). It goes for good
+-- when the flight's rewards are banked — a contract or a milestone paid, a
+-- recovery, any money coming in — when you fly another craft, end the flight
+-- (END FLIGHT, ABORT, a pickup), or go into the builder.
+local REVERT_KEYS = {
+  "co.funds", "co.rep", "co.ledger", "co.standingNews",
+  "res.done", "res.spent",
+  "mission.active", "mission.activeSpec", "mission.board", "mission.seen", "mission.perm",
+  "mission.gdone", "mission.gcount", "mission.done", "mission.flags", "mission.visited",
+  "mission.recovered", "mission.charterPaid", "mission.genSeq",
+  "prog.done", "prog.perm",
+  "inv.cap", "inv.seen", "depot.sold", "names.n",
+}
+-- Rewards: a change in any of these means the flight has been paid for.
+local BANKED_KEYS = { "mission.done", "mission.gcount", "prog.done", "mission.charterPaid", "mission.recovered" }
+
+local flight = nil          -- the launch a revert would go back to
+local flight_seq = 0
+revertArmedAt, revertArmedKind = nil, nil
+REVERT_CONFIRM = 5.0
+revertGone = nil            -- why the last flight stopped being revertable (probes)
+
+local function inv_cids(caps)
+  local out = { astro = true, base = true }
+  for cid in pairs(type(caps) == "table" and caps or {}) do out[cid] = true end
+  return out
+end
+
+-- { names = every key taken (in order), [key] = its value or nil }
+local function snap_state()
+  local keys, names = {}, {}
+  local function take(k) names[#names + 1] = k; keys[k] = deep(save.get(k)) end
+  for _, k in ipairs(REVERT_KEYS) do take(k) end
+  for cid in pairs(inv_cids(keys["inv.cap"])) do
+    take("inv." .. cid)
+    take("inv.gear." .. cid)
+  end
+  keys.names = names
+  return keys
+end
+
+local function same(a, b)
+  if type(a) ~= type(b) then
+    -- nil, false and an empty table all mean "nothing yet" in these keys
+    local function empty(x) return x == nil or x == false or (type(x) == "table" and next(x) == nil) end
+    return empty(a) and empty(b)
+  end
+  if type(a) ~= "table" then return a == b end
+  for k, v in pairs(a) do if not same(v, b[k]) then return false end end
+  for k in pairs(b) do if a[k] == nil and not same(nil, b[k]) then return false end end
+  return true
+end
+
+-- Take the snapshot: called as a launch begins (the hull already paid for).
+local function snapshot(kind, b)
+  flight_seq = flight_seq + 1
+  local pre = {}
+  for _, v in ipairs(findScripts("vessel_controller")) do
+    if v.node and v.node.valid ~= false then pre[v.node.id] = true end
+  end
+  flight = {
+    tag = string.format("flight%d_%d", flight_seq, math.floor((time or 0) * 1000)),
+    kind = kind, bp = deep(b), keys = snap_state(), t0 = time or 0,
+    spent = save.get("shipyard.spent") or 0, pre = pre, name = b and b.name,
+    check_t = time or 0,
+  }
+  tag_names[flight.tag] = (b and b.name) or "your last launch"
+  spawn_tag = flight.tag
+  revertArmedAt, revertArmedKind, revertGone = nil, nil, nil
+end
+
+-- The flight is no longer revertable (`why` for the log and probes).
+function flightClosed(why)
+  if not flight then return end
+  flight = nil
+  revertArmedAt, revertArmedKind = nil, nil
+  revertGone = why or "closed"
+  log("revert: no longer available — " .. revertGone)
+end
+
+-- Does this controller fly (part of) the flight?
+local function ours(v)
+  local n = v and v.node
+  if not (flight and n and n.valid ~= false and n.children) then return false end
+  if flight.root_id and n.id == flight.root_id then return true end
+  for _, c in ipairs(n:children()) do
+    if c.hasTag and c:hasTag(flight.tag) then return true end
+  end
+  return false
+end
+
+-- Has the flight been paid for, or left behind? Asked twice a second.
+local function freshness_tick()
+  if not flight or (time or 0) - flight.check_t < 0.5 then return end
+  flight.check_t = time or 0
+  local gm = ref("game_manager")
+  if gm and gm.inputOwner == "builder" then return flightClosed("you went into the builder") end
+  for _, k in ipairs(BANKED_KEYS) do
+    if not same(flight.keys[k], save.get(k)) then return flightClosed("the flight's rewards are banked (" .. k .. ")") end
+  end
+  for _, e in ipairs(save.get("co.ledger") or {}) do
+    if type(e) == "table" and (e.amount or 0) > 0 and (e.t or -1) > flight.t0 then
+      return flightClosed("money came in since the launch (" .. tostring(e.why) .. ")")
+    end
+  end
+  -- (not while the craft is still being put together: its parts arrive a
+  -- frame or two after its controller)
+  if want_spawn or not rebuilt then return end
+  for _, v in ipairs(findScripts("vessel_controller")) do
+    if v.piloting and not ours(v) then return flightClosed("you are flying another craft") end
+  end
+end
+
+-- What a revert would do now: nil when there is no fresh flight; otherwise
+-- { ok, why, builder } — `why` when it can't (docked to an older craft).
+function revertQuote()
+  if not flight then return nil end
+  local q = { ok = true, name = flight.name, kind = flight.kind }
+  local bh = ref("build_host")
+  q.builder = bh ~= nil and bh.mode == "world" and bh.state == "idle"
+  for _, v in ipairs(findScripts("vessel_controller")) do
+    if ours(v) then
+      if flight.pre[v.node.id] then q.ok, q.why = false, "it is docked to a craft that was there before the launch" end
+      if v.dock and (v.dock.latched or 0) > 0 then q.ok, q.why = false, "it is docked to another craft" end
+    end
+  end
+  return q
+end
+
+function canRevert() return flight ~= nil end
+-- The tag this flight's parts carry (probes and the smoke harness).
+function flightTag() return flight and flight.tag end
+
+-- Every root the flight put in the world: its craft and what they shed.
+local function flight_roots()
+  local roots, crafts = {}, {}
+  if findTagged then
+    for _, p in ipairs(findTagged(flight.tag)) do
+      if p.valid ~= false then
+        -- A craft or a piece of one is a top-level root (a Vessel, or what a
+        -- split made). Anything else a part has come to hang under — a world
+        -- it was parented to — is never taken away: only the part goes.
+        local r = p.parent
+        if not r or r.parent ~= nil or (r.name and space.body(r.name)) then r = p end
+        if r.valid ~= false then roots[r.id] = r end
+      end
+    end
+  end
+  for _, v in ipairs(findScripts("vessel_controller")) do
+    if v.node and roots[v.node.id] then crafts[#crafts + 1] = v end
+  end
+  return roots, crafts
+end
+
+local function restore_state(keys)
+  local now_cids = inv_cids(save.get("inv.cap"))   -- (before inv.cap goes back)
+  -- every key taken, put back as it was — or taken away, if it wasn't there
+  for _, k in ipairs(keys.names) do
+    local v = keys[k]
+    if v == nil then
+      if save.get(k) ~= nil then save.delete(k) end
+    else
+      save.set(k, deep(v))
+    end
+  end
+  -- An inventory opened since the launch (the new craft's hold) is put away.
+  local had = inv_cids(keys["inv.cap"])
+  for cid in pairs(now_cids) do
+    if not had[cid] then save.delete("inv." .. cid); save.delete("inv.gear." .. cid) end
+  end
+  -- Scripts that keep a copy in memory read it again.
+  local ms = ref("missions")
+  if ms then
+    if ms.reloadFromSave then ms.reloadFromSave() elseif ms.start then pcall(ms.start, ms.node) end
+  end
+  local rs = ref("research")
+  if rs then rs.spent = save.get("res.spent") or 0 end
+end
+
+-- Clear the flight off the world: crew out of the seat, every craft and piece
+-- gone, the launch's hold-downs taken up, the fleet board forgets them.
+local function clear_flight()
+  local roots, crafts = flight_roots()
+  for _, v in ipairs(crafts) do
+    if (v.piloting or v.crewAboard) and v.standDown then v.standDown(v.node)
+    elseif v.releaseControl then v.releaseControl() end
+  end
+  local ids = {}
+  for id, r in pairs(roots) do
+    ids[#ids + 1] = id
+    -- The parts go one by one as well as with their root: the root that
+    -- assembly.split makes for a shed stage is a bare node that destroy()
+    -- does not take (engine 0.117.0-rc8: the destroy queue only removes
+    -- nodes with a Matter component, and a split root has none), so a spent
+    -- stage outlived the revert. Its parts are ordinary nodes and do go.
+    if r.children then
+      for _, c in ipairs(r:children()) do destroy(c) end
+    end
+    destroy(r)
+  end
+  if flight.clamps and flight.clamps.valid ~= false then destroy(flight.clamps) end
+  local fo = ref("flight_ops")
+  if fo and fo.forgetNodes then fo.forgetNodes(ids) end
+  -- the clamp pins of anything just removed
+  local keep = {}
+  for _, p in ipairs(pins) do if not roots[p.node.id] then keep[#keep + 1] = p end end
+  pins = keep
+  if vessel_node and roots[vessel_node.id] then vessel_node, relv = nil, nil end
+  if space.warp and (space.warp() or 1) > 1.001 then pcall(space.warp, 1) end
+  return #ids
+end
+
+local function crew_to(x, y, z, hidden)
+  local a = find("Astronaut")
+  if not a then return end
+  a.x, a.y, a.z = x, y, z
+  a.vx, a.vy, a.vz = 0, 0, 0
+  a.visible = not hidden
+end
+
+function revertToLaunch()
+  local q = revertQuote()
+  if not (q and q.ok) then return false, q and q.why or "nothing to revert" end
+  if want_spawn then return false, "a launch is already under way" end
+  local f = flight
+  local bf = ref("base_facilities")
+  local st = bf and bf.launchSite and bf.launchSite(f.kind)
+  local body = st and space.body(st.body)
+  if not body then return false, "no launch site to go back to" end
+  local n = clear_flight()
+  restore_state(f.keys)
+  save.set("shipyard.blueprint", deep(f.bp))
+  save.set("shipyard.site", f.kind)
+  save.set("shipyard.spent", f.spent)
+  save.set("shipyard.pilot", 1)
+  -- the crew waits on the site to board, the way a rollout leaves them
+  crew_to(body.x + st.x + st.up.x * 3.0, body.y + st.y + st.up.y * 3.0, body.z + st.z + st.up.z * 3.0, true)
+  flight = nil
+  revertArmedAt, revertArmedKind = nil, nil
+  log(string.format("revert: back to the launch of %s (%d piece(s) cleared)", tostring(f.name or "the craft"), n))
+  local ok = launchNow(f.kind, { force = true, bp = f.bp })
+  if not ok then return false, "the relaunch would not start" end
+  caption("REVERTED TO LAUNCH", "Back on " .. site_label(f.kind) .. " as you rolled out. Everything since the launch is undone.", 4.0)
+  return true
+end
+
+function revertToBuilder()
+  local q = revertQuote()
+  if not (q and q.ok) then return false, q and q.why or "nothing to revert" end
+  if not q.builder then return false, "the builder is not available here" end
+  local f = flight
+  local vab = find("VabInterior")
+  if not vab then return false, "no Vehicle Assembly Building standing" end
+  local n = clear_flight()
+  restore_state(f.keys)
+  -- …and the hull goes back on the books: nothing was launched.
+  local co = ref("company")
+  if co and co.earn and (f.spent or 0) > 0 then co.earn(f.spent, "reverted to the builder — hull refunded") end
+  save.set("shipyard.blueprint", deep(f.bp))
+  save.set("shipyard.site", f.kind)
+  save.set("shipyard.spent", 0)
+  save.set("shipyard.pilot", 0)
+  save.set("shipyard.launch", 0)
+  -- the crew stands inside the VAB's south door, where LEAVE will let them out
+  if vab.toWorld then
+    local p = vab:toWorld(vec3(0, 1.4, 14))
+    crew_to(p.x, p.y, p.z, false)
+  end
+  flight = nil
+  revertArmedAt, revertArmedKind = nil, nil
+  log(string.format("revert: back to the builder with %s (%d piece(s) cleared, hull refunded)", tostring(f.name or "the craft"), n))
+  local bh = ref("build_host")
+  local ok = bh and bh.enter and bh.enter()
+  if not ok then return false, "the builder would not open" end
+  return true
+end
+
+-- The pause menu's and the HUD's rows: text, armed, and the click (the first
+-- arms, the second within REVERT_CONFIRM seconds goes).
+function revertArmed(kind)
+  return revertArmedAt ~= nil and revertArmedKind == kind and (time or 0) - revertArmedAt <= REVERT_CONFIRM
+end
+
+function revertLabel(kind)
+  if kind == "builder" then
+    return revertArmed("builder") and "Revert to the builder? Progress since launch is lost"
+      or "Revert to the builder (hull refunded)"
+  end
+  return revertArmed("launch") and "Revert to launch? Progress since launch is lost"
+    or "Revert to launch"
+end
+
+-- Returns true once the revert has happened.
+function revertClick(kind)
+  kind = kind == "builder" and "builder" or "launch"
+  local q = revertQuote()
+  if not (q and q.ok) then return false end
+  if revertArmed(kind) then
+    local ok, why
+    if kind == "builder" then ok, why = revertToBuilder() else ok, why = revertToLaunch() end
+    if not ok then log("revert: " .. tostring(why)) end
+    return ok
+  end
+  revertArmedAt, revertArmedKind = time or 0, kind
+  return false
+end
 
 function start(node)
   if save.get("shipyard.launch") ~= 1 then
@@ -192,6 +733,8 @@ function start(node)
     return
   end
   want_spawn = true
+  force_site = false
+  snapshot(site_kind, bp)
   log("launch: vessel blueprint aboard — waiting for the pad terrain…")
 end
 
@@ -202,20 +745,35 @@ end
 -- same spaceport path as a scene start puts the craft on the pad or the
 -- runway threshold and seats the pilot. A craft from an earlier rollout that
 -- is still clamped keeps its pin (`pins`).
-local pins = {}
-function launchNow(kind)
-  if want_spawn then return false end
-  local b = save.get("shipyard.blueprint")
-  if not b or not b.parts then return false end
+--
+-- The site is looked at first (siteBlocker): a launch onto a craft, its
+-- debris or the crew is called off — false, "blocked", what is there — with
+-- the notice, the hull refunded and the crew brought home. `opts.force` (a
+-- revert, which has just cleared its own craft away) skips the look.
+function launchNow(kind, opts)
+  opts = opts or {}
+  if want_spawn then return false, "busy" end
+  local b = opts.bp or save.get("shipyard.blueprint")
+  if not b or not b.parts then return false, "no blueprint" end
+  local k = (kind == "runway" or (kind == nil and save.get("shipyard.site") == "runway")) and "runway" or "pad"
+  if not opts.force then
+    local info = siteBlocker(k, b)
+    if info then
+      refuse(k, info)
+      return false, "blocked", info
+    end
+  end
   save.set("shipyard.launch", 0)
   bp = b
-  site_kind = (kind == "runway" or (kind == nil and save.get("shipyard.site") == "runway")) and "runway" or "pad"
+  site_kind = k
   if vessel_node and vessel_node.valid and relv and body_name then
     pins[#pins + 1] = { node = vessel_node, rel = relv, body = body_name }
   end
   pending, vessel_node, relv, assemble_t, rebuilt = 0, nil, nil, nil, false
   wait_t, last_note = 0.0, 0.0
   want_spawn = true
+  force_site = true -- looked at just now
+  snapshot(site_kind, bp)
   log("launch: rolling out from the VAB (" .. site_kind .. ")")
   return true
 end
@@ -334,6 +892,17 @@ local function try_spaceport()
     end
     return false
   end
+  -- (a scene that loaded with a launch aboard looks here; launchNow looked
+  -- before it set off)
+  if not force_site then
+    local info = siteBlocker(st.kind, bp)
+    if info then
+      refuse(st.kind, info)
+      flightClosed("the launch was called off")
+      return true
+    end
+  end
+  force_site = false
   body_name = st.body
   local planet_node = find(body_name)
   local deck = st.deck and 1.24 or 0.0
@@ -362,12 +931,23 @@ local function try_spaceport()
     spawn("Vessel", vec3(vx, vy, vz), function(v)
       if fwd then v:setUp(vec3(up.x, up.y, up.z), fwd) else v:setUp(vec3(up.x, up.y, up.z)) end
       vessel_node = v
+      if flight then flight.root_id = v.id end
       spawn_parts(v, bp)
     end)
   end
   if st.deck then
+    -- The pad is clear (looked at above), so the hold-downs an earlier launch
+    -- put down are nobody's now: take them up rather than stack another set
+    -- in the same place every launch.
+    for _, old in ipairs(pad_clamps) do
+      if old.valid ~= false then destroy(old) end
+    end
+    pad_clamps = {}
+    local fl = flight
     -- the hold-down posts on the mount: the same deck box the Launchpad had
     spawn("PadClamps", vec3(gx + up.x * deck, gy + up.y * deck, gz + up.z * deck), function(lp)
+      pad_clamps[#pad_clamps + 1] = lp
+      if fl then fl.clamps = lp end
       lp:setUp(vec3(up.x, up.y, up.z), vec3(-st.fwd.x, -st.fwd.y, -st.fwd.z))
       if planet_node then lp.x, lp.y, lp.z = relg.x + up.x * deck, relg.y + up.y * deck, relg.z + up.z * deck end
       vessel()
@@ -551,6 +1131,7 @@ local function try_spawn()
     spawn("Vessel", vec3(vx, vy, vz), function(v)
       v:setUp(vec3(ux, uy, uz))
       vessel_node = v
+      if flight then flight.root_id = v.id end
       spawn_parts(v, bp)
     end)
   end, planet_node)
@@ -559,6 +1140,7 @@ local function try_spawn()
 end
 
 function update(node, dt)
+  freshness_tick()
   if want_spawn then
     wait_t = wait_t + dt
     if try_spawn() then want_spawn = false end

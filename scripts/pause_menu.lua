@@ -236,6 +236,27 @@ local function menu_page()
     row_button("settings", "Settings", function() page = "settings" end),
     row_button("controls", "Controls", function() page = "controls" end),
   }
+  -- REVERT (KSP's): back to the launch, or to the builder, while the flight is
+  -- still the one you launched (vessel_spawner owns the snapshot, the
+  -- freshness rule and the two-click confirm). The armed row is the danger key.
+  local vs = ref("vessel_spawner")
+  local rq = vs and vs.revertQuote and vs.revertQuote()
+  if rq and rq.ok then
+    local function revert_row(key, kind)
+      local armed = vs.revertArmed and vs.revertArmed(kind)
+      return { "button", key = key, style = armed and "panel/danger" or "panel/row", selected = armed or nil,
+               w = "100%", h = 36, textAlign = "center", text = vs.revertLabel(kind),
+               onClicked = function()
+                 if vs.revertArmed(kind) then close() end
+                 vs.revertClick(kind)
+               end }
+    end
+    rows[#rows + 1] = revert_row("revert", "launch")
+    if rq.builder then rows[#rows + 1] = revert_row("revertvab", "builder") end
+  elseif rq and rq.why then
+    rows[#rows + 1] = hint("Revert to launch is unavailable: " .. rq.why .. ".")
+    rows[#rows].key = "revertwhy"
+  end
   -- ABORT FLIGHT — the way home that is always there (flight_ops owns it: the
   -- fee, the two-click confirm, and leaving the craft on the fleet board).
   local fo = ref("flight_ops")

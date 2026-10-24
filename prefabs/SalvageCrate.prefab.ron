@@ -1,0 +1,99 @@
+// SALVAGE CRATE — a dropped suit pack, sealed in a bright float-less canister
+// on the sea floor (scripts/salvage.lua spawns one per crate, parented to its
+// planet, origin at the crate's centre). The cargo bay's hull in rescue orange
+// with a lamp, so it reads in murky water. No collider: the crew swims up to
+// it and presses E.
+[
+    (
+        name: "SalvageCrate",
+        tags: ["salvage"],
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (0.8, 0.8, 0.8),
+        ),
+        matter: Mesh(
+            asset_path: "models/parts/cargo.glb",
+        ),
+        object_materials: {
+            "Dark": (
+                color: (0.3, 0.3, 0.32),
+                texture: Some("textures/parts/metal_albedo.png"),
+                normal_map: Some("textures/parts/metal_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/parts/metal_orm.png"),
+                roughness: 1.2,
+                metallic_map: Some("textures/parts/metal_orm.png"),
+                metallic: 0.4,
+                ao_map: Some("textures/parts/metal_orm.png"),
+                shader: Some("shaders/hullPanels.flsl"),
+                shader_params: {
+                    "tint": (0.3, 0.3, 0.32, 1.0),
+                },
+                shading: Physical,
+            ),
+            "Decal": (
+                color: (1.0, 1.0, 1.0),
+                texture: Some("textures/parts/markings.png"),
+                roughness: 0.55,
+                metallic: 0.0,
+                shading: Physical,
+            ),
+            "Metal": (
+                color: (1, 1, 1),
+                texture: Some("textures/parts/metal_albedo.png"),
+                normal_map: Some("textures/parts/metal_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/parts/metal_orm.png"),
+                roughness: 1.0,
+                metallic_map: Some("textures/parts/metal_orm.png"),
+                metallic: 0.55,
+                ao_map: Some("textures/parts/metal_orm.png"),
+                shader: Some("shaders/hullPanels.flsl"),
+                shader_params: {
+                    "tint": (1, 1, 1, 1.0),
+                },
+                shading: Physical,
+            ),
+            "Paint": (
+                color: (1, 1, 1),
+                texture: Some("textures/parts/paint_albedo.png"),
+                normal_map: Some("textures/parts/paint_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/parts/paint_orm.png"),
+                roughness: 0.8,
+                metallic_map: Some("textures/parts/paint_orm.png"),
+                metallic: 0.2,
+                ao_map: Some("textures/parts/paint_orm.png"),
+                shader: Some("shaders/hullPanels.flsl"),
+                shader_params: {
+                    "tint": (1.0, 0.42, 0.08, 1.0),
+                },
+                shading: Physical,
+            ),
+            "Stencil": (
+                color: (0.06, 0.06, 0.07),
+                texture: Some("textures/parts/markings.png"),
+                roughness: 0.6,
+                metallic: 0.0,
+                shading: Physical,
+            ),
+        },
+        scripts: [],
+    ),
+    (
+        name: "SalvageLamp",
+        transform: (
+            translation: (0.0, 0.9, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: PointLight(
+            color: (1.0, 0.6, 0.25),
+            intensity: 3.0,
+            range: 9.0,
+        ),
+        scripts: [],
+        parent: Some(0),
+    ),
+]

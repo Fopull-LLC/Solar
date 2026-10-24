@@ -354,12 +354,32 @@ local function nice(v)
   return math.max(step, math.floor(v / step) * step)
 end
 
+-- The top of a world's air (m over its radius), 0 if it has none. An ORBIT
+-- goal is "periapsis clear of the atmosphere": on a deep-air world (scale 4,
+-- air up to a radius high) 10 % of the room to the SOI can sit only just
+-- above the top, so the target is never under the top plus a margin.
+local function air_top(name)
+  local b = name and space.body(name) or (not name and home_body()) or nil
+  local w = b and save.get("world." .. b.name)
+  if not (w and (w.atmo or 0) > 0.01) then return 0 end
+  return w.atmoHeight or 0
+end
+
 local function target_of(g)
   if g.value then return g.value end
   if not g.frac then return nil end
   local c = ceiling(g.body)
   if not c then return nil end
-  return nice(c * g.frac)
+  local t = nice(c * g.frac)
+  if g.kind == "orbit" or g.kind == "cargo" then
+    local top = air_top(g.body)
+    if top > 0 and t < top * 1.08 then
+      -- rounded UP here: the target must clear the air, not just reach it
+      local step = top < 500 and 50 or 100
+      t = math.ceil(top * 1.08 / step) * step
+    end
+  end
+  return t
 end
 
 -- The goal's text with its resolved target in it. A label with no `%s` is a
@@ -1748,6 +1768,15 @@ function start(node)
     active = nil
     save.set("mission.active", false)
   end
+end
+
+-- Read the contract state again from the save: a revert to launch
+-- (vessel_spawner) has put mission.* back as they were at the launch. The
+-- flight's high-water marks go with the flight.
+function reloadFromSave()
+  start(nil)
+  best, last_piloting = {}, false
+  lastPaid = nil
 end
 
 -- Record where the crew has stood, for the charter, and pay it when it's whole.

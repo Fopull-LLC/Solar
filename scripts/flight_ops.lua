@@ -204,6 +204,16 @@ local function crew_home()
   return tx + ux * 1.6, ty + uy * 1.6, tz + uz * 1.6
 end
 
+-- Global: vessel_spawner brings the crew home here when a launch is called off.
+function crewHome() return crew_home() end
+
+-- A flight that has ended (the crew home, the craft recovered or left) can no
+-- longer be reverted to its launch: tell the spawner, which keeps that offer.
+local function close_revert(why)
+  local vs = ref("vessel_spawner")
+  if vs and vs.flightClosed then vs.flightClosed(why) end
+end
+
 -- ── what the flight is ──────────────────────────────────────────────────────
 
 local function piloted()
@@ -296,6 +306,7 @@ local function do_recover(st)
     return false
   end
   st.v.recoverCraft()
+  close_revert("the craft was recovered")
   msg, msg_t = "", -100
   return true
 end
@@ -309,6 +320,7 @@ local function do_leave(st)
   if st.v.crewAboard == false and st.v.releaseControl then
     st.v.releaseControl()
     switchToCrew()
+    close_revert("the flight was ended")
     log("FLIGHT ENDED — " .. tostring(st.v.craftName or "the probe") .. " stays where it is")
     msg, msg_t = "", -100
     return true
@@ -320,6 +332,7 @@ local function do_leave(st)
   end
   local name = (st.v.craftName ~= "" and st.v.craftName) or "the craft"
   st.v.standDown(st.v.node, hx, hy, hz, 0, 0, 0)
+  close_revert("the flight was ended")
   log(string.format("FLIGHT ENDED — %s stays parked where you left it; crew home at the base",
     name))
   msg, msg_t = "", -100
@@ -362,6 +375,7 @@ local function do_pickup(st)
   -- at the colony still carrying it just strands them again, from home.
   astro.vx, astro.vy, astro.vz = 0, 0, 0
   astro.visible = true
+  close_revert("the crew was picked up")
 
   if charged >= st.fee then
     log(string.format("PICKUP — shuttle inbound; crew home at the base (%s)",
@@ -438,6 +452,7 @@ function abortFlight()
   -- Throttle off and out of the seat; the craft keeps flying whatever it was
   -- flying. The fleet sync below keeps it on the board.
   q.v.standDown(q.v.node, hx, hy, hz, 0, 0, 0)
+  close_revert("the flight was aborted")
   local paid = bill(q.fee, "flight abort — crew recovery")
   local co = ref("company")
   log(string.format("FLIGHT ABORTED — crew home at the base; %s left where it is. Billed %s%s",
@@ -795,6 +810,8 @@ local function respawn(fid, rec)
       local pz = wz + rx[3] * d.x + up[3] * d.y + rz[3] * d.z
       spawn(d.prefab, vec3(px, py, pz), function(part)
         part:setAngles(d.yaw or 0, d.pitch or 0, d.roll or 0)
+        -- a part of a craft, wherever it ends up (vessel_spawner's pad check)
+        if part.addTag then part:addTag("craftpart") end
         landed = landed + 1
         if landed == total then
           -- Back on its orbit: a spawned compound starts at rest in its body's
@@ -1062,6 +1079,7 @@ function recoverFleet(fid)
   local ok, why = v.recoverReady()
   if not ok then return false, why end
   v.recoverCraft()
+  close_revert("a craft was recovered")
   local fx = ref("sfx"); if fx and fx.flightEnded then fx.flightEnded("recover") end
   return true
 end
@@ -1103,6 +1121,25 @@ end
 
 -- The controller of a fleet craft that's in the scene (for the map's focus).
 function liveOf(fid) return live_of(fid) end
+
+-- These nodes are gone on purpose (a revert to launch took them away): their
+-- records go now, not after the board's usual grace, and are never rebuilt.
+function forgetNodes(ids)
+  local f = fleet()
+  local n = 0
+  for _, id in ipairs(ids or {}) do
+    local fid = fleet_live[id]
+    if fid then
+      f[fid] = nil
+      fleet_live[id] = nil
+      if restore then restore[fid] = nil end
+      n = n + 1
+    end
+    fleet_born[id] = nil
+  end
+  if n > 0 then save.set(FLEET_KEY, f) end
+  return n
+end
 
 -- Look at the saved fleet again and rebuild anything not in the scene (the
 -- restore list is otherwise drawn up once per scene load). For a record

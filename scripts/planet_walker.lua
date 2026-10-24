@@ -196,8 +196,10 @@ end
 -- cave below sea level is air) and fills again in air or aboard any craft —
 -- a craft counts as air, so a sealed one is a submarine. Empty, the crew
 -- blacks out: control goes, and a moment later they wake at the base (the
--- company's rescue, the suit pack's contents lost to the water, a fee when
--- the books can stand it). `oxygen` is 0..1, `o2Left` seconds of air left,
+-- company's rescue, a fee when the books can stand it). The suit pack's
+-- contents are NOT lost: they sink where the crew went down as a salvage
+-- crate (scripts/salvage.lua) with a marker over it, and swimming back down
+-- and pressing E puts them back in the pack — a death drop, not a deletion. `oxygen` is 0..1, `o2Left` seconds of air left,
 -- `headUnder` whether the helmet is under water; status_hud shows a chip
 -- while the tank is not full.
 oxygen = 1.0
@@ -205,6 +207,7 @@ o2Left = 60.0
 headUnder = false
 downed = false            -- blacked out, waiting for the rescue
 drowned = 0               -- times the crew has run out of air (probes)
+lastDrop = nil            -- the salvage crate id the last blackout left (probes)
 local down_t = 0.0
 
 -- Where the crew wakes: the colony, else straight up out of the water.
@@ -228,27 +231,44 @@ local function rescue_point(node, ux, uy, uz)
   return node.x + ux * 3, node.y + uy * 3, node.z + uz * 3
 end
 
+-- The pack's materials go into a salvage crate on the bottom where the crew
+-- went down (salvage.drop). Without the salvage library (a harness) they stay
+-- in the pack: nothing the crew carried is ever deleted.
+local function drop_pack(node, wx, wy, wz)
+  local sv = ref("salvage")
+  local dom = space.dominant and space.dominant(wx, wy, wz)
+  if not (sv and sv.drop and dom) then return nil, 0 end
+  local ok, id, kg, e = pcall(sv.drop, dom, wx, wy, wz, node)
+  if not ok then log("breath: the salvage drop failed: " .. tostring(id)) return nil, 0 end
+  return id, kg or 0, e
+end
+
 local function blackout_end(node, ux, uy, uz)
+  local wx, wy, wz = node.x, node.y, node.z
+  local id, kg, e = drop_pack(node, wx, wy, wz)
   local x, y, z = rescue_point(node, ux, uy, uz)
   node.x, node.y, node.z = x, y, z
   node.vx, node.vy, node.vz = 0, 0, 0
   downed = false
   oxygen, o2Left = 1.0, params.o2_secs
-  local inv = ref("inventory")
-  local lost = inv and inv.mass and inv.mass("astro") or 0
-  if inv and inv.clear and lost > 0 then inv.clear("astro") end
   local co = ref("company")
   local fee = math.floor(params.o2_fee or 0)
   local paid = fee > 0 and co and co.afford and co.afford(fee) and co.spend(fee, "crew rescue") or false
   local bc = ref("big_caption")
   if bc and bc.show then
     local why = "Out of air. The company brought the crew back to the base"
-    if lost > 0.05 then why = why .. string.format("; the suit pack (%.0f kg) went with the water", lost) end
+    if id and kg > 0.05 then
+      local sv = ref("salvage")
+      local where = sv and sv.fromBase and e and sv.fromBase(e) or nil
+      why = why .. string.format(". The suit pack (%.0f kg) sank where you went down%s — follow the SUIT PACK marker, swim down and press E to take it back",
+        kg, where and (", " .. where) or "")
+    end
     if paid then why = why .. string.format(". Rescue: $%d", fee) end
-    bc.show("CREW LOST", why .. ".", 5.0)
+    bc.show("CREW LOST", why .. ".", 7.0)
   end
-  log(string.format("breath: the crew ran out of air and woke at the base (pack %.1f kg lost, fee %s)",
-    lost, paid and ("$" .. fee) or "none"))
+  lastDrop = id
+  log(string.format("breath: the crew ran out of air and woke at the base (pack %.1f kg %s, fee %s)",
+    kg or 0, id and ("in salvage crate " .. tostring(id)) or "kept", paid and ("$" .. fee) or "none"))
 end
 
 -- One frame of breath. `under`: the helmet is in water; `aboard`: in a craft.
@@ -458,6 +478,11 @@ end
 function start(node)
   rig = node:getcomponent("RigidBody")
   cam = ref("planet_camera")
+  -- SALVAGE (scripts/salvage.lua): the crates a blackout leaves. Its node is
+  -- spawned when the scene carries none, as the aero library is.
+  if spawn and findScript and not findScript("salvage") then
+    pcall(spawn, "SalvageLib", vec3(0, 0, 0))
+  end
 end
 
 -- The yaw, in the Astronaut node's own frame, that faces a WORLD direction.

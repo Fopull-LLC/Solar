@@ -831,6 +831,31 @@ local function stage_stack(t, lift)
              end } }
 end
 
+-- REVERT TO LAUNCH, one key at the top right beside the ☰ button, while the
+-- flight is still the one you launched (vessel_spawner decides). The first
+-- click arms it — the key turns red and asks — and the second, within a few
+-- seconds, goes. The pause menu has the same (and Revert to the builder).
+local MENU_BTN_W = 112
+local function revert_key(res_h)
+  local vs = ref("vessel_spawner")
+  local q = vs and vs.revertQuote and vs.revertQuote()
+  if not (q and q.ok) then return nil end
+  local armed = vs.revertArmed and vs.revertArmed("launch") or false
+  -- (graphics.lua's notice toast takes that strip for a few seconds: the key
+  -- steps down under the fuel block meanwhile)
+  local gx = ref("graphics")
+  local toast = gx and type(gx.notice) == "string" and gx.notice ~= "" and time - (gx.noticeAt or -1e9) < 5.0
+  local x, y = -(M + MENU_BTN_W + 8), M
+  if toast then x, y = -M, M + 28 + 8 + (res_h or 0) + 8 end
+  return { "button", key = "revert", style = armed and "panel/danger" or "hud/button", selected = armed or nil,
+           pin = "topRight", x = x, y = y, w = armed and 150 or 96, h = 28,
+           textAlign = "center", textValign = "center", focusable = false,
+           text = armed and "CONFIRM REVERT?" or "◂ REVERT",
+           tooltip = armed and "Click again: back on the pad as you rolled out. Progress since launch is lost."
+             or "Revert to launch — back on the pad as you rolled out (also in the Esc menu)",
+           onClicked = function() if vs.revertClick then vs.revertClick("launch") end end }
+end
+
 -- ── the scene's instruments, placed on the console ──────────────────────────
 
 -- The navball, tapes and windows are pinned to the bottom centre, so their
@@ -932,6 +957,8 @@ function update(node, dt)
   if res then tree[#tree + 1] = res end
   local stack = stage_stack(t, lift)
   if stack then tree[#tree + 1] = stack end
+  local rv = revert_key(res_h)
+  if rv then tree[#tree + 1] = rv end
   ui.make(node, tree)
 
   -- The tooltip lives on the overlay so it draws over the ball and tapes. Made

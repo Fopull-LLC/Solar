@@ -25,6 +25,26 @@
 -- Opacity eases toward that goal at `rate` per second, in steps of 1/8 (a
 -- material write only when the step changes).
 --
+-- WHERE THE CAMERA IS (the builder's flicker, 2026-10-24). This used to read
+-- the camera off the render camera's node (camera.screenToRay) and turn it
+-- into the building's frame. In the builder that node is placed by
+-- builder_camera's lateUpdate, which runs AFTER this one (the overlay's
+-- scripts come later in the scene), so the camera read here was last frame's
+-- — and the building, parented to a planet moving ~90 m/s on rails, had moved
+-- on by one, two or no rails ticks since. The camera "seen" from the building
+-- jumped by multiples of ~1.45 m from frame to frame (measured: steps of 1.4,
+-- 2.9, 4.4 … 10 m, with the real camera still or orbiting slowly), so walls at
+-- the edge of the near band and of a sight line faded in and out a step every
+-- frame or two: 45 reversals in 24 s of slow orbit, 3–5 with the camera
+-- still. Now, in the builder, the camera and the craft come straight from
+-- builder_camera's own state in the build frame (a child of this building,
+-- unrotated): no node, no rails, no frame of lag. Elsewhere (on foot, the
+-- planet camera) the render camera is still read, which is fresh there.
+--
+-- HYSTERESIS. An occluded chunk stays out for `hold` seconds after the last
+-- sight line through it clears, so a line grazing a chunk's edge as the view
+-- turns does not blink it.
+--
 -- Chunk boxes come from the root's string params (written by the
 -- generators): "node|hx|hy|hz|Mat,Mat|k;..." — half sizes about the node's
 -- origin, the materials to write, and the near factor k (default 1).
@@ -38,8 +58,9 @@
 --   near0, near1, rate   the numbers above (metres, metres, 1/s)
 --   faded    how many chunks are below full opacity (read-only, for probes)
 --   fadedNames  which, with their opacity (read-only, for probes)
+--   seen     the camera position the fade used this frame, building-local
 
-defaults = { near0 = 0.6, near1 = 3.0, rate = 6.0, chunks = "", ext = "" }
+defaults = { near0 = 0.6, near1 = 3.0, rate = 6.0, hold = 0.35, chunks = "", ext = "" }
 
 enabled = true
 occlude = false
@@ -48,6 +69,7 @@ radius, halfHeight = 4.0, 8.0
 near0, near1, rate = nil, nil, nil
 faded = 0
 fadedNames = ""
+seen = { 0, 0, 0 }   -- where the camera was taken to be this frame (vab-local; probes)
 
 local root
 local chunks = {}       -- { name, node, ext, hx, hy, hz, k, mats, cx, cy, cz, a, q }
@@ -140,6 +162,41 @@ local function inside(px, py, pz, c)
   return math.abs(px - c.cx) <= c.hx and math.abs(py - c.cy) <= c.hy and math.abs(pz - c.cz) <= c.hz
 end
 
+-- The builder's own view, in this building's frame: camera and craft centre
+-- (vab-local), or nil when the builder is not up here. The build frame is an
+-- unrotated child of this node (build_host make_frame), so frame → building is
+-- its offset; in the standalone builder the builder's frame is the world and
+-- this node stands unrotated at its own position.
+local bc_ref, bh_ref, view_retry = nil, nil, 0
+local function builder_view()
+  if not occlude then return nil end
+  if not (bc_ref and bc_ref.valid ~= false) or not (bh_ref and bh_ref.valid ~= false) then
+    view_retry = view_retry - 1
+    if view_retry > 0 then return nil end
+    view_retry = 60
+    bc_ref = find("Builder Camera") and findScript("builder_camera") or nil
+    bh_ref = find("Build Host") and findScript("build_host") or nil
+  end
+  local bc, bh = bc_ref, bh_ref
+  if not (bc and bc.camState and bc.viewBasis) then return nil end
+  local ox, oy, oz
+  local fr = bh and bh.frameNode and bh.frameNode()
+  if fr and fr.valid ~= false and fr.parent and fr.parent.id == root.id then
+    ox, oy, oz = fr.x, fr.y, fr.z
+  elseif bh and bh.mode == "standalone" then
+    ox, oy, oz = -root.x, -root.y, -root.z
+  else
+    return nil
+  end
+  local cs = bc.camState()
+  if not (cs and cs.P and cs.d) then return nil end
+  local f = bc.viewBasis(cs.yaw or 0, cs.pitch or 0)
+  local cam = { cs.P.x - f.x * cs.d + ox, cs.P.y - f.y * cs.d + oy, cs.P.z - f.z * cs.d + oz }
+  local b = bc.bounds and bc.bounds()
+  local tgt = b and b.centre and { b.centre.x + ox, b.centre.y + oy, b.centre.z + oz } or nil
+  return cam, tgt
+end
+
 local function apply(c, q)
   if q == c.q or not c.node then return end
   c.q = q
@@ -164,13 +221,22 @@ function lateUpdate(node, dt)
     faded = 0
     return
   end
-  if not camera.exists() then return end
-  local w, h = camera.screenSize()
-  local ox, oy, oz = camera.screenToRay(w * 0.5, h * 0.5)
-  local cam = root:toLocal(vec3(ox, oy, oz))
-  local cx, cy, cz = cam.x, cam.y, cam.z
-  local tx, ty, tz = bp[1], bp[2], bp[3]
-  if target then
+  local cx, cy, cz, tx, ty, tz
+  local bcam, btgt = builder_view()
+  if bcam then
+    cx, cy, cz = bcam[1], bcam[2], bcam[3]
+  else
+    if not camera.exists() then return end
+    local w, h = camera.screenSize()
+    local ox, oy, oz = camera.screenToRay(w * 0.5, h * 0.5)
+    local cam = root:toLocal(vec3(ox, oy, oz))
+    cx, cy, cz = cam.x, cam.y, cam.z
+  end
+  seen[1], seen[2], seen[3] = cx, cy, cz
+  tx, ty, tz = bp[1], bp[2], bp[3]
+  if btgt then
+    tx, ty, tz = btgt[1], btgt[2], btgt[3]
+  elseif target then
     local t = root:toLocal(target)
     tx, ty, tz = t.x, t.y, t.z
   end
@@ -222,7 +288,9 @@ function lateUpdate(node, dt)
             end
           end
         end
-        c.occ = occ
+        if occ then c.occ_t = time end
+        -- (held out a moment after the last line through it clears)
+        c.occ = occ or (c.occ_t ~= nil and time - c.occ_t < (params.hold or 0.35))
       end
       if c.occ and occlude then goal = 0.0 end
       c.a = c.a + (goal - c.a) * ease

@@ -2345,8 +2345,7 @@ local function update_chutes(node, dt)
   if db and db.radius then
     local dx, dy, dz = node.x - db.x, node.y - db.y, node.z - db.z
     local alt = math.sqrt(dx * dx + dy * dy + dz * dz) - db.radius
-    local band = db.radius * 0.35
-    dens = (alt <= 0) and 1.0 or math.max(0.0, 1.0 - alt / band)
+    dens = airBandAt(db, alt)
   end
   f.t, f.dens, f.spd, f.grounded = f.t + dt, dens, spd, info.grounded or false
   local PACK_LEN = 12.5   -- riser + lines + canopy, m (models/parts/parachute.glb)
@@ -5034,6 +5033,37 @@ function worldScaleK()
   return (sc and sc.speed) or 1.0, (sc and sc.alt) or 1.0
 end
 
+-- THE AIR BAND: the share of the ground's air (0 … 1) at `alt` metres over
+-- body `db`, which the chutes, the heating, the coasting drag and the joint
+-- loads all read. Scale 1–3 worlds keep the band they were tuned on: linear
+-- to 35 % of the radius. A deep-air world (scale 4+: its world record carries
+-- `atmoScaleH`, system_generator SCALES[4]) has air up to its published
+-- top, so the band is the aero model's own curve there (aero.lua airShare:
+-- e^(−h/Hs) tapered to nothing at the top) — a chute opens, and a re-entry
+-- heats, in the same air the wings fly in. Global on purpose (the upvalue
+-- ceiling); the world record is cached per body for a few seconds.
+AIRBAND = { name = nil, w = nil, t = -100 }
+function airBandAt(db, alt)
+  if not (db and db.radius) then return 0.0 end
+  if time - AIRBAND.t > 3 or AIRBAND.name ~= db.name or time < AIRBAND.t then
+    AIRBAND.name, AIRBAND.t = db.name, time
+    AIRBAND.w = db.name and save.get("world." .. db.name) or nil
+  end
+  local w = AIRBAND.w
+  if w and (w.atmoScaleH or 0) > 0 and (w.atmoHeight or 0) > 0 then
+    if (w.atmo or 0) <= 0.005 then return 0.0 end
+    if alt <= 0 then return 1.0 end
+    local H, Hs = w.atmoHeight, w.atmoScaleH
+    if alt >= H then return 0.0 end
+    local e0 = math.exp(-H / Hs)
+    return (math.exp(-alt / Hs) - e0) / (1 - e0)
+  end
+  local band = db.radius * 0.35
+  if alt <= 0 then return 1.0 end
+  if alt >= band then return 0.0 end
+  return 1.0 - alt / band
+end
+
 -- Air density factor (0 … 1, the same band model as drag and heating) and the
 -- dominant body, at the craft.
 local function air_at(node)
@@ -5042,9 +5072,7 @@ local function air_at(node)
   if not db or not db.radius then return 0.0, db end
   local dx, dy, dz = node.x - db.x, node.y - db.y, node.z - db.z
   local alt = math.sqrt(dx * dx + dy * dy + dz * dz) - db.radius
-  local band = db.radius * 0.35
-  if alt <= 0 or alt >= band then return (alt <= 0) and 1.0 or 0.0, db end
-  return 1.0 - alt / band, db
+  return airBandAt(db, alt), db
 end
 
 -- STRESS: load every joint, fail the ones past their limit. Runs piloted or not
@@ -8053,6 +8081,26 @@ function fixedUpdate(node, dt)
     if engine_active(e, cut) then total_thrust = total_thrust + e.thrust end
   end
   if throttle > 0 and not info.anchored and fuel > 0 then
+    -- NOZZLES (rating version 3, parts_registry ENGINE NICHES): a rocket's
+    -- thrust falls in thick air by its nozzle's sea-level share `asl` (the
+    -- blueprint's; absent on older builds = the same everywhere), at the burn
+    -- rate it always had: k = 1 − (1 − asl)·σ. σ is the air's density over
+    -- reference sea level: the AIR BAND the chutes, drag and heating read
+    -- (airBandAt, the aero curve on a deep-air world) times the world's
+    -- ground density (its record's atmo over aero.lua's ATMO_REF 0.75), so
+    -- engines and drag agree. Globals only: this function is at its upvalue
+    -- ceiling.
+    local sig = 0.0
+    do
+      local dom = space.dominant(node.x, node.y, node.z)
+      local db = dom and space.body(dom)
+      if db and db.radius then
+        local dx, dy, dz = node.x - db.x, node.y - db.y, node.z - db.z
+        local share = airBandAt(db, math.sqrt(dx * dx + dy * dy + dz * dz) - db.radius)
+        local w = AIRBAND.w
+        sig = math.max(0.0, math.min(2.5, share * ((w and w.atmo) or 0) / 0.75))
+      end
+    end
     for _, e in ipairs(engines) do
       if engine_active(e, cut) then
         -- Physics-fresh base: thrust lands ON the hull, not a rails-carry
@@ -8066,7 +8114,9 @@ function fixedUpdate(node, dt)
         local wdx = rx.x * e.dx + up.x * e.dy + rz.x * e.dz
         local wdy = rx.y * e.dx + up.y * e.dy + rz.y * e.dz
         local wdz = rx.z * e.dx + up.z * e.dy + rz.z * e.dz
-        local f = e.thrust * (e.jet and (e.jk or 0) or throttle)
+        local asl = e.rec and e.rec.asl
+        local nk = (asl and asl < 1) and math.max(0.05, 1.0 - (1.0 - asl) * sig) or 1.0
+        local f = e.thrust * (e.jet and (e.jk or 0) or throttle * nk)
         assembly.forceAt(node, vec3(wdx * f, wdy * f, wdz * f), vec3(ex, ey, ez))
       end
     end
@@ -8127,7 +8177,10 @@ function fixedUpdate(node, dt)
     if db2 and not info.anchored and not info.grounded and not R2.onWheels then
       local dxh, dyh, dzh = node.x - db2.x, node.y - db2.y, node.z - db2.z
       local alt = math.sqrt(dxh * dxh + dyh * dyh + dzh * dzh) - db2.radius
-      local band = db2.radius * 0.35
+      -- (the band's density, from airBandAt: the deep air of a scale-4 world
+      -- reaches its published top; `band` is just "still inside the air")
+      local band_d = airBandAt(db2, alt)
+      local band = band_d > 0 and math.huge or -math.huge
       local v = info.vel
       local spd = math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z)
       -- Wind + drag live across the WHOLE band (not just when hot).
@@ -8138,7 +8191,7 @@ function fixedUpdate(node, dt)
       -- rest of the way unbraked and broke at 9.6 m/s. Below the datum the
       -- air is simply sea-level air.
       if alt < band then
-        local dens = math.min(1.0, 1.0 - alt / band)
+        local dens = math.min(1.0, band_d)
         wind_intensity = dens * math.min(1.4, math.max(0.0, (spd - 8.0) / 80.0))
         -- Aero drag opposes velocity through the CoM (∝ density · v²). Gated to
         -- fast UNPOWERED flight: coasting/reentry is where "slow down" bites,
@@ -8178,7 +8231,7 @@ function fixedUpdate(node, dt)
         -- ~146 m/s craft burned up in a second, which made the ship untestable.
         -- Onset 90 m/s, a gentler cube and coefficient: you can fly fast, but a
         -- screaming-fast reentry (250+ m/s) still lights you up over a few s.
-        local density = math.min(1.0, 1.0 - alt / band)
+        local density = math.min(1.0, band_d)
         heating = density ^ 1.5 * (spd / (130.0 * vk2)) ^ 3 * 0.03 -- dmg/sec at the nose
         local ivx, ivy, ivz = v.x / spd, v.y / spd, v.z / spd
         local rx2, up2, rz2 = basis(node)
@@ -8234,7 +8287,7 @@ function fixedUpdate(node, dt)
         -- Drag ∝ air density · v² (real aero), pooled across every open chute
         -- and scaled by how full the canopy is (chute_anim, driven by
         -- update_chutes). Through the CoM so it decelerates without tumbling.
-        local density = math.min(1.0, 1.0 - alt / band)
+        local density = math.min(1.0, band_d)
         -- Terminal speed under the canopies is sqrt(m·g / (k·density)). At 0.9
         -- the starter rocket (3.6 t) came down at 5.8 m/s on an 8.4 g world —
         -- a hard landing for a first flight; 1.3 gives 4.8 m/s there and

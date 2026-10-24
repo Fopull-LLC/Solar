@@ -332,7 +332,15 @@ local function rollout_tick(dt)
       teardown(false)
       crew_to_site(ro.site)
       local vs = ref("vessel_spawner")
-      local ok = vs and vs.launchNow and vs.launchNow(ro.site)
+      local ok, why = false, nil
+      if vs and vs.launchNow then ok, why = vs.launchNow(ro.site) end
+      if not ok and why == "blocked" then
+        -- The site is taken (vessel_spawner has said so on screen, refunded
+        -- the hull and brought the crew home): fade back in on the world.
+        note("the " .. ro.site .. " is blocked — rollout called off")
+        ro.phase, ro.t = "in", time
+        return
+      end
       if not ok then
         note("vessel_spawner can't launch in place — the old way (a scene load)")
         save.set("shipyard.launch", 1)
