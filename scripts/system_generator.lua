@@ -1492,6 +1492,23 @@ end
 
 -- The mountain ranges for the home world: the best of HOME_SEARCH (seed,
 -- scale) pairs. Returns seed, scale, coverage, and the stats it was picked by.
+-- THE PICK IS KEPT. The search is ~240k noise reads (about 100 ms), and the
+-- system is rolled again on every scene load (each launch, each return from
+-- the VAB), always to the same answer. So the save keeps WHICH candidate won —
+-- an index into the candidate list, never the numbers, which are re-read from
+-- the stream and re-scored exactly as the search scored them — under a key
+-- made of the whole candidate list, so a different stream (or a change to
+-- the search) can never reuse a stale pick.
+HOME_RANGES_V = 1
+local function ranges_key(cands)
+  local a, b = 0, 0
+  for k, c in ipairs(cands) do
+    a = (a * 31 + c.seed) % 4294967291
+    b = (b + c.seed * k) % 4294967291
+  end
+  return string.format("%d:%d:%d:%d:%.17g", HOME_RANGES_V, #cands, a, b, cands[#cands].scale)
+end
+
 local function home_ranges(q)
   local cands = {}
   for k = 1, HOME_SEARCH do cands[k] = { seed = q:int(1, 1e9), scale = q:range(3.2, 6.0) } end
@@ -1499,19 +1516,31 @@ local function home_ranges(q)
     local c = cands[1]
     return c.seed, c.scale, 0.5, { gap = 0, searched = 0 }
   end
-  -- A coarse look at everything (both caps and the equator band, 30 points),
-  -- then a fine one at the best few.
-  local coarse = fib_dirs(160, function(lat) return math.abs(lat) > HOME_POLAR or math.abs(lat) < HOME_EQUATOR end)
-  local pre = {}
-  for _, d in ipairs(coarse) do
-    if math.abs(d.lat) > HOME_POLAR or (#pre < 40 and math.abs(d.lat) < HOME_EQUATOR) then pre[#pre + 1] = d end
-  end
-  for _, c in ipairs(cands) do c.g = mask_gap(c.seed, c.scale, pre) end
-  table.sort(cands, function(a, b) if a.g ~= b.g then return a.g > b.g end return a.seed < b.seed end)
   local fine = fib_dirs(1200, function(lat) return math.abs(lat) > HOME_POLAR or math.abs(lat) < HOME_EQUATOR end)
-  local best, bestS = nil, -1e9
-  for i = 1, math.min(48, #cands) do
-    local c = cands[i]
+  local key = ranges_key(cands)
+  local kept = save and save.get and save.get("home.ranges")
+  local pick = nil
+  if type(kept) == "table" and kept.key == key then
+    local i = tonumber(kept.pick)
+    if i and cands[i] then pick = { cands[i] } end
+  end
+  local list = pick
+  if not list then
+    -- A coarse look at everything (both caps and the equator band, 30 points),
+    -- then a fine one at the best few.
+    local coarse = fib_dirs(160, function(lat) return math.abs(lat) > HOME_POLAR or math.abs(lat) < HOME_EQUATOR end)
+    local pre = {}
+    for _, d in ipairs(coarse) do
+      if math.abs(d.lat) > HOME_POLAR or (#pre < 40 and math.abs(d.lat) < HOME_EQUATOR) then pre[#pre + 1] = d end
+    end
+    for k, c in ipairs(cands) do c.g = mask_gap(c.seed, c.scale, pre); c.k = k end
+    list = {}
+    for k, c in ipairs(cands) do list[k] = c end
+    table.sort(list, function(a, b) if a.g ~= b.g then return a.g > b.g end return a.seed < b.seed end)
+  end
+  local best, bestS, bestK = nil, -1e9, nil
+  for i = 1, math.min(48, #list) do
+    local c = list[i]
     local g, thr = mask_gap(c.seed, c.scale, fine)
     -- The mask the threshold makes: wanted high over the caps, low elsewhere.
     local edge = thr
@@ -1533,9 +1562,13 @@ local function home_ranges(q)
     if s > bestS then
       bestS = s
       best = { seed = c.seed, scale = c.scale, cov = 1 - edge, gap = g, capN = cn, capS = cs, eq = ce, eqHigh = eqHigh }
+      bestK = c.k
     end
   end
   best.searched = #cands
+  if not pick and bestK and save and save.set then
+    pcall(save.set, "home.ranges", { key = key, pick = bestK })
+  end
   return best.seed, best.scale, best.cov, best
 end
 
@@ -1759,11 +1792,36 @@ local function site_publish(site)
   homeSitePending = false
 end
 
+-- A world's channels and lakes are the biggest record in the save (every
+-- river's points), and every reader asks through hydroOf, often several times
+-- a frame (climate's river distance, the base's water test): each save.get
+-- turned the whole record into Lua again, 60–110 ms on the base's siting
+-- frames. So the record is read from the save once per slot and kept; the
+-- only writers are here (hydro_put), and a roll forgets it.
+local hydro_mem = {}
+local function hydro_slot() return save.slot and save.slot() or "" end
+local function hydro_get(name)
+  local m = hydro_mem[name]
+  local sl = hydro_slot()
+  if m and m.slot == sl then return m.v end
+  local v = save.get("hydro." .. name)
+  if v ~= nil then hydro_mem[name] = { slot = sl, v = v } end
+  return v
+end
+local function hydro_put(name, v)
+  save.set("hydro." .. name, v)
+  hydro_mem[name] = { slot = hydro_slot(), v = v }
+end
+-- Forget the kept record (something other than this file changed the save's).
+function hydroForget(name)
+  if name then hydro_mem[name] = nil else for k in pairs(hydro_mem) do hydro_mem[k] = nil end end
+end
+
 local function site_try()
   local w = site_wait
   if not w then return end
   local cached = save.get("home.site")
-  local hyd = save.get("hydro." .. w.name)
+  local hyd = hydro_get(w.name)
   local ready = type(cached) == "table" and cached.seed == w.o.seed and cached.v == HOME_GEN
   if not ready and not (hyd and (type(hyd) == "table" and hyd.seed == w.o.seed and hyd.v == HYDRO_V)) and not (terrain and terrain.planetRivers) then
     hyd = {}   -- no engine to ask (the offline harness): the site from the ground alone
@@ -1920,6 +1978,7 @@ local function hydro_valid(cached, o)
   return type(cached) == "table" and cached.seed == o.seed and cached.v == HYDRO_V
 end
 
+
 -- What planetLakes is asked: the coarse grid and the sea it drains to.
 local function lake_query(gs)
   local o = gs.opts
@@ -1972,7 +2031,7 @@ end
 
 function hydroOf(name)
   if not name then return nil end
-  local cached = save.get("hydro." .. name)
+  local cached = hydro_get(name)
   local gs = GENSPEC[name]
   if not gs then return cached end
   local o = gs.opts
@@ -1987,7 +2046,7 @@ function hydroOf(name)
     lakes = ok and l or nil
   end
   local out = hydro_assemble(o, chs, lakes, q)
-  save.set("hydro." .. name, out)
+  hydro_put(name, out)
   return out
 end
 
@@ -2004,7 +2063,7 @@ function hydroWarm(name)
   local gs = name and GENSPEC[name]
   if not gs or hydro_wait[name] then return end
   local o = gs.opts
-  if hydro_valid(save.get("hydro." .. name), o) then return end
+  if hydro_valid(hydro_get(name), o) then return end
   if not (terrain and terrain.planetLakes and terrain.planetRivers) then return end
   local job = { gs = gs, slot = save.slot and save.slot() or nil }
   hydro_wait[name] = job
@@ -2015,8 +2074,8 @@ function hydroWarm(name)
     if hydro_wait[name] == job then hydro_wait[name] = nil end
     -- A galaxy rolled again, or another save loaded, while it was out.
     if GENSPEC[name] ~= gs or (save.slot and save.slot() ~= job.slot) then return end
-    if hydro_valid(save.get("hydro." .. name), o) then return end
-    save.set("hydro." .. name, hydro_assemble(o, job.rivers, job.lakes ~= false and job.lakes or nil, q))
+    if hydro_valid(hydro_get(name), o) then return end
+    hydro_put(name, hydro_assemble(o, job.rivers, job.lakes ~= false and job.lakes or nil, q))
   end
   local function ask(fn, args, field)
     args[#args + 1] = function(v) job[field] = v or {}; done() end
@@ -2540,6 +2599,7 @@ local function roll(p)
 
   homeStar, homeTaken = nil, {}
   GENSPEC = {}
+  for k in pairs(hydro_mem) do hydro_mem[k] = nil end
   lastBaseDir, lastHomeSite = nil, nil
   site_wait, homeSitePending = nil, false
   lastHomeGen = tonumber(p.homeGen) or 1

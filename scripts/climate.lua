@@ -66,9 +66,27 @@ end
 -- save) we still answer, from whatever the rails know — a body always has a
 -- radius and a µ, and "barren, airless, no sea" is the honest default.
 
+-- Read once a frame: the record is asked for per ground sample (the base's
+-- water test, the flora, the lakes), and each save.get turned it into Lua
+-- again — 8–12 ms of a base-siting frame. Shared within the frame: read it,
+-- never write into it.
+WORLD_MEMO = { t = nil, slot = nil, recs = {} }
 function worldOf(name)
   if not name then return nil end
-  local w = save.get("world." .. name)
+  local w
+  local now = time
+  if now then
+    local m = WORLD_MEMO
+    local sl = save.slot and save.slot() or ""
+    if m.t ~= now or m.slot ~= sl then m.t, m.slot, m.recs = now, sl, {} end
+    w = m.recs[name]
+    if w == nil then
+      w = save.get("world." .. name)
+      m.recs[name] = w   -- (a miss is not kept: a record can arrive this frame)
+    end
+  else
+    w = save.get("world." .. name)
+  end
   if w then return w end
   local b = space.body(name)
   if not b then return nil end
@@ -813,6 +831,8 @@ end
 
 -- One lake: the lattice, flood-filled from the lake against the real ground.
 local function build_lake(b, w, L)
+  -- (the four neighbours, made once: building them per cell was 40k tables a lake)
+  local DIRS4 = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }
   local R = w.radius
   local Rl = R + L.level
   local cx, cy, cz = L.x, L.y, L.z
@@ -891,9 +911,10 @@ local function build_lake(b, w, L)
   local stack, nwet = { { si, sj } }, 0
   state[key(si, sj)] = 1
   while #stack > 0 do
+    slice(b)
     local p = table.remove(stack)
     nwet = nwet + 1
-    for _, d in ipairs({ { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }) do
+    for _, d in ipairs(DIRS4) do
       local i, j = p[1] + d[1], p[2] + d[2]
       if i >= 0 and j >= 0 and i < N and j < N and not state[key(i, j)] then
         if is_water(i, j) then
@@ -912,13 +933,14 @@ local function build_lake(b, w, L)
   for _ = 1, 2 do
     local add = {}
     for j = 1, N - 2 do
+      slice(b)
       for i = 1, N - 2 do
         local k = key(i, j)
         if state[k] ~= 1 then
           local qa = open_qa[k]
           if qa == nil or qa > 0 then
             local wn = 0
-            for _, d in ipairs({ { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }) do
+            for _, d in ipairs(DIRS4) do
               if state[key(i + d[1], j + d[2])] == 1 then wn = wn + 1 end
             end
             if wn >= 3 then add[#add + 1] = k end
@@ -930,7 +952,7 @@ local function build_lake(b, w, L)
     -- Every neighbour of water is at least shore, so the mesh closes round it.
     for _, k in ipairs(add) do
       local i, j = k % N, math.floor(k / N)
-      for _, d in ipairs({ { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }) do
+      for _, d in ipairs(DIRS4) do
         local kk = key(i + d[1], j + d[2])
         if not state[kk] then state[kk] = 2 end
       end
@@ -954,6 +976,7 @@ local function build_lake(b, w, L)
     return vid[k]
   end
   for j = 0, N - 2 do
+    slice(b)
     for i = 0, N - 2 do
       local a, b2, c, d = state[key(i, j)], state[key(i + 1, j)], state[key(i, j + 1)], state[key(i + 1, j + 1)]
       if a and b2 and c and d and (a == 1 or b2 == 1 or c == 1 or d == 1) then
@@ -998,6 +1021,7 @@ local function build_lake(b, w, L)
     -- The whole lake: centred on its water, out to its farthest water cell.
     local sx, sy, sz, nw = 0, 0, 0, 0
     for k, st in pairs(state) do
+      slice(b)
       if st == 1 then
         local dx, dy, dz = dir(k % N, math.floor(k / N))
         sx, sy, sz, nw = sx + dx, sy + dy, sz + dz, nw + 1
@@ -1007,6 +1031,7 @@ local function build_lake(b, w, L)
     local cx, cy, cz = sx / l, sy / l, sz / l
     local far = 0
     for k, st in pairs(state) do
+      slice(b)
       if st == 1 then
         local dx, dy, dz = dir(k % N, math.floor(k / N))
         far = math.max(far, ang(dx, dy, dz, cx, cy, cz) * Rv)
@@ -1017,6 +1042,7 @@ local function build_lake(b, w, L)
     -- lattice point inside it: open at the water's height and not water)
     local leak = false
     for j = 0, N - 1 do
+      slice(b)
       for i = 0, N - 1 do
         if not leak and state[key(i, j)] ~= 1 then
           local dx, dy, dz = dir(i, j)
@@ -1044,6 +1070,7 @@ local function build_lake(b, w, L)
               end
             end
           end
+          slice(b)
           if #cells > 0 then
             local lb = len(bx2, by2, bz2)
             local ux2, uy2, uz2 = bx2 / lb, by2 / lb, bz2 / lb

@@ -335,11 +335,47 @@ end
 -- existed (an old save, a fleet craft from last week) has only the capability
 -- flags; those are read into modules at today's figures, so an old battery is
 -- a battery and an old dish is a dish.
+-- A part with no `mods` of its own has them derived from its flags — asked
+-- for dozens of times per part when a craft rolls out (every device test,
+-- every action group pattern), and each derivation built its tables afresh:
+-- ~20 ms of a 1,000-part rollout frame. So the derived list is kept per
+-- record, and rebuilt only when one of the flags it reads has changed. Like a
+-- decoded `mods` string's (decodeMods), the list is shared: read it, never
+-- write into it.
+DERIVE_KEYS = { "kind", "seat", "thrust", "decouple", "chute", "legs", "rcs", "dock", "power", "solar", "comms" }
+derived_cache = setmetatable({}, { __mode = "k" })
+PASS_MODS = nil   -- inside one pass over a craft (defaultGroups): rec → its modules
 function modsOf(rec)
   if type(rec) ~= "table" then return {} end
+  local pm = PASS_MODS
+  if pm then
+    local v = pm[rec]
+    if v then return v end
+    PASS_MODS = nil
+    v = modsOf(rec)
+    PASS_MODS = pm
+    pm[rec] = v
+    return v
+  end
   if type(rec.mods) == "table" then return rec.mods end
   if type(rec.mods) == "string" and rec.mods ~= "" then return decodeMods(rec.mods) end
-  return deriveMods(rec)
+  local keys = DERIVE_KEYS
+  local c = derived_cache[rec]
+  local now = time
+  -- (looked at once a frame: a record's flags are not rewritten mid-frame)
+  if c and now ~= nil and c.t == now then return c.out end
+  if c then
+    local v, same = c.v, true
+    for i = 1, #keys do
+      if v[i] ~= rec[keys[i]] then same = false break end
+    end
+    if same then c.t = now; return c.out end
+  end
+  local out = deriveMods(rec)
+  local v = {}
+  for i = 1, #keys do v[i] = rec[keys[i]] end
+  derived_cache[rec] = { v = v, out = out, t = now }
+  return out
 end
 
 -- Modules implied by a part's flags. The builder calls this too, so the parts
@@ -644,33 +680,62 @@ function subsetGroups(groups, uids)
   return pruneGroups(out, uids)
 end
 
--- Does an `auto` pattern ("deployed.toggle@solar" — action id @ deploy anim or
--- module type) match this part?
-local function auto_match(pat, rec)
-  local act, tag = pat:match("^([^@]+)@?(.*)$")
-  if not actionOf(rec, act) then return nil end
-  if tag == "" then return act end
-  for _, m in ipairs(modsOf(rec)) do
-    if m.type == tag or (m.type == "deploy" and m.anim == tag)
-      or (m.type == "deploy" and tag == "antenna" and (m.anim == "dish" or m.anim == "whip")) then
-      return act
-    end
-  end
-  return nil
-end
-
 -- The groups a craft flies with when nobody has edited them: landing legs on
 -- Gear, panels and antennas on Deploy, lights on Lights, brakes on Brakes.
 -- The custom 1–0 start empty — they are yours.
 function defaultGroups(parts)
+  -- (one pass: nothing about a part's modules changes inside it, so each
+  -- part's are looked up once)
+  local outer = PASS_MODS
+  PASS_MODS = outer or {}
+  local ok, res = pcall(default_groups, parts)
+  PASS_MODS = outer
+  if not ok then error(res, 0) end
+  return res
+end
+function default_groups(parts)
   local groups = {}
   local list = {}
   for _, d in pairs(parts or {}) do list[#list + 1] = d end
   table.sort(list, function(a, b) return (a.uid or 0) < (b.uid or 0) end)
+  -- (a pattern "act@tag" matches a part that offers `act` and has a module
+  -- of type `tag`, a deploy of that anim, or — tag antenna — a dish or whip.
+  -- Each part's actions are listed once rather than once per
+  -- pattern: at 1,000 parts that was 5,000 action lists built and thrown
+  -- away on the rollout frame. The same matches, bound in the same order.)
+  local ids = {}
+  for i, d in ipairs(list) do
+    local have = {}
+    for _, a in ipairs(actionsOf(d)) do have[a.id] = true end
+    ids[i] = have
+  end
+  local pats = {}
   for _, g in ipairs(STANDARD_GROUPS) do
-    for _, d in ipairs(list) do
+    for _, pat in ipairs(g.auto) do
+      if not pats[pat] then
+        local act, tag = pat:match("^([^@]+)@?(.*)$")
+        pats[pat] = { act = act, tag = tag }
+      end
+    end
+  end
+  for _, g in ipairs(STANDARD_GROUPS) do
+    for i, d in ipairs(list) do
       for _, pat in ipairs(g.auto) do
-        local act = auto_match(pat, d)
+        local pp = pats[pat]
+        local act = nil
+        if pp.act and ids[i][pp.act] then
+          if pp.tag == "" then act = pp.act
+          else
+            local tag = pp.tag
+            for _, m in ipairs(modsOf(d)) do
+              if m.type == tag or (m.type == "deploy" and m.anim == tag)
+                or (m.type == "deploy" and tag == "antenna" and (m.anim == "dish" or m.anim == "whip")) then
+                act = pp.act
+                break
+              end
+            end
+          end
+        end
         if act then bind(groups, g.id, d.uid, act) end
       end
     end

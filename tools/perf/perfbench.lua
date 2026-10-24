@@ -201,7 +201,7 @@ local function measure()
         local hsm = {}
         for _, e in ipairs(h.samples or {}) do hsm[string.format("%s:%s:%s", e.script or "?", e.fn or "?", tostring(e.line or "?"))] = e.ms or 0 end
         r.hw[#r.hw + 1] = { ms = h.ms, t = time - r.t0, b = topk(h.buckets or {}, 3), p = topk(h.parts or {}, 3), s = topk(hsx, 3),
-                            bo = topk(hbo, 2), sm = topk(hsm, 2) }
+                            bo = topk(hbo, 2), sm = topk(hsm, 8) }
         table.sort(r.hw, function(a, b) return a.ms > b.ms end)
         if #r.hw > 6 then r.hw[7] = nil end
       end

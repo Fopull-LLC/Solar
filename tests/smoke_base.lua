@@ -70,6 +70,11 @@ _G.find = function(name)
 end
 _G.findScript = function(kind) if kind == "game_manager" then return _G.GM end end
 _G.GM = { loading = false }
+-- The siting job's clock (base_facilities slices by wall time): every field
+-- query costs QUERY_MS of it, so the budget reads as a number of queries.
+local QUERY_MS = 0.05
+FAKE_WALL = 0
+_G.app = { wallClock = function() return FAKE_WALL end }
 _G.space = {
   bodies = function() return { planet } end,
   body = function(n) if n == planet.name then return planet end end,
@@ -80,6 +85,7 @@ _G.terrain = {
   warm = function() end,
   query = function(x, y, z)
     queries = queries + 1
+    FAKE_WALL = FAKE_WALL + QUERY_MS / 1000
     if NOFIELD then return 6.0 end          -- a world whose field is not made yet: clamped air everywhere
     local dx, dy, dz = x - planet.x, y - planet.y, z - planet.z
     local r = len(dx, dy, dz)
@@ -174,8 +180,10 @@ assert(not cutfill.lower and not cutfill.raise, "a flat site needs no cut or fil
 
 -- 0. time-sliced: no frame does more than its budget of field queries (the
 -- engine stops a script that runs 2 s; a loaded machine got there)
-assert(worst_frame <= BF.WORK_BUDGET + 40,
-  string.format("one frame made %d field queries (budget %d)", worst_frame, BF.WORK_BUDGET))
+local per_frame = math.ceil(BF.WORK_MS / QUERY_MS) + BF.WORK_CHECK
+-- (+ the grade check's ~100 point reads, made at once in update, as before)
+assert(worst_frame <= per_frame + 120,
+  string.format("one frame made %d field queries (budget %d)", worst_frame, per_frame))
 
 -- 2. structures
 local want = {}

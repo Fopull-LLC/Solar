@@ -207,6 +207,73 @@ API.raycast = function() return nil end
 API.draw = setmetatable({}, { __index = function() return function() end end })
 API.audio = setmetatable({}, { __index = function() return function() end end })
 API.save = { get = function(k) return store[k] end, set = function(k, v) store[k] = v end, flush = function() end }
+-- The player's files (user://), in memory, and the engine's JSON reader (a
+-- small decoder: the library's files are JSON the engine decodes).
+local files = {}
+local write_fail = nil
+API.assets = {
+  writeText = function(path, text)
+    if write_fail and path:find(write_fail, 1, true) then return false, "disk full" end
+    files[path] = text; return true
+  end,
+  readText = function(path) if files[path] then return files[path] end return nil, "no such file" end,
+  remove = function(path) if files[path] then files[path] = nil; return true end return false, "no such file" end,
+}
+local function json_decode(str)
+  local pos = 1
+  local function ws() pos = str:find("[^ \t\r\n]", pos) or #str + 1 end
+  local val
+  local function utf8(cp)
+    if cp < 0x80 then return string.char(cp)
+    elseif cp < 0x800 then return string.char(0xC0 + math.floor(cp / 64), 0x80 + cp % 64) end
+    return string.char(0xE0 + math.floor(cp / 4096), 0x80 + math.floor(cp / 64) % 64, 0x80 + cp % 64)
+  end
+  local function strv()
+    pos = pos + 1
+    local out = {}
+    while true do
+      local c = str:sub(pos, pos)
+      if c == '"' then pos = pos + 1; return table.concat(out) end
+      if c == "\\" then
+        local e = str:sub(pos + 1, pos + 1)
+        if e == "u" then out[#out + 1] = utf8(tonumber(str:sub(pos + 2, pos + 5), 16)); pos = pos + 6
+        else out[#out + 1] = ({ n = "\n", t = "\t", r = "\r", b = "\b", f = "\f" })[e] or e; pos = pos + 2 end
+      else out[#out + 1] = c; pos = pos + 1 end
+    end
+  end
+  val = function()
+    ws()
+    local c = str:sub(pos, pos)
+    if c == "{" then
+      local t = {}
+      pos = pos + 1; ws()
+      if str:sub(pos, pos) == "}" then pos = pos + 1; return t end
+      while true do
+        ws(); local k = strv(); ws(); pos = pos + 1
+        t[k] = val(); ws()
+        local d = str:sub(pos, pos); pos = pos + 1
+        if d == "}" then return t end
+      end
+    elseif c == "[" then
+      local t = {}
+      pos = pos + 1; ws()
+      if str:sub(pos, pos) == "]" then pos = pos + 1; return t end
+      while true do
+        t[#t + 1] = val(); ws()
+        local d = str:sub(pos, pos); pos = pos + 1
+        if d == "]" then return t end
+      end
+    elseif c == '"' then return strv()
+    elseif str:sub(pos, pos + 3) == "true" then pos = pos + 4; return true
+    elseif str:sub(pos, pos + 4) == "false" then pos = pos + 5; return false
+    elseif str:sub(pos, pos + 3) == "null" then pos = pos + 4; return nil end
+    local num = str:match("^-?[%d%.eE+-]+", pos)
+    pos = pos + #num
+    return tonumber(num)
+  end
+  return val()
+end
+API.json = { decode = json_decode }
 local scene_loads = 0
 API.scene = { load = function() scene_loads = scene_loads + 1 end }
 local REGENV = load_pure("parts_registry")
@@ -403,38 +470,79 @@ env.undoStep()
 check(env.partCount == before, "duplicate is one undo step")
 
 -- 4i. the library and a sub-assembly
+-- The library keeps each craft in a FILE (user://library/<slot>/<slug>.json);
+-- the save keeps only the index.
+local function libfile(sl) return "user://library/default/" .. sl .. ".json" end
+local function libbp(sl)
+  local v = files[libfile(sl)] and json_decode(files[libfile(sl)])
+  return v and env.libDecode(v.bp)
+end
 check(env.craftSave("Test Mk1"), "save to the library")
 check(#env.craftList() == 1 and env.craftList()[1].name == "Test Mk1" and env.craftList()[1].parts == 5, "the library lists it")
+check(libbp("test_mk1") and #libbp("test_mk1").parts == 5 and store["shipyard.craft.test_mk1"] == nil,
+  "…in a file, not in the save")
 -- The autosave (build_host's quiet save) is spread over frames, one pass a
 -- frame, and lands the same records a save you ask for does.
-store["shipyard.craft.auto_mk1"] = nil
-check(env.craftSave("Auto Mk1", true) and env.saving() and store["shipyard.craft.auto_mk1"] == nil,
+check(env.craftSave("Auto Mk1", true) and env.saving() and files[libfile("auto_mk1")] == nil,
   "a quiet save is queued, not written in the call")
 for _ = 1, 4 do env.saveJobTick() end
-check(not env.saving() and type(store["shipyard.craft.auto_mk1"]) == "table"
-  and #store["shipyard.craft.auto_mk1"].parts == 5 and store["shipyard.current"] == "Auto Mk1"
-  and #env.craftList() == 2, "…and lands four frames later, in the library")
+check(not env.saving() and libbp("auto_mk1") and #libbp("auto_mk1").parts == 5 and store["shipyard.current"] == "Auto Mk1"
+  and #env.craftList() == 2 and store["shipyard.craft.auto_mk1"] == nil, "…and lands four frames later, in the library")
 env.craftDelete("Auto Mk1")
--- A craft the save slot refuses (its byte cap) ends the autosave once,
--- rather than retrying the refused save.set every frame.
+check(files[libfile("auto_mk1")] == nil and #env.craftList() == 1, "deleting a craft removes its file")
+-- A library file that cannot be written ends the autosave once, and says so,
+-- rather than retrying every frame.
+write_fail = "huge"
+env.craftSave("Huge", true)
+for _ = 1, 6 do env.saveJobTick() end
+check(not env.saving() and files[libfile("huge")] == nil, "an autosave whose file cannot be written stops")
+write_fail = nil
+-- What the file keeps comes back exactly: lists, sparse and number keys,
+-- floats to the last bit, the values JSON has no word for, odd strings.
 do
-  local real_set = API.save.set
-  API.save.set = function(k, v)
-    if k == "shipyard.craft.huge" then error("the slot would be 4841979 bytes, more than the 4194304 it may hold") end
-    return real_set(k, v)
+  local nan_ok = false
+  local t = { 1, 2.5, -0.0, { a = 1 / 3, [7] = "seven", [2.5] = true }, sparse = { [1] = "a", [3] = "c" },
+              big = 2 ^ 60 + 2 ^ 8, tiny = 5e-324, inf = math.huge, ninf = -math.huge, s = 'q"uo\\te\n\0z', e = {},
+              [true] = "yes", ["\0k"] = "nul key", nested = { { { { "deep" } } } } }
+  local out = {}
+  env.libEncode(t, out)
+  local back = env.libDecode(json_decode(table.concat(out)))
+  local function same(a, b)
+    if type(a) ~= type(b) then return false end
+    if type(a) ~= "table" then
+      if type(a) == "number" and a == 0 and b == 0 then return (1 / a) == (1 / b) end
+      return a == b
+    end
+    for k, v in pairs(a) do if not same(v, b[k]) then return false end end
+    for k in pairs(b) do if a[k] == nil then return false end end
+    return true
   end
-  env.craftSave("Huge", true)
-  for _ = 1, 3 do env.saveJobTick() end
-  check(not env.saving(), "an autosave the slot refuses stops, and is not retried every frame")
-  local tries = 0
-  API.save.set = function(k, v)
-    if k == "shipyard.craft.huge" then tries = tries + 1; error("too big") end
-    return real_set(k, v)
-  end
-  env.craftSave("Huge", true)
-  for _ = 1, 4 do env.saveJobTick() end
-  check(tries == 0 and not env.saving(), "…and a craft that size is not offered to the library again")
-  API.save.set = real_set
+  check(same(t, back), "the library file gives back exactly the tables written")
+  local o2 = {}
+  env.libEncode({ x = 0 / 0 }, o2)
+  local nb = env.libDecode(json_decode(table.concat(o2)))
+  check(nb.x ~= nb.x, "…NaN included")
+end
+-- An entry from before the library was files is moved to its file the first
+-- time it is opened (and its save key dropped)...
+do
+  local old = libbp("test_mk1")
+  local idx = store["shipyard.crafts"]
+  idx[#idx + 1] = { name = "Old Mk1", slug = "old_mk1", parts = 5 }
+  idx[#idx + 1] = { name = "Old Mk2", slug = "old_mk2", parts = 5 }
+  store["shipyard.crafts"] = idx
+  store["shipyard.craft.old_mk1"] = old
+  store["shipyard.craft.old_mk2"] = old
+  env.libMigrated(true)
+  check(env.craftOpen("Old Mk1"), "an old library entry opens")
+  step(2)
+  check(env.partCount == 5 and libbp("old_mk1") and store["shipyard.craft.old_mk1"] == nil,
+    "…and is moved to its file")
+  -- ...and the rest in the background, one at a time.
+  for _ = 1, 8 do env.saveJobTick() end
+  check(libbp("old_mk2") and #libbp("old_mk2").parts == 5 and store["shipyard.craft.old_mk2"] == nil
+    and env.libMigrated(), "the others move to files in the background")
+  env.craftDelete("Old Mk1"); env.craftDelete("Old Mk2")
 end
 env.craftSave("Test Mk1")
 env.craftNew()

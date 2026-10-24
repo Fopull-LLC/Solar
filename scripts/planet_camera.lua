@@ -1190,7 +1190,11 @@ local function place_camera(node, dt)
     -- the terrain. Sweep the same ball up from the crew's centre and stop
     -- short of whatever is overhead.
     local lift = (head - target.pos):dot(up)
-    if lift > 0.05 then
+    -- (not while the world loads: the crew is held 60 m over the ground then,
+    -- with nothing over them, and the first sweeps after a world lands cost
+    -- the engine 20+ ms each — measured on the home-world arrival frame)
+    local gm = lift > 0.05 and script_ref("game_manager") or nil
+    if lift > 0.05 and not (gm and gm.loading) then
       local roofhit = spherecast(target.pos, up, 0.25, lift, target)
       if roofhit and roofhit.distance and not (roofhit.node and roofhit.node.id == target.id) then
         head = head - up * (lift - math.max(0.0, roofhit.distance - 0.05))

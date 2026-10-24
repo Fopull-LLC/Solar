@@ -92,6 +92,11 @@ end
 -- The ☰ MENU button calls this through a script handle.
 function exitToMenu()
   saveGame()
+  -- The menu reads this slot back FROM DISK (it peeks every slot by switching
+  -- to it): the write has to have landed first. (Once the engine writes saves
+  -- on a worker, a plain flush returns before the data is on disk; rc16
+  -- accepts `wait` and writes at once, as before.)
+  save.flush({ wait = true })
   scene.load("menu")
 end
 

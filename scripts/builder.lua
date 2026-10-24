@@ -3898,10 +3898,18 @@ local function make_blueprint()
     end
   end
   local i = 0
+  -- (a part's modules depend on its definition alone: encoded once a
+  -- definition per pass, not once a part — 3,000 parts are a handful of kinds)
+  local mods_of = {}
   for uid, p in pairs(parts) do
     i = i + 1
     -- As this save builds it (thrust and ve for the home world, see BALANCE).
     local d = liveDef(p.def)
+    local mo = mods_of[d]
+    if mo == nil then
+      mo = (elib() and elib().encodeMods(part_mods(d))) or false
+      mods_of[d] = mo
+    end
     bp.parts[i] = {
       uid = uid, id = p.id, prefab = d.prefab, label = d.label,
       x = p.x - centerX, y = p.y - ref_y, z = p.z - centerZ,
@@ -3956,7 +3964,7 @@ local function make_blueprint()
       -- link it or offer its actions.
       -- (as a string: save.set holds four tables deep at most — electronics
       -- encodeMods / decodeMods)
-      mods = (elib() and elib().encodeMods(part_mods(d))) or nil,
+      mods = mo or nil,
       -- procedural parameters (WP3's members and panels), when it has them
       size = p.size and tcopy(p.size) or nil,
       -- a drawn part (WP3): what it is and its joint plates (encoded strings;
@@ -4001,11 +4009,15 @@ end
 local function save_blueprint(noflush)
   -- An autosave still in flight (craftSave quiet, over four frames) lands
   -- first, so the writes happen in the order they were asked for.
+  -- (its library file, encoded a few milliseconds a frame, is finished now)
   if W.save_job and saveJobTick then
-    for _ = 1, 5 do if not W.save_job then break end saveJobTick() end
+    W.lib_now = true
+    for _ = 1, 6 do if not W.save_job then break end saveJobTick() end
+    W.lib_now = false
   end
   local bp, i = make_blueprint()
   save.set("shipyard.blueprint", bp)
+  W.launch_bp = nil
   if not noflush then save.flush() end
   ui("save", 0.9)
   hint("blueprint saved  ·  " .. i .. " parts", 2.5)
@@ -6270,7 +6282,12 @@ end
 -- until it actually goes.
 LAUNCH_CONFIRM = 6.0
 launchArmedAt = nil
+-- The blueprint LAUNCH stored in `shipyard.blueprint`, for the rollout to
+-- start from without reading 1,000 parts back out of the save (build_host
+-- hands it to vessel_spawner.launchNow). nil once anything else is saved.
+function launchBlueprint() return W.launch_bp end
 function doLaunch()
+  W.launch_bp = nil
   local chk = launchCheck()
   if chk.block then
     hint("can't launch — " .. chk.block, 4.0)
@@ -6294,9 +6311,11 @@ function doLaunch()
   local saved = false
   local vs = findScript and findScript("vessel_spawner") or nil
   if vs and vs.valid ~= false and vs.launchBlockedWhy then
-    save_blueprint(true) -- (the check sizes the footprint from the craft on the stand)
+    -- (the check sizes the footprint from the craft on the stand: the
+    -- blueprint just stored is handed over, not read back out of the save)
+    W.launch_bp = save_blueprint(true)
     saved = true
-    local why = vs.launchBlockedWhy(launchSite())
+    local why = vs.launchBlockedWhy(launchSite(), W.launch_bp)
     if why then
       -- a short placard so it is seen, the whole sentence on the hint bar
       local kind = launchSite() == "runway" and "RUNWAY BLOCKED" or "PAD BLOCKED"
@@ -6318,7 +6337,7 @@ function doLaunch()
   end
   if co and co.spend then co.spend(cost, "hull rollout (" .. partCount .. " parts)") end
   save.set("shipyard.spent", cost)
-  if not saved then save_blueprint(true) end
+  if not saved then W.launch_bp = save_blueprint(true) end
   ui("launch", 1.0)
   save.set("shipyard.launch", 1)
   save.set("shipyard.site", launchSite())
@@ -6763,10 +6782,10 @@ end
 -- The library entry for a saved craft, and its thumbnail for the OPEN list
 -- (async; skipped where there is no capture).
 -- (globals, and the job on W: this file's main chunk is at Lua's 200-local limit)
-function libraryPut(name, sl)
-  local st = stats()
+function libraryPut(name, sl, st)
+  st = st or stats()
   index_put({ name = name, slug = sl, parts = st.parts, mass = st.mass, cost = st.cost, t = time,
-              thumb = "user://crafts/" .. sl .. ".png" })
+              thumb = "user://crafts/" .. sl .. ".png", file = LIBFMT })
   save.set("shipyard.current", name)
   if camera and camera.capture and assets and assets.writeBytes then
     pcall(camera.capture, { w = 256, h = 144, ui = false, draws = false }, function(bytes)
@@ -6776,14 +6795,159 @@ function libraryPut(name, sl)
   return st
 end
 
+-- ── the library's blueprints are FILES ──────────────────────────────────────
+-- A craft kept in the library is a user:// file, one per craft and save slot
+-- (user://library/<slot>/<slug>.json); the save keeps only the index
+-- (`shipyard.crafts`). In the save, each copy counted against the slot's 4 MB:
+-- a 3,000-part craft (beside the stand's own copy) was refused, and the
+-- library could not keep it. Entries written before are moved to files the
+-- first time they are opened, and in the background (one a frame, sliced),
+-- and their save key is then dropped.
+--
+-- The file is JSON the engine decodes, written by this encoder so that every
+-- value comes back as it went in: a list is a list, any other table an object
+-- whose non-string keys are tagged ("\0n:12"), every number exact (see the
+-- number case below), and the few values JSON has no word for tagged as
+-- strings ("\0f:inf").
+-- `step` is called between parts; the autosave's job yields there.
+LIBFMT = 1
+function libEsc(str)
+  return '"' .. str:gsub('[%c"\\]', function(c)
+    if c == '"' then return '\\"' elseif c == "\\" then return "\\\\" end
+    return string.format("\\u%04x", c:byte())
+  end) .. '"'
+end
+function libEncode(v, out, step)
+  local t = type(v)
+  if t == "number" then
+    if v ~= v then out[#out + 1] = '"\\u0000f:nan"'
+    elseif v == math.huge then out[#out + 1] = '"\\u0000f:inf"'
+    elseif v == -math.huge then out[#out + 1] = '"\\u0000f:-inf"'
+    elseif v == 0 and 1 / v < 0 then out[#out + 1] = "-0.0"
+    elseif v == math.floor(v) and math.abs(v) < 1e15 then
+      out[#out + 1] = string.format("%d", v)
+    else
+      -- A decimal the reader parses exactly (15 digits, a modest exponent:
+      -- one correctly rounded step); anything else as mantissa and binary
+      -- exponent, both integers ("\0d:m:e" = m × 2^e). The engine's JSON
+      -- reader rounds a 17-digit decimal to the nearest double only most of
+      -- the time (1 in 6 came back a bit off, measured on rc16).
+      local a = math.abs(v)
+      local str = (a >= 1e-6 and a < 1e15) and string.format("%.15g", v) or nil
+      if str and tonumber(str) == v and not str:find("e", 1, true) then
+        out[#out + 1] = str
+      else
+        local m, e = math.frexp(v)
+        out[#out + 1] = string.format('"\\u0000d:%d:%d"', m * 2 ^ 53, e - 53)
+      end
+    end
+  elseif t == "string" then
+    out[#out + 1] = libEsc(v:sub(1, 1) == "\0" and ("\0s:" .. v) or v)
+  elseif t == "boolean" then out[#out + 1] = v and "true" or "false"
+  elseif t == "table" then
+    local n, cnt = #v, 0
+    for _ in pairs(v) do cnt = cnt + 1 end
+    local list = n > 0 and cnt == n
+    if list then for i = 1, n do if v[i] == nil then list = false break end end end
+    if list then
+      out[#out + 1] = "["
+      for i = 1, n do
+        if i > 1 then out[#out + 1] = "," end
+        libEncode(v[i], out, step)
+        if step then step() end
+      end
+      out[#out + 1] = "]"
+    else
+      out[#out + 1] = "{"
+      local first = true
+      for k, x in pairs(v) do
+        local kt, ks = type(k), nil
+        if kt == "string" then ks = (k:sub(1, 1) == "\0") and ("\0s:" .. k) or k
+        elseif kt == "number" then ks = "\0n:" .. string.format("%.17g", k)
+        elseif kt == "boolean" then ks = "\0b:" .. tostring(k) end
+        if ks and type(x) ~= "function" and type(x) ~= "userdata" then
+          if not first then out[#out + 1] = "," end
+          first = false
+          out[#out + 1] = libEsc(ks)
+          out[#out + 1] = ":"
+          libEncode(x, out, step)
+        end
+      end
+      out[#out + 1] = "}"
+    end
+  else
+    out[#out + 1] = "null"
+  end
+end
+-- The decoded JSON back into the tables that were written (fresh tables).
+function libDecode(v)
+  local t = type(v)
+  if t == "string" then
+    if v:sub(1, 1) ~= "\0" then return v end
+    local tag, rest = v:sub(2, 3), v:sub(4)
+    if tag == "s:" then return rest end
+    if tag == "d:" then
+      local m, e = rest:match("^(-?%d+):(-?%d+)$")
+      if m then return math.ldexp(tonumber(m), tonumber(e)) end
+      return v
+    end
+    if tag == "f:" then return rest == "nan" and (0 / 0) or (rest == "-inf" and -math.huge or math.huge) end
+    return v
+  elseif t ~= "table" then return v end
+  local out = {}
+  for k, x in pairs(v) do
+    if type(k) == "string" and k:sub(1, 1) == "\0" then
+      local tag, rest = k:sub(2, 3), k:sub(4)
+      if tag == "n:" then k = tonumber(rest)
+      elseif tag == "b:" then k = rest == "true"
+      elseif tag == "s:" then k = rest end
+    end
+    if k ~= nil then out[k] = libDecode(x) end
+  end
+  return out
+end
+function libSlot()
+  local sl = (save.slot and save.slot()) or "default"
+  return (tostring(sl):gsub("[^%w_%-]", "_"))
+end
+function libPath(sl) return "user://library/" .. libSlot() .. "/" .. sl .. ".json" end
+function libText(bp, step)
+  local out = {}
+  libEncode({ fmt = LIBFMT, bp = bp }, out, step)
+  return table.concat(out)
+end
+-- Write a craft's file. true, or false and why.
+function libWrite(sl, text)
+  if not (assets and assets.writeText) then return false, "no file access" end
+  local ok, res, why = pcall(assets.writeText, libPath(sl), text)
+  if not ok then return false, tostring(res) end
+  if res == false then return false, tostring(why) end
+  return true
+end
+-- A craft's blueprint from its file, or nil.
+function libRead(sl)
+  if not (assets and assets.readText and json and json.decode) then return nil end
+  local ok, text = pcall(assets.readText, libPath(sl))
+  if not ok or type(text) ~= "string" then return nil end
+  local v = json.decode(text)
+  if type(v) ~= "table" or type(v.bp) ~= "table" then return nil end
+  return libDecode(v.bp)
+end
+-- The save key a library blueprint lived under before it was a file.
+function libLegacyKey(sl) return "shipyard.craft." .. sl end
+function libDropLegacy(sl)
+  if save.delete then save.delete(libLegacyKey(sl)) else save.set(libLegacyKey(sl), nil) end
+end
+
 -- craftSave(name [, quiet]). A save you ask for is written at once, with one
 -- flush (it used to flush twice). A QUIET one is build_host's autosave: no
 -- sound, no hint, and no flush of its own (the engine writes the store within
--- a few seconds anyway), and it is spread over four frames — the blueprint,
--- then each save.set, then the library entry — because each of those is one
--- pass over every part: 7 + 12 + 11 ms at 1,000 parts, three times that at
--- 3,000, and the autosave landing two seconds after every edit was the
--- builder's periodic hitch (perfbench g_idle_*, build_host 55-120 ms).
+-- a few seconds anyway), and it is spread over frames — the blueprint, then
+-- its save.set, then the library file (encoded a few milliseconds a frame),
+-- then the library entry — because each of those is one pass over every part:
+-- 7 + 12 + 11 ms at 1,000 parts, three times that at 3,000, and the autosave
+-- landing two seconds after every edit was the builder's periodic hitch
+-- (perfbench g_idle_*, build_host 55-120 ms).
 function craftSave(name, quiet)
   name = name or W.craft or "Untitled"
   W.craft = name
@@ -6795,32 +6959,77 @@ function craftSave(name, quiet)
   W.save_job = nil
   local bp, i = make_blueprint()
   save.set("shipyard.blueprint", bp)
+  W.launch_bp = nil
   ui("save", 0.9)
-  save.set("shipyard.craft." .. sl, bp)
+  -- A big craft's file is written like the autosave's, a few milliseconds a
+  -- frame (its text is ~50 ms of Lua per 1,000 parts); the hint says when.
+  if partCount > LIB_SYNC_PARTS then
+    W.save_job = { stage = 3, name = name, sl = sl, bp = bp, loud = true, st = tcopy(stats()) }
+    return true
+  end
+  local ok, why = libWrite(sl, libText(bp))
+  if not ok then
+    log("builder: the library could not keep “" .. name .. "” — " .. tostring(why))
+    hint("the library could not keep “" .. name .. "”", 3.0)
+    save.flush()
+    return false
+  end
+  libDropLegacy(sl)
   local st = libraryPut(name, sl)
   save.flush()
   hint("saved “" .. name .. "” to the library  ·  " .. st.parts .. " parts", 2.5)
   return true
 end
+LIB_SYNC_PARTS = 300
+-- The library file's text, a few milliseconds a frame: a coroutine that
+-- yields between parts once LIB_SLICE_MS of this frame has gone.
+LIB_SLICE_MS = 2.5
+function libClock() return (app and app.wallClock and app.wallClock()) or os.clock() end
+function libEncodeJob(bp)
+  local co = coroutine.create(function()
+    local t0, n = libClock(), 0
+    return libText(bp, function()
+      n = n + 1
+      if n % 8 == 0 and not W.lib_now and (libClock() - t0) * 1000 > LIB_SLICE_MS then
+        coroutine.yield()
+        t0 = libClock()
+      end
+    end)
+  end)
+  return co
+end
+-- Run an encode job for this frame: the text when it is done, else nil.
+function libEncodeTick(job)
+  local ok, res = coroutine.resume(job)
+  if not ok then error(res, 0) end
+  if coroutine.status(job) == "dead" then return res or "" end
+  return nil
+end
 -- One step of a quiet save a frame (from update).
 -- A stage that fails (save.set refuses a blueprint that would take the slot
--- past its byte cap: ~3,000 parts, with the stand's own copy beside it) ends
--- the job and says so once, instead of failing again every frame.
--- A craft that size is not tried again (a refused save.set has still
--- converted the whole blueprint before it refuses): the autosave keeps
--- only the stand's own copy until the craft is smaller than the one refused.
+-- past its byte cap) ends the job and says so once, instead of failing again
+-- every frame.
 function saveJobStep(j)
   if j.stage == 1 then
     j.bp = make_blueprint()
+    j.st = tcopy(stats())   -- (the entry describes the craft saved, not the stand later)
   elseif j.stage == 2 then
     save.set("shipyard.blueprint", j.bp)
-    if W.lib_fail_n and partCount >= W.lib_fail_n then return true end
+    W.launch_bp = nil
   elseif j.stage == 3 then
     j.lib = true
-    save.set("shipyard.craft." .. j.sl, j.bp)
-    W.lib_fail_n = nil
+    j.enc = j.enc or libEncodeJob(j.bp)
+    local text = libEncodeTick(j.enc)
+    if not text then return false end
+    local ok, why = libWrite(j.sl, text)
+    if not ok then error("the library file: " .. tostring(why), 0) end
+    libDropLegacy(j.sl)
   else
-    libraryPut(j.name, j.sl)
+    local st = libraryPut(j.name, j.sl, j.st)
+    if j.loud then
+      save.flush()
+      hint("saved “" .. j.name .. "” to the library  ·  " .. st.parts .. " parts", 2.5)
+    end
     return true
   end
   j.stage = j.stage + 1
@@ -6828,11 +7037,11 @@ function saveJobStep(j)
 end
 function saveJobTick()
   local j = W.save_job
-  if not j then return end
+  if not j then return libMigrateTick() end
   local ok, done = pcall(saveJobStep, j)
   if not ok then
     W.save_job = nil
-    if j.lib then W.lib_fail_n = partCount end
+    if j.loud then hint("the library could not keep “" .. tostring(j.name) .. "”", 3.0) end
     if W.save_err ~= tostring(done) then
       W.save_err = tostring(done)
       log("builder: autosave stopped — " .. tostring(done))
@@ -6841,11 +7050,93 @@ function saveJobTick()
   end
   if done then W.save_job = nil end
 end
+-- MIGRATION: a library entry still kept in the save is moved to its file, one
+-- at a time while nothing else is being saved: read (one frame), encode
+-- (sliced), written, and its save key dropped.
+function libMigrateTick()
+  if W.lib_migrated then return end
+  local m = W.lib_mig
+  if not m then
+    local idx = save.get("shipyard.crafts")
+    if type(idx) == "table" then
+      for _, e in ipairs(idx) do
+        if type(e) == "table" and e.slug and not e.file and not (W.lib_skip and W.lib_skip[e.slug]) then
+          m = { slug = e.slug }
+          break
+        end
+      end
+    end
+    if not m then W.lib_migrated = true; return end
+    W.lib_mig = m
+    return
+  end
+  local okm, err = pcall(function()
+    if not m.bp then
+      local bp = save.get(libLegacyKey(m.slug))
+      if type(bp) ~= "table" then m.gone = true; return end
+      m.bp = bp
+      return
+    end
+    m.enc = m.enc or libEncodeJob(m.bp)
+    local text = libEncodeTick(m.enc)
+    if not text then return end
+    local ok, why = libWrite(m.slug, text)
+    if not ok then error(why, 0) end
+    m.done = true
+  end)
+  if not okm then
+    log("builder: could not move “" .. tostring(m.slug) .. "” to the library folder — " .. tostring(err))
+    W.lib_skip = W.lib_skip or {}
+    W.lib_skip[m.slug] = true
+    W.lib_mig = nil
+    return
+  end
+  if m.done or m.gone then
+    libMarkFile(m.slug, m.done)
+    if m.done then libDropLegacy(m.slug) end
+    W.lib_mig = nil
+  end
+end
+-- Mark an index entry as kept in a file (or, `false`, as having no blueprint
+-- anywhere: an entry whose key was already gone).
+function libMarkFile(sl, has)
+  local idx = craftList()
+  for _, e in ipairs(idx) do
+    if e.slug == sl then
+      if has then e.file = LIBFMT else e.file = 0 end
+    end
+  end
+  save.set("shipyard.crafts", idx)
+end
 function saving() return W.save_job ~= nil end
+-- Has every library entry been moved to its file? (rescan: look again)
+function libMigrated(rescan)
+  if rescan then W.lib_migrated, W.lib_mig = nil, nil end
+  return W.lib_migrated == true
+end
+-- The blueprint of a library craft (its file; an entry not moved yet is read
+-- from the save, and moved now). nil when there is none.
+function libBlueprint(sl)
+  local entry
+  for _, e in ipairs(craftList()) do if e.slug == sl then entry = e end end
+  if not entry then return nil end
+  if (entry.file or 0) ~= 0 then
+    local bp = libRead(sl)
+    if bp then return bp end
+  end
+  local old = save.get(libLegacyKey(sl))
+  if type(old) ~= "table" then return nil end
+  local ok = libWrite(sl, libText(old))
+  if ok then
+    libMarkFile(sl, true)
+    libDropLegacy(sl)
+    if W.lib_mig and W.lib_mig.slug == sl then W.lib_mig = nil end
+  end
+  return tcopy(old)
+end
 function craftOpen(name, mode)
-  local bp = save.get("shipyard.craft." .. slug(name))
+  local bp = libBlueprint(slug(name))
   if type(bp) ~= "table" then hint("no craft called “" .. tostring(name) .. "” in the library", 2.5); return false end
-  bp = tcopy(bp)
   if mode == "merge" then return hold_fragment(fragment_of_bp(bp)) end
   load_blueprint(bp)
   W.craft = name
@@ -6866,8 +7157,10 @@ function craftNew()
 end
 function craftDelete(name)
   local sl = slug(name)
-  save.set("shipyard.craft." .. sl, nil)
+  if assets and assets.remove then pcall(assets.remove, libPath(sl)) end
+  libDropLegacy(sl)
   index_put({ slug = sl })
+  if W.lib_mig and W.lib_mig.slug == sl then W.lib_mig = nil end
   save.flush()
   return true
 end

@@ -335,7 +335,11 @@ local function rollout_tick(dt)
       crew_to_site(ro.site)
       local vs = ref("vessel_spawner")
       local ok, why = false, nil
-      if vs and vs.launchNow then ok, why = vs.launchNow(ro.site) end
+      -- (the blueprint LAUNCH just stored, as the builder made it: reading
+      -- it back out of the save was 10 ms at 1,000 parts)
+      local b = ref("builder")
+      local lbp = b and b.launchBlueprint and b.launchBlueprint() or nil
+      if vs and vs.launchNow then ok, why = vs.launchNow(ro.site, lbp and { bp = lbp } or nil) end
       if not ok and why == "blocked" then
         -- The site is taken (vessel_spawner has said so on screen, refunded
         -- the hull and brought the crew home): fade back in on the world.

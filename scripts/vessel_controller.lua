@@ -706,7 +706,8 @@ local function load_bp(override)
   -- records say), the device sets, and the action groups.
   do
     local E = elib()
-    if E then for _, d in pairs(bp.parts) do E.stateOf(d) end end
+    local stateOf = E and E.stateOf
+    if stateOf then for _, d in pairs(bp.parts) do stateOf(d) end end
   end
   bp_by_uid = by_uid
   integ.gone = {}
@@ -1725,6 +1726,24 @@ function elib()
   return elib_ref
 end
 
+-- A table of the rulebook's functions in front of its script handle: the same
+-- functions, fetched once (a field that is not a function still reads through).
+-- Within one pass a part's modules can't change, so they are looked up once
+-- a part (modOf as the rulebook's: the first module of that type).
+function elecFns(E)
+  local modsOf, memo = E.modsOf, {}
+  local function mods(rec)
+    local v = memo[rec]
+    if v == nil then v = modsOf(rec); memo[rec] = v end
+    return v
+  end
+  local function modOf(rec, ty)
+    for _, m in ipairs(mods(rec)) do if m.type == ty then return m end end
+    return nil
+  end
+  return setmetatable({ modOf = modOf, modsOf = mods, stateOf = E.stateOf }, { __index = E })
+end
+
 -- The comms network (scripts/comms.lua), resolved once.
 local comms_ref = nil
 local function comms_net()
@@ -1753,6 +1772,9 @@ end
 -- the part list changes (rollout, docking, undocking, staging, breakage).
 function elecRescan()
   local E = elib()
+  -- (the rulebook's functions fetched once a pass: each `E.x` through the
+  -- script handle is a call into the engine, ~0.4 µs, ten a part)
+  if E then E = elecFns(E) end
   elec.parts = {}       -- uids with any electrical module
   elec.crewPart, elec.probePart = nil, nil
   for _, dev in pairs(DEVICES) do dev.parts = {} end
@@ -4981,11 +5003,12 @@ end
 -- Mass and centre (vessel frame) of a set of uids still aboard.
 local function set_mass(node, set)
   local m, x, y, z = 0.0, 0.0, 0.0, 0.0
+  local fuel_by = tankFuelMap()        -- (tankFuelT for every part, from one pass over the tanks)
   for u in pairs(set) do
     if not integ.gone[u] then
       local b = part_box(node, u)
       if b then
-        local bm = b.m + tankFuelT(u)   -- a tank weighs what it still holds
+        local bm = b.m + (fuel_by[u] or 0.0)   -- a tank weighs what it still holds
         m = m + bm
         x, y, z = x + b.cx * bm, y + b.cy * bm, z + b.cz * bm
       end
@@ -5001,14 +5024,36 @@ end
 local function clearance(node, set, dx, dy, dz)
   local need = 0.0
   local stay = {}
+  local emax = 0.0
   for u in pairs(bp_by_uid) do
-    if not set[u] and not integ.gone[u] then stay[#stay + 1] = part_box(node, u) end
+    if not set[u] and not integ.gone[u] then
+      local b = part_box(node, u)
+      if b then
+        stay[#stay + 1] = b
+        if b.ey > emax then emax = b.ey end
+      end
+    end
   end
+  -- (sorted by height, so each departing box is tested only against the boxes
+  -- that can reach it vertically — the same pairs, so the same answer: a
+  -- thousand parts against a thousand was 9 ms of the breakup frame)
+  table.sort(stay, function(p, q) return p.cy < q.cy end)
+  local ns = #stay
   local adx, ady, adz = math.abs(dx), math.abs(dy), math.abs(dz)
   for u in pairs(set) do
     local a = not integ.gone[u] and part_box(node, u)
     if a then
-      for _, b in ipairs(stay) do
+      local reach = a.ey + emax + 0.01 + 1e-6
+      local lo, hi = 1, ns + 1
+      local want = a.cy - reach
+      while lo < hi do
+        local mid = math.floor((lo + hi) / 2)
+        if stay[mid].cy < want then lo = mid + 1 else hi = mid end
+      end
+      local top = a.cy + reach
+      for i = lo, ns do
+        local b = stay[i]
+        if b.cy > top then break end
         if math.abs(a.cx - b.cx) <= a.ex + b.ex + 0.01
           and math.abs(a.cy - b.cy) <= a.ey + b.ey + 0.01
           and math.abs(a.cz - b.cz) <= a.ez + b.ez + 0.01 then
@@ -5360,12 +5405,67 @@ function jointQmax(j)
   return q
 end
 
+-- THE FIRST STRESS PASS, made ahead. The first tick after the clamps let go
+-- worked out every joint's departing set and the mass outboard of it at once:
+-- ~25 ms of the release frame at 1,000 parts. While the craft is held (on the
+-- pad, in the clamps) nothing it is made of changes, so the same caches are
+-- filled then, a couple of milliseconds a tick: the release finds them made.
+-- Only once every part has spawned (a part not there yet would be sized from
+-- the blueprint, and kept so).
+STRESS_WARM_MS = 2.0
+function stressWarm(node, info)
+  if destroyed or not node or not node.valid or not info or #(info.parts or {}) < part_total then return end
+  if integ.warm_done == integ.gen and integ.joints and integ.joints.gen == integ.gen
+    and integ.joints.tree == axial_set_cache then return end
+  local clock = app and app.wallClock
+  if not clock then return end
+  local t0 = clock()
+  local wm = integ.warm
+  if not wm or wm.gen ~= integ.gen or wm.tree ~= axial_set_cache then
+    local us = {}
+    for u, d in pairs(bp_by_uid) do
+      if (d.parent or 0) ~= 0 and not integ.gone[u] and u ~= pod_uid then us[#us + 1] = u end
+    end
+    table.sort(us)
+    local all = {}
+    for u in pairs(bp_by_uid) do if not integ.gone[u] then all[#all + 1] = u end end
+    table.sort(all)
+    wm = { gen = integ.gen, tree = axial_set_cache, us = us, i = 0, k = 0, all = all, b = 0 }
+    integ.warm = wm
+  end
+  while wm.i < #wm.us do
+    wm.i = wm.i + 1
+    axial_departing(wm.us[wm.i])
+    if (clock() - t0) * 1000 > STRESS_WARM_MS then return end
+  end
+  -- every part's box (finding a part's node indexes the craft's children once
+  -- a tick: many boxes a tick, not one)
+  while wm.b < #wm.all do
+    wm.b = wm.b + 1
+    part_box(node, wm.all[wm.b])
+    if wm.b % 16 == 0 and (clock() - t0) * 1000 > STRESS_WARM_MS then return end
+  end
+  local list = joints(node)
+  local fuel_by = tankFuelMap()
+  while wm.k < #list do
+    wm.k = wm.k + 1
+    local j = list[wm.k]
+    if not integ.gone[j.uid] then
+      jointMass(node, j, fuel_by)
+      jointQmax(j)
+    end
+    if (clock() - t0) * 1000 > STRESS_WARM_MS then return end
+  end
+  integ.warm_done = integ.gen
+end
+
 -- STRESS: load every joint, fail the ones past their limit. Runs piloted or not
 -- (a derelict hit hard breaks the same), never while clamped or in the settle
 -- window after release.
 function stressTick(node, info, dt)
   if destroyed or info.anchored or (launch_mode and not released) or dt <= 0 then
     integ.af, integ.wprev, integ.vprev = nil, nil, nil
+    if not destroyed and (info.anchored or (launch_mode and not released)) then stressWarm(node, info) end
     return
   end
   local v, w = info.vel, info.angVel
@@ -6672,6 +6772,7 @@ local function r2_scan(node)
     end
   end
   if not E then return end
+  E = elecFns(E)   -- (one pass: each part's modules looked up once)
   -- The craft's FRONT, as the vessel frame sees it (level, in its X–Z plane):
   -- a rover body's or a command seat's +X; else the command part's +X; else
   -- the vessel's +X. W drives this way. (R2.front is the old ±X sign, kept

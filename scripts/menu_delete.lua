@@ -47,6 +47,14 @@ function clicked(node)
     -- Confirmed: wipe both stores, relabel the slot button, hide ourselves.
     save.deleteSlot(slot_name())
     terrain.deleteSaveDir("saves/" .. slot_name() .. "/terrain")
+    -- ...and the craft library's files (builder.lua keeps each craft in
+    -- user://library/<slot>/, the save only its index).
+    if assets and assets.getContents and assets.remove then
+      local ok, list = pcall(assets.getContents, "user://library/" .. slot_name():gsub("[^%w_%-]", "_"))
+      if ok and type(list) == "table" then
+        for _, p in ipairs(list) do pcall(assets.remove, p) end
+      end
+    end
     local btn = find("Slot " .. math.floor(params.slot))
     if btn then
       local s = btn:getscript("menu_slot")

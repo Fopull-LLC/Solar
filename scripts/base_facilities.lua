@@ -153,27 +153,35 @@ local function ref(kind)
 end
 
 -- ── time-slicing ─────────────────────────────────────────────────────────────
--- Siting is a JOB: a coroutine resumed once a frame that yields every
--- WORK_BUDGET units of work (a field query, a row of paving, a fitting). The
--- engine stops a script that runs 2 s without returning, and on a loaded
--- machine — the world still generating on every core — fitting the layout
--- (a few thousand field marches) and building the paving got there and the
--- base was never sited. Counted in units, not os.clock: that counts the
--- process's CPU across threads, ~10× wall time while the world generates.
-WORK_BUDGET = 250
+-- Siting is a JOB: a coroutine resumed once a frame that yields once it has
+-- spent WORK_MS of this frame's wall clock (checked at its units of work: a
+-- field query, a row of paving, a fitting). The engine stops a script that
+-- runs 2 s without returning, and on a loaded machine — the world still
+-- generating on every core — fitting the layout (a few thousand field
+-- marches) and building the paving got there and the base was never sited.
+-- It used to be counted in units (250 a frame, 2,500 behind the loading
+-- curtain), not os.clock, which counts the process's CPU across threads
+-- (~10× wall time while the world generates); but a unit is anything from a
+-- microsecond to a march, and behind the curtain that made 80–190 ms frames.
+-- The clock here is the WALL (app.wallClock), so other threads don't count.
+WORK_MS = 3.0
+WORK_MS_CURTAIN = 6.0   -- behind the loading curtain (it holds the curtain up)
+WORK_CHECK = 4          -- units between looks at the clock
 local job, job_active, units = nil, false, 0
--- Behind the loading curtain a frame may take far more (nobody sees it; the
--- watchdog's 2 s is the only limit).
-WORK_BUDGET_CURTAIN = 2500
+local function wall() return (app and app.wallClock and app.wallClock()) or os.clock() end
+JOB_T0 = 0
 function work(n)
   units = units + (n or 1)
-  local gm = job_active and refs.game_manager
-  local budget = (gm and gm.valid ~= false and gm.curtain) and WORK_BUDGET_CURTAIN or WORK_BUDGET
-  if job_active and units >= budget then
-    units = 0
+  if not job_active or units < WORK_CHECK then return end
+  units = 0
+  local gm = refs.game_manager
+  local budget = (gm and gm.valid ~= false and gm.curtain) and WORK_MS_CURTAIN or WORK_MS
+  if (wall() - JOB_T0) * 1000 >= budget then
     coroutine.yield()
   end
 end
+-- (each resume starts the frame's budget)
+local function job_begin() job_active, units, JOB_T0 = true, 0, wall() end
 
 -- ── vector helpers (plain tables, so the smoke harness needs no vec3) ────────
 local sqrt, sin, cos, acos, atan2, abs = math.sqrt, math.sin, math.cos, math.acos, math.atan2, math.abs
@@ -775,6 +783,9 @@ local function grade(body, Fr, runway)
   end
   for _, d in ipairs(probes) do
     work(1)
+    -- (the job yields across frames, and the planet moves ~4 m a tick: the
+    -- centre is read again after every unit of work, as the columns do)
+    b = space.body(body.name) or b
     local h = -3.0
     local q = terrain.query(b.x + d.x * (Fr.R + h), b.y + d.y * (Fr.R + h), b.z + d.z * (Fr.R + h))
     if q and q > 0.3 then
@@ -1802,7 +1813,7 @@ function update(node, dt)
           log(string.format("base: the crew is home — grading the spaceport (%d terrain ops, %s)", n, gl.why))
         end)
       end
-      job_active, units = true, 0
+      job_begin()
       local ok, err = coroutine.resume(grade_job)
       job_active = false
       if coroutine.status(grade_job) == "dead" then
@@ -1820,7 +1831,7 @@ function update(node, dt)
       local pp = pave_pending
       pave_job = coroutine.create(function() lay_paving(F, pp.runway, pp.node) end)
     end
-    job_active, units = true, 0
+    job_begin()
     local ok, err = coroutine.resume(pave_job)
     job_active = false
     if coroutine.status(pave_job) == "dead" then
@@ -1861,7 +1872,7 @@ function update(node, dt)
   if not want_spawn then return end
   wait_t = wait_t + dt
   if not job then job = coroutine.create(try_place) end
-  job_active, units = true, 0
+  job_begin()
   local ok, res = coroutine.resume(job)
   job_active = false
   if coroutine.status(job) ~= "dead" then return end

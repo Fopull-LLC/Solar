@@ -403,6 +403,7 @@ do
     deliver()
     asked = 0
     store["hydro." .. name] = nil
+    env.hydroForget(name)
     local h = env.hydroOf(name)
     check(asked == 2 and h and h.v == env.HYDRO_V and h.seed == wet.seed, "hydroOf asks the engine for rivers and lakes")
     check(env.HYDRO_V >= 2, "rivers traced by engine 0.117 rc3 are a new hydro version")
@@ -422,10 +423,12 @@ do
     -- A save that kept the rivers of an older engine asks again.
     asked = 0
     store["hydro." .. name] = { seed = wet.seed, v = 1, rivers = {}, lakes = {} }
+    env.hydroForget(name)
     check(env.hydroOf(name).v == env.HYDRO_V and asked == 2, "a save with an older hydro version asks again")
     -- Off the script thread: the same record, once both answers are in.
     local sync = ser(store["hydro." .. name])
     store["hydro." .. name] = nil
+    env.hydroForget(name)
     asked = 0
     env.hydroWarm(name)
     check(asked == 2 and #later == 2 and store["hydro." .. name] == nil and env.hydroPending(name),
@@ -442,6 +445,7 @@ do
     local slot = "a"
     env.save.slot = function() return slot end
     store["hydro." .. name] = nil
+    env.hydroForget(name)
     env.hydroWarm(name)
     slot = "b"
     deliver()
