@@ -512,7 +512,7 @@ local function describe_craft(v)
   if v.fleetParts then
     local fp = v.fleetParts()
     if fp then
-      man = { name = n.name, parts = {}, fuel = fp.fuel, charge = fp.charge, groups = fp.groups,
+      man = { name = n.name, parts = {}, fuel = fp.fuel, charge = fp.charge, groups = fp.groups, controls = fp.controls,
               probe = fp.probe, crew = fp.crew, station = fp.station, flown = fp.flown }
       for i, d in ipairs(fp.parts) do man.parts[i] = { rec = d } end
     end
@@ -592,7 +592,7 @@ local function describe_craft(v)
     pitch = n.pitch or 0, yaw = n.yaw or 0, roll = n.roll or 0,
     landed = landed and true or false, splashed = splashed or nil,
     fuel = man.fuel or 0, charge = man.charge or 0,
-    groups = dcopy(man.groups), probe = man.probe == true, crew = man.crew == true,
+    groups = dcopy(man.groups), controls = dcopy(man.controls), probe = man.probe == true, crew = man.crew == true,
     -- the crew position they sit in (a pod or a seat), and whether it ever flew
     station = man.station, flown = man.flown ~= false,
     stime = space.time and space.time() or 0,
@@ -786,7 +786,7 @@ local function respawn(fid, rec)
     -- masses and lands on the fuelled craft — a 44 m/s orbit restored at 32,
     -- and spun up, because the centre of mass moved under it.
     save.set("dock.handoff." .. tostring(v.id or 0),
-      { parts = rec.parts, fuel = rec.fuel, charge = rec.charge, lockout = 2.0, groups = rec.groups,
+      { parts = rec.parts, fuel = rec.fuel, charge = rec.charge, lockout = 2.0, groups = rec.groups, controls = rec.controls,
         crew = rec.crew, name = rec.name, station = rec.station, flown = rec.flown,
         vel = (not rec.landed) and { x = fvx, y = fvy, z = fvz } or nil })
     for _, d in ipairs(rec.parts) do

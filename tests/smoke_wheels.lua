@@ -170,16 +170,9 @@ check("at 20 m/s the inside wheel's lock pulls at most alat sideways",
   400 * math.tan(d20) / wb <= alat * 1.0001 and lock_at(20) > 0.3, string.format("%.2f° → %.2f m/s²", lock_at(20), 400 * math.tan(d20) / wb))
 check("steering always eases with speed", lock_at(5) >= lock_at(10) and lock_at(10) >= lock_at(20))
 
--- 2d. a parked rover can time-warp (the engine never counts a chassis on its
--- tyres grounded, so it is pinned for the warp and let go after)
-env.R2.wheels, env.R2.live, env.R2.warp_pin = ws, true, false
-env.r2WarpPin({}, { anchored = false, vel = { x = 0.4, y = 0, z = 0.3 } })
-check("a parked rover on its tyres is pinned for warp", env.R2.warp_pin == true)
-env.R2.warp_pin = false
-env.r2WarpPin({}, { anchored = false, vel = { x = 12, y = 0, z = 0 } })
-check("a rover driving at speed is not", env.R2.warp_pin == false)
-env.r2WarpPin({}, { anchored = true, vel = { x = 0, y = 0, z = 0 } })
-check("a craft on its launch clamps is left to them", env.R2.warp_pin == false)
+-- 2d. a parked rover time-warps on its own tyres: the engine counts it
+-- grounded through them since 0.117.0-rc7 (floptle/0483), so nothing pins it
+check("no warp pin is left (the engine holds a rover on its tyres)", rawget(env, "r2WarpPin") == nil and env.R2.warp_pin == nil)
 env.R2.live = false
 
 -- 3. options: skid steer, a flipped wheel, rear steer, a wheel on the front face

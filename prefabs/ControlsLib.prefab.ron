@@ -1,0 +1,22 @@
+// CONTROLS LIBRARY — scripts/controls.lua (keys, axes, presets; WP5).
+// Spawned by vessel_controller when the scene carries no node running it;
+// reached with findScript("controls"). The builder scene has its own
+// "Controls" manager node.
+[
+    (
+        name: "ControlsLib",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [
+            (
+                kind: "controls",
+                enabled: true,
+                params: [],
+            ),
+        ],
+    ),
+]

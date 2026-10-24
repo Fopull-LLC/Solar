@@ -103,6 +103,13 @@ local function lowest_collider(placed)
   return low or 0.0
 end
 
+-- builder_proc (the drawn parts' meshes), on the BuilderProc manager node.
+local proc_ref = nil
+function proc_lib()
+  if not (proc_ref and proc_ref.valid) then proc_ref = findScript and findScript("builder_proc") or nil end
+  return proc_ref
+end
+
 local function spawn_parts(vessel, bp)
   local rxv, upv, rzv = basis_of(vessel)
   local vx, vy, vz = vessel.x, vessel.y, vessel.z
@@ -121,6 +128,21 @@ local function spawn_parts(vessel, bp)
       -- launch). Parts are authored in the VESSEL frame: overwrite with the
       -- blueprint's exact local rotation (v1.2 builds sideways parts too).
       part:setAngles(d.yaw or 0, d.pitch or 0, d.roll or 0)
+      -- DRAWN PARTS (builder overhaul WP3): a drawn member, panel or brace is
+      -- one prefab for every size. builder_proc gives it the mesh for its
+      -- blueprint `size` and writes its collider's half-extents NOW, before
+      -- the assembly.rebuild below, so the compound has its real box. Its
+      -- joint plates (gussets, splice plates, clamps) ride on it as `joints`.
+      if d.size and d.proc then
+        local P = proc_lib()
+        if P then
+          P.dress(part, { def = d, size = d.size })
+          for _, j in ipairs(d.joints or {}) do P.dressJoint(part, j) end
+        end
+      elseif d.joints then
+        local P = proc_lib()
+        if P then for _, j in ipairs(d.joints) do P.dressJoint(part, j) end end
+      end
       placed[#placed + 1] = { part = part, d = d }
       pending = pending - 1
       if pending == 0 and vessel_node then
@@ -173,6 +195,39 @@ function start(node)
   log("launch: vessel blueprint aboard — waiting for the pad terrain…")
 end
 
+-- LAUNCH IN PLACE. The builder now runs inside the real VAB over this very
+-- scene (scripts/build_host.lua), so a launch no longer reloads the world to
+-- get here: build_host calls this behind its fade, with the blueprint saved
+-- and `shipyard.pilot` set exactly as the builder always left them, and the
+-- same spaceport path as a scene start puts the craft on the pad or the
+-- runway threshold and seats the pilot. A craft from an earlier rollout that
+-- is still clamped keeps its pin (`pins`).
+local pins = {}
+function launchNow(kind)
+  if want_spawn then return false end
+  local b = save.get("shipyard.blueprint")
+  if not b or not b.parts then return false end
+  save.set("shipyard.launch", 0)
+  bp = b
+  site_kind = (kind == "runway" or (kind == nil and save.get("shipyard.site") == "runway")) and "runway" or "pad"
+  if vessel_node and vessel_node.valid and relv and body_name then
+    pins[#pins + 1] = { node = vessel_node, rel = relv, body = body_name }
+  end
+  pending, vessel_node, relv, assemble_t, rebuilt = 0, nil, nil, nil, false
+  wait_t, last_note = 0.0, 0.0
+  want_spawn = true
+  log("launch: rolling out from the VAB (" .. site_kind .. ")")
+  return true
+end
+
+-- Where an in-place launch has got to: "waiting" (for the site's ground),
+-- "assembling" (parts landing), "ready" (assembled and clamped), or nil.
+function launchState()
+  if want_spawn then return "waiting" end
+  if vessel_node and vessel_node.valid then return rebuilt and "ready" or "assembling" end
+  return nil
+end
+
 
 -- The craft's FRONT in its own frame (level, x–z), the rule vessel_controller
 -- drives by (r2FrontOf): a rover body's or a seat's +X, else the command
@@ -187,6 +242,18 @@ local function craft_front(parts)
     local l = math.sqrt(X1 * X1 + X3 * X3)
     if l < 0.5 then return nil end
     return X1 / l, X3 / l
+  end
+  -- A PLANE rolls out nose first: a cockpit (its aero spec says "cockpit")
+  -- flies along its own +Y, so that is the front the runway turns down.
+  for _, d in pairs(parts or {}) do
+    if type(d.af) == "string" and (" " .. d.af .. " "):find(" cockpit ") then
+      local cy, sy = math.cos(d.yaw or 0), math.sin(d.yaw or 0)
+      local cx, sx = math.cos(d.pitch or 0), math.sin(d.pitch or 0)
+      local cz, sz = math.cos(d.roll or 0), math.sin(d.roll or 0)
+      local Y1, Y3 = -cy * sz + sy * sx * cz, sy * sz + cy * sx * cz
+      local l = math.sqrt(Y1 * Y1 + Y3 * Y3)
+      if l > 0.5 then return Y1 / l, Y3 / l end
+    end
   end
   for _, d in pairs(parts or {}) do
     if (d.front or 0) == 1 or (d.seat or 0) == 1 or d.seat == true then
@@ -256,7 +323,6 @@ local function try_spaceport()
   -- the craft was put together over no ground, and on release it fell through
   -- to the sea and floated there until the terrain came in.
   local gx, gy, gz = body.x + st.x, body.y + st.y, body.z + st.z
-  -- `ignore` takes ONE node on rc6 (a list is silently dropped: floptle/0473).
   local crew0 = find("Astronaut")
   local hit = raycast(gx + up.x * 40, gy + up.y * 40, gz + up.z * 40, -up.x, -up.y, -up.z, 120.0,
                       crew0 and { ignore = crew0 } or nil)
@@ -524,6 +590,19 @@ function update(node, dt)
       end
     elseif info then
       relv = nil -- released: the pin's job is done
+    end
+  end
+  -- (the pins of earlier in-place rollouts, the same rule)
+  local i = 1
+  while i <= #pins do
+    local p = pins[i]
+    local info = p.node.valid and assembly.info(p.node) or nil
+    if info and info.anchored then
+      local b = space.body(p.body)
+      if b then assembly.teleport(p.node, vec3(b.x + p.rel.x, b.y + p.rel.y, b.z + p.rel.z)) end
+      i = i + 1
+    else
+      table.remove(pins, i)
     end
   end
 end

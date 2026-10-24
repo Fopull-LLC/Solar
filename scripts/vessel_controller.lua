@@ -172,6 +172,25 @@ local ANIMS = {
     end
     if j.upper then j.upper.roll = gear_lerp(GEAR_STOW_U, GEAR_DEP_U, f) end
     if j.knee then j.knee.roll = gear_lerp(GEAR_STOW_K, GEAR_DEP_K, f) end
+    -- A LANDING GEAR (PartGearS/M) folds its leg aft (toward −Y, about Z)
+    -- into the hull, the tyre swinging with it.
+    if j.gear == nil then
+      j.gear = false
+      for _, c in ipairs(child:children()) do
+        if c.name == "GearPivot" then j.gear = c end
+        if c.name == "Tyre" then j.tyre, j.t0 = c, { c.x, c.y } end
+      end
+    end
+    if j.gear then
+      local a = -(1 - f) * math.pi / 2
+      j.gear.roll = a
+      if j.tyre and j.t0 then
+        local px, py = j.gear.x, j.gear.y
+        local ddx, ddy = j.t0[1] - px, j.t0[2] - py
+        local c, s = math.cos(a), math.sin(a)
+        j.tyre.x, j.tyre.y, j.tyre.roll = px + ddx * c - ddy * s, py + ddx * s + ddy * c, a
+      end
+    end
   end,
   -- A DISH folds flat for launch and, deployed, swings its boresight onto
   -- whoever it is talking to (`pose.aim`, set by the comms pass): the authored
@@ -557,9 +576,13 @@ local function load_bp(override)
     part_total = part_total + 1
     if (d.thrust or 0) > 0 then
       local ax, ay, az = part_axis(d)
+      -- a JET's thrust and burn follow its spool and its air (aeroTick): it
+      -- starts cold
+      local jet = afHas(d, "jet")
       engines[#engines + 1] = { x = d.x, y = d.y, z = d.z, dx = ax, dy = ay, dz = az,
                                 thrust = d.thrust, burn = d.burn or 1,
-                                branch = in_branch[d.uid], uid = d.uid, rec = d }
+                                branch = in_branch[d.uid], uid = d.uid, rec = d,
+                                jet = jet or nil, jk = jet and 0 or nil, jb = jet and 0 or nil }
     end
     if (d.fuel or 0) > 0 then
       -- `left` is what this tank still holds; `ft` its propellant's tonnes per
@@ -687,7 +710,7 @@ local function load_bp(override)
   part_hp = {}
   for _, d in pairs(bp.parts) do part_hp[d.uid] = 1.0 end
   elecRescan()
-  groupsReset(bp.groups)
+  groupsReset(bp.groups, bp.controls)
   focusHeight = pod.y
   podLX, podLY, podLZ = pod.x, pod.y, pod.z
   -- Damage model state: every part starts pristine.
@@ -1790,12 +1813,53 @@ function fireSeparation(uid)
   return false
 end
 
+-- THE CONTROLS RULEBOOK (scripts/controls.lua): key groups on any free key,
+-- and AXES — pitch, yaw, roll, throttle, steer, drive or custom key pairs
+-- driving actuator setpoints with gain and trim. Spawned (ControlsLib) when
+-- the scene has no node running it, as aeroLib does.
+ctlAxes = nil
+ctlAxesData = nil
+local clib_ref = { lib = nil, asked = false }
+function clib()
+  local C = clib_ref.lib
+  if C and C.valid then return C end
+  C = findScript and findScript("controls") or nil
+  -- (a just-spawned ControlsLib is found a frame before its chunk has run)
+  if C and type(C.live) ~= "function" then return nil end
+  if not C and not clib_ref.asked and spawn then
+    clib_ref.asked = true
+    pcall(spawn, "ControlsLib", vec3(0, 0, 0))
+  end
+  clib_ref.lib = C
+  if C and not ctlAxes and ctlAxesData then ctlAxes = C.live(ctlAxesData) end
+  return C
+end
+
+-- The Controls card (flight_hud, O): keys with their lamps, axes with tapes.
+function controlsCard()
+  local E, C = elib(), clib()
+  if not (E and C) then return nil end
+  return C.card(ctlGroups, ctlAxes, aboardRecs(), E)
+end
+
+-- How many custom controls this craft has (the first-flight toast).
+function controlsCustomCount()
+  local E, C = elib(), clib()
+  if not (E and C) then return 0 end
+  return C.customCount(ctlGroups, ctlAxes, E)
+end
+
 -- THE ACTION GROUPS this craft flies with (gid → { name, binds, on }).
 -- From the blueprint if the player edited them, else the standard set.
 ctlGroups = {}
 
-function groupsReset(packed)
+function groupsReset(packed, controls)
   local E = elib()
+  -- the craft's AXES (WP5, scripts/controls.lua): none on an old craft
+  -- (kept packed too: the ControlsLib may land a frame after the craft)
+  local C = clib()
+  ctlAxesData = controls
+  ctlAxes = C and C.live(controls) or nil
   if not E then ctlGroups = {} return end
   if packed then
     ctlGroups = E.unpackGroups(packed)
@@ -1831,6 +1895,12 @@ function groupStrip()
                         on = E.groupState(ctlGroups, g.id, recs), standard = g.standard }
     end
   end
+  -- key groups on any other key (controls.lua "k:<key>")
+  local C = clib()
+  for _, g in ipairs(C and C.extraGroups(ctlGroups) or {}) do
+    out[#out + 1] = { id = g.id, key = g.key, label = g.label, n = #ctlGroups[g.id].binds,
+                      on = E.groupState(ctlGroups, g.id, recs), cap = C.keyLabel(g.key) }
+  end
   return out
 end
 
@@ -1858,6 +1928,28 @@ function groupKeysTick(node, info)
     if not skip and input.pressed(k) then activateGroup(g.id) end
     -- Actuator setpoints ride a HELD key: angle, extension, rotor speed.
     if not skip and E and input.key(k) and elec.control ~= false then holdGroupAxes(g.id, node) end
+  end
+  controlsTick(node)
+end
+
+-- WP5: the key groups on any other key, then the AXES — every tick, the
+-- craft's axis bindings turn the stick and the custom key pairs into actuator
+-- setpoints (controls.evaluate), written into the parts' state the way
+-- partAction does (controls.apply); robo_tick then drives the joints there.
+-- Nothing answers without control, or while the map is open (its keys).
+function controlsTick(node)
+  local E, C = elib(), clib()
+  if not (E and C) or dock.map then return end
+  for _, g in ipairs(C.extraGroups(ctlGroups)) do
+    if input.pressed(g.key) then activateGroup(g.id) end
+    if input.key(g.key) and elec.control ~= false then holdGroupAxes(g.id, node) end
+  end
+  if ctlAxes and #ctlAxes.axes > 0 and elec.control ~= false and not dock.plan and not destroyed then
+    local recs = aboardRecs()
+    local inp = C.readInputs(ctlAxes, input.key, input.pressed, { throttle = throttle })
+    -- a headless run cannot press keys: a probe sets CTL_PROBE = { src = value }
+    if CTL_PROBE then for k, v in pairs(CTL_PROBE) do inp[k] = v end end
+    C.apply(C.evaluate(ctlAxes, inp, recs, 1.0 / 60.0, E), recs, E)
   end
 end
 
@@ -2333,106 +2425,15 @@ local function radial_up(x, y, z)
 end
 
 -- ── DEBRIS THAT HANGS IN THE AIR ───────────────────────────────────────────
--- "debris often left floating" (playtest 2026-10-23, 1.png: wreckage in the
--- sky over a crash). A piece that comes off — wreck, spent stage, booster,
--- sheared part — is a bare assembly with no script of its own, so nothing
--- ever looks at it again. Two engine paths can leave one hanging, both
--- outside its own physics: the distant-craft LOD (floptle-editor space.rs)
--- freezes a compound that is "slow" (grounded, anchored or under 0.5 m/s) on
--- an ANCHOR the moment the camera — or the map's lodAnchor — is 700 m off,
--- which catches a piece at the top of its arc or the moment it was split off
--- at rest, and it hangs there until the camera comes within 500 m; and a
--- compound put to sleep where it rested stays where it slept if what it
--- rested on goes some other way than the engine checks. So every piece is
--- watched by the craft it came from (this script keeps running when the
--- craft is lost): kept out of the LOD (assembly.keepLive) until it has come
--- to rest on the ground, and if it is ever still in the air — no contact,
--- under 0.2 m/s for a second and a half, which nothing falling ever is — it
--- is let go (unanchored, woken) and nudged down. Measured on 0.117.0-rc6: a
--- 4-piece breakup settles in ~8 s and every piece falls when the ground is
--- dug from under it.
-DEBRIS = {}
-function debrisTrack(junk)
-  if not (junk and junk.valid ~= false and assembly.info(junk)) then return end
-  if assembly.keepLive then assembly.keepLive(junk, true) end
-  DEBRIS[#DEBRIS + 1] = { node = junk, t = 0, still = 0, rest = 0, kicks = 0 }
-end
-
-function debrisTick(dt)
-  for k = #DEBRIS, 1, -1 do
-    local d = DEBRIS[k]
-    local n = d.node
-    local inf = n and n.valid ~= false and assembly.info(n)
-    if not inf then
-      table.remove(DEBRIS, k)
-    else
-      d.t = d.t + dt
-      local v = inf.vel
-      local spd = math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z)
-      if inf.grounded and spd < 0.3 then d.rest = d.rest + dt else d.rest = 0 end
-      local cm = inf.com or inf.origin
-      local ux, uy, uz = radial_up(cm.x, cm.y, cm.z)
-      if d.kicks >= 4 or d.t > 900 then
-        if assembly.keepLive then assembly.keepLive(n, false) end
-        table.remove(DEBRIS, k)
-      elseif d.settled then
-        -- SETTLED: every 2 s, is the ground still where it came to rest? The
-        -- terrain's collider is rebuilt as its detail changes (the craft LOD
-        -- and the terrain detail follow the camera, or the map's anchor), and
-        -- digging moves it: a piece asleep on ground that has since dropped
-        -- away is woken.
-        d.chk = d.chk + dt
-        if d.chk > 2.0 then
-          d.chk = 0
-          local h = raycast(cm.x, cm.y, cm.z, -ux, -uy, -uz, 60, n)
-          local gap = h and h.distance or 60
-          -- …and against the terrain's own field, which does not change with
-          -- its collider's detail: far from the camera (or the map's anchor)
-          -- the collider is coarse, a piece comes to rest on it metres off
-          -- the ground you see, and a fast one goes through it (0.117.0-rc6:
-          -- with the anchor 3 km off, the hull of a breakup fell 200 m into
-          -- the planet and the others came to rest 1.5-2.5 m up in the air).
-          local q = terrain.query and terrain.query(cm.x, cm.y, cm.z)
-          if q and q < -1.0 then
-            -- inside the ground: back out onto it
-            local o = inf.origin or cm
-            local up_by = -q + 1.0
-            assembly.teleport(n, vec3(o.x + ux * up_by, o.y + uy * up_by, o.z + uz * up_by))
-            n.asleep = false
-            d.settled, d.rest, d.kicks = false, 0, d.kicks + 1
-            log(string.format("debris: %s was %.1f m inside the ground — put back on it", tostring(n.name), -q))
-          elseif (q and q > 2.5) or gap > d.h0 + 0.6 then
-            n.asleep = false
-            if inf.anchored then assembly.setAnchored(n, false) end
-            d.settled, d.rest, d.kicks = false, 0, d.kicks + 1
-            local m = math.max(0.01, inf.mass or 0.1)
-            assembly.impulseAt(n, vec3(-ux * m * 0.5, -uy * m * 0.5, -uz * m * 0.5), vec3(cm.x, cm.y, cm.z))
-            log(string.format("debris: %s rests %.1f m off the ground (ray %.1f, rested at %.1f) — woken",
-              tostring(n.name), q or -1, gap, d.h0))
-          end
-        end
-      elseif d.rest > 3 then
-        -- at rest on the ground: the LOD may have it now; remember how far
-        -- the ground is below its centre
-        if assembly.keepLive then assembly.keepLive(n, false) end
-        local h = raycast(cm.x, cm.y, cm.z, -ux, -uy, -uz, 60, n)
-        d.settled, d.chk, d.h0 = true, 0, h and h.distance or 60
-      elseif not inf.grounded and spd < 0.2 then
-        d.still = d.still + dt
-        if d.still > 1.5 then
-          d.still, d.kicks = 0, d.kicks + 1
-          if inf.anchored then assembly.setAnchored(n, false) end
-          n.asleep = false
-          local m = math.max(0.01, inf.mass or 0.1)
-          assembly.impulseAt(n, vec3(-ux * m * 0.5, -uy * m * 0.5, -uz * m * 0.5), vec3(cm.x, cm.y, cm.z))
-          log(string.format("debris: %s was hanging in the air — let go", tostring(n.name)))
-        end
-      else
-        d.still = 0
-      end
-    end
-  end
-end
+-- (playtest 2026-10-23: "debris often left floating"). Until 0.117.0-rc6 every
+-- piece a craft shed was watched here: kept out of the distant-craft LOD, let
+-- go if it hung in the air, put back if it sank into the ground. The engine
+-- does all of it since 0.117.0-rc7: the LOD freezes a compound only when it
+-- rests (floptle/0493), collision follows moving bodies as well as the camera
+-- (0492), and a sleeping piece wakes when its ground is dug away. Measured on
+-- rc7 with no watcher and the LOD anchor 3 km off for 30 s after a breakup:
+-- 4 of 4 pieces landed (0 hanging, 0 sunk; 3 runs), and every piece fell
+-- 7-8 m when the ground was dug from under it.
 
 -- `clear` (m, optional) first moves the wreck that far straight out from the
 -- impact, so it starts clear of the hull it just left: overlapping colliders
@@ -2456,7 +2457,6 @@ local function debris_kick(junk, hx, hy, hz, dv, away, hull, also)
   -- the same breakup) for a moment: see releasePiece.
   local a = away or { gap = 0, x = ox, y = oy, z = oz }
   releasePiece(junk, hull, a.x, a.y, a.z, a.gap, also)
-  debrisTrack(junk)
   if dv <= 0 then return end -- velocity kept exactly: no impulse at all
   local g = physTune.clear and (a.gap or 0) or 0
   local m = (ji.mass and ji.mass > 0) and ji.mass or 0.2
@@ -2719,7 +2719,8 @@ function dockManifest(port_uid)
   local E = elib()
   return { name = node.name or "Module", parts = parts, portUid = port_uid,
            fuel = fuel, charge = elec.charge, piloted = piloting, crew = crewAboard,
-           groups = E and E.packGroups(ctlGroups) or nil }
+           groups = E and E.packGroups(ctlGroups) or nil,
+           controls = (clib() and ctlAxes) and clib().pack(ctlAxes) or nil }
 end
 
 -- The craft as it is NOW, for the fleet record flight_ops saves (a craft left
@@ -2738,7 +2739,8 @@ function fleetParts()
   return { parts = out, fuel = fuel, charge = elec.charge, pod = podCrewed == true,
            probe = elec.probePart ~= nil, crew = crewAboard == true,
            station = stationUid, flown = hasFlown ~= false,
-           groups = E and E.packGroups(ctlGroups) or nil }
+           groups = E and E.packGroups(ctlGroups) or nil,
+           controls = (clib() and ctlAxes) and clib().pack(ctlAxes) or nil }
 end
 
 -- Stand down: our root is about to be retired by the merge. Release the pilot's
@@ -2930,6 +2932,10 @@ local function dock_absorb(node)
     if E and man.groups then
       E.mergeGroups(ctlGroups, E.remapGroups(E.unpackGroups(man.groups), remap))
     end
+    local C = clib()
+    if C and man.controls then
+      ctlAxes = C.merge(ctlAxes or C.newCtl(), C.remap(C.live(man.controls), remap))
+    end
   end
   if man.crew then crewAboard = true end
   rescanSeats()
@@ -3041,6 +3047,7 @@ function undock(port_uid)
     local dset = {}
     for u in pairs(dep) do dset[u] = true end
     sub.groups = E.packGroups(E.subsetGroups(ctlGroups, dset))
+    if clib() and ctlAxes then sub.controls = clib().pack(clib().subset(ctlAxes, dset)) end
     E.pruneGroups(ctlGroups, aboardRecs())
   end
   integ.gen = integ.gen + 1
@@ -4013,7 +4020,6 @@ break_part = function(node, uid, d, c, hx, hy, hz, depth)
       controlFallback(node.id)
     end
     log("the pod is gone — vessel lost")
-    debrisTrack(node)   -- what is left of the hull is wreckage now
     local fx_s = findScript("sfx") -- the sting and the VESSEL LOST caption
     if fx_s and fx_s.vesselLost then fx_s.vesselLost(was_piloting, craftName) end
     return
@@ -4147,7 +4153,6 @@ local function shatter(node, hx, hy, hz, spd, info)
   end
   integ.gen = integ.gen + 1
   for uid in pairs(part_hp) do part_hp[uid] = 0 end
-  debrisTrack(node)   -- the last piece is wreckage too
 end
 
 -- Closing speed INTO THE SURFACE (m/s) above which a hit fails the whole
@@ -4951,7 +4956,6 @@ function shedSet(node, set, why, sev, blast)
   assembly.split(node, nodes, function(junk)
     -- Clear of the hull, at the velocity it had: no impulse from overlap.
     releasePiece(junk, node, wx, wy, wz, gap)
-    debrisTrack(junk)
     local ji = assembly.info(junk)
     if ji and ji.origin then
       if blast and ji.com then
@@ -5700,6 +5704,7 @@ function r2SplitCraft(node, info, dec_uid, dep, parts_nodes, nx, ny, nz)
     local dset = {}
     for u in pairs(dep) do dset[u] = true end
     sub.groups = E.packGroups(E.subsetGroups(ctlGroups, dset))
+    if clib() and ctlAxes then sub.controls = clib().pack(clib().subset(ctlAxes, dset)) end
   end
   for u in pairs(dep) do
     if bp_by_uid[u] then
@@ -5828,7 +5833,6 @@ function stageNext()
         caption("the boosters separate")
         assembly.split(node, parts_nodes, function(stage)
           releasePiece(stage, node, kx, ky, kz, gap)
-          debrisTrack(stage)
           local si = assembly.info(stage)
           if si then
             -- Mass-scaled Δv: a FLAT impulse gave a heavy booster almost no
@@ -5906,7 +5910,6 @@ function stageNext()
       caption("a stage separates")
       assembly.split(node, parts_nodes, function(stage)
         releasePiece(stage, node, away.x, away.y, away.z, gap)
-        debrisTrack(stage)
         local si = assembly.info(stage)
         if si then
           -- Mass-scaled Δv (see the ring case) + a small downward nudge so a
@@ -6088,6 +6091,7 @@ R2_LAT_MU = 0.6       -- the share of the tyres' grip a turn may use, sideways
 R2_LAT_SSF = 0.45     -- …and the share of the rollover threshold (half track / CoM height)
 R2_ANTIROLL = 2.0     -- anti-roll bar: × m·g·track of roll torque per radian of lean
 R2_TYRES_VMAX = 45.0  -- m/s: faster than this the tyres fold back into the hull
+R2_GEAR_VMAX = 90.0   -- …but a plane's landing gear rolls on to takeoff and landing speeds
 -- The tyre's friction (× the wheel's Grip setting). It is the one limit the
 -- engine's wheel always honours (see drive_tick: its motor cap does not cap
 -- the drive), so it is set where a rover should live: 0.7 g of push, braking
@@ -6325,6 +6329,13 @@ local function r2_scan(node)
   -- the vessel's +X. W drives this way. (R2.front is the old ±X sign, kept
   -- for the readers that still use it.)
   R2.fwd = r2FrontOf(bp_by_uid, integ.gone, pod_uid, r2_basis)
+  -- a craft flown nose-first (a plane): its front is the nose
+  if AERO.gen ~= integ.gen then aeroScan() end
+  local an = AERO.frame and AERO.frame.n
+  if an and math.sqrt(an.x * an.x + an.z * an.z) > 0.5 then
+    local l = math.sqrt(an.x * an.x + an.z * an.z)
+    R2.fwd = { x = an.x / l, z = an.z / l }
+  end
   R2.front = (math.abs(R2.fwd.x) >= math.abs(R2.fwd.z) and R2.fwd.x < 0) and -1 or 1
   local depth = {}
   local function depth_of(u)
@@ -6351,8 +6362,17 @@ local function r2_scan(node)
         w.tx = half - tyre_w / 2
         w.cx, w.cy, w.cz = d.x + X[1] * w.tx, d.y + X[2] * w.tx, d.z + X[3] * w.tx
         w.axle = X
+        if afHas(d, "gear") then
+          -- A LANDING GEAR: the tyre at the foot of the leg (+X), its axle the
+          -- part's Z; it rolls free (brakes on B), the nose gear steers.
+          w.gear = true
+          w.tx = (d.rx or 0.5) - r
+          w.cx, w.cy, w.cz = d.x + X[1] * w.tx, d.y + X[2] * w.tx, d.z + X[3] * w.tx
+          w.axle = Z
+        end
         w.side = (w.cz >= 0) and 1 or -1
         r2WheelSetup(w, R2.fwd)
+        if w.gear then w.rs = 0 end
         R2.wheels[#R2.wheels + 1] = w
       end
       for _, kind in ipairs({ "hinge", "piston", "rotor" }) do
@@ -6379,6 +6399,8 @@ local function r2_scan(node)
   end
   table.sort(R2.robo, function(a, b) if a.depth ~= b.depth then return a.depth < b.depth end return a.uid < b.uid end)
   table.sort(R2.wheels, function(a, b) return a.uid < b.uid end)
+  R2.gear = false
+  for _, w in ipairs(R2.wheels) do if w.gear then R2.gear = true end end
   r2SteerPlan(R2.wheels, R2.fwd, bp_by_uid, integ.gone)
   -- Each robotic part's MOVING SET: the side of it away from the command
   -- part, by the attachment tree; and which of its halves carries that side.
@@ -6629,7 +6651,7 @@ local function wheel_collider(node, w, live)
   local n = r2NodeOf(node, w.uid)
   local rb = n and n:getcomponent("RigidBody")
   if not rb then return end
-  if live then
+  if live or (w.gear and gearIsUp(w.uid)) then
     rb.half_x, rb.half_y, rb.half_z = 0.05, 0.05, 0.05
   else
     -- a hair short of the tyre: a rover going rigid on its suspension
@@ -6647,11 +6669,15 @@ end
 local function wheels_wanted(node, info)
   if #R2.wheels == 0 or destroyed or not piloting then return false, "unpiloted" end
   if info.anchored then return false, "clamped" end
-  if space.warp() > 1.001 then return false, "warp" end
+  -- (on the ground they stay out through a warp: the engine counts the craft
+  -- grounded through them, floptle/0483; in the air a warp coasts the chassis
+  -- and the tyres apart, so they come in)
+  if space.warp() > 1.001 and not info.grounded then return false, "warp" end
   if R2.holdoff > 0 then return false, "holdoff" end
   if not assembly_ready(info) or integ.push then return false, "assembling" end
+  if R2.gear and gearState() then return false, "gear up" end
   local v = info.vel
-  if math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z) > R2_TYRES_VMAX then return false, "fast" end
+  if math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z) > (R2.gear and R2_GEAR_VMAX or R2_TYRES_VMAX) then return false, "fast" end
   if R2.live then
     -- out: they stay out while any tyre is on the ground, and for a couple
     -- of seconds of air (a bump, a hop) before they fold back into the hull
@@ -6765,8 +6791,7 @@ function hang_tyre(node, w, info)
               stiffness = f, damping = 0.7 * (c.damper or 1), motorSpeed = 0, maxForce = (m.torque or 0.6),
               steer = w.steer0 or 0 }
   w.jointed = true
-  w.joint_age = 0   -- ticks since it was hung, counted in drive_tick (a spawn
-                    -- callback's `time` is not the tick clock's)
+  w.joint_age = 0   -- seconds of ticks since it was hung, counted in drive_tick
 end
 
 -- THE TYRES AS DRAWN. The live tyre is a ball to the physics, held to spin
@@ -6832,6 +6857,13 @@ local function drive_tick(node, info, dt)
   local scmd = ctl and ((input.key("a") and 1 or 0) - (input.key("d") and 1 or 0)) or 0
   -- A headless run cannot press keys: a probe drives through R2.cmd.
   if ctl and R2.cmd then dcmd, scmd = R2.cmd.drive or 0, R2.cmd.steer or 0 end
+  -- LANDING GEAR: W/S are the elevators, not a drive; the jets push it. The
+  -- nose wheel steers with the rudder (A/D), and the parking brake lets go
+  -- the moment the throttle opens.
+  if R2.gear then
+    dcmd = (throttle > 0.05) and 1 or 0
+    if ctl and AERO.cmd then scmd = AERO.cmd.y or 0 end
+  end
   -- the stick eases in and out like a throttle (no wheelspin from a key tap)
   local function ease(cur, want, up, down)
     if want > cur then return math.min(want, cur + up * dt) end
@@ -6844,7 +6876,7 @@ local function drive_tick(node, info, dt)
     if w.jointed and w.tyre and w.tyre.valid and w.tyre.grounded then grounded = grounded + 1 end
   end
   R2.onWheels = grounded > 0
-  R2.driving = ctl and grounded > 0
+  R2.driving = ctl and grounded > 0 and not R2.gear
   R2.ctl = ctl
   local v = info.vel
   local spd = math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z)
@@ -7094,7 +7126,7 @@ local function claw_tick(node, info, dt)
       local dx = -(rx.x * Y[1] + up.x * Y[2] + rz.x * Y[3])
       local dy = -(rx.y * Y[1] + up.y * Y[2] + rz.y * Y[3])
       local dz = -(rx.z * Y[1] + up.z * Y[2] + rz.z * Y[3])
-      local hit = raycast(wx, wy, wz, dx, dy, dz, 0.35, node)
+      local hit = raycast(wx, wy, wz, dx, dy, dz, 0.35, { ignore = r2Own(node) })
       local served = (elec.served and elec.served["c" .. c.uid]) or 1
       if hit and served > 0.5 then
         -- another craft's part grips that craft; the ground grips the ground
@@ -7157,7 +7189,7 @@ local function drill_tick(node, info, dt)
       local dx = -(rx.x * Y[1] + up.x * Y[2] + rz.x * Y[3])
       local dy = -(rx.y * Y[1] + up.y * Y[2] + rz.y * Y[3])
       local dz = -(rx.z * Y[1] + up.z * Y[2] + rz.z * Y[3])
-      local hit = raycast(wx, wy, wz, dx, dy, dz, tipd + (dr.m.reach or 0.9), node)
+      local hit = raycast(wx, wy, wz, dx, dy, dz, tipd + (dr.m.reach or 0.9), { ignore = r2Own(node) })
       if not hit then
         why = "the drill can't reach the ground — set down closer"
       else
@@ -7353,41 +7385,33 @@ function r2Rollout(node, info)
 end
 
 -- ── the tick ───────────────────────────────────────────────────────────────
--- THE HOLD-OFF COUNTS DOWN IN TICKS. It used to be an absolute `time`, set
--- wherever it was set and compared here, in fixedUpdate. But `time` is the
--- PASS's clock: an update-pass caller (the release, a probe, a UI button)
--- stamps frame time, and the tick clock here can trail it by many seconds
--- after a load, a hitch or a warp (it does not catch up dropped ticks).
--- Measured on 0.117.0-rc6: a rover released after a 39 s load kept its
--- tyres in for 11 s; one warped while clamped never put them out at all.
--- PARKED ROVERS AND WARP. A rover standing on its live tyres is held up by
--- jointed bodies, so the engine never counts its chassis `grounded`, and it
--- creeps a few tenths of a m/s on its springs: the warp gate (floptle-editor
--- space.rs, "anchored || grounded || vel² < 0.01") put it on a Kepler conic,
--- found the conic inside the planet and dropped warp to 1× the same tick —
--- a parked rover could not warp at all. So a craft on its wheels (or just
--- off them) is pinned where it stands for the warp, the way a floating
--- craft is (waterTick), and let go the tick warp ends.
-function r2WarpPin(node, info)
-  if R2.warp_pin or not info or info.anchored then return end
-  if not (R2.live or R2.onWheels) or #R2.wheels == 0 then return end
-  local v = info.vel
-  if math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z) > 3.0 then return end
-  assembly.setAnchored(node, true)
-  R2.warp_pin = true
-  log("rover: pinned for time warp")
+-- THE HOLD-OFF COUNTS DOWN IN TICKS (seconds of fixed dt). It used to be an
+-- absolute `time` set in the update pass and compared here, and until
+-- 0.117.0-rc6 the tick clock trailed the frame clock by many seconds after a
+-- load (a rover released after a 39 s load kept its tyres in for 11 s). Since
+-- rc7 one `time` is shared and the tick clock no longer falls behind
+-- (floptle/0469, 0491), but a frame's ticks still read the clock one frame
+-- behind update's (measured: 0.05 s at 20 fps, 0.9 s on a 0.9 s hitch), so a
+-- countdown in ticks is still the exact form, and it stays.
+-- PARKED ROVERS AND WARP. A rover on its live tyres counts as grounded through
+-- them since 0.117.0-rc7 (floptle/0483, assembly.info.grounded too), so the
+-- engine keeps it on realtime physics and holds the warp: the tyres stay out
+-- (wheels_wanted) and nothing is pinned. (Until rc6 it was anchored for the
+-- warp, r2WarpPin, and the tyres came in.) Measured on rc7: parked 110 m out,
+-- warped 1→5→10× by the keys, held 10× for 5.8 s, grounded every frame,
+-- drift 0.00 m, and it drove off at 22 m/s straight after.
+-- The craft and its live tyres (bodies of their own), for a query's ignore
+-- list (floptle/0473): a claw or a drill must not take hold of its own wheel.
+function r2Own(node)
+  local own = { node }
+  for _, w in ipairs(R2.wheels) do
+    if w.tyre and w.tyre.valid then own[#own + 1] = w.tyre end
+  end
+  return own
 end
 
 function r2Tick(node, info, dt)
   R2.holdoff = math.max(0, (R2.holdoff or 0) - (dt or 0))
-  if space.warp() > 1.001 then
-    r2WarpPin(node, info)   -- warp asked for from elsewhere (the map, a probe)
-  elseif R2.warp_pin then
-    R2.warp_pin = false
-    assembly.setAnchored(node, false)
-    R2.holdoff = math.max(R2.holdoff, 0.3)
-    log("rover: warp over, unpinned")
-  end
   if R2.gen ~= integ.gen then
     if R2.live then tyres_in(node); R2.holdoff = math.max(R2.holdoff, 0.5) end
     r2_scan(node)
@@ -7396,6 +7420,15 @@ function r2Tick(node, info, dt)
   robo_tick(node, info, dt)
   claw_tick(node, info, dt)
   drill_tick(node, info, dt)
+  if R2.gear and not R2.live then
+    local gu = gearState()
+    if R2.gear_up ~= nil and gu ~= R2.gear_up then
+      for _, w in ipairs(R2.wheels) do if w.gear then wheel_collider(node, w, false) end end
+      assembly.rebuild(node)
+      damage_arm = math.max(damage_arm, time - 1.5)
+    end
+    R2.gear_up = gu
+  end
   local want, why = wheels_wanted(node, info)
   R2.why = want and "out" or why   -- published: why the tyres are in (HUD, probes)
   if want and not R2.live then tyres_out(node, info)
@@ -7451,6 +7484,248 @@ function roundTwoState()
     out.drills[#out.drills + 1] = { uid = d.uid, working = d.working == true, cores = d.cores or 0, why = d.why, lower = d.lower }
   end
   return out
+end
+
+-- ── AERODYNAMICS (scripts/aero.lua) ─────────────────────────────────────────
+-- Per-part drag, lift, control surfaces and jets for the craft you fly. The
+-- maths is scripts/aero.lua (findScript("aero"), on the AeroLib node, spawned
+-- here when the scene has none); this side builds the craft's model from its
+-- blueprint, hands it the air, the wind and the stick every tick, applies the
+-- force and torque that come back, poses the control surfaces and feeds the
+-- jets' thrust to the engine loop (`e.jk`, `e.jb`). Everything is reached
+-- through globals: fixedUpdate has no upvalue to spare.
+--
+-- THE CONTROL FRAME. A rocket flies by its stack: nose +Y, top −Z (the pod's
+-- window). A craft whose command part flies nose-first (a cockpit, `af`
+-- "cockpit") or lies down (a pod built on its side) flies by THAT part: its
+-- +Y is the nose and its −Z the top, so a plane laid along the runway pitches,
+-- yaws and rolls about its own axes and the navball reads its attitude.
+--
+-- TRIM: ALT + W/S, A/D, Q/E move the trim (the surfaces' rest), ALT + X
+-- zeroes it. The SAS's stability assist damps the rates the stick isn't
+-- asking for through the surfaces as well as the reaction wheels.
+AERO = {
+  lib = nil, asked = false,
+  model = nil, gen = -1, gu = nil,
+  frame = nil,            -- { n = nose, f = top } in the vessel frame; nil = the rocket's
+  trim = { p = 0, y = 0, r = 0 },
+  cmd = nil,              -- a probe's stick { p, y, r } (a headless run cannot press keys)
+  world = nil, world_name = nil, world_t = -100,
+  pivots = {},            -- uid → the surface's moving node (FlapPivot / SurfacePivot) or false
+  hud = nil,              -- published as tele.aero
+  active = false,
+}
+AERO_TRIM_RATE = 0.35     -- trim travel per second of a held ALT + key
+AERO_TRIM_MAX = 0.6
+
+function aeroLib()
+  local A = AERO.lib
+  if A and A.valid then return A end
+  A = findScript and findScript("aero") or nil
+  if not A and not AERO.asked and spawn then
+    AERO.asked = true
+    pcall(spawn, "AeroLib", vec3(0, 0, 0))
+  end
+  AERO.lib = A
+  return A
+end
+
+-- Does a part's aero spec carry this word ("jet", "gear", "cockpit")?
+function afHas(d, word)
+  local s = d and d.af
+  return type(s) == "string" and (" " .. s .. " "):find(" " .. word .. "[ =]") ~= nil
+end
+
+-- A landing gear folded away (G): its fold, by the same per-part animation the
+-- legs use.
+function gearIsUp(uid) return (panim[uid] or 1) < 0.5 end
+function gearState()
+  local up = false
+  for _, w in ipairs(R2.wheels) do if w.gear and gearIsUp(w.uid) then up = true end end
+  return up
+end
+
+-- Re-read the craft (its part set changed): the control frame, and the model
+-- is rebuilt on the next aero tick.
+function aeroScan()
+  AERO.gen = integ.gen
+  AERO.model, AERO.pivots = nil, {}
+  AERO.frame = nil
+  local d = pod_uid and bp_by_uid[pod_uid]
+  if d and not integ.gone[pod_uid] then
+    local _, Y, Z = r2_basis(d.yaw, d.pitch, d.roll)
+    if afHas(d, "cockpit") or Y[2] < 0.866 then
+      AERO.frame = { n = { x = Y[1], y = Y[2], z = Y[3] }, f = { x = -Z[1], y = -Z[2], z = -Z[3] } }
+    end
+  end
+end
+
+-- The control frame in the world: nose, then top.
+function aeroFrame(rx, up, rz)
+  local n, f = AERO.frame.n, AERO.frame.f
+  return rx.x * n.x + up.x * n.y + rz.x * n.z, rx.y * n.x + up.y * n.y + rz.y * n.z, rx.z * n.x + up.z * n.y + rz.z * n.z,
+         rx.x * f.x + up.x * f.y + rz.x * f.z, rx.y * f.x + up.y * f.y + rz.y * f.z, rx.z * f.x + up.z * f.y + rz.z * f.z
+end
+
+-- A probe's stick, in place of the keys.
+function aeroCmd(p, y, r)
+  local c = AERO.cmd
+  if not c then return p, y, r end
+  return c.p or 0, c.y or 0, c.r or 0
+end
+function setThrottle(v) throttle = math.max(0, math.min(1, tonumber(v) or 0)) end
+
+-- The moving node of a control surface (for the eye only: the flight's
+-- deflection is the model's).
+local function aero_pivot(node, uid)
+  local pv = AERO.pivots[uid]
+  if pv ~= nil and (pv == false or pv.valid) then return pv end
+  pv = false
+  local n = r2NodeOf(node, uid)
+  if n then
+    for _, c in ipairs(n:children()) do
+      if c.name == "SurfacePivot" then pv = c end
+      if c.name == "FlapHinge" then
+        for _, g in ipairs(c:children()) do if g.name == "FlapPivot" then pv = g end end
+      end
+    end
+  end
+  AERO.pivots[uid] = pv
+  return pv
+end
+
+-- THE TICK, from fixedUpdate's attitude block: the stick (sp, sy, sr), the
+-- SAS's rate error (ex, ey, ez, world), and the stick's rotation axes in the
+-- world (pitch ap, yaw ay, roll ar).
+function aeroTick(node, info, dt, thr, sp, sy, sr, ex, ey, ez, apx, apy, apz, ayx, ayy, ayz, arx, ary, arz)
+  AERO.active = false
+  if AERO.gen ~= integ.gen then aeroScan() end
+  -- trim: ALT + the stick keys
+  if piloting and elec.control ~= false and not dock.plan and input.key("alt") then
+    local T = AERO.trim
+    local function k(a, b) return (input.key(a) and 1 or 0) - (input.key(b) and 1 or 0) end
+    T.p = math.max(-AERO_TRIM_MAX, math.min(AERO_TRIM_MAX, T.p + k("w", "s") * AERO_TRIM_RATE * dt))
+    T.y = math.max(-AERO_TRIM_MAX, math.min(AERO_TRIM_MAX, T.y + k("a", "d") * AERO_TRIM_RATE * dt))
+    T.r = math.max(-AERO_TRIM_MAX, math.min(AERO_TRIM_MAX, T.r + k("e", "q") * AERO_TRIM_RATE * dt))
+    if input.pressed("x") then T.p, T.y, T.r = 0, 0, 0 end
+  end
+  if info.anchored or dt <= 0 or space.warp() > 1.001 then return end
+  local A = aeroLib()
+  -- (a library node spawned this tick answers before its script has loaded)
+  if not (A and A.airAt and A.build and A.step) then return end
+  local dom = space.dominant(node.x, node.y, node.z)
+  local b = dom and space.body(dom)
+  if not (b and b.radius) then return end
+  local com = info.com
+  local dx, dy, dz = com.x - b.x, com.y - b.y, com.z - b.z
+  local R = b.radius
+  local alt = math.sqrt(dx * dx + dy * dy + dz * dz) - R
+  if AERO.world_name ~= dom or time - AERO.world_t > 5 or time < AERO.world_t then
+    AERO.world, AERO.world_name, AERO.world_t = save.get("world." .. dom), dom, time
+  end
+  local rho, a, o2 = A.airAt(AERO.world, alt, (b.mu or 0) / (R * R), R)
+  -- the model: rebuilt when the craft changes or a gear folds
+  local gu = R2.gear and gearState() or false
+  if not AERO.model or AERO.gu ~= gu then
+    AERO.gu = gu
+    -- (a running jet keeps its spool through a rebuild: the gear folding is
+    -- not a flame-out)
+    local old = AERO.model and AERO.model.byuid
+    AERO.model = A.build(bp_by_uid, {
+      gone = integ.gone,
+      faired = function(d) return (d.faired or 0) ~= 0 and r2Faired(d) end,
+      shell = function(d) return not (type(d.st) == "table" and d.st.jettisoned) end,
+      gearUp = function(d) return gearIsUp(d.uid) end,
+      top = AERO.frame and AERO.frame.f or { x = 0, y = 0, z = -1 },
+    })
+    AERO.model.byuid = {}
+    for _, j in ipairs(AERO.model.jets) do
+      AERO.model.byuid[j.uid] = j
+      if old and old[j.uid] then j.s = old[j.uid].s or 0 end
+    end
+  end
+  local M = AERO.model
+  if rho <= 0 and #M.jets == 0 then AERO.hud = nil return end
+  -- into the vessel frame: the centre of mass, the air past it, the spin
+  local rx, up, rz = basis(node)
+  local bx, by, bz = base_of(node, info)
+  local cx, cy, cz = com.x - bx, com.y - by, com.z - bz
+  local wx, wy, wz = 0, 0, 0
+  if weather and weather.windAt then
+    local ok, wv = pcall(weather.windAt, vec3(com.x, com.y, com.z))
+    if ok and wv then wx, wy, wz = wv.x or 0, wv.y or 0, wv.z or 0 end
+  end
+  local v, w = info.vel, info.angVel
+  local vx, vy, vz = v.x - wx, v.y - wy, v.z - wz
+  local function loc(x, y, z) return x * rx.x + y * rx.y + z * rx.z, x * up.x + y * up.y + z * up.z, x * rz.x + y * rz.y + z * rz.z end
+  local env = { rho = rho, a = a, o2 = o2, dt = dt, throttle = (fuel > 0) and thr or 0 }
+  env.cx, env.cy, env.cz = loc(cx, cy, cz)
+  env.vx, env.vy, env.vz = loc(vx, vy, vz)
+  env.wx, env.wy, env.wz = loc(w.x, w.y, w.z)
+  local function vl(x, y, z) local p, q, s = loc(x, y, z) return { x = p, y = q, z = s } end
+  env.ap, env.ay, env.ar = vl(apx, apy, apz), vl(ayx, ayy, ayz), vl(arx, ary, arz)
+  -- the surfaces' command: stick + trim, and the assist on the axes the
+  -- stick leaves alone (gentler the harder the air pushes)
+  local T = AERO.trim
+  local cp, cyw, cr = sp + T.p, sy + T.y, sr + T.r
+  local V = math.sqrt(env.vx * env.vx + env.vy * env.vy + env.vz * env.vz)
+  if sas_mode ~= "off" and elec.control ~= false then
+    local q = 0.5 * rho * V * V
+    local ks = math.max(0.08, math.min(1.0, 1500 / math.max(q, 1)))
+    if sp == 0 then cp = cp + math.max(-1, math.min(1, 1.2 * ks * (ex * apx + ey * apy + ez * apz))) end
+    if sy == 0 then cyw = cyw + math.max(-1, math.min(1, 1.2 * ks * (ex * ayx + ey * ayy + ez * ayz))) end
+    if sr == 0 then cr = cr + math.max(-1, math.min(1, 1.2 * ks * (ex * arx + ey * ary + ez * arz))) end
+  end
+  if elec.control == false then cp, cyw, cr = T.p, T.y, T.r end
+  env.ctl = { p = math.max(-1, math.min(1, cp)), y = math.max(-1, math.min(1, cyw)), r = math.max(-1, math.min(1, cr)) }
+  local fx, fy, fz, tx, ty, tz = A.step(M, env)
+  -- never more than half the airspeed in one tick (an explicit step of a
+  -- stiff drag must not reverse the craft)
+  local m = math.max(info.mass or 1, 1e-3)
+  local fm = math.sqrt(fx * fx + fy * fy + fz * fz)
+  if fm * dt > 0.5 * V * m and fm > 0 then
+    local k = 0.5 * V * m / (fm * dt)
+    fx, fy, fz, tx, ty, tz = fx * k, fy * k, fz * k, tx * k, ty * k, tz * k
+  end
+  -- (AERO.scale: a probe's A/B switch on the air's force; 1 in the game)
+  local ks = AERO.scale or 1
+  fx, fy, fz, tx, ty, tz = fx * ks, fy * ks, fz * ks, tx * ks, ty * ks, tz * ks
+  if fm > 0 and ks > 0 then
+    assembly.force(node, vec3(rx.x * fx + up.x * fy + rz.x * fz, rx.y * fx + up.y * fy + rz.y * fz, rx.z * fx + up.z * fy + rz.z * fz))
+    assembly.torque(node, vec3(rx.x * tx + up.x * ty + rz.x * tz, rx.y * tx + up.y * ty + rz.y * tz, rx.z * tx + up.z * ty + rz.z * tz))
+  end
+  AERO.active = true
+  -- the jets' thrust for the engine loop (next tick)
+  local jk, jn, air = 0, 0, 0
+  for _, e in ipairs(engines) do
+    if e.jet then
+      local j = M.byuid[e.uid]
+      e.jk, e.jb = j and j.jk or 0, j and j.jb or 0
+      if j then jk, jn, air = jk + j.s, jn + 1, M.diag and M.diag.air or 0 end
+    end
+  end
+  -- the surfaces, posed
+  for _, s in ipairs(M.surfs) do
+    if s.ctl then
+      local pv = aero_pivot(node, s.uid)
+      if pv then pv.pitch = s.defl end
+    end
+  end
+  -- the HUD: angle of attack and sideslip in the control frame, Mach, stall
+  local F = AERO.frame
+  local n = F and F.n or { x = 0, y = 1, z = 0 }
+  local f = F and F.f or { x = 0, y = 0, z = -1 }
+  local rgx, rgy, rgz = n.y * f.z - n.z * f.y, n.z * f.x - n.x * f.z, n.x * f.y - n.y * f.x
+  local vn = env.vx * n.x + env.vy * n.y + env.vz * n.z
+  local vf = env.vx * f.x + env.vy * f.y + env.vz * f.z
+  local vr = env.vx * rgx + env.vy * rgy + env.vz * rgz
+  local D = M.diag or {}
+  AERO.hud = {
+    aoa = V > 1 and math.deg(math.atan2(-vf, vn)) or 0, slip = V > 1 and math.deg(math.atan2(vr, vn)) or 0,
+    mach = D.mach or 0, q = D.q or 0, stall = D.stall or 0, lift = D.lift or 0, drag = D.drag or 0,
+    rho = rho, airspeed = V, trim = { p = T.p, y = T.y, r = T.r },
+    jet = jn > 0 and { spool = jk / jn, air = air, n = jn } or nil,
+  }
 end
 
 function fixedUpdate(node, dt)
@@ -7527,7 +7802,6 @@ function fixedUpdate(node, dt)
   -- Wheels, actuators, the claw, the drill, fairings (round two): global, so
   -- this function spends no upvalue on them.
   if info and not destroyed then r2Tick(node, info, dt) end
-  if #DEBRIS > 0 then debrisTick(dt) end   -- the pieces it shed (global: no upvalue)
   -- (Electrical power_tick runs in lateUpdate — fixedUpdate is at Lua's upvalue
   -- ceiling, so the power system lives in the post-writeback pass instead.)
   if destroyed then
@@ -7552,6 +7826,8 @@ function fixedUpdate(node, dt)
   -- Ship frame: nose = stack axis (+Y), fwd = −Z column, right = fwd × nose.
   local nx, ny, nz = up.x, up.y, up.z
   local fx, fy, fz = -rz.x, -rz.y, -rz.z
+  -- (a cockpit, or a command part laid down, flies by its own axes: aeroScan)
+  if AERO.frame then nx, ny, nz, fx, fy, fz = aeroFrame(rx, up, rz) end
   -- The camera's orbit center: the CAPSULE's live world position (the root
   -- node sits at the stack base, and gravity-up offsets drift off the hull
   -- the moment the vessel pitches — world-exact is the only stable center).
@@ -7723,10 +7999,6 @@ function fixedUpdate(node, dt)
       end
     end
     if nxt ~= warp then
-      -- a rover on its tyres is held by them, not grounded to the engine,
-      -- which then puts its creeping chassis on a conic and drops warp
-      -- ("surface proximity"): it is pinned first (r2WarpPin)
-      if nxt > 1.001 then r2WarpPin(node, info) end
       space.warp(nxt)
       warp = nxt
     end
@@ -7750,7 +8022,7 @@ function fixedUpdate(node, dt)
   if elec.control ~= false then
     if input.key("shift") then throttle = throttle + params.throttle_rate * dt end
     if input.key("ctrl") then throttle = throttle - params.throttle_rate * dt end
-    if input.key("x") then throttle = 0.0 end
+    if input.key("x") and not input.key("alt") then throttle = 0.0 end
     if input.key("z") then throttle = 1.0 end
   elseif elec.why and elec.why:sub(1, 8) == "NO POWER" then
     throttle = 0.0
@@ -7759,7 +8031,8 @@ function fixedUpdate(node, dt)
   if fuel <= 0.0 then throttle = 0.0 end
   local burn_total = 0.0
   for _, e in ipairs(engines) do
-    if engine_active(e, cut) then burn_total = burn_total + e.burn end
+    -- (a jet burns by what its spool and its air let it: aeroTick's e.jb)
+    if engine_active(e, cut) then burn_total = burn_total + e.burn * (e.jet and (e.jb or 0) / math.max(throttle, 0.05) or 1) end
   end
   local refueling = false
   if info.anchored and fuel < fuel_cap then
@@ -7788,7 +8061,7 @@ function fixedUpdate(node, dt)
         local wdx = rx.x * e.dx + up.x * e.dy + rz.x * e.dz
         local wdy = rx.y * e.dx + up.y * e.dy + rz.y * e.dz
         local wdz = rx.z * e.dx + up.z * e.dy + rz.z * e.dz
-        local f = e.thrust * throttle
+        local f = e.thrust * (e.jet and (e.jk or 0) or throttle)
         assembly.forceAt(node, vec3(wdx * f, wdy * f, wdz * f), vec3(ex, ey, ez))
       end
     end
@@ -8011,10 +8284,11 @@ function fixedUpdate(node, dt)
   update_chutes(node, dt)
   -- In the map's PLAN mode these six keys are moving the burn, not the craft.
   -- Reading them here as well would fly the ship every time you tuned a node.
-  local stick = not dock.plan and elec.control ~= false and not R2.driving
+  local stick = not dock.plan and elec.control ~= false and not R2.driving and not input.key("alt")
   local p = stick and ((input.key("w") and 1 or 0) - (input.key("s") and 1 or 0)) or 0
   local y = stick and ((input.key("a") and 1 or 0) - (input.key("d") and 1 or 0)) or 0
   local r = stick and ((input.key("e") and 1 or 0) - (input.key("q") and 1 or 0)) or 0
+  if AERO.cmd and stick then p, y, r = aeroCmd(p, y, r) end
   local rgx, rgy, rgz = cross(fx, fy, fz, nx, ny, nz) -- ship right
   local w = info.angVel
   local manual = (p ~= 0 or y ~= 0 or r ~= 0)
@@ -8083,6 +8357,9 @@ function fixedUpdate(node, dt)
       dwx, dwy, dwz = 0, 0, 0
     end
   end
+  -- THE AIR: per-part drag and lift, the control surfaces on the stick (and
+  -- the SAS's rate error), the jets' thrust for the next tick.
+  aeroTick(node, info, dt, throttle, p, y, r, dwx - w.x, dwy - w.y, dwz - w.z, rgx, rgy, rgz, fx, fy, fz, nx, ny, nz)
   -- Authority is the REACTION WHEELS', and only the powered ones (torque_k: 1
   -- for a pod's, less for a probe core's, 0 flat). The wheels' draw follows
   -- how hard they're working (wheel_use).
@@ -8167,6 +8444,8 @@ function fixedUpdate(node, dt)
       has_gear = #DEVICES.gear.parts > 0, has_rcs = #DEVICES.rcs.parts > 0,
       rcs_on = DEVICES.rcs.on, rcs_blocks = #DEVICES.rcs.parts,
       chute_open = chute_anim,
+      -- the air (aeroTick): aoa, slip, mach, q, stall, trim, jet
+      aero = AERO.hud,
     }
     local dom = space.dominant(node.x, node.y, node.z)
     local b = dom and space.body(dom)

@@ -228,9 +228,16 @@ local function demo_fill(dt)
 end
 
 -- ── the ground layout ───────────────────────────────────────────────────────
--- A ray that may have struck the crew seated in the pod, or a part of the
--- craft the ignore missed, is cast again from just past it: only the ground
--- (terrain, a pad, a building) may hold the cloth up.
+-- The rays pass the craft and its crew in one ignore list (floptle/0473,
+-- 0.117.0-rc7: until rc6 a query took one node, so the seated crew was hit).
+-- A ray that still strikes either is cast again from just past it: only the
+-- ground (terrain, a pad, a building) may hold the cloth up.
+function craft_and_crew()
+  local l = { vnode }
+  local a = find and find("Astronaut")
+  if a and a.valid then l[2] = a end
+  return l
+end
 local function is_craft(n)
   if not (n and n.valid) then return false end
   if n.name == "Astronaut" then return true end
@@ -471,7 +478,7 @@ function lateUpdate(node, dt)
           free.ray = time
           local up = 1.5
           local ox, oy, oz = bx + free.rx - down_x * up, by + free.ry - down_y * up, bz + free.rz - down_z * up
-          local opts = vnode and vnode.valid and { ignore = vnode } or nil
+          local opts = vnode and vnode.valid and { ignore = craft_and_crew() } or nil
           local hit = ground_hit(raycast(ox, oy, oz, down_x, down_y, down_z, up + 2.0, opts),
             ox, oy, oz, down_x, down_y, down_z, up + 2.0, opts)
           if hit and hit.distance < up + 0.6 then
@@ -597,7 +604,7 @@ function lateUpdate(node, dt)
   -- moving air stands back up in under two)
   if still then fall_t = min(3.5, fall_t + dt) else fall_t = max(0, fall_t - 2 * dt) end
   if fall_t > 0 and not lay then
-    local opts = vnode and vnode.valid and { ignore = vnode } or nil
+    local opts = vnode and vnode.valid and { ignore = craft_and_crew() } or nil
     lay = build_layout(px, py, pz, ax, ay, az, e1x, e1y, e1z, e2x, e2y, e2z,
       free and free.dom or down_dom, opts)
   elseif fall_t <= 0 and lay then

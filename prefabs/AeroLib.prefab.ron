@@ -1,0 +1,27 @@
+// AERO LIBRARY — scripts/aero.lua (the aerodynamics) and scripts/parts_aero.lua
+// (the aircraft parts). Spawned by vessel_controller and the builder when the
+// scene carries no node running them; reached with findScript("aero") /
+// findScript("parts_aero"). Written by tools/gen_part_meshes.py.
+[
+    (
+        name: "AeroLib",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [
+            (
+                kind: "aero",
+                enabled: true,
+                params: [],
+            ),
+            (
+                kind: "parts_aero",
+                enabled: true,
+                params: [],
+            ),
+        ],
+    ),
+]
