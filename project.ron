@@ -6,13 +6,16 @@
     matter: true,
     title: Some("Floptle Solar"),
     entry_scene: Some("scenes/menu.ron"),
-    engine_version: Some("0.117.0-rc7"),
+    engine_version: Some("0.117.0-rc8"),
     layers: [
         "entity",
         "level",
     ],
     ui_font: "fonts/SolarUI.ttf",
+    terrain_generator: Some(3),
     script_vec3: Some(Exact),
+    model_texture_filter: Some(AsFile),
+    imported_materials: Some(Classic),
     mixer: (
         master: (
             name: "Master",

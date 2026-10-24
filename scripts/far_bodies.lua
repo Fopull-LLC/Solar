@@ -760,7 +760,10 @@ local function set_look(e, model, alpha, scale, px, py, pz)
   local mk = qa + params.debug * 10 + params.gain * 100
   if e.qa ~= mk then
     local g = params.gain
-    local m = { color = { g, g, g }, alpha = qa }
+    -- The blend is named both ways: since 0.117.0-rc8 an alpha below 1 turns
+    -- blending on and nothing turns it off again, so an impostor that had
+    -- faded in would stay in the sorted, blended pass at full opacity.
+    local m = { color = { g, g, g }, alpha = qa, blend = qa < 1 and "blend" or "cutout" }
     if params.debug > 0 then m.color = { 0, 1, 0 }; m.unlit = true end
     n:setMaterial(m)
     e.qa = mk

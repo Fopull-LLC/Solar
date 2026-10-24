@@ -8,6 +8,9 @@
 -- per material (node:material(name).alpha); below 1 the engine drops pixels in
 -- an ordered 4×4 screen door instead of blending, so a fading chunk stays in
 -- the opaque pass (no sorting) and at 0 it is hidden outright (no draw).
+-- (Since engine 0.117.0-rc8 an alpha below 1 turns a material's blend on,
+-- except on a dither_alpha material, so these chunks stay dithered: checked
+-- in the VAB on rc8 at 0.25 / 0.5 / 0.75.)
 --
 -- Two rules, the lower opacity wins:
 --   NEAR      a chunk whose box comes within `near1` of the camera starts to

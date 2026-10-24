@@ -6678,6 +6678,11 @@ local function wheels_wanted(node, info)
   if R2.gear and gearState() then return false, "gear up" end
   local v = info.vel
   if math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z) > (R2.gear and R2_GEAR_VMAX or R2_TYRES_VMAX) then return false, "fast" end
+  -- Landing gear is the pilot's (G): lowered, it stays out in the air. Folding
+  -- it after 2.5 s aloft and putting it back near the ground made a plane
+  -- climbing out at 2-3 m flip its gear every tick, rebuilding the craft until
+  -- the nose dropped into the runway.
+  if R2.gear then return true end
   if R2.live then
     -- out: they stay out while any tyre is on the ground, and for a couple
     -- of seconds of air (a bump, a hop) before they fold back into the hull
