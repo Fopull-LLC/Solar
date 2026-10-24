@@ -26,6 +26,12 @@ loading = false
 -- the end of the reveal)? base_facilities grades the spaceport's ground
 -- flat out behind it, and gently once the world can be seen.
 curtain = false
+-- WHO HAS THE KEYS. nil = the world (the walker, the belt, the camera, the
+-- pause menu, the map). "builder" while the craft builder runs in the real VAB
+-- over this scene (scripts/build_host.lua sets and clears it): the world's
+-- scripts that read raw keys stand down — W walks nothing, M opens no map, Esc
+-- never pauses — and the builder's own scripts take them.
+inputOwner = nil
 
 local gen, overlay, overlay_text
 local slot = nil
@@ -380,7 +386,11 @@ end
 -- The loading screen's words. `surface` is the step in progress (nil once the
 -- ground is done, when the colony is what is being waited for).
 local REVEAL_MAX = 12.0   -- seconds the curtain may wait on the colony
-local REVEAL_GRADE = 45.0 -- …or on a NEW spaceport's ground being graded
+-- …or on a NEW spaceport's ground being graded. On rc7 the engine paces the
+-- edits itself, and a whole first grade (1,500 ops) took ~45 s on a small
+-- world: revealing mid-grade shows the ground moving under stutter, so the
+-- curtain waits long enough for a grade and one re-check.
+local REVEAL_GRADE = 90.0
 
 -- Is the spawn world's ground there yet? `elapsed` is seconds on the loading
 -- screen, `d` the signed distance terrain.query gives at the spawn world's

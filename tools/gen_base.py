@@ -145,6 +145,16 @@ MATERIALS = {
 }
 
 
+def dithered(ron):
+    """A material that can be faded by screen-door dither (node:material(name).alpha
+    below 1 drops pixels instead of blending, so it stays in the opaque pass):
+    the VAB's shell, which scripts/vab_fade.lua thins away from the builder's
+    camera."""
+    tail = "            )"
+    assert ron.endswith(tail)
+    return ron[:-len(tail)] + "                retro: (dither_alpha: true),\n" + tail
+
+
 # ── prefab writing ──────────────────────────────────────────────────────────
 
 def quat_from_basis(M):
@@ -193,7 +203,8 @@ def collider_block(half, mode="Static"):
 '''
 
 
-def prefab(name, glb, model, about, shell=None, lights=(), shift=(0, 0, 0), root_collider=None, tags=None, markers=()):
+def prefab(name, glb, model, about, shell=None, lights=(), shift=(0, 0, 0), root_collider=None, tags=None, markers=(),
+           subs=()):
     names = sorted(model.parts.keys())
     mats = ",\n".join(f'            "{n}": {MATERIALS[n]()}' for n in names)
     tag_line = f"        tags: [{', '.join(chr(34) + t + chr(34) for t in tags)}],\n" if tags else ""
@@ -217,6 +228,28 @@ def prefab(name, glb, model, about, shell=None, lights=(), shift=(0, 0, 0), root
 {collider_block(root_collider) if root_collider is not None else ""}    ),
 ''']
     d = np.asarray(shift, float)
+    # Child meshes a script fades on their own (`subs`: node name, glb, model,
+    # the sub model's own box centre in the ground frame). The engine centres
+    # each model on its box, so the node stands at that centre.
+    for (sname, sglb, smodel, sc) in subs:
+        smats = ",\n".join(f'            "{n}": {dithered(MATERIALS[n]())}' for n in sorted(smodel.parts.keys()))
+        out.append(f'''    (
+        name: "{sname}",
+        transform: (
+            translation: {f3(np.asarray(sc, float) - d)},
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Mesh(
+            asset_path: "models/base/{sglb}",
+        ),
+        object_materials: {{
+{smats},
+        }},
+        scripts: [],
+        parent: Some(0),
+    ),
+''')
     for i, (c, s, q) in enumerate(shell.boxes if shell else []):
         out.append(f'''    (
         name: "Shell {i + 1}",
@@ -270,7 +303,7 @@ def prefab(name, glb, model, about, shell=None, lights=(), shift=(0, 0, 0), root
 
 from base_buildings import (command_centre, depot, fuel_farm, launch_complex, pad_clamps,  # noqa: E402
                             power, tracking, vab)
-from base_models import zcheck  # noqa: E402
+from base_models import CModel, zcheck  # noqa: E402
 
 BUILDS = [
     # prefab, glb, builder, what it is
@@ -320,18 +353,41 @@ def main():
         res = fn()
         m, sh, lights = res[0], res[1], res[2]
         markers = res[3] if len(res) > 3 else ()
+        subs = res[4] if len(res) > 4 else {}
         fights += zcheck(m, name)
+        for sname, sm in subs.items():
+            fights += zcheck(sm, f"{name}/{sname}")
+        if subs:
+            # and across them: two subs' faces in one plane fight just the same
+            allm = CModel()
+            for part in [m] + list(subs.values()):
+                allm.merge(part)
+            fights += zcheck(allm, f"{name} (all parts)")
         mn, mx = m.bounds()
         c = (mn + mx) / 2
         size = mx - mn
         mc = m.shifted(c)
-        print(f"{name:12s} ({size[0]:6.2f}, {size[1]:6.2f}, {size[2]:6.2f})  {c[1]:7.3f} {c[0]:7.3f} {c[2]:7.3f} {m.tris():7d} {len(sh.boxes):4d}  {len(m.parts)}")
+        tris = m.tris() + sum(sm.tris() for sm in subs.values())
+        print(f"{name:12s} ({size[0]:6.2f}, {size[1]:6.2f}, {size[2]:6.2f})  {c[1]:7.3f} {c[0]:7.3f} {c[2]:7.3f} {tris:7d} {len(sh.boxes):4d}  {len(m.parts)}")
+        if subs:
+            mns = [m.bounds()[0]] + [sm.bounds()[0] for sm in subs.values()]
+            mxs = [m.bounds()[1]] + [sm.bounds()[1] for sm in subs.values()]
+            umn, umx = np.min(mns, 0), np.max(mxs, 0)
+            print(f"{'':12s} whole building ({umx[0] - umn[0]:6.2f}, {umx[1] - umn[1]:6.2f}, {umx[2] - umn[2]:6.2f}),"
+                  f" box centre {np.round((umn + umx) / 2 - c, 3)} off the origin; {len(subs)} fading parts")
         if dry or fights:
             continue
         write_glb(mc, os.path.join(MODELS, glb))
+        sub_nodes = []
+        for sname, sm in subs.items():
+            smn, smx = sm.bounds()
+            sc = (smn + smx) / 2
+            sglb = os.path.splitext(glb)[0] + "_" + sname.lower().replace(" ", "_") + ".glb"
+            write_glb(sm.shifted(sc), os.path.join(MODELS, sglb))
+            sub_nodes.append((sname, sglb, sm, sc))
         about2 = about + f"\n// Ground frame → origin: seat {c[1]:.3f} m, lot offset ox {c[0]:.3f}, oz {c[2]:.3f} (base_facilities FACILITIES)."
         with open(os.path.join(PREFABS, name + ".prefab.ron"), "w") as f:
-            f.write(prefab(name, glb, mc, about2, shell=sh, lights=lights, shift=c, markers=markers))
+            f.write(prefab(name, glb, mc, about2, shell=sh, lights=lights, shift=c, markers=markers, subs=sub_nodes))
     if not dry:
         # BaseFlood: one apron floodlight (a spot down its −Z). The mast and
         # the lamp housing are in base_facilities' fixtures mesh; this is only

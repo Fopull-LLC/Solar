@@ -83,7 +83,7 @@ class CModel(Model):
 
     def note(self):
         for fr in reversed(traceback.extract_stack()[:-2]):
-            if fr.filename.endswith("base_buildings.py"):
+            if fr.filename.endswith(("base_buildings.py", "gen_vab.py")):
                 self.__dict__.setdefault("where", {})[self.call] = fr.lineno
                 return
 

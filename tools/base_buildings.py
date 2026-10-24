@@ -16,113 +16,131 @@ from base_models import (B, CModel, CONC, CONC_DARK, CONT_BLUE, CONT_RED, DARK, 
 
 
 def vab():
-    """VEHICLE ASSEMBLY BUILDING — 24 × 28 m, 21 m high. A high-bay door on
-    each end (south to the apron and the runway, north to the crawlerway and
-    the pad), framed by a steel door gantry, the lower 6.5 m open; a stair
-    tower up the east side to the roof; louvre bands, cable tray, wall packs;
-    work platforms and an overhead crane inside. E opens the builder."""
-    m, sh = CModel(11), Shell()
-    W, D, H, t = 12.0, 14.0, 21.0, 0.6
-    DW, DH, OPEN = 6.0, 17.0, 6.5
-    B(m, "Concrete", CONC, -W - 0.5, W + 0.5, -0.6, 0.12, -D - 0.5, D + 0.5, sh=sh)
-    for sx in (-1, 1):
-        x0, x1 = (W - t, W) if sx > 0 else (-W, -W + t)
-        B(m, "Clad", PAINT, x0, x1, -0.5, H, -D, D)
-        sh.add(((x0 + x1) / 2, H / 2, 0.0), (t, H, 2 * D))
+    """VEHICLE ASSEMBLY BUILDING — 50 × 50 m, 72 m high (tools/vab_dims.py
+    says why). On each end an inverted-T high-bay door, open: the lower
+    42 × 20 m opening's leaves slid aside and stacked in their pockets, the
+    upper 24 m slot's lift leaves raised into the housing at its head. Ribbed
+    cladding between steel pilasters, two belt girts, louvre bands, the agency
+    roundel on each side, a parapet roof with air handlers and obstruction
+    lights. The interior is tools/gen_vab.py (prefab VabInterior, same origin).
+
+    FADING. The builder's camera orbits crafts bigger than the room, so every
+    part of the shell that could stand between it and the craft is its own
+    node it can dither away (scripts/vab_fade.lua): the root mesh is only the
+    slab; the walls, the two door ends and the roof come back in `subs`."""
+    from vab_dims import D, H, LOW_H, LOW_W, ROOF_SLAB, SLAB_Y0, SLAB_Y1, SLOT_H, SLOT_W, TRUSS_Z, W
+    from vab_dims import T as TW
+    root, sh = CModel(11), Shell()
+    names = ("Ext East", "Ext West", "Ext South", "Ext North", "Ext Roof")
+    subs = {k: CModel(20 + i) for i, k in enumerate(names)}
+    # THE SLAB: the floor of the high bay, out under the stacked door leaves
+    root.ground = False      # a swept, sealed floor: no grime gradient on it
+    # cast in bays: 6 × 7 slabs, so no one triangle is the size of the floor
+    xs, zs = np.linspace(-W - 0.5, W + 0.5, 7), np.linspace(-D - 4.0, D + 4.0, 8)
+    for xa, xb in zip(xs[:-1], xs[1:]):
+        for za, zb in zip(zs[:-1], zs[1:]):
+            B(root, "Concrete", CONC, xa, xb, SLAB_Y0, SLAB_Y1, za, zb, var=False)
+    sh.add((0.0, (SLAB_Y0 + SLAB_Y1) / 2, 0.0), (2 * W + 1.0, SLAB_Y1 - SLAB_Y0, 2 * D + 8.0))
+
+    # THE SIDE WALLS
+    for sx, name in ((1, "Ext East"), (-1, "Ext West")):
+        m = subs[name]
+        x0, x1 = (W - TW, W) if sx > 0 else (-W, -W + TW)
         xo = x1 if sx > 0 else x0
-        for k in (-3, -2, 2, 3):
-            z = k * 4.0
-            B(m, "Steel", GREY, xo, xo + 0.22 * sx, 0.0, H - 0.2, z - 0.25, z + 0.25)
-        for k in (-2.5, -1.5, 1.5, 2.5):
-            louvre(m, (xo, 18.6, k * 4.0), (0, 0, -sx), 2.6, 1.4, (sx, 0, 0))
-        for z in (-10.0, -2.0, 6.0):
-            wall_pack(m, (xo, 7.0, z), (sx, 0, 0))
-        emblem(m, (xo, 12.0, 0.0), (sx, 0, 0), 3.0)
-    cable_tray(m, (W + 0.45, 4.2, -D + 0.8), (W + 0.45, 4.2, D - 0.8))
-    for z in np.arange(-D + 1.5, D - 1, 3.0):
-        if abs(abs(z) - 8.0) > 0.4 and abs(abs(z) - 12.0) > 0.4:
-            B(m, "Steel", DARK, W, W + 0.25, 4.0, 4.06, z - 0.04, z + 0.04, var=False)
-    for sx in (-1, 1):
-        for sz in (-1, 1):
-            B(m, "Steel", GREY, sx * (W - 0.4), sx * (W + 0.3), -0.3, H + 0.95, sz * (D - 0.4), sz * (D + 0.3))
-    for sz in (-1, 1):
-        z0, z1 = (D - t, D) if sz > 0 else (-D, -D + t)
+        B(m, "Clad", PAINT, x0, x1, -0.5, H, -D, D)
+        sh.add(((x0 + x1) / 2, H / 2, 0.0), (TW, H, 2 * D))
+        for z in (-16.0, -8.0, 8.0, 16.0):
+            B(m, "Steel", GREY, xo, xo + 0.32 * sx, 0.0, H - 0.3, z - 0.35, z + 0.35)
+        for y in (24.0, 60.0):
+            B(m, "Steel", SLATE, xo, xo + 0.18 * sx, y, y + 0.5, -D + 0.45, D - 0.45, var=False)
+        for z in (-20.0, -12.0, 12.0, 20.0):
+            for y in (31.0, 55.0):
+                louvre(m, (xo, y, z), (0, 0, -sx), 5.0, 2.4, (sx, 0, 0))
+        for z in (-12.0, 0.0, 12.0):
+            wall_pack(m, (xo, 7.5, z), (sx, 0, 0))
+        emblem(m, (xo, 43.0, 0.0), (sx, 0, 0), 6.5)
+        cable_tray(m, (xo + 0.45 * sx, 4.2, -D + 1.0), (xo + 0.45 * sx, 4.2, D - 1.0))
+        for z in np.arange(-D + 2.0, D - 1.5, 3.0):
+            if min(abs(z - p) for p in (-16.0, -8.0, 0.0, 8.0, 16.0)) > 0.5:
+                B(m, "Steel", DARK, xo, xo + 0.25 * sx, 4.0, 4.06, z - 0.04, z + 0.04, var=False)
+        for sz in (-1, 1):   # corner columns
+            B(m, "Steel", GREY, sx * W, sx * (W + 0.3), -0.3, H + 1.05, sz * (D - 0.4), sz * (D + 0.3))
+
+    # THE DOOR ENDS: south (+Z, the apron and the runway) and north (−Z, the
+    # crawlerway to the pad). Both the same inverted T, both open.
+    for sz, name in ((1, "Ext South"), (-1, "Ext North")):
+        m = subs[name]
+        z0, z1 = (D - TW, D) if sz > 0 else (-D, -D + TW)
         zf = z1 if sz > 0 else z0
-        for xa, xb in ((-W + t, -DW), (DW, W - t)):
-            B(m, "Clad", PAINT, xa, xb, -0.5, H, z0, z1)
-            sh.add(((xa + xb) / 2, H / 2, (z0 + z1) / 2), (xb - xa, H, t))
-        B(m, "Clad", PAINT, -DW, DW, DH, H, z0, z1, sh=sh)
-        zl0, zl1 = (z0 + 0.1, z0 + 0.4) if sz > 0 else (z1 - 0.4, z1 - 0.1)
-        zr = zl1 if sz > 0 else zl0
+        for s in (-1, 1):
+            xa, xb = sorted((s * LOW_W, s * (W - TW)))
+            B(m, "Clad", PAINT, xa, xb, -0.5, LOW_H, z0, z1)
+            sh.add(((xa + xb) / 2, LOW_H / 2, (z0 + z1) / 2), (xb - xa, LOW_H, TW))
+            xa, xb = sorted((s * SLOT_W, s * (W - TW)))
+            B(m, "Clad", PAINT, xa, xb, LOW_H, H, z0, z1)
+            sh.add(((xa + xb) / 2, (LOW_H + H) / 2, (z0 + z1) / 2), (xb - xa, H - LOW_H, TW))
+            # jamb, lintel and slot trims, each standing a little prouder
+            # than the one it meets so no two faces share a plane
+            B(m, "Steel", SLATE, s * LOW_W, s * (LOW_W + 0.8), 0.0, LOW_H + 0.8, zf, zf + 0.60 * sz)
+            B(m, "Steel", SLATE, s * (SLOT_W - 0.1), s * (LOW_W + 1.0), LOW_H, LOW_H + 1.3, zf, zf + 0.72 * sz)
+            B(m, "Steel", SLATE, s * SLOT_W, s * (SLOT_W + 0.8), LOW_H + 1.3, SLOT_H, zf, zf + 0.64 * sz)
+            # the lower door's leaves, slid into the pocket: five deep
+            for k in range(5):
+                za = zf + sz * (0.75 + k * 0.56)
+                zb = za + sz * 0.42
+                xa, xb = sorted((s * (LOW_W - 0.35), s * (W + 0.15)))
+                B(m, "Clad", GREYBLUE, xa, xb, 0.0, LOW_H + 0.35, za, zb)
+                zr = zb if sz > 0 else zb
+                for y in (3.0, 7.5, 12.0, 16.5):
+                    B(m, "Steel", SLATE, xa + 0.15, xb - 0.15, y, y + 0.24, zr, zr + 0.05 * sz, var=False)
+                m.color = DARK
+                for xw in (xa + 0.6, xb - 0.6):
+                    T(m, "Steel", DARK, (xw, 0.45, (za + zb) / 2 - 0.25), (xw, 0.45, (za + zb) / 2 + 0.25), 0.3, segs=10)
+            sh.add(((xa + xb) / 2, (LOW_H + 0.35) / 2, zf + sz * (0.75 + 2.5 * 0.56 - 0.07)),
+                   (abs(xb - xa), LOW_H + 0.35, 5 * 0.56))
+            # the leaves' top guide over the pocket
+            xa, xb = sorted((s * (LOW_W - 0.5), s * (W + 0.3)))
+            B(m, "Steel", SLATE, xa, xb, LOW_H + 0.4, LOW_H + 1.0, zf + sz * 0.62, zf + sz * 3.7, var=False)
+            bollard(m, s * (LOW_W - 1.0), zf + 4.4 * sz)
+            lamp_head(m, (s * 16.5, LOW_H + 2.6, zf + 0.6 * sz), (0, -0.55, 0.83 * sz), w=1.1, h=0.55)
+            wall_pack(m, (s * (LOW_W + 1.6), 9.0, zf), (0, 0, sz))
+        # the floor track the leaves roll on, across the whole threshold
         for k in range(5):
-            ya = OPEN + k * (DH - OPEN) / 5
-            yb = ya + (DH - OPEN) / 5 - 0.08
-            B(m, "Clad", GREYBLUE, -DW + 0.05, DW - 0.05, ya, yb, zl0, zl1)
-            for xx in np.arange(-DW + 1.0, DW - 0.5, 1.5):
-                B(m, "Steel", SLATE, xx - 0.06, xx + 0.06, ya + (0.5 if k == 0 else 0.1), yb - 0.1, zr, zr + 0.07 * sz)
-        sh.add((0.0, (OPEN + DH) / 2, (zl0 + zl1) / 2), (2 * DW, DH - OPEN, 0.3))
-        cuboid(m, (0.0, OPEN + 0.2, zr + 0.05 * sz), (sz, 0, 0), (0, 1, 0), 2 * DW - 0.2, 0.36, 0.1,
-               faces={"front": ("Sign", (1, 1, 1), "hazard")}, col=DARK)
-        for sx in (-1, 1):
-            B(m, "Steel", SLATE, sx * (DW + 0.25), sx * (DW + 0.95), 0.0, DH + 0.02, zf, zf + 0.7 * sz)
-        B(m, "Steel", SLATE, -DW - 1.2, DW + 1.2, DH + 0.02, DH + 1.15, zf, zf + 0.9 * sz)
-        for sx in (-1, 1):
-            bollard(m, sx * (DW + 0.6), zf + 1.6 * sz)
-            lamp_head(m, (sx * 3.5, DH + 1.6, zf + 0.6 * sz), (0, -0.55, 0.83 * sz), w=0.9, h=0.45)
+            zc = zf + sz * (0.75 + k * 0.56 + 0.21)
+            B(m, "Steel", DARK, -W - 0.2, W + 0.2, 0.12, 0.17, zc - 0.07, zc + 0.07, var=False)
+        # the slot's head and the housing its lift leaves rose into
+        B(m, "Clad", PAINT, -SLOT_W, SLOT_W, SLOT_H, H, z0, z1, sh=sh)
+        B(m, "Steel", SLATE, -SLOT_W - 1.0, SLOT_W + 1.0, SLOT_H, H - 0.3, zf, zf + 3.0 * sz)
+        for k in range(6):   # the bottom rails of the raised leaves
+            zc = zf + sz * (0.35 + k * 0.45)
+            B(m, "Steel", GREYBLUE, -SLOT_W + 0.2, SLOT_W - 0.2, SLOT_H - 0.35, SLOT_H, zc - 0.17, zc + 0.17, var=False)
         right = (sz, 0, 0)
-        plate(m, "vab_name", (0.0, 19.3, zf), right, (0, 1, 0), 15.0, depth=0.06)
-        plate(m, "bldg1", (sz * (DW + 2.6), 2.4, zf), right, (0, 1, 0), 0.75, depth=0.04)
-    B(m, "Concrete", CONC_DARK, -W + t, W - t, H - 0.6, H, -D + t, D - t, sh=sh)
+        plate(m, "vab_name", (0.0, 67.6, zf + 3.0 * sz), right, (0, 1, 0), 21.0, depth=0.08)
+        emblem(m, (-sz * 18.6, 46.0, zf), (0, 0, sz), 3.6)
+        plate(m, "bldg1", (sz * (LOW_W + 2.2), 2.4, zf + sz * (0.75 + 4 * 0.56 + 0.42)), right, (0, 1, 0), 0.9, depth=0.04)
+        cuboid(m, (0.0, LOW_H + 0.65, zf + 0.73 * sz), right, (0, 1, 0), 2 * SLOT_W - 0.4, 0.5, 0.02,
+               faces={"front": ("Sign", (1, 1, 1), "hazard")}, col=DARK)
+
+    # THE ROOF
+    m = subs["Ext Roof"]
+    B(m, "Concrete", CONC_DARK, -W + TW, W - TW, H - ROOF_SLAB, H, -D + TW, D - TW, sh=sh)
     for (xa, xb, za, zb) in ((-W + 0.4, W - 0.4, D - 0.3, D), (-W + 0.4, W - 0.4, -D, -D + 0.3),
                              (W - 0.3, W, -D + 0.4, D - 0.4), (-W, -W + 0.3, -D + 0.4, D - 0.4)):
-        B(m, "Clad", PAINT, xa, xb, H, H + 0.8, za, zb)
+        B(m, "Clad", PAINT, xa, xb, H, H + 1.0, za, zb)
     for (xa, xb, za, zb) in ((-W + 0.4, W - 0.4, D - 0.35, D + 0.05), (-W + 0.4, W - 0.4, -D - 0.05, -D + 0.35),
                              (W - 0.35, W + 0.05, -D + 0.4, D - 0.4), (-W - 0.05, -W + 0.35, -D + 0.4, D - 0.4)):
-        B(m, "Steel", GREY, xa, xb, H + 0.8, H + 0.9, za, zb, var=False)
-    for (x, z) in ((-6, -7), (-6, 1), (5, -3)):
-        hvac(m, x, H, z, 3.4, 2.2, 1.5, fans=2)
-    B(m, "Steel", GREY, 7.0, 8.4, H, H + 0.9, 8.0, 9.4)
+        B(m, "Steel", GREY, xa, xb, H + 1.0, H + 1.1, za, zb, var=False)
+    for (x, z) in ((-13, -12), (-13, 8), (12, -6), (12, 14)):
+        hvac(m, x, H, z, 5.0, 3.0, 2.0, fans=3)
+    B(m, "Steel", GREY, 1.0, 3.0, H, H + 1.2, -18.0, -16.0)          # roof hatch
     for (x, z) in ((-W + 0.6, -D + 0.6), (W - 0.6, -D + 0.6), (W - 0.6, D - 0.6), (-W + 0.6, D - 0.6)):
-        T(m, "Steel", GREY, (x, H + 0.95, z), (x, H + 3.5, z), 0.025, segs=6)
-    T(m, "Steel", GREY, (9.0, H, 10.0), (9.0, H + 7.0, 10.0), 0.1)
-    obstruction(m, (9.0, H + 7.16, 10.0), r=0.13)
-    # THE STAIR TOWER up the east wall to the roof
-    sx0, sx1, sz0, sz1 = W + 0.7, W + 4.3, -7.0, -2.0
-    for (x, z) in ((sx0, sz0), (sx1, sz0), (sx1, sz1), (sx0, sz1)):
-        T(m, "Steel", GREY, (x, 0.0, z), (x, H + 1.0, z), 0.09)
-    levels = [0.0, 3.5, 7.0, 10.5, 14.0, 17.5, H]
-    for i, y in enumerate(levels[1:], 1):
-        za, zb = (sz0 + 0.1, sz0 + 1.6) if i % 2 else (sz1 - 1.6, sz1 - 0.1)
-        B(m, "Steel", GREY, sx0 + 0.1, sx1 - 0.1, y - 0.12, y, za, zb, var=False, sh=sh)
-        railing(m, SAFETY, (sx1 - 0.05, y, sz0 + 0.1), (sx1 - 0.05, y, sz1 - 0.1), h=1.05, posts=1.2, sh=sh)
-    for i in range(len(levels) - 1):
-        ya, yb = levels[i], levels[i + 1]
-        xm = (sx0 + sx1) / 2 + (0.5 if i % 2 else -0.5)
-        if i % 2 == 0:
-            stair(m, (xm, ya + 0.02, sz1 - 0.3), (xm, yb - 0.14, sz0 + 1.6), 1.0, sh=sh)
-        else:
-            stair(m, (xm, ya + 0.02, sz0 + 0.3), (xm, yb - 0.14, sz1 - 1.6), 1.0, sh=sh)
-    # INSIDE: work platforms down both walls, an overhead crane, strip lights
-    for sx in (-1, 1):
-        for y in (6.0, 10.5, 15.0):
-            x0, x1 = (W - t - 3.2, W - t - 0.02) if sx > 0 else (-W + t + 0.02, -W + t + 3.2)
-            B(m, "Steel", GREYBLUE, x0, x1, y, y + 0.3, -9.0, 9.0, var=False, sh=sh)
-            xe = x0 + 0.05 if sx > 0 else x1 - 0.05
-            railing(m, SAFETY, (xe, y + 0.3, -9.0), (xe, y + 0.3, 9.0), sh=sh)
-    for sx in (-1, 1):
-        B(m, "Steel", DARK, sx * (W - t - 0.02), sx * (W - t - 0.5), 17.6, 18.1, -D + t + 0.02, D - t - 0.02, var=False)
-    B(m, "Steel", OCHRE, -W + t + 0.6, W - t - 0.6, 18.15, 18.95, -0.7, 0.7)
-    B(m, "Steel", DARK, -1.4, 1.4, 17.35, 18.15, -1.0, 1.0)
-    T(m, "Steel", DARK, (0.0, 17.35, 0.0), (0.0, 12.0, 0.0), 0.04)
-    m.color = LAMP_COOL
-    for x in (-6.0, 0.0, 6.0):
-        for z in (-9.0, -3.0, 3.0, 9.0):
-            box(m, "Lamp", (x, H - 0.63, z), (0.5, 0.06, 3.0))
-    for (cx, cz, w, d) in ((0, -5.0, 10.4, 0.4), (0, 5.0, 10.4, 0.4), (-5.0, 0, 0.4, 9.6), (5.0, 0, 0.4, 9.6)):
-        cuboid(m, (cx, 0.135, cz), (1, 0, 0), (0, 0, -1), w, d, 0.03,
-               faces={"front": ("Sign", (1, 1, 1), "hazard")}, col=DARK)
-    lights = [("Interior Light", (0.0, 14.0, 0.0), (1.0, 0.95, 0.86), 3.2, 30.0, None)]
-    return m, sh, lights
+        T(m, "Steel", GREY, (x, H + 1.1, z), (x, H + 3.8, z), 0.03, segs=6)
+        obstruction(m, (x, H + 3.96, z), r=0.13)
+    T(m, "Steel", GREY, (20.0, H, 20.0), (20.0, H + 9.0, 20.0), 0.12)
+    obstruction(m, (20.0, H + 9.16, 20.0), r=0.14)
+    for z in TRUSS_Z:   # the trusses' bearing line, read on the roof as a seam
+        B(m, "Steel", GREY, -W + TW + 0.3, W - TW - 0.3, H, H + 0.08, z - 0.15, z + 0.15, var=False)
+    return root, sh, [], (), subs
 
 
 def command_centre():

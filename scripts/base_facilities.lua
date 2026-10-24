@@ -49,7 +49,7 @@
 -- SCRATCH homeworld_spec.md, "Base footprint".
 
 -- ── the layout (arc metres from the base centre C) ───────────────────────────
-LAYOUT_VERSION = 2
+LAYOUT_VERSION = 3   -- 3: the 50 × 50 × 72 m VAB (tools/vab_dims.py); Command, Power, Tracking moved out
 
 -- The runway, 250 × 18 m paved plus 6 m blast pads, 3 m shoulders.
 RUNWAY = { v = -62.0, u0 = -131.0, u1 = 131.0, blast = 6.0, half = 9.0, shoulder = 3.0 }
@@ -60,12 +60,12 @@ TAXIWAY = { u = 0.0, v0 = -50.0, v1 = -24.0, half = 6.0 }
 -- kind } (kind picks the paint).
 STRIPS = {
   { "Apron",       0.0, -24.0,   0.0,   2.6, 24.0, "apron" },
-  { "Crawlerway",  0.0,  31.4,   0.0,  96.0,  8.0, "crawler" },
-  { "Road East",  24.0,  -8.0,  90.0,  -8.0,  4.0, "road" },
+  { "Crawlerway",  0.0,  57.6,   0.0,  96.0,  8.0, "crawler" },
+  { "Road East",  24.0,  -8.0,  96.0,  -8.0,  4.0, "road" },
   { "Road West", -24.0,  -8.0, -66.0,  -8.0,  4.0, "road" },
   { "Depot Yard", -50.0, -4.0, -50.0,   5.8,  9.0, "yard" },
-  { "Command Walk", 40.0, -4.0, 40.0,   1.7,  4.0, "walk" },
-  { "Power Yard",  76.0,  -4.0,  76.0,  8.0,  3.0, "walk" },
+  { "Command Walk", 50.0, -4.0, 50.0,   1.7,  4.0, "walk" },
+  { "Power Yard",  84.0,  -4.0,  84.0,  8.0,  3.0, "walk" },
   { "Fuel Spur",   -8.0, 104.0, -31.0, 104.0,  3.0, "road" },
 }
 
@@ -77,11 +77,12 @@ STRIPS = {
 -- for the grading and for keepClear: the model's whole box (x × z), centred on
 -- the prefab origin.
 FACILITIES = {
-  { prefab = "FacHangar",   u = 0.0,   v = 17.0,  face = "S", seat = 13.867, ox = 1.879, oz = 0.000,  lot = { 29.0, 31.5 }, lift = 0.15 },
-  { prefab = "FacCommand",  u = 40.0,  v = 12.0,  face = "S", seat = 8.954,  ox = 0.874, oz = 2.070,  lot = { 32.2, 18.9 }, lift = 0.15 },
+  { prefab = "FacHangar",   u = 0.0,   v = 28.0,  face = "S", seat = -0.240, ox = 0.000, oz = 0.000,  lot = { 51.4, 59.1 }, lift = 0.15,
+    interior = "VabInterior" },
+  { prefab = "FacCommand",  u = 50.0,  v = 12.0,  face = "S", seat = 8.954,  ox = 0.874, oz = 2.070,  lot = { 32.2, 18.9 }, lift = 0.15 },
   { prefab = "FacDepot",    u = -50.0, v = 12.0,  face = "S", seat = 5.204,  ox = 5.065, oz = 0.000,  lot = { 32.5, 18.0 }, lift = 0.15 },
-  { prefab = "FacTracking", u = 30.0,  v = 46.0,  face = "S", seat = 5.877,  ox = 0.000, oz = -1.333, lot = { 11.1, 15.5 } },
-  { prefab = "FacPower",    u = 76.0,  v = 14.0,  face = "S", seat = 2.570,  ox = 0.013, oz = 0.000,  lot = { 18.0, 12.0 } },
+  { prefab = "FacTracking", u = 40.0,  v = 46.0,  face = "S", seat = 5.877,  ox = 0.000, oz = -1.333, lot = { 11.1, 15.5 } },
+  { prefab = "FacPower",    u = 84.0,  v = 14.0,  face = "S", seat = 2.570,  ox = 0.013, oz = 0.000,  lot = { 18.0, 12.0 } },
   { prefab = "BaseFuel",    u = -40.0, v = 112.0, face = "W", seat = 8.967,  ox = 0.000, oz = 0.000,  lot = { 28.0, 18.0 } },
   { prefab = "BasePad",     u = 0.0,   v = 125.0, face = "N", seat = 16.520, ox = 0.000, oz = -4.011, lot = { 42.0, 50.0 } },
 }
@@ -90,7 +91,7 @@ FACILITIES = {
 PAD = { u = 0.0, v = 125.0, hs = 2.0 }
 
 -- The fence round the building compound (u0, v0, u1, v1), with its gates.
-FENCE = { u0 = -70.0, v0 = -30.0, u1 = 92.0, v1 = 60.0,
+FENCE = { u0 = -70.0, v0 = -30.0, u1 = 100.0, v1 = 62.0,
           gates = { { side = "S", a = -9.0, b = 9.0 }, { side = "N", a = -11.0, b = 11.0 } } }
 
 -- How far round from C the base reaches (the runway's corners, the pad's
@@ -101,8 +102,8 @@ FOOTPRINT_RADIUS = 175.0
 -- Grading: disc radius and spacing (m), and passes. Each flatten moves the
 -- ground only part of the way inside its disc's soft rim; three passes over
 -- overlapping discs leave it within a few cm of the sphere.
-GRADE = { r = 20.0, step = 13.0, passes = 2, margin = 6.0, perFrame = 10, curtainFrame = 60,
-          probe = { 36.0, 32.0, 28.0, 24.0, 20.0, 16.0, 12.0, 8.0, 4.0 }, cutR = 8.5, fillR = 6.0, near = 450.0 }
+GRADE = { r = 20.0, step = 13.0, passes = 2, margin = 6.0,
+          probeStep = 4.0, probeMin = 40.0, cutTop = 120.0, cutR = 8.5, fillR = 6.0, near = 450.0 }
 -- How far over the sea the graded plain stands at the least (m): a rover on
 -- the runway must be on dry land, clear of the water's reach.
 SEA_MARGIN = 4.0
@@ -123,10 +124,19 @@ local last_note = 0.0
 local done = {}       -- prefab -> true once spawned
 local placed = 0
 local built = nil     -- { nodes = {...}, meshes = {...} } runtime meshes
-local grade_wait = 0  -- frames to let the queued flattens land
 local grade_later = nil  -- a grade put off until the crew comes home
 local recheck_at = nil   -- when to look at the ground again after grading
 local regrades = 0
+-- The worst error the last check found: a regrade that leaves it where it
+-- was (within 2 cm) cannot fix it (it is not the grade's to fix: a feature
+-- the probe lands on, or a field the brush cannot reach), so a second try
+-- stops there instead of grading the same ground again in view.
+local last_worst = nil
+local function grade_stuck(worst)
+  local same = last_worst ~= nil and math.abs(worst - last_worst) < 0.02
+  last_worst = worst
+  return same
+end
 local grade_job = nil
 local pave_pending = nil  -- paving waiting for the grade under it
 local pave_job = nil
@@ -598,20 +608,68 @@ local function grade_holds(body, Fr, runway)
   return worst < 0.35, worst
 end
 
--- THE GRADING IS PACED, and every op is aimed from the planet's LIVE
--- position. terrain.sculpt takes a WORLD point and lands at most 64 a frame;
--- the rest wait for later frames with the world points they were given — by
--- which time an orbiting planet has moved on, and they land metres off,
--- digging and filling where nothing was asked for (on Vever the first
--- whole-base batch left the apron 5–6 m under the graded sphere). So the
--- discs are queued body-relative and sent GRADE.perFrame a frame.
-local grade_q = nil      -- { body = name, list = { {kind, x, y, z, r} ... }, i = next }
+-- Where the craft parked at the base are (body-relative), so a re-laid
+-- layout's grade leaves their ground alone: the fleet's records (flight_ops)
+-- and any vessel already standing. A disc whose reach covers one is skipped.
+keep_off = nil
+local KEEP_OFF_R = 6.0     -- a craft's own reach round its origin (m)
+function parked_craft(body)
+  local out = {}
+  local function add_pt(x, y, z) if x and y and z then out[#out + 1] = V(x, y, z) end end
+  for _, v in ipairs(findScripts and findScripts("vessel_controller") or {}) do
+    local n = v.node
+    if n and n.valid then add_pt(n.x - body.x, n.y - body.y, n.z - body.z) end
+  end
+  local fleet = save.get("fleet.craft")          -- flight_ops' records: x/y/z body-relative
+  if type(fleet) == "table" then
+    for _, rec in pairs(fleet) do
+      if type(rec) == "table" and rec.body == body.name then add_pt(rec.x, rec.y, rec.z) end
+    end
+  end
+  return out
+end
+local function kept_off(d, R, reach)
+  if not keep_off then return false end
+  for _, p in ipairs(keep_off) do
+    local dx, dy, dz = d.x * R - p.x, d.y * R - p.y, d.z * R - p.z
+    if dx * dx + dy * dy + dz * dz < (reach + KEEP_OFF_R) ^ 2 then return true end
+  end
+  return false
+end
+
+-- THE GRADE IS SENT IN ONE GO and the ENGINE paces it (0.117.0-rc7, cards
+-- 0475/0480): script terrain edits queue, land in order a few milliseconds'
+-- worth a frame (each whole), each resolved into its planet's frame the
+-- moment it is made — so a carried-over op lands where it was aimed on a
+-- planet that has moved on its rails — and an edit made while that ground is
+-- still streaming in waits for it and lands on top. `terrain.pending()` says
+-- how many are still to land: the grade is done when it reaches 0. (Solar
+-- used to send GRADE.perFrame a frame and call the grade done once the last
+-- was SENT; on rc7 that was ~800 ops still queued, the paving laid on the
+-- ungraded ground, the check found it 0.9 m off and a second grade of ~800
+-- ops ran in view.)
+local grade_q = nil      -- { body = name, list = { {kind, x, y, z, r} ... } } until sent
+local grade_landing = false   -- sent; the engine is still landing it
+local check_now = false       -- a grade made at siting has landed: check it before the curtain goes
+local function edits_pending() return terrain.pending and terrain.pending() or 0 end
+local function grade_busy() return grade_q ~= nil or grade_landing end
 -- Cut balls are listed top down (the dig of a ball near the surface must not
 -- leave a hanging lid above it); each sits cutR over the next, its bottom
 -- 1.5 m over the grade at the lowest.
 local function grade(body, Fr, runway)
   if not terrain.sculpt then return 0 end
   local discs = gradeDiscs(Fr, runway)
+  local blends = blendDiscs(Fr, runway)
+  if keep_off and #keep_off > 0 then
+    local function keep(ds, reach)
+      local out = {}
+      for _, d in ipairs(ds) do if not kept_off(d, Fr.R, reach) then out[#out + 1] = d end end
+      return out
+    end
+    local n0 = #discs + #blends
+    discs, blends = keep(discs, GRADE.r), keep(blends, GRADE.r * 1.25)
+    log(string.format("base: %d grade discs left off the ground under parked craft", n0 - #discs - #blends))
+  end
   local list = {}
   -- CUT AND FILL FIRST. A flatten only reshapes the ground within a few
   -- voxels of its plane: rock standing higher than that is left where it
@@ -625,23 +683,41 @@ local function grade(body, Fr, runway)
   local cuts, fills = 0, 0
   local probes = {}
   for _, d in ipairs(discs) do probes[#probes + 1] = d end
-  for _, d in ipairs(blendDiscs(Fr, runway)) do probes[#probes + 1] = d end
+  for _, d in ipairs(blends) do probes[#probes + 1] = d end
   -- The field's distance is CLAMPED a few metres out (the 2.15 m voxels
   -- carry ±6 m), so "is there rock up here?" is asked at points 4 m apart
   -- with a 3 m reach, never from far away (asked at 10 m with an 8.5 m reach,
   -- clear air read as rock and a flat plain got 2,000 needless cuts).
-  for _, d in ipairs(probes) do
+  --
+  -- OVERHANGS. The rock is looked for in COLUMNS, not just over each disc's
+  -- centre: the centre and four points half a disc step off it diagonally
+  -- (balls of cutR over centres GRADE.step apart left pillars between them,
+  -- which the flattens then undercut into a hanging slab: the "22 m off" roof
+  -- past the VAB's north door after the layout-3 upgrade). And each column
+  -- is followed UP while it is still in rock — to GRADE.cutTop — so a hill
+  -- taller than the old 36 m probe is cut from its top down, never left as
+  -- a lid over the hollow cut under it.
+  local seen = {}
+  local function column(d)
+    -- one column per 4 m cell (neighbouring discs share their corners)
+    local k = string.format("%d:%d:%d", math.floor(d.x * Fr.R / 4 + 0.5), math.floor(d.y * Fr.R / 4 + 0.5),
+      math.floor(d.z * Fr.R / 4 + 0.5))
+    if seen[k] then return end
+    seen[k] = true
     local want = {}
-    for _, hc in ipairs(GRADE.probe) do
+    local hc, last = GRADE.probeStep, nil
+    while hc <= GRADE.cutTop and (hc <= GRADE.probeMin or (last and hc - last <= 12.0)) do
       work(1)
       b = space.body(body.name) or b
       local q = terrain.query(b.x + d.x * (Fr.R + hc), b.y + d.y * (Fr.R + hc), b.z + d.z * (Fr.R + hc))
       if q and q < 3.0 then
+        last = hc
         -- the ball that takes this rock out, never reaching below the grade
         local c = math.max(hc, GRADE.cutR + 1.5)
         local key = math.floor(c / GRADE.cutR + 0.5)
         if not want[key] then want[key] = c end
       end
+      hc = hc + GRADE.probeStep
     end
     local hs = {}
     for _, c in pairs(want) do hs[#hs + 1] = c end
@@ -650,6 +726,18 @@ local function grade(body, Fr, runway)
       list[#list + 1] = { "lower", d.x * (Fr.R + c), d.y * (Fr.R + c), d.z * (Fr.R + c), GRADE.cutR, 1.0 }
       cuts = cuts + 1
     end
+  end
+  local off = GRADE.step * 0.5
+  for _, d in ipairs(probes) do
+    column(d)
+    local ref = abs(d.y) < 0.9 and V(0, 1, 0) or V(1, 0, 0)
+    local t1 = unit(cross(d, ref))
+    local t2 = cross(d, t1)
+    for _, sg in ipairs({ { 1, 1 }, { 1, -1 }, { -1, 1 }, { -1, -1 } }) do
+      column(unit(add(add(mul(d, Fr.R), t1, sg[1] * off), t2, sg[2] * off)))
+    end
+  end
+  for _, d in ipairs(probes) do
     work(1)
     local h = -3.0
     local q = terrain.query(b.x + d.x * (Fr.R + h), b.y + d.y * (Fr.R + h), b.z + d.z * (Fr.R + h))
@@ -664,7 +752,7 @@ local function grade(body, Fr, runway)
       list[#list + 1] = { "flatten", d.x * Fr.R, d.y * Fr.R, d.z * Fr.R, GRADE.r, 1.0 }
     end
   end
-  for _, d in ipairs(blendDiscs(Fr, runway)) do
+  for _, d in ipairs(blends) do
     list[#list + 1] = { "flatten", d.x * Fr.R, d.y * Fr.R, d.z * Fr.R, GRADE.r * 1.25, 0.45 }
   end
   -- …and the ground under and beside the paving is painted as its sub-base
@@ -676,7 +764,7 @@ local function grade(body, Fr, runway)
       list[#list + 1] = { "paint", d.x * Fr.R, d.y * Fr.R, d.z * Fr.R, pd.r, pd.col }
     end
   end
-  grade_q = { body = body.name, list = list, i = 1 }
+  grade_q = { body = body.name, list = list }
   local n = 0
   for _, e in ipairs(list) do if e[1] ~= "paint" then n = n + 1 end end
   local np = #list - n
@@ -684,38 +772,26 @@ local function grade(body, Fr, runway)
   return n
 end
 
--- Send this frame's share of the queue. True while work remains.
--- How many ops this frame: an op costs the engine a collider rebuild over
--- its disc (a few ms, far more on a loaded machine), so the share follows the
--- frame time — halved when a frame ran long, crept back up when frames are
--- short. A whole-base batch sent at once was frames of 3–12 s.
-local grade_n = 4
+-- Send the whole grade (the engine paces it), then wait for it to land.
+-- True while work remains.
 local function grade_step()
   local q = grade_q
-  if not q then return false end
-  local dt = q.dt or 0
-  -- Behind the loading curtain the grade goes flat out (the frames are not
-  -- seen, and the engine's cost is mostly per frame with edits in it, so
-  -- fewer, fuller frames finish far sooner); in view, a few ops a frame.
-  local gm = ref("game_manager")
-  if gm and gm.curtain then grade_n = GRADE.curtainFrame
-  elseif dt > 0.25 then grade_n = 2
-  elseif dt > 0.12 then grade_n = math.max(2, grade_n - 2)
-  else grade_n = math.min(GRADE.perFrame, grade_n + 1) end
-  local b = space.body(q.body)
-  if not b then return true end
-  local sent = 0
-  while q.i <= #q.list and sent < grade_n do
-    local e = q.list[q.i]
-    if e[1] == "paint" then
-      terrain.paint(b.x + e[2], b.y + e[3], b.z + e[4], e[5], e[6][1], e[6][2], e[6][3], 1.0)
-    else
-      terrain.sculpt(b.x + e[2], b.y + e[3], b.z + e[4], e[5], e[6], e[1])
+  if q then
+    local b = space.body(q.body)
+    if not b then return true end
+    for _, e in ipairs(q.list) do
+      if e[1] == "paint" then
+        terrain.paint(b.x + e[2], b.y + e[3], b.z + e[4], e[5], e[6][1], e[6][2], e[6][3], 1.0)
+      else
+        terrain.sculpt(b.x + e[2], b.y + e[3], b.z + e[4], e[5], e[6], e[1])
+      end
     end
-    q.i, sent = q.i + 1, sent + 1
+    grade_q, grade_landing = nil, true
+    return true
   end
-  if q.i > #q.list then grade_q = nil end
-  return grade_q ~= nil
+  if grade_landing and edits_pending() > 0 then return true end
+  grade_landing = false
+  return false
 end
 
 -- ── the buildings ────────────────────────────────────────────────────────────
@@ -734,6 +810,13 @@ local function place_facility(f, body, Fr, planet_node)
     -- the body-relative offset (never add the body position).
     inst.x, inst.y, inst.z = o.x, o.y, o.z
   end, planet_node)
+  -- The VAB's interior shares the shell's origin and rotation (tools/gen_vab.py).
+  if f.interior then
+    spawn(f.interior, vec3(body.x + o.x, body.y + o.y, body.z + o.z), function(inst)
+      inst:setUp(vec3(up.x, up.y, up.z), vec3(-fwd.x, -fwd.y, -fwd.z))
+      inst.x, inst.y, inst.z = o.x, o.y, o.z
+    end, planet_node)
+  end
 end
 
 -- Two apron floodlights on masts (real spots, aimed at the apron).
@@ -1457,7 +1540,21 @@ local function try_place()
   local R, heading = save.get("base.r"), save.get("base.heading")
   local runway = save.get("base.runway") ~= false
   local fresh = (save.get("base.layout") or 0) < LAYOUT_VERSION or not (R and heading)
-  if fresh then
+  -- AN OLDER LAYOUT ON A SITED BASE (layout 3 brought the 50 m VAB and moved
+  -- three buildings out for it) is RE-LAID, not RE-FITTED: the same centre,
+  -- radius, heading and runway, so the pad, the runway and every strip stay
+  -- exactly where the fleet left its craft, and only the new lots are graded
+  -- (`grade` keeps its discs off parked craft: `upgrade`). A fit could turn
+  -- the whole spaceport to a new heading under them.
+  local was = save.get("base.layout")
+  local upgrade = fresh and not first and R and heading and was and true or false
+  if upgrade then
+    save.set("base.layout", LAYOUT_VERSION)
+    save.set("base.graded", false)
+    keep_off = parked_craft(body)
+    log(string.format("base: layout %s → %d on %s — same site and heading, the new lots to grade (%d parked craft kept clear)",
+      tostring(was), LAYOUT_VERSION, body.name, #keep_off))
+  elseif fresh then
     local r2, h2, cost, rw_wet = fitLayout(body, c)
     if not r2 then return false end
     R, heading = r2, h2
@@ -1495,15 +1592,15 @@ local function try_place()
   -- A base graded and checked before keeps its ground: the edits are in the
   -- slot's saved terrain, so a resume sends nothing (`base.graded`).
   if not fresh and save.get("base.graded") ~= LAYOUT_VERSION then holds, worst = grade_holds(body, F, runway) end
-  grade_wait = 0
   if fresh or not holds then
     local cd = len(V(crew.x - (body.x + cu.x * R), crew.y - (body.y + cu.y * R), crew.z - (body.z + cu.z * R)))
-    -- (a save that has played streams its saved ground back in: edits sent
-    -- before that lands are laid over by it — wait for it to finish)
+    -- (a save that has played streams its saved ground back in. The engine
+    -- holds an EDIT made meanwhile until it has landed (0480), but the
+    -- grade's cut and fill probes READ the ground: asked before it lands,
+    -- a graded site read as air below the grade and got 537 needless fills)
     local busy = save.get("g_played") ~= nil and terrain.busy and terrain.busy()
     if cd <= GRADE.near and not busy then
       local n = grade(body, F, runway)
-      grade_wait = 3
       log(string.format("base: grading the spaceport (%d terrain ops%s)", n,
         fresh and "" or string.format(", the ground had moved %.2f m", worst)))
     else
@@ -1530,7 +1627,7 @@ local function try_place()
   -- the world loads: laid before that lands, the paving followed the ground
   -- as GENERATED and the graded ground then came up over all of it. Wait.
   local streaming = save.get("g_played") ~= nil and terrain.busy and terrain.busy()
-  if grade_q or streaming then
+  if grade_busy() or streaming then
     pave_pending = { runway = runway, node = planet_node, t = time }
   else
     lay_paving(F, runway, planet_node)
@@ -1579,8 +1676,8 @@ end
 
 -- Is ground work still owed or under way? (probes and the loading screen)
 function grading()
-  return grade_q ~= nil or grade_job ~= nil or (grade_later ~= nil and grade_later.streaming == true)
-    or (pave_pending ~= nil and grade_later == nil)
+  return grade_busy() or grade_job ~= nil or check_now or (grade_later ~= nil and grade_later.now == true)
+    or (grade_later ~= nil and grade_later.streaming == true) or (pave_pending ~= nil and grade_later == nil)
 end
 
 local function finish_siting()
@@ -1595,21 +1692,43 @@ local function finish_siting()
 end
 
 function update(node, dt)
-  if grade_q then grade_q.dt = dt end
   -- Keep the published base position live: the body is orbiting.
   if baseBody then
     local b = space.body(baseBody)
     local hx, hy, hz = save.get("base.x"), save.get("base.y"), save.get("base.z")
     if b and hx then baseX, baseY, baseZ = b.x + hx, b.y + hy, b.z + hz end
   end
-  -- The frames after siting: the queued flattens land (64 a frame), then the
-  -- ground is done.
+  -- The frames after siting: the grade lands (the engine's pace), it is
+  -- CHECKED the frame it has, and only then is the ground done — so a grade
+  -- that did not hold is made again behind the loading curtain, never in
+  -- view (the regrade below runs while `grading()` still holds the curtain).
   if not want_spawn and not sited and placed >= #FACILITIES then
-    if grade_q then
-      if not grade_step() then recheck_at = time + 3.0 end
+    if grade_busy() then
+      if not grade_step() then check_now = true end
       return
     end
-    if grade_wait > 0 then grade_wait = grade_wait - 1 elseif not (pave_pending and not grade_later) then finish_siting() end
+    if check_now and not grade_later and not grade_job then
+      check_now = false
+      local b = space.body(baseBody)
+      local ok, worst = grade_holds(b, F, save.get("base.runway") ~= false)
+      if ok then
+        save.set("base.graded", LAYOUT_VERSION)
+        log(string.format("base: the grade holds (%.2f m) — recorded", worst))
+      elseif regrades < 2 and not grade_stuck(worst) then
+        regrades = regrades + 1
+        grade_later = { runway = save.get("base.runway") ~= false, now = true,
+                        why = string.format("check after grading: %.2f m off", worst) }
+        log("base: the grade did not hold — " .. grade_later.why .. ", grading again before the curtain goes")
+      else
+        -- recorded anyway: grading this ground again changes nothing
+        save.set("base.graded", LAYOUT_VERSION)
+        log(string.format("base: the grade still does not hold (%.2f m) — leaving it", worst))
+      end
+    end
+    if not (grade_later and grade_later.now) and not grade_job and not check_now
+       and not (pave_pending and not grade_later) then
+      finish_siting()
+    end
   end
   -- A grade that waited for the crew: start it when they are back in range,
   -- as its own sliced job, then send it like any other.
@@ -1636,7 +1755,7 @@ function update(node, dt)
   end
   -- Paving that waited for its grade: laid (as a sliced job) once the ground
   -- is done.
-  if not want_spawn and pave_pending and not grade_q and not grade_later and not grade_job and F
+  if not want_spawn and pave_pending and not grade_busy() and not grade_later and not grade_job and F
      and (pave_job or save.get("g_played") == nil or not (terrain.busy and terrain.busy())
           or time - (pave_pending.t or time) > 25.0) then
     if not pave_job then
@@ -1651,14 +1770,16 @@ function update(node, dt)
       pave_job, pave_pending = nil, nil
     end
   end
-  if not want_spawn and sited and not grade_later and grade_q then
-    if not grade_step() then recheck_at = time + 3.0 end
+  if not want_spawn and sited and not grade_later and grade_busy() then
+    -- checked as soon as it has landed (an edit no longer lands under ground
+    -- still streaming in, 0480), while a curtain that waited for it is up
+    if not grade_step() then recheck_at = time end
   end
   -- THE GRADE IS CHECKED once it has landed. Edits that land while a slot's
   -- saved terrain is still streaming in can be laid over by it (an old save's
   -- hanging slab came back after it was cut away): look again, regrade up to
   -- twice.
-  if not want_spawn and recheck_at and time >= recheck_at and F and baseBody and not grade_q and not grade_later then
+  if not want_spawn and recheck_at and time >= recheck_at and F and baseBody and not grade_busy() and not grade_later then
     recheck_at = nil
     local b = space.body(baseBody)
     local ok, worst = grade_holds(b, F, save.get("base.runway") ~= false)
@@ -1666,11 +1787,13 @@ function update(node, dt)
       save.set("base.graded", LAYOUT_VERSION)
       log(string.format("base: the grade holds (%.2f m) — recorded", worst))
     end
-    if not ok and regrades < 2 then
+    if not ok and regrades < 2 and not grade_stuck(worst) then
       regrades = regrades + 1
-      grade_later = { runway = save.get("base.runway") ~= false, why = string.format("check after grading: %.2f m off", worst) }
+      grade_later = { runway = save.get("base.runway") ~= false, now = true,
+                      why = string.format("check after grading: %.2f m off", worst) }
       log("base: the grade did not hold — " .. grade_later.why .. ", grading again")
     elseif not ok then
+      save.set("base.graded", LAYOUT_VERSION)
       log(string.format("base: the grade still does not hold (%.2f m) — leaving it", worst))
     end
   end
