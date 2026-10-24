@@ -71,7 +71,7 @@ RON
   start=$(date +%s)
   flock $LOCK bash -c "uptime > $OUT/$m.uptime; $ENVX ALSA_CONFIG_PATH=$S/silent-alsa.conf timeout ${TMO:-330} $F play $PJ > $OUT/$m.log 2>&1; echo \$? > $OUT/$m.exit; uptime >> $OUT/$m.uptime"
   echo "  $m: exit $(cat $OUT/$m.exit) after $(( $(date +%s) - start )) s (incl. lock wait); load $(head -1 $OUT/$m.uptime | sed 's/.*load average: //')"
-  grep -a "PB .*\(RESULT \[\|TIMEOUT\|ERROR\|DONE\|ROCKET\|PLANE\|ROVER\|ORBIT\|MECO\|DIG\|BIG\)\|watchdog\|without returning" $OUT/$m.log | grep -v "worst #\|counts mean\|scripts/frame\|buckets/frame\|frames over" | head -40
+  grep -a "PB .*\(RESULT \[\|SETTLE\|PACING\|TIMEOUT\|ERROR\|DONE\|ROCKET\|PLANE\|ROVER\|ORBIT\|MECO\|DIG\|BIG\)\|watchdog\|without returning" $OUT/$m.log | grep -v "worst #\|counts mean\|scripts/frame\|buckets/frame\|frames over" | head -40
   python3 - "$OUT" "$m" <<'PY'
 import json, sys
 out, m = sys.argv[1], sys.argv[2]

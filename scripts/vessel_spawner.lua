@@ -128,8 +128,15 @@ local spawn_tag = nil       -- the flight tag the parts being spawned now get
 -- once, when the last part has landed. Each part is set at its blueprint pose
 -- in the vessel's frame in its callback, so a part that lands a few frames
 -- after the first (the planet moving on under it) is exactly where it belongs.
+--
+-- On an engine with a spawn budget (0.117 rc16, floptle/0518) every part is
+-- asked for at once and the ENGINE spreads the making over frames,
+-- SPAWN_BUDGET_MS of each frame, each callback running as its part is made;
+-- the budget is put back when the last part is in (`spawnDone`). The hold,
+-- the per-part pose fix and the one rebuild are the same either way.
 SPAWN_BATCH = 150
-local spawn_q = nil          -- { vessel, list = { d, ... }, i, placed, total, tag }
+SPAWN_BUDGET_MS = 4.0
+local spawn_q = nil          -- { vessel, list = { d, ... }, i, placed, total, tag, all }
 
 local function spawn_drain()
   local q = spawn_q
@@ -139,13 +146,16 @@ local function spawn_drain()
   local rxv, upv, rzv = basis_of(vessel)
   local vx, vy, vz = vessel.x, vessel.y, vessel.z
   local placed, total, tag = q.placed, q.total, q.tag
-  local last = math.min(#q.list, q.i + SPAWN_BATCH - 1)
+  local last = q.all and #q.list or math.min(#q.list, q.i + SPAWN_BATCH - 1)
   for k = q.i, last do
     local d = q.list[k]
     local wx = vx + rxv.x * d.x + upv.x * d.y + rzv.x * d.z
     local wy = vy + rxv.y * d.x + upv.y * d.y + rzv.y * d.z
     local wz = vz + rxv.z * d.x + upv.z * d.y + rzv.z * d.z
     spawn(d.prefab, vec3(wx, wy, wz), function(part)
+      -- Asked for all at once, a part can be made after its craft is gone (a
+      -- revert mid-build): the engine then makes it unparented, in the open.
+      if q.all and vessel.valid == false then part:destroy() return end
       -- (the blueprint pose in the vessel's frame, whatever the vessel did
       -- between the ask and the landing)
       if q.fix then part.x, part.y, part.z = d.x, d.y, d.z end
@@ -208,16 +218,24 @@ local function spawn_parts(vessel, bp)
   local list = {}
   for _, d in pairs(bp.parts) do list[#list + 1] = d end
   pending = pending + #list
+  local spread = #list > SPAWN_BATCH
+  local paced = spread and spawnBudget ~= nil and spawnDone ~= nil
   spawn_q = { vessel = vessel, list = list, i = 1, placed = {}, total = #list, tag = spawn_tag,
-              fix = #list > SPAWN_BATCH }
+              fix = spread, all = paced }
   -- Held from the start: the root alone is a compound, anchored, until the
   -- last part lands and the whole craft is rebuilt (and anchored again).
-  if #list > SPAWN_BATCH then
+  if spread then
     assembly.rebuild(vessel)
     assembly.setAnchored(vessel, true)
   end
   assemble_t = time
-  spawn_drain()
+  if paced then
+    local prev = spawnBudget(SPAWN_BUDGET_MS)
+    spawn_drain()
+    spawnDone(function() spawnBudget(prev) end)
+  else
+    spawn_drain()
+  end
 end
 
 -- The spawn WAITS for solid ground: at scene start the pad's terrain may not
@@ -1210,6 +1228,7 @@ function update(node, dt)
   -- old blueprint) must not wedge the whole launch — build the compound from
   -- whatever DID arrive and say so.
   if not rebuilt and assemble_t and pending > 0 and time - assemble_t > 8.0
+    and not (spawnPending and spawnPending() > 0)
     and vessel_node and vessel_node.valid then
     rebuilt = true
     assembly.rebuild(vessel_node)

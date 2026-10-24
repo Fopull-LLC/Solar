@@ -17,7 +17,7 @@
 -- back into exact per-frame bucket and per-script costs. Each scenario prints
 -- "PB RESULT" lines and one "BENCHJSON {...}" line for bench.sh to tabulate.
 defaults = { slot = 13, seed = 1911564384, quit = 1, onfoot = 30, clicks = 20, hold = 0.5, gap = 0.5,
-             mapsecs = 12, flysecs = 45, drivesecs = 45, out = 110, settle = 8 }
+             mapsecs = 12, flysecs = 45, drivesecs = 45, out = 110, settle = 8, sleepsecs = 20, sample = 0 }
 
 local MODE = "base"
 local W = function() return app.wallClock and app.wallClock() or os.clock() end
@@ -62,6 +62,7 @@ local prevB, prevS = {}, {}    -- last smoothed means (to invert)
 local RECS, ORDER = {}, {}
 local lastW = nil
 local FRAME = 0
+local LASTF = -1               -- the last engine frame read from perf.frames
 local function new_rec(name)
   return { name = name, dts = {}, b = {}, sb = {}, s = {}, smax = {}, ssp = {}, parts = {}, pmax = {}, psp = {},
            worst = {}, cnt = {}, cmax = {}, cn = 0, gpu = 0, gn = 0, hit = { n = 0, top = {} }, notes = {},
@@ -122,6 +123,35 @@ local function measure()
     if x > 0.002 then fs[s.name] = x end
   end
   local parts = (perf.parts and perf.parts()) or {}
+  -- 0.117 rc16 (floptle/0514): the engine keeps every frame exactly. Its own
+  -- buckets, parts, scripts, bodies and sampled lines replace the inverted
+  -- means, summed over every frame since the last read (a load can pass
+  -- several with no update of ours). Frame TIMES stay the wall clock between
+  -- our updates, so rows compare with older engines.
+  local bod, smp = nil, nil
+  if perf.frames then
+    local fr = perf.frames(8) or {}
+    local xb, xs, xp = {}, {}, {}
+    local got = false
+    bod, smp = {}, {}
+    for _, f in ipairs(fr) do
+      if f.frame and f.frame > LASTF then
+        LASTF, got = f.frame, true
+        for k, v in pairs(f.buckets or {}) do xb[k] = (xb[k] or 0) + v end
+        for k, v in pairs(f.parts or {}) do xp[k] = (xp[k] or 0) + v end
+        for _, e in ipairs(f.scripts or {}) do xs[e.name] = (xs[e.name] or 0) + (e.ms or 0) end
+        for _, e in ipairs(f.bodies or {}) do bod[e.name or "?"] = (bod[e.name or "?"] or 0) + (e.ms or 0) end
+        for _, e in ipairs(f.samples or {}) do
+          local k = string.format("%s:%s:%s", e.script or "?", e.fn or "?", tostring(e.line or "?"))
+          smp[k] = (smp[k] or 0) + (e.ms or 0)
+        end
+      end
+    end
+    if got then
+      fb, fs, parts, tot = xb, xs, xp, 0
+      for _, v in pairs(fb) do tot = tot + v end
+    end
+  end
   local hs = perf.hitches() or {}
   local c = nil
   if FRAME % 10 == 0 then c = perf.counts() end
@@ -137,6 +167,8 @@ local function measure()
       for k, v in pairs(fb) do r.b[k] = (r.b[k] or 0) + v end
       for k, v in pairs(fs) do r.s[k] = (r.s[k] or 0) + v; if v > (r.smax[k] or 0) then r.smax[k] = v end end
       for k, v in pairs(parts) do r.parts[k] = (r.parts[k] or 0) + v; if v > (r.pmax[k] or 0) then r.pmax[k] = v end end
+      if bod then r.bod = r.bod or {}; for k, v in pairs(bod) do r.bod[k] = (r.bod[k] or 0) + v end end
+      if smp then r.smp = r.smp or {}; for k, v in pairs(smp) do r.smp[k] = (r.smp[k] or 0) + v end end
       if dtw > 33.3 then
         r.nsp = r.nsp + 1
         for k, v in pairs(fb) do r.sb[k] = (r.sb[k] or 0) + v end
@@ -162,7 +194,14 @@ local function measure()
         for k, v in pairs(h.parts or {}) do r.hp[k] = (r.hp[k] or 0) + v end
         -- the engine's own record of the frame: exact, unlike the inverted means
         r.hw = r.hw or {}
-        r.hw[#r.hw + 1] = { ms = h.ms, t = time - r.t0, b = topk(h.buckets or {}, 3), p = topk(h.parts or {}, 3), s = topk(fs, 3) }
+        local hsx = fs
+        if h.scripts then hsx = {}; for _, e in ipairs(h.scripts) do hsx[e.name] = e.ms or 0 end end
+        local hbo = {}
+        for _, e in ipairs(h.bodies or {}) do hbo[e.name or "?"] = e.ms or 0 end
+        local hsm = {}
+        for _, e in ipairs(h.samples or {}) do hsm[string.format("%s:%s:%s", e.script or "?", e.fn or "?", tostring(e.line or "?"))] = e.ms or 0 end
+        r.hw[#r.hw + 1] = { ms = h.ms, t = time - r.t0, b = topk(h.buckets or {}, 3), p = topk(h.parts or {}, 3), s = topk(hsx, 3),
+                            bo = topk(hbo, 2), sm = topk(hsm, 2) }
         table.sort(r.hw, function(a, b) return a.ms > b.ms end)
         if #r.hw > 6 then r.hw[7] = nil end
       end
@@ -215,7 +254,8 @@ local function sc_end(name)
   end
   for i, e in ipairs(r.hw or {}) do
     if i > 4 then break end
-    P("RESULT [%s] worst hitch #%d %.0f ms at +%.1f s: %s | parts %s | scripts (approx) %s", name, i, e.ms, e.t, fmtk(e.b), fmtk(e.p), fmtk(e.s))
+    P("RESULT [%s] worst hitch #%d %.0f ms at +%.1f s: %s | parts %s | scripts %s%s", name, i, e.ms, e.t, fmtk(e.b), fmtk(e.p), fmtk(e.s),
+      ((e.bo and #e.bo > 0) or (e.sm and #e.sm > 0)) and string.format(" | bodies %s | lines %s", fmtk(e.bo or {}), fmtk(e.sm or {})) or "")
   end
   if r.hit.n > 0 then
     P("RESULT [%s] all %d hitches, %.0f ms total: buckets %s | parts %s", name, r.hit.n, r.hms or 0, fmtk(topk(r.hb or {}, 6)), fmtk(topk(r.hp or {}, 6)))
@@ -225,11 +265,14 @@ local function sc_end(name)
   for k, v in pairs(r.notes) do notes[k] = v end
   local lpd = (r.lp0 and LP_DELTA) and LP_DELTA(r.lp0, n) or {}
   if #lpd > 0 then P("RESULT [%s] lua functions (inclusive ms/frame): %s", name, fmtk(lpd)) end
+  if r.bod and next(r.bod) then P("RESULT [%s] bodies/frame: %s", name, fmtk(topk(r.bod, 5, math.max(n, 1)))) end
+  if r.smp and next(r.smp) then P("RESULT [%s] sampled lines/frame: %s", name, fmtk(topk(r.smp, 8, math.max(n, 1)))) end
   print("BENCHJSON " .. json({ mode = MODE, scenario = name, secs = secs, frames = n, p50 = st.p50, p95 = st.p95, p99 = st.p99,
     max = st.max, mean = st.mean, work = wk, over33 = over33, over100 = over100, hitches = r.hit.n, hitchTop = r.hit.top,
     buckets = bm, spikeBuckets = sbm, nSpikes = r.nsp, scripts = scr, scriptsMax = scrmax,
     spikeScripts = topk(r.ssp, 8, math.max(r.nsp, 1)), parts = topk(r.parts, 10, math.max(n, 1)),
-    partsMax = topk(r.pmax, 10), worst = r.hw or {}, worstInverted = r.worst,
+    partsMax = topk(r.pmax, 10), worst = r.hw or {}, bodies = topk(r.bod or {}, 8, math.max(n, 1)),
+    lines = topk(r.smp or {}, 12, math.max(n, 1)), worstInverted = r.worst,
     hitchMs = r.hms or 0, hitchBuckets = topk(r.hb or {}, 8), hitchParts = topk(r.hp or {}, 8), counts = cm, countsMax = r.cmax, gpu = r.gn > 0 and r.gpu / r.gn or -1,
     gpuPasses = topk(r.gp or {}, 8, math.max(r.gn, 1)), luaFns = lpd, notes = notes }))
 end
@@ -336,6 +379,12 @@ local function boot()
   local ns = findScript("menu_newsave")
   save.set("g_scale", math.floor(params.scale or (ns and ns.WORLD_SCALE) or 4))
   perf.enable(true)
+  -- the script sampler (rc16) slows tight loops, so it is a separate run's
+  if (params.sample or 0) > 0 and perf.sampleScripts then perf.sampleScripts(true) end
+  if perf.pacing then
+    local pc = perf.pacing() or {}
+    P("PACING present %s vsync %s refresh %s limitedBy %s", tostring(pc.presentMode), tostring(pc.vsync), tostring(pc.refreshHz), tostring(pc.limitedBy))
+  end
   P("mode %s: created %s seed %d; lua debug=%s jit=%s sethook=%s", MODE, s, params.seed, type(debug), type(jit), tostring(debug and debug.sethook ~= nil))
   sc_begin("a_load")
   local wl = W()
@@ -1170,6 +1219,35 @@ local function run_builder()
   wait(10)
   tap("x")
   sc_end("g_launch_release")
+  -- ...and with the engine cut, how long until the craft (or what is left of
+  -- it) rests: its root compound asleep.
+  sc_begin("g_launch_settle")
+  local ts = W()
+  -- At rest = the root asleep (node.asleep) and physics, the craft's pieces
+  -- included (it often breaks up on release), under 2 ms a frame for a
+  -- second. The physics time is the engine's own per-frame figure.
+  local root_slept, quiet, quiet_t, settled = nil, 0, nil, nil
+  while W() - ts < params.sleepsecs do
+    yield()
+    local n = vc.node
+    if not root_slept and n and n.valid ~= false and n.asleep then
+      root_slept = W() - ts
+      P("SETTLE root asleep %.1f s after the engine cut", root_slept)
+    end
+    local ph = (perf.ms and perf.frames) and (function()
+      local f = perf.frames(1); f = f and f[#f]; return f and f.buckets and f.buckets.physics end)() or nil
+    if ph then
+      if ph < 2.0 then quiet = quiet + 1; quiet_t = quiet_t or (W() - ts) else quiet, quiet_t = 0, nil end
+      if quiet >= 60 and not settled then
+        settled = quiet_t
+        P("SETTLE physics under 2 ms/frame from %.1f s after the engine cut", settled)
+        wait(2)
+        break
+      end
+    end
+  end
+  if not settled then P("SETTLE physics still over 2 ms/frame %.0f s after the engine cut (root asleep: %s)", params.sleepsecs, tostring(root_slept)) end
+  sc_end("g_launch_settle")
 end
 
 -- ── main ────────────────────────────────────────────────────────────────────

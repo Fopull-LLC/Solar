@@ -662,8 +662,10 @@ end
 -- edits waiting and DROPS any more (once-only warning; floptle-script
 -- terrain_api MAX_PENDING_OPS): a grade of more than that sent in one go lost
 -- the rest, the check found the ground off and graded it all again. So the
--- list goes out GRADE.inflight at a time, topped up as it lands, and an op the
--- engine refuses (receipt 0) waits for the next frame. And a queue that has
+-- list goes out as fast as the queue has room — `terrain.capacity()` since
+-- rc16 (floptle/0516), GRADE.inflight at a time before — topped up as it
+-- lands, and an op the engine refuses (receipt 0, paint's too) waits for the
+-- next frame. And a queue that has
 -- just gone empty is not trusted on one read: it must stay empty for
 -- GRADE.settle frames (on rc10 `pending()` did not count the ops a worker was
 -- still making), and a check that fails is read again a second later before
@@ -815,16 +817,20 @@ local function grade_step()
   if q then
     local b = space.body(q.body)
     if not b then return true end
-    local room = GRADE.inflight - edits_pending()
+    -- The engine says how much room its queue has (0.117 rc16, floptle/0516);
+    -- an older one is kept GRADE.inflight deep, a guess under its cap.
+    local room = terrain.capacity and terrain.capacity() or (GRADE.inflight - edits_pending())
     local i = q.i or 1
     while room > 0 and i <= #q.list do
       local e = q.list[i]
+      local id
       if e[1] == "paint" then
-        terrain.paint(b.x + e[2], b.y + e[3], b.z + e[4], e[5], e[6][1], e[6][2], e[6][3], 1.0)
+        -- (a receipt since rc16; nothing before, which is not a refusal)
+        id = terrain.paint(b.x + e[2], b.y + e[3], b.z + e[4], e[5], e[6][1], e[6][2], e[6][3], 1.0)
       else
-        local id = terrain.sculpt(b.x + e[2], b.y + e[3], b.z + e[4], e[5], e[6], e[1])
-        if id == 0 then break end          -- refused: the queue is full; again next frame
+        id = terrain.sculpt(b.x + e[2], b.y + e[3], b.z + e[4], e[5], e[6], e[1])
       end
+      if id == 0 then break end            -- refused: the queue is full; again next frame
       i, room = i + 1, room - 1
     end
     q.i = i
