@@ -1213,6 +1213,11 @@ local function run_builder()
   local i = assembly.info(vc.node)
   P("BIG CRAFT on the pad: %d parts, %.1f t", #i.parts, i.mass)
   sc_begin("g_launch_pad"); wait(8); sc_end("g_launch_pad")
+  -- The finned spine is too tall for its engine mount: with the real load
+  -- model it crushes at the bottom on release, and the scenario would time a
+  -- crash instead of a 1,000-part craft flying. Hold it together unless
+  -- loads=1 asks for the crash (pressure limits still apply).
+  if (params.loads or 0) == 0 and vc.physTune then vc.physTune.loads = false end
   sc_begin("g_launch_release")
   vc.releaseClamps()
   tap("z")

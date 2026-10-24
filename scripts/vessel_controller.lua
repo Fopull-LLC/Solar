@@ -329,9 +329,12 @@ function partsGen() return integ.gen end
 --           (`physics.ignorePair`, engine 0.112), so pieces that merely TOUCH
 --           at the seam can't knock each other as they part; 0 = off
 --   seatKinematic  the seated crew rides as a kinematic passenger
+--   loads   the stress model fails joints on the load through them (off: only
+--           the dynamic-pressure and canopy limits; for a harness that pins a
+--           craft's velocity against a force, which no real craft can do)
 -- (A craft left parked needs nothing from here: since floptle/0385 the engine
 -- puts a resting assembly to sleep and wakes it on any push.)
-physTune = { clear = true, ignore = 0.5, seatKinematic = true }
+physTune = { clear = true, ignore = 0.5, seatKinematic = true, loads = true }
 local smoke_t = 0.0
 local scrape_t = 0.0    -- rate-limits topple/belly-slide grinding damage
 local part_total = 0
@@ -4469,6 +4472,7 @@ local function damage_tick(node, info, dt)
   local artifacts = 0
   local raw = assembly.impacts(node)
   local kids = #raw > 1 and kidsById(node) or nil
+  local touch = #raw > 0 and {} or nil -- uid → impulse: where the craft touches (the stress model's support)
   for _, h in ipairs(raw) do
     -- STALE-ENGINE GUARD: speedAbs is a NEW engine field. If it's missing, the
     -- editor binary predates this session's physics work — damage falls back to
@@ -4484,6 +4488,7 @@ local function damage_tick(node, info, dt)
     local uid, c = uid_of_child(node, h.part, kids)
     local d = uid and bp_by_uid[uid]
     local hp = uid and part_hp[uid]
+    if uid and touch then touch[uid] = (touch[uid] or 0) + math.max(0, h.impulse or 0) end
     if d and hp and hp > 0 then
       local nrm = h.speed or 0
       local energy = math.max(h.speedAbs or 0, nrm)             -- total closing speed
@@ -4510,6 +4515,17 @@ local function damage_tick(node, info, dt)
       if energy > worst then worst, wx, wy, wz = energy, h.x, h.y, h.z end
       if nrm > worst_normal then worst_normal = nrm end
     end
+  end
+  -- The parts that touched, for the stress model (stressContact): each by its
+  -- impulse, plus a quarter of the mean so a part resting with none (the
+  -- engine resolves a resting contact by position) still bears a share.
+  integ.contact = nil
+  if touch and next(touch) then
+    local sum, nt = 0, 0
+    for _, j in pairs(touch) do sum, nt = sum + j, nt + 1 end
+    local floor = 0.25 * sum / nt + 1e-6
+    for u, j in pairs(touch) do touch[u] = j + floor end
+    integ.contact = { t = time, w = touch }
   end
   if artifacts > 0 and time - dbg_t > 1.0 then
     dbg_t = time
@@ -4751,14 +4767,20 @@ end
 -- can fail rather than a rigid brick that either bounces or vaporises:
 --
 --   STRESS. Every attachment (a part to its parent in the builder's tree) has a
---   strength in kN. Each tick the craft's PROPER acceleration (what the hull
---   feels: thrust, contact, drag — gravity excluded) is smoothed over ~0.1 s,
---   and every joint carries the mass outboard of it times the acceleration at
---   that mass's centre, spin included (ω×(ω×r) + α×r). A joint over its limit
---   accumulates strain and lets go; more than twice its limit, it lets go at
---   once. Dynamic pressure (½ρv²) has its own limit per part — tiny for a
---   deployed solar panel or dish, very large for the hull — and an open
---   parachute tears off above its safe deploy pressure.
+--   strength in kN. Each joint is a cut through the craft, and it carries the
+--   force that really passes through it: what the side beyond it needs to
+--   move with the craft (its mass times the PROPER acceleration at its centre
+--   — what the hull feels, gravity excluded — spin included, ω×(ω×r) + α×r),
+--   less the external forces already acting on that side: each engine's
+--   thrust, the air on each part, the canopies, the water, and the ground
+--   where the craft touches it (stressSolve, above stressTick). So a stack on
+--   the pad loads its BOTTOM joint with the weight above it, and under thrust
+--   the joint over the engine carries the most. Acceleration and forces are
+--   smoothed over ~0.1 s alike. A joint over its limit accumulates strain and
+--   lets go; more than twice its limit, it lets go at once. Dynamic pressure
+--   (½ρv²) has its own limit per part — tiny for a deployed solar panel or
+--   dish, very large for the hull — and an open parachute tears off above its
+--   safe deploy pressure.
 --
 --   BREAKUP. What fails is the side of the joint WITHOUT the pod (the same tree
 --   cut a decoupler makes). It leaves as its own body with the velocity it had
@@ -5121,7 +5143,7 @@ end
 -- refused — losing the pod is break_part's job). Returns true if it split.
 --   why      a few words for the log ("g-load", "dynamic pressure", …)
 --   blast    true = it goes off as it leaves (explosion hooks + a light kick)
-function shedSet(node, set, why, sev, blast)
+function shedSet(node, set, why, sev, blast, at_uid)
   if destroyed or not node or not node.valid then return false end
   if pod_uid and set[pod_uid] then return false end
   local nodes, n_set = {}, 0
@@ -5144,12 +5166,18 @@ function shedSet(node, set, why, sev, blast)
   -- Bookkeeping before the split, so this tick's passes already see the new craft.
   -- Named after the part at the torn joint: the lowest-uid part whose parent
   -- stays behind (deterministic, unlike pairs() order).
+  -- (`at_uid`: the joint's own part on the leaving side, when the caller
+  -- knows it — a joint under the pod of a stack built up from its engine
+  -- leaves with the part BELOW the cut, whose parent is nobody.)
   local label, lu = "part", nil
   for u in pairs(set) do
     local d = bp_by_uid[u]
     if d and not set[d.parent or 0] and (not lu or u < lu) then
       lu, label = u, d.label or d.id or "part"
     end
+  end
+  if at_uid and set[at_uid] and bp_by_uid[at_uid] then
+    label = bp_by_uid[at_uid].label or bp_by_uid[at_uid].id or "part"
   end
   drop_set(set)
   local keep_ev = {}
@@ -5231,24 +5259,301 @@ end
 -- on its side of that joint (away from the pod).
 function shedJoint(node, uid, why, sev, blast)
   if integ.gone[uid] then return false end
-  return shedSet(node, axial_departing(uid), why, sev, blast)
+  local set = axial_departing(uid)
+  local d = bp_by_uid[uid]
+  -- the part on the leaving side of the cut: this one, or (the set turned
+  -- round because the pod is on this side) its parent
+  return shedSet(node, set, why, sev, blast, set[uid] and uid or (d and d.parent))
 end
 
--- The joints to load-check, rebuilt whenever the craft's part set changes:
--- one per part that has a parent and is still aboard, with its departing set.
+-- THE STRESS TREE. Every joint is a CUT through the attachment tree: it
+-- splits the craft in two, the side that keeps the pod and the side that
+-- would leave (the same tree cut a decoupler makes, `axial_departing`). Hang
+-- the tree from the pod instead of from whatever part the builder started
+-- with, and the leaving side of EVERY joint is one subtree of it. So one pass
+-- over the parts, children before parents, sums every joint's mass, first
+-- moment and external force at once, O(parts) a tick, where a set per joint
+-- was O(parts²) (a 1,000-part spine: ~500,000 set entries).
+--   ord   live part uids, breadth-first from the root (a parent before its children)
+--   pi    tree index → its parent's index (0 at a root)
+--   ri    tree index → the index of the root of its piece
+--   idx   uid → tree index
+-- Live parts the pod can't reach (a docked craft's own tree, a pod-less
+-- probe) hang from their own tree root, where their departing side is the
+-- plain subtree, as `axial_departing` has it.
+function stressTreeBuild(by_uid, kids, root_uid, gone)
+  local ord, pi, ri, idx = {}, {}, {}, {}
+  local function live(u) return u ~= nil and u ~= 0 and by_uid[u] ~= nil and not gone[u] end
+  local function hang(r)
+    ord[#ord + 1] = r
+    local ir = #ord
+    idx[r], pi[ir], ri[ir] = ir, 0, ir
+    local q = ir
+    while q <= #ord do
+      local u = ord[q]
+      local p = by_uid[u].parent
+      if live(p) and not idx[p] then
+        ord[#ord + 1] = p; idx[p] = #ord; pi[#ord], ri[#ord] = q, ir
+      end
+      for _, k in ipairs(kids[u] or {}) do
+        if live(k) and not idx[k] then
+          ord[#ord + 1] = k; idx[k] = #ord; pi[#ord], ri[#ord] = q, ir
+        end
+      end
+      q = q + 1
+    end
+  end
+  if live(root_uid) then hang(root_uid) end
+  local rest = {}
+  for u in pairs(by_uid) do if live(u) and not idx[u] then rest[#rest + 1] = u end end
+  table.sort(rest)
+  for _, u in ipairs(rest) do   -- tree roots first (a part with no live parent) …
+    if not idx[u] and not live(by_uid[u].parent) then hang(u) end
+  end
+  for _, u in ipairs(rest) do   -- … then anything left (a loop in bad data)
+    if not idx[u] then hang(u) end
+  end
+  return { n = #ord, ord = ord, pi = pi, ri = ri, idx = idx }
+end
+
+-- The tree index whose subtree is joint (u → its parent p)'s leaving side,
+-- or nil when the two are not linked in the tree.
+function stressJointSide(T, u, p)
+  local iu, ip = T.idx[u], T.idx[p]
+  if not iu or not ip then return nil end
+  if T.pi[iu] == ip then return iu end
+  if T.pi[ip] == iu then return ip end
+  return nil
+end
+
+-- THE LOAD THROUGH EVERY JOINT (pure: the probes and tests call it as is).
+-- For the cut at joint k, with A its leaving side (the subtree at tree index
+-- s), the force the rest of the craft puts through the joint into A is what A
+-- needs to move with the craft, less what already pushes on A from outside:
+--
+--     L = Σ_A m_i a_i − F_A − R_A
+--     a_i = a + α×r_i + ω×(ω×r_i)        (rigid body; r_i from the centre of mass)
+--     Σ_A m_i a_i = m_A a + α×S_A + ω×(ω×S_A),   S_A = Σ_A m_i r_i
+--
+-- a is the craft's PROPER acceleration (gravity taken out, so gravity is in
+-- no force here either: weight is "the ground pushing up", exactly as an
+-- accelerometer reads it). F_A is the external force on A this model knows
+-- part by part: engine thrust, the air on each body and surface, the
+-- canopies, the water. R is what is left over — the whole craft's
+-- Σ m a − F — which is the force nobody booked: the ground, the pad, a
+-- contact, a bump, the solver. R_A is A's share of it:
+--   * in contact (grounded, on wheels, touching something) it is the
+--     support, and it acts where the craft touches: shared by the contact
+--     weights c (the parts that touch, or the craft's lowest parts against
+--     the push when nothing says which touch), R_A = R · c_A / c_total;
+--   * in free flight it is the small remainder of what this model can't
+--     place (a CoM force: RCS, the coasting drag; the filter's lag), spread
+--     by mass, R_A = R · m_A / m_total, so it loads no joint.
+-- Because R closes the books (Σ over the whole craft of m a − F − R = 0),
+-- the load computed from the other side, B, is exactly −L: Newton's third
+-- law holds by construction.
+--   P   per tree index: m, x,y,z (world, from the centre of mass), fx,fy,fz (world, kN)
+--   cw  per tree index contact weight, or nil (free flight)
+--   kin { ax,ay,az, alx,aly,alz, wx,wy,wz }
+--   out filled: out.x[k], out.y[k], out.z[k] = L for joint list[k] (kN)
+function stressSolve(T, list, P, cw, kin, out)
+  local n, pi, ri = T.n, T.pi, T.ri
+  local M, SX, SY, SZ = T.M or {}, T.SX or {}, T.SY or {}, T.SZ or {}
+  local FX, FY, FZ, C = T.FX or {}, T.FY or {}, T.FZ or {}, T.C or {}
+  T.M, T.SX, T.SY, T.SZ, T.FX, T.FY, T.FZ, T.C = M, SX, SY, SZ, FX, FY, FZ, C
+  local pm, px, py, pz, pfx, pfy, pfz = P.m, P.x, P.y, P.z, P.fx, P.fy, P.fz
+  for i = 1, n do
+    local m = pm[i]
+    M[i], SX[i], SY[i], SZ[i] = m, m * px[i], m * py[i], m * pz[i]
+    FX[i], FY[i], FZ[i] = pfx[i], pfy[i], pfz[i]
+    C[i] = cw and cw[i] or 0
+  end
+  -- children before parents: breadth-first order, walked backwards
+  for i = n, 2, -1 do
+    local p = pi[i]
+    if p > 0 then
+      M[p], SX[p], SY[p], SZ[p] = M[p] + M[i], SX[p] + SX[i], SY[p] + SY[i], SZ[p] + SZ[i]
+      FX[p], FY[p], FZ[p], C[p] = FX[p] + FX[i], FY[p] + FY[i], FZ[p] + FZ[i], C[p] + C[i]
+    end
+  end
+  local ax, ay, az, alx, aly, alz, wx, wy, wz =
+    kin.ax, kin.ay, kin.az, kin.alx, kin.aly, kin.alz, kin.wx, kin.wy, kin.wz
+  local ox, oy, oz = out.x or {}, out.y or {}, out.z or {}
+  out.x, out.y, out.z = ox, oy, oz
+  -- each piece's residual R, worked out the first time one of its joints asks
+  local rx, ry, rz, rdone = T.RX or {}, T.RY or {}, T.RZ or {}, {}
+  T.RX, T.RY, T.RZ = rx, ry, rz
+  for k = 1, #list do
+    local s = list[k].s
+    local m, sx, sy, sz = M[s], SX[s], SY[s], SZ[s]
+    local wsx, wsy, wsz = wy * sz - wz * sy, wz * sx - wx * sz, wx * sy - wy * sx
+    local lx = m * ax + (aly * sz - alz * sy) + (wy * wsz - wz * wsy) - FX[s]
+    local ly = m * ay + (alz * sx - alx * sz) + (wz * wsx - wx * wsz) - FY[s]
+    local lz = m * az + (alx * sy - aly * sx) + (wx * wsy - wy * wsx) - FZ[s]
+    local r = ri[s]
+    if not rdone[r] then
+      rdone[r] = true
+      local mr, qx, qy, qz = M[r], SX[r], SY[r], SZ[r]
+      local vx, vy, vz = wy * qz - wz * qy, wz * qx - wx * qz, wx * qy - wy * qx
+      rx[r] = mr * ax + (aly * qz - alz * qy) + (wy * vz - wz * vy) - FX[r]
+      ry[r] = mr * ay + (alz * qx - alx * qz) + (wz * vx - wx * vz) - FY[r]
+      rz[r] = mr * az + (alx * qy - aly * qx) + (wx * vy - wy * vx) - FZ[r]
+    end
+    local share = 0
+    if C[r] > 0 then share = C[s] / C[r] elseif M[r] > 0 then share = m / M[r] end
+    ox[k], oy[k], oz[k] = lx - share * rx[r], ly - share * ry[r], lz - share * rz[r]
+  end
+  return out
+end
+
+-- EXTERNAL FORCES, part by part (world, kN): every force this script puts on
+-- the hull at a known part is booked here as it is applied — each engine's
+-- thrust, the air on each body and surface (aeroStressForces), the canopies'
+-- pull, the water on each part. The stress pass reads them the tick after (the
+-- velocity change it measures is the one those forces made) and smooths them
+-- with the same filter as the acceleration, so the two always agree.
+-- Anything not booked (the ground, a bump, RCS, the coasting drag, the
+-- solver) is the residual R above.
+STRESS_F = { px = {}, py = {}, pz = {}, sx = {}, sy = {}, sz = {},
+             lx = 0, ly = 0, lz = 0, lsx = 0, lsy = 0, lsz = 0 }
+function stressForce(uid, fx, fy, fz)
+  if uid == nil then return end
+  local F = STRESS_F
+  local px = F.px
+  if px[uid] then
+    px[uid], F.py[uid], F.pz[uid] = px[uid] + fx, F.py[uid] + fy, F.pz[uid] + fz
+  else
+    px[uid], F.py[uid], F.pz[uid] = fx, fy, fz
+  end
+end
+-- A force through the centre of mass in the sim that is really the air's
+-- (the coasting drag): booked whole, placed on the leading parts by
+-- stressTick.
+function stressLead(fx, fy, fz)
+  local F = STRESS_F
+  F.lx, F.ly, F.lz = F.lx + fx, F.ly + fy, F.lz + fz
+end
+-- Fold this tick's booked forces into the smoothed ones (k as the
+-- acceleration's filter; 1 = restart) and clear the book.
+function stressForcesSmooth(k)
+  local F = STRESS_F
+  F.lsx, F.lsy, F.lsz = F.lsx + (F.lx - F.lsx) * k, F.lsy + (F.ly - F.lsy) * k, F.lsz + (F.lz - F.lsz) * k
+  F.lx, F.ly, F.lz = 0, 0, 0
+  local px, py, pz, sx, sy, sz = F.px, F.py, F.pz, F.sx, F.sy, F.sz
+  for u, x in pairs(sx) do
+    local nx = px[u]
+    local a, b, c
+    if nx then
+      a, b, c = x + (nx - x) * k, sy[u] + (py[u] - sy[u]) * k, sz[u] + (pz[u] - sz[u]) * k
+    else
+      a, b, c = x * (1 - k), sy[u] * (1 - k), sz[u] * (1 - k)
+    end
+    if not nx and a * a + b * b + c * c < 1e-10 then
+      sx[u], sy[u], sz[u] = nil, nil, nil
+    else
+      sx[u], sy[u], sz[u] = a, b, c
+    end
+  end
+  for u, x in pairs(px) do
+    if sx[u] == nil then sx[u], sy[u], sz[u] = x * k, py[u] * k, pz[u] * k end
+    px[u], py[u], pz[u] = nil, nil, nil
+  end
+end
+-- The same ceiling the acceleration sample has (STRESS_SAMPLE_MAX, ~40 g):
+-- this model is for SUSTAINED loads. A canopy opened fast pulls up to half
+-- the craft's speed out of it in one tick (chute drag's cap): booked raw,
+-- that one-tick snatch is hundreds of g. The tick's booked forces are scaled
+-- together until their sum is at most `cap` (kN).
+function stressForcesCap(cap)
+  local F = STRESS_F
+  local px, py, pz = F.px, F.py, F.pz
+  local sx, sy, sz = F.lx, F.ly, F.lz
+  for u, x in pairs(px) do sx, sy, sz = sx + x, sy + py[u], sz + pz[u] end
+  local s = math.sqrt(sx * sx + sy * sy + sz * sz)
+  if s <= cap then return end
+  local f = cap / s
+  for u, x in pairs(px) do px[u], py[u], pz[u] = x * f, py[u] * f, pz[u] * f end
+  F.lx, F.ly, F.lz = F.lx * f, F.ly * f, F.lz * f
+end
+-- Forget the book (and, with `all`, the smoothed forces too).
+function stressForcesDrop(all)
+  local F = STRESS_F
+  for u in pairs(F.px) do F.px[u], F.py[u], F.pz[u] = nil, nil, nil end
+  F.lx, F.ly, F.lz = 0, 0, 0
+  if all then F.sx, F.sy, F.sz, F.lsx, F.lsy, F.lsz = {}, {}, {}, 0, 0, 0 end
+end
+
+-- The air's force on each body and surface of the aero model, booked part by
+-- part: the very sums aero.step made, scaled as the total was (`sc`: the
+-- half-the-airspeed cap and AERO.scale), turned into the world. An aero.lua
+-- that keeps each one's force from its step (M.kept: b.fx …) is read as is;
+-- otherwise they are worked out again (the same bodyForce / surfaceForce at
+-- the same air, spin and deflection: ~0.5 ms a tick at 1,000 parts).
+function aeroStressForces(A, M, env, sc, rx, up, rz)
+  local rxx, rxy, rxz, upx, upy, upz, rzx, rzy, rzz = rx.x, rx.y, rx.z, up.x, up.y, up.z, rz.x, rz.y, rz.z
+  if M.kept then
+    for _, list in ipairs({ M.bodies, M.surfs }) do
+      for _, b in ipairs(list) do
+        local fx, fy, fz = b.fx or 0, b.fy or 0, b.fz or 0
+        if fx ~= 0 or fy ~= 0 or fz ~= 0 then
+          stressForce(b.uid, (rxx * fx + upx * fy + rzx * fz) * sc, (rxy * fx + upy * fy + rzy * fz) * sc,
+            (rxz * fx + upz * fy + rzz * fz) * sc)
+        end
+      end
+    end
+    return
+  end
+  if not (A.bodyForce and A.surfaceForce and A.machDrag) then return end
+  local vx, vy, vz = env.vx or 0, env.vy or 0, env.vz or 0
+  local wx, wy, wz = env.wx or 0, env.wy or 0, env.wz or 0
+  local cx, cy, cz = env.cx or 0, env.cy or 0, env.cz or 0
+  local rho = env.rho or 0
+  local Mach = math.sqrt(vx * vx + vy * vy + vz * vz) / math.max(env.a or 340, 1)
+  local mk = A.machDrag(Mach)
+  local bodyForce, surfaceForce = A.bodyForce, A.surfaceForce
+  for _, b in ipairs(M.bodies) do
+    local qx, qy, qz = b.x - cx, b.y - cy, b.z - cz
+    local fx, fy, fz = bodyForce(b, vx + wy * qz - wz * qy, vy + wz * qx - wx * qz, vz + wx * qy - wy * qx, rho, mk)
+    if fx ~= 0 or fy ~= 0 or fz ~= 0 then
+      stressForce(b.uid, (rxx * fx + upx * fy + rzx * fz) * sc, (rxy * fx + upy * fy + rzy * fz) * sc,
+        (rxz * fx + upz * fy + rzz * fz) * sc)
+    end
+  end
+  for _, s in ipairs(M.surfs) do
+    local qx, qy, qz = s.x - cx, s.y - cy, s.z - cz
+    local fx, fy, fz = surfaceForce(s, vx + wy * qz - wz * qy, vy + wz * qx - wx * qz, vz + wx * qy - wy * qx,
+      rho, Mach, (s.defl or 0) * (s.tau or 1))
+    if fx ~= 0 or fy ~= 0 or fz ~= 0 then
+      stressForce(s.uid, (rxx * fx + upx * fy + rzx * fz) * sc, (rxy * fx + upy * fy + rzy * fz) * sc,
+        (rxz * fx + upz * fy + rzz * fz) * sc)
+    end
+  end
+end
+
+-- The joints to load-check and the tree they hang in, rebuilt whenever the
+-- craft's part set changes: one per part whose parent is still aboard, with
+-- `s`, the tree index of its leaving side. (That includes the pod's own joint
+-- when the builder's tree starts elsewhere — a stack built up from its
+-- engine: the joint under the pod is as real as any, and what leaves when it
+-- goes is everything but the pod's side. Before, it was never checked, so
+-- the loads depended on which part the craft was started from.) The leaving
+-- SET itself is only made when a joint fails (shedJoint).
 local function joints(node)
   local key = integ.joints
-  if key and key.gen == integ.gen and key.tree == axial_set_cache then return key.list end
+  if key and key.gen == integ.gen and key.tree == axial_set_cache then return key.list, key.T end
+  local gone = integ.gone
+  local T = stressTreeBuild(bp_by_uid, bp_kids, pod_uid, gone)
   local list = {}
   for u, d in pairs(bp_by_uid) do
-    if (d.parent or 0) ~= 0 and not integ.gone[u] and u ~= pod_uid then
-      local set = axial_departing(u)
-      if not set[pod_uid or -1] then list[#list + 1] = { uid = u, set = set, d = d } end
+    local p = d.parent or 0
+    if p ~= 0 and not gone[u] then
+      local s = stressJointSide(T, u, p)
+      if s then list[#list + 1] = { uid = u, d = d, s = s } end
     end
   end
   table.sort(list, function(a, b) return a.uid < b.uid end) -- deterministic order
-  integ.joints = { gen = integ.gen, tree = axial_set_cache, list = list }
-  return list
+  integ.joints = { gen = integ.gen, tree = axial_set_cache, list = list, T = T }
+  return list, T
 end
 
 local function joint_strength(d, hp)
@@ -5340,49 +5645,117 @@ function tankFuelMap()
   return out
 end
 
--- set_mass(node, j.set) for a stress joint, without walking the set every
--- tick: the dry boxes' mass and moments are summed once per part set
--- (integ.gen steps whenever a part leaves or arrives), and only the tanks in
--- the set are added each tick with what they hold now. A spine joint of a
--- 1,000-part craft carries most of the craft, and each part of the walk also
--- scanned every tank (stressTick 2.2 → 0.4 ms a frame with the rest of this
--- pass, perfbench g_launch_release).
-function jointMass(node, j, fuel_by)
-  local c = j.mc
-  if not c or c.gen ~= integ.gen then
-    local m, x, y, z, tk = 0.0, 0.0, 0.0, 0.0, {}
-    for u in pairs(j.set) do
-      if not integ.gone[u] then
-        local b = part_box(node, u)
-        if b then
-          m = m + b.m
-          x, y, z = x + b.cx * b.m, y + b.cy * b.m, z + b.cz * b.m
-          tk[#tk + 1] = { u = u, b = b }
-        end
+-- Each joint's leaving side's WET mass now (uid → t): the parts' boxes plus
+-- what their tanks hold, summed up the stress tree. (What the stress pass
+-- loads each joint with; a probe or test can hold it against the set.)
+function stressSideMass(node)
+  local list, T = joints(node)
+  local fuel_by = tankFuelMap()
+  local M = {}
+  for i = 1, T.n do
+    local u = T.ord[i]
+    local b = part_box(node, u)
+    M[i] = (b and b.m or 0) + (fuel_by[u] or 0)
+  end
+  for i = T.n, 2, -1 do
+    local p = T.pi[i]
+    if p > 0 then M[p] = M[p] + M[i] end
+  end
+  local out = {}
+  for _, j in ipairs(list) do out[j.uid] = M[j.s] end
+  return out
+end
+
+-- WHERE THE UNBOOKED FORCE ACTS (stressTick's contact weights, by tree
+-- index into cw; returns their sum). When the craft is touching something:
+--   * the parts the engine says touched last tick (assembly.impacts, booked
+--     by damage_tick into integ.contact: each by its impulse, plus a floor
+--     so a part resting with no impulse still takes a share);
+--   * the mounts of the wheels whose tyres are on the ground;
+--   * a claw that has hold of something (assembly.grip: the weld is a force
+--     no contact reports).
+-- Failing those (the settle window after the clamps let go, when the damage
+-- model is not reading contacts yet), an ESTIMATE: the parts that lead into
+-- the push (dx,dy,dz, the unbooked force's direction: the ground pushes up,
+-- so the craft's lowest parts — stressLeading).
+function stressContact(node, T, P, cw, dx, dy, dz, rx, up, rz)
+  local n, idx = T.n, T.idx
+  for i = 1, n do cw[i] = 0 end
+  local got = 0
+  local ct = integ.contact
+  if ct and ct.t == time then
+    for u, w in pairs(ct.w) do
+      local i = idx[u]
+      if i then cw[i] = cw[i] + w; got = got + w end
+    end
+  end
+  if R2.onWheels then
+    for _, w in ipairs(R2.wheels) do
+      local t = w.tyre
+      if t and t.valid and t.grounded then
+        local i = idx[w.uid]
+        if i then cw[i] = cw[i] + 1; got = got + 1 end
       end
     end
-    -- keep only the parts that are tanks (anything tankFuelT could count)
-    local is_tank = {}
-    for _, t in ipairs(tanks) do if t.uid ~= nil then is_tank[t.uid] = true end end
-    local keep = {}
-    for _, e in ipairs(tk) do if is_tank[e.u] then keep[#keep + 1] = e end end
-    c = { gen = integ.gen, ntanks = #tanks, m = m, x = x, y = y, z = z, tk = keep }
-    j.mc = c
   end
-  -- (a tank list that changed without a new part set — a docked module's
-  -- tanks joining — is caught here)
-  if c.ntanks ~= #tanks then j.mc = nil; return jointMass(node, j, fuel_by) end
-  local m, x, y, z = c.m, c.x, c.y, c.z
-  for _, e in ipairs(c.tk) do
-    local f = fuel_by[e.u]
-    if f and f ~= 0 then
-      local b = e.b
-      m = m + f
-      x, y, z = x + b.cx * f, y + b.cy * f, z + b.cz * f
+  if R2.claws then
+    for _, c in ipairs(R2.claws) do
+      local i = c.gripped and idx[c.uid]
+      if i then cw[i] = cw[i] + 1; got = got + 1 end
     end
   end
-  if m <= 0 then return 0, 0, 0, 0 end
-  return m, x / m, y / m, z / m
+  if got > 0 then return got end
+  return stressLeading(node, T, P, cw, dx, dy, dz, rx, up, rz)
+end
+
+-- The parts that LEAD into a push along (dx,dy,dz): weight 1 in cw for every
+-- part whose box reaches within 0.3 m of the craft's extreme point against
+-- it (the ground pushes up: the lowest parts; the air pushes back: the parts
+-- in front). Returns how many. (`boxOf` stands in for part_box in a test.)
+function stressLeading(node, T, P, cw, dx, dy, dz, rx, up, rz, boxOf)
+  local n, got = T.n, 0
+  boxOf = boxOf or part_box
+  for i = 1, n do cw[i] = 0 end
+  local dl = math.sqrt(dx * dx + dy * dy + dz * dz)
+  if dl < 1e-9 then return 0 end
+  dx, dy, dz = dx / dl, dy / dl, dz / dl
+  -- the push in the vessel frame, for each box's reach along it
+  local vx = math.abs(dx * rx.x + dy * rx.y + dz * rx.z)
+  local vy = math.abs(dx * up.x + dy * up.y + dz * up.z)
+  local vz = math.abs(dx * rz.x + dy * rz.y + dz * rz.z)
+  local low, lo = T.LOW or {}, math.huge
+  T.LOW = low
+  for i = 1, n do
+    local b = boxOf(node, T.ord[i])
+    local reach = b and (vx * b.ex + vy * b.ey + vz * b.ez) or 0
+    local h = P.x[i] * dx + P.y[i] * dy + P.z[i] * dz - reach
+    low[i] = h
+    if h < lo then lo = h end
+  end
+  for i = 1, n do
+    if low[i] <= lo + 0.3 then cw[i] = 1; got = got + 1 end
+  end
+  return got
+end
+
+-- Published: the last stress pass, joint by joint — { uid, kn, pct, m } for
+-- every joint (kN through it, % of its strength, its leaving side's mass),
+-- worst first; whether the craft was in contact; and the stress tree (its
+-- per-part inputs in T.P, the kinematics in T.kin). For probes and the
+-- tests; built only when asked.
+function stressReport()
+  local L = integ.sload
+  if not L then return {} end
+  local rows = {}
+  for k, j in ipairs(L.list) do
+    local kn = L.kn[k]
+    if kn then
+      rows[#rows + 1] = { uid = j.uid, id = j.d.id, kn = kn, pct = 100 * kn / joint_strength(j.d, part_hp[j.uid]),
+                          m = L.T.M and L.T.M[j.s] or 0 }
+    end
+  end
+  table.sort(rows, function(a, b) return a.pct > b.pct end)
+  return rows, L.contact, L.T
 end
 
 -- part_qmax(j.d) with the part's deploy module looked up once per joint
@@ -5406,12 +5779,12 @@ function jointQmax(j)
 end
 
 -- THE FIRST STRESS PASS, made ahead. The first tick after the clamps let go
--- worked out every joint's departing set and the mass outboard of it at once:
--- ~25 ms of the release frame at 1,000 parts. While the craft is held (on the
--- pad, in the clamps) nothing it is made of changes, so the same caches are
--- filled then, a couple of milliseconds a tick: the release finds them made.
--- Only once every part has spawned (a part not there yet would be sized from
--- the blueprint, and kept so).
+-- read every part's collider box (an engine read per part) and built the
+-- stress tree at once. While the craft is held (on the pad, in the clamps)
+-- nothing it is made of changes, so the same caches are filled then, a couple
+-- of milliseconds a tick: the release finds them made. Only once every part
+-- has spawned (a part not there yet would be sized from the blueprint, and
+-- kept so).
 STRESS_WARM_MS = 2.0
 function stressWarm(node, info)
   if destroyed or not node or not node.valid or not info or #(info.parts or {}) < part_total then return end
@@ -5422,21 +5795,11 @@ function stressWarm(node, info)
   local t0 = clock()
   local wm = integ.warm
   if not wm or wm.gen ~= integ.gen or wm.tree ~= axial_set_cache then
-    local us = {}
-    for u, d in pairs(bp_by_uid) do
-      if (d.parent or 0) ~= 0 and not integ.gone[u] and u ~= pod_uid then us[#us + 1] = u end
-    end
-    table.sort(us)
     local all = {}
     for u in pairs(bp_by_uid) do if not integ.gone[u] then all[#all + 1] = u end end
     table.sort(all)
-    wm = { gen = integ.gen, tree = axial_set_cache, us = us, i = 0, k = 0, all = all, b = 0 }
+    wm = { gen = integ.gen, tree = axial_set_cache, k = 0, all = all, b = 0 }
     integ.warm = wm
-  end
-  while wm.i < #wm.us do
-    wm.i = wm.i + 1
-    axial_departing(wm.us[wm.i])
-    if (clock() - t0) * 1000 > STRESS_WARM_MS then return end
   end
   -- every part's box (finding a part's node indexes the craft's children once
   -- a tick: many boxes a tick, not one)
@@ -5446,25 +5809,24 @@ function stressWarm(node, info)
     if wm.b % 16 == 0 and (clock() - t0) * 1000 > STRESS_WARM_MS then return end
   end
   local list = joints(node)
-  local fuel_by = tankFuelMap()
   while wm.k < #list do
     wm.k = wm.k + 1
     local j = list[wm.k]
-    if not integ.gone[j.uid] then
-      jointMass(node, j, fuel_by)
-      jointQmax(j)
-    end
-    if (clock() - t0) * 1000 > STRESS_WARM_MS then return end
+    if not integ.gone[j.uid] then jointQmax(j) end
+    if wm.k % 64 == 0 and (clock() - t0) * 1000 > STRESS_WARM_MS then return end
   end
   integ.warm_done = integ.gen
 end
 
 -- STRESS: load every joint, fail the ones past their limit. Runs piloted or not
 -- (a derelict hit hard breaks the same), never while clamped or in the settle
--- window after release.
+-- window after release. The load through each joint is stressSolve's (above):
+-- what its leaving side needs to move with the craft, less the external
+-- forces already on that side.
 function stressTick(node, info, dt)
   if destroyed or info.anchored or (launch_mode and not released) or dt <= 0 then
     integ.af, integ.wprev, integ.vprev = nil, nil, nil
+    stressForcesDrop(true)
     if not destroyed and (info.anchored or (launch_mode and not released)) then stressWarm(node, info) end
     return
   end
@@ -5484,6 +5846,7 @@ function stressTick(node, info, dt)
   integ.vprev = { x = v.x, y = v.y, z = v.z, dom = dom }
   if not vp or vp.dom ~= dom or space.warp() > 1.001 then
     integ.af, integ.wprev = nil, nil
+    stressForcesDrop(true)
     return
   end
   local gx, gy, gz = 0, 0, 0
@@ -5502,6 +5865,7 @@ function stressTick(node, info, dt)
   local am = math.sqrt(ax * ax + ay * ay + az * az)
   if am > STRESS_SAMPLE_MAX and near_soi_seam(node.x, node.y, node.z,
       math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z), dt) then
+    stressForcesDrop(false)
     return -- a frame change, not a load (see near_soi_seam)
   end
   if am > STRESS_SAMPLE_MAX then
@@ -5509,6 +5873,10 @@ function stressTick(node, info, dt)
     ax, ay, az = ax * f, ay * f, az * f
   end
   local k = math.min(1.0, dt / 0.08)
+  -- (the booked forces get the same ceiling and ride the same filter,
+  -- restarted with it)
+  stressForcesCap(STRESS_SAMPLE_MAX * math.max(info.mass or 0, 0.01))
+  stressForcesSmooth(integ.af and k or 1.0)
   local af = integ.af or { x = ax, y = ay, z = az }
   af.x, af.y, af.z = af.x + (ax - af.x) * k, af.y + (ay - af.y) * k, af.z + (az - af.z) * k
   integ.af = af
@@ -5528,63 +5896,136 @@ function stressTick(node, info, dt)
   local dens = air_at(node)
   local q_kpa = 0.5 * AIR_RHO * dens * spd * spd / 1000.0
   local worst, worst_j, worst_sev, worst_why = 0.0, nil, 0.0, nil
-  -- (what set_mass sums for each joint, from per-joint dry sums cached per
-  -- part set plus this tick's propellant: see jointMass)
+  local list, T = joints(node)
+  local n, ord = T.n, T.ord
+  -- Each part this tick: its wet mass, where it is (world, from the centre of
+  -- mass) and the smoothed external force booked on it.
+  local P = T.P
+  if not P then
+    P = { m = {}, x = {}, y = {}, z = {}, fx = {}, fy = {}, fz = {}, c = {} }
+    T.P = P
+  end
+  local pm, ppx, ppy, ppz, pfx, pfy, pfz = P.m, P.x, P.y, P.z, P.fx, P.fy, P.fz
   local fuel_by = tankFuelMap()
-  -- (every vector's components read once, not per joint: a vec3's `.x` is a
+  local SF = STRESS_F
+  local sfx, sfy, sfz = SF.sx, SF.sy, SF.sz
+  -- (every vector's components read once, not per part: a vec3's `.x` is a
   -- call into the engine)
   local rxx, rxy, rxz, upx, upy, upz = rx.x, rx.y, rx.z, up.x, up.y, up.z
   local rzx, rzy, rzz = rz.x, rz.y, rz.z
-  local cmx, cmy, cmz = cm.x, cm.y, cm.z
+  local ox, oy, oz = bx - cm.x, by - cm.y, bz - cm.z
+  local tm, tsx, tsy, tsz, tfx, tfy, tfz = 0, 0, 0, 0, 0, 0, 0
+  for i = 1, n do
+    local u = ord[i]
+    local b = part_box(node, u)
+    local m, lx, ly, lz = 0, 0, 0, 0
+    if b then m, lx, ly, lz = b.m + (fuel_by[u] or 0), b.cx, b.cy, b.cz end
+    local x = ox + rxx * lx + upx * ly + rzx * lz
+    local y = oy + rxy * lx + upy * ly + rzy * lz
+    local z = oz + rxz * lx + upz * ly + rzz * lz
+    local fx, fy, fz = sfx[u] or 0, sfy[u] or 0, sfz[u] or 0
+    pm[i], ppx[i], ppy[i], ppz[i], pfx[i], pfy[i], pfz[i] = m, x, y, z, fx, fy, fz
+    tm, tsx, tsy, tsz = tm + m, tsx + m * x, tsy + m * y, tsz + m * z
+    tfx, tfy, tfz = tfx + fx, tfy + fy, tfz + fz
+  end
   local wx, wy, wz = w.x, w.y, w.z
-  local afx, afy, afz, alx, aly, alz = af.x, af.y, af.z, al.x, al.y, al.z
-  for _, j in ipairs(joints(node)) do
+  local kin = T.kin or {}
+  T.kin = kin
+  kin.ax, kin.ay, kin.az, kin.alx, kin.aly, kin.alz, kin.wx, kin.wy, kin.wz =
+    af.x, af.y, af.z, al.x, al.y, al.z, wx, wy, wz
+  -- The coasting drag (a force through the centre of mass in the sim, the
+  -- air's in truth) is booked on the parts in front of it.
+  local lx, ly, lz = SF.lsx, SF.lsy, SF.lsz
+  if lx * lx + ly * ly + lz * lz > 1e-6 then
+    local nl = stressLeading(node, T, P, P.c, lx, ly, lz, rx, up, rz)
+    if nl > 0 then
+      local c = P.c
+      lx, ly, lz = lx / nl, ly / nl, lz / nl
+      for i = 1, n do
+        if c[i] > 0 then pfx[i], pfy[i], pfz[i] = pfx[i] + lx, pfy[i] + ly, pfz[i] + lz end
+      end
+      tfx, tfy, tfz = tfx + lx * nl, tfy + ly * nl, tfz + lz * nl
+    end
+  end
+  -- The force nobody booked (the residual R of stressSolve, whole craft).
+  -- TOUCHING something, it is the support, and it acts where the craft
+  -- touches (stressContact). Otherwise (free flight: RCS, a bump, the
+  -- filter's lag) it is spread by mass and loads nothing.
+  local cw = nil
+  local ct = integ.contact
+  if info.grounded or info.gripped or R2.onWheels or (ct and ct.t == time) then
+    local vsx, vsy, vsz = wy * tsz - wz * tsy, wz * tsx - wx * tsz, wx * tsy - wy * tsx
+    local Rx = tm * af.x + (al.y * tsz - al.z * tsy) + (wy * vsz - wz * vsy) - tfx
+    local Ry = tm * af.y + (al.z * tsx - al.x * tsz) + (wz * vsx - wx * vsz) - tfy
+    local Rz = tm * af.z + (al.x * tsy - al.y * tsx) + (wx * vsy - wy * vsx) - tfz
+    if stressContact(node, T, P, P.c, Rx, Ry, Rz, rx, up, rz) > 0 then cw = P.c end
+  end
+  local L = integ.sload
+  if not L or L.T ~= T then
+    L = { T = T, list = list, out = {}, kn = {} }
+    integ.sload = L
+  end
+  L.contact = cw ~= nil
+  local out = stressSolve(T, list, P, cw, kin, L.out)
+  local lox, loy, loz, kn = out.x, out.y, out.z, L.kn
+  local g_now = math.sqrt(af.x * af.x + af.y * af.y + af.z * af.z) / 9.81
+  local canopy = chutes_deployed and chute_anim > 0
+  -- (physTune.loads = false: a harness that pins the velocity against a
+  -- force — physics that can't happen — switches the load check off; the
+  -- pressure checks stay)
+  local loads_on = physTune.loads ~= false
+  for kk = 1, #list do
+    local j = list[kk]
+    kn[kk] = nil
     if not integ.gone[j.uid] then
-      local m, lx, ly, lz = jointMass(node, j, fuel_by)
-      if m > 0 then
-        -- Acceleration at the outboard mass's centre: a + α×r + ω×(ω×r).
-        local px = bx + rxx * lx + upx * ly + rzx * lz - cmx
-        local py = by + rxy * lx + upy * ly + rzy * lz - cmy
-        local pz = bz + rxz * lx + upz * ly + rzz * lz - cmz
-        local wrx, wry, wrz = wy * pz - wz * py, wz * px - wx * pz, wx * py - wy * px
-        local cx = afx + (aly * pz - alz * py) + (wy * wrz - wz * wry)
-        local cy = afy + (alz * px - alx * pz) + (wz * wrx - wx * wrz)
-        local cz = afz + (alx * py - aly * px) + (wx * wry - wy * wrx)
-        local load = m * math.sqrt(cx * cx + cy * cy + cz * cz) -- kN (t · m/s²)
-        local sev = load / joint_strength(j.d, part_hp[j.uid])
-        -- (the reason is worded only for the joint that fails, not for every
-        -- joint every tick)
-        local why = 1
-        -- Dynamic pressure on the part itself.
-        local qs = q_kpa / jointQmax(j)
-        if qs > sev then sev, why = qs, 2 end
-        -- An open canopy: the air it can take before the lines part.
-        if (j.d.chute or 0) == 1 and chutes_deployed and chute_anim > 0 then
-          local cs = q_kpa / CHUTE_SAFE_KPA
-          if cs > sev then
-            sev, why = cs, 3
-          end
+      local lx, ly, lz = lox[kk], loy[kk], loz[kk]
+      local load = math.sqrt(lx * lx + ly * ly + lz * lz) -- kN
+      kn[kk] = load
+      local d = j.d
+      local is_chute = (d.chute or 0) == 1
+      -- An open canopy's own lines are rated by the air they take (below),
+      -- not by the craft they hold up: the pull through them is the craft's
+      -- weight and more, by design (a heavy craft can still use chutes). So
+      -- is one paying out, or whose pull is still fading from the filter.
+      local sev = 0.0
+      if loads_on and not (is_chute and (canopy or chutes_deployed or sfx[j.uid] ~= nil)) then
+        sev = load / joint_strength(d, part_hp[j.uid])
+      end
+      -- (the reason is worded only for the joint that fails, not for every
+      -- joint every tick)
+      local why = 1
+      -- Dynamic pressure on the part itself.
+      local qs = q_kpa / jointQmax(j)
+      if qs > sev then sev, why = qs, 2 end
+      -- An open canopy: the air it can take before the lines part.
+      if is_chute and canopy then
+        local cs = q_kpa / CHUTE_SAFE_KPA
+        if cs > sev then
+          sev, why = cs, 3
         end
-        if sev > 1.0 then
-          integ.strain[j.uid] = (integ.strain[j.uid] or 0) + (sev - 1.0) * dt
-        else
-          integ.strain[j.uid] = math.max(0, (integ.strain[j.uid] or 0) - dt * 0.05)
+      end
+      if sev > 1.0 then
+        integ.strain[j.uid] = (integ.strain[j.uid] or 0) + (sev - 1.0) * dt
+      else
+        integ.strain[j.uid] = math.max(0, (integ.strain[j.uid] or 0) - dt * 0.05)
+      end
+      -- Past 2× it goes at once; past 1× it goes once the overload has lasted
+      -- (0.04 overload·s: 40 % over for 0.1 s, 10 % over for 0.4 s) — and
+      -- only while it is still over: a joint that was overloaded and has
+      -- since been unloaded (the craft broke elsewhere first) doesn't go off
+      -- later as a delayed charge; its strain stays until it heals or the
+      -- load comes back.
+      local fails = sev > 2.0 or (sev > 1.0 and (integ.strain[j.uid] or 0) > 0.04)
+      -- A canopy's lines part at the opening shock, not after a while:
+      -- over its safe pressure while open is a tear at once.
+      if is_chute and canopy and q_kpa > CHUTE_SAFE_KPA then
+        fails = true
+      end
+      if fails and sev > worst then
+        if why == 1 then
+          why = string.format("%.0f kN at %.1f g", load, g_now)
         end
-        -- Past 2× it goes at once; past 1× it goes once the overload has lasted
-        -- (0.04 overload·s: 40 % over for 0.1 s, 10 % over for 0.4 s).
-        local fails = sev > 2.0 or (integ.strain[j.uid] or 0) > 0.04
-        -- A canopy's lines part at the opening shock, not after a while:
-        -- over its safe pressure while open is a tear at once.
-        if (j.d.chute or 0) == 1 and chutes_deployed and chute_anim > 0
-          and q_kpa > CHUTE_SAFE_KPA then
-          fails = true
-        end
-        if fails and sev > worst then
-          if why == 1 then
-            why = string.format("%.0f kN at %.1f g", load, math.sqrt(cx * cx + cy * cy + cz * cz) / 9.81)
-          end
-          worst, worst_j, worst_sev, worst_why = sev, j, sev, why
-        end
+        worst, worst_j, worst_sev, worst_why = sev, j, sev, why
       end
     end
   end
@@ -5598,7 +6039,7 @@ function stressTick(node, info, dt)
   if worst_j then
     local d = worst_j.d
     local fuelled = false
-    for u in pairs(worst_j.set) do
+    for u in pairs(axial_departing(worst_j.uid)) do
       local dd = bp_by_uid[u]
       if dd and not integ.gone[u] and (((dd.fuel or 0) > 0 and (tankLeft(u) or 0) > dd.fuel * 0.25)
         or (dd.kind == "engine" and throttle > 0.05)) then
@@ -5820,6 +6261,9 @@ function chuteDrag(node, info, fx, fy, fz, dt)
     assembly.force(node, vec3(fx, fy, fz))
     return
   end
+  -- (the pull is the canopies': booked on them for the stress model)
+  local nc = #chutes
+  for _, c in ipairs(chutes) do stressForce(c.uid, fx / nc, fy / nc, fz / nc) end
   local rx, up, rz = basis(node)
   local bx, by, bz = base_of(node, info)
   local px, py, pz = 0, 0, 0
@@ -6028,7 +6472,7 @@ function waterTick(node, info, dt)
           -- the centre of what is under: the middle of the wet slab
           local sh = hu - f * hu
           local c = { x = cx - ux * sh, y = cy - uy * sh, z = cz - uz * sh, px = cx, py = cy, pz = cz, Vs = Vs, f = f,
-                      A = Vc ^ (2 / 3) * f }
+                      A = Vc ^ (2 / 3) * f, u = u }
           -- the cell's own velocity, planet frame (info.vel is the craft's
           -- velocity in its dominant body's frame; still water)
           local rxp, ryp, rzp = cx - comx, cy - comy, cz - comz
@@ -6073,6 +6517,7 @@ function waterTick(node, info, dt)
     local rx2, ry2, rz2 = c.px - com.x, c.py - com.y, c.pz - com.z
     Tx, Ty, Tz = Tx + ry2 * dz - rz2 * dy, Ty + rz2 * dx - rx2 * dz, Tz + rx2 * dy - ry2 * dx
     Fx, Fy, Fz = Fx + dx, Fy + dy, Fz + dz
+    stressForce(c.u, fx + dx, fy + dy, fz + dz) -- (the water on this part, for the stress model)
   end
   -- angular drag, exponential on how much of the craft is wet (never flips a spin)
   local I = info.inertia
@@ -8137,8 +8582,10 @@ function aeroTick(node, info, dt, thr, sp, sy, sr, ex, ey, ez, apx, apy, apz, ay
   -- stiff drag must not reverse the craft)
   local m = math.max(info.mass or 1, 1e-3)
   local fm = math.sqrt(fx * fx + fy * fy + fz * fz)
+  local capk = 1
   if fm * dt > 0.5 * V * m and fm > 0 then
     local k = 0.5 * V * m / (fm * dt)
+    capk = k
     fx, fy, fz, tx, ty, tz = fx * k, fy * k, fz * k, tx * k, ty * k, tz * k
   end
   -- (AERO.scale: a probe's A/B switch on the air's force; 1 in the game)
@@ -8147,6 +8594,10 @@ function aeroTick(node, info, dt, thr, sp, sy, sr, ex, ey, ez, apx, apy, apz, ay
   if fm > 0 and ks > 0 then
     assembly.force(node, vec3(rx.x * fx + up.x * fy + rz.x * fz, rx.y * fx + up.y * fy + rz.y * fz, rx.z * fx + up.z * fy + rz.z * fz))
     assembly.torque(node, vec3(rx.x * tx + up.x * ty + rz.x * tz, rx.y * tx + up.y * ty + rz.y * tz, rx.z * tx + up.z * ty + rz.z * tz))
+    -- ...and the same air booked part by part for the stress model, once it
+    -- is worth booking (20 Pa: ~6 m/s at sea level; under that the
+    -- remainder is spread by mass and loads nothing)
+    if M.diag and (M.diag.q or 0) > 20 then aeroStressForces(A, M, env, capk * ks, rx, up, rz) end
   end
   AERO.active = true
   -- the jets' thrust for the engine loop (next tick)
@@ -8541,6 +8992,7 @@ function fixedUpdate(node, dt)
         local f = e.thrust * (e.jet and (e.jk or 0) or throttle * nk)
         THRUST_LIVE = THRUST_LIVE + f
         assembly.forceAt(node, vec3(wdx * f, wdy * f, wdz * f), vec3(ex, ey, ez))
+        stressForce(e.uid, wdx * f, wdy * f, wdz * f) -- (booked on the engine for the stress model)
       end
     end
   end
@@ -8625,6 +9077,7 @@ function fixedUpdate(node, dt)
           local dk = math.min(0.0045, 0.5 * info.mass / (dt * spd * dens + 1e-9))
           assembly.force(node, vec3(
             -v.x * spd * dens * dk, -v.y * spd * dens * dk, -v.z * spd * dens * dk))
+          stressLead(-v.x * spd * dens * dk, -v.y * spd * dens * dk, -v.z * spd * dens * dk)
         end
         -- VISUAL reentry glow, DECOUPLED from damage: plasma licks off the windward
         -- side from ~45 m/s (scaled by density × speed), so a normal descent looks

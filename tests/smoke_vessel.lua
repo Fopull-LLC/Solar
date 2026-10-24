@@ -713,18 +713,18 @@ do
   check(tm.mass and math.abs(tm.mass - (6.07 + c.fuelMass())) < 0.02,
     string.format("the HUD's mass is the true wet mass (%.2f t)", tm.mass or -1))
   check((tm.dv or 0) > 0 and (tm.burn_s or 0) > 0, "the HUD knows the Δv and burn time left")
-  -- BIG-CRAFT CACHES (perf): the stress model's per-joint mass (dry sums cached
-  -- per part set + this tick's propellant) is exactly the outboard set's dry
-  -- mass + what its tanks hold, about the same centre; the hull's reach is
-  -- what laying out every ball would say.
+  -- BIG-CRAFT CACHES (perf): the stress model sums every joint's leaving
+  -- side up one tree hung from the pod (stressTreeBuild), not one set per
+  -- joint: each joint's mass is exactly the outboard set's dry mass + what its
+  -- tanks hold; the hull's reach is what laying out every ball would say.
   do
     local bpp = save_store["shipyard.blueprint"].parts
     local kids = {}
     for _, d in ipairs(bpp) do
       if (d.parent or 0) ~= 0 then kids[d.parent] = kids[d.parent] or {}; table.insert(kids[d.parent], d) end
     end
-    local fuel_by = c.tankFuelMap()
-    local worst = 0
+    local side = c.stressSideMass(c.dock.node)
+    local worst, n = 0, 0
     for _, d0 in ipairs(bpp) do
       local set, list = {}, { d0 }
       while #list > 0 do
@@ -732,19 +732,14 @@ do
         set[d.uid] = d
         for _, k in ipairs(kids[d.uid] or {}) do list[#list + 1] = k end
       end
-      if not set[1] then   -- (the pod's side never leaves)
-        local m, x, y, z = 0, 0, 0, 0
-        for u, d in pairs(set) do
-          local bm = math.max(0.01, d.mass or 0.5) + c.tankFuelT(u)
-          m, x, y, z = m + bm, x + d.x * bm, y + d.y * bm, z + d.z * bm
-        end
-        local uids = {}
-        for u in pairs(set) do uids[u] = true end
-        local jm, jx, jy, jz = c.jointMass(c.dock.node, { uid = d0.uid, set = uids, d = d0 }, fuel_by)
-        worst = math.max(worst, math.abs(jm - m), math.abs(jx - x / m), math.abs(jy - y / m), math.abs(jz - z / m))
+      if not set[1] and (d0.parent or 0) ~= 0 then   -- (the pod's side never leaves)
+        local m = 0
+        for u, d in pairs(set) do m = m + math.max(0.01, d.mass or 0.5) + c.tankFuelT(u) end
+        worst = math.max(worst, math.abs((side[d0.uid] or -1) - m))
+        n = n + 1
       end
     end
-    check(worst < 1e-9, string.format("jointMass is the outboard set's wet mass and centre (worst diff %.2g)", worst))
+    check(n > 3 and worst < 1e-9, string.format("each joint's leaving side, summed up the stress tree, is the outboard set's wet mass (%d joints, worst diff %.2g)", n, worst))
     local _, reach = c.hullSpheres()
     local r2 = c.hullReachNow()
     check(math.abs(reach - r2) < 1e-12, string.format("hullReachNow is hullSpheres' reach (%.3f / %.3f)", r2, reach))
@@ -848,6 +843,12 @@ check(legs_after ~= nil and legs_after.parent ~= nil,
 -- the canopy, which then drags against velocity in the atmosphere. Put the
 -- ship in a descent and check the drag force opposes the fall.
 check(controller_env.chutes_deployed == false, "chutes start packed")
+-- (This harness PINS the velocity: the canopy below pulls on a craft that
+-- never slows, for seconds — a force no real fall can hold against. The
+-- joint-load check reads the forces the script applies, so it is switched
+-- off for this section; the pressure checks stay, and it comes back on for
+-- the stress tests further down.)
+controller_env.physTune.loads = false
 asm.vel = { x = 0, y = -40, z = 0 } -- falling toward the planet (which is +X)
 controller_env.throttle = 0.0        -- engines off: any upward force now is the canopy
 API.LAST_FORCE = nil
@@ -1116,6 +1117,7 @@ end
 check(said, "...and says what it ignored, rather than silently swallowing it")
 
 -- ── STRESS AND THE SAFETY NET (the launch-fling round, 2026-10) ────────────
+controller_env.physTune.loads = true -- (off since the pinned chute descent above)
 -- A SPIN no rocket should have is braked back with a pure couple — a pair of
 -- equal and opposite impulses, so it slows the tumble without shoving the hull
 -- — and it is LOGGED, never silent.

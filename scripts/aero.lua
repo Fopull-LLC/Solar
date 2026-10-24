@@ -537,6 +537,7 @@ function step(M, env)
     local rx, ry, rz = b.x - cx, b.y - cy, b.z - cz
     local ex, ey, ez = vx + wy * rz - wz * ry, vy + wz * rx - wx * rz, vz + wx * ry - wy * rx
     local fx, fy, fz = bodyForce(b, ex, ey, ez, rho, mk)
+    b.fx, b.fy, b.fz = fx, fy, fz   -- (kept per part: vessel_controller's stress model books them)
     add(fx, fy, fz, b.x, b.y, b.z)
   end
   local ctl = env.ctl
@@ -565,6 +566,7 @@ function step(M, env)
     -- a hinged flap turns the section's zero-lift line by τ of its own travel
     local fx, fy, fz, alpha, sig = surfaceForce(s, ex, ey, ez, rho, Mach, s.defl * (s.tau or 1))
     s.alpha, s.sig = alpha or 0, sig or 0
+    s.fx, s.fy, s.fz = fx, fy, fz
     add(fx, fy, fz, s.x, s.y, s.z)
     if not s.ctl then Sw, Ss = Sw + s.S, Ss + s.S * (sig or 0) end
   end
@@ -592,6 +594,7 @@ function step(M, env)
     local k = lit and j.s * sigma ^ 0.7 * jetMach(Mach, j.mmax) * airf * min(1, o2) or 0
     j.jk, j.jb, j.lit = k, lit and j.s * sigma ^ 0.7 * airf or 0, lit
   end
+  M.kept = true   -- every body and surface holds this step's force (fx, fy, fz)
   M.diag = { q = 0.5 * rho * V * V, mach = Mach, lift = lift, drag = drag, v = V,
              stall = Sw > 0 and Ss / Sw or 0, air = airf, rho = rho }
   return Fx, Fy, Fz, Tx, Ty, Tz
