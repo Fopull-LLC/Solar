@@ -1,4 +1,4 @@
-// VISUAL-ONLY variant of prefabs/PartPlate.prefab.ron for the builder stand: no body, no scripts, no damage shader.
+// VISUAL-ONLY variant of prefabs/PartPlate.prefab.ron for the builder stand: no body, no scripts.
 // Written by tools/gen_part_meshes.py (write_vis_prefabs) — regenerate, don't edit.
 // 1 M DECK PLATE — round-two part.
 // Written by tools/gen_part_meshes.py (write_prefab) — edit the generator, not this file.
@@ -24,6 +24,10 @@
                 metallic_map: Some("textures/parts/metal_orm.png"),
                 metallic: 0.55,
                 ao_map: Some("textures/parts/metal_orm.png"),
+                shader: Some("shaders/hullPanels.flsl"),
+                shader_params: {
+                    "tint": (1, 1, 1, 1.0),
+                },
                 shading: Physical,
             ),
             "Tread": (
@@ -36,6 +40,10 @@
                 metallic_map: Some("textures/parts/tread_orm.png"),
                 metallic: 0.6,
                 ao_map: Some("textures/parts/tread_orm.png"),
+                shader: Some("shaders/hullPanels.flsl"),
+                shader_params: {
+                    "tint": (1, 1, 1, 1.0),
+                },
                 shading: Physical,
             ),
         },

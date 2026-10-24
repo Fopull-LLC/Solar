@@ -1,4 +1,4 @@
-// VISUAL-ONLY variant of prefabs/PartDishL.prefab.ron for the builder stand: no body, no scripts, no damage shader.
+// VISUAL-ONLY variant of prefabs/PartDishL.prefab.ron for the builder stand: no body, no scripts.
 // Written by tools/gen_part_meshes.py (write_vis_prefabs) — regenerate, don't edit.
 // DEEP SPACE DISH: the relay dish's mesh at 1.5× (builder.lua `dishL`). Fifteen
 // thousand km of antenna power: the one that links star systems.

@@ -1,4 +1,4 @@
-// VISUAL-ONLY variant of prefabs/PartSolar.prefab.ron for the builder stand: no body, no scripts, no damage shader.
+// VISUAL-ONLY variant of prefabs/PartSolar.prefab.ron for the builder stand: no body, no scripts.
 // Written by tools/gen_part_meshes.py (write_vis_prefabs) — regenerate, don't edit.
 // SOLAR PANEL — a radial blade (+X out off the flank, like a fin): a Yoke on the hull and a cell Wing hinged to it (SolarWingPivot). Flight folds the wing flat along the hull for launch and swings it open on Deploy (U).
 // Written by tools/gen_part_meshes.py (write_prefab) — edit the generator, not this file.
@@ -34,6 +34,10 @@
                 metallic_map: Some("textures/parts/metal_orm.png"),
                 metallic: 0.55,
                 ao_map: Some("textures/parts/metal_orm.png"),
+                shader: Some("shaders/hullPanels.flsl"),
+                shader_params: {
+                    "tint": (1, 1, 1, 1.0),
+                },
                 shading: Physical,
             ),
         },
@@ -74,6 +78,10 @@
                 metallic_map: Some("textures/parts/foil_orm.png"),
                 metallic: 0.7,
                 ao_map: Some("textures/parts/foil_orm.png"),
+                shader: Some("shaders/hullPanels.flsl"),
+                shader_params: {
+                    "tint": (1, 1, 1, 1.0),
+                },
                 shading: Physical,
             ),
             "Metal": (
@@ -86,6 +94,10 @@
                 metallic_map: Some("textures/parts/metal_orm.png"),
                 metallic: 0.55,
                 ao_map: Some("textures/parts/metal_orm.png"),
+                shader: Some("shaders/hullPanels.flsl"),
+                shader_params: {
+                    "tint": (1, 1, 1, 1.0),
+                },
                 shading: Physical,
             ),
             "Solar": (

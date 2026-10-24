@@ -2813,16 +2813,6 @@ def strip_scripts(src):
     return "".join(out)
 
 
-def strip_hull_shader(src):
-    """The builder stand's parts are pristine, and hullPanels draws a pristine
-    part exactly as its material does with no shader (see the shader's header).
-    Without it the stand's identical parts BATCH: a `.flsl` override is a
-    binding per node, so every part was its own draw (6,300 draws for a
-    3,000-beam lattice, perfbench g_idle_3000)."""
-    src = re.sub(r'\n[ \t]*shader: Some\("shaders/hullPanels\.flsl"\),', "", src)
-    return re.sub(r'\n[ \t]*shader_params: \{[^{}]*\},', "", src)
-
-
 def write_vis_prefabs():
     os.makedirs(VIS_DIR, exist_ok=True)
     n = 0
@@ -2830,10 +2820,10 @@ def write_vis_prefabs():
         if not (f.startswith("Part") and f.endswith(".prefab.ron")):
             continue
         src = open(os.path.join(PREFABS, f)).read()
-        vis = strip_hull_shader(strip_scripts(strip_block(src, "rigidbody: Some((")))
+        vis = strip_scripts(strip_block(src, "rigidbody: Some(("))
         assert "rigidbody: Some" not in vis, f
         head = ("// VISUAL-ONLY variant of prefabs/" + f + " for the builder stand: no body,"
-                " no scripts, no damage shader.\n// Written by tools/gen_part_meshes.py (write_vis_prefabs) — regenerate,"
+                " no scripts.\n// Written by tools/gen_part_meshes.py (write_vis_prefabs) — regenerate,"
                 " don't edit.\n")
         open(os.path.join(VIS_DIR, f), "w").write(head + vis)
         n += 1

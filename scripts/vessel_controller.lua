@@ -1553,8 +1553,14 @@ end
 -- straight off the part's remaining HP so the hull visibly deteriorates as you
 -- scrape and crash it, exactly what Ty couldn't see before.
 local diag_dmg_logged = false
+-- (every mesh-child name tools/gen_part_meshes.py writes under a bare collider
+-- root: a part whose mesh child is missing here gets setShaderParam on that
+-- root, which the engine answers with "has no Material … nothing for it to
+-- drive" and the part never shows its wear. A root with its own mesh, like
+-- the landing legs, is painted as a whole below.)
 MESH_KIDS = { Body = true, Mount = true, Tyre = true, Base = true, Head = true, Stage = true,
-              Hub = true, Fingers = true, Housing = true, Bit = true }
+              Hub = true, Fingers = true, Housing = true, Bit = true, Panel = true, Flap = true,
+              Leg = true, Blade = true, SolarYoke = true, SolarWing = true }
 local function set_part_damage(c, hp)
   if c and c.valid then
     local dmg = 1.0 - math.max(0.0, math.min(1.0, hp or 1.0))

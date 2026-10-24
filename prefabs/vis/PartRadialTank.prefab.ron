@@ -1,4 +1,4 @@
-// VISUAL-ONLY variant of prefabs/PartRadialTank.prefab.ron for the builder stand: no body, no scripts, no damage shader.
+// VISUAL-ONLY variant of prefabs/PartRadialTank.prefab.ron for the builder stand: no body, no scripts.
 // Written by tools/gen_part_meshes.py (write_vis_prefabs) — regenerate, don't edit.
 [
     // RADIAL TANK — a strap-on booster fuel tank with the FT-S tank's collider,
@@ -27,6 +27,10 @@
                 metallic_map: Some("textures/parts/foil_orm.png"),
                 metallic: 0.7,
                 ao_map: Some("textures/parts/foil_orm.png"),
+                shader: Some("shaders/hullPanels.flsl"),
+                shader_params: {
+                    "tint": (1, 1, 1, 1.0),
+                },
                 shading: Physical,
             ),
             "Metal": (
@@ -39,6 +43,10 @@
                 metallic_map: Some("textures/parts/metal_orm.png"),
                 metallic: 0.55,
                 ao_map: Some("textures/parts/metal_orm.png"),
+                shader: Some("shaders/hullPanels.flsl"),
+                shader_params: {
+                    "tint": (1, 1, 1, 1.0),
+                },
                 shading: Physical,
             ),
         },

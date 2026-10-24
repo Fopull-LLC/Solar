@@ -96,7 +96,7 @@ local function topk(map, k, div)
 end
 local function fmtk(list) local o = {}; for _, e in ipairs(list) do o[#o + 1] = string.format("%s %.2f", e[1], e[2]) end; return table.concat(o, ", ") end
 
-local SUMMARY_COUNTS = { "draws", "nodes", "instances", "chunks", "props", "decals", "decalTris", "particles", "lights", "rays" }
+local SUMMARY_COUNTS = { "draws", "unbatched", "nodes", "instances", "chunks", "props", "decals", "decalTris", "particles", "lights", "rays", "sweeps" }
 
 local function measure()
   local now = W()
@@ -149,6 +149,12 @@ local function measure()
         if #r.worst > 6 then r.worst[7] = nil end
       end
       for _, h in ipairs(hs) do
+        -- rc12+: the files a slow frame was preparing (first-use work in assets)
+        if h.assets and #h.assets > 0 then
+          local a = {}
+          for _, x in ipairs(h.assets) do a[#a + 1] = string.format("%s %s %.0f", x.path or "?", x.part or "?", x.ms or 0) end
+          P("ASSETHITCH [%s] %.0f ms at +%.1f s (assets %.0f): %s", name, h.ms or 0, time - r.t0, (h.buckets or {}).assets or 0, table.concat(a, "; "))
+        end
         r.hit.n = r.hit.n + 1
         r.hit.top[h.top or "?"] = (r.hit.top[h.top or "?"] or 0) + 1
         r.hb = r.hb or {}; r.hp = r.hp or {}; r.hms = (r.hms or 0) + (h.ms or 0)
@@ -812,15 +818,43 @@ local function run_rover()
     yield()
     if not vn.valid then P("ROVER gone"); break end
     local t = time - t0
-    -- the player's keys: W, with a turn each way
+    -- the player's keys: W, steering away from the base. The rover rolls out
+    -- on the runway pointing back past the colony; a fixed left turn at 8 s
+    -- (the old script) sent it out over open ground on some runs and into the
+    -- base on others (rc11: 127 m from the base at most, a 536 m run on rc10),
+    -- so the drive depended on where the clock happened to leave it.
     if not HELD.w then key_down("w") end
-    local want = (t > 8 and t < 10) and "a" or ((t > 25 and t < 27) and "d" or nil)
+    local want = nil
+    do
+      local i1 = assembly.info(vn)
+      local Rh = unit(sub(i1.com, home()))
+      local away = sub(Rh, scl(u, dot(Rh, u)))
+      local v = i1.vel
+      local vh = sub(v, scl(Rh, dot(v, Rh)))
+      if len(away.x, away.y, away.z) > 1e-6 and len(vh.x, vh.y, vh.z) > 2 then
+        away = unit(away)
+        local sn = dot(cross(unit(vh), away), Rh)   -- + the way out is to the left
+        local cs = dot(unit(vh), away)
+        if cs < 0.97 then want = sn >= 0 and "a" or "d" end
+      end
+    end
     for _, k in ipairs({ "a", "d" }) do
       if k == want and not HELD[k] then key_down(k) elseif k ~= want and HELD[k] then key_up(k) end
     end
     if t > 3 and not L_ROVER_LOG then L_ROVER_LOG = true; local i0 = assembly.info(vn); P("ROVER t=3: speed %.1f why %s anchored %s piloting %s ctl %s driving %s drive %.2f onWheels %s wheels %d asleep %s", len(i0.vel.x, i0.vel.y, i0.vel.z), tostring(vc.R2.why), tostring(i0.anchored), tostring(vc.piloting), tostring(vc.R2.ctl), tostring(vc.R2.driving), vc.R2.drive or -1, tostring(vc.R2.onWheels), #(vc.R2.wheels or {}), tostring(i0.asleep)); P("ROVER elec: %s", vc.elecDebug and vc.elecDebug() or "?") end
     local d = from_base()
     maxd = math.max(maxd, d)
+    -- the track, every 3 s: a drive that never gets far says where it went
+    if math.floor(t / 3) ~= math.floor((t - dt) / 3) then
+      local i1 = assembly.info(vn)
+      local v = i1.vel
+      local Rh = unit(sub(i1.com, home()))
+      local away = sub(Rh, scl(u, dot(Rh, u)))
+      local la = len(away.x, away.y, away.z)
+      local vr = la > 1e-6 and dot(v, scl(away, 1 / la)) or 0  -- + away from the base, - toward it
+      P("ROVER track t=%.0f: %.0f m from the base, speed %.1f (%.1f away from it), onWheels %s, why %s",
+        t, d, len(v.x, v.y, v.z), vr, tostring(vc.R2.onWheels), tostring(vc.R2.why))
+    end
     if d > params.out and not tout then tout = t; P("ROVER %.0f m out after %.1f s", d, t) end
   end
   local i = assembly.info(vn)
@@ -965,6 +999,44 @@ local function run_plane()
     local r = clamp(2.5 * (bank_t - S.bank) - 0.8 * S.pr, -1, 1)
     local slip = S.hud and S.hud.slip or 0
     vc.AERO.cmd = { p = p, y = clamp(-0.02 * slip + (yaw_extra or 0), -1, 1), r = r }
+  end
+  -- How the jet stands before brakes off: ground ~1.45 m under its centre of
+  -- mass is normal; ~2.5 m means the runway under it is not (yet) the grade.
+  do
+    local S0 = st()
+    local q = nil
+    if S0 then
+      local c = S0.i.com
+      q = terrain.query(c.x - S0.U.x * 1.45, c.y - S0.U.y * 1.45, c.z - S0.U.z * 1.45)
+    end
+    P("PLANE before release: agl %.2f, field at 1.45 m below the CoM %.2f, grading %s, edits pending %d",
+      S0 and S0.agl or -1, q or -99, tostring(bf and bf.grading and bf.grading()), terrain.pending and terrain.pending() or -1)
+    -- (params.rwyhold > 0) watch the runway's graded surface while the jet
+    -- stays clamped: the field at the grade radius along the centreline
+    if (params.rwyhold or 0) > 0 and bf and bf.frameOf and bf.dirAt then
+      local R, hd = save.get("base.r"), save.get("base.heading")
+      local c = { x = save.get("base.x"), y = save.get("base.y"), z = save.get("base.z") }
+      local Fr = bf.frameOf(c, hd, R)
+      local function profile(tag)
+        local b = home()
+        local out, worst = {}, 0
+        for uu = -131, 131, 20 do
+          local d = bf.dirAt(Fr, uu, -62)
+          local qq = terrain.query(b.x + d.x * R, b.y + d.y * R, b.z + d.z * R)
+          out[#out + 1] = qq and string.format("%.2f", qq) or "nil"
+          if qq then worst = math.max(worst, math.abs(qq)) end
+        end
+        local S1 = st()
+        local c1 = S1 and S1.i.com
+        local q1 = c1 and terrain.query(c1.x - S1.U.x * 1.45, c1.y - S1.U.y * 1.45, c1.z - S1.U.z * 1.45)
+        P("PLANE RWY[%s] agl %.2f field-at-wheels %.2f, centreline worst %.2f | %s | busy %s",
+          tag, S1 and S1.agl or -1, q1 or -99, worst, table.concat(out, " "), tostring(terrain.busy and terrain.busy()))
+      end
+      for k = 0, params.rwyhold do
+        profile("+" .. k .. "s")
+        if k < params.rwyhold then wait(1) end
+      end
+    end
   end
   vc.releaseClamps()
   vc.setSAS("stability")

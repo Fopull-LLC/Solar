@@ -139,12 +139,111 @@ function start(node)
     local _, el = ui_of(nm)
     if el then el.visible = true end
   end
-  -- Regenerate THIS slot's galaxy. Deterministic per seed + the parameters the
-  -- player picked when they created the save (nil = the generator's default).
-  -- A save that has checkpointed before (g_played) skips the spawn planet's
-  -- eager regeneration: its terrain streams back from the slot's saved field,
-  -- so digs survive; a brand-new save generates it first — and alone.
-  first_load = save.get("g_played") == nil
+  -- A save whose spaceport is already sited has made its spawn world and
+  -- graded it, even if it never reached a checkpoint (`g_played`): a scene
+  -- change flushes the slot's terrain, so the ground streams back from there.
+  -- Generating it again from the seed threw the grade away while the base
+  -- (its grade recorded) stood on it: the runway came back 1-1.7 m out of true
+  -- (perfbench: launch from the standalone builder 20 s into a new save).
+  first_load = save.get("g_played") == nil and save.get("base.body") == nil
+  -- The world is made once the heavy shaders are built (or WARM_MAX passes):
+  -- the sea spawns with the galaxy, and a shader that is still building when
+  -- it first draws is built again on that frame.
+  if warm_assets() then world_pending = true; return end
+  begin_world()
+end
+
+-- WARMED BEHIND THE CURTAIN (assets.warm, engine 0.117.0-rc12). The first frame
+-- that draws a material shader builds its GPU pipeline right there: on a cold
+-- driver cache 0.5-1.3 s each for the sea's (ocean, sea_ice) and the parts'
+-- (hullPanels), the longest frames of a load and of the first rollout.
+-- Pictures decode and upload on first use too, a few to tens of milliseconds
+-- each (perf.hitches names them all).
+--   * Pictures first, WARM_BATCH at a time, then the shaders; the world waits
+--     for both (at most WARM_MAX seconds): the sea spawns with the galaxy,
+--     and a shader still building when it first draws is built again on that
+--     frame. Pictures warmed all at once (a decode thread each), or alongside
+--     the shader builds, held the main thread for 150-370 ms on an empty
+--     scene and up to a second in a load (rc12); one after the other, none.
+-- (UI shaders — navball, tape, map — are not material shaders; assets.warm
+-- refuses them on rc12.)
+WARM_SHADERS = { "shaders/ocean.flsl", "shaders/sea_ice.flsl", "shaders/river.flsl", "shaders/hullPanels.flsl" }
+WARM_TEXTURE_DIRS = { "textures/parts", "textures/base", "textures/vab", "textures/flora", "textures/water",
+                      "textures/vfx", "textures/VFXTEX", "textures/ui" }
+WARM_MAX = 8.0
+WARM_BATCH = 8
+world_pending = false    -- the world waits for the shaders
+shaders_ready = false
+local warm_t, warm_t0, pics_started = nil, nil, false
+local function warm_ms() return ((app and app.wallClock and app.wallClock() or os.clock()) - (warm_t0 or 0)) * 1000 end
+local function failed_note(failed)
+  return (failed and #failed > 0) and (" (not prepared: " .. table.concat(failed, ", ") .. ")") or ""
+end
+
+-- Every picture under WARM_TEXTURE_DIRS, by the project-relative name the game
+-- draws with (rc12's assets.getContents answers full paths on disk).
+function warmPictureList()
+  local pics = {}
+  if not assets.getContents then return pics end
+  for _, dir in ipairs(WARM_TEXTURE_DIRS) do
+    local ok, list = pcall(assets.getContents, dir)
+    for _, p in ipairs(ok and type(list) == "table" and list or {}) do
+      local i = type(p) == "string" and p:find(dir .. "/", 1, true)
+      if i and p:lower():match("%.png$") then pics[#pics + 1] = p:sub(i) end
+    end
+  end
+  return pics
+end
+
+local function warm_shaders()
+  assets.warm(WARM_SHADERS, function(failed)
+    print(string.format("game_manager: shaders warmed by %.0f ms%s", warm_ms(), failed_note(failed)))
+    shaders_ready = true
+  end)
+end
+
+-- The pictures, a batch at a time; then the shaders.
+local function warm_pictures()
+  if pics_started then return end
+  pics_started = true
+  local pics = warmPictureList()
+  local bad = {}
+  local function batch(s)
+    if s > #pics then
+      if #pics > 0 then
+        print(string.format("game_manager: %d pictures warmed by %.0f ms%s", #pics, warm_ms(), failed_note(bad)))
+      end
+      warm_shaders()
+      return
+    end
+    local sub = {}
+    for k = s, math.min(#pics, s + WARM_BATCH - 1) do sub[#sub + 1] = pics[k] end
+    assets.warm(sub, function(failed)
+      for _, f in ipairs(failed or {}) do bad[#bad + 1] = f end
+      batch(s + WARM_BATCH)
+    end)
+  end
+  batch(1)
+end
+
+-- Starts the warm; true while the world should wait for it.
+function warm_assets()
+  shaders_ready, pics_started = true, false
+  if not (assets and assets.warm) then return false end
+  warm_t0 = app and app.wallClock and app.wallClock() or os.clock()
+  shaders_ready, warm_t = false, time
+  warm_pictures()
+  return not shaders_ready
+end
+
+-- Regenerate THIS slot's galaxy. Deterministic per seed + the parameters the
+-- player picked when they created the save (nil = the generator's default).
+-- A save that has checkpointed before (g_played) or sited its base skips the spawn planet's
+-- eager regeneration: its terrain streams back from the slot's saved field,
+-- so digs survive; a brand-new save generates it first — and alone.
+function begin_world()
+  world_pending = false
+  load_t = time
   gen.regenerate(seed, {
     scale = worldScale(),
     pregen = first_load,
@@ -580,6 +679,18 @@ end
 
 function update(node, dt)
   if not slot then return end
+
+  if world_pending then
+    -- the shaders are building on workers; the world waits for them
+    if not shaders_ready and time - (warm_t or time) < WARM_MAX then
+      paint_loading(time - (warm_t or time), "Preparing textures and shaders")
+      return
+    end
+    if not shaders_ready then
+      print(string.format("game_manager: assets still warming after %.0f s — making the world anyway", WARM_MAX))
+    end
+    begin_world()
+  end
 
   if loading then
     -- Hold the crew safely above the spawn planet (its LIVE position — it is

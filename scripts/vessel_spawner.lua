@@ -644,15 +644,10 @@ local function clear_flight()
   local ids = {}
   for id, r in pairs(roots) do
     ids[#ids + 1] = id
-    -- The parts go one by one as well as with their root: the root that
-    -- assembly.split makes for a shed stage is a bare node that destroy()
-    -- does not take (engine 0.117.0-rc8: the destroy queue only removes
-    -- nodes with a Matter component, and a split root has none), so a spent
-    -- stage outlived the revert. Its parts are ordinary nodes and do go.
-    if r.children then
-      for _, c in ipairs(r:children()) do destroy(c) end
-    end
-    destroy(r)
+    -- The root takes its parts with it, a shed stage's bare split root too
+    -- (since engine 0.117.0-rc11; rc8-rc10 left that root and its parts
+    -- behind, so they went one by one here).
+    if r.valid ~= false then destroy(r) end
   end
   if flight.clamps and flight.clamps.valid ~= false then destroy(flight.clamps) end
   local fo = ref("flight_ops")

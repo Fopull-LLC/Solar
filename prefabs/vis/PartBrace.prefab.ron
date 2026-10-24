@@ -1,4 +1,4 @@
-// VISUAL-ONLY variant of prefabs/PartBrace.prefab.ron for the builder stand: no body, no scripts, no damage shader.
+// VISUAL-ONLY variant of prefabs/PartBrace.prefab.ron for the builder stand: no body, no scripts.
 // Written by tools/gen_part_meshes.py (write_vis_prefabs) — regenerate, don't edit.
 // BRACE — a two-point strut (size.len); meshed by scripts/builder_proc.lua.
 // Written by tools/gen_part_meshes.py (write_prefab) — edit the generator, not this file.
