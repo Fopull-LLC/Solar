@@ -50,7 +50,9 @@ SE.lateUpdate(seat, 1 / 60)
 check(SE.riding == true, "crewed from this seat: the script seats the rider")
 check(astro.visible == true, "the rider is shown, whatever hid them on the way in")
 check(model.visible == true, "and the model child (visibility isn't inherited)")
-check(astro.x == 100 and astro.y == 50 and astro.z == -20, "the rider sits where the seat is drawn")
+local sf = SE.params.sit_forward
+check(math.abs(astro.x - (100 + sf)) < 1e-9 and astro.y == 50 and astro.z == -20,
+  "the rider sits where the seat is drawn, forward along its +X by the backpack")
 check(astro.up_set and astro.up_set.y == 1 and astro.fwd_set and astro.fwd_set.x == 1,
   "upright along the seat's up, facing its +X")
 check(reaches["Foot.Left"] and reaches["Hand.Right"], "feet and hands go to the footrest and the stick")
@@ -60,7 +62,7 @@ astro.visible, model.visible = false, false
 seat.worldPos = vec3(101, 50, -20)
 SE.lateUpdate(seat, 1 / 60)
 check(astro.visible == true and model.visible == true, "re-shown every frame while seated")
-check(astro.x == 101, "and follows the seat every frame")
+check(math.abs(astro.x - (101 + sf)) < 1e-9, "and follows the seat every frame")
 
 -- crewed from another command part (a pod elsewhere on the craft)
 vessel.podLX = -0.4

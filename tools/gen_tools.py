@@ -45,7 +45,15 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gen_part_meshes import (PREFABS, ROOT, TAU, Model, box, disk, flange, frame_to,  # noqa: E402
                              lathe, mat_ron, rot_x, rot_z, tube, write_glb)
 
+from gen_suit import CLOTH, GLOVE, PALM, SUIT_MATS  # noqa: E402
+
 MODELS = os.path.join(ROOT, "models", "tools")
+
+
+def suit_cloth(col):
+    """The suit's cloth texture set in one of its colours (the suit itself
+    carries these as vertex colours; a view model's material does it)."""
+    return SUIT_MATS["SuitFabric"]().replace("color: (1.0, 1.0, 1.0)", f"color: {tuple(col)}", 1)
 
 
 def glow(r, g, b, s=2.6):
@@ -62,9 +70,12 @@ TOOL_MATS = {
     "Chrome":    lambda: mat_ron("metal", color=(1.0, 1.0, 1.0), rough=0.4, metal=0.85, hull=False),
     "Dark":      lambda: mat_ron("metal", color=(0.16, 0.16, 0.17), rough=1.3, metal=0.3, hull=False),
     "Rubber":    lambda: mat_ron("rubber", metal=0.0, hull=False),
-    # The suit, for the first-person sleeves and gloves.
-    "Glove":     lambda: mat_ron("rubber", color=(0.62, 0.62, 0.64), metal=0.0, hull=False),
-    "Suit":      lambda: mat_ron("paint", color=(0.93, 0.93, 0.91), rough=1.35, metal=0.0, hull=False),
+    # The EVA suit (tools/gen_suit.py), for the first-person sleeves and
+    # gloves: its cloth in its own colours, and its bearing metal.
+    "Glove":     lambda: suit_cloth(GLOVE),
+    "Palm":      lambda: suit_cloth(PALM),
+    "Suit":      lambda: suit_cloth(CLOTH),
+    "SuitMetal": lambda: SUIT_MATS["SuitMetal"](),
     "Hazard":    lambda: mat_ron("paint", color=(0.95, 0.72, 0.12), hull=False),
     "Lens":      lambda: ('(\n                color: (0.20, 0.30, 0.34),\n                roughness: 0.05,\n'
                           '                metallic: 0.2,\n                alpha: 0.85,\n'
@@ -206,50 +217,123 @@ def terrain_laser():
 #
 # The view-model camera films these and nothing else, so the hands, cuffs and
 # sleeves are part of the model: no arm rig to pose, nothing to clip into a
-# wall. The sleeves run back and down past the bottom of the view from the
-# wrists, the way a forearm leaves the frame in any shooter.
+# wall. They wear the EVA suit (tools/gen_suit.py): light-grey gloves with dark
+# palms, a metal wrist bearing, the suit's cloth sleeve. The view looks down on
+# the tool from up and to its left, so each hand is placed where that view can
+# see it: the right hand's knuckles and thumb round the pistol grip, the left
+# hand cupping the LEFT side of the fore-end with its fingers over the top.
+# The sleeves run back and down past the bottom of the view.
+#
+# The engine recentres a model on its box, and tool_belt's RIG_FP holds the
+# grip and muzzle relative to that centre — so each view model's box centre
+# is pinned to FP_CENTRE (two zero-area triangles), and RIG_FP never changes
+# when the hands do.
 
-def fp_arm(m, fist_c, fist_size, fist_M, wrist, elbow, thumb=None):
-    """A gloved fist round a grip, a gauntlet cuff, a hazard band and the suit
-    sleeve back to `elbow` (out of view)."""
-    box(m, "Glove", fist_c, fist_size, M=fist_M, bevel=0.014)
+FP_CENTRE = {
+    "gravgun_fp": (-0.09172205158580735, -0.14120499599902658, 0.09168546816154502),
+    "laser_fp": (-0.09129929678446527, -0.14607702949859874, 0.030868770701170667),
+}
+
+
+def pin_centre(m, want):
+    mn, mx = m.bounds()
+    lo, hi = mn.copy(), mx.copy()
+    for a in range(3):
+        if (lo[a] + hi[a]) / 2 < want[a]:
+            hi[a] = 2 * want[a] - lo[a]
+        else:
+            lo[a] = 2 * want[a] - hi[a]
+    # zero-area: never drawn, but the box is read from the vertices
+    m.add("Dark", [lo, lo, lo, hi, hi, hi], [(0, 1, 0)] * 6, [(0, 0)] * 6, [(0, 1, 2), (3, 4, 5)])
+    return m
+
+
+def capsule(m, p0, p1, thick, wide, palm_n, segs=12, back="Glove", front="Palm"):
+    """A flattened capsule from p0 to p1: `thick` the half-depth along palm_n
+    (the side facing palm_n is the dark palm), `wide` the half-width across."""
+    p0, p1 = np.asarray(p0, float), np.asarray(p1, float)
+    d = p1 - p0
+    L = float(np.linalg.norm(d))
+    ax = d / L
+    nx = np.asarray(palm_n, float)
+    nx = nx - ax * (nx @ ax)
+    nx /= np.linalg.norm(nx)
+    nz = np.cross(nx, ax)
+    # radius 1 (scaled to thick / wide), the ends domed
+    dome = min(thick, wide)
+    pr = [(0.0, -dome), (0.5, -dome * 0.87), (0.87, -dome * 0.5), (1.0, 0.0),
+          (1.0, L), (0.87, L + dome * 0.5), (0.5, L + dome * 0.87), (0.0, L + dome)]
+    for mat, a0, a1 in ((front, -math.pi / 2, math.pi / 2), (back, math.pi / 2, 3 * math.pi / 2)):
+        sub = Model()
+        lathe(sub, mat, pr, segs=segs // 2, smooth=True, a0=a0, a1=a1, uv_m=4.0)
+        # lathe's (r, y): r scales by thick / wide in x / z; y is the true length
+        out = Model()
+        for k, (Ps, Ns, UVs, Is, _) in sub.parts.items():
+            P = np.vstack(Ps); N = np.vstack(Ns)
+            P2 = P[:, [0]] * (nx * thick) + P[:, [1]] * ax + P[:, [2]] * (nz * wide)
+            N2 = N[:, [0]] * (nx / thick) + N[:, [1]] * ax + N[:, [2]] * (nz / wide)
+            out.add(k, P2, N2, np.vstack(UVs), np.vstack(Is))
+        m.merge(out, None, p0)
+
+
+def fp_glove(m, wrist, elbow, palm, fingers, palm_n, thumb, wide=0.05, thick=0.03):
+    """A gloved hand: the palm (wrist end to knuckles) and the fingers (bent
+    on from the knuckles) as flattened capsules with dark palms toward
+    `palm_n`, the thumb, a flared gauntlet, the wrist bearing and the suit
+    sleeve back to `elbow`."""
+    capsule(m, palm[0], palm[1], thick, wide, palm_n)
+    capsule(m, fingers[0], fingers[1], thick * 0.78, wide * 0.94, fingers[2] if len(fingers) > 2 else palm_n)
+    capsule(m, thumb[0], thumb[1], 0.016, 0.018, thumb[2] if len(thumb) > 2 else palm_n, segs=8)
     wrist, elbow = np.asarray(wrist, float), np.asarray(elbow, float)
     d = elbow - wrist
-    L = float(np.linalg.norm(d))
-    u = d / L
-    tube(m, "Glove", np.asarray(fist_c, float) + (wrist - np.asarray(fist_c, float)) * 0.4, wrist + u * 0.06,
-         0.037, segs=14, r1=0.041)
-    tube(m, "Hazard", wrist + u * 0.06, wrist + u * 0.085, 0.046, segs=16)
-    tube(m, "Suit", wrist + u * 0.085, elbow, 0.05, segs=16, r1=0.066)
-    if thumb is not None:
-        tube(m, "Glove", thumb[0], thumb[1], 0.012, segs=8)
+    u = d / float(np.linalg.norm(d))
+    # the gauntlet: from the heel of the hand, flaring to the bearing
+    tube(m, "Glove", np.asarray(palm[0], float), wrist + u * 0.035, 0.034, segs=14, r1=0.045)
+    # the wrist disconnect: a bright bearing and its darker lock collar
+    tube(m, "SuitMetal", wrist + u * 0.035, wrist + u * 0.056, 0.049, segs=18)
+    tube(m, "Dark", wrist + u * 0.056, wrist + u * 0.064, 0.045, segs=18)
+    tube(m, "Suit", wrist + u * 0.064, elbow, 0.045, segs=16, r1=0.062)
 
 
 def fp_gravity_gun():
     m, grip, muzzle, fore = gravity_gun()
-    rake = rot_x(-0.32)
-    # Right hand round the raked pistol grip, the thumb over its top.
-    w = np.array([0.022, -0.085, 0.12])
-    fp_arm(m, (0.006, -0.052, 0.048), (0.074, 0.105, 0.088), rake, w, w + np.array([0.13, -0.30, 0.42]),
-           thumb=((-0.03, -0.012, 0.06), (-0.03, -0.005, 0.02)))
-    # Left hand round the fore-grip under the bell.
-    w = np.array([-0.045, -0.095, -0.085])
-    fp_arm(m, (-0.004, -0.05, -0.126), (0.07, 0.088, 0.078), None, w, w + np.array([-0.30, -0.28, 0.33]),
-           thumb=((0.028, -0.02, -0.11), (0.03, -0.012, -0.14)))
+    # Right hand round the raked pistol grip: the palm down its back, the
+    # fingers across its front, the thumb up the receiver's left flank.
+    w = np.array([0.012, -0.10, 0.125])
+    fp_glove(m, w, w + np.array([0.13, -0.30, 0.42]),
+             palm=((0.012, -0.095, 0.10), (0.008, -0.02, 0.07)),
+             fingers=((-0.004, -0.03, 0.03), (0.0, -0.09, 0.012), (0.0, 0.0, 1.0)),
+             palm_n=(-0.2, 0.0, -1.0),
+             thumb=((-0.045, -0.035, 0.09), (-0.074, 0.008, 0.03), (1.0, 0.0, 0.0)), wide=0.042, thick=0.026)
+    # Left hand on the emitter bell's left flank, palm in, the fingers
+    # curled over its top.
+    Y = 0.045
+    w = np.array([-0.135, Y - 0.10, -0.075])
+    fp_glove(m, w, w + np.array([-0.24, -0.36, 0.34]),
+             palm=((-0.118, Y - 0.07, -0.115), (-0.098, Y + 0.025, -0.135)),
+             fingers=((-0.082, Y + 0.058, -0.138), (-0.018, Y + 0.084, -0.142), (0.45, -1.0, 0.0)),
+             palm_n=(1.0, 0.0, 0.0),
+             thumb=((-0.112, Y - 0.06, -0.14), (-0.07, Y - 0.075, -0.185), (0.3, 1.0, 0.0)), wide=0.055, thick=0.034)
     return m, grip, muzzle, fore
 
 
 def fp_terrain_laser():
     m, grip, muzzle, fore = terrain_laser()
     # Right hand on the pistol grip.
-    w = np.array([0.022, -0.08, 0.15])
-    fp_arm(m, (0.006, -0.048, 0.078), (0.074, 0.10, 0.088), rot_x(-0.3), w, w + np.array([0.13, -0.30, 0.40]),
-           thumb=((-0.03, -0.006, 0.09), (-0.03, 0.0, 0.05)))
-    # Left palm under the emitter housing, fingers up its right side.
-    w = np.array([-0.035, -0.07, -0.14])
-    fp_arm(m, (-0.004, -0.032, -0.215), (0.085, 0.036, 0.10), None, w, w + np.array([-0.31, -0.26, 0.33]),
-           thumb=((-0.028, -0.01, -0.19), (-0.028, -0.005, -0.235)))
-    box(m, "Glove", (0.03, -0.006, -0.215), (0.018, 0.05, 0.09), bevel=0.006)
+    w = np.array([0.012, -0.095, 0.155])
+    fp_glove(m, w, w + np.array([0.13, -0.30, 0.40]),
+             palm=((0.012, -0.09, 0.13), (0.008, -0.015, 0.10)),
+             fingers=((-0.004, -0.025, 0.06), (0.0, -0.085, 0.042), (0.0, 0.0, 1.0)),
+             palm_n=(-0.2, 0.0, -1.0),
+             thumb=((-0.04, -0.03, 0.12), (-0.066, 0.008, 0.06), (1.0, 0.0, 0.0)), wide=0.042, thick=0.026)
+    # Left hand on the barrel shroud's left side, fingers over its fins.
+    Y = 0.05
+    w = np.array([-0.12, Y - 0.10, -0.165])
+    fp_glove(m, w, w + np.array([-0.25, -0.34, 0.33]),
+             palm=((-0.10, Y - 0.07, -0.205), (-0.078, Y + 0.02, -0.225)),
+             fingers=((-0.066, Y + 0.05, -0.228), (-0.008, Y + 0.068, -0.232), (0.45, -1.0, 0.0)),
+             palm_n=(1.0, 0.0, 0.0),
+             thumb=((-0.09, Y - 0.06, -0.225), (-0.05, Y - 0.07, -0.27), (0.3, 1.0, 0.0)), wide=0.055, thick=0.034)
     return m, grip, muzzle, fore
 
 
@@ -420,6 +504,8 @@ def main():
          "TERRAIN LASER, first person — gloved hands on it; the view-model camera draws it (scripts/tool_belt.lua)."),
     ):
         m, grip, muzzle, fore = fn()
+        if name in FP_CENTRE:
+            pin_centre(m, FP_CENTRE[name])
         m, c = centred(m)
         mn, mx = m.bounds()
         write_glb(m, os.path.join(MODELS, glb))

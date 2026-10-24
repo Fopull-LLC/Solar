@@ -213,7 +213,7 @@ HOLD = {
 -- it (see THE HOLD).
 -- FIRST PERSON: where the grip sits in the camera's frame (+x right, +y up,
 -- -z ahead), at true size, and the view-model camera's field of view.
-local VIEW_AT = { 0.22, -0.31, -0.62 }
+local VIEW_AT = { 0.21, -0.265, -0.60 }  -- raised so the suit's gloves show gripping the tool
 local VIEW_SCALE = 1.0
 local VM_FOV = 0.95
 -- The render layer the view models live on: "viewmodel" (project.ron), else

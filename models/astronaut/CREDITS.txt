@@ -1,10 +1,16 @@
-astronaut_male.glb / astronaut_female.glb
-Converted from "human.blend" (Blender 2.49, 2009) via Blender 4.5/glTF.
+astronaut_male.glb / astronaut_female.glb — the crew's EVA suit
+Written by tools/gen_suit.py (regenerate there; don't edit the files).
 
+THE RIG (the skeletons, their rest poses and inverse bind matrices)
+Converted from "human.blend" (Blender 2.49, 2009) via Blender 4.5/glTF.
 Copyright 2009 Clint Bellanger — http://clintbellanger.net
 Dual-licensed: Creative Commons CC-BY-SA / GPL (as stated in the source file).
-Attribution required; the asset itself remains under CC-BY-SA.
+Attribution required.
 
-Notes: two 410-vert rigged humans (25-bone armatures), UV-mapped, no textures,
-no animation clips in the source file. Texture/vertex-paint in-engine; clips
-to be authored fresh.
+THE SUIT (the mesh, its skin weights, and textures/suit/*.png)
+New geometry built by tools/gen_suit.py on the rig above (no vertex of the
+original body is used), for Solar. Because each file carries the CC-BY-SA rig,
+the files as a whole remain CC-BY-SA (share-alike), with attribution to Clint
+Bellanger for the rig. The textures are procedural (tools/gen_suit.py); the
+agency emblem comes from tools/base_tex.py; lettering is set in the project's
+own fonts (fonts/README.md, SIL OFL).

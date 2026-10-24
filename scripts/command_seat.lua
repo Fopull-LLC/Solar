@@ -33,6 +33,10 @@ defaults = {
   hand_out = 0.12,     -- armrests / stick: forward of the centre
   hand_up = 0.0,
   hand_side = 0.26,
+  -- The EVA suit's backpack is 0.23 m deep: the rider sits forward on the
+  -- cushion by about that, so the PLSS rests against the backrest instead
+  -- of passing through it (tools/gen_suit.py).
+  sit_forward = 0.20,
 }
 
 local astro, model, anim
@@ -84,8 +88,10 @@ function lateUpdate(node, dt)
   local fwd = node:worldRight()          -- the seat faces its +X
   local f2 = node:worldForward()
   local right = vec3(-f2.x, -f2.y, -f2.z) -- +Z: the pilot's right
-  -- sit where the seat is drawn, upright in it, facing out over the footrest
-  a.x, a.y, a.z = P.x, P.y, P.z
+  -- sit where the seat is drawn (forward of its centre by the backpack),
+  -- upright in it, facing out over the footrest
+  local sf = params.sit_forward or 0
+  a.x, a.y, a.z = P.x + fwd.x * sf, P.y + fwd.y * sf, P.z + fwd.z * sf
   a:setUp(up, fwd)
   if model and model.valid then
     model.yaw, model.pitch, model.roll = params.model_yaw, 0, 0
