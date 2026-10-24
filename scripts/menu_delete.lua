@@ -46,7 +46,12 @@ function clicked(node)
   if time < armed_until then
     -- Confirmed: wipe both stores, relabel the slot button, hide ourselves.
     save.deleteSlot(slot_name())
-    terrain.deleteSaveDir("saves/" .. slot_name() .. "/terrain")
+    -- Straight after ☰ MENU the slot just played is still terrain's ACTIVE
+    -- saveDir (scene.load has finished its writes), and deleteSaveDir refuses
+    -- the active one: let go of it first.
+    local tdir = "saves/" .. slot_name() .. "/terrain"
+    if terrain.saveDir and terrain.saveDir() == tdir then terrain.saveDir("") end
+    terrain.deleteSaveDir(tdir)
     -- ...and the craft library's files (builder.lua keeps each craft in
     -- user://library/<slot>/, the save only its index).
     if assets and assets.getContents and assets.remove then

@@ -121,6 +121,32 @@ footprint = nil
 local want_spawn = false
 local wait_t = 0.0
 local last_note = 0.0
+-- On 0.117 rc19 and later (floptle/0515) the site's ground is found with
+-- terrain.raycast and made final with terrain.prepare before the fit:
+-- READY_R round the centre (every point the fit samples — the runway's far
+-- corners are ~150 m out), READY_WAIT s at most. rc16 had both calls, but
+-- there a cast could stop on stand-in ground and still say exact (fits
+-- 57-216 m over the real ground), and a prepare asked while the world
+-- streamed in was dropped (the 15 s wait bought nothing): an older engine
+-- keeps the query march below.
+READY_R, READY_WAIT = 150.0, 15.0
+local ready_t0, ready_late, ready_said = nil, false, false
+local function engine_at_least(maj, min, pat, rc)
+  local v = app and app.version and app.version()
+  if type(v) ~= "string" then return false end
+  local a, b, c, r = v:match("^(%d+)%.(%d+)%.(%d+)%-rc(%d+)")
+  if not a then a, b, c = v:match("^(%d+)%.(%d+)%.(%d+)") end
+  if not a then return false end
+  local have = { tonumber(a), tonumber(b), tonumber(c), r and tonumber(r) or math.huge }
+  local want = { maj, min, pat, rc or math.huge }
+  for i = 1, 4 do
+    if have[i] ~= want[i] then return have[i] > want[i] end
+  end
+  return true
+end
+FIELD_RAYCAST = terrain ~= nil and terrain.raycast ~= nil and terrain.ready ~= nil and terrain.prepare ~= nil
+  and engine_at_least(0, 117, 0, 19)
+local casts, casts_inexact = 0, 0
 local done = {}       -- prefab -> true once spawned
 local placed = 0
 local built = nil     -- { nodes = {...}, meshes = {...} } runtime meshes
@@ -409,7 +435,24 @@ end
 -- (no field there reads as air all the way down), and the spaceport was
 -- fitted 290 m under the surface — 23,000 cuts, a grade that never held
 -- ("22 m off": the rock over it) and the curtain up for minutes.
+--
+-- With FIELD_RAYCAST it is one terrain.raycast down the field instead: the
+-- first surface along the ray, nil for a miss ("air", or "unknown": ground
+-- the world has not made yet) — the same "not found" the march answers,
+-- without the march. A hit that crossed stand-in ground (exact false) is
+-- used as the march would use it, and counted: try_place has made the site
+-- final first, so the count says when that did not hold.
 local function ground_r(body, d, top)
+  if FIELD_RAYCAST then
+    work(4)
+    local b = space.body(body.name) or body      -- live: the job spans frames
+    local hit = terrain.raycast(V(b.x + d.x * top, b.y + d.y * top, b.z + d.z * top),
+      V(-d.x, -d.y, -d.z), top * 0.75)
+    if not hit then return nil end
+    casts = casts + 1
+    if not hit.exact then casts_inexact = casts_inexact + 1 end
+    return top - hit.distance
+  end
   local r = top
   for _ = 1, 600 do
     work(1)
@@ -1574,6 +1617,33 @@ function lay_paving(Fr, runway, planet_node)
   end
 end
 
+-- Before a FIT: the site's ground must answer for good. A streamed world's
+-- ground away from the crew is a coarse stand-in until something comes near,
+-- and a fit read off it is off. Ask the engine to make the site exactly (on
+-- its workers) and wait for it — READY_WAIT s at most, then fit on what
+-- there is, as before. (A base already laid out is not fitted again, and
+-- does not wait.)
+local function site_final(body, c, g0)
+  if not FIELD_RAYCAST then return true end
+  local b, cu = space.body(body.name) or body, unit(c)
+  local gx, gy, gz = b.x + cu.x * g0, b.y + cu.y * g0, b.z + cu.z * g0
+  if not terrain.ready(gx, gy, gz, READY_R) then
+    if not ready_t0 then
+      ready_t0 = wait_t
+      terrain.prepare(gx, gy, gz, READY_R)
+    end
+    if wait_t - ready_t0 < READY_WAIT then return false end
+    if not ready_late then
+      ready_late = true
+      log(string.format("base: the site's ground is still not final after %.0f s — fitting on it as it is", READY_WAIT))
+    end
+  elseif ready_t0 and not ready_said then
+    ready_said = true
+    log(string.format("base: the site's ground is final (%.1f s)", wait_t - ready_t0))
+  end
+  return true
+end
+
 local function try_place()
   -- Nothing is sited while the loading screen is up: the crew is parked over
   -- the north pole then, not standing where they live.
@@ -1600,7 +1670,8 @@ local function try_place()
   if len(c) < 1e-3 then return false end
   -- The terrain must answer before anything is fitted or graded.
   local top = probe_altitude(body)
-  if not ground_r(body, unit(c), top) then return false end
+  local g0 = ground_r(body, unit(c), top)
+  if not g0 then return false end
 
   local R, heading = save.get("base.r"), save.get("base.heading")
   local runway = save.get("base.runway") ~= false
@@ -1620,6 +1691,7 @@ local function try_place()
     log(string.format("base: layout %s → %d on %s — same site and heading, the new lots to grade (%d parked craft kept clear)",
       tostring(was), LAYOUT_VERSION, body.name, #keep_off))
   elseif fresh then
+    if not site_final(body, c, g0) then return false end
     local r2, h2, cost, rw_wet = fitLayout(body, c)
     if not r2 then return false end
     R, heading = r2, h2
@@ -1634,10 +1706,10 @@ local function try_place()
     save.set("base.runway", runway)
     save.set("base.layout", LAYOUT_VERSION)
     save.set("base.graded", false)
-    log(string.format("base: spaceport %s on %s — graded to r %.1f, runway %s (fit cost %.0f)",
+    log(string.format("base: spaceport %s on %s — graded to r %.1f, runway %s (fit cost %.0f)%s",
       first and "sited" or "laid out", body.name, R,
       runway and string.format("heading %.0f°", (90 - math.deg(heading)) % 360) or "left out: the ground there is under water",
-      cost or 0))
+      cost or 0, casts_inexact > 0 and string.format("; %d of %d ground reads crossed stand-in ground", casts_inexact, casts) or ""))
   end
   body = space.body(body.name) or body           -- the fit spanned frames: live again
   F = frameOf(c, heading, R)
@@ -1724,6 +1796,7 @@ function resite()
   done, placed, sited, footprint, F = {}, 0, false, nil, nil
   pave_pending, pave_job = nil, nil
   want_spawn, wait_t, last_note = true, 0.0, 0.0
+  ready_t0, ready_late, ready_said = nil, false, false
   log("base: spaceport cleared — re-siting where you stand")
 end
 

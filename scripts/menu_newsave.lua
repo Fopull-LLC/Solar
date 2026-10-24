@@ -98,9 +98,12 @@ function press(role)
   elseif role == "create" then
     -- A NEW galaxy must never inherit terrain files from whatever lived in
     -- this slot before (same terrain ids, different worlds — a stale file
-    -- would stream in as the "wrong planet"). The saveDir isn't active in the
-    -- menu scene, so the wipe is allowed here.
-    terrain.deleteSaveDir("saves/slot" .. slot_n .. "/terrain")
+    -- would stream in as the "wrong planet"). Straight after ☰ MENU the slot
+    -- just played is still terrain's ACTIVE saveDir, which deleteSaveDir
+    -- refuses: let go of it first (game_manager sets it again on entry).
+    local tdir = "saves/slot" .. slot_n .. "/terrain"
+    if terrain.saveDir and terrain.saveDir() == tdir then terrain.saveDir("") end
+    terrain.deleteSaveDir(tdir)
     save.slot("slot" .. slot_n)
     local v = {}
     for _, p in ipairs(PARAMS) do v[p.save] = value_of(p) end

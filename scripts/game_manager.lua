@@ -153,7 +153,9 @@ function start(node)
   first_load = save.get("g_played") == nil and save.get("base.body") == nil
   -- The world is made once the heavy shaders are built (or WARM_MAX passes):
   -- the sea spawns with the galaxy, and a shader that is still building when
-  -- it first draws is built again on that frame.
+  -- it first draws is built again on that frame. (Measured on rc19 too: made
+  -- alongside the warm, the sea's first frame built ocean.flsl on the main
+  -- thread before the warm got to it, a 0.87 s frame on a cold driver cache.)
   if warm_assets() then world_pending = true; return end
   begin_world()
 end
@@ -170,9 +172,15 @@ end
 --     frame. Pictures warmed all at once (a decode thread each), or alongside
 --     the shader builds, held the main thread for 150-370 ms on an empty
 --     scene and up to a second in a load (rc12); one after the other, none.
--- (UI shaders — navball, tape, map — are not material shaders; assets.warm
--- refuses them on rc12.)
+--   * The HUD's UI shaders (navball, tape) warm after those, on 0.117 rc19
+--     and later (floptle/0521; rc16 and before refuse them with a Console
+--     error). Nothing waits for them. Measured on rc19, the system scene
+--     builds their pipelines on its own first frame (cold driver cache:
+--     navball 29-32 ms, tape 18 ms of that frame), before this warm starts,
+--     so here they are only made sure of; a warm from the menu scene would
+--     take them off that frame.
 WARM_SHADERS = { "shaders/ocean.flsl", "shaders/sea_ice.flsl", "shaders/river.flsl", "shaders/hullPanels.flsl" }
+WARM_UI_SHADERS = { "shaders/navball.flsl", "shaders/tape.flsl" }
 WARM_TEXTURE_DIRS = { "textures/parts", "textures/base", "textures/vab", "textures/flora", "textures/water",
                       "textures/vfx", "textures/VFXTEX", "textures/ui" }
 WARM_MAX = 8.0
@@ -200,10 +208,36 @@ function warmPictureList()
   return pics
 end
 
+-- Whether the engine is `v` or later ("0.117.0-rc19"; a release is later than its rcs).
+local function engine_at_least(v)
+  local function parse(s)
+    local a, b, c, r = tostring(s or ""):match("^(%d+)%.(%d+)%.(%d+)%-rc(%d+)")
+    if not a then a, b, c = tostring(s or ""):match("^(%d+)%.(%d+)%.(%d+)") end
+    if not a then return nil end
+    return { tonumber(a), tonumber(b), tonumber(c), r and tonumber(r) or math.huge }
+  end
+  local have, want = parse(app and app.version and app.version()), parse(v)
+  if not (have and want) then return false end
+  for i = 1, 4 do if have[i] ~= want[i] then return have[i] > want[i] end end
+  return true
+end
+
+-- UI shaders warm from 0.117 rc19 (floptle/0521).
+WARM_UI = engine_at_least("0.117.0-rc19")
+
+local function warm_ui_shaders()
+  if not WARM_UI then return end
+  local ok, err = pcall(assets.warm, WARM_UI_SHADERS, function(failed)
+    print(string.format("game_manager: HUD shaders warmed by %.0f ms%s", warm_ms(), failed_note(failed)))
+  end)
+  if not ok then print("game_manager: HUD shaders not warmed — " .. tostring(err)) end
+end
+
 local function warm_shaders()
   assets.warm(WARM_SHADERS, function(failed)
     print(string.format("game_manager: shaders warmed by %.0f ms%s", warm_ms(), failed_note(failed)))
     shaders_ready = true
+    warm_ui_shaders()
   end)
 end
 
