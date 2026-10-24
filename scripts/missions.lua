@@ -210,8 +210,8 @@ PROGRAMME = {
             "colony can feed itself: something cut, something mined.",
     reward = 400, rep = 0,
     goals = {
-      { kind = "sample", class = "flora", label = "Cut a plant (Harvest Cutter, key 2)" },
-      { kind = "sample", class = "ore", label = "Mine some ore (Mining Laser, key 1)" },
+      { kind = "sample", class = "flora", label = "Cut a plant (Terrain Laser: hold E, or uproot it with the Gravity Gun)" },
+      { kind = "sample", class = "ore", label = "Mine some ore (Terrain Laser)" },
     },
   },
   {

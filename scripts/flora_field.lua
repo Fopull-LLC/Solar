@@ -31,7 +31,7 @@
 -- near you, a cell at a time, and a far patch is simply never built.
 --
 -- HARVEST: `nearestPlant` + `harvest` are the tool-facing API (tool_belt's
--- Harvest Cutter calls them unchanged). A cut plant is `scatter.remove`d by
+-- the gravity gun and the laser's cut call them unchanged). A cut plant is `scatter.remove`d by
 -- its instance id (exact since 0.117), from the twin too, and the source's
 -- `scatter.removed()` list is the save: a few ids per patch and species, put
 -- back with `scatter.remove` whenever the source is declared again, and
@@ -1625,7 +1625,110 @@ local function settle_point(id, h, p)
   return s
 end
 
+-- ── felling: a cut tree comes down ─────────────────────────────────────────
+-- The scatter instance is gone the moment it is harvested. A stand-in from the
+-- same prefab (a display copy: no body, no collider), at the same root, size
+-- and tint, topples away from the cutter about its root — slow, then fast, as
+-- a tree goes — lies a moment, and sinks away in a burst of leaves. At most a
+-- few at once; anything that is not a tree simply pops (the tool's vfx).
+local felled = {}
+local FELL_T, FELL_HOLD, FELL_SINK, FELL_MAX = 1.5, 0.8, 0.7, 3
+
+local function fell_pose(f, n, ang, sink)
+  local c, s = math.cos(ang), math.sin(ang)
+  local ux, uy, uz = f.ux * c + f.hx * s, f.uy * c + f.hy * s, f.uz * c + f.hz * s
+  local fx, fy, fz = f.hx * c - f.ux * s, f.hy * c - f.uy * s, f.hz * c - f.uz * s
+  n.x, n.y, n.z = f.rx - f.ux * sink * 0.6, f.ry - f.uy * sink * 0.6, f.rz - f.uz * sink * 0.6
+  n:setUp(vec3(ux, uy, uz), vec3(fx, fy, fz))
+  local k = f.scale * (1 - 0.85 * sink)
+  n.scale_x, n.scale_y, n.scale_z = k, k, k
+end
+
+-- `hit` is a nearestPlant answer (before or after harvest); (dx,dy,dz) the
+-- way the cut went through it — the tree falls that way. Returns true when a
+-- tree is coming down.
+function fell(hit, dx, dy, dz)
+  local rec = hit and hit.rec
+  if not (rec and rec.sp and rec.sp.form == "tree") or rec.rare then return false end
+  if #felled >= FELL_MAX or not spawn then return false end
+  local planet = cur_body and find(cur_body)
+  local body = cur_body and space.body(cur_body)
+  local fg = ref("flora_gen")
+  if not (planet and body and fg and fg.assetFor) then return false end
+  local ux, uy, uz = hit.ux or 0, hit.uy or 1, hit.uz or 0
+  local d = dx * ux + dy * uy + dz * uz
+  local hx, hy, hz = dx - ux * d, dy - uy * d, dz - uz * d
+  local hl = len(hx, hy, hz)
+  if hl < 1e-3 then return false end
+  local f = { rx = hit.x - body.x, ry = hit.y - body.y, rz = hit.z - body.z, ux = ux, uy = uy, uz = uz,
+              hx = hx / hl, hy = hy / hl, hz = hz / hl, t0 = time, scale = rec.scale or 1,
+              height = hit.height or 4, sp = rec.sp, parts = {}, body = cur_body }
+  felled[#felled + 1] = f
+  local list = { fg.assetFor(rec.sp, 0) }
+  if rec.sp.twin then list[#list + 1] = fg.assetFor(rec.sp, 0, "bark") end
+  for i, a in ipairs(list) do
+    local tint = (i == 2) and rec.sp.barkTint or rec.sp.tint
+    local function took(n)
+      if f.done then n:destroy() return end
+      if n.setParent and n.parent ~= planet then n:setParent(planet, { keepWorld = false }) end
+      n.tags = { "flora" }
+      if tint then
+        pcall(function()
+          local m = n:material(i == 2 and "bark" or "leaf")
+          m.color = { tint[1], tint[2], tint[3] }
+        end)
+      end
+      fell_pose(f, n, 0, 0)
+      f.parts[#f.parts + 1] = n
+    end
+    local pf = a:match("^prefabs/(.-)%.prefab%.ron$")
+    if pf then
+      spawn(pf, vec3(hit.x, hit.y, hit.z), took, { parent = planet, body = false })
+    else
+      createNode("Felled " .. tostring(rec.sp.name), planet, function(n) n.model = a; took(n) end)
+    end
+  end
+  return true
+end
+
+-- For probes: trees coming down right now.
+function felling() return #felled end
+
+local function fell_tick()
+  if #felled == 0 then return end
+  local fx = ref("vfx")
+  local body = cur_body and space.body(cur_body)
+  for i = #felled, 1, -1 do
+    local f = felled[i]
+    local k = time - f.t0
+    local a = math.min(1, k / FELL_T)
+    local ang = a * a * 1.48
+    local sink = math.max(0, math.min(1, (k - FELL_T - FELL_HOLD) / FELL_SINK))
+    if a >= 1 and not f.landed then
+      f.landed = true
+      -- the crown hits the ground: leaves and dust along the trunk
+      if fx and fx.harvest and body then
+        for _, t in ipairs({ 0.45, 0.8 }) do
+          local h = f.height * t
+          fx.harvest(body.x + f.rx + f.hx * h, body.y + f.ry + f.hy * h, body.z + f.rz + f.hz * h, 1.5)
+        end
+      end
+      if audio and audio.play then
+        audio.play("audio/kenney/impact/impactWood_heavy_00" .. tostring(math.random(0, 4)) .. ".ogg",
+          { track = "SFX", volume = 0.6, pitch = 0.7 + math.random() * 0.15 })
+      end
+    end
+    for _, n in ipairs(f.parts) do if n.valid then fell_pose(f, n, ang, sink) end end
+    if sink >= 1 or f.body ~= cur_body then
+      f.done = true
+      for _, n in ipairs(f.parts) do if n.valid then n:destroy() end end
+      table.remove(felled, i)
+    end
+  end
+end
+
 function lateUpdate(node, dt)
+  fell_tick()
   if params.motes <= 0 or not cur_body or time < mote_t then return end
   mote_t = time + 0.5
   local obs = observer()
@@ -2193,34 +2296,31 @@ rare_tick = function(dt)
   rare_lights(obs, body)
 end
 
--- The rare plant on the aim ray, scored like a scattered one.
-local function rare_aim(body, x, y, z, dx, dy, dz, reach, cone, grab)
-  local best, bestScore = nil, -1
+-- The rare plant on the aim line, scored like a scattered one (see
+-- `nearestPlant`: the same span, the same exact axis test).
+local function rare_aim(body, x, y, z, dx, dy, dz, t0, t1, reach, cone, grab, opt)
+  local best, bestScore = nil, -math.huge
+  local from = opt and opt.from
+  local lim = (opt and opt.reach) or reach
   for key, r in pairs(rare.nodes) do
     if r.node and r.node.valid and r.node.visible ~= false and not r.p.cut then
       local p = r.p
       local wx, wy, wz = body.x + p.x, body.y + p.y, body.z + p.z
       local ex, ey, ez = wx - x, wy - y, wz - z
       local d = len(ex, ey, ez)
-      if d > 0.01 and d <= reach then
+      local fd = from and len(wx - from.x, wy - from.y, wz - from.z) or d
+      if d > 0.01 and fd <= lim then
         local dot = (ex * dx + ey * dy + ez * dz) / d
         local hgt = math.max(0.5, p.sp.height or 1)
-        local near_, nx, ny, nz = math.huge, wx, wy, wz
-        for i = 0, 4 do
-          local f = hgt * (i / 4)
-          local px, py, pz = wx + p.ux * f, wy + p.uy * f, wz + p.uz * f
-          local t = (px - x) * dx + (py - y) * dy + (pz - z) * dz
-          if t > 0 then
-            local qd = len(px - (x + dx * t), py - (y + dy * t), pz - (z + dz * t))
-            if qd < near_ then near_, nx, ny, nz = qd, px, py, pz end
-          end
-        end
-        if (near_ <= grab * 1.3 and dot > 0) or dot >= cone then
+        local near_, t, s = axisDistance(x, y, z, dx, dy, dz, t0, t1, wx, wy, wz, p.ux, p.uy, p.uz, hgt)
+        local g = grab * 1.3
+        if (near_ <= g and (t > t0 + 0.05 or dot > 0)) or dot >= cone then
           -- A rare plant wins a tie with the grass round it.
-          local score = (grab * 1.3 - math.min(near_, grab * 1.3)) * 2.0 - d / reach + 0.5
+          local score = (1 - math.min(near_, g) / g) * 2.0 - (t - t0) / (t1 - t0 + 1) + 0.5
           if score > bestScore then
             bestScore = score
-            best = { pid = "rare:" .. key, dist = d, x = wx, y = wy, z = wz, ax = nx, ay = ny, az = nz,
+            best = { pid = "rare:" .. key, dist = d, t = t, gap = near_,
+                     x = wx, y = wy, z = wz, ax = wx + p.ux * s, ay = wy + p.uy * s, az = wz + p.uz * s,
                      height = hgt, ux = p.ux, uy = p.uy, uz = p.uz,
                      rec = { sp = p.sp, rare = key, body = rare.body } }
           end
@@ -2295,90 +2395,171 @@ end
 
 -- ── harvest API (the tool belt calls these) ─────────────────────────────────
 
--- The plant someone is aiming at. Scattered plants have no colliders, so this
--- IS the aim test: the AIM RAY against each candidate's own axis (root to
--- tip), with `grab` a radius in metres — "does the line go through the tree".
--- The old cone (dot >= cone) stays as a floor so a "roughly ahead" sweep with
--- cone = -1 finds anything in reach.
-function nearestPlant(x, y, z, dx, dy, dz, reach, cone, grab)
+-- ── the aim test (the gravity gun's uproot and the laser's CUT share it) ──
+--
+-- Scattered plants have no colliders, so this IS the aim test: the AIM LINE
+-- against each candidate's own axis (root to tip), with `grab` a radius in
+-- metres — "does the line go through the tree".
+
+-- Closest approach between the aim segment o + d·t (t in [t0, t1], |d| = 1)
+-- and a plant's axis r + u·s (s in [0, h], |u| = 1): the distance, t and s.
+-- Exact. (It was five samples a quarter of the height apart: a 20 m tree
+-- aimed at chest-high was 1.2 m from its nearest sample and never found.)
+function axisDistance(ox, oy, oz, dx, dy, dz, t0, t1, rx, ry, rz, ux, uy, uz, h)
+  local wx, wy, wz = ox - rx, oy - ry, oz - rz
+  local b = dx * ux + dy * uy + dz * uz
+  local dd = dx * wx + dy * wy + dz * wz
+  local e = ux * wx + uy * wy + uz * wz
+  local den = 1 - b * b
+  local t = den > 1e-9 and (b * e - dd) / den or t0
+  t = math.max(t0, math.min(t1, t))
+  local s = math.max(0, math.min(h, e + b * t))
+  t = math.max(t0, math.min(t1, b * s - dd))
+  s = math.max(0, math.min(h, e + b * t))
+  local qx, qy, qz = wx + dx * t - ux * s, wy + dy * t - uy * s, wz + dz * t - uz * s
+  return len(qx, qy, qz), t, s
+end
+
+-- How far off its axis a plant still counts as hit: the grab, and a tree's
+-- crown above a third of its height (aim at the leaves and you have the tree).
+local function girth(sp, hgt, s, grab)
+  if sp.form == "tree" and s > hgt * 0.35 then return grab + math.min(2.5, hgt * 0.15) end
+  return grab
+end
+
+-- The span of the aim line to search: [0, reach] from its origin, or — given
+-- `opt.from` (the crew) — the part of the line within `opt.reach` of the crew,
+-- plus a crown's worth: a third-person camera's line starts metres behind.
+local function aim_span(x, y, z, dx, dy, dz, reach, opt)
+  if not (opt and opt.from) then return 0, reach end
+  local f = opt.from
+  local R = (opt.reach or reach) + (opt.crown or 3.0)
+  local wx, wy, wz = x - f.x, y - f.y, z - f.z
+  local b = dx * wx + dy * wy + dz * wz
+  local disc = b * b - (wx * wx + wy * wy + wz * wz - R * R)
+  if disc < 0 then return nil end
+  local sq = math.sqrt(disc)
+  local t0, t1 = math.max(0, -b - sq), -b + sq
+  if t1 <= t0 then return nil end
+  return t0, t1
+end
+
+-- WHERE TO ASK `scatter.near`. The engine picks a source's chunks by how high
+-- the asking point stands over the region's PLANE, a whole chunk at a time
+-- (floptle-core scatter.rs `chunks_near`, the draw's height band): a point
+-- more than about radius + one chunk off the plane finds nothing — not even a
+-- plant asked for at the very place `near` reported it. A flora patch is a
+-- plane tangent at its centre, so on a hill, or out toward a patch's edge, the
+-- ground and every plant on it stand tens of metres off it (measured on a
+-- fresh save: 37–40 m in a forest, where every tree and shrub was
+-- unharvestable — playtest 2026-10-24 "completely unable to mine plants").
+-- Asking from the aim itself (2026-10-23's phantom-plant fix) hit that; asking
+-- from the plane (before it) missed plants whose landed place was further
+-- from the plane than the radius. So: ask from a point between the plane and
+-- the ground, as near the ground as the band allows, with a radius that
+-- reaches `rh` across the ground there (± `slack` of slope).
+local function near_query(p, mx, my, mz, gx, gy, gz, rh, slack, chunk)
+  local dx, dy, dz = mx - p.cx, my - p.cy, mz - p.cz
+  local lx = dx * p.ex[1] + dy * p.ex[2] + dz * p.ex[3]
+  local lz = dx * p.ez[1] + dy * p.ez[2] + dz * p.ez[3]
+  -- the ground's height over the plane, under the middle of the search
+  local ly = (gx - p.cx) * p.ey[1] + (gy - p.cy) * p.ey[2] + (gz - p.cz) * p.ey[3]
+  local a = math.abs(ly)
+  local g = math.max(0, (a - chunk) * 0.5 + 0.5)      -- the gap left between the point and the ground
+  local h = (a - g) * (ly < 0 and -1 or 1)
+  local r = math.sqrt(rh * rh + (g + slack) * (g + slack))
+  return p.cx + p.ex[1] * lx + p.ey[1] * h + p.ez[1] * lz,
+         p.cy + p.ex[2] * lx + p.ey[2] * h + p.ez[2] * lz,
+         p.cz + p.ex[3] * lx + p.ey[3] * h + p.ez[3] * lz, r
+end
+nearQuery = near_query   -- for the smoke test
+
+-- The plant on the aim line (x,y,z + t·d). `cone` > 1 is an AIM: only a plant
+-- the line passes within `grab` of; `cone` <= 1 is a SWEEP round the origin
+-- that also takes anything within `reach` at least that far ahead.
+-- `opt` (optional): { from = crew position, reach = metres from the crew to a
+-- plant's root }; then only the part of the line near the crew is searched.
+-- Returns { pid, x,y,z (root), ax,ay,az (where the line meets it), height,
+-- ux,uy,uz, t, gap, rec } or nil.
+function nearestPlant(x, y, z, dx, dy, dz, reach, cone, grab, opt)
   reach = reach or 4.5
   cone = cone or 0.55
   grab = grab or 1.4
+  local dl = len(dx, dy, dz)
+  if dl < 1e-9 then return nil end
+  dx, dy, dz = dx / dl, dy / dl, dz / dl
   local body = cur_body and space.body(cur_body)
   if not body and rare.body then body = space.body(rare.body) end
   if not body then return nil end
-  local best, bestScore = nil, -1
+  local t0, t1 = aim_span(x, y, z, dx, dy, dz, reach, opt)
+  if not t0 then return nil end
+  local from = opt and opt.from
+  local lim = (opt and opt.reach) or reach
+  local best, bestScore = nil, -math.huge
   if rare.body and next(rare.nodes) then
-    best, bestScore = rare_aim(space.body(rare.body) or body, x, y, z, dx, dy, dz, reach, cone, grab)
+    best, bestScore = rare_aim(space.body(rare.body) or body, x, y, z, dx, dy, dz, t0, t1, reach, cone, grab, opt)
   end
   local rx, ry, rz = x - body.x, y - body.y, z - body.z
+  -- Ask round the origin for a sweep, round the middle of the span for an aim.
+  local mx, my, mz, rh
+  if cone <= 1 then
+    mx, my, mz, rh = rx, ry, rz, reach
+  else
+    local tm = (t0 + t1) * 0.5
+    mx, my, mz = rx + dx * tm, ry + dy * tm, rz + dz * tm
+    rh = (t1 - t0) * 0.5 + grab + 2.5
+  end
+  local gx, gy, gz = ground_under(body, mx, my, mz)
+  local slack = 1.5 + 0.35 * rh
   for id, s in pairs(srcs) do
     local p = patches[s.patch]
-    if p and s.part ~= "bark" and patch_dist(p, rx, ry, rz) <= reach + 2 then
-      -- Ask in the patch's plane: `near` measures to where a prop was ROLLED
-      -- (on the plane), not where it settled on the ground below it.
-      local dx_, dy_, dz_ = rx - p.cx, ry - p.cy, rz - p.cz
-      local lx = dx_ * p.ex[1] + dy_ * p.ex[2] + dz_ * p.ex[3]
-      local lz = dx_ * p.ez[1] + dy_ * p.ez[2] + dz_ * p.ez[3]
-      local qx = body.x + p.cx + p.ex[1] * lx + p.ez[1] * lz
-      local qy = body.y + p.cy + p.ex[2] * lx + p.ez[2] * lz
-      local qz = body.z + p.cz + p.ex[3] * lx + p.ez[3] * lz
+    if p and s.part ~= "bark" and patch_dist(p, mx, my, mz) <= rh + 2 then
+      local qx, qy, qz, qr = near_query(p, mx, my, mz, gx, gy, gz, rh, slack, s.sp.chunk or 10)
+      local hits = scatter.near(id, vec3(body.x + qx, body.y + qy, body.z + qz), qr)
       -- PHANTOM PLANTS (playtest 2026-10-23, "Ulmash Blade" harvested off bare
       -- rock). `near` answers instances that are not drawn: ones never
       -- settled (`settled = false`, at the region's nominal surface), and —
       -- engine side — ones whose re-settle after a dig found no ground, which
-      -- keep their OLD landed place. Lua's own `settle_point` cache was older
-      -- still: it never forgot a plant's ground after the ground was dug
-      -- away. So: only settled plants, at the engine's landed place (which
-      -- follows a re-settle), and only where there is still ground at its
-      -- root — not floating over a hole, not buried under a fill.
-      local hits = scatter.near(id, vec3(x, y, z), reach + 1.0)
-      for k = 1, math.min(#hits, 24) do
+      -- keep their OLD landed place. So: only settled plants, at the engine's
+      -- landed place, and only where there is still ground at its root.
+      for k = 1, math.min(#hits, 160) do
         local h = hits[k]
-        local g = nil
         if h.settled then
-          local gx, gy, gz = h.pos.x - body.x, h.pos.y - body.y, h.pos.z - body.z
           local q = terrain and terrain.query and terrain.query(h.pos.x, h.pos.y, h.pos.z)
-          if q and q < 0.7 and q > -1.2 then g = { gx, gy, gz } end
-        end
-        if g then
-        local hdx, hdy, hdz = h.pos.x - body.x - p.cx, h.pos.y - body.y - p.cy, h.pos.z - body.z - p.cz
-        local hl = { x = hdx * p.ex[1] + hdy * p.ex[2] + hdz * p.ex[3],
-                     z = hdx * p.ez[1] + hdy * p.ez[2] + hdz * p.ez[3] }
-        local wx, wy, wz = body.x + g[1], body.y + g[2], body.z + g[3]
-        local ex, ey, ez = wx - x, wy - y, wz - z
-        local d = len(ex, ey, ez)
-        if d > 0.01 and d <= reach then
-          local dot = (ex * dx + ey * dy + ez * dz) / d
-          local gl = len(g[1], g[2], g[3])
-          local ux, uy, uz = g[1] / gl, g[2] / gl, g[3] / gl
-          local hgt = math.max(0.4, (s.sp.height or 1.0) * (h.scale or 1))
-          local near_, nx, ny, nz = math.huge, wx, wy, wz
-          for i = 0, 4 do
-            local f = hgt * (i / 4)
-            local px, py, pz = wx + ux * f, wy + uy * f, wz + uz * f
-            -- Distance from this point on the trunk to the aim ray. Samples
-            -- BEHIND the origin are skipped, not clamped: clamping makes
-            -- "distance to the ray" mean "distance to the player".
-            local t = (px - x) * dx + (py - y) * dy + (pz - z) * dz
-            if t > 0 then
-              local qd = len(px - (x + dx * t), py - (y + dy * t), pz - (z + dz * t))
-              if qd < near_ then near_, nx, ny, nz = qd, px, py, pz end
-            end
-          end
-          if (near_ <= grab and dot > 0) or dot >= cone then
-            local score = (grab - math.min(near_, grab)) * 2.0 - d / reach
-            if score > bestScore then
-              bestScore = score
-              best = { pid = id .. ":" .. tostring(h.id), dist = d, x = wx, y = wy, z = wz,
-                       ax = nx, ay = ny, az = nz, height = hgt, ux = ux, uy = uy, uz = uz,
-                       rec = { sp = s.sp, src = id, inst = h.id, patch = s.patch, lx = hl.x, lz = hl.z,
-                               seedn = h.id % 2147483647, rx = g[1], ry = g[2], rz = g[3] } }
+          if q and q < 0.7 and q > -1.2 then
+            local wx, wy, wz = h.pos.x, h.pos.y, h.pos.z
+            local ex, ey, ez = wx - x, wy - y, wz - z
+            local d = len(ex, ey, ez)
+            local fd = from and len(wx - from.x, wy - from.y, wz - from.z) or d
+            if d > 0.01 and fd <= lim then
+              local dot = (ex * dx + ey * dy + ez * dz) / d
+              local g1, g2, g3 = wx - body.x, wy - body.y, wz - body.z
+              local gl = len(g1, g2, g3)
+              local ux, uy, uz = g1 / gl, g2 / gl, g3 / gl
+              local hgt = math.max(0.4, (s.sp.height or 1.0) * (h.scale or 1))
+              local near_, t, sa = axisDistance(x, y, z, dx, dy, dz, t0, t1, wx, wy, wz, ux, uy, uz, hgt)
+              local gr = girth(s.sp, hgt, sa, grab)
+              -- On the line ahead (not the root ahead: aimed up a trunk from
+              -- beside it, the root is behind and below the eye).
+              if (near_ <= gr and (t > t0 + 0.05 or dot > 0)) or dot >= cone then
+                local score = (1 - math.min(near_, gr) / gr) * 2.0 - (t - t0) / (t1 - t0 + 1)
+                if score > bestScore then
+                  bestScore = score
+                  local dx_, dy_, dz_ = g1 - p.cx, g2 - p.cy, g3 - p.cz
+                  best = { pid = id .. ":" .. tostring(h.id), dist = d, t = t, gap = near_, x = wx, y = wy, z = wz,
+                           ax = wx + ux * sa, ay = wy + uy * sa, az = wz + uz * sa,
+                           height = hgt, ux = ux, uy = uy, uz = uz,
+                           rec = { sp = s.sp, src = id, inst = h.id, patch = s.patch,
+                                   lx = dx_ * p.ex[1] + dy_ * p.ex[2] + dz_ * p.ex[3],
+                                   lz = dx_ * p.ez[1] + dy_ * p.ez[2] + dz_ * p.ez[3],
+                                   seedn = h.id % 2147483647, rx = g1, ry = g2, rz = g3,
+                                   scale = h.scale or 1, yaw = h.yaw } }
+                end
+              end
             end
           end
         end
       end
-        end -- if g (a drawn plant, on ground)
     end
   end
   return best

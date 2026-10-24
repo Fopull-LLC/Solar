@@ -78,6 +78,7 @@ local CONTROLS = {
     { keys = {}, shown = "SCROLL", what = "gravity gun: hold what you grabbed nearer / further" },
     { keys = { "r" }, shown = "R", what = "gravity gun: throw what you are holding" },
     { keys = { "q" }, shown = "Q", what = "terrain laser: DIG / FILL  ·  relay beacon: pick one up" },
+    { keys = { "e" }, shown = "hold E", what = "terrain laser: CUT — a short cutting beam that saws through plants" },
     { keys = { "tab", "i" }, shown = "TAB  or  I", what = "the suit pack  ·  at the depot, its buy and sell counters" },
   } },
   { group = "Everywhere", col = 1, rows = {

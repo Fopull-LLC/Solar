@@ -153,6 +153,7 @@ local function mix32(a)
   return a
 end
 local SRC, next_src = {}, 0
+local near_refused = 0   -- `near` calls the height band answered with nothing
 -- Frames the engine's draw driver has run (it runs after the scripts' update
 -- each frame, and is what drops props onto the ground).
 local DRAWN = 0
@@ -254,7 +255,23 @@ API.scatter = {
     local node = by_name[s.parent]
     local ex, ey, ez = axes_of(node)
     local out = {}
+    -- WHICH CHUNKS, like the engine (floptle-core scatter.rs `chunks_near`,
+    -- the draw's height band): by how high the asking point stands over the
+    -- region's PLANE, a whole chunk at a time. More than radius + one chunk
+    -- off the plane finds nothing — even a prop asked for at the very place
+    -- `near` reported it (the 2026-10-24 "unable to mine plants" bug).
+    local qx, qy, qz = p.x - BODY.x - node.x, p.y - BODY.y - node.y, p.z - BODY.z - node.z
+    local qlx = qx * ex[1] + qy * ex[2] + qz * ex[3]
+    local qly = qx * ey[1] + qy * ey[2] + qz * ey[3]
+    local qlz = qx * ez[1] + qy * ez[2] + qz * ez[3]
+    local band = math.floor(math.abs(qly) / s.chunk) * s.chunk
+    local full = radius + s.chunk
+    if band > full then near_refused = near_refused + 1 return out end
+    local reach = math.sqrt(full * full - band * band)
+    local ecx, ecz = (math.floor(qlx / s.chunk) + 0.5) * s.chunk, (math.floor(qlz / s.chunk) + 0.5) * s.chunk
     for _, i in ipairs(live(s)) do
+      local icx, icz = (math.floor(i.lx / s.chunk) + 0.5) * s.chunk, (math.floor(i.lz / s.chunk) + 0.5) * s.chunk
+      if math.sqrt((icx - ecx) ^ 2 + (icz - ecz) ^ 2) <= reach + s.chunk then
       local wx = BODY.x + node.x + ex[1] * i.lx + ez[1] * i.lz
       local wy = BODY.y + node.y + ex[2] * i.lx + ez[2] * i.lz
       local wz = BODY.z + node.z + ex[3] * i.lx + ez[3] * i.lz
@@ -278,6 +295,7 @@ API.scatter = {
         out[#out + 1] = { id = i.id, pos = { x = px, y = py, z = pz }, up = { x = ux, y = uy, z = uz },
                           distance = d, scale = i.scale, param = 0.5, settled = settled }
       end
+      end -- in a chunk the band reaches
     end
     table.sort(out, function(a, b) return a.distance < b.distance end)
     return out
@@ -655,6 +673,45 @@ if tall then
   local trunk = ff.nearestPlant(ex, ey, ez, ax, ay, az, 8.0, 0.55, 1.5)
   check("aiming at a plant's TRUNK finds it", trunk ~= nil and trunk.pid == tall.pid)
   check("…and says where to put the beam", trunk and trunk.ax ~= nil and trunk.height ~= nil)
+
+  -- THE TOOL'S OWN AIM (playtest 2026-10-24: "completely unable to mine
+  -- plants"). The crew stands 3 m from the plant and aims chest-high, as
+  -- tool_belt does: from the eye (first person) and from a camera metres
+  -- behind and above (third person), with the reach measured from the crew.
+  -- Under the engine's height band (the `near` stub above) asking from the
+  -- aim found nothing wherever the ground stood off its patch's plane.
+  local pn = by_name["Flora " .. BODY.name .. " " .. tall.rec.patch]
+  local pex, pey = axes_of(pn)
+  local off = (tall.x - BODY.x - pn.x) * pey[1] + (tall.y - BODY.y - pn.y) * pey[2] + (tall.z - BODY.z - pn.z) * pey[3]
+  check("the test plant stands well off its patch's plane (what the band refuses)",
+    math.abs(off) > (tall.rec.sp.chunk or 10) + 8, string.format("%.1f m", off))
+  local crew = { x = tall.x + sx * 3.0 + ux * 1.0, y = tall.y + sy * 3.0 + uy * 1.0, z = tall.z + sz * 3.0 + uz * 1.0 }
+  local function aim_from(ox, oy, oz, at_h)
+    local tx2, ty2, tz2 = tall.x + ux * at_h, tall.y + uy * at_h, tall.z + uz * at_h
+    local a1, a2, a3 = tx2 - ox, ty2 - oy, tz2 - oz
+    local l = math.sqrt(a1 * a1 + a2 * a2 + a3 * a3)
+    local back = math.sqrt((crew.x - ox) ^ 2 + (crew.y - oy) ^ 2 + (crew.z - oz) ^ 2)
+    return ff.nearestPlant(ox, oy, oz, a1 / l, a2 / l, a3 / l, 7.0 + back, 2.0, 1.1, { from = crew, reach = 7.0 })
+  end
+  local eye = { crew.x + ux * 0.6, crew.y + uy * 0.6, crew.z + uz * 0.6 }
+  local fp = aim_from(eye[1], eye[2], eye[3], 1.2)
+  check("first person, aimed chest-high at a tall trunk 3 m off: found", fp ~= nil and fp.pid == tall.pid,
+    fp and fp.pid or "nil")
+  check("…and the beam goes where the line meets the trunk, not to the root",
+    fp and math.abs(math.sqrt((fp.ax - tall.x) ^ 2 + (fp.ay - tall.y) ^ 2 + (fp.az - tall.z) ^ 2) - 1.2) < 0.6)
+  local cam = { crew.x + sx * 6.0 + ux * 2.5, crew.y + sy * 6.0 + uy * 2.5, crew.z + sz * 6.0 + uz * 2.5 }
+  local tp = aim_from(cam[1], cam[2], cam[3], 1.2)
+  check("third person, from a camera 6 m behind the crew: found", tp ~= nil and tp.pid == tall.pid, tp and tp.pid or "nil")
+  local crown = aim_from(eye[1], eye[2], eye[3], tall.height * 0.7)
+  check("…and aimed into its crown", crown ~= nil and crown.pid == tall.pid, crown and crown.pid or "nil")
+  local far = { x = tall.x + sx * 9.0 + ux * 1.0, y = tall.y + sy * 9.0 + uy * 1.0, z = tall.z + sz * 9.0 + uz * 1.0 }
+  local a1, a2, a3 = tall.x - far.x, tall.y - far.y, tall.z - far.z
+  local al2 = math.sqrt(a1 * a1 + a2 * a2 + a3 * a3)
+  local none = ff.nearestPlant(far.x, far.y, far.z, a1 / al2, a2 / al2, a3 / al2, 7.0, 2.0, 1.1, { from = far, reach = 7.0 })
+  check("…but not from 9 m: the reach is the crew's", none == nil or none.pid ~= tall.pid)
+  -- The exact axis test: a 20 m trunk, the line passing 0.5 m from it 1.2 m up.
+  local dgap = ff.axisDistance and ff.axisDistance(0, 1.2, -5, 0, 0, 1, 0, 10, 0.5, 0, 0, 0, 1, 0, 20) or -1
+  check("the aim test is exact along a tall axis", math.abs(dgap - 0.5) < 1e-6, dgap)
 
   local spname = tall.rec.sp.name
   local n0 = #ff.surveyLines(tall.x, tall.y, tall.z, 0.5)

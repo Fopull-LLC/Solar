@@ -380,7 +380,7 @@ local function prog_guidance(mi, astro, m, g, niche)
   elseif g.kind == "sample" and g.class == "ore" then
     return "Mine some ore.", MINE_HINT
   elseif g.kind == "sample" and g.mat == "geode" then
-    local hint = "Geode pockets sit 7–14 m down. With the Mining Laser out, a pulsing ring on the ground marks one within 35 m."
+    local hint = "Geode pockets sit 7–14 m down. With the Terrain Laser out, a pulsing ring on the ground marks one within 35 m."
     local mf = ref("mineral_field")
     local list = (mf and mf.pockets and rhome) and mf.pockets(rhome) or nil
     local at = list and nearest_of(astro, rhome, list, function(p) return (p.left or 1) <= 0 end)

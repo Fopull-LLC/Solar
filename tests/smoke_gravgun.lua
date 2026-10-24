@@ -165,6 +165,7 @@ API.find = function(n) if n == "Astronaut" then return ASTRO end end
 
 local KEYS = {}
 API.input = { button = function() return false end, pressed = function(k) return KEYS[k] == true end,
+              key = function(k) return KEYS[k] == true end,
               scroll = function() return 0 end }
 
 local env = setmetatable({}, { __index = function(_, k)
@@ -316,6 +317,64 @@ frame(2)
 aim_at(0, 0, -6)
 frame(2)
 ok(belt.prompt:find("part of the ground", 1, true) ~= nil, "aimed at bare ground, it says there's nothing loose [" .. belt.prompt .. "]")
+
+-- ── 8. THE LASER'S CUT (hold E) ─────────────────────────────────────────────
+-- Playtest 2026-10-24: "holding E with the destruction tool lets you go in cut
+-- mode that saws through plants". E held with the laser out: a cutting beam
+-- that harvests what it crosses (the same flora_field.harvest as the uproot),
+-- fells a tree, and never digs; E at a door stays the door's; without E the
+-- laser digs as before.
+local digs = 0
+API.terrain.dig = function() digs = digs + 1 end
+API.math = setmetatable({ noise = function() return 0 end }, { __index = math })
+envs.materials.pickOre = function() return "basalt" end
+envs.inventory.roomFor = function() return 99 end
+envs.inventory.add = function(_, _, n) return n end
+local felled, cut_opt = 0, nil
+FLORA.fell = function() felled = felled + 1; return true end
+local real_near = FLORA.nearestPlant
+local cut_down = false   -- a cut plant is gone (the uproot's stub plant never was)
+FLORA.nearestPlant = function(ox, oy, oz, dx, dy, dz, reach, cone, grab, opt)
+  cut_opt = opt
+  if cut_down then return nil end
+  return real_near(ox, oy, oz, dx, dy, dz, reach, cone, grab, opt)
+end
+local real_harvest = FLORA.harvest
+FLORA.harvest = function(...) if belt.cutMode then cut_down = true end return real_harvest(...) end
+local door = false
+envs.facility_menu = { valid = true, prompting = function() return door end, isOpen = function() return false end }
+ok(belt.TOOLDEF.laser.hint:find("hold E: cut plants", 1, true) ~= nil, "the laser's hint lists the cut [" .. belt.TOOLDEF.laser.hint .. "]")
+belt.sim.pressed["2"] = true
+frame(30)
+ok(belt.toolId() == "laser", "2 takes out the laser [" .. belt.toolId() .. "]")
+local h0 = harvested
+aim_at(3, 0.5, -4)
+belt.sim.keys = { e = true }
+frame(2)
+ok(belt.cutMode == true and belt.prompt:sub(1, 3) == "CUT", "holding E puts the laser in CUT [" .. belt.prompt .. "]")
+ok(belt.tool_label({ id = "laser", label = "Terrain Laser" }):find("CUT", 1, true) ~= nil, "...and the belt says so")
+ok(cut_opt and cut_opt.from and cut_opt.reach == belt.params.saw_reach, "...aimed with the crew's short reach")
+frame(20)
+ok(harvested == h0 and belt.progress > 0.05, string.format("it saws a bit at a time (%.2f)", belt.progress))
+frame(120)
+ok(harvested == h0 + 1, "...and cuts the plant through: one harvest [" .. (harvested - h0) .. "]")
+ok(felled == 1, "...and fells it")
+ok(digs == 0, "the cut never digs [" .. digs .. "]")
+aim_at(0, 0, -4)
+frame(30)
+ok(digs == 0 and belt.prompt:find("no plant", 1, true) ~= nil, "aimed at bare ground it cuts nothing and digs nothing [" .. belt.prompt .. "]")
+door = true
+frame(2)
+ok(belt.cutMode == false, "at a building's door, E is the door's, not the cut")
+door = false
+belt.sim.keys = nil
+frame(2)
+ok(belt.cutMode == false and belt.prompt:sub(1, 3) == "DIG", "E up: back to DIG [" .. belt.prompt .. "]")
+belt.sim.btn[0] = true
+frame(40)
+ok(digs > 0, "without E, the laser digs [" .. digs .. "]")
+belt.sim.btn[0] = false
+frame(2)
 
 if #failures == 0 then
   print("GRAVITY GUN SMOKE OK — " .. checks .. " checks passed")

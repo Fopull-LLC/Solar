@@ -15,6 +15,9 @@
 --   TERRAIN LASER  hold LMB: DIG cuts rock and streams it into the pack.
 --                  Q: switch to FILL, which lays rock back down out of the
 --                  pack's own rubble (the spade's raise, with a price).
+--                  hold E: CUT — a thin white-hot cutting beam with a short
+--                  reach that saws through the plants it crosses (trees come
+--                  down) and never touches the ground. See THE CUT.
 --   RELAY BEACON   consumable. LMB plants one where it can stand; Q picks
 --                  a planted one back up. Bought at the depot's BUY counter.
 --
@@ -135,6 +138,13 @@ defaults = {
   cut_grab = 1.1,          -- how near the aim line has to pass the stem
   --@range 0.2 3
   uproot = 0.8,            -- × the species' cutting work
+  --@header Laser cut (hold E)
+  --@range 1.5 10 --@units m
+  saw_reach = 5.0,         -- from the PLAYER: a cutting torch, not a rifle
+  --@range 0.1 2 --@units m
+  saw_grab = 0.6,          -- how near the beam has to pass a stem (a tree's crown is wider)
+  --@range 0.2 3
+  saw = 0.8,               -- × the species' cutting work, at full power and cold
 }
 
 -- Published: the HUD, the walker, the camera and the smoke harness read these.
@@ -152,6 +162,7 @@ bored = 0.0      -- metres the current bore has eaten into the rock
 inUse = false    -- the trigger is held on a tool in hand: the walker faces the aim
 atReach = false  -- the bore has run out to arm's length
 laserMode = "dig"  -- "dig" | "fill"
+cutMode = false    -- the laser is in CUT (E held): it saws plants and never digs
 holding = nil    -- { name, mass, strain, kind } while the gravity gun holds something
 strain = 0.0     -- 0..1+ how hard the gravity gun is working
 wantsScroll = false -- the gravity gun is using the wheel (the camera leaves it alone)
@@ -167,7 +178,7 @@ TOOLDEF = {
   gravgun = { label = "Gravity Gun", prefab = "ToolGravGun", fp_prefab = "ToolGravGunFP",
               hint = "hold LMB to grab  ·  scroll nearer / further  ·  R throw  ·  aim at a plant to uproot it" },
   laser   = { label = "Terrain Laser", prefab = "ToolLaser", fp_prefab = "ToolLaserFP",
-              hint = "hold LMB to dig  ·  Q switches DIG / FILL" },
+              hint = "hold LMB to dig  ·  Q switches DIG / FILL  ·  hold E: cut plants" },
   beacon  = { label = "Relay Beacon", consumable = true,
               hint = "LMB plant a relay beacon  ·  Q pick one up" },
 }
@@ -286,6 +297,7 @@ if type(input) == "table" then
     key = key_gate("key"), pressed = key_gate("pressed"), released = key_gate("released"),
     button = key_gate("button"), clicked = key_gate("clicked"),
     scroll = function() if free() then return 0 end return raw.scroll() end,
+    action = function(...) if free() then return false end return raw.action and raw.action(...) end,
     mouse_delta = function() if free() then return 0, 0 end return raw.mouse_delta() end,
     setMouseLocked = function(on) if free() then return end return raw.setMouseLocked(on) end,
   }, { __index = raw })
@@ -314,6 +326,12 @@ end
 -- (tests/smoke_pause.lua) can see them read.
 local function key_q() return sim_pressed("q") or input.pressed("q") == true end
 local function key_r() return sim_pressed("r") or input.pressed("r") == true end
+-- E is HELD for the laser's cut (the Interact action, so a pad's west face
+-- and a rebind work too). `sim.keys.e` overrides it for probes.
+local function key_e()
+  if sim and sim.keys and sim.keys.e ~= nil then return sim.keys.e == true end
+  return input.key("e") == true or (input.action ~= nil and input.action("Interact") == true)
+end
 local function scroll()
   local s = (input.scroll and input.scroll()) or 0
   if sim and sim.scroll then s = s + sim.scroll; sim.scroll = nil end
@@ -1165,11 +1183,13 @@ local function impact(hit, power, kind)
   if hit then
     impact_n.x, impact_n.y, impact_n.z = hit.x, hit.y, hit.z
     if ps and not ps:isPlaying() then ps:play() end
-    if ps then ps:setIntensity(0.3 + power) end
+    -- The cut is a torch, not a drill: a small hot point, not a blaze.
+    if ps then ps:setIntensity(kind == "cut" and (0.1 + 0.3 * power) or (0.3 + power)) end
     if light then
       if kind == "fill" then light.r, light.g, light.b = 0.45, 0.75, 1.0
+      elseif kind == "cut" then light.r, light.g, light.b = 1.0, 0.95, 0.85
       else light.r, light.g, light.b = 1.0, 0.62, 0.3 end
-      light.intensity = 2.0 + power * 7.0
+      light.intensity = (kind == "cut") and (0.5 + power * 1.5) or (2.0 + power * 7.0)
     end
     if kind == "dig" then
       local fx = ref("vfx")
@@ -1448,6 +1468,138 @@ local function fire_fill(node, dt, firing)
   return h, bad ~= nil
 end
 
+-- ── THE CUT (laser, E held) ─────────────────────────────────────────────────
+-- A thin, white-hot cutting beam with a short reach (`saw_reach` from the
+-- crew), aimed down the same line as the dig. It saws through whatever plant
+-- the line crosses — a stem, a trunk, a tree's crown — and never touches the
+-- terrain: it stops at the ground. Each plant takes its species' cutting work
+-- × `saw`, paced by the laser's own spin-up and heat (the dig's rules: heat
+-- slows it, never stops it), and gives exactly what the gravity gun's uproot
+-- gives (flora_field.harvest: the same yield, the same pack rules, a rare
+-- plant's goal). Trees fall (flora_field.fell).
+--
+-- CHEAP: the field is asked (nearestPlant, a few scatter queries along the
+-- line) at most ten times a second, and not at all while the beam stays on
+-- the plant it is cutting — that is one closest-approach sum a frame.
+--
+-- E is only the cut's while nothing else wants it: at a building's door or a
+-- crate to recover, E is theirs (facility_menu / salvage prompting()).
+local saw = nil        -- { p, pid, work, need, name, lost }
+local saw_look = nil   -- the last field query { t, dx, dy, dz, p }
+local function saw_reset() saw, saw_look = nil, nil end
+
+-- Who else E belongs to right now, or nil.
+local function e_taken()
+  local fm = ref("facility_menu")
+  if fm and fm.prompting and fm.prompting() then return "E is the building's door" end
+  local sv = ref("salvage")
+  if sv and sv.prompting and sv.prompting() then return "E recovers the crate" end
+  return nil
+end
+
+-- For probes: what the saw is on.
+function sawState()
+  return saw and string.format("%s %.0f%%", saw.name, 100 * saw.work / saw.need) or "idle"
+end
+
+local function fire_cut(node, dt)
+  local ox, oy, oz, dx, dy, dz = aim_ray(node)
+  aimMat, aimDepth = nil, 0
+  if not ox then show_beam(nil) hum_off() saw = nil return end
+  local ff = ref("flora_field")
+  local back = len(node.x - ox, node.y - oy, node.z - oz)
+  -- The beam stops at the ground (or a hull): never past it, never into it.
+  local gh = ray_hit(node, ox, oy, oz, dx, dy, dz, params.saw_reach)
+  local stop_t = gh and len(gh.x - ox, gh.y - oy, gh.z - oz) or (back + params.saw_reach)
+  -- The plant: the one being cut while the line still crosses it, else ask.
+  local p = nil
+  if saw and ff and ff.axisDistance then
+    local q = saw.p
+    local g, t = ff.axisDistance(ox, oy, oz, dx, dy, dz, 0, stop_t + 1.0, q.x, q.y, q.z, q.ux, q.uy, q.uz, q.height)
+    if g <= saw.keep and t > 0 and len(q.x - node.x, q.y - node.y, q.z - node.z) <= params.saw_reach + 0.5 then
+      p = q
+      p.t = t
+    end
+  end
+  if not p and ff and ff.nearestPlant then
+    local lk = saw_look
+    if lk and time - lk.t < 0.1 and dx * lk.dx + dy * lk.dy + dz * lk.dz > 0.9999 then
+      p = lk.p
+    else
+      p = ff.nearestPlant(ox, oy, oz, dx, dy, dz, params.saw_reach + back, 2.0, params.saw_grab,
+        { from = { x = node.x, y = node.y, z = node.z }, reach = params.saw_reach, crown = 2.5 })
+      saw_look = { t = time, dx = dx, dy = dy, dz = dz, p = p }
+    end
+    if p and (p.t or 0) > stop_t + 1.0 then p = nil end   -- behind the ground
+  end
+  -- Power: the laser's spin-up and heat, as the dig.
+  -- (heat builds only while it bites, as the dig's does on rock)
+  charge = math.min(1.0, charge + dt / math.max(0.01, params.spin))
+  if p then heat = math.min(1.0, heat + dt / math.max(0.5, params.heat_time))
+  else heat = math.max(0.0, heat - dt / math.max(0.5, params.cool_time)) end
+  local throttle = 1.0 - 0.45 * heat
+  local inv = ref("inventory")
+  local pack = (inv and inv.line("astro")) or ""
+  local hot = heat > 0.6 and "  ·  HOT — cutting slower" or ""
+  local ex, ey, ez
+  if p then
+    if not saw or saw.pid ~= p.pid then
+      saw = { p = p, pid = p.pid, work = 0, name = p.rec.sp.name,
+              need = math.max(0.3, (p.rec.sp.work or 1) * params.saw),
+              keep = math.max(params.saw_grab, (p.gap or 0) + 0.3) + 0.4 }
+    end
+    saw.lost = nil
+    saw.work = saw.work + dt * charge * throttle
+    progress = math.min(1, saw.work / saw.need)
+    local t = p.t or len(p.x - ox, p.y - oy, p.z - oz)
+    ex, ey, ez = ox + dx * t, oy + dy * t, oz + dz * t
+    aimDist, aimX, aimY, aimZ = len(ex - node.x, ey - node.y, ez - node.z), ex, ey, ez
+    plant_req = { h = to_body({ x = p.x, y = p.y, z = p.z }), ready = true, height = p.height,
+                  ux = p.ux, uy = p.uy, uz = p.uz }
+    local fx = ref("vfx")
+    if fx and fx.cut then fx.cut(ex, ey, ez) end
+    prompt = string.format("CUT  ·  %s  %d%%%s  ·  %s", saw.name, math.floor(progress * 100 + 0.5), hot, pack)
+    if saw.work >= saw.need then
+      local got, dropped = {}, 0
+      if ff and ff.harvest then got, dropped = ff.harvest(p, "astro") end
+      local mats = ref("materials")
+      local parts = {}
+      for _, g in ipairs(got) do
+        parts[#parts + 1] = string.format("%s ×%d", (mats and mats.label(g.mat)) or g.mat, g.n)
+      end
+      local stays = p.rec.rare and #got == 0
+      if stays then
+        say("PACK FULL — no room for the " .. saw.name .. "; it stays where it is")
+        play(SFX.denied, { track = "UI", volume = 0.5 })
+      else
+        say(#parts > 0 and ("cut " .. saw.name .. ": " .. table.concat(parts, ", ") .. (dropped > 0 and "  (pack full)" or ""))
+          or "pack full — nothing taken")
+        local fell = ff and ff.fell and ff.fell(p, dx, dy, dz)
+        if not fell and fx and fx.harvest then fx.harvest(p.x, p.y, p.z, p.height) end
+        play(SFX.pickup, { track = "SFX", volume = 0.5 })
+        recoil = recoil + 0.02
+      end
+      saw, saw_look, progress = nil, nil, 0
+    end
+  else
+    -- Off the plant for a moment keeps its progress; a while, and it's lost.
+    if saw then
+      saw.lost = saw.lost or time
+      if time - saw.lost > 0.6 then saw = nil end
+    end
+    progress = saw and math.min(1, saw.work / saw.need) or 0
+    local t = math.min(stop_t, back + params.saw_reach)
+    ex, ey, ez = ox + dx * t, oy + dy * t, oz + dz * t
+    aimDist, aimX, aimY, aimZ = len(ex - node.x, ey - node.y, ez - node.z), ex, ey, ez
+    prompt = string.format("CUT  ·  no plant on the beam within %.0f m  ·  sweep it through a stem%s  ·  %s",
+      params.saw_reach, hot, pack)
+  end
+  show_beam({ x = ex, y = ey, z = ez }, charge, "cut", { onPlant = p ~= nil })
+  publish_shake(p and (0.02 + charge * 0.03) or 0.01)
+  hum_on(SFX.hum, 0.08 + charge * 0.2, 1.25 + charge * 0.3 + (p and 0.15 or 0))
+  if p and math.random() < dt * 8 then recoil = recoil + 0.003 end
+end
+
 -- ── the gravity gun ─────────────────────────────────────────────────────────
 --
 -- `grab` while something is held:
@@ -1531,11 +1683,15 @@ local function try_grab(node, ox, oy, oz, dx, dy, dz)
   local ff = ref("flora_field")
   if ff and ff.nearestPlant then
     local back = len(node.x - ox, node.y - oy, node.z - oz)
-    local p = ff.nearestPlant(ox, oy, oz, dx, dy, dz, params.cut_reach + back, 2.0, params.cut_grab)
+    -- The reach is the CREW's (opt.from): only the part of the line near the
+    -- crew is searched, whichever camera it starts from.
+    local p = ff.nearestPlant(ox, oy, oz, dx, dy, dz, params.cut_reach + back, 2.0, params.cut_grab,
+      { from = { x = node.x, y = node.y, z = node.z }, reach = params.cut_reach })
     if p and p.rec and len(p.x - node.x, p.y - node.y, p.z - node.z) <= params.cut_reach then
-      -- Only if the plant is nearer than the ground the ray hits: the aim
-      -- must pass through the plant, not through the hill behind it.
-      if not h or len(p.x - node.x, p.y - node.y, p.z - node.z) <= h.range + 1.0 then
+      -- Only if the line meets the plant before the ground it hits: the aim
+      -- must pass through the plant, not through the hill behind it. (Along
+      -- the LINE: a tree's trunk collider is the hit when you aim at it.)
+      if not h or (p.t or 0) <= len(h.x - ox, h.y - oy, h.z - oz) + 1.0 then
         return { kind = "plant", plant = p, pid = p.pid, work = 0, name = p.rec.sp.name,
                  need = math.max(0.3, (p.rec.sp.work or 1) * params.uproot), t0 = time }, nil, h
       end
@@ -1993,7 +2149,13 @@ local function paint_beam(req, dt)
     draw.ring(w.x, w.y, w.z, nx, ny, nz, 0.14 + 0.04 * math.sin(time * 18), r, g, b, 0.9)
   else
     local pts = { mx, my, mz, w.x, w.y, w.z }
-    if req.kind == "fill" then
+    if req.kind == "cut" then
+      -- THE CUT: a hair-thin white-hot line with a faint halo, not the dig's
+      -- fat orange beam; brighter where it bites.
+      local bite = req.onPlant and 1.0 or 0.55
+      ribbon(pts, 0.03 + 0.012 * p, BEAM_GLOW, 1.0, 0.96, 0.88, (0.22 + 0.2 * bite) * fl)
+      ribbon(pts, 0.005 + 0.004 * p, BEAM_CORE, 1.0, 1.0, 1.0, 1.0)
+    elseif req.kind == "fill" then
       ribbon(pts, 0.09 + 0.06 * p, BEAM_GLOW, 0.45, 0.75, 1.0, 0.5 * fl)
       ribbon(pts, 0.02 + 0.015 * p, BEAM_CORE, 0.85, 0.95, 1.0, 0.95)
     else
@@ -2090,6 +2252,8 @@ end
 
 local function reset_tool_state(why_)
   progress = 0
+  cutMode = false
+  saw_reset()
   charge, cut_progress, focus = 0.0, 0.0, 0.0
   bore_drop()
   hum_off()
@@ -2145,9 +2309,30 @@ local function tick(node, dt, carrying)
   local id = toolId()
   local firing = btn(0)
   inUse = firing
+  -- "No new catch until the trigger comes up" ends when it comes up, whatever
+  -- is in hand: a release missed while another tool (or none) was out left
+  -- the gravity gun refusing every plant until it was clicked twice.
+  if not firing then need_release = false end
   if id ~= "gravgun" and grab then release("tool changed", true) end
   if id ~= "gravgun" then wantsScroll = false end
+  if id ~= "laser" and cutMode then cutMode = false; saw_reset() end
   if id == "laser" then
+    -- CUT while E is held (and E isn't a door's or a crate's right now).
+    local want_cut = key_e() and e_taken() == nil
+    if want_cut ~= cutMode then
+      cutMode = want_cut
+      saw_reset()
+      bore_drop()
+      if cutMode then
+        play(SFX.mode, { track = "UI", volume = 0.4, pitch = 1.3 })
+        recoil = recoil + 0.01
+      end
+    end
+  end
+  if id == "laser" and cutMode then
+    inUse = true
+    fire_cut(node, dt)
+  elseif id == "laser" then
     if key_q() then
       laserMode = laserMode == "dig" and "fill" or "dig"
       save.set("tool.laserMode", laserMode)
@@ -2163,6 +2348,8 @@ local function tick(node, dt, carrying)
       local hit, full = fire_dig(node, dt, firing)
       draw_ring(hit, firing, full, params.laser_radius * params.laser_strength, false)
     end
+    -- The cut is one key away and says so while the beam is idle.
+    if not firing and prompt ~= "" and e_taken() == nil then prompt = prompt .. "  ·  hold E: cut plants" end
   elseif id == "gravgun" then
     if not grab then hum_off() end
     fire_grav(node, dt, firing)
@@ -2178,7 +2365,10 @@ end
 
 function tool_label(s)
   if s.consumable then return string.format("%s ×%d", s.label, s.n) end
-  if s.id == "laser" then return s.label .. (laserMode == "fill" and "  ·  FILL" or "  ·  DIG") end
+  if s.id == "laser" then
+    if cutMode and s.id == toolId() then return s.label .. "  ·  CUT" end
+    return s.label .. (laserMode == "fill" and "  ·  FILL" or "  ·  DIG")
+  end
   return s.label
 end
 
@@ -2259,6 +2449,14 @@ local function draw_reticle()
     local s = math.min(1, strain)
     r, g, b = 0.55 + 0.45 * s, 0.92 - 0.35 * s, 1.0 - 0.75 * s
     draw.circleOutline(ax, ay, 14 * k, r, g, b, 0.35, 1.2 * k)
+  end
+  if cutMode and toolId() == "laser" then
+    -- CUT: a white-hot reticle that says so.
+    r, g, b, a = 1.0, 0.96, 0.86, 0.95
+    if draw.text then
+      draw.text(ax, ay + 13 * k, "CUT", 11 * k, 0.0, 0.0, 0.0, 0.55, "center")
+      draw.text(ax, ay + 12 * k, "CUT", 11 * k, r, g, b, a, "center")
+    end
   end
   draw.circleOutline(ax, ay, 9 * k, 0.0, 0.0, 0.0, a * 0.45, 3.5 * k)
   draw.circleOutline(ax, ay, 9 * k, r, g, b, a, 1.6 * k)

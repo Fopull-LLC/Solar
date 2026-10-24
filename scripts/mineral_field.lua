@@ -75,7 +75,7 @@ defaults = {
   -- keeps the answer in the save). Units of Star Geode each one holds.
   --@range 1 20
   pocket_units = 6,
-  -- With the Mining Laser out, ground within this range of a pocket shows a
+  -- With the Terrain Laser out, ground within this range of a pocket shows a
   -- faint pulsing ring and how deep it lies: the suit's resonance sensor.
   --@range 0 80 --@units m
   pocket_hint = 35.0,
@@ -469,7 +469,7 @@ end
 -- (`rare.<body>`.ores, body-relative centres); what has been taken out of each
 -- is `rare.ore.<body>`. Nothing marks them on the surface: you find one by
 -- digging, and the suit's resonance sensor (a ring on the ground above, while
--- the Mining Laser is out) says when you are standing over one.
+-- the Terrain Laser is out) says when you are standing over one.
 --
 -- The laser asks `nearest` at its cut point before it asks the rock what it
 -- is (tool_belt pop_unit), so a cut point inside a pocket answers here — and
@@ -856,7 +856,7 @@ function update(node, dt)
 end
 
 -- ── the resonance sensor ─────────────────────────────────────────────────────
--- With the Mining Laser in hand and on foot, a pocket within `pocket_hint`
+-- With the Terrain Laser in hand and on foot, a pocket within `pocket_hint`
 -- metres shows as a faint ring on the ground above it, pulsing, with how far
 -- down it lies. Drawn in the camera pass like every draw.*.
 function lateUpdate(node, dt)
