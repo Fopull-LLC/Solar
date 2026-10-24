@@ -1629,8 +1629,10 @@ def add_interior(src, interior):
 # "Stage" (a piston's middle tube), "Bit" (the drill's auger), "Fingers"
 # (the claw's), "Lamp" (the rover body's headlights).
 
-def end_plate(m, y, w, d, t=0.016, mat="Metal", up=True, bolts=True):
-    """A bolted square end plate (w × d) centred on the Y axis at height y."""
+def end_plate(m, y, w, d, t=0.016, mat="Metal", up=True, bolts=True, bolt_mat="Metal"):
+    """A bolted square end plate (w × d) centred on the Y axis at height y.
+    The bolts wear the plate's own Metal so a frame member is two materials
+    (two draws): a 1,000-member frame was 3,096 draws at four (design §8.2)."""
     yc = y - t / 2 if up else y + t / 2
     box(m, mat, (0, yc, 0), (w, t, d), uv_m=4.0)
     if bolts:
@@ -1638,7 +1640,7 @@ def end_plate(m, y, w, d, t=0.016, mat="Metal", up=True, bolts=True):
             for sz in (-1, 1):
                 p = np.array([sx * (w / 2 - 0.018), y, sz * (d / 2 - 0.018)])
                 dirv = np.array([0, 1.0 if up else -1.0, 0])
-                tube(m, "Dark", p - dirv * 0.002, p + dirv * 0.007, 0.007, segs=6, uv_m=8.0)
+                tube(m, bolt_mat, p - dirv * 0.002, p + dirv * 0.007, 0.007, segs=6, uv_m=8.0)
 
 
 def part_strut(L):
@@ -1659,8 +1661,7 @@ def part_strut(L):
                     c[ax] = sg * 0.0505
                     sz = [0.05, 0.12 * min(1.0, L / n / 0.25), 0.05]
                     sz[ax] = 0.004
-                    box(m, "Dark", tuple(c), tuple(sz), uv_m=6.0)
-        flat_decal(m, "Stencil", "serial1", (0, h - 0.12, 0.0505), (0, 1, 0), (-1, 0, 0), 0.12, 0.022)
+                    box(m, "Metal", tuple(c), tuple(sz), uv_m=6.0)
         return m
     return fn
 
@@ -1676,7 +1677,6 @@ def part_beam(L):
             box(m, "Metal", (0, 0, sg * 0.052), (0.03, L - 0.08, 0.006), uv_m=4.0)
         end_plate(m, h, 0.24, 0.14)
         end_plate(m, -h, 0.24, 0.14, up=False)
-        flat_decal(m, "Decal", "hazard", (0.06, h - 0.06, 0.0555), (1, 0, 0), (0, 1, 0), 0.07, 0.02)
         return m
     return fn
 
@@ -1698,7 +1698,6 @@ def part_ibeam(L):
                 box(m, "Yellow", (sx * 0.05, y, 0), (0.086, 0.012, 0.2), uv_m=1.5)
         end_plate(m, h, 0.24, 0.26)
         end_plate(m, -h, 0.24, 0.26, up=False)
-        flat_decal(m, "Stencil", "serial2", (0.0075, -h + 0.25, 0), (0, 0, 1), (0, 1, 0), 0.14, 0.026)
         return m
     return fn
 
@@ -1728,7 +1727,7 @@ def part_panel(W, D):
             for (x, z) in pts:
                 p = np.array([x, face * t / 2, z])
                 dv = np.array([0, face, 0.0])
-                tube(m, "Dark", p - dv * 0.002, p + dv * 0.006, 0.008, segs=6, uv_m=8.0)
+                tube(m, "Metal", p - dv * 0.002, p + dv * 0.006, 0.008, segs=6, uv_m=8.0)
         return m
     return fn
 
@@ -1738,10 +1737,8 @@ def part_plate():
     m = Model()
     W, t = 1.0, 0.1
     box(m, "Tread", (0, t / 2 - 0.01, 0), (W, 0.02, W), uv_m=2.0)
-    box(m, "Dark", (0, -0.01, 0), (W - 0.02, t - 0.02, W - 0.02), uv_m=2.0)
+    box(m, "Metal", (0, -0.01, 0), (W - 0.02, t - 0.02, W - 0.02), uv_m=2.0)
     box(m, "Metal", (0, -t / 2 + 0.008, 0), (W, 0.016, W), uv_m=2.0)
-    for sg in (-1, 1):
-        flat_decal(m, "Decal", "hazard", (0, -0.005, sg * (W / 2 - 0.01) + sg * 0.001), (sg, 0, 0), (0, 1, 0), 0.6, 0.05)
     return m
 
 
@@ -2151,6 +2148,20 @@ def build_new_parts(dry=False, only=()):
         tail = ""
         write_prefab(prefab, f"{what.upper()} — round-two part.", (key, model), half, mass, tail_nodes=tail)
 
+    # DRAWN PARTS (builder_proc.lua): an Empty root with the box collider at
+    # its 1 m default. The mesh is built at runtime from the blueprint's
+    # `size` (builder_proc.dress) and the collider's half-extents are written
+    # from it before the vessel's assembly.rebuild, so one prefab serves every
+    # length and profile.
+    if want("proc"):
+        for prefab, half, mass, what in (
+                ("PartMember", (0.12, 0.5, 0.07), 0.02, "DRAWN MEMBER — any length and profile (size.len, size.prof)"),
+                ("PartPanelP", (0.5, 0.02, 0.5), 0.025, "DRAWN PANEL — any size (size.w, size.d, size.t)"),
+                ("PartBrace", (0.035, 0.5, 0.035), 0.004, "BRACE — a two-point strut (size.len)")):
+            if not dry:
+                write_prefab(prefab, what + "; meshed by scripts/builder_proc.lua.", None, half, mass)
+            print(f"{prefab:14s} procedural (builder_proc)")
+
     # ROVER BODY — the deck kit stands proud of the box, so its mesh is a
     # recentred child; the headlights' Lamp rides the root.
     if want("rover_body"):
@@ -2281,9 +2292,542 @@ def build_new_parts(dry=False, only=()):
     return ok
 
 
+# ── AIRCRAFT (scripts/parts_aero.lua) ────────────────────────────────────────
+# The lifting surfaces are RADIAL parts: +X is the span (the root on the
+# host's flank at −X), +Y the chord with the LEADING EDGE at +Y, the faces
+# ±Z. Their sections are symmetric (NACA 00xx), so a copy a ring or a mirror
+# turns over looks the same. A control surface's moving part hangs off an
+# Empty laid along its hinge line ("FlapHinge", rotated about Z so its own X
+# is the hinge) through a "FlapPivot" the flight turns about X; an all-moving
+# surface turns its "SurfacePivot". Landing gear folds about "GearPivot".
+# python3 tools/gen_part_meshes.py aero      (or a single key, e.g. wing_l)
+
+def naca_z(t, x):
+    """Half-thickness of a NACA 00xx section of unit chord at x (0 = leading edge)."""
+    x = min(max(x, 0.0), 1.0)
+    return 5 * t * (0.2969 * math.sqrt(x) - 0.1260 * x - 0.3516 * x ** 2 + 0.2843 * x ** 3 - 0.1036 * x ** 4)
+
+
+def naca_dz(t, x):
+    x = min(max(x, 1e-4), 1.0)
+    return 5 * t * (0.2969 * 0.5 / math.sqrt(x) - 0.1260 - 2 * 0.3516 * x + 3 * 0.2843 * x ** 2 - 4 * 0.1036 * x ** 3)
+
+
+def wing_shell(m, span, root, tip, lsw, le, t=0.09, c0=0.0, c1=1.0, x0=None, mat="Paint2",
+               lead="Metal", n=9, root_cap="Metal", decals=True):
+    """A straight-tapered panel between chord fractions c0 and c1 (the part
+    ahead of a hinge, or the flap behind it): the section is lofted from the
+    root (x0) to the tip (x0 + span). UV in metres (u along the span, v along
+    the chord) so the paint's panel lines keep their size."""
+    if x0 is None:
+        x0 = -span / 2
+    xs = [c0 + (c1 - c0) * 0.5 * (1 - math.cos(math.pi * i / n)) for i in range(n + 1)]
+
+    def station(f):
+        c = root + (tip - root) * f
+        return x0 + span * f, le - lsw * f, c
+
+    for sgn in (1, -1):
+        for i in range(n):
+            xa, xb = xs[i], xs[i + 1]
+            mt = lead if (lead and xb <= 0.1 + 1e-9 and c0 < 0.05) else mat
+            P, N, UV = [], [], []
+            for f in (0.0, 1.0):
+                X, yle, c = station(f)
+                for x in (xa, xb):
+                    y = yle - x * c
+                    z = sgn * naca_z(t, x) * c
+                    if x < 1e-6:
+                        nn = (0.0, 1.0, 0.0)
+                    else:
+                        d = naca_dz(t, x)
+                        l = math.hypot(d, 1.0)
+                        nn = (0.0, d / l, sgn / l)
+                    P.append((X, y, z)); N.append(nn); UV.append((X, -y))
+            # quad: (root,xa) (root,xb) (tip,xb) (tip,xa)
+            m.add(mt, P, N, UV, [(0, 1, 3), (0, 3, 2)])
+    # caps: the root and the tip, and the blunt hinge face of a panel ahead of a flap
+    for f, mt, nx in ((0.0, root_cap, -1.0), (1.0, mat, 1.0)):
+        X, yle, c = station(f)
+        P, N, UV, I = [], [], [], []
+        ring = [(yle - x * c, naca_z(t, x) * c) for x in xs] + [(yle - x * c, -naca_z(t, x) * c) for x in reversed(xs[1:-1])]
+        cy = sum(p[0] for p in ring) / len(ring)
+        P.append((X, cy, 0.0)); N.append((nx, 0, 0)); UV.append((cy, 0))
+        for (y, z) in ring:
+            P.append((X, y, z)); N.append((nx, 0, 0)); UV.append((-y, z))
+        k = len(ring)
+        for i in range(k):
+            I.append((0, 1 + i, 1 + (i + 1) % k))
+        m.add(mt, P, N, UV, I)
+    if c1 < 0.999 or c0 > 0.001:
+        for cc in ([c1] if c1 < 0.999 else []) + ([c0] if c0 > 0.001 else []):
+            P, N, UV = [], [], []
+            for f in (0.0, 1.0):
+                X, yle, c = station(f)
+                y = yle - cc * c
+                h = naca_z(t, cc) * c
+                ny = -1.0 if cc == c1 else 1.0
+                for z in (h, -h):
+                    P.append((X, y, z)); N.append((0, ny, 0)); UV.append((X, z))
+            m.add("Dark", P, N, UV, [(0, 1, 3), (0, 3, 2)])
+    if decals and c0 < 0.05 and span > 0.9:
+        X, yle, c = station(0.32)
+        xm = 0.35 if c1 > 0.6 else 0.5 * c1
+        y = yle - xm * c
+        zt = naca_z(t, xm) * c
+        w = min(0.32, 0.22 * span)
+        flat_decal(m, "Stencil", "nostep", (X, y, zt + 0.002), (1, 0, 0), (0, 1, 0), w)
+        flat_decal(m, "Stencil", "nostep", (X, y, -zt - 0.002), (-1, 0, 0), (0, 1, 0), w)
+
+
+def wing_root_block(m, span, root, le, t, x0=None):
+    """The fitting that bolts a panel to its host: a machined block along the
+    root chord, inside the panel's own thickness."""
+    if x0 is None:
+        x0 = -span / 2
+    box(m, "Metal", (x0 + 0.025, le - root / 2, 0.0), (0.05, root * 0.86, 2 * naca_z(t, 0.3) * root * 0.9), uv_m=3.0)
+
+
+def to_frame(model, origin, theta):
+    """Re-express a model in a frame at `origin` turned theta about Z (its X
+    along a hinge line)."""
+    out = Model()
+    out.merge(model, rot_z(-theta), -rot_z(-theta) @ np.asarray(origin, float))
+    return out
+
+
+def quat_z(theta):
+    return (0.0, 0.0, round(math.sin(theta / 2), 7), round(math.cos(theta / 2), 7))
+
+
+def empty_node(name, t, parent, rot=(0.0, 0.0, 0.0, 1.0), comment=""):
+    tx, ty, tz = (round(float(v), 4) for v in t)
+    cm = f"        // {comment}\n" if comment else ""
+    return f"""    (
+        name: "{name}",
+{cm}        transform: (
+            translation: ({tx}, {ty}, {tz}),
+            rotation: {rot},
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+        parent: Some({parent}),
+    ),
+"""
+
+
+# The planforms, exactly as scripts/parts_aero.lua gives them to the flight:
+# span, root chord, tip chord, leading-edge sweep (m at the tip), root LE y,
+# thickness ratio, flap chord share (None = fixed, "all" = all-moving).
+WINGS = {
+    "wing_s":     ("PartWingS",     2.0, 1.0, 1.0, 0.0, 0.5, 0.10, None,  0.03,  "WING PANEL S — 2.0 × 1.0 m"),
+    "wing_l":     ("PartWingL",     3.5, 1.6, 1.6, 0.0, 0.8, 0.09, None,  0.07,  "WING PANEL L — 3.5 × 1.6 m"),
+    "wing_swept": ("PartWingSwept", 3.0, 1.8, 0.8, 1.2, 1.0, 0.08, None,  0.06,  "SWEPT WING — 3.0 m, 1.8 → 0.8 m chord"),
+    "wing_tip":   ("PartWingTip",   1.2, 0.8, 0.3, 0.5, 0.4, 0.08, None,  0.012, "WING TIP — 1.2 m, tapered and swept"),
+    "wing_delta": ("PartWingDelta", 2.4, 3.0, 0.4, 2.4, 1.5, 0.06, None,  0.07,  "DELTA WING — 2.4 m span, 3.0 m root"),
+    "elevon":     ("PartElevon",    1.6, 1.0, 0.6, 0.4, 0.5, 0.09, 0.35,  0.025, "ELEVON PANEL — tail plane with a 35 % elevon"),
+    "aileron":    ("PartAileron",   2.0, 1.2, 1.2, 0.0, 0.6, 0.10, 0.30,  0.035, "AILERON PANEL — wing panel with a 30 % aileron"),
+    "tail_fin":   ("PartTailFin",   1.5, 1.5, 0.7, 0.8, 0.75, 0.09, 0.35, 0.03,  "TAIL FIN — fin with a 35 % rudder"),
+    "canard":     ("PartCanard",    1.0, 0.6, 0.4, 0.2, 0.3, 0.09, "all", 0.012, "CANARD — all-moving"),
+}
+
+
+def build_wing(key, dry, mesh):
+    prefab, span, root, tip, lsw, le, t, flap, mass, what = WINGS[key]
+    x0 = -span / 2
+    half = (span / 2, max(le, root / 2), max(0.02, naca_z(t, 0.3) * root))
+    children, tail = [], ""
+    if flap is None:
+        m = Model()
+        wing_shell(m, span, root, tip, lsw, le, t)
+        wing_root_block(m, span, root, le, t)
+        pm, pc = mesh(key, m)
+        children.append(("Panel", key, pm, pc))
+    elif flap == "all":
+        # the mount stays on the hull, the blade turns about its quarter chord
+        ym = le - root * 0.25
+        blade = Model()
+        wing_shell(blade, span - 0.06, root, tip, lsw * (span - 0.06) / span, le, t, x0=x0 + 0.06, root_cap="Paint2")
+        bm = to_frame(blade, (0.0, ym, 0.0), 0.0)
+        mount = Model()
+        box(mount, "Metal", (x0 + 0.03, ym, 0.0), (0.06, root * 0.5, 2 * naca_z(t, 0.3) * root * 1.1), uv_m=3.0)
+        tube(mount, "Chrome", (x0 + 0.02, ym, 0.0), (x0 + 0.1, ym, 0.0), 0.012, segs=8, uv_m=6.0)
+        mm, mc = mesh(key + "_mount", mount)
+        bmm, bmc = mesh(key + "_blade", bm)
+        children.append(("Mount", key + "_mount", mm, mc))
+        tail = empty_node("SurfacePivot", (0.0, ym, 0.0), 0, comment="turned about X by the flight (the surface's deflection)")
+        tail += prefab_node("Blade", key + "_blade", bmm, bmc, 2)
+    else:
+        hinge = 1.0 - flap
+        main = Model()
+        wing_shell(main, span, root, tip, lsw, le, t, c0=0.0, c1=hinge)
+        wing_root_block(main, span, root * hinge, le, t)
+        fl = Model()
+        # the flap is a hair narrower than the panel so it clears the root block
+        wing_shell(fl, span - 0.05, root, tip, lsw * (span - 0.05) / span, le, t, c0=hinge, c1=1.0,
+                   x0=x0 + 0.05, mat="Paint3", lead=None, root_cap="Paint3", decals=False)
+        # the hinge line, root to tip, and an Empty laid along it
+        h0 = np.array([x0, le - hinge * root, 0.0])
+        h1 = np.array([x0 + span, le - lsw - hinge * tip, 0.0])
+        th = math.atan2(h1[1] - h0[1], h1[0] - h0[0])
+        hm = (h0 + h1) / 2
+        flm = to_frame(fl, hm, th)
+        pm, pc = mesh(key, main)
+        fm, fc = mesh(key + "_flap", flm)
+        children.append(("Panel", key, pm, pc))
+        tail = empty_node("FlapHinge", hm, 0, quat_z(th), comment="along the hinge line (its +X); never moves")
+        tail += empty_node("FlapPivot", (0, 0, 0), 2, comment="turned about X by the flight: + = trailing edge toward −Z")
+        tail += prefab_node("Flap", key + "_flap", fm, fc, 3)
+    if dry:
+        return
+    write_prefab(prefab, f"{what} — a lifting surface (scripts/parts_aero.lua): +X span from the root at −X,"
+                 " leading edge at +Y, faces ±Z.", None, tuple(round(v, 3) for v in half), mass,
+                 children=children, tail_nodes=tail)
+
+
+def part_cockpit():
+    """The Swift cockpit: a 1.0 m fuselage nose with a bubble canopy over its
+    −Z side (the top), the nose at +Y, the stack flange at −Y."""
+    m = Model()
+    r = 0.5
+    # hull: barrel, then an ogive to a dark radome tip; the canopy opening is
+    # left out of the skin (cells facing −Z between y −0.55 and 0.75)
+    prof = [(r, -1.1), (r, -1.05), (r, -0.55)]
+    ys = np.linspace(-0.55, 1.0, 12)
+    for y in ys[1:]:
+        u = max(0.0, (y + 0.1) / 1.18)
+        prof.append((r * (1 - min(1, u) ** 2.2) ** 0.62 if y > -0.1 else r, y))
+    hole_lo, hole_hi = 1, 1 + 8
+    seg = 48
+
+    def skip(i, k):
+        a = TAU * (i + 0.5) / seg
+        da = abs(((a - FRONT) + math.pi) % TAU - math.pi)
+        return hole_lo + 1 <= k <= hole_hi - 1 and da < 0.62
+    lathe(m, "Paint", prof[:-2], segs=seg, uv_m=1.0, smooth=True, skip=skip)
+    lathe(m, "Dark", prof[-3:] + [(0.02, 1.08), (0.0, 1.1)], segs=seg, smooth=True, uv_m=2.0)
+    flange(m, "Metal", -1.1, -1.05, r - 0.04, r, uv_m=2.0)
+    disk(m, "Metal", r - 0.04, -1.1, segs=seg, up=False, uv_m=2.0)
+    # canopy: the upper half of an ellipsoid standing out of the opening
+    cx, cy, cz, ax, ay, az = 0.0, 0.12, -0.28, 0.33, 0.78, 0.42
+    P, N, UV, I = [], [], [], []
+    nu, nv = 24, 10
+    for j in range(nv + 1):
+        ph = (math.pi / 2) * j / nv           # 0 at the rim, π/2 at the top
+        for i in range(nu + 1):
+            th = TAU * i / nu
+            ex, ey, ez = math.cos(th) * math.cos(ph), math.sin(th) * math.cos(ph), -math.sin(ph)
+            P.append((cx + ax * ex, cy + ay * ey, cz + az * ez))
+            nn = np.array([ex / ax, ey / ay, ez / az]); nn /= np.linalg.norm(nn)
+            N.append(tuple(nn)); UV.append((i / nu, j / nv))
+    for j in range(nv):
+        for i in range(nu):
+            a_ = j * (nu + 1) + i
+            I.append((a_, a_ + 1, a_ + nu + 2)); I.append((a_, a_ + nu + 2, a_ + nu + 1))
+    m.add("Glass", P, N, UV, I)
+    # the canopy's frame: a bow at the windscreen and a sill along each side
+    for k in range(7):
+        a0, a1 = math.pi * 0.5 * k / 7, math.pi * 0.5 * (k + 1) / 7
+        p0 = (cx, cy + ay * math.cos(a0) * 0.62, cz - az * math.sin(a0) * 1.005)
+        p1 = (cx, cy + ay * math.cos(a1) * 0.62, cz - az * math.sin(a1) * 1.005)
+    for sx in (-1, 1):
+        tube(m, "Dark", (sx * ax * 0.98, cy - ay * 0.95, cz - 0.01), (sx * ax * 0.98, cy + ay * 0.95, cz - 0.01), 0.018, segs=6, uv_m=4.0)
+    # the windscreen bow: an arch over the canopy at its front third
+    arc = []
+    for k in range(9):
+        th = math.pi * k / 8
+        arc.append((cx + ax * math.cos(th) * 1.01, cy + ay * 0.42, cz - az * 0.91 * math.sin(th) * 1.01))
+    for a, b in zip(arc[:-1], arc[1:]):
+        tube(m, "Dark", a, b, 0.016, segs=6, caps=False, uv_m=4.0)
+    # inside: the tub floor, an ejection seat, a coaming over the panel
+    box(m, "Dark", (0.0, 0.05, -0.12), (0.56, 1.3, 0.04), uv_m=3.0)
+    box(m, "Anodised", (0.0, -0.32, -0.32), (0.32, 0.12, 0.5), uv_m=3.0)        # seat back
+    box(m, "Anodised", (0.0, -0.12, -0.2), (0.32, 0.42, 0.1), uv_m=3.0)         # seat pan
+    box(m, "Yellow", (0.0, -0.36, -0.6), (0.1, 0.06, 0.08), uv_m=6.0)           # the handle
+    box(m, "Dark", (0.0, 0.62, -0.32), (0.5, 0.18, 0.2), uv_m=3.0)              # panel coaming
+    # markings: a flag on each flank, the rescue arrow by the canopy rail
+    decal(m, "Decal", "flag", cyl_r(r), RIGHT, -0.75, 0.2)
+    decal(m, "Decal", "flag", cyl_r(r), math.pi, -0.75, 0.2)
+    decal(m, "Stencil", "rescue", cyl_r(r), RIGHT - 0.55, -0.55, 0.42)
+    decal(m, "Stencil", "serial1", cyl_r(r), BACK, -0.85, 0.16)
+    return m
+
+
+def part_fuse_tank():
+    m = Model()
+    tank_body(m, 2.0, 0.5, "rp1", "serial2")
+    return m
+
+
+def part_turbojet():
+    """A turbojet nacelle: the stack flange at +Y, a grey cowl, a hot-section
+    band, a convergent nozzle and, inside it, the turbine face and tail cone."""
+    m = Model()
+    r = 0.5
+    flange(m, "Metal", 0.84, 0.9, r - 0.04, r, uv_m=2.0)
+    disk(m, "Metal", r - 0.04, 0.9, segs=48, up=True, uv_m=2.0)
+    lathe(m, "Paint3", [(r, -0.25), (r, 0.84)], segs=48, uv_m=1.0)
+    for yb in (0.55, 0.15):
+        lathe(m, "Metal", [(r, yb - 0.012), (r + 0.006, yb - 0.006), (r + 0.006, yb + 0.006), (r, yb + 0.012)], segs=48, uv_m=3.0)
+    bolt_ring(m, "Metal", 0.81, r, 28, size=0.008, height=0.006, radial=True)
+    flange(m, "Metal", -0.36, -0.25, r - 0.06, r, uv_m=2.0)
+    # access panels and the oil-tank bulge on the flank
+    box(m, "Metal", (r * 0.97, 0.35, 0.0), (0.04, 0.5, 0.26), uv_m=3.0, bevel=0.01)
+    box(m, "Metal", (-r * 0.97, 0.35, 0.0), (0.04, 0.5, 0.26), uv_m=3.0, bevel=0.01)
+    # the nozzle: heat-tinted, convergent
+    lathe(m, "Bell", [(0.36, -0.9), (0.42, -0.62), (0.47, -0.36)], segs=40, smooth=True, u_tiles=2, v_norm=(0.0, 1.0))
+    lathe(m, "Metal", [(0.36, -0.9), (0.375, -0.895), (0.375, -0.88), (0.355, -0.875)], segs=40, smooth=True, uv_m=4.0)
+    lathe(m, "BellIn", [(0.345, -0.88), (0.32, -0.55)], segs=40, inward=True, u_tiles=2, v_norm=(1.0, 0.0))
+    disk(m, "Dark", 0.32, -0.55, segs=40, up=False, uv_m=2.0)
+    # turbine blades and the tail cone
+    for k in range(18):
+        a = TAU * k / 18
+        c, s = math.cos(a), math.sin(a)
+        box(m, "Metal", (0.2 * c, -0.555, 0.2 * s), (0.2, 0.01, 0.05), rot_y(-a) @ rot_x(0.4), uv_m=6.0)
+    lathe(m, "Dark", [(0.12, -0.55), (0.08, -0.7), (0.0, -0.78)], segs=24, smooth=True, uv_m=3.0)
+    decal(m, "Stencil", "nostep", cyl_r(r), FRONT, 0.6, 0.3)
+    decal(m, "Decal", "hazard", cyl_r(r), RIGHT, -0.15, 0.4)
+    decal(m, "Decal", "hazard", cyl_r(r), math.pi, -0.15, 0.4)
+    decal(m, "Stencil", "serial2", cyl_r(r), BACK, 0.62, 0.16)
+    return m
+
+
+def part_intake():
+    """A radial ram intake: a duct on the flank (mount face at −X), its mouth
+    at +Y facing the flight, a boundary-layer splitter against the hull."""
+    m = Model()
+    box(m, "Metal", (-0.185, 0.0, 0.0), (0.03, 0.86, 0.46), uv_m=3.0)                 # splitter / mount
+    box(m, "Paint2", (0.0, -0.02, 0.0), (0.34, 0.6, 0.42), uv_m=1.0, bevel=0.02)        # duct
+    # the mouth: a lip frame round a dark throat
+    for (cx_, cz_, sx, sz) in ((0.0, 0.2, 0.36, 0.03), (0.0, -0.2, 0.36, 0.03), (0.165, 0.0, 0.03, 0.43), (-0.165, 0.0, 0.03, 0.43)):
+        box(m, "Metal", (cx_, 0.33, cz_), (sx, 0.1, sz), uv_m=4.0)
+    box(m, "Dark", (0.0, 0.28, 0.0), (0.3, 0.02, 0.37), uv_m=3.0)
+    # the tail fairing tapers into the hull
+    lathe_m = Model()
+    lathe(lathe_m, "Paint2", [(0.17, 0.0), (0.12, -0.07), (0.04, -0.11)], segs=16, smooth=True, uv_m=2.0)
+    m.merge(lathe_m, np.diag([1.0, 1.0, 1.25]), (0.0, -0.32, 0.0))
+    flat_decal(m, "Decal", "hazard", (0.171, 0.15, 0.0), (0, 0, -1), (0, 1, 0), 0.38, 0.06)
+    return m
+
+
+def part_intake_cone():
+    """A nose intake: an annular cowl round a translating shock cone."""
+    m = Model()
+    lathe(m, "Paint", [(0.5, -0.5), (0.5, 0.05), (0.47, 0.3), (0.44, 0.42)], segs=48, smooth=True, uv_m=1.0)
+    lathe(m, "Metal", [(0.44, 0.42), (0.43, 0.45), (0.41, 0.44)], segs=48, smooth=True, uv_m=4.0)
+    lathe(m, "Dark", [(0.41, 0.44), (0.36, 0.1), (0.34, -0.3)], segs=48, inward=True, uv_m=2.0)
+    disk(m, "Dark", 0.34, -0.3, segs=48, up=True, uv_m=2.0)
+    lathe(m, "Metal", [(0.3, -0.3), (0.3, 0.05), (0.2, 0.28), (0.06, 0.45), (0.0, 0.5)], segs=32, smooth=True, uv_m=2.0)
+    flange(m, "Metal", -0.5, -0.45, 0.46, 0.5, uv_m=2.0)
+    disk(m, "Metal", 0.46, -0.5, segs=48, up=False, uv_m=2.0)
+    decal(m, "Decal", "hazard", cyl_r(0.5), FRONT, -0.2, 0.42)
+    decal(m, "Stencil", "serial1", cyl_r(0.5), BACK, -0.3, 0.16)
+    return m
+
+
+GEARS = {
+    #       prefab        rx    tyre r  width  h     rz    mass
+    "S": ("PartGearS", 0.50, 0.25, 0.14, 0.60, 0.15, 0.035),
+    "M": ("PartGearM", 0.75, 0.40, 0.20, 0.95, 0.20, 0.08),
+}
+
+
+def gear_parts(size):
+    """A landing-gear leg on a flank (+X out = down off a belly): the mount at
+    −X, an oleo strut, a fork round a tyre whose axle is the part's Z. The leg
+    hangs from GearPivot (it folds aft, toward −Y); the tyre is the root's
+    "Tyre" child (hidden while the live tyre rolls)."""
+    prefab, rx, r, w, h, rz, mass = GEARS[size]
+    tc = rx - r
+    piv = np.array([-rx + 0.05, 0.0, 0.0])
+    leg = Model()
+    box(leg, "Metal", (-rx + 0.04, 0.0, 0.0), (0.08, 0.22 + r * 0.3, 0.2), uv_m=3.0)
+    top, mid = -rx + 0.06, tc - r - 0.02
+    tube(leg, "Paint3", (top, 0, 0), (mid, 0, 0), 0.05 + r * 0.06, segs=14, uv_m=3.0)
+    tube(leg, "Chrome", (mid, 0, 0), (tc - r * 0.55, 0, 0), 0.032 + r * 0.04, segs=14, uv_m=4.0)
+    # torque links on the aft side
+    tube(leg, "Metal", ((top + mid) / 2, -0.07, 0), (mid + 0.02, -0.11, 0), 0.012, segs=6, uv_m=6.0)
+    tube(leg, "Metal", (mid + 0.02, -0.11, 0), (tc - r * 0.6, -0.05, 0), 0.012, segs=6, uv_m=6.0)
+    # the fork: a crown over the tyre and an arm down each side to the axle
+    zf = w / 2 + 0.025
+    box(leg, "Dark", (tc - r - 0.01, 0.0, 0.0), (0.05, 0.12, 2 * zf + 0.04), uv_m=4.0)
+    for sz in (-1, 1):
+        box(leg, "Dark", (tc - r * 0.5 - 0.01, 0.0, sz * zf), (r + 0.02, 0.07, 0.025), uv_m=4.0)
+    tube(leg, "Metal", (tc, 0, -zf - 0.02), (tc, 0, zf + 0.02), 0.022, segs=10, uv_m=6.0)
+    flat_decal(leg, "Decal", "hazard", ((top + mid) / 2, 0.0, 0.05 + r * 0.06 + 0.001), (1, 0, 0), (0, 1, 0), 0.2, 0.04)
+    legp = Model()
+    legp.merge(leg, None, -piv)
+    t0 = Model()
+    tyre(t0, r, w)
+    ty = Model()
+    ty.merge(t0, rot_y(math.pi / 2), (tc, 0, 0))
+    return prefab, rx, r, h, rz, mass, piv, legp, ty
+
+
+def build_gear(size, dry, mesh):
+    prefab, rx, r, h, rz, mass, piv, legp, ty = gear_parts(size)
+    key = "gear_" + size.lower()
+    lm, lc = mesh(key + "_leg", legp)
+    tm, tc = mesh(key + "_tyre", ty)
+    if dry:
+        return
+    tail = empty_node("GearPivot", piv, 0, comment="the leg folds about Z (aft, toward −Y) as the gear retracts")
+    tail += prefab_node("Leg", key + "_leg", lm, lc, 2)
+    write_prefab(prefab, f"LANDING GEAR {size} — r {r} m tyre on a leg; +X out (down off a belly), the axle"
+                 " along Z. The Tyre child hides while the live tyre rolls; GearPivot folds the leg.",
+                 None, (rx, h / 2, rz), mass, children=[("Tyre", key + "_tyre", tm, tc)], tail_nodes=tail)
+
+
+AERO_KEYS = ("cockpit", "fuse_tank", "turbojet", "intake", "intake_cone", "gear_s", "gear_m") + tuple(WINGS.keys())
+
+
+def build_aero_parts(dry=False, only=()):
+    """Write every aircraft part (scripts/parts_aero.lua): meshes and prefabs."""
+    def mesh(key, model):
+        model, c = recenter(model)
+        write_glb(model, os.path.join(MODELS, key + ".glb"))
+        mn, mx = model.bounds()
+        print(f"{key:16s} size {np.round(mx - mn, 3)} offset {np.round(c, 3)} tris {model.tris()}")
+        return model, c
+
+    def want(k):
+        return not only or k in only
+
+    for key in WINGS:
+        if want(key):
+            build_wing(key, dry, mesh)
+    for size in ("S", "M"):
+        if want("gear_" + size.lower()):
+            build_gear(size, dry, mesh)
+    if want("cockpit"):
+        cm, cc = mesh("cockpit", part_cockpit())
+        if not dry:
+            write_prefab("PartCockpit", "SWIFT COCKPIT — a jet cockpit on a 1.0 m fuselage: nose at +Y, canopy on"
+                         " the −Z side (the top, as the pod's window), the stack flange at −Y.",
+                         None, (0.5, 1.1, 0.5), 0.35, children=[("Body", "cockpit", cm, cc)])
+    simple = [
+        ("fuse_tank", part_fuse_tank, "PartFuseTank", (0.5, 1.0, 0.5), 0.12, "FUSELAGE TANK — 2 m of liquid fuel on a 1.0 m fuselage."),
+        ("turbojet", part_turbojet, "PartTurbojet", (0.5, 0.9, 0.5), 0.35, "WASP TURBOJET — air-breathing; the flange at +Y, the nozzle at −Y (thrust along +Y)."),
+        ("intake", part_intake, "PartIntake", (0.2, 0.45, 0.24), 0.03, "RAM INTAKE — radial (+X out); its mouth at +Y faces the flight."),
+        ("intake_cone", part_intake_cone, "PartIntakeCone", (0.5, 0.5, 0.5), 0.06, "SHOCK CONE INTAKE — a nose intake; the cone at +Y."),
+    ]
+    for key, fn, prefab, half, mass, what in simple:
+        if not want(key):
+            continue
+        model, c = mesh(key, fn())
+        if not dry:
+            write_prefab(prefab, what, None, half, mass, children=[("Body", key, model, c)])
+    if not dry and want("aerolib"):
+        open(os.path.join(PREFABS, "AeroLib.prefab.ron"), "w").write("""// AERO LIBRARY — scripts/aero.lua (the aerodynamics) and scripts/parts_aero.lua
+// (the aircraft parts). Spawned by vessel_controller and the builder when the
+// scene carries no node running them; reached with findScript("aero") /
+// findScript("parts_aero"). Written by tools/gen_part_meshes.py.
+[
+    (
+        name: "AeroLib",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [
+            (
+                kind: "aero",
+                enabled: true,
+                params: [],
+            ),
+            (
+                kind: "parts_aero",
+                enabled: true,
+                params: [],
+            ),
+        ],
+    ),
+]
+""")
+
+
 ROUND2_KEYS = ("strut1", "strut2", "strut3", "beam1", "beam2", "ibeam2", "ibeam3", "panel1", "panel2",
                "panel3", "plate", "hub", "adapter", "rover_body", "fairing_s", "fairing_m", "wheel_s",
-               "wheel_m", "wheel_l", "hinge", "piston", "rotor", "claw", "drill", "solar")
+               "wheel_m", "wheel_l", "hinge", "piston", "rotor", "claw", "drill", "solar", "proc")
+
+
+# ── VISUAL-ONLY VARIANTS (prefabs/vis/) ──────────────────────────────────────
+# The builder stand spawns these: the same meshes and materials with every
+# rigidbody and script stripped, so 1,000 parts on the stand cost the physics
+# nothing (a Kinematic box each cost 58 ms a frame idle at 1,000; design
+# §2.2) and nothing on the stand runs flight code. Derived from the flight
+# prefabs as they are on disk, so run it after anything that rewrites them:
+#     python3 tools/gen_part_meshes.py vis
+
+VIS_DIR = os.path.join(PREFABS, "vis")
+
+
+def strip_block(src, key):
+    """Remove every `key: Some(( … )),` block (balanced parentheses)."""
+    out, i = [], 0
+    while True:
+        j = src.find(key, i)
+        if j < 0:
+            out.append(src[i:])
+            break
+        ls = src.rfind("\n", 0, j) + 1
+        out.append(src[i:ls])
+        k = src.find("(", j)
+        depth = 0
+        while True:
+            if src[k] == "(":
+                depth += 1
+            elif src[k] == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+            k += 1
+        e = src.find("\n", k) + 1
+        i = e
+    return "".join(out)
+
+
+def strip_scripts(src):
+    """Every `scripts: [ … ],` list becomes `scripts: [],`."""
+    out, i = [], 0
+    while True:
+        j = src.find("scripts: [", i)
+        if j < 0:
+            out.append(src[i:])
+            break
+        k = src.find("[", j)
+        depth = 0
+        while True:
+            if src[k] == "[":
+                depth += 1
+            elif src[k] == "]":
+                depth -= 1
+                if depth == 0:
+                    break
+            k += 1
+        out.append(src[i:j] + "scripts: []")
+        i = k + 1
+    return "".join(out)
+
+
+def write_vis_prefabs():
+    os.makedirs(VIS_DIR, exist_ok=True)
+    n = 0
+    for f in sorted(os.listdir(PREFABS)):
+        if not (f.startswith("Part") and f.endswith(".prefab.ron")):
+            continue
+        src = open(os.path.join(PREFABS, f)).read()
+        vis = strip_scripts(strip_block(src, "rigidbody: Some(("))
+        assert "rigidbody: Some" not in vis, f
+        head = ("// VISUAL-ONLY variant of prefabs/" + f + " for the builder stand: no body,"
+                " no scripts.\n// Written by tools/gen_part_meshes.py (write_vis_prefabs) — regenerate,"
+                " don't edit.\n")
+        open(os.path.join(VIS_DIR, f), "w").write(head + vis)
+        n += 1
+    print(f"vis: {n} visual-only prefabs in prefabs/vis/")
 
 
 def main():
@@ -2319,6 +2863,11 @@ def main():
     if not only or "round2" in only or any(k in only for k in ROUND2_KEYS):
         sub = [k for k in only if k in ROUND2_KEYS]
         ok &= build_new_parts(dry, sub)
+    if not only or "aero" in only or any(k in only for k in AERO_KEYS + ("aerolib",)):
+        sub = [k for k in only if k in AERO_KEYS or k == "aerolib"]
+        build_aero_parts(dry, sub)
+    if not dry and (not only or "vis" in only):
+        write_vis_prefabs()
     if not ok:
         sys.exit(1)
 

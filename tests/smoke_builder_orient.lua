@@ -67,7 +67,18 @@ API.draw = setmetatable({}, { __index = function() return function() end end })
 API.save = { get = function(k) return save_store[k] end, set = function(k, v) save_store[k] = v end,
              flush = function() end }
 API.scene = { load = function() end }
-function API.findScript() return nil end
+-- The part registry (scripts/parts_registry.lua) is its own pure script now,
+-- reached with findScript("parts_registry"): load it from disk.
+local REGENV = setmetatable({}, { __index = _G })
+do
+  local rc = assert(loadfile("solar/scripts/parts_registry.lua"))
+  setfenv(rc, REGENV)
+  rc()
+end
+function API.findScript(kind)
+  if kind == "parts_registry" then return REGENV end
+  return nil
+end
 function API.findScripts() return {} end
 API.audio = setmetatable({}, { __index = function()
   return function() return setmetatable({}, { __index = function() return function() end end }) end
@@ -270,12 +281,14 @@ do
   check(all, "every ring copy faces outward with the same roll, one group")
   local spaced = #angs == 4
   for i = 1, #angs do
-    local want = (37 + (i - 1) * 90) % 360
+    -- WP3's attach rules snap a bearing round a hull to 15° (§5.2): 37° → 30°
+    local base = (env.attachRules() == "wp3") and 30 or 37
+    local want = (base + (i - 1) * 90) % 360
     local got = false
     for _, a in ipairs(angs) do if near(a, want, 0.01) then got = true end end
     if not got then spaced = false end
   end
-  check(spaced, "the ring sits at 37°, 127°, 217°, 307° (" .. table.concat(angs, ", ") .. ")")
+  check(spaced, "the ring sits at the snapped bearing and every 90° on (" .. table.concat(angs, ", ") .. ")")
 end
 
 -- 2c. ROTATE a ring member: every counterpart turns the same way RELATIVE TO
@@ -301,9 +314,9 @@ end
 do
   local fins = of("fins")
   env.selectPart(fins[1].uid)
-  press("2") -- the rotate tool
-  press("c") -- PART frame
-  check(env.ROT_FRAME == "part", "C switches the rotation frame to the part")
+  press("3") -- the ROTATE gizmo
+  press("l") -- LOCAL gizmo space (§4.3: L, was C)
+  check(env.ROT_FRAME == "part" and env.gizmoSpace() == "local", "L switches the gizmo space to LOCAL (the part)")
   local B0 = env.basisOf(fins[1].yaw, fins[1].pitch, fins[1].roll)
   API.KEYS.down.shift = true
   press("w")
@@ -325,7 +338,7 @@ do
     if not (near(Bf.X.x, 1, 1e-6) and near(Bf.Y.y, 1, 1e-6)) then reset = false end
   end
   check(reset, "SPACE stands every ring fin back the way its mount holds it")
-  press("c") -- back to the CAMERA frame
+  press("l") -- back to WORLD
 end
 
 -- 2d. symmetry OFF, placing ON a ring member places ONE part
@@ -385,7 +398,7 @@ do
   check(#fins == 2, "mirror places a pair (" .. #fins .. ")")
   if #fins == 2 then
     env.selectPart(fins[1].uid)
-    press("2")
+    press("3")
     API.KEYS.down.shift = true
     press("d") -- 15° about world up (CAMERA frame)
     press("w")

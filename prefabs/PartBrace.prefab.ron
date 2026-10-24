@@ -1,0 +1,27 @@
+// BRACE — a two-point strut (size.len); meshed by scripts/builder_proc.lua.
+// Written by tools/gen_part_meshes.py (write_prefab) — edit the generator, not this file.
+[
+    (
+        name: "PartBrace",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+        rigidbody: Some((
+            boxed: true,
+            mode: Kinematic,
+            radius: 0.035,
+            height: 1.0,
+            half_extents: (0.035, 0.5, 0.035),
+            restitution: 0.05,
+            friction: 0.6,
+            gravity: true,
+            lock_pos: (false, false, false),
+            lock_rot: (false, false, false),
+            mass: 0.004,
+        )),
+    ),
+]

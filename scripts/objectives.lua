@@ -739,7 +739,8 @@ end
 
 function update(node, dt)
   if not el then el = node:getcomponent("UiElement") end
-  if input.pressed("o") then shown = not shown end
+  local gmo = ref("game_manager")
+  if input.pressed("o") and not (gmo and gmo.inputOwner == "builder") then shown = not shown end
 
   local astro = find("Astronaut")
   -- The completion banner outranks everything except a panel: it is the game's

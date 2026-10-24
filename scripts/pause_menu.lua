@@ -432,7 +432,9 @@ function update(node, dt)
   local mgr = ref("game_manager")
   -- Not while the world is streaming in: there is nothing to pause yet, and a
   -- menu over a loading screen is a menu you cannot leave.
-  if mgr and mgr.loading then
+  -- Nor while the VAB builder has the keys: its Esc backs out of its own
+  -- levels and never pauses (LEAVE is a button there).
+  if mgr and (mgr.loading or mgr.inputOwner == "builder") then
     if open then close() end
     return
   end

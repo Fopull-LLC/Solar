@@ -1,0 +1,80 @@
+// VISUAL-ONLY variant of prefabs/PartTankS.prefab.ron for the builder stand: no body, no scripts.
+// Written by tools/gen_part_meshes.py (write_vis_prefabs) — regenerate, don't edit.
+[
+    (
+        name: "PartTankS",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Mesh(
+            asset_path: "models/parts/tank_s.glb",
+        ),
+        object_materials: {
+            "Dark": (
+                color: (0.3, 0.3, 0.32),
+                texture: Some("textures/parts/metal_albedo.png"),
+                normal_map: Some("textures/parts/metal_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/parts/metal_orm.png"),
+                roughness: 1.2,
+                metallic_map: Some("textures/parts/metal_orm.png"),
+                metallic: 0.4,
+                ao_map: Some("textures/parts/metal_orm.png"),
+                shader: Some("shaders/hullPanels.flsl"),
+                shader_params: {
+                    "tint": (0.3, 0.3, 0.32, 1.0),
+                },
+                shading: Physical,
+            ),
+            "Decal": (
+                color: (1.0, 1.0, 1.0),
+                texture: Some("textures/parts/markings.png"),
+                roughness: 0.55,
+                metallic: 0.0,
+                shading: Physical,
+            ),
+            "Metal": (
+                color: (1, 1, 1),
+                texture: Some("textures/parts/metal_albedo.png"),
+                normal_map: Some("textures/parts/metal_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/parts/metal_orm.png"),
+                roughness: 1.0,
+                metallic_map: Some("textures/parts/metal_orm.png"),
+                metallic: 0.55,
+                ao_map: Some("textures/parts/metal_orm.png"),
+                shader: Some("shaders/hullPanels.flsl"),
+                shader_params: {
+                    "tint": (1, 1, 1, 1.0),
+                },
+                shading: Physical,
+            ),
+            "Paint": (
+                color: (1, 1, 1),
+                texture: Some("textures/parts/paint_albedo.png"),
+                normal_map: Some("textures/parts/paint_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/parts/paint_orm.png"),
+                roughness: 1.0,
+                metallic_map: Some("textures/parts/paint_orm.png"),
+                metallic: 1.0,
+                ao_map: Some("textures/parts/paint_orm.png"),
+                shader: Some("shaders/hullPanels.flsl"),
+                shader_params: {
+                    "tint": (1, 1, 1, 1.0),
+                },
+                shading: Physical,
+            ),
+            "Stencil": (
+                color: (0.06, 0.06, 0.07),
+                texture: Some("textures/parts/markings.png"),
+                roughness: 0.6,
+                metallic: 0.0,
+                shading: Physical,
+            ),
+        },
+        scripts: [],
+    ),
+]

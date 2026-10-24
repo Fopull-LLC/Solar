@@ -349,6 +349,8 @@ local function on_foot(node)
   -- first person and whenever a wall pushes the view into the shoulders.
   local pw = ref("planet_walker")
   if not pw then why("no planet_walker in the scene — the belt can't tell who's driving") return false end
+  local gm = ref("game_manager")
+  if gm and gm.inputOwner == "builder" then why(GATE_ABOARD, "builder") return false end -- the VAB builder has the keys
   if pw.onFoot ~= true then why(GATE_ABOARD) return false end
   if pw.swimming == true then why("swimming") return false end
   local pm = ref("pause_menu")
@@ -531,6 +533,11 @@ end
 -- wash, so it is asked to lift it round the cut — once per place, not per
 -- bite. (`liftWash` arrives with the flora field's patch; without it this is
 -- a no-op and digging on a meadow is slow again.)
+-- Re-measured on engine 0.117.0-rc7 (card 0481: a dig re-lays only the marks
+-- it reached, budgeted): on Kail's meadow, 21–27 bites at 0.12 s with 43–143
+-- washes laid, the dig frames still reached 173–326 ms without the lift (the
+-- worst untimed, the turf batch rebuilt whole) against 115–170 ms with it.
+-- So the lift stays.
 local quiet = { body = nil, x = 0, y = 0, z = 0, t = -10 }
 local function quiet_ground(x, y, z)
   local name = space.dominant(x, y, z)

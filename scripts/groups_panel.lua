@@ -1,400 +1,390 @@
--- ACTION GROUPS PANEL — the builder's editor for what each key does in flight.
+-- CONTROLS — the builder's keymap tab (docs/builder-design.md §6.3 C, WP5).
 --
--- (The same frame shows a selected WHEEL's settings outside the groups tool:
--- describe_wheel, at the bottom.)
+-- It draws in the right plate's body under WP2's CTRLS tab
+-- (builder_inspector.rightPlate(); the inspector shrinks to its tabs there).
+-- A selected wheel's settings are INSPECT's (builder_inspector).
 --
--- Tool 5 in the Vehicle Assembly. Three steps, top to bottom, the way you
--- actually do it:
+-- One row per key in use, Besiege style, then the axes:
 --
---   1. pick a GROUP — the standard ones (Gear G, Deploy U, Lights Y, Brakes B,
---      RCS R, SAS T, Abort ⌫) or a custom 1–0; each chip shows how many
---      actions it holds
---   2. pick a PART — from "Controls on this craft" (every part with a switch,
---      actuators first, each with the keys it is on) or by clicking it on the
---      craft (it outlines; parts already in the open group outline amber)
---   3. tick the ACTIONS that part should run when the key is pressed —
---      Extend, Retract, Toggle, Decouple, Shut down… whatever its modules
---      declare (scripts/electronics.lua). A symmetry ring ticks as one.
+--   ┌ CONTROLS ── TEST [T] ─────────────────────────────┐
+--   │ [G]  Gear          Landing Legs ×4           ⇅    │
+--   │ [Y]  Lights        Floodlight ×2             ⇅    │
+--   │ [P]  Claw          Landing Claw              ⇅    │
+--   │ ── AXES ───────────────────────────────────────── │
+--   │ PITCH W/S   Hinge ×2   pos  gain ▬▬▬  trim ▬▬     │
+--   │ C1   ↑/↓    Crane boom  rate                      │
+--   │ [Arm][Rover][Plane][Rocket]       [clear all]     │
+--   └───────────────────────────────────────────────────┘
 --
--- Under that, the open group's whole list, each line with its own ✕. Staging is
--- untouched by any of this: a decoupler can be in a group AND in the stack.
+--   · hovering a row outlines its parts; clicking it selects them;
+--   · ✎ renames a key (the label the flight shows), ✕ empties it;
+--   · a key that two different things use is caution yellow;
+--   · each axis line has its mode (rate / position), a gain fader (−1…1:
+--     negative inverts) and, in position mode, a trim fader;
+--   · the selected part's actions are listed with their keycaps; a keycap
+--     opens the B placard for that action (builder_bind.beginFor);
+--   · presets: Arm (the selection, or every joint), Rover, Plane, Rocket.
 --
--- The rules (what's bound, the standard set, symmetry) are the builder's
--- (`groupsNow`, `groupsToggle` …); this script only draws and clicks.
+-- The rules are controls.lua's; edits go through the builder's commands
+-- (cmd "bind" / "unbind" / "bindAxis", one undo step each). Shown on the
+-- builder's CONTROLS tab (tool "groups"), or by setOpen(true).
 
 local el
 local refs = {}
 local function ref(kind)
   local r = refs[kind]
-  if not r or not r.valid then r = findScript(kind); refs[kind] = r end
+  if not r or not r.valid then r = findScript and findScript(kind) or nil; refs[kind] = r end
   return r
 end
 
 local W = 300
-local KEY_LABEL = { backspace = "⌫" }
+local open_flag = false
+local hover = nil         -- uids of the row under the cursor
+local renaming = nil      -- gid being renamed
+local armed_clear = false
+local last_v, last_sel, last_hover, last_ren, last_arm = nil, nil, nil, nil, nil
 
-local function key_of(g)
-  local k = g.key or ""
-  return KEY_LABEL[k] or k:upper()
+function setOpen(on) open_flag = on and true or false end
+function isOpen() return open_flag end
+
+-- Is the panel up, and is the cursor over it? (registerPanel)
+local PLATE_TOP = 84       -- the inspector's tabs and its one line, above us
+local area = nil          -- where we draw, design units { x, y, w, h }
+
+-- The mouse in design units (as builder_inspector reads it).
+local function mouse_du(H)
+  if not (camera and camera.screenSize and input and input.mouse) then return nil end
+  local _, sh = camera.screenSize()
+  if not (sh and sh > 0) then return nil end
+  local mx, my = input.mouse()
+  local ox, oy = 0, 0
+  if camera.screenRect then ox, oy = camera.screenRect() end
+  return (mx - (ox or 0)) * H / sh, (my - (oy or 0)) * H / sh
 end
 
--- A group chip: its name and key, the count in the corner.
-local function chip(B, E, g, groups, sel, w)
-  local n = 0
-  local gg = groups[g.id]
-  if gg then n = #gg.binds end
-  local label = g.standard and (g.label .. "  " .. key_of(g)) or key_of(g)
-  return { "button", key = "g" .. g.id, style = "panel/choice", selected = sel == g.id,
-    w = w, h = 26, textAlign = "center", textValign = "center",
-    text = n > 0 and (label .. "  ·" .. n) or label,
-    tooltip = string.format("%s — key %s · %d action%s", (gg and gg.name) or g.label, key_of(g), n,
-      n == 1 and "" or "s"),
-    onClicked = function() B.groupsSelect(g.id) end }
+function ownsMouse()
+  if not (el and el.visible and area) then return false end
+  local x, y = mouse_du(area.H)
+  return x ~= nil and x >= area.x and x <= area.x + area.w and y >= area.y and y <= area.y + area.h
 end
 
--- The open group's list, one line per (part label, action), symmetry rings
--- collapsed to ×N so a four-leg ring is one line.
-local function bound_rows(B, E, groups, recs, gid)
-  local gg = groups[gid]
-  local rows = {}
-  if not gg or #gg.binds == 0 then
-    rows[1] = { "text", key = "none", style = "panel/cellMuted", w = "100%", h = "fit", wrap = true,
-      text = "Nothing in this group yet — click a part on the craft, then tick its actions." }
-    return rows
+local function primary(B)
+  if B.selectionPrimary then return B.selectionPrimary() end
+  local s = B.selection and B.selection() or {}
+  return s[#s]
+end
+
+local function cmd(B, C, name, args)
+  local r = B.cmd(name, args)
+  if not r and C.lastError and B.placard then B.placard(C.lastError, "warn") end
+  return r
+end
+
+local function chips_text(parts)
+  local t = {}
+  for _, p in ipairs(parts) do t[#t + 1] = p.label .. (p.n > 1 and (" ×" .. p.n) or "") end
+  return table.concat(t, ", ")
+end
+
+local function all_uids(parts)
+  local out = {}
+  for _, p in ipairs(parts) do for _, u in ipairs(p.uids) do out[#out + 1] = u end end
+  return out
+end
+
+-- A key row: [cap]  name  parts  mode  ✎ ✕
+local function key_row(B, C, E, r, i)
+  local uids = all_uids(r.parts)
+  local name
+  if renaming == r.gid then
+    name = { "field", key = "nf", style = "menu/field", w = "grow", h = 22, text = r.name, maxLen = 24,
+      onSubmitted = function(n)
+        cmd(B, C, "unbind", { gid = r.gid, rename = (n and n.text) or r.name })
+        renaming = nil
+      end,
+      onCancelled = function() renaming = nil end }
+  else
+    name = { "text", key = "n", style = "panel/cellStrong", w = "grow", h = "fit", maxLines = 1, overflow = "ellipsis",
+             text = r.name }
   end
-  local seen, order = {}, {}
-  for _, b in ipairs(gg.binds) do
+  return { "col", key = "k" .. i, w = "100%", h = "fit", gap = 1, pad = 0, button = true,
+    tooltip = table.concat(r.acts, " · ") .. (r.conflict and "  ·  ⚠ an axis uses this key too" or ""),
+    onHoverStart = function() hover = uids end,
+    onHoverEnd = function() if hover == uids then hover = nil end end,
+    onClicked = function() if B.select then B.select(uids, "set") end end,
+    { "row", key = "top", w = "100%", h = 22, gap = 5, pad = 0, align = "center",
+      { "box", key = "cap", style = r.conflict and "hud/chipWarn" or "hud/key", w = 30, h = 20, text = r.cap,
+        textAlign = "center", textValign = "center" },
+      name,
+      { "text", key = "m", style = "panel/cellMuted", w = 30, h = "fit", textAlign = "end", text = r.mode },
+      { "button", key = "ren", style = "panel/secondary", w = 22, h = 20, text = "✎", textAlign = "center",
+        textValign = "center", tooltip = "Rename — the label the flight shows on this key",
+        onClicked = function() renaming = r.gid end },
+      { "button", key = "x", style = "panel/secondary", w = 22, h = 20, text = "✕", textAlign = "center",
+        textValign = "center", tooltip = "Take everything off this key",
+        onClicked = function()
+          local acts = {}
+          local g = B.groupsNow and B.groupsNow() or {}
+          for _, b in ipairs((g[r.gid] or {}).binds or {}) do acts[b.act] = true end
+          local list = {}
+          for a in pairs(acts) do list[#list + 1] = a end
+          cmd(B, C, "unbind", { uids = uids, acts = list, gid = r.gid })
+        end } },
+    { "text", key = "p", style = "panel/cellMuted", w = "100%", h = "fit", maxLines = 1, overflow = "ellipsis",
+      text = "      " .. chips_text(r.parts) } }
+end
+
+local function fader(key, v, lo, hi, show, on_set)
+  return { "row", key = key, w = "100%", h = 20, gap = 6, pad = 0, align = "center",
+    { "text", key = "l", style = "panel/cellMuted", w = 34, h = "fit", text = key:upper() },
+    { "slider", key = "s", style = "ctl/track", w = "grow", h = 12, min = lo, max = hi, value = v, interact = true,
+      onChanged = function(n)
+        local sl = n and n:getcomponent("UiSlider")
+        if sl and sl.value then on_set(sl.value) end
+      end,
+      { "box", key = "f", style = "ctl/fill", part = "fill", w = "100%", h = "100%" },
+      { "box", key = "h", style = "ctl/handle", part = "handle", w = 10, h = 16 } },
+    { "text", key = "v", style = "ctl/value", w = 44, h = "fit", textAlign = "end", text = show(v) } }
+end
+
+-- An axis source and its bound parts, each with mode, gain and trim.
+local function axis_rows(B, C, E, a, i, recs)
+  local out = {}
+  out[#out + 1] = { "row", key = "a" .. i, w = "100%", h = 22, gap = 6, pad = 0, align = "center",
+    { "box", key = "cap", style = a.conflict and "hud/chipWarn" or "hud/key", w = 54, h = 20, text = a.keys,
+      textAlign = "center", textValign = "center" },
+    { "text", key = "n", style = "panel/cellStrong", w = "grow", h = "fit", maxLines = 1, overflow = "ellipsis",
+      text = a.custom and (a.name or a.src:upper()) or a.label } }
+  for j, b in ipairs(a.binds) do
+    local key = "a" .. i .. "b" .. j
+    local uids = b.uids
     local rec = recs[b.uid]
-    if rec then
-      local act = E.actionOf(rec, b.act)
-      local ring = rec.sym and ("s" .. rec.sym) or ("u" .. b.uid)
-      local k = ring .. "|" .. b.act
-      if not seen[k] then
-        seen[k] = { label = rec.label or rec.id or "part", act = act and act.label or b.act, n = 0,
-                    uid = b.uid, actid = b.act }
-        order[#order + 1] = k
-      end
-      seen[k].n = seen[k].n + 1
+    local C2 = C
+    local spec = rec and C.axisSpec(rec, b.act, E)
+    local half = spec and (spec.max - spec.min) / 2 or 1
+    local unit = spec and spec.unit or ""
+    local function tune(field, value)
+      cmd(B, C2, "bindAxis", { uids = uids, act = b.act, field = field, value = value, merge = key .. field })
+    end
+    out[#out + 1] = { "col", key = key, w = "100%", h = "fit", gap = 2, pad = 0,
+      onHoverStart = function() hover = uids end,
+      onHoverEnd = function() if hover == uids then hover = nil end end,
+      { "row", key = "h", w = "100%", h = 22, gap = 4, pad = 0, align = "center",
+        { "text", key = "p", style = "panel/cell", w = "grow", h = "fit", maxLines = 1, overflow = "ellipsis",
+          text = "  " .. b.label .. (b.n > 1 and (" ×" .. b.n) or "") .. " · " .. b.act },
+        { "button", key = "rate", style = "panel/choice", selected = b.mode == "rate", w = 44, h = 20, text = "rate",
+          textAlign = "center", textValign = "center", tooltip = "Moves while held, stays where it stops",
+          onClicked = function() tune("mode", "rate") end },
+        { "button", key = "pos", style = "panel/choice", selected = b.mode == "position", w = 44, h = 20, text = "pos",
+          textAlign = "center", textValign = "center", tooltip = "Follows the input and springs back to the trim",
+          onClicked = function() tune("mode", "position") end },
+        { "button", key = "x", style = "panel/secondary", w = 22, h = 20, text = "✕", textAlign = "center",
+          textValign = "center", tooltip = "Take this part off the axis",
+          onClicked = function() cmd(B, C2, "unbind", { uids = uids, axis = b.act }) end } },
+      fader("gain", b.gain or 1, -1, 1, function(v) return string.format("%+.2f", v) end,
+        function(v) tune("gain", math.floor(v * 20 + 0.5) / 20) end) }
+    if b.mode == "position" then
+      local col = out[#out]
+      col[#col + 1] = fader("trim", b.trim or 0, -half, half,
+        function(v) return string.format(unit == "m" and "%+.2f" or "%+.0f", v) .. (unit == "m" and "m" or unit) end,
+        function(v) tune("trim", v) end)
     end
   end
-  for i, k in ipairs(order) do
-    local e = seen[k]
-    rows[#rows + 1] = { "row", key = "b" .. i, w = "100%", h = 24, gap = 6, pad = 0, align = "center",
-      { "text", key = "p", style = "panel/cellStrong", w = "grow", h = "fit", maxLines = 1, overflow = "ellipsis",
-        text = e.label .. (e.n > 1 and ("  ×" .. e.n) or "") },
-      { "text", key = "a", style = "panel/cellMuted", w = 110, h = "fit", maxLines = 1, overflow = "ellipsis",
-        textAlign = "end", text = e.act },
-      { "button", key = "x", style = "panel/secondary", w = 24, h = 22, text = "✕",
-        textAlign = "center", textValign = "center", tooltip = "Take it out of this group",
-        onClicked = function() B.groupsToggle(gid, e.uid, e.actid) end } }
-  end
-  return rows
+  return out
 end
 
--- What the craft can DO, at a glance: one chip per part (a symmetry ring is one
--- chip) that has anything to switch, ACTUATORS FIRST — pistons, hinges,
--- rotors, the drill, the claw — then the rest. Each chip names the keys its
--- actions are on, so "where are my robotics?" is answered without hunting for
--- the part on the craft; clicking one selects that part below.
---
--- (It used to be click-a-part-or-nothing: a piston you couldn't find on the
--- craft, or whose twelve actions ran off the bottom of the screen, was "not in
--- my action groups".)
-local function controls_rows(B, E, groups, recs)
-  local list = {}
-  for _, rec in pairs(recs) do list[#list + 1] = rec end
-  table.sort(list, function(a, b)
-    local aa, ba = E.actuatorOf and E.actuatorOf(a) ~= nil, E.actuatorOf and E.actuatorOf(b) ~= nil
-    if aa ~= ba then return aa end
-    return (a.uid or 0) < (b.uid or 0)
-  end)
-  local sel = B.selectedPart and B.selectedPart()
-  local selrec = sel and recs[sel]
-  local seen, chips, actuators, loose = {}, {}, 0, 0
-  for _, rec in ipairs(list) do
-    local ring = (rec.sym and rec.sym ~= 0) and ("s" .. rec.sym) or ("u" .. rec.uid)
-    local acts = E.actionsOf(rec)
-    if #acts > 0 and not seen[ring] then
-      seen[ring] = { n = 0 }
-      local act = E.actuatorOf and E.actuatorOf(rec)
-      local keys, kseen = {}, {}
-      for _, b in ipairs(E.bindsOfPart(groups, rec.uid)) do
-        if not kseen[b.gid] then
-          kseen[b.gid] = true
-          keys[#keys + 1] = key_of(E.groupInfo(b.gid) or { key = b.gid })
-        end
-      end
-      if act then
-        actuators = actuators + 1
-        if #keys == 0 then loose = loose + 1 end
-      end
-      local on = selrec and ((selrec.sym and selrec.sym ~= 0 and selrec.sym == rec.sym) or selrec.uid == rec.uid)
-      local n = 0
-      for _, r2 in pairs(recs) do if r2.sym and r2.sym ~= 0 and r2.sym == rec.sym then n = n + 1 end end
-      chips[#chips + 1] = { "button", key = "p" .. rec.uid, style = "panel/choice", selected = on and true or false,
-        w = "fit", h = 24, dir = "row", gap = 6, pad = 4, align = "center",
-        tooltip = act and "An actuator — give it keys below, then hold or press them in flight"
-          or "Click to see what this part can do",
-        { "text", key = "n", style = act and "panel/cellStrong" or "panel/cell", w = "fit", h = "fit",
-          text = (rec.label or rec.id or "part") .. (n > 1 and ("  ×" .. n) or "") },
-        { "text", key = "k", style = (#keys > 0) and "panel/keys" or "panel/cellMuted", w = "fit", h = "fit",
-          text = (#keys > 0) and table.concat(keys, " ") or "—" },
-        onClicked = function() if B.selectPart then B.selectPart(rec.uid) end end }
-    end
-  end
+-- The selected part's actions with their keycaps.
+local function part_rows(B, C, E, bind)
+  local uid = primary(B)
   local rows = {}
-  if #chips == 0 then
-    rows[1] = { "text", key = "noctl", style = "panel/cellMuted", w = "100%", h = "fit", wrap = true,
-      text = "Nothing on this craft has a switch yet." }
-    return rows
-  end
-  rows[1] = { "row", key = "ctl", wrap = true, w = "100%", h = "fit", gap = 4, pad = 0 }
-  for _, c in ipairs(chips) do rows[1][#rows[1] + 1] = c end
-  if loose > 0 and B.groupsAutoActuators then
-    rows[#rows + 1] = { "button", key = "auto", style = "panel/action", w = "100%", h = 28, textAlign = "center",
-      textValign = "center",
-      text = string.format("Give %s a key  (1–0)", loose == 1 and "the actuator" or ("all " .. loose .. " actuators")),
-      tooltip = "Pistons extend on one key, hinges swing on two (held), rotors, drills and claws switch on one",
-      onClicked = function() B.groupsAutoActuators() end }
-  end
-  return rows
-end
-
--- One tickable action chip: ☐/☑ and the action's name.
-local function act_chip(B, E, groups, gid, uid, a, i)
-  local on = E.isBound(groups, gid, uid, a.id)
-  local elsewhere = {}
-  for _, g2 in ipairs(E.groupsOf(groups, uid, a.id)) do
-    if g2 ~= gid then elsewhere[#elsewhere + 1] = key_of(E.groupInfo(g2) or { key = g2 }) end
-  end
-  return { "button", key = "a" .. i, style = "panel/row", selected = on,
-    w = "fit", h = 24, dir = "row", gap = 5, pad = 4, align = "center",
-    tooltip = #elsewhere > 0 and ("also on " .. table.concat(elsewhere, " ")) or nil,
-    { "text", key = "c", style = on and "panel/keys" or "panel/cellMuted", w = 14, h = "fit",
-      text = on and "☑" or "☐" },
-    { "text", key = "t", style = "panel/cellStrong", w = "fit", h = "fit", text = a.label },
-    { "text", key = "o", style = "panel/cellMuted", w = "fit", h = "fit",
-      text = #elsewhere > 0 and table.concat(elsewhere, " ") or "" },
-    onClicked = function() B.groupsToggle(gid, uid, a.id) end }
-end
-
--- The selected part's actions as tick chips for the open group, one line per
--- switch (Extend · Retract · Extend / retract) and per setting (Angle + · − ·
--- centre · → +90° · → −90°), so a piston's twelve actions take four lines.
-local function part_rows(B, E, groups, recs, gid)
-  local uid = B.selectedPart()
-  local rec = uid and recs[uid]
-  local rows = {}
-  if not rec then
+  if not uid then
     rows[1] = { "text", key = "pick", style = "panel/cellMuted", w = "100%", h = "fit", wrap = true,
-      text = "Click a part above, or on the craft, to see what it can do." }
+      text = "Select a part and press B to give it a key — or click a keycap below." }
     return rows
   end
-  local acts = E.actionsOf(rec)
+  local r = B.partRec and B.partRec(uid)
+  local list = {}
+  if r then
+    local d = r.def or {}
+    local rec = { uid = uid, id = r.id, label = d.label, kind = d.kind, mods = E.deriveMods and E.deriveMods(d, d.mods) or d.mods,
+                  sym = r.sym }
+    list = C.partControls(B.groupsNow and B.groupsNow() or {}, B.controlsData and B.controlsData() or nil, rec, E)
+  end
   rows[#rows + 1] = { "text", key = "pl", style = "panel/cellStrong", w = "100%", h = "fit",
-    text = (rec.label or rec.id or "part") .. (rec.sym and rec.sym ~= 0 and "  (ring — edits every member)" or "") }
-  if #acts == 0 then
+    text = ((r and r.def and r.def.label) or "part") .. ((r and r.sym and r.sym ~= 0) and "  (ring — binds every member)" or "") }
+  if #list == 0 then
     rows[#rows + 1] = { "text", key = "noact", style = "panel/cellMuted", w = "100%", h = "fit", wrap = true,
       text = "Nothing to switch on this part — it's structure." }
     return rows
   end
-  local lines, order, axes = {}, {}, false
-  for i, a in ipairs(acts) do
-    local lk = a.state or a.axis or ("t" .. a.id)
-    if not lines[lk] then lines[lk] = {}; order[#order + 1] = lk end
-    lines[lk][#lines[lk] + 1] = act_chip(B, E, groups, gid, uid, a, i)
-    if a.kind == "axis" and a.dir ~= 0 then axes = true end
+  local sc = { "scroll", key = "acts", w = "100%", h = "fit", maxH = 150, gap = 2, pad = 0, dir = "column" }
+  for i, a in ipairs(list) do
+    local keys = #a.keys > 0 and table.concat(a.keys, " ") or "—"
+    sc[#sc + 1] = { "row", key = "r" .. i, w = "100%", h = 22, gap = 6, pad = 0, align = "center",
+      { "text", key = "t", style = a.primary and "panel/cellStrong" or "panel/cell", w = "grow", h = "fit",
+        maxLines = 1, overflow = "ellipsis", text = a.label .. (a.axis and "  ±" or "") },
+      { "button", key = "k", style = "panel/secondary", w = 64, h = 20, text = keys, textAlign = "center",
+        textValign = "center", tooltip = "Press to bind (the B placard for this action)",
+        onClicked = function() if bind and bind.beginFor then bind.beginFor(uid, a.id) end end },
+      { "button", key = "x", style = "panel/secondary", w = 22, h = 20, text = "✕", textAlign = "center",
+        textValign = "center", disabled = #a.keys == 0, tooltip = "Take it off every key",
+        onClicked = function()
+          if a.axis then
+            if #C.axesOfPart(C.live(B.controlsData and B.controlsData() or nil), uid) > 0 then
+              cmd(B, C, "unbind", { uids = { uid }, axis = a.axis })
+            else
+              cmd(B, C, "unbind", { uids = { uid }, acts = { a.axis .. ".inc", a.axis .. ".dec" } })
+            end
+          else
+            cmd(B, C, "unbind", { uids = { uid }, acts = a.acts })
+          end
+        end } }
   end
-  local list = {}
-  for li, lk in ipairs(order) do
-    local row = { "row", key = "l" .. li, wrap = true, w = "100%", h = "fit", gap = 4, pad = 0 }
-    for _, c in ipairs(lines[lk]) do row[#row + 1] = c end
-    list[#list + 1] = row
-  end
-  if axes then
-    list[#list + 1] = { "text", key = "axhint", style = "panel/hint", w = "100%", h = "fit", wrap = true,
-      text = "+ and − move it while the group's key is HELD (let go to stop there); → and centre go straight there on a press." }
-  end
-  local sc = { "scroll", key = "acts", w = "100%", h = "fit", maxH = 150, gap = 4, pad = 0, dir = "col" }
-  for _, r in ipairs(list) do sc[#sc + 1] = r end
   rows[#rows + 1] = sc
   return rows
 end
 
-local function describe(B, E)
-  local groups, recs = B.groupsNow()
-  groups = groups or {}
-  recs = recs or {}
-  local gid = B.groupsSelected() or "1"
-  local info = E.groupInfo(gid) or { label = gid, key = gid }
-  local list = E.groupList()
-  local std, cus = {}, {}
-  for _, g in ipairs(list) do
-    if g.standard then std[#std + 1] = g else cus[#cus + 1] = g end
+local function describe(B, E, C)
+  local groups, recs = {}, {}
+  if B.groupsNow then groups, recs = B.groupsNow() end
+  groups, recs = groups or {}, recs or {}
+  local data = B.controlsData and B.controlsData() or nil
+  local km = C.keymap(groups, data, recs, E)
+  local bind = ref("builder_bind")
+  local testing = B.testMode and B.testMode() or false
+  local body = {}
+  local function add(x) body[#body + 1] = x end
+  add({ "row", key = "head", w = "100%", h = "fit", gap = 8, pad = 0, align = "center",
+    { "text", key = "t", style = "panel/heading", w = "grow", h = "fit", text = "CONTROLS" },
+    { "button", key = "test", style = "panel/choice", selected = testing, w = 74, h = 24, text = "TEST  T",
+      textAlign = "center", textValign = "center",
+      tooltip = "Drive the craft from these keys on the stand — joints move, nothing is edited",
+      onClicked = function() if B.setTestMode then B.setTestMode(not testing) end end } })
+  add({ "text", key = "lead", style = "panel/hint", w = "100%", h = "fit", wrap = true,
+    text = "Select a part, press B, press a key. A joint takes two keys (+ then −) or the stick (W/S A/D Q/E)." })
+  local sc = { "scroll", key = "map", w = "100%", h = "fit", maxH = math.max(120, (area and area.h or 480) - 250),
+               gap = 3, pad = 0, dir = "column" }
+  if #km.keys == 0 then
+    sc[#sc + 1] = { "text", key = "nokeys", style = "panel/cellMuted", w = "100%", h = "fit", text = "No keys yet." }
   end
-  local function grid(set, per, key)
-    local rows = {}
-    local cw = math.floor((W - 2 * 10 - (per - 1) * 4) / per)
-    for r = 1, math.ceil(#set / per) do
-      local kids = {}
-      for c = 1, per do
-        local g = set[(r - 1) * per + c]
-        if g then kids[#kids + 1] = chip(B, E, g, groups, gid, cw) end
-      end
-      rows[#rows + 1] = { "row", key = key .. r, w = "100%", h = 26, gap = 4, pad = 0,
-                          items = kids, function(k) return k end }
+  for i, r in ipairs(km.keys) do sc[#sc + 1] = key_row(B, C, E, r, i) end
+  local any_surf = #km.surfaces.pitch + #km.surfaces.yaw + #km.surfaces.roll > 0
+  if #km.axes > 0 or any_surf then
+    sc[#sc + 1] = { "text", key = "axl", style = "panel/label", w = "100%", h = "fit", text = "AXES" }
+  end
+  for i, a in ipairs(km.axes) do
+    for _, x in ipairs(axis_rows(B, C, E, a, i, recs)) do sc[#sc + 1] = x end
+  end
+  for _, ax in ipairs({ "pitch", "yaw", "roll" }) do
+    local list = km.surfaces[ax]
+    if #list > 0 then
+      sc[#sc + 1] = { "row", key = "sf" .. ax, w = "100%", h = 22, gap = 6, pad = 0, align = "center",
+        { "box", key = "cap", style = "hud/key", w = 54, h = 20, text = C.sourceKeys(nil, ax), textAlign = "center",
+          textValign = "center" },
+        { "text", key = "n", style = "panel/cell", w = "grow", h = "fit", maxLines = 1, overflow = "ellipsis",
+          text = chips_text(list) .. " (auto)" } }
     end
-    return rows
   end
-  local body = {}
-  local function add(x) body[#body + 1] = x end
-  add({ "row", key = "head", w = "100%", h = "fit", gap = 8, pad = 0, align = "center",
-    { "text", key = "t", style = "panel/heading", w = "grow", h = "fit", text = "Action groups" },
-    { "text", key = "s", style = "panel/cellMuted", w = "fit", h = "fit",
-      text = B.groupsEdited() and "edited" or "standard set" } })
-  add({ "text", key = "lead", style = "panel/hint", w = "100%", h = "fit", wrap = true,
-    text = "A group is a key in flight. Pick one, pick a part, tick what it does. Staging is separate." })
-  for _, r in ipairs(grid(std, 3, "std")) do add(r) end
-  for _, r in ipairs(grid(cus, 5, "cus")) do add(r) end
-  add({ "box", key = "r1", style = "panel/rule", w = "100%", h = 1 })
-  local gg = groups[gid]
-  add({ "text", key = "gl", style = "panel/label", w = "100%", h = "fit",
-    text = string.format("%s  ·  key %s", (gg and gg.name) or info.label, key_of(info)) })
-  local bl = { "scroll", key = "bound", w = "100%", h = "fit", maxH = 76, gap = 2, pad = 0, dir = "col" }
-  for _, r in ipairs(bound_rows(B, E, groups, recs, gid)) do bl[#bl + 1] = r end
-  add(bl)
-  add({ "box", key = "r2", style = "panel/rule", w = "100%", h = 1 })
-  add({ "text", key = "cl", style = "panel/label", w = "100%", h = "fit", text = "Controls on this craft" })
-  for _, r in ipairs(controls_rows(B, E, groups, recs)) do add(r) end
-  add({ "box", key = "r4", style = "panel/rule", w = "100%", h = 1 })
-  add({ "text", key = "ll", style = "panel/label", w = "100%", h = "fit", text = "Selected part" })
-  for _, r in ipairs(part_rows(B, E, groups, recs, gid)) do add(r) end
-  add({ "box", key = "r3", style = "panel/rule", w = "100%", h = 1 })
-  add({ "row", key = "btns", w = "100%", h = 30, gap = 6, pad = 0,
-    { "button", key = "clear", style = "panel/secondary", w = "grow", h = 30, textAlign = "center",
-      textValign = "center", text = "Clear group", disabled = not (gg and #gg.binds > 0),
-      onClicked = function() B.groupsClear(gid) end },
-    { "button", key = "reset", style = "panel/secondary", w = "grow", h = 30, textAlign = "center",
-      textValign = "center", text = "Standard set", disabled = not B.groupsEdited(),
-      tooltip = "Throw away your edits: legs on Gear, panels and antennas on Deploy, lights on Lights",
-      onClicked = function() B.groupsReset() end } })
-  return { "col", key = "groups", style = "panel/frame", w = "100%", h = "fit", gap = 5, pad = 10,
-           align = "start", items = body, function(x) return x end }
-end
-
--- ── WHEEL SETTINGS (the same frame, when a wheel is selected) ───────────────
--- How the selected wheel steers and drives, its suspension and its grip: the
--- builder's wheelCfg / wheelSet / wheelFlip / wheelApply / wheelReset hold the
--- rules (and write `wcfg` into the craft record). The arrow beside each wheel
--- on the stand shows which way it will roll the craft when W is pressed.
-local MODE_TIP = {
-  steer = { auto = "steers if it's ahead of the centre of mass", on = "always steers", off = "never steers",
-            invert = "steers the other way (rear steer)" },
-  drive = { auto = "pushes the craft forward on W", on = "always driven", off = "rolls free",
-            invert = "pushes the other way" },
-}
-
-local function chips(B, uid, key, cur, label, tip_set)
-  local row = { "row", key = "m" .. key, w = "100%", h = "fit", gap = 4, pad = 0, align = "center",
-    { "text", key = "l", style = "panel/cell", w = 70, h = "fit", text = label } }
-  for _, m in ipairs({ "auto", "on", "off", "invert" }) do
-    row[#row + 1] = { "button", key = m, style = "panel/choice", selected = cur == m, w = "grow", h = 24,
-      textAlign = "center", textValign = "center", text = m, tooltip = tip_set[m],
-      onClicked = function() B.wheelSet(uid, key, m) end }
-  end
-  return row
-end
-
-local function wslider(B, uid, key, label, cur, lo, hi, show)
-  return { "row", key = "s" .. key, w = "100%", h = 24, gap = 6, pad = 0, align = "center",
-    { "text", key = "l", style = "panel/cell", w = 70, h = "fit", text = label },
-    -- A fader ("ctl/*" styles): groove, orange strip, light cap.
-    { "slider", key = "s", style = "ctl/track", w = "grow", h = 12, min = lo, max = hi, value = cur, interact = true,
-      onChanged = function(n)
-        local sl = n and n:getcomponent("UiSlider")
-        if sl and sl.value then B.wheelSet(uid, key, sl.value, true) end
-      end,
-      { "box", key = "f", style = "ctl/fill", part = "fill", w = "100%", h = "100%" },
-      { "box", key = "h", style = "ctl/handle", part = "handle", w = 10, h = 18 } },
-    { "text", key = "v", style = "ctl/value", w = 52, h = "fit", textAlign = "end", text = show(cur) } }
-end
-
-local function pct(v) return string.format("%d%%", math.floor(v * 100 + 0.5)) end
-local function times(v) return string.format("×%.2f", v) end
-
-local function describe_wheel(B, uid)
-  local c = B.wheelCfg(uid)
-  local info = B.partInfo and B.partInfo(B.partIdOf(uid)) or {}
-  local plan = B.wheelPlan and B.wheelPlan() or {}
-  local me
-  for _, w in ipairs(plan) do if w.uid == uid then me = w end end
-  local status
-  if not me then status = ""
-  elseif me.upright then status = "⚠ its axle stands upright — it can't roll"
-  elseif me.sideways then status = "⚠ its axle points along the craft's travel — it would roll sideways. Mount it on a side face."
-  else
-    status = (me.drives and (c.drive == "invert" and "drives (inverted)" or "drives") or "rolls free")
-      .. "  ·  " .. (me.steers and string.format("steers ±%d°", math.floor(c.steerMax + 0.5)) or "doesn't steer")
-  end
-  local body = {}
-  local function add(x) body[#body + 1] = x end
-  add({ "row", key = "head", w = "100%", h = "fit", gap = 8, pad = 0, align = "center",
-    { "text", key = "t", style = "panel/heading", w = "grow", h = "fit", text = "Wheel settings" },
-    { "text", key = "s", style = "panel/cellMuted", w = "fit", h = "fit", text = info.label or "wheel" } })
-  add({ "text", key = "lead", style = "panel/hint", w = "100%", h = "fit", wrap = true,
-    text = "W/S drive, A/D steer. The arrow by each wheel is the way it rolls the craft on W; the blue arc is how far it steers." })
-  add({ "text", key = "st", style = (me and (me.sideways or me.upright)) and "panel/hintWarn" or "panel/cellStrong",
-    w = "100%", h = "fit", wrap = true, text = status })
-  add({ "box", key = "r1", style = "panel/rule", w = "100%", h = 1 })
-  local sc = { "scroll", key = "ws", w = "100%", h = "fit", maxH = 330, gap = 5, pad = 0, dir = "col" }
-  local function put(x) sc[#sc + 1] = x end
-  put(chips(B, uid, "steer", c.steer, "Steer", MODE_TIP.steer))
-  put(wslider(B, uid, "steerMax", "Steer max", c.steerMax, 0, 45, function(v) return string.format("%d°", math.floor(v + 0.5)) end))
-  put(chips(B, uid, "drive", c.drive, "Drive", MODE_TIP.drive))
-  put({ "button", key = "flip", style = "panel/secondary", w = "100%", h = 26, textAlign = "center", textValign = "center",
-    text = "⇄  Flip direction", tooltip = "Make this wheel push the other way (drive: invert)",
-    onClicked = function() B.wheelFlip(uid) end })
-  put(wslider(B, uid, "motor", "Motor", c.motor, 0, 1, pct))
-  put(wslider(B, uid, "brake", "Brake", c.brake, 0, 1, pct))
-  put({ "text", key = "susp", style = "panel/label", w = "100%", h = "fit", text = "Suspension and tyre" })
-  put(wslider(B, uid, "spring", "Spring", c.spring, 0.25, 4, times))
-  put(wslider(B, uid, "damper", "Damper", c.damper, 0.25, 4, times))
-  put(wslider(B, uid, "travel", "Travel", c.travel, 0.03, 0.5, function(v) return string.format("%.2f m", v) end))
-  put(wslider(B, uid, "friction", "Grip", c.friction, 0.5, 2, times))
-  put({ "row", key = "skid", w = "100%", h = "fit", gap = 4, pad = 0, align = "center",
-    { "text", key = "l", style = "panel/cell", w = 70, h = "fit", text = "Skid steer" },
-    { "button", key = "on", style = "panel/choice", selected = c.skid == true, w = "grow", h = 24, textAlign = "center",
-      textValign = "center", text = "on", tooltip = "Also turn by driving the two sides against each other (tank turn)",
-      onClicked = function() B.wheelSet(uid, "skid", true) end },
-    { "button", key = "off", style = "panel/choice", selected = c.skid ~= true, w = "grow", h = 24, textAlign = "center",
-      textValign = "center", text = "off", onClicked = function() B.wheelSet(uid, "skid", false) end } })
   add(sc)
+  add({ "box", key = "r1", style = "panel/rule", w = "100%", h = 1 })
+  add({ "text", key = "sl", style = "panel/label", w = "100%", h = "fit", text = "SELECTED PART" })
+  for _, r in ipairs(part_rows(B, C, E, bind)) do add(r) end
   add({ "box", key = "r2", style = "panel/rule", w = "100%", h = 1 })
-  add({ "row", key = "apply", w = "100%", h = 28, gap = 6, pad = 0,
-    { "button", key = "sym", style = "panel/secondary", w = "grow", h = 28, textAlign = "center", textValign = "center",
-      text = "Apply to pair/ring", tooltip = "Copy these settings to this wheel's symmetry partners",
-      onClicked = function() B.wheelApply(uid, "sym") end },
-    { "button", key = "all", style = "panel/secondary", w = "grow", h = 28, textAlign = "center", textValign = "center",
-      text = "Apply to all wheels", onClicked = function() B.wheelApply(uid, "all") end } })
-  add({ "button", key = "reset", style = "panel/secondary", w = "100%", h = 26, textAlign = "center", textValign = "center",
-    text = "Defaults", tooltip = "Back to the defaults — what a rover built the obvious way drives right with",
-    onClicked = function() B.wheelReset(uid) end })
-  return { "col", key = "wheel", style = "panel/frame", w = "100%", h = "fit", gap = 5, pad = 10,
+  local pr = { "row", key = "presets", w = "100%", h = 26, gap = 4, pad = 0, align = "center" }
+  for _, p in ipairs(C.PRESETS) do
+    pr[#pr + 1] = { "button", key = p.id, style = "panel/secondary", w = "grow", h = 26, text = p.label,
+      textAlign = "center", textValign = "center", tooltip = p.tip,
+      onClicked = function()
+        local sel = (p.id == "arm" and B.selection) and B.selection() or nil
+        if cmd(B, C, "bind", { preset = p.id, uids = (sel and #sel > 1) and sel or nil }) and B.hint then
+          B.hint(p.label .. " preset applied — undo with Ctrl+Z", 2.5)
+        end
+      end }
+  end
+  add(pr)
+  add({ "row", key = "btns", w = "100%", h = 26, gap = 6, pad = 0,
+    { "button", key = "bind", style = "panel/secondary", w = "grow", h = 26, textAlign = "center", textValign = "center",
+      text = "Bind selected  B", disabled = primary(B) == nil,
+      onClicked = function() if bind and bind.begin then bind.begin(B.selection()) end end },
+    { "button", key = "clear", style = "panel/danger", selected = armed_clear, w = "grow", h = 26, textAlign = "center",
+      textValign = "center", text = armed_clear and "Sure? clear all" or "Clear all",
+      tooltip = "Every key and axis off this craft (one undo step)",
+      onClicked = function()
+        if armed_clear then cmd(B, C, "unbind", { all = true }); armed_clear = false else armed_clear = true end
+      end } })
+  local A = area or { h = 600 }
+  return { "col", key = "groups", style = "panel/frame", w = "100%", h = "fit", maxH = A.h, gap = 5, pad = 10,
            align = "start", items = body, function(x) return x end }
+end
+
+-- Outline the hovered row's parts (orange: the one accent marks "this one").
+local function draw_hover(B)
+  if not (hover and B.partRec and B.drawObb and B.visHalf) then return end
+  for _, u in ipairs(hover) do
+    local r = B.partRec(u)
+    if r then
+      local hx, hy, hz = B.visHalf(r.id, r.def)
+      B.drawObb(r.x, r.y, r.z, r.B, hx + 0.05, hy + 0.05, hz + 0.05, 0.97, 0.55, 0.22, 1.0)
+    end
+  end
 end
 
 function start(node)
   el = node:getcomponent("UiElement")
+  refs.self_node = node
   if el then el.visible = false end
+end
+
+local function tab_open(B)
+  if open_flag then return true end
+  local ins = ref("builder_inspector")
+  if ins and ins.tab then return ins.tab() == "CONTROLS" end
+  if B.tool then return B.tool() == "groups" end
+  return B.groupsTool and B.groupsTool() or false
+end
+
+-- Where to draw: the right plate's body under the inspector's tabs (design
+-- units), and where our host sits, so a child pinned to the host lands there.
+local function place(node)
+  local tb, ins = ref("builder_toolbar"), ref("builder_inspector")
+  local Wl, H = 1280, 720
+  if tb and tb.layerSize then Wl, H = tb.layerSize() end
+  local r = ins and ins.rightPlate and ins.rightPlate() or { x = Wl - 264, y = 80, w = 256, h = H - 138 }
+  -- the host itself moves there (it is pinned to the layer's top right and
+  -- stacks its one child): x from the right edge, y from the top
+  local A = { x = r.x, y = r.y + PLATE_TOP, w = r.w, h = r.h - PLATE_TOP, H = H }
+  if el then
+    if math.abs((el.width or 0) - A.w) > 0.5 then el.width = A.w end
+    local px, py = A.x + A.w - Wl, A.y
+    if math.abs((el.posX or 0) - px) > 0.5 then el.posX = px end
+    if math.abs((el.posY or 0) - py) > 0.5 then el.posY = py end
+  end
+  return A
 end
 
 function update(node, dt)
   if not el then el = node:getcomponent("UiElement") end
-  local B, E = ref("builder"), ref("electronics")
-  local groups = B ~= nil and E ~= nil and B.groupsTool and B.groupsTool()
-  local wheel = B ~= nil and not groups and B.wheelSelected and B.wheelSelected() or nil
-  local show = groups or wheel ~= nil
-  if el and el.visible ~= (show and true or false) then el.visible = show and true or false end
-  if not show then return end
-  if wheel then ui.make(node, describe_wheel(B, wheel)) else ui.make(node, describe(B, E)) end
+  refs.self_node = node
+  local B, E, C = ref("builder"), ref("electronics"), ref("controls")
+  if not (B and E and C) then return end
+  if not refs.registered and B.registerPanel then refs.registered = B.registerPanel(ref("groups_panel")) end
+  local show = tab_open(B)
+  if not show then
+    if el and el.visible then el.visible = false end
+    hover, last_v, area = nil, nil, nil
+    return
+  end
+  local A = place(node)
+  if el and el.visible ~= true then el.visible = true end
+  draw_hover(B)
+  -- re-describe only when something it shows moved
+  local sel = primary(B)
+  local v = table.concat({ tostring(B.craftVersion), tostring(B.testMode and B.testMode()),
+    math.floor(A.x), math.floor(A.y), math.floor(A.h) }, "|")
+  area = A
+  if v == last_v and sel == last_sel and hover == last_hover and renaming == last_ren and armed_clear == last_arm then
+    return
+  end
+  last_v, last_sel, last_hover, last_ren, last_arm = v, sel, hover, renaming, armed_clear
+  ui.make(node, describe(B, E, C))
 end

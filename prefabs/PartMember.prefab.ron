@@ -1,0 +1,27 @@
+// DRAWN MEMBER — any length and profile (size.len, size.prof); meshed by scripts/builder_proc.lua.
+// Written by tools/gen_part_meshes.py (write_prefab) — edit the generator, not this file.
+[
+    (
+        name: "PartMember",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+        rigidbody: Some((
+            boxed: true,
+            mode: Kinematic,
+            radius: 0.12,
+            height: 1.0,
+            half_extents: (0.12, 0.5, 0.07),
+            restitution: 0.05,
+            friction: 0.6,
+            gravity: true,
+            lock_pos: (false, false, false),
+            lock_rot: (false, false, false),
+            mass: 0.02,
+        )),
+    ),
+]

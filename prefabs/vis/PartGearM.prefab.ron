@@ -1,0 +1,173 @@
+// VISUAL-ONLY variant of prefabs/PartGearM.prefab.ron for the builder stand: no body, no scripts.
+// Written by tools/gen_part_meshes.py (write_vis_prefabs) — regenerate, don't edit.
+// LANDING GEAR M — r 0.4 m tyre on a leg; +X out (down off a belly), the axle along Z. The Tyre child hides while the live tyre rolls; GearPivot folds the leg.
+// Written by tools/gen_part_meshes.py (write_prefab) — edit the generator, not this file.
+[
+    (
+        name: "PartGearM",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+    ),
+    (
+        name: "Tyre",
+        transform: (
+            translation: (0.35, 0.0, -0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Mesh(
+            asset_path: "models/parts/gear_m_tyre.glb",
+        ),
+        object_materials: {
+            "Dark": (
+                color: (0.3, 0.3, 0.32),
+                texture: Some("textures/parts/metal_albedo.png"),
+                normal_map: Some("textures/parts/metal_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/parts/metal_orm.png"),
+                roughness: 1.2,
+                metallic_map: Some("textures/parts/metal_orm.png"),
+                metallic: 0.4,
+                ao_map: Some("textures/parts/metal_orm.png"),
+                shader: Some("shaders/hullPanels.flsl"),
+                shader_params: {
+                    "tint": (0.3, 0.3, 0.32, 1.0),
+                },
+                shading: Physical,
+            ),
+            "Metal": (
+                color: (1, 1, 1),
+                texture: Some("textures/parts/metal_albedo.png"),
+                normal_map: Some("textures/parts/metal_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/parts/metal_orm.png"),
+                roughness: 1.0,
+                metallic_map: Some("textures/parts/metal_orm.png"),
+                metallic: 0.55,
+                ao_map: Some("textures/parts/metal_orm.png"),
+                shader: Some("shaders/hullPanels.flsl"),
+                shader_params: {
+                    "tint": (1, 1, 1, 1.0),
+                },
+                shading: Physical,
+            ),
+            "Rubber": (
+                color: (1, 1, 1),
+                texture: Some("textures/parts/rubber_albedo.png"),
+                normal_map: Some("textures/parts/rubber_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/parts/rubber_orm.png"),
+                roughness: 1.0,
+                metallic_map: Some("textures/parts/rubber_orm.png"),
+                metallic: 0.0,
+                ao_map: Some("textures/parts/rubber_orm.png"),
+                shading: Physical,
+            ),
+        },
+        scripts: [],
+        parent: Some(0),
+    ),
+    (
+        name: "GearPivot",
+        // the leg folds about Z (aft, toward −Y) as the gear retracts
+        transform: (
+            translation: (-0.7, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+        parent: Some(0),
+    ),
+    (
+        name: "Leg",
+        transform: (
+            translation: (0.511, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Mesh(
+            asset_path: "models/parts/gear_m_leg.glb",
+        ),
+        object_materials: {
+            "Chrome": (
+                color: (1.0, 1.0, 1.0),
+                texture: Some("textures/parts/metal_albedo.png"),
+                normal_map: Some("textures/parts/metal_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/parts/metal_orm.png"),
+                roughness: 0.4,
+                metallic_map: Some("textures/parts/metal_orm.png"),
+                metallic: 0.85,
+                ao_map: Some("textures/parts/metal_orm.png"),
+                shader: Some("shaders/hullPanels.flsl"),
+                shader_params: {
+                    "tint": (1.0, 1.0, 1.0, 1.0),
+                },
+                shading: Physical,
+            ),
+            "Dark": (
+                color: (0.3, 0.3, 0.32),
+                texture: Some("textures/parts/metal_albedo.png"),
+                normal_map: Some("textures/parts/metal_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/parts/metal_orm.png"),
+                roughness: 1.2,
+                metallic_map: Some("textures/parts/metal_orm.png"),
+                metallic: 0.4,
+                ao_map: Some("textures/parts/metal_orm.png"),
+                shader: Some("shaders/hullPanels.flsl"),
+                shader_params: {
+                    "tint": (0.3, 0.3, 0.32, 1.0),
+                },
+                shading: Physical,
+            ),
+            "Decal": (
+                color: (1.0, 1.0, 1.0),
+                texture: Some("textures/parts/markings.png"),
+                roughness: 0.55,
+                metallic: 0.0,
+                shading: Physical,
+            ),
+            "Metal": (
+                color: (1, 1, 1),
+                texture: Some("textures/parts/metal_albedo.png"),
+                normal_map: Some("textures/parts/metal_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/parts/metal_orm.png"),
+                roughness: 1.0,
+                metallic_map: Some("textures/parts/metal_orm.png"),
+                metallic: 0.55,
+                ao_map: Some("textures/parts/metal_orm.png"),
+                shader: Some("shaders/hullPanels.flsl"),
+                shader_params: {
+                    "tint": (1, 1, 1, 1.0),
+                },
+                shading: Physical,
+            ),
+            "Paint3": (
+                color: (0.22, 0.23, 0.25),
+                texture: Some("textures/parts/paint_albedo.png"),
+                normal_map: Some("textures/parts/paint_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/parts/paint_orm.png"),
+                roughness: 1.0,
+                metallic_map: Some("textures/parts/paint_orm.png"),
+                metallic: 1.0,
+                ao_map: Some("textures/parts/paint_orm.png"),
+                shader: Some("shaders/hullPanels.flsl"),
+                shader_params: {
+                    "tint": (0.22, 0.23, 0.25, 1.0),
+                },
+                shading: Physical,
+            ),
+        },
+        scripts: [],
+        parent: Some(2),
+    ),
+]

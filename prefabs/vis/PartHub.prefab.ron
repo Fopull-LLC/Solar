@@ -1,0 +1,52 @@
+// VISUAL-ONLY variant of prefabs/PartHub.prefab.ron for the builder stand: no body, no scripts.
+// Written by tools/gen_part_meshes.py (write_vis_prefabs) — regenerate, don't edit.
+// STRUT HUB — round-two part.
+// Written by tools/gen_part_meshes.py (write_prefab) — edit the generator, not this file.
+[
+    (
+        name: "PartHub",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Mesh(
+            asset_path: "models/parts/hub.glb",
+        ),
+        object_materials: {
+            "Anodised": (
+                color: (0.5, 0.56, 0.66),
+                texture: Some("textures/parts/metal_albedo.png"),
+                normal_map: Some("textures/parts/metal_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/parts/metal_orm.png"),
+                roughness: 0.85,
+                metallic_map: Some("textures/parts/metal_orm.png"),
+                metallic: 0.5,
+                ao_map: Some("textures/parts/metal_orm.png"),
+                shader: Some("shaders/hullPanels.flsl"),
+                shader_params: {
+                    "tint": (0.5, 0.56, 0.66, 1.0),
+                },
+                shading: Physical,
+            ),
+            "Metal": (
+                color: (1, 1, 1),
+                texture: Some("textures/parts/metal_albedo.png"),
+                normal_map: Some("textures/parts/metal_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/parts/metal_orm.png"),
+                roughness: 1.0,
+                metallic_map: Some("textures/parts/metal_orm.png"),
+                metallic: 0.55,
+                ao_map: Some("textures/parts/metal_orm.png"),
+                shader: Some("shaders/hullPanels.flsl"),
+                shader_params: {
+                    "tint": (1, 1, 1, 1.0),
+                },
+                shading: Physical,
+            ),
+        },
+        scripts: [],
+    ),
+]

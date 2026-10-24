@@ -620,29 +620,60 @@ function controlWarning(t)
   return { level = 3, head = why, sub = sub }
 end
 
--- THE ACTION GROUPS, mid-left: every group with something in it, its key, and
--- whether it's on. Click a row to fire it, same as the key.
+-- THE CONTROLS CARD, mid-left (docs/builder-design.md §6.3 E). Every key the
+-- craft answers to with an annunciator lens lit while its toggle is on, and
+-- each custom axis with a small tape showing where its setpoint stands. O
+-- folds it to its header and back; the first flight of a craft with custom
+-- controls says so on the header. Click a key row to fire it, as the key does.
+local ctl_card = { open = true, seen = nil, toast_t = -1, n = 0 }
+
+local function lamp_row(v, g)
+  local cap = g.cap or (g.key == "backspace" and "⌫" or tostring(g.key):upper())
+  return { "row", key = "g" .. g.id, w = "100%", h = 20, pad = 0, gap = 6, align = "center",
+    button = true, tooltip = string.format("%s — %d action%s · %s", g.label or g.name, g.n, g.n == 1 and "" or "s",
+      g.on and "on" or "off"),
+    onClicked = function() if v.activateGroup then v.activateGroup(g.id) end end,
+    { "box", key = "k", style = g.on and "hud/keyActive" or "hud/key", w = 26, h = 18, text = cap,
+      textAlign = "center", textValign = "center" },
+    { "text", key = "l", style = "hud/value", w = "grow", h = 14, text = g.label or g.name, maxLines = 1,
+      overflow = "ellipsis" },
+    { "box", key = "o", style = g.on and "hud/lampOn" or "hud/lamp", w = 26, h = 12, text = g.on and "ON" or "OFF",
+      textAlign = "center", textValign = "center" } }
+end
+
+local function axis_row(a, i)
+  local TW = 54
+  local x = math.floor((a.value + 1) / 2 * (TW - 4) + 0.5)
+  return { "row", key = "a" .. i, w = "100%", h = 18, pad = 0, gap = 6, align = "center",
+    tooltip = a.label .. " — " .. a.text,
+    { "box", key = "k", style = "hud/key", w = 34, h = 16, text = a.cap, textAlign = "center", textValign = "center" },
+    { "text", key = "l", style = "hud/valueMuted", w = "grow", h = 14, text = a.label, maxLines = 1, overflow = "ellipsis" },
+    { "box", key = "t", style = "hud/track", w = TW, h = 8,
+      { "box", key = "c", style = "hud/track", pin = "topLeft", x = (TW - 2) / 2, y = 0, w = 1, h = 8 },
+      { "box", key = "m", style = "hud/lampOn", pin = "topLeft", x = x, y = 0, w = 4, h = 8 } },
+    { "text", key = "v", style = "hud/value", w = 40, h = 14, text = a.text, textAlign = "end" } }
+end
+
 local function group_strip(v, t)
+  local card = v.controlsCard and v.controlsCard() or nil
   local list = v.groupStrip and v.groupStrip() or {}
-  local rows = {}
+  local axes = card and card.axes or {}
   local mode = t.crew and "CREW ABOARD" or (t.probe and (t.control and "PROBE · REMOTE" or "PROBE · NO CONTROL")) or nil
   local craft = (v.craftName and v.craftName ~= "Vessel") and v.craftName or nil
-  for _, g in ipairs(list) do
-    local key = g.key == "backspace" and "⌫" or tostring(g.key):upper()
-    rows[#rows + 1] = { "row", key = "g" .. g.id, w = "100%", h = 20, pad = 0, gap = 6, align = "center",
-      button = true, tooltip = string.format("%s — %d action%s · %s", g.label, g.n, g.n == 1 and "" or "s",
-        g.on and "on" or "off"),
-      onClicked = function() if v.activateGroup then v.activateGroup(g.id) end end,
-      { "box", key = "k", style = g.on and "hud/keyActive" or "hud/key", w = 22, h = 18, text = key,
-        textAlign = "center", textValign = "center" },
-      { "text", key = "l", style = "hud/value", w = "grow", h = 14, text = g.label, maxLines = 1,
-        overflow = "ellipsis" },
-      { "text", key = "o", style = g.on and "hud/valueAccent" or "hud/valueMuted", w = 26, h = 14,
-        text = g.on and "ON" or "off", textAlign = "end" } }
+  -- a new craft with custom controls: say so on the header for a while
+  local vid = v.node and v.node.id
+  if vid ~= ctl_card.seen then
+    ctl_card.seen = vid
+    ctl_card.n = v.controlsCustomCount and v.controlsCustomCount() or 0
+    ctl_card.toast_t = (ctl_card.n > 0) and (time + 8) or -1
   end
-  if #rows == 0 and not mode then return nil end
+  local toast = time < ctl_card.toast_t
+  if #list == 0 and #axes == 0 and not mode then return nil end
   local kids = {
-    { "text", key = "hd", style = "hud/micro", w = "100%", h = 12, text = "ACTION GROUPS", textAlign = "start" },
+    { "row", key = "hd", w = "100%", h = 12, pad = 0, gap = 4, align = "center",
+      { "text", key = "t", style = toast and "hud/valueAccent" or "hud/micro", w = "grow", h = 12, textAlign = "start",
+        text = toast and string.format("%d CUSTOM CONTROL%s ▸ O", ctl_card.n, ctl_card.n == 1 and "" or "S") or "CONTROLS" },
+      { "text", key = "o", style = "hud/micro", w = "fit", h = 12, text = ctl_card.open and "O ▴" or "O ▾" } },
   }
   if craft then
     kids[#kids + 1] = { "text", key = "craft", style = "hud/value", w = "100%", h = 14, text = craft,
@@ -652,12 +683,23 @@ local function group_strip(v, t)
     kids[#kids + 1] = { "text", key = "mode", style = t.control and "hud/valueAccent" or "hud/valueDanger",
       w = "100%", h = 14, text = mode, maxLines = 1, overflow = "ellipsis" }
   end
-  for _, r in ipairs(rows) do kids[#kids + 1] = r end
-  if #rows == 0 then
-    kids[#kids + 1] = { "text", key = "none", style = "hud/valueMuted", w = "100%", h = 14,
-      text = "none — set them in the builder (5)" }
+  if ctl_card.open then
+    for _, g in ipairs(list) do kids[#kids + 1] = lamp_row(v, g) end
+    if #axes > 0 then
+      kids[#kids + 1] = { "text", key = "axh", style = "hud/micro", w = "100%", h = 12, text = "AXES", textAlign = "start" }
+      for i, a in ipairs(axes) do kids[#kids + 1] = axis_row(a, i) end
+    end
+    if #list == 0 and #axes == 0 then
+      kids[#kids + 1] = { "text", key = "none", style = "hud/valueMuted", w = "100%", h = 14,
+        text = "none — set them in the builder (B)" }
+    end
+  else
+    local on = 0
+    for _, g in ipairs(list) do if g.on then on = on + 1 end end
+    kids[#kids + 1] = { "text", key = "sum", style = "hud/valueMuted", w = "100%", h = 14,
+      text = string.format("%d key%s · %d axis%s · %d on", #list, #list == 1 and "" or "s", #axes, #axes == 1 and "" or "es", on) }
   end
-  return { "col", key = "groups", style = "hud/instrument", pin = "left", x = M, y = 0, w = 196, h = "fit",
+  return { "col", key = "groups", style = "hud/instrument", pin = "left", x = M, y = 0, w = 210, h = "fit",
            pad = 10, gap = 4, items = kids, function(k) return k end }
 end
 
@@ -830,12 +872,14 @@ function update(node, dt)
   local v = params.enabled >= 0.5 and flown() or nil
   local om, gm = ref("orbit_map"), ref("game_manager")
   local t = v and v.tele
-  if not t or (om and om.map_view) or (gm and gm.loading) then
+  if not t or (om and om.map_view) or (gm and (gm.loading or gm.inputOwner == "builder")) then
     show(false)
     layout, warning, made_v = nil, nil, nil
     return
   end
   show(true)
+  -- O folds the Controls card (read before the rebuild gate: a press is one frame)
+  if input and input.pressed("o") then ctl_card.open = not ctl_card.open; made_v = nil end
   -- At most `rate` rebuilds a second; a new craft is drawn at once.
   local rate = params.rate or 0
   -- (By the craft's node id: each findScripts call hands out a new handle.)

@@ -1,0 +1,8 @@
+-- WING_MESH — day-0 STUB. Owner: WP4 (aircraft, builder side), docs/builder-design.md §11.2.
+--
+-- Will hold: phase-2 procedural wing meshes: planform skins and the hinged control surface (§7.2.3).
+--
+-- A pure RULEBOOK script on the "WingMesh" manager node of scenes/builder.ron:
+-- no scene access, its globals are its API, and it loads from disk in a
+-- luajit test (as electronics.lua does). Reach it with findScript("wing_mesh").
+-- It does nothing yet; the builder works without it.

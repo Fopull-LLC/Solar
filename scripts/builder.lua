@@ -1,3 +1,74 @@
+-- ═══ THE PUBLIC BUILDER API (docs/builder-design.md §11.1; WP1) ═══════════
+-- Globals on this script, reached with findScript("builder"). Every panel and
+-- overlay uses ONLY these; nothing outside this file reads `parts`. All
+-- coordinates are BuildFrame-LOCAL (the identity in standalone builder.ron).
+-- WP1's rulebooks sit beside it on the BuilderGraph node: builder_graph (the
+-- links graph, blueprint v2), builder_space (frame adapter, spatial hash),
+-- builder_history (the command history). Under luajit they load from disk.
+--
+-- QUERIES
+--   craftVersion        bumped on any change (poses too; parts IN HAND don't
+--                       bump it until they are put down). structVersion: only
+--                       topology (parts and links).
+--   partUids()          the uids on the stand, sorted.
+--   partRec(uid)        a fresh copy: { uid, id, def, x,y,z, yaw,pitch,roll, B,
+--                       size, sym, mir, parent, att, an, wcfg, links = { {id, a,
+--                       b, k, sa, sb, pa, pb, n, s, prim}… }, hidden, root,
+--                       loose, landed }. k ∈ stack surface splice corner tee
+--                       cross brace weld decouple hinge piston rotor.
+--   selection() (primary last) · selectionPrimary() · select(uids, mode)
+--                       mode "set"|"add"|"toggle"|"remove" (shadows Lua's
+--                       builtin `select` in this file) · selectAll() ·
+--                       selectInvert() · selectConnected(uid, "assembly"|
+--                       "craft"|"ring"|"same")
+--   hovered() · held() → { ids… } · holding() → "part"|"carry"|"paste"|nil
+--   stats()             { parts, mass, dry, cost, thrust, dv, twr, hop, stages,
+--                       com, comDry, cot, launch, islands, loose, version };
+--                       cached per craftVersion (≤ 2 a second during a drag).
+--   frame()             the adapter: identity, node, toLocal/toWorld/
+--                       dirToLocal/dirToWorld(x,y,z) (. or :), ray(mx,my).
+--   root() · links(uid) · dependents(uids) · components() · separation(uid) ·
+--   hingeLocked(uid) · rayCraft(ox,oy,oz,dx,dy,dz) → uid,t,x,y,z,nx,ny,nz
+--   currentTool() "select"|"offset"|"rotate"|"root"|"stage"|"groups" ·
+--   setTool(name) · gizmoSpace()/setGizmoSpace("local"|"world") ·
+--   snapGrid()/setSnapGrid(m) · snapAngle()/setSnapAngle(rad) · setSym(n) ·
+--   setMirror(on, "host"|"center") · mirrorPlane() · testMode()/
+--   setTestMode(on) · overlayMode()/setOverlayMode(0..3) · attachRules()/
+--   setAttachRules("wp3"|"legacy") · drawingTool() · loadProgress() ·
+--   frameMs() · perfCounters() · hiddenUids() · outliner() · hintText() ·
+--   controlsData()/setControls(t)/controlsCtx() · partNode(uid)
+--
+-- COMMANDS cmd(name, args) — one history step each (args.merge folds a drag)
+--   place move rotate delete(only=) setWcfg insert detach link unlink
+--   setParam root group rename hide unhideAll isolate mirror
+--   bind unbind bindAxis (→ scripts/controls.lua with controlsCtx())
+--   hold(spec)  part id | { uid… } (with dependents) | sub-assembly name |
+--               a blueprint fragment
+--   copy(uids) · paste() · duplicate(uids) · clipboard()
+--   undoStep() · redoStep() · canUndo() · canRedo() · historyList() ·
+--   historyJump(i)   (500 steps)
+--   craftList() · craftName() · craftSave(name) · craftOpen(name, "replace"|
+--   "merge") · craftNew() · craftDelete(name) · subAssemblies() ·
+--   makeSubAssembly(name, uids) · subAssembly(name) · reload()
+--
+-- UI PLUMBING
+--   registerPanel(s)    s.ownsMouse() → the builder does no picking while
+--                       true; s.ownsKeys() → no builder keys while true.
+--   hint(msg, secs) · placard(msg, kind, secs) (→ builder_statusbar.
+--   showPlacard when present) · setLaunchSite(site)
+--
+-- KEYS (§4.3): W/S A/D Q/E turn the held part or the selection (RMB = the
+-- camera's), Space reset, R spin, 1–4 tools, L space, X/Shift+X symmetry, M
+-- mirror (Alt+M centre plane), G grid / Shift+G angle snap, T test, V overlays,
+-- H / Alt+H / Shift+H hide, B bind (builder_bind.begin), N beam tool, [ ]
+-- profile, Ctrl+Z/Y undo/redo, Ctrl+C/V/D, Del (Alt+Del only the selection),
+-- Ctrl+S/O/N, Ctrl+F or /, Tab, arrows nudge, Esc backs out ONE level and
+-- never leaves (Ctrl+Q twice leaves).
+--
+-- The part registry (REG, DESC, CATALOGUE) is scripts/parts_registry.lua
+-- (WP3); registryIds(), catalogue() and partInfo(id) still answer from here.
+-- ════════════════════════════════════════════════════════════════════════════
+--
 -- SHIP BUILDER v1.3 (game roadmap SC1) — free placement, free ORIENTATION,
 -- radial mounts + SYMMETRY, precise editing. A ship is just the connected
 -- part graph; any part (or the whole ship) moves freely; the blueprint is
@@ -49,6 +120,11 @@ defaults = {
   nudge = 0.1,        -- precise-edit step (SHIFT = a quarter of this)
 }
 
+-- The API's hint (see the top). Declared HERE, before `local function hint`
+-- below, so it lands on the script's globals; inside this file every later
+-- `hint(…)` is the local one.
+function hint(msg, secs) return hintNow(msg, secs or 2.5) end
+
 -- ── Builder audio (non-spatial UI clicks) ────────────────────────────────────
 -- Every build action gets a crisp click on the UI mixer bus. Kenney CC0 clips.
 local UI_SFX = {
@@ -66,284 +142,100 @@ local function ui(key, vol)
   audio.play(UI_SFX[key] or key, { track = "UI", volume = vol or 1.0 })
 end
 
--- ── Part registry (builder-side only; blueprints embed everything) ──────────
--- h = FULL visual stack height (measured from the mesh AABB × prefab scale,
--- so stacked parts sit flush); rx/rz = half-widths for overlap tests.
--- side = true exposes 4 radial attach nodes on the part's flanks.
--- mass = the part's DRY mass in tonnes. A tank's propellant is on top of it:
--- `fuel` units of FUEL_T_PER_UNIT tonnes each, so a full tank is heavy and an
--- empty one light, and the craft lightens as it burns (see BALANCE below).
--- thrust (kN) and ve (exhaust velocity, m/s) are an engine's figures on the
--- REFERENCE world; the catalogue is built once per save for its home world
--- (see `rating`) and every card, readout and flight uses those numbers.
--- strength = the load (kN) this part's attachment to its parent takes before it
--- gives — the joint the flight's stress model loads with the mass hanging off
--- it times what the craft is doing (thrust, drag, a canopy snatch, a tumble).
--- maxq = dynamic pressure (kPa) the part itself takes (default 80; aero parts
--- more). Both ride in the blueprint; vessel_controller has kind-based fallbacks
--- for builds saved before they existed.
-local REG = {
-  -- ELECTRONICS (`mods`): what a part does electrically, as modules the
-  -- electronics rulebook (scripts/electronics.lua) knows — supply, storage,
-  -- demand, antennas, and the ACTIONS each one offers the action-group editor.
-  -- Engines, decouplers, chutes, legs, RCS and ports get theirs from their flags
-  -- (electronics.deriveMods), so only the electrical parts spell them out.
-  -- Figures are EC (charge) and EC/s; antenna power is metres (two antennas
-  -- reach sqrt(P1·P2) — the ground station is 400 km of power, so from home:
-  -- a probe core's internal antenna ≈ 6 km (the home world and its moons), the
-  -- whip ≈ 30 km, the relay dish ≈ 300 km (the home system), the deep space
-  -- dish ≈ 2,400 km (the next star). Craft to craft they reach much less.)
-  pod       = { prefab = "PartPod",       label = "Pod Mk1",      h = 0.80, rx = 0.50, rz = 0.50, mass = 1.3,  cost = 400, top = true,  bottom = true,  kind = "crewed", side = true, strength = 600,
-                mods = { { type = "command", crew = 1, draw = 0.05 }, { type = "wheel", torque = 1.0, draw = 0.5 },
-                         { type = "battery", ec = 40 } } },
-  -- COMMAND SEAT: an open chair for one, KSP's external seat. It commands the
-  -- craft like a pod (the crew in it IS the pilot) when it is the only crewed
-  -- part aboard, with no reaction wheel and no battery of its own — the craft
-  -- brings those. Bolt it to a rover deck, a lander's flank, anywhere; walk up
-  -- and press F to sit, F again to get off. The crew stays in view, seated.
-  -- It faces its +X (a rover's front). h is the whole chair: base plate to
-  -- headrest; its centre is where the rider's hips sit.
-  seat      = { prefab = "PartSeat",      label = "Command Seat", h = 1.30, rx = 0.45, rz = 0.30, mass = 0.05, cost = 160, top = false, bottom = true,  kind = "crewed", seat = true, strength = 320,
-                mods = { { type = "command", crew = 1, draw = 0.0, seat = true } } },
-  -- PROBE CORE: an uncrewed command part. It flies a craft with nobody aboard —
-  -- but only while it has POWER and a comms PATH home (its own little internal
-  -- antenna reaches the ground station from around the home world and its
-  -- moons; past that it needs a real antenna, or a relay). No link, no control.
-  probe     = { prefab = "PartProbe",     label = "Probe Core",   h = 0.42, rx = 0.42, rz = 0.42, mass = 0.12, cost = 450, top = true,  bottom = true,  kind = "probe", side = true, strength = 380,
-                mods = { { type = "command", crew = 0, draw = 0.06 }, { type = "wheel", torque = 0.6, draw = 0.35 },
-                         { type = "battery", ec = 50 }, { type = "antenna", power = 100, rate = 1, draw = 0.02 } } },
-  nose      = { prefab = "PartNose",      label = "Nose Cone",    h = 0.90, rx = 0.50, rz = 0.50, mass = 0.08, cost = 50,  top = false, bottom = true,  kind = "structural", aero = true, strength = 300, maxq = 120 },
-  chute     = { prefab = "PartChute",     label = "Parachute",    h = 0.34, rx = 0.22, rz = 0.22, mass = 0.08, cost = 80,  top = false, bottom = true,  kind = "canvas", chute = true, side = true, strength = 150 },
-  tankS     = { prefab = "PartTankS",     label = "FT-S Tank",    h = 1.00, rx = 0.50, rz = 0.50, mass = 0.2,  cost = 120, top = true,  bottom = true,  kind = "tank", fuel = 80,  side = true, strength = 450 },
-  tankM     = { prefab = "PartTankM",     label = "FT-M Tank",    h = 1.50, rx = 0.50, rz = 0.50, mass = 0.35, cost = 220, top = true,  bottom = true,  kind = "tank", fuel = 160, side = true, strength = 650 },
-  engineS   = { prefab = "PartEngineS",   label = "Sputter",      h = 1.30, rx = 0.90, rz = 0.90, mass = 0.45, cost = 150, top = true,  bottom = true,  kind = "engine", thrust = 35,  ve = 160, strength = 500 },
-  engineM   = { prefab = "PartEngineM",   label = "Anvil",        h = 1.60, rx = 0.90, rz = 0.90, mass = 0.9,  cost = 380, top = true,  bottom = true,  kind = "engine", thrust = 85,  ve = 173, strength = 800 },
-  -- A fin is a SIDE-MOUNT blade: no axial nodes (never centred), not a side
-  -- host itself — it can only attach to another part's flank, where it self-
-  -- orients to point outward. Ring it with X symmetry for a proper fin set.
-  fins      = { prefab = "PartFins",      label = "Aero Fin",     h = 0.95, rx = 0.35, rz = 0.03, mass = 0.04, cost = 35, top = false, bottom = false, kind = "structural", aero = true, radial_orient = true, strength = 200, maxq = 100 },
-  battery   = { prefab = "PartBattery",   label = "Battery",      h = 1.00, rx = 0.50, rz = 0.50, mass = 0.1,  cost = 130, top = true,  bottom = true,  kind = "structural", power = true, ec = 150, side = true, strength = 350,
-                mods = { { type = "battery", ec = 150 } } },
-  -- Solar panel: a RADIAL blade (mounts on a flank like a fin, self-orients
-  -- outward) that EXTENDS in flight (the Deploy group, U) and charges the
-  -- batteries while the sun is on it. It tracks about its own long axis, so it
-  -- loses output only as the sun swings toward that axis — and nothing at all in
-  -- a planet's shadow. gen = EC/s at home-orbit sunlight (more nearer the star).
-  solar     = { prefab = "PartSolar",     label = "Solar Panel",  h = 0.70, rx = 0.45, rz = 0.06, mass = 0.05, cost = 200, top = false, bottom = false, kind = "structural", solar = true, gen = 1.0, radial_orient = true, strength = 80,
-                mods = { { type = "solar", gen = 1.0 }, { type = "deploy", anim = "solar" } } },
-  -- ANTENNAS. The whip is OMNI and short: it reaches home from the near planets
-  -- and talks craft to craft over tens of km, folded for launch. The dishes are
-  -- DIRECTIONAL — they extend, swing to face whoever they're talking to, draw
-  -- real power while out — and RELAY: a craft carrying one passes everybody
-  -- else's signal on, which is how a web of satellites gets you home from
-  -- behind a moon or from the next star.
-  antenna   = { prefab = "PartAntenna",   label = "Comm Whip",    h = 0.90, rx = 0.12, rz = 0.12, mass = 0.01, cost = 90,  top = false, bottom = false, kind = "structural", radial_orient = true, strength = 60,
-                mods = { { type = "antenna", power = 2250, rate = 4, draw = 0.12, omni = true },
-                         { type = "deploy", anim = "whip" } } },
-  dish      = { prefab = "PartDish",      label = "Relay Dish",   h = 0.80, rx = 0.40, rz = 0.40, mass = 0.08, cost = 260, top = true,  bottom = true,  kind = "structural", comms = true, side = true, strength = 100,
-                mods = { { type = "antenna", power = 2.25e5, relay = true, dish = true, rate = 12, draw = 0.6 },
-                         { type = "deploy", anim = "dish" } } },
-  dishL     = { prefab = "PartDishL",     label = "Deep Space Dish", h = 1.20, rx = 0.60, rz = 0.60, mass = 0.25, cost = 1200, top = true, bottom = true, kind = "structural", comms = true, side = true, strength = 160,
-                mods = { { type = "antenna", power = 1.44e7, relay = true, dish = true, rate = 40, draw = 1.6 },
-                         { type = "deploy", anim = "dish" } } },
-  -- RELAY BEACON (comms, electronics.COMMS.beacon): the cheap ground relay the
-  -- crew plants by hand, as a part. A low-power relay that is always on: on a
-  -- lander it carries the network a few hundred metres over the ground.
-  beacon    = { prefab = "PartBeacon",    label = "Relay Beacon", h = 4.20, rx = 0.35, rz = 0.35, mass = 0.02, cost = 80, top = false, bottom = true,  kind = "structural", strength = 60,
-                mods = { { type = "antenna", power = 1500, relay = true, rate = 2, draw = 0.0, omni = true } } },
-  -- FLOODLIGHT: a lamp for landing at night and for working in a shadow. It is
-  -- what the Lights group (Y) switches; it draws power while it's on.
-  light     = { prefab = "PartLight",     label = "Floodlight",   h = 0.30, rx = 0.15, rz = 0.15, mass = 0.01, cost = 40,  top = false, bottom = false, kind = "structural", radial_orient = true, strength = 60,
-                mods = { { type = "light", draw = 0.2 } } },
-  decoupler = { prefab = "PartDecoupler", label = "Decoupler",    h = 0.25, rx = 0.51, rz = 0.51, mass = 0.06, cost = 60,  top = true,  bottom = true,  kind = "structural", decouple = true, strength = 400 },
-  -- The RADIAL decoupler mounts on a flank and kicks its outboard branch
-  -- away at staging (side boosters). It is itself a side host: booster
-  -- stacks attach to its outer face.
-  radialDec = { prefab = "PartDecoupler", label = "Radial Decoupler", h = 0.25, rx = 0.51, rz = 0.51, mass = 0.05, cost = 60, top = false, bottom = false, kind = "structural", decouple = true, radial = true, side = true, strength = 350 },
-  -- Landing legs are RADIAL now (like fins): mount on the flank of a tank/engine
-  -- with symmetry (X = ×N), each strut self-orients outward, and they fold down
-  -- to deploy / up to stow as ONE symmetry ring (G in flight). No more stack
-  -- sandwich — bolt three or four around the base and they splay out to land.
-  legs      = { prefab = "PartLegs",      label = "Landing Legs", h = 0.90, rx = 0.40, rz = 0.18, mass = 0.015, cost = 40,  top = false, bottom = false, kind = "structural", legs = true, radial_orient = true, strength = 300 },
-  -- SKIPPER: a heavier, punchier engine in the Anvil's exact footprint (same
-  -- proven collider) — twice the Anvil's thrust and the best exhaust velocity
-  -- on the list: the first stage of anything going to another planet.
-  skipper    = { prefab = "PartSkipper",    label = "Skipper",      h = 1.60, rx = 0.90, rz = 0.90, mass = 1.6,  cost = 520, top = true,  bottom = true,  kind = "engine", thrust = 170, ve = 184, strength = 1000 },
-  -- RADIAL TANK: a strap-on drop-tank. radial_orient mounts it on a flank like a
-  -- fin (ring it with symmetry); its fuel joins the shared pool, and a radial
-  -- decoupler kicks it (and its ring) away when spent.
-  radialTank = { prefab = "PartRadialTank", label = "Radial Tank",  h = 1.00, rx = 0.50, rz = 0.50, mass = 0.15, cost = 110, top = false, bottom = false, kind = "tank", fuel = 60, radial_orient = true, strength = 400 },
-  -- DOCKING PORT: the androgynous latch two craft mate through. It stacks like
-  -- a decoupler (same collar footprint) and hosts side mounts, so you can put
-  -- one on the nose of a lander and another under a station module. In flight
-  -- it is BOTH halves of the job: bring two ports face to face and it captures
-  -- (the assemblies weld into one vessel); press its UNDOCK control and it
-  -- splits the stack right back apart at that seam, sending the far half away
-  -- as a live craft you can fly. That's the whole orbit → land → return loop.
-  -- radial_orient makes a FLANK-mounted port face outward (+X) instead of
-  -- keeping its authored "up" — that's what makes side berths work. Stacked
-  -- axially it behaves exactly as before, so one part covers both.
-  dockPort  = { prefab = "PartDockPort",  label = "Docking Port", h = 0.28, rx = 0.53, rz = 0.53, mass = 0.1,  cost = 180, top = true,  bottom = true,  kind = "structural", dock = true, side = true, radial_orient = true, strength = 500 },
-  -- RCS BLOCK: the small four-way thruster cluster docking is actually flown
-  -- with. Mounts on a flank like a fin, rings with symmetry, and pools its
-  -- thrust into the craft's translation authority (IJKL + HN). Balance them
-  -- around the hull — the pooled push goes through the centre of mass, so a
-  -- lopsided set costs you nothing but looks wrong, and a bare craft with no
-  -- blocks simply has no translation at all.
-  rcs       = { prefab = "PartRCS",       label = "RCS Block",    h = 0.34, rx = 0.20, rz = 0.20, mass = 0.04, cost = 80,  top = false, bottom = false, kind = "structural", rcs = true, rcs_thrust = 3.0, radial_orient = true, strength = 60 },
-  -- CARGO BAY: the hold. `cargo` is its capacity in kilograms; a vessel's total
-  -- is the sum of its bays, and that number is the only thing standing between
-  -- a planet full of ore and the warehouse. The bay's own mass is the EMPTY
-  -- mass — what's inside is added in flight from the manifest, so a full hold
-  -- genuinely flies worse than an empty one.
-  cargo     = { prefab = "PartCargo",     label = "Cargo Bay",    h = 1.20, rx = 0.50, rz = 0.50, mass = 0.4,  cost = 300, top = true,  bottom = true,  kind = "structural", cargo = 250, side = true, strength = 500 },
+-- ── Part registry: scripts/parts_registry.lua (WP3) ─────────────────────────
+-- REG, DESC and CATALOGUE live in the pure rulebook script on the scene's
+-- PartsRegistry manager node, reached with findScript("parts_registry"). The
+-- builder never copies it: `REG` below is a read-through view of that table,
+-- resolved on first use (script start order doesn't matter), so `REG[id]` and
+-- `REG.chute` read exactly as they did when the table lived here. Wheel
+-- settings (WCFG_*) and every placement rule stay in this file.
+local REGISTRY = { reg = nil, lib = nil, aero = false, asked = false }
+local function registry()
+  local R = REGISTRY
+  if not R.reg then
+    local lib = findScript and findScript("parts_registry") or nil
+    if lib and lib.REG then R.lib, R.reg = lib, lib.REG end
+  end
+  -- THE AIRCRAFT PARTS (scripts/parts_aero.lua, on the AeroLib node beside
+  -- scripts/aero.lua): joined once through parts_registry.extend. A scene
+  -- with no AeroLib node gets one spawned; until it is up the catalogue simply
+  -- has no AIRCRAFT section yet.
+  if R.lib and not R.aero then
+    local pa = findScript and findScript("parts_aero") or nil
+    if pa and pa.register and R.lib.extend then
+      R.lib.extend(pa)
+      R.aero = true
+    elseif not pa and not R.asked and spawn then
+      R.asked = true
+      pcall(spawn, "AeroLib", vec3(0, 0, 0))
+    end
+  end
+  return R.lib
+end
+local REG = setmetatable({}, { __index = function(_, id)
+  local R = REGISTRY
+  if not R.reg then registry() end
+  return R.reg and R.reg[id] or nil
+end })
 
-  -- ── FRAME: struts, beams, panels, plates and adapters ─────────────────────
-  -- Light and cheap, and they attach every way: stack nodes on both ends,
-  -- a node on every flank, and SURFACE attach anywhere on them (aim at the
-  -- part away from its nodes). `axial_out` makes a strut or beam snapped onto
-  -- a flank point straight out of it, so a frame is built by clicking rather
-  -- than by pitching every member by hand. Aluminium tube is ~6 kg a metre,
-  -- the I-beams painted steel; strength is what each joint takes (kN).
-  strut1    = { prefab = "PartStrut1",    label = "Strut 1 m",    h = 1.00, rx = 0.07, rz = 0.07, mass = 0.012, cost = 15, top = true, bottom = true, side = true, axial_out = true, kind = "structural", strength = 250 },
-  strut2    = { prefab = "PartStrut2",    label = "Strut 2 m",    h = 2.00, rx = 0.07, rz = 0.07, mass = 0.024, cost = 25, top = true, bottom = true, side = true, axial_out = true, kind = "structural", strength = 250 },
-  strut3    = { prefab = "PartStrut3",    label = "Strut 3 m",    h = 3.00, rx = 0.07, rz = 0.07, mass = 0.036, cost = 35, top = true, bottom = true, side = true, axial_out = true, kind = "structural", strength = 250 },
-  beam1     = { prefab = "PartBeam1",     label = "Box Beam 1 m", h = 1.00, rx = 0.12, rz = 0.07, mass = 0.02,  cost = 20, top = true, bottom = true, side = true, axial_out = true, kind = "structural", strength = 380 },
-  beam2     = { prefab = "PartBeam2",     label = "Box Beam 2 m", h = 2.00, rx = 0.12, rz = 0.07, mass = 0.04,  cost = 35, top = true, bottom = true, side = true, axial_out = true, kind = "structural", strength = 380 },
-  ibeam2    = { prefab = "PartIBeam2",    label = "I-Beam 2 m",   h = 2.00, rx = 0.12, rz = 0.13, mass = 0.06,  cost = 45, top = true, bottom = true, side = true, axial_out = true, kind = "structural", strength = 650 },
-  ibeam3    = { prefab = "PartIBeam3",    label = "I-Beam 3 m",   h = 3.00, rx = 0.12, rz = 0.13, mass = 0.09,  cost = 60, top = true, bottom = true, side = true, axial_out = true, kind = "structural", strength = 650 },
-  -- Panels lie flat (X–Z): their stack nodes are the two faces, their flank
-  -- nodes the middle of each edge, so they tile edge to edge into a deck.
-  panel1    = { prefab = "PartPanel1",    label = "Panel 1×1 m",  h = 0.04, rx = 0.50, rz = 0.50, mass = 0.025, cost = 20, top = true, bottom = true, side = true, kind = "structural", strength = 220 },
-  panel2    = { prefab = "PartPanel2",    label = "Panel 2×1 m",  h = 0.04, rx = 1.00, rz = 0.50, mass = 0.05,  cost = 35, top = true, bottom = true, side = true, kind = "structural", strength = 220 },
-  panel3    = { prefab = "PartPanel3",    label = "Panel 2×2 m",  h = 0.04, rx = 1.00, rz = 1.00, mass = 0.10,  cost = 60, top = true, bottom = true, side = true, kind = "structural", strength = 260 },
-  plate     = { prefab = "PartPlate",     label = "Deck Plate",   h = 0.10, rx = 0.50, rz = 0.50, mass = 0.06,  cost = 40, top = true, bottom = true, side = true, kind = "structural", strength = 500 },
-  hub       = { prefab = "PartHub",       label = "Strut Hub",    h = 0.24, rx = 0.12, rz = 0.12, mass = 0.008, cost = 12, top = true, bottom = true, side = true, kind = "structural", strength = 400 },
-  adapter   = { prefab = "PartAdapter",   label = "Adapter 1.0–0.5", h = 0.50, rx = 0.50, rz = 0.50, mass = 0.05, cost = 45, top = true, bottom = true, kind = "structural", strength = 500 },
-
-  -- ── ROVERS ───────────────────────────────────────────────────────────────
-  -- ROVER BODY: a chassis with its own probe core, battery and whip — a body
-  -- and four wheels is a whole rover. Its FRONT is +X (the headlights); W
-  -- drives that way.
-  roverBody = { prefab = "PartRoverBody", label = "Rover Body",   h = 0.30, rx = 0.80, rz = 0.50, mass = 0.35, cost = 520, top = true, bottom = true, side = true, kind = "probe", strength = 500, front = true,
-                mods = { { type = "command", crew = 0, draw = 0.04 }, { type = "wheel", torque = 0.3, draw = 0.2 },
-                         { type = "battery", ec = 400 }, { type = "antenna", power = 120, rate = 1, draw = 0.02 },
-                         { type = "light", draw = 0.15 } } },
-  -- POWERED WHEELS on a flank (radial_orient: +X out is the axle). `drive`
-  -- is the hub motor: torque (kN·m on the reference world, rated for the home
-  -- world like engine thrust), top speed (m/s), draw at full power (EC/s) and
-  -- the tyre radius. A tyre this size on a world this small grips by the load
-  -- it carries — the flight hangs it on the engine's wheel joint.
-  wheelS    = { prefab = "PartWheelS",    label = "Wheel S",      h = 0.50, rx = 0.14, rz = 0.25, mass = 0.05, cost = 110, top = false, bottom = false, radial_orient = true, kind = "structural", strength = 180, wheel = "S", travel = 0.10,
-                mods = { { type = "drive", torque = 0.2, speed = 5.0, draw = 0.12, r = 0.25 } } },
-  wheelM    = { prefab = "PartWheelM",    label = "Wheel M",      h = 0.80, rx = 0.20, rz = 0.40, mass = 0.12, cost = 190, top = false, bottom = false, radial_orient = true, kind = "structural", strength = 300, wheel = "M", travel = 0.15,
-                mods = { { type = "drive", torque = 0.5, speed = 7.0, draw = 0.25, r = 0.40 } } },
-  wheelL    = { prefab = "PartWheelL",    label = "Wheel L",      h = 1.20, rx = 0.28, rz = 0.60, mass = 0.25, cost = 320, top = false, bottom = false, radial_orient = true, kind = "structural", strength = 520, wheel = "L", travel = 0.20,
-                mods = { { type = "drive", torque = 1.1, speed = 9.0, draw = 0.5, r = 0.60 } } },
-  -- FAIRINGS: a base ring that grows a shell to enclose whatever is stacked
-  -- on it (the shell is built to fit — scripts measure the payload), keeps the
-  -- air and the heat off it on the way up, and splits away by its action or
-  -- as a staging event. `fairing` is the base radius.
-  fairingS  = { prefab = "PartFairingS",  label = "Fairing 1.25 m", h = 0.20, rx = 0.625, rz = 0.625, mass = 0.08, cost = 140, top = true, bottom = true, kind = "structural", fairing = 0.625, strength = 450,
-                mods = { { type = "fairing" } } },
-  fairingM  = { prefab = "PartFairingM",  label = "Fairing 2.5 m",  h = 0.20, rx = 1.25,  rz = 1.25,  mass = 0.2,  cost = 260, top = true, bottom = true, kind = "structural", fairing = 1.25, strength = 700,
-                mods = { { type = "fairing" } } },
-
-  -- ── ROBOTICS ─────────────────────────────────────────────────────────────
-  -- Electric actuators. Everything stacked on the moving face (the top node)
-  -- moves with it; they draw power while they move and hold where they stop.
-  -- `robo` = the joint kind; the module carries the motor's figures.
-  hinge     = { prefab = "PartHinge",     label = "Servo Hinge",  h = 0.40, rx = 0.20, rz = 0.20, mass = 0.06, cost = 240, top = true, bottom = true, kind = "structural", robo = "hinge", strength = 420,
-                mods = { { type = "hinge", torque = 3.0, rate = 30, draw = 0.5 } } },
-  piston    = { prefab = "PartPiston",    label = "Piston",       h = 0.50, rx = 0.16, rz = 0.16, mass = 0.08, cost = 260, top = true, bottom = true, kind = "structural", robo = "piston", strength = 420,
-                mods = { { type = "piston", force = 8.0, rate = 0.3, draw = 0.5 } } },
-  rotor     = { prefab = "PartRotor",     label = "Rotor",        h = 0.30, rx = 0.30, rz = 0.30, mass = 0.10, cost = 300, top = true, bottom = true, kind = "structural", robo = "rotor", strength = 450,
-                mods = { { type = "rotor", torque = 2.0, draw = 0.8 } } },
-  -- LANDING CLAW: arm it and it bites into whatever it touches — rock, an
-  -- asteroid, another craft — and holds the craft there until released.
-  claw      = { prefab = "PartClaw",      label = "Landing Claw", h = 0.80, rx = 0.35, rz = 0.35, mass = 0.09, cost = 380, top = true, bottom = false, kind = "structural", claw = true, strength = 600,
-                mods = { { type = "claw", draw = 0.05, hold = 400 } } },
-  -- CORE DRILL: on a flank, bit down. Lowered and running while the craft is
-  -- landed or gripped, it bores into the ground and lifts what it cuts into
-  -- the cargo hold (sample cores count for the labs).
-  drill     = { prefab = "PartDrill",     label = "Core Drill",   h = 1.20, rx = 0.20, rz = 0.20, mass = 0.12, cost = 450, top = false, bottom = false, radial_orient = true, kind = "structural", strength = 300,
-                mods = { { type = "drill", rate = 24.0, draw = 1.2, reach = 0.9 } } },
-}
-
--- What the round-two parts are for, under their names on the catalogue card.
-local DESC = {
-  strut1 = "square strut · 12 kg · nodes on every face", strut2 = "square strut · 24 kg · nodes on every face",
-  strut3 = "square strut · 36 kg · nodes on every face", beam1 = "box beam · 20 kg · stiffer than a strut",
-  beam2 = "box beam · 40 kg · stiffer than a strut", ibeam2 = "steel I-beam · 60 kg · the strongest member",
-  ibeam3 = "steel I-beam · 90 kg · the strongest member", panel1 = "flat panel · 25 kg · decks, walls, fenders",
-  panel2 = "flat panel · 50 kg · decks, walls, fenders", panel3 = "flat panel · 100 kg · decks, walls, fenders",
-  plate = "tread-plate deck · 60 kg · a floor to build on", hub = "strut hub · a node on all six faces",
-  adapter = "stack adapter · 1.0 m to 0.5 m",
-  roverBody = "rover body · probe core, battery, lights · front = +X",
-  seat = "open seat · F to sit and drive · faces +X · no wheel or battery",
-  wheelS = "powered wheel · r 0.25 m · 5 m/s · −0.12 power/s", wheelM = "powered wheel · r 0.4 m · 7 m/s · −0.25 power/s",
-  wheelL = "powered wheel · r 0.6 m · 9 m/s · −0.5 power/s",
-  fairingS = "fairing · B draws its shell (or it fits the payload) · jettisons",
-  fairingM = "fairing · B draws its shell (or it fits the payload) · jettisons",
-  hinge = "servo hinge · ±90° · holds where it stops", piston = "piston · extends 0.8 m · holds where it stops",
-  rotor = "rotor · spins what's on it · up to 60 rpm", claw = "landing claw · arm it to grip the ground",
-  drill = "core drill · bores while landed · fills the hold",
-  beacon = "relay beacon · always on · relays a few hundred m over the ground",
-}
-for id, d in pairs(DESC) do if REG[id] then REG[id].desc = d end end
-
--- THE CATALOGUE, in the order the panel shows it. Grouped the way you build:
--- the crew capsule and what brings it home, then what pushes it, then what it
--- flies with, then what it does once it's there.
---
--- This list is the ONE place the order lives. It used to be spread across
--- three: a parallel `IDS` array in `catalog_button.lua`, a `part` index on each
--- of nineteen authored button nodes in `builder.ron`, and this registry — so
--- adding a part meant editing a scene file and keeping two arrays in step, and
--- getting an index wrong silently mislabelled a card. A part added to `REG` and
--- named here now appears in the catalogue and nowhere else needs to know.
-local CATALOGUE = {
-  { "COMMAND",   { "pod", "probe", "seat", "nose", "chute" } },
-  { "ELECTRICAL",{ "battery", "solar", "light", "antenna", "beacon", "dish", "dishL" } },
-  { "PROPULSION",{ "engineS", "engineM", "skipper", "tankS", "tankM", "radialTank", "rcs" } },
-  { "STRUCTURE", { "decoupler", "radialDec", "legs", "fins" } },
-  { "FRAME",     { "strut1", "strut2", "strut3", "beam1", "beam2", "ibeam2", "ibeam3",
-                   "panel1", "panel2", "panel3", "plate", "hub", "adapter" } },
-  { "PAYLOAD",   { "cargo", "dockPort", "fairingS", "fairingM" } },
-  { "ROVER",     { "roverBody", "wheelS", "wheelM", "wheelL" } },
-  { "ROBOTICS",  { "hinge", "piston", "rotor", "claw", "drill" } },
-}
-
--- Every part this builder knows how to spawn. The catalogue test compares this
--- against what `catalogue()` lists, so a part added to `REG` and forgotten here
--- is a build failure rather than a part nobody can buy.
+-- Every part this builder knows how to spawn (parts_registry.registryIds).
 function registryIds()
-  local out = {}
-  for id in pairs(REG) do out[#out + 1] = id end
-  table.sort(out)
-  return out
+  local lib = registry()
+  return lib and lib.registryIds() or {}
 end
 
--- The catalogue panel asks for this: sections, each with the parts it holds.
--- Ids with no entry in `REG` are dropped rather than drawn as a broken card.
+-- The catalogue panel asks for this: sections, each with the parts it holds
+-- (parts_registry.catalogue: ids with no entry in REG are dropped).
 function catalogue()
-  local out = {}
-  for _, section in ipairs(CATALOGUE) do
-    local ids = {}
-    for _, id in ipairs(section[2]) do
-      if REG[id] then ids[#ids + 1] = id end
+  local lib = registry()
+  return lib and lib.catalogue() or {}
+end
+
+-- ── WP1 rulebooks: builder_graph, builder_space, builder_history ───────────
+-- Pure scripts on the BuilderGraph manager node (findScript). Under luajit
+-- (the smoke harnesses) they are loaded from disk instead, so a harness needs
+-- no wiring. Their functions are copied into LIB once: a handle lookup per
+-- call would cost a crossing into the host every time.
+local LIB = {}
+local function lib(kind)
+  local m = LIB[kind]
+  if m then return m end
+  local h = findScript and findScript(kind) or nil
+  if h and h.valid == false then h = nil end
+  if not h and loadfile and setfenv then
+    local f = loadfile("solar/scripts/" .. kind .. ".lua") or loadfile("scripts/" .. kind .. ".lua")
+    if f then
+      local e = setmetatable({}, { __index = _G })
+      setfenv(f, e)
+      f()
+      h = e
     end
-    if #ids > 0 then out[#out + 1] = { title = section[1], ids = ids } end
   end
-  return out
+  if not h then return nil end
+  LIB[kind] = h
+  return h
 end
 
 -- ── State ───────────────────────────────────────────────────────────────────
 local parts = {}        -- uid -> { id, def, node, x,y,z, yaw,pitch,roll, parent (uid|nil) }
 local next_uid = 1
 local ghost = nil       -- { id, def, node, yaw,pitch,roll [, carried, from_uid] }
-local undo_stack = {}
 local pending_spawns = 0
+-- WP1 state in ONE table (the main chunk is near LuaJIT's 200-local limit):
+--   G        the links graph (builder_graph.newGraph)
+--   H        the spatial hash of part AABBs (builder_space.newHash)
+--   F        the frame adapter (builder_space.newFrame)
+--   hist     the history (builder_history.newHistory(500))
+--   sel      selection set uid → true ; sel_order list (primary last)
+--   sv       structVersion (topology) ; dirty (stats) ; queue (spawns)
+--   caches   per-version caches
+local W = { G = nil, H = nil, F = nil, hist = nil, sel = {}, sel_order = {}, sv = 0,
+            dirty = true, dirty_t = 0, queue = {}, qhead = 1, budget = 60, cache = {},
+            root = nil, hidden = {}, grid = 0.05, angle = math.pi / 12, space = "world",
+            test = false, overlay = 1, visits = 0, outliner = {}, controls = nil,
+            clip = nil, craft = nil, attach = "auto", load_total = 0, vis = nil,
+            press = nil, last_click = nil, box = nil, bynode = {} }
+structVersion = 0
 local hover_uid = nil
 local stats_node, hint_node
 local hint_t = 0        -- seconds a transient hint stays up
@@ -356,6 +248,7 @@ local click_cool = 0
 -- Published (builder_camera frames the ship with these).
 centerX, centerY, centerZ = 0.0, 1.5, 0.0
 partCount = 0
+craftVersion = 0        -- API: bumped on every change to the craft (see the top)
 
 -- ── Symmetry state ──────────────────────────────────────────────────────────
 -- sym_n is the ×N mode (X cycles it); parts placed as a ring share a `sym`
@@ -389,10 +282,47 @@ local STAGE_MAX_ROWS = 14 -- size of the StageRow## pool authored in builder.ron
 -- decoupler badges + the staging panel), 4 = Grab (pick the part up to
 -- re-attach it elsewhere). Switching tools never changes the selection, and
 -- editing never changes the selection — no more "moving the wrong thing".
-local TOOLS = { "move", "rotate", "stage", "grab", "groups" }
-local TOOL_LABEL = { move = "MOVE", rotate = "ROTATE", stage = "STAGE", grab = "GRAB", groups = "ACTION GROUPS" }
-local tool = "move"
+-- 1 SELECT · 2 OFFSET · 3 ROTATE · 4 ROOT (§4.1, the KSP numbering); STAGE
+-- and GROUPS are right-panel tabs now, reached through setTool().
+local TOOLS = { "select", "offset", "rotate", "root", "stage", "groups" }
+local TOOL_LABEL = { select = "SELECT", offset = "OFFSET", rotate = "ROTATE", root = "ROOT",
+                     stage = "STAGE", groups = "ACTION GROUPS" }
+local tool = "select"
 local selected_uid = nil
+
+-- ── MULTI-SELECTION (WP1, §4.2) ─────────────────────────────────────────────
+-- W.sel is the set, W.sel_order the order it was built (the PRIMARY — the
+-- gizmo's pivot, the inspector's part — is the last). `selected_uid` stays
+-- the primary, which is what every single-part rule here reads.
+local function sel_apply(list, mode)
+  mode = mode or "set"
+  local S, O = W.sel, W.sel_order
+  if mode == "set" then
+    S, O = {}, {}
+    W.sel, W.sel_order = S, O
+    mode = "add"
+  end
+  for _, u in ipairs(list) do
+    if parts[u] then
+      local on = S[u]
+      local want = (mode == "add") or (mode == "toggle" and not on)
+      if mode == "remove" then want = false end
+      if want and not on then S[u] = true; O[#O + 1] = u
+      elseif want and on then
+        -- re-adding moves it to primary
+        for i = #O, 1, -1 do if O[i] == u then table.remove(O, i) end end
+        O[#O + 1] = u
+      elseif not want and on then
+        S[u] = nil
+        for i = #O, 1, -1 do if O[i] == u then table.remove(O, i) end end
+      end
+    end
+  end
+  selected_uid = O[#O]
+  W.sel_v = (W.sel_v or 0) + 1
+  if W.hist then W.hist:seal() end
+end
+local function sel_only(u) sel_apply(u and { u } or {}, "set") end
 
 -- ── Electronics & action groups ─────────────────────────────────────────────
 -- The rulebook (scripts/electronics.lua) is a script on the scene's manager
@@ -429,24 +359,28 @@ local function craft_records()
     out[uid] = { uid = uid, id = p.id, label = d.label, kind = d.kind, mods = part_mods(d),
                  legs = d.legs and 1 or 0, decouple = d.decouple and 1 or 0,
                  chute = d.chute and 1 or 0, rcs = d.rcs and 1 or 0, dock = d.dock and 1 or 0,
-                 thrust = d.thrust or 0, sym = p.sym }
+                 thrust = d.thrust or 0, sym = p.sym, parent = p.parent, af = d.af }
   end
   return out
 end
 
 local function hint(msg, secs)
   if hint_node then hint_node.text = msg end
+  W.hint_text = msg
   hint_t = secs or 2.5
 end
 
 -- The full key list is on the pause menu's Controls page; the idle line only
 -- has to say how to start and how to leave (this scene has no pause menu: ESC
 -- leaves it).
-local HINT_IDLE = "click a part to select   ·   1 move · 2 rotate · 3 stage · 4 grab · 5 action groups   ·   B shape a selected fairing   ·   ESC leave"
-local HINT_GHOST = "click a node or any surface to place   ·   ALT = place free   ·   W/S A/D Q/E rotate · R spin · SPACE reset   ·   X symmetry · M mirror   ·   ESC cancel"
-local HINT_GRAB = "move the mouse to slide the whole ship   ·   click to set it down"
+local HINT_IDLE = "click to select · drag to move (ALT only this) · drag empty space to box-select   ·   1 select · 2 offset · 3 rotate · 4 root   ·   CTRL+Z/Y undo/redo · CTRL+C/V/D"
+local HINT_GHOST = "click a node or any surface to place (SHIFT keeps a copy)   ·   the floor places free   ·   W/S A/D Q/E rotate · R spin · SPACE reset   ·   X symmetry · M mirror   ·   ESC drop"
 
-local function publish_center()
+-- The craft's centre and part count. Cheap now: called from the dirty-flag
+-- refresh (at most once a frame), never from a spawn callback.
+local function center_now()
+  if not W.center_dirty then return end
+  W.center_dirty = false
   local n, sx, sy, sz = 0, 0.0, 0.0, 0.0
   for _, p in pairs(parts) do
     n = n + 1; sx = sx + p.x; sy = sy + p.y; sz = sz + p.z
@@ -455,27 +389,143 @@ local function publish_center()
   if n > 0 then centerX, centerY, centerZ = sx / n, sy / n, sz / n
   else centerX, centerY, centerZ = 0.0, 1.5, 0.0 end
 end
+local function publish_center()
+  craftVersion = craftVersion + 1
+  W.dirty = true
+  W.center_dirty = true
+end
 
--- Everything stacked ON `uid`, transitively (the subtree a pickup carries).
-local function subtree(uid)
-  local out, grew = { [uid] = true }, true
-  while grew do
-    grew = false
-    for u, p in pairs(parts) do
-      if p.parent and out[p.parent] and not out[u] then out[u] = true; grew = true end
-    end
+-- Topology changed (a part came or went, a link was made or cut).
+local function struct_changed()
+  W.sv = W.sv + 1
+  structVersion = W.sv
+  craftVersion = craftVersion + 1
+  W.dirty = true
+end
+
+-- The graph, the hash and the frame, made on first use.
+local function graph()
+  if not W.G then
+    local L = lib("builder_graph")
+    W.G = L and L.newGraph() or nil
   end
+  return W.G
+end
+local function alive_set()
+  local c = W.cache
+  if c.alive_v ~= W.sv then
+    local s = {}
+    for u in pairs(parts) do s[u] = true end
+    c.alive, c.alive_v = s, W.sv
+  end
+  return c.alive
+end
+local function is_command(u)
+  local p = parts[u]
+  return p ~= nil and (p.def.kind == "crewed" or p.def.kind == "probe")
+end
+-- The craft root: the one set with tool 4 (cmd root), else the lowest-uid
+-- command part, else the lowest uid with no primary link.
+local function craft_root()
+  if W.root and parts[W.root] then return W.root end
+  local c = W.cache
+  if c.root_v == W.sv then return c.root end
+  local best, free
+  for u, p in pairs(parts) do
+    if is_command(u) and (not best or u < best) then best = u end
+    if not p.parent and (not free or u < free) then free = u end
+  end
+  c.root, c.root_v = best or free, W.sv
+  return c.root
+end
+-- dependents of a set (uid → true), cached per structVersion and set.
+local function deps_of(set)
+  local G, L = graph(), lib("builder_graph")
+  if not (G and L) then return {} end
+  local keys = {}
+  for u in pairs(set) do keys[#keys + 1] = u end
+  table.sort(keys)
+  local k = table.concat(keys, ",")
+  local c = W.cache
+  if c.deps_v ~= W.sv then c.deps, c.deps_v = {}, W.sv end
+  local hit = c.deps[k]
+  if hit then return hit end
+  hit = L.dependents(G, alive_set(), set, craft_root(), is_command)
+  c.deps[k] = hit
+  return hit
+end
+
+-- Everything that comes along with `uid` (it and its dependents): what the
+-- old parent-tree `subtree` was, asked of the graph.
+local function subtree(uid)
+  local out = { [uid] = true }
+  for u in pairs(deps_of({ [uid] = true })) do out[u] = true end
   return out
 end
 
+-- Everything reachable from `from` without passing `via` (what stands on a
+-- fairing base's top, a booster beyond its decoupler).
+local function beyond_of(from, via)
+  local G, L = graph(), lib("builder_graph")
+  if not (G and L) then return { [from] = true } end
+  return L.beyond(G, alive_set(), from, via)
+end
+
+-- What a decoupler throws off (it included); just itself when a loop keeps it on.
+local function separation_of(uid)
+  local G, L = graph(), lib("builder_graph")
+  if G and L then
+    local far = L.separation(G, alive_set(), uid, craft_root())
+    if far then return far end
+    local p = parts[uid]
+    if p and p.parent then return L.beyond(G, alive_set(), uid, p.parent) end
+  end
+  return subtree(uid)
+end
+
+-- The AABB of a part (local frame): the larger of its registry box and its
+-- drawn box, under its turn.
+local function part_box(p)
+  local d = p.def
+  local hx, hy, hz = d.rx, d.h * 0.5, d.rz
+  if visHalf then
+    local a, b, c = visHalf(p.id, d)
+    hx, hy, hz = math.max(hx, a), math.max(hy, b), math.max(hz, c)
+  end
+  local cy, sy = math.cos(p.yaw or 0), math.sin(p.yaw or 0)
+  local cx, sx = math.cos(p.pitch or 0), math.sin(p.pitch or 0)
+  local cz, sz = math.cos(p.roll or 0), math.sin(p.roll or 0)
+  local Xx, Xy, Xz = cy * cz + sy * sx * sz, cx * sz, -sy * cz + cy * sx * sz
+  local Yx, Yy, Yz = -cy * sz + sy * sx * cz, cx * cz, sy * sz + cy * sx * cz
+  local Zx, Zy, Zz = sy * cx, -sx, cy * cx
+  local ex = math.abs(Xx) * hx + math.abs(Yx) * hy + math.abs(Zx) * hz
+  local ey = math.abs(Xy) * hx + math.abs(Yy) * hy + math.abs(Zy) * hz
+  local ez = math.abs(Xz) * hx + math.abs(Yz) * hy + math.abs(Zz) * hz
+  return ex, ey, ez
+end
+local function hash_put(uid, p)
+  if not W.H or p.carried then return end
+  local ex, ey, ez = part_box(p)
+  W.H:set(uid, p.x - ex, p.y - ey, p.z - ez, p.x + ex, p.y + ey, p.z + ez)
+end
+
+-- A part in hand (p.carried) is a preview: its moves don't bump craftVersion
+-- (panels would rebuild every frame of a drag); putting it down does.
 local function set_part_pos(p, x, y, z)
+  if not p.carried then craftVersion = craftVersion + 1; W.dirty = true end
   p.x, p.y, p.z = x, y, z
+  p.pv = (p.pv or 0) + 1
   if p.node then p.node.x, p.node.y, p.node.z = x, y, z end
+  if p.uid then hash_put(p.uid, p) end
 end
 
 local function set_part_rot(p, yaw, pitch, roll)
+  if p.yaw == yaw and p.pitch == pitch and p.roll == roll then return end
+  if not p.carried then craftVersion = craftVersion + 1; W.dirty = true end
   p.yaw, p.pitch, p.roll = yaw, pitch, roll
+  p.pv = (p.pv or 0) + 1
   if p.node then p.node.yaw, p.node.pitch, p.node.roll = yaw, pitch, roll end
+  if p.uid then hash_put(p.uid, p) end
 end
 
 -- ── Orientation math ────────────────────────────────────────────────────────
@@ -531,12 +581,24 @@ local function angle_about(hub, p)
                     px * e1.x + py * e1.y + pz * e1.z)
 end
 
+-- Ring / mirror-pair members, from an index rebuilt once per structVersion
+-- (sym ids only change when parts come and go).
 local function group_members(gid)
-  local out = {}
-  for uid, p in pairs(parts) do
-    if p.sym == gid then out[#out + 1] = uid end
+  local c = W.cache
+  if c.sym_v ~= W.sv then
+    local idx = {}
+    for uid, p in pairs(parts) do
+      if p.sym then
+        local t = idx[p.sym]
+        if not t then t = {}; idx[p.sym] = t end
+        t[#t + 1] = uid
+      end
+    end
+    for _, t in pairs(idx) do table.sort(t) end
+    c.sym, c.sym_v = idx, W.sv
   end
-  table.sort(out)
+  local out = {}
+  for i, u in ipairs(c.sym[gid] or {}) do out[i] = u end
   return out
 end
 
@@ -715,7 +777,7 @@ function escapeSpeed(w)
 end
 
 -- The stock starter on the reference figures: wet mass, propellant, thrust, ve.
-local function starter_numbers()
+function starter_numbers()
   local m0, mf, T, ve = 0.0, 0.0, 0.0, 0.0
   for _, id in ipairs(STARTER) do
     local d = REG[id]
@@ -782,7 +844,7 @@ end
 
 -- Δv of a burn from m0 down to m1 tonnes on engines totalling `th` kN and
 -- `burn` units/s (so exhaust velocity th / (burn · FUEL_T_PER_UNIT)).
-local function burn_dv(th, burn, m0, m1)
+function burn_dv(th, burn, m0, m1)
   if th <= 0 or burn <= 0 or m1 <= 0 or m0 <= m1 then return 0.0 end
   return th / (burn * FUEL_T_PER_UNIT) * math.log(m0 / m1)
 end
@@ -808,7 +870,9 @@ function stageStats()
   for uid, p in pairs(parts) do
     if p.def.radial then
       n_boost = n_boost + 1
-      for u in pairs(subtree(uid)) do booster_uids[u] = true end
+      -- the booster: what this decoupler throws off (the graph's separation:
+      -- its far side once its links to the root side are cut)
+      for u in pairs(separation_of(uid)) do booster_uids[u] = true end
     end
   end
   local out = { stages = {}, world = w, dv = 0.0 }
@@ -886,12 +950,12 @@ function stageStats()
   return out
 end
 
-local function fmt_alt(m)
+function fmt_alt(m)
   if m >= 1000 then return string.format("%.1f km", m / 1000) end
   return string.format("%.0f m", m)
 end
 
-local function stage_lines()
+function stage_lines()
   local s = stageStats()
   local out = ""
   local function dv_s(v) return v > 0 and string.format("%.0f m/s", v) or "—" end
@@ -941,7 +1005,7 @@ local function stage_lines()
 end
 
 -- The current stage items: key → { label, uids = {decoupler uids} }.
-local function stage_items()
+function stage_items()
   local items = {}
   for uid, p in pairs(parts) do
     if p.def.decouple then
@@ -967,7 +1031,7 @@ end
 
 -- Reconcile stage_order with the live items: stale keys drop, new keys slot
 -- in by the classic default (rings first, then axial bottom-up).
-local function sync_stage_order()
+function sync_stage_order()
   local items = stage_items()
   local kept = {}
   for _, key in ipairs(stage_order) do
@@ -1004,7 +1068,7 @@ end
 -- Lazily resolve (and cache) the pool of StageRow## UI nodes authored in
 -- builder.ron. Each stage event gets its OWN node so `node:uiRect()` gives an
 -- exact per-row rect to hit-test against — no font-metric guessing.
-local function stage_row_node(i)
+function stage_row_node(i)
   if not stage_rows then
     stage_rows = {}
     for k = 1, STAGE_MAX_ROWS do
@@ -1015,7 +1079,7 @@ local function stage_row_node(i)
 end
 
 -- The label for stage #k (its firing order) given its separation-event item.
-local function stage_label(k, it)
+function stage_label(k, it)
   if it.fair then return string.format("#%d   FAIRING", k) end
   if it.ring then
     return string.format("#%d   BOOSTER RING ×%d", k, #it.uids)
@@ -1027,7 +1091,7 @@ end
 -- fires first), named by what it does. Visible only while the STAGE tool is
 -- active (it declutters otherwise). The hovered row lights up; the dragged row
 -- fades to a placeholder while its floating ghost rides the cursor.
-local function paint_stages()
+function paint_stages()
   if not stage_node2 then stage_node2 = find("StagePanel") end
   if not stage_node2 then return end
   local items = sync_stage_order()
@@ -1080,7 +1144,7 @@ end
 -- Draw a numbered badge (a filled disc + the number over it) at each stage's
 -- decoupler(s), in the STAGE tool — so the row and the physical part are
 -- unmistakably the same one. The hovered row's badges glow.
-local function draw_stage_badges()
+function draw_stage_badges()
   if tool ~= "stage" then return end
   local items = sync_stage_order()
   for i, key in ipairs(stage_order) do
@@ -1109,7 +1173,7 @@ end
 -- The company ledger, if this scene has one mounted (it does; the builder is
 -- where money is spent). Fetched fresh — scripts don't survive a scene load.
 local co_ref = nil
-local function company_ref()
+function company_ref()
   if not co_ref or not co_ref.node or not co_ref.node.valid then
     co_ref = findScript("company")
   end
@@ -1117,7 +1181,7 @@ local function company_ref()
 end
 
 -- What this build costs to put on the pad.
-local function build_cost()
+function build_cost()
   local c = 0
   for _, p in pairs(parts) do c = c + p.def.cost end
   return c
@@ -1128,16 +1192,18 @@ end
 -- out: the stats start 32 down and the card keeps a 10 bottom margin under them.
 local STATS_TOP, STATS_PAD = 32, 10
 local header_refs = {}
-local function set_stats(text)
+function set_stats(text)
   stats_node.text = text
 end
 
-local function fit_header()
+function fit_header()
   local r = header_refs
   if not r.card and find then r.card = find("BuildTitle") end
   if not (r.card and stats_node and stats_node.uiRect) then return end
-  local h = select(4, stats_node:uiRect())
-  local sh = camera and camera.screenSize and select(2, camera.screenSize())
+  -- (no `select` here: the builder exports its own `select`, the API's)
+  local _, _, _, h = stats_node:uiRect()
+  local sh = nil
+  if camera and camera.screenSize then _, sh = camera.screenSize() end
   if not (h and h > 0 and sh and sh > 0) then return end
   local cel = r.card:getcomponent("UiElement")
   local want = math.ceil(STATS_TOP + h * uiDesignH() / sh + STATS_PAD)
@@ -1147,7 +1213,7 @@ end
 -- What a first rocket is still missing, in the order you'd add it. A pod on
 -- its own sat on the pad with a readout of mass and money and nothing to say
 -- that it wasn't a rocket yet.
-local function next_step(has)
+function next_step(has)
   if not has.command then return "Next: add a Pod Mk1 (crewed) or a Probe Core — something has to fly it" end
   -- A ROVER (wheels, no engine) is whole without tanks: it drives out.
   if has.wheel and not has.engine then
@@ -1183,6 +1249,23 @@ function launchCheck()
     return { block = "no command part — add a Pod Mk1 (crewed) or a Probe Core", warn = {}, has = has }
   end
   local warn = {}
+  -- the offset limit (§5.6): a part nudged off what it is attached to
+  if detachedParts then
+    local det = detachedParts()
+    if #det > 0 then
+      return { block = string.format("%d part%s not touching what %s attached to — move %s back", #det,
+        #det == 1 and " is" or "s are", #det == 1 and "it is" or "they are", #det == 1 and "it" or "them"),
+        warn = {}, has = has, detached = det }
+    end
+  end
+  -- loose islands (§5.2): only the root's island is the craft
+  if islands then
+    local comps = islands()
+    if comps and #comps > 1 then
+      warn[#warn + 1] = string.format("%d loose part group%s not attached to the craft (orange)", #comps - 1,
+        #comps == 2 and "" or "s")
+    end
+  end
   if not has.engine and not has.wheel then
     warn[#warn + 1] = "no engine — it will sit on the pad"
   else
@@ -1231,14 +1314,14 @@ function powerStats()
   return s
 end
 
-local function fmt_range(m)
+function fmt_range(m)
   if m >= 1e6 then return string.format("%.0f Mm", m / 1e6) end
   if m >= 1e4 then return string.format("%.0f km", m / 1000) end
   if m >= 1000 then return string.format("%.1f km", m / 1000) end
   return string.format("%.0f m", m)
 end
 
-local function fmt_secs(t)
+function fmt_secs(t)
   if t == math.huge then return "indefinitely" end
   if t >= 3600 then return string.format("%.1f h", t / 3600) end
   if t >= 60 then return string.format("%.0f min", t / 60) end
@@ -1248,7 +1331,7 @@ end
 -- Two lines for the header card: POWER (store, supply, the draw at idle and
 -- how long the batteries carry it in the dark) and COMMS (how far the best
 -- antenna reaches home and another craft, and whether it relays).
-local function elec_lines()
+function elec_lines()
   local s = powerStats()
   if not s then return "" end
   local out = ""
@@ -1302,7 +1385,7 @@ end
 
 local launch_btn_el = nil
 local launch_btn_n = nil
-local function paint_launch_button(chk)
+function paint_launch_button(chk)
   if not launch_btn_el then
     launch_btn_n = find and find("LaunchBtn")
     launch_btn_el = launch_btn_n and launch_btn_n:getcomponent("UiElement") or false
@@ -1317,7 +1400,15 @@ local function paint_launch_button(chk)
   end
 end
 
-local function refresh_stats()
+-- DIRTY-FLAG STATS: every edit calls refresh_stats(), which only marks the
+-- readout stale; update() repaints it at most once a frame (and at most every
+-- half second while a drag is in progress). Spawn callbacks never touch it.
+local function refresh_stats() W.dirty = true end
+function refreshStatsNow()
+  W.dirty = false
+  craftVersion = craftVersion + 1
+  W.stats_v = (W.stats_v or 0) + 1
+  center_now()
   paint_stages()
   if not stats_node then return end
   -- Mass as it stands on the pad: dry parts plus full tanks.
@@ -1367,26 +1458,204 @@ local function refresh_stats()
     stage_lines()))
 end
 
--- ── Undo (robust: ops that can't apply yet re-push and wait) ────────────────
-local function push_undo(op)
-  undo_stack[#undo_stack + 1] = op
-  if #undo_stack > 40 then table.remove(undo_stack, 1) end
+-- ── PARTS ARE DATA FIRST (WP1) ──────────────────────────────────────────────
+-- A part exists the moment its record is in `parts`; its node is asked for and
+-- lands later (spawns are asynchronous, and at most W.budget = 60 are started a
+-- frame — a 2,000-part load is time-sliced instead of stalling one frame). The
+-- callback dresses the node from the record AS IT IS THEN, so a part moved or
+-- deleted before its node arrives is never wrong. Nothing in a spawn callback
+-- recomputes stats (dirty flag) or the centre.
+
+-- The prefab a part shows on the stand: the visual-only variant when WP3's
+-- prefabs/vis/ has one (no rigidbody: nothing simulates on the stand), else
+-- the flight prefab.
+local function stand_prefab(prefab)
+  if W.vis == nil then
+    W.vis = {}
+    if assets and assets.getContents then
+      local ok, list = pcall(assets.getContents, "prefabs/vis")
+      if ok and type(list) == "table" then
+        for _, f in ipairs(list) do
+          local name = tostring(f):match("([^/]+)%.prefab%.ron$")
+          if name then W.vis[name] = true end
+        end
+      end
+    end
+  end
+  if W.vis[prefab] then return "vis/" .. prefab end
+  return prefab
+end
+
+-- A drawn part's mesh and its joint plates (builder_proc, WP3).
+function dress_proc(node, p)
+  if not (p.def.proc or p.joints) then return end
+  local P = lib("builder_proc")
+  if not P then return end
+  if p.def.proc and P.dress then P.dress(node, { def = p.def, size = p.size }) end
+  if P.dressJoint then
+    for _, j in ipairs(p.joints or {}) do P.dressJoint(node, decodeJoint(j)) end
+  end
+end
+
+-- Put a freshly landed node in the frame: a child of the BuildFrame when there
+-- is one (its local numbers are the builder's), placed as the record says.
+local function dress_node(node, p)
+  if W.F and not W.F.identity and W.F.node and node.setParent then
+    node:setParent(W.F.node, { keepWorld = false })
+  end
+  node.x, node.y, node.z = p.x, p.y, p.z
+  node.yaw, node.pitch, node.roll = p.yaw or 0, p.pitch or 0, p.roll or 0
+  if p.hidden then node.visible = false end
+  if node.id and p.uid then W.bynode[node.id] = p.uid end
+  W.landed = (W.landed or 0) + 1
+  dress_proc(node, p)
+end
+
+local function spawn_now(u, p)
+  W.budget = W.budget - 1
+  pending_spawns = pending_spawns + 1
+  local wx, wy, wz = p.x, p.y, p.z
+  if W.F and not W.F.identity then wx, wy, wz = W.F.toWorld(p.x, p.y, p.z) end
+  spawn(stand_prefab(p.def.prefab), vec3(wx, wy, wz), function(node)
+    pending_spawns = pending_spawns - 1
+    if parts[u] == p and not p.node then
+      p.node = node
+      dress_node(node, p)
+    else
+      destroy(node)
+    end
+  end)
+end
+
+local function request_node(u, p)
+  if W.budget > 0 then spawn_now(u, p)
+  else W.queue[#W.queue + 1] = { u, p } end
+end
+
+-- Start this frame's share of the queued spawns (update calls it first).
+function spawnQueueTick()
+  W.budget = 60
+  local q = W.queue
+  local h = W.qhead
+  while h <= #q and W.budget > 0 do
+    local it = q[h]
+    q[h] = false
+    h = h + 1
+    if parts[it[1]] == it[2] and not it[2].node then spawn_now(it[1], it[2]) end
+  end
+  if h > #q then W.queue, W.qhead = {}, 1 else W.qhead = h end
+end
+-- nil, or { done, total } while a load or paste is still spawning.
+function loadProgress()
+  local left = #W.queue - W.qhead + 1
+  if left <= 0 then
+    W.load_total = 0
+    return nil
+  end
+  if left > W.load_total then W.load_total = left end
+  return { done = W.load_total - left, total = W.load_total }
+end
+
+-- The primary link (the old parent edge) as a graph link, and the fields.
+local function set_parent(u, parent, att)
+  local p = parts[u]
+  if not p then return end
+  local G = graph()
+  if G then
+    local old = G:primary(u)
+    if old then G:remove(old.id) end
+  end
+  p.parent, p.att = parent, att
+  if parent and parts[parent] and G then
+    local L = lib("builder_graph")
+    local l = L.v1Link(parent, u, att)
+    -- joint points in each part's own frame (stack nodes: the end faces)
+    if l.k == "stack" then
+      local hp, hc = parts[parent].def.h * 0.5, p.def.h * 0.5
+      l.pa = { x = 0, y = (att == "bottom") and -hp or hp, z = 0 }
+      l.pb = { x = 0, y = (att == "bottom") and hc or -hc, z = 0 }
+    end
+    G:add(l)
+  end
+  struct_changed()
+end
+
+-- A DRAWN part (WP3: beamP, panelP, brace — `def.proc`) is one registry entry
+-- for every size: its def on the stand is the entry with h, rx, rz, mass,
+-- cost and strength from parts_registry.sizeOf(def, size) (cached per size),
+-- so every rule here (extents, picking, stats, the blueprint) reads it as an
+-- ordinary part.
+local SIZED = setmetatable({}, { __mode = "v" })
+local function def_of(id, size)
+  local d = REG[id]
+  if not d then return nil end
+  if not (d.proc and type(size) == "table") then return d end
+  local key = table.concat({ id, tostring(size.prof), tostring(size.len), tostring(size.w),
+                             tostring(size.d), tostring(size.t) }, ":")
+  local c = SIZED[key]
+  if c then return c end
+  c = {}
+  for k, v in pairs(d) do c[k] = v end
+  local lib2 = registry()
+  local z = lib2 and lib2.sizeOf and lib2.sizeOf(d, size)
+  if z then for k, v in pairs(z) do c[k] = v end end
+  c.prof = size.prof or d.prof
+  SIZED[key] = c
+  return c
+end
+
+-- JOINT VISUALS (WP3's gussets, splice plates, clamps) ride on their part as
+-- builder_attach joint tables; the blueprint stores each as ONE string (save.set
+-- holds four tables deep: bp → parts → rec → joints is already four).
+local function jv(p) return p and string.format("%.4f,%.4f,%.4f", p.x, p.y, p.z) or "" end
+function encodeJoint(j)
+  local h = j.held or {}
+  return table.concat({ j.style or "", jv(j.c), jv(j.ax), jv(j.u), jv(j.w),
+    tostring(j.ow or ""), tostring(j.leg or ""), tostring(j.t or ""), tostring(j.hd or ""),
+    tostring(h.hx or ""), tostring(h.hz or ""), tostring(h.prof or "") }, "|")
+end
+function decodeJoint(s)
+  if type(s) == "table" then return s end
+  if type(s) ~= "string" then return nil end
+  local f = {}
+  for x in (s .. "|"):gmatch("([^|]*)|") do f[#f + 1] = x end
+  local function vec(t)
+    local a, b, c = (t or ""):match("^([^,]+),([^,]+),([^,]+)$")
+    if not a then return nil end
+    return { x = tonumber(a), y = tonumber(b), z = tonumber(c) }
+  end
+  return { style = f[1], c = vec(f[2]), ax = vec(f[3]), u = vec(f[4]), w = vec(f[5]),
+           ow = tonumber(f[6]), leg = tonumber(f[7]), t = tonumber(f[8]), hd = tonumber(f[9]),
+           held = { hx = tonumber(f[10]), hz = tonumber(f[11]), prof = (f[12] ~= "" and f[12]) or nil } }
+end
+
+local function add_part(u, r, node)
+  local def = def_of(r.id, r.size)
+  if not def then return nil end
+  local p = { uid = u, id = r.id, def = def, node = nil, x = r.x, y = r.y, z = r.z,
+              yaw = r.yaw or 0, pitch = r.pitch or 0, roll = r.roll or 0,
+              parent = nil, att = nil, sym = r.sym, mir = r.mir, an = r.an, size = r.size,
+              hidden = r.hidden, pv = 0, joints = r.joints }
+  parts[u] = p
+  partCount = partCount + 1
+  if u >= next_uid then next_uid = u + 1 end
+  if r.sym and r.sym > next_sym then next_sym = r.sym end
+  hash_put(u, p)
+  if r.parent then set_parent(u, r.parent, r.att) else p.att = r.att end
+  struct_changed()
+  publish_center()
+  if node then p.node = node; dress_node(node, p) else request_node(u, p) end
+  return p
 end
 
 local function spawn_part(id, x, y, z, yaw, parent, uid, pitch, roll, att, sym, mir)
-  local def = REG[id]
+  if not REG[id] then return nil end
   local u = uid or next_uid
   if not uid then next_uid = next_uid + 1 end
-  pending_spawns = pending_spawns + 1
-  spawn(def.prefab, vec3(x, y, z), function(node)
-    node.yaw, node.pitch, node.roll = yaw or 0, pitch or 0, roll or 0
-    parts[u] = { id = id, def = def, node = node, x = x, y = y, z = z,
-                 yaw = yaw or 0, pitch = pitch or 0, roll = roll or 0,
-                 parent = parent, att = att, sym = sym, mir = mir }
-    if copyNormal[u] then parts[u].an = copyNormal[u]; copyNormal[u] = nil end
-    pending_spawns = pending_spawns - 1
-    publish_center(); refresh_stats()
-  end)
+  local an = copyNormal[u]
+  copyNormal[u] = nil
+  add_part(u, { id = id, x = x, y = y, z = z, yaw = yaw, pitch = pitch, roll = roll,
+                parent = parent, att = att, sym = sym, mir = mir, an = an })
   return u
 end
 
@@ -1398,46 +1667,219 @@ local function remove_part(uid)
                  att = p.att, sym = p.sym, mir = p.mir, an = p.an }
   if p.node then destroy(p.node) end
   parts[uid] = nil
-  for _, q in pairs(parts) do
-    if q.parent == uid then q.parent = nil end
+  partCount = partCount - 1
+  if W.H then W.H:remove(uid) end
+  local G = graph()
+  if G then
+    for _, l in ipairs(G:removePart(uid)) do
+      -- the parts placed through it lose their parent field with the link
+      local o = (l.a == uid) and l.b or l.a
+      if l.prim and l.a == uid and parts[o] then parts[o].parent = nil end
+    end
+  else
+    for _, q in pairs(parts) do if q.parent == uid then q.parent = nil end end
   end
+  if W.sel[uid] then
+    W.sel[uid] = nil
+    for i = #W.sel_order, 1, -1 do if W.sel_order[i] == uid then table.remove(W.sel_order, i) end end
+    selected_uid = W.sel_order[#W.sel_order]
+  end
+  if W.root == uid then W.root = nil end
+  struct_changed()
   publish_center(); refresh_stats()
   return data
 end
 
-local function undo()
-  if pending_spawns > 0 then return end -- let in-flight spawns land first
-  local op = table.remove(undo_stack)
-  if not op then return end
-  if op.type == "place" then
-    if not remove_part(op.uid) then return end
-  elseif op.type == "place_group" then
-    -- A symmetry ring placed as one op un-places as one op.
-    for _, u in ipairs(op.uids) do remove_part(u) end
-  elseif op.type == "scrap" then
-    for _, d in ipairs(op.parts) do
-      if d.an then copyNormal[d.uid] = d.an end
-      spawn_part(d.id, d.x, d.y, d.z, d.yaw, d.parent, d.uid, d.pitch, d.roll,
-                 d.att, d.sym, d.mir)
-      if d.uid >= next_uid then next_uid = d.uid + 1 end
-    end
-  elseif op.type == "wcfg" then
-    wcfgs = op.prev or {}
-  elseif op.type == "shape" then
-    -- a whole shaping session (or a cleared shape) un-done as one
-    fshapes[op.uid] = op.prev
-  elseif op.type == "move" then
-    for _, m in ipairs(op.moved) do
-      local p = parts[m.uid]
+-- ── HISTORY (WP1, §8.4): snapshots of what an edit touches ─────────────────
+-- An edit records the BEFORE state of the parts it touches (records, their
+-- links, wheel settings and fairing shapes; optionally the craft-wide tables:
+-- staging order, root, outliner groups, action groups, controls). Its AFTER
+-- state is taken lazily the first time it is undone — at that moment the
+-- craft is exactly as the edit left it — so a drag that merges 300 frames
+-- into one step costs one snapshot, not 300.
+local function vcopy(v) return v and { x = v.x, y = v.y, z = v.z } or nil end
+local function tcopy(t)
+  if type(t) ~= "table" then return t end
+  local o = {}
+  for k, v in pairs(t) do o[k] = tcopy(v) end
+  return o
+end
+
+local function snap_parts(uids, extra)
+  local S = { order = {}, parts = {}, links = {}, extra = nil }
+  local seen, lseen = {}, {}
+  local G = graph()
+  for k, v in pairs(uids) do
+    local u = (type(k) == "number" and v == true) and k or v
+    if type(u) == "number" and not seen[u] then
+      seen[u] = true
+      S.order[#S.order + 1] = u
+      local p = parts[u]
       if p then
-        set_part_pos(p, m.x, m.y, m.z)
-        if m.yaw then set_part_rot(p, m.yaw, m.pitch or 0, m.roll or 0) end
-        p.parent = m.parent
-        if m.has_an then p.an = m.an end
+        S.parts[u] = { id = p.id, x = p.x, y = p.y, z = p.z, yaw = p.yaw, pitch = p.pitch, roll = p.roll,
+                       parent = p.parent, att = p.att, sym = p.sym, mir = p.mir, an = vcopy(p.an),
+                       size = tcopy(p.size), hidden = p.hidden, joints = tcopy(p.joints),
+                       wcfg = wcfgs and wcfgs[u] and tcopy(wcfgs[u]) or nil,
+                       fshape = fshapes and fshapes[u] and tcopy(fshapes[u]) or nil }
+        if G then
+          for _, l in ipairs(G:incident(u)) do
+            if not lseen[l.id] then lseen[l.id] = true; S.links[#S.links + 1] = tcopy(l) end
+          end
+        end
       end
     end
   end
+  if extra then
+    S.extra = { stage = tcopy(stage_order), root = W.root, outliner = tcopy(W.outliner),
+                groups = tcopy(groups_state.groups), edited = groups_state.edited,
+                controls = tcopy(W.controls) }
+  end
+  return S
+end
+
+local function apply_snap(S)
+  local G = graph()
+  -- removals first (a removal clears the parent field of what hung on it)
+  for _, u in ipairs(S.order) do
+    local r, p = S.parts[u], parts[u]
+    if p and (not r or p.id ~= r.id) then remove_part(u) end
+  end
+  for _, u in ipairs(S.order) do
+    local r, p = S.parts[u], parts[u]
+    if r then
+      if not p then
+        p = add_part(u, { id = r.id, x = r.x, y = r.y, z = r.z, yaw = r.yaw, pitch = r.pitch,
+                          roll = r.roll, sym = r.sym, mir = r.mir, an = vcopy(r.an),
+                          size = tcopy(r.size), hidden = r.hidden, joints = tcopy(r.joints) })
+      else
+        set_part_pos(p, r.x, r.y, r.z)
+        set_part_rot(p, r.yaw, r.pitch, r.roll)
+        p.sym, p.mir, p.an, p.size, p.joints = r.sym, r.mir, vcopy(r.an), tcopy(r.size), tcopy(r.joints)
+        p.def = def_of(p.id, p.size) or p.def
+        if p.hidden ~= r.hidden then
+          p.hidden = r.hidden
+          if p.node then p.node.visible = not r.hidden end
+        end
+      end
+      if p then
+        p.parent, p.att = r.parent, r.att
+        if wcfgs then wcfgs[u] = tcopy(r.wcfg) end
+        if fshapes then fshapes[u] = tcopy(r.fshape) end
+      end
+    end
+  end
+  if G then
+    for _, u in ipairs(S.order) do
+      for _, l in ipairs(G:incident(u)) do G:remove(l.id) end
+    end
+    for _, l in ipairs(S.links) do
+      if parts[l.a] and parts[l.b] then G:add(tcopy(l)) end
+    end
+    -- a parent field with no primary link behind it (a host that is gone)
+    for _, u in ipairs(S.order) do
+      local p = parts[u]
+      if p and p.parent and not parts[p.parent] then p.parent = nil end
+    end
+  end
+  local X = S.extra
+  if X then
+    stage_order = tcopy(X.stage) or {}
+    W.root = X.root
+    W.outliner = tcopy(X.outliner) or {}
+    groups_state.groups, groups_state.edited = tcopy(X.groups), X.edited
+    W.controls = tcopy(X.controls)
+  end
+  struct_changed()
   publish_center(); refresh_stats()
+end
+
+local function history()
+  if not W.hist then
+    local L = lib("builder_history")
+    W.hist = L and L.newHistory(500) or nil
+  end
+  return W.hist
+end
+
+-- Open an edit of `uids` (list or set). `merge` = a key that folds repeated
+-- edits (a drag, a slider) into the open step. Returns the transaction; add
+-- parts created during it with tx_touch, then tx_commit.
+local function tx_begin(label, uids, merge, extra)
+  local H = history()
+  if merge and H and H.open == merge and H:top() and H:top().tx then
+    local t = H:top().tx
+    -- only when it covers the same parts (else a fresh step)
+    local all = true
+    for k, v in pairs(uids) do
+      local u = (type(k) == "number" and v == true) and k or v
+      if type(u) == "number" and not t.has[u] then all = false break end
+    end
+    if all then return { merged = true } end
+  end
+  local before = snap_parts(uids, extra)
+  local has = {}
+  for _, u in ipairs(before.order) do has[u] = true end
+  return { label = label, before = before, has = has, merge = merge, extra = extra }
+end
+local function tx_touch(t, u)
+  if t.merged or t.has[u] then return end
+  t.has[u] = true
+  t.before.order[#t.before.order + 1] = u   -- absent before: undo removes it
+end
+local function tx_commit(t)
+  if t.merged then return end
+  local H = history()
+  if not H then return end
+  local entry = { label = t.label, merge = t.merge, tx = t }
+  local after = nil
+  entry.undo = function()
+    if not after then
+      local ids = {}
+      for u in pairs(t.has) do ids[#ids + 1] = u end
+      after = snap_parts(ids, t.extra)
+    end
+    apply_snap(t.before)
+  end
+  entry.redo = function() if after then apply_snap(after) end end
+  H:push(entry)
+end
+-- One-shot: run fn inside a step.
+local function tx_run(label, uids, fn, merge, extra)
+  local t = tx_begin(label, uids, merge, extra)
+  local r = fn(t)
+  tx_commit(t)
+  return r
+end
+
+-- The legacy op table (fairing shaping, wheel settings) as history steps.
+local function push_undo(op)
+  local H = history()
+  if not H then return end
+  if op.type == "wcfg" then
+    local prev = op.prev or {}
+    local after = nil
+    H:push({ label = "wheel settings", merge = op.merge,
+      undo = function() after = after or tcopy(wcfgs); wcfgs = tcopy(prev); craftVersion = craftVersion + 1 end,
+      redo = function() if after then wcfgs = tcopy(after); craftVersion = craftVersion + 1 end end })
+  elseif op.type == "shape" then
+    local u, prev, after = op.uid, op.prev, nil
+    H:push({ label = "fairing shape",
+      undo = function() after = after or tcopy(fshapes[u]); fshapes[u] = tcopy(prev); craftVersion = craftVersion + 1 end,
+      redo = function() fshapes[u] = tcopy(after); craftVersion = craftVersion + 1 end })
+  end
+end
+
+local function undo()
+  local H = history()
+  if not H then return end
+  local e = H:undo()
+  if e then hint("undo: " .. (e.label or "edit") .. "   ·   CTRL+Y redo", 1.5) end
+end
+local function redo()
+  local H = history()
+  if not H then return end
+  local e = H:redo()
+  if e then hint("redo: " .. (e.label or "edit"), 1.5) end
 end
 
 -- ── Picking & snapping ──────────────────────────────────────────────────────
@@ -1446,23 +1888,86 @@ local function screen_of(x, y, z)
   return sx, sy, on
 end
 
-local function part_under_cursor(px)
-  local mx, my = input.mouse()
-  -- Precise first: a ray through the cursor against the parts' hulls.
-  local ox, oy, oz, dx, dy, dz = camera.screenToRay(mx, my)
-  local hit = raycast(ox, oy, oz, dx, dy, dz, 300.0)
-  if hit and hit.node then
-    for uid, p in pairs(parts) do
-      if p.node and p.node.id == hit.node.id then return uid end
+-- ── PICKING WITHOUT COLLIDERS (WP1, §8.2) ───────────────────────────────────
+-- Parts on the stand have no bodies (visual-only spawns), so every pick is a
+-- walk of the spatial hash along the cursor ray and an exact rayPart test of
+-- the few parts it finds. W.visits counts the parts examined a frame (the
+-- perf smoke asserts on it).
+local function ensure_hash()
+  if W.H then return W.H end
+  local L = lib("builder_space")
+  if not L then return nil end
+  W.H = L.newHash(1.0, 0.5)
+  for u, p in pairs(parts) do hash_put(u, p) end
+  return W.H
+end
+-- Past 1,000 parts the cells grow to 2 m (fewer, fuller buckets).
+local function rehash_if_needed()
+  local H = W.H
+  if not H then return end
+  local want = (partCount > 1000) and 2.0 or 1.0
+  if H.cell ~= want then
+    H.cell = want
+    H:clear()
+    for u, p in pairs(parts) do hash_put(u, p) end
+  end
+end
+
+-- The parts whose boxes (grown by `grow`, ≤ 0.5 m) the local ray passes,
+-- nearest first.
+local function near_ray(ox, oy, oz, dx, dy, dz, grow)
+  local H = ensure_hash()
+  if not H then
+    local out = {}
+    for u in pairs(parts) do out[#out + 1] = u end
+    return out
+  end
+  return H:ray(ox, oy, oz, dx, dy, dz, 400.0, {}, grow or 0)
+end
+
+-- The first part a local ray meets (exact shape) → uid, t, point, normal.
+-- `exclude` = set of uids to look through (carried parts, hidden ones).
+local function ray_craft(ox, oy, oz, dx, dy, dz, exclude)
+  local o = { x = ox, y = oy, z = oz }
+  local l = math.sqrt(dx * dx + dy * dy + dz * dz)
+  if l < 1e-12 then return nil end
+  local d = { x = dx / l, y = dy / l, z = dz / l }
+  local best, bt, bP, bn = nil, math.huge, nil, nil
+  for _, u in ipairs(near_ray(ox, oy, oz, d.x, d.y, d.z, 0)) do
+    local p = parts[u]
+    if p and not p.hidden and not p.carried and not (exclude and exclude[u]) then
+      W.visits = W.visits + 1
+      local t, P, n = rayPart(p, o, d)
+      if t and t < bt then best, bt, bP, bn = u, t, P, n end
     end
   end
-  -- Fallback: nearest projected center (small parts between big ones).
+  if not best then return nil end
+  return best, bt, bP, bn
+end
+
+function rayCraft(ox, oy, oz, dx, dy, dz)
+  local u, t, P, n = ray_craft(ox, oy, oz, dx, dy, dz)
+  if not u then return nil end
+  return u, t, P.x, P.y, P.z, n.x, n.y, n.z
+end
+
+local function part_under_cursor(px)
+  local mx, my = input.mouse()
+  local ox, oy, oz, dx, dy, dz = camera.screenToRay(mx, my)
+  local u = ray_craft(ox, oy, oz, dx, dy, dz)
+  if u then return u end
+  -- Fallback: the nearest projected centre among parts near the ray (small
+  -- parts between big ones).
   local best, best_d = nil, px * px
-  for uid, p in pairs(parts) do
-    local sx, sy, on = screen_of(p.x, p.y, p.z)
-    if on then
-      local d = (sx - mx) ^ 2 + (sy - my) ^ 2
-      if d < best_d then best, best_d = uid, d end
+  for _, v in ipairs(near_ray(ox, oy, oz, dx, dy, dz, 0.5)) do
+    local p = parts[v]
+    if p and not p.hidden and not p.carried then
+      W.visits = W.visits + 1
+      local sx, sy, on = screen_of(p.x, p.y, p.z)
+      if on then
+        local d = (sx - mx) ^ 2 + (sy - my) ^ 2
+        if d < best_d then best, best_d = v, d end
+      end
     end
   end
   return best
@@ -1477,13 +1982,31 @@ local function outline(p, r, g, b, a)
           r, g, b, a or 1.0)
 end
 
--- Every free attach node of part `p` for the current ghost: axial top/bottom
--- (along the part's OWN axis — a pitched part's stack continues sideways) +
--- 4 radial side nodes on `side = true` parts. Each node carries the world
--- point where the GHOST CENTER would land, so snapping is one lookup.
+-- Is a stack node of `uid` in use? From the LINKS (never world Y: a part
+-- lying down used to offer its occupied joint). Links to `exclude` (the parts
+-- in hand) don't count. Returns the uid on the other end, or nil.
+local function side_user(uid, side, exclude)
+  local G = graph()
+  if not G then return nil end
+  for id in pairs(G.adj[uid] or {}) do
+    local l = G.links[id]
+    local o
+    if l.a == uid and l.sa == side then o = l.b
+    elseif l.b == uid and l.sb == side then o = l.a end
+    if o and not (exclude and exclude[o]) and parts[o] then return o end
+  end
+  return nil
+end
+
+-- Is the point inside (70 % of) a placed part? (the hash, not every part)
 local function is_side_occupied(px, py, pz, exclude)
-  for uid, q in pairs(parts) do
-    if not (exclude and exclude[uid]) then
+  local H = ensure_hash()
+  local list
+  if H then list = H:box(px, py, pz, px, py, pz, {}) else list = {} for u in pairs(parts) do list[#list + 1] = u end end
+  for _, uid in ipairs(list) do
+    local q = parts[uid]
+    if q and not (exclude and exclude[uid]) and not q.carried then
+      W.visits = W.visits + 1
       local ex, ey, ez = part_extents(q)
       if math.abs(px - q.x) < ex * 0.7 and math.abs(py - q.y) < ey * 0.7
         and math.abs(pz - q.z) < ez * 0.7 then
@@ -1494,19 +2017,40 @@ local function is_side_occupied(px, py, pz, exclude)
   return false
 end
 
-local function attach_nodes_of(uid, p, gdef, g_ext_y, exclude, occupied_top, occupied_bottom)
-  local out = {}
+-- CACHED ATTACH FRAMES: a part's axes, worked out once per pose (p.pv).
+local function part_axes(p)
+  local c = p.axes
+  if c and c.pv == p.pv then return c.X, c.Y, c.Z end
   local X, Y, Z = rot_basis(p.yaw, p.pitch, p.roll)
+  p.axes = { pv = p.pv, X = X, Y = Y, Z = Z }
+  return X, Y, Z
+end
+
+-- Every free attach node of part `p` for the current ghost: axial top/bottom
+-- (along the part's OWN axis) + radial flank nodes on `side = true` parts.
+-- Each node carries the point where the GHOST CENTRE would land. An OCCUPIED
+-- stack node is offered as an INSERT (a new stack part goes between) when the
+-- part in hand is a fresh stack part.
+local function attach_nodes_of(uid, p, gdef, g_ext_y, exclude)
+  local out = {}
+  local X, Y, Z = part_axes(p)
   local hh = p.def.h * 0.5
-  if p.def.top and gdef.bottom and not occupied_top[uid] then
-    local ax, ay, az = p.x + Y.x * hh, p.y + Y.y * hh, p.z + Y.z * hh
-    out[#out + 1] = { uid = uid, side = "top", x = ax, y = ay, z = az,
-      cx = ax + Y.x * g_ext_y, cy = ay + Y.y * g_ext_y, cz = az + Y.z * g_ext_y }
+  local fresh_stack = ghost and not ghost.carried and not ghost.paste and gdef.top and gdef.bottom
+  if p.def.top and gdef.bottom then
+    local user = side_user(uid, "top", exclude)
+    if not user or fresh_stack then
+      local ax, ay, az = p.x + Y.x * hh, p.y + Y.y * hh, p.z + Y.z * hh
+      out[#out + 1] = { uid = uid, side = "top", x = ax, y = ay, z = az, insert = user,
+        cx = ax + Y.x * g_ext_y, cy = ay + Y.y * g_ext_y, cz = az + Y.z * g_ext_y }
+    end
   end
-  if p.def.bottom and gdef.top and not occupied_bottom[uid] then
-    local ax, ay, az = p.x - Y.x * hh, p.y - Y.y * hh, p.z - Y.z * hh
-    out[#out + 1] = { uid = uid, side = "bottom", x = ax, y = ay, z = az,
-      cx = ax - Y.x * g_ext_y, cy = ay - Y.y * g_ext_y, cz = az - Y.z * g_ext_y }
+  if p.def.bottom and gdef.top then
+    local user = side_user(uid, "bottom", exclude)
+    if not user or fresh_stack then
+      local ax, ay, az = p.x - Y.x * hh, p.y - Y.y * hh, p.z - Y.z * hh
+      out[#out + 1] = { uid = uid, side = "bottom", x = ax, y = ay, z = az, insert = user,
+        cx = ax - Y.x * g_ext_y, cy = ay - Y.y * g_ext_y, cz = az - Y.z * g_ext_y }
+    end
   end
   -- Radial flanks: ghost sits side-by-side at the same height, its center
   -- pushed out by host half-width + the ghost's own half-width that way.
@@ -1514,10 +2058,7 @@ local function attach_nodes_of(uid, p, gdef, g_ext_y, exclude, occupied_top, occ
     local gex, gey, gez = eff_extents(gdef, ghost.yaw, ghost.pitch, ghost.roll)
     local dirs
     if p.def.radial then
-      -- A mounted radial decoupler's usable face is its disc's OUTWARD +Y
-      -- (the inner face is against the hull): ONE node there, and whatever
-      -- attaches keeps its own orientation — a vertical booster tank hangs
-      -- off the disc exactly like KSP.
+      -- A mounted radial decoupler's usable face is its disc's OUTWARD +Y.
       dirs = { { a = Y, r = hh } }
     else
       dirs = {
@@ -1528,7 +2069,6 @@ local function attach_nodes_of(uid, p, gdef, g_ext_y, exclude, occupied_top, occ
       }
     end
     for _, d in ipairs(dirs) do
-      -- Ghost half-width projected along the outward direction.
       local g = math.abs(d.a.x) * gex + math.abs(d.a.y) * gey + math.abs(d.a.z) * gez
       local ax = p.x + d.a.x * d.r
       local ay = p.y + d.a.y * d.r
@@ -1543,34 +2083,151 @@ local function attach_nodes_of(uid, p, gdef, g_ext_y, exclude, occupied_top, occ
   return out
 end
 
+-- The parts a snap may come from this frame: the parts near the cursor ray
+-- plus the graph neighbours of the one it hits. Also what the node rings are
+-- drawn on (the hit part and its neighbours only — §4.6).
+local function snap_candidates(exclude)
+  local mx, my = input.mouse()
+  local ox, oy, oz, dx, dy, dz = camera.screenToRay(mx, my)
+  local hit = ray_craft(ox, oy, oz, dx, dy, dz, exclude)
+  local list, seen = {}, {}
+  local function add(u)
+    if not seen[u] and parts[u] and not (exclude and exclude[u]) and not parts[u].carried
+      and not parts[u].hidden then
+      seen[u] = true
+      list[#list + 1] = u
+    end
+  end
+  local show = {}
+  if hit then
+    add(hit)
+    show[hit] = true
+    local G = graph()
+    if G then for _, n in ipairs(G:neighbours(hit)) do add(n); show[n] = true end end
+  end
+  for _, u in ipairs(near_ray(ox, oy, oz, dx, dy, dz, 0.5)) do add(u) end
+  return list, show, hit
+end
+
+-- ── WP3's attach rules (builder_attach) ─────────────────────────────────────
+-- attachRules() == "wp3" (the default once builder_attach.best exists): the
+-- snap, the node rings, the joints and the welds come from WP3's rulebook.
+-- "legacy" keeps the old node magnet (setAttachRules).
+local function attach_v2()
+  if W.attach == "legacy" then return nil end
+  local A = lib("builder_attach")
+  if not (A and A.best) then return nil end
+  return A
+end
+-- A part as builder_attach reads it, cached per pose.
+local function arec(u)
+  local p = parts[u]
+  if not p then return nil end
+  local r = p.arec
+  if r and r.pv == p.pv and r.def == p.def then return r end
+  r = { uid = u, id = p.id, def = p.def, x = p.x, y = p.y, z = p.z, B = basisOf(p.yaw, p.pitch, p.roll),
+        size = p.size, pv = p.pv }
+  p.arec = r
+  return r
+end
+local function alinks(u)
+  local G = graph()
+  return G and G:incident(u) or {}
+end
+-- The question for builder_attach this frame.
+function attachQuery(held, exclude, cands, hit)
+  local mx, my = input.mouse()
+  local ox, oy, oz, dx, dy, dz = camera.screenToRay(mx, my)
+  local q = {
+    held = held, mouse = { x = mx, y = my },
+    get = function(u)
+      local p = parts[u]
+      if not p or p.carried or p.hidden or (exclude and exclude[u]) then return nil end
+      W.visits = W.visits + 1
+      return arec(u)
+    end,
+    links = alinks, near = cands,
+    project = function(x, y, z) local sx, sy, on = screen_of(x, y, z); return sx, sy, on end,
+    grid = (W.grid > 0) and W.grid or 0, gridHull = (W.grid > 0) and math.max(W.grid, 0.25) or 0,
+    angle = W.angle, free = input.key("shift"), cornerAngle = W.corner or math.pi / 2,
+    floor = { y = params.floor_y, grid = (W.grid > 0) and math.max(W.grid, 0.05) or 0 },
+    ray = { o = { x = ox, y = oy, z = oz }, d = { x = dx, y = dy, z = dz } },
+    round = roundProfile,
+  }
+  if hit then
+    local P, n = hit[3], hit[4]
+    q.hit = { uid = hit[1], x = P.x, y = P.y, z = P.z, nx = n.x, ny = n.y, nz = n.z }
+  end
+  return q
+end
+
+local function find_snap_v2(A, gdef, exclude)
+  local mx, my = input.mouse()
+  local ox, oy, oz, dx, dy, dz = camera.screenToRay(mx, my)
+  local hu, ht, hP, hn = ray_craft(ox, oy, oz, dx, dy, dz, exclude)
+  if not hu then
+    -- a collider hit (flight prefabs, before prefabs/vis/)
+    local sc = surfaceUnderCursor(exclude)
+    if sc then hu, ht, hP, hn = sc.uid, 0, { x = sc.x, y = sc.y, z = sc.z }, { x = sc.dx, y = sc.dy, z = sc.dz } end
+  end
+  local cands, show = snap_candidates(exclude)
+  if hu and not show[hu] then show[hu] = true; cands[#cands + 1] = hu end
+  ghost.show = show
+  local q = attachQuery({ def = gdef, id = ghost.id, size = ghost.size, off = ghost.off or IDENT },
+    exclude, cands, hu and { hu, ht, hP, hn } or nil)
+  ghost.q = q
+  -- an INSERT on an occupied stack joint is the builder's own (§5.4)
+  if not ghost.carried and gdef.top and gdef.bottom then
+    local _, g_ext_y = eff_extents(gdef, ghost.yaw, ghost.pitch, ghost.roll)
+    local best, bd = nil, 24 * 24
+    for u in pairs(show) do
+      for _, a in ipairs(attach_nodes_of(u, parts[u], gdef, g_ext_y, exclude)) do
+        if a.insert then
+          local sx, sy, on = screen_of(a.x, a.y, a.z)
+          local d = on and (sx - mx) ^ 2 + (sy - my) ^ 2 or math.huge
+          if d < bd then best, bd = a, d end
+        end
+      end
+    end
+    if best then return best end
+  end
+  local c = A.best(q)
+  q.snap = c
+  if not c then return nil end
+  local side = c.side or "surface"
+  if c.kind ~= "stack" and side ~= "radial" then side = "surface" end
+  return { wp3 = c, uid = c.host, side = side, floor = (c.kind == "floor") or nil,
+           x = c.at and c.at.x or c.x, y = c.at and c.at.y or c.y, z = c.at and c.at.z or c.z,
+           dx = c.n and c.n.x, dy = c.n and c.n.y, dz = c.n and c.n.z }
+end
+
 -- The best FREE attach node for the current ghost (nearest to the cursor on
--- screen, within snap_px). Carried stacks never attach to themselves.
+-- screen, within snap_px) among the candidates; carried parts never attach to
+-- themselves. With no node near: the surface under the cursor.
 local function find_snap()
   if not ghost then return nil end
+  do
+    local A = attach_v2()
+    if A then return find_snap_v2(A, ghost.def, ghost.exclude or {}) end
+  end
   local gdef = ghost.def
   local mx, my = input.mouse()
   local best, best_d = nil, params.snap_px * params.snap_px
-  local exclude = {}
-  if ghost.carried then
-    for _, m in ipairs(ghost.carried) do exclude[m.uid] = true end
-  end
-  local occupied_top, occupied_bottom = {}, {}
-  for _, p in pairs(parts) do
-    if p.parent and parts[p.parent] and not exclude[p.parent] and p.att ~= "radial" and p.att ~= "surface" then
-      if p.y >= parts[p.parent].y then occupied_top[p.parent] = true
-      else occupied_bottom[p.parent] = true end
-    end
-  end
+  local exclude = ghost.exclude or {}
+  local cands, show = snap_candidates(exclude)
+  ghost.show = show
+  ghost.cands = cands
   local _, g_ext_y = eff_extents(gdef, ghost.yaw, ghost.pitch, ghost.roll)
-  for uid, p in pairs(parts) do
-    if not exclude[uid] then
-      for _, a in ipairs(attach_nodes_of(uid, p, gdef, g_ext_y, exclude,
-                                         occupied_top, occupied_bottom)) do
-        local sx, sy, on = screen_of(a.x, a.y, a.z)
-        if on then
-          local d = (sx - mx) ^ 2 + (sy - my) ^ 2
-          if d < best_d then best, best_d = a, d end
-        end
+  for _, uid in ipairs(cands) do
+    W.visits = W.visits + 1
+    local p = parts[uid]
+    for _, a in ipairs(attach_nodes_of(uid, p, gdef, g_ext_y, exclude)) do
+      local sx, sy, on = screen_of(a.x, a.y, a.z)
+      if on then
+        local d = (sx - mx) ^ 2 + (sy - my) ^ 2
+        -- an INSERT only wins when it is clearly the node aimed at
+        if a.insert then d = d * 2.0 end
+        if d < best_d then best, best_d = a, d end
       end
     end
   end
@@ -1580,30 +2237,37 @@ local function find_snap()
 end
 
 -- Would a part of `def` (at the ghost's orientation) centered at (x,y,z)
--- DEEPLY overlap a placed part? FORGIVING on purpose: parts live in ONE rigid
--- compound and dropped stages don't collide with each other, so touching /
--- clipping is harmless — only a near-total overlap (one part buried inside
--- another) is worth refusing. The old 0.9 gate rejected boosters that merely
--- HUG the hull, forcing the pull-out-then-nudge-back dance. 0.55 = "you'd
--- have to shove it most of the way through" before it's blocked.
+-- DEEPLY overlap a placed part? FORGIVING on purpose: only a near-total
+-- overlap (one part buried inside another) is refused. Asks the hash.
 local OVERLAP = 0.55
 local function overlaps(def, x, y, z, exclude, gy, gp, gr)
   local ax, ay, az = eff_extents(def, gy, gp, gr)
-  for uid, p in pairs(parts) do
-    if not (exclude and exclude[uid]) then
+  local H = ensure_hash()
+  local list
+  if H then
+    list = H:box(x - ax, y - ay, z - az, x + ax, y + ay, z + az, {})
+  else
+    list = {}
+    for u in pairs(parts) do list[#list + 1] = u end
+  end
+  for _, uid in ipairs(list) do
+    local p = parts[uid]
+    if p and not (exclude and exclude[uid]) and not p.carried then
+      W.visits = W.visits + 1
       local bx, by, bz = part_extents(p)
       if math.abs(x - p.x) < (ax + bx) * OVERLAP
         and math.abs(y - p.y) < (ay + by) * OVERLAP
         and math.abs(z - p.z) < (az + bz) * OVERLAP then
-        return true
+        return true, uid
       end
     end
   end
   return false
 end
 
--- Where a free-floating ghost sits: cursor ray onto the pad plane, else held
--- at the ship's depth.
+-- Where a free-floating ghost sits: the cursor ray onto the build floor,
+-- snapped to the floor grid; else held at the ship's depth (and not
+-- placeable: free placement is on the floor).
 local function free_pos()
   local mx, my = input.mouse()
   local ox, oy, oz, dx, dy, dz = camera.screenToRay(mx, my)
@@ -1611,11 +2275,17 @@ local function free_pos()
   local gh = gey + params.floor_y
   if dy < -1e-4 then
     local t = (gh - oy) / dy
-    if t > 0.3 and t < 400 then return ox + dx * t, gh, oz + dz * t end
+    if t > 0.3 and t < 400 then
+      local x, z = ox + dx * t, oz + dz * t
+      local gs = (W.grid > 0 and not input.key("shift")) and math.max(W.grid, 0.05) or 0
+      if gs > 0 then x, z = math.floor(x / gs + 0.5) * gs, math.floor(z / gs + 0.5) * gs end
+      return x, gh, z, true
+    end
   end
+  center_now()
   local ddx, ddy, ddz = centerX - ox, centerY - oy, centerZ - oz
   local t = math.max(3.0, ddx * dx + ddy * dy + ddz * dz)
-  return ox + dx * t, math.max(gh, oy + dy * t), oz + dz * t
+  return ox + dx * t, math.max(gh, oy + dy * t), oz + dz * t, false
 end
 
 -- Keep an angle readable: wrap to (-π, π].
@@ -1692,7 +2362,7 @@ function attachOrient(def, nx, ny, nz, spin)
 end
 
 -- How far a part's centre stands off the face it is attached to.
-local function attach_reach(def)
+function attach_reach(def)
   if def.radial_orient then return def.rx end
   return def.h * 0.5
 end
@@ -1703,46 +2373,30 @@ end
 function surfaceUnderCursor(exclude)
   local mx, my = input.mouse()
   local ox, oy, oz, dx, dy, dz = camera.screenToRay(mx, my)
-  -- The part's REAL shape first (rayPart: round hulls are round), nearest
-  -- along the ray; the box colliders only if no shape is under the cursor.
-  do
-    local o, d = { x = ox, y = oy, z = oz }, norm3({ x = dx, y = dy, z = dz })
-    local carried = {}
-    if ghost and ghost.carried then
-      for _, m in ipairs(ghost.carried) do carried[m.uid] = true end
-    end
-    local best, bt = nil, math.huge
-    for uid, p in pairs(parts) do
-      if not (exclude and exclude[uid]) and not carried[uid] then
-        local t, P, n = rayPart(p, o, d)
-        if t and t < bt then
-          bt = t
-          best = { uid = uid, side = "surface", x = P.x, y = P.y, z = P.z, dx = n.x, dy = n.y, dz = n.z }
-        end
-      end
-    end
-    if best then return best end
+  -- The part's REAL shape (rayPart: round hulls are round), nearest along the
+  -- ray, from the spatial hash. Parts in hand are looked through.
+  local u, _, P, n = ray_craft(ox, oy, oz, dx, dy, dz, exclude)
+  if u then
+    return { uid = u, side = "surface", x = P.x, y = P.y, z = P.z, dx = n.x, dy = n.y, dz = n.z }
   end
-  local skip = ghost and (ghost.node or (ghost.carried and parts[ghost.from_uid] and parts[ghost.from_uid].node)) or nil
-  local travelled = 0
-  for _ = 1, 6 do
-    local hit = raycast(ox, oy, oz, dx, dy, dz, 300.0 - travelled, skip)
-    if not (hit and hit.node and hit.nx) then return nil end
-    local found = nil
-    for uid, p in pairs(parts) do
-      if p.node and p.node.id == hit.node.id then found = uid break end
-    end
-    if found and not (exclude and exclude[found]) then
-      return { uid = found, side = "surface", x = hit.x, y = hit.y, z = hit.z,
-               dx = hit.nx, dy = hit.ny, dz = hit.nz }
-    end
-    -- a carried part (or something that isn't the craft): look past it
-    local step = (hit.distance or 0) + 0.02
-    ox, oy, oz = ox + dx * step, oy + dy * step, oz + dz * step
-    travelled = travelled + step
-    if travelled > 299 then return nil end
+  -- A part's collider, when it has one (flight prefabs, before prefabs/vis/):
+  -- the engine ray, in the world, mapped back to the part by its node.
+  if not raycast then return nil end
+  local F = W.F
+  local wox, woy, woz, wdx, wdy, wdz = ox, oy, oz, dx, dy, dz
+  if F and not F.identity then
+    wox, woy, woz = F.toWorld(ox, oy, oz)
+    wdx, wdy, wdz = F.dirToWorld(dx, dy, dz)
   end
-  return nil
+  local hit = raycast(wox, woy, woz, wdx, wdy, wdz, 300.0)
+  local hu = hit and hit.node and W.bynode[hit.node.id]
+  if not (hu and parts[hu] and hit.nx) or (exclude and exclude[hu]) or parts[hu].carried then return nil end
+  local x, y, z, nx, ny, nz = hit.x, hit.y, hit.z, hit.nx, hit.ny, hit.nz
+  if F and not F.identity then
+    x, y, z = F.toLocal(x, y, z)
+    nx, ny, nz = F.dirToLocal(nx, ny, nz)
+  end
+  return { uid = hu, side = "surface", x = x, y = y, z = z, dx = nx, dy = ny, dz = nz }
 end
 
 -- Where the ghost goes for a snap, and how it is turned: the mount's ATTACH
@@ -1771,7 +2425,7 @@ end
 -- own X or Z axis, whichever that face looks along. Returns the axis vector
 -- and its name, or nil for a face along the host's Y (a top or bottom face
 -- has no opposite flank to mirror to).
-local function mirror_axis(host, dx, dy, dz)
+function mirror_axis(host, dx, dy, dz)
   local X, Y, Z = rot_basis(host.yaw, host.pitch, host.roll)
   local ax = math.abs(dx * X.x + dy * X.y + dz * X.z)
   local az = math.abs(dx * Z.x + dy * Z.y + dz * Z.z)
@@ -2003,7 +2657,7 @@ function roundProfile(id) return ROUND[id] end
 
 -- Ray (o, d in the part's LOCAL frame) against a surface of revolution about
 -- local Y, radius profile `prof` over y ∈ [-hh, hh]. → t, local normal.
-local function ray_round(prof, hh, o, d)
+function ray_round(prof, hh, o, d)
   local n = #prof
   local ys, rs = { -hh }, { prof[1] }
   for i = 1, n do ys[#ys + 1] = -hh + (i - 0.5) / n * 2 * hh; rs[#rs + 1] = prof[i] end
@@ -2055,7 +2709,7 @@ local function ray_round(prof, hh, o, d)
 end
 
 -- Ray against an axis-aligned box (half-extents h) in the local frame (slabs).
-local function ray_box(hx, hy, hz, o, d)
+function ray_box(hx, hy, hz, o, d)
   local tmin, tmax, nmin = -math.huge, math.huge, nil
   for _, ax in ipairs({ { "x", hx, EX }, { "y", hy, EY }, { "z", hz, EZ } }) do
     local k, h = ax[1], ax[2]
@@ -2141,25 +2795,34 @@ function rotatePose(c, k, a, x, y, z, B)
   return c.x + v.x, c.y + v.y, c.z + v.z, basisMul(R, B)
 end
 
--- The part a precise-edit undo op is already open for (one op per streak,
--- shared by the arrow keys AND the drag gizmo).
+-- Open (once per editing streak) the history step an edit of `uid` lands
+-- in: a merge key per part, so arrow presses and a gizmo drag on one part are
+-- one step until something else happens (history():seal()).
 local nudge_uid = nil
-
--- Apply a precise edit to `uid`: displacement + rotation deltas, with the
--- ring rules (a symmetry member edits every member, displacement rotated to
--- each angle) and ONE undo op per editing streak. The keybinds and the drag
--- gizmo both land here.
--- Open (once per editing streak) the undo op an edit of `uid` lands in.
-local function edit_begin(uid)
-  if nudge_uid ~= uid then
-    nudge_uid = uid
-    local moved = {}
-    for u in pairs(edit_set(uid)) do
-      local q = parts[u]
-      moved[#moved + 1] = { uid = u, x = q.x, y = q.y, z = q.z,
-                            yaw = q.yaw, pitch = q.pitch, roll = q.roll, parent = q.parent }
-    end
-    push_undo({ type = "move", moved = moved })
+local function edit_begin(uid, set)
+  local t = tx_begin("edit " .. ((parts[uid] and parts[uid].def.label) or "part"),
+    set or edit_set(uid), "edit:" .. tostring(uid))
+  tx_commit(t)
+  nudge_uid = uid
+end
+local function tx_add(t, uids)
+  if t.merged then return end
+  local more = {}
+  for k, v in pairs(uids) do
+    local u = (type(k) == "number" and v == true) and k or v
+    if type(u) == "number" and not t.has[u] then more[#more + 1] = u end
+  end
+  if #more == 0 then return end
+  local S = snap_parts(more)
+  local lseen = {}
+  for _, l in ipairs(t.before.links) do lseen[l.id] = true end
+  for _, u in ipairs(S.order) do
+    t.has[u] = true
+    t.before.order[#t.before.order + 1] = u
+    t.before.parts[u] = S.parts[u]
+  end
+  for _, l in ipairs(S.links) do
+    if not lseen[l.id] then t.before.links[#t.before.links + 1] = l end
   end
 end
 
@@ -2264,7 +2927,7 @@ end
 -- being turned, n the face it is mounted on; `wasd` = the W/A/S/D/Q/E set too.
 function rotKeysQ(B, n, wasd)
   local fine = input.key("shift")
-  local big = fine and ROT_SNAP or math.pi / 2
+  local big = fine and ((ROT_SNAP and ROT_SNAP > 0) and ROT_SNAP or math.pi / 12) or math.pi / 2
   local P, Yw, Rl = rotAxes(B)
   local Q = nil
   local function turn(k, a)
@@ -2280,8 +2943,6 @@ function rotKeysQ(B, n, wasd)
     if input.pressed("e") then turn(Rl, big) end
   end
   if input.pressed("r") then turn(n or (B and B.Y) or EY, fine and (math.pi / 36) or (math.pi / 12)) end
-  if input.pressed("t") then turn(P, big) end -- the old pitch / roll keys
-  if input.pressed("y") then turn(Rl, big) end
   return Q
 end
 
@@ -2387,14 +3048,16 @@ end
 -- The rotation keys, every frame (cam_busy = RMB, the camera's).
 function rotKeysTick(cam_busy)
   local sel = selected_uid and parts[selected_uid]
-  rotKeysBusy = (ghost ~= nil) or (sel ~= nil and tool == "rotate")
+  -- §4.3: W/S A/D Q/E always turn the held part or the selection; the camera
+  -- flies on them only with RMB held (cam_busy).
+  rotKeysBusy = (ghost ~= nil) or (sel ~= nil)
   if cam_busy then return end
-  if input.pressed("c") and not input.key("ctrl") then
+  if input.pressed("l") and not input.key("ctrl") then
     ROT_FRAME = (ROT_FRAME == "camera") and "part" or "camera"
     ui("tool", 0.7)
     hint(ROT_FRAME == "camera"
-      and "rotate relative to the CAMERA — W tips the part away from you, D turns it to your right   ·   C: the part's own axes"
-      or "rotate about the PART's own axes   ·   C: relative to the camera", 3.0)
+      and "gizmo space WORLD — keys and rings turn about the world (picked by the view)   ·   L: LOCAL"
+      or "gizmo space LOCAL — keys and rings turn about the part's own axes   ·   L: WORLD", 3.0)
   end
   if ghost then
     if input.pressed("space") then
@@ -2405,13 +3068,13 @@ function rotKeysTick(cam_busy)
     if Q then ghostRotate(Q) end
     return
   end
-  if sel and tool ~= "stage" and tool ~= "groups" then
+  if sel and tool ~= "stage" and tool ~= "groups" and not input.key("ctrl") then
     if input.pressed("space") then
       resetSelection(selected_uid)
       hint("rotation reset", 1.5)
     end
-    local Q = rotKeysQ(basisOf(sel.yaw, sel.pitch, sel.roll), mountNormal(selected_uid), tool == "rotate")
-    if Q then rotateSelection(selected_uid, Q) end
+    local Q = rotKeysQ(basisOf(sel.yaw, sel.pitch, sel.roll), mountNormal(selected_uid), true)
+    if Q then rotateMulti(Q) end
   end
 end
 
@@ -2421,13 +3084,24 @@ end
 function ghostFollow()
   local snap = find_snap()
   local x, y, z
-  if snap then
+  if snap and snap.wp3 then
+    -- WP3: the candidate IS the pose
+    local c = snap.wp3
+    ghost.B = c.B
+    ghost.A = basisClean(basisMul(c.B, basisT(ghost.off or IDENT)))
+    ghost.n = snap.uid and c.n or nil
+    ghost.yaw, ghost.pitch, ghost.roll = basisEuler(c.B)
+    x, y, z = c.x, c.y, c.z
+    ghost.on_floor = snap.floor == true
+    if snap.floor then snap = nil end
+  elseif snap then
     x, y, z = snapPlace(snap)
+    ghost.on_floor = false
   else
     ghost.A, ghost.n = IDENT, nil
     ghost.B = basisClean(ghost.off or IDENT)
     ghost.yaw, ghost.pitch, ghost.roll = basisEuler(ghost.B)
-    x, y, z = free_pos()
+    x, y, z, ghost.on_floor = free_pos()
   end
   if ghost.carried then
     for _, m in ipairs(ghost.carried) do
@@ -2471,16 +3145,13 @@ function placeCopies(placed, copies, kind, n)
     local yaw, pitch, roll = basisEuler(c.B)
     local u = spawn_part(root.id, c.x, c.y, c.z, yaw, c.parent, nil, pitch, roll, root.att, gid, c.mir)
     uids[#uids + 1] = u
-    if c.n and parts[c.parent] then
+    if W.ptx then tx_touch(W.ptx, u) end
+    if c.n and parts[c.parent] and parts[u] then
       local h = parts[c.parent]
-      copyNormal[u] = basisApplyT(basisOf(h.yaw, h.pitch, h.roll), c.n)
+      parts[u].an = basisApplyT(basisOf(h.yaw, h.pitch, h.roll), c.n)
     end
   end
-  if #undo_stack > 0 and undo_stack[#undo_stack].type == "place"
-    and undo_stack[#undo_stack].uid == placed then
-    table.remove(undo_stack)
-  end
-  push_undo({ type = "place_group", uids = uids })
+  struct_changed()
   if kind == "follow" then
     hint(string.format("symmetry: copied onto all %d of the ring — X off to place just one", #uids), 2.5)
   elseif kind == "mirror" then
@@ -2507,7 +3178,7 @@ local gizmo_drag = nil -- { uid, kind = "move"|"turn", axis, lmx, lmy, acc }
 
 -- The gizmo's size scales with the selected part so it never swamps a small
 -- part or hides inside a big one. Returns the arrow length + ring radius.
-local function gizmo_dims(p)
+function gizmo_dims(p)
   local ex, ey, ez = part_extents(p)
   local reach = math.max(ex, ey, ez)
   return 1.15 + reach * 0.5, 0.85 + reach * 0.55
@@ -2515,7 +3186,7 @@ end
 
 -- Two unit vectors spanning the plane ⊥ to axis `a` (for the rotate ring).
 -- (Any axis now: the rings follow the part in the PART rotation frame.)
-local function ring_basis(a)
+function ring_basis(a)
   local u = perp_ref(a, { EY, EX })
   local v = cross3(a, u)
   return u.x, u.y, u.z, v.x, v.y, v.z
@@ -2523,9 +3194,14 @@ end
 
 -- The rotate gizmo's three rings: world X/Y/Z in the CAMERA frame, the
 -- part's own axes in the PART frame (C). Same colours either way.
+-- OFFSET in LOCAL space: the MOUNT frame (two along the host face, one along
+-- its normal), so "slide along the hull" is one arrow.
 function gizmoAxes(p, tool)
-  if tool ~= "rotate" or ROT_FRAME ~= "part" then return GIZ_AXES end
-  local B = basisOf(p.yaw, p.pitch, p.roll)
+  if ROT_FRAME ~= "part" then return GIZ_AXES end
+  local B
+  if tool == "rotate" then B = basisOf(p.yaw, p.pitch, p.roll)
+  elseif p.uid and p.parent then B = mountFrame(p.uid)
+  else return GIZ_AXES end
   local out = {}
   for i, k in ipairs({ B.X, B.Y, B.Z }) do
     local c = GIZ_AXES[i]
@@ -2543,8 +3219,8 @@ local function draw_gizmo(p, tool)
     end
     -- a small hub so the pivot is obvious
     draw.sphere(p.x, p.y, p.z, 0.09, 0.9, 0.9, 0.95, 1.0)
-  else -- move
-    for _, a in ipairs(GIZ_AXES) do
+  else -- offset
+    for _, a in ipairs(gizmoAxes(p, tool)) do
       local hx, hy, hz = p.x + a.x * len, p.y + a.y * len, p.z + a.z * len
       -- shaft
       draw.line(p.x, p.y, p.z, hx, hy, hz, a.r, a.g, a.b, 1.0)
@@ -2583,7 +3259,7 @@ local function gizmo_hit(p, tool, len, rad)
       end
     end
   else
-    for ai, a in ipairs(GIZ_AXES) do
+    for ai, a in ipairs(gizmoAxes(p, tool)) do
       -- Test many points along the shaft so grabbing anywhere on the arrow
       -- (not just the tip) works — much more forgiving.
       for s = 2, 11 do
@@ -2630,11 +3306,12 @@ function gizmoTurn(p, gd, mx, my, dmx, dmy)
     if l2 > 25 then dth = (dmx * vx + dmy * vy) / l2 end
   end
   gd.acc = (gd.acc or 0) + dth
-  local target = input.key("shift") and gd.acc or math.floor(gd.acc / ROT_SNAP + 0.5) * ROT_SNAP
+  local free = input.key("shift") or not ROT_SNAP or ROT_SNAP <= 0
+  local target = free and gd.acc or math.floor(gd.acc / ROT_SNAP + 0.5) * ROT_SNAP
   local delta = target - (gd.applied or 0)
   if math.abs(delta) > 1e-9 then
     gd.applied = target
-    rotateSelection(gd.uid, basisRot(k, delta))
+    rotateMulti(basisRot(k, delta), gd.uid)
   end
   return gd.applied or 0
 end
@@ -2642,7 +3319,7 @@ end
 -- The screen-space bounding radius of the selection's gizmo (center + max
 -- reach to any handle tip, in pixels). A click INSIDE this footprint that
 -- misses a handle must NOT deselect — the player was aiming at the gizmo.
-local function gizmo_footprint_px(p, tool, len, rad)
+function gizmo_footprint_px(p, tool, len, rad)
   local cx, cy, on = screen_of(p.x, p.y, p.z)
   if not on then return nil end
   local reach = (tool == "rotate") and rad or len
@@ -2725,43 +3402,95 @@ function pick(id)
     ui("save", 0.9)
   end
   local def = REG[id]
+  -- a DRAWN part (Beam, Panel, Brace) is a tool, not a part in hand (§5.5)
+  if def.proc and startDrawTool(id) then return end
   ghost = { id = id, def = def, yaw = 0, pitch = 0, roll = 0, node = nil, off = IDENT, B = IDENT }
   click_cool = 0.15
   hint(HINT_GHOST, 6.0)
-  spawn(def.prefab, vec3(0, -80, 0), function(node)
+  spawn(stand_prefab(def.prefab), vec3(0, -80, 0), function(node)
     if ghost and ghost.id == id and not ghost.node and not ghost.carried then
       ghost.node = node
+      if W.F and not W.F.identity and W.F.node and node.setParent then
+        node:setParent(W.F.node, { keepWorld = false })
+      end
     else
       destroy(node)
     end
   end)
 end
 
-local function pickup(uid)
-  local grab = edit_set(uid) -- a ring member brings its whole ring
-  local moved = {}
+-- LIFT parts into the hand (a drag-move, tool 4's old grab, hold({uid…})).
+-- What comes: `opts.set` (default: uid's ring) plus everything that depends on
+-- it (§5.4) — unless opts.only (Alt): then only the set, and its links to its
+-- dependents are cut (they stay as loose islands). Every link between what is
+-- lifted and what stays is cut now; placing makes the new ones. One history
+-- step from lift to drop (the BEFORE is taken here); ESC puts it all back.
+local function pickup(uid, opts)
+  opts = opts or {}
   local root = parts[uid]
+  if not root then return end
+  local set = {}
+  if opts.set then for u in pairs(opts.set) do if parts[u] then set[u] = true end end
+  else for u in pairs(edit_set(uid)) do set[u] = true end end
+  set[uid] = true
+  if not opts.only then
+    for u in pairs(deps_of(set)) do set[u] = true end
+  end
+  local t = nil
+  if opts.paste then t = opts.paste
+  else
+    -- the parts on the far end of every link we cut join the snapshot too
+    local G = graph()
+    local around = {}
+    for u in pairs(set) do
+      around[u] = true
+      if G then for _, n in ipairs(G:neighbours(u)) do around[n] = true end end
+    end
+    t = tx_begin("move " .. (root.def.label or root.id), around)
+  end
+  local G = graph()
+  if G then
+    for u in pairs(set) do
+      for _, l in ipairs(G:incident(u)) do
+        local o = (l.a == u) and l.b or l.a
+        if not set[o] then
+          G:remove(l.id)
+          if l.prim and parts[l.b] then parts[l.b].parent = nil end
+        end
+      end
+    end
+  end
+  struct_changed()
+  local moved = {}
   -- The carried set moves RIGIDLY with its root (turns included): each part's
   -- pose is kept in the root's frame. The root's own turn is kept relative to
   -- the mount it came off, so it re-attaches the same way round elsewhere.
   local Rr = basisOf(root.yaw, root.pitch, root.roll)
-  for u in pairs(grab) do
+  for u in pairs(set) do
     local p = parts[u]
+    p.carried = true
+    if W.H then W.H:remove(u) end
     moved[#moved + 1] = { uid = u, id = p.id, x = p.x, y = p.y, z = p.z,
-                          yaw = p.yaw, pitch = p.pitch, roll = p.roll, parent = p.parent,
-                          has_an = true, an = p.an,
+                          yaw = p.yaw, pitch = p.pitch, roll = p.roll,
                           rel = basisApplyT(Rr, { x = p.x - root.x, y = p.y - root.y, z = p.z - root.z }),
                           relB = basisMul(basisT(Rr), basisOf(p.yaw, p.pitch, p.roll)) }
   end
-  local A0 = mountFrame(uid)
+  local A0 = opts.paste and IDENT or mountFrame(uid)
   ghost = { id = root.id, def = root.def, yaw = root.yaw, pitch = root.pitch or 0,
             roll = root.roll or 0, node = root.node, carried = moved, from_uid = uid,
-            off = basisClean(basisMul(basisT(A0), Rr)), B = Rr }
-  root.parent = nil
-  push_undo({ type = "move", moved = moved })
+            off = basisClean(basisMul(basisT(A0), Rr)), B = Rr, tx = t, exclude = set,
+            paste = opts.paste and true or nil, only = opts.only }
   click_cool = 0.18
   ui("pickup", 0.8) -- lifted off the stack
   hint(HINT_GHOST, 6.0)
+end
+
+-- The carried parts go back to being ordinary parts on the stand.
+local function uncarry(g)
+  for _, m in ipairs(g.carried or {}) do
+    local p = parts[m.uid]
+    if p then p.carried = nil; hash_put(m.uid, p) end
+  end
 end
 
 local function place_ghost(x, y, z, parent, att, sym)
@@ -2771,32 +3500,31 @@ local function place_ghost(x, y, z, parent, att, sym)
     local h = parts[parent]
     an = basisApplyT(basisOf(h.yaw, h.pitch, h.roll), ghost.n)
   end
-  if ghost.carried then
-    local root = parts[ghost.from_uid]
+  local g = ghost
+  if g.carried then
+    local root = parts[g.from_uid]
     if root then
       local dx, dy, dz = x - root.x, y - root.y, z - root.z
-      for _, m in ipairs(ghost.carried) do
+      for _, m in ipairs(g.carried) do
         local p = parts[m.uid]
         if p then set_part_pos(p, p.x + dx, p.y + dy, p.z + dz) end
       end
-      root.parent = parent
-      root.att = att
+      uncarry(g)
+      set_parent(g.from_uid, parent, att)
       root.an = an
-      placed_uid = ghost.from_uid
+      placed_uid = g.from_uid
     end
+    if g.tx then tx_commit(g.tx) end
   else
     -- The ghost node BECOMES the placed part. (Spawning a second node here
-    -- was the great twin bug: every placed part got an invisible orphan
-    -- double exactly on top of it — phantom "copies", un-selectable spots,
-    -- parts "clipping inside each other".)
+    -- was the great twin bug.)
     local u = next_uid
     next_uid = next_uid + 1
-    ghost.node.x, ghost.node.y, ghost.node.z = x, y, z
-    ghost.node.yaw, ghost.node.pitch, ghost.node.roll = ghost.yaw, ghost.pitch, ghost.roll
-    parts[u] = { id = ghost.id, def = ghost.def, node = ghost.node,
-                 x = x, y = y, z = z, yaw = ghost.yaw, pitch = ghost.pitch,
-                 roll = ghost.roll, parent = parent, att = att, sym = sym, an = an }
-    push_undo({ type = "place", uid = u })
+    local t = W.ptx or tx_begin("place " .. (g.def.label or g.id), {})
+    tx_touch(t, u)
+    add_part(u, { id = g.id, x = x, y = y, z = z, yaw = g.yaw, pitch = g.pitch, roll = g.roll,
+                  parent = parent, att = att, sym = sym, an = an }, g.node)
+    if not W.ptx then tx_commit(t) end
     placed_uid = u
   end
   ghost = nil
@@ -2812,12 +3540,18 @@ end
 
 local function cancel_ghost()
   if not ghost then return end
-  if ghost.carried then
-    ghost = nil
-    undo() -- restores the pre-pickup poses + links (the op pushed at pickup)
+  local g = ghost
+  ghost = nil
+  if g.carried then
+    uncarry(g)
+    if g.paste then
+      -- a paste or a sub-assembly that never went down leaves nothing behind
+      for _, m in ipairs(g.carried) do remove_part(m.uid) end
+    elseif g.tx and not g.tx.merged then
+      apply_snap(g.tx.before)   -- the poses and links from before the lift
+    end
   else
-    if ghost.node then destroy(ghost.node) end
-    ghost = nil
+    if g.node then destroy(g.node) end
   end
   hint(HINT_IDLE, 0.0); hint_t = 0
 end
@@ -2836,7 +3570,7 @@ function fairingEnvelope(uid)
   for u, q in pairs(parts) do
     if q.parent == uid and (q.att == "top" or q.att == "surface") then
       local up = (q.x - b.x) * Y.x + (q.y - b.y) * Y.y + (q.z - b.z) * Y.z
-      if up > 0 then for v in pairs(subtree(u)) do load[v] = true end end
+      if up > 0 then for v in pairs(beyond_of(u, uid)) do load[v] = true end end
     end
   end
   local top, rad, n = 0.0, 0.0, 0
@@ -2882,7 +3616,7 @@ function copy_wcfg(w)
   return c
 end
 
-local function copy_shape(sh)
+function copy_shape(sh)
   if not sh then return nil end
   local out = { secs = {}, closed = sh.closed, split = sh.split or 2 }
   for i, sc in ipairs(sh.secs or {}) do out.secs[i] = { r = sc.r, h = sc.h } end
@@ -2892,14 +3626,14 @@ end
 -- Everything that stands on the base's top node (and everything built onto
 -- that), with each part's reach in the base frame: its height range above the
 -- base centre and how far it reaches out from the axis.
-local function fairing_payload(uid)
+function fairing_payload(uid)
   local b = parts[uid]
   local X, Y, Z = rot_basis(b.yaw, b.pitch, b.roll)
   local load = {}
   for u, q in pairs(parts) do
     if q.parent == uid and (q.att == "top" or q.att == "surface") then
       local up = (q.x - b.x) * Y.x + (q.y - b.y) * Y.y + (q.z - b.z) * Y.z
-      if up > 0 then for v in pairs(subtree(u)) do load[v] = true end end
+      if up > 0 then for v in pairs(beyond_of(u, uid)) do load[v] = true end end
     end
   end
   local out = {}
@@ -2957,12 +3691,12 @@ function fairingFit(uid)
 end
 
 -- The shape's rings as a flat list for the blueprint (r1, h1, r2, h2 …) and back.
-local function secs_flat(sh)
+function secs_flat(sh)
   local out = {}
   for _, sc in ipairs(sh and sh.secs or {}) do out[#out + 1] = sc.r; out[#out + 1] = sc.h end
   return out
 end
-local function secs_unflat(flat)
+function secs_unflat(flat)
   local out = {}
   if type(flat) ~= "table" then return out end
   for i = 1, #flat - 1, 2 do out[#out + 1] = { r = flat[i], h = flat[i + 1] } end
@@ -3055,7 +3789,8 @@ function finishBlueprint(bp)
 end
 
 -- ── Blueprint (self-contained; save.* slot store) ───────────────────────────
-local function save_blueprint()
+local function make_blueprint()
+  center_now()
   local bp = { parts = {} }
   local ref_y = math.huge
   for _, p in pairs(parts) do ref_y = math.min(ref_y, p.y - p.def.h * 0.5) end
@@ -3080,7 +3815,7 @@ local function save_blueprint()
       yaw = p.yaw, pitch = p.pitch or 0, roll = p.roll or 0,
       parent = p.parent or 0, att = p.att or "", sym = p.sym or 0,
       stage = stage_of[uid] or 0,
-      h = d.h, mass = d.mass, cost = d.cost, kind = d.kind,
+      h = d.h, mass = d.mass + (p.joints and #p.joints or 0) * 0.001, cost = d.cost, kind = d.kind,
       -- Half-widths ride along too: the flight side needs a part's real
       -- footprint for hull contact, not just its stack height.
       rx = d.rx or 0, rz = d.rz or 0,
@@ -3093,6 +3828,10 @@ local function save_blueprint()
       decouple = d.decouple and 1 or 0, legs = d.legs and 1 or 0,
       radial = d.radial and 1 or 0, chute = d.chute and 1 or 0,
       comms = d.comms and 1 or 0, aero = d.aero and 1 or 0,
+      -- AERODYNAMICS (scripts/aero.lua): the part's aero spec, verbatim — the
+      -- flight reads wings, control surfaces, jets, intakes, gear and drag
+      -- shapes from it (nil for a part without one).
+      af = d.af,
       -- Electrical capabilities: these were being DROPPED on save, so a battery
       -- (power) or solar panel (solar) never did anything in flight. Carry them
       -- and their ratings (EC capacity / charge rate) through to the vessel.
@@ -3122,8 +3861,27 @@ local function save_blueprint()
       -- (as a string: save.set holds four tables deep at most — electronics
       -- encodeMods / decodeMods)
       mods = (elib() and elib().encodeMods(part_mods(d))) or nil,
+      -- procedural parameters (WP3's members and panels), when it has them
+      size = p.size and tcopy(p.size) or nil,
+      -- a drawn part (WP3): what it is and its joint plates (encoded strings;
+      -- each adds builder_attach.JOINT_MASS to the part's mass below)
+      proc = d.proc, prof = d.proc and (p.size and p.size.prof or d.prof) or nil,
+      joints = (p.joints and #p.joints > 0) and tcopy(p.joints) or nil,
     }
   end
+  -- BLUEPRINT v2 (§5.8): the links, the root, the outliner groups and WP5's
+  -- controls ride along; every v1 field above stays, so the flight reads it
+  -- exactly as before.
+  bp.v = 2
+  bp.name = W.craft
+  bp.root = craft_root()
+  local G, L = graph(), lib("builder_graph")
+  if G and L then
+    bp.links = {}
+    for _, l in ipairs(G:all()) do bp.links[#bp.links + 1] = L.packLink(l) end
+  end
+  if W.outliner and #W.outliner > 0 then bp.outliner = tcopy(W.outliner) end
+  if W.controls then bp.controls = tcopy(W.controls) end
   -- ACTION GROUPS: only once the player has edited them. Until then the flight
   -- builds the standard ones (legs on Gear, panels and antennas on Deploy…) from
   -- whatever is aboard, so a craft that never opened the editor still has them.
@@ -3141,10 +3899,16 @@ local function save_blueprint()
   local k = rating()
   bp.catalogue = { home = k.name, thrust = k.thrust, ve = k.ve, v = k.v }
   finishBlueprint(bp)
+  return bp, i
+end
+
+local function save_blueprint()
+  local bp, i = make_blueprint()
   save.set("shipyard.blueprint", bp)
   save.flush()
   ui("save", 0.9)
   hint("blueprint saved  ·  " .. i .. " parts", 2.5)
+  return bp
 end
 
 -- The parachute canister was redrawn to sit on the pod's collar: 0.61 → 0.34 m
@@ -3152,7 +3916,7 @@ end
 -- saved before keeps the old centre, which would leave the new canister
 -- floating above its mount: sit it back down — its foot where it was, anything
 -- hung on its flanks moving with it, anything under it staying put.
-local function refit_chutes(list)
+function refit_chutes(list)
   local cur = REG.chute
   local by, kids = {}, {}
   for _, d in pairs(list) do
@@ -3185,12 +3949,26 @@ local function refit_chutes(list)
   end
 end
 
-local function load_blueprint()
-  -- Spawns are asynchronous: a second load (F5 seen twice at uneven frame
-  -- pacing) before the first one's parts land can't remove them yet, and the
-  -- craft came back doubled — two of every part, one of them not in `parts`.
-  if pending_spawns > 0 then return end
-  local bp = save.get("shipyard.blueprint")
+-- Wipe the stand: every part, link, selection and the history.
+local function clear_stand()
+  for _, p in pairs(parts) do if p.node then destroy(p.node) end end
+  parts = {}
+  partCount = 0
+  if W.G then W.G:clear() end
+  if W.H then W.H:clear() end
+  W.queue, W.qhead = {}, 1
+  W.sel, W.sel_order, selected_uid = {}, {}, nil
+  W.root, W.outliner, W.controls = nil, {}, nil
+  W.cache = {}
+  if W.hist then W.hist:clear() end
+  struct_changed()
+  publish_center()
+end
+
+-- Put a blueprint (v1 or v2) on the stand. v2 brings its links; a v1 one has
+-- them made from its parent/att fields (§5.8). Parts land time-sliced.
+local function load_blueprint(bp)
+  bp = bp or save.get("shipyard.blueprint")
   if not bp or not bp.parts then return end
   refit_chutes(bp.parts)
   -- A rover rolled out turned 90° (finishBlueprint: wheel axles on Z) comes
@@ -3208,30 +3986,60 @@ local function load_blueprint()
   else
     groups_state.groups, groups_state.edited = nil, false
   end
-  for uid in pairs(parts) do remove_part(uid) end
-  undo_stack = {}
+  if ghost and ghost.node and not ghost.carried then destroy(ghost.node) end
+  ghost = nil
+  clear_stand()
   stage_order, saved_stage = {}, {}
   fshapes = {}
   wcfgs = {}
   if shapeStop then shapeStop(false) end
+  local have = {}
   for _, d in pairs(bp.parts) do
-    if (d.stage or 0) > 0 then saved_stage[d.uid] = d.stage end
-    if type(d.wcfg) == "table" and next(d.wcfg) then wcfgs[d.uid] = copy_wcfg(d.wcfg) end
-    -- a drawn fairing comes back drawn (a craft from before shaping has no
-    -- `fsec` and keeps its fitted shell)
-    if (d.fairing or 0) > 0 and type(d.fsec) == "table" and #d.fsec >= 2 then
-      fshapes[d.uid] = { secs = secs_unflat(d.fsec), closed = (d.fclosed or 1) ~= 0,
-                         split = (d.fsplit == 3) and 3 or 2 }
-    end
-    if d.anx and d.any and d.anz then copyNormal[d.uid] = { x = d.anx, y = d.any, z = d.anz } end
-    spawn_part(d.id, d.x, d.y + params.floor_y, d.z, d.yaw,
-               d.parent ~= 0 and d.parent or nil, d.uid, d.pitch, d.roll,
-               d.att ~= "" and d.att or nil,
-               (d.sym or 0) ~= 0 and d.sym or nil,
-               (d.mir or "") ~= "" and d.mir or nil)
-    if (d.sym or 0) > next_sym then next_sym = d.sym end
-    if d.uid >= next_uid then next_uid = d.uid + 1 end
+    if REG[d.id] then have[d.uid] = true end
   end
+  for _, d in pairs(bp.parts) do
+    if have[d.uid] then
+      if (d.stage or 0) > 0 then saved_stage[d.uid] = d.stage end
+      if type(d.wcfg) == "table" and next(d.wcfg) then wcfgs[d.uid] = copy_wcfg(d.wcfg) end
+      -- a drawn fairing comes back drawn (a craft from before shaping has no
+      -- `fsec` and keeps its fitted shell)
+      if (d.fairing or 0) > 0 and type(d.fsec) == "table" and #d.fsec >= 2 then
+        fshapes[d.uid] = { secs = secs_unflat(d.fsec), closed = (d.fclosed or 1) ~= 0,
+                           split = (d.fsplit == 3) and 3 or 2 }
+      end
+      local an = (d.anx and d.any and d.anz) and { x = d.anx, y = d.any, z = d.anz } or nil
+      local p = add_part(d.uid, { id = d.id, x = d.x, y = d.y + params.floor_y, z = d.z,
+        yaw = d.yaw, pitch = d.pitch, roll = d.roll,
+        sym = (d.sym or 0) ~= 0 and d.sym or nil, mir = (d.mir or "") ~= "" and d.mir or nil,
+        an = an, size = type(d.size) == "table" and tcopy(d.size) or nil,
+        joints = type(d.joints) == "table" and tcopy(d.joints) or nil })
+      if p then
+        local par = d.parent or 0
+        p.parent = (par ~= 0 and have[par]) and par or nil
+        p.att = (d.att ~= "" and d.att) or nil
+      end
+    end
+  end
+  -- the links: v2 carries them; a v1 blueprint makes them from parent/att
+  local G, L = graph(), lib("builder_graph")
+  if G and L then
+    local list
+    if type(bp.links) == "table" and #bp.links > 0 then
+      list = {}
+      for i, t in ipairs(bp.links) do list[i] = L.unpackLink(t) end
+    else
+      list = L.linksFromV1(bp.parts)
+    end
+    for _, l in ipairs(list) do
+      if parts[l.a] and parts[l.b] then G:add(l) end
+    end
+  end
+  if bp.root and parts[bp.root] then W.root = bp.root end
+  if type(bp.outliner) == "table" then W.outliner = tcopy(bp.outliner) end
+  if type(bp.controls) == "table" then W.controls = tcopy(bp.controls) end
+  if type(bp.name) == "string" and bp.name ~= "" then W.craft = bp.name end
+  struct_changed()
+  publish_center(); refresh_stats()
 end
 
 -- ── ACTION GROUPS (tool 5) ──────────────────────────────────────────────────
@@ -3259,10 +4067,17 @@ function groupsNow()
 end
 
 function groupsTool() return tool == "groups" end
--- Switch tools from outside (a probe; a future toolbar). Same names as TOOLS.
+-- Switch tools from outside (the toolbar, a probe). Same names as TOOLS;
+-- the old "move" is OFFSET and the old "grab" is SELECT (drag moves now).
 function setTool(name)
+  if name == "move" then name = "offset" elseif name == "grab" then name = "select" end
   for _, t in ipairs(TOOLS) do
-    if t == name then tool = name; refresh_stats() return true end
+    if t == name then
+      tool = name
+      refresh_stats()
+      if W.hist then W.hist:seal() end
+      return true
+    end
   end
   return false
 end
@@ -3278,16 +4093,17 @@ function groupsSelected() return groups_state.gid end
 function groupsSelect(gid) groups_state.gid = gid end
 function groupsEdited() return groups_state.edited end
 function selectedPart() return selected_uid end
-function selectPart(uid) if parts[uid] then selected_uid = uid end end
+function selectPart(uid) if parts[uid] then sel_only(uid) else sel_only(nil) end end
 
 -- First edit: the standard set becomes the player's own, then changes.
-local function groups_own()
+function groups_own()
   local E = elib()
   if not E then return nil end
   if not groups_state.edited or not groups_state.groups then
     groups_state.groups = E.defaultGroups(craft_records())
     groups_state.edited = true
   end
+  craftVersion = craftVersion + 1 -- every caller is about to edit them
   return groups_state.groups
 end
 
@@ -3337,6 +4153,7 @@ end
 
 function groupsReset()
   groups_state.groups, groups_state.edited = nil, false
+  craftVersion = craftVersion + 1
   ui("tool", 0.6)
   hint("action groups back to the standard set", 2.5)
 end
@@ -3384,20 +4201,26 @@ end
 function start(node)
   stats_node = find("BuildStats")
   hint_node = find("BuildHint")
-  load_blueprint()
-  refresh_stats()
+  -- the frame first: parts spawn into it
+  W.budget = 60
+  frameTick()
+  local cur = save.get("shipyard.current")
+  if type(cur) == "string" and cur ~= "" then W.craft = cur end
+  -- parts spawn INTO the frame: if builder_space isn't reachable yet (script
+  -- start order), the load waits for the first frame that has it
+  if W.F then load_blueprint() else W.load_wait = true end
+  refreshStatsNow()
 end
 
-local grab_mode = false
-local grab_last = nil
-local grab_moved = false
 
 -- Engineering markers (in-game draw.* layer): the CENTER OF MASS (amber
 -- sphere + ring) and CENTER OF THRUST (blue sphere + thrust-axis line).
 -- Watching them line up IS the balance tool — an off-axis CoT will pirouette
 -- exactly this way at launch, because flight thrusts at these same offsets.
-local function draw_engineering()
-  if partCount == 0 then return end
+-- The dry CoM and CoT, summed once per craftVersion (not every frame).
+local function eng_points()
+  local c = W.cache
+  if c.eng_v == craftVersion then return c.eng end
   local m, cx, cy, cz = 0.0, 0.0, 0.0, 0.0
   local th, tx, ty, tz = 0.0, 0.0, 0.0, 0.0
   for _, p in pairs(parts) do
@@ -3410,6 +4233,29 @@ local function draw_engineering()
       tx, ty, tz = tx + p.x * t, ty + p.y * t, tz + p.z * t
     end
   end
+  c.eng = { m = m, cx = cx, cy = cy, cz = cz, th = th, tx = tx, ty = ty, tz = tz }
+  c.eng_v = craftVersion
+  return c.eng
+end
+-- The parts of one kind (wheels, fairings), listed once per structVersion.
+local function parts_with(flag)
+  local c = W.cache
+  c.with = (c.with_v == W.sv) and c.with or {}
+  c.with_v = W.sv
+  local l = c.with[flag]
+  if l then return l end
+  l = {}
+  for u, p in pairs(parts) do if p.def[flag] then l[#l + 1] = u end end
+  table.sort(l)
+  c.with[flag] = l
+  return l
+end
+
+function draw_engineering()
+  if partCount == 0 then return end
+  local e = eng_points()
+  local m, cx, cy, cz = e.m, e.cx, e.cy, e.cz
+  local th, tx, ty, tz = e.th, e.tx, e.ty, e.tz
   if m <= 0 then return end
   cx, cy, cz = cx / m, cy / m, cz / m
   draw.sphere(cx, cy, cz, 0.16, 1.0, 0.8, 0.2, 1.0)
@@ -3464,7 +4310,7 @@ end
 
 -- Set one field (clamped, a mode checked); a value equal to its default is
 -- dropped, so the record only ever carries what was changed.
-local function wcfg_put(uid, key, v)
+function wcfg_put(uid, key, v)
   local p = parts[uid]
   if not (p and p.def.wheel) then return end
   local w = wcfgs[uid] or {}
@@ -3483,9 +4329,10 @@ local function wcfg_put(uid, key, v)
   if key == "travel" then def = p.def.travel end
   if v == def then w[key] = nil else w[key] = v end
   wcfgs[uid] = next(w) and w or nil
+  craftVersion = craftVersion + 1
 end
 
-local function wcfg_undo()
+function wcfg_undo()
   local snap = {}
   for u, w in pairs(wcfgs) do
     local c = {}
@@ -3497,12 +4344,10 @@ end
 
 function wheelSet(uid, key, v, quiet)
   if not wheelCfg(uid) then return false end
-  -- one undo step per field drag (a slider fires every frame it moves)
-  local top = undo_stack[#undo_stack]
-  if not (top and top.type == "wcfg" and top.key == key and top.uid == uid) then
-    wcfg_undo()
-    undo_stack[#undo_stack].key, undo_stack[#undo_stack].uid = key, uid
-  end
+  -- one history step per field drag (a slider fires every frame it moves)
+  local snap = {}
+  for u, w in pairs(wcfgs) do snap[u] = copy_wcfg(w) end
+  push_undo({ type = "wcfg", prev = snap, merge = "wcfg:" .. tostring(uid) .. ":" .. tostring(key) })
   wcfg_put(uid, key, v)
   if not quiet then ui("tool", 0.5) end
   return true
@@ -3532,6 +4377,7 @@ function wheelApply(uid, scope)
       if c and q.def.travel ~= p.def.travel then c.travel = nil end
       wcfgs[u] = c
       n = n + 1
+      craftVersion = craftVersion + 1
     end
   end
   ui("place", 0.7)
@@ -3543,6 +4389,7 @@ function wheelReset(uid)
   if not (parts[uid] and parts[uid].def.wheel) then return end
   wcfg_undo()
   wcfgs[uid] = nil
+  craftVersion = craftVersion + 1
   ui("scrap", 0.6)
 end
 
@@ -3693,7 +4540,7 @@ end
 -- it shows the shell it will grow, translucent, rebuilt when the payload
 -- changes.
 local shells = {}   -- fairing uid → { sig, nodes = {…}, meshes = {…} }
-local function free_shell(uid)
+function free_shell(uid)
   local sh = shells[uid]
   if not sh then return end
   for _, n in ipairs(sh.nodes or {}) do if n.valid then destroy(n) end end
@@ -3703,14 +4550,20 @@ end
 
 function roundTwoTick()
   -- the rover's front and every wheel's roll and steer (wheelArrows)
-  if partCount > 0 then wheelArrows() end
+  if partCount > 0 and #parts_with("wheel") > 0 then wheelArrows() end
   -- fairing shells
   local E = elib()
   if not (E and E.fairingShell and mesh and mesh.build) then return end
   for uid in pairs(shells) do
     if not parts[uid] then free_shell(uid) end
   end
-  for uid, p in pairs(parts) do
+  -- (only fairings, and their fit only when the craft changed or one is being shaped)
+  local fl = parts_with("fairing")
+  if #fl == 0 then return end
+  if W.cache.shell_v == craftVersion and W.cache.shell_l == W.landed and not (shapingUid and shapingUid()) then return end
+  W.cache.shell_v, W.cache.shell_l = craftVersion, W.landed
+  for _, uid in ipairs(fl) do
+    local p = parts[uid]
     if p.def.fairing and p.node and p.node.valid then
       local fit = fairingFit(uid)
       local prof = fit and fit.prof
@@ -3767,7 +4620,7 @@ shapeCursor = nil         -- { r =, h = } overrides the mouse (probes)
 
 function shapingUid() return shaping and shaping.uid or nil end
 
-local function shape_frame(uid)
+function shape_frame(uid)
   local b = parts[uid]
   local X, Y, Z = rot_basis(b.yaw, b.pitch, b.roll)
   return b, X, Y, Z, b.def.h * 0.5
@@ -3775,17 +4628,17 @@ end
 
 -- A point at radius r, angle a (about the axis, from the base's X toward its
 -- Z: the profile's own convention) and height y in the base frame.
-local function shape_pt(b, X, Y, Z, r, a, y)
+function shape_pt(b, X, Y, Z, r, a, y)
   local c, s = math.cos(a) * r, math.sin(a) * r
   return b.x + X.x * c + Y.x * y + Z.x * s, b.y + X.y * c + Y.y * y + Z.y * s, b.z + X.z * c + Y.z * y + Z.z * s
 end
 
-local function shape_ring(b, Y, r, y, cr, cg, cb, ca)
+function shape_ring(b, Y, r, y, cr, cg, cb, ca)
   draw.ring(b.x + Y.x * y, b.y + Y.y * y, b.z + Y.z * y, Y.x, Y.y, Y.z, math.max(0.01, r), cr, cg, cb, ca)
 end
 
 -- The profile's rings and `n` meridians through them: the wireframe shell.
-local function shape_wire(b, X, Y, Z, prof, n, cr, cg, cb, ca, rings)
+function shape_wire(b, X, Y, Z, prof, n, cr, cg, cb, ca, rings)
   for k = 0, n - 1 do
     local a = k * 2 * math.pi / n
     local pts = {}
@@ -3802,7 +4655,7 @@ end
 
 -- The mouse as a (radius, height-above-the-ring) pair: its ray meets the plane
 -- through the base's axis that faces the camera.
-local function shape_cursor(b, X, Y, Z, y0)
+function shape_cursor(b, X, Y, Z, y0)
   if shapeCursor then return shapeCursor.r, shapeCursor.h end
   local mx, my = input.mouse()
   local ox, oy, oz, dx, dy, dz = camera.screenToRay(mx, my)
@@ -3845,8 +4698,9 @@ function shapeStart(uid)
   local sh = fshapes[uid] or { secs = {}, closed = false, split = 2 }
   sh.closed = false
   fshapes[uid] = sh
+  craftVersion = craftVersion + 1
   shaping = { uid = uid, prev = prev }
-  selected_uid = uid
+  sel_only(uid)
   click_cool = 0.15
   ui("tool", 0.8)
   hint("SHAPING THE FAIRING — click to lay a ring at the cursor  ·  C close it over the top  ·  ENTER done", 6.0)
@@ -3864,6 +4718,7 @@ function shapeStop(commit)
     if #sh.secs == 0 then fshapes[uid] = nil
     elseif not sh.closed then sh.closed = true end
   end
+  craftVersion = craftVersion + 1
   local prev = shaping.prev
   shaping = nil
   click_cool = 0.15
@@ -3889,8 +4744,9 @@ function uiDesignH()
   return (dh_ref and dh_ref.designHeight and dh_ref.designHeight()) or 720
 end
 
-local function screen_k()
-  local sh = camera.screenSize and select(2, camera.screenSize()) or nil
+function screen_k()
+  local _, sh = nil, nil
+  if camera.screenSize then _, sh = camera.screenSize() end
   return (sh and sh > 1) and sh / uiDesignH() or 1.0, sh or 720
 end
 
@@ -3900,9 +4756,9 @@ local function sframe(...) if draw.rectOutline then draw.rectOutline(...) end en
 local function stext(...) if draw.text then draw.text(...) end end
 
 -- The key card while shaping, bottom-centre over the hangar.
-local function shape_hud(sh, cur, pv, nin, nout)
+function shape_hud(sh, cur, pv, nin, nout)
   local k, shh = screen_k()
-  local sw = camera.screenSize and select(1, camera.screenSize()) or 1280
+  local sw = camera.screenSize and camera.screenSize() or 1280
   local w, hgt = 552 * k, 112 * k
   local x, y = (sw - w) * 0.5, shh - hgt - 52 * k
   srect(x, y, w, hgt, 0.035, 0.08, 0.10, 0.9, 8 * k)
@@ -3939,7 +4795,7 @@ local function shape_hud(sh, cur, pv, nin, nout)
 end
 
 -- The SHAPE FAIRING button under a selected base; true = it took the click.
-local function shape_button(clicked, cam_busy)
+function shape_button(clicked, cam_busy)
   local uid = selected_uid
   local b, X, Y, Z, y0 = shape_frame(uid)
   local sx, sy, on = screen_of(b.x - Y.x * y0, b.y - Y.y * y0, b.z - Y.z * y0)
@@ -3963,7 +4819,10 @@ function shapeTick(clicked, cam_busy)
   if not shaping then
     local sel = selected_uid and parts[selected_uid]
     if ghost or not (sel and sel.def.fairing) or tool == "stage" or tool == "groups" or gizmo_drag then return false end
-    if input.pressed("b") and not input.key("ctrl") then return shapeStart(selected_uid) end
+    -- B shapes a fairing only while WP5's bind prompt (builder_bind.begin)
+    -- isn't there to take the key
+    local bd = findScript and findScript("builder_bind")
+    if input.pressed("b") and not input.key("ctrl") and not (bd and bd.begin) then return shapeStart(selected_uid) end
     return shape_button(clicked, cam_busy)
   end
   local uid = shaping.uid
@@ -4057,7 +4916,7 @@ end
 --   2 one ring laid, cursor up the side   3 two rings, cursor toward the top
 --   4 closed (2 pieces)   5 closed, 3 pieces, cursor shape re-opened
 function fairingProbe(uid, step)
-  selected_uid = uid
+  sel_only(uid)
   if step <= 0 then return end
   shapeStart(uid)
   local sh = fshapes[uid]
@@ -4079,7 +4938,7 @@ end
 -- Which stage row (1-based) the mouse-Y is over, hit-tested against each row
 -- node's REAL solved rect (physical px, the mouse's own space) — exact
 -- regardless of font metrics, viewport docking, or panel size.
-local function stage_row_at(my)
+function stage_row_at(my)
   for k = 1, #stage_order do
     local rn = stage_row_node(k)
     if rn then
@@ -4091,7 +4950,7 @@ local function stage_row_at(my)
   return nil
 end
 
-local function handle_staging(clicked, lmb, grab_mode)
+function handle_staging(clicked, lmb, grab_mode)
   local in_panel = false
   draw_stage_badges()
   stage_hover = nil
@@ -4122,6 +4981,7 @@ local function handle_staging(clicked, lmb, grab_mode)
           table.remove(stage_order, stage_drag.row)
           table.insert(stage_order, row, stage_drag.key)
           stage_drag.row = row
+          craftVersion = craftVersion + 1
         end
         paint_stages()
         if not lmb then
@@ -4185,49 +5045,282 @@ function drawModes()
   stext(sw * 0.5, y + ch + 12 * k, rot, 12 * k, 0.7, 0.78, 0.86, 0.95, "center")
 end
 
-function update(node, dt)
-  draw_engineering()
-  drawModes()
-  roundTwoTick()
-  fit_header()
-  -- One shared click edge for the whole frame.
-  local lmb = input.button(0)
-  local clicked = lmb and not lmb_prev and click_cool <= 0
-  lmb_prev = lmb
-  if click_cool > 0 then click_cool = click_cool - dt end
-  if hint_t > 0 then
-    hint_t = hint_t - dt
-    if hint_t <= 0 and hint_node and not ghost and not grab_mode then
-      hint_node.text = HINT_IDLE
+-- ═══ WP1: THE FRAME, THE INPUT MODEL AND THE KEY MAP (§4) ═════════════════
+-- `update` is a short list of global ticks (LuaJIT allows a function 60
+-- upvalues; the old single `update` sat at the ceiling).
+
+RAW_CAMERA, RAW_DRAW = camera, draw
+API_PANELS = {}
+
+-- The frame adapter, the hash and this frame's share of the spawn queue.
+function frameTick()
+  if not W.F then
+    local L = lib("builder_space")
+    if L then
+      local fnode = find and find("BuildFrame") or nil
+      W.F = L.newFrame(fnode, RAW_CAMERA)
+      if not W.F.identity then
+        W.F.refresh()
+        -- every builder coordinate is local: rays come in, draws go out
+        camera = L.wrapCamera(W.F, RAW_CAMERA)
+        draw = L.wrapDraw(W.F, RAW_DRAW)
+      end
+    end
+  elseif not W.F.identity then
+    W.F.refresh()
+  end
+  if W.load_wait and (W.F or W.load_wait_n and W.load_wait_n > 30) then
+    W.load_wait = nil
+    load_blueprint()
+  elseif W.load_wait then
+    W.load_wait_n = (W.load_wait_n or 0) + 1
+  end
+  ensure_hash()
+  rehash_if_needed()
+  spawnQueueTick()
+end
+
+-- The dirty-flag readout: at most once a frame, and at most twice a second
+-- while a drag or a part in hand keeps changing the craft.
+function statsTick()
+  if not W.dirty then return end
+  if (ghost ~= nil or gizmo_drag ~= nil) and time - (W.stats_t or -1e9) < 0.5 then return end
+  W.stats_t = time
+  refreshStatsNow()
+end
+
+local function other(kind)
+  local h = findScript and findScript(kind) or nil
+  if h and h.valid == false then return nil end
+  return h
+end
+function toolbarOwnsModes()
+  local t = other("builder_toolbar")
+  return t ~= nil and t.ownsModes == true
+end
+function aeroDrawsOverlays()
+  local a = other("builder_aero")
+  return a ~= nil and a.drawsOverlays == true
+end
+
+-- ── the offset limit (§5.6): does a part still touch what it is attached to?
+-- Oriented boxes (the larger of the registry and drawn half-extents), a
+-- separating-axis test with a 2 cm margin.
+local function half3(p)
+  local d = p.def
+  local a, b, c = visHalf(p.id, d)
+  return math.max(d.rx, a), math.max(d.h * 0.5, b), math.max(d.rz, c)
+end
+function partsTouch(p, q, margin)
+  margin = margin or 0.02
+  local A, B = basisOf(p.yaw, p.pitch, p.roll), basisOf(q.yaw, q.pitch, q.roll)
+  local ax, ay, az = half3(p)
+  local bx, by, bz = half3(q)
+  local T = { x = q.x - p.x, y = q.y - p.y, z = q.z - p.z }
+  local Aa, Ba = { A.X, A.Y, A.Z }, { B.X, B.Y, B.Z }
+  local ah, bh = { ax, ay, az }, { bx, by, bz }
+  local function sep(L)
+    local l2 = L.x * L.x + L.y * L.y + L.z * L.z
+    if l2 < 1e-10 then return false end
+    local l = math.sqrt(l2)
+    local ra, rb = 0, 0
+    for i = 1, 3 do
+      ra = ra + math.abs(dot3(L, Aa[i])) * ah[i]
+      rb = rb + math.abs(dot3(L, Ba[i])) * bh[i]
+    end
+    return math.abs(dot3(T, L)) > ra + rb + margin * l
+  end
+  for i = 1, 3 do
+    if sep(Aa[i]) or sep(Ba[i]) then return false end
+  end
+  for i = 1, 3 do
+    for j = 1, 3 do
+      if sep(cross3(Aa[i], Ba[j])) then return false end
     end
   end
-  local cam_busy = input.button(1) -- RMB = the camera's; never build through it
-  -- Shaping a fairing (or its SHAPE button) takes the frame's input first.
-  if shapeTick(clicked, cam_busy) then return end
+  return true
+end
+-- The parts that no longer touch their primary host (cached per craftVersion).
+function detachedParts()
+  local c = W.cache
+  if c.det_v == craftVersion then return c.det end
+  local out = {}
+  for u, p in pairs(parts) do
+    local h = p.parent and parts[p.parent]
+    if h and not p.carried and not partsTouch(p, h, 0.02) then out[#out + 1] = u end
+  end
+  table.sort(out)
+  c.det, c.det_v = out, craftVersion
+  return out
+end
+-- The islands (components), cached per structVersion; loose = not the root's.
+function islands()
+  local c = W.cache
+  if c.isl_v == W.sv then return c.isl end
+  local G, L = graph(), lib("builder_graph")
+  local comps = (G and L) and L.components(G, alive_set(), craft_root(), is_command) or {}
+  local loose = {}
+  for _, k in ipairs(comps) do
+    if not k.root then for _, u in ipairs(k) do loose[u] = true end end
+  end
+  c.isl, c.loose, c.isl_v = comps, loose, W.sv
+  return comps, loose
+end
+local function loose_set()
+  islands()
+  return W.cache.loose or {}
+end
 
-  -- TOOL switch (1 Move · 2 Rotate · 3 Stage · 4 Grab) — never while placing
-  -- a part or holding a gizmo. The active tool decides what the SELECTION's
-  -- gizmo does; switching tools keeps the selection.
-  if not ghost and not gizmo_drag then
-    for i, tname in ipairs(TOOLS) do
+-- ── moving and turning the selection (one part, a ring, or many) ──────────
+local function sel_units()
+  local seen, n = {}, 0
+  for _, u in ipairs(W.sel_order) do
+    local p = parts[u]
+    if p then
+      local key = p.sym and ("g" .. p.sym) or ("u" .. u)
+      if not seen[key] then seen[key] = true; n = n + 1 end
+    end
+  end
+  return n
+end
+-- The selection plus its dependents (what a drag or a gizmo carries).
+function selectionCarry()
+  local set = {}
+  for _, u in ipairs(W.sel_order) do
+    if parts[u] then for v in pairs(edit_set(u)) do set[v] = true end end
+  end
+  for v in pairs(deps_of(set)) do set[v] = true end
+  return set
+end
+function moveMulti(dx, dy, dz)
+  if not selected_uid then return end
+  if sel_units() <= 1 then return apply_edit(selected_uid, dx, dy, dz, 0, 0, 0) end
+  local set = selectionCarry()
+  edit_begin(selected_uid, set)
+  for u in pairs(set) do
+    local q = parts[u]
+    if q then set_part_pos(q, q.x + dx, q.y + dy, q.z + dz) end
+  end
+  publish_center(); refresh_stats()
+end
+function rotateMulti(Q, uid)
+  uid = uid or selected_uid
+  if not (uid and parts[uid]) then return end
+  if sel_units() <= 1 then return rotateSelection(uid, Q) end
+  local set = selectionCarry()
+  edit_begin(uid, set)
+  local c = parts[uid]
+  local cx, cy, cz = c.x, c.y, c.z
+  for u in pairs(set) do
+    local q = parts[u]
+    if q then
+      local v = basisApply(Q, { x = q.x - cx, y = q.y - cy, z = q.z - cz })
+      set_part_pos(q, cx + v.x, cy + v.y, cz + v.z)
+      set_part_rot(q, basisEuler(basisMul(Q, basisOf(q.yaw, q.pitch, q.roll))))
+    end
+  end
+  publish_center(); refresh_stats()
+end
+
+-- ── selection by connection (double-click, menu ▸ Select) ─────────────────
+function selectConnected(uid, scope, mode)
+  local p = parts[uid]
+  if not p then return selection() end
+  local list = {}
+  if scope == "ring" then
+    list = p.sym and group_members(p.sym) or { uid }
+  elseif scope == "same" then
+    for u, q in pairs(parts) do if q.id == p.id then list[#list + 1] = u end end
+    table.sort(list)
+  else
+    local G, L = graph(), lib("builder_graph")
+    local block = nil
+    if scope ~= "craft" then
+      -- an assembly stops AT the first decoupler (it is included, not crossed)
+      block = {}
+      for u, q in pairs(parts) do if q.def.decouple and u ~= uid then block[u] = true end end
+    end
+    local set = (G and L) and L.graphFlood(G, alive_set(), { uid }, block) or { [uid] = true }
+    if block then
+      for u in pairs(block) do
+        if G then
+          for _, n in ipairs(G:neighbours(u)) do if set[n] then set[u] = true break end end
+        end
+      end
+    end
+    for u in pairs(set) do list[#list + 1] = u end
+    table.sort(list)
+  end
+  -- the clicked part stays primary
+  for i = #list, 1, -1 do if list[i] == uid then table.remove(list, i) end end
+  list[#list + 1] = uid
+  sel_apply(list, mode or "set")
+  return selection()
+end
+
+-- ── the keys (§4.3) ─────────────────────────────────────────────────────────
+local SNAP_GRIDS = { 0.01, 0.05, 0.25, 1.0, 0 }
+local SNAP_ANGLES = { math.rad(1), math.rad(5), math.rad(15), 0 }
+local function cycle(list, v)
+  local i = 1
+  for k, x in ipairs(list) do if math.abs(x - v) < 1e-9 then i = k end end
+  return list[i % #list + 1]
+end
+local function fmt_grid(g)
+  if g <= 0 then return "OFF" end
+  if g < 1 then return string.format("%d cm", math.floor(g * 100 + 0.5)) end
+  return string.format("%g m", g)
+end
+
+-- ESC backs out ONE level: the part in hand, a gizmo drag, the context menu, a
+-- box being drawn, the selection. It never leaves the VAB (LEAVE is a button;
+-- CTRL+Q asks first).
+function escapeLadder()
+  if ghost then cancel_ghost(); return "hand" end
+  if W.drawing then
+    if W.drawing.p0 then W.drawing.p0 = nil; hint("start point dropped — click a new start, ESC ends the tool", 2.0)
+    else W.drawing = nil; hint(HINT_IDLE, 0.0); hint_t = 0 end
+    return "draw"
+  end
+  if gizmo_drag then gizmo_drag = nil; if W.hist then W.hist:seal() end; return "gizmo" end
+  local cx = other("builder_context")
+  if cx and cx.isOpen and cx.isOpen() then if cx.close then cx.close() end; return "menu" end
+  if W.box or W.press then W.box, W.press = nil, nil; return "box" end
+  if #W.sel_order > 0 then sel_only(nil); hint("selection cleared", 1.0); return "selection" end
+  return nil
+end
+
+-- A registered panel whose text field has focus owns the keyboard (WP2:
+-- toolbar, catalogue and inspector export ownsKeys()).
+function panelsOwnKeys()
+  for _, s2 in ipairs(API_PANELS) do
+    if s2.valid ~= false and s2.ownsKeys and s2.ownsKeys() then return true end
+  end
+  return false
+end
+
+function keysTick(cam_busy)
+  if panelsOwnKeys() then return false end
+  local ctrl, shift, alt = input.key("ctrl"), input.key("shift"), input.key("alt")
+  if input.pressed("escape") then
+    escapeLadder()
+    return true
+  end
+  -- tools 1–4 (never while holding or dragging)
+  if not ghost and not gizmo_drag and not ctrl then
+    for i = 1, 4 do
       if input.pressed(tostring(i)) then
-        tool = tname
+        setTool(TOOLS[i])
         ui("tool", 0.7)
-        hint("tool: " .. TOOL_LABEL[tool] .. (tool == "grab"
-          and " — click a part to pick it up" or ""), 2.0)
-        refresh_stats()
+        hint("tool: " .. TOOL_LABEL[tool] .. ((tool == "root") and " — click the part the craft hangs from" or ""), 2.0)
       end
     end
   end
-
-  -- SYMMETRY mode: X cycles ×1 ×2 ×3 ×4 ×6 ×8 (SHIFT+X cycles back).
-  -- Applies to radial placements; stacking on a ring always auto-mirrors.
-  if input.pressed("x") then
+  -- SYMMETRY: X cycles ×1 ×2 ×3 ×4 ×6 ×8 (SHIFT+X back)
+  if input.pressed("x") and not ctrl then
     local idx = 1
-    for i, n in ipairs(SYM_STEPS) do
-      if n == sym_n then idx = i end
-    end
-    idx = input.key("shift") and ((idx - 2) % #SYM_STEPS + 1) or (idx % #SYM_STEPS + 1)
+    for i, n in ipairs(SYM_STEPS) do if n == sym_n then idx = i end end
+    idx = shift and ((idx - 2) % #SYM_STEPS + 1) or (idx % #SYM_STEPS + 1)
     sym_n = SYM_STEPS[idx]
     sym_mirror = false
     hint(sym_n > 1
@@ -4235,361 +5328,810 @@ function update(node, dt)
       or "symmetry OFF — every placement is a single part", 2.5)
     refresh_stats()
   end
-
-  -- MIRROR mode (M): flank and surface placements come in mirrored pairs.
-  if input.pressed("m") and not input.key("ctrl") then toggleMirror() end
-
-  -- ── STAGING panel (STAGE tool): drag rows to reorder the firing sequence ──
-  -- Extracted to handle_staging() (below) so this enormous `update` stays under
-  -- LuaJIT's 60-upvalue-per-function ceiling. Returns true when the panel owns
-  -- the mouse this frame — no picking, placing or scrapping through it.
-  if handle_staging(clicked, lmb, grab_mode) then return end
-  -- The ACTION GROUPS tool's panel: same rule (a global, for the same reason).
-  if groupsPanelTick(clicked) then return end
-  -- W/A/S/D/Q/E · R · SPACE · C: the part in hand, or the selection.
-  rotKeysTick(cam_busy)
-
-  -- Self-heal: never let a bad ghost wedge the builder.
-  if ghost then
-    if ghost.carried and not parts[ghost.from_uid] then
-      ghost = nil
-      hint(HINT_IDLE, 0.0); hint_t = 0
-    elseif not ghost.carried and not ghost.node then
-      ghost.wait = (ghost.wait or 0) + dt
-      if ghost.wait > 4.0 then
-        ghost = nil
-        hint("that part failed to spawn — try again", 2.5)
-      end
+  -- MIRROR: M across the host, ALT+M across the craft's centre plane
+  if input.pressed("m") and not ctrl then
+    if alt then
+      W.mirror_plane = (W.mirror_plane == "center") and "host" or "center"
+      if not sym_mirror then toggleMirror() end
+      hint(W.mirror_plane == "center" and "mirror across the CRAFT's centre plane (ALT+M: across the host)"
+        or "mirror across the host", 2.5)
+    else
+      toggleMirror()
     end
   end
+  -- SNAP: G grid, SHIFT+G angle
+  if input.pressed("g") and not ctrl then
+    if shift then
+      W.angle = cycle(SNAP_ANGLES, W.angle)
+      ROT_SNAP = W.angle
+      hint("angle snap " .. ((W.angle > 0) and string.format("%d°", math.floor(math.deg(W.angle) + 0.5)) or "OFF"), 2.0)
+    else
+      W.grid = cycle(SNAP_GRIDS, W.grid)
+      hint("grid snap " .. fmt_grid(W.grid), 2.0)
+    end
+    ui("tool", 0.6)
+  end
+  if input.pressed("t") and not ctrl then setTestMode(not W.test) end
+  if input.pressed("v") and not ctrl then
+    W.overlay = (W.overlay + 1) % 4
+    hint(({ "overlays off", "overlays: CoM · CoT", "overlays: CoM · CoT · CoL", "overlays: CoM · CoT · CoL · aero" })[W.overlay + 1], 2.0)
+  end
+  -- F5 reloaded the blueprint before PHOTO took the key (§8.6): it still does
+  -- while the camera does not claim it (builder_camera.photoKeys).
+  if input.pressed("f5") and not ghost then
+    local bc = other("builder_camera")
+    if not (bc and bc.photoKeys == true) then load_blueprint() end
+  end
+  if input.pressed("tab") then
+    local tb = other("builder_toolbar")
+    if tb and tb.cycleTab then tb.cycleTab() end
+  end
+  if (input.pressed("/") and not shift) or (ctrl and input.pressed("f")) then
+    local cp = other("catalog_panel")
+    if cp and cp.focusSearch then cp.focusSearch() end
+  end
+  if ghost or gizmo_drag then return false end
+  -- the selection
+  if not ctrl and input.pressed("h") then
+    if alt then cmd("unhideAll", {})
+    elseif shift then cmd("isolate", { uids = selection() })
+    elseif #W.sel_order > 0 then cmd("hide", { uids = selection(), on = true }) end
+  end
+  if not ctrl and input.pressed("n") and not W.drawing and REG.beamP then startDrawTool("beamP") end
+  if W.drawing and (input.pressed("[") or input.pressed("]")) then drawToolCycle(input.pressed("]") and 1 or -1) end
+  if not ctrl and input.pressed("b") then
+    local bd = other("builder_bind")
+    if bd and bd.begin and #W.sel_order > 0 then bd.begin(selection()) end
+  end
+  if ctrl then
+    if input.pressed("z") then if shift then redo() else undo() end end
+    if input.pressed("y") then redo() end
+    if input.pressed("c") and #W.sel_order > 0 then copy(selection()) end
+    if input.pressed("v") then paste() end
+    if input.pressed("d") and #W.sel_order > 0 then duplicate(selection()) end
+    if input.pressed("s") then craftSave() end
+    if input.pressed("o") then
+      local tb = other("builder_toolbar")
+      if tb and tb.openLibrary then tb.openLibrary()
+      else
+        local names = {}
+        for _, c in ipairs(craftList()) do names[#names + 1] = c.name end
+        hint(#names > 0 and ("library: " .. table.concat(names, " · ")) or "the craft library is empty — CTRL+S saves this one", 4.0)
+      end
+    end
+    if input.pressed("n") then craftNew() end
+    if input.pressed("q") then
+      if W.quit_t and time - W.quit_t <= 3.0 then W.quit_t = nil; doLeave()
+      else W.quit_t = time; hint("CTRL+Q again to leave the VAB (the craft is kept)", 3.0) end
+    end
+  end
+  return false
+end
 
-  -- ── Ghost follows the cursor ──
-  if ghost and (ghost.node or ghost.carried) then
-    -- snapped or free, turned by its mount and the player's keys (ghostFollow)
-    local snap, x, y, z = ghostFollow()
-
-    -- Telegraphs (in-game draw.* layer): EVERY free attach node shows as a
-    -- ring while a part is in hand; the captured one goes bright green with a
-    -- tie line; carried stacks get amber outlines.
-    local exclude = nil
-    if ghost.carried then
-      exclude = {}
-      for _, m in ipairs(ghost.carried) do
-        exclude[m.uid] = true
+-- ── holding: the part (or carried set, or paste) in hand ───────────────────
+function ghostTick(dt, clicked, released, cam_busy)
+  -- Self-heal: never let a bad ghost wedge the builder.
+  if ghost.carried and not parts[ghost.from_uid] then
+    ghost = nil
+    hint(HINT_IDLE, 0.0); hint_t = 0
+    return
+  elseif not ghost.carried and not ghost.node then
+    ghost.wait = (ghost.wait or 0) + dt
+    if ghost.wait > 4.0 then
+      ghost = nil
+      hint("that part failed to spawn — try again", 2.5)
+    end
+    return
+  end
+  -- snapped or free, turned by its mount and the player's keys (ghostFollow)
+  local snap, x, y, z = ghostFollow()
+  local exclude = ghost.exclude
+  if ghost.carried then
+    -- the part grabbed, outlined; past 24 parts the rest as one merged box (§8.2)
+    local list = ghost.carried
+    if #list <= 24 then
+      for _, m in ipairs(list) do
         local cp = parts[m.uid]
         if cp then outline(cp, 1.0, 0.75, 0.3, 0.9) end
       end
-    end
-    do
-      local occupied_top, occupied_bottom = {}, {}
-      for _, p in pairs(parts) do
-        if p.parent and parts[p.parent] and not (exclude and exclude[p.parent])
-          and p.att ~= "radial" and p.att ~= "surface" then
-          if p.y >= parts[p.parent].y then occupied_top[p.parent] = true
-          else occupied_bottom[p.parent] = true end
-        end
-      end
-      local _, gey = eff_extents(ghost.def, ghost.yaw, ghost.pitch, ghost.roll)
-      for uid, p in pairs(parts) do
-        if not (exclude and exclude[uid]) then
-          for _, a in ipairs(attach_nodes_of(uid, p, ghost.def, gey, exclude,
-                                             occupied_top, occupied_bottom)) do
-            if a.side == "radial" then
-              -- Flank nodes ring in AMBER, facing outward.
-              draw.ring(a.x, a.y, a.z, a.dx, a.dy, a.dz, 0.22, 1.0, 0.75, 0.3, 0.8)
-            else
-              draw.ring(a.x, a.y, a.z, 0, 1, 0, 0.3, 0.35, 0.85, 1.0, 0.8)
-            end
-          end
-        end
-      end
-    end
-    local free_ok = (partCount == 0) or (ghost.carried and #ghost.carried >= partCount)
-        or input.key("alt")
-    local can_place, why
-    -- The copies symmetry would make — only while symmetry is ON (symCopies).
-    local sym_slots, sym_kind = nil, nil
-    if snap then
-      local ex2 = { [snap.uid] = true }
-      if exclude then for u in pairs(exclude) do ex2[u] = true end end
-      -- A RADIAL mount hugs the hull by design — never overlap-gate it (that
-      -- was the "pull it out then push it back" jank). Stack snaps still
-      -- reject only a DEEP overlap.
-      local blocked = snap.side ~= "radial" and snap.side ~= "surface"
-        and overlaps(ghost.def, x, y, z, ex2, ghost.yaw, ghost.pitch, ghost.roll)
-      if blocked then
-        can_place, why = false, "that spot is buried inside another part"
-        draw.sphere(x, y, z, 0.35, 1.0, 0.25, 0.2, 1.0)
-      else
-        can_place = true
-        draw.line(x, y, z, snap.x, snap.y, snap.z, 0.3, 1.0, 0.4, 1.0)
-        draw.ring(snap.x, snap.y, snap.z, snap.dx or 0, snap.dy or 1, snap.dz or 0, 0.4, 0.3, 1.0, 0.4, 1.0)
-      end
-      if can_place and not ghost.carried then
-        sym_slots, sym_kind = symCopies(snap, x, y, z, ghost.B or IDENT, ghost.n)
-        drawCopies(sym_slots) -- a ghost preview of every copy
-      end
-    elseif free_ok then
-      if overlaps(ghost.def, x, y, z, exclude, ghost.yaw, ghost.pitch, ghost.roll) then
-        can_place, why = false, "overlapping — find clear ground"
-        draw.sphere(x, y, z, 0.35, 1.0, 0.25, 0.2, 1.0)
-      else
-        can_place = true
-        local _, gey2 = eff_extents(ghost.def, ghost.yaw, ghost.pitch, ghost.roll)
-        draw.ring(x, y - gey2, z, 0, 1, 0, 0.35, 0.4, 0.7, 1.0, 1.0)
-      end
     else
-      can_place, why = false, nil -- routine: aim at an attach node
+      local a, b2, cc, d, e, f = math.huge, math.huge, math.huge, -math.huge, -math.huge, -math.huge
+      for _, m in ipairs(list) do
+        local cp = parts[m.uid]
+        if cp then
+          a, b2, cc = math.min(a, cp.x), math.min(b2, cp.y), math.min(cc, cp.z)
+          d, e, f = math.max(d, cp.x), math.max(e, cp.y), math.max(f, cp.z)
+        end
+      end
+      if a < math.huge then
+        drawObb((a + d) * 0.5, (b2 + e) * 0.5, (cc + f) * 0.5, IDENT, (d - a) * 0.5 + 0.6, (e - b2) * 0.5 + 0.6,
+          (f - cc) * 0.5 + 0.6, 1.0, 0.75, 0.3, 0.9)
+      end
+      local rp = parts[ghost.from_uid]
+      if rp then outline(rp, 1.0, 0.75, 0.3, 0.9) end
+    end
+  end
+  -- node rings: only on the part under the cursor and its neighbours (§4.6)
+  local _, gey = eff_extents(ghost.def, ghost.yaw, ghost.pitch, ghost.roll)
+  local A = attach_v2()
+  if A and ghost.q and A.visibleNodes then
+    for _, nd in ipairs(A.visibleNodes(ghost.q)) do
+      if nd.captured then draw.ring(nd.x, nd.y, nd.z, nd.nx, nd.ny, nd.nz, 0.3, 1.0, 0.62, 0.22, 1.0)
+      else draw.ring(nd.x, nd.y, nd.z, nd.nx, nd.ny, nd.nz, 0.26, 0.35, 0.85, 1.0, 0.8) end
+    end
+  end
+  for u in pairs((not A) and ghost.show or {}) do
+    local p = parts[u]
+    if p then
+      for _, a in ipairs(attach_nodes_of(u, p, ghost.def, gey, exclude)) do
+        if a.insert then
+          draw.ring(a.x, a.y, a.z, 0, 1, 0, 0.34, 1.0, 0.55, 0.15, 0.85)
+        elseif a.side == "radial" then
+          draw.ring(a.x, a.y, a.z, a.dx, a.dy, a.dz, 0.22, 1.0, 0.75, 0.3, 0.8)
+        else
+          draw.ring(a.x, a.y, a.z, 0, 1, 0, 0.3, 0.35, 0.85, 1.0, 0.8)
+        end
+      end
+    end
+  end
+  local can_place, why
+  local sym_slots, sym_kind = nil, nil
+  local on_floor = ghost.on_floor
+  if snap then
+    local ex2 = { [snap.uid] = true }
+    if snap.insert then ex2[snap.insert] = true end
+    if exclude then for u in pairs(exclude) do ex2[u] = true end end
+    local blocked
+    -- a surface or flank mount hugs the hull by design: never overlap-gated
+    -- (the old rule; builder_attach.blockedBy reads registry boxes, and an
+    -- engine's rx is its plume clearance)
+    if snap.wp3 then blocked = snap.wp3.blocked ~= nil and snap.wp3.kind ~= "surface"
+    elseif snap.insert then blocked = false -- the far side moves out of the way
+    else
+      blocked = snap.side ~= "radial" and snap.side ~= "surface"
+        and overlaps(ghost.def, x, y, z, ex2, ghost.yaw, ghost.pitch, ghost.roll)
+    end
+    if blocked then
+      can_place, why = false, "that spot is buried inside another part"
       draw.sphere(x, y, z, 0.35, 1.0, 0.25, 0.2, 1.0)
+    else
+      can_place = true
+      local cr, cg, cb = 0.3, 1.0, 0.4
+      if snap.insert then cr, cg, cb = 1.0, 0.55, 0.15 end
+      draw.line(x, y, z, snap.x, snap.y, snap.z, cr, cg, cb, 1.0)
+      draw.ring(snap.x, snap.y, snap.z, snap.dx or 0, snap.dy or 1, snap.dz or 0, 0.4, cr, cg, cb, 1.0)
+      if snap.insert then why = "INSERT — the stack beyond moves out to make room" end
+      if snap.wp3 and snap.wp3.why then why = snap.wp3.why end
     end
-
-    -- DEL with a part in hand scraps EVERYTHING being carried.
-    if input.pressed("delete") or input.pressed("del") then
-      if ghost.carried then
-        local datas = {}
-        for _, m in ipairs(ghost.carried) do
-          local d = remove_part(m.uid)
-          if d then datas[#datas + 1] = d end
-        end
-        push_undo({ type = "scrap", parts = datas })
-        ui("scrap", 0.8)
-        hint("scrapped " .. #datas .. " carried part(s) — CTRL+Z to undo", 2.5)
-      elseif ghost.node then
-        destroy(ghost.node)
-        hint(HINT_IDLE, 0.0); hint_t = 0
-      end
+    if can_place and not ghost.carried then
+      sym_slots, sym_kind = symCopies(snap, x, y, z, ghost.B or IDENT, ghost.n)
+      drawCopies(sym_slots)
+    end
+  elseif on_floor then
+    if overlaps(ghost.def, x, y, z, exclude, ghost.yaw, ghost.pitch, ghost.roll) then
+      can_place, why = false, "overlapping — find clear floor"
+      draw.sphere(x, y, z, 0.35, 1.0, 0.25, 0.2, 1.0)
+    else
+      can_place = true
+      local _, gey2 = eff_extents(ghost.def, ghost.yaw, ghost.pitch, ghost.roll)
+      draw.ring(x, y - gey2, z, 0, 1, 0, 0.35, 0.4, 0.7, 1.0, 1.0)
+    end
+  else
+    can_place, why = false, nil
+    draw.sphere(x, y, z, 0.35, 1.0, 0.25, 0.2, 1.0)
+  end
+  -- DEL with a part in hand scraps everything being carried.
+  if input.pressed("delete") or input.pressed("del") then
+    local g = ghost
+    if g.carried then
       ghost = nil
-      return
-    end
-
-    if input.pressed("escape") then cancel_ghost() return end
-    if not cam_busy and clicked then
-      if can_place then
-        local host_uid = snap and snap.uid or nil
-        local n_mount = ghost.n
-        local placed = place_ghost(x, y, z, host_uid, snap and snap.side or nil, nil)
-        selected_uid = placed -- the freshly placed part becomes the selection
-        if sym_slots and #sym_slots > 0 and placed then
-          placeCopies(placed, sym_slots, sym_kind, n_mount)
-        end
-        -- DOCKING SEAM: ports work in PAIRS — one on each craft, stacked face
-        -- to face. A single port welded into a stack is just a spacer and the
-        -- flight panel will (correctly) refuse to separate it, so say which one
-        -- you've just built the moment it's placed rather than in orbit.
-        if placed and parts[placed] and parts[placed].def.fairing and not ghost then
-          hint("fairing base placed — stack the payload on it, then B (or SHAPE FAIRING under it) draws its shell", 5.0)
-        end
-        if placed and parts[placed] and parts[placed].def.dock then
-          local host = host_uid and parts[host_uid]
-          if host and host.def.dock then
-            hint("docking seam — these two separate in flight (peripherals ▸ UNDOCK) " ..
-                 "and can re-dock later", 4.0)
-          else
-            hint("docking port placed — it needs a SECOND port stacked on its free " ..
-                 "face to make a seam that separates", 4.0)
-          end
-        end
-      elseif why then
-        hint(why, 2.0)
-      else
-        hint("no attach node under the cursor — aim at a green node, or hold ALT to place free", 2.5)
-      end
-    end
-    return
-  end
-
-  -- ── Whole-ship grab ──
-  if input.pressed("g") and partCount > 0 and not grab_mode then
-    grab_mode = true
-    grab_last = nil
-    grab_moved = false
-    local moved = {}
-    for uid, p in pairs(parts) do
-      moved[#moved + 1] = { uid = uid, x = p.x, y = p.y, z = p.z, parent = p.parent }
-    end
-    push_undo({ type = "move", moved = moved })
-    click_cool = 0.15
-    hint(HINT_GRAB, 8.0)
-  end
-  if grab_mode then
-    local mx, my = input.mouse()
-    local ox, oy, oz, dx, dy, dz = camera.screenToRay(mx, my)
-    if dy < -1e-4 then
-      local t = (params.floor_y - oy) / dy
-      if t > 0.3 and t < 500 then
-        local gx, gz = ox + dx * t, oz + dz * t
-        if grab_last then
-          local ddx, ddz = gx - grab_last.x, gz - grab_last.z
-          if math.abs(ddx) + math.abs(ddz) > 1e-4 then grab_moved = true end
-          for _, p in pairs(parts) do set_part_pos(p, p.x + ddx, p.y, p.z + ddz) end
-          publish_center()
-        end
-        grab_last = { x = gx, z = gz }
-      end
-    end
-    draw.ring(centerX, params.floor_y + 0.02, centerZ, 0, 1, 0, 1.2, 0.4, 0.8, 1.0, 1.0)
-    if (clicked and not cam_busy) or input.pressed("escape") or input.pressed("g") then
-      grab_mode = false
-      -- A grab that never moved anything shouldn't eat a CTRL+Z.
-      if not grab_moved and #undo_stack > 0 and undo_stack[#undo_stack].type == "move" then
-        table.remove(undo_stack)
-      end
+      uncarry(g)
+      local n = 0
+      for _, m in ipairs(g.carried) do if remove_part(m.uid) then n = n + 1 end end
+      if g.tx and not g.paste then tx_commit(g.tx) end
+      ui("scrap", 0.8)
+      hint("scrapped " .. n .. " carried part(s) — CTRL+Z to undo", 2.5)
+    else
+      if g.node then destroy(g.node) end
+      ghost = nil
       hint(HINT_IDLE, 0.0); hint_t = 0
     end
     return
   end
+  local go = (clicked and not cam_busy) or (ghost.drag and released)
+  if not go then return end
+  if ghost.drag and released then ghost.drag = nil end
+  if not can_place then
+    if why then hint(why, 2.0)
+    elseif clicked then hint("aim at a node, a part's surface or the floor", 2.5) end
+    return
+  end
+  placeHeld(snap, x, y, z, sym_slots, sym_kind)
+end
 
-  -- ── Gizmo drag in progress: it owns the mouse until release ──
-  if gizmo_drag then
-    local p = parts[gizmo_drag.uid]
-    if not lmb or not p then
-      gizmo_drag = nil
-      click_cool = 0.12
-    else
-      local mx, my = input.mouse()
-      local dmx, dmy = mx - gizmo_drag.lmx, my - gizmo_drag.lmy
-      gizmo_drag.lmx, gizmo_drag.lmy = mx, my
-      local a = GIZ_AXES[gizmo_drag.axis]
-      draw_gizmo(p, tool)
-      outline(p, 0.55, 0.85, 1.0, 1.0)
-      if gizmo_drag.kind == "move" then
-        -- Mouse motion projected onto the arrow's screen direction.
-        local sx0, sy0 = screen_of(p.x, p.y, p.z)
-        local sx1, sy1 = screen_of(p.x + a.x, p.y + a.y, p.z + a.z)
-        local vx2, vy2 = sx1 - sx0, sy1 - sy0
-        local l2 = vx2 * vx2 + vy2 * vy2
-        if l2 > 1e-3 and (dmx ~= 0 or dmy ~= 0) then
-          local t2 = (dmx * vx2 + dmy * vy2) / l2
-          if input.key("shift") then t2 = t2 * 0.25 end -- fine control
-          apply_edit(gizmo_drag.uid, a.x * t2, a.y * t2, a.z * t2, 0, 0, 0)
-        end
-        hint("MOVE — drag the arrow  ·  SHIFT fine  ·  release to set", 1.0)
-      else
-        -- Ring turn: the part follows the mouse round the ring (gizmoTurn).
-        local total = gizmoTurn(p, gizmo_drag, mx, my, dmx, dmy)
-        hint(string.format("ROTATE %+.0f°  ·  snaps %d°, SHIFT turns free  ·  release to set",
-          math.deg(total), math.floor(math.deg(ROT_SNAP) + 0.5)), 1.0)
+-- WP3's joint for a placement: the primary link takes the candidate's kind
+-- and points, and the joint plate (gusset, splice, clamp) rides on the part.
+function joinWp3(u, c)
+  local p, G = parts[u], graph()
+  if not (p and G) then return end
+  local l = G:primary(u)
+  if l and c.link then
+    l.k = c.link.k or l.k
+    -- the candidate's link runs held → host; ours runs host (a) → part (b)
+    l.pa, l.pb, l.n = vcopy(c.link.pb), vcopy(c.link.pa), vcopy(c.link.n)
+    if c.joint then
+      local A = lib("builder_attach")
+      l.s = (p.def.strength or 0) * ((A and A.JOINT_BONUS) or 1.25)
+    end
+  end
+  if c.joint then
+    p.joints = p.joints or {}
+    p.joints[#p.joints + 1] = encodeJoint(c.joint)
+    local P = lib("builder_proc")
+    if p.node and P and P.dressJoint then P.dressJoint(p.node, c.joint) end
+  end
+  struct_changed()
+end
+
+-- AUTO-WELD (§5.3): every end of a placed part within 2 cm of another part's
+-- surface gets a `weld` link (builder_attach.autoWelds on the hash's
+-- neighbours). Closing a rectangle with its fourth beam welds both ends.
+function autoWeld(u, t)
+  local A, G, p = attach_v2(), graph(), parts[u]
+  if not (A and A.autoWelds and G and p) then return 0 end
+  local ex, ey, ez = part_box(p)
+  local near = {}
+  local H = ensure_hash()
+  if not H then return 0 end
+  local linked = { [u] = true }
+  for _, n in ipairs(G:neighbours(u)) do linked[n] = true end
+  for _, v in ipairs(H:box(p.x - ex - 0.05, p.y - ey - 0.05, p.z - ez - 0.05, p.x + ex + 0.05, p.y + ey + 0.05,
+                           p.z + ez + 0.05, {})) do
+    if v ~= u and parts[v] and not parts[v].carried then near[#near + 1] = arec(v) end
+  end
+  local n = 0
+  for _, l in ipairs(A.autoWelds(arec(u), near, linked)) do
+    if t then tx_add(t, { l.b }) end
+    l.at = nil
+    G:add(l)
+    n = n + 1
+  end
+  if n > 0 then struct_changed() end
+  return n
+end
+
+-- Put the hand down: the placement, its symmetry copies, an insert's shift —
+-- one history step.
+function placeHeld(snap, x, y, z, sym_slots, sym_kind)
+  local g = ghost
+  local host_uid = snap and snap.uid or nil
+  local n_mount = g.n
+  local keep = input.key("shift") and not g.carried
+  local keep_id, keep_off = g.id, g.off
+  local reselect = g.reselect
+  local t = nil
+  if not g.carried then
+    t = tx_begin("place " .. (g.def.label or g.id), {})
+    W.ptx = t
+  end
+  local ins = snap and snap.insert and parts[snap.insert] and parts[host_uid] and not g.carried
+  if ins then
+    -- INSERT: the far side moves out along the node's normal by the new part's
+    -- height, and the joint re-forms through it (§5.4).
+    local H, N = host_uid, snap.insert
+    local far = beyond_of(N, H)
+    local around = { [H] = true, [N] = true }
+    for u in pairs(far) do around[u] = true end
+    tx_add(t, around)
+    local hB = basisOf(parts[H].yaw, parts[H].pitch, parts[H].roll)
+    local nrm = (snap.side == "top") and hB.Y or neg3(hB.Y)
+    local L = 2 * supportAlong(g.def, g.B or IDENT, nrm)
+    for u in pairs(far) do
+      local q = parts[u]
+      if q then set_part_pos(q, q.x + nrm.x * L, q.y + nrm.y * L, q.z + nrm.z * L) end
+    end
+    local G = graph()
+    if G then
+      for _, l in ipairs(G:incident(H)) do
+        if (l.a == N or l.b == N) and (l.k == "stack") then G:remove(l.id) end
       end
+    end
+    local placed = place_ghost(x, y, z, H, snap.side, nil)
+    local opp = (snap.side == "top") and "bottom" or "top"
+    if parts[N] and parts[N].parent == H then set_parent(N, placed, snap.side)
+    elseif parts[H] and parts[H].parent == N then set_parent(H, placed, opp)
+    else
+      if G then G:add({ a = placed, b = N, k = "stack", sa = snap.side, sb = opp }) end
+    end
+    -- a stack pushed through the floor stands back up on it (the whole craft lifts)
+    local comp = beyond_of(placed, -1)
+    local low = math.huge
+    for u in pairs(comp) do
+      local q = parts[u]
+      if q then local _, ey = part_box(q); low = math.min(low, q.y - ey) end
+    end
+    if low < params.floor_y - 0.005 then
+      local lift = params.floor_y - low
+      tx_add(t, comp)
+      for u in pairs(comp) do
+        local q = parts[u]
+        if q then set_part_pos(q, q.x, q.y + lift, q.z) end
+      end
+    end
+    sel_only(placed)
+    hint("inserted — the stack moved out " .. string.format("%.2f m", L), 2.5)
+  else
+    local placed = place_ghost(x, y, z, host_uid, snap and snap.side or nil, nil)
+    if placed and snap and snap.wp3 then joinWp3(placed, snap.wp3) end
+    if placed then autoWeld(placed, t) end
+    if reselect then sel_apply(reselect, "set") else sel_only(placed) end
+    if sym_slots and #sym_slots > 0 and placed then
+      placeCopies(placed, sym_slots, sym_kind, n_mount)
+    end
+    if placed and parts[placed] and parts[placed].def.fairing then
+      hint("fairing base placed — stack the payload on it, then SHAPE FAIRING under it draws its shell", 5.0)
+    end
+    if placed and parts[placed] and parts[placed].def.dock then
+      local host = host_uid and parts[host_uid]
+      if host and host.def.dock then
+        hint("docking seam — these two separate in flight (peripherals ▸ UNDOCK) and can re-dock later", 4.0)
+      else
+        hint("docking port placed — it needs a SECOND port stacked on its free face to make a seam that separates", 4.0)
+      end
+    end
+  end
+  if t then W.ptx = nil; tx_commit(t) end
+  -- SHIFT+click keeps a copy in hand for the next one
+  if keep and not ghost then
+    pick(keep_id)
+    if ghost then ghost.off = keep_off end
+  end
+end
+
+-- ── THE BEAM, PANEL AND BRACE TOOLS (§5.5, WP3's builder_attach) ───────────
+-- Beam: click a start (a node, a face on the host grid, the floor grid), move
+-- (a live member stretches, its length snapped, a phosphor tag at the cursor),
+-- click the end; SHIFT+click chains the next member from that end, ESC ends
+-- the chain and then the tool. [ / ] change the profile (tube, box, I-beam,
+-- truss). Panel: two corners on a face or the floor ([ / ] sheet or deck).
+-- Brace: point A on a part, point B on another.
+local DRAW_PROFILES = { "tube", "box", "ibeam", "truss" }
+function startDrawTool(id)
+  local A = attach_v2()
+  local def = REG[id]
+  if not (A and def and def.proc and A.pointOn) then return false end
+  local kind = def.proc
+  W.drawing = { id = id, kind = kind, prof = (kind == "member") and (W.draw_prof or def.prof or "box") or "brace",
+                thick = W.draw_thick or 0.04, p0 = nil }
+  click_cool = 0.15
+  ui("tool", 0.7)
+  hint(kind == "member" and "BEAM — click a start, then the end (ALT: end in the air · SHIFT+click chains · [ ] profile · ESC ends)"
+    or (kind == "panel" and "PANEL — click one corner, then the opposite one ([ ] sheet or deck · ESC ends)"
+    or "BRACE — click point A on a part, then point B on another (ESC ends)"), 6.0)
+  return true
+end
+function drawingTool() return W.drawing and { id = W.drawing.id, kind = W.drawing.kind, prof = W.drawing.prof,
+  started = W.drawing.p0 ~= nil } or nil end
+function drawToolCycle(dir)
+  local d = W.drawing
+  if not d then return end
+  if d.kind == "member" then
+    local i = 1
+    for k, n in ipairs(DRAW_PROFILES) do if n == d.prof then i = k end end
+    d.prof = DRAW_PROFILES[(i - 1 + dir) % #DRAW_PROFILES + 1]
+    W.draw_prof = d.prof
+    hint("profile: " .. d.prof, 1.5)
+  elseif d.kind == "panel" then
+    d.thick = (d.thick >= 0.08) and 0.04 or 0.10
+    W.draw_thick = d.thick
+    hint(d.thick >= 0.08 and "deck 10 cm" or "sheet 4 cm", 1.5)
+  end
+end
+
+-- The member / panel / brace the tool would make from p0 to p1.
+local function draw_shape(A, d, p1, get)
+  if d.kind == "member" then return A.memberBetween(d.p0, p1, d.prof, { get = get, exactEnd = p1.host ~= nil }) end
+  if d.kind == "panel" then return A.panelOn(d.p0, p1, d.p0.n, d.thick) end
+  return A.braceBetween(d.p0, p1)
+end
+
+-- Make it: one history step with its end links (WP3's endLink: splice,
+-- corner, tee or brace, with the joint plates) and any welds.
+local function draw_place(A, d, m)
+  local u = next_uid
+  local G = graph()
+  local def = def_of(d.id, m.size)
+  local rec = { uid = u, id = d.id, def = def, x = m.x, y = m.y, z = m.z, B = m.B, size = m.size }
+  local around = {}
+  local ends = {}
+  if d.kind == "panel" then
+    if d.p0.host and parts[d.p0.host] then ends[#ends + 1] = { "a", d.p0.host } end
+  else
+    for _, w in ipairs({ "a", "b" }) do
+      local e = m.ends and m.ends[w]
+      if e and e.host and parts[e.host] then ends[#ends + 1] = { w, e.host } end
+    end
+  end
+  for _, e in ipairs(ends) do around[e[2]] = true end
+  local t = tx_begin("draw " .. (def.label or d.id), around)
+  tx_touch(t, u)
+  local links, joints = {}, {}
+  for _, e in ipairs(ends) do
+    local host = arec(e[2])
+    local l, j
+    if d.kind == "panel" then
+      l = { a = u, b = e[2], k = "surface" }
+    else
+      l, j = A.endLink(rec, e[1], host)
+    end
+    -- ours run host (a) → part (b), the placed part's first end is its primary
+    local link = { a = e[2], b = u, k = l.k, pa = vcopy(l.pb), pb = vcopy(l.pa), n = vcopy(l.n),
+                   sa = "surface", sb = (d.kind ~= "panel") and e[1] or "surface", prim = (#links == 0) or nil }
+    if j then
+      joints[#joints + 1] = encodeJoint(j)
+      link.s = (def.strength or 0) * (A.JOINT_BONUS or 1.25)
+    end
+    links[#links + 1] = link
+  end
+  local yaw, pitch, roll = basisEuler(m.B)
+  local p = add_part(u, { id = d.id, x = m.x, y = m.y, z = m.z, yaw = yaw, pitch = pitch, roll = roll,
+                          size = tcopy(m.size), joints = (#joints > 0) and joints or nil })
+  if p and G then
+    for _, l in ipairs(links) do G:add(l) end
+    if links[1] then p.parent, p.att = links[1].a, "surface" end
+    autoWeld(u, t)
+  end
+  struct_changed()
+  tx_commit(t)
+  ui("place", 0.9)
+  return u
+end
+
+function drawToolTick(clicked, cam_busy)
+  local d = W.drawing
+  local A = attach_v2()
+  if not A then W.drawing = nil return end
+  local mx, my = input.mouse()
+  local ox, oy, oz, dx, dy, dz = camera.screenToRay(mx, my)
+  local hu, ht, hP, hn = ray_craft(ox, oy, oz, dx, dy, dz)
+  local cands = snap_candidates({})
+  local q = attachQuery({ def = REG[d.id], id = d.id, off = IDENT }, nil, cands, hu and { hu, ht, hP, hn } or nil)
+  local pt = A.pointOn(q)
+  -- ALT: the end goes IN THE AIR, on the upright plane through the start that
+  -- faces the camera (a post, a mast), its height on the grid
+  if d.p0 and input.key("alt") and d.kind ~= "panel" then
+    local nx, nz = ox - d.p0.x, oz - d.p0.z
+    local l = math.sqrt(nx * nx + nz * nz)
+    if l > 1e-6 then
+      nx, nz = nx / l, nz / l
+      local den = dx * nx + dz * nz
+      if math.abs(den) > 1e-6 then
+        local tt = ((d.p0.x - ox) * nx + (d.p0.z - oz) * nz) / den
+        if tt > 0 then
+          local g = (W.grid > 0) and W.grid or 0
+          local px, py, pz = ox + dx * tt, oy + dy * tt, oz + dz * tt
+          if g > 0 then py = d.p0.y + math.floor((py - d.p0.y) / g + 0.5) * g end
+          pt = { x = px, y = py, z = pz, n = { x = 0, y = 1, z = 0 }, kind = "air" }
+        end
+      end
+    end
+  end
+  if pt then
+    local n = pt.n or { x = 0, y = 1, z = 0 }
+    draw.ring(pt.x, pt.y, pt.z, n.x, n.y, n.z, 0.12, 1.0, 0.62, 0.22, 1.0)
+  end
+  if hu and parts[hu] then outline(parts[hu], 0.8, 0.88, 1.0, 0.45) end
+  local m
+  if d.p0 and pt then
+    m = draw_shape(A, d, pt, q.get)
+    local p0n = d.p0.n or { x = 0, y = 1, z = 0 }
+    draw.ring(d.p0.x, d.p0.y, d.p0.z, p0n.x, p0n.y, p0n.z, 0.12, 1.0, 0.62, 0.22, 1.0)
+    if m then
+      local sh = A.shapeOf(REG[d.id], m.size)
+      drawObb(m.x, m.y, m.z, m.B, sh.hx, sh.hy, sh.hz, 1.0, 0.62, 0.22, 0.9)
+      local tag = m.size.len and string.format("%.2f m", m.size.len)
+        or string.format("%.2f × %.2f m", m.size.w or 0, m.size.d or 0)
+      stext(mx + 16, my + 8, tag, 15, 0.55, 1.0, 0.6, 1.0)
+    end
+  end
+  if clicked and not cam_busy then
+    if not pt then hint("aim at a part or the floor", 1.5)
+    elseif not d.p0 then d.p0 = pt
+    elseif m then
+      draw_place(A, d, m)
+      -- SHIFT chains the next member from this one's far end
+      if input.key("shift") and d.kind == "member" and m.ends and m.ends.b then
+        local e = m.ends.b
+        d.p0 = { x = e.x, y = e.y, z = e.z, n = pt.n, host = next_uid - 1, region = "b" }
+      else
+        d.p0 = nil
+      end
+    end
+  end
+end
+
+-- ── a gizmo drag owns the mouse until release ───────────────────────────────
+function gizmoDragTick(lmb)
+  local gd = gizmo_drag
+  local p = parts[gd.uid]
+  if not lmb or not p then
+    gizmo_drag = nil
+    click_cool = 0.12
+    if W.hist then W.hist:seal() end
+    if p and p.parent and parts[p.parent] and not partsTouch(p, parts[p.parent], 0.02) then
+      placard("not touching what it is attached to — move it back, or LAUNCH refuses", "warn")
     end
     return
   end
-
-  -- ── Hover preview + SELECT + tool action ──
-  -- Clicking a part SELECTS it (persists); hovering only previews what a
-  -- click would pick. The selection's gizmo follows the active TOOL — never
-  -- the cursor — so nudging one part can't grab another.
-  hover_uid = (not cam_busy) and part_under_cursor(70) or nil
-  local sel = selected_uid and parts[selected_uid]
-  if not sel then selected_uid = nil end
-
-  -- The selected part: bright outline + (in Move/Rotate) its tool gizmo.
-  local giz_len, giz_rad = nil, nil
-  if sel then
-    outline(sel, 0.4, 0.95, 0.7, 1.0)
-    for u in pairs(edit_set(selected_uid)) do
-      if u ~= selected_uid and parts[u] then outline(parts[u], 0.4, 0.95, 0.7, 0.3) end
+  local mx, my = input.mouse()
+  local dmx, dmy = mx - gd.lmx, my - gd.lmy
+  gd.lmx, gd.lmy = mx, my
+  draw_gizmo(p, tool)
+  outline(p, 0.55, 0.85, 1.0, 1.0)
+  if gd.kind == "move" then
+    local a = gd.k
+    local sx0, sy0 = screen_of(p.x, p.y, p.z)
+    local sx1, sy1 = screen_of(p.x + a.x, p.y + a.y, p.z + a.z)
+    local vx2, vy2 = sx1 - sx0, sy1 - sy0
+    local l2 = vx2 * vx2 + vy2 * vy2
+    if l2 > 1e-3 and (dmx ~= 0 or dmy ~= 0) then
+      gd.acc = (gd.acc or 0) + (dmx * vx2 + dmy * vy2) / l2
     end
-    if tool == "move" or tool == "rotate" then
-      giz_len, giz_rad = draw_gizmo(sel, tool)
-      if clicked and not cam_busy then
-        local kind, ai, gpt = gizmo_hit(sel, tool, giz_len, giz_rad)
-        if kind then
-          local mx, my = input.mouse()
-          local ka = gizmoAxes(sel, tool)[ai]
-          gizmo_drag = { uid = selected_uid, kind = kind, axis = ai, lmx = mx, lmy = my,
-                         k = { x = ka.x, y = ka.y, z = ka.z }, P = gpt, rad = giz_rad }
-          return -- a gizmo grab never re-selects
+    local step = input.key("shift") and 0.01 or W.grid
+    local target = (step > 0) and math.floor((gd.acc or 0) / step + 0.5) * step or (gd.acc or 0)
+    local delta = target - (gd.applied or 0)
+    if math.abs(delta) > 1e-9 then
+      gd.applied = target
+      moveMulti(a.x * delta, a.y * delta, a.z * delta)
+    end
+    stext(mx + 16, my + 8, string.format("%+.3f m", target), 15, 1.0, 0.75, 0.3, 1.0)
+    local h = p.parent and parts[p.parent]
+    if h then
+      local ok = partsTouch(p, h, 0.02)
+      draw.line(p.x, p.y, p.z, h.x, h.y, h.z, ok and 0.3 or 1.0, ok and 1.0 or 0.25, ok and 0.4 or 0.2, 1.0)
+      if not ok then stext(mx + 16, my + 28, "not touching what it is attached to", 14, 1.0, 0.3, 0.25, 1.0) end
+    end
+    hint("OFFSET — drag the arrow  ·  snaps " .. fmt_grid(W.grid) .. ", SHIFT 1 cm  ·  release to set", 1.0)
+  else
+    local total = gizmoTurn(p, gd, mx, my, dmx, dmy)
+    hint(string.format("ROTATE %+.0f°  ·  snaps %s, SHIFT turns free  ·  release to set",
+      math.deg(total), (ROT_SNAP and ROT_SNAP > 0) and string.format("%d°", math.floor(math.deg(ROT_SNAP) + 0.5)) or "off"), 1.0)
+  end
+end
+
+-- ── idle: hover, select (click / SHIFT / CTRL / box / double-click), drag ──
+local function draw_selection()
+  local n = 0
+  local sel = W.sel_order
+  for i = #sel, 1, -1 do
+    local p = parts[sel[i]]
+    if p then
+      n = n + 1
+      if n > 200 then break end
+      outline(p, 1.0, 0.62, 0.22, (sel[i] == selected_uid) and 1.0 or 0.75)
+    end
+  end
+  -- dependents, faint (they come along with a drag)
+  local c = W.cache
+  if c.sdep_v ~= W.sv or c.sdep_s ~= W.sel_v then
+    local set = {}
+    for _, u in ipairs(sel) do set[u] = true end
+    c.sdep = (#sel > 0) and deps_of(set) or {}
+    c.sdep_v, c.sdep_s = W.sv, W.sel_v
+  end
+  for u in pairs(c.sdep) do
+    if n > 200 then break end
+    n = n + 1
+    if parts[u] then outline(parts[u], 1.0, 0.62, 0.22, 0.25) end
+  end
+  -- loose islands (orange): one merged box per island, cached per change
+  if c.lbox_v ~= craftVersion then
+    local boxes = {}
+    local comps = islands()
+    for _, k in ipairs(comps or {}) do
+      if not k.root and #boxes < 64 then
+        local a, b2, cc, d, e, f = math.huge, math.huge, math.huge, -math.huge, -math.huge, -math.huge
+        for _, u in ipairs(k) do
+          local p = parts[u]
+          if p and not p.carried then
+            local ex, ey, ez = part_box(p)
+            a, b2, cc = math.min(a, p.x - ex), math.min(b2, p.y - ey), math.min(cc, p.z - ez)
+            d, e, f = math.max(d, p.x + ex), math.max(e, p.y + ey), math.max(f, p.z + ez)
+          end
         end
+        if a < d then boxes[#boxes + 1] = { (a + d) * 0.5, (b2 + e) * 0.5, (cc + f) * 0.5, (d - a) * 0.5 + 0.04,
+                                            (e - b2) * 0.5 + 0.04, (f - cc) * 0.5 + 0.04 } end
       end
     end
+    c.lbox, c.lbox_v = boxes, craftVersion
   end
-
-  -- Hover preview: a soft outline of what a click would select.
-  if hover_uid and hover_uid ~= selected_uid then
-    outline(parts[hover_uid], 0.8, 0.88, 1.0, 0.45)
+  for _, b in ipairs(c.lbox) do
+    drawObb(b[1], b[2], b[3], IDENT, b[4], b[5], b[6], 1.0, 0.45, 0.1, 0.55)
   end
+  local r = craft_root()
+  if r and parts[r] and partCount > 1 then
+    local p = parts[r]
+    draw.ring(p.x, p.y, p.z, 0, 1, 0, 0.25 + p.def.rx, 0.95, 0.85, 0.3, tool == "root" and 1.0 or 0.35)
+  end
+end
 
-  -- Click: SELECT the hovered part, or (GRAB tool) pick it up to re-attach.
-  -- Clicking empty space deselects — EXCEPT a click that lands on the active
-  -- gizmo's footprint (a missed handle grab), which keeps the selection so
-  -- fiddling with the Move/Rotate gizmo never drops what you're editing.
-  if clicked and not cam_busy then
-    if hover_uid then
-      if tool == "grab" then
-        pickup(hover_uid) -- carry flow → re-place at a new attach node
-        selected_uid = nil
-      else
-        selected_uid = hover_uid
-      end
+local function click_at(pr)
+  local u = pr.uid
+  if tool == "root" and u then cmd("root", { uid = u }); return end
+  if u then
+    local lc = W.last_click
+    if lc and lc.uid == u and time - lc.t <= 0.3 and not pr.shift and not pr.ctrl and not lc.dbl then
+      -- a second double-click on the same part (within 1.5 s) widens to the craft
+      local ld = W.last_dbl
+      local scope = (ld and ld.uid == u and time - ld.t <= 1.5 and ld.scope == "assembly") and "craft" or "assembly"
+      selectConnected(u, scope)
+      W.last_click = { uid = u, t = time, dbl = true }
+      W.last_dbl = { uid = u, t = time, scope = scope }
+      hint(scope == "assembly" and "selected the assembly (up to its decouplers) — double-click again for the craft"
+        or "selected the whole craft", 2.0)
       return
     end
-    if sel and giz_len then
-      local gx, gy, gr = gizmo_footprint_px(sel, tool, giz_len, giz_rad)
-      if gx then
-        local mx, my = input.mouse()
-        if (mx - gx) ^ 2 + (my - gy) ^ 2 <= gr * gr then return end -- keep selection
-      end
-    end
-    selected_uid = nil -- clicked the empty canvas, clear of the gizmo
+    sel_apply({ u }, pr.ctrl and "toggle" or (pr.shift and "add" or "set"))
+    W.last_click = { uid = u, t = time }
     return
   end
+  if pr.keep then return end -- a near miss on the gizmo keeps the selection
+  if not pr.shift and not pr.ctrl then sel_only(nil) end
+end
 
-  -- ── Selection editing (acts on the SELECTION; a fallback to the gizmo) ──
+local function finish_box(b, mx, my)
+  local x0, x1 = math.min(b.x0, mx), math.max(b.x0, mx)
+  local y0, y1 = math.min(b.y0, my), math.max(b.y0, my)
+  local list = {}
+  for u, p in pairs(parts) do
+    if not p.hidden then
+      local sx, sy, on = screen_of(p.x, p.y, p.z)
+      if on and sx >= x0 and sx <= x1 and sy >= y0 and sy <= y1 then list[#list + 1] = u end
+    end
+  end
+  table.sort(list)
+  sel_apply(list, b.add and "add" or "set")
+  if #list > 0 then hint(string.format("%d part%s selected", #W.sel_order, #W.sel_order == 1 and "" or "s"), 1.5) end
+end
+
+function startDragMove(uid, only)
+  local reselect = {}
+  for i, u in ipairs(W.sel_order) do reselect[i] = u end
+  pickup(uid, { set = W.sel, only = only })
+  if ghost then
+    ghost.drag = true
+    ghost.reselect = reselect
+    if only then hint("moving only the selection — what hung on it stays, loose (orange)", 2.5) end
+  end
+end
+
+function idleTick(dt, clicked, lmb, released, cam_busy)
+  hover_uid = (not cam_busy and not W.box) and part_under_cursor(70) or nil
+  local sel = selected_uid and parts[selected_uid]
+  if selected_uid and not sel then sel_only(nil) end
+  draw_selection()
+  local giz_len, giz_rad
+  if sel and (tool == "offset" or tool == "rotate") then
+    giz_len, giz_rad = draw_gizmo(sel, tool)
+    local h = sel.parent and parts[sel.parent]
+    if h and tool == "offset" and not partsTouch(sel, h, 0.02) then
+      draw.line(sel.x, sel.y, sel.z, h.x, h.y, h.z, 1.0, 0.25, 0.2, 1.0)
+    end
+  end
+  if hover_uid and not W.sel[hover_uid] then
+    outline(parts[hover_uid], 0.8, 0.88, 1.0, 0.45)
+  end
+  local mx, my = input.mouse()
+  if clicked and not cam_busy then
+    if giz_len then
+      local kind, ai, gpt = gizmo_hit(sel, tool, giz_len, giz_rad)
+      if kind then
+        local ka = gizmoAxes(sel, tool)[ai]
+        gizmo_drag = { uid = selected_uid, kind = kind, axis = ai, lmx = mx, lmy = my,
+                       k = { x = ka.x, y = ka.y, z = ka.z }, P = gpt, rad = giz_rad }
+        if W.hist then W.hist:seal() end
+        return
+      end
+    end
+    local keep = false
+    if sel and giz_len and not hover_uid then
+      local gx, gy, gr = gizmo_footprint_px(sel, tool, giz_len, giz_rad)
+      keep = gx ~= nil and (mx - gx) ^ 2 + (my - gy) ^ 2 <= gr * gr
+    end
+    W.press = { x = mx, y = my, uid = hover_uid, shift = input.key("shift"), ctrl = input.key("ctrl"),
+                alt = input.key("alt"), t = time, keep = keep }
+  end
+  local pr = W.press
+  if pr then
+    if lmb then
+      if not pr.drag and (mx - pr.x) ^ 2 + (my - pr.y) ^ 2 > 36 then
+        pr.drag = true
+        if pr.uid and tool ~= "root" and not cam_busy then
+          if not W.sel[pr.uid] then sel_apply({ pr.uid }, (pr.shift or pr.ctrl) and "add" or "set") end
+          W.press = nil
+          startDragMove(pr.uid, pr.alt)
+          return
+        elseif not pr.uid and not pr.keep then
+          W.box = { x0 = pr.x, y0 = pr.y, add = pr.shift }
+        end
+      end
+      if W.box then
+        local b = W.box
+        local x0, y0 = math.min(b.x0, mx), math.min(b.y0, my)
+        srect(x0, y0, math.abs(mx - b.x0), math.abs(my - b.y0), 1.0, 0.62, 0.22, 0.10, 0)
+        sframe(x0, y0, math.abs(mx - b.x0), math.abs(my - b.y0), 1.0, 0.62, 0.22, 0.9, 1.5)
+      end
+    else
+      if W.box then finish_box(W.box, mx, my)
+      elseif not pr.drag then click_at(pr) end
+      W.press, W.box = nil, nil
+    end
+  end
+  -- arrows nudge the selection (one step a press; SHIFT 1 cm)
   if sel then
-    local p = sel
-    -- Arrow keys nudge (↑/↓ vertical, ←/→ screen-horizontal, ALT+←/→ depth,
-    -- SHIFT fine); R/T/Y rotate. All route through apply_edit on the
-    -- selection (ring-symmetric, one undo op per streak).
-    local step = input.key("shift") and params.nudge * 0.25 or params.nudge
+    local step = input.key("shift") and 0.01 or ((W.grid > 0) and W.grid or params.nudge)
     local ddx, ddy, ddz = 0, 0, 0
     if input.pressed("up") then ddy = step end
     if input.pressed("down") then ddy = -step end
-    local h = (input.pressed("right") and 1 or 0) - (input.pressed("left") and 1 or 0)
-    if h ~= 0 then
-      local mx, my = input.mouse()
+    local hh = (input.pressed("right") and 1 or 0) - (input.pressed("left") and 1 or 0)
+    if hh ~= 0 then
       local _, _, _, d1x, _, d1z = camera.screenToRay(mx, my)
       local _, _, _, d2x, _, d2z = camera.screenToRay(mx + 40, my)
       local rxx, rzz = d2x - d1x, d2z - d1z
       if input.key("alt") then rxx, rzz = -rzz, rxx end
-      if math.abs(rxx) >= math.abs(rzz) then
-        ddx = (rxx >= 0 and 1 or -1) * h * step
-      else
-        ddz = (rzz >= 0 and 1 or -1) * h * step
-      end
+      if math.abs(rxx) >= math.abs(rzz) then ddx = (rxx >= 0 and 1 or -1) * hh * step
+      else ddz = (rzz >= 0 and 1 or -1) * hh * step end
     end
-    -- (rotation keys: rotKeysTick, above)
-    if ddx ~= 0 or ddy ~= 0 or ddz ~= 0 then
-      apply_edit(selected_uid, ddx, ddy, ddz, 0, 0, 0)
-    end
-    -- DEL scraps the selection + its stack (a ring member takes the ring).
+    if ddx ~= 0 or ddy ~= 0 or ddz ~= 0 then moveMulti(ddx, ddy, ddz) end
+    -- DEL scraps the selection and what hangs on it; ALT+DEL only the selection
     if input.pressed("delete") or input.pressed("del") then
-      local grab = edit_set(selected_uid)
-      local datas = {}
-      for u in pairs(grab) do
-        local d = remove_part(u)
-        if d then datas[#datas + 1] = d end
-      end
-      push_undo({ type = "scrap", parts = datas })
+      local n = cmd("delete", { uids = selection(), only = input.key("alt") })
       ui("scrap", 0.8)
-      hint("scrapped " .. #datas .. " part(s) — CTRL+Z to undo", 2.5)
-      selected_uid = nil
+      hint("scrapped " .. tostring(n or 0) .. " part(s) — CTRL+Z to undo", 2.5)
     end
-  else
-    nudge_uid = nil -- nothing selected: next edit opens a fresh undo op
   end
+end
 
-  -- ── Shortcuts ──
-  if input.key("ctrl") and input.pressed("z") then undo() end
-  if input.key("ctrl") and input.pressed("s") then save_blueprint() end
-  if input.pressed("f5") then load_blueprint() end
-  if input.pressed("l") and not input.key("ctrl") then toggleLaunchSite(); refresh_stats() end
-  -- ESC LEAVES, once it has nothing nearer to cancel. The two `escape` handlers
-  -- above this one take their turn first — a part on the cursor, a gizmo drag —
-  -- so the key backs out one level at a time and only reaches the door when
-  -- there is nothing else in front of it. Same ladder as the rest of the game.
-  if input.pressed("escape") and not ghost and not gizmo_drag and not grab_mode then
-    doLeave()
+function update(node, dt)
+  -- in the world: this frame's frame-space shapes wait for lateUpdate (F.flush)
+  if W.F and W.F.beginQueue then W.F.beginQueue() end
+  W.visits = 0
+  frameTick()
+  statsTick()
+  if W.overlay >= 1 and not aeroDrawsOverlays() then draw_engineering() end
+  if not toolbarOwnsModes() then drawModes() end
+  roundTwoTick()
+  fit_header()
+  -- One shared click edge for the whole frame.
+  local lmb = input.button(0)
+  local clicked = lmb and not lmb_prev and click_cool <= 0
+  local released = (not lmb) and lmb_prev
+  lmb_prev = lmb
+  if click_cool > 0 then click_cool = click_cool - dt end
+  if hint_t > 0 then
+    hint_t = hint_t - dt
+    if hint_t <= 0 and not ghost then
+      W.hint_text = HINT_IDLE
+      if hint_node then hint_node.text = HINT_IDLE end
+    end
   end
+  local cam_busy = input.button(1) -- RMB = the camera's; never build through it
+  -- Shaping a fairing (or its SHAPE button) takes the frame's input first.
+  if shapeTick(clicked, cam_busy) then return end
+  if keysTick(cam_busy) then return end
+  -- STAGE and GROUPS panels, then any registered panel, own the mouse first.
+  if handle_staging(clicked, lmb, false) then return end
+  if groupsPanelTick(clicked) then return end
+  if panelsOwnMouse() then W.press, W.box = nil, nil; return end
+  if W.drawing and not ghost then drawToolTick(clicked, cam_busy) return end
+  rotKeysTick(cam_busy or panelsOwnKeys())
+  if ghost then
+    if ghost.node or ghost.carried then ghostTick(dt, clicked, released, cam_busy)
+    else ghostTick(dt, false, false, cam_busy) end
+    return
+  end
+  if gizmo_drag then gizmoDragTick(lmb) return end
+  idleTick(dt, clicked, lmb, released, cam_busy)
 end
 
 -- The HUD buttons call these too.
@@ -4604,11 +6146,21 @@ function doSave() save_blueprint() end
 --
 -- The blueprint is kept, because leaving is not the same as discarding — you
 -- come back to the craft you were drawing.
+-- In the real VAB (build_host, WP6) the builder is an overlay on the live
+-- world: leaving and launching hand back to it instead of loading a scene.
+function buildHost()
+  local bh = findScript and findScript("build_host") or nil
+  if bh and bh.valid ~= false and bh.inWorld and bh.inWorld() then return bh end
+  return nil
+end
+
 function doLeave()
   save_blueprint()
   save.set("shipyard.launch", false)
   save.set("shipyard.pilot", 0)
   save.flush()
+  local bh = buildHost()
+  if bh then bh.leave() return end
   scene.load("system")
 end
 -- A launch with warnings is TWO presses: the first says what is wrong and
@@ -4648,5 +6200,939 @@ function doLaunch()
   save.set("shipyard.site", launchSite())
   save.set("shipyard.pilot", 1) -- you launch IN the pod, not beside it
   save.flush()
+  local bh = buildHost()
+  if bh then bh.rollout(launchSite()) return end
   scene.load("system")
+end
+
+-- ═══ THE PUBLIC BUILDER API (documented at the top of this file) ═══════════
+-- Defined last so every local above is in scope. Globals, never upvalues of
+-- `update`.
+local API = { panels = API_PANELS, stats = nil, stats_cv = -1, stats_t = -1e9 }
+
+function api_not_yet(what)
+  local msg = "builder API: '" .. tostring(what) .. "' not yet"
+  if log then log(msg) elseif print then print(msg) end
+  return false
+end
+
+local function uid_list(a)
+  if type(a) == "number" then return { a } end
+  if type(a) ~= "table" then return {} end
+  local src = a.uids or (a.uid and { a.uid }) or a
+  local out = {}
+  for _, u in ipairs(src) do if parts[u] then out[#out + 1] = u end end
+  return out
+end
+local function list_set(list)
+  local s2 = {}
+  for _, u in ipairs(list) do s2[u] = true end
+  return s2
+end
+local function set_list(set)
+  local out = {}
+  for u in pairs(set) do out[#out + 1] = u end
+  table.sort(out)
+  return out
+end
+
+-- ── queries ────────────────────────────────────────────────────────────────
+function partRec(uid)
+  local p = parts[uid]
+  if not p then return nil end
+  local links = {}
+  local G = graph()
+  if G then for _, l in ipairs(G:incident(uid)) do links[#links + 1] = tcopy(l) end end
+  return { uid = uid, id = p.id, def = p.def, x = p.x, y = p.y, z = p.z,
+           yaw = p.yaw or 0, pitch = p.pitch or 0, roll = p.roll or 0,
+           B = basisOf(p.yaw, p.pitch, p.roll), size = tcopy(p.size), sym = p.sym, mir = p.mir,
+           parent = p.parent, att = p.att,
+           an = p.an and { x = p.an.x, y = p.an.y, z = p.an.z } or nil,
+           wcfg = wcfgs[uid] and copy_wcfg(wcfgs[uid]) or nil, links = links,
+           hidden = p.hidden == true, root = craft_root() == uid, loose = loose_set()[uid] == true,
+           landed = p.node ~= nil }
+end
+
+function selection()
+  local out = {}
+  for _, u in ipairs(W.sel_order) do if parts[u] then out[#out + 1] = u end end
+  return out
+end
+function selectionPrimary() return (selected_uid and parts[selected_uid]) and selected_uid or nil end
+function select(uids, mode)
+  if type(uids) ~= "table" then uids = { uids } end
+  sel_apply(uids, mode or "set")
+  return selection()
+end
+function selectAll() sel_apply(set_list(alive_set()), "set"); return selection() end
+function selectInvert()
+  local list = {}
+  for u in pairs(parts) do if not W.sel[u] then list[#list + 1] = u end end
+  table.sort(list)
+  sel_apply(list, "set")
+  return selection()
+end
+
+function hovered()
+  return (hover_uid and parts[hover_uid]) and hover_uid or nil
+end
+
+function held()
+  if not ghost then return nil end
+  if ghost.carried then
+    local out = { ghost.id }
+    for _, m in ipairs(ghost.carried) do
+      if m.uid ~= ghost.from_uid and parts[m.uid] then out[#out + 1] = parts[m.uid].id end
+    end
+    return out
+  end
+  return { ghost.id }
+end
+function holding()
+  if not ghost then return nil end
+  if ghost.paste then return "paste" end
+  return ghost.carried and "carry" or "part"
+end
+
+-- Cached per craftVersion; while a drag or a part in hand keeps changing the
+-- craft it is recomputed at most twice a second.
+function stats()
+  if API.stats and API.stats_cv == craftVersion then return API.stats end
+  if API.stats and (ghost or gizmo_drag) and time - API.stats_t < 0.5 then return API.stats end
+  local n, mass, dry, cost, thrust = 0, 0.0, 0.0, 0, 0.0
+  local wx, wy, wz, dx, dy, dz = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+  local th, tx, ty, tz = 0.0, 0.0, 0.0, 0.0
+  for _, p in pairs(parts) do
+    local d = p.def
+    local wet = d.mass + (d.fuel or 0) * FUEL_T_PER_UNIT
+    n = n + 1
+    mass, dry, cost = mass + wet, dry + d.mass, cost + d.cost
+    wx, wy, wz = wx + p.x * wet, wy + p.y * wet, wz + p.z * wet
+    dx, dy, dz = dx + p.x * d.mass, dy + p.y * d.mass, dz + p.z * d.mass
+    local t = d.thrust or 0
+    if t > 0 then
+      th = th + t
+      tx, ty, tz = tx + p.x * t, ty + p.y * t, tz + p.z * t
+      thrust = thrust + (liveDef(d).thrust or t)
+    end
+  end
+  local st = (n > 0) and stageStats() or nil
+  local comps, loose = islands()
+  local nl = 0
+  for _ in pairs(loose or {}) do nl = nl + 1 end
+  local out = {
+    parts = n, mass = mass, dry = dry, cost = cost, thrust = thrust,
+    dv = st and st.dv or 0, twr = st and st.twr or 0, hop = st and st.hop or 0,
+    stages = st and st.stages or {},
+    com = (mass > 0) and { x = wx / mass, y = wy / mass, z = wz / mass } or nil,
+    comDry = (dry > 0) and { x = dx / dry, y = dy / dry, z = dz / dry } or nil,
+    cot = (th > 0) and { x = tx / th, y = ty / th, z = tz / th } or nil,
+    launch = launchCheck(), version = craftVersion, islands = #(comps or {}), loose = nl,
+  }
+  API.stats, API.stats_cv, API.stats_t = out, craftVersion, time
+  return out
+end
+
+-- THE FRAME ADAPTER (builder_space.newFrame): the identity in standalone
+-- builder.ron; the BuildFrame's own frame when the scene has one.
+function frame()
+  if W.F then return W.F end
+  local L = lib("builder_space")
+  if L then return L.newFrame(nil, RAW_CAMERA) end
+  return nil
+end
+
+-- the graph
+function root() return craft_root() end
+function links(uid)
+  local G, out = graph(), {}
+  if G then for _, l in ipairs(G:incident(uid)) do out[#out + 1] = tcopy(l) end end
+  return out
+end
+function dependents(uids)
+  return set_list(deps_of(list_set(uid_list(uids))))
+end
+function components()
+  local comps = islands()
+  local out = {}
+  for i, c in ipairs(comps or {}) do
+    local l = {}
+    for k, u in ipairs(c) do l[k] = u end
+    l.root, l.anchor = c.root, c.anchor
+    out[i] = l
+  end
+  return out
+end
+function separation(uid)
+  local G, L = graph(), lib("builder_graph")
+  if not (G and L) then return nil end
+  local far = L.separation(G, alive_set(), uid, craft_root())
+  return far and set_list(far) or nil
+end
+function hingeLocked(uid)
+  local G, L = graph(), lib("builder_graph")
+  return (G and L and parts[uid]) and L.hingeLocked(G, alive_set(), uid) or false
+end
+
+-- modes
+function currentTool() return tool end
+function gizmoSpace() return (ROT_FRAME == "part") and "local" or "world" end
+function setGizmoSpace(sp) ROT_FRAME = (sp == "local") and "part" or "camera" end
+function snapGrid() return W.grid end
+function setSnapGrid(m) W.grid = math.max(0, tonumber(m) or 0) end
+function snapAngle() return W.angle end
+function setSnapAngle(r) W.angle = math.max(0, tonumber(r) or 0); ROT_SNAP = W.angle end
+function setSym(n)
+  n = tonumber(n) or 1
+  for _, k in ipairs(SYM_STEPS) do if k == n then sym_n = n; sym_mirror = false end end
+  refresh_stats()
+  return sym_n
+end
+function setMirror(on, plane)
+  if (on and true or false) ~= sym_mirror then toggleMirror() end
+  if plane then W.mirror_plane = plane end
+  return sym_mirror
+end
+function mirrorPlane() return W.mirror_plane or "host" end
+function testMode() return W.test end
+function setTestMode(on)
+  W.test = on and true or false
+  hint(W.test and "TEST — the craft's controls drive it here, kinematically (T again: off)" or "TEST off", 2.5)
+  craftVersion = craftVersion + 1
+  return W.test
+end
+function overlayMode() return W.overlay end
+function setOverlayMode(n) W.overlay = math.max(0, math.min(3, math.floor(tonumber(n) or 0))); return W.overlay end
+function attachRules() return attach_v2() and "wp3" or "legacy" end
+function setAttachRules(r) W.attach = (r == "legacy") and "legacy" or "auto"; return attachRules() end
+function frameMs()
+  if perf and perf.enabled and perf.enabled() and perf.scriptMs then return perf.scriptMs("builder") end
+  return nil
+end
+function perfCounters()
+  return { visits = W.visits, hashParts = W.H and W.H:count() or 0, hashVisits = W.H and W.H.visits or 0,
+           links = W.G and W.G:count() or 0, queued = #W.queue - W.qhead + 1 }
+end
+function hiddenUids()
+  local out = {}
+  for u, p in pairs(parts) do if p.hidden then out[#out + 1] = u end end
+  table.sort(out)
+  return out
+end
+function outliner() return tcopy(W.outliner or {}) end
+function controlsData() return W.controls end
+-- What controls.lua's bind / unbind / bindAxis edit beside W.controls: the
+-- live action groups (bp.groups), the craft's records and symmetry rings (WP5).
+function controlsCtx()
+  return { groups = groups_own(), recs = craft_records(), E = elib(),
+           members = function(uid)
+             local p = parts[uid]
+             if p and p.sym then return group_members(p.sym) end
+             return { uid }
+           end }
+end
+-- A part's display node, for TEST: builder_bind poses the moving side of each
+-- joint kinematically and puts every node back when TEST ends (no data edits).
+function partNode(uid)
+  local p = parts[uid]
+  return p and p.node or nil
+end
+function setControls(t)
+  tx_run("controls", {}, function() W.controls = t end, "controls", true)
+  craftVersion = craftVersion + 1
+end
+function reload() load_blueprint() end
+
+-- history
+function undoStep() undo() end
+function redoStep() redo() end
+function canUndo() return W.hist ~= nil and W.hist:canUndo() end
+function canRedo() return W.hist ~= nil and W.hist:canRedo() end
+function historyList()
+  local H = history()
+  return H and H:list() or { items = {}, index = 0 }
+end
+function historyJump(i)
+  local H = history()
+  return H and H:jump(i) or 0
+end
+
+-- ── fragments: the clipboard, sub-assemblies, merge ─────────────────────────
+-- A FRAGMENT is a little v2 blueprint in the frame's own coordinates:
+-- { v = 2, kind = "fragment", root, parts = { rec… }, links = { … }, controls }.
+local function fragment(uids)
+  local set = list_set(uids)
+  local frag = { v = 2, kind = "fragment", root = uids[1], parts = {}, links = {}, controls = tcopy(W.controls) }
+  for _, u in ipairs(uids) do
+    local p = parts[u]
+    if p then
+      frag.parts[#frag.parts + 1] = {
+        uid = u, id = p.id, x = p.x, y = p.y, z = p.z, yaw = p.yaw, pitch = p.pitch, roll = p.roll,
+        parent = (p.parent and set[p.parent]) and p.parent or 0, att = p.att or "",
+        sym = p.sym or 0, mir = p.mir or "", an = vcopy(p.an), size = tcopy(p.size), joints = tcopy(p.joints),
+        wcfg = wcfgs[u] and copy_wcfg(wcfgs[u]) or nil, fshape = fshapes[u] and tcopy(fshapes[u]) or nil }
+    end
+  end
+  local G, L = graph(), lib("builder_graph")
+  if G and L then
+    local seen = {}
+    for _, u in ipairs(uids) do
+      for _, l in ipairs(G:incident(u)) do
+        if not seen[l.id] and set[l.a] and set[l.b] then
+          seen[l.id] = true
+          frag.links[#frag.links + 1] = L.packLink(l)
+        end
+      end
+    end
+  end
+  return frag
+end
+
+-- Fragment from a saved craft (a whole blueprint: bottom at 0, centred).
+local function fragment_of_bp(bp)
+  local frag = { v = 2, kind = "fragment", parts = {}, links = tcopy(bp.links), controls = tcopy(bp.controls) }
+  local first = nil
+  for _, d in ipairs(bp.parts or {}) do
+    if REG[d.id] then
+      local an = (d.anx and d.any and d.anz) and { x = d.anx, y = d.any, z = d.anz } or nil
+      frag.parts[#frag.parts + 1] = { uid = d.uid, id = d.id, x = d.x, y = d.y + params.floor_y, z = d.z,
+        yaw = d.yaw, pitch = d.pitch, roll = d.roll, parent = d.parent or 0, att = d.att or "",
+        sym = d.sym or 0, mir = d.mir or "", an = an, size = tcopy(d.size), wcfg = tcopy(d.wcfg),
+        joints = tcopy(d.joints) }
+      if not first or d.uid == bp.root then first = d.uid end
+    end
+  end
+  frag.root = bp.root or first
+  return frag
+end
+
+-- Spawn a fragment's parts with NEW uids (and new symmetry groups), offset by
+-- (ox, oy, oz). Returns the new uids (root first) and old → new.
+local function instantiate(frag, ox, oy, oz, t)
+  ox, oy, oz = ox or 0, oy or 0, oz or 0
+  local map, symmap, out = {}, {}, {}
+  for _, r in ipairs(frag.parts or {}) do
+    if REG[r.id] then map[r.uid] = next_uid; next_uid = next_uid + 1 end
+  end
+  for _, r in ipairs(frag.parts or {}) do
+    local u = map[r.uid]
+    if u then
+      local sym = nil
+      if (r.sym or 0) ~= 0 then
+        if not symmap[r.sym] then next_sym = next_sym + 1; symmap[r.sym] = next_sym end
+        sym = symmap[r.sym]
+      end
+      if t then tx_touch(t, u) end
+      local p = add_part(u, { id = r.id, x = r.x + ox, y = r.y + oy, z = r.z + oz, yaw = r.yaw, pitch = r.pitch,
+        roll = r.roll, sym = sym, mir = (r.mir ~= "" and r.mir) or nil, an = vcopy(r.an), size = tcopy(r.size),
+        joints = tcopy(r.joints) })
+      if p then
+        local par = map[r.parent or 0]
+        p.parent, p.att = par, (r.att ~= "" and r.att) or nil
+        if type(r.wcfg) == "table" then wcfgs[u] = copy_wcfg(r.wcfg) end
+        if type(r.fshape) == "table" then fshapes[u] = tcopy(r.fshape) end
+      end
+    end
+  end
+  local G, L = graph(), lib("builder_graph")
+  if G and L then
+    local list = frag.links
+    if not (type(list) == "table" and #list > 0) then
+      list = {}
+      for i, l in ipairs(L.linksFromV1(frag.parts)) do list[i] = l end
+    else
+      local u2 = {}
+      for i, l in ipairs(list) do u2[i] = L.unpackLink(l) end
+      list = u2
+    end
+    for _, l in ipairs(list) do
+      local a, b = map[l.a], map[l.b]
+      if a and b then
+        l.a, l.b, l.id = a, b, nil
+        G:add(l)
+      end
+    end
+  end
+  -- WP5's controls come along with the uids remapped, when it can
+  local cs = other("controls")
+  if frag.controls and cs and cs.remap and cs.merge then
+    W.controls = cs.merge(W.controls, cs.remap(tcopy(frag.controls), map))
+  end
+  local r0 = map[frag.root or -1]
+  if r0 then out[1] = r0 end
+  for _, r in ipairs(frag.parts or {}) do
+    local u = map[r.uid]
+    if u and u ~= r0 then out[#out + 1] = u end
+  end
+  struct_changed()
+  publish_center(); refresh_stats()
+  return out, map
+end
+
+-- A fragment into the hand: spawned, lifted, and placed (one step) or dropped.
+local function hold_fragment(frag)
+  if ghost or not frag or #(frag.parts or {}) == 0 then return false end
+  local t = tx_begin("paste " .. #frag.parts .. " parts", {})
+  local uids = instantiate(frag, 0, 0, 0, t)
+  if #uids == 0 then return false end
+  pickup(uids[1], { set = list_set(uids), only = true, paste = t })
+  hint(string.format("%d part%s in hand — click to place · ESC drops them", #uids, #uids == 1 and "" or "s"), 3.0)
+  return ghost ~= nil
+end
+
+function copy(uids)
+  local list = uid_list(uids or selection())
+  if #list == 0 then return false end
+  -- the primary first, so it is what the paste hangs from
+  if selected_uid and list_set(list)[selected_uid] then
+    for i = #list, 1, -1 do if list[i] == selected_uid then table.remove(list, i) end end
+    table.insert(list, 1, selected_uid)
+  end
+  W.clip = fragment(list)
+  hint(string.format("copied %d part%s — CTRL+V puts them in your hand", #list, #list == 1 and "" or "s"), 2.0)
+  return #list
+end
+function paste()
+  if not W.clip then hint("nothing copied yet — CTRL+C copies the selection", 2.0); return false end
+  return hold_fragment(W.clip)
+end
+function clipboard() return W.clip end
+-- A copy 0.5 m along the camera's right, selected (one step).
+function duplicate(uids)
+  local list = uid_list(uids or selection())
+  if #list == 0 or ghost then return false end
+  local frag = fragment(list)
+  local mx, my = input.mouse()
+  local _, _, _, d1x, d1y, d1z = camera.screenToRay(mx, my)
+  local _, _, _, d2x, d2y, d2z = camera.screenToRay(mx + 40, my)
+  local rx, ry, rz = unit(d2x - d1x, d2y - d1y, d2z - d1z)
+  if rx == 0 and ry == 0 and rz == 0 then rx = 1 end
+  local t = tx_begin("duplicate " .. #list .. " parts", {})
+  local out = instantiate(frag, rx * 0.5, ry * 0.5, rz * 0.5, t)
+  tx_commit(t)
+  sel_apply(out, "set")
+  ui("place", 0.8)
+  return out
+end
+
+-- ── the craft library (§8.4) ────────────────────────────────────────────────
+local function slug(name)
+  local s2 = tostring(name or "untitled"):lower():gsub("[^%w]+", "_"):gsub("^_+", ""):gsub("_+$", "")
+  return (s2 ~= "" and s2) or "untitled"
+end
+function craftName() return W.craft or "Untitled" end
+function craftList()
+  local idx = save.get("shipyard.crafts")
+  local out = {}
+  if type(idx) == "table" then
+    for _, c in ipairs(idx) do out[#out + 1] = tcopy(c) end
+  end
+  return out
+end
+local function index_put(entry)
+  local idx = craftList()
+  for i = #idx, 1, -1 do if idx[i].slug == entry.slug then table.remove(idx, i) end end
+  if entry.name then table.insert(idx, 1, entry) end
+  save.set("shipyard.crafts", idx)
+end
+function craftSave(name)
+  name = name or W.craft or "Untitled"
+  W.craft = name
+  local bp = save_blueprint()
+  local sl = slug(name)
+  save.set("shipyard.craft." .. sl, bp)
+  local st = stats()
+  index_put({ name = name, slug = sl, parts = st.parts, mass = st.mass, cost = st.cost, t = time,
+              thumb = "user://crafts/" .. sl .. ".png" })
+  save.set("shipyard.current", name)
+  save.flush()
+  -- a thumbnail for the OPEN list (async; skipped where there is no capture)
+  if camera and camera.capture and assets and assets.writeBytes then
+    pcall(camera.capture, { w = 256, h = 144, ui = false, draws = false }, function(bytes)
+      if bytes then pcall(assets.writeBytes, "user://crafts/" .. sl .. ".png", bytes) end
+    end)
+  end
+  hint("saved “" .. name .. "” to the library  ·  " .. st.parts .. " parts", 2.5)
+  return true
+end
+function craftOpen(name, mode)
+  local bp = save.get("shipyard.craft." .. slug(name))
+  if type(bp) ~= "table" then hint("no craft called “" .. tostring(name) .. "” in the library", 2.5); return false end
+  bp = tcopy(bp)
+  if mode == "merge" then return hold_fragment(fragment_of_bp(bp)) end
+  load_blueprint(bp)
+  W.craft = name
+  save.set("shipyard.current", name)
+  hint("opened “" .. name .. "”", 2.0)
+  return true
+end
+function craftNew()
+  if ghost then cancel_ghost() end
+  if partCount > 0 then craftSave() end
+  clear_stand()
+  stage_order, saved_stage = {}, {}
+  groups_state.groups, groups_state.edited = nil, false
+  W.craft = nil
+  save.set("shipyard.current", nil)
+  hint("new craft — the last one is kept in the library (CTRL+O)", 3.0)
+  return true
+end
+function craftDelete(name)
+  local sl = slug(name)
+  save.set("shipyard.craft." .. sl, nil)
+  index_put({ slug = sl })
+  save.flush()
+  return true
+end
+
+-- Sub-assemblies: user://subassemblies/<slug>.json (+ index.json), so they
+-- carry across saves. Kept in memory too (and only there without files).
+W.subs = {}
+local function subs_index()
+  if assets and assets.readJson then
+    local ok, v = pcall(assets.readJson, "user://subassemblies/index.json")
+    if ok and type(v) == "table" then return v end
+  end
+  return {}
+end
+function subAssemblies()
+  local seen, out = {}, {}
+  for _, n in ipairs(subs_index()) do if not seen[n] then seen[n] = true; out[#out + 1] = n end end
+  for n in pairs(W.subs) do if not seen[n] then seen[n] = true; out[#out + 1] = n end end
+  table.sort(out)
+  return out
+end
+function makeSubAssembly(name, uids)
+  local list = uid_list(uids or selection())
+  if #list == 0 or not name or name == "" then return false end
+  local frag = fragment(list)
+  frag.name = name
+  W.subs[name] = frag
+  if assets and assets.writeJson then
+    pcall(assets.writeJson, "user://subassemblies/" .. slug(name) .. ".json", frag)
+    local idx = subs_index()
+    local have = false
+    for _, n in ipairs(idx) do if n == name then have = true end end
+    if not have then idx[#idx + 1] = name end
+    pcall(assets.writeJson, "user://subassemblies/index.json", idx)
+  end
+  hint("sub-assembly “" .. name .. "” saved (" .. #list .. " parts)", 2.5)
+  return true
+end
+function subAssembly(name)
+  if W.subs[name] then return W.subs[name] end
+  if assets and assets.readJson then
+    local ok, v = pcall(assets.readJson, "user://subassemblies/" .. slug(name) .. ".json")
+    if ok and type(v) == "table" then W.subs[name] = v; return v end
+  end
+  return nil
+end
+
+-- ── commands ────────────────────────────────────────────────────────────────
+local CMD = {}
+
+-- the parts an edit of `list` touches, with their neighbours (links change)
+local function with_neighbours(set)
+  local out = {}
+  local G = graph()
+  for u in pairs(set) do
+    out[u] = true
+    if G then for _, n in ipairs(G:neighbours(u)) do out[n] = true end end
+  end
+  return out
+end
+
+function CMD.place(a)
+  local id = a.id
+  if not (id and REG[id]) then return false end
+  local rs = findScript and findScript("research")
+  if rs and rs.isUnlocked and not rs.isUnlocked(id) then return false end
+  local u = next_uid
+  local around = {}
+  if a.parent and parts[a.parent] then around[a.parent] = true end
+  local t = tx_begin("place " .. (REG[id].label or id), around)
+  tx_touch(t, u)
+  if a.an then copyNormal[u] = { x = a.an.x, y = a.an.y, z = a.an.z } end
+  spawn_part(id, a.x or 0, a.y or 0, a.z or 0, a.yaw or 0, a.parent, nil,
+             a.pitch or 0, a.roll or 0, a.att, nil, nil)
+  if a.size and parts[u] then parts[u].size = tcopy(a.size) end
+  tx_commit(t)
+  ui("place", 0.9)
+  return u
+end
+
+function CMD.move(a)
+  local list = uid_list(a)
+  if #list == 0 then return false end
+  if W.hist and not a.merge then W.hist:seal() end
+  local p = parts[list[1]]
+  local ddx, ddy, ddz = a.dx or 0, a.dy or 0, a.dz or 0
+  if a.x or a.y or a.z then
+    ddx, ddy, ddz = (a.x or p.x) - p.x, (a.y or p.y) - p.y, (a.z or p.z) - p.z
+  end
+  if #list == 1 then
+    apply_edit(list[1], ddx, ddy, ddz, 0, 0, 0)
+  else
+    local set = {}
+    for _, u in ipairs(list) do for v in pairs(edit_set(u)) do set[v] = true end end
+    for v in pairs(deps_of(set)) do set[v] = true end
+    edit_begin(list[1], set)
+    for u in pairs(set) do
+      local q = parts[u]
+      if q then set_part_pos(q, q.x + ddx, q.y + ddy, q.z + ddz) end
+    end
+    publish_center(); refresh_stats()
+  end
+  if W.hist and not a.merge then W.hist:seal() end
+  return true
+end
+
+function CMD.rotate(a)
+  local list = uid_list(a)
+  if #list == 0 then return false end
+  if W.hist and not a.merge then W.hist:seal() end
+  if a.reset then
+    resetSelection(list[1])
+  else
+    local Q = a.Q
+    if not Q and a.axis and a.angle then Q = basisRot(norm3(a.axis), a.angle) end
+    if not Q then return false end
+    rotateSelection(list[1], Q)
+  end
+  if W.hist and not a.merge then W.hist:seal() end
+  return true
+end
+
+CMD["delete"] = function(a)
+  local list = uid_list(a)
+  local gone = {}
+  for _, uid in ipairs(list) do
+    local p = parts[uid]
+    gone[uid] = true
+    if p and p.sym then for _, m in ipairs(group_members(p.sym)) do gone[m] = true end end
+  end
+  if not a.only then for u in pairs(deps_of(gone)) do gone[u] = true end end
+  if next(gone) == nil then return false end
+  local t = tx_begin("delete " .. tostring(#set_list(gone)) .. " parts", with_neighbours(gone))
+  local n = 0
+  for u in pairs(gone) do if remove_part(u) then n = n + 1 end end
+  tx_commit(t)
+  if n == 0 then return false end
+  ui("scrap", 0.8)
+  return n
+end
+
+function CMD.setWcfg(a)
+  local p = parts[a.uid]
+  if not (p and p.def.wheel) then return false end
+  wheelSet(a.uid, a.key, a.value, a.quiet)
+  return true
+end
+
+-- A new stack part between `host` and what stands on its `side` node; the
+-- far side moves out by the new part's height.
+function CMD.insert(a)
+  local H = a.host
+  local hp = parts[H]
+  local def = REG[a.id or ""]
+  local side = (a.side == "bottom") and "bottom" or "top"
+  if not (hp and def) then return false end
+  local N = side_user(H, side)
+  local hB = basisOf(hp.yaw, hp.pitch, hp.roll)
+  local nrm = (side == "top") and hB.Y or neg3(hB.Y)
+  local L = def.h
+  local around = { [H] = true }
+  local far = {}
+  if N then far = beyond_of(N, H); for u in pairs(far) do around[u] = true end; around[N] = true end
+  local u = next_uid
+  local t = tx_begin("insert " .. (def.label or a.id), around)
+  tx_touch(t, u)
+  for v in pairs(far) do
+    local q = parts[v]
+    if q then set_part_pos(q, q.x + nrm.x * L, q.y + nrm.y * L, q.z + nrm.z * L) end
+  end
+  local G = graph()
+  if G and N then
+    for _, l in ipairs(G:incident(H)) do
+      if (l.a == N or l.b == N) and l.k == "stack" then G:remove(l.id) end
+    end
+  end
+  local hh = hp.def.h * 0.5
+  local cx = hp.x + nrm.x * (hh + L * 0.5)
+  local cy = hp.y + nrm.y * (hh + L * 0.5)
+  local cz = hp.z + nrm.z * (hh + L * 0.5)
+  spawn_part(a.id, cx, cy, cz, hp.yaw, H, nil, hp.pitch, hp.roll, side, nil, nil)
+  local opp = (side == "top") and "bottom" or "top"
+  if N and parts[N] then
+    if parts[N].parent == H then set_parent(N, u, side)
+    elseif hp.parent == N then set_parent(H, u, opp)
+    elseif G then G:add({ a = u, b = N, k = "stack", sa = side, sb = opp }) end
+  end
+  tx_commit(t)
+  ui("place", 0.9)
+  return u
+end
+
+-- Cut every link between the selection and the rest; poses stay.
+function CMD.detach(a)
+  local set = list_set(uid_list(a))
+  if next(set) == nil then return false end
+  local G = graph()
+  if not G then return false end
+  local t = tx_begin("detach", with_neighbours(set))
+  local n = 0
+  for u in pairs(set) do
+    for _, l in ipairs(G:incident(u)) do
+      local o = (l.a == u) and l.b or l.a
+      if not set[o] then
+        G:remove(l.id)
+        n = n + 1
+        if l.prim and parts[l.b] then parts[l.b].parent = nil end
+      end
+    end
+  end
+  struct_changed()
+  tx_commit(t)
+  return n
+end
+
+function CMD.link(a)
+  if not (parts[a.a] and parts[a.b]) or a.a == a.b then return false end
+  local G = graph()
+  if not G then return false end
+  local t = tx_begin("link", { a.a, a.b })
+  local id = G:add({ a = a.a, b = a.b, k = a.k or "weld", sa = a.sa, sb = a.sb, pa = vcopy(a.pa),
+                     pb = vcopy(a.pb), n = vcopy(a.n), s = a.s, prim = a.prim })
+  if a.prim and parts[a.b] then parts[a.b].parent = a.a; parts[a.b].att = a.sa end
+  struct_changed()
+  tx_commit(t)
+  return id
+end
+
+function CMD.unlink(a)
+  local G = graph()
+  if not G then return false end
+  local l = a.id and G:get(a.id)
+  if not l and a.a and a.b then
+    for _, x in ipairs(G:incident(a.a)) do
+      if (x.a == a.b or x.b == a.b) and (not a.k or x.k == a.k) then l = x break end
+    end
+  end
+  if not l then return false end
+  local t = tx_begin("unlink", { l.a, l.b })
+  G:remove(l.id)
+  if l.prim and parts[l.b] then parts[l.b].parent = nil end
+  struct_changed()
+  tx_commit(t)
+  return true
+end
+
+function CMD.setParam(a)
+  local p = parts[a.uid]
+  if not (p and a.key) then return false end
+  local t = tx_begin("set " .. tostring(a.key), { a.uid }, a.merge or ("param:" .. a.uid .. ":" .. tostring(a.key)))
+  tx_commit(t)
+  p.size = p.size or {}
+  p.size[a.key] = a.value
+  p.def = def_of(p.id, p.size) or p.def
+  p.pv = (p.pv or 0) + 1
+  if p.node then
+    -- a new size is a new mesh: the drawn part is re-dressed by a fresh node
+    destroy(p.node); p.node = nil
+    request_node(a.uid, p)
+  end
+  hash_put(a.uid, p)
+  craftVersion = craftVersion + 1
+  refresh_stats()
+  return true
+end
+
+function CMD.root(a)
+  if not parts[a.uid] then return false end
+  tx_run("root", {}, function() W.root = a.uid end, nil, true)
+  struct_changed()
+  hint("root: " .. (parts[a.uid].def.label or parts[a.uid].id) .. " — everything hangs from it", 2.0)
+  return true
+end
+
+function CMD.group(a)
+  local list = uid_list(a)
+  if #list == 0 then return false end
+  tx_run("group", {}, function()
+    W.outliner = W.outliner or {}
+    W.outliner[#W.outliner + 1] = { name = a.name or ("Group " .. (#W.outliner + 1)), uids = list }
+  end, nil, true)
+  craftVersion = craftVersion + 1
+  return #W.outliner
+end
+
+function CMD.rename(a)
+  local found = false
+  tx_run("rename", {}, function()
+    for _, g in ipairs(W.outliner or {}) do
+      if g.name == a.group then g.name = a.name; found = true end
+    end
+    if not found then W.craft = a.name or W.craft end
+  end, nil, true)
+  craftVersion = craftVersion + 1
+  return true
+end
+
+local function set_hidden(list, on)
+  for _, u in ipairs(list) do
+    local p = parts[u]
+    if p then
+      p.hidden = on or nil
+      if p.node then p.node.visible = not on end
+    end
+  end
+  craftVersion = craftVersion + 1
+end
+function CMD.hide(a)
+  local list = uid_list(a)
+  if #list == 0 then return false end
+  tx_run("hide", list, function() set_hidden(list, a.on ~= false) end)
+  if a.on ~= false then sel_apply(list, "remove") end
+  return #list
+end
+function CMD.unhideAll()
+  local list = hiddenUids()
+  if #list == 0 then return 0 end
+  tx_run("unhide all", list, function() set_hidden(list, false) end)
+  return #list
+end
+function CMD.isolate(a)
+  local keep = list_set(uid_list(a))
+  local list = {}
+  for u in pairs(parts) do if not keep[u] then list[#list + 1] = u end end
+  tx_run("isolate", list, function() set_hidden(list, true) end)
+  return #list
+end
+
+-- A mirrored copy of the selection across the craft's centre plane (its X)
+-- or across a part's own X plane.
+function CMD.mirror(a)
+  local list = uid_list(a)
+  if #list == 0 then return false end
+  center_now()
+  local cx, A = centerX, { x = 1, y = 0, z = 0 }
+  local pl = parts[a.plane or -1]
+  local frag = fragment(list)
+  local t = tx_begin("mirror " .. #list .. " parts", {})
+  local out = instantiate(frag, 0, 0, 0, t)
+  for _, u in ipairs(out) do
+    local p = parts[u]
+    if p then
+      local x, y, z
+      if pl then
+        local h = { x = pl.x, y = pl.y, z = pl.z }
+        local B = basisOf(pl.yaw, pl.pitch, pl.roll)
+        A = B.X
+        x, y, z = reflect_pt(h, A, p.x, p.y, p.z)
+      else
+        x, y, z = 2 * cx - p.x, p.y, p.z
+      end
+      set_part_pos(p, x, y, z)
+      set_part_rot(p, basisEuler(mirrorBasis(A, basisOf(p.yaw, p.pitch, p.roll))))
+    end
+  end
+  tx_commit(t)
+  sel_apply(out, "set")
+  return out
+end
+
+-- WP5's controls model: bind / unbind / bindAxis live in scripts/controls.lua
+-- as functions (state, args) → new state | result. One history step each.
+for _, name in ipairs({ "bind", "unbind", "bindAxis" }) do
+  CMD[name] = function(a)
+    local cs = other("controls")
+    local f = cs and cs[name]
+    if not f then return api_not_yet("cmd " .. name .. " (no controls." .. name .. ")") end
+    -- one history step, and none at all for a bind that was refused
+    local t = tx_begin(name, {}, nil, true)
+    W.controls = W.controls or {}
+    local res = f(W.controls, a, controlsCtx())
+    if res == false or res == nil then
+      apply_snap(t.before)  -- put back anything a refused bind touched
+      return false
+    end
+    if type(res) == "table" and res ~= a then W.controls = res end
+    tx_commit(t)
+    craftVersion = craftVersion + 1
+    return res
+  end
+end
+
+function cmd(name, args)
+  local f = CMD[name]
+  if not f then return api_not_yet("cmd " .. tostring(name)) end
+  return f(args or {})
+end
+
+function hold(spec)
+  if ghost then return false end
+  if type(spec) == "string" then
+    if REG[spec] then
+      pick(spec)
+      return ghost ~= nil
+    end
+    return hold_fragment(subAssembly(spec))
+  end
+  if type(spec) == "table" and spec.parts then return hold_fragment(spec) end
+  if type(spec) == "table" and type(spec[1]) == "number" then
+    if not parts[spec[1]] then return false end
+    pickup(spec[1], { set = list_set(uid_list(spec)) })
+    return ghost ~= nil
+  end
+  return false
+end
+
+function registerPanel(s)
+  if not (s and s.ownsMouse) then return false end
+  for _, p in ipairs(API.panels) do if p == s then return true end end
+  API.panels[#API.panels + 1] = s
+  return true
+end
+
+-- Called by `update` each frame (a global, for the upvalue ceiling).
+function panelsOwnMouse()
+  local list = API.panels
+  if #list == 0 then return false end
+  local i = 1
+  while i <= #list do
+    local s = list[i]
+    if s.valid == false then
+      table.remove(list, i)
+    else
+      if s.ownsMouse() then return true end
+      i = i + 1
+    end
+  end
+  return false
+end
+
+function placard(msg, kind, secs)
+  local warn = kind == "error" or kind == "warn"
+  local sb = other("builder_statusbar")
+  if sb and sb.showPlacard then
+    sb.showPlacard(tostring(msg), kind or "info", secs or (warn and 3.0 or 2.5))
+    return
+  end
+  hint((warn and "⚠ " or "") .. tostring(msg), secs or (warn and 3.0 or 2.5))
+end
+-- The hint bar's current line (WP2's status strip shows it).
+function hintText()
+  if W.hint_text then return W.hint_text end
+  return hint_node and hint_node.text or HINT_IDLE
+end
+function setLaunchSite(site)
+  launchSiteChoice = (site == "runway") and "runway" or "pad"
+  refresh_stats()
+  return launchSiteChoice
+end
+
+-- The frame-space shapes queued during update, drawn against the frame as the
+-- rails left it this frame (builder_space.wrapDraw).
+function lateUpdate(node, dt)
+  if W.F and W.F.flush then W.F.flush() end
 end

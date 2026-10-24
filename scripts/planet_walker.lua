@@ -982,6 +982,8 @@ function update(node, dt)
   -- Nor while the world is still streaming in: the crew is parked in the sky
   -- over the spawn planet then, not standing anywhere they could interact with.
   local gm = ref("game_manager")
+  -- Nor while building in the VAB: build_host parks the crew at the console.
+  if gm and gm.inputOwner == "builder" then onFoot = false; breathe(node, dt, false, true) return end
   if gm and gm.loading then onFoot = false return end
   -- Nothing is piloting us anywhere: we must be walkable, and visible unless
   -- the CAMERA is deliberately hiding us.

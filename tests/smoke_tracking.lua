@@ -4,7 +4,7 @@
 --     and every craft with its signal; the detail says power, signal, path and
 --     who can fly it; FLY / RECOVER / END FLIGHT (two presses) / RENAME / MAP
 --     call flight_ops; every element is one ui.make accepts.
---   * ACTION GROUPS PANEL (scripts/groups_panel.lua): chips per group, the
+--   * CONTROLS TAB (scripts/groups_panel.lua, was the action groups panel): the
 --     selected part's actions as ticks, the open group's list with ✕; a tick
 --     calls the builder; every element valid.
 --   * VESSEL SWITCHER (scripts/vessel_switcher.lua): [ ] cycles the crew and
@@ -257,58 +257,57 @@ bad = {}
 validate(tree, "ts2")
 check(#bad == 0, "the rename row is valid too: " .. table.concat(bad, ", "))
 
--- ── ACTION GROUPS PANEL ─────────────────────────────────────────────────────
+-- ── CONTROLS TAB (groups_panel.lua, the builder's keymap — WP5) ─────────────
+-- The bind flow itself is tests/smoke_builder_bind.lua; this checks the tab
+-- reads a craft's standard groups and edits through the builder's commands.
 local recs = {
   [1] = { uid = 1, id = "probe", label = "Probe Core", kind = "probe" },
   [5] = { uid = 5, id = "solar", label = "Solar Panel", sym = 1, mods = { { type = "solar", gen = 1 }, { type = "deploy", anim = "solar" } } },
   [6] = { uid = 6, id = "solar", label = "Solar Panel", sym = 1, mods = { { type = "solar", gen = 1 }, { type = "deploy", anim = "solar" } } },
   [8] = { uid = 8, id = "light", label = "Floodlight", mods = { { type = "light", draw = 0.2 } } },
 }
+local CT = load("solar/scripts/controls.lua", {})
 local G = E.defaultGroups(recs)
-local gsel, psel, toggled = "deploy", 5, {}
-local B = { valid = true,
-  groupsTool = function() return true end,
+local cdata = { v = 1, axes = {}, custom = {} }
+local psel = 8
+local B = { valid = true, craftVersion = 1,
+  tool = function() return "groups" end,
   groupsNow = function() return G, recs end,
-  groupsSelected = function() return gsel end,
-  groupsSelect = function(g) gsel = g end,
-  groupsEdited = function() return false end,
-  selectedPart = function() return psel end,
-  groupsToggle = function(gid, uid, act) toggled[#toggled + 1] = gid .. ":" .. uid .. ":" .. act; return E.toggleBind(G, gid, uid, act) end,
-  groupsClear = function() end, groupsReset = function() end,
+  controlsData = function() return cdata end,
+  selection = function() return { psel } end,
+  selectionPrimary = function() return psel end,
+  partRec = function(u) local r = recs[u] return r and { uid = u, id = r.id, def = { label = r.label, mods = r.mods, kind = r.kind }, sym = r.sym } end,
+  cmd = function(name, a)
+    local r = CT[name](cdata, a, { groups = G, recs = recs, E = E, members = function(u) return { u } end })
+    if r then B.craftVersion = B.craftVersion + 1 end
+    return r
+  end,
 }
 local gtree = nil
 local gel = { visible = false }
 local gp = load("solar/scripts/groups_panel.lua", {
-  findScript = function(k) if k == "builder" then return B end if k == "electronics" then return E end end,
+  findScript = function(k) if k == "builder" then return B end if k == "electronics" then return E end
+    if k == "controls" then return CT end end,
   ui = { make = function(_, t) gtree = t end },
 })
 local gnode = { getcomponent = function() return gel end }
 gp.start(gnode)
 gp.update(gnode, 0.016)
-check(gel.visible, "the groups panel shows in the groups tool")
+check(gel.visible, "the CONTROLS tab shows on the groups tool")
 bad = {}
 validate(gtree, "groups")
-check(#bad == 0, "every groups-panel element is valid: " .. table.concat(bad, ", "))
-check(by_key(gtree, "gdeploy") and by_key(gtree, "g1") and by_key(gtree, "g0"), "chips for the standard groups and 1–0")
-check(has_text(gtree, "Solar Panel  ×2"), "the Deploy group lists the panel ring as one line")
-local tick = nil
-for _, e in ipairs(each(gtree)) do
-  if e[1] == "button" and type(e.key) == "string" and e.key:match("^a%d") and e.selected then tick = e end
-end
-check(tick ~= nil, "the selected panel's bound action is ticked")
-by_key(gtree, "g1").onClicked()
-check(gsel == "1", "clicking a chip opens that group")
-psel = 8
+check(#bad == 0, "every CONTROLS element is valid: " .. table.concat(bad, ", "))
+check(has_text(gtree, "Solar Panel ×2") and has_text(gtree, "Deploy"), "the Deploy key lists the panel ring as one entry")
+check(has_text(gtree, "Floodlight") and has_text(gtree, "Lights"), "the Lights key holds the floodlight")
+check(has_text(gtree, "Light on / off"), "the selected floodlight's actions are listed")
+-- take the floodlight off its key from the selected-part list
+local x = nil
+for _, e in ipairs(each(gtree)) do if e.key == "x" and e.onClicked and not e.disabled and not x then x = e end end
+check(x ~= nil, "a ✕ to take an action off its key")
 gp.update(gnode, 0.016)
-local light_on = nil
-for _, e in ipairs(each(gtree)) do
-  if e[1] == "button" and e.key and tostring(e.key):match("^a%d") then
-    for _, c in ipairs(e) do if type(c) == "table" and c.text == "Light on" then light_on = e end end
-  end
-end
-check(light_on ~= nil, "the floodlight offers Light on")
-light_on.onClicked()
-check(E.isBound(G, "1", 8, "lit.on"), "ticking it binds Light on to group 1")
+local before = E.isBound(G, "lights", 8, "lit.toggle")
+CT.unbind(cdata, { uids = { 8 }, acts = { "lit.toggle" } }, { groups = G, recs = recs, E = E })
+check(before and not E.isBound(G, "lights", 8, "lit.toggle"), "unbinding through controls.lua takes the light off Lights")
 
 -- ── VESSEL SWITCHER ─────────────────────────────────────────────────────────
 local function V(id, name, x, cs)

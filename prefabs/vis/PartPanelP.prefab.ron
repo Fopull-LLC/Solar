@@ -1,0 +1,16 @@
+// VISUAL-ONLY variant of prefabs/PartPanelP.prefab.ron for the builder stand: no body, no scripts.
+// Written by tools/gen_part_meshes.py (write_vis_prefabs) — regenerate, don't edit.
+// DRAWN PANEL — any size (size.w, size.d, size.t); meshed by scripts/builder_proc.lua.
+// Written by tools/gen_part_meshes.py (write_prefab) — edit the generator, not this file.
+[
+    (
+        name: "PartPanelP",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+    ),
+]

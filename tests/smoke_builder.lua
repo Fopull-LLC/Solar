@@ -101,9 +101,18 @@ API.scene = { load = function() end }
 -- build against the balance and charges at rollout); a scene without one must
 -- degrade to "no money system", which is exactly what a nil handle means.
 -- `API.COMPANY` is set by the money tests below to wire a real one in.
+-- The part registry (scripts/parts_registry.lua) is its own pure script now,
+-- reached with findScript("parts_registry"): load it from disk.
+local REGENV = setmetatable({}, { __index = _G })
+do
+  local rc = assert(loadfile("solar/scripts/parts_registry.lua"))
+  setfenv(rc, REGENV)
+  rc()
+end
 API.COMPANY = nil
 function API.findScript(kind)
   if kind == "company" then return API.COMPANY end
+  if kind == "parts_registry" then return REGENV end
   return nil
 end
 function API.findScripts(kind)
@@ -375,7 +384,7 @@ local pod_node
 for _, n in ipairs(nodes) do
   if n.valid and n.name == "PartPod" then pod_node = n end
 end
-press("1") step(1) -- Move tool (default, but be explicit)
+press("2") step(1) -- the OFFSET gizmo (§4.3: 1 select · 2 offset · 3 rotate · 4 root)
 mouse_to_world(pod_node.x, pod_node.y, pod_node.z)
 click() -- SELECT the pod (gizmo now shows on it)
 local y_before = pod_node.y
@@ -413,7 +422,7 @@ end
 check(stages0.radialDec == 1 and stages0.decoupler == 2,
   string.format("default staging: ring first (ring=%s, axial=%s)",
     tostring(stages0.radialDec), tostring(stages0.decoupler)))
-press("3") step(2) -- Stage tool: the panel appears + becomes interactive
+env.setTool("stage") step(2) -- the STAGE tab: the panel appears + becomes interactive
 check(stage_panel.components["UiElement"].visible == true,
   "the staging panel shows in the Stage tool")
 -- Grab row #1 by its REAL solved rect and drag it down onto row #2's rect —
@@ -442,7 +451,7 @@ check(stages1.radialDec == 2 and stages1.decoupler == 1,
 --    and ring with symmetry — Ty's "a side mount fin you attach with symmetry".
 --    Symmetry is still ×4 from step 3; drop a fin on the pod's free +Z flank and
 --    the ring must place four, each blade's local +X pointing radially OUTWARD.
-press("1") step(2) -- back to the Move tool (Stage tool owns the panel)
+press("1") step(2) -- back to SELECT (the STAGE tab owns the panel)
 local n_before = env.partCount
 env.pick("fins")
 step(12)
@@ -524,18 +533,106 @@ do
   local cel = { visible = true }
   cenv.update({ getcomponent = function() return cel end }, TICK)
   local cards, roleless = 0, {}
-  -- The panel describes its catalogue and a hidden font primer side by side.
-  if drawn and type(drawn[1]) == "table" then drawn = drawn[1] end
-  for _, row in ipairs((drawn and drawn.items) or {}) do
-    if row[1] == "button" then
+  -- The parts plate (WP2): each card is a row keyed by the part id holding
+  -- the card button ("c"), whose role line is the text keyed "r".
+  local function walk(el, parent)
+    if type(el) ~= "table" then return end
+    if el[1] == "button" and el.key == "c" and parent then
       cards = cards + 1
-      local says = row[3] and row[3].text
-      if not (says and says ~= "") then roleless[#roleless + 1] = row.key end
+      local says
+      for i = 1, #el do if type(el[i]) == "table" and el[i].key == "r" then says = el[i].text end end
+      if not (says and says ~= "") then roleless[#roleless + 1] = parent.key end
     end
+    local fn
+    for i = 1, #el do
+      if type(el[i]) == "table" then walk(el[i], el) elseif type(el[i]) == "function" then fn = el[i] end
+    end
+    if el.items and fn then for i, it in ipairs(el.items) do walk(fn(it, i), el) end end
   end
+  walk(drawn, nil)
   check(cards > 10, "the catalogue draws its cards (" .. cards .. ")")
   check(#roleless == 0, "every catalogue card has a role line (missing: "
     .. table.concat(roleless, ", ") .. ")")
+end
+
+-- ── THE PUBLIC BUILDER API (docs/builder-design.md §11.1, day 0) ───────────
+-- What every panel and overlay of the overhaul reads and drives the builder
+-- through. Day 0 implements it over today's tree; these checks pin the
+-- contract so the WP1 refactor keeps it.
+do
+  local hint_n = API.find("BuildHint")
+  local uids = env.partUids()
+  check(#uids == env.partCount and #uids > 0, "API: partUids lists the stand")
+  -- partRec: a fresh copy with the pose, the basis and the parent edges as links
+  local rec_ok, links_ok = true, true
+  for _, u in ipairs(uids) do
+    local r = env.partRec(u)
+    if not (r and r.uid == u and r.id and r.def and r.B and r.B.X and r.x and r.links) then rec_ok = false end
+    for _, l in ipairs(r and r.links or {}) do
+      local child = env.partRec(l.b)
+      if not (child and child.parent == l.a and (l.k == "stack" or l.k == "surface")) then links_ok = false end
+    end
+  end
+  check(rec_ok, "API: partRec has uid, id, def, pose, basis and links")
+  check(links_ok, "API: every link is a parent edge, stack or surface")
+  check(env.partRec(99999) == nil, "API: partRec of no part is nil")
+  -- stats: the numbers, cached per craftVersion
+  local s1 = env.stats()
+  check(s1.parts == env.partCount and s1.mass > s1.dry and s1.dry > 0 and s1.cost > 0,
+    "API: stats counts parts, wet and dry mass, cost")
+  check(s1.com and s1.comDry and s1.launch and s1.version == env.craftVersion, "API: stats has CoM and the launch check")
+  check(env.stats() == s1, "API: stats is cached while craftVersion stands")
+  -- frame: the identity, with . or :
+  local F = env.frame()
+  local fx, fy, fz = F.toLocal(1, 2, 3)
+  local gx, gy, gz = F:toWorld(4, 5, 6)
+  check(F.identity and fx == 1 and fy == 2 and fz == 3 and gx == 4 and gy == 5 and gz == 6,
+    "API: frame is the identity adapter (. and :)")
+  check(select("#", F.ray(500, 500)) == 6, "API: frame.ray gives an origin and a direction")
+  -- selection
+  local u1 = uids[1]
+  env.select(u1)
+  check(env.selection()[1] == u1, "API: select sets the selection")
+  env.select({ u1 }, "toggle")
+  check(#env.selection() == 0, "API: toggle clears it")
+  -- cmd place / move / rotate / delete, each bumping craftVersion
+  local n0, v0 = env.partCount, env.craftVersion
+  local nu = env.cmd("place", { id = "tankS", x = 30, y = 0.61, z = 30 })
+  check(type(nu) == "number" and env.partCount == n0 + 1 and env.craftVersion > v0, "API: cmd place spawns a part")
+  check(env.stats() ~= s1 and env.stats().parts == n0 + 1, "API: stats follows the change")
+  check(env.cmd("place", { id = "noSuchPart" }) == false, "API: cmd place refuses an unknown part")
+  check(env.cmd("move", { uid = nu, dx = 1 }) and math.abs(env.partRec(nu).x - 31) < 1e-9, "API: cmd move")
+  check(env.cmd("move", { uid = nu, x = 30, y = 0.61, z = 30 }) and math.abs(env.partRec(nu).x - 30) < 1e-9,
+    "API: cmd move to a point")
+  check(env.cmd("rotate", { uid = nu, axis = { x = 1, y = 0, z = 0 }, angle = math.pi / 2 })
+    and math.abs(env.partRec(nu).B.Y.y) < 1e-6, "API: cmd rotate turns it on its side")
+  check(env.cmd("rotate", { uid = nu, reset = true }) and math.abs(env.partRec(nu).B.Y.y - 1) < 1e-6,
+    "API: cmd rotate reset stands it back up")
+  check(env.cmd("noSuchCommand", {}) == false, "API: an unknown command says no")
+  check(env.cmd("delete", { uid = nu }) == 1 and env.partCount == n0, "API: cmd delete")
+  -- hold: a part id goes in the hand like a catalogue pick
+  check(env.hold("tankS") and env.held() and env.held()[1] == "tankS", "API: hold a part id")
+  check(env.hold("tankM") == false, "API: hold refuses while something is in hand")
+  press("escape"); step(2)
+  check(env.held() == nil, "API: ESC empties the hand")
+  -- registerPanel: a panel that owns the mouse stops the builder's picking
+  local owns = true
+  env.registerPanel({ ownsMouse = function() return owns end })
+  env.select(u1)
+  MOUSE.x, MOUSE.y = 5, 5 -- empty canvas
+  click()
+  check(env.selection()[1] == u1, "API: a click under a panel that owns the mouse does not deselect")
+  owns = false
+  click()
+  check(#env.selection() == 0, "API: once the panel lets go, the click reaches the builder")
+  -- hint / placard / TEST
+  env.hint("api hint", 1.0)
+  check(hint_n and hint_n.text == "api hint", "API: hint writes the hint bar")
+  env.placard("blocked", "error")
+  check(hint_n and hint_n.text:find("blocked") ~= nil, "API: placard shows (in the hint bar for now)")
+  check(env.testMode() == false and env.setTestMode(true) == true and env.testMode() == true,
+    "API: TEST is a real flag now")
+  env.setTestMode(false)
 end
 
 -- ── THERE IS A WAY OUT ──────────────────────────────────────────────────────

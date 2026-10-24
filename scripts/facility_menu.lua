@@ -5,7 +5,8 @@
 --   Command Centre    → E opens the OPS BOARD, where contracts are signed;
 --                       its "Overview" button shows the company: balance,
 --                       reputation, the contract on the books, the ledger.
---   Vehicle Assembly  → E opens the builder directly.
+--   Vehicle Assembly  → E opens the builder directly, in the building, over the
+--                       live world (scripts/build_host.lua).
 --   Tracking Station  → the FLEET board: every craft you have left somewhere
 --                       (flight_ops keeps it, in the save), where it is and what
 --                       it's doing, and TAKE CONTROL of the selected one (↑ ↓).
@@ -47,8 +48,11 @@ local FAC = {
   -- than 12.9 m to it. The dish is a machine — it only names itself.
   FacCommand  = { label = "Command Centre",   kind = "command",  near = 22.0,
                   inside = 9.2, use = "Use the Ops console", direct = "Ops Board" },
-  FacHangar   = { label = "Vehicle Assembly", kind = "hangar",   near = 26.0,
-                  inside = 15.5, use = "Open the builder", direct = "builder" },
+  -- The VAB is 50 × 50 m (tools/vab_dims.py) and its origin is the floor
+  -- slab's centre: 38 m reaches every corner of the high bay (35.4 m) and a
+  -- few metres out of either door; inside the walls (24.4 m) you are IN it.
+  FacHangar   = { label = "Vehicle Assembly", kind = "hangar",   near = 38.0,
+                  inside = 24.0, use = "Open the builder", direct = "builder" },
   FacTracking = { label = "Tracking Station", kind = "tracking", near = 18.0 },
   FacDepot    = { label = "Commerce Depot",   kind = "depot",    near = 18.0,
                   inside = 7.6, use = "Use the depot counter" },
@@ -796,13 +800,22 @@ local function fade_to(scene_name)
   end, "smooth")
 end
 
+-- THE VAB. The builder opens IN the building, over the live world
+-- (scripts/build_host.lua): no scene load, the real sky through the doors.
+-- Without a build host (an old scene) it is the separate builder scene.
+local function open_builder()
+  local bh = ref("build_host")
+  if bh and bh.enter and bh.enter() then close() return end
+  fade_to("builder")
+end
+
 -- The action button routes by the open facility's kind.
 function action()
   if not open_fac then return end
   local kind = FAC[open_fac].kind
   sfx("click")
   if kind == "hangar" then
-    fade_to("builder")
+    open_builder()
   elseif kind == "command" then
     -- The Command Centre opens the OPS BOARD. Leaving for the main menu moved
     -- to the HUD's ☰ button, which is where every other "quit" already lives —
@@ -834,6 +847,14 @@ local function beyond(astro, name)
 end
 
 function update(node, dt)
+  -- The VAB builder has the keys and the screen: no prompts, no panels.
+  local gm = ref("game_manager")
+  if gm and gm.inputOwner == "builder" then
+    near_fac = nil
+    if prompt_el then prompt_el.visible = false end
+    if open_fac then close() end
+    return
+  end
   sync_scrim()
   if not panel_el then grab() end
   if not panel_el then
@@ -940,7 +961,8 @@ function update(node, dt)
         ob.openBoard()
       elseif f.kind == "hangar" then
         sfx("open")
-        fade_to("builder")
+        if prompt_el then prompt_el.visible = false end
+        open_builder()
       else
         openMenu(near_fac)
       end

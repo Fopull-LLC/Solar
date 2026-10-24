@@ -12,22 +12,6 @@
             asset_path: "models/parts/panel3.glb",
         ),
         object_materials: {
-            "Dark": (
-                color: (0.3, 0.3, 0.32),
-                texture: Some("textures/parts/metal_albedo.png"),
-                normal_map: Some("textures/parts/metal_normal.png"),
-                normal_strength: 1.0,
-                roughness_map: Some("textures/parts/metal_orm.png"),
-                roughness: 1.2,
-                metallic_map: Some("textures/parts/metal_orm.png"),
-                metallic: 0.4,
-                ao_map: Some("textures/parts/metal_orm.png"),
-                shader: Some("shaders/hullPanels.flsl"),
-                shader_params: {
-                    "tint": (0.3, 0.3, 0.32, 1.0),
-                },
-                shading: Physical,
-            ),
             "Metal": (
                 color: (1, 1, 1),
                 texture: Some("textures/parts/metal_albedo.png"),

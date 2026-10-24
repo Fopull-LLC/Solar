@@ -1,0 +1,55 @@
+// VISUAL-ONLY variant of prefabs/PartRadialTank.prefab.ron for the builder stand: no body, no scripts.
+// Written by tools/gen_part_meshes.py (write_vis_prefabs) — regenerate, don't edit.
+[
+    // RADIAL TANK — a strap-on booster fuel tank with the FT-S tank's collider,
+    // but radial_orient mounts it on a flank like a fin/solar panel so you can
+    // ring boosters around a core and feed them through a radial decoupler. It
+    // reads as a spherical tank in gold insulation on a strut cradle (the hull is
+    // at −X). Mesh and materials: tools/gen_part_meshes.py.
+    (
+        name: "PartRadialTank",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Mesh(
+            asset_path: "models/parts/radial_tank.glb",
+        ),
+        object_materials: {
+            "Foil": (
+                color: (1, 1, 1),
+                texture: Some("textures/parts/foil_albedo.png"),
+                normal_map: Some("textures/parts/foil_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/parts/foil_orm.png"),
+                roughness: 1.0,
+                metallic_map: Some("textures/parts/foil_orm.png"),
+                metallic: 0.7,
+                ao_map: Some("textures/parts/foil_orm.png"),
+                shader: Some("shaders/hullPanels.flsl"),
+                shader_params: {
+                    "tint": (1, 1, 1, 1.0),
+                },
+                shading: Physical,
+            ),
+            "Metal": (
+                color: (1, 1, 1),
+                texture: Some("textures/parts/metal_albedo.png"),
+                normal_map: Some("textures/parts/metal_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/parts/metal_orm.png"),
+                roughness: 1.0,
+                metallic_map: Some("textures/parts/metal_orm.png"),
+                metallic: 0.55,
+                ao_map: Some("textures/parts/metal_orm.png"),
+                shader: Some("shaders/hullPanels.flsl"),
+                shader_params: {
+                    "tint": (1, 1, 1, 1.0),
+                },
+                shading: Physical,
+            ),
+        },
+        scripts: [],
+    ),
+]

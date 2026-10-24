@@ -1,0 +1,119 @@
+// VISUAL-ONLY variant of prefabs/PartSolar.prefab.ron for the builder stand: no body, no scripts.
+// Written by tools/gen_part_meshes.py (write_vis_prefabs) — regenerate, don't edit.
+// SOLAR PANEL — a radial blade (+X out off the flank, like a fin): a Yoke on the hull and a cell Wing hinged to it (SolarWingPivot). Flight folds the wing flat along the hull for launch and swings it open on Deploy (U).
+// Written by tools/gen_part_meshes.py (write_prefab) — edit the generator, not this file.
+[
+    (
+        name: "PartSolar",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+    ),
+    (
+        name: "SolarYoke",
+        transform: (
+            translation: (-0.364, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Mesh(
+            asset_path: "models/parts/solar.glb",
+        ),
+        object_materials: {
+            "Metal": (
+                color: (1, 1, 1),
+                texture: Some("textures/parts/metal_albedo.png"),
+                normal_map: Some("textures/parts/metal_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/parts/metal_orm.png"),
+                roughness: 1.0,
+                metallic_map: Some("textures/parts/metal_orm.png"),
+                metallic: 0.55,
+                ao_map: Some("textures/parts/metal_orm.png"),
+                shader: Some("shaders/hullPanels.flsl"),
+                shader_params: {
+                    "tint": (1, 1, 1, 1.0),
+                },
+                shading: Physical,
+            ),
+        },
+        scripts: [],
+        parent: Some(0),
+    ),
+    (
+        name: "SolarWingPivot",
+        transform: (
+            translation: (-0.3, 0.0, 0.0),
+            // Deployed (yaw 0). Flight folds it to yaw +90° — the wing flat
+            // along the hull, cells out — and swings it open (vessel_controller).
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+        parent: Some(0),
+    ),
+    (
+        name: "SolarWing",
+        transform: (
+            translation: (0.375, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Mesh(
+            asset_path: "models/parts/solar_wing.glb",
+        ),
+        object_materials: {
+            "Foil": (
+                color: (1, 1, 1),
+                texture: Some("textures/parts/foil_albedo.png"),
+                normal_map: Some("textures/parts/foil_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/parts/foil_orm.png"),
+                roughness: 1.0,
+                metallic_map: Some("textures/parts/foil_orm.png"),
+                metallic: 0.7,
+                ao_map: Some("textures/parts/foil_orm.png"),
+                shader: Some("shaders/hullPanels.flsl"),
+                shader_params: {
+                    "tint": (1, 1, 1, 1.0),
+                },
+                shading: Physical,
+            ),
+            "Metal": (
+                color: (1, 1, 1),
+                texture: Some("textures/parts/metal_albedo.png"),
+                normal_map: Some("textures/parts/metal_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/parts/metal_orm.png"),
+                roughness: 1.0,
+                metallic_map: Some("textures/parts/metal_orm.png"),
+                metallic: 0.55,
+                ao_map: Some("textures/parts/metal_orm.png"),
+                shader: Some("shaders/hullPanels.flsl"),
+                shader_params: {
+                    "tint": (1, 1, 1, 1.0),
+                },
+                shading: Physical,
+            ),
+            "Solar": (
+                color: (1, 1, 1),
+                texture: Some("textures/parts/solar_albedo.png"),
+                normal_map: Some("textures/parts/solar_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/parts/solar_orm.png"),
+                roughness: 1.0,
+                metallic_map: Some("textures/parts/solar_orm.png"),
+                metallic: 1.0,
+                ao_map: Some("textures/parts/solar_orm.png"),
+                shading: Physical,
+            ),
+        },
+        scripts: [],
+        parent: Some(2),
+    ),
+]

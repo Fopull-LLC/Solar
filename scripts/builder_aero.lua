@@ -1,0 +1,10 @@
+-- BUILDER_AERO — day-0 STUB. Owner: WP4 (aircraft, builder side), docs/builder-design.md §11.2.
+--
+-- Will hold: CoM/CoT/CoL overlays, margin and stall readouts, deflection preview, gear and jet checks, wing placement rules (§7.2).
+--
+-- A PANEL script on the "BuilderAero" host node of scenes/builder.ron (a hidden
+-- child of Builder UI). It talks to the builder only through the public API
+-- at the top of scripts/builder.lua (findScript("builder")): queries,
+-- cmd(name, args), hold(spec), and registerPanel(script) with an
+-- ownsMouse() → bool so the builder stops picking under it.
+-- It does nothing yet; the builder works without it.

@@ -1562,8 +1562,12 @@ end
 -- The map runs in lateUpdate — the CAMERA pass. Driven from fixedUpdate it
 -- sampled tick poses while the world rendered interpolated ones, which showed
 -- as constant back-and-forth jitter on every line.
+local gm_ref = nil
 function lateUpdate(node, dt)
   if not astronaut or not astronaut.valid then astronaut = find("Astronaut") end
+  -- (not while the VAB builder has the keys: M is its mirror there)
+  if not gm_ref or not gm_ref.valid then gm_ref = findScript("game_manager") end
+  if gm_ref and gm_ref.inputOwner == "builder" then return end
   if input.pressed("m") then toggle() end
   if not map_view then return end
   -- N enters and leaves PLAN mode, but only for a craft that has a trajectory

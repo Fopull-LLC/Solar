@@ -2762,6 +2762,13 @@
                     enabled: true,
                     params: [],
                 ),
+                // builder_proc: meshes and colliders for drawn frame parts
+                // (vessel_spawner dresses them before assembly.rebuild).
+                (
+                    kind: "builder_proc",
+                    enabled: true,
+                    params: [],
+                ),
                 (
                     kind: "comms",
                     enabled: true,
@@ -2843,6 +2850,43 @@
                 ),
             ],
             id: Some(479),
+        ),
+        // WP6 · the craft builder's host in the real VAB (scripts/build_host.lua):
+        // enter / leave / rollout, the input owner, the BuildFrame. The node is the
+        // full-screen black a rollout fades through (over the builder's own layer).
+        (
+            name: "Build Host",
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Empty,
+            scripts: [
+                (
+                    kind: "build_host",
+                    enabled: true,
+                    params: [],
+                ),
+            ],
+            id: Some(480),
+            parent_id: Some(16),
+            parent: Some(15),
+            ui: Some((
+                place: Pin(
+                    anchor: Center,
+                    offset: (0.0, 0.0),
+                ),
+                size: (Fixed(4000.0), Fixed(2400.0)),
+                shape: Some((
+                    fill: (0.0, 0.0, 0.0, 1.0),
+                    radius: 0.0,
+                    border: 0.0,
+                    border_color: (0.0, 0.0, 0.0, 0.0),
+                )),
+                visible: false,
+                opacity: 1.0,
+            )),
         ),
     ],
 )

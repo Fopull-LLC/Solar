@@ -117,9 +117,18 @@ API.scene = { load = function() end }
 -- build against the balance and charges at rollout); a scene without one must
 -- degrade to "no money system", which is exactly what a nil handle means.
 -- `API.COMPANY` is set by the money tests below to wire a real one in.
+-- The part registry (scripts/parts_registry.lua) is its own pure script now,
+-- reached with findScript("parts_registry"): load it from disk.
+local REGENV = setmetatable({}, { __index = _G })
+do
+  local rc = assert(loadfile("solar/scripts/parts_registry.lua"))
+  setfenv(rc, REGENV)
+  rc()
+end
 API.COMPANY = nil
 function API.findScript(kind)
   if kind == "company" then return API.COMPANY end
+  if kind == "parts_registry" then return REGENV end
   return nil
 end
 function API.findScripts(kind)

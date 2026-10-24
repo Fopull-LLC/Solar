@@ -25,6 +25,14 @@ setfenv(ec, Eenv)
 ec()
 local E = Eenv
 E.valid = true
+-- The part registry (scripts/parts_registry.lua) is its own pure script now,
+-- reached with findScript("parts_registry"): load it from disk.
+local REGENV = setmetatable({}, { __index = _G })
+do
+  local rc = assert(loadfile("solar/scripts/parts_registry.lua"))
+  setfenv(rc, REGENV)
+  rc()
+end
 
 local T = 0
 local nodes = {}
@@ -45,7 +53,11 @@ local API = {
   print = function() end, log = function() end,
   spawn = function(prefab, pos, cb) local n = make_node(prefab, pos.x, pos.y, pos.z) if cb then cb(n) end end,
   save = { get = function(k) return store[k] end, set = function(k, v) store[k] = v end, flush = function() end },
-  findScript = function(k) if k == "electronics" then return E end return nil end,
+  findScript = function(k)
+    if k == "electronics" then return E end
+    if k == "parts_registry" then return REGENV end
+    return nil
+  end,
   findScripts = function() return {} end,
   input = { key = function() return false end, pressed = function() return false end, button = function() return false end,
             mouse = function() return 0, 0 end },

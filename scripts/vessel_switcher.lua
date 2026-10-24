@@ -136,6 +136,8 @@ local function busy()
 end
 
 function update(node, dt)
+  local gm = ref("game_manager")
+  if gm and gm.inputOwner == "builder" then return end -- the VAB builder has the keys
   if input.pressed("]") and not busy() then step(1) end
   if input.pressed("[") and not busy() then step(-1) end
 end

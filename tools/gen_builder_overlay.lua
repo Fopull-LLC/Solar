@@ -1,0 +1,156 @@
+-- GEN BUILDER OVERLAY — writes scenes/builder_overlay.ron from scenes/builder.ron.
+--
+--   luajit tools/gen_builder_overlay.lua          (from the Solar folder)
+--   luajit solar/tools/gen_builder_overlay.lua    (from the Floptle folder)
+--
+-- The craft builder has two hosts (docs/builder-design.md §9.2, WP6):
+--   * builder.ron, the standalone scene (the fallback and the test host): the
+--     builder plus everything a scene needs on its own — a sky, post
+--     processing, the company/research/inventory managers, the debug keys and
+--     the Build Host that stands the VAB up round the stand;
+--   * builder_overlay.ron, loaded ADDITIVELY over the live system scene by
+--     scripts/build_host.lua: the builder's own nodes only. The system scene
+--     already has a sky and every manager, and a second copy of one would
+--     start, read the save and answer findScript in its place.
+-- One file is edited (builder.ron); this derives the other. The overlay's
+-- camera starts inactive (build_host hands it the view once it has landed).
+-- tests/smoke_build_host.lua fails when the overlay is out of date.
+
+-- The standalone-only nodes (by name); their children go with them.
+STANDALONE = {
+  ["Post Processing"] = true, ["Skybox"] = true,
+  ["Company"] = true, ["Materials"] = true, ["Inventory"] = true, ["Research"] = true,
+  ["Settings"] = true, ["Electronics"] = true, ["Debug"] = true,
+  ["Build Host"] = true,
+}
+
+-- Split a scene file into its header, its node blocks (each with the comment
+-- lines just above it) and its footer. Node blocks are the entries of the
+-- top-level `nodes: [` list, at 8 spaces.
+function parse(src)
+  local lines = {}
+  for l in (src .. "\n"):gmatch("(.-)\r?\n") do lines[#lines + 1] = l end
+  while #lines > 0 and lines[#lines] == "" do lines[#lines] = nil end
+  local i = 1
+  local header, nodes, footer = {}, {}, {}
+  while i <= #lines and lines[i] ~= "    nodes: [" do header[#header + 1] = lines[i]; i = i + 1 end
+  assert(i <= #lines, "no `    nodes: [` line")
+  header[#header + 1] = lines[i]; i = i + 1
+  local pre = {}
+  while i <= #lines do
+    local l = lines[i]
+    if l == "    ]," or l == "    ]" then break end
+    if l == "        (" then
+      local blk = {}
+      for _, p in ipairs(pre) do blk[#blk + 1] = p end
+      pre = {}
+      local first = #blk + 1
+      repeat
+        blk[#blk + 1] = lines[i]; i = i + 1
+      until lines[i - 1] == "        ),"
+      local n = { lines = blk, first = first }
+      for k = first, #blk do
+        local s = blk[k]
+        n.name = n.name or s:match('^            name: "([^"]*)",$')
+        local p = s:match("^            parent: Some%((%d+)%),$")
+        if p then n.parent = tonumber(p) end
+      end
+      nodes[#nodes + 1] = n
+    else
+      pre[#pre + 1] = l; i = i + 1
+    end
+  end
+  for _, p in ipairs(pre) do footer[#footer + 1] = p end
+  while i <= #lines do footer[#footer + 1] = lines[i]; i = i + 1 end
+  return { header = header, nodes = nodes, footer = footer }
+end
+
+-- Drop the nodes `drop(node)` says to, with every descendant, and re-point
+-- the positional `parent` links at the new indices (`parent_id` names a node
+-- by its id and needs nothing).
+function prune(doc, drop)
+  local gone = {}
+  for i, n in ipairs(doc.nodes) do
+    local idx = i - 1
+    if drop(n) then gone[idx] = true end
+  end
+  -- descendants (parents always come before their children here, but walk to
+  -- a fixed point anyway)
+  local changed = true
+  while changed do
+    changed = false
+    for i, n in ipairs(doc.nodes) do
+      local idx = i - 1
+      if not gone[idx] and n.parent and gone[n.parent] then gone[idx] = true; changed = true end
+    end
+  end
+  local map, out = {}, {}
+  for i, n in ipairs(doc.nodes) do
+    if not gone[i - 1] then map[i - 1] = #out; out[#out + 1] = n end
+  end
+  for _, n in ipairs(out) do
+    if n.parent then
+      local np = map[n.parent]
+      assert(np, "node '" .. tostring(n.name) .. "' keeps a parent that was dropped")
+      for k, s in ipairs(n.lines) do
+        if s:match("^            parent: Some%(%d+%),$") then
+          n.lines[k] = "            parent: Some(" .. np .. "),"
+        end
+      end
+      n.parent = np
+    end
+  end
+  return { header = doc.header, nodes = out, footer = doc.footer }
+end
+
+function render(doc)
+  local o = {}
+  for _, l in ipairs(doc.header) do o[#o + 1] = l end
+  for _, n in ipairs(doc.nodes) do for _, l in ipairs(n.lines) do o[#o + 1] = l end end
+  for _, l in ipairs(doc.footer) do o[#o + 1] = l end
+  return table.concat(o, "\n") .. "\n"
+end
+
+-- builder.ron → builder_overlay.ron
+function overlay(src)
+  local doc = prune(parse(src), function(n) return STANDALONE[n.name] == true end)
+  for _, n in ipairs(doc.nodes) do
+    if n.name == "Builder Camera" then
+      for k, s in ipairs(n.lines) do
+        if s:match("^                active: true,$") then n.lines[k] = "                active: false," end
+      end
+    end
+  end
+  local h = {
+    "// GENERATED by tools/gen_builder_overlay.lua from scenes/builder.ron — edit that",
+    "// file, then run the tool. The builder's own nodes only: build_host loads this",
+    "// additively over the live system scene (docs/builder-design.md §9.2).",
+  }
+  for _, l in ipairs(doc.header) do
+    if l == '    name: "builder",' then l = '    name: "builder_overlay",' end
+    h[#h + 1] = l
+  end
+  doc.header = h
+  return render(doc)
+end
+
+local function read(p)
+  local f = io.open(p, "rb")
+  if not f then return nil end
+  local s = f:read("*a")
+  f:close()
+  return s
+end
+
+-- Run as a tool (not when a test loads it with GEN_AS_LIB set).
+if not GEN_AS_LIB then
+  local base = read("scenes/builder.ron") and "" or "solar/"
+  local src = assert(read(base .. "scenes/builder.ron"), "run from the Solar or the Floptle folder")
+  local out = overlay(src)
+  local f = assert(io.open(base .. "scenes/builder_overlay.ron", "wb"))
+  f:write(out)
+  f:close()
+  local n = 0
+  for _ in out:gmatch('\n            name: "') do n = n + 1 end
+  print(string.format("wrote %sscenes/builder_overlay.ron (%d nodes)", base, n))
+end
