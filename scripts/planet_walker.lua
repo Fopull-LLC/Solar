@@ -396,6 +396,9 @@ local gait_amt = 0.0       -- 0 = standing (Base shows), 1 = a gait owns the bod
 local gait_sent = nil      -- the last `gait` written, so an unchanged one isn't re-sent
 local layer_w = {}         -- last weights written, so unchanged ones aren't re-sent
 local land_dip = 0.0
+-- What `update` measured for `lateUpdate`'s pose this frame (one table, kept;
+-- `on` says whether this frame filled it).
+local pose_req = { on = false, spd = 0.0, ground = false, stand = 0.0, stride = 0.0 }
 -- Swimming (see SWIMMING, below): whether the swim layers own the body, and
 -- how far they have faded in. `swimming` is published (the tool belt puts the
 -- laser away: both hands are stroking).
@@ -503,13 +506,22 @@ end
 -- (anim:addBoneRot / reach / lookAt). They last one frame, run after the clips
 -- in the order they are called, and hand the bone back the frame we stop.
 --
--- WHEN matters on a planet that moves. The animation pass runs straight after
--- `update`, before the physics ticks and the rails move the planets; a write
--- from `lateUpdate` would wait for the NEXT frame's pass. So all of it is
--- issued from `update`, and every world point in it (a ray hit, a look target,
--- a knee's pole) comes from the same world the pass converts it out of —
--- nothing moves in between. The pose is kept relative to the model, and the
--- planet then carries body, ground and pose along together.
+-- WHEN: ALL OF IT IS ISSUED FROM `lateUpdate`. The frame runs update →
+-- animation → physics and the rails → lateUpdate → draw, and the engine
+-- re-poses a rig AFTER lateUpdate whenever any script queued a pose write
+-- there — every write of the frame, `update`'s included, solved against the
+-- transforms as they are THEN (floptle-editor anim.rs `apply_late_commands`).
+-- The tool belt puts the hands on the tool from lateUpdate on every frame a
+-- tool is out, so a foot target worked out in `update` was a point on the
+-- world BEFORE the ticks carried the planet (and the crew on it) 1.5–4 m
+-- along its orbit: each knee reached for a spot metres behind the body,
+-- straightening and swinging with the orbit's direction against the body's
+-- heading. That is the "leg IK freaking out, flipping directions and
+-- flickering up and down" of the 2026-10-24 playtest (measured: ankles
+-- jumping 1.7 m in the model's own frame on the frames a tick ran). Issued
+-- here, every world point (a ray hit, a pole, a look target) comes from the
+-- same world the re-pose converts it out of, and nothing moves before the
+-- frame is drawn. The clips themselves still advance in `update`.
 --
 -- The rig (models/astronaut/astronaut_male.glb) is Blender's, hung upside
 -- down: `MaleArm` is the armature root, and no clip keys it, so it is ours;
@@ -548,8 +560,15 @@ local function look(node, dt, up)
   if head and cam and cam.fwd_x then
     local f = vec3(cam.fwd_x, cam.fwd_y, cam.fwd_z)
     local tb = ref("tool_belt")
+    -- (The aim point where it is now: `look` runs in lateUpdate, after the
+    -- ticks moved the planet on from where the belt measured it.)
+    local ax, ay, az
     if tb and tb.inUse == true and tb.aimX then
-      dir = (vec3(tb.aimX, tb.aimY, tb.aimZ) - head):normalized()
+      if tb.aimNow then ax, ay, az = tb.aimNow() end
+      if not ax then ax, ay, az = tb.aimX, tb.aimY, tb.aimZ end
+    end
+    if ax then
+      dir = (vec3(ax, ay, az) - head):normalized()
     else
       local fu = f:dot(up)
       local flat = (f - up * fu):normalized()
@@ -614,10 +633,10 @@ end
 -- or a rock one foot hangs in the air and the other is buried. Each foot looks
 -- down the body's up for the ground under it; the hips drop to the lower one
 -- and both legs reach for their own, knees bending forward, soles turned to
--- the slope. Only while standing — a stride owns its own feet — and faded,
--- never snapped.
+-- the slope. Standing, from a fixed stance; striding, from the clip's own
+-- foot lifted onto the ground under it (`plant`, below). Faded, never snapped.
 --
--- Where the feet ARE is not read off the foot bones: `boneWorld` answers a pose
+-- Where the STANDING feet are is not read off the foot bones: `boneWorld` answers a pose
 -- this already bent (see below), and reading it back walks the feet
 -- down a slope a little further every frame. The idle stance is fixed in the
 -- rig's space (tools/gen_astronaut_anims.py), so the feet are placed from
@@ -642,9 +661,17 @@ local SIDES = { "Left", "Right" }          -- a fixed order; pairs() has none
 -- foot's forward and out to its side (heel, toe, outside edge).
 local PROBE = { { -0.08, 0.0 }, { 0.13, 0.0 }, { 0.02, 0.07 } }
 local FOOT_EASE = 14.0                     -- 1/s: how fast a held foot follows the ground
+-- A held foot ignores ground that moved less than this: a surface-nets crease
+-- re-sampled a millimetre off, or a normal a degree off, is not a step.
+local FOOT_DEAD, NORMAL_DEAD = 0.004, math.rad(2.0)
+local LEG = 0.909                          -- thigh 0.412 + shin 0.497: the leg's full reach (rig)
 local foot_s = {}                          -- side → { p, n } in the ground's frame
+local stride_s = {}                        -- side → { off, n } the ground under a striding foot
+local stride_w = 0.0                       -- how much the strides' feet follow the ground
 local foot_frame, foot_frame_name = nil, nil
 local foot_here = nil                      -- the body, in that frame, last frame
+-- Published for probes: the last frame's foot work.
+feet = { plant = 0, stride = 0, drop = 0, left = 0, right = 0 }
 
 -- The ground under one foot: the plane through three rays, as a point under
 -- the foot's centre and a normal. One ray missing (a ledge) falls back to the
@@ -686,11 +713,56 @@ local function ground_frame(node)
   return nil
 end
 
-local function plant(node, dt, up, want)
+-- The knee's pole. The knee bends toward the BODY's forward, made square to
+-- the leg — so the direction never comes from anything that can change sign:
+-- not the target's offset, not the view, not last frame's pose. A leg hanging
+-- straight down bends its knee forward; one reaching ahead bends it forward
+-- and up; one kicked up behind (a sprint's recovery) bends it forward and
+-- DOWN, which is where a knee goes. (A pole a fixed step in front of the
+-- ankle was nearly ON the line of a leg kicked up behind, and the knee swung
+-- out sideways: 0.3 m, measured, on the run.) A touch out over the toes, and
+-- half a leg out from the leg's middle, so the solve is never near the flip.
+local function knee_pole(hip, ankle, up, fwd, out_dir)
+  local d = ankle - hip
+  local L = d:length()
+  if L < 1e-4 then return ankle + fwd * 0.5 end
+  d = d * (1 / L)
+  local k = fwd - d * fwd:dot(d)
+  if k:length() < 0.25 then
+    -- The leg lies along the body's forward (a kick straight out ahead): the
+    -- knee goes up.
+    k = k + (up - d * up:dot(d)) * 0.5
+  end
+  k = (k:normalized() + out_dir * 0.12):normalized()
+  return (hip + ankle) * 0.5 + k * 0.5
+end
+
+-- FEET. Two jobs, faded into each other by how much a stride owns the legs:
+--   standing  each foot stands on the plane under its fixed stance spot,
+--             held in the planet's frame (see above) and eased, with a dead
+--             band, the hips dropped so the LOWER foot reaches;
+--   striding  the clip's foot is lifted or lowered by the ground under it,
+--             measured from the flat plane of the soles the clip was authored
+--             on, and the hips drop for the downhill one — so a walk up, down
+--             or across a slope puts each foot on the slope instead of in it
+--             or over it, and the stride's own timing (and its no-skate
+--             speed match) is untouched.
+-- Each foot's IK weight falls away when its target is beyond the leg (a
+-- ledge, a hole) rather than straightening toward it, and to nothing in the
+-- air or the water (`stand_want` and `stride_want` are 0 there).
+local function plant(node, dt, up, stand_want, stride_want)
   local fresh = plant_w < 0.02
-  plant_w = plant_w + (want - plant_w) * (1 - math.exp(-(want < plant_w and 12 or 6) * dt))
-  if plant_w < 0.01 then plant_drop = 0.0 foot_s = {} return end
+  plant_w = plant_w + (stand_want - plant_w) * (1 - math.exp(-(stand_want < plant_w and 12 or 6) * dt))
+  stride_w = stride_w + (stride_want - stride_w) * (1 - math.exp(-(stride_want < stride_w and 14 or 6) * dt))
+  if plant_w < 0.01 then foot_s = {} end
+  if stride_w < 0.01 then stride_s = {} end
+  if plant_w < 0.01 and stride_w < 0.01 then
+    plant_drop = plant_drop * math.exp(-10 * dt)
+    feet.plant, feet.stride, feet.drop = 0, 0, plant_drop
+    return
+  end
   local fwd = model_forward(node)
+  fwd = (fwd - up * fwd:dot(up)):normalized()
   local left = up:cross(fwd)
   -- Where the clips alone put it. `boneWorld` reads the animator's pose plus
   -- the writes this node queued so far this frame, never last frame's
@@ -706,51 +778,121 @@ local function plant(node, dt, up, want)
   local here = frame and frame:toLocal(node.pos) or node.pos
   if foot_here and (here - foot_here):length() > 0.03 then fresh = true end
   foot_here = here
+  local sw = stride_w / math.max(1e-4, stride_w + plant_w)   -- the stride's share of the target
   local hits, low = {}, 0.0
   for _, side in ipairs(SIDES) do
+    local out_dir = left * (side == "Left" and 1 or -1)
     local st = STANCE[side]
-    local p = ma + left * st.x + fwd * st.z
-    local over = base + (p - base) - up * (p - base):dot(up)
-    local gp, gn = foot_ground(node, over, up, fwd, left * (st.x >= 0 and 1 or -1))
-    if gp then
-      gp = over + up * math.clamp((gp - over):dot(up), -HIP_DROP_MAX, HIP_DROP_MAX)
-      -- Held in the ground's frame and eased; a fresh plant (or a foot that
-      -- has moved off where it was) takes the new ground as it is.
-      local lp, ln = gp, gn
-      if frame then
-        lp = frame:toLocal(gp)
-        ln = frame:toLocal(gp + gn) - lp
-      end
-      local fs = foot_s[side]
-      if fresh or not fs or (lp - fs.p):length() > 0.25 then
-        fs = { p = lp, n = ln }
-        foot_s[side] = fs
+    local stand_pos, stand_n, clip_ankle, stride_off, stride_n
+    if plant_w >= 0.01 then
+      local p = ma + left * st.x + fwd * st.z
+      local over = base + (p - base) - up * (p - base):dot(up)
+      local gp, gn = foot_ground(node, over, up, fwd, out_dir)
+      if gp then
+        gp = over + up * math.clamp((gp - over):dot(up), -HIP_DROP_MAX, HIP_DROP_MAX)
+        -- Held in the ground's frame and eased; a fresh plant (or a foot that
+        -- has moved off where it was) takes the new ground as it is, and a
+        -- sample within the dead band changes nothing at all.
+        local lp, ln = gp, gn
+        if frame then
+          lp = frame:toLocal(gp)
+          ln = frame:toLocal(gp + gn) - lp
+        end
+        local fs = foot_s[side]
+        local dp = fs and (lp - fs.p):length() or 1e9
+        if fresh or not fs or dp > 0.25 then
+          fs = { p = lp, n = ln }
+          foot_s[side] = fs
+        else
+          if dp > FOOT_DEAD then fs.p = fs.p + (lp - fs.p) * k end
+          if fs.n:dot(ln) < math.cos(NORMAL_DEAD) then fs.n = (fs.n + (ln - fs.n) * k):normalized() end
+        end
+        stand_pos, stand_n = fs.p, fs.n
+        if frame then
+          stand_pos = frame:toWorld(fs.p)
+          stand_n = (frame:toWorld(fs.p + fs.n) - stand_pos):normalized()
+        end
+        stand_pos = stand_pos + stand_n * ANKLE
+        low = math.min(low, (stand_pos - stand_n * ANKLE - over):dot(up) * (1 - sw))
       else
-        fs.p = fs.p + (lp - fs.p) * k
-        fs.n = (fs.n + (ln - fs.n) * k):normalized()
+        foot_s[side] = nil
       end
-      local pos, n = fs.p, fs.n
-      if frame then
-        pos = frame:toWorld(fs.p)
-        n = (frame:toWorld(fs.p + fs.n) - pos):normalized()
-      end
-      hits[side] = { pos = pos, n = n }
-      low = math.min(low, (pos - over):dot(up))
-    else
-      foot_s[side] = nil
     end
+    if stride_w >= 0.01 then
+      -- The clip's ankle (with this frame's lean), its height over the flat
+      -- soles, and the ground under it measured from that same plane.
+      clip_ankle = anim:boneWorld("Foot." .. side)
+      if clip_ankle then
+        local hc = (clip_ankle - base):dot(up)
+        local over = clip_ankle - up * hc
+        local h = raycast(over + up * REACH_UP, -up, REACH_UP + REACH_DOWN, node)
+        local ss = stride_s[side]
+        if not ss then ss = { off = 0.0, n = up }; stride_s[side] = ss end
+        if h then
+          local off = math.clamp(REACH_UP - h.distance, -HIP_DROP_MAX, HIP_DROP_MAX)
+          if math.abs(off - ss.off) > FOOT_DEAD then ss.off = ss.off + (off - ss.off) * (1 - math.exp(-20 * dt)) end
+          local n = vec3(h.nx or 0, h.ny or 0, h.nz or 0)
+          if n:dot(up) < 0.6 then n = up end
+          ss.n = (ss.n + (n - ss.n) * (1 - math.exp(-12 * dt))):normalized()
+        else
+          ss.off = ss.off * math.exp(-10 * dt)
+        end
+        stride_off, stride_n = ss.off, ss.n
+        -- A foot that is down (near the soles) is the one the hips must
+        -- reach for; a foot swinging through the air is lifted with the
+        -- ground under it but does not pull the hips down.
+        local down = 1 - smoothstep(ANKLE + 0.04, ANKLE + 0.14, hc)
+        low = math.min(low, stride_off * down * sw)
+      end
+    end
+    hits[side] = { stand = stand_pos, sn = stand_n, clip = clip_ankle, off = stride_off, on = stride_n }
   end
-  plant_drop = plant_drop + (-low - plant_drop) * (1 - math.exp(-10 * dt))
-  anim:addBonePos("MaleArm", vec3(0, -plant_drop * plant_w, 0))
-  ma_dy = ma_dy - plant_drop * plant_w
+  plant_drop = plant_drop + (math.min(HIP_DROP_MAX, -low) - plant_drop) * (1 - math.exp(-10 * dt))
+  local wsum = math.min(1.0, plant_w + stride_w)
+  anim:addBonePos("MaleArm", vec3(0, -plant_drop * wsum, 0))
+  ma_dy = ma_dy - plant_drop * wsum
+  feet.plant, feet.stride, feet.drop = plant_w, stride_w, plant_drop * wsum
+  -- The hip joints, after that drop: what each leg can reach from.
+  local hips = ma - up * (plant_drop * wsum) - up * (MA_UP - 0.974)
   for _, side in ipairs(SIDES) do
     local h = hits[side]
-    if h then
-      local ankle = h.pos + h.n * ANKLE
-      anim:reach("Foot." .. side, ankle, { pole = ankle + fwd * 0.5 + up * 0.5, weight = plant_w })
-      local along = (fwd - h.n * fwd:dot(h.n)):normalized()
-      anim:lookAt({ "Foot." .. side }, ankle + along * TOE.z + h.n * TOE.y,
-        { axis = TOE, limit = 35, weight = plant_w })
+    local out_dir = left * (side == "Left" and 1 or -1)
+    local target, n, w
+    if h.stand and h.clip and h.off then
+      local ct = h.clip + up * h.off
+      target = h.stand + (ct - h.stand) * sw
+      n = (h.sn + (h.on - h.sn) * sw):normalized()
+      w = wsum
+    elseif h.stand then
+      target, n, w = h.stand, h.sn, plant_w
+    elseif h.clip and h.off then
+      target, n, w = h.clip + up * h.off, h.on, stride_w
+    end
+    if target then
+      -- Beyond the leg (from its hip joint, which stands out to its side):
+      -- let the clip have the foot rather than straighten toward a hole.
+      local hip = hips + out_dir * 0.1 + fwd * -0.045
+      local reach = (target - hip):length()
+      -- (Standing straight, the ankle is 0.90 m from the hip: the rest leg is
+      -- all but straight, so the fade starts past the leg, with slack for the
+      -- hip joint being an estimate.)
+      w = w * (1 - smoothstep(LEG * 1.05, LEG * 1.25, reach))
+      feet[side == "Left" and "left" or "right"] = w
+      if w > 0.005 then
+        anim:reach("Foot." .. side, target, { pole = knee_pole(hip, target, up, fwd, out_dir), weight = w })
+        -- The sole on the ground: standing, always; striding, while that
+        -- foot is down (the clip rolls it heel-to-toe in the air).
+        local sole_w = w
+        if h.clip and sw > 0.5 then
+          local hc = (h.clip - base):dot(up)
+          sole_w = w * (1 - smoothstep(ANKLE + 0.02, ANKLE + 0.1, hc)) * 0.8
+        end
+        if sole_w > 0.01 then
+          local along = (fwd - n * fwd:dot(n)):normalized()
+          anim:lookAt({ "Foot." .. side }, target + along * TOE.z + n * TOE.y,
+            { axis = TOE, limit = 35, weight = sole_w })
+        end
+      end
     end
   end
 end
@@ -934,12 +1076,12 @@ end
 
 -- The whole pose, in the order the engine applies it: bone writes (the lean,
 -- the hips' drop), then the legs' reach, then the head's look.
-local function pose(node, dt, up, spd, on_ground, standing)
+local function pose(node, dt, up, spd, on_ground, standing, striding)
   ma_dy = 0.0
   local head = look(node, dt, up)
   lean(dt, spd, on_ground)
   swim_pose(dt)
-  plant(node, dt, up, standing)
+  plant(node, dt, up, standing, striding)
   -- Swimming, the head keeps its stroke (a crawl's breath, a dive's tuck) and
   -- only leans a little toward where you look.
   if head and look_dir and look_w > 0.01 then
@@ -981,12 +1123,23 @@ end
 -- the frame is drawn, the node is stood along the true vertical; on every
 -- other frame that is the turn the engine made anyway. Rotation only — the
 -- capsule's collision shape follows the body's up, not the node's.
+--
+-- Then the pose (see WHEN, above): the lean, the look and the feet, against
+-- the body and the ground where they are now — after the ticks, in the same
+-- frame the engine re-poses the rig and draws it.
 function lateUpdate(node, dt)
-  if not onFoot or not (node.worldUp and node.setUp) then return end
+  local req = pose_req.on and pose_req or nil
+  pose_req.on = false
+  if not onFoot then return end
   local ux, uy, uz = local_up(node)
   local u = vec3(ux, uy, uz)
-  local cur = node:worldUp()
-  if cur and cur:dot(u) < 0.999999 then node:setUp(u) end
+  if node.worldUp and node.setUp then
+    local cur = node:worldUp()
+    if cur and cur:dot(u) < 0.999999 then node:setUp(u) end
+  end
+  if req and anim and model and model.valid then
+    pose(node, dt, u, req.spd, req.ground, req.stand, req.stride)
+  end
 end
 
 function update(node, dt)
@@ -1259,9 +1412,13 @@ function update(node, dt)
   if input.key("ctrl") or (steer_f and steer_climb < 0) then climb = -1 end
   swim_drive(node, dt, vec3(ux, uy, uz), swimming, depth, feet_down, climb)
   animate(node, dt, spd, not airborne, jumped, swimming, landed)
+  -- The pose itself is lateUpdate's (see WHEN, above): what it needs from
+  -- this frame's movement is kept for it.
   if anim then
-    pose(node, dt, vec3(ux, uy, uz), spd, not airborne and not swimming,
-      (not (airborne or jumped or swimming or flying)) and (1 - gait_amt) or 0.0)
+    local down = not (airborne or jumped or swimming or flying)
+    local r = pose_req
+    r.on, r.spd, r.ground = true, spd, not airborne and not swimming
+    r.stand, r.stride = down and (1 - gait_amt) or 0.0, down and gait_amt or 0.0
   end
 
   if model then

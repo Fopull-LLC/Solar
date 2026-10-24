@@ -10,6 +10,7 @@
     layers: [
         "entity",
         "level",
+        "viewmodel",
     ],
     ui_font: "fonts/SolarUI.ttf",
     terrain_generator: Some(3),

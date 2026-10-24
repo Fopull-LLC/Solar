@@ -10,16 +10,27 @@ Writes
     models/tools/terrain_laser.glb   the Terrain Laser: an enamel receiver, a
                                      finned barrel shroud, a lens head and the
                                      yellow fill canister it places rock from
+    models/tools/fp_gravity_gun.glb  the FIRST-PERSON versions: the same tool
+    models/tools/fp_terrain_laser.glb with the crew's gloved hands on its grips
+                                     and the suit's sleeves running back out of
+                                     the bottom of the view. Drawn only by the
+                                     view-model camera (scripts/tool_belt.lua).
     models/tools/socket.glb          a few millimetres of nothing the hand
                                      node wears, so only the tool shows
     models/tools/loose_rock.glb      a chunk knocked loose by the laser
     prefabs/ToolGravGun, ToolLaser   the held tools (object_materials, no body)
+    prefabs/ToolGravGunFP, ToolLaserFP   their first-person view models
     prefabs/LooseRock                a one-part assembly the gravity gun lifts
 
 Every tool is modelled barrel down -Z with the grip under the receiver. The
 engine recentres a model on its bounding box, so each model is shifted to be
-centred and the GRIP and MUZZLE are printed relative to that centre — those
-are the numbers `scripts/tool_belt.lua` keeps in `RIG`.
+centred and the GRIP, MUZZLE and FORE (the other hand's hold) are printed
+relative to that centre — those are the numbers `scripts/tool_belt.lua` keeps
+in `RIG` (third person) and `RIG_FP` (first person: a different model, so a
+different centre).
+
+The tools are modelled at TRUE SIZE, in metres, and held at scale 1 in both
+views: a gravity gun is 0.64 m long, the laser 0.83 m.
 
 Built from tools/gen_part_meshes.py's primitives and textures, so a tool in
 the hand wears the same paint and metal as the craft it stands beside.
@@ -51,6 +62,9 @@ TOOL_MATS = {
     "Chrome":    lambda: mat_ron("metal", color=(1.0, 1.0, 1.0), rough=0.4, metal=0.85, hull=False),
     "Dark":      lambda: mat_ron("metal", color=(0.16, 0.16, 0.17), rough=1.3, metal=0.3, hull=False),
     "Rubber":    lambda: mat_ron("rubber", metal=0.0, hull=False),
+    # The suit, for the first-person sleeves and gloves.
+    "Glove":     lambda: mat_ron("rubber", color=(0.62, 0.62, 0.64), metal=0.0, hull=False),
+    "Suit":      lambda: mat_ron("paint", color=(0.93, 0.93, 0.91), rough=1.35, metal=0.0, hull=False),
     "Hazard":    lambda: mat_ron("paint", color=(0.95, 0.72, 0.12), hull=False),
     "Lens":      lambda: ('(\n                color: (0.20, 0.30, 0.34),\n                roughness: 0.05,\n'
                           '                metallic: 0.2,\n                alpha: 0.85,\n'
@@ -141,7 +155,8 @@ def gravity_gun():
     tube(m, "Rubber", (0.0, Y - 0.06, -0.12), (0.0, Y - 0.12, -0.13), 0.018, segs=10)
     grip = np.array([0.0, -0.04, 0.05])
     muzzle = np.array([0.0, Y, -0.30])
-    return m, grip, muzzle
+    fore = np.array([0.0, Y - 0.09, -0.125])   # the fore-grip's middle
+    return m, grip, muzzle, fore
 
 
 # ── the terrain laser ───────────────────────────────────────────────────────
@@ -183,7 +198,59 @@ def terrain_laser():
     box(m, "Dark", (0.0, -0.03, -0.018), (0.012, 0.045, 0.01))
     grip = np.array([0.0, -0.035, 0.08])
     muzzle = np.array([0.0, Y, -0.535])
-    return m, grip, muzzle
+    fore = np.array([0.0, Y - 0.08, -0.22])    # a palm under the emitter housing
+    return m, grip, muzzle, fore
+
+
+# ── first person: the same tools in gloved hands ───────────────────────────
+#
+# The view-model camera films these and nothing else, so the hands, cuffs and
+# sleeves are part of the model: no arm rig to pose, nothing to clip into a
+# wall. The sleeves run back and down past the bottom of the view from the
+# wrists, the way a forearm leaves the frame in any shooter.
+
+def fp_arm(m, fist_c, fist_size, fist_M, wrist, elbow, thumb=None):
+    """A gloved fist round a grip, a gauntlet cuff, a hazard band and the suit
+    sleeve back to `elbow` (out of view)."""
+    box(m, "Glove", fist_c, fist_size, M=fist_M, bevel=0.014)
+    wrist, elbow = np.asarray(wrist, float), np.asarray(elbow, float)
+    d = elbow - wrist
+    L = float(np.linalg.norm(d))
+    u = d / L
+    tube(m, "Glove", np.asarray(fist_c, float) + (wrist - np.asarray(fist_c, float)) * 0.4, wrist + u * 0.06,
+         0.037, segs=14, r1=0.041)
+    tube(m, "Hazard", wrist + u * 0.06, wrist + u * 0.085, 0.046, segs=16)
+    tube(m, "Suit", wrist + u * 0.085, elbow, 0.05, segs=16, r1=0.066)
+    if thumb is not None:
+        tube(m, "Glove", thumb[0], thumb[1], 0.012, segs=8)
+
+
+def fp_gravity_gun():
+    m, grip, muzzle, fore = gravity_gun()
+    rake = rot_x(-0.32)
+    # Right hand round the raked pistol grip, the thumb over its top.
+    w = np.array([0.022, -0.085, 0.12])
+    fp_arm(m, (0.006, -0.052, 0.048), (0.074, 0.105, 0.088), rake, w, w + np.array([0.13, -0.30, 0.42]),
+           thumb=((-0.03, -0.012, 0.06), (-0.03, -0.005, 0.02)))
+    # Left hand round the fore-grip under the bell.
+    w = np.array([-0.045, -0.095, -0.085])
+    fp_arm(m, (-0.004, -0.05, -0.126), (0.07, 0.088, 0.078), None, w, w + np.array([-0.30, -0.28, 0.33]),
+           thumb=((0.028, -0.02, -0.11), (0.03, -0.012, -0.14)))
+    return m, grip, muzzle, fore
+
+
+def fp_terrain_laser():
+    m, grip, muzzle, fore = terrain_laser()
+    # Right hand on the pistol grip.
+    w = np.array([0.022, -0.08, 0.15])
+    fp_arm(m, (0.006, -0.048, 0.078), (0.074, 0.10, 0.088), rot_x(-0.3), w, w + np.array([0.13, -0.30, 0.40]),
+           thumb=((-0.03, -0.006, 0.09), (-0.03, 0.0, 0.05)))
+    # Left palm under the emitter housing, fingers up its right side.
+    w = np.array([-0.035, -0.07, -0.14])
+    fp_arm(m, (-0.004, -0.032, -0.215), (0.085, 0.036, 0.10), None, w, w + np.array([-0.31, -0.26, 0.33]),
+           thumb=((-0.028, -0.01, -0.19), (-0.028, -0.005, -0.235)))
+    box(m, "Glove", (0.03, -0.006, -0.215), (0.018, 0.05, 0.09), bevel=0.006)
+    return m, grip, muzzle, fore
 
 
 def socket():
@@ -347,14 +414,18 @@ def main():
          "GRAVITY GUN — the crew's multi-purpose tool, held (scripts/tool_belt.lua)."),
         ("laser", terrain_laser, "terrain_laser.glb", "ToolLaser",
          "TERRAIN LASER — digs and places ground, held (scripts/tool_belt.lua)."),
+        ("gravgun_fp", fp_gravity_gun, "fp_gravity_gun.glb", "ToolGravGunFP",
+         "GRAVITY GUN, first person — gloved hands on it; the view-model camera draws it (scripts/tool_belt.lua)."),
+        ("laser_fp", fp_terrain_laser, "fp_terrain_laser.glb", "ToolLaserFP",
+         "TERRAIN LASER, first person — gloved hands on it; the view-model camera draws it (scripts/tool_belt.lua)."),
     ):
-        m, grip, muzzle = fn()
+        m, grip, muzzle, fore = fn()
         m, c = centred(m)
         mn, mx = m.bounds()
         write_glb(m, os.path.join(MODELS, glb))
         with open(os.path.join(PREFABS, prefab + ".prefab.ron"), "w") as f:
             f.write(tool_prefab(prefab, glb, m, about))
-        rig[name] = (grip - c, muzzle - c, mx - mn, m.tris())
+        rig[name] = (grip - c, muzzle - c, fore - c, mx - mn, m.tris())
     write_glb(socket(), os.path.join(MODELS, "socket.glb"))
     r = loose_rock()
     r, _ = centred(r)
@@ -364,9 +435,9 @@ def main():
     with open(os.path.join(PREFABS, "LooseRock.prefab.ron"), "w") as f:
         f.write(rock_prefab(r, half, 0.09))
     print("RIG (relative to each model's centre, metres):")
-    for k, (g, mz, size, tris) in rig.items():
-        print(f"  {k:8s} grip {np.round(g, 3).tolist()} muzzle {np.round(mz, 3).tolist()} "
-              f"size {np.round(size, 3).tolist()} tris {tris}")
+    for k, (g, mz, fo, size, tris) in rig.items():
+        print(f"  {k:10s} grip {np.round(g, 3).tolist()} muzzle {np.round(mz, 3).tolist()} "
+              f"fore {np.round(fo, 3).tolist()} size {np.round(size, 3).tolist()} tris {tris}")
     print(f"  rock     half {half.tolist()} tris {r.tris()}")
 
 

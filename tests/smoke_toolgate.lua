@@ -143,6 +143,10 @@ local ASTRO = make_node("Astronaut")
 -- Its frame (unturned) — the walker reads the body's facing in the water.
 function ASTRO:toWorld(v) return vec3(self.x + v.x, self.y + v.y, self.z + v.z) end
 function ASTRO:toLocal(v) return vec3(v.x - self.x, v.y - self.y, v.z - self.z) end
+-- The animated model the third-person tools are held in (no animator here, so
+-- the hold itself stands down; what is under test is which tool shows).
+local ASTROMODEL = make_node("AstroModel")
+ASTRO.children = function() return { ASTROMODEL } end
 local TOOLHUD = make_node("Tool HUD")
 -- The tool in the astronaut's hand (scenes/system.ron: bone-attached to
 -- Hand.Right). Authored visible, so anything that skips the holster leaves it out.
@@ -221,10 +225,12 @@ API.spawn = function(prefab, _, cb)
   NODES[prefab] = n
   if cb then cb(n) end
 end
--- The held model of a tool, in the hand (third person) or in front of the eye.
+-- The held model of a tool, in the body's hands (third person: a child of the
+-- AstroModel) or in front of the eye (the first-person view model).
 local function held(prefab, where)
   for _, n in ipairs(SPAWNED) do
-    if n.name == prefab and ((where == "eye") == (n.parent_ ~= nil and n.parent_.name == "Camera")) then return n end
+    if where == "eye" and n.name == prefab .. "FP" and n.parent_ ~= nil and n.parent_.name == "Camera" then return n end
+    if where ~= "eye" and n.name == prefab and n.parent_ == ASTROMODEL then return n end
   end
 end
 
@@ -241,6 +247,7 @@ status.start(STATUS)
 local function tick(n)
   for _ = 1, (n or 1) do
     T = T + 1 / 60
+    ASTRO.pos = vec3(ASTRO.x, ASTRO.y, ASTRO.z)
     walker.update(ASTRO, 1 / 60)
     belt.update(TOOLHUD, 1 / 60)
     if belt.lateUpdate then belt.lateUpdate(TOOLHUD, 1 / 60) end   -- the aim ring draws here
@@ -532,6 +539,62 @@ KEYS["!2"] = true
 tick(200)
 ok((hint_text() or "") == belt.prompt and belt.prompt ~= "",
   "the laser's aim readout reaches the HUD [" .. tostring(hint_text()) .. "]")
+
+-- ── 9. FIRST PERSON: A VIEW MODEL ON ITS OWN LAYER, FILMED BY ITS OWN CAMERA ──
+-- In first person the tool shown is a second model, with the gloved hands
+-- built in, riding the camera on the view-model render layer; a camera of its
+-- own, stacked on the main one, films that layer alone (so it never pushes
+-- into a wall), and the main camera leaves the layer out. Back in third
+-- person the stack and the cull go, and the tool is in the body's hands.
+local CAMNODE = make_node("Camera")
+CAMNODE.calls = {}
+function CAMNODE:setCamera(o) self.calls[#self.calls + 1] = o end
+function CAMNODE:worldRight() return vec3(1, 0, 0) end
+function CAMNODE:worldUp() return vec3(0, 1, 0) end
+local VMCAM = nil
+API.createNode = function(name, parent, cb)
+  local n = make_node(name)
+  n.parent_ = parent
+  n.calls = {}
+  function n:setCamera(o) self.calls[#self.calls + 1] = o end
+  function n:setAngles() end
+  if name == "ViewModel Cam" then VMCAM = n end
+  if cb then cb(n) end
+end
+envs.planet_camera.node = CAMNODE
+envs.planet_camera.firstPerson = true
+KEYS["!2"] = true
+tick(30)
+local fpl = held("ToolLaser", "eye")
+ok(fpl ~= nil and fpl.visible == true, "first person: the laser's view model is in front of the eye")
+ok(fpl and fpl.layer == "viewmodel", "...on the view-model layer [" .. tostring(fpl and fpl.layer) .. "]")
+ok(held("ToolLaser").visible == false, "...and the third-person laser is not drawn")
+ok(VMCAM ~= nil and VMCAM.parent_ == CAMNODE and VMCAM.calls[1] and VMCAM.calls[1].cullMask == 8
+  and VMCAM.calls[1].fovY and VMCAM.calls[1].fovY < 1.15,
+  "a view-model camera rides the main one, filming only that layer, with a narrower lens")
+local last = CAMNODE.calls[#CAMNODE.calls]
+ok(last and last.stack and last.stack[1] == "ViewModel Cam" and last.cullMask == 4294967295 - 8,
+  "...stacked on the main camera, which leaves the layer out")
+envs.planet_camera.firstPerson = false
+tick(30)
+last = CAMNODE.calls[#CAMNODE.calls]
+ok(last and last.stack and #last.stack == 0 and last.cullMask == 4294967295,
+  "third person again: no stack, nothing culled")
+ok(held("ToolLaser").visible == true and fpl.visible == false, "...and the laser is back in the body's hands")
+-- The layer's bit is its place in project.ron's list, after the implicit
+-- Default at 0: tool_belt's VM_LAYERS must agree with the file.
+do
+  local f = io.open("solar/project.ron") or io.open("project.ron")
+  local txt = f and f:read("*a") or ""
+  if f then f:close() end
+  local list = txt:match("layers:%s*%[(.-)%]") or ""
+  local names = { "Default" }
+  for n in list:gmatch('"([^"]+)"') do names[#names + 1] = n end
+  local idx = {}
+  for i, n in ipairs(names) do idx[n] = i - 1 end
+  ok(idx.viewmodel == 3 or (idx.viewmodel == nil and idx.entity == 1),
+    "the view-model layer's bit matches project.ron [" .. table.concat(names, ",") .. "]")
+end
 
 if #failures == 0 then
   print("TOOL GATE SMOKE OK — " .. checks .. " checks passed")

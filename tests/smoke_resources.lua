@@ -161,6 +161,10 @@ end
 
 local ASTRO = { __id = 1, id = 1, name = "Astronaut", valid = true, visible = true,
                 x = SURFACE + 2, y = 0, z = 0 }
+-- The animated model the third-person tools are held in (no animator here, so
+-- the hold stands down; what is under test is which tool shows).
+local ASTROMODEL = { name = "AstroModel", valid = true, visible = true, x = 0, y = 0, z = 0 }
+function ASTRO:children() return { ASTROMODEL } end
 local DEPOT = { __id = 2, id = 2, name = "FacDepot", valid = true, x = SURFACE + 10, y = 0, z = 0 }
 local SHIP = { __id = 3, id = 3, name = "Kestrel I", valid = true,
                x = SURFACE + 6, y = 0, z = 0 }
@@ -857,17 +861,23 @@ check("a hit beyond the tool's reach reads as out of range",
   tb.aimMat == nil and tb.prompt:find("no target") ~= nil, tb.prompt)
 tb.params.laser_reach = reach0
 
--- THE TOOL IS A THING IN YOUR HAND, and only while it's the tool you picked.
+-- THE TOOL IS A THING IN YOUR HANDS, and only while it's the tool you picked.
+-- (Held in the body's frame, a child of the AstroModel, at true size.) A swap
+-- dips the old tool out and brings the new one up: the old one shows for the
+-- first half of it, so a frame after the key it is still the old one.
 local function held(prefab)
-  for _, n in ipairs(SPAWNED) do if n.name == prefab and n.parent_ == TOOLNODE then return n end end
+  for _, n in ipairs(SPAWNED) do if n.name == prefab and n.parent_ == ASTROMODEL then return n end end
 end
 tick(1)
-check("the laser is in the astronaut's hand when it's equipped", held("ToolLaser") and held("ToolLaser").visible)
+check("the laser is in the astronaut's hands when it's equipped", held("ToolLaser") and held("ToolLaser").visible)
+check("...at true size", held("ToolLaser") and (held("ToolLaser").scale or 1) == 1.0, tostring(held("ToolLaser") and held("ToolLaser").scale))
 press("1")
 tick(1)
-check("...and holstered when it isn't", not held("ToolLaser").visible and held("ToolGravGun").visible)
+check("a swap does not pop: a frame later the old tool is still dipping out", held("ToolLaser").visible)
+tick(8)
+check("...and then it is holstered and the new one is out", not held("ToolLaser").visible and held("ToolGravGun").visible)
 press("2")
-tick(1)
+tick(8)
 check("...and back out when it is", held("ToolLaser").visible)
 
 -- HEAT THROTTLES, IT NEVER STOPS. Twenty seconds of unbroken fire: heat pegs,

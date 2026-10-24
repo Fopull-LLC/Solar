@@ -243,6 +243,8 @@ local function tick(n)
       animator.queued = false
     end
     walker.update(ASTRO, TICK)
+    -- The pose (lean, look, feet) is lateUpdate's: see planet_walker WHEN.
+    walker.lateUpdate(ASTRO, TICK)
     cam.lateUpdate(CAMNODE, TICK)
     presses, clicks = {}, {}
   end
@@ -682,7 +684,19 @@ check("setting off, the planted feet fade out rather than snapping",
   lw and lw > 0.3 and lw < 0.999, tostring(lw))
 tick(40)
 ly, lw = reach_h("Left")
-check("...and a stride's feet are the clip's", not lw or lw < 0.02, tostring(lw))
+-- A stride's feet are the clip's own, set on the ground under them (still the
+-- 30° slope): where the clip put each one across and along, its height the
+-- clip's ankle height over the ground under IT — not over the flat soles.
+local sr = animator.reaches["Foot.Left"]
+local clip = animator:boneWorld("Foot.Left")
+local want_y = ground_y(clip.x) + 0.072
+check("...and a stride's feet are the clip's own, set on the slope under them",
+  lw and lw > 0.9 and sr and math.abs(sr.t.x - clip.x) < 0.005 and math.abs(sr.t.z - clip.z) < 0.005
+    and math.abs(sr.t.y - want_y) < 0.01,
+  sr and string.format("w %s, at (%.3f %.3f %.3f), want y %.3f", tostring(lw), sr.t.x, sr.t.y, sr.t.z, want_y))
+check("...the knee bending toward the body's facing, square to the leg",
+  sr and sr.pole and (sr.pole - (sr.t + vec3(0, 0.45, 0))):dot(vec3(math.sin(MODEL.yaw), 0, math.cos(MODEL.yaw))) > 0.2,
+  sr and sr.pole and tostring(sr.pole - sr.t))
 keys.w = nil
 tick(90)
 ly, lw = reach_h("Left")

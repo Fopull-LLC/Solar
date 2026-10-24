@@ -164,25 +164,52 @@ sim = nil
 -- What each kind of gear does on the belt. The ORDER is the belt's order.
 TOOL_ORDER = { "gravgun", "laser", "beacon" }
 TOOLDEF = {
-  gravgun = { label = "Gravity Gun", prefab = "ToolGravGun",
+  gravgun = { label = "Gravity Gun", prefab = "ToolGravGun", fp_prefab = "ToolGravGunFP",
               hint = "hold LMB to grab  ·  scroll nearer / further  ·  R throw  ·  aim at a plant to uproot it" },
-  laser   = { label = "Terrain Laser", prefab = "ToolLaser",
+  laser   = { label = "Terrain Laser", prefab = "ToolLaser", fp_prefab = "ToolLaserFP",
               hint = "hold LMB to dig  ·  Q switches DIG / FILL" },
   beacon  = { label = "Relay Beacon", consumable = true,
               hint = "LMB plant a relay beacon  ·  Q pick one up" },
 }
 
--- Where the hand holds each model and where its beam leaves, relative to the
--- model's centre (tools/gen_tools.py prints these).
+-- Where the hands hold each model and where its beam leaves, relative to the
+-- model's centre (tools/gen_tools.py prints these). `fore` is the other
+-- hand's hold. The first-person models carry their own gloved hands and are
+-- different meshes, so they have their own centre and their own numbers.
 RIG = {
-  gravgun = { grip = { 0.0, -0.056, 0.123 }, muzzle = { 0.0, 0.029, -0.227 } },
-  laser   = { grip = { 0.022, -0.048, 0.195 }, muzzle = { 0.022, 0.037, -0.42 } },
+  gravgun = { grip = { 0.0, -0.056, 0.123 }, muzzle = { 0.0, 0.029, -0.227 }, fore = { 0.0, -0.061, -0.052 } },
+  laser   = { grip = { 0.022, -0.048, 0.195 }, muzzle = { 0.022, 0.037, -0.42 }, fore = { 0.022, -0.043, -0.105 } },
 }
--- The Laser Tool node is bone-attached at ×1.4; its children are scaled back.
-local HAND_SCALE = 1.4
--- First person: where the grip sits in the camera's frame.
-local VIEW_AT = { 0.27, -0.29, -0.66 }
-local VIEW_SCALE = 0.85
+RIG_FP = {
+  gravgun = { grip = { 0.092, 0.101, -0.042 }, muzzle = { 0.092, 0.186, -0.392 } },
+  laser   = { grip = { 0.091, 0.111, 0.049 }, muzzle = { 0.091, 0.196, -0.566 } },
+}
+-- THIRD PERSON: how each tool is carried, in the body's frame (metres from the
+-- right shoulder joint: in toward the chest, down, forward), at rest (`low`,
+-- a relaxed low-ready) and while the trigger is held (`aim`). Every tool is at
+-- TRUE SIZE (scale 1): the gravity gun is 0.64 m long, the laser 0.83 m.
+-- `pitch` is the low-ready's muzzle-down angle.
+HOLD = {
+  gravgun = { low = { 0.07, 0.25, 0.30 }, aim = { 0.08, 0.19, 0.33 }, pitch = -0.32,
+              rwrist = { 0.02, 0.015, 0.065 }, lwrist = { -0.02, -0.015, 0.07 },
+              rfing = { -0.1, -0.4, -0.9 }, lfing = { 0.25, -0.25, -0.93 } },
+  laser   = { low = { 0.08, 0.25, 0.27 }, aim = { 0.10, 0.12, 0.24 }, pitch = -0.38,
+              rwrist = { 0.02, 0.015, 0.065 }, lwrist = { -0.015, -0.035, 0.08 },
+              rfing = { -0.1, -0.4, -0.9 }, lfing = { 0.15, 0.05, -0.98 } },
+}
+-- The Laser Tool node (the old rifle, bone-attached to Hand.Right) still
+-- carries the laser's particle beam; the tools themselves no longer hang off
+-- it (see THE HOLD).
+-- FIRST PERSON: where the grip sits in the camera's frame (+x right, +y up,
+-- -z ahead), at true size, and the view-model camera's field of view.
+local VIEW_AT = { 0.22, -0.31, -0.62 }
+local VIEW_SCALE = 1.0
+local VM_FOV = 0.95
+-- The render layer the view models live on: "viewmodel" (project.ron), else
+-- the project's spare "entity" layer — the bit is the layer's place in
+-- project.ron's list, after the implicit Default at 0. tests/smoke_toolgate.lua
+-- checks the list still says so.
+local VM_LAYERS = { { "viewmodel", 3 }, { "entity", 1 } }
 
 local SFX = {
   hum     = "audio/kenney/sci-fi/forceField_004.ogg",
@@ -581,18 +608,37 @@ local function hum_on(path, vol, pitch)
   end
 end
 
--- ── the models: third person in the hand, first person in front of the eye ──
+-- ── the models: third person in the hands, first person in front of the eye ─
+--
+-- Two models of each tool. THIRD PERSON, the tool is placed by this script in
+-- the body's frame (a child of the AstroModel), at true size, and the arms are
+-- put on it — not the other way round: hung off the hand bone, it inherited
+-- the armature's ½ scale and stood at 60 % of life size ("in third person the
+-- tools look super small"), and it went wherever a clip happened to put the
+-- hand. FIRST PERSON, a second model with the crew's gloved hands built in
+-- rides the camera on a render layer of its own, filmed by a VIEW-MODEL
+-- camera stacked over the main one (docs/camera-stacks.md): it is drawn over
+-- an empty depth buffer, so it never pushes into a wall, and it has its own
+-- narrower field of view. The main camera leaves that layer out.
 
 local models = { tp = {}, fp = {} }    -- id → node | "spawning"
 local hand_n, socketed = nil, false
-local view = { sx = 0, sy = 0, vx = 0, vy = 0, kick = 0, kickv = 0, bob = 0, lfx = nil, lfy = nil, lfz = nil }
+local view = { sx = 0, sy = 0, vx = 0, vy = 0, kick = 0, kickv = 0, bob = 0, lfx = nil, lfy = nil, lfz = nil, dip = 0 }
 recoil = 0.0
+local aim_body = nil      -- the aim point in its planet's frame (see `update`)
+-- Published for probes: where the third-person right hand is sent (nil while
+-- the hold is off).
+gripX, gripY, gripZ = nil, nil, nil
+-- Tool swaps: the old tool dips out of the hands and the new one comes up.
+local swap_t, swap_from = -10.0, nil
+local SWAP_SECS = 0.36
+local vm = { layer = nil, bit = nil, cam = nil, making = false, on = false, main = nil }
 
 local function hand()
   if not (hand_n and hand_n.valid) then hand_n = find("Laser Tool"); socketed = false end
   if hand_n and not socketed then
-    -- The hand node is the socket; the tool is its child. Its own mesh was the
-    -- old stand-in rifle, swapped for a few millimetres of nothing.
+    -- The hand node is only the particle beam's mount now; its own mesh was
+    -- the old stand-in rifle, swapped for a few millimetres of nothing.
     socketed = true
     hand_n.model = "models/tools/socket.glb"
     hand_n.visible = true
@@ -600,37 +646,51 @@ local function hand()
   return hand_n
 end
 
+-- The view-model layer: the first of VM_LAYERS this project defines.
+local function vm_layer(n)
+  if vm.layer == false then return false end
+  if vm.layer then n.layer = vm.layer return true end
+  for _, l in ipairs(VM_LAYERS) do
+    if pcall(function() n.layer = l[1] end) then
+      vm.layer, vm.bit = l[1], l[2]
+      return true
+    end
+  end
+  vm.layer = false
+  log("tool_belt: no render layer for the first-person view model (add \"viewmodel\" to project.ron's layers)")
+  return false
+end
+
 local function model_of(set, id, parent, place)
   local m = models[set][id]
   if m == "spawning" then return nil end
   if m and m.valid then return m end
   local d = TOOLDEF[id]
-  if not (d and d.prefab and parent and spawn) then return nil end
+  local prefab = d and (set == "fp" and d.fp_prefab or d.prefab)
+  if not (prefab and parent and spawn) then return nil end
   models[set][id] = "spawning"
-  spawn(d.prefab, parent.worldPos or vec3(parent.x, parent.y, parent.z), function(n)
+  spawn(prefab, parent.worldPos or vec3(parent.x, parent.y, parent.z), function(n)
     models[set][id] = n
     n.visible = false
     n.castShadow = set == "tp"
+    if set == "fp" then vm_layer(n) end
     n:setParent(parent, { keepWorld = false })
     place(n, id)
   end)
   return nil
 end
 
-local TP_SCALE = 1.2   -- a touch over life size, so the tool reads at third-person distance
 local function place_tp(n, id)
-  local g = RIG[id].grip
-  local s = TP_SCALE / HAND_SCALE
-  n.scale = s
-  n.x, n.y, n.z = -g[1] * s, -g[2] * s, -g[3] * s
+  n.scale = 1.0
+  n.x, n.y, n.z = 0, 1.0, 0.3
   n:setAngles(0, 0, 0)
 end
 
 local function place_fp(n, id)
-  local g = RIG[id].grip
+  local g = RIG_FP[id].grip
   n.scale = VIEW_SCALE
   n.x, n.y, n.z = VIEW_AT[1] - g[1] * VIEW_SCALE, VIEW_AT[2] - g[2] * VIEW_SCALE, VIEW_AT[3] - g[3] * VIEW_SCALE
-  n:setAngles(0.06, 0, 0)
+  n:setAngles(0, 0, 0)
 end
 
 local function cam_node()
@@ -641,25 +701,92 @@ local function first_person()
   return cam ~= nil and cam.firstPerson == true
 end
 
+-- THE VIEW-MODEL CAMERA. Made once, a child of the main camera at zero
+-- offset; stacked on it (and the layer taken out of it) only while the view
+-- models can show, so third person pays for neither the second render nor
+-- the main camera's layer test.
+local function view_model_cam(cn, on)
+  if on and vm.layer == nil then return end            -- no view model spawned yet
+  if on and vm.layer == false then on = false end
+  if on and not (vm.cam and vm.cam.valid) then
+    if not vm.making and createNode then
+      vm.making = true
+      createNode("ViewModel Cam", cn, function(n)
+        n.x, n.y, n.z = 0, 0, 0
+        n:setAngles(0, 0, 0)
+        n:setCamera { fovY = VM_FOV, active = false, cullMask = 2 ^ vm.bit }
+        vm.cam, vm.making = n, false
+      end)
+    end
+    return
+  end
+  if vm.on == on and vm.main == cn then return end
+  local all = 4294967295
+  if vm.main and vm.main.valid and vm.main ~= cn then
+    pcall(function() vm.main:setCamera { stack = {}, cullMask = all } end)
+  end
+  local ok, err = pcall(function()
+    if on then cn:setCamera { stack = { "ViewModel Cam" }, cullMask = all - 2 ^ vm.bit }
+    else cn:setCamera { stack = {}, cullMask = all } end
+  end)
+  if ok then vm.on, vm.main = on, cn
+  else log("tool_belt: the view-model camera stack failed: " .. tostring(err)) end
+end
+
+-- The crew (the Astronaut, which this script normally rides), its animated
+-- model (the AstroModel child) and that model's animator.
+local astro_n, astro_model, astro_anim = nil, nil, nil
+local function crew_model()
+  if not (astro_n and astro_n.valid) then astro_n, astro_model, astro_anim = find("Astronaut"), nil, nil end
+  if not astro_n then return nil end
+  if not (astro_model and astro_model.valid) then
+    astro_model, astro_anim = nil, nil
+    for _, c in ipairs((astro_n.children and astro_n:children()) or {}) do if c.name == "AstroModel" then astro_model = c end end
+  end
+  if astro_model and not astro_anim and astro_model.animator then astro_anim = astro_model:animator() end
+  return astro_model, astro_anim, astro_n
+end
+
+-- For probes: the view model's state in a line.
+function viewModelState()
+  return string.format("layer %s bit %s cam %s on %s main %s", tostring(vm.layer), tostring(vm.bit),
+    tostring(vm.cam and vm.cam.valid), tostring(vm.on), tostring(vm.main and vm.main.name))
+end
+
+-- The tool to show: the equipped one, except halfway through a swap, when the
+-- one going away is still in the hands.
+local function shown_tool(want)
+  if swap_from and time - swap_t < SWAP_SECS * 0.5 then return swap_from end
+  return want
+end
+-- 0 → 1 → 0 across a swap: how far the tools have dipped out of the way.
+local function swap_dip()
+  local k = (time - swap_t) / SWAP_SECS
+  if k >= 1 or k < 0 then return 0.0 end
+  return math.sin(k * math.pi)
+end
+
 -- Show the equipped tool in the right place (or nothing), and move the first-
 -- person model: sway against the look, bob with the walk, kick on recoil.
 local function show_models(node, dt, carrying)
   local h = hand()
   local cn = cam_node()
-  local want = carrying and toolId() or nil
+  local want = carrying and shown_tool(toolId()) or nil
   local fp = first_person()
+  local am = crew_model()
   for _, id in ipairs({ "gravgun", "laser" }) do
-    local tp = h and model_of("tp", id, h, place_tp)
+    local tp = am and model_of("tp", id, am, place_tp)
     local fv = cn and model_of("fp", id, cn, place_fp)
     local on = want == id
     if tp and tp.visible ~= (on and not fp) then tp.visible = on and not fp end
     if fv and fv.visible ~= (on and fp) then fv.visible = on and fp end
   end
+  if cn then view_model_cam(cn, fp and want ~= nil) end
   if not (fp and want and cn) then return end
   local fv = models.fp[want]
   if not (fv and fv ~= "spawning" and fv.valid) then return end
   -- Sway: the model lags the look by a spring, so a flick of the mouse swings
-  -- it and it settles back.
+  -- it and it settles back. Small: a suited arm is steady, not a pendulum.
   local fx, fy, fz = cam.fwd_x or 0, cam.fwd_y or 0, cam.fwd_z or 0
   local r = cn:worldRight()
   local u = cn:worldUp()
@@ -667,73 +794,150 @@ local function show_models(node, dt, carrying)
     local ddx, ddy, ddz = fx - view.lfx, fy - view.lfy, fz - view.lfz
     local yaw_rate = (ddx * r.x + ddy * r.y + ddz * r.z) / math.max(dt, 1e-3)
     local pit_rate = (ddx * u.x + ddy * u.y + ddz * u.z) / math.max(dt, 1e-3)
-    view.vx = view.vx - yaw_rate * 0.012
-    view.vy = view.vy - pit_rate * 0.012
+    view.vx = view.vx - math.max(-6, math.min(6, yaw_rate)) * 0.008
+    view.vy = view.vy - math.max(-6, math.min(6, pit_rate)) * 0.008
   end
   view.lfx, view.lfy, view.lfz = fx, fy, fz
-  local k, c = 90.0, 14.0
+  local k, c = 110.0, 17.0
   view.vx = view.vx + (-k * view.sx - c * view.vx) * dt
   view.vy = view.vy + (-k * view.sy - c * view.vy) * dt
-  view.sx = math.max(-0.06, math.min(0.06, view.sx + view.vx * dt))
-  view.sy = math.max(-0.05, math.min(0.05, view.sy + view.vy * dt))
-  -- Bob: with the crew's speed over the ground.
+  view.sx = math.max(-0.035, math.min(0.035, view.sx + view.vx * dt))
+  view.sy = math.max(-0.03, math.min(0.03, view.sy + view.vy * dt))
+  -- Bob: a figure-eight with the stride, from the crew's speed over the
+  -- ground (the planet's own motion taken out), at the walker's step rate.
   local sp = 0
-  if node.vel then sp = math.min(8, len(node.vel.x, node.vel.y, node.vel.z)) end
-  view.bob = view.bob + dt * (2.2 + sp * 0.9)
-  local bob = math.min(1, sp / 6)
-  local bx = math.sin(view.bob) * 0.008 * bob
-  local by = math.abs(math.cos(view.bob)) * 0.010 * bob
+  local pw = ref("planet_walker")
+  if node.vel then
+    local v = node.vel
+    sp = math.min(9, len(v.x, v.y, v.z))
+    if pw and pw.grounded == false then sp = 0 end
+  end
+  view.bob = view.bob + dt * (sp / 1.6) * math.pi
+  local bob = math.min(1, sp / 5)
+  local bx = math.sin(view.bob) * 0.006 * bob
+  local by = math.abs(math.cos(view.bob)) * 0.008 * bob
   -- Recoil: a damped kick back and up.
   view.kickv = view.kickv + (-160 * view.kick - 18 * view.kickv) * dt + recoil * 9.0
   recoil = 0.0
-  view.kick = math.max(-0.02, math.min(0.09, view.kick + view.kickv * dt))
-  local g = RIG[want].grip
-  -- A held trigger leans the tool in a touch, toward the middle of the view.
-  local lean = inUse and 0.02 or 0.0
+  view.kick = math.max(-0.02, math.min(0.07, view.kick + view.kickv * dt))
+  -- A swap drops the tool out of the bottom of the view and brings the new
+  -- one up; a held trigger brings the tool in a touch toward the middle.
+  local dip = swap_dip()
+  local g = RIG_FP[want].grip
+  local lean = inUse and 0.012 or 0.0
   fv.x = VIEW_AT[1] - g[1] * VIEW_SCALE + view.sx + bx - lean
-  fv.y = VIEW_AT[2] - g[2] * VIEW_SCALE + view.sy - by + view.kick * 0.25
+  fv.y = VIEW_AT[2] - g[2] * VIEW_SCALE + view.sy - by + view.kick * 0.2 - dip * 0.22
   fv.z = VIEW_AT[3] - g[3] * VIEW_SCALE + view.kick
-  fv:setAngles(0.06 + view.sx * 1.5, view.kick * 1.6 + view.sy * 1.2, -view.sx * 2.0)
+  -- Toed in toward the crosshair 7 m out, then the sway's lag and the kick.
+  local yaw_in = math.atan(VIEW_AT[1] / 7.0)
+  local pitch_in = math.atan(-VIEW_AT[2] / 7.0)
+  fv:setAngles(yaw_in + view.sx * 1.2, pitch_in + view.kick * 1.4 + view.sy * 1.0 - dip * 0.7, -view.sx * 1.5)
 end
 
--- THE HOLD. The rig's clips carry nothing in their hands, so a tool hung off
--- Hand.Right pointed at the ground. While a tool is out the arms are put on
--- it (two-bone IK, this frame only): the right hand in front of the chest on
--- the line of the aim, the left on the fore-grip, elbows down and out.
-local astro_model, astro_anim = nil, nil
-local function hold_pose(node)
-  if first_person() or not (cam and cam.fwd_x) then return end
-  if not (astro_model and astro_model.valid) then
-    astro_model, astro_anim = nil, nil
-    for _, c in ipairs((node.children and node:children()) or {}) do if c.name == "AstroModel" then astro_model = c end end
+-- THE HOLD (third person). The rig's clips carry nothing in their hands, so
+-- the tool is placed in the BODY's frame — off the right shoulder as the
+-- clips and the lean put it this frame, along the aim while the trigger is
+-- held, at a relaxed low-ready otherwise — and both hands are put on its
+-- grips (two-bone IK, this frame only), elbows down and out.
+--
+-- The frame is the MODEL's, never the camera's. The hold used to be built on
+-- the camera's forward: walk toward the camera, or stand side-on to it, and
+-- the hands were sent behind the back or across the chest, which folded the
+-- elbows into the torso ("his elbows are inside his chest"). The body turns
+-- to face the aim whenever a tool runs (planet_walker), so the aim's own
+-- direction is only ever a few degrees off the body's, and it is clamped.
+--
+-- In lateUpdate, after planet_walker's (the same node, the script listed
+-- first): the shoulders read here carry this frame's lean, and every point is
+-- in the world the engine re-poses the rig in.
+local hold = { dir = nil, w = 0.0, id = nil, a = 0.0 }
+local function hold_pose(dt, active)
+  local m, an, node = crew_model()
+  hold.w = hold.w + ((active and 1 or 0) - hold.w) * (1 - math.exp(-(active and 10 or 14) * dt))
+  if not (an and an.reach and m and node and cam and cam.fwd_x) or hold.w < 0.01 then
+    if not active then hold.dir = nil end
+    gripX = nil
+    return
   end
-  if astro_model and not astro_anim and astro_model.animator then astro_anim = astro_model:animator() end
-  local an = astro_anim
-  if not (an and an.reach) then return end
-  local ux, uy, uz = node.up_x or 0, node.up_y or 1, node.up_z or 0
-  -- The aim, or the view flattened a little toward the ground while idle.
-  local fx, fy, fz = cam.fwd_x, cam.fwd_y, cam.fwd_z
-  if inUse and aimX then
-    fx, fy, fz = aimX - node.x, aimY - node.y, aimZ - node.z
+  local id = shown_tool(toolId())
+  local hd, rg = HOLD[id], RIG[id]
+  local tp = models.tp[id]
+  if not (hd and rg) then return end
+  local sr = an:boneWorld("Upperarm.Right")
+  local sl = an:boneWorld("Upperarm.Left")
+  if not (sr and sl) then return end
+  local SR = m:toLocal(sr)
+  -- The aim in the model's frame (+Z ahead, +Y up, +X the crew's LEFT).
+  local o = m:toWorld(vec3(0, 0, 0))
+  local function to_model_dir(x, y, z) return m:toLocal(o + vec3(x, y, z)) end
+  local want
+  local ax, ay, az = aimNow()
+  if inUse and ax then
+    local ch = (sr + sl) * 0.5
+    want = to_model_dir(ax - ch.x, ay - ch.y, az - ch.z)
   else
-    local d = fx * ux + fy * uy + fz * uz
-    fx, fy, fz = fx - ux * (d + 0.35), fy - uy * (d + 0.35), fz - uz * (d + 0.35)
+    -- At rest the muzzle is held low and straight ahead of the body, with a
+    -- share of the view's pitch so looking up brings it up a little.
+    local f = to_model_dir(cam.fwd_x, cam.fwd_y, cam.fwd_z)
+    local fl = math.sqrt(f.x * f.x + f.z * f.z)
+    local p = math.atan2(f.y, math.max(fl, 1e-4)) * 0.35 + hd.pitch
+    want = vec3(0, math.sin(p), math.cos(p))
   end
-  local fl = len(fx, fy, fz)
-  if fl < 1e-6 then return end
-  fx, fy, fz = fx / fl, fy / fl, fz / fl
-  local rx, ry, rz = fy * uz - fz * uy, fz * ux - fx * uz, fx * uy - fy * ux
-  local rl = len(rx, ry, rz)
-  if rl < 1e-6 then return end
-  rx, ry, rz = rx / rl, ry / rl, rz / rl
-  local cx, cy, cz = node.x + ux * 0.55, node.y + uy * 0.55, node.z + uz * 0.55   -- the chest
-  local function at(f, r, u)
-    return vec3(cx + fx * f + rx * r + ux * u, cy + fy * f + ry * r + uy * u, cz + fz * f + rz * r + uz * u)
+  want = want:normalized()
+  -- Clamp: never more than 40° off the body's heading, up 65°, down 70°.
+  local yaw = math.atan2(want.x, want.z)
+  local pit = math.asin(math.clamp(want.y, -1, 1))
+  yaw = math.clamp(yaw, -0.7, 0.7)
+  pit = math.clamp(pit, -1.2, 1.13)
+  -- A swap dips the muzzle toward the ground and back up.
+  local dip = swap_dip()
+  pit = pit - dip * 0.9
+  want = vec3(math.sin(yaw) * math.cos(pit), math.sin(pit), math.cos(yaw) * math.cos(pit))
+  if not hold.dir or hold.id ~= id and hold.w < 0.05 then hold.dir = want end
+  hold.dir = (hold.dir + (want - hold.dir) * (1 - math.exp(-(inUse and 16 or 9) * dt))):normalized()
+  hold.id = id
+  local dir = hold.dir
+  -- The tool's axes in the model frame: barrel (-Z) along `dir`, its up the
+  -- body's up made square to it, its right = dir × up (the model's −X ahead).
+  local yu = (vec3(0, 1, 0) - dir * dir.y):normalized()
+  local xr = dir:cross(yu)
+  -- The grip, off the right shoulder: in, down and forward, the low-ready
+  -- easing into the aim as the trigger is held.
+  local a = inUse and 1 or 0
+  hold.a = hold.a + (a - hold.a) * (1 - math.exp(-10 * dt))
+  local lo, ai = hd.low, hd.aim
+  local inn = lo[1] + (ai[1] - lo[1]) * hold.a
+  local down = lo[2] + (ai[2] - lo[2]) * hold.a + dip * 0.08
+  local fwdv = lo[3] + (ai[3] - lo[3]) * hold.a
+  local flat = vec3(dir.x, 0, dir.z)
+  if flat:length() < 1e-4 then flat = vec3(0, 0, 1) end
+  flat = flat:normalized()
+  -- Forward along the aim's heading; raised a little as the aim rises.
+  local grip = SR + vec3(inn, -down, 0) + flat * fwdv + vec3(0, math.max(0, dir.y) * 0.12, 0)
+  local function tool_pt(p) return grip + xr * (p[1] - rg.grip[1]) + yu * (p[2] - rg.grip[2]) - dir * (p[3] - rg.grip[3]) end
+  if tp and tp ~= "spawning" and tp.valid then
+    local origin = tool_pt({ 0, 0, 0 })
+    tp.x, tp.y, tp.z = origin.x, origin.y, origin.z
+    local yw, pt, rl = lookRotation(dir, yu)
+    tp:setAngles(yw, pt, rl)
   end
-  -- (the crew's origin is the capsule's middle, ~0.94 m over the soles: the
-  -- hands sit at ~1.15 m, a hip-fire hold, the tool's line along the aim)
-  an:reach("Hand.Right", at(0.34, 0.16, -0.33), { pole = at(-0.25, 0.55, -0.7) })
-  an:reach("Hand.Left", at(0.58, 0.02, -0.27), { pole = at(0.0, -0.55, -0.7) })
+  -- The hands: each wrist a little behind and under its hold, in the tool's
+  -- frame. World points from here on.
+  local function tool_off(base, off) return { base[1] + off[1], base[2] + off[2], base[3] + off[3] } end
+  local rw = m:toWorld(tool_pt(tool_off(rg.grip, hd.rwrist)))
+  local lw = m:toWorld(tool_pt(tool_off(rg.fore, hd.lwrist)))
+  gripX, gripY, gripZ = rw.x, rw.y, rw.z
+  local W = function(v) return m:toWorld(v) - o end
+  local up_w, right_w, fwd_w = W(vec3(0, 1, 0)), W(vec3(-1, 0, 0)), W(vec3(0, 0, 1))
+  -- Elbows down and out: poles beside and below each shoulder, a touch back.
+  local w = hold.w
+  an:reach("Hand.Right", rw, { pole = sr - up_w * 0.4 + right_w * 0.48 - fwd_w * 0.12, weight = w })
+  an:reach("Hand.Left", lw, { pole = sl - up_w * 0.4 - right_w * 0.45 - fwd_w * 0.05, weight = w })
+  -- The fingers along the grips (each hand's rest knuckle line, rig space).
+  local function fing(f) return W(xr * f[1] + yu * f[2] - dir * f[3]) end
+  local rf, lf = fing(hd.rfing):normalized(), fing(hd.lfing):normalized()
+  an:lookAt({ "Hand.Right" }, rw + rf, { axis = vec3(-0.996, 0.036, 0.08), limit = 85, weight = 0.85 * w })
+  an:lookAt({ "Hand.Left" }, lw + lf, { axis = vec3(0.996, 0.036, 0.08), limit = 85, weight = 0.85 * w })
 end
 
 -- Where a beam leaves the tool in hand, in the world.
@@ -744,10 +948,15 @@ end
 -- two at orbital speed, which put the beam's root out in front of the view.
 -- The crew's pose is this frame's (physics wrote it back before any
 -- lateUpdate), and the eye is a fixed height over it on the body's up.
+--
+-- The view model is filmed with its own, narrower field of view, so the beam
+-- (drawn by the main camera) starts at the point that the MAIN camera shows
+-- where the view-model camera shows the muzzle: the same depth, its offset
+-- from the middle of the view scaled by the ratio of the two lenses.
 local function muzzle()
   local id = toolId()
   local fp = first_person()
-  local rig = RIG[id]
+  local rig = RIG_FP[id]
   if fp and rig and cam and cam.fwd_x then
     local a = find("Astronaut")
     local cn = cam_node()
@@ -761,11 +970,15 @@ local function muzzle()
       local lx = VIEW_AT[1] + (mz[1] - g[1]) * VIEW_SCALE + view.sx
       local ly = VIEW_AT[2] + (mz[2] - g[2]) * VIEW_SCALE + view.sy
       local lz = VIEW_AT[3] + (mz[3] - g[3]) * VIEW_SCALE + view.kick
+      local main_fov = (cam.params and cam.params.fov_y) or 1.15
+      local s = (vm.on and math.tan(main_fov * 0.5) / math.tan(VM_FOV * 0.5)) or 1.0
+      lx, ly = lx * s, ly * s
       -- camera frame: +x right, +y up, -z forward
       return ex + r.x * lx + u.x * ly - fx * lz, ey + r.y * lx + u.y * ly - fy * lz, ez + r.z * lx + u.z * ly - fz * lz
     end
   end
   local m = models[fp and "fp" or "tp"][id]
+  rig = fp and RIG_FP[id] or RIG[id]
   if rig and m and m ~= "spawning" and m.valid and m.toWorld then
     local mz = rig.muzzle
     local w = m:toWorld(vec3(mz[1], mz[2], mz[3]))
@@ -914,21 +1127,22 @@ local function draw_ring(hit, firing, full, radius, fill)
   ring_req = hit and { h = to_body(hit), firing = firing, full = full, r = radius, fill = fill } or nil
 end
 
--- The laser's particle beam (vfx/MiningBeam) on the Laser Muzzle node, a
--- child of the hand. Its place is PARENT-LOCAL — the barrel tip of the model
--- in the hand, in the hand's ×1.4 frame — and is set once; only the beam's END
--- is a world point (setBeamEnd). Writing a world coordinate into a parented
--- node's .x/.y/.z is what once threw the beam's origin kilometres into the sky.
-local muzzle_n, muzzle_placed = nil, false
+-- The laser's particle beam (vfx/MiningBeam) on the Laser Muzzle node. The
+-- scene hangs it off the hand socket; it is moved onto the third-person laser
+-- model itself, at the barrel tip, once that model exists. Its place is
+-- PARENT-LOCAL and set once; only the beam's END is a world point
+-- (setBeamEnd). Writing a world coordinate into a parented node's .x/.y/.z is
+-- what once threw the beam's origin kilometres into the sky.
+local muzzle_n, muzzle_on = nil, nil
 local function beam_particles(hit, power)
-  if not (muzzle_n and muzzle_n.valid) then muzzle_n = find("Laser Muzzle"); muzzle_placed = false end
+  if not (muzzle_n and muzzle_n.valid) then muzzle_n = find("Laser Muzzle"); muzzle_on = nil end
   if not muzzle_n then return end
-  if not muzzle_placed then
-    muzzle_placed = true
-    local g, mz = RIG.laser.grip, RIG.laser.muzzle
-    muzzle_n.x = (mz[1] - g[1]) * TP_SCALE / HAND_SCALE
-    muzzle_n.y = (mz[2] - g[2]) * TP_SCALE / HAND_SCALE
-    muzzle_n.z = (mz[3] - g[3]) * TP_SCALE / HAND_SCALE
+  local tl = models.tp.laser
+  if tl and tl ~= "spawning" and tl.valid and muzzle_on ~= tl and muzzle_n.setParent then
+    muzzle_on = tl
+    muzzle_n:setParent(tl, { keepWorld = false })
+    local mz = RIG.laser.muzzle
+    muzzle_n.x, muzzle_n.y, muzzle_n.z = mz[1], mz[2], mz[3]
   end
   local ps = muzzle_n:particles()
   if not ps then return end
@@ -1799,6 +2013,7 @@ function lateUpdate(node, dt)
   -- Tools away (aboard, the map, a panel): hide what is out once, then cost
   -- nothing — no models, no finds, no beams, frame after frame.
   if gate ~= "in hand" then
+    hold.w, gripX = 0.0, nil
     if not stowed then
       stowed = true
       show_models(node, dt, false)
@@ -1811,8 +2026,7 @@ function lateUpdate(node, dt)
   end
   stowed = false
   show_models(node, dt, gate == "in hand")
-  local tid = toolId()
-  if gate == "in hand" and (tid == "gravgun" or tid == "laser") then hold_pose(node) end
+  hold_pose(dt, not first_person())
   if beam_req then
     paint_beam(beam_req, dt)
     if beam_req.kind == "grav" or beam_req.kind == "plant" then impact(nil) end
@@ -1870,6 +2084,7 @@ function start(node)
     id = (type(old) == "number" and OLD_SLOT[old]) or "gravgun"
   end
   equipped = id
+  swap_from = nil
   laserMode = save.get("tool.laserMode") == "fill" and "fill" or "dig"
 end
 
@@ -1883,6 +2098,8 @@ end
 
 local function equip(id, b)
   if equipped == id then return end
+  -- The tool going away dips out of the hands as the new one comes up.
+  swap_from, swap_t = equipped, time
   equipped = id
   save.set("tool.id", id)
   play(SFX.swap, { track = "UI", volume = 0.45 })
@@ -2072,5 +2289,17 @@ function update(node, dt)
   prompt = ""
   local carrying = on_foot(node)
   tick(node, dt, carrying)
+  -- The aim point is a WORLD point of this update; the ticks then carry the
+  -- planet (and the crew on it) on along its orbit before lateUpdate poses
+  -- the arms and the head. Held in the planet's frame for that.
+  aim_body = aimX and to_body({ x = aimX, y = aimY, z = aimZ }) or nil
   draw_hud(carrying)
+end
+
+-- The aim point where it is NOW (for lateUpdate's poses: the walker's head,
+-- the hold), or nil.
+function aimNow()
+  if not aim_body then return nil end
+  local w = to_world(aim_body)
+  return w.x, w.y, w.z
 end
