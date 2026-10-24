@@ -132,6 +132,28 @@ local px, py, pz = at(1, -0.25, 0, 96)
 check("the pit is open to the sky", cl.columnOpen(0, 0, 0, px, py, pz, SEA) == true)
 check("a pit dug below sea level from dry land is dry", cl.isUnderwater(px, py, pz) == false, cl.seaDepth(px, py, pz))
 
+-- Ground streaming in: for a moment the field under a diver reads rock over
+-- them (a roofed column, then a cave not looked at yet). They were just read
+-- wet, so the wet answer holds through it instead of flashing to -1 (which
+-- refilled the suit tank); the hold runs out, so a real roof still wins.
+local busy = false
+API.terrain.busy = function() return busy end
+check("the diver is in the sea", (cl.seaDepth(sx, sy, sz) or 0) > 0)
+API.terrain.query = function(x, y, z) return -1 end  -- the stale field: rock
+local held = cl.seaDepth(sx, sy, sz)
+check("a stale roof right after a wet read holds the water", held and math.abs(held - 3) < 1e-6, held)
+check("…and is counted", (cl.wetHolds or 0) >= 1, cl.wetHolds)
+check("…but not 10 m away, where nothing was read wet", (cl.seaDepth(at(-1, -0.2, 0, 95)) or 0) <= 0)
+busy = true
+run(3)
+check("while the terrain is streaming the hold lasts longer", (cl.seaDepth(sx, sy, sz) or 0) > 0)
+busy = false
+run(2)
+check("once it runs out, a roof that is still there is dry", (cl.seaDepth(sx, sy, sz) or 0) <= 0, cl.seaDepth(sx, sy, sz))
+API.terrain.query = function(x, y, z) return sdf(x, y, z) end
+API.terrain.busy = nil
+check("the field back, the sea is water again", (cl.seaDepth(sx, sy, sz) or 0) > 0)
+
 -- Cost: an open-sea answer is a handful of field reads.
 local reads = 0
 API.terrain.query = function(x, y, z) reads = reads + 1; return sdf(x, y, z) end

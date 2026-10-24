@@ -91,9 +91,10 @@ defaults = {
   -- props lean in the draw, no node, no remove/restore) where the engine has
   -- them; 0 = swap each bent plant for a node (see "touch"). Off for now:
   -- measured on Kail it costs about half (flora_field 0.5–1.0 ms against
-  -- 0.9–2.2, worst 10–17 ms against 6–28), but the engine bends EVERY source
-  -- in reach, rocks and trunks too, and has no easing of its own (the wake
-  -- below stands in for it); its look is not signed off yet.
+  -- 0.9–2.2, worst 10–17 ms against 6–28), but up to rc9 the engine bent
+  -- EVERY source in reach, rocks and trunks too, and had no easing of its own
+  -- (the wake below stands in for it). rc10 bends only bend > 0 sources and
+  -- springs them back; its look is not signed off yet.
   touch_engine = 0,
   -- Trunks and rocks stop the crew (planet_walker reads `obstacles`), and
   -- how far round the crew they are gathered.
@@ -667,6 +668,10 @@ function baseSurvey()
   return out
 end
 
+-- The kinds of plant that give way to a walker (bent in the draw or swapped
+-- for a node, see "touch"); trunks, cacti and succulents do not.
+local BEND_KIND = { grass = true, fern = true, reed = true, bush = true, shrub = true, moss = true }
+
 local function make_source(p, sp, fg, w)
   local rows = p.rows
   local data, any = {}, false
@@ -713,6 +718,10 @@ local function make_source(p, sp, fg, w)
       opts.tint = jit(sp.barkTint)
     else
       opts.tint = jit(sp.tint)
+      -- Soft plants give way to the crew (scatter.setInteractors); since
+      -- 0.117.0-rc10 only a source made with bend > 0 does, so trunks, cacti
+      -- and succulents stay rigid.
+      if BEND_KIND[sp.kind] then opts.bend = 1 end
       if sp.emissive and (sp.emissiveStrength or 0) > 0 then
         opts.emissive, opts.emissiveStrength = sp.emissive, sp.emissiveStrength
       end
@@ -945,7 +954,6 @@ local rare_tick   -- defined below (rare plants)
 -- `obstacles`, a few times a second, and planet_walker keeps the crew out of
 -- them: you walk into a trunk and stop, and slide round a boulder.
 
-local BEND_KIND = { grass = true, fern = true, reed = true, bush = true, shrub = true, moss = true }
 local touch = { bent = {}, n = 0, t = 0, ct = 0 }
 touchStats = { bent = 0, obstacles = 0, trunks = 0, rocks = 0 }
 
@@ -959,10 +967,11 @@ end
 -- ENGINE BENDING (touch_engine, rc7's scatter.setInteractors): the crew is a
 -- point the props lean away from in the draw, foot planted, with a short wake
 -- of fading points behind so the grass springs back over a second instead of
--- snapping up. No nodes, no scatter.remove/restore. The engine bends EVERY
--- source within the radius (rocks and trunks too: there is no per-source
--- switch), so the radius is kept inside the bump distance planet_walker holds
--- the crew off trunks and rocks at.
+-- snapping up. No nodes, no scatter.remove/restore. Since 0.117.0-rc10 only
+-- sources declared with bend > 0 (the BEND_KIND plants, see make_source) give
+-- way; rc7-rc9 bent every source in reach, rocks and trunks too, so the radius
+-- is still kept inside the bump distance planet_walker holds the crew off
+-- trunks and rocks at.
 local wake = {}          -- { x, y, z (body-relative), t }
 local wake_on = false
 local WAKE_STEP, WAKE_LIFE = 0.45, 1.1

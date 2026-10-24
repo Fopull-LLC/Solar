@@ -207,7 +207,7 @@ API.scatter = {
     for k in pairs(o) do
       local okk = ({ asset = 1, lod = 1, range = 1, seed = 1, center = 1, radius = 1, halfX = 1, halfZ = 1,
         align = 1, perChunk = 1, chunk = 1, scaleMin = 1, scaleMax = 1, fade = 1, density = 1,
-        densityRows = 1, parent = 1, tint = 1, emissive = 1, emissiveStrength = 1 })[k]
+        densityRows = 1, parent = 1, tint = 1, emissive = 1, emissiveStrength = 1, bend = 1 })[k]
       if not okk then error("scatter.create: unknown option " .. k) end
     end
     assert(o.center and o.center.x == 0 and o.center.y == 0 and o.center.z == 0,

@@ -215,6 +215,10 @@ local FLOOD_CELL = 1.5    -- flood-fill cell (m)
 local FLOOD_MAX = 3200    -- cells one cave may visit before it is called dry
 local FLOOD_KEEP = 25.0   -- seconds a cave's answer is kept (digging changes it)
 local FLOOD_SLICE = 400   -- field reads a frame the flood may spend (1–5 µs each)
+local FLOOD_KEEP_BUSY = 2.0 -- …a dry answer found while the terrain is streaming
+local WET_HOLD = 1.5      -- s a point just read wet stays wet through a dry read
+local WET_HOLD_BUSY = 5.0 -- …while the terrain worker is streaming ground in
+local WET_NEAR = 4.0      -- m: how close a later read must be to keep the hold
 
 -- Is the column from body-relative point (px,py,pz) straight up to radius
 -- `top` open? true / false, or nil when the field is not answering there.
@@ -336,7 +340,11 @@ local function flood_step(budget)
       end
     end
     if J.done or J.head > #J.queue then
-      for _, k2 in ipairs(J.list) do flood.cells[k2] = { wet = J.wet, t = flood.clock } end
+      -- A fill over ground still streaming in read a field that is about to
+      -- change: its answer is kept for a moment, not FLOOD_KEEP.
+      local t_mark = flood.clock
+      if not J.wet and terrain.busy and terrain.busy() then t_mark = flood.clock - FLOOD_KEEP + FLOOD_KEEP_BUSY end
+      for _, k2 in ipairs(J.list) do flood.cells[k2] = { wet = J.wet, t = t_mark } end
       flood.n = flood.n + 1
       flood.jobs[key] = nil
       floodStats = { cells = #J.list, wet = J.wet, at = key }
@@ -347,6 +355,37 @@ floodStats = nil
 
 -- Published for the probes: how many cave fills have finished.
 function floodCount() return flood.n end
+
+-- WET HOLD. The roof and cave reads come off the terrain field, and ground
+-- that is still streaming in answers for a second or two as something else
+-- (a freshly streamed sea floor read as a roofed column, then as a cave not
+-- looked at yet): a diver read -1, "dry", and the suit tank refilled. So a
+-- point that was just read wet stays wet through a dry read from the roof or
+-- cave rule for WET_HOLD s (WET_HOLD_BUSY while the terrain worker is
+-- streaming), as long as the read is within WET_NEAR m of the wet one. Being
+-- above the sea's radius is never held, and a dry cave still reads dry once
+-- the hold is over: a swimmer coming into one keeps the water a moment longer.
+local wet_seen = {}   -- { body, x, y, z (body-relative), t } — the recent wet reads
+local function wet_note(name, px, py, pz)
+  local now = flood.clock
+  local slot, oldest
+  for i, w in ipairs(wet_seen) do
+    if w.body == name and len(w.x - px, w.y - py, w.z - pz) < WET_NEAR then slot = i break end
+    if not oldest or w.t < wet_seen[oldest].t then oldest = i end
+  end
+  if not slot then slot = (#wet_seen < 8) and (#wet_seen + 1) or oldest end
+  wet_seen[slot] = { body = name, x = px, y = py, z = pz, t = now }
+end
+local function wet_held(name, px, py, pz)
+  local hold = (terrain.busy and terrain.busy()) and WET_HOLD_BUSY or WET_HOLD
+  for _, w in ipairs(wet_seen) do
+    if w.body == name and flood.clock - w.t <= hold and len(w.x - px, w.y - py, w.z - pz) < WET_NEAR then
+      return true
+    end
+  end
+  return false
+end
+wetHolds = 0   -- (probes) how many dry reads a hold has turned back to wet
 
 -- How deep below the surface of the sea, in metres. Negative = above it (or
 -- in a dry cave: -1); nil when this body has no sea (or there's no body).
@@ -361,11 +400,18 @@ function seaDepth(x, y, z)
     local px, py, pz = x - b.x, y - b.y, z - b.z
     local r = len(px, py, pz)
     local col = columnOpen(b.x, b.y, b.z, px, py, pz, sea)
+    local wet = depth
     if col == false then
       -- Roofed: a cave. Wet only if it is a flooded one.
       if cave_wet(d, b, px, py, pz, sea) ~= true then depth = -1 end
     elseif col == true then
       if surface_open(b.x, b.y, b.z, px / r, py / r, pz / r, sea) == false then depth = -1 end
+    end
+    if depth > 0 then
+      wet_note(d, px, py, pz)
+    elseif wet_held(d, px, py, pz) then
+      depth = wet
+      wetHolds = wetHolds + 1
     end
   end
   -- A lake (scale 3) is water too, wherever one is standing near you.

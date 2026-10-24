@@ -259,6 +259,57 @@ function removeBeacon(id)
   return true
 end
 
+-- A revert to launch (vessel_spawner) puts the beacons back as they were at
+-- the launch, with the pack: one planted since is taken up (the pack has it
+-- again), one picked up since stands again. The record is plain data.
+function beaconSnapshot()
+  if not beacons then load_beacons() end
+  local snap = { order = {}, rec = {} }
+  for _, id in ipairs(order) do
+    local b = beacons[id]
+    snap.order[#snap.order + 1] = id
+    snap.rec[id] = { n = b.name, b = b.body, x = b.x, y = b.y, z = b.z }
+  end
+  return snap
+end
+
+-- Returns how many beacons were taken up and how many stood again.
+function beaconRestore(snap)
+  if type(snap) ~= "table" or type(snap.order) ~= "table" then return 0, 0 end
+  if not beacons then load_beacons() end
+  local gone, back = 0, 0
+  local was = {}
+  for i, id in ipairs(order) do was[i] = id end
+  for _, id in ipairs(was) do
+    if not snap.rec[id] then
+      local b = beacons[id]
+      if b.node and b.node.valid then b.node:destroy() end
+      beacons[id] = nil
+      if save.delete then save.delete("comms.beacon." .. tostring(id)) else save.set("comms.beacon." .. tostring(id), false) end
+      gone = gone + 1
+    end
+  end
+  local new_order = {}
+  for _, id in ipairs(snap.order) do
+    local r = snap.rec[id]
+    if not beacons[id] then
+      beacons[id] = { id = id, name = r.n, body = r.b, x = r.x, y = r.y, z = r.z }
+      save.set("comms.beacon." .. tostring(id), { n = r.n, b = r.b, x = r.x, y = r.y, z = r.z })
+      back = back + 1
+    end
+    new_order[#new_order + 1] = id
+  end
+  order = new_order
+  write_index()
+  -- (comms.beaconSeq is left where it is: a reverted beacon's id is not reused)
+  if gone + back > 0 then
+    log(string.format("comms: revert — %d beacon(s) taken up, %d standing again", gone, back))
+    for _, id in ipairs(order) do spawn_node(beacons[id]) end
+    refreshNow()
+  end
+  return gone, back
+end
+
 function beaconNear(x, y, z, r)
   local best, bd = nil, r or 3.0
   for _, e in ipairs(beaconList()) do

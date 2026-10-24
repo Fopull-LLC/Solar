@@ -8080,6 +8080,7 @@ function fixedUpdate(node, dt)
   for _, e in ipairs(engines) do
     if engine_active(e, cut) then total_thrust = total_thrust + e.thrust end
   end
+  THRUST_LIVE = 0.0 -- what the engines deliver now, in this air (the HUD's THRUST/TWR)
   if throttle > 0 and not info.anchored and fuel > 0 then
     -- NOZZLES (rating version 3, parts_registry ENGINE NICHES): a rocket's
     -- thrust falls in thick air by its nozzle's sea-level share `asl` (the
@@ -8117,6 +8118,7 @@ function fixedUpdate(node, dt)
         local asl = e.rec and e.rec.asl
         local nk = (asl and asl < 1) and math.max(0.05, 1.0 - (1.0 - asl) * sig) or 1.0
         local f = e.thrust * (e.jet and (e.jk or 0) or throttle * nk)
+        THRUST_LIVE = THRUST_LIVE + f
         assembly.forceAt(node, vec3(wdx * f, wdy * f, wdz * f), vec3(ex, ey, ez))
       end
     end
@@ -8556,8 +8558,10 @@ function fixedUpdate(node, dt)
     -- What the engines are PRODUCING (0 on the clamps, at idle or with dry
     -- tanks) and the TWR of that, in the local gravity; `twr_max` is the
     -- full-throttle figure, which is what the builder quotes at the pad.
+    -- THRUST_LIVE is the force the thrust loop put on the hull this frame:
+    -- a nozzle's sea-level loss in thick air and a jet's spool are in it.
     local gl = t.g or 0
-    t.thrust_now = (info.anchored or fuel <= 0) and 0 or th_act * throttle
+    t.thrust_now = (info.anchored or fuel <= 0) and 0 or (THRUST_LIVE or th_act * throttle)
     t.twr = (t.mass > 0 and gl > 0) and t.thrust_now / (t.mass * gl) or 0
     t.twr_max = (t.mass > 0 and gl > 0) and th_act / (t.mass * gl) or 0
     t.stages = {}

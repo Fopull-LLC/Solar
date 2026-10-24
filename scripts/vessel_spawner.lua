@@ -451,6 +451,9 @@ local function snap_state()
     take("inv.gear." .. cid)
   end
   keys.names = names
+  -- the relay beacons (comms keeps them): one planted in flight is the pack's
+  local net = ref("comms")
+  keys.beacons = net and net.beaconSnapshot and net.beaconSnapshot() or nil
   return keys
 end
 
@@ -590,6 +593,8 @@ local function restore_state(keys)
   end
   local rs = ref("research")
   if rs then rs.spent = save.get("res.spent") or 0 end
+  local net = ref("comms")
+  if keys.beacons and net and net.beaconRestore then net.beaconRestore(keys.beacons) end
 end
 
 -- Clear the flight off the world: crew out of the seat, every craft and piece
@@ -712,7 +717,29 @@ function revertClick(kind)
   if not (q and q.ok) then return false end
   if revertArmed(kind) then
     local ok, why
-    if kind == "builder" then ok, why = revertToBuilder() else ok, why = revertToLaunch() end
+    if kind == "builder" then
+      ok, why = revertToBuilder()
+    else
+      -- Through the rollout's black (build_host.fadeThrough): the world is
+      -- not seen being cleared and the craft put back; it fades in on the
+      -- craft seated on the clamps. Without the host, at once.
+      local bh = ref("build_host")
+      if bh and bh.fading and bh.fading() then return false end
+      revertArmedAt, revertArmedKind = nil, nil
+      local failed = false
+      if bh and bh.fadeThrough and bh.fadeThrough(function()
+          local done, w = revertToLaunch()
+          if not done then failed = true; log("revert: " .. tostring(w)) end
+        end, function()
+          if failed then return true end
+          if launchState() ~= "ready" then return false end
+          for _, v in ipairs(findScripts("vessel_controller")) do if v.piloting then return true end end
+          return false
+        end) then
+        return true
+      end
+      ok, why = revertToLaunch()
+    end
     if not ok then log("revert: " .. tostring(why)) end
     return ok
   end

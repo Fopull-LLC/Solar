@@ -391,6 +391,37 @@ check(store["co.funds"] == before + 800, "the hull is refunded")
 check(build_host.entered == 1 and store["shipyard.pilot"] == 0, "the builder opens with the design")
 check(VS.launchState() == nil, "nothing rolls out")
 
+-- ── 5. through the black, beacons and all ──────────────────────────────────
+-- With the host's fadeThrough the revert waits for the black, and fades in
+-- once the craft is clamped and someone is in the seat. The comms beacons
+-- are snapshotted at the launch and put back by the revert.
+local snaps, restored = 0, {}
+scripts.comms = {
+  beaconSnapshot = function() snaps = snaps + 1; return { order = {}, rec = {}, n = snaps } end,
+  beaconRestore = function(sn) restored[#restored + 1] = sn.n; return 0, 0 end,
+}
+local fade = nil
+build_host.fadeThrough = function(atBlack, ready) fade = { atBlack = atBlack, ready = ready }; return true end
+build_host.fading = function() return fade ~= nil end
+VS.launchNow("pad", { force = true })
+tick()
+local snap_n = snaps
+check(snap_n >= 1, "a launch snapshots the beacons")
+check(VS.revertClick("launch") == false, "arm")
+check(VS.revertClick("launch") == true and fade ~= nil, "the second click starts the fade")
+check(#restored == 0 and VS.canRevert(), "...and nothing is undone before the black")
+check(VS.revertClick("launch") == false, "a click during the fade does nothing")
+fade.atBlack()
+check(restored[1] == snap_n, "at black the revert puts back the beacons the launch saw")
+check(fade.ready() == false, "the fade holds while the craft assembles")
+tick()
+check(VS.launchState() == "ready", "the relaunch assembles behind the black")
+-- (the harness has no controller for the new craft: a stand-in takes the seat)
+local pilot = controller("Kestrel I", node("Vessel", 0, 104, 0))
+pilot.piloting = true
+check(fade.ready() == true, "...and the fade lifts once it is ready and crewed")
+build_host.fadeThrough, build_host.fading = nil, nil
+
 if #failures > 0 then
   print("REVERT SMOKE FAILURES:")
   for _, f in ipairs(failures) do print("  ✗ " .. f) end

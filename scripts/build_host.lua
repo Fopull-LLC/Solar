@@ -42,7 +42,8 @@
 -- the option the design leaves open; the fade is the robust first cut.)
 --
 -- Published (findScript("build_host")): building, mode, state, enterMs,
--- inWorld(), frameNode(), enter(), leave(), rollout(site), standaloneReady().
+-- inWorld(), frameNode(), enter(), leave(), rollout(site), standaloneReady(),
+-- fadeThrough(atBlack [, ready]), fading().
 
 defaults = {
   fade = 0.35,        -- seconds to black (and back) round a rollout
@@ -68,6 +69,7 @@ local enter_t = 0
 local ctx_pushed = false
 local fade_el = nil
 local ro = nil        -- the rollout in progress: { t, site, phase }
+local fx = nil        -- a fadeThrough in progress: { t, phase, atBlack, ready }
 local save_v, save_t = nil, 0
 local pending_save = false
 
@@ -244,7 +246,7 @@ end
 -- closes its own panel); false when it can't open here, and facility_menu
 -- falls back to the separate builder scene.
 function enter()
-  if mode ~= "world" or state ~= "idle" then return false end
+  if mode ~= "world" or state ~= "idle" or fx then return false end
   local gm = ref("game_manager")
   if gm and gm.loading then return false end
   vab = find("VabInterior")
@@ -373,6 +375,47 @@ local function rollout_tick(dt)
   end
 end
 
+-- FADE THROUGH BLACK, for anyone (a revert to launch): fadeThrough(atBlack
+-- [, ready]) fades to black over `fade` s, calls atBlack() there, holds
+-- until ready() is true (at most `hold` s; no ready = at once) and fades
+-- back in. The rollout's own black, so the world is never seen being moved.
+-- false when this host can't (not the world's, or a builder / rollout /
+-- fade is under way): do the thing without the fade.
+function fadeThrough(atBlack, ready)
+  if mode ~= "world" or state ~= "idle" or fx or type(atBlack) ~= "function" then return false end
+  fx = { t = time, phase = "out", atBlack = atBlack, ready = ready }
+  return true
+end
+function fading() return fx ~= nil end
+
+local function fx_tick()
+  local f = params.fade or 0.35
+  local k = time - fx.t
+  if fx.phase == "out" then
+    set_black(k / f)
+    if k >= f then
+      set_black(1)
+      local ok, err = pcall(fx.atBlack)
+      if not ok then note("fade: the work at black failed: " .. tostring(err)) end
+      fx.phase, fx.t = "wait", time
+    end
+  elseif fx.phase == "wait" then
+    set_black(1)
+    local done = true
+    if fx.ready then
+      local ok, r = pcall(fx.ready)
+      done = not ok or r == true
+    end
+    if done or k > (params.hold or 8.0) then
+      if not done then note("fade: still not ready — fading in anyway") end
+      fx.phase, fx.t = "in", time
+    end
+  else
+    set_black(1 - k / f)
+    if k >= f then set_black(0) fx = nil end
+  end
+end
+
 -- ── the hooks ────────────────────────────────────────────────────────────────
 
 function start(node)
@@ -395,7 +438,10 @@ function update(node, dt)
     if valid(vab) then drive_fade(true) end
     return
   end
-  if state == "idle" then return end
+  if state == "idle" then
+    if fx then fx_tick() end
+    return
+  end
   if state == "rollout" then
     if ro then rollout_tick(dt) end
     return

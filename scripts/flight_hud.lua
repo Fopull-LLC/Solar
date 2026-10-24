@@ -847,7 +847,11 @@ local function revert_key(res_h)
   local toast = gx and type(gx.notice) == "string" and gx.notice ~= "" and time - (gx.noticeAt or -1e9) < 5.0
   local x, y = -(M + MENU_BTN_W + 8), M
   if toast then x, y = -M, M + 28 + 8 + (res_h or 0) + 8 end
+  -- (the red said inline too: the style's hover fill outranks `selected`,
+  -- and the pointer is still on the key it just clicked)
   return { "button", key = "revert", style = armed and "panel/danger" or "hud/button", selected = armed or nil,
+           fill = armed and { 0.62, 0.15, 0.10, 1.0 } or nil, borderColor = armed and { 1.0, 0.8, 0.7, 1.0 } or nil,
+           textColor = armed and { 0.92, 0.89, 0.81, 1.0 } or nil,
            pin = "topRight", x = x, y = y, w = armed and 150 or 96, h = 28,
            textAlign = "center", textValign = "center", focusable = false,
            text = armed and "CONFIRM REVERT?" or "◂ REVERT",

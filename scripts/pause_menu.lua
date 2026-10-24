@@ -209,6 +209,12 @@ local function design_width()
   return 1280 * uiDesignH() / 720
 end
 
+-- The armed danger key (panel/danger `selected`): red fill, a light edge on
+-- the frame, ink legend.
+local ARMED_FILL = { 0.62, 0.15, 0.10, 1.0 }
+local ARMED_EDGE = { 1.0, 0.8, 0.7, 1.0 }
+local ARMED_TEXT = { 0.92, 0.89, 0.81, 1.0 }
+
 local function row_button(key, text, onClicked)
   return { "button", key = key, style = "panel/row", w = "100%", h = 36,
            textAlign = "center", text = text, onClicked = onClicked }
@@ -244,7 +250,13 @@ local function menu_page()
   if rq and rq.ok then
     local function revert_row(key, kind)
       local armed = vs.revertArmed and vs.revertArmed(kind)
+      -- Armed, the key turns red (docs/ui-style.md, the danger button). Said
+      -- inline as well as by `selected`: the style's hover fill outranks
+      -- `selected`, and the pointer is on the row it has just clicked, so
+      -- the red never showed. Unarmed, the lines go and the style is back.
       return { "button", key = key, style = armed and "panel/danger" or "panel/row", selected = armed or nil,
+               fill = armed and ARMED_FILL or nil, borderColor = armed and ARMED_EDGE or nil,
+               textColor = armed and ARMED_TEXT or nil,
                w = "100%", h = 36, textAlign = "center", text = vs.revertLabel(kind),
                onClicked = function()
                  if vs.revertArmed(kind) then close() end
