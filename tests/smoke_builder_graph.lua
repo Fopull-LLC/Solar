@@ -405,6 +405,38 @@ check(env.partCount == before, "duplicate is one undo step")
 -- 4i. the library and a sub-assembly
 check(env.craftSave("Test Mk1"), "save to the library")
 check(#env.craftList() == 1 and env.craftList()[1].name == "Test Mk1" and env.craftList()[1].parts == 5, "the library lists it")
+-- The autosave (build_host's quiet save) is spread over frames, one pass a
+-- frame, and lands the same records a save you ask for does.
+store["shipyard.craft.auto_mk1"] = nil
+check(env.craftSave("Auto Mk1", true) and env.saving() and store["shipyard.craft.auto_mk1"] == nil,
+  "a quiet save is queued, not written in the call")
+for _ = 1, 4 do env.saveJobTick() end
+check(not env.saving() and type(store["shipyard.craft.auto_mk1"]) == "table"
+  and #store["shipyard.craft.auto_mk1"].parts == 5 and store["shipyard.current"] == "Auto Mk1"
+  and #env.craftList() == 2, "…and lands four frames later, in the library")
+env.craftDelete("Auto Mk1")
+-- A craft the save slot refuses (its byte cap) ends the autosave once,
+-- rather than retrying the refused save.set every frame.
+do
+  local real_set = API.save.set
+  API.save.set = function(k, v)
+    if k == "shipyard.craft.huge" then error("the slot would be 4841979 bytes, more than the 4194304 it may hold") end
+    return real_set(k, v)
+  end
+  env.craftSave("Huge", true)
+  for _ = 1, 3 do env.saveJobTick() end
+  check(not env.saving(), "an autosave the slot refuses stops, and is not retried every frame")
+  local tries = 0
+  API.save.set = function(k, v)
+    if k == "shipyard.craft.huge" then tries = tries + 1; error("too big") end
+    return real_set(k, v)
+  end
+  env.craftSave("Huge", true)
+  for _ = 1, 4 do env.saveJobTick() end
+  check(tries == 0 and not env.saving(), "…and a craft that size is not offered to the library again")
+  API.save.set = real_set
+end
+env.craftSave("Test Mk1")
 env.craftNew()
 check(env.partCount == 0, "a new craft clears the stand")
 check(env.craftOpen("Test Mk1"), "open it again")

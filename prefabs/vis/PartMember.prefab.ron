@@ -1,4 +1,4 @@
-// VISUAL-ONLY variant of prefabs/PartMember.prefab.ron for the builder stand: no body, no scripts.
+// VISUAL-ONLY variant of prefabs/PartMember.prefab.ron for the builder stand: no body, no scripts, no damage shader.
 // Written by tools/gen_part_meshes.py (write_vis_prefabs) — regenerate, don't edit.
 // DRAWN MEMBER — any length and profile (size.len, size.prof); meshed by scripts/builder_proc.lua.
 // Written by tools/gen_part_meshes.py (write_prefab) — edit the generator, not this file.

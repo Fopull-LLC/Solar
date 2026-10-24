@@ -2079,7 +2079,17 @@ function rareScan(w, hydro, sdf, opts)
         end
         return by(out, "s", true)
       end
-      local function lowest() return grid_list(function(p) return -p[4] end) end
+      -- (the whole grid sorted with a Lua comparator: ~7,000 points, 10-15 ms
+      -- a time, and the niches below asked for it up to four times in one
+      -- resume — a 36 ms frame on the home world's first load. Sorted once.)
+      local lowest_list = nil
+      local function lowest()
+        if not lowest_list then lowest_list = grid_list(function(p) return -p[4] end) end
+        return lowest_list
+      end
+      -- Between the forced niches, give the frame back (the scan is a
+      -- coroutine; a yield here is the same as one at a field read).
+      local function breathe() if co then coroutine.yield("running") end end
       local function coast()
         if sea <= 0 then return {} end
         return grid_list(function(p)
@@ -2234,7 +2244,7 @@ function rareScan(w, hydro, sdf, opts)
         -- A world with no wall anywhere: its lowest dry ground.
         if short("cave") then force("cave", lowest(), RR.sep.cave, "lowland") end
       end
-      if short("peak") then force("peak", grid_list(function(p) return p[4] end), RR.sep.peak, "highest") end
+      if short("peak") then force("peak", grid_list(function(p) return p[4] end), RR.sep.peak, "highest"); breathe() end
       if short("ravine") then
         local fl = {}
         for _, f in ipairs(floors) do
@@ -2264,8 +2274,10 @@ function rareScan(w, hydro, sdf, opts)
             end
           end
           force("ravine", by(gl, "s", true), RR.sep.ravine, "gully")
+          breathe()
         end
         if short("ravine") then force("ravine", lowest(), RR.sep.ravine, "lowland") end
+        breathe()
       end
       for _, niche in ipairs({ "lake", "river" }) do
         if short(niche) then
@@ -2276,9 +2288,11 @@ function rareScan(w, hydro, sdf, opts)
               local l = fn()
               for _, c in ipairs(l) do c.how = names[n] end
               force(niche, l, RR.sep[niche] * 0.6, names[n])
+              breathe()
             end
           end
           if short(niche) then force(niche, lowest(), RR.sep[niche] * 0.6, "lowland") end
+          breathe()
         end
       end
     end

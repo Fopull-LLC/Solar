@@ -198,11 +198,31 @@ end
 -- poses (so a hinge that moves its arm moves its balls). The rover's tyres
 -- hang off it as bodies of their own and join them.
 local HULL_MARGIN = 0.45    -- the view's near plane and a little air
-local hull_cache = { id = nil, n = -1, parts = {}, gen = 0 }
-local function hull_parts(vn)
+local hull_cache = { id = nil, n = -1, parts = {}, gen = 0, t = -10.0 }
+-- How often the parts list is checked against the craft's children, and how
+-- often a big craft's balls re-read their local poses. `vn:children()` makes a
+-- table of every part, and each `c.x` is a read across the engine: done every
+-- frame they were ~5 ms at 1,000 parts (perfbench g_launch_pad, rc10).
+local HULL_RECHECK = 0.5
+local HULL_POSE_EVERY = 0.25
+local HULL_POSE_SMALL = 150     -- at or under this many parts, poses every frame
+-- `vessel` (optional) is the craft's controller: its `partsGen()` steps the
+-- moment it gains or loses parts (a stage, a joint that failed), so a craft
+-- that changed shape is re-read that frame, not up to HULL_RECHECK later.
+local function parts_gen(vessel)
+  local f = vessel and vessel.partsGen
+  local ok, g = false, nil
+  if type(f) == "function" then ok, g = pcall(f) end
+  return ok and g or nil
+end
+local function hull_parts(vn, vessel)
   if vn and vn.valid and vn.children then
-    local kids = vn:children()
-    if hull_cache.id ~= vn.id or hull_cache.n ~= #kids then
+    local pg = parts_gen(vessel)
+    local stale = hull_cache.id ~= vn.id or time - hull_cache.t > HULL_RECHECK or time < hull_cache.t
+      or pg ~= hull_cache.pg
+    local kids = stale and vn:children() or nil
+    if kids then hull_cache.t, hull_cache.pg = time, pg end
+    if kids and (hull_cache.id ~= vn.id or hull_cache.n ~= #kids) then
       local parts = {}
       for _, c in ipairs(kids) do
         local getc = c.getcomponent or c.getComponent
@@ -215,7 +235,7 @@ local function hull_parts(vn)
           parts[#parts + 1] = { node = c, r = (r > 0.05) and r or 0.6 }
         end
       end
-      hull_cache = { id = vn.id, n = #kids, parts = parts, gen = hull_cache.gen + 1 }
+      hull_cache = { id = vn.id, n = #kids, parts = parts, gen = hull_cache.gen + 1, t = time, pg = pg }
     end
   end
   return hull_cache.parts
@@ -224,17 +244,30 @@ local function hull_balls(vessel)
   local out = {}
   local vn = vessel.node
   if vn and vn.valid and vn.children then
-    hull_parts(vn)
+    hull_parts(vn, vessel)
     if #hull_cache.parts > 0 then
       local o = vn:toWorld(vec3(0, 0, 0))
       local ex = vn:toWorld(vec3(1, 0, 0)) - o
       local ey = vn:toWorld(vec3(0, 1, 0)) - o
       local ez = vn:toWorld(vec3(0, 0, 1)) - o
-      for _, p in ipairs(hull_cache.parts) do
+      -- (components read once: each `.x` of a vec3 is a call)
+      local o_x, o_y, o_z = o.x, o.y, o.z
+      local exx, exy, exz = ex.x, ex.y, ex.z
+      local eyx, eyy, eyz = ey.x, ey.y, ey.z
+      local ezx, ezy, ezz = ez.x, ez.y, ez.z
+      local parts = hull_cache.parts
+      local fresh = #parts <= HULL_POSE_SMALL or not hull_cache.pose_t or hull_cache.pose_gen ~= hull_cache.gen
+        or time - hull_cache.pose_t > HULL_POSE_EVERY or time < hull_cache.pose_t
+      if fresh then hull_cache.pose_t, hull_cache.pose_gen = time, hull_cache.gen end
+      for _, p in ipairs(parts) do
         local c = p.node
-        if c.valid then
-          local w = o + ex * (c.x or 0) + ey * (c.y or 0) + ez * (c.z or 0)
-          out[#out + 1] = { x = w.x, y = w.y, z = w.z, r = p.r }
+        if fresh then
+          if c.valid then p.lx, p.ly, p.lz = c.x or 0, c.y or 0, c.z or 0 else p.lx = nil end
+        end
+        local lx, ly, lz = p.lx, p.ly, p.lz
+        if lx then
+          out[#out + 1] = { x = o_x + exx * lx + eyx * ly + ezx * lz, y = o_y + exy * lx + eyy * ly + ezy * lz,
+                            z = o_z + exz * lx + eyz * ly + ezz * lz, r = p.r }
         end
       end
     end
@@ -258,12 +291,15 @@ end
 -- the craft.
 local function hull_exit(balls, o, dir)
   local far, reach = 0.0, 0.0
+  -- (the vectors' components read once: each `.x` of a vec3 is a call)
+  local ox, oy, oz = o.x, o.y, o.z
+  local dx, dy, dz = dir.x, dir.y, dir.z
   for _, b in ipairs(balls) do
     local r = (b.r or 0.5) + HULL_MARGIN
-    local cx, cy, cz = b.x - o.x, b.y - o.y, b.z - o.z
+    local cx, cy, cz = b.x - ox, b.y - oy, b.z - oz
     local dc = math.sqrt(cx * cx + cy * cy + cz * cz) + r
     if dc > reach then reach = dc end
-    local t = cx * dir.x + cy * dir.y + cz * dir.z
+    local t = cx * dx + cy * dy + cz * dz
     local d2 = cx * cx + cy * cy + cz * cz - t * t
     if d2 < r * r then
       local e = t + math.sqrt(r * r - d2)
@@ -566,8 +602,10 @@ local LIFT_STEP, LIFT_STEPS = 0.06, 16
 -- closest orbit (`zoomRange`), set each frame.
 local CHASE_MIN = 5.0
 local lift_now, lift_t = 0.0, -10.0
+local lift_want, lift_none = 0.0, nil   -- lift_none: no lift fits; the next step to try
+local LIFT_SCAN = 2
 function chase_clip(vessel, head, up, room_d, dt)
-  if time - lift_t > 0.25 then lift_now = 0.0 end   -- a new chase starts level
+  if time - lift_t > 0.25 then lift_now, lift_want, lift_none = 0.0, 0.0, nil end   -- a new chase starts level
   lift_t = time
   local balls = hull_balls(vessel)
   -- what the view passes through: the craft (its parts), the crew, the tyres
@@ -588,14 +626,48 @@ function chase_clip(vessel, head, up, room_d, dt)
     local room = hd and math.max(0.0, hd - 0.1) or want
     return f, need, math.min(want, room), room >= need, lp <= -PITCH_LIMIT
   end
-  -- The least lift that leaves room outside the hull.
+  -- The least lift that leaves room outside the hull. Each trial is a
+  -- spherecast that meets every part of the craft, so the search starts from
+  -- last frame's answer instead of from level: while that still fits, look
+  -- down at most two steps a frame (the lift eases down slower than that
+  -- anyway) and at level itself; when it no longer fits, search the whole
+  -- range from level as before. When none fits, the view holds the top lift
+  -- and the search goes on from level a few steps a frame (LIFT_SCAN), so a
+  -- view boxed in on every side costs three casts a frame, not eighteen.
+  -- (perfbench, rc10: 17 + 1 spherecasts a frame were 20-40 ms on the pad
+  -- with a 1,000-part craft.)
   local want_lift = nil
-  for k = 0, LIFT_STEPS do
-    local _, _, _, ok, top = trial(k * LIFT_STEP)
-    if ok then want_lift = k * LIFT_STEP break end
-    if top then break end
+  local k0 = math.max(0, math.min(LIFT_STEPS, math.floor((lift_want or 0) / LIFT_STEP + 0.5)))
+  if lift_none then
+    local k = lift_none
+    for _ = 1, LIFT_SCAN do
+      local _, _, _, ok2, top2 = trial(k * LIFT_STEP)
+      if ok2 then want_lift = k * LIFT_STEP break end
+      k = k + 1
+      if top2 or k > LIFT_STEPS then k = 0 end
+    end
+    lift_none = (want_lift == nil) and k or nil
+    want_lift = want_lift or LIFT_STEPS * LIFT_STEP
+  else
+    local ok = k0 > 0 and select(4, trial(k0 * LIFT_STEP))
+    if ok then
+      want_lift = k0 * LIFT_STEP
+      for k = k0 - 1, math.max(1, k0 - 2), -1 do
+        if not select(4, trial(k * LIFT_STEP)) then break end
+        want_lift = k * LIFT_STEP
+      end
+      if want_lift > 0 and select(4, trial(0)) then want_lift = 0 end
+    else
+      for k = 0, LIFT_STEPS do
+        local _, _, _, ok2, top2 = trial(k * LIFT_STEP)
+        if ok2 then want_lift = k * LIFT_STEP break end
+        if top2 then break end
+      end
+    end
+    lift_none = (want_lift == nil) and 0 or nil
+    want_lift = want_lift or LIFT_STEPS * LIFT_STEP
   end
-  want_lift = want_lift or LIFT_STEPS * LIFT_STEP
+  lift_want = want_lift
   if want_lift > lift_now then
     lift_now = lift_now + (want_lift - lift_now) * (1 - math.exp(-15 * dt))
   else
@@ -651,13 +723,19 @@ local function craft_update(vessel, vn, swapped)
               lock = nil, axes = nil, look_t = -10.0, air = false, air_t = -10.0, zoomed = false,
               fit_r = nil }
   end
-  local parts = hull_parts(vn)
+  local parts = hull_parts(vn, vessel)
   if craft.gen ~= hull_cache.gen or time - craft.t > 0.5 or not craft.b then
     craft.gen, craft.t = hull_cache.gen, time
     local list = {}
+    -- (a big craft's poses as the chase view last read them, when that was
+    -- this frame's or recent enough; each `c.x` is a read across the engine)
+    local recent = #parts > HULL_POSE_SMALL and hull_cache.pose_t and hull_cache.pose_gen == hull_cache.gen
+      and time - hull_cache.pose_t <= HULL_POSE_EVERY and time >= hull_cache.pose_t
     for _, p in ipairs(parts) do
       local c = p.node
-      if c.valid then list[#list + 1] = { x = c.x or 0, y = c.y or 0, z = c.z or 0, r = p.r } end
+      if recent then
+        if p.lx then list[#list + 1] = { x = p.lx, y = p.ly, z = p.lz, r = p.r } end
+      elseif c.valid then list[#list + 1] = { x = c.x or 0, y = c.y or 0, z = c.z or 0, r = p.r } end
     end
     if #list == 0 then
       list[1] = { x = vessel.podLX or 0, y = vessel.podLY or 1.2, z = vessel.podLZ or 0, r = 1.0 }

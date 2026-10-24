@@ -713,6 +713,42 @@ do
   check(tm.mass and math.abs(tm.mass - (6.07 + c.fuelMass())) < 0.02,
     string.format("the HUD's mass is the true wet mass (%.2f t)", tm.mass or -1))
   check((tm.dv or 0) > 0 and (tm.burn_s or 0) > 0, "the HUD knows the Δv and burn time left")
+  -- BIG-CRAFT CACHES (perf): the stress model's per-joint mass (dry sums cached
+  -- per part set + this tick's propellant) is exactly the outboard set's dry
+  -- mass + what its tanks hold, about the same centre; the hull's reach is
+  -- what laying out every ball would say.
+  do
+    local bpp = save_store["shipyard.blueprint"].parts
+    local kids = {}
+    for _, d in ipairs(bpp) do
+      if (d.parent or 0) ~= 0 then kids[d.parent] = kids[d.parent] or {}; table.insert(kids[d.parent], d) end
+    end
+    local fuel_by = c.tankFuelMap()
+    local worst = 0
+    for _, d0 in ipairs(bpp) do
+      local set, list = {}, { d0 }
+      while #list > 0 do
+        local d = table.remove(list)
+        set[d.uid] = d
+        for _, k in ipairs(kids[d.uid] or {}) do list[#list + 1] = k end
+      end
+      if not set[1] then   -- (the pod's side never leaves)
+        local m, x, y, z = 0, 0, 0, 0
+        for u, d in pairs(set) do
+          local bm = math.max(0.01, d.mass or 0.5) + c.tankFuelT(u)
+          m, x, y, z = m + bm, x + d.x * bm, y + d.y * bm, z + d.z * bm
+        end
+        local uids = {}
+        for u in pairs(set) do uids[u] = true end
+        local jm, jx, jy, jz = c.jointMass(c.dock.node, { uid = d0.uid, set = uids, d = d0 }, fuel_by)
+        worst = math.max(worst, math.abs(jm - m), math.abs(jx - x / m), math.abs(jy - y / m), math.abs(jz - z / m))
+      end
+    end
+    check(worst < 1e-9, string.format("jointMass is the outboard set's wet mass and centre (worst diff %.2g)", worst))
+    local _, reach = c.hullSpheres()
+    local r2 = c.hullReachNow()
+    check(math.abs(reach - r2) < 1e-12, string.format("hullReachNow is hullSpheres' reach (%.3f / %.3f)", r2, reach))
+  end
   -- Pour it back and draw it again: the pool fills top-down and drains bottom-up.
   local was = c.fuel
   c.fuelFill(50)

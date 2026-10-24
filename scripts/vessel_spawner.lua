@@ -118,19 +118,37 @@ end
 CRAFT_TAG = "craftpart"
 local spawn_tag = nil       -- the flight tag the parts being spawned now get
 
-local function spawn_parts(vessel, bp)
+-- A BIG CRAFT IS PUT TOGETHER OVER SEVERAL FRAMES. Every part is a prefab
+-- the engine instantiates on the frame it is asked for, and a 1,000-part craft
+-- asked for all at once was one 170 ms frame (perfbench g_launch_rollout,
+-- rc10). Parts are asked for SPAWN_BATCH a frame (`spawn_drain`, from update);
+-- the craft is held still the whole time — the root is made a compound and
+-- anchored before the first part is asked for, and the anchored compound is
+-- pinned to the pad every tick as before — and `assembly.rebuild` still runs
+-- once, when the last part has landed. Each part is set at its blueprint pose
+-- in the vessel's frame in its callback, so a part that lands a few frames
+-- after the first (the planet moving on under it) is exactly where it belongs.
+SPAWN_BATCH = 150
+local spawn_q = nil          -- { vessel, list = { d, ... }, i, placed, total, tag }
+
+local function spawn_drain()
+  local q = spawn_q
+  if not q then return end
+  local vessel = q.vessel
+  if not (vessel and vessel.valid ~= false) then spawn_q = nil return end
   local rxv, upv, rzv = basis_of(vessel)
   local vx, vy, vz = vessel.x, vessel.y, vessel.z
-  local total = 0
-  local placed = {}
-  local tag = spawn_tag
-  for _, d in pairs(bp.parts) do
-    total = total + 1
-    pending = pending + 1
+  local placed, total, tag = q.placed, q.total, q.tag
+  local last = math.min(#q.list, q.i + SPAWN_BATCH - 1)
+  for k = q.i, last do
+    local d = q.list[k]
     local wx = vx + rxv.x * d.x + upv.x * d.y + rzv.x * d.z
     local wy = vy + rxv.y * d.x + upv.y * d.y + rzv.y * d.z
     local wz = vz + rxv.z * d.x + upv.z * d.y + rzv.z * d.z
     spawn(d.prefab, vec3(wx, wy, wz), function(part)
+      -- (the blueprint pose in the vessel's frame, whatever the vessel did
+      -- between the ask and the landing)
+      if q.fix then part.x, part.y, part.z = d.x, d.y, d.z end
       -- The engine parents a spawned part by converting its WORLD pose into
       -- the vessel's local frame — which leaves inv(vessel tilt) baked into
       -- the part's local rotation (the "misrotated parts" of every sloped
@@ -181,7 +199,25 @@ local function spawn_parts(vessel, bp)
       end
     end, vessel)
   end
+  q.i = last + 1
   assemble_t = time
+  if q.i > #q.list then spawn_q = nil end
+end
+
+local function spawn_parts(vessel, bp)
+  local list = {}
+  for _, d in pairs(bp.parts) do list[#list + 1] = d end
+  pending = pending + #list
+  spawn_q = { vessel = vessel, list = list, i = 1, placed = {}, total = #list, tag = spawn_tag,
+              fix = #list > SPAWN_BATCH }
+  -- Held from the start: the root alone is a compound, anchored, until the
+  -- last part lands and the whole craft is rebuilt (and anchored again).
+  if #list > SPAWN_BATCH then
+    assembly.rebuild(vessel)
+    assembly.setAnchored(vessel, true)
+  end
+  assemble_t = time
+  spawn_drain()
 end
 
 -- The spawn WAITS for solid ground: at scene start the pad's terrain may not
@@ -1168,6 +1204,7 @@ end
 
 function update(node, dt)
   freshness_tick()
+  spawn_drain()
   if want_spawn then
     wait_t = wait_t + dt
     if try_spawn() then want_spawn = false end

@@ -317,6 +317,9 @@ local integ = {
   fired = {},       -- safety-net kind → count (published via `integrity()`)
   note_t = {},      -- safety-net kind → last log time (rate-limits the log)
 }
+-- Published: steps whenever the craft's part set changes (the camera re-reads
+-- its hull the moment it does, instead of polling every part every frame).
+function partsGen() return integ.gen end
 -- Separation and seating knobs, published so a probe can A/B them on a live
 -- craft (`vc.physTune.clear = false`). The defaults are what the game ships:
 --   clear   move a departing piece out of any collider OVERLAP with the hull
@@ -723,6 +726,10 @@ local function load_bp(override)
   for _, d in pairs(bp.parts) do part_hp[d.uid] = 1.0 end
   integ.gone, integ.box, integ.strain = {}, {}, {}
   integ.gen = integ.gen + 1
+  -- (elecRescan above already sorted THIS part set — the same records, none
+  -- gone, all whole — so the new generation needs no second pass: at 1,000
+  -- parts that pass is ~15 ms, on the rollout's busiest frame)
+  elec.gen_seen = integ.gen
   destroyed = false
   chutes_deployed = false
   chute_fill = { t = 0.0, stretch = 0.0, area = 0.0, dens = 0.0, spd = 0.0 }
@@ -960,14 +967,26 @@ end
 -- light); the plume density and light follow the throttle. Staged-away
 -- engines re-root under the detached stage, so `node:children()` only ever
 -- yields the LIVE stack — no bookkeeping.
+-- (The engine children are listed once per part set and once a second, not
+-- every tick: walking every part's handle and name each tick was a fixed cost
+-- that grew with the craft, flames or no flames.)
+FLAME_KIDS = { gen = -1, id = nil, t = -10.0, list = {} }
 local function set_flames(node, pct, cut)
   local on = pct > 0.02
   cut = cut or math.huge
-  for _, c in ipairs(node:children()) do
+  local F = FLAME_KIDS
+  if F.gen ~= integ.gen or F.id ~= node.id or time - F.t >= 1.0 or time < F.t then
+    local list = {}
+    for _, c in ipairs(node:children()) do
+      if c.name and c.name:find("PartEngine") then list[#list + 1] = c end
+    end
+    F.gen, F.id, F.t, F.list = integ.gen, node.id, time, list
+  end
+  for _, c in ipairs(F.list) do
     -- Only ACTIVE engines light: match the child to its blueprint engine by
     -- local pose (bottom live stage + attached side boosters burn; parts
     -- above the next decoupler are a later stage, cold until their turn).
-    if c.name and c.name:find("PartEngine") then
+    if c.valid ~= false then
       local live = false
       if on then
         for _, e in ipairs(engines) do
@@ -1322,15 +1341,96 @@ local damage_arm = 0.0
 -- old 0.05 threshold and silently drop its impact — so a deflected, grinding
 -- or already-wounded part took no further damage. Nearest-match + cache fixes
 -- that (the entity id is stable, so one resolve holds for the part's life).
+-- The node's pose is read ONCE (each `c.x` is a read across the engine), and
+-- the records are walked as an array snapshot taken in `pairs` order (so a
+-- tie still goes to the same part). A 1,000-part rollout resolves every part
+-- on its first tick: reading the pose inside the loop was 3 engine reads per
+-- part per part, 3 million, ~600 ms in one frame (perfbench g_launch_rollout).
+-- The snapshot is also binned on a UID_CELL grid: a part within one cell of
+-- the node is provably the nearest of all (anything outside the 27 cells round
+-- it is at least a cell away), so the whole list is only walked for a part
+-- that has wandered further than that from every record.
+UID_SNAP = { src = nil, gen = -1, u = {}, d = {}, grid = {} }
+UID_CELL = 0.25
+function uidCellKey(ix, iy, iz) return ((ix + 200000) * 400000 + (iy + 200000)) * 400000 + (iz + 200000) end
+-- The snapshot, fresh for this part set.
+local function uid_snap()
+  local S = UID_SNAP
+  if S.src ~= bp_by_uid or S.gen ~= integ.gen then
+    local h = UID_CELL
+    local us, ds, grid, n = {}, {}, {}, 0
+    for u, d in pairs(bp_by_uid) do
+      n = n + 1
+      us[n], ds[n] = u, d
+      local k = uidCellKey(math.floor(d.x / h), math.floor(d.y / h), math.floor(d.z / h))
+      local l = grid[k]
+      if not l then l = {}; grid[k] = l end
+      l[#l + 1] = n
+    end
+    S.src, S.gen, S.u, S.d, S.grid = bp_by_uid, integ.gen, us, ds, grid
+  end
+  return S
+end
+-- The first record (in `pairs` order) still aboard within `tol` (≤ UID_CELL / 2)
+-- of a vessel-frame point on every axis: what a walk of bp_by_uid that breaks
+-- on the first such record finds.
+function uidNear(px, py, pz, tol)
+  local S, h = uid_snap(), UID_CELL
+  local best = nil
+  for ix = math.floor((px - tol) / h), math.floor((px + tol) / h) do
+    for iy = math.floor((py - tol) / h), math.floor((py + tol) / h) do
+      for iz = math.floor((pz - tol) / h), math.floor((pz + tol) / h) do
+        local l = S.grid[uidCellKey(ix, iy, iz)]
+        if l then
+          for _, i in ipairs(l) do
+            local d = S.d[i]
+            if (not best or i < best) and not integ.gone[S.u[i]] and math.abs(px - d.x) < tol
+              and math.abs(py - d.y) < tol and math.abs(pz - d.z) < tol then
+              best = i
+            end
+          end
+        end
+      end
+    end
+  end
+  return best and S.u[best] or nil
+end
 local function uid_of_node(c)
   local eid = c.id
   local uid = eid_uid[eid]
   if not uid then
-    local best, bd = nil, 1e9
-    for u, d in pairs(bp_by_uid) do
-      local dx, dy, dz = (c.x or 0) - d.x, (c.y or 0) - d.y, (c.z or 0) - d.z
-      local dd = dx * dx + dy * dy + dz * dz
-      if dd < bd then bd, best = dd, u end
+    local S = uid_snap()
+    local h = UID_CELL
+    local cx, cy, cz = c.x or 0, c.y or 0, c.z or 0
+    local us, ds = S.u, S.d
+    local best, bd, bi = nil, 1e9, nil
+    -- the 27 cells round the node, in snapshot order (so a tie goes the same way)
+    local ix, iy, iz = math.floor(cx / h), math.floor(cy / h), math.floor(cz / h)
+    local near = nil
+    for ox = -1, 1 do
+      for oy = -1, 1 do
+        for oz = -1, 1 do
+          local l = S.grid[uidCellKey(ix + ox, iy + oy, iz + oz)]
+          if l then
+            for _, i in ipairs(l) do
+              local d = ds[i]
+              local dx, dy, dz = cx - d.x, cy - d.y, cz - d.z
+              local dd = dx * dx + dy * dy + dz * dz
+              if dd < bd or (dd == bd and bi and i < bi) then bd, best, bi = dd, us[i], i end
+            end
+            near = true
+          end
+        end
+      end
+    end
+    if not (near and bd < h * h) then
+      best, bd = nil, 1e9
+      for i = 1, #us do
+        local d = ds[i]
+        local dx, dy, dz = cx - d.x, cy - d.y, cz - d.z
+        local dd = dx * dx + dy * dy + dz * dz
+        if dd < bd then bd, best = dd, us[i] end
+      end
     end
     uid = best
     eid_uid[eid] = uid
@@ -1338,7 +1438,34 @@ local function uid_of_node(c)
   return uid
 end
 
-local function uid_of_child(node, eid)
+-- `kids` (optional): the node's children by entity id, made once by a caller
+-- that resolves many contacts in one tick — `node:children()` makes a handle
+-- per part, and a 1,000-part craft resting or grinding on the ground
+-- reports hundreds of contacts a tick.
+-- The map is kept per part set, and remade when a contact names a part it
+-- does not have (a part that arrived since).
+-- (at most once a tick: a contact on something that is not a part — a tyre
+-- hangs off as a body of its own — must not remake it per contact)
+KIDS_BY = { gen = -1, id = nil, map = nil, t = nil }
+function kidsById(node, fresh)
+  local K = KIDS_BY
+  if (fresh and K.t ~= time) or not K.map or K.gen ~= integ.gen or K.id ~= node.id then
+    local m = {}
+    for _, c in ipairs(node:children()) do m[c.id] = c end
+    K.gen, K.id, K.map, K.t = integ.gen, node.id, m, time
+  end
+  return K.map
+end
+local function uid_of_child(node, eid, kids)
+  if kids then
+    local c = kids[eid]
+    if not (c and c.valid ~= false) then c = kidsById(node, true)[eid] end
+    if c then
+      local uid = uid_of_node(c)
+      if uid then return uid, c end
+    end
+    return nil
+  end
   for _, c in ipairs(node:children()) do
     if c.id == eid then
       local uid = uid_of_node(c)
@@ -1355,12 +1482,17 @@ end
 -- with no rebuild and no kick. So thrust, RCS, drag, contacts and torques all
 -- act on the craft the builder quoted, lightening as it burns. A part's mass is
 -- written only when it moves (a tank that is burning, a hold that was loaded);
--- the part list is re-read when the craft changes, and once a second.
-local mass_sync = { gen = -1, t = -10.0, list = {}, bays = 0, last = {} }
-function massSync(node)
+-- the part list is re-read when the craft changes (its part set, or the count
+-- of parts in its compound), and every 10 s besides (it was every second: a
+-- 13 ms read of every part at 1,000 parts, perfbench g_launch_pad). A big
+-- craft's parts arrive over several frames: each weighs what it carries the
+-- tick its compound counts it.
+local mass_sync = { gen = -1, t = -10.0, list = {}, bays = 0, last = {}, np = -1 }
+function massSync(node, info)
   local ms = mass_sync
-  if ms.gen ~= integ.gen or time - ms.t >= 1.0 then
-    ms.gen, ms.t = integ.gen, time
+  local np = info and info.parts and #info.parts or ms.np
+  if ms.gen ~= integ.gen or time - ms.t >= 10.0 or np ~= ms.np then
+    ms.gen, ms.t, ms.np = integ.gen, time, np
     local list, bays = {}, 0
     for _, c in ipairs(node:children()) do
       -- parts only (a part node carries its prefab's name): never a passenger
@@ -1377,9 +1509,18 @@ function massSync(node)
   end
   local share = (ms.bays > 0) and (holdT or 0) / ms.bays or 0.0
   local total = 0.0
+  -- Each part's propellant by uid, from one pass over the tanks. tankFuelT
+  -- scans every tank for every part, every tick: parts × tanks (perfbench:
+  -- 1,000 parts, 40 tanks — massSync led vessel_controller on the pad).
+  local fuel_t = ms.fuel_t or {}
+  ms.fuel_t = fuel_t
+  for k in pairs(fuel_t) do fuel_t[k] = nil end
+  for _, t in ipairs(tanks) do
+    if t.uid and fuel_t[t.uid] == nil then fuel_t[t.uid] = (t.left or 0) * (t.ft or 0) end
+  end
   for _, e in ipairs(ms.list) do
     local d = e.d
-    local m = math.max(0.001, (d.mass or 0) + tankFuelT(e.uid)
+    local m = math.max(0.001, (d.mass or 0) + (fuel_t[e.uid] or 0.0)
       + (((d.cargo or 0) > 0) and share or 0.0))
     -- a powered wheel whose tyre is out: the tyre body carries its share
     if R2.live and (d.wheel or "") ~= "" then m = math.max(0.001, m * (1 - TYRE_SHARE)) end
@@ -1476,18 +1617,58 @@ function paintDamage(c, hp) set_part_damage(c, hp) end
 
 -- The live child node for a blueprint uid (position match) — used to paint
 -- damage on parts wounded by a chain reaction they weren't directly hit by.
+-- The children are read ONCE a tick (per part set) into a snapshot binned on
+-- a 0.12 m grid, and the answer is still the FIRST child, in the engine's
+-- order, inside the 6 cm box: walking `node:children()` per call made a
+-- handle and three engine reads per part, per part asked about, and shedding
+-- 976 parts at once asked about all of them (perfbench g_launch_release: a
+-- 1.1 s frame).
+CHILD_SNAP = { t = nil, gen = -1, id = nil, n = 0, kids = nil, x = nil, y = nil, z = nil, grid = nil }
+CHILD_CELL = 0.12
+-- The first child (engine order) within `tol` (≤ CHILD_CELL / 2) of a
+-- vessel-frame point on every axis, or nil.
+function childNear(node, px, py, pz, tol)
+  local S, h = CHILD_SNAP, CHILD_CELL
+  if S.t ~= time or S.gen ~= integ.gen or S.id ~= node.id then
+    local kids = node:children()
+    local xs, ys, zs, grid = {}, {}, {}, {}
+    for i, c in ipairs(kids) do
+      local x, y, z = c.x or 0, c.y or 0, c.z or 0
+      xs[i], ys[i], zs[i] = x, y, z
+      local k = uidCellKey(math.floor(x / h), math.floor(y / h), math.floor(z / h))
+      local l = grid[k]
+      if not l then l = {}; grid[k] = l end
+      l[#l + 1] = i
+    end
+    S.t, S.gen, S.id, S.kids, S.x, S.y, S.z, S.grid = time, integ.gen, node.id, kids, xs, ys, zs, grid
+  end
+  local best = nil
+  local x0, x1 = math.floor((px - tol) / h), math.floor((px + tol) / h)
+  local y0, y1 = math.floor((py - tol) / h), math.floor((py + tol) / h)
+  local z0, z1 = math.floor((pz - tol) / h), math.floor((pz + tol) / h)
+  for ix = x0, x1 do
+    for iy = y0, y1 do
+      for iz = z0, z1 do
+        local l = S.grid[uidCellKey(ix, iy, iz)]
+        if l then
+          for _, i in ipairs(l) do
+            if (not best or i < best) and math.abs(S.x[i] - px) < tol and math.abs(S.y[i] - py) < tol
+              and math.abs(S.z[i] - pz) < tol and S.kids[i].valid ~= false then
+              best = i
+            end
+          end
+        end
+      end
+    end
+  end
+  return best and S.kids[best] or nil
+end
 local function child_of_uid(node, uid)
   local d = bp_by_uid[uid]
   if not d then return nil end
   local known = R2 and R2.node[uid]
   if known and known.valid then return known end
-  for _, c in ipairs(node:children()) do
-    if math.abs((c.x or 0) - d.x) < 0.06 and math.abs((c.y or 0) - d.y) < 0.06
-      and math.abs((c.z or 0) - d.z) < 0.06 then
-      return c
-    end
-  end
-  return nil
+  return childNear(node, d.x, d.y, d.z, 0.06)
 end
 
 -- A destroyed part's engines/tanks leave the pools (its fuel share with it).
@@ -3445,13 +3626,15 @@ function hullSpheres()
   local rx, up, rz = basis(node)
   local bx, by, bz = base_of(node, info)
   local reach = 0.0
+  local rxx, rxy, rxz, upx, upy, upz = rx.x, rx.y, rx.z, up.x, up.y, up.z
+  local rzx, rzy, rzz = rz.x, rz.y, rz.z
   for u, d in pairs(bp_by_uid) do
     if (d.dock or 0) ~= 1 and (part_hp[u] or 0) > 0 then
       local r = part_radius(d)
       out[#out + 1] = {
-        x = bx + rx.x * d.x + up.x * d.y + rz.x * d.z,
-        y = by + rx.y * d.x + up.y * d.y + rz.y * d.z,
-        z = bz + rx.z * d.x + up.z * d.y + rz.z * d.z,
+        x = bx + rxx * d.x + upx * d.y + rzx * d.z,
+        y = by + rxy * d.x + upy * d.y + rzy * d.z,
+        z = bz + rxz * d.x + upz * d.y + rzz * d.z,
         r = r,
       }
       local off = math.sqrt(d.x * d.x + d.y * d.y + d.z * d.z) + r
@@ -3462,18 +3645,45 @@ function hullSpheres()
   return out, reach
 end
 
+-- How far the live hull reaches from the craft's base: the `reach` that
+-- hullSpheres returns, without placing a ball per part. Cached per part set
+-- (integ.gen steps when a part breaks off or arrives), so hullBump only lays
+-- out the balls — a table per part, every tick — when another craft is close
+-- enough to touch (perfbench g_launch_release: 1,000 balls a tick for nobody).
+HULL_REACH = { gen = -1, src = nil, reach = 0.0, n = 0 }
+function hullReachNow()
+  if destroyed then return 0.0, 0 end
+  local H = HULL_REACH
+  if H.gen ~= integ.gen or H.src ~= bp_by_uid then
+    local reach, n = 0.0, 0
+    for u, d in pairs(bp_by_uid) do
+      if (d.dock or 0) ~= 1 and (part_hp[u] or 0) > 0 then
+        n = n + 1
+        local off = math.sqrt(d.x * d.x + d.y * d.y + d.z * d.z) + part_radius(d)
+        if off > reach then reach = off end
+      end
+    end
+    H.gen, H.src, H.reach, H.n = integ.gen, bp_by_uid, reach, n
+  end
+  return H.reach, H.n
+end
+
 function hullBump(node, info, dt)
   if destroyed or info.anchored then return end
-  local mine, my_reach = hullSpheres()
-  if #mine == 0 then return end
+  local my_reach, my_n = hullReachNow()
+  if my_n == 0 then return end
+  local mine = nil
   local m = math.max(0.1, info.mass or 1.0)
   local bx, by, bz = base_of(node, info)
   for _, v in ipairs(findScripts("vessel_controller")) do
     if v.hullSpheres and v.node and v.node.valid and v.node.id ~= node.id then
       local dx0, dy0, dz0 = v.node.x - bx, v.node.y - by, v.node.z - bz
       local d0 = math.sqrt(dx0 * dx0 + dy0 * dy0 + dz0 * dz0)
-      local theirs, their_reach = v.hullSpheres()
-      if d0 < my_reach + their_reach + 2.0 and #theirs > 0 then
+      local their_reach
+      if v.hullReachNow then their_reach = v.hullReachNow() else their_reach = select(2, v.hullSpheres()) end
+      local theirs = (d0 < my_reach + their_reach + 2.0) and v.hullSpheres() or nil
+      if theirs and #theirs > 0 then
+        if not mine then mine = hullSpheres() end
         local oi = assembly.info(v.node)
         local ovx = oi and oi.vel.x or 0
         local ovy = oi and oi.vel.y or 0
@@ -3983,14 +4193,7 @@ break_part = function(node, uid, d, c, hx, hy, hz, depth)
         local dx2, dy2, dz2 = d2.x - d.x, d2.y - d.y, d2.z - d.z
         local dist = math.sqrt(dx2 * dx2 + dy2 * dy2 + dz2 * dz2)
         if dist < blast then
-          local c2 = nil -- the live child for u2, matched by position
-          for _, ch in ipairs(node:children()) do
-            if math.abs((ch.x or 0) - d2.x) < 0.05 and math.abs((ch.y or 0) - d2.y) < 0.05
-              and math.abs((ch.z or 0) - d2.z) < 0.05 then
-              c2 = ch
-              break
-            end
-          end
+          local c2 = childNear(node, d2.x, d2.y, d2.z, 0.05) -- the live child for u2, matched by position
           if c2 then
             part_hp[u2] = hp2 - (1.0 - dist / blast) * power
             if part_hp[u2] <= 0 then
@@ -4237,6 +4440,7 @@ local function damage_tick(node, info, dt)
   local ceiling = own + ARTIFACT_MARGIN
   local artifacts = 0
   local raw = assembly.impacts(node)
+  local kids = #raw > 1 and kidsById(node) or nil
   for _, h in ipairs(raw) do
     -- STALE-ENGINE GUARD: speedAbs is a NEW engine field. If it's missing, the
     -- editor binary predates this session's physics work — damage falls back to
@@ -4249,7 +4453,7 @@ local function damage_tick(node, info, dt)
         "in the Rust binary, not the Lua. Run `cargo run -p floptle-editor` (or " ..
         "reinstall the freshly-built version).")
     end
-    local uid, c = uid_of_child(node, h.part)
+    local uid, c = uid_of_child(node, h.part, kids)
     local d = uid and bp_by_uid[uid]
     local hp = uid and part_hp[uid]
     if d and hp and hp > 0 then
@@ -5075,6 +5279,81 @@ local function air_at(node)
   return airBandAt(db, alt), db
 end
 
+-- Each tank part's propellant (t) by uid, as tankFuelT reads it (the first
+-- tank record with that uid), from one pass over the tanks.
+function tankFuelMap()
+  local out = {}
+  for _, t in ipairs(tanks) do
+    if t.uid ~= nil and out[t.uid] == nil then out[t.uid] = (t.left or 0) * (t.ft or 0) end
+  end
+  return out
+end
+
+-- set_mass(node, j.set) for a stress joint, without walking the set every
+-- tick: the dry boxes' mass and moments are summed once per part set
+-- (integ.gen steps whenever a part leaves or arrives), and only the tanks in
+-- the set are added each tick with what they hold now. A spine joint of a
+-- 1,000-part craft carries most of the craft, and each part of the walk also
+-- scanned every tank (stressTick 2.2 → 0.4 ms a frame with the rest of this
+-- pass, perfbench g_launch_release).
+function jointMass(node, j, fuel_by)
+  local c = j.mc
+  if not c or c.gen ~= integ.gen then
+    local m, x, y, z, tk = 0.0, 0.0, 0.0, 0.0, {}
+    for u in pairs(j.set) do
+      if not integ.gone[u] then
+        local b = part_box(node, u)
+        if b then
+          m = m + b.m
+          x, y, z = x + b.cx * b.m, y + b.cy * b.m, z + b.cz * b.m
+          tk[#tk + 1] = { u = u, b = b }
+        end
+      end
+    end
+    -- keep only the parts that are tanks (anything tankFuelT could count)
+    local is_tank = {}
+    for _, t in ipairs(tanks) do if t.uid ~= nil then is_tank[t.uid] = true end end
+    local keep = {}
+    for _, e in ipairs(tk) do if is_tank[e.u] then keep[#keep + 1] = e end end
+    c = { gen = integ.gen, ntanks = #tanks, m = m, x = x, y = y, z = z, tk = keep }
+    j.mc = c
+  end
+  -- (a tank list that changed without a new part set — a docked module's
+  -- tanks joining — is caught here)
+  if c.ntanks ~= #tanks then j.mc = nil; return jointMass(node, j, fuel_by) end
+  local m, x, y, z = c.m, c.x, c.y, c.z
+  for _, e in ipairs(c.tk) do
+    local f = fuel_by[e.u]
+    if f and f ~= 0 then
+      local b = e.b
+      m = m + f
+      x, y, z = x + b.cx * f, y + b.cy * f, z + b.cz * f
+    end
+  end
+  if m <= 0 then return 0, 0, 0, 0 end
+  return m, x / m, y / m, z / m
+end
+
+-- part_qmax(j.d) with the part's deploy module looked up once per joint
+-- (a part's modules are fixed by its blueprint record).
+function jointQmax(j)
+  local d = j.d
+  if (d.faired or 0) ~= 0 and r2Faired(d) then return 1e9 end
+  local q = (d.maxq or 0) > 0 and d.maxq or QMAX_KPA
+  local m = j.qmod
+  if m == nil then
+    local E = elib()
+    if not E then return part_qmax(d) end
+    m = E.modOf(d, "deploy") or false
+    j.qmod = m
+  end
+  if m and m.anim ~= "legs" and (panim[d.uid] or 0) > 0.3 then
+    q = math.min(q, m.anim == "solar" and 4 or 6)
+  elseif not m and (d.solar or 0) == 1 and DEVICES.solar.anim > 0.3 then q = math.min(q, 4)
+  elseif not m and (d.comms or 0) == 1 and DEVICES.comms.anim > 0.3 then q = math.min(q, 6) end
+  return q
+end
+
 -- STRESS: load every joint, fail the ones past their limit. Runs piloted or not
 -- (a derelict hit hard breaks the same), never while clamped or in the settle
 -- window after release.
@@ -5143,30 +5422,41 @@ function stressTick(node, info, dt)
   local dens = air_at(node)
   local q_kpa = 0.5 * AIR_RHO * dens * spd * spd / 1000.0
   local worst, worst_j, worst_sev, worst_why = 0.0, nil, 0.0, nil
+  -- (what set_mass sums for each joint, from per-joint dry sums cached per
+  -- part set plus this tick's propellant: see jointMass)
+  local fuel_by = tankFuelMap()
+  -- (every vector's components read once, not per joint: a vec3's `.x` is a
+  -- call into the engine)
+  local rxx, rxy, rxz, upx, upy, upz = rx.x, rx.y, rx.z, up.x, up.y, up.z
+  local rzx, rzy, rzz = rz.x, rz.y, rz.z
+  local cmx, cmy, cmz = cm.x, cm.y, cm.z
+  local wx, wy, wz = w.x, w.y, w.z
+  local afx, afy, afz, alx, aly, alz = af.x, af.y, af.z, al.x, al.y, al.z
   for _, j in ipairs(joints(node)) do
     if not integ.gone[j.uid] then
-      local m, lx, ly, lz = set_mass(node, j.set)
+      local m, lx, ly, lz = jointMass(node, j, fuel_by)
       if m > 0 then
         -- Acceleration at the outboard mass's centre: a + α×r + ω×(ω×r).
-        local px = bx + rx.x * lx + up.x * ly + rz.x * lz - cm.x
-        local py = by + rx.y * lx + up.y * ly + rz.y * lz - cm.y
-        local pz = bz + rx.z * lx + up.z * ly + rz.z * lz - cm.z
-        local wrx, wry, wrz = w.y * pz - w.z * py, w.z * px - w.x * pz, w.x * py - w.y * px
-        local cx = af.x + (al.y * pz - al.z * py) + (w.y * wrz - w.z * wry)
-        local cy = af.y + (al.z * px - al.x * pz) + (w.z * wrx - w.x * wrz)
-        local cz = af.z + (al.x * py - al.y * px) + (w.x * wry - w.y * wrx)
+        local px = bx + rxx * lx + upx * ly + rzx * lz - cmx
+        local py = by + rxy * lx + upy * ly + rzy * lz - cmy
+        local pz = bz + rxz * lx + upz * ly + rzz * lz - cmz
+        local wrx, wry, wrz = wy * pz - wz * py, wz * px - wx * pz, wx * py - wy * px
+        local cx = afx + (aly * pz - alz * py) + (wy * wrz - wz * wry)
+        local cy = afy + (alz * px - alx * pz) + (wz * wrx - wx * wrz)
+        local cz = afz + (alx * py - aly * px) + (wx * wry - wy * wrx)
         local load = m * math.sqrt(cx * cx + cy * cy + cz * cz) -- kN (t · m/s²)
         local sev = load / joint_strength(j.d, part_hp[j.uid])
-        local why = string.format("%.0f kN at %.1f g", load,
-          math.sqrt(cx * cx + cy * cy + cz * cz) / 9.81)
+        -- (the reason is worded only for the joint that fails, not for every
+        -- joint every tick)
+        local why = 1
         -- Dynamic pressure on the part itself.
-        local qs = q_kpa / part_qmax(j.d)
-        if qs > sev then sev, why = qs, string.format("%.1f kPa dynamic pressure", q_kpa) end
+        local qs = q_kpa / jointQmax(j)
+        if qs > sev then sev, why = qs, 2 end
         -- An open canopy: the air it can take before the lines part.
         if (j.d.chute or 0) == 1 and chutes_deployed and chute_anim > 0 then
           local cs = q_kpa / CHUTE_SAFE_KPA
           if cs > sev then
-            sev, why = cs, string.format("canopy opened into %.1f kPa (%.0f m/s)", q_kpa, spd)
+            sev, why = cs, 3
           end
         end
         if sev > 1.0 then
@@ -5184,6 +5474,9 @@ function stressTick(node, info, dt)
           fails = true
         end
         if fails and sev > worst then
+          if why == 1 then
+            why = string.format("%.0f kN at %.1f g", load, math.sqrt(cx * cx + cy * cy + cz * cz) / 9.81)
+          end
           worst, worst_j, worst_sev, worst_why = sev, j, sev, why
         end
       end
@@ -5191,6 +5484,11 @@ function stressTick(node, info, dt)
   end
   -- One failure per tick, the worst: the craft is a different shape afterwards
   -- and every load is re-read next tick against the new one.
+  if worst_why == 2 then
+    worst_why = string.format("%.1f kPa dynamic pressure", q_kpa)
+  elseif worst_why == 3 then
+    worst_why = string.format("canopy opened into %.1f kPa (%.0f m/s)", q_kpa, spd)
+  end
   if worst_j then
     local d = worst_j.d
     local fuelled = false
@@ -5221,13 +5519,10 @@ local function inertia_floor(node, info)
   local live = {}
   for _, c in ipairs(node:children()) do
     if c.valid ~= false then
-      for u, d in pairs(bp_by_uid) do
-        if not integ.gone[u] and math.abs((c.x or 0) - d.x) < 0.06
-          and math.abs((c.y or 0) - d.y) < 0.06 and math.abs((c.z or 0) - d.z) < 0.06 then
-          live[u] = true
-          break
-        end
-      end
+      -- (the pose read once, and the records looked up on a grid: this ran
+      -- three engine reads per part per part while a big wreck tumbled)
+      local u = uidNear(c.x or 0, c.y or 0, c.z or 0, 0.06)
+      if u then live[u] = true end
     end
   end
   local I, m = 0.0, 0.0
@@ -5572,6 +5867,11 @@ function waterTick(node, info, dt)
   local bx, by, bz = base_of(node, info)
   local m = math.max(0.05, info.mass or 1)
   local cells, wetV, totV, csum = {}, 0, 0, 0
+  -- (each vector's components read once: a vec3's `.x` is a call)
+  local rxx, rxy, rxz, upx, upy, upz = rx.x, rx.y, rx.z, up.x, up.y, up.z
+  local rzx, rzy, rzz = rz.x, rz.y, rz.z
+  local vx, vy, vz, wx, wy, wz = v.x, v.y, v.z, w.x, w.y, w.z
+  local comx, comy, comz, bdx, bdy, bdz = com.x, com.y, com.z, b.x, b.y, b.z
   for u, dd in pairs(bp_by_uid) do
     local bxx = not integ.gone[u] and part_box(node, u)
     if bxx then
@@ -5579,20 +5879,34 @@ function waterTick(node, info, dt)
       local V = 8 * bxx.hx * bxx.hy * bxx.hz * (WATER_SEALED[kind] or 0.45)
       local Vc = V / 8
       local hx, hy, hz = bxx.ex * 0.5, bxx.ey * 0.5, bxx.ez * 0.5
-      local hu = math.abs(ux * rx.x + uy * rx.y + uz * rx.z) * hx + math.abs(ux * up.x + uy * up.y + uz * up.z) * hy
-        + math.abs(ux * rz.x + uy * rz.y + uz * rz.z) * hz
+      local hu = math.abs(ux * rxx + uy * rxy + uz * rxz) * hx + math.abs(ux * upx + uy * upy + uz * upz) * hy
+        + math.abs(ux * rzx + uy * rzy + uz * rzz) * hz
       hu = math.max(hu, 0.02)
       local pwet = 0
-      for k = 0, 7 do
+      -- A part wholly clear of the sea (and no lake about): none of its eight
+      -- corners can be wet, as every corner lies within `rad` of its centre.
+      -- Its volume still counts; the corner loop is skipped. (A tall craft on
+      -- a pad by the sea is inside WATER.reach, and this ran 8 corners for
+      -- every part, every tick.)
+      local dry = false
+      if sea and not lake then
+        local rad = math.sqrt(hx * hx + hy * hy + hz * hz)
+        local mx = bx + rxx * bxx.cx + upx * bxx.cy + rzx * bxx.cz - bdx
+        local my = by + rxy * bxx.cx + upy * bxx.cy + rzy * bxx.cz - bdy
+        local mz = bz + rxz * bxx.cx + upz * bxx.cy + rzz * bxx.cz - bdz
+        dry = R - math.sqrt(mx * mx + my * my + mz * mz) + rad + hu < -1e-3
+      end
+      if dry then for _ = 0, 7 do totV = totV + Vc end end
+      for k = 0, dry and -1 or 7 do
         local ox = bxx.cx + ((k % 2 == 0) and -hx or hx)
         local oy = bxx.cy + ((math.floor(k / 2) % 2 == 0) and -hy or hy)
         local oz = bxx.cz + ((k < 4) and -hz or hz)
-        local cx = bx + rx.x * ox + up.x * oy + rz.x * oz
-        local cy = by + rx.y * ox + up.y * oy + rz.y * oz
-        local cz = bz + rx.z * ox + up.z * oy + rz.z * oz
+        local cx = bx + rxx * ox + upx * oy + rzx * oz
+        local cy = by + rxy * ox + upy * oy + rzy * oz
+        local cz = bz + rxz * ox + upz * oy + rzz * oz
         local depth = -1e9
         if sea then
-          local qx, qy, qz = cx - b.x, cy - b.y, cz - b.z
+          local qx, qy, qz = cx - bdx, cy - bdy, cz - bdz
           depth = R - math.sqrt(qx * qx + qy * qy + qz * qz)
         end
         if lake then
@@ -5611,10 +5925,10 @@ function waterTick(node, info, dt)
                       A = Vc ^ (2 / 3) * f }
           -- the cell's own velocity, planet frame (info.vel is the craft's
           -- velocity in its dominant body's frame; still water)
-          local rxp, ryp, rzp = cx - com.x, cy - com.y, cz - com.z
-          c.vx = v.x + w.y * rzp - w.z * ryp
-          c.vy = v.y + w.z * rxp - w.x * rzp
-          c.vz = v.z + w.x * ryp - w.y * rxp
+          local rxp, ryp, rzp = cx - comx, cy - comy, cz - comz
+          c.vx = vx + wy * rzp - wz * ryp
+          c.vy = vy + wz * rxp - wx * rzp
+          c.vz = vz + wx * ryp - wy * rxp
           c.s = math.sqrt(c.vx * c.vx + c.vy * c.vy + c.vz * c.vz)
           c.k = 0.5 * WATER_RHO * WATER_CD * c.A * c.s + WATER_RHO * Vs * WATER_LIN
           csum = csum + c.k
@@ -5625,9 +5939,9 @@ function waterTick(node, info, dt)
       if gm and pwet > 0 then
         -- the part's own up, turned toward the water's: m g GM sin(tilt)
         local Yx, Yy, Yz = part_axis(dd)
-        local wx = rx.x * Yx + up.x * Yy + rz.x * Yz
-        local wy = rx.y * Yx + up.y * Yy + rz.y * Yz
-        local wz = rx.z * Yx + up.z * Yy + rz.z * Yz
+        local wx = rxx * Yx + upx * Yy + rzx * Yz
+        local wy = rxy * Yx + upy * Yy + rzy * Yz
+        local wz = rxz * Yx + upz * Yy + rzz * Yz
         local k = gm * bxx.m * g * pwet
         cells.rx = (cells.rx or 0) + (wy * uz - wz * uy) * k
         cells.ry = (cells.ry or 0) + (wz * ux - wx * uz) * k
@@ -7822,7 +8136,7 @@ function fixedUpdate(node, dt)
   -- then contact damage, then the joint-stress model. All three are globals or
   -- were already upvalues: this function sits at LuaJIT's 60-upvalue ceiling.
   -- The parts weigh what they carry (fuel, cargo) before anything pushes.
-  if info then massSync(node) end
+  if info then massSync(node, info) end
   if info then safetyTick(node, info, dt) end
   if info then damage_tick(node, info, dt) end
   if info then stressTick(node, info, dt) end

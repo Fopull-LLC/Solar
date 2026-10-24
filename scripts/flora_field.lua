@@ -2141,7 +2141,14 @@ rare_tick = function(dt)
       if wait then rareStatus = "waiting for the rivers"; return end
       local dig = nil
       if (tonumber(save.get("g_homeGen")) or 1) >= 2 and terrain.dig then
-        dig = function(x, y, z, r) terrain.dig(rare.bx + x, rare.by + y, rare.bz + z, r) end
+        -- One edit a frame: a grotto is two bites, and each is a terrain edit
+        -- the engine applies on the spot, so the scan (a coroutine that
+        -- already yields between field reads) yields after each bite too,
+        -- rather than making both, and the reads after them, in one frame.
+        dig = function(x, y, z, r)
+          terrain.dig(rare.bx + x, rare.by + y, rare.bz + z, r)
+          if coroutine.isyieldable == nil or coroutine.isyieldable() then coroutine.yield("running") end
+        end
       end
       rare.ens = cl.rareScan(w, hydro, function(x, y, z)
         return terrain.query(rare.bx + x, rare.by + y, rare.bz + z)

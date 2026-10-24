@@ -1,4 +1,4 @@
-// VISUAL-ONLY variant of prefabs/PartStrut1.prefab.ron for the builder stand: no body, no scripts.
+// VISUAL-ONLY variant of prefabs/PartStrut1.prefab.ron for the builder stand: no body, no scripts, no damage shader.
 // Written by tools/gen_part_meshes.py (write_vis_prefabs) — regenerate, don't edit.
 // 1 M SQUARE STRUT — round-two part.
 // Written by tools/gen_part_meshes.py (write_prefab) — edit the generator, not this file.
@@ -24,10 +24,6 @@
                 metallic_map: Some("textures/parts/metal_orm.png"),
                 metallic: 0.5,
                 ao_map: Some("textures/parts/metal_orm.png"),
-                shader: Some("shaders/hullPanels.flsl"),
-                shader_params: {
-                    "tint": (0.5, 0.56, 0.66, 1.0),
-                },
                 shading: Physical,
             ),
             "Metal": (
@@ -40,10 +36,6 @@
                 metallic_map: Some("textures/parts/metal_orm.png"),
                 metallic: 0.55,
                 ao_map: Some("textures/parts/metal_orm.png"),
-                shader: Some("shaders/hullPanels.flsl"),
-                shader_params: {
-                    "tint": (1, 1, 1, 1.0),
-                },
                 shading: Physical,
             ),
         },

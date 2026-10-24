@@ -3998,10 +3998,15 @@ local function make_blueprint()
   return bp, i
 end
 
-local function save_blueprint()
+local function save_blueprint(noflush)
+  -- An autosave still in flight (craftSave quiet, over four frames) lands
+  -- first, so the writes happen in the order they were asked for.
+  if W.save_job and saveJobTick then
+    for _ = 1, 5 do if not W.save_job then break end saveJobTick() end
+  end
   local bp, i = make_blueprint()
   save.set("shipyard.blueprint", bp)
-  save.flush()
+  if not noflush then save.flush() end
   ui("save", 0.9)
   hint("blueprint saved  ·  " .. i .. " parts", 2.5)
   return bp
@@ -6191,6 +6196,7 @@ end
 function update(node, dt)
   -- in the world: this frame's frame-space shapes wait for lateUpdate (F.flush)
   if W.F and W.F.beginQueue then W.F.beginQueue() end
+  saveJobTick()
   W.visits = 0
   frameTick()
   statsTick()
@@ -6282,9 +6288,14 @@ function doLaunch()
   -- debris or the crew: the launch is refused here, before the hull is
   -- charged, with what is in the way and what to do about it
   -- (vessel_spawner.launchBlockedWhy; it checks again as it rolls out).
+  -- (The blueprint is made and stored ONCE here, and the store written once
+  -- at the end: LAUNCH made it twice and flushed three times, each a pass
+  -- over every part — ~180 ms at 1,000 parts, on the click.)
+  local saved = false
   local vs = findScript and findScript("vessel_spawner") or nil
   if vs and vs.valid ~= false and vs.launchBlockedWhy then
-    save_blueprint() -- (the check sizes the footprint from the craft on the stand)
+    save_blueprint(true) -- (the check sizes the footprint from the craft on the stand)
+    saved = true
     local why = vs.launchBlockedWhy(launchSite())
     if why then
       -- a short placard so it is seen, the whole sentence on the hint bar
@@ -6307,7 +6318,7 @@ function doLaunch()
   end
   if co and co.spend then co.spend(cost, "hull rollout (" .. partCount .. " parts)") end
   save.set("shipyard.spent", cost)
-  save_blueprint()
+  if not saved then save_blueprint(true) end
   ui("launch", 1.0)
   save.set("shipyard.launch", 1)
   save.set("shipyard.site", launchSite())
@@ -6749,26 +6760,88 @@ local function index_put(entry)
   if entry.name then table.insert(idx, 1, entry) end
   save.set("shipyard.crafts", idx)
 end
-function craftSave(name)
-  name = name or W.craft or "Untitled"
-  W.craft = name
-  local bp = save_blueprint()
-  local sl = slug(name)
-  save.set("shipyard.craft." .. sl, bp)
+-- The library entry for a saved craft, and its thumbnail for the OPEN list
+-- (async; skipped where there is no capture).
+-- (globals, and the job on W: this file's main chunk is at Lua's 200-local limit)
+function libraryPut(name, sl)
   local st = stats()
   index_put({ name = name, slug = sl, parts = st.parts, mass = st.mass, cost = st.cost, t = time,
               thumb = "user://crafts/" .. sl .. ".png" })
   save.set("shipyard.current", name)
-  save.flush()
-  -- a thumbnail for the OPEN list (async; skipped where there is no capture)
   if camera and camera.capture and assets and assets.writeBytes then
     pcall(camera.capture, { w = 256, h = 144, ui = false, draws = false }, function(bytes)
       if bytes then pcall(assets.writeBytes, "user://crafts/" .. sl .. ".png", bytes) end
     end)
   end
+  return st
+end
+
+-- craftSave(name [, quiet]). A save you ask for is written at once, with one
+-- flush (it used to flush twice). A QUIET one is build_host's autosave: no
+-- sound, no hint, and no flush of its own (the engine writes the store within
+-- a few seconds anyway), and it is spread over four frames — the blueprint,
+-- then each save.set, then the library entry — because each of those is one
+-- pass over every part: 7 + 12 + 11 ms at 1,000 parts, three times that at
+-- 3,000, and the autosave landing two seconds after every edit was the
+-- builder's periodic hitch (perfbench g_idle_*, build_host 55-120 ms).
+function craftSave(name, quiet)
+  name = name or W.craft or "Untitled"
+  W.craft = name
+  local sl = slug(name)
+  if quiet then
+    W.save_job = { stage = 1, name = name, sl = sl }
+    return true
+  end
+  W.save_job = nil
+  local bp, i = make_blueprint()
+  save.set("shipyard.blueprint", bp)
+  ui("save", 0.9)
+  save.set("shipyard.craft." .. sl, bp)
+  local st = libraryPut(name, sl)
+  save.flush()
   hint("saved “" .. name .. "” to the library  ·  " .. st.parts .. " parts", 2.5)
   return true
 end
+-- One step of a quiet save a frame (from update).
+-- A stage that fails (save.set refuses a blueprint that would take the slot
+-- past its byte cap: ~3,000 parts, with the stand's own copy beside it) ends
+-- the job and says so once, instead of failing again every frame.
+-- A craft that size is not tried again (a refused save.set has still
+-- converted the whole blueprint before it refuses): the autosave keeps
+-- only the stand's own copy until the craft is smaller than the one refused.
+function saveJobStep(j)
+  if j.stage == 1 then
+    j.bp = make_blueprint()
+  elseif j.stage == 2 then
+    save.set("shipyard.blueprint", j.bp)
+    if W.lib_fail_n and partCount >= W.lib_fail_n then return true end
+  elseif j.stage == 3 then
+    j.lib = true
+    save.set("shipyard.craft." .. j.sl, j.bp)
+    W.lib_fail_n = nil
+  else
+    libraryPut(j.name, j.sl)
+    return true
+  end
+  j.stage = j.stage + 1
+  return false
+end
+function saveJobTick()
+  local j = W.save_job
+  if not j then return end
+  local ok, done = pcall(saveJobStep, j)
+  if not ok then
+    W.save_job = nil
+    if j.lib then W.lib_fail_n = partCount end
+    if W.save_err ~= tostring(done) then
+      W.save_err = tostring(done)
+      log("builder: autosave stopped — " .. tostring(done))
+    end
+    return
+  end
+  if done then W.save_job = nil end
+end
+function saving() return W.save_job ~= nil end
 function craftOpen(name, mode)
   local bp = save.get("shipyard.craft." .. slug(name))
   if type(bp) ~= "table" then hint("no craft called “" .. tostring(name) .. "” in the library", 2.5); return false end

@@ -1,4 +1,4 @@
-// VISUAL-ONLY variant of prefabs/PartAntenna.prefab.ron for the builder stand: no body, no scripts.
+// VISUAL-ONLY variant of prefabs/PartAntenna.prefab.ron for the builder stand: no body, no scripts, no damage shader.
 // Written by tools/gen_part_meshes.py (write_vis_prefabs) — regenerate, don't edit.
 [
     (
@@ -24,10 +24,6 @@
                 metallic_map: Some("textures/parts/metal_orm.png"),
                 metallic: 0.85,
                 ao_map: Some("textures/parts/metal_orm.png"),
-                shader: Some("shaders/hullPanels.flsl"),
-                shader_params: {
-                    "tint": (1.0, 1.0, 1.0, 1.0),
-                },
                 shading: Physical,
             ),
             "Dark": (
@@ -40,10 +36,6 @@
                 metallic_map: Some("textures/parts/metal_orm.png"),
                 metallic: 0.4,
                 ao_map: Some("textures/parts/metal_orm.png"),
-                shader: Some("shaders/hullPanels.flsl"),
-                shader_params: {
-                    "tint": (0.3, 0.3, 0.32, 1.0),
-                },
                 shading: Physical,
             ),
             "Metal": (
@@ -56,10 +48,6 @@
                 metallic_map: Some("textures/parts/metal_orm.png"),
                 metallic: 0.55,
                 ao_map: Some("textures/parts/metal_orm.png"),
-                shader: Some("shaders/hullPanels.flsl"),
-                shader_params: {
-                    "tint": (1, 1, 1, 1.0),
-                },
                 shading: Physical,
             ),
             "Paint2": (
@@ -72,10 +60,6 @@
                 metallic_map: Some("textures/parts/paint_orm.png"),
                 metallic: 1.0,
                 ao_map: Some("textures/parts/paint_orm.png"),
-                shader: Some("shaders/hullPanels.flsl"),
-                shader_params: {
-                    "tint": (0.9, 0.9, 0.88, 1.0),
-                },
                 shading: Physical,
             ),
         },
