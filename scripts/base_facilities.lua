@@ -392,9 +392,18 @@ end
 -- The ground's radius along unit direction d, marched down the terrain's
 -- distance field (a true distance: stepping by it never passes through ground).
 -- Works as soon as the field exists, before any collision is meshed.
+--
+-- The field's distance is clamped a few metres out, so the march goes ~5 m a
+-- step: from a scale-3/4 world's probe altitude (radius + 2·peak + 120 m) the
+-- ground can be 400 m down. A march that has not FOUND the ground answers
+-- nil, never the radius it stopped at: the old 80-step cap returned "the
+-- ground is at r 630" on a world of radius 922 whose ground was not made yet
+-- (no field there reads as air all the way down), and the spaceport was
+-- fitted 290 m under the surface — 23,000 cuts, a grade that never held
+-- ("22 m off": the rock over it) and the curtain up for minutes.
 local function ground_r(body, d, top)
   local r = top
-  for _ = 1, 80 do
+  for _ = 1, 600 do
     work(1)
     local b = space.body(body.name) or body      -- live: the job spans frames
     local q = terrain.query(b.x + d.x * r, b.y + d.y * r, b.z + d.z * r)
@@ -403,7 +412,7 @@ local function ground_r(body, d, top)
     r = r - math.max(q * 0.9, 0.08)
     if r < top * 0.25 then return nil end
   end
-  return r
+  return nil
 end
 
 -- Where the layout samples the ground when it is fitted: along the runway, at
@@ -648,11 +657,36 @@ end
 -- was SENT; on rc7 that was ~800 ops still queued, the paving laid on the
 -- ungraded ground, the check found it 0.9 m off and a second grade of ~800
 -- ops ran in view.)
-local grade_q = nil      -- { body = name, list = { {kind, x, y, z, r} ... } } until sent
+--
+-- SENT AT THE ENGINE'S PACE, NOT ALL AT ONCE. The engine keeps at most 4,096
+-- edits waiting and DROPS any more (once-only warning; floptle-script
+-- terrain_api MAX_PENDING_OPS): a grade of more than that sent in one go lost
+-- the rest, the check found the ground off and graded it all again. So the
+-- list goes out GRADE.inflight at a time, topped up as it lands, and an op the
+-- engine refuses (receipt 0) waits for the next frame. And a queue that has
+-- just gone empty is not trusted on one read: it must stay empty for
+-- GRADE.settle frames (on rc10 `pending()` did not count the ops a worker was
+-- still making), and a check that fails is read again a second later before
+-- anything is regraded.
+GRADE.inflight = 2048
+GRADE.settle = 3
+-- Behind the loading screen the engine may spend more of a frame landing
+-- edits (`terrain.editBudget`, 0.117 rc11): nobody is looking at the frame.
+GRADE.curtainBudget = 24.0
+local grade_q = nil      -- { body = name, list = { {kind, x, y, z, r} ... }, i = next to send } until sent
 local grade_landing = false   -- sent; the engine is still landing it
+local landed_quiet = 0        -- frames the edit queue has read empty since the last op was sent
 local check_now = false       -- a grade made at siting has landed: check it before the curtain goes
+local check_at = nil          -- a failed check is read again at this time before regrading
+local relooked = false        -- …once per grade
+local budget_raised = false
 local function edits_pending() return terrain.pending and terrain.pending() or 0 end
 local function grade_busy() return grade_q ~= nil or grade_landing end
+local function edit_budget(raise)
+  if not terrain.editBudget or raise == budget_raised then return end
+  budget_raised = raise
+  terrain.editBudget(raise and GRADE.curtainBudget or nil)
+end
 -- Cut balls are listed top down (the dig of a ball near the surface must not
 -- leave a hanging lid above it); each sits cutR over the next, its bottom
 -- 1.5 m over the grade at the lowest.
@@ -772,25 +806,39 @@ local function grade(body, Fr, runway)
   return n
 end
 
--- Send the whole grade (the engine paces it), then wait for it to land.
--- True while work remains.
+-- Send the grade at the engine's pace (GRADE.inflight waiting at most), then
+-- wait for it to land and stay landed. True while work remains.
 local function grade_step()
+  local gm = ref("game_manager")
+  edit_budget(gm ~= nil and gm.curtain == true)
   local q = grade_q
   if q then
     local b = space.body(q.body)
     if not b then return true end
-    for _, e in ipairs(q.list) do
+    local room = GRADE.inflight - edits_pending()
+    local i = q.i or 1
+    while room > 0 and i <= #q.list do
+      local e = q.list[i]
       if e[1] == "paint" then
         terrain.paint(b.x + e[2], b.y + e[3], b.z + e[4], e[5], e[6][1], e[6][2], e[6][3], 1.0)
       else
-        terrain.sculpt(b.x + e[2], b.y + e[3], b.z + e[4], e[5], e[6], e[1])
+        local id = terrain.sculpt(b.x + e[2], b.y + e[3], b.z + e[4], e[5], e[6], e[1])
+        if id == 0 then break end          -- refused: the queue is full; again next frame
       end
+      i, room = i + 1, room - 1
     end
-    grade_q, grade_landing = nil, true
+    q.i = i
+    if i > #q.list then grade_q, grade_landing, landed_quiet = nil, true, 0 end
     return true
   end
-  if grade_landing and edits_pending() > 0 then return true end
+  if grade_landing then
+    if edits_pending() > 0 then landed_quiet = 0; return true end
+    landed_quiet = landed_quiet + 1
+    if landed_quiet < GRADE.settle then return true end
+  end
   grade_landing = false
+  relooked = false
+  edit_budget(false)
   return false
 end
 
@@ -1707,11 +1755,15 @@ function update(node, dt)
       if not grade_step() then check_now = true end
       return
     end
-    if check_now and not grade_later and not grade_job then
-      check_now = false
+    if check_now and not grade_later and not grade_job and time >= (check_at or 0) then
+      check_now, check_at = false, nil
       local b = space.body(baseBody)
       local ok, worst = grade_holds(b, F, save.get("base.runway") ~= false)
-      if ok then
+      if not ok and not relooked then
+        -- read again a second later before anything is regraded
+        relooked, check_now, check_at = true, true, time + 1.0
+        log(string.format("base: the grade reads %.2f m off — looking again in a second", worst))
+      elseif ok then
         save.set("base.graded", LAYOUT_VERSION)
         log(string.format("base: the grade holds (%.2f m) — recorded", worst))
       elseif regrades < 2 and not grade_stuck(worst) then
@@ -1787,7 +1839,10 @@ function update(node, dt)
       save.set("base.graded", LAYOUT_VERSION)
       log(string.format("base: the grade holds (%.2f m) — recorded", worst))
     end
-    if not ok and regrades < 2 and not grade_stuck(worst) then
+    if not ok and not relooked then
+      relooked, recheck_at = true, time + 1.0
+      log(string.format("base: the grade reads %.2f m off — looking again in a second", worst))
+    elseif not ok and regrades < 2 and not grade_stuck(worst) then
       regrades = regrades + 1
       grade_later = { runway = save.get("base.runway") ~= false, now = true,
                       why = string.format("check after grading: %.2f m off", worst) }

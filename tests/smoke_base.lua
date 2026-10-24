@@ -80,6 +80,7 @@ _G.terrain = {
   warm = function() end,
   query = function(x, y, z)
     queries = queries + 1
+    if NOFIELD then return 6.0 end          -- a world whose field is not made yet: clamped air everywhere
     local dx, dy, dz = x - planet.x, y - planet.y, z - planet.z
     local r = len(dx, dy, dz)
     return r - ground_r(dx / r, dy / r, dz / r)
@@ -378,6 +379,66 @@ do
   assert(STORE["base.r"] == Rs, "a sited base was regraded to a new sea")
   STORE["world." .. planet.name] = nil
   print(string.format("  by the sea: graded %.1f m over it (ground %.1f m over it)", Rs - sea, planet.radius - sea))
+end
+
+-- ── session 6: the ground is not there yet (a world still being made reads
+-- as clamped air all the way down). The old 80-step march answered "the
+-- ground is at r ≈ top − 430 m" and the spaceport was fitted hundreds of
+-- metres under the surface; now the base waits for the ground. ────────────
+do
+  for _, k in ipairs({ "base.body", "base.x", "base.y", "base.z", "base.r", "base.heading", "base.layout", "base.runway", "base.graded" }) do STORE[k] = nil end
+  put_crew(up0)
+  STORE["world." .. planet.name] = { radius = planet.radius, relief = 40 }
+  NOFIELD = true
+  spawned, created, meshes = {}, {}, {}
+  assert(not session(300), "sited on ground that is not there (" .. tostring(STORE["base.r"]) .. ")")
+  assert(STORE["base.r"] == nil, "a radius was fitted to a field that is not there")
+  NOFIELD = false
+  for _ = 1, 6000 do time = time + TICK; BF.update({}, TICK); if BF.sited then break end end
+  assert(BF.sited, "the base never sited once the ground came")
+  assert(math.abs(STORE["base.r"] - planet.radius) < 2.0,
+    string.format("graded to r %.1f on ground at r %.1f", STORE["base.r"], planet.radius))
+  STORE["world." .. planet.name] = nil
+  print(string.format("  no field yet: waited, then graded to r %.1f", STORE["base.r"]))
+end
+
+-- ── session 7: the engine keeps at most 4,096 edits waiting and drops the
+-- rest; a grade bigger than that must be sent at its pace, none lost, and
+-- the check waits until the queue has stayed empty. ──────────────────────
+do
+  local Q, CAP, PER_FRAME, peak, dropped, sent = 0, 4096, 40, 0, 0, 0
+  local sculpt0, paint0 = terrain.sculpt, terrain.paint
+  terrain.pending = function() return Q end
+  terrain.sculpt = function(...)
+    if Q >= CAP then dropped = dropped + 1; return 0 end
+    Q = Q + 1; sent = sent + 1; peak = math.max(peak, Q); sculpt0(...); return sent
+  end
+  terrain.paint = function(...) if Q >= CAP then dropped = dropped + 1; return end; Q = Q + 1; paint0(...) end
+  for _, k in ipairs({ "base.body", "base.x", "base.y", "base.z", "base.r", "base.heading", "base.layout", "base.runway", "base.graded" }) do STORE[k] = nil end
+  put_crew(up0)
+  local inflight0 = nil
+  spawned, created, meshes = {}, {}, {}
+  local env = setmetatable({}, { __index = _G })
+  local chunk = assert(loadfile("solar/scripts/base_facilities.lua"))
+  setfenv(chunk, env)
+  chunk()
+  BF = env
+  BF.GRADE.inflight = 300                 -- a small window, so a ~1,500-op grade spans many frames
+  env.start({})
+  local checked_at_zero = true
+  for _ = 1, 20000 do
+    time = time + TICK
+    Q = math.max(0, Q - PER_FRAME)
+    env.update({}, TICK)
+    if STORE["base.graded"] and Q > 0 then checked_at_zero = false end
+    if env.sited then break end
+  end
+  assert(BF.sited, "the paced grade never finished")
+  assert(dropped == 0, dropped .. " edits dropped by the engine's queue")
+  assert(peak <= 300 + 1, "the grade kept " .. peak .. " edits waiting (window 300)")
+  assert(STORE["base.graded"] == BF.LAYOUT_VERSION and checked_at_zero, "the grade was checked before it had landed")
+  terrain.pending, terrain.sculpt, terrain.paint = nil, sculpt0, paint0
+  print(string.format("  paced: %d ops, at most %d waiting, none dropped", sent, peak))
 end
 
 print(string.format("smoke_base OK — sliced (worst frame %d queries), %d structures, graded with %d ops, runway %.0f m %s, dish %.0f m from the centre",
