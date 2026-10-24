@@ -80,9 +80,21 @@ defaults = {
   touch_r = 1.1,
   --@range 0 1.2 --@units rad
   touch_bend = 0.75,
+  -- The engine bend's reach (m): every prop within it leans, rocks and trunks
+  -- too, so it stays inside the distance the crew is held off them.
+  --@range 0.3 2 --@units m
+  touch_r_engine = 0.9,
   -- Most plants bent at once.
   --@range 0 40
   touch_cap = 14,
+  -- 1 = bend with the engine's scatter interactors (engine 0.117.0-rc7: the
+  -- props lean in the draw, no node, no remove/restore) where the engine has
+  -- them; 0 = swap each bent plant for a node (see "touch"). Off for now:
+  -- measured on Kail it costs about half (flora_field 0.5–1.0 ms against
+  -- 0.9–2.2, worst 10–17 ms against 6–28), but the engine bends EVERY source
+  -- in reach, rocks and trunks too, and has no easing of its own (the wake
+  -- below stands in for it); its look is not signed off yet.
+  touch_engine = 0,
   -- Trunks and rocks stop the crew (planet_walker reads `obstacles`), and
   -- how far round the crew they are gathered.
   touch_bump = 1,
@@ -186,6 +198,8 @@ local wash_fade_t = 0
 -- and the regions no new wash is laid in until then (body-relative).
 local wash_lifted = {}
 local wash_holds = {}   -- { x, y, z, r, t }
+obs_speed = 0.0          -- the observer's speed over the ground (m/s), smoothed
+local obs_last = nil      -- { body, x, y, z, t } at the last pass
 local frame_checked = false
 local wash                -- defined below update (ground wash)
 local preload_t = 0
@@ -532,6 +546,14 @@ function baseKeep(rx, ry, rz, h, foot)
 end
 
 -- Take a freshly declared source's props off the base's ground (see above).
+-- A JOB, not a call: a patch reaching the base asks `scatter.near` for every
+-- prop within the base's radius (a grass source: a few thousand), and judging
+-- them all in the frame it was declared was 190–250 ms (rc7, Kail). The hits
+-- are queued and judged CLEAR_MS of wall time a frame (`clear_tick`, from
+-- update, every frame); a prop on the paving stands there for those frames.
+local CLEAR_MS = 2.0
+local clear_q = {}
+local function clear_wall() return (app and app.wallClock and app.wallClock()) or os.clock() end
 local function clear_base(id, p, sp)
   local L = base_layout()
   local body = cur_body and space.body(cur_body)
@@ -539,43 +561,64 @@ local function clear_base(id, p, sp)
   -- Only a patch that reaches the base.
   if len(p.cx - L.x, p.cy - L.y, p.cz - L.z) > p.half * 1.5 + L.r then return 0 end
   local hits = scatter.near(id, vec3(body.x + L.x, body.y + L.y, body.z + L.z), L.r) or {}
+  if #hits == 0 then return 0 end
   local h = (sp.height or 1) * (sp.scaleMax or 1)
   -- Grass and ground cover are the verge, however tall a blade: a clean edge.
   if sp.role == "carpet" or sp.kind == "grass" or sp.kind == "moss" then h = math.min(h, BASE_CLEAR.tall) end
   local fg = ref("flora_gen")
   local foot0 = fg and fg.footprint and fg.footprint(sp) or nil
-  local n = 0
-  for _, it in ipairs(hits) do
-    local px, py, pz = it.pos.x - body.x, it.pos.y - body.y, it.pos.z - body.z
-    local foot = foot0 and foot0 * (it.scale or 1)
-    -- A prop not yet dropped answers on its patch's PLANE, which off the
-    -- patch's centre stands metres over the ground; the engine drops it along
-    -- the patch's -Y. Near an edge, where a metre decides it, drop it here
-    -- the same way (a few signed-distance steps) before judging it.
-    if not it.settled and foot then
-      local clr = select(1, base_clearance(L, px, py, pz))
-      if clr < foot + 0.4 + CARPET_FADE + 4 then
-        local t = 0
-        for _ = 1, 8 do
-          local q = terrain.query(body.x + px - p.ey[1] * t, body.y + py - p.ey[2] * t, body.z + pz - p.ey[3] * t)
-          if not q then break end
-          t = t + q
-          if math.abs(q) < 0.03 then break end
+  -- body-relative now: the planet moves on its rails while the job runs
+  for _, it in ipairs(hits) do it.rx, it.ry, it.rz = it.pos.x - body.x, it.pos.y - body.y, it.pos.z - body.z end
+  clear_q[#clear_q + 1] = { id = id, p = p, sp = sp, hits = hits, i = 1, h = h, foot0 = foot0, L = L }
+  return #hits
+end
+
+-- Judge queued props for CLEAR_MS (one prop at the least).
+local function clear_tick()
+  if #clear_q == 0 then return end
+  local t0 = clear_wall()
+  local body = cur_body and space.body(cur_body)
+  while #clear_q > 0 do
+    local j = clear_q[1]
+    if not (body and srcs[j.id]) then
+      table.remove(clear_q, 1)            -- the source went (or the world did)
+    else
+      local p, sp, L = j.p, j.sp, j.L
+      while j.i <= #j.hits do
+        local it = j.hits[j.i]
+        j.i = j.i + 1
+        local px, py, pz = it.rx, it.ry, it.rz
+        local foot = j.foot0 and j.foot0 * (it.scale or 1)
+        -- A prop not yet dropped answers on its patch's PLANE, which off the
+        -- patch's centre stands metres over the ground; the engine drops it along
+        -- the patch's -Y. Near an edge, where a metre decides it, drop it here
+        -- the same way (a few signed-distance steps) before judging it.
+        if not it.settled and foot then
+          local clr = select(1, base_clearance(L, px, py, pz))
+          if clr < foot + 0.4 + CARPET_FADE + 4 then
+            local t = 0
+            for _ = 1, 8 do
+              local q = terrain.query(body.x + px - p.ey[1] * t, body.y + py - p.ey[2] * t, body.z + pz - p.ey[3] * t)
+              if not q then break end
+              t = t + q
+              if math.abs(q) < 0.03 then break end
+            end
+            px, py, pz = px - p.ey[1] * t, py - p.ey[2] * t, pz - p.ey[3] * t
+          end
         end
-        px, py, pz = px - p.ey[1] * t, py - p.ey[2] * t, pz - p.ey[3] * t
+        local keep = baseKeep(px, py, pz, j.h, foot)
+        if keep < 1 then
+          local roll = (((it.id % 2147483647) * 48271 + 11) % 2147483647) / 2147483647
+          if roll >= keep then
+            scatter.remove(j.id, it.id)
+            if p.bark[sp.id] then scatter.remove(p.bark[sp.id], it.id) end
+          end
+        end
+        if j.i % 16 == 0 and (clear_wall() - t0) * 1000 >= CLEAR_MS then return end
       end
-    end
-    local keep = baseKeep(px, py, pz, h, foot)
-    if keep < 1 then
-      local roll = (((it.id % 2147483647) * 48271 + 11) % 2147483647) / 2147483647
-      if roll >= keep then
-        scatter.remove(id, it.id)
-        if p.bark[sp.id] then scatter.remove(p.bark[sp.id], it.id) end
-        n = n + 1
-      end
+      table.remove(clear_q, 1)
     end
   end
-  return n
 end
 
 -- Sources declared before the base was sited (a new save's first patches):
@@ -589,7 +632,7 @@ local function base_sweep()
     local p = patches[sr.patch]
     if p and sr.part ~= "bark" and sr.sp and p.srcs[sr.sp.id] == id then n = n + clear_base(id, p, sr.sp) end
   end
-  if n > 0 then diag(string.format("base sited: %d plants kept off its ground", n)) end
+  if n > 0 then diag(string.format("base sited: %d plants near its ground to judge", n)) end
 end
 
 -- What stands on the base's ground now (probes, the debug console): props of
@@ -689,7 +732,7 @@ local function make_source(p, sp, fg, w)
   if not id then return false end
   if sp.twin then p.bark[sp.id] = declare("bark") or nil end
   local nb = clear_base(id, p, sp)
-  if nb > 0 then diag(string.format("kept %d %s off the base on %s", nb, sp.name or "plants", p.key)) end
+  if nb > 0 then diag(string.format("judging %d %s near the base on %s", nb, sp.name or "plants", p.key)) end
   return id
 end
 
@@ -913,10 +956,51 @@ local function touch_release(key, b)
   touch.n = touch.n - 1
 end
 
+-- ENGINE BENDING (touch_engine, rc7's scatter.setInteractors): the crew is a
+-- point the props lean away from in the draw, foot planted, with a short wake
+-- of fading points behind so the grass springs back over a second instead of
+-- snapping up. No nodes, no scatter.remove/restore. The engine bends EVERY
+-- source within the radius (rocks and trunks too: there is no per-source
+-- switch), so the radius is kept inside the bump distance planet_walker holds
+-- the crew off trunks and rocks at.
+local wake = {}          -- { x, y, z (body-relative), t }
+local wake_on = false
+local WAKE_STEP, WAKE_LIFE = 0.45, 1.1
+local function touch_engine(astro, body)
+  local rx, ry, rz = astro.x - body.x, astro.y - body.y, astro.z - body.z
+  local last = wake[#wake]
+  if not last or len(rx - last.x, ry - last.y, rz - last.z) >= WAKE_STEP then
+    wake[#wake + 1] = { x = rx, y = ry, z = rz, t = time }
+  end
+  while wake[1] and time - wake[1].t > WAKE_LIFE do table.remove(wake, 1) end
+  while #wake > 6 do table.remove(wake, 1) end
+  local s = math.tan(params.touch_bend)
+  local r = params.touch_r_engine
+  local pts = { { pos = vec3(astro.x, astro.y, astro.z), radius = r, strength = s } }
+  for i = #wake, 1, -1 do
+    local w = wake[i]
+    local age = time - w.t
+    -- the newest wake point sits on the crew: the live point covers it
+    if len(rx - w.x, ry - w.y, rz - w.z) > 0.2 then
+      local k = math.exp(-2.2 * age) * 0.5
+      if k > 0.04 then
+        pts[#pts + 1] = { pos = vec3(body.x + w.x, body.y + w.y, body.z + w.z), radius = r, strength = s * k }
+      end
+    end
+  end
+  scatter.setInteractors(pts)
+  wake_on = true
+end
+local function touch_engine_off()
+  if wake_on then scatter.setInteractors({}); wake_on = false end
+  wake = {}
+end
+
 function touchClear()
   for key, b in pairs(touch.bent) do touch_release(key, b) end
   touch.bent, touch.n = {}, 0
   obstacles = {}
+  if touch_engine_off then touch_engine_off() end
 end
 
 -- New bends: what is within reach of the crew's feet.
@@ -1079,15 +1163,22 @@ local function touch_tick(dt)
   local body = cur_body and space.body(cur_body)
   if not (pw and pw.onFoot and astro and body) then
     if touch.n > 0 then for key, b in pairs(touch.bent) do touch_release(key, b) end end
+    touch_engine_off()
     return
   end
-  touch_drive(astro, body, dt)
-  touch.t = touch.t - dt
-  if touch.t <= 0 then
-    touch.t = 0.1
-    local fg = ref("flora_gen")
-    local planet = find(cur_body)
-    if fg and planet then touch_find(astro, body, fg, planet) end
+  if params.touch_engine > 0 and scatter.setInteractors then
+    if touch.n > 0 then for key, b in pairs(touch.bent) do touch_release(key, b) end end
+    touch_engine(astro, body)
+  else
+    touch_engine_off()
+    touch_drive(astro, body, dt)
+    touch.t = touch.t - dt
+    if touch.t <= 0 then
+      touch.t = 0.1
+      local fg = ref("flora_gen")
+      local planet = find(cur_body)
+      if fg and planet then touch_find(astro, body, fg, planet) end
+    end
   end
   touch.ct = touch.ct - dt
   if touch.ct <= 0 and params.touch_bump > 0 then
@@ -1098,6 +1189,7 @@ local function touch_tick(dt)
 end
 
 function update(node, dt)
+  clear_tick()
   if params.rare > 0 then rare_tick(dt) end
   if params.touch > 0 and params.enabled ~= 0 and scatter and scatter.near then touch_tick(dt) end
   if params.enabled == 0 then
@@ -1180,6 +1272,12 @@ function update(node, dt)
   end
 
   local rx, ry, rz = obs.x - body.x, obs.y - body.y, obs.z - body.z
+  -- How fast the observer crosses the ground (body-relative), for the wash.
+  if obs_last and obs_last.body == bname and time > obs_last.t then
+    local v = len(rx - obs_last.x, ry - obs_last.y, rz - obs_last.z) / (time - obs_last.t)
+    obs_speed = obs_speed + (v - obs_speed) * 0.5
+  end
+  obs_last = { body = bname, x = rx, y = ry, z = rz, t = time }
   local rl = len(rx, ry, rz)
   if rl < 1e-3 then return end
   local R = w.radius or body.radius or 100
@@ -1365,6 +1463,8 @@ end
 -- fades with distance at the rim, and fades out with height over the last
 -- third of `tint_alt` (it was lifted all at once on the way up).
 local WASH_IN = 1.5
+-- No new wash is laid while the observer crosses the ground faster than this (m/s).
+WASH_MAX_SPEED = 12.0
 local function wash_alpha(inf, d, range, kalt)
   local kd = math.max(0, math.min(1, (range - d) / (range * 0.4)))
   local ki = math.max(0, math.min(1, (time - (inf[5] or 0)) / WASH_IN))
@@ -1408,7 +1508,12 @@ wash = function(body, rx, ry, rz, species, fg, alt, w)
             for _, hr in ipairs(wash_holds) do
               if time < hr.t and len(px - hr.x, py - hr.y, pz - hr.z) < hr.r then held = true break end
             end
-            if washes[key] == nil and not held and added < 2 and wash_n < params.tint_max then
+            -- (Nothing new is laid while the observer races over the ground:
+            -- laying a 29 m mark is the engine fitting it to the terrain in
+            -- this call, 30–100 ms on a scale-3 world (rc7), and at speed the
+            -- marks would be passed before they had faded in.)
+            if washes[key] == nil and not held and added < 2 and wash_n < params.tint_max
+               and obs_speed < WASH_MAX_SPEED then
               local rows = p.rows
               local c = math.floor((lx / (2 * p.half) + 0.5) * (rows - 1) + 0.5)
               local r = math.floor((lz / (2 * p.half) + 0.5) * (rows - 1) + 0.5)

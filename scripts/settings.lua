@@ -76,12 +76,14 @@ invertY = false
 dynamicRes = false
 
 -- ── the interface size ──────────────────────────────────────────────────────
--- The engine has no global UI scale (0.117.0-rc6): each screen layer is
--- MatchHeight, so `designHeight` design units span the window's height, and
--- every layout in Solar was written for 720 of them. The interface size is
--- that number moved: at 85% a layer is 720 / 0.85 = 847 units tall, so every
--- plate, key and line of text is 85% of the size it was, and the layouts —
--- pinned to the edges, sized in design units — keep working unchanged.
+-- Each screen layer is MatchHeight over 720 design units (the scenes'
+-- design_height), and every layout in Solar was written for that. The
+-- interface size is the engine's one scale over every layer, `ui.setScale`
+-- (floptle/0487, 0.117.0-rc7): at 85% each layer spans 720 / 0.85 = 847
+-- units of the window's height, so every plate, key and line of text is 85%
+-- of the size it was, and the layouts — pinned to the edges, sized in design
+-- units — keep working unchanged. (Until rc6 this moved each layer's own
+-- designHeight, which reached only the layers listed here by name.)
 --
 -- Scripts that turn screen pixels into design units (a block stacked under
 -- another by its uiRect, a width from the window's aspect) read the height
@@ -95,10 +97,14 @@ dynamicRes = false
 -- The top end is where the screens still fit. A layer at 125% is 576 units
 -- tall; the tallest panel (the pause menu's settings page, ~550 with its
 -- margins) needs about that. At 133% it ran off the top and bottom of the
--- screen (measured, 0.117.0-rc6), so the slider stops at 125%.
-UI_MIN, UI_MAX = 0.70, 1.25
+-- screen (measured, 0.117.0-rc6), so the slider stops at 125%. Not every
+-- screen fits that far yet (rc7, 1280×720): above 100% the builder's right
+-- panel runs off the edge, from 110% the flight HUD's pad hint lies over the
+-- CONTROLS panel, and from 115% the main menu's buttons crowd its footnote.
+-- So until those layouts flex, the slider stops at 105%, where every screen
+-- fits (rc7 sheets, 1280×720).
+UI_MIN, UI_MAX = 0.70, 1.05
 uiScale = 1.0
-LAYERS = { "Ship HUD", "Sound and Settings", "Menu UI", "Builder UI" }
 
 function autoUiScale(h)
   if not h or h <= 0 then return 1.0 end
@@ -258,8 +264,8 @@ local function apply_fov()
   end
 end
 
--- Every screen layer this scene has, handles kept (a scene has one or two).
-local layer_cache = {}
+-- One scale for every layer, set again only when it differs (the engine puts
+-- it back to 1 when Play starts; a scene change keeps it).
 local function apply_ui_scale()
   local want = get("ui_scale")
   if type(want) ~= "number" then
@@ -267,23 +273,8 @@ local function apply_ui_scale()
     want = autoUiScale(sh)
   end
   uiScale = effectiveUiScale(want)
-  if not find then return end
-  local dh = 720 / uiScale
-  for _, nm in ipairs(LAYERS) do
-    local c = layer_cache[nm]
-    -- "Sound and Settings" is a layer only in the system scene (the menu has a
-    -- plain node by that name, and asking it for a layer is a Console line).
-    if nm == "Sound and Settings" and not layer_cache["Ship HUD"] then
-      c = false
-    elseif c == nil or (c and c.node.valid == false) then
-      -- (A miss is kept as false: the layers are the scene's own, there from
-      -- the first frame, and `find` walks the scene.)
-      local n = find(nm)
-      c = n and { node = n, layer = n.getcomponent and n:getcomponent("UiLayer") } or false
-      layer_cache[nm] = c
-    end
-    local l = c and c.layer
-    if l and math.abs((l.designHeight or 0) - dh) > 0.01 then l.designHeight = dh end
+  if ui and ui.setScale and math.abs((ui.scale and ui.scale() or 0) - uiScale) > 1e-4 then
+    ui.setScale(uiScale)
   end
 end
 -- A slider fires every frame it moves, and resizing the interface moves the

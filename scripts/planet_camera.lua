@@ -186,8 +186,9 @@ end
 -- ── a craft's own hull, for the chase view ──────────────────────────────────
 -- How far back the view must sit to be clear of the craft it is chasing. Rays
 -- and sweeps see a craft's parts since 0.117.0-rc6, but they answer "the first
--- thing in the way", not "where the hull ends", and a query takes one node to
--- ignore — not the ground, the crew and the craft at once. Casting back in
+-- thing in the way", not "where the hull ends" (the craft, its crew and tyres
+-- can all be ignored at once since floptle/0473, which `sweep` does, but that
+-- says nothing of how far the hull reaches). Casting back in
 -- from beyond the craft to find its far side was tried on rc6 and was worse
 -- (the view in the ground 27 frames a rover test against 7, see the rc6
 -- notes), so the camera keeps the craft's parts as balls: each part's
@@ -379,29 +380,17 @@ end
 -- flying the camera never saw the ground at all.
 --
 -- Since 0.117.0-rc6 the sweep meets the craft's parts too (it starts inside
--- the pod), so it begins ignoring the whole craft and steps past the crew and
--- tyres one at a time. No `ignoreStart`: on rc6 it shrinks the ball for the
--- whole sweep to the gap to whatever is nearest at the start (the crew), which
--- let the view sink 0.15 m from the ground on a slope; and a ball that starts
--- INSIDE a body still meets it at 0, so a hit at the start steps a ball's
--- width on.
-local function sweep(from, dir, maxd, passes, craft)
-  local o, gone, ign = from, 0.0, craft
-  for _ = 1, 12 do
-    local hit = spherecast(o, dir, 0.25, maxd - gone, { ignore = ign })
-    if not (hit and hit.distance) then return nil end
-    local n = hit.node
-    local par = n and n.valid and n.parent
-    local part = craft and par and par.valid and par.id == craft.id
-    if n and n.valid and (part or passes[n.id]) then
-      local step = hit.distance + ((hit.distance < 0.01) and 0.25 or 0.05)
-      gone, o, ign = gone + step, o + dir * step, part and craft or n
-      if gone >= maxd then return nil end
-    else
-      return gone + hit.distance, hit
-    end
-  end
-  return nil
+-- the pod). Until rc7 a query ignored one node, so the sweep began ignoring
+-- the craft and stepped past the crew and the tyres one hit at a time (up to
+-- 12 casts, each re-entering the craft it had stopped ignoring). Since
+-- floptle/0473 `ignore` takes a list: one cast passes the craft, the crew and
+-- every tyre (`passes`, a list of nodes). No `ignoreStart`: everything the
+-- ball starts against or inside is the subject, already ignored, and on rc6
+-- it shrank the ball enough to let the view sink 0.15 m from the ground.
+local function sweep(from, dir, maxd, passes)
+  local hit = spherecast(from, dir, 0.25, maxd, { ignore = passes })
+  if not (hit and hit.distance) then return nil end
+  return hit.distance, hit
 end
 
 -- Cross-script singletons, resolved once and kept (floptle/0063 — findScript is
@@ -581,11 +570,13 @@ function chase_clip(vessel, head, up, room_d, dt)
   if time - lift_t > 0.25 then lift_now = 0.0 end   -- a new chase starts level
   lift_t = time
   local balls = hull_balls(vessel)
+  -- what the view passes through: the craft (its parts), the crew, the tyres
   local passes = {}
+  if vessel.node and vessel.node.valid then passes[#passes + 1] = vessel.node end
   local astro = find("Astronaut")
-  if astro then passes[astro.id] = true end
+  if astro and astro.valid then passes[#passes + 1] = astro end
   for _, w in ipairs((vessel.R2 and vessel.R2.wheels) or {}) do
-    if w.tyre and w.tyre.valid then passes[w.tyre.id] = true end
+    if w.tyre and w.tyre.valid then passes[#passes + 1] = w.tyre end
   end
   local function trial(lift)
     local lp = math.max(-PITCH_LIMIT, pitch - lift)
@@ -593,7 +584,7 @@ function chase_clip(vessel, head, up, room_d, dt)
     local need, reach = hull_exit(balls, head, f * -1)
     need = math.max(need, math.min(reach, CHASE_MIN))
     local want = math.max(room_d, need)
-    local hd = sweep(head, f * -1, want + 0.3, passes, vessel.node)
+    local hd = sweep(head, f * -1, want + 0.3, passes)
     local room = hd and math.max(0.0, hd - 0.1) or want
     return f, need, math.min(want, room), room >= need, lp <= -PITCH_LIMIT
   end
@@ -1230,6 +1221,9 @@ end
 -- is not something to rely on, so this is a call rather than an ordering.
 local atmo_ref
 function lateUpdate(node, dt)
+  -- The VAB builder's own camera has the view (build_host); this one waits.
+  local gm = script_ref("game_manager")
+  if gm and gm.inputOwner == "builder" then return end
   if cinematic_tick(node, dt) then
     -- the free camera placed the view itself
   else

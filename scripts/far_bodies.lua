@@ -38,10 +38,18 @@
 -- user://farlod/<slot>/<body>.L<n> keyed by the genspec, so a scene reload or
 -- the next session reads them back instead of working them out again.
 --
--- WHAT THIS CANNOT DO (engine card 0479): a script cannot stop the engine
--- drawing a body's chunks, so the chunks under an impostor still cost their
--- draws and their meshing; node.visible on the body is not read by the terrain
--- renderer. The impostor fixes how far worlds LOOK, not yet what they cost.
+-- WHAT IT SAVES (engine 0.117.0-rc7, card 0479): a terrain body hidden with
+-- `node.visible = false` (on it or an ancestor) draws nothing and plans no
+-- meshing. So while a body's impostor is fully opaque the BODY NODE is hidden
+-- (`hideChunks`) and its chunks, or the engine's ball, cost nothing; it is
+-- shown again a little before the cross-fade starts (HIDE_SHOW, in body
+-- radii), so its chunks are meshed by the time they fade in. Physics is not
+-- touched (hiding keeps colliders; the sim meshes terrain on demand). Because
+-- hiding a node hides everything under it, the impostor is NOT the body's
+-- child: it hangs off the body's parent (the system group) and is placed in
+-- the world every frame. Everything else under a body (its Core, its sea,
+-- lakes, rivers, flora patches) hides with it, which is what is wanted: the
+-- impostor paints the sea, and the rest is too small to see from there.
 --
 -- Cross-script:  local fb = findScript("far_bodies")
 --                fb.focus("Taeth")   fb.focus(nil)   fb.stats()   fb.active
@@ -88,6 +96,9 @@ defaults = {
   gain = 1.0,
   --- 1 = draw every impostor flat green (to see what it covers).
   debug = 0,
+  --- 1 = hide a body's own terrain (its chunks or the engine's ball) while
+  --- its impostor covers it fully, so it is neither drawn nor meshed.
+  hideChunks = 1,
 }
 
 -- Published.
@@ -100,6 +111,11 @@ VERSION = 2
 -- back to chunks inside 0.7 of that). Between the two it depends on which way
 -- the camera came, so the cover mesh is used from the lower one out.
 local ENGINE_BALL_RADII = 42
+-- hideChunks: a body's own terrain is shown again once the camera is within
+-- HIDE_SHOW × (nearRadii × 1.6) — the distance the cross-fade starts at — so
+-- its chunks have the camera's last stretch to mesh before they fade in, and
+-- hidden again past HIDE_AGAIN × that (the gap keeps it from flickering).
+local HIDE_SHOW, HIDE_AGAIN = 1.25, 1.4
 -- The cover mesh stands this far outside the engine's ball.
 local BALL_COVER = 1.004
 
@@ -487,7 +503,7 @@ local B = {}
 local queue = {} -- pending build jobs: { body, level, co, prio }
 local focused = nil
 local gen_ref
-local S = { built = 0, cached = 0, verts = 0, buildMs = 0, frames = 0, shown = 0, lastErr = nil }
+local S = { built = 0, cached = 0, verts = 0, buildMs = 0, frames = 0, shown = 0, hides = 0, lastErr = nil }
 
 local function genspec(name)
   if not (gen_ref and gen_ref.valid ~= false) then gen_ref = findScript and findScript("system_generator") end
@@ -722,7 +738,12 @@ end
 local function ensure_node(e)
   if e.imp ~= nil then return e.imp end
   e.imp = false
-  createNode("FarLOD " .. e.name, e.node, function(n)
+  -- Under the body's PARENT, not the body: the body node is hidden while the
+  -- impostor covers it (hideChunks), and a hidden node hides its children.
+  -- (Rails bodies do not turn, so the parent's frame is the body's.)
+  local parent = e.node.parent
+  if parent and parent.valid == false then parent = nil end
+  createNode("FarLOD " .. e.name, parent, function(n)
     n.tags = { "farlod" }
     n.castShadow = false
     n.visible = false
@@ -754,6 +775,28 @@ end
 local function hide(e)
   if e.imp and e.imp.valid ~= false and e.vis then e.imp.visible = false end
   e.vis = false
+end
+
+-- The body's own terrain drawn (true) or hidden under its impostor (false).
+local function body_shown(e, on)
+  if e.hidden == (not on) then return end
+  if e.node and e.node.valid ~= false then e.node.visible = on end
+  e.hidden = not on
+  if not on then S.hides = S.hides + 1 end
+end
+
+-- Should the body's own terrain be hidden? `a` is the impostor's alpha, `dc`
+-- and `dl` its distance from the camera and the LOD anchor, `was` whether it
+-- is hidden now. Hidden only under a fully opaque impostor that is drawn
+-- (`ready`); shown again from HIDE_SHOW × the fade's start, or at once if the
+-- impostor goes. The map case (detail anchored far away) hides at any range:
+-- the chunks there are the anchor's coarse ones and the impostor stays on.
+function hideRule(dc, dl, Rb, a, ready, was)
+  if params.hideChunks <= 0 or not ready or a < 0.999 then return false end
+  if dl > dc * 2.5 then return true end
+  local start = params.nearRadii * 1.6 * Rb
+  if was then return dc > start * HIDE_SHOW end
+  return dc > start * HIDE_AGAIN
 end
 
 -- ── the camera ───────────────────────────────────────────────────────────────
@@ -792,15 +835,16 @@ function focusedBody() return focused end
 
 function setActive(on)
   active = on and true or false
-  if not active then for _, e in pairs(B) do hide(e) end end
+  if not active then for _, e in pairs(B) do hide(e); body_shown(e, true) end end
 end
 
 -- One line for probes and logs.
 function stats()
-  local n, shown, lv = 0, 0, {}
+  local n, shown, lv, nh = 0, 0, {}, 0
   for name, e in pairs(B) do
     n = n + 1
     if e.vis then shown = shown + 1 end
+    if e.hidden then nh = nh + 1 end
     local ls = {}
     for l in pairs(e.mesh) do ls[#ls + 1] = l end
     table.sort(ls)
@@ -810,12 +854,12 @@ function stats()
       off = string.format(" pull %.0f/%.0f m%s", sqrt((a.x - b.x) ^ 2 + (a.y - b.y) ^ 2 + (a.z - b.z) ^ 2), e.pull or 0,
         e.pullMax and string.format(" (air: max %.0f)", e.pullMax) or "")
     end
-    lv[#lv + 1] = string.format("%s[%s|L%s a%.2f %s%s]", name, table.concat(ls, ","), tostring(e.level), e.alpha or 0,
-      e.cover and "cover" or "true", off)
+    lv[#lv + 1] = string.format("%s[%s|L%s a%.2f %s%s%s]", name, table.concat(ls, ","), tostring(e.level), e.alpha or 0,
+      e.cover and "cover" or "true", off, e.hidden and " terrain-hidden" or "")
   end
   table.sort(lv)
-  return string.format("tracked %d shown %d built %d cached %d verts %d buildMs %.0f queue %d focus %s err %s :: %s",
-    n, shown, S.built, S.cached, S.verts, S.buildMs, #queue, tostring(focused), tostring(S.lastErr), table.concat(lv, " "))
+  return string.format("tracked %d shown %d hidden %d (hides %d) built %d cached %d verts %d buildMs %.0f queue %d focus %s err %s :: %s",
+    n, shown, nh, S.hides, S.built, S.cached, S.verts, S.buildMs, #queue, tostring(focused), tostring(S.lastErr), table.concat(lv, " "))
 end
 
 -- The decision for one body, given the camera: (alpha, wanted level, cover?).
@@ -847,7 +891,10 @@ end
 function lateUpdate(node, dt)
   S.frames = S.frames + 1
   active = params.on > 0 and active
-  if not active then return end
+  if not active then
+    for _, e in pairs(B) do if e.vis or e.hidden then hide(e); body_shown(e, true) end end
+    return
+  end
   if not (space and space.bodies and mesh and mesh.build) then return end
   local cx, cy, cz, ppr = cam_state()
   if not cx then return end
@@ -905,8 +952,10 @@ function lateUpdate(node, dt)
           set_look(e, cover and m.cover or m["true"], a, (1 + proud / max(base, 1)) * (dc - pull) / dc,
             sb.x - dx * k, sb.y - dy * k, sb.z - dz * k)
           shown = shown + 1
+          body_shown(e, not hideRule(dc, dl, Rb, a, e.vis, e.hidden))
         else
           hide(e)
+          body_shown(e, true)
         end
       end
     end
@@ -917,6 +966,7 @@ end
 
 function onDestroy()
   for _, e in pairs(B) do
+    body_shown(e, true)
     for _, m in pairs(e.mesh) do
       pcall(mesh.free, m["true"]); pcall(mesh.free, m.cover)
     end

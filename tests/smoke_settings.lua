@@ -435,47 +435,58 @@ local bare = load_settings({ bare = true })
 ok(pcall(bare.start, {}), "starts in a scene with no camera or graphics script")
 ok(pcall(bare.set, "fov", 70) and pcall(bare.rows, 580), "...and its rows still draw")
 
--- ── 8. THE INTERFACE SIZE: every screen layer, persisted, Auto by window ───
-local function layer_node(dh)
-  local l = { designHeight = dh }
-  return { valid = true, getcomponent = function(_, k) if k == "UiLayer" then return l end end }, l
-end
-local hud_n, hud_l = layer_node(720)
-local snd_n, snd_l = layer_node(720)
+-- ── 8. THE INTERFACE SIZE: one engine scale (ui.setScale), persisted, Auto by window ──
+-- floptle/0487 (0.117.0-rc7): ui.setScale multiplies every layer; Solar sets it
+-- and no longer moves each layer's designHeight.
+local uis = { s = 1.0, calls = 0 }
+_G.ui = { setScale = function(s) assert(s >= 0.25 and s <= 4); uis.s = s; uis.calls = uis.calls + 1 end,
+          scale = function() return uis.s end }
+local hud_l = { designHeight = 720 }
+local hud_n = { valid = true, getcomponent = function(_, k) if k == "UiLayer" then return hud_l end end }
 slots.settings = {}
-local st8 = load_settings({ nodes = { ["Ship HUD"] = hud_n, ["Sound and Settings"] = snd_n },
-                            screen = { 1920, 1080 } })
+local st8 = load_settings({ nodes = { ["Ship HUD"] = hud_n }, screen = { 1920, 1080 } })
 st8.start({})
 ok(math.abs(st8.uiScale - 0.85) < 1e-9, "Auto at 1080 lines: 85% (got " .. tostring(st8.uiScale) .. ")")
-ok(math.abs(hud_l.designHeight - 720 / 0.85) < 0.01 and math.abs(snd_l.designHeight - 720 / 0.85) < 0.01,
-  "...applied to both of the system's screen layers (design height 847)")
-ok(math.abs(st8.designHeight() - 720 / 0.85) < 1e-6, "designHeight() says so to the scripts that convert pixels")
+ok(math.abs(uis.s - 0.85) < 1e-9, "...set once for the whole interface through ui.setScale (got " .. uis.s .. ")")
+ok(hud_l.designHeight == 720, "...and the layers keep their own design height (720)")
+ok(math.abs(st8.designHeight() - 720 / 0.85) < 1e-6, "designHeight() says 847 to the scripts that convert pixels")
 ok(st8.autoUiScale(720) == 1.0 and math.abs(st8.autoUiScale(1440) - 0.8) < 1e-9,
   "Auto is 100% at 720 lines and never below 80%")
 local row = find_el(st8.rows(580), "uis")
 ok(row ~= nil and find_el(st8.rows(580), "auto") ~= nil, "Display has the Interface size fader and an Auto key")
-st8.set("ui_scale", 1.1)
+local c0 = uis.calls
+run(st8, 2.0)
+ok(uis.calls == c0, "re-asserting an unchanged size twice a second calls nothing")
+uis.s = 1.0   -- Play restarted (the engine resets it to 1)
+run(st8, 0.6)
+ok(math.abs(uis.s - 0.85) < 1e-9, "a scale the engine reset is put back within half a second")
+st8.set("ui_scale", 1.05)
 _G.input = { button = function() return true end }
 st8.update({}, 0.01)
-ok(math.abs(hud_l.designHeight - 720 / 0.85) < 0.01, "a drag is not applied while the button is held…")
+ok(math.abs(uis.s - 0.85) < 1e-9, "a drag is not applied while the button is held…")
 _G.input = { button = function() return false end }
 st8.update({}, 1 / 60)
 _G.input = nil
-ok(math.abs(hud_l.designHeight - 720 / 1.1) < 0.01, "…and lands when it comes up (110% → 655 units)")
+ok(math.abs(uis.s - 1.05) < 1e-9, "…and lands when it comes up (105%)")
 st8.set("ui_scale", 3.0)
 st8.update({}, 1 / 60)
-ok(math.abs(st8.uiScale - st8.UI_MAX) < 1e-9, "a size past the top of the range is held at " .. st8.UI_MAX * 100 .. "%")
+ok(math.abs(st8.uiScale - st8.UI_MAX) < 1e-9 and math.abs(uis.s - st8.UI_MAX) < 1e-9,
+  "a size past the top of the range is held at " .. st8.UI_MAX * 100 .. "%")
 st8.set("ui_scale", 0.7)
 run(st8, 1.0)
 ok(slots.settings.opt_ui_scale == 0.7, "the size is kept in the settings store")
-local st9 = load_settings({ nodes = { ["Ship HUD"] = hud_n }, screen = { 1920, 1080 } })
+uis.s = 1.0
+local st9 = load_settings({ screen = { 1920, 1080 } })
 st9.start({})
-ok(math.abs(hud_l.designHeight - 720 / 0.7) < 0.01, "…and comes back on the next launch")
+ok(math.abs(uis.s - 0.7) < 1e-9, "…and comes back on the next launch")
 find_el(st9.rows(580), "auto").onClicked()
 st9.update({}, 1 / 60)
-ok(math.abs(st9.uiScale - 0.85) < 1e-9, "Auto forgets the choice and follows the window again")
+ok(math.abs(st9.uiScale - 0.85) < 1e-9 and math.abs(uis.s - 0.85) < 1e-9, "Auto forgets the choice and follows the window again")
 run(st9, 1.0)
 ok(slots.settings.opt_ui_scale == nil, "...and the store forgets it too")
+_G.ui = nil
+local st10 = load_settings({ screen = { 1920, 1080 } })
+ok(pcall(st10.start, {}) and pcall(st10.update, {}, 1 / 60), "no ui.setScale (an older engine): no error")
 
 if #failures == 0 then
   print(string.format("SETTINGS SMOKE OK — %d checks passed", checks))

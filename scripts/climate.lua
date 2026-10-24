@@ -468,6 +468,27 @@ local water = { body = nil, lakes = {}, rivers = {}, hydro = nil, t = 0,
 local gen_ref
 local eye_x, eye_y, eye_z = nil, nil, nil
 
+-- BUILDING A LAKE OR A RIVER IS A JOB, resumed once a frame for BUILD_MS of
+-- wall time: a lake's lattice is a few thousand field reads and a river's
+-- first piece walks its whole bed (river_tau), and built in one go they were
+-- 50–230 ms frames (rc7, scale-3 worlds). `slice(b)` is called in the hot
+-- loops; it yields only inside the build job's own coroutine, and refreshes
+-- the body's position after a yield (the planet moves on its rails between
+-- frames, and every read is at b + a body-relative point).
+local BUILD_MS = 2.0
+local build_co, build_t0, build_n = nil, 0, 0
+local function wall() return (app and app.wallClock and app.wallClock()) or (os and os.clock and os.clock()) or 0 end
+local function slice(b)
+  if build_co == nil or coroutine.running() ~= build_co then return end
+  build_n = build_n + 1
+  if build_n % 8 ~= 0 then return end
+  if (wall() - build_t0) * 1000 < BUILD_MS then return end
+  coroutine.yield()
+  build_t0 = wall()
+  local nb = water.body and space.body(water.body)
+  if nb and b then b.x, b.y, b.z = nb.x, nb.y, nb.z end
+end
+
 -- A probe or the map can say where the eye is (nil hands it back).
 function setEye(x, y, z)
   if x then eye_x, eye_y, eye_z = x, y, z else eye_x = nil end
@@ -734,6 +755,7 @@ end
 local function ground_r(b, dx, dy, dz, top, bottom)
   local r = top
   for _ = 1, 200 do
+    slice(b)
     local q = terrain.query(b.x + dx * r, b.y + dy * r, b.z + dz * r)
     if not q then return nil end
     if q < 0.12 then return r - math.max(q, 0) end
@@ -780,6 +802,7 @@ local function build_lake(b, w, L)
   local function is_water(i, j)
     local k = key(i, j)
     if open[k] == nil then
+      slice(b)
       local dx, dy, dz = dir(i, j)
       local qa = terrain.query(b.x + dx * Rl, b.y + dy * Rl, b.z + dz * Rl)
       local qb = terrain.query(b.x + dx * floor_r, b.y + dy * floor_r, b.z + dz * floor_r)
@@ -953,7 +976,7 @@ local function build_lake(b, w, L)
           local dx, dy, dz = dir(i, j)
           if ang(dx, dy, dz, cx, cy, cz) * Rv <= reach then
             local qa = open_qa[key(i, j)]
-            if qa == nil then qa = terrain.query(b.x + dx * Rv, b.y + dy * Rv, b.z + dz * Rv) end
+            if qa == nil then slice(b); qa = terrain.query(b.x + dx * Rv, b.y + dy * Rv, b.z + dz * Rv) end
             if qa and qa > 0.05 then leak = true end
           end
         end
@@ -1319,6 +1342,7 @@ local function free(t)
 end
 
 local function clear_water()
+  build_co, water.job = nil, nil
   for _, l in pairs(water.lakes) do if l then free(l) end end
   for _, r in pairs(water.rivers) do if r then free(r) end end
   water.lakes, water.rivers, water.hydro, water.body = {}, {}, nil, nil
@@ -1363,9 +1387,30 @@ function waterNear()
   return { lakes = nl, rivers = nr, volumes = nv, body = water.body, stats = water.stats }
 end
 
+-- Resume the lake/river build job for this frame's BUILD_MS.
+local function run_build()
+  local j = water.job
+  if not j then return end
+  build_co, build_t0 = j.co, wall()
+  local ok, res = coroutine.resume(j.co)
+  if not ok then
+    print("climate: building " .. j.what .. " failed: " .. tostring(res))
+    j.put(false)
+    water.job, build_co = nil, nil
+  elseif coroutine.status(j.co) == "dead" then
+    j.put(res or false)
+    water.job, build_co = nil, nil
+  end
+end
+local function start_build(what, fn, put)
+  water.job = { what = what, co = coroutine.create(fn), put = put }
+  run_build()
+end
+
 function update(node, dt)
   flood.clock = flood.clock + dt
   if next(flood.jobs) then flood_step(FLOOD_SLICE) end
+  run_build()
   water.t = water.t + dt
   water.t_total = (water.t_total or 0) + dt
   if water.t < 0.5 then return end
@@ -1408,8 +1453,9 @@ function update(node, dt)
       end
     end
   end
-  -- Lakes: build what came near, give back what fell far. One build a tick.
-  local built = false
+  -- Lakes: build what came near, give back what fell far. One build at a
+  -- time, as a job (`run_build`): the slot reads `false` until it lands.
+  local built = water.job ~= nil
   for i, L in ipairs(h.lakes or {}) do
     local lx, ly, lz = b.x + L.x, b.y + L.y, b.z + L.z
     local d = len(ex - lx, ey - ly, ez - lz) - L.reach
@@ -1423,7 +1469,10 @@ function update(node, dt)
       have = nil
     end
     if have == nil and d < LAKE_NEAR and not built then
-      water.lakes[i] = build_lake(b, w, L) or false
+      water.lakes[i] = false
+      local bb = { x = b.x, y = b.y, z = b.z, node = b.node, name = b.name }
+      start_build("lake " .. i, function() return build_lake(bb, w, L) end,
+        function(r) if water.lakes[i] == false then water.lakes[i] = r elseif r then free(r) end end)
       built = true
     elseif have and d > LAKE_FAR then
       free(have)
@@ -1450,7 +1499,10 @@ function update(node, dt)
         local d = len(ex - b.x - mx, ey - b.y - my, ez - b.z - mz)
         local have = water.rivers[k]
         if have == nil and d < RIVER_NEAR and not built then
-          water.rivers[k] = build_river(b, w, rv, i0, i1) or false
+          water.rivers[k] = false
+          local bb = { x = b.x, y = b.y, z = b.z, node = b.node, name = b.name }
+          start_build("river " .. k, function() return build_river(bb, w, rv, i0, i1) end,
+            function(r) if water.rivers[k] == false then water.rivers[k] = r elseif r then free(r) end end)
           built = true
         elseif have and d > RIVER_NEAR * 1.6 then
           free(have)

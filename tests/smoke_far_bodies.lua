@@ -102,10 +102,10 @@ function API.createNode(name, parent, fn)
   local n = mknode(name, parent)
   if fn then fn(n) end
 end
-local function kids(of)
-  local out = {}
-  for _, n in ipairs(nodes) do if n.parent == of and n.valid then out[#out + 1] = n end end
-  return out
+-- A body's impostor: by name (it hangs off the body's parent, not the body,
+-- since the body node is hidden while the impostor covers it).
+local function imp_of(name)
+  for _, n in ipairs(nodes) do if n.name == "FarLOD " .. name and n.valid then return n end end
 end
 
 -- meshes
@@ -212,6 +212,18 @@ do
     prev = a
   end
   check(worst < 0.06, string.format("the cross-fade has no pop (largest step %.3f per 0.1 R)", worst))
+  -- hideChunks: the body's own terrain hidden only under a fully opaque,
+  -- drawn impostor, shown again before the fade starts (9.6 R here), with a gap
+  check(fb.hideRule(20 * 100, 20 * 100, 100, 1, true, false), "a world 20 radii off under its impostor hides its own terrain")
+  check(not fb.hideRule(20 * 100, 20 * 100, 100, 1, false, false), "…not before the impostor is drawn")
+  check(not fb.hideRule(20 * 100, 20 * 100, 100, 0.9, true, false), "…not while it is see-through")
+  check(not fb.hideRule(11.5 * 100, 11.5 * 100, 100, 1, true, true), "shown again from 1.25 × the fade's start (12 R)")
+  check(fb.hideRule(12.5 * 100, 12.5 * 100, 100, 1, true, true) and not fb.hideRule(12.5 * 100, 12.5 * 100, 100, 1, true, false),
+    "between 12 and 13.4 R it stays as it was (no flicker)")
+  check(fb.hideRule(2.5 * 100, 40 * 100, 100, 1, true, false), "the map framing a world while detail stays with the ship: hidden")
+  fb.params.hideChunks = 0
+  check(not fb.hideRule(20 * 100, 20 * 100, 100, 1, true, false), "hideChunks = 0 never hides")
+  fb.params.hideChunks = 1
 end
 
 -- ── a session: from the home surface, looking at the moon ───────────────────
@@ -226,9 +238,9 @@ local function frames(n)
 end
 frames(400)
 
-local moon_imp = kids(by_name.Moon)[1]
-local home_imp = kids(by_name.Home)[1]
-local far_imp = kids(by_name.Far)[1]
+local moon_imp = imp_of("Moon")
+local home_imp = imp_of("Home")
+local far_imp = imp_of("Far")
 check(moon_imp ~= nil and moon_imp.visible, "the moon at 18 radii has a visible impostor")
 check(home_imp == nil or not home_imp.visible, "the world under the camera has none showing")
 check(moon_imp and moon_imp.model and built[moon_imp.model] ~= nil, "the moon's impostor wears a built mesh")
@@ -250,6 +262,9 @@ check(pull > 0.3 * MOON.radius, string.format("pulled %.0f m toward the camera, 
 check(math.abs(proud_px - fb.params.proudPixels) < 0.3,
   string.format("and the same size on screen, %.2f px proud", proud_px))
 check(moon_imp and moon_imp.mat and moon_imp.mat.alpha == 1, "fully opaque at 18 radii")
+check(by_name.Moon.visible == false, "…so the moon's own terrain is hidden (drawn and meshed by nobody)")
+check(moon_imp and moon_imp.parent ~= by_name.Moon, "the impostor is not under the body it hides")
+check(by_name.Home.visible ~= false, "the world under the camera keeps its terrain")
 -- vertices sit near the moon's radius
 if mt then
   local lo, hi = math.huge, 0
@@ -275,7 +290,7 @@ check(per_frame_worst <= fb.params.budget * 4 * 12,
 -- the far planet: 300 radii, cold → cover mesh, every vertex outside its ball
 LOOK = FAR
 frames(400)
-far_imp = kids(by_name.Far)[1]
+far_imp = imp_of("Far")
 local fm = far_imp and far_imp.model and built[far_imp.model]
 check(far_imp ~= nil and far_imp.visible, "the far planet (150 radii, ~4 px) has an impostor")
 local inside = 0
@@ -299,6 +314,7 @@ for _ = 1, 3000 do
   if m and #m.positions >= 40962 * 3 then refined = T - t0; break end
 end
 check(far_imp.visible and far_imp.mat.alpha == 1, "the map framing it: the impostor stays on at 2.5 radii")
+check(by_name.Far.visible == false, "…and the far planet's own (coarse) terrain stays hidden")
 check(refined ~= nil, string.format("focused, it refines to level 6 (%s s of 60 fps frames)", refined and string.format("%.1f", refined) or "never"))
 
 -- the sea: home seen from 12 radii
@@ -307,7 +323,7 @@ CAM = { x = 0, y = 0, z = -12 * 830 } -- 12 home radii out (the moon is only 4)
 LOOK = HOME
 fb.focus(nil)
 frames(600)
-home_imp = kids(by_name.Home)[1]
+home_imp = imp_of("Home")
 local hm = home_imp and home_imp.model and built[home_imp.model]
 check(home_imp ~= nil and home_imp.visible, "home seen from 12 radii has an impostor")
 local wet, dry_low = 0, 0
@@ -352,6 +368,7 @@ fb.setActive(false)
 local any = false
 for _, n in ipairs(nodes) do if n.name:match("^FarLOD") and n.valid and n.visible then any = true end end
 check(not any, "setActive(false) hides every impostor")
+check(by_name.Moon.visible ~= false and by_name.Far.visible ~= false, "…and shows every body's own terrain again")
 fb.setActive(true)
 by_name.Moon.valid = false
 frames(70)

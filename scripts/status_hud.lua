@@ -64,17 +64,9 @@ local function blocked()
   return false
 end
 
--- The UI faces a STYLE names (ui/solar.tokens.ron: label, mono, stencil).
--- The engine loads a font only when an element in the scene names it itself —
--- a font that only a style asks for is never loaded and the text falls back
--- to the project font (engine ui_game.rs ensure_ui_fonts scans the ECS specs;
--- styles are applied to copies). So one hidden element per face names it.
--- Remove when the engine registers style fonts.
-FONT_PRIMER = { "fonts/SolarLabel.ttf", "fonts/SolarMono.ttf", "fonts/SolarStencil.ttf" }
-local function primer()
-  return { "box", key = "fontprimer", visible = false, w = 1, h = 1, pad = 0, gap = 0,
-           items = FONT_PRIMER, function(f, i) return { "text", key = "f" .. i, font = f, text = "0" } end }
-end
+-- (The UI faces a style names, ui/solar.tokens.ron, load on their own since
+-- 0.117.0-rc7, floptle/0477; the hidden FONT_PRIMER element that named them
+-- is gone.)
 
 -- The three readouts as data: what the chips show, and the one-line text the
 -- harness (and anything else) can read back as `line`.
@@ -276,7 +268,6 @@ end
 function start(node)
   el = node:getcomponent("UiElement")
   if el then el.visible = false end
-  ui.make(node, { primer() })
 end
 
 function update(node, dt)
@@ -289,5 +280,5 @@ function update(node, dt)
   local rs = readouts()
   line = text_of(rs)
   ui.make(node, { { "row", key = "chips", w = "fit", h = "fit", gap = 6, pad = 0, align = "center",
-                    items = rs, function(r) return chip(r) end }, primer() })
+                    items = rs, function(r) return chip(r) end } })
 end
