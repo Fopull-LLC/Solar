@@ -127,14 +127,19 @@ defaults = {
   -- Grass fields lay a tinted decal on the ground under themselves, so a
   -- meadow reads as a meadow from the air long after the blades have faded.
   -- 0 = off.
-  -- OFF until the engine's decal relay is budgeted (floptle 0.117.0-rc19,
-  -- decals.rs relay_decals_on_edits): every chunk the terrain streams in
-  -- while the player moves marks the whole level edited, every wash is then
-  -- checked and laid again, one 28.8 m wash per frame at 12-34 ms each, and
-  -- with 70 washes in range that is every frame. Measured on the user's save
-  -- (play, XWayland): walking on a meadow 36.6 ms/frame mean with washes,
-  -- 16.5 ms without; in the editor 41.6 ms. Standing still costs nothing.
-  tint = 0,
+  -- ON since floptle 0.117.0-rc22 (card 0525), and held OFF by the script on
+  -- older engines (WASH_RELAY_BUDGETED below): before rc22 every chunk the
+  -- terrain streamed in marked the whole level edited, every wash was checked
+  -- and laid again, one 28.8 m wash a frame at 12-34 ms, and with 70 washes
+  -- in range that was every frame (walking a meadow on the user's save:
+  -- rc19 36.6 ms/frame mean, rc20 24.5-27.5 with decalRelay 5.1 ms on the
+  -- average frame; 16.5 with the washes off). rc22 re-lays only the marks
+  -- whose ground changed, through the budgeted tiled lay: the same walk with
+  -- 66-101 washes in range reads 16.6 ms mean, p95 22, max 34, decalRelay
+  -- 0.00 on every frame, and 100 laser bites on the meadow cost decalRelay
+  -- 2.0 ms at most (0.14 mean on the first 25, 0 after). Standing still costs
+  -- nothing on any engine.
+  tint = 1,
   --@range 40 250 --@units m
   tint_range = 130.0,
   --@range 8 40 --@units m
@@ -1505,7 +1510,7 @@ local function wash_alpha(inf, d, range, kalt)
   return inf[4] * kd * ki * kalt
 end
 wash = function(body, rx, ry, rz, species, fg, alt, w)
-  if params.tint == 0 or not (decals and decals.add) or (alt or 0) > params.tint_alt then
+  if params.tint == 0 or not WASH_RELAY_BUDGETED or not (decals and decals.add) or (alt or 0) > params.tint_alt then
     if wash_n > 0 or next(washes) then
       for _, d in pairs(washes) do if d then decals.remove(d) end end
       washes, wash_n, wash_info = {}, 0, {}
@@ -2543,6 +2548,11 @@ local function engine_at_least(maj, min, pat, rc)
   return true
 end
 NEAR_BY_POSITION = engine_at_least(0, 117, 0, 20)
+-- The ground wash (params.tint, the "Ground wash" header) is only drawn on an
+-- engine whose decal re-lay is budgeted and regional (0.117.0-rc22, card
+-- 0525); before that, streaming re-laid every wash in range, one a frame at
+-- 12-34 ms, so `wash` keeps the washes off however `tint` is set.
+WASH_RELAY_BUDGETED = engine_at_least(0, 117, 0, 22)
 
 local function near_query(p, mx, my, mz, gx, gy, gz, rh, slack, chunk)
   if NEAR_BY_POSITION then return mx, my, mz, rh + slack end
