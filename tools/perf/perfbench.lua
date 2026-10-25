@@ -12,12 +12,33 @@
 --   builder : g) the in-VAB builder at 300 / 1,000 / 3,000 parts (load, idle,
 --                a part in hand), then a ~1,000-part craft launched to the pad
 --
+-- The player's own save (usersave=1; bench.sh USERSAVE=1 copies save/slot1.ron,
+-- save/settings.ron and saves/slot1 into the scratch project, never Solar's):
+--   foot      : u) stand 20 s at the spawn, then walk 40 s
+--   meadow    : u) 220 m out to the grass (the grassiest spot that far), stand
+--                  8 s, walk there 40 s — the turf wash / decal relay (0525)
+--   digmeadow : u) 100 terrain-laser bites on that meadow
+--   park      : s) a 6-wheel rover rolled out to the runway, released, brakes
+--                  on: time to node.asleep, the wake reason, physics ms/frame
+--                  (0527 / 0531)
+--   bigpark   : s) the ~1,000-part finned spine released on the pad with NO
+--                  throttle: time to sleep and physics before/after (0509 /
+--                  0531); loads=1 lets it break up (the pieces' sleep, 0509)
+--   gameplay  : the gameplay smoke, each step one RESULT line: an in-VAB rover
+--               rollout driven 100 m; the two-stage Skipper→Anvil to orbit; the
+--               starter rocket to its apex and a revert to launch (state back,
+--               0 old parts); the jet's take-off; the 1,002-part rollout and
+--               release, then `sleepsecs` of settling
+-- (park, bigpark and gameplay run on a fresh save too.)
+--
 -- Every frame it reads the engine profiler (perf.*) and INVERTS its smoothed
 -- means (mean = 0.9 mean' + 0.1 x, floptle-core/src/profile.rs Series::push)
 -- back into exact per-frame bucket and per-script costs. Each scenario prints
 -- "PB RESULT" lines and one "BENCHJSON {...}" line for bench.sh to tabulate.
 defaults = { slot = 13, seed = 1911564384, quit = 1, onfoot = 30, clicks = 20, hold = 0.5, gap = 0.5,
-             mapsecs = 12, flysecs = 45, drivesecs = 45, out = 110, settle = 8, sleepsecs = 20, sample = 0 }
+             mapsecs = 12, flysecs = 45, drivesecs = 45, out = 110, settle = 8, sleepsecs = 20, sample = 0,
+             usersave = 0, standsecs = 20, walksecs = 40, meadow_m = 220, digclicks = 100, parksecs = 45,
+             burst = 0 }
 
 local MODE = "base"
 local W = function() return app.wallClock and app.wallClock() or os.clock() end
@@ -97,7 +118,11 @@ local function topk(map, k, div)
 end
 local function fmtk(list) local o = {}; for _, e in ipairs(list) do o[#o + 1] = string.format("%s %.2f", e[1], e[2]) end; return table.concat(o, ", ") end
 
-local SUMMARY_COUNTS = { "draws", "unbatched", "nodes", "instances", "chunks", "props", "decals", "decalTris", "particles", "lights", "rays", "sweeps" }
+-- fieldChunks / fieldEdited / fieldStandIns: the terrains' voxel fields (0.117
+-- rc25): chunks held at full detail, those edited since generation (dug,
+-- raised, painted: kept and saved for life), and coarse stand-ins
+local SUMMARY_COUNTS = { "draws", "unbatched", "nodes", "instances", "chunks", "props", "decals", "decalTris", "particles", "lights", "rays", "sweeps",
+                         "fieldChunks", "fieldEdited", "fieldStandIns", "effects", "voices", "decalsRelaid" }
 
 local function measure()
   local now = W()
@@ -261,6 +286,11 @@ local function sc_end(name)
     P("RESULT [%s] all %d hitches, %.0f ms total: buckets %s | parts %s", name, r.hit.n, r.hms or 0, fmtk(topk(r.hb or {}, 6)), fmtk(topk(r.hp or {}, 6)))
   end
   P("RESULT [%s] counts mean: %s; gpu %.2f ms: %s", name, fmtk(topk(cm, 12)), r.gn > 0 and r.gpu / r.gn or -1, fmtk(topk(r.gp or {}, 6, math.max(r.gn, 1))))
+  if r.cn > 0 and ((r.cnt.fieldChunks or 0) > 0 or (r.cnt.fieldEdited or 0) > 0 or (r.parts.decalRelay or 0) > 0) then
+    P("RESULT [%s] fields: fieldChunks %.0f (max %d) fieldEdited %.0f (max %d) fieldStandIns %.0f (max %d); decalRelay %.2f ms/frame (max %.1f)",
+      name, cm.fieldChunks or 0, r.cmax.fieldChunks or 0, cm.fieldEdited or 0, r.cmax.fieldEdited or 0, cm.fieldStandIns or 0, r.cmax.fieldStandIns or 0,
+      (r.parts.decalRelay or 0) / math.max(n, 1), r.pmax.decalRelay or 0)
+  end
   local notes = {}
   for k, v in pairs(r.notes) do notes[k] = v end
   local lpd = (r.lp0 and LP_DELTA) and LP_DELTA(r.lp0, n) or {}
@@ -362,9 +392,18 @@ local function clear_weather()
   if wx and wx.force then wx.force("clear") end
 end
 
+local ground96   -- defined with the ground helpers below
+
 local function boot()
   local s = "slot" .. math.floor(params.slot)
   NODE.persistent = true
+  if (params.usersave or 0) > 0 then
+    -- the player's save, as the menu's CONTINUE loads it (menu_slot.lua): the
+    -- slot is picked and the system scene loaded; nothing is written to it.
+    -- bench.sh copied it into this scratch project.
+    save.slot(s)
+    P("usersave: slot %s seed %s base %s scale %s played %s", save.slot(), tostring(save.get("g_seed")), tostring(save.get("base.body")), tostring(save.get("g_scale")), tostring(save.get("g_played")))
+  else
   -- exactly what the new-save panel's CREATE does (menu_newsave.lua): wipe the
   -- slot, then its sliders' defaults (scenes/menu.ron), the seed and the current
   -- world scale — and NOTHING else. (Setting base.* / g_played to false made the
@@ -378,6 +417,7 @@ local function boot()
                       g_radmin = 600, g_radmax = 950, g_gravmin = 3.5, g_gravmax = 8.5, g_star = 1.0 }) do save.set(k, v) end
   local ns = findScript("menu_newsave")
   save.set("g_scale", math.floor(params.scale or (ns and ns.WORLD_SCALE) or 4))
+  end
   perf.enable(true)
   -- the script sampler (rc16) slows tight loops, so it is a separate run's
   if (params.sample or 0) > 0 and perf.sampleScripts then perf.sampleScripts(true) end
@@ -411,6 +451,10 @@ local function boot()
     P("WORLD %s R %.1f g %.2f atmoHeight %s", hb.name, hb.radius, hb.mu / hb.radius ^ 2, tostring(type(wd) == "table" and wd.atmoHeight))
     sc_note("a_load", "world", string.format("%s R%.0f", hb.name, hb.radius))
   end
+  local c = perf.counts() or {}
+  P("FIELDS at reveal: fieldChunks %s fieldEdited %s fieldStandIns %s chunks %s props %s decals %s",
+    tostring(c.fieldChunks), tostring(c.fieldEdited), tostring(c.fieldStandIns), tostring(c.chunks), tostring(c.props), tostring(c.decals))
+  if (params.usersave or 0) > 0 then GROUND_FIRST = ground96("first (at the reveal)") end
 end
 local function why_not_ready()
   local pw, gm, bf = findScript("planet_walker"), findScript("game_manager"), findScript("base_facilities")
@@ -423,6 +467,31 @@ local function wait_ready(tmo)
   local ok = wait_for(world_ready, tmo or 60, "world ready")
   P("world ready=%s %.1f s after asking (%s)", tostring(ok ~= nil), W() - t0, why_not_ready())
   return ok
+end
+
+-- 0528: what the engine says about the display and its pacing (the output
+-- under the window, the compositor holding frames, the frame cap)
+local function pacing_line(tag)
+  local rr = app.refreshRate and app.refreshRate()
+  local pc = perf.pacing and perf.pacing() or {}
+  P("PACING %s: app.refreshRate %s | present %s vsync %s refreshHz %s frameCap %s limitedBy %s frameMs %s waitMs %s paced %s/%s",
+    tag, tostring(rr), tostring(pc.presentMode), tostring(pc.vsync), tostring(pc.refreshHz), tostring(pc.frameCap), tostring(pc.limitedBy),
+    pc.frameMs and string.format("%.1f", pc.frameMs) or "nil", pc.waitMs and string.format("%.1f", pc.waitMs) or "nil", tostring(pc.pacedFrames), tostring(pc.frames))
+end
+local function run_quick()
+  for k = 1, 4 do pacing_line(string.format("+%d s", (k - 1) * 3)); wait(3) end
+  sc_begin("q_idle")
+  wait(6)
+  sc_end("q_idle")
+  pacing_line("end")
+  -- a cap at the display's own rate (the 0528 recipe for Adaptive)
+  if (params.cap or 0) > 0 and app.setFrameCap and app.refreshRate then
+    local rr = app.refreshRate()
+    if rr and rr >= 10 then app.setFrameCap(rr); P("PACING setFrameCap(%s)", tostring(rr)) end
+    wait(2)
+    sc_begin("q_capped"); wait(6); sc_end("q_capped")
+    pacing_line("capped")
+  end
 end
 
 local function after_boot_settle(secs)
@@ -466,6 +535,27 @@ end
 local function dir_at(u, t, d, R)
   local a = d / R
   return unit({ x = u.x * math.cos(a) + t.x * math.sin(a), y = u.y * math.cos(a) + t.y * math.sin(a), z = u.z * math.cos(a) + t.z * math.sin(a) })
+end
+
+-- 96 ground radii round the base (12 bearings × 8 distances, 15–120 m), summed:
+-- one number that says whether the world's ground is the same on two engines
+-- (and whether it moved between the reveal and the settled world).
+ground96 = function(tag)
+  local b = home()
+  if not b then P("GROUND96 %s: no home body", tag); return nil end
+  local u, t1, t2, R = base_frame()
+  local sum, n = 0, 0
+  for k = 0, 11 do
+    local ang = k * math.pi / 6
+    local t = unit({ x = t1.x * math.cos(ang) + t2.x * math.sin(ang), y = t1.y * math.cos(ang) + t2.y * math.sin(ang), z = t1.z * math.cos(ang) + t2.z * math.sin(ang) })
+    for _, d in ipairs({ 15, 30, 45, 60, 75, 90, 105, 120 }) do
+      local dir = dir_at(u, t, d, R)
+      local gr = ground_r(b, dir.x, dir.y, dir.z, R + 150)
+      if gr then sum, n = sum + gr, n + 1 end
+    end
+  end
+  P("GROUND96 %s: %d samples, sum %.4f (mean radius %.4f) on %s R %.1f", tag, n, sum, n > 0 and sum / n or 0, b.name, b.radius)
+  return sum
 end
 
 local function onfoot_30()
@@ -704,13 +794,32 @@ local function enter_vab(tag)
   a.x, a.y, a.z = p.x, p.y, p.z
   a.vx, a.vy, a.vz = 0, 0, 0
   wait(2.5)
+  -- the additive load (rc25: the running scene's sounds and effects play on,
+  -- only the overlay's own start): the counts before and after, and the
+  -- load's own steps from the frames it took
+  local c0 = perf.counts() or {}
+  local f0 = LASTF
   sc_begin(tag)
   tap("e")
   local BH = wait_for(function() local bh = findScript("build_host"); return bh and bh.state == "building" and bh end, 20, "the builder")
   if not BH then local fm = findScript("facility_menu"); if fm then fm.openMenu("FacHangar"); fm.action() end
     BH = wait_for(function() local bh = findScript("build_host"); return bh and bh.state == "building" and bh end, 20, "the builder (menu)") end
   sc_end(tag)
-  if BH then P("in the builder (enter %.0f ms)", BH.enterMs or -1) end
+  local c1 = perf.counts() or {}
+  local steps = {}
+  for _, f in ipairs(perf.frames and perf.frames(120) or {}) do
+    if f.frame and f.frame > f0 then
+      for k, v in pairs(f.parts or {}) do if k:match("^scene") then steps[k] = (steps[k] or 0) + v end end
+    end
+  end
+  if BH then
+    P("in the builder (enter %.0f ms): effects %s -> %s, particles %s -> %s, voices %s -> %s, nodes %s -> %s; load steps %s",
+      BH.enterMs or -1, tostring(c0.effects), tostring(c1.effects), tostring(c0.particles), tostring(c1.particles), tostring(c0.voices), tostring(c1.voices),
+      tostring(c0.nodes), tostring(c1.nodes), fmtk(topk(steps, 10)))
+    sc_note(tag, "enterMs", BH.enterMs or -1)
+    sc_note(tag, "effects", string.format("%s->%s", tostring(c0.effects), tostring(c1.effects)))
+    sc_note(tag, "voices", string.format("%s->%s", tostring(c0.voices), tostring(c1.voices)))
+  end
   return BH
 end
 local function load_bp(B, name, list, extra)
@@ -760,13 +869,21 @@ local function rocket_2stage()
   add("engineM", 1.6); add("tankM", 1.5); add("tankM", 1.5); add("pod", 0.8); add("chute", 0.34, 2)
   return l
 end
+local ascend
 local function run_rocket()
   local rs = findScript("research")
   for _, id in ipairs({ "tankM", "engineM", "skipper" }) do if rs and rs.grant then rs.grant(id, "probe") end end
   local bp = (params.tanks or 0) > 0 and rocket_bp(params.tanks) or rocket_2stage()
   local vc = launch_via_builder(bp, "pad", #bp)
   if not vc then P("RESULT rocket: no craft"); return end
+  return ascend(vc)
+end
+-- The ascent itself, from a craft clamped on the pad: keys, a kick, prograde,
+-- MECO at the apoapsis target, a stage, the circularisation. Returns the
+-- phase it ended in ("orbit" when it made it) and the last body state.
+ascend = function(vc)
   local vn = vc.node
+  STAGED, UP_LOCAL = nil, nil
   local S = body_state(vn)
   up_axis(vn, S.U)
   P("ROCKET on the pad: %d parts, %.2f t, alt %.1f; mu %.4g R %.1f craft |v| %.1f body |v| %.1f rel %.1f eps %.1f", #S.i.parts, S.i.mass, S.alt, S.mu, S.b.radius, S.wv, S.bv, S.V, S.eps)
@@ -842,7 +959,8 @@ local function run_rocket()
   sc_begin("c_orbit_coast")
   wait(10)
   sc_end("c_orbit_coast")
-  map_view("f_map_flight", params.mapsecs)
+  if MODE == "rocket" then map_view("f_map_flight", params.mapsecs) end
+  return phase, S
 end
 
 -- ── rover ───────────────────────────────────────────────────────────────────
@@ -1092,6 +1210,54 @@ local function run_plane()
   sc_begin("d_takeoff")
   local t0, ga, air, phase = time, nil, 0, "roll"
   local S
+  -- 0526: the every-7th-frame burst. Every roll frame is kept with the
+  -- engine's own record (perf.frames) and the craft's place on its planet in
+  -- 24 m chunk cells; the first frame whose physics is 2.5x the running median
+  -- (and over `burstms`, default 60) is a burst, printed with the 12 frames
+  -- before and the 8 after it, as BURST lines. burst=N captures N bursts.
+  local ring, burst_n, burst_arm, med = {}, 0, nil, {}
+  local CH = params.chunk or 24
+  local function roll_frame(S)
+    local fr = perf.frames and perf.frames(4) or {}
+    local rel = sub(S.i.com, S.b)
+    -- the planet's own axes are the world's here (bodies on rails do not spin)
+    local cell = string.format("%d,%d,%d", math.floor(rel.x / CH), math.floor(rel.y / CH), math.floor(rel.z / CH))
+    local edge = math.min(rel.x / CH - math.floor(rel.x / CH), rel.y / CH - math.floor(rel.y / CH), rel.z / CH - math.floor(rel.z / CH))
+    for _, f in ipairs(fr) do
+      if f.frame and (not ring[#ring] or f.frame > ring[#ring].frame) then
+        local b, pt, c = f.buckets or {}, f.parts or {}, f.counts or {}
+        local bo = {}
+        for _, e in ipairs(f.bodies or {}) do bo[e.name or "?"] = e.ms or 0 end
+        ring[#ring + 1] = { frame = f.frame, ms = f.ms or 0, physics = b.physics or 0, sweeps = pt.physicsSweeps or 0, static = pt.physicsStatic or 0,
+          broad = pt.physicsBroadphase or 0, pairs = pt.physicsPairs or 0, joints = pt.physicsJoints or 0, sleep = pt.physicsSleep or 0,
+          meshing = pt.terrainMeshing or 0, terrain = b.terrain or 0, scripts = b.scripts or 0, render = b.render or 0,
+          fieldChunks = c.fieldChunks, chunks = c.chunks, sweepsN = c.sweeps, rays = c.rays, props = c.props,
+          V = S.V, agl = S.agl, cell = cell, edge = edge, rel = rel, bodies = topk(bo, 3), paced = f.paced }
+        if #ring > 40 then table.remove(ring, 1) end
+        med[#med + 1] = b.physics or 0
+        if #med > 30 then table.remove(med, 1) end
+        if not burst_arm and burst_n < math.max(1, params.burst) and #med >= 12 then
+          local m = stats(med).p50
+          if (b.physics or 0) > 2.5 * m and (b.physics or 0) > (params.burstms or 60) then burst_arm = { frame = f.frame, left = 8, med = m } end
+        elseif burst_arm then
+          burst_arm.left = burst_arm.left - 1
+          if burst_arm.left <= 0 then
+            burst_n = burst_n + 1
+            P("BURST #%d around frame %d (running median physics %.1f ms); chunk cell %d m; columns: frame ms physics sweeps static broad pairs joints sleep meshing terrain scripts render | V agl | cell edge | fieldChunks chunks sweepsN | bodies | paced",
+              burst_n, burst_arm.frame, burst_arm.med, CH)
+            for _, r in ipairs(ring) do
+              if r.frame >= burst_arm.frame - 12 and r.frame <= burst_arm.frame + 8 then
+                P("BURST %s%d %.1f | %.1f %.1f %.1f %.2f %.2f %.2f %.2f | %.2f %.1f %.1f %.1f | %.1f %.1f | %s %.2f | %s %s %s | %s | %s", r.frame == burst_arm.frame and "*" or " ",
+                  r.frame, r.ms, r.physics, r.sweeps, r.static, r.broad, r.pairs, r.joints, r.sleep, r.meshing, r.terrain, r.scripts, r.render, r.V, r.agl, r.cell, r.edge,
+                  tostring(r.fieldChunks), tostring(r.chunks), tostring(r.sweepsN), fmtk(r.bodies), tostring(r.paced))
+              end
+            end
+            burst_arm = nil
+          end
+        end
+      end
+    end
+  end
   while true do
     yield()
     if not vn.valid then P("PLANE gone"); break end
@@ -1101,6 +1267,7 @@ local function run_plane()
     local t = time - t0
     vc.setThrottle(1)
     if phase == "roll" then
+      roll_frame(S)
       local yaw = clamp(3.0 * (S.herr or 0), -1, 1)
       if S.V < 40 then
         local p = (S.V > 15) and -clamp(3.0 * (D(1) - S.theta) - 1.0 * S.qn, -1, 1) or 0
@@ -1255,6 +1422,485 @@ local function run_builder()
   sc_end("g_launch_settle")
 end
 
+-- ── sleep: what a resting craft costs, and what keeps it awake (0527/0531) ───
+-- Every frame for `secs`: node.asleep, the wake reason (rc25 `assembly.info().wake`),
+-- the craft's speed, and the engine's own physics / physicsStatic for that
+-- frame (perf.frames). Prints the first sleep, a line every 5 s, and a
+-- RESULT with physics before and after sleep.
+local function watch_sleep(name, vn, secs, vc)
+  sc_begin(name)
+  local ts = W()
+  local slept, slept_frame, frames, after = nil, nil, 0, 0
+  local ph_b, phs_b, n_b, ph_a, phs_a, n_a = 0, 0, 0, 0, 0, 0
+  local wakes = {}
+  local last5 = -5
+  local wake_now, v_now = "?", 0
+  local rel0, drift, drift_max = nil, 0, 0   -- the craft's place on its planet: real creep or not
+  while W() - ts < secs do
+    yield()
+    frames = frames + 1
+    if not (vn and vn.valid) then P("SLEEP [%s] craft gone", name); break end
+    local i = assembly.info(vn) or {}
+    if i.com and home() then
+      local rel = sub(i.com, home())
+      rel0 = rel0 or rel
+      drift = len(rel.x - rel0.x, rel.y - rel0.y, rel.z - rel0.z)
+      drift_max = math.max(drift_max, drift)
+    end
+    local asleep = i.asleep or vn.asleep
+    wake_now = tostring(i.wake or vn.wake or "n/a")
+    v_now = i.vel and len(i.vel.x, i.vel.y, i.vel.z) or 0
+    wakes[wake_now] = (wakes[wake_now] or 0) + 1
+    local f = perf.frames and perf.frames(1)
+    f = f and f[#f]
+    local ph = f and f.buckets and f.buckets.physics or 0
+    local phs = f and f.parts and f.parts.physicsStatic or 0
+    if asleep then
+      if not slept then
+        slept, slept_frame = W() - ts, frames
+        P("SLEEP [%s] asleep %.2f s after release (frame %d), wake %s, |v| %.3f", name, slept, frames, wake_now, v_now)
+      end
+      ph_a, phs_a, n_a = ph_a + ph, phs_a + phs, n_a + 1
+    else
+      ph_b, phs_b, n_b = ph_b + ph, phs_b + phs, n_b + 1
+      if slept then after = after + 1 end   -- woke again
+    end
+    if W() - ts - last5 >= 5 then
+      last5 = W() - ts
+      P("SLEEP [%s] t=%.0f asleep %s wake %s |v| %.3f angVel %.3f drift %.3f m physics %.2f static %.2f carry %s", name, last5, tostring(asleep), wake_now, v_now,
+        i.angVel and len(i.angVel.x, i.angVel.y, i.angVel.z) or 0, drift, ph, phs, i.carry and string.format("%.2f", len(i.carry.x or 0, i.carry.y or 0, i.carry.z or 0)) or "?")
+      -- the plain props by the base (no script touches them): do THEY sleep on this planet?
+      local pr = {}
+      local function under(x, y, z, ex)
+        local bb = home()
+        if not bb then return "?" end
+        local u = unit(sub({ x = x, y = y, z = z }, bb))
+        local h = raycast(x + u.x * 0.5, y + u.y * 0.5, z + u.z * 0.5, -u.x, -u.y, -u.z, 6, ex)
+        return h and ((h.node and h.node.name) or "terrain") .. string.format("@%.2f", h.distance or -1) or "nothing"
+      end
+      for _, nm in ipairs({ "PropCrate", "PropCan", "PropCone" }) do
+        local n = find(nm)
+        if n and n.valid then pr[#pr + 1] = string.format("%s asleep %s wake %s |v| %.3f on %s", nm, tostring(n.asleep), tostring(n.wake), len(n.vx or 0, n.vy or 0, n.vz or 0), under(n.x, n.y, n.z, n)) end
+      end
+      if i.com then pr[#pr + 1] = "craft on " .. under(i.com.x, i.com.y, i.com.z, vn) end
+      if #pr > 0 then P("SLEEP [%s] props: %s", name, table.concat(pr, "; ")) end
+      -- forcesleep=1: put it to sleep by hand at 10 s; whatever wakes it then is named
+      if (params.forcesleep or 0) > 0 and last5 >= 10 and not FORCED then
+        FORCED = true
+        vn.asleep = true
+        P("SLEEP [%s] forced asleep by script at t=%.0f: asleep now %s", name, last5, tostring(vn.asleep))
+        yield()
+        local i2 = assembly.info(vn) or {}
+        P("SLEEP [%s] one frame after the forced sleep: asleep %s wake %s |v| %.3f", name, tostring(i2.asleep), tostring(i2.wake), i2.vel and len(i2.vel.x, i2.vel.y, i2.vel.z) or -1)
+      end
+    end
+  end
+  local wk = {}
+  for k, v in pairs(wakes) do wk[#wk + 1] = { k, v } end
+  table.sort(wk, function(a, b) return a[2] > b[2] end)
+  local wl = {}
+  for _, e in ipairs(wk) do wl[#wl + 1] = string.format("%s %d", e[1], e[2]) end
+  P("RESULT [%s] SLEEP: %s; awake %d frames physics %.2f ms/frame (static %.2f); asleep %d frames physics %.2f (static %.2f); re-woke frames %d; wake reasons %s; drift on its planet %.3f m (max %.3f)",
+    name, slept and string.format("asleep after %.2f s (frame %d)", slept, slept_frame) or string.format("NEVER asleep in %.0f s (%d frames), last wake %s |v| %.3f", secs, frames, wake_now, v_now),
+    n_b, n_b > 0 and ph_b / n_b or 0, n_b > 0 and phs_b / n_b or 0, n_a, n_a > 0 and ph_a / n_a or 0, n_a > 0 and phs_a / n_a or 0, after, table.concat(wl, ", "), drift, drift_max)
+  sc_note(name, "drift", drift)
+  sc_note(name, "sleptAfter", slept or -1)
+  sc_note(name, "physAwake", n_b > 0 and ph_b / n_b or 0)
+  sc_note(name, "physAsleep", n_a > 0 and ph_a / n_a or 0)
+  sc_note(name, "wake", wl[1] and wl[1][1] or "?")
+  sc_end(name)
+  return slept
+end
+
+-- ── the player's save: on foot, the meadow, the dig ─────────────────────────
+local function walk_about(name, secs)
+  -- W held, a strafe every 10 s to change the ground under foot
+  sc_begin(name)
+  local t0 = time
+  while time - t0 < secs do
+    if not HELD.w then key_down("w") end
+    local k = math.floor((time - t0) / 10) % 2 == 0 and "d" or "a"
+    local phase = (time - t0) % 10
+    if phase < 1.0 then if not HELD[k] then key_down(k) end else if HELD.a then key_up("a") end; if HELD.d then key_up("d") end end
+    yield()
+  end
+  release_all()
+  sc_end(name)
+end
+local function run_foot()
+  sc_pause("a_onfoot30")
+  sc_begin("u_stand"); wait(params.standsecs); sc_end("u_stand")
+  walk_about("u_walk", params.walksecs)
+  if (params.usersave or 0) > 0 then ground96("settled (after the walk)") end
+end
+
+-- the grassiest spot about `dist` m from the base (any bearing)
+local function find_meadow(dist)
+  local b = home()
+  local u, t1, t2, R = base_frame()
+  local cl = findScript("climate")
+  local best
+  local census = {}
+  for _, d in ipairs({ dist - 60, dist - 30, dist, dist + 30, dist + 60, dist + 100, dist + 140 }) do
+    for k = 0, 23 do
+      local ang = k * math.pi / 12
+      local t = unit({ x = t1.x * math.cos(ang) + t2.x * math.sin(ang), y = t1.y * math.cos(ang) + t2.y * math.sin(ang), z = t1.z * math.cos(ang) + t2.z * math.sin(ang) })
+      local dir = dir_at(u, t, d, R)
+      local gr = ground_r(b, dir.x, dir.y, dir.z, R + 150)
+      if gr then
+        local p = { x = b.x + dir.x * gr, y = b.y + dir.y * gr, z = b.z + dir.z * gr }
+        local smp = cl and cl.sampleAt and cl.sampleAt(b.name, p.x, p.y, p.z)
+        local wet = cl and cl.isUnderwater and cl.isUnderwater(p.x, p.y + 0.5, p.z)
+        if smp and not wet then
+          census[smp.biome or "?"] = (census[smp.biome or "?"] or 0) + 1
+          local grassy = smp.biome == "grass" or smp.biome == "steppe" or smp.biome == "forest"
+          -- grass first (the turf washes live under it), the nearest to `dist` of it
+          local score = (grassy and 10 or 0) + (smp.density or 0) - math.abs(d - dist) / 100
+          if not best or score > best.score then
+            best = { dir = dir, r = gr, t = t, biome = smp.biome, flora = smp.density or 0, d = d, score = score, grassy = grassy }
+          end
+        end
+      end
+    end
+  end
+  local cs = {}
+  for k, v in pairs(census) do cs[#cs + 1] = string.format("%s %d", k, v) end
+  table.sort(cs)
+  P("MEADOW census (%d m .. %d m, 24 bearings): %s", dist - 60, dist + 140, table.concat(cs, ", "))
+  return best
+end
+local function stand_at(spot)
+  local a, bb = astro(), home()
+  a.x, a.y, a.z = bb.x + spot.dir.x * (spot.r + 1.0), bb.y + spot.dir.y * (spot.r + 1.0), bb.z + spot.dir.z * (spot.r + 1.0)
+  a.vx, a.vy, a.vz = 0, 0, 0
+end
+local function run_meadow()
+  sc_pause("a_onfoot30")
+  wait_ready(90)
+  local spot = find_meadow(params.meadow_m)
+  if not spot then P("MEADOW: no spot found"); return end
+  P("MEADOW: %s (flora %.2f, grassy %s) %d m from the base", tostring(spot.biome), spot.flora, tostring(spot.grassy), spot.d)
+  sc_begin("u_meadow_arrive")
+  stand_at(spot)
+  wait(params.settle)
+  sc_end("u_meadow_arrive")
+  walk_about("u_meadow_walk", params.walksecs)
+  if (params.usersave or 0) > 0 then ground96("settled (after the meadow)") end
+end
+local function run_digmeadow()
+  sc_pause("a_onfoot30")
+  wait_ready(90)
+  local spot = find_meadow(params.meadow_m)
+  if not spot then P("MEADOW: no spot found"); return end
+  params.clicks = params.digclicks
+  dig_at("u_dig_meadow", spot)
+end
+
+-- ── park: the rover, brakes on; bigpark: the 1,002-part craft, no throttle ──
+local function brakes_on(vc)
+  tap("b")
+  wait(0.3)
+  local E = findScript("electronics")
+  local on = {}
+  for _, w in ipairs(vc.R2 and vc.R2.wheels or {}) do
+    local st = E and E.stateOf and E.stateOf(w.d) or {}
+    on[#on + 1] = tostring(st.brakes)
+  end
+  P("PARK brakes: %s", table.concat(on, " "))
+  if #on > 0 and on[1] ~= "true" then tap("b"); wait(0.3); P("PARK brakes (second tap): %s", tostring(E and E.stateOf and E.stateOf(vc.R2.wheels[1].d).brakes)) end
+end
+local function run_park()
+  local vc = launch_via_builder(ROVER, "runway", 6)
+  if not vc then P("RESULT park: no craft"); return end
+  local vn = vc.node
+  vc.releaseClamps()
+  wait(1.5)
+  brakes_on(vc)
+  local i = assembly.info(vn)
+  local b = home()
+  P("PARK rover released: %d parts, |v| %.3f, body |v| %.1f, anchored %s, asleep %s, wake %s", #i.parts, len(i.vel.x, i.vel.y, i.vel.z),
+    len(b.vx or 0, b.vy or 0, b.vz or 0), tostring(i.anchored), tostring(i.asleep), tostring(i.wake))
+  watch_sleep("s_park_rover", vn, params.parksecs, vc)
+  -- does a drive command wake it, and does it move?
+  key_down("w"); wait(2); key_up("w")
+  local i2 = assembly.info(vn)
+  P("PARK after W 2 s: asleep %s wake %s |v| %.2f", tostring(i2.asleep), tostring(i2.wake), len(i2.vel.x, i2.vel.y, i2.vel.z))
+end
+local function run_bigpark()
+  local craft = finned_spine(40, 24)
+  local vc = launch_via_builder(craft, "pad", #craft * 0.9)
+  if not vc then P("RESULT bigpark: no craft"); return end
+  local vn = vc.node
+  local i = assembly.info(vn)
+  P("BIG CRAFT on the pad: %d parts, %.1f t", #i.parts, i.mass)
+  sc_begin("s_big_clamped"); wait(5); sc_end("s_big_clamped")
+  if (params.loads or 0) == 0 and vc.physTune then vc.physTune.loads = false end
+  vc.releaseClamps()
+  watch_sleep("s_big_release", vn, params.sleepsecs, vc)
+  P("BIG CRAFT after: %d vessel controllers live", #findScripts("vessel_controller"))
+end
+
+-- ── the gameplay smoke: one RESULT line a step ──────────────────────────────
+local function smoke(step, ok, fmt, ...)
+  P("RESULT SMOKE %s: %s — " .. fmt, step, ok and "PASS" or "FAIL", ...)
+end
+local function from_point(vn, p0)
+  local i = assembly.info(vn)
+  local b = home()
+  local d = sub(sub(i.com, b), p0)
+  return len(d.x, d.y, d.z)
+end
+local function recover_all(why)
+  local n = 0
+  for _, v in ipairs(findScripts("vessel_controller")) do
+    if v.node and v.node.valid and v.recoverReady and v.recoverCraft then
+      local ok = v.recoverReady()
+      if ok then v.recoverCraft(); n = n + 1 end
+    end
+  end
+  P("recovered %d craft (%s)", n, why)
+  wait(2)
+  return n
+end
+local function run_gameplay()
+  -- a) the starter rocket to its apex, then a revert to launch. In the VAB:
+  --    only an in-place launch keeps the flight record a revert needs.
+  do
+    local ok, err = pcall(function()
+      local bp = rocket_bp(2)
+      local vc = launch_in_vab(bp, "pad", #bp)
+      if not vc then smoke("starter", false, "no craft from the in-VAB rollout"); return end
+      local vn = vc.node
+      STAGED, UP_LOCAL = nil, nil
+      local S0 = body_state(vn)
+      local fuel0 = vc.fuel or -1
+      local vs = findScript("vessel_spawner")
+      P("starter on the pad: %d parts, fuel %.1f, canRevert %s", #assembly.info(vn).parts, fuel0, tostring(vs and vs.canRevert and vs.canRevert()))
+      wait(1)
+      tap("z"); wait(0.3); tap("space"); wait(1)
+      if assembly.info(vn).anchored then vc.releaseClamps() end
+      local t0, apex = time, S0.alt
+      while time - t0 < 150 do
+        yield()
+        if not vn.valid then break end
+        local S = body_state(vn)
+        apex = math.max(apex, S.alt)
+        if time - t0 > 4 and S.vr < -0.5 then break end
+      end
+      tap("x")
+      smoke("starter_apex", apex > S0.alt + 50 and time - t0 < 150, "apex %.0f m above the pad after %.1f s", apex - S0.alt, time - t0)
+      -- the revert: the flight cleared, the craft back on the stand as rolled out
+      local okr, why = vs.revertToLaunch()
+      P("revert: %s %s", tostring(okr), tostring(why))
+      local vc2 = wait_craft(#bp, 120)
+      local old = (vn.valid and vc2 and vc2.node ~= vn) and #(assembly.info(vn) or { parts = {} }).parts or 0
+      if vc2 then
+        local i2 = assembly.info(vc2.node)
+        local S2 = body_state(vc2.node)
+        smoke("revert", okr and old == 0 and i2.anchored and math.abs(S2.alt - S0.alt) < 2 and math.abs((vc2.fuel or -2) - fuel0) < 0.5,
+          "revert %s; %d old parts left; anchored %s; alt %.1f (was %.1f); fuel %.1f (was %.1f); %d parts", tostring(okr), old, tostring(i2.anchored), S2.alt, S0.alt, vc2.fuel or -2, fuel0, #i2.parts)
+        -- the pad back to the crane, the crew back on foot
+        local rr, rw = vc2.recoverReady()
+        if rr then vc2.recoverCraft() else P("recover not ready: %s", tostring(rw)) end
+        wait(3)
+      else
+        smoke("revert", false, "revert %s (%s): no craft on the stand afterwards; %d old parts left", tostring(okr), tostring(why), old)
+      end
+    end)
+    if not ok then smoke("starter", false, "error %s", tostring(err)) end
+  end
+  -- b) an in-VAB rover rollout, driven 100 m
+  do
+    local ok, err = pcall(function()
+      local a = astro()
+      P("crew on foot: %s visible %s", tostring(a ~= nil), tostring(a and a.visible))
+      local vc = launch_in_vab(ROVER, "runway", 6)
+      if not vc then smoke("rover_rollout", false, "no craft from the in-VAB rollout"); return end
+      local vn = vc.node
+      local i = assembly.info(vn)
+      smoke("rover_rollout", #i.parts == 6, "%d of 6 parts on the runway, anchored %s", #i.parts, tostring(i.anchored))
+      vc.releaseClamps()
+      wait(1)
+      local p0 = sub(assembly.info(vn).com, home())
+      sc_begin("k_rover_drive")
+      local t0, far = time, 0
+      key_down("w")
+      while time - t0 < 60 do
+        yield()
+        far = math.max(far, from_point(vn, p0))
+        if far >= 100 then break end
+      end
+      release_all()
+      sc_end("k_rover_drive")
+      smoke("rover_drive", far >= 100, "%.0f m from the release point in %.1f s", far, time - t0)
+    end)
+    if not ok then smoke("rover", false, "error %s", tostring(err)) end
+  end
+  -- c) the two-stage to orbit
+  do
+    local ok, err = pcall(function()
+      local rs = findScript("research")
+      for _, id in ipairs({ "tankM", "engineM", "skipper" }) do if rs and rs.grant then rs.grant(id, "probe") end end
+      local bp = rocket_2stage()
+      local vc = launch_via_builder(bp, "pad", #bp)
+      if not vc then smoke("orbit", false, "no craft on the pad"); return end
+      local phase, S = ascend(vc)
+      local okp = phase == "orbit" and S and S.peri > 0 and S.apo < math.huge
+      smoke("orbit", okp, "phase %s, apo %.0f peri %.0f alt %.0f fuel %.1f", tostring(phase), S and S.apo or -1, S and S.peri or -1, S and S.alt or -1, vc.fuel or -1)
+    end)
+    if not ok then smoke("orbit", false, "error %s", tostring(err)) end
+  end
+  -- d) the jet's take-off
+  do
+    local ok, err = pcall(function()
+      run_plane()
+      local r = RECS.d_takeoff
+      smoke("plane_takeoff", r and r.notes.liftoff_s ~= nil, "liftoff %s s", tostring(r and r.notes.liftoff_s))
+    end)
+    if not ok then smoke("plane_takeoff", false, "error %s", tostring(err)) end
+  end
+  -- e) the 1,002-part rollout and release
+  do
+    local ok, err = pcall(function()
+      recover_all("the pad for the big craft")
+      local craft = finned_spine(40, 24)
+      local vc = launch_via_builder(craft, "pad", #craft * 0.9)
+      if not vc then smoke("big_rollout", false, "no craft on the pad"); return end
+      local i = assembly.info(vc.node)
+      smoke("big_rollout", #i.parts >= #craft * 0.9, "%d of %d parts, %.1f t, rollout %.1f s", #i.parts, #craft, i.mass, RECS.launch_load and (W() - RECS.launch_load.w0) or -1)
+      if (params.loads or 0) == 0 and vc.physTune then vc.physTune.loads = false end
+      vc.releaseClamps()
+      local slept = watch_sleep("k_big_release", vc.node, params.sleepsecs, vc)
+      smoke("big_release", vc.node.valid and #findScripts("vessel_controller") >= 1, "root asleep %s; %d craft live", slept and string.format("after %.1f s", slept) or "never", #findScripts("vessel_controller"))
+    end)
+    if not ok then smoke("big_release", false, "error %s", tostring(err)) end
+  end
+end
+
+-- ── shot: the tools' marks for `floptle shot --after` (shotcase 1..4) ────────
+--   1 the gravity gun aimed at a plant (its rim and glow, the foot ring, the motes)
+--   2 the plant being pulled (amber, the tether to it)
+--   3 a scattered rock aimed at
+--   4 a loose prop held on the tether (its sag)
+-- The probe arranges the view and holds it; the engine takes the picture.
+local function run_shot()
+  wait_ready(120)
+  local a = astro()
+  local tb = findScript("tool_belt")
+  local cam = findScript("planet_camera")
+  local ff, mf = findScript("flora_field"), findScript("mineral_field")
+  if not (a and tb) then P("SHOT: no crew/tool_belt"); return end
+  local case = math.floor(params.shotcase or 1)
+  if case <= 2 then
+    -- plants: the base clears its ground; go where they grow
+    local spot = find_meadow(params.meadow_m)
+    if spot then stand_at(spot); P("SHOT: at the %s %d m out", tostring(spot.biome), spot.d); wait(6) end
+    a = astro()
+  end
+  local b = home()
+  local up = unit(sub(a, b))
+  local tgt, label
+  if case == 3 then
+    local best
+    local function rocks_here()
+      for _, rk in ipairs(mf and mf.rocksNear and mf.rocksNear(a.x, a.y, a.z, 150) or {}) do
+        local d = len(rk.x - a.x, rk.y - a.y, rk.z - a.z)
+        if d > 3 and (not best or d < best.d) then best = { x = rk.x, y = rk.y, z = rk.z, d = d, r = rk.r } end
+      end
+    end
+    rocks_here()
+    if not best then
+      -- none by the base: out where the ground is wilder
+      local spot = find_meadow(params.meadow_m)
+      if spot then stand_at(spot); wait(6); a = astro(); up = unit(sub(a, b)); rocks_here() end
+    end
+    if best then
+      -- go and stand by it (it may be far): the rest of the setup walks 3.5 m short of it
+      local _, t1 = base_frame()
+      a.x, a.y, a.z = best.x + t1.x * 5.0 + up.x * 1.0, best.y + t1.y * 5.0 + up.y * 1.0, best.z + t1.z * 5.0 + up.z * 1.0
+      a.vx, a.vy, a.vz = 0, 0, 0
+      wait(3)
+    end
+    tgt, label = best, "rock"
+  elseif case == 4 then
+    local best
+    for _, nm in ipairs({ "PropCrate", "PropCan", "PropCone" }) do
+      for _, n in ipairs(findAll(nm) or {}) do
+        if n and n.valid then
+          local d = len(n.x - a.x, n.y - a.y, n.z - a.z)
+          if d > 2 and (not best or d < best.d) then best = { x = n.x, y = n.y, z = n.z, d = d, name = nm } end
+        end
+      end
+    end
+    tgt, label = best, best and best.name or "prop"
+  else
+    local best
+    local _, t1, t2 = base_frame()
+    -- the field settles its plants on a worker: ask again until one answers
+    local tries = 0
+    while not best and tries < 15 do
+      tries = tries + 1
+      a = astro(); up = unit(sub(a, b))
+      for k = 0, 15 do
+        local ang = k * math.pi / 8
+        local d = unit({ x = t1.x * math.cos(ang) + t2.x * math.sin(ang), y = t1.y * math.cos(ang) + t2.y * math.sin(ang), z = t1.z * math.cos(ang) + t2.z * math.sin(ang) })
+        for _, reach in ipairs({ 6, 14, 25 }) do
+          local p = ff and ff.nearestPlant and ff.nearestPlant(a.x + up.x * 0.8, a.y + up.y * 0.8, a.z + up.z * 0.8, d.x, d.y, d.z, reach, 0.2, 2.0)
+          if p and p.height and p.height > 0.3 and (not best or p.height > best.height) then best = p end
+        end
+      end
+      if not best then P("SHOT: no plant yet (try %d), props %s", tries, tostring((perf.counts() or {}).props)); wait(2) end
+    end
+    tgt, label = best, best and ("plant h " .. string.format("%.1f", best.height)) or "plant"
+  end
+  if not tgt then P("SHOT case %d: no %s found", case, label); return end
+  -- the planet moves metres a tick: the target lives in its frame from here on
+  local trel = sub(tgt, home())
+  local function target() return { x = home().x + trel.x, y = home().y + trel.y, z = home().z + trel.z } end
+  tgt = target()
+  -- stand 3.5 m short of it, face it, aim at it
+  local d = sub(tgt, a)
+  d = sub(d, scl(up, dot(d, up)))
+  d = unit(d)
+  local dist = len(tgt.x - a.x, tgt.y - a.y, tgt.z - a.z)
+  local srel = sub({ x = tgt.x - d.x * 3.5, y = tgt.y - d.y * 3.5, z = tgt.z - d.z * 3.5 }, b)
+  local u2 = unit(srel)
+  local gr = ground_r(b, u2.x, u2.y, u2.z, len(srel.x, srel.y, srel.z) + 3)
+  if gr then srel = scl(u2, gr + 1.0) end
+  local function place()
+    local bb = home()
+    a.x, a.y, a.z = bb.x + srel.x, bb.y + srel.y, bb.z + srel.z
+    a.vx, a.vy, a.vz = 0, 0, 0
+  end
+  place()
+  P("SHOT case %d: %s at %.1f m; standing 3.5 m short of it", case, label, dist)
+  for _ = 1, 20 do yield(); place() end
+  wait(1.0)
+  if cam and cam.face then cam.face(d.x, d.y, d.z, -0.2) end
+  local slot = nil
+  for i, sl in ipairs(tb.belt()) do if sl.id == "gravgun" then slot = i end end
+  tb.sim = { pressed = { [tostring(slot or 1)] = true } }
+  wait(0.5)
+  P("SHOT tool %s, gate %s, instanceTint %s", tostring(tb.toolId()), tostring(tb.gate), tostring(tb.INSTANCE_TINT))
+  local hold = (case == 2 or case == 4)
+  local t0 = time
+  while true do
+    local aa = astro()
+    tgt = target()
+    local eye = { x = aa.x + up.x * 0.6, y = aa.y + up.y * 0.6, z = aa.z + up.z * 0.6 }
+    local lift = case <= 2 and 0.5 or 0.1
+    local ax = { x = tgt.x + up.x * lift, y = tgt.y + up.y * lift, z = tgt.z + up.z * lift }
+    -- the plant moves with its planet: re-aim from the planet frame
+    local dd = sub(ax, eye)
+    tb.sim = { btn = { [0] = hold and (time - t0 > 0.5) }, aim = { eye.x, eye.y, eye.z, dd.x, dd.y, dd.z } }
+    if cam and cam.face then cam.face(d.x, d.y, d.z) end
+    if math.floor(time - t0) ~= math.floor(time - t0 - dt) then
+      P("SHOT t=%.0f: tool %s, holding %s, strain %.2f, prompt %s", time - t0, tostring(tb.toolId()), tostring(tb.holding and tb.holding.name), tb.strain or -1, tostring(tb.prompt))
+    end
+    yield()
+  end
+end
+
 -- ── main ────────────────────────────────────────────────────────────────────
 local CO = nil
 local MAIN = function()
@@ -1263,11 +1909,18 @@ local MAIN = function()
     run_base()
   else
     after_boot_settle(4)
-    if MODE == "quick" then wait(10)
+    if MODE == "quick" then run_quick()
     elseif MODE == "rocket" then run_rocket()
     elseif MODE == "plane" then run_plane()
     elseif MODE == "rover" then run_rover()
     elseif MODE == "builder" then run_builder()
+    elseif MODE == "foot" then run_foot()
+    elseif MODE == "meadow" then run_meadow()
+    elseif MODE == "digmeadow" then run_digmeadow()
+    elseif MODE == "park" then run_park()
+    elseif MODE == "bigpark" then run_bigpark()
+    elseif MODE == "gameplay" then run_gameplay()
+    elseif MODE == "shot" then run_shot()
     else P("unknown mode %s", MODE) end
   end
   release_all()

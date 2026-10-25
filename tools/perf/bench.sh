@@ -4,10 +4,15 @@
 #   bench.sh <engine> [mode ...]
 #     engine : a version under ~/.local/share/floptle/versions (e.g. 0.117.0-rc10)
 #              or a path to a floptle binary
-#     mode   : base rocket plane rover builder (default: all five, in that order)
+#     mode   : base rocket plane rover builder (default: all five, in that order);
+#              park bigpark gameplay (fresh save or the player's);
+#              foot meadow digmeadow (the player's save: set USERSAVE=1)
 #   env: WORK (scratch dir, default $TMPDIR/solar-perf), LOCK (engine lock file),
-#        TMO (per-run timeout s, default 330), SOLAR (Solar checkout, default the repo),
-#        TAG (results name, default the engine version + time), KEEP=1 keeps the probe slot
+#        TMO (per-run timeout s, default 330; gameplay 900), SOLAR (Solar checkout, default the repo),
+#        TAG (results name, default the engine version + time), KEEP=1 keeps the probe slot,
+#        USERSAVE=1 copies $SOLAR/save/slot1.ron, save/settings.ron and saves/slot1 into the
+#        scratch project (Solar's own are never written) and boots from that copy (slot 1),
+#        BENCH_PARAMS extra perfbench params, e.g. '("sleepsecs", 30.0), ("loads", 1.0)'
 #
 # Each mode is one `floptle play` of a scratch copy of Solar whose entry scene is
 # perfbench.lua; each runs under the shared engine lock, silent. Results:
@@ -28,7 +33,17 @@ eng=${1:?usage: bench.sh <engine version or binary> [modes]}; shift
 if [ -x "$eng" ]; then F=$eng; VER=$(basename $(dirname $eng)); else F=$HOME/.local/share/floptle/versions/$eng/floptle; VER=$eng; fi
 [ -x "$F" ] || { echo "no engine binary at $F"; exit 2; }
 MODES=${*:-base rocket plane rover builder}
-TAG=${TAG:-$VER-$(date +%m%d-%H%M)}
+if [ -n "${USERSAVE:-}" ]; then
+  # the player's save, copied: the probe boots slot 1 as the menu's CONTINUE would
+  [ -f $SOL/save/slot1.ron ] || { echo "no $SOL/save/slot1.ron"; exit 2; }
+  mkdir -p $PJ/save $PJ/saves
+  rm -f $PJ/save/slot1.ron; rm -rf $PJ/saves/slot1
+  cp $SOL/save/slot1.ron $PJ/save/slot1.ron
+  cp $SOL/save/settings.ron $PJ/save/settings.ron 2>/dev/null
+  cp -r $SOL/saves/slot1 $PJ/saves/slot1
+  BENCH_PARAMS="(\"usersave\", 1.0), (\"slot\", 1.0)${BENCH_PARAMS:+, $BENCH_PARAMS}"
+fi
+TAG=${TAG:-$VER${USERSAVE:+-user}-$(date +%m%d-%H%M)}
 OUT=$H/results/$TAG; mkdir -p $OUT
 [ -f $S/silent-alsa.conf ] || printf 'pcm.!default { type null }\nctl.!default { type hw card 0 }\n' > $S/silent-alsa.conf
 
@@ -68,10 +83,16 @@ for m in $MODES; do
 )
 RON
   rm -f $PJ/save/slot13.ron; rm -rf $PJ/saves/slot13
+  if [ -n "${USERSAVE:-}" ]; then
+    # a fresh copy for every mode: the probe plays on it (launches, digs) and must not carry that over
+    rm -f $PJ/save/slot1.ron; rm -rf $PJ/saves/slot1
+    cp $SOL/save/slot1.ron $PJ/save/slot1.ron; cp -r $SOL/saves/slot1 $PJ/saves/slot1
+  fi
+  tmo=${TMO:-330}; [ "$m" = gameplay ] && tmo=${TMO:-900}
   start=$(date +%s)
-  flock $LOCK bash -c "uptime > $OUT/$m.uptime; $ENVX ALSA_CONFIG_PATH=$S/silent-alsa.conf timeout ${TMO:-330} $F play $PJ > $OUT/$m.log 2>&1; echo \$? > $OUT/$m.exit; uptime >> $OUT/$m.uptime"
+  flock $LOCK bash -c "uptime > $OUT/$m.uptime; $ENVX ALSA_CONFIG_PATH=$S/silent-alsa.conf timeout $tmo $F play $PJ > $OUT/$m.log 2>&1; echo \$? > $OUT/$m.exit; uptime >> $OUT/$m.uptime"
   echo "  $m: exit $(cat $OUT/$m.exit) after $(( $(date +%s) - start )) s (incl. lock wait); load $(head -1 $OUT/$m.uptime | sed 's/.*load average: //')"
-  grep -a "PB .*\(RESULT \[\|SETTLE\|PACING\|TIMEOUT\|ERROR\|DONE\|ROCKET\|PLANE\|ROVER\|ORBIT\|MECO\|DIG\|BIG\)\|watchdog\|without returning" $OUT/$m.log | grep -v "worst #\|counts mean\|scripts/frame\|buckets/frame\|frames over" | head -40
+  grep -a "PB .*\(RESULT \[\|RESULT SMOKE\|SETTLE\|SLEEP\|PACING\|TIMEOUT\|ERROR\|DONE\|ROCKET\|PLANE\|ROVER\|ORBIT\|MECO\|DIG\|BIG\|GROUND96\|FIELDS\|MEADOW\|PARK\|usersave\)\|watchdog\|without returning" $OUT/$m.log | grep -v "worst #\|counts mean\|scripts/frame\|buckets/frame\|frames over" | head -60
   python3 - "$OUT" "$m" <<'PY'
 import json, sys
 out, m = sys.argv[1], sys.argv[2]
@@ -89,5 +110,5 @@ with open(f"{out}/bench.jsonl", "a") as f:
             f.write(json.dumps(d) + "\n")
 PY
 done
-[ -n "${KEEP:-}" ] || { rm -f $PJ/save/slot13.ron; rm -rf $PJ/saves/slot13; }
+[ -n "${KEEP:-}" ] || { rm -f $PJ/save/slot13.ron; rm -rf $PJ/saves/slot13; rm -f $PJ/save/slot1.ron; rm -rf $PJ/saves/slot1; }
 python3 $HERE/table.py $OUT/bench.jsonl > $OUT/table.md && cat $OUT/table.md
