@@ -20,7 +20,9 @@
 --   digmeadow : u) 100 terrain-laser bites on that meadow
 --   park      : s) a 6-wheel rover rolled out to the runway, released, brakes
 --                  on: time to node.asleep, the wake reason, physics ms/frame
---                  (0527 / 0531)
+--                  (0527 / 0531); dump=1 prints, after 10 s braked, every
+--                  tyre's joint and rigidbody, the chassis mass and g, two
+--                  props by the base, and 120 ticks of planet-frame motion
 --   bigpark   : s) the ~1,000-part finned spine released on the pad with NO
 --                  throttle: time to sleep and physics before/after (0509 /
 --                  0531); loads=1 lets it break up (the pieces' sleep, 0509)
@@ -1609,6 +1611,172 @@ local function brakes_on(vc)
   P("PARK brakes: %s", table.concat(on, " "))
   if #on > 0 and on[1] ~= "true" then tap("b"); wait(0.3); P("PARK brakes (second tap): %s", tostring(E and E.stateOf and E.stateOf(vc.R2.wheels[1].d).brakes)) end
 end
+-- ── park dump=1 (card 0531): the braked rover's tyres and joints, its chassis
+-- and two props by the base, tick by tick in the PLANET frame ───────────────
+-- Everything positional is `node − space.body(planet)` read in the same tick;
+-- nothing in world space is kept across ticks (the planet moves ~5.8 m a tick).
+-- The sleeper's own measure is SLEEP_LINEAR_SPEED × dt = 0.05 / 60 = 0.83 mm
+-- a tick (floptle-physics world.rs settle), so displacements print in mm.
+local DUMP = nil   -- the live tick capture; fixedUpdate fills it and prints a line a tick
+local function rb_line(n)
+  local rb = n and n.valid and n:getcomponent("RigidBody")
+  if not rb then return "no RigidBody" end
+  return string.format("mass %.4f radius %.3f (world %.3f) half %.3f/%.3f/%.3f (world %.3f/%.3f/%.3f) shape %s friction %.2f restitution %.2f kinematic %s",
+    rb.mass or -1, rb.radius or -1, rb.worldRadius or -1, rb.half_x or -1, rb.half_y or -1, rb.half_z or -1,
+    rb.worldHalfX or -1, rb.worldHalfY or -1, rb.worldHalfZ or -1, tostring(rb.shape), rb.friction or -1, rb.restitution or -1, tostring(rb.kinematic))
+end
+local function child_named(n, name)
+  if not (n and n.valid) then return nil end
+  for _, c in ipairs(n:children()) do if c.name == name then return c end end
+  return nil
+end
+local function nearest(name, p)
+  local best, bd
+  for _, n in ipairs(findAll(name) or {}) do
+    if n.valid then
+      local d = len(n.x - p.x, n.y - p.y, n.z - p.z)
+      if not bd or d < bd then best, bd = n, d end
+    end
+  end
+  return best, bd
+end
+-- the ground under a node along the planet's down: the hit, the distance from
+-- the node's centre to it and the ground normal (nil when nothing is hit)
+local function ground_under(n, extra)
+  local b = home()
+  if not (b and n and n.valid) then return nil end
+  local u = unit(sub({ x = n.x, y = n.y, z = n.z }, b))
+  local ig = { n }
+  if extra then ig[#ig + 1] = extra end
+  local h = raycast(n.x + u.x * 0.5, n.y + u.y * 0.5, n.z + u.z * 0.5, -u.x, -u.y, -u.z, 8, { ignore = ig })
+  if not h then return nil end
+  return h, (h.distance or 0) - 0.5, u
+end
+local function dump_prop_static(tag, n)
+  if not (n and n.valid) then P("DUMP %s: none found", tag); return end
+  local body = child_named(n, "Body")
+  local i = assembly.info(n) or {}
+  P("DUMP %s root: %s", tag, rb_line(n))
+  P("DUMP %s Body: %s", tag, rb_line(body))
+  P("DUMP %s assembly.info: mass %s grounded %s asleep %s wake %s |v| %.4f angVel %.4f; node.asleep %s node.wake %s", tag,
+    tostring(i.mass), tostring(i.grounded), tostring(i.asleep), tostring(i.wake), i.vel and len(i.vel.x, i.vel.y, i.vel.z) or -1,
+    i.angVel and len(i.angVel.x, i.angVel.y, i.angVel.z) or -1, tostring(n.asleep), tostring(n.wake))
+  local up = n:worldUp()
+  local h, dist, u = ground_under(n, body)
+  if h then
+    local nn = { x = h.nx, y = h.ny, z = h.nz }
+    local cosang = dot({ x = up.x, y = up.y, z = up.z }, nn)
+    local rb = n:getcomponent("RigidBody")
+    local hy = rb and rb.worldHalfY or -1
+    P("DUMP %s up (%.4f %.4f %.4f) vs ground normal (%.4f %.4f %.4f): %.2f deg; planet up·normal %.2f deg; ground %s at %.3f m below the centre (half_y %.3f: %s %.3f m), material %s", tag,
+      up.x, up.y, up.z, nn.x, nn.y, nn.z, math.deg(math.acos(clamp(cosang, -1, 1))), math.deg(math.acos(clamp(dot(u, nn), -1, 1))),
+      (h.node and h.node.name) or "terrain", dist, hy, dist < hy and "SUNK by" or "clear by", math.abs(hy - dist), tostring(h.material))
+  else
+    P("DUMP %s: nothing under it within 7.5 m", tag)
+  end
+end
+local function dump_static(vc, vn)
+  local info = assembly.info(vn) or {}
+  local b = home()
+  local c = info.com or { x = vn.x, y = vn.y, z = vn.z }
+  local gx, gy, gz = space.gravity(c.x, c.y, c.z)
+  local rel = sub(c, b)
+  P("DUMP planet %s R %.1f mu %.4g: g at the rover %.4f m/s2 (mu/R^2 %.4f), altitude %.2f m over R, planet |v| %.2f m/s (%.3f m/tick)",
+    b.name, b.radius, b.mu, len(gx or 0, gy or 0, gz or 0), b.mu / (b.radius * b.radius), len(rel.x, rel.y, rel.z) - b.radius,
+    len(b.vx or 0, b.vy or 0, b.vz or 0), len(b.vx or 0, b.vy or 0, b.vz or 0) / 60)
+  P("DUMP chassis assembly.info: mass %s parts %d grounded %s anchored %s asleep %s wake %s |v| %.4f angVel %.4f carry %.3f; node.asleep %s",
+    tostring(info.mass), info.parts and #info.parts or -1, tostring(info.grounded), tostring(info.anchored), tostring(info.asleep), tostring(info.wake),
+    info.vel and len(info.vel.x, info.vel.y, info.vel.z) or -1, info.angVel and len(info.angVel.x, info.angVel.y, info.angVel.z) or -1,
+    info.carry and len(info.carry.x or 0, info.carry.y or 0, info.carry.z or 0) or -1, tostring(vn.asleep))
+  P("DUMP chassis root: %s", rb_line(vn))
+  -- how far from the world origin everything sits: f32 positions 4-8 km out
+  -- have a 0.5-1 mm ulp, the floor of any per-tick displacement read here
+  P("DUMP world origin: planet centre %.1f m away, rover %.1f m away (f32 ulp there %.2g m)", len(b.x, b.y, b.z), len(c.x, c.y, c.z), 2 ^ (math.floor(math.log(math.max(1, len(c.x, c.y, c.z))) / math.log(2)) - 23))
+  local E = findScript("electronics")
+  local tyres = {}
+  for k, w in ipairs(vc.R2 and vc.R2.wheels or {}) do
+    local t = w.tyre
+    local st = E and E.stateOf and E.stateOf(w.d) or {}
+    local c = w.cfg or {}
+    local m = w.m or {}
+    P("DUMP tyre %d (%s uid %s): Solar set otherAnchor (hull) (%.3f %.3f %.3f) r %.3f steer0 %.1f rs %s; wcfg spring %s damper %s motor %s brake %s friction %s; motor torque %s; brakes %s",
+      k, tostring(t and t.valid and t.name), tostring(w.uid), w.cx or 0, w.cy or 0, w.cz or 0, w.r or -1, w.steer0 or 0, tostring(w.rs),
+      tostring(c.spring), tostring(c.damper), tostring(c.motor), tostring(c.brake), tostring(c.friction), tostring(m.torque), tostring(st.brakes))
+    if t and t.valid then
+      tyres[#tyres + 1] = t
+      P("DUMP tyre %d rigidbody: %s; grounded %s asleep %s wake %s |v| %.4f", k, rb_line(t), tostring(t.grounded), tostring(t.asleep), tostring(t.wake),
+        len(t.vx or 0, t.vy or 0, t.vz or 0))
+      local j = t:getcomponent("Joint")
+      if j then
+        P("DUMP tyre %d joint (engine): stiffness %.3f damping %.3f maxForce %.4f motor %s motorSpeed %.4f steer %.2f force %.5f position %.3f speed %.3f length %.3f limit %s broken %s (otherAnchor/axis: not readable from Lua, Solar's above)",
+          k, j.stiffness or -1, j.damping or -1, j.maxForce or -1, tostring(j.motor), j.motorSpeed or -1, j.steer or -1, j.force or -1,
+          j.position or -1, j.speed or -1, j.length or -1, tostring(j.limit), tostring(j.broken))
+      else
+        P("DUMP tyre %d joint: none (jointed %s)", k, tostring(w.jointed))
+      end
+      local h, dist = ground_under(t)
+      local rb = t:getcomponent("RigidBody")
+      local r = rb and rb.worldRadius or (w.r or 0)
+      if h then
+        P("DUMP tyre %d ground: %s at %.4f m below the centre (radius %.3f: %s %.4f m), normal (%.4f %.4f %.4f)", k, (h.node and h.node.name) or "terrain",
+          dist, r, dist < r and "SUNK by" or "clear by", math.abs(r - dist), h.nx, h.ny, h.nz)
+      else
+        P("DUMP tyre %d ground: nothing within 7.5 m", k)
+      end
+    else
+      P("DUMP tyre %d: no tyre node", k)
+    end
+  end
+  return tyres
+end
+local function dump_park(vc, vn)
+  P("DUMP ---- static, after 10 s parked and braked ----")
+  local tyres = dump_static(vc, vn)
+  local a = astro()
+  local crate = nearest("PropCrate", a and a.valid and { x = a.x, y = a.y, z = a.z } or { x = vn.x, y = vn.y, z = vn.z })
+  local can = crate and nearest("PropCan", { x = crate.x, y = crate.y, z = crate.z })
+  P("DUMP props: PropCrate %s, PropCan %s beside it (%d crates, %d cans in the scene)", tostring(crate and crate.valid), tostring(can and can.valid),
+    #(findAll("PropCrate") or {}), #(findAll("PropCan") or {}))
+  dump_prop_static("PropCrate", crate)
+  dump_prop_static("PropCan", can)
+  P("DUMP ---- 120 ticks (2 s) in the planet frame; displacement per tick in mm (sleep threshold 0.83 mm/tick) ----")
+  P("DUMP R columns: tick t planet_m chassis_com_dmm chassis_node_dmm tyre1..%d_dmm |v|mm/s asleep wake", #tyres)
+  P("DUMP P columns: tick t crate_dmm crate_asleep crate_wake crate|v|mm/s can_dmm can_asleep can_wake can|v|mm/s")
+  DUMP = { vn = vn, tyres = tyres, crate = crate, can = can, ticks = 120, n = 0, prev = {}, t0 = time }
+  wait_for(function() return DUMP == nil end, 15, "the tick dump")
+  DUMP = nil
+  P("DUMP ---- end ----")
+end
+function fixedUpdate(node, dt)
+  local D = DUMP
+  if not D then return end
+  local b = home()
+  if not b then return end
+  D.n = D.n + 1
+  local function track(key, p)
+    if not p then return "-" end
+    local r = sub(p, b)
+    local d = D.prev[key] and (len(r.x - D.prev[key].x, r.y - D.prev[key].y, r.z - D.prev[key].z) * 1000)
+    D.prev[key] = r
+    return d and string.format("%.2f", d) or "-"
+  end
+  local pstep = D.pprev and len(b.x - D.pprev.x, b.y - D.pprev.y, b.z - D.pprev.z) or 0
+  D.pprev = { x = b.x, y = b.y, z = b.z }
+  local vn = D.vn
+  if vn and vn.valid then
+    local i = assembly.info(vn) or {}
+    local ty = {}
+    for k, t in ipairs(D.tyres) do ty[k] = t.valid and track("t" .. k, { x = t.x, y = t.y, z = t.z }) or "gone" end
+    P("DUMP R %3d %.3f %.3f %s %s %s %.1f %s %s", D.n, time - D.t0, pstep, track("com", i.com), track("node", { x = vn.x, y = vn.y, z = vn.z }),
+      table.concat(ty, " "), i.vel and len(i.vel.x, i.vel.y, i.vel.z) * 1000 or -1, tostring(i.asleep), tostring(i.wake))
+  end
+  local function prop(key, n)
+    if not (n and n.valid) then return "gone - - -" end
+    return string.format("%s %s %s %.1f", track(key, { x = n.x, y = n.y, z = n.z }), tostring(n.asleep), tostring(n.wake), len(n.vx or 0, n.vy or 0, n.vz or 0) * 1000)
+  end
+  P("DUMP P %3d %.3f %s %s", D.n, time - D.t0, prop("crate", D.crate), prop("can", D.can))
+  if D.n >= D.ticks then DUMP = nil end
+end
 local function run_park()
   local vc = launch_via_builder(ROVER, "runway", 6)
   if not vc then P("RESULT park: no craft"); return end
@@ -1620,6 +1788,9 @@ local function run_park()
   local b = home()
   P("PARK rover released: %d parts, |v| %.3f, body |v| %.1f, anchored %s, asleep %s, wake %s", #i.parts, len(i.vel.x, i.vel.y, i.vel.z),
     len(b.vx or 0, b.vy or 0, b.vz or 0), tostring(i.anchored), tostring(i.asleep), tostring(i.wake))
+  -- dump=1 (0531): after 10 s parked and braked, the tyres' joints and the
+  -- planet-frame motion of everything, tick by tick, before the usual watch
+  if (params.dump or 0) > 0 then wait(10); dump_park(vc, vn) end
   watch_sleep("s_park_rover", vn, params.parksecs, vc)
   -- does a drive command wake it, and does it move?
   key_down("w"); wait(2); key_up("w")
@@ -1805,7 +1976,12 @@ local function run_shot()
     local function rocks_here()
       for _, rk in ipairs(mf and mf.rocksNear and mf.rocksNear(a.x, a.y, a.z, 150) or {}) do
         local d = len(rk.x - a.x, rk.y - a.y, rk.z - a.z)
-        if d > 3 and (not best or d < best.d) then best = { x = rk.x, y = rk.y, z = rk.z, d = d, r = rk.r } end
+        -- only what the gravity gun can pull: a stone, a boulder, a crystal
+        local rec = mf.rockRecord and mf.rockRecord(rk)
+        local kid = rec and rec.kind and rec.kind.id
+        if (kid == "stone" or kid == "boulder" or kid == "crystal") and d > 3 and (not best or d < best.d) then
+          best = { x = rk.x, y = rk.y, z = rk.z, d = d, r = rk.r, kind = kid }
+        end
       end
     end
     rocks_here()
@@ -1821,7 +1997,7 @@ local function run_shot()
       a.vx, a.vy, a.vz = 0, 0, 0
       wait(3)
     end
-    tgt, label = best, "rock"
+    tgt, label = best, best and ("rock " .. tostring(best.kind) .. string.format(" r %.2f", best.r)) or "rock"
   elseif case == 4 then
     local best
     for _, nm in ipairs({ "PropCrate", "PropCan", "PropCone" }) do
@@ -1847,6 +2023,7 @@ local function run_shot()
         for _, reach in ipairs({ 6, 14, 25 }) do
           local p = ff and ff.nearestPlant and ff.nearestPlant(a.x + up.x * 0.8, a.y + up.y * 0.8, a.z + up.z * 0.8, d.x, d.y, d.z, reach, 0.2, 2.0)
           if p and p.height and p.height > 0.3 and (not best or p.height > best.height) then best = p end
+          if best and best.height >= 2.5 then break end
         end
       end
       if not best then P("SHOT: no plant yet (try %d), props %s", tries, tostring((perf.counts() or {}).props)); wait(2) end
@@ -1856,7 +2033,8 @@ local function run_shot()
   if not tgt then P("SHOT case %d: no %s found", case, label); return end
   -- the planet moves metres a tick: the target lives in its frame from here on
   local trel = sub(tgt, home())
-  local function target() return { x = home().x + trel.x, y = home().y + trel.y, z = home().z + trel.z } end
+  local theight = tgt.height
+  local function target() return { x = home().x + trel.x, y = home().y + trel.y, z = home().z + trel.z, height = theight } end
   tgt = target()
   -- stand 3.5 m short of it, face it, aim at it
   local d = sub(tgt, a)
@@ -1888,15 +2066,35 @@ local function run_shot()
     local aa = astro()
     tgt = target()
     local eye = { x = aa.x + up.x * 0.6, y = aa.y + up.y * 0.6, z = aa.z + up.z * 0.6 }
-    local lift = case <= 2 and 0.5 or 0.1
+    -- aim at the plant's body (a short sedge: a third of the way up, not past
+    -- it into the ground), at a rock's or a crate's middle
+    local lift = (case <= 2 and math.min(0.5, 0.35 * (tgt.height or 1))) or (case == 4 and -0.1) or 0.1
     local ax = { x = tgt.x + up.x * lift, y = tgt.y + up.y * lift, z = tgt.z + up.z * lift }
     -- the plant moves with its planet: re-aim from the planet frame
     local dd = sub(ax, eye)
-    tb.sim = { btn = { [0] = hold and (time - t0 > 0.5) }, aim = { eye.x, eye.y, eye.z, dd.x, dd.y, dd.z } }
-    if cam and cam.face then cam.face(d.x, d.y, d.z) end
+    -- the trigger goes down only once the idle aim names the target (a grab
+    -- fired at the ground beside a sedge reads "part of the ground")
+    local pr = tostring(tb.prompt or "")
+    if hold and not HOLD_ON and time - t0 > 0.5 and (case == 4 or pr:find("uproot", 1, true)) then HOLD_ON = true end
+    tb.sim = { btn = { [0] = HOLD_ON == true }, aim = { eye.x, eye.y, eye.z, dd.x, dd.y, dd.z } }
+    -- the camera on the thing: down at a held crate, level at a plant or rock
+    if cam and cam.face then cam.face(d.x, d.y, d.z, case == 4 and -0.45 or -0.15) end
     if math.floor(time - t0) ~= math.floor(time - t0 - dt) then
       P("SHOT t=%.0f: tool %s, holding %s, strain %.2f, prompt %s", time - t0, tostring(tb.toolId()), tostring(tb.holding and tb.holding.name), tb.strain or -1, tostring(tb.prompt))
     end
+    -- playshot=N: in a real `play`, photograph the game's camera N s into the
+    -- hold (camera.capture, as F12 does) to user://screenshots, then quit
+    if (params.playshot or 0) > 0 and time - t0 >= params.playshot and not SHOT_TAKEN and camera and camera.capture then
+      SHOT_TAKEN = true
+      local path = string.format("user://screenshots/perfshot_case%d.png", case)
+      camera.capture({ w = 1280, h = 720, ui = true, draws = true }, function(bytes, why)
+        if not bytes then P("SHOT capture failed: %s", tostring(why)); SHOT_DONE = true; return end
+        local ok, err = assets.writeBytes(path, bytes)
+        P("SHOT written %s: %s %s", path, tostring(ok), tostring(err))
+        SHOT_DONE = true
+      end)
+    end
+    if SHOT_DONE then wait(1); return end
     yield()
   end
 end

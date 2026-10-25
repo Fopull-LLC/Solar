@@ -28,7 +28,7 @@ Modes (`perfbench.lua`, strs `mode`):
 | foot | player's | stand 20 s, walk 40 s at the spawn |
 | meadow | player's | 220 m out to the grassiest spot, stand 8 s, walk 40 s (the turf-wash relay, 0525) |
 | digmeadow | player's | 100 laser bites on that meadow |
-| park | either | a 6-wheel rover rolled out, released, brakes on: time to `node.asleep`, the wake reason, physics ms/frame (0527/0531) |
+| park | either | a 6-wheel rover rolled out, released, brakes on: time to `node.asleep`, the wake reason, physics ms/frame (0527/0531); `dump=1` adds, after 10 s braked, every tyre's joint/rigidbody, the chassis mass and g, a PropCrate and PropCan by the base, and 120 ticks of planet-frame displacement (mm) with `asleep`/`wake`, one `DUMP R`/`DUMP P` line a tick |
 | bigpark | either | the 1,002-part finned spine released on the pad with no throttle: sleep and physics before/after (0509/0531) |
 | gameplay | either | the gameplay smoke: in-VAB rover rollout + 100 m drive, two-stage to orbit, starter rocket to apex + revert to launch, jet take-off, 1,002-part rollout and release. One `RESULT SMOKE <step>: PASS/FAIL` line a step |
 | quick | either | 15 s idle with the 0528 pacing readout (`app.refreshRate`, `perf.pacing`); `cap=1` then caps at the refresh |
