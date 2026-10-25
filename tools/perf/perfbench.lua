@@ -1973,29 +1973,60 @@ local function run_shot()
   local tgt, label
   if case == 3 then
     local best
-    local function rocks_here()
-      for _, rk in ipairs(mf and mf.rocksNear and mf.rocksNear(a.x, a.y, a.z, 150) or {}) do
+    -- the grabbable rocks (stone, boulder, crystal) within 80 m, nearest
+    -- first; walk up to each and ask again from beside it: a rock the field
+    -- answered from afar may not be settled where it said
+    local function rocks_here(limit)
+      local list = {}
+      for _, rk in ipairs(mf and mf.rocksNear and mf.rocksNear(a.x, a.y, a.z, limit) or {}) do
         local d = len(rk.x - a.x, rk.y - a.y, rk.z - a.z)
-        -- only what the gravity gun can pull: a stone, a boulder, a crystal
         local rec = mf.rockRecord and mf.rockRecord(rk)
         local kid = rec and rec.kind and rec.kind.id
-        if (kid == "stone" or kid == "boulder" or kid == "crystal") and d > 3 and (not best or d < best.d) then
-          best = { x = rk.x, y = rk.y, z = rk.z, d = d, r = rk.r, kind = kid }
+        if (kid == "stone" or kid == "boulder" or kid == "crystal") and d > 3 and d <= limit then
+          list[#list + 1] = { x = rk.x, y = rk.y, z = rk.z, d = d, r = rk.r, kind = kid, inst = rk.inst, src = rk.src }
         end
       end
+      table.sort(list, function(p1, p2) return p1.d < p2.d end)
+      return list
     end
-    rocks_here()
-    if not best then
-      -- none by the base: out where the ground is wilder
+    -- from beside the base pad (the save's crew may be stranded a kilometre
+    -- out, over ground that is not loaded): 40 m out from the base centre
+    do
+      local u, t1, _, R = base_frame()
+      local dir = dir_at(u, t1, 40, R)
+      local gr = ground_r(b, dir.x, dir.y, dir.z, R + 150)
+      if gr then
+        local spot = { dir = dir, r = gr }
+        stand_at(spot); wait(6); a = astro(); up = unit(sub(a, b))
+        P("SHOT case 3: by the base, %.0f m from its centre", 40)
+      end
+    end
+    local cands = rocks_here(80)
+    for _ = 1, 10 do
+      if #cands > 0 then break end
+      wait(2)
+      a = astro()
+      cands = rocks_here(80)
+    end
+    if #cands == 0 then
       local spot = find_meadow(params.meadow_m)
-      if spot then stand_at(spot); wait(6); a = astro(); up = unit(sub(a, b)); rocks_here() end
+      if spot then stand_at(spot); wait(6); a = astro(); up = unit(sub(a, b)); cands = rocks_here(80) end
     end
-    if best then
-      -- go and stand by it (it may be far): the rest of the setup walks 3.5 m short of it
-      local _, t1 = base_frame()
-      a.x, a.y, a.z = best.x + t1.x * 5.0 + up.x * 1.0, best.y + t1.y * 5.0 + up.y * 1.0, best.z + t1.z * 5.0 + up.z * 1.0
+    P("SHOT case 3: %d grabbable rocks within 80 m", #cands)
+    local _, t1 = base_frame()
+    for i = 1, math.min(4, #cands) do
+      local c = cands[i]
+      local crel = sub(c, home())
+      a.x, a.y, a.z = home().x + crel.x + t1.x * 5.0 + up.x * 1.0, home().y + crel.y + t1.y * 5.0 + up.y * 1.0, home().z + crel.z + t1.z * 5.0 + up.z * 1.0
       a.vx, a.vy, a.vz = 0, 0, 0
-      wait(3)
+      wait(4)
+      a = astro()
+      local here = rocks_here(14)
+      for _, h in ipairs(here) do
+        if h.inst == c.inst and h.src == c.src then best = h end
+      end
+      P("SHOT case 3: candidate %d (%s r %.2f, %.0f m from the start): %s", i, c.kind, c.r, c.d, best and "found beside it" or "not here")
+      if best then break end
     end
     tgt, label = best, best and ("rock " .. tostring(best.kind) .. string.format(" r %.2f", best.r)) or "rock"
   elseif case == 4 then
@@ -2013,8 +2044,10 @@ local function run_shot()
     local best
     local _, t1, t2 = base_frame()
     -- the field settles its plants on a worker: ask again until one answers
+    -- a tall plant for the camera (a sedge flickers in and out of the aim):
+    -- keep looking for one of 1.5 m+ while the field settles
     local tries = 0
-    while not best and tries < 15 do
+    while (not best or (best.height < 1.5 and tries < 10)) and tries < 15 do
       tries = tries + 1
       a = astro(); up = unit(sub(a, b))
       for k = 0, 15 do
@@ -2026,13 +2059,17 @@ local function run_shot()
           if best and best.height >= 2.5 then break end
         end
       end
-      if not best then P("SHOT: no plant yet (try %d), props %s", tries, tostring((perf.counts() or {}).props)); wait(2) end
+      if not best or best.height < 1.5 then P("SHOT: no tall plant yet (try %d, best %s), props %s", tries, tostring(best and best.height), tostring((perf.counts() or {}).props)); wait(2) end
     end
     tgt, label = best, best and ("plant h " .. string.format("%.1f", best.height)) or "plant"
   end
   if not tgt then P("SHOT case %d: no %s found", case, label); return end
   -- the planet moves metres a tick: the target lives in its frame from here on
-  local trel = sub(tgt, home())
+  -- everything below in THIS frame's planet position (a `b` from the start
+  -- of the search is kilometres stale: the planet moves 5.8 m a tick)
+  b = home()
+  up = unit(sub(a, b))
+  local trel = sub(tgt, b)
   local theight = tgt.height
   local function target() return { x = home().x + trel.x, y = home().y + trel.y, z = home().z + trel.z, height = theight } end
   tgt = target()
@@ -2076,15 +2113,50 @@ local function run_shot()
     -- fired at the ground beside a sedge reads "part of the ground")
     local pr = tostring(tb.prompt or "")
     if hold and not HOLD_ON and time - t0 > 0.5 and (case == 4 or pr:find("uproot", 1, true)) then HOLD_ON = true end
-    tb.sim = { btn = { [0] = HOLD_ON == true }, aim = { eye.x, eye.y, eye.z, dd.x, dd.y, dd.z } }
-    -- the camera on the thing: down at a held crate, level at a plant or rock
-    if cam and cam.face then cam.face(d.x, d.y, d.z, case == 4 and -0.45 or -0.15) end
+    -- A sim aim is a WORLD ray read a frame later, when the planet has moved
+    -- 5.8 m: it misses a small thing. For the sedge and the rock the game's
+    -- own aim is used instead: the camera faced at the target, the screen
+    -- centre is the ray, current every frame.
+    local cam_aim = (case == 2 or case == 3)
+    tb.sim = { btn = { [0] = HOLD_ON == true }, aim = (not cam_aim) and { eye.x, eye.y, eye.z, dd.x, dd.y, dd.z } or nil }
+    -- the camera on the thing: from the crew's side for a held crate (from
+    -- behind, the crew hides the tether), level at a plant or rock
+    if cam and cam.face then
+      if case == 4 then
+        local ang = math.rad(55)
+        local sx, sy, sz = up.y * d.z - up.z * d.y, up.z * d.x - up.x * d.z, up.x * d.y - up.y * d.x
+        local fx, fy, fz = d.x * math.cos(ang) + sx * math.sin(ang), d.y * math.cos(ang) + sy * math.sin(ang), d.z * math.cos(ang) + sz * math.sin(ang)
+        cam.face(fx, fy, fz, -0.25)
+      elseif case == 2 or case == 3 then
+        -- the screen centre on the target: a plant's trunk, a rock's middle
+        local dn = sub(ax, { x = aa.x + up.x * 1.5, y = aa.y + up.y * 1.5, z = aa.z + up.z * 1.5 })
+        local hz = len(dn.x - up.x * dot(dn, up), dn.y - up.y * dot(dn, up), dn.z - up.z * dot(dn, up))
+        cam.face(d.x, d.y, d.z, math.atan2(dot(dn, up), hz + 3.0))
+      else
+        cam.face(d.x, d.y, d.z, -0.15)
+      end
+    end
     if math.floor(time - t0) ~= math.floor(time - t0 - dt) then
       P("SHOT t=%.0f: tool %s, holding %s, strain %.2f, prompt %s", time - t0, tostring(tb.toolId()), tostring(tb.holding and tb.holding.name), tb.strain or -1, tostring(tb.prompt))
     end
     -- playshot=N: in a real `play`, photograph the game's camera N s into the
     -- hold (camera.capture, as F12 does) to user://screenshots, then quit
-    if (params.playshot or 0) > 0 and time - t0 >= params.playshot and not SHOT_TAKEN and camera and camera.capture then
+    -- case 2: mid-pull, when the belt's progress reads 40-60 % (a sedge is
+    -- up in a second, so the clock alone photographs the aftermath)
+    local due = time - t0 >= params.playshot
+    if case == 2 then due = ((tb.progress or 0) >= 0.4 and HOLD_ON) or time - t0 >= params.playshot + 20 end
+    if (params.playshot or 0) > 0 and due and not SHOT_TAKEN and camera and camera.capture then
+      P("SHOT capture: t=%.1f progress %.2f holding %s", time - t0, tb.progress or -1, tostring(HOLD_ON))
+      -- the effect nodes about the target: height above it along up, and across
+      for _, nm in ipairs({ "FxAimMark", "FxPlantMark", "FxGravTether", "FxGravHold", "FxCutBeam", "FxCutBite" }) do
+        for _, n in ipairs(findAll(nm) or {}) do
+          local ps = n.particles and n:particles()
+          local rx, ry, rz = n.x - tgt.x, n.y - tgt.y, n.z - tgt.z
+          local hgt = rx * up.x + ry * up.y + rz * up.z
+          P("SHOT fx %s: playing %s, %.2f m above the target, %.2f m across, scale %.2f/%.2f/%.2f", nm, tostring(ps and ps:isPlaying()), hgt,
+            len(rx - up.x * hgt, ry - up.y * hgt, rz - up.z * hgt), n.scale_x or -1, n.scale_y or -1, n.scale_z or -1)
+        end
+      end
       SHOT_TAKEN = true
       local path = string.format("user://screenshots/perfshot_case%d.png", case)
       camera.capture({ w = 1280, h = 720, ui = true, draws = true }, function(bytes, why)

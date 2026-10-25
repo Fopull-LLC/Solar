@@ -1064,6 +1064,75 @@ beamQuads = 0   -- the old ribbon count; kept at 0 for the probes that read it
 local fxn = {}        -- name → node | "spawning"
 local fx_want = {}    -- names asked for this frame
 local fx_tint = {}    -- name → the tint it was last given
+local fx_vol = {}     -- name → the emission volume it was last given
+local fx_bow = {}     -- name → true while its beam has a control point of ours
+-- Since 0.117.0-rc25 (floptle/0529, 0530) the engine itself can mark ONE
+-- scattered prop (scatter.setTint: a rim and a glow on the plant or rock the
+-- tool is aimed at, where before only a particle stand-in could show it), bow
+-- a beam toward a control point (setBeamControl: the tether's sag) and fit an
+-- effect's emission volume without touching its particles (setVolume: one
+-- PlantMark for a 0.4 m tuft and a 12 m tree at the same mote size). Older
+-- engines keep the particle marks fitted by node scale.
+local function engine_at_least(maj, min, pat, rc)
+  local v = app and app.version and app.version()
+  if type(v) ~= "string" then return false end
+  local a, b, c, r = v:match("^(%d+)%.(%d+)%.(%d+)%-rc(%d+)")
+  if not a then a, b, c = v:match("^(%d+)%.(%d+)%.(%d+)") end
+  if not a then return false end
+  local have = { tonumber(a), tonumber(b), tonumber(c), r and tonumber(r) or math.huge }
+  local want = { maj, min, pat, rc or math.huge }
+  for i = 1, 4 do
+    if have[i] ~= want[i] then return have[i] > want[i] end
+  end
+  return true
+end
+local RC25 = engine_at_least(0, 117, 0, 25)
+INSTANCE_TINT = RC25 and scatter ~= nil and scatter.setTint ~= nil and scatter.clearTints ~= nil
+BEAM_BOW = RC25
+FX_VOLUME = RC25
+-- The prop the tool is on, in the engine's own highlight: teal while aimed,
+-- amber as the work goes on (the same ramp as the ring). One at a time; the
+-- mark is cleared the frame nothing asks for it (tint_sweep).
+local tinted = nil      -- { src, inst } the prop carrying our mark
+local tint_want = false
+local tint_last = nil   -- the k it was last given (skip a rewrite of the same look)
+local function tint_instance(src, inst, k, kind)
+  if not (INSTANCE_TINT and src and inst) then return end
+  tint_want = true
+  if tinted and (tinted.src ~= src or tinted.inst ~= inst) then
+    scatter.setTint(tinted.src, tinted.inst, nil)
+    tinted, tint_last = nil, nil
+  end
+  k = math.max(0, math.min(1, k or 0))
+  -- the colour turns amber early in the work (by 40 % it reads warm), the
+  -- strength keeps climbing to the end
+  local kk = math.sqrt(k)
+  local r, g, b = 0.25 + 0.75 * kk, 0.9 - 0.3 * kk, 0.8 - 0.65 * kk
+  if kind == "plant" then
+    -- Foliage is camera-facing cards, so a rim term lights every leaf and
+    -- the canopy reads flat teal. A plant gets a faint glow from inside
+    -- instead, pulsing slowly, and a slight colour shift toward the target
+    -- colour: still a green tree. Rewritten every frame (the pulse); the
+    -- engine re-rolls nothing for it.
+    local pulse = 1 + 0.3 * math.sin(2 * math.pi * 0.8 * (time or 0))
+    local e = (0.04 + 0.06 * k) * pulse
+    local tr, tg, tb_ = 0.88 + 0.12 * kk, 1.0 - 0.08 * kk, 1.0 - 0.22 * kk
+    scatter.setTint(src, inst, { tint = { tr, tg, tb_ }, emissive = { r, g, b }, emissiveStrength = e, rimStrength = 0 })
+    tinted, tint_last = { src = src, inst = inst }, k
+    return
+  end
+  -- a solid mesh (a rock): the rim light works there
+  if tinted and tint_last and math.abs(tint_last - k) < 0.02 then return end
+  scatter.setTint(src, inst, { rim = { r, g, b }, rimStrength = 0.35 + 0.25 * k, emissive = { r, g, b }, emissiveStrength = 0.03 + 0.07 * k })
+  tinted, tint_last = { src = src, inst = inst }, k
+end
+local function tint_sweep()
+  if tinted and not tint_want then
+    scatter.clearTints(tinted.src)
+    tinted, tint_last = nil, nil
+  end
+  tint_want = false
+end
 local function fx_node(name)
   local n = fxn[name]
   if n == "spawning" then return nil end
@@ -1075,8 +1144,10 @@ local function fx_node(name)
   return nil
 end
 -- Place and play one. o: x,y,z (world); ux,uy,uz its +Y and fx,fy,fz a
--- tangent (optional); ex,ey,ez the beam's end; scale (and sy, a taller
--- scale up its Y); power = setIntensity; r,g,b = setTint.
+-- tangent (optional); ex,ey,ez the beam's end; cx,cy,cz the beam's control
+-- point (its bow, rc25); scale (and sy, a taller scale up its Y); volume =
+-- setVolume (rc25: the emission shape alone, the particles as authored);
+-- power = setIntensity; r,g,b = setTint.
 local function fx_use(name, o)
   fx_want[name] = true
   local n = fx_node(name)
@@ -1099,6 +1170,14 @@ local function fx_use(name, o)
   if not ps:isPlaying() then ps:play() end
   if o.power and ps.setIntensity then ps:setIntensity(o.power) end
   if o.ex and ps.setBeamEnd then ps:setBeamEnd(o.ex, o.ey, o.ez) end
+  if BEAM_BOW and ps.setBeamControl then
+    if o.cx then ps:setBeamControl(o.cx, o.cy, o.cz); fx_bow[name] = true
+    elseif fx_bow[name] then ps:setBeamControl(); fx_bow[name] = nil end
+  end
+  if o.volume and FX_VOLUME and ps.setVolume and fx_vol[name] ~= o.volume then
+    fx_vol[name] = o.volume
+    ps:setVolume(o.volume)
+  end
   if o.r and ps.setTint then
     local t = fx_tint[name]
     if not (t and math.abs(t[1] - o.r) < 0.01 and math.abs(t[2] - o.g) < 0.01 and math.abs(t[3] - o.b) < 0.01) then
@@ -1180,6 +1259,7 @@ end
 local beam_req = nil      -- { h = hit (body frame), p = power, kind = "dig"|"fill"|"grav"|"plant", ... }
 local ring_req = nil
 local plant_req = nil
+local rock_req = nil      -- { src, inst } the scattered rock the gravity gun is aimed at
 local beacon_req = nil
 local paint_beacon
 local ring_s = nil
@@ -1697,7 +1777,8 @@ local function fire_cut(node, dt)
     ex, ey, ez = ease_end(ox + dx * t, oy + dy * t, oz + dz * t, dt, 26)
     aimDist, aimX, aimY, aimZ = len(ex - node.x, ey - node.y, ez - node.z), ex, ey, ez
     plant_req = { h = to_body({ x = p.x, y = p.y, z = p.z }), ready = true, height = p.height,
-                  ux = p.ux, uy = p.uy, uz = p.uz, sp = p.rec and p.rec.sp, work = progress }
+                  ux = p.ux, uy = p.uy, uz = p.uz, sp = p.rec and p.rec.sp, work = progress,
+                  src = p.rec and p.rec.src, inst = p.rec and p.rec.inst }
     if biting then
       local fx = ref("vfx")
       if fx and fx.cut and math.random() < dt * 4 then fx.cut(ex, ey, ez) end
@@ -2086,7 +2167,8 @@ local function fire_grav(node, dt, firing)
       reticle_set("plant", cand.name .. "  ·  hold LMB: uproot")
       plant_req = { h = to_body({ x = cand.plant.x, y = cand.plant.y, z = cand.plant.z }), ready = false,
                     height = cand.plant.height, ux = cand.plant.ux, uy = cand.plant.uy, uz = cand.plant.uz,
-                    sp = cand.plant.rec and cand.plant.rec.sp, work = 0 }
+                    sp = cand.plant.rec and cand.plant.rec.sp, work = 0,
+                    src = cand.plant.rec and cand.plant.rec.src, inst = cand.plant.rec and cand.plant.rec.inst }
     elseif cand and cand.kind == "beacon" then
       prompt = string.format("GRAVITY GUN  ·  %s  ·  hold LMB to pull it up", cand.name)
       reticle_set("grab", cand.name .. "  ·  hold LMB: pull up")
@@ -2094,6 +2176,7 @@ local function fire_grav(node, dt, firing)
       prompt = "GRAVITY GUN  ·  Salvage Crate  ·  hold LMB to pull the pack's contents out"
       reticle_set("grab", "Salvage Crate  ·  hold LMB: open")
     elseif cand then
+      if cand.kind == "rock" and cand.rock then rock_req = { src = cand.rock.source, inst = cand.rock.id } end
       local _, _, _, g = gravity_at(node.x, node.y, node.z)
       local lift = (cand.mass * g) / math.max(0.01, params.grav_force)
       local verb = cand.kind == "rock" and "pull it out" or "grab"
@@ -2197,7 +2280,8 @@ local function fire_grav(node, dt, firing)
     show_beam({ x = mx + (math.random() - 0.5) * q, y = my + (math.random() - 0.5) * q, z = mz + (math.random() - 0.5) * q },
       0.5 + progress * 0.5, "plant")
     plant_req = { h = to_body({ x = p.x, y = p.y, z = p.z }), ready = true, height = p.height,
-                  ux = p.ux, uy = p.uy, uz = p.uz, sp = p.rec and p.rec.sp, work = progress }
+                  ux = p.ux, uy = p.uy, uz = p.uz, sp = p.rec and p.rec.sp, work = progress,
+                  src = p.rec and p.rec.src, inst = p.rec and p.rec.inst }
     hum_on(SFX.hold, 0.12 + progress * 0.2, 0.8 + progress * 0.7)
     local fx = ref("vfx")
     local ff = ref("flora_field")
@@ -2574,6 +2658,18 @@ local function paint_plant(req)
   local w = to_world(req.h)
   local ux, uy, uz = req.ux or 0, req.uy or 1, req.uz or 0
   local h = math.max(0.4, math.min(12, req.height or 1))
+  -- A tree's record is its CROWN instance (the trunk is a twin), so `w` can
+  -- stand metres up in the air: the marks belong at its foot. A ray down
+  -- finds the ground (the field's signed distance only answers within a
+  -- metre of the surface); the trunk's own collider on the way is skipped.
+  if raycast and h > 1.0 then
+    local hit = raycast(w.x, w.y, w.z, -ux, -uy, -uz, 24)
+    if hit and hit.node then
+      local hit2 = raycast(hit.x - ux * 0.05, hit.y - uy * 0.05, hit.z - uz * 0.05, -ux, -uy, -uz, 24, hit.node)
+      if hit2 then hit = { x = hit2.x, y = hit2.y, z = hit2.z, distance = (hit.distance or 0) + 0.05 + (hit2.distance or 0), node = hit2.node } end
+    end
+    if hit and (hit.distance or 0) > 0.25 then w = { x = hit.x, y = hit.y, z = hit.z } end
+  end
   local ff = ref("flora_field")
   local wide = (ff and ff.girthOf and req.sp) and ff.girthOf(req.sp, h, h * 0.6, 0.3) or (h * 0.3)
   wide = math.max(0.35, math.min(3.5, wide))
@@ -2582,11 +2678,27 @@ local function paint_plant(req)
   local r = c[1] + (RING.hot[1] - c[1]) * k
   local g = c[2] + (RING.hot[2] - c[2]) * k
   local b = c[3] + (RING.hot[3] - c[3]) * k
-  fx_use("PlantMark", { x = w.x + ux * 0.05, y = w.y + uy * 0.05, z = w.z + uz * 0.05, ux = ux, uy = uy, uz = uz,
-                        scale = wide, sy = h, power = 0.6 + 0.8 * k, r = r, g = g, b = b })
+  if FX_VOLUME then
+    -- rc25: the plant itself carries the mark (its rim and glow, below); the
+    -- motes rise from its foot, their birth disc fitted to the plant's spread
+    -- by emission volume (the cone's 0.5 radius × volume = half the spread),
+    -- the same mote count and size on a tuft and a tree. The node stays at
+    -- the foot: lifted up the trunk, the scaled birth disc drew as a ring
+    -- floating at the crown.
+    local v = math.max(0.4, math.min(7, wide))
+    fx_use("PlantMark", { x = w.x + ux * 0.05, y = w.y + uy * 0.05, z = w.z + uz * 0.05, ux = ux, uy = uy, uz = uz,
+                          volume = v, power = 0.6 + 0.8 * k, r = r, g = g, b = b })
+    tint_instance(req.src, req.inst, k, "plant")
+  else
+    fx_use("PlantMark", { x = w.x + ux * 0.05, y = w.y + uy * 0.05, z = w.z + uz * 0.05, ux = ux, uy = uy, uz = uz,
+                          scale = wide, sy = h, power = 0.6 + 0.8 * k, r = r, g = g, b = b })
+  end
   fx_use("AimMark", { x = w.x + ux * 0.06, y = w.y + uy * 0.06, z = w.z + uz * 0.06, ux = ux, uy = uy, uz = uz,
                       scale = math.max(0.5, wide * 0.9) / 0.39, power = 0.7, r = r, g = g, b = b })
 end
+-- The ROCK MARK (rc25): the stone or crystal the gravity gun is aimed at, in
+-- the engine's own highlight. Nothing before rc25: a rock had no mark.
+local function paint_rock(req) tint_instance(req.src, req.inst, 0, "rock") end
 
 -- THE BEAMS. Each is a particle effect on a pooled node stood at the muzzle
 -- and aimed with setBeamEnd (see THE EFFECTS); what meets the far end is a
@@ -2601,7 +2713,16 @@ local function paint_beam(req, dt)
     local s = math.min(1.0, strain)
     local r, g, b = 1 + 0.7 * s, 1 - 0.15 * s, 1 - 0.65 * s
     if req.kind == "plant" then r, g, b = 0.75, 1.0, 0.65 end
-    fx_use("GravTether", { x = mx, y = my, z = mz, ex = w.x, ey = w.y, ez = w.z, power = 0.6 + 0.7 * p, r = r, g = g, b = b })
+    -- the sag (rc25): a slack tether bows down its middle by a seventh of its
+    -- length, and pulls straight as the strain climbs
+    local cx, cy, cz = nil, nil, nil
+    if BEAM_BOW then
+      local gx, gy, gz = gravity_at(w.x, w.y, w.z)
+      local l = len(w.x - mx, w.y - my, w.z - mz)
+      local sag = l * (0.15 - 0.12 * s) + 0.05
+      cx, cy, cz = (mx + w.x) * 0.5 - gx * sag, (my + w.y) * 0.5 - gy * sag, (mz + w.z) * 0.5 - gz * sag
+    end
+    fx_use("GravTether", { x = mx, y = my, z = mz, ex = w.x, ey = w.y, ez = w.z, cx = cx, cy = cy, cz = cz, power = 0.6 + 0.7 * p, r = r, g = g, b = b })
     if req.kind ~= "plant" then
       fx_use("GravHold", { x = w.x, y = w.y, z = w.z, power = 0.7 + 0.6 * s, r = r, g = g, b = b })
     end
@@ -2644,8 +2765,9 @@ function lateUpdate(node, dt)
       beam_particles(nil)
       paint_beacon(nil)
       fx_sweep()
+      tint_sweep()
     end
-    beam_req, ring_req, plant_req, beacon_req, grav_idle_req = nil, nil, nil, nil, false
+    beam_req, ring_req, plant_req, rock_req, beacon_req, grav_idle_req = nil, nil, nil, nil, nil, false
     return
   end
   stowed = false
@@ -2694,10 +2816,13 @@ function lateUpdate(node, dt)
 
   if plant_req then paint_plant(plant_req) end
   plant_req = nil
+  if rock_req then paint_rock(rock_req) end
+  rock_req = nil
 
   paint_beacon(beacon_req)
   beacon_req = nil
   fx_sweep()
+  tint_sweep()
 end
 
 -- ── the driver ──────────────────────────────────────────────────────────────
