@@ -2526,7 +2526,26 @@ end
 -- from the plane than the radius. So: ask from a point between the plane and
 -- the ground, as near the ground as the band allows, with a radius that
 -- reaches `rh` across the ground there (± `slack` of slope).
+-- Since 0.117.0-rc20 the engine picks scatter chunks by where over the region
+-- the point is, not by its height over the plane (card 0523): ask at the aim
+-- point itself and the plane dance below is history. An older engine keeps it.
+local function engine_at_least(maj, min, pat, rc)
+  local v = app and app.version and app.version()
+  if type(v) ~= "string" then return false end
+  local a, b, c, r = v:match("^(%d+)%.(%d+)%.(%d+)%-rc(%d+)")
+  if not a then a, b, c = v:match("^(%d+)%.(%d+)%.(%d+)") end
+  if not a then return false end
+  local have = { tonumber(a), tonumber(b), tonumber(c), r and tonumber(r) or math.huge }
+  local want = { maj, min, pat, rc or math.huge }
+  for i = 1, 4 do
+    if have[i] ~= want[i] then return have[i] > want[i] end
+  end
+  return true
+end
+NEAR_BY_POSITION = engine_at_least(0, 117, 0, 20)
+
 local function near_query(p, mx, my, mz, gx, gy, gz, rh, slack, chunk)
+  if NEAR_BY_POSITION then return mx, my, mz, rh + slack end
   local dx, dy, dz = mx - p.cx, my - p.cy, mz - p.cz
   local lx = dx * p.ex[1] + dy * p.ex[2] + dz * p.ex[3]
   local lz = dx * p.ez[1] + dy * p.ez[2] + dz * p.ez[3]

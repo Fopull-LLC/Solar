@@ -156,6 +156,14 @@ function start(node)
   -- it first draws is built again on that frame. (Measured on rc19 too: made
   -- alongside the warm, the sea's first frame built ocean.flsl on the main
   -- thread before the warm got to it, a 0.87 s frame on a cold driver cache.)
+  -- On 0.117.0-rc20 a first draw of a shader still in the warm hurries it and
+  -- draws plain until it lands (floptle/0521), so the hold is no longer needed
+  -- for correctness: measured with the world made alongside the warm and the
+  -- shaders queued first, the sea's first frame built nothing (3 of 3 cold
+  -- and warm loads). It stays because the warm then competes with the planet
+  -- generation (3.8-5.7 s cold against 2.0-2.3 s held) and the reveal of a
+  -- fresh save is not sooner; an old save, revealed at ~3.5 s, would show a
+  -- plain sea until the cold warm lands. Revisit when the warm is cheaper.
   if warm_assets() then world_pending = true; return end
   begin_world()
 end
@@ -178,7 +186,13 @@ end
 --     builds their pipelines on its own first frame (cold driver cache:
 --     navball 29-32 ms, tape 18 ms of that frame), before this warm starts,
 --     so here they are only made sure of; a warm from the menu scene would
---     take them off that frame.
+--     take them off that frame. From rc20 the engine builds a UI shader on
+--     its warm pool at the first draw (the HUD pops in a few frames late
+--     instead): the system scene's first frame carries no navball or tape
+--     pipelineCompile any more (measured, cold cache), so this warm is
+--     redundant there and kept only as belt and braces.
+--   * rc20 builds two shaders at a time: the four material shaders warm in
+--     2.0-2.3 s on a cold driver cache (3.2-3.4 s on rc19, 1.7 s on rc16).
 WARM_SHADERS = { "shaders/ocean.flsl", "shaders/sea_ice.flsl", "shaders/river.flsl", "shaders/hullPanels.flsl" }
 WARM_UI_SHADERS = { "shaders/navball.flsl", "shaders/tape.flsl" }
 WARM_TEXTURE_DIRS = { "textures/parts", "textures/base", "textures/vab", "textures/flora", "textures/water",
