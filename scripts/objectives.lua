@@ -47,6 +47,7 @@ local shown = true
 -- The facility the card is sending you to, while the card is up on foot: the
 -- world-space waypoint is drawn over it (see `lateUpdate`).
 local marker_at = nil
+local describe_sig = nil        -- the card's words as last handed to the UI
 
 -- IS THE CREW OUT AND ABOUT? Deliberately NOT `astro.visible`: planet_camera
 -- hides the body whenever the camera lands within 0.7 m of it, which includes
@@ -758,11 +759,20 @@ function update(node, dt)
   marker_at = crew_afoot() and step.at or nil
   if el then el.visible = true end
 
-  -- Described every frame on purpose: the bearing line changes with every step
-  -- you take, and `ui.make` RECONCILES rather than rebuilds — the cost is one
-  -- table walk, not a screen that flickers and forgets. Every row carries a
-  -- `key`, so a row that stays is the same entity from frame to frame.
-  ui.make(node, describe(step, astro))
+  -- Described every frame, HANDED to the UI only when a word changed: the
+  -- bearing line changes with every step you take, and `ui.make` RECONCILES
+  -- rather than rebuilds, but even that walk was 0.3 ms on every frame (3.6
+  -- worst) for a card that reads the same from one frame to the next. The
+  -- description is a few strings; comparing them is nothing. Every row carries
+  -- a `key`, so a row that stays is the same entity from frame to frame.
+  local desc = describe(step, astro)
+  local sig = {}
+  for i, r in ipairs(desc.items) do sig[i] = r.key .. "\1" .. r.style .. "\1" .. r.text end
+  sig = table.concat(sig, "\2")
+  if sig ~= describe_sig then
+    describe_sig = sig
+    ui.make(node, desc)
+  end
 end
 
 -- ── in the world ────────────────────────────────────────────────────────────
