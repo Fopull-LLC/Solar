@@ -8,10 +8,39 @@
 --
 --   GRAVITY GUN    the main tool, Half-Life style. Aim at anything loose —
 --                  a rock the laser knocked free, debris, a part, a small
---                  craft — hold LMB and it is caught at the point you aimed
---                  at and pulled to a spot in front of you on a spring.
+--                  craft, a boulder or a crystal in the ground (plucked out
+--                  as a body), a cargo can or a crate round the base, a
+--                  felled log — hold LMB and it is caught at the point you
+--                  aimed at and pulled to a spot in front of you on a spring.
 --                  Scroll: nearer / further.  R: throw.  Release: drop.
---                  Aimed at a plant it uproots it (the harvest).
+--                  E while holding: STOW it (a rock as its ore, a log as
+--                  timber) if the pack has room. Held into the Commerce
+--                  Depot's intake and let go: rocks and logs go into the
+--                  warehouse, debris is recycled for a refund. Aimed at a
+--                  plant it uproots it (the harvest); at a salvage crate it
+--                  pulls the pack's contents out; at a relay beacon, it
+--                  pulls the beacon up.
+--
+-- ── EVERY EFFECT IS PARTICLES ───────────────────────────────────────────────
+--
+-- No drawn lines. Each beam, mark and hold is a particle effect in vfx/ on a
+-- pooled node (prefabs/Fx*), placed every lateUpdate: the dig's beam and its
+-- molten bore, the fill's slurry and its deposit, the cut's hair-thin line
+-- and the spark fan where it bites, the gravity gun's crackling tether, the
+-- idle glow at its claws and the shell round what it holds, the aim mark on
+-- the ground and the motes rising through a targeted plant. See THE EFFECTS.
+-- What is still drawn is the screen reticle, which is HUD.
+--
+-- ── THE LOCK ────────────────────────────────────────────────────────────────
+--
+-- A tool that targets a plant LOCKS: the first plant the beam crosses is the
+-- one it works, and it stays the one until the beam has been off the plant's
+-- whole body for `lock_grace` seconds — never swapping to a neighbour mid-cut,
+-- never resetting its progress because a leaf flickered out of the hit
+-- volume. The beam's end eases rather than jumping between the plant and the
+-- ground behind it, and the mark on the plant stays up through the grace.
+-- (Playtest 2026-10-24: "it flickers a lot weirdly, I can't tell if I'm
+-- actually doing it right until it's done".)
 --   TERRAIN LASER  hold LMB: DIG cuts rock and streams it into the pack.
 --                  Q: switch to FILL, which lays rock back down out of the
 --                  pack's own rubble (the spade's raise, with a price).
@@ -145,6 +174,13 @@ defaults = {
   saw_grab = 0.6,          -- how near the beam has to pass a stem (a tree's crown is wider)
   --@range 0.2 3
   saw = 0.8,               -- × the species' cutting work, at full power and cold
+  --@range 0.05 1 --@units s
+  lock_grace = 0.25,       -- the beam may leave a locked plant this long and keep it
+  --@header Depot intake
+  --@range 5 40 --@units m
+  intake = 22.0,           -- a held thing let go this near the Commerce Depot's centre is taken in (its apron: the lot is 32 × 18 m)
+  --@range 0 5
+  scrap_rate = 0.4,        -- $ per kg of debris recycled at the depot
 }
 
 -- Published: the HUD, the walker, the camera and the smoke harness read these.
@@ -168,6 +204,15 @@ strain = 0.0     -- 0..1+ how hard the gravity gun is working
 wantsScroll = false -- the gravity gun is using the wheel (the camera leaves it alone)
 gate = "starting up"
 hudText = ""
+-- THE RETICLE'S SHAPE, by what is under it (draw_reticle): "none", "dig",
+-- "fill", "cut", "grab", "heavy", "hold", "plant", "interact"; and the short
+-- line under it naming the target and the key.
+reticleKind = "none"
+reticleLabel = ""
+local function reticle_set(kind, label) reticleKind, reticleLabel = kind, label or "" end
+-- The "collected +N" readout: { text, t } drawn under the reticle for a moment.
+local collected = nil
+local function collected_say(text) collected = { text = text, t = time } end
 -- TEST HOOKS (probes and the smoke harness): `sim` overrides the mouse and
 -- keys — { btn = { [0]=true }, pressed = { r = true }, scroll = n, aim = {ox,oy,oz,dx,dy,dz} }.
 sim = nil
@@ -176,7 +221,7 @@ sim = nil
 TOOL_ORDER = { "gravgun", "laser", "beacon" }
 TOOLDEF = {
   gravgun = { label = "Gravity Gun", prefab = "ToolGravGun", fp_prefab = "ToolGravGunFP",
-              hint = "hold LMB to grab  ·  scroll nearer / further  ·  R throw  ·  aim at a plant to uproot it" },
+              hint = "hold LMB to grab (rocks, crates, logs, debris, a beacon)  ·  scroll nearer / further  ·  R throw  ·  E stow what you hold  ·  let go in the depot's intake to deposit or recycle it  ·  aim at a plant to uproot it" },
   laser   = { label = "Terrain Laser", prefab = "ToolLaser", fp_prefab = "ToolLaserFP",
               hint = "hold LMB to dig  ·  Q switches DIG / FILL  ·  hold E: cut plants" },
   beacon  = { label = "Relay Beacon", consumable = true,
@@ -1009,56 +1054,81 @@ local function muzzle()
   return nil
 end
 
--- ── beams: ribbons of quads, drawn in the camera pass ───────────────────────
-
-local BEAM_GLOW = "textures/vfx/beam/glow.png"
-local BEAM_CORE = "textures/vfx/beam/core.png"
-
--- A camera-facing ribbon through `pts` (flat x,y,z list), `w` half-width.
-beamQuads = 0   -- quads the beams drew last frame (the smoke harness and probes read it)
-local function ribbon(pts, w, tex, r, g, b, a)
-  if not (draw and draw.quad) then return end
-  local ex, ey, ez = cam and cam.cam_x, cam and cam.cam_y, cam and cam.cam_z
-  if not ex then return end
-  local n = #pts / 3
-  if n < 2 then return end
-  -- One side vector PER POINT (the tangent there × the view to it), shared by
-  -- the two quads that meet at it: a ribbon bent near the camera stays one
-  -- unbroken strip instead of a fan of fins.
-  local side = {}
-  for i = 1, n do
-    local i0, i1 = math.max(1, i - 1), math.min(n, i + 1)
-    local tx = pts[i1 * 3 - 2] - pts[i0 * 3 - 2]
-    local ty = pts[i1 * 3 - 1] - pts[i0 * 3 - 1]
-    local tz = pts[i1 * 3] - pts[i0 * 3]
-    local vx, vy, vz = pts[i * 3 - 2] - ex, pts[i * 3 - 1] - ey, pts[i * 3] - ez
-    local sx, sy, sz = ty * vz - tz * vy, tz * vx - tx * vz, tx * vy - ty * vx
-    local sl = len(sx, sy, sz)
-    if sl < 1e-9 then sx, sy, sz, sl = 0, 1, 0, 1 end
-    side[i] = { sx / sl * w, sy / sl * w, sz / sl * w }
+-- ── THE EFFECTS: particle systems on pooled nodes ─────────────────────────
+-- Every beam, mark and hold is a particle effect (vfx/*.vfx.ron) on a node of
+-- its own, spawned once from prefabs/Fx<Name> and kept: top level, so its
+-- coordinates are world ones, placed every lateUpdate at the muzzle, the hit
+-- or the plant, stood up on a normal, aimed with setBeamEnd and scaled with
+-- setIntensity. What was not asked for this frame is stopped (fx_sweep).
+beamQuads = 0   -- the old ribbon count; kept at 0 for the probes that read it
+local fxn = {}        -- name → node | "spawning"
+local fx_want = {}    -- names asked for this frame
+local fx_tint = {}    -- name → the tint it was last given
+local function fx_node(name)
+  local n = fxn[name]
+  if n == "spawning" then return nil end
+  if n and n.valid then return n end
+  if not spawn then return nil end
+  local a = find("Astronaut")
+  fxn[name] = "spawning"
+  spawn("Fx" .. name, a and vec3(a.x, a.y, a.z) or vec3(0, 0, 0), function(m) fxn[name] = m end)
+  return nil
+end
+-- Place and play one. o: x,y,z (world); ux,uy,uz its +Y and fx,fy,fz a
+-- tangent (optional); ex,ey,ez the beam's end; scale (and sy, a taller
+-- scale up its Y); power = setIntensity; r,g,b = setTint.
+local function fx_use(name, o)
+  fx_want[name] = true
+  local n = fx_node(name)
+  if not n then return end
+  n.x, n.y, n.z = o.x, o.y, o.z
+  if o.ux then
+    local tx, ty, tz = o.fx, o.fy, o.fz
+    if not tx then
+      tx, ty, tz = 1 - o.ux * o.ux, -o.ux * o.uy, -o.ux * o.uz
+      if tx * tx + ty * ty + tz * tz < 1e-4 then tx, ty, tz = 0, 0, 1 end
+    end
+    if n.setUp then n:setUp(vec3(o.ux, o.uy, o.uz), vec3(tx, ty, tz)) end
   end
-  for i = 1, n - 1 do
-    local ax, ay, az = pts[i * 3 - 2], pts[i * 3 - 1], pts[i * 3]
-    local bx, by, bz = pts[i * 3 + 1], pts[i * 3 + 2], pts[i * 3 + 3]
-    local sa, sb = side[i], side[i + 1]
-    beamQuads = beamQuads + 1
-    draw.quad(tex, ax - sa[1], ay - sa[2], az - sa[3], ax + sa[1], ay + sa[2], az + sa[3],
-      bx + sb[1], by + sb[2], bz + sb[3], bx - sb[1], by - sb[2], bz - sb[3], r, g, b, a,
-      0, (i - 1) / (n - 1), 1, i / (n - 1))
+  if o.scale then
+    local sy = o.sy or o.scale
+    if n.scale_x ~= o.scale or n.scale_y ~= sy then n.scale_x, n.scale_y, n.scale_z = o.scale, sy, o.scale end
+  end
+  local ps = n.particles and n:particles()
+  if not ps then return end
+  if not ps:isPlaying() then ps:play() end
+  if o.power and ps.setIntensity then ps:setIntensity(o.power) end
+  if o.ex and ps.setBeamEnd then ps:setBeamEnd(o.ex, o.ey, o.ez) end
+  if o.r and ps.setTint then
+    local t = fx_tint[name]
+    if not (t and math.abs(t[1] - o.r) < 0.01 and math.abs(t[2] - o.g) < 0.01 and math.abs(t[3] - o.b) < 0.01) then
+      fx_tint[name] = { o.r, o.g, o.b }
+      ps:setTint(o.r, o.g, o.b)
+    end
   end
 end
-
--- A quadratic Bézier from p0 through control c to p2, as a flat point list.
-local function bezier(p0x, p0y, p0z, cx, cy, cz, p2x, p2y, p2z, segs)
-  local pts = {}
-  for i = 0, segs do
-    local t = i / segs
-    local u = 1 - t
-    pts[#pts + 1] = u * u * p0x + 2 * u * t * cx + t * t * p2x
-    pts[#pts + 1] = u * u * p0y + 2 * u * t * cy + t * t * p2y
-    pts[#pts + 1] = u * u * p0z + 2 * u * t * cz + t * t * p2z
+-- Stop what nobody asked for this frame.
+local function fx_sweep()
+  for name, n in pairs(fxn) do
+    if not fx_want[name] and n ~= "spawning" and n.valid then
+      local ps = n.particles and n:particles()
+      if ps and ps:isPlaying() then ps:stop() end
+    end
   end
-  return pts
+  fx_want = {}
+end
+-- The crew's chest: where collected things fly to.
+local function chest()
+  local a = find("Astronaut")
+  if not a then return nil end
+  return a.x + (a.up_x or 0) * 1.2, a.y + (a.up_y or 1) * 1.2, a.z + (a.up_z or 0) * 1.2
+end
+-- Something flying into the pack from (x,y,z), and the readout.
+local function collect_fx(x, y, z, text)
+  local cx, cy, cz = chest()
+  local fx = ref("vfx")
+  if cx and fx and fx.collect then fx.collect(x, y, z, cx, cy, cz) end
+  if text then collected_say(text) end
 end
 
 -- ── aiming ring (laser) ─────────────────────────────────────────────────────
@@ -1071,7 +1141,9 @@ local RING = {
   fill = { 0.45, 0.78, 1.00 },
 }
 
-local tick_x, tick_y, tick_z = 1, 0, 0
+-- The laser's AIM MARK: a thin ring laid on the ground at the bite (the
+-- AimMark effect stood up on the surface normal), the cut radius across, in
+-- the state's colour. Progress is on the screen reticle's pips.
 local function paint_ring(hit, firing, full, radius, fill)
   if not hit then return end
   local c = RING.idle
@@ -1084,32 +1156,10 @@ local function paint_ring(hit, firing, full, radius, fill)
   local nl = len(nx, ny, nz)
   if nl < 1e-4 then nx, ny, nz, nl = 0, 1, 0, 1 end
   nx, ny, nz = nx / nl, ny / nl, nz / nl
-  local cx, cy, cz = hit.x + nx * 0.08, hit.y + ny * 0.08, hit.z + nz * 0.08
-  local r = radius
-  draw.disc(cx, cy, cz, nx, ny, nz, 0.0, r, c[1], c[2], c[3], 0.10)
-  draw.disc(cx, cy, cz, nx, ny, nz, r, r * 1.05, c[1], c[2], c[3], 0.35)
-  draw.ring(cx, cy, cz, nx, ny, nz, r, c[1], c[2], c[3], 0.9)
-  if firing and not fill and cut_progress > 0.02 then
-    draw.disc(cx, cy, cz, nx, ny, nz, 0.0, r * cut_progress, RING.hot[1], RING.hot[2], RING.hot[3], 0.16)
-    draw.ring(cx, cy, cz, nx, ny, nz, r * cut_progress, RING.hot[1], RING.hot[2], RING.hot[3], 0.85)
-  end
-  local sx, sy, sz = tick_x, tick_y, tick_z
-  local sd = sx * nx + sy * ny + sz * nz
-  sx, sy, sz = sx - nx * sd, sy - ny * sd, sz - nz * sd
-  local sl = len(sx, sy, sz)
-  if sl < 0.2 then
-    sx, sy, sz = 1 - nx * nx, -nx * ny, -nx * nz
-    sl = len(sx, sy, sz)
-    if sl < 1e-3 then sx, sy, sz, sl = 0, 0, 1, 1 end
-  end
-  sx, sy, sz = sx / sl, sy / sl, sz / sl
-  tick_x, tick_y, tick_z = sx, sy, sz
-  local tx, ty, tz = ny * sz - nz * sy, nz * sx - nx * sz, nx * sy - ny * sx
-  local inner, outer = r * 1.12, r * 1.55
-  for _, d in ipairs({ { sx, sy, sz }, { -sx, -sy, -sz }, { tx, ty, tz }, { -tx, -ty, -tz } }) do
-    draw.line(cx + d[1] * inner, cy + d[2] * inner, cz + d[3] * inner,
-              cx + d[1] * outer, cy + d[2] * outer, cz + d[3] * outer, c[1], c[2], c[3], 0.9)
-  end
+  -- the ring in the texture sits at 0.78 of the half-size: size = r / 0.39
+  fx_use("AimMark", { x = hit.x + nx * 0.06, y = hit.y + ny * 0.06, z = hit.z + nz * 0.06,
+                      ux = nx, uy = ny, uz = nz, scale = math.max(0.4, radius) / 0.39,
+                      power = firing and 1.0 or 0.75, r = c[1], g = c[2], b = c[3] })
 end
 
 local function field_normal(x, y, z)
@@ -1182,9 +1232,14 @@ local function impact(hit, power, kind)
   local light = impact_n:getcomponent("PointLight")
   if hit then
     impact_n.x, impact_n.y, impact_n.z = hit.x, hit.y, hit.z
-    if ps and not ps:isPlaying() then ps:play() end
-    -- The cut is a torch, not a drill: a small hot point, not a blaze.
-    if ps then ps:setIntensity(kind == "cut" and (0.1 + 0.3 * power) or (0.3 + power)) end
+    -- Its particles (MiningImpact) are the dig's; the cut and the fill bring
+    -- their own (CutBite, FillDeposit) and take only the light.
+    if ps then
+      if kind == "dig" then
+        if not ps:isPlaying() then ps:play() end
+        ps:setIntensity(0.3 + power)
+      elseif ps:isPlaying() then ps:stop() end
+    end
     if light then
       if kind == "fill" then light.r, light.g, light.b = 0.45, 0.75, 1.0
       elseif kind == "cut" then light.r, light.g, light.b = 1.0, 0.95, 0.85
@@ -1225,7 +1280,28 @@ local function gravity_at(x, y, z)
 end
 
 local rocks = {}   -- loose chunks knocked free, oldest first
-local function knock_loose(x, y, z, nx, ny, nz)
+-- What a loose body IS WORTH, by node: a knocked chunk carries the ore it
+-- came out of; a plucked boulder, stone or crystal its kind's ore; a felled
+-- log timber. Read when it is stowed (E) or dropped at the depot. Weak keys:
+-- a destroyed node takes its record with it.
+local worth = setmetatable({}, { __mode = "k" })
+local function set_worth(n, mat, units, label)
+  if n then worth[n] = { mat = mat, n = units, label = label } end
+end
+local function worth_of(n)
+  if not n then return nil end
+  local w = worth[n]
+  if w then return w end
+  -- the tags the prefabs carry (tools/gen_props.py)
+  if n.hasTag then
+    if n:hasTag("log") then return { mat = "timber", n = 2, label = "Felled Log" } end
+    if n:hasTag("boulder") then return { mat = "iron", n = 3, label = "Boulder" } end
+    if n:hasTag("crystal") then return { mat = "crystal", n = 2, label = "Crystal Outcrop" } end
+    if n:hasTag("loose_rock") then return { mat = "regolith", n = 1, label = "Loose Rock" } end
+  end
+  return nil
+end
+local function knock_loose(x, y, z, nx, ny, nz, mat)
   if params.rocks_max <= 0 or not spawn then return end
   while #rocks >= params.rocks_max do
     local old = table.remove(rocks, 1)
@@ -1236,6 +1312,8 @@ local function knock_loose(x, y, z, nx, ny, nz)
   local px, py, pz = x + nx * 0.9, y + ny * 0.9, z + nz * 0.9
   spawn("LooseRock", vec3(px, py, pz), function(n)
     rocks[slot] = n
+    local mats = ref("materials")
+    set_worth(n, mat or "regolith", 2, ((mats and mat) and mats.label(mat) or "Rock") .. " chunk")
     n:setAngles(math.random() * 6.28, math.random() * 6.28, math.random() * 6.28)
     if assembly and assembly.rebuild then
       assembly.rebuild(n, function(r)
@@ -1293,7 +1371,8 @@ local function pop_unit(node, hit)
   if params.rock_every > 0 and units_mined % params.rock_every == 0 and bored < 1.5 then
     -- out of the cut, up off the ground (the planet's up, not the beam's)
     local ux, uy, uz = gravity_at(hit.x, hit.y, hit.z)
-    knock_loose(hit.x, hit.y, hit.z, ux, uy, uz)
+    knock_loose(hit.x, hit.y, hit.z, ux, uy, uz, mat)
+    collected_say("a chunk broke loose — grab it")
   end
 end
 
@@ -1396,6 +1475,15 @@ local function fire_dig(node, dt, firing)
     end
   end
   progress = cut_progress
+  -- The reticle: the material and where it is, or nothing.
+  if hit and aimMat then
+    reticle_set(full and "full" or "dig", string.format("%s  ·  %s", mats and mats.label(aimMat) or aimMat,
+      aimDepth >= 1.0 and string.format("%.0f m down", aimDepth) or string.format("%.0f m", aimDist or 0)))
+  elseif hit then
+    reticle_set("dig", atReach and "at arm's length" or "")
+  else
+    reticle_set("none", "no target")
+  end
   return hit, full
 end
 
@@ -1427,6 +1515,7 @@ local function fire_fill(node, dt, firing)
   if not h then
     show_beam(nil)
     prompt = string.format("FILL  ·  no ground within %.0f m  ·  %s", params.laser_reach, stock_txt)
+    reticle_set("none", "no ground")
     return nil
   end
   local nx, ny, nz = h.nx or 0, h.ny or 1, h.nz or 0
@@ -1436,6 +1525,8 @@ local function fire_fill(node, dt, firing)
   if near then bad = "too close — you would bury yourself"
   elseif not rock and fill_credit <= 0 then bad = "the canister is empty — dig some rock first" end
   prompt = "FILL  ·  " .. (bad or "hold LMB to lay rock") .. "  ·  " .. stock_txt
+  reticle_set(bad and "full" or "fill", bad or (fill_credit > 0 and string.format("lay rock  ·  %d bites", fill_credit)
+    or (rock and ("lay " .. mats.label(rock)) or "canister empty")))
   if firing and not bad then
     charge = math.min(1.0, charge + dt / math.max(0.01, params.spin))
     if time - last_t >= params.laser_rate then
@@ -1452,7 +1543,7 @@ local function fire_fill(node, dt, firing)
         if math.random() < 0.35 then play(SFX.fill, { track = "SFX", volume = 0.35, pitch = 0.8 + math.random() * 0.3 }) end
       end
     end
-    show_beam(h, charge, "fill")
+    show_beam(h, charge, "fill", { nx = nx, ny = ny, nz = nz })
     publish_shake(0.03 + charge * 0.04)
     recoil = recoil + dt * 0.05
   else
@@ -1484,9 +1575,10 @@ end
 --
 -- E is only the cut's while nothing else wants it: at a building's door or a
 -- crate to recover, E is theirs (facility_menu / salvage prompting()).
-local saw = nil        -- { p, pid, work, need, name, lost }
+local saw = nil        -- { p, pid, work, need, name, lost, keep }
 local saw_look = nil   -- the last field query { t, dx, dy, dz, p }
-local function saw_reset() saw, saw_look = nil, nil end
+local saw_end = nil    -- the beam's end, eased, in the planet's frame
+local function saw_reset() saw, saw_look, saw_end = nil, nil, nil end
 
 -- Who else E belongs to right now, or nil.
 local function e_taken()
@@ -1502,6 +1594,39 @@ function sawState()
   return saw and string.format("%s %.0f%%", saw.name, 100 * saw.work / saw.need) or "idle"
 end
 
+-- Is the aim line still on this plant's body? (the lock's test: its whole
+-- girth plus a little slack, anywhere up its axis)
+local function on_plant(ff, q, ox, oy, oz, dx, dy, dz, t1, slack)
+  local g, t, sa = ff.axisDistance(ox, oy, oz, dx, dy, dz, 0, t1, q.x, q.y, q.z, q.ux, q.uy, q.uz, q.height)
+  local gr = (ff.girthOf and q.rec and ff.girthOf(q.rec.sp, q.height, sa, params.saw_grab)) or params.saw_grab
+  return g <= gr + (slack or 0.3) and t > 0, t, sa
+end
+
+-- The beam's end, eased: it slides between the plant and the ground behind it
+-- instead of jumping. Held in the planet's frame.
+local function ease_end(x, y, z, dt, rate)
+  local b = to_body({ x = x, y = y, z = z })
+  local e = saw_end
+  if e and e.body == b.body and len(e.x - b.x, e.y - b.y, e.z - b.z) < 4.0 then
+    local k = 1 - math.exp(-(rate or 22) * dt)
+    e.x, e.y, e.z = e.x + (b.x - e.x) * k, e.y + (b.y - e.y) * k, e.z + (b.z - e.z) * k
+  else
+    saw_end = b
+  end
+  local w = to_world(saw_end)
+  return w.x, w.y, w.z
+end
+
+-- What a harvest gave, as a line: "+2 Timber, +1 Plant Fiber".
+local function got_line(got)
+  local mats = ref("materials")
+  local parts = {}
+  for _, g in ipairs(got or {}) do
+    parts[#parts + 1] = string.format("+%d %s", g.n, (mats and mats.label(g.mat)) or g.mat)
+  end
+  return table.concat(parts, ", ")
+end
+
 local function fire_cut(node, dt)
   local ox, oy, oz, dx, dy, dz = aim_ray(node)
   aimMat, aimDepth = nil, 0
@@ -1511,14 +1636,30 @@ local function fire_cut(node, dt)
   -- The beam stops at the ground (or a hull): never past it, never into it.
   local gh = ray_hit(node, ox, oy, oz, dx, dy, dz, params.saw_reach)
   local stop_t = gh and len(gh.x - ox, gh.y - oy, gh.z - oz) or (back + params.saw_reach)
-  -- The plant: the one being cut while the line still crosses it, else ask.
-  local p = nil
+  -- THE LOCK: the plant being cut stays the target while the line crosses its
+  -- body, and for `lock_grace` after it leaves; only then is the field asked
+  -- again. A locked plant is never swapped for a neighbour.
+  local p, held = nil, false
   if saw and ff and ff.axisDistance then
     local q = saw.p
-    local g, t = ff.axisDistance(ox, oy, oz, dx, dy, dz, 0, stop_t + 1.0, q.x, q.y, q.z, q.ux, q.uy, q.uz, q.height)
-    if g <= saw.keep and t > 0 and len(q.x - node.x, q.y - node.y, q.z - node.z) <= params.saw_reach + 0.5 then
-      p = q
+    -- The plant's place is kept in the PLANET's frame: a world point held
+    -- across frames is metres off within one on an orbiting world, which is
+    -- what broke the old lock every frame it was tested.
+    local wr, wa = to_world(saw.rb), to_world(saw.ab)
+    q.x, q.y, q.z, q.ax, q.ay, q.az = wr.x, wr.y, wr.z, wa.x, wa.y, wa.z
+    local on, t = on_plant(ff, q, ox, oy, oz, dx, dy, dz, stop_t + 1.0, 0.35)
+    local near = len(q.x - node.x, q.y - node.y, q.z - node.z) <= params.saw_reach + 1.0
+    if on and near then
+      p, saw.lost = q, nil
       p.t = t
+    else
+      saw.lost = saw.lost or time
+      if time - saw.lost <= params.lock_grace then
+        p, held = q, true
+        p.t = math.min(t, stop_t)
+      else
+        saw = nil
+      end
     end
   end
   if not p and ff and ff.nearestPlant then
@@ -1527,7 +1668,7 @@ local function fire_cut(node, dt)
       p = lk.p
     else
       p = ff.nearestPlant(ox, oy, oz, dx, dy, dz, params.saw_reach + back, 2.0, params.saw_grab,
-        { from = { x = node.x, y = node.y, z = node.z }, reach = params.saw_reach, crown = 2.5 })
+        { from = { x = node.x, y = node.y, z = node.z }, reach = params.saw_reach, crown = 4.0 })
       saw_look = { t = time, dx = dx, dy = dy, dz = dz, p = p }
     end
     if p and (p.t or 0) > stop_t + 1.0 then p = nil end   -- behind the ground
@@ -1535,7 +1676,8 @@ local function fire_cut(node, dt)
   -- Power: the laser's spin-up and heat, as the dig.
   -- (heat builds only while it bites, as the dig's does on rock)
   charge = math.min(1.0, charge + dt / math.max(0.01, params.spin))
-  if p then heat = math.min(1.0, heat + dt / math.max(0.5, params.heat_time))
+  local biting = p ~= nil and not held
+  if biting then heat = math.min(1.0, heat + dt / math.max(0.5, params.heat_time))
   else heat = math.max(0.0, heat - dt / math.max(0.5, params.cool_time)) end
   local throttle = 1.0 - 0.45 * heat
   local inv = ref("inventory")
@@ -1543,61 +1685,61 @@ local function fire_cut(node, dt)
   local hot = heat > 0.6 and "  ·  HOT — cutting slower" or ""
   local ex, ey, ez
   if p then
-    if not saw or saw.pid ~= p.pid then
+    if not saw then
       saw = { p = p, pid = p.pid, work = 0, name = p.rec.sp.name,
               need = math.max(0.3, (p.rec.sp.work or 1) * params.saw),
-              keep = math.max(params.saw_grab, (p.gap or 0) + 0.3) + 0.4 }
+              rb = to_body({ x = p.x, y = p.y, z = p.z }), ab = to_body({ x = p.ax or p.x, y = p.ay or p.y, z = p.az or p.z }) }
+      play(SFX.mode, { track = "SFX", volume = 0.25, pitch = 1.6 })   -- the lock: a click
     end
-    saw.lost = nil
-    saw.work = saw.work + dt * charge * throttle
+    if biting then saw.work = saw.work + dt * charge * throttle end
     progress = math.min(1, saw.work / saw.need)
     local t = p.t or len(p.x - ox, p.y - oy, p.z - oz)
-    ex, ey, ez = ox + dx * t, oy + dy * t, oz + dz * t
+    ex, ey, ez = ease_end(ox + dx * t, oy + dy * t, oz + dz * t, dt, 26)
     aimDist, aimX, aimY, aimZ = len(ex - node.x, ey - node.y, ez - node.z), ex, ey, ez
     plant_req = { h = to_body({ x = p.x, y = p.y, z = p.z }), ready = true, height = p.height,
-                  ux = p.ux, uy = p.uy, uz = p.uz }
-    local fx = ref("vfx")
-    if fx and fx.cut then fx.cut(ex, ey, ez) end
+                  ux = p.ux, uy = p.uy, uz = p.uz, sp = p.rec and p.rec.sp, work = progress }
+    if biting then
+      local fx = ref("vfx")
+      if fx and fx.cut and math.random() < dt * 4 then fx.cut(ex, ey, ez) end
+      if ff.sawAt then ff.sawAt(p.x, p.y, p.z, 0.45 + 0.55 * progress) end
+    end
     prompt = string.format("CUT  ·  %s  %d%%%s  ·  %s", saw.name, math.floor(progress * 100 + 0.5), hot, pack)
+    reticle_set("cut", string.format("%s  ·  %d%%", saw.name, math.floor(progress * 100 + 0.5)))
     if saw.work >= saw.need then
       local got, dropped = {}, 0
       if ff and ff.harvest then got, dropped = ff.harvest(p, "astro") end
-      local mats = ref("materials")
-      local parts = {}
-      for _, g in ipairs(got) do
-        parts[#parts + 1] = string.format("%s ×%d", (mats and mats.label(g.mat)) or g.mat, g.n)
-      end
       local stays = p.rec.rare and #got == 0
       if stays then
         say("PACK FULL — no room for the " .. saw.name .. "; it stays where it is")
         play(SFX.denied, { track = "UI", volume = 0.5 })
       else
-        say(#parts > 0 and ("cut " .. saw.name .. ": " .. table.concat(parts, ", ") .. (dropped > 0 and "  (pack full)" or ""))
+        local line = got_line(got)
+        say(line ~= "" and ("cut " .. saw.name .. ": " .. line .. (dropped > 0 and "  (pack full)" or ""))
           or "pack full — nothing taken")
         local fell = ff and ff.fell and ff.fell(p, dx, dy, dz)
+        local fx = ref("vfx")
         if not fell and fx and fx.harvest then fx.harvest(p.x, p.y, p.z, p.height) end
+        -- what it gave flies into the pack, from where the beam bit it
+        collect_fx(p.ax or ex, p.ay or ey, p.az or ez, line ~= "" and line or (dropped > 0 and "pack full" or nil))
         play(SFX.pickup, { track = "SFX", volume = 0.5 })
         recoil = recoil + 0.02
       end
       saw, saw_look, progress = nil, nil, 0
     end
   else
-    -- Off the plant for a moment keeps its progress; a while, and it's lost.
-    if saw then
-      saw.lost = saw.lost or time
-      if time - saw.lost > 0.6 then saw = nil end
-    end
-    progress = saw and math.min(1, saw.work / saw.need) or 0
+    progress = 0
     local t = math.min(stop_t, back + params.saw_reach)
-    ex, ey, ez = ox + dx * t, oy + dy * t, oz + dz * t
+    ex, ey, ez = ease_end(ox + dx * t, oy + dy * t, oz + dz * t, dt, 26)
     aimDist, aimX, aimY, aimZ = len(ex - node.x, ey - node.y, ez - node.z), ex, ey, ez
-    prompt = string.format("CUT  ·  no plant on the beam within %.0f m  ·  sweep it through a stem%s  ·  %s",
+    prompt = string.format("CUT  ·  no plant on the beam within %.0f m  ·  sweep it through a plant%s  ·  %s",
       params.saw_reach, hot, pack)
+    reticle_set("cut", "no plant on the beam")
   end
-  show_beam({ x = ex, y = ey, z = ez }, charge, "cut", { onPlant = p ~= nil })
-  publish_shake(p and (0.02 + charge * 0.03) or 0.01)
-  hum_on(SFX.hum, 0.08 + charge * 0.2, 1.25 + charge * 0.3 + (p and 0.15 or 0))
-  if p and math.random() < dt * 8 then recoil = recoil + 0.003 end
+  show_beam({ x = ex, y = ey, z = ez }, charge, "cut", { onPlant = biting, dx = dx, dy = dy, dz = dz })
+  publish_shake(biting and (0.02 + charge * 0.03) or 0.01)
+  -- The hum pitches up as it bites, and climbs with the cut.
+  hum_on(SFX.hum, 0.08 + charge * 0.2, 1.25 + charge * 0.3 + (biting and (0.15 + 0.3 * progress) or 0))
+  if biting and math.random() < dt * 8 then recoil = recoil + 0.003 end
 end
 
 -- ── the gravity gun ─────────────────────────────────────────────────────────
@@ -1640,7 +1782,13 @@ end
 
 local function name_of(n, kind)
   if not n then return "?" end
-  if n:hasTag("loose_rock") then return "Loose Rock" end
+  local w = worth_of(n)
+  if w and w.label then return w.label end
+  if n.hasTag then
+    if n:hasTag("can") then return "Supply Crate" end
+    if n:hasTag("crate") then return "Cargo Canister" end
+    if n:hasTag("cone") then return "Traffic Cone" end
+  end
   local vc = n.getScript and n:getScript("vessel_controller")
   if vc and vc.craftName then return vc.craftName end
   local nm = n.name or "object"
@@ -1648,27 +1796,81 @@ local function name_of(n, kind)
   return nm
 end
 
+-- Is this a wreck the depot takes back for scrap? Anything the gun can hold
+-- that is not worth something in itself (a rock, a log), not one of the
+-- base's own props, and not a craft under control.
+local function is_debris(n)
+  if not n or worth_of(n) then return false end
+  if n.hasTag and n:hasTag("prop") then return false end
+  local vc = n.getScript and n:getScript("vessel_controller")
+  if vc and vc.craftName then return false end
+  return true
+end
+
+local function mass_txt(m)
+  return m >= 1 and string.format("%.1f t", m) or string.format("%.0f kg", m * 1000)
+end
+
+-- The Commerce Depot's intake: where it stands (world), looked up seldom.
+local depot = { n = nil, t = -10 }
+local function depot_pos()
+  if not (depot.n and depot.n.valid) and time - depot.t > 2.0 then
+    depot.t = time
+    depot.n = find("FacDepot")
+  end
+  local d = depot.n
+  if not (d and d.valid) then return nil end
+  local w = d.worldPos
+  if w then return w.x, w.y, w.z end
+  return d.x, d.y, d.z
+end
+local function in_intake(x, y, z)
+  local dx, dy, dz = depot_pos()
+  if not dx then return false end
+  return len(x - dx, y - dy, z - dz) <= params.intake
+end
 
 -- Where the held point is, in the world, now (and the node's pose answer).
 local function grab_world(g)
   if not (g and g.node and g.node.valid) then return nil end
+  if not g.lp then return g.node.x, g.node.y, g.node.z end
   local w = g.node:toWorld(vec3(g.lp.x, g.lp.y, g.lp.z))
   return w.x, w.y, w.z
 end
 
 lastRelease = nil   -- why the gravity gun last let go (probes read it)
-local function release(why_, quiet_)
+lastTry = nil       -- what the trigger last found (probes read it)
+tries = nil         -- the first few tries (probes read it)
+grabFrames = 0      -- frames something was held (probes read it)
+-- `gone`: the thing is being destroyed (stowed, deposited), so no fizzle on it.
+local function release(why_, quiet_, gone)
   if grab then lastRelease = why_ or (quiet_ and "quiet") or "trigger up" end
-  if grab and grab.kind ~= "plant" and not quiet_ then
-    play(SFX.drop, { track = "SFX", volume = 0.45, pitch = 0.9 + math.random() * 0.2 })
+  if grab and grab.kind ~= "plant" then
+    local n = grab.node
+    if n and n.valid and n.setTint then pcall(n.setTint, n) end   -- the shell off
+    if not gone and grab.kind ~= "pending" and spawnEffect then
+      local gx, gy, gz = grab_world(grab)
+      if gx then spawnEffect("GravFizzle", vec3(gx, gy, gz)) end
+    end
+    if not quiet_ then play(SFX.drop, { track = "SFX", volume = 0.45, pitch = 0.9 + math.random() * 0.2 }) end
   end
   grab, holding, strain, wantsScroll = nil, nil, 0.0, false
   hum_off()
   if why_ then say(why_) end
 end
 
+-- The rocks of the mineral field the gun pulls out of the ground as bodies.
+local ROCK_KINDS = { stone = true, boulder = true, crystal = true }
+local ROCK_PREFAB = { stone = "LooseRock", boulder = "LooseBoulder", crystal = "LooseCrystal" }
+local ROCK_MASS = { stone = 0.09, boulder = 0.9, crystal = 0.16 }
+local ROCK_NAME = { stone = "Stone", boulder = "Boulder", crystal = "Crystal Outcrop" }
+
+-- WHAT IS UNDER THE AIM: a body (an assembly or a rigidbody), a planted relay
+-- beacon, a salvage crate, a rock of the mineral field, a plant — in that
+-- order — or nil and why not.
 local function try_grab(node, ox, oy, oz, dx, dy, dz)
   local h = ray_hit(node, ox, oy, oz, dx, dy, dz, params.grav_reach)
+  local ht = h and len(h.x - ox, h.y - oy, h.z - oz) or nil
   if h and h.node then
     local n, kind, inf = dynamic_of(h.node)
     if n and n.id ~= node.id then
@@ -1678,6 +1880,53 @@ local function try_grab(node, ox, oy, oz, dx, dy, dz)
       return { kind = kind, node = n, lp = lp, dist = d, mass = inf.mass or 0.1, name = name_of(n, kind),
                ox = h.x - node.x, oy = h.y - node.y, oz = h.z - node.z, stretch = 0, t0 = time }, nil, h
     end
+    -- A planted relay beacon (a static body; its prefab's tag says so).
+    local k, m = 0, h.node
+    while m and m.valid ~= false and k < 6 do
+      if m.hasTag and m:hasTag("RelayBeacon") then
+        local net = ref("comms")
+        local near = net and net.beaconNear and net.beaconNear(h.x, h.y, h.z, 3.5)
+        if near then return { kind = "beacon", beacon = near, name = near.name, t0 = time,
+                              x = near.gx, y = near.gy, z = near.gz }, nil, h end
+      end
+      m = m.parent
+      k = k + 1
+    end
+  end
+  -- A salvage crate on the line (no collider: by where it lies).
+  local sv = ref("salvage")
+  if sv and sv.list then
+    for _, e in ipairs(sv.list()) do
+      if e.x then
+        local wx, wy, wz = e.x - ox, e.y - oy, e.z - oz
+        local t = wx * dx + wy * dy + wz * dz
+        if t > 0 and (not ht or t < ht + 0.8) and len(wx - dx * t, wy - dy * t, wz - dz * t) < 1.1
+          and len(e.x - node.x, e.y - node.y, e.z - node.z) <= params.grav_reach then
+          return { kind = "crate", crate = e, name = "Salvage Crate", t0 = time, x = e.x, y = e.y, z = e.z }, nil, h
+        end
+      end
+    end
+  end
+  -- A rock in the ground the line passes through: a stone, a boulder or a
+  -- crystal of the mineral field (scattered, so no collider: the line against
+  -- each rock's own ball, the nearest first, then its record for the pluck).
+  local mf = ref("mineral_field")
+  if mf and mf.rocksNear then
+    local best, bt = nil, nil
+    for _, rk in ipairs(mf.rocksNear(node.x, node.y, node.z, params.grav_reach)) do
+      local wx, wy, wz = rk.x - ox, rk.y - oy, rk.z - oz
+      local t = wx * dx + wy * dy + wz * dz
+      if t > 0 and (not ht or t < ht + rk.r + 0.5) and (not bt or t < bt)
+        and len(wx - dx * t, wy - dy * t, wz - dz * t) <= rk.r + 0.25 then
+        best, bt = rk, t
+      end
+    end
+    local rec = best and ((mf.rockRecord and mf.rockRecord(best)) or mf.nearest(best.x, best.y, best.z, 1.0, ROCK_KINDS))
+    if rec and rec.kind and ROCK_KINDS[rec.kind.id] then
+      local sc = rec.scale or 1
+      return { kind = "rock", rock = rec, name = ROCK_NAME[rec.kind.id] or "Rock", mass = (ROCK_MASS[rec.kind.id] or 0.1) * sc,
+               t0 = time, x = rec.pos.x, y = rec.pos.y, z = rec.pos.z }, nil, h
+    end
   end
   -- No body: a plant? (scattered plants have no colliders)
   local ff = ref("flora_field")
@@ -1686,7 +1935,7 @@ local function try_grab(node, ox, oy, oz, dx, dy, dz)
     -- The reach is the CREW's (opt.from): only the part of the line near the
     -- crew is searched, whichever camera it starts from.
     local p = ff.nearestPlant(ox, oy, oz, dx, dy, dz, params.cut_reach + back, 2.0, params.cut_grab,
-      { from = { x = node.x, y = node.y, z = node.z }, reach = params.cut_reach })
+      { from = { x = node.x, y = node.y, z = node.z }, reach = params.cut_reach, crown = 4.0 })
     if p and p.rec and len(p.x - node.x, p.y - node.y, p.z - node.z) <= params.cut_reach then
       -- Only if the line meets the plant before the ground it hits: the aim
       -- must pass through the plant, not through the hill behind it. (Along
@@ -1700,18 +1949,126 @@ local function try_grab(node, ox, oy, oz, dx, dy, dz)
   return nil, h and "nothing loose there — it's part of the ground" or "nothing in reach", h
 end
 
+-- The shell of light on what is held (the engine's rim tint; a scatter
+-- instance has none, which is why a plant gets motes instead).
+local function shell_on(n)
+  if n and n.valid and n.setTint then pcall(n.setTint, n, { rim = { 0.55, 0.9, 1.0 }, rimStrength = 1.1 }) end
+end
+
+-- Pull a rock out of the ground: the field loses the instance, a body of its
+-- kind stands up in its place and the gun has it the moment physics does.
+local function pluck_rock(node, cand, h)
+  local mf = ref("mineral_field")
+  local rk = cand.rock
+  local kind = mf and mf.pluck and mf.pluck(rk)
+  if not (kind and spawn) then return false end
+  local ux, uy, uz = gravity_at(rk.pos.x, rk.pos.y, rk.pos.z)
+  local sc = rk.scale or 1
+  local lift = 0.3 + 0.25 * sc
+  local px, py, pz = rk.pos.x + ux * lift, rk.pos.y + uy * lift, rk.pos.z + uz * lift
+  local fx = ref("vfx")
+  if fx and fx.oreBreak then fx.oreBreak(rk.pos.x, rk.pos.y, rk.pos.z, ux, uy, uz) end
+  play(SFX.ore .. tostring(math.floor(math.random() * 5)) .. ".ogg", { track = "SFX", volume = 0.6, pitch = 0.7 + math.random() * 0.2 })
+  local mats = ref("materials")
+  local label = cand.name
+  grab = { kind = "pending", name = label, mass = cand.mass, t0 = time, x = px, y = py, z = pz }
+  holding = { name = label, mass = cand.mass, strain = 0, kind = "asm" }
+  spawn(ROCK_PREFAB[kind.id] or "LooseRock", vec3(px, py, pz), function(n)
+    set_worth(n, kind.mat, kind.yield or 1, label)
+    n:setAngles(math.random() * 6.28, (rk.yaw or 0), math.random() * 0.4)
+    if kind.id == "stone" and sc ~= 1 then n.scale = math.max(0.7, math.min(1.6, sc)) end
+    local function take(r)
+      if not (grab and grab.kind == "pending") then return end
+      local inf = assembly and assembly.info and assembly.info(n)
+      grab = { kind = "asm", node = n, lp = vec3(0, 0, 0), dist = math.max(params.grav_min, math.min(params.grav_max,
+                len(px - node.x, py - node.y, pz - node.z))), mass = (inf and inf.mass) or cand.mass, name = label,
+               ox = px - node.x, oy = py - node.y, oz = pz - node.z, stretch = 0, t0 = time }
+      shell_on(n)
+    end
+    if assembly and assembly.rebuild then assembly.rebuild(n, take) else take(n) end
+  end)
+  return true
+end
+
+-- E while holding: STOW it, if it is worth something and the pack has room.
+local function stow_held(node)
+  local n = grab.node
+  local w = worth_of(n)
+  local inv, mats = ref("inventory"), ref("materials")
+  if not w then
+    say(is_debris(n) and ("the " .. grab.name .. " won't fit in the pack — drop it at the depot to recycle it")
+      or ("the " .. grab.name .. " is the base's — put it back"))
+    play(SFX.denied, { track = "UI", volume = 0.45 })
+    return
+  end
+  if not inv then return end
+  local took = inv.add("astro", w.mat, w.n)
+  if took <= 0 then
+    say("PACK FULL — " .. inv.line("astro"))
+    play(SFX.denied, { track = "UI", volume = 0.5 })
+    return
+  end
+  local gx, gy, gz = grab_world(grab)
+  local line = string.format("+%d %s", took, (mats and mats.label(w.mat)) or w.mat)
+  release(nil, true, true)
+  if gx then collect_fx(gx, gy, gz, line) end
+  say("stowed: " .. line)
+  play(SFX.pickup, { track = "SFX", volume = 0.5 })
+  if n and n.valid then n:destroy() end
+  need_release = true
+end
+
+-- Let go inside the depot's intake: rocks and logs go into the warehouse,
+-- a wreck is recycled for scrap money. Returns true when it took the thing.
+local function intake_take(g)
+  local n = g.node
+  if not (n and n.valid) then return false end
+  local gx, gy, gz = grab_world(g)
+  if not (gx and in_intake(gx, gy, gz)) then return false end
+  local inv, mats, co = ref("inventory"), ref("materials"), ref("company")
+  local w = worth_of(n)
+  local line
+  if w and inv then
+    local took = inv.add("base", w.mat, w.n)
+    if took <= 0 then say("the warehouse is full") return false end
+    line = string.format("+%d %s → warehouse", took, (mats and mats.label(w.mat)) or w.mat)
+  elseif is_debris(n) and co and co.earn then
+    local kg = (g.mass or 0.1) * 1000
+    local cash = math.max(1, math.floor(kg * params.scrap_rate))
+    co.earn(cash, "debris recycled")
+    line = string.format("recycled the %s  ·  +%s", g.name, (co.money and co.money(cash)) or ("$" .. cash))
+  else
+    return false
+  end
+  local dx, dy, dz = depot_pos()
+  local fx = ref("vfx")
+  if fx and fx.collect and dx then fx.collect(gx, gy, gz, dx, dy + 3, dz) end
+  if fx and fx.oreBreak then fx.oreBreak(gx, gy, gz) end
+  collected_say(line)
+  say(line)
+  play(SFX.pickup, { track = "SFX", volume = 0.5 })
+  lastIntake = line
+  release(nil, true, true)
+  n:destroy()
+  return true
+end
+lastIntake = nil   -- the depot's last take (probes read it)
+
 -- Every frame while the gun is out.
+local grav_idle_req = false
 local function fire_grav(node, dt, firing)
   local ox, oy, oz, dx, dy, dz = aim_ray(node)
   if not ox then release() show_beam(nil) return end
   local back = len(node.x - ox, node.y - oy, node.z - oz)
   aimMat, aimDepth = nil, 0
   if grab and not firing then
-    release()
+    if grab.kind == "asm" or grab.kind == "body" then intake_take(grab) end
+    if grab then release() end
   end
   if not grab then
     wantsScroll = false
     show_beam(nil)
+    grav_idle_req = true
     -- What the crosshair is over, before the click. Asked ten times a second
     -- while idle (a plant query walks every flora source in reach), and on
     -- the frame the trigger goes down.
@@ -1726,27 +2083,77 @@ local function fire_grav(node, dt, firing)
     if h then aimDist, aimX, aimY, aimZ = h.range, h.x, h.y, h.z else aimDist, aimX, aimY, aimZ = nil, nil, nil, nil end
     if cand and cand.kind == "plant" then
       prompt = string.format("GRAVITY GUN  ·  %s  ·  hold LMB to uproot it", cand.name)
+      reticle_set("plant", cand.name .. "  ·  hold LMB: uproot")
       plant_req = { h = to_body({ x = cand.plant.x, y = cand.plant.y, z = cand.plant.z }), ready = false,
-                    height = cand.plant.height, ux = cand.plant.ux, uy = cand.plant.uy, uz = cand.plant.uz }
+                    height = cand.plant.height, ux = cand.plant.ux, uy = cand.plant.uy, uz = cand.plant.uz,
+                    sp = cand.plant.rec and cand.plant.rec.sp, work = 0 }
+    elseif cand and cand.kind == "beacon" then
+      prompt = string.format("GRAVITY GUN  ·  %s  ·  hold LMB to pull it up", cand.name)
+      reticle_set("grab", cand.name .. "  ·  hold LMB: pull up")
+    elseif cand and cand.kind == "crate" then
+      prompt = "GRAVITY GUN  ·  Salvage Crate  ·  hold LMB to pull the pack's contents out"
+      reticle_set("grab", "Salvage Crate  ·  hold LMB: open")
     elseif cand then
       local _, _, _, g = gravity_at(node.x, node.y, node.z)
       local lift = (cand.mass * g) / math.max(0.01, params.grav_force)
-      prompt = string.format("GRAVITY GUN  ·  %s  ·  %s  ·  %s", cand.name,
-        cand.mass >= 1 and string.format("%.1f t", cand.mass) or string.format("%.0f kg", cand.mass * 1000),
+      local verb = cand.kind == "rock" and "pull it out" or "grab"
+      prompt = string.format("GRAVITY GUN  ·  %s  ·  %s  ·  %s", cand.name, mass_txt(cand.mass),
         lift > 2.5 and "far too heavy for the gun — it will only strain"
-          or (lift > 1 and "too heavy to lift — you can drag it" or "hold LMB to grab"))
+          or (lift > 1 and ("too heavy to lift — you can drag it  ·  hold LMB to " .. verb) or ("hold LMB to " .. verb)))
+      reticle_set(lift > 1 and "heavy" or "grab", string.format("%s  ·  %s  ·  hold LMB: %s", cand.name, mass_txt(cand.mass),
+        lift > 2.5 and "strain" or (lift > 1 and "drag" or verb)))
     else
       prompt = "GRAVITY GUN  ·  " .. (why_ or "nothing in reach") .. "  ·  aim at something loose and hold LMB"
+      reticle_set("none", why_ or "nothing in reach")
     end
     if not firing then need_release = false end
     if firing and not need_release and time - grab_try_t > 0.25 then
       grab_try_t = time
-      if cand then
+      -- for probes: what the trigger found
+      lastTry = { t = time, hit = h and h.node and h.node.name or (h and "ground" or "nothing"), range = h and h.range,
+                  cand = cand and cand.kind, name = cand and cand.name, why = why_,
+                  ox = ox, oy = oy, oz = oz, dx = dx, dy = dy, dz = dz, cx = node.x, cy = node.y, cz = node.z, fp = first_person() }
+      tries = tries or {}
+      if #tries < 4 then tries[#tries + 1] = lastTry end
+      if cand and cand.kind == "beacon" then
+        local inv, net = ref("inventory"), ref("comms")
+        if inv and inv.addGear("astro", "beacon", 1) < 1 then
+          say("PACK FULL — no room to carry the beacon")
+          play(SFX.denied, { track = "UI", volume = 0.5 })
+        elseif net then
+          net.removeBeacon(cand.beacon.id)
+          collect_fx(cand.x, cand.y, cand.z, "+1 Relay Beacon")
+          say(cand.name .. " pulled up")
+          play(SFX.pickup, { track = "UI", volume = 0.5 })
+        end
+        need_release = true
+      elseif cand and cand.kind == "crate" then
+        local sv = ref("salvage")
+        local moved, left = 0, 0
+        if sv and sv.recover then moved, left = sv.recover(cand.crate.id) end
+        if moved <= 0 and left > 0 then
+          say(string.format("no room in the pack — %.0f kg still in the crate", left))
+          play(SFX.denied, { track = "UI", volume = 0.5 })
+        else
+          collect_fx(cand.x, cand.y, cand.z, string.format("+%.0f kg recovered", moved))
+          say(left > 0 and string.format("%.0f kg back in the pack · %.0f kg won't fit", moved, left)
+            or string.format("suit pack recovered · %.0f kg", moved))
+          play(SFX.pickup, { track = "SFX", volume = 0.5 })
+        end
+        need_release = true
+      elseif cand and cand.kind == "rock" then
+        if not pluck_rock(node, cand, h) then
+          play(SFX.dry, { track = "SFX", volume = 0.35, pitch = 1.4 })
+          say("it won't come loose")
+        end
+        recoil = recoil + 0.02
+      elseif cand then
         grab = cand
         if cand.kind ~= "plant" then
           holding = { name = cand.name, mass = cand.mass, strain = 0, kind = cand.kind }
           play(SFX.grab, { track = "SFX", volume = 0.55, pitch = 1.1 - math.min(0.4, cand.mass) })
           if h then spawnEffect("Sparks", vec3(h.x, h.y, h.z), { normal = vec3(h.nx or 0, h.ny or 1, h.nz or 0), intensity = 0.4, scale = 0.5 }) end
+          shell_on(cand.node)
           recoil = recoil + 0.015
         end
       else
@@ -1759,8 +2166,26 @@ local function fire_grav(node, dt, firing)
   end
 
   -- ── holding ──
+  if grab.kind == "pending" then
+    -- a plucked rock, its body not up yet: the beam reaches for its place
+    if time - grab.t0 > 1.5 then release("it won't come loose", true) show_beam(nil) return end
+    aimDist, aimX, aimY, aimZ = len(grab.x - node.x, grab.y - node.y, grab.z - node.z), grab.x, grab.y, grab.z
+    show_beam({ x = grab.x, y = grab.y, z = grab.z }, 0.6, "pending", { aimx = dx, aimy = dy, aimz = dz })
+    hum_on(SFX.hold, 0.15, 0.9)
+    prompt = string.format("PULLING the %s loose…", grab.name)
+    reticle_set("hold", grab.name)
+    return
+  end
   if grab.kind == "plant" then
     local p = grab.plant
+    -- its place, in the planet's frame (see THE CUT: a world point goes stale)
+    if not grab.rb then
+      grab.rb = to_body({ x = p.x, y = p.y, z = p.z })
+      grab.ab = to_body({ x = p.ax or p.x, y = p.ay or p.y, z = p.az or p.z })
+    else
+      local wr, wa = to_world(grab.rb), to_world(grab.ab)
+      p.x, p.y, p.z, p.ax, p.ay, p.az = wr.x, wr.y, wr.z, wa.x, wa.y, wa.z
+    end
     grab.work = grab.work + dt
     progress = math.min(1, grab.work / grab.need)
     aimDist, aimX, aimY, aimZ = len(p.x - node.x, p.y - node.y, p.z - node.z), p.x, p.y, p.z
@@ -1772,25 +2197,23 @@ local function fire_grav(node, dt, firing)
     show_beam({ x = mx + (math.random() - 0.5) * q, y = my + (math.random() - 0.5) * q, z = mz + (math.random() - 0.5) * q },
       0.5 + progress * 0.5, "plant")
     plant_req = { h = to_body({ x = p.x, y = p.y, z = p.z }), ready = true, height = p.height,
-                  ux = p.ux, uy = p.uy, uz = p.uz }
-    hum_on(SFX.hold, 0.12 + progress * 0.2, 0.8 + progress * 0.6)
+                  ux = p.ux, uy = p.uy, uz = p.uz, sp = p.rec and p.rec.sp, work = progress }
+    hum_on(SFX.hold, 0.12 + progress * 0.2, 0.8 + progress * 0.7)
     local fx = ref("vfx")
-    if fx and fx.cut then fx.cut(mx, my, mz) end
+    local ff = ref("flora_field")
+    if fx and fx.cut and math.random() < dt * 4 then fx.cut(mx, my, mz) end
+    if ff and ff.sawAt then ff.sawAt(p.x, p.y, p.z, 0.4 + 0.6 * progress) end
     local inv = ref("inventory")
     prompt = string.format("UPROOTING %s  %d%%  ·  %s", grab.name, math.floor(progress * 100 + 0.5),
       inv and inv.line("astro") or "")
+    reticle_set("plant", string.format("%s  ·  %d%%", grab.name, math.floor(progress * 100 + 0.5)))
     if grab.work >= grab.need then
-      local ff = ref("flora_field")
       local got, dropped = {}, 0
       if ff and ff.harvest then got, dropped = ff.harvest(p, "astro") end
-      local mats = ref("materials")
-      local parts = {}
-      for _, g in ipairs(got) do
-        parts[#parts + 1] = string.format("%s ×%d", (mats and mats.label(g.mat)) or g.mat, g.n)
-      end
-      say(#parts > 0 and table.concat(parts, ", ") .. (dropped > 0 and "  (pack full)" or "")
-        or "pack full — nothing taken")
+      local line = got_line(got)
+      say(line ~= "" and line .. (dropped > 0 and "  (pack full)" or "") or "pack full — nothing taken")
       if fx and fx.harvest then fx.harvest(p.x, p.y, p.z, p.height) end
+      collect_fx(mx, my, mz, line ~= "" and line or (dropped > 0 and "pack full" or nil))
       play(SFX.pickup, { track = "SFX", volume = 0.5 })
       recoil = recoil + 0.02
       grab, progress = nil, 0
@@ -1800,7 +2223,7 @@ local function fire_grav(node, dt, firing)
     return
   end
 
-  if not (grab.node and grab.node.valid) then release("it's gone") show_beam(nil) return end
+  if not (grab.node and grab.node.valid) then release("it's gone", true, true) show_beam(nil) return end
   -- Hold distance: the wheel, while the gun has something.
   wantsScroll = true
   local s = scroll()
@@ -1815,11 +2238,21 @@ local function fire_grav(node, dt, firing)
   aimDist, aimX, aimY, aimZ = len(gx - node.x, gy - node.y, gz - node.z), gx, gy, gz
   holding = holding or {}
   holding.name, holding.mass, holding.strain, holding.kind = grab.name, grab.mass, strain, grab.kind
+  grabFrames = grabFrames + 1
   -- Too far behind the aim for too long (snagged, or far too heavy): let go.
   if (grab.stretch or 0) > params.grav_break then
     release("lost the grip — " .. grab.name .. " is snagged or too heavy")
     show_beam(nil)
     return
+  end
+  -- E: stow it (an edge, so the key held into the next frame does nothing).
+  local e = key_e() and e_taken() == nil
+  if e and not grab.e_was then
+    grab.e_was = true
+    stow_held(node)
+    if not grab then show_beam(nil) return end
+  elseif not e and grab then
+    grab.e_was = false
   end
   -- Throw.
   if key_r() then
@@ -1833,11 +2266,16 @@ local function fire_grav(node, dt, firing)
       grab.node.vel = vec3(v.x + dx * j / m, v.y + dy * j / m, v.z + dz * j / m)
     end
     play(SFX.throw, { track = "SFX", volume = 0.6, pitch = 1.0 + math.random() * 0.1 })
-    spawnEffect("Sparks", vec3(gx, gy, gz), { intensity = 0.8, scale = 0.7 })
+    local mx, my, mz = muzzle()
+    if spawnEffect then
+      if mx then spawnEffect("GravPunt", vec3(mx + dx * 1.1, my + dy * 1.1, mz + dz * 1.1), { normal = vec3(dx, dy, dz) }) end
+      local sp = j / math.max(m, 1e-3)
+      spawnEffect("GravTrail", vec3(gx, gy, gz), { vel = vec3(dx * sp, dy * sp, dz * sp) })
+    end
     recoil = recoil + 0.06
     publish_shake(0.12)
     local nm = grab.name
-    release(nil, true)
+    release(nil, true, true)
     need_release = true
     say(string.format("threw the %s  ·  %.0f m/s", nm, j / math.max(m, 1e-3)))
     show_beam(nil)
@@ -1846,11 +2284,22 @@ local function fire_grav(node, dt, firing)
   show_beam({ x = gx, y = gy, z = gz }, 0.4 + math.min(1, strain) * 0.6, "grav", { aimx = dx, aimy = dy, aimz = dz })
   hum_on(SFX.hold, 0.10 + math.min(1, strain) * 0.25, 0.7 + math.min(1.2, strain) * 0.5)
   publish_shake(math.min(0.08, strain * 0.05))
-  local mtxt = grab.mass >= 1 and string.format("%.1f t", grab.mass) or string.format("%.0f kg", grab.mass * 1000)
   local stxt = strain >= 1.0 and "OVERLOAD — too heavy for the gun"
     or string.format("strain %d%%", math.floor(strain * 100 + 0.5))
-  prompt = string.format("HOLDING %s  ·  %s  ·  %s  ·  %.1f m  ·  scroll nearer / further  ·  R throw  ·  release to drop",
-    grab.name, mtxt, stxt, grab.dist)
+  local w = worth_of(grab.node)
+  local mats = ref("materials")
+  local use = w and string.format("  ·  E stow (+%d %s)", w.n, (mats and mats.label(w.mat)) or w.mat) or ""
+  local at = ""
+  if in_intake(gx, gy, gz) then
+    if w then at = "  ·  IN THE DEPOT'S INTAKE — let go to deposit it"
+    elseif is_debris(grab.node) then
+      at = string.format("  ·  IN THE DEPOT'S INTAKE — let go to recycle it (+$%d)", math.max(1, math.floor(grab.mass * 1000 * params.scrap_rate)))
+    end
+  end
+  prompt = string.format("HOLDING %s  ·  %s  ·  %s  ·  %.1f m  ·  scroll nearer / further  ·  R throw%s  ·  release to drop%s",
+    grab.name, mass_txt(grab.mass), stxt, grab.dist, use, at)
+  reticle_set("hold", at ~= "" and (grab.name .. "  ·  release: " .. (w and "deposit" or "recycle"))
+    or string.format("%s  ·  %s  ·  R throw%s", grab.name, stxt, w and "  ·  E stow" or ""))
   progress = math.min(1, strain)
 end
 
@@ -1977,6 +2426,7 @@ function fire_beacon(node, dt, firing)
   if near then
     prompt = string.format("Q  pick up %s  (%s)", near.name,
       near.linked and string.format("linked, %d%%", math.floor((near.strength or 0) * 100 + 0.5)) or "no link")
+    reticle_set("grab", near.name .. "  ·  Q: pick up")
     beacon_req = { pick = true, body = bname, x = near.gx - body.x, y = near.gy - body.y, z = near.gz - body.z }
     if key_q() then
       if inv.addGear("astro", "beacon", 1) < 1 then
@@ -2018,6 +2468,7 @@ function fire_beacon(node, dt, firing)
     or "links to: nothing — no relay with a path home in sight"
   prompt = bad and (bad .. "   ·   " .. links_txt)
     or (string.format("LMB plant (%d in the pack)   ·   ", carried) .. links_txt)
+  reticle_set(bad and "full" or "dig", bad or "LMB: plant a relay beacon")
   beacon_req = { body = bname, x = lx, y = ly, z = lz, R = R, ok = bad == nil, linked = p.connected, links = p.links }
   if now_down then
     if bad then
@@ -2074,14 +2525,17 @@ paint_beacon = function(req)
   local ux, uy, uz = req.x / r, req.y / r, req.z / r
   if req.pick then
     ghost(false)
-    draw.ring(x + ux * 0.1, y + uy * 0.1, z + uz * 0.1, ux, uy, uz, 1.2, 1.0, 0.78, 0.35, 0.95)
-    draw.ring(x + ux * 0.1, y + uy * 0.1, z + uz * 0.1, ux, uy, uz, 1.35, 1.0, 0.78, 0.35, 0.5)
+    fx_use("AimMark", { x = x + ux * 0.08, y = y + uy * 0.08, z = z + uz * 0.08, ux = ux, uy = uy, uz = uz,
+                        scale = 1.2 / 0.39, power = 1.0, r = 1.0, g = 0.78, b = 0.35 })
     return
   end
   ghost(true, x, y, z, ux, uy, uz, req.ok)
   local E = ref("electronics")
   local c = req.ok and (req.linked and { 0.30, 0.95, 0.80 } or { 1.0, 0.78, 0.35 }) or { 1.0, 0.38, 0.30 }
-  draw.ring(x + ux * 0.08, y + uy * 0.08, z + uz * 0.08, ux, uy, uz, 0.6, c[1], c[2], c[3], 0.9)
+  fx_use("AimMark", { x = x + ux * 0.08, y = y + uy * 0.08, z = z + uz * 0.08, ux = ux, uy = uy, uz = uz,
+                      scale = 0.6 / 0.39, power = 0.8, r = c[1], g = c[2], b = c[3] })
+  -- (the coverage ring and the link lines below are a planning overlay, the
+  -- map's kind of drawing, and stay lines)
   local reach = beacon_reach(r)
   if reach > 1 then
     local sx, sy, sz = 1 - ux * ux, -ux * uy, -ux * uz
@@ -2113,57 +2567,64 @@ end
 
 -- ── lateUpdate: after the rails, draw what update decided ───────────────────
 
+-- The PLANT MARK: motes rising through the whole plant (PlantMark, the node
+-- scaled to the plant's body: its spread across, its height up) and a ring at
+-- its foot (AimMark), in the target colour, warming as the work goes on.
 local function paint_plant(req)
   local w = to_world(req.h)
-  local c = req.ready and RING.ok or RING.idle
   local ux, uy, uz = req.ux or 0, req.uy or 1, req.uz or 0
-  draw.ring(w.x + ux * 0.1, w.y + uy * 0.1, w.z + uz * 0.1, ux, uy, uz, 0.6, c[1], c[2], c[3], 0.9)
-  draw.ring(w.x + ux * 0.1, w.y + uy * 0.1, w.z + uz * 0.1, ux, uy, uz, 0.6 + 0.25 * progress,
-    RING.hot[1], RING.hot[2], RING.hot[3], 0.6 * progress)
+  local h = math.max(0.4, math.min(12, req.height or 1))
+  local ff = ref("flora_field")
+  local wide = (ff and ff.girthOf and req.sp) and ff.girthOf(req.sp, h, h * 0.6, 0.3) or (h * 0.3)
+  wide = math.max(0.35, math.min(3.5, wide))
+  local k = req.work or 0
+  local c = req.ready and RING.ok or RING.idle
+  local r = c[1] + (RING.hot[1] - c[1]) * k
+  local g = c[2] + (RING.hot[2] - c[2]) * k
+  local b = c[3] + (RING.hot[3] - c[3]) * k
+  fx_use("PlantMark", { x = w.x + ux * 0.05, y = w.y + uy * 0.05, z = w.z + uz * 0.05, ux = ux, uy = uy, uz = uz,
+                        scale = wide, sy = h, power = 0.6 + 0.8 * k, r = r, g = g, b = b })
+  fx_use("AimMark", { x = w.x + ux * 0.06, y = w.y + uy * 0.06, z = w.z + uz * 0.06, ux = ux, uy = uy, uz = uz,
+                      scale = math.max(0.5, wide * 0.9) / 0.39, power = 0.7, r = r, g = g, b = b })
 end
 
+-- THE BEAMS. Each is a particle effect on a pooled node stood at the muzzle
+-- and aimed with setBeamEnd (see THE EFFECTS); what meets the far end is a
+-- second node there.
 local function paint_beam(req, dt)
   local w = to_world(req.h)
   local mx, my, mz = muzzle()
   if not mx then return end
   local p = req.p or 0.5
-  local fl = 0.85 + 0.3 * math.random()
-  if req.kind == "grav" or req.kind == "plant" then
-    -- The bent beam: out of the barrel along the aim, then curving onto the
-    -- grab point. Aim away and the control point swings with the aim before
-    -- the object follows, so the beam bows the way you pulled.
-    local ax, ay, az = req.aimx or (w.x - mx), req.aimy or (w.y - my), req.aimz or (w.z - mz)
-    local al = len(ax, ay, az)
-    if al < 1e-6 then return end
-    ax, ay, az = ax / al, ay / al, az / al
-    local d = len(w.x - mx, w.y - my, w.z - mz)
-    local cx, cy, cz = mx + ax * d * 0.55, my + ay * d * 0.55, mz + az * d * 0.55
-    local pts = bezier(mx, my, mz, cx, cy, cz, w.x, w.y, w.z, 18)
+  if req.kind == "grav" or req.kind == "plant" or req.kind == "pending" then
+    -- The tether: blue-white, amber as the strain climbs; green on a plant.
     local s = math.min(1.0, strain)
-    local r, g, b = 0.55 + 0.45 * s, 0.92 - 0.35 * s, 1.0 - 0.75 * s
-    if req.kind == "plant" then r, g, b = 0.55, 1.0, 0.6 end
-    ribbon(pts, 0.10 + 0.05 * p, BEAM_GLOW, r, g, b, 0.45 * fl)
-    ribbon(pts, 0.025 + 0.01 * p, BEAM_CORE, 1.0, 1.0, 1.0, 0.9)
-    -- the catch: a small ring at the grab point
-    local nx, ny, nz = w.x - cx, w.y - cy, w.z - cz
-    draw.ring(w.x, w.y, w.z, nx, ny, nz, 0.14 + 0.04 * math.sin(time * 18), r, g, b, 0.9)
-  else
-    local pts = { mx, my, mz, w.x, w.y, w.z }
-    if req.kind == "cut" then
-      -- THE CUT: a hair-thin white-hot line with a faint halo, not the dig's
-      -- fat orange beam; brighter where it bites.
-      local bite = req.onPlant and 1.0 or 0.55
-      ribbon(pts, 0.03 + 0.012 * p, BEAM_GLOW, 1.0, 0.96, 0.88, (0.22 + 0.2 * bite) * fl)
-      ribbon(pts, 0.005 + 0.004 * p, BEAM_CORE, 1.0, 1.0, 1.0, 1.0)
-    elseif req.kind == "fill" then
-      ribbon(pts, 0.09 + 0.06 * p, BEAM_GLOW, 0.45, 0.75, 1.0, 0.5 * fl)
-      ribbon(pts, 0.02 + 0.015 * p, BEAM_CORE, 0.85, 0.95, 1.0, 0.95)
-    else
-      local h = heat
-      ribbon(pts, 0.08 + 0.08 * p, BEAM_GLOW, 1.0, 0.55 + 0.3 * h, 0.22 + 0.4 * h, 0.55 * fl)
-      ribbon(pts, 0.018 + 0.02 * p, BEAM_CORE, 1.0, 0.92, 0.8, 0.95)
+    local r, g, b = 1 + 0.7 * s, 1 - 0.15 * s, 1 - 0.65 * s
+    if req.kind == "plant" then r, g, b = 0.75, 1.0, 0.65 end
+    fx_use("GravTether", { x = mx, y = my, z = mz, ex = w.x, ey = w.y, ez = w.z, power = 0.6 + 0.7 * p, r = r, g = g, b = b })
+    if req.kind ~= "plant" then
+      fx_use("GravHold", { x = w.x, y = w.y, z = w.z, power = 0.7 + 0.6 * s, r = r, g = g, b = b })
     end
-    impact(w, p, req.kind)
+  elseif req.kind == "cut" then
+    fx_use("CutBeam", { x = mx, y = my, z = mz, ex = w.x, ey = w.y, ez = w.z, power = 0.5 + 0.5 * p })
+    if req.onPlant then
+      -- the bite: its sparks fan back up the beam toward the gun
+      local bx, by, bz = mx - w.x, my - w.y, mz - w.z
+      local bl = len(bx, by, bz)
+      if bl > 1e-4 then bx, by, bz = bx / bl, by / bl, bz / bl else bx, by, bz = 0, 1, 0 end
+      fx_use("CutBite", { x = w.x, y = w.y, z = w.z, ux = bx, uy = by, uz = bz, power = 0.5 + 0.7 * p })
+    end
+    impact(w, p, "cut")
+  elseif req.kind == "fill" then
+    fx_use("FillBeam", { x = mx, y = my, z = mz, ex = w.x, ey = w.y, ez = w.z, power = 0.5 + 0.6 * p })
+    local nx, ny, nz = req.nx, req.ny, req.nz
+    if not nx then nx, ny, nz = gravity_at(w.x, w.y, w.z) end
+    fx_use("FillDeposit", { x = w.x + nx * 0.1, y = w.y + ny * 0.1, z = w.z + nz * 0.1, ux = nx, uy = ny, uz = nz,
+                            power = 0.4 + 0.8 * p })
+    impact(w, p, "fill")
+  else
+    fx_use("DigBeam", { x = mx, y = my, z = mz, ex = w.x, ey = w.y, ez = w.z, power = 0.45 + heat * 0.3 + p * 0.6 })
+    impact(w, p, "dig")
   end
 end
 
@@ -2182,8 +2643,9 @@ function lateUpdate(node, dt)
       impact(nil)
       beam_particles(nil)
       paint_beacon(nil)
+      fx_sweep()
     end
-    beam_req, ring_req, plant_req, beacon_req = nil, nil, nil, nil
+    beam_req, ring_req, plant_req, beacon_req, grav_idle_req = nil, nil, nil, nil, false
     return
   end
   stowed = false
@@ -2191,16 +2653,19 @@ function lateUpdate(node, dt)
   hold_pose(dt, not first_person())
   if beam_req then
     paint_beam(beam_req, dt)
-    if beam_req.kind == "grav" or beam_req.kind == "plant" then impact(nil) end
-    -- The particle beam rides the laser in the hand (third person only: in
-    -- first person the hand, and everything on it, is not drawn).
-    if beam_req.kind == "dig" and not first_person() then beam_particles(to_world(beam_req.h), beam_req.p)
-    else beam_particles(nil) end
+    if beam_req.kind == "grav" or beam_req.kind == "plant" or beam_req.kind == "pending" then impact(nil) end
   elseif beam_req == false then
     impact(nil)
-    beam_particles(nil)
   end
+  -- (the hand socket's own beam is retired: every beam is a pooled node now)
+  beam_particles(nil)
   beam_req = nil
+  -- The gun out and idle: the cold glow between its claws.
+  if grav_idle_req then
+    local mx, my, mz = muzzle()
+    if mx then fx_use("GravIdle", { x = mx, y = my, z = mz, power = 1.0 }) end
+  end
+  grav_idle_req = false
 
   if ring_req then
     local h = ring_req.h
@@ -2232,6 +2697,7 @@ function lateUpdate(node, dt)
 
   paint_beacon(beacon_req)
   beacon_req = nil
+  fx_sweep()
 end
 
 -- ── the driver ──────────────────────────────────────────────────────────────
@@ -2252,6 +2718,7 @@ end
 
 local function reset_tool_state(why_)
   progress = 0
+  reticleKind, reticleLabel = "none", ""
   cutMode = false
   saw_reset()
   charge, cut_progress, focus = 0.0, 0.0, 0.0
@@ -2270,6 +2737,10 @@ local function equip(id, b)
   local d = TOOLDEF[id]
   if d then say(d.label .. " — " .. d.hint) end
   reset_tool_state()
+  -- A swap never fires on a stale trigger: planting the last beacon put the
+  -- gravity gun back in the hand under a still-held click, which pulled the
+  -- beacon straight back up.
+  need_release = true
   recoil = recoil + 0.03
 end
 
@@ -2433,34 +2904,113 @@ function hudLine()
   return head .. "   ·   " .. (inv and inv.line("astro") or "")
 end
 
--- The crosshair: a small ring on the pixel the tool shoots through.
+-- THE RETICLE: a shape per target under it, the target's name and its key
+-- under that, and the work as a ring of pips. HUD, in screen pixels (filled
+-- circles and bars: never a gizmo line in the world).
+--   none      a dim dot: nothing in reach
+--   dig/fill  a ring with four ticks (the laser's bore), orange while it bites
+--   full      the same in caution yellow: the pack is full / it can't
+--   cut       a thin ring with two blade ticks and the word
+--   grab      four corner brackets: something loose
+--   heavy     the brackets in caution yellow: it will only drag
+--   hold      the brackets closed in, tinted by the strain
+--   plant     the brackets in the plant's green
+--   interact  an E key: a door or a crate wants E
+local RET = {
+  ink = { 0.92, 0.89, 0.81 }, muted = { 0.56, 0.55, 0.50 }, accent = { 0.97, 0.55, 0.22 },
+  warn = { 1.0, 0.80, 0.28 }, danger = { 0.97, 0.34, 0.25 },
+  plant = { 0.55, 0.9, 0.6 }, hot = { 1.0, 0.96, 0.86 },
+}
+local function bar(x, y, w, h, c, a)  -- a filled bar with a dark edge
+  draw.rect(x - 1, y - 1, w + 2, h + 2, 0, 0, 0, a * 0.45)
+  draw.rect(x, y, w, h, c[1], c[2], c[3], a)
+end
 local function draw_reticle()
-  if not (draw and draw.circleOutline and camera and camera.screenRect) then return end
+  if not (draw and draw.circleOutline and draw.rect and camera and camera.screenRect) then return end
   local ax, ay = aim_pixel()
   if not ax then return end
   if cinematicUp() then return end
   local _, _, _, vh = camera.screenRect()
   local k = (vh or 720) / uiDesignH()
-  local r, g, b, a = 0.28, 0.86, 0.74, 0.9
-  local head = prompt:match("^[^·]*·%s*(.*)$") or prompt
-  if head:sub(1, 3) == "no " or head:sub(1, 7) == "nothing" then r, g, b, a = 0.75, 0.80, 0.86, 0.55 end
-  if prompt:sub(1, 9) == "PACK FULL" then r, g, b, a = 1.0, 0.72, 0.32, 0.95 end
-  if grab and grab.kind ~= "plant" then
+  local kind = reticleKind or "none"
+  local c, a = RET.ink, 0.85
+  if kind == "none" then c, a = RET.muted, 0.6 end
+  if kind == "full" or kind == "heavy" then c = RET.warn end
+  if kind == "plant" then c = RET.plant end
+  if kind == "cut" then c = RET.hot end
+  if inUse and (kind == "dig" or kind == "fill" or kind == "cut" or kind == "plant") then c = RET.accent end
+  if kind == "hold" then
     local s = math.min(1, strain)
-    r, g, b = 0.55 + 0.45 * s, 0.92 - 0.35 * s, 1.0 - 0.75 * s
-    draw.circleOutline(ax, ay, 14 * k, r, g, b, 0.35, 1.2 * k)
+    c = { 0.55 + 0.45 * s, 0.92 - 0.35 * s, 1.0 - 0.75 * s }
+    if strain >= 1 then c = RET.danger end
   end
-  if cutMode and toolId() == "laser" then
-    -- CUT: a white-hot reticle that says so.
-    r, g, b, a = 1.0, 0.96, 0.86, 0.95
-    if draw.text then
-      draw.text(ax, ay + 13 * k, "CUT", 11 * k, 0.0, 0.0, 0.0, 0.55, "center")
-      draw.text(ax, ay + 12 * k, "CUT", 11 * k, r, g, b, a, "center")
+  local r, g, b = c[1], c[2], c[3]
+  if kind == "grab" or kind == "heavy" or kind == "hold" or kind == "plant" then
+    -- corner brackets, closed in on a hold
+    local d = (kind == "hold" and 9 or 14) * k
+    local l, t = 6 * k, 1.6 * k
+    for _, sx in ipairs({ -1, 1 }) do
+      for _, sy in ipairs({ -1, 1 }) do
+        local cx, cy = ax + sx * d, ay + sy * d
+        bar(sx > 0 and cx - l or cx, cy - t / 2, l, t, c, a)
+        bar(cx - t / 2, sy > 0 and cy - l or cy, t, l, c, a)
+      end
+    end
+    draw.circle(ax, ay, 1.5 * k, r, g, b, a)
+  elseif kind == "interact" then
+    if draw.rectOutline then
+      draw.rectOutline(ax - 9 * k, ay - 9 * k, 18 * k, 18 * k, 0, 0, 0, 0.5, 3.5 * k)
+      draw.rectOutline(ax - 9 * k, ay - 9 * k, 18 * k, 18 * k, r, g, b, a, 1.6 * k)
+    end
+    if draw.text then draw.text(ax, ay - 6.5 * k, "E", 12 * k, r, g, b, a, "center") end
+  else
+    local rr = (kind == "cut") and 7 * k or 9 * k
+    draw.circleOutline(ax, ay, rr, 0, 0, 0, a * 0.45, 3.5 * k)
+    draw.circleOutline(ax, ay, rr, r, g, b, a, (kind == "cut") and 1.2 * k or 1.6 * k)
+    draw.circle(ax, ay, 1.5 * k, r, g, b, a)
+    if kind == "dig" or kind == "fill" or kind == "full" then
+      -- four ticks: the laser's aim is a bore, not a point
+      local t, l0, l1 = 1.6 * k, 11 * k, 16 * k
+      bar(ax - t / 2, ay - l1, t, l1 - l0, c, a); bar(ax - t / 2, ay + l0, t, l1 - l0, c, a)
+      bar(ax - l1, ay - t / 2, l1 - l0, t, c, a); bar(ax + l0, ay - t / 2, l1 - l0, t, c, a)
+    elseif kind == "cut" then
+      -- two blade ticks across, and the word
+      local t = 1.4 * k
+      bar(ax - 15 * k, ay - t / 2, 6 * k, t, c, a); bar(ax + 9 * k, ay - t / 2, 6 * k, t, c, a)
+      if draw.text then
+        draw.text(ax, ay + 11 * k, "CUT", 11 * k, 0, 0, 0, 0.55, "center")
+        draw.text(ax, ay + 10 * k, "CUT", 11 * k, r, g, b, a, "center")
+      end
     end
   end
-  draw.circleOutline(ax, ay, 9 * k, 0.0, 0.0, 0.0, a * 0.45, 3.5 * k)
-  draw.circleOutline(ax, ay, 9 * k, r, g, b, a, 1.6 * k)
-  draw.circle(ax, ay, 1.6 * k, r, g, b, a)
+  -- The work: a ring of pips lit by the progress (the dig's next unit, the
+  -- cut and the uproot through the plant, a hold's strain).
+  if progress > 0.01 and kind ~= "none" and kind ~= "interact" then
+    local n = 24
+    local lit = math.floor(progress * n + 0.5)
+    for i = 0, n - 1 do
+      local ang = -math.pi / 2 + i / n * 2 * math.pi
+      local px, py = ax + math.cos(ang) * 22 * k, ay + math.sin(ang) * 22 * k
+      if i < lit then draw.circle(px, py, 1.5 * k, RET.accent[1], RET.accent[2], RET.accent[3], 0.95)
+      else draw.circle(px, py, 1.0 * k, r, g, b, 0.3) end
+    end
+  end
+  if draw.text then
+    -- the target and the key: one short line under the reticle
+    local lab = reticleLabel
+    if lab and lab ~= "" then
+      draw.text(ax, ay + 30 * k, lab, 12 * k, 0, 0, 0, 0.6, "center")
+      draw.text(ax, ay + 29 * k, lab, 12 * k, r, g, b, math.min(1, a + 0.1), "center")
+    end
+    -- what was just collected, rising and fading
+    if collected and time - collected.t < 1.6 then
+      local u = (time - collected.t) / 1.6
+      local fa = u < 0.7 and 1.0 or (1 - (u - 0.7) / 0.3)
+      local y = ay - 32 * k - u * 22 * k
+      draw.text(ax, y + 1, collected.text, 13 * k, 0, 0, 0, 0.6 * fa, "center")
+      draw.text(ax, y, collected.text, 13 * k, RET.accent[1], RET.accent[2], RET.accent[3], fa, "center")
+    end
+  end
 end
 
 local hud
@@ -2485,8 +3035,15 @@ end
 function update(node, dt)
   inUse = false
   prompt = ""
+  reticleKind, reticleLabel = "none", ""
   local carrying = on_foot(node)
   tick(node, dt, carrying)
+  -- A door or a crate wants E: the reticle says so over whatever the tool
+  -- would have shown, unless the tool is working.
+  if carrying and not inUse and reticleKind == "none" then
+    local t = e_taken()
+    if t then reticle_set("interact", t) end
+  end
   -- The aim point is a WORLD point of this update; the ticks then carry the
   -- planet (and the crew on it) on along its orbit before lateUpdate poses
   -- the arms and the head. Held in the planet's frame for that.

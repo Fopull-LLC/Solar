@@ -78,10 +78,27 @@ API.audio = { play = function() return { stop = function() end, setVolume = func
                                          setPitch = function() end } end }
 API.terrain = { query = function() return 0.5 end, dig = function() end,
                 paint = function() end, warm = function() end }
--- The aim ring is drawn every frame it shows; counted so a test can ask.
+-- The aim mark is a particle effect on a pooled node (prefabs/FxAimMark) that
+-- the belt plays while it shows and stops when it does not; `rings` counts
+-- the frames it was placed, so a test can ask.
 local rings = 0
-API.draw = { line = function() end, ring = function() rings = rings + 1 end, sphere = function() end,
-             disc = function() rings = rings + 1 end }
+local PS = {}   -- prefab → its particle handle stub
+local function particles_of(prefab)
+  local ps = PS[prefab]
+  if not ps then
+    ps = { on = false }
+    function ps:play() self.on = true end
+    function ps:stop() self.on = false end
+    function ps:isPlaying() return self.on end
+    function ps:setIntensity() if self.on and prefab == "FxAimMark" then rings = rings + 1 end end
+    function ps:setBeamEnd() end
+    function ps:setTint() end
+    PS[prefab] = ps
+  end
+  return ps
+end
+API.draw = { line = function() end, ring = function() end, sphere = function() end, disc = function() end,
+             rect = function() end, circle = function() end, circleOutline = function() end, text = function() end }
 API.spawnEffect = function() end
 API.destroy = function() end
 API.physics = { pause = function() end }
@@ -217,6 +234,8 @@ local SPAWNED = {}
 API.spawn = function(prefab, _, cb)
   local n = make_node(prefab)
   n.parent_ = nil
+  if prefab:sub(1, 2) == "Fx" then n.particles = function() return particles_of(prefab) end end
+  function n:setUp() end
   function n:setParent(p) self.parent_ = p end
   function n:setAngles() end
   function n:toWorld(v) return vec3(self.x + v.x, self.y + v.y, self.z + v.z) end
@@ -464,7 +483,7 @@ ok(belt.toolId() == "laser", "an old save's spade slot opens on the Terrain Lase
 -- In the water out of your depth: no firing, no aim ring, no beam.
 KEYS.lmb = true
 tick(2)
-ok(belt.inUse == true and rings > 0, "on foot, the trigger fires and the aim ring draws ["
+ok(belt.inUse == true and rings > 0, "on foot, the trigger fires and the aim mark is placed ["
   .. tostring(belt.inUse) .. " " .. rings .. " " .. tostring(belt.gate) .. "]")
 sea_depth, seabed, ASTRO.grounded = 3.0, false, false
 tick(30)
@@ -473,7 +492,7 @@ rings = 0
 tick(5)
 ok(belt.gate == "swimming", "swimming gates the belt, and says so [" .. tostring(belt.gate) .. "]")
 ok(belt.inUse == false, "...the trigger does nothing")
-ok(rings == 0, "...no aim ring is drawn")
+ok(rings == 0 and not (PS.FxAimMark and PS.FxAimMark.on), "...no aim mark is placed")
 ok(held("ToolLaser").visible == false, "...and the laser is put away")
 ok(TOOLHUD.els.ui ~= nil and TOOLHUD.els.ui.visible == true and belt.hudText:find("swimming") ~= nil,
   "...while the belt still says why [" .. tostring(belt.hudText) .. "]")

@@ -127,7 +127,14 @@ defaults = {
   -- Grass fields lay a tinted decal on the ground under themselves, so a
   -- meadow reads as a meadow from the air long after the blades have faded.
   -- 0 = off.
-  tint = 1,
+  -- OFF until the engine's decal relay is budgeted (floptle 0.117.0-rc19,
+  -- decals.rs relay_decals_on_edits): every chunk the terrain streams in
+  -- while the player moves marks the whole level edited, every wash is then
+  -- checked and laid again, one 28.8 m wash per frame at 12-34 ms each, and
+  -- with 70 washes in range that is every frame. Measured on the user's save
+  -- (play, XWayland): walking on a meadow 36.6 ms/frame mean with washes,
+  -- 16.5 ms without; in the editor 41.6 ms. Standing still costs nothing.
+  tint = 0,
   --@range 40 250 --@units m
   tint_range = 130.0,
   --@range 8 40 --@units m
@@ -975,6 +982,17 @@ end
 local wake = {}          -- { x, y, z (body-relative), t }
 local wake_on = false
 local WAKE_STEP, WAKE_LIFE = 0.45, 1.1
+
+-- THE TOOL'S BITE. While a cut or an uproot works at a plant the tool belt
+-- calls sawAt every frame with the point it is working; the bendy plants
+-- there (grass, ferns, reeds: the sources declared with `bend`) shiver away
+-- from a point that jumps about it, so the plant visibly fights the cut.
+-- Trunks and rocks never bend (bend = 0), so a tree is left to its felling.
+local saw_pt = nil
+function sawAt(x, y, z, strength)
+  saw_pt = { x = x, y = y, z = z, s = strength or 0.6, t = time }
+end
+
 local function touch_engine(astro, body)
   local rx, ry, rz = astro.x - body.x, astro.y - body.y, astro.z - body.z
   local last = wake[#wake]
@@ -996,6 +1014,13 @@ local function touch_engine(astro, body)
         pts[#pts + 1] = { pos = vec3(body.x + w.x, body.y + w.y, body.z + w.z), radius = r, strength = s * k }
       end
     end
+  end
+  if saw_pt and time - saw_pt.t < 0.2 and #pts < 30 then
+    -- a point that darts round the bite, so the lean flips: a shiver
+    local a = time * 37.0
+    local jx, jz = math.cos(a) * 0.22, math.sin(a * 1.31) * 0.22
+    pts[#pts + 1] = { pos = vec3(saw_pt.x + jx, saw_pt.y, saw_pt.z + jz), radius = 1.1,
+                      strength = s * saw_pt.s * (0.55 + 0.45 * math.sin(time * 29.0)) }
   end
   scatter.setInteractors(pts)
   wake_on = true
@@ -1633,6 +1658,13 @@ end
 -- few at once; anything that is not a tree simply pops (the tool's vfx).
 local felled = {}
 local FELL_T, FELL_HOLD, FELL_SINK, FELL_MAX = 1.5, 0.8, 0.7, 3
+-- The LOGS a felling leaves: a LooseLog body (prefabs/LooseLog, an assembly
+-- the gravity gun lifts and the depot takes as timber) laid along the fallen
+-- trunk the moment the crown lands, sized to the tree. A few at a time; the
+-- oldest goes when another falls.
+local logs = {}
+local LOG_MAX = 6
+function logCount() return #logs end
 
 local function fell_pose(f, n, ang, sink)
   local c, s = math.cos(ang), math.sin(ang)
@@ -1712,6 +1744,30 @@ local function fell_tick()
           local h = f.height * t
           fx.harvest(body.x + f.rx + f.hx * h, body.y + f.ry + f.hy * h, body.z + f.rz + f.hz * h, 1.5)
         end
+      end
+      -- ...and the trunk is left lying there as a log, along the fall.
+      if body and spawn and f.height >= 3.0 then
+        while #logs >= LOG_MAX do
+          local old = table.remove(logs, 1)
+          if old and old.valid then old:destroy() end
+        end
+        local k = math.max(0.55, math.min(1.5, f.height / 8.0))
+        local along = 1.6 * k + 0.35
+        local lx = body.x + f.rx + f.hx * along + f.ux * 0.3 * k
+        local ly = body.y + f.ry + f.hy * along + f.uy * 0.3 * k
+        local lz = body.z + f.rz + f.hz * along + f.uz * 0.3 * k
+        local slot = #logs + 1
+        logs[slot] = false
+        local ux, uy, uz, hx, hy, hz = f.ux, f.uy, f.uz, f.hx, f.hy, f.hz
+        spawn("LooseLog", vec3(lx, ly, lz), function(n)
+          logs[slot] = n
+          n.scale = k
+          -- the log's long axis is its X: setUp(up, fwd) puts Y up and Z on
+          -- fwd, and X = up × fwd, so fwd = h × up lays X along the fall
+          local fx_, fy_, fz_ = hy * uz - hz * uy, hz * ux - hx * uz, hx * uy - hy * ux
+          if n.setUp then n:setUp(vec3(ux, uy, uz), vec3(fx_, fy_, fz_)) end
+          if assembly and assembly.rebuild then assembly.rebuild(n) end
+        end)
       end
       if audio and audio.play then
         audio.play("audio/kenney/impact/impactWood_heavy_00" .. tostring(math.random(0, 4)) .. ".ogg",
@@ -2420,12 +2476,24 @@ function axisDistance(ox, oy, oz, dx, dy, dz, t0, t1, rx, ry, rz, ux, uy, uz, h)
   return len(qx, qy, qz), t, s
 end
 
--- How far off its axis a plant still counts as hit: the grab, and a tree's
--- crown above a third of its height (aim at the leaves and you have the tree).
-local function girth(sp, hgt, s, grab)
-  if sp.form == "tree" and s > hgt * 0.35 then return grab + math.min(2.5, hgt * 0.15) end
-  return grab
+-- How far off its axis a plant still counts as hit: its WHOLE BODY, not its
+-- stem. A tree's crown over its upper two thirds (aim at the leaves and you
+-- have the tree), a shrub's or a fungus's spread, a grass tuft's blades; the
+-- trunk itself a little wider than `grab`, the floor. (Playtest 2026-10-24:
+-- "I can't cut plants anywhere but at their stems".) The aim scores by how
+-- central the line passes, so among neighbours the one whose axis is nearest
+-- still wins — the axis is the tiebreak, the body is the hit.
+local SPREAD = { tree = 0.28, shrub = 0.5, grass = 0.45, succulent = 0.38, fungus = 0.45, spire = 0.22, kelp = 0.3 }
+function girthOf(sp, hgt, s, grab)
+  local f = (sp and sp.form) or "shrub"
+  local k = SPREAD[f] or 0.4
+  if f == "tree" then
+    if s > hgt * 0.35 then return math.max(grab, math.min(4.0, hgt * k)) end
+    return math.max(grab, 0.25 + hgt * 0.03)
+  end
+  return math.max(grab, math.min(2.5, hgt * k + 0.15))
 end
+local girth = girthOf
 
 -- The span of the aim line to search: [0, reach] from its origin, or — given
 -- `opt.from` (the crew) — the part of the line within `opt.reach` of the crew,

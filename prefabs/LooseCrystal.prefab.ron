@@ -1,0 +1,70 @@
+// LOOSE CRYSTAL — an outcrop plucked out of the scatter by the gravity gun (scripts/tool_belt.lua).
+// Written by tools/gen_props.py — edit the generator, not this file.
+[
+    (
+        name: "LooseCrystal",
+        tags: ["loose_rock", "crystal"],
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+        rigidbody: Some((
+            mode: Dynamic,
+            radius: 0.3,
+            height: 0.6,
+            half_extents: (0.33, 0.55, 0.39),
+            restitution: 0.15,
+            friction: 0.8,
+            gravity: true,
+            lock_pos: (false, false, false),
+            lock_rot: (false, false, false),
+            assembly: true,
+        )),
+    ),
+    (
+        name: "Body",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (0.42, 0.42, 0.42),
+        ),
+        matter: Mesh(
+            asset_path: "models/flora/rock_crystal_l0.gltf",
+        ),
+        object_materials: {
+            "Bark": (
+                color: (0.62, 0.52, 0.42),
+                texture: Some("textures/flora/bark_rough_l0.png"),
+                roughness: 0.95,
+                metallic: 0.0,
+                shading: Physical,
+            ),
+            "Crystal": (
+                color: (0.55, 0.85, 1.0),
+                emissive: (0.35, 0.75, 1.0),
+                emissive_strength: 0.5,
+                roughness: 0.25,
+                metallic: 0.1,
+                shading: Physical,
+            ),
+        },
+        scripts: [],
+        rigidbody: Some((
+            boxed: true,
+            mode: Kinematic,
+            radius: 0.3,
+            height: 0.6,
+            half_extents: (0.33, 0.55, 0.39),
+            restitution: 0.15,
+            friction: 0.8,
+            gravity: true,
+            lock_pos: (false, false, false),
+            lock_rot: (false, false, false),
+            mass: 0.16,
+        )),
+        parent: Some(0),
+    ),
+]

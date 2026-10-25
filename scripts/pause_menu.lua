@@ -77,6 +77,7 @@ local CONTROLS = {
     { keys = {}, shown = "LEFT MOUSE", what = "hold to use the tool on what the crosshair is over" },
     { keys = {}, shown = "SCROLL", what = "gravity gun: hold what you grabbed nearer / further" },
     { keys = { "r" }, shown = "R", what = "gravity gun: throw what you are holding" },
+    { keys = { "e" }, shown = "E", what = "gravity gun: stow what you are holding (a rock as its ore, a log as timber)  ·  let go of it in the Commerce Depot's intake to deposit it, or recycle a wreck" },
     { keys = { "q" }, shown = "Q", what = "terrain laser: DIG / FILL  ·  relay beacon: pick one up" },
     { keys = { "e" }, shown = "hold E", what = "terrain laser: CUT — a short cutting beam that saws through plants" },
     { keys = { "tab", "i" }, shown = "TAB  or  I", what = "the suit pack  ·  at the depot, its buy and sell counters" },

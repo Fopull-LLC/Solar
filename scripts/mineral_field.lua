@@ -544,18 +544,23 @@ end
 -- point along its beam and asks here. Measured to where the rock actually
 -- lies on the ground (the engine's settle, reproduced), not to where it was
 -- rolled on the patch plane above it.
-function nearest(x, y, z, radius)
+-- `kinds` (optional) is a set of kind ids to consider — the gravity gun asks
+-- for { stone, boulder, crystal }: the rocks big enough to be a body, never
+-- gravel, and never an ore pocket.
+function nearest(x, y, z, radius, kinds)
   radius = radius or params.grab
   -- Inside an ore pocket the pocket is what the beam is cutting.
-  local pk = pocket_at(x, y, z)
-  if pk then return pk end
+  if not kinds then
+    local pk = pocket_at(x, y, z)
+    if pk then return pk end
+  end
   local body = cur_body and space.body(cur_body)
   if not body then return nil end
   local rx, ry, rz = x - body.x, y - body.y, z - body.z
   local best = nil
   for id, s in pairs(srcs) do
     local p = patches[s.patch]
-    if p and patch_dist(p, rx, ry, rz) <= radius + 3 then
+    if p and (not kinds or kinds[s.kind.id]) and patch_dist(p, rx, ry, rz) <= radius + 3 then
       local dx, dy, dz = rx - p.cx, ry - p.cy, rz - p.cz
       local lx = dx * p.ex[1] + dy * p.ex[2] + dz * p.ex[3]
       local lz = dx * p.ez[1] + dy * p.ez[2] + dz * p.ez[3]
@@ -601,7 +606,7 @@ function rocksNear(x, y, z, radius)
         local r = br * (h.scale or 1)
         if h.settled ~= false and r >= 0.3 then
           out[#out + 1] = { x = h.pos.x, y = h.pos.y, z = h.pos.z, r = r, d = h.distance,
-                            key = "r" .. id .. ":" .. tostring(h.id) }
+                            key = "r" .. id .. ":" .. tostring(h.id), src = id, inst = h.id, scale = h.scale }
         end
       end
     end
@@ -633,6 +638,34 @@ function breakAt(hit, cid)
     save_breaks(hit.patch, k.id)
   end
   return k.mat, took
+end
+
+-- The record `pluck` (or breakAt) wants for a rock `rocksNear` listed: by its
+-- source and instance, so it never depends on a proximity query — asked at a
+-- rock's own place, `nearest` can still answer nothing where the patch plane
+-- stands far off the ground (the height band `scatter.near` reads).
+function rockRecord(rk)
+  local s = rk and srcs[rk.src]
+  if not (s and rk.inst) then return nil end
+  return { source = rk.src, kind = s.kind, id = rk.inst, patch = s.patch, scale = rk.scale,
+           pos = vec3(rk.x, rk.y, rk.z), distance = 0 }
+end
+
+-- Pluck it out WHOLE: the rock goes (saved as a break, so it grows back on the
+-- field's timer) and nothing is paid out here — the gravity gun has it in hand
+-- as a body now (tool_belt spawns the Loose* prefab), and what it is worth
+-- comes when that is stowed or dropped at the depot. Returns the kind.
+function pluck(hit)
+  if not (hit and hit.source and hit.kind) or hit.pocket then return nil end
+  scatter.remove(hit.source, hit.id)
+  local p = patches[hit.patch]
+  if p then
+    local list = breaks_of(hit.patch, hit.kind.id)
+    list[#list + 1] = { id = hit.id, t = time }
+    while #list > MAX_BREAKS do scatter.restore(hit.source, table.remove(list, 1).id) end
+    save_breaks(hit.patch, hit.kind.id)
+  end
+  return hit.kind
 end
 
 -- ── driver ──────────────────────────────────────────────────────────────────

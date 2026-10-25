@@ -33,16 +33,16 @@ function API.print(m) logs[#logs + 1] = tostring(m) end
 function API.vec3(x, y, z) return { x = x, y = y, z = z } end
 local effects = {}                       -- one-shots the tools fired
 function API.spawnEffect(key) effects[#effects + 1] = key end
--- The world-space aiming ring is immediate-mode draw calls; record them so a
--- test can check the crosshair actually lands on the hit rather than trusting
--- that it was queued somewhere.
+-- The world-space aim mark is a particle effect on a pooled node (FxAimMark,
+-- spawned once and placed every frame it shows: tools overhaul 2026-10-24);
+-- every placing is recorded as a ring { x, y, z, r } so a test can check the
+-- crosshair actually lands on the hit rather than trusting that it was queued
+-- somewhere. The screen reticle is draw.circle / draw.rect and is not world.
 local rings = {}
 API.draw = {
-  line = function() end,
-  disc = function() end,   -- the sight's fill and band (vfx overhaul)
-  ring = function(cx, cy, cz, nx, ny, nz, r)
-    rings[#rings + 1] = { x = cx, y = cy, z = cz, r = r }
-  end,
+  line = function() end, disc = function() end, ring = function() end,
+  rect = function() end, circle = function() end, circleOutline = function() end,
+  rectOutline = function() end, text = function() end,
 }
 local function last_ring() return rings[#rings] end
 -- The outer ring is the aiming circle; an inner one (the cut counting out the
@@ -225,20 +225,34 @@ local function fx_node(name)
     play = function() n.playing = true end,
     stop = function() n.playing = false end,
     isPlaying = function() return n.playing end,
-    setIntensity = function(_, i) n.intensity = i end,
+    setIntensity = function(_, i)
+      n.intensity = i
+      -- the aim mark: each placing is a ring at the node, the ring in the
+      -- texture at 0.78 of the half-size (tool_belt paint_ring: size = r / 0.39)
+      if name == "FxAimMark" then
+        rings[#rings + 1] = { x = xyz.x, y = xyz.y, z = xyz.z, r = (rawget(n, "scale_x") or 1) * 0.39 }
+      end
+    end,
     setBeamEnd = function(_, x, y, z) n.beam = { x, y, z } end,
+    setTint = function() end,
   }
   -- Colon-called from the script, so swallow the receiver.
   rawset(n, "particles", function(self)
     return { play = ps.play, stop = ps.stop, isPlaying = ps.isPlaying,
-             setIntensity = ps.setIntensity, setBeamEnd = ps.setBeamEnd }
+             setIntensity = ps.setIntensity, setBeamEnd = ps.setBeamEnd, setTint = ps.setTint }
   end)
+  rawset(n, "setUp", function() end)
   rawset(n, "getcomponent", function(_, k)
     if k == "PointLight" then return rawget(n, "light") end
   end)
   return n
 end
 local MUZZLE, IMPACT = fx_node("Laser Muzzle"), fx_node("Laser Impact")
+-- The tools' pooled effect nodes (prefabs/Fx*), by prefab, as they are spawned.
+-- The dig's beam is FxDigBeam: top level, placed at the muzzle in world
+-- coordinates each frame and aimed with setBeamEnd.
+FXN = {}
+local function BEAM() return FXN.FxDigBeam or { beam = nil, playing = false } end
 -- The rifle in the astronaut's hand: bone-attached in the real scene, so the
 -- script must read its WORLD position rather than placing it.
 local TOOLNODE = { name = "Laser Tool", valid = true, visible = true,
@@ -267,6 +281,13 @@ local PANEL = {
 -- Prefab spawns (the tool models) land at once, as plain nodes.
 SPAWNED = {}
 function API.spawn(prefab, _, cb)
+  if prefab:sub(1, 2) == "Fx" then
+    local f = fx_node(prefab)
+    FXN[prefab] = f
+    SPAWNED[#SPAWNED + 1] = f
+    if cb then cb(f) end
+    return
+  end
   local n = { name = prefab, valid = true, visible = true, x = 0, y = 0, z = 0 }
   function n:setParent(p) self.parent_ = p end
   function n:setAngles() end
@@ -607,8 +628,9 @@ set_camera(ASTRO.x + 4.0)
 local voices0 = #voices
 buttons[0] = true
 tick(6)
-check("the beam plays from the muzzle while firing", MUZZLE.playing)
-check("...aimed at what it hit", MUZZLE.beam ~= nil)
+check("the beam plays from the muzzle while firing", BEAM().playing)
+check("...aimed at what it hit", BEAM().beam ~= nil)
+check("...the hand socket's own beam stays off (every beam is a pooled node now)", not MUZZLE.playing)
 -- The muzzle is the barrel tip of a rifle bone-attached to the hand: the rig
 -- puts it where it goes. A script writing world coordinates into its
 -- parent-local .x/.y/.z is what threw the beam's origin kilometres into the sky.
@@ -627,7 +649,7 @@ check("...and one looping hum, not a one-shot a frame", (function()
 end)(), #voices - voices0)
 buttons[0] = false
 tick(2)
-check("letting go stops the beam", not MUZZLE.playing and not IMPACT.playing)
+check("letting go stops the beam", not BEAM().playing and not IMPACT.playing)
 check("...and puts the light out", IMPACT.light.intensity == 0, IMPACT.light.intensity)
 check("...and stops the hum", (function()
   for i = voices0 + 1, #voices do
@@ -709,7 +731,8 @@ for _ = 1, 90 do
   T = T + 0.05
   tb.update(ASTRO, 0.05)
   tb.lateUpdate(ASTRO, 0.05)
-  if MUZZLE.beam then ends[#ends + 1] = { MUZZLE.beam[1], MUZZLE.beam[2], MUZZLE.beam[3] } end
+  local bm = BEAM().beam
+  if bm then ends[#ends + 1] = { bm[1], bm[2], bm[3] } end
   clear_presses()
 end
 buttons[0] = false
@@ -801,8 +824,9 @@ for _ = 1, 90 do
   orbit(4.5)                        -- 90 u/s, the rate a real inner planet moves
   tb.update(ASTRO, 0.05)
   tb.lateUpdate(ASTRO, 0.05)
-  if MUZZLE.beam then
-    moved_ends[#moved_ends + 1] = { MUZZLE.beam[1] - BODY.x, MUZZLE.beam[2], MUZZLE.beam[3] }
+  local bm = BEAM().beam
+  if bm then
+    moved_ends[#moved_ends + 1] = { bm[1] - BODY.x, bm[2], bm[3] }
   end
   clear_presses()
 end
@@ -834,8 +858,9 @@ for _ = 1, 40 do
   orbit(4.5)                        -- the rails, between update and the picture
   tb.lateUpdate(ASTRO, 0.05)
   local bite = dug[#dug]
-  if #dug > n0 and MUZZLE.beam then
-    drawn_vs_bite[#drawn_vs_bite + 1] = math.abs((MUZZLE.beam[1] - BODY.x) - (bite.x - bx0))
+  local bm = BEAM().beam
+  if #dug > n0 and bm then
+    drawn_vs_bite[#drawn_vs_bite + 1] = math.abs((bm[1] - BODY.x) - (bite.x - bx0))
   end
   clear_presses()
 end

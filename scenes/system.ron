@@ -493,6 +493,11 @@
                     enabled: true,
                     params: [],
                 ),
+                (
+                    kind: "base_props",
+                    enabled: true,
+                    params: [],
+                ),
             ],
             rigidbody: Some((
                 capsule: true,

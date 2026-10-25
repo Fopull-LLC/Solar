@@ -438,6 +438,256 @@ def scrape():
     effect("ScrapeDust", 1.6, tracks, header="Dust and grit kicked out of the ground by a scraping hull (air frame).")
 
 
+
+# =====================================================================================
+# THE TOOLS (scripts/tool_belt.lua) — every beam, mark and hold is a particle
+# effect on a pooled node (prefabs/Fx*.prefab.ron), never a drawn line.
+# =====================================================================================
+def vortex(cx, cy, cz, ax, ay, az, s):
+    return f"Vortex(center: ({fnum(cx)}, {fnum(cy)}, {fnum(cz)}), axis: ({fnum(ax)}, {fnum(ay)}, {fnum(az)}), strength: {fnum(s)})"
+
+
+def pull(cx, cy, cz, s):
+    return f"Point(center: ({fnum(cx)}, {fnum(cy)}, {fnum(cz)}), strength: {fnum(s)})"
+
+
+def tools():
+    BEAM = (24, (0, 0, -10), 0.0, 0, 0)
+    # FILL: the same tool laying rock back down — a cooler, denser beam, a
+    # slurry of pale blue in a soft glow, slow scroll.
+    L = 0.3
+    tracks = [
+        T("Core", TX + "beam/core.png", blend="Additive", beam=BEAM, clips=[],
+          size=K([(0, 0.055), (0.5, 0.065), (1, 0.055)], repeat=True), color=C((2.2, 2.6, 3.0, 1.0))),
+        T("Glow", TX + "beam/glow.png", blend="Additive", beam=BEAM, clips=[],
+          size=K([(0, 0.26), (0.5, 0.3), (1, 0.26)], repeat=True),
+          color=K([(0, (0.45, 0.8, 1.6, 0.55)), (0.5, (0.5, 0.85, 1.7, 0.65)), (1, (0.45, 0.8, 1.6, 0.55))], repeat=True)),
+        T("Slurry", TX + "beam/shimmer.png", blend="Additive", beam=(32, (0, 0, -10), 0.02, 4.0, 6.0), clips=[],
+          size=0.42, color=C((0.6, 0.9, 1.4, 0.3))),
+        T("Muzzle", TX + "glow/soft.png", blend="Additive", clips=burst(1, 0, L, cj=0),
+          size=K([(0, 0.4), (0.5, 0.5), (1, 0.4)]), color=C((1.2, 2.0, 2.8, 0.7)), soft=0.05),
+    ]
+    effect("FillBeam", L, tracks, looping=True, header="""
+The terrain laser laying rock back down (FILL): a cool blue-white core in a
+soft blue glow, a slow slurry scroll. tool_belt aims it with setBeamEnd.""")
+
+    # CUT: a hair-thin white-hot cutting line with a faint halo and a fast
+    # scroll, a pinpoint star at the barrel.
+    tracks = [
+        T("Core", TX + "beam/core.png", blend="Additive", beam=BEAM, clips=[],
+          size=K([(0, 0.014), (0.5, 0.017), (1, 0.014)], repeat=True), color=C((3.6, 3.5, 3.3, 1.0))),
+        T("Halo", TX + "beam/glow.png", blend="Additive", beam=BEAM, clips=[],
+          size=K([(0, 0.07), (0.5, 0.085), (1, 0.07)], repeat=True),
+          color=K([(0, (1.8, 1.7, 1.5, 0.35)), (0.5, (1.9, 1.8, 1.6, 0.45)), (1, (1.8, 1.7, 1.5, 0.35))], repeat=True)),
+        T("Scroll", TX + "beam/shimmer.png", blend="Additive", beam=(32, (0, 0, -10), 0.004, 11.0, 30.0), clips=[],
+          size=0.11, color=C((1.6, 1.5, 1.3, 0.25))),
+        T("MuzzleStar", TX + "glow/star.png", blend="Additive", clips=burst(1, 0, L, cj=0),
+          size=K([(0, 0.26), (0.5, 0.2), (1, 0.26)]), rot=R((0, 0, 0), RAD), color=C((2.8, 2.7, 2.4, 0.7)), soft=0.05),
+    ]
+    effect("CutBeam", L, tracks, looping=True, header="""
+The terrain laser's CUT (E held): a hair-thin white-hot cutting line with a
+faint halo and a fast scroll, a pinpoint star at the barrel.""")
+
+    # Where the cut bites a plant: a fan of sparks and embers thrown back up
+    # the beam (the node's +Y points back at the gun), sap and leaf bits,
+    # a thread of smoke, a white-hot point.
+    L = 0.4
+    tracks = [
+        T("Point", TX + "glow/core.png", blend="Additive", clips=burst(1, 0, L, cj=0),
+          size=K([(0, 0.16), (0.5, 0.2), (1, 0.16)]), color=C((3.4, 3.0, 2.4, 1.0)), soft=0.08),
+        T("Glow", TX + "glow/soft.png", blend="Additive", clips=burst(1, 0, L, cj=0),
+          size=K([(0, 0.7), (0.5, 0.85), (1, 0.7)]), color=C((1.6, 1.1, 0.6, 0.45)), soft=0.3),
+        T("Sparks", TX + "spark/dot.png", blend="Additive", orient="Velocity", speed_stretch=0.07,
+          space="World", clips=stream(70, 0.45, 0, L, 0.5), shape=cone(38, 0.03), vel=R((0, 2.5, 0), (0, 6.5, 0)),
+          gravity=1.0, size=0.045, collide=SPARK_HIT,
+          color=K([(0, (3.4, 2.8, 1.8, 1)), (0.4, (2.6, 1.2, 0.3, 1)), (1, (1.0, 0.25, 0.04, 0))])),
+        T("Embers", TX + "spark/dot.png", blend="Additive", space="World", clips=stream(10, 1.2, 0, L, 0.4),
+          shape=cone(70, 0.05), vel=R((0, 0.8, 0), (0, 2.2, 0)), gravity=0.35, drag=1.5, forces=[wind(1.5), turb(1.5, 0.8)],
+          size=K([(0, 0.05), (1, 0.02)]),
+          color=K([(0, (2.6, 1.4, 0.5, 1)), (0.6, (1.8, 0.6, 0.1, 0.8)), (1, (0.4, 0.1, 0.02, 0))])),
+        T("Sap", TX + "water/droplet.png", space="World", clips=stream(12, 0.7, 0, L, 0.3), shape=cone(55, 0.04),
+          vel=R((0, 1.0, 0), (0, 2.8, 0)), gravity=1.0, size=R(0.02, 0.045), collide=(0.0, 0.9, True),
+          color=C((0.55, 0.62, 0.3, 0.9)), lit=False),
+        T("Leaf", TX + "leaf/leaf.png", orient="WorldFixed", space="World", clips=stream(7, 1.4, 0, L, 0.35),
+          shape=cone(80, 0.1), vel=R((0, 0.6, 0), (0, 2.0, 0)), gravity=0.25, drag=2.0, forces=[turb(0.9, 2.5), wind(1.2)],
+          size=R(0.06, 0.12), rot=R((0, 0, 0), RAD), spin=R((-4, -4, -6), (4, 4, 6)),
+          color=K([(0, (0.42, 0.6, 0.26, 1)), (0.8, (0.45, 0.56, 0.25, 1)), (1, (0.45, 0.55, 0.25, 0))]), collide=(0, 0.95)),
+        T("Smoke", TX + "smoke/wisp.png", space="World", clips=stream(6, 1.6, 0, L, 0.3), shape=cone(20, 0.08),
+          vel=R((0, 0.4, 0), (0, 0.9, 0)), forces=[wind(1.2), turb(1.0, 0.5)], size=K([(0, 0.15), (1, 0.7)]),
+          rot=R((0, 0, 0), RAD), spin=R((0, 0, -0.6), (0, 0, 0.6)),
+          color=K([(0, (0.5, 0.48, 0.45, 0)), (0.15, (0.5, 0.48, 0.45, 0.35)), (1, (0.5, 0.48, 0.45, 0))]), soft=0.3),
+    ]
+    effect("CutBite", L, tracks, looping=True, header="""
+Where the cutting beam bites a plant (the node's +Y points back up the beam
+toward the gun): a fan of sparks and embers, sap, leaf bits, a thread of smoke
+and a white-hot point. tool_belt scales it with setIntensity.""")
+
+    # The GRAVITY GUN's tether: a blue-white core in a soft glow with two
+    # crackling arcs thrown round it (beam jitter re-thrown 16 times a second),
+    # and the claws flaring at the origin. Intensity follows the strain.
+    L = 0.25
+    arc = lambda name, seed, w, a: jitter(
+        T(name, TX + "beam/core.png", blend="Additive", beam=(26, (0, 0, -10), 0, 0, 0), clips=[],
+          size=K([(0, w), (0.5, w * 1.4), (1, w)], repeat=True), color=C((1.4, 2.2, 3.2, a))), 0.09, seed, 16.0)
+    tracks = [
+        T("Core", TX + "beam/core.png", blend="Additive", beam=BEAM, clips=[],
+          size=K([(0, 0.03), (0.5, 0.036), (1, 0.03)], repeat=True), color=C((2.4, 2.9, 3.4, 1.0))),
+        T("Glow", TX + "beam/glow.png", blend="Additive", beam=(24, (0, 0, -10), 0.03, 2.5, 3.0), clips=[],
+          size=K([(0, 0.18), (0.5, 0.21), (1, 0.18)], repeat=True),
+          color=K([(0, (0.5, 0.95, 1.8, 0.5)), (0.5, (0.55, 1.0, 1.9, 0.6)), (1, (0.5, 0.95, 1.8, 0.5))], repeat=True)),
+        arc("ArcA", 11, 0.012, 0.9),
+        arc("ArcB", 23, 0.009, 0.7),
+        T("Claws", TX + "glow/soft.png", blend="Additive", clips=burst(1, 0, L, cj=0),
+          size=K([(0, 0.3), (0.5, 0.38), (1, 0.3)]), color=C((1.0, 1.9, 2.8, 0.8)), soft=0.05),
+        T("ClawSparks", TX + "spark/dot.png", blend="Additive", orient="Velocity", speed_stretch=0.04,
+          clips=stream(16, 0.3, 0, L, 0.4), shape=sphere(0.05), vel=R((0, 0.4, 0), (0, 1.4, 0)), drag=2.0,
+          size=0.03, color=K([(0, (1.6, 2.4, 3.2, 1)), (1, (0.8, 1.4, 2.4, 0))])),
+    ]
+    effect("GravTether", L, tracks, looping=True, header="""
+The gravity gun's hold: a blue-white core in a soft glow, two crackling arcs
+thrown round it, the claws flaring at the origin. tool_belt aims it with
+setBeamEnd and scales it with the strain (setIntensity).""")
+
+    # The gun out and idle: a cold glow between the claws, breathing, with the
+    # odd spark crawling across it.
+    L = 1.4
+    tracks = [
+        T("Glow", TX + "glow/soft.png", blend="Additive", clips=burst(1, 0, L, cj=0),
+          size=K([(0, 0.11), (0.5, 0.15), (1, 0.11)]), color=K([(0, (0.6, 1.2, 2.0, 0.5)), (0.5, (0.7, 1.4, 2.2, 0.7)), (1, (0.6, 1.2, 2.0, 0.5))]), soft=0.03),
+        T("Crawl", TX + "spark/dot.png", blend="Additive", orient="Velocity", speed_stretch=0.05,
+          clips=stream(5, 0.3, 0, L, 0.5), shape=sphere(0.04, True), vel=R((0, 0.2, 0), (0, 0.8, 0)), drag=3.0,
+          size=0.022, color=K([(0, (1.6, 2.4, 3.2, 1)), (1, (0.8, 1.4, 2.4, 0))])),
+    ]
+    effect("GravIdle", L, tracks, looping=True, header="""
+The gravity gun out and idle: a cold glow breathing between the claws, the
+odd spark crawling across it. Rides the muzzle.""")
+
+    # What the gun holds: an energy shell round the grab point and small
+    # motes orbiting it, pulled in and whirled.
+    L = 1.0
+    tracks = [
+        T("Shell", TX + "glow/soft.png", blend="Additive", clips=burst(1, 0, L, cj=0),
+          size=K([(0, 0.55), (0.5, 0.65), (1, 0.55)]), color=K([(0, (0.5, 0.9, 1.6, 0.35)), (0.5, (0.55, 1.0, 1.8, 0.45)), (1, (0.5, 0.9, 1.6, 0.35))]), soft=0.25),
+        T("Spot", TX + "glow/tight.png", blend="Additive", clips=burst(1, 0, L, cj=0),
+          size=K([(0, 0.16), (0.5, 0.2), (1, 0.16)]), color=C((1.8, 2.6, 3.4, 0.9)), soft=0.05),
+        T("Motes", TX + "spark/dot.png", blend="Additive", orient="Velocity", speed_stretch=0.06,
+          clips=stream(26, 1.0, 0, L, 0.3), shape=sphere(0.42, True), vel=R((0, 0.1, 0), (0, 0.5, 0)),
+          forces=[vortex(0, 0, 0, 0, 1, 0, 7.0), pull(0, 0, 0, 2.5)], drag=0.6, size=K([(0, 0.0), (0.15, 0.035), (0.85, 0.03), (1, 0)]),
+          color=K([(0, (1.2, 2.0, 3.0, 1)), (1, (0.8, 1.6, 2.6, 0.6))])),
+        T("Arcs", TX + "spark/dot.png", blend="Additive", orient="Velocity", speed_stretch=0.09,
+          clips=stream(12, 0.25, 0, L, 0.5), shape=sphere(0.12), vel=R((0, 1.2, 0), (0, 3.0, 0)), drag=5.0,
+          size=0.03, color=K([(0, (1.8, 2.6, 3.4, 1)), (1, (0.8, 1.4, 2.4, 0))])),
+    ]
+    effect("GravHold", L, tracks, looping=True, header="""
+What the gravity gun holds: an energy shell round the grab point, motes
+whirled round it and pulled in, short arcs crawling over it.""")
+
+    # The punt (R): a shock ring across the aim at the muzzle, a flash, a cone
+    # of sparks down the aim.
+    tracks = [
+        T("Ring", TX + "ring/shock.png", blend="Additive", orient="Horizontal", clips=burst(1, 0, 0.3, cj=0),
+          size=K([(0, 0.12), (0.4, 0.7), (1, 1.0)]), color=K([(0, (1.4, 2.2, 3.0, 0.9)), (0.4, (1.0, 1.8, 2.8, 0.45)), (1, (0.8, 1.4, 2.4, 0))])),
+        T("Flash", TX + "glow/tight.png", blend="Additive", clips=burst(1, 0, 0.14, cj=0),
+          size=K([(0, 0.3), (0.3, 0.6), (1, 0.2)]), color=K([(0, (2.4, 3.0, 3.6, 1)), (1, (1.0, 1.6, 2.6, 0))])),
+        T("Bolt", TX + "spark/dot.png", blend="Additive", orient="Velocity", speed_stretch=0.08, space="World",
+          clips=burst(18, 0, 0.45, 0.4), shape=cone(16, 0.08), vel=R((0, 9, 0), (0, 20, 0)), drag=2.5,
+          size=0.06, color=K([(0, (1.8, 2.6, 3.4, 1)), (1, (0.8, 1.4, 2.4, 0))])),
+        T("Haze", TX + "distort/haze.png", blend="Distortion", distortion=0.015, clips=burst(1, 0, 0.3, cj=0),
+          size=K([(0, 0.3), (1, 1.2)]), color=K([(0, (1, 1, 1, 0.9)), (1, (1, 1, 1, 0))]), soft=0.2),
+    ]
+    effect("GravPunt", 0.5, tracks, header="""
+The gravity gun's punt (R): a shock ring across the aim at the muzzle (+Y = the
+aim), a flash, a bolt of sparks down the line, a kick of heat haze.""")
+
+    # The thrown object: a streak of motes that keeps the throw and arcs down
+    # with it, each with a short trail.
+    tracks = [
+        T("Streak", TX + "spark/dot.png", blend="Additive", space="World", inherit=1.0, clips=burst(9, 0, 0.7, 0.4),
+          shape=sphere(0.25), vel=R((-0.6, -0.6, -0.6), (0.6, 0.6, 0.6)), gravity=1.0, drag=0.4,
+          size=K([(0, 0.05), (1, 0.0)]), trail_=trail(0.25, 0.05, TX + "spark/streak.png", True, 0.03),
+          color=K([(0, (1.6, 2.4, 3.2, 1)), (1, (0.8, 1.4, 2.4, 0))])),
+    ]
+    effect("GravTrail", 0.7, tracks, header="""
+A thrown object's wake: motes that keep the throw's velocity and arc down
+with it, each trailing a short streak.""")
+
+    # Letting go: the shell pops, a few sparks, motes drifting off.
+    tracks = [
+        T("Pop", TX + "glow/soft.png", blend="Additive", clips=burst(1, 0, 0.25, cj=0),
+          size=K([(0, 0.5), (1, 0.9)]), color=K([(0, (0.8, 1.4, 2.4, 0.5)), (1, (0.6, 1.0, 2.0, 0))]), soft=0.2),
+        T("Sparks", TX + "spark/dot.png", blend="Additive", orient="Velocity", speed_stretch=0.06, space="World",
+          clips=burst(8, 0, 0.4, 0.4), shape=sphere(0.1, True), vel=R((0, 0.8, 0), (0, 2.4, 0)), gravity=0.8, drag=1.0,
+          size=0.03, color=K([(0, (1.6, 2.4, 3.2, 1)), (1, (0.8, 1.4, 2.4, 0))])),
+    ]
+    effect("GravFizzle", 0.4, tracks, header="The gravity gun letting go: the shell pops, a few sparks drift off.")
+
+    # The AIM MARK: a thin ring laid flat on the ground where the laser will
+    # bite (a Horizontal billboard on a node stood up on the surface normal),
+    # a faint glow under it. Tinted by the tool's state (setTint).
+    L = 0.6
+    tracks = [
+        T("Ring", TX + "ring/mark.png", blend="Additive", orient="Horizontal", clips=burst(1, 0, L, cj=0),
+          size=K([(0, 1.0), (0.5, 1.03), (1, 1.0)]), color=K([(0, (1, 1, 1, 0.85)), (0.5, (1, 1, 1, 1.0)), (1, (1, 1, 1, 0.85))]), soft=0.02),
+        T("Wash", TX + "glow/soft.png", blend="Additive", orient="Horizontal", clips=burst(1, 0, L, cj=0),
+          size=1.3, color=C((1, 1, 1, 0.12)), soft=0.1),
+    ]
+    effect("AimMark", L, tracks, looping=True, header="""
+The terrain laser's aim mark: a thin ring laid flat on the ground at the bite
+(the node is stood up on the surface normal), a faint wash under it. The tool
+belt sizes it with the node's scale and colours it with setTint.""")
+
+    # The PLANT MARK: the plant the tool has locked onto. Motes rise along its
+    # whole body (the node is scaled to the plant: width across, height up) and
+    # a faint sleeve of light stands round the stem. Tinted by state.
+    L = 1.6
+    tracks = [
+        T("Motes", TX + "spark/dot.png", blend="Additive", clips=stream(14, 1.6, 0, L, 0.3),
+          shape=cone(12, 0.5), vel=R((0, 0.45, 0), (0, 0.75, 0)), forces=[turb(2.0, 0.12)],
+          size=K([(0, 0.0), (0.1, 0.028), (0.8, 0.024), (1, 0.0)]),
+          color=K([(0, (1, 1, 1, 0.9)), (1, (1, 1, 1, 0.5))])),
+    ]
+    effect("PlantMark", L, tracks, looping=True, header="""
+The plant the tool is locked onto: motes rising through its whole body (the
+node is scaled to the plant: its spread across, its height up; the ring at its
+foot is the AimMark node). The tool belt colours it with setTint.""")
+
+    # COLLECTED: what a cut plant or a stowed chunk gives flies into the pack
+    # — a bright mote with a streak and a few leaf bits, thrown at the crew
+    # (the emitter velocity is the throw; everything inherits it).
+    tracks = [
+        T("Mote", TX + "glow/tight.png", blend="Additive", space="World", inherit=1.0, clips=burst(1, 0, 0.42, cj=0),
+          size=K([(0, 0.12), (0.7, 0.16), (1, 0.0)]), trail_=trail(0.3, 0.09, TX + "spark/streak.png", True, 0.02),
+          color=K([(0, (1.6, 2.4, 2.2, 1)), (1, (1.0, 1.6, 1.4, 0))])),
+        T("Bits", TX + "leaf/leaf.png", orient="WorldFixed", space="World", inherit=0.85, clips=burst(6, 0, 0.5, 0.3),
+          shape=sphere(0.2), vel=R((-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)), drag=1.0,
+          size=R(0.05, 0.1), rot=R((0, 0, 0), RAD), spin=R((-6, -6, -8), (6, 6, 8)),
+          color=K([(0, (0.5, 0.65, 0.3, 1)), (1, (0.5, 0.6, 0.3, 0))])),
+    ]
+    effect("Collect", 0.5, tracks, header="""
+Something going into the pack: a bright mote with a streak and a few bits,
+thrown at the crew (spawnEffect's vel is the throw; the tracks inherit it).""")
+
+    # FILL's deposit: where the slurry lands — a cool plasma pool, drops of
+    # slurry falling off it, steam.
+    L = 0.5
+    tracks = [
+        T("Pool", TX + "glow/core.png", blend="Additive", clips=burst(1, 0, L, cj=0),
+          size=K([(0, 0.8), (0.5, 0.95), (1, 0.8)]), color=C((0.9, 1.6, 2.6, 1.0)), soft=0.15),
+        T("Glow", TX + "glow/soft.png", blend="Additive", clips=burst(1, 0, L, cj=0),
+          size=K([(0, 2.4), (0.5, 2.8), (1, 2.4)]), color=C((0.5, 0.9, 1.6, 0.4)), soft=0.4),
+        T("Drops", TX + "water/droplet.png", space="World", clips=stream(24, 0.7, 0, L, 0.4), shape=cone(50, 0.3),
+          vel=R((0, 1.5, 0), (0, 3.5, 0)), gravity=1.0, size=R(0.03, 0.07), collide=(0.0, 0.9, True),
+          color=K([(0, (1.2, 1.8, 2.6, 1.0)), (0.5, (0.5, 0.55, 0.6, 1.0)), (1, (0.4, 0.42, 0.45, 0.8))]), lit=False),
+        T("Steam", TX + "smoke/soft.png", clips=stream(10, 1.4, 0, L, 0.3), shape=cone(30, 0.3),
+          vel=R((0, 0.5, 0), (0, 1.2, 0)), forces=[wind(1.0), push(0, 1, 0, 0.6), turb(1.2, 0.6)],
+          size=K([(0, 0.3), (1, 1.6)]), rot=R((0, 0, 0), RAD),
+          color=K([(0, (0.7, 0.74, 0.78, 0)), (0.15, (0.7, 0.74, 0.78, 0.35)), (1, (0.7, 0.74, 0.78, 0))]), soft=0.4),
+    ]
+    effect("FillDeposit", L, tracks, looping=True, header="""
+Where FILL lays its rock: a cool plasma pool, slurry drops falling off it,
+steam. The node's +Y is the surface normal.""")
+
+
 def step_dust():
     tracks = [
         T("Puff", TX + "smoke/billow_b.png", forces=[wind(2.5)], clips=burst(3, 0, 1.1, 0.3), shape=sphere(0.12),
@@ -854,6 +1104,7 @@ def main():
     ore_break()
     cutter()
     dig()
+    tools()
     water()
     weather()
 

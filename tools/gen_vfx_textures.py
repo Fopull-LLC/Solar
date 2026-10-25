@@ -182,6 +182,18 @@ def shock_ring(n=256):
     return to_img(np.ones_like(a), np.clip(a, 0, 1))
 
 
+
+def mark_ring(n=256, width=0.045, r0=0.78):
+    """A crisp thin ring with a faint inner wash: the tools' aim mark, laid flat
+    on the ground as a Horizontal billboard and tinted by the tool's state."""
+    x, y = grid(n)
+    r = np.sqrt(x * x + y * y)
+    a = np.exp(-((r - r0) / width) ** 2)
+    a += 0.08 * np.clip(1 - r / r0, 0, 1) ** 1.5 * (r < r0)
+    a *= np.clip((1 - r) / 0.04, 0, 1)
+    return to_img(np.ones_like(a), np.clip(a, 0, 1))
+
+
 def scorch(n=256, seed=21):
     """Burn mark decal: charred black core, brown singe, ragged rim."""
     x, y = grid(n)
@@ -317,6 +329,7 @@ def main():
     save(dust_ring(), "ring/dust.png")
     save(lum_to_alpha(MASK + "/30.png", 1.0), "ring/smoke.png", 256)
     save(shock_ring(), "ring/shock.png")
+    save(mark_ring(), "ring/mark.png")
     # ---- beam
     save(beam_profile(128, 40.0, 0.0), "beam/core.png")
     save(beam_profile(128, 6.0, 0.4), "beam/glow.png")

@@ -393,6 +393,17 @@ function cut(x, y, z)
   fire("CutChips", x, y, z)
 end
 
+-- Something going into the pack from (x,y,z): a bright mote with a streak
+-- thrown at the crew at (tx,ty,tz), arriving in about 0.4 s. The throw is a
+-- velocity relative to the planet both stand on, so it is simply the gap.
+function collect(x, y, z, tx, ty, tz)
+  local dx, dy, dz = tx - x, ty - y, tz - z
+  local d = len(dx, dy, dz)
+  if d < 0.05 then return end
+  local k = 1 / 0.42
+  fire("Collect", x, y, z, { vel = vec3(dx * k, dy * k, dz * k), normal = vec3(dx / d, dy / d, dz / d) })
+end
+
 -- A plant coming down.
 function harvest(x, y, z, height)
   local _, _, ux, uy, uz = frame(x, y, z)

@@ -1,0 +1,62 @@
+// LOOSE BOULDER — a terrain boulder plucked out of the scatter by the gravity gun (scripts/tool_belt.lua). Heavy: it drags, it does not lift.
+// Written by tools/gen_props.py — edit the generator, not this file.
+[
+    (
+        name: "LooseBoulder",
+        tags: ["loose_rock", "boulder"],
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+        rigidbody: Some((
+            mode: Dynamic,
+            radius: 0.3,
+            height: 0.6,
+            half_extents: (0.637, 0.377, 0.559),
+            restitution: 0.15,
+            friction: 0.8,
+            gravity: true,
+            lock_pos: (false, false, false),
+            lock_rot: (false, false, false),
+            assembly: true,
+        )),
+    ),
+    (
+        name: "Body",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (2.3, 2.3, 2.3),
+        ),
+        matter: Mesh(
+            asset_path: "models/tools/loose_rock.glb",
+        ),
+        object_materials: {
+            "Rock": (
+                color: (0.78, 0.74, 0.68),
+                texture: Some("textures/terrain/geo_granite.png"),
+                roughness: 0.92,
+                metallic: 0.0,
+                shading: Physical,
+            ),
+        },
+        scripts: [],
+        rigidbody: Some((
+            boxed: true,
+            mode: Kinematic,
+            radius: 0.3,
+            height: 0.6,
+            half_extents: (0.637, 0.377, 0.559),
+            restitution: 0.15,
+            friction: 0.8,
+            gravity: true,
+            lock_pos: (false, false, false),
+            lock_rot: (false, false, false),
+            mass: 0.9,
+        )),
+        parent: Some(0),
+    ),
+]

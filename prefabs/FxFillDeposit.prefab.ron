@@ -1,0 +1,19 @@
+// TOOL VFX node: vfx/FillDeposit on an empty, spawned once and moved by scripts/tool_belt.lua
+// (top level: its coordinates are world coordinates; the beam's end is setBeamEnd).
+[
+    (
+        name: "FxFillDeposit",
+        tags: ["toolfx"],
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+        particles: Some((
+            asset: "vfx/FillDeposit",
+            play_on_start: false,
+        )),
+    ),
+]
