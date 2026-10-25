@@ -40,7 +40,7 @@
 defaults = { slot = 13, seed = 1911564384, quit = 1, onfoot = 30, clicks = 20, hold = 0.5, gap = 0.5,
              mapsecs = 12, flysecs = 45, drivesecs = 45, out = 110, settle = 8, sleepsecs = 20, sample = 0,
              usersave = 0, standsecs = 20, walksecs = 40, meadow_m = 220, digclicks = 100, parksecs = 45,
-             burst = 0 }
+             burst = 0, gpusecs = 10, gpu_out = 200, fullscreen = 0 }
 
 local MODE = "base"
 local W = function() return app.wallClock and app.wallClock() or os.clock() end
@@ -183,7 +183,7 @@ local function measure()
   local c = nil
   if FRAME % 10 == 0 then c = perf.counts() end
   local g = nil
-  if FRAME % 10 == 0 then local ok, gg = pcall(perf.gpu); if ok and gg and gg.total then g = gg end end
+  if FRAME % (MODE == "gpu" and 2 or 10) == 0 then local ok, gg = pcall(perf.gpu); if ok and gg and gg.total then g = gg end end
   if not dtw then return end
   for _, name in ipairs(ORDER) do
     local r = RECS[name]
@@ -306,7 +306,7 @@ local function sc_end(name)
     partsMax = topk(r.pmax, 10), worst = r.hw or {}, bodies = topk(r.bod or {}, 8, math.max(n, 1)),
     lines = topk(r.smp or {}, 12, math.max(n, 1)), worstInverted = r.worst,
     hitchMs = r.hms or 0, hitchBuckets = topk(r.hb or {}, 8), hitchParts = topk(r.hp or {}, 8), counts = cm, countsMax = r.cmax, gpu = r.gn > 0 and r.gpu / r.gn or -1,
-    gpuPasses = topk(r.gp or {}, 8, math.max(r.gn, 1)), luaFns = lpd, notes = notes }))
+    gpuPasses = topk(r.gp or {}, MODE == "gpu" and 32 or 8, math.max(r.gn, 1)), gpuRes = r.res, luaFns = lpd, notes = notes }))
 end
 local function finish_all() for _, name in ipairs(ORDER) do sc_end(name) end end
 
@@ -966,7 +966,10 @@ ascend = function(vc)
 end
 
 -- ── rover ───────────────────────────────────────────────────────────────────
-local function run_rover()
+local function run_rover(o)
+  -- o (the gpu mode): name, secs, out, stop = true ends the drive at `out` m
+  o = o or {}
+  local name, out = o.name or "e_rover", o.out or params.out
   -- (the in-VAB path rolled this rover out with 2 of its 6 parts on rc10: the standalone builder it is)
   local vc = launch_via_builder(ROVER, "runway", 6)
   if not vc then P("RESULT rover: no craft"); return end
@@ -981,9 +984,9 @@ local function run_rover()
     return math.acos(cang) * R
   end
   P("ROVER released %.0f m from the base", from_base())
-  sc_begin("e_rover")
+  sc_begin(name)
   local t0, maxd, tout = time, 0, nil
-  while time - t0 < params.drivesecs do
+  while time - t0 < (o.secs or params.drivesecs) do
     yield()
     if not vn.valid then P("ROVER gone"); break end
     local t = time - t0
@@ -1024,13 +1027,15 @@ local function run_rover()
       P("ROVER track t=%.0f: %.0f m from the base, speed %.1f (%.1f away from it), onWheels %s, why %s",
         t, d, len(v.x, v.y, v.z), vr, tostring(vc.R2.onWheels), tostring(vc.R2.why))
     end
-    if d > params.out and not tout then tout = t; P("ROVER %.0f m out after %.1f s", d, t) end
+    if d > out and not tout then tout = t; P("ROVER %.0f m out after %.1f s", d, t) end
+    if o.stop and d > out then break end
   end
   local i = assembly.info(vn)
   P("ROVER done: max %.0f m from the base, speed %.1f, why %s", maxd, i and len(i.vel.x, i.vel.y, i.vel.z) or -1, tostring(vc.R2.why))
-  sc_note("e_rover", "maxFromBase", maxd)
+  sc_note(name, "maxFromBase", maxd)
   release_all()
-  sc_end("e_rover")
+  sc_end(name)
+  return vc, from_base
 end
 
 -- ── plane (from SCRATCH/aero's probe, trimmed to take-off and low flight) ────
@@ -2171,9 +2176,249 @@ local function run_shot()
   end
 end
 
+-- ── gpu: every GPU pass at one spot, and an A/B of the look's dials ─────────
+-- The engine times each render pass on the GPU (perf.gpu); this prints ALL of
+-- them (sky, depth prepass, matter / terrain, sun shadow map, opaque +
+-- lighting, 2D lighting, glass, particles, reflection capture, post) with the
+-- picture size, render scale and graphics level, so a GPU-bound frame says
+-- which pass it is.
+--   strs where   = base | walk | rover | spawn   (spawn: the player's save, usersave=1)
+--                  base: stand at the base; walk: walk ~100 m out (recorded) and
+--                  stand there; rover: the 6-part rover driven `gpu_out` m
+--                  (recorded) and stopped there
+--   strs toggles = "contact0,fogvol0,shadowdist150,…" (TOGGLES below), each
+--                  applied alone at the same spot for `gpusecs`, the untouched
+--                  look measured before and after them
+--   strs res     = "1920x1080": a window that size (fullscreen=1: the monitor
+--                  switched to it; must be a mode it has)
+--   strs gfx     = Low | Medium | High | Ultra: the graphics level, set through
+--                  graphics.lua (a fresh save with no settings picks High at
+--                  720p and Medium on a screen over 1100 px tall)
+local function light() local ln = find("Lighting"); return ln and ln:getcomponent("Light") end
+local function post() local pn = find("Post Processing"); return pn and pn:getcomponent("PostProcess") end
+local function screen() if camera and camera.screenSize then local w, h = camera.screenSize(); return w or 0, h or 0 end return 0, 0 end
+local function gpu_line(name)
+  local r = RECS[name]; if not r then return end
+  local w, h = screen()
+  local gx = findScript("graphics")
+  local cm = {}
+  for k, v in pairs(r.cnt) do cm[k] = v / math.max(r.cn, 1) end
+  local ps = {}
+  for _, e in ipairs(topk(r.gp or {}, 32, math.max(r.gn, 1))) do ps[#ps + 1] = string.format("%s %.2f", e[1], e[2]) end
+  local sc = app.renderScale and app.renderScale() or -1
+  r.res = { w = w, h = h, scale = sc, level = gx and gx.level() or "?" }
+  P("GPU [%s] %dx%d scale %.2f level %s | total %.2f ms (%d samples) | %s | draws %.0f instances %.0f culled %.0f chunks %.0f props %.0f nodes %.0f",
+    name, w, h, sc, r.res.level, r.gn > 0 and r.gpu / r.gn or -1, r.gn, table.concat(ps, ", "),
+    cm.draws or 0, cm.instances or 0, cm.culled or 0, cm.chunks or 0, cm.props or 0, cm.nodes or 0)
+end
+local function lstate(c)
+  local L, PP = c.L, c.PP
+  if not L then return "no light" end
+  return string.format("shadows %s map %s dist %.0f soft %.2f steps %s contact %s/%s fogVol %s shafts %s fogSteps %s ssr %s post %s bloom %s scale %.2f",
+    tostring(L.shadows), tostring(L.shadowMap), L.shadowDistance or -1, L.shadowSoftness or -1, tostring(L.shadowSteps),
+    tostring(L.contactShadows), tostring(L.contactSteps), tostring(L.fogVolumetric), tostring(L.fogShafts), tostring(L.fogSteps),
+    tostring(L.reflections), tostring(PP and PP.enabled), tostring(PP and PP.bloom), app.renderScale and app.renderScale() or -1)
+end
+-- Each toggle: on(ctx) applies it, off(ctx) puts the look back. Shadow dials
+-- go through a silenced graphics.lua (its update re-asserts the level's
+-- shadow distance every frame).
+local FACS = { "FacHangar", "FacCommand", "FacDepot", "FacTracking", "FacPower", "BaseFuel", "BasePad" }
+local function set_vis(names, v)
+  local n = 0
+  for _, nm in ipairs(names) do
+    for _, nd in ipairs(findAll and findAll(nm) or { find(nm) }) do if nd and nd.valid then nd.visible = v; n = n + 1 end end
+  end
+  return n
+end
+-- A toggle is { set = { field = value, … } } on the Lighting component (the
+-- prior values are kept and put back), or { on =, off = } for the rest.
+local function LT(t) return { set = t } end
+local TOGGLES = {
+  contact0     = LT{ contactShadows = false },
+  contact1     = LT{ contactShadows = true },
+  fogvol0      = { on = function(c) if c.at then c.at.params.volumetric = false end end, off = function(c) if c.at then c.at.params.volumetric = true end end },
+  fogsteps8    = LT{ fogSteps = 8 },
+  fogsteps12   = LT{ fogSteps = 12 },
+  shafts1      = { on = function(c) c.gx.shafts = true end, off = function(c) c.gx.shafts = false end },
+  shadows0     = LT{ shadows = false },
+  shadowmap0   = LT{ shadowMap = false },
+  shadowsteps16 = LT{ shadowMap = false, shadowSteps = 16 },
+  shadowdist100 = LT{ shadowDistance = 100 },
+  shadowdist150 = LT{ shadowDistance = 150 },
+  shadowdist336 = LT{ shadowDistance = 336 },
+  shadowsoft0  = LT{ shadowSoftness = 0 },
+  ssr0         = LT{ reflections = false },
+  post0        = { on = function(c) if c.PP then c.PP.enabled = false end end, off = function(c) if c.PP then c.PP.enabled = true end end },
+  bloom0       = { on = function(c) if c.PP then c.PP.bloom = false end end, off = function(c) if c.PP then c.PP.bloom = true end end },
+  flora0       = { on = function(c) if c.fl then c.fl.params.enabled = 0 end end, off = function(c) if c.fl then c.fl.params.enabled = 1 end end },
+  farbodies0   = { on = function(c) if c.fb then c.fb.params.on = 0 end end, off = function(c) if c.fb then c.fb.params.on = 1 end end },
+  sea0         = { on = function(c) P("GPU sea0: %d nodes hidden", set_vis({ "Sea", "SeaIce" }, false)) end, off = function(c) set_vis({ "Sea", "SeaIce" }, true) end },
+  base0        = { on = function(c) P("GPU base0: %d nodes hidden", set_vis(FACS, false)) end, off = function(c) set_vis(FACS, true) end },
+  scale05      = { on = function(c) c.scale = app.renderScale(); app.setRenderScale(0.5) end, off = function(c) app.setRenderScale(c.scale or 1) end },
+  scale075     = { on = function(c) c.scale = app.renderScale(); app.setRenderScale(0.75) end, off = function(c) app.setRenderScale(c.scale or 1) end },
+  scale09      = { on = function(c) c.scale = app.renderScale(); app.setRenderScale(0.9) end, off = function(c) app.setRenderScale(c.scale or 1) end },
+  -- the fog's light injection off (atmosphere.lua writes fogLight every frame): a flat-coloured march
+  foglight0    = { on = function(c) if c.at then c.at.params.fogLight = 0 end end, off = function(c) if c.at then c.at.params.fogLight = 0.75 end end },
+  fognoise0    = LT{ fogNoise = 0 },
+  -- the base one facility at a time
+  hangar0      = { on = function(c) P("GPU hangar0: %d hidden", set_vis({ "FacHangar" }, false)) end, off = function(c) set_vis({ "FacHangar" }, true) end },
+  interior0    = { on = function(c) P("GPU interior0: %d hidden", set_vis({ "VabInterior", "HangarInterior", "FacHangarInterior", "Interior" }, false)) end,
+                   off = function(c) set_vis({ "VabInterior", "HangarInterior", "FacHangarInterior", "Interior" }, true) end },
+  pad0         = { on = function(c) P("GPU pad0: %d hidden", set_vis({ "BasePad" }, false)) end, off = function(c) set_vis({ "BasePad" }, true) end },
+  flood0       = { on = function(c) P("GPU flood0: %d hidden", set_vis({ "BaseFlood" }, false)) end, off = function(c) set_vis({ "BaseFlood" }, true) end },
+  others0      = { on = function(c) P("GPU others0: %d hidden", set_vis({ "FacCommand", "FacDepot", "FacTracking", "FacPower", "BaseFuel" }, false)) end,
+                   off = function(c) set_vis({ "FacCommand", "FacDepot", "FacTracking", "FacPower", "BaseFuel" }, true) end },
+  -- the base's lamps pulled in to nothing: what the fog pays per lamp in range
+  lights0      = { on = function(c)
+                     c.lights = {}
+                     for _, nm in ipairs({ "BaseFlood", "Pad Flood 1", "Pad Flood 2", "Pad Flood 3", "Pad Flood 4", "Interior Light" }) do
+                       for _, nd in ipairs(findAll and findAll(nm) or {}) do
+                         local pl = nd.valid and nd:getcomponent("PointLight")
+                         if pl then c.lights[#c.lights + 1] = { pl = pl, range = pl.range }; pl.range = 0.1 end
+                       end
+                     end
+                     P("GPU lights0: %d lamps pulled in", #c.lights)
+                   end,
+                   off = function(c) for _, e in ipairs(c.lights or {}) do pcall(function() e.pl.range = e.range end) end end },
+}
+for _, T in pairs(TOGGLES) do
+  if T.set then
+    T.on = function(c) c.prev = {}; for k, v in pairs(T.set) do c.prev[k] = c.L[k]; c.L[k] = v end end
+    T.off = function(c) for k, v in pairs(c.prev or {}) do c.L[k] = v end end
+  end
+end
+-- Wait until the terrain's render slots stop growing (the far rings stream in
+-- over the first minute at a new spot): the look is compared at one scene.
+local function settle_chunks(tmo)
+  local t0, last, lastT = time, -1, time
+  while time - t0 < tmo do
+    local c = perf.counts() or {}
+    if (c.chunks or 0) > last + 20 then last, lastT = c.chunks or 0, time end
+    if time - lastT > 6 and not (terrain.busy and terrain.busy()) then break end
+    wait(1)
+  end
+  local c = perf.counts() or {}
+  P("GPU settled after %.0f s: chunks %s draws %s props %s busy %s", time - t0, tostring(c.chunks), tostring(c.draws), tostring(c.props), tostring(terrain.busy and terrain.busy()))
+end
+local function ab_toggles(prefix)
+  local c = { L = light(), PP = post(), gx = findScript("graphics"), at = findScript("atmosphere"),
+              fl = findScript("flora_field"), fb = findScript("far_bodies") }
+  -- silence graphics.lua's per-frame re-assert of the level's shadow settings
+  local ok, err = pcall(function() c.gx_update = c.gx.update; c.gx.update = function() end end)
+  if not ok then P("GPU: cannot silence graphics.update (%s): the shadow toggles will be overwritten", tostring(err)) end
+  settle_chunks(90)
+  P("GPU state at %s: %s", prefix, lstate(c))
+  local list = {}
+  for t in string.gmatch(tostring(params.toggles or ""), "[^,%s]+") do list[#list + 1] = t end
+  local function run(name)
+    sc_begin(name); wait(params.gpusecs); gpu_line(name); sc_end(name)
+    local r = RECS[name]
+    local out = { total = r.gn > 0 and r.gpu / r.gn or 0, p = {} }
+    for k, v in pairs(r.gp or {}) do out.p[k] = v / math.max(r.gn, 1) end
+    return out
+  end
+  -- the untouched look between every toggle: each is judged against the
+  -- looks on either side of it, so a scene that drifts (the sun, streaming)
+  -- cannot be mistaken for a toggle's effect
+  local looks = { run(prefix .. "_look") }
+  for i, t in ipairs(list) do
+    local T = TOGGLES[t]
+    if not T then P("GPU: unknown toggle %s", t)
+    else
+      local okn, e = pcall(T.on, c)
+      if not okn then P("GPU: toggle %s failed: %s", t, tostring(e)) end
+      wait(1.5)
+      P("GPU state with %s: %s", t, lstate(c))
+      local m = run(prefix .. "_" .. t)
+      local okf, e2 = pcall(T.off, c)
+      if not okf then P("GPU: restore %s failed: %s", t, tostring(e2)) end
+      wait(1.5)
+      local after = run(string.format("%s_look%d", prefix, i + 1))
+      looks[#looks + 1] = after
+      local before = looks[#looks - 1]
+      local parts = {}
+      for _, k in ipairs({ "opaque + lighting", "matter / terrain", "sun shadow map", "depth prepass", "post (AO, bloom, blur…)", "glass" }) do
+        local ref = ((before.p[k] or 0) + (after.p[k] or 0)) / 2
+        if math.abs((m.p[k] or 0) - ref) > 0.05 then parts[#parts + 1] = string.format("%s %+.2f", k, (m.p[k] or 0) - ref) end
+      end
+      P("GPU DELTA [%s] %+.2f ms (%.2f against the looks %.2f / %.2f) | %s", t, m.total - (before.total + after.total) / 2, m.total, before.total, after.total, table.concat(parts, ", "))
+    end
+  end
+  if c.gx_update then pcall(function() c.gx.update = c.gx_update end) end
+end
+local function run_gpu()
+  local where = tostring(params.where or "base")
+  if params.gfx then
+    local gx = findScript("graphics")
+    if gx and gx.set then gx.set(tostring(params.gfx)); P("GPU graphics level set to %s", tostring(params.gfx)) end
+  end
+  if params.res and app.setDisplayMode then
+    -- again, after the game's own settings (opt_fullscreen) have been applied at the load
+    local rw, rh = tostring(params.res):match("(%d+)x(%d+)")
+    if rw then
+      local ok, err = pcall(app.setDisplayMode, { width = tonumber(rw), height = tonumber(rh), fullscreen = params.fullscreen > 0, monitor = params.monitor })
+      P("GPU display mode %sx%s fullscreen %s monitor %s: %s %s", rw, rh, tostring(params.fullscreen > 0), tostring(params.monitor), tostring(ok), tostring(err))
+      wait(1)
+    end
+  end
+  local w, h = screen()
+  P("GPU where=%s picture %dx%d scale %.2f fullscreen %s", where, w, h, app.renderScale and app.renderScale() or -1, tostring(app.fullscreen and app.fullscreen()))
+  if app.monitors then
+    for i, m in ipairs(app.monitors() or {}) do P("GPU monitor %d: %s %dx%d@%s at %s,%s current %s", i, tostring(m.name), m.width or 0, m.height or 0, tostring(m.refresh), tostring(m.x), tostring(m.y), tostring(m.current)) end
+  end
+  if params.shotset then
+    -- gpushot.sh: hold one look (a toggle, or "look" for the untouched one) for
+    -- `floptle shot --after` to photograph
+    wait_ready(90)
+    if where == "walk" then
+      local spot = find_meadow(params.gpu_walk or 120)
+      if spot then stand_at(spot); P("GPU at the %s %d m out (flora %.2f)", tostring(spot.biome), spot.d, spot.flora); wait(3) end
+    end
+    settle_chunks(60)
+    local c = { L = light(), PP = post(), gx = findScript("graphics"), at = findScript("atmosphere"),
+                fl = findScript("flora_field"), fb = findScript("far_bodies") }
+    pcall(function() c.gx.update = function() end end)
+    local T = TOGGLES[tostring(params.shotset)]
+    if T then pcall(T.on, c) end
+    wait(1)
+    P("GPU shot state (%s): %s", tostring(params.shotset), lstate(c))
+    while true do yield() end
+  end
+  if where == "base" or where == "spawn" then
+    wait_ready(90)
+    wait(2)
+    ab_toggles(where == "spawn" and "g_spawn" or "g_base")
+  elseif where == "walk" then
+    wait_ready(90)
+    -- the open ground: the grassiest spot ~gpu_walk m from the base (the spawn
+    -- itself is inside the hangar, which is already 100 m from the base origin)
+    local spot = find_meadow(params.gpu_walk or 120)
+    if spot then stand_at(spot); P("GPU at the %s %d m out (flora %.2f)", tostring(spot.biome), spot.d, spot.flora); wait(3) end
+    walk_about("g_walk", 12)
+    wait(2)
+    ab_toggles("g_meadow")
+  elseif where == "rover" then
+    local vc = run_rover({ name = "g_drive" .. math.floor(params.gpu_out), out = params.gpu_out, secs = 90, stop = true })
+    if not vc then return end
+    wait(3)
+    if params.gfx then local gx = findScript("graphics"); if gx and gx.set then gx.set(tostring(params.gfx)) end end
+    ab_toggles("g_rover")
+  else
+    P("GPU: unknown where %s", where)
+  end
+end
+
 -- ── main ────────────────────────────────────────────────────────────────────
 local CO = nil
 local MAIN = function()
+  if params.res and app.setDisplayMode then
+    local w, h = tostring(params.res):match("(%d+)x(%d+)")
+    if w then
+      local ok, err = pcall(app.setDisplayMode, { width = tonumber(w), height = tonumber(h), fullscreen = params.fullscreen > 0 })
+      P("GPU display mode %sx%s fullscreen %s: %s %s", w, h, tostring(params.fullscreen > 0), tostring(ok), tostring(err))
+      wait(1)
+    end
+  end
   boot()
   if MODE == "base" then
     run_base()
@@ -2191,6 +2436,7 @@ local MAIN = function()
     elseif MODE == "bigpark" then run_bigpark()
     elseif MODE == "gameplay" then run_gameplay()
     elseif MODE == "shot" then run_shot()
+    elseif MODE == "gpu" then run_gpu()
     else P("unknown mode %s", MODE) end
   end
   release_all()

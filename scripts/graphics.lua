@@ -13,7 +13,10 @@
 -- So the frame was almost all lighting: the shaft march alone was half of it,
 -- and the terrain's distance-field sun shadow is most of what remains. Both
 -- are per-pixel costs, which is why render scale is the strong lever and why a
--- 1440p editor view fell to a few frames a second. The level names below are
+-- 1440p editor view fell to a few frames a second. (Engine 0.117.0-rc25, with
+-- the sun shadow MAP: shadows are 1–2 ms; the lit volumetric fog is now the
+-- whole difference between High and Medium — 13–20 ms of a 20–30 ms GPU frame
+-- at 1920×1052, see tools/perf/results/gpu_rc25.md.) The level names below are
 -- bundles of those knobs, cheapest first. With nothing saved, a screen up to
 -- 1080p starts on High and a larger one on Medium, the level that holds 60 fps
 -- at 1440p on a mid-range card.
@@ -52,14 +55,20 @@
 
 LEVELS = { "Low", "Medium", "High", "Ultra" }
 
+-- fogSteps: samples along each pixel's volumetric fog ray (the engine's
+-- quality/cost dial; only the volumetric levels pay it). Measured on engine
+-- 0.117.0-rc25 at 1920×1052 on the home world (tools/perf/results/gpu_rc25.md):
+-- the lit march is 13–20 ms of a 20–30 ms GPU frame at 16 steps, and 12 steps
+-- are 3–5 ms cheaper with no pixel of a daylight meadow changed; 8 would save
+-- twice that but thins thick ground mist. Ultra keeps the full 16.
 local PRESETS = {
-  Low    = { scale = 0.60, sharpen = 0.6, shadows = true, shadowDistance = 70,  volumetric = false, shafts = false,
+  Low    = { scale = 0.60, sharpen = 0.6, shadows = true, shadowDistance = 70,  volumetric = false, shafts = false, fogSteps = 8,
              text = "For older or integrated graphics. Softer image, short shadows, plain haze." },
-  Medium = { scale = 0.90, shadows = true, shadowDistance = 140, volumetric = false, shafts = false,
+  Medium = { scale = 0.90, shadows = true, shadowDistance = 140, volumetric = false, shafts = false, fogSteps = 12,
              text = "Balanced. Sharp enough for most screens, holds 60 fps on a mid-range card." },
-  High   = { scale = 1.00, shadows = true, shadowDistance = 220, volumetric = true,  shafts = false,
+  High   = { scale = 1.00, shadows = true, shadowDistance = 220, volumetric = true,  shafts = false, fogSteps = 12,
              text = "Full resolution and volumetric air. Wants a strong graphics card." },
-  Ultra  = { scale = 1.00, shadows = true, shadowDistance = 400, volumetric = true,  shafts = true,
+  Ultra  = { scale = 1.00, shadows = true, shadowDistance = 400, volumetric = true,  shafts = true,  fogSteps = 16,
              text = "Adds sun shafts through the air. Very expensive at high resolutions." },
 }
 local DEFAULT = "Medium"
@@ -137,6 +146,7 @@ local function apply(name)
   if l then
     l.shadows = p.shadows
     l.shadowDistance = p.shadowDistance * shadowScale
+    if p.fogSteps then l.fogSteps = p.fogSteps end
   end
 end
 
@@ -209,6 +219,7 @@ function update(node, dt)
     l.shadows = p.shadows
     l.shadowDistance = want
   end
+  if l and p.fogSteps and l.fogSteps ~= p.fogSteps then l.fogSteps = p.fogSteps end
 
   choose_default()
 

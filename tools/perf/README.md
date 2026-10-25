@@ -32,6 +32,7 @@ Modes (`perfbench.lua`, strs `mode`):
 | bigpark | either | the 1,002-part finned spine released on the pad with no throttle: sleep and physics before/after (0509/0531) |
 | gameplay | either | the gameplay smoke: in-VAB rover rollout + 100 m drive, two-stage to orbit, starter rocket to apex + revert to launch, jet take-off, 1,002-part rollout and release. One `RESULT SMOKE <step>: PASS/FAIL` line a step |
 | quick | either | 15 s idle with the 0528 pacing readout (`app.refreshRate`, `perf.pacing`); `cap=1` then caps at the refresh |
+| gpu | either | every GPU pass the engine times (`perf.gpu`), with the picture size, render scale and graphics level, at one spot: strs `where` = `base` (stand at the base), `walk` (teleported to the grassiest spot `gpu_walk` m out, a 12 s walk recorded, then stand), `rover` (the 6-part rover driven `gpu_out` m, then stopped) or `spawn` (USERSAVE=1, the player's spawn); strs `toggles` = a comma list of looks applied one at a time for `gpusecs` each (contact0/1, fogvol0, fogsteps8/12, foglight0, fognoise0, shadows0, shadowmap0, shadowdist100/150/336, shadowsoft0, ssr0, post0, bloom0, flora0, farbodies0, sea0, base0, hangar0, interior0, pad0, flood0, others0, lights0, scale05/075/09), the untouched look measured between every two so a drifting scene cannot pass for a toggle — one `GPU [scenario]` line and one `GPU DELTA [toggle]` line each; strs `res` = `1920x1080` (+ `fullscreen=1`, `monitor=n`) and `gfx` = Low/Medium/High/Ultra set the picture and the level. `gputable.py bench.jsonl` tabulates it |
 
 `USERSAVE=1` copies `save/slot1.ron`, `save/settings.ron` and `saves/slot1` into
 the scratch project before every mode and boots from that copy as the menu's
@@ -44,6 +45,14 @@ buckets/parts/bodies per frame, the fields: `fieldChunks`/`fieldEdited`/
 On the player's save the probe also prints `GROUND96`: 96 ground radii round the
 base summed, at the reveal and after the scenario — the same number on two
 engines means the same ground.
+
+## gpushot.sh — a picture of one look, for before/after
+
+    tools/perf/gpushot.sh <engine> <look> [after-seconds]      (WHERE=walk for the meadow, USERSAVE=1 for the player's spawn)
+
+The gpu mode on a fresh save (or the player's), holding one look (`look`, or a
+toggle such as `fogsteps12`) for `floptle shot --after` to photograph at SIZE
+(default 1920x1052, the XWayland play window). Pictures land in `$WORK/shots`.
 
 ## shot.sh — a picture of the tools' marks
 

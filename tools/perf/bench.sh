@@ -13,6 +13,7 @@
 #        USERSAVE=1 copies $SOLAR/save/slot1.ron, save/settings.ron and saves/slot1 into the
 #        scratch project (Solar's own are never written) and boots from that copy (slot 1),
 #        BENCH_PARAMS extra perfbench params, e.g. '("sleepsecs", 30.0), ("loads", 1.0)'
+#        BENCH_STRS extra perfbench strs, e.g. '("where", "walk"), ("toggles", "contact0,flora0")'
 #
 # Each mode is one `floptle play` of a scratch copy of Solar whose entry scene is
 # perfbench.lua; each runs under the shared engine lock, silent. Results:
@@ -78,11 +79,14 @@ for m in $MODES; do
         ( name: "Camera", transform: ( translation: (0.0, 0.0, 0.0), rotation: (0.0, 0.0, 0.0, 1.0), scale: (1.0, 1.0, 1.0) ),
           matter: Camera( fov_y: 1.1519173, active: true ), scripts: [] ),
         ( name: "Perf Bench", transform: ( translation: (0.0, 0.0, 0.0), rotation: (0.0, 0.0, 0.0, 1.0), scale: (1.0, 1.0, 1.0) ),
-          matter: Empty, scripts: [ ( kind: "perfbench", enabled: true, params: [${BENCH_PARAMS:-}], strs: [ ("mode", "$m") ] ) ] ),
+          matter: Empty, scripts: [ ( kind: "perfbench", enabled: true, params: [${BENCH_PARAMS:-}], strs: [ ("mode", "$m")${BENCH_STRS:+, $BENCH_STRS} ] ) ] ),
     ],
 )
 RON
   rm -f $PJ/save/slot13.ron; rm -rf $PJ/saves/slot13
+  # a fresh save is a fresh player: no settings slot left over from a USERSAVE run
+  # (graphics.lua would read its level instead of picking the screen's default)
+  [ -n "${USERSAVE:-}" ] || rm -f $PJ/save/settings.ron
   if [ -n "${USERSAVE:-}" ]; then
     # a fresh copy for every mode: the probe plays on it (launches, digs) and must not carry that over
     rm -f $PJ/save/slot1.ron; rm -rf $PJ/saves/slot1
@@ -92,7 +96,7 @@ RON
   start=$(date +%s)
   flock $LOCK bash -c "uptime > $OUT/$m.uptime; $ENVX ALSA_CONFIG_PATH=$S/silent-alsa.conf timeout $tmo $F play $PJ > $OUT/$m.log 2>&1; echo \$? > $OUT/$m.exit; uptime >> $OUT/$m.uptime"
   echo "  $m: exit $(cat $OUT/$m.exit) after $(( $(date +%s) - start )) s (incl. lock wait); load $(head -1 $OUT/$m.uptime | sed 's/.*load average: //')"
-  grep -a "PB .*\(RESULT \[\|RESULT SMOKE\|SETTLE\|SLEEP\|PACING\|TIMEOUT\|ERROR\|DONE\|ROCKET\|PLANE\|ROVER\|ORBIT\|MECO\|DIG\|BIG\|GROUND96\|FIELDS\|MEADOW\|PARK\|usersave\)\|watchdog\|without returning" $OUT/$m.log | grep -v "worst #\|counts mean\|scripts/frame\|buckets/frame\|frames over" | head -60
+  grep -a "PB .*\(RESULT \[\|RESULT SMOKE\|SETTLE\|SLEEP\|PACING\|TIMEOUT\|ERROR\|DONE\|ROCKET\|PLANE\|ROVER\|GPU\|ORBIT\|MECO\|DIG\|BIG\|GROUND96\|FIELDS\|MEADOW\|PARK\|usersave\)\|watchdog\|without returning" $OUT/$m.log | grep -v "worst #\|counts mean\|scripts/frame\|buckets/frame\|frames over" | head -60
   python3 - "$OUT" "$m" <<'PY'
 import json, sys
 out, m = sys.argv[1], sys.argv[2]
