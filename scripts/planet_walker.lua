@@ -1333,6 +1333,118 @@ local function stand_down(node, dt, ux, uy, uz, fx, fy, fz, on_ground, swimming)
   return true
 end
 
+-- ── THE GROUND NET ──────────────────────────────────────────────────────────
+-- Terrain collision is the engine's meshed surface triangles, and a triangle
+-- only pushes a body that is still on its outer side: once the capsule's
+-- centre is past the floor (a fast fall onto ground not meshed yet, a frame of
+-- several catch-up ticks, a grade or an edit that raised the rock round the
+-- feet) nothing pushes it back and it drops on through the planet — "inside
+-- the planet, cave walls seen from the inside, STRANDED". So, every NET_EVERY
+-- seconds, one terrain.query at the capsule's centre: standing (or swimming)
+-- clear of the rock, that spot is remembered in the PLANET's frame (the planet
+-- moves metres a tick); NET_DEEP metres inside the rock on two checks in a row,
+-- the crew is put back on the last safe spot — lifted until it is clear of
+-- rock, never into it — and the rescue is logged. One query a tenth of a
+-- second: nothing next to the frame.
+local NET_EVERY = 0.1
+local NET_DEEP = 1.0      -- rock over the capsule's centre that means "through"
+local NET_SAFE = 0.4      -- clearance a remembered spot must have
+local NET_UNMADE = 8.0    -- metres under the safe spot, in ground not made yet
+local net_t = -10.0
+local net_bad = 0
+local net_safe = nil      -- { name, x, y, z, rot } on the planet; rot: a node frame
+-- For probes and tests: checks run, rescues made, the last query and rescue.
+groundNet = { checks = 0, rescues = 0, q = nil, last = nil }
+-- Whether the walker is holding the crew up on the ground's field this frame
+-- because the collision probe found no ground there (see THE FIELD FLOOR).
+fieldFloor = false
+-- A probe that wants to watch a fall through the floor switches it off.
+groundNetOn = true
+
+local function net_to_local(name, x, y, z)
+  local f = find and find(name)
+  if f and f.valid and f.toLocal then
+    local l = f:toLocal(vec3(x, y, z))
+    return l.x, l.y, l.z, true
+  end
+  local b = space.body and space.body(name)
+  if b then return x - b.x, y - b.y, z - b.z, false end
+  return nil
+end
+local function net_to_world(s)
+  if s.rot then
+    local f = find and find(s.name)
+    if not (f and f.valid and f.toWorld) then return nil end
+    local w = f:toWorld(vec3(s.x, s.y, s.z))
+    return w.x, w.y, w.z
+  end
+  local b = space.body and space.body(s.name)
+  if b then return b.x + s.x, b.y + s.y, b.z + s.z end
+  return nil
+end
+
+-- Returns true when it moved the crew this frame.
+local function ground_net(node, ux, uy, uz, on_ground, swimming)
+  if not groundNetOn or not (terrain and terrain.query and space and space.dominant) then return false end
+  if time - net_t < NET_EVERY then return false end
+  net_t = time
+  local x, y, z = node.x, node.y, node.z
+  local q = terrain.query(x, y, z)
+  if q == nil then net_bad = 0 return false end
+  local name = space.dominant(x, y, z)
+  if not name then return false end
+  local b = space.body and space.body(name)
+  local r = b and math.sqrt((x - b.x) ^ 2 + (y - b.y) ^ 2 + (z - b.z) ^ 2) or 0
+  groundNet.checks = groundNet.checks + 1
+  groundNet.q = q
+  if terrain.ready and not terrain.ready(x, y, z) then
+    -- Ground not made yet (deep rock is generated when something comes near):
+    -- the query reads it as open air, and so does the collider. Fallen well
+    -- below the last spot stood on, through that, is a fall through too.
+    if not (net_safe and net_safe.name == name and net_safe.r - r > NET_UNMADE) then net_bad = 0 return false end
+  elseif q > -NET_DEEP then
+    net_bad = 0
+    if (on_ground or swimming) and q >= NET_SAFE then
+      local lx, ly, lz, rot = net_to_local(name, x, y, z)
+      if lx then net_safe = { name = name, x = lx, y = ly, z = lz, rot = rot, r = r } end
+    end
+    return false
+  end
+  net_bad = net_bad + 1
+  if net_bad < 2 then return false end
+  net_bad = 0
+  -- Where to: the last safe spot on this planet, else straight up from here.
+  local tx, ty, tz
+  if net_safe and net_safe.name == name then tx, ty, tz = net_to_world(net_safe) end
+  if not tx then tx, ty, tz = x, y, z end
+  -- Up from there in quarter metres until the capsule's centre is clear of
+  -- the rock (a cave's roof is never climbed into: the spot itself is tried
+  -- first, and it was clear when it was remembered).
+  local lift = 0.0
+  local placed = false
+  for _ = 1, 32 do
+    local px, py, pz = tx + ux * lift, ty + uy * lift, tz + uz * lift
+    local pq = terrain.query(px, py, pz)
+    if pq and pq >= NET_SAFE + 0.2 then tx, ty, tz, placed = px, py, pz, true break end
+    lift = lift + 0.25
+  end
+  if not placed then
+    tx, ty, tz = rescue_point(node, ux, uy, uz)
+  end
+  local unmade = terrain.ready and not terrain.ready(x, y, z)
+  print(string.format("WALKER NET rescue: %s at (%.1f, %.1f, %.1f) v %.1f m/s on %s -> %s lift %.1f m",
+    unmade and string.format("%.1f m under the last safe spot, in ground not made yet", net_safe.r - r)
+      or string.format("%.2f m inside the rock", -q), x, y, z, math.sqrt(node.vx ^ 2 + node.vy ^ 2 + node.vz ^ 2), tostring(name),
+    placed and (net_safe and "the last safe spot" or "straight up") or "the rescue point", lift))
+  node.x, node.y, node.z = tx, ty, tz
+  node.vx, node.vy, node.vz = 0, 0, 0
+  mvx, mvy, mvz = 0.0, 0.0, 0.0
+  swim_vup, slope_vup = 0.0, 0.0
+  groundNet.rescues = groundNet.rescues + 1
+  groundNet.last = { t = time, depth = -q, x = tx, y = ty, z = tz, placed = placed }
+  return true
+end
+
 function update(node, dt)
   if not cam then cam = ref("planet_camera") end
   -- The character model rides as a child; keep its visibility mirrored to us so
@@ -1416,6 +1528,25 @@ function update(node, dt)
   if not contact and params.ground_ray > 0 then
     ground_hit = raycast(node.x, node.y, node.z, -ux, -uy, -uz, params.ground_ray, node)
   end
+  -- THE FIELD FLOOR. On engine 0.117 rc25+ a body resting on ground it
+  -- reached can lose that ground's collision triangles a few frames later
+  -- (seen in caves: the collision ray misses the floor terrain.raycast still
+  -- finds 1 m below), and the crew then sinks through the floor and falls into
+  -- the planet. The ground's own field is the truth, so where the collision
+  -- probe finds nothing it asks the field (terrain.raycast reads the field,
+  -- not the collision meshes): ground there is ground under the feet, and a
+  -- body sunk into it is held up (`field_sunk`, below). Where the collider is
+  -- right, the two agree and this never runs.
+  local field_sunk = nil
+  if not contact and not ground_hit and params.ground_ray > 0 and terrain and terrain.raycast then
+    local th = terrain.raycast(vec3(node.x, node.y, node.z), vec3(-ux, -uy, -uz), params.ground_ray)
+    if th and th.distance then
+      ground_hit = { distance = th.distance, field = true }
+      local half = (node.height or 2.0) * 0.5
+      if th.distance < half - 0.02 then field_sunk = half - th.distance end
+    end
+  end
+  fieldFloor = field_sunk ~= nil
   local on_ground = contact or ground_hit ~= nil
   grounded = on_ground
 
@@ -1440,6 +1571,7 @@ function update(node, dt)
     f, s, sprint = 0, 0, false
     speed = 0
   end
+  if not downed and not holding and ground_net(node, ux, uy, uz, on_ground, swimming) then return end
   if stand_down(node, dt, ux, uy, uz, fx, fy, fz, on_ground, swimming) then return end
 
   -- ── the tangent velocity ────────────────────────────────────────────────────
@@ -1535,6 +1667,10 @@ function update(node, dt)
     slope_vup = 0.0
   end
   was_contact = contact
+  -- Held up on the field floor: no sinking, and back up out of it gently.
+  if field_sunk and not jumped then
+    vup = math.max(vup, math.min(3.0, field_sunk / math.max(dt, 1e-3) * 0.5))
+  end
   bump(node, dt, ux, uy, uz)
   node.vx = mvx + ux * vup
   node.vy = mvy + uy * vup

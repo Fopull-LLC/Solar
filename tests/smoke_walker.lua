@@ -1024,6 +1024,96 @@ keys.w = nil
 envs.flora_field = nil
 tick(30)
 
+-- ── 9. the ground net ───────────────────────────────────────────────────────
+-- "you just fall through the floor of the cave into the planet": once the
+-- capsule's centre is past the meshed floor nothing pushes it back. The walker
+-- reads terrain.query at the centre every tenth of a second and puts a crew
+-- more than a metre inside the rock back on the last spot it stood clear of
+-- it, in the planet's frame, lifted until clear — never into the rock.
+local floor_y = 0.0
+local planet = { x = 0, y = -1000, z = 0 }
+local queries = 0
+API.space.body = function() return { x = planet.x, y = planet.y, z = planet.z } end
+API.terrain = {
+  query = function(x, y, z) queries = queries + 1; return y - (planet.y + 1000) - floor_y end,
+  ready = function() return true end,
+}
+sea_y = nil
+keys = {}
+ground_under = true
+ASTRO.grounded = true
+ASTRO.x, ASTRO.y, ASTRO.z, ASTRO.vx, ASTRO.vy, ASTRO.vz = 4.0, 1.0, -2.0, 0, 0, 0
+tick(60)
+local q0 = queries
+check("the net reads the ground about ten times a second, not every frame", q0 >= 8 and q0 <= 14,
+  string.format("%d queries in a second", q0))
+check("standing on the ground is never a rescue", walker.groundNet.rescues == 0)
+-- A metre and a half of the planet moves on, the crew falls 3 m into the rock.
+planet.x = 50.0
+ASTRO.x, ASTRO.y, ASTRO.z, ASTRO.vy = 54.0 + 7.0, -3.0, -2.0, -12.0
+tick(30)
+check("three metres inside the rock, the crew is put back", walker.groundNet.rescues == 1,
+  string.format("%d rescues", walker.groundNet.rescues))
+check("...on the last safe spot, carried with the planet", math.abs(ASTRO.x - 54.0) < 0.01 and math.abs(ASTRO.z + 2.0) < 0.01,
+  string.format("at (%.2f, %.2f, %.2f)", ASTRO.x, ASTRO.y, ASTRO.z))
+check("...clear of the rock and at rest", ASTRO.y >= 0.6 and ASTRO.vy == 0,
+  string.format("y %.2f vy %.2f", ASTRO.y, ASTRO.vy))
+-- Brushing into the ground by half a metre is the solver's, not a rescue.
+local r1 = walker.groundNet.rescues
+ASTRO.y = -0.5
+tick(30)
+check("half a metre into the ground is left to the solver", walker.groundNet.rescues == r1)
+-- The safe spot was dug over (raised) since: lifted until clear, never into it.
+ASTRO.y = 1.0
+tick(30)
+floor_y = 2.5
+ASTRO.y = -4.0
+tick(30)
+check("a safe spot buried since is climbed out of, not into", walker.groundNet.rescues == r1 + 1 and ASTRO.y - floor_y >= 0.6,
+  string.format("y %.2f over a floor at %.2f", ASTRO.y, floor_y))
+-- Ground not made yet reads as open air (and collides as air): fallen ten
+-- metres under the last spot stood on through it is a fall through as well.
+floor_y = 0.0
+ASTRO.y = 1.0
+tick(30)
+local r2 = walker.groundNet.rescues
+local made = true
+API.terrain.ready = function() return made end
+made = false
+ASTRO.y, ASTRO.vy = -4.0, -10.0
+tick(30)
+check("a few metres down into ground not made yet is not yet a rescue", walker.groundNet.rescues == r2)
+ASTRO.y = -12.0
+tick(30)
+made = true
+check("ten metres down through ground not made yet is put back", walker.groundNet.rescues == r2 + 1 and ASTRO.y >= 0.6,
+  string.format("%d rescues, y %.2f", walker.groundNet.rescues - r2, ASTRO.y))
+API.terrain.ready = function() return true end
+-- THE FIELD FLOOR: the collision probe and contact find nothing (the
+-- engine lost the floor's triangles), the field still has ground 0.7 m under
+-- the centre: the crew is held up on it, not left to sink.
+floor_y = 0.0
+API.terrain.raycast = function(o, d, max)
+  local dist = o.y - floor_y
+  if d.y < 0 and dist >= 0 and dist <= max then return { pos = vec3(o.x, floor_y, o.z), distance = dist, exact = true } end
+  return nil
+end
+ground_under = false
+ASTRO.grounded = false
+ASTRO.y, ASTRO.vy = 0.7, -2.0
+tick(1)
+check("ground lost by the collider but in the field holds the crew up", walker.fieldFloor == true and vup() > 0 and walker.grounded == true,
+  string.format("fieldFloor %s vup %.2f grounded %s", tostring(walker.fieldFloor), vup(), tostring(walker.grounded)))
+ASTRO.y, ASTRO.vy = 1.0, 0.0
+tick(1)
+check("...standing at its height on it, no push", walker.fieldFloor == false and math.abs(vup()) < 0.5,
+  string.format("fieldFloor %s vup %.2f", tostring(walker.fieldFloor), vup()))
+ground_under = true
+ASTRO.grounded = true
+API.terrain = nil
+floor_y = 0.0
+ASTRO.y = 1.0
+
 -- ── report ──────────────────────────────────────────────────────────────────
 local bad = {}
 for _, c in ipairs(checks) do
