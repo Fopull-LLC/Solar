@@ -1428,6 +1428,12 @@ local beacon_req = nil
 local paint_beacon
 local ring_s = nil
 local reticle_draw = nil
+-- No screen marks (the reticle, its E and its labels) until this time: a
+-- script taking a photo through camera.capture asks for a clean frame
+-- (scripts/flag.lua). The capture draws draw.text/draw.rect even with
+-- ui = false (engine card), so they are held back here.
+local quiet_until = nil
+function quietFor(secs) quiet_until = (time or 0) + (secs or 0.3) end
 
 local function show_beam(hit, power, kind, extra)
   if not hit then beam_req = false return end
@@ -2917,7 +2923,8 @@ end
 local stowed = false
 function lateUpdate(node, dt)
   beamQuads = 0
-  if reticle_draw then reticle_draw() end
+  -- (a photo being taken asks for a clean frame: quietFor)
+  if reticle_draw and not (quiet_until and (time or 0) < quiet_until) then reticle_draw() end
   reticle_draw = nil
   -- Tools away (aboard, the map, a panel): hide what is out once, then cost
   -- nothing — no models, no finds, no beams, frame after frame.
@@ -3320,8 +3327,13 @@ local function draw_hud(carrying)
   if not hud then return end
   local el = hud:getcomponent("UiElement")
   local pm, om = ref("pause_menu"), ref("orbit_map")
+  -- A facility panel (the Tracking Station, the depot) or the Ops Board owns
+  -- the screen while it is up, as the pause menu does: the hotbar and the
+  -- belt's prompts go under it.
+  local fm, ob = ref("facility_menu"), ref("ops_board")
   local up = (carrying or gate ~= GATE_ABOARD) and not (pm and pm.open)
     and not (om and om.isOpen and om.isOpen())
+    and not (fm and fm.isOpen and fm.isOpen()) and not (ob and ob.isOpen and ob.isOpen())
   if el then el.visible = up end
   if el then
     local y = (access and access.captions and access.captions()) and -84 or -16

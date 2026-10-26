@@ -36,7 +36,25 @@ end
 
 local FADE_IN, FADE_OUT = 0.35, 0.9
 
+-- A full panel the player stopped to read (the pause menu, a facility's, the
+-- Ops Board, the map) owns the screen: the caption waits under it, and its
+-- clock with it, so it is still seen when the panel closes.
+local function panel_up()
+  for _, k in ipairs({ "pause_menu", "facility_menu", "ops_board", "orbit_map", "tracking_station" }) do
+    local s = findScript and findScript(k)
+    if s then
+      if k == "pause_menu" then if s.open then return true end
+      elseif s.isOpen and s.isOpen() then return true end
+    end
+  end
+  return false
+end
+
 function update(node, dt)
+  if title and panel_up() then
+    if drawn then ui.make(node, {}); drawn = false end
+    return
+  end
   clock = clock + (dt or 0)
   local age = clock - shown_at
   if not title or age > life + FADE_OUT then

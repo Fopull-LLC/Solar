@@ -10,7 +10,7 @@
 --      else deployables.place) with its ceremony: driven in, the salute, the
 --      photo; two pictures 0.5 s apart for the cloth's motion; it faces
 --      downwind
---   4. a pod and an EmblemPlate beside it: the plates wear the emblem
+--   4. a pod: its hull plate wears the emblem
 --   5. a rename in Settings (emblem.set): the planted flag and the plate
 --      repaint without a reload
 --   6. the Tracking Station's FLAGS list and its photo
@@ -316,12 +316,6 @@ local function run()
         n:setUp(fu, (vec3(0, 0, 0) - rt):normalized())
         pod = n
       end, { parent = planet, body = false })
-      local lq = planet:toLocal(pp + fu * 0.25 - rt * 1.0)
-      spawn("EmblemPlate", pp, function(n)
-        n.x, n.y, n.z = lq.x, lq.y, lq.z
-        n:setUp(fu, (vec3(0, 0, 0) - rt):normalized())
-        plate = n
-      end, { parent = planet, body = false })
     end
     hold(1.5)
     if pod then
@@ -375,6 +369,25 @@ local function run()
   hold(0.5)
   local ts = findScript("tracking_station")
   local fm = findScript("facility_menu")
+  -- walk up to the Tracking Station's dish, as the player does, so the
+  -- facility menu owns the panel (and everything that hides under a panel
+  -- does)
+  local dish = find("FacTracking")
+  if dish then
+    local astro = find("Astronaut")
+    local bb = space.body(bname)
+    local dw = dish:toWorld(vec3(0, 0, 0))
+    local du = (dw - vec3(bb.x, bb.y, bb.z)):normalized()
+    local aw = vec3(astro.x, astro.y, astro.z)
+    local side = (aw - dw):flatten(du)
+    side = side:length() > 1 and side:normalized() or du:cross(vec3(0, 0, 1)):normalized()
+    local g = ground_at(bname, (dw - vec3(bb.x, bb.y, bb.z)) + side * 9.0)
+    if g then
+      astro.x, astro.y, astro.z = g.x + du.x * 1.2, g.y + du.y * 1.2, g.z + du.z * 1.2
+      astro.vx, astro.vy, astro.vz = 0, 0, 0
+    end
+    hold(1.0)
+  end
   if ts then
     if fm and fm.openMenu then fm.openMenu("FacTracking") else ts.open() end
     ts.selectCraft("f:" .. tostring(fid))

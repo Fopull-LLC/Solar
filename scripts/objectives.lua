@@ -707,6 +707,8 @@ local function panel_up()
   if fm and fm.isOpen and fm.isOpen() then return true end
   local ob = ref("ops_board")
   if ob and ob.isOpen and ob.isOpen() then return true end
+  local ts = ref("tracking_station")
+  if ts and ts.isOpen and ts.isOpen() then return true end
   -- The map owns the whole screen, its readout included.
   local om = ref("orbit_map")
   if om and om.isOpen and om.isOpen() then return true end
