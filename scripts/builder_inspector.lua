@@ -7,8 +7,10 @@
 --             moved here from the groups panel); its controls, with BIND
 --   STAGE     the staging stack (the builder's STAGE tool shows it)
 --   CONTROLS  the keymap (WP5's groups panel, the builder's GROUPS tool)
---   CRAFT     the outliner's named groups, the history (click a step to go
---             back to it) and the budget: parts, islands, the builder's cost
+--   CRAFT     the control mode (Auto / Rover / Aircraft / Rocket, and what
+--             Auto makes of the craft), the outliner's named groups, the
+--             history (click a step to go back to it) and the budget: parts,
+--             islands, the builder's cost
 --
 -- Every number shown comes from the builder's API (partRec, stats, selection)
 -- and every change goes through cmd(), so it is undoable and the craft stays
@@ -252,6 +254,40 @@ local function engine_rows(B, def, out)
   if d.ve then out[#out + 1] = figure("ev", "EXHAUST", pairText(d.asl and d.ve * k or nil, d.ve, "%.0f", " m/s", "sea")) end
 end
 
+-- ── the control mode (builder.ctrlMode, scripts/craft_mode.lua) ─────────────
+-- How the craft drives in flight. AUTO reads the whole craft and says what it
+-- made of it; a key wins over Auto. Shown on THIS CRAFT (nothing selected)
+-- and at the top of the CRAFT tab.
+local CTRL_SHORT = { auto = "Auto", rover = "Rover", aircraft = "Aircraft", rocket = "Rocket" }
+local function ctrl_rows(B, out)
+  if not (B.ctrlMode and B.cmd) then return end
+  local c = B.ctrlMode() or {}
+  local labels, tips = c.labels or CTRL_SHORT, c.tips or {}
+  out[#out + 1] = sublabel("cmh", "CONTROL MODE")
+  -- two keys a row: four don't fit the plate's width with their names
+  local row
+  for k, m in ipairs(B.CTRL_MODES or { "auto", "rover", "aircraft", "rocket" }) do
+    if k % 2 == 1 then
+      row = { "row", key = "cmr" .. k, w = "100%", h = 22, gap = 3, pad = 0, align = "center" }
+      out[#out + 1] = row
+    end
+    local on = (m == "auto" and c.set == nil) or c.set == m
+    row[#row + 1] = { "button", key = m, style = "panel/choice", selected = on, w = "grow", h = 22,
+      text = labels[m] or m, textAlign = "center", textValign = "center",
+      tooltip = tips[m], onClicked = function() B.cmd("setCtrl", { mode = m }) end }
+  end
+  local line
+  if c.set then
+    line = string.format("Flies as %s, chosen%s", (labels[c.set] or c.set):upper(),
+      c.auto and c.auto ~= c.set and string.format(" (Auto would make it %s)", labels[c.auto] or c.auto) or "")
+  elseif c.auto then
+    line = string.format("Auto: %s — %s", (labels[c.auto] or c.auto):upper(), c.why or "")
+  else
+    line = "Auto: reading the craft…"
+  end
+  out[#out + 1] = { "text", key = "cml", style = "panel/hint", w = "100%", h = "fit", wrap = true, text = line }
+end
+
 -- ── INSPECT ─────────────────────────────────────────────────────────────────
 local function inspect(B, out)
   local sel = B.selection and B.selection() or {}
@@ -266,6 +302,8 @@ local function inspect(B, out)
       out[#out + 1] = figure("cm", "MASS", mass_text(s.mass or 0))
       out[#out + 1] = figure("cc", "COST", money(s.cost))
       perf_rows(s, out)
+      out[#out + 1] = rule("rc")
+      ctrl_rows(B, out)
     end
     return
   end
@@ -342,6 +380,8 @@ end
 -- ── CRAFT ───────────────────────────────────────────────────────────────────
 local function craft(B, out)
   local s = B.stats and B.stats() or {}
+  ctrl_rows(B, out)
+  out[#out + 1] = rule("r0")
   out[#out + 1] = sublabel("bud", "BUDGET")
   out[#out + 1] = figure("bp", "PARTS", string.format("%d%s", s.parts or 0, (s.parts or 0) >= 1000 and "  ⚠ test it" or ""))
   if s.islands then out[#out + 1] = figure("bi", "ISLANDS", tostring(s.islands)) end

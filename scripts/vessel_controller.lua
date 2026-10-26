@@ -7668,6 +7668,108 @@ function r2WheelCmd(wheels, plan, drive, steer, spd, alat)
   return out
 end
 
+-- ── the control mode (scripts/craft_mode.lua) ──────────────────────────────
+-- The craft's MODE says what its wheels do, not the wheels' part type
+-- (playtest 2026-10-26: one landing gear on a rover made it a plane that W
+-- could no longer drive). It is resolved with the part lists (r2_scan):
+--   rover     every wheel, landing gear too, drives and steers (drive_tick);
+--             a folded gear is no wheel until it comes down (r2Stowed)
+--   aircraft  every wheel, a rover wheel too, is the plane's gear: free-rolling
+--             (w.rs = 0), brakes, the nose steering with the rudder, the stick
+--             flying (R2.gear)
+--   rocket    the wheels only roll and brake, and the stick turns the craft
+--             (R2.passive)
+-- The player's choice is on the command parts' records (`ctrl`, which the
+-- fleet save, a staging and a docking carry) and wins; with none, Auto reads
+-- the whole craft (craft_mode.autoOf). Until the library node answers (it is
+-- spawned on first use) the tyres wait (wheels_wanted "mode").
+CTRL = { lib = nil, asked = false, t = -100, cap = nil }
+function craftModeLib()
+  local L = CTRL.lib
+  if L and L.valid ~= false and type(L.resolve) == "function" then return L end
+  L = findScript and findScript("craft_mode") or nil
+  -- (a just-spawned CraftModeLib is found a frame before its chunk has run)
+  if L and type(L.resolve) ~= "function" then return nil end
+  if not L and not CTRL.asked and spawn then
+    CTRL.asked = true
+    pcall(spawn, "CraftModeLib", vec3(0, 0, 0))
+  end
+  CTRL.lib = L
+  return L
+end
+
+-- The mode this craft flies by: R2.mode, R2.ctrlSet (the player's, nil =
+-- Auto), R2.ctrlAuto and why, and the flags the wheel code reads.
+function r2ResolveMode()
+  local L = craftModeLib()
+  local prev = R2.mode
+  if not L then
+    R2.modeWait = true
+    return
+  end
+  R2.modeWait = nil
+  local dead = {}
+  for u in pairs(bp_by_uid) do
+    if integ.gone[u] or (part_hp[u] or 1) <= 0 then dead[u] = true end
+  end
+  local mode, set, auto, why = L.resolve(bp_by_uid, pod_uid, dead)
+  -- (a blueprint whose command parts don't carry it: the builder's own)
+  if not set and bp and L.normalize(bp.ctrl) then set = L.normalize(bp.ctrl); mode = set end
+  R2.mode, R2.ctrlSet, R2.ctrlAuto, R2.ctrlWhy = mode, set, auto, why
+  R2.gear = mode == "aircraft"
+  R2.passive = mode == "rocket"
+  if prev ~= nil and prev ~= mode then CTRL.t = time end
+  if prev ~= mode then log(string.format("control mode: %s (%s; auto %s: %s)", mode, set and "chosen" or "auto", tostring(auto), tostring(why))) end
+end
+
+-- Published (HUD, context menu, probes): { mode, set, auto, why, label, t }.
+function ctrlModeInfo()
+  local L = craftModeLib()
+  local label = L and L.describe and L.describe(R2.ctrlSet, R2.ctrlAuto or R2.mode) or tostring(R2.mode)
+  return { mode = R2.mode, set = R2.ctrlSet, auto = R2.ctrlAuto, why = R2.ctrlWhy, label = label, t = CTRL.t }
+end
+
+-- The player's choice ("rover" | "aircraft" | "rocket"; "auto" or nil hands
+-- it back to Auto): written on every command part aboard and on the
+-- blueprint, so it flies, saves and docks with them. The wheels are re-read
+-- at once (the tyres come in and go out again the new way).
+function setCtrlMode(m)
+  local L = craftModeLib()
+  m = L and L.normalize(m) or ((m == "rover" or m == "aircraft" or m == "rocket") and m or nil)
+  for u, d in pairs(bp_by_uid) do
+    if L and L.isCommand(d) and not integ.gone[u] then d.ctrl = m end
+  end
+  if bp then bp.ctrl = m end
+  R2.gen = -1
+  CTRL.t = time
+  log("control mode set: " .. tostring(m or "auto"))
+  return true
+end
+
+-- A landing gear folded away (G): no wheel at all until it comes down.
+function r2Stowed(w) return w.gear == true and gearIsUp(w.uid) end
+-- Which gear are folded, as one string (a change re-lays the tyres).
+function r2StowSig()
+  local s = ""
+  for _, w in ipairs(R2.wheels) do if w.gear then s = s .. (gearIsUp(w.uid) and "1" or "0") end end
+  return s
+end
+-- Every wheel folded away (or none to fold out).
+function r2AllStowed()
+  for _, w in ipairs(R2.wheels) do if not r2Stowed(w) then return false end end
+  return true
+end
+-- The steering plan over the wheels that are down: a folded gear neither
+-- steers nor sets the line the turn pivots on (a rover with its nose gear
+-- folded steers on its front wheels, as it would without it).
+function r2Replan()
+  local list = {}
+  for _, w in ipairs(R2.wheels) do
+    if r2Stowed(w) then w.steers, w.a, w.l = false, w.a or 0, w.l or 0 else list[#list + 1] = w end
+  end
+  r2SteerPlan(list, R2.fwd, bp_by_uid, integ.gone)
+end
+
 -- ── the part lists ──────────────────────────────────────────────────────────
 -- Rebuilt whenever the craft's part set changes (integ.gen). Every part node
 -- is resolved to its uid here, BEFORE anything moves: later lookups go by
@@ -7698,6 +7800,7 @@ local function r2_scan(node)
     R2.fwd = { x = an.x / l, z = an.z / l }
   end
   R2.front = (math.abs(R2.fwd.x) >= math.abs(R2.fwd.z) and R2.fwd.x < 0) and -1 or 1
+  r2ResolveMode()
   local depth = {}
   local function depth_of(u)
     if depth[u] then return depth[u] end
@@ -7725,7 +7828,7 @@ local function r2_scan(node)
         w.axle = X
         if afHas(d, "gear") then
           -- A LANDING GEAR: the tyre at the foot of the leg (+X), its axle the
-          -- part's Z; it rolls free (brakes on B), the nose gear steers.
+          -- part's Z. How it rolls is the craft's mode's (a rover drives it).
           w.gear = true
           w.tx = (d.rx or 0.5) - r
           w.cx, w.cy, w.cz = d.x + X[1] * w.tx, d.y + X[2] * w.tx, d.z + X[3] * w.tx
@@ -7733,7 +7836,9 @@ local function r2_scan(node)
         end
         w.side = (w.cz >= 0) and 1 or -1
         r2WheelSetup(w, R2.fwd)
-        if w.gear then w.rs = 0 end
+        -- an aircraft's or a rocket's wheels roll free: no motor pushes them
+        -- (a rover's, landing gear too, drive)
+        if R2.gear or R2.passive then w.rs = 0 end
         R2.wheels[#R2.wheels + 1] = w
       end
       for _, kind in ipairs({ "hinge", "piston", "rotor" }) do
@@ -7760,9 +7865,9 @@ local function r2_scan(node)
   end
   table.sort(R2.robo, function(a, b) if a.depth ~= b.depth then return a.depth < b.depth end return a.uid < b.uid end)
   table.sort(R2.wheels, function(a, b) return a.uid < b.uid end)
-  R2.gear = false
-  for _, w in ipairs(R2.wheels) do if w.gear then R2.gear = true end end
-  r2SteerPlan(R2.wheels, R2.fwd, bp_by_uid, integ.gone)
+  R2.hasGear = false
+  for _, w in ipairs(R2.wheels) do if w.gear then R2.hasGear = true end end
+  r2Replan()
   -- Each robotic part's MOVING SET: the side of it away from the command
   -- part, by the attachment tree; and which of its halves carries that side.
   for _, r in ipairs(R2.robo) do
@@ -8036,7 +8141,10 @@ local function wheels_wanted(node, info)
   if space.warp() > 1.001 and not info.grounded then return false, "warp" end
   if R2.holdoff > 0 then return false, "holdoff" end
   if not assembly_ready(info) or integ.push then return false, "assembling" end
-  if R2.gear and gearState() then return false, "gear up" end
+  if R2.modeWait then return false, "mode" end
+  -- (folded landing gear is no wheel: with every wheel folded there is
+  -- nothing to put down; with some, the rest roll — r2Tick re-lays them)
+  if r2AllStowed() then return false, "gear up" end
   local v = info.vel
   if math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z) > (R2.gear and R2_GEAR_VMAX or R2_TYRES_VMAX) then return false, "fast" end
   -- Landing gear is the pilot's (G): lowered, it stays out in the air. Folding
@@ -8063,16 +8171,19 @@ local function wheels_wanted(node, info)
 end
 
 local function tyres_out(node, info)
-  local any = false
+  local any = 0
   for _, w in ipairs(R2.wheels) do
     local faired = (w.d.faired or 0) ~= 0 and r2Faired(w.d)
-    if not w.onRobo and not faired then
+    w.out = false
+    if not w.onRobo and not faired and not r2Stowed(w) then
       wheel_collider(node, w, true)
-      any = true
-      w.want = true
+      any = any + 1
+      w.want, w.out = true, true
     end
   end
-  if not any then return end
+  if any == 0 then return end
+  R2.nOut = any
+  R2.stow_live = r2StowSig()
   -- The hull drops its wheel boxes now, in fixedUpdate: a rebuild keeps the
   -- assembly's physics pose on a moving planet (floptle/0449, 0.117.0-rc3).
   assembly.rebuild(node)
@@ -8113,7 +8224,7 @@ local function tyres_in(node)
   -- 0.117.0-rc3 (floptle/0420).
   for _, w in ipairs(R2.wheels) do
     if w.tyre and w.tyre.valid then destroy(w.tyre) end
-    w.tyre, w.jointed, w.mesh, w.mesh_of = nil, false, nil, nil
+    w.tyre, w.jointed, w.mesh, w.mesh_of, w.out = nil, false, nil, nil, false
     wheel_collider(node, w, false)
   end
   if node and node.valid then assembly.rebuild(node) end
@@ -8139,7 +8250,7 @@ function hang_tyre(node, w, info)
     local gx, gy, gz = space.gravity(info.com.x, info.com.y, info.com.z)
     if gx then g = math.sqrt(gx * gx + gy * gy + gz * gz) end
   end
-  local load = (info.mass or 1) * g / math.max(1, #R2.wheels)
+  local load = (info.mass or 1) * g / math.max(1, R2.nOut or #R2.wheels)
   -- (sized for 1 cm in this simple model; the joint's soft step gives
   -- about three times that, and a heavy end a little more)
   local sag = 0.01 * w.r / 0.4
@@ -8249,7 +8360,7 @@ ROVER_AIR_HOLD = 8.0               -- s off the ground before the ship's stick t
 -- the ground; R2.air0: its pitch and lean as it left it; R2.air_up: the local
 -- up this tick.)
 function r2AirMode(info)
-  if #R2.wheels == 0 or R2.gear then R2.air0 = nil return false end
+  if #R2.wheels == 0 or R2.gear or R2.passive then R2.air0 = nil return false end
   if R2.driving or R2.onWheels or (info and (info.grounded or info.anchored)) then
     R2.ground_t, R2.air0 = time, nil
     return false
@@ -8324,12 +8435,15 @@ local function drive_tick(node, info, dt)
   local scmd = ctl and ((input.key("a") and 1 or 0) - (input.key("d") and 1 or 0)) or 0
   -- A headless run cannot press keys: a probe drives through R2.cmd.
   if ctl and R2.cmd then dcmd, scmd = R2.cmd.drive or 0, R2.cmd.steer or 0 end
-  -- LANDING GEAR: W/S are the elevators, not a drive; the jets push it. The
-  -- nose wheel steers with the rudder (A/D), and the parking brake lets go
-  -- the moment the throttle opens.
+  -- AN AIRCRAFT'S WHEELS (landing gear or not): W/S are the elevators, not a
+  -- drive; the jets push it. The nose wheel steers with the rudder (A/D), and
+  -- the parking brake lets go the moment the throttle opens. A ROCKET'S roll
+  -- the same way and don't steer: A/D are the stick's.
   if R2.gear then
     dcmd = (throttle > 0.05) and 1 or 0
     if ctl and AERO.cmd then scmd = AERO.cmd.y or 0 end
+  elseif R2.passive then
+    dcmd, scmd = (throttle > 0.05) and 1 or 0, 0
   end
   -- the stick eases in and out like a throttle (no wheelspin from a key tap)
   local function ease(cur, want, up, down)
@@ -8343,7 +8457,7 @@ local function drive_tick(node, info, dt)
     if w.jointed and w.tyre and w.tyre.valid and w.tyre.grounded then grounded = grounded + 1 end
   end
   R2.onWheels = grounded > 0
-  R2.driving = ctl and grounded > 0 and not R2.gear
+  R2.driving = ctl and grounded > 0 and not R2.gear and not R2.passive
   R2.ctl = ctl
   local v = info.vel
   local spd = math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z)
@@ -8404,7 +8518,7 @@ local function drive_tick(node, info, dt)
   end
   local stall_k = math.max(0, math.min(1, (R2.stall_t - 0.5) / 1.0))
   local n_drive = 0
-  for _, w in ipairs(R2.wheels) do if (w.rs or 0) ~= 0 then n_drive = n_drive + 1 end end
+  for _, w in ipairs(R2.wheels) do if (w.rs or 0) ~= 0 and w.out then n_drive = n_drive + 1 end end
   n_drive = math.max(1, n_drive)
   -- HILL HOLD: off the stick and rolling DOWNHILL → the motors hold back the
   -- slope and a little more, so a rover let go of on a hill slows to a walk
@@ -8814,7 +8928,10 @@ function r2Jettison(node, uid)
       physics.ignorePair(h, node, 1.5)
       if deb.shell and deb.shell.valid then deb.shell.visible = false end
       deb.node = h
-      after(25.0, function() if h.valid then destroy(h) end end)
+      -- (and only if it is still a fairing half: one the depot took is gone,
+      -- and its handle — a bare slot number — can read `valid` again on the
+      -- next node spawned; engine card 0552)
+      after(25.0, function() if h.valid and h.name == "FairingHalf" then destroy(h) end end)
     end)
   end
   -- the shells' mass leaves with them
@@ -8887,14 +9004,29 @@ function r2Tick(node, info, dt)
   robo_tick(node, info, dt)
   claw_tick(node, info, dt)
   drill_tick(node, info, dt)
-  if R2.gear and not R2.live then
-    local gu = gearState()
-    if R2.gear_up ~= nil and gu ~= R2.gear_up then
-      for _, w in ipairs(R2.wheels) do if w.gear then wheel_collider(node, w, false) end end
-      assembly.rebuild(node)
-      damage_arm = math.max(damage_arm, time - 1.5)
+  -- (the library node answered: read the mode now)
+  if R2.modeWait and craftModeLib() then r2ResolveMode(); R2.gen = -1 end
+  -- LANDING GEAR FOLDING (G), in any mode. Tyres in: the leg's wheel box
+  -- goes and comes with it. Tyres out: the tyres are laid again without the
+  -- folded legs (a rover drives on, a plane's come in), and back with them
+  -- when they are down.
+  if R2.hasGear then
+    local sig = r2StowSig()
+    if R2.stow_sig ~= nil and sig ~= R2.stow_sig then
+      r2Replan()
+      if R2.live then
+        if sig ~= R2.stow_live then
+          log("rover: the gear " .. (#sig > 0 and sig:find("1") and "folds" or "comes down") .. ": the tyres are laid again")
+          tyres_in(node)
+          R2.holdoff = math.max(R2.holdoff, 0.25)
+        end
+      else
+        for _, w in ipairs(R2.wheels) do if w.gear then wheel_collider(node, w, false) end end
+        assembly.rebuild(node)
+        damage_arm = math.max(damage_arm, time - 1.5)
+      end
     end
-    R2.gear_up = gu
+    R2.stow_sig = sig
   end
   local want, why = wheels_wanted(node, info)
   R2.why = want and "out" or why   -- published: why the tyres are in (HUD, probes)
@@ -8908,7 +9040,7 @@ function r2Tick(node, info, dt)
   else
     R2.driving, R2.onWheels = false, false
   end
-  SFX.drive(node, R2.live and not R2.gear, R2.speed or 0, R2.drive or 0, R2.onWheels)
+  SFX.drive(node, R2.live and not R2.gear and not R2.passive, R2.speed or 0, R2.drive or 0, R2.onWheels)
 end
 
 -- Before the craft is cut (staging, undocking, a part tearing off, docking):
@@ -9093,7 +9225,7 @@ function aeroTick(node, info, dt, thr, sp, sy, sr, ex, ey, ez, apx, apy, apz, ay
   end
   local rho, a, o2 = A.airAt(AERO.world, alt, (b.mu or 0) / (R * R), R)
   -- the model: rebuilt when the craft changes or a gear folds
-  local gu = R2.gear and gearState() or false
+  local gu = R2.hasGear and r2StowSig() or false
   if not AERO.model or AERO.gu ~= gu then
     AERO.gu = gu
     -- (a running jet keeps its spool through a rebuild: the gear folding is

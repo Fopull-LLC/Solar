@@ -66,6 +66,25 @@ Pictures in `$WORK/proj/save/user/wheelshots/`. Cause and fix: node handles are
 bare slot numbers, so a cached TyreMesh handle from before the get-off read
 `valid` again for another node (vessel_controller r2TyreVisuals).
 
+## ctrlprobe.sh + ctrlprobe_modes.lua — a craft's control mode (Auto, Rover, Aircraft, Rocket)
+
+    WORK=$SCRATCH/ctrl LOCK=$SCRATCH/engine.lock tools/perf/ctrlprobe.sh <engine> [ctrlrover ctrljet ctrljetwheels ctrlrevert]
+
+The 2026-10-26 playtest's "landing gear as a rover wheel" and "rover wheels as a
+plane's gear" (scripts/craft_mode.lua: the craft's mode, not the wheel's part type,
+says what the wheels do). `ctrlrover`: the stock rover with a Landing Gear S at its
+nose reads Auto: Rover, drives out past 95 m, drives and turns, folds the gear (on
+its other four tyres), drives and turns both ways, puts the gear down (its tyre
+back), Aircraft and Rocket forced (W no longer drives), Auto again; Rocket chosen,
+the fleet saved and the world loaded again (the restored rover still says Rocket).
+`ctrljet`: the 27-part jet reads Aircraft; Rover forced drives it on its gear with
+the throttle shut and steers it; Aircraft holds it again. `ctrljetwheels`: the jet
+with its gears swapped for rover wheels reads Aircraft and takes off. `ctrlrevert`:
+in the VAB, the builder says Auto: Rover, Aircraft chosen (undo/redo, saved to the
+library and opened again), rolled out as Aircraft, reverted to launch, still
+Aircraft. One `CP PASS|FAIL <check>` line a check, `CP RESULT <mode>`; 1280×720
+pictures in `$WORK/proj/save/user/ctrlshots/`. TMO defaults to 360 s a mode.
+
 ## staleprobe.sh + staleprobe_modes.lua — a handle kept from a node that is gone
 
     WORK=$SCRATCH/stale LOCK=$SCRATCH/engine.lock tools/perf/staleprobe.sh <engine>
@@ -132,6 +151,28 @@ scattered rock aimed at, 4 a loose prop held on the tether. The probe (mode
 `sim` hook; `floptle shot --after N` plays that long on the fixed clock and
 draws the game's camera to `$WORK/shots/<ver>-case<N>.png`.
 
+## flora.sh + floraprobe.lua — how the plants read at eye height
+
+    WORK=$SCRATCH/foliage LOCK=/mnt/disks/3tb/.floptle-shared/engine.lock tools/perf/flora.sh <engine> [TAG]
+    FLORA_PARAMS='("levels", 23.0), ("res", 1080.0), ("heads", 1.0)'   PATCHES="x.patch"
+
+A copy of the player's save (deleted after), the astronaut moved to the densest
+forest ~`forest` m (300) from the base, a free camera at eye height, `heads`
+headings per graphics level in `levels` (digits, 1-4 = Low..Ultra), a picture
+each (1280x720, `res=1080` for 1920x1080) and the GPU per pass (`GPU` lines).
+`PATCHES` A/B a change on the scratch copy only.
+
+**What it found (2026-10-26, rc37): the dotted canopies were the scatter LOD
+cross-dissolve.** The engine dissolves the two bands on complementary 4x4
+screen doors; different meshes do not fill each other in, so every plant in a
+fade window drew as a dot grid. The window was a quarter of the reach (16.5 m
+for a tree, three windows: a third of its drawn distance). A/B with the fade
+off: solid crowns. Fix: `flora_gen.fadeBands` windows are 3 % of the reach,
+1.5-4 m (GPU unchanged: High 15.5 -> 14.8 ms, Medium 7.4 -> 7.5 ms, one spot).
+Leaf alpha mips were ruled out (per-leaf coverage at cutoff 0.5 holds within a
+few % down to 16 px), as were ditherAlpha/nearFade (no flora material sets
+them). Left for the engine: cutout before the dissolve, a noise pattern, 3D AA.
+
 ## look.sh + lookprobe.lua — what the ground looks like over the base
 
     WORK=$SCRATCH/ground LOCK=$SCRATCH/engine.lock tools/perf/look.sh <engine> [TAG]
@@ -197,3 +238,4 @@ the sun at 25°, the sun low and behind the ground, dusk, orbit and eclipse, and
 the gravity gun and laser working. `perf.gpu` per pass at the vista, with old and
 new interleaved, then each effect alone (`GX GPU` lines). `PATCHES=` applies
 diffs to the scratch copy only. Results are in `results/gfx_look.md`.
+

@@ -1840,7 +1840,7 @@ local function snap_parts(uids, extra)
   if extra then
     S.extra = { stage = tcopy(stage_order), root = W.root, outliner = tcopy(W.outliner),
                 groups = tcopy(groups_state.groups), edited = groups_state.edited,
-                controls = tcopy(W.controls) }
+                controls = tcopy(W.controls), ctrl = W.ctrl }
   end
   return S
 end
@@ -1896,6 +1896,7 @@ local function apply_snap(S)
     W.outliner = tcopy(X.outliner) or {}
     groups_state.groups, groups_state.edited = tcopy(X.groups), X.edited
     W.controls = tcopy(X.controls)
+    W.ctrl = X.ctrl
   end
   struct_changed()
   publish_center(); refresh_stats()
@@ -4007,6 +4008,15 @@ local function make_blueprint()
   end
   if W.outliner and #W.outliner > 0 then bp.outliner = tcopy(W.outliner) end
   if W.controls then bp.controls = tcopy(W.controls) end
+  -- THE CONTROL MODE (ctrlMode): on the blueprint and on every command part,
+  -- whose records a fleet save, a staging and a docking carry
+  if W.ctrl then
+    bp.ctrl = W.ctrl
+    local L = ctrlLib()
+    for _, d in ipairs(bp.parts) do
+      if L and L.isCommand(d) then d.ctrl = W.ctrl end
+    end
+  end
   -- ACTION GROUPS: only once the player has edited them. Until then the flight
   -- builds the standard ones (legs on Gear, panels and antennas on Deploy…) from
   -- whatever is aboard, so a craft that never opened the editor still has them.
@@ -4092,7 +4102,7 @@ local function clear_stand()
   if W.H then W.H:clear() end
   W.queue, W.qhead = {}, 1
   W.sel, W.sel_order, selected_uid = {}, {}, nil
-  W.root, W.outliner, W.controls = nil, {}, nil
+  W.root, W.outliner, W.controls, W.ctrl = nil, {}, nil, nil
   W.cache = {}
   if W.hist then W.hist:clear() end
   struct_changed()
@@ -4172,6 +4182,17 @@ local function load_blueprint(bp)
   if type(bp.outliner) == "table" then W.outliner = tcopy(bp.outliner) end
   if type(bp.controls) == "table" then W.controls = tcopy(bp.controls) end
   if type(bp.name) == "string" and bp.name ~= "" then W.craft = bp.name end
+  -- the control mode: the blueprint's, or (a fleet craft's records) its
+  -- command parts'
+  do
+    local m = bp.ctrl
+    if m == nil then
+      for _, d in pairs(bp.parts) do
+        if type(d.ctrl) == "string" and (d.kind == "crewed" or d.kind == "probe") then m = d.ctrl break end
+      end
+    end
+    W.ctrl = (m == "rover" or m == "aircraft" or m == "rocket") and m or nil
+  end
   struct_changed()
   publish_center(); refresh_stats()
 end
@@ -6812,6 +6833,51 @@ function hiddenUids()
 end
 function outliner() return tcopy(W.outliner or {}) end
 function controlsData() return W.controls end
+
+-- ── THE CONTROL MODE (scripts/craft_mode.lua) ──────────────────────────────
+-- How the craft is driven in flight: Rover, Aircraft or Rocket, or Auto,
+-- which reads the whole craft (wings that carry it fly it, wheels that carry
+-- it drive it). The mode, not the wheel's part type, says what the wheels do,
+-- so landing gear can be a rover's wheel and rover wheels a plane's gear.
+-- W.ctrl is the player's choice (nil = Auto); it rides the blueprint as
+-- `bp.ctrl` and on every command part's record (`ctrl`), so the fleet save,
+-- a staging and a docking carry it. The rulebook is on the CraftModeLib node,
+-- spawned here when the scene has none; until it answers, Auto says "Auto".
+CTRL_MODES = { "auto", "rover", "aircraft", "rocket" }
+function ctrlLib()
+  local L = lib("craft_mode")
+  if not L and not W.ctrl_asked and spawn then
+    W.ctrl_asked = true
+    pcall(spawn, "CraftModeLib", vec3(0, 0, 0))
+  end
+  -- (a just-spawned library is found a frame before its chunk has run)
+  if L and type(L.resolve) ~= "function" then return nil end
+  return L
+end
+-- { set (nil = Auto), auto, why, mode, label, labels, tips }, cached per craftVersion.
+function ctrlMode()
+  local c = W.cache
+  if c.ctrl and c.ctrl_v == craftVersion and c.ctrl.ready then return c.ctrl end
+  local L = ctrlLib()
+  local out = { set = W.ctrl, ready = L ~= nil }
+  if L then
+    local recs = {}
+    for uid, p in pairs(parts) do
+      local d = p.def or {}
+      recs[uid] = { uid = uid, af = d.af, wheel = d.wheel, mass = d.mass, fuel = d.fuel, fuel_t = FUEL_T_PER_UNIT,
+                    kind = d.kind, seat = d.seat, front = d.front }
+    end
+    out.auto, out.why = L.autoOf(recs)
+    out.mode = W.ctrl or out.auto
+    out.label = L.describe(W.ctrl, out.auto)
+    out.labels, out.tips = L.LABEL, L.TIP
+  else
+    out.mode = W.ctrl
+    out.label = W.ctrl and (W.ctrl:sub(1, 1):upper() .. W.ctrl:sub(2)) or "Auto"
+  end
+  c.ctrl, c.ctrl_v = out, craftVersion
+  return out
+end
 -- What controls.lua's bind / unbind / bindAxis edit beside W.controls: the
 -- live action groups (bp.groups), the craft's records and symmetry rings (WP5).
 function controlsCtx()
@@ -7691,6 +7757,18 @@ function CMD.group(a)
   end, nil, true)
   craftVersion = craftVersion + 1
   return #W.outliner
+end
+
+-- The craft's control mode (ctrlMode): "auto" | "rover" | "aircraft" | "rocket".
+function CMD.setCtrl(a)
+  local m = a.mode
+  if m ~= "rover" and m ~= "aircraft" and m ~= "rocket" then m = nil end
+  if m == W.ctrl then return true end
+  tx_run("control mode", {}, function() W.ctrl = m end, nil, true)
+  craftVersion = craftVersion + 1
+  local c = ctrlMode()
+  hint("control mode: " .. (c.label or "Auto") .. "   ·   how the craft drives in flight (the command part's menu changes it there)", 3.0)
+  return true
 end
 
 function CMD.rename(a)

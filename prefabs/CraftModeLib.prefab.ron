@@ -1,0 +1,22 @@
+// CRAFT MODE LIBRARY — scripts/craft_mode.lua (a craft's control mode: rover,
+// aircraft or rocket, and what Auto makes of a craft). Spawned by
+// vessel_controller and the builder when the scene carries no node running
+// it; reached with findScript("craft_mode").
+[
+    (
+        name: "CraftModeLib",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [
+            (
+                kind: "craft_mode",
+                enabled: true,
+                params: [],
+            ),
+        ],
+    ),
+]

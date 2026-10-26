@@ -668,11 +668,18 @@ local function group_strip(v, t)
     ctl_card.toast_t = (ctl_card.n > 0) and (time + 8) or -1
   end
   local toast = time < ctl_card.toast_t
-  if #list == 0 and #axes == 0 and not mode then return nil end
+  -- THE CONTROL MODE (vessel_controller ctrlModeInfo): how the craft drives,
+  -- lit for a few seconds when it changes (a pick from the command part's
+  -- menu, a click here, a staging that leaves a rover); a click steps it on.
+  local cm = v.ctrlModeInfo and v.ctrlModeInfo() or nil
+  if not (cm and cm.mode) then cm = nil end
+  local cm_new = cm and time - (cm.t or -100) < 4.0
+  if #list == 0 and #axes == 0 and not mode and not cm then return nil end
   local kids = {
     { "row", key = "hd", w = "100%", h = 12, pad = 0, gap = 4, align = "center",
       { "text", key = "t", style = toast and "hud/valueAccent" or "hud/micro", w = "grow", h = 12, textAlign = "start",
-        text = toast and string.format("%d CUSTOM CONTROL%s ▸ O", ctl_card.n, ctl_card.n == 1 and "" or "S") or "CONTROLS" },
+        text = cm_new and ("MODE: " .. string.upper(cm.label or cm.mode))
+          or (toast and string.format("%d CUSTOM CONTROL%s ▸ O", ctl_card.n, ctl_card.n == 1 and "" or "S") or "CONTROLS") },
       { "text", key = "o", style = "hud/micro", w = "fit", h = 12, text = ctl_card.open and "O ▴" or "O ▾" } },
   }
   if craft then
@@ -682,6 +689,16 @@ local function group_strip(v, t)
   if mode then
     kids[#kids + 1] = { "text", key = "mode", style = t.control and "hud/valueAccent" or "hud/valueDanger",
       w = "100%", h = 14, text = mode, maxLines = 1, overflow = "ellipsis" }
+  end
+  if cm then
+    local nxt = ({ auto = "rover", rover = "aircraft", aircraft = "rocket", rocket = "auto" })[cm.set or "auto"]
+    kids[#kids + 1] = { "row", key = "ctrl", w = "100%", h = 16, pad = 0, gap = 6, align = "center", button = true,
+      tooltip = (cm.why and ("Control mode — " .. (cm.set and "chosen" or "Auto: " .. cm.why)) or "Control mode")
+        .. ". Click: " .. nxt .. " (also on the command part's menu).",
+      onClicked = function() if v.setCtrlMode then v.setCtrlMode(nxt) end end,
+      { "text", key = "k", style = "hud/micro", w = 34, h = 12, text = "MODE" },
+      { "text", key = "v", style = cm_new and "hud/valueAccent" or "hud/value", w = "grow", h = 14,
+        text = string.upper(cm.label or cm.mode), maxLines = 1, overflow = "ellipsis" } }
   end
   if ctl_card.open then
     for _, g in ipairs(list) do kids[#kids + 1] = lamp_row(v, g) end

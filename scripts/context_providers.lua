@@ -610,6 +610,38 @@ local function part_actions(t, ctx)
   return out
 end
 
+-- THE CONTROL MODE, on a command part (a pod, cockpit, probe core, rover
+-- body or seat): how the craft drives — Auto, Rover, Aircraft or Rocket
+-- (scripts/craft_mode.lua; vessel_controller setCtrlMode). One row that
+-- steps to the next mode; the craft re-lays its wheels at once.
+local CTRL_ORDER = { "auto", "rover", "aircraft", "rocket" }
+local CTRL_NAME = { auto = "Auto", rover = "Rover", aircraft = "Aircraft", rocket = "Rocket" }
+local function part_ctrl(t, ctx)
+  local v, rec = t.vessel, t.rec or {}
+  if not (v and v.setCtrlMode and v.ctrlModeInfo) then return {} end
+  local isCmd = rec.kind == "crewed" or rec.kind == "probe" or rec.seat == 1 or rec.seat == true or rec.front == 1
+  if not isCmd then return {} end
+  local function cur()
+    local ok, info = pcall(v.ctrlModeInfo)
+    return ok and info or {}
+  end
+  local function nxt(set)
+    local s = set or "auto"
+    for i, m in ipairs(CTRL_ORDER) do if m == s then return CTRL_ORDER[i % #CTRL_ORDER + 1] end end
+    return "auto"
+  end
+  local i = cur()
+  return { { type = "action", id = "ctrlmode", group = "CONTROL MODE", keep = true,
+    label = "Mode  " .. (i.set and CTRL_NAME[i.set] or ("Auto: " .. (CTRL_NAME[i.auto or i.mode or ""] or "…"))),
+    hint = "▸ " .. CTRL_NAME[nxt(i.set)],
+    act = function()
+      local m = nxt(cur().set)
+      local r = v.setCtrlMode(m)
+      if ctx.toast then ctx.toast("control mode: " .. CTRL_NAME[m]) end
+      return r
+    end } }
+end
+
 -- ── the builder ─────────────────────────────────────────────────────────────
 local WHEEL_MODES = { "auto", "on", "off", "invert" }
 local function builder_part(t, ctx)
@@ -885,6 +917,7 @@ PROVIDED = {
   { "part", "battery", part_battery, 26 },
   { "part", "storage", part_storage, 30 },
   { "part", "actions", part_actions, 40 },
+  { "part", "ctrlmode", part_ctrl, 45 },
   { "builder_part", "figures", builder_part, 10 },
   { "crate", "salvage", crate_provider, 10 },
   { "prop", "prop", prop_provider, 90 },
