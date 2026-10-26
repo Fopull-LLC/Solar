@@ -15,7 +15,7 @@
     ui_font: "fonts/SolarUI.ttf",
     terrain_generator: Some(3),
     script_vec3: Some(Exact),
-    model_texture_filter: Some(AsFile),
+    model_texture_filter: Some(Smooth),
     imported_materials: Some(Classic),
     mixer: (
         master: (
