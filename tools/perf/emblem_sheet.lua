@@ -1,9 +1,11 @@
--- Contact sheet of generated emblems (and one flag), offline:
+-- Contact sheet of generated emblems (and one flag), offline (through the
+-- Lua image shim; tools/perf/emblemprobe.sh draws them in the engine):
 --   luajit tools/perf/emblem_sheet.lua OUTDIR   (from the Solar root)
 -- Writes OUTDIR/e<i>.rgba (256²) and OUTDIR/flag.rgba, plus timings on stdout.
 -- tools/perf/emblem_sheet.py turns them into a PNG grid.
 local out = arg[1] or "."
-local env = setmetatable({}, { __index = _G })
+-- image.* is the engine's; offline the emblem draws through its Lua port
+local env = setmetatable({ image = dofile("tests/lib/image_shim.lua") }, { __index = _G })
 local chunk = assert(loadfile("scripts/emblem.lua"))
 setfenv(chunk, env); chunk()
 local NAMES = { "Solar Exploration Agency", "Kestrel Aerospace", "Northern Lights Space Command",

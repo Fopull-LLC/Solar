@@ -9,6 +9,9 @@
 --   * a missing custom picture falls back to the generated emblem, once noted
 --   * an older save is migrated to the default name with a rename prompt
 --   * the editor's rows are elements ui.make accepts; typing follows the name
+--   * every motif is cut to every shape (nothing outside the emblem), and
+--     the flag is the emblem on its field; drawn through the Lua port of
+--     image.* (tests/lib/image_shim.lua)
 --   * build time (offline, warm) is recorded
 --
 --   luajit solar/tests/smoke_emblem.lua
@@ -25,7 +28,9 @@ local function load(path, env)
   return env
 end
 
-local E = load("solar/scripts/emblem.lua", {})
+-- image.* is the engine's; offline, its Lua port draws the same pictures
+local IMAGE = dofile("solar/tests/lib/image_shim.lua")
+local E = load("solar/scripts/emblem.lua", { image = IMAGE })
 
 -- ── names ───────────────────────────────────────────────────────────────────
 check(E.monogram("Solar Exploration Agency") == "SEA", "SEA: " .. E.monogram("Solar Exploration Agency"))
@@ -150,6 +155,7 @@ check(select(2, E.decodeImage("GIF89a....")) ~= nil, "anything else is refused")
 local SAVE = { g_seed = 5 }
 local made = {}
 local S = load("solar/scripts/emblem.lua", {
+  image = IMAGE,
   save = { get = function(k) return SAVE[k] end, set = function(k, v) SAVE[k] = v end },
   assets = {
     textureFromPixels = function(w, h, px) made[#made + 1] = { w, h, #px } return "img:" .. #made end,
@@ -222,14 +228,49 @@ local shape = ed.spec.shape
 E.editorSetName(ed, "Copper Moon Works")
 check(ed.spec.shape == shape and ed.spec.mono == "CMW", "after a tweak, a new name changes only the monogram")
 
--- ── the build time (offline, warm; the engine's is measured in-engine) ──────
+-- ── the picture: every shape cuts every motif to itself ─────────────────────
+-- A motif is drawn in a layer and cut to its field; nothing of it may show
+-- outside the emblem (the rocket's trail and the swooshes are big crescents
+-- that reach the corners when uncut).
+local leaks = {}
+for _, shape in ipairs(E.SHAPES) do
+  for _, motif in ipairs(E.MOTIFS) do
+    local s = E.specFor("Polaris Works")
+    s.shape, s.motif = shape, motif
+    local _, img = E.rasterEmblem(s, "Polaris Works", 96)
+    local function alpha(x, y) return select(4, img:getPixel(x, y)) or 0 end
+    local out = { { 0, 0 }, { 95, 0 }, { 0, 95 }, { 95, 95 }, { 2, 2 }, { 93, 2 }, { 2, 93 }, { 93, 93 } }
+    if shape == "roundel" or shape == "patch" then
+      -- outside the rim (r 126.2 units, 47.3 px) and its smooth edge
+      for i = 0, 15 do
+        local a = (i + 0.5) * math.pi / 8
+        out[#out + 1] = { 47.5 + math.cos(a) * 49, 47.5 + math.sin(a) * 49 }
+      end
+    end
+    local bad = 0
+    for _, p in ipairs(out) do if alpha(p[1], p[2]) > 0 then bad = bad + 1 end end
+    if bad > 0 or alpha(48, 48) < 0.99 then leaks[#leaks + 1] = shape .. "/" .. motif end
+  end
+end
+check(#leaks == 0, "every motif stays inside every shape, and the middle is solid: " .. table.concat(leaks, ", "))
+local px96 = E.rasterEmblem(E.specFor("Vostok"), "Vostok", 96)
+local px48 = E.rasterEmblem(E.specFor("Vostok"), "Vostok", 48)
+check(#px96 == 96 * 96 * 4 and #px48 == 48 * 48 * 4, "a slot card's small emblem, worn and unworn")
+local fpx, fimg = E.rasterFlag(E.specFor("Vostok"), "Vostok", px1)
+check(#fpx == E.FLAG_W * E.FLAG_H * 4 and fimg.width == E.FLAG_W, "the flag takes the emblem's pixels")
+local P0 = E.specFor("Vostok").pal
+local r, g, b = fimg:getPixel(E.FLAG_W - 4, 4)
+check(math.abs(r - P0.bg[1]) < 0.01 and math.abs(g - P0.bg[2]) < 0.01, "...on a field of the emblem's own colour")
+
+-- ── the build time (offline, through the Lua image shim; the engine's own
+-- is measured by tools/perf/emblemprobe.sh) ─────────────────────────────────
 local t0 = os.clock()
 for _ = 1, 3 do
   local p = E.rasterEmblem(E.specFor("Northern Lights Space Command"), "Northern Lights Space Command")
   E.rasterFlag(E.specFor("Northern Lights Space Command"), "Northern Lights Space Command", p)
 end
 local ms = (os.clock() - t0) * 1000 / 3
-check(ms < 120, string.format("an emblem and its flag build in %.1f ms here", ms))
+check(ms < 2000, string.format("an emblem and its flag build in %.1f ms here (the Lua shim)", ms))
 
 if #failures > 0 then
   print("EMBLEM SMOKE FAILURES:")

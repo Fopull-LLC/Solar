@@ -454,12 +454,13 @@ def main():
     # ── default textures: the rasteriser's own output for the default name ──
     raw = os.path.join(TEXDIR, ".emblem_raw")
     os.makedirs(raw, exist_ok=True)
-    lua = ('local env = setmetatable({}, { __index = _G })\n'
+    # image.* is the engine's; offline the emblem draws through its Lua port
+    lua = ('local env = setmetatable({ image = dofile("tests/lib/image_shim.lua") }, { __index = _G })\n'
            'local c = assert(loadfile("scripts/emblem.lua")); setfenv(c, env); c()\n'
            'local s = env.specFor(env.DEFAULT_NAME)\n'
            'local px = env.rasterEmblem(s, env.DEFAULT_NAME)\n'
            'local f = io.open(arg[1] .. "/e.rgba", "wb"); f:write(px); f:close()\n'
-           'f = io.open(arg[1] .. "/f.rgba", "wb"); f:write(env.rasterFlag(s, env.DEFAULT_NAME, px)); f:close()\n')
+           'f = io.open(arg[1] .. "/f.rgba", "wb"); f:write((env.rasterFlag(s, env.DEFAULT_NAME, px))); f:close()\n')
     lf = os.path.join(raw, "dump.lua")
     open(lf, "w").write(lua)
     subprocess.check_call(["luajit", lf, raw], cwd=ROOT)
