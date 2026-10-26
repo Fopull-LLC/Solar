@@ -43,6 +43,19 @@ local function ref(kind)
   return r
 end
 
+-- An exported build is the real game: no cheat keys there, whatever `enabled`
+-- says. The editor, `floptle run` and `play` keep user:// in the project's
+-- save/user; a build keeps it in the player's own data folder (lua-api
+-- app.dataPath).
+local exported_cache = nil
+function exported_build()
+  if exported_cache == nil then
+    local dp = app and app.dataPath and app.dataPath()
+    exported_cache = type(dp) == "string" and not dp:gsub("\\", "/"):find("/save/user/?$") or false
+  end
+  return exported_cache
+end
+
 local function say(msg)
   flash, flash_t = msg, time
   log("debug: " .. msg)
@@ -140,7 +153,7 @@ end
 
 function update(node, dt)
   if not el then el = node:getcomponent("UiElement") end
-  if params.enabled >= 0.5 then
+  if params.enabled >= 0.5 and not exported_build() then
     for _, k in ipairs(KEYS) do
       if input.pressed(k[1]) then k[2]() end
     end

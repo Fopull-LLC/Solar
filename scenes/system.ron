@@ -2078,9 +2078,7 @@
                 (
                     kind: "company",
                     enabled: true,
-                    params: [
-                        ("start_funds", 99999.0),
-                    ],
+                    params: [],
                     pinned_bools: Some([]),
                 ),
             ],
