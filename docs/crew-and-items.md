@@ -1,12 +1,21 @@
 # Crew and items: the agency, its astronauts, and the things they carry
 
 Design for the crew-and-items upgrade, 2026-10-25. Engine: Floptle 0.117.0-rc27.
-Status: decision-ready. Each section recommends one way to build it. Open questions
-that are the user's to answer are collected in §9.
+Status: decision-ready. Each section recommends one way to build it. The user has
+answered every open question; §9 records the answers.
 
 ## 0. Summary
 
-The player is the **agency**, not one astronaut. The agency hires a **roster** of crew.
+The player is the **agency**, not one astronaut. The agency has a **name and an
+emblem** (generated from the name, tweakable, or the player's own image), and they
+appear on flags, crewed parts, suits and the HUD. A new save starts with **three free
+astronauts**. More are hired for a one-time fee, with no wages. **Astronauts can die**:
+from a destroyed cabin, oxygen, drowning, a fatal impact, crushing, or re-entry heat.
+Every cause is telegraphed with warnings and a short grace. The pack drops as a
+recoverable crate, the remains stay where they fell, and the roster keeps a memorial.
+A "rescue instead" switch exists for players who want a pure sandbox.
+
+The agency hires a **roster** of crew.
 Any crewed part seats as many crew as it has **slots**. You control one thing at a
 time: **a craft**, or **one crew member on foot**. A **crew strip** of live portraits in
 the bottom-left corner shows the crew aboard the craft you are flying. Hover a
@@ -60,66 +69,146 @@ The single-astronaut code keeps working throughout:
 There is one save key per member, `crew.m.<id>`, the same pattern as `comms.beacon.<id>`:
 
 ```lua
-{ id = 3, name = "Dana Okafor", hired = <space.time()>, cost = 2400,
-  role = "pilot",            -- "pilot" | "engineer" | "scientist" | "rookie" (traits later; unused in v1)
-  status = "afoot",          -- "base" | "aboard" | "afoot" | "lost"
+{ id = 3, name = "Dana Okafor", hired = <space.time()>, cost = 2400, starter = false,
+  status = "afoot",          -- "base" | "aboard" | "afoot" | "dead"
   -- where (status decides which fields mean anything):
   craft = "Kestrel I",       -- aboard: display only (the truth is the part's st.crew, §3.2)
   body = "Vever", x = .., y = .., z = .., yaw = ..,   -- afoot: body-relative, like salvage/beacons
-  -- the suit:
-  o2 = 1.0, helmet = true, hp = 1.0,
+  -- the suit and the body:
+  o2 = 1.0,                  -- the suit's own supply, 0..1 (§2.3)
+  breath = 1.0,              -- held breath under water / helmet off in bad air, 0..1
+  hp = 1.0,                  -- injuries, 0..1 (heals 0.02/min aboard or at base)
+  heat = 0.0,                -- exposure to re-entry heating, 0..1
+  helmet = true, rcs = 4.0,  -- helmet state; RCS Pack fill while carried (§5.7)
   hand = "repairkit",        -- the item in hand (nil = empty hands)
   task = nil,                -- a running job (§6.3), or nil
-  flights = 4, eva_s = 1830, flags = 1,               -- service record, for the roster panel
+  flights = 4, eva_s = 1830, flags = 1, repairs = 2,  -- service record, for the roster panel
+  -- once dead (§2.3):
+  died = nil,                -- { st = space.time(), date = "Day 41 Y2", cause = "impact", body = "Nami",
+                             --   x,y,z = body-relative, craft = "Kestrel I" | nil, remains = <dep id> }
 }
 ```
 
+**Roles and traits are not in this upgrade.** There is no `role` field until the
+base crew system works. See §9, "Later".
+
 Other keys:
 
-- `crew.roster`: the id list in hire order.
+- `crew.roster`: the id list in hire order, including the dead (the memorial reads it).
 - `crew.seq`: the last id issued.
 - `crew.active`: the id the `Astronaut` node is now, or `false` when it is unbound (§4.1).
 - `crew.offers`: the three applicants on the board.
 - `crew.version`: the migration stamp (`1`).
+- `crew.death`: `true` by default; the forgiving option (§2.3).
 
 Each crew member's pack is an ordinary inventory container, **`crew:<id>`**. Its
 capacity rule is the suit's: `cap("crew:*") = suit_kg`.
 
-### 2.2 Hiring
+### 2.2 Starting crew and hiring
 
-The Command Centre gets a **CREW** button next to its Overview button. It opens the
-**Astronaut Complex** panel (`crew_roster_panel.lua`):
+**A new save starts with three free starter astronauts** (`starter = true`, cost 0).
+Their names are generated from `g_seed`. Each gets the standard issue (§5.1).
+Member #1 is put on foot at the colony as the avatar; the other two wait at base.
 
-- **Roster.** Each crew member gets a row: name, status, where, and service record.
-  The actions are **Rename**, **Go to** (an on-foot member in physics range; §4), and
-  **Recall**. Recall brings an on-foot member home for the pickup fee
-  (`flight_ops.pickupFee`).
-- **Applicants.** Three names, each deterministic from `g_seed` and `crew.seq`, with
-  a hire cost of `1500 + 600 × (roster size − 1)`, capped at 6000. Hiring spends
-  through `company.spend`. A hired member starts at base (`status = "base"`) with the
-  standard issue (§5.1) taken from the base warehouse, or bought if the warehouse is
-  short.
-- **The agency never runs out.** If no member is alive and free (none at base or on
-  foot), the next applicant joins for free with a caption. The game can't
-  softlock on crew.
+**Hiring.** The Command Centre gets a **CREW** button next to its Overview button. It
+opens the **Astronaut Complex** panel (`crew_roster_panel.lua`):
+
+- **Roster.** Each living member gets a row: name, status, where, and service record.
+  The actions are:
+  - **Rename**;
+  - **Go to**: switch to an on-foot member in physics range (§4);
+  - **Recall**: brings an on-foot member home for the pickup fee
+    (`flight_ops.pickupFee`).
+- **Applicants.** Three names, each deterministic from `g_seed` and `crew.seq`.
+  - A **one-time hire fee** of `1500 + 600 × (living roster − 3)`, capped at 6000. So
+    the fourth astronaut costs $1,500.
+  - **No wages.** A crew member costs nothing after hiring.
+  - Hiring spends through `company.spend`.
+  - A hired member starts at base (`status = "base"`) with the standard issue, taken
+    from the base warehouse or bought if the warehouse is short.
+- **The free newbie.** When **every astronaut is dead**, the first applicant on the
+  board is marked **FREE** ("a volunteer, $0") until hired.
+  - The game also never leaves you with nobody to control. At the moment the last
+    member dies, that free newbie is hired automatically.
+  - They walk out of the Command Centre as the avatar, with the caption "The agency
+    has a new volunteer: <name>".
+  - Their issue kit is free as well, so a broke agency can still get back in the game.
 
 A crew member at base has no body. They are "in the building". The game always has
 someone to control on foot (§4.1).
 
-### 2.3 Losing crew
+### 2.3 Death: real, telegraphed, and fair
 
-Today's rule is "surviving a breakup costs you the ship, not the save" (vessel_controller
-destruction comment). The new rule extends it: **every crew member in a lost
-part survives** and is set down beside the wreck as an on-foot member. Out of air is
-unchanged: they wake at the base and pay the fee. The `lost` status exists in the
-schema so that permadeath can be added as a setting later (open question Q1).
+**Astronauts can die. This is on by default.** Every cause below has a visible warning
+before it, a short grace in which the player can act, and a cause written on the
+memorial. The thresholds are chosen so that ordinary play (a firm chute landing, a
+jump off a ledge, a swim) never kills anyone.
+
+**The causes:**
+
+| Cause | Kills when | The warning before it | The grace |
+|---|---|---|---|
+| **Crew part destroyed** | The part a member sits in breaks (hp 0) or the craft is lost with them in it. Members in *other* parts that survive the breakup are set down beside the wreck alive, as today. | The part's health on the crew strip header. At < 35% the strip shows **"CABIN FAILING"** in amber, with the crash tolerance as a speed ("hold under 9 m/s"). The descent HUD's vertical speed turns red when above the crewed part's tolerance. | None at the moment of impact. The warning is the descent itself, and crewed pods are the toughest part (tolerance 9 m/s). |
+| **Out of suit oxygen** | The suit's `o2` reaches 0, then the blackout grace runs out. The supply lasts **20 minutes on EVA** where the air can't be breathed (vacuum, toxic or thin air; climate tells). It refills fully aboard, at base, or at a locker ("Refill suit O2 from Kestrel I"). In breathable air with the helmet off there is no drain. | Chips on the portrait and the HUD: **O2 25%** (amber, chime), **O2 10%** (red, alarm every 10 s), **1 MIN** (continuous alarm, the HUD rim pulses). | **15 s BLACKOUT**: the screen dims, a heartbeat plays, and they can't move. Boarding, or a crewmate who reaches them and picks "Share O2" from the right-click menu, saves them. |
+| **Drowning** | Today's held-breath rule (`o2_secs` = 60 s under water). At 0 they black out instead of waking at base. | The existing breath meter, plus the same 25% / 10% chips and alarm. | **10 s BLACKOUT** under water: surfacing (a swim stroke up, the buoyancy) or a crewmate pulling them out saves them. |
+| **Impact on foot** (falls, being hit by a craft or boulder) | The body's velocity changes by more than **13 m/s within one tick** (Δv is read off the body each tick; that covers a fall and a hit the same way). **6–13 m/s** injures instead: `hp` drops by `(Δv − 6) / 7`, a limp and a hurt grunt play, and at hp 0 the member dies. | The fall indicator: while airborne, a chip shows the fall speed relative to the ground. It turns amber at 6 m/s and red at 12 m/s with a "FATAL FALL" warning. On a low-g moon it rarely gets there. Injured members show an hp bar on their portrait and chip. | None at the impact. The warning is the fall indicator, and the threshold is a 9 m drop at 9.8 m/s². |
+| **Crushed** | Something solid fills the suit's middle: `overlapSphere` (r 0.15 at the capsule's centre) hits a dynamic body or craft for 0.4 s in a row. Examples: pinned under a toppled rover, under a dropped boulder. | The first tick of overlap: a "PINNED" chip, a strained breath, and a red vignette. | **0.4 s**. Anything that moves the weight or the body clears it. |
+| **Burned on re-entry** | A member **exposed** to re-entry heating (in an open seat, or on EVA) gets `heat += vessel heating × 2 × dt`. They die at 1.0. A closed pod protects its crew until the pod itself fails (the first row). | **"HEAT"** on the portrait from heat 0.2, and an alarm from 0.6. The crew strip header shows the craft's heating rate whenever an open-seat rider is aboard. | Heat cools at 0.1/s once heating stops, so climbing out of the heat in time saves them. |
+
+**What happens at the moment of death:**
+
+- The camera holds on them for 2 s, with a muted sting, and the caption names them and
+  the cause: "Dana Okafor was killed: impact, 17 m/s".
+- Control passes, in this order:
+  1. the nearest living on-foot member in range;
+  2. the craft they were in, or the nearest crewed craft;
+  3. a member at base (they walk out of the Command Centre);
+  4. the free newbie (§2.2).
+
+**The body and the pack:**
+
+- **Remains.** A gritty, plain marker: the suit lies where they fell, in a still pose
+  (the suit model, no ragdoll needed). It is a `deployables` record of kind `remains`
+  (§5.5), so it persists, shows on the Tracking Station, and can be found.
+  - Right-click it → **Recover the body**: another crew member carries them home (they
+    take 80 kg against the pack, then RECOVER). The memorial records "brought home",
+    and the agency gets back the reputation lost below.
+  - Remains on a body you never return to just stay there as a monument.
+- **Inventory.** The pack drops where they died as a **salvage crate**: the existing
+  `salvage.drop`, which now carries items as well as materials.
+  - Under water it sinks, as today.
+  - In space it floats at the death point, moving with the craft's or the body's
+    velocity (a deployable record in orbit coordinates is too much for this upgrade).
+    A crate in space is kept relative to the craft it was nearest; if that craft is
+    gone, the crate goes too, and the memorial notes "lost in space".
+  - **Crew who die inside a destroyed part**: their packs drop as one crate at the
+    wreck.
+- **Reputation.** −2 for the agency per death, −1 more if the remains are never brought
+  home (applied when the record is a year old).
+
+**The memorial.** The Astronaut Complex panel has a **MEMORIAL** tab: name, hire date,
+date and place of death, the cause in plain words, the craft, flights, EVA time, flags
+planted, and "brought home" or "remains on Nami". The Command Centre's lobby has a
+plaque. Generated in-world: one line per name on a dark plate, the agency emblem
+(§2.5) at the top.
+
+**The forgiving option.** Keep one switch, **"Crew death: ON / Rescue instead"**:
+
+- set on the new-save panel, and changeable in Settings ▸ Game for that save;
+- stored in `crew.death`, default **ON**;
+- with Rescue, every cause above blacks out and the member wakes at base for the
+  rescue fee. This is today's out-of-air rule, which already exists, so it costs
+  almost nothing to keep, and it makes the game a pure sandbox for players who want one.
+
+It is not the default, because the user asked for real death.
 
 ### 2.4 Migration of existing saves (runs once, `crew.lua`)
 
 It runs when `crew.version` is nil and `g_played` is true (an existing save). New
-saves are created at version 1 with member #1 already in place.
+saves are created at version 1 with the three starters already in place.
 
-1. Create member #1 with a generated name, role `pilot`, and `hired` = 0.
+1. Create member #1 with a generated name and `hired` = 0. **Also create members #2 and
+   #3 as free starters at base**, so every save has the same three-astronaut start.
 2. Move the pack: `inv.astro` → `inv.crew:1` and `inv.gear.astro` → `inv.gear.crew:1`.
    Then write `{}` to the old keys (the store has no delete for these;
    `save.delete` is used where it exists).
@@ -130,11 +219,90 @@ saves are created at version 1 with member #1 already in place.
    - Otherwise set `status = "afoot"` at the saved crew position (game_manager's
      `p` keys), and set `crew.active = 1`.
 4. `tool.id`/`tool.equipped` become the record's `hand`.
-5. Set `crew.version = 1`.
+5. The agency identity: `agency.name` = "Solar Exploration Agency", and an emblem
+   generated from that name (§2.5). A one-time notice says "Name your agency in
+   Settings ▸ Agency".
+6. Set `crew.death = true` (death on, as for new saves), and `crew.version = 1`.
 
 After this, `"astro"` keeps resolving to the active member's pack (§5.2), so the
 objectives, salvage, the inventory panel, the depot and the mining code all keep
 working without edits.
+
+### 2.5 Agency identity: name and emblem
+
+The player is the agency, so the agency has a **name** and an **emblem**. Both are
+chosen on the new-save panel and can be changed later in Settings ▸ Agency. The emblem
+is used everywhere:
+
+- the flag cloth (§7);
+- an **emblem plate** on every crewed part (Pod Mk1/Mk2, cabin, cockpit, Command Seat
+  back);
+- the suit's shoulder patch;
+- the crew strip header, the Tracking Station and Astronaut Complex headers;
+- the save-slot card on the main menu;
+- the memorial plaque;
+- the VAB's door sign.
+
+**Save keys:**
+
+- `agency.name` (string, 1–32 characters);
+- `agency.emblem` = `{ v = 1, seed, shape, mono, motif, pal = { bg, ring, fg, accent }, image = nil | "user://emblems/<file>" }`.
+
+The spec is small. The texture is rebuilt from it at load (§ below), so the save holds
+no pixels. An uploaded image stays in the player's `user://` folder and the save holds
+only its path.
+
+**The generated emblem** (`emblem.lua`, a pure rulebook that loads in luajit):
+
+- **Seed** = a hash of the agency name. Typing a different name gives a different
+  emblem; **↻ Regenerate** steps the seed.
+- **Monogram**: the initials of the name's significant words (up to 3: "Solar
+  Exploration Agency" → "SEA"), drawn in a built-in stencil-style block alphabet
+  (A–Z, 0–9 as filled polygons in the rulebook), so it needs no font.
+- **Shape**, one of: roundel (NASA "meatball"), shield, hexagon mission patch, chevron
+  badge, or rounded square.
+- **Motif**, one of: an orbit ellipse, a rising rocket silhouette, a star, a ringed
+  planet, or crossed swooshes. It is placed behind or around the monogram by the
+  shape's layout rule.
+- **Palette**, from 10 curated four-colour sets in the Flight Hardware style
+  (docs/ui-style.md): navy and white with a red swoosh, olive and cream, black and safety
+  orange, and so on. All sets are checked for contrast, so every seed looks finished.
+- **Wear**: a light painted-metal grain, like base_tex.py's `wear()`, so it sits in the
+  gritty art direction.
+- **Rasterised** by `emblem.lua` into 256×256 RGBA pixels, with signed-distance shapes
+  for edges at 2× supersampling. It goes to `assets.textureFromPixels(256, 256,
+  pixels)` → `img:N`, published as `emblem.tex()`.
+  - The flag texture (512×341) is composed the same way: the field colour, the emblem,
+    and the agency name in the block alphabet.
+  - Both are rebuilt at load (about 30 ms in LuaJIT, measured as acceptance) and
+    whenever the spec changes.
+- **Tweak**: the panel has the shape (◂ ▸), motif (◂ ▸) and palette (◂ ▸), plus a colour
+  picker on each of the four colours. It previews live.
+
+**A custom image file:**
+
+- **The engine has no native file-open dialog** (lua-api.md: `assets.readBytes`,
+  `assets.getContents` and `assets.textureFromBytes` exist, with `user://` paths, but
+  there is no picker and no OS file drop). That is engine card **H11** (§8).
+- **The fallback now: a folder the game scans.**
+  - The panel's **Use my own image** button lists `assets.getContents("user://emblems")`.
+  - It shows the folder's real path (`app.dataPath()` + `/emblems`) with "Put a PNG or
+    JPG here, then press ↻".
+  - The chosen file is read with `assets.readBytes` (≤ 8 MB) and turned into a texture
+    with `assets.textureFromBytes`, centre-cropped to square.
+  - The flag composes it the same way as a generated emblem.
+  - If the file is later missing, the generated emblem from the same name is used, with
+    a one-time notice.
+- When H11 lands, the same button opens the native dialog and copies the picked file
+  into `user://emblems/`, so saves still point inside `user://`.
+
+**Where it's used in code:**
+
+- A small `emblem_plate.lua` sits on an `EmblemPlate` quad child in each crewed part's
+  prefab, and on the suit's shoulder.
+- In `start` it calls `setMaterial{ texture = emblem.tex() }`. It also listens for
+  `emblem.version` changes, so a rename in Settings repaints every plate, flag and
+  header live.
 
 ## 3. Seats, pods and hatches (B)
 
@@ -206,13 +374,27 @@ reads it today keeps working. `podCrewed` stays the "can carry crew" flag.
 - **When EVA is allowed.** There are two cases:
   - **On a surface:** the craft is landed or splashed and slower than 1 m/s relative
     to the ground.
-  - **In space or in flight off the ground:** the crew member carries an **RCS Pack**
-    (§5.7), the throttle is 0, and the craft is not accelerating (under 0.2 m/s²: no
-    engine, no staging in progress).
-  - Without a pack in space, the EVA button is **refused** and says why: "In space:
-    Dana needs an RCS Pack (the Pod Mk2's locker has one: take it first)". This is the
-    clearest option. A warning that lets them out anyway would produce an astronaut
-    floating away with no way back, which is exactly what the user asked to avoid.
+  - **In space or in flight off the ground:** the throttle is 0, and the craft is not
+    accelerating (under 0.2 m/s²: no engine, no staging in progress).
+  - **Without an RCS Pack in space, the game warns but doesn't refuse.** A two-button
+    confirm opens over the portrait:
+
+    > **Dana has no RCS Pack.** Out there she can't steer or stop: she'll keep the
+    > craft's speed and can only grab the hatch if she's still within reach. If she
+    > drifts away, the way back is a billed pickup. (The Pod Mk2's locker has one.)
+    >
+    > **[ EVA anyway ]**   **[ Cancel ]**
+
+    - The confirm defaults to **Cancel** (Enter cancels; the EVA anyway button has to
+      be clicked).
+    - "Don't ask again this save" is offered after the third time.
+  - **Adrift without a pack:**
+    - she leaves at rest relative to the craft (§3.5), so she floats beside the hatch
+      unless something moves her;
+    - F boards when she's within reach of a hatch;
+    - more than 50 m from any craft, her portrait and her right-click menu offer **Call
+      pickup**: the existing billed `flight_ops` pickup, which brings her home. Her
+      suit oxygen (§2.3) runs meanwhile, so the O2 chips say how long she has.
 - **The last member leaves.** The craft is left uncrewed:
   - the throttle is cut, and control goes to the member who left;
   - on the ground it is a parked fleet record; in space it keeps coasting on its orbit
@@ -319,7 +501,7 @@ Crew aboard are reached through their craft's portraits, not the list.
 | `` ` `` (backquote) | **Quick swap**: back to whatever you controlled before (craft ⇄ last crew member). The fastest loop for "EVA, fix, back to the craft". |
 | `F` (flying) | EVA **the commander** (today's single-crew F, unchanged in feel). |
 | `F` (on foot) | Board the nearest free slot (§3.5). |
-| Portrait hover → **EVA** | That member steps out of their part's hatch, and you control them. Shift-click: they step out and you stay on the craft. Greyed with the reason when not allowed (§3.3): "moving 12 m/s", "in space: needs an RCS Pack", "engines firing", "no hatch on a cabin buried in the stack". |
+| Portrait hover → **EVA** | That member steps out of their part's hatch, and you control them. Shift-click: they step out and you stay on the craft. Greyed with the reason when not allowed (§3.3): "moving 12 m/s", "engines firing", "no hatch on a cabin buried in the stack". In space without an RCS Pack it asks first (§3.3). |
 | EVA in space, with an RCS Pack | WASD / SPACE / CTRL translate (camera-relative). SHIFT is a stronger burst. **X** = HOLD: kill your velocity relative to the nearest craft. F near a hatch boards. See §5.7. |
 | Portrait hover → **⇄** | Move to another free slot aboard (an IVA transfer). |
 | Portrait right-click | The context menu for that member: helmet, pack, hand. The same `astro` provider, now with the member as its target. |
@@ -531,7 +713,7 @@ The builder's right plate gets a fifth tab, **CREW**, after CRAFT. It is
 │ Pod Mk2  [D.OKAFOR★][J.REYES][   ]│  drag a roster card in or out; ★ = commander
 │ Seat     [   ]                    │
 │───────────────────────────────────│
-│ ROSTER (at base)                  │  cards: name, role; greyed if aboard elsewhere/away
+│ ROSTER (at base)                  │  cards: name, flights; greyed if aboard elsewhere/away
 │ [M.HALE] [R.ITO] [+ HIRE…]        │
 │───────────────────────────────────│
 │ LOADOUT ▾ D.OKAFOR  38/106 kg 22/60 L │  click a seat card to pick whose pack is shown
@@ -778,10 +960,16 @@ verbs the same way, with no menu code changes.
 
 ## 7. Flags (F)
 
-- **The texture.** `tools/base_tex.py` gains `flag()`: the agency emblem (the existing
-  `emblem()` roundel) on a navy field with the agency's name. The output is
-  `textures/base/flag.png` at 512 × 341. "The company logo" is this emblem. A custom
-  name or emblem is Q3.
+- **The texture** is the **agency's own** (§2.5), built at runtime by `emblem.lua`:
+  - the palette's field colour, the emblem, and the agency name in the block alphabet,
+    at 512 × 341, through `assets.textureFromPixels`;
+  - with a custom image, that image composed onto the field;
+  - all flags share one texture (`emblem.flagTex()`). A rename or a new emblem repaints
+    every planted flag live.
+  - A flag planted under an older emblem keeps the agency's *current* one. One identity
+    is clearer than a history of logos.
+  - `tools/base_tex.py`'s static `emblem()` roundel stays as the base's sign art and as
+    the picture shown if the runtime texture is not ready yet.
 - **The model** (`tools/gen_flag.py`, Blender):
   - a 2.2 m pole with a ground spike;
   - a cloth quad of 1.2 × 0.8 m, subdivided 24 × 12, with its UV origin at the pole;
@@ -838,25 +1026,31 @@ verbs the same way, with no menu code changes.
 | H7 | **Drag and drop in UI**. | `ui.dragging`, `ui.dropTarget`, `ui.hovered`, hoverStart/End. | None. |
 | H8 | **Visual (non-physical) children of an assembly part**: a mesh child with no collider under a vessel part does not join the compound and does not change its mass. | Not documented either way. | **Doc clarification card only if** WS1 finds a problem. The design sidesteps it: dolls are top-level and placed in lateUpdate. |
 | H9 | **Photo to a file**. | `camera.capture` → bytes → `assets.writeBytes`; `assets.textureFromBytes` to show it. | None. |
+| H11 | **A native file-open dialog**, and **files dropped on the window**: the player picks or drags in an image (a save to import, a mod, a custom emblem, a level), and the game gets its bytes. It is sandboxed: the script never sees arbitrary paths, only the chosen file's name and bytes. | No picker and no OS drop event in lua-api.md. What exists: `assets.readBytes`/`getContents` on `user://`, `assets.textureFromBytes` (≤ 8 MB, PNG/JPEG), and `app.dataPath()` to show the folder. | **Card (needed).** Proposed shape: `app.openFile({ title, filter = {"png","jpg"} }, function(name, bytes, err) end)` plus a `filesDropped(list)` hook. Fallback until then: a `user://emblems/` folder the game scans (§2.5). |
+| H12 | **Contact impulse on any body**: `hit.impulse` (and a summed per-tick impulse) in `onCollisionEnter`/`Stay`, the way `assembly.impacts()` already reports it for vessels. For fall damage, crush detection and breakables in any game. | `onCollisionEnter(node, other, hit)` gives the point and normal only. `assembly.impacts` exists for assemblies. | Nice-to-have card. Solar uses the per-tick Δv of the body (impacts) and an `overlapSphere` at the capsule's centre (crushing), which are adequate (§2.3). |
 | H10 | **Holding a character at a moving, tumbling part** (the repair lock), and **thrust on a free-floating character** (the RCS Pack). | `RigidBody.kinematic` and position/velocity writes (already used by the seated crew since 0.104); `assembly.info` `vel`/`angVel`/`com`; `setUp`; velocity increments on a dynamic body. | None. A weld (`setJoint{kind="fixed"}`) was considered and rejected for game reasons (§6.3), not because anything is missing. |
 
-## 9. Open questions for the user (genuine design choices)
+## 9. Decisions (all answered by the user, 2026-10-25)
 
-1. **Permadeath.** Today crew survive a breakup and are rescued after running out of air.
-   Should crew be able to **die** (a lost pod kills its crew, and drowning is final),
-   either always or as a "hardcore crew" setting? The recommendation is a setting, off
-   by default.
-2. ~~**Space EVA.**~~ **Answered (2026-10-25):** space EVA comes in now with a worn **RCS Pack** item (§5.7). Repairs are a held task: the crew member is locked to the part until it is done or they cancel it from the right-click menu (§6).
-3. **The company identity.** The flag uses the existing agency roundel and an agency
-   name. Should players **name the agency and pick or edit its emblem** (colours, a
-   symbol) when they start a save? The recommendation is yes: a name field and an emblem
-   picker on the new-save panel.
-4. **Hiring economy.** Is a one-time hire fee (≈ $1.5k–6k) enough, or should crew draw
-   **wages**, which make a big roster a running cost? The recommendation is small wages,
-   so a big roster costs something to keep.
-5. **Crew traits.** Roles are stored but unused. Should roles matter in a follow-up?
-   For example: engineers repair faster, and only pilots fly without a probe core
-   (KSP's rule). The recommendation is yes, in a follow-up upgrade rather than this one.
+1. **Death is real** and on by default (§2.3). There are six telegraphed causes, a pack
+   that can be recovered, remains, and a memorial. A per-save "Rescue instead" switch is
+   kept for players who want a pure sandbox.
+2. **Space EVA** comes in now with the worn **RCS Pack** (§5.7). Without one, the game
+   warns with "EVA anyway / Cancel" and lets them go. The billed pickup brings back
+   anyone adrift (§3.3). Repair is a held task, locked to the part until it's done or
+   cancelled from the right-click menu (§6).
+3. **Agency identity**: the player names the agency on the new-save panel. The emblem is
+   generated from the name and can be regenerated or tweaked, or replaced with the
+   player's own image (§2.5). It is used on flags, parts, suits, the HUD and the
+   memorial.
+4. **Crew economy**: three free starters; a one-time hire fee after that; no wages; a
+   free newbie when everyone is dead (§2.2).
+5. **Roles and traits**: deferred (see "Later").
+
+**Later (not in this upgrade):** crew roles and traits, once the base crew system works.
+For example: engineers repair faster, pilots fly without a probe core, scientists get
+more from samples. Also the expressive crew-cam faces. The record has room for both; no
+code is reserved.
 
 ## 10. Workstreams (G)
 
@@ -896,6 +1090,23 @@ that agent's work is committed:
   Shift-EVA, quick swap, the switch list), EVA in space and §5.7 (the RCS Pack, the
   refill from craft propellant, the rails-warp refusal), the §6.3 lock, the revert keys
   (`crew.*`), the spawner's seat plan, and the locker plan at launch.
+  - **§2.2:** the three starters, hiring logic, and the free newbie (including the
+    auto-hire when the last member dies).
+  - **§2.3, the death rules and their state:**
+    - suit O2 and the EVA supply (planet_walker, with climate's breathability);
+    - drowning's blackout;
+    - the impact Δv and injury model;
+    - the crush overlap test;
+    - re-entry exposure (vessel_controller's `heating` × exposed crew);
+    - the cabin-failing state;
+    - the blackout graces and "Share O2";
+    - the control handoff order;
+    - `crew.death`, and the rescue path when it is off.
+  - Each death calls `salvage.drop` (WS3) and `deployables.place("remains", …)` (WS4).
+  - WS1 publishes every warning as **state**; WS2 draws it:
+    `crew.alerts(id) → { o2 = 0..1, breath, hp, heat, fall = m/s, pinned = bool, blackout = secs left, cabin = hp }`.
+  - For EVA without a pack, `crew.evaCheck(id) → ok, why, warn` returns `warn` instead
+    of refusing; `eva(id, { confirmed = true })` goes ahead.
 - **Publishes** (the interface every other workstream codes against, stubbed on day 0):
 
 ```lua
@@ -906,6 +1117,9 @@ control(id) -> ok, why; eva(id, {stay=bool}) -> ok, why; board(id, v, uid?, slot
 quickSwap() -> ok; switchList() -> {{kind="crew"|"vessel", id|v, name, dist}…}
 aboard(v) -> {{id, uid, slot, commander=bool}…}; dollOf(id) -> node|nil; bodyOf(id) -> node|nil
 setTask(id, task) -> ok, why; task(id) -> task|nil; cancelTask(id, why)
+alerts(id) -> {o2, breath, hp, heat, fall, pinned, blackout, cabin}; evaCheck(id) -> ok, why, warn
+memorial() -> {{id, name, hired, died = {st, date, cause, body, craft, remains}, flights, eva_s, flags, home = bool}…}
+deathOn() -> bool; setDeath(on)
 held(id) -> bool                                -- locked at a task (§6.3): movement code stands down
 -- crew_task.lua: attach(id), release(id, why)   -- the lock; WS3's repair calls these through setTask/cancelTask
 -- eva_pack.lua: rcsLeft(id) -> units, cap; refill(id, from_vessel) -> units; hold(on); reference() -> node|nil
@@ -940,7 +1154,27 @@ version  -- bumps on any change (panels poll it)
     - right-click the crew member → Cancel repair: they are released at under 0.1 m/s
       relative to the part, and progress is kept;
     - re-click: the job resumes and finishes, hp is 1.0;
-    - board: the pack refills from the craft's propellant. The luajit sweep and `floptle check` (0 errors, 6
+    - board: the pack refills from the craft's propellant.
+    - EVA without a pack in space shows the warning; Cancel keeps them aboard; "EVA
+      anyway" lets them out at rest relative to the craft; past 50 m, Call pickup
+      brings them home.
+  - **luajit:** `smoke_crew_death`, one case per cause:
+    - the impact thresholds (6 / 13 m/s);
+    - O2 drain to the alarm thresholds, then blackout, then death, and saved by
+      boarding inside the grace;
+    - crush after 0.4 s of overlap only;
+    - heat accumulation and cooling;
+    - a destroyed part kills only its own occupants;
+    - the control handoff order;
+    - the free-newbie auto-hire;
+    - with `crew.death` off every cause rescues instead;
+    - a new save and a migrated save both have three starters.
+  - **In-engine probe, death** (`tools/perf/deathprobe.lua`):
+    - a 20 m drop kills (crate and remains spawned, a memorial row written), and a 5 m
+      drop doesn't;
+    - a rover set on a crew member crushes them;
+    - a fast re-entry kills an open-seat rider and spares the pod's crew;
+    - a probe with death off rescues all three. The luajit sweep and `floptle check` (0 errors, 6
     warnings) pass.
 
 ### WS2: Crew presentation (strip, cams, IVA, VAB tab, roster panel, scene files)
@@ -956,9 +1190,16 @@ version  -- bumps on any change (panels poll it)
   - **the scene files for this upgrade** (`scenes/system.ron`, `scenes/builder.ron` and
     the generated overlay via `tools/gen_builder_overlay.lua`) and the new `interior`
     layer in `project.ron`. Other workstreams send node additions as patches.
+  - new `scripts/crew_alerts_hud.lua` (O2, breath, hp, HEAT, fall, PINNED, CABIN
+    FAILING chips, alarm sounds, the blackout dim, and the death camera hold and
+    caption);
   - tests: new `smoke_crew_strip.lua` and `smoke_builder_crew.lua`.
 - **Does:** §4.4 and §5.6, the hire panel UI on WS1's `hire`/`offers`, and the strip's
   budget measurement (H1).
+  - The **EVA-without-pack confirm** on the portrait (§3.3).
+  - The **warnings** of §2.3, drawn from `crew.alerts`.
+  - The Astronaut Complex **MEMORIAL** tab, and the lobby plaque in the scene (the
+    emblem on it comes from WS4's `emblem.tex()`).
 - **Depends on** WS1's stubbed API (day 0). It can build against a fake roster table
   until WS1 lands.
 - **Acceptance:**
@@ -968,13 +1209,16 @@ version  -- bumps on any change (panels poll it)
     reveals EVA and ⇄; `perf.cost('render')` with the strip on and off is ≤ 0.6 ms on
     `bench.sh … plane` (record `uptime`); V shows the IVA with the crew dolls; the VAB
     tab assigns 2 crew and a locker plan, and the launch seats them.
+  - **In-engine:** the alarm chips at 25% / 10% / 1 MIN (shots); the EVA confirm, with
+    its Cancel default; the memorial lists a probe death with its cause.
 
 ### WS3: Items, hands and tasks
 
 - **Owns:**
   - new `scripts/items.lua`;
   - `inventory.lua`, `inventory_panel.lua`, `tool_belt.lua` (after the tools agent
-    lands), `salvage.lua`;
+    lands), `salvage.lua` (crates carry items as well as materials; a crate in space
+    rides relative to its nearest craft, §2.3);
   - `context_providers.lua` (after the ctxmenu agent lands): locker take/put by item,
     `held.repair`, the deployable "Pick up", and the "Give" stub;
   - new prefabs `ItemRepairKit`, `ItemBeaconStowed`, `ItemFlagFurled`;
@@ -1011,19 +1255,34 @@ version  -- bumps on any change (panels poll it)
        `comms.beacons` are unchanged, and an old save with planted beacons and 2
        carried ones loads them all.
 
-### WS4: Flags, deployables store, Tracking Station
+### WS4: Agency identity, flags, deployables store, Tracking Station
 
 - **Owns:**
   - new `scripts/deployables.lua`, `scripts/flag.lua`, `shaders/flag_cloth.flsl`;
-  - new `tools/gen_flag.py`; the `flag()` addition to `tools/base_tex.py`;
-  - new `prefabs/Flag`, `FlagGhost`, `FlagGhostBad`, `DeployLib`;
+  - new `tools/gen_flag.py`;
+  - new `prefabs/Flag`, `FlagGhost`, `FlagGhostBad`, `DeployLib`, and `Remains` (the
+    fallen suit, a still pose of the suit model);
+  - **agency identity (§2.5):**
+    - new `scripts/emblem.lua` (generator, rasteriser, `tex()`/`flagTex()`, the
+      `user://emblems` scan) and new `scripts/emblem_plate.lua`;
+    - new `prefabs/EmblemPlate`, and the plate child added to `PartPod`, `PartSeat` and
+      `PartCockpit`;
+    - WS1 adds the same child to its new `PartPodMk2`/`PartCabin`, and the suit's
+      shoulder patch goes to the suit owner as a patch;
+    - `menu_newsave.lua` (the agency name, the emblem editor, and the "Crew death /
+      Rescue instead" switch);
+    - `menu_settings.lua` (Settings ▸ Agency: rename, re-edit; the death switch for this
+      save);
+    - `menu_slot.lua` (the emblem on the save card);
   - `tracking_station.lua` (FLAGS, plus a CREW section listing the roster with
     GO TO/Recall on WS1's API);
   - `objectives.lua`, `missions.lua` (the flag goal);
   - tests: new `smoke_flags.lua`; updates to `smoke_tracking.lua` and
     `smoke_objectives.lua`.
-- **Does:** §5.5's store, all of §7, and `dep.*` in the revert snapshot (a patch to
-  WS1's vessel_spawner).
+- **Does:** §5.5's store, all of §7, §2.5, the `remains` deployable kind (and REMAINS in
+  the Tracking Station, with "Recover the body"), and `dep.*` in the revert snapshot (a
+  patch to WS1's vessel_spawner). WS4 publishes `emblem.tex()`, `emblem.flagTex()`,
+  `emblem.version` and `agency.name()` for every header that shows the identity.
 - **Acceptance:**
   - **luajit:** place, list, near and remove; snapshot and restore; the flag goal
     latches on a placed flag and old contracts still latch on stepping out.
@@ -1033,18 +1292,34 @@ version  -- bumps on any change (panels poll it)
     - on an airless moon the cloth is static on its crossbar;
     - the Tracking Station row shows the photo;
     - reload, and the flag is still there.
+  - **luajit:** `smoke_emblem`:
+    - the same name gives the same emblem, and different names give different ones;
+    - the monogram rule ("Solar Exploration Agency" → "SEA"; one-word names);
+    - every palette passes the contrast check;
+    - a spec round-trips through the save;
+    - a missing custom image falls back to the generated emblem;
+    - migration sets the default name.
+  - **In-engine:**
+    - the new-save panel previews the emblem live as the name is typed; ↻ changes it;
+    - the generator, rasteriser and flag compose take ≤ 30 ms at load;
+    - a PNG dropped in `user://emblems/` shows in the list and becomes the flag (shot);
+    - a rename in Settings repaints a planted flag and a pod's plate without a reload.
 
 ### Order and the first playable slice
 
 - **Day 0 (both together, ~2 h):** WS1 commits a stub of `crew.lua` that returns member
   #1 and the `activeId` alias. WS3 commits `items.lua` and the inventory alias. Every
   other workstream codes against these from then on.
-- **Slice 1, "tactile items"** (WS3 + WS4 on top of the stubs; the user can play this
-  first). On today's single astronaut (member #1):
+- **Slice 1, "tactile items and identity"** (WS3 + WS4 on top of the stubs; the user can
+  play this first). On today's single astronaut (member #1), still under today's rescue
+  rule, because death waits for the three starters in slice 2:
+  - the agency name and generated or custom emblem, on the new-save panel and in
+    Settings;
   - the repair kit;
   - lockers with take/put;
   - the relay beacon as a held, deployable item;
-  - the waving company flag with its photo and the Tracking Station list;
+  - the waving company flag, wearing the agency's emblem, with its photo and the
+    Tracking Station list;
   - VAB loadout for the one astronaut, as a minimal version of the CREW tab with
     loadout only.
   The repair already uses the **held lock** (§6.3): WS1 delivers `crew_task`'s attach,
@@ -1052,8 +1327,10 @@ version  -- bumps on any change (panels poll it)
 - **Slice 1b, "EVA in space"** (WS1, right after slice 1 and before multi-crew): the RCS
   Pack, EVA in orbit, HOLD, refills from craft propellant, and repairing a damaged
   station in orbit with the same held task. It still runs on the single astronaut.
-- **Slice 2, "the crew"** (WS1 + WS2):
-  - roster and hiring;
+- **Slice 2, "the crew"** (WS1 + WS2, with WS3's crates and WS4's remains):
+  - three starters (migration adds two to existing saves), hiring, the free newbie;
+  - **death on by default**: the six causes, their warnings, the crate and remains, the
+    memorial, and the Rescue switch;
   - Pod Mk2 and the Crew Cabin;
   - seat assignment in the VAB;
   - EVA, boarding and switching;
