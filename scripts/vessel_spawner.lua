@@ -671,9 +671,26 @@ local function freshness_tick()
   -- (not while the craft is still being put together: its parts arrive a
   -- frame or two after its controller)
   if want_spawn or not rebuilt then return end
+  -- Off the craft before it ever left the launch site (a revert would only
+  -- put back what stands there): the offer goes. A craft that has flown
+  -- keeps it through an EVA, as KSP's does.
+  local bf = ref("base_facilities")
+  local st = bf and bf.launchSite and bf.launchSite(flight.kind)
+  local body = st and space.body(st.body)
+  local aboard = false
   for _, v in ipairs(findScripts("vessel_controller")) do
     if v.piloting and not ours(v) then return flightClosed("you are flying another craft") end
+    if ours(v) then
+      if v.piloting then aboard = true end
+      local n = v.node
+      if body and n and n.valid ~= false then
+        local dx, dy, dz = n.x - (body.x + st.x), n.y - (body.y + st.y), n.z - (body.z + st.z)
+        if dx * dx + dy * dy + dz * dz > 60 * 60 then flight.flew = true end
+      end
+    end
   end
+  if aboard then flight.boarded = true
+  elseif flight.boarded and not flight.flew then return flightClosed("the crew got off on the launch site") end
 end
 
 -- What a revert would do now: nil when there is no fresh flight; otherwise

@@ -968,12 +968,29 @@ local function update_map3d(node, dt)
   end
   -- A name on the map is a small enamel tag (docs/ui-style.md): a dark cut
   -- edge, the plate, and the name printed in the label face in warm ink.
+  -- Every tag keeps clear of the ones placed before it this frame (worlds
+  -- first, then craft, markers and stations): one that would land on another
+  -- moves up a row, twice at most, and is left out after that.
   local function label(x, y, text, fs)
-    if cineHidden() then return end   -- cinematic mode (F4): lines only, no tags
+    if cineHidden() then return false end   -- cinematic mode (F4): lines only, no tags
     local w, h = name_w(text, fs), fs * 1.5
+    local spot = nil
+    for row = 0, 2 do
+      local ty = y - row * h * 1.1
+      local clear = not covered(x - w / 2, ty - h / 2, w, h)
+      for _, q in ipairs(placed) do
+        if not clear then break end
+        if math.abs(q[1] - x) < (q[3] + w) / 2 and math.abs(q[2] - ty) < (q[4] + h) / 2 then clear = false end
+      end
+      if clear then spot = ty break end
+    end
+    if not spot then return false end
+    y = spot
+    placed[#placed + 1] = { x, y, w, h }
     draw.rect(x - w / 2 - 1, y - h / 2 - 1, w + 2, h + 2, 0.0, 0.0, 0.0, 0.7, fs * 0.15)
     draw.rect(x - w / 2, y - h / 2, w, h, 0.12, 0.124, 0.112, 0.86, fs * 0.12)
     draw.text(x, y - fs * 0.62, text, fs, 0.92, 0.89, 0.81, 1.0, "center", "fonts/SolarLabel.ttf")
+    return true
   end
   -- Orbit lines around each body's parent, and the names of what's in view.
   for i, b in ipairs(bodies) do
@@ -1016,17 +1033,7 @@ local function update_map3d(node, dt)
         local rpx = b.radius * ppu(cam_dist(b.x, b.y, b.z))
         local fs = 15 * lk
         local ly = sy - math.max(8 * lk, rpx) - fs * 1.1
-        local tw = name_w(b.name, fs)
-        local clear = not covered(sx - tw / 2, ly - fs * 0.75, tw, fs * 1.5)
-        for _, q in ipairs(placed) do
-          if math.abs(q[1] - sx) < (q[3] + tw) / 2 and math.abs(q[2] - ly) < fs * 1.5 then
-            clear = false break
-          end
-        end
-        if clear then
-          placed[#placed + 1] = { sx, ly, tw }
-          label(sx, ly, b.name, fs)
-        end
+        label(sx, ly, b.name, fs)
       end
     end
   end
