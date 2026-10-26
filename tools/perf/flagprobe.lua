@@ -18,7 +18,7 @@
 --   8. reload: the flag is still there
 --
 -- Pictures to user://flagshots/, lines "FLG ". One RESULT line per check.
-defaults = { quit = 1, slot = 15, seed = 4242, scale = 4, airless = 1 }
+defaults = { quit = 1, slot = 15, seed = 4242, scale = 4, airless = 1, onlyphoto = 0 }
 
 local W = function() return app.wallClock and app.wallClock() or os.clock() end
 local W0 = W()
@@ -265,6 +265,25 @@ local function run()
     local fu = frel:normalized()
     local mid = frel + fu * 1.2 - f0 * 2.0
     cam_at(bname, frel - f0 * 2.0 + rt * 5.5 + fu * 1.8, mid)
+  end
+  if params.onlyphoto == 1 then
+    -- card 0542: is the reticle's screen text in the photo's own bytes? The
+    -- screen as the player sees it (ui on) at the photo's moment, beside it.
+    cam_off()
+    -- a tool in hand, so the reticle (its E box and its labels) is drawn
+    local ihn = findScript("item_hand")
+    if ihn and ihn.hold then pcall(ihn.hold, "gravgun") end
+    wait_for(function() return fl and fl.state and fl.state.phase == "salute" end, 10, "the salute")
+    hold(1.1)
+    local fmn = findScript("facility_menu")
+    local tbn = findScript("tool_belt")
+    P("at the photo: door prompt %s, belt prompt '%s'", tostring(fmn and fmn.prompting and fmn.prompting()),
+      tostring(tbn and tbn.prompt))
+    shot("photo_moment_screen", true)
+    wait_for(function() return fl.state.photo ~= nil end, 10, "the photo")
+    P("photo: %s", tostring(fl.state.photo))
+    hold(0.5)
+    return
   end
   hold(0.25)
   shot("6_drive", false)

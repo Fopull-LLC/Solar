@@ -270,10 +270,6 @@ local function take_photo()
   local ok = pcall(spawn, "FlagPhotoCam", vec3(cx, cy, cz), function(cam)
     cam.x, cam.y, cam.z = lx, ly, lz
     cam:lookAt(vec3(mx, my, mz), vec3(ux, uy, uz))
-    -- a clean frame: the tool belt holds its screen marks (the reticle's E
-    -- and its labels) back while the capture renders
-    local tb = ref("tool_belt")
-    if tb and tb.quietFor then pcall(tb.quietFor, 0.35) end
     local path = rec.photo
     local okc, err = pcall(camera.capture, cam, { w = 640, h = 360, format = "jpeg", quality = 88 }, function(bytes, why)
       if bytes and assets and assets.writeBytes then
