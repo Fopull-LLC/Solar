@@ -39,8 +39,8 @@
 -- "PB RESULT" lines and one "BENCHJSON {...}" line for bench.sh to tabulate.
 defaults = { slot = 13, seed = 1911564384, quit = 1, onfoot = 30, clicks = 20, hold = 0.5, gap = 0.5,
              mapsecs = 12, flysecs = 45, drivesecs = 45, out = 110, settle = 8, sleepsecs = 20, sample = 0,
-             usersave = 0, standsecs = 20, walksecs = 40, meadow_m = 220, digclicks = 100, parksecs = 45,
-             burst = 0, gpusecs = 10, gpu_out = 200, fullscreen = 0 }
+             usersave = 0, standsecs = 20, walksecs = 40, meadow_m = 220, digclicks = 100, parksecs = 45, parksecs2 = 20,
+             burst = 0, gpusecs = 10, gpu_out = 200, fullscreen = 0, circthr = 0.25, starter_cut = 150 }
 
 local MODE = "base"
 local W = function() return app.wallClock and app.wallClock() or os.clock() end
@@ -935,15 +935,29 @@ ascend = function(vc)
       end
     elseif phase == "coast" then
       if S.vr < 3 then
-        thr_window("shift ramp"); key_down("shift"); phase = "circ"; P("CIRC burn at alt %.0f", S.alt)
+        -- a gentle burn (circthr of full): a full-throttle Anvil on a 900 m world
+        -- adds hundreds of m/s in a few frames and escapes before the lagged
+        -- periapsis estimate can see it (rc25 gameplay: apo inf, fuel 0)
+        thr_window("circ burn"); vc.setThrottle(params.circthr); phase = "circ"; P("CIRC burn at alt %.0f, throttle %.2f", S.alt, params.circthr)
       end
     end
-    if not STAGED and (vc.fuel or 0) <= 320.5 and (params.tanks or 0) == 0 then STAGED = true; P("STAGE at alt %.0f: %s", S.alt, tostring(vc.stageNext())) end
+    if not STAGED and (vc.fuel or 0) <= 320.5 and (params.tanks or 0) == 0 then STAGED = true; P("STAGE at alt %.0f: %s", S.alt, tostring(vc.stageNext())); BS_LAST = nil; STAGE_T = time
+      -- the flown craft may be a new vessel after the split: follow the pilot
+      yield()
+      local nv = pilot()
+      if nv and nv.node and nv.node.valid and nv.node ~= vn then P("STAGE: now flying %s (%d parts)", tostring(nv.node.name), #assembly.info(nv.node).parts); vc, vn = nv, nv.node
+        -- the new vessel starts with its own SAS and throttle: carry ours over
+        vc.setSAS("prograde")
+        if phase == "circ" then vc.setThrottle(params.circthr) end
+      end
+    end
     if phase == "circ" then
-      if HELD.shift and (vc.throttle or 0) > 0.98 then key_up("shift") end
-      if S.peri > PERI or (vc.fuel or 1) <= 0 then
-        release_all(); tap("x"); thr_window("x cut (orbit)")
-        P("ORBIT apo %.0f peri %.0f alt %.0f V %.1f fuel %.1f", S.apo, S.peri, S.alt, S.V, vc.fuel or -1)
+      -- (the craft's track jumps when a stage drops away: its speed is only
+      -- trusted for the escape test a second after staging)
+      local esc = S.eps >= 0 and time - (STAGE_T or -10) > 1.0
+      if S.peri > PERI or esc or (vc.fuel or 1) <= 0 then
+        release_all(); tap("x"); vc.setThrottle(0); thr_window("x cut (orbit)")
+        P("ORBIT apo %.0f peri %.0f alt %.0f V %.1f fuel %.1f%s", S.apo, S.peri, S.alt, S.V, vc.fuel or -1, esc and " (ESCAPE: cut)" or "")
         phase = "orbit"; break
       end
     end
@@ -1240,7 +1254,7 @@ local function run_plane()
           meshing = pt.terrainMeshing or 0, terrain = b.terrain or 0, scripts = b.scripts or 0, render = b.render or 0,
           fieldChunks = c.fieldChunks, chunks = c.chunks, sweepsN = c.sweeps, rays = c.rays, props = c.props,
           V = S.V, agl = S.agl, cell = cell, edge = edge, rel = rel, bodies = topk(bo, 3), paced = f.paced }
-        if #ring > 40 then table.remove(ring, 1) end
+        if #ring > 200 then table.remove(ring, 1) end
         med[#med + 1] = b.physics or 0
         if #med > 30 then table.remove(med, 1) end
         if not burst_arm and burst_n < math.max(1, params.burst) and #med >= 12 then
@@ -1265,6 +1279,28 @@ local function run_plane()
       end
     end
   end
+  -- 0526 (rc27): the lift-off itself, burst or not. The ring keeps rolling
+  -- through the climb, and once the craft is `liftagl` m up (default 12) every
+  -- kept frame from 0.5 m up is printed as a LIFT line (same columns as BURST),
+  -- with one LIFT SUMMARY line: the hump is there or it is not.
+  local lift_printed = false
+  local function lift_table(S)
+    lift_printed = true
+    local n, pmax, fmax, psum, over100, smax, stmax, p12 = 0, 0, 0, 0, 0, 0, 0, 0
+    P("LIFT columns: frame ms physics sweeps static broad pairs joints sleep meshing terrain scripts render | V agl | cell edge | fieldChunks chunks sweepsN | bodies | paced")
+    for _, r in ipairs(ring) do
+      if r.agl >= 0.5 then
+        n = n + 1; psum = psum + r.physics; pmax = math.max(pmax, r.physics); fmax = math.max(fmax, r.ms); smax = math.max(smax, r.sweeps); stmax = math.max(stmax, r.static)
+        if r.ms > 100 then over100 = over100 + 1 end
+        if r.agl <= 12 and r.agl >= 4 then p12 = math.max(p12, r.physics) end
+        P("LIFT  %d %.1f | %.1f %.1f %.1f %.2f %.2f %.2f %.2f | %.2f %.1f %.1f %.1f | %.1f %.1f | %s %.2f | %s %s %s | %s | %s",
+          r.frame, r.ms, r.physics, r.sweeps, r.static, r.broad, r.pairs, r.joints, r.sleep, r.meshing, r.terrain, r.scripts, r.render, r.V, r.agl, r.cell, r.edge,
+          tostring(r.fieldChunks), tostring(r.chunks), tostring(r.sweepsN), fmtk(r.bodies), tostring(r.paced))
+      end
+    end
+    P("LIFT SUMMARY: %d frames from 0.5 m up to %.1f m agl: physics mean %.1f max %.1f ms (sweeps max %.1f, static max %.1f), frame max %.1f ms, %d frames over 100 ms, physics max at 4-12 m agl %.1f ms",
+      n, S.agl, n > 0 and psum / n or 0, pmax, smax, stmax, fmax, over100, p12)
+  end
   while true do
     yield()
     if not vn.valid then P("PLANE gone"); break end
@@ -1273,6 +1309,10 @@ local function run_plane()
     ga = ga or S.alt
     local t = time - t0
     vc.setThrottle(1)
+    if phase == "climb" and not lift_printed then
+      roll_frame(S)
+      if S.agl > (params.liftagl or 12) then lift_table(S) end
+    end
     if phase == "roll" then
       roll_frame(S)
       local yaw = clamp(3.0 * (S.herr or 0), -1, 1)
@@ -1713,9 +1753,20 @@ local function dump_static(vc, vn)
         len(t.vx or 0, t.vy or 0, t.vz or 0))
       local j = t:getcomponent("Joint")
       if j then
-        P("DUMP tyre %d joint (engine): stiffness %.3f damping %.3f maxForce %.4f motor %s motorSpeed %.4f steer %.2f force %.5f position %.3f speed %.3f length %.3f limit %s broken %s (otherAnchor/axis: not readable from Lua, Solar's above)",
+        P("DUMP tyre %d joint (engine): stiffness %.3f damping %.3f maxForce %.4f motor %s motorSpeed %.4f steer %.2f force %.5f position %.3f speed %.3f length %.3f limit %s broken %s",
           k, j.stiffness or -1, j.damping or -1, j.maxForce or -1, tostring(j.motor), j.motorSpeed or -1, j.steer or -1, j.force or -1,
           j.position or -1, j.speed or -1, j.length or -1, tostring(j.limit), tostring(j.broken))
+        -- rc27 (0531): the joint's anchors and axis are readable; Solar set
+        -- otherAnchor = the hull-space wheel seat (w.cx/cy/cz) and axis (0,1,0)
+        if j.otherAnchorX ~= nil then
+          local dx, dy, dz = (j.otherAnchorX or 0) - (w.cx or 0), (j.otherAnchorY or 0) - (w.cy or 0), (j.otherAnchorZ or 0) - (w.cz or 0)
+          P("DUMP tyre %d joint anchors (engine): anchor (%.3f %.3f %.3f) otherAnchor (%.3f %.3f %.3f) axis (%.3f %.3f %.3f); otherAnchor - Solar's seat = (%.4f %.4f %.4f) %s; axis %s",
+            k, j.anchorX or 0, j.anchorY or 0, j.anchorZ or 0, j.otherAnchorX or 0, j.otherAnchorY or 0, j.otherAnchorZ or 0, j.axisX or 0, j.axisY or 0, j.axisZ or 0,
+            dx, dy, dz, len(dx, dy, dz) < 1e-3 and "MATCH" or "DIFFERS",
+            (math.abs((j.axisX or 0)) < 1e-6 and math.abs((j.axisY or 0) - 1) < 1e-6 and math.abs((j.axisZ or 0)) < 1e-6) and "(0,1,0) MATCH" or "DIFFERS from (0,1,0)")
+        else
+          P("DUMP tyre %d joint anchors: not readable on this engine (pre-rc27)", k)
+        end
       else
         P("DUMP tyre %d joint: none (jointed %s)", k, tostring(w.jointed))
       end
@@ -1796,11 +1847,41 @@ local function run_park()
   -- dump=1 (0531): after 10 s parked and braked, the tyres' joints and the
   -- planet-frame motion of everything, tick by tick, before the usual watch
   if (params.dump or 0) > 0 then wait(10); dump_park(vc, vn) end
+  -- what keeps a parked rover awake, by taking Solar's own per-tick touches
+  -- away one at a time: park_sas=0 turns the SAS off (its reaction-wheel torque
+  -- is a held force), park_eva=1 puts the crew out of the seat (the seated
+  -- kinematic body), park_r2=0 stops the wheel tick (its joint writes)
+  if params.park_sas == 0 then vc.setSAS("off"); P("PARK SAS off") end
+  if (params.park_eva or 0) > 0 then tap("f"); wait(2); local a = astro(); P("PARK crew out (f): astronaut visible %s, piloting %s", tostring(a and a.visible), tostring(vc.piloting)) end
+  if params.park_r2 == 0 and vc.R2 then vc.R2.live = false; P("PARK R2.live = false (no wheel tick)") end
   watch_sleep("s_park_rover", vn, params.parksecs, vc)
-  -- does a drive command wake it, and does it move?
-  key_down("w"); wait(2); key_up("w")
+  if vc.seat_w then P("PARK seat writes (patched vessel_controller): %d written, %d skipped", vc.seat_w.writes or -1, vc.seat_w.skips or -1) end
+  if (params.park_eva or 0) > 0 then return end
+  -- does a drive command wake it, and does it move? (the parking brake first:
+  -- with it on, W draws nothing — vessel_controller holds a braked rover)
+  tap("b"); wait(0.3)
+  local Eb = findScript("electronics")
+  P("PARK brakes released for the W test: %s", tostring(Eb and Eb.stateOf and vc.R2 and vc.R2.wheels[1] and Eb.stateOf(vc.R2.wheels[1].d).brakes))
+  local wake_frames = 0
+  key_down("w")
+  for _ = 1, 30 do
+    yield(); wake_frames = wake_frames + 1
+    local iw = assembly.info(vn) or {}
+    if not (iw.asleep or vn.asleep) then break end
+  end
+  local iw = assembly.info(vn) or {}
+  P("PARK W held: awake after %d frame(s), wake %s |v| %.3f", wake_frames, tostring(iw.wake), iw.vel and len(iw.vel.x, iw.vel.y, iw.vel.z) or -1)
+  wait(2); key_up("w")
   local i2 = assembly.info(vn)
   P("PARK after W 2 s: asleep %s wake %s |v| %.2f", tostring(i2.asleep), tostring(i2.wake), len(i2.vel.x, i2.vel.y, i2.vel.z))
+  -- brakes on again, it stops and the parking brakes hold it (vessel_controller
+  -- PARKING): does it sleep again? (0531 / 0527: "wakes on input, sleeps when stopped")
+  tap("b"); wait(0.3)
+  wait_for(function() local i3 = assembly.info(vn) or {}; return i3.vel and len(i3.vel.x, i3.vel.y, i3.vel.z) < 0.3 end, 15, "the rover to stop")
+  local i3 = assembly.info(vn) or {}
+  P("PARK stopped again: asleep %s wake %s |v| %.3f", tostring(i3.asleep), tostring(i3.wake), i3.vel and len(i3.vel.x, i3.vel.y, i3.vel.z) or -1)
+  FORCED = nil
+  watch_sleep("s_park_restop", vn, params.parksecs2, vc)
 end
 local function run_bigpark()
   local craft = finned_spine(40, 24)
@@ -1812,6 +1893,10 @@ local function run_bigpark()
   sc_begin("s_big_clamped"); wait(5); sc_end("s_big_clamped")
   if (params.loads or 0) == 0 and vc.physTune then vc.physTune.loads = false end
   vc.releaseClamps()
+  -- big_sas=0: the SAS off (its reaction-wheel torque is a held force on a
+  -- parked craft); big_eva=1: the crew out of the seat (a kinematic passenger)
+  if params.big_sas == 0 then wait(0.5); vc.setSAS("off"); P("BIG SAS off") end
+  if (params.big_eva or 0) > 0 then wait(0.5); tap("f"); wait(2); local a = astro(); P("BIG crew out (f): astronaut visible %s, piloting %s", tostring(a and a.visible), tostring(vc.piloting)) end
   watch_sleep("s_big_release", vn, params.sleepsecs, vc)
   P("BIG CRAFT after: %d vessel controllers live", #findScripts("vessel_controller"))
 end
@@ -1855,16 +1940,19 @@ local function run_gameplay()
       wait(1)
       tap("z"); wait(0.3); tap("space"); wait(1)
       if assembly.info(vn).anchored then vc.releaseClamps() end
-      local t0, apex = time, S0.alt
-      while time - t0 < 150 do
+      -- the engine is cut `starter_cut` m up (a full tank of this starter climbs
+      -- for minutes on a 900 m world), then it coasts to its apoapsis
+      local t0, apex, cut_t, over = time, S0.alt, nil, false
+      while time - t0 < 90 do
         yield()
         if not vn.valid then break end
         local S = body_state(vn)
         apex = math.max(apex, S.alt)
-        if time - t0 > 4 and S.vr < -0.5 then break end
+        if not cut_t and S.alt - S0.alt > params.starter_cut then cut_t = time - t0; tap("x"); P("starter engine cut at +%.0f m, V %.1f, %.1f s", S.alt - S0.alt, S.V, cut_t) end
+        if cut_t and time - t0 > cut_t + 1 and S.vr < -0.5 then over = true; break end
       end
-      tap("x")
-      smoke("starter_apex", apex > S0.alt + 50 and time - t0 < 150, "apex %.0f m above the pad after %.1f s", apex - S0.alt, time - t0)
+      if not cut_t then tap("x") end
+      smoke("starter_apex", apex > S0.alt + 50 and over, "apex %.0f m above the pad after %.1f s (engine cut at %s s, apoapsis passed %s)", apex - S0.alt, time - t0, tostring(cut_t), tostring(over))
       -- the revert: the flight cleared, the craft back on the stand as rolled out
       local okr, why = vs.revertToLaunch()
       P("revert: %s %s", tostring(okr), tostring(why))
@@ -1877,15 +1965,22 @@ local function run_gameplay()
           "revert %s; %d old parts left; anchored %s; alt %.1f (was %.1f); fuel %.1f (was %.1f); %d parts", tostring(okr), old, tostring(i2.anchored), S2.alt, S0.alt, vc2.fuel or -2, fuel0, #i2.parts)
         -- the pad back to the crane, the crew back on foot
         local rr, rw = vc2.recoverReady()
-        if rr then vc2.recoverCraft() else P("recover not ready: %s", tostring(rw)) end
+        if rr then vc2.recoverCraft() else
+          -- reverted, it stands on the clamps unflown: the crane will not take
+          -- it, so the crew steps out of the pod and walks
+          P("recover not ready: %s; the crew steps out (f)", tostring(rw))
+          tap("f")
+        end
         wait(3)
+        local a3 = astro()
+        P("crew on foot after the revert: visible %s, piloting %s", tostring(a3 and a3.visible), tostring(vc2.piloting))
       else
         smoke("revert", false, "revert %s (%s): no craft on the stand afterwards; %d old parts left", tostring(okr), tostring(why), old)
       end
     end)
     if not ok then smoke("starter", false, "error %s", tostring(err)) end
   end
-  -- b) an in-VAB rover rollout, driven 100 m
+  -- b) an in-VAB rover rollout, driven 100 m, then recovered
   do
     local ok, err = pcall(function()
       local a = astro()
@@ -1909,6 +2004,21 @@ local function run_gameplay()
       release_all()
       sc_end("k_rover_drive")
       smoke("rover_drive", far >= 100, "%.0f m from the release point in %.1f s", far, time - t0)
+      -- the crew back on foot at the base (the crane recovers the rover), so
+      -- the starter can be built in the VAB next
+      wait_for(function() local ii = assembly.info(vn) or {}; return ii.vel and len(ii.vel.x, ii.vel.y, ii.vel.z) < 1.0 end, 20, "the rover to stop")
+      wait(1)
+      local rr, rw = vc.recoverReady()
+      P("rover recover ready: %s %s", tostring(rr), tostring(rw))
+      if rr then vc.recoverCraft(); wait(2)
+      else
+        -- a rover that never left the ground has not "flown" (vessel_controller
+        -- hasFlown), so the crane will not take it: the crew steps out instead
+        tap("f"); wait(2)
+        P("rover: crew stepped out (f): piloting %s", tostring(vc.piloting))
+      end
+      local a2 = astro()
+      P("crew on foot after the rover: %s visible %s", tostring(a2 ~= nil), tostring(a2 and a2.visible))
     end)
     if not ok then smoke("rover", false, "error %s", tostring(err)) end
   end
