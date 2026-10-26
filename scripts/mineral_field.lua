@@ -46,9 +46,11 @@ defaults = {
   -- 1–4 µs on 0.116.1), so this is a look knob more than a budget now.
   --@range 0.3 1.5
   reach = 0.8,
-  -- Metres over which one LOD band cross-dissolves into the next.
+  -- Metres over which one LOD band cross-dissolves into the next. Kept to a
+  -- few metres: the engine's dissolve is a screen door, so every rock inside
+  -- a window draws as a grid of dots (flora_gen.fadeBands).
   --@range 0 40 --@units m
-  fade = 10.0,
+  fade = 3.0,
   -- Dissolve rocks out at the edge of their reach (1) or cut them (0).
   fade_out = 1,
   -- Patch size as a fraction of the planet's radius (clamped to 150..260 m).
@@ -426,7 +428,6 @@ local function make_source(p, k, w, R)
   local empty = params.fade_out > 0 and fg and fg.emptyAsset and fg.emptyAsset() or nil
   if empty then
     lod[#lod + 1] = { asset = empty, distance = far + 0.5 }
-    fade = math.max(fade, math.min(far * 0.22, far * 0.65 * 0.5))
   end
   local ok, id = pcall(scatter.create, {
     seed = hash(w.seed or 1, p.face, p.sgn + 2, p.i + 50000, p.j + 50000, #k.id * 131 + k.chunk),

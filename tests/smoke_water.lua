@@ -166,11 +166,13 @@ local fg = load_script("solar/scripts/flora_gen.lua")
 local lod, fade = fg.fadeBands({ { asset = "g.prefab.ron", at = 1.0 } }, 26, "mesh:1")
 check("a one-band layer (grass) gets a band of nothing past its reach", #lod == 2 and lod[2].asset == "mesh:1"
   and lod[1].distance == 26 and lod[2].distance > 26 and lod[2].distance < 27.5)
-check("…and a fade window of a quarter of its reach or more (no snap)", fade >= 6.5 and fade <= 26 * 0.3, fade)
+-- A dissolve, not a snap, but a narrow one: the engine's dissolve is a screen
+-- door, and every plant inside a window draws as a grid of dots.
+check("…and a fade window of a few metres (a dissolve, not a snap, not a screen-door belt)", fade >= 1.5 and fade <= 4, fade)
 lod, fade = fg.fadeBands({ { asset = "a", at = 0.22 }, { asset = "b", at = 0.55 }, { asset = "c", at = 1.0 } }, 150, "mesh:1")
 check("a tree keeps its bands, nearest first, and ends in nothing", #lod == 4 and lod[1].distance == 33
   and lod[3].distance == 150 and lod[4].asset == "mesh:1")
-check("…its window never spans more than half the narrowest band", fade <= 33 * 0.5 + 1e-9 and fade >= 10, fade)
+check("…its window is a few metres, never more than half the narrowest band", fade <= 33 * 0.5 + 1e-9 and fade >= 1.5 and fade <= 4, fade)
 lod = fg.fadeBands({ { asset = "a", at = 1.0 } }, 40, nil)
 check("with no empty mesh (no renderer) the list is just the bands", #lod == 1)
 

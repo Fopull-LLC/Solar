@@ -674,10 +674,22 @@ end
 
 -- The LOD list a scatter source of `far` metres reach is declared with: the
 -- given bands (asset, fraction of far), ending in a dissolve to nothing, and
--- the fade window. The window is a quarter of the reach (most of it, for a
--- short-reach layer like grass, so the edge is soft), but never more than half
--- the narrowest band, or a prop would be mid-dissolve across a whole band.
--- Pure, so the smoke harness can hold it to that.
+-- the fade window.
+--
+-- THE WINDOW IS NARROW: 3 % of the reach, 1.5 to 4 m. The engine's dissolve
+-- is a screen door (a 4x4 ordered dither: each band keeps a share of its
+-- pixels, the arriving one on the complement), and two different meshes on
+-- complementary doors do not fill each other in — so every plant inside a
+-- window drew as a grid of dots: canopies as stippled screen doors, shrubs
+-- speckled, trunks dotted. The window used to be a quarter of the reach (up to
+-- half the narrowest band): a tree was mid-dissolve over 16.5 m of each of its
+-- three windows (16-33, 66-83, 133-150 m), a third of every distance it is
+-- drawn at, and most stands in view had dotted trees in them
+-- (tools/perf/flora.sh; 2026-10-26, rc37). A few metres is a second of
+-- walking: still no pop, and the dots are a thin ring nobody stands in.
+-- Never more than half the narrowest band. Pure, so the smoke harness can hold
+-- it to that.
+local FADE_SHARE, FADE_MIN, FADE_MAX = 0.03, 1.5, 4.0
 function fadeBands(list, far, empty)
   local lod, prev, narrow = {}, 0, math.huge
   for i, b in ipairs(list) do
@@ -686,7 +698,7 @@ function fadeBands(list, far, empty)
     narrow = math.min(narrow, d - prev)
     prev = d
   end
-  local fade = math.max(2.5, math.min(far * 0.28, narrow * 0.5))
+  local fade = math.min(math.max(FADE_MIN, math.min(far * FADE_SHARE, FADE_MAX)), narrow * 0.5)
   if empty then
     -- Just past the reach: the dissolve happens inside [far - fade, far], and
     -- the empty band costs a chunk ring a few metres wide.
