@@ -69,16 +69,16 @@ MODELS = os.path.join(ROOT, "models", "tools")
 # view models keep their look while the suit's generator changes: warm
 # off-white beta cloth, light-grey gloves with dark grip palms, an anodised
 # wrist bearing. Their cloth is the suit's own texture set (textures/suit/).
-CLOTH = (0.85, 0.83, 0.78)
-GLOVE = (0.56, 0.57, 0.58)
-PALM = (0.20, 0.20, 0.21)
+CLOTH = (0.80, 0.785, 0.745)     # the suit's TMG (gen_suit_blender.py CLOTH)
+GLOVE = (0.62, 0.615, 0.60)      # its gloves, with the grime they carry
+PALM = (0.16, 0.16, 0.17)        # RTV grip
 
 
 def suit_cloth(col):
     """The suit's cloth texture set in one of its colours."""
     t = "textures/suit/fabric"
     return (f'(\n                color: {tuple(col)},\n                texture: Some("{t}_albedo.png"),\n'
-            f'                normal_map: Some("{t}_normal.png"),\n                normal_strength: 0.8,\n'
+            f'                normal_map: Some("{t}_normal.png"),\n                normal_strength: 1.0,\n'
             f'                roughness_map: Some("{t}_orm.png"),\n                roughness: 1.0,\n'
             f'                metallic_map: Some("{t}_orm.png"),\n                metallic: 1.0,\n'
             f'                ao_map: Some("{t}_orm.png"),\n                shading: Physical,\n            )')
