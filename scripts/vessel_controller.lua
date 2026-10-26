@@ -8267,7 +8267,8 @@ function r2AirAxes(F, rx, up, rz)
 end
 
 -- The angular velocity the rover's keys ask for (world). k: p = W − S,
--- y = A − D, r = E − Q (the ship stick's own reading). w: the craft's
+-- y = the lean key (+ leans the roof left; the rover hands it Q − E),
+-- r = the turn key (+ turns right; the rover hands it D − A). w: the craft's
 -- angular velocity now; hold: SAS on. U: the local up (nil: rates only);
 -- ref: { th, ph } the pitch and lean it left the ground with (filled in the
 -- first time). Pitch th = asin(front·U), + nose up; lean ph = asin(right·U),
@@ -9803,12 +9804,16 @@ function fixedUpdate(node, dt)
   -- Desired world angular velocity, decomposed on the ship basis.
   local dwx, dwy, dwz
   -- A ROVER OFF THE GROUND keeps the rover's keys, on the rover's own axes
-  -- (r2AirStick): W/S lean the nose down/up, A/D lean it left/right, Q/E
-  -- turn it, each a gentle lean from the attitude it took off with. The ship's axes put "pitch" about the rover's front, so W
-  -- rolled a jumping rover to the right (playtest 2026-10-26).
+  -- (r2AirStick): W/S lean the nose back/forward like a dirt bike, A/D keep
+  -- steering (a gentle turn, as they steer on the ground, so steering off a
+  -- bump never tips the rover), Q/E lean the roof left/right; each a gentle
+  -- lean from the attitude it took off with. The ship's axes put "pitch"
+  -- about the rover's front, so W rolled a jumping rover to the right
+  -- (playtest 2026-10-26). The stick's own k.y is the lean key and k.r the
+  -- turn key, so the keys are handed over swapped: lean = Q − E, turn = D − A.
   if r2AirMode(info) then
     R2.air0 = R2.air0 or {}
-    dwx, dwy, dwz = r2AirStick({ p = p, y = y, r = r }, rx, up, rz, w, sas_on, nil, R2.air_up, R2.air0)
+    dwx, dwy, dwz = r2AirStick({ p = p, y = -r, r = -y }, rx, up, rz, w, sas_on, nil, R2.air_up, R2.air0)
     p, y, r = 0, 0, 0   -- (no control surface answers the rover's lean)
     R2.airStick = true
   elseif manual or sas_mode == "stability" or sas_mode == "off" then

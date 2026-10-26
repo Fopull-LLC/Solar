@@ -15,7 +15,8 @@
 --     no roll and no yaw in it, at the gentle ROVER_AIR_RATE — and, with the
 --     local up known, only as far as ROVER_AIR_LEAN from the pitch it left
 --     the ground with, where a held W holds it;
---   * A/D lean the roof left/right, Q/E turn the front left/right;
+--   * Q/E lean the roof left/right, A/D turn the front left/right (the
+--     controller hands the stick lean = Q − E, turn = D − A);
 --   * off the keys, SAS on holds the rover still, SAS off lets it coast;
 --   * all of it on the rover's axes whatever way the craft is turned.
 --
