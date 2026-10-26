@@ -74,33 +74,99 @@ end
 -- so a sideways tank or a splayed leg counts at its real reach. Parts without a
 -- readable box fall back to the blueprint's stack height, which is what the
 -- builder used to put y = 0 at the bottom of the stack in the first place.
+-- One part's reach below its centre along the vessel's up, in metres (the
+-- prefab box from its live RigidBody, turned by the blueprint rotation).
+local function part_reach(e)
+  local part, d = e.part, e.d
+  local hx, hy, hz = d.rx or 0.5, (d.h or 1.0) * 0.5, d.rz or 0.5
+  local getc = part.getComponent or part.getcomponent
+  local rb = getc and getc(part, "RigidBody")
+  if rb and rb.half_y and rb.half_y > 0 then
+    -- The engine scales the box by the part node's scale; the component
+    -- reports the unscaled prefab numbers.
+    hx = (rb.half_x or hx) * math.abs(part.scale_x or 1)
+    hy = rb.half_y * math.abs(part.scale_y or 1)
+    hz = (rb.half_z or hz) * math.abs(part.scale_z or 1)
+  end
+  -- The part's local X/Y/Z axes in the vessel frame (YXZ, as everywhere in
+  -- this project); only their vessel-up (y) components matter here.
+  local cy, sy = math.cos(d.yaw or 0), math.sin(d.yaw or 0)
+  local cx, sx = math.cos(d.pitch or 0), math.sin(d.pitch or 0)
+  local cz, sz = math.cos(d.roll or 0), math.sin(d.roll or 0)
+  local Xx, Xy, Xz = cy * cz + sy * sx * sz, cx * sz, -sy * cz + cy * sx * sz
+  local Yx, Yy, Yz = -cy * sz + sy * sx * cz, cx * cz, sy * sz + cy * sx * cz
+  local Zy = Xz * Yx - Xx * Yz
+  return math.abs(Xy) * hx + math.abs(Yy) * hy + math.abs(Zy) * hz
+end
+
 local function lowest_collider(placed)
   local low = nil
   for _, e in ipairs(placed) do
-    local part, d = e.part, e.d
-    local hx, hy, hz = d.rx or 0.5, (d.h or 1.0) * 0.5, d.rz or 0.5
-    local getc = part.getComponent or part.getcomponent
-    local rb = getc and getc(part, "RigidBody")
-    if rb and rb.half_y and rb.half_y > 0 then
-      -- The engine scales the box by the part node's scale; the component
-      -- reports the unscaled prefab numbers.
-      hx = (rb.half_x or hx) * math.abs(part.scale_x or 1)
-      hy = rb.half_y * math.abs(part.scale_y or 1)
-      hz = (rb.half_z or hz) * math.abs(part.scale_z or 1)
-    end
-    -- The part's local X/Y/Z axes in the vessel frame (YXZ, as everywhere in
-    -- this project); only their vessel-up (y) components matter here.
-    local cy, sy = math.cos(d.yaw or 0), math.sin(d.yaw or 0)
-    local cx, sx = math.cos(d.pitch or 0), math.sin(d.pitch or 0)
-    local cz, sz = math.cos(d.roll or 0), math.sin(d.roll or 0)
-    local Xx, Xy, Xz = cy * cz + sy * sx * sz, cx * sz, -sy * cz + cy * sx * sz
-    local Yx, Yy, Yz = -cy * sz + sy * sx * cz, cx * cz, sy * sz + cy * sx * cz
-    local Zy = Xz * Yx - Xx * Yz
-    local reach = math.abs(Xy) * hx + math.abs(Yy) * hy + math.abs(Zy) * hz
-    local bottom = (d.y or 0) - reach
+    local bottom = (e.d.y or 0) - part_reach(e)
     if not low or bottom < low then low = bottom end
   end
   return low or 0.0
+end
+
+-- SEATED ON THE GROUND THAT IS THERE (playtest 2026-10-26: "this just made
+-- the entire jet sink into the ground and explode"). A runway craft was put
+-- at the SITE point's height — the gate only asks that the ground read
+-- within 2.5 m of it — and, launched while the base was still grading its
+-- ground, the grade then raised the runway under the clamped craft: on
+-- release its hull started inside the rock, where the terrain's surface has
+-- nothing to push it out with, and it fell through the planet. (probe
+-- SCRATCH/craft run "before2": the jet assembled 2.4 s before the regrade
+-- finished, then fell at ~g from the moment it was let go, no tyre ever
+-- touching.) So the craft is seated on the ground under its own feet: the
+-- ground straight under the bottom of every part that hangs within
+-- SEAT_BAND of the lowest one is found by a ray from above, and the clamp pin
+-- is moved along up so the part nearest the ground clears it by `clear` —
+-- up out of a raised grade, down onto a lowered one (never more than
+-- SEAT_DROP down: a ray that found a ditch is not a reason to sink a craft).
+-- Done when it is assembled and every SEAT_EVERY s while it stays clamped.
+SEAT_BAND, SEAT_DROP, SEAT_EVERY, SEAT_UP = 1.0, 2.0, 0.5, 4.0
+-- `pin` = the vessel origin's place (world, now), `rxv, upv, rzv` its axes.
+-- Returns the shift along up (m; + = lift), or nil when no ray found ground.
+function seatShift(placed, pin, rxv, upv, rzv, clear, ignore)
+  local low = lowest_collider(placed)
+  local need = nil
+  for _, e in ipairs(placed) do
+    local d = e.d
+    local by = (d.y or 0) - part_reach(e)
+    if by <= low + SEAT_BAND then
+      local px = pin.x + rxv.x * (d.x or 0) + upv.x * by + rzv.x * (d.z or 0)
+      local py = pin.y + rxv.y * (d.x or 0) + upv.y * by + rzv.y * (d.z or 0)
+      local pz = pin.z + rxv.z * (d.x or 0) + upv.z * by + rzv.z * (d.z or 0)
+      local hit = raycast(px + upv.x * SEAT_UP, py + upv.y * SEAT_UP, pz + upv.z * SEAT_UP,
+                          -upv.x, -upv.y, -upv.z, SEAT_UP + SEAT_DROP + 1.0, ignore)
+      if hit and hit.distance then
+        local gap = SEAT_UP - hit.distance          -- the ground over this part's bottom (+ = buried)
+        if not need or gap > need then need = gap end
+      end
+    end
+  end
+  if not need then return nil end
+  return math.max(-SEAT_DROP, need + (clear or 0.02))
+end
+local seat_t = 0.0
+local seat_placed = nil   -- the parts of the craft being held (for the re-seat)
+SEAT_DECK = nil           -- the site has a deck (pad) or not (runway); set as it spawns
+
+-- Move the clamp pin so the held craft sits `clear` over the ground under it.
+function reseat(tag)
+  if not (vessel_node and vessel_node.valid and relv and body_name and seat_placed) then return end
+  local b = space.body(body_name)
+  if not b then return end
+  local rxv, upv, rzv = basis_of(vessel_node)
+  local pin = { x = b.x + relv.x, y = b.y + relv.y, z = b.z + relv.z }
+  local skip = { vessel_node }
+  local crew = find("Astronaut")
+  if crew then skip[#skip + 1] = crew end
+  local sh = seatShift(seat_placed, pin, rxv, upv, rzv, params.clear, { ignore = skip })
+  if not sh or math.abs(sh) < 0.01 then return end
+  relv.x, relv.y, relv.z = relv.x + upv.x * sh, relv.y + upv.y * sh, relv.z + upv.z * sh
+  log(string.format("launch: %s — seated on the ground under it: %s %.2f m", tag or "held",
+    sh > 0 and "lifted" or "lowered", math.abs(sh)))
 end
 
 -- builder_proc (the drawn parts' meshes), on the BuilderProc manager node.
@@ -206,6 +272,11 @@ local function spawn_drain()
         log(string.format("vessel assembled: %d parts — clamped to the pad "
           .. "(lowest collider %.2f m below the origin, seated %.2f m above the deck)",
           total, -low + 0.0, params.clear)) -- (+0.0: never print "-0.00")
+        -- off a deck (the runway, the old dropped pad), seat it on the ground
+        -- actually under it (seatShift)
+        seat_placed = (SEAT_DECK == false) and placed or nil
+        seat_t = 0.0
+        if seat_placed then reseat("assembled") end
       end
     end, vessel)
   end
@@ -698,7 +769,7 @@ local function clear_flight()
   local keep = {}
   for _, p in ipairs(pins) do if not roots[p.node.id] then keep[#keep + 1] = p end end
   pins = keep
-  if vessel_node and roots[vessel_node.id] then vessel_node, relv = nil, nil end
+  if vessel_node and roots[vessel_node.id] then vessel_node, relv, seat_placed = nil, nil, nil end
   if space.warp and (space.warp() or 1) > 1.001 then pcall(space.warp, 1) end
   return #ids
 end
@@ -871,6 +942,7 @@ function launchNow(kind, opts)
     pins[#pins + 1] = { node = vessel_node, rel = relv, body = body_name }
   end
   pending, vessel_node, relv, assemble_t, rebuilt = 0, nil, nil, nil, false
+  seat_placed = nil
   wait_t, last_note, site_wait = 0.0, 0.0, 0.0
   want_spawn = true
   force_site = true -- looked at just now
@@ -1136,6 +1208,7 @@ local function try_spaceport(dt)
   body_name = st.body
   local planet_node = find(body_name)
   local deck = st.deck and 1.24 or 0.0
+  SEAT_DECK = st.deck and true or false
   local relg = { x = st.x, y = st.y, z = st.z }
   local fo = findScript("flight_ops")
   if fo and fo.rerateAtPad then
@@ -1337,6 +1410,7 @@ local function try_spawn(dt)
   -- collider glued to the moving surface. Its local position is set exact in
   -- the callback (body-relative — no tick-of-drift error).
   local planet_node = body_name and find(body_name) or nil
+  SEAT_DECK = true   -- (the dropped pad is the deck it stands on)
   spawn("Launchpad", vec3(gx + ux * deck, gy + uy * deck, gz + uz * deck), function(lp)
     lp:setUp(vec3(ux, uy, uz))
     if planet_node and relg then
@@ -1397,13 +1471,18 @@ function update(node, dt)
   if vessel_node and vessel_node.valid and relv and body_name then
     local info = assembly.info(vessel_node)
     if info and info.anchored then
+      -- (the ground under a held runway craft can still move: a base grade)
+      if seat_placed then
+        seat_t = seat_t + (dt or 0)
+        if seat_t >= SEAT_EVERY then seat_t = 0.0; reseat("held") end
+      end
       local b = space.body(body_name)
       if b then
         assembly.teleport(vessel_node,
           vec3(b.x + relv.x, b.y + relv.y, b.z + relv.z))
       end
     elseif info then
-      relv = nil -- released: the pin's job is done
+      relv, seat_placed = nil, nil -- released: the pin's job is done
     end
   end
   -- (the pins of earlier in-place rollouts, the same rule)

@@ -399,18 +399,28 @@ end
 -- compressor there sell scale and stop a stack of engines swamping the mix);
 -- the ambient drone sits on the Ambient bus. Persistent LOOPS (engine, reentry,
 -- bed) keep ONE voice and ride its volume/pitch with throttle/heat instead of
--- restarting — no clicks, no voice churn. All clips are Kenney CC0.
+-- restarting — no clicks, no voice churn. Real recordings (audio/foley,
+-- audio/SOURCES.md): NASA's SLS at full thrust, CC0 pyro bangs, clunks,
+-- servos and pneumatics. The air is a synthesised roar, never a tone: the
+-- old Kenney force-field loop decayed 60 dB every 0.95 s, so looped it beeped
+-- about once a second — under every rover past 10 m/s.
 local SFX = {
-  engine   = "audio/kenney/sci-fi/spaceEngineLarge_000.ogg",
-  ignite   = "audio/kenney/sci-fi/thrusterFire_000.ogg",
-  stage    = "audio/kenney/impact/impactMetal_heavy_000.ogg",
-  boosters = "audio/kenney/sci-fi/impactMetal_000.ogg",
-  clamp    = "audio/kenney/impact/impactMetal_medium_000.ogg",
-  explode  = "audio/kenney/sci-fi/explosionCrunch_000.ogg",
-  boom     = "audio/kenney/sci-fi/lowFrequency_explosion_000.ogg",
-  chute    = "audio/kenney/interface/open_001.ogg",
-  reentry  = "audio/kenney/sci-fi/forceField_000.ogg",
-  gear     = "audio/kenney/sci-fi/doorOpen_000.ogg",
+  engine   = "audio/foley/rocket_roar.ogg",
+  ignite   = "audio/foley/rocket_ignite.ogg",
+  stage    = "audio/foley/pyro_bang.ogg",
+  boosters = "audio/foley/pyro_far.ogg",
+  clamp    = "audio/foley/clamp_clunk.ogg",
+  thump    = "audio/foley/rover_bump.ogg",
+  explode  = "audio/foley/pyro_bang.ogg",
+  boom     = "audio/foley/explosion_far.ogg",
+  chute    = "audio/foley/hiss_short.ogg",
+  reentry  = "audio/foley/wind_roar.ogg",
+  gear     = "audio/foley/servo_run.ogg",
+  motor    = "audio/foley/rover_motor.ogg",
+  gravel   = "audio/foley/rover_gravel.ogg",
+  -- live state, kept here so the chunk needs no new locals (LuaJIT's 200):
+  -- the rover's two loops, and when the craft last left the ground
+  live     = { motor = nil, gravel = nil, air_since = nil },
 }
 local engine_sfx, reentry_sfx = nil, nil
 local throttle_prev = 0.0
@@ -496,7 +506,7 @@ local function update_wind_audio(node, wind, flux, spd)
         minDistance = 8.0, maxDistance = 1200.0, volume = 0.0 })
     end
     if reentry_sfx then
-      reentry_sfx:setVolume(math.min(1.0, 0.12 + intensity * 0.9))
+      reentry_sfx:setVolume(math.min(1.0, intensity * 1.6))
       reentry_sfx:setPitch(0.7 + math.min(0.9, (spd or 0) / 320.0))
     end
   elseif reentry_sfx then
@@ -504,10 +514,41 @@ local function update_wind_audio(node, wind, flux, spd)
   end
 end
 
+-- The ROVER: the drive motors whine up with the wheel speed and the effort
+-- on the stick, and the tyres crunch over the ground while they are on it.
+-- Two loops that live with the craft and are muted, not stopped, at rest.
+function SFX.drive(node, live, spd, effort, on_ground)
+  if not audio then return end
+  local L = SFX.live
+  local roll = live and math.min(1.0, spd / 10.0) or 0.0
+  local push = live and math.min(1.0, math.abs(effort or 0)) or 0.0
+  local mv = (roll > 0.02 or push > 0.05) and (0.10 + 0.30 * roll + 0.20 * push) or 0.0
+  local gv = (live and on_ground and spd > 0.4) and (0.15 + 0.55 * roll) or 0.0
+  if mv > 0 and not L.motor then
+    L.motor = audio.play(SFX.motor, node, { track = "SFX", loop = true, mode = "spatial",
+      falloff = "inverse", minDistance = 4.0, maxDistance = 120.0, volume = 0.0 })
+  end
+  if gv > 0 and not L.gravel then
+    L.gravel = audio.play(SFX.gravel, node, { track = "SFX", loop = true, mode = "spatial",
+      falloff = "inverse", minDistance = 4.0, maxDistance = 90.0, volume = 0.0 })
+  end
+  if L.motor then
+    L.motor:setVolume(mv)
+    L.motor:setPitch(0.55 + 0.75 * roll + 0.10 * push)
+  end
+  if L.gravel then
+    L.gravel:setVolume(gv)
+    L.gravel:setPitch(0.80 + 0.35 * roll)
+  end
+end
+
 -- Stop the vessel's persistent loops (EVA, breakup) — silence, don't leak.
 local function silence_loops()
   if engine_sfx then engine_sfx:stop(); engine_sfx = nil end
   if reentry_sfx then reentry_sfx:stop(); reentry_sfx = nil end
+  local L = SFX.live
+  if L.motor then L.motor:stop(); L.motor = nil end
+  if L.gravel then L.gravel:stop(); L.gravel = nil end
 end
 
 -- ── blueprint ───────────────────────────────────────────────────────────────
@@ -3889,13 +3930,26 @@ end
 -- Is this craft parked? (Landed and stopped — the precondition for every way of
 -- ending a flight except walking away from the wreck.) Published so the flight
 -- card can ask without duplicating the test.
+-- With HYSTERESIS: a rover creeping to a stop crossed 1.5 m/s and lost a
+-- tyre's contact for a tick over and over, so the card flickered between
+-- "flying" and "recover". Parked comes on below 1.5 m/s on the ground and
+-- goes off only past 2.5 m/s or after 0.5 s off the ground.
+PARKED_H = { on = false, air_t = nil }
 function parked()
   local node = dock.node
-  if destroyed or not node or not node.valid then return false end
+  if destroyed or not node or not node.valid then PARKED_H.on = false return false end
   local info = assembly.info(node)
-  if not (info and (info.grounded or R2.onWheels)) then return false end
+  if not info then PARKED_H.on = false return false end
   local v = info.vel
-  return math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z) < 1.5
+  local spd = math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z)
+  local ground = info.grounded or R2.onWheels
+  if ground then PARKED_H.air_t = nil elseif not PARKED_H.air_t then PARKED_H.air_t = time end
+  if PARKED_H.on then
+    if spd > 2.5 or (PARKED_H.air_t and time - PARKED_H.air_t > 0.5) then PARKED_H.on = false end
+  elseif ground and spd < 1.5 then
+    PARKED_H.on = true
+  end
+  return PARKED_H.on
 end
 
 -- ── recovery ────────────────────────────────────────────────────────────────
@@ -8156,6 +8210,94 @@ function r2Steady(node, info, tk, dt)
   wheelTorque(node, info, up.x * yr - w.x + ar.x, up.y * yr - w.y + ar.y, up.z * yr - w.z + ar.z, tk, dt)
 end
 
+-- A ROVER IN THE AIR (playtest 2026-10-26: "as soon as you get any air w is
+-- making the craft tilt to the right"). Off its tyres a rover used to fall
+-- through to the SHIP's stick, whose pitch axis is the ship's right — and for
+-- a rover built round an upright pod that is the rover's FRONT, so W rolled
+-- it right at the full 1 rad/s (probe: 84° of roll in 1.9 s of air). Now a
+-- rover (driven wheels, not landing gear) that left the ground less than
+-- ROVER_AIR_HOLD s ago keeps the rover's keys on the rover's own axes, and
+-- they LEAN it, like a rider on a dirt bike, rather than spin it:
+--   W / S  nose ROVER_AIR_LEAN down / up from where it left the ground
+--   A / D  roof ROVER_AIR_LEAN left / right of where it left the ground
+--   Q / E  turn left / right at ROVER_AIR_RATE
+-- Off the keys it holds the attitude it took off with (SAS on) or coasts
+-- (SAS off). W is held to drive, so it must not pitch the rover over: a rate
+-- on the key (the first version) put a held W's rover on its nose (42° down
+-- in 1.4 s of air). All of it on the craft's real reaction wheels
+-- (elec.torque_k) at ROVER_AIR_TK of their authority, at most
+-- ROVER_AIR_RATE. Back on its tyres, the keys drive again (R2.driving).
+ROVER_AIR_RATE = 0.6               -- rad/s, the most it turns
+ROVER_AIR_LEAN = math.rad(15)      -- the lean a key asks for
+ROVER_AIR_GAIN = 2.5               -- rad/s per rad of lean error
+ROVER_AIR_TK = 0.5                 -- share of the reaction wheels' authority
+ROVER_AIR_HOLD = 8.0               -- s off the ground before the ship's stick takes over
+
+-- Is this craft a rover in the air right now? (R2.ground_t: the last tick on
+-- the ground; R2.air0: its pitch and lean as it left it; R2.air_up: the local
+-- up this tick.)
+function r2AirMode(info)
+  if #R2.wheels == 0 or R2.gear then R2.air0 = nil return false end
+  if R2.driving or R2.onWheels or (info and (info.grounded or info.anchored)) then
+    R2.ground_t, R2.air0 = time, nil
+    return false
+  end
+  if not (R2.ground_t ~= nil and (time - R2.ground_t) < ROVER_AIR_HOLD) then R2.air0 = nil return false end
+  local c = info and (info.com or info.origin)
+  local U = nil
+  if c and space and space.gravity then
+    local gx, gy, gz = space.gravity(c.x, c.y, c.z)
+    local l = gx and math.sqrt(gx * gx + gy * gy + gz * gz) or 0
+    if l > 1e-6 then U = { x = -gx / l, y = -gy / l, z = -gz / l } end
+  end
+  R2.air_up = U
+  return true
+end
+
+-- The rover's axes in the world: its front (R2.fwd, level in the vessel
+-- frame), its up, and its right = front × up.
+function r2AirAxes(F, rx, up, rz)
+  local fx, fy, fz = rx.x * F.x + rz.x * F.z, rx.y * F.x + rz.y * F.z, rx.z * F.x + rz.z * F.z
+  local l = math.sqrt(fx * fx + fy * fy + fz * fz)
+  if l < 1e-6 then fx, fy, fz, l = rx.x, rx.y, rx.z, 1 end
+  fx, fy, fz = fx / l, fy / l, fz / l
+  local ux, uy, uz = up.x, up.y, up.z
+  local gx, gy, gz = fy * uz - fz * uy, fz * ux - fx * uz, fx * uy - fy * ux
+  return { x = fx, y = fy, z = fz }, { x = ux, y = uy, z = uz }, { x = gx, y = gy, z = gz }
+end
+
+-- The angular velocity the rover's keys ask for (world). k: p = W − S,
+-- y = A − D, r = E − Q (the ship stick's own reading). w: the craft's
+-- angular velocity now; hold: SAS on. U: the local up (nil: rates only);
+-- ref: { th, ph } the pitch and lean it left the ground with (filled in the
+-- first time). Pitch th = asin(front·U), + nose up; lean ph = asin(right·U),
+-- + roof leaning left. A turn about +right lifts the front; one about +front
+-- tips the roof right; one about +up turns the front left.
+function r2AirStick(k, rx, up, rz, w, hold, F, U, ref)
+  local Fw, Uv, Rt = r2AirAxes(F or R2.fwd or { x = 1, z = 0 }, rx, up, rz)
+  local rate = ROVER_AIR_RATE
+  local function cur(a) return w.x * a.x + w.y * a.y + w.z * a.z end
+  local function clampr(v) return math.max(-rate, math.min(rate, v)) end
+  local p, y, r = k.p or 0, k.y or 0, k.r or 0
+  local wr, wf
+  if U then
+    local function asn(v) return math.asin(math.max(-1, math.min(1, v))) end
+    local th = asn(Fw.x * U.x + Fw.y * U.y + Fw.z * U.z)
+    local ph = asn(Rt.x * U.x + Rt.y * U.y + Rt.z * U.z)
+    if ref and not ref.th then ref.th, ref.ph = th, ph end
+    local th0, ph0 = ref and ref.th or th, ref and ref.ph or ph
+    -- pitch: W leans the nose back (th0 + LEAN), like gassing a dirt bike in
+    -- the air, and S forward; off the keys hold th0 (SAS) or coast
+    if p ~= 0 or hold then wr = clampr(ROVER_AIR_GAIN * (th0 + p * ROVER_AIR_LEAN - th)) else wr = cur(Rt) end
+    if y ~= 0 or hold then wf = clampr(-ROVER_AIR_GAIN * (ph0 + y * ROVER_AIR_LEAN - ph)) else wf = cur(Fw) end
+  else
+    wr = p ~= 0 and p * rate or (hold and 0 or cur(Rt))
+    wf = y ~= 0 and -y * rate or (hold and 0 or cur(Fw))
+  end
+  local wu = r ~= 0 and -r * rate or (hold and 0 or cur(Uv))
+  return Rt.x * wr + Fw.x * wf + Uv.x * wu, Rt.y * wr + Fw.y * wf + Uv.y * wu, Rt.z * wr + Fw.z * wf + Uv.z * wu
+end
+
 -- Drive, steer, brake and park, every tick the tyres are out
 -- (wheel_spec.md). W/S drive every driven wheel along the craft's front,
 -- each by the spin sign its mount gives it; A/D STEER the steerable wheels
@@ -8753,6 +8895,7 @@ function r2Tick(node, info, dt)
   else
     R2.driving, R2.onWheels = false, false
   end
+  SFX.drive(node, R2.live and not R2.gear, R2.speed or 0, R2.drive or 0, R2.onWheels)
 end
 
 -- Before the craft is cut (staging, undocking, a part tearing off, docking):
@@ -9436,7 +9579,11 @@ function fixedUpdate(node, dt)
   -- The ground contact point is a touch below the stack base.
   local gsd = terrain.query(bx, by, bz)
   local near_ground = info.grounded or (gsd ~= nil and gsd < 4.0)
-  if info.grounded and not was_grounded then
+  -- A TOUCHDOWN is a landing: the craft was off the ground for a while first.
+  -- A rover's contact flag flickers over every bump at speed, and each flicker
+  -- used to ring a metal clank and print "touchdown" (50 in a 25 s drive).
+  if not info.grounded then SFX.live.air_since = SFX.live.air_since or time end
+  if info.grounded and not was_grounded and time - (SFX.live.air_since or time) > 0.6 then
     -- Touching down is worth saying however gently it happened — the dust and
     -- the thump below are gated on landing HARD, and a caption that only fires
     -- on a bad landing would tell a player they had crashed and nothing else.
@@ -9447,11 +9594,12 @@ function fixedUpdate(node, dt)
     if sp > 1.5 then
       local fx = fxd()
       if fx then fx.touchdown(bx, by, bz, sp) else spawnEffect("TouchDust", bx, by, bz) end
-      sfx3(SFX.clamp, bx, by, bz, math.min(0.9, 0.3 + sp * 0.05), 0.8)
+      sfx3(SFX.thump, bx, by, bz, math.min(0.9, 0.3 + sp * 0.05), 1.0)
       add_shake(math.min(0.5, sp * 0.03)) -- a firm touchdown thuds the view
     end
   end
   was_grounded = info.grounded or false
+  if info.grounded then SFX.live.air_since = nil end
   if burning and near_ground and time - launch_dust_t > 0.16 then
     launch_dust_t = time
     -- The ground blast under the engines is vfx.lua's (it follows each
@@ -9654,7 +9802,16 @@ function fixedUpdate(node, dt)
   local sasm_x, sasm_y, sasm_z
   -- Desired world angular velocity, decomposed on the ship basis.
   local dwx, dwy, dwz
-  if manual or sas_mode == "stability" or sas_mode == "off" then
+  -- A ROVER OFF THE GROUND keeps the rover's keys, on the rover's own axes
+  -- (r2AirStick): W/S lean the nose down/up, A/D lean it left/right, Q/E
+  -- turn it, each a gentle lean from the attitude it took off with. The ship's axes put "pitch" about the rover's front, so W
+  -- rolled a jumping rover to the right (playtest 2026-10-26).
+  if r2AirMode(info) then
+    R2.air0 = R2.air0 or {}
+    dwx, dwy, dwz = r2AirStick({ p = p, y = y, r = r }, rx, up, rz, w, sas_on, nil, R2.air_up, R2.air0)
+    p, y, r = 0, 0, 0   -- (no control surface answers the rover's lean)
+    R2.airStick = true
+  elseif manual or sas_mode == "stability" or sas_mode == "off" then
     -- Current rates on the ship axes (so released axes can persist SAS-off).
     local cur_p = w.x * rgx + w.y * rgy + w.z * rgz
     local cur_y = w.x * fx + w.y * fy + w.z * fz
@@ -9722,6 +9879,8 @@ function fixedUpdate(node, dt)
   -- for a pod's, less for a probe core's, 0 flat). The wheels' draw follows
   -- how hard they're working (wheel_use).
   local tk = (elec.torque_k or 1.0) * params.torque
+  -- (a rover in the air leans gently: half the wheels' authority)
+  if R2.airStick then tk = tk * ROVER_AIR_TK; R2.airStick = nil end
   -- (A rover on its wheels steers with them: WASD is the drive, not the
   -- stick; with SAS on, the reaction wheels only steady its pitch and roll.)
   if not info.anchored and warp <= 1.001 and R2.driving then

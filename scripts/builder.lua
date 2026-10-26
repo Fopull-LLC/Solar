@@ -1355,6 +1355,19 @@ function launchCheck()
         #comps == 2 and "" or "s")
     end
   end
+  -- parts buried in each other (red): harmless, unless it is a wheel or a
+  -- leg that can no longer reach the ground
+  if badOverlaps then
+    local ov = badOverlaps()
+    if #ov > 0 then
+      local p = parts[ov[1].sunk]
+      local q = parts[ov[1].sunk == ov[1].a and ov[1].b or ov[1].a]
+      local what = (p and p.def.label or "a part") .. " is " .. string.format("%.0f cm", ov[1].depth * 100)
+        .. " inside " .. (q and q.def.label or "another part")
+      warn[#warn + 1] = (#ov == 1 and what or string.format("%d parts overlap (red) — %s", #ov, what))
+        .. ((p and (p.def.wheel or p.def.legs)) and " — it may not reach the ground" or "")
+    end
+  end
   if not has.engine and not has.wheel then
     warn[#warn + 1] = "no engine — it will sit on the pad"
   else
@@ -5296,6 +5309,97 @@ local function loose_set()
   return W.cache.loose or {}
 end
 
+-- ── BADLY OVERLAPPING PARTS (playtest 2026-10-26) ─────────────────────────
+-- "i moved the front wheel up inside of the cockpit a bit ... im wondering if
+-- that odd movement i did also is making the physics freak out". Parts of one
+-- craft never collide with each other (they are one rigid body), so an
+-- overlap does the flight no harm — except where a part has to MEET
+-- something: a wheel or a leg buried in the hull cannot reach the ground. The
+-- builder says so instead of leaving it to a guess: a pair whose oriented
+-- boxes interpenetrate deeper than OVERLAP_WARN_DEPTH (and than
+-- OVERLAP_WARN_SHARE of the thinner part's half-thickness), neither mounted
+-- on the other, is marked with a
+-- thin red box on the part that sinks in (the smaller one), and LAUNCH lists
+-- it among the warnings. A surface mount hugging its host, a wing root on a
+-- fuselage, a part nudged to touch — all a few centimetres — say nothing.
+OVERLAP_WARN_DEPTH = 0.10
+OVERLAP_WARN_SHARE = 0.35
+-- How deep two parts' oriented boxes go into each other (m), 0 apart: the
+-- smallest overlap along the 15 separating axes (the SAT test partsTouch
+-- does, measured instead of asked).
+function partsOverlapDepth(p, q)
+  local A, B = basisOf(p.yaw, p.pitch, p.roll), basisOf(q.yaw, q.pitch, q.roll)
+  local ax, ay, az = half3(p)
+  local bx, by, bz = half3(q)
+  local T = { x = q.x - p.x, y = q.y - p.y, z = q.z - p.z }
+  local Aa, Ba = { A.X, A.Y, A.Z }, { B.X, B.Y, B.Z }
+  local ah, bh = { ax, ay, az }, { bx, by, bz }
+  local best = math.huge
+  local function axis(L)
+    local l2 = L.x * L.x + L.y * L.y + L.z * L.z
+    if l2 < 1e-10 then return true end
+    local l = math.sqrt(l2)
+    local ra, rb = 0, 0
+    for i = 1, 3 do
+      ra = ra + math.abs(dot3(L, Aa[i])) * ah[i]
+      rb = rb + math.abs(dot3(L, Ba[i])) * bh[i]
+    end
+    local o = (ra + rb - math.abs(dot3(T, L))) / l
+    if o <= 0 then return false end
+    if o < best then best = o end
+    return true
+  end
+  for i = 1, 3 do
+    if not axis(Aa[i]) or not axis(Ba[i]) then return 0 end
+  end
+  for i = 1, 3 do
+    for j = 1, 3 do
+      if not axis(cross3(Aa[i], Ba[j])) then return 0 end
+    end
+  end
+  return best == math.huge and 0 or best
+end
+-- The pairs that overlap badly: { { a = uid, b = uid, depth = m, sunk = uid } },
+-- cached per craftVersion. The spatial hash finds the neighbours.
+function badOverlaps()
+  local c = W.cache
+  if c.ovl_v == craftVersion then return c.ovl end
+  local out, seen = {}, {}
+  local H = ensure_hash()
+  for u, p in pairs(parts) do
+    if not p.carried then
+      local ex, ey, ez = part_box(p)
+      local list
+      if H then list = H:box(p.x - ex, p.y - ey, p.z - ez, p.x + ex, p.y + ey, p.z + ez, {})
+      else list = {} for v in pairs(parts) do list[#list + 1] = v end end
+      for _, v in ipairs(list) do
+        local q = parts[v]
+        -- (a part and the host it is mounted on hug by design: a leg round
+        -- an engine bell, a wing root in a fuselage)
+        if v ~= u and q and not q.carried and p.parent ~= v and q.parent ~= u then
+          local key = u < v and (u .. ":" .. v) or (v .. ":" .. u)
+          if not seen[key] then
+            seen[key] = true
+            local d = partsOverlapDepth(p, q)
+            if d > OVERLAP_WARN_DEPTH then
+              local pa, pb, pc = half3(p)
+              local qa, qb, qc = half3(q)
+              local thin = math.min(math.min(pa, pb, pc), math.min(qa, qb, qc))
+              if d > OVERLAP_WARN_SHARE * thin then
+                local vp, vq = pa * pb * pc, qa * qb * qc
+                out[#out + 1] = { a = u, b = v, depth = d, sunk = (vp <= vq) and u or v }
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+  table.sort(out, function(x, y) return x.depth > y.depth end)
+  c.ovl, c.ovl_v = out, craftVersion
+  return out
+end
+
 -- ── moving and turning the selection (one part, a ring, or many) ──────────
 local function sel_units()
   local seen, n = {}, 0
@@ -6073,6 +6177,13 @@ local function draw_selection()
   end
   for _, b in ipairs(c.lbox) do
     drawObb(b[1], b[2], b[3], IDENT, b[4], b[5], b[6], 1.0, 0.45, 0.1, 0.55)
+  end
+  -- parts sunk into another (badOverlaps): a thin red box on the one that
+  -- sinks in, a dozen at most
+  local ov = badOverlaps and badOverlaps() or {}
+  for k = 1, math.min(#ov, 12) do
+    local p = parts[ov[k].sunk]
+    if p and not p.carried then outline(p, 1.0, 0.22, 0.18, 0.8) end
   end
   local r = craft_root()
   if r and parts[r] and partCount > 1 then
