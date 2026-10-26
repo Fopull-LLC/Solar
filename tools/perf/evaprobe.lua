@@ -390,6 +390,18 @@ local MAIN = function()
     hold_here("repair")
   end
   wait(2.0)
+  -- facing: the body's front against the way to the hit point (1 = square on)
+  do
+    local a = astro and astro() or find("Astronaut")
+    local hx, hy, hz = vc.partPointNow(uid, task.lx, task.ly, task.lz, true)
+    if a and hx then
+      local f = a:worldForward()
+      local dx, dy, dz = hx - a.x, hy - a.y, hz - a.z
+      local l = math.sqrt(dx * dx + dy * dy + dz * dz)
+      local d = l > 1e-4 and (f.x * dx + f.y * dy + f.z * dz) / l or 0
+      R("facing", d > 0.8, "front · way to the work %.2f (%.0f°), %.2f m off", d, math.deg(math.acos(math.max(-1, math.min(1, d)))), l)
+    end
+  end
   R("lock", M.n > 30, "%d ticks held at the work spot on a station tumbling at %.3f rad/s (position checked at the release below)", M.n, spin)
   -- 6. cancel
   local before = ct.progress(c.activeId())

@@ -74,6 +74,14 @@ local function set_kinematic(a, on)
   if is ~= on then rb.kinematic = on and 1 or 0 end
 end
 
+-- Standing along gravity (the walker's default). Off while a repair holds the
+-- crew in space, where the hull can be over their head or under their feet.
+local function set_align(a, on)
+  local getc = a and (a.getComponent or a.getcomponent)
+  local rb = getc and getc(a, "RigidBody")
+  if rb and rb.alignUp ~= on then rb.alignUp = on end
+end
+
 local function len(x, y, z) return math.sqrt(x * x + y * y + z * z) end
 
 -- ── the repair rules (items.lua's when WS3's library is there) ─────────────
@@ -280,6 +288,7 @@ do_release = function(id, why)
   local in_space = false
   if a then
     set_kinematic(a, false)
+    set_align(a, true)
     if v and v.partPointNow then
       local wx, wy, wz, vx, vy, vz = v.partPointNow(t.uid, t.sx, t.sy, t.sz)
       if wx then a.vx, a.vy, a.vz = vx, vy, vz end
@@ -363,6 +372,34 @@ function fixedUpdate(node, dt)
   if not ok then log("crew_task: " .. tostring(err)) end
 end
 
+-- In space the body turns to the work, not just its heading: its front
+-- swings onto the hit point (eased, about a third of a second), its up kept as
+-- near as that allows to where it was, so the hands reach the hull whichever
+-- side of the crew it is on.
+local function face_work(a, h, v, wx, wy, wz, dt)
+  if not (a.worldForward and a.worldUp and a.setUp) then return end
+  local t = h.task
+  local hx, hy, hz = v.partPointNow(t.uid, t.lx, t.ly, t.lz)
+  if not hx then return end
+  local fx, fy, fz = hx - wx, hy - wy, hz - wz
+  local l = len(fx, fy, fz)
+  if l < 1e-4 then return end
+  fx, fy, fz = fx / l, fy / l, fz / l
+  set_align(a, false)
+  local cf = a:worldForward()
+  local e = 1 - math.exp(-dt / 0.12)
+  fx, fy, fz = cf.x + (fx - cf.x) * e, cf.y + (fy - cf.y) * e, cf.z + (fz - cf.z) * e
+  l = len(fx, fy, fz)
+  if l < 1e-4 then return end
+  fx, fy, fz = fx / l, fy / l, fz / l
+  local u = a:worldUp()
+  local d = u.x * fx + u.y * fy + u.z * fz
+  local ux, uy, uz = u.x - fx * d, u.y - fy * d, u.z - fz * d
+  l = len(ux, uy, uz)
+  if l < 1e-3 then return end
+  a:setUp(vec3(ux / l, uy / l, uz / l), vec3(fx, fy, fz))
+end
+
 function holdTick(dt)
   local a = astro()
   local pw = ref("planet_walker")
@@ -398,6 +435,11 @@ function holdTick(dt)
         a.x, a.y, a.z = wx, wy, wz
         a.vx, a.vy, a.vz = vx, vy, vz
         h.lx, h.ly, h.lz = lx, ly, lz
+        if h.space == nil then
+          local st = v.evaState and v.evaState() or nil
+          h.space = not (st and st.surface)
+        end
+        if h.space then face_work(a, h, v, wx, wy, wz, dt) end
         lastTick = { id = id, t = h.t, k = k, err = err }
       end
       t.done = math.min(t.secs, (t.done or 0) + dt)
