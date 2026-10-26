@@ -190,7 +190,8 @@ local prompt = false
 for _, s in ipairs(drawn) do if s:find("Recover the suit pack", 1, true) then prompt = true end end
 check(prompt, "...and says so on screen")
 -- first, with the pack nearly full: it takes what fits
-check(inv.add("astro", "regolith", 45) == 45, "the crew has refilled the pack meanwhile")
+-- (31 kg: with the tools carried, the same 45 kg of room is left as before)
+check(inv.add("astro", "regolith", 31) == 31, "the crew has refilled the pack meanwhile")
 local room = inv.free("astro")
 keys.e = true
 tick(1)
@@ -200,7 +201,7 @@ check(left_kg > 0 and inv.free("astro") < 3.0, string.format(
 check(caption and caption[1] == "SALVAGE", "...and says what it couldn't take: " .. tostring(caption and caption[2]))
 check(#sv.list() == 1, "...the crate stays with the rest")
 -- empty the pack (sell the regolith), go back
-inv.remove("astro", "regolith", 45)
+inv.remove("astro", "regolith", 31)
 keys.e = true
 tick(1)
 check(inv.count("astro", "iron") == 10 and inv.count("astro", "crystal") == 5, "E puts every unit back in the pack")

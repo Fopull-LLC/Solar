@@ -36,10 +36,10 @@
 version = 1
 
 ITEMS = {
-  gravgun   = { name = "Gravity Gun",   kind = "tool",       kg = 7.0,  L = 14, cost = 600,  shop = true, issue = true,
+  gravgun   = { name = "Gravity Gun",   kind = "tool",       kg = 6.0,  L = 10, cost = 600,  shop = true, issue = true,
                 hold = { prefab = "ToolGravGun", fp = "ToolGravGunFP", grip = "two" },
                 about = "grabs anything loose and throws it; uproots plants" },
-  laser     = { name = "Terrain Laser", kind = "tool",       kg = 9.0,  L = 16, cost = 900,  shop = true, issue = true,
+  laser     = { name = "Terrain Laser", kind = "tool",       kg = 8.0,  L = 12, cost = 900,  shop = true, issue = true,
                 hold = { prefab = "ToolLaser", fp = "ToolLaserFP", grip = "two" },
                 about = "digs rock into the pack, or lays it back down (Q)" },
   repairkit = { name = "Repair Kit",    kind = "consumable", kg = 4.0,  L = 6,  cost = 120,  shop = true,

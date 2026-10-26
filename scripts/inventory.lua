@@ -37,9 +37,10 @@
 defaults = {
   -- What an astronaut can carry in the suit pack. This number and the laser's
   -- `yield` are one decision, not two: a pack should be about one good tunnel's
-  -- work. The tools weigh in it now (7 + 9 kg), so it is 90 + 16: the room
-  -- left for ore with both tools carried is exactly what it was.
-  suit_kg = 106.0,
+  -- work. The tools weigh in it (6 + 8 kg) and every hire is issued both, so
+  -- a crew member who carries both mines 76 kg a trip and one who leaves them
+  -- to a crewmate carries the full 90: who carries the tools is a choice.
+  suit_kg = 90.0,
   base_kg = 1000000,  -- the home warehouse: a number, but not one you'll hit
 }
 
@@ -666,13 +667,13 @@ function adoptPack(from, to)
   return moved
 end
 
--- A one-line summary for HUDs: "12.4 / 106 kg".
+-- A one-line summary for HUDs: "12.4 / 90 kg".
 function line(cid)
   cid = R(cid)
   return string.format("%.1f / %.0f kg", mass(cid), cap(cid))
 end
 
--- …and with the bulk, for the pack panel and the menus: "12.4 / 106 kg · 30 / 60 L".
+-- …and with the bulk, for the pack panel and the menus: "12.4 / 90 kg · 22 / 60 L".
 function lineFull(cid)
   cid = R(cid)
   local vc = volCap(cid)

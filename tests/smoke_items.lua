@@ -67,18 +67,19 @@ local issue = I.issueList()
 ok(#issue == 2 and issue[1] == "gravgun" and issue[2] == "laser", "the standard issue is the two tools")
 
 -- ── the pack: kilograms and litres ──────────────────────────────────────────
-ok(inv.cap("astro") == 106 and inv.volCap("astro") == 60, "a pack is 106 kg and 60 L")
+ok(inv.cap("astro") == 90 and inv.volCap("astro") == 60, "a pack is 90 kg and 60 L")
 local got = inv.issueKit("astro")
-ok(#got == 2 and inv.itemMass("astro") == 16 and inv.volume("astro") == 30, "the issue weighs 16 kg and fills 30 L")
+ok(#got == 2 and inv.itemMass("astro") == 14 and inv.volume("astro") == 22, "the issue weighs 14 kg and fills 22 L")
 ok(#inv.issueKit("astro") == 0, "the issue happens once")
 inv.removeItem("astro", "laser", 1)
 inv.ensureKit("astro")
 ok(inv.itemCount("astro", "laser") == 0, "a tool left behind is not re-issued")
 inv.addItem("astro", "laser", 1)
 
--- beacons: 18 L each. 30 L of tools leaves room for one (and 12 L over).
+-- beacons: 18 L each. 22 L of tools leaves room for two (and 2 L over).
 local n, why = inv.addItem("astro", "beacon", 3)
-ok(n == 1 and why and why:match("^no room: 12 L free"), "litres bind items, honestly: " .. tostring(n) .. " " .. tostring(why))
+ok(n == 2 and why and why:match("^no room: 2 L free"), "litres bind items, honestly: " .. tostring(n) .. " " .. tostring(why))
+inv.removeItem("astro", "beacon", 1)
 -- kilograms bind too: fill the pack with iron, then a kit won't fit by mass
 local room_kg = inv.free("astro")
 inv.add("astro", "iron", 1000)
@@ -90,13 +91,13 @@ ok(near(inv.free("astro"), room_kg), "materials out again")
 -- ── lockers, moves, refusals ────────────────────────────────────────────────
 inv.setCap("locker:1", 80)
 ok(inv.volCap("locker:1") == 120, "a locker is 120 L")
-inv.addItem("locker:1", "repairkit", 3)
+inv.addItem("locker:1", "repairkit", 5)
 local m, w = inv.moveItem("locker:1", "astro", "repairkit", 1)
-ok(m == 1 and w == nil and inv.itemCount("locker:1", "repairkit") == 2 and inv.itemCount("astro", "repairkit") == 1, "take one kit from a locker")
+ok(m == 1 and w == nil and inv.itemCount("locker:1", "repairkit") == 4 and inv.itemCount("astro", "repairkit") == 1, "take one kit from a locker")
 m, w = inv.moveItem("locker:1", "astro", "repairkit", 5)
--- 30 + 18 + 6 = 54 L: room for one more 6 L kit
-ok(m == 1 and w and w:match("L free"), "a partial take says why: " .. tostring(m) .. " " .. tostring(w))
-ok(inv.itemCount("locker:1", "repairkit") == 1, "...and the rest stays in the locker")
+-- 22 + 18 + 6 = 46 L: room for two more 6 L kits
+ok(m == 2 and w and w:match("L free"), "a partial take says why: " .. tostring(m) .. " " .. tostring(w))
+ok(inv.itemCount("locker:1", "repairkit") == 2, "...and the rest stays in the locker")
 m, w = inv.moveItem("locker:1", "astro", "flag", 1)
 ok(m == 0 and w == "none to move", "refusal: none to move")
 m, w = inv.moveItem("astro", "salvage:9", "laser", 1)
@@ -128,7 +129,7 @@ ok(inv.resolve("astro") == "crew:1", "astro resolves to crew:1")
 ok(inv.itemCount("astro", "beacon") == 2 and inv.count("astro", "iron") == 5, "old carried beacons read through the alias")
 ok(store["inv.gear.astro"] and next(store["inv.gear.astro"]) == nil, "the old key is emptied")
 ok(store["comms.beacons"][2] == 2, "planted beacons are comms' and untouched")
-ok(inv.cap("crew:1") == 106 and inv.volCap("astro") == 60, "a crew pack has the suit's limits")
+ok(inv.cap("crew:1") == 90 and inv.volCap("astro") == 60, "a crew pack has the suit's limits")
 active = nil
 ok(inv.resolve("astro") == "astro", "nobody on foot and no commander: astro stays itself")
 active = 1
