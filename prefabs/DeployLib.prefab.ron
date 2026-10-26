@@ -1,0 +1,22 @@
+// DEPLOY LIBRARY — scripts/deployables.lua: flags and every other deployable
+// planted in the world. Spawned by whoever needs it when the scene has none;
+// reached with findScript("deployables").
+// Written by tools/gen_flag.py — edit the generator, not this file.
+[
+    (
+        name: "DeployLib",
+        transform: (
+            translation: (0.0000, 0.0000, 0.0000),
+            rotation: (0.00000, 0.00000, 0.00000, 1.00000),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [
+            (
+                kind: "deployables",
+                enabled: true,
+                params: [],
+            ),
+        ],
+    ),
+]

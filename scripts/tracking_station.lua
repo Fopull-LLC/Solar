@@ -26,6 +26,21 @@
 -- listed under its own heading with its link home, and the header carries the
 -- network's size and the home world's ground coverage.
 --
+-- FLAGS: every flag the agency has planted (scripts/deployables.lua), under
+-- the relays: its name, world, date and who planted it. The detail shows the
+-- photo taken as it went in, where it stands and how far from home, and:
+--
+--   VIEW         the photo, the whole panel
+--   MAP          the orbit map on its world
+--   RENAME       what the board and the map call it
+--   REMOVE       forget it (twice to confirm): the flag comes down
+--
+-- (A live camera to the flag isn't offered: it would stream another world
+-- in from a building at the base. The photo is the memento.)
+--
+-- The header wears the agency's emblem and name (scripts/emblem.lua), and the
+-- crew row lists the roster (scripts/crew.lua) when there is one.
+--
 -- Switching between craft in flight without coming here is `[` / `]` (the
 -- vessel switcher, scripts/vessel_switcher.lua).
 
@@ -56,6 +71,8 @@ local msg, msg_t = "", -100
 local armed_end = nil         -- { fid, until }
 local renaming = nil          -- fid being renamed
 local rename_text = ""
+local viewing = nil           -- a flag id whose photo fills the panel
+local armed_remove = nil      -- { fid, t }
 
 function isOpen() return (el and el.visible) or false end
 function typing() return renaming ~= nil end
@@ -70,6 +87,16 @@ end
 function close()
   if el then el.visible = false end
   renaming = nil
+  viewing = nil
+end
+
+-- deployables' right-click "Rename…" on a flag: select it here, ready to rename.
+function renameFlag(id)
+  selected = "f:" .. tostring(id)
+  renaming = selected
+  local dep = ref("deployables")
+  local e = dep and dep.get and dep.get(id)
+  rename_text = e and e.n or ""
 end
 
 function selectCraft(id) selected = id; armed_end = nil; renaming = nil end
@@ -366,11 +393,11 @@ end
 local function row(e, sel)
   local E = ref("electronics")
   local n = (E and e.signal) and E.bars(e.signal) or 0
-  local sig = (e.fid == "crew") and "" or (e.link and bars_text(n) or "no link")
+  local sig = (e.fid == "crew" or e.flagId) and "" or (e.link and bars_text(n) or "no link")
   return { "button", key = "r" .. tostring(e.fid), style = e.piloted and "panel/rowActive" or "panel/row",
     selected = sel == e.fid, w = "100%", h = 34, dir = "row", gap = 10, align = "center",
     { "text", key = "m", style = "panel/cell", w = 12, h = "fit",
-      text = e.fid == "crew" and "◉" or (e.relay and "▲") or (e.probe and not e.pod and "◇" or "◆") },
+      text = e.fid == "crew" and "◉" or (e.relay and "▲") or (e.flagId and "▮") or (e.probe and not e.pod and "◇" or "◆") },
     { "col", key = "nm", w = "grow", h = "fit", gap = 0, pad = 0,
       { "text", key = "t", style = "panel/cellStrong", w = "100%", h = "fit", maxLines = 1,
         overflow = "ellipsis", text = e.name },
@@ -427,6 +454,142 @@ function relay_summary(net, relays)
     cov and string.format("  ·  %s ground %d%%", home, math.floor(cov.ground * 100 + 0.5)) or "")
 end
 
+-- ── flags ───────────────────────────────────────────────────────────────────
+
+-- Latitude and longitude of a body-relative point, as "12.3°N 45.6°E".
+function latlon(x, y, z)
+  local l = math.sqrt(x * x + y * y + z * z)
+  if l < 1e-6 then return "—" end
+  local lat = math.deg(math.asin(math.max(-1, math.min(1, y / l))))
+  local lon = math.deg(math.atan2(z, x))
+  return string.format("%.1f°%s  %.1f°%s", math.abs(lat), lat >= 0 and "N" or "S", math.abs(lon), lon >= 0 and "E" or "W")
+end
+
+-- Every planted flag, as a board entry (fid "f:<id>").
+function flag_entries()
+  local dep = ref("deployables")
+  local out = {}
+  if not (dep and dep.list) then return out end
+  local bf = ref("base_facilities")
+  for _, f in ipairs(dep.list("flag")) do
+    local dist, home = nil, false
+    if bf and bf.baseBody == f.b then
+      home = true
+      local b = space.body(f.b)
+      if b and bf.baseX then
+        local bx, by, bz = bf.baseX - b.x, bf.baseY - b.y, bf.baseZ - b.z
+        local lb = math.sqrt(bx * bx + by * by + bz * bz)
+        local lf = math.sqrt(f.x * f.x + f.y * f.y + f.z * f.z)
+        if lb > 1e-6 and lf > 1e-6 then
+          local c = math.max(-1, math.min(1, (bx * f.x + by * f.y + bz * f.z) / (lb * lf)))
+          dist = math.acos(c) * (b.radius or lb)
+        end
+      end
+    elseif bf and bf.baseBody then
+      local a, b = space.body(bf.baseBody), space.body(f.b)
+      if a and b then dist = math.sqrt((a.x - b.x) ^ 2 + (a.y - b.y) ^ 2 + (a.z - b.z) ^ 2) end
+    end
+    out[#out + 1] = { fid = "f:" .. tostring(f.id), flag = f, flagId = f.id, name = f.n or "Flag", body = f.b,
+                      status = string.format("flag · %s", f.d or ""), landed = true, dist = dist, homeWorld = home,
+                      by = dep.memberName and dep.memberName(f.by) or nil }
+  end
+  return out
+end
+
+local function flag_detail(e, rows)
+  local function add(x) rows[#rows + 1] = x end
+  local dep = ref("deployables")
+  local f = e.flag
+  add({ "text", key = "st", style = "panel/label", w = "100%", h = "fit", text = "Agency flag" })
+  if renaming == e.fid then
+    add({ "row", key = "ren", w = "100%", h = 34, gap = 6, pad = 0, align = "center",
+      { "field", key = "f", style = "menu/field", w = "grow", h = 32, placeholder = e.name, maxLen = 40,
+        onChanged = function(n) rename_text = n.text or "" end,
+        onSubmitted = function(n)
+          local ok, why = dep.rename(e.flagId, n.text or rename_text)
+          if ok then sfx("click"); renaming = nil else say(why) end
+        end },
+      { "button", key = "ok", style = "panel/action", w = 70, h = 32, text = "Save", textAlign = "center",
+        textValign = "center", onClicked = function()
+          local ok, why = dep.rename(e.flagId, rename_text)
+          if ok then sfx("click"); renaming = nil else say(why) end
+        end },
+      { "button", key = "no", style = "panel/secondary", w = 70, h = 32, text = "Cancel", textAlign = "center",
+        textValign = "center", onClicked = function() renaming = nil end } })
+  else
+    add({ "row", key = "hd", w = "100%", h = "fit", gap = 8, pad = 0, align = "center",
+      { "text", key = "nm", style = "panel/heading", w = "grow", h = "fit", wrap = true, text = e.name },
+      { "button", key = "rn", style = "panel/secondary", w = 76, h = 26, text = "Rename", textAlign = "center",
+        textValign = "center", onClicked = function() renaming, rename_text = e.fid, e.name end } })
+  end
+  -- the photo (built from its file once, then cached by deployables)
+  local tex = dep and dep.photoTex and dep.photoTex(e.flagId) or nil
+  if tex then
+    add({ "button", key = "ph", w = 320, h = 180, texture = tex, imageFit = "cover", tooltip = "View the photo",
+      onClicked = function() sfx("click"); viewing = e.flagId end })
+  else
+    add({ "box", key = "ph", w = 320, h = 180, style = "panel/frame",
+      { "text", key = "t", style = "panel/cellMuted", w = "100%", h = "fit", textAlign = "center",
+        text = f.photo and "developing the photo…" or "no photo" } })
+  end
+  add(line("where", "Where", string.format("%s  ·  %s", e.body or "?", latlon(f.x or 0, f.y or 0, f.z or 0))))
+  if e.dist then
+    add(line("home", e.homeWorld and "From base" or "From home", e.homeWorld and fmt_alt(e.dist)
+      or string.format("%s (world to world)", fmt_km(e.dist))))
+  end
+  add(line("when", "Planted", f.d or "—"))
+  add(line("by", "By", e.by or "the agency"))
+  add({ "box", key = "rule", style = "panel/rule", w = "100%", h = 1 })
+  local armed = armed_remove and armed_remove.fid == e.fid and time < armed_remove.t
+  add({ "row", key = "acts", w = "100%", h = 32, gap = 6, pad = 0,
+    { "button", key = "view", style = "panel/secondary", w = "grow", h = 32, textAlign = "center",
+      textValign = "center", text = "View", disabled = tex == nil, tooltip = "The photo taken as it went in",
+      onClicked = function() sfx("click"); viewing = e.flagId end },
+    { "button", key = "map", style = "panel/secondary", w = "grow", h = 32, textAlign = "center",
+      textValign = "center", text = "Map", tooltip = "Open the orbit map on " .. tostring(e.body),
+      onClicked = function()
+        local om = ref("orbit_map")
+        local n = (dep.nodeOf and dep.nodeOf(e.flagId)) or find(e.body)
+        if om and om.focusNode and n then
+          local fm = ref("facility_menu")
+          if fm and fm.close then fm.close() else close() end
+          om.focusNode(n)
+        end
+      end },
+    { "button", key = "rm", style = "panel/danger", w = "grow", h = 32, textAlign = "center",
+      textValign = "center", selected = armed, text = armed and "Confirm" or "Remove",
+      tooltip = "Forget this flag: it comes down, and its photo goes",
+      onClicked = function()
+        if armed then
+          armed_remove = nil
+          if dep.remove(e.flagId) then say(e.name .. " taken down"); selected = nil end
+        else
+          armed_remove = { fid = e.fid, t = time + 4.0 }
+        end
+      end } })
+  if armed then add(wrapped("warn", "panel/hintWarn", "Press again to take " .. e.name .. " down. It cannot be undone.")) end
+  return rows
+end
+
+-- The photo, the whole panel.
+local function photo_view()
+  local dep = ref("deployables")
+  local e = dep and dep.get and dep.get(viewing)
+  if not e then viewing = nil return nil end
+  local tex = dep.photoTex(viewing)
+  local w = math.min(W, design_width_now and design_width_now() or W) - PAD * 2
+  local h = math.floor(w * 9 / 16)
+  return { "col", key = "ts", style = "panel/frame", w = "100%", dir = "col", gap = 12, pad = PAD, align = "start",
+    { "row", key = "head", w = "100%", h = "fit", gap = 14, pad = 0, align = "center",
+      { "text", key = "title", style = "panel/heading", w = "grow", h = "fit", text = e.n or "Flag" },
+      { "text", key = "n", style = "panel/cellMuted", w = "fit", h = "fit",
+        text = string.format("%s  ·  %s", e.b or "?", e.d or "") },
+      { "button", key = "back", style = "panel/secondary", w = 90, h = 28, text = "◂  Back", textAlign = "center",
+        textValign = "center", onClicked = function() sfx("click"); viewing = nil end } },
+    { "image", key = "photo", w = w, h = h, texture = tex or "textures/parts/flag_default.png", imageFit = "contain" },
+  }
+end
+
 -- ── the detail pane ─────────────────────────────────────────────────────────
 
 local function detail(e, fo, co)
@@ -438,6 +601,7 @@ local function detail(e, fo, co)
     return rows
   end
   local E = ref("electronics")
+  if e.flagId then return flag_detail(e, rows) end
   if e.relay then
     local b = e.beacon
     add({ "text", key = "st", style = "panel/label", w = "100%", h = "fit", text = "Relay beacon" })
@@ -465,8 +629,21 @@ local function detail(e, fo, co)
     add(line("where", "Where", (e.aboard and ("in the seat of " .. e.aboard.name)) or
       string.format("%s, %s", e.status or "on foot", e.body or "?")))
     if e.alt then add(line("alt", "Altitude", fmt_alt(e.alt))) end
+    local cr = ref("crew")
+    local roster = cr and cr.roster and cr.roster() or {}
+    if #roster > 0 then
+      add({ "text", key = "rl", style = "panel/label", w = "100%", h = "fit", text = "Roster" })
+      for i, r in ipairs(roster) do
+        local st, det = nil, nil
+        if cr.where then st, det = cr.where(r.id) end
+        local wtxt = (st == "aboard" and ("aboard " .. tostring(det or "a craft")))
+          or (st == "afoot" and ("on foot, " .. tostring(det or "?")))
+          or (st == "dead" and "lost" ) or (st or "at the base")
+        add(line("m" .. i, r.name or ("#" .. tostring(r.id)), wtxt, st == "dead" and "panel/cellMuted" or nil))
+      end
+    end
     add(wrapped("about", "panel/hint",
-      "There is one crew. They fly what they sit in; probes are flown from this desk while they stay put."))
+      "The crew fly what they sit in; probes are flown from this desk while they stay put."))
     return rows
   end
   add({ "text", key = "st", style = "panel/label", w = "100%", h = "fit",
@@ -619,6 +796,8 @@ local function describe()
   for _, e in ipairs(list) do all[#all + 1] = e end
   local relays = relay_entries()
   for _, e in ipairs(relays) do all[#all + 1] = e end
+  local flags = flag_entries()
+  for _, e in ipairs(flags) do all[#all + 1] = e end
   local sel = nil
   for _, e in ipairs(all) do if e.fid == selected then sel = e end end
   if not sel then
@@ -640,24 +819,37 @@ local function describe()
     end
   end
   group("Crew", function(e) return e.fid == "crew" end)
-  group("In flight", function(e) return e.fid ~= "crew" and not e.relay and not e.landed end)
-  group("Landed", function(e) return e.fid ~= "crew" and not e.relay and e.landed end)
+  group("In flight", function(e) return e.fid ~= "crew" and not e.relay and not e.flagId and not e.landed end)
+  group("Landed", function(e) return e.fid ~= "crew" and not e.relay and not e.flagId and e.landed end)
   if #list == 0 then
     left[#left + 1] = { "text", key = "empty", style = "panel/cellMuted", w = "100%", h = "fit", wrap = true,
       text = "No craft in the field." }
   end
   group("Relays", function(e) return e.relay == true end)
+  group("Flags", function(e) return e.flagId ~= nil end)
   local net = ref("comms")
   local linked = 0
   for _, e in ipairs(list) do if e.link then linked = linked + 1 end end
   local hint = (msg ~= "" and time - msg_t < msg_dur) and ("» " .. msg)
     or "Click a craft for its details.   [ / ] switch between nearby craft in flight.   E or Esc to leave."
+  if viewing then
+    local pv = photo_view()
+    if pv then return pv end
+  end
+  local em = ref("emblem")
+  local etex = em and em.tex and em.tex() or nil
+  local aname = em and em.name and em.name() or nil
   return { "col", key = "ts", style = "panel/frame", w = "100%", dir = "col", gap = 12, pad = PAD, align = "start",
     { "row", key = "head", w = "100%", h = "fit", gap = 14, pad = 0, align = "center",
-      { "text", key = "title", style = "panel/heading", w = "grow", h = "fit", text = "Tracking Station" },
+      { "image", key = "emb", w = 34, h = 34, texture = etex or "textures/parts/emblem_default.png", imageFit = "contain" },
+      { "col", key = "tt", w = "grow", h = "fit", gap = 0, pad = 0, align = "start",
+        { "text", key = "title", style = "panel/heading", w = "100%", h = "fit", text = "Tracking Station" },
+        { "text", key = "ag", style = "panel/cellMuted", w = "100%", h = "fit", maxLines = 1, overflow = "ellipsis",
+          text = aname or "" } },
       { "text", key = "n", style = "panel/cellMuted", w = "fit", h = "fit",
-        text = string.format("%d craft  ·  %d in contact  ·  %d transmitters%s", #list, linked,
-          net and net.transmitters or 0, relay_summary(net, relays)) } },
+        text = string.format("%d craft  ·  %d in contact  ·  %d transmitters%s%s", #list, linked,
+          net and net.transmitters or 0, relay_summary(net, relays),
+          #flags > 0 and string.format("  ·  %d flag%s", #flags, #flags == 1 and "" or "s") or "") } },
     { "box", key = "rule", style = "panel/rule", w = "100%", h = 1 },
     { "row", key = "panes", w = "100%", h = "fit", gap = 24, pad = 0, align = "start",
       { "scroll", key = "listS", w = LIST_W, h = "fit", maxH = 470, gap = 0, pad = 0,
@@ -679,9 +871,16 @@ local function design_width()
   return 1280 * uiDesignH() / 720
 end
 
+design_width_now = design_width
+
 function start(node)
   el = node:getcomponent("UiElement")
   if el then el.visible = false end
+  -- the agency's identity and its flags: their libraries, if this scene has none
+  if spawn and findScript then
+    if not findScript("emblem") then pcall(spawn, "AgencyLib", vec3(0, 0, 0)) end
+    if not findScript("deployables") then pcall(spawn, "DeployLib", vec3(0, 0, 0)) end
+  end
 end
 
 function update(node, dt)

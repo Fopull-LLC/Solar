@@ -1,0 +1,51 @@
+// flag_cloth — the agency's flag, waving (docs/crew-and-items.md §7).
+//
+// The cloth is a 1.2 × 0.8 m sheet subdivided 24 × 12 (tools/gen_flag.py), UV
+// u = 0 at the pole → 1 at the fly end, v = 0 at the top. Its texture is the
+// agency's own flag (scripts/emblem.lua flagTex(), set by scripts/flag.lua).
+//
+// What moves it is the local wind, which flag.lua samples (weather.windAt at
+// the pole top, 4 Hz, eased) and hands in as `windSpeed` (m/s). flag.lua also
+// turns the cloth's pivot about the pole so it lies downwind; this shader only
+// makes the sheet ripple:
+//   - a travelling wave sin(k·u − ω·t), its amplitude growing from nothing at
+//     the pole to the most at the fly end, plus a fractal flutter;
+//   - amplitude and frequency both rise with the wind: limp folds under
+//     1 m/s, a straight snapping sheet at 15 m/s and over;
+//   - the fly end pulled in toward the pole by the ripple, so the sheet
+//     doesn't stretch as it waves.
+// On a world without air `still` = 1: the sheet hangs flat from the Apollo
+// crossbar, with only `settle` (a fading wobble flag.lua starts on planting).
+//
+// Lighting: the ripple's slope shades the cloth in moving bands (the surface
+// is lit as if unmoved, shaders.md §4.5, so the folds are painted in).
+shader flag_cloth {
+  stage fragment
+  uniform windSpeed: float = 4.0 range(0, 40)
+  uniform still: float = 0.0 range(0, 1)
+  uniform settle: float = 0.0 range(0, 1)
+  uniform seed: float = 0.0
+
+  let s = saturate(windSpeed / 15.0)
+  let calm = (1.0 - s) * (1.0 - still)
+  let live = 1.0 - still
+  let k = mix(5.5, 10.0, s)
+  let w = mix(2.2, 11.0, s)
+  let amp = mix(0.03, 0.10, s) * live * smoothstep(0.3, 1.5, windSpeed)
+  let ph = uv.x * k - time * w + uv.y * 0.9 + seed
+  let flutter = fbm(vec3(uv.x * 3.0 - time * w * 0.25, uv.y * 2.0, seed + time * 0.4), octaves: 3.0) * 0.035 * s * live
+  let fold = sin(uv.x * 17.0 + seed) * 0.016 * calm
+  let wob = sin(time * 9.0 + uv.x * 4.0) * settle * 0.035
+  let dz = (sin(ph) * amp + flutter + fold + wob) * uv.x
+  // the fly end drawn toward the pole as the sheet ripples or hangs slack,
+  // and its lower corner sagging a little in still air
+  let dx = 0.0 - (abs(sin(ph)) * amp * 0.5 + calm * 0.05) * uv.x
+  let dy = 0.0 - calm * 0.06 * uv.x * uv.x * uv.y
+
+  // the slope of the ripple shades it: crests catch the light, troughs don't
+  let slope = cos(ph) * amp * k * uv.x + cos(uv.x * 17.0 + seed) * 0.016 * 17.0 * calm * uv.x
+  let shade = clamp(1.0 + slope * 0.9, 0.62, 1.22)
+  let albedo = baseTexture().rgb * instanceColor.rgb
+  output color = vec4(litPbr(albedo) * shade, 1.0)
+  output offset = vec3(dx, dy, dz)
+}

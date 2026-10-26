@@ -215,6 +215,7 @@ local ROCKET_MIN = 750
 -- How to get the stuff a delivery contract wants, in one sentence: plants
 -- come up with the gravity gun, everything else out of the rock with the laser.
 local MINE_HINT = "Press 2 for the Terrain Laser and hold LEFT MOUSE on rock."
+local FLAG_HINT = "Bring a Company Flag: VAB ▸ CREW ▸ loadout."
 local CUT_HINT = "Press 1 for the Gravity Gun and hold LEFT MOUSE on a plant to uproot it."
 
 -- A contract's brief is a paragraph for the Ops Board; the card gets its first
@@ -304,22 +305,29 @@ local function offworld_step(m, goals, astro, label, pays)
       task = string.format("Build a craft that can reach %s.", X or "it"),
       hint = "The orbit map (M) shows where it is and plans the burn." })
   end
+  -- A flag goal is "plant a flag" now (missions.lua v = 2); one signed
+  -- before that still asks only to step out.
+  local plant = g.kind == "flag" and g.v == 2
   local task = ({
     soi = "Fly to %s.",
     orbit = "Put a craft in orbit of %s.",
     land = "Land on %s.",
-    flag = "Land on %s and step out.",
+    flag = plant and "Land on %s and plant a flag." or "Land on %s and step out.",
     cargo = "Orbit %s with the cargo aboard.",
   })[g.kind] or "Fly to %s."
   local hint = ({
     soi = "A flyby is enough — enter its sphere of influence. M opens the map.",
     orbit = "Keep the periapsis clear of the ground.",
     land = "Intact and stopped counts.",
-    flag = "Standing on it plants the company beacon.",
+    flag = plant and FLAG_HINT or "Standing on it plants the company beacon.",
     cargo = "Load the Cargo Bay from your suit pack at the craft.",
   })[g.kind] or "M opens the orbit map."
   if g.kind == "flag" and here == X then
-    task, hint = "Step out onto " .. X .. ".", "F gets you out of the craft."
+    if plant then
+      task, hint = "Plant a flag on " .. X .. ".", "Step out, take the Company Flag from the belt and click the ground where it should stand."
+    else
+      task, hint = "Step out onto " .. X .. ".", "F gets you out of the craft."
+    end
   end
   return step({ key = "go", task = string.format(task, X or "the target"), hint = hint })
 end
@@ -483,6 +491,7 @@ local function current_step(astro)
   return st
 end
 
+local agency_seen = nil
 current_step_inner = function(astro)
   local bf = ref("base_facilities")
   local mi = ref("missions")
@@ -495,6 +504,21 @@ current_step_inner = function(astro)
     return { key = "siting", label = "Colony",
              task = "Your base is going up around you.",
              hint = "W A S D to walk, hold RIGHT MOUSE to look — ESC lists every control." }
+  end
+
+  -- An older save meets its agency once (scripts/emblem.lua migrate): a
+  -- name it didn't choose, and where to change it. It stands down after a
+  -- minute and a half, or as soon as the agency is renamed.
+  local em = ref("emblem")
+  if em and em.needsPrompt and em.needsPrompt() then
+    agency_seen = agency_seen or (time or 0)
+    if (time or 0) - agency_seen > 90 then
+      em.clearPrompt()
+    else
+      return { key = "agency", label = "Your agency",
+               task = "You fly for the " .. tostring(em.name()) .. ".",
+               hint = "Rename it and choose its emblem in Settings ▸ Agency (ESC). It is painted on every flag you plant." }
+    end
   end
 
   local m = mi and mi.active and mi.byId(mi.active) or nil

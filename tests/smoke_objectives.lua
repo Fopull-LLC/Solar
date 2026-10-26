@@ -397,4 +397,35 @@ ok(says("Build a craft that can reach Nami") and says("Vehicle Assembly"),
   "with no craft, it sends you to build one that can get there: " .. table.concat(lines(), " | "))
 missions.active = nil
 
+-- ── A FLAG CONTRACT (v = 2): plant one, with the hint where the flag comes from
+missions.catalogue["g3-flag-Nami"] = { id = "g3-flag-Nami", gen = true, kind = "flag", body = "Nami",
+  title = "Plant a flag: Nami", reward = 4000, brief = "Stake the claim.",
+  goals = { { kind = "flag", body = "Nami", v = 2, label = "Plant a flag on Nami" } } }
+fleet = { { node = { valid = true } } }
+missions.ticked = {}
+missions.active = "g3-flag-Nami"
+update(card, 1 / 60)
+ok(says("plant a flag") and says("Company Flag"), "a flag contract says to plant one, and where the flag comes from: "
+  .. table.concat(lines(), " | "))
+space.dominant = function() return "Nami" end
+update(card, 1 / 60)
+ok(says("Plant a flag on Nami"), "standing there, it says to plant it: " .. table.concat(lines(), " | "))
+space.dominant = plain_dominant
+missions.active = nil
+fleet = {}
+
+-- ── AN OLDER SAVE MEETS ITS AGENCY once (emblem.lua's prompt)
+local prompt = true
+local EMB = { valid = true, needsPrompt = function() return prompt end, clearPrompt = function() prompt = false end,
+              name = function() return "Solar Exploration Agency" end }
+_G.findScript = (function(prev)
+  return function(kind) if kind == "emblem" then return EMB end return prev(kind) end
+end)(_G.findScript)
+update(card, 1 / 60)
+ok(says("Solar Exploration Agency") and says("Settings"), "an older save is told its agency's name and where to change it: "
+  .. table.concat(lines(), " | "))
+_G.time = _G.time + 120
+update(card, 1 / 60)
+ok(prompt == false and not says("You fly for"), "...once: it stands down after a while")
+
 print(string.format("OBJECTIVES SMOKE OK — %d checks passed", checks))

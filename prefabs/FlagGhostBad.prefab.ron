@@ -1,0 +1,54 @@
+// FLAGGHOSTBAD — the flag's placement preview, where it can't (the tool belt's deploy mode).
+// Written by tools/gen_flag.py — edit the generator, not this file.
+[
+    (
+        name: "FlagGhostBad",
+        transform: (
+            translation: (0.0000, 0.0000, 0.0000),
+            rotation: (0.00000, 0.00000, 0.00000, 1.00000),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Mesh(
+            asset_path: "models/parts/flag_pole.glb",
+        ),
+        material: Some((
+            color: (1.0, 0.38, 0.3),
+            emissive: (1.0, 0.38, 0.3),
+            emissive_strength: 0.8,
+            unlit: true,
+            alpha: 0.5,
+        )),
+        scripts: [],
+    ),
+    (
+        name: "FlagGhostBad Pivot",
+        transform: (
+            translation: (0.0000, 1.2075, 0.0000),
+            rotation: (0.00000, 0.00000, 0.00000, 1.00000),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+        parent: Some(0),
+    ),
+    (
+        name: "FlagGhostBad Cloth",
+        transform: (
+            translation: (0.6300, -0.4120, 0.0000),
+            rotation: (0.00000, 0.00000, 0.00000, 1.00000),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Mesh(
+            asset_path: "models/parts/flag_cloth.glb",
+        ),
+        material: Some((
+            color: (1.0, 0.38, 0.3),
+            emissive: (1.0, 0.38, 0.3),
+            emissive_strength: 0.8,
+            unlit: true,
+            alpha: 0.5,
+        )),
+        scripts: [],
+        parent: Some(1),
+    ),
+]

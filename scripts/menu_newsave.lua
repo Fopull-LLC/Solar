@@ -7,6 +7,15 @@
 -- the fresh slot and enters the game — game_manager reads it back and hands
 -- it to the generator, so the same save always regenerates the same galaxy. The
 -- panel's buttons carry menu_ng_button, which routes clicks here (press).
+--
+-- YOUR AGENCY (docs/crew-and-items.md §2.5): the panel grows a column on the
+-- right, built here with ui.make, where the player names the agency and sees
+-- its emblem generated from the name as they type — regenerate it, step its
+-- shape, motif, colours and letters, repaint any of its four colours, or use
+-- a picture of their own (scripts/emblem.lua's editor). Nothing there has to
+-- be touched: a new save made straight away is the "Solar Exploration
+-- Agency" under a finished emblem. The crew-death switch sits under it
+-- ("Crew can die" / "Rescue instead", crew.lua's `crew.death`).
 
 open = false -- published: menu_slot opens the panel, buttons check it
 
@@ -32,6 +41,31 @@ WORLD_SCALE = 4
 
 local slot_n = 1
 local seed_str = ""
+
+-- The agency column.
+local AG_X, AG_W, PANEL_W, GAL_W = 604, 336, 960, 600
+local ed = nil             -- scripts/emblem.lua's editor state
+local death = true         -- crew can die (false: rescue instead)
+local panel_node = nil
+
+local function emblem_lib()
+  local e = findScript and findScript("emblem")
+  if not e and spawn then pcall(spawn, "AgencyLib", vec3(0, 0, 0)) end
+  return e
+end
+
+local function sfx(key)
+  local f = findScript and findScript("sfx")
+  if f and f.play then f.play(key) end
+end
+
+-- What the new save will be called and wear (for probes and the create).
+function agency()
+  local e = emblem_lib()
+  if not (e and ed) then return nil end
+  return e.editorResult(ed)
+end
+function editor() return ed end
 
 local function ui_of(name)
   local n = find(name)
@@ -75,6 +109,9 @@ function openFor(n)
   slot_n = n
   seed_str = ""
   open = true
+  death = true
+  local e = emblem_lib()
+  ed = e and e.newEditor and e.newEditor(nil, nil) or nil
   local lbl = find("NG Slot Label")
   if lbl then lbl.text = string.format("SAVE SLOT %d", n) end
   seed_label()
@@ -86,6 +123,7 @@ end
 local function close()
   open = false
   show(false)
+  if panel_node then pcall(ui.make, panel_node, {}) end
 end
 
 -- Button router (menu_ng_button forwards its role here).
@@ -136,6 +174,15 @@ function press(role)
       if v[p.save] then save.set(p.save, v[p.save]) end
     end
     if #seed_str > 0 then save.set("g_seed", tonumber(seed_str)) end
+    -- The agency: its name and the emblem's spec (never its pixels).
+    local e = emblem_lib()
+    local aname, aspec = nil, nil
+    if e and ed then aname, aspec = e.editorResult(ed) end
+    if aname then
+      save.set("agency.name", aname)
+      save.set("agency.emblem", aspec)
+    end
+    save.set("crew.death", death)
     -- A new galaxy is made at the CURRENT world scale, and keeps it for life
     -- (system_generator SCALES; game_manager reads it back). The sliders above
     -- are already in that scale's units.
@@ -144,21 +191,66 @@ function press(role)
   end
 end
 
+-- The agency column, described.
+local function describe_agency(e)
+  local rows = e.editorRows(ed, AG_W, sfx)
+  rows[#rows + 1] = { "box", key = "rule", style = "panel/rule", w = "100%", h = 1 }
+  rows[#rows + 1] = { "row", key = "death", w = "100%", h = 28, gap = 6, pad = 0, align = "center",
+    { "text", key = "l", style = "panel/label", w = 74, h = "fit", text = "Crew" },
+    { "button", key = "die", style = "panel/choice", w = "grow", h = 26, text = "Can die", selected = death,
+      textAlign = "center", textValign = "center",
+      tooltip = "Astronauts can be lost: every danger is warned of first, and the roster keeps a memorial",
+      onClicked = function() sfx("click"); death = true end },
+    { "button", key = "res", style = "panel/choice", w = "grow", h = 26, text = "Rescue instead", selected = not death,
+      textAlign = "center", textValign = "center",
+      tooltip = "A crew member who would die is brought home instead, for a fee",
+      onClicked = function() sfx("click"); death = false end } }
+  return {
+    { "box", key = "vr", pin = "topLeft", x = GAL_W - 2, y = 24, w = 1, h = 564, style = "panel/rule" },
+    { "col", key = "agency", pin = "topLeft", x = AG_X, y = 22, w = AG_W, h = "fit", gap = 7, pad = 0,
+      align = "start", items = rows, function(x) return x end },
+  }
+end
+
+-- The panel grows to hold the agency column; the galaxy half keeps its place.
+local function widen(node)
+  local _, ng = ui_of("NG Panel")
+  if ng and ng.width ~= PANEL_W then ng.width = PANEL_W end
+  -- (the title, slot label and seed hint are sized to the panel in the scene:
+  -- they stay centred across the whole card)
+end
+
+local function name_focused()
+  local f = ui and ui.focused and ui.focused()
+  return f ~= nil and f.name == "FieldAgencyName"
+end
+
 function update(node, dt)
   if not open then return end
-  -- Seed entry: the panel is the only text input on screen, so bare digit
-  -- keys type into it. 9 digits max keeps seeds in the generator's range.
+  panel_node = node
+  local e = emblem_lib()
+  if e and not ed and e.newEditor then ed = e.newEditor(nil, nil) end
+  if e and ed then
+    widen(node)
+    e.editorTick(ed)
+    ui.make(node, describe_agency(e))
+  end
+  local typing = name_focused()
+  -- Seed entry: bare digit keys type into the seed (unless the agency's
+  -- name field has the keyboard). 9 digits max keeps seeds in the
+  -- generator's range.
   for d = 0, 9 do
-    if input.pressed(tostring(d)) and #seed_str < 9 then
+    if not typing and input.pressed(tostring(d)) and #seed_str < 9 then
       seed_str = seed_str .. d
       seed_label()
     end
   end
   if input.pressed("escape") then
+    if typing and ui.focus then ui.focus(nil) return end
     close()
     return
   end
-  if input.pressed("backspace") and #seed_str > 0 then
+  if not typing and input.pressed("backspace") and #seed_str > 0 then
     seed_str = seed_str:sub(1, -2)
     seed_label()
   end

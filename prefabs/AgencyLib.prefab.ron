@@ -1,0 +1,22 @@
+// AGENCY LIBRARY — scripts/emblem.lua: the agency's name and emblem, and the
+// textures built from them. Spawned by whoever needs it when the scene has
+// none; reached with findScript("emblem").
+// Written by tools/gen_flag.py — edit the generator, not this file.
+[
+    (
+        name: "AgencyLib",
+        transform: (
+            translation: (0.0000, 0.0000, 0.0000),
+            rotation: (0.00000, 0.00000, 0.00000, 1.00000),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [
+            (
+                kind: "emblem",
+                enabled: true,
+                params: [],
+            ),
+        ],
+    ),
+]

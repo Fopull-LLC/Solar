@@ -273,8 +273,12 @@ put(craft.node, "Ryethos", 0)
 tick(3)
 check("landing on the moon pays", paid(s), mi.goalLines()[1])
 
--- beacon: on foot on the body
+-- flag: a flag of the agency's planted on the body (deployables.lua)
+local dep = load_script("solar/scripts/deployables.lua", "deployables")
+dep.start({})
 s = take("flag", "Ryethos")
+check("a flag contract asks for a planted flag", s.goals[1].v == 2 and s.goals[1].label:find("Plant a flag", 1, true),
+  s.goals[1].label)
 craft.piloting = false
 walker.onFoot = true
 put(astro, "Umunquo", 1)
@@ -282,9 +286,34 @@ second()
 check("standing at home plants nothing on the moon", mi.active == s.id)
 put(astro, "Ryethos", 1)
 tick(3)
-check("standing on the moon plants the beacon and pays", paid(s))
+check("standing on the moon isn't planting a flag", mi.active == s.id)
+local R = BODIES.Ryethos
+local fid = dep.place("flag", "Ryethos", R.x, R.y + R.radius, R.z, { by = 1 })
+check("a flag is planted on the moon", fid ~= nil and dep.hasFlagOn("Ryethos"))
+tick(3)
+check("planting the flag pays", paid(s))
 second()
 check("...and the Charter counts it", mi.charter().done == 2, mi.charter().done)
+
+-- a contract signed before flags (its goal has no v = 2) still completes by
+-- stepping out, the old way
+local old = mi.genSpec("flag", "Oskal", 98)
+old.goals = { { kind = "flag", body = "Oskal", label = "Set foot on Oskal (plants the beacon)" } }
+old.title = "Plant a beacon: Oskal"
+store["mission.board"] = { old }
+check("signing an old beacon contract", mi.accept(old.id) == true)
+put(astro, "Oskal", 1)
+tick(3)
+check("an old beacon contract still pays on stepping out", paid(old))
+put(astro, "Ryethos", 1)
+-- and an old one still on the board (unsigned) is rewritten as a flag contract
+local old2 = mi.genSpec("flag", "Nami", 97)
+old2.goals = { { kind = "flag", body = "Nami", label = "Set foot on Nami (plants the beacon)" } }
+store["mission.board"] = { old2 }
+mi.start({})
+check("an unsigned beacon contract becomes 'Plant a flag'",
+  store["mission.board"][1] and store["mission.board"][1].goals[1].v == 2, store["mission.board"][1] and store["mission.board"][1].title)
+store["mission.board"] = {}
 for _, m in ipairs(gen_offers()) do
   check("no second beacon is offered for the moon", not (m.kind == "flag" and m.body == "Ryethos"))
 end

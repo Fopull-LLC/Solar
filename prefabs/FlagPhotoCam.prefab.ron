@@ -1,0 +1,18 @@
+// FLAG PHOTO CAM — the camera a planted flag's photo is taken through
+// (scripts/flag.lua: spawned, captured from off-screen, destroyed).
+// Written by tools/gen_flag.py — edit the generator, not this file.
+[
+    (
+        name: "FlagPhotoCam",
+        transform: (
+            translation: (0.0000, 0.0000, 0.0000),
+            rotation: (0.00000, 0.00000, 0.00000, 1.00000),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Camera(
+            fov_y: 0.95,
+            active: false,
+        ),
+        scripts: [],
+    ),
+]

@@ -66,6 +66,9 @@ end
 function start(node)
   el = node:getcomponent("UiElement")
   show(false)
+  -- Settings ▸ Agency (settings.lua's tab) is scripts/emblem.lua's; in the
+  -- menu it explains that each save is its own agency.
+  if spawn and findScript and not findScript("emblem") then pcall(spawn, "AgencyLib", vec3(0, 0, 0)) end
 end
 
 function update(node, dt)

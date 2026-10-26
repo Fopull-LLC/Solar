@@ -1390,6 +1390,29 @@ function mapComms(subject, px_at, label, lk, show)
       end
     end
   end
+  -- THE AGENCY'S FLAGS (scripts/deployables.lua): a short pole with a pennant
+  -- in signal orange, and its name — the Tracking Station's MAP lands here.
+  local dep = findScript and findScript("deployables")
+  if show.markers and dep and dep.list and camera and camera.worldToScreen then
+    for _, f in ipairs(dep.list("flag")) do
+      if f.gx then
+        local gb = space.body(f.b)
+        local ux, uy, uz = 0, 1, 0
+        if gb then
+          local l = math.sqrt(f.x * f.x + f.y * f.y + f.z * f.z)
+          if l > 1e-6 then ux, uy, uz = f.x / l, f.y / l, f.z / l end
+        end
+        local s = px_at(f.gx, f.gy, f.gz, 6)
+        local tx, ty, tz = f.gx + ux * s * 2.6, f.gy + uy * s * 2.6, f.gz + uz * s * 2.6
+        draw.line(f.gx, f.gy, f.gz, tx, ty, tz, 0.97, 0.55, 0.22, 1)
+        draw.ring(tx, ty, tz, ux, uy, uz, s * 0.55, 0.97, 0.55, 0.22, 1)
+        if label then
+          local px, py, _, on = camera.worldToScreen(tx, ty, tz)
+          if on then label(px, py - 14 * (lk or 1), f.n or "Flag", 11 * (lk or 1)) end
+        end
+      end
+    end
+  end
   if show.markers and camera and camera.worldToScreen then
     -- (Not `net.station and net.station()`: an `and` keeps only the first of
     -- the three values, and the ring was drawn at (x, nil, nil).)

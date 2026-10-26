@@ -29,8 +29,10 @@
 --                        (around home, or around a NAMED body)
 --   soi       body       fly into that body's sphere of influence (a flyby)
 --   land      body?      touch down intact (optionally on a NAMED body)
---   flag      body       stand on that body's surface on foot — plants the
---                        company beacon; counts once you've done it
+--   flag      body v=2   plant a flag on that body (deployables.lua): latches
+--                        when one is placed there. Without v = 2 (a contract
+--                        signed before flags, or a haul's "set foot on X"):
+--                        stand on that body's surface on foot
 --   cargo     body kg    be in orbit of that body with this much in the hold
 --   dock                 latch onto another craft in flight
 --   recover              bring the craft home and recover it at the base
@@ -697,10 +699,10 @@ function genSpec(kind, bname, seq)
       (b.atmo or 0) <= 0.15 and " There's no air: the chutes won't help." or "")
     g = { { kind = "land", body = X, label = "Land intact on " .. X } }
   elseif kind == "flag" then
-    title = "Plant a beacon: " .. X
-    brief = string.format("Stake the claim. Land on %s, step out, and stand on it — the\n" ..
-      "suit plants the company beacon. It counts toward the Charter.", X)
-    g = { { kind = "flag", body = X, label = "Set foot on " .. X .. " (plants the beacon)" } }
+    title = "Plant a flag: " .. X
+    brief = string.format("Stake the claim. Land on %s, step out with a Company Flag and\n" ..
+      "plant it. The agency's colours on another world — and a photo for the wall.", X)
+    g = { { kind = "flag", body = X, v = 2, label = "Plant a flag on " .. X } }
   elseif kind == "haul" then
     local mat = unique_mat(home, b)
     if not mat then return nil end
@@ -901,6 +903,41 @@ local function refill()
     save.set("mission.board", keep)
     save.set("mission.genSeq", seq)
   end
+end
+
+-- A flag was planted (deployables.lua calls this): the world is claimed, so
+-- the board stops offering a flag there, and the Charter counts it.
+function flagPlanted(body, id)
+  if type(body) ~= "string" then return end
+  local f = save.get("mission.flags") or {}
+  f[body] = true
+  save.set("mission.flags", f)
+  local v = save.get("mission.visited") or {}
+  if not v[body] then
+    v[body] = true
+    save.set("mission.visited", v)
+  end
+  pcall(refill)
+end
+
+-- Board contracts written before flags were planted by hand ("Plant a beacon:
+-- X", set foot on it) are rewritten as the new kind; a SIGNED one keeps its
+-- old goal (and still completes by stepping out).
+local function upgrade_board()
+  local b = save.get("mission.board")
+  if type(b) ~= "table" then return end
+  local any = false
+  for i, sp in ipairs(b) do
+    local g1 = type(sp) == "table" and sp.kind == "flag" and sp.goals and sp.goals[1]
+    if g1 and g1.v ~= 2 then
+      local fresh = genSpec("flag", sp.body, i)
+      if fresh then
+        sp.title, sp.brief, sp.goals = fresh.title, fresh.brief, fresh.goals
+        any = true
+      end
+    end
+  end
+  if any then save.set("mission.board", b) end
 end
 
 -- ── the charter: every world in the system ──────────────────────────────────
@@ -1623,6 +1660,12 @@ local function goal_now(g, v, info)
     local s = info.vel
     return math.sqrt(s.x * s.x + s.y * s.y + s.z * s.z) < 1.5
   elseif g.kind == "flag" then
+    if g.v == 2 then
+      -- a flag of the agency's standing there (planted on this contract or
+      -- before it: the board never offers a world that already has one)
+      local dep = ref("deployables")
+      return dep ~= nil and dep.hasFlagOn ~= nil and dep.hasFlagOn(g.body) == true
+    end
     return on_foot_at(g.body)
   elseif g.kind == "dock" then
     return (v.dock and (v.dock.latched or 0) > 0) or false
@@ -1756,6 +1799,10 @@ function forceComplete()
 end
 
 function start(node)
+  pcall(upgrade_board)
+  -- the flags' store (scripts/deployables.lua): spawned here when the scene
+  -- carries none, as the salvage library is
+  if spawn and findScript and not findScript("deployables") then pcall(spawn, "DeployLib", vec3(0, 0, 0)) end
   local a = save.get("mission.active")
   active = (type(a) == "string") and a or nil
   local seen = save.get("mission.seen")

@@ -594,7 +594,8 @@ local function engine_wind(o, name, b, x, y, z)
   local w = wind_at
   -- Re-sent when the world, the wind or the camera's place has moved on
   -- enough to matter, not every frame.
-  local fresh = w and w.name == name and w.node == n
+  -- (node handles are compared by id: two handles to one node are not ==)
+  local fresh = w and w.name == name and w.node and n and w.node.id == n.id
   if fresh then
     local dv = (w.vx - v.x) ^ 2 + (w.vy - v.y) ^ 2 + (w.vz - v.z) ^ 2
     local dc = (w.cx - c.x) ^ 2 + (w.cy - c.y) ^ 2 + (w.cz - c.z) ^ 2

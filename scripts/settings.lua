@@ -728,12 +728,23 @@ local function access_rows(out)
     .. "deuteranopia or tritanopia. Keys are listed on the pause menu's Controls page.")
 end
 
+-- The agency's name and emblem (per save): scripts/emblem.lua's editor.
+local function agency_rows(out)
+  local em = ref("emblem")
+  if em and em.settingsRows then
+    em.settingsRows(out, 420)
+  else
+    out[#out + 1] = hint("agx", "The agency's name and emblem are set per save; load one to change them.")
+  end
+end
+
 local TABS = {
   { id = "display", label = "Display", build = display_rows },
   { id = "camera", label = "Camera", build = camera_rows },
   { id = "controls", label = "Controls", build = controls_rows, engine = "controls" },
   { id = "audio", label = "Audio", build = audio_rows },
   { id = "access", label = "Accessibility", build = access_rows, engine = "accessibility" },
+  { id = "agency", label = "Agency", build = agency_rows },
 }
 local rows_at = -1   -- our clock when a screen last asked for the rows (it is up)
 
