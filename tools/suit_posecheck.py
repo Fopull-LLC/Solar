@@ -22,7 +22,10 @@ Flags:
 
 Poses: tpose (the bind), idle (arms down), elbow140, armraise (one arm up,
 one forward), crouch (a deep knee bend), seated, walk, toolhold (both hands
-on a tool's grips, as tool_belt holds one), headcheck (helmet off, the head).
+on a tool's grips, as tool_belt holds one), headcheck (helmet off, the head),
+openhand / fist (the glove at rest and curled as the clips curl it), wrist
+(bent), crossbody (a hand across the chest, the other arm back), hipflex (a
+thigh high forward, the other back).
 Blender is not part of the game; it only checks it (tools/gen_suit.py writes
 the suit).
 """
@@ -78,6 +81,19 @@ POSES = {
                  ("Upperarm.Left", Y, DOWN), ("Upperarm.Left", X, -62), ("Upperarm.Left", Z, 30),
                  ("Forearm.Left", X, -55), ("Forearm.Left", Z, 25)],
     "headcheck": [("Upperarm.Left", Y, DOWN), ("Upperarm.Right", Y, -DOWN), ("Head", Z, 20)],
+    # the hands, arms out: open (the glove's rest), a fist as the clips curl
+    # it (the knuckles 50°, the middle joints a further 65°), the wrist bent
+    "openhand": [],
+    "fist": [("Fingers1.Left", Y, 50), ("Fingers2.Left", Y, 65),
+             ("Fingers1.Right", Y, -50), ("Fingers2.Right", Y, -65)],
+    "wrist": [("Hand.Left", Y, 55), ("Hand.Right", Y, 40), ("Hand.Right", Z, -30)],
+    # the left hand across the chest; the right arm reaching up and back
+    "crossbody": [("Upperarm.Left", Y, DOWN), ("Upperarm.Left", X, -85), ("Upperarm.Left", Z, -45),
+                  ("Forearm.Left", X, -50), ("Upperarm.Right", Y, -DOWN), ("Upperarm.Right", X, 35),
+                  ("Forearm.Right", X, -20)],
+    # the hips: one thigh high forward, one back (a stride's extremes)
+    "hipflex": [("Thigh.Left", X, -100), ("Shin.Left", X, 60), ("Thigh.Right", X, 30), ("Shin.Right", X, 30),
+                ("Upperarm.Left", Y, DOWN), ("Upperarm.Right", Y, -DOWN)],
 }
 # Close-ups: (name, bone whose head to look at, view direction from the target, distance)
 CLOSE = {
@@ -95,6 +111,15 @@ CLOSE = {
     "walk": [("legs_side", "Shin.Left", (1, 0, 0.0), 1.4)],
     "toolhold": [("shoulders", "Back", (0.5, -1, 0.35), 1.3), ("shoulder_r", "Upperarm.Right", (-1, -0.6, 0.3), 0.8)],
     "headcheck": [("head_front", "Head", (0.25, -1, -0.25), 0.55), ("head_side", "Head", (1, -0.3, -0.2), 0.55)],
+    "openhand": [("hand_top", "Hand.Left", (0.15, -0.45, 1), 0.42), ("hand_palm", "Hand.Left", (0.25, -0.5, -1), 0.42),
+                 ("hand_thumb", "Hand.Left", (0.35, -1, 0.35), 0.42), ("hand_tip", "Hand.Left", (1, -0.35, 0.35), 0.45)],
+    "fist": [("fist_top", "Hand.Left", (0.15, -0.45, 1), 0.42), ("fist_thumb", "Hand.Left", (0.35, -1, 0.35), 0.42),
+             ("fist_side", "Hand.Left", (0.4, -0.25, -0.2), 0.42), ("fist_palm", "Hand.Left", (0.3, -0.6, -1), 0.42)],
+    "wrist": [("wrist_side", "Hand.Left", (0.2, -1, 0.15), 0.5), ("wrist_r", "Hand.Right", (-0.2, -1, 0.3), 0.5)],
+    "crossbody": [("cross_front", "Upperarm.Left", (0.2, -1, 0.35), 1.0), ("cross_back", "Upperarm.Left", (0.4, 1, 0.5), 1.0),
+                  ("reach_back", "Upperarm.Right", (-1, 0.2, 0.3), 1.0)],
+    "hipflex": [("hip_side", "Thigh.Left", (1, -0.1, 0.1), 1.1), ("hip_back", "Thigh.Left", (0.4, 1, 0.2), 1.1),
+                ("hip_front", "Thigh.Right", (-0.1, -1, 0.1), 1.1)],
 }
 MAT_TEX = {   # material: (albedo, normal map, roughness, metallic)
     "SuitFabric": ("textures/suit/fabric_albedo.png", "textures/suit/fabric_normal.png", 0.9, 0.0),
@@ -293,6 +318,10 @@ def main():
             t = head(arm, bone)
             if bone == "Head":
                 t = t + Vector((0, 0, 0.15))      # the face, not the neck
+            if bone.startswith("Hand."):
+                # the middle of the glove: the wrist's head toward the knuckles
+                f = head(arm, "Fingers1" + bone[4:])
+                t = t + (f - t) * 0.75
             shoot(cam, t, d, dist, os.path.join(OUT, f"{name}_{cname}.png"), lens=40)
 
 

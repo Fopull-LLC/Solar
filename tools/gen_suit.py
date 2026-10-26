@@ -61,12 +61,20 @@ numbers (MA_UP, the AstroModel's −0.05 offset) were tuned against the old
 body's box. Two zero-area anchor triangles pin the box's centre to the old
 body's exactly (REST_CENTRE).
 
-HOW IT BENDS: see tools/gen_suit_blender.py (the shoulder's ball, the elbow's
-and knee's pleats and balls, the waist convolute). tools/suit_posecheck.py
-renders the suit through the joints' ranges in Blender.
+HOW IT BENDS: the soft suit is one skinned surface per chain, not pieces —
+each arm (the cloth in the scye bearing, sleeve, elbow, gauntlet, palm, four
+fingers and the thumb) one subdivided cage, the waist, brief and both legs one
+mesh split at a shared crotch line — weight-painted by falloffs about each
+joint, asymmetric (narrow on the crease, broad on the outside), and modelled
+with the elbows and knees part-bent so linear blend skinning's worst bend is
+halved. The gloves are skinned to the rig's finger chain and thumb bones. See
+tools/gen_suit_blender.py's soft-suit notes. tools/suit_posecheck.py renders
+the suit through the joints' ranges (and the hands open, in a fist, the wrist
+bent) in Blender.
 
-BUDGET. About 11,900 triangles for the suit (the head under the helmet
-included) and 2,150 for the helmet, visor and lamps; five materials on the
+BUDGET. About 15,400 triangles for the suit (the head under the helmet
+included; the two arms 3,000 each, the lower body 1,900) and 2,150 for the
+helmet, visor and lamps; five materials on the
 suit (SuitFabric, SuitShell, SuitMetal, SuitHead, SuitDecal) and four on the
 helmet's models (SuitShell, SuitMetal, SuitBubble; SuitVisor; SuitLamp).
 Textures: the cloth set 512², the shell set 256², decals 512×256, the face
@@ -499,6 +507,13 @@ def wear(C, P, N, kind, rig):
         a += 0.25 + 0.35 * blot
     if kind == "arm":
         a += 0.12 * blot * np.clip(N[:, 1] * -1 + 0.3, 0, 1)
+        # the arm is one surface down to the fingertips: the glove's grime
+        # past each wrist (the Hand bone's head, along its axis)
+        for side in ("Left", "Right"):
+            B = rig.bind["Hand." + side]
+            ax = B[:3, 1] / np.linalg.norm(B[:3, 1])
+            g = np.clip(((P - B[:3, 3]) @ ax + 0.035 * k) / 0.03, 0, 1)
+            a += g * (0.25 + 0.35 * blot)
     if kind in ("hut", "pack", "hard", "evva", "metal"):
         sc = np.clip((n2 - 0.62) * 4, 0, 1)
         a += 0.25 * sc + (0.08 * blot if kind != "metal" else 0)

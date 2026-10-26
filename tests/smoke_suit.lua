@@ -11,6 +11,10 @@
 --   * every material the suit names is dressed by the AstroModel's
 --     object_materials in scenes/system.ron, and every texture those name, and
 --     the first-person tools' gloves name, exists;
+--   * the soft suit is SKINNED, not pieces: the gloves are weighted to the
+--     finger chain and the thumb bones, every limb joint blends its two bones
+--     somewhere (no rigid piece per bone), and the suit keeps its budget
+--     (at most 16,500 triangles, five materials);
 --   * the HELMET that comes off: helmet / visor / lamps are plain (unskinned)
 --     models, the scene hangs the Helmet on the AstroModel's Back bone (an
 --     attachment) with the Visor and the Lamps under it, each dressed for the
@@ -100,6 +104,54 @@ for _, sex in ipairs({ "male", "female" }) do
          path, i, c, CENTRE[sex][i]))
     end
     for m in (js:match('"materials":(%b[])') or ""):gmatch('"name":"([^"]+)"') do MATS[m] = true end
+    -- the skin itself: read JOINTS_0 / WEIGHTS_0 out of the binary chunk
+    local _, raw = glb_json(path)
+    local bin0 = 20 + u32(raw, 13) + 8          -- 0-based offset of the BIN chunk's data
+    local acc, views = {}, {}
+    for a in (js:match('"accessors":(%b[])') or ""):gmatch("%b{}") do
+      acc[#acc + 1] = { view = tonumber(a:match('"bufferView":(%d+)')), count = tonumber(a:match('"count":(%d+)')),
+                        off = tonumber(a:match('"byteOffset":(%d+)')) or 0 }
+    end
+    for v in (js:match('"bufferViews":(%b[])') or ""):gmatch("%b{}") do
+      views[#views + 1] = tonumber(v:match('"byteOffset":(%d+)')) or 0
+    end
+    local tris, prims = 0, 0
+    local used = {}                              -- bone name → vertices weighted to it
+    local pair = {}                              -- "a|b" → vertices blending both
+    for attrs, ind in (js:match('"meshes":(%b[])') or ""):gmatch('"attributes":(%b{}),"indices":(%d+)') do
+      prims = prims + 1
+      tris = tris + acc[tonumber(ind) + 1].count / 3
+      local ja, wa = tonumber(attrs:match('"JOINTS_0":(%d+)')), tonumber(attrs:match('"WEIGHTS_0":(%d+)'))
+      if ja and wa then
+        local A, W = acc[ja + 1], acc[wa + 1]
+        local po, pw = bin0 + views[A.view + 1] + A.off, bin0 + views[W.view + 1] + W.off
+        for v = 0, A.count - 1 do
+          local bs = {}
+          for q = 0, 3 do
+            local w = raw:byte(pw + v * 4 + q + 1)
+            if w > 12 then bs[#bs + 1] = BONES[raw:byte(po + v * 4 + q + 1) + 1] end
+          end
+          for i = 1, #bs do
+            used[bs[i]] = (used[bs[i]] or 0) + 1
+            for j = 1, #bs do if i ~= j then pair[bs[i] .. "|" .. bs[j]] = (pair[bs[i] .. "|" .. bs[j]] or 0) + 1 end end
+          end
+        end
+      end
+    end
+    ok(tris > 0 and tris <= 16500, string.format("%s: %d triangles, the budget is 16,500", path, tris))
+    ok(prims <= 5, string.format("%s: %d materials, the budget is five", path, prims))
+    for _, sd in ipairs({ "Left", "Right" }) do
+      for _, b in ipairs({ "Fingers1", "Fingers2", "Thumb1", "Thumb2" }) do
+        ok((used[b .. "." .. sd] or 0) > 40, string.format("%s: the glove isn't skinned to %s.%s", path, b, sd))
+      end
+      for _, pj in ipairs({ { "Upperarm", "Forearm" }, { "Forearm", "Hand" }, { "Hand", "Fingers1" },
+                            { "Fingers1", "Fingers2" }, { "Thigh", "Shin" }, { "Shin", "Foot" } }) do
+        local a, b = pj[1] .. "." .. sd, pj[2] .. "." .. sd
+        ok((pair[a .. "|" .. b] or 0) > 20, string.format("%s: nothing blends %s into %s (a joint of rigid pieces)", path, a, b))
+      end
+      ok((pair["Hip|Thigh." .. sd] or 0) > 20, path .. ": nothing blends the hip into Thigh." .. sd)
+    end
+    ok((pair["Back|Hip"] or 0) > 20, path .. ": nothing blends the waist (Back into Hip)")
   end
 end
 ok(next(MATS) ~= nil, "the suits name no materials")

@@ -3,8 +3,12 @@
 -- helmet API (what it says here and on an airless body), the helmet coming
 -- off (the hands at the neck ring) and the head under it; first person
 -- bare-headed; the left shoulder driven through abduction and flexion by arm
--- IK; a walk; the visor raised. Pictures to user://suitshots/, lines "SUS ".
-defaults = { quit = 1, slot = 7, seed = 4242, scale = 4, sweep = 1, walk = 1, seat = 1 }
+-- IK; a walk; the visor raised; the gloves close up; a crouch (the root
+-- lowered, the walker's foot IK bending the knees); and the suit's cost: the
+-- GPU passes and the CPU's render and animation buckets with the astronaut
+-- framed, shown against hidden (`perf`). Pictures to user://suitshots/,
+-- lines "SUS ".
+defaults = { quit = 1, slot = 7, seed = 4242, scale = 4, sweep = 1, walk = 1, seat = 1, perf = 1, crouch = 1, onlyperf = 0 }
 
 local W = function() return app.wallClock and app.wallClock() or os.clock() end
 local W0 = W()
@@ -113,9 +117,65 @@ local function main()
     view(tag .. "_close", "Head", 0.35, 1.05, 0.05, 0.12)
   end
 
+  -- ── the suit's cost: the same framing, the astronaut shown then hidden ──
+  if params.perf > 0 then
+    local function sample(tag, n)
+      perf.enable(false); perf.enable(true)
+      local acc, cnt = {}, 0
+      for _ = 1, n do
+        local l, u, f = frame()
+        local t = bone("Back") + u * -0.2
+        cam_at(t + l * 0.6 + f * 2.2 + u * 0.2, t)
+        yield()
+        local g = perf.gpu and perf.gpu()
+        local fr = perf.frames(1)
+        fr = fr and fr[#fr]
+        if g and fr then
+          cnt = cnt + 1
+          acc.gpu = (acc.gpu or 0) + g.total
+          for _, ps in ipairs(g.passes) do acc["g:" .. ps.name] = (acc["g:" .. ps.name] or 0) + ps.ms end
+          for _, b in ipairs({ "render", "animation", "models" }) do
+            acc["c:" .. b] = (acc["c:" .. b] or 0) + ((fr.buckets or {})[b] or 0)
+          end
+          acc["c:frame"] = (acc["c:frame"] or 0) + fr.ms
+        end
+      end
+      local keys = {}
+      for k_ in pairs(acc) do keys[#keys + 1] = k_ end
+      table.sort(keys)
+      local parts = {}
+      for _, k_ in ipairs(keys) do parts[#parts + 1] = string.format("%s=%.3f", k_, acc[k_] / math.max(cnt, 1)) end
+      P("PERF %s n=%d %s", tag, cnt, table.concat(parts, " "))
+    end
+    local m = model()
+    hold(1.0)
+    for rep_ = 1, 2 do
+      m.visible = true
+      sample("shown" .. rep_, 150)
+      m.visible = false
+      sample("hidden" .. rep_, 150)
+    end
+    m.visible = true
+    perf.enable(false)
+    if params.onlyperf > 0 then
+      P("DONE")
+      if params.quit > 0 then app.quit() end
+      return
+    end
+  end
+
   -- ── helmet on ──
   hold(1.0)
   tour("on")
+  -- the gloves, close
+  do
+    local l, u, f = frame()
+    local d = bone("Hand.Right") - bone("Back")
+    P("hand.right from back: side %.2f up %.2f fwd %.2f", d:dot(l), d:dot(u), d:dot(f))
+  end
+  view("hands_right", "Hand.Right", -0.35, 0.65, 0.30, 0.0)
+  view("hands_left", "Hand.Left", 0.40, 0.65, 0.30, 0.0)
+  view("hands_low", "Hand.Right", -0.20, 0.55, -0.30, 0.0)
   -- the API, here and on the other bodies (an airless moon refuses)
   local ok, why = su.canRemoveHelmet()
   P("API here: helmetOn %s canRemoveHelmet %s %s refusal(false) %s", tostring(su.helmetOn()), tostring(ok), tostring(why),
@@ -161,6 +221,23 @@ local function main()
     end
     for _, d in ipairs({ 0, 45, 90, 135, 170 }) do drive("abd", d) end
     for _, d in ipairs({ -40, 0, 60, 120, 170 }) do drive("flex", d) end
+  end
+  -- ── a crouch: the root lowered, the walker's foot IK bends the knees ──
+  if params.crouch > 0 then
+    local an = model():animator()
+    local function crouched(name, side, fwd, up, n)
+      for _ = 1, n do
+        an:addBonePos("MaleArm", vec3(0, -0.42, 0))
+        local l, u, f = frame()
+        local t = bone("Hip")
+        cam_at(t + l * side + f * fwd + u * up, t)
+        yield()
+      end
+      shot(name)
+      for _ = 1, 3 do an:addBonePos("MaleArm", vec3(0, -0.42, 0)); yield() end
+    end
+    crouched("crouch_side", 2.2, 0.5, 0.2, 30)
+    crouched("crouch_front", 0.4, 2.2, 0.4, 12)
   end
   -- ── a walk (helmet off), from the side ──
   if params.walk > 0 then

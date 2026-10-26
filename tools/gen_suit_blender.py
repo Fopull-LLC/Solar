@@ -49,6 +49,8 @@ argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
 RIG_PATH, OUT_PATH = argv[0], argv[1]
 
 AUTHOR_ABDUCT = 50.0      # the arms are modelled this far down from the rig's T
+AUTHOR_ELBOW = 35.0       # … with the elbows this far bent
+AUTHOR_KNEE = 25.0        # … and the knees (see the soft suit's notes)
 SCYE_BORE = 0.088         # the scye bearing's bore (radius, m on the male rig)
 
 
@@ -204,6 +206,14 @@ class Piece:
             m.limit_method = "ANGLE"
             m.angle_limit = math.radians(a[2] if len(a) > 2 else 40)
             m.harden_normals = False
+        elif kind == "recalc":    # faces wound outward (cages are built without caring)
+            import bmesh
+            bm = bmesh.new()
+            bm.from_mesh(ob.data)
+            bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+            bm.to_mesh(ob.data)
+            bm.free()
+            ob.data.update()
         elif kind == "bool":
             m = ob.modifiers.new("bool", "BOOLEAN")
             m.operation = a[0]
@@ -461,6 +471,7 @@ ORANGE = (0.92, 0.47, 0.16)       # signal orange, used three times
 METAL = (0.80, 0.80, 0.78)        # anodised bearings
 METAL_D = (0.42, 0.43, 0.45)
 GLOVE = (0.66, 0.655, 0.64)       # the glove's TMG, greyer than the suit
+GLOVE_D = (0.52, 0.515, 0.50)     # under the gauntlet's lip
 PALM = (0.16, 0.16, 0.17)         # RTV grip
 SOLE = (0.14, 0.14, 0.145)
 BOOT_W = (0.74, 0.73, 0.70)       # the boot's TMG, greyer and more used than the suit's
@@ -485,8 +496,17 @@ def build(rig):
     D = np.tile(np.eye(4), (nb, 1, 1))
     for side, s in (("Left", 1.0), ("Right", -1.0)):
         R = rot_about(Z, -s * AUTHOR_ABDUCT, J("Upperarm." + side))
-        for b in ("Upperarm", "Forearm", "Hand", "Fingers1", "Fingers2", "Thumb1", "Thumb2"):
-            D[rig.index[b + "." + side]] = R
+        D[rig.index["Upperarm." + side]] = R
+        # the elbow part-bent (the forearm forward), about the elbow as posed
+        Ea = (R @ np.append(J("Forearm." + side), 1.0))[:3]
+        Re = rot_about(unit(np.cross(unit(Ea - J("Upperarm." + side)), Z)), AUTHOR_ELBOW, Ea)
+        for b in ("Forearm", "Hand", "Fingers1", "Fingers2", "Thumb1", "Thumb2"):
+            D[rig.index[b + "." + side]] = Re @ R
+        # the knee part-bent (the shin back)
+        Kb = J("Shin." + side)
+        Rk = rot_about(unit(np.cross(unit(Kb - J("Thigh." + side)), -Z)), AUTHOR_KNEE, Kb)
+        for b in ("Shin", "Foot", "Toes"):
+            D[rig.index[b + "." + side]] = Rk
 
     def Ja(name):
         return (D[rig.index[name]] @ np.append(J(name), 1.0))[:3]
@@ -618,40 +638,10 @@ def build(rig):
     Piece("Hose", "SuitShell", V, F, W, C, UVc=UVc, dirt="hard")
     ring_piece("Grommet", "SuitMetal", hp1, nrm, 0.010 * k, 0.020 * k, 0.010 * k, "Back", METAL_D, segs=10)
 
-    # ── WAIST and BRIEF (the LTA top): a convoluted waist from the BSC down to
-    # the waist bearing, then the brief, which hangs ─────────────────────────
+    # ── the WAIST and the BRIEF are the top of the lower body's one surface
+    # (lower_body, after the arms) ─────────────────────────────────────────
     waist_y = hip[1] - 0.078 * k
     crotch = J("Thigh.Left")[1] - 0.090 * k
-    wrings = []
-    ys = np.linspace(waist_y + 0.010 * k, hut_y0 + 0.004 * k, 7)
-    for i, y in enumerate(ys):
-        ridge = i % 2 == 1
-        hw = (0.176 if ridge else 0.166) * k
-        wob = (lambda a, i=i: 0.0025 * k * math.sin(3 * a + i * 1.3) + 0.002 * k * math.sin(7 * a + i))
-        wrings.append(dict(c=(x0, y, zc), e1=X, e2=Z, r1=hw, r2=hw * 0.74, sq=2.4, rad=wob,
-                           w=blend("Hip", "Back", float(smooth01(ys[0] + 0.012 * k, ys[-1] - 0.012 * k, y))),
-                           col=CLOTH if ridge else CLOTH_SH))
-    V, F, UVc, W, C = loft(wrings, 22, a0=-math.pi / 2)
-    Piece("Waist", "SuitFabric", V, F, W, C, UVc=UVc, dirt="body")
-    bring = []
-    for y, g in ((-0.012, 0.0), (-0.006, 0.006), (0.006, 0.006), (0.012, 0.0)):
-        bring.append(dict(c=(x0, waist_y + y * k, zc), e1=X, e2=Z, r1=(0.180 + g) * k, r2=(0.134 + g) * k, sq=2.4,
-                          w={"Hip": 1}))
-    V, F, UVc, W, C = loft(bring, 24, tile=0.1)
-    Piece("WaistRing", "SuitMetal", V, F, W, np.tile(METAL, (len(V), 1)), UVc=UVc, dirt="metal", smooth=False,
-          sharp=30)
-
-    def sag(amp, n=5, ph=0.0):
-        return lambda a: amp * (0.6 * math.sin(n * a + ph) + 0.4 * math.sin((n + 3) * a + 2 * ph)) \
-            - amp * 0.8 * max(0.0, -math.sin(a))
-    brief = []
-    for y, hw, hd, dzz in ((crotch + 0.020 * k, 0.060, 0.055, 0.0), (crotch + 0.045 * k, 0.150, 0.108, -0.006),
-                           (crotch + 0.095 * k, 0.196, 0.132, -0.012), (crotch + 0.155 * k, 0.198, 0.136, -0.010),
-                           (waist_y - 0.045 * k, 0.190, 0.134, -0.004), (waist_y - 0.010 * k, 0.182, 0.134, 0.0)):
-        brief.append(dict(c=(x0, y, zc + dzz * k), e1=X, e2=Z, r1=hw * k, r2=hd * k, sq=2.5, w={"Hip": 1},
-                          col=CLOTH, rad=sag(0.003 * k, 4, y * 40)))
-    V, F, UVc, W, C = loft(brief, 22, cap0=True, a0=-math.pi / 2)
-    Piece("Brief", "SuitFabric", V, F, W, C, UVc=UVc, dirt="seat")
 
     # ── PLSS: the pack, rigid on Back, high on the back ────────────────────
     hit, _ = surf_point(tree, (x0, hut_y0 + 0.22 * k, zh - 0.5), (0, 0, 1), (x0, 0, zh - 0.14 * k))
@@ -718,9 +708,10 @@ def build(rig):
     for side, s in (("Left", 1.0), ("Right", -1.0)):
         arm(rig, D, Ja, J, side, s, k, scye[side])
 
-    # ── LEGS ──────────────────────────────────────────────────────────────
+    # ── the LOWER BODY (waist, brief, legs) and the BOOTS ─────────────────
+    lower_body(rig, D, J, Ja, k, x0, zc, hut_y0, waist_y, crotch)
     for side, s in (("Left", 1.0), ("Right", -1.0)):
-        leg(rig, J, side, s, k, x0, zc, crotch)
+        boot(rig, D, J, side, s, k)
 
     # ── HEAD (under the helmet) and the neck ───────────────────────────────
     head_piece(J, k, x0, zh, neck_top, nc)
@@ -785,91 +776,460 @@ def bezier_path(ctrl, n):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# the soft suit: one skinned surface per limb chain
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# The cloth is not pieces. Each ARM — the gathered cloth in the scye bearing,
+# the sleeve, the elbow, the forearm, the gauntlet, the palm, four fingers and
+# the thumb — is ONE closed quad cage, smoothed by a level of Catmull-Clark
+# subdivision, so the fingers grow out of the palm and the palm out of the
+# cuff with no seam anywhere. The LOWER TORSO and both LEGS are one surface
+# too: the waist convolute, the brief, and the legs split out of the brief at
+# a crotch line both legs share, down into the boots.
+#
+# WEIGHTS ARE PAINTED, NOT ASSIGNED PER PIECE: after subdivision every vertex
+# is weighted by a falloff of its own position about the joint it is near
+# (arm_weights, low_weights), so a joint blends smoothly over several edge
+# loops. Each joint's blend is ASYMMETRIC, the way a weight painter does it
+# for linear blend skinning (which the engine uses): narrow on the crease
+# side, so the crease tucks in rather than collapsing, broad on the outer
+# side, so the outside of an elbow or knee rounds over instead of pinching.
+# And the limbs are MODELLED PART-BENT (the elbows 35°, the knees 25°, in the
+# authoring pose; see build()): linear blending shrinks a blended ring by
+# cos(θ/2) for a bend θ away from the pose it was modelled in, so modelling
+# mid-range halves the worst bend (140° at the elbow becomes 105° away: the
+# blended ring keeps 61% of its section instead of 34%).
+#
+# THE SHOULDER is the exception, deliberately: the scye bearing is rigid on
+# the hard upper torso, as on the real suit, and the sleeve's root inside it is
+# a dome centred exactly on the shoulder pivot, weighted wholly to the upper
+# arm, which turns about its own centre and so always fills the bearing's
+# bore. A Back→Upperarm blend there would be shrunk by cos(θ/2) — to 9% of
+# its section at 170° of abduction — and tear the sleeve off the bearing; no
+# weighting fixes that without a helper joint driven at half the arm's turn,
+# which nothing in the engine drives (see the hand-back's engine notes).
+#
+# HANDS. The rig has one finger chain per hand (Fingers1 at the knuckles,
+# Fingers2 at the middle joints) and a two-bone thumb; all four fingers are
+# skinned to that chain — the knuckle line arcs (the little finger's knuckle
+# set back), each finger's joints sit as near the chain's pivots as a hand's
+# proportions allow — and the thumb to Thumb1/Thumb2. The glove is modelled
+# relaxed: the fingers a little curled, the thumb opposed under the index
+# finger, as a pressurised glove rests. No clip moves the thumb bones.
+
+class Cage:
+    """A quad (or n-gon) mesh under construction: positions, per-vertex
+    vertex groups (bones or helper scalars), colours, faces with per-corner
+    UVs (None: a box projection is made for the face)."""
+
+    def __init__(self, tile=0.25):
+        self.P, self.G, self.C, self.F, self.UV = [], [], [], [], []
+        self.tile = tile
+
+    def add(self, p, g=None, c=CLOTH):
+        self.P.append(np.asarray(p, float))
+        self.G.append(dict(g or {}))
+        self.C.append(tuple(c))
+        return len(self.P) - 1
+
+    def ring(self, pts, g=None, c=CLOTH):
+        out = []
+        for i, p in enumerate(pts):
+            gi = g(i) if callable(g) else g
+            ci = c(i) if callable(c) else c
+            out.append(self.add(p, gi, ci))
+        return out
+
+    def face(self, idx, uv=None):
+        self.F.append(tuple(int(i) for i in idx))
+        self.UV.append(uv)
+
+    def band(self, ra, rb, ut, va, vb):
+        """Quads between two rings of the same count, u round (ut tiles), v
+        along. Winding is fixed afterwards (recalc)."""
+        n = len(ra)
+        for i in range(n):
+            j = (i + 1) % n
+            u0, u1 = i / n * ut, (i + 1) / n * ut
+            self.face((ra[i], ra[j], rb[j], rb[i]), [(u0, va), (u1, va), (u1, vb), (u0, vb)])
+
+    def piece(self, name, mat, dirt, part="suit", subsurf=0):
+        UVc = []
+        for f, uv in zip(self.F, self.UV):
+            if uv is None:
+                # a box projection of this face, in tiles
+                P = np.array([self.P[i] for i in f])
+                n = np.cross(P[1] - P[0], P[2] - P[0])
+                ax = int(np.argmax(np.abs(n)))
+                q = [a for a in range(3) if a != ax]
+                uv = [(p[q[0]] / self.tile, p[q[1]] / self.tile) for p in P]
+            UVc.append(uv)
+        pc = Piece(name, mat, np.array(self.P), self.F, self.G, np.array(self.C, float), UVc=UVc, part=part,
+                   dirt=dirt, mods=[("recalc",)] + ([("subsurf", subsurf)] if subsurf else []))
+        return pc
+
+
+def frame_ring(c, ex, ey, t, rx, ry, angs, bump=None):
+    """Ring points about centre c in the plane normal to t, with ex/ey (made
+    perpendicular to t) as the x and y of the section, radii rx/ry, at the
+    given angles (radians); bump(a) adds to the radius."""
+    t = unit(t)
+    ex = unit(np.asarray(ex, float) - t * (t @ ex))
+    ey = np.asarray(ey, float) - t * (t @ ey) - ex * (ex @ ey)
+    ey = unit(ey)
+    out = []
+    for a in angs:
+        r = 1.0 + (bump(a) if bump else 0.0)
+        out.append(np.asarray(c, float) + ex * (rx * r * math.cos(a)) + ey * (ry * r * math.sin(a)))
+    return out
+
+
+def follow_ring(prev, c0, c, t, rx, ry, ex):
+    """A ring of len(prev) points about c (normal t) whose points keep the
+    previous ring's angular order: each previous point's direction from c0,
+    flattened onto the new plane, scaled to an ellipse rx (along ex) by ry."""
+    t = unit(t)
+    ex = unit(np.asarray(ex, float) - t * (t @ ex))
+    ey = np.cross(t, ex)
+    out = []
+    for p in prev:
+        d = np.asarray(p, float) - c0
+        x, y = d @ ex, d @ ey
+        a = math.atan2(y, x)
+        out.append(np.asarray(c, float) + ex * (rx * math.cos(a)) + ey * (ry * math.sin(a)))
+    return out
+
+
+def stitch(cg, A, B, tA, tB, ut, va, vb):
+    """Close the band between rings A and B of different counts with
+    triangles, marching both by their angular parameter t (0..1, increasing
+    round the ring, A[0] at tA[0]); u = t·ut."""
+    nA, nB = len(A), len(B)
+    t0 = tA[0]
+    ta = [(x - t0) % 1.0 for x in tA]
+    tb = [(x - t0) % 1.0 for x in tB]
+    j0 = min(range(nB), key=lambda j: min(tb[j], 1 - tb[j]))
+    B = B[j0:] + B[:j0]
+    tb = tb[j0:] + tb[:j0]
+    if tb[0] > 0.5:
+        tb[0] -= 1.0
+    tb = [tb[0]] + [x if x >= tb[0] else x + 1.0 for x in tb[1:]]
+    i = j = 0
+
+    def ua(q):
+        return (ta[q % nA] + (1.0 if q >= nA else 0.0)) * ut
+
+    def ub(q):
+        return (tb[q % nB] + (1.0 if q >= nB else 0.0)) * ut
+    while i < nA or j < nB:
+        na = ta[i + 1] if i + 1 < nA else 1.0 + ta[0]
+        nb = tb[j + 1] if j + 1 < nB else 1.0 + tb[0]
+        if j >= nB or (i < nA and na <= nb):
+            cg.face((A[i % nA], A[(i + 1) % nA], B[j % nB]), [(ua(i), va), (ua(i + 1), va), (ub(j), vb)])
+            i += 1
+        else:
+            cg.face((A[i % nA], B[(j + 1) % nB], B[j % nB]), [(ua(i), va), (ub(j + 1), vb), (ub(j), vb)])
+            j += 1
+
+
+ENC = 0.06      # helper groups carry offsets in metres as 0.5 + x / ENC
+
+
+def enc(x):
+    return float(np.clip(0.5 + x / ENC, 0.0, 1.0))
+
+
+def dec(g, name):
+    return (g.get(name, 0.5) - 0.5) * ENC
+
+
+def wsum(*parts):
+    out = {}
+    for f, d in parts:
+        if f <= 0:
+            continue
+        for b, w in d.items():
+            out[b] = out.get(b, 0.0) + f * w
+    return out
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # arms
 # ═════════════════════════════════════════════════════════════════════════════
 
+# Cage radii are a little over the finished ones: a level of Catmull-Clark
+# pulls a ring of eight in by about 5 %.
+CAGE = 1.05
+
+
 def arm(rig, D, Ja, J, side, s, k, sc):
     ua, fa, hd = "Upperarm." + side, "Forearm." + side, "Hand." + side
+    f1n, f2n = "Fingers1." + side, "Fingers2." + side
+    t1n, t2n = "Thumb1." + side, "Thumb2." + side
     P, n, d = sc                       # pivot, scye normal, ring plane distance
     S, E, H = Ja(ua), Ja(fa), Ja(hd)
+    F1, F2 = Ja(f1n), Ja(f2n)
     axu, axf = unit(E - S), unit(H - E)
-    out = unit(s * np.cross(Z, axu))   # away from the body, in the frontal plane
     L1 = float(np.linalg.norm(E - S))
     L2 = float(np.linalg.norm(H - E))
+    out = unit(s * np.cross(Z, axu))   # away from the body, in the frontal plane
 
-    # The SHOULDER is a ball and socket. The scye bearing and its housing are
-    # rigid on Back. Behind the bearing sits a cloth BALL centred exactly on
-    # the shoulder pivot and rigid on Upperarm: a sphere turning about its own
-    # centre stays where it is, so whatever the arm does, the bearing's bore
-    # closes on the same cloth surface — never a gap, never a floating ring.
-    # Its radius is the bore at the bearing's OUTER face (bore² + depth²), so
-    # the bore is covered across the bearing's whole width, and its folds only
-    # ever stand out from that sphere, never into it. The sleeve is rooted
-    # INSIDE the ball, rigid on Upperarm, and comes out of it like an arm out
-    # of a gathered shoulder; nothing between the two is blended, so nothing
-    # pinches into fins (linear skinning shrinks a blended ring by cos(θ/2),
-    # a third of it at the 140° an overhead reach asks of a shoulder).
+    # the hand's frame: along it, the back of the hand, toward the thumb
+    hax = unit(F2 - H)
+    hup = D[rig.index[hd]][:3, :3] @ Y
+    hup = unit(hup - hax * (hup @ hax))
+    hfw = np.cross(hax, hup)
+    if hfw @ Ja(t1n) < hfw @ H:
+        hfw = -hfw
+    hk = float(np.linalg.norm(F1 - H)) / 0.1120          # the hand's own scale
+    nb_e = unit(axu + axf)                               # the elbow's bisector
+    crease_e = unit(axf - axu * (axf @ axu))             # the side the forearm folds to
+
+    cg = Cage(tile=0.2)
+    ANG8 = [(j + 1) * TAU / 8 for j in range(8)]        # T0 T2 T4 SL B4 B2 B0 SI
+
+    def ring8(c, t, rx, ry, col=CLOTH, bump=None):
+        return cg.ring(frame_ring(c, hfw, hup, t, rx * CAGE, ry * CAGE, ANG8, bump), {"_ko": 0.5, "_po": 0.5}, col)
+
+    rings, vs = [], []                                    # the tube's rings and their v (arc length / tile)
+
+    def push(r, c):
+        if rings:
+            vs.append(vs[-1] + float(np.linalg.norm(c - push.last)) / 0.25)
+        else:
+            vs.append(0.0)
+        push.last = np.asarray(c, float)
+        rings.append(r)
+
+    # ── the shoulder: the dome in the scye bearing ──────────────────────────
     ring_out = d + 0.019 * k
-    Rb = math.sqrt((SCYE_BORE * k) ** 2 + ring_out ** 2) + 0.001 * k
-    prof = [(Rb * math.sin(a), -Rb * math.cos(a)) for a in np.linspace(0, math.pi, 9)]
-    rings = lathe_pts(prof[1:-1], P, axu, Z, 16)
-    for i, r in enumerate(rings):
-        r["w"] = {ua: 1}
-        r["col"] = CLOTH_SH if i % 2 else CLOTH
-        r["rad"] = (lambda a, i=i: 0.004 * k * max(0.0, math.sin(5 * a + i * 1.7)) * math.sin(math.pi * i / 7))
-    V, F, UVc, W, C = loft(rings, 16, cap0=True, cap1=True, tile=0.25)
-    Piece("ShoulderBall." + side, "SuitFabric", V, F, W, C, UVc=UVc, dirt="body")
+    Rb = (math.sqrt((SCYE_BORE * k) ** 2 + ring_out ** 2) + 0.003 * k) / 0.985
+    ex_s = hfw
+    # a shoulder convolute: concentric pleats round the arm's axis, so the
+    # dome the bearing shows when the arm is high reads as gathered cloth
+    for i, th in enumerate((165, 142, 124, 106, 90, 74, 58, 46)):
+        a = math.radians(th)
+        pl = 1.0 if i % 2 == 0 else 0.90                  # ridge, fold
+        R_ = Rb * (pl if th < 160 else 1.0)
+        c = S + axu * R_ * math.cos(a)
+        rho = R_ * math.sin(a)
+        r = ring8(c, axu, rho, rho, CLOTH if pl == 1.0 else CLOTH_SH,
+                  bump=lambda a_, i=i: 0.02 * math.sin(4 * a_ + i * 0.9))
+        push(r, c)
+    cg.face(rings[0])                                     # the dome's far pole, inside the HUT
 
-    def off(t):
-        return 0.020 * k * (1 - float(smooth01(0.10 * k, L1 - 0.06 * k, t)))
-
-    def up_c(t):
-        return S + axu * t + out * off(t)
-
+    # ── the upper arm: the sleeve out of the dome, the upper-arm bearing ───
     s_ub = 0.165 * k
-    sock = []
-    # the sleeve's root, gathered, inside the ball and out through it
-    for t, r, g in ((0.000, 0.058, 0.0), (0.050, 0.064, 0.004), (0.095, 0.072, 0.005), (0.130, 0.078, 0.003)):
-        sock.append(dict(c=up_c(t * k), r=r * k, w={ua: 1}, col=CLOTH,
-                         rad=lambda a, g=g, t=t: g * k * math.sin(6 * a + t * 60)))
-    # The upper arm: TMG over the restraint, a slight sag on its underside.
-    conv0 = L1 - 0.070 * k
-    for t in np.linspace(s_ub + 0.006 * k, conv0, 4):
-        f = (t - s_ub) / (conv0 - s_ub)
-        sock.append(dict(c=up_c(t), r=(0.075 - 0.007 * f) * k, w={ua: 1}, col=CLOTH,
-                         rad=lambda a, f=f: 0.0025 * k * math.sin(4 * a + 9 * f) - 0.003 * k * max(0, math.cos(a))))
-    # The elbow: pleats either side, a three-ring blend across the pivot, the
-    # inner side rigid (the crease tucks in), and a ball on the pivot.
-    for dd, r, w, c_ in ((-0.050, 0.068, {ua: 1}, CLOTH), (-0.038, 0.061, {ua: 1}, CLOTH_SH),
-                         (-0.026, 0.067, {ua: 1}, CLOTH), (-0.012, 0.059, blend(ua, fa, 0.25), CLOTH_SH),
-                         (0.000, 0.059, blend(ua, fa, 0.5), CLOTH_SH), (0.012, 0.059, blend(ua, fa, 0.75), CLOTH_SH),
-                         (0.025, 0.065, {fa: 1}, CLOTH), (0.037, 0.060, {fa: 1}, CLOTH_SH),
-                         (0.049, 0.064, {fa: 1}, CLOTH)):
-        c = up_c(L1 + dd * k) if dd < 0 else (E + axf * dd * k)
-        sock.append(dict(c=c, r=r * k, w=w, col=c_, w_in={ua: 1} if dd <= 0 else {fa: 1}, inner=Z,
-                         rad=lambda a, dd=dd: 0.003 * k * math.sin(3 * a + dd * 90)))
-    # The forearm, tapering to the wrist disconnect.
-    for dd, r in ((0.085, 0.063), (0.15, 0.060), (L2 / k - 0.075, 0.055), (L2 / k - 0.040, 0.052)):
-        sock.append(dict(c=E + axf * dd * k, r=r * k, w={fa: 1}, col=CLOTH,
-                         rad=lambda a, dd=dd: 0.0018 * k * math.sin(5 * a + dd * 40)))
-    V, F, UVc, W, C = loft(limb(sock, Z), 13, a0=math.pi / 2 * s + math.pi, tile=0.25)
-    Piece("Sleeve." + side, "SuitFabric", V, F, W, C, UVc=UVc, dirt="arm")
-    ball = lathe_pts([(0.057 * k * math.sin(a), -0.057 * k * math.cos(a)) for a in np.linspace(0, math.pi, 6)][1:-1],
-                     E, axu, Z, 10)
-    for r in ball:
-        r["w"] = {ua: 1}
-        r["col"] = CLOTH_SH
-    V, F, UVc, W, C = loft(ball, 10, cap0=True, cap1=True)
-    Piece("ElbowBall." + side, "SuitFabric", V, F, W, C, UVc=UVc, dirt="arm")
-    # the upper-arm bearing, the wrist disconnect (a lock ring with a
-    # coloured band: blue left, red right, as the real ones are keyed)
+    for t, r, col in ((0.104, 0.075, CLOTH), (0.138, 0.077, CLOTH), (s_ub, 0.077, CLOTH), (0.198, 0.075, CLOTH),
+                      (0.240, 0.072, CLOTH)):
+        c = S + axu * t * k
+        push(ring8(c, axu, r * k, r * k * 0.97, col), c)
+    # ── the elbow: pleats across the pivot, along the bent path ─────────────
+    for dd, r, col in ((-0.046, 0.069, CLOTH), (-0.024, 0.063, CLOTH_SH), (0.0, 0.067, CLOTH),
+                       (0.024, 0.062, CLOTH_SH), (0.046, 0.064, CLOTH)):
+        if dd < 0:
+            c, t = E + axu * dd * k, axu if dd < -0.03 else unit(axu + nb_e)
+        elif dd > 0:
+            c, t = E + axf * dd * k, axf if dd > 0.03 else unit(axf + nb_e)
+        else:
+            c, t = E, nb_e
+        push(ring8(c, t, r * k, r * k * 0.96, col,
+                   bump=lambda a_, dd=dd: 0.03 * max(0.0, -math.cos(a_ - 0.0)) * (1 if dd == 0 else 0)), c)
+    # ── the forearm to the wrist disconnect, then the glove's gauntlet ──────
+    wr = L2 - 0.062 * k                                 # the wrist disconnect, from the elbow
+    for dd, r, col in ((0.095 * k, 0.062, CLOTH), (wr - 0.042 * k, 0.057, CLOTH), (wr - 0.014 * k, 0.053, CLOTH),
+                       (wr, 0.050, CLOTH), (wr + 0.012 * k, 0.063, GLOVE), (wr + 0.036 * k, 0.066, GLOVE),
+                       (wr + 0.041 * k, 0.059, GLOVE_D), (L2 - 0.010 * k, 0.051, GLOVE),
+                       (L2 + 0.004 * k, 0.047, GLOVE)):
+        c = E + axf * dd
+        push(ring8(c, axf, r * k, r * k * (0.92 if col == GLOVE else 1.0), col), c)
+    circ = TAU * 0.07 * k
+    ut = max(1, round(circ / 0.25))
+    for a_, b_, va, vb in zip(rings[:-1], rings[1:], vs[:-1], vs[1:]):
+        cg.band(a_, b_, ut, va, vb)
+
+    # ── the glove's hand ────────────────────────────────────────────────────
+    # Finger table: lateral centre (toward the thumb +), knuckle set back,
+    # middle joint from the knuckle, length, spread. Metres on the male hand.
+    FING = [(+0.0315, -0.003, 0.047, 0.088, +0.07), (+0.0105, 0.000, 0.0497, 0.096, +0.01),
+            (-0.0105, -0.003, 0.047, 0.090, -0.05), (-0.0315, -0.010, 0.040, 0.072, -0.13)]
+    kn = float((F1 - H) @ hax)                           # wrist → knuckle line
+    pip = float((F2 - F1) @ hax)                         # knuckle → middle-joint line
+    w_, t_ = 0.044 * hk, 0.0195 * hk                     # the palm's half width, half thickness
+    lat = [0.042, 0.021, 0.0, -0.021, -0.042]            # T0..T4 / B0..B4 across
+    ko_edge = [FING[0][1], (FING[0][1] + FING[1][1]) / 2, (FING[1][1] + FING[2][1]) / 2,
+               (FING[2][1] + FING[3][1]) / 2, FING[3][1]]
+
+    def palm_ring(sv, wd, th, ko=None, arch=0.25, side_dn=0.35):
+        """12 points: T0..T4 (back of the hand, thumb side first), SL, B4..B0
+        (the palm), SI; sv along the hand from the wrist."""
+        pts, kos = [], []
+        for i in range(5):
+            x = lat[i] / 0.042 * wd
+            o = ko[i] if ko else 0.0
+            pts.append(H + hax * (sv + o * hk) + hfw * x + hup * th * (1 + arch * (1 - (x / wd) ** 2)))
+            kos.append(o)
+        pts.append(H + hax * sv + hfw * (-wd - 0.006 * hk) + hup * (-th * 0.15))
+        kos.append(ko[4] if ko else 0.0)
+        for i in (4, 3, 2, 1, 0):
+            x = lat[i] / 0.042 * wd
+            o = ko[i] if ko else 0.0
+            pts.append(H + hax * (sv + o * hk) + hfw * x - hup * th * (1 - 0.15 * (1 - (x / wd) ** 2)))
+            kos.append(o)
+        pts.append(H + hax * sv + hfw * (wd + 0.009 * hk) - hup * th * side_dn)
+        kos.append(ko[0] if ko else 0.0)
+        return pts, kos
+
+    def pal_col(i, dark):
+        return PALM if (dark and 6 <= i <= 10) else GLOVE
+
+    Wr = rings[-1]                                       # the wrist, 8: T0 T2 T4 SL B4 B2 B0 SI
+    p1, _ = palm_ring(0.030 * hk, w_ * 0.95, t_ * 1.05)
+    P1 = cg.ring(p1, {"_ko": 0.5, "_po": 0.5}, lambda i: pal_col(i, True))
+    p2, _ = palm_ring(0.064 * hk, w_ * 1.02, t_ * 1.08)
+    P2 = cg.ring(p2, {"_ko": 0.5, "_po": 0.5}, lambda i: pal_col(i, True))
+    pk, kos = palm_ring(kn - 0.006 * hk, w_, t_ * 0.95, ko=ko_edge, arch=0.32)
+    # the knuckles: a ridge across the back of the hand
+    pk = [p + hup * (0.0035 * hk if i < 5 else 0.0) for i, p in enumerate(pk)]
+    K = [cg.add(p, {"_ko": enc(o * hk), "_po": 0.5}, pal_col(i, True)) for i, (p, o) in enumerate(zip(pk, kos))]
+    # wrist (8) → P1 (12): pentagons over the back and the palm, quads at the sides
+    m8 = [0, 2, 4, 5, 6, 8, 10, 11]
+    for j in range(8):
+        a, b = m8[j], m8[(j + 1) % 8]
+        span = list(range(a, b + 1)) if b > a else [a, 0] if b == 0 else list(range(a, 12)) + list(range(0, b + 1))
+        cg.face([Wr[j], Wr[(j + 1) % 8]] + [P1[q] for q in reversed(span)])
+    # P1 → P2, leaving the thumb's two faces (B0–SI–T0 side) open
+    for i in range(12):
+        j = (i + 1) % 12
+        if i in (10, 11):
+            continue
+        cg.face((P1[i], P1[j], P2[j], P2[i]))
+    for i in range(12):
+        j = (i + 1) % 12
+        cg.face((P2[i], P2[j], K[j], K[i]))
+    # the knuckle end's sides
+    cg.face((K[4], K[5], K[6]))
+    cg.face((K[10], K[11], K[0]))
+
+    # ── four fingers out of the knuckle end ────────────────────────────────
+    def bend(v, ax, deg):
+        a = math.radians(deg)
+        ax = unit(ax)
+        return v * math.cos(a) + np.cross(ax, v) * math.sin(a) + ax * (ax @ v) * (1 - math.cos(a))
+
+    for fi, (lx, ko, pj, ln, spread) in enumerate(FING):
+        q0 = [K[fi], K[fi + 1], K[10 - (fi + 1)], K[10 - fi]]     # T_i, T_i+1, B_i+1, B_i
+        root = np.mean([cg.P[q] for q in q0], axis=0)
+        lat_ax = hfw                                    # the finger's own sideways
+        dr = unit(hax + hfw * spread)
+        po = (ko + pj) - pip / hk                       # where its middle joint is, off the chain's
+        # the relaxed curl: the knuckle 8°, the middle joint 14°, the end joint 16°
+        cur = root.copy()
+        d0 = bend(dr, unit(np.cross(hup, dr)), 10)
+        # rings: (distance from the knuckle, half width, half height, top bump, curl after)
+        L = ln * hk
+        J1, J2 = pj * hk, (pj + 0.55 * (ln - pj)) * hk
+        steps = [(0.009 * hk, 0.0142, 0.0138, 0.0020), (0.026 * hk, 0.0132, 0.0124, 0.0),
+                 (J1, 0.0138, 0.0130, 0.0018), (J1 + 0.4 * (J2 - J1), 0.0126, 0.0118, 0.0),
+                 (J2, 0.0126, 0.0120, 0.0012), (L - 0.011 * hk, 0.0120, 0.0112, 0.0),
+                 (L - 0.0035 * hk, 0.0072, 0.0066, 0.0)]
+        prev, prev_c = [cg.P[q] for q in q0], root
+        prev_i = q0
+        sdist, dcur = 0.0, d0
+        g = {"_ko": enc(ko * hk), "_po": enc(po * hk)}
+        for si, (sd, hw_, hh_, bump) in enumerate(steps):
+            if sd > J1 and sdist <= J1:
+                dcur = bend(dcur, unit(np.cross(hup, dcur)), 20)
+            if sd > J2 and sdist <= J2:
+                dcur = bend(dcur, unit(np.cross(hup, dcur)), 20)
+            cur = cur + dcur * (sd - sdist)
+            sdist = sd
+            fup = unit(np.cross(dcur, lat_ax) * -1)
+            fup = fup if fup @ hup > 0 else -fup
+            pts = []
+            for qi, (sx, sy) in enumerate(((1, 1), (-1, 1), (-1, -1), (1, -1))):
+                pts.append(cur + lat_ax * sx * hw_ * hk * 1.06 + fup * (sy * hh_ * hk * 1.06 + (bump * hk if sy > 0 else 0)))
+            dark = si >= 4
+            ids = cg.ring(pts, g, lambda q, dark=dark: PALM if (dark and q >= 2) else GLOVE)
+            for q in range(4):
+                cg.face((prev_i[q], prev_i[(q + 1) % 4], ids[(q + 1) % 4], ids[q]))
+            prev_i = ids
+        cg.face(prev_i)                                  # the fingertip
+
+    # ── the thumb: out of the palm's thumb side, opposed under the index ───
+    q0 = [P1[10], P1[11], P1[0], P2[0], P2[11], P2[10]]
+    base = np.mean([cg.P[q] for q in q0], axis=0)
+    d1 = unit(hax * 0.58 + hfw * 0.74 - hup * 0.22)
+    Tc1 = base - d1 * 0.012 * hk                          # the thumb's root, in the palm
+    Tc2 = Tc1 + d1 * 0.050 * hk                           # its knuckle
+    d2 = unit(hax * 0.92 + hfw * 0.02 - hup * 0.28)
+    def curl(v, deg):
+        return bend(v, unit(np.cross(hup, v)), deg)
+    tex = unit(np.cross(d1, hup))
+    d3 = curl(d2, 18)
+    th_rings = [(base + d1 * 0.008 * hk, d1, 0.0215, 0.0175), (Tc1 + d1 * 0.030 * hk, d1, 0.0178, 0.0152),
+                (Tc2, unit(d1 + d2), 0.0156, 0.0142), (Tc2 + d2 * 0.016 * hk, d2, 0.0138, 0.0128),
+                (Tc2 + d2 * 0.031 * hk, d2, 0.0134, 0.0124), (Tc2 + d2 * 0.031 * hk + d3 * 0.016 * hk, d3, 0.0122, 0.0112),
+                (Tc2 + d2 * 0.031 * hk + d3 * 0.0245 * hk, d3, 0.0068, 0.0062)]
+    prev_pts, prev_c, prev_i = [cg.P[q] for q in q0], base, q0
+    for ti, (c, t, rx, ry) in enumerate(th_rings):
+        pts = follow_ring(prev_pts, prev_c, c, t, rx * hk * CAGE, ry * hk * CAGE, tex)
+        dark = ti >= 3
+
+        def tcol(q, pts=pts, c=c, dark=dark):
+            return PALM if (dark and (pts[q] - c) @ (-hup + hfw * 0.3) > 0.0) else GLOVE
+        ids = cg.ring(pts, {"_th": 1.0, "_ko": 0.5, "_po": 0.5}, tcol)
+        for q in range(6):
+            cg.face((prev_i[q], prev_i[(q + 1) % 6], ids[(q + 1) % 6], ids[q]))
+        prev_pts, prev_c, prev_i = pts, c, ids
+    cg.face(prev_i)
+
+    pc = cg.piece("Arm." + side, "SuitFabric", "arm", subsurf=1)
+
+    # ── the weights, painted on the subdivided surface ──────────────────────
+    hin_e, hout_e = 0.014 * k, 0.050 * k
+
+    def arm_weights(Pv, G):
+        out_w = []
+        for p, g in zip(Pv, G):
+            # the elbow
+            se = float((p - E) @ nb_e)
+            rad = p - E - nb_e * se
+            cr = float(unit(rad) @ crease_e) if np.linalg.norm(rad) > 1e-9 else 0.0
+            h = hout_e + (hin_e - hout_e) * (cr + 1) / 2
+            wf = float(smooth01(-h, h, se))
+            # the wrist
+            sw = float((p - H) @ axf)
+            wh = float(smooth01(-0.034 * k, 0.008 * k, sw))
+            # the fingers, on the one chain
+            ko, po, th = dec(g, "_ko"), dec(g, "_po"), g.get("_th", 0.0)
+            up = float((p - F1) @ hup)
+            s1 = float((p - F1) @ hax) - ko
+            a1, b1 = ((0.013, 0.009) if up > 0 else (0.004, 0.006))
+            w1 = float(smooth01(-a1 * hk, b1 * hk, s1))
+            s2 = float((p - F2) @ hax) - po
+            a2, b2 = ((0.008, 0.007) if up > 0 else (0.003, 0.004))
+            w2 = float(smooth01(-a2 * hk, b2 * hk, s2)) * w1
+            hand = {hd: 1 - w1, f1n: w1 - w2, f2n: w2}
+            # the thumb: Thumb1 from the base of the thenar, Thumb2 past its knuckle
+            wt1 = float(smooth01(-0.008 * hk, 0.014 * hk, float((p - Tc1) @ d1)))
+            wt2 = float(smooth01(-0.005 * hk, 0.006 * hk, float((p - Tc2) @ unit(d1 + d2)))) * wt1
+            thumb = {hd: 1 - wt1, t1n: wt1 - wt2, t2n: wt2}
+            hc = wsum((1 - th, hand), (th, thumb))
+            out_w.append(wsum((1 - wh, {ua: 1 - wf, fa: wf}), (wh, hc)))
+        return out_w
+    pc.W = arm_weights
+    pc.wg = True
+
+    # ── hardware on the arm: rigid, each where the cloth under it is ────────
+    up_c = lambda t: S + axu * t                         # noqa: E731
     ring_piece("UpperArmBearing." + side, "SuitMetal", up_c(s_ub), axu, 0.072 * k, 0.084 * k, 0.020 * k, ua, METAL,
                segs=16, band=METAL_D)
-    wc = H - axf * 0.030 * k
-    ring_piece("Wrist." + side, "SuitMetal", wc, axf, 0.046 * k, 0.061 * k, 0.024 * k, fa, METAL, segs=16,
+    wc = E + axf * wr
+    ring_piece("Wrist." + side, "SuitMetal", wc, axf, 0.046 * k, 0.061 * k, 0.022 * k, fa, METAL, segs=16,
                band=(0.24, 0.34, 0.56) if s > 0 else (0.62, 0.22, 0.18))
     # the emblem on the left upper arm, the flag on the right
-    r_p = 0.074 * k + 0.0025
+    r_p = 0.077 * k * 0.985 + 0.0025
     ph = 0.075 * k
     span = ph / r_p
     sc_ = s_ub + 0.085 * k
@@ -880,13 +1240,13 @@ def arm(rig, D, Ja, J, side, s, k, sc):
         return up_c(sc_ + (tv - 0.5) * ph) + (out * math.cos(a) + across * math.sin(a)) * r_p
     decal_piece("Emblem." + side, "emblem" if s > 0 else "flag", patch, out, ua, nu=4, nv=1)
 
-    # the CUFF CHECKLIST on the left forearm: a small spiral-bound book on a
-    # strap; a wrist mirror on the right
+    # the CUFF CHECKLIST on the left forearm, a wrist mirror on the right,
+    # each on a strap
+    top = unit(np.cross(axf, hfw))
+    if top @ hup < 0:
+        top = -top
     if s > 0:
-        top = unit(np.cross(axf, Z))
-        if top @ Y < 0:
-            top = -top
-        cc = E + axf * 0.15 * k + top * 0.060 * k
+        cc = E + axf * 0.128 * k + top * 0.064 * k
         Mb = np.column_stack([unit(np.cross(top, axf)), top, axf])
         V, F = box_mesh(cc, (0.085 * k, 0.020 * k, 0.095 * k), Mb)
         Piece("Cuff", "SuitShell", V, F, {fa: 1}, SHELL_G, tile=0.5, dirt="hard", mods=[("bevel", 0.003 * k, 1)],
@@ -895,136 +1255,223 @@ def arm(rig, D, Ja, J, side, s, k, sc):
                     lambda su, tv: cc + top * 0.0105 * k + Mb[:, 0] * (-0.038 * k + 0.076 * k * su)
                     + axf * (0.042 * k - 0.084 * k * tv), top, fa)
     else:
-        top = unit(np.cross(axf, Z))
-        if top @ Y < 0:
-            top = -top
-        cc = E + axf * 0.14 * k + top * 0.062 * k
+        cc = E + axf * 0.125 * k + top * 0.066 * k
         Mb = np.column_stack([unit(np.cross(top, axf)), top, axf])
         V, F = box_mesh(cc, (0.06 * k, 0.012 * k, 0.07 * k), Mb)
         Piece("Mirror", "SuitMetal", V, F, {fa: 1}, METAL, tile=0.5, dirt="metal", mods=[("bevel", 0.002 * k, 1)],
               sharp=30)
-    # a strap round the forearm under it
-    strap = [dict(c=E + axf * t * k, r=0.0615 * k, w={fa: 1}, col=SHELL_D) for t in (0.135, 0.155)]
+    strap = [dict(c=E + axf * t * k, r=0.0625 * k, w={fa: 1}, col=SHELL_D) for t in (0.117, 0.137)]
     V, F, UVc, W, C = loft(limb(strap, Z), 16, tile=0.1)
     Piece("Strap." + side, "SuitFabric", V, F, W, C, UVc=UVc, dirt="arm")
 
-    glove(rig, D, Ja, J, side, s, k, H, axf)
-
-
-def glove(rig, D, Ja, J, side, s, k, H, axf):
-    hd = "Hand." + side
-    f1n, f2n = "Fingers1." + side, "Fingers2." + side
-    t1n, t2n = "Thumb1." + side, "Thumb2." + side
-    F1, F2 = Ja(f1n), Ja(f2n)
-    T1, T2 = Ja(t1n), Ja(t2n)
-    hax = unit(F2 - H)
-    hup = D[rig.index[hd]][:3, :3] @ Y       # the back of the hand (T-pose: up)
-    hup = unit(hup - hax * (hup @ hax))
-    hfw = np.cross(hax, hup)
-    if hfw @ Ja(t1n) < hfw @ H:             # across the palm toward the thumb
-        hfw = -hfw
-
-    # The gauntlet: TMG flaring over the wrist disconnect.
-    g = [(-0.030, 0.060), (-0.018, 0.067), (0.000, 0.066), (0.016, 0.056), (0.026, 0.050)]
-    gl = [dict(c=H + axf * dd * k, r=r * k, w={hd: 1}, col=GLOVE,
-               rad=lambda a, dd=dd: 0.0025 * k * math.sin(6 * a + dd * 200)) for dd, r in g]
-    V, F, UVc, W, C = loft(limb(gl, Z), 14, tile=0.2)
-    Piece("Gauntlet." + side, "SuitFabric", V, F, W, C, UVc=UVc, dirt="glove")
-
-    # The palm: a padded block from the wrist to the knuckles, dark RTV on
-    # the palm side.
-    def pal(a):
-        return PALM if math.sin(a) < -0.45 else GLOVE
-
-    def gr(p, wdt, th, w, sq=2.8):
-        return dict(c=p, e1=hfw, e2=hup, r1=wdt * k, r2=th * k, w=w, col=pal, sq=sq)
-    base = H + hax * 0.012 * k
-    palm = [gr(base, 0.044, 0.029, {hd: 1}), gr(lerp(H, F1, 0.45), 0.051, 0.031, {hd: 1}),
-            gr(lerp(H, F1, 0.85), 0.053, 0.028, {hd: 1}), gr(F1 + hax * 0.004 * k, 0.051, 0.023, blend(hd, f1n, 0.5))]
-    V, F, UVc, W, C = loft(palm, 16, cap1=True, tile=0.2)
-    Piece("Palm." + side, "SuitFabric", V, F, W, C, UVc=UVc, dirt="glove")
-
-    # Four fingers, all on the one finger chain (the rig's), spread a little,
-    # each a padded tube with a dark grip pad on its tip.
-    for i, (lat, ln, rr) in enumerate(((0.034, 0.082, 0.0118), (0.012, 0.090, 0.0124), (-0.011, 0.086, 0.0118),
-                                      (-0.032, 0.070, 0.0106))):
-        o = hfw * lat * k
-        root = F1 + o - hax * 0.006 * k
-        mid = F2 + o * 1.05
-        dirn = unit(hax + hfw * lat * 0.6)
-        tip = mid + dirn * (ln * k - float(np.linalg.norm(F2 - F1)))
-        fr = []
-        for t, r, w in ((0.0, rr, {f1n: 1}), (0.35, rr * 1.04, {f1n: 1}), (0.62, rr * 0.98, blend(f1n, f2n, 0.5)),
-                        (0.85, rr * 0.97, {f2n: 1}), (0.97, rr * 0.80, {f2n: 1}), (1.0, rr * 0.45, {f2n: 1})):
-            c = lerp(root, mid, t / 0.62) if t <= 0.62 else lerp(mid, tip, (t - 0.62) / 0.38)
-            fr.append(dict(c=c, e1=hfw, e2=hup, r1=r * k, r2=r * k * 0.92, w=w,
-                           col=(lambda a, t=t: PALM if (math.sin(a) < -0.3 and t > 0.7) else GLOVE)))
-        V, F, UVc, W, C = loft(fr, 6, cap1=True, tile=0.2)
-        Piece("Finger%d.%s" % (i, side), "SuitFabric", V, F, W, C, UVc=UVc, dirt="glove")
-    # The thumb.
-    tdir = unit(T2 - T1)
-    th = [dict(c=T1 - tdir * 0.012 * k, r=0.018 * k, w=blend(hd, t1n, 0.4), col=GLOVE),
-          dict(c=T2, r=0.0150 * k, w=blend(t1n, t2n, 0.5), col=GLOVE),
-          dict(c=T2 + tdir * 0.030 * k, r=0.0135 * k, w={t2n: 1}, col=GLOVE),
-          dict(c=T2 + tdir * 0.046 * k, r=0.007 * k, w={t2n: 1}, col=PALM)]
-    V, F, UVc, W, C = loft(limb(th, hup), 8, cap1=True, tile=0.2)
-    Piece("Thumb." + side, "SuitFabric", V, F, W, C, UVc=UVc, dirt="glove")
-
 
 # ═════════════════════════════════════════════════════════════════════════════
-# legs
+# the lower torso and the legs: one surface
 # ═════════════════════════════════════════════════════════════════════════════
 
-def leg(rig, J, side, s, k, x0, zc, crotch):
-    T, K, A = J("Thigh." + side), J("Shin." + side), J("Foot." + side)
-    th, sh_, ft, to = "Thigh." + side, "Shin." + side, "Foot." + side, "Toes." + side
-    axt, axs = unit(K - T), unit(A - K)
-    LT, LS = float(np.linalg.norm(K - T)), float(np.linalg.norm(A - K))
-    rings = []
-    # the hip: from inside the brief, Hip blending into Thigh below the joint
-    for dd, r in ((-0.10, 0.086), (-0.04, 0.092), (0.02, 0.098), (0.08, 0.104)):
-        rings.append(dict(c=T + axt * dd * k, r=r * k, w=blend("Hip", th, float(smooth01(-0.05, 0.09, dd))),
-                          col=CLOTH))
-    # thigh bearing, then the thigh: the EV1 band (the third accent), a slight
-    # bag at the back
-    for dd, r, c_ in ((0.13, 0.104, CLOTH), (0.20, 0.102, CLOTH), (0.2001, 0.102, ORANGE), (0.235, 0.101, ORANGE),
-                      (0.2351, 0.101, CLOTH), (0.30, 0.097, CLOTH), (LT / k - 0.068, 0.092, CLOTH)):
-        rings.append(dict(c=T + axt * dd * k, r=r * k, w={th: 1}, col=c_,
-                          rad=lambda a, dd=dd: 0.003 * k * math.sin(5 * a + dd * 30)
-                          + 0.004 * k * max(0.0, -math.sin(a)) * math.sin(math.pi * min(1, dd / 0.4))))
-    # the knee: pleats, Thigh blending into Shin, proud at the front
-    for dd, r, w, c_ in ((-0.052, 0.091, {th: 1}, CLOTH), (-0.038, 0.083, {th: 1}, CLOTH_SH),
-                         (-0.024, 0.090, {th: 1}, CLOTH), (-0.011, 0.081, blend(th, sh_, 0.25), CLOTH_SH),
-                         (0.000, 0.081, blend(th, sh_, 0.5), CLOTH_SH), (0.011, 0.081, blend(th, sh_, 0.75), CLOTH_SH),
-                         (0.024, 0.089, {sh_: 1}, CLOTH), (0.037, 0.082, {sh_: 1}, CLOTH_SH),
-                         (0.050, 0.088, {sh_: 1}, CLOTH)):
-        c = (K + axt * dd * k) if dd < 0 else (K + axs * dd * k)
-        rings.append(dict(c=c, r=r * k, w=w, col=c_, w_in={th: 1} if dd <= 0 else {sh_: 1}, inner=-Z,
-                          rad=lambda a, dd=dd: 0.003 * k * math.sin(3 * a + dd * 120)))
-    for dd, r in ((0.11, 0.088), (0.20, 0.085), (0.28, 0.078), (LS / k - 0.12, 0.068)):
-        rings.append(dict(c=K + axs * dd * k, r=r * k, w={sh_: 1}, col=CLOTH,
-                          rad=lambda a, dd=dd: 0.0025 * k * math.sin(4 * a + dd * 50)))
-    for dd, r in ((LS / k - 0.085, 0.064), (LS / k - 0.060, 0.064)):
-        rings.append(dict(c=K + axs * dd * k, r=r * k,
-                          w=blend(sh_, ft, float(smooth01(LS - 0.10 * k, LS - 0.05 * k, dd * k))), col=CLOTH))
-    V, F, UVc, W, C = loft(limb(rings, Z), 13, a0=math.pi if s > 0 else 0.0, tile=0.25)
-    Piece("Leg." + side, "SuitFabric", V, F, W, C, UVc=UVc, dirt="leg")
-    for nm, c, r, bone in (("HipBall", T, 0.088, "Hip"), ("KneeBall", K, 0.079, th)):
-        ball = lathe_pts([(r * k * math.sin(a), -r * k * math.cos(a)) for a in np.linspace(0, math.pi, 6)][1:-1],
-                         c, axt, Z, 10)
-        for rr in ball:
-            rr["w"] = {bone: 1}
-            rr["col"] = CLOTH_SH
-        V, F, UVc, W, C = loft(ball, 10, cap0=True, cap1=True)
-        Piece(nm + "." + side, "SuitFabric", V, F, W, C, UVc=UVc, dirt="leg")
-    ring_piece("ThighBearing." + side, "SuitMetal", T + axt * 0.13 * k, axt, 0.098 * k, 0.110 * k, 0.020 * k, th, METAL,
-               segs=16, band=METAL_D)
+def lower_body(rig, D, J, Jp, k, x0, zc, hut_y0, waist_y, crotch):
+    """The waist convolute (Back into Hip), the waist bearing, the brief, and
+    both legs out of it to the boots — one mesh. The trunk's lowest ring (24)
+    splits into the legs: each leg's first ring is half the trunk's ring and
+    a crotch line of seven points both legs share."""
+    cg = Cage(tile=0.25)
+    TS = 24
 
-    # The BOOT: one cast-looking shoe on a dark sole — an upper lofted from
-    # heel to toe (high at the ankle, low and rounded at the toe), the sole a
-    # slab a little proud of it; rigid on Foot, the toe box on Toes with a
-    # flex line at the ball of the foot; grey rubber round the toe and heel.
-    Tp = J("Toes." + side)
+    def trunk_ring(y, hd, hw, zoff=0.0, sq=2.5, rad=None):
+        out = []
+        for i in range(TS):
+            a = TAU * i / TS                              # 0 front, π/2 left, π back
+            ca, sa = math.cos(a), math.sin(a)
+            x = math.copysign(abs(sa) ** (2.0 / sq), sa)
+            z = math.copysign(abs(ca) ** (2.0 / sq), ca)
+            r = 1.0 + (rad(a) if rad else 0.0)
+            out.append(np.array([x0 + hw * x * r, y, zc + zoff + hd * z * r]))
+        return out
+
+    rings, vs, ys = [], [], []
+    # the waist: convolutes from inside the body seal closure to the bearing
+    yw = np.linspace(hut_y0 + 0.004 * k, waist_y + 0.012 * k, 7)
+    for i, y in enumerate(yw):
+        ridge = i % 2 == 1
+        hw = (0.176 if ridge else 0.166) * k
+        wob = (lambda a, i=i: 0.014 * math.sin(3 * a + i * 1.3) + 0.010 * math.sin(7 * a + i))
+        rings.append(cg.ring(trunk_ring(y, hw * 0.74, hw, sq=2.4, rad=wob), None, CLOTH if ridge else CLOTH_SH))
+        ys.append(y)
+    # the waist bearing's band, then the brief, which hangs
+    for y, hw, hd, dz in ((waist_y - 0.002 * k, 0.178, 0.132, 0.0), (waist_y - 0.016 * k, 0.181, 0.134, 0.0),
+                          (waist_y - 0.050 * k, 0.190, 0.134, -0.004), (crotch + 0.150 * k, 0.197, 0.136, -0.010),
+                          (crotch + 0.098 * k, 0.195, 0.133, -0.012)):
+        sagf = (lambda a, y=y: 0.016 * (0.6 * math.sin(4 * a + y * 40) + 0.4 * math.sin(7 * a + y * 80))
+                - 0.012 * max(0.0, -math.cos(a)))
+        rings.append(cg.ring(trunk_ring(y, hd * k, hw * k, dz * k, rad=sagf), None, CLOTH))
+        ys.append(y)
+    yT = crotch + 0.052 * k
+    T = cg.ring(trunk_ring(yT, 0.124 * k, 0.186 * k, -0.012 * k, sq=2.3), None, CLOTH)
+    rings.append(T)
+    ys.append(yT)
+    ut_t = max(1, round(TAU * 0.16 * k / 0.25))
+    v = 0.0
+    for a_, b_, y0_, y1_ in zip(rings[:-1], rings[1:], ys[:-1], ys[1:]):
+        cg.band(a_, b_, ut_t, v, v + (y0_ - y1_) / 0.25)
+        v += (y0_ - y1_) / 0.25
+    # the crotch line: from the back centre (T[12]) down under the body and
+    # up to the front centre (T[0]), seven points both legs share
+    zb, zf = cg.P[T[12]][2], cg.P[T[0]][2]
+    cl = []
+    for q in range(1, 8):
+        u = q / 8
+        z = zb + (zf - zb) * u
+        y = yT - (yT - (crotch - 0.004 * k)) * math.sin(math.pi * u) ** 0.55
+        cl.append(cg.add((x0, y, z), None, CLOTH))
+    # (cl runs back → front)
+
+    legs = {}
+    for side, s in (("Left", 1.0), ("Right", -1.0)):
+        th, sh_, ft = "Thigh." + side, "Shin." + side, "Foot." + side
+        Tp, K, A = Jp(th), Jp(sh_), Jp(ft)
+        axt, axs = unit(K - Tp), unit(A - K)
+        LT, LS = float(np.linalg.norm(K - Tp)), float(np.linalg.norm(A - K))
+        lat = unit(s * X - axt * (s * X @ axt))
+        nb_k = unit(axt + axs)
+        legs[side] = dict(T=Tp, K=K, A=A, axt=axt, axs=axs, nb_k=nb_k, LT=LT, LS=LS, s=s)
+        half = [T[0]] + ([T[i] for i in range(1, 12)] if s > 0 else [T[24 - i] for i in range(1, 12)]) + [T[12]]
+        r0 = half + cl                                    # front → lateral → back → crotch (back → front)
+        # each point's turn about the thigh from its front toward its outside
+        fr = unit(Z - axt * (Z @ axt))
+        lt = unit(lat - fr * (lat @ fr))
+        c0 = Tp + axt * 0.06 * k
+
+        def ang(p, c=c0, fr=fr, lt=lt):
+            d_ = np.asarray(p) - c
+            return (math.atan2(d_ @ lt, d_ @ fr) / TAU) % 1.0
+        t0 = [ang(cg.P[q]) for q in r0]
+        # unwrap: the ring runs once round, increasing
+        for q in range(1, len(t0)):
+            while t0[q] < t0[q - 1] - 0.5:
+                t0[q] += 1.0
+        LSG = 16
+        angs = [TAU * j / LSG for j in range(LSG)]
+
+        def lring(c, t, r1, r2, col=CLOTH, bump=None, cen_lat=0.0):
+            return cg.ring(frame_ring(np.asarray(c) + lt * cen_lat, fr, lt, t, r1, r2, angs, bump), None, col)
+
+        lr, lv = [], []
+        # the thigh, out of the brief: the thigh bearing, the EV1 band
+        prof = [(0.118, 0.104, 0.098, 0.006, CLOTH), (0.160, 0.105, 0.103, 0.003, CLOTH),
+                (0.205, 0.103, 0.101, 0.0, CLOTH), (0.225, 0.102, 0.100, 0.0, CLOTH),
+                (0.2252, 0.102, 0.100, 0.0, ORANGE), (0.258, 0.101, 0.099, 0.0, ORANGE),
+                (0.2582, 0.101, 0.099, 0.0, CLOTH), (0.320, 0.097, 0.095, 0.0, CLOTH),
+                (LT / k - 0.075, 0.092, 0.090, 0.0, CLOTH)]
+        for dd, r1, r2, cl_, col in prof:
+            c = Tp + axt * dd * k
+            lr.append(lring(c, axt, r1 * k, r2 * k, col, cen_lat=cl_ * k,
+                            bump=lambda a, dd=dd: 0.03 * math.sin(5 * a + dd * 30)
+                            + 0.04 * max(0.0, -math.cos(a)) * math.sin(math.pi * min(1.0, dd / 0.4))))
+            lv.append(dd * k)
+        # the knee: pleats across the pivot, proud at the front
+        for dd, r, col in ((-0.050, 0.091, CLOTH), (-0.026, 0.084, CLOTH_SH), (0.0, 0.089, CLOTH),
+                           (0.026, 0.083, CLOTH_SH), (0.050, 0.087, CLOTH)):
+            if dd < 0:
+                c, t = K + axt * dd * k, axt if dd < -0.03 else unit(axt + nb_k)
+            elif dd > 0:
+                c, t = K + axs * dd * k, axs if dd > 0.03 else unit(axs + nb_k)
+            else:
+                c, t = K, nb_k
+            lr.append(lring(c, t, r * k, r * k * 0.97, col,
+                            bump=lambda a, dd=dd: 0.035 * max(0.0, math.cos(a)) * (1.0 if dd == 0 else 0.4)
+                            + 0.02 * math.sin(3 * a + dd * 120)))
+            lv.append(LT + dd * k)
+        # the shin, into the boot
+        for dd, r in ((0.11, 0.088), (0.20, 0.085), (0.28, 0.078), (LS / k - 0.12, 0.068), (LS / k - 0.085, 0.064),
+                      (LS / k - 0.060, 0.063)):
+            c = K + axs * dd * k
+            lr.append(lring(c, axs, r * k, r * k * 0.98, CLOTH, bump=lambda a, dd=dd: 0.03 * math.sin(4 * a + dd * 50)))
+            lv.append(LT + dd * k)
+        ut_l = max(1, round(TAU * 0.10 * k / 0.25))
+        # the crotch band: the 20 of the first ring down to the leg's 16
+        t1 = [ang(cg.P[q]) for q in lr[0]]
+        stitch(cg, r0, lr[0], t0, t1, ut_l, -0.4, lv[0] / 0.25)
+        for a_, b_, va, vb in zip(lr[:-1], lr[1:], lv[:-1], lv[1:]):
+            cg.band(a_, b_, ut_l, va / 0.25, vb / 0.25)
+
+    pc = cg.piece("LowerBody", "SuitFabric", "leg")
+
+    # ── the weights ─────────────────────────────────────────────────────────
+    w_lo, w_hi = yw[-1] + 0.012 * k, yw[0] - 0.012 * k        # the waist's blend, Hip below → Back above
+
+    def thigh_w(p, L):
+        sv = float((p - L["T"]) @ L["axt"])
+        rad = p - L["T"] - L["axt"] * sv
+        nr = np.linalg.norm(rad)
+        u = rad / nr if nr > 1e-9 else Z
+        c, l_ = float(u @ Z), float(u @ (L["s"] * X))
+        cc, ll = c * c, l_ * l_
+        tot = max(cc + ll, 1e-9)
+        lo = ((0.030 if c > 0 else -0.030) * cc + (0.000 if l_ > 0 else 0.050) * ll) / tot
+        hi = ((0.100 if c > 0 else 0.150) * cc + (0.120 if l_ > 0 else 0.120) * ll) / tot
+        return float(smooth01(lo * k, hi * k, sv))
+
+    def knee_w(p, L):
+        sv = float((p - L["K"]) @ L["nb_k"])
+        rad = p - L["K"] - L["nb_k"] * sv
+        cr = float(unit(rad) @ unit(-Z + L["nb_k"] * (Z @ L["nb_k"]))) if np.linalg.norm(rad) > 1e-9 else 0.0
+        h = (0.060 + (0.016 - 0.060) * (cr + 1) / 2) * k
+        return float(smooth01(-h, h, sv))
+
+    def ankle_w(p, L):
+        ha = float((L["A"] - p) @ L["axs"])
+        return 1.0 - float(smooth01(0.050 * k, 0.100 * k, ha))
+
+    def low_weights(Pv):
+        out_w = []
+        for p in Pv:
+            y = p[1]
+            back = float(smooth01(w_lo, w_hi, y))
+            sd = float(smooth01(x0 - 0.02 * k, x0 + 0.02 * k, p[0]))
+            parts = []
+            for side, f in (("Left", sd), ("Right", 1 - sd)):
+                if f <= 0:
+                    continue
+                L = legs[side]
+                wt = thigh_w(p, L)
+                wk = knee_w(p, L) if wt > 0 else 0.0
+                wa = ankle_w(p, L) if wk > 0 else 0.0
+                parts.append((f, {"Hip": 1 - wt, "Thigh." + side: wt * (1 - wk), "Shin." + side: wt * wk * (1 - wa),
+                                  "Foot." + side: wt * wk * wa}))
+            leg = wsum(*parts)
+            out_w.append(wsum((back, {"Back": 1.0}), (1 - back, leg)))
+        return out_w
+    pc.W = low_weights
+
+    # the waist bearing (Hip) and the thigh bearings (Thigh), where the cloth
+    # under each is wholly on its bone
+    bring = []
+    for y, g in ((-0.012, 0.0), (-0.006, 0.006), (0.006, 0.006), (0.012, 0.0)):
+        bring.append(dict(c=(x0, waist_y - 0.009 * k + y * k, zc), e1=X, e2=Z, r1=(0.181 + g) * k, r2=(0.135 + g) * k,
+                          sq=2.4, w={"Hip": 1}))
+    V, F, UVc, W, C = loft(bring, 24, tile=0.1)
+    Piece("WaistRing", "SuitMetal", V, F, W, np.tile(METAL, (len(V), 1)), UVc=UVc, dirt="metal", smooth=False,
+          sharp=30)
+    for side, L in legs.items():
+        ring_piece("ThighBearing." + side, "SuitMetal", L["T"] + L["axt"] * 0.160 * k, L["axt"], 0.100 * k,
+                   0.112 * k, 0.020 * k, "Thigh." + side, METAL, segs=16, band=METAL_D)
+    return legs
+
+
+def boot(rig, D, J, side, s, k):
+    """The BOOT: one cast-looking shoe on a dark sole — an upper lofted from
+    heel to toe (high at the ankle, low and rounded at the toe), the sole a
+    slab a little proud of it; rigid on Foot, the toe box on Toes with a flex
+    line at the ball of the foot; grey rubber round the toe and heel. Built
+    in the bind pose and carried into the authoring pose by the Foot's own
+    turn (the knees are modelled bent)."""
+    A, Tp = J("Foot." + side), J("Toes." + side)
+    ft, to = "Foot." + side, "Toes." + side
+    Mf = D[rig.index[ft]]
+
+    def posed(V):
+        V = np.asarray(V, float)
+        return (np.hstack([V, np.ones((len(V), 1))]) @ Mf.T)[:, :3]
     bx = A[0] + s * 0.004 * k
     heel_z, toe_z = A[2] - 0.090 * k, Tp[2] + 0.112 * k
     sole_t = 0.030 * k
@@ -1050,9 +1497,9 @@ def leg(rig, J, side, s, k, x0, zc, crotch):
         so_.append(dict(c=(bx, sole_t / 2, z), e1=X, e2=Y, r1=(hw + 0.007) * k * (0.9 if i in (0, 9) else 1.0),
                         r2=sole_t / 2, sq=6.0, w=bw(z), col=SOLE))
     V, F, UVc, W, C = loft(up_, 14, cap0=True, cap1=True, tile=0.25)
-    Piece("Boot." + side, "SuitFabric", V, F, W, C, UVc=UVc, dirt="boot", sharp=60)
+    Piece("Boot." + side, "SuitFabric", posed(V), F, W, C, UVc=UVc, dirt="boot", sharp=60)
     V, F, UVc, W, C = loft(so_, 8, cap0=True, cap1=True, tile=0.25)
-    Piece("Sole." + side, "SuitFabric", V, F, W, C, UVc=UVc, dirt="boot", sharp=45)
+    Piece("Sole." + side, "SuitFabric", posed(V), F, W, C, UVc=UVc, dirt="boot", sharp=45)
     # the strap over the instep, buckled on the outside
     sp_ = []
     zst = A[2] + 0.075 * k
@@ -1063,10 +1510,15 @@ def leg(rig, J, side, s, k, x0, zc, crotch):
         sp_.append(dict(c=(bx, (y0 + tp) / 2, z), e1=X, e2=Y, r1=hw + 0.004 * k, r2=(tp - y0) / 2 + 0.004 * k,
                         sq=2.8, w={ft: 1}, col=SHELL_D))
     V, F, UVc, W, C = loft(sp_, 14, tile=0.1)
-    Piece("BootStrap." + side, "SuitFabric", V, F, W, C, UVc=UVc, dirt="boot")
+    Piece("BootStrap." + side, "SuitFabric", posed(V), F, W, C, UVc=UVc, dirt="boot")
     # the ankle bearing on the boot's collar
-    ring_piece("Ankle." + side, "SuitMetal", np.array([bx, 0.170 * k, A[2] - 0.004 * k]), Y, 0.058 * k, 0.071 * k,
-               0.020 * k, ft, METAL, segs=16, band=METAL_D)
+    pc = ring_piece("Ankle." + side, "SuitMetal", np.array([bx, 0.170 * k, A[2] - 0.004 * k]), Y, 0.058 * k,
+                    0.071 * k, 0.020 * k, ft, METAL, segs=16, band=METAL_D)
+    me = pc.ob.data
+    Vb = np.zeros(len(me.vertices) * 3)
+    me.vertices.foreach_get("co", Vb)
+    me.vertices.foreach_set("co", posed(Vb.reshape(-1, 3)).reshape(-1))
+    me.update()
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1404,7 +1856,11 @@ def export(rig, D, path):
         me.corner_normals.foreach_get("vector", cn)
         cn = cn.reshape(-1, 3)
         # per-vertex weights
-        if callable(pc.W):
+        if callable(pc.W) and getattr(pc, "wg", False):
+            names = {g.index: g.name for g in ob.vertex_groups}
+            G = [{names[g.group]: g.weight for g in v.groups} for v in me.vertices]
+            Wl = pc.W(P, G)
+        elif callable(pc.W):
             Wl = pc.W(P)
         elif isinstance(pc.W, dict):
             Wl = [pc.W] * nv

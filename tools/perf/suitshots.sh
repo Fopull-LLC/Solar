@@ -4,6 +4,8 @@
 # $WORK/suitshots/<TAG>/png; the probe's save slot is deleted afterwards.
 #   WORK=$SCRATCH/suit2 LOCK=$SCRATCH/engine.lock tools/perf/suitshots.sh <engine> [TAG]
 #   SHOT_PARAMS='("sweep", 0.0)'   probe params (see suitshots.lua)
+#   ASTRO=/path/to/dir   draw the astronaut glbs from this directory instead of
+#                        models/astronaut (an A/B against an older suit)
 set -u
 SOL=$(cd "$(dirname "$0")/../.." && pwd)
 VER=${1:?engine version or binary}; TAG=${2:-suit}
@@ -12,6 +14,12 @@ WORK=${WORK:?set WORK}; LOCK=${LOCK:?set LOCK}
 ALSA=${ALSA:-$(dirname "$LOCK")/silent-alsa.conf}
 PJ=$WORK/suitshotsproj
 mkdir -p "$PJ/save" "$PJ/saves" "$PJ/.floptle"
+rm -f "$PJ/models"; rm -rf "$PJ/models"
+if [ -n "${ASTRO:-}" ]; then
+  mkdir -p "$PJ/models"
+  for m in "$SOL"/models/*; do [ "$(basename "$m")" = astronaut ] || ln -s "$m" "$PJ/models/$(basename "$m")"; done
+  ln -s "$ASTRO" "$PJ/models/astronaut"
+fi
 for d in models textures animation_controllers animations audio docs fonts materials shaders terrain tests tools ui vfx input.ron .luarc.json; do
   [ -e "$PJ/$d" ] || ln -s "$SOL/$d" "$PJ/$d"
 done
