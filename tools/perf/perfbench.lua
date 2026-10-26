@@ -562,6 +562,19 @@ ground96 = function(tag)
     end
   end
   P("GROUND96 %s: %d samples, sum %.4f (mean radius %.4f) on %s R %.1f", tag, n, sum, n > 0 and sum / n or 0, b.name, b.radius)
+  if terrain.stats then
+    local function fmt(st)
+      if type(st) ~= "table" then return tostring(st) end
+      local o = {}
+      for k, v in pairs(st) do o[#o + 1] = k .. "=" .. (type(v) == "number" and string.format("%.0f", v) or tostring(v)) end
+      table.sort(o)
+      return table.concat(o, " ")
+    end
+    P("TSTATS %s all: %s", tag, fmt(terrain.stats()))
+    for _, id in ipairs({ b.id or false, b.node and b.node.id or false, b.terrain or false }) do
+      if id then local ok, st = pcall(terrain.stats, id); P("TSTATS %s id %s: %s", tag, tostring(id), ok and fmt(st) or ("err " .. tostring(st))) end
+    end
+  end
   return sum
 end
 
@@ -1627,6 +1640,7 @@ local function watch_sleep(name, vn, secs, vc)
   local ph_b, phs_b, n_b, ph_a, phs_a, n_a = 0, 0, 0, 0, 0, 0
   local tk_b, tk_a = 0, 0
   local wakes = {}
+  local cw, cw_frames, ph_all = {}, 0, 0   -- rc33 perf.counts().wakes, summed by cause
   local last5 = -5
   local wake_now, v_now = "?", 0
   local rel0, drift, drift_max = nil, 0, 0   -- the craft's place on its planet: real creep or not
@@ -1649,6 +1663,14 @@ local function watch_sleep(name, vn, secs, vc)
     f = f and f[#f]
     local ph = f and f.buckets and f.buckets.physics or 0
     local phs = f and f.parts and f.parts.physicsStatic or 0
+    ph_all = ph_all + ph
+    local pcw = (perf.counts() or {}).wakes
+    cw_type = type(pcw)
+    if type(pcw) == "table" then
+      local any = false
+      for k, v in pairs(pcw) do cw[k] = (cw[k] or 0) + v; any = true end
+      if any then cw_frames = cw_frames + 1 end
+    end
     if asleep then
       if not slept then
         slept, slept_frame = W() - ts, frames
@@ -1700,6 +1722,11 @@ local function watch_sleep(name, vn, secs, vc)
   P("RESULT [%s] SLEEP: %s; awake %d frames physics %.2f ms/frame (static %.2f); asleep %d frames physics %.2f (static %.2f); re-woke frames %d; wake reasons %s; drift on its planet %.3f m (max %.3f)",
     name, slept and string.format("asleep after %.2f s (frame %d)", slept, slept_frame) or string.format("NEVER asleep in %.0f s (%d frames), last wake %s |v| %.3f", secs, frames, wake_now, v_now),
     n_b, n_b > 0 and ph_b / n_b or 0, n_b > 0 and phs_b / n_b or 0, n_a, n_a > 0 and ph_a / n_a or 0, n_a > 0 and phs_a / n_a or 0, after, table.concat(wl, ", "), drift, drift_max)
+  local cwl = {}
+  for k, v in pairs(cw) do cwl[#cwl + 1] = k .. " " .. v end
+  table.sort(cwl)
+  P("RESULT [%s] WAKES: frames %d, awake %d (%.1f %%), physics %.3f ms/frame over all; perf.counts().wakes (%s) on %d frames: %s", name, frames, n_b,
+    100 * n_b / math.max(frames, 1), ph_all / math.max(frames, 1), tostring(cw_type), cw_frames, #cwl > 0 and table.concat(cwl, ", ") or "none")
   P("RESULT [%s] SLEEP ticks: awake %.2f ticks/frame, physics %.3f ms/tick; asleep %.2f ticks/frame, physics %.3f ms/tick", name,
     tk_b / math.max(n_b, 1), ph_b / math.max(tk_b, 1), tk_a / math.max(n_a, 1), ph_a / math.max(tk_a, 1))
   trace_report(slept and (name .. " after the first sleep") or name, vn)
@@ -2035,8 +2062,13 @@ local function run_park()
   key_down("w")
   for _ = 1, 30 do
     yield(); wake_frames = wake_frames + 1
+    local pw = (perf.counts() or {}).wakes
+    if type(pw) == "table" then for k, v in pairs(pw) do P("PARK W frame %d perf.counts().wakes %s=%d", wake_frames, k, v) end end
     local iw = assembly.info(vn) or {}
-    if not (iw.asleep or vn.asleep) then break end
+    if not (iw.asleep or vn.asleep) then
+      for _ = 1, 2 do yield(); local pw2 = (perf.counts() or {}).wakes; if type(pw2) == "table" then for k, v in pairs(pw2) do P("PARK W after-wake perf.counts().wakes %s=%d", k, v) end end end
+      break
+    end
   end
   local iw = assembly.info(vn) or {}
   P("PARK W held: awake after %d frame(s), wake %s |v| %.3f", wake_frames, tostring(iw.wake), iw.vel and len(iw.vel.x, iw.vel.y, iw.vel.z) or -1)
@@ -2052,6 +2084,36 @@ local function run_park()
   P("PARK stopped again: asleep %s wake %s |v| %.3f", tostring(i3.asleep), tostring(i3.wake), i3.vel and len(i3.vel.x, i3.vel.y, i3.vel.z) or -1)
   FORCED = nil
   watch_sleep("s_park_restop", vn, params.parksecs2, vc)
+  -- trial33: a positive control for perf.counts().wakes (a kick on the sleeping
+  -- rover, then a velocity write on a sleeping crate)
+  local function wk3(tag)
+    for f = 1, 3 do
+      yield()
+      local pw = (perf.counts() or {}).wakes
+      local o = {}
+      if type(pw) == "table" then for k, v in pairs(pw) do o[#o + 1] = k .. "=" .. v end end
+      local ii = assembly.info(vn) or {}
+      local cr = find("PropCrate")
+      P("WAKECTL %s frame %d: perf.counts().wakes {%s}; rover asleep %s wake %s; crate asleep %s wake %s", tag, f, table.concat(o, ","), tostring(ii.asleep), tostring(ii.wake),
+        tostring(cr and cr.asleep), tostring(cr and cr.wake))
+    end
+  end
+  wk3("before")
+  local ii = assembly.info(vn) or {}
+  if ii.com and ii.mass then
+    local u = unit(sub(ii.com, home()))
+    assembly.impulseAt(vn, vec3(u.x * ii.mass * 1000 * 0.5, u.y * ii.mass * 1000 * 0.5, u.z * ii.mass * 1000 * 0.5), vec3(ii.com.x, ii.com.y, ii.com.z))
+    P("WAKECTL kicked the rover up by 0.5 m/s (impulse at its CoM; asleep before %s)", tostring(ii.asleep))
+  end
+  wk3("rover kick")
+  wait(3)
+  local cr = find("PropCrate")
+  if cr and cr.valid then
+    P("WAKECTL crate asleep before the velocity write: %s", tostring(cr.asleep))
+    local b = home(); local u = unit(sub({ x = cr.x, y = cr.y, z = cr.z }, b))
+    cr.vel = vec3((cr.vx or 0) + u.x * 2, (cr.vy or 0) + u.y * 2, (cr.vz or 0) + u.z * 2)
+    wk3("crate vel")
+  end
 end
 local function run_bigpark()
   local craft = finned_spine(40, 24)
@@ -2072,17 +2134,24 @@ local function run_bigpark()
     e_rest("bigpark", vn)
     local t0 = W()
     local wk, phs, sts, n = {}, 0, 0, 0
+    ewk = {}
     while W() - t0 < params.e_secs do
       yield()
       local line, wake, ph = e_frame(vn)
       local f = perf.frames and perf.frames(1); f = f and f[#f] or {}
       wk[wake] = (wk[wake] or 0) + 1
       phs, sts, n = phs + ph, sts + ((f.parts or {}).physicsStatic or 0), n + 1
-      P("E BIG %s", line)
+      local pcw = (perf.counts() or {}).wakes
+      local cws = {}
+      if type(pcw) == "table" then for k, v in pairs(pcw) do cws[#cws + 1] = k .. "=" .. v; ewk[k] = (ewk[k] or 0) + v end end
+      P("E BIG %s | wakes %s", line, table.concat(cws, ","))
     end
     local o = {}
     for k, v in pairs(wk) do o[#o + 1] = k .. " " .. v end
     P("E BIG RESULT: %d frames, physics %.2f ms/frame (static %.2f); wake readout %s", n, n > 0 and phs / n or 0, n > 0 and sts / n or 0, table.concat(o, ", "))
+    local eo = {}
+    for k, v in pairs(ewk) do eo[#eo + 1] = k .. " " .. v end
+    P("E BIG RESULT wakes (perf.counts): %s", table.concat(eo, ", "))
     trace_report("E bigpark first " .. params.e_secs .. " s", vn)
     trace_reset()
     e_rest("bigpark (after)", vn)

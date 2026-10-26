@@ -6537,50 +6537,10 @@ end
 -- takes out at most half the error about the craft's lightest axis (the
 -- solver's own tensor says which); a heavy craft feels exactly `tk`.
 function wheelTorque(node, info, ex, ey, ez, tk, dt)
-  -- (parked: see parkedStill — the ground holds the attitude, and any torque
-  -- at all keeps the craft from ever sleeping)
-  if ex * ex + ey * ey + ez * ez < PARK_RATE * PARK_RATE and parkedStill(node, info) then return end
   local k = tk
   local lam = inertiaMin(info)
   if lam and lam > 0 and dt and dt > 0 then k = math.min(k, 0.5 * lam / dt) end
   assembly.torque(node, vec3(ex * k, ey * k, ez * k))
-end
-
--- PARKED AND STILL: a craft resting on the ground (on its tyres, its legs or
--- its hull), not clamped, barely moving, with no hand on any control. The
--- engine wakes an assembly for ANY non-zero force or torque a script holds on
--- it (rc27: floptle-physics compound.rs apply_force / apply_torque), so a
--- parked craft that was handed a breeze's push, the reaction wheels' damping
--- of its rocking on its springs and the anti-roll bar's lean correction every
--- tick never slept while piloted: a braked rover's physics ran every frame, a
--- 1,002-part rocket on the pad cost 46-48 ms of physics a frame. While this
--- holds, those three small corrections are not issued (each caller checks its
--- own size against what the ground holds; a gust or a lean bigger than that
--- still pushes, and wakes it). Anything that moves it — the throttle, a key,
--- a probe's command, a push — ends it the same tick.
-PARK_SPEED = 0.25    -- m/s: |v| under this is resting (a braked rover rocks at 0.07-0.10)
-PARK_SPIN = 0.10     -- rad/s: and turning less than this
-PARK_RATE = 0.20     -- rad/s: a reaction-wheel rate error under this is the rocking, not a command
-PARK_KEYS = { "w", "a", "s", "d", "q", "e", "shift", "z", "space" }
-PARK = { t = -1, on = false }
-function parkedStill(node, info)
-  if PARK.t == time and PARK.node == node then return PARK.on end
-  PARK.t, PARK.node = time, node
-  local on = info and not info.anchored and (info.grounded or R2.onWheels) and space.warp() <= 1.001
-    and throttle <= 0 and not rcs.firing and not (R2.cmd and ((R2.cmd.drive or 0) ~= 0 or (R2.cmd.steer or 0) ~= 0))
-    and not (AERO.cmd and ((AERO.cmd.p or 0) ~= 0 or (AERO.cmd.y or 0) ~= 0 or (AERO.cmd.r or 0) ~= 0))
-    and true or false
-  if on then
-    local v, w = info.vel, info.angVel
-    on = v.x * v.x + v.y * v.y + v.z * v.z < PARK_SPEED * PARK_SPEED and w.x * w.x + w.y * w.y + w.z * w.z < PARK_SPIN * PARK_SPIN
-  end
-  if on and piloting and elec.control ~= false then
-    for _, k in ipairs(PARK_KEYS) do
-      if input.key(k) then on = false break end
-    end
-  end
-  PARK.on = on
-  return on
 end
 
 -- THE SAFETY NET. Never the thing that makes the craft behave — the things above
@@ -8414,11 +8374,7 @@ local function drive_tick(node, info, dt)
     local I = (inertiaMin and inertiaMin(info)) or (m * tr * tr / 12)
     local tq = -R2_ANTIROLL * mgt * phi - 4.0 * I * wr
     tq = math.max(-0.5 * mgt, math.min(0.5 * mgt, tq))
-    -- (parked and still, a lean under 0.1 m·g·track is the springs': the
-    -- bar's torque there only rocks it and keeps it awake, parkedStill)
-    if not (math.abs(tq) < 0.1 * mgt and parkedStill(node, info)) then
-      assembly.torque(node, vec3(fx * tq, fy * tq, fz * tq))
-    end
+    assembly.torque(node, vec3(fx * tq, fy * tq, fz * tq))
   else
     R2.antiroll = nil
   end
@@ -9048,23 +9004,12 @@ function aeroTick(node, info, dt, thr, sp, sy, sr, ex, ey, ez, apx, apy, apz, ay
   -- (AERO.scale: a probe's A/B switch on the air's force; 1 in the game)
   local ks = AERO.scale or 1
   fx, fy, fz, tx, ty, tz = fx * ks, fy * ks, fz * ks, tx * ks, ty * ks, tz * ks
-  -- PARKED (parkedStill): a breeze the ground holds is not pushed. Resting
-  -- craft took 0.13-0.46 m/s² of wind every tick (a braked rover, a rocket on
-  -- the pad), never enough to move them and always enough to keep them awake.
-  -- Under 0.1 g of push and 0.025 g·m of turn per tonne the brakes and the
-  -- ground's grip hold it still; a stronger gust still pushes (and wakes it).
-  local held = false
-  if fm > 0 and ks > 0 and parkedStill(node, info) then
-    local g = (b.mu or 0) / (R * R)
-    local tm = math.sqrt(tx * tx + ty * ty + tz * tz)
-    held = fm * ks < 0.1 * m * g and tm * ks < 0.025 * m * g
-  end
-  AERO.held = held
+  -- (A parked craft is pushed by the breeze too: since engine rc33 a sleeper
+  -- absorbs force changes under a fifth of its weight, so this no longer
+  -- keeps it awake — tools/perf/results/rc33.md.)
   if fm > 0 and ks > 0 then
-    if not held then
-      assembly.force(node, vec3(rx.x * fx + up.x * fy + rz.x * fz, rx.y * fx + up.y * fy + rz.y * fz, rx.z * fx + up.z * fy + rz.z * fz))
-      assembly.torque(node, vec3(rx.x * tx + up.x * ty + rz.x * tz, rx.y * tx + up.y * ty + rz.y * tz, rx.z * tx + up.z * ty + rz.z * tz))
-    end
+    assembly.force(node, vec3(rx.x * fx + up.x * fy + rz.x * fz, rx.y * fx + up.y * fy + rz.y * fz, rx.z * fx + up.z * fy + rz.z * fz))
+    assembly.torque(node, vec3(rx.x * tx + up.x * ty + rz.x * tz, rx.y * tx + up.y * ty + rz.y * tz, rx.z * tx + up.z * ty + rz.z * tz))
     -- ...and the same air booked part by part for the stress model, once it
     -- is worth booking (20 Pa: ~6 m/s at sea level; under that the
     -- remainder is spread by mass and loads nothing)
