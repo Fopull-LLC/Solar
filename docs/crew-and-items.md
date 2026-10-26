@@ -14,15 +14,19 @@ portrait and **EVA** sends that crew member out of the part's hatch. Every on-fo
 member nearby is one click, `[`/`]`, or `` ` `` away.
 
 Everything a crew member uses is a physical **item** with mass and bulk: the Gravity
-Gun, the Terrain Laser, the **Repair Kit**, the **Relay Beacon**, and the
-**Company Flag**. Items sit in a crew member's pack, a **stowage locker** part, a
+Gun, the Terrain Laser, the **Repair Kit**, the **Relay Beacon**, the
+**Company Flag**, and the **RCS Pack**. The RCS Pack works from the inventory: carrying
+it lets a crew member fly on EVA in space with RCS thrusters. Items sit in a crew member's pack, a **stowage locker** part, a
 craft's hold, or the base warehouse. In the VAB you hand items to crew or load them
 into lockers. In the field you take them out of a locker through the right-click
 menu, hold one in your hand, and use it.
 
-A repair means walking to the broken part with a kit in hand, right-clicking the part
-and choosing **Repair**. The crew member then works on the part with both hands for a
-set time, and a progress bar fills. Deployables (beacon, flag) are placed from the
+A repair means going to the broken part with a kit in hand: walking on the ground, or
+flying the RCS Pack to a damaged station in orbit. You right-click the part and choose
+**Repair**. The crew member is then **held at the part** in a looping work animation,
+locked in the part's own frame, so they ride a tumbling or orbiting station and can't
+drift away. A progress bar fills. Movement keys don't stop the job; only an explicit
+right-click → **Cancel repair** does. Deployables (beacon, flag) are placed from the
 hand with a ghost preview. They are saved in the world, and the Tracking Station
 lists them. A planted flag waves in the local wind, hangs straight on an airless
 world, and is photographed at the moment it is planted.
@@ -199,12 +203,21 @@ reads it today keeps working. `podCrewed` stays the "can carry crew" flag.
   and whose portrait is drawn first.
 - **Crew in another craft** keep riding it. Switching control never moves anyone
   (as `remoteControl` does today).
-- **The last member leaves.** The craft is a parked craft:
-  - EVA is only offered when the craft is landed or splashed and slower than 1 m/s
-    (there is no space EVA pack yet; it is a future item, §5.1);
-  - the throttle is cut; control goes to the member who left;
-  - the craft is a fleet record you can board again, and if it has a probe core and
-    a link, `` ` `` flies it back.
+- **When EVA is allowed.** There are two cases:
+  - **On a surface:** the craft is landed or splashed and slower than 1 m/s relative
+    to the ground.
+  - **In space or in flight off the ground:** the crew member carries an **RCS Pack**
+    (§5.7), the throttle is 0, and the craft is not accelerating (under 0.2 m/s²: no
+    engine, no staging in progress).
+  - Without a pack in space, the EVA button is **refused** and says why: "In space:
+    Dana needs an RCS Pack (the Pod Mk2's locker has one: take it first)". This is the
+    clearest option. A warning that lets them out anyway would produce an astronaut
+    floating away with no way back, which is exactly what the user asked to avoid.
+- **The last member leaves.** The craft is left uncrewed:
+  - the throttle is cut, and control goes to the member who left;
+  - on the ground it is a parked fleet record; in space it keeps coasting on its orbit
+    (with SAS holding if it has power);
+  - you can board it again, and if it has a probe core and a link, `` ` `` flies it back.
 
 ### 3.4 Crew aboard are dolls, not bodies
 
@@ -237,6 +250,9 @@ No member aboard has a rigid body. Each one is a **CrewDoll**: the suit model
   2. Then fall back to today's `exitSpot` search (a clear capsule-sized spot around
      the hull).
   3. An open seat uses `exitSpot` from the seat.
+  4. **In space**, the member leaves the hatch with the craft's velocity at the hatch
+     point (`vel + angVel × r`), so they start at rest relative to the craft and 1 m
+     out. The pack's **HOLD** (§5.7) is on for the first 2 s.
 - **Boarding (F on foot)** goes into the **nearest free slot** of the nearest crewed
   part within `board_range`. For pods this is measured to the hatch (not the spine);
   climbing the ladder still counts through today's spine rule.
@@ -303,7 +319,8 @@ Crew aboard are reached through their craft's portraits, not the list.
 | `` ` `` (backquote) | **Quick swap**: back to whatever you controlled before (craft ⇄ last crew member). The fastest loop for "EVA, fix, back to the craft". |
 | `F` (flying) | EVA **the commander** (today's single-crew F, unchanged in feel). |
 | `F` (on foot) | Board the nearest free slot (§3.5). |
-| Portrait hover → **EVA** | That member steps out of their part's hatch, and you control them. Shift-click: they step out and you stay on the craft. Greyed with the reason when not allowed: "moving 12 m/s", "in orbit: no EVA pack", "no hatch on a cabin buried in the stack". |
+| Portrait hover → **EVA** | That member steps out of their part's hatch, and you control them. Shift-click: they step out and you stay on the craft. Greyed with the reason when not allowed (§3.3): "moving 12 m/s", "in space: needs an RCS Pack", "engines firing", "no hatch on a cabin buried in the stack". |
+| EVA in space, with an RCS Pack | WASD / SPACE / CTRL translate (camera-relative). SHIFT is a stronger burst. **X** = HOLD: kill your velocity relative to the nearest craft. F near a hatch boards. See §5.7. |
 | Portrait hover → **⇄** | Move to another free slot aboard (an IVA transfer). |
 | Portrait right-click | The context menu for that member: helmet, pack, hand. The same `astro` provider, now with the member as its target. |
 | On-foot chip → **CONTROL** | `crew.control(id)`. A click on the chip does the same. |
@@ -392,8 +409,11 @@ ITEMS = {
                 hold = { prefab = "ItemFlagFurled", grip = "shoulder" },
                 deploy = { store = "deployables", kind = "flag", ghost = "FlagGhost", bad = "FlagGhostBad",
                            slope = 0.6, spacing = 2.0, pick = 2.0, secs = 2.5 } },
+  rcspack   = { name = "RCS Pack",      kind = "worn",       kg = 22.0, L = 30, cost = 1400, shop = true,
+                worn = { prefab = "ItemRcsPack", bone = "Spine2" },     -- drawn on the back over the PLSS; never in hand
+                rcs = { thrust = 90, burst = 1.6, prop = 4.0, isp_dv = 30, g_max = 2.0 } },     -- §5.7
 }
--- later, same shape: evapack (space EVA), sampler, drill, welder, spare parts, food/O2 canisters.
+-- later, same shape: sampler, drill, welder, spare parts, food/O2 canisters.
 ```
 
 **Tools are items.** The gun and the laser:
@@ -467,6 +487,9 @@ buyItem(cid, id, n)           --> ok, why   (company.spend; all or nothing)
   with empty hands is how you'd walk a long way.
 - tool_belt publishes `held()` → id and `hold(id)` → ok, why, which the strip, the
   menus and probes use.
+- **Worn items** (`kind = "worn"`, today only the RCS Pack) are not on the belt and
+  never take the hand. Having one in the pack is enough for it to work. Its model is
+  drawn on the back, and it counts against mass and litres like anything else.
 
 ### 5.5 Deploying (beacon, flag, and anything later)
 
@@ -540,62 +563,195 @@ The builder's right plate gets a fifth tab, **CREW**, after CRAFT. It is
   avatar is in the plan, it boards as today. If not, it stays on foot at the VAB door
   and the camera follows the craft (you control the craft).
 
+### 5.7 The RCS Pack (EVA in space)
+
+**What it is.** A worn item: 22 kg, 30 L, $1,400. Carrying it in the pack is enough;
+it never takes the hand slot, so you can fly with the Repair Kit held. Every pack
+carries **4.0 units** of the craft's propellant, about **30 m/s** of Δv for a loaded
+suit. That is plenty for a station's length and back several times, and a real limit.
+
+**When it works.** Thrust is live when the wearer is **not grounded**, and either:
+
+- they are in space (no surface within 50 m below), or
+- they are on a body with local gravity under `g_max` (2 m/s²).
+
+On a heavier world it does nothing: it can't lift a suit, and pretending to would turn
+it into a jump jet. The HUD chip says "RCS: no lift here".
+
+**Controls** (`eva_pack.lua`, on foot only; the walker's ground controls are unchanged):
+
+| Key | Does |
+|---|---|
+| W A S D | Translate forward/back/left/right, relative to the camera's view (not to "up"). |
+| SPACE / CTRL | Up / down along the camera's up. |
+| SHIFT (hold) | Burst: 1.6× thrust, 1.6× propellant. |
+| X (toggle) | **HOLD**: null your velocity relative to the **reference craft** (the nearest loaded craft within 200 m, named on the chip), then keep it there. On by default for 2 s after an EVA. Any translation key suspends it, and it resumes 1 s after you let go. |
+| Mouse (RMB look, as on foot) | The suit **yaws and pitches to face the view** with a smooth slew (2 rad/s, eased). There is no free roll: the suit's "up" is the camera's up, so the view always reads level. |
+
+**How the body is driven** (the physics):
+
+- The suit stays the same dynamic capsule. In free fall, the walker's grounded
+  velocity-chase does not run (there is no ground to chase). Instead `eva_pack` adds a
+  **Δv each tick** in `fixedUpdate`:
+  - `dv = thrust / (suit + pack + cargo mass) × dt` along the commanded
+    camera-relative direction;
+  - `vx, vy, vz = vx + dvx, vy + dvy, vz + dvz`;
+  - it **only ever adds** to the body's velocity and never writes an absolute one,
+    because absolute numbers in this world are orbital (km/s) and frame-dependent.
+- **HOLD** computes the reference craft's point velocity *this tick*,
+  `info.vel + info.angVel × (suit − info.com)`, and thrusts against the difference,
+  capped by the same thrust. So it costs propellant and takes a moment, like the real
+  thing.
+- The capsule's `align_up` is switched **off** while thrust is live (a suit floating
+  in orbit has no "down") and back on when grounded. The suit's attitude is set by
+  `setUp(camUp, camFwd)`, slewed.
+- **The moving-frame caveat.** The home planet moves 1.5–6 m per tick, and craft in
+  orbit move km/s:
+  - the reference craft is kept as a **node id**, never as a position;
+  - its relative position and velocity are recomputed from both nodes every tick;
+  - the "distance to craft" readout and the hatch-board range are recomputed each
+    frame;
+  - nothing stores a world position across frames. Velocities are only ever compared
+    within one tick.
+- **Gravity still applies.** In orbit the suit falls along the same orbit as the
+  station beside it, which is why relative motion is all that matters and why HOLD
+  works on relative velocity.
+
+**Propellant.**
+
+- The fill is tracked **only while a crew member carries the pack**, as a crew-record
+  field `crew.m.<id>.rcs`. Item stacks stay plain counts.
+- A pack in a locker, a hold or the base is always full. Putting a used pack into a
+  locker tops it up from that craft's propellant (`vessel_controller.fuelDraw`, the
+  pool RCS thrusters already draw). The base and the VAB fill it for free.
+- A worn pack **refills from the craft automatically when the wearer boards**. A locker
+  part's context menu also offers "Refill RCS Pack (from Kestrel I's tanks)" without
+  stowing it.
+- **Empty pack.** A member adrift more than 50 m from any craft with an empty pack is
+  never stranded: their portrait and context menu offer **Call pickup**, the existing
+  billed `flight_ops` pickup, which brings them home.
+
+**Feel.** Cold-gas puffs (small particle jets at the pack's eight nozzles, on whichever
+axes are firing) and a hiss loop scaled by thrust. The HUD chip shows: propellant bar,
+relative speed to the reference craft, its name and distance, and HOLD on or off.
+Translation is deliberately gentle (90 N on ~120 kg, about 0.75 m/s²). Docking with a
+hatch should feel like parking, not flying.
+
+**Time warp.** Rails warp is refused while any crew member is on EVA in space (KSP's
+rule). Physics warp up to 4× is allowed.
+
 ## 6. Repair as a task (E)
 
-### 6.1 The flow
+### 6.1 The flow (the same on the ground and in space)
 
 1. **Get a kit.** It was put in the pack in the VAB, or taken from a locker
-   (right-click the locker → Take ▸ Repair Kit).
-2. **EVA** (portrait hover → EVA, or F). The craft must be landed or splashed and still
-   (§3.3).
-3. **Hold the kit** (its belt slot). It hangs from the left hand.
-4. **Walk to the damaged part.** Damaged parts show their wear already (the hull
-   `damage` uniform). While a kit is in hand, the hovered part's outline is tinted by
-   its health.
+   (right-click the locker → Take ▸ Repair Kit). For a station, also take an **RCS
+   Pack**.
+2. **EVA** (portrait hover → EVA, or F). §3.3 says when EVA is allowed: on the ground,
+   or in space with a pack.
+3. **Hold the kit** (its belt slot). It hangs from the left hand. The RCS Pack is worn,
+   so it doesn't compete with the kit.
+4. **Get to the damaged part.** Walk there, or fly with the RCS Pack and use X (HOLD)
+   to stop beside it. Damaged parts already show their wear (the hull `damage`
+   uniform). While a kit is in hand, the hovered part's outline is tinted by its
+   health.
 5. **Right-click it → Repair (~14 s)**. The row shows the part's health and the time.
-6. **The work.** The crew member faces the part and kneels or leans:
-   - both hands reach (`anim:reach`) to the right-clicked **hit point**, stored in the
-     part's local frame and converted each frame (the moving-planet rule);
-   - the kit is set down at their feet as a prop;
-   - a spark and weld puff (the laser's `FxCutBite`, tinted) plays at the hands, with a
-     ratchet loop sound;
-   - a progress ring is drawn over the part, and the menu's job bar fills.
+6. **Held at the work.** From the moment Repair starts, the crew member is **locked to
+   the part** (§6.3):
+   - they slide in over 0.4 s to a work spot 0.7 m off the surface, facing the
+     right-clicked **hit point**;
+   - on the ground they kneel or stand; in space they hang facing the hull with their
+     legs trailing;
+   - a looping work animation plays: both hands reach (`anim:reach`) to the hit
+     point, the kit clamps to the hull beside the hands (a prop in the part's frame);
+   - a spark and weld puff plays at the hands (the laser's `FxCutBite`, tinted), with
+     a ratchet loop sound;
+   - a progress ring is drawn over the part. The HUD reads "REPAIRING Pod Mk2 · 43% ·
+     right-click → Cancel repair".
+   - They ride the part however the craft moves: a tumbling station, an orbit, a
+     planet moving 6 m per tick. They can't drift off and can't be knocked away.
 7. **Done.** `vessel_controller.repairPart(uid, 1.0)` runs. The kit is consumed (removed
-   from the pack), the wear paint clears, and a caption reads "Pod Mk2 repaired —
-   100%".
+   from the pack), the wear paint clears, a caption reads "Pod Mk2 repaired — 100%",
+   and the crew member is **released** (§6.3) at rest relative to the part.
 
 ### 6.2 Rules
 
 | Rule | Value |
 |---|---|
-| Who | A crew member **on foot**, with a Repair Kit **in hand**. No repairs from the seat: the point is the trip. |
+| Who | A crew member **on foot or on EVA**, with a Repair Kit **in hand**. No repairs from the seat: the point is the trip. |
 | Which parts | `0 < hp < 0.999`. A broken part (hp 0, gone from the craft) is wreckage: "beyond a field repair" (`repairPart`'s rule). |
-| Reach | `reach (2.6 m) + the part's half-size`, measured to the hit point (the context-menu `crewAccess` rule). |
+| Starting it | The crew is within `reach (2.6 m) + the part's half-size` of the hit point (the context-menu `crewAccess` rule), and moving under 1 m/s relative to the part. In space, coming in faster gives "slow down first (X holds)". |
 | Duration | `secs = 6 + 16 × (1 − hp)`: a scuff is 7 s, a failing part 18 s. |
-| Craft state | The part's craft moves under 0.5 m/s relative to the crew, and is not being flown with throttle > 0. |
-| Interruptions (`check`) | Walked out of reach + 0.5 m; took fall or impact damage; out of air or under water; the kit left the hand; the part broke. The job **cancels**: progress is kept on the part for 120 s (`st.rprog`, so a step back and a re-click resumes), and the kit is not used. |
+| Craft state | The craft's throttle is 0 and it isn't staging. Ground or orbit both count; parked isn't needed. |
+| **Movement input** | **Doesn't cancel.** WASD, SPACE, CTRL and the RCS keys do nothing while held at the work. The hint line repeats how to cancel. |
+| **Cancel** | Explicit only: **right-click → Cancel repair**. It is offered on the crew member (the `astro` target, and their CrewBody), on the part being repaired, and on their portrait or on-foot chip. **Esc does not cancel**: Esc opens the pause menu everywhere, and pausing must not throw away a long weld. |
+| Forced stops | Only what makes the work impossible: the part breaks or leaves the craft; the craft is destroyed; the craft fires engines (throttle > 0 or > 0.5 m/s² of thrust: the crew is pushed off and released); the crew member runs out of air. Each one releases them with a caption saying why. |
+| On cancel or stop | Progress is kept on the part for 120 s (`st.rprog`), so a re-click resumes. The kit is not used. |
 | Switching away | The job **keeps running**. It belongs to the crew member, not the menu (§6.3), so you can start one member repairing, switch to another, and come back. If the member's body leaves physics range, the job pauses and resumes when they're respawned. |
 | Results | `repairPart` restores `hp`, repaints, and the joint strength (`joint_strength(d, hp)`) comes back, so the structure is stronger again. |
 
-### 6.3 Tasks belong to crew members
+### 6.3 Tasks belong to crew members, and the lock
 
-`crew.setTask(id, task)` puts a job on a member, and `crew_task.lua` (a pure rulebook
-with a tick) runs it. The record holds the task as plain data, so it is saved:
+`crew.setTask(id, task)` puts a job on a member, and `crew_task.lua` runs it. The record
+holds the task as plain data, so it is saved:
 
 ```lua
 task = { kind = "repair", craft = <vessel key: fleet fid or node id>, uid = 12,
          lx = 0.21, ly = 0.40, lz = -0.48,      -- hit point in the part's frame
+         sx = 0.21, sy = 0.40, sz = -1.18,      -- the work spot (suit centre) in the part's frame
          secs = 14.2, done = 3.1, item = "repairkit" }
 ```
 
-The avatar's task is driven by tool_belt and planet_walker:
+**The lock uses the kinematic-passenger path the seat already uses.** Seated crew have
+ridden this way since engine 0.104 (`vessel_controller.seatCrew` and the boarding
+block):
 
-- **Pose.** They stop walking input while it runs. WASD **cancels** the job, after a
-  0.5 s grace with a "keep working? (WASD again to stop)" hint, so a nudge doesn't
-  throw away a long weld.
-- **Idle members.** A CrewBody's task is driven by `crew_body.lua`, with the same IK.
-- **The menu.** The context-menu `job` entry calls `crew.setTask` and shows the task's
-  progress while it is open. Closing the menu doesn't stop it.
+- **Attach** (`crew_task.attach(id)`):
+  1. Store the work spot and hit point **in the part's local frame**, never in world.
+  2. Set the body's `RigidBody.kinematic = 1`, the same write `seatCrew` does.
+  3. Turn the capsule's `align_up` off for the hold.
+  4. Set `crew.m.<id>.held = true`. planet_walker, eva_pack and the belt all stand down
+     while `held` is set.
+- **Each tick** (`fixedUpdate`):
+  - vessel_controller publishes `partPointNow(uid, lx,ly,lz) → wx,wy,wz, vx,vy,vz`;
+  - it is computed from **this tick's** assembly pose, with the same rails-carry
+    compensation the seat uses (`pod_world` / `board_dist`'s lag note);
+  - the point velocity is `info.vel + info.angVel × (p − info.com)`;
+  - crew_task writes the body's position and velocity from it, and its attitude with
+    `setUp(part normal, toward the hit point)`.
+  - So the body is exactly where the part is this tick, however the station spins or
+    the planet moves.
+- **Each frame** (`lateUpdate`): the hands' IK targets (`anim:reach`) are recomputed from
+  the part's **rendered** pose, so the hands sit on the hull the camera draws, the same
+  reason `command_seat` poses in the camera pass.
+- **Release** (done, cancel, or forced stop):
+  1. `kinematic = 0`, and velocity = the part's point velocity this tick, so they start
+     **at rest relative to the part**, not to the world.
+  2. On the ground they are set down at the work spot's ground point; in space they
+     float 0.7 m off the hull.
+  3. `align_up` goes back on only if they are grounded.
+  4. The **RCS Pack's state** on release: thrusters idle, **HOLD on** for 2 s with the
+     part's craft as the reference. Even a station tumbling fast leaves them beside
+     the hull, not flung off it.
+  5. `held` is cleared, and the controls come back.
+- **Why not a weld joint** (`setJoint{kind="fixed", to = part}`): the weld would also be
+  exact, but it puts the suit's ~120 kg into the station's dynamics. It would wake a
+  sleeping craft, load the joint-stress model, and fight `align_up`. The kinematic
+  passenger touches nothing on the craft, and it is already proven by the seat.
+
+**Who drives the task:**
+
+- **The avatar:** tool_belt (pose, effects, kit prop) and crew_task (the lock).
+- **An idle member:** `crew_body.lua`, with the same IK and the same lock.
+- **The menu:** the context-menu `job` entry calls `crew.setTask` and shows progress
+  while it is open. Closing the menu doesn't stop it.
+- **Cancel** is a registered `astro`/`part` provider entry, `{ id = "task.cancel",
+  label = "Cancel repair", act = crew.cancelTask }`. The portrait's right-click menu
+  carries the same entry.
+
+**Engine needs:** none new. Everything used is already exercised by the seated crew:
+`RigidBody.kinematic`, writing a body's position and velocity, `assembly.info`
+(`vel`, `angVel`, `com`), `setUp`, and `anim:reach`.
 
 ### 6.4 The provider
 
@@ -682,6 +838,7 @@ verbs the same way, with no menu code changes.
 | H7 | **Drag and drop in UI**. | `ui.dragging`, `ui.dropTarget`, `ui.hovered`, hoverStart/End. | None. |
 | H8 | **Visual (non-physical) children of an assembly part**: a mesh child with no collider under a vessel part does not join the compound and does not change its mass. | Not documented either way. | **Doc clarification card only if** WS1 finds a problem. The design sidesteps it: dolls are top-level and placed in lateUpdate. |
 | H9 | **Photo to a file**. | `camera.capture` → bytes → `assets.writeBytes`; `assets.textureFromBytes` to show it. | None. |
+| H10 | **Holding a character at a moving, tumbling part** (the repair lock), and **thrust on a free-floating character** (the RCS Pack). | `RigidBody.kinematic` and position/velocity writes (already used by the seated crew since 0.104); `assembly.info` `vel`/`angVel`/`com`; `setUp`; velocity increments on a dynamic body. | None. A weld (`setJoint{kind="fixed"}`) was considered and rejected for game reasons (§6.3), not because anything is missing. |
 
 ## 9. Open questions for the user (genuine design choices)
 
@@ -689,17 +846,17 @@ verbs the same way, with no menu code changes.
    Should crew be able to **die** (a lost pod kills its crew, and drowning is final),
    either always or as a "hardcore crew" setting? The recommendation is a setting, off
    by default.
-2. **Space EVA.** This design allows EVA only when landed or splashed (there is no
-   jetpack yet), so in-orbit repairs wait for an **EVA pack** item. Is that right for
-   this upgrade, or should the EVA pack come in now?
+2. ~~**Space EVA.**~~ **Answered (2026-10-25):** space EVA comes in now with a worn **RCS Pack** item (§5.7). Repairs are a held task: the crew member is locked to the part until it is done or they cancel it from the right-click menu (§6).
 3. **The company identity.** The flag uses the existing agency roundel and an agency
    name. Should players **name the agency and pick or edit its emblem** (colours, a
-   symbol) when they start a save?
+   symbol) when they start a save? The recommendation is yes: a name field and an emblem
+   picker on the new-save panel.
 4. **Hiring economy.** Is a one-time hire fee (≈ $1.5k–6k) enough, or should crew draw
-   **wages**, which make a big roster a running cost?
+   **wages**, which make a big roster a running cost? The recommendation is small wages,
+   so a big roster costs something to keep.
 5. **Crew traits.** Roles are stored but unused. Should roles matter in a follow-up?
    For example: engineers repair faster, and only pilots fly without a probe core
-   (KSP's rule).
+   (KSP's rule). The recommendation is yes, in a follow-up upgrade rather than this one.
 
 ## 10. Workstreams (G)
 
@@ -722,15 +879,23 @@ that agent's work is committed:
     `vessel_spawner.lua`, `vessel_switcher.lua`, `game_manager.lua`, `build_host.lua`;
   - `parts_registry.lua` + `parts_aero.lua` (seats, hatches, Pod Mk2, Crew Cabin
     definitions);
-  - `planet_walker.lua`: suit-state load/save hooks. The suit agent's helmet code lands
-    first; WS1 then owns the file.
+  - `planet_walker.lua`: suit-state load/save hooks, standing down while `held`, and
+    handing free fall to the pack. The suit agent's helmet code lands first; WS1 then
+    owns the file.
+  - **the RCS Pack**: new `scripts/eva_pack.lua` (thrust, HOLD, attitude slew,
+    propellant, its HUD chip, puffs and hiss), new `prefabs/ItemRcsPack` and its
+    model. Its `items.lua` entry is written by WS3 on day 0 from §5.1; changes to it
+    go to WS3 as patches.
+  - the **repair lock** in `crew_task.lua` (attach, per-tick ride, release) and
+    vessel_controller's `partPointNow`;
   - tests: new `smoke_crew.lua`, `smoke_crew_migrate.lua`, `smoke_crew_seats.lua`;
     updates to `smoke_command_seat.lua`, `smoke_crew_stations.lua`, `smoke_revert.lua`,
     `smoke_fleet_readout.lua`.
 - **Does:** §2 (records, hiring logic, migration), §3 (slots, `st.crew`, dolls placed and
   posed, hatches, boarding), §4.1–4.3 (avatar binding, `crew.control`, EVA,
-  Shift-EVA, quick swap, the switch list), the revert keys (`crew.*`), the spawner's
-  seat plan, and the locker plan at launch.
+  Shift-EVA, quick swap, the switch list), EVA in space and §5.7 (the RCS Pack, the
+  refill from craft propellant, the rails-warp refusal), the §6.3 lock, the revert keys
+  (`crew.*`), the spawner's seat plan, and the locker plan at launch.
 - **Publishes** (the interface every other workstream codes against, stubbed on day 0):
 
 ```lua
@@ -741,8 +906,12 @@ control(id) -> ok, why; eva(id, {stay=bool}) -> ok, why; board(id, v, uid?, slot
 quickSwap() -> ok; switchList() -> {{kind="crew"|"vessel", id|v, name, dist}…}
 aboard(v) -> {{id, uid, slot, commander=bool}…}; dollOf(id) -> node|nil; bodyOf(id) -> node|nil
 setTask(id, task) -> ok, why; task(id) -> task|nil; cancelTask(id, why)
+held(id) -> bool                                -- locked at a task (§6.3): movement code stands down
+-- crew_task.lua: attach(id), release(id, why)   -- the lock; WS3's repair calls these through setTask/cancelTask
+-- eva_pack.lua: rcsLeft(id) -> units, cap; refill(id, from_vessel) -> units; hold(on); reference() -> node|nil
 version  -- bumps on any change (panels poll it)
--- vessel_controller: seatsOf(), crewIds(), seatMember(uid, slot, id), hatchWorld(uid), commander()
+-- vessel_controller: seatsOf(), crewIds(), seatMember(uid, slot, id), hatchWorld(uid), commander(),
+--                    partPointNow(uid, lx,ly,lz) -> wx,wy,wz, vx,vy,vz   (this tick's pose, rails-carry compensated)
 ```
 
 - **Acceptance:**
@@ -756,7 +925,22 @@ version  -- bumps on any change (panels poll it)
     land, EVA #2 (they appear at the hatch, clear of the hull, under 0.3 m/s); quick
     swap ×10 (each switch < 1 frame of input dead time, and the camera blend completes);
     `[`/`]` reaches all 3; reboard; recover. All 3 are back at base with packs intact.
-    Shots go to `SCRATCH/ws1/`. The luajit sweep and `floptle check` (0 errors, 6
+    Shots go to `SCRATCH/ws1/`.
+  - **In-engine probe, space** (`tools/perf/evaprobe.lua`):
+    - put a two-module station in orbit (spawned from a blueprint) with a slow tumble
+      (0.1 rad/s);
+    - EVA without a pack is refused with the reason; take a pack from the locker, then
+      EVA;
+    - fly 20 m out and back: propellant falls by the Δv used, and HOLD brings the
+      relative speed under 0.05 m/s within 3 s;
+    - start a repair: for its whole length the suit's distance from the part's work
+      spot stays under 0.05 m at every tick (logged), while the station tumbles and
+      orbits;
+    - press WASD and RCS keys mid-job: nothing moves, and the job continues;
+    - right-click the crew member → Cancel repair: they are released at under 0.1 m/s
+      relative to the part, and progress is kept;
+    - re-click: the job resumes and finishes, hp is 1.0;
+    - board: the pack refills from the craft's propellant. The luajit sweep and `floptle check` (0 errors, 6
     warnings) pass.
 
 ### WS2: Crew presentation (strip, cams, IVA, VAB tab, roster panel, scene files)
@@ -799,8 +983,11 @@ version  -- bumps on any change (panels poll it)
     `smoke_gravgun.lua`, `smoke_revert_beacons.lua`.
 - **Does:** §5.1–5.5 (the registry, the alias, bulk, hand slot and grips, the generic
   deploy mode with the beacon moved onto it and comms untouched) and §6 (the repair
-  job, IK, effects, interruption rules, consumption), with the avatar's task driving in
-  tool_belt.
+  job, IK, effects, the cancel entries and forced-stop rules, consumption), with the
+  avatar's task driving in tool_belt. The lock itself (attach, ride, release) is WS1's
+  `crew_task`; WS3 calls it through `crew.setTask`/`cancelTask`. On day 0, WS3 also
+  writes the `rcspack` entry in `items.lua` and the `kind = "worn"` rule (not on the
+  belt, never in hand).
 - **Interface to WS4:** `items.ITEMS.flag.deploy.store = "deployables"`. Deploy mode
   calls `deployables.place(kind, body, gx,gy,gz, {by, yaw}) → id` and `deployables.near(x,y,z,r)`.
   The plant animation hook is `tool_belt.plantAnim(secs, kind)`.
@@ -808,14 +995,18 @@ version  -- bumps on any change (panels poll it)
   - **luajit:** `smoke_items`: mass and litre limits with honest partial moves; `astro`
     alias resolution; `moveItem` refusals with reasons; old `inv.gear.astro` beacons
     readable after migration.
-  - **luajit:** `smoke_repair`: duration formula; `check` cancels at reach + 0.5 m; the
-    kit is consumed only on `done`; resume within 120 s.
+  - **luajit:** `smoke_repair`: duration formula; movement input never cancels; only
+    `cancelTask` and the forced stops (part broken, craft destroyed, thrust, out of
+    air) end it; the kit is consumed only on `done`; resume within 120 s; "Cancel
+    repair" is offered on the crew member, the part and the portrait while a task
+    runs.
   - **In-engine probe:**
     1. wear a pod part to 0.4 (`wearPart`);
     2. EVA, take a kit from the locker through the menu, hold it, right-click → Repair;
     3. the hands land on the hit point (shot); 13–14 s later hp is 1.0 and the kit
        count went down by 1;
-    4. walking away mid-job cancels it.
+    4. WASD mid-job does nothing; right-click → Cancel repair releases them standing
+       at the work spot, and a re-click resumes from the kept progress.
     5. Separately, plant and pick up a beacon by the new path. The relay solve and
        `comms.beacons` are unchanged, and an old save with planted beacons and 2
        carried ones loads them all.
@@ -856,6 +1047,11 @@ version  -- bumps on any change (panels poll it)
   - the waving company flag with its photo and the Tracking Station list;
   - VAB loadout for the one astronaut, as a minimal version of the CREW tab with
     loadout only.
+  The repair already uses the **held lock** (§6.3): WS1 delivers `crew_task`'s attach,
+  ride and release and `partPointNow` as an early piece, alongside the day-0 stubs.
+- **Slice 1b, "EVA in space"** (WS1, right after slice 1 and before multi-crew): the RCS
+  Pack, EVA in orbit, HOLD, refills from craft propellant, and repairing a damaged
+  station in orbit with the same held task. It still runs on the single astronaut.
 - **Slice 2, "the crew"** (WS1 + WS2):
   - roster and hiring;
   - Pod Mk2 and the Crew Cabin;
