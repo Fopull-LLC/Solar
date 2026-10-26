@@ -457,6 +457,9 @@ local function panel_open()
   if ob and ob.isOpen and ob.isOpen() then return true end
   local ip = script_ref("inventory_panel")
   if ip and ip.open then return true end
+  -- the right-click menu (context_menu.lua) needs its pointer too
+  local cm = script_ref("context_menu")
+  if cm and cm.isOpen and cm.isOpen() then return true end
   return false
 end
 

@@ -86,6 +86,7 @@ local CONTROLS = {
     { keys = { "m" }, shown = "M", what = "the orbit map" },
     { keys = { "o" }, shown = "O", what = "hide the objectives card" },
     { keys = { "escape" }, shown = "ESC", what = "back out of whatever is in front of you" },
+    { keys = {}, shown = "RIGHT CLICK", what = "tap (don't drag) on your crew, a part of a craft or a crate: what you can do with it  ·  pad Y at the crosshair" },
   } },
   { group = "Flying", col = 2, rows = {
     { keys = { "shift", "ctrl" }, shown = "SHIFT / CTRL", what = "throttle up / down" },
@@ -156,6 +157,9 @@ local function something_else_is_up()
   if om and om.isOpen and om.isOpen() then return true end
   local pp = ref("peripheral_panel")
   if pp and pp.isOpen and pp.isOpen() then return true end
+  -- A right-click menu is a rung too: Esc backs out of it (context_menu.lua).
+  local cm = ref("context_menu")
+  if cm and cm.isOpen and (cm.isOpen() or cm.escTakenAt == time) then return true end
   -- First person is a level too: the first Esc puts you back on the shoulder,
   -- the second opens this. Backing out one thing at a time is the whole
   -- convention, and skipping a rung is how a menu ambushes you.

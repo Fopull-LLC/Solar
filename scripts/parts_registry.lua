@@ -165,6 +165,11 @@ REG = {
   -- mass — what's inside is added in flight from the manifest, so a full hold
   -- genuinely flies worse than an empty one.
   cargo     = { prefab = "PartCargo",     label = "Cargo Bay",    h = 1.20, rx = 0.50, rz = 0.50, mass = 0.4,  cost = 300, top = true,  bottom = true,  kind = "structural", cargo = 250, side = true, strength = 500 },
+  -- STOWAGE LOCKER: a small box with its OWN container (`store` kg) — unlike
+  -- the bays, which pool into one hold. Tools, samples and spares ride in it;
+  -- what's inside weighs on this part (vessel_controller's lockers) and the
+  -- right-click menu lists it.
+  locker    = { prefab = "PartLocker",    label = "Stowage Locker", h = 0.50, rx = 0.30, rz = 0.30, mass = 0.08, cost = 90, top = true, bottom = true, kind = "structural", store = 80, side = true, strength = 300 },
 
   -- ── FRAME: struts, beams, panels, plates and adapters ─────────────────────
   -- Light and cheap, and they attach every way: stack nodes on both ends,
@@ -352,6 +357,7 @@ DESC = {
   rotor = "rotor · spins what's on it · up to 60 rpm", claw = "landing claw · arm it to grip the ground",
   drill = "core drill · bores while landed · fills the hold",
   beacon = "relay beacon · always on · relays a few hundred m over the ground",
+  locker = "stowage locker · 80 kg of its own · right-click for its contents",
 }
 for id, d in pairs(DESC) do if REG[id] then REG[id].desc = d end end
 
@@ -373,7 +379,7 @@ CATALOGUE = {
   { "FRAME",     { "strut1", "strut2", "strut3", "beam1", "beam2", "ibeam2", "ibeam3",
                    "panel1", "panel2", "panel3", "plate", "hub", "adapter",
                    "beamP", "panelP", "brace" } },
-  { "PAYLOAD",   { "cargo", "dockPort", "fairingS", "fairingM" } },
+  { "PAYLOAD",   { "cargo", "locker", "dockPort", "fairingS", "fairingM" } },
   { "ROVER",     { "roverBody", "wheelS", "wheelM", "wheelL" } },
   { "ROBOTICS",  { "hinge", "piston", "rotor", "claw", "drill" } },
 }

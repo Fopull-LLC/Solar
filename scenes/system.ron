@@ -2949,5 +2949,39 @@
                 opacity: 1.0,
             )),
         ),
+        // The right-click menus in the world (scripts/context_menu.lua): a
+        // full-screen layer the menu plate is placed on at the cursor, hidden
+        // until a menu opens. The providers ride the ContextLib it spawns.
+        (
+            name: "Context Menu",
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Empty,
+            scripts: [
+                (
+                    kind: "context_menu",
+                    enabled: true,
+                    params: [],
+                ),
+            ],
+            id: Some(481),
+            parent_id: Some(16),
+            parent: Some(15),
+            ui: Some((
+                place: Pin(
+                    anchor: TopLeft,
+                    offset: (0.0, 0.0),
+                ),
+                size: (Fixed(1280.0), Fixed(720.0)),
+                visible: false,
+                opacity: 1.0,
+                // over the flight HUD and its overlay (order 1): a menu opened
+                // over the instruments must not be drawn under them
+                order: 10,
+            )),
+        ),
     ],
 )

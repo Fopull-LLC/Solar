@@ -1,0 +1,28 @@
+// CONTEXT LIBRARY — scripts/context_registry.lua (the right-click menus'
+// provider registry) and scripts/context_providers.lua (the game's own
+// providers). Spawned by context_menu.lua / builder_context.lua when the
+// scene carries no node running the registry; reached with
+// findScript("context_registry").
+[
+    (
+        name: "ContextLib",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [
+            (
+                kind: "context_registry",
+                enabled: true,
+                params: [],
+            ),
+            (
+                kind: "context_providers",
+                enabled: true,
+                params: [],
+            ),
+        ],
+    ),
+]

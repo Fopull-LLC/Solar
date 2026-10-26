@@ -71,6 +71,17 @@ InputMap(
             ],
         ),
         Action(
+            name: "Context",
+            bindings: [
+                Binding(
+                    source: Pad(
+                        id: Any,
+                        ctrl: Button(North),
+                    ),
+                ),
+            ],
+        ),
+        Action(
             name: "Pause",
             bindings: [
                 Binding(

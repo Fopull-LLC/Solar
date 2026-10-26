@@ -43,6 +43,7 @@ local function role(def)
   if def.kind == "probe" then return "probe core — flies with power + a link home" end
   if def.chute then return "parachute — slows the landing" end
   if def.cargo then return string.format("cargo hold · carries %d kg", def.cargo) end
+  if def.store then return string.format("stowage locker · %d kg of its own", def.store) end
   if def.legs then return string.format("landing legs · %.0f kg", def.mass * 1000) end
   if def.decouple then return def.radial and "radial decoupler — drops side boosters" or "decoupler — separates a stage" end
   return string.format("%.2f t", def.mass or 0)

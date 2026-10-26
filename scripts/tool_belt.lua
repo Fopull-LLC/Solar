@@ -469,6 +469,10 @@ local function on_foot(node)
   if ob and ob.isOpen and ob.isOpen() then why("the ops board has the keys") return false end
   local ip = ref("inventory_panel")
   if ip and ip.open then why("the suit pack has the keys") return false end
+  -- A right-click menu is up (context_menu.lua): its rows take the left
+  -- button, which must not also fire the tool through them.
+  local cm = ref("context_menu")
+  if cm and cm.isOpen and cm.isOpen() then why("a context menu has the pointer") return false end
   -- The map owns the camera (and the camera's screen ray starts thousands of
   -- metres out): no aiming, no rays, no plant queries from there.
   local om = ref("orbit_map")

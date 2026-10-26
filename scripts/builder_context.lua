@@ -93,6 +93,57 @@ end
 
 local SELECT_SCOPES = { { "assembly", "assembly" }, { "ring", "ring" }, { "same", "same part" } }
 
+-- THE SHARED REGISTRY's rows for this part (scripts/context_registry.lua,
+-- kind "builder_part": its figures, what it holds, what it hangs off, its ring,
+-- a wheel's modes — the same providers the world's menus use). The library is
+-- spawned when the scene carries none (the standalone builder.ron).
+local lib_t = -10
+local function registry()
+  local r = ref("context_registry")
+  if not r and spawn and (time or 0) - lib_t > 2.0 then
+    lib_t = time or 0
+    pcall(spawn, "ContextLib", vec3(0, 0, 0))
+  end
+  return r
+end
+function sharedEntries(B, uid)
+  local r = registry()
+  local rec = B.partRec(uid)
+  if not (r and rec) then return {} end
+  local list = r.entriesFor({ kind = "builder_part", B = B, uid = uid, rec = rec, label = rec.def and rec.def.label },
+    { ref = ref, actor = { kind = "builder", id = "builder" },
+      toast = function(m) if B.hint then B.hint(m, 2.5) end end, close = function() close() end })
+  return list or {}, r
+end
+local function shared_rows(B, rows)
+  local list, r = sharedEntries(B, st.uid)
+  local h = 0
+  for i, e in ipairs(list) do
+    if e.type == "info" or e.type == "meter" then
+      local v = r.live(e.value)
+      rows[#rows + 1] = { "row", key = "s" .. i, w = "100%", h = 16, gap = 6, pad = 0, align = "center",
+        { "text", key = "l", style = "panel/label", w = 74, h = 16, text = e.label or "", textValign = "center" },
+        { "text", key = "v", style = "panel/cellStrong", w = "grow", h = 16, text = v and tostring(v) or "—",
+          textValign = "center", maxLines = 1, overflow = "ellipsis" } }
+      h = h + 19
+    elseif e.type == "action" or e.type == "toggle" then
+      local ok, why = r.usable(e)
+      rows[#rows + 1] = { "button", key = "s" .. i, style = "panel/row", w = "100%", h = ROW, dir = "row", gap = 6, pad = 4,
+        align = "center", disabled = (not ok) or nil, tooltip = why,
+        onClicked = function()
+          local okp, w2 = r.press(e)
+          if not okp and B.hint then B.hint(w2 or "can't", 2.5) end
+          if not e.keep then close() else st.sig = nil end
+        end,
+        { "text", key = "l", style = "panel/cell", w = "grow", h = ROW - 4, text = e.label, textValign = "center" },
+        e.hint and { "text", key = "h", style = "panel/keys", w = "fit", h = ROW - 4, text = e.hint, textValign = "center" } or nil }
+      h = h + ROW + 3
+    end
+  end
+  if #list > 0 then rows[#rows + 1] = { "box", key = "srule", style = "panel/rule", w = "100%", h = 1 }; h = h + 4 end
+  return h
+end
+
 local function describe(B, L)
   local list, rec = entries(B, st.uid)
   if not rec then return nil end
@@ -100,6 +151,7 @@ local function describe(B, L)
   local n = #(B.selection and B.selection() or {})
   local title = (def.label or rec.id) .. (n > 1 and ("  ×" .. n) or "")
   local rows = {}
+  shared_rows(B, rows)
   local had_ctl = false
   for _, e in ipairs(list) do
     if e.kind == "control" and not had_ctl then

@@ -22,11 +22,12 @@ local R = env
 
 -- ── the old builder's numbers ───────────────────────────────────────────────
 -- WP3 adds three drawn frame parts (beamP, panelP, brace) to FRAME, each
--- with a catalogue line: 49 + 3 parts, 26 + 3 lines, FRAME 13 + 3.
-local OLD_REG, OLD_DESC = 52, 29
+-- with a catalogue line: 49 + 3 parts, 26 + 3 lines, FRAME 13 + 3. The
+-- context-menu work adds the Stowage Locker to PAYLOAD (+1 part, +1 line).
+local OLD_REG, OLD_DESC = 53, 30
 local OLD_SECTIONS = {
   { "COMMAND", 5 }, { "ELECTRICAL", 7 }, { "PROPULSION", 7 }, { "STRUCTURE", 4 },
-  { "FRAME", 16 }, { "PAYLOAD", 4 }, { "ROVER", 4 }, { "ROBOTICS", 5 },
+  { "FRAME", 16 }, { "PAYLOAD", 5 }, { "ROVER", 4 }, { "ROBOTICS", 5 },
 }
 
 local n = 0

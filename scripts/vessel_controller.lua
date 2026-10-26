@@ -728,6 +728,13 @@ local function load_bp(override)
   eid_uid = {}              -- clear the part-entity → uid cache
   part_hp = {}
   for _, d in pairs(bp.parts) do part_hp[d.uid] = 1.0 end
+  -- ...except what a restored craft's records say: its parts' WEAR rides in
+  -- their state (`st.hp`, written by fleetParts), so a dented tank is still
+  -- dented after a reload and a repair kit still has something to mend.
+  for _, d in pairs(bp.parts) do
+    local h = type(d.st) == "table" and tonumber(d.st.hp) or nil
+    if h and h > 0 and h < 1 then part_hp[d.uid] = h end
+  end
   integ.gone, integ.box, integ.strain = {}, {}, {}
   integ.gen = integ.gen + 1
   -- (elecRescan above already sorted THIS part set — the same records, none
@@ -1236,7 +1243,7 @@ function trueMass()
   for u, d in pairs(bp_by_uid or {}) do
     if not integ.gone[u] and (part_hp[u] or 1) > 0 then dry = dry + (d.mass or 0) end
   end
-  dry = dry + (holdT or 0)
+  dry = dry + (holdT or 0) + lockerT()
   return dry, dry + fuelMass()
 end
 
@@ -1525,7 +1532,7 @@ function massSync(node, info)
   for _, e in ipairs(ms.list) do
     local d = e.d
     local m = math.max(0.001, (d.mass or 0) + (fuel_t[e.uid] or 0.0)
-      + (((d.cargo or 0) > 0) and share or 0.0))
+      + (((d.cargo or 0) > 0) and share or 0.0) + (LOCKER_T[e.uid] or 0.0))
     -- a powered wheel whose tyre is out: the tyre body carries its share
     if R2.live and (d.wheel or "") ~= "" then m = math.max(0.001, m * (1 - TYRE_SHARE)) end
     local was = ms.last[e.eid]
@@ -2943,7 +2950,15 @@ function fleetParts()
   if destroyed then return nil end
   local out = {}
   for u, d in pairs(bp_by_uid) do
-    if not integ.gone[u] and (part_hp[u] or 1) > 0 then out[#out + 1] = d end
+    if not integ.gone[u] and (part_hp[u] or 1) > 0 then
+      out[#out + 1] = d
+      -- its wear rides in its state (packRecord keeps numbers), so a reload
+      -- brings the dents back (load_bp) — nil when it is whole
+      if type(d.st) == "table" then
+        local h = part_hp[u] or 1
+        d.st.hp = (h < 0.999) and math.floor(h * 1000 + 0.5) / 1000 or nil
+      end
+    end
   end
   table.sort(out, function(a, b) return (a.uid or 0) < (b.uid or 0) end)
   local E = elib()
@@ -3960,6 +3975,17 @@ function recoverCraft()
     local n = inv.transferAll(holdId, "base")
     if n > 0 then log(string.format("  cargo: %d unit(s) into the warehouse", n)) end
   end
+  -- ...and so do the stowage lockers (materials to the warehouse; gear goes
+  -- back on the crew's racks, the warehouse's gear bag)
+  if inv then
+    for _, l in ipairs(LOCKERS) do
+      inv.transferAll(l.cid, "base")
+      for _, g in ipairs(inv.gearItems and inv.gearItems(l.cid) or {}) do
+        local n = inv.removeGear(l.cid, g.id, g.n)
+        if n > 0 then inv.addGear("base", g.id, n) end
+      end
+    end
+  end
   save.set("mission.recovered", true)
   if crewAboard then
     local i2 = assembly.info(node)
@@ -4011,6 +4037,7 @@ function holdRegister(node)
   local inv = findScript("inventory")
   if inv and holdId then inv.setCap(holdId, holdCap) end
   holdT = holdMass() * CARGO_T_PER_KG -- a hold that comes back loaded weighs it
+  lockerRegister()
 end
 
 function holdMass()
@@ -4023,7 +4050,145 @@ end
 -- bays take their share on the next tick (massSync).
 function holdApplyMass(node)
   holdT = holdMass() * CARGO_T_PER_KG
-  return #hold_parts > 0
+  lockerApplyMass()
+  return #hold_parts > 0 or #LOCKERS > 0
+end
+
+-- ── STOWAGE LOCKERS (parts with `store` kg) ───────────────────────────────
+-- Unlike the pooled hold, every locker is ITS OWN container ("locker:<n>"):
+-- the context menu (scripts/context_providers.lua) opens one part and moves
+-- things between it and the crew's pack. The number is the part's own, kept
+-- in its state (`st.locker`), so it rides the fleet record, a docking and a
+-- reload with the part, and the contents (inventory's save keys) with it.
+-- What a locker holds is real mass ON THAT PART (LOCKER_T, read by massSync).
+LOCKERS = {}       -- { { uid, cid, cap } }
+LOCKER_T = {}      -- uid → tonnes in that locker
+LOCKER_STORE = { locker = 80 }  -- kg by part id, for records saved before `store`
+function lockerRegister()
+  LOCKERS, LOCKER_T = {}, {}
+  local inv = findScript("inventory")
+  local E = elib()
+  for u, d in pairs(bp_by_uid) do
+    local cap = tonumber(d.store) or 0
+    if cap <= 0 then cap = LOCKER_STORE[d.id or ""] or 0 end
+    if cap > 0 and not integ.gone[u] then
+      local st = (E and E.stateOf) and E.stateOf(d) or d.st
+      if type(st) ~= "table" then st = {}; d.st = st end
+      if not st.locker then
+        local n = (save.get("locker.seq") or 0) + 1
+        save.set("locker.seq", n)
+        st.locker = n
+      end
+      local cid = "locker:" .. tostring(st.locker)
+      if inv then inv.setCap(cid, cap) end
+      LOCKERS[#LOCKERS + 1] = { uid = u, cid = cid, cap = cap }
+    end
+  end
+  table.sort(LOCKERS, function(a, b) return a.uid < b.uid end)
+  lockerApplyMass()
+end
+function lockerApplyMass()
+  local inv = findScript("inventory")
+  for _, l in ipairs(LOCKERS) do
+    LOCKER_T[l.uid] = inv and inv.mass(l.cid) * CARGO_T_PER_KG or 0
+  end
+end
+function lockerT()
+  local t = 0
+  for u, m in pairs(LOCKER_T) do
+    if not integ.gone[u] and (part_hp[u] or 1) > 0 then t = t + m end
+  end
+  return t
+end
+-- The locker on part `uid` → container id, capacity (kg); nil for any other part.
+function lockerOf(uid)
+  for _, l in ipairs(LOCKERS) do
+    if l.uid == uid and not integ.gone[uid] then return l.cid, l.cap end
+  end
+  return nil
+end
+
+-- ── PART SERVICE (the context menu's view of one part) ─────────────────────
+-- Read-only questions and the few changes the menu may make, so it never
+-- reaches into the damage model's or the tanks' own tables.
+
+-- The blueprint record of a part still aboard and whole (nil otherwise).
+function partRec(uid)
+  if uid and aboard(uid) then return bp_by_uid[uid] end
+  return nil
+end
+-- Its health: 1 pristine … 0 broken (nil when it isn't aboard).
+function partHp(uid)
+  if not (uid and bp_by_uid[uid]) or integ.gone[uid] then return nil end
+  return part_hp[uid] or 1.0
+end
+-- The blueprint uid behind a part's live node (a ray's hit.node).
+function uidOfNode(c)
+  if not (c and c.valid ~= false) then return nil end
+  return uid_of_node(c)
+end
+-- Every part that is worn (0 < hp < 1): { { uid, hp } } — for probes and HUDs.
+function damagedParts()
+  local out = {}
+  for u, h in pairs(part_hp) do
+    if h > 0 and h < 0.999 and bp_by_uid[u] and not integ.gone[u] then out[#out + 1] = { uid = u, hp = h } end
+  end
+  table.sort(out, function(a, b) return a.uid < b.uid end)
+  return out
+end
+-- MEND a part: its health up to `to` (default whole). A part that has BROKEN
+-- (hp 0) is wreckage that has left the craft, and nothing mends that — the
+-- model's rule, not the menu's. Repaints the wear. Returns the new hp, or
+-- nil and why.
+function repairPart(uid, to)
+  local h = partHp(uid)
+  if not h then return nil, "that part isn't on this craft" end
+  if h <= 0 then return nil, "it is wrecked — beyond a field repair" end
+  local want = math.max(h, math.min(1.0, to or 1.0))
+  part_hp[uid] = want
+  local node = dock.node
+  if node and node.valid then set_part_damage(child_of_uid(node, uid), want) end
+  return want
+end
+-- Probes and cheats: wear a part to `hp` (never below 0.05: this is not a
+-- way to break one — the damage model does that).
+function wearPart(uid, hp)
+  if not partHp(uid) then return nil end
+  part_hp[uid] = math.max(0.05, math.min(1.0, hp or 0.5))
+  local node = dock.node
+  if node and node.valid then set_part_damage(child_of_uid(node, uid), part_hp[uid]) end
+  return part_hp[uid]
+end
+-- Each tank aboard: { { uid, left, cap, t (tonnes held), stage order } } in
+-- the order the engines draw them (the stage that leaves first, first).
+function tankList()
+  local out = {}
+  for i, t in ipairs(tanks) do
+    if t.uid and aboard(t.uid) then
+      out[#out + 1] = { uid = t.uid, left = t.left or 0, cap = t.fuel or 0, t = (t.left or 0) * (t.ft or 0),
+                        order = i, branch = t.branch and true or false }
+    end
+  end
+  return out
+end
+-- PUMP up to `units` of propellant from tank part `from` to tank part `to`:
+-- what fits in `to`, never more than `from` holds. The pool, the tanks'
+-- masses (massSync) and the staging's Δv follow on the next tick. → moved.
+function tankTransfer(from, to, units)
+  if from == to then return 0 end
+  local a, b = nil, nil
+  for _, t in ipairs(tanks) do
+    if t.uid == from and not a then a = t end
+    if t.uid == to and not b then b = t end
+  end
+  if not (a and b and aboard(from) and aboard(to)) then return 0 end
+  local room = math.max(0, (b.fuel or 0) - (b.left or 0))
+  local move = math.max(0, math.min(units or math.huge, a.left or 0, room))
+  if move <= 0 then return 0 end
+  a.left = (a.left or 0) - move
+  b.left = (b.left or 0) + move
+  fuelSync()
+  return move
 end
 
 -- What the HUD / panels say about the hold. nil when the craft has no bays —

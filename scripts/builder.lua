@@ -3948,6 +3948,9 @@ local function make_blueprint()
       -- Hold capacity in kg (0 = not a cargo bay). The vessel sums these into
       -- one pooled hold when it spawns.
       cargo = d.cargo or 0,
+      -- A stowage locker's own capacity in kg (0 = none): its own container in
+      -- flight (vessel_controller lockers).
+      store = d.store or 0,
       -- ROUND TWO: a rover body's FRONT, a powered wheel's size, a fairing's
       -- base radius (and the shell it grew, see fairingShell), a robotic
       -- joint's kind, a claw, and a mirror pair's plane.
