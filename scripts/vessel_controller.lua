@@ -4159,6 +4159,228 @@ function wearPart(uid, hp)
   if node and node.valid then set_part_damage(child_of_uid(node, uid), part_hp[uid]) end
   return part_hp[uid]
 end
+-- A part's own state field (`st.<k>`, which rides the fleet record, docking
+-- and revert): read it, or with a value write it (`false` clears). The crew's
+-- jobs keep their progress here (st.rprog). nil when the part isn't aboard.
+function partSt(uid, k, v, write)
+  local d = uid and bp_by_uid[uid]
+  if not d or integ.gone[uid] then return nil end
+  if write then
+    d.st = type(d.st) == "table" and d.st or {}
+    if v == false then d.st[k] = nil else d.st[k] = v end
+  end
+  return type(d.st) == "table" and d.st[k] or nil
+end
+
+-- ── PART FRAMES, NOW (the crew's repair lock, docs/crew-and-items.md §6.3) ─
+-- Where a part is THIS tick, for a body a script holds against it. The craft's
+-- axes come from `assembly.info` (this tick's, where the node's are a frame's)
+-- and the origin from `info.origin` (clear of the rails carry the node lags
+-- by: the same compensation the seat uses, see base_of / board_dist). The
+-- frame's origin is the part's blueprint point and its axes are the craft's,
+-- so a point stored in it rides the part however the craft turns or the
+-- planet moves. The same frame serves a point picked off the screen: measured
+-- on 0.117.0-rc27 in lateUpdate, node:toWorld (the drawn pose) agrees with
+-- this to the millimetre, while node.x/basis(node) read a rails carry behind
+-- (3.4 m in orbit). `rendered` is accepted for callers that pass it and
+-- changes nothing. → a table, or nil when the part or the craft is gone.
+function partFrameNow(uid, rendered)
+  rendered = false
+  local d = uid and bp_by_uid[uid]
+  if not d or integ.gone[uid] or (part_hp[uid] or 1) <= 0 then return nil end
+  local node = dock.node
+  if destroyed or not (node and node.valid) then return nil end
+  local info = assembly.info(node)
+  local R, U, Z
+  if info and info.right and info.up and not rendered then
+    R, U = info.right, info.up
+    -- Z = R × U (the frame is right-handed): no sign convention to get wrong
+    Z = vec3(R.y * U.z - R.z * U.y, R.z * U.x - R.x * U.z, R.x * U.y - R.y * U.x)
+  else
+    R, U, Z = basis(node)
+  end
+  local bx, by, bz
+  if rendered or not info then bx, by, bz = node.x, node.y, node.z else bx, by, bz = base_of(node, info) end
+  local F = {
+    ox = bx + R.x * d.x + U.x * d.y + Z.x * d.z,
+    oy = by + R.y * d.x + U.y * d.y + Z.y * d.z,
+    oz = bz + R.z * d.x + U.z * d.y + Z.z * d.z,
+    rx = R.x, ry = R.y, rz = R.z, ux = U.x, uy = U.y, uz = U.z, zx = Z.x, zy = Z.y, zz = Z.z,
+    vx = 0, vy = 0, vz = 0, wx = 0, wy = 0, wz = 0, cx = bx, cy = by, cz = bz,
+  }
+  if info then
+    F.vx, F.vy, F.vz = info.vel.x, info.vel.y, info.vel.z
+    if info.angVel then F.wx, F.wy, F.wz = info.angVel.x, info.angVel.y, info.angVel.z end
+    if info.com then
+      F.cx, F.cy, F.cz = info.com.x, info.com.y, info.com.z
+      -- (com is in the same frame as the origin we used)
+      if rendered then F.cx, F.cy, F.cz = F.cx + node.x - info.origin.x, F.cy + node.y - info.origin.y, F.cz + node.z - info.origin.z end
+    end
+  end
+  return F
+end
+
+-- How far the craft's PHYSICS frame (info.origin, this tick) is ahead of
+-- its NODE (the pose last written back): the rails carry the node lags by
+-- (board_dist's note). Positions read off any node in the same pass lag by
+-- the same amount, so `node.x + lag` is that node in the physics frame, and a
+-- physics-frame point minus `lag` is where to WRITE a node for it to be
+-- there. → lx, ly, lz (zeros without a compound)
+function nodeLag()
+  local node = dock.node
+  if not (node and node.valid) then return 0, 0, 0 end
+  local info = assembly.info(node)
+  if not (info and info.origin) then return 0, 0, 0 end
+  return info.origin.x - node.x, info.origin.y - node.y, info.origin.z - node.z
+end
+
+-- A point in part `uid`'s frame → where it is in the world this tick, and how
+-- fast it is moving there (info.vel + angVel × (p − com)).
+-- → wx, wy, wz, vx, vy, vz (nil when the part is gone)
+function partPointNow(uid, lx, ly, lz, rendered)
+  local F = partFrameNow(uid, rendered)
+  if not F then return nil end
+  local px = F.ox + F.rx * lx + F.ux * ly + F.zx * lz
+  local py = F.oy + F.ry * lx + F.uy * ly + F.zy * lz
+  local pz = F.oz + F.rz * lx + F.uz * ly + F.zz * lz
+  local qx, qy, qz = px - F.cx, py - F.cy, pz - F.cz
+  return px, py, pz,
+    F.vx + F.wy * qz - F.wz * qy,
+    F.vy + F.wz * qx - F.wx * qz,
+    F.vz + F.wx * qy - F.wy * qx
+end
+
+-- A world point (and optionally a world direction) → part `uid`'s frame.
+-- `rendered` as for partFrameNow: a ray hit from this frame's picture.
+function partLocalNow(uid, wx, wy, wz, rendered, dx, dy, dz)
+  local F = partFrameNow(uid, rendered)
+  if not F then return nil end
+  local qx, qy, qz = wx - F.ox, wy - F.oy, wz - F.oz
+  local lx = qx * F.rx + qy * F.ry + qz * F.rz
+  local ly = qx * F.ux + qy * F.uy + qz * F.uz
+  local lz = qx * F.zx + qy * F.zy + qz * F.zz
+  if not dx then return lx, ly, lz end
+  return lx, ly, lz,
+    dx * F.rx + dy * F.ry + dz * F.rz, dx * F.ux + dy * F.uy + dz * F.uz, dx * F.zx + dy * F.zy + dz * F.zz
+end
+
+-- ── EVA (docs/crew-and-items.md §3.3, §3.5) ────────────────────────────────
+-- The craft's side of "may the crew step out": landed or splashed and still,
+-- or off the ground with the engines quiet. `space`: nothing under the craft
+-- for 50 m (an RCS Pack is then the only way to steer).
+-- → { surface, space, speed, throttle, accel } or nil
+function evaState()
+  local node = dock.node
+  if destroyed or not (node and node.valid) then return nil end
+  local info = assembly.info(node)
+  if not info then return nil end
+  local v = info.vel
+  local speed = math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z)
+  local surface = info.grounded == true or info.anchored == true or R2.onWheels == true or WATER.splashed == true
+  local space_ = false
+  if not surface then
+    local px, py, pz = pod_world(node, info)
+    local d0 = space.dominant(px, py, pz)
+    local b0 = d0 and space.body(d0)
+    if b0 then
+      local ux, uy, uz = norm(px - b0.x, py - b0.y, pz - b0.z)
+      local reach = hullReach() + 0.5
+      local hit = raycast and raycast(px - ux * reach, py - uy * reach, pz - uz * reach, -ux, -uy, -uz, 50.0) or nil
+      space_ = hit == nil
+    end
+  end
+  return { surface = surface, space = space_, speed = speed, throttle = throttle or 0, accel = 0 }
+end
+
+-- STEP OUT, now (the checks are crew.evaCheck's): out at the clear spot
+-- beside the crew position, moving with the craft AT that spot
+-- (vel + angVel × r), so in space they start at rest relative to the craft
+-- and float beside it. Warp drops to 1×. Global: crew.eva and F call it.
+-- Asked between ticks (a confirm's click, crew.eva from a menu) it lands on
+-- the next tick: the crew rides the seat as a KINEMATIC body, and one moved
+-- outside fixedUpdate on a moving world stands a rails carry behind where it
+-- was put — inside the hull, which then throws it off at hundreds of m/s.
+function evaNow(in_tick)
+  local node = dock.node
+  if destroyed or not (node and node.valid) or not crewAboard then return false end
+  if not in_tick then
+    dock.evaPending = true
+    return true
+  end
+  local info = assembly.info(node)
+  local px, py, pz = pod_world(node, info)
+  local ex, ey, ez = exitSpot(node, info, px, py, pz)
+  local vx, vy, vz = 0, 0, 0
+  if info then
+    vx, vy, vz = info.vel.x, info.vel.y, info.vel.z
+    if info.angVel and info.com then
+      local w, c = info.angVel, info.com
+      local qx, qy, qz = ex - c.x, ey - c.y, ez - c.z
+      vx, vy, vz = vx + w.y * qz - w.z * qy, vy + w.z * qx - w.x * qz, vz + w.x * qy - w.y * qx
+    end
+  end
+  if space.warp and space.warp() > 1.001 then space.warp(1) end
+  standDown(node, ex, ey, ez, vx, vy, vz)
+  local c = findScript("crew")
+  if c and c.noteAfoot then pcall(c.noteAfoot, c.activeId()) end
+  local ep = findScript("eva_pack")
+  if ep and ep.evaStarted then pcall(ep.evaStarted, node) end
+  return true
+end
+
+-- F while flying: ask crew.lua whether the crew may go (refused with the
+-- reason; no RCS Pack in space asks first through eva_pack's confirm), then
+-- go. Without the crew library: today's F.
+function evaPress(node, info)
+  local c = findScript("crew")
+  if not (c and c.evaCheck) then return evaNow(true) end
+  local id = c.activeId()
+  local ok, why, warn = c.evaCheck(id)
+  if not ok then
+    log("EVA refused: " .. tostring(why))
+    local fx = findScript("sfx")
+    if fx and fx.caption then fx.caption("can't step out: " .. tostring(why)) end
+    return false
+  end
+  if warn then
+    local ep = findScript("eva_pack")
+    if ep and ep.askEva then ep.askEva(id, warn) return false end
+  end
+  return evaNow(true)
+end
+
+-- Who is aboard, and who is at the controls (§3.2, §3.3). One astronaut
+-- until slice 2's slots: the avatar while crewAboard.
+function crewIds()
+  local c = crewAboard and findScript("crew")
+  local id = c and c.activeId and c.activeId()
+  return id and { id } or {}
+end
+function commander()
+  return crewIds()[1]
+end
+
+-- Rails warp waits while anyone is on EVA in space (§5.7).
+function evaBlocksWarp()
+  local c = findScript("crew")
+  if not (c and c.onEvaInSpace) then return false end
+  local ok, on = pcall(c.onEvaInSpace)
+  return ok and on == true
+end
+
+-- The crew has just climbed in: the RCS Pack refills from this craft's
+-- propellant, Oxygen Tanks fill from its air, the record says aboard.
+function crewBoarded(node)
+  local c = findScript("crew")
+  local id = c and c.activeId and c.activeId()
+  if not id then return end
+  local ep = findScript("eva_pack")
+  if ep and ep.refill then pcall(ep.refill, id, dock.node) end
+  local I = findScript("items")
+  if I and I.refillO2 and c.packOf then pcall(I.refillO2, c.packOf(id)) end
+  if c.noteAboard then pcall(c.noteAboard, id, craftName) end
+end
+
 -- Each tank aboard: { { uid, left, cap, t (tonnes held), stage order } } in
 -- the order the engines draw them (the stage that leaves first, first).
 function tankList()
@@ -5020,9 +5242,19 @@ end
 -- it (`except_id` = the asking craft's node id; climbing back into the craft
 -- you just left is fine). Global: no upvalue spent in fixedUpdate, and a
 -- probe or the HUD can ask it too.
+-- (a global: the file's main chunk is at Lua's 200-local ceiling)
+CREWLIB = { ref = nil, t = -10.0 }
 function crewOnFoot(except_id)
   if not astronaut or not astronaut.valid then astronaut = find("Astronaut") end
   if not astronaut then return false end
+  -- held at a job (crew_task): not free to climb in, and no "F — board" prompt
+  local cl = CREWLIB.ref
+  if not (cl and cl.valid ~= false) and (time or 0) - CREWLIB.t > 2.0 then
+    CREWLIB.t = time or 0
+    cl = findScript("crew")
+    CREWLIB.ref = cl
+  end
+  if cl and cl.valid ~= false and cl.held and cl.held() then return false end
   local now = time or 0.0
   for _, v in ipairs(findScripts("vessel_controller")) do
     if v.crewAboard then return false end
@@ -5043,6 +5275,9 @@ function boardNow(node, info)
   info = info or assembly.info(node)
   if not astronaut or not astronaut.valid then astronaut = find("Astronaut") end
   if not (podCrewed and not crewAboard and astronaut and crewOnFoot(node.id)) then return false end
+  -- Held at a job (a repair): F doesn't pull them off it; cancel does.
+  local cl = findScript("crew")
+  if cl and cl.held and cl.held() then return false end
   -- The crew position NEAREST them: the seat they walked up to, or the pod.
   local d, st = board_dist(node, astronaut, info)
   if d > params.board_range then return false end
@@ -5059,6 +5294,7 @@ function boardNow(node, info)
   -- into a takeoff (a vertical climb's "retrograde" points at the core).
   sas_mode, sas_last = "stability", "stability"
   hud_t = -10.0 -- repaint the HUD immediately
+  crewBoarded(node)
   return true
 end
 
@@ -8968,18 +9204,23 @@ function fixedUpdate(node, dt)
   end
 
   -- ---- board / exit -------------------------------------------------------
+  -- (an EVA asked between ticks: crew.eva, the no-pack confirm)
+  if dock.evaPending then
+    dock.evaPending = nil
+    evaNow(true)
+  end
   if input.pressed("f") and astronaut then
     if piloting and not crewAboard then
       -- Flying a probe from the ground: there is no hatch to step out of.
     elseif piloting then
-      local v = info and info.vel
       -- Out past the hull's widest reach on that side, never inside it: a crew
       -- capsule stepping out INTO a side booster is a body overlapping the
       -- hull, which the engine resolves as a collision (the launch fling).
       -- ...and never into anything else either (exitSpot tries the sides in
       -- turn for one clear of the pad, its clamps, a wall or the hull).
-      local ex, ey, ez = exitSpot(node, info, px, py, pz)
-      standDown(node, ex, ey, ez, v and v.x, v and v.y, v and v.z)
+      -- crew.evaCheck decides whether they may (evaPress; a global, so this
+      -- function spends no upvalue on it).
+      evaPress(node, info)
     else
       boardNow(node, info)
     end
@@ -9120,6 +9361,9 @@ function fixedUpdate(node, dt)
       end
       if throttle > 0.01 then
         log("warp locked: cut throttle first")
+        nxt = warp
+      elseif evaBlocksWarp() then
+        log("warp locked: crew on EVA in space (physics only)")
         nxt = warp
       elseif not alt_ok then
         log("warp locked: too low")

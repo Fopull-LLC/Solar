@@ -1,0 +1,66 @@
+// RCS PACK — the worn cold-gas unit round the suit's backpack
+// (docs/crew-and-items.md §5.7; scripts/eva_pack.lua spawns it under the
+// AstroModel while the pack is carried). The model is in the suit's model
+// space (tools/gen_rcs_pack.py), so it hangs on the Back bone with the
+// helmet's attachment offset.
+[
+    (
+        name: "ItemRcsPack",
+        tags: ["item"],
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Mesh(
+            asset_path: "models/items/rcs_pack.glb",
+        ),
+        object_materials: {
+            "PackShell": (
+                color: (0.9, 0.9, 0.86),
+                texture: Some("textures/parts/metal_albedo.png"),
+                normal_map: Some("textures/parts/metal_normal.png"),
+                normal_strength: 0.6,
+                roughness_map: Some("textures/parts/metal_orm.png"),
+                roughness: 0.8,
+                metallic_map: Some("textures/parts/metal_orm.png"),
+                metallic: 0.1,
+                ao_map: Some("textures/parts/metal_orm.png"),
+                shading: Physical,
+            ),
+            "PackMetal": (
+                color: (0.55, 0.57, 0.6),
+                texture: Some("textures/parts/metal_albedo.png"),
+                normal_map: Some("textures/parts/metal_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/parts/metal_orm.png"),
+                roughness: 0.5,
+                metallic_map: Some("textures/parts/metal_orm.png"),
+                metallic: 0.8,
+                ao_map: Some("textures/parts/metal_orm.png"),
+                shading: Physical,
+            ),
+            "PackHazard": (
+                color: (0.95, 0.7, 0.12),
+                roughness: 0.6,
+                metallic: 0.0,
+                shading: Physical,
+            ),
+            "PackNozzle": (
+                color: (0.1, 0.1, 0.11),
+                roughness: 0.4,
+                metallic: 0.9,
+                shading: Physical,
+            ),
+        },
+        scripts: [],
+        attachment: Some((
+            bone: "Back",
+            offset: (
+                translation: (0.0, -0.4741124, -0.0888791),
+                rotation: (0.9996517, -0.0, 2e-07, -0.0263907),
+                scale: (1.9999999, 1.9999999, 1.9999999),
+            ),
+        )),
+    ),
+]

@@ -19,8 +19,12 @@
 -- scene, and goes when it is emptied.
 --
 --   local sv = findScript("salvage")
---   sv.drop(body, x, y, z [, ignore])   the suit pack's materials into a new crate
---                                       on the bottom under (x,y,z) → id, kg, entry
+--   sv.drop(body, x, y, z [, ignore [, opts]])
+--                                       the suit pack's materials into a new crate
+--                                       on the bottom under (x,y,z) → id, kg, entry;
+--                                       opts.items = true takes the ITEMS too (a
+--                                       death drop: the whole pack), opts.from =
+--                                       the container (default "astro")
 --   sv.list()                           { { id, body, x,y,z (world), kg, n, dist? } }
 --   sv.nearest(x, y, z [, r])           the nearest crate within r m → entry, distance
 --   sv.recover(id)                      as much as fits back into the pack →
@@ -119,19 +123,24 @@ local function seabed(b, x, y, z, ignore)
 end
 
 -- ── drop ────────────────────────────────────────────────────────────────────
--- Move the suit pack's MATERIALS into a new crate on the bottom under the
--- world point (x,y,z) on `bodyName`. Gear (the suit's tools, beacons) stays on
--- the crew — it was never what the water took. Nothing is destroyed: whatever
--- would not move stays in the pack. Returns id, kg, entry — or nil, 0 for an
--- empty pack.
-function drop(bodyName, x, y, z, ignore)
+-- Move a pack's MATERIALS into a new crate on the bottom under the world point
+-- (x,y,z) on `bodyName`. A drowning keeps the gear on the crew — the tools and
+-- beacons were never what the water took — so items come along only when
+-- asked (`opts.items`: a death drop is the whole pack). Nothing is destroyed:
+-- whatever would not move stays in the pack. Returns id, kg, entry — or nil, 0
+-- for an empty pack.
+function drop(bodyName, x, y, z, ignore, opts)
   local inv = ref("inventory")
   local b = bodyName and space.body(bodyName)
   if not (inv and inv.items and b) then return nil, 0 end
-  local items = inv.items("astro")
+  opts = opts or {}
+  local from = opts.from or "astro"
+  local items = inv.items(from)
   local kg = 0
   for _, it in ipairs(items) do kg = kg + (it.kg or 0) end
-  if #items == 0 or kg <= 0 then return nil, 0 end
+  local gear = (opts.items and inv.itemList) and inv.itemList(from) or {}
+  for _, g in ipairs(gear) do kg = kg + (g.kg or 0) end
+  if (#items == 0 and #gear == 0) or kg <= 0 then return nil, 0 end
   all()
   local id = (save.get(SEQ) or 0) + 1
   save.set(SEQ, id)
@@ -139,12 +148,16 @@ function drop(bodyName, x, y, z, ignore)
   if inv.setCap then inv.setCap(cid, kg + 1.0) end
   local moved = 0
   for _, it in ipairs(items) do
-    local n = inv.transfer("astro", cid, it.mat, it.n)
+    local n = inv.transfer(from, cid, it.mat, it.n)
     if n > 0 then moved = moved + (it.kg or 0) * n / math.max(it.n, 1) end
+  end
+  for _, g in ipairs(gear) do
+    local n = inv.moveItem(from, cid, g.id, g.n, { force = true })
+    if n > 0 then moved = moved + (g.kg or 0) * n / math.max(g.n, 1) end
   end
   local gx, gy, gz = seabed(b, x, y, z, ignore)
   local c = { id = id, body = bodyName, x = gx - b.x, y = gy - b.y, z = gz - b.z,
-              sx = x - b.x, sy = y - b.y, sz = z - b.z, kg = moved, n = "Suit pack",
+              sx = x - b.x, sy = y - b.y, sz = z - b.z, kg = moved, n = opts.label or "Suit pack",
               born = time or 0 }
   crates[id] = c
   order[#order + 1] = id
@@ -203,8 +216,14 @@ function recover(id)
     local n = inv.transfer(cid, "astro", it.mat, it.n)
     if n > 0 then moved = moved + (it.kg or 0) * n / math.max(it.n, 1) end
   end
-  local left = inv.mass(cid) - (inv.gearMass and inv.gearMass(cid) or 0)
-  if left <= 1e-6 or inv.isEmpty(cid) then
+  -- the items a death drop carried: what fits (mass and litres) comes back
+  for _, g in ipairs(inv.itemList and inv.itemList(cid) or {}) do
+    local n = inv.moveItem(cid, "astro", g.id, g.n)
+    if n > 0 then moved = moved + (g.kg or 0) * n / math.max(g.n, 1) end
+  end
+  local left = inv.mass(cid)
+  local has_items = inv.itemList and #inv.itemList(cid) > 0
+  if left <= 1e-6 or (inv.isEmpty(cid) and not has_items) then
     forget(id)
     left = 0
   else

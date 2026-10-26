@@ -592,8 +592,11 @@ ITEMS = {
                 deploy = { store = "deployables", kind = "flag", ghost = "FlagGhost", bad = "FlagGhostBad",
                            slope = 0.6, spacing = 2.0, pick = 2.0, secs = 2.5 } },
   rcspack   = { name = "RCS Pack",      kind = "worn",       kg = 22.0, L = 30, cost = 1400, shop = true,
-                worn = { prefab = "ItemRcsPack", bone = "Spine2" },     -- drawn on the back over the PLSS; never in hand
+                worn = { prefab = "ItemRcsPack", bone = "Back" },     -- drawn on the back over the PLSS; never in hand
                 rcs = { thrust = 90, burst = 1.6, prop = 4.0, isp_dv = 30, g_max = 2.0 } },     -- §5.7
+  o2tank    = { name = "Oxygen Tank",   kind = "worn",       kg = 8.0,  L = 5,  cost = 350,  shop = true,
+                worn = { prefab = "ItemO2Tank", bone = "Back" },
+                fill = { cap = 900 } },                                          -- §5.8: +15 min of suit air
 }
 -- later, same shape: sampler, drill, welder, spare parts, food/O2 canisters.
 ```
@@ -821,6 +824,30 @@ hatch should feel like parking, not flying.
 
 **Time warp.** Rails warp is refused while any crew member is on EVA in space (KSP's
 rule). Physics warp up to 4× is allowed.
+
+### 5.8 The Oxygen Tank (longer EVAs and dives)
+
+A worn item like the RCS Pack: 8 kg, 5 L, $350. Carried in a pack it adds **15 minutes**
+of suit air; several stack. It never takes the hand slot, and it goes anywhere items go
+(lockers, holds, the warehouse, crates, the VAB) by the same Take/Put.
+
+- **Per-tank state.** Each tank keeps its own level (`fill`, seconds of air) beside the
+  stack's count: `inv.fill.<cid>` holds one number per tank, and the levels move with
+  the tanks. Empty tanks stay in the pack as items, to be refilled.
+- **Draw order.** The suit breathes from the carried tanks first, the **emptiest tank
+  first** (an open bottle is finished before a full one is opened). Only when every tank
+  is dry does it draw the suit's built-in supply, so the suit's O2 figure and its
+  25% / 10% / 1 MIN alarms (§2.3) keep meaning "the last reserve". Taking a tank out of
+  a locker takes the fullest one.
+- **Under water.** With the helmet ON the crew breathes suit air under water too:
+  tanks, then the suit's supply, then the blackout grace. Held breath (`o2_secs`, the
+  drowning rule of §2.3) applies only bare-headed. So tanks make dives possible.
+- **Refills** where the RCS Pack refills: boarding a craft, a locker's menu ("Refill
+  oxygen tanks"), and the warehouse and the VAB for free (a tank put in `base` is full).
+- **Interface** (items.lua; planet_walker and crew consume it, WS1):
+  `o2Reserve(pack) → seconds, { per tank }`, `drawO2(pack, secs) → drawn` (the caller
+  breathes any shortfall from the suit's own supply), `refillO2(cid) → added`.
+- **Shown** on the crew's context menu (total air and each tank) and in the pack panel.
 
 ## 6. Repair as a task (E)
 

@@ -270,17 +270,20 @@ local function counter_rows(inv, co, mats)
   if counter == "buy" then
     local bal = (co and co.balance) and co.balance() or nil
     for _, g in ipairs(inv and inv.shopList and inv.shopList() or {}) do
-      local room = inv.free("astro") + 1e-6 >= g.kg
+      local fit, room_why = 1, nil
+      if inv.roomForItem then fit, room_why = inv.roomForItem("astro", g.id, 1)
+      elseif inv.free("astro") + 1e-6 < g.kg then fit = 0 end
+      local room = fit >= 1
       local cash = not bal or bal >= g.cost
-      local why = (not cash and "not enough money") or (not room and "no room in the pack") or nil
+      local why = (not cash and "not enough money") or (not room and (room_why or "no room in the pack")) or nil
       out[#out + 1] = { "button", key = "buy_" .. g.id, style = "panel/row", w = "100%", h = 34,
         dir = "row", gap = 10, align = "center", disabled = why and true or nil, opacity = why and 0.55 or nil,
         tooltip = g.about,
         { "text", key = "name", style = "panel/cell", w = "grow", h = "fit", text = g.name },
         { "text", key = "have", style = "panel/cellMuted", w = "fit", h = "fit",
           text = why or string.format("%d carried", inv.gearCount("astro", g.id)) },
-        { "text", key = "kg", style = "panel/cell", w = 56, h = "fit", textAlign = "end",
-          text = string.format("%.0f kg", g.kg) },
+        { "text", key = "kg", style = "panel/cell", w = 92, h = "fit", textAlign = "end",
+          text = g.L and string.format("%.0f kg · %.0f L", g.kg, g.L) or string.format("%.0f kg", g.kg) },
         { "text", key = "pay", style = "panel/cellStrong", w = 64, h = "fit", textAlign = "end", text = money(g.cost) },
         { "text", key = "go", style = "panel/cellMuted", w = 30, h = "fit", textAlign = "end", text = "buy" },
         onClicked = function() buyGear(g.id) end }
@@ -322,7 +325,7 @@ local function describe(astro)
     { "row", key = "head", w = "100%", h = "fit", gap = 10, pad = 0, align = "center",
       { "text", key = "title", style = "panel/heading", w = "grow", h = "fit", text = "Inventory" },
       { "text", key = "mass", style = "panel/cellMuted", w = "fit", h = "fit",
-        text = "suit pack  " .. (inv and inv.line("astro") or "") } },
+        text = "suit pack  " .. (inv and (inv.lineFull or inv.line)("astro") or "") } },
   }
   -- How full, as a shape: the bar goes amber in the last 15 %.
   if inv and inv.cap then
@@ -366,20 +369,37 @@ local function describe(astro)
   rows[#rows + 1] = { "col", key = "stacks", w = "100%", h = "fit", gap = 4, pad = 0,
     items = items, function(entry) return stack_row(entry, mats, co) end }
 
-  -- GEAR: what the crew carries to use, not to sell — the tool belt's slots.
+  -- GEAR: what the crew carries to use, not to sell — the belt's slots, and
+  -- what is worn (the RCS Pack, Oxygen Tanks: carried is enough).
   local gear = (inv and inv.gearItems) and inv.gearItems("astro") or {}
   if #gear > 0 then
-    rows[#rows + 1] = { "text", key = "gearH", style = "panel/label", w = "100%", h = "fit", text = "GEAR  ·  ON THE TOOL BELT" }
+    local vol = (inv.volume and inv.volCap) and string.format("  ·  %.0f / %.0f L", inv.volume("astro"), inv.volCap("astro")) or ""
+    rows[#rows + 1] = { "text", key = "gearH", style = "panel/label", w = "100%", h = "fit", text = "GEAR  ·  ON THE BELT OR WORN" .. vol }
     for _, g in ipairs(gear) do
       local about = inv.GEAR[g.id] and inv.GEAR[g.id].about or ""
+      local what = g.kind == "worn" and "worn" or (g.tool and "tool" or "")
       rows[#rows + 1] = { "row", key = "gear_" .. g.id, style = "panel/row", w = "100%", h = 32,
         dir = "row", gap = 10, align = "center",
         { "text", key = "n", style = "panel/cell", w = 34, h = "fit", textAlign = "end",
           text = g.tool and "" or string.format("%d ×", g.n) },
         { "text", key = "name", style = "panel/cell", w = "grow", h = "fit", maxLines = 1, overflow = "ellipsis",
           text = g.name .. "  ·  " .. about },
-        { "text", key = "kg", style = "panel/cell", w = 64, h = "fit", textAlign = "end",
-          text = g.tool and "tool" or string.format("%.1f kg", g.kg) } }
+        { "text", key = "w", style = "panel/cellMuted", w = 40, h = "fit", textAlign = "end", text = what },
+        { "text", key = "kg", style = "panel/cell", w = 92, h = "fit", textAlign = "end",
+          text = g.L and string.format("%.1f kg · %.0f L", g.kg, g.L) or string.format("%.1f kg", g.kg) } }
+      -- each Oxygen Tank's air, fullest first
+      if g.fills and g.fillCap then
+        local lv = {}
+        for i = #g.fills, 1, -1 do
+          local f = g.fills[i]
+          lv[#lv + 1] = f <= 0 and "empty" or string.format("%.0f min", f / 60)
+        end
+        rows[#rows + 1] = { "row", key = "fill_" .. g.id, w = "100%", h = 22, gap = 10, pad = 0, align = "center",
+          { "box", key = "p", w = 34, h = 1 },
+          { "text", key = "t", style = "panel/cellMuted", w = "grow", h = "fit", maxLines = 1, overflow = "ellipsis",
+            text = string.format("air  ·  %s  ·  %.0f of %.0f min  ·  refill aboard, at a locker or at the base",
+              table.concat(lv, " · "), (g.fill or 0) / 60, #g.fills * g.fillCap / 60) } }
+      end
     end
   end
 

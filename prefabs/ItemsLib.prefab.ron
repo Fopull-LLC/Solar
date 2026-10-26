@@ -1,0 +1,28 @@
+// ITEMS LIBRARY — scripts/items.lua (the item registry: mass, bulk, grips,
+// deploy rules) and scripts/item_hand.lua (what the crew member on foot holds
+// in the hand: the belt's non-tool items, deploy mode, the repair work).
+// Spawned by inventory.lua when the scene carries no node running "items";
+// reached with findScript("items") / findScript("item_hand").
+[
+    (
+        name: "ItemsLib",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [
+            (
+                kind: "items",
+                enabled: true,
+                params: [],
+            ),
+            (
+                kind: "item_hand",
+                enabled: true,
+                params: [],
+            ),
+        ],
+    ),
+]

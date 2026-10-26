@@ -192,13 +192,16 @@ end
 do
   local W = world("pad", { pad = "deck", sited = true, padNow = true })
   local VS = W.VS
-  check(VS.SITE_WAIT == 30.0 and VS.SITE_WAIT_BASE == 90.0, "the waits are 30 s, and 90 s while the base is still going up")
+  check(VS.SITE_WAIT == 30.0 and VS.SITE_WAIT_BASE == 180.0, "the waits are 30 s, and 180 s while the base is still going up")
   check(VS.siteGate(0, true, false) == "go", "a ready site goes")
   check(VS.siteGate(100, true, true) == "go", "a ready site goes however long it took")
   check(VS.siteGate(29.9, false, false) == "wait", "a site not there yet waits")
   check(VS.siteGate(30.0, false, false) == "refuse", "...and is called off after SITE_WAIT")
   check(VS.siteGate(60, false, true) == "wait", "while the base has not put its pad down it waits longer")
-  check(VS.siteGate(90, false, true) == "refuse", "...but not for ever")
+  check(VS.siteGate(179, false, true) == "wait", "...a new save's base grading for minutes is waited for")
+  check(VS.siteGate(180, false, true) == "refuse", "...but not for ever")
+  check(VS.siteGate(100, false, false, 10) == "wait", "the base just finished: SITE_WAIT counts from then, not from the first look")
+  check(VS.siteGate(100, false, false, 30) == "refuse", "...and then it is called off")
 end
 
 -- ── 2. the pad is down: the launch goes at once ──────────────────────────────
@@ -248,15 +251,60 @@ do
   check(W.vessels() == 0, "and nothing turns up later")
 end
 
--- ── 5. the base never puts the pad down: 90 s, then called off ──────────────
+-- ── 5. the base never puts the pad down: 180 s, then called off ─────────────
 do
   local W = world("pad", { pad = "deck", sited = false })
   W.VS.start(W.SP)
-  W.run(80.0)
-  check(W.VS.launchState() == "waiting", "the base still going up: waiting at 80 s")
+  W.run(170.0)
+  check(W.VS.launchState() == "waiting", "the base still going up: waiting at 170 s")
   W.run(12.0)
   check(W.VS.launchState() == nil and W.vessels() == 0 and W.store["shipyard.spent"] == 0,
     "...called off by SITE_WAIT_BASE, refunded")
+end
+
+-- ── 5b. a NEW save: the base sited but still grading its ground for two
+-- minutes, the runway off its site until the grade lands — the first launch
+-- waits it out and goes; it is never called off ───────────────────────────
+do
+  local w = { pad = "none", sited = true, ready = true }
+  local W = world("runway", w)
+  local grading = true
+  W.bf.grading = function() return grading end
+  local real = W.env.raycast
+  -- the ground 4.9 m under the site until the grade is done
+  W.env.raycast = function(x, y, z, dx, dy, dz, max, opt)
+    local h = real(x, y, z, dx, dy, dz, max, opt)
+    if h and grading and h.distance then h = { distance = h.distance + 4.9, node = h.node, x = h.x, y = h.y, z = h.z } end
+    return h
+  end
+  W.VS.start(W.SP)
+  W.run(120.0)
+  check(W.vessels() == 0 and W.VS.launchState() == "waiting", "grading for 120 s: the first launch is still waiting, not refused")
+  grading = false
+  W.tick()
+  check(W.vessels() == 1, "the grade lands: the craft rolls out")
+  check(W.store["shipyard.spent"] == 800, "...and nothing was refunded")
+end
+
+-- ── 5c. the grade done but the site still wrong: SITE_WAIT from then ───────
+do
+  local w = { pad = "none", sited = true, ready = true }
+  local W = world("runway", w)
+  local grading = true
+  W.bf.grading = function() return grading end
+  local real = W.env.raycast
+  W.env.raycast = function(x, y, z, dx, dy, dz, max, opt)
+    local h = real(x, y, z, dx, dy, dz, max, opt)
+    if h and h.distance then h = { distance = h.distance + 4.9, node = h.node, x = h.x, y = h.y, z = h.z } end
+    return h
+  end
+  W.VS.start(W.SP)
+  W.run(100.0)
+  grading = false
+  W.run(20.0)
+  check(W.VS.launchState() == "waiting", "20 s after the grade: still waiting (SITE_WAIT counts from the grade)")
+  W.run(12.0)
+  check(W.VS.launchState() == nil and W.vessels() == 0, "...then called off, nothing built over the wrong ground")
 end
 
 -- ── 6. only part of the pad answers ─────────────────────────────────────────

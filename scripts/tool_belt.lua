@@ -47,8 +47,10 @@
 --                  hold E: CUT — a thin white-hot cutting beam with a short
 --                  reach that saws through the plants it crosses (trees come
 --                  down) and never touches the ground. See THE CUT.
---   RELAY BEACON   consumable. LMB plants one where it can stand; Q picks
---                  a planted one back up. Bought at the depot's BUY counter.
+--   EVERYTHING ELSE in hand (a Repair Kit, a Relay Beacon, a flag) is
+--                  scripts/item_hand.lua's: it owns the hand and the belt's
+--                  keys (1–9, H for empty hands), deploy mode and the repair
+--                  work; this script follows `item_hand.held()`.
 --
 --   TAB / I  inventory (and, at the Commerce Depot, the buy and sell counters)
 --
@@ -225,7 +227,7 @@ TOOLDEF = {
   laser   = { label = "Terrain Laser", prefab = "ToolLaser", fp_prefab = "ToolLaserFP",
               hint = "hold LMB to dig  ·  Q switches DIG / FILL  ·  hold E: cut plants" },
   beacon  = { label = "Relay Beacon", consumable = true,
-              hint = "LMB plant a relay beacon  ·  Q pick one up" },
+              hint = "LMB set it down where the ghost is teal  ·  right-click a planted one → Pick up" },
 }
 
 -- Where the hands hold each model and where its beam leaves, relative to the
@@ -413,6 +415,11 @@ local OLD_SLOT = { "laser", "gravgun", "laser", "beacon" }
 
 -- The belt as it stands: { { id, label, n, consumable }, ... } in TOOL_ORDER.
 function belt()
+  -- THE ITEMS' BELT (scripts/item_hand.lua → items.belt): every holdable item
+  -- in the pack, tools first. The hand is item_hand's; this script draws and
+  -- fires the two tools and follows what it says is in hand.
+  local H = ref("item_hand")
+  if H and H.belt then return H.belt() end
   local inv = ref("inventory")
   local out = {}
   for _, id in ipairs(TOOL_ORDER) do
@@ -425,8 +432,18 @@ end
 
 local equipped = nil   -- the equipped gear id
 
+-- The item in hand: item_hand's (nil = empty hands), else the old belt's.
 function toolId()
+  local H = ref("item_hand")
+  if H and H.held then return H.held() end
   return equipped or "gravgun"
+end
+-- §5.4's names for it.
+function held() return toolId() end
+function hold(id)
+  local H = ref("item_hand")
+  if H and H.hold then return H.hold(id) end
+  return false, "no item hand in this scene"
 end
 
 local function slot_of(id, b)
@@ -470,6 +487,9 @@ local function on_foot(node)
   if ob and ob.isOpen and ob.isOpen() then why("the ops board has the keys") return false end
   local ip = ref("inventory_panel")
   if ip and ip.open then why("the suit pack has the keys") return false end
+  -- Held at a job (a repair): the hands are on the hull, not on a tool.
+  local H = ref("item_hand")
+  if H and H.busy and H.busy() then why("the hands are at the work") return false end
   -- A right-click menu is up (context_menu.lua): its rows take the left
   -- button, which must not also fire the tool through them.
   local cm = ref("context_menu")
@@ -2666,81 +2686,9 @@ local function beacon_reach(R)
   return v
 end
 
-function fire_beacon(node, dt, firing)
-  local net, inv = ref("comms"), ref("inventory")
-  local now_down = firing and not trig_was
-  trig_was = firing
-  inUse = false
-  local h = laser_shot(node)
-  if not (net and inv and net.placeBeacon) then prompt = "no comms network in this scene" return end
-  if not h then prompt = string.format("no ground within %.0f m of the crosshair", params.laser_reach) return end
-  local bname = space.dominant(h.x, h.y, h.z)
-  local body = bname and space.body(bname)
-  if not body then prompt = "no world under the crosshair" return end
-  local near = net.beaconNear(h.x, h.y, h.z, BEACON.grab)
-  if near then
-    prompt = string.format("Q  pick up %s  (%s)", near.name,
-      near.linked and string.format("linked, %d%%", math.floor((near.strength or 0) * 100 + 0.5)) or "no link")
-    reticle_set("grab", near.name .. "  ·  Q: pick up")
-    beacon_req = { pick = true, body = bname, x = near.gx - body.x, y = near.gy - body.y, z = near.gz - body.z }
-    if key_q() then
-      if inv.addGear("astro", "beacon", 1) < 1 then
-        say("PACK FULL — no room to carry the beacon")
-        play(SFX.denied, { track = "UI", volume = 0.5 })
-      else
-        net.removeBeacon(near.id)
-        say(near.name .. " picked up")
-        play(SFX.pickup, { track = "UI", volume = 0.5 })
-      end
-    end
-    return
-  end
-  local ux, uy, uz = h.x - body.x, h.y - body.y, h.z - body.z
-  local R = len(ux, uy, uz)
-  ux, uy, uz = ux / R, uy / R, uz / R
-  local nx, ny, nz = field_normal(h.x, h.y, h.z)
-  if not nx then nx, ny, nz = h.nx or ux, h.ny or uy, h.nz or uz end
-  local carried = inv.gearCount("astro", "beacon")
-  local bad = nil
-  if carried < 1 then bad = "no beacons in the pack — buy them at the depot's BUY counter"
-  elseif nx * ux + ny * uy + nz * uz < BEACON.slope then bad = "too steep to stand a beacon on"
-  elseif net.beaconNear(h.x, h.y, h.z, BEACON.spacing) then bad = "too close to another beacon" end
-  local lx, ly, lz = h.x - body.x, h.y - body.y, h.z - body.z
-  local p = preview
-  if not p or p.body ~= bname or time - p.t > 0.3
-    or (lx - p.x) ^ 2 + (ly - p.y) ^ 2 + (lz - p.z) ^ 2 > 0.25 then
-    local links, connected = net.previewLinks(h.x, h.y, h.z)
-    for _, l in ipairs(links) do l.x, l.y, l.z = l.x - body.x, l.y - body.y, l.z - body.z end
-    p = { body = bname, x = lx, y = ly, z = lz, links = links, connected = connected, t = time }
-    preview = p
-  end
-  local names = {}
-  for i, l in ipairs(p.links) do
-    if i > 3 then names[#names + 1] = string.format("+%d more", #p.links - 3) break end
-    names[#names + 1] = string.format("%s %d%%", l.name, math.floor(l.hop * 100 + 0.5))
-  end
-  local links_txt = #names > 0 and ("links to: " .. table.concat(names, ", "))
-    or "links to: nothing — no relay with a path home in sight"
-  prompt = bad and (bad .. "   ·   " .. links_txt)
-    or (string.format("LMB plant (%d in the pack)   ·   ", carried) .. links_txt)
-  reticle_set(bad and "full" or "dig", bad or "LMB: plant a relay beacon")
-  beacon_req = { body = bname, x = lx, y = ly, z = lz, R = R, ok = bad == nil, linked = p.connected, links = p.links }
-  if now_down then
-    if bad then
-      say(bad)
-      play(SFX.denied, { track = "UI", volume = 0.5 })
-    elseif inv.removeGear("astro", "beacon", 1) == 1 then
-      local id = net.placeBeacon(bname, h.x, h.y, h.z)
-      if id then
-        say(string.format("Relay %d planted — %s", id, p.connected and links_txt or "no link home yet"))
-        play(SFX.plant, { track = "UI", volume = 0.5 })
-        preview = nil
-      else
-        inv.addGear("astro", "beacon", 1)
-      end
-    end
-  end
-end
+-- (Planting is item_hand's DEPLOY MODE now, and picking one back up is the
+-- right-click menu's "Pick up": Q is the laser's mode key. The gravity gun
+-- still pulls a planted beacon up, above.)
 
 local ghosts = {}
 local function ghost_node(prefab, x, y, z)
@@ -3076,14 +3024,30 @@ local function tick(node, dt, carrying)
   -- The belt, from the pack. The equipped tool has to be on it: plant the
   -- last beacon and the hand goes back to the gravity gun.
   local b = belt()
-  for i, s in ipairs(b) do
-    if pressed(tostring(i)) then equip(s.id, b) end
+  local H = ref("item_hand")
+  if H and H.held then
+    -- the hand is item_hand's (number keys, H, the menus): follow it, with
+    -- the swap's dip, and never fire on the click that changed it
+    local want = H.held()
+    if want ~= equipped then
+      swap_from, swap_t = equipped, time
+      equipped = want
+      reset_tool_state()
+      need_release = true
+      recoil = recoil + 0.03
+      local d = want and TOOLDEF[want]
+      if d then say(d.label .. " — " .. d.hint) end
+    end
+  else
+    for i, s in ipairs(b) do
+      if pressed(tostring(i)) then equip(s.id, b) end
+    end
+    if not slot_of(toolId(), b) then
+      local fallback = (b[1] and b[1].id) or "gravgun"
+      if equipped ~= fallback then equip(fallback, b) end
+    end
   end
-  if not slot_of(toolId(), b) then
-    local fallback = (b[1] and b[1].id) or "gravgun"
-    if equipped ~= fallback then equip(fallback, b) end
-  end
-  tool = slot_of(toolId(), b) or 1
+  tool = slot_of(toolId(), b) or 0
 
   local id = toolId()
   local firing = btn(0)
@@ -3132,11 +3096,13 @@ local function tick(node, dt, carrying)
   elseif id == "gravgun" then
     if not grab then hum_off() end
     fire_grav(node, dt, firing)
-  elseif id == "beacon" then
+  else
+    -- anything else in hand (a kit, a beacon, a flag) or empty hands: the
+    -- item's own script works it (item_hand: deploy mode, the repair verb)
     hum_off()
     show_beam(nil)
-    fire_beacon(node, dt, firing)
     aimMat = nil
+    inUse = false
   end
 end
 
@@ -3152,7 +3118,14 @@ function tool_label(s)
 end
 
 local function hint_line()
-  local d = TOOLDEF[toolId()]
+  local d = TOOLDEF[toolId() or ""]
+  local H = ref("item_hand")
+  if not d and H then
+    local recent = time - msg_t < 3.0 and msg ~= ""
+    local p = (H.prompt and H.prompt ~= "") and H.prompt or (H.hint and H.hint()) or ""
+    if recent then return p ~= "" and (p .. "   ·   " .. msg) or msg end
+    return p
+  end
   local recent = time - msg_t < 3.0 and msg ~= ""
   if inUse and prompt ~= "" then return recent and (prompt .. "   ·   " .. msg) or prompt end
   if recent then return msg end

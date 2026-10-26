@@ -429,14 +429,16 @@ check("an ice world yields ice", (function()
 end)())
 
 -- ── 2. containers ───────────────────────────────────────────────────────────
-check("a fresh pack is empty", inv.isEmpty("astro") and inv.mass("astro") == 0)
+-- (the standard issue — the two tools — weighs in the pack since the item
+-- registry: a fresh pack holds no materials, and only the issue's kilograms)
+check("a fresh pack is empty", inv.isEmpty("astro") and math.abs(inv.mass("astro") - inv.itemMass("astro")) < 1e-9)
 check("the suit's capacity is what the params say",
   inv.cap("astro") == inv.params.suit_kg, inv.cap("astro"))
 
 -- Derived, not hardcoded: the suit's capacity is a balance knob against the
 -- laser's cut rate and moves when that does. What must hold is the RULE — the
 -- units that fit go in and the one that doesn't is refused.
-local fits = math.floor(inv.cap("astro") / mats.kg("iron"))
+local fits = math.floor(inv.free("astro") / mats.kg("iron"))
 local took = inv.add("astro", "iron", fits)
 check("a pack takes what fits", took == fits, took)
 local over = inv.add("astro", "iron", 5)

@@ -455,6 +455,9 @@ function start(node)
   else
     mode = "standalone"
     building = true
+    -- the crew library (crew.lua: the roster the loadout reads); in the
+    -- world scene game_manager spawns it
+    if not find("CrewLib") and spawn then pcall(spawn, "CrewLib", vec3(0, 0, 0)) end
     standalone_start()
   end
 end

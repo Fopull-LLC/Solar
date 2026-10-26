@@ -120,7 +120,17 @@ function worldScale()
   return v
 end
 
+-- THE CREW LIBRARY (scripts/crew.lua, crew_task.lua, eva_pack.lua): the
+-- roster and its migration, the repair lock and the RCS Pack ride one node.
+-- A scene that doesn't carry one gets it here (build_host does the same in
+-- the standalone builder). Global: a probe can ask for it too.
+function ensureCrewLib()
+  if find and find("CrewLib") then return end
+  if spawn then pcall(spawn, "CrewLib", vec3(0, 0, 0)) end
+end
+
 function start(node)
+  ensureCrewLib()
   local s = save.slot()
   if s == "main" then return end -- direct editor play: stay out of the way
   slot = s

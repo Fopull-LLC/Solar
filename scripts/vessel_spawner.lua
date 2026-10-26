@@ -486,6 +486,10 @@ local REVERT_KEYS = {
   "mission.recovered", "mission.charterPaid", "mission.genSeq",
   "prog.done", "prog.perm",
   "inv.cap", "inv.seen", "depot.sold", "names.n",
+  -- the crew (scripts/crew.lua): the roster's own keys; each member's record
+  -- and pack are taken by snap_state from the roster
+  "crew.roster", "crew.seq", "crew.active", "crew.offers", "crew.offerSeq",
+  "inv.vcap",                -- the containers' litre capacities (WS3)
 }
 -- Rewards: a change in any of these means the flight has been paid for.
 local BANKED_KEYS = { "mission.done", "mission.gcount", "prog.done", "mission.charterPaid", "mission.recovered" }
@@ -507,14 +511,25 @@ local function snap_state()
   local keys, names = {}, {}
   local function take(k) names[#names + 1] = k; keys[k] = deep(save.get(k)) end
   for _, k in ipairs(REVERT_KEYS) do take(k) end
-  for cid in pairs(inv_cids(keys["inv.cap"])) do
+  local cids = inv_cids(keys["inv.cap"])
+  -- every crew member's record (status, suit air, RCS fill, task) and pack
+  for _, id in ipairs(type(keys["crew.roster"]) == "table" and keys["crew.roster"] or {}) do
+    take("crew.m." .. tostring(id))
+    cids["crew:" .. tostring(id)] = true
+  end
+  for cid in pairs(cids) do
     take("inv." .. cid)
     take("inv.gear." .. cid)
+    take("inv.fill." .. cid)   -- the Oxygen Tanks' fill levels (WS3)
+    take("inv.issued." .. cid) -- the standard issue stamp (WS3)
   end
   keys.names = names
   -- the relay beacons (comms keeps them): one planted in flight is the pack's
   local net = ref("comms")
   keys.beacons = net and net.beaconSnapshot and net.beaconSnapshot() or nil
+  -- flags and other deployables (deployables.lua keeps them), the same way
+  local dep = ref("deployables")
+  keys.deployables = dep and dep.snapshot and dep.snapshot() or nil
   return keys
 end
 
@@ -656,6 +671,8 @@ local function restore_state(keys)
   if rs then rs.spent = save.get("res.spent") or 0 end
   local net = ref("comms")
   if keys.beacons and net and net.beaconRestore then net.beaconRestore(keys.beacons) end
+  local dep = ref("deployables")
+  if keys.deployables and dep and dep.restore then dep.restore(keys.deployables) end
 end
 
 -- Clear the flight off the world: crew out of the seat, every craft and piece
@@ -961,15 +978,27 @@ end
 -- while the base has not put its pad down at all), the launch is CALLED OFF
 -- the way a blocked pad is: nothing assembled, the hull refunded, the crew
 -- home. A launch never drops a craft and never waits for ever.
+--
+-- A NEW SAVE'S FIRST LAUNCH must never be refused: the base is still going
+-- up and grading its ground then (the runway read 4.9 m off its site and the
+-- pad "not down yet" in WS3's probe, called off after 30 s). The base counts
+-- as BUSY while it is not sited or while base_facilities.grading() owes
+-- ground work; a busy base gets SITE_WAIT_BASE,
+-- and the plain SITE_WAIT counts only from the moment the base stopped being
+-- busy (`calm`). A sited base that has finished its ground work and still
+-- shows no pad is not going to: that waits SITE_WAIT, as before. The guarantee is unchanged: nothing is assembled until the
+-- site answers, and the wait ends.
 SITE_NODE = "BasePad"
-SITE_WAIT, SITE_WAIT_BASE = 30.0, 90.0
+SITE_WAIT, SITE_WAIT_BASE = 30.0, 180.0
+SITE_CALM = { t = 0.0 }   -- seconds since the base was last busy (a global: no new chunk local)
 DECK_TOP = { lo = 1.5, hi = 3.5 }   -- the deck's top over the site point (Shell 3 reads 2.49)
 
 -- "go", "wait" or "refuse": `waited` s of looking, `ready` the site answered,
 -- `base_busy` the base has not put its pad down yet. Global for the tests.
-function siteGate(waited, ready, base_busy)
+function siteGate(waited, ready, base_busy, calm)
   if ready then return "go" end
-  if waited < (base_busy and SITE_WAIT_BASE or SITE_WAIT) then return "wait" end
+  if base_busy then return waited < SITE_WAIT_BASE and "wait" or "refuse" end
+  if math.min(waited, calm or waited) < SITE_WAIT then return "wait" end
   return "refuse"
 end
 
@@ -1069,8 +1098,9 @@ local function try_spaceport(dt)
   local ok, why = siteReady(st, body, bp)
   if not ok then
     site_wait = site_wait + (dt or 0)
-    local base_busy = st.deck and not (bf.sited or find(st.node or SITE_NODE))
-    local gate = siteGate(site_wait, false, base_busy)
+    local base_busy = (not bf.sited) or (bf.grading ~= nil and bf.grading() == true)
+    if base_busy or site_wait <= (dt or 0) then SITE_CALM.t = 0.0 else SITE_CALM.t = SITE_CALM.t + (dt or 0) end
+    local gate = siteGate(site_wait, false, base_busy, SITE_CALM.t)
     waitingFor = st.kind == "runway" and "Waiting for the runway…" or "Waiting for the launch pad…"
     if site_wait > 1.0 then site_caption(st.kind, true) end
     if gate == "refuse" then

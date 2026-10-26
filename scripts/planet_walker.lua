@@ -251,6 +251,8 @@ local function blackout_end(node, ux, uy, uz)
   node.vx, node.vy, node.vz = 0, 0, 0
   downed = false
   oxygen, o2Left = 1.0, params.o2_secs
+  breath, suitO2 = 1.0, 1.0
+  if persistAirNow then persistAirNow() end
   local co = ref("company")
   local fee = math.floor(params.o2_fee or 0)
   local paid = fee > 0 and co and co.afford and co.afford(fee) and co.spend(fee, "crew rescue") or false
@@ -271,39 +273,150 @@ local function blackout_end(node, ux, uy, uz)
     kg or 0, id and ("in salvage crate " .. tostring(id)) or "kept", paid and ("$" .. fee) or "none"))
 end
 
+-- SUIT AIR (docs/crew-and-items.md §2.3, §5.8; the rule is crew.lua's).
+-- With the helmet on wherever the air outside can't be breathed — vacuum,
+-- poison, thin air, and under water — the crew breathes the suit's air: the
+-- Oxygen Tanks in the pack first (items.drawO2, WS3), then the suit's own
+-- built-in supply (`suitO2`, 0..1 of crew.SUIT_AIR_SECS). Bare-headed under
+-- water it is held breath, as before (`breath`, o2_secs, × suit.breathMult).
+-- Aboard any craft the suit fills again (and boarding fills the tanks).
+--
+-- Published for the HUD and probes: `oxygen` / `o2Left` are the reserve the
+-- crew is breathing from NOW (suit air in all, or held breath), `breath`,
+-- `suitO2`, `airLeft` / `airCap` (seconds of suit air, tanks included) and
+-- `airSource` ("suit" | "hold" | "ambient").
+breath = 1.0
+suitO2 = 1.0
+airLeft = 1200.0
+airCap = 1200.0
+airSource = "ambient"
+local air = { t = -10.0, breathable = true, save_t = 0.0, saved = 1.0, tanks = nil, cap_t = -10.0 }
+
+local function crew_air_lib()
+  local c = ref("crew")
+  if c and c.drawAir and c.airSource then return c end
+  return nil
+end
+
+-- (cached a few times a second: the climate and aero lookups are not free)
+local function breathable_now(node, su)
+  if time - air.t < 0.5 then return air.breathable end
+  air.t = time
+  local ok = true
+  if su and su.breathableAt then ok = su.breathableAt(node.x, node.y, node.z) == true end
+  air.breathable = ok
+  return ok
+end
+
+local function suit_air_cap(c, pack)
+  if time - air.cap_t < 1.0 then return airCap end
+  air.cap_t = time
+  local n, cap = 0, 0
+  local inv, I = ref("inventory"), ref("items")
+  if inv and inv.itemCount then
+    local ok, k = pcall(inv.itemCount, pack, "o2tank")
+    n = ok and (k or 0) or 0
+  end
+  local d = I and I.def and I.def("o2tank")
+  cap = (d and d.fill and d.fill.cap) or 900
+  airCap = (c.SUIT_AIR_SECS or 1200) + n * cap
+  return airCap
+end
+
+-- Keep the record's `o2` current (every 2 s while it changes): the suit's
+-- air survives a save and a scene change.
+local function persist_air(force)
+  if not force and (time - air.save_t < 2.0 or math.abs(suitO2 - air.saved) < 1e-4) then return end
+  air.save_t, air.saved = time, suitO2
+  local c = ref("crew")
+  if c and c.patch and c.activeId then
+    local id = c.activeId()
+    if id then pcall(c.patch, id, { o2 = suitO2 }) end
+  end
+end
+
+function persistAirNow() persist_air(true) end
+
 -- One frame of breath. `under`: the helmet is in water; `aboard`: in a craft.
 -- Returns true while blacked out (the controller hands the body to the water).
 local function breathe(node, dt, under, aboard, ux, uy, uz)
   local secs = math.max(1, params.o2_secs)
+  if not air.loaded then
+    -- the suit's air as the record left it (a save, a scene change)
+    local c = ref("crew")
+    if c and c.get and c.activeId then
+      air.loaded = true
+      local r = c.get(c.activeId())
+      if r and type(r.o2) == "number" then suitO2, air.saved = r.o2, r.o2 end
+    end
+  end
   headUnder = under and not aboard
   if downed then
     down_t = down_t + dt
     if down_t >= params.o2_blackout then blackout_end(node, ux, uy, uz) end
     return downed
   end
-  if headUnder then
+  local su = ref("suit")
+  local c = crew_air_lib()
+  local src
+  if aboard then
+    src = "ambient"
+  elseif c and su and su.helmetOn then
+    src = c.airSource(su.helmetOn() == true, headUnder, headUnder or breathable_now(node, su))
+  else
+    -- no suit or crew library (a harness): today's rule, held breath under water
+    src = headUnder and "hold" or "ambient"
+  end
+  airSource = src
+  if src == "hold" then
     -- Bare-headed (scripts/suit.lua) the crew is holding their breath, not
     -- breathing from the tank: it goes `breath_hold` times faster.
-    local su = ref("suit")
     local mult = (su and su.breathMult and su.breathMult()) or 1.0
-    oxygen = math.max(0, oxygen - dt / secs * mult)
+    breath = math.max(0, breath - dt / secs * mult)
   else
-    oxygen = math.min(1, oxygen + dt / math.max(0.1, params.o2_refill))
+    breath = math.min(1, breath + dt / math.max(0.1, params.o2_refill))
   end
-  o2Left = oxygen * secs
-  if oxygen <= 0 then
+  if c then
+    local pack = (c.packOf and c.packOf()) or "astro"
+    if aboard then
+      if suitO2 < 1 then suitO2 = 1.0 end
+    elseif src == "suit" then
+      if not air.tanks or air.tanks_pack ~= pack then air.tanks, air.tanks_pack = c.tanksOf(pack), pack end
+      suitO2, airLeft = c.drawAir(suitO2, dt, air.tanks)
+    end
+    suit_air_cap(c, pack)
+    if src ~= "suit" and time - (air.left_t or -10) > 1.0 then
+      air.left_t = time
+      local t = air.tanks_pack == pack and air.tanks or c.tanksOf(pack)
+      airLeft = suitO2 * (c.SUIT_AIR_SECS or 1200) + t.reserve()
+    end
+    persist_air(false)
+  end
+  if src == "suit" then
+    oxygen = airCap > 0 and math.max(0, math.min(1, airLeft / airCap)) or 0
+    o2Left = airLeft
+  else
+    oxygen = breath
+    o2Left = breath * secs
+  end
+  local out = (src == "hold" and breath <= 0) or (src == "suit" and airLeft <= 0)
+  if out then
     downed, down_t = true, 0.0
     drowned = drowned + 1
     local fx = ref("sfx")
     if fx and fx.caption then fx.caption("out of air") end
-    log("breath: out of air — blacking out")
+    log(src == "suit" and "breath: the suit is out of air — blacking out" or "breath: out of air — blacking out")
     return true
   end
   return false
 end
 
 -- Probes and cheats: set the tank (0..1).
-function setOxygen(v) oxygen = math.max(0, math.min(1, v or 1)); o2Left = oxygen * params.o2_secs end
+function setOxygen(v)
+  breath = math.max(0, math.min(1, v or 1)); oxygen = breath; o2Left = breath * params.o2_secs
+end
+-- ...and the suit's built-in air (0..1).
+function setSuitAir(v) suitO2 = math.max(0, math.min(1, v or 1)); persist_air(true) end
 
 -- ── trunks and rocks ────────────────────────────────────────────────────────
 -- Scattered trees and rocks have no colliders, so the crew walked through
@@ -1146,6 +1259,80 @@ function lateUpdate(node, dt)
   end
 end
 
+-- HELD AT A JOB, OR FLOATING (docs/crew-and-items.md §5.7, §6.3). Two cases
+-- where the feet's velocity chase must not run:
+--   * held: crew_task places the body every tick in the part's frame (it is
+--     kinematic); movement keys do nothing, and the crew faces the work;
+--   * free fall in space (nothing under them for 50 m) or with the RCS Pack's
+--     thrust live: there is no ground to chase, and a velocity written here
+--     would be an absolute one — orbital, km/s, frame-dependent. Gravity and
+--     the pack (eva_pack, which only ever ADDS Δv) own the body; the crew
+--     faces the view.
+-- The tangent velocity the walker steers is re-read off the body, so landing
+-- or a release hands back to walking without a jolt. → true when handled.
+holding = false     -- published: held at a job this frame
+floating = false    -- published: free fall / pack flight this frame
+function holdStart() holding = true end
+function holdEnd() holding = false end
+local space_t, space_on = -10.0, false
+-- Above the air (no atmosphere, or past its top: climate's world record),
+-- with nothing under the crew for 50 m. A fall through air stays the
+-- walker's (terminal velocity, air control); a world the climate library
+-- doesn't know is never space. Cached 0.2 s; asked afresh on the first frame
+-- on foot after a while (the frame they step out of a hatch).
+local function above_air(node)
+  local cl = ref("climate")
+  local d = space and space.dominant and space.dominant(node.x, node.y, node.z)
+  local w = d and cl and cl.worldOf and cl.worldOf(d)
+  local b = d and space.body(d)
+  if not (w and b) then return false end
+  if (w.atmo or 0) <= 0.005 then return true end
+  local R = w.radius or b.radius or 800
+  local H = (w.atmoHeight or 0) > 0 and w.atmoHeight or 0.35 * R
+  local alt = math.sqrt((node.x - b.x) ^ 2 + (node.y - b.y) ^ 2 + (node.z - b.z) ^ 2) - R
+  return alt >= H
+end
+local function in_space(node, ux, uy, uz)
+  if time - space_t < 0.2 then return space_on end
+  space_t = time
+  -- ...or moving along the ground faster than any jump or fall carries you
+  -- (stepped out of an orbiting or flying craft): its speed is the craft's,
+  -- and the feet's chase toward walking pace would throw it away
+  local vu = node.vx * ux + node.vy * uy + node.vz * uz
+  local tang = math.sqrt(math.max(0, node.vx * node.vx + node.vy * node.vy + node.vz * node.vz - vu * vu))
+  space_on = (tang > 15.0 or above_air(node)) and raycast(node.x, node.y, node.z, -ux, -uy, -uz, 50.0, node) == nil
+  return space_on
+end
+local last_foot_t = -10.0
+local function stand_down(node, dt, ux, uy, uz, fx, fy, fz, on_ground, swimming)
+  if time - last_foot_t > 0.5 then space_t = -10.0 end
+  last_foot_t = time
+  local cl = ref("crew")
+  local is_held = cl ~= nil and cl.held ~= nil and cl.held() == true
+  local ep = ref("eva_pack")
+  local float = not is_held and not on_ground and not swimming
+    and ((ep ~= nil and ep.live == true) or in_space(node, ux, uy, uz))
+  holding, floating = is_held, float
+  if not (is_held or float) then return false end
+  local vu = node.vx * ux + node.vy * uy + node.vz * uz
+  mvx, mvy, mvz = node.vx - ux * vu, node.vy - uy * vu, node.vz - uz * vu
+  if rig then rig.friction = 0 end
+  if model then
+    local want
+    local ct = is_held and ref("crew_task")
+    if ct and ct.aimNow and cl.activeId then
+      local ax, ay, az = ct.aimNow(cl.activeId())
+      if ax then want = local_yaw(node, ax - node.x, ay - node.y, az - node.z) end
+    else
+      want = local_yaw(node, fx, fy, fz)
+    end
+    if want then face_yaw = face_yaw + wrap(want - face_yaw) * (1 - math.exp(-params.turn * dt)) end
+    model.yaw = face_yaw
+  end
+  animate(node, dt, 0.0, is_held, false, false, false)
+  return true
+end
+
 function update(node, dt)
   if not cam then cam = ref("planet_camera") end
   -- The character model rides as a child; keep its visibility mirrored to us so
@@ -1253,6 +1440,7 @@ function update(node, dt)
     f, s, sprint = 0, 0, false
     speed = 0
   end
+  if stand_down(node, dt, ux, uy, uz, fx, fy, fz, on_ground, swimming) then return end
 
   -- ── the tangent velocity ────────────────────────────────────────────────────
   -- Eased toward what the keys ask for rather than set to it, so a start has a

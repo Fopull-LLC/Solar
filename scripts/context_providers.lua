@@ -18,11 +18,18 @@
 --   crate         a salvage crate: what's in it, take it back
 --   prop          anything else: what and how far
 --
--- NOT HERE, ON PURPOSE: Repair, Take, Deploy here, moving things in and out
--- of a locker. Those belong to whatever the actor is HOLDING (a repair kit, a
--- beacon, a flag): the item work registers its own providers and conditions
--- them on `ctx.actor.held` and on `actorReach` below. The menu runs a timed
--- entry for them (`job`, see context_registry.lua).
+-- THE ITEMS' VERBS (docs/crew-and-items.md §5.3, §6.4) are providers of
+-- their own, conditioned on the actor and what they hold:
+--   part   held.repair  "Repair" while a Repair Kit is in hand (a dimmed row
+--                       saying how to get one when it isn't), a timed TASK
+--                       on the crew member (scripts/item_hand.lua runs it)
+--          task.cancel  "Cancel repair" on the part being worked
+--          (storage)    a locker's or a hold's Take ▸ / Put ▸ / Take all,
+--                       and "Refill oxygen tanks" at a locker
+--   astro  task.cancel  "Cancel repair" on the crew member at work
+--          (suit)       what is in hand, Hold ▸ another, Put it away; the air
+--                       with every Oxygen Tank's level; "Give ▸" (later)
+--   prop   pickup       "Pick up" a planted relay beacon or a deployable
 --
 -- Everything here works through other scripts' published API, and every
 -- entry that can't be used says why instead of disappearing.
@@ -64,7 +71,9 @@ function actorReach(ctx, target, extra)
   local n = target.node
   local d
   if n and n.valid ~= false then d = crew:distanceTo(n)
-  elseif target.wx then d = crew:distanceTo(vec3 and vec3(target.wx, target.wy, target.wz) or { x = target.wx, y = target.wy, z = target.wz })
+  elseif target.wx then
+    local x, y, z = pickNow(target)
+    d = crew:distanceTo(vec3 and vec3(x, y, z) or { x = x, y = y, z = z })
   else return nil, nil end
   local rec = target.rec or {}
   local size = math.max(rec.rx or 0.5, rec.rz or 0.5, (rec.h or 1) * 0.5)
@@ -74,9 +83,49 @@ function actorReach(ctx, target, extra)
 end
 crewAccess = actorReach   -- (the old name)
 
+-- THE PICK POINT, KEPT. A target's wx/wy/wz is the world point of the frame
+-- the menu opened, and the home planet moves metres a tick: read raw a
+-- second later it is metres off. The first time a provider sees a target
+-- (the same frame as the pick: the menu describes itself right after it
+-- opens) the point is pinned in the frame it belongs to — the part's own
+-- (vessel_controller.partLocalNow), else the world's body — and every later
+-- read gets it back where it is NOW. → wx, wy, wz | nil
+function pickNow(t)
+  if not (t and t.wx) then return nil end
+  local v = t.vessel
+  if t._pin == nil then
+    t._pin = false
+    if t.kind == "part" and v and v.partLocalNow then
+      local lx, ly, lz = v.partLocalNow(t.uid, t.wx, t.wy, t.wz, true)
+      if lx then t._pin = { part = true, lx, ly, lz } end
+    end
+    if not t._pin and space and space.dominant then
+      local d = space.dominant(t.wx, t.wy, t.wz)
+      local b = d and space.body(d)
+      if b then t._pin = { body = d, t.wx - b.x, t.wy - b.y, t.wz - b.z } end
+    end
+  end
+  local p = t._pin
+  if p and p.part and v and v.partPointNow then
+    local x, y, z = v.partPointNow(t.uid, p[1], p[2], p[3], true)
+    if x then return x, y, z end
+  elseif p and p.body then
+    local b = space.body(p.body)
+    if b then return b.x + p[1], b.y + p[2], b.z + p[3] end
+  end
+  return t.wx, t.wy, t.wz
+end
+
 local function far_why(d)
   if not d then return "the crew has to be out on foot, or aboard" end
   return string.format("walk up to it (%.0f m away)", d)
+end
+
+-- An item stack's levels in words: "15 · 9 · 0 min" (the Oxygen Tank).
+function tank_levels(g)
+  local parts = {}
+  for i = #g.fills, 1, -1 do parts[#parts + 1] = string.format("%.0f", g.fills[i] / 60) end
+  return table.concat(parts, " · ") .. " min"
 end
 
 -- A container's contents as rows: { { what = "mat"|"gear", id, n, kg, label } }.
@@ -87,7 +136,9 @@ function contents(inv, mats, cid)
                       label = (mats and mats.label and mats.label(it.mat)) or it.mat }
   end
   for _, g in ipairs(inv.gearItems and inv.gearItems(cid) or {}) do
-    out[#out + 1] = { what = "gear", id = g.id, n = g.n, kg = g.kg, label = g.name, tool = g.tool }
+    local label = g.name
+    if g.fills then label = string.format("%s  (%s)", g.name, tank_levels(g)) end
+    out[#out + 1] = { what = "gear", id = g.id, n = g.n, kg = g.kg, label = label, tool = g.tool, fills = g.fills }
   end
   return out
 end
@@ -200,19 +251,62 @@ local function astro_provider(t, ctx)
         return true
       end }
   end
-  local tb = R(ctx, "tool_belt")
-  if tb and tb.toolId then
-    local okb, belt = pcall(tb.belt)
-    local cur = tb.toolId()
-    local name = cur
-    for _, b in ipairs(okb and belt or {}) do if b.id == cur then name = b.label end end
-    out[#out + 1] = { type = "info", id = "hand", group = "PACK", label = "IN HAND", value = name or "—" }
-    -- Putting the tool away is the belt's to offer (a `stow`/`holster` of its
-    -- own); until it does, nothing pretends to.
-    if tb.stow or tb.holster then
-      out[#out + 1] = { type = "action", id = "stow", group = "PACK", label = "Stow tool",
-        act = function() return (tb.stow or tb.holster)() ~= false end }
+  -- the carried Oxygen Tanks: the total and each tank's level
+  local I = R(ctx, "items")
+  if inv and inv.fills and I and I.fillCap then
+    local cap = I.fillCap("o2tank") or 900
+    local fl = inv.fills(t.pack or "astro", "o2tank")
+    if #fl > 0 then
+      table.sort(fl, function(a, b) return a > b end)
+      out[#out + 1] = { type = "meter", id = "tanks", group = "SUIT", label = "O2 TANKS",
+        frac = function()
+          local tot = 0
+          for _, f in ipairs(inv.fills(t.pack or "astro", "o2tank")) do tot = tot + f end
+          return tot / math.max(1, cap * #fl)
+        end,
+        value = function()
+          local tot = 0
+          for _, f in ipairs(inv.fills(t.pack or "astro", "o2tank")) do tot = tot + f end
+          return string.format("%.0f min in %d", tot / 60, #fl)
+        end }
+      for i, f in ipairs(fl) do
+        if i > 6 then break end
+        out[#out + 1] = { type = "info", id = "tank" .. i, group = "SUIT", label = string.format("TANK %d", i),
+          value = f <= 0 and "empty — refill aboard or at a locker" or string.format("%.0f min  ·  %s", f / 60, pctf(f / cap)),
+          warn = f < cap * 0.1 }
+      end
     end
+  end
+  -- what is in hand, another out of the pack, or put away (item_hand)
+  local H = R(ctx, "item_hand")
+  local mine = ctx.actor and ctx.actor.kind == "crew" and (not t.node or not ctx.actor.node or ctx.actor.node == t.node
+    or (t.node.id and ctx.actor.node.id == t.node.id))
+  if H and H.held and mine then
+    local cur = H.held()
+    out[#out + 1] = { type = "info", id = "hand", group = "PACK", label = "IN HAND",
+      value = cur and (I and I.nameOf(cur) or cur) or "empty hands" }
+    local okb, b = pcall(H.belt)
+    if okb and #b > 0 then
+      out[#out + 1] = { type = "sub", id = "holdsub", group = "PACK", label = "Hold…", hint = "1–9",
+        title = "TAKE IN HAND", sub = function()
+          local list = {}
+          for i, e in ipairs(H.belt()) do
+            list[#list + 1] = { type = "action", id = "hold_" .. e.id, label = e.label .. (e.n > 1 and string.format("  ×%d", e.n) or ""),
+              hint = tostring(i), enabled = e.id ~= H.held(), why = "already in hand",
+              act = function() local ok2, w = H.hold(e.id); return ok2, w end }
+          end
+          return list
+        end }
+    end
+    if cur then
+      out[#out + 1] = { type = "action", id = "stow", group = "PACK", label = "Put it away", hint = "H",
+        act = function() return H.stow() ~= false end }
+    end
+  end
+  -- another crew member: hand them something (slice 3)
+  if not mine and ctx.actor and ctx.actor.kind == "crew" then
+    out[#out + 1] = { type = "action", id = "give", group = "PACK", label = "Give…", enabled = false,
+      why = "handing things over comes with the crew's own bodies" }
   end
   return out, "EVA SUIT", (pw and pw.headUnder) and "under water" or nil
 end
@@ -349,6 +443,81 @@ local function part_battery(t, ctx)
     value = function() local st = E.stateOf(rec); return string.format("%.0f / %.0f EC", st.charge or 0, m.ec) end } }
 end
 
+-- TAKE / PUT between a container on a craft (a locker, a hold) and the
+-- actor's pack: one item a press, "Take all" for everything that fits. The
+-- actor must be on foot within reach of the part, or aboard that craft; a
+-- row that can't go says why (the inventory's reason: "no room: 4 L free").
+local function moved_toast(ctx, verb, n, name, why)
+  if not ctx.toast then return end
+  if n > 0 then ctx.toast(string.format("%s %s%s", verb, name, why and ("  ·  " .. why) or ""))
+  else ctx.toast(why or "it didn't move", true) end
+end
+function move_rows(out, ctx, t, cid, group, what)
+  local function pack() return (ctx.actor and ctx.actor.pack) or "astro" end
+  local function reach_ok() return actorReach(ctx, t) ~= nil end
+  local function reach_why() local _, d = actorReach(ctx, t); return far_why(d) end
+  out[#out + 1] = { type = "sub", id = "take_" .. cid, group = group, label = "Take…", hint = "▸",
+    title = "TAKE FROM THE " .. what, enabled = reach_ok, why = reach_why,
+    sub = function()
+      local inv, mats = R(ctx, "inventory"), R(ctx, "materials")
+      local list = {}
+      if not inv then return list end
+      for _, g in ipairs(inv.itemList and inv.itemList(cid) or {}) do
+        list[#list + 1] = { type = "action", id = "take_" .. g.id, keep = true,
+          label = string.format("%s%s", g.name, g.fills and ("  (" .. tank_levels(g) .. ")") or ""),
+          hint = string.format("×%d", g.n), enabled = reach_ok, why = reach_why,
+          act = function()
+            local n, why = inv.moveItem(cid, pack(), g.id, 1)
+            moved_toast(ctx, "took the", n, g.name, n > 0 and nil or why)
+            if n > 0 then local v = t.vessel; if v and v.holdApplyMass then pcall(v.holdApplyMass, v.node) end end
+            return n > 0, why
+          end }
+      end
+      local mat_rows = inv.items(cid)
+      if #mat_rows > 0 then
+        list[#list + 1] = { type = "action", id = "take_mats", keep = true, label = "Take the materials",
+          hint = string.format("%d kinds", #mat_rows), enabled = reach_ok, why = reach_why,
+          act = function()
+            local n = inv.transferAll(cid, pack())
+            if ctx.toast then ctx.toast(n > 0 and string.format("%d unit(s) into the pack", n) or "no room in the pack", n <= 0) end
+            local v = t.vessel; if v and v.holdApplyMass then pcall(v.holdApplyMass, v.node) end
+            return n > 0
+          end }
+      end
+      if #list == 0 then list[#list + 1] = { type = "info", id = "empty", label = "— empty —" } end
+      list[#list + 1] = { type = "action", id = "takeall", label = "Take all", keep = true,
+        enabled = reach_ok, why = reach_why,
+        act = function()
+          local n, why = inv.moveAllItems(cid, pack())
+          local m = inv.transferAll(cid, pack())
+          if ctx.toast then ctx.toast(string.format("%d item(s), %d unit(s) into the pack%s", n, m, why and ("  ·  " .. why) or ""), n + m <= 0) end
+          local v = t.vessel; if v and v.holdApplyMass then pcall(v.holdApplyMass, v.node) end
+          return n + m > 0
+        end }
+      return list
+    end }
+  out[#out + 1] = { type = "sub", id = "put_" .. cid, group = group, label = "Put…", hint = "▸",
+    title = "PUT IN THE " .. what, enabled = reach_ok, why = reach_why,
+    sub = function()
+      local inv = R(ctx, "inventory")
+      local list = {}
+      if not inv then return list end
+      for _, g in ipairs(inv.itemList and inv.itemList(pack()) or {}) do
+        list[#list + 1] = { type = "action", id = "put_" .. g.id, keep = true,
+          label = string.format("%s%s", g.name, g.fills and ("  (" .. tank_levels(g) .. ")") or ""),
+          hint = string.format("×%d", g.n), enabled = reach_ok, why = reach_why,
+          act = function()
+            local n, why = inv.moveItem(pack(), cid, g.id, 1)
+            moved_toast(ctx, "stowed the", n, g.name, n > 0 and nil or why)
+            if n > 0 then local v = t.vessel; if v and v.holdApplyMass then pcall(v.holdApplyMass, v.node) end end
+            return n > 0, why
+          end }
+      end
+      if #list == 0 then list[#list + 1] = { type = "info", id = "none", label = "— nothing in the pack —" } end
+      return list
+    end }
+end
+
 local function part_storage(t, ctx)
   local v, uid, rec = t.vessel, t.uid, t.rec or {}
   if not v then return {} end
@@ -361,6 +530,33 @@ local function part_storage(t, ctx)
       value = function() return string.format("%s / %s", kgs(ctx, inv.mass(cid)), kgs(ctx, inv.cap(cid))) end }
     out[#out + 1] = { type = "sub", id = "open", group = "STOWAGE", label = "Contents",
       hint = "▸", title = "LOCKER  ·  " .. (v.craftName or "craft"), sub = contents_sub(ctx, cid, "Locker") }
+    move_rows(out, ctx, t, cid, "STOWAGE", "LOCKER")
+    local I = R(ctx, "items")
+    if inv.refill and I and I.fillCap then
+      out[#out + 1] = { type = "action", id = "refill", group = "STOWAGE", keep = true,
+        label = "Refill oxygen tanks", hint = v.craftName and ("from " .. v.craftName) or nil,
+        enabled = function()
+          local acc = actorReach(ctx, t)
+          if acc == nil then return false end
+          local cap = I.fillCap("o2tank")
+          for _, c in ipairs({ ctx.actor and ctx.actor.pack or "astro", cid }) do
+            for _, f in ipairs(inv.fills(c, "o2tank")) do if f < cap - 0.5 then return true end end
+          end
+          return false
+        end,
+        why = function()
+          local acc, d = actorReach(ctx, t)
+          if acc == nil then return far_why(d) end
+          return "every tank here and in the pack is full"
+        end,
+        act = function()
+          local add = inv.refill(ctx.actor and ctx.actor.pack or "astro", "o2tank") + inv.refill(cid, "o2tank")
+          if ctx.toast then ctx.toast(string.format("tanks topped up: +%.0f min of air", add / 60)) end
+          local fx = R(ctx, "sfx")
+          if fx and fx.play then pcall(fx.play, "close") end
+          return add > 0
+        end }
+    end
   end
   if (rec.cargo or 0) > 0 and v.holdId and inv then
     local hid = v.holdId
@@ -369,6 +565,7 @@ local function part_storage(t, ctx)
       value = function() return string.format("%s / %s", kgs(ctx, inv.mass(hid)), kgs(ctx, inv.cap(hid))) end }
     out[#out + 1] = { type = "sub", id = "openhold", group = "CARGO", label = "Contents",
       hint = "▸", title = "HOLD  ·  " .. (v.craftName or "craft"), sub = contents_sub(ctx, hid, "Hold") }
+    move_rows(out, ctx, t, hid, "CARGO", "HOLD")
   end
   return out
 end
@@ -525,9 +722,163 @@ local function prop_provider(t, ctx)
   return out, t.label or (t.node and t.node.name) or "Object"
 end
 
+-- ── what the held item brings ───────────────────────────────────────────────
+local function damaged(t)
+  local v = t.vessel
+  local h = v and v.partHp and v.partHp(t.uid)
+  return h ~= nil and h > 0 and h < 0.999, h
+end
+local function slot_key(H, id)
+  for i, e in ipairs(H and H.belt and H.belt() or {}) do if e.id == id then return tostring(i) end end
+  return "its belt slot"
+end
+local function member_task(ctx)
+  local H = R(ctx, "item_hand")
+  if not (H and H.task) then return nil, H end
+  local ok, tk = pcall(H.task)
+  return ok and tk or nil, H
+end
+
+-- REPAIR (§6.4): the kit in hand makes the verb; without it a dimmed row
+-- says how to get one, so the verb is discoverable.
+local function held_repair(t, ctx)
+  pickNow(t)   -- (pinned in the part's frame this frame: see pickNow)
+  local is_dmg, hp = damaged(t)
+  if not is_dmg then return {} end
+  local H = R(ctx, "item_hand")
+  local I = R(ctx, "items")
+  if not (H and I) then return {} end
+  local tk = member_task(ctx)
+  if tk then return {} end   -- at work: the cancel row is task.cancel's
+  local inv = R(ctx, "inventory")
+  if ctx.actor and ctx.actor.kind ~= "crew" then
+    return { { type = "action", id = "repair", group = "SERVICE", label = "Repair", enabled = false,
+               why = "only on foot or on EVA: no repairs from the seat" } }
+  end
+  if H.held() ~= "repairkit" then
+    local has = inv and inv.itemCount("astro", "repairkit") > 0
+    return { { type = "action", id = "repair", group = "SERVICE", label = "Repair", enabled = false,
+               why = has and ("hold the Repair Kit (" .. slot_key(H, "repairkit") .. ")")
+                 or "needs a Repair Kit — lockers, or the VAB" } }
+  end
+  local secs = I.repairSecs(hp)
+  local v = t.vessel
+  local rprog = (v and v.partSt) and v.partSt(t.uid, "rprog") or (t.rec and t.rec.st or {}).rprog
+  local kept = I.keptProgress(rprog, (space and space.time and space.time()) or (time or 0), secs)
+  return { { type = "action", id = "repair", group = "SERVICE", label = kept > 0 and "Resume repair" or "Repair",
+             hint = kept > 0 and string.format("%d%%  ·  %.0f s left", math.floor(kept / secs * 100 + 0.5), secs - kept)
+               or string.format("%.0f s", secs),
+             enabled = function() return H.repairWhyNot(t, ctx) == nil end,
+             why = function() return H.repairWhyNot(t, ctx) end,
+             act = function() return H.startRepair(t, ctx) end } }
+end
+
+-- CANCEL: explicit, on the crew member and on the part being worked (§6.2).
+local function cancel_row(H, label)
+  return { type = "action", id = "cancel", group = "WORK", label = label or "Cancel repair", danger = true,
+           act = function() return H.cancel("cancelled") end }
+end
+local function task_cancel_part(t, ctx)
+  local tk, H = member_task(ctx)
+  if not (tk and H) or tk.uid ~= t.uid then return {} end
+  local v = t.vessel
+  if v and v.node and tk.craft and v.node.id ~= tk.craft then return {} end
+  local f = (tk.done or 0) / math.max(0.1, tk.secs or 1)
+  return { { type = "meter", id = "work", group = "WORK", label = "REPAIR", frac = function()
+               local k = member_task(ctx); return k and (k.done or 0) / math.max(0.1, k.secs or 1) or f end,
+             value = function() local k = member_task(ctx); return pctf(k and (k.done or 0) / math.max(0.1, k.secs or 1) or f) end },
+           cancel_row(H) }
+end
+local function task_cancel_astro(t, ctx)
+  local tk, H = member_task(ctx)
+  if not (tk and H) then return {} end
+  return { { type = "info", id = "work", group = "WORK", label = "AT WORK",
+             value = function() local k = member_task(ctx); return k and string.format("%s  ·  %s", k.label or k.kind,
+               pctf((k.done or 0) / math.max(0.1, k.secs or 1))) or "—" end },
+           cancel_row(H, tk.kind == "repair" and "Cancel repair" or "Cancel") }
+end
+
+-- PICK UP a planted relay beacon (comms owns its record) or a deployable
+-- (deployables.lua owns those): reach and pack room.
+local function pickup(t, ctx)
+  local n = t.node
+  local inv = R(ctx, "inventory")
+  if not (n and inv) then return {} end
+  -- where the thing is NOW: its node (a beacon's origin is half its height
+  -- over the ground), else the pinned pick point
+  local px, py, pz
+  if n.valid ~= false and n.worldX then px, py, pz = n.worldX, n.worldY, n.worldZ
+  elseif t.wx then px, py, pz = pickNow(t)
+  else return {} end
+  local net = R(ctx, "comms")
+  local is_beacon = n.name == "RelayBeacon" or (n.parent and n.parent.name == "RelayBeacon")
+    or (n.hasTag and pcall(n.hasTag, n, "RelayBeacon") and n:hasTag("RelayBeacon"))
+  local out = {}
+  if net and net.beaconNear then
+    local near = net.beaconNear(px, py, pz, 3.5)
+    if near or is_beacon then
+      local b = near
+      local acc, d = actorReach(ctx, t, 1.0)
+      out[#out + 1] = { type = "info", id = "relay", group = "RELAY", label = "LINK",
+        value = b and (b.linked and string.format("linked, %d%%", math.floor((b.strength or 0) * 100 + 0.5)) or "no link") or "—" }
+      out[#out + 1] = { type = "action", id = "pickup", group = "RELAY", label = "Pick up",
+        enabled = function()
+          if not b then return false end
+          if actorReach(ctx, t, 1.0) == nil then return false end
+          return (inv.roomForItem("astro", "beacon", 1)) >= 1
+        end,
+        why = function()
+          if not b then return "no beacon there" end
+          local a2, d2 = actorReach(ctx, t, 1.0)
+          if a2 == nil then return far_why(d2) end
+          local _, w = inv.roomForItem("astro", "beacon", 1)
+          return w or "no room in the pack"
+        end,
+        act = function()
+          local got = inv.addItem("astro", "beacon", 1)
+          if got < 1 then return false, "no room in the pack" end
+          net.removeBeacon(b.id)
+          if ctx.toast then ctx.toast((b.name or "Relay") .. " picked up") end
+          return true
+        end }
+      return out, (b and b.name) or "RELAY BEACON", "a ground relay"
+    end
+  end
+  local dep = R(ctx, "deployables")
+  if dep and dep.near then
+    local okn, rec = pcall(dep.near, px, py, pz, 2.5)
+    if okn and type(rec) == "table" and rec.id then
+      local kind = rec.k or rec.kind or "flag"
+      local I = R(ctx, "items")
+      local item = (I and I.known(kind)) and kind or nil
+      out[#out + 1] = { type = "action", id = "pickup", group = "DEPLOYED", label = "Pick up",
+        enabled = function() return item ~= nil and actorReach(ctx, t, 1.0) ~= nil and (inv.roomForItem("astro", item, 1)) >= 1 end,
+        why = function()
+          if not item then return "it can't be carried" end
+          local a2, d2 = actorReach(ctx, t, 1.0)
+          if a2 == nil then return far_why(d2) end
+          local _, w = inv.roomForItem("astro", item, 1); return w or "no room in the pack"
+        end,
+        act = function()
+          if inv.addItem("astro", item, 1) < 1 then return false, "no room in the pack" end
+          local okr = pcall(dep.remove, rec.id)
+          if not okr then inv.removeItem("astro", item, 1) return false, "it wouldn't come up" end
+          if ctx.toast then ctx.toast((rec.n or (I and I.nameOf(item)) or "it") .. " picked up") end
+          return true
+        end }
+      return out, rec.n or (I and I.nameOf(item)) or "DEPLOYED"
+    end
+  end
+  return {}
+end
+
 -- ── registration ────────────────────────────────────────────────────────────
 PROVIDED = {
+  { "astro", "task.cancel", task_cancel_astro, 5 },
   { "astro", "suit", astro_provider, 10 },
+  { "part", "task.cancel", task_cancel_part, 5 },
+  { "part", "held.repair", held_repair, 15 },
+  { "prop", "pickup", pickup, 20 },
   { "part", "core", part_core, 10 },
   { "part", "tank", part_tank, 20 },
   { "part", "engine", part_engine, 25 },
