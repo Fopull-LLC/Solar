@@ -1307,6 +1307,7 @@ local function run_plane()
     S = st()
     if not S then break end
     ga = ga or S.alt
+    ROLL0 = ROLL0 or sub(S.i.com, S.b)   -- where the take-off roll began, on the planet
     local t = time - t0
     vc.setThrottle(1)
     if phase == "climb" and not lift_printed then
@@ -1322,7 +1323,8 @@ local function run_plane()
       else fly(S, D(11), 0, yaw) end
       if not vc.R2.onWheels and S.alt > ga + 1.5 and S.V > 30 then air = air + 1 / 60 else air = 0 end
       if air > 0.6 then
-        P("PLANE airborne after %.1f s at %.1f m/s", t, S.V)
+        local rel = sub(S.i.com, S.b)
+        P("PLANE airborne after %.1f s at %.1f m/s, %.1f m from where the roll began", t, S.V, len(rel.x - ROLL0.x, rel.y - ROLL0.y, rel.z - ROLL0.z))
         sc_note("d_takeoff", "liftoff_s", t)
         sc_end("d_takeoff")
         phase = "climb"
@@ -1373,6 +1375,44 @@ local function lattice(N)
   return list
 end
 -- a connected ~1,000-part craft: engine, a spine of tanks each ringed with 24 fins, a pod
+-- ── For E: one frame of the engine's own physics split, the costliest bodies
+-- and the craft's wake readout (bigpark e_secs, builder settle) ─────────────
+local function e_frame(vn)
+  local f = perf.frames and perf.frames(1)
+  f = f and f[#f] or {}
+  local b, pt = f.buckets or {}, f.parts or {}
+  local bo = {}
+  for k, e in ipairs(f.bodies or {}) do if k <= 3 then bo[#bo + 1] = string.format("%s %.2f", e.name or "?", e.ms or 0) end end
+  local i = vn and vn.valid ~= false and assembly.info(vn) or {}
+  return string.format("frame %s ms %.1f physics %.2f static %.2f sweeps %.2f sleep %.2f joints %.2f broad %.2f pairs %.2f | bodies %s | asleep %s wake %s |v| %.4f",
+    tostring(f.frame), f.ms or 0, b.physics or 0, pt.physicsStatic or 0, pt.physicsSweeps or 0, pt.physicsSleep or 0, pt.physicsJoints or 0,
+    pt.physicsBroadphase or 0, pt.physicsPairs or 0, table.concat(bo, ", "), tostring(i.asleep), tostring(i.wake), i.vel and len(i.vel.x, i.vel.y, i.vel.z) or -1),
+    tostring(i.wake), b.physics or 0
+end
+-- what the craft stands on: the first thing a ray finds under its lowest
+-- point, its RigidBody (shape, mode) and the chain of nodes it hangs from
+local function e_rest(tag, vn)
+  local i = assembly.info(vn) or {}
+  local bb = home()
+  if not (i.com and bb) then P("E %s rest: no craft/planet", tag); return end
+  local u = unit(sub(i.com, bb))
+  local h = raycast(i.com.x, i.com.y, i.com.z, -u.x, -u.y, -u.z, 600, vn)
+  if not h then P("E %s rest: nothing under the CoM within 600 m", tag); return end
+  local n = h.node
+  local chain, c = {}, n
+  for _ = 1, 8 do
+    if not (c and c.valid) then break end
+    chain[#chain + 1] = c.name
+    c = c.parent
+  end
+  local rb = n and n.valid and n:getcomponent("RigidBody")
+  P("E %s rest: under the CoM at %.2f m: %s (%s); its RigidBody: %s; mode %s; node chain %s; craft grounded %s anchored %s; planet %s |v| %.1f m/s (the craft rides it: carry %.2f m/tick)",
+    tag, h.distance or -1, n and n.name or "terrain", n and "a node" or "the terrain field (no node)",
+    rb and string.format("shape %s half %.2f/%.2f/%.2f friction %.2f kinematic %s", tostring(rb.shape), rb.half_x or -1, rb.half_y or -1, rb.half_z or -1, rb.friction or -1, tostring(rb.kinematic)) or "none",
+    rb and tostring(rb.mode or rb.bodyMode or rb.static) or "-", table.concat(chain, " < "), tostring(i.grounded), tostring(i.anchored),
+    bb.name or "?", len(bb.vx or 0, bb.vy or 0, bb.vz or 0), i.carry and len(i.carry.x or 0, i.carry.y or 0, i.carry.z or 0) or -1)
+end
+
 local function finned_spine(T, F)
   local l, uid = { rec(1, "engineS", 0, 0.65 + 0.11, 0) }, 1
   local y = 1.3 + 0.11
@@ -1401,7 +1441,9 @@ local function run_builder()
   local B = findScript("builder")
   wait(1.5)
   local function load_bp_g(name, list) load_bp(B, name, list) end
-  for _, N in ipairs({ 300, 1000, 3000 }) do
+  -- onlycraft=1: straight to the 1,002-part launch and its settle (the 0509
+  -- settle that came out at 12 or 97 ms of physics a frame on rc27)
+  for _, N in ipairs((params.onlycraft or 0) > 0 and {} or { 300, 1000, 3000 }) do
     load_bp_g("g_load_" .. N, lattice(N))
     sc_begin("g_idle_" .. N); wait(4); sc_end("g_idle_" .. N)
     sc_begin("g_hand_" .. N)
@@ -1446,9 +1488,17 @@ local function run_builder()
   -- included (it often breaks up on release), under 2 ms a frame for a
   -- second. The physics time is the engine's own per-frame figure.
   local root_slept, quiet, quiet_t, settled = nil, 0, nil, nil
+  local wk, last_e, phs, phn = {}, -1, 0, 0
   while W() - ts < params.sleepsecs do
     yield()
     local n = vc.node
+    do
+      -- (For E) the root's wake readout every frame, a full line a second
+      local line, wake, ph0 = e_frame(n)
+      wk[wake] = (wk[wake] or 0) + 1
+      phs, phn = phs + ph0, phn + 1
+      if W() - ts - last_e >= 1 then last_e = W() - ts; P("E SETTLE t=%.0f %s", last_e, line) end
+    end
     if not root_slept and n and n.valid ~= false and n.asleep then
       root_slept = W() - ts
       P("SETTLE root asleep %.1f s after the engine cut", root_slept)
@@ -1466,7 +1516,97 @@ local function run_builder()
     end
   end
   if not settled then P("SETTLE physics still over 2 ms/frame %.0f s after the engine cut (root asleep: %s)", params.sleepsecs, tostring(root_slept)) end
+  do
+    local o = {}
+    for k, v in pairs(wk) do o[#o + 1] = k .. " " .. v end
+    table.sort(o)
+    P("E SETTLE RESULT: physics %.2f ms/frame over %d frames; root wake readout per frame: %s; pieces now %d vessel controllers", phn > 0 and phs / phn or 0, phn, table.concat(o, ", "), #findScripts("vessel_controller"))
+  end
   sc_end("g_launch_settle")
+end
+
+-- ── trace=1 (sleep, rc27): every assembly force/torque/impulse/velocity write
+-- the piloted craft's own scripts make, by call site and tick ─────────────────
+-- The engine wakes an assembly for ANY non-zero held force, torque or impulse a
+-- script applies (floptle-physics compound.rs apply_force/apply_torque), so a
+-- parked craft only sleeps when nothing writes one. trace_install puts a proxy
+-- `assembly` table in each script's environment (a handle's __newindex sets
+-- the script's env field, which shadows the global); every call through it is
+-- counted per call site (the caller's file:line), with its magnitude, and
+-- passed on unchanged. trace_report prints one line per site for the window.
+local TRACE = nil
+local TRACE_FNS = { force = 2, torque = 2, forceAt = 2, impulseAt = 2, impulse = 2, setVelocity = 2, setAngVel = 2,
+                    setAnchored = 0, setAsleep = 0, keepLive = 0, merge = 0 }
+local function trace_site(kind)
+  local src, line
+  if debug and debug.info then src, line = debug.info(3, "sl") end
+  if not line and debug and debug.getinfo then local d = debug.getinfo(3, "Sl"); src, line = d and d.short_src, d and d.currentline end
+  src = tostring(src or "?"):gsub("^%[string \"(.-)\"%]$", "%1"):gsub("^.*/", ""):gsub("%.lua.*$", "")
+  return string.format("%s %s:%s", kind, src, tostring(line or "?"))
+end
+local function trace_install(vc, kinds)
+  if TRACE then return end
+  TRACE = { sites = {}, ticks = 0, tick_calls = {}, installed = {} }
+  local real = assembly
+  local proxy = setmetatable({}, { __index = real })
+  for name, argi in pairs(TRACE_FNS) do
+    local f = real[name]
+    if type(f) == "function" then
+      proxy[name] = function(...)
+        local T = TRACE
+        if T and T.on then
+          local site = trace_site(name)
+          local s = T.sites[site]
+          if not s then s = { n = 0, ticks = 0, last = -1, max = 0, min = math.huge, sum = 0, zero = 0 }; T.sites[site] = s end
+          s.n = s.n + 1
+          if s.last ~= T.ticks then s.last = T.ticks; s.ticks = s.ticks + 1 end
+          if argi > 0 then
+            local v = select(argi, ...)
+            local m = (type(v) == "userdata" or type(v) == "table") and len(v.x or 0, v.y or 0, v.z or 0) or 0
+            s.sum = s.sum + m
+            if m > s.max then s.max = m end
+            if m < s.min then s.min = m end
+            if m == 0 then s.zero = s.zero + 1 end
+            T.tick_calls[#T.tick_calls + 1] = string.format("%s=%.3g", site:gsub(" vessel_controller", ""), m)
+          else
+            T.tick_calls[#T.tick_calls + 1] = site
+          end
+        end
+        return f(...)
+      end
+    end
+  end
+  for _, k in ipairs(kinds or { "vessel_controller", "command_seat", "planet_walker", "flight_ops", "tool_belt" }) do
+    for _, h in ipairs(findScripts(k) or {}) do
+      if h.valid then h.assembly = proxy; TRACE.installed[#TRACE.installed + 1] = k end
+    end
+  end
+  if vc and vc.valid then vc.assembly = proxy end
+  P("TRACE installed on %s", table.concat(TRACE.installed, ", "))
+end
+local function trace_reset() if TRACE then TRACE.sites, TRACE.ticks, TRACE.on = {}, 0, true end end
+local function trace_report(name, vn)
+  if not TRACE then return end
+  local i = vn and vn.valid and assembly.info(vn) or {}
+  local m = math.max(1e-6, i.mass or 1)
+  local rows = {}
+  for site, s in pairs(TRACE.sites) do rows[#rows + 1] = { site, s } end
+  table.sort(rows, function(a, b) return a[2].n > b[2].n end)
+  P("TRACE [%s] %d ticks, craft mass %.2f t, %d call sites", name, TRACE.ticks, m, #rows)
+  for _, r in ipairs(rows) do
+    local s = r[2]
+    P("TRACE [%s] %-40s calls %5d in %5d/%d ticks; |arg| min %.3g mean %.3g max %.3g (per t: max %.3g); exactly zero %d",
+      name, r[1], s.n, s.ticks, TRACE.ticks, s.min == math.huge and 0 or s.min, s.n > 0 and s.sum / s.n or 0, s.max, s.max / m, s.zero)
+  end
+  if #rows == 0 then P("TRACE [%s] no force, torque, impulse or velocity write in the window", name) end
+end
+local function trace_tick()
+  local T = TRACE
+  if not T then return nil end
+  T.ticks = T.ticks + 1
+  local c = T.tick_calls
+  T.tick_calls = {}
+  return c
 end
 
 -- ── sleep: what a resting craft costs, and what keeps it awake (0527/0531) ───
@@ -1476,6 +1616,7 @@ end
 -- RESULT with physics before and after sleep.
 local function watch_sleep(name, vn, secs, vc)
   sc_begin(name)
+  trace_reset()
   local ts = W()
   local slept, slept_frame, frames, after = nil, nil, 0, 0
   local ph_b, phs_b, n_b, ph_a, phs_a, n_a = 0, 0, 0, 0, 0, 0
@@ -1506,6 +1647,7 @@ local function watch_sleep(name, vn, secs, vc)
       if not slept then
         slept, slept_frame = W() - ts, frames
         P("SLEEP [%s] asleep %.2f s after release (frame %d), wake %s, |v| %.3f", name, slept, frames, wake_now, v_now)
+        trace_report(name .. " until asleep", vn); trace_reset()
       end
       ph_a, phs_a, n_a = ph_a + ph, phs_a + phs, n_a + 1
     else
@@ -1550,6 +1692,7 @@ local function watch_sleep(name, vn, secs, vc)
   P("RESULT [%s] SLEEP: %s; awake %d frames physics %.2f ms/frame (static %.2f); asleep %d frames physics %.2f (static %.2f); re-woke frames %d; wake reasons %s; drift on its planet %.3f m (max %.3f)",
     name, slept and string.format("asleep after %.2f s (frame %d)", slept, slept_frame) or string.format("NEVER asleep in %.0f s (%d frames), last wake %s |v| %.3f", secs, frames, wake_now, v_now),
     n_b, n_b > 0 and ph_b / n_b or 0, n_b > 0 and phs_b / n_b or 0, n_a, n_a > 0 and ph_a / n_a or 0, n_a > 0 and phs_a / n_a or 0, after, table.concat(wl, ", "), drift, drift_max)
+  trace_report(slept and (name .. " after the first sleep") or name, vn)
   sc_note(name, "drift", drift)
   sc_note(name, "sleptAfter", slept or -1)
   sc_note(name, "physAwake", n_b > 0 and ph_b / n_b or 0)
@@ -1804,6 +1947,7 @@ local function dump_park(vc, vn)
   P("DUMP ---- end ----")
 end
 function fixedUpdate(node, dt)
+  local calls = trace_tick()
   local D = DUMP
   if not D then return end
   local b = home()
@@ -1823,8 +1967,9 @@ function fixedUpdate(node, dt)
     local i = assembly.info(vn) or {}
     local ty = {}
     for k, t in ipairs(D.tyres) do ty[k] = t.valid and track("t" .. k, { x = t.x, y = t.y, z = t.z }) or "gone" end
-    P("DUMP R %3d %.3f %.3f %s %s %s %.1f %s %s", D.n, time - D.t0, pstep, track("com", i.com), track("node", { x = vn.x, y = vn.y, z = vn.z }),
-      table.concat(ty, " "), i.vel and len(i.vel.x, i.vel.y, i.vel.z) * 1000 or -1, tostring(i.asleep), tostring(i.wake))
+    P("DUMP R %3d %.3f %.3f %s %s %s %.1f %s %s%s", D.n, time - D.t0, pstep, track("com", i.com), track("node", { x = vn.x, y = vn.y, z = vn.z }),
+      table.concat(ty, " "), i.vel and len(i.vel.x, i.vel.y, i.vel.z) * 1000 or -1, tostring(i.asleep), tostring(i.wake),
+      calls and (" calls " .. (#calls > 0 and table.concat(calls, " ") or "none")) or "")
   end
   local function prop(key, n)
     if not (n and n.valid) then return "gone - - -" end
@@ -1846,7 +1991,20 @@ local function run_park()
     len(b.vx or 0, b.vy or 0, b.vz or 0), tostring(i.anchored), tostring(i.asleep), tostring(i.wake))
   -- dump=1 (0531): after 10 s parked and braked, the tyres' joints and the
   -- planet-frame motion of everything, tick by tick, before the usual watch
-  if (params.dump or 0) > 0 then wait(10); dump_park(vc, vn) end
+  -- trace=1 (or dump=1): every force/torque/impulse write Solar's scripts make
+  -- on it, by call site, per watch window and per dumped tick
+  if (params.trace or 0) > 0 or (params.dump or 0) > 0 then trace_install(vc); trace_reset() end
+  if (params.dump or 0) > 0 then
+    -- (the 10 s before the dump also say when it first fell asleep)
+    local t0, first = W(), nil
+    while W() - t0 < 10 do
+      yield()
+      local ii = assembly.info(vn) or {}
+      if not first and (ii.asleep or vn.asleep) then first = W() - t0; P("PARK asleep %.2f s after the brakes went on (before the dump)", first) end
+    end
+    if not first then P("PARK not asleep in the 10 s before the dump") end
+    dump_park(vc, vn)
+  end
   -- what keeps a parked rover awake, by taking Solar's own per-tick touches
   -- away one at a time: park_sas=0 turns the SAS off (its reaction-wheel torque
   -- is a held force), park_eva=1 puts the crew out of the seat (the seated
@@ -1863,6 +2021,7 @@ local function run_park()
   local Eb = findScript("electronics")
   P("PARK brakes released for the W test: %s", tostring(Eb and Eb.stateOf and vc.R2 and vc.R2.wheels[1] and Eb.stateOf(vc.R2.wheels[1].d).brakes))
   local wake_frames = 0
+  trace_reset()
   key_down("w")
   for _ = 1, 30 do
     yield(); wake_frames = wake_frames + 1
@@ -1874,6 +2033,7 @@ local function run_park()
   wait(2); key_up("w")
   local i2 = assembly.info(vn)
   P("PARK after W 2 s: asleep %s wake %s |v| %.2f", tostring(i2.asleep), tostring(i2.wake), len(i2.vel.x, i2.vel.y, i2.vel.z))
+  trace_report("park W held 2 s", vn)
   -- brakes on again, it stops and the parking brakes hold it (vessel_controller
   -- PARKING): does it sleep again? (0531 / 0527: "wakes on input, sleeps when stopped")
   tap("b"); wait(0.3)
@@ -1895,9 +2055,56 @@ local function run_bigpark()
   vc.releaseClamps()
   -- big_sas=0: the SAS off (its reaction-wheel torque is a held force on a
   -- parked craft); big_eva=1: the crew out of the seat (a kinematic passenger)
+  if (params.trace or 0) > 0 or (params.dump or 0) > 0 or (params.e_secs or 0) > 0 then trace_install(vc); trace_reset() end
+  -- e_secs=N (For E): what it stands on, then every frame for N s the physics
+  -- split, the costliest bodies and the wake readout, and the writes Solar made
+  if (params.e_secs or 0) > 0 then
+    e_rest("bigpark", vn)
+    local t0 = W()
+    local wk, phs, sts, n = {}, 0, 0, 0
+    while W() - t0 < params.e_secs do
+      yield()
+      local line, wake, ph = e_frame(vn)
+      local f = perf.frames and perf.frames(1); f = f and f[#f] or {}
+      wk[wake] = (wk[wake] or 0) + 1
+      phs, sts, n = phs + ph, sts + ((f.parts or {}).physicsStatic or 0), n + 1
+      P("E BIG %s", line)
+    end
+    local o = {}
+    for k, v in pairs(wk) do o[#o + 1] = k .. " " .. v end
+    P("E BIG RESULT: %d frames, physics %.2f ms/frame (static %.2f); wake readout %s", n, n > 0 and phs / n or 0, n > 0 and sts / n or 0, table.concat(o, ", "))
+    trace_report("E bigpark first " .. params.e_secs .. " s", vn)
+    trace_reset()
+    e_rest("bigpark (after)", vn)
+  end
   if params.big_sas == 0 then wait(0.5); vc.setSAS("off"); P("BIG SAS off") end
   if (params.big_eva or 0) > 0 then wait(0.5); tap("f"); wait(2); local a = astro(); P("BIG crew out (f): astronaut visible %s, piloting %s", tostring(a and a.visible), tostring(vc.piloting)) end
   watch_sleep("s_big_release", vn, params.sleepsecs, vc)
+  -- big_throttle=1: full throttle (Z) after the watch — does it wake at once,
+  -- and does the engine push it (the spine's one small engine cannot lift
+  -- 1,002 parts: it is the wake and the thrust that are read, not a climb)
+  if (params.big_throttle or 0) > 0 and vn.valid and (params.big_eva or 0) == 0 then
+    local i0 = assembly.info(vn) or {}
+    local p0 = i0.com and home() and sub(i0.com, home())
+    trace_reset()
+    key_down("z")
+    local wf = 0
+    for _ = 1, 30 do
+      yield(); wf = wf + 1
+      local iw = assembly.info(vn) or {}
+      if not (iw.asleep or vn.asleep) then break end
+    end
+    local iw = assembly.info(vn) or {}
+    P("BIG throttle Z: asleep before %s, awake after %d frame(s), wake %s, throttle %.2f", tostring(i0.asleep), wf, tostring(iw.wake), vc.throttle or -1)
+    wait(3); key_up("z")
+    local i3 = assembly.info(vn) or {}
+    local p3 = i3.com and home() and sub(i3.com, home())
+    P("BIG after 3 s at full throttle: asleep %s wake %s |v| %.3f, moved %.3f m on its planet, thrust live %.1f, throttle %.2f",
+      tostring(i3.asleep), tostring(i3.wake), i3.vel and len(i3.vel.x, i3.vel.y, i3.vel.z) or -1,
+      (p0 and p3) and len(p3.x - p0.x, p3.y - p0.y, p3.z - p0.z) or -1, vc.THRUST_LIVE or -1, vc.throttle or -1)
+    trace_report("big throttle 3 s", vn)
+    tap("x")
+  end
   P("BIG CRAFT after: %d vessel controllers live", #findScripts("vessel_controller"))
 end
 
