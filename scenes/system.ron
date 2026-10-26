@@ -468,8 +468,20 @@
                 posterize_bands: 0,
                 posterize_dither: false,
                 posterize_chroma: false,
+                screen_shaders: [
+                    (
+                        shader: "shaders/sunFlare.flsl",
+                        enabled: true,
+                    ),
+                ],
             ),
-            scripts: [],
+            scripts: [
+                (
+                    kind: "sun_flare",
+                    enabled: true,
+                    params: [],
+                ),
+            ],
             id: Some(13),
         ),
         (

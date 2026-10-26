@@ -50,6 +50,8 @@
 --   gx.shafts            … and the sun shafts through it?
 --   gx.notice            a sentence to show the player, or nil (+ gx.noticeAt)
 --   gx.shadowScale       the world-size factor on the level's shadow distance
+--   gx.flare, gx.dof     does this level draw the sun flare / the far-field blur?
+--   gx.setLook(k, on)    the player's switches: "flare", "dof" (settings.lua)
 --
 -- SHADOW DISTANCE AND WORLD SIZE. The levels' distances were set on 250–400 m
 -- worlds. A scale-3 world is 600–950 m across: from a hill or low flight the
@@ -68,14 +70,23 @@ LEVELS = { "Low", "Medium", "High", "Ultra" }
 -- the lit march is 13–20 ms of a 20–30 ms GPU frame at 16 steps, and 12 steps
 -- are 3–5 ms cheaper with no pixel of a daylight meadow changed; 8 would save
 -- twice that but thins thick ground mist. Ultra keeps the full 16.
+-- THE LENS (post, on the scene's Post Processing node, re-asserted here so a
+-- level is one bundle). See the LOOK section below for what each one is for.
+--   bloom      { threshold, intensity }: only light past `threshold` glows
+--   flare      the sun flare pass (sun_flare.lua, shaders/sunFlare.flsl)
+--   dof        far-field blur: max px at 1080p, and taps; nil = off
 local PRESETS = {
   Low    = { scale = 0.60, sharpen = 0.6, shadows = true, shadowDistance = 70,  volumetric = false, shafts = false, fogSteps = 8,
+             bloom = { 1.6, 0.30 }, flare = false, dof = nil,
              text = "For older or integrated graphics. Softer image, short shadows, plain haze." },
-  Medium = { scale = 0.90, shadows = true, shadowDistance = 140, volumetric = false, shafts = false, fogSteps = 12,
+  Medium = { scale = 0.90, sharpen = 0.25, shadows = true, shadowDistance = 140, volumetric = false, shafts = false, fogSteps = 12,
+             bloom = { 1.6, 0.35 }, flare = true, dof = { 1.75, 8 },
              text = "Balanced. Sharp enough for most screens, holds 60 fps on a mid-range card." },
   High   = { scale = 1.00, shadows = true, shadowDistance = 220, volumetric = true,  shafts = false, fogSteps = 12,
-             text = "Full resolution and volumetric air. Wants a strong graphics card." },
+             bloom = { 1.6, 0.35 }, flare = true, dof = { 2.25, 12 },
+             text = "Full resolution, volumetric air and a soft far distance. Wants a strong graphics card." },
   Ultra  = { scale = 1.00, shadows = true, shadowDistance = 400, volumetric = true,  shafts = true,  fogSteps = 16,
+             bloom = { 1.6, 0.35 }, flare = true, dof = { 2.5, 16 },
              text = "Adds sun shafts through the air. Very expensive at high resolutions." },
 }
 local DEFAULT = "Medium"
@@ -92,6 +103,8 @@ defaults = {
 }
 
 volumetric, shafts = false, false
+flare, dof = false, false
+local look_on = { flare = true, dof = true }   -- the player's switches
 notice, noticeAt = nil, -1
 
 local current = nil
@@ -139,10 +152,150 @@ local function apply_dynamic(p)
   end
 end
 
+
+-- ── THE LOOK: bloom, the sun flare, the far-field blur ──────────────────────
+--
+-- BLOOM is for light, not for daylight. The bright-pass is a hard threshold on
+-- luminance in the scene's own (linear, pre-tonemap) light, so the threshold
+-- says what counts as a light source. At 1.0 a sunlit pale rock, a snowfield
+-- or a white hangar wall passed it and the whole day wore a milky halo; at 1.6
+-- they do not, and what does is what makes its own light — the star's disc,
+-- the tools' energy parts (tool_energy `power` 3), lamps, exhaust, the
+-- lightning flash. The intensity went up a little to give those their glow.
+--
+-- THE FAR FIELD. "Grainy at distance" (measured 2026-10-26, engine rc33,
+-- tools/perf/gfx.sh): a still frame shows a per-pixel speckle on the ground
+-- from ~40 m out, the same with AO off, the fog dither off, the upscale's
+-- sharpening off and at render scale 1, and nothing changes between two
+-- frames of a still camera, so it is spatial aliasing that crawls as the
+-- camera moves. Its cause is the terrain's textures: the engine keeps the
+-- terrain palette as a texture array with ONE mip level, and a palette
+-- texture with no import setting is sampled nearest-neighbour, so a 256 px
+-- tile 4.5 m across, seen 60 m off, puts 3–4 texels in every pixel and picks
+-- one of them at random. The engine has no anti-aliasing pass to hide it.
+-- (Engine card: mipmapped terrain palette; .floptle/textures.ron can at least
+-- ask for linear filtering.) Here: High and Ultra (and Medium, it is cheap)
+-- add a gentle far-field depth of field. Nothing nearer than `focus` is
+-- touched (the near range is set beyond anything on screen, and the engine
+-- leaves an in-focus pixel exactly alone, not filtered), and past it the blur
+-- ramps over `range` to a pixel or two, which is the speckle's own size.
+-- Focus and range grow with height over the ground, so a view from the air
+-- keeps the ground under it sharp, and it fades out in thin air and at night
+-- (a blurred star field is wrong, and in space everything is far). In the VAB
+-- the focus follows the builder camera's distance to its pivot, so the craft
+-- is sharp and the hangar behind it softens a touch. The upscale's sharpening
+-- at Medium is gentler too (0.25, was 0.4): it was sharpening the speckle.
+--
+-- Measured costs are in tools/perf/results/gfx_look.md.
+local post_ref, post_level = nil, nil
+local cam_node = nil       -- "Camera 1" (world_scale finds it)
+local flare_ref = nil
+local at_ref2, bc_ref, gm_ref2, look_t = nil, nil, nil, -100
+local dof_cur = nil        -- what was last written: focus, range, blur
+
+local function post()
+  if not (post_ref and post_ref.node and post_ref.node.valid) then
+    local n = find and find("Post Processing")
+    local c = n and n:getcomponent("PostProcess")
+    post_ref = c and { node = n, c = c } or nil
+    post_level, dof_cur = nil, nil      -- a new node: everything is written again
+  end
+  return post_ref and post_ref.c
+end
+
+function setLook(k, on)
+  if look_on[k] == nil then return end
+  look_on[k] = on ~= false
+  post_level = nil
+end
+
+-- Bloom and the flare: once per level change (and on a scene rebuild).
+local function apply_post(p)
+  local pc = post()
+  if not pc then return end
+  local key = level() .. tostring(look_on.flare)
+  if post_level == key and math.abs((pc.bloomThreshold or 0) - p.bloom[1]) < 1e-3 then return end
+  post_level = key
+  pc.bloom = true
+  pc.bloomThreshold = p.bloom[1]
+  pc.bloomIntensity = p.bloom[2]
+  if not (flare_ref and flare_ref.valid ~= false) then flare_ref = findScript and findScript("sun_flare") or nil end
+  if flare_ref and flare_ref.setOn then flare_ref.setOn(p.flare == true and look_on.flare) end
+end
+
+local function smooth01(a, b, x)
+  local t = math.max(0, math.min(1, (x - a) / (b - a)))
+  return t * t * (3 - 2 * t)
+end
+
+-- The far-field blur for this frame: focus, range (m) and blur (px), or nil.
+local function dof_want(p)
+  if not (p.dof and look_on.dof) then return nil end
+  if time - look_t > 1.0 then
+    look_t = time
+    if not (at_ref2 and at_ref2.valid ~= false) then at_ref2 = findScript("atmosphere") end
+    if not (gm_ref2 and gm_ref2.valid ~= false) then gm_ref2 = findScript("game_manager") end
+    if not (bc_ref and bc_ref.valid ~= false) then bc_ref = findScript("builder_camera") end
+    if not (map_ref and map_ref.valid ~= false) then map_ref = findScript("orbit_map") end
+  end
+  if map_ref and map_ref.map_view then return nil end
+  local px = p.dof[1]
+  if camera and camera.screenSize then
+    local _, h = camera.screenSize()
+    if h and h > 0 then px = px * h / 1080 end
+  end
+  -- The VAB: the craft sharp, the hangar behind it a touch soft.
+  if gm_ref2 and gm_ref2.inputOwner == "builder" and bc_ref and bc_ref.dist then
+    local d = math.max(1, bc_ref.dist)
+    return d * 1.3, d * 2.0 + 10, px * 0.8
+  end
+  if not (cam_node and cam_node.valid) then return nil end
+  local at = at_ref2
+  local rho = at and (at.rho_now or 0) or 0
+  local day = at and smooth01(-0.15, 0.15, at.sun_now or 1) or 1
+  local k = smooth01(0.05, 0.4, rho) * day
+  if k < 0.02 then return nil end
+  local alt = 0
+  if space and space.dominant then
+    local d = space.dominant(cam_node.x, cam_node.y, cam_node.z)
+    local b = d and space.body(d)
+    if b and b.radius then
+      local dx, dy, dz = cam_node.x - b.x, cam_node.y - b.y, cam_node.z - b.z
+      alt = math.max(0, math.sqrt(dx * dx + dy * dy + dz * dz) - b.radius)
+    end
+  end
+  -- On foot the horizon of a 900 m world is ~60 m off; the ground past it
+  -- (and the far hills) is where the texture speckle is. Up in the air the
+  -- ground below stays sharp: the focus moves out with the height.
+  local focus = 25 * shadowScale + 1.2 * alt
+  return focus, focus * 2.5, px * k
+end
+
+local function apply_dof(p)
+  local pc = post()
+  if not pc then return end
+  local f, r, b = dof_want(p)
+  if not f or b < 0.75 then
+    if dof_cur ~= false then pc.dofFocus = 0; pc.dofBlur = 0; dof_cur = false end
+    return
+  end
+  local c = dof_cur
+  if c and math.abs(c[1] - f) < f * 0.03 and math.abs(c[2] - r) < r * 0.03 and math.abs(c[3] - b) < 0.05 then return end
+  dof_cur = { f, r, b }
+  pc.dofFocus = f
+  pc.dofRange = r
+  pc.dofNearRange = 1e6          -- nothing in front of the focus ever blurs
+  pc.dofBlur = b
+  pc.dofSamples = p.dof[2]
+  pc.dofHighlight = 0
+end
+
 local function apply(name)
   local p = PRESETS[name] or PRESETS[DEFAULT]
   current = PRESETS[name] and name or DEFAULT
   volumetric, shafts = p.volumetric, p.shafts
+  flare, dof = p.flare == true, p.dof ~= nil
+  post_level = nil
   if app.setRenderScale then app.setRenderScale(p.scale) end
   -- The upscale from a lowered scale sharpens edges (0.102); a bigger stretch
   -- wants a harder hand, and at 1.0 there is nothing to sharpen.
@@ -158,7 +311,6 @@ end
 
 -- The world under the camera: its radius sets `shadowScale` (see the header).
 -- Once a second; nil-safe off every world.
-local cam_node = nil
 local function world_scale()
   if time - scale_t < 1.0 then return end
   scale_t = time
@@ -196,8 +348,11 @@ end
 
 function start(node)
   local got = with_settings(function()
-    return { level = save.get("gfx_level", nil), dyn = save.get("opt_dynamic_res", false) }
+    return { level = save.get("gfx_level", nil), dyn = save.get("opt_dynamic_res", false),
+             flare = save.get("opt_lens_flare", true), dof = save.get("opt_far_blur", true) }
   end) or {}
+  look_on.flare = got.flare ~= false
+  look_on.dof = got.dof ~= false
   local saved = got.level
   dynamic = got.dyn == true
   -- nothing saved: a first run, on Medium whatever the screen (see the header)
@@ -216,6 +371,8 @@ function update(node, dt)
     l.shadowDistance = want
   end
   if l and p.fogSteps and l.fogSteps ~= p.fogSteps then l.fogSteps = p.fogSteps end
+  apply_post(p)
+  apply_dof(p)
 
 
   if not params.autoLower or lowered then return end

@@ -1,0 +1,80 @@
+// sunFlare — the sun seen through a lens: a glare round the disc, six thin
+// diffraction rays and a short chain of ghosts reflected through the middle of
+// the frame. A screen pass on the Post Processing node (system.ron), driven by
+// scripts/sun_flare.lua, which feeds where the sun is, how much of its light
+// reaches the eye (air, dusk, weather) and how much is lens (more in space).
+//
+// OCCLUSION is read from the frame's own depth, here: nine taps over the
+// sun's disc, each counting as clear when what is drawn there is farther than
+// `occlFar` (the script puts it at half the star's distance, so the star's own
+// sphere and the empty sky read clear, and a hill, a building, a crewmate or
+// the planet itself read as cover). A sun behind a ridge throws no flare,
+// and one half behind it throws half of one.
+//
+// It runs after bloom and depth of field (screen shaders do), so the flare is
+// not blurred by the lens it is pretending to be, and before the grade and the
+// tonemap, so it is graded like the rest of the picture.
+//
+// Cost: 9 depth taps, one atan2 and a few exps a pixel, no textures.
+shader sunFlare {
+  stage post
+  // xy: the sun in uv (may lie off the frame); z: 0..1, in front of the camera
+  // and not far off the frame (the script fades it toward the edges)
+  uniform sunUv: vec3 = vec3(0.5, 0.5, 0)
+  // the world direction to the sun (unit)
+  uniform sunDir: vec3 = vec3(0, 1, 0)
+  // the sun's light reaching the eye, linear rgb; 0 = no flare at all
+  uniform sunCol: vec3 = vec3(0, 0, 0)
+  // x: the disc's angular radius (radians), y: its radius in uv height, z: unused
+  uniform sunSize: vec3 = vec3(0.005, 0.005, 0)
+  // a tap farther than this (world units) sees the sun
+  uniform occlFar: float = 100000 range(0, 10000000)
+  // the glare round the disc (veiling glare in the eye and the lens)
+  uniform glare: float = 0.3 range(0, 4)
+  // diffraction rays off the aperture
+  uniform rays: float = 0.1 range(0, 4)
+  // the ghost chain
+  uniform ghosts: float = 0.1 range(0, 4)
+
+  let texel = screenTexel()
+  let aspect = texel.y / texel.x
+  let s = sunUv.xy
+
+  // ── how much of the disc is uncovered ──
+  let ry = max(sunSize.y, texel.y * 2.0)
+  let rx = ry / aspect
+  let qx = rx * 0.7071
+  let qy = ry * 0.7071
+  let v = step(occlFar, sceneDepth(s))
+    + step(occlFar, sceneDepth(s + vec2(rx, 0))) + step(occlFar, sceneDepth(s - vec2(rx, 0)))
+    + step(occlFar, sceneDepth(s + vec2(0, ry))) + step(occlFar, sceneDepth(s - vec2(0, ry)))
+    + step(occlFar, sceneDepth(s + vec2(qx, qy))) + step(occlFar, sceneDepth(s - vec2(qx, qy)))
+    + step(occlFar, sceneDepth(s + vec2(qx, -qy))) + step(occlFar, sceneDepth(s - vec2(qx, -qy)))
+  let vis = v / 9.0 * saturate(sunUv.z)
+
+  // ── glare: by true angle from the sun, so it does not stretch at the edges ──
+  let ang = acos(clamp(dot(sceneRay(), sunDir), -1.0, 1.0))
+  let a = ang / max(sunSize.x, 0.0005)
+  let veil = 0.5 * exp(-a * 0.9) + 0.06 * exp(-ang * 20.0)
+
+  // ── six rays from the disc, thin and short ──
+  let d = (uv - s) * vec2(aspect, 1.0)
+  let r = length(d)
+  let phi = atan2(d.y, d.x)
+  let spike = pow(abs(cos(phi * 3.0 + 0.35)), 220.0) + 0.3 * pow(abs(cos(phi * 3.0 + 1.4)), 400.0)
+  let ray = spike * exp(-max(r - ry, 0.0) * 11.0) * smoothstep(ry * 0.6, ry * 1.6, r)
+
+  // ── ghosts: the sun reflected through the frame's centre ──
+  let ax = (s - vec2(0.5, 0.5))
+  let g1 = length((uv - (vec2(0.5, 0.5) - ax * 0.45)) * vec2(aspect, 1.0))
+  let g2 = length((uv - (vec2(0.5, 0.5) - ax * 0.9)) * vec2(aspect, 1.0))
+  let g3 = length((uv - (vec2(0.5, 0.5) - ax * 1.35)) * vec2(aspect, 1.0))
+  let g4 = length((uv - (vec2(0.5, 0.5) + ax * 0.3)) * vec2(aspect, 1.0))
+  let gh = vec3(1.0, 0.8, 0.55) * smoothstep(0.045, 0.03, g1) * 0.5
+    + vec3(0.55, 0.75, 1.0) * smoothstep(0.11, 0.07, g2) * 0.22
+    + vec3(0.6, 1.0, 0.75) * (smoothstep(0.03, 0.02, g3) * 0.6 + smoothstep(0.19, 0.17, g3) * smoothstep(0.15, 0.17, g3) * 0.25)
+    + vec3(1.0, 0.6, 0.85) * smoothstep(0.022, 0.012, g4) * 0.4
+
+  let add = sunCol * vis * (veil * glare + ray * rays) + gh * sunCol * vis * ghosts
+  output color = vec4(sceneColor().rgb + add, 1.0)
+}

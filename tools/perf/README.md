@@ -25,6 +25,8 @@ Modes (`perfbench.lua`, strs `mode`):
 | plane | fresh | the 27-part jet: take-off roll (with the 0526 **BURST** capture, and a **LIFT** table of every frame from 0.5 to `liftagl` (12) m up) and low flight |
 | rover | fresh | a 6-part rover driven from the runway past 110 m |
 | builder | fresh | the in-VAB builder at 300/1,000/3,000 parts, then a ~1,000-part launch and its settling (`loads=1` lets it break up; `onlycraft=1` skips straight to the launch; `E SETTLE` lines give the physics split and the root's wake readout each second) |
+| builder `vabidle=1` | fresh | the VAB as a player sits in it (idle empty, 40 parts idle, a part in hand), every script running there with its node (`VAB SCRIPT` lines), then the lean VAB A/B/A (`build_host.setLean`: `g_idle_40_full` / `g_idle_40_lean2`) and zoomed right out (`g_far`, `g_far_full`) |
+| vabshots | fresh | 1920×1080 pictures (`save/user/vabshots/` in the scratch project) of the builder's 2026-10-26 playtest fixes: the tile icons, a hovered card's spinning preview, a part in hand over the panel and in the view (latched card, cursor chip, HOLDING line), the MOVE tool (hover, carried, ESC back) |
 | foot | player's | stand 20 s, walk 40 s at the spawn |
 | meadow | player's | 220 m out to the grassiest spot, stand 8 s, walk 40 s (the turf-wash relay, 0525) |
 | digmeadow | player's | 100 laser bites on that meadow |
@@ -148,3 +150,16 @@ flat magenta.
 - Compare engines only in pairs taken at similar load; the Hub repainted at
   80–99 % CPU under a running game before rc25.
 - Delete probe saves (bench.sh removes its own slot 13 and the slot-1 copy).
+
+## gfx.sh + gfxprobe.lua — the lens look (bloom, sun flare, far blur) and the far-ground grain
+
+    WORK=$SCRATCH/gfx LOCK=$SCRATCH/engine.lock NOSETTINGS=1 tools/perf/gfx.sh <engine> [TAG]
+
+One silent `floptle play` on a COPY of the player's save (1920×1052 window). Each
+scene is shot with the old look (bloom 1.0/0.25, no flare, no far blur, sharpness
+0.4) and the new one: a far vista at Medium and High (plus the grain diagnosis:
+AO off, fog dither off, sharpening off, scale 1, bloom off, the DoF focus band),
+the sun at 25°, the sun low and behind the ground, dusk, orbit and eclipse, and
+the gravity gun and laser working. `perf.gpu` per pass at the vista, with old and
+new interleaved, then each effect alone (`GX GPU` lines). `PATCHES=` applies
+diffs to the scratch copy only. Results are in `results/gfx_look.md`.

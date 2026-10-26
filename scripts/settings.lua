@@ -58,6 +58,8 @@ local DEFAULTS = {
   vol_Master = 1.0, vol_Music = 0.8, vol_SFX = 1.0, vol_Ambient = 1.0, vol_UI = 1.0,
   vsync = "On",
   frame_cap = "off",          -- "off" | "refresh" | "half"
+  lens_flare = true,          -- the sun flare (graphics.lua; levels that draw one)
+  far_blur = true,            -- the far-field depth of field (graphics.lua; High and up)
   dynamic_res = false,
   fov = 66,                   -- vertical degrees (the scene camera's 1.152 rad)
   look = 1.0,                 -- mouse sensitivity multiplier
@@ -296,6 +298,14 @@ local APPLY = {
     if gx and gx.setDynamic then gx.setDynamic(dynamicRes) end
   end,
   fov = apply_fov,
+  lens_flare = function()
+    local gx = ref("graphics")
+    if gx and gx.setLook then gx.setLook("flare", get("lens_flare") ~= false) end
+  end,
+  far_blur = function()
+    local gx = ref("graphics")
+    if gx and gx.setLook then gx.setLook("dof", get("far_blur") ~= false) end
+  end,
   look = function() lookScale = get("look") end,
   invert_y = function() invertY = get("invert_y") == true end,
   fullscreen = function()
@@ -536,6 +546,12 @@ local function display_rows(out)
   ui_scale_rows(out)
   out[#out + 1] = choice("gfx", "Graphics quality", opts, cur, function(v) set("gfx_level", v) end)
   if gx and gx.describe then out[#out + 1] = hint("gfxd", gx.describe(cur)) end
+  out[#out + 1] = on_off("flare", "Sun lens flare", get("lens_flare") ~= false,
+    function(v) set("lens_flare", v) end)
+  out[#out + 1] = on_off("fblur", "Distance blur", get("far_blur") ~= false,
+    function(v) set("far_blur", v) end)
+  out[#out + 1] = hint("lookh", "From Medium up: the sun throws a lens flare (stronger in space), and "
+    .. "the far ground is softened a touch so its texture does not crawl. Nothing near you is blurred.")
 
   local fs = app and app.fullscreen and app.fullscreen()
   out[#out + 1] = choice("fs", "Window", { { label = "Fullscreen", value = true },

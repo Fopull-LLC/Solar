@@ -1304,7 +1304,7 @@ end
 -- moment the camera is placed — every frame, whichever way this one went (the
 -- map, the cockpit, on foot). Two nodes' lateUpdates run in load order, which
 -- is not something to rely on, so this is a call rather than an ordering.
-local atmo_ref
+local atmo_ref, flare_ref
 function lateUpdate(node, dt)
   -- The VAB builder's own camera has the view (build_host); this one waits.
   local gm = script_ref("game_manager")
@@ -1327,6 +1327,10 @@ function lateUpdate(node, dt)
   end
   if not atmo_ref or not atmo_ref.valid then atmo_ref = findScript("atmosphere") end
   if atmo_ref and atmo_ref.valid and atmo_ref.follow then atmo_ref.follow(dt) end
+  -- The sun flare projects the star through the camera, so it too wants the
+  -- camera where this frame put it (its own lateUpdate runs before ours).
+  if not flare_ref or not flare_ref.valid then flare_ref = findScript("sun_flare") end
+  if flare_ref and flare_ref.valid and flare_ref.follow then flare_ref.follow(dt) end
 end
 
 -- ── CINEMATIC MODE ──────────────────────────────────────────────────────────
