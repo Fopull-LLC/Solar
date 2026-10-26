@@ -1016,6 +1016,15 @@
         base: ( text_color: "phos", text_size: 18.0, font: "mono" ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
+    // (smaller sizes for a long agency name on a save card: scripts/menu_slot.lua fitName)
+    "menu/slotName15": (
+        base: ( text_color: "phos", text_size: 15.0, font: "mono" ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    "menu/slotName12": (
+        base: ( text_color: "phos", text_size: 12.0, font: "mono" ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
     "menu/slotGo": (
         base: ( text_color: "accent", text_size: 13.0, font: "label", tracking: 1.6 ),
         transition: ( duration: 0.0, ease: Linear ),

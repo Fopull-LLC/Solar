@@ -879,8 +879,10 @@ function update(node, dt)
   end
   -- The pause menu and the orbit map own the screen while they are up: a
   -- prompt drawn over them is one you cannot act on.
-  local pm, om = ref("pause_menu"), ref("orbit_map")
-  if (pm and pm.open) or (om and om.isOpen and om.isOpen()) then
+  -- So does an open right-click menu: the prompt sits where the menu opens
+  -- beside the crew, and its text was drawn over the menu's rows.
+  local pm, om, cmn = ref("pause_menu"), ref("orbit_map"), ref("context_menu")
+  if (pm and pm.open) or (om and om.isOpen and om.isOpen()) or (cmn and cmn.isOpen and cmn.isOpen()) then
     if prompt_el then prompt_el.visible = false end
     return
   end

@@ -777,6 +777,20 @@ local function body_state(vnode)
     v = BS_LAST.v
   end
   if not BS_LAST or BS_LAST.node ~= vnode or now ~= BS_LAST.t then BS_LAST = { node = vnode, t = now, rel = rel, v = v } end
+  -- The craft's own velocity and orbit, as the flight HUD reads them
+  -- (vessel_controller: node.v, already relative to the body it flies over,
+  -- and space.elements). The smoothed track above differences com against the
+  -- body's position, two reads that can come from different ticks while the
+  -- body moves ~240 m/s on its rails.
+  local el = nil
+  if vnode.vx and space.elements then
+    v = { x = vnode.vx, y = vnode.vy, z = vnode.vz }
+    el = space.elements(vnode.x, vnode.y, vnode.z, vnode.vx, vnode.vy, vnode.vz)
+    local nrel = { x = vnode.x - b.x, y = vnode.y - b.y, z = vnode.z - b.z }
+    r = len(nrel.x, nrel.y, nrel.z)
+    U = scl(nrel, 1 / r)
+    rel = nrel
+  end
   local mu = b.mu
   local v2 = dot(v, v)
   local eps = v2 / 2 - mu / r
@@ -784,8 +798,13 @@ local function body_state(vnode)
   local hh = dot(h, h)
   local e = math.sqrt(math.max(0, 1 + 2 * eps * hh / (mu * mu)))
   local a = eps < 0 and -mu / (2 * eps) or math.huge
+  local apo, peri = a * (1 + e) - b.radius, a * (1 - e) - b.radius
+  if el and el.periapsis then
+    peri = el.periapsis - b.radius
+    apo = el.apoapsis and (el.apoapsis - b.radius) or math.huge
+  end
   return { mu = mu, eps = eps, wv = len(i.vel.x, i.vel.y, i.vel.z), bv = len(b.vx or 0, b.vy or 0, b.vz or 0), i = i, b = b, U = U, r = r, alt = r - b.radius, v = v, V = math.sqrt(v2), vr = dot(v, U),
-           apo = a * (1 + e) - b.radius, peri = a * (1 - e) - b.radius }
+           apo = apo, peri = peri }
 end
 -- the craft's own axis that pointed up on the pad (a vessel node need not be +Y up)
 local UP_LOCAL = nil
@@ -903,7 +922,7 @@ end
 -- phase it ended in ("orbit" when it made it) and the last body state.
 ascend = function(vc)
   local vn = vc.node
-  STAGED, UP_LOCAL = nil, nil
+  STAGED, UP_LOCAL, BOOST = nil, nil, nil
   local S = body_state(vn)
   up_axis(vn, S.U)
   P("ROCKET on the pad: %d parts, %.2f t, alt %.1f; mu %.4g R %.1f craft |v| %.1f body |v| %.1f rel %.1f eps %.1f", #S.i.parts, S.i.mass, S.alt, S.mu, S.b.radius, S.wv, S.bv, S.V, S.eps)
@@ -918,7 +937,8 @@ ascend = function(vc)
   local wd = save.get("world." .. S.b.name) or {}
   local atmoH = (type(wd) == "table" and wd.atmoHeight) or S.b.radius * 0.3
   local APO = params.apo or math.max(atmoH * 1.25, S.b.radius * 0.15) + 40
-  local PERI = params.peri or math.max(atmoH * 1.05, S.b.radius * 0.1) + 20
+  -- (over the "Made Orbit" contract's periapsis: builder.orbitAlt, 1.08 × the air)
+  local PERI = params.peri or math.max(atmoH * 1.08, S.b.radius * 0.1) + 20
   P("ROCKET world %s R %.0f atmo %.0f: apo target %.0f, peri target %.0f", S.b.name, S.b.radius, atmoH, APO, PERI)
   sc_note("c_ascent", "world", string.format("%s R%.0f", S.b.name, S.b.radius))
   local phase, tthr = "vertical", nil
@@ -952,7 +972,16 @@ ascend = function(vc)
         phase = "coast"; P("MECO apo %.0f peri %.0f alt %.0f V %.1f (craft |v| %.1f body %.1f eps %.1f)", S.apo, S.peri, S.alt, S.V, S.wv, S.bv, S.eps)
       end
     elseif phase == "coast" then
+      -- the air takes a deep-air world's coast hundreds of metres short of
+      -- the MECO apoapsis (rc33: 1,046 predicted, 811 reached, with the air
+      -- up to 793): top it up as a player watching the APOAPSIS readout does
+      if S.vr > 3 and S.apo < APO * 0.97 and (vc.throttle or 0) <= 0.01 and not BOOST then
+        BOOST = true; vc.setThrottle(params.circthr); P("BOOST apo %.0f under %.0f at alt %.0f", S.apo, APO, S.alt)
+      elseif BOOST and S.apo >= APO then
+        BOOST = nil; vc.setThrottle(0); P("BOOST done apo %.0f alt %.0f", S.apo, S.alt)
+      end
       if S.vr < 3 then
+        BOOST = nil
         -- a gentle burn (circthr of full): a full-throttle Anvil on a 900 m world
         -- adds hundreds of m/s in a few frames and escapes before the lagged
         -- periapsis estimate can see it (rc25 gameplay: apo inf, fuel 0)
@@ -973,7 +1002,8 @@ ascend = function(vc)
       -- (the craft's track jumps when a stage drops away: its speed is only
       -- trusted for the escape test a second after staging)
       local esc = S.eps >= 0 and time - (STAGE_T or -10) > 1.0
-      if S.peri > PERI or esc or (vc.fuel or 1) <= 0 then
+      -- (a periapsis can never rise past the height the burn is made at)
+      if S.peri > math.min(PERI, S.alt - 15) or esc or (vc.fuel or 1) <= 0 then
         release_all(); tap("x"); vc.setThrottle(0); thr_window("x cut (orbit)")
         P("ORBIT apo %.0f peri %.0f alt %.0f V %.1f fuel %.1f%s", S.apo, S.peri, S.alt, S.V, vc.fuel or -1, esc and " (ESCAPE: cut)" or "")
         phase = "orbit"; break

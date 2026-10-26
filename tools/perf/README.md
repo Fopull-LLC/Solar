@@ -46,6 +46,38 @@ On the player's save the probe also prints `GROUND96`: 96 ground radii round the
 base summed, at the reveal and after the scenario — the same number on two
 engines means the same ground.
 
+## demo.sh + demo_probe.lua — a whole player session, for a pre-playtest pass
+
+    WORK=$SCRATCH/qa LOCK=$SCRATCH/engine.lock tools/perf/demo.sh <engine> [TAG]
+
+One silent `floptle play`. A NEW save made from the main menu's new-save panel
+(the agency typed in, CREATE), the time from CREATE to the reveal; the first
+view (objectives card, crew record, pack, belt); the right-click suit menu with
+the helmet off and on; First Steps (a plant cut with the laser's E, ore dug);
+a flag and a beacon bought, held and set down; the VAB with the stock starter
+(Pod, Parachute, FT-S, Sputter) built in place and LAUNCHed — **the first
+launch's wait**, LAUNCH to the crew in the pod on the pad; a climb, the map,
+a revert to launch, out of the pod; the Tracking Station, the map, the pause
+menu. `USERSAVE=1` loads a COPY of the player's save as CONTINUE does and checks
+the crew migration (member #1 owns the old pack), the agency prompt, the fleet
+and beacons. Params (`DEMO_PARAMS`): `rush=1` goes straight from the reveal to
+the VAB and launches (the player who runs for the rocket), `walk=1` walks there
+with W instead of being placed, `seed=N` types a fixed galaxy seed (4242 is the
+item probe's world, whose base faces the way its planet moves). One `DEMO …
+RESULT` line a check, a `HITCH` line for every frame over 100 ms after the
+reveal with the step it fell in, 1920×1080 pictures with the UI in
+`$WORK/demo/<TAG>/png`. The probe's saves are deleted afterwards.
+
+**Orbit (2026-10-26):** the gameplay smoke's `orbit` step "always failed"
+because the probe read the craft's velocity by differencing its position
+against the planet's, two reads that can come from different ticks while the
+planet moves ~240 m/s: the MECO apoapsis was overstated and the circularisation
+started while falling, then drove the craft to escape. `body_state` now reads
+the craft's own velocity and `space.elements`, as the flight HUD does, and tops
+the apoapsis back up when the deep air takes it off during the coast: the
+Skipper → Anvil two-stage makes orbit (apo 3,527 m, peri 853 m on Naolol). The
+stock starter is a hop by design (builder.lua HOP_MULT), not an orbiter.
+
 ## gpushot.sh — a picture of one look, for before/after
 
     tools/perf/gpushot.sh <engine> <look> [after-seconds]      (WHERE=walk for the meadow, USERSAVE=1 for the player's spawn)

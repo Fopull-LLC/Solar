@@ -225,6 +225,12 @@ do
   end
   ok(found, "the locker lists what is in it")
   ok(R.live(R.byId(list, "mass").value) == "92 kg", "a locker's load weighs on the part")
+  -- the Take…/Put… sub-panels' titles fit the menu's heading (QA 2026-10-26:
+  -- "TAKE FROM THE LOCK…" was cut off)
+  for _, id in ipairs({ "take_locker:7", "put_locker:7" }) do
+    local e = R.byId(list, id)
+    ok(e and e.title and #e.title <= 16, "the " .. id .. " sub-panel's title fits (" .. tostring(e and e.title) .. ")")
+  end
   -- actions
   list = R.entriesFor(part(6), ctx_for(near))
   local lt = R.byId(list, "act_lit.toggle")

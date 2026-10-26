@@ -155,6 +155,16 @@ _G.findScript = plain_find
 menu.update({}, 1 / 60)
 assert(nodes["Facility Prompt"].__el.visible == true, "prompt should come back after unpausing")
 
+-- An open right-click menu beside the crew: the prompt was drawn over its rows
+-- (QA 2026-10-26, "Enter the Vehicle Assembly — builder · E" across IN HAND).
+local cmenu = { isOpen = function() return true end }
+_G.findScript = function(kind) if kind == "context_menu" then return cmenu end return plain_find(kind) end
+menu.update({}, 1 / 60)
+assert(nodes["Facility Prompt"].__el.visible == false, "prompt should hide under an open context menu")
+_G.findScript = plain_find
+menu.update({}, 1 / 60)
+assert(nodes["Facility Prompt"].__el.visible == true, "prompt should come back when the context menu closes")
+
 -- Press E → panel opens on the Tracking Station.
 KEYS["e"] = true
 menu.update({}, 1 / 60)

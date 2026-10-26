@@ -371,20 +371,27 @@ local function money_of(co, v)
   return (co and co.money) and co.money(v) or ("$" .. tostring(v))
 end
 
+-- The crew member you control, by name (the roster's), else "Crew".
+local function crew_name()
+  local cr = ref("crew")
+  local r = cr and cr.get and cr.activeId and cr.get(cr.activeId())
+  return (r and type(r.name) == "string" and r.name ~= "") and r.name or "Crew"
+end
+
 -- The crew, as a row: on foot somewhere, or in a craft's seat.
 local function crew_entry(rows)
   local pw = ref("planet_walker")
   local astro = find("Astronaut")
   for _, e in ipairs(rows) do
     if e.crew then
-      return { fid = "crew", name = "Crew", status = "aboard " .. e.name, aboard = e, body = e.body }
+      return { fid = "crew", name = crew_name(), status = "aboard " .. e.name, aboard = e, body = e.body }
     end
   end
   if not astro then return nil end
   local body = space.dominant(astro.x, astro.y, astro.z)
   local b = body and space.body(body)
   local alt = b and (math.sqrt((astro.x - b.x) ^ 2 + (astro.y - b.y) ^ 2 + (astro.z - b.z) ^ 2) - b.radius) or nil
-  return { fid = "crew", name = "Crew", status = (pw and pw.onFoot) and "on foot" or "at the base",
+  return { fid = "crew", name = crew_name(), status = (pw and pw.onFoot) and "on foot" or "at the base",
            body = body, alt = alt }
 end
 
@@ -619,13 +626,14 @@ local function detail(e, fo, co)
     end
     add(line("pwr", "Power", "always on (long-life cell)", "panel/cellMuted"))
     add(wrapped("about", "panel/hint",
-      "A relay beacon passes every signal it hears on toward home. Plant more with the tool belt's [4] "
-      .. "to carry the network round the world; walk up to one and press Q with [4] in hand to take it back."))
+      "A relay beacon passes every signal it hears on toward home. Carry more (the depot sells them), "
+      .. "take one in hand and set it down to carry the network round the world; right-click a planted one "
+      .. "→ Pick up to take it back."))
     return rows
   end
   if e.fid == "crew" then
     add({ "text", key = "st", style = "panel/label", w = "100%", h = "fit", text = "Your crew" })
-    add({ "text", key = "nm", style = "panel/heading", w = "100%", h = "fit", text = "Crew" })
+    add({ "text", key = "nm", style = "panel/heading", w = "100%", h = "fit", text = e.name or "Crew" })
     add(line("where", "Where", (e.aboard and ("in the seat of " .. e.aboard.name)) or
       string.format("%s, %s", e.status or "on foot", e.body or "?")))
     if e.alt then add(line("alt", "Altitude", fmt_alt(e.alt))) end

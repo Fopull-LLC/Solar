@@ -58,6 +58,38 @@ end
 
 local shown = nil   -- the emblem texture on the card (nil: none yet)
 
+-- THE AGENCY'S NAME ON THE CARD fits the 200 units between the emblem and
+-- CONTINUE (QA 2026-10-26: "Solar Exploration Agency" at 18 ran right up to
+-- CONTINUE, and a longer name ran under it). The slot font is about 0.46 of
+-- its size a letter, in design units (measured: 24 letters at 18 span 205):
+-- the largest of SIZES that fits, and past the smallest the name is cut with
+-- an ellipsis (the new-save field takes 32 letters, which fit at 12). Each size is a style (ui/solar.uistyle.ron
+-- "menu/slotName", "menu/slotName15" …): the style sets the text size, so an
+-- element's own textSize would not hold. Globals for the tests.
+-- → text, size, style
+NAME_W, NAME_SIZE, CHAR_W = 196, 18, 0.46
+SIZES = { 18, 15, 12 }
+SIZE_MIN = SIZES[#SIZES]
+local function style_of(size) return size == 18 and "menu/slotName" or ("menu/slotName" .. size) end
+function fitName(s)
+  s = tostring(s or "")
+  local n = utf8 and utf8.len and utf8.len(s) or #s
+  if not n or n < 1 then return s, NAME_SIZE, style_of(NAME_SIZE) end
+  for _, size in ipairs(SIZES) do
+    if n * CHAR_W * size <= NAME_W then return s, size, style_of(size) end
+  end
+  local keep = math.max(1, math.floor(NAME_W / (CHAR_W * SIZE_MIN)) - 1)
+  -- (cut on a character, not a byte: names may carry accents)
+  local cut = s
+  if utf8 and utf8.offset then
+    local b = utf8.offset(s, keep + 1)
+    if b then cut = s:sub(1, b - 1) end
+  else
+    cut = s:sub(1, keep)
+  end
+  return (cut:gsub("%s+$", "")) .. "…", SIZE_MIN, style_of(SIZE_MIN)
+end
+
 local function refresh(node)
   local n = math.floor(params.slot)
   local v = peek_all("slot" .. n, { "g_seed", "agency.name", "agency.emblem" })
@@ -72,7 +104,12 @@ local function refresh(node)
       if ok then tex = t end
     end
   end
-  if name then name.text = used and (agency or "Solar Exploration Agency") or "Empty" end
+  if name then
+    local txt, size, style = "Empty", NAME_SIZE, "menu/slotName"
+    if used then txt, size, style = fitName(agency or "Solar Exploration Agency") end
+    name.text = txt
+    if name.style ~= style then name.style = style end
+  end
   if go then go.text = used and "CONTINUE  ▸" or "NEW GALAXY  +" end
   if tag then tag.text = used and string.format("SLOT %d  ·  GALAXY %d", n, seed) or string.format("SLOT %d", n) end
   if el then el.width = used and W_WITH_DELETE or W_FULL end

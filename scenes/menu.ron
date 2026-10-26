@@ -747,7 +747,7 @@
             parent: Some(26),
             ui: Some((
                 place: Free(pos: (0.0, 24.0)),
-                size: (Pct(1.0), Fixed(32.0)),
+                size: (Fixed(600.0), Fixed(32.0)),
                 text: Some((
                     text: "NEW GALAXY",
                     size: 24.0,
@@ -772,7 +772,7 @@
             parent: Some(26),
             ui: Some((
                 place: Free(pos: (0.0, 60.0)),
-                size: (Pct(1.0), Fixed(16.0)),
+                size: (Fixed(600.0), Fixed(16.0)),
                 text: Some((
                     text: "SAVE SLOT 1",
                     size: 11.0,
@@ -839,7 +839,7 @@
             parent: Some(26),
             ui: Some((
                 place: Free(pos: (0.0, 152.0)),
-                size: (Pct(1.0), Fixed(16.0)),
+                size: (Fixed(600.0), Fixed(16.0)),
                 text: Some((
                     text: "type digits for a fixed seed  ·  backspace erases  ·  click the field to go back to random",
                     size: 11.0,

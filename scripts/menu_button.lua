@@ -37,9 +37,11 @@ function update(node, dt)
   -- main menu that was not there, and now it opens the controls, which are
   -- exactly as useful whether or not there is a save slot behind you.
   --
-  -- Not over the menu it opens.
+  -- Not over the menu it opens, and not in the VAB builder: its toolbar runs
+  -- to the top-right corner and this button sat on its LAUNCH (the builder
+  -- has its own Esc, "leave").
   local pm = ref("pause_menu")
-  local show = (mgr and not mgr.loading and not (pm and pm.open)) or false
+  local show = (mgr and not mgr.loading and not (pm and pm.open) and mgr.inputOwner ~= "builder") or false
   el.visible = show
 end
 

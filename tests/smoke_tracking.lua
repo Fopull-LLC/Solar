@@ -136,6 +136,8 @@ local ts = load("solar/scripts/tracking_station.lua", {
     if k == "comms" then return { valid = true, transmitters = 4, refreshNow = function() end } end
     if k == "company" then return CO end
     if k == "base_facilities" then return BF end
+    if k == "crew" then return { valid = true, activeId = function() return 1 end,
+      get = function(id) return id == 1 and { id = 1, name = "Felix Vance" } or nil end, roster = function() return {} end } end
     return nil
   end,
   save = { get = function(k) return SAVE[k] end, set = function(k, v) SAVE[k] = v end },
@@ -156,6 +158,7 @@ validate(tree, "ts")
 check(#bad == 0, "every tracking-station element is valid: " .. table.concat(bad, ", "))
 check(by_key(tree, "rcrew") and by_key(tree, "rc1") and by_key(tree, "rc2") and by_key(tree, "rc3"),
   "the board lists the crew and every craft")
+check(has_text(tree, "Felix Vance"), "the crew row names the crew member you control (not \"Crew\")")
 check(has_text(tree, "▮▮▮▮"), "a craft in contact shows its signal bars")
 check(has_text(tree, "no link"), "a craft out of contact says so")
 -- select the probe out of contact: detail says why it can't be flown

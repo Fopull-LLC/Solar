@@ -216,8 +216,8 @@ end
 local function widen(node)
   local _, ng = ui_of("NG Panel")
   if ng and ng.width ~= PANEL_W then ng.width = PANEL_W end
-  -- (the title, slot label and seed hint are sized to the panel in the scene:
-  -- they stay centred across the whole card)
+  -- (the title, slot label and seed hint are GAL_W wide in the scene: they
+  -- stay centred over the galaxy half, clear of the agency column)
 end
 
 local function name_focused()

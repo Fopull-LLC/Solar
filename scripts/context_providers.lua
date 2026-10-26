@@ -457,7 +457,7 @@ function move_rows(out, ctx, t, cid, group, what)
   local function reach_ok() return actorReach(ctx, t) ~= nil end
   local function reach_why() local _, d = actorReach(ctx, t); return far_why(d) end
   out[#out + 1] = { type = "sub", id = "take_" .. cid, group = group, label = "Take…", hint = "▸",
-    title = "TAKE FROM THE " .. what, enabled = reach_ok, why = reach_why,
+    title = "TAKE  ·  " .. what, enabled = reach_ok, why = reach_why,
     sub = function()
       local inv, mats = R(ctx, "inventory"), R(ctx, "materials")
       local list = {}
@@ -497,7 +497,7 @@ function move_rows(out, ctx, t, cid, group, what)
       return list
     end }
   out[#out + 1] = { type = "sub", id = "put_" .. cid, group = group, label = "Put…", hint = "▸",
-    title = "PUT IN THE " .. what, enabled = reach_ok, why = reach_why,
+    title = "PUT  ·  " .. what, enabled = reach_ok, why = reach_why,
     sub = function()
       local inv = R(ctx, "inventory")
       local list = {}
