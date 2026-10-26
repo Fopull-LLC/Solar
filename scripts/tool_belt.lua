@@ -233,17 +233,17 @@ TOOLDEF = {
 -- hand's hold. The first-person models carry their own gloved hands and are
 -- different meshes, so they have their own centre and their own numbers.
 RIG = {
-  gravgun = { grip = { 0.0, -0.056, 0.123 }, muzzle = { 0.0, 0.029, -0.227 }, fore = { 0.0, -0.061, -0.052 } },
-  laser   = { grip = { 0.022, -0.048, 0.195 }, muzzle = { 0.022, 0.037, -0.42 }, fore = { 0.022, -0.043, -0.105 } },
+  gravgun = { grip = { 0.0, -0.058, 0.127 }, muzzle = { 0.0, 0.032, -0.253 }, fore = { 0.0, -0.068, -0.082 } },
+  laser   = { grip = { 0.008, -0.039, 0.207 }, muzzle = { 0.008, 0.046, -0.433 }, fore = { 0.008, -0.028, -0.069 } },
 }
 RIG_FP = {
-  gravgun = { grip = { 0.092, 0.101, -0.042 }, muzzle = { 0.092, 0.186, -0.392 } },
-  laser   = { grip = { 0.091, 0.111, 0.049 }, muzzle = { 0.091, 0.196, -0.566 } },
+  gravgun = { grip = { 0.092, 0.101, -0.042 }, muzzle = { 0.092, 0.191, -0.422 } },
+  laser   = { grip = { 0.091, 0.111, 0.049 }, muzzle = { 0.091, 0.196, -0.591 } },
 }
 -- THIRD PERSON: how each tool is carried, in the body's frame (metres from the
 -- right shoulder joint: in toward the chest, down, forward), at rest (`low`,
 -- a relaxed low-ready) and while the trigger is held (`aim`). Every tool is at
--- TRUE SIZE (scale 1): the gravity gun is 0.64 m long, the laser 0.83 m.
+-- TRUE SIZE (scale 1): the gravity gun is 0.69 m long, the laser 0.91 m.
 -- `pitch` is the low-ready's muzzle-down angle.
 HOLD = {
   gravgun = { low = { 0.07, 0.25, 0.30 }, aim = { 0.08, 0.19, 0.33 }, pitch = -0.32,
@@ -258,8 +258,26 @@ HOLD = {
 -- it (see THE HOLD).
 -- FIRST PERSON: where the grip sits in the camera's frame (+x right, +y up,
 -- -z ahead), at true size, and the view-model camera's field of view.
-local VIEW_AT = { 0.21, -0.265, -0.60 }  -- raised so the suit's gloves show gripping the tool
+local VIEW_AT = { 0.25, -0.205, -0.62 }  -- low right, the gloves in sight on both grips
 local VIEW_SCALE = 1.0
+-- The view model is toed in so its muzzle points at the crosshair this far
+-- out (m), and canted (rad, + = top to the left). It turns about its GRIP,
+-- which stays at VIEW_AT. Toed in at 2.5 m and canted a fifth of a turn to
+-- the right, the tool shows its left flank (the nameplate, the coil, the
+-- claws or the heat sink) and the off hand round its fore-grip, instead of
+-- only its back end.
+local VIEW_TOE = 2.5
+local VIEW_CANT = -0.35
+-- A point in the view model's frame turned by its angles (node:setAngles:
+-- yaw about Y, then pitch about X, then roll about Z).
+local function vm_rot(yw, pt, rl, x, y, z)
+  local cr, sr = math.cos(rl), math.sin(rl)
+  x, y = x * cr - y * sr, x * sr + y * cr
+  local cp, sp = math.cos(pt), math.sin(pt)
+  y, z = y * cp - z * sp, y * sp + z * cp
+  local cy, sy = math.cos(yw), math.sin(yw)
+  return x * cy + z * sy, y, -x * sy + z * cy
+end
 local VM_FOV = 0.95
 -- The render layer the view models live on: "viewmodel" (project.ron), else
 -- the project's spare "entity" layer — the bit is the layer's place in
@@ -751,9 +769,11 @@ end
 
 local function place_fp(n, id)
   local g = RIG_FP[id].grip
+  local yw, pt = math.atan(VIEW_AT[1] / VIEW_TOE), math.atan(-VIEW_AT[2] / VIEW_TOE)
+  local gx, gy, gz = vm_rot(yw, pt, VIEW_CANT, g[1] * VIEW_SCALE, g[2] * VIEW_SCALE, g[3] * VIEW_SCALE)
   n.scale = VIEW_SCALE
-  n.x, n.y, n.z = VIEW_AT[1] - g[1] * VIEW_SCALE, VIEW_AT[2] - g[2] * VIEW_SCALE, VIEW_AT[3] - g[3] * VIEW_SCALE
-  n:setAngles(0, 0, 0)
+  n.x, n.y, n.z = VIEW_AT[1] - gx, VIEW_AT[2] - gy, VIEW_AT[3] - gz
+  n:setAngles(yw, pt, VIEW_CANT)
 end
 
 local function cam_node()
@@ -829,6 +849,15 @@ local function swap_dip()
   return math.sin(k * math.pi)
 end
 
+-- The view model's angles this frame: the toe-in, the sway, the kick and a
+-- swap's dip (show_models places it; muzzle() follows the same turn).
+local function vm_angles()
+  local dip = swap_dip()
+  return math.atan(VIEW_AT[1] / VIEW_TOE) + view.sx * 1.2,
+    math.atan(-VIEW_AT[2] / VIEW_TOE) + view.kick * 1.4 + view.sy * 1.0 - dip * 0.7,
+    VIEW_CANT - view.sx * 1.5
+end
+
 -- Show the equipped tool in the right place (or nothing), and move the first-
 -- person model: sway against the look, bob with the walk, kick on recoil.
 local function show_models(node, dt, carrying)
@@ -886,15 +915,16 @@ local function show_models(node, dt, carrying)
   -- A swap drops the tool out of the bottom of the view and brings the new
   -- one up; a held trigger brings the tool in a touch toward the middle.
   local dip = swap_dip()
-  local g = RIG_FP[want].grip
   local lean = inUse and 0.012 or 0.0
-  fv.x = VIEW_AT[1] - g[1] * VIEW_SCALE + view.sx + bx - lean
-  fv.y = VIEW_AT[2] - g[2] * VIEW_SCALE + view.sy - by + view.kick * 0.2 - dip * 0.22
-  fv.z = VIEW_AT[3] - g[3] * VIEW_SCALE + view.kick
-  -- Toed in toward the crosshair 7 m out, then the sway's lag and the kick.
-  local yaw_in = math.atan(VIEW_AT[1] / 7.0)
-  local pitch_in = math.atan(-VIEW_AT[2] / 7.0)
-  fv:setAngles(yaw_in + view.sx * 1.2, pitch_in + view.kick * 1.4 + view.sy * 1.0 - dip * 0.7, -view.sx * 1.5)
+  -- Toed in toward the crosshair VIEW_TOE out, then the sway's lag and the
+  -- kick; turned about the grip, so the hand stays where VIEW_AT puts it.
+  local yw, pt, rl = vm_angles()
+  local g = RIG_FP[want].grip
+  local gx, gy, gz = vm_rot(yw, pt, rl, g[1] * VIEW_SCALE, g[2] * VIEW_SCALE, g[3] * VIEW_SCALE)
+  fv.x = VIEW_AT[1] - gx + view.sx + bx - lean
+  fv.y = VIEW_AT[2] - gy + view.sy - by + view.kick * 0.2 - dip * 0.22
+  fv.z = VIEW_AT[3] - gz + view.kick
+  fv:setAngles(yw, pt, rl)
 end
 
 -- THE HOLD (third person). The rig's clips carry nothing in their hands, so
@@ -913,6 +943,8 @@ end
 -- In lateUpdate, after planet_walker's (the same node, the script listed
 -- first): the shoulders read here carry this frame's lean, and every point is
 -- in the world the engine re-poses the rig in.
+-- (the mechanisms' springs: see THE MECHANISMS below; the hold reads the kick)
+local mech = { claw = 0.0, clawv = 0.0, spin = 0.0, spinv = 0.0, kick = 0.0, kickv = 0.0, pt = -10.0 }
 local hold = { dir = nil, w = 0.0, id = nil, a = 0.0 }
 local function hold_pose(dt, active)
   local m, an, node = crew_model()
@@ -976,7 +1008,7 @@ local function hold_pose(dt, active)
   if flat:length() < 1e-4 then flat = vec3(0, 0, 1) end
   flat = flat:normalized()
   -- Forward along the aim's heading; raised a little as the aim rises.
-  local grip = SR + vec3(inn, -down, 0) + flat * fwdv + vec3(0, math.max(0, dir.y) * 0.12, 0)
+  local grip = SR + vec3(inn, -down, 0) + flat * fwdv + vec3(0, math.max(0, dir.y) * 0.12, 0) - dir * mech.kick
   local function tool_pt(p) return grip + xr * (p[1] - rg.grip[1]) + yu * (p[2] - rg.grip[2]) - dir * (p[3] - rg.grip[3]) end
   if tp and tp ~= "spawning" and tp.valid then
     local origin = tool_pt({ 0, 0, 0 })
@@ -1001,6 +1033,100 @@ local function hold_pose(dt, active)
   local rf, lf = fing(hd.rfing):normalized(), fing(hd.lfing):normalized()
   an:lookAt({ "Hand.Right" }, rw + rf, { axis = vec3(-0.996, 0.036, 0.08), limit = 85, weight = 0.85 * w })
   an:lookAt({ "Hand.Left" }, lw + lf, { axis = vec3(0.996, 0.036, 0.08), limit = 85, weight = 0.85 * w })
+end
+
+-- THE MECHANISMS. The tools are built with moving parts (tools/gen_tools.py
+-- keeps them as nodes of the model, which the engine poses as bones): the
+-- gravity gun's three claws open as it reaches for something, close on what
+-- it holds and snap open on a punt, which also kicks the gun back in the
+-- hands; the laser's knurled focus ring spins with the beam and its heat
+-- sink glows with `heat`. Only the shown model is posed, and only while
+-- something moves: bone writes are held (anim:holdPose), so a tool at rest
+-- costs nothing.
+local CLAWS = { "ClawTop", "ClawLeft", "ClawRight" }
+local mech_rig = {}       -- set .. id → { node =, an =, ids = {name → index}, tries =, last = {}, heat = }
+punt_t = -10.0            -- when the gravity gun last threw (the punt's snap)
+
+local function mech_of(set, id)
+  local n = models[set][id]
+  if not (n and n ~= "spawning" and n.valid and n.visible) then return nil end
+  local k = set .. id
+  local r = mech_rig[k]
+  if not r or r.node ~= n then
+    r = { node = n, an = n.animator and n:animator() or nil, ids = nil, tries = 0, last = {}, heat = -1 }
+    mech_rig[k] = r
+  end
+  if not r.ids and r.an and r.tries < 60 then
+    -- boneIndex answers once the model has posed (and errors on a name the
+    -- model lacks): asked for a few frames, then given up on
+    r.tries = r.tries + 1
+    local ids, any = {}, false
+    for _, b in ipairs({ "ClawTop", "ClawLeft", "ClawRight", "Focus" }) do
+      local ok, i = pcall(r.an.boneIndex, r.an, b)
+      if ok and i then ids[b] = i; any = true end
+    end
+    if any then r.ids = ids; r.an:holdPose(true) end
+  end
+  return r
+end
+
+local function bone_rot(r, name, yaw, pitch, roll)
+  local i = r.ids and r.ids[name]
+  if not i then return end
+  local l = r.last[name]
+  if l and math.abs(l[1] - yaw) + math.abs(l[2] - pitch) + math.abs(l[3] - roll) < 2e-4 then return end
+  r.an:setBoneRot(i, yaw, pitch, roll)
+  r.last[name] = { yaw, pitch, roll }
+end
+
+local function articulate(dt)
+  local id = shown_tool(toolId())
+  local set = first_person() and "fp" or "tp"
+  -- the claws: a damped spring toward what the gun is doing
+  local want = 0.0
+  if id == "gravgun" then
+    if time - punt_t < 0.14 then want = 0.78
+    elseif holding then want = -0.09 + 0.015 * math.sin(time * 15) * math.min(1, strain or 0)
+    elseif inUse then want = 0.40 + 0.03 * math.sin(time * 23)
+    else want = 0.02 end
+  end
+  if punt_t > mech.pt then
+    mech.pt = punt_t
+    mech.kickv = mech.kickv + 1.1
+    mech.clawv = mech.clawv + 9.0
+  end
+  mech.clawv = mech.clawv + ((want - mech.claw) * 320 - mech.clawv * 24) * dt
+  mech.claw = math.max(-0.2, math.min(0.95, mech.claw + mech.clawv * dt))
+  mech.kickv = mech.kickv + (-mech.kick * 300 - mech.kickv * 26) * dt
+  mech.kick = math.max(-0.01, math.min(0.06, mech.kick + mech.kickv * dt))
+  if id == "gravgun" then
+    local r = mech_of(set, "gravgun")
+    if r and r.ids then
+      for _, b in ipairs(CLAWS) do bone_rot(r, b, 0, mech.claw, 0) end
+    end
+  end
+  -- the laser: the focus ring spins up with the beam, the heat sink glows
+  local firing = id == "laser" and inUse
+  mech.spinv = mech.spinv + ((firing and (7.0 + 5.0 * heat) or 0.0) - mech.spinv) * (1 - math.exp(-(firing and 3 or 1.5) * dt))
+  if id == "laser" then
+    local r = mech_of(set, "laser")
+    if r then
+      if mech.spinv > 0.02 then
+        mech.spin = (mech.spin + mech.spinv * dt) % (2 * math.pi)
+        bone_rot(r, "Focus", 0, 0, mech.spin)
+      end
+      local h = math.floor(heat * 40 + 0.5) / 40
+      if h ~= r.heat then
+        r.heat = h
+        local ok = pcall(function()
+          local m = r.node:material("HeatGlow")
+          m.emissive = { 0.85 + 0.15 * h, 0.16 + 0.30 * h, 0.04 + 0.08 * h }
+          m.emissiveStrength = 2.6 * h ^ 1.8
+        end)
+        if not ok then r.heat = 99 end   -- a model without the part: never again
+      end
+    end
+  end
 end
 
 -- Where a beam leaves the tool in hand, in the world.
@@ -1030,9 +1156,12 @@ local function muzzle()
       local fx, fy, fz = cam.fwd_x, cam.fwd_y, cam.fwd_z
       local r, u = cn:worldRight(), cn:worldUp()
       local g, mz = rig.grip, rig.muzzle
-      local lx = VIEW_AT[1] + (mz[1] - g[1]) * VIEW_SCALE + view.sx
-      local ly = VIEW_AT[2] + (mz[2] - g[2]) * VIEW_SCALE + view.sy
-      local lz = VIEW_AT[3] + (mz[3] - g[3]) * VIEW_SCALE + view.kick
+      local yw, pt, rl = vm_angles()
+      local ox, oy, oz = vm_rot(yw, pt, rl, (mz[1] - g[1]) * VIEW_SCALE, (mz[2] - g[2]) * VIEW_SCALE,
+        (mz[3] - g[3]) * VIEW_SCALE)
+      local lx = VIEW_AT[1] + ox + view.sx
+      local ly = VIEW_AT[2] + oy + view.sy
+      local lz = VIEW_AT[3] + oz + view.kick
       local main_fov = (cam.params and cam.params.fov_y) or 1.15
       local s = (vm.on and math.tan(main_fov * 0.5) / math.tan(VM_FOV * 0.5)) or 1.0
       lx, ly = lx * s, ly * s
@@ -2357,6 +2486,7 @@ local function fire_grav(node, dt, firing)
       spawnEffect("GravTrail", vec3(gx, gy, gz), { vel = vec3(dx * sp, dy * sp, dz * sp) })
     end
     recoil = recoil + 0.06
+    punt_t = time
     publish_shake(0.12)
     local nm = grab.name
     release(nil, true, true)
@@ -2773,6 +2903,7 @@ function lateUpdate(node, dt)
   stowed = false
   show_models(node, dt, gate == "in hand")
   hold_pose(dt, not first_person())
+  articulate(dt)
   if beam_req then
     paint_beam(beam_req, dt)
     if beam_req.kind == "grav" or beam_req.kind == "plant" or beam_req.kind == "pending" then impact(nil) end
