@@ -22,9 +22,9 @@ anim:setBoneRot):
   laser        Focus, the knurled focusing ring (or the emitter crown), spun
                round the barrel axis.
 
-The terrain laser comes in VARIANTS (LASERS below): TL7 is the tool in the
-game; A, B and C are design prototypes, built only when asked for
-(`-- OUT.json TL7,A,B,C`), so a pick can be made from pictures.
+The terrain laser comes in VARIANTS (LASERS below): C (the TL-3 Plasma Bore)
+is the tool in the game; TL7 (the old TL-7), A and B are kept, built only
+when asked for (`-- OUT.json TL7,A,B,C`); B is earmarked for a later item.
 
 ENERGY PARTS carry a uv of their own instead of a texture map (UVMODE, set by
 uvmode()): the tool_* shaders (shaders/tool_*.flsl) read uv.y as distance
@@ -635,7 +635,7 @@ def gravity_gun():
 # One family with the gravity gun: graphite and enamel, worn edges, stencils,
 # the same pistol grip and energy cell, signal orange only on what moves.
 #
-#   TL7  the TL-7, the laser in the game: a skeletal stock round its cell, an
+#   TL7  the TL-7, the game's laser until design C was picked: a skeletal stock round its cell, an
 #        enamel receiver, a rangefinder on the rail, a rubber hand-guard, then
 #        a radial heat sink CONCENTRIC with the barrel (annular fins round a
 #        core that glows from the root out with heat), the stepped optics, the
@@ -644,11 +644,11 @@ def gravity_gun():
 #        receiver, twin cells on the stock, and an EXPOSED focusing chamber, a
 #        hexagonal crystal in a cage between copper coils, ahead of a heavy
 #        nozzle.
-#   B    TL-5 SURVEYOR, a slim beam rifle: a survey scope, a long barrel in a
+#   B    TL-5 SURVEYOR (kept for a later "plasma sniper" item), a slim beam rifle: a survey scope, a long barrel in a
 #        ventilated shroud and a glowing COOLANT LOOP: a reservoir under the
 #        barrel feeding two lines up the sides to a ring at the muzzle; the
 #        coolant warms from ice blue toward amber with heat.
-#   C    TL-3 PLASMA BORE, stubby: a hoop handle, a fat plasma drum seen
+#   C    TL-3 PLASMA BORE, THE LASER IN THE GAME, stubby: a hoop handle, a fat plasma drum seen
 #        between ribs and copper magnet rings, and an EMITTER CROWN of six
 #        electrodes that spins with the beam.
 #
@@ -1131,7 +1131,7 @@ def main():
     argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
     argv = [a for a in argv if not a.startswith("--")]
     path = argv[0] if argv else "/tmp/tools_mesh.json"
-    want = argv[1].split(",") if len(argv) > 1 else ["TL7"]
+    want = argv[1].split(",") if len(argv) > 1 else ["C"]
     res = {}
     for name, fn in [("gravgun", gravity_gun)] + [("laser_" + v, LASERS[v]) for v in want]:
         geo, anchors, nodes = fn()

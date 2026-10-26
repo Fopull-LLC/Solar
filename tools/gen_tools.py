@@ -2,7 +2,7 @@
 """Generate the on-foot TOOLS and the loose rock they throw around.
 
     python3 tools/gen_tools.py          (needs Blender: $BLENDER, default the Steam install)
-    python3 tools/gen_tools.py --laser-variant B      the game's laser is design B
+    python3 tools/gen_tools.py --laser-variant B      the game's laser is design B (default C)
     python3 tools/gen_tools.py --protos DIR           also write every laser design
                                          (TL7, A, B, C) into DIR/models/tools and
                                          DIR/prefabs as ToolLaser<V>[FP], for
@@ -18,13 +18,13 @@ at the edges, stencilled labels, signal orange only on the moving parts):
         top, the field-coil body (copper windings round a glowing core in a
         cage, a padded guard, a fore-grip under it), the emitter bell with its
         glowing dish, and three hinged claws round it.
-    TL-7 terrain laser: a skeletal stock round the power cell, an enamel
-        receiver with the fill canister on its left and the coolant coupling
-        on its right, a rangefinder on the rail, a rubber hand-guard, the
-        radial heat sink on the barrel's axis (it glows from the root out
-        with the laser's heat), the stepped optics with an orange knurled
-        focus ring and a crown of focusing vanes. Three other designs (A, B,
-        C: gen_tools_blender.py's LASERS) can stand in for it.
+    TL-3 plasma bore (the terrain laser, design C): stubby, a hoop handle
+        over a compact graphite receiver, the energy cell slung low behind
+        the grip, a fat plasma drum seen between ribs and copper magnet
+        rings, and an emitter crown of six electrodes that spins with the
+        beam. The other designs (TL7, the old TL-7; A, the TL-9 Excavator;
+        B, the TL-5 Surveyor, kept for a later plasma sniper) are still
+        built by --laser-variant: gen_tools_blender.py's LASERS.
 
 THE ENERGY PARTS wear the tool_* surface shaders (shaders/tool_*.flsl): the
 gravity gun's field core, dish, cell and capacitor bands glow blue, a laser's
@@ -53,7 +53,7 @@ gloves, draws the decal atlas, and writes:
 
 Every tool is modelled barrel down -Z with the grip under the receiver, at
 TRUE SIZE in metres and held at scale 1 in both views (the gravity gun is
-0.69 m long, the laser 0.91 m). The engine recentres a model on its rest
+0.69 m long, the laser 0.60 m). The engine recentres a model on its rest
 bounding box, so each model is shifted to be centred and the GRIP, MUZZLE and
 FORE (the other hand's hold) are printed relative to that centre — the numbers
 `scripts/tool_belt.lua` keeps in `RIG` (third person) and `RIG_FP` (first
@@ -228,7 +228,7 @@ BLENDER = os.environ.get("BLENDER", "/mnt/disks/3tb/SteamLibrary/steamapps/commo
 BL_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gen_tools_blender.py")
 _BL = {}
 LASER_VARIANTS = ("TL7", "A", "B", "C")
-WANT_LASERS = ["TL7"]          # what blender_tools() asks Blender for (main sets it)
+WANT_LASERS = ["C"]          # what blender_tools() asks Blender for (main sets it)
 
 
 def blender_tools():
@@ -304,7 +304,7 @@ def gravity_gun():
     return Rig(blender_tools()["gravgun"])
 
 
-def terrain_laser(variant="TL7"):
+def terrain_laser(variant="C"):
     return Rig(blender_tools()["laser_" + variant])
 
 
@@ -437,7 +437,7 @@ def fp_gravity_gun():
     return rig
 
 
-def fp_terrain_laser(variant="TL7"):
+def fp_terrain_laser(variant="C"):
     rig = terrain_laser(variant)
     m = rig.body
     # Right hand on the pistol grip.
@@ -840,8 +840,8 @@ def rig_lines(r, r_fp):
 def main():
     import argparse
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--laser-variant", default="TL7", choices=LASER_VARIANTS,
-                    help="the laser design the game's ToolLaser / ToolLaserFP wear (default TL7)")
+    ap.add_argument("--laser-variant", default="C", choices=LASER_VARIANTS,
+                    help="the laser design the game's ToolLaser / ToolLaserFP wear (default C, the TL-3 Plasma Bore)")
     ap.add_argument("--protos", metavar="DIR",
                     help="also write every laser design into DIR/models/tools and DIR/prefabs (ToolLaser<V>[FP])")
     args = ap.parse_args()

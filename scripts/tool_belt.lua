@@ -237,16 +237,16 @@ TOOLDEF = {
 -- `vent` is where a tool sheds heat (the laser's heat haze rises from it).
 RIG = {
   gravgun = { grip = { 0.0, -0.058, 0.127 }, muzzle = { 0.0, 0.032, -0.253 }, fore = { 0.0, -0.068, -0.082 }, vent = { 0.0, 0.096, -0.073 } },
-  laser   = { grip = { 0.008, -0.039, 0.207 }, muzzle = { 0.008, 0.046, -0.433 }, fore = { 0.008, -0.028, -0.069 }, vent = { 0.008, 0.097, -0.211 } },
+  laser   = { grip = { 0.007, -0.052, 0.102 }, muzzle = { 0.007, 0.033, -0.298 }, fore = { 0.007, -0.085, -0.136 }, vent = { 0.007, 0.113, -0.136 } },
 }
 RIG_FP = {
   gravgun = { grip = { 0.092, 0.101, -0.042 }, muzzle = { 0.092, 0.191, -0.422 }, vent = { 0.092, 0.255, -0.242 } },
-  laser   = { grip = { 0.091, 0.111, 0.049 }, muzzle = { 0.091, 0.196, -0.591 }, vent = { 0.091, 0.247, -0.369 } },
+  laser   = { grip = { 0.091, 0.111, 0.049 }, muzzle = { 0.091, 0.196, -0.351 }, vent = { 0.091, 0.276, -0.189 } },
 }
 -- THIRD PERSON: how each tool is carried, in the body's frame (metres from the
 -- right shoulder joint: in toward the chest, down, forward), at rest (`low`,
 -- a relaxed low-ready) and while the trigger is held (`aim`). Every tool is at
--- TRUE SIZE (scale 1): the gravity gun is 0.69 m long, the laser 0.91 m.
+-- TRUE SIZE (scale 1): the gravity gun is 0.69 m long, the laser 0.60 m.
 -- `pitch` is the low-ready's muzzle-down angle.
 HOLD = {
   gravgun = { low = { 0.07, 0.25, 0.30 }, aim = { 0.08, 0.19, 0.33 }, pitch = -0.32,

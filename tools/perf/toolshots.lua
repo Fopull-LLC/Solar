@@ -83,8 +83,16 @@ local function main()
     local u = vec3(a.x - bn.x, a.y - bn.y, a.z - bn.z)
     return u:normalized()
   end
+  -- the hands are item_hand's: hold(id) puts a tool in them (tool_belt's
+  -- key sim is no longer read for that)
   local function equip(id)
-    for i, s in ipairs(tb.belt()) do if s.id == id then tb.sim = { pressed = { [tostring(i)] = true } } end end
+    local ih = findScript("item_hand")
+    if ih and ih.hold then
+      local ok, why = ih.hold(id)
+      if not ok then P("hold %s refused: %s", id, tostring(why)) end
+    else
+      for i, s in ipairs(tb.belt()) do if s.id == id then tb.sim = { pressed = { [tostring(i)] = true } } end end
+    end
     hold(1.2)
     P("equipped %s (want %s)", tostring(tb.toolId()), id)
   end
@@ -314,6 +322,17 @@ local function main()
           yield()
         end
         shot(lt .. "_tp_" .. id .. "_work")
+        -- a second frame a beat later (still firing): a spinning part has turned
+        for _ = 1, 3 do
+          local a = crew()
+          local uu = up_at()
+          local e = vec3(a.x, a.y, a.z) + uu * 1.5
+          local dd = vec3(a.x, a.y, a.z) + f0 * 3.0 - uu * 0.2 - e
+          tb.sim = { btn = { [0] = true }, aim = { e.x, e.y, e.z, dd.x, dd.y, dd.z } }
+          tp_cam(0.42, 0.30, 0.12)
+          yield()
+        end
+        shot(lt .. "_tp_" .. id .. "_work2")
         hold(0.1)
         tb.sim = { btn = { [0] = false } }
         cam.setFreecam(false)
