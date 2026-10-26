@@ -60,7 +60,7 @@ end
 
 -- A key plays its clip on the UI bus, quietly.
 env.play("click")
-ok(#played == 1 and played[1].clip:find("click"), "a key plays its clip")
+ok(#played == 1 and played[1].clip:find("switch_1"), "a key plays its clip")
 ok(played[1].opts.track == "UI" and played[1].opts.volume <= 0.6, "…on the UI bus, quietly")
 ok(pcall(env.play, "no-such-sound") and #played == 1, "an unknown key is silent, not an error")
 
@@ -74,7 +74,7 @@ ok(#played == 3, "…and again once the moment has passed")
 -- A payout's jingle swallows the cash clink the ledger makes under it.
 tick(1.0)
 env.play("jingle"); env.play("cash")
-ok(#played == 4 and played[4].clip:find("confirmation_004"), "the jingle swallows the cash clink")
+ok(#played == 4 and played[4].clip:find("ticket_print"), "the jingle swallows the cash clink")
 
 -- The objectives card changing step chimes — but not for the first step after
 -- a load, and not while the world is still settling.
@@ -88,7 +88,7 @@ ok(#played == n0, "no chime for the first steps after a load")
 tick(4.0)
 ob.headline = "Build a craft that can do the job."
 tick(0.1)
-ok(#played == n0 + 1 and played[#played].clip:find("glass"), "a new step chimes")
+ok(#played == n0 + 1 and played[#played].clip:find("quindar_out"), "a new step chimes")
 tick(1.0)
 ok(#played == n0 + 1, "…once")
 
@@ -103,35 +103,40 @@ end
 -- and the edge makes the sound, with no audio line in any of those scripts.
 local n = #played
 pm.open = true; tick(0.05)
-ok(heard("maximize_002", n), "opening the pause menu makes a sound")
+ok(heard("latch_clunk", n), "opening the pause menu makes a sound")
 n = #played
 pm.open = false; tick(0.05)
-ok(heard("minimize_002", n), "...and closing it another")
+ok(heard("clamp_clunk", n), "...and closing it another")
 n = #played
 ip.open = true; tick(0.05); ip.open = false; tick(0.05)
-ok(heard("open_001", n) and heard("close_001", n), "the bag opens and closes audibly")
+ok(heard("hiss_seal", n) and heard("impactPlate_light_002", n), "the bag opens and closes audibly")
 n = #played
 map_open = true; tick(0.05); map_open = false; tick(0.05)
-ok(heard("maximize_006", n) and heard("minimize_006", n), "the map opens and closes audibly")
+ok(heard("radio_squelch", n) and heard("toggle_off", n), "the map opens and closes audibly")
 n = #played
 tick(0.5)
 ok(#played == n, "...and nothing repeats while nothing changes")
 
 -- The flight card coming up, once — not again as it flips recover ↔ leave.
-fo.mode = "flying"; tick(0.05)
+fo.mode = "flying"; tick(3.2)
 n = #played
-fo.mode = "recover"; tick(0.05)
-ok(heard("question_002", n), "the flight card coming up is heard")
+fo.mode = "recover"; tick(0.5)
+ok(#played == n, "the card waits until the craft has settled")
+tick(0.6)
+ok(heard("quindar_in", n), "the flight card coming up is heard")
+n = #played
+for _ = 1, 10 do fo.mode = "flying"; tick(0.15); fo.mode = "recover"; tick(1.1) end
+ok(#played == n, "...and a craft creeping flying <-> recover does not chirp on every flicker")
 n = #played
 fo.mode = "leave"; tick(0.05); fo.mode = "recover"; tick(0.05)
 ok(#played == n, "...but not the card changing its mind at the base's edge")
 env.flightEnded("recover")
-ok(last_clip():find("confirmation_003"), "a recovery has its own confirmation")
+ok(last_clip():find("ticket_print"), "a recovery has its own confirmation")
 env.play("cash")
-ok(last_clip():find("confirmation_003"), "...and swallows the refund's cash clink")
+ok(last_clip():find("ticket_print"), "...and swallows the refund's cash clink")
 tick(1.0)
 env.flightEnded("leave")
-ok(last_clip():find("back_002"), "leaving the craft where it sits has its own sound")
+ok(last_clip():find("toggle_off"), "leaving the craft where it sits has its own sound")
 
 -- The crew: jump and land follow the astronaut on the SFX bus, and a run of
 -- the same sound is not one clip on a loop.

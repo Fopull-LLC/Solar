@@ -225,8 +225,8 @@ local function sound(off)
   local clip = string.format("audio/kenney/impact/impactPlate_light_%03d.ogg", math.random(0, 4))
   if n and n.valid ~= false then audio.play(clip, n, o) else audio.play(clip, o) end
   -- the seal: a short hiss as the ring lets go (or seats)
-  local hiss = string.format("audio/kenney/sci-fi/forceField_%03d.ogg", math.random(0, 4))
-  local o2 = { track = "SFX", volume = 0.16, minDistance = 2, maxDistance = 14, pitch = off and 1.35 or 1.2 }
+  local hiss = (math.random() < 0.5) and "audio/foley/hiss_seal.ogg" or "audio/foley/hiss_cylinder.ogg"
+  local o2 = { track = "SFX", volume = 0.30, minDistance = 2, maxDistance = 14, pitch = off and 1.08 or 0.95 }
   if n and n.valid ~= false then audio.play(hiss, n, o2) else audio.play(hiss, o2) end
   if caption then caption(off and "helmet unlatched" or "helmet locked") end
 end
@@ -283,7 +283,7 @@ function setVisor(down)
   persist()
   show()
   if audio and audio.play then
-    audio.play(string.format("audio/kenney/interface/switch_%03d.ogg", math.random(1, 4)),
+    audio.play(string.format("audio/foley/switch_%d.ogg", math.random(1, 5)),
       { track = "SFX", volume = 0.18 })
   end
   return true, nil
@@ -294,7 +294,7 @@ function setLamps(on)
   persist()
   show()
   if audio and audio.play then
-    audio.play("audio/kenney/interface/toggle_001.ogg", { track = "SFX", volume = 0.18 })
+    audio.play(lamps and "audio/foley/toggle_on.ogg" or "audio/foley/toggle_off.ogg", { track = "SFX", volume = 0.30 })
   end
   return true, nil
 end

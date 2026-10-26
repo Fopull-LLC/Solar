@@ -84,14 +84,14 @@ local function play(path, o)
   return nil
 end
 local SFX = {
-  swap = "audio/kenney/interface/pluck_001.ogg",
-  denied = "audio/kenney/interface/error_003.ogg",
+  swap = "audio/foley/switch_2.ogg",
+  denied = "audio/foley/buzz_denied.ogg",
   plant = "audio/kenney/impact/impactMetal_002.ogg",
-  set = "audio/kenney/interface/confirmation_002.ogg",
-  ratchet = "audio/kenney/sci-fi/impactMetal_00",   -- + 0..4
-  weld = "audio/kenney/sci-fi/forceField_001.ogg",
-  latch = "audio/kenney/sci-fi/doorClose_001.ogg",
-  done = "audio/kenney/interface/confirmation_002.ogg",
+  set = "audio/foley/latch_clunk.ogg",
+  ratchet = "audio/foley/ratchet_",   -- + 1..5 (an impact wrench)
+  weld = "audio/foley/weld_arc.ogg",
+  latch = "audio/foley/hiss_seal.ogg",
+  done = "audio/foley/clamp_clunk.ogg",
 }
 
 -- ── who is out there ────────────────────────────────────────────────────────
@@ -1048,10 +1048,10 @@ local function pose_work(tk, dt)
     pcall(spawnEffect, "Sparks", s, { normal = n, scale = 0.35 + math.random() * 0.25, intensity = 0.8 })
     if math.random() < 0.18 then pcall(spawnEffect, "CutBite", s, { normal = n, scale = 0.5 }) end
   end
-  if not R.snd then R.snd = play(SFX.weld, { track = "SFX", volume = 0.18, pitch = 1.9, loop = true }) end
+  if not R.snd then R.snd = play(SFX.weld, { track = "SFX", volume = 0.6, pitch = 1.0, loop = true }) end
   if now() > (R.click_t or 0) then
     R.click_t = now() + 0.35 + math.random() * 0.45
-    play(SFX.ratchet .. tostring(math.random(0, 4)) .. ".ogg", { track = "SFX", volume = 0.35, pitch = 1.3 + math.random() * 0.3 })
+    play(SFX.ratchet .. tostring(math.random(1, 5)) .. ".ogg", { track = "SFX", volume = 0.35, pitch = 0.95 + math.random() * 0.15 })
   end
   -- the ring of progress over the part, and the line
   if camera and camera.worldToScreen and draw and draw.circle then

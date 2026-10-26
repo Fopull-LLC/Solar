@@ -289,19 +289,19 @@ local VM_FOV = 0.95
 local VM_LAYERS = { { "viewmodel", 3 }, { "entity", 1 } }
 
 local SFX = {
-  hum     = "audio/kenney/sci-fi/forceField_004.ogg",
+  hum     = "audio/foley/bore_hum.ogg",
   ore     = "audio/kenney/impact/impactMining_00",   -- + 0..4
-  denied  = "audio/kenney/interface/error_003.ogg",
-  swap    = "audio/kenney/interface/pluck_001.ogg",
-  plant   = "audio/kenney/interface/confirmation_002.ogg",
-  pickup  = "audio/kenney/interface/drop_002.ogg",
-  grab    = "audio/kenney/sci-fi/forceField_000.ogg",
-  hold    = "audio/kenney/sci-fi/engineCircular_001.ogg",
-  drop    = "audio/kenney/sci-fi/forceField_002.ogg",
-  throw   = "audio/kenney/sci-fi/laserLarge_002.ogg",
-  dry     = "audio/kenney/sci-fi/laserSmall_001.ogg",
-  fill    = "audio/kenney/sci-fi/slime_000.ogg",
-  mode    = "audio/kenney/interface/switch_002.ogg",
+  denied  = "audio/foley/buzz_denied.ogg",
+  swap    = "audio/foley/switch_2.ogg",
+  plant   = "audio/foley/latch_clunk.ogg",
+  pickup  = "audio/kenney/impact/impactPlate_light_001.ogg",
+  grab    = "audio/foley/hiss_seal.ogg",
+  hold    = "audio/foley/rover_motor.ogg",
+  drop    = "audio/foley/hiss_short.ogg",
+  throw   = "audio/foley/hiss_cylinder.ogg",
+  dry     = "audio/foley/relay_tick.ogg",
+  fill    = "audio/kenney/impact/impactSoft_heavy_002.ogg",
+  mode    = "audio/foley/toggle_on.ogg",
 }
 
 local cam

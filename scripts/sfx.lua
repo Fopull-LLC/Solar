@@ -9,7 +9,8 @@
 --
 -- Two kinds of sound live here:
 --
---   * INTERFACE — Kenney CC0 clips on the UI bus, kept QUIET. These are
+--   * INTERFACE — real CC0 switch, relay and printer recordings on the UI bus
+--     (audio/foley, see CLIPS), kept QUIET. These are
 --     confirmations, not events, and a click louder than a footstep is a click
 --     the player learns to hate. `play(key)`.
 --   * THE CREW — jump, landing, swim strokes, bubbles, wading in. On the SFX
@@ -24,6 +25,8 @@
 --
 --     local s = findScript("sfx")
 --     if s then s.play("cash") end                 -- company.lua, a payout
+--     if s then s.play("select") end               -- the VAB, a part picked up
+--     if s then s.play("place") end                -- the VAB, a part attached
 --     if s then s.playAt("jump", node) end         -- planet_walker, the jump
 --     if s then s.flightEnded("recover") end       -- flight_ops, it worked
 --     if s then s.vesselLost(piloting, name) end   -- vessel_controller
@@ -31,35 +34,48 @@
 -- Callers always allow for a nil handle: a harness (or a scene) with no sfx
 -- node is a silent game, not a broken one.
 
-local I = "audio/kenney/interface/"
 local K = "audio/kenney/impact/"
+local F = "audio/foley/"
 
 -- key → { clip, volume }  (flat, UI bus)
+--
+-- The interface sounds like a company's hardware, not a game's: real switch
+-- and relay clicks, a calculator printing its ticket when money moves, a
+-- typewriter key for a signature, a lock buzzer for "no", and the Apollo
+-- Quindar tone — the radio chirp at the end of a transmission — kept for the
+-- two moments the radio would speak (the flight card, the next step). All CC0
+-- recordings, cut and levelled by tools/build_sfx.py; sources in
+-- audio/SOURCES.md. No tonal bleeps: a click louder than a footstep is a
+-- click the player learns to hate.
 local CLIPS = {
-  click  = { I .. "click_002.ogg",        0.45 },
-  open   = { I .. "open_002.ogg",         0.40 },
-  close  = { I .. "close_002.ogg",        0.35 },
-  cash   = { I .. "confirmation_002.ogg", 0.45 },
-  jingle = { I .. "confirmation_004.ogg", 0.60 },
-  sign   = { I .. "select_003.ogg",       0.50 },
-  chime  = { I .. "glass_002.ogg",        0.30 },
-  arm    = { I .. "question_001.ogg",     0.40 },
-  denied = { I .. "error_003.ogg",        0.35 },
-  -- The pause menu: the world stopping, and starting again.
-  pause_open  = { I .. "maximize_002.ogg", 0.32 },
-  pause_close = { I .. "minimize_002.ogg", 0.28 },
+  click  = { F .. "switch_1.ogg",      0.50 },
+  open   = { F .. "rocker_on.ogg",     0.80 },
+  close  = { F .. "rocker_off.ogg",    0.90 },
+  cash   = { F .. "ticket_short.ogg",  0.50 },
+  jingle = { F .. "ticket_print.ogg",  1.00 },
+  sign   = { F .. "key_strike.ogg",    1.00 },
+  chime  = { F .. "quindar_out.ogg",   0.16 },
+  arm    = { F .. "toggle_on.ogg",     0.90 },
+  denied = { F .. "buzz_denied.ogg",   0.45 },
+  -- The pause menu: the world stopping, and starting again — the big switch.
+  pause_open  = { F .. "latch_clunk.ogg", 0.70 },
+  pause_close = { F .. "clamp_clunk.ogg", 0.60 },
   -- The suit pack. Its own pair, so the bag doesn't sound like a building.
-  bag_open  = { I .. "open_001.ogg",  0.36 },
-  bag_close = { I .. "close_001.ogg", 0.30 },
-  bag_move  = { I .. "drop_002.ogg",  0.42 },
-  -- The orbit map: a softer, longer swell than a panel.
-  map_open  = { I .. "maximize_006.ogg", 0.28 },
-  map_close = { I .. "minimize_006.ogg", 0.24 },
+  bag_open  = { F .. "hiss_seal.ogg",  0.35 },
+  bag_close = { K .. "impactPlate_light_002.ogg", 0.45 },
+  bag_move  = { K .. "impactSoft_medium_001.ogg", 0.25 },
+  -- The orbit map: the tracking console coming up, a breath of radio.
+  map_open  = { F .. "radio_squelch.ogg", 0.45 },
+  map_close = { F .. "toggle_off.ogg",    0.75 },
   -- The flight card coming up, and the three ways out of it.
-  card    = { I .. "question_002.ogg",     0.36 },
-  recover = { I .. "confirmation_003.ogg", 0.55 },
-  leave   = { I .. "back_002.ogg",         0.45 },
-  pickup  = { I .. "confirmation_001.ogg", 0.50 },
+  card    = { F .. "quindar_in.ogg",   0.18 },
+  recover = { F .. "ticket_print.ogg", 0.70 },
+  leave   = { F .. "toggle_off.ogg",   0.90 },
+  pickup  = { F .. "latch_clunk.ogg",  0.90 },
+  -- The VAB: a part lifted off the floor (`select`), and set onto the craft
+  -- (`place`) — the clamp letting go, and the clamp biting.
+  select  = { F .. "hiss_cylinder.ogg", 0.40 },
+  place   = { F .. "clamp_clunk.ogg",   0.50 },
   -- VESSEL LOST (audio/sfx/vessel_lost.ogg, tools/gen_soundscape_audio.py):
   -- a low boom and a falling three-note figure. The one loud thing here.
   lost   = { "audio/sfx/vessel_lost.ogg", 0.85 },
@@ -198,6 +214,8 @@ end
 local stroke_t, bubble_t = 0.0, 0.0
 
 local DOWN = { recover = true, leave = true, pickup = true }
+-- the flight card's debounce: seconds down, seconds flying, may it sound
+local card_t = { down = 0, fly = 0, armed = false }
 
 local function listen(dt)
   -- Only where there is a crew to be heard: in the main menu and the builder
@@ -221,13 +239,24 @@ local function listen(dt)
   end
   local fo = ref("flight_ops")
   if fo then
-    local m = fo.mode or "none"
-    local was = seen.flight
-    seen.flight = m
-    -- The card coming UP: down and stopped, from flying (or from nothing — a
-    -- craft that settles on the pad). Not recover ↔ leave as you drift past
-    -- the base's edge, which is the same card changing its mind.
-    if was and DOWN[m] and not DOWN[was] then play("card") end
+    -- The card coming UP: down and stopped after a real flight. Not recover ↔
+    -- leave as you drift past the base's edge (the same card changing its
+    -- mind), and not a rover creeping to a stop: flight_ops' mode flickers
+    -- flying ↔ recover at walking pace, and on each flicker the card's chirp
+    -- rang — 20 times in 15 s at the end of a probe drive. So the card is
+    -- heard once it has been down for a second, and again only after the
+    -- craft has really flown (3 s on the move) since.
+    if DOWN[fo.mode or "none"] then
+      card_t.fly = 0
+      card_t.down = card_t.down + dt
+      if card_t.armed and card_t.down >= 1.0 then play("card"); card_t.armed = false end
+    elseif fo.mode == "flying" then
+      card_t.down = 0
+      card_t.fly = card_t.fly + dt
+      if card_t.fly >= 3.0 then card_t.armed = true end
+    else
+      card_t.down, card_t.fly = 0, 0   -- on foot, on the pad: no flight to end
+    end
   end
 
   local wk = ref("planet_walker")

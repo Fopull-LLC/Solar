@@ -645,7 +645,7 @@ check("...with sparks and a light on the rock", IMPACT.playing and IMPACT.light.
 check("...and one looping hum, not a one-shot a frame", (function()
   local n = 0
   for i = voices0 + 1, #voices do
-    if voices[i].clip:find("forceField") then n = n + 1 end
+    if voices[i].clip:find("bore_hum") then n = n + 1 end
   end
   return n == 1
 end)(), #voices - voices0)
@@ -655,7 +655,7 @@ check("letting go stops the beam", not BEAM().playing and not IMPACT.playing)
 check("...and puts the light out", IMPACT.light.intensity == 0, IMPACT.light.intensity)
 check("...and stops the hum", (function()
   for i = voices0 + 1, #voices do
-    if voices[i].clip:find("forceField") and not voices[i].stopped then return false end
+    if voices[i].clip:find("bore_hum") and not voices[i].stopped then return false end
   end
   return true
 end)())
