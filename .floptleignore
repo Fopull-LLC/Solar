@@ -1,4 +1,5 @@
 # Left out of exported builds: development material the game never loads.
-tools/
-tests/
-docs/
+# (A leading / means the project root only: models/tools and textures/tools ship.)
+/tools/
+/tests/
+/docs/
