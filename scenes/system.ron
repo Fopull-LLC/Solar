@@ -35,6 +35,7 @@
         fog_anisotropy: 0.6,
         fog_steps: 16,
         fog_shafts: true,
+        fog_shafts_map: true,
         fog_sky: 0.0,
         fog_follows_body: true,
     ),
