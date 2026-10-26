@@ -64,6 +64,49 @@ scattered rock aimed at, 4 a loose prop held on the tether. The probe (mode
 `sim` hook; `floptle shot --after N` plays that long on the fixed clock and
 draws the game's camera to `$WORK/shots/<ver>-case<N>.png`.
 
+## look.sh + lookprobe.lua — what the ground looks like over the base
+
+    WORK=$SCRATCH/ground LOCK=$SCRATCH/engine.lock tools/perf/look.sh <engine> [TAG]
+
+One silent `floptle play` (or `EDITOR=1`: `floptle <proj> --auto-play`, the way
+the player plays) on a COPY of the player's save (`save/slot1.ron`,
+`save/settings.ron`, `saves/slot1`; `NOSETTINGS=1` leaves the settings out),
+deleted again after the run. A free camera over the astronaut's spot; pictures
+in `$WORK/look/<TAG>/png`, numbers as `LP` lines in `run.log`. Params through
+`LOOK_PARAMS='("camr", 779.0), ("weather", 1.0)'`:
+
+| param | what |
+|---|---|
+| alt / camr | camera height over the ground under the astronaut, or an absolute radius (779 = 6 m over the pad plateau on Zorosia: the same spot every run) |
+| pitch, head, off | look down (deg), heading in quarter turns, metres along the ground from the astronaut |
+| weather | 1 = forced rain |
+| secs, every | how long to watch and how often to photograph |
+| gfx, fog | 1-4 = Low..Ultra; 0/1 = fog off/on (both from the second picture on) |
+| seq=1 | a toggle series, one picture each: sun0 (the home star's light, the Lighting node and ambient all off: what is lit goes black), starmark/unlitmark (every unlit material magenta), planetmat, plights0 (every point light), farlod0, farbodies0, body0 (the planet node hidden), atmo0, clouds0, atmoscript0, key0 |
+| seq=2 / 3 | a red material on the planet node / the planet's air off |
+
+Every run also prints the home body's radius and occluder radius, the fog, the
+field vs collider ray hits under four screen points (`RAY`), every node with a
+Material of its own (`MATNODE`, grouped by name) and `slot keepers` (see below).
+
+**What it found (2026-10-25, rc27): flat, unlit ground.** On most loads the
+whole home world drew in one saturated colour that ignored the sun (sand
+255,235,148 or teal 196,255,255; black plants beside bright ground at dusk, the
+ground unchanged with every light off). Fog, air, weather, graphics level,
+settings, editor-vs-player, point lights and far bodies were all ruled out by
+A/B. Cause: an engine bug. A terrain node destroyed during Play stays in the
+engine's terrain table, component lookups match a node by slot (not slot +
+generation), and the engine shades every terrain with the Material of the first
+terrain in that table that has one — so the stale entry reads the Material of
+whatever node next took its slot (Solar's star Ummi: sand; a blue core or a
+rare plant's orb: teal). Solar destroys the scene's baked system on every load
+(13 nodes), so which node fills which slot was a race. Workaround in
+`system_generator.destroyKeepingSlots`: the freed slots are filled on the next
+frame by empty "Slot Keeper" nodes. Minimal engine repro: two terrain nodes A
+and B in a scene, generate both, destroy A in Play, create a sphere with
+`setMaterial{unlit=true, color={1,0,1}, emissive={1,0,1}}` anywhere: B draws
+flat magenta.
+
 ## Rules that cost time when broken
 
 - Never write `base.*` or `g_played` as false in a probe save (it reads as an old

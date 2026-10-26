@@ -17,9 +17,16 @@
 -- the sun shadow MAP: shadows are 1–2 ms; the lit volumetric fog is now the
 -- whole difference between High and Medium — 13–20 ms of a 20–30 ms GPU frame
 -- at 1920×1052, see tools/perf/results/gpu_rc25.md.) The level names below are
--- bundles of those knobs, cheapest first. With nothing saved, a screen up to
--- 1080p starts on High and a larger one on Medium, the level that holds 60 fps
--- at 1440p on a mid-range card.
+-- bundles of those knobs, cheapest first.
+--
+-- A NEW PLAYER STARTS ON MEDIUM, at every screen size. (It used to be High up
+-- to 1080p.) Until the engine marches its volumetric fog at half resolution,
+-- High's lit fog alone costs 24–30 ms of GPU at 1080p on an RTX 4060, so High
+-- missed 60 fps on exactly the screens it was picked for; Medium holds 60.
+-- There is no hardware probe here: a machine too weak even for Medium is
+-- caught by the auto-lower below, which is allowed down to Low only when the
+-- game is badly slow. A saved choice is always the player's and is never
+-- changed by this default.
 --
 -- The choice is the PLAYER'S, not the save's, so it lives in its own store
 -- slot ("settings") rather than in whichever save slot is loaded.
@@ -94,7 +101,6 @@ local scale_t = -100
 local slow_for, lowered = 0, false
 local ema = nil            -- smoothed frame time, seconds
 local map_ref, bf_ref = nil, nil
-local pick_default = false -- no saved choice: pick one for this screen once it is known
 
 local function light()
   if not lit then
@@ -194,18 +200,8 @@ function start(node)
   end) or {}
   local saved = got.level
   dynamic = got.dyn == true
-  pick_default = saved == nil
+  -- nothing saved: a first run, on Medium whatever the screen (see the header)
   apply(saved or DEFAULT)
-end
-
--- A first run with no saved choice: full resolution up to 1080p, where it is
--- cheap and where a softened picture shows most; Medium above that.
-local function choose_default()
-  if not pick_default or not (camera and camera.screenSize) then return end
-  local _, h = camera.screenSize()
-  if not h or h <= 0 then return end
-  pick_default = false
-  apply(h <= 1100 and "High" or "Medium")
 end
 
 function update(node, dt)
@@ -221,7 +217,6 @@ function update(node, dt)
   end
   if l and p.fogSteps and l.fogSteps ~= p.fogSteps then l.fogSteps = p.fogSteps end
 
-  choose_default()
 
   if not params.autoLower or lowered then return end
   ema = ema and (ema + (dt - ema) * math.min(1, dt * 2)) or dt

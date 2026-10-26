@@ -1848,8 +1848,82 @@ local function site_try()
   end
 end
 
+-- ── destroying a system without poisoning the ground (engine 0.117 rc27) ──
+--
+-- When Play destroys a terrain node, the engine keeps that terrain in its
+-- own tables, and its component lookups match a node by SLOT, not by slot +
+-- generation. The next node made in the freed slot is then read as that
+-- terrain — and the engine shades EVERY terrain with the Material of the
+-- first terrain it finds that carries one. So the old system destroyed at
+-- every load (the scene's baked system, a galaxy sector let go) left slots
+-- that a star, a glowing core or a rare plant's orb then filled, and the
+-- whole home world drew flat and unlit in that node's colour: sand-yellow
+-- under Ummi's material, teal under a blue core's or an orb's, the night
+-- side as bright as noon. Which node filled which slot is a race, so one
+-- load in three or so looked right (tools/perf/lookprobe.lua, seq=1;
+-- the engine repro is in tools/perf/README.md).
+--
+-- Until the engine forgets a destroyed terrain, the freed slots are filled
+-- at once by plain empty nodes that carry nothing: a stale terrain entry
+-- then finds no Material in its slot and every world keeps the engine's
+-- normal lit ground. Creates queued in a frame land BEFORE that frame's
+-- destroys, so the keepers are made on the frame after (armed in
+-- lateUpdate, made in the next update) — the first creates after the slots
+-- come free, ahead of whatever the world builds next.
+local keep_due, keep_armed = 0, false
+local keeper_root = nil
+slotKeepers = 0   -- how many keepers this session holds (probes read it)
+
+local function subtree_size(n, depth)
+  local c = n.children
+  if type(c) == "function" then local ok, r = pcall(c, n); c = ok and r or nil end
+  local k = 1
+  if depth < 64 then
+    for _, ch in ipairs(c or {}) do k = k + subtree_size(ch, depth + 1) end
+  end
+  return k
+end
+
+-- Destroy a node (a system group, a body) and fill the slots it frees with
+-- keepers on the next frame. Cross-script: galaxy.lua lets sectors go this way.
+function destroyKeepingSlots(n)
+  if not (n and n.valid ~= false) then return end
+  local ok, k = pcall(subtree_size, n, 0)
+  keep_due = keep_due + (ok and k or 1)
+  print(string.format("system_generator: %s destroyed (%d nodes); their slots get keepers next frame", tostring(n.name), ok and k or 1))
+  n:destroy()
+end
+
+local function make_keepers()
+  local k = keep_due
+  keep_due, keep_armed = 0, false
+  local function fill(parent)
+    for _ = 1, k do createNode("Slot Keeper", parent, function() end) end
+    slotKeepers = slotKeepers + k
+  end
+  if keeper_root and keeper_root.valid ~= false then
+    fill(keeper_root)
+  else
+    -- the root itself takes one of the slots; its children the rest
+    k = k - 1
+    createNode("Slot Keepers", function(r)
+      r.tags = { "slotkeepers" }
+      keeper_root = r
+      fill(r)
+    end)
+    slotKeepers = slotKeepers + 1
+  end
+end
+
 function update(node, dt)
+  if keep_armed then make_keepers() end
   if site_wait then site_try() end
+end
+
+-- This frame's destroys land after every create it queued: arm the keepers
+-- for the next frame's update (see destroyKeepingSlots).
+function lateUpdate(node, dt)
+  if keep_due > 0 then keep_armed = true end
 end
 
 -- What the flora, climate and FX read about a world's ground and life: the
@@ -2594,8 +2668,18 @@ local function roll(p)
   -- Clear our previous work: the whole system GROUP goes in one subtree
   -- destroy (that's the point of generating into a clean hierarchy), plus any
   -- stray top-level "genbody" nodes from the old flat format.
-  for _, n in ipairs(findTagged("gensystem")) do n:destroy() end
-  for _, n in ipairs(findTagged("genbody")) do n:destroy() end
+  -- (Each through destroyKeepingSlots: see above. A genbody inside a system
+  -- group goes with the group, so only the loose ones are destroyed again.)
+  for _, n in ipairs(findTagged("gensystem")) do destroyKeepingSlots(n) end
+  for _, n in ipairs(findTagged("genbody")) do
+    local par = n.parent
+    local loose = true
+    while par and par.valid ~= false do
+      if par.hasTag and par:hasTag("gensystem") then loose = false break end
+      par = par.parent
+    end
+    if loose then destroyKeepingSlots(n) end
+  end
 
   homeStar, homeTaken = nil, {}
   GENSPEC = {}
