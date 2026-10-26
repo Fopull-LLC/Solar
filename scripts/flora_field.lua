@@ -1667,8 +1667,15 @@ local FELL_T, FELL_HOLD, FELL_SINK, FELL_MAX = 1.5, 0.8, 0.7, 3
 -- the gravity gun lifts and the depot takes as timber) laid along the fallen
 -- trunk the moment the crown lands, sized to the tree. A few at a time; the
 -- oldest goes when another falls.
+-- EACH LOG IS KEPT BY ITS OWN NAME ("LooseLog <n>"), not by its handle alone:
+-- the depot or the pack takes a log away (tool_belt destroys it), and a
+-- script's handle is the engine's bare slot number, handed to the next node
+-- spawned — the oldest's handle read `valid` again on some other node, which
+-- was destroyed in its place (engine card 0552). A log goes only if the node
+-- still answers to its name.
 local logs = {}
 local LOG_MAX = 6
+local log_seq = 0
 function logCount() return #logs end
 
 local function fell_pose(f, n, ang, sink)
@@ -1754,7 +1761,7 @@ local function fell_tick()
       if body and spawn and f.height >= 3.0 then
         while #logs >= LOG_MAX do
           local old = table.remove(logs, 1)
-          if old and old.valid then old:destroy() end
+          if old and old.n.valid and old.n.name == old.name then old.n:destroy() end
         end
         local k = math.max(0.55, math.min(1.5, f.height / 8.0))
         local along = 1.6 * k + 0.35
@@ -1765,7 +1772,10 @@ local function fell_tick()
         logs[slot] = false
         local ux, uy, uz, hx, hy, hz = f.ux, f.uy, f.uz, f.hx, f.hy, f.hz
         spawn("LooseLog", vec3(lx, ly, lz), function(n)
-          logs[slot] = n
+          log_seq = log_seq + 1
+          local nm = "LooseLog " .. log_seq
+          n.name = nm
+          logs[slot] = { n = n, name = nm }
           n.scale = k
           -- the log's long axis is its X: setUp(up, fwd) puts Y up and Z on
           -- fwd, and X = up × fwd, so fwd = h × up lays X along the fall

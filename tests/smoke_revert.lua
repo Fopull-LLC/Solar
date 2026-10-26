@@ -431,6 +431,58 @@ pilot.piloting = true
 check(fade.ready() == true, "...and the fade lifts once it is ready and crewed")
 build_host.fadeThrough, build_host.fading = nil, nil
 
+-- ── 6. a revert mid-build, the root's slot handed on ───────────────────────
+-- A big craft's parts are asked for all at once and the engine makes them
+-- over frames (spawnBudget). Reverted while they are still landing, the rest
+-- must go: a script's handle is the engine's bare slot number, and the
+-- relaunch's new root can be made in the old one's slot — the old root's
+-- handle then reads `valid` again (engine card 0552), so `valid` alone let
+-- the old parts in, counted against the new build.
+pilot.piloting = false
+local BIG = { name = "Heavy", parts = {} }
+for i = 1, 160 do
+  BIG.parts[i] = { uid = i, prefab = "PartTank", x = 0, y = i * 0.1, z = 0, h = 0.1, rx = 0.6, rz = 0.6, mass = 1 }
+end
+local landing = {}
+local spawn_now = env.spawn
+env.spawn = function(prefab, p, cb, parent)
+  if prefab:sub(1, 4) ~= "Part" then return spawn_now(prefab, p, cb, parent) end
+  landing[#landing + 1] = function() spawn_now(prefab, p, function(n) n.destroy = kill; cb(n) end, parent) end
+end
+local function land_all()
+  local l = landing
+  landing = {}
+  for _, f in ipairs(l) do f() end
+end
+env.spawnBudget = function() return 0 end
+env.spawnDone = function() end
+store["shipyard.blueprint"] = BIG
+store["shipyard.pilot"] = 1
+VS.launchNow("pad", { force = true, bp = BIG })
+local n0 = #spawned
+tick()
+local old_root
+for i = n0 + 1, #spawned do if spawned[i].name == "Vessel" then old_root = spawned[i] end end
+check(old_root and #landing == 160 and VS.launchState() == "assembling", "a big craft's parts are all asked for at once")
+for _ = 1, 60 do table.remove(landing, 1)() end   -- some land
+check(#old_root:children() == 60, "...and land over frames")
+check(VS.revertToLaunch() == true and not old_root.valid, "reverted mid-build: the craft goes")
+old_root.valid = true   -- its slot handed to some new node
+n0 = #spawned
+tick()   -- the relaunch: a new root, its own 160 parts asked for
+local new_root
+for i = n0 + 1, #spawned do if spawned[i].name == "Vessel" then new_root = spawned[i] end end
+check(new_root and new_root ~= old_root and #landing == 260, "the relaunch asks for its parts behind the old build's 100 (" .. #landing .. ")")
+local m0 = #spawned
+land_all()
+local kept = 0
+for i = m0 + 1, #spawned do
+  if spawned[i].parent == old_root and spawned[i].valid then kept = kept + 1 end
+end
+check(kept == 0, "every part of the reverted build is dropped as it lands (" .. kept .. " kept)")
+check(#new_root:children() == 160 and VS.launchState() == "ready", "the relaunch is whole, and ready only once it is")
+env.spawn, env.spawnBudget, env.spawnDone = spawn_now, nil, nil
+
 if #failures > 0 then
   print("REVERT SMOKE FAILURES:")
   for _, f in ipairs(failures) do print("  ✗ " .. f) end

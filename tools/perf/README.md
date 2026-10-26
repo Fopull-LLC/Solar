@@ -66,6 +66,22 @@ Pictures in `$WORK/proj/save/user/wheelshots/`. Cause and fix: node handles are
 bare slot numbers, so a cached TyreMesh handle from before the get-off read
 `valid` again for another node (vessel_controller r2TyreVisuals).
 
+## staleprobe.sh + staleprobe_modes.lua — a handle kept from a node that is gone
+
+    WORK=$SCRATCH/stale LOCK=$SCRATCH/engine.lock tools/perf/staleprobe.sh <engine>
+
+Engine card 0552: a script's node handle is the engine's bare slot number, and
+a destroyed node's slot is handed to the next node spawned, so an old handle
+reads `valid` again and names the new node. `stale` (fresh save): four rocks
+are knocked loose by `tool_belt.knockLoose` (what the laser's mining does),
+every chunk is destroyed as a
+stow or the depot would (still in tool_belt's list), 60 marker nodes are made
+(`SP ... freed slot(s) handed to markers`: the ids that came back), and the
+eight more are knocked loose, evicting every old entry. A marker made in a
+stowed chunk's slot must survive: `SP RESULT: PASS / FAIL / INCONCLUSIVE`
+(none of the freed slots came back). `PATCHES=` a reverse diff of the fix shows
+the old eviction destroying the markers.
+
 ## demo.sh + demo_probe.lua — a whole player session, for a pre-playtest pass
 
     WORK=$SCRATCH/qa LOCK=$SCRATCH/engine.lock tools/perf/demo.sh <engine> [TAG]

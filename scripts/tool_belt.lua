@@ -1543,7 +1543,15 @@ local function gravity_at(x, y, z)
   return dx / r, dy / r, dz / r, g
 end
 
-local rocks = {}   -- loose chunks knocked free, oldest first
+-- Loose chunks knocked free, oldest first, each { n, name }: kept by its own
+-- name ("LooseRock <n>") as well as its handle. A chunk stowed or dropped at
+-- the depot is destroyed here without leaving this list, and a script's handle
+-- is the engine's bare slot number, handed to the next node spawned: the
+-- oldest's handle read `valid` again on some other node, which went in its
+-- place (engine card 0552). A chunk goes only if the node still answers to
+-- its name.
+local rocks = {}
+local rock_seq = 0
 -- What a loose body IS WORTH, by node: a knocked chunk carries the ore it
 -- came out of; a plucked boulder, stone or crystal its kind's ore; a felled
 -- log timber. Read when it is stowed (E) or dropped at the depot. Weak keys:
@@ -1569,13 +1577,16 @@ local function knock_loose(x, y, z, nx, ny, nz, mat)
   if params.rocks_max <= 0 or not spawn then return end
   while #rocks >= params.rocks_max do
     local old = table.remove(rocks, 1)
-    if old and old ~= "spawning" and old.valid then old:destroy() end
+    if old and old ~= "spawning" and old.n.valid and old.n.name == old.name then old.n:destroy() end
   end
   local slot = #rocks + 1
   rocks[slot] = "spawning"
   local px, py, pz = x + nx * 0.9, y + ny * 0.9, z + nz * 0.9
   spawn("LooseRock", vec3(px, py, pz), function(n)
-    rocks[slot] = n
+    rock_seq = rock_seq + 1
+    local nm = "LooseRock " .. rock_seq
+    n.name = nm
+    rocks[slot] = { n = n, name = nm }
     local mats = ref("materials")
     set_worth(n, mat or "regolith", 2, ((mats and mat) and mats.label(mat) or "Rock") .. " chunk")
     n:setAngles(math.random() * 6.28, math.random() * 6.28, math.random() * 6.28)
@@ -1591,6 +1602,9 @@ local function knock_loose(x, y, z, nx, ny, nz, mat)
     end
   end)
 end
+
+-- For probes: a chunk knocked loose at a point, as the laser's mining does.
+function knockLoose(x, y, z, nx, ny, nz, mat) knock_loose(x, y, z, nx, ny, nz, mat) end
 
 local function pop_unit(node, hit)
   local inv, mats = ref("inventory"), ref("materials")

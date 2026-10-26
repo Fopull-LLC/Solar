@@ -203,6 +203,7 @@ local spawn_tag = nil       -- the flight tag the parts being spawned now get
 SPAWN_BATCH = 150
 SPAWN_BUDGET_MS = 4.0
 local spawn_q = nil          -- { vessel, list = { d, ... }, i, placed, total, tag, all }
+local build_q = nil          -- the last craft's queue, kept past the asking (a revert marks it dead)
 
 local function spawn_drain()
   local q = spawn_q
@@ -221,7 +222,10 @@ local function spawn_drain()
     spawn(d.prefab, vec3(wx, wy, wz), function(part)
       -- Asked for all at once, a part can be made after its craft is gone (a
       -- revert mid-build): the engine then makes it unparented, in the open.
-      if q.all and vessel.valid == false then part:destroy() return end
+      -- `q.dead` says so (clear_flight): the root's handle is the engine's bare
+      -- slot number, and the relaunch's new root or clamps can be made in that
+      -- slot, so `vessel.valid` alone read true again (engine card 0552).
+      if q.dead or (q.all and vessel.valid == false) then part:destroy() return end
       -- (the blueprint pose in the vessel's frame, whatever the vessel did
       -- between the ask and the landing)
       if q.fix then part.x, part.y, part.z = d.x, d.y, d.z end
@@ -293,6 +297,7 @@ local function spawn_parts(vessel, bp)
   local paced = spread and spawnBudget ~= nil and spawnDone ~= nil
   spawn_q = { vessel = vessel, list = list, i = 1, placed = {}, total = #list, tag = spawn_tag,
               fix = spread, all = paced }
+  build_q = spawn_q
   -- Held from the start: the root alone is a compound, anchored, until the
   -- last part lands and the whole craft is rebuilt (and anchored again).
   if spread then
@@ -780,6 +785,10 @@ local function clear_flight()
     if r.valid ~= false then destroy(r) end
   end
   if flight.clamps and flight.clamps.valid ~= false then destroy(flight.clamps) end
+  -- a craft still assembling goes too: the rest of its parts are dropped as
+  -- they land (spawn_drain)
+  if build_q then build_q.dead = true end
+  spawn_q, build_q = nil, nil
   local fo = ref("flight_ops")
   if fo and fo.forgetNodes then fo.forgetNodes(ids) end
   -- the clamp pins of anything just removed
