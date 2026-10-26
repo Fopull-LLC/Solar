@@ -196,9 +196,9 @@ function validate(id, t)
     local _, _, _, pvx, pvy, pvz = v.partPointNow(t.uid, t.sx, t.sy, t.sz)
     if hx then
       local reach = P("reach") + 1.5
-      local kx, ky, kz = 0, 0, 0
-      if v.nodeLag then kx, ky, kz = v.nodeLag() end
-      if len(a.x + kx - hx, a.y + ky - hy, a.z + kz - hz) > reach then return false, "out of reach" end
+      local ax, ay, az = a.x, a.y, a.z
+      if v.physPosOf then ax, ay, az = v.physPosOf(a) end
+      if len(ax - hx, ay - hy, az - hz) > reach then return false, "out of reach" end
       local rel = len((a.vx or 0) - pvx, (a.vy or 0) - pvy, (a.vz or 0) - pvz)
       if rel > P("max_rel") then
         local st = v.evaState and v.evaState() or nil
@@ -233,9 +233,10 @@ function attach(id)
   if (t.done or 0) <= 0 and v.partSt then
     t.done = kept(v.partSt(t.uid, "rprog"), clock(), t.secs)
   end
-  local kx, ky, kz = 0, 0, 0
-  if v.nodeLag then kx, ky, kz = v.nodeLag() end
-  local s0x, s0y, s0z = v.partLocalNow(t.uid, a.x + kx, a.y + ky, a.z + kz)
+  -- where the body is in the physics frame (its tick pose, card 0543)
+  local ax, ay, az = a.x, a.y, a.z
+  if v.physPosOf then ax, ay, az = v.physPosOf(a) end
+  local s0x, s0y, s0z = v.partLocalNow(t.uid, ax, ay, az)
   if not s0x then return false, "that part isn't on this craft" end
   H[id] = { vid = t.craft, task = t, s0x = s0x, s0y = s0y, s0z = s0z, t = 0, save_t = time or 0 }
   set_kinematic(a, true)

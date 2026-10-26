@@ -4220,18 +4220,30 @@ function partFrameNow(uid, rendered)
   return F
 end
 
--- How far the craft's PHYSICS frame (info.origin, this tick) is ahead of
--- its NODE (the pose last written back): the rails carry the node lags by
--- (board_dist's note). Positions read off any node in the same pass lag by
--- the same amount, so `node.x + lag` is that node in the physics frame, and a
--- physics-frame point minus `lag` is where to WRITE a node for it to be
--- there. → lx, ly, lz (zeros without a compound)
-function nodeLag()
+-- How far the craft's PHYSICS frame (info.origin, this tick) is from the
+-- root's x/y/z (the pose interpolated for the camera, which lags up to a tick
+-- of the world's rails carry: 3.4 m in a low orbit, card 0543). Read in the
+-- same pass, another node's x/y/z lags by the same amount, so `node.x + lag`
+-- is that node in the physics frame.
+-- NOT the tick pose: measured on rc30 in orbit, an assembly root's
+-- tickX/Y/Z is not in info.origin's frame (the crew's tick pose plus
+-- origin − root tick came out 3.0 m off the work spot, wandering tick to
+-- tick, where x/y/z gave 0.008 m). `render` is accepted and changes nothing.
+-- → lx, ly, lz, false (zeros without a compound)
+function nodeLag(render)
   local node = dock.node
-  if not (node and node.valid) then return 0, 0, 0 end
+  if not (node and node.valid) then return 0, 0, 0, false end
   local info = assembly.info(node)
-  if not (info and info.origin) then return 0, 0, 0 end
-  return info.origin.x - node.x, info.origin.y - node.y, info.origin.z - node.z
+  if not (info and info.origin) then return 0, 0, 0, false end
+  return info.origin.x - node.x, info.origin.y - node.y, info.origin.z - node.z, false
+end
+
+-- Another node (the crew) in this craft's physics frame, from its x/y/z read
+-- in the same pass as the root's (nodeLag).
+function physPosOf(n)
+  if not n then return nil end
+  local kx, ky, kz = nodeLag()
+  return n.x + kx, n.y + ky, n.z + kz
 end
 
 -- A point in part `uid`'s frame → where it is in the world this tick, and how

@@ -188,8 +188,8 @@ end
 local function rel_to(vc, a)
   local i = assembly.info(vc.node)
   local w, c = i.angVel, i.com
-  local kx, ky, kz = vc.nodeLag()
-  local qx, qy, qz = a.x + kx - c.x, a.y + ky - c.y, a.z + kz - c.z
+  local ax, ay, az = vc.physPosOf(a)
+  local qx, qy, qz = ax - c.x, ay - c.y, az - c.z
   local px = i.vel.x + w.y * qz - w.z * qy
   local py = i.vel.y + w.z * qx - w.x * qz
   local pz = i.vel.z + w.x * qy - w.y * qx
@@ -299,8 +299,7 @@ local MAIN = function()
   _, dd = rel_to(vc, a)
   while dd > d_start + 2.0 and tb < 90 do
     local i2 = assembly.info(vc.node)
-    local kx, ky, kz = vc.nodeLag()
-    local ax, ay, az = a.x + kx, a.y + ky, a.z + kz
+    local ax, ay, az = vc.physPosOf(a)
     local c2, w = i2.com, i2.angVel
     local dx, dy, dz = c2.x - ax, c2.y - ay, c2.z - az
     local dl = len(dx, dy, dz)
@@ -353,7 +352,7 @@ local MAIN = function()
   local nx, ny, nz = F0.rx, F0.ry, F0.rz
   local hx, hy, hz = F0.ox + nx * 0.62, F0.oy + ny * 0.62, F0.oz + nz * 0.62
   local px, py, pz, pvx, pvy, pvz = vc.partPointNow(uid, 0.62 + 1.4, 0, 0)
-  do local kx, ky, kz = vc.nodeLag(); px, py, pz = px - kx, py - ky, pz - kz end
+  do local kx, ky, kz = vc.nodeLag(true); px, py, pz = px - kx, py - ky, pz - kz end
   a.x, a.y, a.z = px, py, pz
   a.vx, a.vy, a.vz = pvx, pvy, pvz
   ep.holdFor(1.0, vc.node)
@@ -399,9 +398,9 @@ local MAIN = function()
   for k = 1, 4 do
     wait(0.1)
     local qx, qy, qz, qvx, qvy, qvz = vc.partPointNow(uid, task.sx, task.sy, task.sz)
-    local kx, ky, kz = vc.nodeLag()
-    ctr[#ctr + 1] = string.format("%.3f m/s %.3f m", len(a.vx - qvx, a.vy - qvy, a.vz - qvz), len(a.x + kx - qx, a.y + ky - qy, a.z + kz - qz))
-    if k == 1 then cpos = len(a.x + kx - qx, a.y + ky - qy, a.z + kz - qz) end
+    local ax, ay, az = vc.physPosOf(a)
+    ctr[#ctr + 1] = string.format("%.3f m/s %.3f m", len(a.vx - qvx, a.vy - qvy, a.vz - qvz), len(ax - qx, ay - qy, az - qz))
+    if k == 1 then cpos = len(ax - qx, ay - qy, az - qz) end
   end
   M.cpos = cpos
   P("after cancel: %s (holdOn %s live %s firing %s held %s)", table.concat(ctr, " "), tostring(ep.holdOn), tostring(ep.live), tostring(ep.firing), tostring(c.held()))
@@ -433,7 +432,7 @@ local MAIN = function()
   local left1 = ep.rcsLeft()
   local fuel0 = vc.fuel
   local hp2x, hp2y, hp2z, h2vx, h2vy, h2vz = vc.partPointNow(uid, 1.2, 0, 0)
-  do local kx, ky, kz = vc.nodeLag(); hp2x, hp2y, hp2z = hp2x - kx, hp2y - ky, hp2z - kz end
+  do local kx, ky, kz = vc.nodeLag(true); hp2x, hp2y, hp2z = hp2x - kx, hp2y - ky, hp2z - kz end
   a.x, a.y, a.z, a.vx, a.vy, a.vz = hp2x, hp2y, hp2z, h2vx, h2vy, h2vz
   wait(0.2)
   local boarded = vc.boardNow()
