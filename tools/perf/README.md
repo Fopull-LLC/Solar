@@ -87,7 +87,7 @@ in `$WORK/look/<TAG>/png`, numbers as `LP` lines in `run.log`. Params through
 
 Every run also prints the home body's radius and occluder radius, the fog, the
 field vs collider ray hits under four screen points (`RAY`), every node with a
-Material of its own (`MATNODE`, grouped by name) and `slot keepers` (see below).
+Material of its own (`MATNODE`, grouped by name).
 
 **What it found (2026-10-25, rc27): flat, unlit ground.** On most loads the
 whole home world drew in one saturated colour that ignored the sun (sand
@@ -100,9 +100,9 @@ generation), and the engine shades every terrain with the Material of the first
 terrain in that table that has one — so the stale entry reads the Material of
 whatever node next took its slot (Solar's star Ummi: sand; a blue core or a
 rare plant's orb: teal). Solar destroys the scene's baked system on every load
-(13 nodes), so which node fills which slot was a race. Workaround in
-`system_generator.destroyKeepingSlots`: the freed slots are filled on the next
-frame by empty "Slot Keeper" nodes. Minimal engine repro: two terrain nodes A
+(13 nodes), so which node fills which slot was a race. Fixed in the engine in
+rc29 (card 0537); Solar's slot-keeper workaround was removed when it moved to
+rc30 (results/rc29.md: 5 of 5 loads lit without it). Minimal engine repro: two terrain nodes A
 and B in a scene, generate both, destroy A in Play, create a sphere with
 `setMaterial{unlit=true, color={1,0,1}, emissive={1,0,1}}` anywhere: B draws
 flat magenta.

@@ -242,14 +242,8 @@ local function drop_sector(k)
   -- Tear down by NAME through the group node: the star's system group holds
   -- every body it owns, so one subtree destroy takes the lot — the same
   -- property the generator built the group for.
-  -- (Through the generator, which fills the slots the system frees: a
-  -- destroyed terrain's slot reused by a lit-up node shades every world in
-  -- that node's material — see system_generator.destroyKeepingSlots.)
   local n = find(e.star .. " System")
-  if n and n.valid then
-    local gen = ref("system_generator")
-    if gen and gen.destroyKeepingSlots then gen.destroyKeepingSlots(n) else n:destroy() end
-  end
+  if n and n.valid then n:destroy() end
   live[k] = nil
   log("galaxy: " .. e.star .. " system released")
 end

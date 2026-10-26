@@ -156,6 +156,7 @@ local function measure()
   -- several with no update of ours). Frame TIMES stay the wall clock between
   -- our updates, so rows compare with older engines.
   local bod, smp = nil, nil
+  local xt, xtf = nil, 0
   if perf.frames then
     local fr = perf.frames(8) or {}
     local xb, xs, xp = {}, {}, {}
@@ -164,6 +165,7 @@ local function measure()
     for _, f in ipairs(fr) do
       if f.frame and f.frame > LASTF then
         LASTF, got = f.frame, true
+        xt, xtf = (xt or 0) + (f.ticks or 0), xtf + 1
         for k, v in pairs(f.buckets or {}) do xb[k] = (xb[k] or 0) + v end
         for k, v in pairs(f.parts or {}) do xp[k] = (xp[k] or 0) + v end
         for _, e in ipairs(f.scripts or {}) do xs[e.name] = (xs[e.name] or 0) + (e.ms or 0) end
@@ -195,6 +197,7 @@ local function measure()
       for k, v in pairs(fs) do r.s[k] = (r.s[k] or 0) + v; if v > (r.smax[k] or 0) then r.smax[k] = v end end
       for k, v in pairs(parts) do r.parts[k] = (r.parts[k] or 0) + v; if v > (r.pmax[k] or 0) then r.pmax[k] = v end end
       if bod then r.bod = r.bod or {}; for k, v in pairs(bod) do r.bod[k] = (r.bod[k] or 0) + v end end
+      if xt then r.tk = (r.tk or 0) + xt; r.tf = (r.tf or 0) + xtf; r.tkmax = math.max(r.tkmax or 0, xt) end
       if smp then r.smp = r.smp or {}; for k, v in pairs(smp) do r.smp[k] = (r.smp[k] or 0) + v end end
       if dtw > 33.3 then
         r.nsp = r.nsp + 1
@@ -297,6 +300,8 @@ local function sc_end(name)
   for k, v in pairs(r.notes) do notes[k] = v end
   local lpd = (r.lp0 and LP_DELTA) and LP_DELTA(r.lp0, n) or {}
   if #lpd > 0 then P("RESULT [%s] lua functions (inclusive ms/frame): %s", name, fmtk(lpd)) end
+  P("RESULT [%s] ticks: %.2f per engine frame over %d frames (max %d in one update); physics %.2f ms/frame = %.3f ms/tick", name,
+    (r.tk or 0) / math.max(r.tf or 0, 1), r.tf or 0, r.tkmax or 0, (r.b.physics or 0) / math.max(r.tf or 0, 1), (r.b.physics or 0) / math.max(r.tk or 0, 1))
   if r.bod and next(r.bod) then P("RESULT [%s] bodies/frame: %s", name, fmtk(topk(r.bod, 5, math.max(n, 1)))) end
   if r.smp and next(r.smp) then P("RESULT [%s] sampled lines/frame: %s", name, fmtk(topk(r.smp, 8, math.max(n, 1)))) end
   print("BENCHJSON " .. json({ mode = MODE, scenario = name, secs = secs, frames = n, p50 = st.p50, p95 = st.p95, p99 = st.p99,
@@ -306,7 +311,7 @@ local function sc_end(name)
     partsMax = topk(r.pmax, 10), worst = r.hw or {}, bodies = topk(r.bod or {}, 8, math.max(n, 1)),
     lines = topk(r.smp or {}, 12, math.max(n, 1)), worstInverted = r.worst,
     hitchMs = r.hms or 0, hitchBuckets = topk(r.hb or {}, 8), hitchParts = topk(r.hp or {}, 8), counts = cm, countsMax = r.cmax, gpu = r.gn > 0 and r.gpu / r.gn or -1,
-    gpuPasses = topk(r.gp or {}, MODE == "gpu" and 32 or 8, math.max(r.gn, 1)), gpuRes = r.res, luaFns = lpd, notes = notes }))
+    gpuPasses = topk(r.gp or {}, MODE == "gpu" and 32 or 8, math.max(r.gn, 1)), gpuRes = r.res, luaFns = lpd, notes = notes, ticks = (r.tk or 0) / math.max(r.tf or 0, 1), physTick = (r.b.physics or 0) / math.max(r.tk or 0, 1) }))
 end
 local function finish_all() for _, name in ipairs(ORDER) do sc_end(name) end end
 
@@ -1384,8 +1389,8 @@ local function e_frame(vn)
   local bo = {}
   for k, e in ipairs(f.bodies or {}) do if k <= 3 then bo[#bo + 1] = string.format("%s %.2f", e.name or "?", e.ms or 0) end end
   local i = vn and vn.valid ~= false and assembly.info(vn) or {}
-  return string.format("frame %s ms %.1f physics %.2f static %.2f sweeps %.2f sleep %.2f joints %.2f broad %.2f pairs %.2f | bodies %s | asleep %s wake %s |v| %.4f",
-    tostring(f.frame), f.ms or 0, b.physics or 0, pt.physicsStatic or 0, pt.physicsSweeps or 0, pt.physicsSleep or 0, pt.physicsJoints or 0,
+  return string.format("frame %s ticks %s ms %.1f physics %.2f static %.2f sweeps %.2f sleep %.2f joints %.2f broad %.2f pairs %.2f | bodies %s | asleep %s wake %s |v| %.4f",
+    tostring(f.frame), tostring(f.ticks), f.ms or 0, b.physics or 0, pt.physicsStatic or 0, pt.physicsSweeps or 0, pt.physicsSleep or 0, pt.physicsJoints or 0,
     pt.physicsBroadphase or 0, pt.physicsPairs or 0, table.concat(bo, ", "), tostring(i.asleep), tostring(i.wake), i.vel and len(i.vel.x, i.vel.y, i.vel.z) or -1),
     tostring(i.wake), b.physics or 0
 end
@@ -1620,6 +1625,7 @@ local function watch_sleep(name, vn, secs, vc)
   local ts = W()
   local slept, slept_frame, frames, after = nil, nil, 0, 0
   local ph_b, phs_b, n_b, ph_a, phs_a, n_a = 0, 0, 0, 0, 0, 0
+  local tk_b, tk_a = 0, 0
   local wakes = {}
   local last5 = -5
   local wake_now, v_now = "?", 0
@@ -1650,8 +1656,10 @@ local function watch_sleep(name, vn, secs, vc)
         trace_report(name .. " until asleep", vn); trace_reset()
       end
       ph_a, phs_a, n_a = ph_a + ph, phs_a + phs, n_a + 1
+      tk_a = tk_a + (f and f.ticks or 0)
     else
       ph_b, phs_b, n_b = ph_b + ph, phs_b + phs, n_b + 1
+      tk_b = tk_b + (f and f.ticks or 0)
       if slept then after = after + 1 end   -- woke again
     end
     if W() - ts - last5 >= 5 then
@@ -1692,6 +1700,8 @@ local function watch_sleep(name, vn, secs, vc)
   P("RESULT [%s] SLEEP: %s; awake %d frames physics %.2f ms/frame (static %.2f); asleep %d frames physics %.2f (static %.2f); re-woke frames %d; wake reasons %s; drift on its planet %.3f m (max %.3f)",
     name, slept and string.format("asleep after %.2f s (frame %d)", slept, slept_frame) or string.format("NEVER asleep in %.0f s (%d frames), last wake %s |v| %.3f", secs, frames, wake_now, v_now),
     n_b, n_b > 0 and ph_b / n_b or 0, n_b > 0 and phs_b / n_b or 0, n_a, n_a > 0 and ph_a / n_a or 0, n_a > 0 and phs_a / n_a or 0, after, table.concat(wl, ", "), drift, drift_max)
+  P("RESULT [%s] SLEEP ticks: awake %.2f ticks/frame, physics %.3f ms/tick; asleep %.2f ticks/frame, physics %.3f ms/tick", name,
+    tk_b / math.max(n_b, 1), ph_b / math.max(tk_b, 1), tk_a / math.max(n_a, 1), ph_a / math.max(tk_a, 1))
   trace_report(slept and (name .. " after the first sleep") or name, vn)
   sc_note(name, "drift", drift)
   sc_note(name, "sleptAfter", slept or -1)
@@ -2556,6 +2566,7 @@ local TOGGLES = {
   fogvol0      = { on = function(c) if c.at then c.at.params.volumetric = false end end, off = function(c) if c.at then c.at.params.volumetric = true end end },
   fogsteps8    = LT{ fogSteps = 8 },
   fogsteps12   = LT{ fogSteps = 12 },
+  fogsteps16   = LT{ fogSteps = 16 },
   shafts1      = { on = function(c) c.gx.shafts = true end, off = function(c) c.gx.shafts = false end },
   shadows0     = LT{ shadows = false },
   shadowmap0   = LT{ shadowMap = false },
@@ -2575,6 +2586,8 @@ local TOGGLES = {
   scale075     = { on = function(c) c.scale = app.renderScale(); app.setRenderScale(0.75) end, off = function(c) app.setRenderScale(c.scale or 1) end },
   scale09      = { on = function(c) c.scale = app.renderScale(); app.setRenderScale(0.9) end, off = function(c) app.setRenderScale(c.scale or 1) end },
   -- the fog's light injection off (atmosphere.lua writes fogLight every frame): a flat-coloured march
+  flora0fogvol0 = { on = function(c) if c.fl then c.fl.params.enabled = 0 end; if c.at then c.at.params.volumetric = false end end, off = function(c) if c.fl then c.fl.params.enabled = 1 end; if c.at then c.at.params.volumetric = true end end },
+  flora0fogsteps16 = { on = function(c) if c.fl then c.fl.params.enabled = 0 end; c.L.fogSteps = 16 end, off = function(c) if c.fl then c.fl.params.enabled = 1 end; c.L.fogSteps = 12 end },
   foglight0    = { on = function(c) if c.at then c.at.params.fogLight = 0 end end, off = function(c) if c.at then c.at.params.fogLight = 0.75 end end },
   fognoise0    = LT{ fogNoise = 0 },
   -- the base one facility at a time

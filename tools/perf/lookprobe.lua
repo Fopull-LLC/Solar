@@ -94,7 +94,7 @@ local function main()
     local pw, gm, bf = findScript("planet_walker"), findScript("game_manager"), findScript("base_facilities")
     return pw and gm and bf and bf.sited and not gm.loading and not gm.curtain and not (bf.grading and bf.grading())
   end, 200)
-  P("ready | slot keepers %s", tostring(findScript("system_generator") and findScript("system_generator").slotKeepers))
+  P("ready")
   local wx = findScript("weather")
   if wx and wx.force then wx.force((params.weather or 0) > 0 and "rain" or "clear") end
   local b = space.body(save.get("base.body"))
