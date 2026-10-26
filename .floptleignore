@@ -1,0 +1,4 @@
+# Left out of exported builds: development material the game never loads.
+tools/
+tests/
+docs/
