@@ -1,5 +1,7 @@
 astronaut_male.glb / astronaut_female.glb — the crew's EVA suit
-Written by tools/gen_suit.py (regenerate there; don't edit the files).
+helmet_*.glb / visor_*.glb / lamps_*.glb — its helmet, gold visor and lamps
+Written by tools/gen_suit.py, which models the geometry in Blender through
+tools/gen_suit_blender.py (regenerate there; don't edit the files).
 
 THE RIG (the skeletons, their rest poses and inverse bind matrices)
 Converted from "human.blend" (Blender 2.49, 2009) via Blender 4.5/glTF.
@@ -7,10 +9,14 @@ Copyright 2009 Clint Bellanger — http://clintbellanger.net
 Dual-licensed: Creative Commons CC-BY-SA / GPL (as stated in the source file).
 Attribution required.
 
-THE SUIT (the mesh, its skin weights, and textures/suit/*.png)
-New geometry built by tools/gen_suit.py on the rig above (no vertex of the
-original body is used), for Solar. Because each file carries the CC-BY-SA rig,
-the files as a whole remain CC-BY-SA (share-alike), with attribution to Clint
-Bellanger for the rig. The textures are procedural (tools/gen_suit.py); the
-agency emblem comes from tools/base_tex.py; lettering is set in the project's
-own fonts (fonts/README.md, SIL OFL).
+THE SUIT (the mesh, the head under the helmet, its skin weights, and
+textures/suit/*.png)
+New geometry built by tools/gen_suit.py / tools/gen_suit_blender.py on the rig
+above (no vertex of the original body is used), for Solar. Because each suit
+file carries the CC-BY-SA rig, the files as a whole remain CC-BY-SA
+(share-alike), with attribution to Clint Bellanger for the rig. The helmet,
+visor and lamps files carry no rig, but are modelled in the rig's space for
+the suit, and are released under the same CC-BY-SA terms with the suit. The
+textures are procedural (tools/gen_suit.py); the agency emblem comes from
+tools/base_tex.py; lettering is set in the project's own fonts
+(fonts/README.md, SIL OFL).

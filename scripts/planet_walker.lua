@@ -282,7 +282,11 @@ local function breathe(node, dt, under, aboard, ux, uy, uz)
     return downed
   end
   if headUnder then
-    oxygen = math.max(0, oxygen - dt / secs)
+    -- Bare-headed (scripts/suit.lua) the crew is holding their breath, not
+    -- breathing from the tank: it goes `breath_hold` times faster.
+    local su = ref("suit")
+    local mult = (su and su.breathMult and su.breathMult()) or 1.0
+    oxygen = math.max(0, oxygen - dt / secs * mult)
   else
     oxygen = math.min(1, oxygen + dt / math.max(0.1, params.o2_refill))
   end

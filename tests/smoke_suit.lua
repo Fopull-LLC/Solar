@@ -10,7 +10,12 @@
 --     body's, so the AstroModel's −0.05 offset and the walker's MA_UP still hold;
 --   * every material the suit names is dressed by the AstroModel's
 --     object_materials in scenes/system.ron, and every texture those name, and
---     the first-person tools' gloves name, exists.
+--     the first-person tools' gloves name, exists;
+--   * the HELMET that comes off: helmet / visor / lamps are plain (unskinned)
+--     models, the scene hangs the Helmet on the AstroModel's Back bone (an
+--     attachment) with the Visor and the Lamps under it, each dressed for the
+--     materials it names, and the Astronaut runs scripts/suit.lua after the
+--     tool belt (its hands go to the neck ring over the tool's hold).
 --
 --   luajit solar/tests/smoke_suit.lua
 
@@ -116,6 +121,68 @@ if f then
   end
   for tex in om:gmatch('Some%("([^"]+%.png)"%)') do ok(exists(tex), "system.ron: suit texture missing: " .. tex) end
 end
+
+-- the helmet's three models: plain models, written by the suit's generator
+local HELMET = { { "helmet", "Helmet" }, { "visor", "Helmet Visor" }, { "lamps", "Helmet Lamps" } }
+local HMATS = {}
+for _, h in ipairs(HELMET) do
+  local path = "models/astronaut/" .. h[1] .. "_male.glb"
+  local js = glb_json(path)
+  ok(js ~= nil, path .. ": not a glb")
+  if js then
+    ok(js:find('"generator":"Solar tools/gen_suit.py"', 1, true) ~= nil, path .. ": not written by tools/gen_suit.py")
+    ok(js:find('"skins"', 1, true) == nil, path .. ": a helmet part must be a plain model (it rides a bone)")
+    HMATS[h[1]] = {}
+    for m in (js:match('"materials":(%b[])') or ""):gmatch('"name":"([^"]+)"') do HMATS[h[1]][m] = true end
+    ok(next(HMATS[h[1]]) ~= nil, path .. ": names no materials")
+  end
+  ok(exists("models/astronaut/" .. h[1] .. "_female.glb"), h[1] .. "_female.glb missing")
+end
+local f2 = open("scenes/system.ron")
+if f2 then
+  local ron = f2:read("*a")
+  f2:close()
+  local function block(name)
+    local s = ron:find('\n        (\n            name: "' .. name .. '",', 1, true)
+    if not s then return nil end
+    local e = ron:find('\n        ),', s + 10, true)
+    return ron:sub(s, e)
+  end
+  local astro = block("AstroModel")
+  local astro_id = astro and tonumber(astro:match("            id: Some%((%d+)%)"))
+  local ids = {}
+  for _, h in ipairs(HELMET) do
+    local b = block(h[2])
+    ok(b ~= nil, "system.ron: no " .. h[2] .. " node")
+    if b then
+      ids[h[1]] = tonumber(b:match("            id: Some%((%d+)%)"))
+      ok(b:find('asset_path: "models/astronaut/' .. h[1] .. '_male.glb"', 1, true) ~= nil,
+         "system.ron: " .. h[2] .. " doesn't wear " .. h[1] .. "_male.glb")
+      local om = b:match("object_materials: (%b{})") or ""
+      for m in pairs(HMATS[h[1]] or {}) do
+        ok(om:find('"' .. m .. '":', 1, true) ~= nil, "system.ron: " .. h[2] .. "'s object_materials miss " .. m)
+      end
+      for tex in om:gmatch('Some%("([^"]+%.png)"%)') do ok(exists(tex), "system.ron: helmet texture missing: " .. tex) end
+    end
+  end
+  local hb = block("Helmet")
+  if hb then
+    ok(tonumber(hb:match("parent_id: Some%((%d+)%)")) == astro_id, "system.ron: the Helmet isn't under the AstroModel")
+    ok(hb:find('attachment: Some((\n                bone: "Back",', 1, true) ~= nil,
+       "system.ron: the Helmet doesn't ride the Back bone")
+    local sc = hb:match("scale: %(([%d%.]+), [%d%.]+, [%d%.]+%),\n                %),\n            %)%)")
+    ok(sc and math.abs(tonumber(sc) - 2.0) < 1e-3, "system.ron: the Helmet's offset must undo the armature's ½ scale")
+  end
+  for _, part in ipairs({ "visor", "lamps" }) do
+    local b = block(part == "visor" and "Helmet Visor" or "Helmet Lamps")
+    ok(b and tonumber(b:match("parent_id: Some%((%d+)%)")) == ids.helmet, "system.ron: the " .. part .. " isn't under the Helmet")
+  end
+  local an = block("Astronaut") or ""
+  local tb, su = an:find('kind: "tool_belt",', 1, true), an:find('kind: "suit",', 1, true)
+  ok(su ~= nil, "system.ron: the Astronaut doesn't run scripts/suit.lua")
+  ok(tb and su and su > tb, "system.ron: suit.lua must come after tool_belt on the Astronaut")
+end
+ok(exists("scripts/suit.lua"), "scripts/suit.lua missing")
 
 -- the first-person tools' gloves and sleeves wear the suit's textures
 for _, pf in ipairs({ "prefabs/ToolGravGunFP.prefab.ron", "prefabs/ToolLaserFP.prefab.ron" }) do
