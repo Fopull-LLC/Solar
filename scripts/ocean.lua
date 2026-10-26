@@ -194,6 +194,7 @@ end
 -- is hidden while the eye is roofed over and walled in on every side (a cave,
 -- not an overhang on a beach, where the sea is in view).
 local vol, vol_frozen = nil, false
+local dry_t = 0      -- seconds the eye has been dry under the sea's level
 local look_t, surf_hidden = 0, false
 caveDry = false      -- published: the eye is in a dry spot under the sea's level
 
@@ -240,10 +241,10 @@ local function look_tick(node, ex, ey, ez, dc, dt)
   look_t = 0.15
   local cl = findScript("climate")
   local v = sea_volume(node)
-  local dry = false
+  local dry, wet = false, false
   local hide = false
   if dc < R + 4 and cl and cl.isUnderwater and terrain and terrain.query then
-    local wet = cl.isUnderwater(ex, ey, ez)
+    wet = cl.isUnderwater(ex, ey, ez)
     dry = (dc < R) and not wet
     if not wet and cl.columnOpen then
       local rx, ry, rz = ex - body.x, ey - body.y, ez - body.z
@@ -253,9 +254,17 @@ local function look_tick(node, ex, ey, ez, dc, dt)
     end
   end
   caveDry = dry
-  if v and water and water.setFrozen and dry ~= vol_frozen then
-    vol_frozen = dry
-    water.setFrozen(v, dry)
+  -- Each flip costs the engine a physics rebuild (rc37: every terrain collider
+  -- made again), and digging round sea level flipped it every look: thawed
+  -- at once in real water, frozen after half a second dry under the sea's
+  -- level, and left as it is above it, where the volume holds nothing anyway.
+  local want = vol_frozen
+  if wet then want, dry_t = false, 0
+  elseif dry then dry_t = dry_t + 0.15; if dry_t >= 0.5 then want = true end
+  else dry_t = 0 end
+  if v and water and water.setFrozen and want ~= vol_frozen then
+    vol_frozen = want
+    water.setFrozen(v, want)
   end
   if hide ~= surf_hidden then
     surf_hidden = hide
