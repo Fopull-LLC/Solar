@@ -171,7 +171,16 @@ env.space = { body = function(n) return n == "Golil" and body or nil end, bodies
 -- The ground is in (the site's ray hits, the field answers), and a spawn lands
 -- at once: a launch assembles on the next update.
 env.terrain = { warm = function() end, query = function() return 1 end }
-env.raycast = function(x, y, z) return { distance = 40, x = x, y = y - 40, z = z } end
+-- Launch Complex 1 stands on the pad site: its deck (Shell 3, under BasePad)
+-- tops out 2.49 m over the site point, and the spawner looks for it there.
+local base_pad = node("BasePad", PAD.x, PAD.y + 16.5, PAD.z)
+local pad_deck = node("Shell 3", 0, -14.4, 0, base_pad)
+env.raycast = function(x, y, z)
+  if math.abs(x - PAD.x) < 5 and math.abs(z - PAD.z) < 5 and y > PAD.y + 2.49 and y < PAD.y + 60 then
+    return { distance = y - (PAD.y + 2.49), x = x, y = PAD.y + 2.49, z = z, node = pad_deck }
+  end
+  return { distance = 40, x = x, y = y - 40, z = z }
+end
 local spawned = {}
 env.spawn = function(prefab, p, cb, parent)
   local n = node(prefab, p.x - (parent and parent.x or 0), p.y - (parent and parent.y or 0), p.z - (parent and parent.z or 0), parent)

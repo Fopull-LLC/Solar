@@ -245,6 +245,8 @@ local bp = nil
 local site_kind = "pad"
 local wait_t = 0.0
 local last_note = 0.0
+local site_wait = 0.0       -- seconds the spaceport launch has looked at its site and found it not ready
+local site_note = nil       -- the caption put up while it waits (taken down when it goes)
 local force_site = false    -- this launch skips the site check (a revert cleared it)
 local pins = {}             -- earlier in-place rollouts still in their clamps (see launchNow)
 local pad_clamps = {}       -- every PadClamps a pad launch has put down (taken up when the pad is next used)
@@ -404,7 +406,10 @@ end
 function blockSentence(kind, info)
   local where = site_label(kind)
   if not info then return nil end
-  if info.what == "debris" then
+  if info.what == "unready" then
+    return string.format("%s did not come in: %s. Nothing was launched and the hull is refunded. Launch again in a moment.",
+      kind == "runway" and "The runway" or "The launch pad", info.name or "its ground never answered")
+  elseif info.what == "debris" then
     return string.format("Debris%s is lying on %s. Move it off (the gravity gun can shift it) and launch again.",
       info.name and (" from " .. info.name) or "", where)
   elseif info.what == "crew" then
@@ -431,7 +436,9 @@ end
 local function refuse(kind, info)
   local msg = blockSentence(kind, info) or "The launch site is blocked."
   log("launch: REFUSED — " .. msg)
-  caption(kind == "runway" and "RUNWAY BLOCKED" or "PAD BLOCKED", msg, 7.0)
+  local title = kind == "runway" and "RUNWAY BLOCKED" or "PAD BLOCKED"
+  if info and info.what == "unready" then title = kind == "runway" and "RUNWAY NOT READY" or "PAD NOT READY" end
+  caption(title, msg, 7.0)
   local spent = save.get("shipyard.spent") or 0
   local co = ref("company")
   if spent > 0 and co and co.earn then
@@ -802,6 +809,7 @@ function start(node)
     return
   end
   save.set("shipyard.launch", 0)
+  site_wait, waitingFor = 0.0, nil
   site_kind = save.get("shipyard.site") == "runway" and "runway" or "pad"
   bp = save.get("shipyard.blueprint")
   if not bp or not bp.parts then
@@ -846,7 +854,7 @@ function launchNow(kind, opts)
     pins[#pins + 1] = { node = vessel_node, rel = relv, body = body_name }
   end
   pending, vessel_node, relv, assemble_t, rebuilt = 0, nil, nil, nil, false
-  wait_t, last_note = 0.0, 0.0
+  wait_t, last_note, site_wait = 0.0, 0.0, 0.0
   want_spawn = true
   force_site = true -- looked at just now
   snapshot(site_kind, bp)
@@ -933,9 +941,118 @@ local function facing_for(up, D, fx, fz)
   return vec3(-D.x, -D.y, -D.z)
 end
 
--- LAUNCH FROM THE SPACEPORT. Returns true once the craft is on its way, false
--- to wait (terrain not in yet), nil when this save has no spaceport here.
-local function try_spaceport()
+-- ═══ IS THE SITE THERE? ═════════════════════════════════════════════════════
+--
+-- A craft is only put together over the thing it is meant to stand on. The
+-- old gate asked for "something under the deck point, and the terrain near
+-- it": the terrain 1.9 m under the pad answered that before base_facilities
+-- had put Launch Complex 1 down (the base waits for its own ground, and the
+-- two waits race after a scene load), so the 1,002-part craft was assembled
+-- over no deck — in one bigpark run of five the pad never came in under it
+-- and on release it fell 15 m into the sea. Now:
+--   * the PAD: rays down through the craft's footprint (the centre and four
+--     points round it) must strike the pad's own structure (SITE_NODE, the
+--     BasePad base_facilities places) at its deck height;
+--   * the RUNWAY: a ray at the threshold must strike ground within a couple
+--     of metres of the site point, and that ground must be final
+--     (terrain.ready over the craft's reach — not a stand-in).
+-- Until then the launch WAITS (the caption says so; build_host holds its
+-- black). If the site still is not there after SITE_WAIT s (SITE_WAIT_BASE
+-- while the base has not put its pad down at all), the launch is CALLED OFF
+-- the way a blocked pad is: nothing assembled, the hull refunded, the crew
+-- home. A launch never drops a craft and never waits for ever.
+SITE_NODE = "BasePad"
+SITE_WAIT, SITE_WAIT_BASE = 30.0, 90.0
+DECK_TOP = { lo = 1.5, hi = 3.5 }   -- the deck's top over the site point (Shell 3 reads 2.49)
+
+-- "go", "wait" or "refuse": `waited` s of looking, `ready` the site answered,
+-- `base_busy` the base has not put its pad down yet. Global for the tests.
+function siteGate(waited, ready, base_busy)
+  if ready then return "go" end
+  if waited < (base_busy and SITE_WAIT_BASE or SITE_WAIT) then return "wait" end
+  return "refuse"
+end
+
+-- The ancestor chain of a hit node holds a node named `name`?
+local function under_named(n, name)
+  for _ = 1, 8 do
+    if not (n and n.valid ~= false) then return false end
+    if n.name == name then return true end
+    n = n.parent
+  end
+  return false
+end
+
+-- Is the launch site's surface there under the craft's footprint? true, or
+-- false and why (for the log and the refusal).
+function siteReady(st, body, b)
+  local up = st.up
+  local gx, gy, gz = body.x + st.x, body.y + st.y, body.z + st.z
+  -- (looked past: the crew waiting on the site, and the hold-downs an earlier
+  -- launch left on the deck, taken up once the craft goes ahead)
+  local skip = {}
+  local crew0 = find("Astronaut")
+  if crew0 then skip[#skip + 1] = crew0 end
+  for _, c in ipairs(pad_clamps) do if c.valid ~= false then skip[#skip + 1] = c end end
+  local ign = #skip > 0 and { ignore = skip } or nil
+  local reach = bp_size(b)
+  -- two level directions across the site: its forward, and up × forward
+  local fx, fy, fz = st.fwd.x, st.fwd.y, st.fwd.z
+  local rx, ry, rz = up.y * fz - up.z * fy, up.z * fx - up.x * fz, up.x * fy - up.y * fx
+  if st.deck then
+    local want = st.node or SITE_NODE
+    local off = math.max(1.0, math.min(3.0, reach))
+    local pts = { { 0, 0 }, { off, 0 }, { -off, 0 }, { 0, off }, { 0, -off } }
+    for i, p in ipairs(pts) do
+      local px = gx + fx * p[1] + rx * p[2]
+      local py = gy + fy * p[1] + ry * p[2]
+      local pz = gz + fz * p[1] + rz * p[2]
+      -- (from 2 m over the deck: a gantry arm overhead is not the deck)
+      local top = DECK_TOP.hi + 2.0
+      local hit = raycast(px + up.x * top, py + up.y * top, pz + up.z * top, -up.x, -up.y, -up.z, top + 8.0, ign)
+      if not (hit and hit.distance) then return false, "nothing under the deck" end
+      if not (hit.node and under_named(hit.node, want)) then
+        return false, i == 1 and "the pad is not down yet" or "the pad does not reach under the craft"
+      end
+      local h = top - hit.distance
+      if h < DECK_TOP.lo or h > DECK_TOP.hi then
+        return false, string.format("the pad's deck reads %.1f m over the site", h)
+      end
+    end
+    return true
+  end
+  -- the runway: final ground at the threshold, where the site says it is
+  if terrain.ready and not terrain.ready(gx, gy, gz, math.max(10.0, reach + 2.0)) then
+    return false, "the ground there is not final yet"
+  end
+  local hit = raycast(gx + up.x * 40, gy + up.y * 40, gz + up.z * 40, -up.x, -up.y, -up.z, 120.0, ign)
+  if not (hit and hit.distance) then return false, "nothing under the threshold" end
+  local h = 40 - hit.distance
+  if h < -2.5 or h > 2.5 then return false, string.format("the ground reads %.1f m off the site", h) end
+  return true
+end
+
+local function site_caption(kind, on)
+  local bc = ref("big_caption")
+  if not (bc and bc.show) then return end
+  local title = kind == "runway" and "WAITING FOR THE RUNWAY" or "WAITING FOR THE LAUNCH PAD"
+  if on and site_note ~= title then
+    site_note = title
+    bc.show(title, kind == "runway" and "Waiting for the runway…" or "Waiting for the launch pad…", SITE_WAIT_BASE)
+  elseif not on and site_note then
+    if bc.current == site_note and bc.hide then bc.hide() end
+    site_note = nil
+  end
+end
+
+-- What a waiting launch is waiting for, or nil (build_host shows it on its
+-- black; probes read it).
+waitingFor = nil
+
+-- LAUNCH FROM THE SPACEPORT. Returns true once the craft is on its way (or
+-- the launch is called off), false to wait (the site not ready yet), nil when
+-- this save has no spaceport here.
+local function try_spaceport(dt)
   local bf = findScript("base_facilities")
   local st = bf and bf.launchSite and bf.launchSite(site_kind)
   if not st then return nil end
@@ -948,26 +1065,33 @@ local function try_spaceport()
   end
   terrain.warm(st.body)
   local up = st.up
-  -- The terrain must be in: a ray down at the site from 40 m up that strikes
-  -- something other than the crew, AND the terrain's own field answering
-  -- there (it reads ~6 m, its ceiling, where no ground has streamed in; the
-  -- pad's deck point stands 2 m over its ground). The crew is set
-  -- down on the launch site before its ground has streamed in (the runway
-  -- threshold is 127 m from the base centre): a bare ray hit the astronaut,
-  -- the craft was put together over no ground, and on release it fell through
-  -- to the sea and floated there until the terrain came in.
   local gx, gy, gz = body.x + st.x, body.y + st.y, body.z + st.z
-  local crew0 = find("Astronaut")
-  local hit = raycast(gx + up.x * 40, gy + up.y * 40, gz + up.z * 40, -up.x, -up.y, -up.z, 120.0,
-                      crew0 and { ignore = crew0 } or nil)
-  local q = terrain.query(gx, gy, gz)
-  if not (hit and hit.distance and q and q < (st.deck and 4.0 or 2.5)) then
-    if wait_t - (last_note or 0) > 5.0 then
-      last_note = wait_t
-      log(string.format("launch: waiting for the %s's ground… (%.0fs)", st.kind, wait_t))
+  local ok, why = siteReady(st, body, bp)
+  if not ok then
+    site_wait = site_wait + (dt or 0)
+    local base_busy = st.deck and not (bf.sited or find(st.node or SITE_NODE))
+    local gate = siteGate(site_wait, false, base_busy)
+    waitingFor = st.kind == "runway" and "Waiting for the runway…" or "Waiting for the launch pad…"
+    if site_wait > 1.0 then site_caption(st.kind, true) end
+    if gate == "refuse" then
+      log(string.format("launch: the %s never came in (%s) after %.0f s — called off", st.kind, why or "?", site_wait))
+      waitingFor = nil
+      site_caption(st.kind, false)
+      refuse(st.kind, { what = "unready", name = why })
+      flightClosed("the launch was called off")
+      return true
+    end
+    if site_wait - (last_note or 0) > 5.0 then
+      last_note = site_wait
+      log(string.format("launch: waiting for the %s… (%s, %.0fs)", st.kind == "runway" and "runway" or "launch pad", why or "?", site_wait))
     end
     return false
   end
+  if site_wait > 0 then
+    log(string.format("launch: the %s is there — %.1f s after the launch first looked", st.kind, site_wait))
+  end
+  waitingFor = nil
+  site_caption(st.kind, false)
   -- (a scene that loaded with a launch aboard looks here; launchNow looked
   -- before it set off)
   if not force_site then
@@ -1036,7 +1160,7 @@ local function try_spaceport()
   return true
 end
 
-local function try_spawn()
+local function try_spawn(dt)
   -- Not while the loading screen is up: the crew is parked over the spawn
   -- world's NORTH POLE then, and that is the first ground to answer the
   -- terrain probe below — the pad went down there, a quarter of the world
@@ -1045,7 +1169,7 @@ local function try_spawn()
   -- moved to the base (game_manager launch_site) the frame loading ends.
   local gm = findScript("game_manager")
   if gm and gm.loading then return false end
-  local sp = try_spaceport()
+  local sp = try_spaceport(dt)
   if sp ~= nil then return sp end
   -- Site reference read FRESH each attempt: the crew's own position, which is
   -- where a launch rolls out from.
@@ -1220,7 +1344,7 @@ function update(node, dt)
   spawn_drain()
   if want_spawn then
     wait_t = wait_t + dt
-    if try_spawn() then want_spawn = false end
+    if try_spawn(dt) then want_spawn = false end
     return
   end
 

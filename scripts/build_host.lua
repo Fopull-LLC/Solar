@@ -324,6 +324,18 @@ function rollout(site)
   return true
 end
 
+-- The words on the black while a rollout waits (nil takes them down).
+local words_up = nil
+local function wait_words(text)
+  if text == words_up then return end
+  words_up = text
+  if not (host and ui and ui.make) then return end
+  ui.make(host, text and {
+    { "text", key = "wait", pin = "center", w = 900, h = "fit", textAlign = "center", textSize = 22,
+      textColor = { 0.74, 0.82, 0.90 }, text = text },
+  } or {})
+end
+
 local function rollout_tick(dt)
   local f = params.fade or 0.35
   local k = time - ro.t
@@ -364,8 +376,19 @@ local function rollout_tick(dt)
     for _, v in ipairs(findScripts("vessel_controller")) do
       if v.piloting then seated = true break end
     end
-    if (st == "ready" and seated) or k > (params.hold or 8.0) then
-      if k > (params.hold or 8.0) then note("the craft took too long — showing it as it stands (" .. tostring(st) .. ")") end
+    -- While the spawner is still WAITING for the site (the pad not down, the
+    -- runway's ground not final) the black stays up with its words on it:
+    -- fading in then showed an empty pad, and the craft that turned up later
+    -- could be one assembled over nothing. The spawner calls the launch off
+    -- itself (refunded) if the site never comes (SITE_WAIT_BASE at most).
+    local hold = params.hold or 8.0
+    if st == "waiting" then hold = math.max(hold, (vs.SITE_WAIT_BASE or 90.0) + 5.0) end
+    local words = st == "waiting" and k > 1.0 and vs.waitingFor or nil
+    wait_words(words)
+    if (st == "ready" and seated) or (st == nil and k > 0.2) or k > hold then
+      if k > hold then note("the craft took too long — showing it as it stands (" .. tostring(st) .. ")") end
+      if st == nil then note("the launch was called off — fading back in") end
+      wait_words(nil)
       ro.phase, ro.t = "in", time
     end
   elseif ro.phase == "in" then

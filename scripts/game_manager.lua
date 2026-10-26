@@ -844,7 +844,14 @@ function update(node, dt)
     if bf and ((bf.grading and bf.grading()) or base_pending(find("Astronaut"))) and time < ready_t + REVEAL_GRADE then
       reveal_by = math.max(reveal_by, time + 0.5)
     end
-    if time >= reveal_by or (time - ready_t > 1.0 and not base_pending(find("Astronaut"))) then
+    -- a launch still waiting for its pad (vessel_spawner's site gate) keeps
+    -- the curtain too: it goes ahead or is called off within SITE_WAIT_BASE
+    local vs = findScript("vessel_spawner")
+    local launching = vs and vs.launchState and vs.launchState() == "waiting"
+    if launching and time < ready_t + (vs.SITE_WAIT_BASE or 90.0) + 2.0 then
+      reveal_by = math.max(reveal_by, time + 0.5)
+    end
+    if time >= reveal_by or (time - ready_t > 1.0 and not base_pending(find("Astronaut")) and not launching) then
       reveal()
     end
   end
