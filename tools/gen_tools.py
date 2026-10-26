@@ -2,6 +2,11 @@
 """Generate the on-foot TOOLS and the loose rock they throw around.
 
     python3 tools/gen_tools.py          (needs Blender: $BLENDER, default the Steam install)
+    python3 tools/gen_tools.py --laser-variant B      the game's laser is design B
+    python3 tools/gen_tools.py --protos DIR           also write every laser design
+                                         (TL7, A, B, C) into DIR/models/tools and
+                                         DIR/prefabs as ToolLaser<V>[FP], for
+                                         tools/perf/toolstand.sh's PROTOS=1 sheet
 
 The two tools are industrial machine tools in the spirit of Valve's gravity
 gun, pulled into Solar's NASA/ESA-era look (graphite and enamel, worn paint
@@ -16,8 +21,16 @@ at the edges, stencilled labels, signal orange only on the moving parts):
     TL-7 terrain laser: a skeletal stock round the power cell, an enamel
         receiver with the fill canister on its left and the coolant coupling
         on its right, a rangefinder on the rail, a rubber hand-guard, the
-        finned heat sink (it glows with the laser's heat), the stepped optics
-        with an orange knurled focus ring and a crown of focusing vanes.
+        radial heat sink on the barrel's axis (it glows from the root out
+        with the laser's heat), the stepped optics with an orange knurled
+        focus ring and a crown of focusing vanes. Three other designs (A, B,
+        C: gen_tools_blender.py's LASERS) can stand in for it.
+
+THE ENERGY PARTS wear the tool_* surface shaders (shaders/tool_*.flsl): the
+gravity gun's field core, dish, cell and capacitor bands glow blue, a laser's
+cell, emitter and crystal or plasma amber; glass sleeves catch the light; the
+gauges are lamp rows; a laser's heat sink glows from the root out. Their
+`charge` and `heat` are driven by scripts/tool_belt.lua (THE MECHANISMS).
 
 tools/gen_tools_blender.py builds their geometry in Blender (bevels, extruded
 silhouettes, swept hoses) and hands it back; this script adds the first-person
@@ -143,6 +156,59 @@ TOOL_MATS = {
 }
 
 
+# ── the energy parts: tool_* surface shaders, in each tool's palette ───────
+#
+# `charge` and `heat` start where an idle tool sits; tool_belt drives them.
+
+PALETTES = {
+    # the gravity gun's field: a cold electric blue that whitens as it charges
+    "field": {"glow": (0.30, 0.60, 1.00), "core": (0.90, 0.95, 1.00), "gauge": (1.00, 0.62, 0.24), "heat": 0.0},
+    # a laser's beam energy: amber to white-hot; its gauges read heat
+    "laser": {"glow": (1.00, 0.50, 0.16), "core": (1.00, 0.92, 0.78), "gauge": (1.00, 0.62, 0.24), "heat": 1.0},
+}
+COOLANT = {"glow": (0.40, 0.78, 1.00), "core": (0.88, 0.97, 1.00), "heatTo": (1.00, 0.45, 0.12)}
+
+
+def _param(v):
+    if isinstance(v, (tuple, list)):
+        return f"({v[0]}, {v[1]}, {v[2]}, 1.0)"
+    return f"({float(v)}, 0.0, 0.0, 0.0)"
+
+
+def shader_mat(shader, params, color=(1.0, 1.0, 1.0), rough=0.5, metal=0.0):
+    ps = "".join(f'                    "{k}": {_param(v)},\n' for k, v in params.items())
+    return (f'(\n                color: ({color[0]}, {color[1]}, {color[2]}),\n'
+            f'                roughness: {rough},\n                metallic: {metal},\n'
+            f'                shader: Some("shaders/{shader}.flsl"),\n'
+            f'                shader_params: {{\n{ps}                }},\n'
+            f'                shading: Physical,\n            )')
+
+
+def energy(p, bands, flow, power, glow=None, core=None, **extra):
+    g, c = glow or p["glow"], core or p["core"]
+    return shader_mat("tool_energy", dict(glow=g, core=c, charge=0.3, bands=bands, flow=flow, power=power, **extra),
+                      color=g)
+
+
+ENERGY_MATS = {
+    "Energy":      lambda p: energy(p, 40, 0.5, 3.0),
+    "EnergyDish":  lambda p: energy(p, 120, -0.12, 3.2),
+    "EnergyBand":  lambda p: energy(p, 0, 0.0, 2.4),
+    "Emitter":     lambda p: energy(p, 150, -0.10, 3.5),
+    "Crystal":     lambda p: energy(p, 25, 0.3, 2.6),
+    "Plasma":      lambda p: energy(p, 30, 0.8, 3.0),
+    "Coolant":     lambda p: energy(p, 30, 0.25, 2.2, glow=COOLANT["glow"], core=COOLANT["core"],
+                                    heatTo=COOLANT["heatTo"], heatMix=1.0),
+    "EnergyGlass": lambda p: shader_mat("tool_glass", dict(glow=p["glow"], charge=0.3), color=p["glow"]),
+    "CoolGlass":   lambda p: shader_mat("tool_glass", dict(glow=COOLANT["glow"], charge=0.3), color=COOLANT["glow"]),
+    "Gauge":       lambda p: shader_mat("tool_gauge", dict(glow=p["gauge"], charge=0.3, useHeat=p["heat"], segs=10),
+                                        color=p["gauge"]),
+    # a laser's heat sink: dark machined metal that glows from the root out
+    "HeatGlow":    lambda p: shader_mat("tool_heat", dict(tint=(0.32, 0.32, 0.33), heat=0.0, reach=0.026),
+                                        color=(0.32, 0.32, 0.33), rough=0.75, metal=0.6),
+}
+
+
 def centred(m):
     mn, mx = m.bounds()
     c = (mn + mx) / 2
@@ -161,14 +227,16 @@ def centred(m):
 BLENDER = os.environ.get("BLENDER", "/mnt/disks/3tb/SteamLibrary/steamapps/common/Blender/blender")
 BL_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gen_tools_blender.py")
 _BL = {}
+LASER_VARIANTS = ("TL7", "A", "B", "C")
+WANT_LASERS = ["TL7"]          # what blender_tools() asks Blender for (main sets it)
 
 
 def blender_tools():
     if not _BL:
         with tempfile.TemporaryDirectory() as d:
             out = os.path.join(d, "tools_mesh.json")
-            r = subprocess.run([BLENDER, "--background", "--factory-startup", "--python", BL_SCRIPT, "--", out],
-                               capture_output=True, text=True)
+            r = subprocess.run([BLENDER, "--background", "--factory-startup", "--python", BL_SCRIPT, "--", out,
+                                ",".join(WANT_LASERS)], capture_output=True, text=True)
             if r.returncode != 0 or not os.path.exists(out):
                 sys.exit("gen_tools_blender.py failed:\n" + r.stdout[-3000:] + r.stderr[-3000:])
             with open(out) as f:
@@ -236,8 +304,8 @@ def gravity_gun():
     return Rig(blender_tools()["gravgun"])
 
 
-def terrain_laser():
-    return Rig(blender_tools()["laser"])
+def terrain_laser(variant="TL7"):
+    return Rig(blender_tools()["laser_" + variant])
 
 
 # ── first person: the same tools in gloved hands ───────────────────────────
@@ -312,7 +380,20 @@ def fp_glove(m, wrist, elbow, palm, fingers, palm_n, thumb, wide=0.05, thick=0.0
     `palm_n`, the thumb, a flared gauntlet, the wrist bearing and the suit
     sleeve back to `elbow`."""
     capsule(m, palm[0], palm[1], thick, wide, palm_n)
-    capsule(m, fingers[0], fingers[1], thick * 0.78, wide * 0.94, fingers[2] if len(fingers) > 2 else palm_n)
+    # four fingers, as the suit's glove has them (tools/gen_suit_blender.py):
+    # side by side across the hand's width, the middle finger longest, the
+    # little finger short and set back, each its own padded capsule
+    f0, f1 = np.asarray(fingers[0], float), np.asarray(fingers[1], float)
+    fn = np.asarray(fingers[2] if len(fingers) > 2 else palm_n, float)
+    ax = (f1 - f0) / float(np.linalg.norm(f1 - f0))
+    nx = fn - ax * (fn @ ax)
+    nx /= np.linalg.norm(nx)
+    nz = np.cross(nx, ax)
+    L = float(np.linalg.norm(f1 - f0))
+    fw = wide * 0.94 / 4
+    for i, (ln, back) in enumerate(((0.92, 0.03), (1.0, 0.0), (0.94, 0.03), (0.76, 0.10))):
+        o = nz * fw * (1.5 - i) * 2
+        capsule(m, f0 + o - ax * back * L, f0 + o + ax * (ln - back) * L, thick * 0.66, fw * 0.92, fn, segs=8)
     capsule(m, thumb[0], thumb[1], 0.016, 0.018, thumb[2] if len(thumb) > 2 else palm_n, segs=8)
     wrist, elbow = np.asarray(wrist, float), np.asarray(elbow, float)
     d = elbow - wrist
@@ -356,8 +437,8 @@ def fp_gravity_gun():
     return rig
 
 
-def fp_terrain_laser():
-    rig = terrain_laser()
+def fp_terrain_laser(variant="TL7"):
+    rig = terrain_laser(variant)
     m = rig.body
     # Right hand on the pistol grip.
     w = np.array([0.012, -0.095, 0.155])
@@ -366,8 +447,9 @@ def fp_terrain_laser():
              fingers=((-0.004, -0.025, 0.06), (0.0, -0.085, 0.042), (0.0, 0.0, 1.0)),
              palm_n=(-0.2, 0.0, -1.0),
              thumb=((-0.04, -0.03, 0.12), (-0.066, 0.008, 0.06), (1.0, 0.0, 0.0)), wide=0.042, thick=0.026)
-    # Left hand round the fore-grip under the hand-guard, as the gravity gun's.
-    fore_grip_hand(m, Y=0.05, z=-0.192)
+    # Left hand round the fore-grip under the barrel, as the gravity gun's
+    # (every design keeps its fore-grip about here: its `fore` anchor).
+    fore_grip_hand(m, Y=0.05, z=float(rig.anchors["fore"][2]) + 0.004)
     return rig
 
 
@@ -498,6 +580,9 @@ def tool_atlas():
 
     text("gm3", "GM-3", stencil, 64, INK, track=0.08)
     text("tl7", "TL-7", stencil, 64, INK, track=0.08)
+    text("tl9", "TL-9", stencil, 64, INK, track=0.08)        # the design prototypes
+    text("tl5", "TL-5", stencil, 64, INK, track=0.08)
+    text("tl3", "TL-3", stencil, 64, INK, track=0.08)
     text("gm3_name", "GRAVITIC FIELD MANIPULATOR", label, 30, INK, track=0.08)
     text("tl7_name", "TERRAIN LASER  /  CUT · FILL", label, 30, INK, track=0.08)
     text("serial_a", "S/N GM3-0417   MAINT. 26-09", label, 22, INK, track=0.05)
@@ -634,16 +719,18 @@ def loose_rock(seed=7, size=(0.62, 0.42, 0.5)):
 
 # ── prefabs ─────────────────────────────────────────────────────────────────
 
-def mats_block(model, indent="        "):
+def mats_block(model, indent="        ", pal=None):
     if isinstance(model, Rig):
         names = sorted({k for m in model.models.values() if m is not None for k in m.parts})
     else:
         names = sorted(model.parts.keys())
-    body = ",\n".join(f'{indent}    "{n}": {TOOL_MATS[n]()}' for n in names)
+    pal = pal or PALETTES["laser"]
+    body = ",\n".join(f'{indent}    "{n}": {ENERGY_MATS[n](pal) if n in ENERGY_MATS else TOOL_MATS[n]()}'
+                      for n in names)
     return f"{indent}object_materials: {{\n{body},\n{indent}}},\n"
 
 
-def tool_prefab(name, glb, model, about):
+def tool_prefab(name, glb, model, about, pal=None):
     return f'''// {about}
 // Written by tools/gen_tools.py — edit the generator, not this file.
 [
@@ -658,7 +745,7 @@ def tool_prefab(name, glb, model, about):
         matter: Mesh(
             asset_path: "models/tools/{glb}",
         ),
-{mats_block(model)}        scripts: [],
+{mats_block(model, pal=pal)}        scripts: [],
     ),
 ]
 '''
@@ -724,32 +811,70 @@ def rock_prefab(model, half, mass):
 '''
 
 
+def build(name, fn, glb, prefab, about, pal, models_dir, prefabs_dir, asset_dir="models/tools"):
+    """Build one tool, centre it, write its glb and prefab; return its RIG line."""
+    r = fn()
+    if name in FP_CENTRE:
+        pin_centre(r, FP_CENTRE[name])
+    mn, mx = r.bounds()
+    r.shift(-(mn + mx) / 2)
+    mn, mx = r.bounds()
+    write_rig_glb(r, os.path.join(models_dir, glb))
+    with open(os.path.join(prefabs_dir, prefab + ".prefab.ron"), "w") as f:
+        f.write(tool_prefab(prefab, glb, r, about, pal=pal).replace('"models/tools/', f'"{asset_dir}/'))
+    A = r.anchors
+    return (A["grip"], A["muzzle"], A["fore"], A.get("vent", A["muzzle"]), mx - mn, r.tris(),
+            [n["name"] for n in r.nodes if r.models.get(n["name"]) is not None])
+
+
+def rig_lines(r, r_fp):
+    """tool_belt's RIG / RIG_FP `laser` lines for a design (RIG_FP's grip is
+    the same for every design: the view model's centre is pinned)."""
+    f = lambda v: "{ " + ", ".join(f"{x:.3f}".rstrip("0").rstrip(".") if abs(x) > 5e-4 else "0.0" for x in v) + " }"
+    g, mz, fo, vt = r[:4]
+    gf, mzf, _, vtf = r_fp[:4]
+    return (f"  laser   = {{ grip = {f(g)}, muzzle = {f(mz)}, fore = {f(fo)}, vent = {f(vt)} }},\n"
+            f"  laser   = {{ grip = {f(gf)}, muzzle = {f(mzf)}, vent = {f(vtf)} }},\n")
+
+
 def main():
+    import argparse
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--laser-variant", default="TL7", choices=LASER_VARIANTS,
+                    help="the laser design the game's ToolLaser / ToolLaserFP wear (default TL7)")
+    ap.add_argument("--protos", metavar="DIR",
+                    help="also write every laser design into DIR/models/tools and DIR/prefabs (ToolLaser<V>[FP])")
+    args = ap.parse_args()
+    lv = args.laser_variant
+    WANT_LASERS[:] = list(LASER_VARIANTS) if args.protos else [lv]
     os.makedirs(MODELS, exist_ok=True)
     tool_atlas()
     rig = {}
-    for name, fn, glb, prefab, about in (
+    fld, las = PALETTES["field"], PALETTES["laser"]
+    for name, fn, glb, prefab, about, pal in (
         ("gravgun", gravity_gun, "gravity_gun.glb", "ToolGravGun",
-         "GRAVITY GUN — the crew's multi-purpose tool, held (scripts/tool_belt.lua)."),
-        ("laser", terrain_laser, "terrain_laser.glb", "ToolLaser",
-         "TERRAIN LASER — digs and places ground, held (scripts/tool_belt.lua)."),
+         "GRAVITY GUN — the crew's multi-purpose tool, held (scripts/tool_belt.lua).", fld),
+        ("laser", lambda: terrain_laser(lv), "terrain_laser.glb", "ToolLaser",
+         "TERRAIN LASER — digs and places ground, held (scripts/tool_belt.lua).", las),
         ("gravgun_fp", fp_gravity_gun, "fp_gravity_gun.glb", "ToolGravGunFP",
-         "GRAVITY GUN, first person — gloved hands on it; the view-model camera draws it (scripts/tool_belt.lua)."),
-        ("laser_fp", fp_terrain_laser, "fp_terrain_laser.glb", "ToolLaserFP",
-         "TERRAIN LASER, first person — gloved hands on it; the view-model camera draws it (scripts/tool_belt.lua)."),
+         "GRAVITY GUN, first person — gloved hands on it; the view-model camera draws it (scripts/tool_belt.lua).", fld),
+        ("laser_fp", lambda: fp_terrain_laser(lv), "fp_terrain_laser.glb", "ToolLaserFP",
+         "TERRAIN LASER, first person — gloved hands on it; the view-model camera draws it (scripts/tool_belt.lua).",
+         las),
     ):
-        r = fn()
-        if name in FP_CENTRE:
-            pin_centre(r, FP_CENTRE[name])
-        mn, mx = r.bounds()
-        r.shift(-(mn + mx) / 2)
-        mn, mx = r.bounds()
-        write_rig_glb(r, os.path.join(MODELS, glb))
-        with open(os.path.join(PREFABS, prefab + ".prefab.ron"), "w") as f:
-            f.write(tool_prefab(prefab, glb, r, about))
-        A = r.anchors
-        rig[name] = (A["grip"], A["muzzle"], A["fore"], mx - mn, r.tris(),
-                     [n["name"] for n in r.nodes if r.models.get(n["name"]) is not None])
+        rig[name] = build(name, fn, glb, prefab, about, pal, MODELS, PREFABS)
+    if args.protos:
+        pm, pp = os.path.join(args.protos, "models", "tools"), os.path.join(args.protos, "prefabs")
+        os.makedirs(pm, exist_ok=True)
+        os.makedirs(pp, exist_ok=True)
+        for v in LASER_VARIANTS:
+            rig[f"laser{v}"] = build("laser", (lambda v=v: terrain_laser(v)), f"terrain_laser_{v}.glb",
+                                     f"ToolLaser{v}", f"TERRAIN LASER design {v} (a prototype)", las, pm, pp)
+            rig[f"laser{v}_fp"] = build("laser_fp", (lambda v=v: fp_terrain_laser(v)), f"fp_terrain_laser_{v}.glb",
+                                        f"ToolLaser{v}FP", f"TERRAIN LASER design {v}, first person (a prototype)",
+                                        las, pm, pp)
+            with open(os.path.join(args.protos, f"rig_{v}.txt"), "w") as f:
+                f.write(rig_lines(rig[f"laser{v}"], rig[f"laser{v}_fp"]))
     write_glb(socket(), os.path.join(MODELS, "socket.glb"))
     rk = loose_rock()
     rk, _ = centred(rk)
@@ -758,11 +883,14 @@ def main():
     half = np.round((mx - mn) / 2 * 0.92, 3)
     with open(os.path.join(PREFABS, "LooseRock.prefab.ron"), "w") as f:
         f.write(rock_prefab(rk, half, 0.09))
-    print("RIG (relative to each model's centre, metres):")
-    for k, (g, mz, fo, size, tris, nodes) in rig.items():
+    print(f"RIG (relative to each model's centre, metres; the game's laser is design {lv}):")
+    for k, (g, mz, fo, vt, size, tris, nodes) in rig.items():
         print(f"  {k:10s} grip {np.round(g, 3).tolist()} muzzle {np.round(mz, 3).tolist()} "
-              f"fore {np.round(fo, 3).tolist()} size {np.round(size, 3).tolist()} tris {tris} nodes {nodes}")
+              f"fore {np.round(fo, 3).tolist()} vent {np.round(vt, 3).tolist()} size {np.round(size, 3).tolist()} "
+              f"tris {tris} nodes {nodes}")
     print(f"  rock     half {half.tolist()} tris {rk.tris()}")
+    print("tool_belt's laser lines (RIG, then RIG_FP):")
+    print(rig_lines(rig["laser"], rig["laser_fp"]), end="")
 
 
 if __name__ == "__main__":

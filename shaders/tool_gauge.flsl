@@ -1,0 +1,28 @@
+// tool_gauge — a tool's readout window: a row of lamp segments that fill with
+// `charge` (the gravity gun's field) or, with `useHeat` 1, with `heat` (a
+// laser's sink). The lit segments glow; the top one breathes; the unlit ones
+// are dark glass with a faint ghost of the lamp, as a real segment display has.
+// uv is the window's own 0..1 (tools/gen_tools_blender.py, UVMODE "quad"):
+// uv.x along the bar, uv.y across it.
+shader tool_gauge {
+  stage fragment
+  uniform glow:    color = #FFA040
+  uniform charge:  float = 0.3 range(0, 1.6)
+  uniform heat:    float = 0.0 range(0, 1)
+  uniform useHeat: float = 0.0 range(0, 1)
+  uniform segs:    float = 10 range(1, 40)
+
+  let level = mix(saturate(charge), saturate(heat), useHeat)
+  let cell = fract(uv.x * segs)
+  let lamp = step(0.16, cell) * step(cell, 0.9) * step(abs(uv.y - 0.5), 0.34)
+  let idx = floor(uv.x * segs) / segs
+  let on = step(idx, level - 0.5 / segs)
+  // the segment at the top of the level breathes
+  let top = step(level - 1.5 / segs, idx) * on
+  let breath = 0.75 + 0.25 * sin(time * 9.0)
+  // hot end of a heat bar turns red
+  let col = mix(glow.rgb, vec3(1.0, 0.25, 0.08), useHeat * smoothstep(0.6, 1.0, uv.x))
+  let lit = col * lamp * on * mix(2.6, 2.6 * breath, top)
+  let ghost = col * lamp * 0.05 + vec3(0.012, 0.013, 0.015)
+  output color = vec4(lit + ghost, 1.0)
+}

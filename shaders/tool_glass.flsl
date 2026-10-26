@@ -1,0 +1,20 @@
+// tool_glass — the clear sleeve over a tool's energy cell or coolant line:
+// additive, so the glowing part inside shows through untouched and the glass
+// only adds what glass adds — a rim of the energy's colour toward the
+// silhouette (the light caught in its thickness) and a sharp glint of the key
+// light. Order-independent (nothing to sort) and texture-free.
+// `charge` brightens the caught light; `heat` is declared for the fan-out.
+shader tool_glass {
+  stage fragment
+  blend additive
+  uniform glow:   color = #4F9DFF
+  uniform charge: float = 0.3 range(0, 1.6)
+  uniform heat:   float = 0.0 range(0, 1)
+
+  let face = saturate(abs(dot(normal, viewDir)))
+  let rim = pow(1.0 - face, 3.0)
+  let hv = normalize(lightDir + viewDir)
+  let glint = pow(saturate(dot(normal, hv)), 90.0)
+  let caught = glow.rgb * (rim * (0.35 + 0.9 * saturate(charge)) + 0.03)
+  output color = vec4(caught + lightColor * glint * 0.3, 1.0)
+}

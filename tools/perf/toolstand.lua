@@ -4,8 +4,15 @@
 -- frames them (VIEW_AT, VM_FOV), then poses the articulated parts (claws,
 -- heat sink) if the model has them and photographs that too.
 -- Run by tools/perf/toolstand.sh; pictures land in user://toolstand/.
+--
+-- protos = 1 (toolstand.sh PROTOS=DIR): the LASER DESIGN SHEET instead — the
+-- gravity gun and each laser design (ToolLaser<V>, V in TL7 A B C) from the
+-- 3/4 front, the left side and first person, under one light; the energy
+-- parts idle in the 3/4 view and working (charge, heat) in the others.
+-- charge / heat: the energy uniforms the ordinary stand's tools wear.
 defaults = { quit = 1, pose = 1, toe = 7.0, cant = 0.0, sweep = 0, vax = 0.21, vay = -0.265, vaz = -0.6, vmfov = 0.95,
-  ggx = 0, ggy = 0, ggz = 0, lgx = 0, lgy = 0, lgz = 0 }
+  ggx = 0, ggy = 0, ggz = 0, lgx = 0, lgy = 0, lgz = 0, protos = 0, charge = 0.3, heat = 0.0, wcharge = 0.9,
+  wheat = 0.7 }
 
 local W = function() return app.wallClock and app.wallClock() or os.clock() end
 local W0 = W()
@@ -33,7 +40,85 @@ local function put(prefab, x, fn)
   spawn(prefab, vec3(x, 0, 0), function(n) made[prefab] = n; if fn then fn(n) end end)
 end
 
+local function energy(n, c, h)
+  pcall(function() n:setShaderParam("charge", c); n:setShaderParam("heat", h) end)
+end
+
+local function light()
+  local L = find("Lighting"):getcomponent("Light")
+  L.directionX, L.directionY, L.directionZ = -0.45, -0.75, -0.5
+  L.colorR, L.colorG, L.colorB = 1.0, 0.95, 0.88
+  L.intensity = 2.6
+  L.ambientR, L.ambientG, L.ambientB = 0.32, 0.33, 0.36
+  pcall(function() L.fog = false end)
+  createNode("Floor", nil, function(n) n:setPrimitive("Cube", { 0.42, 0.41, 0.39 }); n.x, n.y, n.z = 30, -0.35, 0; n.scale_x, n.scale_y, n.scale_z = 400, 0.1, 400 end)
+end
+
+-- yaw about Y, then pitch about X, then roll about Z (node:setAngles)
+local function rot(yw, pt, rl, v)
+  local x, y, z = v[1], v[2], v[3]
+  x, y = x * math.cos(rl) - y * math.sin(rl), x * math.sin(rl) + y * math.cos(rl)
+  y, z = y * math.cos(pt) - z * math.sin(pt), y * math.sin(pt) + z * math.cos(pt)
+  x, z = x * math.cos(yw) + z * math.sin(yw), -x * math.sin(yw) + z * math.cos(yw)
+  return { x, y, z }
+end
+
+-- THE DESIGN SHEET: row by row, the gravity gun then each laser design.
+local function protos_main()
+  light()
+  local rows = { { "GG", "ToolGravGun", "ToolGravGunFP", { params.ggx, params.ggy, params.ggz } } }
+  for _, v in ipairs({ "TL7", "A", "B", "C" }) do
+    rows[#rows + 1] = { v, "ToolLaser" .. v, "ToolLaser" .. v .. "FP", { params.lgx, params.lgy, params.lgz } }
+  end
+  for i, r in ipairs(rows) do
+    put(r[2], (i - 1) * 10)
+    put(r[3], (i - 1) * 10 + 100)
+  end
+  frames(40)
+  local cam = find("Camera")
+  local VA = { params.vax, params.vay, params.vaz }
+  for _, r in ipairs(rows) do
+    local n, f = made[r[2]], made[r[3]]
+    if not (n and f) then P("MISSING %s", r[1]) else
+      local t = vec3(n.x, n.y, n.z)
+      local function at(dist, yaw, pitch, name)
+        cam.x = t.x + dist * math.cos(pitch) * math.sin(yaw)
+        cam.y = t.y + dist * math.sin(pitch)
+        cam.z = t.z + dist * math.cos(pitch) * math.cos(yaw)
+        cam:lookAt(t, vec3(0, 1, 0))
+        cam:setCamera { fovY = 0.6 }
+        frames(8)
+        shot(r[1] .. "_" .. name)
+        frames(4)
+      end
+      energy(n, params.charge, params.heat)
+      at(1.45, math.rad(-128), math.rad(16), "q")          -- 3/4 front, from the left
+      energy(n, params.wcharge, params.wheat)
+      at(1.45, math.rad(-90), math.rad(3), "side")          -- the left side, working
+      -- first person, framed as tool_belt frames the view model (VIEW_AT, the
+      -- toe-in and cant, VM_FOV), working
+      energy(f, params.wcharge, params.wheat)
+      local ox = f.x
+      local yw, pt, rl = math.atan(VA[1] / params.toe), math.atan(-VA[2] / params.toe), params.cant
+      local rg = rot(yw, pt, rl, r[4])
+      f.x, f.y, f.z = ox + VA[1] - rg[1], VA[2] - rg[2], VA[3] - rg[3]
+      f:setAngles(yw, pt, rl)
+      cam.x, cam.y, cam.z = ox, 0, 0
+      cam:setAngles(0, 0, 0)
+      cam:setCamera { fovY = params.vmfov }
+      frames(8)
+      shot(r[1] .. "_fp")
+      frames(4)
+    end
+  end
+  local t = W() + 15
+  while pending > 0 and W() < t do yield() end
+  P("DONE")
+  if params.quit > 0 then app.quit() end
+end
+
 local function main()
+  if params.protos > 0 then return protos_main() end
   local L = find("Lighting"):getcomponent("Light")
   L.directionX, L.directionY, L.directionZ = -0.45, -0.75, -0.5
   L.colorR, L.colorG, L.colorB = 1.0, 0.95, 0.88
@@ -49,6 +134,7 @@ local function main()
   put("ToolGravGunFP", 20)
   put("ToolLaserFP", 30)
   frames(30)
+  for _, n in pairs(made) do energy(n, params.charge, params.heat) end
   for k, n in pairs(made) do
     local bones = n.bones and n:bones() or {}
     local names = {}

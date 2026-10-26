@@ -1,0 +1,53 @@
+// tool_energy — the hand tools' ENERGY parts: the GM-3's field core, its
+// emitter dish, its cell and capacitor bands; the lasers' cells, crystals,
+// coolant and emitters. A self-lit surface (it makes its own light, so it reads
+// the same in sun and in shade) with bands that travel along the flow, a slow
+// churn so it never looks printed, a breath at rest and a flutter when
+// charged, and a fresnel rim that brightens toward the silhouette.
+//
+// `charge` (0 idle … 1 working, above 1 a flash) is driven by
+// scripts/tool_belt.lua as the tool works: node:setShaderParam fans out to
+// every part of the tool that wears a tool_* shader, so one write a frame
+// moves them all. Every tool_* shader declares `charge` and `heat`, so the
+// fan-out always has somewhere to land.
+//
+// uv is NOT a texture map on these parts: tools/gen_tools_blender.py writes it
+// (UVMODE) so uv.y runs ALONG the flow in metres (down the barrel, or out from
+// the axis on a dish) and uv.x goes once round the axis (0..1).
+//
+// Cost: no textures, one value noise, two sins. Drawn every frame in first
+// person, so it stays that small.
+shader tool_energy {
+  stage fragment
+  uniform glow:   color = #4F9DFF
+  uniform core:   color = #EAF4FF
+  uniform charge: float = 0.3 range(0, 1.6)
+  uniform heat:   float = 0.0 range(0, 1)
+  // bands per metre along the flow, and how fast they travel (m/s at full charge)
+  uniform bands:  float = 40 range(0, 200)
+  uniform flow:   float = 0.5 range(-4, 4)
+  // overall brightness (the bloom picks up what passes 1)
+  uniform power:  float = 3.0 range(0, 12)
+  // a coolant warms toward heatTo as `heat` climbs (heatMix 0: it never does)
+  uniform heatTo:  color = #FF7320
+  uniform heatMix: float = 0.0 range(0, 1)
+
+  let tone = mix(glow.rgb, heatTo.rgb, saturate(heat) * heatMix)
+  let c = saturate(charge)
+  let flash = max(charge - 1.0, 0.0)
+  let face = saturate(abs(dot(normal, viewDir)))
+  let rim = pow(1.0 - face, 2.0)
+  // bands travelling along the flow, faster as it charges
+  let s = uv.y * bands - time * flow * bands * (0.15 + 0.85 * c)
+  let band = pow(0.5 + 0.5 * sin(s * 6.2831853), 4.0)
+  // a slow churn across the bands
+  let churn = valueNoise(vec3(uv.x * 9.0, uv.y * (bands * 0.3 + 4.0), time * (0.7 + 2.5 * c)))
+  // a breath at rest, a flutter at work
+  let breath = 0.84 + 0.16 * sin(time * (2.0 + 10.0 * c))
+  let e = (0.30 + 0.85 * c + 1.8 * flash) * breath * (0.45 + 0.45 * churn + 0.55 * band)
+  // the brightest of it whitens toward the core colour
+  let white = saturate(e * 0.4 + band * c * 0.35 + flash)
+  let body = mix(tone, core.rgb, white) * e * power
+  let edge = tone * rim * (0.5 + c + flash) * power * 0.6
+  output color = vec4(body + edge, 1.0)
+}

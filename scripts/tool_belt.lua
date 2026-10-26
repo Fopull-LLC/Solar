@@ -232,13 +232,14 @@ TOOLDEF = {
 -- model's centre (tools/gen_tools.py prints these). `fore` is the other
 -- hand's hold. The first-person models carry their own gloved hands and are
 -- different meshes, so they have their own centre and their own numbers.
+-- `vent` is where a tool sheds heat (the laser's heat haze rises from it).
 RIG = {
-  gravgun = { grip = { 0.0, -0.058, 0.127 }, muzzle = { 0.0, 0.032, -0.253 }, fore = { 0.0, -0.068, -0.082 } },
-  laser   = { grip = { 0.008, -0.039, 0.207 }, muzzle = { 0.008, 0.046, -0.433 }, fore = { 0.008, -0.028, -0.069 } },
+  gravgun = { grip = { 0.0, -0.058, 0.127 }, muzzle = { 0.0, 0.032, -0.253 }, fore = { 0.0, -0.068, -0.082 }, vent = { 0.0, 0.096, -0.073 } },
+  laser   = { grip = { 0.008, -0.039, 0.207 }, muzzle = { 0.008, 0.046, -0.433 }, fore = { 0.008, -0.028, -0.069 }, vent = { 0.008, 0.097, -0.211 } },
 }
 RIG_FP = {
-  gravgun = { grip = { 0.092, 0.101, -0.042 }, muzzle = { 0.092, 0.191, -0.422 } },
-  laser   = { grip = { 0.091, 0.111, 0.049 }, muzzle = { 0.091, 0.196, -0.591 } },
+  gravgun = { grip = { 0.092, 0.101, -0.042 }, muzzle = { 0.092, 0.191, -0.422 }, vent = { 0.092, 0.255, -0.242 } },
+  laser   = { grip = { 0.091, 0.111, 0.049 }, muzzle = { 0.091, 0.196, -0.591 }, vent = { 0.091, 0.247, -0.369 } },
 }
 -- THIRD PERSON: how each tool is carried, in the body's frame (metres from the
 -- right shoulder joint: in toward the chest, down, forward), at rest (`low`,
@@ -1043,10 +1044,21 @@ end
 -- keeps them as nodes of the model, which the engine poses as bones): the
 -- gravity gun's three claws open as it reaches for something, close on what
 -- it holds and snap open on a punt, which also kicks the gun back in the
--- hands; the laser's knurled focus ring spins with the beam and its heat
--- sink glows with `heat`. Only the shown model is posed, and only while
--- something moves: bone writes are held (anim:holdPose), so a tool at rest
--- costs nothing.
+-- hands; the laser's knurled focus ring spins with the beam. Only the shown
+-- model is posed, and only while something moves: bone writes are held
+-- (anim:holdPose), so a tool at rest costs nothing.
+--
+-- THE ENERGY. The tools' energy parts wear the tool_* surface shaders
+-- (shaders/tool_energy, tool_glass, tool_gauge, tool_heat): their bands,
+-- breathing and flicker run on the GPU by themselves; this script only says
+-- how hard the tool is working, as two uniforms on the shown model —
+-- `charge` (the gravity gun's field: idle, reaching, holding under strain,
+-- a flash on a punt; a laser's spin-up) and `heat` (a laser's heat sink and
+-- gauge, its coolant's colour). One node:setShaderParam fans out to every
+-- part wearing a tool_* shader, and it is written only when the value moves
+-- by a 64th, so an idle tool costs no writes. Self-contained: energy_tick()
+-- reads only the published state (inUse, holding, strain, punt_t, charge,
+-- heat) and writes only shader uniforms.
 local CLAWS = { "ClawTop", "ClawLeft", "ClawRight" }
 local mech_rig = {}       -- set .. id → { node =, an =, ids = {name → index}, tries =, last = {}, heat = }
 punt_t = -10.0            -- when the gravity gun last threw (the punt's snap)
@@ -1057,7 +1069,7 @@ local function mech_of(set, id)
   local k = set .. id
   local r = mech_rig[k]
   if not r or r.node ~= n then
-    r = { node = n, an = n.animator and n:animator() or nil, ids = nil, tries = 0, last = {}, heat = -1 }
+    r = { node = n, an = n.animator and n:animator() or nil, ids = nil, tries = 0, last = {}, u = {} }
     mech_rig[k] = r
   end
   if not r.ids and r.an and r.tries < 60 then
@@ -1072,6 +1084,31 @@ local function mech_of(set, id)
     if any then r.ids = ids; r.an:holdPose(true) end
   end
   return r
+end
+
+-- THE ENERGY: the field's charge, eased toward what the gun is doing, and the
+-- punt's flash on top of it (decaying).
+local energy = { field = 0.15, flash = 0.0, pt = -10.0 }
+local function uniform(r, key, v)
+  local q = math.floor(v * 64 + 0.5) / 64
+  if r.u[key] == q or r.u[key] == false then return end
+  local ok = pcall(r.node.setShaderParam, r.node, key, q)
+  r.u[key] = ok and q or false     -- a model without tool_* parts: never again
+end
+local function energy_tick(r, id, dt)
+  if id == "gravgun" then
+    local want = 0.15                                      -- idle: a slow breath
+    if holding then want = 0.8 + 0.2 * math.min(1, strain or 0)
+    elseif inUse then want = 0.62 end                      -- reaching
+    energy.field = energy.field + (want - energy.field) * (1 - math.exp(-5 * dt))
+    if punt_t > energy.pt then energy.pt = punt_t; energy.flash = 0.6 end
+    energy.flash = energy.flash * math.exp(-5 * dt)
+    if energy.flash < 0.01 then energy.flash = 0 end
+    uniform(r, "charge", energy.field + energy.flash)
+  elseif id == "laser" then
+    uniform(r, "charge", 0.2 + 0.8 * (charge or 0))
+    uniform(r, "heat", heat or 0)
+  end
 end
 
 local function bone_rot(r, name, yaw, pitch, roll)
@@ -1108,8 +1145,9 @@ local function articulate(dt)
     if r and r.ids then
       for _, b in ipairs(CLAWS) do bone_rot(r, b, 0, mech.claw, 0) end
     end
+    if r then energy_tick(r, "gravgun", dt) end
   end
-  -- the laser: the focus ring spins up with the beam, the heat sink glows
+  -- the laser: the focus ring spins up with the beam; its energy (above)
   local firing = id == "laser" and inUse
   mech.spinv = mech.spinv + ((firing and (7.0 + 5.0 * heat) or 0.0) - mech.spinv) * (1 - math.exp(-(firing and 3 or 1.5) * dt))
   if id == "laser" then
@@ -1119,16 +1157,7 @@ local function articulate(dt)
         mech.spin = (mech.spin + mech.spinv * dt) % (2 * math.pi)
         bone_rot(r, "Focus", 0, 0, mech.spin)
       end
-      local h = math.floor(heat * 40 + 0.5) / 40
-      if h ~= r.heat then
-        r.heat = h
-        local ok = pcall(function()
-          local m = r.node:material("HeatGlow")
-          m.emissive = { 0.85 + 0.15 * h, 0.16 + 0.30 * h, 0.04 + 0.08 * h }
-          m.emissiveStrength = 2.6 * h ^ 1.8
-        end)
-        if not ok then r.heat = 99 end   -- a model without the part: never again
-      end
+      energy_tick(r, "laser", dt)
     end
   end
 end
@@ -1146,11 +1175,12 @@ end
 -- (drawn by the main camera) starts at the point that the MAIN camera shows
 -- where the view-model camera shows the muzzle: the same depth, its offset
 -- from the middle of the view scaled by the ratio of the two lenses.
-local function muzzle()
+-- `key` names any point RIG / RIG_FP keep ("muzzle", "vent"): tool_at(key).
+local function tool_at(key)
   local id = toolId()
   local fp = first_person()
   local rig = RIG_FP[id]
-  if fp and rig and cam and cam.fwd_x then
+  if fp and rig and rig[key] and cam and cam.fwd_x then
     local a = find("Astronaut")
     local cn = cam_node()
     if a and cn then
@@ -1159,7 +1189,7 @@ local function muzzle()
       local ex, ey, ez = a.x + ux * eh, a.y + uy * eh, a.z + uz * eh
       local fx, fy, fz = cam.fwd_x, cam.fwd_y, cam.fwd_z
       local r, u = cn:worldRight(), cn:worldUp()
-      local g, mz = rig.grip, rig.muzzle
+      local g, mz = rig.grip, rig[key]
       local yw, pt, rl = vm_angles()
       local ox, oy, oz = vm_rot(yw, pt, rl, (mz[1] - g[1]) * VIEW_SCALE, (mz[2] - g[2]) * VIEW_SCALE,
         (mz[3] - g[3]) * VIEW_SCALE)
@@ -1175,8 +1205,8 @@ local function muzzle()
   end
   local m = models[fp and "fp" or "tp"][id]
   rig = fp and RIG_FP[id] or RIG[id]
-  if rig and m and m ~= "spawning" and m.valid and m.toWorld then
-    local mz = rig.muzzle
+  if rig and rig[key] and m and m ~= "spawning" and m.valid and m.toWorld then
+    local mz = rig[key]
     local w = m:toWorld(vec3(mz[1], mz[2], mz[3]))
     if w then return w.x, w.y, w.z end
   end
@@ -1186,6 +1216,7 @@ local function muzzle()
   end
   return nil
 end
+local function muzzle() return tool_at("muzzle") end
 
 -- ── THE EFFECTS: particle systems on pooled nodes ─────────────────────────
 -- Every beam, mark and hold is a particle effect (vfx/*.vfx.ron) on a node of
@@ -2923,6 +2954,16 @@ function lateUpdate(node, dt)
     if mx then fx_use("GravIdle", { x = mx, y = my, z = mz, power = 1.0 }) end
   end
   grav_idle_req = false
+  -- The laser shedding heat: a shimmer and the odd ember off its heat sink,
+  -- as strong as it is hot (vfx/LaserVent; nothing below a fifth of the heat).
+  if toolId() == "laser" and (heat or 0) > 0.2 then
+    local vx, vy, vz = tool_at("vent")
+    local _, _, a = crew_model()
+    if vx and a then
+      fx_use("LaserVent", { x = vx, y = vy, z = vz, ux = a.up_x or 0, uy = a.up_y or 1, uz = a.up_z or 0,
+        power = (heat - 0.2) / 0.8 })
+    end
+  end
 
   if ring_req then
     local h = ring_req.h

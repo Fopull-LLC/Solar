@@ -2,7 +2,15 @@
 -- (tools/perf/toolshots.sh). First person and third person, idle and firing,
 -- the gravity gun on a crate if one is near, and a close-up of each tool in
 -- the hands. Pictures to user://toolshots/.
-defaults = { quit = 1, firesecs = 4.0 }
+-- mode 1: the ENERGY set (see energy_set): each tool idle and working, first
+-- and third person, in daylight and then in shade — under a canopy the probe
+-- holds between the crew and the sun (ProbeShade, from toolshots.sh).
+-- laseronly / dayonly trim the energy set to the laser, or to daylight (the
+-- laser design runs: toolshots.sh VARIANT=…).
+-- perfsecs > 0: after each first-person idle shot, the GPU's own time per
+-- render pass (perf.gpu) and the draw count, averaged over that many seconds,
+-- printed as "TSG PERF" lines (run BEFORE=1 and not, and compare).
+defaults = { quit = 1, firesecs = 4.0, mode = 0, shadedist = 2.6, laseronly = 0, dayonly = 0, perfsecs = 0 }
 
 local W = function() return app.wallClock and app.wallClock() or os.clock() end
 local W0 = W()
@@ -24,6 +32,36 @@ local function shot(name)
     else P("SHOT %s failed %s", name, tostring(why)) end
   end)
   if not ok then pending = pending - 1; P("capture error %s", tostring(err)) end
+end
+
+-- The shade canopy: kept between the crew and the sun every lateUpdate (the
+-- planet moves metres a tick, so it is placed after physics, from the crew).
+local shade = { on = false, n = nil, asked = false }
+local function sun_dir(a)
+  local best
+  for _, b in ipairs(space.bodies() or {}) do if not best or (b.mu or 0) > (best.mu or 0) then best = b end end
+  if not best then return nil end
+  local d = vec3(best.x - a.x, best.y - a.y, best.z - a.z)
+  return d:normalized()
+end
+function lateUpdate(node, dt)
+  if not shade.on then
+    if shade.n and shade.n.valid then shade.n.visible = false; shade.n.x = shade.n.x + 500 end
+    return
+  end
+  local a = find("Astronaut")
+  if not a then return end
+  if not (shade.n and shade.n.valid) then
+    if not shade.asked then shade.asked = true; spawn("ProbeShade", vec3(a.x, a.y, a.z), function(n) shade.n = n end) end
+    return
+  end
+  local s = sun_dir(a)
+  if not s then return end
+  local up = vec3(a.up_x or 0, a.up_y or 1, a.up_z or 0)
+  local c = vec3(a.x, a.y, a.z) + up * 1.2 + s * params.shadedist
+  shade.n.visible = true
+  shade.n.x, shade.n.y, shade.n.z = c.x, c.y, c.z
+  if shade.n.setUp then shade.n:setUp(s, up:cross(s):normalized()) end
 end
 
 local function main()
@@ -161,6 +199,133 @@ local function main()
   -- face the heading, the crew turned to it
   cam.face(f0.x, f0.y, f0.z, -0.1)
   hold(1.0)
+  if params.mode == 1 then
+    -- THE ENERGY SET: daylight, then shade; each tool idle and working.
+    local tools = params.laseronly > 0 and { "laser" } or { "gravgun", "laser" }
+    -- Shade: the shadow side of the nearest base building, where its colliders
+    -- shade the first-person view model too (a stacked camera takes only
+    -- terrain and collider-proxy shadows); the canopy if no spot is found.
+    local function building_shade()
+      local a, uu = crew(), up_at()
+      local sd = sun_dir(a)
+      if not sd then return nil end
+      local sf = sd:flatten(uu):normalized()
+      local best
+      for _, nm in ipairs({ "FacTracking", "FacHangar", "FacCommand", "FacDepot", "FacPower" }) do
+        for _, n in ipairs(findAll(nm) or {}) do
+          -- facilities ride their planet: their x/y/z are planet-local
+          local w = n.valid and n:toWorld(vec3(0, 0, 0))
+          local d = w and len(w.x - a.x, w.y - a.y, w.z - a.z)
+          if w and (not best or d < best.d) then best = { n = n, d = d, w = w } end
+        end
+      end
+      P("shade: nearest building %s", best and string.format("%s at %.0f m", best.n.name, best.d) or "none")
+      if not best then return nil end
+      local c = best.w
+      for D = 12, 44, 4 do
+        local p = c - sf * D + uu * 40
+        local g = raycast(p.x, p.y, p.z, -uu.x, -uu.y, -uu.z, 90, a)
+        if g then
+          local e = vec3(g.x, g.y, g.z) + uu * 1.5
+          local blk = raycast(e.x, e.y, e.z, sd.x, sd.y, sd.z, 300, a)
+          if blk then
+            local bn = body()
+            P("shade spot: %.0f m from %s, ground found, sun blocked at %.1f m", D, best.n.name,
+              len(blk.x - e.x, blk.y - e.y, blk.z - e.z))
+            return vec3(g.x, g.y, g.z) + uu * 1.0 - vec3(bn.x, bn.y, bn.z), -sf
+          end
+        end
+      end
+      return nil
+    end
+    for _, lt in ipairs(params.dayonly > 0 and { "day" } or { "day", "shade" }) do
+      if lt == "shade" then
+        local rel, look = building_shade()
+        if rel then
+          for _ = 1, 40 do
+            local bn, a = body(), crew()
+            a.x, a.y, a.z = bn.x + rel.x, bn.y + rel.y, bn.z + rel.z
+            a.vx, a.vy, a.vz = 0, 0, 0
+            yield()
+          end
+          f0 = look
+          cam.face(f0.x, f0.y, f0.z, -0.1)
+        else
+          shade.on = true
+        end
+      end
+      hold(1.0)
+      local sd = sun_dir(crew())
+      P("light %s sun elevation %.1f deg", lt, sd and math.deg(math.asin(math.max(-1, math.min(1, sd:dot(up_at()))))) or -99)
+      for _, id in ipairs(tools) do
+        equip(id)
+        cam.setFreecam(false)
+        cam.firstPerson = true
+        cam.face(f0.x, f0.y, f0.z, -0.12)
+        hold(1.5)
+        shot(lt .. "_fp_" .. id .. "_idle")
+        hold(0.3)
+        if params.perfsecs > 0 and perf and perf.gpu then
+          perf.enable(true)
+          hold(0.5)
+          local sum, n, draws, fms = {}, 0, 0, 0
+          local t = time + params.perfsecs
+          while time < t do
+            local g = perf.gpu()
+            if g and g.passes then
+              n = n + 1
+              sum.total = (sum.total or 0) + (g.total or 0)
+              for _, ps in ipairs(g.passes) do sum[ps.name] = (sum[ps.name] or 0) + ps.ms end
+              local c = perf.counts()
+              draws = draws + (c.draws or 0)
+              fms = fms + (perf.ms("render") or 0)
+            end
+            yield()
+          end
+          local parts = {}
+          for k, v in pairs(sum) do parts[#parts + 1] = string.format("%s=%.3f", k, v / math.max(n, 1)) end
+          table.sort(parts)
+          P("PERF %s %s frames %d draws %.1f cpu-render %.3f | %s", lt, id, n, draws / math.max(n, 1),
+            fms / math.max(n, 1), table.concat(parts, " "))
+          perf.enable(false)
+        end
+        -- working: the trigger held at the ground ahead (the gun reaching,
+        -- the laser heating up)
+        cam.face(f0.x, f0.y, f0.z, -0.5)
+        local t = time + params.firesecs
+        while time < t do tb.sim = { btn = { [0] = true } }; yield() end
+        shot(lt .. "_fp_" .. id .. "_work")
+        hold(0.1)
+        P("%s fp %s: heat %.2f charge %.2f inUse %s", lt, id, tb.heat or -1, tb.charge or -1, tostring(tb.inUse))
+        tb.sim = { btn = { [0] = false } }
+        cam.firstPerson = false
+        hold(0.6)
+        for _ = 1, 24 do tp_cam(0.42, 0.30, 0.12); yield() end
+        shot(lt .. "_tp_" .. id .. "_idle")
+        t = time + params.firesecs
+        while time < t do
+          local a = crew()
+          local uu = up_at()
+          local e = vec3(a.x, a.y, a.z) + uu * 1.5
+          local gpt = vec3(a.x, a.y, a.z) + f0 * 3.0 - uu * 0.2
+          local dd = gpt - e
+          tb.sim = { btn = { [0] = true }, aim = { e.x, e.y, e.z, dd.x, dd.y, dd.z } }
+          tp_cam(0.42, 0.30, 0.12)
+          yield()
+        end
+        shot(lt .. "_tp_" .. id .. "_work")
+        hold(0.1)
+        tb.sim = { btn = { [0] = false } }
+        cam.setFreecam(false)
+        hold(1.5)
+      end
+    end
+    shade.on = false
+    wait_for(function() return pending <= 0 end, 20)
+    P("DONE")
+    if params.quit > 0 then app.quit() end
+    return
+  end
   for _, id in ipairs({ "gravgun", "laser" }) do
     equip(id)
     fp_set(id)

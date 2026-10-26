@@ -1,0 +1,32 @@
+// tool_heat — a laser's heat sink: dark machined fins under the engine's own
+// Physical light (litPbr), glowing from the root out as `heat` climbs. Dull
+// red at the root first, then orange, then a yellow-white core at the top of
+// the range, with a faint flicker; the fin tips stay dark metal unless the
+// tool is near its limit, so the glow reads as heat soaking OUT of the barrel
+// rather than as a lamp. A temper tint (straw to bronze) creeps over the cool
+// metal as it heats.
+//
+// `heat` (0..1) is driven by scripts/tool_belt.lua (node:setShaderParam, fanned
+// out to every tool_* part; `charge` is declared so that fan-out lands too).
+// uv is written by tools/gen_tools_blender.py (UVMODE "radial"): uv.x is
+// metres OUT from the hot root, uv.y metres along the barrel.
+shader tool_heat {
+  stage fragment
+  uniform tint:   color = #525254
+  uniform heat:   float = 0.0 range(0, 1)
+  uniform charge: float = 0.0 range(0, 1.6)
+  // how far out from the root (m) the glow climbs at full heat
+  uniform reach:  float = 0.03 range(0.001, 0.2)
+
+  let h = saturate(heat)
+  let flick = 0.88 + 0.12 * valueNoise(vec3(uv.y * 70.0, uv.x * 90.0, time * 2.5))
+  // temperature at this point: the root first, spreading out with heat
+  let t = saturate(h * 1.15 - uv.x / reach) * flick
+  let red = mix(vec3(0.50, 0.05, 0.01), vec3(1.0, 0.36, 0.06), saturate(t * 1.7))
+  let bb = mix(red, vec3(1.0, 0.82, 0.52), saturate(t * 2.2 - 1.2))
+  let glowAmt = pow(t, 2.4) * 6.0
+  // the metal under it: tempered toward straw and bronze as the whole sink warms
+  let temper = mix(tint.rgb, vec3(0.42, 0.33, 0.22), saturate(h * 1.4 - uv.x * 6.0) * 0.6)
+  let lit = litPbr(temper * (1.0 - 0.6 * saturate(t * 2.0)))
+  output color = vec4(lit + bb * glowAmt, 1.0)
+}
