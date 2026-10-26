@@ -280,8 +280,14 @@ end
 -- (camera.captureTexture through the preview camera, 64², kept as an img:
 -- texture for the session), one at a time while nothing is hovered or held,
 -- the first time the catalogue opens. The cards show them as they arrive.
+-- build_host keeps them for the session, so the next VAB entry starts with
+-- every icon already taken.
 ICONS = {}            -- id → "img:N"
 local icq = { busy = false, failed = {}, n = 0, cam = nil, making = false }
+local function icon_store()
+  local bh = findScript and findScript("build_host") or nil
+  return bh and bh.partIcon and bh.keepPartIcon and bh or nil
+end
 -- The icon camera: a plain off-screen camera beside the preview's (the
 -- render-target camera itself photographed nothing but its sky on rc33).
 local function icon_camera(B)
@@ -296,8 +302,19 @@ local function icon_camera(B)
 end
 local function icon_tick(B)
   if icq.done or icq.busy or not (camera and camera.captureTexture) then return false end
+  local cat = B.catalogue and B.catalogue() or {}
+  local store = not icq.seeded and icon_store() or nil
+  icq.seeded = true
+  if store then
+    for _, sec in ipairs(cat) do
+      for _, x in ipairs(sec.ids) do
+        local tex = not ICONS[x] and store.partIcon(x)
+        if tex then ICONS[x] = tex; icq.n = icq.n + 1; st.dirty = true end
+      end
+    end
+  end
   local id = nil
-  for _, sec in ipairs(B.catalogue and B.catalogue() or {}) do
+  for _, sec in ipairs(cat) do
     for _, x in ipairs(sec.ids) do
       if not ICONS[x] and not icq.failed[x] and B.previewPrefab and B.previewPrefab(x) then id = x break end
     end
@@ -331,7 +348,11 @@ local function icon_tick(B)
   icq.busy = true
   local ok = pcall(camera.captureTexture, ic, { w = 64, h = 64 }, function(tex, err)
     icq.busy = false
-    if tex then ICONS[id] = tex; icq.n = icq.n + 1 else icq.failed[id] = true end
+    if tex then
+      ICONS[id] = tex; icq.n = icq.n + 1
+      local keep = icon_store()
+      if keep then keep.keepPartIcon(id, tex) end
+    else icq.failed[id] = true end
     if icq.n % 8 == 0 then st.dirty = true end
   end)
   if not ok then icq.busy = false; icq.failed[id] = true end

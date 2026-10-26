@@ -43,7 +43,7 @@
 --
 -- Published (findScript("build_host")): building, mode, state, enterMs,
 -- inWorld(), frameNode(), enter(), leave(), rollout(site), standaloneReady(),
--- fadeThrough(atBlack [, ready]), fading().
+-- fadeThrough(atBlack [, ready]), fading(), partIcon(id), keepPartIcon(id, tex).
 
 defaults = {
   fade = 0.35,        -- seconds to black (and back) round a rollout
@@ -60,6 +60,13 @@ building = false      -- the overlay is up (world) / the stand is up (standalone
 mode = nil            -- "world" | "standalone"
 state = "idle"        -- idle · frame · loading · building · rollout
 enterMs = nil         -- E to the builder's first frame, ms (probes)
+
+-- The catalogue's tile icons (part id → "img:N"), kept here for the session:
+-- the overlay's own scripts start afresh on every entry, and photographing
+-- every part again took half a minute each time.
+local part_icons = {}
+function partIcon(id) return part_icons[id] end
+function keepPartIcon(id, tex) part_icons[id] = tex end
 
 local host = nil      -- this script's node
 local frame = nil     -- the BuildFrame node

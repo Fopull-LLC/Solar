@@ -1563,6 +1563,28 @@ local function run_vabshots()
   if B.setTool then B.setTool("select") end
 end
 
+-- vabicons: the tile icons are kept for the session (build_host), so the
+-- second VAB entry shows every icon at once instead of photographing again
+local function run_vabicons()
+  local BH = enter_vab("i_enter1")
+  if not BH then return end
+  local t0 = time
+  local cat = findScript("catalog_panel")
+  local last, still = -1, 0
+  wait_for(function()
+    local n = cat and cat.iconCount and cat.iconCount() or 0
+    if n == last then still = still + 1 else still, last = 0, n end
+    return n > 0 and still > 240
+  end, 90, "the icons")
+  P("VICONS first entry %d icons in %.1f s", last, time - t0)
+  BH.leave(); wait(3)
+  BH = enter_vab("i_enter2")
+  if not BH then return end
+  wait(0.5)
+  cat = findScript("catalog_panel")
+  P("VICONS second entry %s icons after 0.5 s", tostring(cat and cat.iconCount and cat.iconCount()))
+  vshot("icons_second_entry")
+end
 local function run_builder()
   local BH = enter_vab("g_enter")
   if not BH then return end
@@ -2992,6 +3014,7 @@ local MAIN = function()
     elseif MODE == "rover" then run_rover()
     elseif MODE == "builder" then run_builder()
     elseif MODE == "vabshots" then run_vabshots()
+    elseif MODE == "vabicons" then run_vabicons()
     elseif MODE == "foot" then run_foot()
     elseif MODE == "meadow" then run_meadow()
     elseif MODE == "digmeadow" then run_digmeadow()
