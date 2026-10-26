@@ -361,9 +361,11 @@ ok(tools_live(), "…and gives them back")
 -- Every gate above is a way to end up unable to mine. The Console line that
 -- names them is not on screen, and the HUD used to hide itself along with the
 -- belt — the least informative of the three possible screens.
+-- A full facility panel is the exception: it covers the screen and says why
+-- itself, so the hotbar goes under it (it drew through the Tracking Station).
 fac_open = true
 tick(2)
-ok(hud_up(), "the belt's readout stays up while a panel holds the keys")
+ok(not hud_up(), "a full facility panel covers the belt's readout")
 ok(belt.hudText:find("stowed") ~= nil, "…and says the tools are stowed [" .. belt.hudText .. "]")
 ok(belt.hudText:find("facility panel") ~= nil, "…and names what is holding them")
 fac_open = false
