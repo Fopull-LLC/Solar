@@ -49,6 +49,7 @@ defaults = {
   fade = 0.35,        -- seconds to black (and back) round a rollout
   hold = 8.0,         -- the most a rollout waits at black for the craft
   autosave = 2.0,     -- seconds a changed craft must sit still before it is saved
+  lean = 1,           -- 1: the world outside does only what the doors show while you build
 }
 
 OVERLAY = "builder_overlay"
@@ -86,6 +87,57 @@ local function valid(n) return n ~= nil and n.valid ~= false end
 local function note(msg) log("build host: " .. msg) end
 
 -- ── shared helpers ───────────────────────────────────────────────────────────
+
+-- ── THE LEAN VAB (playtest 2026-10-26: "we do not need to simulate the whole
+-- world in the vab, only the nearby terrain … so that the view resembles what
+-- you would see") ────────────────────────────────────────────────────────────
+-- While the builder is up (world mode) the world keeps its sky, sun, time of
+-- day, weather fronts and the ground and flora round the building — what the
+-- south doors show — and stops the rest, each through a switch the system
+-- already has, every value put back exactly on the way out (lean_restore):
+--   * weather: no rain or snow particles round the camera (they fell INSIDE
+--     the hall; the fronts, the sky's gloom and the lightning go on);
+--   * flora: the crew is parked, so the field's planting pass every 0.15 s
+--     finds nothing new — once every 2 s instead (what is planted stays);
+--   * the base behind the VAB (north of its south door: the tracking dish,
+--     the fuel farm, the pad and its floodlights) is hidden — no wall of the
+--     hall lets it be seen, and its lamps no longer light the fog.
+-- setLean(on) switches it live (the bench's A/B).
+LEAN_HIDE = { "FacTracking", "BaseFuel", "BasePad", "Pad Flood 1", "Pad Flood 2", "Pad Flood 3", "Pad Flood 4" }
+leanOn = false
+local lean = nil      -- what was changed: { w_particles, fl_interval, hidden = { node… } }
+local function lean_apply()
+  if lean or mode ~= "world" or (params.lean or 1) == 0 then return end
+  lean = { hidden = {} }
+  local w = ref("weather")
+  if w and w.params then lean.w = w; lean.w_particles = w.params.particles; w.params.particles = false end
+  local fl = ref("flora_field")
+  if fl and fl.params then
+    lean.fl = fl; lean.fl_interval = fl.params.interval
+    fl.params.interval = math.max(fl.params.interval or 0.15, 2.0)
+  end
+  for _, nm in ipairs(LEAN_HIDE) do
+    for _, n in ipairs(findAll and findAll(nm) or {}) do
+      if valid(n) and n.visible ~= false then n.visible = false; lean.hidden[#lean.hidden + 1] = n end
+    end
+  end
+  leanOn = true
+  note(string.format("lean VAB on: weather particles off, flora every 2 s, %d nodes behind the hall hidden", #lean.hidden))
+end
+local function lean_restore()
+  if not lean then return end
+  local L = lean
+  lean = nil
+  if L.w and L.w.valid ~= false and L.w.params then L.w.params.particles = L.w_particles end
+  if L.fl and L.fl.valid ~= false and L.fl.params then L.fl.params.interval = L.fl_interval end
+  for _, n in ipairs(L.hidden) do if valid(n) then n.visible = true end end
+  leanOn = false
+end
+function setLean(on)
+  if on then params.lean = 1; if state == "building" then lean_apply() end
+  else lean_restore(); params.lean = 0 end
+  return leanOn
+end
 
 -- The vab_fade controller on VabInterior's root.
 local function fader() return ref("vab_fade") end
@@ -228,6 +280,10 @@ end
 -- Take the overlay down and give the world its keys, camera and crew back.
 -- `show_crew` false keeps the astronaut hidden (a rollout seats them).
 local function teardown(show_crew)
+  -- the builder's cursor never outlives it (an RMB fly-look held as the
+  -- overlay goes; builder_camera's onDestroy says the same); the world's
+  -- cameras assert their own wish next frame
+  if input and input.setMouseLocked then input.setMouseLocked(false) end
   if scene and scene.unload then pcall(scene.unload, OVERLAY) end
   if valid(frame) then frame:destroy() end
   frame = nil
@@ -237,6 +293,7 @@ local function teardown(show_crew)
   set_active(world_camera(), true)
   push_ctx(false)
   set_owner(nil)
+  lean_restore()
   unpark_crew(show_crew)
   building = false
   save_v = nil
@@ -256,6 +313,10 @@ function enter()
   end
   enter_t = time
   enterMs = nil
+  -- The cursor comes into the VAB FREE: the first-person look (or a held
+  -- RMB orbit) had it locked, and the camera that locked it stands down
+  -- now, so nothing else would ever let go (builder_camera then owns it).
+  if input and input.setMouseLocked then input.setMouseLocked(false) end
   set_owner("builder")
   push_ctx(true)
   park_crew()
@@ -489,6 +550,7 @@ function update(node, dt)
       set_active(bc, true)
       state = "building"
       building = true
+      lean_apply()
       enterMs = (time - enter_t) * 1000
       note(string.format("building in the VAB (%.0f ms from E)", enterMs))
     elseif time - enter_t > 5.0 then

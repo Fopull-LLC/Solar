@@ -154,6 +154,14 @@ end
 function pickPart(id)
   local B = ref("builder")
   if not (B and id) then return false end
+  -- A fresh part already in hand: its own card puts it back, another card
+  -- swaps it (a lifted or pasted craft piece is never dropped from here).
+  local cur = B.heldId and B.heldId() or nil
+  if cur and B.holding and B.holding() == "part" and B.dropHeld then
+    B.dropHeld()
+    st.dirty = true
+    if cur == id then return false end
+  end
   local ok
   if B.hold then ok = B.hold(id) elseif B.pick then B.pick(id); ok = true end
   if ok then push_recent(id) end
@@ -161,13 +169,205 @@ function pickPart(id)
   return ok
 end
 
-function setQuery(q) st.query = q or ""; st.dirty = true end
-function setTab(t) st.tab = t; st.dirty = true end
+-- A new section (or a new search) starts at the TOP of its list (playtest:
+-- "selecting a new part category list should scroll you to the top instead
+-- of keeping you where u are"). The list keeps its scroll otherwise — the
+-- once-a-second refresh and a pick never move it. `scroll_top` counts the
+-- frames left to write it (the list node may arrive a frame after the make).
+function setQuery(q)
+  q = q or ""
+  if q ~= st.query then st.scroll_top = 2 end
+  st.query = q; st.dirty = true
+end
+function setTab(t)
+  if t ~= st.tab or st.query ~= "" then st.scroll_top = 2 end
+  st.tab = t; st.dirty = true
+end
+LIST_NODE = "CatalogList"
+local function scroll_top_tick()
+  if not (st.scroll_top and st.scroll_top > 0) then return end
+  st.scroll_top = st.scroll_top - 1
+  local n = find and find(LIST_NODE)
+  local e = n and n.getcomponent and n:getcomponent("UiElement")
+  if e then e.scrollY = 0 end
+end
 function tab() return st.tab end
 
 function focusSearch()
   local f = find and find("FieldPartSearch")
   if f and ui and ui.focus then ui.focus(f) end
+end
+
+-- ── THE PREVIEW (playtest 2026-10-26: "show a viewport of the part spinning
+-- so you can see what each part in the catalogue looks like") ──────────────
+-- ONE render-target camera, never one per card: the part under the cursor
+-- (or, with none hovered, the part in your hand) spins on a little stand of
+-- its own, 2.4 km up the builder's frame where nothing else is, on the
+-- "viewmodel" render layer (bit 3: Default 0, entity 1, level 2, viewmodel 3
+-- — the first-person tools' layer, which stands down in the builder), and the
+-- camera's cullMask is that layer alone, so its render is the part over the
+-- sky. 256² at 30 Hz, and the camera node is switched OFF whenever no plate
+-- shows, so an idle catalogue pays nothing for it. The plate floats beside
+-- the parts panel's top corner; the list itself never moves.
+PREVIEW_TARGET = "partpreview"
+local PV = { alt = 2400.0, fov = 0.5, px = 256, bit = 3, layer = "viewmodel" }
+local pv = { cam = nil, making = false, part = nil, id = nil, want = nil, spin = 0, ready = false, on = false, dist = 4 }
+previewId = nil       -- the part the plate shows (probes)
+
+local function pv_parent(B) return B.frameNodeOrNil and B.frameNodeOrNil() or nil end
+local function pv_valid(n) return n ~= nil and n.valid ~= false end
+local function pv_layer(n, depth)
+  depth = depth or 0
+  pcall(function() n.layer = PV.layer end)
+  if depth < 4 and n.children then
+    local ok, kids = pcall(function() return n:children() end)
+    if ok and type(kids) == "table" then for _, c in ipairs(kids) do pv_layer(c, depth + 1) end end
+  end
+end
+local function pv_camera(B)
+  if pv_valid(pv.cam) then return pv.cam end
+  if pv.making or not createNode then return nil end
+  pv.making = true
+  createNode("PartPreviewCam", pv_parent(B), function(n)
+    pv.making, pv.cam = false, n
+    n.x, n.y, n.z = 0, PV.alt, pv.dist
+    if n.setAngles then n:setAngles(0, 0, 0) end
+    local ok, err = pcall(function()
+      n:setCamera { target = PREVIEW_TARGET, width = PV.px, height = PV.px, hz = 30, fovY = PV.fov, active = false,
+                    cullMask = 2 ^ PV.bit }
+    end)
+    if not ok and log then log("catalog preview: no render target (" .. tostring(err) .. ")") end
+    n.enabled = pv.on
+  end)
+  return nil
+end
+local function pv_show(on)
+  pv.on = on
+  if pv_valid(pv.cam) and pv.cam.enabled ~= on then pv.cam.enabled = on end
+  if pv_valid(pv.part) and pv.part.enabled ~= on then pv.part.enabled = on end
+end
+-- Put part `id` on the stand (a fresh spawn when it changes).
+local function stage_want(B, id)
+  if id == pv.id then return end
+  pv.id, pv.ready = id, false
+  if pv_valid(pv.part) then pv.part:destroy() end
+  pv.part = nil
+  local prefab = B.previewPrefab and B.previewPrefab(id)
+  local def = B.partInfo(id) or {}
+  local size = math.max(def.h or 1, 2 * (def.rx or 0.5), 2 * (def.rz or def.rx or 0.5), 0.3)
+  pv.dist = size * 0.62 / math.tan(PV.fov * 0.5)
+  if prefab and spawn then
+    spawn(prefab, vec3 and vec3(0, PV.alt, 0) or nil, function(n)
+      if pv.id ~= id or not pv_valid(n) then if pv_valid(n) then n:destroy() end return end
+      local par = pv_parent(B)
+      if par and n.setParent then n:setParent(par, { keepWorld = false }) end
+      n.x, n.y, n.z = 0, PV.alt, 0
+      pv_layer(n)
+      pv.part, pv.ready, pv.ready_t = n, true, time or 0
+      n.enabled = pv.on
+    end, { body = false })
+  end
+end
+local function stage_pose(yaw)
+  if pv_valid(pv.cam) then
+    pv.cam.x, pv.cam.y, pv.cam.z = 0, PV.alt + pv.dist * 0.18, pv.dist
+    if pv.cam.setAngles then pv.cam:setAngles(0, -0.18, 0) end
+  end
+  if pv_valid(pv.part) and pv.part.setAngles then pv.part:setAngles(yaw, 0, 0) end
+end
+
+-- THE TILE ICONS: each part photographed ONCE from the same stand
+-- (camera.captureTexture through the preview camera, 64², kept as an img:
+-- texture for the session), one at a time while nothing is hovered or held,
+-- the first time the catalogue opens. The cards show them as they arrive.
+ICONS = {}            -- id → "img:N"
+local icq = { busy = false, failed = {}, n = 0, cam = nil, making = false }
+-- The icon camera: a plain off-screen camera beside the preview's (the
+-- render-target camera itself photographed nothing but its sky on rc33).
+local function icon_camera(B)
+  if pv_valid(icq.cam) then return icq.cam end
+  if icq.making or not createNode then return nil end
+  icq.making = true
+  createNode("PartIconCam", pv_parent(B), function(n)
+    icq.making, icq.cam = false, n
+    pcall(function() n:setCamera { fovY = PV.fov, active = false, cullMask = 2 ^ PV.bit } end)
+  end)
+  return nil
+end
+local function icon_tick(B)
+  if icq.done or icq.busy or not (camera and camera.captureTexture) then return false end
+  local id = nil
+  for _, sec in ipairs(B.catalogue and B.catalogue() or {}) do
+    for _, x in ipairs(sec.ids) do
+      if not ICONS[x] and not icq.failed[x] and B.previewPrefab and B.previewPrefab(x) then id = x break end
+    end
+    if id then break end
+  end
+  if not id then
+    icq.done = true
+    st.dirty = true
+    return false
+  end
+  local ic = icon_camera(B)
+  if not ic then return true end
+  stage_want(B, id)
+  -- the live preview's render target stays OFF while icons are taken: only
+  -- the part on the stand and the one-shot captures draw
+  pv.on = false
+  if pv_valid(pv.cam) and pv.cam.enabled ~= false then pv.cam.enabled = false end
+  if pv_valid(pv.part) then
+    if pv.part.enabled ~= true then pv.part.enabled = true end
+    if pv.part.setAngles then pv.part:setAngles(0.65, 0, 0) end
+  end
+  ic.x, ic.y, ic.z = 0, PV.alt + pv.dist * 0.18, pv.dist
+  if ic.setAngles then ic:setAngles(0, -0.18, 0) end
+  -- a moment on the stand before the picture (the model streams in, the pose lands)
+  if not (pv.ready and pv.id == id and (time or 0) - (pv.ready_t or 0) > 0.35) then
+    icq.wait = (icq.wait or 0) + 1
+    if icq.wait > 240 then icq.failed[id] = true; icq.wait = 0 end
+    return true
+  end
+  icq.wait = 0
+  icq.busy = true
+  local ok = pcall(camera.captureTexture, ic, { w = 64, h = 64 }, function(tex, err)
+    icq.busy = false
+    if tex then ICONS[id] = tex; icq.n = icq.n + 1 else icq.failed[id] = true end
+    if icq.n % 8 == 0 then st.dirty = true end
+  end)
+  if not ok then icq.busy = false; icq.failed[id] = true end
+  return true
+end
+function iconCount() return icq.n end
+
+-- Each frame: what should spin, and spin it (or, with nothing to show, the
+-- next tile icon).
+local function preview_tick(B, dt)
+  local want = st.hover or st.held
+  previewId = want
+  if not want then
+    if not icon_tick(B) then pv_show(false) end
+    return
+  end
+  pv_camera(B)
+  stage_want(B, want)
+  pv_show(true)
+  pv.spin = (pv.spin + (dt or 0.016) * 0.9) % (2 * math.pi)
+  stage_pose(pv.spin)
+end
+function previewReady() return pv.ready and pv_valid(pv.cam) and pv.on end
+
+-- The floating plate: the part's picture, its name, its role.
+local function preview_plate(B, L)
+  local id = st.hover or st.held
+  if not (id and pv.ready) then return nil end
+  local def = B.partInfo(id) or {}
+  local r = L.left
+  return { "col", key = "pv", style = "panel/frame", pin = "topLeft", x = r.x + r.w + 8, y = r.y, w = 196, h = "fit",
+    gap = 4, pad = 8, align = "stretch",
+    { "image", key = "img", texture = "rt:" .. PREVIEW_TARGET, w = 180, h = 180 },
+    { "text", key = "n", style = "cat/name", w = "100%", h = 16, text = (st.held == id and "IN HAND  ·  " or "") .. (def.label or id),
+      maxLines = 1, overflow = "ellipsis" },
+    { "text", key = "r", style = "cat/role", w = "100%", h = "fit", text = role(def), wrap = true, maxLines = 3 } }
 end
 
 -- ── the plate ───────────────────────────────────────────────────────────────
@@ -190,17 +390,26 @@ local function card(B, rs, co, it)
   if armed then price_text = "confirm " .. money(price) .. "?" end
   local role_text = needs and ("locked · " .. needs) or role(def)
   local fav = st.favs[id] == true
+  -- the card of the part in your hand is latched in, orange-rimmed, "IN HAND"
+  local inhand = st.held == id
+  if inhand then price_text = "IN HAND" end
+  local icon = ICONS[id]
   return { "row", key = id, w = "100%", h = 40, gap = 3, pad = 0, align = "center",
-    { "button", key = "c", style = "panel/row", w = "grow", h = 40, dir = "column", align = "stretch", gap = 2,
+    icon and { "image", key = "ic", texture = icon, w = 36, h = 36, opacity = locked and 0.55 or 1.0 }
+      or { "box", key = "ic", style = "panel/rule", w = 36, h = 36, opacity = 0.35 },
+    { "button", key = "c", style = inhand and "panel/rowActive" or "panel/row", selected = inhand or nil,
+      w = "grow", h = 40, dir = "column", align = "stretch", gap = 2,
       opacity = locked and 0.7 or 1.0,
       onClicked = function() pickPart(id) end,
+      onHoverEnd = function() if st.hover == id then st.hover = nil end end,
       onHoverStart = function()
+        st.hover = id
         if locked and rs and B.hint and rs.lockLine then B.hint((rs.labelOf and rs.labelOf(id) or id) .. "  —  " .. (rs.lockLine(id) or ""), 4.0) end
       end,
       { "row", key = "top", w = "100%", h = 16, gap = 4, pad = 0, align = "center",
         { "text", key = "n", style = locked and "cat/nameLocked" or "cat/name", w = "grow", h = 16,
           text = def.label or id, maxLines = 1, overflow = "ellipsis" },
-        { "text", key = "p", style = armed and "cat/priceArmed" or (locked and "cat/priceLocked" or "cat/price"),
+        { "text", key = "p", style = inhand and "cat/inHand" or armed and "cat/priceArmed" or (locked and "cat/priceLocked" or "cat/price"),
           w = "fit", h = 16, text = price_text, textAlign = "end" } },
       { "text", key = "r", style = needs and "cat/roleNeeds" or "cat/role", w = "100%", h = 14, text = role_text,
         maxLines = 1, overflow = "ellipsis" } },
@@ -273,10 +482,10 @@ function describe(B, L)
       end },
     tabs(B),
     { "box", key = "rule", style = "panel/rule", w = "100%", h = 1 },
-    { "scroll", key = "list", w = "100%", h = "grow", dir = "column", gap = 3, pad = 0, align = "stretch",
+    { "scroll", key = "list", name = LIST_NODE, w = "100%", h = "grow", dir = "column", gap = 3, pad = 0, align = "stretch",
       scrollSpeed = 48, items = rows, function(x) return x end },
     { "text", key = "foot", style = "panel/hint", w = "100%", h = 14, maxLines = 1, overflow = "ellipsis",
-      text = "click to hold · ENTER picks the first match" },
+      text = st.held and "IN HAND — click it again to put it back · ESC drops" or "click to hold · ENTER picks the first match" },
   }
 end
 
@@ -321,8 +530,17 @@ function update(node, dt)
   local L = layout(W, H)
   LAST.L = L
   st.t = st.t + (dt or 0)
-  local sig = table.concat({ math.floor(W), math.floor(H), st.tab, st.query }, "|")
-  if not st.dirty and sig == st.sig and st.t < 1.0 then return end
+  st.held = B.heldId and B.heldId() or nil
+  -- (no card hovered while the pointer is off the panel: the plate goes)
+  if st.hover and not ownsMouse() then st.hover = nil end
+  preview_tick(B, dt)
+  local sig = table.concat({ math.floor(W), math.floor(H), st.tab, st.query, tostring(st.held), tostring(st.hover),
+    tostring(pv.ready) }, "|")
+  if not st.dirty and sig == st.sig and st.t < 1.0 then scroll_top_tick() return end
   st.dirty, st.sig, st.t = false, sig, 0
-  ui.make(node, { describe(B, L) })
+  local tree = { describe(B, L) }
+  local plate = preview_plate(B, L)
+  if plate then tree[#tree + 1] = plate end
+  ui.make(node, tree)
+  scroll_top_tick()
 end

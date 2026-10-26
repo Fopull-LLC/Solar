@@ -37,7 +37,7 @@
 -- means (mean = 0.9 mean' + 0.1 x, floptle-core/src/profile.rs Series::push)
 -- back into exact per-frame bucket and per-script costs. Each scenario prints
 -- "PB RESULT" lines and one "BENCHJSON {...}" line for bench.sh to tabulate.
-defaults = { slot = 13, seed = 1911564384, quit = 1, onfoot = 30, clicks = 20, hold = 0.5, gap = 0.5,
+defaults = { slot = 13, vabidle = 0, seed = 1911564384, quit = 1, onfoot = 30, clicks = 20, hold = 0.5, gap = 0.5,
              mapsecs = 12, flysecs = 45, drivesecs = 45, out = 110, settle = 8, sleepsecs = 20, sample = 0,
              usersave = 0, standsecs = 20, walksecs = 40, meadow_m = 220, digclicks = 100, parksecs = 45, parksecs2 = 20,
              burst = 0, gpusecs = 10, gpu_out = 200, fullscreen = 0, circthr = 0.25, starter_cut = 150 }
@@ -1483,12 +1483,145 @@ local function finned_spine(T, F)
   return l
 end
 
+-- ── vabshots: pictures of the builder's playtest fixes (2026-10-26) ─────────
+local function vshot(nm)
+  local done = false
+  local ok, err = pcall(camera.capture, { w = 1920, h = 1080, ui = true, draws = true }, function(bytes, why)
+    if bytes then assets.writeBytes("user://vabshots/" .. nm .. ".png", bytes); P("SHOT %s", nm)
+    else P("SHOT %s failed: %s", nm, tostring(why)) end
+    done = true
+  end)
+  if not ok then P("capture error %s", tostring(err)); return end
+  wait_for(function() return done end, 5, "shot " .. nm)
+end
+local function mouse_to(x, y) input.simulate { mouse = { x, y } }; yield(); yield() end
+local function lmb_click() input.simulate { button = 0, down = true }; yield(); yield(); input.simulate { button = 0, down = false }; yield(); yield() end
+local function run_vabshots()
+  local BH = enter_vab("v_enter")
+  if not BH then return end
+  local B = findScript("builder")
+  wait(1.5)
+  local rs = findScript("research")
+  for _, id in ipairs({ "tankM", "engineM", "skipper" }) do if rs and rs.grant then rs.grant(id, "probe") end end
+  load_bp(B, "v_bp", rocket_2stage())
+  local bc = findScript("builder_camera")
+  if bc and bc.frameCraft then bc.frameCraft() end
+  wait(2)
+  local sw, sh = camera.screenSize()
+  local tb = findScript("builder_toolbar")
+  local LW, LH = 1280, 720
+  if tb and tb.layerSize then LW, LH = tb.layerSize() end
+  local L = tb and tb.builderLayout and tb.builderLayout(LW, LH)
+  local k = sh / LH
+  P("VSHOT screen %dx%d layer %dx%d left %s", sw, sh, LW, LH, L and string.format("%.0f,%.0f %.0fx%.0f", L.left.x, L.left.y, L.left.w, L.left.h) or "?")
+  -- 1. a card hovered: the spinning preview beside the panel
+  -- (the capture is 1080 tall, the window 1052: aim at the 4th card, FT-S Tank, by the window's own scale)
+  local cx, cy = 120 * sw / 1920, 515 * sh / 1080
+  local cat = findScript("catalog_panel")
+  if cat and cat.setTab then cat.setTab("PROPULSION") end
+  mouse_to(sw * 0.5, sh * 0.5)
+  wait(36)   -- the tile icons are photographed one by one while nothing is hovered
+  P("VSHOT icons before hover %s", tostring(cat and cat.iconCount and cat.iconCount()))
+  vshot("0_icons")
+  mouse_to(cx, cy); wait(1.5)
+  P("VSHOT hover preview id %s ready %s", tostring(cat and cat.previewId), tostring(cat and cat.previewReady and cat.previewReady()))
+  vshot("1_hover_preview")
+  wait(0.7)
+  vshot("1b_hover_preview_spun")
+  P("VSHOT icons %s", tostring(cat and cat.iconCount and cat.iconCount()))
+  -- 2. click it: in hand — the card latched, the chip, the hint line, still over the panel
+  lmb_click(); wait(0.25)
+  P("VSHOT held %s hint %s", tostring(B.heldId and B.heldId()), tostring(B.hintText and B.hintText()))
+  vshot("2_inhand_over_panel")
+  -- 3. the cursor into the view: the part on it, the chip beside it
+  mouse_to(sw * 0.55, sh * 0.45); wait(0.8)
+  vshot("3_inhand_in_view")
+  tap("escape"); wait(0.5)
+  -- 4. the MOVE tool: hover a placed part, click it up, carry it, put it back with ESC
+  if B.setTool then B.setTool("lift") end
+  local fr = B.frame and B.frame()
+  local uids = B.partUids and B.partUids() or {}
+  local target = nil
+  for _, u in ipairs(uids) do local r = B.partRec(u); if r and r.id == "tankM" then target = r end end
+  if target and fr then
+    local wx, wy, wz = target.x, target.y, target.z
+    if fr.toWorld and not fr.identity then wx, wy, wz = fr.toWorld(target.x, target.y, target.z) end
+    local px, py = camera.worldToScreen(wx, wy, wz)
+    P("VSHOT move target uid %s at %.0f,%.0f", tostring(target.uid), px or -1, py or -1)
+    if px then
+      mouse_to(px, py); wait(0.6)
+      vshot("4_move_hover")
+      lmb_click(); wait(0.3)
+      P("VSHOT lifted %s", tostring(B.held and B.held() and #B.held()))
+      mouse_to(px + 260 * k, py - 40 * k); wait(0.8)
+      vshot("5_move_carried")
+      tap("escape"); wait(0.6)
+      P("VSHOT after ESC held %s", tostring(B.held and B.held() ~= nil))
+      vshot("6_move_esc_back")
+    end
+  end
+  if B.setTool then B.setTool("select") end
+end
+
 local function run_builder()
   local BH = enter_vab("g_enter")
   if not BH then return end
   local B = findScript("builder")
   wait(1.5)
   local function load_bp_g(name, list) load_bp(B, name, list) end
+  -- vabidle=1: the VAB as the player sits in it (the starter stack, idle,
+  -- orbiting, a part in hand), no big loads or launch: the builder's own cost
+  if (params.vabidle or 0) > 0 then
+    sc_begin("g_idle_empty"); wait(6); sc_end("g_idle_empty")
+    load_bp_g("g_load_40", lattice(40))
+    sc_begin("g_idle_40"); wait(6); sc_end("g_idle_40")
+    sc_begin("g_hand_40")
+    if B.pick then B.pick("beam1") end
+    wait(5)
+    tap("escape")
+    sc_end("g_hand_40")
+    -- every script running in the VAB, by its own cost, with the node it sits on
+    do
+      local all = {}
+      for _, e in ipairs(perf.scripts() or {}) do all[#all + 1] = e end
+      table.sort(all, function(a, b) return (a.ms or 0) > (b.ms or 0) end)
+      local tot = 0
+      for _, e in ipairs(all) do tot = tot + (e.ms or 0) end
+      P("VAB SCRIPTS %d kinds, %.2f ms (perf.scripts, mean)", #all, tot)
+      for i, e in ipairs(all) do
+        if i > 60 then break end
+        local where = "?"
+        local ok, list = pcall(findScripts, e.name)
+        if ok and list and list[1] and list[1].node then
+          local n, ch = list[1].node, {}
+          for _ = 1, 4 do if not (n and n.valid ~= false) then break end; ch[#ch + 1] = tostring(n.name); n = n.parent end
+          where = string.format("x%d on %s", #list, table.concat(ch, " < "))
+        end
+        P("VAB SCRIPT %-22s %.3f ms  %s", e.name, e.ms or 0, where)
+      end
+    end
+    -- the lean VAB (build_host.setLean) A/B/A at one spot, then zoomed right out
+    if BH.setLean then
+      P("LEAN state %s", tostring(BH.leanOn))
+      BH.setLean(false); wait(2)
+      sc_begin("g_idle_40_full"); wait(6); sc_end("g_idle_40_full")
+      BH.setLean(true); wait(2)
+      sc_begin("g_idle_40_lean2"); wait(6); sc_end("g_idle_40_lean2")
+    end
+    local bc = findScript("builder_camera")
+    if bc and bc.camState then
+      local c = bc.camState()
+      bc.setCamState({ d = 1000, yaw = c.yaw, pitch = 0.35 })
+      wait(2)
+      sc_begin("g_far"); wait(6); sc_end("g_far")
+      if BH.setLean then
+        BH.setLean(false); wait(2)
+        sc_begin("g_far_full"); wait(6); sc_end("g_far_full")
+        BH.setLean(true)
+      end
+    end
+    return
+  end
   -- onlycraft=1: straight to the 1,002-part launch and its settle (the 0509
   -- settle that came out at 12 or 97 ms of physics a frame on rc27)
   for _, N in ipairs((params.onlycraft or 0) > 0 and {} or { 300, 1000, 3000 }) do
@@ -2858,6 +2991,7 @@ local MAIN = function()
     elseif MODE == "plane" then run_plane()
     elseif MODE == "rover" then run_rover()
     elseif MODE == "builder" then run_builder()
+    elseif MODE == "vabshots" then run_vabshots()
     elseif MODE == "foot" then run_foot()
     elseif MODE == "meadow" then run_meadow()
     elseif MODE == "digmeadow" then run_digmeadow()

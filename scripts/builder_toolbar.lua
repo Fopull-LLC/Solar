@@ -82,7 +82,7 @@ end
 local last_tool = "select"
 local function bstate(B)
   local s = {}
-  s.tool = B.tool and B.tool() or last_tool
+  s.tool = (B.toolName and B.toolName()) or (B.tool and B.tool()) or last_tool
   local sm = B.symMode and B.symMode() or 1
   s.mirror = sm == "mirror"
   s.sym = type(sm) == "number" and sm or 1
@@ -142,10 +142,11 @@ local function row1(B, s)
     { "offset", "2 OFFSET", 72, "Offset gizmo on the selection   ·   2" },
     { "rotate", "3 ROTATE", 72, "Rotate gizmo on the selection   ·   3" },
     { "root", "4 ROOT", 60, "Make the clicked part the craft's root   ·   4" },
+    { "lift", "5 MOVE", 58, "Pick up a placed part (and what hangs on it), put it down anywhere it attaches   ·   5 · ESC puts it back" },
   }
   local r = { "row", key = "r1", w = "100%", h = 26, gap = 4, pad = 0, align = "center",
     { "text", key = "vab", style = "panel/heading", w = 44, h = 24, text = "VAB", textValign = "center" },
-    { "field", key = "name", name = "FieldCraftName", style = "menu/field", w = 140, h = 24, textSize = 13,
+    { "field", key = "name", name = "FieldCraftName", style = "menu/field", w = 108, h = 24, textSize = 13,
       text = (not s.typing) and s.name or nil,
       placeholder = "craft name", maxLen = 40, textValign = "center", tooltip = "The craft's name — Enter saves it under this name",
       onSubmitted = function(n)
@@ -161,7 +162,7 @@ local function row1(B, s)
         if B.craftSave then B.craftSave(s.name) elseif B.doSave then B.doSave() end
         say(B, "saved — " .. s.name)
       end }),
-    key("sub", "SUB-ASSY", 72, { style = "panel/secondary", disabled = not B.makeSubAssembly,
+    key("sub", "SUB-ASSY", 64, { style = "panel/secondary", disabled = not B.makeSubAssembly,
       tip = "Save the selection as a sub-assembly (PARTS ▸ SUB-ASSY)",
       click = function()
         local sel = B.selection and B.selection() or {}
@@ -175,7 +176,11 @@ local function row1(B, s)
   }
   for _, t in ipairs(tools) do
     r[#r + 1] = key("t" .. t[1], t[2], t[3], { selected = s.tool == t[1], tip = t[4],
-      click = function() last_tool = t[1]; if B.setTool then B.setTool(t[1]) end end })
+      click = function()
+        last_tool = t[1]
+        if B.setTool then B.setTool(t[1]) end
+        if t[1] == "lift" and B.LIFT_HINT then say(B, "tool: MOVE" .. B.LIFT_HINT) end
+      end })
   end
   r[#r + 1] = spacer("s2")
   r[#r + 1] = key("leave", "◂ LEAVE", 68, { style = "panel/secondary",
@@ -295,7 +300,7 @@ end
 -- THE KEY CARD (§4.3).
 local KEYS = {
   { "MOUSE", {
-    { "LMB", "select · drag to move" }, { "SHIFT / CTRL+LMB", "add to / toggle in the selection" },
+    { "LMB", "select · drag to move" }, { "5 then click", "pick a placed part up · click to put it down" }, { "SHIFT / CTRL+LMB", "add to / toggle in the selection" },
     { "ALT+drag", "move only the selection" }, { "double-click", "select the assembly, then the craft" },
     { "RMB drag", "orbit about the point under the cursor" }, { "RMB click", "the part's menu" },
     { "MMB / SHIFT+RMB", "pan" }, { "wheel", "zoom to the cursor" },
@@ -303,7 +308,7 @@ local KEYS = {
     { "RMB+WASD QE", "fly the camera" } } },
   { "PARTS", {
     { "W/S A/D Q/E", "turn 90° (SHIFT 15°)" }, { "R", "spin on its mount" }, { "SPACE", "reset the turn" },
-    { "1 2 3 4", "select · offset · rotate · root" }, { "L", "gizmo space local / world" },
+    { "1 2 3 4 5", "select · offset · rotate · root · move" }, { "L", "gizmo space local / world" },
     { "X / SHIFT+X", "symmetry ×1…×8" }, { "M / ALT+M", "mirror (host / centre plane)" },
     { "G / SHIFT+G", "grid / angle snap" }, { "B", "bind a key to the selection" },
     { "DEL / ALT+DEL", "delete (with / without dependents)" }, { "H / ALT+H", "hide / unhide all" } } },

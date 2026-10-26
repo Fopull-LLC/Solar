@@ -128,12 +128,12 @@ function hint(msg, secs) return hintNow(msg, secs or 2.5) end
 -- ── Builder audio (non-spatial UI clicks) ────────────────────────────────────
 -- Every build action gets a crisp click on the UI mixer bus. Kenney CC0 clips.
 local UI_SFX = {
-  place  = "audio/kenney/interface/click_001.ogg",
-  pickup = "audio/kenney/interface/pluck_001.ogg",
-  scrap  = "audio/kenney/interface/close_001.ogg",
-  tool   = "audio/kenney/interface/tick_001.ogg",
-  save   = "audio/kenney/interface/confirmation_001.ogg",
-  launch = "audio/kenney/interface/confirmation_003.ogg",
+  place  = "audio/foley/clamp_clunk.ogg",
+  pickup = "audio/foley/hiss_cylinder.ogg",
+  scrap  = "audio/foley/steel_drop.ogg",
+  tool   = "audio/foley/switch_3.ogg",
+  save   = "audio/foley/key_strike.ogg",
+  launch = "audio/foley/latch_clunk.ogg",
 }
 -- Take a KEY (into UI_SFX), not a clip path, so callers don't each capture
 -- UI_SFX as an upvalue — `update` is already near LuaJIT's 60-upvalue ceiling.
@@ -282,10 +282,12 @@ local STAGE_MAX_ROWS = 14 -- size of the StageRow## pool authored in builder.ron
 -- decoupler badges + the staging panel), 4 = Grab (pick the part up to
 -- re-attach it elsewhere). Switching tools never changes the selection, and
 -- editing never changes the selection — no more "moving the wrong thing".
--- 1 SELECT · 2 OFFSET · 3 ROTATE · 4 ROOT (§4.1, the KSP numbering); STAGE
--- and GROUPS are right-panel tabs now, reached through setTool().
-local TOOLS = { "select", "offset", "rotate", "root", "stage", "groups" }
-local TOOL_LABEL = { select = "SELECT", offset = "OFFSET", rotate = "ROTATE", root = "ROOT",
+-- 1 SELECT · 2 OFFSET · 3 ROTATE · 4 ROOT (§4.1, the KSP numbering) · 5 MOVE
+-- (internally "lift": click a placed part to pick it up with what hangs on
+-- it, click to put it down; "move" is the old alias of OFFSET); STAGE and
+-- GROUPS are right-panel tabs now, reached through setTool().
+local TOOLS = { "select", "offset", "rotate", "root", "lift", "stage", "groups" }
+local TOOL_LABEL = { select = "SELECT", offset = "OFFSET", rotate = "ROTATE", root = "ROOT", lift = "MOVE",
                      stage = "STAGE", groups = "ACTION GROUPS" }
 local tool = "select"
 local selected_uid = nil
@@ -373,7 +375,7 @@ end
 -- The full key list is on the pause menu's Controls page; the idle line only
 -- has to say how to start and how to leave (this scene has no pause menu: ESC
 -- leaves it).
-local HINT_IDLE = "click to select · drag to move (ALT only this) · drag empty space to box-select   ·   1 select · 2 offset · 3 rotate · 4 root   ·   CTRL+Z/Y undo/redo · CTRL+C/V/D"
+local HINT_IDLE = "click to select · drag to move (ALT only this) · drag empty space to box-select   ·   1 select · 2 offset · 3 rotate · 4 root · 5 move   ·   CTRL+Z/Y undo/redo · CTRL+C/V/D"
 local HINT_GHOST = "click a node or any surface to place (SHIFT keeps a copy)   ·   the floor places free   ·   W/S A/D Q/E rotate · R spin · SPACE reset   ·   X symmetry · M mirror   ·   ESC drop"
 
 -- The craft's centre and part count. Cheap now: called from the dirty-flag
@@ -3499,7 +3501,9 @@ function pick(id)
   if def.proc and startDrawTool(id) then return end
   ghost = { id = id, def = def, yaw = 0, pitch = 0, roll = 0, node = nil, off = IDENT, B = IDENT }
   click_cool = 0.15
-  hint(HINT_GHOST, 6.0)
+  ui("pickup", 0.9) -- in your hand: heard, not only seen (playtest 2026-10-26)
+  holdStarted()
+  hint(holdHint(), 8.0)
   spawn(stand_prefab(def.prefab), vec3(0, -80, 0), function(node)
     if ghost and ghost.id == id and not ghost.node and not ghost.carried then
       ghost.node = node
@@ -3575,7 +3579,8 @@ local function pickup(uid, opts)
             paste = opts.paste and true or nil, only = opts.only }
   click_cool = 0.18
   ui("pickup", 0.8) -- lifted off the stack
-  hint(HINT_GHOST, 6.0)
+  holdStarted()
+  hint(holdHint(), 8.0)
 end
 
 -- The carried parts go back to being ordinary parts on the stand.
@@ -4183,6 +4188,10 @@ function groupsNow()
 end
 
 function groupsTool() return tool == "groups" end
+-- The tool in use, by its TOOLS name (the toolbar lights its key from this:
+-- `tool` itself is a local here, so the panels' B.tool read nil and the
+-- toolbar only ever knew the key it had been clicked with, not 1–5).
+function toolName() return tool end
 -- Switch tools from outside (the toolbar, a probe). Same names as TOOLS;
 -- the old "move" is OFFSET and the old "grab" is SELECT (drag moves now).
 function setTool(name)
@@ -5424,11 +5433,12 @@ function keysTick(cam_busy)
   end
   -- tools 1–4 (never while holding or dragging)
   if not ghost and not gizmo_drag and not ctrl then
-    for i = 1, 4 do
+    for i = 1, 5 do
       if input.pressed(tostring(i)) then
         setTool(TOOLS[i])
         ui("tool", 0.7)
-        hint("tool: " .. TOOL_LABEL[tool] .. ((tool == "root") and " — click the part the craft hangs from" or ""), 2.0)
+        hint("tool: " .. TOOL_LABEL[tool] .. ((tool == "root") and " — click the part the craft hangs from"
+          or (tool == "lift") and LIFT_HINT or ""), tool == "lift" and 5.0 or 2.0)
       end
     end
   end
@@ -6121,6 +6131,114 @@ function startDragMove(uid, only)
   end
 end
 
+-- ── WHAT IS IN YOUR HAND (playtest 2026-10-26) ──────────────────────────────
+-- "right now it's hard to tell — I have to drag my mouse back in view to see
+-- if the part is in my hand or not." A part in hand now says so four ways
+-- without the cursor going near the 3D view: the pickup click, its catalogue
+-- card latched "IN HAND" (catalog_panel reads heldId), a chip riding the
+-- cursor with the part's name, and the hint line ("HOLDING …"). A right-
+-- click TAP drops it (as ESC does); an RMB drag still orbits.
+HOLD = { seq = nil, cam = nil, t = 0 }
+function heldId()
+  if not ghost or ghost.paste then return nil end
+  return ghost.id
+end
+function heldLabel()
+  if not ghost then return nil end
+  local lbl = (ghost.def and ghost.def.label) or ghost.id or "part"
+  if ghost.paste then return "the clipboard" end
+  if ghost.carried and #ghost.carried > 1 then
+    return string.format("%s + %d attached", lbl, #ghost.carried - 1)
+  end
+  return lbl
+end
+function holdHint()
+  local lbl = heldLabel()
+  if not lbl then return HINT_IDLE end
+  return "HOLDING  " .. lbl .. "  —  click a node or surface to place (SHIFT keeps a copy)  ·  ESC / right-click drops it"
+    .. "  ·  W/S A/D Q/E rotate · R spin · X symmetry"
+end
+-- Put back what is in hand (the catalogue swaps a fresh part this way).
+function dropHeld()
+  if not ghost then return false end
+  cancel_ghost()
+  return true
+end
+function holdStarted()
+  HOLD.t = time or 0
+  local cam = HOLD.cam
+  if not cam or cam.valid == false then cam = other("builder_camera"); HOLD.cam = cam end
+  HOLD.seq = cam and cam.rmbClick and cam.rmbClick.seq or nil
+end
+-- Every frame while something is in hand: the right-click tap, and the chip.
+function holdTick()
+  if not ghost then return end
+  local cam = HOLD.cam
+  if not cam or cam.valid == false then cam = other("builder_camera"); HOLD.cam = cam end
+  local c = cam and cam.rmbClick
+  if c and c.seq then
+    if HOLD.seq == nil then HOLD.seq = c.seq
+    elseif c.seq ~= HOLD.seq then
+      HOLD.seq = c.seq
+      local what = heldLabel()
+      cancel_ghost()
+      ui("scrap", 0.5)
+      hint("dropped " .. tostring(what or "the part") .. (tool == "lift" and " — it went back where it was" or ""), 2.0)
+      return
+    end
+  end
+  holdChip()
+end
+-- The chip: a dark tag with an orange rim just below-right of the cursor,
+-- "IN HAND  FT-M Tank". Screen drawing, so it shows over the catalogue too.
+function holdChip()
+  if not (draw and draw.text and input and input.mouse) or ghost.drag then return end
+  local lbl = heldLabel()
+  if not lbl then return end
+  local mx, my = input.mouse()
+  local k = screen_k()
+  local fs = 15 * k
+  local txt = "IN HAND  " .. lbl
+  local w = (#txt * 0.5 * fs) + 18 * k
+  local h = fs + 12 * k
+  local x, y = mx + 20 * k, my + 22 * k
+  local sw, shh = 1920, 1080
+  if camera and camera.screenSize then sw, shh = camera.screenSize() end
+  if x + w > (sw or 1920) - 4 then x = mx - 20 * k - w end
+  if y + h > (shh or 1080) - 4 then y = my - 22 * k - h end
+  -- a short pulse when it arrives, so the eye catches it
+  local age = (time or 0) - (HOLD.t or 0)
+  local a = age < 0.35 and (0.75 + 0.25 * math.sin(age * 40)) or 1.0
+  if draw.rect then draw.rect(x, y, w, h, 0.08, 0.075, 0.065, 0.88 * a, 4 * k) end
+  if draw.rectOutline then draw.rectOutline(x, y, w, h, 1.0, 0.62, 0.22, 0.95 * a, 1.5 * k) end
+  draw.text(x + 9 * k, y + 6 * k, txt, fs, 1.0, 0.80, 0.55, a)
+end
+
+-- THE MOVE TOOL (5, "lift"; playtest: "a tool for picking up parts that have
+-- been placed and moving them around easily"). Click a placed part: it and
+-- everything that hangs on it come up into your hand (a symmetry member
+-- brings its ring); click again to put it down — the ordinary attach rules,
+-- nodes, surfaces and the floor, exactly as a new part. A press-and-drag
+-- moves it too (release puts it down). ESC or a right-click tap puts it back
+-- where it was (the lift's history step is undone, links and all).
+LIFT_HINT = " — click a part to pick it up (with what hangs on it), click to put it down · drag works too · ESC puts it back"
+function liftClick(pr)
+  if not (pr and pr.uid and parts[pr.uid]) then return end
+  if not W.sel[pr.uid] then sel_apply({ pr.uid }, "set") end
+  startDragMove(pr.uid, pr.alt)
+  if ghost then ghost.drag = nil end   -- in hand: the next click puts it down
+end
+function liftHoverTick(u)
+  local p = u and parts[u]
+  if not p then return end
+  outline(p, 1.0, 0.75, 0.3, 0.9)
+  if draw and draw.text and input and input.mouse then
+    local mx, my = input.mouse()
+    local k = screen_k()
+    draw.text(mx + 18 * k, my + 18 * k, "click to pick up " .. ((p.def and p.def.label) or p.id), 13 * k, 1.0, 0.80, 0.55, 0.9)
+  end
+end
+
 function idleTick(dt, clicked, lmb, released, cam_busy)
   hover_uid = (not cam_busy and not W.box) and part_under_cursor(70) or nil
   local sel = selected_uid and parts[selected_uid]
@@ -6137,6 +6255,7 @@ function idleTick(dt, clicked, lmb, released, cam_busy)
   if hover_uid and not W.sel[hover_uid] then
     outline(parts[hover_uid], 0.8, 0.88, 1.0, 0.45)
   end
+  if tool == "lift" then liftHoverTick(hover_uid) end
   local mx, my = input.mouse()
   if clicked and not cam_busy then
     if giz_len then
@@ -6179,6 +6298,7 @@ function idleTick(dt, clicked, lmb, released, cam_busy)
       end
     else
       if W.box then finish_box(W.box, mx, my)
+      elseif not pr.drag and tool == "lift" and pr.uid and parts[pr.uid] then liftClick(pr)
       elseif not pr.drag then click_at(pr) end
       W.press, W.box = nil, nil
     end
@@ -6236,6 +6356,8 @@ function update(node, dt)
   -- Shaping a fairing (or its SHAPE button) takes the frame's input first.
   if shapeTick(clicked, cam_busy) then return end
   if keysTick(cam_busy) then return end
+  -- the part in hand says so even over a panel (the chip, the RMB-tap drop)
+  if ghost then holdTick() end
   -- STAGE and GROUPS panels, then any registered panel, own the mouse first.
   if handle_staging(clicked, lmb, false) then return end
   if groupsPanelTick(clicked) then return end
@@ -6482,6 +6604,17 @@ end
 
 -- THE FRAME ADAPTER (builder_space.newFrame): the identity in standalone
 -- builder.ron; the BuildFrame's own frame when the scene has one.
+-- The catalogue's spinning preview (catalog_panel): the prefab a part's
+-- stand-in is spawned from, and the node the builder's world hangs on (the
+-- BuildFrame in the VAB, nil = the scene root in standalone builder.ron).
+function previewPrefab(id)
+  local def = REG[id]
+  return def and def.prefab and stand_prefab(def.prefab) or nil
+end
+function frameNodeOrNil()
+  return (W.F and not W.F.identity and W.F.node) or nil
+end
+
 function frame()
   if W.F then return W.F end
   local L = lib("builder_space")

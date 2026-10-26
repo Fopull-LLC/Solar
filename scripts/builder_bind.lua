@@ -158,13 +158,13 @@ end
 
 local function done(B, text)
   if B.hint then B.hint(text, 2.5) end
-  if audio then audio.play("audio/kenney/interface/click_001.ogg", { track = "UI", volume = 0.8 }) end
+  if audio then audio.play("audio/foley/switch_4.ogg", { track = "UI", volume = 0.6 }) end
   close()
 end
 
 local function refuse(msg)
   prompt.msg = msg
-  if audio then audio.play("audio/kenney/interface/error_004.ogg", { track = "UI", volume = 0.5 }) end
+  if audio then audio.play("audio/foley/buzz_denied.ogg", { track = "UI", volume = 0.45 }) end
 end
 
 local function who() return prompt.label .. (prompt.n > 1 and ("  ×" .. prompt.n) or "") end

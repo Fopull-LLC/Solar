@@ -30,7 +30,10 @@ defaults = {
 
 focusing = false      -- legacy: the old builder read this; always false now
 
-local MIN_D, MAX_D = 0.5, 400.0
+-- (MAX_D was 400 m: far outside the hall, where the whole base and a wide
+-- ring of terrain came into view and into the frame. 160 m still frames a
+-- 60 m stack with room, from outside the open doors.)
+local MIN_D, MAX_D = 0.5, 160.0
 local PITCH_MAX = math.pi * 0.5 - 0.02
 local FLOOR = 0.3               -- the camera never goes under the deck (frame y)
 local DRAG_PX = 4
@@ -313,6 +316,33 @@ local function typing()
 end
 local function key(k) return input.key(k) end
 
+-- ── THE CURSOR (playtest: "the vab steals my mouse") ───────────────────────
+-- While the builder is up it OWNS the mouse lock, and the lock is on for ONE
+-- thing only: an RMB fly-look (RMB + W/A/S/D/Q/E) whose button is still
+-- down. The wish is asserted EVERY frame, so no other wish survives in here:
+--   * the on-foot first-person look locks the mouse and then stands down the
+--     moment E opens the builder (planet_camera waits while inputOwner is
+--     the builder) — its lock used to come along, the cursor hidden and the
+--     UI dead (a locked mouse gets no UI pointer);
+--   * an RMB released over a panel, a drag ended by alt-tab (the engine
+--     zeroes the buttons while the window is unfocused), a text field taking
+--     focus mid-drag: all just "the button is not down" here;
+--   * the builder leaving (onDestroy) or the host tearing down
+--     (releaseCursor) lets go.
+-- Pure: the test drives it (tests/smoke_builder_cursor.lua).
+mouseLocked = false
+function cursorWant(R, rmb, typing_now)
+  return R ~= nil and R.fly == true and rmb == true and not typing_now
+end
+local function cursor_assert(want)
+  if input and input.setMouseLocked then input.setMouseLocked(want and true or false) end
+  mouseLocked = want and true or false
+end
+function releaseCursor()
+  if S.rmb then S.rmb.fly = false end
+  cursor_assert(false)
+end
+
 -- The point the cursor ray meets at the depth worth zooming to: the part it
 -- hits (builder.rayCraft), else the pivot's depth.
 local function cursor_point(mx, my)
@@ -441,13 +471,23 @@ end
 function update(node, dt)
   local b = B()
   if b and b.partUids then scan_step(b) end
-  if typing() then return end
+  if typing() then
+    -- a text field took the keys: no drag survives it, and no lock
+    S.rmb = nil
+    S.rmb_was = input.button(1)
+    cursor_assert(false)
+    return
+  end
   local mx, my = input.mouse()
   local ui_over = over_ui()
 
   -- RMB: a click (context menu) or a drag (orbit; fly with WASD held).
   local rmb = input.button(1)
-  if rmb and not S.rmb and not ui_over then
+  -- a drag starts on the PRESS (an edge), never on a button that was already
+  -- down: one held over a panel, through a text field or across alt-tab
+  local rmb_edge = rmb and not S.rmb_was
+  S.rmb_was = rmb
+  if rmb_edge and not S.rmb and not ui_over then
     S.rmb = { x = mx, y = my, t = time or 0, dragged = false, uid = b and b.hovered and b.hovered() or nil }
   end
   if S.rmb then
@@ -467,7 +507,7 @@ function update(node, dt)
         pan(dx, dy)
       elseif flykeys then
         -- Fly: look about the camera itself, move on the keys.
-        if not R.fly then R.fly = true; input.lockMouse() end
+        R.fly = true   -- the lock itself: cursor_assert below, while RMB is down
         local C = cam_pos()
         local look = params.look or 0.0032
         S.yaw = S.yaw - dx * look
@@ -489,13 +529,14 @@ function update(node, dt)
       end
     end
     if not rmb then
-      if R.fly then input.unlockMouse() end
       if not R.dragged then
         rmbClick = { seq = (rmbClick.seq or 0) + 1, x = R.x, y = R.y, uid = R.uid }
       end
       S.rmb = nil
     end
   end
+
+  cursor_assert(cursorWant(S.rmb, rmb, false))
 
   -- MMB: pan.
   local mmb = input.button(2)
@@ -546,6 +587,10 @@ function update(node, dt)
 end
 
 -- Placed after every update (the builder's picking reads last frame's view).
+-- The builder going away (the overlay unloaded, the scene changed) never
+-- leaves the cursor locked behind it.
+function onDestroy(node) cursor_assert(false) end
+
 function lateUpdate(node, dt)
   local b = B()
   local fr = b and b.frame and b.frame() or nil
@@ -578,7 +623,7 @@ end
 function camState() return { P = S.P, yaw = S.yaw, pitch = S.pitch, d = S.d, fov = S.fov, goal = S.goal } end
 function setCamState(t)
   if t.P then S.P = v(t.P.x, t.P.y, t.P.z) end
-  S.yaw, S.pitch, S.d = t.yaw or S.yaw, t.pitch or S.pitch, t.d or S.d
+  S.yaw, S.pitch, S.d = t.yaw or S.yaw, t.pitch or S.pitch, clamp(t.d or S.d, MIN_D, MAX_D)
   if t.fov then S.fov = t.fov end
   S.goal = nil
 end

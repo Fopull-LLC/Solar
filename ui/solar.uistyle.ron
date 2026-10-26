@@ -1076,6 +1076,11 @@
         base: ( text_color: "danger", text_size: 12.0, font: "label" ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
+    // The card of the part in your hand: its price slot reads IN HAND.
+    "cat/inHand": (
+        base: ( text_color: "accent", text_size: 12.0, font: "label" ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
     "cat/role": (
         base: ( text_color: "muted", text_size: 10.5 ),
         transition: ( duration: 0.0, ease: Linear ),

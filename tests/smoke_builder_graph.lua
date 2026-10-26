@@ -456,6 +456,70 @@ check(held and #held == 2, "hold({uid}) lifts the tank and the engine")
 press("escape")
 check(env.held() == nil and env.partRec(4).parent == 3 and env.partRec(5).parent == 4, "ESC puts them back")
 
+-- 4g2. playtest 2026-10-26: the MOVE tool (5) and what's in your hand.
+do
+  local plays = {}
+  local audio0 = API.audio
+  API.audio = { play = function(clip) plays[#plays + 1] = clip end }
+  local FAKECAM = { rmbClick = { seq = 7 } }
+  local find0 = API.findScript
+  API.findScript = function(k) if k == "builder_camera" then return FAKECAM end return find0(k) end
+  env.HOLD.cam = nil
+  local p1 = env.partRec(1)
+  local x1, z1 = p1.x, p1.z
+  -- a part from the catalogue: heard, named on the hint line, readable by the catalogue
+  env.pick("tankS")
+  step(2)
+  check(#plays >= 1 and plays[#plays]:find("hiss_cylinder"), "picking a catalogue part plays the pickup sound")
+  check(env.heldId() == "tankS", "heldId names the part in hand (the catalogue latches its card)")
+  check(env.hintText and env.hintText():find("^HOLDING") ~= nil and env.hintText():find(env.partInfo("tankS").label, 1, true),
+    "the hint line says HOLDING and the part's name: " .. tostring(env.hintText and env.hintText()))
+  check(env.hintText():find("right%-click") ~= nil, "…and how to drop it")
+  -- a right-click TAP (the camera's rmbClick) drops it
+  FAKECAM.rmbClick = { seq = 8, x = 10, y = 10 }
+  step(2)
+  check(env.held() == nil, "a right-click tap drops the part in hand")
+  -- swapping from the catalogue: dropHeld puts it back
+  env.pick("tankS"); step(2)
+  check(env.dropHeld() == true and env.held() == nil, "dropHeld puts a catalogue part back")
+  -- the MOVE tool: click a placed part → in hand with what hangs on it
+  check(env.setTool("lift") == true, "setTool('lift') is the MOVE tool")
+  at(x1, z1); step(20)   -- (past the pick's click cooldown)
+  click()
+  local h = env.held()
+  check(h and #h == 5 and env.holding() == "carry", "MOVE: a click lifts the pod and everything on it (" .. tostring(h and #h) .. ")")
+  check(env.hintText():find("HOLDING") ~= nil and env.hintText():find("+ 4 attached", 1, true) ~= nil,
+    "the hint names the lifted part and how many came with it: " .. tostring(env.hintText()))
+  -- ESC puts it all back where it was, links and all
+  press("escape")
+  step(2)
+  check(env.held() == nil and near(env.partRec(1).x, x1, 1e-6) and env.partRec(2).parent == 1 and env.partRec(5).parent == 4,
+    "MOVE + ESC: back where it was, links and all")
+  -- the right-click tap does the same
+  at(x1, z1); step(2)
+  click()
+  check(env.held() ~= nil, "MOVE: lifted again")
+  FAKECAM.rmbClick = { seq = 9, x = 10, y = 10 }
+  step(2)
+  check(env.held() == nil and near(env.partRec(1).x, x1, 1e-6) and env.partRec(2).parent == 1,
+    "MOVE + right-click tap: back where it was")
+  -- click it up, click it down somewhere else (the floor: the normal rules)
+  at(x1, z1); step(2)
+  click()
+  at(x1 + 4, z1 + 2); step(3)
+  click()
+  check(env.held() == nil, "MOVE: the second click puts it down")
+  check(near(env.partRec(1).x, x1 + 4, 0.3) and env.partRec(2).parent == 1 and env.partRec(5).parent == 4,
+    string.format("…where the cursor was, the stack intact (pod x %.2f)", env.partRec(1).x))
+  env.undoStep()
+  step(1)
+  check(near(env.partRec(1).x, x1, 1e-6), "one undo brings it back")
+  env.setTool("select")
+  API.findScript = find0
+  API.audio = audio0
+  env.HOLD.cam = nil
+end
+
 -- 4h. copy, paste, duplicate
 env.select({ 4, 5 }, "set")
 check(env.copy() == 2, "copy two parts")
