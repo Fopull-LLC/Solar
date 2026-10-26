@@ -49,6 +49,23 @@ On the player's save the probe also prints `GROUND96`: 96 ground radii round the
 base summed, at the reveal and after the scenario — the same number on two
 engines means the same ground.
 
+## wheelprobe.sh + wheelprobe_modes.lua — wheels after getting off and back on
+
+    WORK=$SCRATCH/wheels LOCK=$SCRATCH/engine.lock tools/perf/wheelprobe.sh <engine> [wheels planewheels]
+
+The 2026-10-26 playtest's "wheels face the wrong direction when getting off and
+back on". `wheels`: the 4-wheel rover driven past 95 m from the base, the crew
+out MID-TURN and back in, a straight drive; parked, the crew out until the
+chassis sleeps, back in, drive and turn; two quick off/on mid-turn. `planewheels`:
+the jet taxiing with the rudder held (the nose gear steers), the crew out
+mid-turn, back in, turn the other way. Every half second a `WP` line gives each
+wheel's DRAWN yaw against the chassis (its TyreMesh's axle), the joint's steer
+and the ball body's yaw; a drawn yaw off the joint's by more than 3°, or a mesh
+that turns with its ball, is a `FAIL`. One `WP RESULT <tag>: PASS/FAIL` line.
+Pictures in `$WORK/proj/save/user/wheelshots/`. Cause and fix: node handles are
+bare slot numbers, so a cached TyreMesh handle from before the get-off read
+`valid` again for another node (vessel_controller r2TyreVisuals).
+
 ## demo.sh + demo_probe.lua — a whole player session, for a pre-playtest pass
 
     WORK=$SCRATCH/qa LOCK=$SCRATCH/engine.lock tools/perf/demo.sh <engine> [TAG]

@@ -8094,6 +8094,9 @@ local function tyres_out(node, info)
         if not R2.live or not (node and node.valid) then destroy(t) return end
         t:setAngles(yaw, pitch, roll)
         w.tyre = t
+        -- its own mesh, looked up now (r2TyreVisuals: never a handle kept
+        -- from the tyre before it)
+        w.mesh, w.mesh_of = child_named(t, "TyreMesh"), t.id
         w.jointed = false
         hang_tyre(node, w, assembly.info(node))
       end)
@@ -8110,7 +8113,7 @@ local function tyres_in(node)
   -- 0.117.0-rc3 (floptle/0420).
   for _, w in ipairs(R2.wheels) do
     if w.tyre and w.tyre.valid then destroy(w.tyre) end
-    w.tyre, w.jointed = nil, false
+    w.tyre, w.jointed, w.mesh, w.mesh_of = nil, false, nil, nil
     wheel_collider(node, w, false)
   end
   if node and node.valid then assembly.rebuild(node) end
@@ -8164,6 +8167,15 @@ end
 -- about its axle only; it is not turned when the axle steers, so its mesh
 -- would keep facing straight ahead. Each frame the mesh is laid along the
 -- engine's axle (base steer + steering) and turned by the distance rolled.
+-- THE MESH HANDLE IS THE CURRENT TYRE'S (playtest 2026-10-26: "wheels often
+-- face the wrong direction when getting off and back on"). A script's node
+-- handle is the engine's bare slot number, and a destroyed node's slot is
+-- handed to the next node spawned, so the TyreMesh handle kept from the tyre
+-- before a get-off/get-on read `valid` again and pointed at ANOTHER new node:
+-- this wheel's mesh was laid on some other node, and its own was never laid
+-- at all and turned with its ball (probe: up to 50° of yaw while turning; the
+-- player saw a rear wheel square across). So the handle is dropped with its
+-- tyre (tyres_in), taken fresh with the new one, and checked against it.
 function r2TyreVisuals(node, dt)
   if not (R2.live and node and node.valid) then return end
   local rx, up, rz = basis(node)
@@ -8172,7 +8184,7 @@ function r2TyreVisuals(node, dt)
   for _, w in ipairs(R2.wheels) do
     local t = w.tyre
     if t and t.valid then
-      if not (w.mesh and w.mesh.valid) then w.mesh = child_named(t, "TyreMesh") end
+      if not (w.mesh and w.mesh.valid and w.mesh_of == t.id) then w.mesh, w.mesh_of = child_named(t, "TyreMesh"), t.id end
       local mnode = w.mesh
       if mnode then
         local s = math.rad((w.steer0 or 0) + R2_STEER_SIGN * (w.steerNow or 0))
@@ -8909,7 +8921,7 @@ end
 function r2Cleanup()
   for _, w in ipairs(R2.wheels) do
     if w.tyre and w.tyre.valid then destroy(w.tyre) end
-    w.tyre = nil
+    w.tyre, w.mesh, w.mesh_of = nil, nil, nil
   end
   R2.live = false
   for _, sh in pairs(R2.shells) do
