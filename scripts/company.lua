@@ -74,6 +74,21 @@ local function rich()
   return save.get("debug.rich") == true
 end
 
+-- SANDBOX (the new-save panel's GAME MODE, save key `game.mode`): money is no
+-- object and the agency's standing is at the top. The balance reads as
+-- SANDBOX_FUNDS, which `money` prints as "∞"; nothing spent or earned moves
+-- it (the ledger still lists both, so a purchase can be checked); reputation
+-- reads REP_MAX, so every standing gate (contract tiers, the late catalogue)
+-- is open; no advance is ever needed. research.lua opens the whole catalogue.
+-- A save without the key is a career, as every save before it was.
+SANDBOX_FUNDS = 1e15
+function isSandbox()
+  return save.get("game.mode") == "sandbox"
+end
+local function unlimited()
+  return rich() or isSandbox()
+end
+
 -- First run on a slot seeds the opening balance. `co.booted` marks it done, so
 -- a company that legitimately spends down to zero is never topped back up.
 local function boot()
@@ -95,6 +110,7 @@ end
 
 function balance()
   boot()
+  if isSandbox() then return SANDBOX_FUNDS end
   if rich() then return RICH end
   return save.get("co.funds") or 0
 end
@@ -107,6 +123,7 @@ end
 
 function rep()
   boot()
+  if isSandbox() then return REP_MAX end
   return save.get("co.rep") or 0
 end
 
@@ -128,6 +145,11 @@ end
 function spend(amount, why)
   amount = math.max(0, math.floor(amount or 0))
   if amount == 0 then return true end
+  if isSandbox() then
+    record(-amount, why)
+    log(string.format("company: −$%d  (%s)   [sandbox]", amount, why or "—"))
+    return true
+  end
   if rich() then
     -- Still recorded: the ledger is how you check that the thing you clicked
     -- charged what it said it would, and that's worth having while testing.
@@ -147,6 +169,13 @@ end
 function earn(amount, why)
   amount = math.max(0, math.floor(amount or 0))
   if amount == 0 then return end
+  if isSandbox() then
+    record(amount, why)
+    log(string.format("company: +$%d  (%s)   [sandbox]", amount, why or "—"))
+    local s = findScript and findScript("sfx")
+    if s and s.play then s.play("cash") end
+    return
+  end
   local b = balance()
   save.set("co.funds", b + amount)
   funds = b + amount
@@ -200,6 +229,7 @@ end
 -- Would Mission Control advance money right now, if the company stayed broke?
 -- Pure on the save: the harness and a panel can ask without waiting.
 function advanceReady()
+  if isSandbox() then return false, "sandbox" end
   if rich() then return false, "debug funds" end
   if owed() > 0 then return false, "an advance is still owed" end
   local done = save.get("mission.done")
@@ -235,8 +265,8 @@ end
 -- Keep the published mirrors live for anything reading them as plain state.
 function update(node, dt)
   boot()
-  funds = save.get("co.funds") or 0
-  reputation = save.get("co.rep") or 0
+  funds = isSandbox() and SANDBOX_FUNDS or (save.get("co.funds") or 0)
+  reputation = rep()
   loan = save.get("co.loan") or 0
   if advanceReady() then
     broke_t = broke_t + (dt or 0)
@@ -252,6 +282,10 @@ end
 -- Reputation moves slowly and clamps: it gates contracts and the catalogue, so
 -- it must never run away on a lucky streak or bottom out unrecoverably.
 function addRep(d, why)
+  if isSandbox() then
+    if d and d ~= 0 then log(string.format("company: reputation %+d  (%s)   [sandbox: stays at the top]", d, why or "—")) end
+    return
+  end
   local before = rep()
   local r = math.max(REP_MIN, math.min(REP_MAX, before + (d or 0)))
   save.set("co.rep", r)
@@ -282,6 +316,7 @@ end
 
 -- "Contractor · 5 (Trusted at 8)" — the one line a panel shows.
 function standingLine(r)
+  if not r and isSandbox() then return string.format("%s · max (sandbox)", STANDING[#STANDING].name) end
   r = r or rep()
   local s = standing(r)
   if s.nextAt then
@@ -322,6 +357,7 @@ end
 
 -- Money, formatted the one way the whole game formats it.
 function money(v)
+  if (v or 0) >= SANDBOX_FUNDS then return "∞" end
   v = math.floor(v or 0)
   local s = tostring(math.abs(v))
   local out = ""

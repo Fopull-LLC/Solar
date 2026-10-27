@@ -912,9 +912,63 @@ local function pickup(t, ctx)
   return {}
 end
 
+-- THE MEDKIT (crew.lua's treat): on a crew member on foot (a CrewBody, the
+-- "member" target) or on yourself. Their state first — DOWN and the seconds
+-- left, or their hp — then "Use Medkit" (dimmed with the reason when it
+-- can't be), or "Cancel" while the work runs.
+local function medkit_rows(id, ctx)
+  local c = R(ctx, "crew")
+  if not (c and c.get and c.treatWhyNot) then return {} end
+  local r = c.get(id)
+  if not r or r.status == "dead" then return {} end
+  local out = {}
+  local T = c.treating and c.treating()
+  if r.downed then
+    out[#out + 1] = { type = "info", id = "down", group = "CREW", label = "DOWN", value = function()
+      local q = c.get(id)
+      return (q and q.downed) and string.format("bleeding out  ·  %d s", math.max(0, math.floor((q.downed.left or 0) + 0.5))) or "—" end }
+  elseif (r.hp or 1) < 0.995 then
+    out[#out + 1] = { type = "info", id = "hp", group = "CREW", label = "HEALTH", value = function()
+      local q = c.get(id); return pctf(q and q.hp or 1) end }
+  else
+    return out
+  end
+  if T then
+    if T.target == id then
+      out[#out + 1] = { type = "meter", id = "treat", group = "CREW", label = T.kind == "revive" and "REVIVING" or "TREATING",
+        frac = function() local k = c.treating(); return k and k.frac or 1 end,
+        value = function() local k = c.treating(); return pctf(k and k.frac or 1) end }
+      out[#out + 1] = { type = "action", id = "cancel_treat", group = "CREW", label = "Cancel", danger = true,
+        act = function() return c.cancelTreat("cancelled") end }
+    end
+    return out
+  end
+  local I = R(ctx, "items")
+  local M = I and I.MEDKIT or {}
+  out[#out + 1] = { type = "action", id = "medkit", group = "CREW", label = "Use Medkit",
+    hint = r.downed and string.format("revive · %.0f s", M.revive_secs or 6) or string.format("+%d%% · %.0f s",
+      math.floor((M.heal or 0.5) * 100 + 0.5), M.heal_secs or 4),
+    enabled = function() return c.treatWhyNot(id) == nil end,
+    why = function() return c.treatWhyNot(id) end,
+    act = function() return c.treat(id) end }
+  return out
+end
+local function member_medkit(t, ctx)
+  if not t.id then return {} end
+  return medkit_rows(t.id, ctx)
+end
+local function astro_medkit(t, ctx)
+  local c = R(ctx, "crew")
+  local id = c and c.activeId and c.activeId()
+  if not id then return {} end
+  return medkit_rows(id, ctx)
+end
+
 -- ── registration ────────────────────────────────────────────────────────────
 PROVIDED = {
   { "astro", "task.cancel", task_cancel_astro, 5 },
+  { "astro", "medkit", astro_medkit, 8 },
+  { "member", "medkit", member_medkit, 10 },
   { "astro", "suit", astro_provider, 10 },
   { "part", "task.cancel", task_cancel_part, 5 },
   { "part", "held.repair", held_repair, 15 },

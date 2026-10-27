@@ -561,7 +561,13 @@ local function ensure_iva_cam(node)
   createNode("Iva Cam", nil, function(n)
     iva_cam_making = false
     iva_cam = n
-    pcall(function() n:setCamera { fovY = params.fov_y or 1.15, active = false, cullMask = INTERIOR_BIT } end)
+    -- (post "after": the cabin is laid over the picture after depth of field
+    -- and motion blur, so they leave it sharp; grade and tonemap still apply.
+    -- No sky capture or fog of its own: its reflections read the frame's sky
+    -- map, and a cabin has no fog. Its sun shadows stay: the sun comes in
+    -- through the windows and nowhere else.)
+    pcall(function() n:setCamera { fovY = params.fov_y or 1.15, active = false, cullMask = INTERIOR_BIT, post = "after",
+                                   sky = false, fog = false } end)
   end)
   return nil
 end

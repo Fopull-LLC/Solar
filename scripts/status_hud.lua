@@ -85,7 +85,7 @@ local function readouts()
   end
   if co and co.money then
     out[#out + 1] = { key = "funds", label = "Funds", value = co.money(co.balance()) }
-    out[#out + 1] = { key = "rep", label = "Rep", value = string.format("%+d", co.rep()) }
+    out[#out + 1] = { key = "rep", label = "Rep", value = (co.isSandbox and co.isSandbox()) and "MAX" or string.format("%+d", co.rep()) }
   end
   if inv and inv.mass then
     local m, cap = inv.mass("astro"), (inv.cap and inv.cap("astro")) or nil

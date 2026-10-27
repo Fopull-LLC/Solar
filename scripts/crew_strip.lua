@@ -49,8 +49,11 @@ MODES = { "small", "large", "hidden" }
 -- 0.6 ms budget; sharing 6 redraws a second measured 0.12–0.59 ms (noise
 -- ±0.3 at load 4–9). Until H1 lands the portraits SHARE a redraw budget:
 -- RT_BUDGET redraws a second across the page (each portrait RT_BUDGET / n,
--- staggered), the hovered one HOVER_HZ.
-RT_BUDGET = 5.0
+-- staggered), the hovered one HOVER_HZ. Engine 0.117.1-dev.1363 (cards
+-- 0568/0570: the portraits skip shadows, sky, terrain and fog, and a hidden
+-- one stops drawing) measured the strip at 5 a second at ~0.1 ms, so the
+-- budget is raised to 12: about 4 Hz a portrait for a pod of three.
+RT_BUDGET = 12.0
 HZ_MIN = 1.2
 HOVER_HZ, OPEN_HZ = 6.0, 4.0
 function rateFor(k, n, hovered)
@@ -97,6 +100,7 @@ function chipsFor(a, m)
   if hp < 0.99 then out[#out + 1] = { string.format("HP %d%%", math.floor(hp * 100 + 0.5)), hp < 0.35 and "danger" or "warn" } end
   if (a.heat or 0) >= 0.2 then out[#out + 1] = { "HEAT", (a.heat or 0) >= 0.6 and "danger" or "warn" } end
   if a.blackout then out[#out + 1] = { "BLACKOUT", "danger" } end
+  if a.downed then out[#out + 1] = { string.format("DOWN %d s", math.max(0, math.floor(a.downed + 0.5))), "danger" } end
   return out
 end
 
@@ -169,7 +173,9 @@ local function cam_for(k, S)
     c.tw = S.tw
     pcall(function()
       n:setCamera { target = "crew" .. k, width = S.tw, height = S.th, hz = rateFor(k, 1, false), fovY = CAM_FOV,
-                    active = false, cullMask = INTERIOR_BIT }
+                    active = false, cullMask = INTERIOR_BIT,
+                    -- a portrait films a lit cabin: no sun map, sky, terrain or fog passes of its own
+                    shadows = false, sky = false, terrain = false, fog = false }
     end)
     c.hz, c.mask = rateFor(k, 1, false), INTERIOR_BIT
   end)

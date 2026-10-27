@@ -178,6 +178,14 @@ function resolve(hit)
   if n.name == "Astronaut" then
     return { kind = "astro", node = n, pack = "astro", label = "Crew", wx = hx, wy = hy, wz = hz }
   end
+  -- another crew member on foot (a CrewBody): who they are, for the Medkit
+  local cb = (n.name == "CrewBody" and n) or (n.parent and n.parent.name == "CrewBody" and n.parent) or nil
+  if cb then
+    local c = ref("crew")
+    local id = c and c.memberOfNode and c.memberOfNode(cb)
+    local r = id and c.get and c.get(id)
+    if r then return { kind = "member", node = cb, id = id, pack = "crew:" .. id, label = r.name, wx = hx, wy = hy, wz = hz } end
+  end
   -- a craft: the part itself (its parent is the craft's root), or the root
   local v = vessel_of(n.parent)
   if v then return part_target(v, n, hx, hy, hz) end
@@ -253,7 +261,7 @@ local function light(t)
   st.lit = {}
   if not t then return end
   local root = t.node
-  if t.kind == "astro" and root then
+  if (t.kind == "astro" or t.kind == "member") and root then
     for _, c in ipairs(root:children()) do if c.name == "AstroModel" then root = c end end
   end
   if not (root and root.valid ~= false and root.setTint) then return end

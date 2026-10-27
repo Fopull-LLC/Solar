@@ -83,7 +83,8 @@ local function chip(a, text) for _, c in ipairs(H.chipsOf(a)) do if c[1]:find(te
 ok(chip({ o2 = 0.24, air_s = 288 }, "O2 24%")[2] == "warn", "O2 25%: an amber chip")
 ok(chip({ o2 = 0.09, air_s = 108 }, "O2 9%")[2] == "danger", "O2 10%: a red chip")
 ok(chip({ o2 = 0.04, air_s = 48 }, "O2 1 MIN") ~= nil, "under a minute of air: O2 1 MIN")
-ok(chip({ fall = 8 }, "FALL 8")[2] == "warn" and chip({ fall = 13 }, "FATAL FALL") ~= nil, "the fall chip: amber at 6, FATAL FALL at 12")
+ok(chip({ fall = 8 }, "FALL") == nil and chip({ fall = 12 }, "FALL 12")[2] == "warn" and chip({ fall = 19 }, "FATAL FALL") ~= nil,
+  "the fall chip: nothing under 9 m/s, amber from 9, FATAL FALL from 18")
 ok(chip({ pinned = true }, "PINNED") ~= nil, "PINNED")
 ok(chip({ cabin = 0.3, cabin_tol = 9 }, "CABIN FAILING · hold under 9 m/s") ~= nil, "CABIN FAILING with the tolerance")
 ok(chip({ heat = 0.25 }, "HEAT")[2] == "warn" and chip({ heat = 0.65 }, "HEAT")[2] == "danger", "HEAT amber from 0.2, red from 0.6")

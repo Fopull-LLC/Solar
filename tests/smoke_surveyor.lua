@@ -142,9 +142,11 @@ check(chips[1][1]:find("^HIT") and chips[1][2] == "danger" and chips[2][1] == "H
 local snd = H.soundsOf({}, { hit = { amount = 0.5, t = 1 } }, 1)
 check(snd[1] == "hit", "…and the hit sound, once")
 hp = C.hurt(2, 0.6, "shot", "by Dana Okafor, 30 m", { by = "Dana Okafor", x = 30, y = 100, z = 0 })
+check(hp == 0 and C.get(2).status == "afoot" and C.get(2).downed ~= nil, "the second hit (not overkill): DOWN, bleeding out")
+hp = C.hurt(2, 0.6, "shot", "by Dana Okafor, 30 m", { by = "Dana Okafor", x = 30, y = 100, z = 0 })
 local r = C.get(2)
 check(hp == 0 and r.status == "dead" and r.died.cause == "shot" and r.died.detail == "by Dana Okafor, 30 m",
-  "the second hit kills: cause shot, " .. tostring(r.died and r.died.detail))
+  "a third, while down, kills: cause shot, " .. tostring(r.died and r.died.detail))
 local m = C.memorial()
 check(#m == 1 and m[1].died.cause == "shot", "the memorial has them")
 check(L.caps[#L.caps]:find("killed: shot by Dana Okafor, 30 m") ~= nil, "the caption: " .. tostring(L.caps[#L.caps]))

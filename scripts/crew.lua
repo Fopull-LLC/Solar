@@ -8,7 +8,10 @@
 --   crew.active    the id the `Astronaut` node is now (see "the avatar")
 --   crew.offers    the applicants on the board
 --   crew.version   the migration stamp (VERSION below)
---   crew.death     true: death is real; false: "rescue instead"
+--   crew.safety    "death" (permadeath) | "rescue" (rescued instead, for a
+--                  fee) | "invincible" (no harm at all); the new-save panel's
+--                  CREW SAFETY. A save without it reads the older boolean
+--   crew.death     true: death is real; false: "rescue instead" (kept in step)
 --
 -- Each member's pack is an ordinary inventory container, `crew:<id>`;
 -- inventory's `"astro"` alias resolves to the active member's (WS3).
@@ -60,12 +63,20 @@
 --   tanksOf(pack) / drawAir(o2, dt, tanks)   the suit air rule (built-in + O2 tanks)
 --   evaCheck(id) → ok, why, warn (warn: allowed, but ask first — no RCS Pack in space)
 --   memorial() → {…}             deathOn() → bool          setDeath(on)
---   kill(id, cause, detail) → ok   (death on: dies; off: rescued)
+--   safety() → "death"|"rescue"|"invincible"   setSafety(mode)   invincible() → bool
+--   kill(id, cause, detail) → ok   (death on: dies; off: rescued; invincible:
+--                                nothing, but a lost cabin sets them down beside it)
 --   hurt(id, amount, cause, detail, {by, x,y,z}) → hp|nil, why   a wound from
 --                                outside (the TL-5 Surveyor; later animals): hp
 --                                down, the HIT alert, death or rescue at 0
 --   lastHit[id] → {t, amount, cause, by, hp}   (alerts().hit while fresh)
 --   blackoutGrace(src) → secs    blackoutEnd(src) → handled (planet_walker asks)
+--   downRule(cause, over) → bool  bleedSecs(cause, over) → s   (pure: who goes DOWNED)
+--   rec.downed = {left, secs, cause, detail, by}   bleeding out on the ground
+--   downedList() → {{id, name, left, dist}…}   lastDown → {id, name, cause, secs, t}
+--   treatWhyNot(target) → why|nil   treat(target) → ok, why   cancelTreat(why)
+--   treating() → {by, target, kind = "revive"|"heal", secs, done, frac}|nil
+--                                the Medkit's work (items.MEDKIT); lastTreat for probes
 --   patch(id, fields)            merge fields into a record (false clears; bumps version)
 --   onEvaInSpace() → bool, id    (rails warp is refused while true)
 --   seatDef(rec|partId) → {seats, hatch, command, open}|nil   slotCount(rec)
@@ -94,9 +105,12 @@ defaults = {
   hire_step = 400,
   hire_cap = 4000,
   starters = 3,
-  -- DEATH (§2.3). Impact: Δv in one tick, m/s.
-  impact_injure = 6.0,
-  impact_kill = 13.0,
+  -- DEATH (§2.3). Impact: the fall speed a landing takes away, m/s. Generous
+  -- on purpose (playtest 2026-10-27, "too easy to have damaging or fatal
+  -- falls … makes exploring annoying"): a 4 m drop is free, a 10 m one hurts
+  -- badly, about 20 m kills (Earth-like g).
+  impact_injure = 9.0,
+  impact_kill = 20.0,
   walk_dv = 10.0,         -- m/s of sideways Δv the walker makes itself (a run stopped)
   crush_secs = 0.4,       -- s of something solid in the suit's middle
   crush_r = 0.15,         -- m, the sphere at the capsule's centre
@@ -107,6 +121,16 @@ defaults = {
   hold_secs = 2.0,        -- the camera holds on the fallen this long
   heal_per_min = 0.02,    -- hp back a minute aboard or at base
   cabin_tol = 9.0,        -- m/s a crewed pod survives (the strip's "hold under")
+  -- DOWNED (Permadeath only): a survivable lethal wound — a fall under
+  -- down_over × impact_kill, a shot that isn't overkill — leaves the member
+  -- bleeding out on the ground for bleed_secs (down to bleed_min the further
+  -- past lethal it was); a Medkit in time revives them. Everything else
+  -- (crushed, a lost cabin, re-entry heat, an explosion, out of air) kills
+  -- outright.
+  down_over = 1.6,
+  shot_over = 0.5,        -- hp past zero a shot may go and still leave them down
+  bleed_secs = 90.0,
+  bleed_min = 30.0,
   -- CREW BODIES (§4.1)
   body_range = 2500.0,    -- m from the focus: further, a record only
   body_spawn = 2000.0,    -- m: a record comes back as a body inside this
@@ -123,6 +147,7 @@ showInterior = false
 
 local function P(k) return (params and params[k]) or defaults[k] end
 local function bump() version = (version or 0) + 1 end
+local go_down, down_monitor, treat_tick, cancel_treat   -- (the downed and the Medkit, below)
 
 local refs = {}
 local function ref(kind)
@@ -606,7 +631,7 @@ end
 -- Merge fields into a record (other crew scripts use this; panels poll
 -- `version`). `nil` can't be merged, so a field is cleared with `false`.
 local CLEAR = { task = true, hand = true, craft = true, died = true, body = true, x = true, y = true, z = true,
-                yaw = true, anchor = true, face = true }
+                yaw = true, anchor = true, face = true, downed = true }
 function patch(id, fields)
   local r = get(id)
   if not r then return false end
@@ -701,16 +726,34 @@ end
 
 function log_(s) if log then log(s) end end
 
--- ── death settings (§2.3) ──────────────────────────────────────────────────
-function deathOn()
+-- ── death settings (§2.3): CREW SAFETY ─────────────────────────────────────
+-- "death": permadeath (the default); "rescue": whoever would die is brought
+-- home for a fee; "invincible": nothing hurts the crew at all — no hp lost to
+-- an impact, a shot, a crush, re-entry heat or an empty suit (the air still
+-- runs down on the gauge; it just never blacks anyone out), and the alert
+-- chips stay quiet. A save from before the three-way switch has only the
+-- boolean `crew.death`, read as death / rescue.
+SAFETY = { "death", "rescue", "invincible" }
+function safety()
   ensure()
-  return save.get("crew.death") ~= false
+  local s = save.get("crew.safety")
+  if s == "death" or s == "rescue" or s == "invincible" then return s end
+  return save.get("crew.death") == false and "rescue" or "death"
 end
 
-function setDeath(on)
-  save.set("crew.death", on and true or false)
+function setSafety(mode)
+  if mode ~= "rescue" and mode ~= "invincible" then mode = "death" end
+  save.set("crew.safety", mode)
+  save.set("crew.death", mode == "death")
   bump()
 end
+
+-- THE one check every harm path asks.
+function invincible() return safety() == "invincible" end
+
+function deathOn() return safety() == "death" end
+
+function setDeath(on) setSafety(on and "death" or "rescue") end
 
 function memorial()
   local out = {}
@@ -1191,6 +1234,7 @@ function control(id)
   if not r then return false, "no such crew member" end
   if r.status == "dead" then return false, r.name .. " is dead" end
   if r.status == "base" then return false, r.name .. " is at the base" end
+  if r.downed then return false, r.name .. " is down — bring a Medkit" end
   local v = craftOf(id)
   if v then return takeCraft(v, id) end
   if id == activeId() and not avatarCraft() then
@@ -1588,6 +1632,7 @@ function cancelTask(id, why)
 end
 
 function held(id)
+  if TREAT and TREAT.by == (id or activeId()) then return true end
   local ct = ref("crew_task")
   if ct and ct.isHeld then return ct.isHeld(id or activeId()) == true end
   return false
@@ -1675,7 +1720,24 @@ function alerts(id)
   if MON.dying and MON.dying.id == id then blackout = math.max(0, MON.dying.t1 - now()) end
   local lh = lastHit and lastHit[id]
   local hit = (lh and now() - lh.t < (HIT_SHOW or 1.6)) and lh or nil
+  if invincible() then
+    -- nothing can hurt them, so nothing to warn of: the chips stay quiet
+    -- (the walker's own air gauge still shows the suit running down)
+    return { o2 = 1.0, air_s = nil, breath = 1.0, hp = r.hp or 1.0, heat = 0.0, hit = nil, fall = 0.0,
+             pinned = false, blackout = nil, cabin = nil, cabin_tol = nil, o2_level = nil, breath_level = nil,
+             safe = true }
+  end
+  -- DOWN: this member's own bleed-out, and the nearest other member down
+  -- within 600 m (the HUD's "<NAME> DOWN · 74 s" chip)
+  local own = r.downed and (r.downed.left or 0) or nil
+  local near = nil
+  if is_avatar and down_monitor then
+    for _, d in ipairs(downedList()) do
+      if d.id ~= id and d.dist and d.dist < 600 then near = d break end
+    end
+  end
   return { o2 = o2, air_s = air_s, breath = breath, hp = r.hp or 1.0, heat = r.heat or 0.0, hit = hit,
+           downed = own, down = near,
            fall = is_avatar and MON.fall or 0.0, pinned = is_avatar and MON.pinned or false,
            blackout = blackout, cabin = cabin, cabin_tol = tol,
            o2_level = airLevel(o2, air_s), breath_level = (breath < 1) and airLevel(breath, nil) or nil }
@@ -1735,6 +1797,7 @@ end
 CAUSE_TEXT = {
   impact = "impact", cabin = "the cabin failed", oxygen = "out of oxygen", drowned = "drowned",
   crushed = "crushed", heat = "burned on re-entry", lost = "lost with the craft", shot = "shot",
+  explosion = "caught in an explosion",
 }
 
 -- The control handoff when the controlled member is gone.
@@ -1744,7 +1807,7 @@ local function handoff(dead_id, from_v)
   local onfoot = {}
   for id, b in pairs(bodies) do
     local r = get(id)
-    if r and r.status == "afoot" and b.valid ~= false and id ~= dead_id then
+    if r and r.status == "afoot" and not r.downed and b.valid ~= false and id ~= dead_id then
       local d = ax and len(b.x - ax, b.y - ay, b.z - az) or 0
       if d <= P("body_range") then onfoot[#onfoot + 1] = { id = id, dist = d } end
     end
@@ -1794,12 +1857,12 @@ local function handoff(dead_id, from_v)
 end
 
 -- Rescue instead (death off): blacked out, they wake at base for the fee.
-local function rescue(id, cause)
+local function rescue(id, cause, free)
   local r = get(id)
   local is_avatar = id == activeId() and not avatarCraft()
   local co = ref("company")
   local fo = ref("flight_ops")
-  local fee = 250
+  local fee = free and 0 or 250
   if co and co.afford and co.afford(fee) and co.spend then co.spend(fee, "crew rescue") end
   local v, uid, slot = craftOf(id)
   if v and v.seatMember then v.seatMember(uid, slot, nil) end
@@ -1823,13 +1886,39 @@ local function rescue(id, cause)
   return true
 end
 
--- KILL member `id` (death on), or rescue them (death off). `detail` is the
+-- Invincible, and their cabin broke up round them: out of the seat and set
+-- down on foot beside the wreck (the avatar's own stand-down is the
+-- controller's), or home for nothing when there is no wreck point.
+local function walk_away(id, cause, opts)
+  local v, uid, slot = craftOf(id)
+  if v and v.seatMember and uid then v.seatMember(uid, slot, nil) end
+  for _, w in ipairs(vessels()) do if w.unseatMember then pcall(w.unseatMember, id) end end
+  despawn_doll(id)
+  if opts.x and id ~= activeId() and setDown(id, opts.x, opts.y, opts.z) then
+    log_(string.format("crew: #%d walked away from the wreck (invincible)", id))
+    bump()
+    return true
+  end
+  return rescue(id, cause, true)
+end
+
+-- KILL member `id` (death on), or rescue them (death off); invincible, nothing
+-- happens (a lost cabin sets them down beside the wreck). `detail` is the
 -- caption's figure ("17 m/s"). Returns true when something happened.
 function kill(id, cause, detail, opts)
   opts = opts or {}
   local r = get(id)
   if not r or r.status == "dead" then return false end
+  if invincible() then
+    if cause == "cabin" then return walk_away(id, cause, opts) end
+    return false
+  end
   if not deathOn() then return rescue(id, cause) end
+  if opts.over and not r.downed and not craftOf(id) and downRule(cause, opts.over) then
+    return go_down(id, cause, detail, opts)
+  end
+  if TREAT and (TREAT.target == id or TREAT.by == id) then cancel_treat(id == TREAT.target and "they died" or "you died") end
+  if r.downed then r.downed = nil; put(r) end
   local ride = avatarCraft()
   local is_avatar = id == activeId()
   local v, uid, slot = craftOf(id)
@@ -1850,7 +1939,7 @@ function kill(id, cause, detail, opts)
   r.status = "dead"
   r.task = nil
   r.died = { st = st, date = date, cause = cause, detail = detail, body = d,
-             craft = (v and v.craftName) or opts.craft, remains = rem, crate = crate }
+             craft = (v and v.craftName) or opts.craft, remains = rem, crate = crate, bled = opts.bled or nil }
   if d and x then
     local b = space.body(d)
     if b then r.died.x, r.died.y, r.died.z = x - b.x, y - b.y, z - b.z end
@@ -1918,6 +2007,7 @@ function hurt(id, amount, cause, detail, opts)
   local r = get(id)
   if not r or r.status == "dead" then return nil, "nobody to hurt" end
   if r.status == "base" then return nil, "at the base" end
+  if invincible() then return r.hp or 1, "invincible" end
   amount = math.max(0, amount or 0)
   local hp = math.max(0, (r.hp or 1) - amount)
   lastHit[id] = { t = now(), amount = amount, cause = cause or "shot", by = opts.by, hp = hp }
@@ -1925,11 +2015,229 @@ function hurt(id, amount, cause, detail, opts)
     detail and (", " .. detail) or "", amount, hp))
   bump()
   if hp <= 1e-6 then
-    kill(id, cause or "shot", detail, opts)
+    local o = {}
+    for k, v in pairs(opts) do o[k] = v end
+    o.over = amount - (r.hp or 1)
+    kill(id, cause or "shot", detail, o)
     return 0
   end
   patch(id, { hp = hp })
   return hp
+end
+
+-- ── DOWNED: bleeding out on the ground (Permadeath) ────────────────────────
+-- Pure: does a lethal wound leave them down rather than dead? `over` is how
+-- far past lethal it was: an impact's Δv ÷ impact_kill (1.0 = just lethal),
+-- a shot's hp past zero. Only those two causes: a fall or a bolt is a wound a
+-- medic can work on; a crush, a lost cabin, re-entry heat or an explosion is
+-- not, and out of air the blackout's own grace already is the timer (a Medkit
+-- can't give them air).
+function downRule(cause, over)
+  if cause == "impact" then return (over or 99) < P("down_over") end
+  if cause == "shot" then return (over or 99) < P("shot_over") end
+  return false
+end
+-- Pure: the bleed-out time, shorter the worse the wound.
+function bleedSecs(cause, over)
+  local f = 0
+  if cause == "impact" then f = ((over or 1) - 1) / math.max(0.01, P("down_over") - 1)
+  elseif cause == "shot" then f = (over or 0) / math.max(0.01, P("shot_over")) end
+  f = math.max(0, math.min(1, f))
+  return P("bleed_secs") - (P("bleed_secs") - P("bleed_min")) * f
+end
+
+lastDown = nil
+TREAT = nil
+lastTreat = nil
+
+go_down = function(id, cause, detail, opts)
+  local r = get(id)
+  local secs = bleedSecs(cause, opts.over)
+  local is_avatar = id == activeId() and not avatarCraft()
+  if r.task then cancelTask(id, "down") end
+  if TREAT and TREAT.by == id then cancel_treat("you went down") end
+  patch(id, { hp = 0, downed = { left = secs, secs = secs, cause = cause, detail = detail, by = opts.by } })
+  r = get(id)
+  lastDown = { id = id, name = r.name, cause = cause, secs = secs, t = now() }
+  local bc = ref("big_caption")
+  if bc and bc.show then
+    bc.show("ASTRONAUT DOWN", string.format("%s is down (%s%s) and bleeding out: %d s. A Medkit can save them.",
+      r.name, CAUSE_TEXT[cause] or cause, detail and (", " .. detail) or "", math.floor(secs + 0.5)), 6.0)
+  end
+  log_(string.format("crew: #%d DOWN (%s, %s): %.0f s to bleed out", id, tostring(cause), tostring(detail), secs))
+  if is_avatar then
+    -- they lie where they fell (a CrewBody); control passes on as at a death
+    park_avatar_member(id)
+    local a = astro()
+    if a then a.visible = false; a.vx, a.vy, a.vz = 0, 0, 0 end
+    handoff(id, nil)
+    quiet_monitors(2.5)
+  end
+  bump()
+  return true
+end
+
+-- The downed, nearest the avatar first (the HUD's chip, the strip).
+function downedList()
+  local out = {}
+  local a = astro()
+  for _, r in ipairs(roster()) do
+    if r.downed and r.status ~= "dead" then
+      local x, y, z = world_pos(r.id)
+      local d = (a and x) and len(x - a.x, y - a.y, z - a.z) or nil
+      out[#out + 1] = { id = r.id, name = r.name, left = r.downed.left or 0, secs = r.downed.secs, dist = d,
+                        treated = TREAT ~= nil and TREAT.target == r.id }
+    end
+  end
+  table.sort(out, function(p, q) return (p.dist or 1e18) < (q.dist or 1e18) end)
+  return out
+end
+
+local down_t = 0
+down_monitor = function(dt)
+  down_t = down_t + dt
+  if down_t < 0.25 then return end
+  local step_ = down_t
+  down_t = 0
+  for _, r in ipairs(roster()) do
+    local dn = r.downed
+    if dn and r.status ~= "dead" then
+      if r.id == activeId() and not avatarCraft() and #queue == 0 and not MON.dying then
+        -- (a save loaded with the avatar's member down: lie down, pass on)
+        park_avatar_member(r.id)
+        handoff(r.id, nil)
+      end
+      if not (TREAT and TREAT.target == r.id) then
+        dn.left = (dn.left or 0) - step_
+        if dn.left <= 0 then
+          local how = dn.cause == "impact" and "after a fall" or (dn.cause == "shot" and "after a shot" or "")
+          local det = "bled out " .. how .. (dn.detail and ((tostring(dn.detail):sub(1, 3) == "by " and " " or ", ") .. dn.detail) or "")
+          r.downed = nil
+          put(r)
+          kill(r.id, dn.cause, det, { by = dn.by, bled = true })
+        else
+          put(r)
+        end
+      end
+    end
+  end
+end
+
+-- ── THE MEDKIT: treating the injured and the downed ───────────────────────
+-- The member you control, on foot, a Medkit in hand, within reach of someone
+-- injured or down (or hurt themselves): held at the work (the walker stands
+-- down, as at a repair) for the kit's time; the bleed-out clock stops while
+-- they work. Done: one Medkit used, a heal of +MEDKIT.heal hp, or a revive to
+-- MEDKIT.revive_hp. Walking off, the patient dying, or Cancel stops it (the
+-- kit is kept).
+local function medkit_rules()
+  local I = ref("items")
+  return (I and I.MEDKIT) or { heal = 0.5, heal_secs = 4.0, revive_hp = 0.25, revive_secs = 6.0, reach = 2.6 }
+end
+local function kit_count(id)
+  local inv = ref("inventory")
+  if not (inv and inv.itemCount) then return 0 end
+  local ok, n = pcall(inv.itemCount, packOf(id), "medkit")
+  return ok and n or 0
+end
+-- (asked in the FRAME — treat_tick runs in update — where the avatar and
+-- the body nodes are both as drawn: in a physics tick they read a rails
+-- carry apart, metres on a moving planet)
+local function dist_to(by, target)
+  if by == target then return 0 end
+  local a = astro()
+  local x, y, z = world_pos(target)
+  if not (a and x) then return nil end
+  return len(x - a.x, y - a.y, z - a.z)
+end
+
+function treatWhyNot(target)
+  local by = activeId()
+  local r = get(target)
+  if not (by and r) then return "nobody there" end
+  if r.status == "dead" then return r.name .. " is dead — a Medkit can't help" end
+  if r.status ~= "afoot" then return "only someone on foot" end
+  if not r.downed and (r.hp or 1) >= 0.995 then return r.name .. " isn't hurt" end
+  if avatarCraft() then return "step out first" end
+  local pw = ref("planet_walker")
+  if pw and pw.onFoot == false then return "on foot only" end
+  if TREAT then return "already treating someone" end
+  if kit_count(by) < 1 then return "needs a Medkit — the depot sells them" end
+  local H = ref("item_hand")
+  if H and H.held and H.held() ~= "medkit" then return "hold the Medkit" end
+  local d = dist_to(by, target)
+  if not d then return "out of range" end
+  if d > medkit_rules().reach then return string.format("walk up to them (%.0f m away)", d) end
+  return nil
+end
+
+function treat(target)
+  local why = treatWhyNot(target)
+  if why then return false, why end
+  local M = medkit_rules()
+  local r = get(target)
+  local revive = r.downed and true or false
+  TREAT = { by = activeId(), target = target, kind = revive and "revive" or "heal",
+            secs = revive and M.revive_secs or M.heal_secs, done = 0, t0 = now() }
+  caption(string.format("%s %s — right-click → Cancel", revive and "REVIVING" or "TREATING", r.name))
+  log_(string.format("crew: #%d treats #%d (%s, %.0f s)", TREAT.by, target, TREAT.kind, TREAT.secs))
+  bump()
+  return true
+end
+
+cancel_treat = function(why)
+  if not TREAT then return false end
+  lastTreat = { by = TREAT.by, target = TREAT.target, kind = TREAT.kind, done = false, why = why or "cancelled", t = now() }
+  log_(string.format("crew: treatment of #%d stopped (%s)", TREAT.target, tostring(why)))
+  TREAT = nil
+  bump()
+  return true
+end
+function cancelTreat(why) return cancel_treat(why or "cancelled") end
+
+function treating()
+  if not TREAT then return nil end
+  local t = {}
+  for k, v in pairs(TREAT) do t[k] = v end
+  t.frac = math.min(1, TREAT.done / math.max(0.1, TREAT.secs))
+  return t
+end
+
+treat_tick = function(dt)
+  local T = TREAT
+  if not T then return end
+  local r = get(T.target)
+  if not r or r.status == "dead" then return cancel_treat("they died") end
+  if activeId() ~= T.by or avatarCraft() then return cancel_treat("control changed") end
+  local d = dist_to(T.by, T.target)
+  if not d or d > medkit_rules().reach + 1.0 then
+    log_(string.format("crew: the medic is %s m from #%d", d and string.format("%.1f", d) or "?", T.target))
+    return cancel_treat("walked away")
+  end
+  if kit_count(T.by) < 1 then return cancel_treat("the Medkit is gone") end
+  T.done = T.done + dt
+  if T.done < T.secs then return end
+  local inv = ref("inventory")
+  if inv and inv.removeItem then pcall(inv.removeItem, packOf(T.by), "medkit", 1) end
+  local M = medkit_rules()
+  local hp
+  if T.kind == "revive" then
+    hp = M.revive_hp
+    patch(T.target, { downed = false, hp = hp })
+  else
+    hp = math.min(1, (r.hp or 1) + M.heal)
+    patch(T.target, { hp = hp })
+  end
+  lastTreat = { by = T.by, target = T.target, kind = T.kind, done = true, hp = hp, t = now() }
+  TREAT = nil
+  local bc = ref("big_caption")
+  if T.kind == "revive" and bc and bc.show then
+    bc.show("ASTRONAUT REVIVED", string.format("%s is back on their feet (%d%%). Get them home to heal.", r.name, math.floor(hp * 100 + 0.5)), 5.0)
+  else
+    caption(string.format("%s treated — %d%%", r.name, math.floor(hp * 100 + 0.5)))
+  end
+  log_(string.format("crew: #%d %s by #%d, hp %.2f", T.target, T.kind == "revive" and "revived" or "healed", T.by, hp))
+  bump()
 end
 
 -- ── the monitor: impact, crush, heat (the avatar on foot; heat aboard) ─────
@@ -1965,6 +2273,7 @@ local function avatar_monitor(dt)
   if ride or now() < hold_imp or held(id) then
     MON.vx = nil
     MON.fall, MON.pinned, MON.crush_t = 0, false, 0
+    MON.air, MON.peak = 0, 0
     return
   end
   local vx, vy, vz = a.vx or 0, a.vy or 0, a.vz or 0
@@ -1973,15 +2282,21 @@ local function avatar_monitor(dt)
   -- (velocities are in the planet's rails frame: the ground is at rest)
   local gvx, gvy, gvz = 0, 0, 0
   local jumped = MON.x and len(a.x - MON.x, a.y - MON.y, a.z - MON.z) > math.max(30, len(vx, vy, vz) * dt * 4 + 10)
+  -- a teleport (a switch, a pickup, a probe) is no part of a fall: the
+  -- airborne peak starts again from here
+  if jumped then MON.air, MON.peak = 0, 0 end
   if MON.vx and MON.dom == d and not jumped then
     -- Δv this tick: all of it along the vertical (a fall, a landing), and
     -- sideways only past what the walker itself does in a tick (a run
     -- stopped dead is 9.4 m/s and hurts nobody; a rover at 25 m/s does)
-    -- Only speed LOST counts: falling speed the ground took away, and
-    -- sideways speed a crash took away. A push the other way (the ground
-    -- shoving a body back out after a dig under the boots, a collider
-    -- correcting an overlap) gains speed and hurts nobody; counting it as
-    -- an impact killed crew who were only digging.
+    -- A FALL is judged when it ends: the fastest the body fell while it was
+    -- off the ground (at least 0.2 s of it), taken away by the landing. Tick-to-tick wobble while walking (steps,
+    -- slopes, the capsule riding bumpy voxels, the ground pushing back after
+    -- a dig) is never a fall: it bled hp from crew who were only walking.
+    -- Sideways, only a crash counts: speed lost past what a run stopped dead
+    -- makes (a rover's crew thrown off), which a walker never reaches.
+    local pw = ref("planet_walker")
+    local on_ground = pw and (pw.grounded or pw.onGround) or false
     local dv = 0
     if b then
       local ux, uy, uz = a.x - b.x, a.y - b.y, a.z - b.z
@@ -1990,18 +2305,27 @@ local function avatar_monitor(dt)
         ux, uy, uz = ux / l, uy / l, uz / l
         local r0 = MON.vx * ux + MON.vy * uy + MON.vz * uz
         local r1 = vx * ux + vy * uy + vz * uz
-        local down = math.max(0, math.max(0, -r0) - math.max(0, -r1))
+        local down = 0
+        if not on_ground then
+          MON.air = (MON.air or 0) + dt
+          MON.peak = math.max(MON.peak or 0, -r1)
+        else
+          -- (the touchdown tick still carries the fall: the ground stops it
+          -- after, so the whole fall speed is what the landing takes away)
+          if (MON.air or 0) >= 0.2 then down = math.max(0, MON.peak or 0, -r1) end
+          MON.air, MON.peak = 0, 0
+        end
         local h0x, h0y, h0z = MON.vx - ux * r0, MON.vy - uy * r0, MON.vz - uz * r0
         local h1x, h1y, h1z = vx - ux * r1, vy - uy * r1, vz - uz * r1
-        local hs0, hs1 = len(h0x, h0y, h0z), len(h1x, h1y, h1z)
-        local side = math.max(0, hs0 - hs1 - P("walk_dv"))
+        local side = math.max(0, len(h0x, h0y, h0z) - len(h1x, h1y, h1z) - P("walk_dv"))
         dv = math.sqrt(down * down + side * side)
       end
     end
     local verdict, loss = impactRule(dv)
+    if verdict ~= "ok" and invincible() then verdict = "ok" end
     if verdict == "kill" then
       MON.vx = nil
-      kill(id, "impact", string.format("%.0f m/s", dv))
+      kill(id, "impact", string.format("%.0f m/s", dv), { over = dv / P("impact_kill") })
       return
     elseif verdict == "injure" and now() - MON.injured_t > 0.3 then
       MON.injured_t = now()
@@ -2009,11 +2333,25 @@ local function avatar_monitor(dt)
       local hp = math.max(0, (r and r.hp or 1) - loss)
       patch(id, { hp = hp })
       log_(string.format("crew: #%d hurt (%.1f m/s), hp %.2f", id, dv, hp))
-      if hp <= 0 then kill(id, "impact", string.format("%.0f m/s", dv)) return end
+      if hp <= 0 then kill(id, "impact", string.format("%.0f m/s", dv), { over = 1.0 }) return end
     end
   end
   MON.vx, MON.vy, MON.vz = vx, vy, vz
   MON.x, MON.y, MON.z = a.x, a.y, a.z
+  -- Knocks mend: 20 s after the last hurt, hp comes back 1% every 4 s
+  -- (written once a second, not every tick).
+  local hit = lastHit[id]
+  local calm = now() - math.max(MON.injured_t or -1e9, hit and hit.t or -1e9)
+  if calm > 20 then
+    MON.mend = (MON.mend or 0) + dt / 400
+    if MON.mend >= 0.0025 then
+      local r = get(id)
+      if r and r.status ~= "dead" and (r.hp or 1) < 1 then patch(id, { hp = math.min(1, (r.hp or 1) + MON.mend) }) end
+      MON.mend = 0
+    end
+  else
+    MON.mend = 0
+  end
   MON.dom = d
   if b then MON.bx, MON.by, MON.bz = b.x, b.y, b.z end
   -- the fall speed against the ground (the fall chip)
@@ -2059,6 +2397,7 @@ local function heat_monitor(dt)
   if heat_t < 0.25 then return end
   local step_ = heat_t
   heat_t = 0
+  local safe = invincible()
   for _, v in ipairs(vessels()) do
     if v.node and v.node.valid ~= false then
       local rate = v.heating or 0
@@ -2066,7 +2405,7 @@ local function heat_monitor(dt)
         if s.taken then
           local r = get(s.taken)
           if r then
-            local h, dead = heatStep(r.heat or 0, rate, s.open == true, step_)
+            local h, dead = heatStep(r.heat or 0, rate, s.open == true and not safe, step_)
             if math.abs(h - (r.heat or 0)) > 1e-4 then
               r.heat = h
               save.set(key(r.id), r)
@@ -2145,6 +2484,9 @@ end
 -- first frame the alias is there (then this costs one flag test).
 function update(node, dt)
   if not ensured then ensure() end
+  -- the Medkit's work: in the frame, where the avatar and the bodies are
+  -- read at the same moment (a physics tick sees them a rails carry apart)
+  treat_tick(dt or 0.016)
   -- ` : back to the last thing you controlled
   if input and input.pressed and input.pressed("`") then
     local gm = ref("game_manager")
@@ -2169,6 +2511,7 @@ function fixedUpdate(node, dt)
   run_queue()
   avatar_monitor(dt or 0.016)
   heat_monitor(dt or 0.016)
+  down_monitor(dt or 0.016)
 end
 
 function lateUpdate(node, dt)

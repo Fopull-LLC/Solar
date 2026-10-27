@@ -37,7 +37,9 @@ local function make(store)
                 spend = function(n) log.spent = log.spent + n; return true end },
     big_caption = { valid = true, show = function(t, s) log.caps[#log.caps + 1] = t .. ": " .. s end },
     flight_ops = { valid = true, crewHome = function() return 5, 102, 5 end },
-    planet_walker = { valid = true, breath = 1.0, airLeft = 1200, airCap = 1200, suitO2 = 1.0 },
+    -- the walker: on the ground unless the body is falling
+    planet_walker = setmetatable({ valid = true, breath = 1.0, airLeft = 1200, airCap = 1200, suitO2 = 1.0 },
+      { __index = function(_, k) if k == "grounded" then return (astro.vy or 0) >= -0.01 end end }),
   }
   local overlap = {}
   local E = setmetatable({
@@ -65,10 +67,10 @@ end
 
 -- ── the rules ──────────────────────────────────────────────────────────────
 local C = make({ g_seed = 3 })
-check(C.impactRule(5.9) == "ok", "5.9 m/s: nothing")
-local v, loss = C.impactRule(9.5)
-check(v == "injure" and math.abs(loss - 0.5) < 1e-9, "9.5 m/s injures by half (" .. tostring(loss) .. ")")
-check(C.impactRule(13.0) == "kill", "13 m/s kills")
+check(C.impactRule(8.9) == "ok", "8.9 m/s (a 4 m drop): nothing")
+local v, loss = C.impactRule(14.5)
+check(v == "injure" and math.abs(loss - 0.5) < 1e-9, "14.5 m/s injures by half (" .. tostring(loss) .. ")")
+check(C.impactRule(20.0) == "kill", "20 m/s kills")
 local t, dead = C.crushStep(0, true, 0.2)
 check(not dead, "0.2 s pinned: alive")
 t, dead = C.crushStep(t, true, 0.21)
@@ -102,13 +104,15 @@ check(C1.hireFee() == 1000, "the 4th astronaut costs $1,000")
 astro.vy = 0
 tick(C1, 2)
 astro.vy = -4
-tick(C1, 1)
-check(C1.get(1).status ~= "dead" and (C1.get(1).hp or 1) == 1, "a 4 m/s landing: nothing")
-astro.vy = -9.5
-tick(C1, 1)
+tick(C1, 15)
 astro.vy = 0
 tick(C1, 1)
-check(C1.get(1).status ~= "dead" and math.abs(C1.get(1).hp - 0.5) < 0.01, "a 9.5 m/s landing: hurt to hp 0.5 (" .. tostring(C1.get(1).hp) .. ")")
+check(C1.get(1).status ~= "dead" and (C1.get(1).hp or 1) == 1, "a 4 m/s landing: nothing")
+astro.vy = -14.5
+tick(C1, 15)
+astro.vy = 0
+tick(C1, 1)
+check(C1.get(1).status ~= "dead" and math.abs(C1.get(1).hp - 0.5) < 0.01, "a 14.5 m/s landing: hurt to hp 0.5 (" .. tostring(C1.get(1).hp) .. ")")
 -- a teleport (a switch) is not an impact
 astro.x, astro.vy = 500, -30
 tick(C1, 2)
@@ -116,17 +120,17 @@ astro.x, astro.vy = 0, 0
 tick(C1, 1)
 check(C1.get(1).status ~= "dead", "...but a tick that jumps position doesn't count: a teleport, a switch, a pickup")
 tick(C1, 3)
-astro.vy = -17
-tick(C1, 1)
+astro.vy = -33   -- (past 1.6 × impact_kill: no DOWNED state, dead outright)
+tick(C1, 15)
 astro.vy = 0
 tick(C1, 1)
 local r1 = C1.get(1)
-check(r1.status == "dead" and r1.died and r1.died.cause == "impact" and r1.died.detail == "17 m/s", "a 17 m/s landing kills: impact, 17 m/s")
+check(r1.status == "dead" and r1.died and r1.died.cause == "impact" and r1.died.detail == "33 m/s", "a 33 m/s landing kills outright: impact, 33 m/s")
 check(#L.drops == 1 and L.drops[1].from == "crew:1" and L.drops[1].items == true, "the whole pack drops as a crate")
 check(#L.places == 1 and L.places[1].kind == "remains" and L.places[1].by == 1, "the remains are placed")
 check(r1.died.crate == 41 and r1.died.remains == 71, "the record knows its crate and remains")
 check(L.rep == -2, "the agency loses 2 reputation")
-check(C1.lastDeath and C1.lastDeath.text:match("was killed: impact, 17 m/s"), "the caption: " .. tostring(C1.lastDeath and C1.lastDeath.text))
+check(C1.lastDeath and C1.lastDeath.text:match("was killed: impact, 33 m/s"), "the caption: " .. tostring(C1.lastDeath and C1.lastDeath.text))
 check(astro.visible == false, "the camera holds on the fallen (the avatar hidden there)")
 local mem = C1.memorial()
 check(#mem == 1 and mem[1].id == 1 and mem[1].died.cause == "impact", "the memorial lists them")
@@ -181,7 +185,7 @@ C4.setDeath(false)
 check(C4.deathOn() == false, "the Rescue switch")
 tick(C4, 3)
 a4.vy = -30
-tick(C4, 1)
+tick(C4, 15)
 a4.vy = 0
 tick(C4, 1)
 check(C4.get(1).status == "afoot" and C4.living() == 3, "a fatal fall with death off: rescued, alive")
@@ -192,6 +196,50 @@ check(C4.get(2).status == "base", "a destroyed cabin with death off: they wake a
 check(C4.blackoutEnd("suit") == false, "out of air with death off: planet_walker's own rescue")
 C4.setDeath(true)
 check(C4.blackoutEnd("hold") == true and C4.get(1).died.cause == "drowned", "out of air with death on: drowned")
+
+-- ── CREW SAFETY: the three-way switch, and Invincible ─────────────────────
+local s5 = { g_seed = 7 }
+local C5, a5, L5, sc5, set_overlap5 = make(s5)
+C5.start()
+C5.time = C5.time + 4  -- (the monitors wait 3 s after a scene starts)
+check(C5.safety() == "death", "a new save: Permadeath")
+local s5b = { g_seed = 8, ["crew.death"] = false }
+local C5b = make(s5b)
+check(C5b.safety() == "rescue" and C5b.deathOn() == false, "an old save's death-off boolean reads as Rescue")
+C5.setSafety("invincible")
+check(C5.invincible() and not C5.deathOn() and s5["crew.safety"] == "invincible" and s5["crew.death"] == false,
+  "Invincible: stored as crew.safety, crew.death kept in step")
+tick(C5, 3)
+a5.vy = -40
+tick(C5, 30)
+a5.vy = 0
+tick(C5, 1)
+check(C5.get(1).status == "afoot" and (C5.get(1).hp or 1) == 1 and a5.visible == true and L5.spent == 0,
+  "Invincible: a 40 m/s landing does nothing (hp " .. tostring(C5.get(1).hp) .. ")")
+a5.vy = -9.5
+tick(C5, 15)
+a5.vy = 0
+tick(C5, 1)
+check((C5.get(1).hp or 1) == 1, "...nor a 9.5 m/s one (no injury)")
+local hp5, why5 = C5.hurt(1, 0.8, "shot", "by Test, 30 m")
+check(hp5 == 1 and why5 == "invincible" and C5.get(1).hp == 1 and C5.alerts(1).hit == nil,
+  "Invincible: a rifle hit does nothing, no HIT chip")
+set_overlap5({ { node = { valid = true, id = 7, name = "LooseBoulder" } } })
+tick(C5, 60)
+check(C5.get(1).status == "afoot" and C5.alerts(1).pinned == false, "Invincible: a second under a boulder, not crushed, no chip")
+set_overlap5({})
+sc5.planet_walker.airLeft = 0
+local al = C5.alerts(1)
+check(al.o2_level == nil and al.o2 == 1 and al.safe == true, "Invincible: an empty suit raises no O2 chip")
+check(C5.kill(1, "oxygen") == false and C5.kill(1, "drowned") == false and C5.kill(1, "heat") == false
+  and C5.get(1).status == "afoot" and C5.living() == 3, "Invincible: oxygen, drowning, heat never kill")
+check(C5.blackoutEnd("suit") == false, "...and a blackout end is not a death")
+C5.patch(2, { status = "aboard", craft = "Kestrel" })
+C5.cabinLost(nil, 4, { 2 }, 0, 100, 0)
+check(C5.get(2).status ~= "dead" and C5.living() == 3, "Invincible: a lost cabin's crew live (" .. tostring(C5.get(2).status) .. ")")
+check(L5.rep == 0 and L5.spent == 0, "...no reputation lost, no fee")
+C5.setSafety("death")
+check(C5.deathOn() and s5["crew.death"] == true, "back to Permadeath")
 
 if #failures > 0 then
   for _, m in ipairs(failures) do print("FAIL: " .. m) end

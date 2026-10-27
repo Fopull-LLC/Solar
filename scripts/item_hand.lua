@@ -209,6 +209,9 @@ function hint()
   if d.use and d.use.provider == "repair" then
     return "Repair Kit in hand  ·  walk up to a damaged part, right-click it → Repair  ·  H put it away"
   end
+  if d.use and d.use.provider == "medkit" then
+    return "Medkit in hand  ·  right-click someone hurt or down (or yourself) → Use Medkit  ·  H put it away"
+  end
   return d.name
 end
 
@@ -1079,6 +1082,80 @@ local function pose_work(tk, dt)
   end
 end
 
+-- THE MEDKIT's work (crew.lua runs it): kneel at the patient, both hands on
+-- their chest, the pouch open on the ground beside; a ring and a line.
+local function pose_treat(T, dt)
+  local c = crew()
+  local a = astro()
+  if not (c and a) then return end
+  local px, py, pz
+  if T.target == T.by then
+    px, py, pz = a.x, a.y, a.z
+  else
+    local b = c.bodyOf and c.bodyOf(T.target)
+    if b and b.valid ~= false then px, py, pz = b.x, b.y, b.z end
+  end
+  if not px then return end
+  local ux, uy, uz = up_at(a.x, a.y, a.z)
+  local U = vec3(ux, uy, uz)
+  local downed = T.kind == "revive"
+  -- the chest: lying, a hand's breadth off the ground; standing, at the chest
+  local chest = vec3(px, py, pz) + U * (downed and -0.55 or 0.25)
+  if T.target == T.by then chest = vec3(a.x, a.y, a.z) + U * 0.2 end
+  local m, an = model()
+  if m and T.target ~= T.by then
+    local l = a:toLocal(chest)
+    if l.x * l.x + l.z * l.z > 1e-4 then m.yaw = math.atan2(l.x, l.z) end
+  end
+  local side = vec3(1, 0, 0)
+  if m and an and an.reach then
+    local o, Uu, F, Rt = frame_of(m)
+    side = Rt
+    local k = math.min(1, (T.done or 0) / 0.5)
+    if downed then pcall(an.addBoneRot, an, "Back", 0, 0.75 * k, 0, k) end
+    local wob = math.sin(now() * 5.0) * 0.02
+    local sh = an:boneWorld("Upperarm.Right")
+    local sl = an:boneWorld("Upperarm.Left")
+    if sh then pcall(an.reach, an, "Hand.Right", chest + Rt * (0.06 + wob) + U * 0.05, { pole = sh - Uu * 0.45 + Rt * 0.3, weight = k }) end
+    if sl then pcall(an.reach, an, "Hand.Left", chest - Rt * (0.06 - wob) + U * 0.05, { pole = sl - Uu * 0.45 - Rt * 0.3, weight = k }) end
+    pcall(an.lookAt, an, { "Back", "Head" }, chest, { limit = 60, weight = 0.8 })
+  end
+  -- the pouch, open on the ground beside them
+  local p = prop("medkit")
+  props_except("medkit")
+  if p then
+    local g = vec3(a.x, a.y, a.z) - U * 0.95 + side * 0.35
+    p:setUp(U, side)
+    p.x, p.y, p.z = g.x, g.y, g.z
+    if not p.visible then p.visible = true end
+  end
+  if camera and camera.worldToScreen and draw and draw.circle then
+    local q = chest + U * 0.6
+    local sx, sy, _, on = camera.worldToScreen(q.x, q.y, q.z)
+    local f = T.frac or 0
+    if on and sx then
+      local N = 32
+      local lit = math.floor(f * N + 0.5)
+      for i = 0, N - 1 do
+        local ang = -math.pi / 2 + i / N * 2 * math.pi
+        local px2, py2 = sx + math.cos(ang) * 26, sy + math.sin(ang) * 26
+        if i < lit then draw.circle(px2, py2, 2.2, 0.97, 0.55, 0.22, 0.95)
+        else draw.circle(px2, py2, 1.4, 0.92, 0.89, 0.81, 0.35) end
+      end
+    end
+    if draw.text and camera.screenRect then
+      local vx, vy, vw, vh = camera.screenRect()
+      local r = c.get and c.get(T.target)
+      if vw then
+        local txt = string.format("%s %s  ·  %d%%  ·  right-click → Cancel", downed and "REVIVING" or "TREATING",
+          string.upper(r and r.name or "crew"), math.floor(f * 100))
+        draw.text(vx + vw * 0.5, vy + vh * 0.78 + 1, txt, 16, 0, 0, 0, 0.6, "center")
+        draw.text(vx + vw * 0.5, vy + vh * 0.78, txt, 16, 1.0, 0.86, 0.62, 1.0, "center")
+      end
+    end
+  end
+end
+
 -- the plant: kneel, the right hand to the ground point
 local function pose_plant()
   local P = D.plant
@@ -1098,9 +1175,20 @@ end
 
 -- ── the frame ───────────────────────────────────────────────────────────────
 local carrying = false
+local function treating()
+  local c = crew()
+  if not (c and c.treating) then return nil end
+  local ok, t = pcall(c.treating)
+  return ok and t or nil
+end
+
 function update(node, dt)
   prompt = ""
   carrying = on_foot()
+  if treating() then
+    prompt = "treating  ·  right-click → Cancel"
+    return
+  end
   local tk = task()
   if tk then
     -- held at the work: the walker's keys stand down (crew_task's does it
@@ -1150,6 +1238,12 @@ function lateUpdate(node, dt)
   local fp = pc and pc.firstPerson == true
   local pw = ref("planet_walker")
   guard("worn", pose_worn, pw and pw.onFoot == true and not fp)
+  local T = treating()
+  if T then
+    ghosts_off()
+    guard("treat", pose_treat, T, dt)
+    return
+  end
   if tk and tk.kind == "repair" then
     ghosts_off()
     guard("work", pose_work, tk, dt)

@@ -132,6 +132,27 @@ function fixedUpdate(node, dt)
   node.vx, node.vy, node.vz = 0, 0, 0
   local ux, uy, uz = x - b.x, y - b.y, z - b.z
   local l = math.sqrt(ux * ux + uy * uy + uz * uz)
+  if l > 1e-6 and r.downed then
+    -- DOWN (crew.lua): lying on their back where they fell, the capsule laid
+    -- along the ground, the head the way they faced
+    ux, uy, uz = ux / l, uy / l, uz / l
+    local f = type(r.face) == "table" and r.face or nil
+    local fx, fy, fz = 1, 0, 0
+    if f then fx, fy, fz = f.x, f.y, f.z end
+    local d = fx * ux + fy * uy + fz * uz
+    fx, fy, fz = fx - ux * d, fy - uy * d, fz - uz * d
+    local fl = math.sqrt(fx * fx + fy * fy + fz * fz)
+    if fl < 1e-3 then
+      fx, fy, fz = uy, -ux, 0
+      if math.abs(uz) > 0.9 then fx, fy, fz = 0, uz, -uy end
+      fl = math.sqrt(fx * fx + fy * fy + fz * fz)
+    end
+    fx, fy, fz = fx / fl, fy / fl, fz / fl
+    local drop = P("half_h") - 0.3
+    node.x, node.y, node.z = x - ux * drop, y - uy * drop, z - uz * drop
+    node:setUp(vec3(fx, fy, fz), vec3(ux, uy, uz))
+    return
+  end
   if l > 1e-6 then
     local f = r.face
     if type(f) == "table" and f.x then

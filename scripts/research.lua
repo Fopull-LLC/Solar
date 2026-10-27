@@ -113,8 +113,11 @@ local function done()
   return save.get("res.done") or {}
 end
 
+-- A SANDBOX save (company.lua, `game.mode`) has the whole catalogue open from
+-- the start: money is no object there, so a research price is only a click.
 function isUnlocked(id)
   if not TECH[id] then return true end
+  if save.get("game.mode") == "sandbox" then return true end
   return done()[id] == true
 end
 

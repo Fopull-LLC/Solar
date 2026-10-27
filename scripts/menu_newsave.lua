@@ -14,8 +14,10 @@
 -- shape, motif, colours and letters, repaint any of its four colours, or use
 -- a picture of their own (scripts/emblem.lua's editor). Nothing there has to
 -- be touched: a new save made straight away is the "Solar Exploration
--- Agency" under a finished emblem. The crew-death switch sits under it
--- ("Crew can die" / "Rescue instead", crew.lua's `crew.death`).
+-- Agency" under a finished emblem. Two switches sit under it:
+--   GAME MODE    Career (today's rules) / Sandbox (unlimited funds, top
+--                reputation, every part unlocked: company.lua, `game.mode`)
+--   CREW SAFETY  Permadeath / Rescue / Invincible (crew.lua's `crew.safety`)
 
 open = false -- published: menu_slot opens the panel, buttons check it
 
@@ -45,7 +47,28 @@ local seed_str = ""
 -- The agency column.
 local AG_X, AG_W, PANEL_W, GAL_W = 604, 336, 960, 600
 local ed = nil             -- scripts/emblem.lua's editor state
-local death = true         -- crew can die (false: rescue instead)
+local mode = "career"      -- GAME MODE: "career" | "sandbox"
+local safety = "death"     -- CREW SAFETY: "death" | "rescue" | "invincible"
+
+local MODES = {
+  { "career", "Career", "Earn every dollar and build a name: contracts, research and standing gate the way up" },
+  { "sandbox", "Sandbox", "Unlimited funds, top reputation and every part unlocked; contracts still run" },
+}
+local SAFETIES = {
+  { "death", "Permadeath", "Astronauts can be lost: every danger is warned of first, and the roster keeps a memorial" },
+  { "rescue", "Rescue", "A crew member who would die is brought home instead, for a fee" },
+  { "invincible", "Invincible", "Nothing hurts the crew: no falls, shots, crushes, heat or running out of air" },
+}
+local function blurb(list, v)
+  for _, o in ipairs(list) do if o[1] == v then return o[3] end end
+  return ""
+end
+-- For probes: what CREATE will store, and a way to pick (as the buttons do).
+function options() return mode, safety end
+function setOptions(m, s)
+  if m == "career" or m == "sandbox" then mode = m end
+  if s == "death" or s == "rescue" or s == "invincible" then safety = s end
+end
 local panel_node = nil
 
 local function emblem_lib()
@@ -109,7 +132,7 @@ function openFor(n)
   slot_n = n
   seed_str = ""
   open = true
-  death = true
+  mode, safety = "career", "death"
   local e = emblem_lib()
   ed = e and e.newEditor and e.newEditor(nil, nil) or nil
   local lbl = find("NG Slot Label")
@@ -182,7 +205,9 @@ function press(role)
       save.set("agency.name", aname)
       save.set("agency.emblem", aspec)
     end
-    save.set("crew.death", death)
+    save.set("game.mode", mode)
+    save.set("crew.safety", safety)
+    save.set("crew.death", safety == "death")
     -- A new galaxy is made at the CURRENT world scale, and keeps it for life
     -- (system_generator SCALES; game_manager reads it back). The sliders above
     -- are already in that scale's units.
@@ -195,16 +220,21 @@ end
 local function describe_agency(e)
   local rows = e.editorRows(ed, AG_W, sfx)
   rows[#rows + 1] = { "box", key = "rule", style = "panel/rule", w = "100%", h = 1 }
-  rows[#rows + 1] = { "row", key = "death", w = "100%", h = 28, gap = 6, pad = 0, align = "center",
-    { "text", key = "l", style = "panel/label", w = 74, h = "fit", text = "Crew" },
-    { "button", key = "die", style = "panel/choice", w = "grow", h = 26, text = "Can die", selected = death,
-      textAlign = "center", textValign = "center",
-      tooltip = "Astronauts can be lost: every danger is warned of first, and the roster keeps a memorial",
-      onClicked = function() sfx("click"); death = true end },
-    { "button", key = "res", style = "panel/choice", w = "grow", h = 26, text = "Rescue instead", selected = not death,
-      textAlign = "center", textValign = "center",
-      tooltip = "A crew member who would die is brought home instead, for a fee",
-      onClicked = function() sfx("click"); death = false end } }
+  -- a labelled segmented choice and, under it, one line on what is picked
+  local function pick(key, text, list, cur, set)
+    local row = { "row", key = key, w = "100%", h = 28, gap = 6, pad = 0, align = "center",
+      { "text", key = "l", style = "panel/label", w = 74, h = "fit", text = text } }
+    for _, o in ipairs(list) do
+      row[#row + 1] = { "button", key = o[1], style = "panel/choice", w = "grow", h = 26, text = o[2],
+        selected = (o[1] == cur), textAlign = "center", textValign = "center", tooltip = o[3],
+        onClicked = function() if o[1] ~= cur then sfx("click") end; set(o[1]) end }
+    end
+    rows[#rows + 1] = row
+    rows[#rows + 1] = { "text", key = key .. "_h", style = "panel/hint", w = "100%", h = "fit", wrap = true,
+                        text = blurb(list, cur) }
+  end
+  pick("mode", "Mode", MODES, mode, function(v) mode = v end)
+  pick("safety", "Crew", SAFETIES, safety, function(v) safety = v end)
   return {
     { "box", key = "vr", pin = "topLeft", x = GAL_W - 2, y = 24, w = 1, h = 564, style = "panel/rule" },
     { "col", key = "agency", pin = "topLeft", x = AG_X, y = 22, w = AG_W, h = "fit", gap = 7, pad = 0,

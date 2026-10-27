@@ -46,6 +46,15 @@ ITEMS = {
                 hold = { prefab = "ItemRepairKit", grip = "left" },
                 use = { target = "part", provider = "repair" },
                 about = "patches, fasteners and a welder cartridge: one field repair of a damaged part" },
+  -- THE MEDKIT (crew.lua's treat): a trauma pouch. Light enough to always
+  -- carry one (1.5 kg, 2 L), dear enough not to carry ten ($150, a third of
+  -- a starter's pay-out), and slow and partial on purpose: +50 % hp over 4 s
+  -- of held work, or a member who is DOWN back on their feet at 25 % after 6
+  -- s. One use. It can't help the dead, nor give air to the suffocating.
+  medkit    = { name = "Medkit",        kind = "consumable", kg = 1.5,  L = 2,  cost = 150,  shop = true,
+                hold = { prefab = "ItemMedkit", grip = "left" },
+                use = { target = "crew", provider = "medkit" },
+                about = "a trauma pouch: dressings, a tourniquet and a stimulant. One use: +50% hp, or revive someone who is down" },
   beacon    = { name = "Relay Beacon",  kind = "deployable", kg = 6.0,  L = 18, cost = 80,   shop = true,
                 hold = { prefab = "ItemBeaconStowed", grip = "shoulder" },
                 deploy = { store = "comms", ghost = "RelayBeaconGhost", bad = "RelayBeaconGhostBad",
@@ -81,7 +90,11 @@ ITEMS = {
 
 -- The belt's order: tools first, then devices and deployables, then
 -- consumables with a hold. (Worn items are never on the belt.)
-ORDER = { "gravgun", "laser", "surveyor", "beacon", "flag", "repairkit", "rcspack", "o2tank" }
+ORDER = { "gravgun", "laser", "surveyor", "beacon", "flag", "repairkit", "medkit", "rcspack", "o2tank" }
+
+-- The Medkit's work (crew.lua runs it): seconds held at it, what it gives,
+-- and the reach from the medic to the patient (m).
+MEDKIT = { heal = 0.5, heal_secs = 4.0, revive_hp = 0.25, revive_secs = 6.0, reach = 2.6 }
 local KIND_RANK = { tool = 1, device = 2, deployable = 3, consumable = 4, worn = 9 }
 
 -- Litres by container family (docs §5.1). A cargo hold's litres come from its

@@ -10,7 +10,7 @@
 --                 rim flashes red
 --     HP 62%      injured (amber; red under 35%)
 --     HEAT        from heat 0.2 (amber), the alarm from 0.6 (red)
---     FALL 8 m/s  airborne: amber from 6 m/s, red "FATAL FALL" from 12
+--     FALL 12 m/s  airborne: amber past crew.impact_injure, red "FATAL FALL" near impact_kill
 --     PINNED      a red vignette and the chip
 --     CABIN FAILING · hold under 9 m/s   the crew part under 35%
 --   BLACKOUT: the screen dims toward black over the grace, a heartbeat plays.
@@ -65,13 +65,22 @@ function chipsOf(a)
   if (a.hp or 1) < 0.99 then out[#out + 1] = { "HP " .. pct(a.hp) .. "%", (a.hp or 1) < 0.35 and "danger" or "warn" } end
   if (a.heat or 0) >= 0.2 then out[#out + 1] = { "HEAT " .. pct(a.heat) .. "%", (a.heat or 0) >= 0.6 and "danger" or "warn" } end
   local f = a.fall or 0
-  if f >= 12 then out[#out + 1] = { string.format("FATAL FALL %.0f m/s", f), "danger" }
-  elseif f >= 6 then out[#out + 1] = { string.format("FALL %.0f m/s", f), "warn" } end
+  local cl = findScript and findScript("crew")
+  local inj = cl and cl.params and cl.params.impact_injure or 9
+  local kil = cl and cl.params and cl.params.impact_kill or 20
+  if f >= kil * 0.9 then out[#out + 1] = { string.format("FATAL FALL %.0f m/s", f), "danger" }
+  elseif f >= inj then out[#out + 1] = { string.format("FALL %.0f m/s", f), "warn" } end
   if a.pinned then out[#out + 1] = { "PINNED", "danger" } end
   if a.cabin and a.cabin < 0.35 then
     out[#out + 1] = { string.format("CABIN FAILING · hold under %.0f m/s", a.cabin_tol or 9), "warn" }
   end
   if a.blackout then out[#out + 1] = { string.format("BLACKOUT %.0f s", math.max(0, a.blackout)), "danger" } end
+  -- someone DOWN nearby, bleeding out (crew.lua): who, how long, how far
+  if a.down then
+    local nm = (a.down.name or "CREW"):match("^(%S+)") or "CREW"
+    out[#out + 1] = { string.format("%s DOWN · BLEEDING OUT %d s · %.0f m", nm:upper(),
+      math.max(0, math.floor((a.down.left or 0) + 0.5)), a.down.dist or 0), a.down.treated and "warn" or "danger" }
+  end
   return out
 end
 

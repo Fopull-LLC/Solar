@@ -19,6 +19,8 @@ frame is the one scripts/item_hand.lua carries it in:
                     its folded legs along +Y, slung over a shoulder.
   ItemFlagFurled    the company flag furled round its collapsed pole, in a
                     sleeve, along +Y.
+  ItemMedkit        a trauma pouch: +Y out of its carry loop (carried hanging
+                    from the left hand like the repair case), long side along +Z.
   ItemO2Tank        a spare breathing-oxygen bottle with its valve and quick-
                     disconnect, along +Y (clipped beside the PLSS).
 """
@@ -32,7 +34,7 @@ from mathutils import Matrix, Vector
 
 UV_M = 3.0
 WEAR = {"Enamel": "EnamelWorn", "GunPaint": "PaintWorn", "Hazard": "PaintWorn", "Olive": "PaintWorn",
-        "O2Green": "PaintWorn"}
+        "O2Green": "PaintWorn", "MedRed": "MedRed", "Webbing": "Webbing"}
 DECALS = {   # cells of textures/tools/tool_decals.png (gen_tools_blender.py's table)
     "hazard": (0, 288, 128, 32), "serial_a": (0, 336, 256, 32), "serial_b": (256, 336, 256, 32),
     "arrow": (0, 368, 128, 64), "bolts": (384, 368, 128, 64), "emblem": (384, 160, 128, 128),
@@ -265,6 +267,43 @@ def repair_kit():
     return {"grip": [0.0, H + 0.050, 0.0]}
 
 
+# ── the MEDKIT: a trauma pouch ─────────────────────────────────────────────
+#
+# A soft-sided pouch in faded rescue red: a padded body with a darker zip
+# seam all round, a white cross stitched on both faces, two compression
+# straps of olive webbing with metal buckles, a grab loop on top and a
+# tourniquet tucked under one strap. 20 cm long, 13 tall, 8 thick: 2 L.
+
+def medkit():
+    L, H, T = 0.20, 0.13, 0.078
+    box("body", "MedRed", (0, H * 0.5, 0), (T, H, L), bevel=0.022, segs=3)
+    box("zip", "Dark", (0, H * 0.80, 0), (T * 1.02, 0.007, L * 1.01), bevel=0.002)
+    for k in range(9):
+        box(f"zip_tooth{k}", "Chrome", (T / 2 + 0.002, H * 0.80, -0.08 + k * 0.02), (0.003, 0.006, 0.004))
+    box("zip_pull", "Chrome", (T / 2 + 0.004, H * 0.78, 0.085), (0.004, 0.022, 0.008), bevel=0.001)
+    # the white cross on both faces
+    for s_ in (-1, 1):
+        x = s_ * (T / 2 + 0.0015)
+        box(f"cross_v{s_}", "Enamel", (x, H * 0.45, 0), (0.003, 0.070, 0.022), bevel=0.0008)
+        box(f"cross_h{s_}", "Enamel", (x, H * 0.45, 0), (0.003, 0.022, 0.070), bevel=0.0008)
+    # two compression straps round the short way, with buckles
+    for sz in (-1, 1):
+        z = sz * 0.068
+        box(f"strap_top{sz}", "Webbing", (0, H + 0.002, z), (T * 0.96, 0.004, 0.024))
+        box(f"strap_bot{sz}", "Webbing", (0, -0.002, z), (T * 0.96, 0.004, 0.024))
+        for s_ in (-1, 1):
+            box(f"strap_side{sz}{s_}", "Webbing", (s_ * (T / 2 + 0.002), H * 0.5, z), (0.004, H * 1.02, 0.024))
+        box(f"buckle{sz}", "Dark", (T / 2 + 0.006, H * 0.62, z), (0.006, 0.028, 0.030), bevel=0.002)
+        bolt(f"buckle_pin{sz}", (T / 2 + 0.009, H * 0.62, z), (1, 0, 0), r=0.003)
+    # the grab loop on top
+    hose("loop", "Webbing", [(0, H + 0.004, -0.035), (0, H + 0.030, -0.022), (0, H + 0.036, 0.0),
+                             (0, H + 0.030, 0.022), (0, H + 0.004, 0.035)], 0.006, sides=6)
+    # a tourniquet tucked under the near strap
+    box("tq_band", "Rubber", (-(T / 2 + 0.006), H * 0.40, 0.068), (0.006, 0.090, 0.030), bevel=0.002)
+    cyl("tq_rod", "Dark", (-(T / 2 + 0.012), H * 0.62, 0.050), (-(T / 2 + 0.012), H * 0.62, 0.086), 0.004, segs=8)
+    return {"grip": [0.0, H + 0.030, 0.0]}
+
+
 # ── the RELAY BEACON, stowed ───────────────────────────────────────────────
 #
 # The planted beacon's mast telescoped down, its dish folded flat against
@@ -391,7 +430,8 @@ def main():
     argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
     path = argv[0] if argv else "/tmp/items_mesh.json"
     res = {}
-    for name, fn in (("repairkit", repair_kit), ("beacon", beacon_stowed), ("flag", flag_furled), ("o2tank", o2_tank)):
+    for name, fn in (("repairkit", repair_kit), ("beacon", beacon_stowed), ("flag", flag_furled), ("o2tank", o2_tank),
+                     ("medkit", medkit)):
         reset()
         anchors = fn()
         geo = export()

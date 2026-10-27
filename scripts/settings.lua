@@ -752,6 +752,21 @@ local function agency_rows(out)
   else
     out[#out + 1] = hint("agx", "The agency's name and emblem are set per save; load one to change them.")
   end
+  -- CREW SAFETY, per save (crew.lua), changeable any time; the game mode is
+  -- fixed when the save is made, so it is only said here.
+  local cr = ref("crew")
+  if cr and cr.safety and cr.setSafety then
+    out[#out + 1] = { "box", key = "cs_rule", style = "panel/rule", w = "100%", h = 1 }
+    out[#out + 1] = choice("cs", "Crew safety", {
+      { label = "Permadeath", value = "death" }, { label = "Rescue", value = "rescue" },
+      { label = "Invincible", value = "invincible" },
+    }, cr.safety(), function(v) cr.setSafety(v) end)
+    local co = ref("company")
+    local sandbox = co and co.isSandbox and co.isSandbox()
+    out[#out + 1] = hint("csh", (sandbox and "A Sandbox save: unlimited funds, top reputation, every part unlocked. "
+      or "A Career save. ") .. "Crew safety applies to this save only: Permadeath can lose an astronaut, "
+      .. "Rescue brings them home for a fee, Invincible means nothing hurts them.")
+  end
 end
 
 local TABS = {
@@ -792,7 +807,8 @@ function rows(w)
                         align = "start", items = body, function(x) return x end }
     end
   end
-  out[#out + 1] = hint("saved", "Saved as you change them, for every save on this machine.")
+  out[#out + 1] = hint("saved", tab == "agency" and "The agency and its crew safety belong to the save that is loaded."
+    or "Saved as you change them, for every save on this machine.")
   return out
 end
 

@@ -2,7 +2,7 @@
 """Held items: the Repair Kit, the stowed Relay Beacon, the furled Company Flag
 and the Oxygen Tank (docs/crew-and-items.md §5).
 
-    python3 tools/gen_items.py
+    python3 tools/gen_items.py [item …]     (only those, e.g. medkit; default all)
 
 Builds each item in Blender (tools/gen_items_blender.py, headless), then writes
 models/items/<item>.glb and prefabs/Item*.prefab.ron. The look is the hand
@@ -35,6 +35,8 @@ MATS = {
     "Hazard":     lambda: mat_ron("paint", color=(0.95, 0.72, 0.12), hull=False),
     "Olive":      lambda: mat_ron("rubber", color=(0.36, 0.37, 0.27), metal=0.0, hull=False),
     "O2Green":    lambda: mat_ron("paint", color=(0.22, 0.42, 0.26), hull=False),
+    "MedRed":     lambda: mat_ron("rubber", color=(0.55, 0.13, 0.10), metal=0.0, hull=False),
+    "Webbing":    lambda: mat_ron("rubber", color=(0.30, 0.31, 0.24), metal=0.0, hull=False),
     "Anodised":   lambda: mat_ron("metal", color=(0.42, 0.47, 0.55), rough=0.85, metal=0.5, hull=False),
     "Chrome":     lambda: mat_ron("metal", color=(1.0, 1.0, 1.0), rough=0.4, metal=0.85, hull=False),
     "Dark":       lambda: mat_ron("metal", color=(0.16, 0.16, 0.17), rough=1.3, metal=0.3, hull=False),
@@ -53,6 +55,8 @@ ITEMS = (
      "RELAY BEACON, stowed — folded and strapped, carried over the shoulder (scripts/item_hand.lua)."),
     ("flag", "flag_furled.glb", "ItemFlagFurled",
      "COMPANY FLAG, furled — the cloth rolled in its sleeve round the collapsed pole, over the shoulder (scripts/item_hand.lua)."),
+    ("medkit", "medkit.glb", "ItemMedkit",
+     "MEDKIT — a trauma pouch, carried by its grab loop (scripts/item_hand.lua); used on the injured and the downed (scripts/crew.lua)."),
     ("o2tank", "o2_tank.glb", "ItemO2Tank",
      "OXYGEN TANK — a spare breathing-oxygen bottle, clipped beside the suit's PLSS while carried (scripts/item_hand.lua)."),
 )
@@ -119,7 +123,10 @@ def main():
     os.makedirs(MODELS, exist_ok=True)
     data = blender_items()
     print("ITEMS (relative to each model's centre, metres):")
+    only = set(sys.argv[1:])
     for key, glb, pf, about in ITEMS:
+        if only and key not in only:
+            continue
         m, c, size = model_of(data[key])
         write_glb(m, os.path.join(MODELS, glb))
         with open(os.path.join(PREFABS, pf + ".prefab.ron"), "w") as f:

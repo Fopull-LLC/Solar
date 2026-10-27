@@ -439,6 +439,8 @@ local function breathe(node, dt, under, aboard, ux, uy, uz)
     o2Left = breath * secs
   end
   local out = (src == "hold" and breath <= 0) or (src == "suit" and airLeft <= 0)
+  -- CREW SAFETY "invincible" (crew.lua): the gauge reads empty, nobody blacks out
+  if out and c and c.invincible and c.invincible() then out = false end
   if out then
     downed, down_t, down_src = true, 0.0, src
     drowned = drowned + 1

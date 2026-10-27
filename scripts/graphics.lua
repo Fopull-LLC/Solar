@@ -269,11 +269,9 @@ local function dof_want(p)
     if not (map_ref and map_ref.valid ~= false) then map_ref = findScript("orbit_map") end
   end
   if map_ref and map_ref.map_view then return nil end
-  -- The seat view's interior is a stacked camera's picture laid in before
-  -- post-processing, over the main camera's depth (the world beyond the hull):
-  -- a depth blur would blur the cabin as if it were the far hills.
-  if not (pc_ref3 and pc_ref3.valid ~= false) then pc_ref3 = findScript and findScript("planet_camera") or nil end
-  if pc_ref3 and pc_ref3.cockpit and pc_ref3.seatView and not pc_ref3.seatView.open then return nil end
+  -- (The seat view's cabin is a stacked camera drawn after depth of field,
+  -- post = "after" in planet_camera, so the blur reaches only the world
+  -- outside the windows.)
   local px = p.dof[1]
   if camera and camera.screenSize then
     local _, h = camera.screenSize()

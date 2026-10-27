@@ -171,14 +171,20 @@ local function run_ivapod2()
   IV.check("seat_list", n == 3, "%d seats to step through", n)
   for k = 1, n do
     enter_seat(vc, k)
-    local g = gpu_avg(60)
-    P("IV GPU seat view %d: total %.3f ms", k, g)
+    local g, passes = gpu_avg(60)
+    local list = {}
+    for nm, ms in pairs(passes or {}) do if ms > 0.05 then list[#list + 1] = string.format("%s %.2f", nm, ms) end end
+    table.sort(list)
+    P("IV GPU seat view %d: total %.3f ms; passes: %s", k, g, table.concat(list, ", "))
     look_round("seat" .. k, k > 1 and { fwd = true, left = true, right = true, back = true } or nil)
   end
   pc.setCockpit(false)
   wait(0.5)
-  local g0 = gpu_avg(60)
-  P("IV GPU orbit view (no seat): total %.3f ms", g0)
+  local g0, p0 = gpu_avg(60)
+  local l0 = {}
+  for nm, ms in pairs(p0 or {}) do if ms > 0.05 then l0[#l0 + 1] = string.format("%s %.2f", nm, ms) end end
+  table.sort(l0)
+  P("IV GPU orbit view (no seat): total %.3f ms; passes: %s", g0, table.concat(l0, ", "))
   IV.result()
 end
 
