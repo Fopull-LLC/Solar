@@ -1,0 +1,30 @@
+// Heat shimmer behind a running turbojet (Distortion blend: bends the scene
+// behind it). prefabs/FxJet's "Jet Haze" node; off on Low.
+(
+    name: "JetHaze",
+    lifetime: 0.5,
+    playback: Looping,
+    end: Destroy,
+    tracks: [
+        (
+            name: "Haze",
+            render: Billboard(texture: Some("textures/vfx/distort/haze.png")),
+            blend: Distortion,
+            distortion: 0.045,
+            soft: 0.4,
+            space: Local,
+            clips: [(start: 0.0, end: 0.55, lifetime_jitter: 0.25, emit: Some(Rate(rate: 36.0)))],
+            automation: [],
+            shape: Cone(angle: 5.0, radius: 0.3),
+            velocity: Range(Vec3((0.0, 16.0, 0.0)), Vec3((0.0, 26.0, 0.0))),
+            size: Curve((keys: [(t: 0.0, v: F32(0.8), interp: Linear), (t: 1.0, v: F32(3.2), interp: Linear)], extrapolate: Clamp)),
+            rotation: Range(Vec3((0.0, 0.0, 0.0)), Vec3((0.0, 0.0, 6.283))),
+            angular_velocity: Const(Vec3((0.0, 0.0, 0.0))),
+            color: Curve((keys: [(t: 0.0, v: Rgba((1.0, 1.0, 1.0, 0.0)), interp: Linear), (t: 0.12, v: Rgba((1.0, 1.0, 1.0, 1.0)), interp: Linear), (t: 1.0, v: Rgba((1.0, 1.0, 1.0, 0.0)), interp: Linear)], extrapolate: Clamp)),
+            gravity: 0.0,
+            drag: 0.8,
+        ),
+    ],
+    seed: 1,
+    gravity_mode: Field,
+)

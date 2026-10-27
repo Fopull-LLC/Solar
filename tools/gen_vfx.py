@@ -929,8 +929,10 @@ def weather():
         # Curtains: the grey veils a heavy shower hangs in, sweeping by on the wind.
         T("Veil", TX + "smoke/soft.png", space="World", inherit=1.0, gravity=0.4, forces=[wind(1.0)], clips=burst(2, 0, L, 0.2, cj=0.5),
           shape=box(30, 4, 30), vel=R((0, -3.5, 0), (0, -2.5, 0)), size=R(5.0, 9.0), rot=R((0, 0, 0), RAD),
-          color=K([(0, (0.55, 0.58, 0.62, 0)), (0.3, (0.55, 0.58, 0.62, 0.07)), (1, (0.55, 0.58, 0.62, 0))]),
-          soft=1.5),
+          # unlit and faint: a lit veil caught the sky light and showed as
+          # bright white blobs against a dark storm (most of all at the pad)
+          color=K([(0, (0.42, 0.45, 0.49, 0)), (0.3, (0.42, 0.45, 0.49, 0.045)), (1, (0.42, 0.45, 0.49, 0))]),
+          soft=1.5, lit=False),
     ]
     effect("RainPatch", L, tracks, header="""
 A patch of rain, fired a few metres over the camera by weather.lua several

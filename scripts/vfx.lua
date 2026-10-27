@@ -16,10 +16,16 @@
 -- with the ground, on the same clock, so nothing drifts or jitters. Two rules
 -- follow, and both are easy to get wrong:
 --
---   * `opts.vel` is RELATIVE to that planet. The craft velocities the vessel
---     hands us are world velocities, so the planet's own is taken off here.
---     (Adding it, as the pre-0.112 workaround did, throws the effect off at
---     orbital speed.)
+--   * `opts.vel` is RELATIVE to that planet — and so is every velocity
+--     physics reports (assembly.info's vel, node.vel): a body in a planet's
+--     sphere of influence is simulated in that planet's frame and CARRIED
+--     along its rails (node.carry), so its velocity never holds the planet's.
+--     Taking the planet's velocity off again (as this script did until
+--     2026-10-26) threw every spark, smoke puff and piece of debris off at
+--     the world's orbital speed — ~180 m/s on the home world — so they were
+--     gone in a frame, and pointed the reentry plasma along the orbit instead
+--     of into the airflow. (Adding it, as the pre-0.112 workaround did, was
+--     the same mistake the other way.)
 --   * `opts.normal` is the effect's +Y: a cone fires off the surface, a ring
 --     lies on it, and Field gravity still points at the planet.
 --
@@ -27,6 +33,12 @@
 -- beam and impact, the launch blast (one looping node per planet, parented to
 -- it so it rides it), the reentry plasma (follows the craft) and a few flash
 -- lights.
+--
+-- A craft's own feedback — jet exhaust, engine and reentry heat glow, tyre
+-- marks and dust, knocks and shorting parts — is scripts/vehicle_fx.lua
+-- (docs/vfx-feedback.md). This script spawns its node, and hands it what
+-- the vessel tells this one: each burning engine (flame), the reentry
+-- heating (heat) and a scrape (scrape).
 
 defaults = {
   --- Master switch for everything this script adds (callers fall back to
@@ -49,6 +61,18 @@ end
 
 local now = 0
 local spawned = 0                -- one-shots fired (stats)
+local vfx2 = { ref = nil, asked = false }   -- scripts/vehicle_fx.lua
+local function vehicle_fx()
+  local r = vfx2.ref
+  if r and r.valid then return r end
+  r = findScript and findScript("vehicle_fx") or nil
+  if not r and not vfx2.asked and spawn then
+    vfx2.asked = true
+    pcall(spawn, "VehicleFx", vec3(0, 0, 0))
+  end
+  vfx2.ref = r
+  return r
+end
 local lights = {}                -- live flashes
 local engines = {}               -- flame node id → state, refreshed every frame by flame()
 local smolders = {}              -- uid → last reported position and velocity
@@ -92,10 +116,11 @@ local function frame(x, y, z)
   return name, b, ux, uy, uz, air_at(x, y, z, name, b)
 end
 
--- A world velocity (what physics reports) as one relative to the planet.
+-- A velocity physics reports, for an effect: already relative to the planet
+-- whose frame the body rides (see THE FRAME above), so it passes as it is.
 local function rel(b, vx, vy, vz)
   if not vx then return nil end
-  return vec3(vx - (b and b.vx or 0), vy - (b and b.vy or 0), vz - (b and b.vz or 0))
+  return vec3(vx, vy, vz)
 end
 
 -- Dust takes the colour of the ground it comes off: the generator's surface
@@ -136,6 +161,12 @@ local function fire(key, x, y, z, o)
   spawned = spawned + 1
   spawnEffect(key, vec3(x, y, z), opts)
 end
+
+-- The same, for vehicle_fx.lua (and any other caller): a one-shot in the
+-- planet's frame. `o.vel` is RELATIVE to the planet here.
+function emit(key, x, y, z, o) fire(key, x, y, z, o) end
+-- A world's dust colour (nil: the authored tan).
+function dustTint(name) return dust_tint(name) end
 
 -- ── light flashes: a few PointLight nodes per planet, parented to it ────────
 -- A keyed envelope { {t, v}, ... } at time `t`, linear between keys, 0 outside.
@@ -308,7 +339,8 @@ function markList()
 end
 
 -- ════════════════════════════════════════════════════════════════════════════
--- THE CALLS (positions are world points; velocities are world velocities)
+-- THE CALLS (positions are world points; velocities as physics reports them:
+-- relative to the planet whose frame the body rides)
 -- ════════════════════════════════════════════════════════════════════════════
 
 -- A craft or part blowing up. `big` = a tank or engine (fuel), else a strut.
@@ -324,6 +356,9 @@ function explode(x, y, z, vx, vy, vz, big)
   fire(big and "Explosion" or "ExplosionSmall", x + ux * lift, y + uy * lift, z + uz * lift,
     { vel = v and vec3(v.x * k, v.y * k, v.z * k) })
   flash(x + ux * 2, y + uy * 2, z + uz * 2, 1.0, 0.62, 0.3, big and 40 or 16, big and 45 or 22, big and 1.4 or 0.8)
+  -- the part itself coming apart: shards of plate and skin (the explosion's
+  -- own debris is rock, thrown out of the ground)
+  fire("PartDebris", x, y, z, { vel = v, intensity = big and 1.4 or 1.0 })
   if sd and sd < (big and 7 or 4) then
     local gx, gy, gz = x - ux * sd, y - uy * sd, z - uz * sd
     fire("GroundShock", gx + ux * 0.3, gy + uy * 0.3, gz + uz * 0.3, { intensity = big and 1.3 or 0.7, dust = true })
@@ -352,6 +387,9 @@ function scrape(x, y, z, vx, vy, vz)
   local _, b = body_at(x, y, z)
   fire("Sparks", x, y, z, { vel = rel(b, vx, vy, vz) })
   fire("ScrapeDust", x, y, z, { dust = true })
+  -- and a gouge left where it bit (the pad as well as the ground)
+  local v2 = vehicle_fx()
+  if v2 and v2.scuff then v2.scuff(x, y, z, vx, vy, vz) end
 end
 
 -- Landing legs (or a hull) meeting the ground at `speed` m/s.
@@ -451,6 +489,7 @@ end
 
 function flame(f, live, pct)
   if not (f and f.valid ~= false) then return end
+  local par = f.parent
   local id = f.__id or f
   local st = engines[id]
   if not st then
@@ -489,6 +528,9 @@ function flame(f, live, pct)
   if light then
     light.intensity = live and (0.8 + (pct or 0) * 4.0) * (0.85 + 0.3 * math.random()) or 0.0
   end
+  -- The bell's heat, its light-off and shut-down (vehicle_fx.lua).
+  local v2 = vehicle_fx()
+  if v2 and v2.burn and par then v2.burn(par, live, pct, st.air, f) end
 end
 
 -- Exhaust smoke left in the air, and the blast where the plume meets the ground.
@@ -576,6 +618,9 @@ end
 -- plasma node is put on the craft's leading face in lateUpdate.
 function heat(vnode, glow, vx, vy, vz)
   if not (vnode and vnode.valid ~= false) then return end
+  -- the hull cooking and the wake behind it (vehicle_fx.lua)
+  local v2 = vehicle_fx()
+  if v2 and v2.reentry then v2.reentry(vnode, glow, vx, vy, vz) end
   reentry = reentry or {}
   local r = reentry
   r.v, r.glow, r.vx, r.vy, r.vz, r.t = vnode, glow, vx, vy, vz, now
@@ -679,7 +724,7 @@ local function swim_tick()
   local r = len(rx, ry, rz)
   local ux, uy, uz = rx / r, ry / r, rz / r
   local depth = seaR - r          -- feet below the surface
-  local vx, vy, vz = (a.vx or 0) - (b.vx or 0), (a.vy or 0) - (b.vy or 0), (a.vz or 0) - (b.vz or 0)
+  local vx, vy, vz = a.vx or 0, a.vy or 0, a.vz or 0   -- (planet-relative, see THE FRAME)
   local vr = vx * ux + vy * uy + vz * uz
   local spd = len(vx - ux * vr, vy - uy * vr, vz - uz * vr)
   local sx, sy, sz = b.x + ux * seaR, b.y + uy * seaR, b.z + uz * seaR
@@ -700,6 +745,7 @@ end
 function update(node, dt)
   now = time or (now + dt)
   if params.on == false then return end
+  if not vfx2.asked then vehicle_fx() end
   engines_tick()
   -- Smouldering parts: a puff every so often along the extrapolated path
   -- (velocity relative to the planet, so the path is the one you see).

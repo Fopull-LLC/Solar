@@ -11,11 +11,24 @@
 // (node:setShaderParam fans out to every part material wearing this shader).
 // `tint` is the material's colour (the shader replaces the built-in look, so
 // the colour the material carries is handed in here).
+//
+// HEAT (scripts/vehicle_fx.lua): `heat` 0 cold … 1 bright orange-red … 1.4
+// yellow-white, a blackbody-like glow added on top of the lit surface, so a
+// nozzle after a long burn or a hull through reentry glows in the dark and
+// shows against daylight once it is properly hot. `flow` is the airflow's
+// direction in the world (the craft's velocity, unit) for reentry: faces
+// turned into it glow, the lee side stays dark. (0,0,0) = glow all over (an
+// engine's own heat). The glow is broken up by the same soot noise as the
+// scorch, so it reads as uneven metal, not a lamp.
 shader hullPanels {
   stage fragment
   uniform tint:   color = #FFFFFF
   // Battle damage, 0 pristine … 1 wrecked.
   uniform damage: float = 0.0 range(0, 1)
+  // Heat glow, 0 cold … 1 orange-red … 1.4 yellow-white.
+  uniform heat:   float = 0.0 range(0, 1.5)
+  // Airflow direction (world, unit) for a windward-only glow; zero = all over.
+  uniform flow:   vec3 = vec3(0, 0, 0)
 
   let albedo = baseTexture().rgb * tint.rgb * instanceColor.rgb
 
@@ -31,9 +44,23 @@ shader hullPanels {
   // with damage so a wrecked hull is criss-crossed with scuffs.
   let gouge   = (1.0 - smoothstep(0.0, 0.06 + 0.18 * dmg, worley(objectPos * 3.2))) * vis
   // Dents: mid-frequency shading break-up, so the surface looks beaten.
-  let dents   = mix(1.0, 0.45 + 0.55 * (fbm(objectPos * 5.5, octaves: 3.0) * 0.5 + 0.5), vis)
+  let n55     = fbm(objectPos * 5.5, octaves: 3.0) * 0.5 + 0.5
+  let dents   = mix(1.0, 0.45 + 0.55 * n55, vis)
   let burnt   = mix(albedo, vec3(0.03, 0.025, 0.022), scorch)
   let scarred = mix(burnt, vec3(0.66, 0.64, 0.6), saturate(gouge)) * dents
 
-  output color = vec4(litPbr(scarred), 1.0)
+  // ── heat ───────────────────────────────────────────────────────────────────
+  let h       = clamp(heat, 0.0, 1.5)
+  // windward mask: 1 everywhere with no flow, else the faces turned into it
+  let fl      = length(flow)
+  let lead    = mix(1.0, smoothstep(-0.15, 0.7, dot(normal, flow / max(fl, 0.001))), saturate(fl))
+  // blackbody-ish: dull cherry → orange-red → yellow-white
+  let bb      = mix(vec3(0.55, 0.035, 0.0), vec3(1.0, 0.3, 0.04), smoothstep(0.15, 0.85, h))
+  let bbw     = mix(bb, vec3(1.0, 0.72, 0.42), smoothstep(0.95, 1.4, h))
+  let mottle  = 0.42 + 0.9 * n55
+  let glowk   = h * h * (0.35 + 3.2 * h * h) * lead * mottle
+  // hot metal darkens and loses its sheen under its own glow (oxide)
+  let cooked  = scarred * (1.0 - 0.45 * saturate(h * 1.6) * lead)
+
+  output color = vec4(litPbr(cooked) + bbw * glowk, 1.0)
 }

@@ -1,0 +1,23 @@
+// REENTRY WAKE — scripts/vfx.lua puts it on the lee side of a craft in the
+// plasma (local +Y = downstream) and drives it by the heating, beside
+// FxReentry on the windward face. Effect: tools/gen_vfx_vehicle.py.
+[
+    (
+        name: "FxReentryWake",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: PointLight(
+            color: (1.0, 0.5, 0.3),
+            intensity: 0.0,
+            range: 30.0,
+        ),
+        scripts: [],
+        particles: Some((
+            asset: "vfx/ReentryWake",
+            play_on_start: false,
+        )),
+    ),
+]

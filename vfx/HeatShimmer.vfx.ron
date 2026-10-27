@@ -1,0 +1,30 @@
+// Shimmer rising off a hot nozzle after the burn (Distortion; +Y = up).
+(
+    name: "HeatShimmer",
+    lifetime: 1.2,
+    playback: OneShot,
+    end: Destroy,
+    tracks: [
+        (
+            name: "Haze",
+            render: Billboard(texture: Some("textures/vfx/distort/haze.png")),
+            blend: Distortion,
+            distortion: 0.03,
+            soft: 0.3,
+            space: Local,
+            clips: [(start: 0.0, end: 1.2, lifetime_jitter: 0.3, emit: Some(Burst(count: 3, count_jitter: 0.2, pulses: 1, interval: 0.0, interval_jitter: 0.2)))],
+            automation: [],
+            shape: Sphere(radius: 0.35, shell: false),
+            velocity: Range(Vec3((-0.2, 1.0, -0.2)), Vec3((0.2, 2.2, 0.2))),
+            size: Curve((keys: [(t: 0.0, v: F32(0.7), interp: Linear), (t: 1.0, v: F32(1.8), interp: Linear)], extrapolate: Clamp)),
+            rotation: Range(Vec3((0.0, 0.0, 0.0)), Vec3((0.0, 0.0, 6.283))),
+            angular_velocity: Const(Vec3((0.0, 0.0, 0.0))),
+            color: Curve((keys: [(t: 0.0, v: Rgba((1.0, 1.0, 1.0, 0.0)), interp: Linear), (t: 0.2, v: Rgba((1.0, 1.0, 1.0, 0.9)), interp: Linear), (t: 1.0, v: Rgba((1.0, 1.0, 1.0, 0.0)), interp: Linear)], extrapolate: Clamp)),
+            gravity: 0.0,
+            drag: 0.0,
+            forces: [Wind(coupling: 1.0)],
+        ),
+    ],
+    seed: 1,
+    gravity_mode: Field,
+)

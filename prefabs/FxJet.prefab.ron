@@ -1,0 +1,96 @@
+// TURBOJET EXHAUST — spawned by scripts/vehicle_fx.lua on a turbojet part
+// (parented to it, at the nozzle, turned so local +Y points out of it). Each
+// child is one effect so each can be driven (and left off on Low) on its own:
+// the plume and its light by the spool, the shimmer, the soot, the contrail.
+// Effects: tools/gen_vfx_vehicle.py.
+[
+    (
+        name: "FxJet",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+    ),
+    (
+        name: "Jet Plume",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: PointLight(
+            color: (1.0, 0.55, 0.25),
+            intensity: 0.0,
+            range: 9.0,
+        ),
+        scripts: [],
+        particles: Some((
+            asset: "vfx/JetPlume",
+            play_on_start: false,
+        )),
+        parent: Some(0),
+    ),
+    (
+        name: "Jet Haze",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+        particles: Some((
+            asset: "vfx/JetHaze",
+            play_on_start: false,
+        )),
+        parent: Some(0),
+    ),
+    (
+        name: "Jet Smoke",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+        particles: Some((
+            asset: "vfx/JetSmoke",
+            play_on_start: false,
+        )),
+        parent: Some(0),
+    ),
+    (
+        name: "Jet Contrail",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+        particles: Some((
+            asset: "vfx/JetContrail",
+            play_on_start: false,
+        )),
+        parent: Some(0),
+    ),
+    (
+        name: "Contrail Puffs",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+        particles: Some((
+            asset: "vfx/ContrailPuffs",
+            play_on_start: false,
+        )),
+        parent: Some(0),
+    ),
+]

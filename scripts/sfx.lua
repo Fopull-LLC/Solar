@@ -96,6 +96,11 @@ local WORLD = {
               0.38, 2, 25 },
   wade    = { { "audio/water/splash_1.ogg", "audio/water/splash_2.ogg", "audio/water/splash_3.ogg" },
               0.22, 3, 50 },
+  -- scripts/vehicle_fx.lua: a torn-up part shorting out, a hard knock on the
+  -- hull, a fast tyre meeting the ground
+  zap     = { { F .. "radio_crackle.ogg" }, 0.16, 2, 25 },
+  knock   = { { F .. "steel_drop.ogg" }, 0.35, 4, 60 },
+  tyre    = { seq(K .. "impactSoft_heavy_", 0, 4), 0.35, 3, 50 },
 }
 
 -- A sale that also pays a discovery premium is two ledger entries in one

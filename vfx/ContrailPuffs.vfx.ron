@@ -1,0 +1,32 @@
+// The contrail spreading and breaking up behind the ribbon (World track, wind).
+// High and Ultra only.
+(
+    name: "ContrailPuffs",
+    lifetime: 7.0,
+    playback: Looping,
+    end: Destroy,
+    tracks: [
+        (
+            name: "Puff",
+            render: Billboard(texture: Some("textures/vfx/smoke/soft.png")),
+            blend: Alpha,
+            lit: true,
+            translucency: 0.6,
+            soft: 2.0,
+            space: World,
+            clips: [(start: 0.0, end: 7.0, lifetime_jitter: 0.3, emit: Some(Rate(rate: 16.0)))],
+            automation: [],
+            shape: Sphere(radius: 0.4, shell: false),
+            velocity: Range(Vec3((-0.3, 2.0, -0.3)), Vec3((0.3, 5.0, 0.3))),
+            size: CurveRange((keys: [(t: 0.0, v: F32(1.0), interp: Linear), (t: 0.3, v: F32(3.0), interp: Linear), (t: 1.0, v: F32(6.5), interp: Linear)], extrapolate: Clamp), (keys: [(t: 0.0, v: F32(0.65), interp: Linear), (t: 0.3, v: F32(1.95), interp: Linear), (t: 1.0, v: F32(4.225), interp: Linear)], extrapolate: Clamp)),
+            rotation: Range(Vec3((0.0, 0.0, 0.0)), Vec3((0.0, 0.0, 6.283))),
+            angular_velocity: Const(Vec3((0.0, 0.0, 0.0))),
+            color: CurveRange((keys: [(t: 0.0, v: Rgba((0.95, 0.96, 0.98, 0.0)), interp: Linear), (t: 0.05, v: Rgba((0.95, 0.96, 0.98, 0.2)), interp: Linear), (t: 0.5, v: Rgba((0.93, 0.94, 0.96, 0.1)), interp: Linear), (t: 1.0, v: Rgba((0.9, 0.9, 0.92, 0.0)), interp: Linear)], extrapolate: Clamp), (keys: [(t: 0.0, v: Rgba((0.779, 0.7872, 0.8036, 0.0)), interp: Linear), (t: 0.05, v: Rgba((0.779, 0.7872, 0.8036, 0.2)), interp: Linear), (t: 0.5, v: Rgba((0.7626, 0.7708, 0.7872, 0.1)), interp: Linear), (t: 1.0, v: Rgba((0.738, 0.738, 0.7544, 0.0)), interp: Linear)], extrapolate: Clamp)),
+            gravity: 0.0,
+            drag: 0.0,
+            forces: [Wind(coupling: 0.4), Turbulence(frequency: 0.08, strength: 0.4)],
+        ),
+    ],
+    seed: 1,
+    gravity_mode: Field,
+)

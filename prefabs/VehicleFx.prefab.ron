@@ -1,0 +1,21 @@
+// VEHICLE FX — scripts/vehicle_fx.lua: the feedback a craft gives off (jet
+// exhaust, engine and reentry heat, tyre marks and dust, damage sparks).
+// Spawned by scripts/vfx.lua when the scene has no node running it.
+[
+    (
+        name: "VehicleFx",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [
+            (
+                kind: "vehicle_fx",
+                enabled: true,
+                params: [],
+            ),
+        ],
+    ),
+]

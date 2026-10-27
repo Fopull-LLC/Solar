@@ -1,0 +1,32 @@
+// A tyre touching down fast: the puff of rubber as it spins up (vehicle_fx.lua).
+(
+    name: "TyreTouch",
+    lifetime: 1.8,
+    playback: OneShot,
+    end: Destroy,
+    tracks: [
+        (
+            name: "Puff",
+            render: Billboard(texture: Some("textures/vfx/smoke/soft.png")),
+            blend: Alpha,
+            lit: true,
+            translucency: 0.6,
+            soft: 0.6,
+            space: World,
+            clips: [(start: 0.0, end: 1.8, lifetime_jitter: 0.3, emit: Some(Burst(count: 6, count_jitter: 0.2, pulses: 1, interval: 0.0, interval_jitter: 0.2)))],
+            automation: [],
+            shape: Sphere(radius: 0.25, shell: false),
+            velocity: Range(Vec3((-1.2, 0.3, -1.2)), Vec3((1.2, 1.4, 1.2))),
+            size: CurveRange((keys: [(t: 0.0, v: F32(0.4), interp: Linear), (t: 0.25, v: F32(1.4), interp: Linear), (t: 1.0, v: F32(2.6), interp: Linear)], extrapolate: Clamp), (keys: [(t: 0.0, v: F32(0.26), interp: Linear), (t: 0.25, v: F32(0.91), interp: Linear), (t: 1.0, v: F32(1.69), interp: Linear)], extrapolate: Clamp)),
+            rotation: Range(Vec3((0.0, 0.0, 0.0)), Vec3((0.0, 0.0, 6.283))),
+            angular_velocity: Const(Vec3((0.0, 0.0, 0.0))),
+            color: CurveRange((keys: [(t: 0.0, v: Rgba((0.86, 0.86, 0.88, 0.0)), interp: Linear), (t: 0.04, v: Rgba((0.84, 0.84, 0.86, 0.6)), interp: Linear), (t: 1.0, v: Rgba((0.8, 0.8, 0.82, 0.0)), interp: Linear)], extrapolate: Clamp), (keys: [(t: 0.0, v: Rgba((0.7052, 0.7052, 0.7216, 0.0)), interp: Linear), (t: 0.04, v: Rgba((0.6888, 0.6888, 0.7052, 0.6)), interp: Linear), (t: 1.0, v: Rgba((0.656, 0.656, 0.6724, 0.0)), interp: Linear)], extrapolate: Clamp)),
+            gravity: 0.0,
+            drag: 0.0,
+            inherit_velocity: 0.5,
+            forces: [Wind(coupling: 1.4)],
+        ),
+    ],
+    seed: 1,
+    gravity_mode: Field,
+)

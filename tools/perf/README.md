@@ -239,6 +239,25 @@ the gravity gun and laser working. `perf.gpu` per pass at the vista, with old an
 new interleaved, then each effect alone (`GX GPU` lines). `PATCHES=` applies
 diffs to the scratch copy only. Results are in `results/gfx_look.md`.
 
+## vfxprobe.sh + vfxprobe_modes.lua — the vehicle feedback effects
+
+    WORK=$SCRATCH/vfx LOCK=$SCRATCH/engine.lock tools/perf/vfxprobe.sh <engine> [vfxjet vfxrover vfxrocket vfxdamage]
+
+The playtest's "very little feedback when the jet is working", hot engines,
+reentry, damage and tyre marks (scripts/vehicle_fx.lua, docs/vfx-feedback.md).
+`vfxjet`: the 27-part jet cold on the runway, spooled to 35 %, the take-off roll
+at full throttle (side, rear and close nozzle pictures), low flight, the cut and
+the nozzle cooling. `vfxrover`: the 6-part rover shoved sideways at speed on the
+runway (rubber, smoke), out onto loose ground (tread prints, dust), a hard stop,
+a slide, then a drift sequence (a picture every 0.5 s). `vfxrocket`: the starter
+rocket's burn and cut (bell heat, ignition, shimmer), then teleported into the air
+falling fast (`ralt` × the air's height, default 0.35; `rspeed` m/s, default 150, about 1.6× orbital speed on the home world; `rangle`° down, default 25; reentry
+plasma, wake, hull glow, a sequence every 0.5 s, the afterglow). `vfxdamage`: the
+rover worn to 15–30 % (shorting sparks, smoke). Each phase is a perfbench scenario
+(`PB RESULT`: scripts, particles, effects, decals, GPU passes); `VFX STATS` lines
+are vehicle_fx.stats() with the engine's counts, `VFX WHEELS` each tyre's slip and
+surface. Pictures (1280×720): `$WORK/proj/save/user/vfxshots/`.
+
 ## rain.sh + rainprobe.lua — the weather's haze, rain on the ground, the depth of field
 
     WORK=$SCRATCH/rainfx LOCK=/mnt/disks/3tb/.floptle-shared/engine.lock tools/perf/rain.sh <engine> [TAG]
