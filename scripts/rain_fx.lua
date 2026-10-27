@@ -30,6 +30,7 @@
 --                rf.setWet(w, p)   wet and puddles now (probes; nil lets go)
 --                rf.setOn(bool)    a switch for a settings screen
 --                rf.field          the drop field this frame, flat (see build_field)
+--                rf.setCompute(v)  the GPU rain rings on/off (nil: the param)
 
 defaults = {
   --- Master switch.
@@ -48,6 +49,9 @@ defaults = {
   reach = 22.0,
   --- Print the state once a second.
   debug = false,
+  --- PROTOTYPE: rain rings simulated on the GPU (shaders/rainRipples.wgsl) and
+  --- laid round the camera as a decal. Off by default.
+  computeRipples = false,
 }
 
 local SHADERS = { "rainFx", "rainFxHigh", "rainWet" }
@@ -221,12 +225,104 @@ function draw_field(node, which)
   end
 end
 
+-- ── rain rings on the GPU (PROTOTYPE, `computeRipples`, off by default) ─────
+-- A wave field (shaders/rainRipples.wgsl: `emit` + `step` 60 times a second, `shade`
+-- once a frame into a gpu.texture) drawn as one decal RR_SIZE m across on the
+-- ground under the camera, so the rings lie on the ground, the pad or a hull
+-- and are lit like them. The patch is laid where the camera is and laid again
+-- when the camera has gone a quarter of it away (the decal rides the planet on
+-- its own); the new one replaces the old once it has landed, and the field
+-- starts again then. setCompute(true/false/nil) overrides the param (probes).
+local RR_N, RR_SIZE, RR_HZ, RR_CELLS = 512, 16.0, 60, 32   -- cells: a 0.5 m drop lattice
+local RR, compute_on = nil, nil
+local RR_SH = "shaders/rainRipples.wgsl"
+function setCompute(v) compute_on = v end
+function ripplesState() return RR end   -- (probes)
+local rr_test = false
+function setRippleTest(v) rr_test = v and true or false end   -- (probes: solid magenta)
+local function rr_free()
+  if not RR then return end
+  if RR.decal then pcall(decals.remove, RR.decal) end
+  if RR.next then pcall(decals.remove, RR.next) end
+  for _, k in ipairs({ "cur", "prev", "tex" }) do if RR[k] then pcall(gpu.free, RR[k]) end end
+  RR = nil
+end
+local function rr_frame(dt, rate, po, X, Y, Z, cx, cy, cz)
+  if RR and RR.dead then return end
+  if not RR then
+    local cur = gpu and gpu.buffer and gpu.buffer { count = RR_N * RR_N, type = "f32" }
+    if not cur then RR = { dead = true }; return end
+    RR = { cur = cur, prev = gpu.buffer { count = RR_N * RR_N, type = "f32" }, tex = gpu.texture { w = RR_N, h = RR_N },
+           acc = 0, t = 0, seed = 0, born = 0 }
+  end
+  -- (a decal laid the frame its gpu texture is made finds no such picture and
+  -- never draws: the texture is registered after the decal pages are built)
+  RR.born = RR.born + 1
+  if RR.born < 3 then return end
+  -- the ground under the camera, in the planet's frame
+  local dx, dy, dz = cx - po.x, cy - po.y, cz - po.z
+  local lx = dx * X[1] + dy * X[2] + dz * X[3]
+  local ly = dx * Y[1] + dy * Y[2] + dz * Y[3]
+  local lz = dx * Z[1] + dy * Z[2] + dz * Z[3]
+  local l = sqrt(lx * lx + ly * ly + lz * lz)
+  if l < 1 then return end
+  local ux, uy, uz = lx / l, ly / l, lz / l
+  local g = l
+  -- the ground under the camera: the field's own surface (terrain.query is a
+  -- clamped distance, and reads "inside" on graded ground), else the camera
+  local wux, wuy, wuz = to_world(X, Y, Z, ux, uy, uz)
+  local hit = terrain.raycast and terrain.raycast(vec3(cx + wux * 2, cy + wuy * 2, cz + wuz * 2), vec3(-wux, -wuy, -wuz), 60)
+  if hit and hit.pos then
+    local hx_, hy_, hz_ = hit.pos.x - po.x, hit.pos.y - po.y, hit.pos.z - po.z
+    g = sqrt(hx_ * hx_ + hy_ * hy_ + hz_ * hz_)
+  end
+  local gx_, gy_, gz_ = ux * g, uy * g, uz * g
+  local c = RR.centre
+  local far = not c or (c[1] - gx_) ^ 2 + (c[2] - gy_) ^ 2 + (c[3] - gz_) ^ 2 > (RR_SIZE * 0.25) ^ 2
+  if far and not RR.next then
+    local wx, wy, wz = to_world(X, Y, Z, gx_, gy_, gz_)
+    local nx, ny, nz = to_world(X, Y, Z, ux, uy, uz)
+    local hx, hy, hz = 0, 1, 0
+    if math.abs(uy) > 0.9 then hx, hy, hz = 1, 0, 0 end
+    local tx, ty, tz = to_world(X, Y, Z, hy * uz - hz * uy, hz * ux - hx * uz, hx * uy - hy * ux)
+    local ok, id = pcall(decals.add, { texture = RR.tex.name, pos = vec3(po.x + wx, po.y + wy, po.z + wz),
+      normal = vec3(nx, ny, nz), up = vec3(tx, ty, tz), size = RR_SIZE, depth = 6 })
+    RR.laid = { ok = ok, id = id, q = l - g }
+    if ok and id then RR.next, RR.nextCentre = id, { gx_, gy_, gz_ } end
+  end
+  if RR.next and decals.landed(RR.next) ~= false then
+    if RR.decal then pcall(decals.remove, RR.decal) end
+    RR.decal, RR.centre, RR.next = (decals.landed(RR.next) and RR.next) or nil, RR.nextCentre, nil
+    RR.seed = RR.seed + 1
+    compute.run(RR_SH, "clear", { size = { RR_N, RR_N }, bind = { cur = RR.cur, prev = RR.prev }, params = { n = RR_N } })
+  end
+  if not RR.decal then return end
+  -- the field: RR_HZ steps a second whatever the frame rate (at most 4 a frame)
+  RR.acc = min(RR.acc + dt, 4 / RR_HZ)
+  local sd = RR.seed * 17.31
+  while RR.acc >= 1 / RR_HZ do
+    RR.acc = RR.acc - 1 / RR_HZ
+    compute.run(RR_SH, "emit", { size = { RR_CELLS, RR_CELLS }, bind = { cur = RR.cur }, params = {
+      n = RR_N, cells = RR_CELLS, texel = RR_SIZE / RR_N, cell = RR_SIZE / RR_CELLS, period = 0.9,
+      rate = min(1, rate * 1.1), amp = 1.0, rad = 0.07, t0 = RR.t, t1 = RR.t + 1 / RR_HZ, ox = sd, oy = sd * 0.5 } })
+    compute.run(RR_SH, "step", { size = { RR_N, RR_N }, bind = { cur = RR.cur, prev = RR.prev }, params = {
+      n = RR_N, c2 = 0.12, damp = 0.975 } })
+    RR.cur, RR.prev = RR.prev, RR.cur
+    RR.t = RR.t + 1 / RR_HZ
+  end
+  local F = field
+  compute.run(RR_SH, "shade", { size = { RR_N, RR_N }, bind = { cur = RR.cur, out = RR.tex }, params = {
+    n = RR_N, test = rr_test and 1 or 0, gain = 4.0, wet = min(1, 0.35 + 0.65 * max(wet, puddles)),
+    sr = F[SKY], sg = F[SKY + 1], sb = F[SKY + 2], dr = F[DROP], dg = F[DROP + 1], db = F[DROP + 2] } })
+end
+
 -- ── the frame ───────────────────────────────────────────────────────────────
 local dbg_t = -100
 
 local function off(node)
   state.on, state.rate = false, 0
   show(node, nil)
+  if RR then rr_free() end
 end
 
 local cam_node = nil
@@ -295,6 +391,10 @@ function lateUpdate(node, dt)
   show(node, which)
   state.on = true
   draw_field(node, which)
+  local want_rr = compute_on
+  if want_rr == nil then want_rr = params.computeRipples end
+  if want_rr and rate > 0.01 then rr_frame(dt, rate, po, X, Y, Z, cx, cy, cz)
+  elseif RR then rr_free() end
 
   if params.debug and time - dbg_t > 1.0 then
     dbg_t = time
@@ -304,5 +404,6 @@ function lateUpdate(node, dt)
 end
 
 function onDestroy(node)
+  rr_free()
   for _, n in ipairs(SHADERS) do pcall(node.setScreenShader, node, n, false) end
 end

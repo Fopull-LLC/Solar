@@ -7,9 +7,11 @@
 // in TONNES per cubic metre, because every mass in this game is in tonnes (a
 // small tank is 1.5 in a 1 m³ box): at 1025 the Archimedes push on a 1-tonne
 // astronaut was six hundred times their weight and threw them out of the sea.
-// It is kept OUT of physics (density 0.001, no drag): the engine places this
-// volume once a frame while the planet moves every rails tick, so its sea sat
-// a carry away from the drawn one (a crate hovered 1.2 m over it). Craft float
+// It is kept OUT of physics (density 0: the engine applies no buoyancy and
+// never warns about it; no drag): the engine places this volume once a frame
+// while the planet moves every rails tick, so its sea sat a carry away from
+// the drawn one (a crate hovered 1.2 m over it). It is still the underwater
+// look and what water.at answers for. Craft float
 // in vessel_controller.lua (waterTick) and the crew swims in planet_walker.lua,
 // both from the sea as the planet carries it (climate.seaRadius/seaDepth).
 [
@@ -48,7 +50,7 @@
         matter: WaterVolume(
             pool: false,
             radius: 1.0,
-            density: 0.001,
+            density: 0.0,
             drag: 0.0,
             angular_drag: 0.0,
             frozen: false,

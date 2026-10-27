@@ -1008,7 +1008,7 @@ local function build_lake(b, w, L)
       local o = { shape = "lake", parent = water.body,
         center = vec3(cx * Rv, cy * Rv, cz * Rv), radius = Rv, reach = reach, depth = bed }
       if not VOLUMES then
-        o.density, o.drag, o.angularDrag = 0.001, 0.0, 0.0
+        o.density, o.drag, o.angularDrag = 0.0, 0.0, 0.0   -- 0: look and water.at only, no buoyancy, no warnings (engine rc38)
         local d = look.deep or { 0.04, 0.2, 0.3 }
         o.tint = { math.min(1, d[1] * 1.4 + 0.02), math.min(1, d[2] * 1.4 + 0.02), math.min(1, d[3] * 1.4 + 0.02) }
         o.visibility = 4 + (look.clarity or 3) * 3

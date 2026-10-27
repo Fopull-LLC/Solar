@@ -299,3 +299,28 @@ same player model. `tests/smoke_economy.lua` holds the working tree to targets.
 `econprobe.lua`: the Ops Board with ground work on it (one selected), the depot
 with pack, warehouse and freight goods, the builder's catalogue prices. Slot 13
 in the scratch project; delete `$WORK/proj/save` and `$WORK/proj/saves` after.
+
+## seaprobe.sh + seaprobe_modes.lua — the sea's Water Volume and stale node handles
+
+    WORK=$SCRATCH/sea LOCK=$SCRATCH/engine.lock [PATCHES=x.patch] tools/perf/seaprobe.sh <engine>
+
+Mode `sea` (fresh save): first the engine card 0552 repro (a node destroyed, 200
+made until one takes its id: the old handle must read `valid` false, `name` nil
+and never reach the new node; `SH RESULT`), then the crew on the deepest sea a
+scan finds, the free camera 3 m under and 2 m over (`water.at`, the underwater
+look), and the 6-part rover dropped in (its height over the sea each second:
+Solar floats craft itself). Count the engine's `≈ … density` warnings in the log.
+Pictures in `$WORK/proj/save/user/seashots/`. results/rc38.md: density 0 (0551).
+
+## exportshot.sh + exportshot.lua — pictures from an exported build's player
+
+    WORK=$SCRATCH/xshot LOCK=$SCRATCH/engine.lock tools/perf/exportshot.sh <build dir> [Solar]
+
+Plays a copy of the build's `assets/` with the build's own binary (a project
+path; `XDG_DATA_HOME` in scratch, so no player data is touched) on a COPY of the
+player's save, twice: with the build's `.floptle/textures.ron` and without it.
+Three 1280×720 pictures each in `$WORK/png-with|without`. (card 0550)
+
+rainprobe.lua also has a part `compute` (`RAIN_ONLY=compute`): the GPU rain
+rings prototype (rain_fx `computeRipples`) on/off, pictures and `perf.gpu`.
+

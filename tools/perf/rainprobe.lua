@@ -11,6 +11,11 @@
 --           at Medium and High
 --   gpu     perf.gpu + script ms in heavy rain at the base, Medium and High:
 --           rain_fx on / off interleaved; and clear on foot, old / new DOF
+--   compute the GPU rain rings prototype (rain_fx `computeRipples`, rc38
+--           compute): heavy rain on open ground at Medium, pictures with the
+--           rings off and on (two a quarter second apart), the crew's own
+--           camera, then perf.gpu + script ms with the rings on / off
+--           interleaved (Medium x3, High x2); `RX RR` lines
 --   rover   a 6-part rover rolled out on the runway: DOF old / new from its
 --           chase camera (loads the builder scene; run it last)
 -- w, h: the window and the pictures (1280×720 by default: the GPU-safety rule
@@ -123,6 +128,7 @@ local function state(tag)
   P("ROOF %s: sheltered %s particles %s, ray up: %s; sun %.3f", tag, tostring(c.sheltered), tostring(c.particles), roof(), at.sun_now or -1)
 end
 
+local GPUAPI = gpu          -- (the engine's gpu table, before `gpu` below names the sampler)
 local SCRIPTS = { "rain_fx", "weather", "atmosphere", "graphics", "sun_flare" }
 local function gpu(tag)
   hold(0.8)
@@ -350,6 +356,103 @@ local function gpu_part()
   cam.setFreecam(true)
 end
 
+local function compute_part()
+  if not rf.setCompute then P("RR no setCompute in rain_fx"); return end
+  P("RR gpu.limits %s", (function()
+    local l = GPUAPI and GPUAPI.limits and GPUAPI.limits() or {}
+    local t = {}
+    for k, v in pairs(l) do t[#t + 1] = k .. "=" .. tostring(v) end
+    table.sort(t)
+    return table.concat(t, " ")
+  end)())
+  local b = body()
+  gx.set("Medium"); hold(1.0)
+  weather("rain", 1.3, 1, 1)
+  local pad0, pu0, pf0 = pad_site()
+  local h = pu0:cross(pf0):normalized()
+  local th = 40 / b.radius
+  local u = (pu0 * math.cos(th) + pf0 * math.sin(th)):normalized()
+  local gr = ground_r(u)
+  local fwd = (h * math.cos(math.rad(35)) - u * math.sin(math.rad(35))):normalized()
+  place(u, gr + 1.7, fwd)
+  settle(10)
+  rf.setCompute(false); hold(0.6)
+  state("rr_off"); shot("rr_Medium_ground_off")
+  local d0 = decals.count()
+  rf.setCompute(true); hold(2.5)
+  P("RR decals %d -> %d", d0, decals.count())
+  local st = rf.ripplesState and rf.ripplesState()
+  if st then
+    P("RR state: decal %s landed %s next %s laid ok=%s id=%s err=%s q=%s steps t=%.2f tex %s", tostring(st.decal),
+      tostring(st.decal and decals.landed(st.decal)), tostring(st.next), tostring(st.laid and st.laid.ok),
+      tostring(st.laid and st.laid.id), tostring(st.laid and not st.laid.ok and st.laid.id), tostring(st.laid and st.laid.q), st.t or -1,
+      tostring(st.tex and st.tex.name))
+    if st.tex and st.tex.read then
+      pending = pending + 1
+      st.tex:read(function(bytes, err)
+        pending = pending - 1
+        if not bytes then P("RR tex read failed %s", tostring(err)); return end
+        local n, sum, mx = 0, 0, 0
+        for i = 4, #bytes, 4 do
+          local a = bytes:byte(i)
+          if a > 8 then n = n + 1 end
+          sum = sum + a; if a > mx then mx = a end
+        end
+        P("RR tex alpha: %d of %d pixels > 8, mean %.2f, max %d", n, #bytes / 4, sum / (#bytes / 4), mx)
+        assets.writeBytes("user://rain/rr_tex.rgba", bytes)
+      end)
+    end
+  else P("RR state: none") end
+  -- is the decal drawn at all? the field painted solid magenta, then a plain
+  -- scorch decal (a file) laid under the camera beside it
+  if rf.setRippleTest then
+    rf.setRippleTest(true); hold(0.5); shot("rr_test_magenta"); rf.setRippleTest(false)
+    local cn = find("Camera 1")
+    local bb = body()
+    local up = V(cn.x - bb.x, cn.y - bb.y, cn.z - bb.z):normalized()
+    local fw = (h * math.cos(math.rad(35)) - up * math.sin(math.rad(35))):normalized()
+    local hit = terrain.raycast(V(cn.x, cn.y, cn.z), fw, 30)
+    P("RR control ray: %s", hit and string.format("%.1f m", hit.distance) or "miss")
+    local okd, did = pcall(decals.add, { texture = "textures/vfx/decal/scorch.png", pos = hit and hit.pos or V(cn.x, cn.y, cn.z),
+      normal = hit and hit.normal or up, size = 3, depth = 2 })
+    hold(1.0)
+    P("RR control decal %s %s landed %s", tostring(okd), tostring(did), tostring(okd and did and decals.landed(did)))
+    shot("rr_test_scorch")
+    if okd and did then decals.remove(did) end
+  end
+  state("rr_on"); shot("rr_Medium_ground_on"); hold(0.25); shot("rr_Medium_ground_on_b")
+  -- closer and steeper: the rings themselves
+  place(u, gr + 1.0, (h * math.cos(math.rad(60)) - u * math.sin(math.rad(60))):normalized())
+  hold(1.5)
+  shot("rr_Medium_close_on"); rf.setCompute(false); hold(0.5); shot("rr_Medium_close_off"); rf.setCompute(true)
+  -- the pad deck
+  local pad, pu, pf = pad_site()
+  local right = pu:cross(pf):normalized()
+  local eye = pad + pf * 6 + right * 3 + pu * 4.2
+  place(eye:normalized(), eye:length(), (pad + pf * 2 - eye):normalized())
+  hold(2.5)
+  shot("rr_Medium_pad_on"); rf.setCompute(false); hold(0.5); shot("rr_Medium_pad_off"); rf.setCompute(true)
+  -- the crew's own camera, on foot
+  cam.setFreecam(false)
+  put_crew()
+  if physics and physics.pause then physics.pause(false) end
+  cam.face(-pf.x, -pf.y, -pf.z, -0.25)
+  hold(2.5)
+  shot("rr_Medium_crew_on")
+  for _, lv in ipairs({ "Medium", "High" }) do
+    gx.set(lv); hold(1.0)
+    weather("rain", 1.3, 1, 1)
+    for rep = 1, (lv == "Medium" and 3 or 2) do
+      rf.setCompute(true); hold(1.0); gpu(lv .. " heavy rain, GPU rings on #" .. rep)
+      rf.setCompute(false); hold(0.5); gpu(lv .. " heavy rain, GPU rings off #" .. rep)
+    end
+  end
+  rf.setCompute(nil)
+  weather("clear")
+  gx.set("Medium")
+  cam.setFreecam(true)
+end
+
 -- ── rover: rolled out through the builder scene, as perfbench does ─────────
 local function rec(uid, id, x, y, z, o)
   o = o or {}
@@ -437,7 +540,7 @@ local function main()
   cam.setFreecam(true)
   hold(0.3)
   if cam.setTimeFreeze then cam.setTimeFreeze(true) end   -- (only takes in the free camera)
-  local parts = { { "wx", wx_part }, { "splash", splash_part }, { "dof", dof_part }, { "gpu", gpu_part }, { "rover", rover_part } }
+  local parts = { { "wx", wx_part }, { "splash", splash_part }, { "dof", dof_part }, { "gpu", gpu_part }, { "compute", compute_part }, { "rover", rover_part } }
   for _, pt in ipairs(parts) do
     if want[pt[1]] then
       P("PART %s", pt[1])
