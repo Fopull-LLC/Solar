@@ -3112,5 +3112,114 @@
             parent_id: Some(600),
             parent: Some(95),
         ),
+        // ── crew (docs/crew-and-items.md §4.4, §2.3, §2.2; WS2) ── live portraits of the crew aboard, bottom-left
+        (
+            name: "Crew Strip",
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Empty,
+            scripts: [
+                (
+                    kind: "crew_strip",
+                    enabled: true,
+                    params: [],
+                ),
+                (
+                    kind: "iva",
+                    enabled: true,
+                    params: [],
+                ),
+            ],
+            id: Some(603),
+            parent_id: Some(16),
+            parent: Some(15),
+            ui: Some((
+                place: Pin(
+                    anchor: BottomLeft,
+                    offset: (12.0, -12.0),
+                ),
+                size: (Fit, Fit),
+                stack: Some((
+                    dir: Column,
+                    gap: 4.0,
+                    pad: 0.0,
+                    align: Start,
+                    justify: Start,
+                )),
+                visible: false,
+                opacity: 1.0,
+                order: 2,
+            )),
+        ),
+        // the crew's warning chips, alarms, blackout dim and the death caption
+        (
+            name: "Crew Alerts",
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Empty,
+            scripts: [
+                (
+                    kind: "crew_alerts_hud",
+                    enabled: true,
+                    params: [],
+                ),
+            ],
+            id: Some(604),
+            parent_id: Some(16),
+            parent: Some(15),
+            ui: Some((
+                place: Stretch(
+                    min: (0.0, 0.0),
+                    max: (1.0, 1.0),
+                    margin: (0.0, 0.0, 0.0, 0.0),
+                ),
+                size: (Pct(1.0), Pct(1.0)),
+                visible: false,
+                opacity: 1.0,
+                order: 3,
+            )),
+        ),
+        // the Astronaut Complex: roster, applicants (hire), memorial
+        (
+            name: "Crew Roster Panel",
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Empty,
+            scripts: [
+                (
+                    kind: "crew_roster_panel",
+                    enabled: true,
+                    params: [],
+                ),
+            ],
+            id: Some(605),
+            parent_id: Some(16),
+            parent: Some(15),
+            ui: Some((
+                place: Pin(
+                    anchor: Center,
+                    offset: (0.0, 0.0),
+                ),
+                size: (Fixed(720.0), Fit),
+                stack: Some((
+                    dir: Column,
+                    gap: 0.0,
+                    pad: 0.0,
+                    align: Start,
+                    justify: Start,
+                )),
+                visible: false,
+                opacity: 1.0,
+            )),
+        ),
     ],
 )

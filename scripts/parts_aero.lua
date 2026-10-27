@@ -44,7 +44,10 @@ PARTS = {
               top = false, bottom = true, kind = "crewed", side = true, strength = 600, maxq = 140,
               af = "cockpit cdF=0.1 cd=0.45",
               mods = { { type = "command", crew = 1, draw = 0.04 }, { type = "wheel", torque = 0.12, draw = 0.1 },
-                       { type = "battery", ec = 60 } } },
+                       { type = "battery", ec = 60 } },
+              -- the pilot under the canopy (−Z, the top); crew.lua SEATS mirrors this
+              seats = { { x = 0.0, y = 0.1, z = 0.05, yaw = 0 } },
+              hatch = { x = 0.0, y = 0.2, z = -0.55, nx = 0, ny = 0, nz = -1 }, iva = "IvaCockpit" },
 
   -- ── PROPULSION ────────────────────────────────────────────────────────────
   -- FUSELAGE TANK: liquid fuel in a 2 m painted fuselage section; jets and

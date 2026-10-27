@@ -1,11 +1,11 @@
 -- CREW — the agency's astronauts: who they are, where they are, what they
--- carry and what they are doing (docs/crew-and-items.md §2, §4, §6.3).
+-- carry and what they are doing (docs/crew-and-items.md §2, §3, §4, §6.3).
 --
 -- One save key per member, `crew.m.<id>`, plus a few roster keys:
 --
 --   crew.roster    ids in hire order, the dead included (the memorial reads it)
 --   crew.seq       the last id issued
---   crew.active    the id the `Astronaut` node is now (false: unbound)
+--   crew.active    the id the `Astronaut` node is now (see "the avatar")
 --   crew.offers    the applicants on the board
 --   crew.version   the migration stamp (VERSION below)
 --   crew.death     true: death is real; false: "rescue instead"
@@ -18,28 +18,69 @@
 -- loads in luajit: everything it touches is `save`, `findScript`, `find` and
 -- `time`, which a test stubs.
 --
+-- ── THE AVATAR (§4.1, as built) ─────────────────────────────────────────────
+-- The `Astronaut` node is ALWAYS bound to one living member, `crew.active`:
+-- their suit, pack and hand. On foot it is them; aboard a craft it is them,
+-- hidden, riding the craft as today (vessel_controller `crewAboard` = "the
+-- avatar rides this craft"). (The design's "unbound" avatar while flying is
+-- folded into this: the member at the controls IS the active one, so the
+-- inventory alias, the suit and the HUD never lose their owner.)
+-- Everyone else is a CrewBody (on foot, in range: prefabs/CrewBody,
+-- scripts/crew_body.lua), a CrewDoll (seated in a craft: prefabs/CrewDoll,
+-- placed here every lateUpdate) or a record (at base, or out of range).
+--
+-- ── SEATS (§3.1, §3.2) ──────────────────────────────────────────────────────
+-- Who sits where lives ON THE PART: `st.crew<k> = memberId` for slot k
+-- (st.crew1, st.crew2, …). Plain numbers, so electronics.packRecord keeps
+-- them through a fleet record, a staging split, a docking, a revert and a
+-- reload with no extra code (a nested table would be dropped by encodeState).
+-- Seat geometry is SEATS below (mirrors parts_registry/parts_aero `seats`;
+-- smoke_crew_seats checks they agree).
+--
 -- THE INTERFACE (other workstreams code against this; keep it stable):
 --   roster() → {rec…}            get(id) → rec|nil         activeId() → id|nil
---   packOf(id) → "crew:"..id     where(id) → status, detail
---   hire(i) → id|nil, why        offers() → {{name, cost}…}   rename(id, s) → ok, why
---   control(id) → ok, why        eva(id, {stay, confirmed}) → ok, why, warn
+--   living() → n                 packOf(id) → "crew:"..id  where(id) → status, detail
+--   hire(i) → id|nil, why        offers() → {{name, cost, free}…}   hireFee() → $
+--   rename(id, s) → ok, why
+--   control(id) → ok, why        take control of member `id` (on foot: their
+--                                CrewBody; aboard: their craft, at their seat)
+--   takeCraft(v, id?) → ok, why  fly craft `v` as member `id` (default its commander)
+--   eva(id, {stay, confirmed}) → ok, why, warn   (stay: out as a CrewBody, you keep the craft)
 --   board(id, v, uid?, slot?) → ok, why
---   quickSwap() → ok             switchList() → {{kind, id|v, name, dist}…}
---   aboard(v) → {{id, uid, slot, commander}…}   dollOf(id) → node|nil   bodyOf(id) → node|nil
+--   quickSwap() → ok, why        switchList() → {{kind="crew"|"vessel", id|v, name, dist, crew}…}
+--   step(dir) → name|nil         `[`/`]` along switchList (vessel_switcher calls it)
+--   aboard(v) → {{id, name, uid, slot, open, command, commander, hp, o2}…}  (portraits: WS2)
+--   seatMap(v) → {{uid, slot, open, command, taken = id|nil, label}…}
+--   craftOf(id) → v|nil          dollOf(id) → node|nil    bodyOf(id) → node|nil
 --   setTask(id, task) → ok, why  task(id) → task|nil   cancelTask(id, why) → ok
 --   held(id) → bool              (locked at a task: movement code stands down)
---   alerts(id) → {o2, air_s, breath, hp, heat, fall, pinned, blackout, cabin}
+--   alerts(id) → {o2, air_s, breath, hp, heat, fall, pinned, blackout, cabin, cabin_tol}
+--   lastDeath → {id, name, cause, text, t, x, y, z} | nil   (the death camera hold, WS2)
 --   airSource(helmet, headUnder, breathable) → "suit"|"hold"|"ambient"
 --   tanksOf(pack) / drawAir(o2, dt, tanks)   the suit air rule (built-in + O2 tanks)
 --   evaCheck(id) → ok, why, warn (warn: allowed, but ask first — no RCS Pack in space)
 --   memorial() → {…}             deathOn() → bool          setDeath(on)
+--   kill(id, cause, detail) → ok   (death on: dies; off: rescued)
+--   blackoutGrace(src) → secs    blackoutEnd(src) → handled (planet_walker asks)
 --   patch(id, fields)            merge fields into a record (false clears; bumps version)
 --   onEvaInSpace() → bool, id    (rails warp is refused while true)
+--   seatDef(rec|partId) → {seats, hatch, command, open}|nil   slotCount(rec)
+--   memberAt(rec, k) / setMemberAt(rec, k, id)   the part-state slot accessors
+--   launchPlan(parts, plan, avail, active) → { {uid, slot, id}… }, commanderId   (the VAB seat plan)
+--   validatePlan(parts, plan) → ok, why   (WS2's CREW tab: no double booking, someone at the controls)
+--   current() → {kind="crew", id} | {kind="vessel", v}   switchTo(entry) → ok, why
+--   avatarCraft() → v|nil        the craft the avatar rides
+--   dollPose(id) / dollAt(vid, uid)   where a doll goes (crew_body) / an open seat's doll (command_seat)
+--   setDown(id, x,y,z)           a member on foot at a world point (a wreck they walked from)
+--   launchAs(id, craft)          the launch's commander becomes the avatar (vessel_controller)
+--   noteAboard / noteAfoot / noteHome(id)   status bookkeeping the controller calls
+--   showInterior                 WS2 sets true to draw the dolls in closed pods (crew cams, IVA)
 --   version                      bumps on any change (panels poll it)
 --
--- Slice 1 / 1b run on ONE astronaut (member #1, always the avatar). The
--- multi-crew pieces (CrewBody, dolls, seats by slot, switching) answer with
--- the single-astronaut behaviour until slice 2 fills them in.
+-- vessel_controller's side (globals): seatsOf(), crewIds(), crewCount(),
+-- commander(), seatMember(uid, slot, id), memberSlot(id), freeSeat(prefer),
+-- unseatMember(id), hatchWorld(uid), hatchSpot(uid), avatarBoard(id),
+-- setStationOf(id), boardPrompt(st). docs/crew-and-items.md §10 "WS1 as built".
 
 defaults = {
   -- One-time hire fee: base + step × (living roster − 3), capped.
@@ -48,10 +89,33 @@ defaults = {
   hire_base = 1000,
   hire_step = 400,
   hire_cap = 4000,
+  starters = 3,
+  -- DEATH (§2.3). Impact: Δv in one tick, m/s.
+  impact_injure = 6.0,
+  impact_kill = 13.0,
+  walk_dv = 10.0,         -- m/s of sideways Δv the walker makes itself (a run stopped)
+  crush_secs = 0.4,       -- s of something solid in the suit's middle
+  crush_r = 0.15,         -- m, the sphere at the capsule's centre
+  heat_gain = 2.0,        -- heat += craft heating × this × dt, while exposed
+  heat_cool = 0.1,        -- per second once out of the heat
+  grace_suit = 15.0,      -- s of blackout on an empty suit before death
+  grace_water = 10.0,     -- s of blackout under water
+  hold_secs = 2.0,        -- the camera holds on the fallen this long
+  heal_per_min = 0.02,    -- hp back a minute aboard or at base
+  cabin_tol = 9.0,        -- m/s a crewed pod survives (the strip's "hold under")
+  -- CREW BODIES (§4.1)
+  body_range = 2500.0,    -- m from the focus: further, a record only
+  body_spawn = 2000.0,    -- m: a record comes back as a body inside this
 }
 
-VERSION = 1
+VERSION = 2
 version = 0
+-- The last death (WS2's camera hold and caption read it; probes too).
+lastDeath = nil
+-- WS2 sets this true while a crew cam or V's IVA wants the dolls in closed
+-- pods drawn; otherwise they stay hidden inside the hull (a 2 m suit in a
+-- 1 m capsule shows through it).
+showInterior = false
 
 local function P(k) return (params and params[k]) or defaults[k] end
 local function bump() version = (version or 0) + 1 end
@@ -67,12 +131,18 @@ local function ref(kind)
 end
 
 local function now() return time or 0 end
+local function len(x, y, z) return math.sqrt(x * x + y * y + z * z) end
 
 local function copy(t)
   if type(t) ~= "table" then return t end
   local o = {}
   for k, v in pairs(t) do o[k] = copy(v) end
   return o
+end
+
+local function caption(text)
+  local fx = ref("sfx")
+  if fx and fx.caption then pcall(fx.caption, text) end
 end
 
 -- ── names ───────────────────────────────────────────────────────────────────
@@ -101,6 +171,225 @@ function nameFor(seed, n)
   return f .. " " .. l
 end
 
+-- ── seats (§3.1) ───────────────────────────────────────────────────────────
+-- Per part id: the slots (part frame, the blueprint's x,y,z frame; yaw = the
+-- way the doll faces, about the part's +Y, 0 = the part's +X), the hatch
+-- (point + outward normal), whether the slots COMMAND the craft (a cabin
+-- carries people and flies nothing) and whether they are OPEN (a seat is
+-- its own exit; the rider shows). Mirrors parts_registry / parts_aero.
+SEATS = {
+  pod     = { command = true,
+              seats = { { x = 0.0, y = -0.22, z = 0.16, yaw = 1.5708 } },
+              hatch = { x = 0.47, y = -0.02, z = 0.0, nx = 1, ny = 0, nz = 0 } },
+  podMk2  = { command = true,
+              seats = { { x = 0.0, y = -0.28, z = 0.22, yaw = 1.5708 },
+                        { x = -0.66, y = -0.28, z = 0.16, yaw = 1.8708 },
+                        { x = 0.66, y = -0.28, z = 0.16, yaw = 1.2708 } },
+              hatch = { x = 0.49, y = -0.06, z = 0.0, nx = 1, ny = 0, nz = 0 } },
+  cabin   = { command = false,
+              seats = { { x = -0.44, y = -0.3, z = 0.64, yaw = 1.5708 }, { x = 0.44, y = -0.3, z = 0.64, yaw = 1.5708 },
+                        { x = 0.44, y = -0.3, z = -0.64, yaw = -1.5708 }, { x = -0.44, y = -0.3, z = -0.64, yaw = -1.5708 } },
+              hatch = { x = 0.51, y = -0.1, z = 0.0, nx = 1, ny = 0, nz = 0 } },
+  seat    = { command = true, open = true, seats = { { x = 0, y = 0, z = 0, yaw = 0 } } },
+  saddle  = { command = true, open = true, seats = { { x = 0, y = 0, z = 0, yaw = 0 } } },
+  cockpit = { command = true,
+              seats = { { x = 0.0, y = 0.1, z = 0.05, yaw = 0 } },
+              hatch = { x = 0.0, y = 0.2, z = -0.55, nx = 0, ny = 0, nz = -1 } },
+}
+
+-- A part record (or a part id) → its seat definition, or nil (no seats).
+-- Any other crewed part (a modded one) gets one slot like the Pod Mk1, or
+-- an open seat when it says `seat`.
+function seatDef(rec)
+  local id = type(rec) == "table" and rec.id or rec
+  local d = SEATS[id or ""]
+  if d then return d end
+  if type(rec) == "table" and rec.kind == "crewed" then
+    return ((rec.seat or 0) == 1 or rec.seat == true) and SEATS.seat or SEATS.pod
+  end
+  return nil
+end
+
+function slotCount(rec)
+  local d = seatDef(rec)
+  return d and #d.seats or 0
+end
+
+local function st_of(rec)
+  local st = rec and rec.st
+  if type(st) == "string" then
+    local E = ref("electronics")
+    if E and E.decodeState then st = E.decodeState(st); rec.st = st end
+  end
+  return type(st) == "table" and st or nil
+end
+
+function memberAt(rec, k)
+  local st = st_of(rec)
+  local v = st and st["crew" .. tostring(k)]
+  if type(v) == "number" and v > 0 then return v end
+  return nil
+end
+
+function setMemberAt(rec, k, id)
+  if type(rec) ~= "table" then return end
+  local st = st_of(rec)
+  if not st then st = {}; rec.st = st end
+  st["crew" .. tostring(k)] = id or nil
+end
+
+-- Everyone seated across a part list (a blueprint, a fleet record's parts,
+-- a live craft's records): { {id, uid, slot, open, command} … } in part
+-- order then slot. `alive(uid)` (optional) skips parts that are gone.
+function seatedIn(parts, alive)
+  local out = {}
+  local list = {}
+  for _, d in pairs(parts or {}) do list[#list + 1] = d end
+  table.sort(list, function(a, b) return (a.uid or 0) < (b.uid or 0) end)
+  for _, d in ipairs(list) do
+    local def = seatDef(d)
+    if def and (not alive or alive(d.uid)) then
+      for k = 1, #def.seats do
+        local id = memberAt(d, k)
+        if id then
+          out[#out + 1] = { id = id, uid = d.uid, slot = k, open = def.open == true, command = def.command == true }
+        end
+      end
+    end
+  end
+  return out
+end
+
+-- Where member `id` sits in `parts`: uid, slot (nil, nil if not there).
+function slotOf(parts, id)
+  for _, d in pairs(parts or {}) do
+    local def = seatDef(d)
+    if def then
+      for k = 1, #def.seats do
+        if memberAt(d, k) == id then return d.uid, k end
+      end
+    end
+  end
+  return nil, nil
+end
+
+-- The command rank of a part (lower flies): a pod over a seat, then the
+-- part nearest the root, then uid — vessel_controller's own ranking.
+local function cmd_rank(d, depth)
+  return (depth or 0) * 1e6 + (d.uid or 0) + ((((d.seat or 0) == 1) or d.seat == true) and 1e9 or 0)
+end
+
+-- The member at the controls: the one in the best-ranked COMMAND slot.
+-- `depth(uid)` (optional) gives the part's tree depth.
+function commanderOf(parts, depth, alive)
+  local best, rank = nil, nil
+  for _, d in pairs(parts or {}) do
+    local def = seatDef(d)
+    if def and def.command and (not alive or alive(d.uid)) then
+      for k = 1, #def.seats do
+        local id = memberAt(d, k)
+        if id then
+          local r = cmd_rank(d, depth and depth(d.uid)) * 16 + k
+          if not rank or r < rank then best, rank = id, r end
+        end
+      end
+    end
+  end
+  return best
+end
+
+-- The free slot boarding fills: in `prefer_uid` if it has one, else the
+-- best command slot, else any. → uid, slot | nil
+function freeSlot(parts, prefer_uid, alive)
+  local cand = {}
+  for _, d in pairs(parts or {}) do
+    local def = seatDef(d)
+    if def and (not alive or alive(d.uid)) then
+      for k = 1, #def.seats do
+        if not memberAt(d, k) then
+          local r = (d.uid == prefer_uid and 0 or 1) * 1e12 + (def.command and 0 or 1e11) + cmd_rank(d) * 16 + k
+          cand[#cand + 1] = { uid = d.uid, slot = k, r = r }
+        end
+      end
+    end
+  end
+  table.sort(cand, function(a, b) return a.r < b.r end)
+  if cand[1] then return cand[1].uid, cand[1].slot end
+  return nil, nil
+end
+
+-- ── the VAB seat plan (§3.2, §5.6; WS2 draws the CREW tab) ─────────────────
+-- A plan is a list { {uid, slot, id} … } (the blueprint's `crew`, or the
+-- save key `shipyard.crew` the CREW tab writes). Checked, not trusted:
+function validatePlan(parts, plan)
+  local by = {}
+  for _, d in pairs(parts or {}) do by[d.uid] = d end
+  local seen, slots, cmd = {}, {}, false
+  for _, e in ipairs(plan or {}) do
+    local d = by[e.uid]
+    local def = d and seatDef(d)
+    if not def then return false, "no seat there" end
+    if (e.slot or 0) < 1 or e.slot > #def.seats then return false, "no such seat" end
+    local key = tostring(e.uid) .. "/" .. tostring(e.slot)
+    if slots[key] then return false, "two crew in one seat" end
+    if seen[e.id] then return false, "one crew member in two seats" end
+    slots[key], seen[e.id] = true, true
+    if def.command then cmd = true end
+  end
+  if #(plan or {}) > 0 and not cmd then return false, "nobody at the controls" end
+  return true, nil
+end
+
+-- The seats at launch. `avail(id)` says who may fly (alive, at base or the
+-- avatar standing at the base); `active` is the avatar's member. Bad
+-- entries are dropped. With no plan (or none left) the active member takes
+-- the best command slot: today's single-crew launch. → list, commanderId
+function launchPlan(parts, plan, avail, active)
+  local by = {}
+  for _, d in pairs(parts or {}) do by[d.uid] = d end
+  local out, seen, slots = {}, {}, {}
+  for _, e in ipairs(plan or {}) do
+    local d = by[e.uid]
+    local def = d and seatDef(d)
+    local key = tostring(e.uid) .. "/" .. tostring(e.slot)
+    if def and e.id and (e.slot or 0) >= 1 and e.slot <= #def.seats and not slots[key] and not seen[e.id]
+      and (not avail or avail(e.id)) then
+      out[#out + 1] = { uid = e.uid, slot = e.slot, id = e.id }
+      seen[e.id], slots[key] = true, true
+    end
+  end
+  local tmp = {}
+  for _, d in pairs(parts or {}) do
+    local st = {}
+    tmp[#tmp + 1] = { uid = d.uid, id = d.id, kind = d.kind, seat = d.seat, st = st }
+  end
+  local tby = {}
+  for _, d in ipairs(tmp) do tby[d.uid] = d end
+  for _, e in ipairs(out) do setMemberAt(tby[e.uid], e.slot, e.id) end
+  local cmdr = commanderOf(tmp)
+  if not cmdr and active and (not avail or avail(active)) and not seen[active] then
+    -- nobody at the controls: the avatar takes the best command slot
+    local best, rank, slot = nil, nil, nil
+    for _, d in ipairs(tmp) do
+      local def = seatDef(d)
+      if def and def.command then
+        for k = 1, #def.seats do
+          if not memberAt(d, k) then
+            local r = cmd_rank(d) * 16 + k
+            if not rank or r < rank then best, rank, slot = d, r, k end
+          end
+        end
+      end
+    end
+    if best then
+      out[#out + 1] = { uid = best.uid, slot = slot, id = active }
+      setMemberAt(best, slot, active)
+      cmdr = active
+    end
+  end
+  return out, cmdr
+end
+
 -- ── records ────────────────────────────────────────────────────────────────
 local function key(id) return "crew.m." .. tostring(id) end
 
@@ -127,6 +416,9 @@ end
 -- when the inventory alias is in (inventory.resolve exists): before that,
 -- moving it would empty the pack every "astro" caller still reads. A save
 -- migrated before the alias landed moves the pack the first time it can.
+--   version 1: member #1 from the single astronaut (slice 1)
+--   version 2: the three-astronaut start — #2 and #3 join at base (slice 2);
+--              a v1 save keeps its member #1, their pack and progress.
 local ensured = false
 
 local function move_bag(from, to)
@@ -183,8 +475,7 @@ local function place_member_one(rec)
           end
         end
         if target then
-          target.st = type(target.st) == "table" and target.st or {}
-          target.st.crew = { rec.id }
+          setMemberAt(target, 1, rec.id)
           save.set("fleet.craft", f)
         end
         rec.status, rec.craft = "aboard", c.name
@@ -197,26 +488,59 @@ local function place_member_one(rec)
   rec.x, rec.y, rec.z = save.get("p_x"), save.get("p_y"), save.get("p_z")
 end
 
-function migrate()
-  if save.get("crew.version") ~= nil then return false end
-  local old = save.get("g_played") ~= nil
-  local seq = save.get("crew.seq") or 0
-  local id = 1
+-- The starters a save is owed (v2): members up to `starters`, free, at base.
+local function add_starters()
   local seed = save.get("g_seed") or 0
-  local rec = newRecord(id, nameFor(seed, id), { hired = 0, starter = true, cost = 0 })
-  if old then
-    place_member_one(rec)
-  else
-    rec.status = "afoot"
+  local r = ids()
+  local seq = save.get("crew.seq") or 0
+  local starters = 0
+  for _, id in ipairs(r) do
+    local rec = save.get(key(id))
+    if type(rec) == "table" and rec.starter then starters = starters + 1 end
   end
-  -- The tool in hand (tool_belt's key) is the record's hand from now on.
-  local tid = save.get("tool.id")
-  if type(tid) == "string" then rec.hand = tid end
-  put(rec)
-  save.set("crew.roster", { id })
-  save.set("crew.seq", math.max(seq, id))
-  save.set("crew.active", id)
-  if save.get("crew.death") == nil then save.set("crew.death", true) end
+  local added = 0
+  while starters < P("starters") do
+    seq = seq + 1
+    local rec = newRecord(seq, nameFor(seed, seq), { hired = 0, starter = true, cost = 0, status = "base" })
+    put(rec)
+    r[#r + 1] = seq
+    starters, added = starters + 1, added + 1
+    local inv = ref("inventory")
+    if inv and inv.ensureKit then pcall(inv.ensureKit, "crew:" .. seq) end
+  end
+  save.set("crew.roster", r)
+  save.set("crew.seq", seq)
+  return added
+end
+
+function migrate()
+  local v = save.get("crew.version")
+  if v ~= nil and v >= VERSION then return false end
+  if v == nil then
+    local old = save.get("g_played") ~= nil
+    local seq = save.get("crew.seq") or 0
+    local id = 1
+    local seed = save.get("g_seed") or 0
+    local rec = newRecord(id, nameFor(seed, id), { hired = 0, starter = true, cost = 0 })
+    if old then
+      place_member_one(rec)
+    else
+      rec.status = "afoot"
+    end
+    -- The tool in hand (tool_belt's key) is the record's hand from now on.
+    local tid = save.get("tool.id")
+    if type(tid) == "string" then rec.hand = tid end
+    put(rec)
+    save.set("crew.roster", { id })
+    save.set("crew.seq", math.max(seq, id))
+    save.set("crew.active", id)
+    if save.get("crew.death") == nil then save.set("crew.death", true) end
+  end
+  -- v2: the three-astronaut start (a v1 save keeps member #1 as they are)
+  local added = add_starters()
+  if v ~= nil and added > 0 then
+    save.set("crew.notice", string.format("%d more astronauts have joined the agency. They wait at the base.", added))
+  end
   save.set("crew.version", VERSION)
   return true
 end
@@ -266,17 +590,24 @@ function activeId()
   return nil
 end
 
+local function set_active(id)
+  save.set("crew.active", id or false)
+  bump()
+end
+
 function packOf(id)
   return "crew:" .. tostring(id or activeId() or 1)
 end
 
 -- Merge fields into a record (other crew scripts use this; panels poll
 -- `version`). `nil` can't be merged, so a field is cleared with `false`.
+local CLEAR = { task = true, hand = true, craft = true, died = true, body = true, x = true, y = true, z = true,
+                yaw = true, anchor = true, face = true }
 function patch(id, fields)
   local r = get(id)
   if not r then return false end
   for k, v in pairs(fields or {}) do
-    if v == false and (k == "task" or k == "hand" or k == "craft" or k == "died") then r[k] = nil else r[k] = v end
+    if v == false and CLEAR[k] then r[k] = nil else r[k] = v end
   end
   put(r)
   return true
@@ -300,7 +631,7 @@ function where(id)
 end
 
 -- ── hiring (§2.2) ──────────────────────────────────────────────────────────
-local function living()
+function living()
   local n = 0
   for _, r in ipairs(roster()) do if r.status ~= "dead" then n = n + 1 end end
   return n
@@ -328,23 +659,28 @@ function offers()
   local fee = hireFee()
   local free = living() == 0
   local out = {}
-  for i, a in ipairs(o) do out[i] = { name = a.name, cost = (free and i == 1) and 0 or fee } end
+  for i, a in ipairs(o) do
+    out[i] = { name = a.name, cost = (free and i == 1) and 0 or fee, free = (free and i == 1) or nil }
+  end
   return out
 end
 
-function hire(i)
+-- Hire applicant i. opts.free: no fee and the kit is free (the newbie).
+function hire(i, opts)
+  opts = opts or {}
   local list = offers()
   local a = list[i or 1]
   if not a then return nil, "no such applicant" end
-  if a.cost > 0 then
+  local cost = opts.free and 0 or a.cost
+  if cost > 0 then
     local co = ref("company")
     if co and co.spend then
-      if not co.spend(a.cost, "crew hire: " .. a.name) then return nil, "not enough money" end
+      if not co.spend(cost, "crew hire: " .. a.name) then return nil, "not enough money" end
     end
   end
   local id = (save.get("crew.seq") or 0) + 1
   save.set("crew.seq", id)
-  local rec = newRecord(id, a.name, { hired = (space and space.time and space.time()) or 0, cost = a.cost })
+  local rec = newRecord(id, a.name, { hired = (space and space.time and space.time()) or 0, cost = cost })
   put(rec)
   local r = ids()
   r[#r + 1] = id
@@ -354,9 +690,12 @@ function hire(i)
   save.set("crew.offers", o)
   -- the standard issue (§5.1): whatever the inventory offers for it
   local inv = ref("inventory")
-  if inv and inv.ensureKit then pcall(inv.ensureKit, packOf(id)) end
+  if inv and inv.ensureKit then pcall(inv.ensureKit, packOf(id), cost == 0 and { free = true } or nil) end
+  log_(string.format("crew: hired %s (#%d) for $%d", a.name, id, cost))
   return id, nil
 end
+
+function log_(s) if log then log(s) end end
 
 -- ── death settings (§2.3) ──────────────────────────────────────────────────
 function deathOn()
@@ -380,62 +719,178 @@ function memorial()
   return out
 end
 
--- ── where the crew physically is (single astronaut until slice 2) ──────────
-function bodyOf(id)
-  if id ~= nil and id == activeId() and find then
-    local a = find("Astronaut")
-    if a and a.valid ~= false then return a end
+-- ── the death rules, pure (§2.3; smoke_crew_death) ─────────────────────────
+-- Impact: Δv this tick → "ok" | "injure", hp lost | "kill"
+function impactRule(dv)
+  if dv >= P("impact_kill") then return "kill", 1.0 end
+  if dv > P("impact_injure") then return "injure", (dv - P("impact_injure")) / (P("impact_kill") - P("impact_injure")) end
+  return "ok", 0
+end
+
+-- Crush: seconds pinned so far → new seconds, dead?
+function crushStep(t, pinned, dt)
+  if not pinned then return 0, false end
+  t = (t or 0) + dt
+  return t, t >= P("crush_secs")
+end
+
+-- Re-entry exposure: heat, the craft's heating rate, exposed? → new heat, dead?
+function heatStep(heat, rate, exposed, dt)
+  heat = heat or 0
+  if exposed and (rate or 0) > 0 then
+    heat = heat + rate * P("heat_gain") * dt
+  else
+    heat = math.max(0, heat - P("heat_cool") * dt)
+  end
+  return heat, heat >= 1.0
+end
+
+-- The warning level of a reserve 0..1 with `secs` left: nil | "low" (25%)
+-- | "crit" (10%) | "min" (a minute or less).
+function airLevel(frac, secs)
+  if secs and secs <= 60 then return "min" end
+  if frac <= 0.10 then return "crit" end
+  if frac <= 0.25 then return "low" end
+  return nil
+end
+
+function blackoutGrace(src)
+  return src == "hold" and P("grace_water") or P("grace_suit")
+end
+
+-- The handoff order when the controlled member dies (§2.3), pure: the
+-- candidates → the pick.
+--   onfoot = { {id, dist} … } living members on foot in range
+--   craft  = the craft they were in (a handle) if it still carries crew
+--   crafts = { {v, dist} … } other crewed craft in range
+--   base   = { id … } living members at base
+-- → kind, what: "crew", id | "craft", v | "base", id | "newbie", nil
+function handoffPick(onfoot, craft, crafts, base)
+  local best, bd = nil, nil
+  for _, c in ipairs(onfoot or {}) do
+    if not bd or (c.dist or 0) < bd then best, bd = c.id, c.dist or 0 end
+  end
+  if best then return "crew", best end
+  if craft then return "craft", craft end
+  local bv, bvd = nil, nil
+  for _, c in ipairs(crafts or {}) do
+    if not bvd or (c.dist or 0) < bvd then bv, bvd = c.v, c.dist or 0 end
+  end
+  if bv then return "craft", bv end
+  if base and base[1] then return "base", base[1] end
+  return "newbie", nil
+end
+
+-- ── where the crew physically is ───────────────────────────────────────────
+local bodies = {}      -- id → CrewBody node (on foot, in range)
+local bodyWant = {}    -- id → true while a spawn is queued
+local dolls = {}       -- id → { node, vid, uid, slot, open }
+local dollWant = {}
+
+local function astro()
+  if not find then return nil end
+  local a = find("Astronaut")
+  if a and a.valid ~= false then return a end
+  return nil
+end
+
+local function vessels()
+  return findScripts and findScripts("vessel_controller") or {}
+end
+
+local function vessel_by_id(nid)
+  for _, v in ipairs(vessels()) do
+    if v.node and v.node.valid ~= false and v.node.id == nid then return v end
   end
   return nil
 end
 
-function dollOf(id) return nil end
-
--- The craft carrying member `id` right now (its controller handle), or nil.
-function craftOf(id)
-  if id ~= activeId() then return nil end
-  for _, v in ipairs(findScripts and findScripts("vessel_controller") or {}) do
+-- The craft the avatar rides (its `crewAboard`), or nil.
+function avatarCraft()
+  for _, v in ipairs(vessels()) do
     if v.crewAboard and v.node and v.node.valid ~= false then return v end
   end
   return nil
 end
 
+-- Seats of a live craft (its `seatsOf`), or {} for an older controller.
+local function seats_of(v)
+  if v and v.seatsOf then
+    local ok, s = pcall(v.seatsOf)
+    if ok and type(s) == "table" then return s end
+  end
+  return {}
+end
+
+function bodyOf(id)
+  if id == nil then return nil end
+  if id == activeId() then
+    local v = avatarCraft()
+    if not v then return astro() end
+    return nil
+  end
+  local b = bodies[id]
+  if b and b.valid ~= false then return b end
+  return nil
+end
+
+function dollOf(id)
+  local d = dolls[id]
+  if d and d.node and d.node.valid ~= false then return d.node end
+  return nil
+end
+
+-- The craft carrying member `id` right now (its controller handle), or nil.
+function craftOf(id)
+  if id == nil then return nil end
+  for _, v in ipairs(vessels()) do
+    if v.node and v.node.valid ~= false then
+      for _, s in ipairs(seats_of(v)) do
+        if s.taken == id then return v, s.uid, s.slot end
+      end
+      -- an older controller (no seats): the avatar's craft
+      if not v.seatsOf and v.crewAboard and id == activeId() then return v end
+    end
+  end
+  return nil
+end
+
+-- The crew aboard craft `v`, slot order, commander first: the portraits.
 function aboard(v)
   local out = {}
-  if v and v.crewAboard then
+  if not v then return out end
+  local cmd = v.commander and v.commander() or nil
+  for _, s in ipairs(seats_of(v)) do
+    local r = s.taken and get(s.taken)
+    if r and r.status ~= "dead" then
+      out[#out + 1] = { id = s.taken, name = r and r.name or ("#" .. s.taken), uid = s.uid, slot = s.slot,
+                        open = s.open == true, command = s.command == true, commander = s.taken == cmd,
+                        hp = r and r.hp or 1, o2 = r and r.o2 or 1, label = s.label,
+                        avatar = (v.crewAboard and s.taken == activeId()) or false }
+    end
+  end
+  table.sort(out, function(a, b)
+    if a.commander ~= b.commander then return a.commander end
+    if a.uid ~= b.uid then return a.uid < b.uid end
+    return a.slot < b.slot
+  end)
+  if #out == 0 and v.crewAboard and not v.seatsOf then
     local id = activeId()
-    if id then
-      out[1] = { id = id, uid = v.stationUid, slot = 1, commander = true }
-    end
+    if id then out[1] = { id = id, uid = v.stationUid, slot = 1, commander = true } end
   end
   return out
 end
 
-function switchList()
-  local out = {}
-  local id = activeId()
-  local r = get(id)
-  if r and not craftOf(id) then out[#out + 1] = { kind = "crew", id = id, name = r.name, dist = 0 } end
-  for _, v in ipairs(findScripts and findScripts("vessel_controller") or {}) do
-    if v.node and v.node.valid ~= false then
-      out[#out + 1] = { kind = "vessel", v = v, name = v.craftName or "Vessel", dist = nil }
-    end
-  end
-  return out
+function seatMap(v)
+  return seats_of(v)
 end
 
-function control(id)
-  if id == activeId() then return true, nil end
-  return false, "only one astronaut until the crew arrives"
-end
-
-function quickSwap() return false end
-
+-- ── EVA in space (§5.7) ────────────────────────────────────────────────────
 -- Is anyone on EVA in space (off the ground, nothing under them for 50 m)?
 -- Rails warp is refused while they are (§5.7). eva_pack keeps the answer.
 function onEvaInSpace()
   local id = activeId()
-  if not id or craftOf(id) then return false, nil end
+  if not id or avatarCraft() then return false, nil end
   local ep = ref("eva_pack")
   if ep and ep.inSpace then
     local ok, v = pcall(ep.inSpace)
@@ -444,7 +899,6 @@ function onEvaInSpace()
   return false, nil
 end
 
--- ── EVA (§3.3) ─────────────────────────────────────────────────────────────
 -- Has member `id` got an RCS Pack in their pack?
 function hasPack(id)
   local inv = ref("inventory")
@@ -473,6 +927,8 @@ function evaCheck(id)
   if r.status == "dead" then return false, "dead", nil end
   local v = craftOf(id)
   if not v then return false, "not aboard a craft", nil end
+  -- (a hatch blocked by the stack falls back to the clear spot round the
+  -- hull, vessel_controller hatchSpot: nobody is ever shut in)
   local st = v.evaState and v.evaState() or nil
   if not st then return true, nil, nil end
   if st.surface then
@@ -487,36 +943,545 @@ function evaCheck(id)
   return true, nil, nil
 end
 
--- Step member `id` out. opts.confirmed goes past the no-pack warning;
--- without it a warning comes back as (false, "confirm", warn) and the
--- caller (the F key, a portrait) asks the player.
+-- ── suit state on the avatar (§4.1 step 1–2) ───────────────────────────────
+-- The avatar's suit (o2, helmet, hand) into member `id`'s record.
+local function suit_out(id)
+  if not id then return end
+  local f = {}
+  local pw = ref("planet_walker")
+  if pw and type(pw.suitO2) == "number" then f.o2 = pw.suitO2 end
+  local su = ref("suit")
+  if su and su.helmetOn then
+    local ok, h = pcall(su.helmetOn)
+    if ok then f.helmet = h == true end
+  end
+  local tb = ref("tool_belt")
+  if tb and tb.toolId then
+    local ok, t = pcall(tb.toolId)
+    if ok then f.hand = t or false end
+  end
+  patch(id, f)
+end
+
+-- Member `id`'s suit onto the avatar.
+local function suit_in(id)
+  local r = get(id)
+  if not r then return end
+  local pw = ref("planet_walker")
+  if pw and pw.reloadSuit then pcall(pw.reloadSuit) end
+  local su = ref("suit")
+  if su and su.setHelmet and su.helmetOn then
+    local ok, h = pcall(su.helmetOn)
+    if ok and (h == true) ~= (r.helmet ~= false) then pcall(su.setHelmet, r.helmet ~= false, { quiet = true, force = true }) end
+  end
+  local tb = ref("tool_belt")
+  if tb and tb.hold then pcall(tb.hold, r.hand) end
+  -- the gravity gun lets go of whatever the last member held
+  local gg = ref("gravity_gun")
+  if gg and gg.drop then pcall(gg.drop) end
+end
+
+-- The body frame: name and body-relative position of a world point.
+local function rel(x, y, z)
+  if not (space and space.dominant) then return nil end
+  local d = space.dominant(x, y, z)
+  local b = d and space.body(d)
+  if not b then return nil end
+  return d, x - b.x, y - b.y, z - b.z
+end
+
+local function world_of(r)
+  if not (r and r.body and space and space.body) then return nil end
+  local b = space.body(r.body)
+  if not b then return nil end
+  return b.x + (r.x or 0), b.y + (r.y or 0), b.z + (r.z or 0)
+end
+
+-- ── CrewBody spawn/despawn (§4.1) ──────────────────────────────────────────
+-- A record on foot becomes a body: kinematic, standing where its record says
+-- (crew_body.lua keeps it there, in its planet's frame).
+local function spawn_body(id, x, y, z)
+  if bodies[id] or bodyWant[id] or not spawn then return end
+  bodyWant[id] = true
+  local ok = pcall(spawn, "CrewBody", vec3 and vec3(x, y, z) or { x = x, y = y, z = z }, function(n)
+    bodyWant[id] = nil
+    local r = get(id)
+    if not (r and r.status == "afoot") or bodies[id] then
+      if n and n.valid ~= false then destroy(n) end
+      return
+    end
+    bodies[id] = n
+  end)
+  if not ok then bodyWant[id] = nil end
+end
+
+local function despawn_body(id)
+  local b = bodies[id]
+  bodies[id] = nil
+  if b and b.valid ~= false and destroy then destroy(b) end
+end
+
+-- Leave the avatar's member where they stand: a CrewBody at the avatar's
+-- pose, the record on foot there.
+local function park_avatar_member(id)
+  local a = astro()
+  if not (a and id) then return end
+  suit_out(id)
+  local d, x, y, z = rel(a.x, a.y, a.z)
+  -- the way they face: the suit model's (the rig looks along its node's +Z)
+  local face = false
+  for _, ch in ipairs(a.children and a:children() or {}) do
+    if ch.name == "AstroModel" and ch.worldForward then
+      local f = ch:worldForward()
+      face = { x = -f.x, y = -f.y, z = -f.z }
+    end
+  end
+  patch(id, { status = "afoot", craft = false, body = d, x = x, y = y, z = z, face = face, anchor = false })
+  spawn_body(id, a.x, a.y, a.z)
+end
+
+-- ── dolls (§3.4) ───────────────────────────────────────────────────────────
+local function spawn_doll(id, v, s)
+  if dolls[id] or dollWant[id] or not spawn then return end
+  dollWant[id] = true
+  local vid = v.node.id
+  local ok = pcall(spawn, "CrewDoll", vec3 and vec3(v.node.x, v.node.y, v.node.z) or nil, function(n)
+    dollWant[id] = nil
+    if dolls[id] then if n and n.valid ~= false then destroy(n) end return end
+    dolls[id] = { node = n, vid = vid, uid = s.uid, slot = s.slot, open = s.open }
+  end)
+  if not ok then dollWant[id] = nil end
+end
+
+local function despawn_doll(id)
+  local d = dolls[id]
+  dolls[id] = nil
+  if d and d.node and d.node.valid ~= false and destroy then destroy(d.node) end
+end
+
+-- Who should be a doll right now: every seated member except the avatar in
+-- the craft it rides. Spawns what is missing, drops what is not.
+local doll_t = -10
+function dollSync(force)
+  if not force and now() - doll_t < 0.25 then return end
+  doll_t = now()
+  local want = {}
+  local active = activeId()
+  for _, v in ipairs(vessels()) do
+    if v.node and v.node.valid ~= false and not (v.isLost and v.isLost()) then
+      for _, s in ipairs(seats_of(v)) do
+        local r = s.taken and get(s.taken)
+        if r and r.status ~= "dead" and not (v.crewAboard and s.taken == active) and not want[s.taken] then
+          want[s.taken] = { v = v, s = s }
+        end
+      end
+    end
+  end
+  for id, d in pairs(dolls) do
+    local w = want[id]
+    if not w or not (d.node and d.node.valid ~= false) or d.vid ~= w.v.node.id then
+      despawn_doll(id)
+    else
+      d.uid, d.slot, d.open = w.s.uid, w.s.slot, w.s.open
+    end
+  end
+  for id, w in pairs(want) do
+    if not dolls[id] then spawn_doll(id, w.v, w.s) end
+  end
+end
+
+-- Where doll `id` goes this frame (crew_body.lua asks in its lateUpdate):
+-- → x,y,z, the part's up and forward (+X) and the doll's yaw, open, vessel
+function dollPose(id)
+  local d = dolls[id]
+  if not d then return nil end
+  local v = vessel_by_id(d.vid)
+  if not (v and v.partFrameNow) then return nil end
+  -- A closed part's crew sit in its interior (iva.lua: a human-scale room kept
+  -- in a space of its own, docs/crew-and-items.md §3.4): ask it first.
+  if not d.open then
+    local I = ref("iva")
+    if I and I.dollPose then
+      local ok, p = pcall(I.dollPose, v, d.uid, d.slot)
+      if ok and p then return p end
+    end
+  end
+  local ok, F = pcall(v.partFrameNow, d.uid, true)
+  if not ok or not F then return nil end
+  local rec = v.partRec and v.partRec(d.uid)
+  local def = seatDef(rec)
+  local s = def and def.seats[d.slot] or { x = 0, y = 0, z = 0, yaw = 0 }
+  local x = F.ox + F.rx * s.x + F.ux * s.y + F.zx * s.z
+  local y = F.oy + F.ry * s.x + F.uy * s.y + F.zy * s.z
+  local z = F.oz + F.rz * s.x + F.uz * s.y + F.zz * s.z
+  local c, sn = math.cos(s.yaw or 0), math.sin(s.yaw or 0)
+  -- facing: the part's +X turned by yaw about its +Y
+  local fx, fy, fz = F.rx * c - F.zx * sn, F.ry * c - F.zy * sn, F.rz * c - F.zz * sn
+  return { x = x, y = y, z = z, ux = F.ux, uy = F.uy, uz = F.uz, fx = fx, fy = fy, fz = fz,
+           open = d.open == true, v = v, uid = d.uid, visible = d.open == true or showInterior == true }
+end
+
+-- Which member a spawned CrewBody / CrewDoll node is (crew_body.lua asks:
+-- a spawn callback runs before the new node's scripts do, so the binding
+-- can't be pushed into them). → id, "doll"|"body" | nil
+function memberOfNode(n)
+  if not n then return nil end
+  for id, d in pairs(dolls) do if d.node == n then return id, "doll" end end
+  for id, b in pairs(bodies) do if b == n then return id, "body" end end
+  return nil
+end
+
+-- Command Seats pose their own rider (command_seat.lua): the doll in the
+-- seat of craft node `vid`, part `uid`, if there is one.
+function dollAt(vid, uid)
+  for id, d in pairs(dolls) do
+    if d.vid == vid and d.uid == uid and d.node and d.node.valid ~= false then return d.node, id end
+  end
+  return nil
+end
+
+-- ── who the controls go to ─────────────────────────────────────────────────
+-- What you control now: { kind = "crew", id } on foot, or { kind = "vessel", v }.
+function current()
+  for _, v in ipairs(vessels()) do
+    if v.piloting and v.node and v.node.valid ~= false then return { kind = "vessel", v = v, id = v.node.id } end
+  end
+  return { kind = "crew", id = activeId() }
+end
+
+local prev = nil  -- the last thing controlled before the current one (quickSwap)
+local function remember()
+  local c = current()
+  if c.kind == "vessel" then prev = { kind = "vessel", nid = c.v.node.id }
+  else prev = { kind = "crew", id = c.id } end
+end
+
+-- Let go of whatever the avatar is doing before it becomes someone else:
+-- a ridden craft keeps its member seated (a doll from now on); a member on
+-- foot is left standing there (a CrewBody).
+local function free_avatar(keep_v)
+  local id = activeId()
+  local ride = avatarCraft()
+  if ride then
+    suit_out(id)
+    if not (keep_v and ride.node.id == keep_v.node.id) then
+      if ride.releaseControl then pcall(ride.releaseControl) end
+      if ride.crewLeave then pcall(ride.crewLeave) end
+    end
+  else
+    for _, v in ipairs(vessels()) do
+      if v.piloting and v.releaseControl and not (keep_v and v.node.id == keep_v.node.id) then pcall(v.releaseControl) end
+    end
+    local r = get(id)
+    if r and r.status ~= "dead" then park_avatar_member(id) end
+  end
+end
+
+-- Switching requests run in the physics tick (an avatar moved outside it on
+-- a moving world stands a rails carry from where it was put).
+local queue = {}
+
+-- TAKE CONTROL of member `id` (§4.1).
+function control(id)
+  local r = get(id)
+  if not r then return false, "no such crew member" end
+  if r.status == "dead" then return false, r.name .. " is dead" end
+  if r.status == "base" then return false, r.name .. " is at the base" end
+  local v = craftOf(id)
+  if v then return takeCraft(v, id) end
+  if id == activeId() and not avatarCraft() then
+    -- already them on foot: just take the controls back from a craft
+    for _, w in ipairs(vessels()) do if w.piloting and w.releaseControl then pcall(w.releaseControl) end end
+    return true, nil
+  end
+  if not bodies[id] then return false, r.name .. " is out of range" end
+  queue[#queue + 1] = { kind = "control", id = id }
+  return true, nil
+end
+
+-- FLY craft `v` as member `id` (default: its commander, else anyone aboard).
+function takeCraft(v, id)
+  if not (v and v.node and v.node.valid ~= false) then return false, "no craft" end
+  local seated = aboard(v)
+  if #seated == 0 then return false, "nobody aboard" end
+  if not id then id = seated[1].id end
+  local found = false
+  for _, s in ipairs(seated) do if s.id == id then found = true end end
+  if not found then return false, "not aboard that craft" end
+  queue[#queue + 1] = { kind = "craft", nid = v.node.id, id = id }
+  return true, nil
+end
+
+-- EVA member `id` out of their craft's hatch (§3.5, §4.3). opts.stay: out
+-- as a CrewBody, you keep flying. opts.confirmed: past the no-pack warning.
 function eva(id, opts)
   id = id or activeId()
   opts = opts or {}
   local ok, why, warn = evaCheck(id)
   if not ok then return false, why end
   if warn and not opts.confirmed then return false, "confirm", warn end
-  local v = craftOf(id)
-  if not (v and v.evaNow) then return false, "no hatch" end
-  local done = v.evaNow()
-  if not done then return false, "no clear spot outside" end
+  local v, uid = craftOf(id)
+  if not v then return false, "not aboard a craft" end
+  if not v.seatsOf then
+    -- an older controller: the single astronaut
+    if not v.evaNow then return false, "no hatch" end
+    if not v.evaNow() then return false, "no clear spot outside" end
+    return true, nil
+  end
+  if not opts.stay then remember() end
+  queue[#queue + 1] = { kind = "eva", id = id, nid = v.node.id, uid = uid, stay = opts.stay == true }
   return true, nil
 end
 
--- Board craft `v` (a controller handle). Slots arrive in slice 2.
+-- Board craft `v`: the avatar (today's F), or an idle CrewBody ("Board").
 function board(id, v, uid, slot)
-  if id ~= activeId() then return false, "only the avatar boards" end
-  if not (v and v.boardNow) then return false, "not a craft" end
-  if v.boardNow() then return true, nil end
-  return false, "out of reach"
+  if not (v and v.node) then return false, "not a craft" end
+  if id == activeId() and not avatarCraft() then
+    if not v.boardNow then return false, "not a craft" end
+    if v.boardNow() then return true, nil end
+    return false, "out of reach"
+  end
+  local b = bodies[id]
+  if not b then return false, "not on foot nearby" end
+  if not v.seatMember then return false, "can't seat a second crew member" end
+  local s_uid, s_slot = uid, slot
+  if not s_uid and v.freeSeat then
+    s_uid, s_slot = v.freeSeat(nil)
+  end
+  if not s_uid then return false, "no free seat" end
+  local ok, why = v.seatMember(s_uid, s_slot, id)
+  if not ok then return false, why end
+  despawn_body(id)
+  patch(id, { status = "aboard", craft = v.craftName or false, body = false, x = false, y = false, z = false })
+  return true, nil
 end
 
--- Status bookkeeping the controller calls on EVA and boarding.
+-- Back to the last thing you controlled (`).
+function quickSwap()
+  if not prev then return false, "nothing to swap back to" end
+  local p = prev
+  if p.kind == "vessel" then
+    local v = vessel_by_id(p.nid)
+    if not v then prev = nil return false, "that craft is gone" end
+    return switchTo({ kind = "vessel", v = v })
+  end
+  return switchTo({ kind = "crew", id = p.id })
+end
+
+-- ── the switch list (§4.2) ─────────────────────────────────────────────────
+-- Everything [ ] steps through: each member on foot in range (by name), and
+-- every craft with a command part in range. Range from what you control now.
+local function pos_of_current(c)
+  if c.kind == "vessel" then local n = c.v.node return n.x, n.y, n.z end
+  local a = astro()
+  if a then return a.x, a.y, a.z end
+  return nil
+end
+
+function switchList(range)
+  range = range or P("body_range")
+  local cur = current()
+  local cx, cy, cz = pos_of_current(cur)
+  local out = {}
+  local active = activeId()
+  local ride = avatarCraft()
+  if active and not ride then
+    local r = get(active)
+    if r and r.status ~= "dead" then out[#out + 1] = { kind = "crew", id = active, name = r.name, dist = 0 } end
+  end
+  for id, b in pairs(bodies) do
+    if b.valid ~= false then
+      local r = get(id)
+      local d = cx and len(b.x - cx, b.y - cy, b.z - cz) or 0
+      if r and r.status == "afoot" and d <= range then
+        out[#out + 1] = { kind = "crew", id = id, name = r.name, dist = d }
+      end
+    end
+  end
+  table.sort(out, function(a, b) return a.name < b.name or (a.name == b.name and a.id < b.id) end)
+  local craft = {}
+  for _, v in ipairs(vessels()) do
+    local n = v.node
+    if n and n.valid ~= false and v.controlState then
+      local cs = v.controlState()
+      if (cs.pod or cs.probe) and not cs.lost then
+        local d = cx and len(n.x - cx, n.y - cy, n.z - cz) or 0
+        local mine = (cur.kind == "vessel" and cur.v.node.id == n.id) or (ride and ride.node.id == n.id)
+        if mine or d <= range then
+          local nc = #aboard(v)
+          craft[#craft + 1] = { kind = "vessel", v = v, name = v.craftName or n.name or "Vessel", id = n.id,
+                                dist = d, crew = nc, can = cs.can or nc > 0, why = cs.why }
+        end
+      end
+    end
+  end
+  table.sort(craft, function(a, b) return a.name < b.name or (a.name == b.name and a.id < b.id) end)
+  for _, c in ipairs(craft) do out[#out + 1] = c end
+  return out, cur
+end
+
+-- Go to a switch-list target.
+function switchTo(t)
+  if not t then return false, "nothing there" end
+  if t.kind == "crew" then
+    remember()
+    return control(t.id)
+  end
+  local v = t.v
+  if not (v and v.node and v.node.valid ~= false) then return false, "that craft is gone" end
+  remember()
+  local ride = avatarCraft()
+  if #aboard(v) > 0 and not (ride and ride.node.id == v.node.id) then
+    return takeCraft(v)
+  end
+  local fo = ref("flight_ops")
+  if fo and fo.switchToVessel then
+    if fo.switchToVessel(v) then return true, nil end
+    return false, "it would not answer"
+  end
+  if v.remoteControl and v.remoteControl() then return true, nil end
+  return false, "it would not answer"
+end
+
+-- Step `dir` (+1/−1) along the list. → the target's caption, or nil.
+function step(dir)
+  local list, cur = switchList()
+  if #list < 2 then return nil, "nothing else in range to switch to" end
+  local i = 0
+  local ride = avatarCraft()
+  for k, t in ipairs(list) do
+    if cur.kind == "crew" and t.kind == "crew" and t.id == cur.id then i = k end
+    if cur.kind == "vessel" and t.kind == "vessel" and t.v.node.id == cur.v.node.id then i = k end
+  end
+  if i == 0 and ride then
+    for k, t in ipairs(list) do if t.kind == "vessel" and t.v.node.id == ride.node.id then i = k end end
+  end
+  local j = ((i - 1 + dir) % #list) + 1
+  local t = list[j]
+  local ok, why = switchTo(t)
+  if not ok then return nil, why end
+  if t.kind == "crew" then return t.name .. " · on foot" end
+  if (t.crew or 0) > 0 then return string.format("%s · %d aboard", t.name, t.crew) end
+  return t.name .. " · " .. (t.can and "remote" or ("no control — " .. tostring(t.why or ""))):lower()
+end
+
+-- ── the queued switches (run in fixedUpdate) ───────────────────────────────
+local hold_imp = 0       -- the impact monitor waits after a teleport
+-- (a switch: half a second; a set-down at the base, `secs`: the crew's
+-- home is a couple of metres over the ground and the drop is not a fall)
+local function quiet_monitors(secs) hold_imp = math.max(hold_imp, now() + (secs or 0.5)) end
+
+local function do_control(q)
+  local id = q.id
+  local b = bodies[id]
+  local a = astro()
+  if not (b and b.valid ~= false and a) then return end
+  local bx, by, bz = b.x, b.y, b.z
+  local bvx, bvy, bvz = 0, 0, 0
+  local cb = b.getScript and b:getScript("crew_body") or nil
+  if cb and cb.velocityNow then bvx, bvy, bvz = cb.velocityNow() end
+  -- standing on a planet: where the record says, this tick (the body node
+  -- was written a tick ago, a rails carry behind)
+  local r0 = get(id)
+  if r0 and not r0.anchor then
+    local wx, wy, wz = world_of(r0)
+    if wx then bx, by, bz = wx, wy, wz end
+  end
+  free_avatar(nil)
+  despawn_body(id)
+  a.x, a.y, a.z = bx, by, bz
+  a.vx, a.vy, a.vz = bvx, bvy, bvz
+  a.visible = true
+  set_active(id)
+  patch(id, { status = "afoot", craft = false, anchor = false })
+  suit_in(id)
+  quiet_monitors()
+  local r = get(id)
+  caption((r and r.name or "crew") .. " · on foot")
+  log_(string.format("crew: control → %s (#%d) on foot", r and r.name or "?", id))
+end
+
+local function do_craft(q)
+  local v = vessel_by_id(q.nid)
+  if not (v and v.avatarBoard) then
+    -- an older controller: fly it as before
+    if v and v.takeControl then v.takeControl() end
+    return
+  end
+  local id = q.id
+  local old = activeId()
+  local ride = avatarCraft()
+  if ride and ride.node.id == v.node.id and old == id then
+    if not v.piloting and v.remoteControl then v.remoteControl() end
+    return
+  end
+  free_avatar(v)
+  set_active(id)
+  v.avatarBoard(id)
+  patch(id, { status = "aboard", craft = v.craftName or false })
+  suit_in(id)
+  quiet_monitors()
+  dollSync(true)
+  local r = get(id)
+  caption(string.format("%s · %s", v.craftName or "craft", r and r.name or "crew"))
+  log_(string.format("crew: control → %s (#%d) aboard %s", r and r.name or "?", id, tostring(v.craftName)))
+end
+
+local function do_eva(q)
+  local v = vessel_by_id(q.nid)
+  if not v then return end
+  local id = q.id
+  if q.stay then
+    -- out as a CrewBody beside the hatch; you keep the craft
+    local x, y, z = nil, nil, nil
+    if v.hatchSpot then x, y, z = v.hatchSpot(q.uid) end
+    if not x then return end
+    v.seatMember(q.uid, select(2, v.memberSlot(id)), nil)
+    local d, rx, ry, rz = rel(x, y, z)
+    -- off the ground: they wait beside the craft, in its part frame
+    local anchor = false
+    local st = v.evaState and v.evaState() or nil
+    if st and not st.surface and v.partLocalNow then
+      local lx, ly, lz = v.partLocalNow(q.uid, x, y, z)
+      if lx then anchor = { vid = v.node.id, uid = q.uid, x = lx, y = ly, z = lz } end
+    end
+    patch(id, { status = "afoot", craft = false, body = d, x = rx, y = ry, z = rz, anchor = anchor, face = false })
+    spawn_body(id, x, y, z)
+    dollSync(true)
+    log_(string.format("crew: #%d steps out of %s and waits by the hatch", id, tostring(v.craftName)))
+    return
+  end
+  local old = activeId()
+  local ride = avatarCraft()
+  if not (ride and ride.node.id == v.node.id) then
+    -- the avatar is elsewhere: it comes to this craft first
+    free_avatar(v)
+    v.avatarBoard(id)
+  elseif old ~= id then
+    suit_out(old)
+  end
+  set_active(id)
+  suit_in(id)
+  if v.setStationOf then v.setStationOf(id) end
+  if v.evaNow then v.evaNow(true) end
+  quiet_monitors()
+  dollSync(true)
+end
+
+local function run_queue()
+  if #queue == 0 then return end
+  local q = table.remove(queue, 1)
+  if q.kind == "control" then do_control(q)
+  elseif q.kind == "craft" then do_craft(q)
+  elseif q.kind == "eva" then do_eva(q) end
+end
+
+-- ── status bookkeeping the controller calls ────────────────────────────────
 function noteAboard(id, craft)
-  patch(id, { status = "aboard", craft = craft or false })
+  patch(id, { status = "aboard", craft = craft or false, body = false, x = false, y = false, z = false })
 end
 function noteAfoot(id)
-  local a = bodyOf(id)
+  local a = astro()
   local f = { status = "afoot", craft = false }
   if a and space and space.dominant then
     local d = space.dominant(a.x, a.y, a.z)
@@ -524,6 +1489,50 @@ function noteAfoot(id)
     if b then f.body, f.x, f.y, f.z = d, a.x - b.x, a.y - b.y, a.z - b.z end
   end
   patch(id, f)
+end
+-- A craft came home (recovered): everyone in it goes back to base.
+function noteHome(id)
+  local r = get(id)
+  if r and r.status ~= "dead" then
+    patch(id, { status = "base", craft = false, body = false, x = false, y = false, z = false,
+                flights = (r.flights or 0) + 1 })
+  end
+end
+
+-- A member set down on foot at a world point (a wreck they walked away
+-- from): a CrewBody there, the record on foot.
+function setDown(id, x, y, z)
+  local r = get(id)
+  if not (r and r.status ~= "dead") then return false end
+  if id == activeId() and not avatarCraft() then return false end
+  local d, rx, ry, rz = rel(x, y, z)
+  patch(id, { status = "afoot", craft = false, body = d, x = rx, y = ry, z = rz })
+  despawn_doll(id)
+  spawn_body(id, x, y, z)
+  return true
+end
+
+-- The launch seats a commander who isn't the avatar's member: the avatar
+-- flies as them, and the member it was goes back into the building.
+function launchAs(id, craft)
+  local old = activeId()
+  if old == id then return end
+  if old then
+    suit_out(old)
+    local r = get(old)
+    -- (seated in this craft too: they stay aboard as a doll)
+    local seated = false
+    for _, v in ipairs(vessels()) do
+      for _, s in ipairs(seats_of(v)) do if s.taken == old then seated = true end end
+    end
+    if r and r.status ~= "dead" and not seated then
+      patch(old, { status = "base", craft = false, body = false, x = false, y = false, z = false })
+    end
+  end
+  set_active(id)
+  noteAboard(id, craft)
+  suit_in(id)
+  quiet_monitors()
 end
 
 -- ── tasks (§6.3) ───────────────────────────────────────────────────────────
@@ -634,25 +1643,503 @@ function drawAir(o2, dt, tanks)
   return o2, left
 end
 
+-- ── the death monitor's live state (the avatar on foot) ────────────────────
+local MON = { vx = nil, vy = nil, vz = nil, x = nil, y = nil, z = nil, dom = nil, bx = nil, by = nil, bz = nil,
+              fall = 0, pinned = false, crush_t = 0, injured_t = -10, dying = nil }
+
 -- ── warnings as state (§2.3; WS2 draws them) ───────────────────────────────
 function alerts(id)
+  id = id or activeId()
   local r = get(id) or {}
-  local pw = ref("planet_walker")
-  local breath = (pw and pw.breath) or (pw and pw.oxygen) or 1.0
+  local is_avatar = id == activeId()
+  local pw = is_avatar and ref("planet_walker") or nil
+  local breath = (pw and pw.breath) or 1.0
   -- o2: the suit's air in all, built-in + tanks, as a share of their capacity
   local o2 = r.o2 or 1.0
-  if pw and pw.airLeft and pw.airCap and pw.airCap > 0 then o2 = pw.airLeft / pw.airCap end
-  return { o2 = o2, air_s = pw and pw.airLeft or nil, breath = breath, hp = r.hp or 1.0, heat = r.heat or 0.0, fall = 0.0,
-           pinned = false, blackout = (pw and pw.downed) and 1.0 or nil, cabin = nil }
+  local air_s = nil
+  if pw and pw.airLeft and pw.airCap and pw.airCap > 0 then o2, air_s = pw.airLeft / pw.airCap, pw.airLeft end
+  local cabin, tol = nil, nil
+  local v, uid = craftOf(id)
+  if v and uid and v.partHp then
+    local ok, hp = pcall(v.partHp, uid)
+    if ok and hp then cabin, tol = hp, P("cabin_tol") end
+  end
+  local blackout = nil
+  if pw and pw.downed then blackout = pw.downLeft or 1.0 end
+  if MON.dying and MON.dying.id == id then blackout = math.max(0, MON.dying.t1 - now()) end
+  return { o2 = o2, air_s = air_s, breath = breath, hp = r.hp or 1.0, heat = r.heat or 0.0,
+           fall = is_avatar and MON.fall or 0.0, pinned = is_avatar and MON.pinned or false,
+           blackout = blackout, cabin = cabin, cabin_tol = tol,
+           o2_level = airLevel(o2, air_s), breath_level = (breath < 1) and airLevel(breath, nil) or nil }
+end
+
+-- ── death (§2.3) ───────────────────────────────────────────────────────────
+-- Ground under a world point (for remains): a ray down the local vertical.
+local function ground_under(d, x, y, z)
+  local b = space and space.body and space.body(d)
+  if not (b and raycast) then return x, y, z end
+  local ux, uy, uz = x - b.x, y - b.y, z - b.z
+  local l = len(ux, uy, uz)
+  if l < 1e-6 then return x, y, z end
+  ux, uy, uz = ux / l, uy / l, uz / l
+  local a = astro()
+  local ok, h = pcall(raycast, x + ux * 0.5, y + uy * 0.5, z + uz * 0.5, -ux, -uy, -uz, 60, a)
+  if ok and h and h.x then return h.x, h.y, h.z end
+  return x, y, z
+end
+
+-- Where member `id` is in the world now (avatar, body, doll or record).
+local function world_pos(id)
+  if id == activeId() then
+    local ride = avatarCraft()
+    local a = astro()
+    if a and not ride then return a.x, a.y, a.z end
+  end
+  local b = bodies[id]
+  if b and b.valid ~= false then return b.x, b.y, b.z end
+  local d = dolls[id]
+  if d and d.node and d.node.valid ~= false then return d.node.x, d.node.y, d.node.z end
+  local v = craftOf(id)
+  if v and v.node then return v.node.x, v.node.y, v.node.z end
+  return world_of(get(id))
+end
+
+-- The pack drops as a salvage crate, the remains stay where they fell.
+local function leave_behind(id, r, x, y, z, ignore)
+  local d = space and space.dominant and space.dominant(x, y, z)
+  local crate, rem = nil, nil
+  local sv = ref("salvage")
+  if sv and sv.drop and d then
+    local ok, cid = pcall(sv.drop, d, x, y, z, ignore, { from = packOf(id), items = true,
+      label = (r.name or "crew") .. "'s pack" })
+    if ok then crate = cid end
+  end
+  local dep = ref("deployables")
+  if not dep and spawn and find and not find("DeployLib") then pcall(spawn, "DeployLib", vec3(0, 0, 0)) end
+  if dep and dep.place and d then
+    local gx, gy, gz = ground_under(d, x, y, z)
+    local ok, rid = pcall(dep.place, "remains", d, gx, gy, gz, { by = id, name = r.name })
+    if ok then rem = rid end
+  end
+  return crate, rem, d
+end
+
+CAUSE_TEXT = {
+  impact = "impact", cabin = "the cabin failed", oxygen = "out of oxygen", drowned = "drowned",
+  crushed = "crushed", heat = "burned on re-entry", lost = "lost with the craft",
+}
+
+-- The control handoff when the controlled member is gone.
+local function handoff(dead_id, from_v)
+  local a = astro()
+  local ax, ay, az = a and a.x, a and a.y, a and a.z
+  local onfoot = {}
+  for id, b in pairs(bodies) do
+    local r = get(id)
+    if r and r.status == "afoot" and b.valid ~= false and id ~= dead_id then
+      local d = ax and len(b.x - ax, b.y - ay, b.z - az) or 0
+      if d <= P("body_range") then onfoot[#onfoot + 1] = { id = id, dist = d } end
+    end
+  end
+  local craft = nil
+  if from_v and from_v.node and from_v.node.valid ~= false and #aboard(from_v) > 0 then craft = from_v end
+  local crafts = {}
+  for _, v in ipairs(vessels()) do
+    if v.node and v.node.valid ~= false and #aboard(v) > 0 then
+      crafts[#crafts + 1] = { v = v, dist = ax and len(v.node.x - ax, v.node.y - ay, v.node.z - az) or 0 }
+    end
+  end
+  local base = {}
+  for _, r in ipairs(roster()) do if r.status == "base" then base[#base + 1] = r.id end end
+  local kind, what = handoffPick(onfoot, craft, crafts, base)
+  if kind == "crew" then
+    queue[#queue + 1] = { kind = "control", id = what }
+    return
+  end
+  if kind == "craft" then
+    queue[#queue + 1] = { kind = "craft", nid = what.node.id, id = aboard(what)[1].id }
+    return
+  end
+  local id = what
+  if kind == "newbie" then
+    id = hire(1, { free = true })
+    local r = get(id)
+    local bc = ref("big_caption")
+    if bc and bc.show and r then bc.show("A NEW VOLUNTEER", "The agency has a new volunteer: " .. r.name, 6.0) end
+  end
+  if not id then return end
+  -- out of the Command Centre as the avatar
+  local fo = ref("flight_ops")
+  local hx, hy, hz = nil, nil, nil
+  if fo and fo.crewHome then hx, hy, hz = fo.crewHome() end
+  set_active(id)
+  if a and hx then
+    a.x, a.y, a.z = hx, hy, hz
+    a.vx, a.vy, a.vz = 0, 0, 0
+  end
+  if a then a.visible = true end
+  noteAfoot(id)
+  suit_in(id)
+  quiet_monitors(2.5)
+  local r = get(id)
+  caption((r and r.name or "crew") .. " walks out of the Command Centre")
+end
+
+-- Rescue instead (death off): blacked out, they wake at base for the fee.
+local function rescue(id, cause)
+  local r = get(id)
+  local is_avatar = id == activeId() and not avatarCraft()
+  local co = ref("company")
+  local fo = ref("flight_ops")
+  local fee = 250
+  if co and co.afford and co.afford(fee) and co.spend then co.spend(fee, "crew rescue") end
+  local v, uid, slot = craftOf(id)
+  if v and v.seatMember then v.seatMember(uid, slot, nil) end
+  despawn_body(id)
+  despawn_doll(id)
+  patch(id, { hp = 1.0, heat = 0, o2 = 1.0 })
+  if is_avatar then
+    local a = astro()
+    local hx, hy, hz = nil, nil, nil
+    if fo and fo.crewHome then hx, hy, hz = fo.crewHome() end
+    if a and hx then a.x, a.y, a.z = hx, hy, hz; a.vx, a.vy, a.vz = 0, 0, 0; a.visible = true end
+    noteAfoot(id)
+    quiet_monitors(2.5)
+  else
+    patch(id, { status = "base", craft = false, body = false, x = false, y = false, z = false })
+  end
+  local bc = ref("big_caption")
+  if bc and bc.show and r then bc.show("CREW RESCUED", string.format("%s blacked out (%s). The agency brought them back to the base.",
+    r.name, CAUSE_TEXT[cause] or cause), 6.0) end
+  log_(string.format("crew: #%d rescued (%s)", id, tostring(cause)))
+  return true
+end
+
+-- KILL member `id` (death on), or rescue them (death off). `detail` is the
+-- caption's figure ("17 m/s"). Returns true when something happened.
+function kill(id, cause, detail, opts)
+  opts = opts or {}
+  local r = get(id)
+  if not r or r.status == "dead" then return false end
+  if not deathOn() then return rescue(id, cause) end
+  local ride = avatarCraft()
+  local is_avatar = id == activeId()
+  local v, uid, slot = craftOf(id)
+  local x, y, z = opts.x, opts.y, opts.z
+  if not x then x, y, z = world_pos(id) end
+  if is_avatar and not ride then suit_out(id) end
+  -- out of their seat (a doll; any stale seat elsewhere too), off their feet (a body)
+  if v and v.seatMember and uid then v.seatMember(uid, slot, nil) end
+  for _, w in ipairs(vessels()) do if w.unseatMember then pcall(w.unseatMember, id) end end
+  despawn_body(id)
+  despawn_doll(id)
+  local crate, rem, d = nil, nil, nil
+  if x then crate, rem, d = leave_behind(id, r, x, y, z, astro()) end
+  local st = (space and space.time and space.time()) or 0
+  local dep = ref("deployables")
+  local date = dep and dep.dateOf and dep.dateOf(st) or nil
+  r = get(id)
+  r.status = "dead"
+  r.task = nil
+  r.died = { st = st, date = date, cause = cause, detail = detail, body = d,
+             craft = (v and v.craftName) or opts.craft, remains = rem, crate = crate }
+  if d and x then
+    local b = space.body(d)
+    if b then r.died.x, r.died.y, r.died.z = x - b.x, y - b.y, z - b.z end
+  end
+  put(r)
+  local co = ref("company")
+  if co and co.addRep then pcall(co.addRep, -2, "astronaut lost: " .. r.name) end
+  local text = string.format("%s was killed: %s%s", r.name, CAUSE_TEXT[cause] or cause,
+    detail and (", " .. detail) or "")
+  lastDeath = { id = id, name = r.name, cause = cause, text = text, t = now(), x = x, y = y, z = z }
+  local bc = ref("big_caption")
+  if bc and bc.show then bc.show("ASTRONAUT LOST", text, 6.0) end
+  log_("crew: " .. text)
+  -- the controlled one: the camera holds 2 s, then control passes on
+  if is_avatar then
+    local a = astro()
+    if ride then
+      if ride.releaseControl then pcall(ride.releaseControl) end
+      if ride.crewLeave then pcall(ride.crewLeave) end
+    end
+    if a then
+      a.visible = false
+      a.vx, a.vy, a.vz = 0, 0, 0
+    end
+    local rd, rx, ry, rz = nil, nil, nil, nil
+    if x then rd, rx, ry, rz = rel(x, y, z) end
+    MON.dying = { id = id, t1 = now() + P("hold_secs"), v = v, d = rd, x = rx, y = ry, z = rz }
+  end
+  bump()
+  return true
+end
+
+-- planet_walker asks at the end of its blackout grace (src "suit" | "hold"):
+-- true = handled here (death), false = do today's rescue.
+function blackoutEnd(src)
+  if not deathOn() then return false end
+  local id = activeId()
+  if not id then return false end
+  return kill(id, src == "hold" and "drowned" or "oxygen")
+end
+
+-- A crewed part broke (vessel_controller): its occupants die (death on) or
+-- are rescued. `x,y,z` the wreck point.
+function cabinLost(v, uid, ids_, x, y, z)
+  for _, id in ipairs(ids_ or {}) do
+    kill(id, "cabin", nil, { x = x, y = y, z = z, craft = v and v.craftName })
+  end
+end
+
+-- ── the monitor: impact, crush, heat (the avatar on foot; heat aboard) ─────
+local function avatar_monitor(dt)
+  local a = astro()
+  local id = activeId()
+  if not (a and id) then return end
+  local ride = avatarCraft()
+  if MON.dying then
+    -- the hold on the fallen: the avatar waits hidden where they fell
+    local m = MON.dying
+    if m.d and space and space.body then
+      local b = space.body(m.d)
+      if b then a.x, a.y, a.z = b.x + m.x, b.y + m.y, b.z + m.z; a.vx, a.vy, a.vz = 0, 0, 0 end
+    end
+    if now() >= m.t1 then
+      MON.dying = nil
+      -- (the suit's parts come back; the walker re-shows the root)
+      for _, ch in ipairs(MON.hid or {}) do if ch.valid ~= false then ch.visible = true end end
+      MON.hid = nil
+      handoff(m.id, m.v)
+    end
+    return
+  end
+  -- not while the world loads (the avatar is put where the save says, a
+  -- craft is rebuilt around it), nor for 3 s after the reveal
+  local gm = ref("game_manager")
+  if gm and (gm.loading or gm.curtain) then quiet_monitors(3.0) end
+  -- out of a hatch or a seat (EVA, a recovery, END FLIGHT): the step down
+  -- from a pod on the pad is not a fall
+  if MON.rode and not ride then quiet_monitors(1.5) end
+  MON.rode = ride ~= nil
+  if ride or now() < hold_imp or held(id) then
+    MON.vx = nil
+    MON.fall, MON.pinned, MON.crush_t = 0, false, 0
+    return
+  end
+  local vx, vy, vz = a.vx or 0, a.vy or 0, a.vz or 0
+  local d = space and space.dominant and space.dominant(a.x, a.y, a.z) or nil
+  local b = d and space.body(d)
+  -- (velocities are in the planet's rails frame: the ground is at rest)
+  local gvx, gvy, gvz = 0, 0, 0
+  local jumped = MON.x and len(a.x - MON.x, a.y - MON.y, a.z - MON.z) > math.max(30, len(vx, vy, vz) * dt * 4 + 10)
+  if MON.vx and MON.dom == d and not jumped then
+    -- Δv this tick: all of it along the vertical (a fall, a landing), and
+    -- sideways only past what the walker itself does in a tick (a run
+    -- stopped dead is 9.4 m/s and hurts nobody; a rover at 25 m/s does)
+    local ex, ey, ez = vx - MON.vx, vy - MON.vy, vz - MON.vz
+    local dv = len(ex, ey, ez)
+    if b then
+      local ux, uy, uz = a.x - b.x, a.y - b.y, a.z - b.z
+      local l = len(ux, uy, uz)
+      if l > 1e-6 then
+        local r = (ex * ux + ey * uy + ez * uz) / l
+        local hz = math.sqrt(math.max(0, dv * dv - r * r))
+        hz = math.max(0, hz - P("walk_dv"))
+        dv = math.sqrt(r * r + hz * hz)
+      end
+    end
+    local verdict, loss = impactRule(dv)
+    if verdict == "kill" then
+      MON.vx = nil
+      kill(id, "impact", string.format("%.0f m/s", dv))
+      return
+    elseif verdict == "injure" and now() - MON.injured_t > 0.3 then
+      MON.injured_t = now()
+      local r = get(id)
+      local hp = math.max(0, (r and r.hp or 1) - loss)
+      patch(id, { hp = hp })
+      log_(string.format("crew: #%d hurt (%.1f m/s), hp %.2f", id, dv, hp))
+      if hp <= 0 then kill(id, "impact", string.format("%.0f m/s", dv)) return end
+    end
+  end
+  MON.vx, MON.vy, MON.vz = vx, vy, vz
+  MON.x, MON.y, MON.z = a.x, a.y, a.z
+  MON.dom = d
+  if b then MON.bx, MON.by, MON.bz = b.x, b.y, b.z end
+  -- the fall speed against the ground (the fall chip)
+  local pw = ref("planet_walker")
+  local grounded = pw and (pw.grounded or pw.onGround)
+  if b and not grounded then
+    local ux, uy, uz = a.x - b.x, a.y - b.y, a.z - b.z
+    local l = len(ux, uy, uz)
+    if l > 1e-6 then
+      MON.fall = math.max(0, -((vx - gvx) * ux + (vy - gvy) * uy + (vz - gvz) * uz) / l)
+    end
+  else
+    MON.fall = 0
+  end
+  -- crushed: something solid in the suit's middle
+  if overlapSphere then
+    local hits = overlapSphere(vec3(a.x, a.y, a.z), P("crush_r"), { ignore = { a } })
+    local pinned = false
+    for _, h in ipairs(hits or {}) do
+      local n = h.node
+      if n and n.valid ~= false and n.id ~= a.id then
+        local p = n.parent
+        local nm = n.name or ""
+        if nm:match("^Loose") or nm:match("^Debris") or nm == "Vessel"
+          or (p and p.valid ~= false and (p.name == "Vessel" or (p.getScript and p:getScript("vessel_controller")))) then
+          pinned = true
+          break
+        end
+      end
+    end
+    local dead
+    MON.crush_t, dead = crushStep(MON.crush_t, pinned, dt)
+    MON.pinned = pinned
+    if dead then kill(id, "crushed") return end
+  end
+end
+
+-- Re-entry heat on everyone exposed (an open seat; anyone on EVA rides no
+-- craft's heating). Runs at 4 Hz.
+local heat_t = 0
+local function heat_monitor(dt)
+  heat_t = heat_t + dt
+  if heat_t < 0.25 then return end
+  local step_ = heat_t
+  heat_t = 0
+  for _, v in ipairs(vessels()) do
+    if v.node and v.node.valid ~= false then
+      local rate = v.heating or 0
+      for _, s in ipairs(seats_of(v)) do
+        if s.taken then
+          local r = get(s.taken)
+          if r then
+            local h, dead = heatStep(r.heat or 0, rate, s.open == true, step_)
+            if math.abs(h - (r.heat or 0)) > 1e-4 then
+              r.heat = h
+              save.set(key(r.id), r)
+            end
+            if dead then kill(r.id, "heat") end
+          end
+        end
+      end
+    end
+  end
+end
+
+-- ── CrewBody range: records out of range, bodies back in range ─────────────
+local range_t = -10
+local function body_sync()
+  if now() - range_t < 1.0 then return end
+  range_t = now()
+  local fx, fy, fz = nil, nil, nil
+  local cam = find and (find("Camera 1") or find("Camera"))
+  local c = current()
+  if c.kind == "vessel" then fx, fy, fz = c.v.node.x, c.v.node.y, c.v.node.z
+  else local a = astro() if a then fx, fy, fz = a.x, a.y, a.z end end
+  if not fx and cam then fx, fy, fz = cam.x, cam.y, cam.z end
+  if not fx then return end
+  local active = activeId()
+  for _, r in ipairs(roster()) do
+    if r.status == "afoot" and r.id ~= active then
+      local b = bodies[r.id]
+      if b and b.valid ~= false then
+        if len(b.x - fx, b.y - fy, b.z - fz) > P("body_range") then
+          local d, x, y, z = rel(b.x, b.y, b.z)
+          patch(r.id, { body = d, x = x, y = y, z = z })
+          despawn_body(r.id)
+        end
+      else
+        bodies[r.id] = nil
+        local x, y, z = world_of(r)
+        if x and len(x - fx, y - fy, z - fz) < P("body_spawn") then spawn_body(r.id, x, y, z) end
+      end
+    elseif bodies[r.id] then
+      despawn_body(r.id)
+    end
+  end
+end
+
+-- Heal 0.02/min aboard or at base.
+local heal_t = 0
+local function heal(dt)
+  heal_t = heal_t + dt
+  if heal_t < 5 then return end
+  local s = heal_t
+  heal_t = 0
+  for _, r in ipairs(roster()) do
+    if (r.status == "base" or r.status == "aboard") and (r.hp or 1) < 1 then
+      r.hp = math.min(1, (r.hp or 1) + P("heal_per_min") * s / 60)
+      save.set(key(r.id), r)
+    end
+  end
 end
 
 -- ── the manager ────────────────────────────────────────────────────────────
 function start(node)
   ensure()
+  quiet_monitors(3.0)
+  local n = save.get("crew.notice")
+  if type(n) == "string" and n ~= "" then
+    local bc = ref("big_caption")
+    if bc and bc.show then
+      bc.show("THE CREW", n, 7.0)
+      save.set("crew.notice", false)
+    end
+  end
 end
 
 -- A save migrated while inventory's alias was missing moves its pack the
 -- first frame the alias is there (then this costs one flag test).
 function update(node, dt)
   if not ensured then ensure() end
+  -- ` : back to the last thing you controlled
+  if input and input.pressed and input.pressed("`") then
+    local gm = ref("game_manager")
+    if not (gm and (gm.loading or gm.inputOwner == "builder")) then
+      local ok, why = quickSwap()
+      if not ok and why then caption(why) end
+    end
+  end
 end
+
+local dead_t = 0
+function fixedUpdate(node, dt)
+  if not save then return end
+  -- a save left with its avatar's member dead (quit during the hold): pass on
+  dead_t = dead_t + (dt or 0)
+  if dead_t > 1.0 and not MON.dying and #queue == 0 then
+    dead_t = 0
+    local r = get(activeId())
+    if (not r or r.status == "dead") and living() > 0 then handoff(activeId(), nil)
+    elseif not r and living() == 0 and #roster() > 0 then handoff(nil, nil) end
+  end
+  run_queue()
+  avatar_monitor(dt or 0.016)
+  heat_monitor(dt or 0.016)
+end
+
+function lateUpdate(node, dt)
+  if not save then return end
+  -- the hold on the fallen: the walker and the camera show the avatar again
+  -- each frame; its suit stays hidden here, in the last pass (the remains
+  -- lie where they fell)
+  if MON.dying then
+    local a = astro()
+    if a and a.children then
+      MON.hid = MON.hid or {}
+      for _, ch in ipairs(a:children()) do
+        if ch.visible ~= false then ch.visible = false; MON.hid[#MON.hid + 1] = ch end
+      end
+    end
+  end
+  dollSync(false)
+  body_sync()
+  heal(dt or 0.016)
+end
+
+-- Probes and tests: the module's live tables.
+function _debug() return { bodies = bodies, dolls = dolls, queue = queue, mon = MON, prev = prev } end

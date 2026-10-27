@@ -212,6 +212,8 @@ oxygen = 1.0
 o2Left = 60.0
 headUnder = false
 downed = false            -- blacked out, waiting for the rescue
+downLeft = nil            -- seconds of the blackout's grace left (crew.alerts)
+local down_src = nil      -- what ran out: "suit" | "hold"
 drowned = 0               -- times the crew has run out of air (probes)
 lastDrop = nil            -- the salvage crate id the last blackout left (probes)
 local down_t = 0.0
@@ -343,6 +345,16 @@ end
 
 function persistAirNow() persist_air(true) end
 
+-- (crew slice 2) The avatar became another crew member: their suit's air
+-- from their record (crew.lua's switch calls this; the next breath reloads).
+function reloadSuit()
+  air.loaded = false
+  air.tanks, air.tanks_pack = nil, nil
+  air.cap_t = -10.0
+  downed, downLeft = false, nil
+  breath = 1.0
+end
+
 -- One frame of breath. `under`: the helmet is in water; `aboard`: in a craft.
 -- Returns true while blacked out (the controller hands the body to the water).
 local function breathe(node, dt, under, aboard, ux, uy, uz)
@@ -359,7 +371,28 @@ local function breathe(node, dt, under, aboard, ux, uy, uz)
   headUnder = under and not aboard
   if downed then
     down_t = down_t + dt
-    if down_t >= params.o2_blackout then blackout_end(node, ux, uy, uz) end
+    -- (crew slice 2) With death on, the grace is crew.lua's (15 s on an
+    -- empty suit, 10 s under water) and its end is a death, not a rescue:
+    -- crew.blackoutEnd handles it. Boarding or surfacing inside the grace
+    -- saves them (aboard / head out of the water ends the blackout below).
+    local c = ref("crew")
+    local death = c and c.deathOn and c.blackoutEnd and c.deathOn()
+    local grace = death and c.blackoutGrace and c.blackoutGrace(down_src) or params.o2_blackout
+    downLeft = math.max(0, grace - down_t)
+    if death and (aboard or (down_src == "hold" and not headUnder)) then
+      downed, downLeft = false, nil
+      breath = math.max(breath, 0.05)
+      log("breath: out of the blackout in time")
+      return false
+    end
+    if down_t >= grace then
+      if death and c.blackoutEnd(down_src) then
+        downed, downLeft = false, nil
+        oxygen, o2Left, breath, suitO2 = 1.0, params.o2_secs, 1.0, 1.0
+      else
+        blackout_end(node, ux, uy, uz)
+      end
+    end
     return downed
   end
   local su = ref("suit")
@@ -407,7 +440,7 @@ local function breathe(node, dt, under, aboard, ux, uy, uz)
   end
   local out = (src == "hold" and breath <= 0) or (src == "suit" and airLeft <= 0)
   if out then
-    downed, down_t = true, 0.0
+    downed, down_t, down_src = true, 0.0, src
     drowned = drowned + 1
     local fx = ref("sfx")
     if fx and fx.caption then fx.caption("out of air") end

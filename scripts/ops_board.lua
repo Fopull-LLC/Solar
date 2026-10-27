@@ -349,6 +349,15 @@ local function describe()
           local fm = ref("facility_menu")
           closeBoard()
           if fm and fm.openMenu then fm.openMenu("FacCommand") end
+        end },
+      -- The Astronaut Complex (crew_roster_panel.lua, docs §2.2): roster,
+      -- hiring, memorial. facility_menu owns it once it is up.
+      { "button", key = "crew", style = "panel/secondary", w = 84, h = 30,
+        textAlign = "center", text = "Crew",
+        onClicked = function()
+          local fm = ref("facility_menu")
+          closeBoard()
+          if fm and fm.openRoster then fm.openRoster("ROSTER") end
         end } },
     { "box", key = "rule", style = "panel/rule", w = "100%", h = 1 },
     { "row", key = "panes", w = "100%", h = "fit", gap = 24, pad = 0, align = "start",

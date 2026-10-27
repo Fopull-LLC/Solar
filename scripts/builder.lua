@@ -1507,7 +1507,18 @@ function launchCheck()
   if not has.command then
     return { block = "no command part — add a Pod Mk1 (crewed) or a Probe Core", warn = {}, has = has }
   end
+  -- THE CREW (docs/crew-and-items.md §5.6; builder_crew.lua): crewed command
+  -- parts with nobody planned at the controls and no probe core can't fly.
+  local bcrew = findScript and findScript("builder_crew") or nil
+  if bcrew and bcrew.launchBlock then
+    local okb, why = pcall(bcrew.launchBlock)
+    if okb and why then return { block = why, warn = {}, has = has } end
+  end
   local warn = {}
+  if bcrew and bcrew.launchWarn then
+    local okw, lines = pcall(bcrew.launchWarn)
+    if okw and type(lines) == "table" then for _, l in ipairs(lines) do warn[#warn + 1] = l end end
+  end
   -- the offset limit (§5.6): a part nudged off what it is attached to
   if detachedParts then
     local det = detachedParts()

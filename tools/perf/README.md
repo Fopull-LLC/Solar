@@ -364,3 +364,22 @@ same player model. `tests/smoke_economy.lua` holds the working tree to targets.
 `econprobe.lua`: the Ops Board with ground work on it (one selected), the depot
 with pack, warehouse and freight goods, the builder's catalogue prices. Slot 13
 in the scratch project; delete `$WORK/proj/save` and `$WORK/proj/saves` after.
+
+## crewprobe.sh + crewprobe_modes.lua — the multi-crew slice 2 spine
+
+    WORK=$SCRATCH/ws1 LOCK=/mnt/disks/3tb/.floptle-shared/engine.lock tools/perf/crewprobe.sh <engine> [modes]
+
+docs/crew-and-items.md §2–4. It builds a snapshot of the tree under `$WORK/solar`.
+`HEADFILES="scenes/system.ron …"` takes files from git HEAD instead of the working
+tree, which keeps another agent's half-done scene edits out of the run. A
+planet_walker patch goes in `PATCHES`. `CP PASS|FAIL` lines report each check,
+and `CP RESULT <mode>` gives the verdict. Pictures (1280×720) land in
+`$WORK/proj/save/user/crewshots/`.
+
+| mode | what |
+|---|---|
+| crewpod | A new save has three starters. A Pod Mk2 rocket rolls out with all three aboard (`shipyard.crew`), and the probe checks seats, the commander, two dolls and `aboard()`. Then it: switches to #2 at their seat; EVAs #3 (out at the hatch, under 0.3 m/s against the craft); checks the `[ ]` list; quick-swaps ×6; Shift-EVAs a member (a CrewBody, you keep flying); takes control of them on foot; re-boards with F and "Board". |
+| crewrover | A rover with two Command Seats: the avatar in one, a doll riding the other, posed by command_seat. |
+| crewsplit | pod \| decoupler \| pod with a member in each, 400 m up. SPACE splits it. Each piece keeps its crew and control stays with the active member. `switchTo` flies the other piece as its member, and `` ` `` comes back. |
+| crewdeath | A 5 m drop (alive, injured). A 40 m drop: the fall chip passes 12 m/s before the death. Then the probe checks the memorial, remains, crate, caption, the 2 s hold and the handoff to a member at base. Killing everyone hires the free newbie. With death off, the same 40 m drop rescues. |
+| crewmigrate | `USERSAVE=1`: on a copy of the player's save, three members; #1, their pack and the avatar are untouched. |

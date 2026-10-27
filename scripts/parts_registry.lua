@@ -78,7 +78,32 @@ REG = {
   -- dish ≈ 2,400 km (the next star). Craft to craft they reach much less.)
   pod       = { prefab = "PartPod",       label = "Pod Mk1",      h = 0.80, rx = 0.50, rz = 0.50, mass = 1.3,  cost = 500, top = true,  bottom = true,  kind = "crewed", side = true, strength = 600,
                 mods = { { type = "command", crew = 1, draw = 0.05 }, { type = "wheel", torque = 1.0, draw = 0.5 },
-                         { type = "battery", ec = 40 } } },
+                         { type = "battery", ec = 40 } },
+                -- SEATS AND HATCH (docs/crew-and-items.md §3.1): slots in the
+                -- part's frame (yaw: the doll's facing about +Y, 0 = +X) and
+                -- the hatch (point + outward normal). crew.lua SEATS mirrors
+                -- these (smoke_crew_seats checks); #seats = the command crew.
+                seats = { { x = 0.0, y = -0.22, z = 0.16, yaw = 1.5708 } },
+                hatch = { x = 0.47, y = -0.02, z = 0.0, nx = 1, ny = 0, nz = 0 }, iva = "IvaPodMk1" },
+  -- POD MK2: the three-seat capsule. The same 1 m stack diameter as the Mk1
+  -- (it sits on the same tanks and chute), taller, with three windows, a
+  -- bigger hatch on +X, a heavier shield and a stronger wheel. Three crew
+  -- side by side, the commander in the middle.
+  podMk2    = { prefab = "PartPodMk2",    label = "Pod Mk2",      h = 1.15, rx = 0.50, rz = 0.50, mass = 2.4,  cost = 1400, top = true, bottom = true, kind = "crewed", side = true, strength = 720,
+                mods = { { type = "command", crew = 3, draw = 0.08 }, { type = "wheel", torque = 1.6, draw = 0.6 },
+                         { type = "battery", ec = 80 } },
+                seats = { { x = 0.0, y = -0.28, z = 0.22, yaw = 1.5708 },
+                        { x = -0.66, y = -0.28, z = 0.16, yaw = 1.8708 },
+                        { x = 0.66, y = -0.28, z = 0.16, yaw = 1.2708 } },
+                hatch = { x = 0.49, y = -0.06, z = 0.0, nx = 1, ny = 0, nz = 0 }, iva = "IvaPodMk2" },
+  -- CREW CABIN: a pressurised can for four passengers. It carries crew and
+  -- flies nothing (no command module): put it under a pod, or behind a
+  -- cockpit. Four portholes, a side hatch on +X, a heat-shielded floor.
+  cabin     = { prefab = "PartCabin",     label = "Crew Cabin",   h = 1.30, rx = 0.50, rz = 0.50, mass = 1.6,  cost = 900, top = true, bottom = true, kind = "structural", side = true, strength = 650,
+                mods = { { type = "cabin", crew = 4 } },
+                seats = { { x = -0.44, y = -0.3, z = 0.64, yaw = 1.5708 }, { x = 0.44, y = -0.3, z = 0.64, yaw = 1.5708 },
+                        { x = 0.44, y = -0.3, z = -0.64, yaw = -1.5708 }, { x = -0.44, y = -0.3, z = -0.64, yaw = -1.5708 } },
+                hatch = { x = 0.51, y = -0.1, z = 0.0, nx = 1, ny = 0, nz = 0 }, iva = "IvaCabin" },
   -- COMMAND SEAT: an open chair for one, KSP's external seat. It commands the
   -- craft like a pod (the crew in it IS the pilot) when it is the only crewed
   -- part aboard, with no reaction wheel and no battery of its own — the craft
@@ -87,7 +112,9 @@ REG = {
   -- It faces its +X (a rover's front). h is the whole chair: base plate to
   -- headrest; its centre is where the rider's hips sit.
   seat      = { prefab = "PartSeat",      label = "Command Seat", h = 1.30, rx = 0.45, rz = 0.30, mass = 0.05, cost = 40, top = false, bottom = true,  kind = "crewed", seat = true, strength = 320,
-                mods = { { type = "command", crew = 1, draw = 0.0, seat = true } } },
+                mods = { { type = "command", crew = 1, draw = 0.0, seat = true } },
+                -- an open seat is its own exit: no hatch
+                seats = { { x = 0, y = 0, z = 0, yaw = 0, open = true } } },
   -- PROBE CORE: an uncrewed command part. It flies a craft with nobody aboard —
   -- but only while it has POWER and a comms PATH home (its own little internal
   -- antenna reaches the ground station from around the home world and its
@@ -365,6 +392,8 @@ DESC = {
   brace = "two-point brace · click A, click B · stiffens a frame",
   roverBody = "rover body · probe core, battery, lights · front = +X",
   seat = "open seat · F to sit and drive · faces +X · no wheel or battery",
+  podMk2 = "three-seat capsule · 1 m stack · hatch on +X",
+  cabin = "four passengers · flies nothing · hatch on +X",
   wheelS = "powered wheel · r 0.25 m · 5 m/s · −0.12 power/s", wheelM = "powered wheel · r 0.4 m · 7 m/s · −0.25 power/s",
   wheelL = "powered wheel · r 0.6 m · 9 m/s · −0.5 power/s",
   fairingS = "fairing · B draws its shell (or it fits the payload) · jettisons",
@@ -388,7 +417,7 @@ for id, d in pairs(DESC) do if REG[id] then REG[id].desc = d end end
 -- getting an index wrong silently mislabelled a card. A part added to `REG` and
 -- named here now appears in the catalogue and nowhere else needs to know.
 CATALOGUE = {
-  { "COMMAND",   { "pod", "probe", "seat", "nose", "chute" } },
+  { "COMMAND",   { "pod", "podMk2", "cabin", "probe", "seat", "nose", "chute" } },
   { "ELECTRICAL",{ "battery", "solar", "light", "antenna", "beacon", "dish", "dishL" } },
   { "PROPULSION",{ "engineS", "engineM", "skipper", "tankS", "tankM", "radialTank", "rcs" } },
   { "STRUCTURE", { "decoupler", "radialDec", "legs", "fins" } },

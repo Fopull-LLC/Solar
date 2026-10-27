@@ -463,86 +463,183 @@ local function panel_open()
   return false
 end
 
--- ── the pilot's seat ────────────────────────────────────────────────────────
+-- ── the seat view (first person inside the craft) ──────────────────────────
 -- While flying, `V` (or scrolling in past the closest orbit) puts the view in
--- the commander's seat, looking out of the pod's window. The pod prefab carries
--- the cabin as a disabled "Pod Interior" subtree (seat, console, the crew's legs
--- and gloves, a lamp): it is switched on only while we are in here, so it costs
--- nothing the rest of the time. The exterior hull has a real window opening and
--- a dark liner, so nothing has to be hidden or cut away.
+-- the commander's seat. V again moves to the next occupied seat of the craft,
+-- and past the last one comes back out (Esc or a scroll out leave at once).
+--
+-- CLOSED PARTS (Pod Mk1, Pod Mk2, Crew Cabin, Swift Cockpit) have a real
+-- interior, built at human scale by tools/gen_iva.py and kept by iva.lua on the
+-- `interior` layer. The main camera never draws that layer; here a second
+-- camera, "Iva Cam", is STACKED on it (drawn over an empty depth buffer, so
+-- nothing outside can ever poke into the room), placed at the seat's eye and
+-- turned exactly as the main camera is. The main camera looks out from the
+-- hull's own window point (iva.mainEye) with the part's exterior hidden, so
+-- the world shows wherever the room has a window and nowhere else.
+--
+-- OPEN SEATS (the Command Seat, the Moto Saddle) are first person at the
+-- rider's head, the helmet parked off-camera (iva.park) so the visor never
+-- fills the view; the rider's own body stays in view below.
 --
 -- Published: `cockpit` is a rung on the Esc ladder (pause_menu.lua) just like
--- `firstPerson` is on foot.
+-- `firstPerson` is on foot; `seatView` = { uid, slot, open } while in it.
 cockpit = false
--- The eye in the POD's frame (metres): the seat faces the window on −Z.
-local SEAT_EYE = vec3(0.0, 0.0, 0.06)
--- How far the head turns: a helmet in a couch, not an owl.
-local SEAT_YAW, SEAT_UP, SEAT_DOWN = math.rad(110), math.rad(60), math.rad(55)
-local seat = nil            -- { pod =, interior = } of the piloted vessel
+seatView = nil
+-- How far the head turns (a helmet in a couch, the torso helping it round):
+-- far enough to look back over the shoulder and straight up and down.
+local SEAT_YAW, SEAT_UP, SEAT_DOWN = math.rad(170), math.rad(80), math.rad(72)
+local OPEN_YAW = math.rad(125)
 local seat_yaw, seat_pitch = 0.0, -0.08
+local seat_vessel = nil
+-- Layers (project.ron): bit i = the i-th listed layer after Default.
+local ALL = 4294967295
+local INTERIOR_BIT, OFFSTAGE_BIT = 16, 32
+-- What the main camera draws when no seat view is up: everything but the
+-- interiors and the parked nodes. tool_belt asks for this too (cullBase).
+function cullBase() return ALL - INTERIOR_BIT - OFFSTAGE_BIT end
+local iva_cam, iva_cam_making, iva_fov = nil, false, nil
+local main_mask_set, main_node = nil, nil
 
--- The piloted vessel's command pod: the part carrying a "Pod Interior", the
--- one nearest the published pod offset when a craft has several.
-local function find_seat(vessel)
-  local vn = vessel and vessel.node
-  if not (vn and vn.valid and vn.children) then return nil end
-  -- Riding an open Command Seat: there is no cabin to look out of.
-  if vessel.podSeat then return nil end
-  local best, bd = nil, nil
-  for _, c in ipairs(vn:children()) do
-    for _, g in ipairs(c:children()) do
-      if g.name == "Pod Interior" then
-        local dx = (c.x or 0) - (vessel.podLX or 0)
-        local dy = (c.y or 0) - (vessel.podLY or 0)
-        local dz = (c.z or 0) - (vessel.podLZ or 0)
-        local d = dx * dx + dy * dy + dz * dz
-        if not bd or d < bd then best, bd = { pod = c, interior = g, vessel = vn }, d end
-        break
-      end
-    end
+local function find_desc(n, name, depth)
+  if not (n and n.valid) or (depth or 0) > 5 then return nil end
+  for _, c in ipairs(n:children() or {}) do
+    if c.name == name then return c end
+    local f = find_desc(c, name, (depth or 0) + 1)
+    if f then return f end
   end
-  return best
+  return nil
 end
 
--- Enter or leave the seat. Entering needs a pod with a cabin; a craft without
--- one (its pod lost to a crash) stays in third person.
-function setCockpit(on, vessel)
+local function iva_ref() return script_ref("iva") end
+
+-- The seats V steps through on craft `vessel`: the commander's first, then
+-- every other occupied seat, closed parts and open ones alike.
+function seatList(vessel)
+  local out = {}
+  local C, I = script_ref("crew"), iva_ref()
+  if not (vessel and C) then return out end
+  local active = C.activeId and C.activeId()
+  local closed = {}
+  if I and I.closedSeats then
+    for _, s in ipairs(I.closedSeats(vessel)) do closed[s.uid .. ":" .. s.slot] = s end
+  end
+  local map = C.seatMap and C.seatMap(vessel) or {}
+  local first, rest = {}, {}
+  for _, s in ipairs(map) do
+    local occupied = s.taken ~= nil
+    local c = closed[s.uid .. ":" .. s.slot]
+    if occupied or (c and #map == 1) then
+      local e = { uid = s.uid, slot = s.slot, open = c == nil, id = s.taken }
+      if s.taken ~= nil and s.taken == active then first[#first + 1] = e else rest[#rest + 1] = e end
+    end
+  end
+  for _, e in ipairs(rest) do first[#first + 1] = e end
+  -- an older controller (no seat map): the piloted pod, closed
+  if #first == 0 and vessel.stationUid and I and I.closedSeats then
+    for _, s in ipairs(I.closedSeats(vessel)) do
+      if s.uid == vessel.stationUid then first[1] = { uid = s.uid, slot = s.slot, open = false } break end
+    end
+  end
+  return first
+end
+
+local function main_mask(node, stacked)
+  main_node = node
+  local key = stacked and "iva" or "base"
+  if main_mask_set == key then return end
+  local ok = pcall(function()
+    if stacked then node:setCamera { stack = { "Iva Cam" }, cullMask = cullBase() }
+    else node:setCamera { stack = {}, cullMask = cullBase() } end
+  end)
+  if ok then main_mask_set = key end
+end
+
+local function ensure_iva_cam(node)
+  if iva_cam and iva_cam.valid then return iva_cam end
+  if iva_cam_making or not createNode then return nil end
+  iva_cam_making = true
+  createNode("Iva Cam", nil, function(n)
+    iva_cam_making = false
+    iva_cam = n
+    pcall(function() n:setCamera { fovY = params.fov_y or 1.15, active = false, cullMask = INTERIOR_BIT } end)
+  end)
+  return nil
+end
+
+-- Enter or leave the seat view. `on` = true enters at the first seat of the
+-- list (or `at`, an index); false leaves.
+function setCockpit(on, vessel, at)
+  local I = iva_ref()
   if on then
-    local s = find_seat(vessel)
+    local list = seatList(vessel)
+    local s = list[at or 1]
     if not s then cockpit = false return false end
-    seat = s
-    seat.interior.enabled = true
+    seat_vessel = vessel
+    seatView = { uid = s.uid, slot = s.slot, open = s.open, index = at or 1, count = #list, id = s.id }
+    if I then
+      if s.open then I.clearView() else I.setView(vessel, s.uid, s.slot) end
+    end
+    if s.open then
+      local a = find("Astronaut")
+      for _, nm in ipairs({ "Helmet", "Helmet Visor", "Helmet Lamps" }) do
+        local h = find_desc(a, nm)
+        if h and I and I.park then I.park(h) end
+      end
+    end
     seat_yaw, seat_pitch = 0.0, -0.08
     cockpit = true
   else
-    if seat and seat.interior and seat.interior.valid then seat.interior.enabled = false end
-    seat = nil
+    if I and I.clearView then I.clearView() end
+    seatView, seat_vessel = nil, nil
     cockpit = false
+    if main_node and main_node.valid then main_mask(main_node, false) end
   end
   return cockpit
 end
 
--- The seat view, once per frame. Returns false if the pod has gone (staged
--- away, destroyed) and the view must fall back to the orbit.
+-- Turn the head in the seat view (probes, a cutscene): radians, clamped.
+function setSeatLook(yaw, pitch)
+  local ylim = (seatView and seatView.open) and OPEN_YAW or SEAT_YAW
+  seat_yaw = math.clamp(yaw or 0, -ylim, ylim)
+  seat_pitch = math.clamp(pitch or 0, -SEAT_DOWN, SEAT_UP)
+end
+
+-- V in the seat: the next seat, or out after the last.
+function nextSeat(vessel)
+  if not cockpit then return setCockpit(true, vessel) end
+  local i = (seatView and seatView.index or 1) + 1
+  local list = seatList(vessel)
+  if i > #list then return setCockpit(false) end
+  return setCockpit(true, vessel, i)
+end
+
+-- The look, in the eye's frame (right, up, back), as a world direction.
+local function look_dir(right, up, back)
+  local cp = math.cos(seat_pitch)
+  return (right * (math.sin(seat_yaw) * cp) + up * math.sin(seat_pitch) - back * (math.cos(seat_yaw) * cp)):normalized()
+end
+
+-- The seat view, once per frame. Returns false if the seat has gone (staged
+-- away, destroyed, the crew out) and the view must fall back to the orbit.
 local function seat_view(node, dt, blocked)
-  local pod, vn = seat and seat.pod, seat and seat.vessel
-  if not (pod and pod.valid and vn and vn.valid) then setCockpit(false) return false end
-  -- Compose through the VESSEL's pose, not the pod's own toWorld: a child's
-  -- world transform is a frame behind its moving parent in the camera pass,
-  -- and at 10 m/s that left the eye 18 cm down by the cabin floor. The pod's
-  -- local pose (the blueprint's; YXZ like everywhere in this project) is
-  -- exact, so parent ∘ local is this frame's seat.
-  local cy, sy = math.cos(pod.yaw or 0), math.sin(pod.yaw or 0)
-  local cx, sx = math.cos(pod.pitch or 0), math.sin(pod.pitch or 0)
-  local cz, sz = math.cos(pod.roll or 0), math.sin(pod.roll or 0)
-  local lx = vec3(cy * cz + sy * sx * sz, cx * sz, -sy * cz + cy * sx * sz)
-  local ly = vec3(-cy * sz + sy * sx * cz, cx * cz, sy * sz + cy * sx * cz)
-  local lz = lx:cross(ly)
-  local lp = vec3(pod.x or 0, pod.y or 0, pod.z or 0)
-  local o = vn:toWorld(lp)
-  local ex = (vn:toWorld(lp + lx) - o):normalized()
-  local ey = (vn:toWorld(lp + ly) - o):normalized()
-  local ez = (vn:toWorld(lp + lz) - o):normalized()
+  local I, v, sv = iva_ref(), seat_vessel, seatView
+  if not (I and v and sv and v.node and v.node.valid) then setCockpit(false) return false end
+  local eye, right, up, back, place
+  if sv.open then
+    -- the avatar rides its own seat; another member's open seat is their doll
+    local C = script_ref("crew")
+    local a = (sv.id and C and C.activeId and C.activeId() ~= sv.id and C.dollOf and C.dollOf(sv.id)) or find("Astronaut")
+    local o, X, Y = nil, nil, nil
+    if I.partFrame then o, X, Y = I.partFrame(v, sv.uid) end
+    if not (a and o) then setCockpit(false) return false end
+    -- the rider's own eye, just in front of their face (iva.riderEye)
+    place, right, up, back = I.riderEye(v, sv.uid, a)
+    if not place then setCockpit(false) return false end
+  else
+    eye, right, up, back = I.eyeOf(v, sv.uid, sv.slot)
+    place = I.mainEye(v, sv.uid)
+    if not (eye and place) then setCockpit(false) return false end
+  end
   -- The mouse always turns the head in here (a panel takes the pointer back).
   local looking = not blocked
   input.setMouseLocked(looking)
@@ -552,28 +649,50 @@ local function seat_view(node, dt, blocked)
     local st = script_ref("settings")
     local sens = params.sensitivity * 0.01 * ((st and st.lookScale) or 1.0)
     if st and st.invertY then dy = -dy end
-    seat_yaw = math.clamp(seat_yaw + dx * sens, -SEAT_YAW, SEAT_YAW)
+    local ylim = sv.open and OPEN_YAW or SEAT_YAW
+    seat_yaw = math.clamp(seat_yaw + dx * sens, -ylim, ylim)
     seat_pitch = math.clamp(seat_pitch - dy * sens, -SEAT_DOWN, SEAT_UP)
   end
-  local cp = math.cos(seat_pitch)
-  local fwd = (ex * (math.sin(seat_yaw) * cp) + ey * math.sin(seat_pitch)
-    + ez * (-math.cos(seat_yaw) * cp)):normalized()
-  local place = o + ex * SEAT_EYE.x + ey * SEAT_EYE.y + ez * SEAT_EYE.z
+  local fwd = look_dir(right, up, back)
   -- The same shake the orbit takes, scaled to a head strapped into a couch:
   -- the cabin rattles round you by centimetres, not metres.
   local sh = save.get("cam.shake") or 0.0
   if access.reducedMotion() then sh = 0.0 end
+  local jx, jy = 0.0, 0.0
   if sh > 0.002 then
     local amp = sh * sh * 0.012
-    place = place + ex * ((math.random() * 2 - 1) * amp) + ey * ((math.random() * 2 - 1) * amp)
+    jx, jy = (math.random() * 2 - 1) * amp, (math.random() * 2 - 1) * amp
   end
+  -- looking straight up or down, the head's up is its back/forward
+  local lup = up
+  if math.abs(fwd:dot(up)) > 0.98 then lup = back * (fwd:dot(up) > 0 and 1 or -1) end
+  place = place + right * jx + up * jy
   node.pos = place
-  node:lookAt(place + fwd, ey)
+  node:lookAt(place + fwd, lup)
+  if sv.open then
+    main_mask(node, false)
+  else
+    local ic = ensure_iva_cam(node)
+    if ic then
+      local e = eye + right * jx + up * jy
+      ic.pos = e
+      ic:lookAt(e + fwd, lup)
+      local fv = params.fov_y
+      local cc = node.getcomponent and node:getcomponent("Camera")
+      if cc and cc.fovY then fv = cc.fovY end
+      if iva_fov ~= fv then
+        pcall(function() ic:setCamera { fovY = fv } end)
+        iva_fov = fv
+      end
+      main_mask(node, true)
+    end
+  end
   fwd_x, fwd_y, fwd_z = fwd.x, fwd.y, fwd.z
   cam_x, cam_y, cam_z = place.x, place.y, place.z
-  local flat = fwd:flatten(ey)
-  if flat:length() == 0 then flat = ez * -1 end
+  local flat = fwd:flatten(up)
+  if flat:length() == 0 then flat = back * -1 end
   flat_x, flat_y, flat_z = flat.x, flat.y, flat.z
+  if I.need then I.need(v) end
   return true
 end
 
@@ -962,7 +1081,7 @@ local function place_camera(node, dt)
       if math.abs(dz) > 0.01 then craft.zoomed = true end
       params.distance = math.clamp(params.distance * ZOOM_STEP ^ (-dz), mind, maxd)
     end
-    if not blocked and input.pressed("v") then setCockpit(not cockpit, vessel) end
+    if not blocked and input.pressed("v") then nextSeat(vessel) end
     if cockpit and not blocked and input.pressed("escape") then setCockpit(false) end
     if not blocked and not cockpit then
       if input.pressed("c") then cycleCamMode() end
@@ -1305,12 +1424,65 @@ end
 -- map, the cockpit, on foot). Two nodes' lateUpdates run in load order, which
 -- is not something to rely on, so this is a call rather than an ordering.
 local atmo_ref, flare_ref
+
+-- ── THE DEATH HOLD (docs/crew-and-items.md §2.3) ─────────────────────────────
+-- When a crew member dies the view holds on the place for a couple of seconds
+-- before control passes on (crew_alerts_hud.lua calls this). Kept relative to
+-- the body it happened on: the planet moves metres a tick, so a world point
+-- would slide out of frame.
+local hold = nil
+function holdOn(x, y, z, secs)
+  local node = main_node or (findScript("planet_camera") or {}).node
+  if not (node and space and space.dominant) then return false end
+  local d = space.dominant(x, y, z)
+  local b = d and space.body(d)
+  if not b then return false end
+  local cx, cy, cz = node.x, node.y, node.z
+  -- frame it: back off to 6 m from the point if the camera is far or on it
+  local dx, dy, dz = cx - x, cy - y, cz - z
+  local l = math.sqrt(dx * dx + dy * dy + dz * dz)
+  if l > 25 or l < 2 then
+    local ux, uy, uz = x - b.x, y - b.y, z - b.z
+    local ul = math.max(1e-6, math.sqrt(ux * ux + uy * uy + uz * uz))
+    ux, uy, uz = ux / ul, uy / ul, uz / ul
+    if l < 1e-3 then dx, dy, dz, l = ux, uy, uz, 1 end
+    dx, dy, dz = dx / l, dy / l, dz / l
+    cx, cy, cz = x + (dx + ux) * 4.0, y + (dy + uy) * 4.0, z + (dz + uz) * 4.0
+  end
+  hold = { body = d, px = x - b.x, py = y - b.y, pz = z - b.z, cx = cx - b.x, cy = cy - b.y, cz = cz - b.z,
+           t1 = time + (secs or 2.0) }
+  return true
+end
+function holding() return hold ~= nil end
+
+local function hold_tick(node)
+  if not hold then return false end
+  if time > hold.t1 then hold = nil return false end
+  local b = space.body(hold.body)
+  if not b then hold = nil return false end
+  local p = vec3(b.x + hold.px, b.y + hold.py, b.z + hold.pz)
+  local c = vec3(b.x + hold.cx, b.y + hold.cy, b.z + hold.cz)
+  local up = (p - vec3(b.x, b.y, b.z)):normalized()
+  node.pos = c
+  node:lookAt(p, up)
+  local f = (p - c):normalized()
+  fwd_x, fwd_y, fwd_z = f.x, f.y, f.z
+  cam_x, cam_y, cam_z = c.x, c.y, c.z
+  return true
+end
+
 function lateUpdate(node, dt)
+  -- The interiors and parked nodes are never the main camera's to draw.
+  if main_mask_set == nil or (main_mask_set == "iva" and not (cockpit and seatView and not seatView.open)) then
+    main_mask(node, false)
+  end
   -- The VAB builder's own camera has the view (build_host); this one waits.
   local gm = script_ref("game_manager")
   if gm and gm.inputOwner == "builder" then return end
   if cinematic_tick(node, dt) then
     -- the free camera placed the view itself
+  elseif hold_tick(node) then
+    -- a death: the view holds on the place
   else
     place_camera(node, dt)
   end

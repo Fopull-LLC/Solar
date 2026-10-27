@@ -96,7 +96,23 @@ local function index_of(list, cur)
 end
 
 -- Step `dir` (+1 / −1) along the list. Returns the new target's name.
+-- With the crew library (crew slice 2) the list is crew.switchList: every
+-- crew member on foot in range BY NAME, and every craft (a craft with crew
+-- aboard is flown by them: the avatar becomes its commander).
 function step(dir)
+  local cl = ref("crew")
+  if cl and cl.step and cl.switchList then
+    local name, why = cl.step(dir)
+    if not name then
+      caption(why or "nothing else in range to switch to")
+      return nil
+    end
+    caption("switched to " .. name)
+    log("switch: " .. name)
+    local s = ref("sfx")
+    if s and s.play then s.play("click") end
+    return name
+  end
   local list, cur = targets()
   if #list < 2 then
     caption("nothing else in range to switch to")

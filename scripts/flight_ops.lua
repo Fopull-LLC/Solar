@@ -1018,6 +1018,14 @@ function takeControlOf(fid)
   if not v then return false, "still being put back on " .. tostring(e.body) end
   if v.piloting then return false, "you're already flying it" end
   fleetSync()   -- the record is the truth we fall back on: make it current first
+  -- crew seated in it (not the avatar): they fly it, free (crew slice 2)
+  local cl = ref("crew")
+  if cl and cl.takeCraft and v.crewCount and v.crewCount() > 0 and not v.crewAboard then
+    local ok, why = cl.takeCraft(v)
+    if not ok then return false, why end
+    log(string.format("TAKE CONTROL — %s (its crew)", e.name))
+    return true, e.name
+  end
   if not e.pod or e.crew then
     if not (e.probe or e.crew) then return false, "no command part aboard — it can't be flown" end
     if not (v.remoteControl and v.remoteControl()) then return false, "it would not answer" end
@@ -1043,6 +1051,12 @@ end
 -- at, not flown (its controls read NO CREW).
 function switchToVessel(v)
   if not (v and v.node and v.node.valid and v.remoteControl) then return false end
+  -- crew seated aboard (and you aren't riding it): you fly it as them
+  local cl = ref("crew")
+  if cl and cl.takeCraft and v.crewCount and v.crewCount() > 0 and not v.crewAboard then
+    fleetSync()
+    return (cl.takeCraft(v)) == true
+  end
   fleetSync()
   if not v.remoteControl() then return false end
   return true

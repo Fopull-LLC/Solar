@@ -829,7 +829,10 @@ local function view_model_cam(cn, on)
     return
   end
   if vm.on == on and vm.main == cn then return end
+  -- Everything the main camera may draw: planet_camera's base (the interior
+  -- and offstage layers are never the main camera's, docs/crew-and-items.md §3.4).
   local all = 4294967295
+  if cam and cam.cullBase then all = cam.cullBase() end
   if vm.main and vm.main.valid and vm.main ~= cn then
     pcall(function() vm.main:setCamera { stack = {}, cullMask = all } end)
   end

@@ -1,5 +1,5 @@
 -- BUILDER_INSPECTOR — the right plate of the Vehicle Assembly (docs/builder-design.md
--- §4.4; WP2). Four tabs (TAB cycles them):
+-- §4.4; WP2). Five tabs (TAB cycles them):
 --
 --   INSPECT   the selection: its name and count, mass and cost; its position
 --             and turn as numbers you can type (ENTER applies, one undo step);
@@ -11,6 +11,8 @@
 --             Auto makes of the craft), the outliner's named groups, the
 --             history (click a step to go back to it) and the budget: parts,
 --             islands, the builder's cost
+--   CREW      who sits where, the roster and the loadout (packs, locker
+--             plans, base stock): scripts/builder_crew.lua describes it
 --
 -- Every number shown comes from the builder's API (partRec, stats, selection)
 -- and every change goes through cmd(), so it is undoable and the craft stays
@@ -23,7 +25,7 @@ local function ref(kind)
   return r
 end
 
-TABS = { "INSPECT", "STAGE", "CONTROLS", "CRAFT" }
+TABS = { "INSPECT", "STAGE", "CONTROLS", "CRAFT", "CREW" }
 local st = { tab = "INSPECT", sig = nil, t = 0 }
 
 function tab() return st.tab end
@@ -521,12 +523,22 @@ function describe(B, L)
   local tabs = { "row", key = "tabs", w = "100%", h = 24, gap = 3, pad = 0 }
   for _, t in ipairs(TABS) do
     tabs[#tabs + 1] = { "button", key = "t" .. t, style = "panel/choice", selected = st.tab == t, w = "grow", h = 24,
-      text = t == "CONTROLS" and "CTRLS" or t, textAlign = "center", textValign = "center",
+      text = t == "CONTROLS" and "CTRLS" or (t == "INSPECT" and "INSP" or t), textAlign = "center", textValign = "center",
       tooltip = t:sub(1, 1) .. t:sub(2):lower() .. "   ·   TAB", onClicked = function() setTab(t) end }
   end
   local body = {}
   if st.tab == "INSPECT" then inspect(B, body)
   elseif st.tab == "CRAFT" then craft(B, body)
+  elseif st.tab == "CREW" then
+    local bc = ref("builder_crew")
+    if bc and bc.describe then
+      local ok, err = pcall(bc.describe, B, body)
+      if not ok then body[#body + 1] = { "text", key = "cerr", style = "panel/hintWarn", w = "100%", h = "fit", wrap = true,
+        text = "The crew tab could not be drawn: " .. (tostring(err):gsub("^.-:%d+:%s*", "")) } end
+    else
+      body[1] = { "text", key = "cx", style = "panel/body", w = "100%", h = "fit", wrap = true,
+        text = "No crew office in this building." }
+    end
   elseif st.tab == "STAGE" then
     stage_rows(B, body)
   else
@@ -597,7 +609,8 @@ function update(node, dt)
   if st.tab == "STAGE" and st.hover and B.stageHover then B.stageHover(st.hover) end
   local sel = B.selection()
   local sig = table.concat({ math.floor(W), math.floor(H), st.tab, tostring(B.craftVersion), table.concat(sel, ","),
-    tostring(focused_name()), tostring(st.hover), tostring(st.drag) }, "|")
+    tostring(focused_name()), tostring(st.hover), tostring(st.drag),
+    st.tab == "CREW" and tostring(ref("builder_crew") and ref("builder_crew").sig and ref("builder_crew").sig()) or "" }, "|")
   if sig == st.sig and st.t < 1.0 then return end
   st.sig, st.t = sig, 0
   ui.make(node, { describe(B, st.L) })

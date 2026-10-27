@@ -1204,6 +1204,123 @@ version  -- bumps on any change (panels poll it)
     - a probe with death off rescues all three. The luajit sweep and `floptle check` (0 errors, 6
     warnings) pass.
 
+#### WS1 as built: slice 2's spine (2026-10-27)
+
+What landed, and where it differs from the plan above. The interface is listed
+in full at the top of `scripts/crew.lua`.
+
+- **The avatar is always bound.** `crew.active` always names a living member:
+  the `Astronaut` node is them on foot, and the same member riding hidden in the
+  craft you fly (`crewAboard` keeps its meaning: "the avatar rides this craft").
+  The design's unbound avatar is folded into this. The pilot is the active
+  member, so the `"astro"` alias, the suit and the HUD always have an owner.
+- **Seats are `st.crew<k> = id` on the part** (`st.crew1`, `st.crew2`, …), not a
+  nested `st.crew` table. `electronics.encodeState` keeps only numbers and
+  booleans, so a table would have been dropped from every fleet record, split
+  and revert. Plain numbers ride all of them with no extra code. The v1
+  migration's `st.crew = {1}` was never kept for this reason.
+- **Seat geometry**: `crew.SEATS` (pod, podMk2, cabin, seat, saddle, cockpit)
+  mirrors `seats`/`hatch` in `parts_registry` and `parts_aero`
+  (`smoke_crew_seats` checks they agree). Any other crewed part gets one slot.
+- **New parts.**
+  - **Pod Mk2**: 3 seats, a 1 m stack, $1,400.
+  - **Crew Cabin**: 4 passengers, `kind = "structural"`, commands nothing,
+    $900.
+  - Meshes come from `tools/gen_part_meshes.py` (`pod_mk2`, `cabin`).
+  - Prefabs: `PartPodMk2`, `PartCabin` and their `vis/` copies, each with the
+    emblem plate.
+- **Migration v2**:
+  - a v1 save keeps member #1 exactly as they were (name, health, record, pack,
+    hand) and gets #2 and #3 at base, with a one-time notice;
+  - a new save starts with all three.
+- **The VAB seat plan** (WS2's CREW tab writes it):
+  - Where it lives: `bp.crew`, or the save key `shipyard.crew`, as
+    `{ {uid, slot, id}… }`.
+  - `crew.validatePlan(parts, plan)` refuses double booking and a plan with
+    nobody at the controls.
+  - At launch, `crew.launchPlan` drops anyone who isn't available. The avatar
+    then flies as the commander, and the member it was goes back into the
+    building.
+  - With no plan, the avatar takes the best command slot (today's launch).
+- **vessel_controller** (globals):
+  - `seatsOf()`, `crewIds()`, `crewCount()`, `commander()`;
+  - `seatMember(uid, slot, id)`, `memberSlot(id)`, `freeSeat(prefer)`,
+    `unseatMember(id)`;
+  - `hatchWorld(uid)`, `hatchSpot(uid)`;
+  - `avatarBoard(id)`, `setStationOf(id)`, `boardPrompt(st)`;
+  - `crewPartBroken`, `crewEvacuate`, `depHasCrew`, `avatarSeatedIn`,
+    `avatarExclusive`.
+
+  Behaviour:
+  - F boards the free slot of the part you walk up to, else any free slot. A
+    full craft refuses, and the prompt says "F — board Pod Mk2 (2 free)".
+  - A piece carrying seated crew leaves a split as a live craft, even with no
+    command part.
+  - A restored craft takes the avatar only if their member is in its seats, so
+    a stale `crew` flag no longer pulls them back in.
+  - A fresh launch clears the member from older fleet records.
+- **Dolls**:
+  - `prefabs/CrewDoll` (the suit, no body) is placed by `crew_body.lua` from
+    `crew.dollPose` every lateUpdate.
+  - In a closed pod a doll is hidden unless `crew.showInterior` is set (WS2's
+    crew cams and IVA).
+  - An open seat's doll is posed by `command_seat.lua`, the same pose as the
+    avatar's (`ridingDoll`).
+- **CrewBody** (`prefabs/CrewBody`, `crew_body.lua`):
+  - Kinematic, held in its planet's frame (velocity 0: the rails frame), and
+    settled on the ground.
+  - Beside a craft in space it rides that part's frame (the record's `anchor`).
+  - Out of `body_range` (2.5 km) it is a record only, and it respawns inside
+    2 km.
+- **Switching** runs in crew.lua's fixedUpdate (a queue), so nothing is moved
+  outside the physics tick on a moving world:
+  - `control(id)` and `takeCraft(v, id)` switch who you control;
+  - `eva(id, {stay, confirmed})`;
+  - `board(id, v)`, for an idle body;
+  - `quickSwap()` on `` ` ``;
+  - `step(dir)` on `[`/`]` (vessel_switcher defers to it);
+  - `switchList()`.
+
+  flight_ops' `switchToVessel` and `takeControlOf` fly a craft with crew
+  seated in it as that crew.
+- **Death**:
+  - The rules are pure functions for the tests: `impactRule`, `crushStep`,
+    `heatStep`, `airLevel`, `blackoutGrace`, `handoffPick`.
+  - The monitor runs in crew.lua's fixedUpdate, on the avatar on foot:
+    - impact Δv: all of the vertical, plus any sideways change beyond the
+      walker's own 10 m/s, so stopping from a run never hurts;
+    - the fall chip;
+    - crush: 0.15 m overlap with a craft, a loose boulder or debris;
+    - heat: open-seat riders, from the craft's `heating`;
+    - it is quiet while the world loads, for 3 s after, for 1.5 s after
+      leaving a craft, and for 2.5 s after a set-down at the base.
+  - `kill(id, cause)` does all of this:
+    - drops the pack (`salvage.drop` from `crew:<id>`, items too);
+    - places the remains (`deployables.place("remains")`);
+    - writes the memorial record, takes −2 reputation and shows the
+      caption;
+    - holds 2 s on the fallen (`lastDeath`, with the suit hidden);
+    - hands control on in the design's order, ending with the free newbie.
+  - With death off, every cause rescues (wake at base for $250).
+  - A crewed part breaking kills its own occupants. A lost craft sets the crew
+    of its surviving parts down beside the wreck. A catastrophic breakup kills
+    everyone aboard.
+- **O2 and drowning death** need planet_walker (not WS1's in this slice). The
+  patch `planet_walker.patch` adds `reloadSuit()` and the 15 s / 10 s grace,
+  ending in `crew.blackoutEnd`.
+- **Not in this slice**:
+  - Share O2;
+  - the remains' "Recover the body";
+  - the rep refund for bringing them home;
+  - the out-of-range Tracking Station GO TO;
+  - the "no hatch" refusal for a buried cabin (a blocked hatch falls back to
+    the clear spot round the hull);
+  - the 0.35 s camera blend (WS2's planet_camera).
+- **Proof**:
+  - luajit: `smoke_crew_seats`, `smoke_crew_death` and `smoke_crew_migrate`;
+  - in the engine: `tools/perf/crewprobe.sh` (crewpod, crewrover, crewsplit,
+    crewdeath and, with `USERSAVE=1`, crewmigrate).
+
 ### WS2: Crew presentation (strip, cams, IVA, VAB tab, roster panel, scene files)
 
 - **Owns:**

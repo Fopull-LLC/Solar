@@ -76,13 +76,16 @@ local function find_rider()
 end
 
 -- Is the craft above us being flown with its crew in THIS seat?
-local function seated_here(node)
+local function vessel_of(node)
   local p = node.parent
-  if not (p and p.valid) then return false end
+  if not (p and p.valid) then return nil end
   if not (vessel and vessel.valid and vessel.node and vessel.node.id == p.id) then
     vessel = p.getScript and p:getScript("vessel_controller") or nil
   end
-  local v = vessel
+  return vessel
+end
+local function seated_here(node)
+  local v = vessel_of(node)
   if not (v and v.crewAboard and v.podSeat) then return false end
   local dx, dy, dz = (node.x or 0) - (v.podLX or 0), (node.y or 0) - (v.podLY or 0), (node.z or 0) - (v.podLZ or 0)
   return dx * dx + dy * dy + dz * dz < 0.01
@@ -155,22 +158,56 @@ local function unghost(a)
   end
 end
 
+-- A SECOND RIDER (crew slice 2): a crew member seated here who is not the
+-- one you control is a CrewDoll (crew.lua). It gets the same pose as the
+-- Astronaut would: → the doll node, its model and animator, or nil.
+local crewlib, doll_t = nil, -10
+local dollNode, dollModel, dollAnim = nil, nil, nil
+local function doll_here(node)
+  local v = vessel_of(node)
+  if not (v and v.node and v.uidOfNode) then return nil end
+  if not (crewlib and crewlib.valid ~= false) and time - doll_t > 1 then
+    doll_t = time
+    crewlib = findScript("crew")
+  end
+  if not (crewlib and crewlib.dollAt) then return nil end
+  local uid = v.uidOfNode(node)
+  local d = uid and crewlib.dollAt(v.node.id, uid)
+  if not d then return nil end
+  if dollNode ~= d then
+    dollNode, dollModel, dollAnim = d, nil, nil
+    for _, c in ipairs(d:children()) do if c.name == "AstroModel" then dollModel = c end end
+    dollAnim = dollModel and dollModel:animator() or nil
+  end
+  return d
+end
+
 -- Published for probes: is the rider being seated by this script right now?
 riding = false
+-- …and is it a doll (a crew member you are not controlling)?
+ridingDoll = false
 -- …and where the hands went: "grips" (a fork's bars) or "reach"
 hands = nil
 
 function lateUpdate(node, dt)
   riding = false
+  ridingDoll = false
   hands = nil
-  if not seated_here(node) then
+  local a, rmodel, ranim
+  if seated_here(node) then
+    a = find_rider()
+    if not a then return end
+    rmodel, ranim = model, anim
+    ghost_tyres(a, vessel)
+  else
     if next(ghosted) then unghost(astro) end
-    return
+    a = doll_here(node)
+    if not a then return end
+    rmodel, ranim = dollModel, dollAnim
+    ridingDoll = true
   end
-  local a = find_rider()
-  if not a then return end
   riding = true
-  ghost_tyres(a, vessel)
+  local model, anim = rmodel, ranim
   -- In view: whatever hid the crew on the way in (the launch handoff parks
   -- them hidden, a transfer hides them for a pod) doesn't know this is a seat.
   if not a.visible then a.visible = true end

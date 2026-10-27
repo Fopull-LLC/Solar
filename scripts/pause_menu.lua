@@ -103,12 +103,20 @@ local CONTROLS = {
     { keys = { "[", "]" }, shown = "[  /  ]", what = "switch to the next craft nearby, or the crew" },
     { keys = { "p" }, shown = "P", what = "peripherals and docking console" },
     { keys = { ",", "." }, shown = ",  /  .", what = "time warp down / up" },
-    { keys = { "v" }, shown = "V", what = "the pilot's seat, at the window" },
+    { keys = { "v" }, shown = "V", what = "first person in the seat  ·  V again: the next crew seat, then out" },
     { keys = { "c" }, shown = "C", what = "camera: auto  ·  free orbit  ·  chase  ·  horizon" },
     { keys = { "home" }, shown = "MIDDLE DRAG  ·  HOME", what = "slide the view's pivot over the craft  ·  back to its middle" },
     { keys = { "alt" }, shown = "ALT + SCROLL", what = "slide the pivot along the craft" },
     { keys = { "f" }, shown = "F", what = "get out and stand on the ground" },
     { keys = { "enter" }, shown = "⏎", what = "end the flight, once down and stopped" },
+  } },
+  { group = "Crew", col = 2, rows = {
+    { keys = { "`" }, shown = "`", what = "quick swap: back to the craft or crew member you had before" },
+    { keys = { "[", "]" }, shown = "[  /  ]", what = "step through the crew on foot nearby and the craft" },
+    { keys = { "f" }, shown = "F", what = "flying: the commander steps out  ·  on foot: board the nearest free seat" },
+    { keys = {}, shown = "PORTRAIT", what = "hover a crew portrait (bottom left): EVA steps them out, ⇄ moves them to a free seat; SHIFT-click EVA keeps you on the craft" },
+    -- (keys: the source spelling crew_strip polls, `"\\"`, as smoke_pause reads it)
+    { keys = { "\\\\" }, shown = "\\", what = "crew portraits: small  ·  large  ·  hidden" },
   } },
   { group = "Orbit map", col = 3, rows = {
     { keys = {}, shown = "RIGHT DRAG", what = "orbit the view  ·  with CTRL, pan" },

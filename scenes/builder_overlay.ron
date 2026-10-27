@@ -1191,7 +1191,8 @@
                 opacity: 1.0,
             )),
         ),
-        // WP2 · INSPECT (stub).
+        // WP2 · INSPECT (stub). builder_crew rides here: the CREW tab's rules
+        // and plans (the inspector draws its describe).
         (
             name: "BuilderInspector",
             transform: (
@@ -1203,6 +1204,11 @@
             scripts: [
                 (
                     kind: "builder_inspector",
+                    enabled: true,
+                    params: [],
+                ),
+                (
+                    kind: "builder_crew",
                     enabled: true,
                     params: [],
                 ),

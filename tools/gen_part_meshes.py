@@ -701,6 +701,226 @@ def part_pod_interior():
 
 # ── engines ──────────────────────────────────────────────────────────────────
 
+# ── pod Mk2 and the crew cabin (crew slice 2, docs/crew-and-items.md §3.1) ──
+# Pod Mk2: the three-seat capsule on the same 1 m stack. A taller, steeper
+# cone than the Mk1 (heat-blackened tiles low, scuffed white paint high),
+# three bolted window frames on the −Z side (the crew's front), a raised
+# hatch with a wheel handle and handrails on +X, a bolted docking/chute
+# collar on top and a heavy ablative shield under a riveted rim.
+POD2 = dict(h=1.15, rb=0.5, rt=0.27, yb=-0.49, yt=0.43, segs=56)
+
+
+def pod2_profile():
+    p = POD2
+    ys = np.linspace(p["yb"], p["yt"], 11)
+    rs = [p["rb"] + (p["rt"] - p["rb"]) * ((y - p["yb"]) / (p["yt"] - p["yb"])) ** 1.12 for y in ys]
+    return list(zip(rs, ys))
+
+
+def surface_frame(prof, theta, y):
+    """Point, outward normal, tangent (around) and slant (up) on a lathed
+    wall at angle theta, height y."""
+    ys = [q[1] for q in prof]; rs = [q[0] for q in prof]
+    r = float(np.interp(y, ys, rs))
+    dr = (float(np.interp(y + 1e-3, ys, rs)) - float(np.interp(y - 1e-3, ys, rs))) / 2e-3
+    c, s = math.cos(theta), math.sin(theta)
+    p = np.array([r * c, y, r * s])
+    up = np.array([dr * c, 1.0, dr * s]); up /= np.linalg.norm(up)
+    t = np.array([-s, 0.0, c])
+    n = np.cross(t, up); n /= np.linalg.norm(n)
+    if n @ np.array([c, 0, s]) < 0:
+        n = -n
+    return p, n, t, up
+
+
+def framed_window(m, prof, theta, y, w, h, depth=0.035):
+    """A window set on the wall: a dark recess, a glass pane, a bolted
+    bezel of four bars (no hole in the hull: the interior is WS2's IVA)."""
+    p, n, t, up = surface_frame(prof, theta, y)
+    M = np.stack([t, up, n], 1)
+    box(m, "Dark", p - n * 0.004, (w + 0.01, h + 0.01, 0.012), M, uv_m=6.0)
+    m.add("Glass", [p + n * 0.006 + t * sx * w / 2 + up * sy * h / 2 for (sx, sy) in ((-1, -1), (1, -1), (1, 1), (-1, 1))],
+          [n] * 4, [(0, 0), (1, 0), (1, 1), (0, 1)], [(0, 1, 2), (0, 2, 3)])
+    bw = 0.028
+    for (cx, cy, sx, sy) in ((0, h / 2 + bw / 2, w + 2 * bw, bw), (0, -h / 2 - bw / 2, w + 2 * bw, bw),
+                             (w / 2 + bw / 2, 0, bw, h), (-w / 2 - bw / 2, 0, bw, h)):
+        c = p + t * cx + up * cy + n * 0.009
+        box(m, "Metal", c, (sx, sy, 0.02), M, uv_m=6.0, bevel=0.003)
+        nb = max(2, int(max(sx, sy) / 0.045))
+        for k in np.linspace(0.15, 0.85, nb):
+            if sx > sy:
+                q = c + t * (sx * (k - 0.5)) + n * 0.011
+            else:
+                q = c + up * (sy * (k - 0.5)) + n * 0.011
+            tube(m, "Metal", q - n * 0.003, q + n * 0.006, 0.004, segs=6, uv_m=8.0)
+
+
+def hatch_door(m, prof, theta, y, w, h, wheel=True):
+    """A raised, framed hatch: a thick door plate, a bolted frame, hinge
+    knuckles on one side and a wheel (or bar) handle."""
+    p, n, t, up = surface_frame(prof, theta, y)
+    M = np.stack([t, up, n], 1)
+    box(m, "Paint2", p + n * 0.012, (w, h, 0.024), M, uv_m=4.0, bevel=0.006)
+    bw = 0.026
+    for (cx, cy, sx, sy) in ((0, h / 2 + bw / 2, w + 2 * bw, bw), (0, -h / 2 - bw / 2, w + 2 * bw, bw),
+                             (w / 2 + bw / 2, 0, bw, h), (-w / 2 - bw / 2, 0, bw, h)):
+        box(m, "Metal", p + t * cx + up * cy + n * 0.01, (sx, sy, 0.03), M, uv_m=6.0, bevel=0.003)
+    for k in (-0.3, 0.3):
+        q = p - t * (w / 2 + bw * 0.6) + up * (h * k)
+        tube(m, "Metal", q - up * 0.04 + n * 0.03, q + up * 0.04 + n * 0.03, 0.012, segs=8, uv_m=6.0)
+    hc = p + n * 0.03 + t * (w * 0.18)
+    if wheel:
+        sub = Model()
+        lathe(sub, "Metal", [(0.05, -0.006), (0.058, 0.0), (0.05, 0.006)], segs=20, uv_m=8.0)
+        tube(sub, "Metal", (-0.05, 0, 0), (0.05, 0, 0), 0.006, segs=6, uv_m=8.0)
+        tube(sub, "Metal", (0, 0, -0.05), (0, 0, 0.05), 0.006, segs=6, uv_m=8.0)
+        m.merge(sub, frame_to(n), hc + n * 0.02)
+        tube(m, "Metal", hc, hc + n * 0.02, 0.012, segs=8, uv_m=8.0)
+    else:
+        tube(m, "Metal", hc - up * 0.06 + n * 0.035, hc + up * 0.06 + n * 0.035, 0.009, segs=8, uv_m=8.0)
+        for k in (-1, 1):
+            tube(m, "Metal", hc + up * 0.06 * k, hc + up * 0.06 * k + n * 0.035, 0.007, segs=6, uv_m=8.0)
+
+
+def handrail(m, prof, theta, y0, y1, mat="Paint2", out=0.035):
+    ys = [q[1] for q in prof]; rs = [q[0] for q in prof]
+    pts = []
+    for y in (y0, y1):
+        r = float(np.interp(y, ys, rs))
+        pts.append(((r + out) * math.cos(theta), y, (r + out) * math.sin(theta)))
+    tube(m, mat, pts[0], pts[1], 0.009, segs=8, uv_m=4.0)
+    for (x, y, z) in pts:
+        r0 = float(np.interp(y, ys, rs))
+        tube(m, mat, (r0 * math.cos(theta), y, r0 * math.sin(theta)), (x, y, z), 0.007, segs=6)
+
+
+def part_pod_mk2():
+    m = Model()
+    p = POD2
+    h = p["h"]
+    y_bot, y_top = -h / 2, h / 2
+    prof = pod2_profile()
+    segs = p["segs"]
+    # The wall: heat-stained tiles on the lower third, white paint above,
+    # a dark liner inside so the windows never show daylight.
+    lathe(m, "Tiles", prof[:5], segs=segs, uv_m=1.0)
+    lathe(m, "Paint", prof[4:], segs=segs, uv_m=1.0)
+    lathe(m, "Dark", [(r - 0.014, y) for (r, y) in prof], segs=segs, uv_m=2.0, inward=True)
+    # A weld land between the tile and paint courses, and a mid-wall rib.
+    for yy in (prof[4][1], 0.12):
+        r0 = float(np.interp(yy, [q[1] for q in prof], [q[0] for q in prof]))
+        lathe(m, "Metal", [(r0 - 0.003, yy - 0.01), (r0 + 0.004, yy - 0.005), (r0 + 0.004, yy + 0.005), (r0 - 0.003, yy + 0.01)], segs=segs, uv_m=3.0)
+    # Three windows across the crew's front (−Z): the commander's centre one
+    # a little bigger.
+    for a, w, hh in ((FRONT - 0.62, 0.15, 0.13), (FRONT, 0.18, 0.15), (FRONT + 0.62, 0.15, 0.13)):
+        framed_window(m, prof, a, 0.06, w, hh)
+    # The hatch on +X, with handrails either side and a grab bar above it.
+    hatch_door(m, prof, RIGHT, -0.06, 0.26, 0.32, wheel=True)
+    for side in (-1, 1):
+        handrail(m, prof, RIGHT + side * 0.5, -0.24, 0.12)
+    handrail(m, prof, RIGHT + 0.0001, 0.2, 0.3)
+    # Heat shield: a thicker ablative dome under a riveted rim.
+    hs = [(0.0, y_bot)] + [(0.5 * math.sin(t), y_bot + 0.07 * (1 - math.cos(t))) for t in np.linspace(0.15, math.pi / 2, 8)]
+    lathe(m, "Ablative", hs, segs=segs, smooth=True, uv_m=1.5)
+    flange(m, "Metal", y_bot + 0.06, p["yb"] + 0.014, 0.45, 0.5, uv_m=2.0)
+    bolt_ring(m, "Metal", p["yb"] + 0.002, 0.478, 42, size=0.006, height=0.006, up=True)
+    bolt_ring(m, "Metal", y_bot + 0.06, 0.47, 42, size=0.005, height=0.005, up=False, a0=0.04)
+    # Top collar: shoulder, bolted collar, the chute/docking ring.
+    lathe(m, "Metal", [(p["rt"], p["yt"]), (p["rt"] - 0.012, p["yt"] + 0.01), (0.215, p["yt"] + 0.016)], segs=segs, uv_m=3.0)
+    flange(m, "Metal", p["yt"] + 0.014, y_top - 0.035, 0.17, 0.215, uv_m=3.0)
+    lathe(m, "Dark", [(0.215, y_top - 0.035), (0.21, y_top - 0.018), (0.165, y_top - 0.018)], segs=segs, uv_m=3.0)
+    disk(m, "Metal", 0.165, y_top - 0.022, segs=32, uv_m=3.0)
+    bolt_ring(m, "Metal", y_top - 0.035, 0.195, 18, size=0.006, height=0.005, up=True)
+    lathe(m, "Dark", [(0.12, y_top - 0.022), (0.12, y_top), (0.08, y_top), (0.08, y_top - 0.022)], segs=24, uv_m=4.0)
+    # RCS quads low on the skirt, and an umbilical box on −X.
+    rf = lambda y: float(np.interp(y, [q[1] for q in prof], [q[0] for q in prof]))
+    for a in (math.pi / 4, 3 * math.pi / 4, 5 * math.pi / 4, 7 * math.pi / 4):
+        y = -0.33
+        r = rf(y)
+        c, s = math.cos(a), math.sin(a)
+        box(m, "Dark", (r * c, y, r * s), (0.055, 0.08, 0.08), rot_y(-a), uv_m=8.0)
+        for dy in (-0.022, 0.022):
+            tube(m, "Metal", ((r + 0.02) * c, y + dy, (r + 0.02) * s), ((r + 0.05) * c, y + dy, (r + 0.05) * s), 0.007, segs=6, r1=0.012)
+    pu, nu_, tu, uu = surface_frame(prof, math.pi, -0.2)
+    box(m, "Dark", pu + nu_ * 0.025, (0.12, 0.09, 0.05), np.stack([tu, uu, nu_], 1), uv_m=6.0, bevel=0.006)
+    # Markings: the name on the back, hatch and rescue stencils, flag, serial.
+    decal(m, "Stencil", "pod", rf, BACK, 0.12, 0.34)
+    decal(m, "Stencil", "hatch", rf, RIGHT, 0.17, 0.2)
+    decal(m, "Stencil", "rescue", rf, RIGHT + 0.42, -0.36, 0.2)
+    decal(m, "Decal", "flag", rf, FRONT + 1.15, 0.05, 0.13)
+    decal(m, "Stencil", "serial2", rf, FRONT - 1.15, 0.07, 0.12)
+    decal(m, "Stencil", "nostep", rf, BACK + 0.6, -0.36, 0.14)
+    return m, (1, 1, 1)
+
+
+# The crew cabin: a pressurised can for four on the 1 m stack. Ribbed
+# barrel (stringers, bolted ring frames top and bottom), four portholes
+# (two each side of the hatch, two on −X), the hatch on +X, a ladder of
+# grab rungs down beside it, scuffed white paint with a dark band.
+def part_cabin():
+    m = Model()
+    h, r = 1.3, 0.5
+    y0, y1 = -h / 2, h / 2
+    ring = 0.05
+    prof = [(r - 0.004, y0 + ring), (r - 0.004, y1 - ring)]
+    lathe(m, "Paint", [(r - 0.004, -0.2), (r - 0.004, y1 - ring)], segs=56, uv_m=1.0)
+    lathe(m, "Paint2", [(r - 0.004, y0 + ring), (r - 0.004, -0.2)], segs=56, uv_m=1.0)
+    lathe(m, "Dark", [(r - 0.016, y0 + ring), (r - 0.016, y1 - ring)], segs=56, uv_m=2.0, inward=True)
+    flange(m, "Metal", y0, y0 + ring, r - 0.03, r + 0.004, uv_m=2.0)
+    flange(m, "Metal", y1 - ring, y1, r - 0.03, r + 0.004, uv_m=2.0)
+    bolt_ring(m, "Metal", y0 + ring * 0.5, r + 0.004, 36, size=0.007, height=0.006, radial=True, a0=0.05)
+    bolt_ring(m, "Metal", y1 - ring * 0.5, r + 0.004, 36, size=0.007, height=0.006, radial=True, a0=0.05)
+    # A dark service band and the stringers (raised ribs every 30°, skipping
+    # the hatch and the portholes).
+    lathe(m, "Dark", [(r - 0.002, -0.23), (r + 0.002, -0.225), (r + 0.002, -0.175), (r - 0.002, -0.17)], segs=56, uv_m=3.0)
+    for k in range(12):
+        a = TAU * k / 12 + TAU / 24
+        if abs(math.remainder(a - RIGHT, TAU)) < 0.4:
+            continue
+        c, s = math.cos(a), math.sin(a)
+        box(m, "Metal", (r * c, 0.0, r * s), (0.012, h - 2 * ring - 0.02, 0.022), rot_y(-a), uv_m=4.0)
+    # Bulkhead domes top and bottom so the stack never shows daylight.
+    for sgn in (-1, 1):
+        yb = y0 + 0.004 if sgn < 0 else y1 - 0.004
+        pr = [(r - 0.03, yb)] + [((r - 0.03) * math.cos(t), yb - sgn * 0.07 * math.sin(t)) for t in np.linspace(0.15, math.pi / 2, 6)]
+        lathe(m, "Metal", pr, segs=32, smooth=True, uv_m=2.0)
+    # Portholes: round, bolted, a little proud of the wall.
+    for a in (RIGHT + 0.85, RIGHT - 0.85, math.pi + 0.5, math.pi - 0.5):
+        p, n, t, up = surface_frame(prof, a, 0.18)
+        sub = Model()
+        lathe(sub, "Metal", [(0.075, -0.002), (0.085, 0.01), (0.075, 0.022), (0.058, 0.024)], segs=24, uv_m=8.0)
+        disk(sub, "Glass", 0.06, 0.012, segs=24)
+        disk(sub, "Dark", 0.06, 0.0, segs=24)
+        for k in range(8):
+            aa = TAU * k / 8
+            tube(sub, "Metal", (0.08 * math.cos(aa), 0.015, 0.08 * math.sin(aa)), (0.08 * math.cos(aa), 0.025, 0.08 * math.sin(aa)), 0.004, segs=6, uv_m=8.0)
+        m.merge(sub, frame_to(n), p)
+    # The hatch on +X, rungs beside it, a floodlight-style marker lamp above.
+    hatch_door(m, prof, RIGHT, -0.1, 0.3, 0.42, wheel=False)
+    for yy in np.linspace(-0.45, 0.35, 5):
+        a = RIGHT - 0.42
+        c, s = math.cos(a), math.sin(a)
+        p0 = np.array([r * c, yy, r * s])
+        t = np.array([-s, 0, c])
+        tube(m, "Paint2", p0 + np.array([c, 0, s]) * 0.04 - t * 0.05, p0 + np.array([c, 0, s]) * 0.04 + t * 0.05, 0.008, segs=8)
+        for k in (-1, 1):
+            tube(m, "Paint2", p0 + t * 0.05 * k, p0 + np.array([c, 0, s]) * 0.04 + t * 0.05 * k, 0.006, segs=6)
+    # Air bottles on the −X flank (they keep the box centred against the hatch).
+    for zz in (-0.1, 0.1):
+        tube(m, "Paint2", (-r - 0.045, -0.4, zz), (-r - 0.045, 0.05, zz), 0.029, segs=12, uv_m=3.0)
+        box(m, "Metal", (-r - 0.02, -0.33, zz), (0.04, 0.02, 0.05), uv_m=6.0)
+        box(m, "Metal", (-r - 0.02, -0.02, zz), (0.04, 0.02, 0.05), uv_m=6.0)
+    rf = cyl_r(r - 0.004)
+    decal(m, "Stencil", "hatch", rf, RIGHT, 0.23, 0.2)
+    decal(m, "Decal", "flag", rf, FRONT, 0.2, 0.16)
+    decal(m, "Stencil", "serial1", rf, FRONT, -0.32, 0.14)
+    decal(m, "Stencil", "nostep", rf, BACK, -0.32, 0.16)
+    decal(m, "Stencil", "rescue", rf, RIGHT - 0.42, 0.48, 0.18)
+    return m, (1, 1, 1)
+
+
+
+
 def thrust_top(m, y_top, r, plate=0.06, foil_to=None, r_low=0.3):
     """Bolted interface plate + gold-foil thrust structure below it."""
     flange(m, "Metal", y_top - plate, y_top, 0.0, r, uv_m=2.0)
@@ -1333,6 +1553,8 @@ def patch_legs(models):
 
 PARTS = {
     "pod":        (part_pod, "PartPod"),
+    "pod_mk2":    (part_pod_mk2, "PartPodMk2"),
+    "cabin":      (part_cabin, "PartCabin"),
     "nose":       (part_nose, "PartNose"),
     "tank_s":     (part_tankS, "PartTankS"),
     "tank_m":     (part_tankM, "PartTankM"),
@@ -1355,7 +1577,7 @@ PARTS = {
 
 # Builder envelopes (h, and the box each mesh must stay centred in).
 ENVELOPE = {
-    "pod": (1.0, 0.8, 1.0), "nose": (1.0, 0.9, 1.0), "tank_s": (1.0, 1.0, 1.0), "tank_m": (1.0, 1.5, 1.0),
+    "pod": (1.0, 0.8, 1.0), "pod_mk2": (1.0, 1.15, 1.0), "cabin": (1.0, 1.3, 1.0), "nose": (1.0, 0.9, 1.0), "tank_s": (1.0, 1.0, 1.0), "tank_m": (1.0, 1.5, 1.0),
     "engine_s": (None, 1.3, None), "engine_m": (1.0, 1.6, 1.0), "skipper": (1.0, 1.6, 1.0),
     "decoupler": (1.02, 0.25, 1.02), "dock_port": (1.06, 0.28, 1.06), "battery": (1.0, 1.0, 1.0),
     "cargo": (1.0, 1.2, 1.0), "radial_tank": (1.0, 1.0, 1.0), "aero_fin": (0.74, 1.02, 0.14),

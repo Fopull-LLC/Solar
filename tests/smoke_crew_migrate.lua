@@ -2,12 +2,15 @@
 -- docs/crew-and-items.md §2.4), against a stub save.
 --
 --   * an OLD save (g_played, a suit pack, gear, a fleet craft with crew = true)
---     yields member #1 aboard that craft's station part (st.crew = {1}), with
+--     yields member #1 aboard that craft's station part (st.crew1 = 1), with
 --     the pack and gear moved to crew:1 once inventory's alias exists, and
 --     the tool in hand on the record;
 --   * an old save on foot puts member #1 at game_manager's saved position;
 --   * running it twice is a no-op;
---   * a NEW save gets member #1 directly, on foot and active;
+--   * a NEW save gets member #1 directly, on foot and active, and #2, #3 at
+--     base (the three-astronaut start, version 2);
+--   * a VERSION 1 save (slice 1: one member, their pack and progress) gets
+--     #2 and #3 at base and keeps #1 exactly as they were;
 --   * before the alias exists the pack stays put (nothing reads an empty
 --     pack), and moves the first time the alias is there;
 --   * names are deterministic per seed; the hire fee rule; EVA checks
@@ -58,12 +61,15 @@ local store = {
 }
 local C = make(store, true)
 C.start()
-check(store["crew.version"] == 1, "the migration stamps crew.version")
+check(store["crew.version"] == C.VERSION, "the migration stamps crew.version")
+check(#store["crew.roster"] == 3 and C.get(2).status == "base" and C.get(3).starter == true,
+  "three starters: #2 and #3 wait at base")
 local r = C.get(1)
 check(r ~= nil and r.id == 1, "member #1 exists")
 check(r.status == "aboard" and r.craft == "Kestrel I", "aboard the craft that had crew = true (" .. tostring(r.status) .. ")")
 local pod = store["fleet.craft"].c1.parts[2]
-check(pod.st.crew and pod.st.crew[1] == 1 and pod.st.hp == 0.8, "st.crew = {1} on the station part, its other state kept")
+check(pod.st.crew1 == 1 and pod.st.hp == 0.8, "st.crew1 = 1 on the station part, its other state kept")
+check(C.memberAt(pod, 1) == 1 and C.memberAt(pod, 2) == nil, "memberAt reads the slot")
 check(store["fleet.craft"].c2.parts[1].st == nil, "the uncrewed probe is untouched")
 check(store["inv.crew:1"].iron == 6 and store["inv.crew:1"].copper == 2, "the materials moved to crew:1")
 check(store["inv.gear.crew:1"].beacon == 2 and store["inv.gear.crew:1"].laser == 1, "the gear moved to crew:1")
@@ -77,7 +83,7 @@ check(type(r.name) == "string" and #r.name > 3, "a generated name (" .. tostring
 local before = store["crew.m.1"]
 local C2 = make(store, true)
 C2.start()
-check(store["crew.m.1"] == before and #store["crew.roster"] == 1, "running it again changes nothing")
+check(store["crew.m.1"] == before and #store["crew.roster"] == 3, "running it again changes nothing")
 check(store["inv.crew:1"].iron == 6, "...and doesn't move the pack twice")
 
 -- ── an old save on foot ────────────────────────────────────────────────────
@@ -93,13 +99,34 @@ local s3 = { g_seed = 99 }
 local C4 = make(s3, true)
 local r4 = C4.get(1)
 check(r4 and r4.status == "afoot" and r4.starter == true, "a new save gets member #1 directly")
-check(s3["crew.version"] == 1, "...at the current version")
+check(s3["crew.version"] == C4.VERSION, "...at the current version")
+check(#s3["crew.roster"] == 3 and C4.get(2).status == "base" and C4.get(3).status == "base", "...with #2 and #3 at base")
+check(C4.get(2).name ~= r4.name and C4.get(3).name ~= C4.get(2).name, "three different names")
+
+-- ── a version-1 save (slice 1): #1 keeps everything ─────────────────────────
+local m1 = { id = 1, name = "Pat Example", status = "afoot", starter = true, hp = 0.7, flights = 9, eva_s = 300, hand = "laser" }
+local s6 = { g_played = 40, g_seed = 5, ["crew.version"] = 1, ["crew.roster"] = { 1 }, ["crew.seq"] = 1,
+             ["crew.active"] = 1, ["crew.death"] = true, ["crew.packMoved"] = true, ["crew.m.1"] = m1,
+             ["inv.crew:1"] = { iron = 30 }, ["inv.gear.crew:1"] = { laser = 1 } }
+local C7 = make(s6, true)
+C7.start()
+local k1 = C7.get(1)
+check(s6["crew.version"] == C7.VERSION and #s6["crew.roster"] == 3, "v1 → v2: two starters join (" .. #s6["crew.roster"] .. ")")
+check(k1.name == "Pat Example" and k1.hp == 0.7 and k1.flights == 9 and k1.hand == "laser" and k1.status == "afoot",
+  "member #1 kept their name, health, record and hand")
+check(s6["inv.crew:1"].iron == 30 and s6["crew.active"] == 1, "...their pack and the avatar")
+check(C7.get(2).status == "base" and C7.get(3).status == "base" and C7.get(2).id == 2, "#2 and #3 at base")
+check(type(s6["crew.notice"]) == "string", "a one-time notice says they joined")
+local before7 = s6["crew.m.2"]
+local C8 = make(s6, true)
+C8.start()
+check(s6["crew.m.2"] == before7 and #s6["crew.roster"] == 3, "v2 again: a no-op")
 
 -- ── before inventory's alias exists ────────────────────────────────────────
 local s4 = { g_played = 1, ["inv.astro"] = { iron = 4 } }
 local C5, scripts5 = make(s4, false)
 C5.start()
-check(s4["crew.version"] == 1 and s4["inv.astro"].iron == 4, "no alias yet: the record is made, the pack stays in astro")
+check(s4["crew.version"] == C5.VERSION and s4["inv.astro"].iron == 4, "no alias yet: the record is made, the pack stays in astro")
 check(s4["crew.packMoved"] ~= true, "...and the move is still owed")
 scripts5.inventory = { resolve = function(c) return c end }
 C5.update()

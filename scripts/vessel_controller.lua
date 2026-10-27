@@ -870,9 +870,12 @@ end
 -- merged craft). The current station stays if it is still aboard.
 function rescanSeats(parts)
   crewSeats = {}
+  local cl = crewLibNow()
   for _, d in pairs(parts or bp_by_uid) do
-    if d.kind == "crewed" then
-      crewSeats[#crewSeats + 1] = { uid = d.uid, x = d.x, y = d.y, z = d.z, seat = (d.seat or 0) == 1 }
+    local def = cl and cl.seatDef(d)
+    if d.kind == "crewed" or def then
+      crewSeats[#crewSeats + 1] = { uid = d.uid, x = d.x, y = d.y, z = d.z, seat = (d.seat or 0) == 1 or (def and def.open == true),
+                                    slots = def and #def.seats or 1, command = (not def) or def.command == true }
     end
   end
   table.sort(crewSeats, function(a, b) return a.uid < b.uid end)
@@ -2526,12 +2529,15 @@ end
 function controlTick()
   local can, mode, why = false, nil, nil
   local st = elec.probePart and bp_by_uid[elec.probePart] and bp_by_uid[elec.probePart].st
-  if crewAboard then
+  if crewAboard and (commander() ~= nil or not crewLibNow()) then
     can, mode = true, "crew"
+  elseif crewAboard and not elec.probePart then
+    why = "NO CREW AT THE CONTROLS — a cabin flies nothing"
   elseif not elib() then
     can, mode = true, "crew"            -- no rulebook: fly as before
   elseif not elec.probePart then
-    why = elec.crewPart and "NO CREW — the pod is empty" or "NO COMMAND PART"
+    why = (crewCount() > 0 and "CREW ABOARD — switch to them with [ ]")
+      or (elec.crewPart and "NO CREW — the pod is empty") or "NO COMMAND PART"
   elseif st and st.hibernate then
     why = "PROBE CORE OFF — hibernating"
   elseif elec.served and (elec.served[elec.probePart] or 1) < 0.5 then
@@ -3262,11 +3268,18 @@ function takeControl()
     dock.msg = "no crew pod aboard — this craft can't be crewed"
     return false
   end
+  local clt = crewLibNow()
+  local tid = clt and clt.activeId and clt.activeId()
+  if clt and tid and not memberSlot(tid) and not freeSeat(stationUid) then
+    dock.msg = "every seat aboard is taken"
+    return false
+  end
   for _, v in ipairs(findScripts("vessel_controller")) do
     if v.node and v.node.id ~= node.id then
       if v.releaseControl then v.releaseControl() end
       -- The crew can only be in one seat: they leave the other craft's.
       if v.crewAboard and v.crewLeave then v.crewLeave() end
+      if tid and v.unseatMember then v.unseatMember(tid) end
     end
   end
   if not astronaut or not astronaut.valid then astronaut = find("Astronaut") end
@@ -3274,6 +3287,8 @@ function takeControl()
   if astronaut then astronaut.visible = podSeat == true end
   piloting = true
   crewAboard = true
+  seatAvatarCheck()
+  setStationOf(tid)
   set_navball(true)
   sas_mode, sas_last = "stability", "stability"
   log("control transferred to " .. (node.name or "vessel"))
@@ -4126,6 +4141,11 @@ end
 
 function standDown(node, x, y, z, vx, vy, vz)
   piloting = false
+  if crewAboard then
+    local cl = crewLibNow()
+    local id = cl and cl.activeId and cl.activeId()
+    if id then unseatMember(id) end
+  end
   crewAboard = false
   leftAt = time or 0.0
   throttle = 0.0
@@ -4265,6 +4285,16 @@ function recoverCraft()
     end
   end
   save.set("mission.recovered", true)
+  local clr = crewLibNow()
+  if clr and clr.noteHome then
+    local act = clr.activeId and clr.activeId()
+    for _, s in ipairs(seatsOf()) do
+      if s.taken and not (crewAboard and s.taken == act) then
+        pcall(clr.noteHome, s.taken)
+        seatMember(s.uid, s.slot, nil)
+      end
+    end
+  end
   if crewAboard then
     local i2 = assembly.info(node)
     local bx2, by2, bz2 = base_of(node, i2)
@@ -4598,8 +4628,12 @@ function evaNow(in_tick)
     return true
   end
   local info = assembly.info(node)
-  local px, py, pz = pod_world(node, info)
-  local ex, ey, ez = exitSpot(node, info, px, py, pz)
+  local ex, ey, ez = nil, nil, nil
+  if stationUid and not podSeat then ex, ey, ez = hatchSpot(stationUid) end
+  if not ex then
+    local px, py, pz = pod_world(node, info)
+    ex, ey, ez = exitSpot(node, info, px, py, pz)
+  end
   local vx, vy, vz = 0, 0, 0
   if info then
     vx, vy, vz = info.vel.x, info.vel.y, info.vel.z
@@ -4679,15 +4713,408 @@ function evaPress(node, info)
   return evaNow(true)
 end
 
--- Who is aboard, and who is at the controls (§3.2, §3.3). One astronaut
--- until slice 2's slots: the avatar while crewAboard.
-function crewIds()
-  local c = crewAboard and findScript("crew")
-  local id = c and c.activeId and c.activeId()
-  return id and { id } or {}
+-- ── SEATS: who sits where (docs/crew-and-items.md §3.2, §3.3) ─────────────
+-- The truth is on the PART: `st.crew<k> = memberId` (crew.lua's slot
+-- accessors; plain numbers, so a fleet record, a staging split, a docking
+-- and a revert carry them with no extra code). `crewAboard` keeps its old
+-- meaning: THE AVATAR (crew.active) rides this craft. Every other seated
+-- member is a doll (crew.lua places them). All globals: the main chunk is at
+-- Lua's 200-local ceiling and fixedUpdate at the 60-upvalue one.
+function crewLibNow()
+  local cl = CREWLIB.ref
+  if not (cl and cl.valid ~= false) and (time or 0) - CREWLIB.t > 2.0 then
+    CREWLIB.t = time or 0
+    cl = findScript("crew")
+    CREWLIB.ref = cl
+  end
+  if cl and cl.valid ~= false and cl.seatDef then return cl end
+  return nil
 end
+function seatAlive(u)
+  return bp_by_uid[u] ~= nil and not integ.gone[u] and (part_hp[u] or 1) > 0
+end
+-- The parts that HAVE seats, cached until the craft's structure changes (a
+-- 1,000-part craft has a handful): uid → record, and the sorted uids.
+SEATC = { bp = nil, gen = -1, n = -1, parts = {}, uids = {} }
+function seatParts()
+  local c = crewLibNow()
+  if not c then return {}, {} end
+  if SEATC.bp ~= bp_by_uid or SEATC.gen ~= integ.gen or SEATC.n ~= part_total then
+    local parts, uids = {}, {}
+    for u, d in pairs(bp_by_uid) do
+      if c.seatDef(d) then parts[u] = d; uids[#uids + 1] = u end
+    end
+    table.sort(uids)
+    SEATC.bp, SEATC.gen, SEATC.n, SEATC.parts, SEATC.uids = bp_by_uid, integ.gen, part_total, parts, uids
+  end
+  return SEATC.parts, SEATC.uids
+end
+-- Every slot aboard: { {uid, slot, open, command, taken = id|nil, x,y,z (vessel frame), label} … }
+function seatsOf()
+  local out = {}
+  local c = crewLibNow()
+  if not c or destroyed then return out end
+  local _, uids = seatParts()
+  for _, u in ipairs(uids) do
+    local d = seatAlive(u) and bp_by_uid[u]
+    local def = c.seatDef(d)
+    if def then
+      for k, s in ipairs(def.seats) do
+        out[#out + 1] = { uid = u, slot = k, open = def.open == true, command = def.command == true,
+                          taken = c.memberAt(d, k), x = d.x + s.x, y = d.y + s.y, z = d.z + s.z,
+                          label = d.label or d.id, hatch = def.hatch ~= nil }
+      end
+    end
+  end
+  return out
+end
+-- Everyone aboard (the commander first, then slot order).
+function crewIds()
+  local out = {}
+  local c = crewLibNow()
+  if not c then
+    -- no crew library (a harness): the avatar while crewAboard
+    local cl = crewAboard and findScript("crew")
+    local id = cl and cl.activeId and cl.activeId()
+    return id and { id } or {}
+  end
+  local cmd = commander()
+  if cmd then out[1] = cmd end
+  for _, s in ipairs(seatsOf()) do
+    if s.taken and s.taken ~= cmd then out[#out + 1] = s.taken end
+  end
+  return out
+end
+function crewCount() return #crewIds() end
+-- The member at the controls: the best-ranked COMMAND slot (§3.3).
 function commander()
-  return crewIds()[1]
+  local c = crewLibNow()
+  if not c then return crewIds()[1] end
+  local function depth(u)
+    local n, g = 0, 0
+    while bp_by_uid[u] and (bp_by_uid[u].parent or 0) ~= 0 and g < 64 do u = bp_by_uid[u].parent; n, g = n + 1, g + 1 end
+    return n
+  end
+  return c.commanderOf((seatParts()), depth, seatAlive)
+end
+-- Seat member `id` in (uid, slot), or empty it (id nil). → ok, why
+function seatMember(uid, slot, id)
+  local c = crewLibNow()
+  local d = uid and bp_by_uid[uid]
+  if not (c and d) then return false, "no such part" end
+  local def = c.seatDef(d)
+  if not def or not slot or slot < 1 or slot > #def.seats then return false, "no such seat" end
+  if id then
+    local cur = c.memberAt(d, slot)
+    if cur and cur ~= id then return false, "that seat is taken" end
+    -- one seat per member
+    for u2, d2 in pairs((seatParts())) do
+      local def2 = c.seatDef(d2)
+      if def2 then for k = 1, #def2.seats do if c.memberAt(d2, k) == id then c.setMemberAt(d2, k, nil) end end end
+    end
+  end
+  c.setMemberAt(d, slot, id)
+  return true, nil
+end
+-- Where member `id` sits aboard: uid, slot (nil when not aboard).
+function memberSlot(id)
+  local c = crewLibNow()
+  if not (c and id) then return nil, nil end
+  for _, s in ipairs(seatsOf()) do if s.taken == id then return s.uid, s.slot end end
+  return nil, nil
+end
+-- The free slot boarding fills (`prefer_uid` first, then command slots).
+function freeSeat(prefer_uid)
+  local c = crewLibNow()
+  if not c then return nil, nil end
+  return c.freeSlot((seatParts()), prefer_uid, seatAlive)
+end
+-- Take member `id` out of whatever seat they have aboard.
+function unseatMember(id)
+  local u, k = memberSlot(id)
+  if u then seatMember(u, k, nil) end
+  return u ~= nil
+end
+-- The avatar's member must be in a seat while it rides (an older save's
+-- craft, a crew transfer): put them in the station's free slot, else any.
+function seatAvatarCheck()
+  local c = crewLibNow()
+  if not (c and crewAboard) then return end
+  local id = c.activeId and c.activeId()
+  if not id or memberSlot(id) then return end
+  local u, k = freeSeat(stationUid)
+  if not u and stationUid and bp_by_uid[stationUid] then u, k = stationUid, 1 end
+  if u then
+    local d = bp_by_uid[u]
+    c.setMemberAt(d, k, id)
+    log(string.format("vessel: crew #%d seated in %s slot %d", id, tostring(d.label or d.id), k))
+  end
+end
+-- The station (camera centre, hatch, open-seat pose) at member `id`'s part.
+function setStationOf(id)
+  local u = memberSlot(id)
+  if u then return setStation(u) end
+  return false
+end
+-- The hatch of part `uid` now: point and outward normal in the world (the
+-- physics frame, partFrameNow), or nil (an open seat, a part with no hatch).
+function hatchWorld(uid)
+  local c = crewLibNow()
+  local d = uid and bp_by_uid[uid]
+  local def = c and d and c.seatDef(d)
+  local h = def and def.hatch
+  if not h then return nil end
+  local F = partFrameNow(uid)
+  if not F then return nil end
+  return F.ox + F.rx * h.x + F.ux * h.y + F.zx * h.z,
+         F.oy + F.ry * h.x + F.uy * h.y + F.zy * h.z,
+         F.oz + F.rz * h.x + F.uz * h.y + F.zz * h.z,
+         F.rx * h.nx + F.ux * h.ny + F.zx * h.nz,
+         F.ry * h.nx + F.uy * h.ny + F.zy * h.nz,
+         F.rz * h.nx + F.uz * h.ny + F.zz * h.nz
+end
+-- A clear capsule-sized spot outside part `uid`'s hatch (§3.5: 0.9 m out
+-- along its normal, 0.4 m up), else today's exitSpot round the hull.
+function hatchSpot(uid)
+  local node = dock.node
+  if destroyed or not (node and node.valid) then return nil end
+  local info = assembly.info(node)
+  local hx, hy, hz, nx, ny, nz = hatchWorld(uid)
+  if hx then
+    local ux, uy, uz = radial_up(hx, hy, hz)
+    -- off the ground the suit must float clear of every hull, feet and
+    -- helmet too (touching one reads as standing on it): further out
+    local i0 = info
+    local aloft = i0 and not (i0.grounded or i0.anchored or R2.onWheels or WATER.splashed)
+    local out_, up_ = aloft and 1.3 or 0.9, aloft and 0.0 or 0.4
+    local cx, cy, cz = hx + nx * out_ + ux * up_, hy + ny * out_ + uy * up_, hz + nz * out_ + uz * up_
+    local clear = true
+    if overlapSphere then
+      if not astronaut or not astronaut.valid then astronaut = find("Astronaut") end
+      for _, k in ipairs(aloft and { -0.66, -0.32, 0.32, 0.66 } or { -0.32, 0.32 }) do
+        local hits = overlapSphere(vec3(cx + ux * k, cy + uy * k, cz + uz * k), 0.33,
+          astronaut and { ignore = astronaut } or nil)
+        for _, h in ipairs(hits or {}) do
+          if not (astronaut and h.node and h.node.id == astronaut.id) then clear = false break end
+        end
+        if not clear then break end
+      end
+    end
+    if clear then dock.lastExit = "hatch" return cx, cy, cz end
+  end
+  dock.lastExit = "hull"   -- (published for probes: the hatch was blocked)
+  local d = uid and bp_by_uid[uid]
+  local q = d or pod
+  local rx, up, rz = basis(node)
+  local bx, by, bz = base_of(node, info)
+  local px = bx + rx.x * q.x + up.x * q.y + rz.x * q.z
+  local py = by + rx.y * q.x + up.y * q.y + rz.y * q.z
+  local pz = bz + rx.z * q.x + up.z * q.y + rz.z * q.z
+  return exitSpot(node, info, px, py, pz)
+end
+-- THE AVATAR COMES ABOARD as member `id` (already seated here): crew.lua's
+-- switch to a craft with crew. Takes the controls; the avatar rides hidden
+-- (or seated in view in an open seat) at their station.
+function avatarBoard(id)
+  local node = dock.node
+  if destroyed or not (node and node.valid) then return false end
+  for _, ov in ipairs(findScripts("vessel_controller")) do
+    if ov.node and ov.node.id ~= node.id then
+      if ov.releaseControl then ov.releaseControl() end
+      if ov.crewAboard and ov.crewLeave then ov.crewLeave() end
+    end
+  end
+  if not astronaut or not astronaut.valid then astronaut = find("Astronaut") end
+  if not memberSlot(id) then
+    local u, k = freeSeat(stationUid)
+    if u then seatMember(u, k, id) end
+  end
+  setStationOf(id)
+  piloting = true
+  crewAboard = true
+  if astronaut then
+    astronaut.visible = podSeat == true
+    local px, py, pz = pod_world(node, assembly.info(node))
+    astronaut.x, astronaut.y, astronaut.z = px, py, pz
+  end
+  set_navball(true)
+  sas_mode, sas_last = "stability", "stability"
+  hud_t = -10.0
+  integ.seated = false   -- seatCrew re-asserts the passenger next tick
+  return true
+end
+-- A crewed part broke (hp 0) or the craft came apart around it: its
+-- occupants die (crew.kill; with death off they're rescued). The avatar is
+-- left to the caller (standDown) when death is off.
+function crewPartBroken(node, uid, x, y, z)
+  local c = crewLibNow()
+  local d = uid and bp_by_uid[uid]
+  local def = c and d and c.seatDef(d)
+  if not def then return end
+  local active = c.activeId and c.activeId()
+  local ids = {}
+  for k = 1, #def.seats do
+    local id = c.memberAt(d, k)
+    if id then
+      ids[#ids + 1] = id
+      c.setMemberAt(d, k, nil)
+    end
+  end
+  for _, id in ipairs(ids) do
+    if id == active and crewAboard then
+      if c.deathOn and c.deathOn() then
+        pcall(c.kill, id, "cabin", nil, { x = x, y = y, z = z, craft = craftName })
+      end
+    else
+      pcall(c.kill, id, "cabin", nil, { x = x, y = y, z = z, craft = craftName })
+    end
+  end
+end
+-- The craft is lost but some crewed parts held: their crew are set down
+-- beside the wreck, alive (CrewBodies), as the avatar is.
+function crewEvacuate(node, x, y, z)
+  local c = crewLibNow()
+  if not c then return end
+  local active = c.activeId and c.activeId()
+  local ux, uy, uz = radial_up(x, y, z)
+  local n = 0
+  for u, d in pairs(bp_by_uid) do
+    local def = c.seatDef(d)
+    if def then
+      for k = 1, #def.seats do
+        local id = c.memberAt(d, k)
+        if id then
+          c.setMemberAt(d, k, nil)
+          if id ~= active or not crewAboard then
+            n = n + 1
+            local a = n * 1.3
+            local rx, _, rz = basis(node)
+            local px = x + ux * 2.0 + rx.x * math.cos(a) * 2.2 + rz.x * math.sin(a) * 2.2
+            local py = y + uy * 2.0 + rx.y * math.cos(a) * 2.2 + rz.y * math.sin(a) * 2.2
+            local pz = z + uz * 2.0 + rx.z * math.cos(a) * 2.2 + rz.z * math.sin(a) * 2.2
+            if c.setDown then pcall(c.setDown, id, px, py, pz) end
+          end
+        end
+      end
+    end
+  end
+end
+-- Is the avatar's member seated in these part records (a fleet record's)?
+-- True with no crew library, or when no part carries a slot (an old record).
+function avatarSeatedIn(parts)
+  local c = crewLibNow()
+  if not c then return true end
+  local id = c.activeId and c.activeId()
+  local any = false
+  for _, d in pairs(parts or {}) do
+    local def = c.seatDef(d)
+    if def then
+      for k = 1, #def.seats do
+        local m = c.memberAt(d, k)
+        if m then any = true; if m == id then return true end end
+      end
+    end
+  end
+  return not any
+end
+-- The avatar rides ONE craft: any other that thinks it carries them lets go
+-- (and their seat there empties).
+function avatarExclusive()
+  local node = dock.node
+  local c = crewLibNow()
+  local id = c and c.activeId and c.activeId()
+  for _, ov in ipairs(findScripts("vessel_controller")) do
+    if ov.node and node and ov.node.id ~= node.id then
+      if ov.crewAboard and ov.crewLeave then ov.crewLeave() end
+      if id and ov.unseatMember then ov.unseatMember(id) end
+    end
+  end
+end
+-- "F — board Pod Mk2 (2 free)", "F — sit in the seat", "Pod Mk1 is full".
+function boardPrompt(st)
+  local cl = crewLibNow()
+  local d = st and bp_by_uid[st.uid]
+  if not (cl and d) then return (st and st.seat) and "F — sit in the seat" or "F — board the pod" end
+  local def = cl.seatDef(d)
+  local free = 0
+  for k = 1, (def and #def.seats or 1) do if not cl.memberAt(d, k) then free = free + 1 end end
+  local name = d.label or d.id or "the pod"
+  if free == 0 then
+    local u = freeSeat(st.uid)
+    if not u then return name .. " is full" end
+    return string.format("F — board (%s is full: another seat)", name)
+  end
+  if st.seat then return "F — sit in the seat" end
+  return string.format("F — board %s (%d free)", name, free)
+end
+-- THE LAUNCH SEATS (§3.2): the VAB's plan (the blueprint's `crew`, or the
+-- CREW tab's `shipyard.crew`), checked by crew.launchPlan: members at base
+-- or the avatar's member; the avatar flies as the commander. With no plan,
+-- the avatar takes the best command slot (today's launch).
+function crewLaunch()
+  local cl = crewLibNow()
+  -- A RESTORED craft (a fleet record, a scene change): its seats came with
+  -- it. The avatar rides it only if their member is in one of them — the
+  -- crew may have climbed into a fresh launch since the record was written.
+  if not (cl and cl.launchPlan and podCrewed and launch_mode and not released) then
+    if cl and not avatarSeatedIn(bp_by_uid) then
+      crewAboard, piloting = false, false
+      log("vessel: restored without its crew — they are elsewhere now")
+      return
+    end
+    avatarExclusive()
+    seatAvatarCheck()
+    return
+  end
+  avatarExclusive()
+  -- the member is in this craft now: no fleet record keeps them seated
+  -- elsewhere (one written before the launch, restored after it)
+  local act0 = cl.activeId and cl.activeId()
+  local fl = save.get("fleet.craft")
+  if act0 and type(fl) == "table" then
+    local dirty = false
+    for _, rec in pairs(fl) do
+      for _, d in ipairs(type(rec) == "table" and rec.parts or {}) do
+        local def = cl.seatDef(d)
+        for k = 1, (def and #def.seats or 0) do
+          if cl.memberAt(d, k) == act0 then cl.setMemberAt(d, k, nil); dirty = true end
+        end
+      end
+      if type(rec) == "table" and rec.crew == true then rec.crew = false; dirty = true end
+    end
+    if dirty then save.set("fleet.craft", fl) end
+  end
+  local plan = (bp and type(bp.crew) == "table" and bp.crew) or save.get("shipyard.crew")
+  local active = cl.activeId and cl.activeId()
+  local avail = function(id)
+    local r = cl.get(id)
+    if not r or r.status == "dead" then return false end
+    if id == active then return true end
+    return r.status == "base"
+  end
+  local list, cmdr = cl.launchPlan(bp_by_uid, type(plan) == "table" and plan or nil, avail, active)
+  for _, e in ipairs(list) do
+    seatMember(e.uid, e.slot, e.id)
+    if cl.noteAboard then pcall(cl.noteAboard, e.id, craftName) end
+  end
+  if cmdr and cmdr ~= active and cl.launchAs then
+    -- the avatar flies as the commander; the member it was goes into the building
+    pcall(cl.launchAs, cmdr, craftName)
+  end
+  setStationOf(cmdr or active)
+  seatAvatarCheck()
+  log(string.format("vessel: %d crew aboard at launch", #list))
+end
+-- Does this departing set carry seated crew (they leave as a live craft)?
+function depHasCrew(dep)
+  local c = crewLibNow()
+  if not c then return false end
+  for u in pairs(dep) do
+    local d = bp_by_uid[u]
+    local def = d and c.seatDef(d)
+    if def then for k = 1, #def.seats do if c.memberAt(d, k) then return true end end end
+  end
+  return false
 end
 
 -- Rails warp waits while anyone is on EVA in space (§5.7).
@@ -4887,6 +5314,7 @@ break_part = function(node, uid, d, c, hx, hy, hz, depth)
   sfx3(is_explosive and SFX.boom or SFX.explode, hx, hy, hz,
     is_explosive and 1.0 or 0.8, 0.92 + (uid % 5) * 0.03)
   drop_part(uid)
+  crewPartBroken(node, uid, hx, hy, hz)
   -- A destroyed chute stops dragging (it stayed in the pool and kept pulling,
   -- canopy and all, from a part that was no longer there), and a destroyed
   -- device stops being driven.
@@ -4962,6 +5390,7 @@ break_part = function(node, uid, d, c, hx, hy, hz, depth)
     destroyed = true
     silence_loops()
     local was_piloting = piloting
+    crewEvacuate(node, hx, hy, hz)
     if crewAboard then
       local ux, uy, uz = radial_up(hx, hy, hz)
       standDown(node, hx + ux * 2.0, hy + uy * 2.0, hz + uz * 2.0, 0, 0, 0)
@@ -5062,6 +5491,9 @@ local function shatter(node, hx, hy, hz, spd, info)
   --
   -- Surviving a breakup is meant to cost you the ship, not the save. They come
   -- to a stop beside the wreck; getting home from there is `flight_ops`.
+  -- Everyone still seated goes with the airframe (§2.3: the craft is lost
+  -- with them in it; with death off the avatar is set down as before).
+  for u in pairs(bp_by_uid) do crewPartBroken(node, u, hx, hy + 2.0, hz) end
   if crewAboard then
     standDown(node, hx, hy + 2.0, hz, 0, 0, 0)
   elseif piloting then
@@ -5405,7 +5837,10 @@ function start(node)
     if type(handoff.vel) == "table" then integ.push = handoff.vel end
     -- The crew was in this seat when the game was saved: they still are, and
     -- they're flying it (the boarding handoff seats them on the first tick).
-    if handoff.crew and podCrewed then boarding = true end
+    -- (crew slice 2) ...if the avatar's member is in one of its seats: a
+    -- stale `crew` flag on a craft they left must not pull them back in. A
+    -- record from before the seats (no slot anywhere) trusts the flag.
+    if handoff.crew and podCrewed and avatarSeatedIn(handoff.parts) then boarding = true end
     -- ...in the crew position they were sitting in (a pod, or the seat).
     if handoff.station then setStation(handoff.station) end
     -- A craft saved before it ever flew (released on the pad, a rover driven
@@ -5611,7 +6046,19 @@ function boardNow(node, info)
   -- The crew position NEAREST them: the seat they walked up to, or the pod.
   local d, st = board_dist(node, astronaut, info)
   if d > params.board_range then return false end
-  if st then setStation(st) end
+  -- ...into a free slot of that part, else the nearest free one aboard (§3.5)
+  local clb = crewLibNow()
+  local bid = clb and clb.activeId and clb.activeId()
+  if clb and bid then
+    local u, k = freeSeat(st and st.uid or stationUid)
+    if not u then
+      local fx = findScript("sfx")
+      if fx and fx.caption then fx.caption(string.format("%s is full", tostring((st and bp_by_uid[st.uid] and bp_by_uid[st.uid].label) or craftName))) end
+      return false
+    end
+    seatMember(u, k, bid)
+    setStation(u)
+  elseif st then setStation(st) end
   -- Climbing in takes the controls from whatever you were flying.
   for _, ov in ipairs(findScripts("vessel_controller")) do
     if ov.releaseControl and ov.node and ov.node.id ~= node.id then ov.releaseControl() end
@@ -7273,7 +7720,7 @@ function r2DepartsWithCommand(dep)
     local d = bp_by_uid[u]
     if d and not integ.gone[u] and E.modOf(d, "command") then return true end
   end
-  return false
+  return depHasCrew(dep)
 end
 
 -- Split `dep` off as its own live craft (the Vessel prefab, its own
@@ -10325,8 +10772,10 @@ function fixedUpdate(node, dt)
     -- A crewed craft takes the crew; a PROBE is flown from the ground, and the
     -- crew stands at the base and watches it go.
     crewAboard = podCrewed == true
-    astronaut.visible = (not crewAboard) or podSeat == true
-    set_navball(true)
+    -- (crewLaunch may hand the crew back: a restored craft they've left)
+    if crewAboard then crewLaunch() end
+    if piloting then astronaut.visible = (not crewAboard) or podSeat == true end
+    if piloting then set_navball(true) end
     sas_mode, sas_last = "stability", "stability"
     log(crewAboard and "vessel: you're in the pod — SHIFT throttle, SPACE releases the clamps"
       or "vessel: probe on the pad, flown from the ground — SHIFT throttle, SPACE releases the clamps")
@@ -10454,7 +10903,7 @@ function fixedUpdate(node, dt)
     local bd, bst = nil, nil
     if astronaut and podCrewed and not crewAboard then bd, bst = board_dist(node, astronaut, info) end
     if bd and bd <= params.board_range + 1.4 and crewOnFoot(node.id) then
-      set_prompt((bst and bst.seat) and "F — sit in the seat" or "F — board the pod")
+      set_prompt(boardPrompt(bst))
     else
       set_prompt("")
     end
@@ -11187,6 +11636,11 @@ function lateUpdate(node, dt)
     if einfo then power_tick(node, einfo, dt) end
   end
   if piloting then dockGuides() end
+  -- the avatar's member always has a seat while it rides (an old save's craft)
+  if crewAboard and (time or 0) - (CREWLIB.chk or -10) > 1.0 then
+    CREWLIB.chk = time or 0
+    seatAvatarCheck()
+  end
   -- A seat whose part has gone (shed, staged) can't hold its rider: they move
   -- to the command pod if there is one (a lost pod loses the craft anyway).
   if crewAboard and stationUid and stationUid ~= pod_uid

@@ -12,6 +12,8 @@
         "entity",
         "level",
         "viewmodel",
+        "interior",
+        "offstage",
     ],
     ui_font: "fonts/SolarUI.ttf",
     terrain_generator: Some(3),

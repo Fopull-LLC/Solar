@@ -4,7 +4,11 @@
 --
 --   Command Centre    → E opens the OPS BOARD, where contracts are signed;
 --                       its "Overview" button shows the company: balance,
---                       reputation, the contract on the books, the ledger.
+--                       reputation, the contract on the books, the ledger;
+--                       its CREW button (and the overview's) opens the
+--                       Astronaut Complex (crew_roster_panel.lua): roster,
+--                       applicants, memorial. This menu owns that panel's
+--                       E/Esc, walking away and scrim, as it does the board's.
 --   Vehicle Assembly  → E opens the builder directly, in the building, over the
 --                       live world (scripts/build_host.lua).
 --   Tracking Station  → the FLEET board: every craft you have left somewhere
@@ -304,7 +308,26 @@ function trackingSelect(i) track_sel = i end
 -- Is a facility panel up? The tool belt asks, so holding E at the depot digs a
 -- hole in the floor instead of… well, exactly that.
 function isOpen()
-  return open_fac ~= nil
+  return open_fac ~= nil or roster_open()
+end
+
+-- THE ASTRONAUT COMPLEX (crew_roster_panel.lua). Counted as "a facility panel
+-- is up" (isOpen above), so the tool belt, the camera and the pause menu that
+-- already stand down for this menu stand down for it too.
+function roster_open()
+  local rp = ref("crew_roster_panel")
+  return rp ~= nil and rp.isOpen ~= nil and rp.isOpen() == true
+end
+
+function openRoster(tab)
+  local rp = ref("crew_roster_panel")
+  if not (rp and rp.openPanel) then return false end
+  if open_fac then close() end
+  local ob = ref("ops_board")
+  if ob and ob.isOpen and ob.isOpen() and ob.closeBoard then ob.closeBoard() end
+  rp.openPanel(tab or "ROSTER")
+  sync_scrim()
+  return true
 end
 
 -- ── the depot ───────────────────────────────────────────────────────────────
@@ -753,6 +776,7 @@ local function refresh()
     content_warned = nil
   end
   if title_n then title_n.text = f.label end
+  crew_button(f.kind == "command")
   if body_n then body_n.text = body end
   -- ALWAYS write the label. It used to be written only when there WAS an
   -- action, on the reasoning that the button would be hidden otherwise — which
@@ -781,10 +805,25 @@ local function scrim(on)
                             w = 4000, h = 2400, order = -100 } } or {})
 end
 
-local function sync_scrim()
+function sync_scrim()
   local pm, ob = ref("pause_menu"), ref("ops_board")
   scrim(open_fac ~= nil or (pm ~= nil and pm.open == true)
-    or (ob ~= nil and ob.isOpen ~= nil and ob.isOpen() == true))
+    or (ob ~= nil and ob.isOpen ~= nil and ob.isOpen() == true) or roster_open())
+end
+
+-- The overview's CREW button, beside its action: described into the scene's
+-- button row (hand-placed buttons there are left alone by ui.make), only for
+-- the Command Centre. The action button narrows to make room.
+local crew_btn_on = nil
+function crew_button(on)
+  if crew_btn_on == on or not (ui and ui.make) then return end
+  local row = find("Facility Buttons")
+  if not row then return end
+  crew_btn_on = on
+  if action_el then action_el.width = on and 176 or 300 end
+  ui.make(row, on and { { "button", key = "crew", style = "panel/action", w = 116, h = 36, text = "Crew  ▸",
+    textAlign = "center", textValign = "center", tooltip = "The Astronaut Complex: roster, hiring, memorial",
+    onClicked = function() sfx("click"); openRoster("ROSTER") end } } or {})
 end
 
 -- The Tracking Station has a screen of its own (scripts/tracking_station.lua):
@@ -896,6 +935,7 @@ function update(node, dt)
     near_fac = nil
     if prompt_el then prompt_el.visible = false end
     if open_fac then close() end
+    if roster_open() then ref("crew_roster_panel").close(); sync_scrim() end
     return
   end
   sync_scrim()
@@ -978,6 +1018,20 @@ function update(node, dt)
     return
   end
 
+  -- The Astronaut Complex: the Command Centre's other console. E (unless a
+  -- name is being typed) or Esc closes it; so does walking out.
+  if roster_open() then
+    local rp = ref("crew_roster_panel")
+    if prompt_el then prompt_el.visible = false end
+    if input.pressed("escape") then
+      escTakenAt = time
+      rp.close()
+    elseif (interact_pressed() and not (rp.typing and rp.typing())) or beyond(astro, "FacCommand") then
+      rp.close()
+    end
+    if not roster_open() then sync_scrim() end
+    return
+  end
   local ob = ref("ops_board")
   if ob and ob.isOpen and ob.isOpen() then
     if prompt_el then prompt_el.visible = false end
