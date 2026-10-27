@@ -224,6 +224,12 @@ local function pv_layer(n, depth)
     if ok and type(kids) == "table" then for _, c in ipairs(kids) do pv_layer(c, depth + 1) end end
   end
 end
+-- A stand camera films the stand alone: no sun shadows (the rig lights it),
+-- no terrain or fog 2.4 km up. Set once per camera; refused keys are harmless.
+local function studio_camera(n)
+  pcall(function() n:setCamera { shadows = false, terrain = false, fog = false } end)
+end
+
 local function pv_camera(B)
   if pv_valid(pv.cam) then return pv.cam end
   if pv.making or not createNode then return nil end
@@ -237,9 +243,82 @@ local function pv_camera(B)
                     cullMask = 2 ^ PV.bit }
     end)
     if not ok and log then log("catalog preview: no render target (" .. tostring(err) .. ")") end
+    studio_camera(n)
     n.enabled = pv.on
   end)
   return nil
+end
+-- THE STUDIO (playtest 2026-10-27: "the part pictures are too dark"). The
+-- stand used to be lit by whatever the sky gave 2.4 km up — the night side, a
+-- low sun, the part's own shadow — over black space. Now it has a rig of its
+-- own, sized to the part on it: a warm KEY high front-left, a cool FILL low
+-- front-right, a white RIM behind for the silhouette, and an unlit slate
+-- BACKDROP card behind the part so dark hulls read against it. Lights are
+-- picked per view from the camera's own position, so only the stand's cameras
+-- see them, and the rig is switched off with the stand (an idle catalogue pays
+-- nothing; the main view never counts them against its sixteen).
+-- { name, x, y, z (× the camera distance, stand frame), colour, intensity, range × dist }
+local RIG = {
+  { "StudioKey",  -0.85, 0.95, 0.95, { 1.00, 0.95, 0.86 }, 3.6, 3.2 },
+  { "StudioFill",  1.05, 0.10, 0.75, { 0.80, 0.88, 1.00 }, 1.8, 3.2 },
+  { "StudioRim",   0.35, 0.85, -1.05, { 1.00, 1.00, 1.00 }, 3.0, 3.0 },
+}
+local BACKDROP = { z = -1.7, size = 6.0, color = { 0.17, 0.18, 0.20 } }
+local rig = { nodes = {}, making = 0, dist = nil, on = nil }
+local function rig_make(B)
+  if rig.making > 0 or not createNode then return end
+  local par = pv_parent(B)
+  if not par then return end
+  for i, L in ipairs(RIG) do
+    if not pv_valid(rig.nodes[i]) then
+      rig.making = rig.making + 1
+      createNode(L[1], par, function(n)
+        rig.making = rig.making - 1
+        rig.nodes[i], rig.dist = n, nil
+        n.enabled = false
+      end)
+    end
+  end
+  local bi = #RIG + 1
+  if not pv_valid(rig.nodes[bi]) then
+    rig.making = rig.making + 1
+    createNode("StudioBackdrop", par, function(n)
+      rig.making = rig.making - 1
+      rig.nodes[bi], rig.dist = n, nil
+      pcall(function()
+        n:setPrimitive("Cube", BACKDROP.color)
+        n:setMaterial { color = BACKDROP.color, unlit = true }
+      end)
+      pcall(function() n.layer = PV.layer end)
+      n.enabled = false
+    end)
+  end
+end
+-- Place the rig for the part on the stand (once per part) and switch it.
+local function rig_tick(B, on)
+  if on then rig_make(B) end
+  local d = pv.dist
+  for i = 1, #RIG + 1 do
+    local n = rig.nodes[i]
+    if pv_valid(n) then
+      if on and rig.dist ~= d then
+        local L = RIG[i]
+        if L then
+          n.x, n.y, n.z = L[2] * d, PV.alt + L[3] * d, L[4] * d
+          pcall(function() n:setPointLight { color = L[5], intensity = L[6], range = L[7] * d } end)
+        else
+          -- square to the camera's 0.18 rad tilt, centred on its line of sight
+          local bz = BACKDROP.z * d
+          n.x, n.y, n.z = 0, PV.alt + 0.18 * d - math.tan(0.18) * (d - bz), bz
+          if n.setAngles then n:setAngles(0, -0.18, 0) end
+          n.scale_x, n.scale_y, n.scale_z = BACKDROP.size * d, BACKDROP.size * d, 0.02 * d
+        end
+      end
+      if n.enabled ~= on then n.enabled = on end
+    end
+  end
+  if on and rig.making == 0 then rig.dist = d end
+  rig.on = on
 end
 local function pv_show(on)
   pv.on = on
@@ -297,6 +376,7 @@ local function icon_camera(B)
   createNode("PartIconCam", pv_parent(B), function(n)
     icq.making, icq.cam = false, n
     pcall(function() n:setCamera { fovY = PV.fov, active = false, cullMask = 2 ^ PV.bit } end)
+    studio_camera(n)
   end)
   return nil
 end
@@ -338,8 +418,10 @@ local function icon_tick(B)
   end
   ic.x, ic.y, ic.z = 0, PV.alt + pv.dist * 0.18, pv.dist
   if ic.setAngles then ic:setAngles(0, -0.18, 0) end
-  -- a moment on the stand before the picture (the model streams in, the pose lands)
-  if not (pv.ready and pv.id == id and (time or 0) - (pv.ready_t or 0) > 0.35) then
+  rig_tick(B, true)
+  -- a moment on the stand before the picture (the model streams in, the pose
+  -- lands, the studio stands round it)
+  if not (pv.ready and pv.id == id and (time or 0) - (pv.ready_t or 0) > 0.35 and (rig.dist == pv.dist or (icq.wait or 0) > 120)) then
     icq.wait = (icq.wait or 0) + 1
     if icq.wait > 240 then icq.failed[id] = true; icq.wait = 0 end
     return true
@@ -366,12 +448,13 @@ local function preview_tick(B, dt)
   local want = st.hover or st.held
   previewId = want
   if not want then
-    if not icon_tick(B) then pv_show(false) end
+    if not icon_tick(B) then pv_show(false); if rig.on ~= false then rig_tick(B, false) end end
     return
   end
   pv_camera(B)
   stage_want(B, want)
   pv_show(true)
+  rig_tick(B, true)
   pv.spin = (pv.spin + (dt or 0.016) * 0.9) % (2 * math.pi)
   stage_pose(pv.spin)
 end
