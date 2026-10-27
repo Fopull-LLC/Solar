@@ -265,12 +265,82 @@ end
 function maxWarp() return ceiling end
 function warpNote() return note end
 
+-- WHAT CANNOT OUTRUN THE STREAMER (warp fix 2026-10-27). Both limits are about
+-- reaching unbuilt space, and a craft or a walker on a CLOSED orbit inside a
+-- built system never will: parked on a planet, flying round it, or circling
+-- this system's star inside the built ring. Those get no ceiling at all, which
+-- is KSP's landed and orbital warp. (Before this, the anchor's speed was its
+-- speed round the STAR, over REAL seconds, so it carried the planet's orbital
+-- speed times the warp: the ceiling fell as the warp rose, and a craft parked
+-- on the ground was taken down a step at 50-100x.)
+--
+-- Pure: is the orbit `el` (space.elements: distances from the body's centre)
+-- closed and inside `room` metres of that centre?
+function closedWithin(el, room)
+  if type(el) ~= "table" or type(room) ~= "number" then return false end
+  local ap = el.apoapsis
+  return type(ap) == "number" and ap == ap and ap < room
+end
+
+-- Pure: the ceiling (a warp multiplier) and why. `o`: bound (closed orbit in a
+-- built system), pending (a ring sector still to build), margin (m to the
+-- built edge), speed (game m/s), lead, building, top (the params).
+function ceilingFor(o)
+  if o.bound then return math.huge, nil end
+  if o.pending then
+    local c = o.building or 100.0
+    return c, string.format("warp %d× max · charting the systems ahead", c)
+  end
+  local cap = math.max(1.0, o.margin or 1.0) / (math.max(1.0, o.lead or 25.0) * math.max(o.speed or 0, 1.0))
+  if cap < 1.0 then cap = 1.0 end
+  if cap >= math.max(1.0, o.top or 10000.0) then return math.huge, nil end
+  return cap, string.format("warp %d× max · charting ahead of you", math.floor(cap))
+end
+
+-- The star names of every built system (home and the ring).
+local function is_star(name)
+  if not name then return false end
+  local gen = ref("system_generator")
+  if gen and gen.homeStar == name then return true end
+  for _, e in pairs(live) do if e.star == name then return true end end
+  return false
+end
+
+-- The edge of the built ring, measured from (x, z): the least distance.
+local function edge_margin(x, z, S, b)
+  local sx, sz = sector_of(x, z, S)
+  local ex = (sx + (b + 1)) * S - x
+  local wx = x - (sx - b) * S
+  local ez = (sz + (b + 1)) * S - z
+  local wz = z - (sz - b) * S
+  return math.max(1.0, math.min(math.min(ex, wx), math.min(ez, wz)))
+end
+
+-- Is the anchor on a closed orbit that keeps it inside built space? Round a
+-- planet or moon: inside its sphere of influence (the planet is on rails in a
+-- built system). Round a star: inside the built ring around that star.
+local function bound_now(node, S, b)
+  if not (space and space.dominant and space.elements and space.body) then return false end
+  local d = space.dominant(node.x, node.y, node.z)
+  local db = d and space.body(d)
+  if not db then return false end
+  local el = space.elements(node.x, node.y, node.z, node.vx or 0, node.vy or 0, node.vz or 0)
+  if is_star(db.name or d) then
+    return closedWithin(el, edge_margin(db.x, db.z, S, b))
+  end
+  return closedWithin(el, db.soi or 0)
+end
+
 local function recompute(node, S, speed)
+  local b = math.floor(params.build or 1)
+  if bound_now(node, S, b) then
+    ceiling, note = math.huge, nil
+    return
+  end
   local pending = false
   local ax, az = node.x, node.z
   local sx, sz = sector_of(ax, az, S)
   local seed = save.get("g_seed") or 0
-  local b = math.floor(params.build or 1)
   for dx = -b, b do
     for dz = -b, b do
       local k = key(sx + dx, sz + dz)
@@ -279,37 +349,16 @@ local function recompute(node, S, speed)
       end
     end
   end
-  if pending then
-    ceiling = params.buildingWarp or 100.0
-    note = string.format("warp %d× max · charting the systems ahead", ceiling)
-    return
-  end
   -- The built region reaches `build` sectors out from the one you are in, so
   -- the nearest unbuilt ground is the far edge of that ring. Measured from
-  -- where you are inside your own sector, not from its centre.
-  local ex = (sx + (b + 1)) * S - ax
-  local wx = ax - (sx - b) * S
-  local ez = (sz + (b + 1)) * S - az
-  local wz = az - (sz - b) * S
-  local margin = math.max(1.0, math.min(math.min(ex, wx), math.min(ez, wz)))
-  local lead = math.max(1.0, params.leadTime or 25.0)
-  -- speed is in metres per second of GAME time; warp multiplies game time, so
-  -- the distance covered per real second is speed × warp.
-  local cap = margin / (lead * math.max(speed, 1.0))
-  if cap < 1.0 then cap = 1.0 end
-  -- Above the top of the ladder the ceiling is moot, so say NOTHING rather
-  -- than report a limit nobody can reach. A HUD line that is always there is a
-  -- HUD line nobody reads, and this one has to be believed on the one occasion
-  -- it drops.
-  local top = math.max(1.0, params.freeWarp or 10000.0)
-  if cap >= top then
-    ceiling, note = math.huge, nil
-  else
-    ceiling = cap
-    -- Phrased as a fact about the ship, not a complaint about the player:
-    -- what the ladder tops out at right now, and why.
-    note = string.format("warp %d× max · charting ahead of you", math.floor(cap))
-  end
+  -- where you are inside your own sector, not from its centre. `speed` is in
+  -- metres per GAME second, so cap × speed is game metres per real second.
+  -- Above the top of the ladder the ceiling is moot and says NOTHING: a HUD
+  -- line that is always there is a line nobody reads.
+  ceiling, note = ceilingFor({
+    pending = pending, margin = edge_margin(node.x, node.z, S, b), speed = speed,
+    lead = params.leadTime, building = params.buildingWarp, top = params.freeWarp,
+  })
 end
 
 -- ── readable state (the map + the HUD) ──────────────────────────────────────
@@ -340,7 +389,7 @@ end
 
 -- ── driver ──────────────────────────────────────────────────────────────────
 
-local last_x, last_z, last_t = nil, nil, 0
+local last_x, last_z, last_t, last_rt = nil, nil, 0, 0
 
 function update(node, dt)
   local gen = ref("system_generator")
@@ -358,13 +407,16 @@ function update(node, dt)
 
   -- Speed over the last interval, in game metres per second. Measured rather
   -- than read off a vessel, so it is right for the crew, a ship, and a wreck.
+  -- (Over GAME seconds: rails time, which warp multiplies. Over real seconds
+  -- the speed carried the warp, and the ceiling fell as the warp rose.)
+  local gt = (space and space.time) and space.time() or time
   local speed = 0
-  if last_x and time > last_t then
-    local dtt = time - last_t
+  if last_x and gt > last_t then
+    local dtt = gt - last_t
     speed = math.sqrt((a.x - last_x) ^ 2 + (a.z - last_z) ^ 2) / math.max(dtt, 1e-3)
   end
-  if not last_x or time - last_t > 0.5 then
-    last_x, last_z, last_t = a.x, a.z, time
+  if not last_x or gt < last_t or time - last_rt > 0.5 then
+    last_x, last_z, last_t, last_rt = a.x, a.z, gt, time
   end
 
   local sx, sz = sector_of(a.x, a.z, S)

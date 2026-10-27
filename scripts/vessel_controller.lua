@@ -4652,7 +4652,7 @@ function evaNow(in_tick)
       vx, vy, vz = vx + w.y * qz - w.z * qy, vy + w.z * qx - w.x * qz, vz + w.x * qy - w.y * qx
     end
   end
-  if space.warp and space.warp() > 1.001 then space.warp(1) end
+  if space.warp and space.warp() > 1.001 then space.warp(1); warpSay("Warp ×1 · stepping out") end
   standDown(node, ex, ey, ez, vx, vy, vz)
   -- Off the ground, the first moments out are watched (evaGuard).
   if info and not (info.grounded or info.anchored or R2.onWheels or WATER.splashed) then
@@ -5124,6 +5124,15 @@ function depHasCrew(dep)
     if def then for k = 1, #def.seats do if c.memberAt(d, k) then return true end end end
   end
   return false
+end
+
+-- A warp refusal or drop, said where the player looks (the warp chip,
+-- warp_chip.lua) as well as in the log. A global, not a local: fixedUpdate
+-- sits at LuaJIT's upvalue ceiling (platform 0086).
+function warpSay(msg)
+  log(msg)
+  local wc = findScript("warp_chip")
+  if wc and wc.say then pcall(wc.say, msg) end
 end
 
 -- Rails warp waits while anyone is on EVA in space (§5.7).
@@ -11066,8 +11075,8 @@ function fixedUpdate(node, dt)
   -- A ceiling that drops UNDER the warp we are already at takes it down with
   -- it. This is the one that matters: the ceiling falls the instant the galaxy
   -- starts building a system, which is exactly when the ship must not be
-  -- crossing a sector a second. Stepping down is silent unless there is a
-  -- reason to give.
+  -- crossing a sector a second. A step down is said on screen (warpSay): a
+  -- drop the player can't see the reason for reads as a broken key.
   if warp > warp_cap + 0.001 then
     local down = 1
     for _, w in ipairs(WARP_STEPS) do
@@ -11075,7 +11084,7 @@ function fixedUpdate(node, dt)
     end
     if down < warp then
       space.warp(down)
-      if warp_why then log(string.format("warp %d× — %s", down, warp_why)) end
+      warpSay(string.format("Warp ×%d · %s", down, warp_why or "limited out here"))
       warp = down
     end
   end
@@ -11089,8 +11098,8 @@ function fixedUpdate(node, dt)
     -- Refusing to go UP is not the same as being dragged down: say why, or the
     -- key just stops working and that reads as a broken control.
     if nxt > warp and nxt > warp_cap + 0.001 then
-      log(warp_why and ("warp limited: " .. warp_why)
-        or string.format("warp limited to %d× out here", math.floor(warp_cap)))
+      warpSay(warp_why and ("Warp limited · " .. warp_why)
+        or string.format("Warp limited to ×%d out here", math.floor(warp_cap)))
       nxt = warp
     end
     if nxt > warp then
@@ -11104,13 +11113,13 @@ function fixedUpdate(node, dt)
         alt_ok = rr - b0.radius > 40.0
       end
       if throttle > 0.01 then
-        log("warp locked: cut throttle first")
+        warpSay("Warp limited · cut the throttle first")
         nxt = warp
       elseif evaBlocksWarp() then
-        log("warp locked: crew on EVA in space (physics only)")
+        warpSay("Warp limited · crew on EVA in space")
         nxt = warp
       elseif not alt_ok then
-        log("warp locked: too low")
+        warpSay("Warp limited · too low to coast (under 40 m)")
         nxt = warp
       end
     end
@@ -11129,6 +11138,7 @@ function fixedUpdate(node, dt)
     if touched then
       space.warp(1)
       warp = 1
+      warpSay("Warp ×1 · controls")
     end
   end
 
