@@ -6,14 +6,17 @@
 --     O2 25%      amber, a chime once            O2 10%   red, the alarm every 10 s
 --     O2 1 MIN    red, the alarm continuous, the screen rim pulses red
 --     BREATH …    the same three steps under water (held breath)
+--     HIT −43%    shot (crew.hurt): red for 1.6 s, a thud and two pips, the
+--                 rim flashes red
 --     HP 62%      injured (amber; red under 35%)
 --     HEAT        from heat 0.2 (amber), the alarm from 0.6 (red)
 --     FALL 8 m/s  airborne: amber from 6 m/s, red "FATAL FALL" from 12
 --     PINNED      a red vignette and the chip
 --     CABIN FAILING · hold under 9 m/s   the crew part under 35%
 --   BLACKOUT: the screen dims toward black over the grace, a heartbeat plays.
---   A DEATH: crew.lastDeath changes → a muted sting and planet_camera holds on
---   the place for 2 s (crew.lua shows the caption through big_caption).
+--   A DEATH: crew.lastDeath changes → a muted sting and, when it was the
+--   member you control, planet_camera holds on the place for 2 s (crew.lua
+--   shows the caption through big_caption).
 --
 -- Pure (luajit): chipsOf(alerts) → { {text, level} … }, soundsOf(prev, alerts)
 
@@ -33,6 +36,7 @@ SND = {
   loop = "audio/sfx/crew_alarm_loop.ogg",
   heart = "audio/sfx/crew_heartbeat.ogg",
   sting = "audio/sfx/crew_sting.ogg",
+  hit = "audio/sfx/crew_hit.ogg",
 }
 ALARM_EVERY = 10.0
 
@@ -50,6 +54,7 @@ end
 function chipsOf(a)
   local out = {}
   if not a then return out end
+  if a.hit then out[#out + 1] = { "HIT −" .. pct(a.hit.amount) .. "%", "danger" } end
   local lv = a.o2_level or airLevel(a.o2, a.air_s)
   if lv == "min" then out[#out + 1] = { "O2 1 MIN", "danger" }
   elseif lv == "crit" then out[#out + 1] = { "O2 " .. pct(a.o2) .. "%", "danger" }
@@ -74,6 +79,10 @@ end
 -- at time t: → { one-shot keys… }, loop key | nil.
 function soundsOf(S, a, t)
   local shots = {}
+  if a and a.hit and a.hit.t ~= S.hit_t then
+    S.hit_t = a.hit.t
+    shots[#shots + 1] = "hit"
+  end
   local lv = a and (a.o2_level or airLevel(a.o2, a.air_s)) or nil
   local bl = a and (a.breath_level or ((a.breath or 1) < 1 and airLevel(a.breath, nil) or nil)) or nil
   local worst = (lv == "min" or bl == "min") and "min" or ((lv == "crit" or bl == "crit") and "crit")
@@ -163,7 +172,11 @@ function lateUpdate(node, dt)
   if ld and ld.t ~= death_t then
     death_t = ld.t
     play("sting", { track = "UI", volume = 0.9 })
-    if pc and pc.holdOn and ld.x then pc.holdOn(ld.x, ld.y, ld.z, 2.0) end
+    -- the camera holds on the fallen only when it was the one you control
+    -- (a crew member shot dead 150 m off must not yank the view, or the
+    -- scope, away from the shooter)
+    local mine = C.activeId and ld.id == C.activeId()
+    if pc and pc.holdOn and ld.x and mine then pc.holdOn(ld.x, ld.y, ld.z, 2.0) end
   end
   local id = who()
   local a = (C and C.alerts and id) and C.alerts(id) or nil
@@ -188,7 +201,9 @@ function lateUpdate(node, dt)
   end
   local danger_rim = false
   for _, c in ipairs(chips) do
-    if c[1] == "O2 1 MIN" or c[1] == "PINNED" or (c[1]:find("^BREATH") and c[2] == "danger") then danger_rim = true end
+    if c[1] == "O2 1 MIN" or c[1] == "PINNED" or (c[1]:find("^BREATH") and c[2] == "danger") or c[1]:find("^HIT") then
+      danger_rim = true
+    end
   end
   if danger_rim then
     local pulse = 0.35 + 0.35 * math.abs(math.sin(t * 3.2))

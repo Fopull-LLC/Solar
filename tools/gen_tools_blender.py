@@ -24,7 +24,8 @@ anim:setBoneRot):
 
 The terrain laser comes in VARIANTS (LASERS below): C (the TL-3 Plasma Bore)
 is the tool in the game; TL7 (the old TL-7), A and B are kept, built only
-when asked for (`-- OUT.json TL7,A,B,C`); B is earmarked for a later item.
+when asked for (`-- OUT.json TL7,A,B,C`). B is also the crew's plasma rifle,
+the TL-5 SURVEYOR (res["surveyor"], always built: laser_B(rifle=True)).
 
 ENERGY PARTS carry a uv of their own instead of a texture map (UVMODE, set by
 uvmode()): the tool_* shaders (shaders/tool_*.flsl) read uv.y as distance
@@ -64,6 +65,7 @@ DECALS = {
     "tl9":        (0, 432, 170,  80),
     "tl5":        (170, 432, 171, 80),
     "tl3":        (341, 432, 171, 80),
+    "tl5_name":   (0, 320, 128,  16),
 }
 ATLAS = 512.0
 
@@ -644,7 +646,7 @@ def gravity_gun():
 #        receiver, twin cells on the stock, and an EXPOSED focusing chamber, a
 #        hexagonal crystal in a cage between copper coils, ahead of a heavy
 #        nozzle.
-#   B    TL-5 SURVEYOR (kept for a later "plasma sniper" item), a slim beam rifle: a survey scope, a long barrel in a
+#   B    TL-5 SURVEYOR (also the crew's plasma rifle, scripts/surveyor.lua), a slim beam rifle: a survey scope, a long barrel in a
 #        ventilated shroud and a glowing COOLANT LOOP: a reservoir under the
 #        barrel feeding two lines up the sides to a ring at the muzzle; the
 #        coolant warms from ice blue toward amber with heat.
@@ -892,8 +894,10 @@ def laser_A():
     return export(), anchors, nodes
 
 
-def laser_B():
-    """TL-5 SURVEYOR: the slim beam rifle with the glowing coolant loop."""
+def laser_B(rifle=False):
+    """TL-5 SURVEYOR: the slim beam rifle with the glowing coolant loop.
+    `rifle`: the crew weapon (scripts/surveyor.lua) — its own nameplate line
+    and a slotted muzzle brake over the emitter head; the rest is design B."""
     reset()
     Y = TL_Y
     # ── a slim enamel receiver with a dark waist
@@ -902,7 +906,8 @@ def laser_B():
     slab("rcv", "Enamel", prof, -0.034, 0.034, bevel=0.005, segs=2)
     box("waist", "Dark", (0.0, 0.046, -0.020), (0.0695, 0.082, 0.008))
     decal("rcv_name", "tl5", (-0.0346, 0.066, 0.070), (-1, 0, 0), (0, 1, 0), 0.066, 0.021)
-    decal("rcv_sub", "tl7_name", (-0.0346, 0.044, 0.070), (-1, 0, 0), (0, 1, 0), 0.094, 0.0075)
+    decal("rcv_sub", "tl5_name" if rifle else "tl7_name", (-0.0346, 0.044, 0.070), (-1, 0, 0), (0, 1, 0),
+          0.094 if not rifle else 0.072, 0.0075 if not rifle else 0.009)
     decal("rcv_emb", "emblem", (-0.0346, 0.060, -0.080), (-1, 0, 0), (0, 1, 0), 0.022, 0.022)
     decal("rcv_warn", "laser_warn", (0.0346, 0.056, -0.075), (1, 0, 0), (0, 1, 0), 0.042, 0.028)
     decal("rcv_ser", "serial_b", (0.0346, 0.020, 0.090), (1, 0, 0), (0, 1, 0), 0.056, 0.0070)
@@ -974,15 +979,26 @@ def laser_B():
     cyl("lens", "EnergyGlass", (0, Y, -0.5585), (0, Y, -0.5595), 0.0165, segs=12)
     ring_z("head_rim", "Chrome", -0.561, 0.0235, 0.0262, 0.004, y=Y, segs=16)
     focus_ring(Y, -0.500, -0.528, 0.032, knurls=10)
+    if rifle:
+        # a slotted muzzle brake round the emitter: four ports a side vent the
+        # bolt's blast sideways (the kick the hands feel)
+        lathe("brake", "Dark", [(0.024, -0.562), (0.027, -0.564), (0.027, -0.606), (0.022, -0.608), (0.0175, -0.606)],
+              segs=16, at=(0, Y, 0))
+        for s_ in (-1, 1):
+            for k in range(4):
+                box(f"port{s_}{k}", "GunBody", (s_ * 0.0268, Y, -0.572 - k * 0.009), (0.002, 0.012, 0.004))
+        ring_z("brake_rim", "Chrome", -0.607, 0.0175, 0.0225, 0.003, y=Y, segs=16)
     # ── the fore-grip under the reservoir
     box("fgrip_mount", "GunBody", (0.0, Y - 0.062, -0.190), (0.022, 0.010, 0.050), bevel=0.003)
     fore_grip(Y, (-0.066, -0.188), (-0.146, -0.204))
     pistol_grip(LASER_DZ)
     anchors = {
         "grip": [0.0, -0.035, 0.080],
-        "muzzle": [0.0, Y, -0.565],
+        "muzzle": [0.0, Y, -0.612 if rifle else -0.565],
         "fore": [0.0, Y - 0.106, -0.196],
         "vent": [0.0, Y + 0.034, -0.300],
+        # the rifle's scope: the eye end of the tube (first-person ADS)
+        "scope": [0.0, 0.124, 0.122],
     }
     nodes = [{"name": "Body", "parent": None, "t": [0, 0, 0], "roll": 0.0},
              {"name": "Focus", "parent": "Body", "t": [0, Y, 0], "roll": 0.0}]
@@ -1133,7 +1149,8 @@ def main():
     path = argv[0] if argv else "/tmp/tools_mesh.json"
     want = argv[1].split(",") if len(argv) > 1 else ["C"]
     res = {}
-    for name, fn in [("gravgun", gravity_gun)] + [("laser_" + v, LASERS[v]) for v in want]:
+    for name, fn in ([("gravgun", gravity_gun)] + [("laser_" + v, LASERS[v]) for v in want]
+                     + [("surveyor", lambda: laser_B(rifle=True))]):
         geo, anchors, nodes = fn()
         tris = sum(len(m["P"]) // 9 for n in geo.values() for m in n.values())
         res[name] = {"geo": geo, "anchors": anchors, "nodes": nodes}

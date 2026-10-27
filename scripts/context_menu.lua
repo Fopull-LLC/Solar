@@ -545,6 +545,10 @@ end
 
 -- The right button: a TAP opens, a hold or a drag is the camera's.
 local function rmb_tap()
+  -- a weapon in hand aims with the right button (scripts/surveyor.lua's
+  -- scope): its press is never a tap (holster with H, or pad Y, for the menu)
+  local sv = ref("surveyor")
+  if sv and sv.ownsRmb and sv.ownsRmb() then st.rmb = nil return nil end
   local down = input.button(1) == true
   local R = st.rmb
   if down and not R then

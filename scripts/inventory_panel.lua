@@ -387,8 +387,17 @@ local function describe(astro)
         { "text", key = "w", style = "panel/cellMuted", w = 40, h = "fit", textAlign = "end", text = what },
         { "text", key = "kg", style = "panel/cell", w = 92, h = "fit", textAlign = "end",
           text = g.L and string.format("%.1f kg · %.0f L", g.kg, g.L) or string.format("%.1f kg", g.kg) } }
-      -- each Oxygen Tank's air, fullest first
-      if g.fills and g.fillCap then
+      -- each Oxygen Tank's air (each rifle's cell), fullest first
+      local I = ref("items")
+      local cellish = I and I.def and I.def(g.id) and I.def(g.id).fill and I.def(g.id).fill.what == "cell"
+      if g.fills and g.fillCap and cellish then
+        local lv = {}
+        for i = #g.fills, 1, -1 do lv[#lv + 1] = string.format("%.0f%%", 100 * g.fills[i] / g.fillCap) end
+        rows[#rows + 1] = { "row", key = "fill_" .. g.id, w = "100%", h = 22, gap = 10, pad = 0, align = "center",
+          { "box", key = "p", w = 34, h = 1 },
+          { "text", key = "t", style = "panel/cellMuted", w = "grow", h = "fit", maxLines = 1, overflow = "ellipsis",
+            text = string.format("cell  ·  %s  ·  recharges aboard a craft and at the base", table.concat(lv, " · ")) } }
+      elseif g.fills and g.fillCap then
         local lv = {}
         for i = #g.fills, 1, -1 do
           local f = g.fills[i]

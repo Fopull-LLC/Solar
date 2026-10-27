@@ -1,0 +1,25 @@
+// TL-5 SURVEYOR bolt: vfx/PlasmaBolt and its blue-white light on one node,
+// pooled and moved by scripts/surveyor.lua (top level: world coordinates,
+// set every lateUpdate from the bolt's planet-frame position; the streak's
+// tail is setBeamEnd).
+[
+    (
+        name: "FxPlasmaBolt",
+        tags: ["toolfx"],
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: PointLight(
+            color: (0.55, 0.8, 1.0),
+            intensity: 0.0,
+            range: 14.0,
+        ),
+        scripts: [],
+        particles: Some((
+            asset: "vfx/PlasmaBolt",
+            play_on_start: false,
+        )),
+    ),
+]

@@ -124,7 +124,9 @@ function causeText(d)
   if type(d) ~= "table" then return "cause unknown" end
   local c = d.cause and (CAUSE[d.cause] or tostring(d.cause)) or "cause unknown"
   local det = d.detail or (d.dv and string.format("%.0f m/s", d.dv)) or nil
-  if det then c = c .. " (" .. tostring(det) .. ")" end
+  -- a detail naming who did it reads on: "shot by Dana Okafor, 30 m"
+  if det and tostring(det):sub(1, 3) == "by " then c = c .. " " .. tostring(det)
+  elseif det then c = c .. " (" .. tostring(det) .. ")" end
   return c
 end
 

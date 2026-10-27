@@ -23,8 +23,14 @@ at the edges, stencilled labels, signal orange only on the moving parts):
         the grip, a fat plasma drum seen between ribs and copper magnet
         rings, and an emitter crown of six electrodes that spins with the
         beam. The other designs (TL7, the old TL-7; A, the TL-9 Excavator;
-        B, the TL-5 Surveyor, kept for a later plasma sniper) are still
-        built by --laser-variant: gen_tools_blender.py's LASERS.
+        B, the TL-5 Surveyor) are still built by --laser-variant:
+        gen_tools_blender.py's LASERS.
+    TL-5 SURVEYOR plasma rifle (the crew's weapon, design B): a slim
+        enamel receiver under a survey scope, a skeletal stock round its
+        cell, a long barrel in a ventilated shroud with a glowing coolant
+        loop, a slotted muzzle brake. models/tools/surveyor.glb and
+        fp_surveyor.glb, prefabs ToolSurveyor / ToolSurveyorFP, in the
+        "plasma" palette (ice blue to blue-white).
 
 THE ENERGY PARTS wear the tool_* surface shaders (shaders/tool_*.flsl): the
 gravity gun's field core, dish, cell and capacitor bands glow blue, a laser's
@@ -165,6 +171,9 @@ PALETTES = {
     "field": {"glow": (0.30, 0.60, 1.00), "core": (0.90, 0.95, 1.00), "gauge": (1.00, 0.62, 0.24), "heat": 0.0},
     # a laser's beam energy: amber to white-hot; its gauges read heat
     "laser": {"glow": (1.00, 0.50, 0.16), "core": (1.00, 0.92, 0.78), "gauge": (1.00, 0.62, 0.24), "heat": 1.0},
+    # the TL-5 Surveyor's plasma: ice blue to blue-white as it charges; its
+    # gauge reads the cell's charge, not heat (the coolant loop shows the heat)
+    "plasma": {"glow": (0.42, 0.74, 1.00), "core": (0.90, 0.97, 1.00), "gauge": (0.55, 0.85, 1.00), "heat": 0.0},
 }
 COOLANT = {"glow": (0.40, 0.78, 1.00), "core": (0.88, 0.97, 1.00), "heatTo": (1.00, 0.45, 0.12)}
 
@@ -308,6 +317,12 @@ def terrain_laser(variant="C"):
     return Rig(blender_tools()["laser_" + variant])
 
 
+def surveyor():
+    """The TL-5 SURVEYOR plasma rifle: design B with its own nameplate line
+    and a muzzle brake (gen_tools_blender.laser_B(rifle=True))."""
+    return Rig(blender_tools()["surveyor"])
+
+
 # ── first person: the same tools in gloved hands ───────────────────────────
 #
 # The view-model camera films these and nothing else, so the hands, cuffs and
@@ -438,7 +453,16 @@ def fp_gravity_gun():
 
 
 def fp_terrain_laser(variant="C"):
-    rig = terrain_laser(variant)
+    return fp_laser_hands(terrain_laser(variant))
+
+
+def fp_surveyor():
+    return fp_laser_hands(surveyor())
+
+
+def fp_laser_hands(rig):
+    """The gloves on a laser-family tool (the TL-7's grip, a fore-grip at the
+    design's `fore` anchor)."""
     m = rig.body
     # Right hand on the pistol grip.
     w = np.array([0.012, -0.095, 0.155])
@@ -583,6 +607,7 @@ def tool_atlas():
     text("tl9", "TL-9", stencil, 64, INK, track=0.08)        # the design prototypes
     text("tl5", "TL-5", stencil, 64, INK, track=0.08)
     text("tl3", "TL-3", stencil, 64, INK, track=0.08)
+    text("tl5_name", "PLASMA SURVEY RIFLE", label, 14, INK, pad=2, track=0.06)
     text("gm3_name", "GRAVITIC FIELD MANIPULATOR", label, 30, INK, track=0.08)
     text("tl7_name", "TERRAIN LASER  /  CUT · FILL", label, 30, INK, track=0.08)
     text("serial_a", "S/N GM3-0417   MAINT. 26-09", label, 22, INK, track=0.05)
@@ -824,7 +849,7 @@ def build(name, fn, glb, prefab, about, pal, models_dir, prefabs_dir, asset_dir=
         f.write(tool_prefab(prefab, glb, r, about, pal=pal).replace('"models/tools/', f'"{asset_dir}/'))
     A = r.anchors
     return (A["grip"], A["muzzle"], A["fore"], A.get("vent", A["muzzle"]), mx - mn, r.tris(),
-            [n["name"] for n in r.nodes if r.models.get(n["name"]) is not None])
+            [n["name"] for n in r.nodes if r.models.get(n["name"]) is not None], A.get("scope", A["grip"]))
 
 
 def rig_lines(r, r_fp):
@@ -863,6 +888,14 @@ def main():
          las),
     ):
         rig[name] = build(name, fn, glb, prefab, about, pal, MODELS, PREFABS)
+    pls = PALETTES["plasma"]
+    for name, fn, glb, prefab, about in (
+        ("surveyor", surveyor, "surveyor.glb", "ToolSurveyor",
+         "TL-5 SURVEYOR — the crew's plasma rifle, held (scripts/tool_belt.lua draws it, scripts/surveyor.lua fires it)."),
+        ("surveyor_fp", fp_surveyor, "fp_surveyor.glb", "ToolSurveyorFP",
+         "TL-5 SURVEYOR, first person — gloved hands on it; the view-model camera draws it (scripts/tool_belt.lua)."),
+    ):
+        rig[name] = build(name, fn, glb, prefab, about, pls, MODELS, PREFABS)
     if args.protos:
         pm, pp = os.path.join(args.protos, "models", "tools"), os.path.join(args.protos, "prefabs")
         os.makedirs(pm, exist_ok=True)
@@ -884,13 +917,17 @@ def main():
     with open(os.path.join(PREFABS, "LooseRock.prefab.ron"), "w") as f:
         f.write(rock_prefab(rk, half, 0.09))
     print(f"RIG (relative to each model's centre, metres; the game's laser is design {lv}):")
-    for k, (g, mz, fo, vt, size, tris, nodes) in rig.items():
+    for k, (g, mz, fo, vt, size, tris, nodes, _sc) in rig.items():
         print(f"  {k:10s} grip {np.round(g, 3).tolist()} muzzle {np.round(mz, 3).tolist()} "
               f"fore {np.round(fo, 3).tolist()} vent {np.round(vt, 3).tolist()} size {np.round(size, 3).tolist()} "
               f"tris {tris} nodes {nodes}")
     print(f"  rock     half {half.tolist()} tris {rk.tris()}")
     print("tool_belt's laser lines (RIG, then RIG_FP):")
     print(rig_lines(rig["laser"], rig["laser_fp"]), end="")
+    print("tool_belt's surveyor lines (RIG, then RIG_FP; scope = the eyepiece):")
+    print(rig_lines(rig["surveyor"], rig["surveyor_fp"]).replace("laser   =", "surveyor ="), end="")
+    for k in ("surveyor", "surveyor_fp"):
+        print(f"  {k} scope {np.round(rig[k][7], 3).tolist()}")
 
 
 if __name__ == "__main__":

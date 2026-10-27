@@ -5446,6 +5446,28 @@ break_part = function(node, uid, d, c, hx, hy, hz, depth)
   end
 end
 
+-- A HIT FROM OUTSIDE (a weapon: scripts/surveyor.lua's plasma bolt; later
+-- anything that wounds a hull at a point): the part's hp down by `amount`,
+-- its wear repainted (the hull shader's scorch), and at 0 it BREAKS the way a
+-- crash breaks it (break_part: its blast, its chain, its crew). World point
+-- x,y,z is where it was struck (the blast's centre). → the new hp, or nil
+-- when the part isn't aboard and whole.
+function hitPart(uid, amount, x, y, z)
+  local h = partHp(uid)
+  if not h or h <= 0 then return nil end
+  local node = dock.node
+  local d = bp_by_uid[uid]
+  local c = node and node.valid and child_of_uid(node, uid) or nil
+  local hp = math.max(0, h - math.max(0, amount or 0))
+  part_hp[uid] = hp
+  if c then set_part_damage(c, hp) end
+  if hp <= 0 and c and d then
+    local w = c.worldPos
+    break_part(node, uid, d, c, x or (w and w.x), y or (w and w.y), z or (w and w.z))
+  end
+  return hp
+end
+
 -- A CATASTROPHIC hit doesn't just crush the contact parts — the airframe FAILS
 -- and the ship comes apart. Every surviving part shears into its own tumbling
 -- wreck kicked away from the impact, over a big crater and a low boom. Latched

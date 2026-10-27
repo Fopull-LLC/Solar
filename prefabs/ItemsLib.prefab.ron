@@ -1,8 +1,10 @@
 // ITEMS LIBRARY — scripts/items.lua (the item registry: mass, bulk, grips,
-// deploy rules) and scripts/item_hand.lua (what the crew member on foot holds
-// in the hand: the belt's non-tool items, deploy mode, the repair work).
+// deploy rules), scripts/item_hand.lua (what the crew member on foot holds
+// in the hand: the belt's non-tool items, deploy mode, the repair work) and
+// scripts/surveyor.lua (the TL-5 Surveyor plasma rifle: its bolts, hits and
+// cells; tool_belt draws and holds it).
 // Spawned by inventory.lua when the scene carries no node running "items";
-// reached with findScript("items") / findScript("item_hand").
+// reached with findScript("items") / ("item_hand") / ("surveyor").
 [
     (
         name: "ItemsLib",
@@ -20,6 +22,11 @@
             ),
             (
                 kind: "item_hand",
+                enabled: true,
+                params: [],
+            ),
+            (
+                kind: "surveyor",
                 enabled: true,
                 params: [],
             ),

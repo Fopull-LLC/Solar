@@ -61,6 +61,16 @@ ITEMS = {
                 worn = { prefab = "ItemRcsPack", bone = "Back" },
                 rcs = { thrust = 90, burst = 1.6, prop = 4.0, isp_dv = 30, g_max = 2.0 },
                 about = "cold-gas thrusters on the back: fly on EVA where there is no ground to walk on" },
+  -- THE TL-5 SURVEYOR (scripts/surveyor.lua): a plasma rifle, the crew's
+  -- first weapon. Heavy and bulky on purpose — 9 kg and 16 L of a 60 L suit
+  -- pack is a choice against ore, tanks and beacons. Its energy cell is a
+  -- FILL (energy units, the pieces' levels kept by inventory like a tank's
+  -- air): a shot draws 6–10, it recharges aboard a craft and at the base.
+  surveyor  = { name = "TL-5 Surveyor", kind = "tool",       kg = 9.0,  L = 16, cost = 2400, shop = true,
+                hold = { prefab = "ToolSurveyor", fp = "ToolSurveyorFP", grip = "two" },
+                fill = { cap = 100, what = "cell" },
+                weapon = true,
+                about = "a plasma rifle with a survey scope: hold LMB to charge a bolt, release to fire; RMB to aim down the scope" },
   o2tank    = { name = "Oxygen Tank",   kind = "worn",       kg = 8.0,  L = 5,  cost = 350,  shop = true,
                 -- clipped to the PLSS; never in hand. Each tank is its own reserve of suit
                 -- air (`fill`, seconds), kept per tank as item state (inventory.fills).
@@ -71,7 +81,7 @@ ITEMS = {
 
 -- The belt's order: tools first, then devices and deployables, then
 -- consumables with a hold. (Worn items are never on the belt.)
-ORDER = { "gravgun", "laser", "beacon", "flag", "repairkit", "rcspack", "o2tank" }
+ORDER = { "gravgun", "laser", "surveyor", "beacon", "flag", "repairkit", "rcspack", "o2tank" }
 local KIND_RANK = { tool = 1, device = 2, deployable = 3, consumable = 4, worn = 9 }
 
 -- Litres by container family (docs §5.1). A cargo hold's litres come from its
@@ -206,6 +216,16 @@ end
 -- pieces. These are the pure rules; the wrappers below ask inventory.
 function fillCap(id) local d = ITEMS[id]; return d and d.fill and d.fill.cap or nil end
 function hasFill(id) return fillCap(id) ~= nil end
+function isWeapon(id) local d = ITEMS[id]; return d ~= nil and d.weapon == true end
+-- One piece's level as the panels write it: an oxygen tank's minutes of air
+-- ("12"), an energy cell's percent ("84%"). `unit` → the unit word for the
+-- whole stack's total ("min" | "%").
+function fillText(id, level)
+  local d = ITEMS[id]
+  local what = d and d.fill and d.fill.what or "o2"
+  if what == "cell" then return string.format("%.0f%%", 100 * (level or 0) / (d.fill.cap or 100)), "%" end
+  return string.format("%.0f", (level or 0) / 60), "min"
+end
 
 -- THE DRAW ORDER: the EMPTIEST tank that still has air first, so a partly
 -- used bottle is finished before a full one is opened (and the full ones stay

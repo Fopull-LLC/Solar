@@ -8,6 +8,7 @@
 | `ambience/` | `wind_low`, `wind_gust`, `underwater` (seamless loops) | synthesized by `tools/gen_soundscape_audio.py` | the project's own |
 | `music/` | `drift`, `far_shore`, `low_orbit` (calm pad pieces, faded both ends) | synthesized by `tools/gen_soundscape_audio.py` | the project's own |
 | `sfx/` | `swim_stroke_1..4`, `bubbles_1..3`, `vessel_lost` | synthesized by `tools/gen_soundscape_audio.py` | the project's own |
+| `sfx/` | `surveyor_charge`, `surveyor_ready` (a seamless loop), `surveyor_fire`, `surveyor_hit`, `crew_hit` — the TL-5 Surveyor plasma rifle and the crew's HIT warning | synthesized by `tools/gen_weapon_audio.py` | the project's own |
 | `weather/` | `rain_light`, `rain_heavy`, `hail`, `dust` (seamless loops), `thunder_1..3` | synthesized by `tools/gen_weather_audio.py` | the project's own |
 
 Levels (from `python3 tools/gen_soundscape_audio.py --stats`, confirmed with ffmpeg's

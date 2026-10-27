@@ -383,3 +383,22 @@ and `CP RESULT <mode>` gives the verdict. Pictures (1280×720) land in
 | crewsplit | pod \| decoupler \| pod with a member in each, 400 m up. SPACE splits it. Each piece keeps its crew and control stays with the active member. `switchTo` flies the other piece as its member, and `` ` `` comes back. |
 | crewdeath | A 5 m drop (alive, injured). A 40 m drop: the fall chip passes 12 m/s before the death. Then the probe checks the memorial, remains, crate, caption, the 2 s hold and the handoff to a member at base. Killing everyone hires the free newbie. With death off, the same 40 m drop rescues. |
 | crewmigrate | `USERSAVE=1`: on a copy of the player's save, three members; #1, their pack and the avatar are untouched. |
+
+## rifleshots.sh + rifleprobe.lua — the TL-5 Surveyor plasma rifle
+
+    WORK=$SCRATCH/rifle LOCK=/mnt/disks/3tb/.floptle-shared/engine.lock tools/perf/rifleshots.sh <engine> [TAG]
+
+scripts/surveyor.lua on a new save (slot 16, deleted afterwards). The rifle is
+bought at the BUY counter (price and full cell checked), a lander rolls out and
+the crew shoots its pod from 30 m (hp drop, scorch; with a
+`vessel_controller.hitPart` patch in `PATCHES`, a fourth bolt breaks it). Then
+it finds a clear 150 m line (on a small world the ground curves 0.9 m under a
+150 m chord, so the probe searches, sunniest first, and looks again once the
+plants' colliders have streamed in) and shoots member #2 as a CrewBody: twice
+at 150 m (hip, then scope), once at 30 m (dead: cause, memorial, caption).
+After that it fires a "hostile" bolt at the avatar (the HIT and HP chips),
+shoots #3 twice with death off (rescued), and checks the cell's drain and
+recharge and the indoors block in the hangar. It prints the cost (`fire`/`hit` ms,
+`perf.scriptMs`, GPU passes with three bolts in flight). `RFL RESULT` lines;
+pictures (1280×720: holding, charging, the scope, bolts in flight, impacts,
+the HUD) in `$WORK/rifleshots/<TAG>/png`.

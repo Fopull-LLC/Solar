@@ -61,6 +61,10 @@
 --   evaCheck(id) → ok, why, warn (warn: allowed, but ask first — no RCS Pack in space)
 --   memorial() → {…}             deathOn() → bool          setDeath(on)
 --   kill(id, cause, detail) → ok   (death on: dies; off: rescued)
+--   hurt(id, amount, cause, detail, {by, x,y,z}) → hp|nil, why   a wound from
+--                                outside (the TL-5 Surveyor; later animals): hp
+--                                down, the HIT alert, death or rescue at 0
+--   lastHit[id] → {t, amount, cause, by, hp}   (alerts().hit while fresh)
 --   blackoutGrace(src) → secs    blackoutEnd(src) → handled (planet_walker asks)
 --   patch(id, fields)            merge fields into a record (false clears; bumps version)
 --   onEvaInSpace() → bool, id    (rails warp is refused while true)
@@ -1667,7 +1671,9 @@ function alerts(id)
   local blackout = nil
   if pw and pw.downed then blackout = pw.downLeft or 1.0 end
   if MON.dying and MON.dying.id == id then blackout = math.max(0, MON.dying.t1 - now()) end
-  return { o2 = o2, air_s = air_s, breath = breath, hp = r.hp or 1.0, heat = r.heat or 0.0,
+  local lh = lastHit and lastHit[id]
+  local hit = (lh and now() - lh.t < (HIT_SHOW or 1.6)) and lh or nil
+  return { o2 = o2, air_s = air_s, breath = breath, hp = r.hp or 1.0, heat = r.heat or 0.0, hit = hit,
            fall = is_avatar and MON.fall or 0.0, pinned = is_avatar and MON.pinned or false,
            blackout = blackout, cabin = cabin, cabin_tol = tol,
            o2_level = airLevel(o2, air_s), breath_level = (breath < 1) and airLevel(breath, nil) or nil }
@@ -1726,7 +1732,7 @@ end
 
 CAUSE_TEXT = {
   impact = "impact", cabin = "the cabin failed", oxygen = "out of oxygen", drowned = "drowned",
-  crushed = "crushed", heat = "burned on re-entry", lost = "lost with the craft",
+  crushed = "crushed", heat = "burned on re-entry", lost = "lost with the craft", shot = "shot",
 }
 
 -- The control handoff when the controlled member is gone.
@@ -1850,8 +1856,9 @@ function kill(id, cause, detail, opts)
   put(r)
   local co = ref("company")
   if co and co.addRep then pcall(co.addRep, -2, "astronaut lost: " .. r.name) end
+  -- (a detail that names who did it reads on: "shot by Dana Okafor, 30 m")
   local text = string.format("%s was killed: %s%s", r.name, CAUSE_TEXT[cause] or cause,
-    detail and (", " .. detail) or "")
+    detail and ((tostring(detail):sub(1, 3) == "by " and " " or ", ") .. detail) or "")
   lastDeath = { id = id, name = r.name, cause = cause, text = text, t = now(), x = x, y = y, z = z }
   local bc = ref("big_caption")
   if bc and bc.show then bc.show("ASTRONAUT LOST", text, 6.0) end
@@ -1890,6 +1897,37 @@ function cabinLost(v, uid, ids_, x, y, z)
   for _, id in ipairs(ids_ or {}) do
     kill(id, "cabin", nil, { x = x, y = y, z = z, craft = v and v.craftName })
   end
+end
+
+-- ── wounds from outside (a weapon; later an animal) ───────────────────────
+-- HURT member `id`: hp down by `amount` (a share of a healthy body, 0..1),
+-- the HIT alert for a moment (alerts().hit: the HUD's chip and its flash),
+-- and at 0 the death with `cause` and `detail` (the memorial reads "Shot (by
+-- Dana Okafor, 150 m)") — or, with death off, the rescue (kill's rule). Only
+-- someone out in the world can be hurt: on foot, or in an open seat. A
+-- record at base, or a member inside a closed cabin (the hull takes the
+-- hit), is out of reach. `opts`: by (a name, for the record), x,y,z (where
+-- it happened: the remains go there). → the new hp (0: dead or rescued), or
+-- nil and why.
+lastHit = {}
+HIT_SHOW = 1.6
+function hurt(id, amount, cause, detail, opts)
+  opts = opts or {}
+  local r = get(id)
+  if not r or r.status == "dead" then return nil, "nobody to hurt" end
+  if r.status == "base" then return nil, "at the base" end
+  amount = math.max(0, amount or 0)
+  local hp = math.max(0, (r.hp or 1) - amount)
+  lastHit[id] = { t = now(), amount = amount, cause = cause or "shot", by = opts.by, hp = hp }
+  log_(string.format("crew: #%d hit (%s%s): -%.2f, hp %.2f", id, tostring(cause or "shot"),
+    detail and (", " .. detail) or "", amount, hp))
+  bump()
+  if hp <= 1e-6 then
+    kill(id, cause or "shot", detail, opts)
+    return 0
+  end
+  patch(id, { hp = hp })
+  return hp
 end
 
 -- ── the monitor: impact, crush, heat (the avatar on foot; heat aboard) ─────

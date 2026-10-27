@@ -688,6 +688,96 @@ Where FILL lays its rock: a cool plasma pool, slurry drops falling off it,
 steam. The node's +Y is the surface normal.""")
 
 
+def rifle():
+    """The TL-5 Surveyor plasma rifle (scripts/surveyor.lua): its bolt in
+    flight (a node effect), the muzzle blast and the impact (one-shots)."""
+    # THE BOLT: a node at the bolt's HEAD (prefabs/FxPlasmaBolt, which carries
+    # its light), the beam tracks run back along the flight path to the tail
+    # (setBeamEnd), so it reads as a streak at any speed and any frame rate.
+    BOLT = (12, (0, 0, -6), 0.0, 0, 0)
+    L = 0.25
+    tracks = [
+        T("Core", TX + "beam/core.png", blend="Additive", beam=BOLT, clips=[],
+          size=K([(0, 0.06), (0.5, 0.07), (1, 0.06)], repeat=True), color=C((2.6, 3.3, 4.2, 1.0))),
+        T("Sheath", TX + "beam/glow.png", blend="Additive", beam=BOLT, clips=[],
+          size=K([(0, 0.46), (0.5, 0.54), (1, 0.46)], repeat=True),
+          color=K([(0, (0.45, 0.85, 2.0, 0.6)), (0.5, (0.55, 0.95, 2.2, 0.7)), (1, (0.45, 0.85, 2.0, 0.6))], repeat=True)),
+        T("Ripple", TX + "beam/shimmer.png", blend="Additive", beam=(16, (0, 0, -6), 0.012, 9.0, 40.0), clips=[],
+          size=0.22, color=C((0.6, 1.0, 1.8, 0.35))),
+        T("Head", TX + "glow/core.png", blend="Additive", clips=burst(1, 0, L, cj=0),
+          size=K([(0, 0.34), (0.5, 0.42), (1, 0.34)]), color=C((3.0, 3.5, 4.2, 1.0)), soft=0.05),
+        T("Halo", TX + "glow/soft.png", blend="Additive", clips=burst(1, 0, L, cj=0),
+          size=K([(0, 1.5), (0.5, 1.7), (1, 1.5)]), color=C((0.35, 0.7, 1.6, 0.35)), soft=0.3),
+        T("Shimmer", TX + "distort/haze.png", blend="Distortion", distortion=0.02, clips=burst(1, 0, L, cj=0),
+          size=K([(0, 0.9), (0.5, 1.1), (1, 0.9)]), color=C((1, 1, 1, 0.8)), soft=0.2),
+    ]
+    effect("PlasmaBolt", L, tracks, looping=True, header="""
+The TL-5 Surveyor's plasma bolt in flight (prefabs/FxPlasmaBolt, which also
+carries its light): a blue-white core and sheath stretched back along the
+flight path to the tail (surveyor.lua's setBeamEnd), a white-hot head in a
+soft halo, a rippling shimmer and a ball of heat haze round the head.""")
+
+    # THE MUZZLE BLAST (+Y = the aim): a flash, a shock ring across the bore,
+    # a cone of sparks down the line, the brake's side jets, heat haze and a
+    # thread of ionised smoke.
+    tracks = [
+        T("Flash", TX + "glow/flash.png", blend="Additive", clips=burst(1, 0, 0.09, cj=0),
+          size=K([(0, 0.35), (0.3, 0.75), (1, 0.2)]), rot=R((0, 0, 0), RAD),
+          color=K([(0, (3.0, 3.6, 4.2, 1)), (1, (1.0, 1.8, 3.0, 0))])),
+        T("Ring", TX + "ring/shock.png", blend="Additive", orient="Horizontal", clips=burst(1, 0, 0.18, cj=0),
+          size=K([(0, 0.06), (0.4, 0.28), (1, 0.42)]), color=K([(0, (1.4, 2.4, 3.4, 0.7)), (1, (0.8, 1.4, 2.6, 0))])),
+        T("Sparks", TX + "spark/dot.png", blend="Additive", orient="Velocity", speed_stretch=0.05, space="World",
+          clips=burst(14, 0, 0.3, 0.4), shape=cone(9, 0.02), vel=R((0, 14, 0), (0, 30, 0)), drag=4.0,
+          size=0.03, color=K([(0, (2.0, 3.0, 4.0, 1)), (1, (0.8, 1.4, 2.6, 0))])),
+        T("Jets", TX + "glow/soft.png", blend="Additive", clips=burst(6, 0, 0.16, 0.3), shape=ring(0.03),
+          vel=R((-3.0, 0.2, -3.0), (3.0, 1.2, 3.0)), drag=8.0, size=K([(0, 0.08), (1, 0.22)]),
+          color=K([(0, (0.9, 1.6, 2.6, 0.7)), (1, (0.5, 0.9, 1.8, 0))])),
+        T("Haze", TX + "distort/haze.png", blend="Distortion", distortion=0.03, clips=burst(2, 0, 0.45, 0.3),
+          shape=sphere(0.05), vel=R((-0.2, 0.6, -0.2), (0.2, 1.6, 0.2)), size=K([(0, 0.25), (1, 0.8)]),
+          color=K([(0, (1, 1, 1, 0.9)), (1, (1, 1, 1, 0))]), soft=0.2),
+        T("Wisp", TX + "smoke/wisp.png", clips=burst(2, 0, 1.2, 0.4), shape=sphere(0.04),
+          vel=R((-0.15, 0.1, -0.15), (0.15, 0.5, 0.15)), forces=[wind(1.2), turb(1.2, 0.4)],
+          size=K([(0, 0.06), (1, 0.4)]), rot=R((0, 0, 0), RAD),
+          color=K([(0, (0.62, 0.66, 0.72, 0)), (0.12, (0.62, 0.66, 0.72, 0.25)), (1, (0.62, 0.66, 0.72, 0))]), soft=0.2),
+    ]
+    effect("PlasmaMuzzle", 1.2, tracks, header="""
+The TL-5 Surveyor firing (+Y = the aim): a blue-white flash, a shock ring
+across the bore, a cone of sparks down the line, the muzzle brake's side
+jets, a kick of heat haze and a thread of ionised smoke.""")
+
+    # THE IMPACT (+Y = the surface normal): a white-hot flash and glow, a
+    # splash of sparks and molten droplets that land and cool, a shock ring on
+    # the face, haze and smoke.
+    tracks = [
+        T("Flash", TX + "glow/flash.png", blend="Additive", clips=burst(1, 0, 0.12, cj=0),
+          size=K([(0, 0.6), (0.25, 1.6), (1, 0.5)]), rot=R((0, 0, 0), RAD),
+          color=K([(0, (3.4, 3.8, 4.4, 1)), (1, (1.2, 1.9, 3.0, 0))])),
+        T("Glow", TX + "glow/soft.png", blend="Additive", clips=burst(1, 0, 0.6, cj=0),
+          size=K([(0, 1.2), (1, 2.2)]), color=K([(0, (0.9, 1.5, 2.6, 0.6)), (1, (0.6, 0.6, 0.9, 0))]), soft=0.3),
+        T("Ring", TX + "ring/shock.png", blend="Additive", orient="Horizontal", clips=burst(1, 0, 0.3, cj=0),
+          size=K([(0, 0.2), (0.4, 1.4), (1, 2.0)]), color=K([(0, (1.4, 2.2, 3.2, 0.8)), (1, (0.6, 1.0, 2.0, 0))])),
+        T("Sparks", TX + "spark/dot.png", blend="Additive", orient="Velocity", speed_stretch=0.06, space="World",
+          clips=burst(40, 0, 0.7, 0.5), shape=cone(60, 0.05), vel=R((0, 4, 0), (0, 13, 0)), gravity=1.0, drag=0.8,
+          size=0.035, collide=SPARK_HIT,
+          color=K([(0, (3.0, 3.4, 4.0, 1)), (0.3, (2.6, 1.6, 0.7, 1)), (1, (1.0, 0.3, 0.05, 0))])),
+        T("Molten", TX + "glow/tight.png", blend="Additive", space="World", clips=burst(10, 0, 1.6, 0.4),
+          shape=cone(45, 0.05), vel=R((0, 2.0, 0), (0, 5.0, 0)), gravity=1.0, drag=0.3, size=R(0.04, 0.08),
+          collide=(0.15, 0.9),
+          color=K([(0, (3.0, 2.2, 1.2, 1)), (0.4, (2.2, 0.9, 0.2, 1)), (1, (0.5, 0.1, 0.02, 0))])),
+        T("Haze", TX + "distort/haze.png", blend="Distortion", distortion=0.035, clips=burst(3, 0, 0.9, 0.3),
+          shape=sphere(0.15), vel=R((-0.3, 0.5, -0.3), (0.3, 1.5, 0.3)), size=K([(0, 0.5), (1, 1.6)]),
+          color=K([(0, (1, 1, 1, 0.9)), (1, (1, 1, 1, 0))]), soft=0.3),
+        T("Smoke", TX + "smoke/puff_a.png", clips=burst(4, 0, 2.2, 0.4), shape=sphere(0.12),
+          vel=R((-0.4, 0.4, -0.4), (0.4, 1.2, 0.4)), forces=[wind(1.0), turb(0.8, 0.4)],
+          size=K([(0, 0.3), (1, 1.5)]), rot=R((0, 0, 0), RAD),
+          color=K([(0, (0.3, 0.29, 0.28, 0)), (0.1, (0.3, 0.29, 0.28, 0.55)), (1, (0.42, 0.41, 0.4, 0))]), soft=0.3),
+    ]
+    effect("PlasmaHit", 2.2, tracks, header="""
+A TL-5 Surveyor bolt landing (+Y = the surface normal): a white-hot flash and
+glow, a shock ring on the face, a splash of sparks and molten droplets that
+land and cool, heat haze and a puff of smoke.""")
+
+
 def step_dust():
     tracks = [
         T("Puff", TX + "smoke/billow_b.png", forces=[wind(2.5)], clips=burst(3, 0, 1.1, 0.3), shape=sphere(0.12),
@@ -1088,6 +1178,9 @@ def main():
     if "weather" in sys.argv[1:]:
         weather()
         return
+    if "rifle" in sys.argv[1:]:
+        rifle()
+        return
     flame()
     pad_blast()
     touch_dust()
@@ -1107,6 +1200,7 @@ def main():
     cutter()
     dig()
     tools()
+    rifle()
     water()
     weather()
 

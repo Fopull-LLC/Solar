@@ -124,6 +124,14 @@ end
 -- An item stack's levels in words: "15 · 9 · 0 min" (the Oxygen Tank).
 function tank_levels(g)
   local parts = {}
+  -- (a rifle's cell reads in percent: items.fillText)
+  local I = findScript and findScript("items")
+  if I and I.fillText and g.id then
+    local unit
+    for i = #g.fills, 1, -1 do parts[#parts + 1], unit = I.fillText(g.id, g.fills[i]) end
+    if unit == "%" then return table.concat(parts, " · ") end
+    return table.concat(parts, " · ") .. " min"
+  end
   for i = #g.fills, 1, -1 do parts[#parts + 1] = string.format("%.0f", g.fills[i] / 60) end
   return table.concat(parts, " · ") .. " min"
 end

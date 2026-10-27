@@ -216,16 +216,19 @@ local function reticle_set(kind, label) reticleKind, reticleLabel = kind, label 
 local collected = nil
 local function collected_say(text) collected = { text = text, t = time } end
 -- TEST HOOKS (probes and the smoke harness): `sim` overrides the mouse and
--- keys — { btn = { [0]=true }, pressed = { r = true }, scroll = n, aim = {ox,oy,oz,dx,dy,dz} }.
+-- keys — { btn = { [0]=true }, pressed = { r = true }, scroll = n, aim = {ox,oy,oz,dx,dy,dz} | function → those six }.
 sim = nil
 
 -- What each kind of gear does on the belt. The ORDER is the belt's order.
-TOOL_ORDER = { "gravgun", "laser", "beacon" }
+TOOL_ORDER = { "gravgun", "laser", "surveyor", "beacon" }
 TOOLDEF = {
   gravgun = { label = "Gravity Gun", prefab = "ToolGravGun", fp_prefab = "ToolGravGunFP",
               hint = "hold LMB to grab (rocks, crates, logs, debris, a beacon)  ·  scroll nearer / further  ·  R throw  ·  E stow what you hold  ·  let go in the depot's intake to deposit or recycle it  ·  aim at a plant to uproot it" },
   laser   = { label = "Terrain Laser", prefab = "ToolLaser", fp_prefab = "ToolLaserFP",
               hint = "hold LMB to dig  ·  Q switches DIG / FILL  ·  hold E: cut plants" },
+  -- the TL-5 Surveyor plasma rifle: drawn and held here, fired by scripts/surveyor.lua
+  surveyor = { label = "TL-5 Surveyor", prefab = "ToolSurveyor", fp_prefab = "ToolSurveyorFP",
+              hint = "hold LMB to charge a bolt, let go to fire  ·  hold RMB: the scope  ·  H holsters" },
   beacon  = { label = "Relay Beacon", consumable = true,
               hint = "LMB set it down where the ghost is teal  ·  right-click a planted one → Pick up" },
 }
@@ -238,10 +241,12 @@ TOOLDEF = {
 RIG = {
   gravgun = { grip = { 0.0, -0.058, 0.127 }, muzzle = { 0.0, 0.032, -0.253 }, fore = { 0.0, -0.068, -0.082 }, vent = { 0.0, 0.096, -0.073 } },
   laser   = { grip = { 0.007, -0.052, 0.102 }, muzzle = { 0.007, 0.033, -0.298 }, fore = { 0.007, -0.085, -0.136 }, vent = { 0.007, 0.113, -0.136 } },
+  surveyor = { grip = { 0.019, -0.039, 0.217 }, muzzle = { 0.019, 0.046, -0.475 }, fore = { 0.019, -0.06, -0.059 }, vent = { 0.019, 0.08, -0.163 } },
 }
 RIG_FP = {
   gravgun = { grip = { 0.092, 0.101, -0.042 }, muzzle = { 0.092, 0.191, -0.422 }, vent = { 0.092, 0.255, -0.242 } },
   laser   = { grip = { 0.091, 0.111, 0.049 }, muzzle = { 0.091, 0.196, -0.351 }, vent = { 0.091, 0.276, -0.189 } },
+  surveyor = { grip = { 0.054, 0.117, 0.087 }, muzzle = { 0.054, 0.202, -0.605 }, vent = { 0.054, 0.236, -0.293 } },
 }
 -- THIRD PERSON: how each tool is carried, in the body's frame (metres from the
 -- right shoulder joint: in toward the chest, down, forward), at rest (`low`,
@@ -253,6 +258,11 @@ HOLD = {
               rwrist = { 0.02, 0.015, 0.065 }, lwrist = { -0.02, -0.015, 0.07 },
               rfing = { -0.1, -0.4, -0.9 }, lfing = { 0.25, -0.25, -0.93 } },
   laser   = { low = { 0.08, 0.25, 0.27 }, aim = { 0.10, 0.12, 0.24 }, pitch = -0.38,
+              rwrist = { 0.02, 0.015, 0.065 }, lwrist = { -0.015, -0.035, 0.08 },
+              rfing = { -0.1, -0.4, -0.9 }, lfing = { 0.15, 0.05, -0.98 } },
+  -- the rifle (0.94 m): shouldered in the aim (the butt, 0.25 m behind the
+  -- grip, in the shoulder's pocket), carried muzzle-down at rest
+  surveyor = { low = { 0.07, 0.27, 0.25 }, aim = { 0.11, 0.08, 0.20 }, pitch = -0.5,
               rwrist = { 0.02, 0.015, 0.065 }, lwrist = { -0.015, -0.035, 0.08 },
               rfing = { -0.1, -0.4, -0.9 }, lfing = { 0.15, 0.05, -0.98 } },
 }
@@ -551,6 +561,11 @@ end
 local function aim_ray(node)
   if sim and sim.aim then
     local a = sim.aim
+    -- a function is asked at the moment of use (a probe's aim, worked out
+    -- from this frame's positions: a point kept from an earlier frame is
+    -- metres off on a planet that moves)
+    if type(a) == "function" then a = { a() } end
+    if not a[1] then return nil end
     local l = len(a[4], a[5], a[6])
     return a[1], a[2], a[3], a[4] / l, a[5] / l, a[6] / l
   end
@@ -738,6 +753,8 @@ gripX, gripY, gripZ = nil, nil, nil
 -- Tool swaps: the old tool dips out of the hands and the new one comes up.
 local swap_t, swap_from = -10.0, nil
 local SWAP_SECS = 0.36
+-- The tools with models of their own, drawn and held here.
+HELD_MODELS = { "gravgun", "laser", "surveyor" }
 local vm = { layer = nil, bit = nil, cam = nil, making = false, on = false, main = nil }
 
 local function hand()
@@ -894,14 +911,19 @@ local function show_models(node, dt, carrying)
   local want = carrying and shown_tool(toolId()) or nil
   local fp = first_person()
   local am = crew_model()
-  for _, id in ipairs({ "gravgun", "laser" }) do
+  -- (the rifle aimed down its scope in first person: the scope's picture,
+  -- not the view model)
+  local SV = want == "surveyor" and ref("surveyor") or nil
+  local scoped_fp = fp and SV ~= nil and (SV.scopeK or 0) > 0.6
+  for _, id in ipairs(HELD_MODELS) do
     local tp = am and model_of("tp", id, am, place_tp)
     local fv = cn and model_of("fp", id, cn, place_fp)
     local on = want == id
     if tp and tp.visible ~= (on and not fp) then tp.visible = on and not fp end
-    if fv and fv.visible ~= (on and fp) then fv.visible = on and fp end
+    local fon = on and fp and not scoped_fp
+    if fv and fv.visible ~= fon then fv.visible = fon end
   end
-  if cn then view_model_cam(cn, fp and want ~= nil) end
+  if cn then view_model_cam(cn, fp and want ~= nil and not scoped_fp) end
   if not (fp and want and cn) then return end
   local fv = models.fp[want]
   if not (fv and fv ~= "spawning" and fv.valid) then return end
@@ -1169,6 +1191,19 @@ local function articulate(dt)
       for _, b in ipairs(CLAWS) do bone_rot(r, b, 0, mech.claw, 0) end
     end
     if r then energy_tick(r, "gravgun", dt) end
+  end
+  -- the rifle: its focus ring turns up with the charge, the cell and the
+  -- coolant loop glow with it, a flash on the shot
+  if id == "surveyor" then
+    local SV = ref("surveyor")
+    local r = mech_of(set, "surveyor")
+    if SV and r then
+      local c = SV.charge or 0
+      mech.sspin = (mech.sspin or 0) + ((c > 0.01) and (2.0 + 14.0 * c) or 0) * dt
+      if c > 0.01 or (SV.flash or 0) > 0.02 then bone_rot(r, "Focus", 0, 0, mech.sspin % (2 * math.pi)) end
+      uniform(r, "charge", math.min(1.2, 0.2 + 0.8 * c + 0.6 * (SV.flash or 0)))
+      uniform(r, "heat", SV.heat or 0)
+    end
   end
   -- the laser: the focus ring spins up with the beam; its energy (above)
   local firing = id == "laser" and inUse
@@ -3010,6 +3045,23 @@ local function equip(id, b)
   recoil = recoil + 0.03
 end
 
+-- What surveyor.lua is lent to aim and fire from the hands (made once a node).
+-- (kept on `view`: this chunk is at Lua's 200-local limit)
+function surveyor_api(node)
+  if view.sv_api and view.sv_api.node == node then return view.sv_api end
+  view.sv_api = {
+    node = node,
+    aim = function() return aim_ray(node) end,
+    muzzle = function() return muzzle() end,
+    fp = function() return first_person() end,
+    kick = function(k) recoil = recoil + k; mech.kickv = mech.kickv + k * 30 end,
+    say = function(t) say(t) end,
+  }
+  return view.sv_api
+end
+-- Is the view behind the eyes (planet_camera's first person)?
+function firstPersonNow() return first_person() end
+
 local function tick(node, dt, carrying)
   if not carrying then
     reset_tool_state("tools stowed: " .. gate)
@@ -3106,6 +3158,21 @@ local function tick(node, dt, carrying)
   elseif id == "gravgun" then
     if not grab then hum_off() end
     fire_grav(node, dt, firing)
+  elseif id == "surveyor" then
+    -- the TL-5 Surveyor: scripts/surveyor.lua charges, scopes and fires it;
+    -- this script holds it (the walker faces the aim while it is busy)
+    hum_off()
+    show_beam(nil)
+    aimMat = nil
+    local SV = ref("surveyor")
+    if SV and SV.tick then
+      local busy, kind, label, px, py, pz = SV.tick(node, dt, firing and not need_release, btn(1), surveyor_api(node))
+      inUse = busy == true
+      reticle_set(kind or "none", label)
+      if px then aimX, aimY, aimZ = px, py, pz else aimX, aimY, aimZ = nil, nil, nil end
+    else
+      inUse = false
+    end
   else
     -- anything else in hand (a kit, a beacon, a flag) or empty hands: the
     -- item's own script works it (item_hand: deploy mode, the repair verb)
@@ -3120,6 +3187,12 @@ end
 
 function tool_label(s)
   if s.consumable then return string.format("%s ×%d", s.label, s.n) end
+  if s.id == "surveyor" then
+    local SV = ref("surveyor")
+    local c = SV and SV.cell
+    if c and s.id == toolId() then return string.format("%s  ·  CELL %d%%", s.label, math.floor(c + 0.5)) end
+    return s.label
+  end
   if s.id == "laser" then
     if cutMode and s.id == toolId() then return s.label .. "  ·  CUT" end
     return s.label .. (laserMode == "fill" and "  ·  FILL" or "  ·  DIG")
@@ -3223,6 +3296,11 @@ local function draw_reticle()
   if cinematicUp() then return end
   local _, _, _, vh = camera.screenRect()
   local k = (vh or 720) / uiDesignH()
+  -- the rifle draws its own (a crosshair with the charge; its scope's picture)
+  if toolId() == "surveyor" then
+    local SV = ref("surveyor")
+    if SV and SV.drawReticle then SV.drawReticle(ax, ay, k, first_person()) return end
+  end
   local kind = reticleKind or "none"
   local c, a = RET.ink, 0.85
   if kind == "none" then c, a = RET.muted, 0.6 end
@@ -3317,6 +3395,11 @@ local function draw_hud(carrying)
   local up = (carrying or gate ~= GATE_ABOARD) and not (pm and pm.open)
     and not (om and om.isOpen and om.isOpen())
     and not (fm and fm.isOpen and fm.isOpen()) and not (ob and ob.isOpen and ob.isOpen())
+  -- (the rifle's scope picture in first person fills the view: no hotbar over it)
+  if up and toolId() == "surveyor" and first_person() then
+    local SV = ref("surveyor")
+    if SV and (SV.scopeK or 0) > 0.6 then up = false end
+  end
   if el then el.visible = up end
   if el then
     local y = (access and access.captions and access.captions()) and -84 or -16
