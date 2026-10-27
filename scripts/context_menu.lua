@@ -522,8 +522,10 @@ local function blocked()
   if ob and ob.isOpen and ob.isOpen() then return true end
   local ip = ref("inventory_panel")
   if ip and ip.open then return true end
+  -- (the map's own menus — a world or a craft right-clicked on it, opened by
+  -- scripts/targeting.lua, `target.map` — are the one kind that stays up there)
   local om = ref("orbit_map")
-  if om and om.isOpen and om.isOpen() then return true end
+  if om and om.isOpen and om.isOpen() then return not (open and target and target.map == true) end
   local pc = ref("planet_camera")
   if pc and (pc.freecam or pc.cinematic) then return true end
   return false
@@ -534,6 +536,10 @@ local function still_valid()
   if not (target and actor) then return false end
   if actor.node and actor.node.valid == false then return false end
   local t = target
+  if t.map then
+    local om = ref("orbit_map")
+    if not (om and om.isOpen and om.isOpen()) then return false end
+  end
   if t.kind == "part" then
     local v = t.vessel
     if not (v and v.node and v.node.valid) then return false end
@@ -596,7 +602,7 @@ function update(node, dt)
   local pad = input.action ~= nil and input.action("Context") == true
   local pad_edge = pad and not st.pad_prev
   st.pad_prev = pad
-  if tap or pad_edge then
+  if (tap or pad_edge) and not (target and target.map) then
     if not (open and tap and mouse_in_menu()) then
       local who = actorNow()
       if who then

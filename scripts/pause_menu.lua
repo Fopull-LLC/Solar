@@ -97,6 +97,7 @@ local CONTROLS = {
     { keys = { "h", "j", "k", "l", "i", "n" }, shown = "H J K L I N", what = "RCS translation" },
     { keys = { "space" }, shown = "SPACE", what = "next stage  ·  release the launch clamps" },
     { keys = { "t", "alt" }, shown = "T  ·  ALT 1–9", what = "SAS on / off  ·  pick a hold" },
+    { keys = { "alt" }, shown = "ALT 0", what = "SAS Target: point at the target (right-click a world, craft or docking port: Set target)" },
     { keys = { "g", "u", "y", "b" }, shown = "G  U  Y  B", what = "gear  ·  deploy (panels, antennas)  ·  lights  ·  brakes" },
     { keys = { "1", "2", "3", "4", "5", "6", "7", "8", "9" }, shown = "1 … 0", what = "your action groups (builder, tool 5)" },
     { keys = { "backspace" }, shown = "⌫", what = "abort: cut the throttle, fire the Abort group" },

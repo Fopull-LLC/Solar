@@ -212,7 +212,12 @@ local CATALOGUE = {
 --                       a pocket unit (`rare.ore.<home>`) or resonant crystal
 --                       dug from underground (`rare.geo.<home>`, geodeFind).
 --   groundcov frac      comms.coverage(home).ground ≥ frac
---   skycov   frac       comms.coverage(home).sky ≥ frac
+--   skycov   frac       comms.coverage(home).sustained ≥ frac on a FULL window:
+--                       the share of the ground linked for 75 % of one orbit
+--                       of the highest relay satellite (5 to 30 min of game
+--                       time) — a constellation that HOLDS the ground, not a
+--                       lucky instant with every satellite on one side.
+--                       (A comms without it: the snapshot `sky`, as before.)
 --   orbitrelay n        comms.relayStats().orbit[home] ≥ n
 --   linked   class=     a body of that class (moon / planet) is in
 --                       comms.linkedBodies()
@@ -268,17 +273,20 @@ PROGRAMME = {
   },
   {
     -- SATELLITES GROW THE NETWORK: every relay in orbit with a path home
-    -- counts (comms.coverage().sky = beacons, the base dish AND satellites).
+    -- counts (comms.coverage().sky = beacons, the base dish AND satellites),
+    -- and the stages ask for coverage HELD over a full orbit (`sustained`).
     -- One satellite at ~1 radius up sees about a quarter of the world, so
     -- each stage is one or two more launches, not a constellation.
     id = "sky", title = "Eyes in the Sky", requires = "relay_net",
     brief = "Ground relays need hills and line of sight. Satellites don't: every relay\n" ..
-            "in orbit with a link home spreads the network over the ground beneath it.",
+            "in orbit with a link home spreads the network over the ground beneath it.\n" ..
+            "The board counts ground the network HOLDS — linked three quarters of the time\n" ..
+            "over a whole orbit — not ground a satellite happens to be over.",
     reward = 12000, rep = 3, grants = { "dishL" },
     goals = {
       { kind = "orbitrelay", n = 1, pay = 3000, label = "A relay satellite in orbit" },
-      { kind = "skycov", frac = 0.50, pay = 3000, label = "Half the planet in the network" },
-      { kind = "skycov", frac = 0.80, pay = 5000, label = "80% of the planet in the network" },
+      { kind = "skycov", frac = 0.50, pay = 3000, label = "Half the planet held in the network for a full orbit" },
+      { kind = "skycov", frac = 0.80, pay = 5000, label = "80% of the planet held in the network for a full orbit" },
     },
   },
   {
@@ -294,7 +302,9 @@ PROGRAMME = {
 }
 
 -- Published for the card and the board: the network numbers as last polled.
--- { api = bool, ground = 0..1, sky = 0..1, orbit = n, linked = { names }, t }
+-- { api = bool, ground = 0..1, sky = 0..1, orbit = n, linked = { names }, t,
+--   sustained = 0..1 | nil (a comms without it), window, held (s), full,
+--   gaps = { n, share, clusters } | nil, skyHeld = "47% held · 3:10 / 5:00 window" }
 progNet = { api = false, ground = 0, sky = 0, orbit = 0, linked = {}, t = -1 }
 
 -- Published for the panels.
@@ -1196,6 +1206,21 @@ function homeName()
 end
 
 -- ── the network, polled ─────────────────────────────────────────────────────
+
+-- "47% held · 3:10 / 5:00 window": the sustained share and how much of the
+-- window the history has reached (game time). Once full: "… · 5:00 window".
+local function mmss(s)
+  s = math.max(0, math.floor((s or 0) + 0.5))
+  if s >= 3600 then return string.format("%d:%02d:%02d", math.floor(s / 3600), math.floor(s / 60) % 60, s % 60) end
+  return string.format("%d:%02d", math.floor(s / 60), s % 60)
+end
+function progHeldText(n)
+  n = n or progNet
+  if type(n.sustained) ~= "number" then return nil end
+  local p = string.format("%d%% held", math.floor(n.sustained * 100 + 1e-6))
+  if n.full then return p .. " · " .. mmss(n.window) .. " window" end
+  return string.format("%s · %s / %s window", p, mmss(math.min(n.held or 0, n.window or 0)), mmss(n.window))
+end
 -- comms.lua (the relay network) answers three questions; each is asked
 -- through a guard, so a comms script that does not have them yet — or throws —
 -- leaves `progNet.api` false and the relay goals waiting.
@@ -1211,6 +1236,11 @@ local function net_poll()
       local ok, c = pcall(net.coverage, home)
       if ok and type(c) == "table" then
         out.ground, out.sky = tonumber(c.ground) or 0, tonumber(c.sky) or 0
+        if type(c.sustained) == "number" then
+          out.sustained, out.window, out.held = c.sustained, tonumber(c.window) or 300, tonumber(c.held) or 0
+          out.full, out.gaps = c.full == true, c.gaps
+          out.skyHeld = progHeldText(out)
+        end
       end
     end
   end
@@ -1400,7 +1430,12 @@ local function prog_goal_now(m, i, g, niches)
   elseif g.kind == "groundcov" then
     return progNet.api and (progNet.ground or 0) >= g.frac - 1e-6
   elseif g.kind == "skycov" then
-    return progNet.api and (progNet.sky or 0) >= g.frac - 1e-6
+    if not progNet.api then return false end
+    -- held for a full window, never a lucky instant
+    if type(progNet.sustained) == "number" then
+      return progNet.full == true and progNet.sustained >= g.frac - 1e-6
+    end
+    return (progNet.sky or 0) >= g.frac - 1e-6
   elseif g.kind == "orbitrelay" then
     return (progNet.orbit or 0) >= (g.n or 1)
   elseif g.kind == "linked" then
@@ -1426,6 +1461,9 @@ end
 local function prog_tail(g)
   if g.kind == "groundcov" or g.kind == "skycov" then
     if not progNet.api then return "   (network not reporting yet)" end
+    if g.kind == "skycov" and progNet.skyHeld then
+      return "   (" .. progNet.skyHeld .. " · " .. pct(progNet.sky) .. " now)"
+    end
     return "   (now " .. pct(g.kind == "groundcov" and progNet.ground or progNet.sky) .. ")"
   elseif g.kind == "orbitrelay" then
     return string.format("   (%d in orbit)", progNet.orbit or 0)

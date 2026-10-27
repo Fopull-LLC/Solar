@@ -50,7 +50,7 @@ RESERVED = {
   space = "staging", i = "translation", j = "translation", k = "translation", l = "translation",
   h = "translation", n = "translation", m = "the map", f = "board / step out",
   v = "the cockpit view", c = "the camera mode", ["."] = "time warp", [","] = "time warp",
-  escape = "the pause menu", alt = "the autopilot holds (Alt+1…9)", tab = "the map's target",
+  escape = "the pause menu", alt = "the autopilot holds (Alt+1…9, Alt+0 target)", tab = "the map's target",
   o = "the Controls card", ["/"] = "the objective switcher", enter = "flight ops", f4 = "photo mode", f5 = "photo mode",
   f6 = "photo mode", f12 = "screenshots", super = "the system", capslock = "the system",
 }

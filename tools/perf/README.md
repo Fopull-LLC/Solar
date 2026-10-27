@@ -402,3 +402,20 @@ recharge and the indoors block in the hangar. It prints the cost (`fire`/`hit` m
 `perf.scriptMs`, GPU passes with three bolts in flight). `RFL RESULT` lines;
 pictures (1280×720: holding, charging, the scope, bolts in flight, impacts,
 the HUD) in `$WORK/rifleshots/<TAG>/png`.
+
+## covprobe.sh + covprobe.lua — sustained relay coverage (the sky goals)
+
+    WORK=$SCRATCH/cov LOCK=$SCRATCH/engine.lock tools/perf/covprobe.sh <engine> all|map [seconds]
+
+A fresh save (slot 15); a relay satellite (probe core, 3 batteries, Relay Dish)
+rolled out of the VAB, its fleet record put on a circular orbit 2.4 radii out
+over the ground station, the scene reloaded; then one relay, then three (two
+more records on the same orbit, `fleetRescan`), each watched under ×50 warp
+for 2.2 windows and the three again at ×1000. `COV T` lines every 2 s: the
+snapshot (`sky`) beside the sustained share, held/window, satellites and the
+biggest gap; `COV SATS` lines: each relay's radius, angle round the orbit from
+the base's zenith, link and charge. `COV RESULT` lines: orbit, velcheck (comms'
+conic for the relay against where it is ~10 min of game later), one_relay
+(the snapshot spikes, nothing is held), three, three_held, heavy_warp, saved.
+`map` plays in a window with the orbit map open and writes `cov_one.png` and
+`cov_three.png` (camera.capture) to `$OUT`. The slot is deleted afterwards.

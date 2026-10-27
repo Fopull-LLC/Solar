@@ -1087,12 +1087,30 @@ end
 local SAS_KEYS = {
   ["1"] = "stability", ["2"] = "prograde", ["3"] = "retrograde",
   ["4"] = "normal", ["5"] = "antinormal", ["6"] = "radialin",
-  ["7"] = "radialout", ["8"] = "dock", ["9"] = "node",
+  ["7"] = "radialout", ["8"] = "dock", ["9"] = "node", ["0"] = "target",
 }
 
 function setSAS(m)
   sas_mode = m
   if m ~= "off" then sas_last = m end
+end
+
+-- SAS TARGET / ANTI-TARGET (modes "target", "antitarget"): the hold is worked
+-- out by scripts/targeting.lua (the target, our docking port, the roll), which
+-- hands back the wanted angular velocity and the aim. Global, so fixedUpdate
+-- spends no upvalue on it. → dwx, dwy, dwz, aimx, aimy, aimz or nil (hold).
+TGT_HOLD = { ref = nil, miss = -10.0 }
+function targetHold(node, nx, ny, nz)
+  local H = TGT_HOLD
+  if not (H.ref and H.ref.valid ~= false) then
+    if (time or 0) - H.miss < 2.0 then return nil end
+    H.ref = findScript and findScript("targeting") or nil
+    if not H.ref then H.miss = time or 0 return nil end
+  end
+  if not H.ref.steer then return nil end
+  local ok, a, b, c, d, e, f = pcall(H.ref.steer, node.id, nx, ny, nz, sas_mode, params.max_rate, params.rate_accel)
+  if not ok then return nil end
+  return a, b, c, d, e, f
 end
 
 local function sas_target_dir(node, db, mode)
@@ -2999,6 +3017,92 @@ end
 local DOCK_ASSIST_R = 6.0     -- soft-capture magnetism reaches this far
 local DOCK_LOCKOUT = 2.5      -- s of no-recapture after an undock (or you'd re-latch)
 
+-- ── the docking maths (global: no upvalues for fixedUpdate) ─────────────────
+-- A port's ROLL KEY: its first guide petal (tools/gen_part_meshes.py
+-- part_dockport: three petals, the first 0.3 rad round from the part's +X in
+-- its XZ plane); a radial port mates along +X and keys on its +Y. Two ports
+-- seat with their petals interleaved: 60° apart, every 120°.
+-- (scripts/targeting.lua TM is the same maths for the SAS hold and the HUD.)
+DOCKM = { fold = 3, offset = math.pi / 3, petal = 0.3 }
+function DOCKM.partBasis(yaw, pitch, roll)
+  local cy, sy = math.cos(yaw or 0), math.sin(yaw or 0)
+  local cx, sx = math.cos(pitch or 0), math.sin(pitch or 0)
+  local cz, sz = math.cos(roll or 0), math.sin(roll or 0)
+  return { cy * cz + sy * sx * sz, cx * sz, -sy * cz + cy * sx * sz },
+         { -cy * sz + sy * sx * cz, cx * cz, sy * sz + cy * sx * cz },
+         { sy * cx, -sx, cy * cx }
+end
+function DOCKM.keyLocal(rec)
+  local X, Y, Z = DOCKM.partBasis(rec and rec.yaw, rec and rec.pitch, rec and rec.roll)
+  if rec and (rec.att or "") == "radial" then return Y[1], Y[2], Y[3] end
+  local c, s = math.cos(DOCKM.petal), math.sin(DOCKM.petal)
+  return X[1] * c + Z[1] * s, X[2] * c + Z[2] * s, X[3] * c + Z[3] * s
+end
+-- The craft's TICK axes (assembly.info right/up; Z = R × U); drawn ones only
+-- without a compound (a test rig).
+function DOCKM.tickAxes(node, info)
+  if info and info.right and info.up then
+    local R, U = info.right, info.up
+    return R, U, vec3(R.y * U.z - R.z * U.y, R.z * U.x - R.x * U.z, R.x * U.y - R.y * U.x)
+  end
+  return basis(node)
+end
+function DOCKM.across(vx, vy, vz, ax, ay, az)
+  local d = vx * ax + vy * ay + vz * az
+  local x, y, z = vx - ax * d, vy - ay * d, vz - az * d
+  local l = math.sqrt(x * x + y * y + z * z)
+  if l < 1e-9 then return nil end
+  return x / l, y / l, z / l
+end
+function DOCKM.rotate(vx, vy, vz, ax, ay, az, t)
+  local c, s = math.cos(t), math.sin(t)
+  local cx, cy, cz = ay * vz - az * vy, az * vx - ax * vz, ax * vy - ay * vx
+  local d = (ax * vx + ay * vy + az * vz) * (1 - c)
+  return vx * c + cx * s + ax * d, vy * c + cy * s + ay * d, vz * c + cz * s + az * d
+end
+-- The key a port with axis A must take to interleave with the key tk, the
+-- slot nearest its key mk now. → Kx, Ky, Kz.
+function DOCKM.matchKey(Ax, Ay, Az, tkx, tky, tkz, mkx, mky, mkz)
+  local bx, by, bz = DOCKM.across(tkx, tky, tkz, Ax, Ay, Az)
+  if not bx then return nil end
+  local px, py, pz = DOCKM.across(mkx, mky, mkz, Ax, Ay, Az)
+  local best, bk = -2, nil
+  for j = 0, DOCKM.fold - 1 do
+    local kx, ky, kz = DOCKM.rotate(bx, by, bz, Ax, Ay, Az, DOCKM.offset + j * 2 * math.pi / DOCKM.fold)
+    local d = px and (kx * px + ky * py + kz * pz) or (j == 0 and 1 or -1)
+    if d > best then best, bk = d, { kx, ky, kz } end
+  end
+  return bk[1], bk[2], bk[3]
+end
+-- The rotation (rows) taking frame (a, k, a×k) onto (A, K, A×K): R = W·Cᵀ.
+function DOCKM.frameRot(a, k, A, K)
+  local b = { a[2] * k[3] - a[3] * k[2], a[3] * k[1] - a[1] * k[3], a[1] * k[2] - a[2] * k[1] }
+  local B = { A[2] * K[3] - A[3] * K[2], A[3] * K[1] - A[1] * K[3], A[1] * K[2] - A[2] * K[1] }
+  local C, W = { a, k, b }, { A, K, B }
+  local R = {}
+  for i = 1, 3 do
+    R[i] = {}
+    for j = 1, 3 do R[i][j] = W[1][i] * C[1][j] + W[2][i] * C[2][j] + W[3][i] * C[3][j] end
+  end
+  return R
+end
+-- A rotation matrix → its axis × angle (radians).
+function DOCKM.rotVec(R)
+  local tr = R[1][1] + R[2][2] + R[3][3]
+  local c = math.max(-1, math.min(1, (tr - 1) / 2))
+  local th = math.acos(c)
+  if th < 1e-7 then return 0, 0, 0, 0 end
+  local x, y, z = R[3][2] - R[2][3], R[1][3] - R[3][1], R[2][1] - R[1][2]
+  local l = math.sqrt(x * x + y * y + z * z)
+  if l < 1e-9 then
+    -- a half turn: the axis from the diagonal
+    x, y, z = math.sqrt(math.max(0, (R[1][1] + 1) / 2)), math.sqrt(math.max(0, (R[2][2] + 1) / 2)),
+              math.sqrt(math.max(0, (R[3][3] + 1) / 2))
+    l = math.sqrt(x * x + y * y + z * z)
+  end
+  return x / l * th, y / l * th, z / l * th, th
+end
+
 dock = {
   -- The capture envelope lives ON the published table, not in locals: the HUD
   -- and the panel tick the pilot's checklist against these every frame, and
@@ -3140,14 +3244,21 @@ end
 -- node lags the rails carry by a tick, which is metres at orbital speed and
 -- would put every capture test off the real hardware).
 local function dock_world(node, info, p)
-  local rx, up, rz = basis(node)
+  -- TICK poses throughout (docs/positions-and-frames.md rule 2): the origin
+  -- AND the axes from assembly.info, never the tick origin with the node's
+  -- drawn axes (that mix put a port up to a tick of rotation off at range).
+  local R, U, Z = DOCKM.tickAxes(node, info)
   local bx, by, bz = base_of(node, info)
-  return bx + rx.x * p.x + up.x * p.y + rz.x * p.z,
-         by + rx.y * p.x + up.y * p.y + rz.y * p.z,
-         bz + rx.z * p.x + up.z * p.y + rz.z * p.z,
-         rx.x * p.ax + up.x * p.ay + rz.x * p.az,
-         rx.y * p.ax + up.y * p.ay + rz.y * p.az,
-         rx.z * p.ax + up.z * p.ay + rz.z * p.az
+  local kx, ky, kz = DOCKM.keyLocal(bp_by_uid[p.uid])
+  return bx + R.x * p.x + U.x * p.y + Z.x * p.z,
+         by + R.y * p.x + U.y * p.y + Z.y * p.z,
+         bz + R.z * p.x + U.z * p.y + Z.z * p.z,
+         R.x * p.ax + U.x * p.ay + Z.x * p.az,
+         R.y * p.ax + U.y * p.ay + Z.y * p.az,
+         R.z * p.ax + U.z * p.ay + Z.z * p.az,
+         R.x * kx + U.x * ky + Z.x * kz,
+         R.y * kx + U.y * ky + Z.y * kz,
+         R.z * kx + U.z * ky + Z.z * kz
 end
 
 -- The live child node for a port uid, cached (ports don't move within the hull).
@@ -3193,8 +3304,9 @@ function dockFaces()
   if not info then return out end
   for _, p in ipairs(dock.ports) do
     if not p.buried and not p.mate then
-      local x, y, z, ax, ay, az = dock_world(node, info, p)
-      out[#out + 1] = { uid = p.uid, x = x, y = y, z = z, ax = ax, ay = ay, az = az }
+      local x, y, z, ax, ay, az, kx, ky, kz = dock_world(node, info, p)
+      out[#out + 1] = { uid = p.uid, x = x, y = y, z = z, ax = ax, ay = ay, az = az,
+                        kx = kx, ky = ky, kz = kz, h = (bp_by_uid[p.uid] or {}).h }
     end
   end
   return out
@@ -3368,6 +3480,67 @@ local function dock_is_master(node, v)
   return (node.id or 0) < (v.node.id or 0)
 end
 
+-- THE HARD DOCK'S SNAP. The merge welds the module where it met us: within
+-- 3 cm and 1° once soft capture has done its work, but not exact. Here, in
+-- OUR craft's frame (blueprint records and the parts' local poses only: no
+-- world positions, nothing that moves on rails), the module is turned and
+-- moved as one rigid piece so its port sits exactly on ours: axes collinear,
+-- faces flush, petals interleaved. The pieces were already this close, so the
+-- correction is a few millimetres; the compound is rebuilt (momentum kept).
+function dockSnap(node, pend, man, remap, live)
+  local mate = remap[man.portUid]
+  local P = pend.port
+  local Pm = P and bp_by_uid[P.uid]
+  local Q = mate and bp_by_uid[mate]
+  if not (P and Pm and Q and P.ax) then return end
+  local am = { P.ax, P.ay, P.az }
+  local km = { DOCKM.keyLocal(Pm) }
+  local X, Y = DOCKM.partBasis(Q.yaw, Q.pitch, Q.roll)
+  local aq = ((Q.att or "") == "radial") and X or Y
+  if aq[1] * am[1] + aq[2] * am[2] + aq[3] * am[3] > 0 then aq = { -aq[1], -aq[2], -aq[3] } end
+  local kq = { DOCKM.keyLocal(Q) }
+  local A = { -am[1], -am[2], -am[3] }
+  local Kx, Ky, Kz = DOCKM.matchKey(A[1], A[2], A[3], km[1], km[2], km[3], kq[1], kq[2], kq[3])
+  if not Kx then return end
+  -- (kq across aq, exactly, before the frame is built)
+  local qx, qy, qz = DOCKM.across(kq[1], kq[2], kq[3], aq[1], aq[2], aq[3])
+  if not qx then return end
+  local R = DOCKM.frameRot(aq, { qx, qy, qz }, A, { Kx, Ky, Kz })
+  local seat = (Pm.h or 0.28) * 0.5 + (Q.h or 0.28) * 0.5
+  local T = { Pm.x + am[1] * seat, Pm.y + am[2] * seat, Pm.z + am[3] * seat }
+  local Q0 = { Q.x, Q.y, Q.z }
+  local function rot(v)
+    return R[1][1] * v[1] + R[1][2] * v[2] + R[1][3] * v[3],
+           R[2][1] * v[1] + R[2][2] * v[2] + R[2][3] * v[3],
+           R[3][1] * v[1] + R[3][2] * v[2] + R[3][3] * v[3]
+  end
+  local _, _, _, th = DOCKM.rotVec(R)
+  local moved = math.sqrt((T[1] - Q0[1]) ^ 2 + (T[2] - Q0[2]) ^ 2 + (T[3] - Q0[3]) ^ 2)
+  local n = 0
+  for _, pp in ipairs(man.parts) do
+    local u, c = remap[pp.uid], live[pp.eid]
+    local rec = u and bp_by_uid[u]
+    if rec then
+      local dx, dy, dz = rot({ (rec.x or 0) - Q0[1], (rec.y or 0) - Q0[2], (rec.z or 0) - Q0[3] })
+      rec.x, rec.y, rec.z = T[1] + dx, T[2] + dy, T[3] + dz
+      local Xb, Yb, Zb = DOCKM.partBasis(rec.yaw, rec.pitch, rec.roll)
+      local Xn, Yn, Zn = { rot(Xb) }, { rot(Yb) }, { rot(Zb) }
+      local pitch = math.asin(math.max(-1, math.min(1, -Zn[2])))
+      local yaw, roll
+      if math.abs(Zn[2]) > 1 - 1e-10 then yaw, roll = math.atan2(-Xn[3], Xn[1]), 0
+      else yaw, roll = math.atan2(Zn[1], Zn[3]), math.atan2(Xn[2], Yn[2]) end
+      rec.yaw, rec.pitch, rec.roll = yaw, pitch, roll
+      if c and c.valid ~= false then
+        c.x, c.y, c.z = rec.x, rec.y, rec.z
+        if c.setAngles then c:setAngles(yaw, pitch, roll) end
+      end
+      n = n + 1
+    end
+  end
+  log(string.format("DOCK SNAP: the module set exact — moved %.1f mm, turned %.2f°, %d parts", moved * 1000, math.deg(th), n))
+  if assembly.rebuild then assembly.rebuild(node) end
+end
+
 -- Fold a captured module's blueprint into ours. Runs the tick AFTER the merge
 -- was queued — by then every absorbed part is one of OUR children and its LOCAL
 -- pose is already expressed in our frame, so we read the merged geometry
@@ -3409,6 +3582,7 @@ local function dock_absorb(node)
     dock.msg = "capture failed — the module's parts never arrived"
     return
   end
+  if pend.snap then dockSnap(node, pend, man, remap, live) end
   for _, u in ipairs(absorbed) do
     local rec = bp_by_uid[u]
     rec.parent = remap[rec.parent or 0] or 0
@@ -3672,8 +3846,8 @@ function dockTick(node, info, dt)
     if p.mate then
       dock_lamp(node, p, "latched")
     elseif not p.buried then
-      local x, y, z, ax, ay, az = dock_world(node, info, p)
-      mine[#mine + 1] = { p = p, x = x, y = y, z = z, ax = ax, ay = ay, az = az }
+      local x, y, z, ax, ay, az, kx, ky, kz = dock_world(node, info, p)
+      mine[#mine + 1] = { p = p, x = x, y = y, z = z, ax = ax, ay = ay, az = az, kx = kx, ky = ky, kz = kz }
     else
       dock_lamp(node, p, "off")
     end
@@ -3690,7 +3864,8 @@ function dockTick(node, info, dt)
   for _, v in ipairs(findScripts("vessel_controller")) do
     local far = false
     if v.node and v.node.valid then
-      local dx0, dy0, dz0 = v.node.x - bx0, v.node.y - by0, v.node.z - bz0
+      local tp = v.node.tickPos or v.node   -- (tick pose against our tick origin)
+      local dx0, dy0, dz0 = tp.x - bx0, tp.y - by0, tp.z - bz0
       far = (dx0 * dx0 + dy0 * dy0 + dz0 * dz0) > (DOCK_ASSIST_R + 60.0) ^ 2
     end
     if v.dockFaces and v.node and v.node.valid and v.node.id ~= node.id and not far then
@@ -3703,7 +3878,7 @@ function dockTick(node, info, dt)
           -- you've picked a berth the readout must keep describing THAT berth,
           -- or the numbers you're flying on jump to a nearer port mid-approach.
           local locked = dock.lock and dock.lock.id == v.node.id
-            and dock.lock.uid == q.uid
+            and dock.lock.uid == q.uid and (not dock.lock.mine or dock.lock.mine == m.p.uid)
           if (locked or (d < DOCK_ASSIST_R and align > 0.15))
             and (not best or best.locked ~= true) and (locked or not best or d < best.d) then
             local inv = 1.0 / math.max(d, 1e-6)
@@ -3745,26 +3920,30 @@ function dockTick(node, info, dt)
     max = -best.q.ax, may = -best.q.ay, maz = -best.q.az,
     vx = oi and oi.vel.x or 0, vy = oi and oi.vel.y or 0, vz = oi and oi.vel.z or 0,
   }
-  -- SOFT CAPTURE: a spring toward their port plus a damper on the relative
+  -- SOFT CAPTURE and HARD DOCK (dockCapture, below): inside a metre, square
+  -- within 20° and slow, the pair is drawn face to face and turned coaxial,
+  -- rolled to the nearest petal slot; once flush and true it latches and the
+  -- seam is set exact (dock_absorb). Outside it, the long, gentle magnet.
+  local cap = dockCapture(node, info, best, oi, dt)
+  -- THE LONG MAGNET: a spring toward their port plus a damper on the relative
   -- motion. The SPRING is applied at our port, so it swings the craft square as
   -- well as pulling it in; the DAMPER goes through the centre of mass, because
-  -- braking is not supposed to be a steering input — off-centre damping fights
-  -- the very rotation the spring is trying to settle and the pair wallows.
-  -- Both craft run this and each pulls only ITSELF, so the pair behaves like one
-  -- mutual magnet: a station never gets dragged around by a probe. Everything
-  -- scales with our own mass, so a heavy tug and a light lander handle alike.
-  if dock.assist and best.align > 0.35 and not info.anchored and time > dock.arm then
+  -- braking is not supposed to be a steering input. Both craft run this and
+  -- each pulls only ITSELF. Everything scales with our own mass.
+  if not cap and dock.assist and best.align > 0.35 and not info.anchored and time > dock.arm then
     local m = math.max(0.1, info.mass or 1.0)
-    local pull = math.min(1.0, (DOCK_ASSIST_R - best.d) / DOCK_ASSIST_R) * best.align
+    -- (never below zero: a LOCKED berth is followed at any range, and past
+    -- DOCK_ASSIST_R this went negative — a repulsion growing with distance,
+    -- which threw two craft 40 m apart away from each other at 125 m/s)
+    local pull = math.max(0.0, math.min(1.0, (DOCK_ASSIST_R - best.d) / DOCK_ASSIST_R)) * best.align
     local k, c = 2.2 * m * pull, 1.6 * m * pull
     assembly.forceAt(node, vec3(best.ux * k, best.uy * k, best.uz * k),
       vec3(best.m.x, best.m.y, best.m.z))
     assembly.force(node, vec3(rvx * c, rvy * c, rvz * c))
   end
-  -- LATCH. Close enough, square enough, slow enough — and past the lockout that
-  -- stops a fresh undock snapping straight back on.
-  if best.d < dock.captureR and best.align > dock.alignMin and drift < dock.driftMax
-    and time > dock.arm and dock_is_master(node, best.v) then
+  -- LATCH: the faces flush and true (or held close and nearly so for a few
+  -- seconds), past the lockout that stops a fresh undock snapping back on.
+  if cap == "seat" and dock_is_master(node, best.v) then
     local man = best.v.dockManifest and best.v.dockManifest(best.q.uid)
     if man and #man.parts > 0 then
       -- No tyre joint may hang off either hull through the weld.
@@ -3772,15 +3951,128 @@ function dockTick(node, info, dt)
       if best.v.r2Before then best.v.r2Before(best.v.node) end
       best.v.dockAbsorbed()
       assembly.merge(node, best.v.node)
-      dock.pending = { port = best.m.p, manifest = man, t = time }
+      dock.pending = { port = best.m.p, manifest = man, t = time, snap = true }
+      log(string.format("DOCK SEAT: gap %.3f m, misalignment %.2f° (axis %.2f°), drift %.3f m/s after %.1f s of soft capture",
+        dock.soft and dock.soft.gap or -1, dock.soft and dock.soft.th or -1, dock.soft and dock.soft.ang or -1,
+        dock.soft and dock.soft.drift or -1, dock.soft and (time - dock.soft.t0) or -1))
       dock.target = nil
-      add_shake(0.12)
+      dock.soft = nil
+      add_shake(0.06)
       sfx3(SFX.clamp, best.m.x, best.m.y, best.m.z, 0.85, 1.15)
-      local fx = fxd()
-      if fx then fx.separate(best.m.x, best.m.y, best.m.z) else spawnEffect("SepPuff", best.m.x, best.m.y, best.m.z) end
-      dock.msg = "capture — latching"
+      dock.msg = "hard dock"
     end
   end
+end
+
+-- SOFT CAPTURE → HARD DOCK. Ty: the docked pair sat crooked — the old latch
+-- welded whatever pose the ports met at (up to 37° off). Now:
+--   SOFT  within `range` m of seating (our port's centre against where it
+--         belongs: out along their axis, faces flush), within `angle` and
+--         slower than `drift`: a critically damped spring on the gap and on
+--         the full misalignment (axis AND roll, to the nearest petal slot)
+--         draws the pair together. The MASTER applies it to both craft as
+--         equal and opposite impulses (and couples) on the REDUCED mass and
+--         inertia, so momentum is conserved and neither craft is kicked: a
+--         probe and a station move by their shares. Eased in over half a
+--         second, its acceleration capped.
+--   HARD  flush and true (`seatGap`, `seatAng`, `seatDrift`), or held within
+--         8 cm and 2.5° for `patience` s: → "seat", and the master merges.
+--         dock_absorb then sets the seam EXACT in the merged craft's frame.
+-- Tick poses throughout (dock_world, assembly.info). → nil | "soft" | "seat".
+DOCK_CAP = { range = 1.0, angle = math.rad(20), drift = 0.8, seatGap = 0.03, seatAng = 1.0,
+             seatDrift = 0.05, patience = 4.0, kp = 4.0, kd = 4.0, kpr = 4.0, kdr = 4.0,
+             amax = 2.0, alphamax = 1.5 }
+local function inertia_mean(i)
+  local I = i and i.inertia
+  if not (I and I[1] and I[2] and I[3]) then return (i and i.mass or 1) * 0.5 end
+  return math.max(1e-4, (I[1].x + I[2].y + I[3].z) / 3)
+end
+-- An angular impulse L as a pure couple about cm (the safety net's form).
+function DOCKM.couple(n, Lx, Ly, Lz, cm)
+  local Ll = math.sqrt(Lx * Lx + Ly * Ly + Lz * Lz)
+  if Ll < 1e-12 then return end
+  local ex, ey, ez = Ly, -Lx, 0
+  if math.abs(Lz) > math.abs(Lx) and math.abs(Lz) > math.abs(Ly) then ex, ey, ez = Lz, 0, -Lx end
+  local el = math.sqrt(ex * ex + ey * ey + ez * ez)
+  ex, ey, ez = ex / el, ey / el, ez / el
+  local jx = (Ly * ez - Lz * ey) * 0.5
+  local jy = (Lz * ex - Lx * ez) * 0.5
+  local jz = (Lx * ey - Ly * ex) * 0.5
+  assembly.impulseAt(n, vec3(jx, jy, jz), vec3(cm.x + ex, cm.y + ey, cm.z + ez))
+  assembly.impulseAt(n, vec3(-jx, -jy, -jz), vec3(cm.x - ex, cm.y - ey, cm.z - ez))
+end
+function dockCapture(node, info, best, oi, dt)
+  local C = DOCK_CAP
+  local m, q = best.m, best.q
+  if not (oi and oi.com and info.com and dock.assist and m.kx and q.kx) or info.anchored or oi.anchored
+    or time <= dock.arm then
+    dock.soft = nil
+    return nil
+  end
+  local seat = ((bp_by_uid[m.p.uid] or {}).h or 0.28) * 0.5 + (q.h or 0.28) * 0.5
+  local ex, ey, ez = q.x + q.ax * seat - m.x, q.y + q.ay * seat - m.y, q.z + q.az * seat - m.z
+  local gap = math.sqrt(ex * ex + ey * ey + ez * ez)
+  local ang = math.acos(math.max(-1, math.min(1, -(m.ax * q.ax + m.ay * q.ay + m.az * q.az))))
+  -- OUR VELOCITY RELATIVE TO THEIRS, from how the seam itself moves (the gap
+  -- vector, both ends tick poses of the same read, tick to tick): the other
+  -- craft's assembly.info vel read a steady 0.31 m/s that wasn't there (an
+  -- unpiloted craft), which stalled the damper against the spring 0.32 m out.
+  local S0 = dock.soft
+  local rvx, rvy, rvz = info.vel.x - oi.vel.x, info.vel.y - oi.vel.y, info.vel.z - oi.vel.z
+  if S0 and S0.ex and dt and dt > 0 then
+    local nx, ny, nz = -(ex - S0.ex) / dt, -(ey - S0.ey) / dt, -(ez - S0.ez) / dt
+    local pv = S0.rv or { nx, ny, nz }
+    rvx, rvy, rvz = pv[1] + (nx - pv[1]) * 0.5, pv[2] + (ny - pv[2]) * 0.5, pv[3] + (nz - pv[3]) * 0.5
+  end
+  local drift = math.sqrt(rvx * rvx + rvy * rvy + rvz * rvz)
+  if not (S0 and S0.ex) then drift = 0 end   -- (unmeasured on the first tick: judged from the next)
+  -- (a little hysteresis: once held, it lets go only further out)
+  local hold = dock.soft and 1.3 or 1.0
+  if gap > C.range * hold or ang > C.angle * hold or drift > C.drift * hold then
+    dock.soft = nil
+    return nil
+  end
+  local A = { -q.ax, -q.ay, -q.az }
+  local Kx, Ky, Kz = DOCKM.matchKey(A[1], A[2], A[3], q.kx, q.ky, q.kz, m.kx, m.ky, m.kz)
+  if not Kx then return nil end
+  local R = DOCKM.frameRot({ m.ax, m.ay, m.az }, { m.kx, m.ky, m.kz }, A, { Kx, Ky, Kz })
+  local rx, ry, rz, th = DOCKM.rotVec(R)
+  local w1, w2 = info.angVel or vec3(0, 0, 0), oi.angVel or vec3(0, 0, 0)
+  local wrx, wry, wrz = w1.x - w2.x, w1.y - w2.y, w1.z - w2.z
+  local wr = math.sqrt(wrx * wrx + wry * wry + wrz * wrz)
+  if not dock.soft then
+    dock.soft = { t0 = time }
+    log(string.format("DOCK SOFT CAPTURE: gap %.2f m, misaligned %.1f° (axis %.1f°), drift %.2f m/s",
+      gap, math.deg(th), math.deg(ang), drift))
+  end
+  local S = dock.soft
+  S.gap, S.th, S.ang, S.drift, S.wr = gap, math.deg(th), math.deg(ang), drift, wr
+  S.rv = (S0 and S0.ex) and { rvx, rvy, rvz } or nil   -- (measured from the second tick on)
+  S.ex, S.ey, S.ez = ex, ey, ez
+  local held = time - S.t0
+  if (gap < C.seatGap and S.th < C.seatAng and drift < C.seatDrift and wr < 0.05)
+    or (held > C.patience and gap < 0.08 and S.th < 2.5) then
+    return "seat"
+  end
+  if not dock_is_master(node, best.v) then return "soft" end
+  local m1, m2 = math.max(0.01, info.mass or 1), math.max(0.01, oi.mass or 1)
+  local mu = m1 * m2 / (m1 + m2)
+  local ramp = math.min(1.0, held / 0.5)
+  local ax_, ay_, az_ = (C.kp * ex - C.kd * rvx) * ramp, (C.kp * ey - C.kd * rvy) * ramp, (C.kp * ez - C.kd * rvz) * ramp
+  local al = math.sqrt(ax_ * ax_ + ay_ * ay_ + az_ * az_)
+  if al > C.amax then ax_, ay_, az_ = ax_ * C.amax / al, ay_ * C.amax / al, az_ * C.amax / al end
+  local jx, jy, jz = mu * ax_ * dt, mu * ay_ * dt, mu * az_ * dt
+  assembly.impulseAt(node, vec3(jx, jy, jz), info.com)
+  assembly.impulseAt(best.v.node, vec3(-jx, -jy, -jz), oi.com)
+  local I1, I2 = inertia_mean(info), inertia_mean(oi)
+  local Ir = I1 * I2 / (I1 + I2)
+  local bx_, by_, bz_ = (C.kpr * rx - C.kdr * wrx) * ramp, (C.kpr * ry - C.kdr * wry) * ramp, (C.kpr * rz - C.kdr * wrz) * ramp
+  local bl = math.sqrt(bx_ * bx_ + by_ * by_ + bz_ * bz_)
+  if bl > C.alphamax then bx_, by_, bz_ = bx_ * C.alphamax / bl, by_ * C.alphamax / bl, bz_ * C.alphamax / bl end
+  local Lx, Ly, Lz = Ir * bx_ * dt, Ir * by_ * dt, Ir * bz_ * dt
+  DOCKM.couple(node, Lx, Ly, Lz, info.com)
+  DOCKM.couple(best.v.node, -Lx, -Ly, -Lz, oi.com)
+  return "soft"
 end
 
 -- ── RCS ─────────────────────────────────────────────────────────────────────
@@ -4069,9 +4361,54 @@ end
 -- you are to where the corridor is, which turns "am I lined up?" into a length
 -- you can watch shrink. The corridor goes green the moment every capture
 -- condition is met, so the last second of a dock needs no HUD at all.
+-- The guides are drawn in the camera pass, but `dock.target` was measured in
+-- the physics tick, up to a rails carry away from the drawn frame (metres on
+-- a moving world): both faces are read again here, from the drawn poses, so
+-- every line starts and ends on the hardware the frame shows. → a copy of
+-- the target, or nil.
+function dockGuidePose(t0)
+  -- DRAWN poses for both faces (docs/positions-and-frames.md rule 2): each
+  -- craft root's toWorld this pass, never its tick origin mixed with its
+  -- drawn axes (`dock_world` is the physics read, for capture).
+  local node = dock.node
+  local p = dock_port(t0.port)
+  if not (node and node.valid and p) then return nil end
+  local function face(n, q)
+    if not n.toWorld then return dock_world(n, assembly.info(n), q) end   -- (a test rig's node)
+    local o = n:toWorld(vec3(q.x, q.y, q.z))
+    local a = n:toWorld(vec3(q.x + q.ax, q.y + q.ay, q.z + q.az))
+    return o.x, o.y, o.z, a.x - o.x, a.y - o.y, a.z - o.z
+  end
+  local t = {}
+  for k, v in pairs(t0) do t[k] = v end
+  t.mx, t.my, t.mz = face(node, p)
+  local found = false
+  for _, v in ipairs(findScripts("vessel_controller")) do
+    if v.node and v.node.valid and v.node.id == t0.id and v.dock then
+      for _, q in ipairs(v.dock.ports) do
+        if q.uid == t0.uid then
+          local ax, ay, az
+          t.qx, t.qy, t.qz, ax, ay, az = face(v.node, q)
+          t.max, t.may, t.maz = -ax, -ay, -az
+          found = true
+        end
+      end
+    end
+  end
+  if not found then return nil end
+  local dx, dy, dz = t.mx - t.qx, t.my - t.qy, t.mz - t.qz
+  t.range = math.sqrt(dx * dx + dy * dy + dz * dz)
+  local along = -(dx * t.max + dy * t.may + dz * t.maz)
+  t.along = along
+  t.lateral = math.sqrt(math.max(0.0, t.range * t.range - along * along))
+  return t
+end
+
 function dockGuides()
   local t = dock.target
   if not t or not t.mx or dock.map or cinematicUp() then return end
+  t = dockGuidePose(t)
+  if not t then return end
   local ok = t.range < dock.captureR and t.align > dock.alignMin
     and t.drift < dock.driftMax
   local r, g, b = 1.0, 0.72, 0.2
@@ -4084,7 +4421,9 @@ function dockGuides()
   draw.ring(t.mx, t.my, t.mz, t.max, t.may, t.maz, 0.42, r, g, b, 0.95)
   draw.ring(t.qx, t.qy, t.qz, t.max, t.may, t.maz, 0.42, r, g, b, 0.7)
   -- The corridor: back down the target's normal, far enough to fly in on.
-  local L = math.max(2.0, math.min(12.0, t.range * 2.0))
+  -- (at least out to where the miss bar meets it: a bar ending past the
+  -- drawn corridor points at nothing)
+  local L = math.max(2.0, math.min(12.0, t.range * 2.0), (t.along or 0) + 2.0)
   draw.line(t.qx, t.qy, t.qz,
             t.qx - t.max * L, t.qy - t.may * L, t.qz - t.maz * L, r, g, b, 0.5)
   -- The MISS: our port, out to its own point on the corridor. Watch it shrink.
@@ -4093,7 +4432,8 @@ function dockGuides()
   local cx = t.qx + t.max * along
   local cy = t.qy + t.may * along
   local cz = t.qz + t.maz * along
-  if t.lateral > 0.03 then
+  -- (near only: at range the bar is metres long and reads as a line to nowhere)
+  if t.lateral > 0.03 and t.range < 12.0 then
     draw.line(t.mx, t.my, t.mz, cx, cy, cz, 1.0, 0.35, 0.35, 0.9)
   end
   -- Where we'd arrive if we just kept drifting: the closing-rate lead marker.
@@ -10571,6 +10911,20 @@ end
 
 function onDestroy(node)
   r2Cleanup()
+  -- A CRAFT GONE UNDER ITS RIDER (despawned, cleared by a script) with the
+  -- crew still in the seat: the crew rode as a kinematic passenger, and with
+  -- nothing left to un-seat them they stayed kinematic — left behind in space
+  -- by the planet's travel, hundreds of metres up a second later (verified
+  -- 2026-10-27, verifyprobe vbike). Stood down where the craft was, with its
+  -- velocity, as a step-out would (recoverCraft does this before it destroys).
+  if crewAboard and not destroyed then
+    local x, y, z = node and node.x, node and node.y, node and node.z
+    local ok = pcall(function()
+      local up = node.up or vec3(0, 1, 0)
+      standDown(node, x + up.x * 1.5, y + up.y * 1.5, z + up.z * 1.5, node.vx or 0, node.vy or 0, node.vz or 0)
+    end)
+    if not ok then pcall(seatCrew, node, false) end
+  end
   -- a craft gone under its rider (recovered, despawned) gives the capsule
   -- back too: nothing of this controller runs again to do it
   local k = R2.riderShape
@@ -11523,6 +11877,8 @@ function fixedUpdate(node, dt)
           tx, ty, tz = t.max, t.may, t.maz
         end
       end
+    elseif sas_mode == "target" or sas_mode == "antitarget" then
+      dwx, dwy, dwz, sasm_x, sasm_y, sasm_z = targetHold(node, nx, ny, nz)
     else
       local ddom = space.dominant(node.x, node.y, node.z)
       local db = ddom and space.body(ddom)
@@ -11540,10 +11896,13 @@ function fixedUpdate(node, dt)
       else
         dwx, dwy, dwz = 0, 0, 0
       end
-    else
+    elseif not dwx then
       dwx, dwy, dwz = 0, 0, 0
     end
   end
+  -- (soft capture owns the attitude while it draws the ports together: the
+  -- wheels would hold the craft against it)
+  if dock.soft and not manual then dwx, dwy, dwz = w.x, w.y, w.z end
   -- THE AIR: per-part drag and lift, the control surfaces on the stick (and
   -- the SAS's rate error), the jets' thrust for the next tick.
   aeroTick(node, info, dt, throttle, p, y, r, dwx - w.x, dwy - w.y, dwz - w.z, rgx, rgy, rgz, fx, fy, fz, nx, ny, nz)

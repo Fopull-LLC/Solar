@@ -1062,6 +1062,8 @@ local function update_map3d(node, dt)
   -- The COMMS NETWORK: every craft, the ground station, and every usable link,
   -- coloured by its strength (bright where a path home runs through it).
   mapComms(node, px_at, label, lk, map_show)
+  -- THE TARGET (scripts/targeting.lua): its ring, distance, closest approach.
+  if map_show.markers then mapTarget(node, px_at, label, lk) end
 
   -- ---- maneuver-node planning (KSP) --------------------------------------
   -- Plan a burn and watch the resulting orbit — and where it drops you into
@@ -1276,6 +1278,19 @@ end
 
 function isOpen() return map_view end
 
+-- The target's marks, drawn by scripts/targeting.lua in this pass (global: no
+-- upvalue for update_map3d; looked up again if the library respawns).
+TGT_MAP = { ref = nil, miss = -10.0 }
+function mapTarget(node, px_at, label, lk)
+  local H = TGT_MAP
+  if not (H.ref and H.ref.valid ~= false) then
+    if (time or 0) - H.miss < 2.0 then return end
+    H.ref = findScript and findScript("targeting") or nil
+    if not H.ref then H.miss = time or 0 return end
+  end
+  if H.ref.drawMap then pcall(H.ref.drawMap, node, px_at, label, lk) end
+end
+
 -- The planned burn's WORLD direction, or nil when there is no burn to point
 -- at. `recompute_trajectories` caches it because it only knows the direction
 -- while the map is doing its walk, and the SAS that wants it runs in flight —
@@ -1309,6 +1324,10 @@ cov_body = nil   -- set by update_map3d: the world the coverage tint is drawn on
 -- world, one small disc per sample lying on the ground — teal where the ground
 -- network (station + relay beacons) reaches, blue where only a satellite does,
 -- a faint red where nothing does. Depth-tested, so the far side hides.
+-- HELD ground (linked for 75 % of the sustained window: what the sky goals
+-- count) wears a pale gold ring round its disc; the biggest patch of ground
+-- NOT held is ringed in amber, with a marker at its centre — where the next
+-- relay satellite should pass over.
 local function map_coverage(net, px_at)
   if not (cov_body and net.coverageGrid) then return nil end
   local g = net.coverageGrid(cov_body)
@@ -1318,6 +1337,10 @@ local function map_coverage(net, px_at)
   local spot = (b.radius or 100) * math.sqrt(4 * math.pi / math.max(1, n)) * 0.28
   local was = draw.depthTest()
   draw.depthTest(true)
+  local held = g.held
+  local gap = g.gaps and g.gaps.clusters and g.gaps.clusters[1]
+  local in_gap = {}
+  if gap and gap.idx and held then for _, i in ipairs(gap.idx) do in_gap[i] = true end end
   for i, u in ipairs(g.dirs) do
     local r = (g.r and g.r[i] or b.radius) + 2
     local x, y, z = b.x + u[1] * r, b.y + u[2] * r, b.z + u[3] * r
@@ -1329,9 +1352,82 @@ local function map_coverage(net, px_at)
     else
       draw.disc(x, y, z, u[1], u[2], u[3], 0, spot * 0.45, 1.0, 0.35, 0.3, 0.35)
     end
+    if held and held[i] then
+      draw.disc(x, y, z, u[1], u[2], u[3], spot * 1.12, spot * 1.32, 1.0, 0.86, 0.45, 0.8)
+    elseif in_gap[i] then
+      draw.disc(x, y, z, u[1], u[2], u[3], spot * 1.12, spot * 1.32, 1.0, 0.62, 0.18, 0.75)
+    end
+  end
+  -- the biggest gap's centre: a ring the size of the patch and a cross
+  if gap and held and gap.n >= 2 then
+    local R = (b.radius or 100) + 3
+    local ux, uy, uz = gap.x, gap.y, gap.z
+    local ang = math.acos(math.max(-1, 1 - 2 * gap.n / math.max(1, n)))
+    local cx, cy, cz = b.x + ux * R * math.cos(ang), b.y + uy * R * math.cos(ang), b.z + uz * R * math.cos(ang)
+    draw.ring(cx, cy, cz, ux, uy, uz, R * math.sin(ang), 1.0, 0.62, 0.18, 0.9)
+    local px, py, pz = b.x + ux * R, b.y + uy * R, b.z + uz * R
+    local s = spot * 1.6
+    -- two strokes across the ground at the centre
+    local ax, ay, az = 1 - ux * ux, -ux * uy, -ux * uz
+    if ax * ax + ay * ay + az * az < 1e-4 then ax, ay, az = -uy * ux, 1 - uy * uy, -uy * uz end
+    local al = math.sqrt(ax * ax + ay * ay + az * az)
+    ax, ay, az = ax / al, ay / al, az / al
+    local bx2, by2, bz2 = uy * az - uz * ay, uz * ax - ux * az, ux * ay - uy * ax
+    draw.line(px - ax * s, py - ay * s, pz - az * s, px + ax * s, py + ay * s, pz + az * s, 1.0, 0.62, 0.18, 1)
+    draw.line(px - bx2 * s, py - by2 * s, pz - bz2 * s, px + bx2 * s, py + by2 * s, pz + bz2 * s, 1.0, 0.62, 0.18, 1)
   end
   draw.depthTest(was and true or false)
   return g
+end
+
+-- THE RELAY SATELLITES round the coverage world (comms.relaySats): each one's
+-- FOOTPRINT — the ground that can hear it, a ring on the surface (blue with a
+-- path home, red without) — and, from the satellite, its hop home drawn
+-- solid, or a red cross and "NO LINK HOME" when it has none. `at` moves a
+-- live craft's end onto the craft.
+local function map_relay_sats(net, px_at, label, lk, at)
+  if not (cov_body and net.relaySats) then return end
+  local b = space.body(cov_body)
+  if not b then return end
+  local was = draw.depthTest()
+  for _, e in ipairs(net.relaySats(cov_body)) do
+    local x, y, z = at(e.id, e.x, e.y, e.z)
+    local ux, uy, uz = x - b.x, y - b.y, z - b.z
+    local l = math.sqrt(ux * ux + uy * uy + uz * uz)
+    if l > 1e-6 then
+      ux, uy, uz = ux / l, uy / l, uz / l
+      local R = (b.radius or 100) + 3
+      local f = e.foot or 0
+      local cr, cg, cb = 0.35, 0.62, 1.0
+      if not e.linked then cr, cg, cb = 1.0, 0.35, 0.3 end
+      if f > 0.01 then
+        draw.depthTest(true)
+        local c = math.cos(f)
+        draw.ring(b.x + ux * R * c, b.y + uy * R * c, b.z + uz * R * c, ux, uy, uz, R * math.sin(f), cr, cg, cb, 0.85)
+        -- the point under it
+        draw.disc(b.x + ux * R, b.y + uy * R, b.z + uz * R, ux, uy, uz, 0, px_at(x, y, z, 3), cr, cg, cb, 0.9)
+      end
+      draw.depthTest(false)
+      if e.linked and e.px then
+        local ex, ey, ez = at(e.parent, e.px, e.py, e.pz)
+        draw.line(x, y, z, ex, ey, ez, 0.35, 0.95, 0.6, 1)
+      elseif not e.linked then
+        local s = px_at(x, y, z, 9)
+        draw.line(x - s, y - s, z, x + s, y + s, z, 1.0, 0.3, 0.25, 1)
+        draw.line(x - s, y + s, z, x + s, y - s, z, 1.0, 0.3, 0.25, 1)
+        if label and camera and camera.worldToScreen then
+          local sx, sy, _, on = camera.worldToScreen(x, y, z)
+          if on then label(sx, sy + 18 * (lk or 1), "NO LINK HOME", 11 * (lk or 1)) end
+        end
+      end
+    end
+  end
+  draw.depthTest(was and true or false)
+end
+
+local function mmss(s)
+  s = math.max(0, math.floor((s or 0) + 0.5))
+  return string.format("%d:%02d", math.floor(s / 60), s % 60)
 end
 
 function mapComms(subject, px_at, label, lk, show)
@@ -1366,12 +1462,35 @@ function mapComms(subject, px_at, label, lk, show)
     depth(true)
   end
   local cov = show.links and map_coverage(net, px_at) or nil
+  if show.links then map_relay_sats(net, px_at, label, lk, at) end
   if cov and label and camera and camera.screenSize then
     local sw, sh = camera.screenSize()
     if sw then
+      local held = ""
+      if cov.held then
+        held = cov.full and string.format("  ·  held %d%% over a %s window", math.floor(cov.sustained * 100 + 1e-6), mmss(cov.window))
+          or string.format("  ·  held %d%% · %s / %s window", math.floor(cov.sustained * 100 + 1e-6),
+            mmss(math.min(cov.heldS or 0, cov.window or 0)), mmss(cov.window))
+      end
       label(sw * 0.5, (sh or 720) - 64 * (lk or 1), string.format(
-        "%s coverage  ·  ground network %d%%  ·  with satellites %d%%   (teal ground · blue sky · red none)",
-        cov_body, math.floor(cov.ground * 100 + 0.5), math.floor(cov.sky * 100 + 0.5)), 13 * (lk or 1))
+        "%s coverage  ·  ground network %d%%  ·  with satellites %d%%%s",
+        cov_body, math.floor(cov.ground * 100 + 0.5), math.floor(cov.sky * 100 + 0.5), held), 13 * (lk or 1))
+      label(sw * 0.5, (sh or 720) - 46 * (lk or 1),
+        "teal ground · blue sky · red none · gold ring held · amber the biggest gap: where the next relay should pass",
+        11 * (lk or 1))
+      local gp = cov.gaps and cov.gaps.clusters and cov.gaps.clusters[1]
+      if gp and cov.held and camera.worldToScreen then
+        local b = space.body(cov_body)
+        if b then
+          local R = (b.radius or 100) + 3
+          local px, py, _, on = camera.worldToScreen(b.x + gp.x * R, b.y + gp.y * R, b.z + gp.z * R)
+          if on then
+            label(px, py - 16 * (lk or 1), string.format("GAP · %d%% of the ground · %d°%s",
+              math.floor(gp.n / math.max(1, #cov.dirs) * 100 + 0.5), math.floor(math.abs(gp.lat) + 0.5),
+              gp.lat >= 0 and "N" or "S"), 11 * (lk or 1))
+          end
+        end
+      end
     end
   end
   -- RELAY BEACONS: a small upright triangle each, teal with a path home,

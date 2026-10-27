@@ -390,7 +390,7 @@ local function prog_guidance(mi, astro, m, g, niche)
   elseif g.kind == "sample" and g.class == "ore" then
     return "Mine some ore.", MINE_HINT
   elseif g.kind == "sample" and g.mat == "geode" then
-    local hint = "Geode pockets sit 7–14 m down. With the Terrain Laser out, a pulsing ring on the ground marks one within 35 m."
+    local hint = "A Star Geode is resonant crystal from the deep rock: dig into a geode pocket 7–20 m down (with the Terrain Laser out, a pulsing ring on the ground marks one within 35 m), or cut resonant crystal 3 m or more under the surface."
     local mf = ref("mineral_field")
     local list = (mf and mf.pockets and rhome) and mf.pockets(rhome) or nil
     local at = list and nearest_of(astro, rhome, list, function(p) return (p.left or 1) <= 0 end)
@@ -431,9 +431,23 @@ local function prog_guidance(mi, astro, m, g, niche)
     return "Put a relay satellite in orbit.",
       string.format("A probe core, a Relay Dish and power, in any stable orbit of %s.", home or "home")
   elseif g.kind == "skycov" then
-    return "Close the gaps in the sky.", string.format(
-      "%sSatellites spaced evenly round the orbit cover the sky between them; three in one plane cover most of it.",
-      net.api and (pct(net.sky) .. " of the sky is covered. ") or "")
+    -- the stage counts ground HELD over a full orbit (missions progNet.skyHeld:
+    -- "47% held · 3:10 / 5:00 window"), not the live snapshot
+    local now_s = ""
+    if net.api and net.skyHeld then
+      now_s = string.format("%s (%s in the network right now). ", net.skyHeld, pct(net.sky))
+    elseif net.api then
+      now_s = pct(net.sky) .. " of the planet is in the network. "
+    end
+    local gap = net.gaps and net.gaps.clusters and net.gaps.clusters[1]
+    local gap_s = ""
+    if gap and (gap.n or 0) >= 2 then
+      gap_s = string.format(" The biggest gap is round %d°%s: the map (M, then 4) rings it in amber.",
+        math.floor(math.abs(gap.lat or 0) + 0.5), (gap.lat or 0) >= 0 and "N" or "S")
+    end
+    return "Grow the network with relay satellites.", string.format(
+      "%sGround counts once it has a link home three quarters of the time over a whole orbit. Every relay in orbit with a link home covers the ground beneath it; two or three spaced round one orbit hold most of the planet.%s",
+      now_s, gap_s)
   elseif g.kind == "linked" and g.class == "moon" then
     return "Link a moon to the network.", "A relay on or around a moon, in sight of one of yours."
   elseif g.kind == "linked" then

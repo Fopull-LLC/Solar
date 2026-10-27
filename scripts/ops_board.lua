@@ -231,8 +231,9 @@ local function detail(mi, co, c)
     local net = mi.progNet
     if net and (m.id == "relay_net" or m.id == "sky" or m.id == "beyond") then
       rows[#rows + 1] = wrapped("net", "panel/cellMuted", net.api and string.format(
-        "Network: ground %d%% · sky %d%% · relays in orbit %d · worlds linked %d",
-        math.floor((net.ground or 0) * 100), math.floor((net.sky or 0) * 100), net.orbit or 0, #(net.linked or {}))
+        "Network: ground %d%% · sky %d%%%s · relays in orbit %d · worlds linked %d",
+        math.floor((net.ground or 0) * 100), math.floor((net.sky or 0) * 100),
+        net.skyHeld and (" (" .. net.skyHeld .. ")") or "", net.orbit or 0, #(net.linked or {}))
         or "Network: not reporting yet.")
     end
     return rows

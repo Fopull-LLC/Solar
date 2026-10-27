@@ -893,8 +893,11 @@ function fleetOffline()
     if type(rec) == "table" and not live_of(fid) then
       local b = rec.body and space.body(rec.body)
       if b then
+        -- (the velocity, the game time it was written and whether it is
+        -- down: comms carries a craft in flight along its conic to now)
         out[#out + 1] = { fid = fid, name = rec.name, parts = rec.parts, charge = rec.charge,
-                          wx = b.x + (rec.x or 0), wy = b.y + (rec.y or 0), wz = b.z + (rec.z or 0) }
+                          wx = b.x + (rec.x or 0), wy = b.y + (rec.y or 0), wz = b.z + (rec.z or 0),
+                          vx = rec.vx, vy = rec.vy, vz = rec.vz, stime = rec.stime, landed = rec.landed == true }
       end
     end
   end

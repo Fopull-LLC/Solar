@@ -236,6 +236,20 @@ COMMS = {
   -- when that receiver could link straight to a relay with a path home (or
   -- to the ground station).
   coverSamples = 200, coverRx = 100, coverLift = 1.0,
+  -- SUSTAINED COVERAGE (the sky goals; comms keeps the history, the rules
+  -- are below under "sustained coverage"). A ground sample is HELD when it
+  -- had a link home for at least `hold` of the window. The window is the
+  -- longest orbital period among the connected relay satellites round the
+  -- world, never under `minWindow` and never over `maxWindow` game seconds
+  -- (the clamp: a relay parked far out — a period of hours — would otherwise
+  -- ask the player to watch the map for hours; half an hour of game time is
+  -- about two minutes at ×10 warp). Snapshots are taken on a game-time grid
+  -- at least `perWindow` to a window and `perPeriod` to the FASTEST relay's
+  -- orbit, but never more than `maxPerWindow` (cost) or closer than `minStep`
+  -- seconds; `retain` windows of history are kept, so a window that grows
+  -- back (a satellite lost, then replaced) finds its history still there.
+  sustain = { hold = 0.75, minWindow = 300, maxWindow = 1800, perWindow = 48, perPeriod = 24,
+              maxPerWindow = 240, minStep = 1.0, retain = 2.0 },
 }
 
 -- The grazing allowance for a world of radius r (see COMMS.graze).
@@ -1552,6 +1566,341 @@ function groundReach(r, mast, lift, rx, power)
     if ok(mid) then lo = mid else hi = mid end
   end
   return lo
+end
+
+-- ── sustained coverage (pure; comms.lua keeps one history per world) ────────
+--
+-- A snapshot of coverage is a lie while satellites move: a lucky instant with
+-- three relays bunched over the right hemisphere reads 80 % and then 30 %
+-- ten minutes later. The sky goals ask instead how much of the ground was
+-- HELD: linked for at least COMMS.sustain.hold of a rolling window, the
+-- window being one orbit of the highest relay satellite (see COMMS.sustain).
+--
+-- THE HISTORY (`tr`): snapshots { t, w, f } in time order — `t` the game
+-- time it was taken (space.time()), `w` the seconds it stands for (the grid
+-- step, or the share of a span it was picked to represent under heavy warp),
+-- `f` the per-sample flags (1 linked, 0 not; a flags table is never written
+-- after it is added, so one table may be shared by many snapshots). Each
+-- sample's linked fraction is the time-weighted mean of its flags over the
+-- window; nothing in the history is about WHICH relay linked it, so a
+-- satellite lost or added never wipes it — it is what the ground experienced.
+
+-- The period (s) of the orbit a craft is on round a mass mu, from its state
+-- relative to that mass; nil on an escape (or no mass).
+function orbitPeriod(x, y, z, vx, vy, vz, mu)
+  if not mu or mu <= 0 then return nil end
+  local r = math.sqrt(x * x + y * y + z * z)
+  if r < 1e-6 then return nil end
+  local v2 = vx * vx + vy * vy + vz * vz
+  local inv_a = 2 / r - v2 / mu
+  if inv_a <= 1e-15 then return nil end
+  local a = 1 / inv_a
+  return 2 * math.pi * math.sqrt(a * a * a / mu), a
+end
+
+-- The window and the grid step from the periods of the connected relay
+-- satellites round the world (any order; empty = none up). S defaults to
+-- COMMS.sustain. Returns W, h (game seconds).
+function sustainWindow(periods, S)
+  S = S or COMMS.sustain
+  local maxP, minP = 0, math.huge
+  for _, p in ipairs(periods or {}) do
+    if p and p > 0 and p == p then
+      if p > maxP then maxP = p end
+      if p < minP then minP = p end
+    end
+  end
+  local W = math.max(maxP, S.minWindow)
+  if W > S.maxWindow then W = S.maxWindow end
+  local h = W / S.perWindow
+  if minP < math.huge then h = math.min(h, minP / S.perPeriod) end
+  h = math.max(h, W / S.maxPerWindow, S.minStep)
+  return W, h
+end
+
+-- Which instants to take now. `last` = the game time of the last snapshot
+-- (nil: none yet), `now` = the game time now, `h` the step, `W` the window,
+-- `budget` the most instants this call may take. Returns the list
+-- { { t, w }… } (oldest first) and the new `last`.
+--
+-- Normally that is every grid instant since `last`, each standing for `h`.
+-- Under warp the clock can run past many of them in one frame (at ×1000 a
+-- 60 fps frame is 16 s of game time; at ×10000 it is minutes — whole orbits
+-- of a low satellite). Instants older than a window would be forgotten at
+-- once, so they are skipped; if more are due than the budget allows, the
+-- budget's worth are spread EVENLY over the span due, each standing for its
+-- share of it, so the fraction stays an honest time average of the orbit
+-- rather than a few bunched moments.
+function sustainPlan(last, now, h, W, budget)
+  budget = math.max(1, math.floor(budget or 4))
+  if not last then return { { t = now, w = h } }, now end
+  if now - last < h then return {}, last end
+  local k = math.floor((now - last) / h)
+  local stop = last + k * h
+  local start = last
+  if stop - start > W then start = stop - W end
+  local span = stop - start
+  local m = math.floor(span / h + 0.5)
+  local out = {}
+  if m <= budget then
+    for j = 1, m do out[#out + 1] = { t = stop - (m - j) * h, w = h } end
+  else
+    local w = span / budget
+    for j = 1, budget do out[#out + 1] = { t = start + w * j, w = w } end
+  end
+  return out, stop
+end
+
+function sustainNew(n)
+  return { n = n or COMMS.coverSamples, snaps = {} }
+end
+
+-- Add a snapshot (taken at game time t, standing for w seconds). A snapshot
+-- at or before the last one's time is ignored (the history stays ordered).
+function sustainAdd(tr, t, w, flags)
+  local s = tr.snaps
+  local last = s[#s]
+  if last and t <= last.t + 1e-9 then return false end
+  s[#s + 1] = { t = t, w = w, f = flags }
+  tr.stats = nil
+  return true
+end
+
+-- Forget snapshots that ended before game time `from`.
+function sustainPrune(tr, from)
+  local s = tr.snaps
+  local k = 0
+  while s[k + 1] and s[k + 1].t <= from do k = k + 1 end
+  if k > 0 then
+    local out = {}
+    for i = k + 1, #s do out[#out + 1] = s[i] end
+    tr.snaps = out
+    tr.stats = nil
+  end
+end
+
+-- Move the whole history by dt (the game clock restarted: a scene load).
+function sustainShift(tr, dt)
+  for _, sn in ipairs(tr.snaps) do sn.t = sn.t + dt end
+  tr.stats = nil
+end
+
+-- The numbers at game time `now` over a window W:
+--   sustained  0..1 the share of samples held (linked ≥ `hold` of the window)
+--   held       seconds of history inside the window (W once it is full)
+--   full       held reached the window: a goal may latch
+--   frac[i]    each sample's linked fraction; ok[i] true when it is held
+--   count      snapshots in the window
+-- The history may be shorter than the window (just started): the fraction is
+-- over what there is, and `full` says it is not a verdict yet.
+function sustainStats(tr, now, W, hold)
+  hold = hold or COMMS.sustain.hold
+  local n = tr.n
+  local from = now - W
+  local wsum, held, count = 0, 0, 0
+  local acc = {}
+  for i = 1, n do acc[i] = 0 end
+  for _, sn in ipairs(tr.snaps) do
+    if sn.t > from and sn.t <= now + 1e-9 then
+      local w = sn.w
+      local inside = sn.t - from
+      if w > inside then w = inside end
+      if w > 0 then
+        wsum = wsum + w
+        count = count + 1
+        local f = sn.f
+        for i = 1, n do
+          if (f[i] or 0) > 0 then acc[i] = acc[i] + w end
+        end
+      end
+    end
+  end
+  held = math.min(W, wsum)
+  local frac, ok, nok = {}, {}, 0
+  for i = 1, n do
+    local v = wsum > 0 and acc[i] / wsum or 0
+    frac[i] = v
+    ok[i] = wsum > 0 and v >= hold - 1e-9
+    if ok[i] then nok = nok + 1 end
+  end
+  return { sustained = n > 0 and nok / n or 0, held = held, window = W, full = held >= W - 1e-6,
+           frac = frac, ok = ok, count = count, hold = hold }
+end
+
+-- Does a sustained goal of `frac` latch on these stats? Only on a full window.
+function sustainMeets(st, frac)
+  return st ~= nil and st.full == true and (st.sustained or 0) >= frac - 1e-6
+end
+
+-- THE SAVE: one string per world, "S1|n|age,w,bits;…" — ages and weights in
+-- tenths of a second before the moment it was written, the flags 6 to a
+-- character. The game clock restarts every session, so times are kept as
+-- ages and set back against the clock that reads them. ~40 characters a
+-- snapshot; 96 snapshots (two 5-minute windows) is under 4 kB.
+local SB64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+local function bits_enc(f, n)
+  local out = {}
+  for i = 1, n, 6 do
+    local v = 0
+    for k = 0, 5 do
+      if i + k <= n and (f[i + k] or 0) > 0 then v = v + 2 ^ k end
+    end
+    out[#out + 1] = SB64:sub(v + 1, v + 1)
+  end
+  return table.concat(out)
+end
+local function bits_dec(s, n)
+  local f = {}
+  for c = 1, #s do
+    local v = SB64:find(s:sub(c, c), 1, true)
+    if not v then return nil end
+    v = v - 1
+    for k = 0, 5 do
+      local i = (c - 1) * 6 + k + 1
+      if i <= n then f[i] = (math.floor(v / 2 ^ k) % 2 == 1) and 1 or 0 end
+    end
+  end
+  if #f ~= n then return nil end
+  return f
+end
+
+function sustainEncode(tr, now)
+  local parts = { "S1", tostring(tr.n) }
+  local body = {}
+  local last_f, last_s = nil, nil
+  for _, sn in ipairs(tr.snaps) do
+    local s
+    if sn.f == last_f then s = last_s else s = bits_enc(sn.f, tr.n); last_f, last_s = sn.f, s end
+    body[#body + 1] = string.format("%d,%d,%s", math.floor((now - sn.t) * 10 + 0.5), math.floor(sn.w * 10 + 0.5), s)
+  end
+  parts[#parts + 1] = table.concat(body, ";")
+  return table.concat(parts, "|")
+end
+
+-- nil when the string isn't a history (or is for another grid size).
+function sustainDecode(str, now, n)
+  if type(str) ~= "string" then return nil end
+  local ver, ns, body = str:match("^(S1)|(%d+)|(.*)$")
+  if not ver then return nil end
+  ns = tonumber(ns)
+  if n and ns ~= n then return nil end
+  local tr = sustainNew(ns)
+  local cache = {}
+  for age, w, bits in body:gmatch("(%-?%d+),(%d+),([^;]+)") do
+    local f = cache[bits]
+    if not f then f = bits_dec(bits, ns); cache[bits] = f end
+    if not f then return nil end
+    sustainAdd(tr, now - tonumber(age) / 10, tonumber(w) / 10, f)
+  end
+  return tr
+end
+
+-- THE GAPS: the samples not held, gathered into patches of neighbouring
+-- ground (two samples are neighbours within ~1.7 grid spacings). Returns
+-- { n, share, idx = { i… }, clusters = { { n, x,y,z (unit, the patch's
+-- centre), lat (deg, +y up), lon (deg), idx = { its samples } }… } biggest
+-- first, at most `top` }.
+-- Where the next satellite should pass over is the biggest patch's centre.
+local nbr_cache = {}
+local function grid_neighbours(dirs)
+  local n = #dirs
+  local nb = nbr_cache[n]
+  if nb and nb.dirs == dirs then return nb end
+  nb = { dirs = dirs }
+  local lim = math.cos(math.sqrt(4 * math.pi / math.max(1, n)) * 1.7)
+  for i = 1, n do
+    local a, l = dirs[i], {}
+    for j = 1, n do
+      if j ~= i then
+        local b = dirs[j]
+        if a[1] * b[1] + a[2] * b[2] + a[3] * b[3] >= lim then l[#l + 1] = j end
+      end
+    end
+    nb[i] = l
+  end
+  nbr_cache[n] = nb
+  return nb
+end
+
+function sustainGaps(dirs, ok, top)
+  top = top or 3
+  local n = #dirs
+  local idx = {}
+  for i = 1, n do if not ok[i] then idx[#idx + 1] = i end end
+  local out = { n = #idx, share = n > 0 and #idx / n or 0, idx = idx, clusters = {} }
+  if #idx == 0 then return out end
+  local nb = grid_neighbours(dirs)
+  local seen = {}
+  for _, i in ipairs(idx) do
+    if not seen[i] then
+      local q, qi = { i }, 1
+      seen[i] = true
+      local sx, sy, sz, c = 0, 0, 0, 0
+      while q[qi] do
+        local k = q[qi]
+        qi = qi + 1
+        local d = dirs[k]
+        sx, sy, sz, c = sx + d[1], sy + d[2], sz + d[3], c + 1
+        for _, j in ipairs(nb[k]) do
+          if not ok[j] and not seen[j] then seen[j] = true; q[#q + 1] = j end
+        end
+      end
+      local l = math.sqrt(sx * sx + sy * sy + sz * sz)
+      if l < 1e-6 then sx, sy, sz, l = dirs[i][1], dirs[i][2], dirs[i][3], 1 end
+      sx, sy, sz = sx / l, sy / l, sz / l
+      out.clusters[#out.clusters + 1] = { n = c, x = sx, y = sy, z = sz, idx = q,
+        lat = math.deg(math.asin(math.max(-1, math.min(1, sy)))), lon = math.deg(math.atan2(sz, sx)) }
+    end
+  end
+  table.sort(out.clusters, function(a, b) return a.n > b.n end)
+  while #out.clusters > top do out.clusters[#out.clusters] = nil end
+  return out
+end
+
+-- THE FOOTPRINT: how far round a world of radius R (central angle, radians)
+-- a probe receiver (power rx, `lift` m up) hears a relay of `power` at
+-- distance d from the world's centre: the smaller of the link budget's reach
+-- and the horizon, with the same occlusion and grazing as `hears`. The map
+-- draws it as a ring on the ground.
+function footprintAngle(R, d, power, rx, lift)
+  rx, lift = rx or COMMS.coverRx, lift or COMMS.coverLift
+  local range = linkRange(rx, power)
+  if range <= 0 or R <= 0 or d <= R then return 0 end
+  local body = { { name = "w", x = 0, y = 0, z = 0, radius = R } }
+  local rr = R + lift
+  local function ok(th)
+    local px, py = math.sin(th) * rr, math.cos(th) * rr
+    local dd = math.sqrt(px * px + (py - d) ^ 2)
+    if dd >= range then return false end
+    return segmentBlocked(px, py, 0, 0, d, 0, body, COMMS.occlude, nil, true) == nil
+  end
+  if not ok(0) then return 0 end
+  local lo, hi = 0, math.pi
+  if ok(hi) then return hi end
+  for _ = 1, 40 do
+    local mid = (lo + hi) * 0.5
+    if ok(mid) then lo = mid else hi = mid end
+  end
+  return lo
+end
+
+-- One instant's flags: 1 where a receiver on the ground under each grid
+-- direction hears one of `relays` (each { x,y,z, power, agl }, already known
+-- to have a path home), else 0. `radii[i]` is the ground under direction i
+-- (nil: `R`). Returns the flags and how many are linked.
+function coverFlags(bx, by, bz, R, grid, radii, relays, bodies, rx, lift)
+  rx, lift = rx or COMMS.coverRx, lift or COMMS.coverLift
+  local flags, n = {}, 0
+  for i, u in ipairs(grid) do
+    local r = ((radii and radii[i]) or R) + lift
+    local f = 0
+    if #relays > 0 and hears(bx + u[1] * r, by + u[2] * r, bz + u[3] * r, rx, relays, bodies) > 0 then
+      f = 1
+      n = n + 1
+    end
+    flags[i] = f
+  end
+  return flags, n
 end
 
 -- Signal bars (0–4) from a path strength.

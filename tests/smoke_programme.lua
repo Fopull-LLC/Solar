@@ -11,8 +11,8 @@
 --     coverage stage by stage, pay each stage ONCE, latch through a dip, and
 --     grant the research they promise; the Relay Dish stays locked behind the
 --     milestone and opens with it;
---   * Eyes in the Sky and Beyond tick off orbit relays, sky coverage and
---     linked moons / planets;
+--   * Eyes in the Sky and Beyond tick off orbit relays, sky coverage HELD over
+--     a full window (never a snapshot) and linked moons / planets;
 --   * everything survives a reload (fresh script, same save) without paying
 --     twice, and a comms script that throws never takes the game down.
 --
@@ -257,7 +257,10 @@ check("…and say why", (mi.progGoalLines("relay_net")[1] or ""):find("not repor
   mi.progGoalLines("relay_net")[1])
 local NET = { ground = 0.05, sky = 0, orbit = 0, linked = {}, calls = 0 }
 local comms = { valid = true }
-function comms.coverage(b) NET.calls = NET.calls + 1; NET.asked = b; return { ground = NET.ground, sky = NET.sky } end
+function comms.coverage(b)
+  NET.calls = NET.calls + 1; NET.asked = b
+  return { ground = NET.ground, sky = NET.sky, sustained = NET.sustained, window = NET.window, held = NET.held, full = NET.full }
+end
 function comms.relayStats() return { ground = { Umunquo = 3 }, orbit = { Umunquo = NET.orbit }, total = 3 + NET.orbit } end
 function comms.linkedBodies() return NET.linked end
 local hooked = nil
@@ -319,12 +322,28 @@ NET.orbit = 1
 NET.sky = 0.4
 second()
 check("one relay in orbit ticks the first sky goal", ticked("sky", 1) and not ticked("sky", 2))
-NET.sky = 0.55
+-- SUSTAINED: the sky stages count ground HELD over a full window, not the
+-- snapshot (comms coverage().sustained / full; a comms without it: the snapshot)
+NET.sky, NET.sustained, NET.window, NET.held, NET.full = 0.62, 0.30, 300, 300, true
 second()
-check("satellites growing the network to 55% tick the half-planet stage", ticked("sky", 2) and not ticked("sky", 3))
-NET.sky = 0.81
+check("a 62% snapshot with only 30% held does not tick the half-planet stage", not ticked("sky", 2))
+local sl = mi.progGoalLines("sky")[2] or ""
+check("…and the line shows what is held, and the live number", sl:find("30% held · 5:00 window", 1, true) ~= nil
+  and sl:find("62% now", 1, true) ~= nil, sl)
+NET.sustained, NET.held, NET.full = 0.55, 190, false
 second()
-check("80% (ground + satellites) completes Eyes in the Sky", state_of("sky") == "done")
+check("55% held over only part of the window does not tick it yet", not ticked("sky", 2))
+sl = mi.progGoalLines("sky")[2] or ""
+check("…and the line shows the window filling", sl:find("55% held · 3:10 / 5:00 window", 1, true) ~= nil, sl)
+check("progNet publishes the sustained numbers", mi.progNet.sustained == 0.55 and mi.progNet.window == 300
+  and mi.progNet.held == 190 and mi.progNet.full == false)
+NET.held, NET.full = 300, true
+second()
+check("satellites holding 55% over a full window tick the half-planet stage", ticked("sky", 2) and not ticked("sky", 3))
+NET.sky, NET.sustained = 0.81, 0.81
+second()
+check("80% held (ground + satellites) completes Eyes in the Sky", state_of("sky") == "done")
+NET.sustained, NET.window, NET.held, NET.full = nil, nil, nil, nil
 check("…granting the Deep Space Dish", rs.isUnlocked("dishL"))
 check("…and opens Beyond", state_of("beyond") == "active")
 NET.linked = { "Umunquo" }

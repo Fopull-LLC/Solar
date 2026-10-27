@@ -20,6 +20,18 @@
 --                          false until that world's ground under the grid has been measured
 --                          once (its terrain resident; then kept in the save) — before that the
 --                          samples sit on the nominal sphere and the number can still shift.
+--                          SUSTAINED (the sky goals; see "SUSTAINED coverage" below):
+--                            sustained 0..1  the share of samples linked for ≥ `hold` (75 %)
+--                                            of the window — satellites included
+--                            window    s     one orbit of the highest connected relay
+--                                            satellite round it, held between 5 and 30 min
+--                            held      s     game seconds of history inside the window
+--                            full      bool  held has reached the window: a goal may latch
+--                            satellites n    connected relay satellites round it
+--                            gaps      { n, share, clusters = { { n, x,y,z, lat, lon }… } }:
+--                                            the samples NOT held, in patches, biggest first
+--   net.relaySats(body)    the relay satellites round it, for the map: { id, name, x,y,z,
+--                          linked, parent, px,py,pz (next hop home), why, foot (rad), period }
 --   net.linkedBodies()     { "Vever", "Iru", … } sorted: bodies with a relay on or round them
 --                          (or the ground station) that has a path home.
 --   net.networkVersion     a number that changes whenever the network CHANGES: a beacon placed
@@ -47,7 +59,8 @@
 --   net.beaconNear(x, y, z, r)         the nearest beacon within r m → entry, distance
 --   net.previewLinks(gx, gy, gz)       what a beacon planted here would link to:
 --                                      { { name, strength (path home), hop, home, dist, x,y,z }… }, connected
---   net.coverageGrid(body)             the map tint: { dirs = {{ux,uy,uz}…}, r = {…}, cov = {2|1|0…} }
+--   net.coverageGrid(body)             the map tint: { dirs = {{ux,uy,uz}…}, r = {…}, cov = {2|1|0…},
+--                                        held = {bool…}, frac = {0..1…}, gaps, sustained, window, heldS, full }
 --
 -- ── THE SOLVE ───────────────────────────────────────────────────────────────
 -- A few times a second this gathers every transmitter in the save:
@@ -86,6 +99,18 @@ defaults = {
   cover_min = 0.5,
   --@range 2 60 --@units s
   cover_max = 10.0,
+  --@header Sustained coverage
+  -- The most coverage snapshots taken in one frame, over every world (each
+  -- is 200 samples heard against the relays): under heavy warp the instants
+  -- due past this are spread evenly over the span instead.
+  --@range 1 32
+  sustain_budget = 4,
+  -- Seconds between writes of the history into the save.
+  --@range 2 120 --@units s
+  sustain_save = 10.0,
+  -- A world nobody has asked about for this long stops being tracked.
+  --@range 30 3600 --@units s
+  sustain_idle = 300.0,
 }
 
 -- The clock, as of this script's last frame. Not `time` directly: these
@@ -393,6 +418,16 @@ end
 
 local function finite(v) return type(v) == "number" and v == v and v > -math.huge and v < math.huge end
 
+-- GAME time (space.time(): on the rails, warp included; it starts again from
+-- 0 every session). What the sustained coverage history runs on — `time`
+-- is the frame clock, and under warp the worlds move a hundred times faster
+-- than it.
+local function game_now()
+  local t = space and space.time and space.time()
+  if type(t) == "number" and t == t then return t end
+  return now()
+end
+
 -- The world a point belongs to (the smallest sphere of influence holding it),
 -- from the same read.
 local function frame_of(x, y, z, bodies)
@@ -442,6 +477,7 @@ local function solve()
   local bodies = space.bodies() or {}
   local by = body_index(bodies)
   local list = {}
+  local gt = game_now()
   local sx, sy, sz = station()
   if sx and finite(sx) and finite(sy) and finite(sz) then
     station_pos = { x = sx, y = sy, z = sz }
@@ -482,6 +518,11 @@ local function solve()
           local nd = pin({ id = n.id, name = v.craftName or n.name or "Vessel", x = x, y = y, z = z,
                            any = cn.any or 0, relay = cn.relay or 0, rate = cn.rate or 1, silent = cn.silent,
                            craft = true }, by, bodies)
+          -- its velocity in its world's frame (what space.elements reads, and
+          -- what the fleet record keeps), stamped with the game time: the
+          -- sustained coverage carries a relay along its conic from here
+          local vx, vy, vz = n.vx, n.vy, n.vz
+          if finite(vx) and finite(vy) and finite(vz) then nd.vx, nd.vy, nd.vz, nd.t0 = vx, vy, vz, gt end
           list[#list + 1] = nd
         end
       end
@@ -500,6 +541,17 @@ local function solve()
       if finite(r.wx) and finite(r.wy) and finite(r.wz) then
         local p = pin({ x = r.wx, y = r.wy, z = r.wz }, oby, ob, r.body)
         r.frame, r.rx, r.ry, r.rz = p.frame, p.rx, p.ry, p.rz
+        -- In flight, a record is where the craft WAS when it was written
+        -- (`stime`): carried along its conic to now, like flight_ops does
+        -- when it rebuilds it (a fleetOffline that hands the velocity on).
+        local fb = p.frame and oby[p.frame]
+        if not r.landed and finite(r.vx) and finite(r.vy) and finite(r.vz) and fb and (fb.mu or 0) > 0 then
+          local dt = (type(r.stime) == "number") and (gt - r.stime) or 0
+          if dt > 0 and dt < 1e7 then
+            r.rx, r.ry, r.rz, r.vx, r.vy, r.vz = E.kepler(r.rx, r.ry, r.rz, r.vx, r.vy, r.vz, fb.mu, dt)
+          end
+          r.t0 = gt
+        end
       end
     end
   end
@@ -512,7 +564,14 @@ local function solve()
         local nd = { id = "f:" .. tostring(r.fid), name = r.name or "Vessel", x = r.wx, y = r.wy, z = r.wz,
                      any = ant.any, relay = ant.relay, rate = ant.rate, offline = true, craft = true,
                      frame = r.frame, rx = r.rx, ry = r.ry, rz = r.rz,
+                     vx = r.t0 and r.vx or nil, vy = r.t0 and r.vy or nil, vz = r.t0 and r.vz or nil, t0 = r.t0,
                      silent = (any.n == 0) and "no antenna aboard" or (not powered and "no power for its radio") or nil }
+        -- (carried on from where the record was read two seconds ago)
+        local fb = nd.t0 and nd.frame and by[nd.frame]
+        if fb and gt > nd.t0 then
+          nd.rx, nd.ry, nd.rz, nd.vx, nd.vy, nd.vz = E.kepler(nd.rx, nd.ry, nd.rz, nd.vx, nd.vy, nd.vz, fb.mu, gt - nd.t0)
+          nd.t0 = gt
+        end
         nd.x, nd.y, nd.z = place(nd, by)
         list[#list + 1] = nd
       end
@@ -873,18 +932,254 @@ local function cover_of(name)
   return fresh or c
 end
 
+-- ── SUSTAINED coverage (the sky goals) ──────────────────────────────────────
+-- The snapshot above is right for the ground network (beacons don't move) and
+-- wrong for satellites: it is whatever the constellation happens to be over
+-- at that instant. For each world asked about, a history of snapshots is kept
+-- on a GAME-time grid (electronics "sustained coverage": the window is one
+-- orbit of the highest connected relay satellite, 5 to 30 minutes; at least
+-- 48 snapshots a window and 24 an orbit of the fastest relay), and a sample
+-- is HELD when it had a link home for 75 % of the window.
+--
+-- Each instant is solved as it WAS: every relay of the last solve placed at
+-- that game time — a satellite carried along its own conic from where the
+-- solve saw it (electronics.kepler, the rails' own two-body motion), a beacon,
+-- the station and a landed relay where they stand on their world — then the
+-- relays alone solved for a path home, and the 200 samples heard against the
+-- ones that have one. So under warp, when a frame jumps past many grid
+-- instants, they are still taken where the orbit put each relay at each of
+-- them (spread evenly over the span past the frame's budget), never "a
+-- snapshot every 10 real seconds". The worlds themselves are held where they
+-- are this frame (a moon's occlusion of a relay is a frame stale at most).
+--
+-- THE SAVE: the history is kept ("comms.sustain.<world>", every 10 s): a
+-- held network that took ten minutes of warp to prove should not have to be
+-- proved again because the game was saved and loaded. Times are kept as ages
+-- (the game clock restarts at 0 every session; it does not run while the
+-- game is closed), so a loaded history picks up exactly where it stopped.
+local sus = {}        -- body → { tr, last, W, h, nsat, asked, saved, dirty, st, stLast, stW, gaps, static }
+local sus_err = false
+
+local function moving_relay(nd)
+  return nd.craft and nd.vx ~= nil and nd.t0 ~= nil and nd.frame ~= nil and not nd.landed and (nd.relay or 0) > 0
+end
+
+-- The relays of the last solve, placed at game time t (bodies as read now):
+-- only relays (and the station) can carry a path home, so they are solved
+-- alone. Returns the ones with a path home, as `hears` wants them.
+local function linked_relays_at(t, E, bodies, by, body)
+  local rel = {}
+  for _, nd in ipairs(list_last) do
+    local up = nd.home and (nd.power or E.COMMS.station) or (nd.relay or 0)
+    if up > 0 then
+      local c = { id = nd.id, home = nd.home, power = nd.power, any = nd.any, relay = nd.relay, agl = nd.agl,
+                  beacon = nd.beacon, name = nd.name, up = up }
+      c.x, c.y, c.z = place(nd, by)
+      local fb = moving_relay(nd) and by[nd.frame]
+      if fb then
+        local px, py, pz = E.kepler(nd.rx, nd.ry, nd.rz, nd.vx, nd.vy, nd.vz, fb.mu, t - nd.t0)
+        c.x, c.y, c.z = fb.x + px, fb.y + py, fb.z + pz
+      end
+      rel[#rel + 1] = c
+    end
+  end
+  local st = E.solveNetwork(rel, bodies)
+  local rx = E.COMMS.coverRx
+  local out = {}
+  for _, c in ipairs(rel) do
+    local s = st[c.id]
+    if s and s.connected then
+      local d = math.sqrt((c.x - body.x) ^ 2 + (c.y - body.y) ^ 2 + (c.z - body.z) ^ 2)
+      if d - body.radius * 1.2 < E.linkRange(rx, c.up) then
+        out[#out + 1] = { x = c.x, y = c.y, z = c.z, power = c.up, agl = c.agl }
+      end
+    end
+  end
+  return out
+end
+
+-- THE WINDOW: from the connected relay satellites round this world (and
+-- whether anything in the network moves at all).
+local function sustain_window(E, s, name, body)
+  local periods = {}
+  local any_moving = false
+  for _, nd in ipairs(list_last) do
+    if moving_relay(nd) then
+      any_moving = true
+      local st = status[nd.id]
+      if nd.frame == name and st and st.connected then
+        periods[#periods + 1] = E.orbitPeriod(nd.rx, nd.ry, nd.rz, nd.vx, nd.vy, nd.vz, body.mu)
+      end
+    end
+  end
+  local W, h = E.sustainWindow(periods)
+  s.W, s.h, s.nsat = W, h, #periods
+  return W, h, any_moving
+end
+
+local function sustain_of(name)
+  local s = sus[name]
+  if s then s.asked = now(); return s end
+  local E = ref("electronics")
+  if not (E and E.sustainNew and name and space.body(name)) then return nil end
+  local n = E.COMMS.coverSamples
+  local tr = E.sustainDecode(save.get("comms.sustain." .. name), game_now(), n) or E.sustainNew(n)
+  local last = tr.snaps[#tr.snaps]
+  s = { tr = tr, last = last and last.t or nil, asked = now(), saved = now() }
+  sus[name] = s
+  sustain_window(E, s, name, space.body(name))
+  return s
+end
+
+-- Take the snapshots due for one world. Returns how many it took.
+local function sustain_step(name, s, budget)
+  local E = ref("electronics")
+  if not E then return 0 end
+  local T = game_now()
+  -- the clock started again (a scene load kept this script): the history
+  -- moves with it, its ages intact
+  if s.last and T < s.last - 1.0 then
+    E.sustainShift(s.tr, T - s.last)
+    s.last = T
+  end
+  local bodies = space.bodies() or {}
+  local by = body_index(bodies)
+  local body = by[name]
+  if not body then return 0 end
+  local W, h, any_moving = sustain_window(E, s, name, body)
+  local plan, last = E.sustainPlan(s.last, T, h, W, budget)
+  if #plan == 0 then return 0 end
+  local grid = E.surfaceGrid(E.COMMS.coverSamples)
+  -- the ground under the grid as the snapshot has measured it (never
+  -- measured from here: under warp this runs every frame); until it is
+  -- complete, the nominal sphere, as the snapshot does
+  local radii = ground_r[name]
+  local rr = (radii and radii.done) and radii or nil
+  local R = (radii and radii.R) or body.radius
+  for _, p in ipairs(plan) do
+    local flags
+    if not any_moving then
+      -- nothing moves: every instant is this network's one answer
+      local sc = s.static
+      if not (sc and sc.version == networkVersion and sc.done == (rr ~= nil)) then
+        local rel = linked_relays_at(p.t, E, bodies, by, body)
+        sc = { version = networkVersion, done = rr ~= nil,
+               flags = (E.coverFlags(body.x, body.y, body.z, R, grid, rr, rel, bodies)) }
+        s.static = sc
+      end
+      flags = sc.flags
+    else
+      local rel = linked_relays_at(p.t, E, bodies, by, body)
+      flags = E.coverFlags(body.x, body.y, body.z, R, grid, rr, rel, bodies)
+    end
+    E.sustainAdd(s.tr, p.t, p.w, flags)
+  end
+  s.last = last
+  E.sustainPrune(s.tr, last - W * (E.COMMS.sustain.retain or 2))
+  s.dirty = true
+  return #plan
+end
+
+-- The numbers as of the latest snapshot (cached until the next one).
+local function sustain_stats(name)
+  local s = sus[name]
+  local E = ref("electronics")
+  if not (s and s.W and s.last and E) then return nil, s end
+  if s.st and s.stLast == s.last and s.stW == s.W and s.stN == #s.tr.snaps then return s.st, s end
+  local st = E.sustainStats(s.tr, s.last, s.W)
+  s.gaps = E.sustainGaps(E.surfaceGrid(E.COMMS.coverSamples), st.ok)
+  s.st, s.stLast, s.stW, s.stN = st, s.last, s.W, #s.tr.snaps
+  return st, s
+end
+
+local function sustain_update()
+  local E = ref("electronics")
+  if not (E and E.sustainNew) then return end
+  local budget = (params and params.sustain_budget) or 4
+  for name, s in pairs(sus) do
+    if budget > 0 then
+      local ok, n = pcall(sustain_step, name, s, budget)
+      if ok then
+        budget = budget - (n or 0)
+      elseif not sus_err then
+        sus_err = true
+        log("comms: sustained coverage of " .. tostring(name) .. " failed: " .. tostring(n))
+      end
+    end
+    -- kept in the save every few seconds, and when it stops being asked for
+    local idle = now() - (s.asked or 0) > ((params and params.sustain_idle) or 300)
+    if s.dirty and s.last and (idle or now() - (s.saved or 0) >= ((params and params.sustain_save) or 10)) then
+      s.saved, s.dirty = now(), false
+      save.set("comms.sustain." .. name, E.sustainEncode(s.tr, s.last))
+    end
+    if idle and not s.dirty then sus[name] = nil end
+  end
+end
+
+-- Forget a world's history (a probe; a new network that should start clean).
+function sustainReset(name)
+  sus[name] = nil
+  if save.delete then save.delete("comms.sustain." .. tostring(name)) else save.set("comms.sustain." .. tostring(name), false) end
+end
+
 function coverage(name)
   local c = cover_of(name)
-  if not c then return { ground = 0, sky = 0, samples = 0, ready = false } end
-  return { ground = c.ground, sky = c.sky, samples = c.samples, ready = c.radiiDone == true }
+  local E = ref("electronics")
+  sustain_of(name)
+  local st, s = sustain_stats(name)
+  local S = E and E.COMMS.sustain or { minWindow = 300, hold = 0.75 }
+  local out
+  if not c then out = { ground = 0, sky = 0, samples = 0, ready = false }
+  else out = { ground = c.ground, sky = c.sky, samples = c.samples, ready = c.radiiDone == true } end
+  out.sustained = st and st.sustained or 0
+  out.window = (s and s.W) or S.minWindow
+  out.held = st and st.held or 0
+  out.full = st ~= nil and st.full == true
+  out.hold = S.hold
+  out.satellites = (s and s.nsat) or 0
+  local g = s and s.gaps
+  out.gaps = g and { n = g.n, share = g.share, clusters = g.clusters } or nil
+  return out
 end
 
 function coverageGrid(name)
   local c = cover_of(name)
   local E = ref("electronics")
   if not (c and E) then return nil end
+  sustain_of(name)
+  local st, s = sustain_stats(name)
   return { dirs = E.surfaceGrid(E.COMMS.coverSamples), r = c.r, cov = c.flags,
-           ground = c.ground, sky = c.sky, version = c.version }
+           ground = c.ground, sky = c.sky, version = c.version,
+           held = st and st.ok or nil, frac = st and st.frac or nil, sustained = st and st.sustained or 0,
+           window = (s and s.W) or E.COMMS.sustain.minWindow, heldS = st and st.held or 0,
+           full = st ~= nil and st.full == true, gaps = s and s.gaps or nil }
+end
+
+-- The relay satellites round a world, for the map: { { id, name, x,y,z (now),
+-- linked, parent (id), px,py,pz (the next hop toward home, now), why, foot
+-- (the central angle of the ground that hears it, radians), period } }.
+function relaySats(name)
+  local E = ref("electronics")
+  local bodies = space.bodies() or {}
+  local by = body_index(bodies)
+  local body = name and by[name]
+  if not (E and body) then return {} end
+  local out = {}
+  for _, nd in ipairs(list_last) do
+    if nd.craft and (nd.relay or 0) > 0 and not nd.landed and nd.frame == name then
+      local x, y, z = place(nd, by)
+      local st = status[nd.id]
+      local e = { id = nd.id, name = nd.name, x = x, y = y, z = z, linked = st and st.connected or false,
+                  parent = st and st.parent or nil, why = st and st.why or nil }
+      local p = e.parent and nodes[e.parent]
+      if p then e.px, e.py, e.pz = place(p, by) end
+      local d = math.sqrt((x - body.x) ^ 2 + (y - body.y) ^ 2 + (z - body.z) ^ 2)
+      e.foot = E.footprintAngle(body.radius, d, nd.relay)
+      if nd.vx then e.period = E.orbitPeriod(nd.rx, nd.ry, nd.rz, nd.vx, nd.vy, nd.vz, body.mu) end
+      out[#out + 1] = e
+    end
+  end
+  return out
 end
 
 -- ── the frame ───────────────────────────────────────────────────────────────
@@ -904,4 +1199,5 @@ function update(node, dt)
     solve_t = now()
     solve()
   end
+  sustain_update()
 end

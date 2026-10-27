@@ -148,6 +148,10 @@ local function load_script(path, kind, node)
   local chunk = assert(loadfile(path))
   setfenv(chunk, env)
   chunk()
+  -- (this rig moves craft by hand and has no rotation: the petal interleave a
+  -- real capture rolls to is checked in smoke_targeting; here the ports seat
+  -- key to key, so the soft capture → hard dock path runs on a straight push)
+  if env.DOCKM then env.DOCKM.offset = 0 end
   env.params = {}
   for k, v in pairs(env.defaults or {}) do env.params[k] = v end
   script_envs[kind] = script_envs[kind] or {}
@@ -376,9 +380,11 @@ if station.dock.target then
 end
 
 -- 3. Fly it in. Capture on contact, absorption on the following tick.
-for _ = 1, 30 do
-  if lander_node.valid and lander_node.y > 1.30 then
-    lander_node.y = math.max(1.30, lander_node.y - 0.06)
+-- (flush: the station's port centre at 0.94, the lander's 0.14 above its
+-- root, faces 0.28 apart — root at 1.08; the hard dock seats there)
+for _ = 1, 40 do
+  if lander_node.valid and lander_node.y > 1.08 then
+    lander_node.y = math.max(1.08, lander_node.y - 0.06)
   end
   tick()
 end

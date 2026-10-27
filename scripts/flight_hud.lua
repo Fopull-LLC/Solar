@@ -87,6 +87,10 @@ local HOLDS = {
   { mode = "antinormal", glyph = "▽", name = "Anti-normal — down out of the orbit plane", key = "ALT+5" },
   { mode = "radialout",  glyph = "⇡", name = "Radial out — away from the planet", key = "ALT+7" },
   { mode = "radialin",   glyph = "⇣", name = "Radial in — toward the planet", key = "ALT+6" },
+  -- (the target: right-click a world, a craft or a port → Set target; a port
+  -- target swings YOUR docking port onto it — scripts/targeting.lua)
+  { mode = "target",     glyph = "◉", name = "Target — point at the target (a docking port: square up and roll to it)", key = "ALT+0" },
+  { mode = "antitarget", glyph = "⊘", name = "Anti-target — point away from the target", key = "" },
   { mode = "dock",       glyph = "⊡", name = "Dock align — square up to the target port", key = "ALT+8" },
   { rcs = true },
 }
@@ -276,10 +280,10 @@ local function sas_block(v, t)
   }
   for i, h in ipairs(HOLDS) do
     local col, row = (i - 1) % 2, math.floor((i - 1) / 2)
-    local x, y = x0 + col * 38, y0 + 24 + row * 26
+    local x, y = x0 + col * 38, y0 + 22 + row * 22   -- (six rows on the plate)
     if h.rcs then
       local has = t.has_rcs
-      kids[#kids + 1] = { "button", key = "rcs", style = "hud/sasWord", x = x, y = y, w = 34, h = 22,
+      kids[#kids + 1] = { "button", key = "rcs", style = "hud/sasWord", x = x, y = y, w = 34, h = 20,
         text = "RCS", textAlign = "center", textValign = "center",
         selected = has and t.rcs_on or false, disabled = not has, focusable = false,
         tooltip = has and string.format("RCS thrusters (×%d) — R", t.rcs_blocks)
@@ -288,10 +292,10 @@ local function sas_block(v, t)
           if has and v.setPeripheral then v.setPeripheral("rcs") end
         end }
     else
-      kids[#kids + 1] = { "button", key = h.mode, style = "hud/sas", x = x, y = y, w = 34, h = 22,
+      kids[#kids + 1] = { "button", key = h.mode, style = "hud/sas", x = x, y = y, w = 34, h = 20,
         text = h.glyph, textAlign = "center", textValign = "center", focusable = false,
         selected = v.sas_mode == h.mode,
-        tooltip = h.name .. "   [" .. h.key .. "]",
+        tooltip = h.name .. (h.key ~= "" and ("   [" .. h.key .. "]") or ""),
         onClicked = function()
           if not v.setSAS then return end
           -- The lit hold is the off switch too: the grid never needs an OFF cell.
