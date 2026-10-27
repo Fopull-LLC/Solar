@@ -3964,7 +3964,7 @@ end
 local RECOVER_RANGE = 260.0   -- metres from the base site
 -- Fraction of a pristine part's value returned. 0.8 made flying nearly free
 -- once mining paid properly: a flight should cost something to be worth planning.
-local RECOVER_RATE = 0.65
+local RECOVER_RATE = 0.85
 
 -- Distance to the home base (the crew spawn), in the body-relative frame that
 -- survives the planet's orbit. nil when there's no base on this world.

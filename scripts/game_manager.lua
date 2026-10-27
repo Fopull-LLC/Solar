@@ -581,6 +581,7 @@ local TIPS = {
   "TAB or I opens your suit pack. It holds 90 kg — sell at the depot when it fills.",
   "M opens the orbit map from anywhere — on foot or in flight.",
   "Land near the base and hold ENTER to recover the craft: most of its cost comes back.",
+  "Short of money? The Ops Board always has ground work — supply orders, bulk hauls, survey drives. A rover pays best.",
   "ESC backs out of one thing at a time. Its CONTROLS page lists every key.",
   "A pod, a tank, an engine and a parachute make a rocket. Build one at the Vehicle Assembly.",
 }

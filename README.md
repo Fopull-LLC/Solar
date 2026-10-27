@@ -83,20 +83,29 @@ upright after it lands; bigger craft want landing legs.
 
 | part | dry t | fuel | thrust · ve (reference g 7) | cost | for |
 |---|---|---|---|---|---|
-| Pod Mk1 | 1.30 | | | $400 | the seat |
-| Parachute | 0.08 | | | $80 | landing |
-| Nose Cone / Aero Fin | 0.08 / 0.04 | | | $50 / $35 | drag, stability |
-| Landing Legs | 0.015 each | | | $40 | standing up |
-| FT-S Tank | 0.20 | 80 (0.8 t) | | $120 | the starter |
-| FT-M Tank | 0.35 | 160 (1.6 t) | | $220 | twice the fuel, lighter tankage |
-| Radial Tank | 0.15 | 60 (0.6 t) | | $110 | strap-on |
-| Sputter | 0.45 | | 35 kN · 160 m/s | $150 | the starter |
-| Anvil | 0.90 | | 85 kN · 173 m/s | $380 | orbit, moons |
-| Skipper | 1.60 | | 170 kN · 184 m/s | $520 | first stages, other planets |
-| Decoupler / Radial Dec. | 0.06 / 0.05 | | | $60 / $60 | staging |
-| Battery · Solar · Dish | 0.10 · 0.05 · 0.06 | | | $130 · $200 · $120 | power, comms |
-| RCS Block | 0.04 | (pool) | 3 kN, unscaled | $80 | docking |
-| Docking Port · Cargo Bay | 0.10 · 0.40 | | | $180 · $300 | payload |
+| Pod Mk1 | 1.30 | | | $500 | the seat |
+| Parachute | 0.08 | | | $100 | landing |
+| Nose Cone / Aero Fin | 0.08 / 0.04 | | | $60 / $40 | drag, stability |
+| Landing Legs | 0.015 each | | | $90 | standing up |
+| FT-S Tank | 0.20 | 80 (0.8 t) | | $150 | the starter |
+| FT-M Tank | 0.35 | 160 (1.6 t) | | $450 | twice the fuel, lighter tankage |
+| Radial Tank | 0.15 | 60 (0.6 t) | | $350 | strap-on |
+| Sputter | 0.45 | | 35 kN · 160 m/s | $250 | the starter |
+| Anvil | 0.90 | | 85 kN · 173 m/s | $1,200 | orbit, moons |
+| Skipper | 1.60 | | 170 kN · 184 m/s | $2,000 | first stages, other planets |
+| Decoupler / Radial Dec. | 0.06 / 0.05 | | | $150 / $180 | staging |
+| Battery · Solar · Relay Dish | 0.10 · 0.05 · 0.08 | | | $60 · $600 · $900 | power, comms |
+| Probe Core · Deep Space Dish | 0.12 · 0.25 | | | $1,500 · $4,000 | uncrewed, deep space |
+| RCS Block | 0.04 | (pool) | 3 kN, unscaled | $250 | docking |
+| Docking Port · Cargo Bay | 0.10 · 0.40 | | | $1,500 · $150 | payload |
+
+Parts are priced by what they are for (`parts_registry.lua`): **bike and rover
+parts cost tens of dollars** (a whole bike ≈ $270, a four-wheel rover with three
+Stowage Lockers ≈ $470), aircraft parts are the middle tier (a light jet ≈
+$3,300), and **space hardware is the expensive tier** — the starter rocket
+$1,000, a two-stage orbiter ≈ $3,800, a relay probe or a docking pair $7,500+.
+Landing near the base and recovering refunds 85% of what came home, so it is
+the crater that costs, not the flight.
 
 What that buys, in units of the home world's escape speed (the same on every
 save; `SOLAR_BALANCE_TABLE=1 luajit solar/tests/smoke_balance.lua` prints m/s):
@@ -127,9 +136,11 @@ whatever you fly home. A material's *first* sale is a discovery: a premium (and,
 for a rare material, a point of reputation), and usually a part that just became
 researchable. A new company opens with $500 — not quite a rocket — so the first
 few minutes are mining and harvesting, and the first launch is paid for.
+Goods driven in on a craft (a rover's hold, a bike's locker) sell at the
+depot's **freight rate**, +30% over the same goods out of a suit pack.
 
 **Contracts.** Eight fixed contracts (the ladder) teach the game, paying more as
-they get harder, from *Bring It Home* ($1,800) to *Rendezvous* ($16,000). After
+they get harder, from *Bring It Home* ($1,800) to *Rendezvous* ($24,000). After
 and between them, `missions.lua` **generates** work from the system you actually
 rolled — survey, orbit, land on, plant a beacon on, haul a material home from,
 recover a probe from, or deliver cargo into orbit of a real body named on the
@@ -139,6 +150,20 @@ opens in tiers by **standing** (`company.lua`: Unknown → Contractor 3 → Trus
 generated work pays, what the depot pays, and the late research. Over all of it
 sits the **Charter**: set foot on every world in the system ($250,000).
 
+**Ground work.** From the First Steps milestone on, the board always holds two
+or three repeatable jobs on the home world: a **supply order** (~45 kg of one
+material, about $600 — three times the depot price, and the buyer takes the
+goods), a **bulk haul** (160 kg and up, a rover's job, about $2,100) and a
+**survey drive** (drive 1.2 km over the ground in one trip and park back at the
+base, about $1,000). They grow with standing. A company that has lost its
+rockets always has paid work it can do by rover.
+
+**Mission Control's advance.** Once the First Flight is flown, a company whose
+balance sits under $300 is advanced $1,500 — enough for a starter rocket or a
+rover — repaid automatically from a quarter of everything it earns afterwards.
+No interest, no reputation, and never a second while the first is owed.
+`luajit tools/perf/econ_sim.lua <before> <after>` plays three scripted players
+against two trees' economies (`tests/smoke_economy.lua` holds this one to it).
 | key | |
 |---|---|
 | `ESC` | **pause** — the world stops, and the CONTROLS page lists every key below |

@@ -120,8 +120,8 @@ opens the **Astronaut Complex** panel (`crew_roster_panel.lua`):
   - **Recall**: brings an on-foot member home for the pickup fee
     (`flight_ops.pickupFee`).
 - **Applicants.** Three names, each deterministic from `g_seed` and `crew.seq`.
-  - A **one-time hire fee** of `1500 + 600 × (living roster − 3)`, capped at 6000. So
-    the fourth astronaut costs $1,500.
+  - A **one-time hire fee** of `1000 + 400 × (living roster − 3)`, capped at 4000. So
+    the fourth astronaut costs $1,000.
   - **No wages.** A crew member costs nothing after hiring.
   - Hiring spends through `company.spend`.
   - A hired member starts at base (`status = "base"`) with the standard issue, taken

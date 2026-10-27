@@ -86,24 +86,24 @@ defaults = {
   pickup_range = 300.0,
   -- What the shuttle charges to come and get you, per kilometre travelled.
   --@range 0 500
-  pickup_per_km = 40.0,
+  pickup_per_km = 30.0,
   -- The call-out fee, before distance. A pickup should sting a little even from
   -- just over the hill.
   --@range 0 5000
-  pickup_base = 250.0,
+  pickup_base = 150.0,
   -- The most a pickup can ever cost, however far away you managed to get. A
   -- fee proportional to a solar system is a fee nobody can pay.
   --@range 0 100000
-  pickup_max = 6000.0,
+  pickup_max = 4000.0,
 
   --@header Abort flight
   -- Bringing the crew home from a flight that cannot end on its own: the
   -- call-out, plus the same per-km as a pickup, capped. Charged as far as the
   -- account goes — the rest is written off, never refused.
   --@range 0 5000
-  abort_base = 400.0,
+  abort_base = 250.0,
   --@range 0 100000
-  abort_max = 2500.0,
+  abort_max = 2000.0,
   -- Taking control of a craft with no live comms link means flying a crew out
   -- to it: this much per km from the base, on top of the call-out.
   --@range 0 5000

@@ -241,7 +241,8 @@ local function detail(mi, co, c)
     { "text", key = "payL", style = "panel/label", w = "fit", h = "fit", text = "Pays" },
     { "text", key = "pay", style = "panel/figure", w = "fit", h = "fit", text = money_of(co, m.reward) },
     { "text", key = "rep", style = "panel/cellMuted", w = "grow", h = "fit",
-      text = string.format("%+d reputation", m.rep or 0) } }
+      text = m.ground and "ground work · repeatable · money, not standing"
+        or string.format("%+d reputation", m.rep or 0) } }
   rows[#rows + 1] = { "box", key = "drule", style = "panel/rule", w = "100%", h = 1 }
 
   if c.state == "offer" then

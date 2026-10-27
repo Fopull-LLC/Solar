@@ -59,7 +59,7 @@ for _, id in ipairs(R.registryIds()) do check(seen[id], "in the catalogue: " .. 
 
 -- the entries the builder leans on, spot-checked against the old figures
 local pod = R.partInfo("pod")
-check(pod and pod.prefab == "PartPod" and pod.h == 0.80 and pod.mass == 1.3 and pod.cost == 400,
+check(pod and pod.prefab == "PartPod" and pod.h == 0.80 and pod.mass == 1.3 and pod.cost == 500,
   "pod: prefab, height, mass, cost")
 check(R.REG.chute.h == 0.34 and R.REG.chute.rx == 0.22, "chute keeps its refit size (refit_chutes reads it)")
 check(R.REG.engineS.thrust == 35 and R.REG.engineS.ve == 160, "Sputter on the reference figures")

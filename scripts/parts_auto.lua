@@ -52,7 +52,7 @@ PARTS = {
   -- centred on its own part: its axle runs right through (±0.11 m), so a fork
   -- or swing arm clamps it in the middle and either end takes another part (a
   -- strut each side, a fender, a beam). On a flank it mounts by an axle end.
-  wheelB   = { prefab = "PartWheelB", label = "Moto Wheel", h = 0.66, rx = 0.11, rz = 0.33, mass = 0.05, cost = 160,
+  wheelB   = { prefab = "PartWheelB", label = "Moto Wheel", h = 0.66, rx = 0.11, rz = 0.33, mass = 0.05, cost = 35,
                top = false, bottom = false, radial_orient = true, kind = "structural", strength = 260, wheel = "B", travel = 0.04,
                hubpt = { 0, 0, 0 }, hubax = { 1, 0, 0 },
                hubs = { { kind = "hub", p = { 0, 0, 0 }, n = { 1, 0, 0 } },
@@ -62,7 +62,7 @@ PARTS = {
   -- TELESCOPIC FORK: bolts to a FRONT face; a wheel clamps between its legs.
   -- It steers (A/D) about its raked head and rides 13 cm of travel; the
   -- handlebar turns with it.
-  forkT    = { prefab = "PartForkT", label = "Telescopic Fork", h = 0.9588, rx = 0.4416, rz = 0.3585, mass = 0.03, cost = 220,
+  forkT    = { prefab = "PartForkT", label = "Telescopic Fork", h = 0.9588, rx = 0.4416, rz = 0.3585, mass = 0.03, cost = 40,
                top = false, bottom = false, radial_orient = true, upright = true, mountpt = { -0.4416, 0.3116, 0 },
                kind = "structural", strength = 300,
                hubpt = { 0.0606, -0.4067, 0 }, hubax = { 0, 0, 1 },
@@ -71,7 +71,7 @@ PARTS = {
                           ax = -0.4067, ay = 0.9135, az = 0, px = -0.2716, py = 0.2116, pz = 0 } } },
   -- SWING ARM: hinges off a REAR face; a wheel clamps in its jaws. A
   -- monoshock gives it 12 cm of travel; it never steers.
-  swingArm = { prefab = "PartSwingArm", label = "Swing Arm", h = 0.3348, rx = 0.335, rz = 0.1505, mass = 0.025, cost = 150,
+  swingArm = { prefab = "PartSwingArm", label = "Swing Arm", h = 0.3348, rx = 0.335, rz = 0.1505, mass = 0.025, cost = 25,
                top = false, bottom = false, radial_orient = true, upright = true, kind = "structural", strength = 300,
                hubpt = { 0.265, -0.1326, 0 }, hubax = { 0, 0, 1 },
                hubs = { { kind = "hub", p = { 0.265, -0.1326, 0 }, n = { 0, 0, 1 } } },
@@ -79,19 +79,19 @@ PARTS = {
                           ax = 0, ay = 1, az = 0, px = -0.285, py = -0.0626, pz = 0, len = 0.5544 } } },
   -- COIL-OVER STRUT: on a flank (a car's, a rover's), a wheel bolted to its
   -- hub flange. 18 cm of travel; a front strut steers about its own axis.
-  strutS   = { prefab = "PartStrutS", label = "Coil-over Strut", h = 0.625, rx = 0.1235, rz = 0.13, mass = 0.04, cost = 180,
+  strutS   = { prefab = "PartStrutS", label = "Coil-over Strut", h = 0.625, rx = 0.1235, rz = 0.13, mass = 0.04, cost = 30,
                top = false, bottom = false, radial_orient = true, upright = true, kind = "structural", strength = 420,
                hubs = { { kind = "end", p = { 0.1235, -0.2275, 0 }, n = { 1, 0, 0 } } },
                mods = { { type = "susp", kind = "strut", travel = 0.18, sag = 0.33, zeta = 0.5, steer = -1,
                           ax = 0, ay = 1, az = 0, sx = 0.0165, px = -0.0935, py = -0.2675, pz = 0, len = 0.15 } } },
   -- BALANCE GYRO: a flywheel that holds a two-wheeler up at a standstill and
   -- leans it into its turns. Anywhere on the craft.
-  gyro     = { prefab = "PartGyro", label = "Balance Gyro", h = 0.355, rx = 0.2, rz = 0.1824, mass = 0.06, cost = 400,
+  gyro     = { prefab = "PartGyro", label = "Balance Gyro", h = 0.355, rx = 0.2, rz = 0.1824, mass = 0.06, cost = 60,
                top = true, bottom = true, side = true, kind = "structural", strength = 400,
                mods = { { type = "gyro", torque = 1.5, draw = 0.4 } } },
   -- BATTERY PACK: a tank-shaped 200 EC pack, the power a bike's hub motors
   -- run on (a seat carries none). Stacks or sits on any face.
-  packB    = { prefab = "PartPackB", label = "Battery Pack", h = 0.35, rx = 0.31, rz = 0.171, mass = 0.04, cost = 150,
+  packB    = { prefab = "PartPackB", label = "Battery Pack", h = 0.35, rx = 0.31, rz = 0.171, mass = 0.04, cost = 25,
                top = true, bottom = true, side = true, kind = "structural", power = true, ec = 200, strength = 300,
                mods = { { type = "battery", ec = 200 } } },
   -- MOTO SADDLE: a crew part, the open seat of a motorcycle (or a quad, a
@@ -104,7 +104,7 @@ PARTS = {
   -- view, a bike counts them as its rider) and scripts/command_seat.lua sits
   -- them astride it, feet on the pegs, hands on a fork's grips (the
   -- prefab's params; tools/gen_auto_parts.py moto_saddle).
-  saddle   = { prefab = "PartSaddle", label = "Moto Saddle", h = 1.30, rx = 0.36, rz = 0.17, mass = 0.03, cost = 90,
+  saddle   = { prefab = "PartSaddle", label = "Moto Saddle", h = 1.30, rx = 0.36, rz = 0.17, mass = 0.03, cost = 15,
                top = false, bottom = true, kind = "crewed", seat = true, strength = 260,
                mods = { { type = "command", crew = 1, draw = 0.0, seat = true } } },
 }

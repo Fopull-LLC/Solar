@@ -555,13 +555,13 @@ lastRefusal = nil   -- published for probes and the builder: the last launch cal
 -- recovery, any money coming in — when you fly another craft, end the flight
 -- (END FLIGHT, ABORT, a pickup), or go into the builder.
 local REVERT_KEYS = {
-  "co.funds", "co.rep", "co.ledger", "co.standingNews",
+  "co.funds", "co.rep", "co.ledger", "co.standingNews", "co.loan", "co.loans",
   "res.done", "res.spent",
   "mission.active", "mission.activeSpec", "mission.board", "mission.seen", "mission.perm",
   "mission.gdone", "mission.gcount", "mission.done", "mission.flags", "mission.visited",
   "mission.recovered", "mission.charterPaid", "mission.genSeq",
   "prog.done", "prog.perm",
-  "inv.cap", "inv.seen", "depot.sold", "names.n",
+  "inv.cap", "inv.seen", "depot.sold", "depot.freight", "names.n",
   -- the crew (scripts/crew.lua): the roster's own keys; each member's record
   -- and pack are taken by snap_state from the roster
   "crew.roster", "crew.seq", "crew.active", "crew.offers", "crew.offerSeq",

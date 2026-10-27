@@ -93,13 +93,6 @@ function start(node)
   boot()
 end
 
--- Keep the published mirrors live for anything reading them as plain state.
-function update(node, dt)
-  boot()
-  funds = save.get("co.funds") or 0
-  reputation = save.get("co.rep") or 0
-end
-
 function balance()
   boot()
   if rich() then return RICH end
@@ -159,10 +152,101 @@ function earn(amount, why)
   funds = b + amount
   record(amount, why)
   log(string.format("company: +$%d  (%s)   balance $%d", amount, why or "—", funds))
+  -- An advance on the books takes its share of every credit until it is paid.
+  local owe = save.get("co.loan") or 0
+  if owe > 0 and not rich() then
+    local pay = math.min(owe, math.max(1, math.floor(amount * ADVANCE.share)))
+    save.set("co.loan", owe - pay)
+    save.set("co.funds", funds - pay)
+    funds, loan = funds - pay, owe - pay
+    record(-pay, owe - pay > 0 and "advance repayment" or "advance repaid in full")
+    log(string.format("company: −$%d  (advance repayment, $%d still owed)   balance $%d",
+      pay, owe - pay, funds))
+  end
   -- Money arriving should be HEARD: a balance that changes silently in a
   -- corner is a payout nobody noticed.
   local s = findScript and findScript("sfx")
   if s and s.play then s.play("cash") end
+end
+
+-- ── THE ADVANCE: nobody is ever stuck ──────────────────────────────────────
+-- Playtest 2026-10-26: "it's very hard to make money back up to where you were
+-- and progress again". Three rockets in a crater could leave a company with
+-- less than a starter hull and nothing to sell, and the only way out was a
+-- long walk with a full pack, over and over.
+--
+-- So once the company has flown (the First Flight contract is done, so the
+-- opening — mine, sell, launch with money you earned — is untouched), Mission
+-- Control steps in when the balance sits under `below` for a few seconds: it
+-- advances `amount`, enough for a starter rocket or a rover with a hold, and
+-- takes `share` of everything earned afterwards until it is paid back. It is
+-- a loan, not a gift: no reputation, no interest, and never a second one while
+-- the first is owed — so it can't be farmed, only leaned on.
+ADVANCE = {
+  below = 300,      -- the balance under which the company counts as broke
+  amount = 1500,    -- what Mission Control advances
+  share = 0.25,     -- of every later credit, until it is repaid
+  wait = 4.0,       -- seconds broke before it steps in (a purchase mid-click isn't "broke")
+}
+loan = 0            -- published: what is still owed on the advance
+
+local broke_t = 0.0
+
+-- What is owed on the advance (0 when nothing is).
+function owed()
+  return save.get("co.loan") or 0
+end
+
+-- Would Mission Control advance money right now, if the company stayed broke?
+-- Pure on the save: the harness and a panel can ask without waiting.
+function advanceReady()
+  if rich() then return false, "debug funds" end
+  if owed() > 0 then return false, "an advance is still owed" end
+  local done = save.get("mission.done")
+  if not (type(done) == "table" and done.firstflight) then return false, "fly the First Flight first" end
+  if balance() >= ADVANCE.below then return false, "not broke" end
+  return true, nil
+end
+
+-- Take the advance now (the update below calls it; so can a harness). Returns
+-- the amount credited, or 0.
+function advance()
+  if not advanceReady() then return 0 end
+  local a = ADVANCE.amount
+  local b = balance()
+  save.set("co.funds", b + a)
+  save.set("co.loan", a)
+  funds, loan = b + a, a
+  save.set("co.loans", (save.get("co.loans") or 0) + 1)
+  record(a, "Mission Control advance (repaid from income)")
+  log(string.format("company: Mission Control advance +$%d — repaid from %d%% of income   balance $%d",
+    a, math.floor(ADVANCE.share * 100 + 0.5), funds))
+  local s = findScript and findScript("sfx")
+  if s and s.play then s.play("cash") end
+  local bc = findScript and findScript("big_caption")
+  if bc and bc.show then
+    bc.show("MISSION CONTROL ADVANCE",
+      string.format("%s to keep the programme flying  ·  repaid from %d%% of what you earn",
+        money(a), math.floor(ADVANCE.share * 100 + 0.5)), 6)
+  end
+  return a
+end
+
+-- Keep the published mirrors live for anything reading them as plain state.
+function update(node, dt)
+  boot()
+  funds = save.get("co.funds") or 0
+  reputation = save.get("co.rep") or 0
+  loan = save.get("co.loan") or 0
+  if advanceReady() then
+    broke_t = broke_t + (dt or 0)
+    if broke_t >= ADVANCE.wait then
+      broke_t = 0
+      advance()
+    end
+  else
+    broke_t = 0
+  end
 end
 
 -- Reputation moves slowly and clamps: it gates contracts and the catalogue, so

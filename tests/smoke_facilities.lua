@@ -499,6 +499,9 @@ assert(dbody:find("NEW"), "…and the body explains the NEW mark, got: " .. dbod
 -- Plus the discovery premiums, because every one of these is a first sale.
 local want = math.floor(72 * 3 * 1.12) + math.floor(3 * 11 * 1.12) + math.floor(40 * 18 * 1.12)
   + math.floor(2 * 140 * 1.12) + 150 * (1 + 0) + 150 * (1 + 1) * 2 + 150 * (1 + 3)
+-- …and the FREIGHT RATE on what is in the landed craft's hold (60 regolith,
+-- +30%): a rover-load sells dearer than a suit pack (facility_menu FREIGHT_RATE).
+want = want + math.floor(60 * 3 * 1.12 * 0.30)
 assert(nodes["Facility Action"].text:find("Sell everything"),
   "…with a single sell action, got: " .. nodes["Facility Action"].text)
 assert(nodes["Facility Action"].text:find("$" .. want, 1, true),

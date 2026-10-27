@@ -336,6 +336,10 @@ function depotUnload()
   if not inv then return "no inventory system" end
   local moved, from = 0, 0
   for _, h in ipairs(landedHolds()) do
+    -- What comes off a craft is FREIGHT, and sells at the freight rate.
+    local fr = save.get("depot.freight") or {}
+    for _, it in ipairs(inv.items(h.id)) do fr[it.mat] = (fr[it.mat] or 0) + it.n end
+    save.set("depot.freight", fr)
     local n = inv.transferAll(h.id, "base")
     if n > 0 then
       moved, from = moved + n, from + 1
@@ -358,6 +362,19 @@ end
 local function kept_back(mat)
   local mi = ref("missions")
   return mi ~= nil and mi.reserves ~= nil and mi.reserves(mat) == true
+end
+
+-- THE FREIGHT RATE. Goods that come off a craft's hold at the depot pad (a
+-- rover, a bike's locker, a lander's Cargo Bay) sell for FREIGHT_RATE more
+-- than the same goods out of a suit pack: a bulk load is worth more to the
+-- depot than handfuls, and a rover is how a broke company earns its way back
+-- (playtest 2026-10-26). Counted in units per material at unload
+-- (`depot.freight`) and spent as those units are sold or delivered.
+FREIGHT_RATE = 0.30
+
+local function freight_units(mat, n)
+  local fr = save.get("depot.freight") or {}
+  return math.min(n or 0, fr[mat] or 0)
 end
 
 -- The depot's price for one material right now: list × standing.
@@ -395,6 +412,8 @@ function depotSell(only)
   local mult = price_mult(co)
   local total, bonus, firsts, kept, rare = 0, 0, {}, 0, 0
   local sold = save.get("depot.sold") or {}
+  local fr = save.get("depot.freight") or {}
+  local freight = 0
   for _, it in ipairs(items) do
     if only and it.mat ~= only then
       -- not this press
@@ -402,6 +421,11 @@ function depotSell(only)
       kept = kept + it.n
     else
       total = total + it.value * mult
+      local fu = math.min(it.n, fr[it.mat] or 0)
+      if fu > 0 and it.n > 0 then
+        freight = freight + it.value * mult * FREIGHT_RATE * fu / it.n
+        fr[it.mat] = (fr[it.mat] or 0) - fu
+      end
       if not sold[it.mat] then
         sold[it.mat] = true
         firsts[#firsts + 1] = mats.label(it.mat)
@@ -416,7 +440,9 @@ function depotSell(only)
     kept == 1 and "" or "s") or nil
   if total <= 0 and bonus <= 0 then return keep or "nothing to sell" end
   save.set("depot.sold", sold)
-  total = math.floor(total)
+  save.set("depot.freight", fr)
+  freight = math.floor(freight)
+  total = math.floor(total) + freight
   co.earn(total, only and ("sold " .. mats.label(only)) or "materials sold")
   if bonus > 0 then
     co.earn(bonus, "discovery premium")
@@ -424,7 +450,8 @@ function depotSell(only)
     if rare > 0 then co.addRep(rare, "first sale of " .. table.concat(firsts, ", ")) end
     if rs and rs.noteDiscovery then rs.noteDiscovery() end
   end
-  return string.format("sold for %s%s%s", co.money(total),
+  return string.format("sold for %s%s%s%s", co.money(total),
+    freight > 0 and string.format("  (freight rate +%s)", co.money(freight)) or "",
     bonus > 0 and string.format("  ·  NEW DISCOVERY: %s (+%s)",
       table.concat(firsts, ", "), co.money(bonus)) or "",
     keep and ("  ·  " .. keep) or "")
@@ -437,12 +464,16 @@ local function depot_stock()
   local inv, co, mats = ref("inventory"), ref("company"), ref("materials")
   if not (inv and mats) then return {} end
   local ids = { "astro", "base" }
-  for _, h in ipairs(landedHolds()) do ids[#ids + 1] = h.id end
+  local held = {}
+  for _, h in ipairs(landedHolds()) do ids[#ids + 1] = h.id; held[h.id] = true end
   local by = {}
   for _, cid in ipairs(ids) do
     for _, it in ipairs(inv.items(cid)) do
-      local e = by[it.mat] or { mat = it.mat, n = 0, value = 0 }
+      local e = by[it.mat] or { mat = it.mat, n = 0, value = 0, fvalue = 0 }
       e.n, e.value = e.n + it.n, e.value + it.value
+      -- freight: what is still in a hold, plus what came off one earlier
+      local fu = held[cid] and it.n or (cid == "base" and freight_units(it.mat, it.n) or 0)
+      if it.n > 0 then e.fvalue = e.fvalue + it.value * fu / it.n end
       by[it.mat] = e
     end
   end
@@ -451,7 +482,8 @@ local function depot_stock()
   for _, mat in ipairs(mats.list()) do
     local e = by[mat]
     if e then
-      e.value = math.floor(e.value * mult)
+      e.freight = math.floor(e.fvalue * mult * FREIGHT_RATE)
+      e.value = math.floor(e.value * mult) + e.freight
       e.kept = kept_back(mat)
       e.first = first_sale(mat)
       e.bonus = e.first and bonus_of(mats, mat) or 0
@@ -593,12 +625,18 @@ local function depot_body()
   lines[#lines + 1] = string.format("WAREHOUSE — %.1f kg", inv.mass("base"))
   local worth, kept, units = depot_plan()
   if units == 0 then
-    lines[#lines + 1] = "Empty. Mine rock with the laser, cut flora with the harvester, or fly it home in a Cargo Bay."
+    lines[#lines + 1] = "Empty. Mine rock with the laser, cut flora with the harvester, or bring it in by rover: goods off a craft's hold sell at the freight rate (+" .. math.floor(FREIGHT_RATE * 100 + 0.5) .. "%)."
   else
     local any_first = false
     for _, e in ipairs(depot_stock()) do if e.first and not e.kept then any_first = true end end
     local pct = math.floor((price_mult(co) - 1.0) * 100 + 0.5)
     lines[#lines + 1] = string.format("Worth %s   ·   reputation %+d%% on prices", co.money(worth), pct)
+    local fr = 0
+    for _, e in ipairs(depot_stock()) do if not e.kept then fr = fr + (e.freight or 0) end end
+    if fr > 0 then
+      lines[#lines + 1] = string.format("Freight rate: +%d%% on goods off a craft's hold (+%s here)",
+        math.floor(FREIGHT_RATE * 100 + 0.5), co.money(fr))
+    end
     if any_first then
       lines[#lines + 1] = "NEW — never sold before: its first sale pays a discovery premium."
     end
@@ -639,6 +677,11 @@ local function panel_content(f)
     if co and co.money then
       lines[#lines + 1] = string.format("Balance %s   ·   reputation %+d",
         co.money(co.balance()), co.rep())
+      local owe = co.owed and co.owed() or 0
+      if owe > 0 then
+        lines[#lines + 1] = string.format("Mission Control advance — %s still owed, repaid from a quarter of income",
+          co.money(owe))
+      end
     end
     if mi then
       lines[#lines + 1] = ""

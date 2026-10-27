@@ -39,6 +39,16 @@
 --   deliver   mat/class  have this much of a material in the base WAREHOUSE
 --             kg?        (units, or kilograms when `kg` is given)
 --   sample    mat        have HELD this material at all — the discovery set
+--   drive     value      drive this far (m) over the ground in one trip, in a
+--                        vehicle you are driving (a rover, a bike, a plane
+--                        taxiing): the odometer counts while it is on its
+--                        wheels and resets when you get out
+--   home                 park the craft you are driving back at the base
+--                        (stopped, within GROUND_PARK of it)
+--
+--   consume = true       (deliver) the buyer TAKES the goods: on payout they
+--                        leave the warehouse. Ground orders pay well over the
+--                        depot price because of it.
 --
 --   after = i            this goal only counts once goal i is met (so "land on
 --                        Nami, THEN recover the craft" can't be met backwards)
@@ -76,10 +86,17 @@
 --
 --   Bring It Home $1,800 < Field Botany $2,200 < First Flight $2,500
 --     < Prospector $2,800 < The High Road $5,000 < Deep Core $6,500
---     < Made Orbit $9,000 < Rendezvous $16,000
+--     < Made Orbit $11,000 < Rendezvous $24,000
 --
--- …and the generated work after it runs from about $6k (a flyby of your own
--- moon) to six figures (bring a probe home from the far planet).
+-- …and the generated work after it runs from about $8k (a flyby of your own
+-- moon) to six figures (bring a probe home from the far planet). Orbit and
+-- Rendezvous rose with the space parts (parts_registry, 2026-10-26): an
+-- orbiter is ~$2,600 now and a docking pair ~$8,000.
+--
+-- Under all of it runs GROUND WORK (below the generator): repeatable supply
+-- orders, bulk hauls and survey drives on the home world, open from the First
+-- Steps milestone, so a company that just lost a rocket always has paid work
+-- it can do on foot or by rover.
 local CATALOGUE = {
   {
     id = "firstflight", title = "First Flight",
@@ -146,7 +163,7 @@ local CATALOGUE = {
     id = "orbit", title = "Made Orbit",
     brief = "Not a lob — an ORBIT. Get your periapsis clear of the atmosphere\n" ..
             "so the craft comes back around on its own.",
-    reward = 9000, rep = 2, requires = "highroad",
+    reward = 11000, rep = 2, requires = "highroad",
     goals = {
       { kind = "orbit", frac = 0.10, label = "Periapsis above %s" },
     },
@@ -155,7 +172,7 @@ local CATALOGUE = {
     id = "rendezvous", title = "Rendezvous",
     brief = "Two craft, one seam. Undock a module in flight and latch it back\n" ..
             "on — the manoeuvre every station and every return trip is built of.",
-    reward = 16000, rep = 3, requires = "orbit",
+    reward = 24000, rep = 3, requires = "orbit",
     goals = {
       { kind = "dock", label = "Dock two craft in flight" },
       { kind = "land", label = "Bring the stack home intact" },
@@ -281,6 +298,7 @@ local co = nil
 local flight_seen = {}   -- goal index → true once met on THIS flight
 local perm = {}          -- goal index → true once done, for good (see PERMANENT)
 local best = {}          -- goal index → the closest this flight has come
+local odo = { d = 0.0, id = nil, body = nil, x = nil, y = nil, z = nil }  -- `drive` goals
 local last_piloting = false
 
 -- Cross-script singletons, resolved once and kept: `findScript` walks the whole
@@ -441,14 +459,20 @@ end
 
 -- Kinds, their base pay at "one orbit's worth of Δv", and what each asks for.
 -- `once` = one contract of this kind per body, ever.
+-- (×1.4 on 2026-10-26, with the space parts: a moonship costs about twice what
+-- it did, and a contract has to pay for the craft it needs.)
 local GEN_KINDS = {
-  survey = { base = 2600, once = true },
-  orbit  = { base = 3000, once = true },
-  land   = { base = 3400, once = true },
-  flag   = { base = 3800, once = true },
-  haul   = { base = 3400 },
-  rescue = { base = 3800 },
-  cargo  = { base = 6000 },
+  survey = { base = 3600, once = true },
+  orbit  = { base = 4200, once = true },
+  land   = { base = 4800, once = true },
+  flag   = { base = 5300, once = true },
+  haul   = { base = 4800 },
+  rescue = { base = 5300 },
+  cargo  = { base = 8400 },
+  -- GROUND WORK (home world, repeatable, priced by the job — `ground_spec`)
+  order  = { ground = true },
+  bulk   = { ground = true },
+  trek   = { ground = true },
 }
 local KIND_ORDER = { "survey", "orbit", "land", "flag", "haul", "rescue", "cargo" }
 
@@ -472,6 +496,46 @@ TIERS = {
 
 -- How many generated contracts the board holds, by standing level.
 local SLOTS = { [0] = 0, [1] = 0, [2] = 2, [3] = 3, [4] = 4, [5] = 5 }
+
+-- ── GROUND WORK ─────────────────────────────────────────────────────────────
+-- Playtest 2026-10-26: "it's very hard to make money back up to where you were
+-- and progress again". Contracts were all flights, and a company with no
+-- rocket and little money had only the depot: walk, fill the pack, walk back,
+-- $200 at a time. Ground work is paid work on the home world that never runs
+-- out, is sized to the company's standing, and pays a rover far better than
+-- a suit:
+--
+--   order   a supply order: ~45 kg of one material (a suit's load), taken by
+--           the buyer at ~3× the depot price plus a call-out fee
+--   bulk    a bulk haul: 160 kg and up of one material — more than a suit
+--           carries, so it is a rover's job (a Cargo Bay or Stowage Lockers)
+--           — at ~3.5× the depot price plus a bigger fee
+--   trek    a survey drive: drive 1.2 km and up over the ground in one trip,
+--           in a rover or on a bike, and park it back at the base
+--
+-- It opens with the First Steps milestone (cut a plant, mine some ore), so the
+-- opening — mine, sell, launch the first rocket with money you earned — is
+-- what it was. The board keeps GROUND_SLOTS of it beside the flight work, one
+-- of each kind at most, and a finished one is replaced by a fresh roll.
+GROUND = {
+  name = "Ground work",
+  needs = "first_steps",
+  what = "supply orders, bulk hauls and survey drives on the home world — repeatable",
+}
+local GROUND_ORDER = { "order", "bulk", "trek" }
+local GROUND_SLOTS = { [0] = 2, [1] = 2, [2] = 3, [3] = 3, [4] = 3, [5] = 3 }
+GROUND_PARK = 200.0     -- m from the base that counts as "parked at the base"
+-- The figures, by ground level L (0 Unknown, 1 Contractor, 2 Trusted, …):
+GROUND_PAY = {
+  order = { kg = 45,   kgL = 15,  fee = 200, feeL = 100, mult = 3.0 },
+  bulk  = { kg = 160,  kgL = 40,  fee = 400, feeL = 150, mult = 3.5 },
+  trek  = { m = 1200,  mL = 400,  fee = 300, feeL = 100, perM = 0.6 },
+}
+
+local function ground_open()
+  local pd = save.get("prog.done")
+  return type(pd) == "table" and pd[GROUND.needs] == true
+end
 
 -- The long-term goal: a beacon of the company's on every world in the system.
 local CHARTER_REWARD, CHARTER_REP = 250000, 5
@@ -658,6 +722,88 @@ local function price(v)
   return math.max(step, math.floor(v / step + 0.5) * step)
 end
 
+-- ── ground work specs ──────────────────────────────────────────────────────
+
+-- The company's ground level: 0 Unknown (or worse), 1 Contractor, 2 Trusted…
+local function ground_level()
+  local c = company()
+  local lvl = (c and c.standing) and c.standing().level or 1
+  return math.max(0, lvl - 1)
+end
+
+-- What the home world gives up near the surface, worth ordering: tier-1
+-- materials (never regolith, the filler) no deeper than the company is used
+-- to digging. A planet with none falls back to regolith.
+local function ground_mats(home, L)
+  local mats = ref("materials")
+  local out = {}
+  local bands = mats and mats.BANDS and (mats.BANDS[home.kind] or mats.BANDS.barren) or {}
+  for _, bd in ipairs(bands) do
+    if bd.mat ~= "regolith" and mats.tier(bd.mat) <= 1 and (bd.minDepth or 0) <= 4 + 4 * L then
+      out[#out + 1] = bd.mat
+    end
+  end
+  if #out == 0 then out[1] = "regolith" end
+  return out
+end
+
+-- A deterministic pick in [0, 1) from a number (no engine rng in the harness).
+local function mix(n)
+  local x = math.sin((n or 0) * 12.9898 + 78.233) * 43758.5453
+  return x - math.floor(x)
+end
+
+-- The depot price per kg the pay is figured from, capped so a world whose
+-- surface is crystal doesn't turn a supply order into a jackpot.
+local function per_kg(mat)
+  local mats = ref("materials")
+  if not (mats and mat) then return 3.3 end      -- plant matter, on average
+  return math.min(6.0, (mats.value(mat) or 0) / math.max(mats.kg(mat) or 1, 0.1))
+end
+
+local function ground_spec(kind, home, seq)
+  local L = ground_level()
+  local P = GROUND_PAY[kind]
+  if not P then return nil end
+  local mats = ref("materials")
+  local mult = (company() and company().rewardMult and company().rewardMult()) or 1.0
+  local X = home.name
+  local title, brief, g, reward
+  if kind == "order" or kind == "bulk" then
+    local kg = P.kg + P.kgL * L
+    local list = ground_mats(home, L)
+    local flora = (kind == "order") and mix(seq * 3 + 1) < 0.34
+    local mat = (not flora) and list[1 + math.floor(mix(seq * 3 + 2) * #list) % #list] or nil
+    local what = flora and "plant matter" or ((mats and mats.label(mat)) or mat)
+    reward = price((P.fee + P.feeL * L + kg * per_kg(mat) * P.mult) * mult)
+    if kind == "order" then
+      title = string.format("Supply order: %d kg of %s", kg, what)
+      brief = string.format("The colony's workshops need %d kg of %s. Put it in the warehouse\n" ..
+        "and the order takes it — it pays about three times what the depot would.", kg, what)
+    else
+      title = string.format("Bulk haul: %d kg of %s", kg, what)
+      brief = string.format("A standing order for %d kg of %s, more than a suit carries:\n" ..
+        "a rover's job. Fit a Cargo Bay or Stowage Lockers, fill it, park at the\n" ..
+        "depot and unload. The buyer takes the lot.", kg, what)
+    end
+    g = { { kind = "deliver", mat = mat, class = flora and "flora" or nil, kg = kg, consume = true,
+            label = string.format("%d kg of %s in the warehouse", kg, what) } }
+  elseif kind == "trek" then
+    local m = P.m + P.mL * L
+    reward = price((P.fee + P.feeL * L + m * P.perM) * mult)
+    title = string.format("Survey drive: %s", fmt_m(m))
+    brief = string.format("The surveyors want ground truth on %s: drive %s over the ground in\n" ..
+      "one trip — a rover or a bike — and bring the vehicle back to the base.", X, fmt_m(m))
+    g = { { kind = "drive", value = m, label = "Drive %s over the ground in one trip" },
+          { kind = "home", after = 1, label = "Park it back at the base" } }
+  end
+  if not g then return nil end
+  return { id = string.format("g%d-%s-%s", seq or 0, kind, X), gen = true, ground = true,
+           key = kind .. ":" .. X, kind = kind, body = X,
+           title = title, brief = brief, reward = reward, rep = 0,
+           goals = g, dv = 0, diff = 1.0 }
+end
+
 -- Build one contract spec for (kind, body). Pure data — it goes in the save.
 -- nil when the kind can't be done there (nothing to haul, no plan).
 function genSpec(kind, bname, seq)
@@ -665,6 +811,10 @@ function genSpec(kind, bname, seq)
   if not R then return nil end
   local home, b = home_entry(R), R.by[bname]
   if not (home and b) then return nil end
+  if GEN_KINDS[kind] and GEN_KINDS[kind].ground then
+    if b.name ~= home.name then return nil end
+    return ground_spec(kind, home, seq)
+  end
   local p = plan(R, home, b)
   if not p then return nil end
   local K = GEN_KINDS[kind]
@@ -795,6 +945,11 @@ local function candidates()
   end
   local gdone = save.get("mission.gdone") or {}
   local out = {}
+  if ground_open() then
+    for _, k in ipairs(GROUND_ORDER) do
+      out[#out + 1] = { kind = k, body = home.name, key = k .. ":" .. home.name, ground = true }
+    end
+  end
   for _, b in ipairs(R.bodies) do
     local cls = class_of(R, home, b)
     for _, k in ipairs(KIND_ORDER) do
@@ -841,25 +996,38 @@ local function active_spec()
 end
 
 -- Bring the board up to its slot count; drop anything that no longer applies.
--- Cheap and idempotent, so `update` calls it once a second.
+-- Cheap and idempotent, so `update` calls it once a second. Flight work and
+-- ground work fill their own slots, so a board full of cheap ground jobs never
+-- crowds out the next world to fly to (or the other way round).
+local function is_ground(kind)
+  local K = GEN_KINDS[kind]
+  return K ~= nil and K.ground == true
+end
+
 local function refill()
   local R = roster()
   if not R then return end
-  local slots = SLOTS[standing_level()] or 0
+  local lvl = standing_level()
+  local cap = { [false] = SLOTS[lvl] or 0,
+                [true] = ground_open() and (GROUND_SLOTS[lvl] or 2) or 0 }
   local cands = candidates()
   local ok = {}
   for _, c in ipairs(cands) do ok[c.key] = true end
   local cur, keep, used = board(), {}, {}
+  local count = { [false] = 0, [true] = 0 }
   local act = active_spec()
   if act then used[act.key] = true end
   local changed = false
   for _, s in ipairs(cur) do
     -- Repeatable kinds stay; a one-shot whose body is done (or now beaconed)
     -- does not. A board from another system (a re-rolled save) is cleared.
-    if R.by[s.body] and (ok[s.key] or not GEN_KINDS[s.kind].once) and not used[s.key]
-       and #keep < math.max(slots, 0) then
+    local K = GEN_KINDS[s.kind]
+    local grp = is_ground(s.kind)
+    if K and R.by[s.body] and (ok[s.key] or not K.once) and not used[s.key]
+       and count[grp] < math.max(cap[grp], 0) then
       keep[#keep + 1] = s
       used[s.key] = true
+      count[grp] = count[grp] + 1
     else
       changed = true
     end
@@ -867,37 +1035,42 @@ local function refill()
   local seq = save.get("mission.genSeq") or 0
   local he = home_entry(R)
   local base = name_hash((R.star or "") .. ((he and he.name) or ""))
-  local guard = 0
-  while #keep < slots and guard < 8 do
-    guard = guard + 1
-    local free = {}
-    for _, c in ipairs(cands) do if not used[c.key] then free[#free + 1] = c end end
-    if #free == 0 then break end
-    seq = seq + 1
-    local rnd = lcg(base + seq * 7919)
-    -- Lean toward the nearer, cheaper work: a weight of 1/difficulty, so the
-    -- board always has something you can fly now next to something to aim at.
-    local specs, total = {}, 0
-    for _, c in ipairs(free) do
-      local sp = genSpec(c.kind, c.body, seq)
-      if sp then
-        local w = 1.0 / math.max(sp.diff, 0.5)
-        specs[#specs + 1] = { sp = sp, w = w }
-        total = total + w
-      else
-        used[c.key] = true
+  for _, grp in ipairs({ false, true }) do
+    local guard = 0
+    while count[grp] < cap[grp] and guard < 8 do
+      guard = guard + 1
+      local free = {}
+      for _, c in ipairs(cands) do
+        if not used[c.key] and (c.ground == true) == grp then free[#free + 1] = c end
       end
+      if #free == 0 then break end
+      seq = seq + 1
+      local rnd = lcg(base + seq * 7919)
+      -- Lean toward the nearer, cheaper work: a weight of 1/difficulty, so the
+      -- board always has something you can fly now next to something to aim at.
+      local specs, total = {}, 0
+      for _, c in ipairs(free) do
+        local sp = genSpec(c.kind, c.body, seq)
+        if sp then
+          local w = 1.0 / math.max(sp.diff, 0.5)
+          specs[#specs + 1] = { sp = sp, w = w }
+          total = total + w
+        else
+          used[c.key] = true
+        end
+      end
+      if #specs == 0 then break end
+      local pick = rnd() * total
+      local chosen = specs[#specs].sp
+      for _, e in ipairs(specs) do
+        pick = pick - e.w
+        if pick <= 0 then chosen = e.sp break end
+      end
+      keep[#keep + 1] = chosen
+      used[chosen.key] = true
+      count[grp] = count[grp] + 1
+      changed = true
     end
-    if #specs == 0 then break end
-    local pick = rnd() * total
-    local chosen = specs[#specs].sp
-    for _, e in ipairs(specs) do
-      pick = pick - e.w
-      if pick <= 0 then chosen = e.sp break end
-    end
-    keep[#keep + 1] = chosen
-    used[chosen.key] = true
-    changed = true
   end
   if changed then
     save.set("mission.board", keep)
@@ -967,6 +1140,7 @@ end
 function tierLine()
   local open, lvl = open_tiers(), standing_level()
   local names = {}
+  if ground_open() then names[#names + 1] = GROUND.name end
   for i, t in ipairs(TIERS) do if open[i] then names[#names + 1] = t.name end end
   local nxt = nil
   for i, t in ipairs(TIERS) do
@@ -1383,6 +1557,11 @@ function upcoming()
     end
   end
   local R = roster()
+  if R and not ground_open() then
+    out[#out + 1] = { m = { id = "tier0", title = GROUND.name .. " contracts", reward = 0, rep = 0,
+                            tier = true, brief = "Opens " .. GROUND.what .. "." },
+                      needs = "the First Steps milestone (cut a plant, mine some ore)" }
+  end
   if R then
     local open = open_tiers()
     local c = company()
@@ -1595,6 +1774,8 @@ local function measure(g, v, info)
     return math.sqrt(s.x * s.x + s.y * s.y + s.z * s.z)
   elseif g.kind == "orbit" or g.kind == "cargo" then
     return peri_alt(g, v)
+  elseif g.kind == "drive" then
+    return odo.d
   end
   return nil
 end
@@ -1616,6 +1797,58 @@ local function delivered(g)
   end
   return n
 end
+
+-- THE ODOMETER for `drive` goals: metres the craft you are driving has covered
+-- over the ground on this trip, measured in its world's frame (the planet
+-- moves metres a tick; a world-space difference would count its orbit).
+-- Reset whenever nobody is driving, so one trip is one trip.
+-- (`odo` itself is declared with the rest of the tracker state, at the top.)
+local ODO_MAX_SPEED = 45.0      -- m/s: a jump faster than this is a teleport, not driving
+
+local function on_ground(v, info)
+  if not info then return false end
+  if info.grounded then return true end
+  return (v.r2OnWheels and v.r2OnWheels()) and true or false
+end
+
+local function odo_reset()
+  odo.d, odo.id, odo.body, odo.x = 0.0, nil, nil, nil
+end
+
+local function odo_tick(v, info, dt)
+  local n = v and v.node
+  if not (n and n.valid ~= false) then odo_reset() return end
+  local bn = dominant_of(n)
+  local b = bn and space.body(bn)
+  if not b then return end
+  local x, y, z = n.x - b.x, n.y - b.y, n.z - b.z
+  if odo.id ~= (n.id or n.__id) or odo.body ~= bn or not odo.x then
+    odo.d = (odo.id == (n.id or n.__id)) and odo.d or 0.0
+    odo.id, odo.body, odo.x, odo.y, odo.z = (n.id or n.__id), bn, x, y, z
+    return
+  end
+  local step = math.sqrt((x - odo.x) ^ 2 + (y - odo.y) ^ 2 + (z - odo.z) ^ 2)
+  odo.x, odo.y, odo.z = x, y, z
+  if on_ground(v, info) and step > 1e-3 and step <= ODO_MAX_SPEED * math.max(dt or 0, 1 / 60) then
+    odo.d = odo.d + step
+  end
+end
+
+-- Metres the craft `v` is from the base, in the base world's frame (nil off
+-- that world or without a base).
+local function base_dist(v)
+  local n = v and v.node
+  local bx, by, bz = save.get("base.x"), save.get("base.y"), save.get("base.z")
+  local bn = save.get("base.body")
+  if not (n and type(bx) == "number" and type(bn) == "string") then return nil end
+  if dominant_of(n) ~= bn then return nil end
+  local b = space.body(bn)
+  if not b then return nil end
+  return math.sqrt((n.x - b.x - bx) ^ 2 + (n.y - b.y - by) ^ 2 + (n.z - b.z - bz) ^ 2)
+end
+
+-- Published for the card: how far the current trip has driven.
+function odometer() return odo.d end
 
 -- Is this goal satisfied RIGHT NOW? (Latching is the caller's job — a goal that
 -- was true a moment ago stays true for the rest of the flight.)
@@ -1669,6 +1902,14 @@ local function goal_now(g, v, info)
     return on_foot_at(g.body)
   elseif g.kind == "dock" then
     return (v.dock and (v.dock.latched or 0) > 0) or false
+  elseif g.kind == "drive" then
+    return odo.d >= (g.value or 0)
+  elseif g.kind == "home" then
+    if not on_ground(v, info) then return false end
+    local s = info.vel
+    if math.sqrt(s.x * s.x + s.y * s.y + s.z * s.z) > 1.5 then return false end
+    local d = base_dist(v)
+    return d ~= nil and d <= GROUND_PARK
   elseif g.kind == "recover" then
     return save.get("mission.recovered") == true
   elseif g.kind == "deliver" then
@@ -1708,6 +1949,14 @@ local function tail(i, g)
     end
     return string.format("   (%d / %d in the warehouse)", delivered(g), g.value or 1)
   end
+  if g.kind == "drive" then
+    return string.format("   (%s / %s this trip)", fmt_m(odo.d), fmt_m(g.value or 0))
+  end
+  if g.kind == "home" then
+    local v = piloted()
+    local d = v and base_dist(v)
+    return d and string.format("   (%s away)", fmt_m(d)) or ""
+  end
   local b = best[i]
   if not b then return "" end
   return string.format("   (best this flight %s)", fmt_of(g)(b))
@@ -1746,6 +1995,37 @@ local function announce(id, title, reward)
   log(string.format("CONTRACT COMPLETE — %s   +$%d", title, reward))
 end
 
+-- A ground order's buyer TAKES the goods (`consume`): they leave the warehouse
+-- with the payout, so the same crate can't fill the next order too. The
+-- depot's freight tally (facility_menu) goes down with them.
+local function consume(m)
+  local inv, mats = ref("inventory"), ref("materials")
+  if not inv then return end
+  local fr = save.get("depot.freight")
+  for _, g in ipairs(m.goals or {}) do
+    if g.kind == "deliver" and g.consume then
+      local want = g.kg or g.value or 0
+      for _, it in ipairs(inv.items("base")) do
+        if want <= 0 then break end
+        if (g.mat and it.mat == g.mat) or (not g.mat and (not g.class
+            or (mats and mats.class(it.mat) == g.class))) then
+          local per = g.kg and ((mats and mats.kg(it.mat)) or 1) or 1
+          local n = math.min(it.n, math.ceil(want / math.max(per, 1e-3) - 1e-6))
+          if n > 0 then
+            local took = inv.remove("base", it.mat, n) or n
+            if type(took) ~= "number" then took = n end
+            want = want - took * per
+            if type(fr) == "table" and fr[it.mat] then
+              fr[it.mat] = math.max(0, fr[it.mat] - took)
+            end
+          end
+        end
+      end
+    end
+  end
+  if type(fr) == "table" then save.set("depot.freight", fr) end
+end
+
 local function payout(m)
   -- The jingle goes first: the ledger's cash clink under it is swallowed.
   local fx = ref("sfx")
@@ -1755,6 +2035,7 @@ local function payout(m)
     if c.earn then c.earn(m.reward, "contract: " .. m.title) end
     if c.addRep then c.addRep(m.rep or 0, "completed " .. m.title) end
   end
+  consume(m)
   if m.gen then
     local gd = save.get("mission.gdone") or {}
     if GEN_KINDS[m.kind] and GEN_KINDS[m.kind].once then
@@ -1889,6 +2170,7 @@ function update(node, dt)
   end
 
   local v = piloted()
+  if v then odo_tick(v, assembly.info(v.node), dt) else odo_reset() end
   -- Leaving the craft (or losing it) ends the flight's latches: goals have to
   -- be met on ONE trip, which is what makes "get high AND land intact" a flight
   -- plan instead of two unrelated afternoons.

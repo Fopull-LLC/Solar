@@ -210,7 +210,7 @@ end
 
 -- The cheapest thing that flies: pod, small tank, small engine, parachute.
 -- Below this the next step is money, not a rocket.
-local ROCKET_MIN = 750
+local ROCKET_MIN = 1000   -- the stock starter (parts_registry, 2026-10-26)
 
 -- How to get the stuff a delivery contract wants, in one sentence: plants
 -- come up with the gravity gun, everything else out of the rock with the laser.
@@ -252,6 +252,7 @@ local function next_goal(m, lines)
 end
 
 local function names_a_world(m)
+  if m.ground then return false end   -- ground work is at home (missions.lua GROUND)
   if m.gen then return true end
   for _, g in ipairs(m.goals or {}) do if g.body then return true end end
   return false
@@ -548,6 +549,23 @@ current_step_inner = function(astro)
       local st = offworld_step(m, goals, astro, label, pays)
       if st then return st end
     end
+    -- A survey drive: a vehicle, then the distance, then home.
+    if m.ground then
+      local g = next_goal(m, goals)
+      if g and (g.kind == "drive" or g.kind == "home") then
+        if not has_vessel(astro) then
+          return { key = "vehicle", label = label, at = "FacHangar",
+                   task = "Build a rover or a bike.",
+                   hint = "Rover Body, four wheels and a seat: a few hundred dollars at the Vehicle Assembly.",
+                   goals = goals, pay = pays }
+        end
+        return { key = "drive", label = label,
+                 task = g.kind == "drive" and "Drive it — one trip, over the ground." or "Park it back at the base.",
+                 hint = g.kind == "drive" and "Any route counts; getting out resets the trip."
+                   or "Stop within a couple of hundred metres of the base.",
+                 goals = goals, pay = pays }
+      end
+    end
     if needs_flight(m) and not has_vessel(astro) then
       -- No rocket, and not the money for one: the ground game is the way back.
       if co and co.balance and co.balance() < ROCKET_MIN then
@@ -572,7 +590,8 @@ current_step_inner = function(astro)
       local flora = want.class == "flora"
       return { key = "mine", label = label,
                task = flora and "Harvest plants for the contract." or "Mine ore for the contract.",
-               hint = flora and CUT_HINT or MINE_HINT,
+               hint = (flora and CUT_HINT or MINE_HINT)
+                 .. ((m.kind == "bulk") and " A rover with a Cargo Bay carries it in one trip." or ""),
                goals = goals, pay = pays }
     end
     return { key = "fly", label = label, task = m.title,

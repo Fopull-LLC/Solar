@@ -240,7 +240,7 @@ check(ts.recoverRule({ fid = "crew" }, home) == false, "rule: the crew row is no
 check(ts.recoveryFactor(100, 30000) == 1.0 and ts.recoveryFactor(nil, 30000) == 1.0, "factor: full at the base")
 local f1, f2 = ts.recoveryFactor(5000, 30000), ts.recoveryFactor(40000, 30000)
 check(f1 < 1.0 and f2 < f1 and f2 > 0.1, "factor: falls off with distance")
-check(math.abs(ts.recoveryFactor(math.pi * 30000, 30000) - 0.1) < 1e-9, "factor: 10% at the antipode")
+check(math.abs(ts.recoveryFactor(math.pi * 30000, 30000) - 0.25) < 1e-9, "factor: 25% at the antipode")
 ts.selectCraft("c3")
 ts.update(tnode, 0.016)
 by_key(tree, "end").onClicked()

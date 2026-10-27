@@ -110,9 +110,9 @@ check(C.nameFor(1, 1) == C.nameFor(1, 1), "a name is deterministic")
 local differ = 0
 for n = 1, 10 do if C.nameFor(1, n) ~= C.nameFor(2, n) then differ = differ + 1 end end
 check(differ >= 8, "different seeds, different names (" .. differ .. "/10)")
-check(C.hireFee(3) == 1500 and C.hireFee(4) == 2100 and C.hireFee(20) == 6000, "the hire fee: 1500, +600 a head, capped at 6000")
+check(C.hireFee(3) == 1000 and C.hireFee(4) == 1400 and C.hireFee(20) == 4000, "the hire fee: 1000, +400 a head, capped at 4000")
 local o = C.offers()
-check(#o == 3 and o[1].cost == 1500, "three applicants on the board")
+check(#o == 3 and o[1].cost == 1000, "three applicants on the board")
 
 -- ── tasks ride the record ──────────────────────────────────────────────────
 check(C.setTask(1, { kind = "repair", uid = 6 }) == true and C.task(1).uid == 6, "setTask puts a task on the record")

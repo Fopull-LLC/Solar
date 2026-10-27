@@ -119,8 +119,8 @@ local function say(text, dur) msg, msg_t, msg_dur = text or "", time, dur or 6.0
 -- full near the base and falls off with the distance over the ground, down to
 -- RECOVER_MIN of it on the far side of the world.
 local RECOVER_NEAR = 260.0   -- m over the ground: still "at the base", full refund
-local RECOVER_MIN = 0.10     -- the share of the refund left at the antipode
-local RECOVER_RATE = 0.65    -- a pristine part's refund (vessel_controller's rate)
+local RECOVER_MIN = 0.25     -- the share of the refund left at the antipode
+local RECOVER_RATE = 0.85    -- a pristine part's refund (vessel_controller's rate)
 last_recovery = nil          -- published: the summary of the last recovery
 
 -- The share of the refund paid for a craft `arc` metres over the ground from

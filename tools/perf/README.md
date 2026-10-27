@@ -278,3 +278,24 @@ committed (git HEAD), for before/after. Pictures are 1280×720 by default
 `$WORK/rain/<TAG>/png`; `RX STATE` lines give the weather, the haze and DOF
 values, `RX ROOF` whether the camera is under a roof (the rain is off there),
 `RX GPU` the passes and the scripts' ms.
+
+## econ_sim.lua — the economy, played by three scripted players (pure Lua)
+
+    luajit tools/perf/econ_sim.lua <before-root> <after-root>     # ECON_LOG=1 for the timelines
+
+Loads a tree's real company, missions, materials, inventory, research and part
+registries into a stubbed world (a canyon home and a barren moon) and plays: A a
+new player's first 30 minutes, B a Trusted company crashing three orbiters from
+$15,000, B2 a young company crashing three High Road rockets from $5,000 (back by
+ground work alone, and with the High Road flown), C a rover player who never
+flies. Prices, rewards, the recovery and freight rates and the advance come from
+the tree, so `git show HEAD:scripts/<f>.lua` copies give a before/after on the
+same player model. `tests/smoke_economy.lua` holds the working tree to targets.
+
+## econshot.sh — the economy panels in the real game, at 1280×720
+
+    WORK=$SCRATCH/econ LOCK=/mnt/disks/3tb/.floptle-shared/engine.lock tools/perf/econshot.sh <engine> board|depot|catalog [after-s] [fresh]
+
+`econprobe.lua`: the Ops Board with ground work on it (one selected), the depot
+with pack, warehouse and freight goods, the builder's catalogue prices. Slot 13
+in the scratch project; delete `$WORK/proj/save` and `$WORK/proj/saves` after.

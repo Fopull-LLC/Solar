@@ -49,6 +49,22 @@
 -- maxq = dynamic pressure (kPa) the part itself takes (default 80; aero parts
 -- more). Both ride in the blueprint; vessel_controller has kind-based fallbacks
 -- for builds saved before they existed.
+--
+-- PRICED BY WHAT A PART IS FOR (playtest 2026-10-26: "bike parts should be the
+-- cheapest and rover parts shouldn't be too pricey, to encourage building
+-- exploration vehicles; space exploration should be the real pricey thing").
+-- Four tiers, and the order inside each still reads as you'd expect:
+--   ground   bike and rover parts, frame members, seats, lockers, lights,
+--            batteries: tens of dollars. A whole bike is ~$200, a four-wheel
+--            rover with a hold ~$400 — a vehicle you can afford to lose.
+--   tools    robotics and the core drill: low hundreds.
+--   air      wings, gear, intakes, the cockpit and the turbojet
+--            (parts_aero.lua): moderate, a plane ~$3,000.
+--   space    pods, tanks, engines, decouplers, probe cores, dishes, docking
+--            ports, fairings: the starter rocket is ~$1,000, an orbiter
+--            ~$2,600, a docking pair or a deep-space probe $8,000 and up.
+-- Landing near the base refunds 85% of what came home (vessel_controller
+-- RECOVER_RATE), so it is the craft you LOSE that costs.
 REG = {
   -- ELECTRONICS (`mods`): what a part does electrically, as modules the
   -- electronics rulebook (scripts/electronics.lua) knows — supply, storage,
@@ -60,7 +76,7 @@ REG = {
   -- a probe core's internal antenna ≈ 6 km (the home world and its moons), the
   -- whip ≈ 30 km, the relay dish ≈ 300 km (the home system), the deep space
   -- dish ≈ 2,400 km (the next star). Craft to craft they reach much less.)
-  pod       = { prefab = "PartPod",       label = "Pod Mk1",      h = 0.80, rx = 0.50, rz = 0.50, mass = 1.3,  cost = 400, top = true,  bottom = true,  kind = "crewed", side = true, strength = 600,
+  pod       = { prefab = "PartPod",       label = "Pod Mk1",      h = 0.80, rx = 0.50, rz = 0.50, mass = 1.3,  cost = 500, top = true,  bottom = true,  kind = "crewed", side = true, strength = 600,
                 mods = { { type = "command", crew = 1, draw = 0.05 }, { type = "wheel", torque = 1.0, draw = 0.5 },
                          { type = "battery", ec = 40 } } },
   -- COMMAND SEAT: an open chair for one, KSP's external seat. It commands the
@@ -70,33 +86,33 @@ REG = {
   -- and press F to sit, F again to get off. The crew stays in view, seated.
   -- It faces its +X (a rover's front). h is the whole chair: base plate to
   -- headrest; its centre is where the rider's hips sit.
-  seat      = { prefab = "PartSeat",      label = "Command Seat", h = 1.30, rx = 0.45, rz = 0.30, mass = 0.05, cost = 160, top = false, bottom = true,  kind = "crewed", seat = true, strength = 320,
+  seat      = { prefab = "PartSeat",      label = "Command Seat", h = 1.30, rx = 0.45, rz = 0.30, mass = 0.05, cost = 40, top = false, bottom = true,  kind = "crewed", seat = true, strength = 320,
                 mods = { { type = "command", crew = 1, draw = 0.0, seat = true } } },
   -- PROBE CORE: an uncrewed command part. It flies a craft with nobody aboard —
   -- but only while it has POWER and a comms PATH home (its own little internal
   -- antenna reaches the ground station from around the home world and its
   -- moons; past that it needs a real antenna, or a relay). No link, no control.
-  probe     = { prefab = "PartProbe",     label = "Probe Core",   h = 0.42, rx = 0.42, rz = 0.42, mass = 0.12, cost = 450, top = true,  bottom = true,  kind = "probe", side = true, strength = 380,
+  probe     = { prefab = "PartProbe",     label = "Probe Core",   h = 0.42, rx = 0.42, rz = 0.42, mass = 0.12, cost = 1500, top = true,  bottom = true,  kind = "probe", side = true, strength = 380,
                 mods = { { type = "command", crew = 0, draw = 0.06 }, { type = "wheel", torque = 0.6, draw = 0.35 },
                          { type = "battery", ec = 50 }, { type = "antenna", power = 100, rate = 1, draw = 0.02 } } },
-  nose      = { prefab = "PartNose",      label = "Nose Cone",    h = 0.90, rx = 0.50, rz = 0.50, mass = 0.08, cost = 50,  top = false, bottom = true,  kind = "structural", aero = true, strength = 300, maxq = 120 },
-  chute     = { prefab = "PartChute",     label = "Parachute",    h = 0.34, rx = 0.22, rz = 0.22, mass = 0.08, cost = 80,  top = false, bottom = true,  kind = "canvas", chute = true, side = true, strength = 150 },
-  tankS     = { prefab = "PartTankS",     label = "FT-S Tank",    h = 1.00, rx = 0.50, rz = 0.50, mass = 0.2,  cost = 120, top = true,  bottom = true,  kind = "tank", fuel = 80,  side = true, strength = 450 },
-  tankM     = { prefab = "PartTankM",     label = "FT-M Tank",    h = 1.50, rx = 0.50, rz = 0.50, mass = 0.35, cost = 220, top = true,  bottom = true,  kind = "tank", fuel = 160, side = true, strength = 650 },
-  engineS   = { prefab = "PartEngineS",   label = "Sputter",      h = 1.30, rx = 0.90, rz = 0.90, mass = 0.45, cost = 150, top = true,  bottom = true,  kind = "engine", thrust = 35,  ve = 160, strength = 500 },
-  engineM   = { prefab = "PartEngineM",   label = "Anvil",        h = 1.60, rx = 0.90, rz = 0.90, mass = 0.9,  cost = 380, top = true,  bottom = true,  kind = "engine", thrust = 85,  ve = 173, strength = 800 },
+  nose      = { prefab = "PartNose",      label = "Nose Cone",    h = 0.90, rx = 0.50, rz = 0.50, mass = 0.08, cost = 60,  top = false, bottom = true,  kind = "structural", aero = true, strength = 300, maxq = 120 },
+  chute     = { prefab = "PartChute",     label = "Parachute",    h = 0.34, rx = 0.22, rz = 0.22, mass = 0.08, cost = 100,  top = false, bottom = true,  kind = "canvas", chute = true, side = true, strength = 150 },
+  tankS     = { prefab = "PartTankS",     label = "FT-S Tank",    h = 1.00, rx = 0.50, rz = 0.50, mass = 0.2,  cost = 150, top = true,  bottom = true,  kind = "tank", fuel = 80,  side = true, strength = 450 },
+  tankM     = { prefab = "PartTankM",     label = "FT-M Tank",    h = 1.50, rx = 0.50, rz = 0.50, mass = 0.35, cost = 450, top = true,  bottom = true,  kind = "tank", fuel = 160, side = true, strength = 650 },
+  engineS   = { prefab = "PartEngineS",   label = "Sputter",      h = 1.30, rx = 0.90, rz = 0.90, mass = 0.45, cost = 250, top = true,  bottom = true,  kind = "engine", thrust = 35,  ve = 160, strength = 500 },
+  engineM   = { prefab = "PartEngineM",   label = "Anvil",        h = 1.60, rx = 0.90, rz = 0.90, mass = 0.9,  cost = 1200, top = true,  bottom = true,  kind = "engine", thrust = 85,  ve = 173, strength = 800 },
   -- A fin is a SIDE-MOUNT blade: no axial nodes (never centred), not a side
   -- host itself — it can only attach to another part's flank, where it self-
   -- orients to point outward. Ring it with X symmetry for a proper fin set.
-  fins      = { prefab = "PartFins",      label = "Aero Fin",     h = 0.95, rx = 0.35, rz = 0.03, mass = 0.04, cost = 35, top = false, bottom = false, kind = "structural", aero = true, radial_orient = true, strength = 200, maxq = 100 },
-  battery   = { prefab = "PartBattery",   label = "Battery",      h = 1.00, rx = 0.50, rz = 0.50, mass = 0.1,  cost = 130, top = true,  bottom = true,  kind = "structural", power = true, ec = 150, side = true, strength = 350,
+  fins      = { prefab = "PartFins",      label = "Aero Fin",     h = 0.95, rx = 0.35, rz = 0.03, mass = 0.04, cost = 40, top = false, bottom = false, kind = "structural", aero = true, radial_orient = true, strength = 200, maxq = 100 },
+  battery   = { prefab = "PartBattery",   label = "Battery",      h = 1.00, rx = 0.50, rz = 0.50, mass = 0.1,  cost = 60, top = true,  bottom = true,  kind = "structural", power = true, ec = 150, side = true, strength = 350,
                 mods = { { type = "battery", ec = 150 } } },
   -- Solar panel: a RADIAL blade (mounts on a flank like a fin, self-orients
   -- outward) that EXTENDS in flight (the Deploy group, U) and charges the
   -- batteries while the sun is on it. It tracks about its own long axis, so it
   -- loses output only as the sun swings toward that axis — and nothing at all in
   -- a planet's shadow. gen = EC/s at home-orbit sunlight (more nearer the star).
-  solar     = { prefab = "PartSolar",     label = "Solar Panel",  h = 0.70, rx = 0.45, rz = 0.06, mass = 0.05, cost = 200, top = false, bottom = false, kind = "structural", solar = true, gen = 1.0, radial_orient = true, strength = 80,
+  solar     = { prefab = "PartSolar",     label = "Solar Panel",  h = 0.70, rx = 0.45, rz = 0.06, mass = 0.05, cost = 600, top = false, bottom = false, kind = "structural", solar = true, gen = 1.0, radial_orient = true, strength = 80,
                 mods = { { type = "solar", gen = 1.0 }, { type = "deploy", anim = "solar" } } },
   -- ANTENNAS. The whip is OMNI and short: it reaches home from the near planets
   -- and talks craft to craft over tens of km, folded for launch. The dishes are
@@ -104,43 +120,43 @@ REG = {
   -- real power while out — and RELAY: a craft carrying one passes everybody
   -- else's signal on, which is how a web of satellites gets you home from
   -- behind a moon or from the next star.
-  antenna   = { prefab = "PartAntenna",   label = "Comm Whip",    h = 0.90, rx = 0.12, rz = 0.12, mass = 0.01, cost = 90,  top = false, bottom = false, kind = "structural", radial_orient = true, strength = 60,
+  antenna   = { prefab = "PartAntenna",   label = "Comm Whip",    h = 0.90, rx = 0.12, rz = 0.12, mass = 0.01, cost = 120,  top = false, bottom = false, kind = "structural", radial_orient = true, strength = 60,
                 mods = { { type = "antenna", power = 2250, rate = 4, draw = 0.12, omni = true },
                          { type = "deploy", anim = "whip" } } },
-  dish      = { prefab = "PartDish",      label = "Relay Dish",   h = 0.80, rx = 0.40, rz = 0.40, mass = 0.08, cost = 260, top = true,  bottom = true,  kind = "structural", comms = true, side = true, strength = 100,
+  dish      = { prefab = "PartDish",      label = "Relay Dish",   h = 0.80, rx = 0.40, rz = 0.40, mass = 0.08, cost = 900, top = true,  bottom = true,  kind = "structural", comms = true, side = true, strength = 100,
                 mods = { { type = "antenna", power = 2.25e5, relay = true, dish = true, rate = 12, draw = 0.6 },
                          { type = "deploy", anim = "dish" } } },
-  dishL     = { prefab = "PartDishL",     label = "Deep Space Dish", h = 1.20, rx = 0.60, rz = 0.60, mass = 0.25, cost = 1200, top = true, bottom = true, kind = "structural", comms = true, side = true, strength = 160,
+  dishL     = { prefab = "PartDishL",     label = "Deep Space Dish", h = 1.20, rx = 0.60, rz = 0.60, mass = 0.25, cost = 4000, top = true, bottom = true, kind = "structural", comms = true, side = true, strength = 160,
                 mods = { { type = "antenna", power = 1.44e7, relay = true, dish = true, rate = 40, draw = 1.6 },
                          { type = "deploy", anim = "dish" } } },
   -- RELAY BEACON (comms, electronics.COMMS.beacon): the cheap ground relay the
   -- crew plants by hand, as a part. A low-power relay that is always on: on a
   -- lander it carries the network a few hundred metres over the ground.
-  beacon    = { prefab = "PartBeacon",    label = "Relay Beacon", h = 4.20, rx = 0.35, rz = 0.35, mass = 0.02, cost = 80, top = false, bottom = true,  kind = "structural", strength = 60,
+  beacon    = { prefab = "PartBeacon",    label = "Relay Beacon", h = 4.20, rx = 0.35, rz = 0.35, mass = 0.02, cost = 60, top = false, bottom = true,  kind = "structural", strength = 60,
                 mods = { { type = "antenna", power = 1500, relay = true, rate = 2, draw = 0.0, omni = true } } },
   -- FLOODLIGHT: a lamp for landing at night and for working in a shadow. It is
   -- what the Lights group (Y) switches; it draws power while it's on.
-  light     = { prefab = "PartLight",     label = "Floodlight",   h = 0.30, rx = 0.15, rz = 0.15, mass = 0.01, cost = 40,  top = false, bottom = false, kind = "structural", radial_orient = true, strength = 60,
+  light     = { prefab = "PartLight",     label = "Floodlight",   h = 0.30, rx = 0.15, rz = 0.15, mass = 0.01, cost = 20,  top = false, bottom = false, kind = "structural", radial_orient = true, strength = 60,
                 mods = { { type = "light", draw = 0.2 } } },
-  decoupler = { prefab = "PartDecoupler", label = "Decoupler",    h = 0.25, rx = 0.51, rz = 0.51, mass = 0.06, cost = 60,  top = true,  bottom = true,  kind = "structural", decouple = true, strength = 400 },
+  decoupler = { prefab = "PartDecoupler", label = "Decoupler",    h = 0.25, rx = 0.51, rz = 0.51, mass = 0.06, cost = 150,  top = true,  bottom = true,  kind = "structural", decouple = true, strength = 400 },
   -- The RADIAL decoupler mounts on a flank and kicks its outboard branch
   -- away at staging (side boosters). It is itself a side host: booster
   -- stacks attach to its outer face.
-  radialDec = { prefab = "PartDecoupler", label = "Radial Decoupler", h = 0.25, rx = 0.51, rz = 0.51, mass = 0.05, cost = 60, top = false, bottom = false, kind = "structural", decouple = true, radial = true, side = true, strength = 350 },
+  radialDec = { prefab = "PartDecoupler", label = "Radial Decoupler", h = 0.25, rx = 0.51, rz = 0.51, mass = 0.05, cost = 180, top = false, bottom = false, kind = "structural", decouple = true, radial = true, side = true, strength = 350 },
   -- Landing legs are RADIAL now (like fins): mount on the flank of a tank/engine
   -- with symmetry (X = ×N), each strut self-orients outward, and they fold down
   -- to deploy / up to stow as ONE symmetry ring (G in flight). No more stack
   -- sandwich — bolt three or four around the base and they splay out to land.
-  legs      = { prefab = "PartLegs",      label = "Landing Legs", h = 0.90, rx = 0.40, rz = 0.18, mass = 0.015, cost = 40,  top = false, bottom = false, kind = "structural", legs = true, radial_orient = true, strength = 300 },
+  legs      = { prefab = "PartLegs",      label = "Landing Legs", h = 0.90, rx = 0.40, rz = 0.18, mass = 0.015, cost = 90,  top = false, bottom = false, kind = "structural", legs = true, radial_orient = true, strength = 300 },
   -- SKIPPER: a heavier, punchier engine in the Anvil's exact footprint (same
   -- proven collider) — twice the Anvil's thrust: the first stage of anything
   -- going to another planet. (Rating version 3 gives the three engines their
   -- jobs, sea level against vacuum: see ENGINE NICHES below.)
-  skipper    = { prefab = "PartSkipper",    label = "Skipper",      h = 1.60, rx = 0.90, rz = 0.90, mass = 1.6,  cost = 520, top = true,  bottom = true,  kind = "engine", thrust = 170, ve = 184, strength = 1000 },
+  skipper    = { prefab = "PartSkipper",    label = "Skipper",      h = 1.60, rx = 0.90, rz = 0.90, mass = 1.6,  cost = 2000, top = true,  bottom = true,  kind = "engine", thrust = 170, ve = 184, strength = 1000 },
   -- RADIAL TANK: a strap-on drop-tank. radial_orient mounts it on a flank like a
   -- fin (ring it with symmetry); its fuel joins the shared pool, and a radial
   -- decoupler kicks it (and its ring) away when spent.
-  radialTank = { prefab = "PartRadialTank", label = "Radial Tank",  h = 1.00, rx = 0.50, rz = 0.50, mass = 0.15, cost = 110, top = false, bottom = false, kind = "tank", fuel = 60, radial_orient = true, strength = 400 },
+  radialTank = { prefab = "PartRadialTank", label = "Radial Tank",  h = 1.00, rx = 0.50, rz = 0.50, mass = 0.15, cost = 350, top = false, bottom = false, kind = "tank", fuel = 60, radial_orient = true, strength = 400 },
   -- DOCKING PORT: the androgynous latch two craft mate through. It stacks like
   -- a decoupler (same collar footprint) and hosts side mounts, so you can put
   -- one on the nose of a lander and another under a station module. In flight
@@ -151,25 +167,25 @@ REG = {
   -- radial_orient makes a FLANK-mounted port face outward (+X) instead of
   -- keeping its authored "up" — that's what makes side berths work. Stacked
   -- axially it behaves exactly as before, so one part covers both.
-  dockPort  = { prefab = "PartDockPort",  label = "Docking Port", h = 0.28, rx = 0.53, rz = 0.53, mass = 0.1,  cost = 180, top = true,  bottom = true,  kind = "structural", dock = true, side = true, radial_orient = true, strength = 500 },
+  dockPort  = { prefab = "PartDockPort",  label = "Docking Port", h = 0.28, rx = 0.53, rz = 0.53, mass = 0.1,  cost = 1500, top = true,  bottom = true,  kind = "structural", dock = true, side = true, radial_orient = true, strength = 500 },
   -- RCS BLOCK: the small four-way thruster cluster docking is actually flown
   -- with. Mounts on a flank like a fin, rings with symmetry, and pools its
   -- thrust into the craft's translation authority (IJKL + HN). Balance them
   -- around the hull — the pooled push goes through the centre of mass, so a
   -- lopsided set costs you nothing but looks wrong, and a bare craft with no
   -- blocks simply has no translation at all.
-  rcs       = { prefab = "PartRCS",       label = "RCS Block",    h = 0.34, rx = 0.20, rz = 0.20, mass = 0.04, cost = 80,  top = false, bottom = false, kind = "structural", rcs = true, rcs_thrust = 3.0, radial_orient = true, strength = 60 },
+  rcs       = { prefab = "PartRCS",       label = "RCS Block",    h = 0.34, rx = 0.20, rz = 0.20, mass = 0.04, cost = 250,  top = false, bottom = false, kind = "structural", rcs = true, rcs_thrust = 3.0, radial_orient = true, strength = 60 },
   -- CARGO BAY: the hold. `cargo` is its capacity in kilograms; a vessel's total
   -- is the sum of its bays, and that number is the only thing standing between
   -- a planet full of ore and the warehouse. The bay's own mass is the EMPTY
   -- mass — what's inside is added in flight from the manifest, so a full hold
   -- genuinely flies worse than an empty one.
-  cargo     = { prefab = "PartCargo",     label = "Cargo Bay",    h = 1.20, rx = 0.50, rz = 0.50, mass = 0.4,  cost = 300, top = true,  bottom = true,  kind = "structural", cargo = 250, side = true, strength = 500 },
+  cargo     = { prefab = "PartCargo",     label = "Cargo Bay",    h = 1.20, rx = 0.50, rz = 0.50, mass = 0.4,  cost = 150, top = true,  bottom = true,  kind = "structural", cargo = 250, side = true, strength = 500 },
   -- STOWAGE LOCKER: a small box with its OWN container (`store` kg) — unlike
   -- the bays, which pool into one hold. Tools, samples and spares ride in it;
   -- what's inside weighs on this part (vessel_controller's lockers) and the
   -- right-click menu lists it.
-  locker    = { prefab = "PartLocker",    label = "Stowage Locker", h = 0.50, rx = 0.30, rz = 0.30, mass = 0.08, cost = 90, top = true, bottom = true, kind = "structural", store = 80, side = true, strength = 300 },
+  locker    = { prefab = "PartLocker",    label = "Stowage Locker", h = 0.50, rx = 0.30, rz = 0.30, mass = 0.08, cost = 40, top = true, bottom = true, kind = "structural", store = 80, side = true, strength = 300 },
 
   -- ── FRAME: struts, beams, panels, plates and adapters ─────────────────────
   -- Light and cheap, and they attach every way: stack nodes on both ends,
@@ -213,7 +229,7 @@ REG = {
   -- ROVER BODY: a chassis with its own probe core, battery and whip — a body
   -- and four wheels is a whole rover. Its FRONT is +X (the headlights); W
   -- drives that way.
-  roverBody = { prefab = "PartRoverBody", label = "Rover Body",   h = 0.30, rx = 0.80, rz = 0.50, mass = 0.35, cost = 520, top = true, bottom = true, side = true, kind = "probe", strength = 500, front = true,
+  roverBody = { prefab = "PartRoverBody", label = "Rover Body",   h = 0.30, rx = 0.80, rz = 0.50, mass = 0.35, cost = 150, top = true, bottom = true, side = true, kind = "probe", strength = 500, front = true,
                 mods = { { type = "command", crew = 0, draw = 0.04 }, { type = "wheel", torque = 0.3, draw = 0.2 },
                          { type = "battery", ec = 400 }, { type = "antenna", power = 120, rate = 1, draw = 0.02 },
                          { type = "light", draw = 0.15 } } },
@@ -222,39 +238,39 @@ REG = {
   -- world like engine thrust), top speed (m/s), draw at full power (EC/s) and
   -- the tyre radius. A tyre this size on a world this small grips by the load
   -- it carries — the flight hangs it on the engine's wheel joint.
-  wheelS    = { prefab = "PartWheelS",    label = "Wheel S",      h = 0.50, rx = 0.14, rz = 0.25, mass = 0.05, cost = 110, top = false, bottom = false, radial_orient = true, kind = "structural", strength = 180, wheel = "S", travel = 0.10,
+  wheelS    = { prefab = "PartWheelS",    label = "Wheel S",      h = 0.50, rx = 0.14, rz = 0.25, mass = 0.05, cost = 25, top = false, bottom = false, radial_orient = true, kind = "structural", strength = 180, wheel = "S", travel = 0.10,
                 mods = { { type = "drive", torque = 0.2, speed = 5.0, draw = 0.12, r = 0.25 } } },
-  wheelM    = { prefab = "PartWheelM",    label = "Wheel M",      h = 0.80, rx = 0.20, rz = 0.40, mass = 0.12, cost = 190, top = false, bottom = false, radial_orient = true, kind = "structural", strength = 300, wheel = "M", travel = 0.15,
+  wheelM    = { prefab = "PartWheelM",    label = "Wheel M",      h = 0.80, rx = 0.20, rz = 0.40, mass = 0.12, cost = 40, top = false, bottom = false, radial_orient = true, kind = "structural", strength = 300, wheel = "M", travel = 0.15,
                 mods = { { type = "drive", torque = 0.5, speed = 7.0, draw = 0.25, r = 0.40 } } },
-  wheelL    = { prefab = "PartWheelL",    label = "Wheel L",      h = 1.20, rx = 0.28, rz = 0.60, mass = 0.25, cost = 320, top = false, bottom = false, radial_orient = true, kind = "structural", strength = 520, wheel = "L", travel = 0.20,
+  wheelL    = { prefab = "PartWheelL",    label = "Wheel L",      h = 1.20, rx = 0.28, rz = 0.60, mass = 0.25, cost = 70, top = false, bottom = false, radial_orient = true, kind = "structural", strength = 520, wheel = "L", travel = 0.20,
                 mods = { { type = "drive", torque = 1.1, speed = 9.0, draw = 0.5, r = 0.60 } } },
   -- FAIRINGS: a base ring that grows a shell to enclose whatever is stacked
   -- on it (the shell is built to fit — scripts measure the payload), keeps the
   -- air and the heat off it on the way up, and splits away by its action or
   -- as a staging event. `fairing` is the base radius.
-  fairingS  = { prefab = "PartFairingS",  label = "Fairing 1.25 m", h = 0.20, rx = 0.625, rz = 0.625, mass = 0.08, cost = 140, top = true, bottom = true, kind = "structural", fairing = 0.625, strength = 450,
+  fairingS  = { prefab = "PartFairingS",  label = "Fairing 1.25 m", h = 0.20, rx = 0.625, rz = 0.625, mass = 0.08, cost = 400, top = true, bottom = true, kind = "structural", fairing = 0.625, strength = 450,
                 mods = { { type = "fairing" } } },
-  fairingM  = { prefab = "PartFairingM",  label = "Fairing 2.5 m",  h = 0.20, rx = 1.25,  rz = 1.25,  mass = 0.2,  cost = 260, top = true, bottom = true, kind = "structural", fairing = 1.25, strength = 700,
+  fairingM  = { prefab = "PartFairingM",  label = "Fairing 2.5 m",  h = 0.20, rx = 1.25,  rz = 1.25,  mass = 0.2,  cost = 800, top = true, bottom = true, kind = "structural", fairing = 1.25, strength = 700,
                 mods = { { type = "fairing" } } },
 
   -- ── ROBOTICS ─────────────────────────────────────────────────────────────
   -- Electric actuators. Everything stacked on the moving face (the top node)
   -- moves with it; they draw power while they move and hold where they stop.
   -- `robo` = the joint kind; the module carries the motor's figures.
-  hinge     = { prefab = "PartHinge",     label = "Servo Hinge",  h = 0.40, rx = 0.20, rz = 0.20, mass = 0.06, cost = 240, top = true, bottom = true, kind = "structural", robo = "hinge", strength = 420,
+  hinge     = { prefab = "PartHinge",     label = "Servo Hinge",  h = 0.40, rx = 0.20, rz = 0.20, mass = 0.06, cost = 120, top = true, bottom = true, kind = "structural", robo = "hinge", strength = 420,
                 mods = { { type = "hinge", torque = 3.0, rate = 30, draw = 0.5 } } },
-  piston    = { prefab = "PartPiston",    label = "Piston",       h = 0.50, rx = 0.16, rz = 0.16, mass = 0.08, cost = 260, top = true, bottom = true, kind = "structural", robo = "piston", strength = 420,
+  piston    = { prefab = "PartPiston",    label = "Piston",       h = 0.50, rx = 0.16, rz = 0.16, mass = 0.08, cost = 130, top = true, bottom = true, kind = "structural", robo = "piston", strength = 420,
                 mods = { { type = "piston", force = 8.0, rate = 0.3, draw = 0.5 } } },
-  rotor     = { prefab = "PartRotor",     label = "Rotor",        h = 0.30, rx = 0.30, rz = 0.30, mass = 0.10, cost = 300, top = true, bottom = true, kind = "structural", robo = "rotor", strength = 450,
+  rotor     = { prefab = "PartRotor",     label = "Rotor",        h = 0.30, rx = 0.30, rz = 0.30, mass = 0.10, cost = 150, top = true, bottom = true, kind = "structural", robo = "rotor", strength = 450,
                 mods = { { type = "rotor", torque = 2.0, draw = 0.8 } } },
   -- LANDING CLAW: arm it and it bites into whatever it touches — rock, an
   -- asteroid, another craft — and holds the craft there until released.
-  claw      = { prefab = "PartClaw",      label = "Landing Claw", h = 0.80, rx = 0.35, rz = 0.35, mass = 0.09, cost = 380, top = true, bottom = false, kind = "structural", claw = true, strength = 600,
+  claw      = { prefab = "PartClaw",      label = "Landing Claw", h = 0.80, rx = 0.35, rz = 0.35, mass = 0.09, cost = 500, top = true, bottom = false, kind = "structural", claw = true, strength = 600,
                 mods = { { type = "claw", draw = 0.05, hold = 400 } } },
   -- CORE DRILL: on a flank, bit down. Lowered and running while the craft is
   -- landed or gripped, it bores into the ground and lifts what it cuts into
   -- the cargo hold (sample cores count for the labs).
-  drill     = { prefab = "PartDrill",     label = "Core Drill",   h = 1.20, rx = 0.20, rz = 0.20, mass = 0.12, cost = 450, top = false, bottom = false, radial_orient = true, kind = "structural", strength = 300,
+  drill     = { prefab = "PartDrill",     label = "Core Drill",   h = 1.20, rx = 0.20, rz = 0.20, mass = 0.12, cost = 200, top = false, bottom = false, radial_orient = true, kind = "structural", strength = 300,
                 mods = { { type = "drill", rate = 24.0, draw = 1.2, reach = 0.9 } } },
 }
 

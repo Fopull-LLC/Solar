@@ -43,9 +43,11 @@
 
 defaults = {
   -- One-time hire fee: base + step × (living roster − 3), capped.
-  hire_base = 1500,
-  hire_step = 600,
-  hire_cap = 6000,
+  -- (2026-10-26: was 1,500 / 600 / 6,000 — a crew lost with a rocket should be
+  -- a setback the ground game can pay for, not a wall.)
+  hire_base = 1000,
+  hire_step = 400,
+  hire_cap = 4000,
 }
 
 VERSION = 1

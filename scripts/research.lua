@@ -34,15 +34,20 @@ defaults = {}
 -- needs plus roughly the next one or two unlocks, in the order you want them:
 --
 --   First Flight $2,500 ……… FT-M Tank $600 (the High Road wants the fuel)
---   High Road / Prospector … Anvil $1,400, Battery, Comms Dish, Cargo Bay
---   Made Orbit $9,000 …………… Radial Tank / Decoupler, Solar Panel, RCS
+--   High Road / Prospector … Anvil $1,400, Comms Dish
+--   Made Orbit $11,000 ………… Radial Tank / Decoupler, Solar Panel, RCS
 --   Trusted / Prime standing  Skipper, Docking Port (Rendezvous)
+--
+-- The GROUND game's two unlocks are cheap on purpose (2026-10-26): the Battery
+-- ($300) and the Cargo Bay ($500) are what turn a rover into a hauler, and a
+-- rover hauling ore is how a company that lost a rocket earns its way back
+-- (missions.lua GROUND work, the depot's freight rate).
 --
 -- `rep` is a STANDING gate (company.lua): the parts that open interplanetary
 -- work are not sold to a company nobody has heard of.
 TECH = {
   tankM      = { cost = 600,  label = "FT-M Tank" },
-  battery    = { cost = 900,  label = "Battery",        mat = "copper" },
+  battery    = { cost = 300,  label = "Battery",        mat = "copper" },
   engineM    = { cost = 1400, label = "Anvil" },
   -- The relay dish is what a SATELLITE relay is made of: it opens once the
   -- ground network is up (the Relay Network milestone grants it outright), so
@@ -54,7 +59,7 @@ TECH = {
   radialDec  = { cost = 900,  label = "Radial Decoupler" },
   radialTank = { cost = 1200, label = "Radial Tank",    after = "tankM" },
   solar      = { cost = 2200, label = "Solar Panel",    mat = "silica",  after = "battery" },
-  cargo      = { cost = 1800, label = "Cargo Bay",      mat = "iron" },
+  cargo      = { cost = 500,  label = "Cargo Bay",      mat = "iron" },
   rcs        = { cost = 2600, label = "RCS Block",      after = "engineM", rep = 3 },
   skipper    = { cost = 4500, label = "Skipper",        mat = "iron",    after = "engineM", rep = 8 },
   dockPort   = { cost = 3800, label = "Docking Port",   mat = "copper",  rep = 6, after = "rcs" },
