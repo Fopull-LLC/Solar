@@ -145,15 +145,16 @@ defaults = {
   --@range 4 30 --@units m
   grav_max = 12.0,
   -- The power budget, in game units (t·m/s², tonnes are the game's mass):
-  -- about 0.4 t held against the home world's pull.
+  -- about 0.53 t held against the home world's pull (playtest 2026-10-27:
+  -- "slightly more powerful" — was 4.0, +30 %; the weight still decides).
   --@range 0.5 40
-  grav_force = 4.0,
+  grav_force = 5.2,
   --@range 2 20 --@units rad/s
   grav_omega = 9.0,        -- how fast a light object snaps to the aim
   --@range 0.2 1.5
   grav_zeta = 0.8,         -- damping ratio of the pull
   --@range 0.02 3 --@units t
-  grav_mref = 0.25,        -- stiffness stops growing with mass past this
+  grav_mref = 0.32,        -- stiffness stops growing with mass past this (was 0.25)
   --@range 0 10
   grav_spin_damp = 2.5,    -- how fast a held object's tumble dies
   --@range 2 40 --@units m/s
@@ -1739,9 +1740,15 @@ local function pop_unit(node, hit)
       end
     end
   end
-  local mat, _, rich = survey(hit.x, hit.y, hit.z)
+  local mat, depth, rich = survey(hit.x, hit.y, hit.z)
   if not mat then return end
   local took = inv.add("astro", mat, rich and 2 or 1)
+  -- STAR GEODES: resonant crystal cut out of the deep rock is a geode find
+  -- (missions.geodeFind keeps the count and announces the first).
+  if took > 0 and mat == "crystal" then
+    local mi = ref("missions")
+    if mi and mi.geodeFind then pcall(mi.geodeFind, space.dominant(hit.x, hit.y, hit.z), mat, took, depth or 0) end
+  end
   if took <= 0 then
     if time - denied_t > 2.5 then
       denied_t = time
@@ -1974,6 +1981,7 @@ local function saw_reset() saw, saw_look, saw_end = nil, nil, nil end
 -- Who else E belongs to right now, or nil.
 local function e_taken()
   local fm = ref("facility_menu")
+  if fm and fm.crateNear and fm.crateNear() then return "E opens the crate" end
   if fm and fm.prompting and fm.prompting() then return "E is the building's door" end
   local sv = ref("salvage")
   if sv and sv.prompting and sv.prompting() then return "E recovers the crate" end
@@ -3485,7 +3493,10 @@ local function draw_hud(carrying)
   local up = (carrying or gate ~= GATE_ABOARD) and not (pm and pm.open)
     and not (om and om.isOpen and om.isOpen())
     and not (fm and fm.isOpen and fm.isOpen()) and not (ob and ob.isOpen and ob.isOpen())
-  -- (the rifle's scope picture in first person fills the view: no hotbar over it)
+  -- (the rifle's scope picture in first person fills the view: no hotbar over
+  -- it — but the picture itself IS the reticle, so that one stays: hiding it
+  -- with the hotbar left a bare zoom with no scope at all)
+  local reticle_up = up
   if up and toolId() == "surveyor" and first_person() then
     local SV = ref("surveyor")
     if SV and (SV.scopeK or 0) > 0.6 then up = false end
@@ -3498,7 +3509,7 @@ local function draw_hud(carrying)
   if carrying and prompt == "" and gate ~= "in hand" then prompt = gate end
   hudText = carrying and hudLine() or ("tools stowed  ·  " .. gate)
   if up and ui and ui.make then ui.make(hud, hotbar(carrying)) end
-  reticle_draw = (up and carrying and gate == "in hand") and draw_reticle or nil
+  reticle_draw = (reticle_up and carrying and gate == "in hand") and draw_reticle or nil
 end
 
 function update(node, dt)

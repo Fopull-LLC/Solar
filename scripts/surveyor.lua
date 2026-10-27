@@ -663,6 +663,50 @@ local function step_bolt(b, dt)
   return false
 end
 
+-- ── the scope's feel: breath, sway, the kick ───────────────────────────────
+-- Shouldered in first person, the rifle is never quite still: a suited body
+-- breathes (the muzzle rises and settles every few seconds), the arms wander
+-- a little, a fresh mount sways more until it settles, walking with it up
+-- sways a lot, and a shot kicks the sight up and it comes back down. All of
+-- it is a small turn of the VIEW (the camera, after planet_camera has placed
+-- it), so the scope's picture, the crosshair and where the bolt goes agree:
+-- the bolt leaves along the swayed line you see. Angles in radians; at 4×
+-- on a 1080-line screen a milliradian is about 3.6 pixels.
+SWAY = { breath = 0.0010, breath_hz = 0.21, drift = 0.0006, settle = 3.0, settle_secs = 1.3,
+         move = 4.0, kick = 0.16 }
+sway = { yaw = 0, pitch = 0, t = 0, settle = 1, kick = 0, kickv = 0, ex = 0, ey = 0,
+         hook = false, applied_t = -1, moving = 0 }
+local function sway_tick(dt, moving)
+  local S = SWAY
+  sway.t = sway.t + dt
+  sway.settle = math.max(0, sway.settle - dt / S.settle_secs)
+  sway.moving = sway.moving + ((moving or 0) - sway.moving) * (1 - math.exp(-4 * dt))
+  local amp = 1 + sway.settle * sway.settle * (S.settle - 1) + sway.moving * S.move
+  local t, tau = sway.t, 2 * math.pi
+  -- the breath: in lifts the muzzle (slow), out lets it down (quicker)
+  local ph = tau * S.breath_hz * t
+  local breath = S.breath * (math.sin(ph) + 0.3 * math.sin(2 * ph + 0.6))
+  -- the arms' wander: incommensurate slow sines, a figure-of-eight that never repeats
+  local dy = S.drift * (0.62 * math.sin(tau * 0.31 * t + 0.4) + 0.38 * math.sin(tau * 0.83 * t + 2.1))
+  local dp = S.drift * 0.7 * (0.55 * math.sin(tau * 0.47 * t + 1.7) + 0.45 * math.sin(tau * 1.13 * t))
+  -- the kick: a damped spring (it overshoots a hair and settles)
+  local w, z = 13.0, 0.55
+  sway.kickv = sway.kickv + (-w * w * sway.kick - 2 * z * w * sway.kickv) * dt
+  sway.kick = sway.kick + sway.kickv * dt
+  local oy, op = sway.yaw, sway.pitch
+  sway.yaw = amp * dy
+  sway.pitch = amp * (breath + dp) + sway.kick
+  -- the eye behind the eyepiece: the tube's picture slides against the view
+  -- as the rifle moves (and sits off-centre while it is first brought up)
+  local vx, vy = (sway.yaw - oy) / math.max(dt, 1e-3), (sway.pitch - op) / math.max(dt, 1e-3)
+  local tex, tey = -vx * 0.9 + sway.settle * 0.010, vy * 0.9 + sway.settle * 0.018
+  sway.ex = sway.ex + (tex - sway.ex) * (1 - math.exp(-8 * dt))
+  sway.ey = sway.ey + (tey - sway.ey) * (1 - math.exp(-8 * dt))
+end
+function scope_kick(c)
+  if scopeK > 0.5 then sway.kickv = sway.kickv + SWAY.kick * (0.6 + 0.4 * (c or 1)) end
+end
+
 -- ── the trigger, the scope, the cell: tool_belt calls this while it's held ─
 local trig = { held = false, t0 = 0, snd = nil, ready_snd = nil, need_up = false }
 local gated_t = -10        -- the last frame the rifle was in hand (update)
@@ -721,6 +765,7 @@ local function fire(node, api)
   cell_draw(cost)
   fireFrom(mx, my, mz, fx, fy, fz, { charge = c, by = rec and rec.name or "the crew", shooter = me })
   api.kick(0.03 + 0.05 * c)
+  scope_kick(c)
   heat = math.min(1, heat + 0.25 + 0.2 * c)
   flash = 1.0
   vent_until = now() + P("vent_secs")
@@ -749,8 +794,21 @@ function tick(node, dt, lmb, rmb, api)
   if want ~= scoped then
     scoped = want
     play(SND.scope, { track = "UI", volume = 0.3, pitch = want and 1.2 or 0.9 })
+    if want then sway.settle = 1 end
   end
+  -- eased in and out, and SNAPPED at the ends: the old exponential never
+  -- arrived, so the lens kept re-writing a field of view a hair off the last
   scopeK = scopeK + ((scoped and 1 or 0) - scopeK) * (1 - math.exp(-14 * dt))
+  if scoped and scopeK > 0.995 then scopeK = 1 elseif not scoped and scopeK < 0.005 then scopeK = 0 end
+  local a = astro()
+  local mv = 0
+  if a and a.vx then
+    local ux, uy, uz = a.up_x or 0, a.up_y or 1, a.up_z or 0
+    local vx, vy, vz = a.vx, a.vy, a.vz
+    local vu = vx * ux + vy * uy + vz * uz
+    mv = math.min(1, len(vx - ux * vu, vy - uy * vu, vz - uz * vu) / 3.0)
+  end
+  sway_tick(dt, mv)
   -- the vent after a shot
   venting = math.max(0, vent_until - now())
   if venting > 0 and venting - dt <= 0 then play(SND.vent, { track = "SFX", volume = 0.3 }) end
@@ -823,6 +881,235 @@ local function bar(x, y, w, h, c, a)
   draw.rect(x, y, w, h, c[1], c[2], c[3], a)
 end
 
+-- The scope's lens: the main camera's field of view and the look's speed.
+-- RE-ASSERTED EVERY FRAME while the scope is up, against the camera's own
+-- value: settings.lua puts the player's field of view back twice a second
+-- (a craft's camera can be rebuilt under it), and the old lens wrote only
+-- when its OWN target moved — so the zoom held for half a second, snapped
+-- out, and stayed out until the next change: the scope "jittering" in and
+-- out (playtest 2026-10-27). The base is the player's setting, not the
+-- scene's, so leaving the scope lands exactly where settings wants it.
+-- This runs in lateUpdate, after settings' update, so a frame is never drawn
+-- at the wrong field of view.
+lens = { applied = nil, cur = nil, sens0 = nil, writes = 0, base = nil }
+local function base_fov(pc)
+  local st = ref("settings")
+  local deg = st and st.get and st.get("fov")
+  if type(deg) == "number" and deg > 10 and deg < 170 then return math.rad(deg) end
+  return (pc.params and pc.params.fov_y) or 1.1519173
+end
+local function lens_tick(fp, active)
+  local pc = ref("planet_camera")
+  local cn = pc and pc.node
+  if not (pc and cn and cn.valid ~= false) then return end
+  local cc = lens.comp
+  if not (cc and lens.comp_of == cn) then
+    cc = cn.getcomponent and cn:getcomponent("Camera") or nil
+    lens.comp, lens.comp_of = cc, cn
+  end
+  local base = base_fov(pc)
+  lens.base = base
+  local k = active and scopeK or 0
+  local zoom = 1 + ((fp and P("zoom_fp") or P("zoom_tp")) - 1) * k
+  local fov = 2 * math.atan(math.tan(base * 0.5) / zoom)
+  local have = cc and cc.fovY
+  -- The look's speed: the player's, captured as the scope comes up and put
+  -- back whenever it is down (`sens_w`: our last write).
+  local P_ = pc.params
+  if k <= 0 then
+    if lens.applied then
+      if cc then cc.fovY = base else pcall(function() cn:setCamera { fovY = base } end) end
+      lens.applied, lens.cur = nil, nil
+    end
+    if P_ and lens.sens_w and lens.sens0 then P_.sensitivity = lens.sens0 end
+    lens.sens_w = nil
+    return
+  end
+  if not have or math.abs(have - fov) > 1e-4 then
+    if cc then cc.fovY = fov else pcall(function() cn:setCamera { fovY = fov } end) end
+    lens.writes = lens.writes + 1
+  end
+  if P_ then
+    -- (captured once, as the scope starts to come up: another script's
+    -- params read back through its handle a frame late, so a value read
+    -- mid-scope may be our own last write)
+    if not lens.sens_w then lens.sens0 = P_.sensitivity or 0.3 end
+    local want = lens.sens0 / zoom
+    if want ~= lens.sens_w then P_.sensitivity = want end
+    lens.sens_w = want
+  end
+  lens.applied, lens.cur = fov, fov
+end
+
+-- The sway turns the view: the camera planet_camera has just placed, turned
+-- by the sway's small angles about its own right and up. planet_camera
+-- points the camera afresh every frame (lookAt), so this never accumulates.
+-- Called by planet_camera right after it places the camera when it has the
+-- hook (`cameraFollow`), else from this script's lateUpdate.
+local function apply_sway(cn, pc)
+  if not (cn and cn.valid ~= false and pc) then return end
+  local k = scopeK
+  if k <= 0.05 then return end
+  -- The basis is planet_camera's own, published as it placed the view this
+  -- frame (fwd, the eye): the node's axes and position read back here are a
+  -- frame old, and turning LAST frame's (already swayed) view made the sway
+  -- integrate into a drift of tens of milliradians (probe 2026-10-27). The
+  -- up is the crew's local up; the target is far down the line, so a
+  -- centimetre of eye position is a microradian of aim.
+  local fx, fy, fz = pc.fwd_x, pc.fwd_y, pc.fwd_z
+  local ex, ey, ez = pc.cam_x, pc.cam_y, pc.cam_z
+  local a = astro()
+  if not (fx and ex and a) then return end
+  local ux, uy, uz = a.up_x or 0, a.up_y or 1, a.up_z or 0
+  -- right = fwd × up, true up = right × fwd
+  local rx, ry, rz = fy * uz - fz * uy, fz * ux - fx * uz, fx * uy - fy * ux
+  local rl = len(rx, ry, rz)
+  if rl < 1e-4 then return end
+  rx, ry, rz = rx / rl, ry / rl, rz / rl
+  local vx, vy, vz = ry * fz - rz * fy, rz * fx - rx * fz, rx * fy - ry * fx
+  local ty, tp = math.tan(sway.yaw * k), math.tan(sway.pitch * k)
+  local dx, dy, dz = fx + rx * ty + vx * tp, fy + ry * ty + vy * tp, fz + rz * ty + vz * tp
+  local l = len(dx, dy, dz)
+  if l < 1e-6 then return end
+  local D = 1000 / l
+  cn:lookAt(vec3(ex + dx * D, ey + dy * D, ez + dz * D), vec3(ux, uy, uz))
+  sway.applied_t = now()
+end
+local function sway_wanted()
+  local tb = ref("tool_belt")
+  return now() - gated_t < 0.2 and tb and tb.firstPersonNow and tb.firstPersonNow() and scopeK > 0.05
+end
+function cameraFollow(cn, dt)
+  sway.hook = true
+  if sway_wanted() then apply_sway(cn, ref("planet_camera")) end
+end
+
+-- THE SCOPE'S PICTURE. A 4× tube sight seen from behind the eyepiece:
+--   * the field, a circle 92 % of the screen's height, its picture the
+--     camera's own zoomed view; black outside it, and the tube's edge;
+--   * the glass: a faint warm coating tint, a vignette darkening the last
+--     fifth of the field, and a colour fringe at the rim (blue out, red in);
+--   * the eye-box: the tube's circle slides a little against the picture as
+--     the rifle moves (`sway.ex/ey`), a crescent of shadow on the trailing side;
+--   * the reticle: heavy posts from the rim, a fine cross, a lit centre dot
+--     (the charge's colour), milliradian ticks every 5 (long every 10) out to
+--     30, and a stadia range-finder bottom-left: a bar the height of a
+--     standing suited figure (1.8 m) at 100 … 500 m — put the figure's boots
+--     on the line and read where its helmet touches. All of it is sized from
+--     the camera's actual field of view, so the marks are true angles;
+--   * the range (the laser), the cell, the charge arc, the magnification.
+-- Coming up to the eye the field fades in from black (scopeK 0.6 → 1).
+local function mrad_px(sh)
+  local fov = lens.cur or lens.applied or 0.30
+  return (sh * 0.5) / math.tan(fov * 0.5) * 0.001
+end
+function draw_scope(ax, ay, k, sw, sh, c)
+  stats.scope_draws = (stats.scope_draws or 0) + 1
+  local R = math.min(sw, sh) * 0.46
+  local ink = { 0.03, 0.03, 0.03 }
+  -- the tube's circle, slid by the eye-box
+  local mp = mrad_px(sh)
+  local fx = ax + math.max(-0.08 * R, math.min(0.08 * R, sway.ex * 1000 * mp))
+  local fy = ay + math.max(-0.08 * R, math.min(0.08 * R, sway.ey * 1000 * mp))
+  -- the glass: tint and vignette (rings from 78 % of the field out, darker
+  -- toward the rim), then the colour fringe
+  draw.circle(fx, fy, R, 1.0, 0.86, 0.62, 0.045)
+  -- (each ring overlaps the next, so the falloff reads as a gradient, not bands)
+  local n = 14
+  local gap = R * 0.24 / n
+  for i = 0, n - 1 do
+    local u = (i + 0.5) / n
+    local rr = R * (0.76 + 0.24 * u)
+    draw.circleOutline(fx, fy, rr, 0, 0, 0, 0.035 + 0.16 * u * u * u, gap * 2.2 + 1)
+  end
+  draw.circleOutline(fx, fy, R * 0.992, 0.25, 0.45, 1.0, 0.22, 2.5 * k)
+  draw.circleOutline(fx, fy, R * 0.975, 1.0, 0.35, 0.12, 0.14, 2.0 * k)
+  -- black past the field: four slabs outside its square, rings over the corners
+  -- (overlapping by two pixels: no seam where they meet)
+  draw.rect(0, 0, sw, math.max(0, fy - R + 2), 0, 0, 0, 1)
+  draw.rect(0, fy + R - 2, sw, math.max(0, sh - fy - R + 2), 0, 0, 0, 1)
+  draw.rect(0, fy - R - 2, math.max(0, fx - R + 2), 2 * R + 4, 0, 0, 0, 1)
+  draw.rect(fx + R - 2, fy - R - 2, math.max(0, sw - fx - R + 2), 2 * R + 4, 0, 0, 0, 1)
+  local step = 14 * k
+  local rr = R + step * 0.5
+  while rr < R * 1.43 + step do
+    draw.circleOutline(fx, fy, rr, 0.0, 0.0, 0.0, 1.0, step + 2)
+    rr = rr + step
+  end
+  draw.circleOutline(fx, fy, R, 0.05, 0.06, 0.07, 1.0, 6 * k)
+  -- the eye-box crescent: a soft shadow on the side the tube has slid from
+  local ox, oy = fx - ax, fy - ay
+  local ol = math.sqrt(ox * ox + oy * oy)
+  if ol > 0.5 then
+    for i = 1, 4 do
+      draw.circleOutline(fx - ox / ol * i * 2.5 * k, fy - oy / ol * i * 2.5 * k, R * (1.0 - 0.012 * i), 0, 0, 0,
+        math.min(0.35, ol / (0.05 * R)) * (0.5 - 0.1 * i), 7 * k)
+    end
+  end
+  -- coming up to the eye: the field fades in from black
+  if scopeK < 1 then
+    local fade = math.max(0, math.min(1, (1 - scopeK) / 0.4))
+    if fade > 0.01 then draw.circle(fx, fy, R, 0, 0, 0, 0.92 * fade) end
+  end
+  -- THE RETICLE (the view's own centre: the sway turns the view, not this)
+  local t = math.max(1.0, 1.1 * k)
+  local post = 4.0 * k
+  local inner = R * 0.38
+  bar(ax - R, ay - post / 2, R - inner, post, ink, 0.95)
+  bar(ax + inner, ay - post / 2, R - inner, post, ink, 0.95)
+  bar(ax - post / 2, ay + inner, post, R - inner, ink, 0.95)
+  bar(ax - t / 2, ay - inner, t, inner - 3 * k, ink, 0.9)      -- the fine upper wire
+  bar(ax - inner, ay - t / 2, inner - 3 * k, t, ink, 0.9)
+  bar(ax + 3 * k, ay - t / 2, inner - 3 * k, t, ink, 0.9)
+  bar(ax - t / 2, ay + 3 * k, t, inner - 3 * k, ink, 0.9)
+  -- milliradian ticks along the wires: every 5, longer every 10, to 30
+  for m = 5, 30, 5 do
+    local o = m * mp
+    if o < inner - 4 * k then
+      local L = (m % 10 == 0) and 7 * k or 4 * k
+      bar(ax + o - t / 2, ay - L / 2, t, L, ink, 0.9)
+      bar(ax - o - t / 2, ay - L / 2, t, L, ink, 0.9)
+      bar(ax - L / 2, ay + o - t / 2, L, t, ink, 0.9)
+      bar(ax - L / 2, ay - o - t / 2, L, t, ink, 0.9)
+    end
+  end
+  -- the centre: a lit dot (the charge's colour), dark-ringed so it reads on snow
+  draw.circle(ax, ay, 2.6 * k, 0, 0, 0, 0.55)
+  draw.circle(ax, ay, 1.6 * k, c[1], c[2], c[3], 1.0)
+  -- the stadia range-finder, bottom-left: a 1.8 m figure at 100 … 500 m
+  local base_y = ay + 22 * mp
+  local x0 = ax - 9 * mp
+  if base_y < ay + R * 0.8 then
+    local xs = {}
+    for i, d in ipairs({ 100, 200, 300, 400, 500 }) do
+      local h = 1.8 / d * 1000 * mp
+      local x = x0 - (i - 1) * 7 * mp
+      xs[#xs + 1] = x
+      bar(x - t / 2, base_y - h, t, h, ink, 0.9)
+      bar(x - 2.5 * k, base_y - h - t / 2, 5 * k, t, ink, 0.9)
+      if draw.text then draw.text(x, base_y + 4 * k, tostring(math.floor(d / 100)), 10 * k, 0.05, 0.05, 0.05, 0.85, "center") end
+    end
+    bar(xs[#xs] - 3 * k, base_y - t / 2, x0 - xs[#xs] + 6 * k, t, ink, 0.9)
+  end
+  -- the charge, a lit arc low on the field's edge
+  local nn = 40
+  for i = 0, nn - 1 do
+    local ang = math.pi * (0.28 + 0.44 * i / (nn - 1))
+    local px, py = fx + math.cos(ang) * (R - 22 * k), fy + math.sin(ang) * (R - 22 * k)
+    if i / nn < charge then draw.circle(px, py, 2.2 * k, c[1], c[2], c[3], 0.95)
+    else draw.circle(px, py, 1.2 * k, 0.5, 0.55, 0.6, 0.5) end
+  end
+  if draw.text then
+    local txt = aimDist and string.format("RNG %4.0f m", aimDist) or "RNG  ---"
+    draw.text(fx + R * 0.42, fy + R * 0.55, txt, 14 * k, 0.55, 0.85, 1.0, 0.9, "left")
+    draw.text(fx + R * 0.42, fy + R * 0.55 + 18 * k, string.format("CELL %3.0f%%", cell or 0), 14 * k,
+      (cell or 0) < 20 and COL.warn[1] or 0.55, (cell or 0) < 20 and COL.warn[2] or 0.85,
+      (cell or 0) < 20 and COL.warn[3] or 1.0, 0.9, "left")
+    draw.text(fx + R * 0.30, fy - R * 0.62, string.format("%.0fx", P("zoom_fp")), 13 * k, 0.55, 0.85, 1.0, 0.7, "left")
+    draw.text(ax + 6 * k, ay + 6 * k + 30 * mp, "mil", 9 * k, 0.05, 0.05, 0.05, 0.6, "left")
+  end
+end
+
 function drawReticle(ax, ay, k, fp)
   if not (draw and draw.rect and draw.circle) then return end
   local c = COL.ink
@@ -835,53 +1122,9 @@ function drawReticle(ax, ay, k, fp)
     local ok, w, h = pcall(camera.screenSize)
     if ok and w then sw, sh = w, h end
   end
-  -- THE SCOPE (first person, aimed in): the scope's round field, black past
-  -- it; a fine crosshair with mil ticks; the range and the charge round it
+  -- THE SCOPE (first person, aimed in): see draw_scope.
   if fp and scopeK > 0.6 then
-    local R = math.min(sw, sh) * 0.46
-    -- black past the field: four slabs outside its square, and rings over
-    -- the square's corners (a ring is drawn `px` thick about its radius)
-    draw.rect(0, 0, sw, math.max(0, ay - R), 0, 0, 0, 1)
-    draw.rect(0, ay + R, sw, math.max(0, sh - ay - R), 0, 0, 0, 1)
-    draw.rect(0, ay - R, math.max(0, ax - R), 2 * R, 0, 0, 0, 1)
-    draw.rect(ax + R, ay - R, math.max(0, sw - ax - R), 2 * R, 0, 0, 0, 1)
-    local step = 14 * k
-    local rr = R + step * 0.5
-    while rr < R * 1.43 + step do
-      draw.circleOutline(ax, ay, rr, 0.0, 0.0, 0.0, 1.0, step + 2)
-      rr = rr + step
-    end
-    draw.circleOutline(ax, ay, R, 0.05, 0.06, 0.07, 1.0, 6 * k)
-    draw.circleOutline(ax, ay, R * 0.985, 0.0, 0.0, 0.0, 0.35, 10 * k)
-    local t = 1.2 * k
-    bar(ax - R, ay - t / 2, R - 14 * k, t, { 0.05, 0.05, 0.05 }, 0.9)
-    bar(ax + 14 * k, ay - t / 2, R - 14 * k, t, { 0.05, 0.05, 0.05 }, 0.9)
-    bar(ax - t / 2, ay + 14 * k, t, R - 14 * k, { 0.05, 0.05, 0.05 }, 0.9)
-    bar(ax - t / 2, ay - R, t, R - 14 * k, { 0.05, 0.05, 0.05 }, 0.9)
-    for i = 1, 6 do
-      local o = i * R / 7
-      bar(ax - t, ay + o, t * 2, t, { 0.05, 0.05, 0.05 }, 0.9)
-      bar(ax - 4 * k, ay + o - t / 2, 8 * k, t, { 0.05, 0.05, 0.05 }, 0.9)
-      bar(ax + o, ay - 3 * k, t, 6 * k, { 0.05, 0.05, 0.05 }, 0.9)
-      bar(ax - o, ay - 3 * k, t, 6 * k, { 0.05, 0.05, 0.05 }, 0.9)
-    end
-    draw.circle(ax, ay, 1.6 * k, c[1], c[2], c[3], 1.0)
-    -- the charge, a lit arc low on the field's edge
-    local n = 40
-    for i = 0, n - 1 do
-      local ang = math.pi * (0.28 + 0.44 * i / (n - 1))
-      local px, py = ax + math.cos(ang) * (R - 22 * k), ay + math.sin(ang) * (R - 22 * k)
-      if i / n < charge then draw.circle(px, py, 2.2 * k, c[1], c[2], c[3], 0.95)
-      else draw.circle(px, py, 1.2 * k, 0.5, 0.55, 0.6, 0.5) end
-    end
-    if draw.text then
-      local txt = aimDist and string.format("RNG %4.0f m", aimDist) or "RNG  ---"
-      draw.text(ax + R * 0.42, ay + R * 0.55, txt, 14 * k, 0.55, 0.85, 1.0, 0.9, "left")
-      draw.text(ax + R * 0.42, ay + R * 0.55 + 18 * k, string.format("CELL %3.0f%%", cell or 0), 14 * k,
-        (cell or 0) < 20 and COL.warn[1] or 0.55, (cell or 0) < 20 and COL.warn[2] or 0.85,
-        (cell or 0) < 20 and COL.warn[3] or 1.0, 0.9, "left")
-      draw.text(ax - R * 0.42, ay + R * 0.55, string.format("%.0f×", P("zoom_fp")), 14 * k, 0.55, 0.85, 1.0, 0.7, "right")
-    end
+    draw_scope(ax, ay, k, sw, sh, c)
     return
   end
   -- THE RETICLE: four ticks round a gap (a bolt goes where the gap is), the
@@ -911,35 +1154,6 @@ function drawReticle(ax, ay, k, fp)
 end
 
 -- ── the frame ──────────────────────────────────────────────────────────────
--- The scope's lens: the main camera's field of view and the look's speed,
--- written only while it changes, put back the moment it is not wanted.
-local lens = { applied = nil, fov0 = nil, sens0 = nil }
-local function lens_tick(fp, active)
-  local pc = ref("planet_camera")
-  local cn = pc and pc.node
-  if not (pc and cn and cn.valid ~= false) then return end
-  local base = (pc.params and pc.params.fov_y) or 1.1519173
-  local k = active and scopeK or 0
-  local zoom = 1 + ((fp and P("zoom_fp") or P("zoom_tp")) - 1) * k
-  local fov = 2 * math.atan(math.tan(base * 0.5) / zoom)
-  if k < 0.01 then
-    if lens.applied then
-      pcall(function() cn:setCamera { fovY = base } end)
-      if lens.sens0 and pc.params then pc.params.sensitivity = lens.sens0 end
-      lens.applied, lens.sens0 = nil, nil
-    end
-    return
-  end
-  if not lens.applied or math.abs(lens.applied - fov) > 1e-3 then
-    pcall(function() cn:setCamera { fovY = fov } end)
-    if pc.params then
-      if not lens.sens0 then lens.sens0 = pc.params.sensitivity end
-      pc.params.sensitivity = lens.sens0 / zoom
-    end
-    lens.applied = fov
-  end
-end
-
 local recharge_t = 0
 function update(node, dt)
   local t0 = clock()
@@ -975,6 +1189,11 @@ function lateUpdate(node, dt)
   local tb = ref("tool_belt")
   local fp = tb and tb.firstPersonNow and tb.firstPersonNow() or false
   lens_tick(fp, now() - gated_t < 0.2)
+  -- the sway, when planet_camera has no hook to call us after it places the view
+  if not sway.hook and sway_wanted() then
+    local pc = ref("planet_camera")
+    apply_sway(pc and pc.node, pc)
+  end
   -- the bolts in flight on the pooled nodes, from their planet frame now
   for k = 1, POOL_N do
     local b = bolts[k]

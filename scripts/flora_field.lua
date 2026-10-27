@@ -1891,6 +1891,33 @@ wash = function(body, rx, ry, rz, species, fg, alt, w)
   end
 end
 
+-- ── "where is it?" marks only until the plant itself is in ──────────────────
+-- The orbs over a rare plant and the glow motes round a glowing one were drawn
+-- whether or not the plant was. Right after a load, before a plant's model has
+-- streamed in, they are the only sign of it (the playtest found a rare plant
+-- by its dot that way), but once the plant is drawn they read as a marker dot
+-- hanging on it (playtest 2026-10-27). So each mark now shows only until the
+-- plant's model and its textures are in (assets.warm calls back), then fades
+-- out over MARK_FADE seconds. `markAlpha(path)` is 1 while loading, then 1 → 0.
+MARK_FADE, MARK_GRACE = 1.5, 0.4
+local MARK_TEX = { "textures/flora/foliage_l0.png", "textures/flora/foliage_n.png", "textures/flora/foliage_glow.png" }
+local warm_at = {}      -- model path -> time it was ready (false while loading)
+function markAlpha(path)
+  if not path then return 1 end
+  local w = warm_at[path]
+  if w == nil then
+    warm_at[path] = false
+    local list = { path }
+    for _, t in ipairs(MARK_TEX) do list[#list + 1] = t end
+    local fn = assets and assets.warm
+    local ok = fn and pcall(fn, list, function() warm_at[path] = time or 0 end)
+    if not ok then warm_at[path] = time or 0 end
+    return 1
+  end
+  if not w then return 1 end
+  return math.max(0, math.min(1, 1 - ((time or 0) - w - MARK_GRACE) / MARK_FADE))
+end
+
 -- ── glow motes ──────────────────────────────────────────────────────────────
 -- A few small emissive specks hovering round glowing plants near you. A pool of
 -- nodes made once and moved, never spawned per plant: a scene change rebuilds
@@ -2111,9 +2138,17 @@ function lateUpdate(node, dt)
   end
   table.sort(spots, function(a, b) return a.d < b.d end)
   local used = 0
+  local fgm = ref("flora_gen")
   for _, s in ipairs(spots) do
     if used >= #motes then break end
     local m = motes[used + 1]
+    -- (only a plant not drawn yet is marked: see markAlpha)
+    local ma = 1
+    if fgm and fgm.modelFor then
+      ma = markAlpha(fgm.modelFor(s.sp, 0, srcs[s.id] and srcs[s.id].part))
+      if s.h.settled == false then ma = 1 end
+    end
+    if ma <= 0.01 then m = nil end
     if m and m.valid then
       local g = settle_point(s.id, s.h, s.p)
       local l = len(g[1], g[2], g[3])
@@ -2127,7 +2162,7 @@ function lateUpdate(node, dt)
       local sc = 0.06 + 0.05 * r:next()
       m.scale_x, m.scale_y, m.scale_z = sc, sc, sc
       m:setMaterial { color = { gc[1] * 0.5, gc[2] * 0.5, gc[3] * 0.5 }, emissive = gc,
-                      emissiveStrength = s.sp.glow or 0.5 }
+                      emissiveStrength = s.sp.glow or 0.5, alpha = ma }
       if not m.visible then m.visible = true end
       used = used + 1
     end
@@ -2302,7 +2337,7 @@ local function rare_make(bname, planet)
   rare.made = bname
   for _, p in ipairs(list) do
     local sp = p.sp
-    local r = { p = p, node = nil }
+    local r = { p = p, node = nil, model = ref("flora_gen") and ref("flora_gen").modelFor(sp, 0) or nil }
     rare.nodes[p.key] = r
     if not p.cut then
       local fg = ref("flora_gen")
@@ -2397,6 +2432,25 @@ local function rare_lights(obs, body)
     if math.abs((e.r.lit or -1) - want) > 0.05 then
       e.r.lit = want
       if e.r.light.setPointLight then e.r.light:setPointLight { intensity = want } end
+    end
+  end
+  -- The orbs: a mark only until the plant itself is drawn (markAlpha).
+  for _, r in pairs(rare.nodes) do
+    if r.orbs then
+      local a = markAlpha(r.model)
+      a = math.floor(a * 20 + 0.5) / 20
+      if a ~= r.orb_a then
+        r.orb_a = a
+        for i, o in ipairs(r.orbs) do
+          if o.valid then
+            o.visible = a > 0
+            if a > 0 then
+              local ok, m = pcall(o.material, o)
+              if ok and m then m.alpha = ((i == 1) and 0.8 or 0.9) * a end
+            end
+          end
+        end
+      end
     end
   end
   -- The beams, and spotting.

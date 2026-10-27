@@ -61,19 +61,28 @@ defaults = {
   turn = 12.0,
 
   --@header Swimming
-  -- Slower than walking (see the water block in update).
+  -- A pressure suit swims like a sack of tools: a strong swimmer in trunks
+  -- makes 1.5-2 m/s, a suited one a laboured walk's pace (playtest 2026-10-27,
+  -- "swim kicking is way too fast"). The strokes are played at the speed over
+  -- the metres a stroke covers, so slower here is a slower, heavier stroke.
   --@range 0 20 --@units m/s
-  swim = 3.0,
+  swim = 1.3,
   --@range 0 20 --@units m/s
-  swim_fast = 4.6,
+  swim_fast = 1.9,
   -- The climb rate SPACE / CTRL give you against the buoyant bob.
   --@range 0 20 --@units m/s
-  swim_climb = 3.2,
+  swim_climb = 1.2,
   -- How hard a swimmer chases the speed asked for (as `accel`, 1/s). Water
-  -- is thick: a stroke takes a moment to get you going and you glide to a
-  -- stop, which is what lets the strokes read as the thing moving you.
-  --@range 1 40 --@units 1/s
-  swim_accel = 4.0,
+  -- is thick and the suit heavy: each stroke takes a moment to get you going.
+  --@range 0.2 40 --@units 1/s
+  swim_accel = 1.4,
+  -- The water's drag once you stop stroking (1/s): you glide a body length
+  -- or so and stop, rather than coasting or stopping dead.
+  --@range 0.2 40 --@units 1/s
+  swim_drag = 1.8,
+  -- How fast the float settles to the vertical speed asked for (1/s).
+  --@range 0.2 20 --@units 1/s
+  swim_vaccel = 1.6,
   -- The share of the swim speed you get backing up or swimming sideways
   -- while you face the view (aiming): a back-scull and a side stroke are
   -- slower than a crawl.
@@ -84,6 +93,20 @@ defaults = {
   -- How fast a swimmer turns to face where they are going (as `turn`).
   --@range 1 40 --@units 1/s
   swim_turn = 5.0,
+
+  --@header Body and push
+  -- The suited crew's mass in the game's unit (tonnes): ~85 kg of person and
+  -- ~55 kg of suit and pack. The capsule used to be the engine's default 1.0,
+  -- a one-tonne battering ram the controller drove at walking speed.
+  --@range 0.03 1 --@units t
+  mass = 0.14,
+  -- The most a crew member can shove with (kN): a braced push with the legs.
+  -- What actually reaches the thing is also capped by the boots' grip
+  -- (`push_grip` × weight), so on a light world the shove is weaker.
+  --@range 0 5 --@units kN
+  push_force = 0.9,
+  --@range 0 2
+  push_grip = 0.9,
 
   --@header Breath
   -- Seconds of air in the suit with the head under water (a full tank).
@@ -468,6 +491,131 @@ function setSuitAir(v) suitO2 = math.max(0, math.min(1, v or 1)); persist_air(tr
 -- slide round it), and a crew already inside is eased out.
 local CREW_R = 0.35
 bumped = 0          -- obstacles touched this frame (probes)
+-- ── PUSHING THINGS ──────────────────────────────────────────────────────────
+-- The controller writes the capsule's velocity every frame, so whatever the
+-- capsule walks into is met by a body that will NOT slow down: the solver's
+-- contact impulse each tick is the walker's whole momentum again, and over a
+-- second that summed to a rocket shoved like a shopping trolley (and a part
+-- hit hard enough to break). A person leaning on a 50-tonne stack moves it a
+-- hair; a small rover rolls a little.
+--
+-- So a pressed contact with anything that MOVES (a craft, a loose body) is
+-- taken out of the solver's hands: the walker never closes on it faster than
+-- it is already moving away, and pushes it itself with a force a pair of legs
+-- can make — `push_force`, capped by the boots' grip on the ground (no grip
+-- in the air, a weak one swimming). The thing then accelerates by F/m: the
+-- rocket by millimetres a second, the rover by a walking shove.
+--
+-- Contacts arrive through onCollisionStay (the engine's per-tick contact), and
+-- the wall the capsule leans on (node.wallNormal) is the fallback.
+local press_c = {}        -- other.id -> { n, x, y, z (relative to us), nx, ny, nz, t }
+pushState = { n = 0, force = 0, mass = 0, clamp = 0, other = nil }  -- probes
+function onCollisionStay(node, other, hit)
+  if not (other and hit and hit.nx) then return end
+  local id = other.id
+  if not id then return end
+  local e = press_c[id]
+  if not e then e = {}; press_c[id] = e end
+  e.n, e.t = other, time or 0
+  e.x, e.y, e.z = (hit.x or node.x) - node.x, (hit.y or node.y) - node.y, (hit.z or node.z) - node.z
+  e.nx, e.ny, e.nz = hit.nx, hit.ny, hit.nz
+end
+onCollisionEnter = onCollisionStay
+
+-- What `other` is to a push: its mass (t), velocity, and how to push it.
+local function push_target(other)
+  if not (other and other.valid ~= false) then return nil end
+  if assembly and assembly.info then
+    local ok, inf = pcall(assembly.info, other)
+    if ok and inf and inf.mass then
+      if inf.anchored or inf.gripped then return nil end
+      return { m = inf.mass, v = inf.vel, asm = true }
+    end
+  end
+  local rb = other.getcomponent and other:getcomponent("RigidBody")
+  if rb and (rb.kinematic or 0) == 0 and (rb.mass or 0) > 0 and other.vel then
+    return { m = rb.mass, v = other.vel, asm = false }
+  end
+  return nil
+end
+
+pushOff = false          -- probes: true restores the old unlimited shove (A/B)
+local function press(node, dt, ux, uy, uz, on_ground, swimming)
+  local ps = pushState
+  ps.n, ps.force, ps.clamp, ps.other = 0, 0, 0, nil
+  if pushOff then return end
+  local now_t = time or 0
+  local list = {}
+  for id, e in pairs(press_c) do
+    if now_t - e.t > 0.12 or not (e.n and e.n.valid ~= false) then press_c[id] = nil
+    else list[#list + 1] = e end
+  end
+  if #list == 0 and node.wallNormal and raycast then
+    -- the wall we lean on, and what it is
+    local wn = node.wallNormal
+    local ok, h = pcall(raycast, node.x, node.y, node.z, -wn.x, -wn.y, -wn.z, (WALK_R or 0.33) + 0.4, { ignore = { node } })
+    if ok and h and h.node then
+      list[1] = { n = h.node, x = h.x - node.x, y = h.y - node.y, z = h.z - node.z, nx = wn.x, ny = wn.y, nz = wn.z }
+    end
+  end
+  if #list == 0 then return end
+  local best, bj, bn, bp = 0, nil, nil, nil
+  for _, e in ipairs(list) do
+    local nx, ny, nz = e.nx, e.ny, e.nz
+    -- n from the thing towards us
+    if nx * -e.x + ny * -e.y + nz * -e.z < 0 then nx, ny, nz = -nx, -ny, -nz end
+    local nu = nx * ux + ny * uy + nz * uz
+    -- the floor (a deck we stand on) is not a push; a wall is
+    if math.abs(nu) < 0.6 then
+      local tgt = push_target(e.n)
+      if tgt then
+        -- in the ground plane only
+        nx, ny, nz = nx - ux * nu, ny - uy * nu, nz - uz * nu
+        local l = math.sqrt(nx * nx + ny * ny + nz * nz)
+        if l > 1e-4 then
+          nx, ny, nz = nx / l, ny / l, nz / l
+          local vin = -(mvx * nx + mvy * ny + mvz * nz)        -- how hard we walk into it
+          local tv = tgt.v
+          local away = tv and -(tv.x * nx + tv.y * ny + tv.z * nz) or 0   -- it moving off ahead of us
+          local allow = math.max(0, away) + 0.03
+          if vin > allow then
+            local cut = vin - allow
+            mvx, mvy, mvz = mvx + nx * cut, mvy + ny * cut, mvz + nz * cut
+            ps.clamp = math.max(ps.clamp, cut)
+            if vin > best then best, bj, bn, bp = vin, tgt, e.n, { nx, ny, nz, e.x, e.y, e.z } end
+          end
+          ps.n = ps.n + 1
+        end
+      end
+    end
+  end
+  if not bj then return end
+  -- The shove: the legs' force, capped by the boots' grip; how hard you lean
+  -- in is how much of it you put in (a walk into it is half, a run is all).
+  local g = 0
+  if space and space.dominant then
+    local name = space.dominant(node.x, node.y, node.z)
+    local b = name and space.body(name)
+    if b and b.mu then
+      local r2 = (node.x - b.x) ^ 2 + (node.y - b.y) ^ 2 + (node.z - b.z) ^ 2
+      if r2 > 1 then g = b.mu / r2 end
+    end
+  end
+  local m = (params and params.mass) or 0.14
+  local grip = on_ground and (params.push_grip * m * g) or (swimming and 0.15 * params.push_force or 0)
+  local F = math.min(params.push_force, grip) * math.min(1.0, best / 1.5)
+  if F <= 0 then return end
+  local J = F * dt
+  local nx, ny, nz = bp[1], bp[2], bp[3]
+  if bj.asm and assembly.impulseAt then
+    pcall(assembly.impulseAt, bn, vec3(-nx * J, -ny * J, -nz * J), vec3(node.x + bp[4], node.y + bp[5], node.z + bp[6]))
+  elseif bn.vel then
+    local v = bn.vel
+    pcall(function() bn.vel = vec3(v.x - nx * J / bj.m, v.y - ny * J / bj.m, v.z - nz * J / bj.m) end)
+  end
+  ps.force, ps.mass, ps.other = F, bj.m, bn.name
+end
+
 function bump(node, dt, ux, uy, uz)
   bumped = 0
   local ff = ref("flora_field")
@@ -641,6 +789,8 @@ WALK_R, WALK_H = 0.33, 2.0
 function start(node)
   rig = node:getcomponent("RigidBody")
   if rig and (rig.radius or 0) >= 0.1 then WALK_R, WALK_H = rig.radius, rig.height or WALK_H end
+  -- A suited person's mass, not the engine's default tonne (see PUSHING THINGS).
+  if rig and params.mass and math.abs((rig.mass or 0) - params.mass) > 1e-4 then rig.mass = params.mass end
   cam = ref("planet_camera")
   -- SALVAGE (scripts/salvage.lua): the crates a blackout leaves. Its node is
   -- spawned when the scene carries none, as the aero library is.
@@ -1104,6 +1254,13 @@ local function ease(cur, want, rate, dt)
   return cur + (want - cur) * (1 - math.exp(-rate * dt))
 end
 
+-- The swim's speeds against the 3 m/s swim and 3.2 m/s climb the blends and
+-- the attitude were first tuned at: (along, vertical).
+function swim_k()
+  local p = params or defaults
+  return math.max(0.2, (p.swim or 3.0) / 3.0), math.max(0.2, (p.swim_climb or 3.2) / 3.2)
+end
+
 local function send(kind, key, v, eps)
   if not sw_sent[key] or math.abs(sw_sent[key] - v) > eps then
     if kind == "param" then anim:setParam(key, v) else anim:setSpeed(v, key) end
@@ -1146,11 +1303,14 @@ local function swim_drive(node, dt, up, in_water, depth, feet_down, climb)
     sw_vu, sw_vu_att = sw_vu * 0.3, 0.0
   end
   local mag = math.abs(sw_vf) + math.abs(sw_vs) + math.abs(sw_vu) + 0.05
-  sw_f = ease(sw_f, math.clamp(sw_vf / 1.4, -1, 1), 5.0, dt)
+  -- The blends were tuned at a 3 m/s swim and a 3.2 m/s climb: their speed
+  -- thresholds follow the speeds the suit actually makes (`swim_k`).
+  local ks, kv = swim_k()
+  sw_f = ease(sw_f, math.clamp(sw_vf / (1.4 * ks), -1, 1), 5.0, dt)
   if math.abs(sw_vs) > 0.05 then sw_s = ease(sw_s, sw_vs > 0 and 1 or -1, 6.0, dt) end
   if math.abs(sw_vu) > 0.05 then sw_v = ease(sw_v, sw_vu > 0 and 1 or -1, 6.0, dt) end
-  sw_side = ease(sw_side, smoothstep(0.25, 0.9, math.abs(sw_vs)) * smoothstep(0.3, 0.7, math.abs(sw_vs) / mag), 4.0, dt)
-  sw_vert = ease(sw_vert, smoothstep(0.5, 1.4, math.abs(sw_vu)) * smoothstep(0.35, 0.75, math.abs(sw_vu) / mag), 4.0, dt)
+  sw_side = ease(sw_side, smoothstep(0.25 * ks, 0.9 * ks, math.abs(sw_vs)) * smoothstep(0.3, 0.7, math.abs(sw_vs) / mag), 4.0, dt)
+  sw_vert = ease(sw_vert, smoothstep(0.5 * kv, 1.4 * kv, math.abs(sw_vu)) * smoothstep(0.35, 0.75, math.abs(sw_vu) / mag), 4.0, dt)
   -- A crawl needs air. With some slack, so the chop doesn't flick it.
   if depth then
     if swim_under and depth < 1.4 then swim_under = false
@@ -1204,9 +1364,10 @@ local function swim_pose(dt)
     local sag = math.sqrt(fwd * fwd + vu * vu)
     local travel = math.pi / 2 - math.atan2(vu, fwd)      -- 0 straight up, π/2 level, π straight down
     if not swim_under then travel = travel - 0.1 end      -- a crawl rides a touch head-up
-    local m = smoothstep(0.35, 1.6, sag)
+    local ks, kv = swim_k()
+    local m = smoothstep(0.35 * ks, 1.6 * ks, sag)
     local rest = swim_under and 0.26 or 0.14
-    tp = rest + (travel - rest) * m - 0.38 * smoothstep(0.3, 1.2, -sw_vf) * (1 - m)
+    tp = rest + (travel - rest) * m - 0.38 * smoothstep(0.3 * ks, 1.2 * ks, -sw_vf) * (1 - m)
     tp = math.clamp(tp, -0.6, 2.8)
     -- Water is softer than gravity: a swimmer rolls into a turn more than a
     -- runner leans, and leans a touch into a sideways swim.
@@ -1214,7 +1375,7 @@ local function swim_pose(dt)
     tb = math.clamp(-math.atan(h * yaw_rate / 4.0) * 0.8 - 0.06 * sw_vs, -0.6, 0.6)
     -- (Not while diving: a duck-dive passes through level on its way down.)
     local level = smoothstep(0.6, 1.4, sw_pitch) * (1 - smoothstep(2.0, 2.6, sw_pitch))
-      * (1 - smoothstep(0.3, 1.0, -vu))
+      * (1 - smoothstep(0.3 * kv, 1.0 * kv, -vu))
     local surf = 1 - smoothstep(1.0, 1.8, depth_s)
     tl = surf * math.max(0.0, depth_s - (0.55 + (0.12 - 0.55) * level))
   end
@@ -1695,6 +1856,16 @@ function update(node, dt)
   local md = mvx * ux + mvy * uy + mvz * uz
   mvx, mvy, mvz = mvx - ux * md, mvy - uy * md, mvz - uz * md
   local rate = swimming and params.swim_accel or (on_ground and params.accel or params.air_accel)
+  if swimming then
+    -- Speeding up is the strokes' work (`swim_accel`); slowing down is the
+    -- water's drag (`swim_drag`), quadratic like water's: fast is shed quickly,
+    -- the last of a glide slowly.
+    local want2 = tx * tx + ty * ty + tz * tz
+    local have2 = mvx * mvx + mvy * mvy + mvz * mvz
+    if want2 < have2 then
+      rate = params.swim_drag * (0.5 + math.min(1.0, math.sqrt(have2) / math.max(0.1, params.swim)))
+    end
+  end
   local k = 1 - math.exp(-rate * dt)
   mvx, mvy, mvz = mvx + (tx - mvx) * k, mvy + (ty - mvy) * k, mvz + (tz - mvz) * k
 
@@ -1719,7 +1890,7 @@ function update(node, dt)
   if swimming then
     -- Buoyancy pulls you toward the surface, hard when you're deep and gently
     -- as you reach it, so floating is the resting state rather than a fight.
-    local want = math.min(2.2, math.max(0.0, depth - 0.7) * 1.1)
+    local want = math.min(1.0, math.max(0.0, depth - 0.7) * 0.6)
     if not downed and (input.key("space") or (steer_f and steer_climb > 0)) then want = params.swim_climb end
     if not downed and (input.key("ctrl") or (steer_f and steer_climb < 0)) then want = -params.swim_climb end
     -- Eased from THIS controller's own last value, not from the body's: the
@@ -1727,7 +1898,7 @@ function update(node, dt)
     -- capsule between frames. Easing from the body's velocity folded that push
     -- in every frame on top of the swim float, and a swimmer let go three
     -- metres down came out of the water four metres into the air.
-    swim_vup = swim_vup + (want - swim_vup) * math.min(1.0, dt * 4.0)
+    swim_vup = swim_vup + (want - swim_vup) * (1 - math.exp(-params.swim_vaccel * dt))
     vup = swim_vup
     slope_vup = 0.0
   elseif not airborne then
@@ -1771,6 +1942,7 @@ function update(node, dt)
     vup = math.max(vup, math.min(3.0, field_sunk / math.max(dt, 1e-3) * 0.5))
   end
   bump(node, dt, ux, uy, uz)
+  press(node, dt, ux, uy, uz, on_ground, swimming)
   node.vx = mvx + ux * vup
   node.vy = mvy + uy * vup
   node.vz = mvz + uz * vup

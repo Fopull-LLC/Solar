@@ -1499,7 +1499,7 @@ end
 -- moment the camera is placed — every frame, whichever way this one went (the
 -- map, the cockpit, on foot). Two nodes' lateUpdates run in load order, which
 -- is not something to rely on, so this is a call rather than an ordering.
-local atmo_ref, flare_ref
+local atmo_ref, flare_ref, sv_ref
 
 -- ── THE DEATH HOLD (docs/crew-and-items.md §2.3) ─────────────────────────────
 -- When a crew member dies the view holds on the place for a couple of seconds
@@ -1561,6 +1561,11 @@ function lateUpdate(node, dt)
     -- a death: the view holds on the place
   else
     place_camera(node, dt)
+    -- A shouldered optic turns the placed view a hair (surveyor.lua: the
+    -- breath, the arms' wander, a shot's kick). Asked here so it is always
+    -- after the placement, whatever order the two nodes' lateUpdates run in.
+    if not (sv_ref and sv_ref.valid) then sv_ref = findScript("surveyor", { quiet = true }) end
+    if sv_ref and sv_ref.valid and sv_ref.cameraFollow then sv_ref.cameraFollow(node, dt) end
   end
   -- The camera mode / pivot line, for a couple of seconds after a change
   -- (never in cinematic mode: that is for pictures).
