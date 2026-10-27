@@ -4138,6 +4138,9 @@ function standDown(node, x, y, z, vx, vy, vz)
   if not astronaut or not astronaut.valid then astronaut = find("Astronaut") end
   -- Out of the seat: a body again (it rode as a kinematic passenger).
   seatCrew(node, false)
+  -- ...at its own size again (a seat shrank the capsule: motoRiderShape).
+  -- Here as well as in r2Tick, which a wrecked craft no longer runs.
+  if R2.riderShape then motoRiderShape(node) end
   if astronaut then
     if x then
       astronaut.x, astronaut.y, astronaut.z = x, y, z
@@ -4608,11 +4611,51 @@ function evaNow(in_tick)
   end
   if space.warp and space.warp() > 1.001 then space.warp(1) end
   standDown(node, ex, ey, ez, vx, vy, vz)
+  -- Off the ground, the first moments out are watched (evaGuard).
+  if info and not (info.grounded or info.anchored or R2.onWheels or WATER.splashed) then
+    dock.evaGuard = { t1 = (time or 0) + 0.6, n = 0 }
+  else
+    dock.evaGuard = nil
+  end
   local c = findScript("crew")
   if c and c.noteAfoot then pcall(c.noteAfoot, c.activeId()) end
   local ep = findScript("eva_pack")
   if ep and ep.evaStarted then pcall(ep.evaStarted, node) end
   return true
+end
+
+-- THE FIRST MOMENTS OUT, off the ground: for 0.6 s after evaNow the crew
+-- must still be at rest relative to the craft where they float (nothing they
+-- can do in that time — the pack's ~1 m/s² — changes that by 2 m/s). Anything
+-- else is something writing them an absolute velocity: the walker took the
+-- hull under the hatch for ground and wrote |v| 0 over an orbit's 68 m/s
+-- (evaprobe 2026-10-27, the crew thrown into the planet). Put back to the
+-- craft's velocity at that point, and said in the log so it is found and
+-- fixed where it came from. Called from fixedUpdate (the physics frame).
+function evaGuard(node, info)
+  local g = dock.evaGuard
+  if not g then return end
+  local a = astronaut
+  if crewAboard or (time or 0) > g.t1 or not (info and info.origin and info.com and a and a.valid) then
+    dock.evaGuard = nil
+    return
+  end
+  local ax, ay, az = a.x + info.origin.x - node.x, a.y + info.origin.y - node.y, a.z + info.origin.z - node.z
+  local c, w = info.com, info.angVel or { x = 0, y = 0, z = 0 }
+  local qx, qy, qz = ax - c.x, ay - c.y, az - c.z
+  local pvx = info.vel.x + w.y * qz - w.z * qy
+  local pvy = info.vel.y + w.z * qx - w.x * qz
+  local pvz = info.vel.z + w.x * qy - w.y * qx
+  local rx, ry, rz = a.vx - pvx, a.vy - pvy, a.vz - pvz
+  local rel = math.sqrt(rx * rx + ry * ry + rz * rz)
+  if rel > 2.0 then
+    a.vx, a.vy, a.vz = pvx, pvy, pvz
+    g.n = g.n + 1
+    if g.n == 1 then
+      log(string.format("vessel: EVA guard: the crew was moving %.1f m/s against the craft %.2f s after stepping out; put back at rest beside it",
+        rel, g.t1 - (time or 0)))
+    end
+  end
 end
 
 -- F while flying: ask crew.lua whether the crew may go (refused with the
@@ -8459,7 +8502,8 @@ RIDER_R = 0.01
 function motoRiderShape(node)
   local a = astronaut
   if not (a and a.valid) then a = find("Astronaut") end
-  local rb = a and a:getcomponent("RigidBody")
+  local getc = a and (a.getComponent or a.getcomponent)
+  local rb = getc and getc(a, "RigidBody")
   if not rb then return end
   local d = pod_uid and bp_by_uid[pod_uid]
   local seat = d and ((d.seat or 0) == 1 or d.seat == true)
@@ -10397,6 +10441,7 @@ function fixedUpdate(node, dt)
     -- hand the crew back to physics if we were seating them — unless they're
     -- still in our seat while you fly something else
     if not crewAboard then seatCrew(node, false) end
+    if dock.evaGuard then evaGuard(node, info) end
     -- Handed off (EVA, lost, staged): rejoin the LOD if we were kept live.
     if kept_live then
       assembly.keepLive(node, false)

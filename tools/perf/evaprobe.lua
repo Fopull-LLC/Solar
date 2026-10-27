@@ -239,8 +239,10 @@ local MAIN = function()
   -- 3. with a pack: out
   set_pack(1)
   local ok3, why3, warn3 = c.evaCheck(c.activeId())
+  EV.vc, EV.n, EV.on = vc, 0, true
   local okE = c.eva(c.activeId())
   wait(0.5)
+  EV.on = false
   local rel, dist = rel_to(vc, a)
   R("eva", okE and not vc.crewAboard and warn3 == nil and rel < 0.3, "out %s (check %s %s warn %s), %.2f m/s relative, %.1f m from the CoM",
     tostring(okE), tostring(ok3), tostring(why3), tostring(warn3 ~= nil), rel, dist)
@@ -390,13 +392,18 @@ local MAIN = function()
     hold_here("repair")
   end
   wait(2.0)
-  -- facing: the body's front against the way to the hit point (1 = square on)
+  -- facing: the body's front against the way to the hit point (1 = square on).
+  -- Both ends in the PHYSICS frame (physPosOf, partPointNow): the suit node's
+  -- x/y/z against the RENDERED part point mixed two frames, and read the
+  -- 1.12 m way to the work as 1.6–2.0 m at the wrong angle (28° on every run,
+  -- 45–113° where the hull lies under the crew; measured right: 0°).
   do
     local a = astro and astro() or find("Astronaut")
-    local hx, hy, hz = vc.partPointNow(uid, task.lx, task.ly, task.lz, true)
+    local hx, hy, hz = vc.partPointNow(uid, task.lx, task.ly, task.lz)
     if a and hx then
       local f = a:worldForward()
-      local dx, dy, dz = hx - a.x, hy - a.y, hz - a.z
+      local ax, ay, az = vc.physPosOf(a)
+      local dx, dy, dz = hx - ax, hy - ay, hz - az
       local l = math.sqrt(dx * dx + dy * dy + dz * dz)
       local d = l > 1e-4 and (f.x * dx + f.y * dy + f.z * dz) / l or 0
       R("facing", d > 0.8, "front · way to the work %.2f (%.0f°), %.2f m off", d, math.deg(math.acos(math.max(-1, math.min(1, d)))), l)
@@ -470,9 +477,37 @@ local MAIN = function()
   hold_here("end")
 end
 
+-- THE STEP-OUT, tick by tick (EVA DIAG lines): where the suit is against the
+-- craft's centre of mass in the physics frame, how fast relative to the hull
+-- at that point, kinematic or not, its capsule radius, and what it overlaps.
+EV = { on = false, n = 0 }
+local function eva_diag(tag)
+  local vc = EV.vc
+  if not (EV.on and vc and vc.node and vc.node.valid) or EV.n > 45 then return end
+  EV.n = EV.n + 1
+  local a = find("Astronaut")
+  local i = assembly.info(vc.node)
+  if not (a and i) then return end
+  local rb = a:getcomponent("RigidBody")
+  local ax, ay, az = vc.physPosOf(a)
+  local c, w = i.com, i.angVel
+  local qx, qy, qz = ax - c.x, ay - c.y, az - c.z
+  local rvx = a.vx - (i.vel.x + w.y * qz - w.z * qy)
+  local rvy = a.vy - (i.vel.y + w.z * qx - w.x * qz)
+  local rvz = a.vz - (i.vel.z + w.x * qy - w.y * qx)
+  local hits = overlapSphere and overlapSphere(vec3(ax, ay, az), 0.33, { ignore = a }) or {}
+  local kx, ky, kz = vc.nodeLag()
+  local pw, ep = findScript("planet_walker"), findScript("eva_pack")
+  P("DIAG %s #%d aboard %s kin %s r %.2f | d %.2f m (%.2f %.2f %.2f) rel %.2f m/s (%.1f %.1f %.1f) | hits %d | lag %.2f | |v| %.1f | walker foot %s ground %s float %s pack live %s",
+    tag, EV.n, tostring(vc.crewAboard), tostring(rb and rb.kinematic), rb and rb.radius or -1,
+    len(qx, qy, qz), qx, qy, qz, len(rvx, rvy, rvz), rvx, rvy, rvz, #hits, len(kx, ky, kz), len(a.vx, a.vy, a.vz),
+    tostring(pw and pw.onFoot), tostring(pw and pw.grounded), tostring(pw and pw.floating), tostring(ep and ep.live))
+end
+
 -- Ticks the lock held after the slide-in (crew_task.lastTick: the body was
 -- placed at the work spot in that tick's physics frame).
 function fixedUpdate(node, dt)
+  if EV.on then eva_diag("tick") end
   if not M.on then return end
   local c, ct = findScript("crew"), findScript("crew_task")
   local id = c and c.activeId()
@@ -484,6 +519,7 @@ end
 -- (see STOP == "repair")
 local diag_n = 0
 function lateUpdate(node, dt)
+  if EV.on then eva_diag("frame") end
   if STOP == "repair" and M.on and diag_n < 3 then
     local c = findScript("crew")
     local h = c and c.task(c.activeId())

@@ -203,6 +203,21 @@ end
 function inSpace() return inSpaceNow == true end
 
 -- ── where are we ───────────────────────────────────────────────────────────
+-- Is node `n` part of a craft in flight (not landed, not clamped)? Under the
+-- crew in space that is no ground: the station below the hatch is falling
+-- with them (planet_walker asks the same).
+local function craft_in_flight(n)
+  for _ = 1, 6 do
+    if not (n and n.valid ~= false) then return false end
+    local v = n.getScript and n:getScript("vessel_controller")
+    if v then
+      local i = assembly and assembly.info and assembly.info(n)
+      return i ~= nil and not i.grounded and not i.anchored
+    end
+    n = n.parent
+  end
+  return false
+end
 local function surroundings(a, pw)
   if time - cache.t < 0.25 then return cache.space, cache.g end
   cache.t = time
@@ -213,8 +228,19 @@ local function surroundings(a, pw)
     local ux, uy, uz = norm(a.x - b.x, a.y - b.y, a.z - b.z)
     local r = len(a.x - b.x, a.y - b.y, a.z - b.z)
     g = (b.mu or 0) / math.max(1, r * r)
-    local hit = raycast and raycast(a.x, a.y, a.z, -ux, -uy, -uz, P("space_ray"), a) or nil
-    sp = hit == nil
+    -- nothing under them but craft that are themselves in flight: stepping
+    -- out of an orbiting station with its hull below the hatch is space
+    -- (evaprobe 2026-10-27: read as ground, rails warp was allowed on EVA)
+    local x, y, z, left = a.x, a.y, a.z, P("space_ray")
+    for _ = 1, 4 do
+      local hit = raycast and raycast(x, y, z, -ux, -uy, -uz, left, a) or nil
+      if hit == nil then break end
+      if not craft_in_flight(hit.node) then sp = false break end
+      local dd = (hit.distance or left) + 0.05
+      left = left - dd
+      if left <= 0 then break end
+      x, y, z = x - ux * dd, y - uy * dd, z - uz * dd
+    end
   end
   cache.space, cache.g = sp, g
   return sp, g

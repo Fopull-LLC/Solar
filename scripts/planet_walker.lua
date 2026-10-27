@@ -44,6 +44,12 @@ defaults = {
   -- Terminal velocity. A long fall that outruns the collider goes through it.
   --@range 5 200 --@units m/s
   fall_max = 60.0,
+  -- Faster than this along the ground and the feet let go: no run or fall
+  -- makes it, so the body is riding something or flying ballistic (stepped
+  -- out of an orbiting craft, thrown clear of a wreck). Gravity, contacts and
+  -- the RCS Pack own it; see `stand_down`.
+  --@range 10 60 --@units m/s
+  float_fast = 15.0,
 
   --@header Character model
   -- Facing offset (radians) added to the character's yaw — flip by π if the
@@ -1250,7 +1256,15 @@ function lateUpdate(node, dt)
   if not onFoot then return end
   local ux, uy, uz = local_up(node)
   local u = vec3(ux, uy, uz)
-  if node.worldUp and node.setUp then
+  -- (not while the body's turn is someone else's: crew_task turns off its
+  -- alignUp to square the crew on a job in space, with the work under them
+  -- as often as beside them, and standing them back up along the planet's
+  -- vertical here every frame undid that — evaprobe `facing`, 110° off with
+  -- the station's hull below the crew)
+  local getc = node.getComponent or node.getcomponent
+  local rb = getc and getc(node, "RigidBody")
+  local own = not (rb and (rb.alignUp == false or rb.alignUp == 0))
+  if own and node.worldUp and node.setUp then
     local cur = node:worldUp()
     if cur and cur:dot(u) < 0.999999 then node:setUp(u) end
   end
@@ -1292,16 +1306,38 @@ local function above_air(node)
   local alt = math.sqrt((node.x - b.x) ^ 2 + (node.y - b.y) ^ 2 + (node.z - b.z) ^ 2) - R
   return alt >= H
 end
+-- Is node `n` part of a craft in flight (not landed, not clamped)? Under the
+-- crew in space that is no ground: an orbiting station below them is falling
+-- with them.
+local function craft_in_flight(n)
+  for _ = 1, 6 do
+    if not (n and n.valid ~= false) then return false end
+    local v = n.getScript and n:getScript("vessel_controller")
+    if v then
+      local i = assembly and assembly.info and assembly.info(n)
+      return i ~= nil and not i.grounded and not i.anchored
+    end
+    n = n.parent
+  end
+  return false
+end
 local function in_space(node, ux, uy, uz)
   if time - space_t < 0.2 then return space_on end
   space_t = time
-  -- ...or moving along the ground faster than any jump or fall carries you
-  -- (stepped out of an orbiting or flying craft): its speed is the craft's,
-  -- and the feet's chase toward walking pace would throw it away
-  local vu = node.vx * ux + node.vy * uy + node.vz * uz
-  local tang = math.sqrt(math.max(0, node.vx * node.vx + node.vy * node.vy + node.vz * node.vz - vu * vu))
-  space_on = (tang > 15.0 or above_air(node)) and raycast(node.x, node.y, node.z, -ux, -uy, -uz, 50.0, node) == nil
-  return space_on
+  space_on = false
+  if not above_air(node) then return false end
+  -- nothing under them for 50 m but craft that are themselves in flight
+  local x, y, z, left = node.x, node.y, node.z, 50.0
+  for _ = 1, 4 do
+    local h = raycast(x, y, z, -ux, -uy, -uz, left, node)
+    if h == nil then space_on = true return true end
+    if not craft_in_flight(h.node) then return false end
+    local d = (h.distance or left) + 0.05
+    left = left - d
+    if left <= 0 then space_on = true return true end
+    x, y, z = x - ux * d, y - uy * d, z - uz * d
+  end
+  return false
 end
 local last_foot_t = -10.0
 local function stand_down(node, dt, ux, uy, uz, fx, fy, fz, on_ground, swimming)
@@ -1310,8 +1346,17 @@ local function stand_down(node, dt, ux, uy, uz, fx, fy, fz, on_ground, swimming)
   local cl = ref("crew")
   local is_held = cl ~= nil and cl.held ~= nil and cl.held() == true
   local ep = ref("eva_pack")
-  local float = not is_held and not on_ground and not swimming
-    and ((ep ~= nil and ep.live == true) or in_space(node, ux, uy, uz))
+  -- Faster along the ground than feet go (params.float_fast): stepped out of
+  -- a craft in orbit, its 68 m/s is the crew's too, and the chase below
+  -- writes an ABSOLUTE walking velocity. It did whenever the 50 m ray found
+  -- the hull under the hatch: the first frame on foot wrote |v| = 0, 68 m/s
+  -- relative to the station, and the crew went into the planet (evaprobe
+  -- 2026-10-27, 1 run in 4). Asked every frame, contact or not: a hull
+  -- touched in orbit is no ground to walk on either.
+  local vu0 = node.vx * ux + node.vy * uy + node.vz * uz
+  local fast = node.vx * node.vx + node.vy * node.vy + node.vz * node.vz - vu0 * vu0 > params.float_fast * params.float_fast
+  local float = not is_held and not swimming
+    and (fast or (not on_ground and ((ep ~= nil and ep.live == true) or in_space(node, ux, uy, uz))))
   holding, floating = is_held, float
   if not (is_held or float) then return false end
   local vu = node.vx * ux + node.vy * uy + node.vz * uz
