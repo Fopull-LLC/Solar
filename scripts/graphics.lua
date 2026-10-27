@@ -74,19 +74,19 @@ LEVELS = { "Low", "Medium", "High", "Ultra" }
 -- level is one bundle). See the LOOK section below for what each one is for.
 --   bloom      { threshold, intensity }: only light past `threshold` glows
 --   flare      the sun flare pass (sun_flare.lua, shaders/sunFlare.flsl)
---   dof        far-field blur: max px at 1080p, and taps; nil = off
+--   dof        the depth of field: max px at 1080p, and taps; nil = off
 local PRESETS = {
   Low    = { scale = 0.60, sharpen = 0.6, shadows = true, shadowDistance = 70,  volumetric = false, shafts = false, fogSteps = 8,
              bloom = { 1.6, 0.30 }, flare = false, dof = nil,
              text = "For older or integrated graphics. Softer image, short shadows, plain haze." },
   Medium = { scale = 0.90, sharpen = 0.25, shadows = true, shadowDistance = 140, volumetric = false, shafts = false, fogSteps = 12,
-             bloom = { 1.6, 0.35 }, flare = true, dof = { 1.75, 8 },
+             bloom = { 1.6, 0.35 }, flare = true, dof = { 3.25, 10 },
              text = "Balanced. Sharp enough for most screens, holds 60 fps on a mid-range card." },
   High   = { scale = 1.00, shadows = true, shadowDistance = 220, volumetric = true,  shafts = false, fogSteps = 12,
-             bloom = { 1.6, 0.35 }, flare = true, dof = { 2.25, 12 },
+             bloom = { 1.6, 0.35 }, flare = true, dof = { 4.0, 14 },
              text = "Full resolution, volumetric air and a soft far distance. Wants a strong graphics card." },
   Ultra  = { scale = 1.00, shadows = true, shadowDistance = 400, volumetric = true,  shafts = true,  fogSteps = 16,
-             bloom = { 1.6, 0.35 }, flare = true, dof = { 2.5, 16 },
+             bloom = { 1.6, 0.35 }, flare = true, dof = { 4.5, 16 },
              text = "Adds sun shafts through the air. Very expensive at high resolutions." },
 }
 local DEFAULT = "Medium"
@@ -174,16 +174,22 @@ end
 -- tile 4.5 m across, seen 60 m off, puts 3–4 texels in every pixel and picks
 -- one of them at random. The engine has no anti-aliasing pass to hide it.
 -- (Engine card: mipmapped terrain palette; .floptle/textures.ron can at least
--- ask for linear filtering.) Here: High and Ultra (and Medium, it is cheap)
--- add a gentle far-field depth of field. Nothing nearer than `focus` is
--- touched (the near range is set beyond anything on screen, and the engine
--- leaves an in-focus pixel exactly alone, not filtered), and past it the blur
--- ramps over `range` to a pixel or two, which is the speckle's own size.
--- Focus and range grow with height over the ground, so a view from the air
--- keeps the ground under it sharp, and it fades out in thin air and at night
--- (a blurred star field is wrong, and in space everything is far). In the VAB
--- the focus follows the builder camera's distance to its pivot, so the craft
--- is sharp and the hangar behind it softens a touch. The upscale's sharpening
+-- ask for linear filtering.) Here: Medium and up add a depth of field that
+-- focuses on what the camera is looking at: the crew (or the craft) it
+-- orbits, or in first person and the free camera what is in the middle of the
+-- view. Nothing nearer than the focus is touched (the near range is set
+-- beyond anything on screen, and the engine leaves an in-focus pixel exactly
+-- alone, not filtered). Past it the blur ramps over `range` to 3–4.5 px at
+-- 1080p: the focus is the subject's distance × 1.25 + 6 m (12–60 m) in third
+-- person, or the distance the view's middle meets (at least 12 m) in first
+-- person and the free camera; the range 2.2× that and at least 140 m, so on foot the middle distance
+-- (80–300 m) softens and the far hills are fully soft. (It was a fixed 65 m
+-- focus and a 160 m range to 1.75 px, which did next to nothing on the
+-- ground and showed only from the air.) The focus moves out with height
+-- (0.6 × the altitude), and it fades out in thin air and at night (a blurred
+-- star field is wrong, and in space everything is far). In the VAB the focus
+-- follows the builder camera's distance to its pivot at the old gentle
+-- strength, so the craft is sharp and the hangar softens a touch. The upscale's sharpening
 -- at Medium is gentler too (0.25, was 0.4): it was sharpening the speckle.
 --
 -- Measured costs are in tools/perf/results/gfx_look.md.
@@ -228,6 +234,30 @@ local function smooth01(a, b, x)
   return t * t * (3 - 2 * t)
 end
 
+-- What the camera is looking at, in metres: the crew (or the craft) it
+-- orbits in third person; in first person, the cockpit and the free camera,
+-- whatever is in the middle of the view (a ray, four times a second, eased).
+local pc_ref3, astro_ref, look_ray_t, look_d = nil, nil, -100, 20
+local function subject_distance(cx, cy, cz)
+  if not (pc_ref3 and pc_ref3.valid ~= false) then pc_ref3 = findScript and findScript("planet_camera") or nil end
+  local pc = pc_ref3
+  if pc and not pc.firstPerson and not pc.cockpit and not pc.freecam and pc.pivot_x then
+    local dx, dy, dz = (pc.pivot_x or cx) - cx, (pc.pivot_y or cy) - cy, (pc.pivot_z or cz) - cz
+    local d = math.sqrt(dx * dx + dy * dy + dz * dz)
+    if d > 0.5 then return d, false end
+  end
+  if pc and pc.cockpit then return 25, false end
+  if time - look_ray_t > 0.25 and raycast and cam_node.worldForward then
+    look_ray_t = time
+    local f = cam_node:worldForward()
+    if not (astro_ref and astro_ref.valid) then astro_ref = find("Astronaut") end
+    local hit = raycast(vec3(cx, cy, cz), f, 400, astro_ref and { ignore = astro_ref } or nil)
+    local want = hit and math.max(2, hit.distance or 400) or 400
+    look_d = look_d + (want - look_d) * 0.5
+  end
+  return look_d, true
+end
+
 -- The far-field blur for this frame: focus, range (m) and blur (px), or nil.
 local function dof_want(p)
   if not (p.dof and look_on.dof) then return nil end
@@ -244,10 +274,11 @@ local function dof_want(p)
     local _, h = camera.screenSize()
     if h and h > 0 then px = px * h / 1080 end
   end
-  -- The VAB: the craft sharp, the hangar behind it a touch soft.
+  -- The VAB: the craft sharp, the hangar behind it a touch soft (as gentle
+  -- as it always was: the builder is a workbench, not a photograph).
   if gm_ref2 and gm_ref2.inputOwner == "builder" and bc_ref and bc_ref.dist then
     local d = math.max(1, bc_ref.dist)
-    return d * 1.3, d * 2.0 + 10, px * 0.8
+    return d * 1.3, d * 2.0 + 10, math.min(px * 0.8, px / p.dof[1] * 1.4)
   end
   if not (cam_node and cam_node.valid) then return nil end
   local at = at_ref2
@@ -255,20 +286,29 @@ local function dof_want(p)
   local day = at and smooth01(-0.15, 0.15, at.sun_now or 1) or 1
   local k = smooth01(0.05, 0.4, rho) * day
   if k < 0.02 then return nil end
+  local cx, cy, cz = cam_node.x, cam_node.y, cam_node.z
   local alt = 0
   if space and space.dominant then
-    local d = space.dominant(cam_node.x, cam_node.y, cam_node.z)
+    local d = space.dominant(cx, cy, cz)
     local b = d and space.body(d)
     if b and b.radius then
-      local dx, dy, dz = cam_node.x - b.x, cam_node.y - b.y, cam_node.z - b.z
+      local dx, dy, dz = cx - b.x, cy - b.y, cz - b.z
       alt = math.max(0, math.sqrt(dx * dx + dy * dy + dz * dz) - b.radius)
     end
   end
-  -- On foot the horizon of a 900 m world is ~60 m off; the ground past it
-  -- (and the far hills) is where the texture speckle is. Up in the air the
-  -- ground below stays sharp: the focus moves out with the height.
-  local focus = 25 * shadowScale + 1.2 * alt
-  return focus, focus * 2.5, px * k
+  local sub, looked = subject_distance(cx, cy, cz)
+  -- The subject sharp, and everything from just past it softening over a
+  -- few hundred metres: the middle distance (80–300 m on foot) goes soft,
+  -- the far hills fully, and the subject and the ground round it are left
+  -- exactly alone. Up in the air the focus moves out with the height, so
+  -- the ground under a craft is softer than a walker's but still reads.
+  -- (in first person and the free camera the subject is what the view's
+  -- middle meets, however far: that is what is focused on)
+  local focus
+  if looked then focus = math.max(12, sub) + 0.2 * alt
+  else focus = math.max(12, math.min(60, sub * 1.25 + 6)) + 0.6 * alt end
+  local range = math.max(140, focus * 2.2)
+  return focus, range, px * k
 end
 
 local function apply_dof(p)

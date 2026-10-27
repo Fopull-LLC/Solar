@@ -38,6 +38,15 @@
 --     setCelestial), per world: thicker, darker and greyer as a front builds
 --   * the sky and the haze, through atmosphere.lua: `sky` below is read there
 --     every frame (greyer and darker air, thicker haze, a lightning flash)
+--   * the haze closes in hard under weather (a grey day a little, rain to a
+--     few hundred metres, a storm to the far side of the base), rolling in
+--     over tens of seconds and thickening and thinning as banks of it drift
+--     through (`bankOf`); the deck hangs lower in rain and lower still in a
+--     storm (`cloudH`); on a calm, damp morning a MIST lies in the low
+--     ground until the sun burns it off (`mistOf`) — atmosphere.lua draws all
+--     of it, and keeps a floor under how far you can see
+--   * the ground gets wet, puddles fill and the drops splash (rain_fx.lua,
+--     which reads current())
 --   * the sun's shadows soften and the picture's exposure falls under
 --     overcast — under cloud the light is the sky's, not the sun's
 --   * precipitation around the camera: patches of rain, snow, hail, dust or
@@ -70,8 +79,9 @@
 --                      — or nil off every world
 --   wx.line()      → "Rain · wind 6 m/s from the SW", for a HUD
 --   wx.force(type, k)   hold a weather (probes, tests); force(nil) lets go
+--   wx.forceMist(k)     hold the morning mist at k (probes); nil lets go
 --   wx.sky         { body, cover, dim, grey, haze, flash, tint, cloudDark,
---                    cloudColor } for atmosphere.lua
+--                    cloudColor, cloudH, mist, bank } for atmosphere.lua
 
 defaults = {
   --- Master switch.
@@ -272,15 +282,27 @@ end
 -- (`stops`) and the haze, which goes to a dark slate (`tint`), do the rest.
 --   dim    how much the air's own colour darkens (atmosphere.lua)
 --   grey   how much it loses its colour
---   haze   how much thicker the haze is (rain hides the far hills, snow
---          more, a dust storm almost everything)
+--   haze   how much thicker the haze is: a grey day a little, rain a lot (the
+--          base's far side greys out, the hills go), a storm more, snow and
+--          dust most. atmosphere.lua keeps a floor under the distance it
+--          leaves, so no weather blinds a launch
+--   cloudH the deck's height, a share of the air's (0.35 = fair weather): rain
+--          cloud hangs lower and a storm's base lower still
 --   stops  exposure, negative
 --   sun    the direct light's share left
 --   amb    diffuse sky light added to the ambient (a share of daylight)
 --   tint   { r, g, b, amount } the haze's colour
 --   cloudDark   the deck's darkness, 0..1 (1 = almost no light through)
 --   cloudColor  { r, g, b } the deck's daylight colour (white = fair weather)
-local HAZE = { wet = 3.0, snow = 7.0, dust = 12.0, ash = 6.0 }
+-- How much thicker the haze is at the height of the precipitation (HAZE) and
+-- on top of that in a storm (STORMHAZE), as multipliers on the clear day's
+-- extinction. On a 900 m world a clear day hazes the ground one radius off by
+-- half; rain (×~8) greys the far side of the base and takes the hills, a
+-- thunderstorm (×~14) leaves the pad, 125 m off, a dark shape in the murk.
+-- (They were 3 / 7 / 12 / 6 with no storm term, "not dramatic": rain left
+-- the view all but as it was.)
+local HAZE = { wet = 6.5, snow = 11.0, dust = 15.0, ash = 9.0 }
+local STORMHAZE = { wet = 6.0, snow = 9.0, dust = 10.0, ash = 7.0 }
 local GLOOM = { wet = 1.0, snow = 0.65, dust = 0.8, ash = 1.15 }
 function skyOf(o)
   local c = o.cover or 0
@@ -291,7 +313,11 @@ function skyOf(o)
   local grey = min(0.9, 0.55 * overcast + 0.3 * p)
   local hz = (kind == "dust" and HAZE.dust) or (kind == "ash" and HAZE.ash)
     or (HAZE.wet + (HAZE.snow - HAZE.wet) * sn)
-  local haze = 1 + p * hz * 0.6 + st * hz * 0.4
+  local hs = (kind == "dust" and STORMHAZE.dust) or (kind == "ash" and STORMHAZE.ash)
+    or (STORMHAZE.wet + (STORMHAZE.snow - STORMHAZE.wet) * sn)
+  -- a grey day is a hazier one too: the light is flat and the far ground
+  -- loses its shadows and its colour
+  local haze = 1 + 0.8 * overcast + p * hz + st * hs
   local g = (kind == "dust" and GLOOM.dust) or (kind == "ash" and GLOOM.ash)
     or (GLOOM.wet + (GLOOM.snow - GLOOM.wet) * sn)
   -- A little less than before the deck could darken (0.75 / 0.45 / 0.9):
@@ -320,8 +346,11 @@ function skyOf(o)
     cr, cg, cb = cr + (0.94 - cr) * sn, cg + (0.95 - cg) * sn, cb + (0.98 - cb) * sn
     cd = cd * (1 - 0.45 * sn)
   end
+  -- The deck's height: rain cloud hangs lower than a fair day's, a storm's
+  -- base lower still (the engine's deck sits at 0.35 of the air's height).
+  local ch = 0.35 - 0.06 * overcast * p - 0.08 * st
   return { cover = c, dim = dim, grey = grey, haze = haze, stops = stops, sun = sun, amb = amb,
-           tint = { tr, tg, tb, ta }, cloudDark = cd, cloudColor = { cr, cg, cb } }
+           tint = { tr, tg, tb, ta }, cloudDark = cd, cloudColor = { cr, cg, cb }, cloudH = ch, mist = 0 }
 end
 
 -- ── the scene ───────────────────────────────────────────────────────────────
@@ -391,6 +420,10 @@ local FORCE = {
   ashstorm     = { I = 0.96, kind = "ash" },
 }
 
+-- Hold the morning mist at `k` (0..1) whatever the hour (probes); nil lets go.
+local forced_mist = nil
+function forceMist(k) forced_mist = k end
+
 function force(kind, k)
   if not kind then forced = nil; return end
   local f = FORCE[kind]
@@ -401,15 +434,56 @@ function force(kind, k)
 end
 
 -- ── what the camera's world is doing ────────────────────────────────────────
-local temp_t, temp_v, temp_body = -100, nil, nil
+local temp_t, temp_v, temp_body, moist_v = -100, nil, nil, nil
 local function temp_here(name, x, y, z, p)
   if time - temp_t > 2.0 or temp_body ~= name then
     temp_t, temp_body = time, name
     local cl = ref("climate")
     local s = cl and cl.sampleAt and cl.sampleAt(name, x, y, z)
     temp_v = s and s.temp or p.temp
+    moist_v = s and s.moist or nil
   end
   return temp_v or p.temp
+end
+
+-- ── mist and fog banks ──────────────────────────────────────────────────────
+-- MIST: on a calm, damp morning the air by the ground cools through the night
+-- to its dew point and the low ground fills with it, from a little before
+-- sunrise until the sun has climbed and burnt it off. Not every morning: a
+-- hash of the day says whether this one is misty, more often on a wet world
+-- and after rain. `sunUp` is the star's elevation at the eye (a cosine, from
+-- atmosphere.lua), `moist` the climate's moisture where you stand (0..1).
+function mistOf(o, p, sunUp, moist, seed, t, spell)
+  if p.airless or o.kind == "dust" or o.kind == "ash" or not sunUp then return 0 end
+  local dawn = smooth(-0.14, 0.0, sunUp) * (1 - smooth(0.1, 0.32, sunUp))
+  if dawn <= 0 then return 0 end
+  local calm = 1 - smooth(2.5, 7.0, o.wind or 0)
+  local damp = smooth(0.15, 0.6, moist or p.moist or 0)
+  -- one roll a "morning": the clock's long period, so a probe or a short
+  -- session sees the same morning throughout
+  local day = floor((t or 0) / ((spell or 360) * 4))
+  local chance = 0.3 + 0.45 * damp + ((o.state == "clearing") and 0.3 or 0)
+  local here = hash(seed or 0, day, 21) < chance and 1 or 0.25
+  return clamp01(dawn * calm * damp * here * (1 - (o.precip or 0)) * (1 - 0.4 * smooth(0.6, 1.0, o.cover or 0)))
+end
+
+-- FOG BANKS: under a grey sky or rain the murk is not even, it thickens and
+-- thins as banks of it drift through, over tens of seconds. A smooth noise of
+-- the clock, 1 ± `amp`.
+function bankOf(seed, t, amp)
+  if not amp or amp <= 0 then return 1 end
+  local u = (t or 0) / 38
+  local k = floor(u)
+  local f = smooth(0, 1, u - k)
+  local a, b = hash(seed or 0, k, 31), hash(seed or 0, k + 1, 31)
+  local v = a + (b - a) * f
+  -- a second, faster wave on top so the swell is not a plain sine
+  local u2 = (t or 0) / 13
+  local k2 = floor(u2)
+  local f2 = smooth(0, 1, u2 - k2)
+  local c, d = hash(seed or 0, k2, 37), hash(seed or 0, k2 + 1, 37)
+  v = v * 0.75 + (c + (d - c) * f2) * 0.25
+  return 1 + amp * (v * 2 - 1)
 end
 
 -- The local frame at a point on body b: up, north, east.
@@ -478,19 +552,20 @@ end
 
 local clouds_sent = {}
 local clouds_t = -100
-local function send_clouds(name, cover, dark, col)
+local function send_clouds(name, cover, dark, col, h)
   local s = clouds_sent[name]
   local n = find(name)
   if not (n and n.setCelestial) then return end
-  dark, col = dark or 0, col or { 1, 1, 1 }
+  dark, col, h = dark or 0, col or { 1, 1, 1 }, h or 0.35
   if s and s.node == n and math.abs(s.c - cover) < 0.006 and math.abs(s.d - dark) < 0.006
+    and math.abs(s.h - h) < 0.002
     and math.abs(s.r - col[1]) + math.abs(s.g - col[2]) + math.abs(s.b - col[3]) < 0.01 then return end
-  n:setCelestial { clouds = cover, cloudDarkness = dark, cloudColor = { col[1], col[2], col[3] } }
-  clouds_sent[name] = { node = n, c = cover, d = dark, r = col[1], g = col[2], b = col[3] }
+  n:setCelestial { clouds = cover, cloudDarkness = dark, cloudColor = { col[1], col[2], col[3] }, cloudHeight = h }
+  clouds_sent[name] = { node = n, c = cover, d = dark, r = col[1], g = col[2], b = col[3], h = h }
 end
 
 local function clouds_all(here, here_sky)
-  if here and here_sky then send_clouds(here, here_sky.cover, here_sky.cloudDark, here_sky.cloudColor) end
+  if here and here_sky then send_clouds(here, here_sky.cover, here_sky.cloudDark, here_sky.cloudColor, here_sky.cloudH) end
   if time - clouds_t < 4.0 then return end
   clouds_t = time
   for _, b in ipairs(space.bodies() or {}) do
@@ -501,7 +576,7 @@ local function clouds_all(here, here_sky)
         local I, trend, kind, hail = at(seed_of(b.name, w), p, clock or 0, params.spell)
         local sk = skyOf(derive(p, I, trend, kind, hail, p.temp))
         if kind == "dust" then sk.cloudColor = dust_deck(w) end
-        send_clouds(b.name, sk.cover, sk.cloudDark, sk.cloudColor)
+        send_clouds(b.name, sk.cover, sk.cloudDark, sk.cloudColor, sk.cloudH)
       end
     end
   end
@@ -799,10 +874,10 @@ local function strike(o, x, y, z, b, w, ahead)
   local gx = ux * math.cos(th) + dx * math.sin(th)
   local gy = uy * math.cos(th) + dy * math.sin(th)
   local gz = uz * math.cos(th) + dz * math.sin(th)
-  -- Cloud base: where the engine draws the deck.
-  local top = R + H * 0.35
-  local cx, cy, cz = b.x + gx * (b.radius + H * 0.35), b.y + gy * (b.radius + H * 0.35), b.z + gz * (b.radius + H * 0.35)
-  local hit = raycast and raycast(vec3(cx, cy, cz), vec3(-gx, -gy, -gz), H * 0.35 + 200)
+  -- Cloud base: where the engine draws the deck (lower in a storm, skyOf).
+  local ch = (sky and sky.cloudH) or 0.35
+  local cx, cy, cz = b.x + gx * (b.radius + H * ch), b.y + gy * (b.radius + H * ch), b.z + gz * (b.radius + H * ch)
+  local hit = raycast and raycast(vec3(cx, cy, cz), vec3(-gx, -gy, -gz), H * ch + 200)
   local sx, sy, sz
   if hit then sx, sy, sz = hit.x, hit.y, hit.z
   else sx, sy, sz = b.x + gx * b.radius, b.y + gy * b.radius, b.z + gz * b.radius end
@@ -952,6 +1027,7 @@ function update(node, dt)
 
   local s = skyOf(o)
   s.body = name
+  s.precip = o.precip or 0
   -- A dust storm's haze is the ground's colour.
   if o.kind == "dust" then
     local t = tint_of(name, w) or { 1, 1, 1 }
@@ -973,6 +1049,15 @@ function update(node, dt)
   -- The light precipitation is seen by: the day's, under the cloud's gloom,
   -- with a floor for a moonless night (it is still faintly there).
   local sun = (at and at.sun_now) or 1
+  -- Morning mist and drifting banks (atmosphere.lua thickens and lowers the
+  -- haze for them). The banks swell with the murk: a grey day a little, rain
+  -- and mist more.
+  local seed = seed_of(name, w)
+  s.mist = forced_mist or mistOf(o, p, at and at.sun_now, moist_v, seed, clock, params.spell)
+  local amp = 0.12 * smooth(0.4, 1.0, o.cover or 0) + 0.22 * (o.precip or 0) + 0.3 * s.mist
+  s.bank = bankOf(seed, clock, amp)
+  s.haze = s.haze * s.bank
+  o.mist = s.mist
   -- Brighter than the haze behind it, or a pale streak on a pale sky is not
   -- there at all: rain and snow are seen by the light they catch and bend.
   -- The exposure falls under cloud; the particles are lifted against it, or

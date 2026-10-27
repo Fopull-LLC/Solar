@@ -239,3 +239,23 @@ the gravity gun and laser working. `perf.gpu` per pass at the vista, with old an
 new interleaved, then each effect alone (`GX GPU` lines). `PATCHES=` applies
 diffs to the scratch copy only. Results are in `results/gfx_look.md`.
 
+## rain.sh + rainprobe.lua — the weather's haze, rain on the ground, the depth of field
+
+    WORK=$SCRATCH/rainfx LOCK=/mnt/disks/3tb/.floptle-shared/engine.lock tools/perf/rain.sh <engine> [TAG]
+
+One silent play on a COPY of the player's save (deleted after). `RAIN_ONLY` picks
+parts: `info` (the world's radius, air, sea, the lowest ground nearby), `wx`
+(clear / overcast / rain / storm from over the pad and over a valley, Medium and
+High, plus the valley in morning mist: `weather.force`, `weather.forceMist`,
+`atmosphere.snapWeather`, `rain_fx.setWet`), `splash` (heavy rain close up on open
+ground, on the pad, round the crew; each with rain_fx off for comparison), `dof`
+(the crew on foot, the old HEAD depth of field forced against the new one, plus
+the focus band), `gpu` (perf.gpu and perf.scriptMs in heavy rain with rain_fx on
+and off interleaved, and clear weather with the old and new DOF), `rover` (a
+rover rolled out through the builder scene: DOF old/new). `OLD=1` runs the
+weather, atmosphere, graphics and sun_flare scripts and the system scene as
+committed (git HEAD), for before/after. Pictures are 1280×720 by default
+(`RAIN_PARAMS='("w", 1920.0), ("h", 1080.0)'` for full size) in
+`$WORK/rain/<TAG>/png`; `RX STATE` lines give the weather, the haze and DOF
+values, `RX ROOF` whether the camera is under a roof (the rain is off there),
+`RX GPU` the passes and the scripts' ms.

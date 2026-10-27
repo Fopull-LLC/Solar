@@ -471,6 +471,18 @@
                 posterize_chroma: false,
                 screen_shaders: [
                     (
+                        shader: "shaders/rainFx.flsl",
+                        enabled: false,
+                    ),
+                    (
+                        shader: "shaders/rainFxHigh.flsl",
+                        enabled: false,
+                    ),
+                    (
+                        shader: "shaders/rainWet.flsl",
+                        enabled: false,
+                    ),
+                    (
                         shader: "shaders/sunFlare.flsl",
                         enabled: true,
                     ),
@@ -479,6 +491,11 @@
             scripts: [
                 (
                     kind: "sun_flare",
+                    enabled: true,
+                    params: [],
+                ),
+                (
+                    kind: "rain_fx",
                     enabled: true,
                     params: [],
                 ),

@@ -273,7 +273,9 @@ cam.x, cam.y, cam.z = 0, R + 1.5, 0
 for _ = 1, 600 do pcframe() end
 local clear_end, clear_spread = light.fogEnd, light.fogColorR - light.fogColorB
 weather = { valid = true, sky = { body = "Ember", cover = 1, dim = 0.8, grey = 0.8, haze = 4, flash = 0 } }
-for _ = 1, 600 do pcframe() end
+for _ = 1, 60 do pcframe() end
+ok(light.fogEnd > clear_end * 0.8, "the storm's murk rolls in over tens of seconds, not at once (fog end " .. light.fogEnd .. " after 1 s)")
+for _ = 1, 3600 do pcframe() end
 ok(light.fogEnd < clear_end * 0.5, "under a storm the haze closes in (fog end " .. light.fogEnd .. " from " .. clear_end .. ")")
 ok(light.fogColorR - light.fogColorB < 0.4 * clear_spread,
   "...and goes the grey of the cloud deck rather than the air's colour")

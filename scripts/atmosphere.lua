@@ -140,6 +140,21 @@ defaults = {
   --- cutting to the map and back, an SOI hand-off to a world of another colour.
   --@range 0.1 20
   ease = 4.0,
+  --- Seconds the weather's part of the haze takes to settle (a front's murk
+  --- rolls in over tens of seconds, not frames). A cut to another world is
+  --- eased at `ease` instead.
+  --@range 0.5 120
+  weatherEase = 12.0,
+  --- The least distance (m) the flat ramp may close to under any weather, at
+  --- the ground: rain, a storm, snow or dust never blind the player.
+  --@range 50 1000
+  minFar = 170.0,
+  --- Morning mist: the layer's top over the low ground (m), and how much
+  --- thicker the haze is in it at its height.
+  --@range 2 60
+  mistTop = 9.0,
+  --@range 0 20
+  mistThick = 7.0,
   --- Print what the air is doing, once a second. For tuning and for `run`.
   debug = false,
 }
@@ -331,7 +346,12 @@ end
 
 -- Blended state, so nothing snaps.
 local cur = { rho = 0.0, atmo = 0.0, h = 0.0, r = 0.55, g = 0.68, b = 0.92, sun = 1.0, sig = 0.0,
-              cover = 0.0, dim = 0.0, grey = 0.0, haze = 1.0 }
+              cover = 0.0, dim = 0.0, grey = 0.0, haze = 1.0, mist = 0.0, precip = 0.0, body = nil }
+local snap_weather = false
+
+-- The weather's haze straight to where it is going, next frame (probes, a
+-- forced weather): the slow ease is for weather that changes on its own.
+function snapWeather() snap_weather = true end
 local dbg_t = -100
 local done_at = nil   -- the `time` of the frame already followed
 
@@ -404,6 +424,9 @@ function follow(dt)
   if not ex then return end
   local rho, w, rad, h, sunUp, dom = air_here(ex, ey, ez)
   rho = rho or 0
+  -- the low ground the morning mist lies in: the sea's level where there is a
+  -- sea, else the world's mean surface (altitudes over the body's radius)
+  local mist_floor = (w and (w.sea or 0) > 0 and rad) and (w.sea - rad) or 0
   local wsky = weather_sky(dom)
   scan_air(dom, wsky)
 
@@ -423,14 +446,23 @@ function follow(dt)
     local sig = extinction(rad, atmo, params.horizonHaze, params.eyeHeight, params.farHaze, params.bigFrom, params.bigTo)
     cur.sig = cur.sig + (sig - cur.sig) * k
   end
-  -- The weather's part, eased the same way (it already moves over minutes;
-  -- this only covers the cut to another world).
-  local wc, wd, wg, wh = 0, 0, 0, 1
-  if wsky then wc, wd, wg, wh = wsky.cover or 0, wsky.dim or 0, wsky.grey or 0, wsky.haze or 1 end
-  cur.cover = cur.cover + (wc - cur.cover) * k
-  cur.dim = cur.dim + (wd - cur.dim) * k
-  cur.grey = cur.grey + (wg - cur.grey) * k
-  cur.haze = cur.haze + (wh - cur.haze) * k
+  -- The weather's part, eased slowly: a front's murk rolls in over tens of
+  -- seconds (weatherEase), a fog bank swells and thins. A cut to another
+  -- world (or the map and back) is eased at the air's own rate.
+  local wc, wd, wg, wh, wm, wp = 0, 0, 0, 1, 0, 0
+  if wsky then
+    wc, wd, wg, wh = wsky.cover or 0, wsky.dim or 0, wsky.grey or 0, wsky.haze or 1
+    wm, wp = wsky.mist or 0, wsky.precip or 0
+  end
+  local kw = 1.0 - math.exp(-math.max(dt or 0, 0) / math.max(params.weatherEase or 12.0, 0.05))
+  if dom ~= cur.body then kw = math.max(kw, k); cur.body = dom end
+  if snap_weather then kw = 1.0; snap_weather = false end
+  cur.cover = cur.cover + (wc - cur.cover) * kw
+  cur.dim = cur.dim + (wd - cur.dim) * kw
+  cur.grey = cur.grey + (wg - cur.grey) * kw
+  cur.haze = cur.haze + (wh - cur.haze) * kw
+  cur.mist = cur.mist + (wm - cur.mist) * kw
+  cur.precip = cur.precip + (wp - cur.precip) * kw
   if sunUp then cur.sun = cur.sun + (sunUp - cur.sun) * k end
   -- An eased value creeps toward zero and never gets there; the fog is cut
   -- once what is left could not move a pixel.
@@ -462,8 +494,17 @@ function follow(dt)
     local cr, cg, cb = (0.25 * cur.r + 0.71) * lt, (0.25 * cur.g + 0.71) * lt, (0.25 * cur.b + 0.71) * lt
     fr, fg, fb = fr + (cr - fr) * ov, fg + (cg - fg) * ov, fb + (cb - fb) * ov
     local y = 0.2126 * fr + 0.7152 * fg + 0.0722 * fb
-    local kd = 1.0 - 0.2 * cur.dim
+    -- (0.2 before: a storm's murk read as a pale wash; under a thunderhead
+    -- the air between you and the hills is as dark as the cloud above it)
+    local kd = 1.0 - 0.38 * cur.dim
     fr, fg, fb = (fr + (y - fr) * cur.grey) * kd, (fg + (y - fg) * cur.grey) * kd, (fb + (y - fb) * cur.grey) * kd
+  end
+  if cur.mist > 0.001 then
+    -- Mist is water, white in the day's light: the haze pales toward it.
+    local lt = 0.05 + 0.95 * smooth(-0.3, 0.25, cur.sun)
+    local m = 0.55 * cur.mist
+    local wr, wg2, wb = 0.86 * lt, 0.88 * lt, 0.92 * lt
+    fr, fg, fb = fr + (wr - fr) * m, fg + (wg2 - fg) * m, fb + (wb - fb) * m
   end
   local tint = wsky and wsky.tint
   if tint and (tint[4] or 0) > 0 then
@@ -479,7 +520,17 @@ function follow(dt)
 
   -- Extinction at the ground, thickened by the weather (rain and snow are
   -- what most of a storm's murk is), and the scale length that goes with it.
-  local sig = math.max(cur.sig * cur.haze, 1e-6)
+  -- The weather never closes the flat ramp in nearer than `minFar` at the
+  -- ground (the volumetric march is held to the same extinction), and the
+  -- clear day's own haze is never thinned by it. Morning mist thickens it too
+  -- (on the flat ramp everywhere; the march puts it in the low ground).
+  if not gx_ref or not gx_ref.valid then gx_ref = findScript("graphics") end
+  local vol_on = params.volumetric ~= false and ((not gx_ref) or gx_ref.volumetric)
+  -- (the flat ramp has no layer to put the mist in, so it is all distance there)
+  local mk = vol_on and 0.35 or 1.0
+  local wsig = cur.sig * cur.haze * (1 + (params.mistThick or 7.0) * mk * cur.mist)
+  local cap = (params.farLengths or 1.7) / math.max(params.minFar or 170, 1)
+  local sig = math.max(math.min(wsig, math.max(cap, cur.sig)), 1e-6)
   local len = 1.0 / sig
   -- Above the ground the whole ramp is stretched by 1/rho, so the haze at any
   -- distance falls in proportion to the air and reaches nothing at the top of
@@ -500,7 +551,8 @@ function follow(dt)
   -- world in clear weather — is not overcast: only a closing deck counts, or
   -- every clear day on a wet world wore a storm's milky horizon.)
   local ovc = smooth(0.4, 1.0, cur.cover)
-  local skyf = (params.skyFog or 0.42) + (1 - (params.skyFog or 0.42)) * 0.75 * ovc
+  -- (in rain the horizon is all murk: the sky's share goes to the whole band)
+  local skyf = (params.skyFog or 0.42) + (1 - (params.skyFog or 0.42)) * math.min(1, 0.75 * ovc + 0.25 * cur.precip + 0.4 * cur.mist)
   l.fogSky = clamp01(skyf * cur.rho)
   l.fogDither = true
   l.fogDitherStrength = 0.6
@@ -517,13 +569,30 @@ function follow(dt)
     -- body), its top softened over its upper third. Under weather it deepens
     -- toward the cloud base, where precipitation hangs.
     local top = math.max(cur.h, 1.0) * ((params.hazeTop or 0.2) + 0.15 * ovc)
-    l.fogHeight = top * 0.65
-    l.fogFalloff = top * 0.35
+    local fh, ff = top * 0.65, top * 0.35
+    local dens = sig * cur.rho
+    -- Morning mist: a thin, thick layer over the low ground — the valleys
+    -- fill with it and a hill stands out of it. Its top is over the world's
+    -- mean surface (the body's radius; its sea where it has one), so it lies
+    -- in the low ground wherever you stand. The haze above it thins away.
+    if cur.mist > 0.001 then
+      local mt = (params.mistTop or 9.0) + (mist_floor or 0)
+      local m = smooth(0.0, 0.6, cur.mist)
+      fh = fh + (mt - fh) * m
+      ff = ff + (mt * 0.9 + 4 - ff) * m
+      dens = dens * (1 + ((params.mistThick or 7.0) - 1) * m)
+    end
+    l.fogHeight = fh
+    l.fogFalloff = ff
     -- The march's fence: far enough to cross the shell along the ground,
     -- shrunk with the air so the optical depth marched to the sky falls away
     -- as the sky does.
     l.fogEnd = math.max(math.min(len * 4.0, params.range or 2600) * cur.rho, 1.0)
-    l.fogDensity = sig * cur.rho
+    l.fogDensity = dens
+    -- Lumpier under weather: banks of murk, not an even wash.
+    local lump = math.max(cur.precip, cur.mist, 0.5 * ovc)
+    l.fogNoise = 0.45 + 0.35 * lump
+    l.fogNoiseScale = 24 + 36 * lump
     l.fogAnisotropy = (params.anisotropy or 0.3) * (1 - 0.7 * ovc)
     -- Overcast: no direct beam to scatter, only the sky's diffuse light.
     l.fogLight = (params.fogLight or 0.75) * (1 - 0.5 * ovc)
@@ -535,8 +604,8 @@ function follow(dt)
 
   if params.debug and time - dbg_t > 1.0 then
     dbg_t = time
-    print(string.format("atmosphere: rho %.3f sig %.5f fog %.0f..%.0f sky %.2f rgb %.2f %.2f %.2f cover %.2f",
-      cur.rho, sig, near, far, l.fogSky, fr, fg, fb, cur.cover))
+    print(string.format("atmosphere: rho %.3f sig %.5f fog %.0f..%.0f sky %.2f rgb %.2f %.2f %.2f cover %.2f haze %.2f mist %.2f",
+      cur.rho, sig, near, far, l.fogSky, fr, fg, fb, cur.cover, cur.haze, cur.mist))
   end
 end
 
