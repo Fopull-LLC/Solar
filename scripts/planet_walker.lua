@@ -1518,6 +1518,9 @@ local function ground_net(node, ux, uy, uz, on_ground, swimming)
   node.vx, node.vy, node.vz = 0, 0, 0
   mvx, mvy, mvz = 0.0, 0.0, 0.0
   swim_vup, slope_vup = 0.0, 0.0
+  -- a rescue is a teleport, not a fall: the crew's impact check waits
+  local cl = ref("crew")
+  if cl and cl.quietMonitors then pcall(cl.quietMonitors, 1.0) end
   groundNet.rescues = groundNet.rescues + 1
   groundNet.last = { t = time, depth = -q, x = tx, y = ty, z = tz, placed = placed }
   return true

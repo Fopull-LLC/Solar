@@ -1374,6 +1374,8 @@ local hold_imp = 0       -- the impact monitor waits after a teleport
 -- (a switch: half a second; a set-down at the base, `secs`: the crew's
 -- home is a couple of metres over the ground and the drop is not a fall)
 local function quiet_monitors(secs) hold_imp = math.max(hold_imp, now() + (secs or 0.5)) end
+-- Teleports (the walker's ground net and field floor) say so: the snap is no fall.
+function quietMonitors(secs) quiet_monitors(secs) end
 
 local function do_control(q)
   local id = q.id
@@ -1975,16 +1977,25 @@ local function avatar_monitor(dt)
     -- Δv this tick: all of it along the vertical (a fall, a landing), and
     -- sideways only past what the walker itself does in a tick (a run
     -- stopped dead is 9.4 m/s and hurts nobody; a rover at 25 m/s does)
-    local ex, ey, ez = vx - MON.vx, vy - MON.vy, vz - MON.vz
-    local dv = len(ex, ey, ez)
+    -- Only speed LOST counts: falling speed the ground took away, and
+    -- sideways speed a crash took away. A push the other way (the ground
+    -- shoving a body back out after a dig under the boots, a collider
+    -- correcting an overlap) gains speed and hurts nobody; counting it as
+    -- an impact killed crew who were only digging.
+    local dv = 0
     if b then
       local ux, uy, uz = a.x - b.x, a.y - b.y, a.z - b.z
       local l = len(ux, uy, uz)
       if l > 1e-6 then
-        local r = (ex * ux + ey * uy + ez * uz) / l
-        local hz = math.sqrt(math.max(0, dv * dv - r * r))
-        hz = math.max(0, hz - P("walk_dv"))
-        dv = math.sqrt(r * r + hz * hz)
+        ux, uy, uz = ux / l, uy / l, uz / l
+        local r0 = MON.vx * ux + MON.vy * uy + MON.vz * uz
+        local r1 = vx * ux + vy * uy + vz * uz
+        local down = math.max(0, math.max(0, -r0) - math.max(0, -r1))
+        local h0x, h0y, h0z = MON.vx - ux * r0, MON.vy - uy * r0, MON.vz - uz * r0
+        local h1x, h1y, h1z = vx - ux * r1, vy - uy * r1, vz - uz * r1
+        local hs0, hs1 = len(h0x, h0y, h0z), len(h1x, h1y, h1z)
+        local side = math.max(0, hs0 - hs1 - P("walk_dv"))
+        dv = math.sqrt(down * down + side * side)
       end
     end
     local verdict, loss = impactRule(dv)
