@@ -6641,11 +6641,16 @@ function idleTick(dt, clicked, lmb, released, cam_busy)
     -- pick-up the moment the mouse moved 6 px). A near miss takes the nearest
     -- handle within GIZ_NEAR_PX; further off, a click still selects the part
     -- under it, but a drag never lifts one (`giz`) — the Move tool (5) does.
+    -- (…and just OUTSIDE it: a press 25–35 px beyond a ring's rim, over the
+    -- next part up the stack, lifted that part and carried it off — verified
+    -- 2026-10-27, verifyprobe vvab. Within GIZ_NEAR_PX of the footprint the
+    -- nearest handle is asked for too.)
     local keep, giz = false, false
     if sel and giz_len then
       local gx, gy, gr = gizmo_footprint_px(sel, tool, giz_len, giz_rad)
-      giz = gx ~= nil and (mx - gx) ^ 2 + (my - gy) ^ 2 <= gr * gr
-      if giz then
+      local d2 = gx and (mx - gx) ^ 2 + (my - gy) ^ 2
+      giz = gx ~= nil and d2 <= gr * gr
+      if gx ~= nil and d2 <= (gr + GIZ_NEAR_PX) ^ 2 then
         local kind, ai, gpt = gizmo_hit(sel, tool, giz_len, giz_rad, GIZ_NEAR_PX)
         if kind then
           local ka = gizmoAxes(sel, tool)[ai]

@@ -1489,7 +1489,7 @@ local RING = {
 -- size in the world only while its radius on screen stays under RING_CAP of
 -- the view's height; nearer, it shrinks to hold that, and dims with it, so
 -- the closest marks are the smallest and the faintest. → radius, dim (0..1].
-RING_CAP = { laser = 0.05, plant = 0.07, dim = 0.45 }
+RING_CAP = { laser = 0.08, plant = 0.07, dim = 0.45 }
 function ring_on_screen(x, y, z, nx, ny, nz, r, cap)
   if not (camera and camera.worldToScreen and camera.screenRect) or r <= 0 then return r, 1 end
   local sx, sy, _, on = camera.worldToScreen(x, y, z)
