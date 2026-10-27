@@ -1,5 +1,6 @@
 -- PARTS_AUTO — the auto-engineering parts: a moto wheel, a telescopic fork,
--- a swing arm, a coil-over strut and a balance gyro (docs/auto-engineering.md).
+-- a swing arm, a coil-over strut, a balance gyro, a battery pack and a moto
+-- saddle (docs/auto-engineering.md).
 --
 -- A data script on the AutoLib node (prefabs/AutoLib.prefab.ron, beside
 -- scripts/auto_drive.lua), like parts_aero on the AeroLib node. The builder
@@ -93,6 +94,19 @@ PARTS = {
   packB    = { prefab = "PartPackB", label = "Battery Pack", h = 0.35, rx = 0.31, rz = 0.171, mass = 0.04, cost = 150,
                top = true, bottom = true, side = true, kind = "structural", power = true, ec = 200, strength = 300,
                mods = { { type = "battery", ec = 200 } } },
+  -- MOTO SADDLE: a crew part, the open seat of a motorcycle (or a quad, a
+  -- trike): a saddle and tank-tail shroud on a short subframe, faces +X. It
+  -- stacks on a frame block, a beam or the pack by its mount cradle (the
+  -- box's bottom; the box is the Command Seat's height, the rider's room:
+  -- the crew is parked at its centre); its footpegs hang either side of
+  -- whatever it is on. It
+  -- commands like the Command Seat (`seat`: F to sit, the rider stays in
+  -- view, a bike counts them as its rider) and scripts/command_seat.lua sits
+  -- them astride it, feet on the pegs, hands on a fork's grips (the
+  -- prefab's params; tools/gen_auto_parts.py moto_saddle).
+  saddle   = { prefab = "PartSaddle", label = "Moto Saddle", h = 1.30, rx = 0.36, rz = 0.17, mass = 0.03, cost = 90,
+               top = false, bottom = true, kind = "crewed", seat = true, strength = 260,
+               mods = { { type = "command", crew = 1, draw = 0.0, seat = true } } },
 }
 
 DESC = {
@@ -102,12 +116,13 @@ DESC = {
   strutS = "coil-over strut · on a flank · wheel on its flange · 18 cm",
   gyro = "balance gyro · holds a bike up · leans it into turns",
   packB = "battery pack · 200 EC · a bike's tank",
+  saddle = "moto saddle · crew 1 · F to ride astride · faces +X",
 }
 for id, d in pairs(DESC) do if PARTS[id] then PARTS[id].desc = d end end
 
 -- Where they go in the catalogue: after the rover's own parts.
 SECTION = "ROVER"
-ORDER = { "wheelB", "forkT", "swingArm", "strutS", "gyro", "packB" }
+ORDER = { "wheelB", "forkT", "swingArm", "strutS", "gyro", "packB", "saddle" }
 
 
 

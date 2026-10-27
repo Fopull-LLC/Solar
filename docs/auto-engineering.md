@@ -16,7 +16,7 @@ rover code in `vessel_controller.lua` (R2) and the engine's wheel joint
   sidecar, a six-wheeled chopper, a trike with lamps on its hubs) is just as
   easy.
 
-## 2. The parts (six, in the ROVER section)
+## 2. The parts (seven, in the ROVER section)
 
 | Part | Mounts | Takes | Role |
 |---|---|---|---|
@@ -26,6 +26,7 @@ rover code in `vessel_controller.lua` (R2) and the engine's wheel joint
 | **Coil-over Strut** | a flank (car, rover, trike axle) | any wheel on its hub flange | 18 cm of travel; a strut ahead of the centre of mass steers about its own axis. |
 | **Balance Gyro** | anywhere | — | Holds a two-wheeler up at any speed, crewed or not (draws power while it works). |
 | **Battery Pack** | stack or any face | — | A tank-shaped 200 EC pack: a seat carries no battery, and a bike needs one. |
+| **Moto Saddle** | stacks (its mount cradle) on a frame block, beam or pack; faces +X | — | A crew part for one: saddle and tank-tail shroud on a short subframe, footpegs hanging either side of what it sits on. Commands like the Command Seat (F to ride and to step off, the rider stays in view, the bike counts them as its rider); the rider sits astride, leaning forward, feet on the pegs, hands on the fork's grips. |
 
 Why these and not more:
 
@@ -43,6 +44,24 @@ Why these and not more:
   rover.
 - **Fenders and frames** are the frame parts you already have (panels, drawn
   beams, the node block); nothing bike-only.
+- **A saddle, not a chair.** The Command Seat on a bike looked silly (a
+  high-backed chair perched on the frame). The Moto Saddle is the same
+  command part (`seat = true`, crew 1: boarding, EVA, the cameras, the
+  control mode and the bike's rider all treat it exactly as the seat); only
+  the shape and the rider's pose differ. The pose is data: the part's
+  prefab passes `scripts/command_seat.lua` its params (sit height, forward
+  lean, peg and grip points; `tools/gen_auto_parts.py` writes them from the
+  mesh's own numbers). With a fork on the craft the hands go to its grips
+  (the fork's ForkSteer node, so they turn with the bars); without one they
+  reach forward to a fixed point. Everything follows the part, so a lean on
+  A/D tips the rider with the bike.
+  Its part box is the Command Seat's height (1.30 m above the mount cradle,
+  the rider's room) though the saddle is 0.3 m deep: the crew is parked at
+  the command part's centre as a kinematic capsule 2 m tall, and parked at
+  the saddle's own centre that capsule reached through the frame to the
+  ground and shoved a parked bike off at 20–25 m/s (motoprobe). While they
+  ride, `command_seat` also lets the capsule pass through the craft's hull
+  and its own live tyres (`physics.ignorePair`, lifted when they get off).
 
 ### Attach rules (builder_attach, the hub patch)
 
@@ -112,7 +131,9 @@ steers about the vertical (it still works; only the rake is lost).
 
 - `scripts/parts_auto.lua` — the parts (registry entries, catalogue lines).
 - `scripts/auto_drive.lua` — suspension, steering-axis and balance maths.
-- `prefabs/AutoLib.prefab.ron`, `prefabs/Part{WheelB,ForkT,SwingArm,StrutS,Gyro,PackB}`,
+- `scripts/command_seat.lua` — the rider's pose on the Command Seat and the
+  Moto Saddle (the prefab's params).
+- `prefabs/AutoLib.prefab.ron`, `prefabs/Part{WheelB,ForkT,SwingArm,StrutS,Gyro,PackB,Saddle}`,
   `prefabs/WheelTyreB`, `prefabs/vis/…` — written by `tools/gen_auto_parts.py`.
 - `tests/smoke_moto.lua`, `tools/perf/motoprobe.sh` + `motoprobe_modes.lua`.
 - Patches (owned files): `vessel_controller.lua` (flight), `builder.lua`

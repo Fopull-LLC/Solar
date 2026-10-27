@@ -329,6 +329,150 @@ def battery_pack():
     return m
 
 
+# ── MOTO SADDLE (a crew part) ────────────────────────────────────────────────
+def loft(m, mat, stations, ring=20, p=2.6, uv_m=3.0, caps=(True, True)):
+    """A soft body lofted along X through superellipse sections: stations are
+    (x, half-width, y-bottom, y-top). Smooth normals, UVs in metres."""
+    n = ring
+    P, I = [], []
+    for x, w, yb, yt in stations:
+        ym, hh = (yb + yt) / 2, (yt - yb) / 2
+        for k in range(n):
+            a = TAU * k / n
+            c, s = math.cos(a), math.sin(a)
+            z = w * math.copysign(abs(c) ** (2 / p), c)
+            y = ym + hh * math.copysign(abs(s) ** (2 / p), s)
+            P.append((x, y, z))
+    P = np.array(P, float)
+    ns = len(stations)
+    for j in range(ns - 1):
+        for k in range(n):
+            a0, a1 = j * n + k, j * n + (k + 1) % n
+            b0, b1 = a0 + n, a1 + n
+            I += [(a0, b0, b1), (a0, b1, a1)]
+    # smooth normals from the faces (outward: away from each section's centre)
+    N = np.zeros_like(P)
+    for a, b, c in I:
+        fn = np.cross(P[b] - P[a], P[c] - P[a])
+        N[a] += fn; N[b] += fn; N[c] += fn
+    for j, (x, w, yb, yt) in enumerate(stations):
+        cen = np.array([x, (yb + yt) / 2, 0.0])
+        for k in range(n):
+            i = j * n + k
+            if N[i] @ (P[i] - cen) < 0:
+                N[i] = -N[i]
+    N /= np.maximum(np.linalg.norm(N, axis=1, keepdims=True), 1e-9)
+    UV = np.stack([P[:, 2] * uv_m, P[:, 0] * uv_m + P[:, 1] * uv_m], 1)
+    m.add(mat, P, N, UV, I)
+    # flat end caps
+    for j, sg in ((0, -1), (ns - 1, 1)):
+        if not caps[0 if j == 0 else 1]:
+            continue
+        ring_p = P[j * n:(j + 1) * n]
+        cen = ring_p.mean(0)
+        cp = np.vstack([ring_p, cen])
+        cn = np.tile([sg * 1.0, 0, 0], (n + 1, 1))
+        cuv = np.stack([cp[:, 2] * uv_m, cp[:, 1] * uv_m], 1)
+        m.add(mat, cp, cn, cuv, [(k, (k + 1) % n, n) for k in range(n)])
+
+
+# The saddle is modelled about its own centre (mount cradle at y = −0.15);
+# the PART's box is the Command Seat's height (1.30 m) from that cradle up:
+# it holds the rider. That box matters: the crew is parked at the part's
+# centre as a kinematic body 2 m tall, and parked as low as the saddle itself
+# (0.15 m over the frame) it reached through the frame into the ground and
+# shoved a parked bike off at 20 m/s (motoprobe, 2026-10-26).
+SADDLE_HALF = (0.36, 0.65, 0.17)   # the part's box: the stack face is its bottom
+SADDLE_LIFT = 0.50                 # the mesh sits this far below the box centre
+SADDLE_SIT = (-0.12, 0.085)        # the cushion's dip (x, top y; mesh frame): where the rider sits
+SADDLE_PEG = (0.10, -0.385, 0.215)  # footpeg centres (x, y, ±z; mesh frame): either side of the frame
+
+
+def moto_saddle():
+    """A motorcycle saddle and tank-tail shroud on a short subframe, X forward,
+    +Y up, the box centred at the origin with its bottom face (the mount
+    cradle) at y = −0.15. Footpeg hangers drop below the box either side of
+    whatever it is stacked on (the frame rail or node block it bolts to)."""
+    m = Model()
+    hy = 0.15                      # the mount cradle is the mesh's y = −0.15 (the box's bottom, SADDLE_LIFT lower in the part)
+    # the mount cradle: a bolted plate with gussets, the stack face
+    box(m, "Dark", (0.0, -hy + 0.015, 0.0), (0.26, 0.03, 0.20), uv_m=4.0, bevel=0.008)
+    for sx in (-0.09, 0.09):
+        for sz in (-0.07, 0.07):
+            tube(m, "Metal", (sx, -hy + 0.03, sz), (sx, -hy + 0.042, sz), 0.009, segs=6, uv_m=8.0)
+    for sz in (-0.075, 0.075):
+        box(m, "Anodised", (0.0, -hy + 0.06, sz), (0.20, 0.06, 0.012), uv_m=4.0)
+    # the subframe: two rails from the shroud back under the tail, cross tubes
+    RZ = 0.075
+    rail = [(0.30, -0.075), (0.10, -0.085), (-0.12, -0.07), (-0.34, -0.025)]
+    for sz in (-1, 1):
+        for (x0, y0), (x1, y1) in zip(rail[:-1], rail[1:]):
+            tube(m, "Anodised", (x0, y0, sz * RZ), (x1, y1, sz * RZ), 0.013, segs=10, uv_m=6.0)
+        tube(m, "Anodised", (-0.06, -hy + 0.06, sz * RZ), (-0.12, -0.07, sz * RZ), 0.011, segs=8, uv_m=6.0)
+        tube(m, "Anodised", (0.07, -hy + 0.06, sz * RZ), (0.10, -0.085, sz * RZ), 0.011, segs=8, uv_m=6.0)
+    for x, y in ((0.28, -0.075), (-0.32, -0.03)):
+        tube(m, "Anodised", (x, y, -RZ), (x, y, RZ), 0.011, segs=8, uv_m=6.0)
+    # the seat pan (painted steel) and the cushion (black, deep in the middle)
+    pan = [(-0.345, 0.095, -0.03, 0.035), (-0.30, 0.125, -0.04, 0.03), (-0.20, 0.15, -0.045, 0.02),
+           (-0.08, 0.15, -0.05, 0.015), (0.04, 0.12, -0.055, 0.02), (0.13, 0.075, -0.06, 0.03)]
+    loft(m, "Paint3", pan, ring=16, p=3.0)
+    cush = [(-0.355, 0.07, 0.02, 0.085), (-0.335, 0.105, 0.015, 0.11), (-0.29, 0.13, 0.015, 0.118),
+            (-0.22, 0.145, 0.012, 0.108), (-0.12, 0.15, 0.01, 0.085), (-0.03, 0.135, 0.012, 0.088),
+            (0.05, 0.105, 0.015, 0.098), (0.12, 0.07, 0.02, 0.11), (0.15, 0.045, 0.03, 0.112)]
+    loft(m, "Rubber", cush, ring=24, p=2.4, uv_m=4.0)
+    # the passenger strap across the tail, and the piping round the pan
+    for sz in (-1, 1):
+        tube(m, "Dark", (-0.25, 0.02, sz * 0.152), (-0.25, 0.10, sz * 0.12), 0.006, segs=6, uv_m=8.0)
+        tube(m, "Dark", (-0.25, 0.10, sz * 0.12), (-0.25, 0.122, 0.0), 0.006, segs=6, uv_m=8.0)
+    # the tank-tail shroud: a painted shell rising from the saddle's nose, knee
+    # recesses with rubber pads, a filler cap and a stencil
+    shroud = [(0.10, 0.095, -0.05, 0.07), (0.15, 0.13, -0.065, 0.105), (0.22, 0.152, -0.075, 0.13),
+              (0.30, 0.16, -0.075, 0.145), (0.345, 0.15, -0.07, 0.143), (0.36, 0.125, -0.06, 0.128)]
+    loft(m, "Paint", shroud, ring=32, p=2.5, uv_m=2.0)
+    for sz in (-1, 1):
+        # knee pads, let into the shroud's flanks where the rider's knees grip
+        box(m, "Rubber", (0.245, 0.03, sz * 0.154), (0.10, 0.08, 0.014), uv_m=4.0, bevel=0.008)
+        flat_decal(m, "Decal", "hazard", (0.30, -0.035, sz * 0.157), (sz * 1.0, 0, 0), (0, 1, 0), 0.09, 0.02)
+    tube(m, "Chrome", (0.27, 0.13, 0), (0.27, 0.155, 0), 0.035, segs=16, uv_m=6.0)
+    tube(m, "Dark", (0.27, 0.155, 0), (0.27, 0.163, 0), 0.022, segs=12, uv_m=6.0)
+    for k in range(6):
+        a = TAU * k / 6
+        tube(m, "Metal", (0.27 + 0.045 * math.cos(a), 0.138, 0.045 * math.sin(a)),
+             (0.27 + 0.045 * math.cos(a), 0.146, 0.045 * math.sin(a)), 0.005, segs=6, uv_m=8.0)
+    # the grab rail round the tail and an orange reflector under it
+    gr = [(-0.18, -0.01), (-0.30, 0.0), (-0.355, 0.01)]
+    for sz in (-1, 1):
+        pts = [(x, y, sz * 0.15) for x, y in gr]
+        for a_, b_ in zip(pts[:-1], pts[1:]):
+            tube(m, "Chrome", a_, b_, 0.011, segs=8, uv_m=6.0)
+        tube(m, "Chrome", (-0.355, 0.01, sz * 0.15), (-0.355, 0.01, sz * 0.06), 0.011, segs=8, uv_m=6.0)
+        tube(m, "Dark", (-0.18, -0.01, sz * 0.15), (-0.16, -0.07, sz * RZ), 0.009, segs=6, uv_m=8.0)
+    tube(m, "Chrome", (-0.355, 0.01, -0.06), (-0.355, 0.01, 0.06), 0.011, segs=8, uv_m=6.0)
+    box(m, "PaintOrange", (-0.352, -0.035, 0.0), (0.012, 0.03, 0.09), uv_m=6.0)
+    # footpeg hangers: plates from the rails down either side of the frame,
+    # folding knurled pegs on pivots, heel guards
+    px, py, pz = SADDLE_PEG
+    for sz in (-1, 1):
+        top = (px + 0.03, -0.083, sz * RZ)
+        bot = (px, py + 0.02, sz * 0.15)
+        d = np.subtract(bot, top)
+        L = float(np.linalg.norm(d))
+        mid = tuple(np.add(top, bot) / 2)
+        # a flat plate lying in the plane of the drop
+        ang = math.atan2(d[0], -d[1])
+        roll = math.atan2(d[2], -d[1])
+        M = rot_z(ang) @ rot_x(-roll)
+        box(m, "Anodised", mid, (0.05, L, 0.012), M=M, uv_m=4.0)
+        tube(m, "Metal", (px + 0.03, -0.083, sz * (RZ - 0.012)), (px + 0.03, -0.083, sz * (RZ + 0.012)), 0.012, segs=8, uv_m=8.0)
+        box(m, "Dark", (px, py + 0.01, sz * 0.155), (0.045, 0.04, 0.03), uv_m=5.0, bevel=0.005)       # pivot block
+        tube(m, "Metal", (px, py, sz * 0.165), (px, py, sz * 0.285), 0.013, segs=8, uv_m=10.0)        # the peg
+        box(m, "Dark", (px, py + 0.012, sz * 0.228), (0.034, 0.008, 0.11), uv_m=8.0)                   # its cleat
+        for k in range(4):
+            box(m, "Metal", (px, py + 0.019, sz * (0.186 + 0.028 * k)), (0.036, 0.006, 0.006), uv_m=10.0)
+        box(m, "Anodised", (px - 0.045, py + 0.07, sz * 0.158), (0.06, 0.09, 0.006), uv_m=4.0)         # heel guard
+    return m
+
+
 # ── writing ──────────────────────────────────────────────────────────────────
 def bounds_of(*models):
     mn = np.array([1e9] * 3); mx = -mn
@@ -490,11 +634,39 @@ def main():
         G.write_prefab("PartPackB", "BATTERY PACK — a tank-shaped 200 EC pack for bikes and small rovers; X forward.",
                        ("battery_pack", pm), half, 0.04)
 
+    # MOTO SADDLE ---------------------------------------------------------------------------
+    sd = moto_saddle()
+    sm2, sc2 = mesh("moto_saddle", sd)
+    half = SADDLE_HALF
+    frames["saddle"] = dict(half=half, sit=SADDLE_SIT, peg=SADDLE_PEG, mesh_bounds=r4(sd.bounds()[0]) + r4(sd.bounds()[1]))
+    if not dry:
+        G.write_prefab("PartSaddle", "MOTO SADDLE — a crew part: a motorcycle saddle and tank-tail shroud on a short"
+                       " subframe, X forward; stacks by its bottom (the mount cradle) and its footpegs hang either"
+                       " side of the frame below. scripts/command_seat.lua seats the rider astride it (the params).",
+                       None, half, 0.03, children=[("Saddle", "moto_saddle", sm2, sc2 + np.array([0.0, -SADDLE_LIFT, 0.0]))])
+        # the rider's pose (command_seat.lua): astride, leaning forward, feet on
+        # the pegs, hands on a fork's grips (ForkSteer frame, the fork() bar)
+        sx, sy = SADDLE_SIT
+        px, py, pz = SADDLE_PEG
+        pose = [("model_yaw", 3.14159265), ("sit_forward", sx), ("sit_up", round(sy + 0.15 - SADDLE_LIFT, 4)), ("lean_fwd", 0.26),
+                ("foot_out", px + 0.01), ("foot_down", round(-py - 0.035 + SADDLE_LIFT, 4)), ("foot_side", pz + 0.005),
+                ("knee_out", 0.45),
+                ("hand_out", 0.62), ("hand_up", round(0.34 - SADDLE_LIFT, 4)), ("hand_side", 0.30), ("hand_lift", 0.0),
+                ("grips", 1.0), ("grip_x", -0.0835), ("grip_y", 0.303), ("grip_z", 0.3125)]
+        prm = "".join(f'                        ("{k}", {float(v)}),\n' for k, v in pose)
+        scr = ('scripts: [\n                (\n                    kind: "command_seat",\n                    enabled: true,\n'
+               '                    params: [\n' + prm +
+               '                    ],\n                ),\n            ],')
+        fp = os.path.join(G.PREFABS, "PartSaddle.prefab.ron")
+        src = open(fp).read()
+        src = src.replace("scripts: [],", scr, 1)
+        open(fp, "w").write(src)
+
     for k, v in frames.items():
         print("FRAME", k, v)
     if not dry:
         os.makedirs(G.VIS_DIR, exist_ok=True)
-        for prefab in ("PartWheelB", "PartForkT", "PartSwingArm", "PartStrutS", "PartGyro", "PartPackB"):
+        for prefab in ("PartWheelB", "PartForkT", "PartSwingArm", "PartStrutS", "PartGyro", "PartPackB", "PartSaddle"):
             src = open(os.path.join(G.PREFABS, prefab + ".prefab.ron")).read()
             vis = G.strip_scripts(G.strip_block(src, "rigidbody: Some(("))
             head_ = ("// VISUAL-ONLY variant of prefabs/" + prefab + ".prefab.ron for the builder stand: no body,"

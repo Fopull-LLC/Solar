@@ -15,7 +15,8 @@
 --     steered right (under the fall) by the bars; a lean asked for at speed
 --     is held as an equilibrium; a countersteer starts a turn;
 --   * the parts register into the ROVER section once, each with the keys
---     the builder and the flight read.
+--     the builder and the flight read; the Moto Saddle is a crewed open
+--     seat whose prefab sits its rider astride (command_seat's params).
 
 local failures, passes = {}, 0
 local function check(name, ok, detail)
@@ -186,6 +187,28 @@ local dm = mod(wb, "drive")
 check("the moto wheel drives, centred on its own part", dm and dm.centred == true and dm.r and dm.r > 0.2)
 check("the gyro carries a gyro module", mod(REG.gyro, "gyro") and mod(REG.gyro, "gyro").torque > 0)
 check("the battery pack holds charge", mod(REG.packB, "battery") and mod(REG.packB, "battery").ec > 0)
+-- the Moto Saddle: a crew part that commands like the Command Seat
+local sd = REG.saddle
+local cm = sd and mod(sd, "command")
+check("the saddle is a crewed open seat for one (F to ride, the rider in view)",
+  sd and sd.kind == "crewed" and sd.seat == true and cm and cm.crew == 1 and cm.seat == true)
+check("the saddle stacks by its bottom and takes nothing on top", sd and sd.bottom == true and sd.top == false)
+check("the saddle is light and cheap", sd and sd.mass <= 0.05 and sd.cost <= 160)
+do
+  local f = io.open("solar/prefabs/PartSaddle.prefab.ron")
+  local src = f and f:read("*a") or ""
+  if f then f:close() end
+  check("the saddle's prefab seats its rider (command_seat, astride: pegs, grips)",
+    src:find('kind: "command_seat"', 1, true) and src:find('("grips", 1.0)', 1, true) and src:find('("sit_up",', 1, true)
+    and src:find("models/parts/moto_saddle.glb", 1, true))
+  local v = io.open("solar/prefabs/vis/PartSaddle.prefab.ron")
+  local vs = v and v:read("*a") or ""
+  if v then v:close() end
+  check("…and its builder-stand copy has no scripts or body", vs ~= "" and not vs:find('kind: "command_seat"', 1, true) and not vs:find("rigidbody", 1, true))
+  local S = load("solar/scripts/command_seat.lua")
+  check("command_seat: the Command Seat's pose is unchanged by default (no lift, no lean, stick hand up)",
+    S.defaults.sit_up == 0 and S.defaults.lean_fwd == 0 and S.defaults.grips == 0 and S.defaults.hand_lift == 0.1)
+end
 
 if #failures > 0 then
   print(("smoke_moto: %d/%d FAILED"):format(#failures, #failures + passes))

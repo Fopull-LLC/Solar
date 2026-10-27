@@ -1,9 +1,11 @@
 -- ── moto probe (tools/perf/motoprobe.sh): the auto-engineering parts in flight (docs/auto-engineering.md) ──
 -- Modes:
---   bike       a motorcycle (fork, swing arm, two moto wheels, a seat, a battery
---              pack): driven out past 95 m from the base, then a straight, a
---              left and a right turn, a slalom and a stop. Every half second:
---              speed, lean and the lean asked for, the bars, the forks.
+--   bike       a motorcycle (fork, swing arm, two moto wheels, a Moto Saddle, a
+--              battery pack in the frame): a close-up of the rider astride it,
+--              then driven out past 95 m from the base, a straight, a left and
+--              a right turn, a slalom and a stop; then F to step off (EVA) and
+--              F to get back on. Every half second: speed, lean and the lean
+--              asked for, the bars, the forks, the rider's pose.
 --              params gyro=1 adds a Balance Gyro.
 --   car        a rover body on four coil-over struts with M wheels, out past
 --              95 m, then a field of raised bumps (terrain.sculpt) driven
@@ -46,7 +48,10 @@ local function member(id, a, b, o)
   return r
 end
 
--- THE MOTORCYCLE (front +X; numbers from scripts/parts_auto.lua's frames)
+-- THE MOTORCYCLE (front +X; numbers from scripts/parts_auto.lua's frames):
+-- the Moto Saddle's shroud butts the steering head, the battery pack hangs in
+-- the frame under it (an electric bike's), the saddle stacks on a block at
+-- the top of the seat stay, its pegs either side of that block.
 local function mp_bike(gyro)
   puid = 0
   local L = {}
@@ -54,16 +59,20 @@ local function mp_bike(gyro)
   local H = add(prec("hub", 0.18, 1.068, 0, X1, Y1))                                    -- 1 the steering head block
   local F = add(prec("forkT", 0.7416, 0.7564, 0, X1, Y1, { parent = H.uid, att = "surface" }))
   add(prec("wheelB", 0.8022, 0.3497, 0, Z1, Y1, { parent = F.uid, att = "surface" }))
-  add(prec("packB", -0.25, 1.068, 0, X1, Y1, { parent = H.uid, att = "surface" }))      -- the tank
+  add(prec("packB", 0.12, 0.77, 0, X1, Y1, { parent = H.uid, att = "surface" }))        -- the battery, in the frame
   local hp, rp = { x = 0.18, y = 1.068, z = 0 }, { x = -0.03, y = 0.48, z = 0 }
   local sp = add(member("beamP", hp, rp, { parent = H.uid, att = "surface" }))          -- the down tube
   local R = add(prec("hub", rp.x, rp.y, 0, X1, Y1, { parent = sp.uid, att = "surface" }))
   local A = add(prec("swingArm", -0.485, 0.4826, 0, neg(X1), Y1, { parent = R.uid, att = "surface" }))
   add(prec("wheelB", -0.75, 0.35, 0, neg(Z1), Y1, { parent = A.uid, att = "surface" }))
-  local sh = { x = -0.80, y = 0.90, z = 0 }
+  local sh = { x = -0.30, y = 0.79, z = 0 }
   local sf = add(member("beamP", rp, sh, { parent = R.uid, att = "surface" }))          -- the seat stay
   local S = add(prec("hub", sh.x, sh.y, 0, X1, Y1, { parent = sf.uid, att = "surface" }))
-  add(prec("seat", sh.x, sh.y + 0.12 + 0.65, 0, X1, Y1, { parent = S.uid, att = "top" }))
+  if (params.oldseat or 0) > 0 then   -- A/B: the Command Seat on the same block
+    add(prec("seat", sh.x, sh.y + 0.12 + 0.65, 0, X1, Y1, { parent = S.uid, att = "top" }))
+  else
+    add(prec("saddle", sh.x, sh.y + 0.12 + 0.65, 0, X1, Y1, { parent = S.uid, att = "top" }))
+  end
   -- the gyro where an engine would be: on the rear block's front face, low
   if gyro then add(prec("gyro", rp.x + 0.12 + 0.2, rp.y, 0, X1, Y1, { parent = R.uid, att = "surface" })) end
   return L
@@ -256,6 +265,56 @@ local function mp_hold(vc, drive, steer, secs, tag, shot)
   return st
 end
 
+-- THE PROBE CAMERA (as vfxprobe's): eye and target from a function each
+-- frame, applied through planet_camera's freecam in lateUpdate.
+local MPC = {}
+function lateUpdate(node, dt)
+  local f = MPC.cam
+  if not f then return end
+  local pc = findScript("planet_camera")
+  if not (pc and pc.setFreecam) then return end
+  local eye, tgt = f()
+  if not eye then return end
+  local name = space.dominant(eye.x, eye.y, eye.z)
+  local b = name and space.body(name)
+  if not b then return end
+  pc.setFreecam(true)
+  local fc = pc.freecamState and pc.freecamState()
+  if not fc then return end
+  local pos = vec3(eye.x - b.x, eye.y - b.y, eye.z - b.z)
+  local u = pos:normalized()
+  fc.body, fc.rel = name, pos
+  local d = vec3(tgt.x - eye.x, tgt.y - eye.y, tgt.z - eye.z)
+  local h = d:flatten(u)
+  fc.ref = h:normalized()
+  fc.pitch = math.atan2(d:dot(u), h:length())
+end
+local function mp_cam_off()
+  MPC.cam = nil
+  local pc = findScript("planet_camera")
+  if pc and pc.setFreecam then pc.setFreecam(false) end
+end
+-- a camera held in a node's frame (eye and target in its local axes)
+local function mp_cam_local(n, ex, ey, ez, tx, ty, tz)
+  MPC.cam = function()
+    if not n.valid then return nil end
+    return n:toWorld(vec3(ex, ey, ez)), n:toWorld(vec3(tx, ty, tz))
+  end
+end
+-- the rider's seat script on this craft (command_seat on the saddle)
+local function mp_seat(vc)
+  for _, s in ipairs(findScripts("command_seat")) do
+    if s.node and s.node.valid and s.node.parent and s.node.parent.id == vc.node.id then return s end
+  end
+end
+local function mp_rider_line(vc, tag)
+  local s = mp_seat(vc)
+  local a = find("Astronaut")
+  local ms = vc.motoState and vc.motoState() or {}
+  P("MP %s rider [%s]: aboard %s seatpart %s riding %s hands %s visible %s bike %s rider %s", MP_TAG, tag, tostring(vc.crewAboard),
+    tostring(s ~= nil), tostring(s and s.riding), tostring(s and s.hands), tostring(a and a.visible), tostring(ms.bike), tostring(ms.rider))
+end
+
 local function run_bike()
   local gy = (params.gyro or 0) > 0
   MP_TAG = gy and "bikegyro" or "bike"
@@ -267,12 +326,29 @@ local function run_bike()
   -- stand still on the runway first: does it stay up?
   if (params.nobal or 0) > 0 then vc.R2.motoOff = true end
   local s0 = mp_hold(vc, 0, 0, 4, "stand", true)
+  mp_rider_line(vc, "launch")
+  -- the rider astride it, close: from the front-left and from the side
+  -- (the stick held at rest meanwhile, as mp_hold does)
+  local function still(secs)
+    local t0 = time
+    while time - t0 < secs do vc.R2.cmd = { drive = 0, steer = 0 }; yield() end
+  end
+  local seat = mp_seat(vc)
+  if seat then
+    mp_cam_local(seat.node, 1.5, 0.05, -1.3, -0.05, -0.4, 0.0)
+    still(0.5); mp_shot("rider_close")
+    mp_cam_local(seat.node, 0.1, -0.25, -2.3, 0.1, -0.6, 0.0)
+    still(0.5); mp_shot("rider_side")
+    mp_cam_off()
+    still(0.3)
+  end
   vc.R2.motoOff = nil
   local ok, from_base = mp_out(vc, 95, 0.7)
   if not ok then P("MP RESULT %s: FAIL (fell on the way out)", MP_TAG); return end
   local total = 0
   local a = mp_hold(vc, 1, 0, 8, "straight", true); total = total + a.dist
   local l = mp_hold(vc, 0.6, 1, 5, "left", true); total = total + l.dist
+  mp_rider_line(vc, "left")
   local r = mp_hold(vc, 0.6, -1, 5, "right", true); total = total + r.dist
   local fell = s0.fell or a.fell or l.fell or r.fell
   local sl = { dist = 0 }
@@ -282,6 +358,25 @@ local function run_bike()
   end
   local st = mp_hold(vc, 0, 0, 6, "stop", true)
   fell = fell or st.fell
+  -- F: step off (EVA), then F: back on
+  mp_rider_line(vc, "stopped")
+  vc.R2.cmd = nil
+  local function press_f() input.simulate { key = "f", down = true }; wait(0.2); input.simulate { key = "f", down = false }; wait(0.2) end
+  press_f()
+  wait_for(function() return not vc.crewAboard end, 5, "EVA")
+  wait(1.5)
+  mp_rider_line(vc, "eva")
+  local seat2 = mp_seat(vc)
+  if seat2 then mp_cam_local(seat2.node, 2.2, 0.5, -2.2, 0.0, -0.5, 0.0); wait(0.5); mp_shot("eva"); mp_cam_off() end
+  local eva_ok = not vc.crewAboard
+  press_f()
+  wait_for(function() return vc.crewAboard end, 5, "board")
+  wait(1.0)
+  mp_rider_line(vc, "reboard")
+  local s3 = mp_seat(vc)
+  local board_ok = vc.crewAboard and s3 and s3.riding
+  if s3 then mp_cam_local(s3.node, 1.5, 0.05, 1.3, -0.05, -0.4, 0.0); wait(0.5); mp_shot("reboard_close"); mp_cam_off() end
+  P("MP RESULT %s seat: EVA %s, board %s", MP_TAG, eva_ok and "PASS" or "FAIL", board_ok and "PASS" or "FAIL")
   P("MP RESULT %s: %s — %.0f m ridden after the run-out (straight %.0f m at up to %.1f m/s), turns lean L %.1f° R %.1f°, standing lean max %.1f°, %.0f m from the base",
     MP_TAG, (not fell and total > 100 and l.meanlean > 3 and r.meanlean < -3) and "PASS" or "FAIL", total, a.dist, a.vmax,
     l.meanlean, r.meanlean, st.maxlean, from_base())
@@ -428,12 +523,21 @@ local function run_motoshop()
     wait(2.5)
     P("MP shop %s: %d parts in the builder", c[1], B.partCount or -1)
     mp_shot("builder_" .. c[1], params.ui == 1)
+    -- …and close: the craft framed, then turned a little
+    local BC = findScript("builder_camera")
+    if BC and BC.frameCraft and c[1] == "bike" then
+      BC.frameCraft(); if BC.settle then BC.settle() end
+      wait(0.5); mp_shot("builder_bike_framed", false)
+      local st = BC.camState()
+      BC.setCamState({ yaw = (st.yaw or 0) + 0.7, pitch = (st.pitch or 0), d = (st.d or 3) * 0.8 })
+      wait(0.5); mp_shot("builder_bike_quarter", false)
+    end
   end
   -- the parts sheet: each part on its own, side by side
   puid = 0
   local sheet = {}
   local xs = 0
-  for _, id in ipairs({ "wheelB", "forkT", "swingArm", "strutS", "gyro", "packB" }) do
+  for _, id in ipairs({ "wheelB", "forkT", "swingArm", "strutS", "gyro", "packB", "saddle" }) do
     sheet[#sheet + 1] = prec(id, xs, 0.8, 0, X1, Y1)
     xs = xs + 1.15
   end
