@@ -792,20 +792,28 @@ end
 local function stage_stack(t, lift)
   local cards = {}
   local n = #(t.stages or {})
+  local function one(st)
+    if st.kind == "ring" then
+      return (st.n or 0) > 1 and string.format("Boosters ×%d", st.n) or "Radial split",
+        st.eng > 0 and string.format("drops %d eng · %d kN", st.eng, st.kn) or "separate"
+    elseif st.kind == "chute" then
+      return string.format("Chutes ×%d", st.n or 0), "deploy"
+    elseif st.kind == "fairing" then
+      return "Fairing", "jettison"
+    end
+    return "Decouple", st.eng > 0 and string.format("then %d eng · %d kN", st.eng, st.kn) or "then coast"
+  end
   for i = n, 1, -1 do
     local st = t.stages[i]
-    local title, sub
-    if st.kind == "ring" then
-      title = string.format("Boosters ×%d", st.n or 0)
-      sub = st.eng > 0 and string.format("drops %d eng · %d kN", st.eng, st.kn) or "separate"
-    elseif st.kind == "chute" then
-      title = string.format("Chutes ×%d", st.n or 0)
-      sub = "deploy"
-    elseif st.kind == "fairing" then
-      title, sub = "Fairing", "jettison"
-    else
-      title = "Decouple"
-      sub = st.eng > 0 and string.format("then %d eng · %d kN", st.eng, st.kn) or "then coast"
+    local title, sub = one(st)
+    -- a stage of several events (the builder's STAGE tab put them together):
+    -- one card, every event named
+    for _, o in ipairs(st.also or {}) do
+      local t2 = one(o)
+      title = title .. " + " .. t2
+    end
+    if st.also then
+      sub = st.eng > 0 and string.format("%d eng · %d kN", st.eng, st.kn) or string.format("%d events", #st.also + 1)
     end
     cards[#cards + 1] = { key = "s" .. i, num = i, title = title, sub = sub,
                           next = (i == 1) and not t.anchored }

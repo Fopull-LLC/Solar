@@ -580,29 +580,59 @@ local function load_bp(override)
   elec.cap, elec.gen, elec.comms = 0.0, 0.0, false
   local decouplers, boosters = {}, {}
   if not bp or not bp.parts then return end
-  -- Parent links → radial-decoupler BRANCHES (each = the decoupler + its
-  -- whole outboard subtree; they separate laterally as one group).
-  local by_uid, kids = {}, {}
+  -- THE TREE, made whole from the builder's links first (SPLIT.normalize: a
+  -- part held on by a weld or a demoted link is hung off its partner, not left
+  -- as a second root that stays behind when its craft separates).
+  if bp.links then SPLIT.normalize(bp.parts, bp.links, bp.root) else SPLIT.normalize(bp.parts, nil, bp.root) end
+  local by_uid = {}
+  for _, d in pairs(bp.parts) do by_uid[d.uid] = d end
+  local kids = SPLIT.kids(bp.parts)
+  -- THE COMMAND POD. A stack can carry MORE THAN ONE crewed part — a lander
+  -- riding its mothership through a docking seam is exactly that — and `pairs`
+  -- order is arbitrary, so "whichever crewed part came last" made `pod_uid`
+  -- nondeterministic. That matters: `axial_departing` inverts its cut to keep
+  -- the pod side, so a coin-flip there undocked the MOTHERSHIP instead of the
+  -- lander. Pick the crewed part nearest the tree root (the primary craft's
+  -- pod), tie-broken by uid so the same blueprint always flies the same way.
+  local best_pod, best_rank
+  -- (no crewed part: the PROBE CORE nearest the root commands the craft)
+  local want_kind = nil
   for _, d in pairs(bp.parts) do
-    by_uid[d.uid] = d
-    local pu = d.parent or 0
-    if pu ~= 0 then
-      kids[pu] = kids[pu] or {}
-      kids[pu][#kids[pu] + 1] = d.uid
+    if d.kind == "crewed" then want_kind = "crewed" break end
+    if d.kind == "probe" then want_kind = "probe" end
+  end
+  for _, d in pairs(bp.parts) do
+    if d.kind == want_kind then
+      local depth, u, guard = 0, d.uid, 0
+      while by_uid[u] and (by_uid[u].parent or 0) ~= 0 and guard < 64 do
+        u = by_uid[u].parent
+        depth, guard = depth + 1, guard + 1
+      end
+      -- A real pod outranks an open COMMAND SEAT: with both aboard the crew
+      -- flies from the pod, and a seat only commands when it is all there is.
+      local rank = depth * 1e6 + d.uid + (((d.seat or 0) == 1) and 1e9 or 0)
+      if not best_rank or rank < best_rank then best_rank, best_pod = rank, d end
     end
   end
+  if best_pod then
+    pod = { x = best_pod.x, y = best_pod.y, z = best_pod.z }
+    pod_uid = best_pod.uid
+  end
+  podCrewed = best_pod ~= nil and best_pod.kind == "crewed"
+  -- An OPEN SEAT (the builder's `seat`): its rider stays in view, seated
+  -- (scripts/command_seat.lua poses them); a pod hides its crew.
+  podSeat = podCrewed and (best_pod.seat or 0) == 1
+  -- Every place the crew can sit (see `crewSeats`); they start in the command
+  -- pod, which a real pod wins over a seat (the rank above).
+  stationUid = podCrewed and best_pod.uid or nil
+  -- Radial-decoupler BRANCHES: each = what that decoupler throws off (the
+  -- side without the crew, SPLIT.sides); they separate as one group, their
+  -- engines burn from the start and their tanks drain first.
   local in_branch = {} -- uid → branch root uid
   for _, d in pairs(bp.parts) do
     if (d.radial or 0) == 1 and (d.decouple or 0) == 1 then
-      local uids, queue = {}, { d.uid }
-      while #queue > 0 do
-        local u = table.remove(queue)
-        if not uids[u] then
-          uids[u] = true
-          in_branch[u] = d.uid
-          for _, k in ipairs(kids[u] or {}) do queue[#queue + 1] = k end
-        end
-      end
+      local uids = SPLIT.sides(by_uid, kids, d.uid, best_pod and best_pod.uid or nil)
+      for u in pairs(uids) do in_branch[u] = in_branch[u] or d.uid end
       local pos = {}
       for u in pairs(uids) do
         local dd = by_uid[u]
@@ -642,44 +672,6 @@ local function load_bp(override)
       decouplers[#decouplers + 1] = { uid = d.uid, y = d.y }
     end
   end
-  -- THE COMMAND POD. A stack can carry MORE THAN ONE crewed part — a lander
-  -- riding its mothership through a docking seam is exactly that — and `pairs`
-  -- order is arbitrary, so "whichever crewed part came last" made `pod_uid`
-  -- nondeterministic. That matters: `axial_departing` inverts its cut to keep
-  -- the pod side, so a coin-flip there undocked the MOTHERSHIP instead of the
-  -- lander. Pick the crewed part nearest the tree root (the primary craft's
-  -- pod), tie-broken by uid so the same blueprint always flies the same way.
-  local best_pod, best_rank
-  -- (no crewed part: the PROBE CORE nearest the root commands the craft)
-  local want_kind = nil
-  for _, d in pairs(bp.parts) do
-    if d.kind == "crewed" then want_kind = "crewed" break end
-    if d.kind == "probe" then want_kind = "probe" end
-  end
-  for _, d in pairs(bp.parts) do
-    if d.kind == want_kind then
-      local depth, u, guard = 0, d.uid, 0
-      while by_uid[u] and (by_uid[u].parent or 0) ~= 0 and guard < 64 do
-        u = by_uid[u].parent
-        depth, guard = depth + 1, guard + 1
-      end
-      -- A real pod outranks an open COMMAND SEAT: with both aboard the crew
-      -- flies from the pod, and a seat only commands when it is all there is.
-      local rank = depth * 1e6 + d.uid + (((d.seat or 0) == 1) and 1e9 or 0)
-      if not best_rank or rank < best_rank then best_rank, best_pod = rank, d end
-    end
-  end
-  if best_pod then
-    pod = { x = best_pod.x, y = best_pod.y, z = best_pod.z }
-    pod_uid = best_pod.uid
-  end
-  podCrewed = best_pod ~= nil and best_pod.kind == "crewed"
-  -- An OPEN SEAT (the builder's `seat`): its rider stays in view, seated
-  -- (scripts/command_seat.lua poses them); a pod hides its crew.
-  podSeat = podCrewed and (best_pod.seat or 0) == 1
-  -- Every place the crew can sit (see `crewSeats`); they start in the command
-  -- pod, which a real pod wins over a seat (the rank above).
-  stationUid = podCrewed and best_pod.uid or nil
   rescanSeats(bp.parts)
   table.sort(decouplers, function(a, b) return a.y < b.y end)
   -- Build the ordered EVENT list: booster branches group into ring events by
@@ -1107,45 +1099,278 @@ local function sas_target_dir(node, db, mode)
   return nil
 end
 
--- ── staging ─────────────────────────────────────────────────────────────────
--- The DEPARTING SET of an axial decoupler, by the ATTACHMENT TREE — not world
--- height. Firing a decoupler cuts the one tree edge above it (dec → its parent)
--- and the side WITHOUT the pod flies away. Concretely: the decoupler plus its
--- whole subtree (everything built onto it, away from the pod) departs; the pod
--- side stays. This is why a nose cone hung LOW on an upper stage now stays, and
--- a strut dangling DOWN from an upper stage is no longer swept off by a cut
--- below it (both were the "geometry read the wrong stage" bug). Radial parts
--- ride whichever spine part they're bolted to — the tree already encodes that.
--- Memoized per decoupler; the cache is cleared each load_bp.
-local function axial_departing(dec_uid)
-  local cached = axial_set_cache[dec_uid]
-  if cached then return cached end
-  local set, queue = { [dec_uid] = true }, { dec_uid }
-  while #queue > 0 do
-    local u = table.remove(queue)
-    for _, k in ipairs(bp_kids[u] or {}) do
-      if not set[k] then set[k] = true; queue[#queue + 1] = k end
+-- ══ SPLIT RULEBOOK BEGIN (pure: tests/smoke_stage_split.lua loads this block) ══
+-- Where a craft comes apart, from its records alone (no scene, no engine).
+--
+-- SPLIT.normalize(recs, links, root) makes the attachment tree (`parent`/`att`)
+-- whole. The builder joins parts by LINKS (builder_graph): the primary link is
+-- the record's `parent`, but a part can be held on by a link that is not
+-- primary — a WELD, or a stack link demoted when its partner was re-attached
+-- elsewhere. Such a part has `parent` 0 and looked, to the flight, like a
+-- second root: the playtest's jet cockpit (welded to its fuselage) stayed on
+-- the rocket when the radial decoupler under the jet fired, and took the
+-- controls with it. Every tree the links join to the main one is re-rooted at
+-- the joined part and hung off its partner, so the tree reaches every part
+-- the builder showed attached. `root` (the blueprint's) picks the main tree;
+-- without one, the largest. Returns how many records changed.
+--
+-- SPLIT.sides(by_uid, kids, dec, keep, alive) → the set that LEAVES when
+-- decoupler `dec` fires: the cut is the decoupler's own joint (dec → its
+-- parent); the decoupler leaves with what is built onto it, unless `keep`
+-- (the part the crew sits in, else the command part) is on that side — then
+-- the parent's side leaves and the decoupler stays with the crew. A radial
+-- decoupler is the same cut: a jet hung on a rocket's radial decoupler with
+-- the crew in the jet keeps the jet and drops the rocket. `alive(u)` (optional)
+-- says a part is still aboard.
+SPLIT = {}
+local function split_opp(side)
+  if side == "top" then return "bottom" end
+  if side == "bottom" then return "top" end
+  return "surface"
+end
+function SPLIT.normalize(recs, links, root)
+  local by, list = {}, {}
+  for _, d in pairs(recs) do
+    if d.uid then by[d.uid] = d; list[#list + 1] = d.uid end
+  end
+  table.sort(list)
+  local changed = 0
+  -- parents that name nobody aboard, and cycles, are cut first
+  for _, u in ipairs(list) do
+    local d = by[u]
+    if (d.parent or 0) ~= 0 and not by[d.parent] then d.parent = 0; changed = changed + 1 end
+  end
+  local state = {}
+  for _, u in ipairs(list) do
+    if not state[u] then
+      local path, on, x = {}, {}, u
+      while x and x ~= 0 and by[x] and not state[x] do
+        if on[x] then by[x].parent = 0; changed = changed + 1; break end
+        on[x] = true
+        path[#path + 1] = x
+        x = by[x].parent
+      end
+      for _, p in ipairs(path) do state[p] = true end
     end
   end
-  -- Robustness: if the pod ended up on the subtree side (a craft built pod-down),
-  -- the OTHER side is the one that leaves — invert so the pod always stays.
-  if pod_uid and set[pod_uid] then
-    local inv = {}
-    for u in pairs(bp_by_uid) do if not set[u] then inv[u] = true end end
-    set = inv
+  local tree_of = {}
+  local function retree()
+    tree_of = {}
+    for _, u in ipairs(list) do
+      if not tree_of[u] then
+        local path, x = {}, u
+        while true do
+          if tree_of[x] then break end
+          path[#path + 1] = x
+          local p = by[x].parent or 0
+          if p == 0 then tree_of[x] = x break end
+          x = p
+        end
+        local r = tree_of[x]
+        for _, p in ipairs(path) do tree_of[p] = r end
+      end
+    end
   end
-  axial_set_cache[dec_uid] = set
-  return set
+  retree()
+  local main = root and by[root] and tree_of[root] or nil
+  if not main then
+    local count, best = {}, nil
+    for _, u in ipairs(list) do
+      local t = tree_of[u]
+      count[t] = (count[t] or 0) + 1
+      if not best or count[t] > count[best] or (count[t] == count[best] and t < best) then best = t end
+    end
+    main = best
+  end
+  if not main or not links then return changed end
+  local ls = {}
+  for _, l in ipairs(links) do
+    if l.a and l.b and by[l.a] and by[l.b] and l.a ~= l.b then ls[#ls + 1] = l end
+  end
+  table.sort(ls, function(p, q) if p.a ~= q.a then return p.a < q.a end return p.b < q.b end)
+  local function hang(x, host, l)
+    -- re-root x's tree at x (each edge on the way to its root turns round)
+    local path, y = {}, x
+    while y ~= 0 and by[y] do path[#path + 1] = y; y = by[y].parent or 0 end
+    for i = #path, 2, -1 do
+      local p, c = by[path[i]], by[path[i - 1]]
+      p.parent, p.att = c.uid, split_opp(c.att)
+    end
+    local d = by[x]
+    d.parent = host
+    local side = (l.a == host) and l.sa or l.sb
+    d.att = (side and side ~= "") and side or "surface"
+    changed = changed + 1
+  end
+  local grew = true
+  while grew do
+    grew = false
+    for _, l in ipairs(ls) do
+      local ta, tb = tree_of[l.a], tree_of[l.b]
+      if ta == main and tb ~= main then hang(l.b, l.a, l); grew = true
+      elseif tb == main and ta ~= main then hang(l.a, l.b, l); grew = true end
+      if grew then retree() break end
+    end
+  end
+  return changed
 end
+-- children index of a record set (uid → { child uids }, sorted)
+function SPLIT.kids(recs)
+  local by, kids = {}, {}
+  for _, d in pairs(recs) do if d.uid then by[d.uid] = d end end
+  for u, d in pairs(by) do
+    local p = d.parent or 0
+    if p ~= 0 and by[p] then
+      kids[p] = kids[p] or {}
+      kids[p][#kids[p] + 1] = u
+    end
+  end
+  for _, k in pairs(kids) do table.sort(k) end
+  return kids
+end
+function SPLIT.sides(by, kids, dec, keep, alive)
+  local ok = function(u) return by[u] ~= nil and (not alive or alive(u)) end
+  local function grow(from, block)
+    local set, q = { [from] = true }, { from }
+    while #q > 0 do
+      local u = table.remove(q)
+      for _, k in ipairs(kids[u] or {}) do
+        if not set[k] and k ~= block and ok(k) then set[k] = true; q[#q + 1] = k end
+      end
+    end
+    return set
+  end
+  local d = by[dec]
+  if not d then return {} end
+  local p = d.parent or 0
+  if p ~= 0 and ok(p) then
+    local sub = grow(dec)
+    if keep and sub[keep] and keep ~= dec then
+      local inv = {}
+      for u in pairs(by) do if not sub[u] and ok(u) then inv[u] = true end end
+      return inv
+    end
+    return sub
+  end
+  -- a decoupler at the tree's root: it stays with the piece the crew is in
+  -- (else its biggest), and every other piece built onto it leaves
+  local pieces, stay, best = {}, nil, -1
+  for _, k in ipairs(kids[dec] or {}) do
+    if ok(k) then
+      local s, n = grow(k), 0
+      for _ in pairs(s) do n = n + 1 end
+      pieces[#pieces + 1] = s
+      if keep and s[keep] then stay = #pieces; best = math.huge
+      elseif n > best then stay, best = #pieces, n end
+    end
+  end
+  local out = {}
+  if keep == dec then stay = nil end
+  for i, s in ipairs(pieces) do
+    if i ~= stay then for u in pairs(s) do out[u] = true end end
+  end
+  if keep == dec or not next(out) then
+    -- nothing on the far side: the decoupler itself is all that goes
+    if keep ~= dec then out[dec] = true end
+  end
+  return out
+end
+-- ══ SPLIT RULEBOOK END ══
 
--- Does a radial booster BRANCH leave with an axial cut? Only if the spine part
--- it's bolted to (its mount = the radial decoupler's parent) is in that cut's
--- departing set. A booster on the surviving upper stack stays put; one on the
--- discarded lower stack physically has to go. Pure tree — no raw-y guessing.
-local function branch_departs(root_uid, dec_uid)
-  local dr = bp_by_uid[root_uid]
-  local mount = dr and (dr.parent or 0)
-  return mount ~= nil and mount ~= 0 and axial_departing(dec_uid)[mount] == true
+-- ── staging ─────────────────────────────────────────────────────────────────
+-- The DEPARTING SET of a decoupler (axial or radial), by the ATTACHMENT TREE —
+-- not world height (SPLIT.sides): the cut is the decoupler's own joint, and
+-- the side WITHOUT the crew leaves. This is why a nose cone hung LOW on an
+-- upper stage stays, and a strut dangling DOWN from an upper stage is not swept
+-- off by a cut below it (both were the "geometry read the wrong stage" bug).
+-- Radial parts ride whichever spine part they're bolted to — the tree already
+-- encodes that. Memoized per decoupler and keep-side; cleared each load_bp.
+--
+-- THE KEEP SIDE is the crew's (2026-10-26 playtest): the part the crew sits in
+-- when they are aboard, else the command part. Control stays with the crew; a
+-- piece that carries a command part of its own leaves as a craft you can
+-- switch to (r2SplitCraft), anything else as debris.
+function splitKeeper()
+  if crewAboard and stationUid and bp_by_uid[stationUid] and not integ.gone[stationUid] then return stationUid end
+  if pod_uid and bp_by_uid[pod_uid] and not integ.gone[pod_uid] then return pod_uid end
+  return nil
+end
+-- Events ride away with the parts they act on: a decoupler, a fairing or a
+-- booster branch in `dep` leaves with it; a chute event keeps the chutes still
+-- aboard. Purely by tree membership.
+function pruneEvents(dep)
+  local keep = {}
+  for _, e2 in ipairs(events) do
+    if e2.kind == "axial" or e2.kind == "fairing" then
+      if not dep[e2.uid] then keep[#keep + 1] = e2 end
+    elseif e2.kind == "chute" then
+      local us = {}
+      for _, u in ipairs(e2.uids or {}) do if not dep[u] then us[#us + 1] = u end end
+      if #us > 0 then e2.uids = us; keep[#keep + 1] = e2 end
+    else
+      local bs = {}
+      for _, g in ipairs(e2.branches or {}) do if not dep[g.uid] then bs[#bs + 1] = g end end
+      if #bs > 0 then e2.branches = bs; keep[#keep + 1] = e2 end
+    end
+  end
+  events = keep
+  if chutes then
+    local kc = {}
+    for _, c in ipairs(chutes) do if not dep[c.uid] then kc[#kc + 1] = c end end
+    chutes = kc
+  end
+end
+-- After a split: when the command part went with the other piece (the crew
+-- sat elsewhere, a seat or a second pod), what stays is commanded from where
+-- the crew sits, else the nearest command part still aboard.
+function splitRecommand(dep)
+  if not (pod_uid and dep[pod_uid]) then return end
+  local best, rank = nil, nil
+  if crewAboard and stationUid and bp_by_uid[stationUid] and not dep[stationUid] then best = bp_by_uid[stationUid] end
+  if not best then
+    for u, d in pairs(bp_by_uid) do
+      if not dep[u] and not integ.gone[u] and (d.kind == "crewed" or d.kind == "probe") then
+        local r = (d.kind == "crewed" and 0 or 1e7) + u
+        if not rank or r < rank then best, rank = d, r end
+      end
+    end
+  end
+  if best then
+    pod_uid = best.uid
+    podCrewed = best.kind == "crewed"
+    if not (crewAboard and stationUid and not dep[stationUid]) then
+      pod = { x = best.x, y = best.y, z = best.z }
+      podLX, podLY, podLZ = best.x, best.y, best.z
+      focusHeight = best.y
+      podSeat = podCrewed and (best.seat or 0) == 1
+      stationUid = podCrewed and best.uid or nil
+    end
+  else
+    pod_uid, podCrewed = nil, false
+  end
+  rescanSeats()
+end
+-- A piece's name: the craft's, then its command part ("Ascent · Mk1 Cockpit"),
+-- else its biggest part ("Ascent · FT-M Tank").
+function splitName(recs, node)
+  local base = (craftName ~= "Vessel" and craftName) or (node and node.name) or "Craft"
+  local E = elib()
+  local cmd, big = nil, nil
+  for _, r in ipairs(recs) do
+    if E and E.modOf(r, "command") and (not cmd or (r.uid or 0) < (cmd.uid or 0)) then cmd = r end
+    if not big or (r.mass or 0) > (big.mass or 0) then big = r end
+  end
+  local r = cmd or big
+  return base .. " · " .. ((r and (r.label or r.id)) or "stage")
+end
+local function axial_departing(dec_uid)
+  local keep = splitKeeper()
+  local key = tostring(dec_uid) .. "/" .. tostring(keep) .. "/" .. tostring(integ.gen)
+  local cached = axial_set_cache[key]
+  if cached then return cached end
+  local set = SPLIT.sides(bp_by_uid, bp_kids, dec_uid, keep, function(u) return not integ.gone[u] end)
+  axial_set_cache[key] = set
+  return set
 end
 
 -- Which live child node belongs to a departing axial cut: match the live child
@@ -1331,16 +1556,6 @@ end
 
 local function drop_departing(dec_uid)
   drop_set(axial_departing(dec_uid))
-end
-
--- Booster separation bookkeeping: the branch's engines and tanks leave with
--- it (its tanks take their pooled-fuel share along).
-local function drop_branch(root_uid)
-  local set = { [root_uid] = true }
-  for u, r in pairs(bp_in_branch) do
-    if r == root_uid then set[u] = true end
-  end
-  drop_set(set)
 end
 
 -- ── damage / destruction ────────────────────────────────────────────────────
@@ -2065,9 +2280,14 @@ function fireSeparation(uid)
       for _, g in ipairs(ev.branches or {}) do if g.uid == uid then mine = true end end
     end
     if mine then
+      -- just this event (not the rest of its stage), as SPACE would fire it
+      local node = dock.node
+      if destroyed or not node or not node.valid then return false end
+      local info = assembly.info(node)
+      if not info or info.anchored then return false end
       table.remove(events, i)
-      table.insert(events, 1, ev)
-      return stageNext()
+      if ev.kind ~= "chute" and ev.kind ~= "fairing" then r2Before(node) end
+      return fireEvent(node, info, ev)
     end
   end
   return false
@@ -3962,8 +4182,9 @@ end
 -- could plausibly go and get it. Damaged parts refund less; destroyed ones
 -- refund nothing, because they aren't there.
 local RECOVER_RANGE = 260.0   -- metres from the base site
--- Fraction of a pristine part's value returned. 0.8 made flying nearly free
--- once mining paid properly: a flight should cost something to be worth planning.
+-- Fraction of a pristine part's value returned. 0.85 since space parts became
+-- the expensive tier (parts_registry, 2026-10-26): a craft you land and bring
+-- home costs 15% of itself, so it is the crater that costs, not the flight.
 local RECOVER_RATE = 0.85
 
 -- Distance to the home base (the crew spawn), in the body-relative frame that
@@ -7007,7 +7228,7 @@ function r2DepartsWithCommand(dep)
   if not E then return false end
   for u in pairs(dep) do
     local d = bp_by_uid[u]
-    if d and not integ.gone[u] and u ~= pod_uid and E.modOf(d, "command") then return true end
+    if d and not integ.gone[u] and E.modOf(d, "command") then return true end
   end
   return false
 end
@@ -7025,33 +7246,25 @@ function r2SplitCraft(node, info, dec_uid, dep, parts_nodes, nx, ny, nz)
       n = n + 1
       if type(d.st) == "table" and d.st.charge then sub_charge = sub_charge + d.st.charge end
       local rec = E and E.packRecord(d) or {}
-      rec.stage = 0
+      -- its own staging order rides along (its decouplers fire in the order
+      -- the builder gave them, on the new craft's SPACE)
       if not dep[rec.parent or 0] then rec.parent = 0 end
       sub.parts[n] = rec
     end
   end
-  local fuel_before = fuel
-  -- (events that rode with it leave; the same pruning a plain staging does)
-  local keep = {}
-  for _, e2 in ipairs(events) do
-    if e2.kind == "axial" or e2.kind == "fairing" then
-      if not dep[e2.uid] then keep[#keep + 1] = e2 end
-    elseif e2.kind == "chute" then
-      local us = {}
-      for _, u in ipairs(e2.uids) do if not dep[u] then us[#us + 1] = u end end
-      if #us > 0 then e2.uids = us; keep[#keep + 1] = e2 end
-    else
-      local bs = {}
-      for _, g in ipairs(e2.branches) do if not dep[g.uid] then bs[#bs + 1] = g end end
-      if #bs > 0 then e2.branches = bs; keep[#keep + 1] = e2 end
-    end
+  -- the builder's links among its parts (SPLIT.normalize on the new craft)
+  if bp and bp.links then
+    local ls = {}
+    for _, l in ipairs(bp.links) do if dep[l.a] and dep[l.b] then ls[#ls + 1] = l end end
+    if #ls > 0 then sub.links = ls end
   end
-  events = keep
+  local fuel_before = fuel
+  pruneEvents(dep)
   -- it leaves AWAY FROM WHAT STAYS (a rover under a lander drops, a probe
   -- on a rover's back falls off behind it), measured before it is gone
   local away = clearAway(node, dep)
   local gap = away.gap
-  drop_departing(dec_uid)
+  drop_set(dep)
   sub.fuel = math.max(0.0, fuel_before - fuel)
   sub.charge = sub_charge
   sub.lockout = 2.0
@@ -7076,17 +7289,15 @@ function r2SplitCraft(node, info, dec_uid, dep, parts_nodes, nx, ny, nz)
   if E then E.pruneGroups(ctlGroups, aboardRecs()) end
   for eid, u in pairs(eid_uid) do if dep[u] then eid_uid[eid] = nil end end
   integ.gen = integ.gen + 1
+  splitRecommand(dep)
   elecRescan()
   dock_retree()
   dockRescan()
   quench(parts_nodes)
-  local name = (craftName ~= "Vessel" and craftName or (node.name or "Vessel")) .. " " .. ((sub.parts[1] and sub.parts[1].label) or "stage")
-  for _, r in ipairs(sub.parts) do
-    if E and E.modOf(r, "command") then name = (craftName ~= "Vessel" and craftName or "Craft") .. " · " .. (r.label or "craft") end
-  end
+  local name = splitName(sub.parts, node)
   local bx, by, bz = base_of(node, info)
   sfx3(SFX.stage, bx, by, bz, 0.9, 1.0)
-  caption("a stage separates — it can be flown on its own")
+  caption(string.format("%s separates — switch to it with [ ]", name))
   assembly.split(node, parts_nodes, function(stage)
     if not stage then return end
     releasePiece(stage, node, away.x, away.y, away.z, gap)
@@ -7119,14 +7330,107 @@ function stageNext()
   if destroyed or not node or not node.valid or #events == 0 then return false end
   local info = assembly.info(node)
   if not info or info.anchored then return false end
-  if events[1].kind ~= "chute" and events[1].kind ~= "fairing" then r2Before(node) end
+  -- ONE STAGE = every event the builder put in it (a decoupler and the chutes
+  -- under it, a booster ring and a fairing…): they fire on the same SPACE, in
+  -- list order. Events with no stage of their own are a stage each.
+  local first = table.remove(events, 1)
+  local group = { first }
+  while events[1] and first.stage and first.stage < 1e6 and events[1].stage == first.stage do
+    group[#group + 1] = table.remove(events, 1)
+  end
+  for _, ev in ipairs(group) do
+    if ev.kind ~= "chute" and ev.kind ~= "fairing" then r2Before(node) break end
+  end
+  for _, ev in ipairs(group) do
+    if node.valid and not destroyed then fireEvent(node, assembly.info(node) or info, ev) end
+  end
+  return true
+end
+
+-- Is the event still aboard (an earlier event of its stage may have carried
+-- its parts away)? Trims a ring's branches and a chute event's chutes.
+function stageEventLive(ev)
+  local live = function(u) return bp_by_uid[u] ~= nil and not integ.gone[u] end
+  if ev.kind == "axial" or ev.kind == "fairing" then return live(ev.uid) end
+  if ev.kind == "chute" then
+    local us = {}
+    for _, u in ipairs(ev.uids or {}) do if live(u) then us[#us + 1] = u end end
+    ev.uids = us
+    return #us > 0
+  end
+  local bs = {}
+  for _, g in ipairs(ev.branches or {}) do if live(g.uid) then bs[#bs + 1] = g end end
+  ev.branches = bs
+  return #bs > 0
+end
+
+-- Cut the craft at decoupler `dec_uid`: the side without the crew leaves
+-- (SPLIT.sides). A piece with a command part of its own leaves as a craft you
+-- can switch to; anything else leaves as debris with a kick of `dv` m/s along
+-- `kick` (world unit; nil = away from what stays).
+function separateAt(node, info, dec_uid, dv, kick, what)
+  local dep = axial_departing(dec_uid)
+  if not next(dep) then return false end
+  local parts_nodes = {}
+  for _, child in ipairs(node:children()) do
+    if child_departs_axial(child, dec_uid) then parts_nodes[#parts_nodes + 1] = child end
+  end
+  if #parts_nodes == 0 then return false end
+  if r2DepartsWithCommand(dep) then
+    -- The piece that leaves carries a command part of its own (a rover under
+    -- a lander, a probe on a booster, an empty pod): it goes as a LIVE craft
+    -- you can switch to and fly, like an undocked module.
+    return r2SplitCraft(node, info, dec_uid, dep, parts_nodes)
+  end
+  -- Measured BEFORE the piece is marked gone (clearance skips gone parts):
+  -- which way it leaves (from the kept mass toward its own), and how far it
+  -- must move along that to be out of the hull.
+  local away = clearAway(node, dep)
+  local gap = away.gap
+  local kx, ky, kz = away.x, away.y, away.z
+  if kick then kx, ky, kz = kick.x, kick.y, kick.z end
+  local recs = {}
+  for u in pairs(dep) do if bp_by_uid[u] then recs[#recs + 1] = bp_by_uid[u] end end
+  local name = splitName(recs, node)
+  pruneEvents(dep)
+  drop_set(dep)
+  splitRecommand(dep)
+  local n_away = #parts_nodes
+  quench(parts_nodes)
+  local bx, by, bz = base_of(node, info)
+  sfx3(what == "ring" and SFX.boosters or SFX.stage, bx, by, bz, 0.9, 1.0) -- the charge fires
+  caption(what == "ring" and "the boosters separate" or "a stage separates")
+  assembly.split(node, parts_nodes, function(stage)
+    if not stage then return end
+    releasePiece(stage, node, kx, ky, kz, gap)
+    local si = assembly.info(stage)
+    if si then
+      -- Mass-scaled Δv: a FLAT impulse gave a heavy stage almost no push
+      -- (Δv = impulse/mass), so close-mounted pieces clung to the hull and
+      -- looked stuck. The charge is the only energy in the separation (the
+      -- piece only moves out of a real overlap first, releasePiece).
+      local m = math.max(0.1, si.mass)
+      local g2 = physTune.clear and gap or 0
+      assembly.impulseAt(stage, vec3(kx * dv * m, ky * dv * m, kz * dv * m),
+        vec3(si.com.x + kx * g2, si.com.y + ky * g2, si.com.z + kz * g2))
+      local fx = fxd()
+      if fx then fx.separate(si.com.x, si.com.y, si.com.z, info.vel.x, info.vel.y, info.vel.z)
+      else spawnEffect("SepPuff", si.com.x, si.com.y, si.com.z) end
+    end
+    stage.name = name
+    log(string.format("%s away: %s (%d parts)", what == "ring" and "booster" or "stage", name, n_away))
+  end)
+  return true
+end
+
+-- Fire ONE separation event (already taken off the list).
+function fireEvent(node, info, ev)
+  if not stageEventLive(ev) then return false end
   local bx, by, bz = base_of(node, info)
   local rx, up, rz = basis(node)
-  local nx, ny, nz = up.x, up.y, up.z
-  if events[1].kind == "chute" then
+  if ev.kind == "chute" then
     -- PARACHUTES: pop them open. They start dragging (see the drag pass
     -- below) as soon as they're in thick enough air.
-    table.remove(events, 1)
     chutes_deployed = true
     chute_fill = { t = 0.0, stretch = 0.0, area = 0.0, dens = 0.0, spd = 0.0 }
     sfx3(SFX.chute, bx, by, bz, 0.8, 1.0) -- the canopy cracks open
@@ -7153,141 +7457,31 @@ function stageNext()
     end
     caption("the parachutes crack open")
     log("parachutes deployed")
-  elseif events[1].kind == "fairing" then
-    local ev = table.remove(events, 1)
+  elseif ev.kind == "fairing" then
     r2Jettison(node, ev.uid)
-  elseif events[1].kind == "ring" then
-    -- A BOOSTER RING: every branch in the ring kicks away laterally at
-    -- once (symmetric pairs leave together, so the ship stays balanced).
-    local ev = table.remove(events, 1)
+  elseif ev.kind == "ring" then
+    -- A BOOSTER RING: every branch in the ring leaves at once (symmetric
+    -- pairs together, so the ship stays balanced). A branch kicks OUTWARD
+    -- from the spine when it is the booster that leaves; when the crew rode
+    -- the "booster" (a jet on a rocket's radial decoupler), the rocket is
+    -- what leaves, away from the crew's side.
     for _, g in ipairs(ev.branches) do
-      local parts_nodes = {}
-      for _, child in ipairs(node:children()) do
-        local known = eid_uid[child.id]
-        if known and g.uids and g.uids[known] then
-          parts_nodes[#parts_nodes + 1] = child
-        else
-        for _, q in ipairs(g.pos) do
-          if math.abs((child.x or 0) - q.x) < 0.05 and math.abs((child.y or 0) - q.y) < 0.05
-            and math.abs((child.z or 0) - q.z) < 0.05 then
-            parts_nodes[#parts_nodes + 1] = child
-            break
-          end
+      if bp_by_uid[g.uid] and not integ.gone[g.uid] then
+        local dep = axial_departing(g.uid)
+        local kick = nil
+        if dep[g.uid] then
+          local ol = math.sqrt(g.x * g.x + g.z * g.z)
+          local ox, oz = 1, 0
+          if ol > 1e-4 then ox, oz = g.x / ol, g.z / ol end
+          kick = { x = rx.x * ox + rz.x * oz, y = rx.y * ox + rz.y * oz, z = rx.z * ox + rz.z * oz }
         end
-        end
-      end
-      if #parts_nodes > 0 then
-        -- Kick OUTWARD: the branch's radial direction in the vessel frame.
-        local ol = math.sqrt(g.x * g.x + g.z * g.z)
-        local ox, oz = 1, 0
-        if ol > 1e-4 then ox, oz = g.x / ol, g.z / ol end
-        -- Measured BEFORE the branch is marked gone (clearance skips gone parts).
-        local gap = clearance(node, g.uids or { [g.uid] = true }, ox, 0, oz)
-        drop_branch(g.uid)
-        local kx = rx.x * ox + rz.x * oz
-        local ky = rx.y * ox + rz.y * oz
-        local kz = rx.z * ox + rz.z * oz
-        local n_away = #parts_nodes
-        quench(parts_nodes)
-        sfx3(SFX.boosters, bx, by, bz, 0.85, 1.0) -- the separation charge fires
-        caption("the boosters separate")
-        assembly.split(node, parts_nodes, function(stage)
-          releasePiece(stage, node, kx, ky, kz, gap)
-          local si = assembly.info(stage)
-          if si then
-            -- Mass-scaled Δv: a FLAT impulse gave a heavy booster almost no
-            -- push (Δv = impulse/mass), so close-mounted rings clung to the
-            -- hull and looked stuck. Multiply by mass for a consistent ~4.5
-            -- m/s lateral kick whatever the stage weighs. And nudge the origin
-            -- a hair OUTWARD first to clear the contact the solver would
-            -- otherwise immediately re-close — the actual "won't detach" cause.
-            -- (It used to be nudged a flat 35 cm outward to stop it re-closing
-            -- the contact it was split from — a visible pop. Now it moves only
-            -- out of any real overlap, and passes through the hull for a
-            -- moment; the charge below is the only energy in the separation.)
-            local dv, m = 4.5, math.max(0.1, si.mass)
-            local g2 = physTune.clear and gap or 0
-            assembly.impulseAt(stage, vec3(kx * dv * m, ky * dv * m, kz * dv * m),
-              vec3(si.com.x + kx * g2, si.com.y + ky * g2, si.com.z + kz * g2))
-            local fx = fxd()
-            if fx then fx.separate(si.com.x, si.com.y, si.com.z, info.vel.x, info.vel.y, info.vel.z)
-            else spawnEffect("SepPuff", si.com.x, si.com.y, si.com.z) end
-          end
-          log("boosters away: " .. n_away .. " parts")
-        end)
+        separateAt(node, assembly.info(node) or info, g.uid, 4.5, kick, "ring")
       end
     end
   else
-    local dec = table.remove(events, 1) -- an AXIAL cut
-    -- The dropped set is TOPOLOGICAL: the decoupler's whole subtree by the
-    -- attachment tree (pod side stays), including any radial branches bolted
-    -- to the discarded stack — a separate booster stage on the survivor stays.
-    local dep = axial_departing(dec.uid)
-    local parts_nodes = {}
-    for _, child in ipairs(node:children()) do
-      if child_departs_axial(child, dec.uid) then parts_nodes[#parts_nodes + 1] = child end
-    end
-    if #parts_nodes > 0 and r2DepartsWithCommand(dep) then
-      -- The stage that leaves carries a command part of its own (a rover
-      -- under a lander, a probe on top of a booster): it goes as a LIVE craft
-      -- you can switch to and fly, like an undocked module.
-      r2SplitCraft(node, info, dec.uid, dep, parts_nodes, nx, ny, nz)
-    elseif #parts_nodes > 0 then
-      -- Measured BEFORE the stage is marked gone (clearance skips gone parts):
-      -- which way the stage leaves (from the kept mass toward its own), and
-      -- how far it must move along that to be out of the hull.
-      local away = clearAway(node, dep)
-      local gap = away.gap
-      drop_departing(dec.uid)
-      -- Events ride away with the parts they act on: an axial cut or a ring
-      -- whose decoupler sat in the discarded subtree leaves; events on the
-      -- surviving pod side stay. Purely by tree membership now.
-      local keep = {}
-      for _, e2 in ipairs(events) do
-        if e2.kind == "axial" or e2.kind == "fairing" then
-          if not dep[e2.uid] then keep[#keep + 1] = e2 end
-        elseif e2.kind == "chute" then
-          keep[#keep + 1] = e2 -- chutes ride the surviving stack
-        else
-          local bs = {}
-          for _, g in ipairs(e2.branches) do
-            if not branch_departs(g.uid, dec.uid) then
-              bs[#bs + 1] = g
-            else
-              drop_branch(g.uid) -- its mount left with the stack
-            end
-          end
-          if #bs > 0 then
-            e2.branches = bs
-            keep[#keep + 1] = e2
-          end
-        end
-      end
-      events = keep
-      local n_away = #parts_nodes
-      quench(parts_nodes)
-      sfx3(SFX.stage, bx, by, bz, 0.9, 1.0) -- the decoupler bangs
-      caption("a stage separates")
-      assembly.split(node, parts_nodes, function(stage)
-        releasePiece(stage, node, away.x, away.y, away.z, gap)
-        local si = assembly.info(stage)
-        if si then
-          -- Mass-scaled Δv (see the ring case) + a small downward nudge so a
-          -- heavy spent stage actually falls clear of the surviving stack
-          -- instead of riding along in contact.
-          -- (A flat 30 cm downward nudge used to do the clearing — a visible
-          -- pop at every staging. See the ring case.)
-          local dv, m = 3.5, math.max(0.1, si.mass)
-          local g2 = physTune.clear and gap or 0
-          assembly.impulseAt(stage, vec3(nx * -dv * m, ny * -dv * m, nz * -dv * m),
-            vec3(si.com.x - nx * g2, si.com.y - ny * g2, si.com.z - nz * g2))
-          local fx = fxd()
-          if fx then fx.separate(si.com.x, si.com.y, si.com.z, info.vel.x, info.vel.y, info.vel.z)
-          else spawnEffect("SepPuff", si.com.x, si.com.y, si.com.z) end
-        end
-        log("stage away: " .. n_away .. " parts")
-      end)
-    end
+    -- An AXIAL cut: the spent stage falls back along the stack, away from
+    -- what stays (a lander leaving its descent stage, the classic stack).
+    separateAt(node, info, ev.uid, 3.5, nil, "axial")
   end
   return true
 end
@@ -7332,6 +7526,7 @@ end
 -- 60-upvalue ceiling. State lives in the one `R2` table.
 
 TYRE_SHARE = 0.6
+R2_TYRE_RATIO = 12.0   -- a tyre weighs at least 1/12 of the load it carries (hang_tyre)
 R2 = {
   gen = -1,           -- integ.gen the part lists were built for
   wheels = {},        -- { uid, d, m (drive module), r, tx, side, node, tyre, seat }
@@ -7521,16 +7716,107 @@ function r2FrontOf(bp, gone, cmd_uid, basis_fn)
   return { x = 1, z = 0 }
 end
 
+-- Is there a part that says where the front is (a rover body, a seat)?
+function r2HasFrontPart(bp, gone)
+  for u, d in pairs(bp or {}) do
+    if not (gone and gone[u]) and ((d.front or 0) == 1 or (d.seat or 0) == 1 or d.seat == true) then return true end
+  end
+  return false
+end
+
+-- A BIKE'S FRONT IS ITS FORK (playtest 2026-10-26: "sometimes it gets the
+-- direction wrong and it drives better backwards"). The front came from the
+-- seat's facing, so a saddle put on the other way round made the swing arm
+-- the front: W rode it tail-first, steering on the rear wheel. Now a fork or a
+-- swing arm says it, whatever the saddle does: from the swing arm to the fork
+-- when there are both, else a fork's +X (it mounts on a front face), else
+-- the way a swing arm's −X points. Level, vessel frame; nil without either.
+function r2MotoFront(E)
+  if not E then return nil end
+  local fx, fz, nf, ax, az, na = 0, 0, 0, 0, 0, 0
+  local dx, dz = 0, 0
+  for u, d in pairs(bp_by_uid) do
+    if not integ.gone[u] and (part_hp[u] or 1) > 0 then
+      local m = E.modOf(d, "susp")
+      if m and (m.kind == "fork" or m.kind == "arm") then
+        local X = r2_basis(d.yaw, d.pitch, d.roll)
+        local s = m.kind == "fork" and 1 or -1
+        dx, dz = dx + s * X[1], dz + s * X[3]
+        if m.kind == "fork" then fx, fz, nf = fx + (d.x or 0), fz + (d.z or 0), nf + 1
+        else ax, az, na = ax + (d.x or 0), az + (d.z or 0), na + 1 end
+      end
+    end
+  end
+  if nf + na == 0 then return nil end
+  if nf > 0 and na > 0 then
+    local px, pz = fx / nf - ax / na, fz / nf - az / na
+    if math.sqrt(px * px + pz * pz) > 0.3 then dx, dz = px, pz end
+  end
+  local l = math.sqrt(dx * dx + dz * dz)
+  if l < 1e-3 then return nil end
+  return { x = dx / l, z = dz / l }
+end
+
+-- A FRONT THE WHEELS CAN'T ROLL ALONG (a seat or a probe core put on
+-- sideways): when most of the craft's wheels would roll across it, the front
+-- is turned onto the line they roll on, the way nearest the old front (or
+-- the fork's). Landing gear doesn't vote (it is laid along the front).
+-- Returns the new front, or nil to keep it.
+function r2RollFront(E, F, mf)
+  if not (E and F) then return nil end
+  local sx, sz, n, across = 0, 0, 0, 0
+  for u, d in pairs(bp_by_uid) do
+    if not integ.gone[u] and (part_hp[u] or 1) > 0 and E.modOf(d, "drive") and not afHas(d, "gear") then
+      local X = r2_basis(d.yaw, d.pitch, d.roll)
+      local rx, rz = -X[3], X[1]                  -- the roll line: axle × up
+      local l = math.sqrt(rx * rx + rz * rz)
+      if l > 0.3 then
+        rx, rz = rx / l, rz / l
+        local a = rx * F.x + rz * F.z
+        if math.abs(a) < R2_REALIGN then across = across + 1 end
+        -- sign-aligned with the first wheel's line
+        if n > 0 and rx * sx + rz * sz < 0 then rx, rz = -rx, -rz end
+        sx, sz, n = sx + rx, sz + rz, n + 1
+      end
+    end
+  end
+  if n == 0 or across * 2 <= n then return nil end
+  local l = math.sqrt(sx * sx + sz * sz)
+  if l < 1e-3 then return nil end
+  sx, sz = sx / l, sz / l
+  local ref = mf or F
+  local s = sx * ref.x + sz * ref.z
+  if math.abs(s) < 0.05 then s = sx + sz end     -- square across: a fixed choice
+  if s < 0 then sx, sz = -sx, -sz end
+  return { x = sx, z = sz }
+end
+
 -- A wheel's base steer and spin sign, from its mount (w.axle, vessel frame)
 -- and the craft's front F.
+-- A WHEEL ROLLS ALONG THE CRAFT (playtest 2026-10-26: "sometimes the jet /
+-- aircraft's landing gear points in the wrong direction or is like fighting
+-- and it makes the aircraft jump around crazily"). A landing gear's axle was
+-- its part's Z, so a gear turned on its leg, or hung from a part whose own
+-- axes run another way (a hub block, a plate), rolled ACROSS the runway and
+-- its tyre's side grip fought the take-off roll. A wheel whose part axle
+-- stands upright (on a belly) or runs within R2_REALIGN of the front is laid
+-- across the front instead (the drawn tyre follows the joint): landing gear
+-- always, any wheel that would otherwise roll sideways. Its spin sign then
+-- follows the front like any other wheel's.
+R2_REALIGN = 0.5   -- |roll · front| under this: the wheel is turned to roll along the front
 function r2WheelSetup(w, F)
   w.cfg = r2WheelCfg(w.d)
   local ax, az = w.axle[1], w.axle[3]
   F = F or { x = 1, z = 0 }
-  if math.sqrt(ax * ax + az * az) < 0.3 then
-    -- an axle standing upright is no wheel the engine can roll
-    w.steer0, w.rs = 0, 0
-    return w
+  local hl = math.sqrt(ax * ax + az * az)
+  w.realigned = nil
+  if w.gear or hl < 0.3 or math.abs((-az * F.x + ax * F.z) / math.max(hl, 1e-6)) < R2_REALIGN then
+    -- across the front (sign kept nearest the part's own, so a mirrored
+    -- pair stays a pair)
+    local nx, nz = F.z, -F.x
+    if nx * ax + nz * az < 0 then nx, nz = -nx, -nz end
+    if not w.gear or math.abs(nx * ax + nz * az) < 0.999 * math.max(hl, 1e-6) then w.realigned = true end
+    ax, az = nx, nz
   end
   local th = math.deg(math.atan2(ax, az))
   if th > 90 then th = th - 180 elseif th <= -90 then th = th + 180 end
@@ -7791,16 +8077,30 @@ local function r2_scan(node)
   -- a rover body's or a command seat's +X; else the command part's +X; else
   -- the vessel's +X. W drives this way. (R2.front is the old ±X sign, kept
   -- for the readers that still use it.)
+  r2ResolveMode()
   R2.fwd = r2FrontOf(bp_by_uid, integ.gone, pod_uid, r2_basis)
-  -- a craft flown nose-first (a plane): its front is the nose
+  R2.fwdWhy = "seat or command part"
+  -- a bike's front is its FORK (and a swing arm's other end), whichever way
+  -- the saddle was put on (r2MotoFront)
+  local mf = r2MotoFront(E)
+  if mf then R2.fwd, R2.fwdWhy = mf, "fork / swing arm" end
+  -- a craft flown nose-first (a plane): its front is the nose — a cockpit's,
+  -- an Aircraft's, or a tilted command part's when nothing else says where
+  -- the front is (a rover's probe core lying on its side is not a nose)
   if AERO.gen ~= integ.gen then aeroScan() end
   local an = AERO.frame and AERO.frame.n
-  if an and math.sqrt(an.x * an.x + an.z * an.z) > 0.5 then
+  local pd = pod_uid and bp_by_uid[pod_uid]
+  if an and math.sqrt(an.x * an.x + an.z * an.z) > 0.5
+    and (R2.mode == "aircraft" or afHas(pd, "cockpit") or not (mf or r2HasFrontPart(bp_by_uid, integ.gone))) then
     local l = math.sqrt(an.x * an.x + an.z * an.z)
-    R2.fwd = { x = an.x / l, z = an.z / l }
+    R2.fwd, R2.fwdWhy = { x = an.x / l, z = an.z / l }, "nose"
+  else
+    -- …and a front the wheels can't roll along (a seat put on sideways) is
+    -- turned to the line they roll on (r2RollFront)
+    local rf = r2RollFront(E, R2.fwd, mf)
+    if rf then R2.fwd, R2.fwdWhy = rf, "the wheels' rolling line" end
   end
   R2.front = (math.abs(R2.fwd.x) >= math.abs(R2.fwd.z) and R2.fwd.x < 0) and -1 or 1
-  r2ResolveMode()
   local depth = {}
   local function depth_of(u)
     if depth[u] then return depth[u] end
@@ -8129,10 +8429,62 @@ local function wheel_collider(node, w, live)
     -- settles a few centimetres onto its wheel boxes instead of finding them
     -- buried in the ground (a depenetration kick the damage model reads as a
     -- crash)
-    rb.half_x, rb.half_y, rb.half_z = w.d.rx or 0.2, w.r - 0.04, w.r - 0.04
+    -- (a two-wheeler's moto wheels stand it up: motoStand)
+    local hx = w.d.rx or 0.2
+    if R2.bike and w.m and w.m.centred then hx = math.max(hx, BIKE_STAND) end
+    rb.half_x, rb.half_y, rb.half_z = hx, w.r - 0.04, w.r - 0.04
   end
   local t = child_named(n, "Tyre")
   if t then t.visible = not live end
+end
+
+-- THE STAND. A two-wheeler nobody is riding (its tyres in: unpiloted, warped,
+-- parked) stood on two boxes as narrow as its tyres and fell over (playtest
+-- 2026-10-26; motoprobe). Its moto wheels' boxes are then BIKE_STAND across
+-- the axle, the footprint a centre stand gives it: it tips only past ~25°.
+-- Out on its live tyres again, the rider's feet or a gyro hold it.
+-- THE RIDER'S CAPSULE (playtest 2026-10-26: "motorcycles … hardly get any
+-- torque and [can't] climb hills … sometimes it drives better backwards").
+-- A rider in an open seat is parked in it as the astronaut's kinematic
+-- capsule, 2 m tall and 0.33 m round, and on a saddle that reaches down
+-- through the frame and both tyres. physics.ignorePair (command_seat) does
+-- not stop a kinematic body's contacts on 0.117.0-rc38, so the capsule —
+-- re-placed every tick and frame on a planet moving metres a tick — shoved
+-- the bike: a parked bike rolled off at up to 1.8 m/s², and under full drive
+-- it crawled at 0.4–0.7 m/s or went backwards (motoprobe bikelab, `tinyrider`
+-- A/B: 0.4 m/s → 15.6 m/s). While anyone rides a SEAT (a saddle, the Command
+-- Seat) the capsule is shrunk to a point (RIDER_R), and given back the moment
+-- they are off it. (Engine card: ignorePair and kinematic contacts.)
+RIDER_R = 0.01
+function motoRiderShape(node)
+  local a = astronaut
+  if not (a and a.valid) then a = find("Astronaut") end
+  local rb = a and a:getcomponent("RigidBody")
+  if not rb then return end
+  local d = pod_uid and bp_by_uid[pod_uid]
+  local seat = d and ((d.seat or 0) == 1 or d.seat == true)
+  local on = crewAboard == true and seat and not destroyed
+  if on and not R2.riderShape then
+    R2.riderShape = { r = rb.radius, h = rb.height, id = a.id }
+    rb.radius, rb.height = RIDER_R, 2 * RIDER_R
+  elseif not on and R2.riderShape then
+    local k = R2.riderShape
+    R2.riderShape = nil
+    if a.id == k.id then rb.radius, rb.height = k.r or 0.33, k.h or 2.0 end
+  elseif on and (rb.radius or 0) > RIDER_R * 1.5 then
+    -- (something put it back while they still ride: shrink it again)
+    rb.radius, rb.height = RIDER_R, 2 * RIDER_R
+  end
+end
+
+BIKE_STAND = 0.30
+function motoStand(node)
+  if R2.live or not R2.bike or not (node and node.valid) then return end
+  local any = false
+  for _, w in ipairs(R2.wheels) do
+    if w.m and w.m.centred then wheel_collider(node, w, false); any = true end
+  end
+  if any then assembly.rebuild(node) end
 end
 
 -- Should the tyres be out? The active bubble only: piloted, at 1× warp, not
@@ -8264,6 +8616,17 @@ function hang_tyre(node, w, info)
     if gx then g = math.sqrt(gx * gx + gy * gy + gz * gz) end
   end
   local load = (info.mass or 1) * g / math.max(1, R2.nOut or #R2.wheels)
+  -- A TYRE NO LIGHTER THAN R2_TYRE_RATIO OF WHAT IT CARRIES (playtest
+  -- 2026-10-26: a jet's gear "fighting … makes the aircraft jump around").
+  -- The joint's spring works on the tyre's mass, and no setting makes it
+  -- stiffer than about that mass per tick squared: a 21 kg nose tyre under a
+  -- 3 t jet ran at the 45 Hz cap, all but rigid each tick, 150:1 against its
+  -- load — the light-tyre chatter of card 0562 — and threw the jet up off
+  -- the runway as it rotated. The stock rover's tyres sit near 1:2.5 and a
+  -- bike's 1:4.5; a heavy aircraft's gear is brought to 1:R2_TYRE_RATIO (its
+  -- leg keeps the rest of its part's mass, so the craft weighs a few % more
+  -- on its wheels).
+  mt = math.max(mt, load / math.max(g, 0.1) / R2_TYRE_RATIO)
   -- (sized for 1 cm in this simple model; the joint's soft step gives
   -- about three times that, and a heavy end a little more)
   local sag = 0.01 * w.r / 0.4
@@ -8638,6 +9001,7 @@ local function drive_tick(node, info, dt)
     end
   end
   R2.power = power
+  R2.vf = vf
   R2.served = smin
   -- ANTI-ROLL (r2Steady applies it): how far the body leans over its tyres —
   -- the left tyres hanging lower on their springs than the right ones means
@@ -8689,6 +9053,126 @@ local function drive_tick(node, info, dt)
     local want_a = R2_TC * gl * lmot
     local e = (want_a - limited * R2.a_s) / math.max(want_a, 0.1)
     R2.lk = math.max(1, math.min(8, (R2.lk or 1.5) * math.exp(math.max(-1, math.min(1, e)) * dt * 6)))
+  end
+  if R2.gear or R2.hasGear then gearOleo(node, info, dt, upv, gl) end
+end
+
+-- THE OLEO (playtest 2026-10-26: the landing gear "is like fighting and it
+-- makes the aircraft jump around crazily"). A landing gear's tyre hangs on
+-- the engine's wheel joint, a soft spring on the light tyre with no travel
+-- limit and a damping the joint caps (hang_tyre): a jet touching down at
+-- 2 m/s and 43 m/s pressed its main gear 0.28 m up their legs (twice their
+-- travel) and the spring threw it back off the runway at 7.5 m/s, 8–10 m up
+-- (motoprobe jetgear: bounce 8.2–10.0 m on every landing, on 0.117.0-rc38
+-- before this change and after the axle fix alike). A real gear's oleo
+-- damps the stroke both ways and bottoms on a stop. Here, for every gear
+-- (and every wheel of an Aircraft) whose tyre is down: a damper on the leg's
+-- stroke rate, R2_OLEO_C × the load it carries per m/s, compressing and
+-- extending alike, as an impulse on the hull at the leg's mount along the
+-- craft's up; at rest the stroke doesn't move and it adds nothing (the
+-- joint's spring still carries the craft).
+-- WHY IT STILL BOUNCED, and the cap. The per-tick log of a touchdown
+-- (motoprobe jetgear, finelog) shows the light tyre at 43 m/s shoved 0.28 m
+-- up its leg in two ticks at a 2 m/s sink — further than the sink could
+-- carry it: the engine pushing a fast ball out of the ground it sank into —
+-- and the joint's spring, at 91 kN on a 10 kN load, throwing the jet up at
+-- 7 m/s. No damper a script can add stops one tick's spring. So the gear may
+-- not lift the craft: while a tyre is down, and R2_GEAR_HOLD s after, the
+-- hull's climb (radial, over the planet) is held to R2_GEAR_VUP, the rest
+-- taken off at the centre of mass. A take-off is unaffected: the wings lift
+-- the craft off its gear at well under that, and once the tyres are off the
+-- ground the cap lets go.
+R2_OLEO_C = 1.2      -- s/m: the damper's force per m/s of stroke, × the static load
+R2_GEAR_VUP = 1.5    -- m/s: the most the gear may push the craft up
+R2_GEAR_HOLD = 0.4   -- s after the last tyre left the ground
+R2_GEAR_CAPG = 4.0   -- g: the most the cap takes off in a tick
+R2_GEAR_QMAX = 0.35  -- rad/s: the most the gear may pitch the craft
+function gearOleo(node, info, dt, upv, gl)
+  if not (dt and dt > 0 and info) then return end
+  local n = math.max(1, R2.nOut or #R2.wheels)
+  local load = (info.mass or 1) * (gl or 9.8) / n
+  local down = false
+  for _, w in ipairs(R2.wheels) do
+    local t = w.tyre
+    local j = (w.gear or R2.gear) and w.jointed and t and t.valid and t:getcomponent("Joint")
+    if j then
+      local s = (j.position or 0) / WHEEL_POS_SCALE            -- + up the leg
+      -- (the stroke rate smoothed over a few ticks: the light tyre's contact
+      -- chatter read raw made the damper itself a source of bumps)
+      local raw = w.oleo_s and (s - w.oleo_s) / dt or 0
+      w.oleo_s = s
+      w.oleo_sd = (w.oleo_sd or 0) + (raw - (w.oleo_sd or 0)) * math.min(1, dt * 20)
+      local sd = w.oleo_sd
+      if t.grounded and (w.joint_age or 0) > 0.1 then
+        down = true
+        local F = R2_OLEO_C * load * sd
+        -- (never more than 1.5 × its load either way: one tick must not fling it)
+        F = math.max(-1.5 * load, math.min(1.5 * load, F))
+        if math.abs(F) > 1e-4 then
+          local mx, my, mz = v2w(node, info, w.cx, w.cy, w.cz)
+          assembly.impulseAt(node, vec3(upv.x * F * dt, upv.y * F * dt, upv.z * F * dt), vec3(mx, my, mz))
+          -- (booked on the leg for the stress model: the ground's push through it)
+          stressForce(w.uid, upv.x * F, upv.y * F, upv.z * F)
+        end
+        w.oleoF = F
+      else
+        w.oleoF = 0
+      end
+    end
+  end
+  if down then R2.gearDown_t = time end
+  -- (an Aircraft's only: a rover with a landing gear climbs a hill faster than that)
+  if R2.gear and R2.gearDown_t and time - R2.gearDown_t < R2_GEAR_HOLD and space.gravity then
+    local c = info.com or info.origin
+    local gx, gy, gz = space.gravity(c.x, c.y, c.z)
+    local gm = gx and math.sqrt(gx * gx + gy * gy + gz * gz) or 0
+    if gm > 1e-6 then
+      local Ux, Uy, Uz = -gx / gm, -gy / gm, -gz / gm
+      local v = info.vel
+      local vu = v.x * Ux + v.y * Uy + v.z * Uz
+      if vu > R2_GEAR_VUP then
+        -- (at most R2_GEAR_CAPG g a tick, and booked through the centre of
+        -- mass for the stress model: unbooked, it read as a 900 kN shock and
+        -- tore the gear off)
+        local m = info.mass or 1
+        local dv = math.min(vu - R2_GEAR_VUP, R2_GEAR_CAPG * gm * dt)
+        local J = dv * m
+        assembly.impulseAt(node, vec3(-Ux * J, -Uy * J, -Uz * J), vec3(c.x, c.y, c.z))
+        stressLead(-Ux * J / dt, -Uy * J / dt, -Uz * J / dt)
+        R2.gearCapped = (R2.gearCapped or 0) + 1
+      end
+      -- …and may not pitch it faster than R2_GEAR_QMAX: a main gear a little
+      -- ahead of the centre of mass (the probe jet's, once its tank drains)
+      -- kicked the nose up 6° at touchdown, the wing lifted it 3–4 m off the
+      -- runway and it came down nose first. A pure couple about the craft's
+      -- pitch axis (two opposite impulses along the up, either side of the
+      -- centre of mass), at most R2_GEAR_CAPG g's worth of turn a tick.
+      local F = R2.fwd or { x = 1, z = 0 }
+      local rxv, _, rzv = basis(node)
+      local nx, ny, nz = rxv.x * F.x + rzv.x * F.z, rxv.y * F.x + rzv.y * F.z, rxv.z * F.x + rzv.z * F.z
+      local Rx, Ry, Rz = ny * Uz - nz * Uy, nz * Ux - nx * Uz, nx * Uy - ny * Ux   -- right = nose × up
+      local rl = math.sqrt(Rx * Rx + Ry * Ry + Rz * Rz)
+      local It = info.inertia
+      if rl > 0.5 and It and It[1] then
+        Rx, Ry, Rz = Rx / rl, Ry / rl, Rz / rl
+        local w = info.angVel
+        local q = w.x * Rx + w.y * Ry + w.z * Rz
+        if math.abs(q) > R2_GEAR_QMAX then
+          local dq = (math.abs(q) - R2_GEAR_QMAX) * (q > 0 and -1 or 1)
+          -- the angular impulse that takes dq off about the right axis
+          local Ip = Rx * (It[1].x * Rx + It[1].y * Ry + It[1].z * Rz) + Ry * (It[2].x * Rx + It[2].y * Ry + It[2].z * Rz)
+            + Rz * (It[3].x * Rx + It[3].y * Ry + It[3].z * Rz)
+          local L = dq * Ip
+          local d = 2.0
+          local Lmax = R2_GEAR_CAPG * gm * dt * (info.mass or 1) * d
+          L = math.max(-Lmax, math.min(Lmax, L))
+          -- impulses ±J·up at c ± d·nose: angular impulse 2·d·(nose × up)·J = 2dJ·right
+          local J = L / (2 * d)
+          assembly.impulseAt(node, vec3(Ux * J, Uy * J, Uz * J), vec3(c.x + nx * d, c.y + ny * d, c.z + nz * d))
+          assembly.impulseAt(node, vec3(-Ux * J, -Uy * J, -Uz * J), vec3(c.x - nx * d, c.y - ny * d, c.z - nz * d))
+        end
+      end
+    end
   end
 end
 
@@ -8766,7 +9250,16 @@ function motoScan()
     local s = w.susp
     local rr = s and R2.rest[s.uid]
     if s and rr then
-      local a, st0, raked = L.suspAxis(s.m, rr.X, rr.Y, rr.Z, w.axle)
+      -- (a wheel that would roll across the front — on a strut bolted to a
+      -- front face, its axle along the craft — is laid across it, as
+      -- r2WheelSetup does for a wheel on the hull)
+      local D = w.axle
+      local hl = math.sqrt(D[1] * D[1] + D[3] * D[3])
+      if hl < 0.3 or math.abs((-D[3] * F.x + D[1] * F.z) / math.max(hl, 1e-6)) < R2_REALIGN then
+        D = { F.z, 0, -F.x }
+        w.realigned = true
+      end
+      local a, st0, raked = L.suspAxis(s.m, rr.X, rr.Y, rr.Z, D)
       s.axis, s.raked = a, raked
       w.steer0 = st0
       local rd = L.rollDir(L.axleOf(a, st0), { 0, 1, 0 })
@@ -9412,6 +9905,7 @@ function r2Tick(node, info, dt)
   if R2.gen ~= integ.gen then
     if R2.live then tyres_in(node); R2.holdoff = math.max(R2.holdoff, 0.5) end
     r2_scan(node)
+    motoStand(node)
     fairing_build(node)
   end
   robo_tick(node, info, dt)
@@ -9442,6 +9936,7 @@ function r2Tick(node, info, dt)
     end
     R2.stow_sig = sig
   end
+  motoRiderShape(node)
   local want, why = wheels_wanted(node, info)
   R2.why = want and "out" or why   -- published: why the tyres are in (HUD, probes)
   if want and not R2.live then tyres_out(node, info)
@@ -10612,7 +11107,16 @@ function fixedUpdate(node, dt)
           end
         end
       end
-      t.stages[i] = st
+      -- one card a SPACE: events the builder put in one stage fire together
+      local prev = t.stages[#t.stages]
+      local evp = events[i - 1]
+      if prev and evp and ev.stage and ev.stage < 1e6 and evp.stage == ev.stage then
+        prev.also = prev.also or {}
+        prev.also[#prev.also + 1] = st
+        prev.eng, prev.kn = prev.eng + st.eng, prev.kn + st.kn
+      else
+        t.stages[#t.stages + 1] = st
+      end
     end
     tele = t
   end

@@ -97,7 +97,8 @@ before it turns. At a walk the bars are the rider's (A/D, full lock).
 
 - The lean asked for is capped by the grip (a lowside past it) and comes on at
   30°/s; the traction control never pushes hard enough to lift the front.
-- A bike with neither a rider nor a gyro (a probe core alone) falls over.
+- A bike with neither a rider nor a gyro falls over once its tyres are out;
+  parked and unridden it stands on its stand (§3b).
 - Parked, a bike is not brake-held (the parking hold tore its light tyres off
   their spots); B still brakes.
 - `auto_drive.bikeSteer` (steering under the fall, a true countersteer, no
@@ -110,6 +111,85 @@ W/S drive and brake as on any rover; the parking brake holds it when stopped.
 the joint's axis, so a raked axis can carry a fork on a craft built facing
 ±X (the seat's default). On a craft built facing ±Z it can't: the fork then
 steers about the vertical (it still works; only the rake is lost).
+
+## 3b. Building it any way you like (playtest 2026-10-26)
+
+"motorcycles are hard to build right… sometimes it gets the direction wrong
+and it drives better backwards… people are free to build how they want and it
+recognizes what you build". What the flight now reads from the build, and why:
+
+- **The rider no longer shoves the bike.** The rider rides as the
+  astronaut's kinematic capsule (2 m × 0.33 m), parked in the saddle, and on
+  a saddle it reaches down through the frame and both tyres.
+  `physics.ignorePair` (command_seat) does not stop a kinematic body's
+  contacts on 0.117.0-rc38, so the capsule, re-placed every tick on a planet
+  moving metres a tick, pushed the bike: a parked bike rolled off at up to
+  1.8 m/s², under full drive it crawled at 0.4–0.7 m/s or went backwards, and
+  which way depended on where the planet was in its orbit ("sometimes"). It
+  was never the motors: the same bike with a Probe Core and a gyro instead of
+  a rider did 14 m/s. While anyone rides a seat the capsule is shrunk to a
+  point (`motoRiderShape`, vessel_controller) and given back when they are
+  off it. motoprobe `bikelab`, `tinyrider` A/B: 0.4 → 15.6 m/s; a 28 % ramp
+  (32 % at its steepest) climbed in 7.6 s.
+- **The front is the fork's.** A fork (or a swing arm's other end; from the
+  arm to the fork when there are both) says where the front is, whichever
+  way the saddle sits (`r2MotoFront`). A seat or a probe core put on sideways
+  no longer turns W into a sideways push: when most wheels would roll across
+  the front, the front is turned onto the line they roll on
+  (`r2RollFront`). A tilted command part is a plane's nose only on an
+  aircraft (a cockpit, Aircraft mode, or nothing else saying where the front
+  is).
+- **Every wheel rolls along the craft.** A wheel whose axle stands upright
+  or runs within 60° of the front (on a front face, on a strut bolted to a
+  front face, a landing gear turned on its leg) is laid across the front;
+  the drawn tyre follows (`r2WheelSetup`, `R2_REALIGN`, and the same in
+  `motoScan` for a wheel on a suspension part).
+- **Two wheels and no rocket engine is a bike**, whatever commands it
+  (craft_mode: a Probe Core and a gyro ride as well as a saddle; it was
+  "Rocket", and its wheels only rolled).
+- **The stand.** A bike nobody rides (tyres in) stands on its moto wheels'
+  boxes made `BIKE_STAND` (0.3 m) wide across the axle: a centre stand. It
+  used to fall over the moment the rider stepped off.
+- **The builder says what is missing** (`builder.wheelChecks`, in the launch
+  check): driven wheels with no battery; wheels and no motor; a two-wheeler
+  with no seat and no gyro; a bike's wheels out of line by more than 4 cm.
+  The old "wheels on more than one axle line" warning is gone: the flight lays
+  every wheel along the front now.
+- **Snapping lands exactly.** The grid used to run from a face's corner, so
+  on a Strut Hub (0.24 m) the hull grid's 25 cm left only its edges and a
+  part could not be centred at all, and on a Rover Body's top it was 5 cm off
+  the centre line. A face's grid now runs from its centre, which always snaps
+  (`builder_attach.faceSnap`; a frame member keeps its grid from end A), and
+  a part's own hubs and ends — a fork's or swing arm's hub, a strut's flange,
+  a wheel's axle ends — win outright when the cursor is anywhere on that part
+  (`HUB_PX` from beside it). tests/smoke_snap.lua; motoprobe `snapbuild`
+  builds the bike and a strut car through the builder's own query with the
+  grid on, 16 joints, every one exact (0 m).
+
+## 3c. Landing gear (playtest 2026-10-26)
+
+"sometimes the jet / aircraft's landing gear points in the wrong direction or
+is like fighting and it makes the aircraft jump around crazily". Two causes,
+both in vessel_controller's wheel code:
+
+- **Pointing the wrong way.** A gear's axle was its part's Z, so a gear turned
+  on its leg, or hung from a part whose axes run another way (the builder's
+  `radial_orient` takes the host's axes: on a hub block or a plate the gear's
+  Z ran along the nose), rolled across the runway and its tyre's side grip
+  fought the take-off roll. Every gear is now laid across the craft's front
+  (`r2WheelSetup`); motoprobe `jetgear` 1 (every gear turned 90°), 2 (180°),
+  3 (mains splayed 25°, nose 90°) and 5 (one main 90°, one 180°) take off.
+- **Jumping.** At touchdown (2 m/s sink, 43 m/s) the engine pushed the light
+  tyre 0.28 m up its leg in two ticks — further than the sink could carry it —
+  and the wheel joint's spring, at 91 kN on a 10 kN load, threw the 3 t jet
+  back up at 7 m/s, 8–10 m over the runway, on every landing, on the old
+  code too. Three answers: a tyre is never lighter than 1/12 of the load it
+  carries (`R2_TYRE_RATIO`: the joint's stiffness works on the tyre's mass); an
+  oleo damper on each leg's stroke (`gearOleo`, `R2_OLEO_C`, booked for the
+  stress model); and on an Aircraft the gear may not push the hull up faster
+  than `R2_GEAR_VUP` (1.5 m/s) while a tyre is down and 0.4 s after (taken off
+  at the centre of mass, at most 4 g a tick, booked through it). Unbooked, the
+  first versions of the last two read as a shock and tore the gear off.
 
 ## 4. Controls summary
 

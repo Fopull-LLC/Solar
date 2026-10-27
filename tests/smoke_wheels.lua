@@ -199,8 +199,10 @@ local bpf = {
 }
 local Ff = env.r2FrontOf(bpf, {}, nil, bpbasis)
 local wf = wheels_of(bpf, Ff)
-check("a wheel with its axle along the front gets a 90° base steer", math.abs(math.abs(wf[1].steer0) - 90) < 1e-6
-  or (wf[1].rs == 0), tostring(wf[1].steer0))
+-- (2026-10-26: a wheel that would roll sideways is laid across the front
+-- instead, so it rolls and drives with the others: r2WheelSetup R2_REALIGN)
+check("a wheel with its axle along the front is turned to roll along it", math.abs(wf[1].steer0) < 1e-6
+  and wf[1].rs ~= 0 and wf[1].realigned == true, tostring(wf[1].steer0) .. " rs " .. tostring(wf[1].rs))
 
 -- a seat facing −X is the front when there is no rover body
 local bps = { [1] = { x = 0, y = 0, z = 0, mass = 0.1, seat = 1, yaw = math.pi } }

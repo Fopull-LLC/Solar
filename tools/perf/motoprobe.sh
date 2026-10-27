@@ -30,7 +30,10 @@ s = s.replace('    elseif MODE == "plane" then run_plane()',
               '    elseif MODE == "car" then run_car(false)\n'
               '    elseif MODE == "car_rigid" then run_car(true)\n'
               '    elseif MODE == "trike" then run_trike()\n'
-              '    elseif MODE == "motoshop" then run_motoshop()')
+              '    elseif MODE == "motoshop" then run_motoshop()\n'
+              '    elseif MODE == "jetgear" then run_jetgear()\n'
+              '    elseif MODE == "bikelab" then run_bikelab()\n'
+              '    elseif MODE == "snapbuild" then run_snapbuild()')
 open(p, 'w').write(s)
 PY
 SOLAR=${SOLAR:-$(cd "$HERE/../.." && pwd)} WORK=$S bash $S/tools/bench.sh $eng ${*:-bike bikegyro car car_rigid trike motoshop}

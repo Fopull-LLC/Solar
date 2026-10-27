@@ -421,6 +421,100 @@ local function craft(B, out)
   end
 end
 
+-- ── STAGE ───────────────────────────────────────────────────────────────────
+-- The staging stack as the flight flies it (B.stageView): one card per SPACE,
+-- the LAST to fire on top and stage 1 just above LAUNCH — the flight HUD's
+-- stack, the same way up. Each card lists its events (a decoupler, a booster
+-- ring, a fairing, the chutes): what each one throws off and what it leaves
+-- burning. An event is moved by dragging its row onto another stage (or onto
+-- NEW STAGE), or with its keys: ▲ fires it a stage later, ▼ a stage sooner,
+-- ⇥ gives it a stage of its own. A card's ▲ ▼ move the whole stage. Hovering a
+-- row lights its parts in the view; clicking it selects them.
+local KIND_TAG = { axial = "STACK", ring = "RADIAL", chute = "CHUTE", fairing = "SHELL" }
+local function stage_rows(B, out)
+  local v = B.stageView and B.stageView()
+  if not v then return end
+  local stages = v.stages or {}
+  local N = #stages
+  local function move(key, to, new) B.cmd("stage", { op = "item", key = key, to = to, new = new }) end
+  out[#out + 1] = { "row", key = "shd", w = "100%", h = 22, gap = 4, pad = 0, align = "center",
+    { "text", key = "l", style = "panel/label", w = "grow", h = 22, textValign = "center",
+      maxLines = 1, overflow = "ellipsis",
+      text = N > 0 and string.format("%d STAGE%s · BOTTOM FIRES FIRST", N, N == 1 and "" or "S") or "STAGES" },
+    { "button", key = "rst", style = "panel/secondary", w = 62, h = 20, text = "DEFAULT", textAlign = "center", textValign = "center",
+      tooltip = "Put the stages back in the default order: boosters, then decouplers bottom-up, fairings, chutes last",
+      onClicked = function() B.cmd("stage", { op = "reset" }) end } }
+  if N == 0 then
+    out[#out + 1] = { "text", key = "sx", style = "panel/body", w = "100%", h = "fit", wrap = true,
+      text = "Nothing to stage yet. Decouplers, radial decouplers, fairings and parachutes each add an event here; engines burn with the stage they sit in." }
+  end
+  -- NEW STAGE on top: drop an event here to fire it after everything else
+  local function newzone(k, to, label)
+    return { "box", key = k, style = st.drag and "panel/rowActive" or "panel/row", w = "100%", h = 18, dropTarget = true,
+      text = label, textAlign = "center", textValign = "center", opacity = st.drag and 1.0 or 0.55,
+      tooltip = "Drop an event here to give it a stage of its own",
+      onDropped = function() if st.drag then move(st.drag, to, true) end st.drag = nil end }
+  end
+  if N > 0 then out[#out + 1] = newzone("ntop", N + 1, "+ NEW STAGE (fires last)") end
+  for n = N, 1, -1 do
+    local sg = stages[n]
+    local card = { "col", key = "s" .. n, style = "panel/row", w = "100%", h = "fit", gap = 2, pad = 4, align = "stretch",
+      dropTarget = true,
+      onDropped = function() if st.drag then move(st.drag, n, false) end st.drag = nil end,
+      onHoverStart = function() st.hover = "s" .. n end,
+      onHoverEnd = function() if st.hover == "s" .. n then st.hover = nil end end }
+    card[#card + 1] = { "row", key = "h", w = "100%", h = 20, gap = 3, pad = 0, align = "center",
+      { "text", key = "n", style = "panel/cellStrong", w = "grow", h = 20, textValign = "center",
+        text = string.format("STAGE %d%s", n, n == 1 and "  ·  next SPACE" or "") },
+      { "button", key = "up", style = "panel/choice", w = 22, h = 18, text = "▲", textAlign = "center", textValign = "center",
+        disabled = n == N, tooltip = "Fire this whole stage later",
+        onClicked = function() B.cmd("stage", { op = "swap", i = n, j = n + 1 }) end },
+      { "button", key = "dn", style = "panel/choice", w = 22, h = 18, text = "▼", textAlign = "center", textValign = "center",
+        disabled = n == 1, tooltip = "Fire this whole stage sooner",
+        onClicked = function() B.cmd("stage", { op = "swap", i = n, j = n - 1 }) end } }
+    for i, e in ipairs(sg.items or {}) do
+      local detail = {}
+      if e.drops then detail[#detail + 1] = "drops " .. e.drops end
+      if e.lights then detail[#detail + 1] = "then burns " .. e.lights end
+      if e.kind == "chute" then detail[#detail + 1] = "open on this SPACE" end
+      if e.kind == "fairing" then detail[#detail + 1] = "the shell falls away" end
+      local key = e.key
+      local row = { "button", key = "e" .. key, style = (st.hover == key) and "panel/rowActive" or "panel/row", w = "100%", h = "fit",
+        dir = "column", gap = 1, pad = 3, align = "stretch", draggable = true,
+        tooltip = "Drag onto another stage · click to select its parts",
+        onClicked = function() B.select(e.uids, "set") end,
+        onDragStart = function() st.drag = key end,
+        onDragCancel = function() st.drag = nil end,
+        onHoverStart = function() st.hover = key end,
+        onHoverEnd = function() if st.hover == key then st.hover = nil end end,
+        { "row", key = "t", w = "100%", h = 18, gap = 3, pad = 0, align = "center",
+          { "text", key = "k", style = "panel/keys", w = 50, h = 18, text = KIND_TAG[e.kind] or "EVENT", textValign = "center",
+            maxLines = 1, overflow = "clip" },
+          { "text", key = "n", style = "panel/cell", w = "grow", h = 18, text = e.label, textValign = "center",
+            maxLines = 1, overflow = "ellipsis" },
+          { "button", key = "u", style = "panel/choice", w = 20, h = 16, text = "▲", textAlign = "center", textValign = "center",
+            tooltip = "Fire it a stage later", onClicked = function() move(key, n + 1, n == N) end },
+          { "button", key = "d", style = "panel/choice", w = 20, h = 16, text = "▼", textAlign = "center", textValign = "center",
+            tooltip = "Fire it a stage sooner", onClicked = function() if n == 1 then move(key, 1, true) else move(key, n - 1, false) end end },
+          { "button", key = "o", style = "panel/choice", w = 20, h = 16, text = "⇥", textAlign = "center", textValign = "center",
+            disabled = #sg.items < 2, tooltip = "Give it a stage of its own, right after this one",
+            onClicked = function() move(key, n + 1, true) end } } }
+      if #detail > 0 then
+        row[#row + 1] = { "text", key = "x", style = "panel/cellMuted", w = "100%", h = "fit", wrap = true,
+          text = table.concat(detail, " · ") }
+      end
+      card[#card + 1] = row
+    end
+    out[#out + 1] = card
+  end
+  if N > 0 then out[#out + 1] = newzone("nbot", 1, "+ NEW STAGE (fires first)") end
+  local L = v.launch or {}
+  out[#out + 1] = { "col", key = "launch", style = "panel/row", w = "100%", h = "fit", gap = 1, pad = 4, align = "stretch",
+    { "text", key = "n", style = "panel/cellStrong", w = "100%", h = 18, text = "LAUNCH  ·  SPACE releases the clamps", textValign = "center" },
+    { "text", key = "x", style = "panel/cellMuted", w = "100%", h = "fit", wrap = true,
+      text = (L.lights and L.lights ~= "") and ("burns " .. L.lights) or "no engine lit at lift-off" } }
+end
+
 -- ── the plate ───────────────────────────────────────────────────────────────
 function describe(B, L)
   local r = L.right
@@ -434,15 +528,14 @@ function describe(B, L)
   if st.tab == "INSPECT" then inspect(B, body)
   elseif st.tab == "CRAFT" then craft(B, body)
   elseif st.tab == "STAGE" then
-    body[1] = { "text", key = "sx", style = "panel/body", w = "100%", h = "fit", wrap = true,
-      text = "The staging stack: drag a row to change the order things fire in. Engines and chutes fire with their stage." }
+    stage_rows(B, body)
   else
     body[1] = { "text", key = "cx", style = "panel/body", w = "100%", h = "fit", wrap = true,
       text = "Keys and what they run. Select a part and press B to bind one." }
   end
   -- STAGE and CONTROLS hand the plate's body to the builder's and WP5's
   -- panels: the plate shrinks to its tabs and a line about them.
-  local short = st.tab == "STAGE" or st.tab == "CONTROLS"
+  local short = st.tab == "CONTROLS"
   return { "col", key = "plate", style = "panel/frame", pin = "topLeft", x = r.x, y = r.y, w = r.w,
     h = short and "fit" or r.h, gap = 6, pad = 10, align = "stretch",
     tabs,
@@ -471,7 +564,7 @@ function ownsMouse()
   if not L then return false end
   local x, y = mouse_du(L.H)
   local r = L.right
-  local h = (st.tab == "STAGE" or st.tab == "CONTROLS") and 80 or r.h
+  local h = (st.tab == "CONTROLS") and 80 or r.h
   return x ~= nil and x >= r.x and x <= r.x + r.w and y >= r.y and y <= r.y + h
 end
 function ownsKeys()
@@ -500,9 +593,11 @@ function update(node, dt)
     if tool then st.tab = "INSPECT" end
   end
   st.t = st.t + (dt or 0)
+  -- the STAGE tab's hovered row lights its parts in the view (for as long as it is hovered)
+  if st.tab == "STAGE" and st.hover and B.stageHover then B.stageHover(st.hover) end
   local sel = B.selection()
   local sig = table.concat({ math.floor(W), math.floor(H), st.tab, tostring(B.craftVersion), table.concat(sel, ","),
-    tostring(focused_name()) }, "|")
+    tostring(focused_name()), tostring(st.hover), tostring(st.drag) }, "|")
   if sig == st.sig and st.t < 1.0 then return end
   st.sig, st.t = sig, 0
   ui.make(node, { describe(B, st.L) })

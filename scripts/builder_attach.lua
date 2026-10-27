@@ -40,6 +40,7 @@ WELD_EMBED = 0.04        -- …or up to 4 cm inside it (a drawn member meets a f
 END_FRAC, END_MIN = 0.12, 0.15   -- end region: 12 % of the length or 0.15 m
 NODE_HULL = { frac = 0.10, min = 12, max = 40 }   -- stack node capture (px)
 NODE_FRAME = { frac = 0.06, min = 8, max = 24 }   -- …on a frame member
+HUB_PX = 60              -- a fork's or swing arm's hub captures a wheel from this far (px)
 LEN_STEP, LEN_MIN, LEN_MAX = 0.05, 0.25, 12.0     -- drawn members
 JOINT_MASS = 0.001       -- t: a gusset or splice plate set (~1 kg)
 JOINT_BONUS = 1.25       -- a gusseted link is 25 % stronger
@@ -89,6 +90,26 @@ local function toLocal(rec, P) return applyT(rec.B, sub(P, rec)) end
 local function toWorld(rec, p) return add(v(rec.x, rec.y, rec.z), apply(rec.B, p)) end
 local function snap(x, g) if not g or g <= 0 then return x end return math.floor(x / g + 0.5) * g end
 local function clamp(x, a, b) if x < a then return a elseif x > b then return b end return x end
+-- One in-face coordinate x on a face of half-width h, on grid g (playtest
+-- 2026-10-26: "hard to snap the parts together without turning the grid off
+-- … it makes stuff slightly offset"). The grid used to run from the face's
+-- CORNER, so on a face whose width is not a whole number of steps the centre
+-- was no grid point at all: on a Strut Hub (0.24 m) the hull grid's 25 cm put
+-- every part on an EDGE, and on a Rover Body's top 5 cm off the centre line.
+-- Now the centre is always a snap point, and it wins within CENTRE_PULL of
+-- the face (or half a step): a part aimed at a face lands centred on it,
+-- exactly. `fromEnd` keeps a frame member's grid measured from its end A (a
+-- 1 m beam's grid points at 5 cm from its end) and pulls to its middle only
+-- within half a step (a part slid along a beam goes where it is put); a
+-- hull's grid runs from its centre.
+CENTRE_PULL = 0.3
+function faceSnap(x, h, g, fromEnd)
+  if not g or g <= 0 then return clamp(x, -h, h) end
+  local p = fromEnd and (-h + snap(x + h, g)) or snap(x, g)
+  local pull = fromEnd and 0.5 * g or math.max(0.5 * g, CENTRE_PULL * h)
+  if math.abs(x) <= pull and math.abs(x) <= math.abs(x - p) + (fromEnd and 0 or pull) then p = 0 end
+  return clamp(p, -h, h)
+end
 vec = { v = v, add = add, sub = sub, mul = mul, dot = dot, cross = cross, norm = norm, len = len,
         apply = apply, applyT = applyT, bmul = bmul, clean = clean, brot = brot, turn = turn }
 
@@ -237,9 +258,9 @@ local function nodesOf(rec, held, links)
       local n = norm(apply(rec.B, v(hb.n[1], hb.n[2], hb.n[3])))
       local at = toWorld(rec, lp)
       if hb.kind == "hub" then
-        if gd.hubpt and gd.hubax then out[#out + 1] = { uid = rec.uid, side = "hub", at = at, n = n } end
+        if gd.hubpt and gd.hubax then out[#out + 1] = { uid = rec.uid, side = "hub", at = at, n = n, hubnode = true } end
       elseif not gm then
-        out[#out + 1] = { uid = rec.uid, side = "radial", at = at, n = n }
+        out[#out + 1] = { uid = rec.uid, side = "radial", at = at, n = n, hubnode = true }
       end
     end
   end
@@ -395,7 +416,7 @@ local function memberJoint(held, host, hitP, hitN, q)
     local kind
     if region == "span" then
       kind = "tee"
-      y = -hs.hy + snap(y + hs.hy, g)                      -- grid from end A
+      y = faceSnap(y, hs.hy, g, true)                      -- grid from end A
       y = clamp(y, -hs.hy + ey, hs.hy - ey)
     else
       kind = "corner"
@@ -431,7 +452,7 @@ local function memberJoint(held, host, hitP, hitN, q)
   end
   -- the held member lies ON the face: a CROSS (clamped) — or a lap if parallel
   local atl = mul(fn, half)
-  atl.y = clamp(-hs.hy + snap(pl.y + hs.hy, g), -hs.hy, hs.hy)
+  atl.y = faceSnap(pl.y, hs.hy, g, true)
   local at = toWorld(host, atl)
   local P = add(at, mul(d, support(gs, c.B, d)))
   -- slide the held along its own axis to where the cursor is (grid on the held)
@@ -462,17 +483,20 @@ local function surfaceCandidate(held, host, hitP, hitN, q)
     local r = math.sqrt(pl.x * pl.x + pl.z * pl.z)
     local th = math.atan2(pl.z, pl.x)
     if not q.free and q.angle and q.angle > 0 then th = snap(th, q.angle) end
-    local y = clamp(snap(pl.y, g), -hs.hy, hs.hy)
+    local y = faceSnap(pl.y, hs.hy, g, false)
     local nr = math.sqrt(nl.x * nl.x + nl.z * nl.z)
     pl = v(r * math.cos(th), y, r * math.sin(th))
     nl = norm(v(nr * math.cos(th), nl.y, nr * math.sin(th)))
   else
-    -- a box face: the two in-face coordinates on the grid, measured from the
-    -- face's corner so a 1 m beam's grid points sit at 5 cm from its end
+    -- a box face: the two in-face coordinates on the grid (faceSnap): a
+    -- member's or panel's measured from its corner, so a 1 m beam's grid
+    -- points sit at 5 cm from its end; a hull's from the face's centre, which
+    -- always snaps (a part aimed at a hub block's face lands centred on it)
     local fn = mul(AXV[ax], sgn)
+    local fromEnd = hs.member or hs.panel
     local function s1(k, h)
       if k == ax then return sgn * h end
-      return clamp(-h + snap(pl[k] + h, g), -h, h)
+      return faceSnap(pl[k], h, g, fromEnd)
     end
     pl = v(s1("x", hs.hx), s1("y", hs.hy), s1("z", hs.hz))
     nl = fn
@@ -545,11 +569,20 @@ function candidates(q)
         local r = get(u)
         if r then
           local rad = nodeRadiusPx(r, q.project)
+          local onHit = q.hit and q.hit.uid == u
           for _, nd in ipairs(nodesOf(r, held, linksOf(u))) do
             local sx, sy, on = q.project(nd.at.x, nd.at.y, nd.at.z)
             if on then
               local dd = math.sqrt((sx - q.mouse.x) ^ 2 + (sy - q.mouse.y) ^ 2)
-              if dd <= rad and dd < bd then best, bd = { nd, r }, dd end
+              -- A HUB is the one place a wheel goes on a fork or swing arm (and
+              -- a fork on a wheel): with the cursor anywhere on that part, or
+              -- within HUB_PX of the hub, it wins outright (playtest
+              -- 2026-10-26: wheels landed a little off their forks)
+              -- (an "end" — a strut's flange, a wheel's axle end — the same:
+              -- it is the place a wheel or a lamp goes on that part)
+              local r2 = rad
+              if nd.hubnode then r2 = onHit and math.huge or math.max(rad, HUB_PX) end
+              if dd <= r2 and dd < bd then best, bd = { nd, r }, dd end
             end
           end
         end

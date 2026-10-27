@@ -361,7 +361,17 @@ Keys are keycaps (`panel/choice` latched in = active).
   - INSPECT: the selection's name, count, mass and cost; numeric offset and rotation;
     the part's own settings (wheel, actuator limits, wing shape, fuel load); its
     controls.
-  - STAGE: the staging stack.
+  - STAGE: the staging stack, drawn the way the flight HUD stacks it (the last
+    stage on top, stage 1 above LAUNCH). A stage is what one SPACE fires: one or
+    more events (a decoupler, a radial ring, a fairing, the chutes), each row
+    saying what it drops and what it leaves burning. Rows drag onto another
+    stage or onto NEW STAGE; ▲ ▼ ⇥ do the same by key; a card's ▲ ▼ move the
+    whole stage; DEFAULT puts the order back. A new event slots in after the
+    last stage that fires before it by default (`STAGEM`, builder.lua). The
+    blueprint gives every event of a stage the same `stage` number, and the
+    flight fires them on one SPACE. What a decoupler drops is the side away
+    from the crew (vessel_controller `SPLIT.sides`), the same in the tab and in
+    flight.
   - CONTROLS: the keymap (section 6).
   - CRAFT: the outliner (named groups, sub-assemblies, symmetry sets), the history
     list, and the part and performance budget.

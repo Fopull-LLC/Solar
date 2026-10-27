@@ -280,7 +280,6 @@ local next_sym = 0
 -- panel to reorder. Persisted per-part (`stage`) in the blueprint — flight
 -- fires the events in exactly this order.
 local stage_order = {}   -- array of keys: "u<uid>" | "g<sym gid>"
-local stage_drag = nil   -- { key, row, grab_dy } while a row is being dragged
 local stage_hover = nil  -- stage-panel row the cursor is over (world highlight)
 local stage_node2 = nil  -- the StagePanel UI node
 local stage_rows = nil   -- cached array of the StageRow## UI nodes
@@ -1106,7 +1105,132 @@ function stage_lines()
   return out
 end
 
--- The current stage items: key → { label, uids = {decoupler uids} }.
+-- ══ STAGE MODEL BEGIN (pure: tests/smoke_stage_split.lua loads this block) ══
+-- THE STAGING STACK, as data. A STAGE is what one SPACE fires: a list of
+-- separation EVENTS (items). `stages` is an array of stages in FIRING order
+-- (stage 1 fires first), each an array of item keys. Items come from the
+-- craft (`stage_items`): an axial decoupler "u<uid>", a radial-decoupler ring
+-- "g<sym>" (a lone one "u<uid>"), a fairing "u<uid>", the chutes "c".
+--   STAGEM.rank(it)          the default order: rings, then axial cuts and
+--                            fairings bottom-up, chutes last
+--   STAGEM.sync(stages, items, saved) → stages: gone items drop, empty stages
+--                            close, a reloaded blueprint's saved stage numbers
+--                            come back (uid → n), and a NEW item gets a stage
+--                            of its own after the last stage that fires
+--                            before it by default (so a decoupler added under
+--                            the stack fires before the ones above it)
+--   STAGEM.move(stages, key, to, asNew) → stages: the item into stage `to`
+--                            (asNew: a new stage inserted at `to`)
+--   STAGEM.swap(stages, i, j) → stages: two stages trade places
+--   STAGEM.index(stages, items) → uid → stage number (what the blueprint saves)
+STAGEM = {}
+function STAGEM.rank(it)
+  if it.chute then return 3e6 end
+  if it.ring then return 1e6 + (it.y or 0) end
+  return 1e6 + 1e3 + (it.y or 0)
+end
+function STAGEM.minrank(stage, items)
+  local m = math.huge
+  for _, k in ipairs(stage) do
+    local it = items[k]
+    if it then m = math.min(m, STAGEM.rank(it)) end
+  end
+  return m
+end
+function STAGEM.sortgroup(g, items)
+  table.sort(g, function(a, b)
+    local ra, rb = STAGEM.rank(items[a]), STAGEM.rank(items[b])
+    if ra ~= rb then return ra < rb end
+    return a < b
+  end)
+end
+function STAGEM.sync(stages, items, saved)
+  local out, placed = {}, {}
+  for _, g in ipairs(stages or {}) do
+    local ng = {}
+    -- (an old save's flat list of keys: each key its own stage)
+    if type(g) == "string" then g = { g } end
+    for _, k in ipairs(g) do
+      if items[k] and not placed[k] then ng[#ng + 1] = k; placed[k] = true end
+    end
+    if #ng > 0 then out[#out + 1] = ng end
+  end
+  local fresh, by_n = {}, {}
+  local keys = {}
+  for k in pairs(items) do keys[#keys + 1] = k end
+  table.sort(keys)
+  for _, k in ipairs(keys) do
+    if not placed[k] then
+      local it, n = items[k], nil
+      for _, u in ipairs(it.uids or {}) do
+        local su = saved and saved[u]
+        if su and su > 0 and (not n or su < n) then n = su end
+      end
+      if n then
+        by_n[n] = by_n[n] or {}
+        table.insert(by_n[n], k)
+      else
+        fresh[#fresh + 1] = k
+      end
+    end
+  end
+  local ns = {}
+  for n in pairs(by_n) do ns[#ns + 1] = n end
+  table.sort(ns)
+  for _, n in ipairs(ns) do
+    STAGEM.sortgroup(by_n[n], items)
+    out[#out + 1] = by_n[n]
+  end
+  table.sort(fresh, function(a, b)
+    local ra, rb = STAGEM.rank(items[a]), STAGEM.rank(items[b])
+    if ra ~= rb then return ra < rb end
+    return a < b
+  end)
+  for _, k in ipairs(fresh) do
+    local r = STAGEM.rank(items[k])
+    local at = 1
+    for i, g in ipairs(out) do
+      if STAGEM.minrank(g, items) < r then at = i + 1 end
+    end
+    table.insert(out, at, { k })
+  end
+  return out
+end
+function STAGEM.move(stages, key, to, asNew)
+  local out = {}
+  for i, g in ipairs(stages) do
+    local ng = {}
+    for _, k in ipairs(g) do if k ~= key then ng[#ng + 1] = k end end
+    out[i] = ng
+  end
+  to = math.max(1, math.min(to or 1, #out + 1))
+  if asNew or not out[to] then
+    table.insert(out, to, { key })
+  else
+    table.insert(out[to], key)
+  end
+  local kept = {}
+  for _, g in ipairs(out) do if #g > 0 then kept[#kept + 1] = g end end
+  return kept
+end
+function STAGEM.swap(stages, i, j)
+  if not (stages[i] and stages[j]) then return stages end
+  stages[i], stages[j] = stages[j], stages[i]
+  return stages
+end
+function STAGEM.index(stages, items)
+  local out = {}
+  for n, g in ipairs(stages) do
+    for _, k in ipairs(g) do
+      local it = items[k]
+      for _, u in ipairs(it and it.uids or {}) do out[u] = n end
+    end
+  end
+  return out
+end
+-- ══ STAGE MODEL END ══
+
+-- The current stage items: key → { key, uids = {part uids}, y, ring | fair | chute }.
 function stage_items()
   local items = {}
   for uid, p in pairs(parts) do
@@ -1126,50 +1250,30 @@ function stage_items()
     elseif p.def.fairing then
       -- A fairing's jettison is a staging event too (and an action).
       items["u" .. uid] = { key = "u" .. uid, uids = { uid }, ring = false, y = p.y, fair = true }
+    elseif p.def.chute then
+      -- every chute aboard opens on ONE event (the flight's), so they are one item
+      local it = items.c
+      if not it then it = { key = "c", uids = {}, chute = true, y = p.y }; items.c = it end
+      it.uids[#it.uids + 1] = uid
+      it.y = math.max(it.y, p.y)
     end
   end
+  for _, it in pairs(items) do table.sort(it.uids) end
   return items
 end
 
--- Reconcile stage_order with the live items: stale keys drop, new keys slot
--- in by the classic default (rings first, then axial bottom-up).
+-- Reconcile the staging stack with the live items (STAGEM.sync); cached per
+-- craft version, so the panel, the badges and the blueprint read one answer.
 function sync_stage_order()
+  if W.stage_sync_v == craftVersion and W.stage_items then return W.stage_items end
   local items = stage_items()
-  local kept = {}
-  for _, key in ipairs(stage_order) do
-    if items[key] then
-      kept[#kept + 1] = key
-      items[key].placed = true
-    end
-  end
-  local fresh = {}
-  for _, it in pairs(items) do
-    if not it.placed then fresh[#fresh + 1] = it end
-  end
-  -- New items slot by their SAVED stage when reloading a blueprint, else by
-  -- the classic default: rings first, axial bottom-up.
-  local function saved_of(it)
-    local s = nil
-    for _, u in ipairs(it.uids) do
-      local su = saved_stage[u]
-      if su and su > 0 and (not s or su < s) then s = su end
-    end
-    return s or 1e9
-  end
-  table.sort(fresh, function(a, b)
-    local sa, sb = saved_of(a), saved_of(b)
-    if sa ~= sb then return sa < sb end
-    if a.ring ~= b.ring then return a.ring end
-    return a.y < b.y
-  end)
-  for _, it in ipairs(fresh) do kept[#kept + 1] = it.key end
-  stage_order = kept
+  stage_order = STAGEM.sync(stage_order, items, saved_stage)
+  W.stage_items, W.stage_sync_v = items, craftVersion
   return items
 end
 
 -- Lazily resolve (and cache) the pool of StageRow## UI nodes authored in
--- builder.ron. Each stage event gets its OWN node so `node:uiRect()` gives an
--- exact per-row rect to hit-test against — no font-metric guessing.
+-- builder.ron (the old floating panel; the STAGE tab draws the stack now).
 function stage_row_node(i)
   if not stage_rows then
     stage_rows = {}
@@ -1180,96 +1284,149 @@ function stage_row_node(i)
   return stage_rows[i]
 end
 
--- The label for stage #k (its firing order) given its separation-event item.
+-- What a separation event IS, in words: its kind and how many.
+function stageItemLabel(it)
+  if it.chute then return #it.uids > 1 and string.format("Parachutes ×%d", #it.uids) or "Parachute" end
+  if it.fair then return "Fairing jettison" end
+  local p = parts[it.uids[1]]
+  local nm = p and p.def.label or "Decoupler"
+  if it.ring and #it.uids > 1 then return string.format("%s ×%d", nm, #it.uids) end
+  return nm
+end
 function stage_label(k, it)
-  if it.fair then return string.format("#%d   FAIRING", k) end
-  if it.ring then
-    return string.format("#%d   BOOSTER RING ×%d", k, #it.uids)
-  end
-  return string.format("#%d   DECOUPLER", k)
+  return string.format("%d   %s", k, stageItemLabel(it))
 end
 
--- Paint the STAGING panel: each separation event is a numbered STAGE row (#1
--- fires first), named by what it does. Visible only while the STAGE tool is
--- active (it declutters otherwise). The hovered row lights up; the dragged row
--- fades to a placeholder while its floating ghost rides the cursor.
-function paint_stages()
-  if not stage_node2 then stage_node2 = find("StagePanel") end
-  if not stage_node2 then return end
+-- Labels counted: "FT-M Tank ×2, Skipper" (most first, at most `n`).
+function countLabels(set, n, skip)
+  local cnt, order = {}, {}
+  for u in pairs(set) do
+    local p = parts[u]
+    if p and not (skip and skip[u]) then
+      local l = p.def.label or p.id
+      if not cnt[l] then cnt[l] = 0; order[#order + 1] = l end
+      cnt[l] = cnt[l] + 1
+    end
+  end
+  table.sort(order, function(a, b) if cnt[a] ~= cnt[b] then return cnt[a] > cnt[b] end return a < b end)
+  local out = {}
+  for i, l in ipairs(order) do
+    if i > (n or 3) then out[#out + 1] = string.format("+%d more", #order - (n or 3)) break end
+    out[#out + 1] = cnt[l] > 1 and string.format("%s ×%d", l, cnt[l]) or l
+  end
+  return table.concat(out, ", "), #order
+end
+
+-- THE STAGE TAB'S DATA (builder_inspector draws it): one entry per stage in
+-- firing order, each with its events (what each one is, which parts it
+-- throws off, which engines it leaves burning) — the same model the flight
+-- flies (vessel_controller events, grouped by stage number).
+-- The part the flight keeps when a decoupler fires (vessel_controller
+-- splitKeeper): where the crew sits — the crewed part nearest the tree's root,
+-- a pod before an open seat — else the probe core nearest it.
+function stageKeep()
+  local best, rank = nil, nil
+  for u, p in pairs(parts) do
+    local k = p.def.kind
+    if k == "crewed" or k == "probe" then
+      local depth, x, g = 0, u, 0
+      while parts[x] and parts[x].parent and g < 256 do x = parts[x].parent; depth = depth + 1; g = g + 1 end
+      local r = (k == "probe" and 1e12 or 0) + (p.def.seat and 1e9 or 0) + depth * 1e5 + u
+      if not rank or r < rank then best, rank = u, r end
+    end
+  end
+  return best
+end
+-- What firing decoupler `uid` throws off, seen from the crew's side (the
+-- flight's rule), it included; {} when a loop through a strut keeps it on.
+function stageDrops(uid, keep)
+  local G, L = graph(), lib("builder_graph")
+  if G and L and keep and keep ~= uid then
+    local far = L.separation(G, alive_set(), uid, keep)
+    return far or {}
+  end
+  return separation_of(uid)
+end
+
+function stageView()
   local items = sync_stage_order()
-  local panel = stage_node2:getcomponent("UiElement")
-  local show = (tool == "stage") and #stage_order > 0
-  if panel then panel.visible = show end
-  -- One row node per stage event; extras hide (the pool is fixed-size).
-  for k = 1, STAGE_MAX_ROWS do
-    local rn = stage_row_node(k)
-    if rn then
-      local el = rn:getcomponent("UiElement")
-      local key = stage_order[k]
-      local it = key and items[key]
-      if show and it then
-        if el then el.visible = true end
-        rn.text = stage_label(k, it)
-        local dragged = stage_drag and stage_drag.key == key
-        local hot = (stage_hover == key)
-        if el then
-          if dragged then         -- gap left behind by the picked-up row
-            el.fillA, el.textA = 0.06, 0.30
-          elseif hot then         -- cursor is over this row
-            el.fillA, el.textA = 0.55, 1.0
-          else
-            el.fillA, el.textA = 0.16, 1.0
+  local keep = stageKeep()
+  local out = { stages = {}, launch = nil }
+  -- engines by the flight's rule: below the lowest axial cut (and boosters)
+  -- burn from lift-off; each axial cut lights the engines above it, up to the
+  -- next cut
+  local cuts = {}
+  for _, p in pairs(parts) do if p.def.decouple and not p.def.radial then cuts[#cuts + 1] = p.y end end
+  table.sort(cuts)
+  local boost = {}
+  for ru, p in pairs(parts) do
+    if p.def.radial and p.def.decouple then
+      for u in pairs(stageDrops(ru, keep)) do boost[u] = true end
+    end
+  end
+  local function engines_between(lo, hi, with_boost)
+    local set = {}
+    for u, p in pairs(parts) do
+      if (p.def.thrust or 0) > 0 then
+        if (with_boost and boost[u]) or (not boost[u] and p.y > lo + 0.01 and p.y < hi - 0.01) then set[u] = true end
+      end
+    end
+    return set
+  end
+  local first = cuts[1] or math.huge
+  out.launch = { lights = (countLabels(engines_between(-math.huge, first, true), 3)) }
+  for n, g in ipairs(stage_order) do
+    local st = { n = n, items = {} }
+    for _, k in ipairs(g) do
+      local it = items[k]
+      if it then
+        local e = { key = k, label = stageItemLabel(it), uids = it.uids, kind = it.chute and "chute" or it.fair and "fairing" or it.ring and "ring" or "axial" }
+        if not it.chute and not it.fair then
+          local drop, own = {}, {}
+          for _, u in ipairs(it.uids) do
+            own[u] = true
+            for v in pairs(stageDrops(u, keep)) do drop[v] = true end
+          end
+          local txt, nk = countLabels(drop, 3, own)
+          e.drops = nk > 0 and txt or nil
+          if not it.ring then
+            local hi = math.huge
+            for _, y in ipairs(cuts) do if y > it.y + 0.01 and y < hi then hi = y end end
+            local lit = countLabels(engines_between(it.y, hi, false), 3)
+            e.lights = lit ~= "" and lit or nil
           end
         end
-      elseif el then
-        el.visible = false
+        st.items[#st.items + 1] = e
       end
     end
+    out.stages[#out.stages + 1] = st
   end
-  -- The floating ghost mirrors the dragged row's live label (its number updates
-  -- as the order changes); handle_staging positions it on the cursor.
-  if not stage_ghost then stage_ghost = find("StageDragGhost") end
-  if stage_ghost then
-    local gel = stage_ghost:getcomponent("UiElement")
-    if stage_drag then
-      local row = nil
-      for k, key in ipairs(stage_order) do if key == stage_drag.key then row = k end end
-      local it = items[stage_drag.key]
-      if row and it then stage_ghost.text = stage_label(row, it) end
-      if gel then gel.visible = true end
-    elseif gel then
-      gel.visible = false
-    end
-  end
+  return out
 end
 
--- Draw a numbered badge (a filled disc + the number over it) at each stage's
--- decoupler(s), in the STAGE tool — so the row and the physical part are
--- unmistakably the same one. The hovered row's badges glow.
-function draw_stage_badges()
-  if tool ~= "stage" then return end
-  local items = sync_stage_order()
-  for i, key in ipairs(stage_order) do
-    local it = items[key]
-    if it then
-      local hot = (stage_hover == key) or (stage_drag and stage_drag.key == key)
-      local r, g, b = 1.0, 0.75, 0.25
-      if hot then r, g, b = 0.3, 1.0, 0.5 end
-      for _, uid in ipairs(it.uids) do
-        local p = parts[uid]
-        if p then
-          -- A camera-facing badge disc + a bright ring; the stage number is
-          -- read off the panel row of the same color when hovered.
-          local up = { x = 0, y = 1, z = 0 }
-          draw.disc(p.x, p.y + 0.15, p.z, up.x, up.y, up.z, 0.0, 0.22 + (hot and 0.08 or 0),
-            r, g, b, 0.9)
-          draw.ring(p.x, p.y + 0.15, p.z, up.x, up.y, up.z, 0.30, r, g, b, 1.0)
-          -- little riser so the badge reads above the part
-          draw.line(p.x, p.y, p.z, p.x, p.y + 0.15, p.z, r, g, b, 0.8)
-        end
-      end
-    end
+-- The STAGE tab's hover: the event (key) or stage ("s<n>") the cursor is on
+-- lights its parts in the view for a moment.
+function stageHover(key)
+  stage_hover = key
+  W.stage_hover_t = time or 0
+end
+
+-- The old floating staging panel is retired (the STAGE tab of the right plate
+-- shows the stack): keep its scene nodes hidden.
+function paint_stages()
+  if not stage_node2 then stage_node2 = find("StagePanel") end
+  if stage_node2 then
+    local panel = stage_node2:getcomponent("UiElement")
+    if panel and panel.visible then panel.visible = false end
   end
+  for k = 1, STAGE_MAX_ROWS do
+    local rn = stage_row_node(k)
+    local el = rn and rn:getcomponent("UiElement")
+    if el and el.visible then el.visible = false end
+  end
+  if not stage_ghost then stage_ghost = find("StageDragGhost") end
+  local gel = stage_ghost and stage_ghost:getcomponent("UiElement")
+  if gel and gel.visible then gel.visible = false end
 end
 
 -- The company ledger, if this scene has one mounted (it does; the builder is
@@ -1400,10 +1557,7 @@ function launchCheck()
     warn[#warn + 1] = "no parachute — the pod will not survive the landing"
   end
   if has.wheel then
-    local _, nx, nz, other = wheelAxles()
-    if other > 0 or (nx > 0 and nz > 0) then
-      warn[#warn + 1] = "wheels on more than one axle line — mount them all on two opposite flanks or they can't all drive"
-    end
+    for _, w in ipairs(wheelChecks()) do warn[#warn + 1] = w end
   end
   -- A probe with nothing aboard to keep it powered is a probe that goes dark
   -- before it gets anywhere. Say how long it has.
@@ -1417,6 +1571,71 @@ function launchCheck()
     end
   end
   return { warn = warn, has = has }
+end
+
+-- WHAT A WHEELED CRAFT IS MISSING (playtest 2026-10-26: "motorcycles are
+-- hard to build right"). The flight works out the front and lays every wheel
+-- to roll along it (vessel_controller r2WheelSetup), so how the wheels are
+-- turned no longer matters; what still does, said plainly:
+--   no battery      driven wheels and nothing to power them (a seat or a
+--                   saddle carries none)
+--   no motor        wheels, none of them driven, and no engine
+--   a two-wheeler   (every wheel in one line) with no seat to ride it and no
+--                   Balance Gyro: it falls over; its wheels a few cm out of
+--                   line: it crabs
+-- Global and pure over the craft records, for the smoke tests.
+function wheelChecks()
+  local out = {}
+  local E = elib()
+  local pw = powerStats()
+  if not (E and pw) then return out end
+  local wheels, driven, rider, gyro, engine = {}, 0, false, false, false
+  for uid, r in pairs(pw.records or {}) do
+    local p = parts[uid]
+    local dm = E.modOf(r, "drive")
+    if dm and p then
+      wheels[#wheels + 1] = { x = p.x or 0, z = p.z or 0 }
+      if (tonumber(dm.speed) or 0) > 0 and (tonumber(dm.torque) or 0) > 0 then driven = driven + 1 end
+    end
+    if p and p.def and p.def.seat then rider = true end
+    if E.modOf(r, "gyro") then gyro = true end
+    if (tonumber(r.thrust) or 0) > 0 then engine = true end
+  end
+  if #wheels == 0 then return out end
+  if driven > 0 and (pw.store or 0) <= 0 and (pw.solar or 0) <= 0 then
+    out[#out + 1] = "no battery — the wheel motors have no power (a seat carries none): add a Battery Pack"
+  end
+  if driven == 0 and not engine then
+    out[#out + 1] = "no driven wheel — landing gear only rolls: add a wheel with a motor (Wheel S/M/L, Moto Wheel)"
+  end
+  -- in one line? (the wheels' spread across their own long axis)
+  if #wheels >= 2 then
+    local mx, mz = 0, 0
+    for _, r in ipairs(wheels) do mx, mz = mx + r.x, mz + r.z end
+    mx, mz = mx / #wheels, mz / #wheels
+    local sxx, sxz, szz = 0, 0, 0
+    for _, r in ipairs(wheels) do
+      local dx, dz = r.x - mx, r.z - mz
+      sxx, sxz, szz = sxx + dx * dx, sxz + dx * dz, szz + dz * dz
+    end
+    local ang = 0.5 * math.atan2(2 * sxz, sxx - szz)
+    local ax, az = math.cos(ang), math.sin(ang)
+    local lo, hi = math.huge, -math.huge
+    for _, r in ipairs(wheels) do
+      local l = -(r.x - mx) * az + (r.z - mz) * ax
+      lo, hi = math.min(lo, l), math.max(hi, l)
+    end
+    local spread = hi - lo
+    if spread <= 0.3 and driven > 0 then
+      if not (rider or gyro) then
+        out[#out + 1] = "a two-wheeler with no seat to ride it and no Balance Gyro falls over — add a Moto Saddle or a gyro"
+      end
+      if spread > 0.04 then
+        out[#out + 1] = string.format("the wheels are %.0f cm out of line — a bike's wheels go one behind the other", spread * 100)
+      end
+    end
+  end
+  return out
 end
 
 -- THE ELECTRICAL PICTURE of the craft on the stand (electronics.summary):
@@ -1905,6 +2124,7 @@ local function apply_snap(S)
   local X = S.extra
   if X then
     stage_order = tcopy(X.stage) or {}
+    W.stage_sync_v = nil
     W.root = X.root
     W.outliner = tcopy(X.outliner) or {}
     groups_state.groups, groups_state.edited = tcopy(X.groups), X.edited
@@ -3921,14 +4141,9 @@ local function make_blueprint()
   for _, p in pairs(parts) do ref_y = math.min(ref_y, p.y - p.def.h * 0.5) end
   if ref_y == math.huge then ref_y = 0 end
   -- Firing order: each decoupler carries its stage-event index.
+  -- (every event of a stage carries its number: the flight fires them on one SPACE)
   local items = sync_stage_order()
-  local stage_of = {}
-  for i2, key in ipairs(stage_order) do
-    local it = items[key]
-    if it then
-      for _, u in ipairs(it.uids) do stage_of[u] = i2 end
-    end
-  end
+  local stage_of = STAGEM.index(stage_order, items)
   local i = 0
   -- (a part's modules depend on its definition alone: encoded once a
   -- definition per pass, not once a part — 3,000 parts are a handful of kinds)
@@ -4147,6 +4362,7 @@ local function load_blueprint(bp)
   ghost = nil
   clear_stand()
   stage_order, saved_stage = {}, {}
+  W.stage_sync_v = nil
   fshapes = {}
   wcfgs = {}
   if shapeStop then shapeStop(false) end
@@ -5103,75 +5319,48 @@ function fairingProbe(uid, step)
     shapeStop(true)
   end
 end
--- hit-test the panel against its REAL solved rect (node:uiRect — physical px,
--- the mouse's space) and drag rows to reorder the firing sequence. Returns true
--- when the panel owns the mouse this frame. Lives OUTSIDE `update` so that huge
--- function stays under LuaJIT's 60-upvalue-per-function ceiling.
--- Which stage row (1-based) the mouse-Y is over, hit-tested against each row
--- node's REAL solved rect (physical px, the mouse's own space) — exact
--- regardless of font metrics, viewport docking, or panel size.
-function stage_row_at(my)
-  for k = 1, #stage_order do
-    local rn = stage_row_node(k)
-    if rn then
-      -- NB: `a and f()` truncates a multi-return — call uiRect on its own line.
-      local rx, ry, rw, rh = rn:uiRect()
-      if rx and rw > 1 and my >= ry and my <= ry + rh then return k, ry end
-    end
-  end
-  return nil
-end
-
-function handle_staging(clicked, lmb, grab_mode)
-  local in_panel = false
-  draw_stage_badges()
-  stage_hover = nil
-  if tool == "stage" and #stage_order > 0 then
-    if not stage_node2 then stage_node2 = find("StagePanel") end
-    local prx, pry, prw, prh = 0, 0, 0, 0
-    if stage_node2 then prx, pry, prw, prh = stage_node2:uiRect() end
-    if prx and prw > 1 then
-      local mx, my = input.mouse()
-      in_panel = mx >= prx and mx <= prx + prw and my >= pry and my <= pry + prh
-      local row = stage_row_at(my)
-      if in_panel and row and not stage_drag then stage_hover = stage_order[row] end
-      if stage_drag then
-        -- Ghost tracks the cursor: design_y = (mouse_y - grab_dy) / scale, and
-        -- the layer origin cancels because the ghost is drawn origin+pos*scale
-        -- while the cursor sits at origin+mouse_y (see builder.ron ghost node).
-        if not stage_ghost then stage_ghost = find("StageDragGhost") end
-        if stage_ghost then
-          local gel = stage_ghost:getcomponent("UiElement")
-          if gel then
-            local _, sh = camera.screenSize()
-            local scale = (sh and sh > 1) and (sh / uiDesignH()) or 1.0
-            gel.posY = (my - stage_drag.grab_dy) / scale
+-- In the STAGE tab, a numbered badge at each event's part(s) — the stage
+-- number beside it — so the list and the craft are unmistakably the same.
+-- The hovered event (or stage) glows green.
+function draw_stage_badges()
+  if tool ~= "stage" then return end
+  if stage_hover and (time or 0) - (W.stage_hover_t or 0) > 0.25 then stage_hover = nil end
+  local items = sync_stage_order()
+  local k = screen_k and screen_k() or 1
+  for n, g in ipairs(stage_order) do
+    for _, key in ipairs(g) do
+      local it = items[key]
+      if it then
+        local hot = (stage_hover == key) or (stage_hover == ("s" .. n))
+        local r, gg, b = 1.0, 0.75, 0.25
+        if it.chute then r, gg, b = 0.55, 0.8, 1.0 end
+        if hot then r, gg, b = 0.3, 1.0, 0.5 end
+        for _, uid in ipairs(it.uids) do
+          local p = parts[uid]
+          if p then
+            local up = { x = 0, y = 1, z = 0 }
+            draw.disc(p.x, p.y + 0.15, p.z, up.x, up.y, up.z, 0.0, 0.22 + (hot and 0.08 or 0), r, gg, b, 0.9)
+            draw.ring(p.x, p.y + 0.15, p.z, up.x, up.y, up.z, 0.30, r, gg, b, 1.0)
+            draw.line(p.x, p.y, p.z, p.x, p.y + 0.15, p.z, r, gg, b, 0.8)
+            if hot then outline(p, 0.3, 1.0, 0.5, 0.9) end
+            if draw.text and camera and camera.worldToScreen then
+              -- (the builder's camera takes stand-local points: builder_space wrapCamera)
+              local sx, sy = camera.worldToScreen(p.x, p.y + 0.15, p.z)
+              if sx then draw.text(sx + 14 * k, sy - 9 * k, tostring(n), 16 * k, r, gg, b, 1.0) end
+            end
           end
         end
-        -- Reorder as the cursor crosses into another row's rect.
-        if row and row ~= stage_drag.row then
-          table.remove(stage_order, stage_drag.row)
-          table.insert(stage_order, row, stage_drag.key)
-          stage_drag.row = row
-          craftVersion = craftVersion + 1
-        end
-        paint_stages()
-        if not lmb then
-          stage_drag = nil
-          click_cool = 0.2
-          paint_stages()
-          hint("staging order set — #1 fires first in flight", 2.5)
-        end
-      elseif in_panel and clicked and not grab_mode and row then
-        local _, ry = stage_row_at(my)
-        stage_drag = { key = stage_order[row], row = row, grab_dy = my - (ry or my) }
-        paint_stages()
-      else
-        paint_stages() -- refresh the hover highlight
       end
     end
   end
-  return stage_drag or in_panel
+end
+
+-- The world badges of the STAGE tab (the tab itself is the right plate's,
+-- builder_inspector; it owns its own mouse). Lives OUTSIDE `update` so that
+-- huge function stays under LuaJIT's 60-upvalue-per-function ceiling.
+function handle_staging(clicked, lmb, grab_mode)
+  draw_stage_badges()
+  return false
 end
 
 -- THE MODES, always on screen (bottom centre): symmetry as a row of chips —
@@ -7475,6 +7664,7 @@ function craftNew()
   if partCount > 0 then craftSave() end
   clear_stand()
   stage_order, saved_stage = {}, {}
+  W.stage_sync_v = nil
   groups_state.groups, groups_state.edited = nil, false
   W.craft = nil
   save.set("shipyard.current", nil)
@@ -7879,6 +8069,28 @@ for _, name in ipairs({ "bind", "unbind", "bindAxis" }) do
     craftVersion = craftVersion + 1
     return res
   end
+end
+
+-- STAGE EDITS (one undo step each), from the STAGE tab:
+--   { op = "item", key, to, new }   an event into stage `to` (new: a stage of its own there)
+--   { op = "swap", i, j }           two stages trade places
+--   { op = "reset" }                the default order again
+CMD.stage = function(a)
+  sync_stage_order()
+  local t = tx_begin("staging", {}, nil, true)
+  if a.op == "item" and a.key then
+    stage_order = STAGEM.move(stage_order, a.key, a.to, a.new)
+  elseif a.op == "swap" and a.i and a.j then
+    stage_order = STAGEM.swap(stage_order, a.i, a.j)
+  elseif a.op == "reset" then
+    stage_order, saved_stage = {}, {}
+    W.stage_sync_v = nil
+  end
+  tx_commit(t)
+  craftVersion = craftVersion + 1
+  sync_stage_order()
+  refresh_stats()
+  return true
 end
 
 function cmd(name, args)

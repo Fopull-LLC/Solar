@@ -121,7 +121,7 @@ function setOf(recs, cmd_uid, gone)
 end
 
 function autoOf(recs, gone)
-  local S, m, wheels, gear, jets, rover = 0, 0, 0, 0, 0, false
+  local S, m, wheels, gear, jets, rover, rockets = 0, 0, 0, 0, 0, false, 0
   each(recs, gone, function(d)
     local a = spec(d.af)
     m = m + num(d.mass) + num(d.fuel) * ((d.fuel_t ~= nil) and num(d.fuel_t) or FUEL_T)
@@ -130,7 +130,7 @@ function autoOf(recs, gone)
       local tip = (a.tip ~= nil) and num(a.tip) or root
       S = S + span * (root + tip) / 2
     end
-    if a and a.jet then jets = jets + 1 end
+    if a and a.jet then jets = jets + 1 elseif num(d.thrust) > 0 then rockets = rockets + 1 end
     local w = wheel_of(d, a)
     if w then
       wheels = wheels + 1
@@ -143,7 +143,9 @@ function autoOf(recs, gone)
   if lift >= AUTO_LIFT or (jets > 0 and lift >= AUTO_LIFT_JET) then
     return "aircraft", string.format("wings carry it (%.1f m²/t)", lift), fig
   end
-  if wheels >= 3 or (wheels >= 2 and rover) then
+  -- (two driven wheels and no rocket engine is a motorcycle, whatever
+  -- commands it: a Probe Core and a Balance Gyro ride as well as a saddle)
+  if wheels >= 3 or (wheels >= 2 and (rover or (rockets == 0 and wheels - gear >= 2))) then
     return "rover", string.format("%d wheels carry it", wheels), fig
   end
   if wheels > 0 then return "rocket", "too few wheels to drive on", fig end

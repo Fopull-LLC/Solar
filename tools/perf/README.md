@@ -66,6 +66,21 @@ Pictures in `$WORK/proj/save/user/wheelshots/`. Cause and fix: node handles are
 bare slot numbers, so a cached TyreMesh handle from before the get-off read
 `valid` again for another node (vessel_controller r2TyreVisuals).
 
+## motoprobe.sh + motoprobe_modes.lua — bikes, cars on struts, landing gear, the builder's snap
+
+    WORK=$SCRATCH/moto LOCK=$SCRATCH/engine.lock tools/perf/motoprobe.sh <engine> [modes]
+
+docs/auto-engineering.md. One WORK dir per chain of runs: two chains queued on
+the same WORK share its scratch project and the second overwrites the first's
+scene params. Modes:
+
+| mode | what |
+|---|---|
+| bike, bikegyro, car, car_rigid, trike, motoshop | the auto parts' first probes (a ride, the bump field, the parts in the builder) |
+| bikelab | the probe bike built several ways (`bikev`: 0 the probe bike, 1 saddle backwards, 2 a strut instead of the fork, 3 the battery on top of the head, 4 built facing +Z, 5 built facing −X, 6 a Probe Core and a gyro, no rider): stand, W for 6 s (`forward`: metres toward the front the PLAYER sees, the fork's side), S (`reverse`); `slalom=n` runs of four gates at ~8 m/s with a U-turn and a stop; `park=1` stops, steps off and watches it 12 s unridden; `hill=g` sculpts a ramp of grade g (14 m long, measured: mean and steepest 3 m) and climbs it. A/B switches: `aerooff`, `norake`, `tinyrider` (the rider's capsule shrunk), `ghostall` (re-ignorePair every tick). One `MP RESULT bikelab<v> <test>` line a test |
+| jetgear | the 27-part jet with its gear placed every way (`gearv`: 0 stock, 1 turned 90° on the leg, 2 turned 180°, 3 mains splayed 25° and the nose 90°, 4 Rover Wheel M on the belly and flanks, 5 one main 90°, the other 180°): stand, take-off roll (fine per-tick log from 25 m/s), a hop to ~6 m, an idle descent onto the runway (the bounce above the touchdown height), the roll-out, then a taxi at 7 m/s turning 30° each way. Max vertical acceleration, pitch and roll rates and side slip a phase |
+| snapbuild | the probe bike and a strut car built IN THE BUILDER through its own query (`builder.attachQuery` → `builder_attach.best`), grid 5 cm on, each part aimed a few cm off its spot with the cursor far from every node: every joint's offset (`MP SNAP`), 1280×720 pictures |
+
 ## ctrlprobe.sh + ctrlprobe_modes.lua — a craft's control mode (Auto, Rover, Aircraft, Rocket)
 
     WORK=$SCRATCH/ctrl LOCK=$SCRATCH/engine.lock tools/perf/ctrlprobe.sh <engine> [ctrlrover ctrljet ctrljetwheels ctrlrevert]
@@ -84,6 +99,32 @@ in the VAB, the builder says Auto: Rover, Aircraft chosen (undo/redo, saved to t
 library and opened again), rolled out as Aircraft, reverted to launch, still
 Aircraft. One `CP PASS|FAIL <check>` line a check, `CP RESULT <mode>`; 1280×720
 pictures in `$WORK/proj/save/user/ctrlshots/`. TMO defaults to 360 s a mode.
+
+## stageprobe.sh + stageprobe_modes.lua — multi-stage and multi-type craft
+
+    WORK=$SCRATCH/stage LOCK=$SCRATCH/engine.lock tools/perf/stageprobe.sh <engine> [stagejet stage3 stagelander stagevab]
+
+The 2026-10-26 playtest: "the stage menu is totally broken", and a jet on a
+rocket's radial decoupler that left its cockpit (and the controls) on the rocket.
+`stagejet`: the player's own craft (`crafts/rocketjet.json`, copied into the
+scratch project as `user://probe_rocketjet.json`): a rocket with a nose cone and a
+jet on a radial decoupler, the crew in the jet's cockpit. The stack cannot climb
+off the ground on its own (TWR 1.09, the jet 1.25 m off the rocket's axis: it
+topples and shatters ~3 s after release, on HEAD too), so the probe starts it
+`airstart` (500) m up with both engines burning and fires the decoupler `sepat`
+(2) s later. The jet must keep its cockpit, crew, controls and the camera, the
+rocket fall as debris, the jet fly on its own engine (an attitude hold dives it
+for speed and levels it), and the revert put the whole craft back on the pad.
+`stage3`: Skipper | probe core | Anvil | Sputter, pod, chute, built from the engine
+up: three SPACEs; the spent first stage has a probe core so it leaves as a craft,
+and `[ ]` switches to it and back. `stagelander`: a lander with two radial
+boosters, the chutes put into the boosters' stage in the VAB: one SPACE drops both
+boosters and opens the chutes (one HUD card). `stagevab`: the STAGE tab at
+1280×720 (the player's craft; the three-stage rocket by default, two stages
+swapped, the chutes moved into stage 1 with a row hovered, two undos). One
+`SP PASS|FAIL <check>` line a check and `SP RESULT <mode>`; pictures in
+`$WORK/proj/save/user/stageshots/`. `PATCHES=` a reverse diff of
+vessel_controller.lua shows the old split: the cockpit stays on the rocket.
 
 ## staleprobe.sh + staleprobe_modes.lua — a handle kept from a node that is gone
 
@@ -132,6 +173,30 @@ the craft's own velocity and `space.elements`, as the flight HUD does, and tops
 the apoapsis back up when the deep air takes it off during the coast: the
 Skipper → Anvil two-stage makes orbit (apo 3,527 m, peri 853 m on Naolol). The
 stock starter is a hop by design (builder.lua HOP_MULT), not an orbiter.
+
+## seaprobe.sh + seaprobe_modes.lua — the sea's Water Volume and stale node handles
+
+    WORK=$SCRATCH/sea LOCK=$SCRATCH/engine.lock [PATCHES=x.patch] tools/perf/seaprobe.sh <engine>
+
+Mode `sea` (fresh save): first the engine card 0552 repro (a node destroyed, 200
+made until one takes its id: the old handle must read `valid` false, `name` nil
+and never reach the new node; `SH RESULT`), then the crew on the deepest sea a
+scan finds, the free camera 3 m under and 2 m over (`water.at`, the underwater
+look), and the 6-part rover dropped in (its height over the sea each second:
+Solar floats craft itself). Count the engine's `≈ … density` warnings in the log.
+Pictures in `$WORK/proj/save/user/seashots/`. results/rc38.md: density 0 (0551).
+
+## exportshot.sh + exportshot.lua — pictures from an exported build's player
+
+    WORK=$SCRATCH/xshot LOCK=$SCRATCH/engine.lock tools/perf/exportshot.sh <build dir> [Solar]
+
+Plays a copy of the build's `assets/` with the build's own binary (a project
+path; `XDG_DATA_HOME` in scratch, so no player data is touched) on a COPY of the
+player's save, twice: with the build's `.floptle/textures.ron` and without it.
+Three 1280×720 pictures each in `$WORK/png-with|without`. (card 0550)
+
+rainprobe.lua also has a part `compute` (`RAIN_ONLY=compute`): the GPU rain
+rings prototype (rain_fx `computeRipples`) on/off, pictures and `perf.gpu`.
 
 ## gpushot.sh — a picture of one look, for before/after
 
@@ -299,28 +364,3 @@ same player model. `tests/smoke_economy.lua` holds the working tree to targets.
 `econprobe.lua`: the Ops Board with ground work on it (one selected), the depot
 with pack, warehouse and freight goods, the builder's catalogue prices. Slot 13
 in the scratch project; delete `$WORK/proj/save` and `$WORK/proj/saves` after.
-
-## seaprobe.sh + seaprobe_modes.lua — the sea's Water Volume and stale node handles
-
-    WORK=$SCRATCH/sea LOCK=$SCRATCH/engine.lock [PATCHES=x.patch] tools/perf/seaprobe.sh <engine>
-
-Mode `sea` (fresh save): first the engine card 0552 repro (a node destroyed, 200
-made until one takes its id: the old handle must read `valid` false, `name` nil
-and never reach the new node; `SH RESULT`), then the crew on the deepest sea a
-scan finds, the free camera 3 m under and 2 m over (`water.at`, the underwater
-look), and the 6-part rover dropped in (its height over the sea each second:
-Solar floats craft itself). Count the engine's `≈ … density` warnings in the log.
-Pictures in `$WORK/proj/save/user/seashots/`. results/rc38.md: density 0 (0551).
-
-## exportshot.sh + exportshot.lua — pictures from an exported build's player
-
-    WORK=$SCRATCH/xshot LOCK=$SCRATCH/engine.lock tools/perf/exportshot.sh <build dir> [Solar]
-
-Plays a copy of the build's `assets/` with the build's own binary (a project
-path; `XDG_DATA_HOME` in scratch, so no player data is touched) on a COPY of the
-player's save, twice: with the build's `.floptle/textures.ron` and without it.
-Three 1280×720 pictures each in `$WORK/png-with|without`. (card 0550)
-
-rainprobe.lua also has a part `compute` (`RAIN_ONLY=compute`): the GPU rain
-rings prototype (rain_fx `computeRipples`) on/off, pictures and `perf.gpu`.
-

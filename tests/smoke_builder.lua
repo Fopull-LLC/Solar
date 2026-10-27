@@ -422,30 +422,44 @@ end
 check(stages0.radialDec == 1 and stages0.decoupler == 2,
   string.format("default staging: ring first (ring=%s, axial=%s)",
     tostring(stages0.radialDec), tostring(stages0.decoupler)))
-env.setTool("stage") step(2) -- the STAGE tab: the panel appears + becomes interactive
-check(stage_panel.components["UiElement"].visible == true,
-  "the staging panel shows in the Stage tool")
--- Grab row #1 by its REAL solved rect and drag it down onto row #2's rect —
--- exercises the per-row uiRect hit-test + the drag ghost following the cursor.
-MOUSE.x, MOUSE.y = 40, stage_row_center(1)
-step(1)
-MOUSE.lmb = true
-step(1)
-check(stage_ghost.components["UiElement"].visible == true,
-  "grabbing a stage row shows the floating drag ghost")
-MOUSE.y = stage_row_center(2)
-step(1)
-MOUSE.lmb = false
-step(16)
-check(stage_ghost.components["UiElement"].visible == false,
-  "dropping the row hides the drag ghost")
+env.setTool("stage") step(2) -- the STAGE tab (the right plate's; the old floating panel is retired)
+check(stage_panel.components["UiElement"].visible == false,
+  "the old floating staging panel stays hidden (the STAGE tab shows the stack)")
+local view = env.stageView()
+check(#view.stages == 2 and view.stages[1].items[1].kind == "ring" and view.stages[2].items[1].kind == "axial",
+  string.format("the STAGE tab's view: stage 1 the ring, stage 2 the decoupler (%d stages)", #view.stages))
+check(view.stages[2].items[1].drops == nil and view.stages[1].items[1].label ~= nil,
+  "rows name their event (a decoupler with nothing under it drops nothing)")
+-- swap the two stages (the card's ▼ key): one undo step
+env.cmd("stage", { op = "swap", i = 1, j = 2 })
+step(2)
 local stages1 = {}
 for _, d in ipairs(saved_parts()) do
   if d.decouple == 1 then stages1[d.id] = d.stage end
 end
 check(stages1.radialDec == 2 and stages1.decoupler == 1,
-  string.format("dragging row #1 below row #2 swaps the firing order (ring=%s, axial=%s)",
+  string.format("swapping the stages swaps the firing order (ring=%s, axial=%s)",
     tostring(stages1.radialDec), tostring(stages1.decoupler)))
+-- the ring joins the decoupler's stage: both fire on one SPACE (same number)
+env.cmd("stage", { op = "item", key = view.stages[1].items[1].key, to = 1 })
+step(2)
+local stages2 = {}
+for _, d in ipairs(saved_parts()) do
+  if d.decouple == 1 then stages2[d.id] = d.stage end
+end
+check(stages2.radialDec == 1 and stages2.decoupler == 1,
+  string.format("an event moved into another stage fires with it (ring=%s, axial=%s)",
+    tostring(stages2.radialDec), tostring(stages2.decoupler)))
+API.KEYS.down["ctrl"] = true
+press("z")
+step(2)
+API.KEYS.down["ctrl"] = false
+local stages3 = {}
+for _, d in ipairs(saved_parts()) do
+  if d.decouple == 1 then stages3[d.id] = d.stage end
+end
+check(stages3.radialDec == 2 and stages3.decoupler == 1,
+  string.format("CTRL+Z undoes a staging edit (ring=%s, axial=%s)", tostring(stages3.radialDec), tostring(stages3.decoupler)))
 
 -- 8. FINS are SIDE-MOUNT blades now (no axial nodes) that self-orient outward
 --    and ring with symmetry — Ty's "a side mount fin you attach with symmetry".
