@@ -210,6 +210,10 @@ local patches = {}  -- key → patch
 local srcs = {}     -- scatter id → { patch = key, kind = k, fill = 0..1 }
 local breaks = {}   -- "patch|kind" → { {id, t}, ... }, oldest first
 local convert = {}  -- "patch|kind" → old hole positions to turn into ids
+-- Ground edits waiting to re-drop the rocks on them (see "the ground moved"),
+-- and the old sources of re-dropped rocks, still drawn until t.
+local gw_regions, gw_queue, gw_queued = {}, {}, {}
+local retiring = {}  -- { id, pk, t }
 local swept = false
 local cur_body = nil
 local next_t = 0
@@ -315,9 +319,19 @@ local function drop_source(id)
   srcs[id] = nil
 end
 
+-- Destroy retired sources whose hold is over (or a patch's, or all).
+local function sweep_retiring(pk, all)
+  local keep = {}
+  for _, r in ipairs(retiring) do
+    if all or r.pk == pk or time >= r.t then scatter.destroy(r.id) else keep[#keep + 1] = r end
+  end
+  retiring = keep
+end
+
 local function drop_patch(key)
   local p = patches[key]
   if not p then return end
+  sweep_retiring(key)
   for _, id in pairs(p.srcs) do if id then drop_source(id) end end
   if p.node and p.node.valid then p.node:destroy() end
   patches[key] = nil
@@ -326,7 +340,9 @@ end
 local function tear_down()
   for key in pairs(patches) do drop_patch(key) end
   for id in pairs(srcs) do drop_source(id) end
+  sweep_retiring(nil, true)
   patches, srcs, breaks, convert = {}, {}, {}, {}
+  gw_regions, gw_queue, gw_queued = {}, {}, {}
   sources, patchCount, count, cur_body, bodyName = 0, 0, 0, nil, nil
 end
 
@@ -731,11 +747,135 @@ local function convert_holes(body)
   end
 end
 
+-- ── the ground moved: drop the rocks on it again ────────────────────────────
+-- flora_field "the ground moved" (it forwards every groundChanged here): a
+-- rock settles once and keeps that height, so rocks round a dig, a fill or
+-- the base's grade are declared again (same seed, same rocks, breaks kept)
+-- once the edits there have landed and gone quiet, one source a tick, the
+-- old source drawn for HOLD seconds while the new one's rocks settle.
+local HOLD = 2.0
+function groundChanged(x, y, z, r)
+  local body = cur_body and space.body(cur_body)
+  local ff = ref("flora_field")
+  if not (body and x and ff and ff.groundMerge) then return false end
+  local G = ff.GROUND or {}
+  local rx, ry, rz = x - body.x, y - body.y, z - body.z
+  if #gw_regions >= (G.most or 48) then
+    ff.groundMerge(gw_regions, rx, ry, rz, r or 3.0, time, math.huge, math.huge)
+  else
+    ff.groundMerge(gw_regions, rx, ry, rz, r or 3.0, time, G.merge or 6.0, G.cap or 150.0)
+  end
+  return true
+end
+
+local function ground_tick(w, R)
+  if #retiring > 0 then sweep_retiring() end
+  local ff = ref("flora_field")
+  if not (ff and ff.groundDue) then return end
+  local G = ff.GROUND or {}
+  if #gw_regions > 0 and not (terrain.pending and terrain.pending() > 0) then
+    for _, g in ipairs(ff.groundDue(gw_regions, time, G.wait or 1.2)) do
+      for key, p in pairs(patches) do
+        if patch_dist(p, g.x, g.y, g.z) <= g.r + (G.pad or 3.0)
+           and len(g.x - p.cx, g.y - p.cy, g.z - p.cz) <= g.r + p.half * 1.5 + (G.pad or 3.0) then
+          for kid, id in pairs(p.srcs) do
+            if id and srcs[id] then ff.groundQueue(gw_queue, gw_queued, key, kid) end
+          end
+        end
+      end
+    end
+  end
+  local j = table.remove(gw_queue, 1)
+  if not j then return end
+  gw_queued[j.key .. "|" .. tostring(j.id)] = nil
+  local p = patches[j.key]
+  local id = p and p.srcs[j.id]
+  local s = id and srcs[id]
+  if not s then return end
+  retiring[#retiring + 1] = { id = id, pk = p.key, t = time + HOLD }
+  srcs[id] = nil
+  p.srcs[j.id] = make_source(p, s.kind, w, R)
+end
+function groundBusy() return #gw_regions + #gw_queue end
+
+-- Rocks resting on something that is not the ground (a roof, the pad, a
+-- craft) go, and rocks over open air or under it have their ground re-dropped
+-- once: flora_field "props standing on something that is not the ground",
+-- with its AUDIT numbers, a slice a frame round the observer.
+local au = { t = -1e9, job = nil, tried = {} }
+auditRemoved, auditRedropped = 0, 0
+local function audit_tick(obs)
+  local ff = ref("flora_field")
+  local A = ff and ff.AUDIT
+  if not (A and obs and cur_body and scatter.near and A.every > 0) then return end
+  local body = space.body(cur_body)
+  if not body then return end
+  if not au.job then
+    if time < au.t + A.every then return end
+    au.t = time
+    local list = {}
+    local rx, ry, rz = obs.x - body.x, obs.y - body.y, obs.z - body.z
+    for id, sr in pairs(srcs) do
+      local p = patches[sr.patch]
+      if p and patch_dist(p, rx, ry, rz) <= A.radius then list[#list + 1] = id end
+    end
+    if #list == 0 then return end
+    au.job = { list = list, si = 1, hits = nil, i = 1 }
+  end
+  local j = au.job
+  local t0 = (app and app.wallClock and app.wallClock()) or os.clock()
+  local n = 0
+  while j.si <= #j.list do
+    local sid = j.list[j.si]
+    local sr = srcs[sid]
+    if not sr then
+      j.si, j.hits = j.si + 1, nil
+    else
+      if not j.hits then
+        j.hits, j.i = scatter.near(sid, vec3(obs.x, obs.y, obs.z), A.radius) or {}, 1
+        -- body-relative: the job runs over frames on a moving planet
+        for _, it in ipairs(j.hits) do it.rx, it.ry, it.rz = it.pos.x - body.x, it.pos.y - body.y, it.pos.z - body.z end
+      end
+      while j.i <= #j.hits do
+        local it = j.hits[j.i]
+        j.i, n = j.i + 1, n + 1
+        if it.settled then
+          local px, py, pz = body.x + it.rx, body.y + it.ry, body.z + it.rz
+          local d = terrain.query(px, py, pz)
+          if d and math.abs(d) > A.tol then
+            local up = it.up or vec3(0, 1, 0)
+            local hit = d > 0 and raycast(vec3(px + up.x * 0.3, py + up.y * 0.3, pz + up.z * 0.3),
+              vec3(-up.x, -up.y, -up.z), 0.6) or nil
+            local key = sr.patch .. "|" .. sr.kind.id .. "|" .. tostring(it.id)
+            -- (a ray that meets the terrain answers with the world's own node,
+            -- named for the body: surveyor is_ground)
+            local hn = hit and hit.node
+            local solid = hn and hn.valid ~= false and hn.name and not space.body(hn.name)
+            local hq = solid and terrain.query(hit.x, hit.y, hit.z)
+            if hq and hq > 0.15 then
+              scatter.remove(sid, it.id)
+              auditRemoved = auditRemoved + 1
+            elseif not au.tried[key] then
+              au.tried[key] = true
+              auditRedropped = auditRedropped + 1
+              groundChanged(px, py, pz, 3.0)
+            end
+          end
+        end
+        if n % 32 == 0 and (((app and app.wallClock and app.wallClock()) or os.clock()) - t0) * 1000 >= A.ms then return end
+      end
+      j.si, j.hits = j.si + 1, nil
+    end
+  end
+  au.job = nil
+end
+
 function update(node, dt)
   if params.enabled == 0 then
     if cur_body then tear_down() end
     return
   end
+  if cur_body then audit_tick(observer()) end
   if time < next_t then return end
   next_t = time + 0.2
   local gm = ref("game_manager")
@@ -874,6 +1014,7 @@ function update(node, dt)
   sources, count = ns, math.floor(props)
   convert_holes(body)
   regrow()
+  ground_tick(w, R)
 
   if not frame_checked then
     for _, p in pairs(patches) do
@@ -945,4 +1086,36 @@ function lateUpdate(node, dt)
       end
     end
   end
+end
+
+-- ── ground audit (probes, the debug console) ────────────────────────────────
+-- flora_field.groundAudit for the rocks: every settled rock within `radius`
+-- of a WORLD point against the terrain where it lies (+ over, − under).
+function groundAudit(x, y, z, radius, tol)
+  tol = tol or 0.3
+  local out = { checked = 0, floating = 0, buried = 0, worst = 0, examples = {} }
+  local body = cur_body and space.body(cur_body)
+  if not (body and scatter and scatter.near) then return out end
+  for id, s in pairs(srcs) do
+    local p = patches[s.patch]
+    if p and patch_dist(p, x - body.x, y - body.y, z - body.z) <= radius then
+      for _, h in ipairs(scatter.near(id, vec3(x, y, z), radius) or {}) do
+        if h.settled then
+          local d = terrain.query(h.pos.x, h.pos.y, h.pos.z)
+          if d then
+            out.checked = out.checked + 1
+            if math.abs(d) > math.abs(out.worst) then out.worst = d end
+            local bad = d > tol and "floating" or (d < -tol and "buried" or nil)
+            if bad then
+              out[bad] = out[bad] + 1
+              if #out.examples < 12 then
+                out.examples[#out.examples + 1] = { src = id, id = h.id, d = d, kind = s.kind.id, x = h.pos.x, y = h.pos.y, z = h.pos.z }
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+  return out
 end

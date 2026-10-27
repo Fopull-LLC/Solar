@@ -705,6 +705,15 @@ local function quiet_ground(x, y, z)
   if ff and ff.liftWash then ff.liftWash(x, y, z, 110.0, 8.0) end
 end
 
+-- Every bite and every fill tells the fields where the ground moved, so the
+-- plants and rocks there are dropped onto the new ground (flora_field
+-- groundChanged: folded into one region per place, re-dropped once it is
+-- quiet; it tells mineral_field too).
+function groundChanged(x, y, z, r)
+  local ff = ref("flora_field")
+  if ff and ff.groundChanged then ff.groundChanged(x, y, z, r) end
+end
+
 -- ── shake and sound helpers ─────────────────────────────────────────────────
 
 local function publish_shake(v)
@@ -1753,6 +1762,7 @@ local function fire_dig(node, dt, firing)
       quiet_ground(hit.x, hit.y, hit.z)
       terrain.dig(hit.x, hit.y, hit.z, params.laser_radius,
         params.laser_strength * (0.55 + 0.45 * charge))
+      groundChanged(hit.x, hit.y, hit.z, params.laser_radius)
     end
     show_beam(hit, charge, "dig")
     publish_shake(0.05 + charge * 0.09)
@@ -1854,6 +1864,7 @@ local function fire_fill(node, dt, firing)
         fill_credit = fill_credit - 1
         quiet_ground(px, py, pz)
         terrain.sculpt(px, py, pz, params.fill_radius, params.fill_strength * (0.5 + 0.5 * charge), "raise")
+        groundChanged(px, py, pz, params.fill_radius)
         local fx = ref("vfx")
         if fx and fx.dig then fx.dig(h.x, h.y, h.z, true) end
         if math.random() < 0.35 then play(SFX.fill, { track = "SFX", volume = 0.35, pitch = 0.8 + math.random() * 0.3 }) end

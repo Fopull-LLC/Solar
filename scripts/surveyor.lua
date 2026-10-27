@@ -509,6 +509,8 @@ local function crater(x, y, z, nx, ny, nz)
   local ff = ref("flora_field")
   if ff and ff.liftWash then pcall(ff.liftWash, x, y, z, 110.0, 8.0) end
   pcall(terrain.dig, x - nx * r * 0.4, y - ny * r * 0.4, z - nz * r * 0.4, r, 1.0)
+  -- the plants and rocks on the bitten ground drop onto it again
+  if ff and ff.groundChanged then pcall(ff.groundChanged, x, y, z, r) end
 end
 
 -- ── the bolts ──────────────────────────────────────────────────────────────

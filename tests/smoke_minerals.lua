@@ -409,6 +409,24 @@ if rock then
   end
 end
 
+-- The ground moved: rocks on it are declared again once the edits there go
+-- quiet (flora_field folds the edits; mineral_field re-drops its own).
+do
+  load_script("solar/scripts/flora_field.lua", "flora_field")
+  local srcs0, made0 = mf.sources, next_src
+  for i = 1, 120 do
+    mf.groundChanged(ASTRO.x - i * 0.05, ASTRO.y, ASTRO.z, 2.4)
+    if i % 8 == 0 then T = T + 0.12; mf.update({}, 0.12) end
+  end
+  check("a laser's bites are one region for the rocks too", mf.groundBusy() == 1 and next_src == made0, mf.groundBusy())
+  tick(8)
+  local q = mf.groundBusy()
+  tick(q + 20)
+  check("…the rock sources under it are declared again, each once", next_src > made0 and next_src - made0 <= srcs0
+    and mf.groundBusy() == 0, (next_src - made0) .. " of " .. srcs0)
+  check("…and every source still stands", mf.sources == srcs0, mf.sources .. " vs " .. srcs0)
+end
+
 -- Airless crust still gets rock; a gas body gets none.
 store["world." .. BODY.name].kind = "gas"
 mf.clearAll()

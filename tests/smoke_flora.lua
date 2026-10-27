@@ -776,6 +776,67 @@ do
   end
 end
 
+-- ── the ground moved (groundChanged) ────────────────────────────────────────
+-- A laser's hundreds of bites in one place are ONE region; once it has been
+-- quiet for GROUND.wait the sources of the patches under it are declared
+-- again, one a tick, with the same plants; nothing far off is touched.
+do
+  ff.clearAll()
+  tick(80)
+  local g0 = ff.groundAudit(ASTRO.x, ASTRO.y, ASTRO.z, 30)
+  local made0 = next_src
+  local srcs0 = ff.sources
+  -- 200 bites boring 10 m down-and-along, 0.12 s apart
+  for i = 1, 200 do
+    ff.groundChanged(ASTRO.x - i * 0.05, ASTRO.y + i * 0.02, ASTRO.z, 2.4)
+    if i % 8 == 0 then T = T + 0.12; ff.update({}, 0.12) end
+  end
+  check("a bore of 200 bites is one ground region", ff.groundBusy() == 1, ff.groundBusy())
+  check("…nothing is re-dropped while the laser is still cutting", next_src == made0, next_src - made0)
+  tick(6)                                   -- quiet for 1.5 s: due
+  local queued = ff.groundBusy()
+  check("…then the patches under it are queued", queued > 0 and queued <= srcs0, queued .. " of " .. srcs0)
+  tick(queued + 12)
+  local redone = next_src - made0
+  check("…and their sources declared again, one a tick, each once", redone > 0 and redone <= srcs0 * 2 and ff.groundBusy() == 0,
+    redone .. " creates for " .. srcs0 .. " sources")
+  check("…every source still standing afterwards (old ones retired, not lost)", ff.sources == srcs0, ff.sources .. " vs " .. srcs0)
+  local g1 = ff.groundAudit(ASTRO.x, ASTRO.y, ASTRO.z, 30)
+  check("…the same plants stand there, on the ground", g1.checked == g0.checked and g1.floating == 0 and g1.buried == 0,
+    string.format("%d/%d checked, %d floating, %d buried", g1.checked, g0.checked, g1.floating, g1.buried))
+  -- An edit on the far side of the world touches nothing here.
+  local made1 = next_src
+  ff.groundChanged(BODY.x - SURFACE, BODY.y, BODY.z, 3.0)
+  tick(12)
+  check("an edit far from every patch re-drops nothing", next_src == made1 and ff.groundBusy() == 0, next_src - made1)
+end
+
+-- Pure pieces: merge, due, queue.
+do
+  local L = {}
+  ff.groundMerge(L, 0, 0, 0, 2, 1.0, 6, 150)
+  ff.groundMerge(L, 1, 0, 0, 1, 2.0, 6, 150)         -- inside: time only
+  check("an edit inside a region only moves its time on", #L == 1 and L[1].r == 2 and L[1].t == 2.0)
+  ff.groundMerge(L, 9, 0, 0, 2, 3.0, 6, 150)         -- near: grows to cover both
+  check("an edit near a region grows it to cover both", #L == 1 and math.abs(L[1].r - 6.5) < 1e-9
+    and math.abs(L[1].x - 4.5) < 1e-9 and L[1].t == 3.0, string.format("%d r %.2f x %.2f", #L, L[1].r, L[1].x))
+  ff.groundMerge(L, 100, 0, 0, 2, 3.5, 6, 150)       -- far: its own
+  check("an edit far from every region is a region of its own", #L == 2)
+  ff.groundMerge(L, 0, 0, 0, 40, 3.6, 6, 150)        -- swallows the first
+  check("a bigger edit swallows a region inside it", #L == 2 and L[1].r == 40)
+  local C = {}
+  ff.groundMerge(C, 0, 0, 0, 100, 0, 6, 150)
+  ff.groundMerge(C, 150, 0, 0, 100, 0, 6, 150)       -- covering both would be 175 > cap
+  check("regions stop growing at the cap", #C == 2)
+  local due = ff.groundDue(L, 4.0, 1.2)
+  check("nothing is due before it has been quiet", #due == 0 and #L == 2)
+  due = ff.groundDue(L, 4.85, 1.2)
+  check("…a region quiet for the wait is due and taken out", #due == 2 and #L == 0, #due)
+  local q, qd = {}, {}
+  check("a job is queued once", ff.groundQueue(q, qd, "a", 3) and not ff.groundQueue(q, qd, "a", 3)
+    and ff.groundQueue(q, qd, "a", 4) and #q == 2)
+end
+
 -- ── report ──────────────────────────────────────────────────────────────────
 local bad = {}
 for _, c in ipairs(checks) do

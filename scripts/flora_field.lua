@@ -218,6 +218,9 @@ local wash                -- defined below update (ground wash)
 local preload_t = 0
 local swept = false
 local retiring = {} -- { id, pk, spid, t }: re-settled stands' old sources, still drawn until t
+-- Ground edits waiting to re-drop the props on them (see "the ground moved").
+local gw_regions = {}            -- { x, y, z, r, t }: body-relative, t = the last edit in it
+local gw_queue, gw_queued = {}, {}
 
 local AX = { { 1, 2, 3 }, { 2, 3, 1 }, { 3, 1, 2 } }
 
@@ -402,6 +405,7 @@ function clearAll()
   for _, d in pairs(washes) do if d and decals and decals.remove then decals.remove(d) end end
   washes, wash_n, wash_info = {}, 0, {}
   patches, srcs, settled, motes, cuts, convert = {}, {}, {}, {}, {}, {}
+  gw_regions, gw_queue, gw_queued = {}, {}, {}
   count, sources, patchCount = 0, 0, 0
 end
 
@@ -884,6 +888,208 @@ local function redeclare(p, sp)
   p.srcs[sp.id] = make_source(p, sp, fg, w)
 end
 
+-- ── the ground moved: drop what stood on it again ───────────────────────────
+-- The engine drops a prop onto the ground once, when its chunk first settles,
+-- and keeps that height for good (lua-api scatter.create). It forgets a chunk
+-- when a script edit lands on it, but only round the point the edit was
+-- SENT, in the world as it was then — a grade of thousands of flattens lands
+-- over seconds while the planet moves metres a tick, so its own edges were
+-- never re-dropped — and never when saved ground streams in under props
+-- already settled. That left grass hanging 2–3 m over the base's feathered
+-- edges and rocks a metre over the cut by the pad (playtest 2026-10-27).
+--
+-- So every script that edits the ground says where (`groundChanged`, a world
+-- point and a radius; it also tells mineral_field), the edits are folded
+-- into a few regions (a laser's hundreds of bites are one), and once a
+-- region has been quiet for GROUND.wait seconds and the engine has landed
+-- every edit, the sources of the patches it touches are declared again
+-- (`redeclare`: same seed, same plants, cuts kept, the old source drawn for
+-- resettle_hold seconds, so nothing blinks), one source a tick. A source
+-- near the base is judged against the paving again when it is redeclared
+-- (make_source → clear_base), so nothing is left on a lot or the paving.
+GROUND = { wait = 1.2, merge = 6.0, cap = 150.0, pad = 3.0, most = 48 }
+
+-- Fold an edit (centre, radius, time) into `list`: inside a region it only
+-- moves the region's time on; touching one (within `merge`) grows that
+-- region to the sphere round both, while that stays under `cap`; anything
+-- else is a region of its own. Pure (luajit tests).
+function groundMerge(list, x, y, z, r, t, merge, cap)
+  merge, cap = merge or 0, cap or math.huge
+  for _, g in ipairs(list) do
+    local d = len(x - g.x, y - g.y, z - g.z)
+    if d + r <= g.r then
+      g.t = math.max(g.t, t)
+      return g
+    elseif d + g.r <= r then
+      g.x, g.y, g.z, g.r, g.t = x, y, z, r, math.max(g.t, t)
+      return g
+    elseif d <= g.r + r + merge then
+      local nr = (d + r + g.r) * 0.5
+      if nr <= cap then
+        local k = (nr - g.r) / d
+        g.x, g.y, g.z = g.x + (x - g.x) * k, g.y + (y - g.y) * k, g.z + (z - g.z) * k
+        g.r, g.t = nr, math.max(g.t, t)
+        return g
+      end
+    end
+  end
+  local g = { x = x, y = y, z = z, r = r, t = t }
+  list[#list + 1] = g
+  return g
+end
+
+-- The regions quiet for `wait` seconds at `now`, taken out of `list`. Pure.
+function groundDue(list, now, wait)
+  local due = {}
+  for i = #list, 1, -1 do
+    if now - list[i].t >= wait then due[#due + 1] = table.remove(list, i) end
+  end
+  return due
+end
+
+-- Queue one job (a patch key and a layer id) once until it runs. Pure.
+function groundQueue(queue, queued, key, id)
+  local k = key .. "|" .. tostring(id)
+  if queued[k] then return false end
+  queued[k] = true
+  queue[#queue + 1] = { key = key, id = id }
+  return true
+end
+
+-- A WORLD point and radius where the ground was dug, raised, flattened or
+-- graded. Cheap: call it per edit. Tells the rocks too.
+function groundChanged(x, y, z, r)
+  local mf = ref("mineral_field")
+  if mf and mf.groundChanged then pcall(mf.groundChanged, x, y, z, r) end
+  local body = cur_body and space.body(cur_body)
+  if not body or not x then return false end
+  local rx, ry, rz = x - body.x, y - body.y, z - body.z
+  -- (a planet the field is not growing on: nothing of ours stands there)
+  if len(rx, ry, rz) > (body.radius or 1e9) * 2 + 1000 then return false end
+  if #gw_regions >= GROUND.most then
+    groundMerge(gw_regions, rx, ry, rz, r or 3.0, time, math.huge, math.huge)
+  else
+    groundMerge(gw_regions, rx, ry, rz, r or 3.0, time, GROUND.merge, GROUND.cap)
+  end
+  return true
+end
+
+-- Regions that have gone quiet → their patches' sources, one redeclared a
+-- tick. (`ground_tick` runs from update, every field pass.)
+local function ground_tick()
+  if #gw_regions > 0 and not (terrain.pending and terrain.pending() > 0) then
+    for _, g in ipairs(groundDue(gw_regions, time, GROUND.wait)) do
+      for key, p in pairs(patches) do
+        -- (in the patch's plane, and not on the far side of the world under it)
+        if patch_dist(p, g.x, g.y, g.z) <= g.r + GROUND.pad
+           and len(g.x - p.cx, g.y - p.cy, g.z - p.cz) <= g.r + p.half * 1.5 + GROUND.pad then
+          for spid, id in pairs(p.srcs) do
+            if id and srcs[id] then groundQueue(gw_queue, gw_queued, key, spid) end
+          end
+        end
+      end
+    end
+  end
+  local j = table.remove(gw_queue, 1)
+  if not j then return end
+  gw_queued[j.key .. "|" .. tostring(j.id)] = nil
+  local p = patches[j.key]
+  local s = p and p.srcs[j.id] and srcs[p.srcs[j.id]]
+  if s and s.sp then redeclare(p, s.sp) end
+end
+function groundBusy() return #gw_regions + #gw_queue end
+
+-- ── props standing on something that is not the ground ─────────────────────
+-- The engine's settling ray stops at the first thing under a prop — a
+-- building's roof or ramp, a parked craft, debris — not only the terrain:
+-- on the player's save ferns stood 2-4 m up on the fuel farm and the pad
+-- (groundprobe, 2026-10-27). So the settled props round the observer are
+-- checked a slice at a time (AUDIT.ms a frame, a pass every AUDIT.every s):
+-- one more than AUDIT.tol over the terrain with something solid right under
+-- it is taken off (scatter.remove — it comes back on the next declaration and
+-- is judged again; it is not a cut and is not saved); one over open air or
+-- under the ground stands on ground that has since changed, and that ground
+-- is re-dropped (groundChanged), once per prop. Only a prop on something
+-- that is not the terrain is ever removed.
+AUDIT = { every = 3.0, radius = 60.0, ms = 0.35, tol = 0.35 }
+local au = { t = -1e9, job = nil, tried = {} }
+auditRemoved, auditRedropped = 0, 0
+local function audit_take(sid, it)
+  local s = srcs[sid]
+  local p = s and patches[s.patch]
+  scatter.remove(sid, it.id)
+  if p and s.sp and p.bark[s.sp.id] then scatter.remove(p.bark[s.sp.id], it.id) end
+  auditRemoved = auditRemoved + 1
+end
+local function audit_tick(obs)
+  if not (obs and cur_body and scatter and scatter.near and AUDIT.every > 0) then return end
+  local body = space.body(cur_body)
+  if not body then return end
+  if not au.job then
+    if time < au.t + AUDIT.every then return end
+    au.t = time
+    local list = {}
+    local rx, ry, rz = obs.x - body.x, obs.y - body.y, obs.z - body.z
+    for id, sr in pairs(srcs) do
+      local p = patches[sr.patch]
+      if p and sr.part ~= "bark" and sr.sp and patch_dist(p, rx, ry, rz) <= AUDIT.radius then list[#list + 1] = id end
+    end
+    if #list == 0 then return end
+    au.job = { list = list, si = 1, hits = nil, i = 1 }
+  end
+  local j = au.job
+  local t0 = clear_wall()
+  local n = 0
+  while j.si <= #j.list do
+    local sid = j.list[j.si]
+    local sr = srcs[sid]
+    if not sr then
+      j.si, j.hits = j.si + 1, nil
+    else
+      if not j.hits then
+        j.hits = scatter.near(sid, vec3(obs.x, obs.y, obs.z), AUDIT.radius) or {}
+        j.i = 1
+        -- body-relative now: the job runs over frames and the planet moves
+        -- metres a tick, so a world position read now is wrong next frame
+        for _, it in ipairs(j.hits) do it.rx, it.ry, it.rz = it.pos.x - body.x, it.pos.y - body.y, it.pos.z - body.z end
+      end
+      while j.i <= #j.hits do
+        local it = j.hits[j.i]
+        j.i = j.i + 1
+        n = n + 1
+        if it.settled then
+          local px, py, pz = body.x + it.rx, body.y + it.ry, body.z + it.rz
+          local d = terrain.query(px, py, pz)
+          if d and math.abs(d) > AUDIT.tol then
+            local up = it.up or vec3(0, 1, 0)
+            local hit = d > 0 and raycast(vec3(px + up.x * 0.3, py + up.y * 0.3, pz + up.z * 0.3),
+              vec3(-up.x, -up.y, -up.z), 0.6) or nil
+            local key = sr.patch .. "|" .. tostring(sr.sp and sr.sp.id) .. "|" .. tostring(it.id)
+            -- a hit is something solid only where the ground is not (the
+            -- settling ray reads the collision mesh, which can sit a few
+            -- decimetres off the field in a fresh pit)
+            -- (a ray that meets the terrain answers with the world's own node,
+            -- named for the body: surveyor is_ground)
+            local hn = hit and hit.node
+            local solid = hn and hn.valid ~= false and hn.name and not space.body(hn.name)
+            local hq = solid and terrain.query(hit.x, hit.y, hit.z)
+            if hq and hq > 0.15 then
+              audit_take(sid, it)             -- on a roof, a craft, debris
+            elseif not au.tried[key] then
+              au.tried[key] = true
+              auditRedropped = auditRedropped + 1
+              groundChanged(px, py, pz, 3.0)
+            end
+          end
+        end
+        if n % 32 == 0 and (clear_wall() - t0) * 1000 >= AUDIT.ms then return end
+      end
+      j.si, j.hits = j.si + 1, nil
+    end
+  end
+  au.job = nil
+end
+
 -- Old saves' holes → ids: the plant nearest each saved position (in the
 -- patch plane, where `near` measures) is the one that was cut. Runs as soon
 -- as the source is declared: since engine 0.117.0-rc3 a parented source
@@ -1229,6 +1435,7 @@ end
 
 function update(node, dt)
   clear_tick()
+  if params.enabled ~= 0 and cur_body then audit_tick(observer()) end
   if params.rare > 0 then rare_tick(dt) end
   if params.touch > 0 and params.enabled ~= 0 and scatter and scatter.near then touch_tick(dt) end
   if params.enabled == 0 then
@@ -1458,6 +1665,7 @@ function update(node, dt)
   patchCount = n
   convert_holes()
   regrow()
+  ground_tick()
   if params.resettle > 0 then
     local done = 0
     for _, p in ipairs(nearest) do
@@ -2321,6 +2529,7 @@ rare_tick = function(dt)
         -- rather than making both, and the reads after them, in one frame.
         dig = function(x, y, z, r)
           terrain.dig(rare.bx + x, rare.by + y, rare.bz + z, r)
+          groundChanged(rare.bx + x, rare.by + y, rare.bz + z, r)
           if coroutine.isyieldable == nil or coroutine.isyieldable() then coroutine.yield("running") end
         end
       end
@@ -2731,6 +2940,43 @@ function surveyLines(x, y, z, radius)
   local out = {}
   for _, nm in ipairs(order) do
     out[#out + 1] = string.format("%2d × %s", tally[nm], nm)
+  end
+  return out
+end
+
+-- ── ground audit (probes, the debug console) ────────────────────────────────
+-- Every settled prop within `radius` of a WORLD point, measured against the
+-- terrain where it stands: terrain.query at the prop's root is its height
+-- over (+) or under (−) the ground. → { checked, floating, buried, worst,
+-- examples = { { src, id, d, kind, x, y, z }, ... } } (tol: metres, 0.3).
+function groundAudit(x, y, z, radius, tol)
+  tol = tol or 0.3
+  local out = { checked = 0, floating = 0, buried = 0, worst = 0, examples = {}, props = {} }
+  local body = cur_body and space.body(cur_body)
+  if not (body and scatter and scatter.near) then return out end
+  for id, s in pairs(srcs) do
+    local p = patches[s.patch]
+    if p and s.part ~= "bark" and patch_dist(p, x - body.x, y - body.y, z - body.z) <= radius then
+      for _, h in ipairs(scatter.near(id, vec3(x, y, z), radius) or {}) do
+        if h.settled then
+          local d = terrain.query(h.pos.x, h.pos.y, h.pos.z)
+          if d then
+            out.checked = out.checked + 1
+            if math.abs(d) > math.abs(out.worst) then out.worst = d end
+            local bad = d > tol and "floating" or (d < -tol and "buried" or nil)
+            if bad then
+              out[bad] = out[bad] + 1
+              if #out.examples < 12 then
+                out.examples[#out.examples + 1] = { src = id, id = h.id, d = d, kind = s.sp.kind, x = h.pos.x, y = h.pos.y, z = h.pos.z }
+              end
+            end
+            if #out.props < 400 then
+              out.props[#out.props + 1] = { src = id, id = h.id, d = d, kind = s.sp.kind, x = h.pos.x, y = h.pos.y, z = h.pos.z }
+            end
+          end
+        end
+      end
+    end
   end
   return out
 end

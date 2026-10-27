@@ -470,7 +470,7 @@ local function make_crater(x, y, z, r)
     -- Scorch first (color-only, always lands within reach); then dig if genuinely in.
     terrain.paint(x, y, z, r * 1.6, 0.08, 0.07, 0.06, 0.7)
   end
-  if sd < r then terrain.dig(x, y, z, r, 1.0) end
+  if sd < r then terrain.dig(x, y, z, r, 1.0); groundChangedAt(x, y, z, r) end
 end
 
 -- The engine LOOP follows the vessel and rides the throttle; born on the first
@@ -1007,6 +1007,15 @@ local fx_ref = nil
 local function fxd()
   if not (fx_ref and fx_ref.valid) then fx_ref = findScript and findScript("vfx") or nil end
   return fx_ref
+end
+
+-- The ground was dug here (a crater, a scrape, the drill): the plants and
+-- rocks on it are dropped onto it again (flora_field groundChanged, which
+-- tells mineral_field too). A global, not a local: this chunk is at its cap.
+local ff_ref = nil
+function groundChangedAt(x, y, z, r)
+  if not (ff_ref and ff_ref.valid) then ff_ref = findScript and findScript("flora_field") or nil end
+  if ff_ref and ff_ref.groundChanged then pcall(ff_ref.groundChanged, x, y, z, r) end
 end
 
 -- ── engine plumes ───────────────────────────────────────────────────────────
@@ -5777,6 +5786,7 @@ local function damage_tick(node, info, dt)
           local sd = terrain.query(h.x, h.y, h.z)
           if sd and sd < r then
             terrain.dig(h.x, h.y, h.z, r, 0.6)
+            groundChangedAt(h.x, h.y, h.z, r)
             -- SCUFF the surface where the hull bit in: a dark scratch mark painted
             -- over a wider radius than the gouge (color-only — no remesh cost), so
             -- the scar reads even where the dig is shallow.
@@ -10199,6 +10209,7 @@ local function drill_tick(node, info, dt)
           dr.dig_t = time
           -- a small bite at the face: the bore deepens as it goes
           terrain.dig(hit.x + dx * 0.15, hit.y + dy * 0.15, hit.z + dz * 0.15, 0.22, 0.6)
+          groundChangedAt(hit.x, hit.y, hit.z, 0.4)
           local fx = fxd()
           if fx and fx.dig then fx.dig(hit.x, hit.y, hit.z, false) end
         end

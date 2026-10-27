@@ -1398,6 +1398,9 @@ local function try_spawn(dt)
     -- Three passes, a few ms each. The flatten levels to the planet's up
     -- right here, so the pad is level at any latitude.
     for _ = 1, 3 do terrain.sculpt(gx, gy, gz, PAD_FLAT, 1.0, "flatten") end
+    -- (the plants and rocks on the levelled ground drop onto it again)
+    local ff = ref("flora_field")
+    if ff and ff.groundChanged then pcall(ff.groundChanged, gx, gy, gz, PAD_FLAT) end
     local again = raycast(ax, ay, az, -ux, -uy, -uz, 260.0)
     if again and again.distance then
       gx, gy, gz = ax - ux * again.distance, ay - uy * again.distance, az - uz * again.distance

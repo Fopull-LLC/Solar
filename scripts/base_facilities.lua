@@ -862,6 +862,26 @@ local function grade(body, Fr, runway)
   return n
 end
 
+-- THE PLANTS AND ROCKS ON THE GRADED GROUND. A scatter prop settles once and
+-- keeps that height; the engine forgets the props under an edit only round
+-- the point it was sent, and a grade lands over seconds on a planet that
+-- moves metres a tick, so its feathered edges kept grass hanging 2-3 m in the
+-- air and rocks a metre up (playtest 2026-10-27). Once a grade has landed —
+-- and once a session, for ground graded before (a slot's saved ground
+-- streams in under props that may have settled first) — the fields are told
+-- the whole footprint changed: they drop their props there again and judge
+-- them against the paving again (flora_field groundChanged).
+local ground_told = false
+function tell_ground()
+  local ff = ref("flora_field")
+  local b = baseBody and space.body(baseBody)
+  if not (ff and ff.groundChanged and b and footprint) then return false end
+  ground_told = true
+  ff.groundChanged(b.x + footprint.x, b.y + footprint.y, b.z + footprint.z,
+    FOOTPRINT_RADIUS + GRADE.r * 1.25 + 12.0)
+  return true
+end
+
 -- Send the grade at the engine's pace (GRADE.inflight waiting at most), then
 -- wait for it to land and stay landed. True while work remains.
 local function grade_step()
@@ -899,6 +919,7 @@ local function grade_step()
   grade_landing = false
   relooked = false
   edit_budget(false)
+  tell_ground()
   return false
 end
 
@@ -1921,6 +1942,10 @@ function update(node, dt)
   -- saved terrain is still streaming in can be laid over by it (an old save's
   -- hanging slab came back after it was cut away): look again, regrade up to
   -- twice.
+  if not ground_told and sited and not want_spawn and not grading() and not grade_later
+     and not (terrain.busy and terrain.busy()) then
+    tell_ground()
+  end
   if not want_spawn and recheck_at and time >= recheck_at and F and baseBody and not grade_busy() and not grade_later then
     recheck_at = nil
     local b = space.body(baseBody)
