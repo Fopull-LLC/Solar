@@ -1,0 +1,93 @@
+[
+    (
+        name: "PartNoseS",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (0.44, 0.44, 0.44),
+        ),
+        matter: Mesh(
+            asset_path: "models/parts/nose.glb",
+        ),
+        object_materials: {
+            "Decal": (
+                color: (1.0, 1.0, 1.0),
+                texture: Some("textures/parts/markings.png"),
+                roughness: 0.55,
+                metallic: 0.0,
+                shading: Physical,
+            ),
+            "Metal": (
+                color: (1, 1, 1),
+                texture: Some("textures/parts/metal_albedo.png"),
+                normal_map: Some("textures/parts/metal_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/parts/metal_orm.png"),
+                roughness: 1.0,
+                metallic_map: Some("textures/parts/metal_orm.png"),
+                metallic: 0.55,
+                ao_map: Some("textures/parts/metal_orm.png"),
+                shader: Some("shaders/hullPanels.flsl"),
+                shader_params: {
+                    "tint": (1, 1, 1, 1.0),
+                },
+                shading: Physical,
+            ),
+            "Paint": (
+                color: (1, 1, 1),
+                texture: Some("textures/parts/paint_albedo.png"),
+                normal_map: Some("textures/parts/paint_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/parts/paint_orm.png"),
+                roughness: 1.0,
+                metallic_map: Some("textures/parts/paint_orm.png"),
+                metallic: 1.0,
+                ao_map: Some("textures/parts/paint_orm.png"),
+                shader: Some("shaders/hullPanels.flsl"),
+                shader_params: {
+                    "tint": (1, 1, 1, 1.0),
+                },
+                shading: Physical,
+            ),
+            "Stencil": (
+                color: (0.06, 0.06, 0.07),
+                texture: Some("textures/parts/markings.png"),
+                roughness: 0.6,
+                metallic: 0.0,
+                shading: Physical,
+            ),
+            "Tiles": (
+                color: (1, 1, 1),
+                texture: Some("textures/parts/tiles_albedo.png"),
+                normal_map: Some("textures/parts/tiles_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/parts/tiles_orm.png"),
+                roughness: 1.0,
+                metallic_map: Some("textures/parts/tiles_orm.png"),
+                metallic: 0.0,
+                ao_map: Some("textures/parts/tiles_orm.png"),
+                shader: Some("shaders/hullPanels.flsl"),
+                shader_params: {
+                    "tint": (1, 1, 1, 1.0),
+                },
+                shading: Physical,
+            ),
+        },
+        scripts: [],
+        rigidbody: Some((
+            boxed: true,
+            mode: Kinematic,
+            radius: 0.5,
+            height: 2.0,
+            // The engine scales a collider by its node's scale: × the prefab's
+            // the 0.9 m cone it stacks as; at 0.55 it reached 0.1 m into the part below.
+            half_extents: (0.5, 0.45, 0.5),
+            restitution: 0.05,
+            friction: 0.6,
+            gravity: true,
+            lock_pos: (false, false, false),
+            lock_rot: (false, false, false),
+            mass: 0.08,
+        )),
+    ),
+]

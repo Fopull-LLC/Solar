@@ -25,9 +25,9 @@ local R = env
 -- with a catalogue line: 49 + 3 parts, 26 + 3 lines, FRAME 13 + 3. The
 -- context-menu work adds the Stowage Locker to PAYLOAD (+1 part, +1 line).
 -- (+2 parts, +2 lines: the Pod Mk2 and the Crew Cabin, crew slice 2)
-local OLD_REG, OLD_DESC = 55, 32
+local OLD_REG, OLD_DESC = 56, 32   -- 55 in the old builder, + the Small Nose Cone
 local OLD_SECTIONS = {
-  { "COMMAND", 7 }, { "ELECTRICAL", 7 }, { "PROPULSION", 7 }, { "STRUCTURE", 4 },
+  { "COMMAND", 8 }, { "ELECTRICAL", 7 }, { "PROPULSION", 7 }, { "STRUCTURE", 4 },
   { "FRAME", 16 }, { "PAYLOAD", 5 }, { "ROVER", 4 }, { "ROBOTICS", 5 },
 }
 

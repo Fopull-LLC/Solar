@@ -123,6 +123,8 @@ REG = {
                 mods = { { type = "command", crew = 0, draw = 0.06 }, { type = "wheel", torque = 0.6, draw = 0.35 },
                          { type = "battery", ec = 50 }, { type = "antenna", power = 100, rate = 1, draw = 0.02 } } },
   nose      = { prefab = "PartNose",      label = "Nose Cone",    h = 0.90, rx = 0.50, rz = 0.50, mass = 0.08, cost = 60,  top = false, bottom = true,  kind = "structural", aero = true, strength = 300, maxq = 120 },
+  -- The Nose Cone at 0.44 scale: caps a pod's 0.44 m top where a parachute would go.
+  noseS     = { prefab = "PartNoseS",     label = "Small Nose Cone", h = 0.40, rx = 0.22, rz = 0.22, mass = 0.02, cost = 25,  top = false, bottom = true,  kind = "structural", aero = true, strength = 200, maxq = 120 },
   chute     = { prefab = "PartChute",     label = "Parachute",    h = 0.34, rx = 0.22, rz = 0.22, mass = 0.08, cost = 100,  top = false, bottom = true,  kind = "canvas", chute = true, side = true, strength = 150 },
   tankS     = { prefab = "PartTankS",     label = "FT-S Tank",    h = 1.00, rx = 0.50, rz = 0.50, mass = 0.2,  cost = 150, top = true,  bottom = true,  kind = "tank", fuel = 80,  side = true, strength = 450 },
   tankM     = { prefab = "PartTankM",     label = "FT-M Tank",    h = 1.50, rx = 0.50, rz = 0.50, mass = 0.35, cost = 450, top = true,  bottom = true,  kind = "tank", fuel = 160, side = true, strength = 650 },
@@ -417,7 +419,7 @@ for id, d in pairs(DESC) do if REG[id] then REG[id].desc = d end end
 -- getting an index wrong silently mislabelled a card. A part added to `REG` and
 -- named here now appears in the catalogue and nowhere else needs to know.
 CATALOGUE = {
-  { "COMMAND",   { "pod", "podMk2", "cabin", "probe", "seat", "nose", "chute" } },
+  { "COMMAND",   { "pod", "podMk2", "cabin", "probe", "seat", "nose", "noseS", "chute" } },
   { "ELECTRICAL",{ "battery", "solar", "light", "antenna", "beacon", "dish", "dishL" } },
   { "PROPULSION",{ "engineS", "engineM", "skipper", "tankS", "tankM", "radialTank", "rcs" } },
   { "STRUCTURE", { "decoupler", "radialDec", "legs", "fins" } },
