@@ -158,6 +158,40 @@ function suspAxis(m, X, Y, Z, D)
   return up, s1, false
 end
 
+-- THE JOINT SLIDES UPRIGHT (playtest 2026-10-27, build dfb3e17: "the bike
+-- drives much better BACKWARDS than forwards… forwards it's slow and can't
+-- climb hills"). The engine's tyre grip (floptle-physics joints.rs
+-- tyre_grip) budgets its friction on the wheel joint's SPRING impulse, taken
+-- along the joint's own axis. On an axis that leans back (a raked fork, a
+-- swing arm turned on its mount) the tyre's own drive has a share along that
+-- axis: driving forward pulls the tyre down the axis and unloads the spring,
+-- so the grip shrinks as the push grows; reversing loads it and the grip
+-- grows. With the axis leaning back by r and S the spring's load, the push T
+-- a tyre of friction μ can make on a wheel carrying N:
+--     forward   T ≤ μ N cos r / (1 + μ sin r)
+--     reverse   T ≤ μ N cos r / (1 − μ sin r)
+-- The user's dirt bike (swing arm turned 45°, μ 1.13): 0.45 N forward against
+-- more than the motor can give backwards. So the joint's spring always
+-- slides along the craft's UP; the suspension part's own (raked) axis is
+-- only how its legs or arm are drawn. Returns the axis, the base steer about
+-- it, and the part's own axis (for the drawing and the logs).
+function jointAxis(m, X, Y, Z, D)
+  local a = suspAxis(m, X, Y, Z, D)
+  local up = v3(0, 1, 0)
+  local s0 = axleSteer(up, D)
+  return up, s0, a
+end
+
+-- The push a tyre can make before it slides, as a share of the load N it
+-- carries, on a joint axis leaning back by `rake` (rad) — the engine's grip
+-- budget as above. dir = 1 forward, −1 reverse. (tests/smoke_moto.lua)
+function gripShare(mu, rake, dir)
+  local c, s = math.cos(rake or 0), math.sin(rake or 0) * (dir or 1)
+  local den = 1 + mu * s
+  if den <= 1e-6 then return math.huge end
+  return mu * c / den
+end
+
 -- ── 3. A TWO-WHEELER ────────────────────────────────────────────────────────
 -- A craft is a BIKE when it has two or more wheels and they all run in one
 -- line: no two of them further apart across the craft than INLINE_TRACK (m).

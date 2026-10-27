@@ -67,7 +67,7 @@ local DEFAULTS = {
 }
 -- …and the ones whose default is "leave it alone" (a nil can't sit in a table).
 local OPTIONAL = { "fullscreen", "display", "text_scale", "captions", "reduced_motion", "color_filter",
-                   "bindings", "ui_scale" }
+                   "bindings", "ui_scale", "render_scale" }
 local KEYS = {}
 for k in pairs(DEFAULTS) do KEYS[#KEYS + 1] = k end
 for _, k in ipairs(OPTIONAL) do KEYS[#KEYS + 1] = k end
@@ -311,18 +311,40 @@ local APPLY = {
   fullscreen = function()
     local v = get("fullscreen")
     if v ~= nil and app and app.setFullscreen then pcall(app.setFullscreen, v) end
+    -- Back to a window: the window size the player chose, not whatever the
+    -- platform hands back (a window the size of the monitor read as
+    -- "resolution locked to the monitor's", playtest dfb3e17).
+    if v == false then
+      local d = get("display")
+      if type(d) == "table" and d.win and app and app.setDisplayMode then
+        pcall(app.setDisplayMode, { width = d.w, height = d.h, monitor = d.mon, fullscreen = false })
+      end
+    end
   end,
-  -- The resolution (and monitor) the player picked: { w, h, hz, mon }. Set
-  -- only when the window is not already that size, so a scene load does not
-  -- switch the display mode again. Nothing to do without a window.
+  -- The resolution (and monitor) the player picked: { w, h, hz, mon [, win] }.
+  -- `win` marks a WINDOW size (any size; Wayland offers full screen only at
+  -- the monitor's own mode): it is applied as a window, and left alone while
+  -- the game is full screen. Set only when the window is not already that
+  -- size, so a scene load does not switch the display mode again. Nothing to
+  -- do without a window.
   display = function()
     local d = get("display")
     if type(d) ~= "table" or not (app and app.setDisplayMode and app.monitors) then return end
     if #app.monitors() == 0 then return end
+    local full = app.fullscreen and app.fullscreen() == true
+    if d.win and full then return end
     local sw, sh = screen_size()
     if sw == d.w and sh == d.h then return end
-    local ok, err = pcall(app.setDisplayMode, { width = d.w, height = d.h, refresh = d.hz, monitor = d.mon })
+    local want = { width = d.w, height = d.h, monitor = d.mon }
+    if d.win then want.fullscreen = false else want.refresh = d.hz end
+    local ok, err = pcall(app.setDisplayMode, want)
     if not ok then print("settings: display mode " .. tostring(err)) end
+  end,
+  -- The render scale, over the graphics level's own (nil = the level's).
+  -- graphics.lua owns the scale; it also reads this at its own start.
+  render_scale = function()
+    local gx = ref("graphics")
+    if gx and gx.setScale then gx.setScale(get("render_scale")) end
   end,
   text_scale = function()
     local v = get("text_scale")
@@ -441,7 +463,28 @@ local function pct(v) return string.format("%d%%", math.floor(v * 100 + 0.5)) en
 -- What the Display tab is about to apply: a monitor and a mode on it, stepped
 -- through with ‹ › and applied with Apply (a click must not switch the screen
 -- mode on every step).
-local pick = { mon = nil, i = nil }
+local pick = { mon = nil, i = nil, win = nil }
+
+-- Window sizes offered in a window (16:9, and whatever the monitor itself
+-- offers), up to the monitor's own size. A window may be any size; full
+-- screen only the monitor's modes — and under Wayland that is ONE, the
+-- desktop's own, which is why the row looked locked (playtest dfb3e17).
+WINDOW_SIZES = { { 3840, 2160 }, { 3200, 1800 }, { 2560, 1440 }, { 2240, 1260 }, { 1920, 1080 },
+                 { 1600, 900 }, { 1366, 768 }, { 1280, 720 }, { 1024, 576 } }
+
+function windowSizes(mw, mh, modes)
+  local out, seen = {}, {}
+  local function add(w, h)
+    local k = w .. "x" .. h
+    if seen[k] or (mw and w > mw) or (mh and h > mh) then return end
+    seen[k] = true
+    out[#out + 1] = { w = w, h = h, win = true }
+  end
+  for _, m in ipairs(modes or {}) do add(m.w, m.h) end
+  for _, z in ipairs(WINDOW_SIZES) do add(z[1], z[2]) end
+  table.sort(out, function(a, b) return a.w * a.h > b.w * b.h end)
+  return out
+end
 
 -- The monitor's modes, one per size (the highest refresh at each, which is
 -- what app.setDisplayMode takes when none is named), largest first.
@@ -485,8 +528,16 @@ local function mode_rows(out)
       if v ~= pick.mon then pick.mon, pick.i = v, nil end
     end)
   end
+  local full = app.fullscreen and app.fullscreen() == true
   local sizes = sizes_of(pick.mon)
+  if not full then
+    local mw, mh
+    for _, m in ipairs(mons) do if m.index == pick.mon then mw, mh = m.width, m.height end end
+    sizes = windowSizes(mw, mh, sizes)
+  end
   if #sizes == 0 then return end
+  -- Full screen ↔ window changes the list: find the place in it again.
+  if pick.win ~= (not full) then pick.win, pick.i = not full, nil end
   if not pick.i then
     local sw, sh = screen_size()
     local want_w = type(saved) == "table" and saved.w or sw
@@ -509,16 +560,35 @@ local function mode_rows(out)
     { "button", key = "dn", style = "panel/choice", w = 30, h = 30, textAlign = "center",
       text = "‹", disabled = pick.i >= #sizes, onClicked = step(1) },
     { "text", key = "v", style = "panel/cellStrong", w = "grow", h = "fit", textAlign = "center",
-      text = string.format("%d × %d  ·  %d Hz", z.w, z.h, math.floor((z.hz or 60) + 0.5)) },
+      text = z.win and string.format("%d × %d  ·  window", z.w, z.h)
+        or string.format("%d × %d  ·  %d Hz", z.w, z.h, math.floor((z.hz or 60) + 0.5)) },
     { "button", key = "up", style = "panel/choice", w = 30, h = 30, textAlign = "center",
       text = "›", disabled = pick.i <= 1, onClicked = step(-1) },
     { "button", key = "go", style = "panel/choice", w = 76, h = 30, textAlign = "center",
       text = live and "In use" or "Apply", selected = live, onClicked = function()
         if live then return end
         local fx = ref("sfx"); if fx then fx.play("click") end
-        set("display", { w = z.w, h = z.h, hz = z.hz, mon = pick.mon })
+        set("display", { w = z.w, h = z.h, hz = z.hz, mon = pick.mon, win = z.win or nil })
       end },
   })
+  if full and #sizes == 1 then
+    out[#out + 1] = hint("resw", string.format("Full screen runs at the desktop's own %d × %d here "
+      .. "(on Wayland the desktop owns the screen's mode). For fewer pixels lower the Render scale, "
+      .. "or play Windowed at any size.", z.w, z.h))
+  end
+end
+
+-- The render scale: the fraction of the screen the 3D world is drawn at,
+-- upscaled and sharpened; the interface stays sharp. Auto is the graphics
+-- level's own (Low 60%, Medium 90%, High and Ultra 100%).
+RENDER_SCALES = { 1.0, 0.85, 0.75, 0.67, 0.5 }
+local function render_scale_rows(out)
+  local cur = get("render_scale")
+  local opts = { { label = "Auto", value = "auto" } }
+  for _, v in ipairs(RENDER_SCALES) do opts[#opts + 1] = { label = pct(v), value = v } end
+  out[#out + 1] = choice("rsc", "Render scale", opts, type(cur) == "number" and cur or "auto", function(v)
+    set("render_scale", type(v) == "number" and v or nil)
+  end)
 end
 
 -- Interface size: a fader from 70% to 125% and an Auto key.
@@ -557,6 +627,7 @@ local function display_rows(out)
   out[#out + 1] = choice("fs", "Window", { { label = "Fullscreen", value = true },
     { label = "Windowed", value = false } }, fs == true, function(v) set("fullscreen", v) end)
   mode_rows(out)
+  render_scale_rows(out)
   out[#out + 1] = choice("vs", "Vsync", { { label = "On", value = "On" },
     { label = "Adaptive", value = "Adaptive" }, { label = "Off", value = "Off" } },
     (app and app.vsync and app.vsync()) or get("vsync"), function(v) set("vsync", v) end)
@@ -569,7 +640,7 @@ local function display_rows(out)
   out[#out + 1] = on_off("dyn", "Dynamic resolution", get("dynamic_res"),
     function(v) set("dynamic_res", v) end)
   out[#out + 1] = hint("dh", "Dynamic resolution lowers the render scale on its own when a frame "
-    .. "runs long, up to the quality level's own. Full screen switches the monitor to the "
+    .. "runs long, up to the render scale. Full screen switches the monitor to the "
     .. "resolution; windowed, the window takes that size. F11 or Alt+Enter also switch "
     .. "fullscreen, and the editor's own window ignores all of it.")
 end

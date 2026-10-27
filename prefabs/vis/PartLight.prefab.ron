@@ -84,14 +84,15 @@
     (
         name: "Lamp",
         transform: (
-            translation: (0.6, 0.0, 0.0),
-            rotation: (0.0, 0.0, 0.0, 1.0),
+            translation: (0.18, 0.0, 0.0),
+            rotation: (0.0, -0.70710677, 0.0, 0.70710677),
             scale: (1.0, 1.0, 1.0),
         ),
         matter: PointLight(
             color: (1.0, 0.94, 0.82),
             intensity: 0.0,
-            range: 16.0,
+            range: 30.0,
+            spot: Some((angle: 55.0, softness: 0.45)),
         ),
         scripts: [],
         parent: Some(0),

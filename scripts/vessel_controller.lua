@@ -8246,6 +8246,29 @@ function r2HasFrontPart(bp, gone)
   return false
 end
 
+-- The way the rider faces, level (vessel frame): the seat the crew sits in
+-- (stationUid), else the craft's command seat, else the lowest-uid seat
+-- aboard. nil with no seat, or one that faces up or down.
+function r2SeatFront()
+  local function isSeat(d) return d and ((d.seat or 0) == 1 or d.seat == true) end
+  local d
+  for _, u in ipairs({ stationUid or false, pod_uid or false }) do
+    local q = u and bp_by_uid[u]
+    if not d and q and not integ.gone[u] and isSeat(q) then d = q end
+  end
+  if not d then
+    local bu
+    for u, q in pairs(bp_by_uid) do
+      if not integ.gone[u] and isSeat(q) and (not bu or u < bu) then d, bu = q, u end
+    end
+  end
+  if not d then return nil end
+  local X = r2_basis(d.yaw, d.pitch, d.roll)
+  local l = math.sqrt(X[1] * X[1] + X[3] * X[3])
+  if l < 0.5 then return nil end
+  return { x = X[1] / l, z = X[3] / l }
+end
+
 -- A BIKE'S FRONT IS ITS FORK (playtest 2026-10-26: "sometimes it gets the
 -- direction wrong and it drives better backwards"). The front came from the
 -- seat's facing, so a saddle put on the other way round made the swing arm
@@ -8276,7 +8299,7 @@ function r2MotoFront(E)
   end
   local l = math.sqrt(dx * dx + dz * dz)
   if l < 1e-3 then return nil end
-  return { x = dx / l, z = dz / l }
+  return { x = dx / l, z = dz / l }, nf
 end
 
 -- A FRONT THE WHEELS CAN'T ROLL ALONG (a seat or a probe core put on
@@ -8604,8 +8627,25 @@ local function r2_scan(node)
   R2.fwdWhy = "seat or command part"
   -- a bike's front is its FORK (and a swing arm's other end), whichever way
   -- the saddle was put on (r2MotoFront)
-  local mf = r2MotoFront(E)
-  if mf then R2.fwd, R2.fwdWhy = mf, "fork / swing arm" end
+  local mf, nfork = r2MotoFront(E)
+  if mf then
+    R2.fwd, R2.fwdWhy = mf, "fork / swing arm"
+    -- …a swing arm alone only says which LINE the bike runs on; which end
+    -- is the front is then the rider's: the seat the crew sits in (or the
+    -- craft's seat), when it faces along that line (playtest 2026-10-27:
+    -- "put the seat facing forwards"). A fork always leads: the bars must
+    -- be at the front, or the balance (motoBike) steers out of the lean.
+    local sf = r2SeatFront()
+    if sf then
+      local dd = sf.x * mf.x + sf.z * mf.z
+      if dd < -0.7 and (nfork or 0) == 0 then
+        mf = { x = -mf.x, z = -mf.z }
+        R2.fwd, R2.fwdWhy = mf, "the seat (along the swing arm's line)"
+      elseif dd < -0.7 then
+        log("moto: the seat faces the swing arm, not the fork: the fork's end is the front")
+      end
+    end
+  end
   -- a craft flown nose-first (a plane): its front is the nose — a cockpit's,
   -- an Aircraft's, or a tilted command part's when nothing else says where
   -- the front is (a rover's probe core lying on its side is not a nose)
@@ -8988,7 +9028,10 @@ function motoRiderShape(node)
   local seat = d and ((d.seat or 0) == 1 or d.seat == true)
   local on = crewAboard == true and seat and not destroyed
   if on and not R2.riderShape then
-    R2.riderShape = { r = rb.radius, h = rb.height, id = a.id }
+    -- (never remember a point as the size to give back: another craft's
+    -- seat may have shrunk it already — the walker's own size then)
+    local big = (rb.radius or 0) > RIDER_R * 1.5
+    R2.riderShape = { r = big and rb.radius or 0.33, h = big and rb.height or 2.0, id = a.id }
     rb.radius, rb.height = RIDER_R, 2 * RIDER_R
   elseif not on and R2.riderShape then
     local k = R2.riderShape
@@ -9782,8 +9825,16 @@ function motoScan()
         D = { F.z, 0, -F.x }
         w.realigned = true
       end
-      local a, st0, raked = L.suspAxis(s.m, rr.X, rr.Y, rr.Z, D)
-      s.axis, s.raked = a, raked
+      -- the joint's spring slides along the craft's UP, never the part's
+      -- raked axis: the engine budgets a tyre's grip on that spring's push,
+      -- and on a leaning axis the drive's own share unloaded it going
+      -- forward and loaded it in reverse (auto_drive.jointAxis; playtest
+      -- 2026-10-27, the bike that was "a beast" only backwards)
+      local a, st0, own
+      if L.jointAxis then a, st0, own = L.jointAxis(s.m, rr.X, rr.Y, rr.Z, D)
+      else a, st0 = L.suspAxis(s.m, rr.X, rr.Y, rr.Z, D); own = a end
+      s.axis, s.partAxis = a, own
+      s.raked = own and math.abs(own[2] or 1) < 0.999 or false
       w.steer0 = st0
       local rd = L.rollDir(L.axleOf(a, st0), { 0, 1, 0 })
       local along = rd[1] * F.x + rd[3] * F.z
@@ -10495,7 +10546,19 @@ function r2Cleanup()
   R2.shells = {}
 end
 
-function onDestroy(node) r2Cleanup() end
+function onDestroy(node)
+  r2Cleanup()
+  -- a craft gone under its rider (recovered, despawned) gives the capsule
+  -- back too: nothing of this controller runs again to do it
+  local k = R2.riderShape
+  if k then
+    R2.riderShape = nil
+    local a = find and find("Astronaut")
+    local getc = a and (a.getComponent or a.getcomponent)
+    local rb = getc and getc(a, "RigidBody")
+    if rb and a.id == k.id then rb.radius, rb.height = k.r or 0.33, k.h or 2.0 end
+  end
+end
 
 -- Standing on its own tyres counts as on the ground (the hull's compound is
 -- not touching anything: the tyre bodies carry it). flight_ops and the

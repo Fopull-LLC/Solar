@@ -636,8 +636,11 @@ local function animate(node, dt, spd, on_ground, jumped, swimming, landed_at)
   end
 end
 
+-- The walker's capsule as the scene builds it (the seat-shrink heal in update).
+WALK_R, WALK_H = 0.33, 2.0
 function start(node)
   rig = node:getcomponent("RigidBody")
+  if rig and (rig.radius or 0) >= 0.1 then WALK_R, WALK_H = rig.radius, rig.height or WALK_H end
   cam = ref("planet_camera")
   -- SALVAGE (scripts/salvage.lua): the crates a blackout leaves. Its node is
   -- spawned when the scene carries none, as the aero library is.
@@ -1560,6 +1563,19 @@ function update(node, dt)
   -- head. The camera owns the decision now; this only asks, and only heals the
   -- case the camera isn't responsible for.
   onFoot = true
+  -- ON FOOT THE CAPSULE IS OURS, FULL SIZE (playtest 2026-10-27: after a bike
+  -- survey drive the crew sank into the ground and the camera went under it
+  -- "for the rest of the mission"). A seat shrinks it to a point while they
+  -- ride (vessel_controller motoRiderShape) and that craft's controller gives
+  -- it back — unless the controller never ran again (the bike recovered or
+  -- despawned under the rider), or a second craft's shrink remembered the
+  -- point as the size to give back. A point capsule holds the body's centre on
+  -- the ground: the model stood a metre deep, and the camera's pivot with it.
+  -- (scenes/system.ron: radius 0.33, height 2.0)
+  if rig and (rig.radius or WALK_R) < 0.1 then
+    rig.radius, rig.height = WALK_R, WALK_H
+    log("walker: the capsule was still a seat's point on foot — given its size back")
+  end
   local cam_hides = cam ~= nil and cam.hidesBody == true
   if not node.visible and not cam_hides then node.visible = true end
   if model then model.visible = node.visible end
@@ -1786,8 +1802,18 @@ function update(node, dt)
     local want
     if aiming and tb ~= nil and tb.inUse == true and tb.aimX then
       -- The tool aims through the cursor, which need not be the middle of the
-      -- view: face the point it is working.
-      want = local_yaw(node, tb.aimX - node.x, tb.aimY - node.y, tb.aimZ - node.z)
+      -- view: face the point it is working — WHERE IT IS NOW. `aimX` is a
+      -- world point of the belt's last update, which runs after this one or
+      -- a frame before it, and the planet carries both the crew and the
+      -- target 1.5-6 m a tick in between: with a plant three metres off,
+      -- that stale point lay behind, beside or above the crew and the body
+      -- turned to it, gun and all, with the tether still on the plant
+      -- (playtest 2026-10-27, "turned off into the sky and fired upward").
+      -- aimNow is the same point held in the planet's frame.
+      local ax, ay, az = nil, nil, nil
+      if tb.aimNow then ax, ay, az = tb.aimNow() end
+      if not ax then ax, ay, az = tb.aimX, tb.aimY, tb.aimZ end
+      want = local_yaw(node, ax - node.x, ay - node.y, az - node.z)
     elseif aiming then
       want = local_yaw(node, fx, fy, fz)
     elseif spd > 0.3 then

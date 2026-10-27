@@ -112,6 +112,17 @@ the joint's axis, so a raked axis can carry a fork on a craft built facing
 ±X (the seat's default). On a craft built facing ±Z it can't: the fork then
 steers about the vertical (it still works; only the rake is lost).
 
+**The joint slides upright (playtest 2026-10-27).** "The bike drives much
+better BACKWARDS than forwards." The engine budgets a tyre's grip on the
+wheel joint's spring push along the joint's axis (`joints.rs tyre_grip`,
+`load`). On an axis that leans back, the drive's own share along it unloads
+the spring going forward and loads it in reverse: a tyre may push
+μN cos r / (1 ± μ sin r). The user's dirt bike had its swing arm turned 45°
+on its mount: 0.45 N forward, more than the motor backwards. Every suspension
+joint now slides along the craft's up (`auto_drive.jointAxis`); the fork's
+rake and a turned arm are only drawn. (Engine card: the grip budget should be
+the contact's normal load, not the spring impulse along the axis.)
+
 ## 3b. Building it any way you like (playtest 2026-10-26)
 
 "motorcycles are hard to build right… sometimes it gets the direction wrong

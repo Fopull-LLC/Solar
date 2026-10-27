@@ -871,14 +871,17 @@ end
 -- streams in under props that may have settled first) — the fields are told
 -- the whole footprint changed: they drop their props there again and judge
 -- them against the paving again (flora_field groundChanged).
+-- `force`: the session's look, for saved ground streamed in under props
+-- (no edit the engine saw). A grade that just landed is the engine's own to
+-- re-drop on 0.117.1+ (flora_field groundChanged), so it is not forced.
 local ground_told = false
-function tell_ground()
+function tell_ground(force)
   local ff = ref("flora_field")
   local b = baseBody and space.body(baseBody)
   if not (ff and ff.groundChanged and b and footprint) then return false end
   ground_told = true
   ff.groundChanged(b.x + footprint.x, b.y + footprint.y, b.z + footprint.z,
-    FOOTPRINT_RADIUS + GRADE.r * 1.25 + 12.0)
+    FOOTPRINT_RADIUS + GRADE.r * 1.25 + 12.0, force == true)
   return true
 end
 
@@ -1944,7 +1947,7 @@ function update(node, dt)
   -- twice.
   if not ground_told and sited and not want_spawn and not grading() and not grade_later
      and not (terrain.busy and terrain.busy()) then
-    tell_ground()
+    tell_ground(true)
   end
   if not want_spawn and recheck_at and time >= recheck_at and F and baseBody and not grade_busy() and not grade_later then
     recheck_at = nil

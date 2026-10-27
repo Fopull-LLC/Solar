@@ -339,6 +339,57 @@ _G.camera = { screenSize = function() return 1920, 1080 end }
 modes_set = {}
 load_settings().start({})
 ok(#modes_set == 0, "...and a scene load in a window already that size does not switch it again")
+-- WAYLAND (playtest dfb3e17: "resolution can't be changed, it's locked to the
+-- monitor's"): each monitor offers its current mode only. Full screen says so
+-- and points at the render scale; a WINDOW may be any size, so windowed the
+-- row steps through window sizes up to the monitor's.
+app.monitors = function()
+  return { { index = 1, name = "DP-1", x = 0, y = 0, width = 2560, height = 1440, refresh = 144, current = true } }
+end
+app.displayModes = function() return { { width = 2560, height = 1440, refresh = 144, monitor = 1 } } end
+_G.camera = { screenSize = function() return 2560, 1440 end }
+modes_set = {}
+local stw = load_settings()
+stw.start({})
+stw.showTab("display")
+app_state.fullscreen = true
+ok(find_el(stw.rows(580), "resw") ~= nil, "full screen with one mode: a line saying why, and what to do instead")
+ok(find_el(stw.rows(580), "rsc") ~= nil, "...and a Render scale row")
+app_state.fullscreen = false
+local function resw_text() local v = find_el(stw.rows(580), "res"); local t; walk(v, function(e) if e.key == "v" then t = e.text end end); return t end
+ok(find_el(stw.rows(580), "resw") == nil and resw_text():find("1920 × 1080") and resw_text():find("window"),
+  "windowed: window sizes, starting at the saved one: " .. tostring(resw_text()))
+find_el(stw.rows(580), "dn").onClicked()
+ok(resw_text():find("1600 × 900"), "‹ steps down through window sizes the monitor never offered: " .. resw_text())
+modes_set = {}
+find_el(stw.rows(580), "go").onClicked()
+ok(#modes_set == 1 and modes_set[1].width == 1600 and modes_set[1].fullscreen == false,
+  "Apply makes a window that size (fullscreen = false): " .. #modes_set .. " " .. tostring(modes_set[1] and modes_set[1].width) .. " " .. tostring(modes_set[1] and modes_set[1].fullscreen))
+local ws = stw.windowSizes(1920, 1080, {})
+ok(ws[1].w == 1920 and ws[#ws].w == 1024, "window sizes stop at the monitor's own size")
+-- a saved window size is left alone while the game is full screen…
+modes_set = {}
+_G.camera = { screenSize = function() return 2560, 1440 end }
+app_state.fullscreen = true
+stw.set("display", stw.get("display"))
+ok(#modes_set == 0, "a window size is not forced on a full screen")
+-- …and comes back when the game goes back to a window
+stw.set("fullscreen", false)
+ok(#modes_set == 1 and modes_set[1].width == 1600 and modes_set[1].fullscreen == false,
+  "back to Windowed: the chosen window size, not the monitor's")
+-- RENDER SCALE: reaches graphics.lua, and Auto hands it back to the level
+local gx_scale = "unset"
+envs.graphics.setScale = function(v) gx_scale = v end
+local rsc = find_el(stw.rows(580), "rsc")
+local b67
+walk(rsc, function(e) if e.text == "67%" then b67 = e end end)
+b67.onClicked()
+ok(gx_scale == 0.67 and stw.get("render_scale") == 0.67, "Render scale 67% reaches graphics.setScale")
+walk(find_el(stw.rows(580), "rsc"), function(e) if e.text == "Auto" then e.onClicked() end end)
+ok(gx_scale == nil and stw.get("render_scale") == nil, "Auto gives the scale back to the graphics level")
+envs.graphics.setScale = nil
+app_state.fullscreen = true
+
 app.monitors = function() return {} end
 ok(find_el(st5.rows(580), "res") == nil and find_el(st5.rows(580), "resn") ~= nil,
   "no window (floptle run): no Resolution row, a line saying it follows the window")

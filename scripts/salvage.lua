@@ -307,7 +307,24 @@ local function blocked()
   return false
 end
 
+-- ONE LIBRARY. planet_walker spawns a SalvageLib when the scene has none; a
+-- second instance (a spawn racing a scene that already had one) would draw
+-- every marker again and keep a crate node of its own. Only the first
+-- instance findScripts lists does anything; asked once a second.
+local sole_t, sole_ok = -10, true
+local function sole(node)
+  if not (findScripts and node) then return true end
+  local t = time or 0
+  if t - sole_t < 1.0 then return sole_ok end
+  sole_t = t
+  local all_s = findScripts("salvage") or {}
+  sole_ok = #all_s <= 1 or all_s[1].node == nil or all_s[1].node == node
+  if not sole_ok and log then log("salvage: a second SalvageLib is standing down") end
+  return sole_ok
+end
+
 function update(node, dt)
+  if not sole(node) then near = nil return end
   local cs = all()
   -- every crate whose planet is here has a node (a second's cadence: a
   -- spawn is asynchronous and a planet streams in when it streams in)
@@ -366,12 +383,89 @@ local function fmt_m(d)
   return string.format("%.0f m", d)
 end
 
+-- The craft being piloted, for the markers in the seat: a pack is usually
+-- fetched with a vehicle, and the marker used to vanish the moment you got in
+-- one (playtest). Asked only while the crew is not on foot.
+local function rider()
+  for _, v in ipairs(findScripts and findScripts("vessel_controller") or {}) do
+    if v.piloting and v.node and v.node.valid ~= false then return v.node end
+  end
+  return nil
+end
+
+-- The crate the objectives card follows (its switcher, objectives.lua): drawn
+-- brighter, named as the objective, and from any distance on its world.
+local function picked_id()
+  local ob = ref("objectives")
+  return ob and ob.selectedPack and ob.selectedPack() or nil
+end
+
+-- What the markers do for one crate, from an observer `d` metres away: nil
+-- (not drawn), "mark" (an ordinary marker) or "goal" (the card's objective).
+-- Pure, for the test.
+function markerKind(d, picked, range)
+  if picked then return "goal" end
+  if d <= (range or 3000) then return "mark" end
+  return nil
+end
+
+-- ONE MARKER PER PACK (playtest: the SUIT PACK label drawn twice over itself,
+-- a little offset). Crates lying within MERGE_R of each other on the same
+-- world — a death drop beside a drowning's, or a double drop — are one place
+-- to go and get one marker, their kilograms summed. Pure, for the test:
+-- the crates to mark from (ox,oy,oz) on world `here` → { at = entry, d, kg,
+-- n, label, goal }, the picked one (the objectives card's) first, then
+-- nearest first. `skip` is the crate the E prompt is already about.
+MERGE_R = 25.0
+function markerGroups(entries, ox, oy, oz, here, pid, range, skip)
+  local groups = {}
+  for _, e in ipairs(entries or {}) do
+    if e.x and e.body == here and e.id ~= skip then
+      local d = math.sqrt((ox - e.x) ^ 2 + (oy - e.y) ^ 2 + (oz - e.z) ^ 2)
+      local picked = pid ~= nil and pid == e.id
+      local g = nil
+      for _, h in ipairs(groups) do
+        local a = h.at
+        if (a.x - e.x) ^ 2 + (a.y - e.y) ^ 2 + (a.z - e.z) ^ 2 <= MERGE_R * MERGE_R then g = h break end
+      end
+      if g then
+        g.kg, g.n = g.kg + (e.kg or 0), g.n + 1
+        g.goal = g.goal or picked
+        if picked or d < g.d then g.at, g.d = e, d end
+      else
+        groups[#groups + 1] = { at = e, d = d, kg = e.kg or 0, n = 1, goal = picked }
+      end
+    end
+  end
+  local out = {}
+  for _, g in ipairs(groups) do
+    local kind = markerKind(g.d, g.goal, range)
+    if kind then
+      local e = g.at
+      g.goal = kind == "goal"
+      g.label = (g.n > 1 and string.format("%d PACKS", g.n))
+        or ((e.n and e.n ~= "Suit pack") and e.n:upper() or "SUIT PACK")
+      out[#out + 1] = g
+    end
+  end
+  table.sort(out, function(a, b)
+    if a.goal ~= b.goal then return a.goal end
+    return a.d < b.d
+  end)
+  return out
+end
+
 function lateUpdate(node, dt)
+  if not sole(node) then return end
   if not (camera and camera.worldToScreen and camera.screenRect and draw and draw.text) then return end
   local pc = ref("planet_camera")
   if pc and pc.cinematic == true then return end
   local a = crew()
-  if not a or blocked() then return end
+  if blocked() then return end
+  -- In a seat (a rover, a bike, a lander) the markers measure from the craft.
+  local seat = nil
+  if not a then seat = rider(); if not seat then return end end
+  local o = a or seat
   local vx, vy, vw, vh = camera.screenRect()
   if not vw or vw <= 0 then return end
   local k = vh / uiH()
@@ -380,29 +474,36 @@ function lateUpdate(node, dt)
         16 * k, 1.0, 0.86, 0.62, 1.0)
   end
   if (params.markers or 1) < 0.5 then return end
-  local here = space.dominant and space.dominant(a.x, a.y, a.z)
-  for _, e in ipairs(list()) do
-    if e.x and e.body == here and not (near and near.id == e.id) then
-      local d = math.sqrt((a.x - e.x) ^ 2 + (a.y - e.y) ^ 2 + (a.z - e.z) ^ 2)
-      if d <= (params.marker_range or 3000) then
-        local b = space.body(e.body)
-        local ux, uy, uz = 0, 1, 0
-        if b then ux, uy, uz = unit(e.x - b.x, e.y - b.y, e.z - b.z) end
-        local sx, sy, dep, on = camera.worldToScreen(e.x + ux * 1.5, e.y + uy * 1.5, e.z + uz * 1.5)
-        local text = string.format("SUIT PACK  ·  %.0f kg  ·  %s", e.kg or 0, fmt_m(d))
-        local front = sx and ((dep and dep > 0) or on)
-        if front and sx >= vx + 40 * k and sx <= vx + vw - 40 * k and sy >= vy + 40 * k and sy <= vy + vh - 120 * k then
-          tag(sx, sy - 24 * k, text, 14 * k, 1.0, 0.80, 0.55, 1.0)
-          draw.circle(sx, sy, 5 * k, 1.0, 0.45, 0.10, 0.95)
-          draw.circleOutline(sx, sy, 10 * k, 1.0, 0.45, 0.10, 0.8, 2 * k)
-        else
-          -- off screen or behind: on the edge, on the side to turn to
-          local right
-          if sx and front then right = sx > vx + vw * 0.5 else right = not (sx and sx > vx + vw * 0.5) end
-          local ex = right and (vx + vw - 170 * k) or (vx + 170 * k)
-          tag(ex, vy + vh * 0.42, right and (text .. "  ›") or ("‹  " .. text), 14 * k, 1.0, 0.80, 0.55, 1.0)
-        end
-      end
+  local here = space.dominant and space.dominant(o.x, o.y, o.z)
+  local groups = markerGroups(list(), o.x, o.y, o.z, here, picked_id(), params.marker_range,
+    near and near.id or nil)
+  local pins = { left = 0, right = 0 }       -- edge pins stacked down each side
+  for _, g in ipairs(groups) do
+    local goal, e, d = g.goal, g.at, g.d
+    local b = space.body(e.body)
+    local ux, uy, uz = 0, 1, 0
+    if b then ux, uy, uz = unit(e.x - b.x, e.y - b.y, e.z - b.z) end
+    local sx, sy, dep, on = camera.worldToScreen(e.x + ux * 1.5, e.y + uy * 1.5, e.z + uz * 1.5)
+    local text = string.format("%s%s  ·  %.0f kg  ·  %s", goal and "◆ " or "", g.label, g.kg, fmt_m(d))
+    local tr, tg, tb = 1.0, 0.80, 0.55
+    if goal then tr, tg, tb = 1.0, 0.90, 0.70 end
+    local front = sx and ((dep and dep > 0) or on)
+    if front and sx >= vx + 40 * k and sx <= vx + vw - 40 * k and sy >= vy + 40 * k and sy <= vy + vh - 120 * k then
+      tag(sx, sy - 24 * k, text, (goal and 15 or 14) * k, tr, tg, tb, 1.0)
+      draw.circle(sx, sy, 5 * k, 1.0, 0.45, 0.10, 0.95)
+      draw.circleOutline(sx, sy, (goal and 12 or 10) * k, 1.0, 0.45, 0.10, 0.8, 2 * k)
+    else
+      -- off screen or behind: on the edge, on the side to turn to. Each
+      -- side's pins stack downwards (the objective first: groups come
+      -- sorted), so two packs off the same side never print on each other —
+      -- that read as one label drawn twice, a little offset (playtest).
+      local right
+      if sx and front then right = sx > vx + vw * 0.5 else right = not (sx and sx > vx + vw * 0.5) end
+      local side = right and "right" or "left"
+      local ex = right and (vx + vw - 170 * k) or (vx + 170 * k)
+      local ey = vy + vh * 0.36 + pins[side] * 26 * k
+      pins[side] = pins[side] + 1
+      tag(ex, ey, right and (text .. "  ›") or ("‹  " .. text), 14 * k, tr, tg, tb, 1.0)
     end
   end
 end

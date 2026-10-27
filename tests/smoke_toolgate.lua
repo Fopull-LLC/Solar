@@ -617,6 +617,19 @@ do
     "the view-model layer's bit matches project.ron [" .. table.concat(names, ",") .. "]")
 end
 
+-- THE FLIGHT CARD OVER THE CREW STRIP (playtest dfb3e17: "END FLIGHT" sat on
+-- the portraits). The strip's pixel height becomes design units through the
+-- interface's design height, not 720: at 1080p and Auto (85%, 847 units) a
+-- 210 px strip pinned 12 up stands 12 + 164.7 units tall — the old 720 sum
+-- said 152 and the card came down 12 units into it.
+do
+  local top = status.stripTopOf(-12, 210, 1080, 720 / 0.85)
+  ok(top and math.abs(top - (12 + 210 * (720 / 0.85) / 1080)) < 1e-6,
+    "the strip's top is measured in design units: " .. tostring(top))
+  ok(top > 12 + 210 * 720 / 1080 + 8, "...higher than the old 720-based lift reached")
+  ok(status.stripTopOf(-12, 0, 1080, 720) == nil, "a strip with no height lifts nothing")
+end
+
 if #failures == 0 then
   print("TOOL GATE SMOKE OK — " .. checks .. " checks passed")
   os.exit(0)

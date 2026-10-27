@@ -446,14 +446,15 @@ end
 local FLOWN = { orbitrelay = true, skycov = true, linked = true }
 
 -- The programme's step for the card, or nil when it has nothing open. In
--- flight, only a goal you meet by flying.
-local function prog_step(astro, flying)
+-- flight, only a goal you meet by flying — unless `only` names the milestone
+-- (the player picked it on the switcher, so it shows wherever they are).
+local function prog_step(astro, flying, only)
   local mi = ref("missions")
   if not (mi and mi.progActive) then return nil end
   local act = mi.progActive()
   for _, m in ipairs(act) do
     local g, i, niche = mi.progNextGoal(m.id)
-    if g and (not flying or FLOWN[g.kind]) then
+    if g and (only == nil or m.id == only) and (only ~= nil or not flying or FLOWN[g.kind]) then
       local task, hint = prog_guidance(mi, astro, m, g, niche)
       local others = {}
       for _, o in ipairs(act) do if o ~= m then others[#others + 1] = o.title end end
@@ -483,10 +484,154 @@ local function prog_brief()
   return { label = "Programme · " .. m.title, lines = open }
 end
 
+-- ── the switcher: which objective the card follows ─────────────────────────
+--
+-- The card used to pick its objective by itself — the contract, else the
+-- programme's next milestone — and a crew member's suit pack lying out there
+-- had only its own marker, drawn while you were on foot. Playtest: "I built a
+-- bike to go and get the pack and the marker vanished." Now every objective
+-- that is open is on a list, and / (or the ◂ ▸ on the card) steps through it:
+--
+--   contract:<id>   the contract on the books (missions.active)
+--   prog:<id>       a programme milestone with a goal still open
+--   pack:<id>       a suit pack in a salvage crate (salvage.lua): a drowning's
+--                   or a dead crew member's whole pack
+--
+-- The pick is kept in the save ("objectives.pick"). One that no longer exists
+-- (the contract paid, the pack recovered) falls back to the card's own choice,
+-- so nothing about the derivation above ever has to know a pick was made.
+-- The world marker and the bearing follow the pick: a facility marker is drawn
+-- here, the pack's by salvage.lua (it asks `selectedPack()`).
+PICK_KEY = "objectives.pick"
+local pick, pick_loaded = nil, false
+
+local function pick_get()
+  if not pick_loaded then
+    pick_loaded = true
+    local v = save and save.get and save.get(PICK_KEY)
+    pick = (type(v) == "string" and v ~= "") and v or nil
+  end
+  return pick
+end
+
+local function pick_set(k)
+  pick, pick_loaded = k, true
+  if save and save.set then save.set(PICK_KEY, k or "") end
+end
+
+-- Every open objective, in a fixed order: the contract, the milestones, the
+-- packs (oldest first). Each { key, kind, id, name [, pack] }.
+function objectiveList()
+  local out = {}
+  local mi = ref("missions")
+  if mi and mi.active then
+    local m = mi.byId and mi.byId(mi.active)
+    out[#out + 1] = { key = "contract:" .. tostring(mi.active), kind = "contract", id = mi.active,
+                      name = (m and m.title) or "Contract" }
+  end
+  if mi and mi.progActive and mi.progNextGoal then
+    for _, m in ipairs(mi.progActive()) do
+      if mi.progNextGoal(m.id) then
+        out[#out + 1] = { key = "prog:" .. tostring(m.id), kind = "prog", id = m.id, name = m.title }
+      end
+    end
+  end
+  local sv = ref("salvage")
+  if sv and sv.list then
+    for _, e in ipairs(sv.list()) do
+      out[#out + 1] = { key = "pack:" .. tostring(e.id), kind = "pack", id = e.id,
+                        name = e.n or "Suit pack", pack = e }
+    end
+  end
+  return out
+end
+
+-- What the card follows when nothing is picked: the contract, else the first
+-- milestone (current_step_inner's own order).
+local function auto_key(list)
+  for _, o in ipairs(list) do if o.kind == "contract" then return o.key end end
+  for _, o in ipairs(list) do if o.kind == "prog" then return o.key end end
+  return nil
+end
+
+-- The picked objective, if it is still open (else nil: the card chooses).
+local function chosen(list)
+  local k = pick_get()
+  if not k then return nil end
+  for _, o in ipairs(list) do if o.key == k then return o end end
+  return nil
+end
+
+-- Where the card is on the list: index, count.
+local function position(list)
+  local cur = (chosen(list) or {}).key or auto_key(list)
+  for i, o in ipairs(list) do if o.key == cur then return i, #list end end
+  return 0, #list
+end
+
+local describe_sig_reset   -- set below: a pick redraws the card at once
+
+-- Step to the next (dir = 1) or previous (-1) objective. → the entry, or nil
+-- when there is nothing open.
+function cycle(dir)
+  dir = (dir and dir < 0) and -1 or 1
+  local list = objectiveList()
+  local n = #list
+  if n == 0 then return nil end
+  local i = position(list)
+  local ni
+  if i == 0 then ni = (dir < 0) and n or 1 else ni = ((i - 1 + dir) % n) + 1 end
+  pick_set(list[ni].key)
+  if describe_sig_reset then describe_sig_reset() end
+  return list[ni]
+end
+
+-- The key of what the card follows now ("pack:3", "contract:x", …) or nil.
+function selected()
+  local list = objectiveList()
+  return (chosen(list) or {}).key or auto_key(list)
+end
+
+-- The id of the salvage crate the card follows, or nil (salvage.lua draws
+-- that crate's marker as THE objective, and draws it from a vehicle too).
+local picked_pack = nil
+function selectedPack() return picked_pack end
+
+-- A suit pack as the card's step. `spot` is a world point; describe() turns it
+-- into a distance and a bearing from whoever is moving (crew or craft).
+local function pack_step(o, afoot)
+  local e = o.pack or {}
+  local named = e.n and e.n ~= "Suit pack" and e.n or nil
+  return { key = o.key, label = "Recovery",
+           task = named and ("Recover " .. named .. ".") or "Recover the suit pack.",
+           hint = afoot and "Walk up to the crate and press E: whatever fits goes back in your pack."
+                         or "Get close, step out (F) and press E at the crate.",
+           pay = string.format("%.0f kg in the crate", e.kg or 0),
+           spot = { x = e.x, y = e.y, z = e.z, body = e.body, name = named or "Suit pack" } }
+end
+
+-- The craft being piloted (its node is the one moving), or nil.
+local function piloted_node()
+  for _, v in ipairs(findScripts and findScripts("vessel_controller") or {}) do
+    if v.piloting and v.node and v.node.valid ~= false then return v.node end
+  end
+  return nil
+end
+
 -- The step, as a table the card renders. `at` is the facility to walk to.
 -- Hints are ONE short sentence: the card is read at a glance while walking.
 local current_step_inner
-local function current_step(astro)
+local function current_step(astro, o)
+  -- A pick other than the contract replaces the derivation — once the base
+  -- is up (the siting step is the one thing nothing outranks).
+  if o and o.kind ~= "contract" then
+    local bf = ref("base_facilities")
+    if not (bf and not bf.sited) then
+      local st
+      if o.kind == "pack" then st = pack_step(o, true) else st = prog_step(astro, false, o.id) end
+      if st then return st end
+    end
+  end
   local st = current_step_inner(astro)
   if st and not st.prog and st.key ~= "siting" then st.progBrief = prog_brief() end
   return st
@@ -651,11 +796,44 @@ local function row(key, style, text)
   return { "text", key = key, style = style, w = "100%", h = "fit", wrap = true, text = text }
 end
 
-local function describe(step, astro)
-  local rows = {
-    row("label", "hud/label", step.label or "Next"),
-    row("task", "hud/task", step.task or ""),
+-- The switcher's strip along the top of the card: ◂  OBJECTIVE 2 / 3 · /  ▸.
+-- Only when there is more than one thing to follow.
+local function pick_row(i, n)
+  return { "row", key = "pick", w = "100%", h = "fit", gap = 6, align = "center",
+    { "button", key = "pickPrev", style = "hud/button", w = 22, h = 18, text = "◂", textAlign = "center",
+      onClicked = function() cycle(-1) end },
+    { "text", key = "pickText", style = "hud/label", w = "grow", h = "fit",
+      text = string.format("Objective %d / %d   ·   /", i, n) },
+    { "button", key = "pickNext", style = "hud/button", w = 22, h = 18, text = "▸", textAlign = "center",
+      onClicked = function() cycle(1) end },
   }
+end
+
+local function describe(step, astro, pick_i, pick_n)
+  local rows = {}
+  if pick_n and pick_n > 1 then rows[#rows + 1] = pick_row(math.max(pick_i or 1, 1), pick_n) end
+  rows[#rows + 1] = row("label", "hud/label", step.label or "Next")
+  rows[#rows + 1] = row("task", "hud/task", step.task or "")
+
+  -- A point in the world (a suit pack): the distance from whoever is moving,
+  -- and the bearing against the view.
+  local s = step.spot
+  if s and s.x and astro then
+    local ox, oy, oz = world_of(astro)
+    local here = space.dominant and space.dominant(ox, oy, oz)
+    if s.body and here and s.body ~= here then
+      rows[#rows + 1] = row("where", "hud/where", string.format("› %s — on %s", s.name or "It", s.body))
+    else
+      local d = math.sqrt((s.x - ox) ^ 2 + (s.y - oy) ^ 2 + (s.z - oz) ^ 2)
+      if d > 4.0 then
+        rows[#rows + 1] = row("where", "hud/where", string.format("› %s — %s", s.name or "It", fmt_m(d)))
+        local way = bearing_to(astro, { worldX = s.x, worldY = s.y, worldZ = s.z })
+        if way then rows[#rows + 1] = row("way", "hud/where", "   " .. way) end
+      else
+        rows[#rows + 1] = row("where", "hud/where", "› You're at the crate — press E")
+      end
+    end
+  end
 
   -- Where it is. Only while you're not already standing at it — a direction you
   -- have already followed is noise.
@@ -757,21 +935,29 @@ end
 -- stand down entirely, and the flight HUD printed the goals into its text dump
 -- instead — so the one thing you were up there to do was the one thing drawn
 -- as fine print.
-local function should_show(astro)
+local function should_show(astro, o)
   if params.enabled < 0.5 or not shown then return false end
   -- `onFoot` is already false while the world loads, so there is no separate
   -- loading check to make here.
   if not crew_afoot() then
     local mi = ref("missions")
-    if not (in_cockpit() and mi and (mi.active or prog_flown(mi))) then return false end
+    -- …and a pick that isn't the contract (a pack to fetch, a milestone)
+    -- follows you into the seat: that is what the player chose to follow.
+    local picked = o ~= nil and o.kind ~= "contract"
+    if not (in_cockpit() and (picked or (mi and (mi.active or prog_flown(mi))))) then return false end
   end
   return not panel_up()
 end
 
 -- The flying version of the card: which contract, its goals ticking, what it
 -- pays. No directions and no brief — you are already doing it.
-local function flight_step()
+local function flight_step(o)
   local mi, co = ref("missions"), ref("company")
+  if o and o.kind == "pack" then return pack_step(o, false) end
+  if o and o.kind == "prog" then
+    local ps = prog_step(find("Astronaut"), true, o.id)
+    if ps then ps.hint = nil; ps.foot = nil; return ps end
+  end
   if mi and not mi.active then
     local ps = prog_step(find("Astronaut"), true)
     if ps then ps.hint = nil; return ps end
@@ -783,26 +969,66 @@ local function flight_step()
            pay = (m and co) and ("Pays " .. co.money(m.reward)) or nil }
 end
 
+-- The switcher's key. Not a letter (every one is taken on foot or in the
+-- seat) and not reserved by the flight controls (controls.lua RESERVED).
+SWITCH_KEY = "/"
+
+-- May the switcher's key act? Not in the builder, not behind a panel, not
+-- while a name is being typed.
+local function switch_ok()
+  local gmo = ref("game_manager")
+  if gmo and gmo.inputOwner == "builder" then return false end
+  local cr = ref("crew_roster_panel")
+  if cr and cr.typing and cr.typing() then return false end
+  return not panel_up()
+end
+
+describe_sig_reset = function() describe_sig = nil end
+
+-- A signature of the description: every key, style and text in it, nested
+-- rows included (the switcher strip is a row of three).
+local function sig_of(e, acc)
+  acc[#acc + 1] = tostring(e.key) .. "\1" .. tostring(e.style) .. "\1" .. tostring(e.text)
+  for _, c in ipairs(e) do
+    if type(c) == "table" then sig_of(c, acc) end
+  end
+  for _, c in ipairs(e.items or {}) do sig_of(c, acc) end
+  return acc
+end
+
 function update(node, dt)
   if not el then el = node:getcomponent("UiElement") end
   local gmo = ref("game_manager")
   if input.pressed("o") and not (gmo and gmo.inputOwner == "builder") then shown = not shown end
+  -- / steps to the next objective (and brings a card hidden with O back).
+  if input.pressed("/") and switch_ok() then
+    if cycle(1) then shown = true end
+  end
 
   local astro = find("Astronaut")
+  local afoot = crew_afoot()
+  local list = objectiveList()
+  local o = chosen(list)
+  picked_pack = (o and o.kind == "pack") and o.id or nil
   -- The completion banner outranks everything except a panel: it is the game's
   -- one answer to "did that count?", and the moment it has to be given is
   -- usually the moment the card would otherwise be hidden.
   local paid = (params.enabled >= 0.5 and shown and not panel_up()) and banner() or nil
-  if not paid and not should_show(astro) then
+  if not paid and not should_show(astro, o) then
     if el then el.visible = false end
     marker_at = nil
     return
   end
 
-  local step = paid or (crew_afoot() and current_step(astro) or flight_step())
+  local step = paid or (afoot and current_step(astro, o) or flight_step(o))
   headline, targetName = step.task, step.at
-  marker_at = crew_afoot() and step.at or nil
+  marker_at = afoot and step.at or nil
   if el then el.visible = true end
+
+  -- Distances and bearings are measured from whoever is moving: the crew on
+  -- foot, the craft in the seat.
+  local obs = astro
+  if not afoot and step.spot then obs = piloted_node() or astro end
 
   -- Described every frame, HANDED to the UI only when a word changed: the
   -- bearing line changes with every step you take, and `ui.make` RECONCILES
@@ -810,10 +1036,9 @@ function update(node, dt)
   -- worst) for a card that reads the same from one frame to the next. The
   -- description is a few strings; comparing them is nothing. Every row carries
   -- a `key`, so a row that stays is the same entity from frame to frame.
-  local desc = describe(step, astro)
-  local sig = {}
-  for i, r in ipairs(desc.items) do sig[i] = r.key .. "\1" .. r.style .. "\1" .. r.text end
-  sig = table.concat(sig, "\2")
+  local pi, pn = position(list)
+  local desc = describe(step, obs, pi, paid and 0 or pn)
+  local sig = table.concat(sig_of(desc, {}), "\2")
   if sig ~= describe_sig then
     describe_sig = sig
     ui.make(node, desc)

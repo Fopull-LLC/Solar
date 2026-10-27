@@ -3591,37 +3591,60 @@ end
 -- Generously sampled: a big rotate ring at a shallow angle projects to a long
 -- screen arc, so we walk it densely and use a fat pixel radius — aiming at a
 -- ring should GRAB it, never fall through to a deselect.
-local GIZ_HIT_PX = 22
-local function gizmo_hit(p, tool, len, rad)
+-- MEASURED TO THE DRAWN LINE, NOT TO ITS SAMPLES (playtest 2026-10-27: "rotating
+-- or moving parts with the gizmo keeps accidentally picking up and moving
+-- parts"). The ring's 48 points and the shaft's 10 were tested as points: on a
+-- ring a few hundred pixels across, the gap between two points left a press
+-- right ON the band 30–40 px from either, a miss — and the press fell through
+-- to the part under it, which a 6 px drag then picked up. Now the distance is
+-- to the segment between neighbouring points (a ring is a polyline, an arrow
+-- its shaft to the tip of its cone). `slack` (px) widens the catch: a press
+-- inside the gizmo's footprint takes the nearest handle within GIZ_NEAR_PX.
+GIZ_HIT_PX = 22
+GIZ_NEAR_PX = 40
+function gizmoSegD2(mx, my, ax, ay, bx, by)
+  local vx, vy = bx - ax, by - ay
+  local l2 = vx * vx + vy * vy
+  local t = 0
+  if l2 > 1e-9 then t = math.max(0, math.min(1, ((mx - ax) * vx + (my - ay) * vy) / l2)) end
+  local px, py = ax + vx * t - mx, ay + vy * t - my
+  return px * px + py * py, t
+end
+local function gizmo_hit(p, tool, len, rad, slack)
   local mx, my = input.mouse()
-  local best, best_kind, best_d = nil, nil, GIZ_HIT_PX * GIZ_HIT_PX
+  local lim = slack or GIZ_HIT_PX
+  local best, best_kind, best_d = nil, nil, lim * lim
   local best_pt = nil
   if tool == "rotate" then
     for ai, a in ipairs(gizmoAxes(p, tool)) do
       local ux, uy, uz, vx2, vy2, vz2 = ring_basis(a)
-      for k = 0, 47 do
+      local psx, psy, pon, pw = nil, nil, false, nil
+      for k = 0, 48 do
         local t = k * (2 * math.pi / 48)
         local cx = p.x + (ux * math.cos(t) + vx2 * math.sin(t)) * rad
         local cy2 = p.y + (uy * math.cos(t) + vy2 * math.sin(t)) * rad
         local cz = p.z + (uz * math.cos(t) + vz2 * math.sin(t)) * rad
         local sx, sy, on = screen_of(cx, cy2, cz)
-        if on then
-          local d = (sx - mx) ^ 2 + (sy - my) ^ 2
-          if d < best_d then best, best_kind, best_d = ai, "turn", d; best_pt = { x = cx, y = cy2, z = cz } end
+        if on and pon then
+          local d, f = gizmoSegD2(mx, my, psx, psy, sx, sy)
+          if d < best_d then
+            best, best_kind, best_d = ai, "turn", d
+            local w = { x = cx, y = cy2, z = cz }
+            if f < 0.5 and pw then w = pw end
+            best_pt = w
+          end
         end
+        psx, psy, pon, pw = sx, sy, on, { x = cx, y = cy2, z = cz }
       end
     end
   else
     for ai, a in ipairs(gizmoAxes(p, tool)) do
-      -- Test many points along the shaft so grabbing anywhere on the arrow
-      -- (not just the tip) works — much more forgiving.
-      for s = 2, 11 do
-        local f = len * s / 11
-        local sx, sy, on = screen_of(p.x + a.x * f, p.y + a.y * f, p.z + a.z * f)
-        if on then
-          local d = (sx - mx) ^ 2 + (sy - my) ^ 2
-          if d < best_d then best, best_kind, best_d = ai, "move", d end
-        end
+      -- the whole arrow, from a little out of the centre to the cone's tip
+      local x0, y0, on0 = screen_of(p.x + a.x * len * 0.15, p.y + a.y * len * 0.15, p.z + a.z * len * 0.15)
+      local x1, y1, on1 = screen_of(p.x + a.x * len, p.y + a.y * len, p.z + a.z * len)
+      if on0 and on1 then
+        local d = gizmoSegD2(mx, my, x0, y0, x1, y1)
+        if d < best_d then best, best_kind, best_d = ai, "move", d end
       end
     end
   end
@@ -6613,20 +6636,38 @@ function idleTick(dt, clicked, lmb, released, cam_busy)
         return
       end
     end
-    local keep = false
-    if sel and giz_len and not hover_uid then
+    -- INSIDE THE GIZMO'S FOOTPRINT the press is the gizmo's (playtest
+    -- 2026-10-27: a press just off a ring or an arrow, over a part, became a
+    -- pick-up the moment the mouse moved 6 px). A near miss takes the nearest
+    -- handle within GIZ_NEAR_PX; further off, a click still selects the part
+    -- under it, but a drag never lifts one (`giz`) — the Move tool (5) does.
+    local keep, giz = false, false
+    if sel and giz_len then
       local gx, gy, gr = gizmo_footprint_px(sel, tool, giz_len, giz_rad)
-      keep = gx ~= nil and (mx - gx) ^ 2 + (my - gy) ^ 2 <= gr * gr
+      giz = gx ~= nil and (mx - gx) ^ 2 + (my - gy) ^ 2 <= gr * gr
+      if giz then
+        local kind, ai, gpt = gizmo_hit(sel, tool, giz_len, giz_rad, GIZ_NEAR_PX)
+        if kind then
+          local ka = gizmoAxes(sel, tool)[ai]
+          gizmo_drag = { uid = selected_uid, kind = kind, axis = ai, lmx = mx, lmy = my,
+                         k = { x = ka.x, y = ka.y, z = ka.z }, P = gpt, rad = giz_rad }
+          if W.hist then W.hist:seal() end
+          return
+        end
+      end
+      keep = giz and not hover_uid
     end
     W.press = { x = mx, y = my, uid = hover_uid, shift = input.key("shift"), ctrl = input.key("ctrl"),
-                alt = input.key("alt"), t = time, keep = keep }
+                alt = input.key("alt"), t = time, keep = keep, giz = giz }
   end
   local pr = W.press
   if pr then
     if lmb then
       if not pr.drag and (mx - pr.x) ^ 2 + (my - pr.y) ^ 2 > 36 then
         pr.drag = true
-        if pr.uid and tool ~= "root" and not cam_busy then
+        if pr.giz then
+          -- (a drag that began on the gizmo moves nothing: not a part, not a box)
+        elseif pr.uid and tool ~= "root" and not cam_busy then
           if not W.sel[pr.uid] then sel_apply({ pr.uid }, (pr.shift or pr.ctrl) and "add" or "set") end
           W.press = nil
           startDragMove(pr.uid, pr.alt)

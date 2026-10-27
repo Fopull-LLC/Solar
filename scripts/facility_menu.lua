@@ -935,7 +935,11 @@ function update(node, dt)
     near_fac = nil
     if prompt_el then prompt_el.visible = false end
     if open_fac then close() end
-    if roster_open() then ref("crew_roster_panel").close(); sync_scrim() end
+    if roster_open() then ref("crew_roster_panel").close() end
+    -- (always: a scrim left up by a panel that went with the builder taking
+    -- the screen — the pause menu's, on Revert to the builder — dimmed the
+    -- whole builder)
+    sync_scrim()
     return
   end
   sync_scrim()

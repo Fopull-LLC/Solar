@@ -85,6 +85,7 @@ local CONTROLS = {
   { group = "Everywhere", col = 1, rows = {
     { keys = { "m" }, shown = "M", what = "the orbit map" },
     { keys = { "o" }, shown = "O", what = "hide the objectives card" },
+    { keys = { "/" }, shown = "/", what = "the next objective: the contract, a milestone, a suit pack to recover  ·  or ◂ ▸ on the card" },
     { keys = { "escape" }, shown = "ESC", what = "back out of whatever is in front of you" },
     { keys = {}, shown = "RIGHT CLICK", what = "tap (don't drag) on your crew, a part of a craft or a crate: what you can do with it  ·  pad Y at the crosshair" },
   } },
@@ -196,6 +197,13 @@ function close()
   open, page = false, "menu"
   if el then el.visible = false end
   set_paused(false)
+  -- The dim behind this menu is facility_menu's scrim, which it re-syncs on
+  -- its own update — but not while the VAB builder has the screen, and
+  -- Revert to the builder hands it the screen in this same click: the scrim
+  -- stayed over the whole builder ("it's darker, as if a fade never
+  -- finished", playtest 2026-10-27). Lifted here, the moment the menu goes.
+  local fm = ref("facility_menu")
+  if fm and fm.sync_scrim then pcall(fm.sync_scrim) end
 end
 
 function openMenu()

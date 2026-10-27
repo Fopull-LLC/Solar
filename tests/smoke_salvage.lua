@@ -165,6 +165,65 @@ for _, s in ipairs(drawn) do if s:find("SUIT PACK", 1, true) and s:find("kg", 1,
 check(marked, "the marker names the crate, its mass and the distance: " .. table.concat(drawn, " | "))
 check(not sv.prompting(), "...and from afar there's no prompt")
 
+-- From a SEAT (playtest: "I built a bike to go and get the pack and the marker
+-- vanished"): the markers measure from the craft being piloted.
+envs.planet_walker.onFoot = false
+local BIKE = node("Bike")
+BIKE.x, BIKE.y, BIKE.z = PLANET.x + 700, PLANET.y, PLANET.z
+API.findScripts = function(kind)
+  if kind == "vessel_controller" then return { { piloting = true, node = BIKE } } end
+  return {}
+end
+drawn = {}
+sv.lateUpdate(nil, 1 / 60)
+local seat_mark = false
+for _, s in ipairs(drawn) do if s:find("SUIT PACK", 1, true) then seat_mark = true end end
+check(seat_mark, "the pack's marker stays up from a vehicle: " .. table.concat(drawn, " | "))
+-- The objectives card's pick: that crate is THE objective, from any range.
+check(sv.markerKind(5000, false, 3000) == nil and sv.markerKind(5000, true, 3000) == "goal"
+  and sv.markerKind(100, false, 3000) == "mark", "the picked crate is marked from any range, the rest within it")
+envs.objectives = { valid = true, selectedPack = function() return id end }
+BIKE.x = PLANET.x + 9000
+drawn = {}
+sv.lateUpdate(nil, 1 / 60)
+local goal_mark = false
+for _, s in ipairs(drawn) do if s:find("◆", 1, true) then goal_mark = true end end
+check(goal_mark, "...and drawn as the objective: " .. table.concat(drawn, " | "))
+envs.objectives = nil
+API.findScripts = nil
+envs.planet_walker.onFoot = true
+
+-- ONE MARKER PER PACK (playtest: "SUIT PACK · 41 kg · 690 m" drawn twice over
+-- itself). Two crates side by side are one marker with their mass summed;
+-- one far off is its own; the picked one comes first.
+do
+  local E = {
+    { id = 1, body = "W", x = 100, y = 0, z = 0, kg = 41, n = "Suit pack" },
+    { id = 2, body = "W", x = 103, y = 0, z = 0, kg = 9,  n = "Suit pack" },
+    { id = 3, body = "W", x = 900, y = 0, z = 0, kg = 5,  n = "M. Moreau's pack" },
+    { id = 4, body = "Other", x = 0, y = 0, z = 0, kg = 1 },
+  }
+  local G = sv.markerGroups(E, 0, 0, 0, "W", 3, 3000, nil)
+  check(#G == 2, "two crates side by side make one marker, the far one its own: " .. #G)
+  check(G[1].goal and G[1].label == "M. MOREAU'S PACK", "...the picked one first, by name")
+  check(G[2].kg == 50 and G[2].label == "2 PACKS" and G[2].at.id == 1, "...the pair summed (50 kg, 2 PACKS)")
+  local G2 = sv.markerGroups(E, 0, 0, 0, "W", nil, 3000, 1)
+  check(#G2 == 2 and G2[1].kg == 9, "the crate the E prompt is about is not marked again")
+end
+-- …and one library: a second SalvageLib stands down (it drew every marker again).
+do
+  local mine = { }
+  local other = { }
+  API.findScripts = function(kind) if kind == "salvage" then return { { node = other }, { node = mine } } end return {} end
+  T = T + 5
+  drawn = {}
+  sv.lateUpdate(mine, 1 / 60)
+  check(#drawn == 0, "a second salvage instance draws nothing: " .. table.concat(drawn, " | "))
+  API.findScripts = nil
+  T = T + 5
+  sv.lateUpdate(nil, 1 / 60)
+end
+
 -- ── 4. reload ───────────────────────────────────────────────────────────────
 -- a fresh script over the same save (a scene load takes the old nodes with
 -- it): the crate is still there

@@ -142,6 +142,9 @@ local was_vessel = nil      -- the piloted craft's node id (a switch is a new su
 -- teleport, or coming back from the map or the pilot's seat.
 local SOI_HOLD = 0.5
 local UP_RATE_FOOT, UP_RATE_FLY = math.rad(120), math.rad(40)   -- most a second
+-- How far out of the rock the pivot and the camera are kept (m).
+CAM_CLEAR = 0.3
+local pivot_lift = 0.0   -- how far the pivot came up out of the rock this frame
 local up_body, up_cand, up_cand_t = nil, nil, 0.0
 local placed_t = nil        -- when the orbit view was last placed
 local placed_rel = nil      -- the subject, from its world's centre, then
@@ -625,6 +628,20 @@ local function look_dir(right, up, back)
   return (right * (math.sin(seat_yaw) * cp) + up * math.sin(seat_pitch) - back * (math.cos(seat_yaw) * cp)):normalized()
 end
 
+-- The head's own up for that look: the look turned a further quarter turn up
+-- (∂look/∂pitch), so it is square to the look at every yaw and pitch and
+-- turns smoothly with them.
+-- THE VIEW SNAPPED ROUND (playtest 2026-10-27: "the camera often snaps around
+-- while I look around" in the seat). The up handed to lookAt was the seat's
+-- up, swapped for the seat's back once the look came within 11.5° of it —
+-- but the head may pitch up to 80°, so every look up past 78.5° crossed that
+-- line, and with the head turned the swap rolled the picture by up to the
+-- yaw itself (170° looking back over the shoulder).
+local function look_up(right, up, back)
+  local sp, cp = math.sin(seat_pitch), math.cos(seat_pitch)
+  return (right * (-math.sin(seat_yaw) * sp) + up * cp + back * (math.cos(seat_yaw) * sp)):normalized()
+end
+
 -- The seat view, once per frame. Returns false if the seat has gone (staged
 -- away, destroyed, the crew out) and the view must fall back to the orbit.
 local function seat_view(node, dt, blocked)
@@ -669,9 +686,8 @@ local function seat_view(node, dt, blocked)
     local amp = sh * sh * 0.012
     jx, jy = (math.random() * 2 - 1) * amp, (math.random() * 2 - 1) * amp
   end
-  -- looking straight up or down, the head's up is its back/forward
-  local lup = up
-  if math.abs(fwd:dot(up)) > 0.98 then lup = back * (fwd:dot(up) > 0 and 1 or -1) end
+  -- the head's own up (look_up): never the seat's up swapped for its back
+  local lup = look_up(right, up, back)
   place = place + right * jx + up * jy
   node.pos = place
   node:lookAt(place + fwd, lup)
@@ -1218,7 +1234,14 @@ local function place_camera(node, dt)
   -- Flying, the MIDDLE button held slides the pivot over the craft instead
   -- (`panPivot`): drag up and the view climbs the stack.
   local panning = piloting and not blocked and input.button(2) == true
-  local looking = (not blocked) and (firstPerson or shiftlock or input.button(1) or panning)
+  -- SHIFT LOCK IS THE WALKER'S (playtest 2026-10-27: "shiftlock gets stuck in
+  -- flight"): its toggle (MMB / Alt) is off while flying — the middle button
+  -- pans the pivot and Alt is the holds' and the pivot slide's — so a lock
+  -- carried aboard could never be let go of, and the mouse stayed trapped.
+  -- Flying, the view turns on a held right button (or the seat view); the
+  -- walker's lock waits, untouched, for the next EVA.
+  local locked = shiftlock and not piloting
+  local looking = (not blocked) and (firstPerson or locked or input.button(1) or panning)
   input.setMouseLocked(looking)
   mouseLooking = looking
   last_up = up
@@ -1328,6 +1351,26 @@ local function place_camera(node, dt)
         head = head - up * (lift - math.max(0.0, roofhit.distance - 0.05))
       end
     end
+    -- …and never INSIDE the rock (playtest 2026-10-27: "the character pokes
+    -- through the ground… the camera snaps in and looks from beneath the
+    -- terrain"). With the crew sunk into the ground the pivot was in the rock,
+    -- the wall clip's ball started inside it and answered "a wall at 0 m", and
+    -- the view sat at the pivot looking at the terrain's underside and the
+    -- sea from below. The ground's own field says where the pivot is (cheap,
+    -- (the walker reads it at the crew's centre ten times a second, the
+    -- ground net); with the centre inside it, the pivot comes up to the
+    -- surface. (A bored tunnel is air: nothing changes there.)
+    pivot_lift = 0.0
+    local wk = script_ref("planet_walker")
+    local gn = wk and wk.groundNet
+    local q = gn and gn.q
+    if q and q < 0 then
+      local h = (head - target.pos):dot(up)
+      if q + h < CAM_CLEAR then
+        pivot_lift = math.min(6.0, CAM_CLEAR - (q + h))
+        head = head + up * pivot_lift
+      end
+    end
   end
 
   -- OVER THE SHOULDER. In third person the crew stands dead centre — exactly
@@ -1376,6 +1419,9 @@ local function place_camera(node, dt)
   -- instant a doorway clears is what made walking around the base feel like the
   -- view was flinching. Coming out is a glide. (Chasing a craft it never comes
   -- in past the craft's own hull.)
+  -- (The snap in from under the ground, playtest 2026-10-27, was not this
+  -- rule but a pivot inside the rock — the ball's first contact at 0 m: see
+  -- the pivot's ground guard above. A real wall still pulls it in at once.)
   if clip_back == nil or back <= clip_back then
     clip_back = back
   else
@@ -1392,6 +1438,30 @@ local function place_camera(node, dt)
   end
 
   local place = head - fwd * back
+  -- NEVER UNDER THE GROUND. On foot, a camera the sweep let into the rock (a
+  -- ball that started inside it, a collision mesh not built yet, the ease
+  -- above) is brought back along its line toward the pivot, which is in the
+  -- open, to the last point outside it.
+  -- (only when something is off: the pivot had to come up out of the rock,
+  -- or the sweep pulled the view in — never on an open hillside)
+  if not piloting and not firstPerson and back > 0.05 and (pivot_lift > 0 or back < room_d - 0.01)
+    and terrain and terrain.query then
+    local q = terrain.query(place.x, place.y, place.z)
+    if q and q < CAM_CLEAR * 0.5 then
+      local lo, hi = 0.0, back
+      for _ = 1, 6 do
+        local mid = (lo + hi) * 0.5
+        local p2 = head - fwd * mid
+        local qm = terrain.query(p2.x, p2.y, p2.z)
+        if qm == nil or qm >= CAM_CLEAR * 0.5 then lo = mid else hi = mid end
+      end
+      back = lo
+      clip_back = math.min(clip_back or lo, lo)
+      place = head - fwd * back
+      hidesBody = firstPerson or back < 0.7
+      target.visible = not hidesBody
+    end
+  end
   -- SCREEN SHAKE: the vessel publishes cam.shake (liftoff rumble, buffeting,
   -- crashes). Jitter the camera position along its right/up so the view rattles
   -- while the look target holds steady. Squared for an ease-in (small = subtle).

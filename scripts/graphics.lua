@@ -46,6 +46,8 @@
 --   gx.set("High")       apply + remember
 --   gx.describe(name)    one line for a settings screen
 --   gx.setDynamic(on)    engine dynamic resolution, capped at the level's scale
+--   gx.setScale(v)       the player's render scale over the level's (nil = the level's)
+--   gx.scaleOf(name)     the render scale a level runs at, the player's included
 --   gx.volumetric        read by atmosphere.lua: may it march volumetric fog?
 --   gx.shafts            … and the sun shafts through it?
 --   gx.notice            a sentence to show the player, or nil (+ gx.noticeAt)
@@ -142,13 +144,30 @@ end
 -- apply.
 local dynamic = false
 
+-- The player's render scale (Settings ▸ Display ▸ Render scale), over every
+-- level's own: nil = the level's. A level still sets everything else.
+local scale_pick = nil
+local function scale_of(p)
+  local s = scale_pick or p.scale
+  return math.max(0.25, math.min(1.0, s))
+end
+-- The upscale's sharpening for a scale: the level's at its own scale, else
+-- harder the bigger the stretch (Medium's 0.25 at 90%, Low's 0.6 at 60%),
+-- none at native.
+local function sharpen_of(p, s)
+  if not scale_pick then return p.sharpen or 0.4 end
+  if s >= 0.999 then return 0.0 end
+  return math.max(0.2, math.min(0.7, 0.25 + (0.9 - s) * (0.35 / 0.3)))
+end
+
 local function apply_dynamic(p)
   if not app.setDynamicResolution then return end
+  local s = scale_of(p)
   if dynamic then
-    pcall(app.setDynamicResolution, { min = math.max(0.25, p.scale * 0.5), max = p.scale })
+    pcall(app.setDynamicResolution, { min = math.max(0.25, s * 0.5), max = s })
   else
     pcall(app.setDynamicResolution, false)
-    if app.setRenderScale then app.setRenderScale(p.scale) end
+    if app.setRenderScale then app.setRenderScale(s) end
   end
 end
 
@@ -339,10 +358,11 @@ local function apply(name)
   volumetric, shafts = p.volumetric, p.shafts
   flare, dof = p.flare == true, p.dof ~= nil
   post_level = nil
-  if app.setRenderScale then app.setRenderScale(p.scale) end
+  local sc = scale_of(p)
+  if app.setRenderScale then app.setRenderScale(sc) end
   -- The upscale from a lowered scale sharpens edges (0.102); a bigger stretch
   -- wants a harder hand, and at 1.0 there is nothing to sharpen.
-  if app.setRenderSharpness then app.setRenderSharpness(p.sharpen or 0.4) end
+  if app.setRenderSharpness then app.setRenderSharpness(sharpen_of(p, sc)) end
   if dynamic then apply_dynamic(p) end
   local l = light()
   if l then
@@ -381,6 +401,18 @@ end
 
 function describe(name) return (PRESETS[name] or PRESETS[DEFAULT]).text end
 
+function scaleOf(name) return scale_of(PRESETS[name or level()] or PRESETS[DEFAULT]) end
+
+-- Called by settings.lua (the Render scale row): a number 0.25–1, or nil for
+-- the level's own. Applied at once; settings.lua keeps it in the store.
+function setScale(v)
+  v = tonumber(v)
+  if v then v = math.max(0.25, math.min(1.0, v)) end
+  if v == scale_pick then return end
+  scale_pick = v
+  apply(level())
+end
+
 function set(name)
   if not PRESETS[name] then return false end
   apply(name)
@@ -392,12 +424,15 @@ end
 function start(node)
   local got = with_settings(function()
     return { level = save.get("gfx_level", nil), dyn = save.get("opt_dynamic_res", false),
+             rscale = save.get("opt_render_scale", nil),
              flare = save.get("opt_lens_flare", true), dof = save.get("opt_far_blur", true) }
   end) or {}
   look_on.flare = got.flare ~= false
   look_on.dof = got.dof ~= false
   local saved = got.level
   dynamic = got.dyn == true
+  scale_pick = tonumber(got.rscale)
+  if scale_pick then scale_pick = math.max(0.25, math.min(1.0, scale_pick)) end
   -- nothing saved: a first run, on Medium whatever the screen (see the header)
   apply(saved or DEFAULT)
 end

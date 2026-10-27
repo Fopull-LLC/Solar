@@ -624,6 +624,36 @@ local function to_world(t)
   return w
 end
 
+-- A cached answer's WORLD points, kept up with the planet. `carry_mark`
+-- stamps a cache with the world under `at` as it is now; `carry_since` moves
+-- each table's x,y,z (and a plant's ax,ay,az) on by how far that world has
+-- moved since, and re-stamps. The 0.1 s previews of the gravity gun and the
+-- cut were reused with their world points as found, up to six ticks of the
+-- planet's travel old: the mark, the aim and the crew's facing pointed metres
+-- off the plant (playtest 2026-10-27).
+function carry_mark(c, at)
+  local name = at and space.dominant(at.x, at.y, at.z)
+  local b = name and space.body(name)
+  if b then c.cbody, c.cbx, c.cby, c.cbz = name, b.x, b.y, b.z end
+  return c
+end
+function carry_since(c, list)
+  local b = c.cbody and space.body(c.cbody)
+  if not b then return end
+  local dx, dy, dz = b.x - c.cbx, b.y - c.cby, b.z - c.cbz
+  if dx == 0 and dy == 0 and dz == 0 then return end
+  local seen = {}
+  for i = 1, 3 do
+    local t = list[i]
+    if type(t) == "table" and not seen[t] then
+      seen[t] = true
+      if type(t.x) == "number" then t.x, t.y, t.z = t.x + dx, t.y + dy, t.z + dz end
+      if type(t.ax) == "number" then t.ax, t.ay, t.az = t.ax + dx, t.ay + dy, t.az + dz end
+    end
+  end
+  c.cbx, c.cby, c.cbz = b.x, b.y, b.z
+end
+
 -- ── the bore ────────────────────────────────────────────────────────────────
 
 local function bore_world()
@@ -1451,6 +1481,38 @@ local RING = {
   fill = { 0.45, 0.78, 1.00 },
 }
 
+-- THE MARK'S SIZE ON SCREEN (playtest 2026-10-27: "the aim circle is too big
+-- up close and blocks the view"). A ring the cut radius across, or a plant's
+-- spread, is a fair size a few metres off and fills the view at arm's length
+-- (the laser's 1.2 m bite at 1.5 m is half the screen). So the ring keeps its
+-- size in the world only while its radius on screen stays under RING_CAP of
+-- the view's height; nearer, it shrinks to hold that, and dims with it, so
+-- the closest marks are the smallest and the faintest. → radius, dim (0..1].
+RING_CAP = { laser = 0.05, plant = 0.07, dim = 0.45 }
+function ring_on_screen(x, y, z, nx, ny, nz, r, cap)
+  if not (camera and camera.worldToScreen and camera.screenRect) or r <= 0 then return r, 1 end
+  local sx, sy, _, on = camera.worldToScreen(x, y, z)
+  if not (sx and on) then return r, 1 end
+  -- two tangents across the mark: its widest look on screen
+  local ax, ay, az = 1, 0, 0
+  if math.abs(nx) > 0.9 then ax, ay, az = 0, 1, 0 end
+  local tx, ty, tz = ny * az - nz * ay, nz * ax - nx * az, nx * ay - ny * ax
+  local tl = len(tx, ty, tz)
+  if tl < 1e-6 then return r, 1 end
+  tx, ty, tz = tx / tl, ty / tl, tz / tl
+  local bx, by, bz = ny * tz - nz * ty, nz * tx - nx * tz, nx * ty - ny * tx
+  local px = 0
+  for _, d in ipairs({ { tx, ty, tz }, { bx, by, bz } }) do
+    local qx, qy, _, qon = camera.worldToScreen(x + d[1] * r, y + d[2] * r, z + d[3] * r)
+    if qx and qon ~= false then px = math.max(px, len(qx - sx, qy - sy, 0)) end
+  end
+  local _, _, _, vh = camera.screenRect()
+  local lim = (vh or 720) * cap
+  if px <= lim or px < 1e-3 then return r, 1 end
+  local k = lim / px
+  return r * k, math.max(RING_CAP.dim, k)
+end
+
 -- The laser's AIM MARK: a thin ring laid on the ground at the bite (the
 -- AimMark effect stood up on the surface normal), the cut radius across, in
 -- the state's colour. Progress is on the screen reticle's pips.
@@ -1467,9 +1529,11 @@ local function paint_ring(hit, firing, full, radius, fill)
   if nl < 1e-4 then nx, ny, nz, nl = 0, 1, 0, 1 end
   nx, ny, nz = nx / nl, ny / nl, nz / nl
   -- the ring in the texture sits at 0.78 of the half-size: size = r / 0.39
+  -- (held under RING_CAP.laser of the view near the crew: ring_on_screen)
+  local rr, dim = ring_on_screen(hit.x, hit.y, hit.z, nx, ny, nz, math.max(0.4, radius), RING_CAP.laser)
   fx_use("AimMark", { x = hit.x + nx * 0.06, y = hit.y + ny * 0.06, z = hit.z + nz * 0.06,
-                      ux = nx, uy = ny, uz = nz, scale = math.max(0.4, radius) / 0.39,
-                      power = firing and 1.0 or 0.75, r = c[1], g = c[2], b = c[3] })
+                      ux = nx, uy = ny, uz = nz, scale = rr / 0.39,
+                      power = (firing and 1.0 or 0.75) * dim, r = c[1], g = c[2], b = c[3] })
 end
 
 local function field_normal(x, y, z)
@@ -1992,11 +2056,12 @@ local function fire_cut(node, dt)
   if not p and ff and ff.nearestPlant then
     local lk = saw_look
     if lk and time - lk.t < 0.1 and dx * lk.dx + dy * lk.dy + dz * lk.dz > 0.9999 then
+      carry_since(lk, { lk.p })
       p = lk.p
     else
       p = ff.nearestPlant(ox, oy, oz, dx, dy, dz, params.saw_reach + back, 2.0, params.saw_grab,
         { from = { x = node.x, y = node.y, z = node.z }, reach = params.saw_reach, crown = 4.0 })
-      saw_look = { t = time, dx = dx, dy = dy, dz = dz, p = p }
+      saw_look = carry_mark({ t = time, dx = dx, dy = dy, dz = dz, p = p }, node)
     end
     if p and (p.t or 0) > stop_t + 1.0 then p = nil end   -- behind the ground
   end
@@ -2299,7 +2364,7 @@ local function pluck_rock(node, cand, h)
   play(SFX.ore .. tostring(math.floor(math.random() * 5)) .. ".ogg", { track = "SFX", volume = 0.6, pitch = 0.7 + math.random() * 0.2 })
   local mats = ref("materials")
   local label = cand.name
-  grab = { kind = "pending", name = label, mass = cand.mass, t0 = time, x = px, y = py, z = pz }
+  grab = carry_mark({ kind = "pending", name = label, mass = cand.mass, t0 = time, x = px, y = py, z = pz }, node)
   holding = { name = label, mass = cand.mass, strain = 0, kind = "asm" }
   spawn(ROCK_PREFAB[kind.id] or "LooseRock", vec3(px, py, pz), function(n)
     set_worth(n, kind.mat, kind.yield or 1, label)
@@ -2403,10 +2468,13 @@ local function fire_grav(node, dt, firing)
     local cand, why_, h
     local pv = grab_preview
     if not firing and pv and time - pv.t < 0.1 and dx * pv.dx + dy * pv.dy + dz * pv.dz > 0.99995 then
+      -- (its world points carried on with the planet since they were found:
+      -- a tenth of a second is up to 36 m of a planet's travel)
+      carry_since(pv, { pv.h, pv.cand, pv.cand and pv.cand.plant })
       cand, why_, h = pv.cand, pv.why, pv.h
     else
       cand, why_, h = try_grab(node, ox, oy, oz, dx, dy, dz)
-      grab_preview = { t = time, cand = cand, why = why_, h = h, dx = dx, dy = dy, dz = dz }
+      grab_preview = carry_mark({ t = time, cand = cand, why = why_, h = h, dx = dx, dy = dy, dz = dz }, node)
     end
     if h then aimDist, aimX, aimY, aimZ = h.range, h.x, h.y, h.z else aimDist, aimX, aimY, aimZ = nil, nil, nil, nil end
     if cand and cand.kind == "plant" then
@@ -2479,6 +2547,15 @@ local function fire_grav(node, dt, firing)
         recoil = recoil + 0.02
       elseif cand then
         grab = cand
+        if cand.kind == "plant" and cand.plant then
+          -- The plant's place in the planet's frame NOW, on the frame it was
+          -- found: taken on the next frame (as it was), the world point was
+          -- a frame of the planet's travel old (1.5-6 m a tick), and the
+          -- hold, the beam and the crew's facing all aimed at that.
+          local p = cand.plant
+          cand.rb = to_body({ x = p.x, y = p.y, z = p.z })
+          cand.ab = to_body({ x = p.ax or p.x, y = p.ay or p.y, z = p.az or p.z })
+        end
         if cand.kind ~= "plant" then
           holding = { name = cand.name, mass = cand.mass, strain = 0, kind = cand.kind }
           play(SFX.grab, { track = "SFX", volume = 0.55, pitch = 1.1 - math.min(0.4, cand.mass) })
@@ -2499,6 +2576,7 @@ local function fire_grav(node, dt, firing)
   if grab.kind == "pending" then
     -- a plucked rock, its body not up yet: the beam reaches for its place
     if time - grab.t0 > 1.5 then release("it won't come loose", true) show_beam(nil) return end
+    carry_since(grab, { grab })     -- (its place rides the planet: carry_mark)
     aimDist, aimX, aimY, aimZ = len(grab.x - node.x, grab.y - node.y, grab.z - node.z), grab.x, grab.y, grab.z
     show_beam({ x = grab.x, y = grab.y, z = grab.z }, 0.6, "pending", { aimx = dx, aimy = dy, aimz = dz })
     hum_on(SFX.hold, 0.15, 0.9)
@@ -2869,8 +2947,9 @@ local function paint_plant(req)
     fx_use("PlantMark", { x = w.x + ux * 0.05, y = w.y + uy * 0.05, z = w.z + uz * 0.05, ux = ux, uy = uy, uz = uz,
                           scale = wide, sy = h, power = 0.6 + 0.8 * k, r = r, g = g, b = b })
   end
+  local mr, dim = ring_on_screen(w.x, w.y, w.z, ux, uy, uz, math.max(0.5, wide * 0.9), RING_CAP.plant)
   fx_use("AimMark", { x = w.x + ux * 0.06, y = w.y + uy * 0.06, z = w.z + uz * 0.06, ux = ux, uy = uy, uz = uz,
-                      scale = math.max(0.5, wide * 0.9) / 0.39, power = 0.7, r = r, g = g, b = b })
+                      scale = mr / 0.39, power = 0.7 * dim, r = r, g = g, b = b })
 end
 -- The ROCK MARK (rc25): the stone or crystal the gravity gun is aimed at, in
 -- the engine's own highlight. Nothing before rc25: a rock had no mark.

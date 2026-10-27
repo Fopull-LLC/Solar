@@ -754,10 +754,15 @@ end
 -- once the edits there have landed and gone quiet, one source a tick, the
 -- old source drawn for HOLD seconds while the new one's rocks settle.
 local HOLD = 2.0
-function groundChanged(x, y, z, r)
+-- On an engine that re-drops the props under a script's edit itself
+-- (flora_field ENGINE_RESETTLES_EDITS, 0.117.1) only a `force`d change is
+-- taken: ground that changed with no edit the engine saw (see flora_field
+-- groundChanged). Redeclaring after every bite swapped whole stands of rocks.
+function groundChanged(x, y, z, r, force)
   local body = cur_body and space.body(cur_body)
   local ff = ref("flora_field")
   if not (body and x and ff and ff.groundMerge) then return false end
+  if ff.ENGINE_RESETTLES_EDITS and not force then return false end
   local G = ff.GROUND or {}
   local rx, ry, rz = x - body.x, y - body.y, z - body.z
   if #gw_regions >= (G.most or 48) then
@@ -846,7 +851,8 @@ local function audit_tick(obs)
             local up = it.up or vec3(0, 1, 0)
             local hit = d > 0 and raycast(vec3(px + up.x * 0.3, py + up.y * 0.3, pz + up.z * 0.3),
               vec3(-up.x, -up.y, -up.z), 0.6) or nil
-            local key = sr.patch .. "|" .. sr.kind.id .. "|" .. tostring(it.id)
+            -- (once a session per stand, not per rock: flora_field AUDIT)
+            local key = sr.patch .. "|" .. sr.kind.id
             -- (a ray that meets the terrain answers with the world's own node,
             -- named for the body: surveyor is_ground)
             local hn = hit and hit.node
@@ -855,10 +861,10 @@ local function audit_tick(obs)
             if hq and hq > 0.15 then
               scatter.remove(sid, it.id)
               auditRemoved = auditRemoved + 1
-            elseif not au.tried[key] then
+            elseif not au.tried[key] and math.abs(d) > (A.redrop or 0.8) then
               au.tried[key] = true
               auditRedropped = auditRedropped + 1
-              groundChanged(px, py, pz, 3.0)
+              groundChanged(px, py, pz, 3.0, true)
             end
           end
         end

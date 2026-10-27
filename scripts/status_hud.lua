@@ -205,6 +205,22 @@ function designWidth()
   return 1280 * uiDesignH() / 720
 end
 
+-- The crew strip's top edge, in design units above the screen's bottom, or
+-- nil when it is not showing. Pure arithmetic in `stripTopOf` (tests).
+function stripTopOf(bottom_off, h_px, screen_h, design_h)
+  if not (h_px and h_px > 0 and screen_h and screen_h > 0) then return nil end
+  return -(bottom_off or -12) + h_px * (design_h or 720) / screen_h
+end
+
+function stripTop()
+  local n = nd("Crew Strip")
+  local e = comp(n)
+  if not (e and e.visible ~= false and n.uiRect and camera and camera.screenSize) then return nil end
+  local _, _, _, h = n:uiRect()
+  local _, sh = camera.screenSize()
+  return stripTopOf(e.posY, h, sh, uiDesignH())
+end
+
 function layout()
   local dw = designWidth()
   local fh = ref("flight_hud")
@@ -257,6 +273,15 @@ function layout()
     elseif crew_afoot() and dw / 2 - HOTBAR_HALF - GAP - M < w then
       posY = -(HOTBAR_TOP + GAP)
     end
+    -- …and the crew strip shares that corner (crew_strip.lua, pinned
+    -- bottom-left): while it shows, the card stands on top of it. Measured
+    -- in DESIGN units — the strip's pixel height × uiDesignH() / screen
+    -- height. crew_strip used to lift the card itself with 720 in place of
+    -- the design height, so at any interface size under 100% (Auto is 85% at
+    -- 1080p) the lift came up short and "END FLIGHT" sat on the portraits
+    -- (playtest dfb3e17).
+    local lift = stripTop()
+    if lift then posY = math.min(posY, -(lift + GAP)) end
     set(fo, "width", w)
     set(fo, "posY", posY)
   end

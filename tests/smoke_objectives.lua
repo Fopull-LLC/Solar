@@ -428,4 +428,97 @@ _G.time = _G.time + 120
 update(card, 1 / 60)
 ok(prompt == false and not says("You fly for"), "...once: it stands down after a while")
 
+-- ── THE SWITCHER (playtest, dfb3e17) ────────────────────────────────────────
+-- "I built a bike to go and get the pack and the marker vanished": the card
+-- picked its objective by itself and a dead crew member's suit pack was not
+-- one of them. Now / (or ◂ ▸ on the card) steps through every open objective
+-- — the contract, the milestones, each pack in a salvage crate — the pick is
+-- kept in the save, and the card follows it into the seat.
+local function el_of(key, t)
+  t = t or drawn
+  if type(t) ~= "table" then return nil end
+  if t.key == key then return t end
+  for _, c in ipairs(t) do local f = type(c) == "table" and el_of(key, c) if f then return f end end
+  for _, c in ipairs(t.items or {}) do local f = el_of(key, c) if f then return f end end
+  return nil
+end
+local crates = { { id = 7, body = planet.name, x = planet.x, y = planet.y + planet.radius,
+                   z = planet.z + 300, kg = 42, n = "M. Moreau's pack" } }
+local SV = { list = function() return crates end }
+_G.findScript = (function(prev)
+  return function(kind) if kind == "salvage" then return SV end return prev(kind) end
+end)(_G.findScript)
+missions.lastPaid = nil
+missions.ticked = {}
+missions.active = "firstflight"
+fleet = { { node = { valid = true, x = astro.x, y = astro.y, z = astro.z } } }
+astro.x, astro.y, astro.z = planet.x, planet.y + planet.radius, planet.z
+update(card, 1 / 60)
+ok(says("First Flight"), "unpicked, the card follows the contract: " .. table.concat(lines(), " | "))
+ok(el_of("pickText") and el_of("pickText").text:find("1 / 2", 1, true),
+  "two objectives open: the card says which of them it is on")
+ok(el_of("pickNext") and type(el_of("pickNext").onClicked) == "function", "...with a ▸ to click")
+
+KEYS["/"] = true
+update(card, 1 / 60)
+KEYS["/"] = false
+ok(says("Recover M. Moreau's pack") and says("300 m"),
+  "/ steps to the suit pack, with how far it is: " .. table.concat(lines(), " | "))
+ok(says("42 kg"), "...and what is in the crate")
+ok(STORE["objectives.pick"] == "pack:7", "the pick is kept in the save: " .. tostring(STORE["objectives.pick"]))
+ok(selectedPack() == 7, "salvage.lua is told which crate is the objective")
+ok(el_of("pickText").text:find("2 / 2", 1, true), "...and the strip says 2 / 2")
+
+-- In the seat: the card stays up for the pack, measured from the CRAFT.
+walker.onFoot = false
+local fh_find = _G.findScript
+_G.findScript = function(kind)
+  if kind == "flight_hud" then return { layout = { topLeft = 334 } } end
+  return fh_find(kind)
+end
+fleet = { { piloting = true, node = { valid = true, x = planet.x, y = planet.y + planet.radius, z = planet.z + 250 } } }
+update(card, 1 / 60)
+ok(card.__el.visible == true and says("Recover M. Moreau's pack"),
+  "driving to the pack, the card still follows it: " .. table.concat(lines(), " | "))
+ok(says("50 m"), "...measured from the vehicle: " .. table.concat(lines(), " | "))
+-- No contract on the books: the pack alone still keeps the card up in a seat.
+missions.active = nil
+update(card, 1 / 60)
+ok(card.__el.visible == true and says("Recover"), "a picked pack keeps the card up in the seat with no contract")
+missions.active = "firstflight"
+_G.findScript = fh_find
+walker.onFoot = true
+fleet = { { node = { valid = true, x = astro.x, y = astro.y, z = astro.z } } }
+
+-- The ▸ on the card does what / does: round to the contract again.
+update(card, 1 / 60)
+el_of("pickNext").onClicked()
+update(card, 1 / 60)
+ok(says("First Flight") and STORE["objectives.pick"] == "contract:firstflight",
+  "clicking ▸ wraps round to the contract: " .. table.concat(lines(), " | "))
+el_of("pickPrev").onClicked()
+update(card, 1 / 60)
+ok(says("Recover M. Moreau's pack"), "◂ steps back to the pack")
+
+-- A reload keeps the pick (the script starts afresh; the save does not).
+chunk()
+_G.params = { enabled = 1, arrived = 24.0 }
+start(card)
+update(card, 1 / 60)
+ok(says("Recover M. Moreau's pack"), "the pick survives a reload: " .. table.concat(lines(), " | "))
+
+-- The pack recovered: the pick is gone and the card chooses again, no strip.
+crates = {}
+update(card, 1 / 60)
+ok(says("First Flight") and not says("Recover"), "a recovered pack hands the card back to the contract")
+ok(el_of("pickText") == nil, "one objective: no switcher strip")
+ok(selectedPack() == nil, "...and no crate is the objective")
+-- With nothing open at all, / is harmless.
+missions.active = nil
+KEYS["/"] = true
+update(card, 1 / 60)
+KEYS["/"] = false
+ok(says("Sign your next contract"), "/ with nothing open changes nothing: " .. table.concat(lines(), " | "))
+fleet = {}
+
 print(string.format("OBJECTIVES SMOKE OK — %d checks passed", checks))

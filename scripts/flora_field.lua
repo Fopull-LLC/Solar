@@ -480,6 +480,29 @@ end
 local BASE_CLEAR = { fade = 14.0, margin = 2.0, lot = 6.0, perM = 0.8, tall = 1.0, reach = 40.0 }
 local base_l = { key = nil }
 
+-- What the base clearing (and the ground audit) took off a stand, by patch and
+-- species: re-applied the moment the stand is declared again (make_source), the
+-- way the cuts are. Ids are (seed, chunk, index), so the same id is the same
+-- plant in every declaration. Without it a redeclared stand drew every plant
+-- on the paving again until clear_tick, a few frames later, took them off one
+-- by one: plants near the base blinking in and out (playtest 2026-10-27).
+-- Tied to the layout it was judged against (base_l.key): a moved base starts
+-- over.
+local function keep_cleared(p, spid, iid)
+  p.cleared = p.cleared or {}
+  local c = p.cleared[spid]
+  if not c or c.key ~= base_l.key then
+    c = { key = base_l.key, ids = {} }
+    p.cleared[spid] = c
+  end
+  c.ids[iid] = true
+end
+local function cleared_of(p, spid)
+  local c = p.cleared and p.cleared[spid]
+  if c and c.key == base_l.key then return c.ids end
+  return nil
+end
+
 local function base_layout()
   local bf = ref("base_facilities")
   if not (bf and bf.frameOf and bf.uvOf and bf.FACILITIES) then return nil end
@@ -629,6 +652,7 @@ local function clear_tick()
           if roll >= keep then
             scatter.remove(j.id, it.id)
             if p.bark[sp.id] then scatter.remove(p.bark[sp.id], it.id) end
+            keep_cleared(p, sp.id, it.id)
           end
         end
         if j.i % 16 == 0 and (clear_wall() - t0) * 1000 >= CLEAR_MS then return end
@@ -750,6 +774,9 @@ local function make_source(p, sp, fg, w)
     -- What was cut here stays cut: ids are (seed, chunk, index), so the same
     -- id names the same plant in every declaration of this source.
     for _, c in ipairs(list) do scatter.remove(id, c.id) end
+    -- …and what the base clearing took off here stays off (keep_cleared).
+    local gone = cleared_of(p, sp.id)
+    if gone then for iid in pairs(gone) do scatter.remove(id, iid) end end
     srcs[id] = { patch = p.key, sp = sp, fill = sum / (rows * rows), part = part, made = time, tint = opts.tint }
     return id
   end
@@ -958,9 +985,27 @@ end
 
 -- A WORLD point and radius where the ground was dug, raised, flattened or
 -- graded. Cheap: call it per edit. Tells the rocks too.
-function groundChanged(x, y, z, r)
+--
+-- ONLY WHERE THE ENGINE DOES NOT (playtest 2026-10-27, "plants near the base
+-- phase into existence, speed by, and then disappear"). Since engine
+-- 0.117.1 (91e97ff, "Scatter re-settles where an edit landed on a moving
+-- planet") the engine itself re-drops the props under every script edit,
+-- found through the planet's frame as it is when the edit lands, which is
+-- the very thing this was written to stand in for. Redeclaring on top of it
+-- swapped whole 150-260 m stands for fresh sources after every laser bite,
+-- fill, crater and drill bite (and after every floating prop the audit saw):
+-- each new source drew the props the base clearing had taken off the paving
+-- (those removals were the old source's) until clear_tick took them off again
+-- a few frames later, while the old source drew beside it for resettle_hold
+-- seconds. So on such an engine an edit only tells the rocks (which do the
+-- same check), and a redeclare happens only when `force` says the ground
+-- changed WITHOUT an edit the engine saw: saved ground streaming in under
+-- props that settled first (the base, once a session) and the audit's
+-- floating props (once per stand per session).
+function groundChanged(x, y, z, r, force)
   local mf = ref("mineral_field")
-  if mf and mf.groundChanged then pcall(mf.groundChanged, x, y, z, r) end
+  if mf and mf.groundChanged then pcall(mf.groundChanged, x, y, z, r, force) end
+  if ENGINE_RESETTLES_EDITS and not force then return false end
   local body = cur_body and space.body(cur_body)
   if not body or not x then return false end
   local rx, ry, rz = x - body.x, y - body.y, z - body.z
@@ -1011,7 +1056,12 @@ function groundBusy() return #gw_regions + #gw_queue end
 -- under the ground stands on ground that has since changed, and that ground
 -- is re-dropped (groundChanged), once per prop. Only a prop on something
 -- that is not the terrain is ever removed.
-AUDIT = { every = 3.0, radius = 60.0, ms = 0.35, tol = 0.35 }
+-- A stand is re-dropped for a floating prop at most ONCE a session (`tried`
+-- is keyed by patch and species, not by prop: keyed by prop, every one of a
+-- stand's hundreds of props a few decimetres off the collision mesh asked for
+-- the whole stand again, one after another, every pass), and only for a prop
+-- more than AUDIT.redrop off the field.
+AUDIT = { every = 3.0, radius = 60.0, ms = 0.35, tol = 0.35, redrop = 0.8 }
 local au = { t = -1e9, job = nil, tried = {} }
 auditRemoved, auditRedropped = 0, 0
 local function audit_take(sid, it)
@@ -1019,6 +1069,7 @@ local function audit_take(sid, it)
   local p = s and patches[s.patch]
   scatter.remove(sid, it.id)
   if p and s.sp and p.bark[s.sp.id] then scatter.remove(p.bark[s.sp.id], it.id) end
+  if p and s.sp then keep_cleared(p, s.sp.id, it.id) end
   auditRemoved = auditRemoved + 1
 end
 local function audit_tick(obs)
@@ -1064,7 +1115,7 @@ local function audit_tick(obs)
             local up = it.up or vec3(0, 1, 0)
             local hit = d > 0 and raycast(vec3(px + up.x * 0.3, py + up.y * 0.3, pz + up.z * 0.3),
               vec3(-up.x, -up.y, -up.z), 0.6) or nil
-            local key = sr.patch .. "|" .. tostring(sr.sp and sr.sp.id) .. "|" .. tostring(it.id)
+            local key = sr.patch .. "|" .. tostring(sr.sp and sr.sp.id)
             -- a hit is something solid only where the ground is not (the
             -- settling ray reads the collision mesh, which can sit a few
             -- decimetres off the field in a fresh pit)
@@ -1075,10 +1126,10 @@ local function audit_tick(obs)
             local hq = solid and terrain.query(hit.x, hit.y, hit.z)
             if hq and hq > 0.15 then
               audit_take(sid, it)             -- on a roof, a craft, debris
-            elseif not au.tried[key] then
+            elseif not au.tried[key] and math.abs(d) > AUDIT.redrop then
               au.tried[key] = true
               auditRedropped = auditRedropped + 1
-              groundChanged(px, py, pz, 3.0)
+              groundChanged(px, py, pz, 3.0, true)
             end
           end
         end
@@ -1288,12 +1339,10 @@ local function touch_find(astro, body, fg, planet)
                 n:setMaterial { texture = "textures/flora/foliage_l0.png", normalMap = "textures/flora/foliage_n.png",
                                 color = col, sway = 0.5, backlight = 0.5 }
               else
-                -- A model drawn as it is: its own parts, each shaded by the source's tint.
-                local ok, mats = pcall(n.materials, n)
-                for _, m in ipairs(ok and type(mats) == "table" and mats or {}) do
-                  local ok2, mm = pcall(n.material, n, m.material or m.object)
-                  if ok2 and mm then mm.color = col end
-                end
+                -- A model drawn as it is: its own parts, shaded by the source's
+                -- tint (tint_whole: a named part's override would start
+                -- untextured).
+                tint_whole(n, col)
               end
               n.tags = { "flora" }
               b.node = n
@@ -1896,6 +1945,25 @@ local function fell_pose(f, n, ang, sink)
   n.scale_x, n.scale_y, n.scale_z = k, k, k
 end
 
+-- A stand-in's tint, over its OWN look. NOT node:material("leaf"): a named
+-- part's override "starts as the engine's default material, not as the part's
+-- imported look" (lua-api node:material), so writing its colour drew a felled
+-- tree in flat green leaves and a plain tan trunk, untextured (playtest
+-- 2026-10-27). A flora prefab's node carries its own Material (the leaf or
+-- bark texture and normal map the scatter draws it with, tools/
+-- gen_flora_prefabs.py): its colour is set there and the rest is kept. A bare
+-- model has none, and setMaterial on it changes only the keys given over each
+-- part's own look (textures, cut-out leaves) — so the colour goes that way.
+function tint_whole(n, tint)
+  local col = { tint[1], tint[2], tint[3] }
+  local done = pcall(function()
+    local m = n:material()
+    if not (m and m.texture and m.texture ~= "") then error("no material of its own") end
+    m.color = col
+  end)
+  if not done then pcall(n.setMaterial, n, { color = col }) end
+end
+
 -- `hit` is a nearestPlant answer (before or after harvest); (dx,dy,dz) the
 -- way the cut went through it — the tree falls that way. Returns true when a
 -- tree is coming down.
@@ -1924,12 +1992,7 @@ function fell(hit, dx, dy, dz)
       if f.done then n:destroy() return end
       if n.setParent and n.parent ~= planet then n:setParent(planet, { keepWorld = false }) end
       n.tags = { "flora" }
-      if tint then
-        pcall(function()
-          local m = n:material(i == 2 and "bark" or "leaf")
-          m.color = { tint[1], tint[2], tint[3] }
-        end)
-      end
+      if tint then tint_whole(n, tint) end
       fell_pose(f, n, 0, 0)
       f.parts[#f.parts + 1] = n
     end
@@ -2772,6 +2835,10 @@ NEAR_BY_POSITION = engine_at_least(0, 117, 0, 20)
 -- 0525); before that, streaming re-laid every wash in range, one a frame at
 -- 12-34 ms, so `wash` keeps the washes off however `tint` is set.
 WASH_RELAY_BUDGETED = engine_at_least(0, 117, 0, 22)
+-- The engine re-drops the props under a script's terrain edit itself, through
+-- the planet's frame as it is when the edit lands (0.117.1, 91e97ff): an edit
+-- needs no redeclare from here (see groundChanged). Read by mineral_field.
+ENGINE_RESETTLES_EDITS = engine_at_least(0, 117, 1)
 
 local function near_query(p, mx, my, mz, gx, gy, gz, rh, slack, chunk)
   if NEAR_BY_POSITION then return mx, my, mz, rh + slack end
@@ -2887,7 +2954,19 @@ end
 function harvest(hitrec, cid)
   local rec = hitrec and hitrec.rec
   if rec and rec.rare then return rare_harvest(rec, cid) end
-  if not (rec and srcs[rec.src]) then return {}, 0 end
+  if not rec then return {}, 0 end
+  -- THE STAND AS IT IS NOW, not as it was when the aim found the plant. An
+  -- uproot or a cut takes seconds, and the stand can be declared again in
+  -- them (a re-drop, a re-settle): the source the aim answered from is then
+  -- retiring or gone, and asking only after it left the plant standing in
+  -- the new source, harvested and still there (playtest 2026-10-27, "plants
+  -- sometimes don't disappear after being pulled or cut"). The same id is the
+  -- same plant in every declaration of the stand, so it is taken out of the
+  -- current source, the trunk's twin, and every retiring one.
+  local p = rec.patch and patches[rec.patch]
+  local cur = p and rec.sp and p.srcs[rec.sp.id] or nil
+  if cur and not srcs[cur] then cur = nil end
+  if not (srcs[rec.src] or cur) then return {}, 0 end
   local fg = ref("flora_gen")
   local inv = ref("inventory")
   local got, dropped = {}, 0
@@ -2898,8 +2977,8 @@ function harvest(hitrec, cid)
   end
   -- One removal by id, in the crown's source and the trunk's twin: the
   -- engine re-resolves just that chunk, and every other plant stays put.
-  scatter.remove(rec.src, rec.inst)
-  local p = patches[rec.patch]
+  if srcs[rec.src] then scatter.remove(rec.src, rec.inst) end
+  if cur and cur ~= rec.src then scatter.remove(cur, rec.inst) end
   if p then
     if p.bark[rec.sp.id] then scatter.remove(p.bark[rec.sp.id], rec.inst) end
     -- …and from a re-settled stand's old sources while they still draw.
@@ -2910,10 +2989,18 @@ function harvest(hitrec, cid)
     list[#list + 1] = { id = rec.inst, t = time }
     while #list > MAX_CUTS do
       local old = table.remove(list, 1)
-      scatter.restore(rec.src, old.id)
+      if cur then scatter.restore(cur, old.id) end
       if p.bark[rec.sp.id] then scatter.restore(p.bark[rec.sp.id], old.id) end
     end
     save_cuts(rec.patch, rec.sp.id)
+  end
+  -- A plant swapped for a bending node (touch) is the instance this took:
+  -- the node goes too, or it stands on where the plant was cut.
+  for key, b in pairs(touch.bent) do
+    if b.inst == rec.inst and (b.src == rec.src or b.src == cur) then
+      b.restored = true      -- (nothing to hand back: it was cut)
+      touch_release(key, b)
+    end
   end
   settled[rec.src .. ":" .. tostring(rec.inst)] = nil
   return got, dropped
