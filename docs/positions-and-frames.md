@@ -73,6 +73,32 @@ breaking one of the rules below.
 6. **Probe and screenshot cameras go in lateUpdate**, after the game has placed
    everything for the frame.
 
+7. **Smooth what the player sees.** Aims, facings, markers, lines, camera
+   offsets, IK targets and HUD readouts can jitter between updates, even when
+   the positions are right: the tick rate and the frame rate differ, raycasts
+   flicker between two hits, and a target is re-acquired.
+   - **Smooth in the right frame.** Smooth the planet-relative or part-relative
+     value (an offset, a local direction, a yaw or pitch), never a raw world
+     position. Smoothing a world point drags it behind the moving planet. That
+     lag is the bug from rule 1 again.
+   - **Make it frame-rate independent:**
+     `v = v + (target - v) * (1 - math.exp(-k * dt))`, with k about 8–20 /s for
+     aims and markers and 4–8 /s for cameras. Never use a fixed fraction per
+     frame.
+   - **Rotations:** slerp quaternions or directions and renormalise. For
+     angles, smooth the wrapped difference (−π..π), never the raw angle.
+   - **Snap on discontinuities:**
+     - a new target, a teleport, a seat change, a scene load or a
+       floating-origin rebase snaps straight to the new value;
+     - so does any jump larger than a threshold (say 2 m or 30°).
+     Otherwise the view swings across the screen.
+   - **Smooth the presentation only.** Physics, steering error and hit tests
+     use the unsmoothed truth. Smoothing must never feed back into control.
+     That would add lag to a loop such as SAS and make it oscillate.
+   - **Add hysteresis to on/off decisions** (in range or out, target found or
+     lost, a marker pinned to the edge or not), so they don't flicker at the
+     threshold.
+
 ## Recipes
 
 **Hold a point on the ground** (a waypoint, a dig spot, a plant):
@@ -126,6 +152,9 @@ local wx = F.ox + F.rx*lx + F.ux*ly + F.zx*lz   -- lx,ly,lz stored in the part's
       the same pass.
 - [ ] fixedUpdate uses tick poses; lateUpdate and drawing use drawn poses.
 - [ ] Speeds are body-relative, and timing that must survive warp uses game time.
+- [ ] Anything the player sees move (aims, facings, markers, lines, camera) is
+      smoothed in its body or part frame, frame-rate independent, and snaps on
+      discontinuities. Control loops and hit tests use the unsmoothed values.
 - [ ] **In the screenshots, every line, marker and aim ends ON its target**, from
       at least two angles, while moving (in orbit or on the moving planet), not
       only at rest.
