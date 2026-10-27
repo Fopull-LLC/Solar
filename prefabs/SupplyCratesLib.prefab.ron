@@ -1,0 +1,22 @@
+// SUPPLY CRATES LIBRARY — scripts/supply_crates.lua: lays the base's supply
+// crates out round the base each session and answers which one the crew is
+// standing at. Spawned by facility_menu.lua when the scene carries no node
+// running "supply_crates"; reached with findScript("supply_crates").
+[
+    (
+        name: "SupplyCratesLib",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [
+            (
+                kind: "supply_crates",
+                enabled: true,
+                params: [],
+            ),
+        ],
+    ),
+]

@@ -1,0 +1,33 @@
+// ITEM CARD HOST — the screen slot the depot's item card is described into
+// (scripts/inventory_panel.lua: spawned beside the Inventory Panel, under the
+// same parent, the first time a card shows). Pinned to the left edge just
+// right of the 440 px panel, so the card floats beside the counter list
+// instead of growing the panel off the screen.
+[
+    (
+        name: "Item Card Host",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+        ui: Some((
+            place: Pin(
+                anchor: Left,
+                offset: (466.0, 0.0),
+            ),
+            size: (Fixed(380.0), Fit),
+            stack: Some((
+                dir: Column,
+                gap: 0.0,
+                pad: 0.0,
+                align: Start,
+                justify: Start,
+            )),
+            visible: false,
+            opacity: 1.0,
+        )),
+    ),
+]

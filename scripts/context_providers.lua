@@ -757,6 +757,8 @@ local function prop_provider(t, ctx)
     out[#out + 1] = { type = "info", id = "dist", label = "DISTANCE",
       value = function() return string.format("%.1f m", crew:distanceTo(t.node)) end }
   end
+  -- (a base supply crate is static: supply_crates.lua gives its own rows)
+  if t.node and t.node.hasTag and t.node:hasTag("supply_crate") then return out, "Supply crate" end
   if t.mass then out[#out + 1] = { type = "info", id = "mass", label = "MASS", value = tonnes(ctx, t.mass) } end
   out[#out + 1] = { type = "info", id = "grab", label = "", value = "the Gravity Gun can carry it" }
   return out, t.label or (t.node and t.node.name) or "Object"

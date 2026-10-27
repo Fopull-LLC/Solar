@@ -156,7 +156,10 @@ local near_fac = nil   -- name of the nearest facility in range
 -- screen at the exact moment a panel opened over it. The belt asks this and
 -- stands its E down while a door is in front of you. LMB still fires, because
 -- nothing else wants it.
-function prompting() return near_fac ~= nil and open_fac == nil end
+-- (A supply crate within reach takes E too: "Open the crate", below.)
+local crate_near = nil  -- the supply crate the prompt is offering
+function prompting() return (near_fac ~= nil and open_fac == nil) or crate_near ~= nil end
+function crateNear() return crate_near end
 -- The depot's last receipt ("sold for $412"), shown under the stock list for a
 -- few seconds so the panel confirms what just happened without a popup.
 local depot_msg, depot_msg_t = "", -100
@@ -928,11 +931,43 @@ local function beyond(astro, name)
   return apart(astro, f) > (FAC[name].near or params.radius) + LEAVE_SLACK
 end
 
+-- ── supply crates (scripts/supply_crates.lua) ──────────────────────────────
+-- The library rides a node of its own, spawned once when the scene has none.
+local crates_lib_t = -10
+local function crates_lib()
+  local sc = ref("supply_crates")
+  if sc then return sc end
+  if (time or 0) - crates_lib_t > 5.0 and spawn and vec3 then
+    crates_lib_t = time or 0
+    if not (find and find("SupplyCratesLib")) then pcall(spawn, "SupplyCratesLib", vec3(0, 0, 0)) end
+  end
+  return nil
+end
+-- The crate prompt, and E at it. → true when the crate has E this frame.
+function crate_prompt(astro)
+  local sc = crates_lib()
+  crate_near = sc and sc.nearAstro and sc.nearAstro(astro) or nil
+  if not crate_near then return false end
+  local ip = ref("inventory_panel")
+  if ip and ip.open then
+    if prompt_el then prompt_el.visible = false end
+    if interact_pressed() and ip.closePanel then ip.closePanel() end
+    return true
+  end
+  show_prompt("Open the supply crate  ·  " .. (crate_near.name or "") .. "   ·   E")
+  if prompt_el then prompt_el.visible = true end
+  if interact_pressed() and ip and ip.openCrate then
+    sfx("open")
+    ip.openCrate(crate_near.cid)
+  end
+  return true
+end
+
 function update(node, dt)
   -- The VAB builder has the keys and the screen: no prompts, no panels.
   local gm = ref("game_manager")
   if gm and gm.inputOwner == "builder" then
-    near_fac = nil
+    near_fac, crate_near = nil, nil
     if prompt_el then prompt_el.visible = false end
     if open_fac then close() end
     if roster_open() then ref("crew_roster_panel").close() end
@@ -959,7 +994,7 @@ function update(node, dt)
     diag("the crew is aboard a vessel (or the world is loading) — prompts are off")
   end
   if not afoot then
-    near_fac = nil
+    near_fac, crate_near = nil, nil
     if prompt_el then prompt_el.visible = false end
     if open_fac then close() end
     return
@@ -1043,6 +1078,10 @@ function update(node, dt)
     if interact_pressed() or beyond(astro, "FacCommand") then ob.closeBoard() end
     return
   end
+  -- A SUPPLY CRATE within arm's reach wins over the building behind it (two
+  -- stand against the depot's wall): E opens it in the suit pack's panel,
+  -- and E again closes it.
+  if crate_prompt(astro) then return end
   if near_fac then
     local f = FAC[near_fac]
     local say = f.label

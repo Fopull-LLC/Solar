@@ -237,6 +237,18 @@ local ARMED_FILL = { 0.62, 0.15, 0.10, 1.0 }
 local ARMED_EDGE = { 1.0, 0.8, 0.7, 1.0 }
 local ARMED_TEXT = { 0.92, 0.89, 0.81, 1.0 }
 
+-- SAVE AND QUIT TO DESKTOP: the full checkpoint (game_manager.saveGame: where
+-- the crew stands, every dug field), the store on disk, then app.quit() — an
+-- exported build closes, the editor stops Play. Published for probes.
+function quitToDesktop()
+  local gm = findScript and findScript("game_manager")
+  if gm and gm.saveGame then pcall(gm.saveGame) end
+  if save and save.flush then pcall(save.flush, { wait = true }) end
+  if log then log("pause menu: saved; quitting to the desktop") end
+  if app and app.quit then app.quit() end
+  return true
+end
+
 local function row_button(key, text, onClicked)
   return { "button", key = key, style = "panel/row", w = "100%", h = 36,
            textAlign = "center", text = text, onClicked = onClicked }
@@ -308,6 +320,12 @@ local function menu_page()
       function()
         close()
         if mgr and mgr.exitToMenu then mgr.exitToMenu() end
+      end)
+    -- …and straight out of the game: the same checkpoint, on disk, then quit.
+    rows[#rows + 1] = row_button("desktop", "Save and quit to desktop",
+      function()
+        close()
+        quitToDesktop()
       end)
   end
   rows[#rows + 1] = rule("rule2")

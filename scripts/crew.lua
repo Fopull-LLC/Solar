@@ -129,8 +129,11 @@ defaults = {
   -- outright.
   down_over = 1.6,
   shot_over = 0.5,        -- hp past zero a shot may go and still leave them down
-  bleed_secs = 90.0,
-  bleed_min = 30.0,
+  -- Three minutes at just-lethal, one at the edge (playtest 2026-10-27: 90 s
+  -- was too short to fetch a Medkit from the depot or a crewmate's pack —
+  -- a rescue should be a run, not a lottery).
+  bleed_secs = 180.0,
+  bleed_min = 60.0,
   -- CREW BODIES (§4.1)
   body_range = 2500.0,    -- m from the focus: further, a record only
   body_spawn = 2000.0,    -- m: a record comes back as a body inside this

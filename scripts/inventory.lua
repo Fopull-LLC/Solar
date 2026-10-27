@@ -15,6 +15,8 @@
 --                  parts; the vessel registers it when it spawns)
 --   "base"         the home warehouse = the VAB's stock; effectively unlimited
 --   "salvage:<id>" a dropped pack lying in the world (scripts/salvage.lua)
+--   "crate:<n>"    a supply crate round the base (scripts/supply_crates.lua):
+--                  400 kg, 480 L (items.CRATE_KG, VOL.crate)
 --
 -- TWO LIMITS. Kilograms bind everything (materials weigh what materials.lua
 -- says, items what items.lua says). Litres bind ITEMS only: a pack is 60 L, a
@@ -177,7 +179,13 @@ function cap(cid)
   if is_pack(cid) then return params.suit_kg end
   if cid == "base" then return params.base_kg end
   local caps = save.get("inv.cap") or {}
-  return caps[cid] or 0
+  if caps[cid] then return caps[cid] end
+  -- a base supply crate (scripts/supply_crates.lua): the registry's size
+  if cid:sub(1, 6) == "crate:" then
+    local I = registry()
+    return (I and I.CRATE_KG) or 400
+  end
+  return 0
 end
 
 function mass(cid)
@@ -414,6 +422,7 @@ function volCap(cid)
   local caps = save.get("inv.vcap") or {}
   if caps[cid] then return caps[cid] end
   if cid:sub(1, 7) == "locker:" then return V.locker end
+  if cid:sub(1, 6) == "crate:" then return V.crate or 480 end
   if cid:sub(1, 5) == "hold:" then
     -- a hold's litres follow its Cargo Bays (250 kg each): 1000 L a bay
     return math.max(1, math.ceil(cap(cid) / 250 - 1e-9)) * V.bay
@@ -609,6 +618,24 @@ function buyItem(cid, id, n)
   return true, nil
 end
 buyGear = buyItem
+
+-- SELL n of an item from a container back to the depot, at the registry's
+-- used-goods price (items.sellPrice: 60 % of list). → n sold, $ paid, why
+function sellItem(cid, id, n)
+  cid = R(cid)
+  local g = idef(id)
+  n = math.floor(n or 1)
+  if not g or n <= 0 then return 0, 0, "nothing to sell" end
+  local I = registry()
+  local each = (I and I.sellPrice) and I.sellPrice(id) or math.floor((g.cost or 0) * 0.6)
+  if each <= 0 then return 0, 0, "the depot won't buy that" end
+  local took = removeItem(cid, id, math.min(n, itemCount(cid, id)))
+  if took <= 0 then return 0, 0, "none to sell" end
+  local paid = each * took
+  local co = findScript and findScript("company")
+  if co and co.earn then co.earn(paid, string.format("sold %s%s", took > 1 and (took .. " × ") or "", g.name)) end
+  return took, paid, nil
+end
 
 -- THE STANDARD ISSUE (items with `issue`, the two tools today), free and
 -- once: a new crew member is issued it when hired; an old save's pack is

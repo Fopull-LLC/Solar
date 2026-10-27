@@ -146,8 +146,11 @@ _G.findScript = function(kind) return refs[kind] end
 _G.findScripts = function(kind) return kind == "vessel_controller" and fleet or {} end
 
 -- What the panel last described.
-local drawn = nil
-_G.ui = { make = function(_, tree) drawn = tree end }
+local drawn, card_drawn = nil, nil
+local card_host = { name = "Item Card Host", valid = true, __el = { visible = false } }
+function card_host:getcomponent() return self.__el end
+_G.spawn = function(prefab, pos, fn) if prefab == "ItemCardHost" then fn(card_host) end end
+_G.ui = { make = function(c, tree) if c == card_host then card_drawn = tree else drawn = tree end end }
 
 -- Walk the described tree and collect every text run, and every button.
 local function walk(el, texts, buttons)
@@ -172,6 +175,7 @@ end
 local function screen()
   local texts, buttons = {}, {}
   walk(drawn, texts, buttons)
+  if card_host.__el.visible then walk(card_drawn, texts, buttons) end
   for _, b in ipairs(buttons) do b.text = b.text or label(b) end
   return texts, buttons
 end
@@ -315,8 +319,29 @@ end
 local buy_row = button_with("Relay Beacon")
 ok(buy_row ~= nil, "the BUY counter lists the relay beacon, priced")
 ok(says("$80"), "…at its price")
+-- (2026-10-27) a click READS the item: its card opens beside the panel, with
+-- the description and the numbers; the row's own small button buys.
+refs.items = { card = function(id)
+  return { id = id, name = "Relay Beacon", kind = "Deployable · planted", about = "a cheap ground relay",
+           rows = { { "Mass", "6.0 kg" }, { "Reach", "a few hundred metres" } }, prefab = nil } end }
 buy_row.onClicked()
-ok(#bought == 1 and bought[1] == "beacon", "clicking it buys one into the pack")
+ok(#bought == 0 and _G.detailId == "beacon", "clicking the row picks it and buys nothing")
+tick(1)
+tick(1)
+ok(says("a cheap ground relay") and says("a few hundred metres") and says("DEPLOYABLE"), "…and its card reads it out")
+ok(card_host.__el.visible == true, "…in its own slot beside the panel")
+local card_buy = button_with("Buy the Relay Beacon")
+ok(card_buy ~= nil and card_buy.text:find("$80", 1, true), "…with a buy key at its price")
+local quick
+do
+  local _, bb = screen()
+  for _, b in ipairs(bb) do if b.text == "buy" then quick = b end end
+end
+ok(quick ~= nil, "the row's own buy key")
+quick.onClicked()
+ok(#bought == 1 and bought[1] == "beacon", "clicking buy buys one into the pack")
+card_buy.onClicked()
+ok(#bought == 2, "…and so does the card's")
 tick(1)
 ok(says("on the tool belt"), "…and says where it went")
 button_with("Sell counter").onClicked()
@@ -326,12 +351,25 @@ ok(sell_row ~= nil, "the SELL counter lists what there is to sell")
 sell_row.onClicked()
 ok(sold_one[1] == "ore", "…and a row sells that material through the depot")
 ok(says("Sell everything"), "…with the depot's sell-everything key")
+-- GEAR sells back too, a piece a click, at the registry's price
+local sold_gear = {}
+inv.itemList = function(cid) return cid == "astro" and { { id = "beacon", name = "Relay Beacon", n = 2, kg = 12, L = 36 } } or {} end
+inv.sellItem = function(cid, id, n) sold_gear[#sold_gear + 1] = cid .. ":" .. id; return 1, 48, nil end
+refs.items.sellPrice = function(id) return 48 end
+refs.items.SELL_BACK = 0.6
+tick(1)
+ok(says("BOUGHT BACK AT 60%"), "the SELL counter has a GEAR section at 60 %")
+local gear_row = button_with("in the pack")
+ok(gear_row ~= nil and gear_row.text:find("$48", 1, true), "…a row per piece of gear, priced")
+gear_row.onClicked()
+ok(sold_gear[1] == "astro:beacon", "…and a click sells one back")
+inv.itemList, inv.sellItem = nil, nil
 -- Away from the depot there is no shop at all.
 nodes.FacDepot.x = 400
 tick(1)
 ok(_G.atCounter == false, "away from the depot there are no counters")
 ok(not says("Buy counter") and not button_with("Relay Beacon"), "…and no buy button anywhere else")
-ok(buyGear("beacon") == false and #bought == 1, "…and buying is refused off the counter")
+ok(buyGear("beacon") == false and #bought == 2, "…and buying is refused off the counter")
 nodes.FacDepot.x = 8
 
 -- 11. ESC CLOSES IT, and so does walking away — the pack is on your back, but
@@ -344,5 +382,39 @@ walker.onFoot = false
 tick(1)
 ok(_G.open == false and panel.__el.visible == false,
   "climbing into a pod closes the panel")
+
+-- 12. A SUPPLY CRATE (scripts/supply_crates.lua): at arm's length it wins the
+-- target; the panel lists what is in it, a crate row takes it out, a pack
+-- gear row puts it in.
+walker.onFoot = true
+local crate_node = add({ name = "SupplyCrate", x = astro.x + 1.5, y = astro.y, z = astro.z })
+local cgear = { { id = "medkit", name = "Medkit", n = 2, kg = 3, L = 4 } }
+local moves = {}
+refs.supply_crates = { params = { reach = 2.4 },
+  nearAstro = function(a, r) if a:distanceTo(crate_node) < r then return { id = 1, cid = "crate:1", name = "Depot crate A", node = crate_node }, 1.5 end end }
+inv.cap = function() return 400 end
+inv.volCap = function() return 480 end
+inv.volume = function() return 4 end
+inv.lineFull = function(cid) return cid == "crate:1" and "3.0 / 400 kg  ·  4 / 480 L" or "12.0 / 90 kg" end
+inv.itemList = function(cid) return cid == "crate:1" and cgear or {} end
+inv.gearItems = function() return { { id = "laser", name = "Terrain Laser", n = 1, kg = 8, L = 12, kind = "tool", tool = true } } end
+inv.GEAR = { laser = { name = "Terrain Laser", about = "digs" }, medkit = { name = "Medkit" } }
+inv.moveItem = function(from, to, id, n) moves[#moves + 1] = from .. ">" .. to .. ":" .. id; return 1 end
+openCrate("crate:1")
+tick(1)
+ok(_G.open == true and _G.targetId == "crate:1", "E at a crate opens the panel on it (" .. tostring(_G.targetId) .. ")")
+ok(says("DEPOT CRATE A") and says("400 kg"), "…its name and its load")
+local take = button_with("Medkit")
+ok(take ~= nil and take.text:find("take", 1, true), "…a row per item in it, to take")
+take.onClicked()
+ok(moves[#moves] == "crate:1>astro:medkit", "…and a click takes one into the pack (" .. tostring(moves[#moves]) .. ")")
+local put = button_with("Terrain Laser")
+ok(put ~= nil, "the pack's gear rows are buttons at a crate")
+put.onClicked()
+ok(moves[#moves] == "astro>crate:1:laser", "…and a click stows one (" .. tostring(moves[#moves]) .. ")")
+ok(button_with("Take everything that fits") ~= nil, "…with a take-everything key")
+closePanel()
+tick(1)
+ok(_G.open == false, "E again closes it")
 
 report("INVENTORY SMOKE OK — " .. checks .. " checks passed")

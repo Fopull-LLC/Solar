@@ -218,7 +218,27 @@ store["rare.ore.Ryethos"] = { [2] = 1 }
 second()
 check("a Star Geode dug on a moon does not tick the home geode goal", not ticked("rare_finds", 3)
   and state_of("rare_finds") == "active", mi.progGoalLines("rare_finds")[3])
+-- STAR GEODES (playtest 2026-10-27): resonant crystal dug out of the deep
+-- rock is a geode find; a surface crystal or a shallow scrape is not.
+check("the rule: a pocket's geode always counts", mi.isGeodeFind("geode", 0))
+check("…crystal from 3 m down or deeper counts", mi.isGeodeFind("crystal", 3.0) and mi.isGeodeFind("crystal", 22))
+check("…a surface scrape of crystal doesn't", not mi.isGeodeFind("crystal", 0.5))
+check("…and nothing else counts at any depth", not mi.isGeodeFind("iron", 40) and not mi.isGeodeFind("uranium", 40))
+check("shallow crystal on home is no find", mi.geodeFind("Umunquo", "crystal", 1, 1.0) == false and mi.geodeFinds("Umunquo") == 0)
+check("deep crystal on a MOON is a find there", mi.geodeFind("Ryethos", "crystal", 2, 21) == true)
+second()
+check("…but does not tick the home geode goal", not ticked("rare_finds", 3))
+check("deep crystal dug on home counts as a Star Geode find", mi.geodeFind("Umunquo", "crystal", 1, 8.5) == true
+  and mi.geodeFinds("Umunquo") == 1 and store["rare.geo.Umunquo"].deep == 8.5)
+second()
+check("peak + a home geode (deep crystal) finish Rare Finds", state_of("rare_finds") == "done", state_of("rare_finds"))
 store["rare.ore.Umunquo"] = { [4] = 2 }
+check("pockets and deep crystal add up", mi.geodeFinds("Umunquo") == 3)
+do
+  local keep = store["rare.geo.Umunquo"]; store["rare.geo.Umunquo"] = nil
+  check("a pocket alone is a find (as before)", mi.geodeFinds("Umunquo") == 2)
+  store["rare.geo.Umunquo"] = keep
+end
 second()
 check("peak + a home geode finish Rare Finds", state_of("rare_finds") == "done", state_of("rare_finds"))
 check("…paying both stages and the milestone", co.balance() == f1 + 500 + 500 + 700 + 1200, co.balance() - f1)
@@ -235,7 +255,7 @@ end
 check("without comms the relay goals wait", not ticked("relay_net", 1))
 check("…and say why", (mi.progGoalLines("relay_net")[1] or ""):find("not reporting", 1, true) ~= nil,
   mi.progGoalLines("relay_net")[1])
-local NET = { ground = 0.1, sky = 0, orbit = 0, linked = {}, calls = 0 }
+local NET = { ground = 0.05, sky = 0, orbit = 0, linked = {}, calls = 0 }
 local comms = { valid = true }
 function comms.coverage(b) NET.calls = NET.calls + 1; NET.asked = b; return { ground = NET.ground, sky = NET.sky } end
 function comms.relayStats() return { ground = { Umunquo = 3 }, orbit = { Umunquo = NET.orbit }, total = 3 + NET.orbit } end
@@ -247,35 +267,39 @@ local f2 = co.balance()
 second()
 check("comms is asked about the HOME world", NET.asked == "Umunquo", NET.asked)
 check("…and its change hook is taken", type(hooked) == "function")
-check("10% covers no stage", not ticked("relay_net", 1) and co.balance() == f2)
-check("the line shows the live number", (mi.progGoalLines("relay_net")[1] or ""):find("now 10%", 1, true) ~= nil,
+check("5% covers no stage", not ticked("relay_net", 1) and co.balance() == f2)
+check("the line shows the live number", (mi.progGoalLines("relay_net")[1] or ""):find("now 5%", 1, true) ~= nil,
   mi.progGoalLines("relay_net")[1])
-NET.ground = 0.3
+check("the Relay Network asks a quarter of the ground, in two stages", #mi.progById("relay_net").goals == 2
+  and mi.progById("relay_net").goals[1].frac == 0.10 and mi.progById("relay_net").goals[2].frac == 0.25)
+NET.ground = 0.12
 second()
-check("30% ticks the 25% stage", ticked("relay_net", 1) and not ticked("relay_net", 2))
-check("…and pays it", co.balance() == f2 + 1200, co.balance() - f2)
+check("12% ticks the 10% stage", ticked("relay_net", 1) and not ticked("relay_net", 2))
+check("…and pays it", co.balance() == f2 + 800, co.balance() - f2)
+check("…and grants the Probe Core (a satellite needs one)", rs.isUnlocked("probe"))
 second(); second()
-check("…once", co.balance() == f2 + 1200)
-NET.ground = 0.55
-second()
-check("55% ticks the 50% stage", ticked("relay_net", 2))
-check("…and grants the Probe Core", rs.isUnlocked("probe"))
+check("…once", co.balance() == f2 + 800)
 check("the Relay Dish is still locked", not rs.isUnlocked("dish"))
-NET.ground = 0.2
+NET.ground = 0.06
 second()
-check("a dip in coverage never takes a stage back", ticked("relay_net", 1) and ticked("relay_net", 2))
+check("a dip in coverage never takes a stage back", ticked("relay_net", 1) and not ticked("relay_net", 2))
+-- satellites are no help with the GROUND stages (there are none before the dish)
+NET.sky = 0.4
+second()
+check("sky coverage doesn't stand in for the ground network", not ticked("relay_net", 2))
+NET.sky = 0
 -- A change event re-polls at once rather than on the next second.
-NET.ground = 0.85
+NET.ground = 0.26
 hooked()
 tick(1)
-check("the change hook re-polls on the next frame", ticked("relay_net", 3))
-check("80% completes the Relay Network", state_of("relay_net") == "done")
+check("the change hook re-polls on the next frame", ticked("relay_net", 2))
+check("25% completes the Relay Network", state_of("relay_net") == "done")
 check("…granting the Relay Dish (satellite relays)", rs.isUnlocked("dish") and rs.blockedBy("dish") == nil)
 check("…and opens Eyes in the Sky", state_of("sky") == "active")
 check("Deep Space Dish is locked behind Eyes in the Sky",
   (rs.blockedBy("dishL") or ""):find("Eyes in the Sky", 1, true) ~= nil, rs.blockedBy("dishL"))
-check("total paid for the network: 3 stages + the milestone",
-  co.balance() == f2 + 1200 + 2000 + 3500 + 3000, co.balance() - f2)
+check("total paid for the network: 2 stages + the milestone",
+  co.balance() == f2 + 800 + 1500 + 3000, co.balance() - f2)
 
 -- ── 5. reload: fresh script, same save ──────────────────────────────────────
 do
@@ -295,9 +319,12 @@ NET.orbit = 1
 NET.sky = 0.4
 second()
 check("one relay in orbit ticks the first sky goal", ticked("sky", 1) and not ticked("sky", 2))
-NET.sky = 0.96
+NET.sky = 0.55
 second()
-check("96% sky completes Eyes in the Sky", state_of("sky") == "done")
+check("satellites growing the network to 55% tick the half-planet stage", ticked("sky", 2) and not ticked("sky", 3))
+NET.sky = 0.81
+second()
+check("80% (ground + satellites) completes Eyes in the Sky", state_of("sky") == "done")
 check("…granting the Deep Space Dish", rs.isUnlocked("dishL"))
 check("…and opens Beyond", state_of("beyond") == "active")
 NET.linked = { "Umunquo" }

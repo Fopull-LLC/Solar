@@ -2,8 +2,8 @@
 --
 --   * the rules: a fall under 1.6 × impact_kill or a shot that isn't overkill
 --     leaves a member DOWN; a crush, a lost cabin, heat, an explosion, out of
---     air, or a fall past 1.6× kills outright; the bleed-out time is 90 s at
---     just-lethal, down to 30 s at the edge;
+--     air, or a fall past 1.6× kills outright; the bleed-out time is 180 s at
+--     just-lethal, down to 60 s at the edge;
 --   * a fatal fall on foot: down, hp 0, the caption, control passes on (to the
 --     nearest member on foot), the downed can't be taken control of;
 --   * left alone they bleed out at the timer: dead with the original cause,
@@ -85,8 +85,10 @@ check(C.downRule("shot", 0.2) and not C.downRule("shot", 0.6), "shots: down unle
 for _, c in ipairs({ "crushed", "cabin", "heat", "explosion", "oxygen", "drowned" }) do
   check(not C.downRule(c, 1.0), c .. ": instant, never down")
 end
-check(C.bleedSecs("impact", 1.0) == 90 and C.bleedSecs("impact", 1.6) == 30
-  and math.abs(C.bleedSecs("impact", 1.3) - 60) < 1e-6, "bleed out: 90 s just lethal, 30 s at the edge")
+check(C.bleedSecs("impact", 1.0) == 180 and C.bleedSecs("impact", 1.6) == 60
+  and math.abs(C.bleedSecs("impact", 1.3) - 120) < 1e-6, "bleed out: 180 s just lethal, 60 s at the edge")
+check(C.bleedSecs("shot", 0) == 180 and C.bleedSecs("shot", 0.5) == 60
+  and math.abs(C.bleedSecs("shot", 0.25) - 120) < 1e-6, "bleed out from a bolt: 180 s grazed, 60 s at the edge")
 local mk = IE.def("medkit")
 check(mk and mk.kg == 1.5 and mk.L == 2 and mk.cost == 150 and mk.shop == true and mk.kind == "consumable",
   "the Medkit: 1.5 kg, 2 L, $150, at the depot")
@@ -107,7 +109,11 @@ check(C1.activeId() ~= 1, "control passed on (to #" .. tostring(C1.activeId()) .
 check(select(1, C1.control(1)) == false, "the downed can't be taken control of")
 local dl = C1.downedList()
 check(#dl == 1 and dl[1].id == 1 and dl[1].left > 0, "downedList: #1, " .. string.format("%.0f", dl[1] and dl[1].left or -1) .. " s")
-secs(C1, r.downed.secs + 1)
+-- the old 90 s clock is long gone and they are still holding on (180–60 s now)
+secs(C1, 95)
+check(C1.get(1).status ~= "dead" and C1.get(1).downed and C1.get(1).downed.left > 0,
+  "still down, not dead, 95 s in (" .. string.format("%.0f", C1.get(1).downed and C1.get(1).downed.left or -1) .. " s left)")
+secs(C1, r.downed.secs - 95 + 1)
 r = C1.get(1)
 check(r.status == "dead" and r.died.cause == "impact" and r.died.bled == true
   and r.died.detail == "bled out after a fall, 26 m/s", "left alone: bled out (" .. tostring(r.died and r.died.detail) .. ")")

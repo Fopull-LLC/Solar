@@ -190,10 +190,11 @@ local CATALOGUE = {
 --
 --   1  First Steps     cut a plant, mine some ore                     (home)
 --   2  Rare Finds      a plant from a ravine floor, one from a peak,
---                      a Star Geode from an underground pocket         (home)
---   3  Relay Network   ground relays until 25 / 50 / 80 % of the home
+--                      a Star Geode (a pocket, or deep crystal)        (home)
+--   3  Relay Network   ground relays until 10 / 25 % of the home
 --                      planet's ground has a link home                 → Relay Dish
---   4  Eyes in the Sky relay satellites in orbit; 95 % sky coverage   → Deep Space Dish
+--   4  Eyes in the Sky relay satellites in orbit grow the network to
+--                      50 / 80 % of the planet (ground + satellites)   → Deep Space Dish
 --   5  Beyond          link a moon, then another planet
 --
 -- Each goal can pay on its own (`pay`, `grant`) — a staged goal is a reward
@@ -207,8 +208,9 @@ local CATALOGUE = {
 --   rare     niche=     a rare plant from that niche cut ON THE HOME WORLD
 --            alt={…}    (`rare.cut.<home>`). If the home world has none in that
 --                       niche, the first `alt` niche it does have stands in.
---   sample   home=true  (mat = "geode") a Star Geode out of one of the home
---                       world's pockets (`rare.ore.<home>`), not just held.
+--   sample   home=true  (mat = "geode") a Star Geode found on the home world:
+--                       a pocket unit (`rare.ore.<home>`) or resonant crystal
+--                       dug from underground (`rare.geo.<home>`, geodeFind).
 --   groundcov frac      comms.coverage(home).ground ≥ frac
 --   skycov   frac       comms.coverage(home).sky ≥ frac
 --   orbitrelay n        comms.relayStats().orbit[home] ≥ n
@@ -243,30 +245,40 @@ PROGRAMME = {
     goals = {
       { kind = "rare", niche = "ravine", alt = { "river", "lake", "cave" }, pay = 500 },
       { kind = "rare", niche = "peak", alt = { "cave", "lake", "river" }, pay = 500 },
-      { kind = "sample", mat = "geode", home = true, pay = 700, label = "A Star Geode from an underground pocket" },
+      { kind = "sample", mat = "geode", home = true, pay = 700, label = "A Star Geode: a geode pocket, or resonant crystal dug from deep rock" },
     },
   },
   {
+    -- THE GROUND NETWORK (playtest 2026-10-27: "100 % of a huge planet to get
+    -- the relay dish makes satellites pointless"). A quarter of the ground is
+    -- the ground network's job — the base dish and four to six beacons on
+    -- high ground, a few hundred metres apart (one beacon links ~6 % of an
+    -- 800 m world) — with a stage on the way so the first beacons pay. The
+    -- rest of the planet is what the Relay Dish it unlocks is for: satellites
+    -- (Eyes in the Sky) grow the network from there.
     id = "relay_net", title = "Relay Network", requires = "first_steps",
-    brief = "A craft past the horizon is a craft nobody can talk to. Ring the planet\n" ..
-            "with Relay Beacons — cheap, and each one only has to see the last —\n" ..
-            "until most of the ground has a link home.",
+    brief = "A craft past the horizon is a craft nobody can talk to. Plant Relay\n" ..
+            "Beacons on high ground — cheap, and each one only has to see the last —\n" ..
+            "until a quarter of the ground has a link home. Then go up.",
     reward = 3000, rep = 2, grants = { "dish" },
     goals = {
-      { kind = "groundcov", frac = 0.25, pay = 1200, label = "25% of the ground covered" },
-      { kind = "groundcov", frac = 0.50, pay = 2000, grant = "probe", label = "50% of the ground covered" },
-      { kind = "groundcov", frac = 0.80, pay = 3500, label = "80% of the ground covered" },
+      { kind = "groundcov", frac = 0.10, pay = 800, grant = "probe", label = "10% of the ground has a link home" },
+      { kind = "groundcov", frac = 0.25, pay = 1500, label = "25% of the ground has a link home" },
     },
   },
   {
+    -- SATELLITES GROW THE NETWORK: every relay in orbit with a path home
+    -- counts (comms.coverage().sky = beacons, the base dish AND satellites).
+    -- One satellite at ~1 radius up sees about a quarter of the world, so
+    -- each stage is one or two more launches, not a constellation.
     id = "sky", title = "Eyes in the Sky", requires = "relay_net",
-    brief = "Ground relays need hills and line of sight. Satellites don't: put relays\n" ..
-            "in orbit until every point of the sky over home can reach the network.",
+    brief = "Ground relays need hills and line of sight. Satellites don't: every relay\n" ..
+            "in orbit with a link home spreads the network over the ground beneath it.",
     reward = 12000, rep = 3, grants = { "dishL" },
     goals = {
       { kind = "orbitrelay", n = 1, pay = 3000, label = "A relay satellite in orbit" },
-      { kind = "skycov", frac = 0.60, pay = 3000, label = "60% sky coverage" },
-      { kind = "skycov", frac = 0.95, pay = 5000, label = "95% sky coverage" },
+      { kind = "skycov", frac = 0.50, pay = 3000, label = "Half the planet in the network" },
+      { kind = "skycov", frac = 0.80, pay = 5000, label = "80% of the planet in the network" },
     },
   },
   {
@@ -1245,14 +1257,68 @@ local function home_cut(niche)
   return false
 end
 
--- Has a Star Geode come out of one of the home world's pockets?
-local function home_geode()
-  local home = progHome()
-  if not home then return false end
-  for _, n in pairs(save.get("rare.ore." .. home) or {}) do
-    if (tonumber(n) or 0) > 0 then return true end
+-- ── STAR GEODES ─────────────────────────────────────────────────────────────
+-- What a Star Geode IS (playtest 2026-10-27: "rare underground crystals should
+-- count as star geode finds"): a find of resonant crystal in the deep rock.
+-- Two ways to make one, and both count:
+--
+--   * a GEODE POCKET (mineral_field: a few per world, 7–20 m down, the laser's
+--     resonance ring marks one within 35 m) pays out Star Geode units —
+--     counted from `rare.ore.<body>` as before;
+--   * RESONANT CRYSTAL cut out of the rock UNDERGROUND (the laser's dig, at
+--     least GEODE_DEPTH below the surface — not a surface outcrop plucked or
+--     broken) is a geode find too. The dig reports it here (tool_belt →
+--     `geodeFind`), kept as `rare.geo.<body>` = { n, deep, mat }.
+--
+-- Only the HOME world's finds tick the programme (as for the rare plants); a
+-- find anywhere is announced.
+GEODE_DEPTH = 3.0
+GEODE_MATS = { geode = true, crystal = true }
+
+-- Pure: does a dug unit of `mat` at `depth` m count as a Star Geode find?
+function isGeodeFind(mat, depth)
+  if mat == "geode" then return true end
+  return GEODE_MATS[mat] == true and (depth or 0) >= GEODE_DEPTH
+end
+
+-- Star Geode finds on a body: pocket units + underground crystal. → n
+function geodeFinds(body)
+  if not body then return 0 end
+  local n = 0
+  for _, v in pairs(save.get("rare.ore." .. body) or {}) do n = n + math.max(0, tonumber(v) or 0) end
+  local g = save.get("rare.geo." .. body)
+  if type(g) == "table" then n = n + math.max(0, tonumber(g.n) or 0) end
+  return n
+end
+
+-- The dig reports a unit it took: `body` the world, `mat` what came out, `n`
+-- units, `depth` metres under the surface. → true if it counted as a find.
+lastGeode = nil
+function geodeFind(body, mat, n, depth)
+  if not (body and isGeodeFind(mat, depth)) or (n or 0) <= 0 then return false end
+  if mat == "geode" then return true end   -- the pocket keeps its own count
+  local g = save.get("rare.geo." .. body)
+  if type(g) ~= "table" then g = { n = 0, deep = 0 } end
+  local first = (g.n or 0) <= 0 and geodeFinds(body) <= 0
+  g.n = (g.n or 0) + n
+  g.deep = math.max(g.deep or 0, math.floor((depth or 0) * 10 + 0.5) / 10)
+  g.mat = mat
+  save.set("rare.geo." .. body, g)
+  lastGeode = { body = body, n = n, depth = depth, t = time or 0 }
+  if first then
+    if log then log(string.format("RARE FIND: a Star Geode — resonant crystal %.0f m down on %s", depth or 0, body)) end
+    local bc = ref("big_caption")
+    if bc and bc.show then
+      bc.show("STAR GEODE", string.format("Resonant crystal from %.0f m down: a Star Geode find on %s.", depth or 0, body), 5.0)
+    end
   end
-  return false
+  return true
+end
+
+-- Has a Star Geode been found on the home world (a pocket, or crystal dug
+-- out of the deep rock)?
+local function home_geode()
+  return geodeFinds(progHome()) > 0
 end
 
 -- Which niches the home world has rare plants in, read from the save
