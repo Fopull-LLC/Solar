@@ -1,0 +1,28 @@
+// AUTO LIBRARY — scripts/parts_auto.lua (the auto-engineering parts: moto wheel,
+// fork, swing arm, strut, gyro) and scripts/auto_drive.lua (their suspension,
+// steering-axis and balance maths). Spawned by the builder and by
+// vessel_controller when the scene carries no node running them; reached with
+// findScript("parts_auto") / findScript("auto_drive"). Pure, no hooks.
+[
+    (
+        name: "AutoLib",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [
+            (
+                kind: "parts_auto",
+                enabled: true,
+                params: [],
+            ),
+            (
+                kind: "auto_drive",
+                enabled: true,
+                params: [],
+            ),
+        ],
+    ),
+]

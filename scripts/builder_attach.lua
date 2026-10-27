@@ -153,7 +153,9 @@ function mountBasis(def, side, n, hostB)
   if side == "radial" and not (def.radial_orient or def.radial or def.axial_out or isMember(def)) then return hostB end
   n = norm(n)
   if def.radial_orient then
-    local Y = perp_ref(n, { hostB.Y, hostB.Z, EY })
+    -- (an `upright` part — a fork, a swing arm, a strut — keeps its +Y on the
+    -- build's up, whatever lies under it: docs/auto-engineering.md)
+    local Y = perp_ref(n, def.upright and { EY, hostB.Y, hostB.Z } or { hostB.Y, hostB.Z, EY })
     return { X = n, Y = Y, Z = cross(n, Y) }
   end
   local X = perp_ref(n, { hostB.Y, hostB.X, EX })
@@ -218,7 +220,48 @@ local function nodesOf(rec, held, links)
       if not taken then out[#out + 1] = { uid = rec.uid, side = "radial", at = at, n = dd[1] } end
     end
   end
+  -- HUBS (docs/auto-engineering.md): a part's own attach points, `def.hubs`
+  -- in its frame. A "hub" takes a part that has a hub point of its own
+  -- (`hubpt`/`hubax`: a wheel's centre into a fork's or swing arm's jaws, a
+  -- fork or arm onto a wheel's centre), centred, axle to axle; an "end" is a
+  -- flank node any part mounts on (a strut's hub flange, a moto wheel's
+  -- through-axle ends).
+  for _, hb in ipairs(d.hubs or {}) do
+    local lp = v(hb.p[1], hb.p[2], hb.p[3])
+    local taken = false
+    for _, l in ipairs(links or {}) do
+      local p = linkPointOn(rec, l)
+      if p and len(sub(p, lp)) < 0.05 then taken = true break end
+    end
+    if not taken then
+      local n = norm(apply(rec.B, v(hb.n[1], hb.n[2], hb.n[3])))
+      local at = toWorld(rec, lp)
+      if hb.kind == "hub" then
+        if gd.hubpt and gd.hubax then out[#out + 1] = { uid = rec.uid, side = "hub", at = at, n = n } end
+      elseif not gm then
+        out[#out + 1] = { uid = rec.uid, side = "radial", at = at, n = n }
+      end
+    end
+  end
   return out
+end
+
+-- The held part ON A HUB: its own hub point on the node, its axle (`hubax`)
+-- along the node's, its +Y as near the build's up as that allows — so a wheel
+-- sits centred between a fork's legs, and a fork stands over a wheel.
+local function hubCandidate(node, host, held)
+  local gd, n = held.def, node.n
+  local ha = norm(v(gd.hubax[1], gd.hubax[2], gd.hubax[3]))
+  local up = perp_ref(n, { EY, host.B.Y, EX })
+  local ly = perp_ref(ha, { EY, EX, EZ })
+  local lz, wz = cross(ha, ly), cross(n, up)
+  local function img(e) return add(add(mul(n, dot(ha, e)), mul(up, dot(ly, e))), mul(wz, dot(lz, e))) end
+  local B = clean({ X = img(EX), Y = img(EY), Z = img(EZ) })
+  local P = sub(node.at, apply(B, v(gd.hubpt[1], gd.hubpt[2], gd.hubpt[3])))
+  local c = { kind = "surface", host = host.uid, node = true, side = "hub", B = B, x = P.x, y = P.y, z = P.z,
+              at = node.at, n = n }
+  c.link = { b = host.uid, k = "surface", pa = applyT(B, sub(node.at, P)), pb = toLocal(host, node.at), n = applyT(host.B, n) }
+  return c
 end
 
 -- On-screen size of a part (px), for the node capture radius.
@@ -242,6 +285,14 @@ end
 -- ── the pieces of a candidate ───────────────────────────────────────────────
 local function heldShape(held) return shapeOf(held.def, held.size) end
 
+-- A radial part's MOUNT POINT (`def.mountpt`, its own frame) sits on the
+-- face, not its box centre's line: the fork's head bracket is high on its box.
+local function mountShift(def, B, P)
+  local mp = def.mountpt
+  if not mp then return P end
+  return sub(P, apply(B, v(0, mp[2], mp[3])))
+end
+
 local function finish(c, held, A)
   c.B = clean(bmul(A, held.off or IDENT))
   return c
@@ -249,12 +300,14 @@ end
 
 -- The held part on a stack or flank node.
 local function nodeCandidate(node, host, held)
+  if node.side == "hub" then return hubCandidate(node, host, held) end
   local n = node.n
   local A = mountBasis(held.def, node.side, n, host.B)
   local c = finish({ kind = "stack", host = host.uid, node = true, side = node.side }, held, A)
   if node.side == "radial" then c.kind = "surface" end
   local r = support(heldShape(held), c.B, n)
   local P = add(node.at, mul(n, r))
+  if node.side == "radial" then P = mountShift(held.def, c.B, P) end
   c.x, c.y, c.z = P.x, P.y, P.z
   c.at, c.n = node.at, n
   local gm = isMember(held.def)
@@ -428,7 +481,7 @@ local function surfaceCandidate(held, host, hitP, hitN, q)
   local n = apply(host.B, nl)
   local A = mountBasis(held.def, "surface", n, host.B)
   local c = finish({ kind = "surface", host = host.uid }, held, A)
-  local P = add(at, mul(n, support(heldShape(held), c.B, n)))
+  local P = mountShift(held.def, c.B, add(at, mul(n, support(heldShape(held), c.B, n))))
   c.x, c.y, c.z, c.at, c.n = P.x, P.y, P.z, at, n
   if isMember(held.def) then c.end_ = dot(c.B.Y, n) > 0 and "a" or "b" end
   c.link = { b = host.uid, k = "surface", pa = applyT(c.B, sub(at, P)), pb = pl, n = nl }

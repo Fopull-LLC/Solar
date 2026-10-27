@@ -149,7 +149,7 @@ end
 -- resolved on first use (script start order doesn't matter), so `REG[id]` and
 -- `REG.chute` read exactly as they did when the table lived here. Wheel
 -- settings (WCFG_*) and every placement rule stay in this file.
-local REGISTRY = { reg = nil, lib = nil, aero = false, asked = false }
+local REGISTRY = { reg = nil, lib = nil, aero = false, asked = false, auto = false, auto_asked = false }
 local function registry()
   local R = REGISTRY
   if not R.reg then
@@ -168,6 +168,19 @@ local function registry()
     elseif not pa and not R.asked and spawn then
       R.asked = true
       pcall(spawn, "AeroLib", vec3(0, 0, 0))
+    end
+  end
+  -- THE AUTO-ENGINEERING PARTS (scripts/parts_auto.lua on the AutoLib node,
+  -- docs/auto-engineering.md): the moto wheel, fork, swing arm, strut and
+  -- gyro, joined the same way into the ROVER section.
+  if R.lib and not R.auto then
+    local pu = findScript and findScript("parts_auto") or nil
+    if pu and pu.register and R.lib.extend then
+      R.lib.extend(pu)
+      R.auto = true
+    elseif not pu and not R.auto_asked and spawn then
+      R.auto_asked = true
+      pcall(spawn, "AutoLib", vec3(0, 0, 0))
     end
   end
   return R.lib

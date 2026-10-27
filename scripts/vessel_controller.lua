@@ -7824,6 +7824,9 @@ local function r2_scan(node)
         local half = (d.rx or 0.2)
         local tyre_w = ({ S = 0.18, M = 0.26, L = 0.38 })[w.size] or 0.26
         w.tx = half - tyre_w / 2
+        -- a MOTO WHEEL (`centred`): the tyre sits on the part's own centre, its
+        -- axle running through to both ends (docs/auto-engineering.md)
+        if dm.centred then w.tx = 0 end
         w.cx, w.cy, w.cz = d.x + X[1] * w.tx, d.y + X[2] * w.tx, d.z + X[3] * w.tx
         w.axle = X
         if afHas(d, "gear") then
@@ -7867,7 +7870,9 @@ local function r2_scan(node)
   table.sort(R2.wheels, function(a, b) return a.uid < b.uid end)
   R2.hasGear = false
   for _, w in ipairs(R2.wheels) do if w.gear then R2.hasGear = true end end
+  motoScan()     -- suspension parts, the moto wheel, gyros (auto-engineering)
   r2Replan()
+  motoPlan()     -- …and whether it is a two-wheeler
   -- Each robotic part's MOVING SET: the side of it away from the command
   -- part, by the attachment tree; and which of its halves carries that side.
   for _, r in ipairs(R2.robo) do
@@ -8142,6 +8147,7 @@ local function wheels_wanted(node, info)
   if R2.holdoff > 0 then return false, "holdoff" end
   if not assembly_ready(info) or integ.push then return false, "assembling" end
   if R2.modeWait then return false, "mode" end
+  if R2.autoWait then return false, "auto" end
   -- (folded landing gear is no wheel: with every wheel folded there is
   -- nothing to put down; with some, the rest roll — r2Tick re-lays them)
   if r2AllStowed() then return false, "gear up" end
@@ -8177,6 +8183,7 @@ local function tyres_out(node, info)
     w.out = false
     if not w.onRobo and not faired and not r2Stowed(w) then
       wheel_collider(node, w, true)
+      if w.susp then motoCollider(node, w.susp, true) end
       any = any + 1
       w.want, w.out = true, true
     end
@@ -8201,6 +8208,10 @@ local function tyres_out(node, info)
     if w.want then
       w.want = nil
       local x, y, z = v2w(node, info, w.cx, w.cy, w.cz)
+      -- a tyre on a suspension part comes out where the ground has it, not
+      -- 4 cm into it under the rigid wheel box: a soft spring on a light tyre
+      -- turned that overlap into a kick (a parked bike thrown to 4 m/s)
+      if w.susp then x, y, z = x + up.x * 0.04, y + up.y * 0.04, z + up.z * 0.04 end
       spawn("WheelTyre" .. (w.size or "M"), vec3(x, y, z), function(t)
         if not R2.live or not (node and node.valid) then destroy(t) return end
         t:setAngles(yaw, pitch, roll)
@@ -8226,11 +8237,13 @@ local function tyres_in(node)
     if w.tyre and w.tyre.valid then destroy(w.tyre) end
     w.tyre, w.jointed, w.mesh, w.mesh_of, w.out = nil, false, nil, nil, false
     wheel_collider(node, w, false)
+    if w.susp then motoCollider(node, w.susp, false) end
   end
   if node and node.valid then assembly.rebuild(node) end
   damage_arm = math.max(damage_arm, time - 1.5)   -- the swap is not a crash
   R2.driving = false
   R2.hold_t = 0
+  R2.bikeT0, R2.leanTs = nil, nil
 end
 
 -- Hang one tyre on its wheel joint, dynamic, at the mount it was spawned on.
@@ -8267,8 +8280,12 @@ function hang_tyre(node, w, info)
   -- joint or compound in the scene changes, which bakes whatever sag the
   -- tyre has at that moment into its rest (0.117.0-rc3; tyres ended up to
   -- 0.4 m up their mounts).
-  t:setJoint{ kind = "wheel", to = node, axis = vec3(0, 1, 0), otherAnchor = vec3(w.cx, w.cy, w.cz),
-              stiffness = f, damping = 0.7 * (c.damper or 1), motorSpeed = 0, maxForce = (m.torque or 0.6),
+  -- ON A SUSPENSION PART (a fork, a swing arm, a strut): its own spring and
+  -- damper, along its own axis (motoSpring)
+  local axis, damp = vec3(0, 1, 0), 0.7 * (c.damper or 1)
+  if w.susp and w.susp.axis and AUTO.lib then f, damp, axis = motoSpring(w, info, mt, g, c) end
+  t:setJoint{ kind = "wheel", to = node, axis = axis, otherAnchor = vec3(w.cx, w.cy, w.cz),
+              stiffness = f, damping = damp, motorSpeed = 0, maxForce = (m.torque or 0.6),
               steer = w.steer0 or 0 }
   w.jointed = true
   w.joint_age = 0   -- seconds of ticks since it was hung, counted in drive_tick
@@ -8330,7 +8347,10 @@ function r2Steady(node, info, tk, dt)
   -- ANTI-ROLL: lean the body back level over its own tyres (drive_tick
   -- measures the lean from the suspension, so a sidehill is not fought)
   local ar = R2.antiroll or { x = 0, y = 0, z = 0 }
-  wheelTorque(node, info, up.x * yr - w.x + ar.x, up.y * yr - w.y + ar.y, up.z * yr - w.z + ar.z, tk, dt)
+  local ex, ey, ez = up.x * yr - w.x + ar.x, up.y * yr - w.y + ar.y, up.z * yr - w.z + ar.z
+  -- (a two-wheeler's roll is its balance's: motoBike)
+  if R2.bike then ex, ey, ez = motoSteadyMask(node, ex, ey, ez) end
+  wheelTorque(node, info, ex, ey, ez, tk, dt)
 end
 
 -- A ROVER IN THE AIR (playtest 2026-10-26: "as soon as you get any air w is
@@ -8484,7 +8504,10 @@ local function drive_tick(node, info, dt)
   -- walking pace the wheels roll free off the stick; below it the brakes
   -- catch the rover before a hill can get it rolling. Steering alone doesn't
   -- let go of a parked rover.
-  if dcmd == 0 and spd < 0.8 and grounded >= math.min(3, #R2.wheels) then
+  -- (not a two-wheeler: a parked wheel holds the spot it stopped on, and a
+  -- bike rocking on its feet or gyro tore its light tyres off those spots —
+  -- it stands on its rider or gyro and rolls free, B still brakes it)
+  if dcmd == 0 and spd < 0.8 and grounded >= math.min(3, #R2.wheels) and not R2.bike then
     R2.hold_t = R2.hold_t + dt
   elseif dcmd ~= 0 or spd > 1.2 then
     R2.hold_t = 0
@@ -8506,6 +8529,8 @@ local function drive_tick(node, info, dt)
     end
   end
   local accel = R2_TC * gl + climb
+  -- a two-wheeler pushes no harder than lifts its front wheel (motoPlan)
+  if R2.bike and R2.wheelieK then accel = math.min(accel, R2.wheelieK * gl + climb) end
   if (front_up == 0) ~= (rear_up == 0) then accel = accel * 0.5 end
   -- STALL: driven but barely moving (parked in a dip or a rut, nose against
   -- a bump the chassis slope doesn't see) → after half a second let the
@@ -8527,13 +8552,16 @@ local function drive_tick(node, info, dt)
   -- On the level, and coasting uphill, the wheels still roll free.
   local gmag = math.sqrt(gdir.x * gdir.x + gdir.y * gdir.y + gdir.z * gdir.z)
   local downhill = spd > 0.05 and (v.x * gdir.x + v.y * gdir.y + v.z * gdir.z) / spd or 0  -- g along the motion
-  local hill_hold = dcmd == 0 and grounded > 0 and gmag > 0 and downhill > 0.02 * gmag
+  local hill_hold = dcmd == 0 and grounded > 0 and gmag > 0 and downhill > 0.02 * gmag and not R2.bike   -- (a bike: see the parking hold)
   local hill_a = hill_hold and (downhill + 0.15 * gmag) or 0
   -- signed forward speed, for the steering's speed limit
   local vf = v.x * fx + v.y * fy + v.z * fz
   local mu = 1
   for _, w in ipairs(R2.wheels) do if w.cfg and w.cfg.friction then mu = math.min(mu, w.cfg.friction) end end
   local cmds = r2WheelCmd(R2.wheels, R2.plan, R2.drive, R2.steer, math.abs(vf), r2Lateral(gl, R2.plan, mu * R2_TYRE_MU))
+  R2.dt = dt
+  -- a TWO-WHEELER: the bars and the lean are the balance's (motoBike)
+  if R2.bike and not R2.gear and not R2.passive and grounded > 0 then motoBike(node, info, cmds, vf, gl, dt, rxv, upv, rzv, gdir) end
   local power = 0
   local limited, lmot = nil, 1   -- did the traction control hold a wheel back this tick (and which way)
   local smin = 1                  -- the worst-served motor (published: R2.served)
@@ -8541,6 +8569,7 @@ local function drive_tick(node, info, dt)
     local t = w.tyre
     if w.jointed then w.joint_age = (w.joint_age or 0) + dt end
     local j = w.jointed and (w.joint_age or 0) > 0.05 and t and t.valid and t:getcomponent("Joint")
+    if j and w.susp then motoSusp(w, j) end
     if j then
       local c = w.cfg or {}
       local cmd = cmds[k]
@@ -8661,6 +8690,390 @@ local function drive_tick(node, info, dt)
     local e = (want_a - limited * R2.a_s) / math.max(want_a, 0.1)
     R2.lk = math.max(1, math.min(8, (R2.lk or 1.5) * math.exp(math.max(-1, math.min(1, e)) * dt * 6)))
   end
+end
+
+-- ══ AUTO-ENGINEERING: SUSPENSION PARTS, THE MOTO WHEEL AND BIKES ═══════════
+-- (docs/auto-engineering.md; the maths is scripts/auto_drive.lua on the
+-- AutoLib node, the parts scripts/parts_auto.lua.)
+--
+--   SUSPENSION  a wheel clamped in a Telescopic Fork or a Swing Arm, or bolted
+--               to a Coil-over Strut, hangs on the engine's wheel joint along
+--               THAT part's axis (the fork's raked head) with a real spring
+--               and damper: the craft's weight sits it a third of the way into
+--               its travel (so it takes 3 g to bottom it: the engine's wheel
+--               joint has no travel limit, and changing a loaded spring's
+--               rate on the fly pumps energy into it), damped near half
+--               critical. The wheel's own Spring, Damper and Travel settings
+--               tune it. The fork's legs, the arm and the strut's
+--               knuckle are drawn following the tyre.
+--   BIKES       a craft whose wheels all run in one line stays up the way a
+--               rider keeps a motorcycle up: at speed by steering under the
+--               fall (A/D ask for a LEAN and the turn follows from it, a
+--               countersteer included), at a walk by the rider's feet; a
+--               Balance Gyro holds it at any speed, with or without a rider.
+AUTO = { lib = nil, asked = false }
+function autoLib()
+  local L = AUTO.lib
+  if L and type(L.suspJoint) == "function" then return L end
+  L = findScript and findScript("auto_drive") or nil
+  if L and type(L.suspJoint) ~= "function" then return nil end
+  if not L and not AUTO.asked and spawn then
+    AUTO.asked = true
+    pcall(spawn, "AutoLib", vec3(0, 0, 0))
+  end
+  AUTO.lib = L
+  return L
+end
+
+-- The part a wheel is clamped in (its parent, or a part built onto it — a
+-- fork put on a wheel first), when that part carries a suspension.
+function motoHost(E, w)
+  local cands = { w.d.parent }
+  for _, k in ipairs(bp_kids[w.uid] or {}) do cands[#cands + 1] = k end
+  for _, u in ipairs(cands) do
+    local d = u and bp_by_uid[u]
+    local sm = d and not integ.gone[u] and E.modOf(d, "susp")
+    if sm then return { uid = u, d = d, m = sm } end
+  end
+  return nil
+end
+
+-- r2_scan, after the wheel list and before the steering plan: which wheels
+-- ride a suspension part (their axis, base steer, spin sign and whether
+-- they steer), and the gyros aboard.
+function motoScan()
+  local E = elib()
+  R2.gyros, R2.autoWait = {}, nil
+  if not E then return end
+  local any = false
+  for u, d in pairs(bp_by_uid) do
+    if not integ.gone[u] and (part_hp[u] or 1) > 0 then
+      local gm = E.modOf(d, "gyro")
+      if gm then R2.gyros[#R2.gyros + 1] = { uid = u, d = d, m = gm }; any = true end
+    end
+  end
+  for _, w in ipairs(R2.wheels) do
+    w.susp = (not w.gear) and motoHost(E, w) or nil
+    if w.susp then any = true end
+  end
+  local L = autoLib()
+  if not L then
+    if any then R2.autoWait = true end
+    return
+  end
+  local F = R2.fwd or { x = 1, z = 0 }
+  for _, w in ipairs(R2.wheels) do
+    local s = w.susp
+    local rr = s and R2.rest[s.uid]
+    if s and rr then
+      local a, st0, raked = L.suspAxis(s.m, rr.X, rr.Y, rr.Z, w.axle)
+      s.axis, s.raked = a, raked
+      w.steer0 = st0
+      local rd = L.rollDir(L.axleOf(a, st0), { 0, 1, 0 })
+      local along = rd[1] * F.x + rd[3] * F.z
+      local rs = math.abs(along) > 0.3 and (along > 0 and 1 or -1) or 0
+      local c = w.cfg or r2WheelCfg(w.d)
+      w.cfg = c
+      if c.drive == "off" then rs = 0 elseif c.drive == "invert" then rs = -rs end
+      if R2.gear or R2.passive then rs = 0 end
+      w.rs = rs
+      -- a fork steers, a swing arm never does (unless the wheel is told to);
+      -- a strut leaves it to the wheel's own rule (ahead of the centre of mass)
+      if c.steer == "auto" then
+        if (s.m.steer or -1) == 1 then c.steer = "on" elseif (s.m.steer or -1) == 0 then c.steer = "off" end
+      end
+    end
+  end
+end
+
+-- After the steering plan: is it a bike, how long is it, who rides it.
+function motoPlan()
+  local L = AUTO.lib
+  R2.bike = false
+  if not L or #R2.wheels < 2 then return end
+  local list = {}
+  for _, w in ipairs(R2.wheels) do if not r2Stowed(w) then list[#list + 1] = w end end
+  R2.bike = L.isBike(list)
+  local amin, amax = math.huge, -math.huge
+  for _, w in ipairs(list) do amin, amax = math.min(amin, w.a or 0), math.max(amax, w.a or 0) end
+  R2.wheelbase = math.max(0.3, amax - amin)
+  -- the push that would lift the front: g × (CoM ahead of the rear axle) /
+  -- (CoM height), with a margin; the traction control stays under it
+  local hcg = (R2.plan and R2.plan.hcg) or 0.8
+  R2.wheelieK = 0.6 * math.max(0.05, -amin) / math.max(0.3, hcg)
+  R2.rider = false
+  for u, d in pairs(bp_by_uid) do
+    if not integ.gone[u] and ((d.seat or 0) == 1 or d.seat == true) then R2.rider = true end
+  end
+  if R2.bike then
+    log(string.format("moto: a two-wheeler (wheelbase %.2f m, %s, %d gyro, front %.2f %.2f, CoM %.2f m up)", R2.wheelbase,
+      R2.rider and "a seat" or "no seat", #R2.gyros, (R2.fwd or {}).x or 0, (R2.fwd or {}).z or 0, (R2.plan or {}).hcg or -1))
+  end
+  for _, w in ipairs(R2.wheels) do
+    if w.susp then
+      log(string.format("moto: wheel %d on %s: axis %.2f %.2f %.2f%s, base steer %.1f, spin %d, steers %s, a %.2f l %.2f",
+        w.uid, tostring(w.susp.m.kind), w.susp.axis and w.susp.axis[1] or 0, w.susp.axis and w.susp.axis[2] or 0,
+        w.susp.axis and w.susp.axis[3] or 0, w.susp.raked and " (raked)" or "", w.steer0 or 0, w.rs or 0, tostring(w.steers), w.a or 0, w.l or 0))
+    end
+  end
+end
+
+-- The load on one wheel as it stands (kN): a two-wheeler's by the lever rule
+-- (its weight is not shared evenly between the ends), else an even share.
+function motoLoad(w, info, g)
+  local m = info.mass or 1
+  local n = math.max(1, R2.nOut or #R2.wheels)
+  if #R2.wheels == 2 then
+    local o = (R2.wheels[1] == w) and R2.wheels[2] or R2.wheels[1]
+    local span = math.abs((w.a or 0) - (o.a or 0))
+    if span > 0.2 then
+      local share = math.max(0.15, math.min(0.85, math.abs(o.a or 0) / span))
+      return m * g * share
+    end
+  end
+  return m * g / n
+end
+
+-- hang_tyre for a wheel on a suspension part: the joint's frequency and
+-- damping from the spring and damper this corner wants (auto_drive), and
+-- the axis it slides on. Returns stiffness, damping, axis.
+function motoSpring(w, info, mt, g, c)
+  local L, s = AUTO.lib, w.susp
+  local wc = type(w.d.wcfg) == "table" and tonumber(w.d.wcfg.travel) or nil
+  s.travel = wc or s.m.travel or 0.15
+  s.mt = mt
+  s.load = s.load or motoLoad(w, info, g)
+  local k, cd = L.springFor(s.load, s.travel, s.m.sag, s.m.zeta, g, c.spring, c.damper)
+  s.k, s.c = k, cd
+  local f, z, ke, ce = L.suspJoint(k, cd, mt, R2.dt or (1 / 60))
+  s.ke, s.ce = ke, ce
+  return f, z, vec3(s.axis[1], s.axis[2], s.axis[3])
+end
+
+-- Every tick, per suspended wheel: how far it is compressed (the drawing and
+-- the probes read it). The joint's own measure: a wheel joint's `position`
+-- is its travel along the axis in metres, but it comes back through the
+-- degrees conversion the engine gives turning joints (× 57.3, 0.117.0-rc37),
+-- so it is divided back here. (A world-space measure — the tyre against
+-- its mount — is a tick of the planet's travel off on a world on its rails.)
+WHEEL_POS_SCALE = 57.29578
+function motoSusp(w, j)
+  local s = w.susp
+  if not (s and j) then return end
+  s.comp = (j.position or 0) / WHEEL_POS_SCALE      -- + the wheel has come up toward the hull
+  s.peak = math.max(s.peak or 0, s.comp)
+end
+
+-- A TWO-WHEELER, every tick its tyres are out: the lean, the lean asked for,
+-- the bars (steering balance at speed) and the torque the rider's body and
+-- feet or a gyro put in. Rewrites the steering wheels' commands.
+BIKE_EASE = 0.8
+-- STEERING BALANCE (auto_drive.bikeSteer: the bars turned under the fall,
+-- A/D asking for a lean) is off: on the engine's ball tyres it held the
+-- probe's straights and turns on some runs and threw the bike on others
+-- (docs/auto-engineering.md). Off, A/D steer as on a rover and the rider's
+-- weight and feet, or a gyro, hold the lean the turn wants.
+BIKE_STEER_BALANCE = false
+BIKE_LEAN_RATE = math.rad(30)   -- rad/s
+function motoBike(node, info, cmds, vf, gl, dt, rxv, upv, rzv, gdir)
+  local L = AUTO.lib
+  if not L or R2.motoOff then return end   -- (motoOff: a probe's switch)
+  local F = R2.fwd or { x = 1, z = 0 }
+  local Fw = { rxv.x * F.x + rzv.x * F.z, rxv.y * F.x + rzv.y * F.z, rxv.z * F.x + rzv.z * F.z }
+  local gl2 = math.max(1e-6, gl)
+  local U = { -gdir.x / gl2, -gdir.y / gl2, -gdir.z / gl2 }
+  -- the front, level (the bike's own front leans and pitches with it)
+  local d = Fw[1] * U[1] + Fw[2] * U[2] + Fw[3] * U[3]
+  local Fl = L.vec.unit({ Fw[1] - U[1] * d, Fw[2] - U[2] * d, Fw[3] - U[3] * d })
+  local wv = info.angVel
+  local phi, rate = L.leanOf(Fl, { upv.x, upv.y, upv.z }, U, { wv.x, wv.y, wv.z })
+  -- (the rate smoothed over a few ticks: the damping term amplified the
+  -- tyres' contact chatter)
+  R2.leanRateS = (R2.leanRateS or rate) + (rate - (R2.leanRateS or rate)) * math.min(1, dt * 20)
+  rate = R2.leanRateS
+  local yaw = wv.x * U[1] + wv.y * U[2] + wv.z * U[3]            -- + turning left
+  local alat = vf * yaw                                           -- m/s², + to the left
+  local plan = R2.plan or {}
+  local h = math.max(0.25, plan.hcg or 0.7)
+  local Lb = R2.wheelbase or 1.4
+  local lock = 25
+  for _, w in ipairs(R2.wheels) do if w.steers and w.cfg then lock = w.cfg.steerMax or lock end end
+  local mu = R2_TYRE_MU
+  local stick = R2.steer or 0                                     -- eased A/D, + left
+  local phiT
+  if BIKE_STEER_BALANCE then
+    phiT = L.leanTarget(stick, math.abs(vf), gl, Lb, lock, mu)
+  else
+    -- A/D ask for a lean (the rider's weight, feet or a gyro put it there)
+    phiT = L.leanTarget(stick, math.abs(vf), gl, Lb, lock, mu)
+  end
+  -- the lean asked for comes on at BIKE_LEAN_RATE: a rider tips in, and a
+  -- step to full lean overshot it into a lowside
+  local pt = R2.leanTs or phi
+  phiT = pt + math.max(-BIKE_LEAN_RATE * dt, math.min(BIKE_LEAN_RATE * dt, phiT - pt))
+  R2.leanTs = phiT
+  local share, steer = 0, nil
+  if BIKE_STEER_BALANCE then
+    share = L.steerShare(vf)
+    local st = L.bikeSteer(phi, rate, phiT, vf, gl, Lb, h, lock)
+    -- below a walk the bars are the rider's (full lock on A/D); above it the
+    -- balance has them
+    local direct = stick * lock
+    steer = direct + (st - direct) * share
+    for k, w in ipairs(R2.wheels) do
+      if w.steers and cmds[k] then cmds[k].steer = steer * (w.ssign or 1) end
+    end
+  else
+    -- …and the bars FOLLOW THE LEAN, as a real fork's trail turns it: the
+    -- turn the lean balances, tan δ = L g tan φ / v². Leaned further than
+    -- the turn, the turn tightens and stands it up; less, it widens and the
+    -- bike falls in: the lean leads, the turn follows. At a walk the bars
+    -- are the rider's (A/D, full lock).
+    share = L.steerShare(vf)
+    local vv = math.max(1.0, math.abs(vf))
+    local eq = math.deg(math.atan(Lb * gl * math.tan(phi) / (vv * vv)))
+    if vf < 0 then eq = -eq end
+    eq = math.max(-lock, math.min(lock, eq))
+    steer = stick * lock * (1 - share) + eq * share
+    for k, w in ipairs(R2.wheels) do
+      if w.steers and cmds[k] then cmds[k].steer = steer * (w.ssign or 1) end
+    end
+  end
+  -- the torque: the gyros (served by the power) and the rider
+  local gt, draw_k = 0, 0
+  for _, g in ipairs(R2.gyros or {}) do
+    local served = (elec.served and elec.served["g" .. g.uid]) or 1
+    gt = gt + (g.m.torque or 1.5) * served
+  end
+  local rider = R2.rider and crewAboard == true
+  -- eased in from 40 % over BIKE_EASE s once a tyre is down: at full
+  -- authority the moment the tyres came out, the torque on a craft still
+  -- settling onto its springs threw it end over end (probe: 7.8 m/s, both
+  -- tyres in the air, a second after a parked bike's tyres came out)
+  local down = 0
+  for _, w in ipairs(R2.wheels) do if w.tyre and w.tyre.valid and w.tyre.grounded then down = down + 1 end end
+  if down >= 1 and not R2.bikeT0 then R2.bikeT0 = time end
+  local ease = R2.bikeT0 and math.min(1, 0.4 + 0.6 * (time - R2.bikeT0) / BIKE_EASE) or 0
+  local tmax = L.balanceAuthority(gt, rider, vf) * ease
+  local I = (info.mass or 0.3) * h * h
+  local tq = L.bikeTorque(phi, rate, phiT, info.mass or 0.3, h, gl, alat, tmax, I)
+  -- (+ leans it left: a turn about −front). About the bike's OWN front, not
+  -- the level one: pitched up a slope or on its springs, a turn about the
+  -- level front is part yaw, and the balance spun the bike on the spot.
+  local Fb = L.vec.unit(Fw)
+  assembly.torque(node, vec3(-Fb[1] * tq, -Fb[2] * tq, -Fb[3] * tq))
+  if gt > 0 then draw_k = math.min(1, math.abs(tq) / math.max(0.1, gt)) end
+  for _, g in ipairs(R2.gyros or {}) do R2.draw["g" .. g.uid] = (g.m.draw or 0.4) * (0.15 + 0.85 * draw_k) end
+  R2.lean, R2.leanT, R2.leanRate, R2.bikeSteer, R2.bikeTorque, R2.alat, R2.yawRate = phi, phiT, rate, steer, tq, alat, yaw
+  R2.gl, R2.tmax, R2.share = gl, tmax, share
+  R2.gyroSpin = (R2.gyroSpin or 0) + dt * (gt > 0 and 40 or 0)
+end
+
+-- r2Steady on a bike: the roll is the balance's, not the reaction wheels'
+-- (they would hold it upright through a turn and throw it over).
+function motoSteadyMask(node, ex, ey, ez)
+  if not R2.bike then return ex, ey, ez end
+  local rxv, _, rzv = basis(node)
+  local F = R2.fwd or { x = 1, z = 0 }
+  local fx, fy, fz = rxv.x * F.x + rzv.x * F.z, rxv.y * F.x + rzv.y * F.z, rxv.z * F.x + rzv.z * F.z
+  local d = ex * fx + ey * fy + ez * fz
+  return ex - d * fx, ey - d * fy, ez - d * fz
+end
+
+-- A suspension part's own box while its wheel's tyre is out: a stub at its
+-- centre, as a wheel's is (wheel_collider). A fork's or swing arm's box
+-- takes in the wheel it holds, and the live tyre hung inside it was thrown
+-- clear of it the moment it came out (0.117.0-rc37: a parked bike kicked to
+-- 5.7 m/s).
+function motoCollider(node, s, live)
+  local n = r2NodeOf(node, s.uid)
+  local rb = n and n:getcomponent("RigidBody")
+  if not rb then return end
+  if live then
+    rb.half_x, rb.half_y, rb.half_z = 0.05, 0.05, 0.05
+  else
+    local d = s.d
+    rb.half_x, rb.half_y, rb.half_z = d.rx or 0.2, (d.h or 0.5) / 2, d.rz or 0.2
+  end
+end
+
+-- THE MOVING HALVES AS DRAWN (lateUpdate): a fork's steering half turns and
+-- its legs slide, a swing arm swings, a strut's knuckle slides and steers and
+-- its wishbone follows; a moto wheel's axle stubs hide with its tyre out (the
+-- live tyre carries its own), and a gyro's flywheel caps spin.
+function motoFind(n, name, depth)
+  if not (n and n.valid) then return nil end
+  for _, c in ipairs(n:children()) do
+    if c.name == name then return c end
+  end
+  if (depth or 0) < 3 then
+    for _, c in ipairs(n:children()) do
+      local f = motoFind(c, name, (depth or 0) + 1)
+      if f then return f end
+    end
+  end
+  return nil
+end
+function motoVisuals(node, dt)
+  if not (node and node.valid) then return end
+  for _, w in ipairs(R2.wheels) do
+    local s = w.susp
+    if s then
+      local pn = r2NodeOf(node, s.uid)
+      if pn then
+        s.vis = s.vis or {}
+        local V = s.vis
+        if not (V.of == pn.id) then
+          V.of = pn.id
+          V.steer = motoFind(pn, "ForkSteer") or motoFind(pn, "StrutSlide")
+          V.slide = motoFind(pn, "ForkSlide")
+          V.arm = motoFind(pn, "ArmPivot")
+          V.y0 = V.steer and V.steer.y or 0
+          if not V.slide and V.steer and s.m.kind == "strut" then V.slide = V.steer end
+        end
+        local live = R2.live and w.tyre and w.tyre.valid and w.jointed
+        local comp = live and (s.comp or 0) or 0
+        local stv = live and (w.steerNow or 0) * R2_STEER_SIGN or 0
+        local P = AUTO.lib and AUTO.lib.poseOf(s.m.kind, comp, stv, s.m.len) or { slide = comp, steer = math.rad(stv), arm = 0 }
+        if s.m.kind == "fork" then
+          if V.steer then V.steer:setAngles(P.steer, 0, 0) end
+          if V.slide then V.slide.y = P.slide end
+        elseif s.m.kind == "arm" then
+          if V.arm then V.arm:setAngles(0, 0, P.arm) end
+        elseif s.m.kind == "strut" then
+          if V.steer then V.steer:setAngles(P.steer, 0, 0); V.steer.y = V.y0 + P.slide end
+          if V.arm then V.arm:setAngles(0, 0, P.arm) end
+        end
+      end
+    end
+    if w.m and w.m.centred then
+      local wn = r2NodeOf(node, w.uid)
+      local ax = wn and child_named(wn, "Axle")
+      local want = not (R2.live and w.out)
+      if ax and ax.visible ~= want then ax.visible = want end
+    end
+  end
+  if #(R2.gyros or {}) > 0 then
+    for _, g in ipairs(R2.gyros) do
+      local gn = r2NodeOf(node, g.uid)
+      local fw = gn and child_named(gn, "Flywheel")
+      if fw then fw:setAngles(0, (R2.gyroSpin or 0) % (2 * math.pi), 0) end
+    end
+  end
+end
+
+-- Published (probes, the HUD): the bike's state and each suspension's.
+function motoState()
+  local o = { g = R2.gl, tmax = R2.tmax, share = R2.share, bike = R2.bike == true, lean = R2.lean, leanT = R2.leanT, steer = R2.bikeSteer, torque = R2.bikeTorque, yaw = R2.yawRate,
+              alat = R2.alat, wheelbase = R2.wheelbase, rider = R2.rider, gyros = #(R2.gyros or {}), susp = {} }
+  for _, w in ipairs(R2.wheels) do
+    local s = w.susp
+    if s then
+      o.susp[#o.susp + 1] = { uid = w.uid, kind = s.m.kind, comp = s.comp, peak = s.peak, travel = s.travel, k = s.k,
+                              c = s.c, ke = s.ke, ce = s.ce, load = s.load, raked = s.raked, steer0 = w.steer0 }
+    end
+  end
+  return o
 end
 
 -- ── claw ───────────────────────────────────────────────────────────────────
@@ -9006,6 +9419,7 @@ function r2Tick(node, info, dt)
   drill_tick(node, info, dt)
   -- (the library node answered: read the mode now)
   if R2.modeWait and craftModeLib() then r2ResolveMode(); R2.gen = -1 end
+  if R2.autoWait and autoLib() then R2.gen = -1 end
   -- LANDING GEAR FOLDING (G), in any mode. Tyres in: the leg's wheel box
   -- goes and comes with it. Tyres out: the tyres are laid again without the
   -- folded legs (a rover drives on, a plane's come in), and back with them
@@ -10210,6 +10624,8 @@ end
 function lateUpdate(node, dt)
   -- the live tyres as drawn: along their steered axles, rolling
   if R2.live then r2TyreVisuals(node, dt) end
+  -- forks, swing arms and struts follow their wheels (auto-engineering)
+  if #R2.wheels > 0 and AUTO.lib then motoVisuals(node, dt) end
   -- A craft nobody is flying still folds and points what it's told to (the
   -- Tracking Station, a docked partner's groups) — the piloted one does this in
   -- its fixed tick.
