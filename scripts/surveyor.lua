@@ -506,6 +506,8 @@ end
 local function crater(x, y, z, nx, ny, nz)
   local r = P("crater_r")
   if r <= 0 or not (terrain and terrain.dig) then return end
+  -- never into the base's foundations (base_facilities digRefused): a blast there only scorches
+  local bf = ref("base_facilities"); if bf and bf.digRefused and bf.digRefused(x - nx * r * 0.4, y - ny * r * 0.4, z - nz * r * 0.4, r) then return end
   local ff = ref("flora_field")
   if ff and ff.liftWash then pcall(ff.liftWash, x, y, z, 110.0, 8.0) end
   pcall(terrain.dig, x - nx * r * 0.4, y - ny * r * 0.4, z - nz * r * 0.4, r, 1.0)

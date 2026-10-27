@@ -19,6 +19,9 @@
 --   7. keepClear: true on the paving and the lots, false out in the field;
 --   8. an OLD save (a base sited before this layout) is laid out where it
 --      stands, never moved.
+--   9. the floor: a row of static slabs under every strip, on the sphere; and
+--      the foundations: digClamp keeps digs out of every strip's and lot's
+--      column (GUARD.margin wider), not out of open ground or deep rock.
 --
 --   luajit solar/tests/smoke_base.lua
 
@@ -276,6 +279,62 @@ assert(BF.keepClear(planet.name, rel(0, 125)), "the pad must be kept clear")
 assert(not BF.keepClear(planet.name, rel(120, 40)), "open ground NE of the compound is not paved")
 assert(not BF.keepClear(planet.name, rel(0, -110)), "open ground south of the runway is not paved")
 assert(not BF.keepClear("Elsewhere", rel(0, 0)), "another world's ground is never the base's")
+
+-- 9. the floor and its foundations: every strip is a row of static slabs on the
+-- sphere, parented to the planet in body-relative coords, their tops SLAB.top
+-- over the grade; and digClamp keeps every dig out of a strip's or a lot's
+-- column (GUARD.margin wider), but not out of open ground, deep rock or
+-- another world.
+local slabs, slab_area = 0, 0
+for _, n in ipairs(spawned) do
+  if n.name == "PaveSlab" then
+    slabs = slabs + 1
+    assert(n.parent == planet_node, "a floor slab is not parented to the planet")
+    assert(approx(planet.x + n.x, n.world.x, 1e-6) and approx(planet.z + n.z, n.world.z, 1e-6), "a slab's local coords are not body-relative")
+    assert(approx(len(n.x, n.y, n.z), R + BF.SLAB.top - BF.SLAB.thick / 2, 1e-6), "a slab's top is not SLAB.top over the grade")
+    assert(n.scale and n.scale.y == BF.SLAB.thick and n.scale.x > 1 and n.scale.z > 1, "a slab was not scaled to its piece")
+    local u = n.up_set
+    assert(u and math.abs(len(n.x, n.y, n.z) - (n.x * u.x + n.y * u.y + n.z * u.z)) < 1e-6, "a slab is not turned to its radial up")
+    slab_area = slab_area + n.scale.x * (n.scale.z - 2 * BF.SLAB.overlap)
+  end
+end
+assert(slabs >= 40 and BF.SLAB_COUNT == slabs, "floor slabs: " .. slabs .. " (count " .. tostring(BF.SLAB_COUNT) .. ")")
+assert(slab_area > 262 * 24 + 26 * 12 + 26 * 48, string.format("the slabs cover %.0f m² — less than the runway, taxiway and apron", slab_area))
+local function wrel(u, v, h)
+  local d = BF.dirAt(Fr, u, v)
+  return planet.x + d.x * (R + h), planet.y + d.y * (R + h), planet.z + d.z * (R + h)
+end
+local function refused(u, v, h, r) local x, y, z = wrel(u, v, h); return BF.digRefused(x, y, z, r) ~= nil end
+-- (across the runway in its own strip frame: a great circle, it bows ~1 m off v = const)
+local RS = BF.stripOf(Fr, BF.RUNWAY.u0, BF.RUNWAY.v, BF.RUNWAY.u1, BF.RUNWAY.v)
+local edge = BF.RUNWAY.half + BF.RUNWAY.shoulder
+local function rw(s, w, h)
+  local d = BF.stripDir(RS, s, w)
+  return planet.x + d.x * (R + h), planet.y + d.y * (R + h), planet.z + d.z * (R + h)
+end
+local function rw_refused(s, w, h, r) local x, y, z = rw(s, w, h); return BF.digRefused(x, y, z, r) ~= nil end
+assert(rw_refused(RS.L / 2, 0, 0, 0.6), "a dig on the runway was allowed")
+assert(rw_refused(RS.L / 2 + 40, 0, -4, 0.6), "a dig 4 m under the runway was allowed")
+for _, s in ipairs({ 1.0, RS.L / 4, RS.L / 2, RS.L - 1.0 }) do
+  assert(rw_refused(s, -edge - 1.0, 0, 0.6), "a dig 1 m off the runway's edge was allowed")
+  assert(rw_refused(s, edge + 1.0, 0, 0.6), "a dig 1 m off the runway's north edge was allowed")
+  assert(not rw_refused(s, -edge - BF.GUARD.margin - 1.0, 0, 0.6), "a dig 3 m off the runway's edge was refused")
+end
+assert(rw_refused(-1.0, 0, 0, 0.6) and not rw_refused(-BF.GUARD.margin - 1.5, 0, 0, 0.6), "the runway's end is not guarded right")
+assert(refused(BF.PAD.u + 5, BF.PAD.v, -1, 0.6), "a dig under the pad was allowed")
+assert(refused(50, 3.5 - 0.5, 0, 0.6), "a dig at the Command Centre's floor was allowed")
+assert(not refused(120, 40, 0, 0.6), "a dig in open ground NE of the compound was refused")
+assert(not refused(0, -10, -40, 2.0), "a dig 40 m under the apron (deep rock) was refused")
+do
+  local x, y, z = rw(RS.L / 2, 0, 0)
+  local r, why = BF.digClamp(x, y, z, 3.0)
+  assert(r == 0 and type(why) == "string" and why:find("foundations"), "digClamp on the runway: " .. tostring(r) .. " " .. tostring(why))
+  x, y, z = rw(RS.L / 2, -edge - 3.0, 0)
+  r = BF.digClamp(x, y, z, 3.0)
+  assert(r > 0.8 and r < 1.2, string.format("a 3 m ball 3 m off the edge should shrink to ~1 m, got %.2f", r))
+  local far = BF.digClamp(x + 1e5, y, z, 3.0)
+  assert(far == 3.0, "a dig on another world was clamped")
+end
 
 -- the grade is checked once it has landed and recorded: a resume sends nothing
 for _ = 1, 400 do time = time + TICK; BF.update({}, TICK) end

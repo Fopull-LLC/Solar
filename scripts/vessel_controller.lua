@@ -470,7 +470,8 @@ local function make_crater(x, y, z, r)
     -- Scorch first (color-only, always lands within reach); then dig if genuinely in.
     terrain.paint(x, y, z, r * 1.6, 0.08, 0.07, 0.06, 0.7)
   end
-  if sd < r then terrain.dig(x, y, z, r, 1.0); groundChangedAt(x, y, z, r) end
+  -- (never into the base's foundations: the ball shrinks to stay clear of them)
+  if sd < r then r = baseDigRadius(x, y, z, r); if r >= 0.3 then terrain.dig(x, y, z, r, 1.0); groundChangedAt(x, y, z, r) end end
 end
 
 -- The engine LOOP follows the vessel and rides the throttle; born on the first
@@ -1016,6 +1017,17 @@ local ff_ref = nil
 function groundChangedAt(x, y, z, r)
   if not (ff_ref and ff_ref.valid) then ff_ref = findScript and findScript("flora_field") or nil end
   if ff_ref and ff_ref.groundChanged then pcall(ff_ref.groundChanged, x, y, z, r) end
+end
+-- The base's foundations can't be dug (base_facilities digClamp): the radius a
+-- blast, gouge or drill may dig there, r where nothing guarded is near. A global
+-- table and function for the same reason as above.
+BASE_GUARD = { ref = nil }
+function baseDigRadius(x, y, z, r)
+  local g = BASE_GUARD
+  if not (g.ref and g.ref.valid) then g.ref = findScript and findScript("base_facilities") or nil end
+  if not (g.ref and g.ref.digClamp) then return r end
+  local ok, rr = pcall(g.ref.digClamp, x, y, z, r)
+  return (ok and type(rr) == "number") and rr or r
 end
 
 -- ── engine plumes ───────────────────────────────────────────────────────────
@@ -5793,7 +5805,7 @@ local function damage_tick(node, info, dt)
         if spark and not dug and (h.d.legs or 0) ~= 1 then
           local r = 0.6 + math.min(2.0, h.e * 0.12)
           local sd = terrain.query(h.x, h.y, h.z)
-          if sd and sd < r then
+          if sd and sd < r and baseDigRadius(h.x, h.y, h.z, r) >= r then
             terrain.dig(h.x, h.y, h.z, r, 0.6)
             groundChangedAt(h.x, h.y, h.z, r)
             -- SCUFF the surface where the hull bit in: a dark scratch mark painted
@@ -10262,6 +10274,8 @@ local function drill_tick(node, info, dt)
       local hit = raycast(wx, wy, wz, dx, dy, dz, tipd + (dr.m.reach or 0.9), { ignore = r2Own(node) })
       if not hit then
         why = "the drill can't reach the ground — set down closer"
+      elseif baseDigRadius(hit.x, hit.y, hit.z, 0.4) < 0.4 then
+        why = "the base's foundations — can't drill here"
       else
         working = true
         dr.prog = dr.prog + dt * (dr.m.rate or 4) / 60.0 -- units a minute → per tick

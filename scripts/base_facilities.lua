@@ -33,8 +33,10 @@
 -- are laid along every strip and over every lot, each centred ON the sphere of
 -- radius R with the planet's radial up as its plane (the engine's default on a
 -- planet), so the overlapping tangent planes converge on the sphere to a few
--- centimetres. The paving is a mesh laid 10 cm over that ground (a mesh, not a
--- collider: wheels and boots ride the graded terrain). The edits persist in the
+-- centimetres. The paving is a mesh laid 10 cm over that ground, and under it
+-- a floor of static slabs on the sphere that holds wheels and boots up whatever
+-- the ground does (`lay_slabs`); the ground round it can't be dug (`digClamp`,
+-- "the floor and its foundations" below). The edits persist in the
 -- slot's terrain; a later session only checks a few points (terrain.query on
 -- the sphere) and regrades if the ground has moved.
 --
@@ -379,6 +381,174 @@ function keepClear(bodyName, rx, ry, rz)
     if abs(u - cu) <= hu + m and abs(v - cv) <= hv + m then return true end
   end
   return false
+end
+
+-- ── the floor and its foundations ────────────────────────────────────────────
+-- THE PAVING IS A FLOOR. The paving meshes draw; they hold nothing up, and
+-- before this every strip — the runway, the taxiway, the apron, the roads,
+-- the yards and walks — was the graded TERRAIN under a picture of asphalt, so
+-- a terrain laser could take the ground out from under it and the crew, a
+-- rover or a parked jet fell through the "runway" (playtest 2026-10-27). Now
+-- every strip is also a row of static box colliders (prefabs/PaveSlab: one
+-- unit box, scaled), each a chord of the strip SLAB.seg metres long, its top
+-- SLAB.top over the graded sphere: they hold whatever stands on them up
+-- whatever the terrain under them does. (The buildings' floors and the pad's
+-- hardstand are box colliders of their own prefabs already.) A chord of
+-- 10 m on a 600 m world bows 2 cm and turns 1° at a joint: nothing a wheel
+-- feels. The top sits a little under the paving's own height (PAVE_H), so a
+-- wheel on the slab never floats over the asphalt it draws on.
+SLAB = { seg = 10.0, top = 0.06, thick = 1.2, overlap = 0.3 }
+-- THE FOUNDATIONS CAN'T BE DUG. A column round every strip and lot, GUARD.margin
+-- wider than it, from GUARD.depth under the grade to GUARD.height over it, is
+-- off limits to digs: the terrain laser, a crash's crater, a hull's gouge, the
+-- drill and the surveyor's blasts ask `digClamp` first (the ground's own grade
+-- here never does).
+GUARD = { margin = 2.0, depth = 10.0, height = 80.0, why = "The base's foundations — can't dig here" }
+
+-- The strip floor in pieces: { d (centre, unit), t (along), n (across), hl, hw }.
+local function strip_pieces(Fr, runway)
+  local out = {}
+  local function strip(S, half)
+    local n = math.max(1, math.ceil(S.L / SLAB.seg))
+    local ls = S.L / n
+    for k = 0, n - 1 do
+      local s = (k + 0.5) * ls
+      out[#out + 1] = { d = stripDir(S, s, 0), t = stripTan(S, s), n = S.n, hl = ls / 2, hw = half }
+    end
+  end
+  if runway then strip(runway_strip(Fr), RUNWAY.half + RUNWAY.shoulder) end
+  strip(stripOf(Fr, TAXIWAY.u, TAXIWAY.v0 - 0.6, TAXIWAY.u, TAXIWAY.v1), TAXIWAY.half)
+  for _, st in ipairs(STRIPS) do strip(stripOf(Fr, st[2], st[3], st[4], st[5]), st[6]) end
+  return out
+end
+
+-- Every lot as a piece, its axes the layout's u and v there.
+local function lot_pieces(Fr)
+  local out = {}
+  for _, f in ipairs(FACILITIES) do
+    local cu, cv, hu, hv = lotRect(f)
+    local d = dirAt(Fr, cu, cv)
+    local tu = unit(add(Fr.eu, d, -dot(Fr.eu, d)))
+    out[#out + 1] = { d = d, t = tu, n = cross(d, tu), hl = hu, hw = hv }
+  end
+  return out
+end
+
+-- DIG GUARDS: volumes no dig may reach, by owner, so anything that builds on
+-- the ground (the base here; a player's outpost one day) can say "not under
+-- me". A volume is a box in its body's frame (body-relative, as the base's
+-- nodes are): centre c, unit axes t / up / n, half sizes ht / hn across the
+-- ground, and lo..hi along up from c. guards[owner] = { body, list, c, r }.
+guards = {}
+function setGuards(owner, body, list)
+  if not list or #list == 0 or not body then guards[owner] = nil; return end
+  local c = V(0, 0, 0)
+  for _, g in ipairs(list) do c = add(c, g.c) end
+  c = mul(c, 1 / #list)
+  local r = 0
+  for _, g in ipairs(list) do
+    r = math.max(r, len(add(g.c, c, -1)) + sqrt(g.ht * g.ht + g.hn * g.hn) + math.max(abs(g.lo), abs(g.hi)))
+  end
+  guards[owner] = { body = body, list = list, c = c, r = r }
+end
+
+local function guard_dist(g, q)
+  local rel = add(q, g.c, -1)
+  local a, b, s = dot(rel, g.t), dot(rel, g.up), dot(rel, g.n)
+  local ea = math.max(0, abs(a) - g.ht)
+  local es = math.max(0, abs(s) - g.hn)
+  local eb = b < g.lo and g.lo - b or (b > g.hi and b - g.hi or 0)
+  return sqrt(ea * ea + es * es + eb * eb)
+end
+
+-- How big a ball (centre x, y, z in WORLD space, radius r) may be dug there:
+-- r where nothing guarded is near, less where a guard is closer than r (the
+-- ball shrunk to stay clear of it), 0 with the centre inside one. The second
+-- answer is why, when it is less than r. A laser or a drill takes anything
+-- under r as "no"; a crater may dig the smaller ball.
+function digClamp(x, y, z, r)
+  r = r or 0
+  local best, why = math.huge, nil
+  for _, o in pairs(guards) do
+    local b = space.body(o.body)
+    if b then
+      local q = V(x - b.x, y - b.y, z - b.z)
+      if len(add(q, o.c, -1)) < o.r + r then
+        for _, g in ipairs(o.list) do
+          local d = guard_dist(g, q)
+          if d < best then best, why = d, g.why end
+          if best <= 0 then break end
+        end
+      end
+    end
+    if best <= 0 then break end
+  end
+  if best >= r then return r end
+  return math.max(0, best), why or GUARD.why
+end
+-- The tools' one-line question: nil = dig away, else the reason it can't.
+-- Counted for probes (DIG_REFUSED).
+DIG_REFUSED = 0
+function digRefused(x, y, z, r)
+  local rr, why = digClamp(x, y, z, r)
+  if rr < r then DIG_REFUSED = DIG_REFUSED + 1; return why end
+  return nil
+end
+-- (probes) every guard volume, flat: { owner, body, c, t, up, n, ht, hn, lo, hi }
+function guardVolumes()
+  local out = {}
+  for owner, o in pairs(guards) do
+    for _, g in ipairs(o.list) do out[#out + 1] = { owner = owner, body = o.body, c = g.c, t = g.t, up = g.up, n = g.n,
+                                                    ht = g.ht, hn = g.hn, lo = g.lo, hi = g.hi } end
+  end
+  return out
+end
+
+-- The base's own guards: every strip piece and every lot, GUARD.margin wider.
+function guardBase(Fr, runway, bodyName)
+  local list = {}
+  local m = GUARD.margin
+  local function put(p)
+    list[#list + 1] = { c = mul(p.d, Fr.R), t = p.t, up = p.d, n = p.n, ht = p.hl + m, hn = p.hw + m,
+                        lo = -GUARD.depth, hi = GUARD.height, why = GUARD.why }
+  end
+  for _, p in ipairs(strip_pieces(Fr, runway)) do put(p) end
+  for _, p in ipairs(lot_pieces(Fr)) do put(p) end
+  setGuards("base", bodyName, list)
+  return #list
+end
+
+-- The slabs, once per siting (they stand on the sphere, not on the ground,
+-- so a regrade leaves them be). Nodes arrive through spawn's callback.
+local slabs = { nodes = {}, key = nil }
+SLAB_COUNT = 0
+local function clear_slabs()
+  for _, n in ipairs(slabs.nodes) do if n.valid then n:destroy() end end
+  slabs.nodes, slabs.key, SLAB_COUNT = {}, nil, 0
+end
+function lay_slabs(Fr, runway, planet_node)
+  if not (spawn and planet_node) then return 0 end
+  local key = string.format("%.6f:%.6f:%.6f:%.3f:%.5f:%s", Fr.c.x, Fr.c.y, Fr.c.z, Fr.R, Fr.heading, tostring(runway))
+  if slabs.key == key then return 0 end
+  clear_slabs()
+  slabs.key = key
+  local list = strip_pieces(Fr, runway)
+  local rc = Fr.R + SLAB.top - SLAB.thick / 2
+  local b = baseBody and space.body(baseBody)
+  local bx, by, bz = b and b.x or 0, b and b.y or 0, b and b.z or 0
+  for _, p in ipairs(list) do
+    local o = mul(p.d, rc)
+    -- (spawned at its world point; parent-local, i.e. body-relative, once it is there)
+    spawn("PaveSlab", vec3(bx + o.x, by + o.y, bz + o.z), function(inst)
+      inst:setUp(vec3(p.d.x, p.d.y, p.d.z), vec3(p.t.x, p.t.y, p.t.z))
+      inst.scale = vec3(p.hw * 2, SLAB.thick, (p.hl + SLAB.overlap) * 2)
+      inst.x, inst.y, inst.z = o.x, o.y, o.z
+      slabs.nodes[#slabs.nodes + 1] = inst
+      SLAB_COUNT = #slabs.nodes
+    end, planet_node)
+  end
+  log(string.format("base: %d floor slabs under the paving (top %.2f m over the grade)", #list, SLAB.top))
+  return #list
 end
 
 -- ── siting ───────────────────────────────────────────────────────────────────
@@ -1639,6 +1809,8 @@ function lay_paving(Fr, runway, planet_node)
   else
     log("base: could not build the paving — " .. tostring(B))
   end
+  -- the floor under it (once per siting; the meshes above are the picture)
+  lay_slabs(Fr, runway, planet_node)
 end
 
 -- Before a FIT: the site's ground must answer for good. A streamed world's
@@ -1741,6 +1913,8 @@ local function try_place()
   baseBody = body.name
   baseX, baseY, baseZ = body.x + cu.x * R, body.y + cu.y * R, body.z + cu.z * R
   footprint = { body = body.name, x = cu.x * R, y = cu.y * R, z = cu.z * R, radius = FOOTPRINT_RADIUS }
+  -- (the ground under the strips and lots is off limits to digs from now on)
+  log(string.format("base: %d dig guards round the strips and lots (%.0f m margin)", guardBase(F, runway, body.name), GUARD.margin))
 
   -- THE GROUND. Graded on a fresh layout, or when it no longer holds — but
   -- only with the crew close by. Terrain streams in around the crew: the
@@ -1814,6 +1988,8 @@ function resite()
     if mesh and mesh.free then for _, m in ipairs(built.meshes) do mesh.free(m) end end
   end
   built = nil
+  clear_slabs()
+  setGuards("base", nil)
   for _, k in ipairs({ "base.body", "base.x", "base.y", "base.z", "base.r", "base.heading", "base.runway", "base.layout", "base.graded" }) do
     save.set(k, false)
   end

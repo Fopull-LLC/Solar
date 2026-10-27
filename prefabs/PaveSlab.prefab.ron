@@ -1,0 +1,42 @@
+// PAVE SLAB — one piece of the base's paved floor (base_facilities `lay_slabs`):
+// a static unit box the script scales to a strip's width × SLAB.thick × a chord
+// of the strip, turned to the radial up there. The paving mesh is the picture;
+// this holds wheels and boots up whatever the terrain under it does. No mesh
+// (decals never lie on it), no shadow.
+[
+    (
+        name: "Base Floor",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+        cast_shadow: false,
+    ),
+    (
+        name: "Floor Slab",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+        parent: Some(0),
+        cast_shadow: false,
+        rigidbody: Some((
+            boxed: true,
+            mode: Static,
+            radius: 0.5,
+            height: 1.0,
+            half_extents: (0.5, 0.5, 0.5),
+            restitution: 0.0,
+            friction: 0.9,
+            gravity: false,
+            lock_pos: (false, false, false),
+            lock_rot: (false, false, false),
+        )),
+    ),
+]

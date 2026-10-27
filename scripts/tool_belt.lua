@@ -1811,7 +1811,9 @@ local function fire_dig(node, dt, firing)
     aimDist, aimMat, aimDepth = nil, nil, 0
     aimX, aimY, aimZ = nil, nil, nil
   end
-  if firing and hit then
+  -- THE BASE'S FOUNDATIONS can't be dug (base_facilities digRefused): no cut, no ore, the reason in the readout
+  local bf = ref("base_facilities"); local guarded = hit and bf and bf.digRefused and bf.digRefused(hit.x, hit.y, hit.z, params.laser_radius) or nil
+  if firing and hit and not guarded then
     heat = math.min(1.0, heat + dt / math.max(0.5, params.heat_time))
     local throttle = 1.0 - 0.45 * heat
     if last_hit then
@@ -1871,6 +1873,7 @@ local function fire_dig(node, dt, firing)
       prompt = "DIG  ·  " .. (head ~= "" and (head .. "  ·  ") or "") .. pack
     end
   end
+  if guarded then prompt = "DIG  ·  " .. guarded .. "  ·  " .. pack end
   progress = cut_progress
   -- The reticle: the material and where it is, or nothing.
   if hit and aimMat then
