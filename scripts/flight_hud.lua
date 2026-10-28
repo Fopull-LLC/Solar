@@ -720,7 +720,12 @@ local function group_strip(v, t)
     kids[#kids + 1] = { "text", key = "sum", style = "hud/valueMuted", w = "100%", h = 14,
       text = string.format("%d key%s · %d axis%s · %d on", #list, #list == 1 and "" or "s", #axes, #axes == 1 and "" or "es", on) }
   end
-  return { "col", key = "groups", style = "hud/instrument", pin = "left", x = M, y = 0, w = 210, h = "fit",
+  -- Its height along the left edge is status_hud's to settle (leftColumnOf:
+  -- the crew strip and the Flight Ops card stack up from the bottom, the
+  -- objectives card down from the top); it reads the card by this name.
+  local sh = ref("status_hud")
+  return { "col", key = "groups", name = "Controls Card", style = "hud/instrument", pin = "left", x = M,
+           y = (sh and sh.controlsY) or 0, w = 210, h = "fit",
            pad = 10, gap = 4, items = kids, function(k) return k end }
 end
 

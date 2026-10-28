@@ -221,6 +221,85 @@ function stripTop()
   return stripTopOf(e.posY, h, sh, uiDesignH())
 end
 
+-- The crew strip's widest OUTER width, in design units, so it always ends
+-- before whatever holds the bottom centre, with a gap (crew_strip.lua caps
+-- itself to this and scrolls what doesn't fit). In flight: the console's left
+-- edge. On foot: the hotbar's. Otherwise the screen. Pure arithmetic in
+-- stripCapOf (tests): dw the design width, console_left nil off the console.
+STRIP_X = 12                  -- the strip's pin offset (scenes/system.ron "Crew Strip")
+STRIP_GAP = 12                -- the gap it keeps from the console or hotbar
+-- the console's left edge while flight_hud hasn't published one yet (it
+-- centres a 612-wide plate)
+local CONSOLE_HALF = 306
+function stripCapOf(dw, console_left, afoot)
+  local right
+  if console_left then right = console_left
+  elseif afoot then right = dw / 2 - HOTBAR_HALF
+  else right = dw - STRIP_X end
+  return math.max(0, right - STRIP_GAP - STRIP_X)
+end
+
+function stripMaxW()
+  local fh = ref("flight_hud")
+  local cockpit = fh and fh.layout
+  local dw = designWidth()
+  local cl = cockpit and cockpit.consoleLeft
+  if not cl and not crew_afoot() then cl = dw / 2 - CONSOLE_HALF end
+  return stripCapOf(dw, cl, crew_afoot())
+end
+
+-- An element's laid-out rect in DESIGN units (x, y from the top-left, w, h),
+-- or nil while it is hidden or not laid out.
+local function rect_of(n)
+  local e = comp(n)
+  if not (e and e.visible ~= false and n.uiRect and camera and camera.screenSize) then return nil end
+  local x, y, w, h = n:uiRect()
+  local _, sh = camera.screenSize()
+  if not (x and h and h > 0 and sh and sh > 0) then return nil end
+  local k = uiDesignH() / sh
+  return x * k, y * k, w * k, h * k
+end
+
+-- THE LEFT COLUMN IN FLIGHT. From the top: the objectives card (top-left in
+-- flight), the CONTROLS card (flight_hud, pinned to the left edge's middle),
+-- then from the bottom the crew strip and the Flight Ops card on top of it.
+-- With the strip LARGE at 100% (720 design units tall) the card stood on the
+-- CONTROLS panel. Pure arithmetic (tests): every figure is design units, y
+-- down from the top; `top` the highest the CONTROLS card may start, `floor`
+-- the height above the bottom that the strip (or the margin) takes, `fo_h`
+-- the Flight Ops card's height (0: none), `fo_bottom` the height its bottom
+-- stands at when stacked, `ctl_h` the CONTROLS card's height (nil: none).
+-- → controls_y (the card's offset from the left-middle pin), fo_beside (the
+-- card moves right of CONTROLS, standing on the strip).
+--   1. Everything stacked: CONTROLS stays centred if it fits, slides up (not
+--      above `top`) to clear the card if not.
+--   2. Not enough height for that: the card stands BESIDE the CONTROLS card,
+--      on the strip, and CONTROLS has from `top` to the strip.
+--   3. Not even that: CONTROLS starts at `top`.
+function leftColumnOf(dh, top, floor, fo_h, fo_bottom, ctl_h)
+  if not ctl_h then return 0, false end
+  local centred = dh / 2 - ctl_h / 2
+  local function fit(bottom_from_bottom)
+    local lo, hi = top, dh - bottom_from_bottom - GAP - ctl_h
+    if hi < lo then return nil end
+    return math.max(lo, math.min(centred, hi))
+  end
+  local y = fit((fo_h or 0) > 0 and (fo_bottom + fo_h) or floor)
+  if y then return y - centred, false end
+  if (fo_h or 0) > 0 then
+    y = fit(floor)
+    if y then return y - centred, true end
+  end
+  return top - centred, (fo_h or 0) > 0
+end
+
+-- Published: where the CONTROLS card sits (flight_hud reads it), design units
+-- below the left edge's middle.
+controlsY = 0
+CONTROLS_W = 210              -- flight_hud's CONTROLS card width
+local CONTROLS_NAME = "Controls Card"
+local FO_X = 16               -- the Flight Ops card's authored pin offset
+
 function layout()
   local dw = designWidth()
   local fh = ref("flight_hud")
@@ -264,26 +343,53 @@ function layout()
   -- The flight card, bottom-left, beside whatever holds the bottom centre: the
   -- hotbar on foot, the instrument console in flight. Where the screen is too
   -- narrow for both it sits on top of them instead.
-  local fo = comp(nd("Flight Ops"))
+  local fo_n = nd("Flight Ops")
+  local fo = comp(fo_n)
+  local lift = stripTop()
+  local dh = uiDesignH()
   if fo then
     local w, posY = CARD_W, -M
     if cockpit then
       w = FLIGHT_CARD_W
-      if M + w + GAP > cockpit.consoleLeft then posY = -((cockpit.consoleRise or (uiDesignH() - cockpit.consoleTop)) + GAP) end
+      if M + w + GAP > cockpit.consoleLeft then posY = -((cockpit.consoleRise or (dh - cockpit.consoleTop)) + GAP) end
     elseif crew_afoot() and dw / 2 - HOTBAR_HALF - GAP - M < w then
       posY = -(HOTBAR_TOP + GAP)
     end
     -- …and the crew strip shares that corner (crew_strip.lua, pinned
     -- bottom-left): while it shows, the card stands on top of it. Measured
     -- in DESIGN units — the strip's pixel height × uiDesignH() / screen
-    -- height. crew_strip used to lift the card itself with 720 in place of
-    -- the design height, so at any interface size under 100% (Auto is 85% at
-    -- 1080p) the lift came up short and "END FLIGHT" sat on the portraits
-    -- (playtest dfb3e17).
-    local lift = stripTop()
+    -- height (crew_strip used to convert with 720, so at any interface size
+    -- under 100% "END FLIGHT" sat on the portraits: playtest dfb3e17).
     if lift then posY = math.min(posY, -(lift + GAP)) end
+    local posX = FO_X
+    -- In flight the CONTROLS card holds the left edge's middle: stack the
+    -- column (leftColumnOf), or stand the card beside CONTROLS.
+    local cy = 0
+    local cn = cockpit and nd(CONTROLS_NAME)
+    local ch
+    if cn then ch = select(4, rect_of(cn)) end
+    if cockpit and ch then
+      local top = M
+      local obn = nd("Objectives")
+      if obn then
+        local _, oy, _, oh = rect_of(obn)
+        if oy then top = oy + oh + GAP end
+      end
+      local fh = select(4, rect_of(fo_n))
+      local beside
+      cy, beside = leftColumnOf(dh, top, lift or M, fh or 0, -posY, ch)
+      if beside then
+        posX = M + CONTROLS_W + GAP
+        -- beside CONTROLS it may reach over the console: then it stands above it
+        if posX + w + GAP > cockpit.consoleLeft then
+          posY = math.min(posY, -((cockpit.consoleRise or (dh - cockpit.consoleTop)) + GAP))
+        end
+      end
+    end
+    controlsY = cy
     set(fo, "width", w)
     set(fo, "posY", posY)
+    set(fo, "posX", posX)
   end
 
   -- The notice toast rides above the console in flight rather than across it.

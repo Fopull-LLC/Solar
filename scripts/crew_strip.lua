@@ -1,24 +1,34 @@
 -- CREW STRIP — live portraits of the crew aboard the craft you control,
 -- bottom-left (docs/crew-and-items.md §4.4, §3.3).
 --
---   ┌ CREW · Kestrel I · 3/3 ─────────────────────── ◂ 1/2 ▸ ┐
---   │ [live cam] [live cam] [live cam] [live cam]            │  112 × 112 (large: 208 × 208)
---   │  D.OKAFOR★   J.REYES    M.HALE     ...                 │  hover: [EVA] [⇄]
---   ├ ON FOOT ───────────────────────────────────────────────┤
---   │ [T.VANCE 42 m · CONTROL]  [R.ITO 310 m · CONTROL]      │  chips, no live cam
---   └────────────────────────────────────────────────────────┘
+--   ┌ CREW · Kestrel I · 6/8 ─────────────────────────────────┐
+--   │ ◂ ░[live cam] [live cam] [live cam] [live ca░ ▸          │  112 × 112 (large: 208 × 208)
+--   │    D.OKAFOR★   J.REYES    M.HALE     ...                 │  hover: [EVA] [⇄]
+--   ├ ON FOOT ────────────────────────────────────────────────┤
+--   │ [T.VANCE 42 m · CONTROL]  [R.ITO 310 m · CONTROL]       │  chips, no live cam
+--   └─────────────────────────────────────────────────────────┘
 --
--- Portraits: at most 4 a page, each a UI image wearing `rt:crew<k>`, filmed by
--- a top-level camera ("Crew Cam <k>") set every lateUpdate 0.55 m in front of
--- the member's face in their seat, looking back at it, fovY 0.9. In a closed
--- part the camera draws only the `interior` layer (the room, iva.lua, and the
--- dolls); an open seat's rider needs the world, so only the HOVERED open-seat
--- portrait films (4 Hz) and the others keep their last picture.
+-- A HORIZONTAL SCROLL VIEW. Its width is capped so the strip always ends
+-- before whatever holds the bottom centre (the flight console, the hotbar on
+-- foot; status_hud.stripMaxW), at every interface size and screen. With more
+-- crew than fit, the view clips and scrolls: the wheel over it steps one
+-- portrait a notch (the engine's scroll view: a wheel drives X when there is
+-- no Y to drive), ◂ ▸ at the ends show only while there is more that way,
+-- and a fade on the clipped side says so too. Switching to a member, or a
+-- member boarding, scrolls them into view (focusMember). A wheel notch or an
+-- arrow moves one portrait.
 --
--- Budget: 4 targets at 168 × 168 sharing RT_BUDGET redraws a second (the
--- design's 8 Hz each waits on engine card H1, see RT_BUDGET), hovered 6 Hz.
--- Hidden strip, the map, the builder, cinematic mode: the cameras are
--- disabled (a disabled camera is not drawn) and the images keep their frames.
+-- Portraits: one a member, each a UI image wearing `rt:crew<i>`, filmed by a
+-- top-level camera ("Crew Cam <i>") set every lateUpdate 0.42 m in front of
+-- the member's face in their seat, looking back at it, fovY 0.9. ONLY THE
+-- PORTRAITS IN VIEW FILM: a scrolled-out one's camera is disabled (a disabled
+-- camera is not drawn), so the cost is bounded by what fits, not by the crew.
+-- In a closed part the camera draws only the `interior` layer (the room,
+-- iva.lua, and the dolls); an open seat's rider needs the world.
+--
+-- Budget: the portraits in view share RT_BUDGET redraws a second, hovered
+-- HOVER_HZ. Hidden strip, the map, the builder, cinematic mode: the cameras
+-- are disabled and the images keep their frames.
 --
 -- `\` cycles small → large → hidden (saved: opt_crewStrip).
 --
@@ -27,7 +37,8 @@
 -- cancels; "EVA anyway" must be clicked); after the third time a "don't ask
 -- again this save" box appears (crew.evaNoAsk).
 --
--- Pure layout (luajit, tests/smoke_crew_strip.lua): layout(n, page, size).
+-- Pure layout (luajit, tests/smoke_crew_strip.lua): layout(n, size, maxW,
+-- scroll), scrollToShow(L, i, scroll).
 
 local refs = {}
 local function ref(kind)
@@ -39,7 +50,6 @@ local function ref(kind)
   return r
 end
 
-PER_PAGE = 4
 -- A portrait is SQUARE, its target too, and it is drawn at exactly its frame's
 -- size inside the frame's border (playtest: a 4:3 target "cover"-fitted into
 -- its frame drew past the border, off the strip's left edge).
@@ -52,7 +62,7 @@ MODES = { "small", "large", "hidden" }
 -- redraw: three at 8 Hz cost 1.1 ms a frame, at 4 Hz 0.8 ms, against the
 -- 0.6 ms budget; sharing 6 redraws a second measured 0.12–0.59 ms (noise
 -- ±0.3 at load 4–9). Until H1 lands the portraits SHARE a redraw budget:
--- RT_BUDGET redraws a second across the page (each portrait RT_BUDGET / n,
+-- RT_BUDGET redraws a second across the view (each portrait RT_BUDGET / n,
 -- staggered), the hovered one HOVER_HZ. Engine 0.117.1-dev.1363 (cards
 -- 0568/0570: the portraits skip shadows, sky, terrain and fog, and a hidden
 -- one stops drawing) measured the strip at 5 a second at ~0.1 ms, so the
@@ -75,22 +85,62 @@ CAM_DIST, CAM_FOV = 0.42, 0.9   -- close enough that a face fills the frame and 
 GAP, PLATE_H = 6, 18
 INTERIOR_BIT, OFFSTAGE_BIT = 16, 32
 
+CARD_PAD = 6                 -- the strip card's own padding (describe's root)
+ARROW_W, ARROW_GAP = 14, 4   -- the ◂ ▸ keys at the ends of an overflowing view
+FADE_W = 6                   -- one step of the edge fade (three steps)
+HEAD_MIN = 180               -- the header's width when the cap allows (CREW · name · k/N)
+
 -- ── pure layout ────────────────────────────────────────────────────────────
--- n members aboard, page (1-based), size "small" | "large" → {
---   pages, page, first, last, shown = {i…}, w, h, strip_w, strip_h, paged }
-function layout(n, page, size)
+-- n members aboard, size "small" | "large", maxW the strip's widest OUTER
+-- width in design units (nil: no cap), scroll the view's position → {
+--   n, w, h, tw, th, fw (a framed portrait's width), pitch (fw + GAP),
+--   content_w, view_w, overflow, max_scroll, scroll (clamped), visible =
+--   {i…} (the portraits at least partly in view), vis = {[i] = true},
+--   strip_w, strip_h, inner_w (inside the card's padding), more_l, more_r }
+function layout(n, size, maxW, scroll)
+  n = math.max(0, math.floor(n or 0))
   local S = SIZES[size or "small"] or SIZES.small
-  local pages = math.max(1, math.ceil((n or 0) / PER_PAGE))
-  page = math.max(1, math.min(page or 1, pages))
-  local first = (page - 1) * PER_PAGE + 1
-  local last = math.min(n or 0, first + PER_PAGE - 1)
-  local shown = {}
-  for i = first, last do shown[#shown + 1] = i end
-  local cols = math.max(1, #shown)
-  return { pages = pages, page = page, first = first, last = last, shown = shown, w = S.w, h = S.h,
-           tw = S.tw, th = S.th, paged = pages > 1,
-           strip_w = cols * (S.w + 2 * FRAME_PAD) + (cols - 1) * GAP + 12,
-           strip_h = 22 + S.h + 2 * FRAME_PAD + PLATE_H + 12 }
+  local fw = S.w + 2 * FRAME_PAD
+  local pitch = fw + GAP
+  local content_w = n > 0 and (n * pitch - GAP) or 0
+  local inner_max = maxW and (maxW - 2 * CARD_PAD) or math.huge
+  local overflow, view_w = false, content_w
+  if content_w > inner_max then
+    overflow = true
+    -- the view takes all the room it has: a portrait cut by its edge sits
+    -- under the fade (snapping to whole portraits left up to a large
+    -- portrait's width of the corner empty)
+    view_w = math.max(40, math.floor(inner_max - 2 * (ARROW_W + ARROW_GAP)))
+  end
+  local max_scroll = math.max(0, content_w - view_w)
+  scroll = math.max(0, math.min(scroll or 0, max_scroll))
+  local visible, vis = {}, {}
+  for i = 1, n do
+    local x0 = (i - 1) * pitch
+    if x0 + fw > scroll + 0.5 and x0 < scroll + view_w - 0.5 then
+      visible[#visible + 1] = i
+      vis[i] = true
+    end
+  end
+  local row_w = view_w + (overflow and 2 * (ARROW_W + ARROW_GAP) or 0)
+  local inner_w = math.min(inner_max, math.max(row_w, HEAD_MIN))
+  return { n = n, w = S.w, h = S.h, tw = S.tw, th = S.th, fw = fw, pitch = pitch,
+           content_w = content_w, view_w = view_w, overflow = overflow, max_scroll = max_scroll, scroll = scroll,
+           visible = visible, vis = vis, row_w = row_w, inner_w = inner_w,
+           more_l = scroll > 0.5, more_r = scroll < max_scroll - 0.5,
+           strip_w = inner_w + 2 * CARD_PAD,
+           strip_h = 22 + S.h + 2 * FRAME_PAD + PLATE_H + 2 * CARD_PAD }
+end
+
+-- The scroll that brings portrait i fully into view, moving as little as it
+-- can (an in-view portrait leaves it where it is).
+function scrollToShow(L, i, scroll)
+  scroll = scroll or L.scroll or 0
+  if not (L and i and i >= 1 and i <= L.n) then return scroll end
+  local x0 = (i - 1) * L.pitch
+  if x0 < scroll then scroll = x0
+  elseif x0 + L.fw > scroll + L.view_w then scroll = x0 + L.fw - L.view_w end
+  return math.max(0, math.min(scroll, L.max_scroll))
 end
 
 -- "Dana Okafor" → "D.OKAFOR"
@@ -118,12 +168,21 @@ end
 -- ── state ──────────────────────────────────────────────────────────────────
 local el, host
 local mode = "small"
-local page = 1
-local cams = {}           -- [k] = { node, making, target, hz, on, last_open }
+local cams = {}           -- [i] = { node, making, tw, hz, mask, open, on }: member i's portrait camera
+VIEW_NAME = "Crew Strip View"
+local view_node = nil     -- the scroll view's node, while the crew overflow it
+local scroll = 0          -- where the view stands (design units), read back each frame
+local scroll_pending = nil  -- a scroll to write into the view (it may not exist yet)
+local want_focus = nil    -- a member id to bring into view
+local last_active, last_ids, last_craft = nil, nil, nil
+local last_L = nil
 local hover_id, hover_t = nil, -10
 local confirm = nil       -- { id, warn, stay, t }
 local msg, msg_t = nil, -10
-strip = { shown = 0, live = 0 }   -- published for probes: portraits drawn, cameras live
+-- Published for probes: shown = portraits in view, live = cameras filming,
+-- n = aboard, and the view's geometry (design units).
+strip = { shown = 0, live = 0, n = 0, overflow = false, scroll = 0, maxScroll = 0, viewW = 0, width = 0, cap = nil,
+          visible = {} }
 hoverId = nil             -- published: the member whose portrait the pointer is on
 local function now() return time or 0 end
 
@@ -337,7 +396,7 @@ local function chip_row(key, chips)
   return row
 end
 
-local function portrait(i, m, L, live, hov, v)
+local function portrait(i, m, L, hov, v)
   local C = ref("crew")
   local a = (C and C.alerts and C.alerts(m.id)) or {}
   local name = shortName(m.name) .. (m.commander and " ★" or "")
@@ -358,7 +417,10 @@ local function portrait(i, m, L, live, hov, v)
       plate[1].text = shortName(m.name) .. " · " .. why
     end
   end
-  local tex = live and ("rt:crew" .. i) or nil
+  -- a member whose camera has never been made (never in view) shows the
+  -- bezel: an image wearing a target nobody draws would be an empty hole
+  local c = cams[i]
+  local tex = (c and c.node and c.node.valid ~= false) and ("rt:crew" .. i) or nil
   local img = tex and { "image", key = "img" .. i, texture = tex, w = L.w, h = L.h, imageFit = "contain" }
     or { "box", key = "img" .. i, style = "hud/bezel", w = L.w, h = L.h }
   local chips = chipsFor(a, m)
@@ -369,38 +431,81 @@ local function portrait(i, m, L, live, hov, v)
   return col
 end
 
-local function describe(v, list, L, afoot)
+-- The portraits' column height: the picture in its frame, the name plate,
+-- and the chip row when anyone wears chips (the view is exactly this tall,
+-- so it has no vertical travel and the wheel drives it sideways).
+local function port_h(L, chips) return L.h + 2 * FRAME_PAD + 1 + PLATE_H + (chips and 15 or 0) end
+
+-- Step the view a portrait at a time (the ◂ ▸ keys).
+function scrollBy(d)
+  local L = last_L
+  if not (L and L.overflow) then return end
+  scroll_pending = math.max(0, math.min((scroll_pending or scroll) + d * L.pitch, L.max_scroll))
+end
+-- Put the view at x (probes); focusMember(id) brings a member into view.
+function scrollTo(x) scroll_pending = math.max(0, x or 0) end
+function focusMember(id) want_focus = id end
+
+local function fade(key, pin, h, more)
+  local out = {}
+  if not more then return out end
+  for s = 1, 3 do
+    out[#out + 1] = { "box", key = key .. s, pin = pin, x = (pin == "topRight" and -1 or 1) * (s - 1) * FADE_W, y = 0,
+                      w = FADE_W, h = h, fill = { 0.112, 0.116, 0.104, ({ 0.82, 0.55, 0.25 })[s] } }
+  end
+  return out
+end
+
+local function arrow(key, glyph, on, h, d)
+  if not on then return { "box", key = key .. "0", w = ARROW_W, h = h } end
+  return { "button", key = key, style = "hud/button", w = ARROW_W, h = h, text = glyph, textAlign = "center",
+           textValign = "center", onClicked = function() scrollBy(d) end }
+end
+
+-- A row of on-foot chips no wider than the strip may be: it wraps.
+local function chip_w(label) return #label * 6.0 + 16 end
+
+local function describe(v, list, L, afoot, chips_any, cap_in)
   local C = ref("crew")
   local rows = {}
   if v then
     local total = 0
     for _, s in ipairs((C and C.seatMap and C.seatMap(v)) or {}) do total = total + 1 end
-    local head = { "row", key = "head", w = "fit", h = 18, gap = 8, pad = 0, align = "center",
-                   { "text", key = "ht", style = "hud/micro", w = "fit", h = 18,
-                     text = string.format("CREW · %s · %d/%d", tostring(v.craftName or "Craft"), #list, math.max(total, #list)) } }
-    if L.paged then
-      head[#head + 1] = { "button", key = "pgL", style = "hud/button", w = 20, h = 16, text = "◂", textAlign = "center",
-                          onClicked = function() page = math.max(1, page - 1) end }
-      head[#head + 1] = { "text", key = "pgN", style = "hud/micro", w = "fit", h = 16, text = L.page .. "/" .. L.pages }
-      head[#head + 1] = { "button", key = "pgR", style = "hud/button", w = 20, h = 16, text = "▸", textAlign = "center",
-                          onClicked = function() page = page + 1 end }
+    rows[#rows + 1] = { "row", key = "head", w = L.inner_w, h = 18, gap = 8, pad = 0, align = "center",
+                        { "text", key = "ht", style = "hud/micro", w = "grow", h = 18, maxLines = 1, overflow = "ellipsis",
+                          text = string.format("CREW · %s · %d/%d", tostring(v.craftName or "Craft"), #list,
+                            math.max(total, #list)) } }
+    local ph = port_h(L, chips_any)
+    if #list == 0 then
+      rows[#rows + 1] = { "text", key = "empty", style = "hud/micro", w = "fit", h = 18, text = "NOBODY ABOARD" }
+    elseif L.overflow then
+      -- the clipped, scrolling view: every portrait is in it (the clip hides
+      -- and the hit test skips the ones out of view; their cameras are off)
+      local view = { "scroll", key = "view", name = VIEW_NAME, pin = "topLeft", x = 0, y = 0, w = L.view_w, h = ph + 0.5,
+                     dir = "row", gap = GAP, pad = 0, align = "start", scrollSpeed = L.pitch }
+      for i, m in ipairs(list) do view[#view + 1] = portrait(i, m, L, hover_id == m.id, v) end
+      local framebox = { "box", key = "vf", w = L.view_w, h = ph + 0.5, view }
+      for _, f in ipairs(fade("fl", "topLeft", ph, L.more_l)) do framebox[#framebox + 1] = f end
+      for _, f in ipairs(fade("fr", "topRight", ph, L.more_r)) do framebox[#framebox + 1] = f end
+      rows[#rows + 1] = { "row", key = "ports", w = L.row_w, h = "fit", gap = ARROW_GAP, pad = 0, align = "start",
+                          arrow("arL", "◂", L.more_l, L.h + 2 * FRAME_PAD, -1), framebox,
+                          arrow("arR", "▸", L.more_r, L.h + 2 * FRAME_PAD, 1) }
+    else
+      local prow = { "row", key = "prow", w = "fit", h = "fit", gap = GAP, pad = 0, align = "start" }
+      for i, m in ipairs(list) do prow[#prow + 1] = portrait(i, m, L, hover_id == m.id, v) end
+      rows[#rows + 1] = prow
     end
-    rows[#rows + 1] = head
-    local prow = { "row", key = "ports", w = "fit", h = "fit", gap = GAP, pad = 0, align = "start" }
-    for j, i in ipairs(L.shown) do
-      local m = list[i]
-      prow[#prow + 1] = portrait(j, m, L, true, hover_id == m.id, v)
-    end
-    if #L.shown == 0 then
-      prow[#prow + 1] = { "text", key = "empty", style = "hud/micro", w = "fit", h = 18, text = "NOBODY ABOARD" }
-    end
-    rows[#rows + 1] = prow
   end
   if #afoot > 0 then
     rows[#rows + 1] = { "text", key = "afh", style = "hud/micro", w = "fit", h = 14, text = v and "ON FOOT" or "CREW" }
-    local row = { "row", key = "afoot", w = "fit", h = "fit", gap = 4, pad = 0, align = "center" }
+    local est, shown = 0, {}
     for i, e in ipairs(afoot) do
       if i > 6 then break end
+      shown[#shown + 1] = e
+      est = est + chip_w(e.label) + (i > 1 and 4 or 0)
+    end
+    local row = { "row", key = "afoot", w = math.min(cap_in, est), h = "fit", gap = 4, pad = 0, align = "center", wrap = true }
+    for i, e in ipairs(shown) do
       row[#row + 1] = { "button", key = "af" .. i, style = "hud/button", w = "fit", h = 20,
                         text = e.label, textAlign = "center", onClicked = e.act }
     end
@@ -409,7 +514,7 @@ local function describe(v, list, L, afoot)
   if confirm then
     local cf = confirm
     local asked = (save and save.get and save.get("crew.evaAsked")) or 0
-    local box = { "col", key = "confirm", style = "hud/card", w = 360, h = "fit", gap = 6, pad = 8, align = "start",
+    local box = { "col", key = "confirm", style = "hud/card", w = math.min(360, cap_in), h = "fit", gap = 6, pad = 8, align = "start",
       { "text", key = "cft", style = "hud/chipWarnText", w = "100%", h = "fit", wrap = true, text = cf.warn },
       { "row", key = "cfb", w = "100%", h = 24, gap = 8, pad = 0, align = "center",
         { "button", key = "cfyes", style = "hud/button", w = 120, h = 22, text = "EVA anyway", textAlign = "center",
@@ -424,9 +529,10 @@ local function describe(v, list, L, afoot)
     rows[#rows + 1] = box
   end
   if msg and now() - msg_t < 2.5 then
-    rows[#rows + 1] = { "text", key = "msg", style = "hud/chipWarnText", w = "fit", h = 16, text = msg }
+    rows[#rows + 1] = { "text", key = "msg", style = "hud/chipWarnText", w = "fit", maxW = cap_in, h = 16, maxLines = 1,
+                        overflow = "ellipsis", text = msg }
   end
-  local root = { "col", key = "strip", style = "hud/card", w = "fit", h = "fit", gap = 4, pad = 6, align = "start" }
+  local root = { "col", key = "strip", style = "hud/card", w = "fit", h = "fit", gap = 4, pad = CARD_PAD, align = "start" }
   for _, r in ipairs(rows) do root[#root + 1] = r end
   return root
 end
@@ -474,34 +580,83 @@ function update(node, dt)
   if confirm and input.pressed("enter") then confirmEva(false) end
 end
 
+-- The strip's widest outer width (design units): status_hud knows where the
+-- console or the hotbar stands. nil: no cap known yet.
+local function cap()
+  local SH = ref("status_hud")
+  return SH and SH.stripMaxW and SH.stripMaxW() or nil
+end
+
+local function view_el()
+  if not (view_node and view_node.valid ~= false) then view_node = find and find(VIEW_NAME) or nil end
+  return view_node and view_node:getcomponent("UiElement") or nil
+end
+
+local function hide(node)
+  if el.visible then el.visible = false end
+  all_off()
+  strip.shown, strip.n, strip.overflow = 0, 0, false
+  lift_ops(node, false)
+end
+
 function lateUpdate(node, dt)
   if not el then return end
   local C = ref("crew")
   local v = piloted()
-  if mode == "hidden" or blocked() or not C then
-    if el.visible then el.visible = false end
-    all_off()
-    strip.shown = 0
-    lift_ops(node, false)
-    return
-  end
+  if mode == "hidden" or blocked() or not C then return hide(node) end
   local list = (v and C.aboard and C.aboard(v)) or {}
   local afoot = afoot_entries(v)
-  if #list == 0 and #afoot == 0 and not confirm then
-    if el.visible then el.visible = false end
-    all_off()
-    strip.shown = 0
-    lift_ops(node, false)
-    return
-  end
+  if #list == 0 and #afoot == 0 and not confirm then return hide(node) end
   if not el.visible then el.visible = true end
-  local L = layout(#list, page, mode)
-  page = L.page
+  local maxW = cap()
   local S = SIZES[mode] or SIZES.small
-  -- hover: which portrait the pointer is over (its id), for EVA/⇄ and 15 Hz
+  -- where the view stands: the wheel moved it (the engine owns it), or we
+  -- are about to
+  local L = layout(#list, mode, maxW, scroll)
+  if L.overflow then
+    local e = view_el()
+    if e then
+      if scroll_pending then e.scrollX = math.min(scroll_pending, L.max_scroll); scroll_pending = nil end
+      scroll = e.scrollX or scroll
+    elseif scroll_pending then
+      scroll = scroll_pending
+    end
+  else
+    view_node, scroll, scroll_pending = nil, 0, nil
+  end
+  -- who to bring into view: the member you switch to, a member boarding
+  local active = C.activeId and C.activeId()
+  local craft = v and v.node and v.node.id or nil
+  local ids = {}
+  for _, m in ipairs(list) do ids[m.id] = true end
+  if craft ~= last_craft then
+    scroll, scroll_pending = 0, 0
+    want_focus = active
+  else
+    if active ~= last_active then want_focus = active end
+    if last_ids then
+      for _, m in ipairs(list) do if not last_ids[m.id] then want_focus = m.id end end
+    end
+  end
+  last_active, last_ids, last_craft = active, ids, craft
+  L = layout(#list, mode, maxW, scroll_pending or scroll)
+  if want_focus then
+    for i, m in ipairs(list) do
+      if m.id == want_focus then
+        local ns = scrollToShow(L, i, L.scroll)
+        if math.abs(ns - L.scroll) > 0.5 then
+          scroll_pending = ns
+          L = layout(#list, mode, maxW, ns)
+        end
+      end
+    end
+    want_focus = nil
+  end
+  last_L = L
+  -- hover: which portrait the pointer is over (its id), for EVA/⇄ and the rate
   local hk = hovered_key("pt") or hovered_key("img") or hovered_key("pl") or hovered_key("eva") or hovered_key("mv")
     or hovered_key("nm")
-  local hm = hk and L.shown[hk] and list[L.shown[hk]]
+  local hm = hk and L.vis[hk] and list[hk]
   if forced_hover then hover_id, hover_t = forced_hover, now()
   elseif hm then hover_id, hover_t = hm.id, now()
   elseif now() - hover_t > 0.3 then hover_id = nil end
@@ -510,10 +665,12 @@ function lateUpdate(node, dt)
   local I = ref("iva")
   if v and I and I.need then I.need(v) end
   local live = 0
-  for k = 1, PER_PAGE do
-    local m = list[L.shown[k] or -1]
-    local c = m and cam_for(k, S) or cams[k]
-    if m and c and c.node then
+  local nvis = #L.visible
+  local chips_any = false
+  for i, m in ipairs(list) do
+    if not chips_any and #chipsFor((C.alerts and C.alerts(m.id)) or {}, m) > 0 then chips_any = true end
+    local c = L.vis[i] and cam_for(i, S) or cams[i]
+    if L.vis[i] and c and c.node then
       local hov = hover_id == m.id
       if m.open then
         -- an open seat films the world: hovered at OPEN_HZ, otherwise slowly
@@ -521,7 +678,7 @@ function lateUpdate(node, dt)
         set_cam(c, hov and OPEN_HZ or OPEN_IDLE_HZ, 4294967295 - INTERIOR_BIT - OFFSTAGE_BIT, true)
         cam_on(c, true)
       else
-        set_cam(c, rateFor(k, #L.shown, hov), INTERIOR_BIT, false)
+        set_cam(c, rateFor(i, nvis, hov), INTERIOR_BIT, false)
         -- while the seat view is up only its own room is drawn: a portrait
         -- from another room keeps its last picture
         local pc = ref("planet_camera")
@@ -529,13 +686,16 @@ function lateUpdate(node, dt)
         cam_on(c, not (sv and not sv.open and sv.uid ~= m.uid))
       end
       if c.on and aim(c, v, m) then live = live + 1 end
-      c.last = m.id
     else
+      -- scrolled out of view (or nobody there): not drawn at all
       cam_on(c, false)
     end
   end
-  strip.shown, strip.live = #L.shown, live
-  ui.make(node, describe(v, list, L, afoot))
+  for i, c in pairs(cams) do if i > #list then cam_on(c, false) end end
+  strip.shown, strip.live, strip.n = nvis, live, #list
+  strip.overflow, strip.scroll, strip.maxScroll, strip.viewW = L.overflow, L.scroll, L.max_scroll, L.view_w
+  strip.width, strip.cap, strip.visible = L.strip_w, maxW, L.visible
+  ui.make(node, describe(v, list, L, afoot, chips_any, (maxW or 1e9) - 2 * CARD_PAD))
   lift_ops(node, true)
 end
 
