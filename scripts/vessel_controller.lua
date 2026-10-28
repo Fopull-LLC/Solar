@@ -8525,17 +8525,22 @@ end
 R2_WHEEL_TOP = { S = 14.0, M = 22.0, L = 28.0 }      -- m/s on the level, full stick
 R2_WHEEL_TORQUE = { S = 0.35, M = 0.9, L = 2.0 }     -- kN·m, rated like thrust (× parts.rating)
 R2_TC = 0.55          -- traction control: g the motors may push the craft at on the level
-R2_LAT_MU = 0.6       -- the share of the tyres' grip a turn may use, sideways
+R2_LK_MAX = 24.0      -- the most the traction control's lead may be scaled up (drive_tick, THE LEAD ADAPTS)
+R2_LAT_MU = 0.47      -- the share of the tyres' grip a turn may use, sideways (0.42 g on R2_TYRE_MU, as before it rose)
 R2_LAT_SSF = 0.45     -- …and the share of the rollover threshold (half track / CoM height)
 R2_ANTIROLL = 2.0     -- anti-roll bar: × m·g·track of roll torque per radian of lean
 R2_TYRES_VMAX = 45.0  -- m/s: faster than this the tyres fold back into the hull
 R2_GEAR_VMAX = 90.0   -- …but a plane's landing gear rolls on to takeoff and landing speeds
 -- The tyre's friction (× the wheel's Grip setting). It is the one limit the
 -- engine's wheel always honours (see drive_tick: its motor cap does not cap
--- the drive), so it is set where a rover should live: 0.7 g of push, braking
--- and cornering — a loose-surface tyre, enough to climb 30° and hold there,
--- and under the rollover threshold of any rover that is not a tower.
-R2_TYRE_MU = 0.7
+-- the drive), so it is set where a rover should live: a knobbly tyre on dirt,
+-- 0.9 g of push, braking and cornering, enough to climb 40° and hold there.
+-- The project grips each tyre ONCE (project.ron `wheel_friction: Single`,
+-- floptle 0575): until engine 0.117.1-dev.1368 a wheel-joint tyre also took
+-- its ground contact's own friction, about twice this, and 0.7 here drove
+-- like 1.4. The turn and lean limits (R2_LAT_MU, auto_drive BIKE_MU_SHARE)
+-- were scaled down with the rise so a turn asks what it did.
+R2_TYRE_MU = 0.9
 R2_G_REF = 9.8        -- the gravity the figures are for (a lighter world slows them)
 
 -- A wheel's top speed (m/s) on a world of gravity g: its size's figure or the
@@ -9822,6 +9827,13 @@ local function drive_tick(node, info, dt)
   -- a two-wheeler pushes no harder than lifts its front wheel (motoPlan)
   if R2.bike and R2.wheelieK then accel = math.min(accel, R2.wheelieK * gl + climb) end
   if (front_up == 0) ~= (rear_up == 0) then accel = accel * 0.5 end
+  -- …and what the lead adapts to (below): that push less the slope's share,
+  -- the craft's own acceleration along its front
+  R2.want_a = math.max(0.05 * gl, accel - climb)
+  -- off the stick the lead starts over: a lead wound up for the last run
+  -- (or a stop) put a big push into the first tick of the next one, and a
+  -- bike set off backwards on its rear tyre hopping and spinning
+  if math.abs(R2.drive or 0) < 0.02 then R2.lk = 1.5 end
   -- STALL: driven but barely moving (parked in a dip or a rut, nose against
   -- a bump the chassis slope doesn't see) → after half a second let the
   -- motors work up to their full torque over the next second, so a rover can
@@ -9977,9 +9989,9 @@ local function drive_tick(node, info, dt)
   R2.vf_prev = vf
   R2.a_s = (R2.a_s or 0) + (am - (R2.a_s or 0)) * math.min(1, dt * 6)
   if limited and grounded > 0 then
-    local want_a = R2_TC * gl * lmot
+    local want_a = (R2.want_a or R2_TC * gl) * lmot
     local e = (want_a - limited * R2.a_s) / math.max(want_a, 0.1)
-    R2.lk = math.max(1, math.min(8, (R2.lk or 1.5) * math.exp(math.max(-1, math.min(1, e)) * dt * 6)))
+    R2.lk = math.max(1, math.min(R2_LK_MAX, (R2.lk or 1.5) * math.exp(math.max(-1, math.min(1, e)) * dt * 6)))
   end
   if R2.gear or R2.hasGear then gearOleo(node, info, dt, upv, gl) end
 end

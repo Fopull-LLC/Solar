@@ -175,6 +175,13 @@ end
 -- slides along the craft's UP; the suspension part's own (raked) axis is
 -- only how its legs or arm are drawn. Returns the axis, the base steer about
 -- it, and the part's own axis (for the drawing and the logs).
+-- STILL NEEDED on 0.117.1-dev.1368 (2026-10-27), which budgets the grip on
+-- the contact's normal load (floptle 0573): the user's dirt bike on its
+-- raked axes still made 0.85 m/s² forward against 2.44 in reverse (4.4 vs
+-- 14.1 m/s after 5 s) and stalled 5 m up the 45% ramp; upright, 1.63 / 2.03.
+-- The rolling grip's push lands on the light tyre alone, and on a slanted
+-- axis its share along the axis goes into the spring and the ground instead
+-- of the craft (engine card draft in the 2026-10-27 migration report).
 function jointAxis(m, X, Y, Z, D)
   local a = suspAxis(m, X, Y, Z, D)
   local up = v3(0, 1, 0)
@@ -184,7 +191,7 @@ end
 
 -- The push a tyre can make before it slides, as a share of the load N it
 -- carries, on a joint axis leaning back by `rake` (rad) — the engine's grip
--- budget as above. dir = 1 forward, −1 reverse. (tests/smoke_moto.lua)
+-- budget as above, before 0573. dir = 1 forward, −1 reverse. (tests/smoke_moto.lua)
 function gripShare(mu, rake, dir)
   local c, s = math.cos(rake or 0), math.sin(rake or 0) * (dir or 1)
   local den = 1 + mu * s
@@ -227,11 +234,11 @@ end
 -- How far the rider may ask it to lean at this speed: the grip's (a tyre
 -- that slides out under the lean is a lowside) and the tightest turn the
 -- fork's lock makes at this speed (asking for more would fall it in).
-BIKE_MU_SHARE = 0.55
+BIKE_MU_SHARE = 0.43   -- of R2_TYRE_MU 0.9: the 21° grip lean it gave at 0.55 of 0.7
 BIKE_LEAN_MAX = math.rad(42)
 function leanLimit(v, g, L, lockDeg, mu)
   g = math.max(0.1, g or 9.8)
-  local grip = math.atan((mu or 0.7) * BIKE_MU_SHARE)
+  local grip = math.atan((mu or 0.9) * BIKE_MU_SHARE)
   local kap = math.tan(math.rad(lockDeg or 25)) / math.max(0.3, L or 1.4)
   local turn = math.atan((v or 0) * (v or 0) * kap / g)
   return math.min(BIKE_LEAN_MAX, grip, turn)

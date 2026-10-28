@@ -134,10 +134,21 @@ function V.ground(vc, F, U, from_d, to_d, grade, rel0)
     local bb = home()
     local up = (grade ~= 0) and math.max(0, d - from_d) * grade or 0
     local p = { x = bb.x + rel0.x + F.x * d + U.x * up, y = bb.y + rel0.y + F.y * d + U.y * up, z = bb.z + rel0.z + F.z * d + U.z * up }
+    local nn = n
+    if grade == 0 then
+      -- level ground follows the planet: the point dropped onto the sphere
+      -- through the start, flattened square to the local up (a straight
+      -- 150 m plane on a small world sinks 0.7 m at its far end, and the
+      -- strokes left a rippled strip out there)
+      local r = { x = rel0.x + F.x * d, y = rel0.y + F.y * d, z = rel0.z + F.z * d }
+      nn = unit(r)
+      local R0 = len(rel0.x, rel0.y, rel0.z)
+      p = { x = bb.x + nn.x * R0, y = bb.y + nn.y * R0, z = bb.z + nn.z * R0 }
+    end
     for _, lat in ipairs({ -1.4, 0, 1.4 }) do
       local q = { x = p.x + L.x * lat, y = p.y + L.y * lat, z = p.z + L.z * lat }
       if grade ~= 0 then terrain.sculpt(q.x, q.y, q.z, 1.6, 1.0, "raise") end
-      terrain.sculpt(q.x, q.y, q.z, 1.9, 1.0, "flatten", { normal = vec3(n.x, n.y, n.z) })
+      terrain.sculpt(q.x, q.y, q.z, 1.9, 1.0, "flatten", { normal = vec3(nn.x, nn.y, nn.z) })
       made = made + 1
     end
     d = d + 0.9
@@ -147,12 +158,19 @@ function V.ground(vc, F, U, from_d, to_d, grade, rel0)
   return rel0, made
 end
 -- the grade along the centreline (mean, steepest 3 m) between d0 and d1
-function V.profile(vc, F, U, rel0, d0, d1)
+function V.profile(vc, F, U, rel0, d0, d1, curved)
   local prof, bb = {}, home()
+  local R0 = len(rel0.x, rel0.y, rel0.z)
   for k = 0, math.floor((d1 - d0) / 0.5) do
     local dd = d0 + k * 0.5
     local p = { x = bb.x + rel0.x + F.x * dd + U.x * 8, y = bb.y + rel0.y + F.y * dd + U.y * 8, z = bb.z + rel0.z + F.z * dd + U.z * 8 }
-    local h = raycast(p.x, p.y, p.z, -U.x, -U.y, -U.z, 20, { ignore = { vc.node } })
+    local Ud = U
+    if curved then
+      -- heights over the sphere through the start, along the local up
+      Ud = unit({ x = rel0.x + F.x * dd, y = rel0.y + F.y * dd, z = rel0.z + F.z * dd })
+      p = { x = bb.x + Ud.x * (R0 + 8), y = bb.y + Ud.y * (R0 + 8), z = bb.z + Ud.z * (R0 + 8) }
+    end
+    local h = raycast(p.x, p.y, p.z, -Ud.x, -Ud.y, -Ud.z, 20, { ignore = { vc.node } })
     prof[#prof + 1] = h and (8 - h.distance) or 0 / 0
   end
   local steep, mx, mn = 0, -1e9, 1e9
@@ -230,7 +248,11 @@ function V.run_bike_test(vc, dir, secs, tag)
     vmax = math.max(vmax, s)
     if not s15 and time - t0 >= 1.5 then s15 = { s, time } end
     if not s45 and time - t0 >= 4.5 then s45 = { s, time } end
-    if time - t0 >= nextm then marks[#marks + 1] = string.format("%.1f", s); nextm = nextm + 1 end
+    if time - t0 >= nextm then
+      marks[#marks + 1] = string.format("%.1f", s); nextm = nextm + 1
+      local bb, cc = home(), assembly.info(vn).com
+      P("VP %s +%ds: %.1f m/s at %.1f m along the strip", tag, nextm - 1, s, V.strip and dot(sub(sub(cc, bb), V.strip.rel0), V.strip.F) or 0)
+    end
     if (params.diag or 0) > 0 and time - (V.td or 0) > 0.25 then V.td = time; V.tyres(vc, string.format("%s+%.2f", tag, time - t0)) end
     if V.upness(vn) < 0.3 then fell = true; break end
   end
@@ -303,13 +325,21 @@ local function run_vbike()
   local okout = V.out(vc, 95)
   V.stop(vc)
   if not okout then V.check("out", false, "fell on the way out"); V.result(); return end
-  -- 1. flat: a strip flattened 50 m each way along the bike's line
+  -- 1. flat: a strip flattened along the bike's line, 48 m back and 110 m on
   local U = V.up(assembly.info(vn).com)
   local F = V.fwdW(vc)
   F = unit(sub(F, scl(U, dot(F, U))))
-  local rel0, made = V.ground(vc, F, U, -48, 48, 0)
-  local steep, rise = V.profile(vc, F, U, rel0, -45, 45)
-  P("VP flat strip: %d sculpts, steepest 3 m %.1f%%, rise over 90 m %.2f m", made, steep * 100, rise)
+  -- (on to 110 m: a stronger bike rolls 35 m and more while it is stopped
+  -- after the W run, and the S run starts out there)
+  local rel0, made = V.ground(vc, F, U, -48, 110, 0)
+  local steep, rise, fprof = V.profile(vc, F, U, rel0, -45, 105, true)
+  V.strip = { rel0 = rel0, F = F }
+  P("VP flat strip: %d sculpts, steepest 3 m %.1f%%, rise over 150 m %.2f m", made, steep * 100, rise)
+  do
+    local pts = {}
+    for k = 1, #fprof, 4 do pts[#pts + 1] = string.format("%d:%.2f", -45 + (k - 1) * 0.5, fprof[k]) end
+    P("VP flat profile (m along: height): %s", table.concat(pts, " "))
+  end
   V.stop(vc)
   local fw = V.run_bike_test(vc, 1, 5, "full W")
   V.stop(vc)
