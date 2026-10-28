@@ -304,11 +304,50 @@ def weights(hd):
     wj = below * smooth(lm["chin_low"] - 0.026, lm["chin_low"] - 0.004, y) * smooth(-0.045, -0.005, z)
     # inside the mouth: the lower half of the bag with the jaw, the upper not
     mouthbag = inside & (ax < mw + 0.01) & (y > my - 0.035) & (y < my + 0.03) & (z > -0.03)
+    # which lip a point belongs to. The lips are two surfaces that only touch:
+    # joined at the corners and deep in the mouth, not across the line where
+    # they press together. So each is found by walking the mesh from a seed on
+    # its front, inside the corners and in front of the bag; what the walk
+    # from the lower lip reaches goes with the jaw, the upper lip's does not.
+    # (Splitting by height alone put the lower lip's inner face, which rises a
+    # little above the line, on the upper side: a jaw drop stretched it into a
+    # tall pale slab that read as a tongue.)
+    Q = hd["Q"]
+    zfront = _surface_z(P, 0.0, my, r=0.003)
+    region = (ax < mw - 0.0015) & (np.abs(y - my) < 0.022) & (z > zfront - 0.013)
+    nbr = [[] for _ in range(len(P))]
+    for q in Q:
+        for i in range(4):
+            a_, b_ = q[i], q[(i + 1) % 4]
+            nbr[a_].append(b_)
+            nbr[b_].append(a_)
+
+    def walk(seed_y):
+        cand = np.where(region & (np.abs(x) < 0.004))[0]
+        seed = cand[np.argmin(np.abs(y[cand] - seed_y) + np.abs(z[cand] - zfront) * 0.5)]
+        seen = {int(seed)}
+        stack = [int(seed)]
+        while stack:
+            v = stack.pop()
+            for w in nbr[v]:
+                if w not in seen and region[w]:
+                    seen.add(w)
+                    stack.append(w)
+        return seen
+    lower_set = walk(my - 0.007)
+    upper_set = walk(my + 0.007)
+    both = lower_set & upper_set                 # (if the walks meet, the split is unsafe: fall back)
+    lower_side = y < my - 0.0005
+    if not both:
+        idx = np.array(sorted(lower_set))
+        lower_side[idx] = True
+        idx = np.array(sorted(upper_set))
+        lower_side[idx] = False
     wj = np.where(mouthbag, (y < my - 0.0005).astype(float), wj)
-    # right on the lips' meeting line in front: the upper lip's edge stays,
-    # the lower lip's goes (the lips are separate rows there)
+    wj = np.where(region, lower_side.astype(float) * np.where(region, 1.0, 0.0) + 0.0, wj)
     W[:, BI["Jaw"]] = wj
-    upper = y >= my
+    upper = ~lower_side
+    hd["lip_walk"] = (len(lower_set), len(upper_set), len(both))
     gl = np.exp(-((x / 0.022) ** 4) - ((y - my) / 0.012) ** 2) * smooth(0.04, 0.07, z)
     W[:, BI["LipUpper"]] = np.where(upper & ~mouthbag, gl * 0.85, 0)
     W[:, BI["LipLower"]] = np.where(~upper & ~mouthbag, gl * 0.85, 0)

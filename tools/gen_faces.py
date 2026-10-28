@@ -142,15 +142,15 @@ def orient(P, F, centre):
 # ═════════════════════════════════════════════════════════════════════════════
 # the rig
 # ═════════════════════════════════════════════════════════════════════════════
-JAW_MAX = 0.26
+JAW_MAX = 0.34
 CHANNEL_MAP = {
     "jaw_open": [("Jaw", 0, 0, 0, 0, JAW_MAX)],
-    "lip_down": [("LipLower", 0, -0.0045, 0.0012, 0, 0)],
-    "lip_up": [("LipUpper", 0, 0.0045, 0.0010, 0, 0)],
-    "smile_L": [("MouthL", 0.0060, 0.0085, -0.0035, 0, 0), ("LipUpper", 0, 0.0008, 0, 0, 0)],
+    "lip_down": [("LipLower", 0, -0.0065, 0.0012, 0, 0)],
+    "lip_up": [("LipUpper", 0, 0.0058, 0.0008, 0, 0)],
+    "smile_L": [("MouthL", 0.0060, 0.0088, -0.0022, 0, 0), ("LipUpper", 0, 0.0008, 0, 0, 0)],
     "frown_L": [("MouthL", 0.0008, -0.0060, -0.0004, 0, 0)],
-    "stretch_L": [("MouthL", 0.0065, -0.0025, -0.0025, 0, 0)],
-    "cheek_L": [("CheekL", 0.0012, 0.0055, 0.0018, 0, 0), ("LidLoL", 0, 0, 0, 0, -0.06)],
+    "stretch_L": [("MouthL", 0.0060, -0.0022, -0.0012, 0, 0)],
+    "cheek_L": [("CheekL", 0.0010, 0.0055, 0.0012, 0, 0), ("LidLoL", 0, 0, 0, 0, -0.06)],
     "brow_in_up_L": [("BrowInL", 0, 0.0085, 0, 0, 0), ("BrowOutL", 0, 0.0015, 0, 0, 0), ("LidUpL", 0, 0, 0, 0, -0.04)],
     "brow_out_up_L": [("BrowOutL", 0, 0.0078, 0, 0, 0)],
     "brow_down_L": [("BrowInL", -0.0024, -0.0058, 0.0008, 0, 0), ("BrowOutL", 0, -0.0028, 0, 0, 0),
@@ -304,10 +304,10 @@ def mouth_parts(hd):
     out = []
     lm, P = hd["lm"], hd["P"]
     my = lm["mouth_y"]
-    zf = GB._surface_z(P, 0.0, my, r=0.003) - 0.0075
+    zf = GB._surface_z(P, 0.0, my, r=0.003) - 0.0125
     # teeth one by one along each arch: a front face each, a dark gap between
     # (an even band reads as a plank), the lower set short (the lip hides it)
-    for nm, ytop, ybot, bone in (("upper", my + 0.0125, my - 0.0016, "FaceRoot"), ("lower", my + 0.0012, my - 0.0075, "Jaw")):
+    for nm, ytop, ybot, bone in (("upper", my + 0.0115, my - 0.0012, "FaceRoot"), ("lower", my - 0.0045, my - 0.0100, "Jaw")):
         Pt, Ft, Ct = [], [], []
         widths = [0.0042, 0.0034, 0.0038, 0.0034, 0.0034]        # incisors, lateral, canine, premolars
         xs = []
@@ -326,19 +326,69 @@ def mouth_parts(hd):
                     root = ytop if nm == "upper" else ybot
                     # incisors longest; the edge rounded at the corners
                     edge = tip + (0.0006 if nm == "upper" else -0.0006) * (k / 4)
-                    for yy, sh in ((root, 0.72), (edge, 0.95)):
+                    # the gum above (below, for the lower set), then the crown
+                    gum = root
+                    root = (tip + (root - tip) * 0.62)
+                    Pt.append(np.array([px, gum, pz - 0.0008]))
+                    Ct.append((0.30, 0.10, 0.10))
+                    for yy, sh in ((root, 0.62), (edge, 1.0)):
                         Pt.append(np.array([px, yy, pz]))
-                        side = 0.78 if xx in (x0, x1) else 1.0
-                        v = sh * side * (0.93 - 0.05 * k)
-                        Ct.append((0.84 * v, 0.81 * v, 0.72 * v))
+                        # each tooth's sides dark: the gaps between them are
+                        # what makes a row of teeth read as teeth
+                        side = 0.32 if xx in (x0, x1) else 1.0
+                        v = sh * side * (1.0 - 0.07 * k) * (1.0 if nm == "upper" else 0.7)
+                        Ct.append((0.97 * v, 0.95 * v, 0.88 * v))
                 for j in range(2):
-                    q = base + 2 * j
-                    Ft.append((q, q + 1, q + 3, q + 2))
+                    q = base + 3 * j
+                    Ft.append((q, q + 1, q + 4, q + 3))          # gum → crown root
+                    Ft.append((q + 1, q + 2, q + 5, q + 4))      # crown
         Pt = np.array(Pt)
         out.append(("FaceMouth", Pt, orient(Pt, Ft, np.array([0, my, zf - 0.03])), Ct, [bone] * len(Pt)))
-    Pq, Fq, _ = sphere(np.array([0, my - 0.011, zf - 0.016]), 1.0, np.array([0, 0, 1.0]), nu=12, nv=8,
-                       scale=(0.016, 0.0055, 0.019))
-    out.append(("FaceMouth", np.array(Pq), Fq, [(0.36, 0.14, 0.13)] * len(Pq), ["Jaw"] * len(Pq)))
+    # the tongue: low and well back on the floor of the mouth, in its shadow
+    # (forward and lit it reads as a tongue hanging out)
+    Pq, Fq, _ = sphere(np.array([0, my - 0.0175, zf - 0.030]), 1.0, np.array([0, 0, 1.0]), nu=12, nv=8,
+                       scale=(0.0135, 0.0045, 0.016))
+    out.append(("FaceMouth", np.array(Pq), Fq, [(0.20, 0.06, 0.06)] * len(Pq), ["Jaw"] * len(Pq)))
+    # the back of the mouth: a dark mass filling the cavity behind the teeth,
+    # its lower half on the jaw, so however wide the mouth opens nothing behind
+    # it shows — not the throat's skin seen from inside, not the suit's neck
+    # (tools/perf/neck_check.py sweeps for exactly that)
+    Pb, Fb, _ = sphere(np.array([0, my - 0.010, zf - 0.040]), 1.0, np.array([0, 0, 1.0]), nu=16, nv=10,
+                       scale=(0.023, 0.020, 0.024))
+    Pb = np.array(Pb)
+    out.append(("FaceMouth", Pb, Fb, [(0.05, 0.012, 0.012)] * len(Pb),
+                ["Jaw" if p[1] < my - 0.010 else "FaceRoot" for p in Pb]))
+    return out
+
+
+def enclosed(P, Q, N, idx, reach=0.09):
+    """Of the points idx, those whose outward ray (along the normal) hits the
+    mesh within `reach`: surfaces facing into a cavity, not the open air."""
+    T = np.array([(q[0], q[1], q[2]) for q in Q] + [(q[0], q[2], q[3]) for q in Q])
+    v0, v1, v2 = P[T[:, 0]], P[T[:, 1]], P[T[:, 2]]
+    e1, e2 = v1 - v0, v2 - v0
+    out = np.zeros(len(P), bool)
+
+    def hits(o, d):
+        p = np.cross(d, e2)
+        det = (e1 * p).sum(1)
+        ok = np.abs(det) > 1e-14
+        inv = np.where(ok, 1.0 / np.where(ok, det, 1), 0)
+        s_ = o - v0
+        u = (s_ * p).sum(1) * inv
+        q = np.cross(s_, e1)
+        v = (q @ d) * inv
+        t = (e2 * q).sum(1) * inv
+        return bool((ok & (u >= 0) & (v >= 0) & (u + v <= 1) & (t > 1e-5) & (t < reach)).any())
+    for i in idx:
+        n = N[i]
+        a = unit(np.cross(n, [0.0, 1.0, 0.0]) if abs(n[1]) < 0.9 else np.cross(n, [1.0, 0.0, 0.0]))
+        b = np.cross(n, a)
+        o = P[i] + n * 2e-4
+        # five rays (the normal and four tipped 30°): a thin seam (the lips'
+        # meeting line) lets one through, not most
+        dirs_ = [n] + [unit(n + 0.58 * w) for w in (a, -a, b, -b)]
+        out[i] = sum(hits(o, d) for d in dirs_) >= 3
     return out
 
 
@@ -359,7 +409,12 @@ def build_head(h):
     facezone = smooth(-0.005, 0.03, P[:, 2]) * smooth(lm["chin_low"] - 0.005, lm["chin_low"] + 0.01, P[:, 1]) \
         * smooth(0.055, 0.045, np.abs(P[:, 0]))
     dp = GB.depth(P)
-    occ = 1 - 0.9 * smooth(0.012, 0.032, dp) * facezone
+    # (only where a cavity really is: the nostrils; the mouth is below. On
+    # the open face a deep crease is the sculpt's own shading, and darkening
+    # it painted smudges on the more lined heads)
+    ny_ = lm["nose"][1]
+    nostrils = (np.abs(P[:, 0]) < 0.016) & (P[:, 1] > ny_ - 0.016) & (P[:, 1] < ny_ + 0.004) & (P[:, 2] > lm["nose"][2] - 0.03)
+    occ = 1 - 0.9 * smooth(0.016, 0.034, dp) * facezone * nostrils
     # inside the lips: the mouth's wet dark lining — every surface in the
     # mouth's zone behind the lips' front that faces back or across, from
     # just behind where the lips meet
@@ -367,8 +422,41 @@ def build_head(h):
     zfront = GB._surface_z(P, 0.0, my_, r=0.003)
     zone = (np.abs(P[:, 0]) < mw_ + 0.004) & (P[:, 1] > my_ - 0.035) & (P[:, 1] < my_ + 0.03)
     inner = zone & (P[:, 2] < zfront - 0.0025 - 0.15 * (P[:, 0] / max(mw_, 1e-3)) ** 2 * 0.02) & (N[:, 2] < 0.35)
-    occ = np.where(inner, np.minimum(occ, 0.18), occ)
-    C = np.hstack([vertex_masks(s, t), occ[:, None]])
+
+    # …and every surface in the mouth's box that is INSIDE the head: a ray
+    # out along its normal hits the head again (the bag's walls, its back,
+    # the throat's inside), where the outer skin's ray escapes. (The depth
+    # measure is blind straight down, where the neck runs on under them.)
+    box = (np.abs(P[:, 0]) < 0.040) & (P[:, 1] > my_ - 0.045) & (P[:, 1] < my_ + 0.035) & (P[:, 2] < zfront - 0.004)
+    inside = enclosed(P, Q, N, np.where(box)[0])
+    # (an outer surface under an overhang — the chin under the lower lip, the
+    # lip under the nose — also sends its ray into the head: those are near
+    # the outer skin and in front, so they are left out)
+    inside = inside & ((N[:, 2] < 0.5) | (P[:, 2] < zfront - 0.022))
+    inner = inner | inside
+    # the lips' meeting surfaces: at rest they press together (the lower
+    # lip's faces up, the upper's down); open, they are the wet inside of the
+    # lips — dark, never the lip's own colour (else a jaw drop shows a pink
+    # slab that reads as a tongue)
+    contact = (np.abs(P[:, 0]) < mw_ + 0.003) & (np.abs(P[:, 1] - my_) < 0.012) & (P[:, 2] > zfront - 0.03) & \
+        (((P[:, 1] < my_ + 0.0005) & (N[:, 1] > 0.22)) | ((P[:, 1] > my_ - 0.0005) & (N[:, 1] < -0.22)))
+    occ = np.where(inner, np.minimum(occ, 0.08), occ)
+    occ = np.where(contact & ~inner, np.minimum(occ, 0.12), occ)
+    inner = inner | contact
+    # (A is stored as 0.55 + 0.45 × open: the engine cuts a hole where a
+    # vertex's alpha is under 0.5 on an opaque surface, so a dark mouth
+    # lining at alpha 0.1 was not drawn at all — the far side showed through)
+    C = np.hstack([vertex_masks(s, t), (0.55 + 0.45 * occ)[:, None]])
+    # the lips' colour from the head itself, in millimetres about the mouth's
+    # line (the canonical layout put it a lip's height too low on some heads,
+    # so an open mouth showed a tall pink "lower lip" that read as a tongue)
+    xr = np.clip(np.abs(P[:, 0]) / max(mw_, 1e-3), 0, 1.2)
+    up_h = (0.0075 + 0.0012 * np.exp(-(P[:, 0] / 0.004) ** 2)) * np.clip(1 - xr ** 2, 0, 1) ** 0.5
+    lo_h = 0.0095 * np.clip(1 - xr ** 2, 0, 1) ** 0.6
+    dy = P[:, 1] - my_
+    lipv = np.where(dy >= 0, smooth(up_h + 0.0012, up_h - 0.0012, dy), smooth(lo_h + 0.0015, lo_h - 0.0015, -dy))
+    lipv = lipv * smooth(1.08, 0.92, xr) * smooth(zfront - 0.016, zfront - 0.010, P[:, 2]) * smooth(0.1, 0.45, N[:, 2])
+    C[:, 0] = np.where(inner, 0.0, lipv)
     C[inner, 0] = 0.0                       # no lip colour on the lining
     parts = {}
 
@@ -843,7 +931,8 @@ MATS = {
                  ' shader: Some("shaders/face_skin.flsl"),\n shading: Physical,\n)'),
     "FaceEye": ('(\n color: (1.0, 1.0, 1.0),\n roughness: 0.08,\n metallic: 0.0,\n'
                 ' shader: Some("shaders/face_eye.flsl"),\n shading: Physical,\n)'),
-    "FaceMouth": '(\n color: (1.0, 1.0, 1.0),\n roughness: 0.55,\n metallic: 0.0,\n shading: Physical,\n)',
+    "FaceMouth": ('(\n color: (1.0, 1.0, 1.0),\n roughness: 0.4,\n metallic: 0.0,\n'
+                  ' shader: Some("shaders/face_mouth.flsl"),\n shading: Physical,\n)'),
     "Hair": ('(\n color: (0.2, 0.15, 0.1),\n texture: Some("textures/faces/hair_cards.png"),\n roughness: 0.78,\n'
              ' metallic: 0.0,\n shading: Physical,\n)'),
     "CapCloth": ('(\n color: (1.0, 1.0, 1.0),\n texture: Some("textures/suit/fabric_albedo.png"),\n'

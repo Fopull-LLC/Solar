@@ -296,6 +296,8 @@ def hair_mesh(name):
         if 0.04 < c < 0.7:
             st2 = dict(st, length=min(0.012, st["length"] * 0.5) * (0.6 + 0.8 * c), width=st["width"] * 0.7,
                        lift=0.0006)
+            if st["flow"] in ("gather", "back"):
+                st2["flow"] = "crown"          # pulled-back hair still has its short hairs lying forward
             Pc, Fc, UVc = card(ph, th, st2, rng, FINE)
             add(Pc, Fc, UVc)
             edge += 1

@@ -1644,8 +1644,10 @@ def head_piece(J, k, x0, zh, neck_top, nc):
     nr = []
     # (thin: the crew's own head brings its neck down into the ring over this
     # one, which is only there so the ring's well is never empty)
-    for y, r, w in ((neck_top - 0.010 * k, 0.040, {"Back": 1}), (neck_top + 0.018 * k, 0.039, blend("Back", "Head", 0.2)),
-                    (Hj[1] + 0.035 * k, 0.035, blend("Back", "Head", 0.75)), (Hj[1] + 0.070 * k, 0.030, {"Head": 1})):
+    # (and short: it stops in the ring's well, below the chin and the jaw at any
+    # turn of the head — tools/perf/neck_check.py — so nothing of it is seen)
+    for y, r, w in ((neck_top - 0.012 * k, 0.038, {"Back": 1}), (neck_top + 0.004 * k, 0.036, blend("Back", "Head", 0.15)),
+                    (Hj[1] + 0.012 * k, 0.033, blend("Back", "Head", 0.5)), (Hj[1] + 0.018 * k, 0.030, blend("Back", "Head", 0.7))):
         nr.append(dict(c=(x0, y, Hj[2] - 0.012 * k), e1=X, e2=Z, r1=r * k, r2=r * k * 1.1, w=w))
     V, F, UVc, W, C = loft(nr, 12, tile=0.25)
     npc = Piece("Neck", "SuitHead", V, F, W, (1, 1, 1), dirt="none")

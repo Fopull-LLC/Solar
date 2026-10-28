@@ -116,8 +116,9 @@
             ),
             "FaceMouth": (
                 color: (1.0, 1.0, 1.0),
-                roughness: 0.55,
+                roughness: 0.4,
                 metallic: 0.0,
+                shader: Some("shaders/face_mouth.flsl"),
                 shading: Physical,
             ),
         },

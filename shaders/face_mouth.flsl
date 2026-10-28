@@ -1,0 +1,11 @@
+// face_mouth — the teeth and the tongue (tools/gen_faces.py): their colour is
+// per vertex (ivory teeth with dark gaps between them, a dark tongue in the
+// mouth's shadow). A plain material drew them flat white, which through an
+// open mouth read as a pale slab.
+shader face_mouth {
+  stage fragment
+  uniform glow: float = 0.0 range(0, 1)
+
+  let c = vertexColor.rgb
+  output color = vec4(litPbr(c) + c * glow * 0.15, 1.0)
+}

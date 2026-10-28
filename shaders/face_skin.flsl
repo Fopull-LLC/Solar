@@ -11,7 +11,7 @@
 //       up under the hair, down on the brow),
 //       G stubble density, B brows (density: 1 the thick of it), A wrinkles
 //   vertexColor: R lips, G warmth (blood under the skin), B where freckles go,
-//       A open (1) … deep (0): the mouth's inside, the nostrils, behind the lids
+//       A open (1) … deep (0.55): the mouth's inside, the nostrils, behind the lids
 //   the Material's normal map (skin_normal.png): pores and lines
 // No texture slot of its own (one material map, one vertex colour): it draws
 // on a GPU with the fewest sampled textures, too.
@@ -34,6 +34,8 @@ shader face_skin {
   // the scalp under the hair: the hairline's shift (−low … +high), how much
   // the hair shows through the skin there, how coarse it is (coily: more shadow)
   uniform scalp: vec3 = vec3(0, 0.8, 0.0)
+  // probes: x 1 draws the vertex colour's alpha (the cavities) flat, y 1 its red (the lips)
+  uniform debugView: vec3 = vec3(0, 0, 0)
 
   let d = baseTexture()
   let vc = vertexColor
@@ -75,6 +77,10 @@ shader face_skin {
   let dirt = smoothstep(0.45, 0.75, fbm(vec3(uv.x * 22.0, uv.y * 22.0, 3.0), octaves: 3.0)) * grime
   let alb0 = mix(c9, c9 * vec3(0.45, 0.40, 0.36), dirt * 0.7)
   // the inside of the mouth is wet and dark red, not skin
-  let alb = mix(vec3(0.10, 0.025, 0.025) + alb0 * 0.15, alb0, vc.a)
-  output color = vec4(litPbr(alb) + alb * glow * 0.35, 1.0)
+  // (vertex alpha 0.55 deep … 1 open: under 0.5 the engine would cut a hole)
+  let open = saturate((vc.a - 0.55) / 0.45)
+  let alb = mix(vec3(0.10, 0.025, 0.025) + alb0 * 0.15, alb0, open)
+  let shown = litPbr(alb) + alb * glow * 0.35
+  let dbg = mix(mix(shown, vec3(vc.a, vc.a, vc.a), debugView.x), vec3(vc.r, vc.g * 0.0, 0.0), debugView.y)
+  output color = vec4(dbg, 1.0)
 }

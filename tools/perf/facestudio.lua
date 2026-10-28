@@ -12,6 +12,7 @@ local W0 = W()
 local function P(fmt, ...) print(string.format("FACE %7.2f " .. fmt, W() - W0, ...)) end
 local CO, CASE
 local cam_at = nil          -- { x,y,z, tx,ty,tz }
+local head_turn = nil       -- { yaw, pitch, roll } on every actor's suit Head bone (case neck)
 local pending = 0
 local function yield() coroutine.yield() end
 local function wait(s) local t = W() + s; while W() < t do yield() end end
@@ -175,6 +176,108 @@ local MAIN = function()
       shot(string.format("p%d_helmet", k), 720, 720)
       helmets(k, false)
     end
+  elseif CASE == "exprs" then
+    -- every person through the main expressions: close (512²) and at the
+    -- strip portrait's framing, small (fovY 0.9 at 0.42 m is this lens at
+    -- 0.80 m; captured 336² and shown at 168², a portrait's target size)
+    local list = { "neutral", "happy", "focus", "worried", "scared", "excited", "relief", "delight" }
+    local key, fill = find("Key Light"), find("Fill Light")
+    for k = 1, params.n do
+      local _, _, m = actor(k)
+      for _, c in ipairs(m:children()) do if c.name == "Helmet" then c.visible = false end end
+    end
+    for k = 1, params.n do
+      local f, s = actor(k)
+      s.forceHelmet = false
+      s.still = true
+      local fr = face_frame(f)
+      local rx, rz = -fr.fz, fr.fx
+      key.pos = vec3(fr.x + fr.fx * 0.9 + rx * 0.7, fr.y + 0.55, fr.z + fr.fz * 0.9 + rz * 0.7)
+      fill.pos = vec3(fr.x + fr.fx * 0.8 - rx * 0.9, fr.y + 0.05, fr.z + fr.fz * 0.8 - rz * 0.9)
+      for _, nm in ipairs(list) do
+        s.override = {}
+        for ch, v in pairs(F.EXPR[nm]) do s.override[ch] = v end
+        frame_face(f, 0.40, 0.0, 0.06)
+        wait(0.5)
+        shot(string.format("x%d_%s_close", k, nm), 512, 512)
+        frame_face(f, 0.80, -0.03, 0.0)
+        wait(0.3)
+        shot(string.format("x%d_%s_strip", k, nm), 336, 336)
+      end
+    end
+  elseif CASE == "mouthdebug" then
+    local f, s = actor(1)
+    s.still = true
+    s.override = {}
+    for ch, v in pairs(F.EXPR.excited) do s.override[ch] = v end
+    frame_face(f, 0.30, -0.05, 0.0)
+    wait(0.6)
+    shot("md_plain", 512, 512)
+    local m = f:material("FaceMouth")
+    pcall(function() m.color = { 0, 1, 0 } end)
+    wait(0.4)
+    shot("md_mouthgreen", 512, 512)
+    pcall(function() m.color = { 1, 1, 1 } end)
+    local e = f:material("FaceEye")
+    pcall(function() e.color = { 0, 0, 1 } end)
+    local sk = f:material("FaceSkin")
+    pcall(sk.setShaderParam, sk, "skin", 1, 0, 1)
+    wait(0.4)
+    shot("md_skinmagenta", 512, 512)
+    pcall(sk.setShaderParam, sk, "debugView", 1, 0, 0)
+    wait(0.4)
+    shot("md_alpha", 512, 512)
+    pcall(sk.setShaderParam, sk, "debugView", 0, 1, 0)
+    wait(0.4)
+    shot("md_red", 512, 512)
+    pcall(sk.setShaderParam, sk, "debugView", 0, 0, 0)
+    for _, c in ipairs(f:children()) do c.visible = false end
+    wait(0.3)
+    shot("md_nohair", 512, 512)
+    f.visible = false
+    wait(0.3)
+    shot("md_noface", 512, 512)
+    P("materials: %s", tostring(#f:materials()))
+    for _, mm in ipairs(f:materials()) do P("  part %s mat %s", tostring(mm.object), tostring(mm.material)) end
+  elseif CASE == "neck" then
+    -- the worst poses for the neck: the head turned, tipped and rolled
+    -- with the mouth wide open; from below the chin and into the mouth
+    local poses = { { "front_jawfull", 0, 0, 0, "jaw" }, { "turned_panic", 0.70, 0.52, 0.26, "panic" },
+                    { "down_panic", 0, -0.61, 0, "panic" }, { "up_excited", -0.70, 0.61, 0, "excited" } }
+    local key, fill = find("Key Light"), find("Fill Light")
+    for k = 1, params.n do
+      local _, _, m = actor(k)
+      for _, c in ipairs(m:children()) do if c.name == "Helmet" then c.visible = false end end
+    end
+    for k = 1, params.n do
+      local f, s = actor(k)
+      s.still = true
+      s.forceHelmet = false
+      for _, ps in ipairs(poses) do
+        s.override = {}
+        if ps[5] == "jaw" then s.override = { jaw_open = 1, lip_down = 1 }
+        else for ch, v in pairs(F.EXPR[ps[5]]) do s.override[ch] = v end end
+        -- frame from the unturned face (taken before the turn), aimed at the
+        -- head's place: the turned head is seen as it turns
+        head_turn = nil
+        wait(0.3)
+        local fr = face_frame(f)
+        head_turn = { ps[2], ps[3], ps[4] }
+        wait(0.5)
+        local rx, rz = -fr.fz, fr.fx
+        key.pos = vec3(fr.x + fr.fx * 0.9 + rx * 0.7, fr.y + 0.55, fr.z + fr.fz * 0.9 + rz * 0.7)
+        fill.pos = vec3(fr.x + fr.fx * 0.8 - rx * 0.9, fr.y - 0.25, fr.z + fr.fz * 0.8 - rz * 0.9)
+        -- into the mouth (from in front, a little above the lips)
+        cam_at = { fr.x + fr.fx * 0.26, fr.y - 0.035, fr.z + fr.fz * 0.26, fr.x, fr.y - 0.085, fr.z }
+        wait(0.3)
+        shot(string.format("n%d_%s_mouth", k, ps[1]), 512, 512)
+        -- from below the chin, looking up at the jaw and the neck
+        cam_at = { fr.x + fr.fx * 0.22, fr.y - 0.24, fr.z + fr.fz * 0.22, fr.x, fr.y - 0.11, fr.z }
+        wait(0.3)
+        shot(string.format("n%d_%s_below", k, ps[1]), 512, 512)
+      end
+      head_turn = nil
+    end
   elseif CASE == "rig" then
     local f, s = actor(params.actor)
     s.still = true
@@ -215,6 +318,13 @@ function update(node, dt)
 end
 
 function lateUpdate(node, dt)
+  if head_turn then
+    for k = 1, params.n do
+      local _, _, m = actor(k)
+      local a = m and m:animator()
+      if a then pcall(a.addBoneRot, a, "Head", head_turn[1], head_turn[2], head_turn[3]) end
+    end
+  end
   local c = find("Camera")
   if c and cam_at then
     c.pos = vec3(cam_at[1], cam_at[2], cam_at[3])

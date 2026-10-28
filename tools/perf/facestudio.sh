@@ -12,6 +12,8 @@ ALSA=${ALSA:-/mnt/disks/3tb/.floptle-shared/silent-alsa.conf}
 [ -f $ALSA ] || printf 'pcm.!default { type null }\nctl.!default { type hw card 0 }\n' > $ALSA
 PJ=$WORK/facestudioproj
 mkdir -p "$PJ/save" "$PJ/saves" "$PJ/.floptle"
+# MODELS_DIR: draw models from another tree (an A/B against older faces)
+rm -f "$PJ/models"; [ -n "${MODELS_DIR:-}" ] && ln -s "$MODELS_DIR" "$PJ/models"
 for d in models textures animation_controllers animations audio docs fonts materials shaders terrain tests tools ui vfx input.ron .luarc.json; do
   [ -e "$PJ/$d" ] || ln -s "$SOL/$d" "$PJ/$d"
 done

@@ -202,19 +202,29 @@ end
 -- ═════════════════════════════════════════════════════════════════════════════
 EXPR = {
   neutral = {},
-  focus = { brow_down_ = 0.30, squint_ = 0.18, frown_ = 0.08 },
-  happy = { smile_ = 0.85, cheek_ = 0.65, squint_ = 0.30, brow_out_up_ = 0.15, flush = 0.15 },
-  excited = { smile_ = 1.0, cheek_ = 0.85, jaw_open = 0.45, brow_out_up_ = 0.55, brow_in_up_ = 0.25, wide_ = 0.25,
-              lip_up = 0.35, lip_down = 0.25, flush = 0.35 },
-  relief = { smile_ = 0.6, cheek_ = 0.4, brow_in_up_ = 0.55, blink_ = 0.15, jaw_open = 0.08 },
-  delight = { smile_ = 0.75, cheek_ = 0.5, wide_ = 0.3, brow_out_up_ = 0.55, brow_in_up_ = 0.2, jaw_open = 0.15 },
-  worried = { brow_in_up_ = 0.85, frown_ = 0.45, stretch_ = 0.2, wide_ = 0.15, pale = 0.15 },
-  scared = { brow_in_up_ = 1.0, brow_out_up_ = 0.55, wide_ = 0.85, stretch_ = 0.6, jaw_open = 0.18, lip_down = 0.45,
-             pale = 0.5, pupil = 0.7 },
-  panic = { brow_in_up_ = 1.0, brow_out_up_ = 0.9, wide_ = 1.0, stretch_ = 1.0, jaw_open = 0.8, lip_down = 0.85,
-            lip_up = 0.3, pale = 0.75, pupil = 1.0 },
+  -- calm attention: brows a touch down, lids a touch narrowed
+  focus = { brow_down_ = 0.5, squint_ = 0.3, frown_ = 0.1 },
+  -- a closed-mouth smile that reaches the eyes
+  happy = { smile_ = 0.9, cheek_ = 0.75, squint_ = 0.35, lip_up = 0.15, brow_out_up_ = 0.1, flush = 0.12 },
+  -- a broad open smile: corners up and back, cheeks up into the eyes,
+  -- the upper teeth showing, the lower lip pulled down and wide
+  excited = { smile_ = 1.0, cheek_ = 1.0, squint_ = 0.45, jaw_open = 0.5, lip_up = 0.6, lip_down = 0.15,
+              stretch_ = 0.3, brow_out_up_ = 0.3, flush = 0.3 },
+  -- the breath out: a soft smile, inner brows still up, lids heavy
+  relief = { smile_ = 0.6, cheek_ = 0.45, brow_in_up_ = 0.55, blink_ = 0.25, jaw_open = 0.06 },
+  -- floating free: an open-mouthed wondering smile, eyes wide
+  delight = { smile_ = 0.85, cheek_ = 0.6, wide_ = 0.3, brow_out_up_ = 0.6, brow_in_up_ = 0.3, jaw_open = 0.3,
+              lip_up = 0.6, stretch_ = 0.15 },
+  -- inner brows up and knit, the mouth's corners down
+  worried = { brow_in_up_ = 1.0, brow_down_ = 0.2, frown_ = 0.7, stretch_ = 0.2, wide_ = 0.15, lip_down = 0.1, pale = 0.15 },
+  -- wide eyes under raised brows; the mouth open and tense, pulled wide
+  scared = { brow_in_up_ = 1.0, brow_out_up_ = 0.7, wide_ = 0.9, jaw_open = 0.4, stretch_ = 0.85, lip_down = 0.35,
+             lip_up = 0.25, pale = 0.5, pupil = 0.7 },
+  -- shouting in fear: wider still
+  panic = { brow_in_up_ = 1.0, brow_out_up_ = 0.9, wide_ = 1.0, stretch_ = 0.9, jaw_open = 0.8, lip_down = 0.85,
+            lip_up = 0.5, pale = 0.75, pupil = 1.0 },
   pain = { brow_down_ = 0.7, brow_in_up_ = 0.45, squint_ = 0.85, blink_ = 0.45, stretch_ = 0.55, lip_up = 0.65,
-           jaw_open = 0.12, flush = 0.35, cheek_ = 0.4 },
+           jaw_open = 0.1, flush = 0.35, cheek_ = 0.4 },
   strain = { brow_down_ = 0.85, squint_ = 0.75, blink_ = 0.2, lip_up = 0.55, lip_down = 0.3, stretch_ = 0.75, frown_ = 0.3,
              cheek_ = 0.45, flush = 0.85 },
   tired = { blink_ = 0.5, brow_in_up_ = 0.25, frown_ = 0.25, jaw_open = 0.04, pale = 0.15 },
