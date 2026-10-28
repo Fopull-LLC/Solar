@@ -737,9 +737,11 @@ SUIT_MATS = {
     "SuitBubble": lambda: ('(\n                color: (0.86, 0.90, 0.94),\n                alpha: 0.16,\n'
                            '                roughness: 0.06,\n                metallic: 0.0,\n'
                            '                blend: Some(Blend),\n                shading: Physical,\n            )'),
+    # the gold visor is a tinted film the face shows through (face.lua lights
+    # the face a little under a helmet), not an opaque mirror
     "SuitVisor":  lambda: (f'(\n                color: (1.0, 1.0, 1.0),\n                texture: Some("{TEX}visor.png"),\n'
-                           '                roughness: 0.14,\n                metallic: 0.6,\n'
-                           '                shading: Physical,\n            )'),
+                           '                alpha: 0.6,\n                roughness: 0.14,\n                metallic: 0.6,\n'
+                           '                blend: Some(Blend),\n                shading: Physical,\n            )'),
     "SuitLamp":   lambda: ('(\n                color: (1.0, 0.95, 0.86),\n'
                            '                texture: Some("textures/base/lens.png"),\n'
                            '                unlit: true,\n                fog: false,\n            )'),

@@ -20,3 +20,11 @@ the suit, and are released under the same CC-BY-SA terms with the suit. The
 textures are procedural (tools/gen_suit.py); the agency emblem comes from
 tools/base_tex.py; lettering is set in the project's own fonts
 (fonts/README.md, SIL OFL).
+
+THE FACES (faces/head_*.glb, faces/hair_*.glb, faces/cap.glb, textures/faces/*)
+The heads are built on the realistic head (animation topology) from Blender
+Studio's "Human Base Meshes" bundle v1.4.1 (CC0, blender.org/download/demo-files),
+kept as tools/faces_base/head_base.npz; tools/gen_faces.py deforms it into
+eight structures and adds the face rig, weights, eyes, teeth, textures, hair
+cards and the comm cap (new work, CC0). The heads hang on the suit's Head bone
+(scripts/face.lua); the suit itself keeps only the neck.

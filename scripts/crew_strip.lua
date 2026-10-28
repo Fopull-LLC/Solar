@@ -2,7 +2,7 @@
 -- bottom-left (docs/crew-and-items.md §4.4, §3.3).
 --
 --   ┌ CREW · Kestrel I · 3/3 ─────────────────────── ◂ 1/2 ▸ ┐
---   │ [live cam] [live cam] [live cam] [live cam]            │  128 × 96 (large: 256 × 192)
+--   │ [live cam] [live cam] [live cam] [live cam]            │  112 × 112 (large: 208 × 208)
 --   │  D.OKAFOR★   J.REYES    M.HALE     ...                 │  hover: [EVA] [⇄]
 --   ├ ON FOOT ───────────────────────────────────────────────┤
 --   │ [T.VANCE 42 m · CONTROL]  [R.ITO 310 m · CONTROL]      │  chips, no live cam
@@ -15,7 +15,7 @@
 -- dolls); an open seat's rider needs the world, so only the HOVERED open-seat
 -- portrait films (4 Hz) and the others keep their last picture.
 --
--- Budget: 4 targets at 192 × 144 sharing RT_BUDGET redraws a second (the
+-- Budget: 4 targets at 168 × 168 sharing RT_BUDGET redraws a second (the
 -- design's 8 Hz each waits on engine card H1, see RT_BUDGET), hovered 6 Hz.
 -- Hidden strip, the map, the builder, cinematic mode: the cameras are
 -- disabled (a disabled camera is not drawn) and the images keep their frames.
@@ -40,7 +40,11 @@ local function ref(kind)
 end
 
 PER_PAGE = 4
-SIZES = { small = { w = 128, h = 96, tw = 192, th = 144 }, large = { w = 256, h = 192, tw = 384, th = 288 } }
+-- A portrait is SQUARE, its target too, and it is drawn at exactly its frame's
+-- size inside the frame's border (playtest: a 4:3 target "cover"-fitted into
+-- its frame drew past the border, off the strip's left edge).
+SIZES = { small = { w = 112, h = 112, tw = 168, th = 168 }, large = { w = 208, h = 208, tw = 312, th = 312 } }
+FRAME_PAD = 3                -- the frame's border round the picture (design units, every side)
 MODES = { "small", "large", "hidden" }
 -- Measured on rc38 (tools/perf/ivaprobe.sh ivapod2, Medium, 1920×1052): a
 -- portrait target pays for a whole scene render whatever its cullMask (the
@@ -56,12 +60,18 @@ MODES = { "small", "large", "hidden" }
 RT_BUDGET = 12.0
 HZ_MIN = 1.2
 HOVER_HZ, OPEN_HZ = 6.0, 4.0
+-- An open seat's portrait films the world, so it costs more than a cabin's:
+-- unhovered it still films, slowly. (It used to film ONE frame and then
+-- switch off — but a camera that has drawn once redraws only at its `hz`, so
+-- that one frame at 4 Hz was never drawn and the portrait stayed black:
+-- playtest dfb3e17, M.MOREAU on a bike.)
+OPEN_IDLE_HZ = 1.0
 function rateFor(k, n, hovered)
   if hovered then return HOVER_HZ end
   local hz = math.max(HZ_MIN, RT_BUDGET / math.max(1, n))
   return hz * (1.0 + 0.04 * ((k or 1) - 1))       -- staggered: never in step for long
 end
-CAM_DIST, CAM_FOV = 0.55, 0.9
+CAM_DIST, CAM_FOV = 0.42, 0.9   -- close enough that a face fills the frame and its expression reads (crew_faces)
 GAP, PLATE_H = 6, 18
 INTERIOR_BIT, OFFSTAGE_BIT = 16, 32
 
@@ -79,7 +89,8 @@ function layout(n, page, size)
   local cols = math.max(1, #shown)
   return { pages = pages, page = page, first = first, last = last, shown = shown, w = S.w, h = S.h,
            tw = S.tw, th = S.th, paged = pages > 1,
-           strip_w = cols * S.w + (cols - 1) * GAP + 16, strip_h = 22 + S.h + PLATE_H + 12 }
+           strip_w = cols * (S.w + 2 * FRAME_PAD) + (cols - 1) * GAP + 12,
+           strip_h = 22 + S.h + 2 * FRAME_PAD + PLATE_H + 12 }
 end
 
 -- "Dana Okafor" → "D.OKAFOR"
@@ -113,6 +124,7 @@ local hover_id, hover_t = nil, -10
 local confirm = nil       -- { id, warn, stay, t }
 local msg, msg_t = nil, -10
 strip = { shown = 0, live = 0 }   -- published for probes: portraits drawn, cameras live
+hoverId = nil             -- published: the member whose portrait the pointer is on
 local function now() return time or 0 end
 
 local function opt_load()
@@ -194,11 +206,16 @@ local function all_off()
   strip.live = 0
 end
 
-local function set_cam(c, hz, mask)
+-- `open`: the portrait films the world (an open seat), so it draws the sky
+-- and the ground behind the face. A cabin's draws neither: the Skybox's
+-- solid colour is black, which is right behind a lit room and a black void
+-- behind a rider.
+local function set_cam(c, hz, mask, open)
   if not (c and c.node and c.node.valid ~= false) then return end
-  if c.hz ~= hz or c.mask ~= mask then
-    pcall(function() c.node:setCamera { hz = hz, cullMask = mask } end)
-    c.hz, c.mask = hz, mask
+  open = open == true
+  if c.hz ~= hz or c.mask ~= mask or c.open ~= open then
+    pcall(function() c.node:setCamera { hz = hz, cullMask = mask, sky = open, terrain = open } end)
+    c.hz, c.mask, c.open = hz, mask, open
   end
 end
 
@@ -219,9 +236,9 @@ local function aim(c, v, m)
   end
   -- level with the face (a seated doll's eyes sit a little under the
   -- rig's standing eye height), looking straight back at it
-  local p = eye - back * CAM_DIST - up * 0.06
+  local p = eye - back * CAM_DIST - up * 0.03
   c.node.pos = p
-  c.node:lookAt(eye - up * 0.10, up)
+  c.node:lookAt(eye - up * 0.06, up)
   return true
 end
 
@@ -342,10 +359,11 @@ local function portrait(i, m, L, live, hov, v)
     end
   end
   local tex = live and ("rt:crew" .. i) or nil
-  local img = tex and { "image", key = "img" .. i, texture = tex, w = L.w, h = L.h, imageFit = "cover" }
+  local img = tex and { "image", key = "img" .. i, texture = tex, w = L.w, h = L.h, imageFit = "contain" }
     or { "box", key = "img" .. i, style = "hud/bezel", w = L.w, h = L.h }
   local chips = chipsFor(a, m)
-  local col = { "col", key = "pt" .. i, style = "hud/chip", w = L.w + 4, h = "fit", gap = 1, pad = 2, align = "start",
+  local col = { "col", key = "pt" .. i, style = "hud/chip", w = L.w + 2 * FRAME_PAD, h = "fit", gap = 1, pad = FRAME_PAD,
+                align = "start",
                 img, plate }
   if #chips > 0 then col[#col + 1] = chip_row("ch" .. i, chips) end
   return col
@@ -487,6 +505,7 @@ function lateUpdate(node, dt)
   if forced_hover then hover_id, hover_t = forced_hover, now()
   elseif hm then hover_id, hover_t = hm.id, now()
   elseif now() - hover_t > 0.3 then hover_id = nil end
+  hoverId = hover_id          -- published: face.lua turns the hovered member's eyes to the lens
   -- the interiors the portraits film
   local I = ref("iva")
   if v and I and I.need then I.need(v) end
@@ -497,12 +516,12 @@ function lateUpdate(node, dt)
     if m and c and c.node then
       local hov = hover_id == m.id
       if m.open then
-        -- an open seat films the world: only while hovered (the rest keep
-        -- their last picture, which costs nothing)
-        set_cam(c, OPEN_HZ, 4294967295 - INTERIOR_BIT - OFFSTAGE_BIT)
-        cam_on(c, hov or c.last ~= m.id)
+        -- an open seat films the world: hovered at OPEN_HZ, otherwise slowly
+        -- (a one-frame shot never drew: see OPEN_IDLE_HZ)
+        set_cam(c, hov and OPEN_HZ or OPEN_IDLE_HZ, 4294967295 - INTERIOR_BIT - OFFSTAGE_BIT, true)
+        cam_on(c, true)
       else
-        set_cam(c, rateFor(k, #L.shown, hov), INTERIOR_BIT)
+        set_cam(c, rateFor(k, #L.shown, hov), INTERIOR_BIT, false)
         -- while the seat view is up only its own room is drawn: a portrait
         -- from another room keeps its last picture
         local pc = ref("planet_camera")
@@ -521,20 +540,9 @@ function lateUpdate(node, dt)
 end
 
 -- The Flight Ops card shares the bottom-left corner: while the strip shows,
--- the card stands on top of it (§4.4), and goes back down when it hides.
-local ops_el, ops_y0 = nil, nil
-function lift_ops(node, on)
-  if not (ops_el and ops_el.valid ~= false) then
-    local n = find and find("Flight Ops")
-    ops_el = n and n.getcomponent and n:getcomponent("UiElement") or nil
-    if not ops_el then return end
-    ops_y0 = ops_y0 or ops_el.posY or -16
-  end
-  local want = ops_y0
-  if on and node.uiRect and camera and camera.screenSize then
-    local _, _, _, h = node:uiRect()
-    local _, sh = camera.screenSize()
-    if h and sh and sh > 0 then want = ops_y0 - (h * 720 / sh + 8) end
-  end
-  if ops_el.posY ~= want then ops_el.posY = want end
-end
+-- the card stands on top of it (§4.4). status_hud.lua's layout pass does
+-- that now (it owns every HUD block's place, and measures the strip in design
+-- units: this converted with 720 and fell short at any interface size under
+-- 100%, so "END FLIGHT" sat on the portraits — playtest dfb3e17). Two
+-- writers on one posY is how that bug hid. Kept as a no-op for the callers.
+function lift_ops(node, on) end

@@ -1,0 +1,24 @@
+// face_eye — the eyeballs (tools/gen_faces.py): uv is the ball's front seen
+// head-on, (0.5, 0.5) the cornea's centre and 0.5 the ball's radius. The
+// iris colour is the person's; `pupil` widens with fear and in the dark.
+shader face_eye {
+  stage fragment
+  uniform iris: color = #5A4632
+  uniform pupil: float = 0.35 range(0.15, 0.7)
+  uniform pale: float = 0.0 range(0, 1)
+  uniform glow: float = 0.0 range(0, 1)
+
+  let q = (uv - vec2(0.5, 0.5)) * 2.0
+  let r = length(q)
+  let ir = 0.48
+  let fib = 0.85 + 0.15 * sin(atan2(q.y, q.x) * 40.0 + r * 9.0)
+  let irisCol = iris.rgb * fib * mix(1.25, 0.65, smoothstep(0.1, ir, r))
+  let limbal = smoothstep(ir - 0.08, ir, r)
+  let ic = mix(irisCol, iris.rgb * 0.25, limbal * 0.8)
+  let pr = ir * pupil
+  let pc = mix(vec3(0.015, 0.012, 0.012), ic, smoothstep(pr - 0.02, pr + 0.02, r))
+  // a living eye's white is not white: warm grey, pinker toward the corners
+  let sclera = mix(vec3(0.66, 0.62, 0.58), vec3(0.60, 0.44, 0.40), smoothstep(0.55, 1.0, r) * (0.6 + 0.4 * pale))
+  let c = mix(pc, sclera, smoothstep(ir - 0.01, ir + 0.02, r))
+  output color = vec4(litPbr(c) + c * glow * 0.15, 1.0)
+}

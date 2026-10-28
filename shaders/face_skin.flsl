@@ -1,0 +1,80 @@
+// face_skin — a crew member's face (tools/gen_faces.py, scripts/face.lua).
+//
+// Every head shares one texture layout (the faces' canonical lattice), so the
+// person is in the uniforms: skin tone, hair colour (brows and stubble), the
+// lips, how much stubble, freckles, age, a scar. The expression adds colour
+// on top of the rig's shape: `flush` (blood up: strain, effort, joy), `pale`
+// (blood gone: fear, shock, death), `grime` (soot and dust after a bad day),
+// `glow` (the helmet's face light, so a face behind a visor reads).
+//
+//   the Material's texture (skin_detail.png): R the scalp (0.5 on the hairline,
+//       up under the hair, down on the brow),
+//       G stubble density, B brows (density: 1 the thick of it), A wrinkles
+//   vertexColor: R lips, G warmth (blood under the skin), B where freckles go,
+//       A open (1) … deep (0): the mouth's inside, the nostrils, behind the lids
+//   the Material's normal map (skin_normal.png): pores and lines
+// No texture slot of its own (one material map, one vertex colour): it draws
+// on a GPU with the fewest sampled textures, too.
+shader face_skin {
+  stage fragment
+  uniform skin: color = #B98A6E
+  uniform hair: color = #3A2A20
+  uniform lip: color = #9C5B52
+  uniform stubble: float = 0.0 range(0, 1)
+  uniform freckles: float = 0.0 range(0, 1)
+  uniform age: float = 0.3 range(0, 1)
+  uniform brow: float = 0.5 range(0, 1)
+  // a scar: a segment in uv, a → b, and its strength (0 none)
+  uniform scarA: vec3 = vec3(0, 0, 0)
+  uniform scarB: vec3 = vec3(0, 0, 0)
+  uniform flush: float = 0.0 range(0, 1)
+  uniform pale: float = 0.0 range(0, 1)
+  uniform grime: float = 0.0 range(0, 1)
+  uniform glow: float = 0.0 range(0, 1)
+  // the scalp under the hair: the hairline's shift (−low … +high), how much
+  // the hair shows through the skin there, how coarse it is (coily: more shadow)
+  uniform scalp: vec3 = vec3(0, 0.8, 0.0)
+
+  let d = baseTexture()
+  let vc = vertexColor
+  let mott = valueNoise(vec3(uv.x * 90.0, uv.y * 90.0, 1.7))
+  let base = skin.rgb * (0.95 + 0.08 * mott)
+  // painted cavities (the light does most of it; this deepens the creases)
+  let c1 = base
+  // blood under the skin: always a little, more when flushed, none when pale
+  let warmth = vc.g * (0.18 + 0.55 * flush) * (1.0 - pale)
+  let c2 = mix(c1, c1 * vec3(1.10, 0.78, 0.72), warmth)
+  let spots = smoothstep(0.62, 0.78, valueNoise(vec3(uv.x * 420.0, uv.y * 420.0, 5.3)))
+  let fr = spots * vc.b * freckles
+  let c3 = mix(c2, c2 * vec3(0.70, 0.55, 0.44), fr * 0.85)
+  let c4 = c3 * (1.0 - d.a * age * 0.20)
+  let stub = smoothstep(0.08, 0.6, d.g) * stubble
+  let c5 = mix(c4, hair.rgb * 0.55 + c4 * 0.25, stub * 0.8)
+  let lipm = smoothstep(0.25, 0.7, vc.r)
+  let c6 = mix(c5, mix(c5, lip.rgb, 0.85), lipm * (1.0 - pale * 0.6))
+  let bw = smoothstep(1.0 - brow - 0.12, 1.0 - brow + 0.12, d.b)
+  let bh = valueNoise(vec3(uv.x * 900.0, uv.y * 900.0, 4.4))
+  let c7 = mix(c6, hair.rgb * 0.7 + c6 * 0.3, bw * (0.5 + 0.2 * bh))
+  // the scar: distance to the segment, in uv
+  let pa = uv - vec2(scarA.x, scarA.y)
+  let ba = vec2(scarB.x - scarA.x, scarB.y - scarA.y)
+  let h = saturate(dot(pa, ba) / max(dot(ba, ba), 0.0000001))
+  let sd = length(pa - ba * h)
+  let scar = (1.0 - smoothstep(scarA.z * 0.4, scarA.z, sd)) * scarB.z
+  let c8 = mix(c7, c7 * vec3(1.12, 0.86, 0.84) + vec3(0.05, 0.03, 0.03), scar)
+  // under the hair: the scalp darkened by the hair growing from it; at the
+  // hairline a fringe of fine hairs thinning out onto the skin
+  let sh = scalp.x * 0.35
+  let under = smoothstep(0.46 + sh, 0.72 + sh, d.r)
+  let fringe = smoothstep(0.22 + sh, 0.55 + sh, d.r) * (1.0 - under * 0.6)
+  let hairs = smoothstep(0.55, 0.85, valueNoise(vec3(uv.x * 900.0, uv.y * 260.0, 2.1)))
+  let hc = hair.rgb * 0.6 + c8 * 0.25
+  let c8s = mix(c8, hc, saturate(under * (0.72 + 0.2 * scalp.z) + fringe * (0.12 + hairs * 0.7)) * scalp.y)
+  let lum = dot(c8s, vec3(0.30, 0.55, 0.15))
+  let c9 = mix(c8s, vec3(lum * 0.92, lum * 0.95, lum * 1.0), pale * 0.55)
+  let dirt = smoothstep(0.45, 0.75, fbm(vec3(uv.x * 22.0, uv.y * 22.0, 3.0), octaves: 3.0)) * grime
+  let alb0 = mix(c9, c9 * vec3(0.45, 0.40, 0.36), dirt * 0.7)
+  // the inside of the mouth is wet and dark red, not skin
+  let alb = mix(vec3(0.10, 0.025, 0.025) + alb0 * 0.15, alb0, vc.a)
+  output color = vec4(litPbr(alb) + alb * glow * 0.35, 1.0)
+}

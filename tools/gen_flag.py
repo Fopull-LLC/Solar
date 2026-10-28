@@ -448,6 +448,9 @@ def main():
     q = quat_from_matrix(np.array([[1, 0, 0], [0, 0, 1], [0, -1, 0]], float))   # +Y (head) along -Z... lying down
     t += node("Remains Suit", 0, (0, -0.02, 0.0), mesh("models/astronaut/astronaut_male.glb"),
               mats=SUIT_MATS, rot=q)
+    # the face on the suit's Head bone (tools/gen_faces.py; still, eyes shut)
+    import gen_faces
+    t += gen_faces.face_nodes(1, 2)
     t += "]\n"
     open(os.path.join(PREFABS, "Remains.prefab.ron"), "w").write(t)
 

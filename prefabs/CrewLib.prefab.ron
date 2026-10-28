@@ -1,6 +1,7 @@
 // CREW LIBRARY — scripts/crew.lua (the roster, the records, the migration),
 // scripts/crew_task.lua (jobs a crew member is held at: the repair lock) and
-// scripts/eva_pack.lua (the RCS Pack on EVA). Spawned by game_manager.lua and
+// scripts/eva_pack.lua (the RCS Pack on EVA) and scripts/crew_faces.lua (each
+// member's look, and how they feel: scripts/face.lua draws it). Spawned by game_manager.lua and
 // build_host.lua when the scene carries no node running crew.lua; reached
 // with findScript("crew") / ("crew_task") / ("eva_pack").
 [
@@ -25,6 +26,11 @@
             ),
             (
                 kind: "eva_pack",
+                enabled: true,
+                params: [],
+            ),
+            (
+                kind: "crew_faces",
                 enabled: true,
                 params: [],
             ),

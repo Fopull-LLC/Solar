@@ -98,4 +98,108 @@
         anim_controller: Some("animation_controllers/character"),
         parent: Some(0),
     ),
+    // the crew member's face on the suit's Head bone: scripts/face.lua,
+    // tools/gen_faces.py (its hair, and the comm cap under a helmet)
+    (
+        name: "Face",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Mesh(
+            asset_path: "models/astronaut/faces/head_1.glb",
+        ),
+        object_materials: {
+            "FaceSkin": (
+                color: (1.0, 1.0, 1.0),
+                texture: Some("textures/faces/skin_detail.png"),
+                normal_map: Some("textures/faces/skin_normal.png"),
+                normal_strength: 0.5,
+                roughness: 0.7,
+                metallic: 0.0,
+                shader: Some("shaders/face_skin.flsl"),
+                shading: Physical,
+            ),
+            "FaceEye": (
+                color: (1.0, 1.0, 1.0),
+                roughness: 0.08,
+                metallic: 0.0,
+                shader: Some("shaders/face_eye.flsl"),
+                shading: Physical,
+            ),
+            "FaceMouth": (
+                color: (1.0, 1.0, 1.0),
+                roughness: 0.55,
+                metallic: 0.0,
+                shading: Physical,
+            ),
+        },
+        scripts: [
+            (
+                kind: "face",
+                enabled: true,
+                params: [],
+            ),
+        ],
+        parent: Some(1),
+        attachment: Some((
+            bone: "Head",
+            offset: (
+                translation: (0.0, 0.3024299, 0.0116693),
+                rotation: (-0.0469754, 3e-07, -0.0, 0.998896),
+                scale: (2.0, 2.0, 2.0),
+            ),
+        )),
+    ),
+    (
+        name: "Hair",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Mesh(
+            asset_path: "models/astronaut/faces/hair_crop.glb",
+        ),
+        object_materials: {
+            "Hair": (
+                color: (0.2, 0.15, 0.1),
+                texture: Some("textures/faces/hair_cards.png"),
+                roughness: 0.78,
+                metallic: 0.0,
+                shading: Physical,
+            ),
+        },
+        scripts: [],
+        parent: Some(2),
+    ),
+    (
+        name: "Cap",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Mesh(
+            asset_path: "models/astronaut/faces/cap.glb",
+        ),
+        object_materials: {
+            "CapCloth": (
+                color: (1.0, 1.0, 1.0),
+                texture: Some("textures/suit/fabric_albedo.png"),
+                roughness: 0.9,
+                metallic: 0.0,
+                shading: Physical,
+            ),
+            "CapShell": (
+                color: (1.0, 1.0, 1.0),
+                roughness: 0.45,
+                metallic: 0.1,
+                shading: Physical,
+            ),
+        },
+        scripts: [],
+        parent: Some(2),
+    ),
 ]

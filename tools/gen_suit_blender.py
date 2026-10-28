@@ -1625,14 +1625,43 @@ def face_sphere():
     return V, out
 
 
+# The head itself, its hair and the comm cap are the crew's own now
+# (tools/gen_faces.py: models/astronaut/faces, hung on the Head bone by
+# scripts/face.lua's Face node); the suit keeps only the neck and the
+# collar. HEAD_IN_SUIT = True puts the old plain head and cap back.
+HEAD_IN_SUIT = False
+
+
 def head_piece(J, k, x0, zh, neck_top, nc):
+    """The neck rising out of the neck ring's well (and, with HEAD_IN_SUIT,
+    the old plain head in a comm cap on the Head bone)."""
+    Hj = J("Head")
+    hc = Hj + np.array([0, 0.150, 0.020]) * k
+    if HEAD_IN_SUIT:
+        old_head(J, k, Hj, hc)
+    # the neck: out of the well in the neck ring and up into the head, the
+    # cooling garment's collar at its base
+    nr = []
+    # (thin: the crew's own head brings its neck down into the ring over this
+    # one, which is only there so the ring's well is never empty)
+    for y, r, w in ((neck_top - 0.010 * k, 0.040, {"Back": 1}), (neck_top + 0.018 * k, 0.039, blend("Back", "Head", 0.2)),
+                    (Hj[1] + 0.035 * k, 0.035, blend("Back", "Head", 0.75)), (Hj[1] + 0.070 * k, 0.030, {"Head": 1})):
+        nr.append(dict(c=(x0, y, Hj[2] - 0.012 * k), e1=X, e2=Z, r1=r * k, r2=r * k * 1.1, w=w))
+    V, F, UVc, W, C = loft(nr, 12, tile=0.25)
+    npc = Piece("Neck", "SuitHead", V, F, W, (1, 1, 1), dirt="none")
+    npc.uvmode = "face"
+    npc.face = (hc, k)
+    cr = [dict(c=(x0, neck_top - 0.020 * k + y * k, Hj[2] - 0.004 * k), e1=X, e2=Z, r1=r * k, r2=r * k * 1.1,
+               w={"Back": 1}, col=(0.50, 0.55, 0.62)) for y, r in ((0.0, 0.060), (0.026, 0.059), (0.032, 0.054))]
+    V, F, UVc, W, C = loft(cr, 12, tile=0.25)
+    Piece("Collar", "SuitFabric", V, F, W, C, UVc=UVc, dirt="none")
+
+
+def old_head(J, k, Hj, hc):
     """A plain human head in a comm cap ("Snoopy cap") on the Head bone: a
     cube sphere shaped by head_r, the face painted (textures/suit/head.png);
     the cap a shell 5 mm off the skull with its ear cups, two mic booms and a
     chin strap; the neck rising out of the neck ring's well."""
-    Hj = J("Head")
-    hc = Hj + np.array([0, 0.150, 0.020]) * k
-
     def head_w(P):
         return [blend("Back", "Head", float(smooth01(Hj[1] - 0.010 * k, Hj[1] + 0.045 * k, p[1]))) for p in P]
 
@@ -1689,22 +1718,6 @@ def head_piece(J, k, x0, zh, neck_top, nc):
     sr = [dict(c=p, r=0.003 * k, r2=0.008 * k, w={"Head": 1}, col=CAP_B) for p in bezier_path(pts, 9)]
     V, F, UVc, W, C = loft(limb(sr, Y), 6, tile=0.1)
     Piece("ChinStrap", "SuitFabric", V, F, W, C, UVc=UVc, dirt="cap")
-    # the neck: out of the well in the neck ring and up into the head, the
-    # cooling garment's collar at its base
-    nr = []
-    for y, r, w in ((neck_top - 0.010 * k, 0.053, {"Back": 1}), (neck_top + 0.018 * k, 0.052, blend("Back", "Head", 0.2)),
-                    (Hj[1] + 0.035 * k, 0.048, blend("Back", "Head", 0.75)), (Hj[1] + 0.070 * k, 0.042, {"Head": 1})):
-        nr.append(dict(c=(x0, y, Hj[2] - 0.012 * k), e1=X, e2=Z, r1=r * k, r2=r * k * 1.1, w=w))
-    V, F, UVc, W, C = loft(nr, 12, tile=0.25)
-    npc = Piece("Neck", "SuitHead", V, F, W, (1, 1, 1), dirt="none")
-    npc.uvmode = "face"
-    npc.face = (hc, k)
-    cr = [dict(c=(x0, neck_top - 0.020 * k + y * k, Hj[2] - 0.004 * k), e1=X, e2=Z, r1=r * k, r2=r * k * 1.1,
-               w={"Back": 1}, col=(0.50, 0.55, 0.62)) for y, r in ((0.0, 0.060), (0.026, 0.059), (0.032, 0.054))]
-    V, F, UVc, W, C = loft(cr, 12, tile=0.25)
-    Piece("Collar", "SuitFabric", V, F, W, C, UVc=UVc, dirt="none")
-
-
 # ═════════════════════════════════════════════════════════════════════════════
 # the helmet: EVVA over a clear bubble, the gold visor, the lamps
 # ═════════════════════════════════════════════════════════════════════════════
