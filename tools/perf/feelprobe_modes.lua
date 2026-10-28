@@ -150,49 +150,63 @@ end
 
 -- ── the swim ────────────────────────────────────────────────────────────────
 local function find_sea(b, R)
-  -- open water: 3 m under the sea's surface, the nearest rock more than 2 m
-  -- off (terrain.query), at the spot and 15 m round it; the candidates are
-  -- then made exactly (terrain.prepare) and asked again (a stand-in's sea was
-  -- land once the real ground streamed in: a swimmer walked out at 3 s)
-  local function open_at(u)
-    local bb = home()
-    local t1 = unit(cross(u, { x = 0, y = 1, z = 0 }))
-    local t2 = unit(cross(u, t1))
-    local worst = 1e9
-    for _, o in ipairs({ { 0, 0 }, { 15, 0 }, { -15, 0 }, { 0, 15 }, { 0, -15 } }) do
-      local r = R - 3
-      local q = terrain.query(bb.x + u.x * r + t1.x * o[1] + t2.x * o[2], bb.y + u.y * r + t1.y * o[1] + t2.y * o[2],
-        bb.z + u.z * r + t1.z * o[1] + t2.z * o[2])
-      if not q then return -1 end
-      worst = math.min(worst, q)
-    end
-    return worst
-  end
+  -- open water, found the way a swimmer would: the deepest columns in a scan
+  -- of the world (the ground marched down from above, as seaprobe does), then
+  -- each tried for real: the crew put 1 m under the surface there, the ground
+  -- streamed in, and kept only if they are still swimming 4 s later, under
+  -- the sea's surface (climate.seaDepth > 0.3 m: a floating swimmer reads
+  -- about 1 m; most deep stand-in columns were land once the real ground came in)
   local cand = {}
-  local N = 2000
+  local N = 900
   for i = 0, N - 1 do
     local y = 1 - (i + 0.5) / N * 2
     local rr = math.sqrt(1 - y * y)
     local th = i * 2.399963
     local u = { x = math.cos(th) * rr, y = y, z = math.sin(th) * rr }
-    local q = open_at(u)
-    if q > 2 then cand[#cand + 1] = { u = u, d = q } end
-    if i % 50 == 0 then yield() end
+    local g = ground_r(b, u.x, u.y, u.z, b.radius * 1.3)
+    if g and R - g > 8 then cand[#cand + 1] = { u = u, d = R - g } end
+    if i % 40 == 0 then yield() end
   end
   table.sort(cand, function(a, c) return a.d > c.d end)
-  F("sea: %d open-water candidates of %d", #cand, N)
-  for k = 1, math.min(8, #cand) do
+  F("sea: %d columns deeper than 8 m of %d", #cand, N)
+  local pw = findScript("planet_walker")
+  local A = astro()
+  local tried = {}
+  for k = 1, #cand do
+    if #tried >= 8 then break end
     local u = cand[k].u
-    b = home()
-    local px, py, pz = b.x + u.x * R, b.y + u.y * R, b.z + u.z * R
-    if terrain.prepare then pcall(terrain.prepare, px, py, pz, 96) end
-    wait_for(function() return not terrain.ready or terrain.ready(px, py, pz, 40) end, 20, "the sea's ground")
-    local q = open_at(u)
-    F("sea candidate %d: clearance %.1f m (stand-in), %.1f m (exact)", k, cand[k].d, q)
-    if q > 2 then return u, q end
+    local far = true
+    for _, t in ipairs(tried) do if dot(t, u) > math.cos(200 / R) then far = false end end
+    if far then
+      tried[#tried + 1] = u
+      b = home()
+      local px, py, pz = b.x + u.x * R, b.y + u.y * R, b.z + u.z * R
+      if terrain.prepare then pcall(terrain.prepare, px, py, pz, 64) end
+      A.x, A.y, A.z = b.x + u.x * (R - 1), b.y + u.y * (R - 1), b.z + u.z * (R - 1)
+      A.vx, A.vy, A.vz = 0, 0, 0
+      wait_for(function() return not terrain.ready or terrain.ready(px, py, pz, 30) end, 15, "the sea's ground")
+      wait(4)
+      b = home()
+      local t1 = unit(cross(u, { x = 0, y = 1, z = 0 }))
+      local t2 = unit(cross(u, t1))
+      local worst = 1e9
+      for _, o in ipairs({ { 0, 0 }, { 12, 0 }, { -12, 0 }, { 0, 12 }, { 0, -12 } }) do
+        local d = unit({ x = u.x * R + t1.x * o[1] + t2.x * o[2], y = u.y * R + t1.y * o[1] + t2.y * o[2], z = u.z * R + t1.z * o[1] + t2.z * o[2] })
+        local g = ground_r(b, d.x, d.y, d.z, R + 2)
+        worst = math.min(worst, g and (R - g) or -1)
+      end
+      local cl = findScript("climate")
+      F("sea try %d: stand-in %.1f m deep; exact water under the surface %.1f m (worst of 5); swimming %s, seaDepth %s",
+        #tried, cand[k].d, worst, tostring(pw.swimming), tostring(cl and cl.seaDepth(A.x, A.y, A.z)))
+      -- (the marched ground is no judge here: terrain.query read rock at the
+      -- sea's surface over open water; the swimmer and the sea's own depth are)
+      local sd = cl and cl.seaDepth(A.x, A.y, A.z) or -1
+      if pw.swimming and sd >= 0.3 then return u, sd end
+    end
   end
   return nil
 end
+
 local function run_feelswim()
   wait_ready(90)
   local b = home()
@@ -201,12 +215,12 @@ local function run_feelswim()
   if R <= 0 then F("RESULT swim: no sea on the home world"); return end
   local u, deep = find_sea(b, R)
   if not u then F("RESULT swim: no open sea"); return end
-  F("sea %.1f m deep", deep)
+  F("sea: %.1f m over the swimmer", deep)
   local A = astro()
   b = home()
-  A.x, A.y, A.z = b.x + u.x * (R + 0.2), b.y + u.y * (R + 0.2), b.z + u.z * (R + 0.2)
+  A.x, A.y, A.z = b.x + u.x * (R - 0.6), b.y + u.y * (R - 0.6), b.z + u.z * (R - 0.6)
   A.vx, A.vy, A.vz = 0, 0, 0
-  wait(4)
+  wait(3)
   local pw, pc = findScript("planet_walker"), findScript("planet_camera")
   local t = cross(u, { x = 0, y = 1, z = 0 })
   if len(t.x, t.y, t.z) < 1e-3 then t = cross(u, { x = 1, y = 0, z = 0 }) end
@@ -281,6 +295,14 @@ local function shove(vn, tag, secs)
   local spot = { x = c0.x + d.x * 4.0, y = c0.y + d.y * 4.0, z = c0.z + d.z * 4.0 }
   local su = unit(spot)
   local gr = ground_r(b, su.x, su.y, su.z, b.radius * 1.3) or len(spot.x, spot.y, spot.z)
+  -- the floor the craft stands on: a launch pad's deck is a building, not
+  -- terrain (marched terrain put the walker in the flame trench, under the
+  -- rocket's base, where nothing touched it), so a ray down from above
+  do
+    local top = len(c0.x, c0.y, c0.z) + 30
+    local h = raycast(vec3(b.x + su.x * top, b.y + su.y * top, b.z + su.z * top), vec3(-su.x, -su.y, -su.z), 80, A)
+    if h and h.distance then gr = math.max(gr, top - h.distance) end
+  end
   A.x, A.y, A.z = b.x + su.x * (gr + 1.1), b.y + su.y * (gr + 1.1), b.z + su.z * (gr + 1.1)
   A.vx, A.vy, A.vz = 0, 0, 0
   wait(1.5)
@@ -291,6 +313,7 @@ local function shove(vn, tag, secs)
   pw.steer(1, 0, true)
   local t0 = time
   local maxv, maxw, nmax, fmax = 0, 0, 0, 0
+  local lastlog, midshot = nil, false
   local lc, lt = c0, time
   while time - t0 < secs do
     yield()
@@ -310,6 +333,24 @@ local function shove(vn, tag, secs)
     local ps = pw.pushState
     nmax = math.max(nmax, ps.n or 0)
     fmax = math.max(fmax, ps.force or 0)
+    if TRACEW and time - t0 < 1.2 then
+      local tp = A.tickPos or A
+      F("%s trace %.3f: walker world (%.2f, %.2f, %.2f) tick (%.2f, %.2f, %.2f), craft com (%.2f, %.2f, %.2f)", tag, time - t0, A.x, A.y, A.z,
+        tp.x, tp.y, tp.z, ii.com.x, ii.com.y, ii.com.z)
+    end
+    if not midshot and time - t0 > 3 then
+      midshot = true
+      fshot(tag:gsub("[^%w]+", "_") .. "_mid")
+    end
+    if not lastlog or time - lastlog > 0.5 then
+      lastlog = time
+      local m2 = rel(bb, A)
+      local off = sub(m2, cc)
+      local h = dot(off, up)
+      local hz = sub(off, scl(up, h))
+      F("%s t %.1f: walker %.2f m off the axis, %.2f m above the craft's centre of mass, |v| %.2f, grounded %s; push n %s force %.2f",
+        tag, time - t0, len(hz.x, hz.y, hz.z), h, len(A.vx, A.vy, A.vz), tostring(A.grounded), tostring(ps.n), ps.force or 0)
+    end
   end
   pw.steer(nil)
   pc.firstPerson = false
@@ -397,23 +438,68 @@ local function run_feelpush()
   F("RESULT gravity gun: rover rose %.2f / moved %.2f m at 4.0, rose %.2f / moved %.2f m at 5.2", r0, m0, r1, m1)
 end
 
+-- a tall heavy stack (params.heavytanks medium tanks a stage, default 4: about
+-- 20 t), standing on its engine bell once the clamps let go
+local function heavy_stack(n)
+  local l, y, u = {}, 0, 0
+  local function add(id, h, st)
+    u = u + 1
+    l[#l + 1] = rec(u, id, 0, y + h / 2, 0, { parent = u > 1 and u - 1 or 0, att = u > 1 and "top" or "", stage = st or 0 })
+    y = y + h
+  end
+  add("skipper", 1.6)
+  for _ = 1, n do add("tankM", 1.5) end
+  add("decoupler", 0.25, 1); add("engineM", 1.6)
+  for _ = 1, n do add("tankM", 1.5) end
+  add("pod", 0.8); add("chute", 0.34, 2)
+  return l
+end
 local function run_feelheavy()
-  local vc = launch_via_builder(rocket_2stage(), "runway", 9)
+  local n = math.floor(params.heavytanks or 4)
+  local bp = heavy_stack(n)
+  local vc = launch_via_builder(bp, params.heavysite or "pad", #bp)
   if not vc then F("RESULT push heavy: no craft"); return end
   local vn = vc.node
   vc.releaseClamps()
   wait(3)
   exit_craft()
+  do
+    local b = home()
+    local i = assembly.info(vn)
+    local c = rel(b, i.com)
+    local up = unit(c)
+    local top = 0
+    for _, n in ipairs(i.parts) do if type(n) ~= "number" and n.x then local pr = rel(b, n); top = math.max(top, dot(sub(pr, c), up)) end end
+    F("heavy stack standing: %.2f t, %d parts, the craft's up · radial %.3f, centre of mass %.1f m over the ground, top part %.1f m over the COM; walker hp %s",
+      i.mass, #i.parts, dot(unit(vn:worldUp()), up), len(c.x, c.y, c.z) - (ground_r(b, up.x, up.y, up.z, len(c.x, c.y, c.z)) or 0), top,
+      tostring(findScript("crew") and findScript("crew").get(findScript("crew").activeId()).hp))
+    local pc = findScript("planet_camera")
+    pc.firstPerson = false
+    wait(1.0)
+    fshot("heavy_before")
+  end
   local pw = findScript("planet_walker")
+  -- B (the game as it is) first, on the intact stack; then A, the old
+  -- unlimited 1 t shove, which can topple and break it
+  vc.CRASH_TRACE = true
+  TRACEW = true
+  local dB, vB, m = shove(vn, "heavy B (capped push)", 6)
+  TRACEW = false
+  local i1 = assembly.info(vn)
+  local parts_b, destroyed_b = i1 and #i1.parts or -1, vc.destroyed
+  fshot("heavy_after_B")
+  wait(3)
   pw.pushOff = true
   astro():getcomponent("RigidBody").mass = 1.0
   local dA, vA = shove(vn, "heavy A (old: 1 t, unlimited)", 6)
   pw.pushOff = false
   astro():getcomponent("RigidBody").mass = pw.params.mass
-  wait(3)
-  local dB, vB, m = shove(vn, "heavy B (capped push)", 6)
-  F("RESULT push heavy: %s — %.1f t rocket moved %.3f m (top %.3f m/s) before, %.3f m (top %.3f m/s) now",
-    (dB < 0.1 and vB < 0.1) and "PASS" or "FAIL", m, dA, vA, dB, vB)
+  i1 = { parts = {} }
+  for k = 1, parts_b do i1.parts[k] = k end
+  F("RESULT push heavy: %s — %.1f t rocket (%d parts, %d after, destroyed %s) moved %.3f m (top %.3f m/s) before, %.3f m (top %.3f m/s) now",
+    (dB < 0.1 and vB < 0.1 and parts_b == #bp and not destroyed_b) and "PASS" or "FAIL", m, #bp, i1 and #i1.parts or -1,
+    tostring(destroyed_b), dA, vA, dB, vB)
+  fshot("heavy_after_A")
 end
 
 -- ── the plant marks ─────────────────────────────────────────────────────────

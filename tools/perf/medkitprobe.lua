@@ -231,11 +231,38 @@ local function main()
       body.up and (body.up.x * u.x + body.up.y * u.y + body.up.z * u.z) or -9,
       terrain.query(body.x, body.y, body.z) or -1)
   end
+  if body and body.worldForward then
+    -- lying on the back: the suit's front (the node's +Z, crew_body) to the sky
+    local hb3 = home()
+    local u = unit({ x = body.x - hb3.x, y = body.y - hb3.y, z = body.z - hb3.z })
+    local f = body:worldForward()
+    local front = -(f.x * u.x + f.y * u.y + f.z * u.z)
+    R("down_pose", front > 0.8, "the suit's front · the sky %.2f (1 = flat on the back, -1 = face-down)", front)
+    -- and CONTROL is not offered on them: the switch list (the strip's chips, [ ])
+    local listed = false
+    for _, e in ipairs(C.switchList() or {}) do if e.kind == "crew" and e.id == id1 then listed = true end end
+    R("no_control", not listed, "the downed member in the switch list: %s", tostring(listed))
+  end
   local chips = findScript("crew_alerts_hud").chipsOf(C.alerts())
   local ct = {}
   for _, c in ipairs(chips) do ct[#ct + 1] = c[1] end
   shot("downed_chip")
   frames(3)
+  if body then
+    -- a close look at the downed: 2.2 m off their side, the camera low
+    local b = home()
+    local u = unit({ x = body.x - b.x, y = body.y - b.y, z = body.z - b.z })
+    local side = unit(cross(u, math.abs(u.y) > 0.9 and { x = 1, y = 0, z = 0 } or { x = 0, y = 1, z = 0 }))
+    a.x, a.y, a.z = body.x - side.x * 2.6 + u.x * 0.9, body.y - side.y * 2.6 + u.y * 0.9, body.z - side.z * 2.6 + u.z * 0.9
+    a.vx, a.vy, a.vz = 0, 0, 0
+    if cam then cam.firstPerson = true end
+    hold(0.6)
+    face(body.x, body.y, body.z)
+    hold(0.6)
+    shot("downed_close")
+    frames(3)
+    if cam then cam.firstPerson = false end
+  end
   R("chip", #ct > 0 and ct[#ct]:match("DOWN") ~= nil, "chips: %s", table.concat(ct, " | "))
   -- 3. over to them, the Medkit in hand, the right-click rows, the revive
   if body then

@@ -21,6 +21,8 @@
 defaults = {
   half_h = 1.0,        -- the capsule's half height (planet_walker's 2 m suit)
   model_yaw = 3.14159265,
+  down_roll = 0.35,    -- downed: rad rolled from flat on the back onto a side
+  down_lift = 0.38,    -- downed: the capsule's centre this far off the ground (the pack under them)
   foot_out = 0.42,     -- a seated doll's feet: forward of the hips…
   foot_down = 0.55,    -- …and below them
   foot_side = 0.12,
@@ -148,9 +150,16 @@ function fixedUpdate(node, dt)
       fl = math.sqrt(fx * fx + fy * fy + fz * fz)
     end
     fx, fy, fz = fx / fl, fy / fl, fz / fl
-    local drop = P("half_h") - 0.3
+    -- On the back, rolled a little onto one side: the suit's front (the
+    -- model faces the node's +Z) turned to the sky. Forward = the planet's up
+    -- laid them face-down, which reads as dead. The side follows the member,
+    -- so two downed side by side don't mirror each other.
+    local sx, sy, sz = fy * uz - fz * uy, fz * ux - fx * uz, fx * uy - fy * ux
+    local roll = ((tonumber(memberId) or 0) % 2 == 0 and 1 or -1) * P("down_roll")
+    local c, s = math.cos(roll), math.sin(roll)
+    local drop = P("half_h") - P("down_lift")
     node.x, node.y, node.z = x - ux * drop, y - uy * drop, z - uz * drop
-    node:setUp(vec3(fx, fy, fz), vec3(ux, uy, uz))
+    node:setUp(vec3(fx, fy, fz), vec3(-ux * c + sx * s, -uy * c + sy * s, -uz * c + sz * s))
     return
   end
   if l > 1e-6 then

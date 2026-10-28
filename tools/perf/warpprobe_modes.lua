@@ -149,9 +149,17 @@ local function run_warprover()
     local Ug = unit(r)
     local upw = vn:worldUp()
     local cang = clamp(dot(Ug, u), -1, 1)
-    return r, string.format("| %.0f m from base, |v| %.3f, grounded %s onWheels %s anchored %s, up.U %.4f, parts %d",
+    -- the flight HUD's ALTITUDE / SPEED windows against the altitude from the
+    -- tick pose and from the drawn pose (a parked rover read 59212 m at ×10000)
+    local b = home()
+    local tp = vn.tickPos
+    local at = len(tp.x - b.x, tp.y - b.y, tp.z - b.z) - b.radius
+    local ad = len(vn.x - b.x, vn.y - b.y, vn.z - b.z) - b.radius
+    local ta, ts = find("Alt Readout"), find("Speed Readout")
+    return r, string.format("| %.0f m from base, |v| %.3f, grounded %s onWheels %s anchored %s, up.U %.4f, parts %d | HUD alt %s spd %s, alt tick %.1f drawn %.1f, node |v| %.2f body |v| %.1f",
       math.acos(cang) * len(r.x, r.y, r.z), len(i.vel.x, i.vel.y, i.vel.z), tostring(i.grounded), tostring(vc.R2.onWheels),
-      tostring(i.anchored), dot(upw, Ug), #i.parts)
+      tostring(i.anchored), dot(upw, Ug), #i.parts, ta and tostring(ta.text) or "-", ts and tostring(ts.text) or "-",
+      at, ad, len(vn.vx, vn.vy, vn.vz), len(b.vx, b.vy, b.vz))
   end
   wpshot("parked")
   wp_ladder("rover", where, params.warpsecs or 60)

@@ -689,12 +689,15 @@ local function label(k, t) return { "text", key = k, style = "panel/label", w = 
 local function hint(k, t, warn) return { "text", key = k, style = warn and "panel/hintWarn" or "panel/hint", w = "100%", h = "fit",
   wrap = true, text = t } end
 
+-- A load in kg: whole as "6", a fraction to a decimal (a medkit is 1.5 kg, not "2").
+local function kgs(x) local f = x % 1; return string.format((f < 0.05 or f > 0.95) and "%.0f" or "%.1f", x) end
+
 local function mass_line(inv, cid)
   local kg = call(inv, "mass", cid) or 0
   local cap = call(inv, "cap", cid) or 0
   local L = call(inv, "volume", cid) or 0
   local vc = call(inv, "volCap", cid) or 60
-  return string.format("%.0f/%.0f kg  %.0f/%.0f L", kg, cap, L, vc)
+  return string.format("%s/%.0f kg  %.0f/%.0f L", kgs(kg), cap, L, vc)
 end
 
 local function money(v)
@@ -885,7 +888,7 @@ local function loadout_rows(out, plan, roster)
     local kg, L = lockerLoad(items)
     out[#out + 1] = itembox("lk" .. l.uid, l.uid,
       { "text", key = "h", style = "panel/label", w = "100%", h = 18, textValign = "center", maxLines = 1, overflow = "ellipsis",
-        text = string.format("LOCKER #%d  %.0f/%.0f kg  %.0f/%.0f L", l.n, kg, l.cap, L, volL) },
+        text = string.format("LOCKER #%d  %s/%.0f kg  %.0f/%.0f L", l.n, kgs(kg), l.cap, L, volL) },
       tiles, "planned empty")
   end
   -- the stock

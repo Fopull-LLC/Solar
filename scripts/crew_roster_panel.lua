@@ -226,8 +226,9 @@ local function roster_rows(c, rows)
                 st.focusNext = true
               end
             end),
-          small_button("go", "Go to", not afoot_away or type(c and c.control) ~= "function",
-            afoot_away and "Take control of them" or "Only someone on foot elsewhere", function()
+          small_button("go", "Go to", not afoot_away or r.downed or type(c and c.control) ~= "function",
+            (afoot_away and r.downed and "They're down: bring a Medkit") or (afoot_away and "Take control of them")
+              or "Only someone on foot elsewhere", function()
               local ok, why = call(c, "control", r.id)
               if ok then sfx("click"); close() else say("can't switch — " .. tostring(why or "no answer")) end
             end),

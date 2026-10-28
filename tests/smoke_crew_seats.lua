@@ -127,6 +127,18 @@ local merged = { BP[2], BP[4], strform }
 local ids = {}
 for _, s in ipairs(C.seatedIn(merged)) do ids[#ids + 1] = s.id end
 check(#ids == 3, "docked: both crafts' crew in one list (" .. table.concat(ids, ",") .. ")")
+-- …and a member on both sides (a cloned record) sits once, in the host's seat
+do
+  local host = { { uid = 1, id = "pod", kind = "crewed", st = { crew1 = 4 } } }
+  local mod = { { uid = 7, id = "podMk2", kind = "crewed", st = { crew1 = 4, crew2 = 8, crew3 = 8 } } }
+  local n = C.dedupeSeats(host, mod)
+  local all = {}
+  for _, s in ipairs(C.seatedIn({ host[1], mod[1] })) do all[#all + 1] = s.id end
+  check(n == 2 and C.memberAt(host[1], 1) == 4 and C.memberAt(mod[1], 1) == nil and C.memberAt(mod[1], 2) == 8
+        and C.memberAt(mod[1], 3) == nil and #all == 2,
+        "docked: no member sits twice (" .. n .. " emptied; " .. table.concat(all, ",") .. ")")
+  check(C.dedupeSeats(host, mod) == 0, "docked: nothing to empty when everyone sits once")
+end
 
 -- ── the VAB plan ───────────────────────────────────────────────────────────
 local P2 = { { uid = 1, id = "engineS", kind = "engine" }, { uid = 2, id = "podMk2", kind = "crewed", parent = 1 },

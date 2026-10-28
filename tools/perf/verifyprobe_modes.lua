@@ -862,6 +862,8 @@ function V.select_tool(id)
   return tb.toolId() == id
 end
 V.TREES = { broadleaf = true, conifer = true, palm = true, fungus = true }
+-- the felling checks want REAL trees (a broadleaf or conifer forest), not the fungi near the base
+V.REALTREES = { broadleaf = true, conifer = true }
 function V.plants_near(p, r, kinds)
   local ff = findScript("flora_field")
   local A = ff.groundAudit(p.x, p.y, p.z, r, 5)
@@ -932,25 +934,42 @@ local function run_vplants()
   local small = {}
   for _, q in ipairs(V.plants_near(a, 25)) do if not V.TREES[q.kind] and (q.kind == "grass" or q.kind == "fern" or q.kind == "bush" or q.kind == "shrub" or q.kind == "reed") then small[#small + 1] = q end end
   local trees = {}
-  for _, q in ipairs(V.plants_near(a, 40, V.TREES)) do trees[#trees + 1] = q end
+  for _, q in ipairs(V.plants_near(a, 40, V.REALTREES)) do trees[#trees + 1] = q end
   V.find_trees = function()
-    -- out to where trees stand: a forest's bearings, the crew put there until 4+ trees are near
+    -- out to where real trees stand (broadleaf or conifer, not the fungi by
+    -- the base): stops on rings round the base, the crew put at each until 3+
+    -- such trees are within 45 m. Every stop is logged with its biome.
     local b = home()
     local u, t1, t2, R = base_frame()
     local cl = findScript("climate")
-    for _, dist in ipairs({ 80, 140, 220, 320 }) do
-      for k = 0, 11 do
-        local ang = k * math.pi / 6
+    local stops = 0
+    for _, dist in ipairs({ 90, 160, 240, 340 }) do
+      for k = 0, 7 do
+        if stops >= 18 then return {} end
+        local ang = k * math.pi / 4 + dist * 0.01
         local t = unit({ x = t1.x * math.cos(ang) + t2.x * math.sin(ang), y = t1.y * math.cos(ang) + t2.y * math.sin(ang), z = t1.z * math.cos(ang) + t2.z * math.sin(ang) })
         local dir = dir_at(u, t, dist, R)
+        b = home()
         local gr = ground_r(b, dir.x, dir.y, dir.z, R + 150)
         local smp = gr and cl and cl.sampleAt and cl.sampleAt(b.name, b.x + dir.x * gr, b.y + dir.y * gr, b.z + dir.z * gr)
-        if smp and (smp.biome == "forest" or smp.biome == "jungle" or smp.biome == "taiga") and (smp.density or 0) > 0.3 then
+        local sea = cl and cl.seaRadius(b.name) or 0
+        if gr and gr > sea + 1 then
+          stops = stops + 1
           stand_at({ dir = dir, r = gr })
-          wait(3)
-          local tr = V.plants_near(a, 30, V.TREES)
-          P("VP tree search: %s %d m bearing %d: %d trees", smp.biome, dist, k * 30, #tr)
-          if #tr >= 4 then return tr end
+          wait(2.5)
+          -- (groundAudit lists at most 400 props: at 45 m the grass filled
+          -- it before a tree; 25 m, and the kinds seen, logged)
+          local all = V.plants_near(a, 25)
+          local tr, kinds = {}, {}
+          for _, q in ipairs(all) do
+            kinds[q.kind] = (kinds[q.kind] or 0) + 1
+            if V.REALTREES[q.kind] then tr[#tr + 1] = q end
+          end
+          local kl = {}
+          for k, n in pairs(kinds) do kl[#kl + 1] = k .. " " .. n end
+          P("VP tree search: %s (density %.2f) %d m bearing %.0f: %d real trees (%s)", tostring(smp and smp.biome), smp and smp.density or -1,
+            dist, math.deg(ang), #tr, table.concat(kl, ", "))
+          if #tr >= 3 then return tr end
         end
       end
     end
@@ -968,6 +987,7 @@ local function run_vplants()
       local e, d = eye_dir(V.w(q))
       tb.sim = { btn = { [0] = true }, aim = { e.x, e.y, e.z, d.x, d.y, d.z } }
       yield()
+      V.maxp = math.max(V.maxp or 0, tb.progress or 0)
       local ang = V.model_yaw_err(V.w(q))
       local ax, ay, az = nil, nil, nil
       if tb.aimNow then ax, ay, az = tb.aimNow() end
@@ -1000,12 +1020,16 @@ local function run_vplants()
   if trees[1] then
     local q = trees[1]
     local qu = V.up(V.w(q))
-    local w, f = face_test("laser", { rel = { x = q.rel.x + qu.x, y = q.rel.y + qu.y, z = q.rel.z + qu.z }, kind = q.kind, id = q.id }, "cut_left", 6)
+    V.maxp = 0
+    local w, f = face_test("laser", { rel = { x = q.rel.x + qu.x, y = q.rel.y + qu.y, z = q.rel.z + qu.z }, kind = q.kind, id = q.id }, "cut_left", 10)
+    P("VP the cut's progress reached %.2f (tool_belt.progress; 1 = through)", V.maxp or -1)
     tb.sim = nil
     V.check("face_cut", w <= 15 and f == 0, "a tree 3 m to the left cut with the laser: worst facing error after 0.8 s %.1f°, flips %d", w, f)
     wait(1.5)
-    P("VP felling now %s, logs %s", tostring(ff.felling()), tostring(ff.logCount()))
+    P("VP felling now %s, logs %s (a %s, id %s)", tostring(ff.felling()), tostring(ff.logCount()), tostring(q.kind), tostring(q.id))
     V.shot("felled_tree", false)
+    wait(2.5)
+    V.shot("felled_tree_down", false)
     felled_q = q
   end
   -- 3. the aim ring at 1.5, 3, 8 and 20 m (laser, aimed at bare ground ahead)
@@ -1088,17 +1112,26 @@ local function run_vplants()
       local qu = V.up(V.w(q))
       local tq = { rel = { x = q.rel.x + qu.x, y = q.rel.y + qu.y, z = q.rel.z + qu.z } }
       local t0 = time
-      while time - t0 < 6 do
+      local mp = 0
+      local seen, lastss = {}, nil
+      while time - t0 < 10 do
         local e, d = eye_dir(V.w(tq))
         tb.sim = { btn = { [0] = true }, aim = { e.x, e.y, e.z, d.x, d.y, d.z } }
         yield()
+        mp = math.max(mp, tb.progress or 0)
+        local ss = tb.sawState and tb.sawState() or "?"
+        ss = ss:gsub(" %d+%%$", "")
+        if ss ~= lastss then seen[#seen + 1] = string.format("%.1f %s", time - t0, ss); lastss = ss end
       end
+      P("VP cut %s %s: progress reached %.2f, felling %s; the saw locked: %s; the prompt now '%s'", q.kind, tostring(q.id), mp,
+        tostring(ff.felling()), table.concat(seen, " | "), tostring(tb.prompt))
       tb.sim = nil
       wait(2.0)
       cut = cut + 1
       if V.gone(q) then cgone = cgone + 1 else cleft[#cleft + 1] = q.kind .. ":" .. q.id end
     end
   end
+  P("VP trees cut: %s", (function() local o = {}; for i = 2, math.min(#trees, 1 + cut) do o[#o + 1] = trees[i].kind end; return table.concat(o, " ") end)())
   V.check("cut_gone", cut >= 2 and cgone == cut, "%d trees cut, %d gone from the field (still standing: %s)", cut, cgone, table.concat(cleft, " "))
   if felled_q then
     -- the felled tree's parts, by look
@@ -1113,6 +1146,110 @@ local function run_vplants()
     end
     P("VP %d flora nodes near (felled parts, bent plants)", n)
   end
+  V.result()
+end
+
+-- ── vnose: the Small Nose Cone (noseS) on a pod, through the builder's own hand ──
+-- A stack of engine, tank and pod loaded; noseS picked (B.pick) and placed by a
+-- simulated click on the pod's top; where it went (parent, height against the
+-- pod's top), a picture in the VAB; then launched from the pad at full
+-- throttle: altitude, speed and parts each second, and pictures in flight.
+local function run_vnose()
+  V.tag = "nose"
+  local BH = enter_vab("n_enter")
+  if not BH then V.check("vab", false, "no builder"); V.result(); return end
+  local B = findScript("builder")
+  wait(1.0)
+  local R = findScript("parts_registry")
+  local REG = R and R.REG or {}
+  local podH, noseH = (REG.pod and REG.pod.h) or 0.8, (REG.noseS and REG.noseS.h) or 0.4
+  local bp = { rec(1, "engineS", 0, 0.65, 0), rec(2, "tankS", 0, 1.8, 0, { parent = 1, att = "top" }),
+               rec(3, "pod", 0, 2.3 + podH / 2, 0, { parent = 2, att = "top" }) }
+  load_bp(B, "n_bp", bp)
+  wait(1.0)
+  local podUid
+  for _, u in ipairs(B.partUids()) do if B.partIdOf(u) == "pod" then podUid = u end end
+  local pn = podUid and B.partNode(podUid)
+  local ok = B.pick and B.pick("noseS")
+  wait(0.8)
+  P("VP noseS picked: %s, held %s", tostring(ok), tostring(B.heldId and B.heldId()))
+  local placed = false
+  if pn then
+    -- the cursor on the pod's top face, a little in from its rim
+    for _, dy in ipairs({ podH / 2 - 0.02, podH / 2 - 0.08, podH / 2 - 0.15 }) do
+      local w = pn:toWorld(vec3(0.05, dy, 0.05))
+      local sx, sy, _, on = camera.worldToScreen(w.x, w.y, w.z)
+      if sx and on then
+        mouse_to(sx, sy)
+        wait(0.6)
+        lmb_click()
+        wait(0.8)
+        for _, u in ipairs(B.partUids()) do if B.partIdOf(u) == "noseS" then placed = u end end
+        P("VP click at (%.0f, %.0f) on the pod (y %.2f): noseS placed %s", sx, sy, dy, tostring(placed))
+        if placed then break end
+      end
+    end
+  end
+  if B.dropHeld then pcall(B.dropHeld) end
+  tap("escape")
+  wait(0.5)
+  local noseUid = placed
+  if not noseUid then
+    -- the builder would not take it from the cursor: load it on top to fly it anyway
+    bp[#bp + 1] = rec(4, "noseS", 0, 2.3 + podH + noseH / 2, 0, { parent = 3, att = "top" })
+    load_bp(B, "n_bp_nose", bp)
+    for _, u in ipairs(B.partUids()) do if B.partIdOf(u) == "noseS" then noseUid = u end end
+  end
+  -- where it sits: on the pod's top, its axis the pod's
+  local nn = noseUid and B.partNode(noseUid)
+  if pn and nn then
+    local pt = pn:toWorld(vec3(0, podH / 2, 0))
+    local nc = nn.worldPos or vec3(nn.x, nn.y, nn.z)
+    local pu, nu = pn:worldUp(), nn:worldUp()
+    local nb = { x = nc.x - nu.x * noseH / 2, y = nc.y - nu.y * noseH / 2, z = nc.z - nu.z * noseH / 2 }   -- (its record's centre, h/2 down)
+    local sx, sy, sz = 1, 1, 1
+    local okS, sc = pcall(function() return nn.scale end)
+    if okS and type(sc) ~= "number" and sc then sx, sy, sz = sc.x or 1, sc.y or 1, sc.z or 1 elseif okS and type(sc) == "number" then sx, sy, sz = sc, sc, sc end
+    V.check("nose_on_pod", placed ~= false and placed ~= nil and len(nb.x - pt.x, nb.y - pt.y, nb.z - pt.z) < 0.06 and dot(pu, nu) > 0.999,
+      "placed by the cursor %s; the cone's base %.3f m from the pod's top (centre %.2f m above it), axes %.4f; node scale %.2f %.2f %.2f",
+      tostring(placed ~= nil and placed ~= false), len(nb.x - pt.x, nb.y - pt.y, nb.z - pt.z), dot(sub(nc, pt), pu), dot(pu, nu), sx, sy, sz)
+  else
+    V.check("nose_on_pod", false, "pod %s nose %s", tostring(pn ~= nil), tostring(nn ~= nil))
+  end
+  local bc = findScript("builder_camera")
+  if bc and bc.camState and pn then
+    local c = bc.camState()
+    bc.setCamState({ d = 4.5, yaw = c.yaw, pitch = 0.25 })
+    wait(1.2)
+  end
+  V.shot("vab_pod_nose", false)
+  -- fly it
+  local co = findScript("company")
+  if co and co.earn then co.earn(20000, "probe") end
+  if B.launchSite and B.launchSite() ~= "pad" and B.toggleLaunchSite then B.toggleLaunchSite() end
+  B.doLaunch()
+  wait(0.6)
+  if BH.state == "building" then B.doLaunch() end
+  local vc = wait_craft(#bp, 150)
+  if not vc then V.check("launch", false, "no craft"); V.result(); return end
+  local vn = vc.node
+  local n0 = #assembly.info(vn).parts
+  wait(1.0)
+  V.shot("pad", false)
+  tap("z"); wait(0.3)
+  vc.releaseClamps()
+  local top, vtop = 0, 0
+  for k = 1, 10 do
+    wait(1.0)
+    local S = body_state(vn)
+    if not S then break end
+    top, vtop = math.max(top, S.alt), math.max(vtop, S.V)
+    P("VP nose flight t %d: alt %.1f m, speed %.1f m/s, vertical %.1f, parts %d, throttle %.2f, fuel %.1f", k, S.alt, S.V, S.vr or -1,
+      #S.i.parts, vc.throttle or -1, vc.fuel or -1)
+    if k == 3 then V.shot("flight", false) end
+  end
+  local n1 = vn.valid and #assembly.info(vn).parts or 0
+  V.check("nose_flies", n1 == n0 and top > 20, "%d parts on the pad, %d after 10 s; top %.0f m, %.0f m/s", n0, n1, top, vtop)
   V.result()
 end
 

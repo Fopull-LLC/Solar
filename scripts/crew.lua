@@ -305,6 +305,33 @@ function slotOf(parts, id)
   return nil, nil
 end
 
+-- A docking merges two crafts' records, and the seats ride the records: a
+-- member seated in BOTH (which no game path makes, but a cloned fleet record
+-- or an old save can) would sit twice in the merged craft. `keep` are the
+-- host's records, `incoming` the module's; a seat in `incoming` whose member
+-- is already seated in `keep` (or earlier in `incoming`) is emptied. → how
+-- many seats were emptied.
+function dedupeSeats(keep, incoming)
+  local seen = {}
+  for _, s in ipairs(seatedIn(keep)) do seen[s.id] = true end
+  local list = {}
+  for _, d in pairs(incoming or {}) do list[#list + 1] = d end
+  table.sort(list, function(a, b) return (a.uid or 0) < (b.uid or 0) end)
+  local n = 0
+  for _, d in ipairs(list) do
+    local def = seatDef(d)
+    if def then
+      for k = 1, #def.seats do
+        local id = memberAt(d, k)
+        if id then
+          if seen[id] then setMemberAt(d, k, nil); n = n + 1 else seen[id] = true end
+        end
+      end
+    end
+  end
+  return n
+end
+
 -- The command rank of a part (lower flies): a pod over a seat, then the
 -- part nearest the root, then uid — vessel_controller's own ranking.
 local function cmd_rank(d, depth)
@@ -1344,7 +1371,9 @@ function switchList(range)
     if b.valid ~= false then
       local r = get(id)
       local d = cx and len(b.x - cx, b.y - cy, b.z - cz) or 0
-      if r and r.status == "afoot" and d <= range then
+      -- (not the downed: control() refuses them, so the strip's CONTROL chip
+      -- and [ ] would offer what can't be done; the DOWN chip lists them)
+      if r and r.status == "afoot" and not r.downed and d <= range then
         out[#out + 1] = { kind = "crew", id = id, name = r.name, dist = d }
       end
     end

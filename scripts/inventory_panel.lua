@@ -611,7 +611,8 @@ local function counter_rows(inv, co, mats)
           { "text", key = "have", style = "panel/cellMuted", w = "fit", h = "fit",
             text = why or string.format("%d carried", inv.gearCount("astro", g.id)) },
           { "text", key = "kg", style = "panel/cell", w = 92, h = "fit", textAlign = "end",
-            text = g.L and string.format("%.0f kg · %.0f L", g.kg, g.L) or string.format("%.0f kg", g.kg) },
+            -- (whole masses as "6 kg", the rest to a decimal: the medkit is 1.5 kg, not "2 kg")
+            text = string.format(g.kg % 1 == 0 and "%.0f kg" or "%.1f kg", g.kg) .. (g.L and string.format(" · %.0f L", g.L) or "") },
           { "text", key = "pay", style = "panel/cellStrong", w = 60, h = "fit", textAlign = "end", text = money(g.cost) } },
         { "button", key = "go", style = "panel/secondary", w = 46, h = 34, textAlign = "center", textValign = "center",
           disabled = why and true or nil, opacity = why and 0.45 or nil, text = "buy", tooltip = why,

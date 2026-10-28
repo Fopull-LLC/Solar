@@ -194,10 +194,13 @@ local function pct(x) return math.floor(math.max(0, math.min(1, x)) * 100 + 0.5)
 local function live(v)
   local n = v.node
   if not (n and n.valid) then return nil end
-  local d = space.dominant(n.x, n.y, n.z)
+  -- The tick pose, against space.body (this tick's too): n.x is the drawn
+  -- place, up to a tick of the planet's travel away (tens of km at ×10000).
+  local p = n.tickPos or n   -- (a node with no body: its own place)
+  local d = space.dominant(p.x, p.y, p.z)
   local b = d and space.body(d)
   if not b then return nil end
-  local rx, ry, rz = n.x - b.x, n.y - b.y, n.z - b.z
+  local rx, ry, rz = p.x - b.x, p.y - b.y, p.z - b.z
   local r = math.sqrt(rx * rx + ry * ry + rz * rz)
   if r < 1e-3 then return nil end
   return {

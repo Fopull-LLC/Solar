@@ -953,10 +953,14 @@ end
 local function update_navball(node, nx, ny, nz, fx, fy, fz, tgtx, tgty, tgtz)
   find_instruments()
   if not navball then return end
-  local d = space.dominant(node.x, node.y, node.z)
+  -- The TICK pose against space.body (also this tick's): node.x is the drawn
+  -- place, up to a tick of the planet's travel away, which at ×10000 is tens
+  -- of km (a parked rover's altitude read 59212 m).
+  local tp = node.tickPos or node   -- (a node with no body: its own place)
+  local d = space.dominant(tp.x, tp.y, tp.z)
   local b = d and space.body(d)
   if not b then return end
-  local ux, uy, uz = norm(node.x - b.x, node.y - b.y, node.z - b.z)
+  local ux, uy, uz = norm(tp.x - b.x, tp.y - b.y, tp.z - b.z)
   local ex, ey, ez
   if math.abs(uy) > 0.93 then
     ex, ey, ez = norm(cross(0, 0, 1, ux, uy, uz))
@@ -989,7 +993,7 @@ local function update_navball(node, nx, ny, nz, fx, fy, fz, tgtx, tgty, tgtz)
   local he = nx * ex + ny * ey + nz * ez
   local hn = nx * nhx + ny * nhy + nz * nhz
   local heading = (math.deg(math.atan2(he, hn)) + 360) % 360
-  local dxr, dyr, dzr = node.x - b.x, node.y - b.y, node.z - b.z
+  local dxr, dyr, dzr = tp.x - b.x, tp.y - b.y, tp.z - b.z
   local alt = math.sqrt(dxr * dxr + dyr * dyr + dzr * dzr) - b.radius
   local tk_v, tk_a = worldScaleK()
   if tape_spd then tape_spd:setShaderParam("tape", vl, tk_v > 1.2 and 60 or 40, 5) end
@@ -3634,6 +3638,14 @@ local function dock_absorb(node)
       ctlAxes = C.merge(ctlAxes or C.newCtl(), C.remap(C.live(man.controls), remap))
     end
   end
+  -- (a member seated on both sides keeps the host's seat: no one sits twice)
+  do
+    local cl, mine, inc, new = crewLibNow(), {}, {}, {}
+    for _, u in ipairs(absorbed) do new[u] = true; inc[#inc + 1] = bp_by_uid[u] end
+    for u, d in pairs(bp_by_uid) do if not new[u] then mine[#mine + 1] = d end end
+    local n = cl and cl.dedupeSeats and cl.dedupeSeats(mine, inc) or 0
+    if n > 0 then log(string.format("dock: %d seat(s) in the module held crew already aboard; emptied", n)) end
+  end
   if man.crew then crewAboard = true end
   rescanSeats()
   -- The rescan pairs the seam for us: we just hung the module's port off ours
@@ -5950,6 +5962,49 @@ local SHATTER_SPEED = 13.0
 -- damage (see damage_tick). Global: damage_tick is at its upvalue budget.
 SLIDE_FEEL = 0.65
 
+-- Is a contact point on a person (the avatar, or a crew member on foot)? A
+-- walker is pushed by its own controller, not a crash: its contact reports a
+-- depenetration speed (9+ m/s on a parked 20 t rocket) that the crash model
+-- read as a hit, and walking into an engine bell blew it up (2026-10-27,
+-- feelprobe feelheavy). The engine's impacts don't name the other body, so
+-- the walkers' capsules are matched by place: within WALKER_R of a capsule's
+-- axis segment. Global: damage_tick is at its upvalue budget. Cached a tick.
+WALKER_R = 0.9
+WALKERS = { t = -1, pts = {} }
+function walkerNear(x, y, z)
+  if WALKERS.t ~= time then
+    WALKERS.t = time
+    local pts = {}
+    local function add(n)
+      if n and n.valid ~= false then   -- (not by `visible`: first person hides the avatar)
+        local p = n.tickPos or n
+        local u = n.worldUp and n:worldUp() or nil
+        local ux, uy, uz = u and u.x or 0, u and u.y or 0, u and u.z or 0
+        pts[#pts + 1] = { p.x, p.y, p.z, ux, uy, uz }
+        -- impacts are the LAST tick's: where the walker was then, one tick of
+        -- the planet's carry back (4 m a tick on the home world's rails)
+        local c = n.carry
+        if c and (c.x ~= 0 or c.y ~= 0 or c.z ~= 0) then
+          pts[#pts + 1] = { p.x - c.x, p.y - c.y, p.z - c.z, ux, uy, uz }
+        end
+      end
+    end
+    -- (on foot only: a rider in an open seat is part of the craft's crash)
+    local pw = findScript("planet_walker")
+    if pw and pw.onFoot then add(find("Astronaut")) end
+    for _, cb in ipairs(findScripts("crew_body") or {}) do if not cb.doll then add(cb.node) end end
+    WALKERS.pts = pts
+  end
+  for _, w in ipairs(WALKERS.pts) do
+    local dx, dy, dz = x - w[1], y - w[2], z - w[3]
+    -- along the capsule's axis (±1 m, its half height), then off it
+    local a = math.max(-1.0, math.min(1.0, dx * w[4] + dy * w[5] + dz * w[6]))
+    local ex, ey, ez = dx - w[4] * a, dy - w[5] * a, dz - w[6] * a
+    if ex * ex + ey * ey + ez * ez < WALKER_R * WALKER_R then return true end
+  end
+  return false
+end
+
 -- The most a single contact may claim beyond the craft's OWN speed before it is
 -- treated as a solver artifact rather than a crash.
 --
@@ -6030,7 +6085,7 @@ local function damage_tick(node, info, dt)
     local d = uid and bp_by_uid[uid]
     local hp = uid and part_hp[uid]
     if uid and touch then touch[uid] = (touch[uid] or 0) + math.max(0, h.impulse or 0) end
-    if d and hp and hp > 0 then
+    if d and hp and hp > 0 and not (h.x and walkerNear(h.x, h.y, h.z)) then
       local nrm = h.speed or 0
       local energy = math.max(h.speedAbs or 0, nrm)             -- total closing speed
       -- A contact the craft could not physically have delivered is a solver
@@ -6052,7 +6107,7 @@ local function damage_tick(node, info, dt)
       -- its normal part.
       local feel = math.sqrt(nrm * nrm + (SLIDE_FEEL * slide) ^ 2)
       hits[#hits + 1] = { uid = uid, c = c, d = d, hp = hp,
-                          e = feel, slide = slide, x = h.x, y = h.y, z = h.z }
+                          e = feel, slide = slide, x = h.x, y = h.y, z = h.z, raw = h.speedAbs, imp = h.impulse }
       if energy > worst then worst, wx, wy, wz = energy, h.x, h.y, h.z end
       if nrm > worst_normal then worst_normal = nrm end
     end
@@ -6115,6 +6170,9 @@ local function damage_tick(node, info, dt)
       local tol = part_tolerance(h.d) * (0.45 + 0.55 * live)
       local floor = tol * 0.35
       if h.e >= tol then
+        -- (CRASH_TRACE, set by a probe: what broke it, and where)
+        if CRASH_TRACE then log(string.format("CRASH TRACE: %s broke: felt %.1f m/s (tolerance %.1f; reported %.1f, impulse %.1f) at (%.2f, %.2f, %.2f), craft %.2f m/s",
+          h.d.label or h.d.id or "?", h.e, tol, h.raw or -1, h.imp or -1, h.x or 0, h.y or 0, h.z or 0, own)) end
         set_part_damage(h.c, 0)
         part_hp[h.uid] = 0
         break_part(node, h.uid, h.d, h.c, h.x, h.y, h.z)

@@ -44,7 +44,7 @@ m = open(sys.argv[2]).read() + "\n" + open(sys.argv[3]).read()
 s = open(p).read()
 i = s.index('-- ── main ──')
 s = s[:i] + m + s[i:]
-modes = ('vbike', 'vvab', 'vflora', 'vplants', 'vobj', 'vjitter')
+modes = ('vbike', 'vvab', 'vflora', 'vplants', 'vobj', 'vjitter', 'vnose')
 s = s.replace('    elseif MODE == "plane" then run_plane()',
               '    elseif MODE == "plane" then run_plane()' + ''.join('\n    elseif MODE == "%s" then run_%s()' % (m, m) for m in modes))
 open(p, 'w').write(s)
