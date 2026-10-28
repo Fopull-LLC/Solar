@@ -500,6 +500,14 @@ local function colour(sp, e)
   sp.tint = { mid[1] / N.leaf, mid[2] / N.leaf, mid[3] / N.leaf }
   local bk = BARKS and BARKS[(pal.bark or 0) + 1]
   local bm = bk and bk.mid or { 0.3, 0.21, 0.14 }
+  -- The bark gets the leaves' floor too: the "black" bark (0.08) drew every
+  -- trunk as a flat black post with no bark texture left in it, in full sun
+  -- (crimson/umbra palettes; fell probe 2026-10-27). Lifted, hue kept.
+  local blum = bm[1] * 0.3 + bm[2] * 0.59 + bm[3] * 0.11
+  if blum < floor_ then
+    local f = floor_ / math.max(blum, 0.02)
+    bm = { math.min(1.0, bm[1] * f), math.min(1.0, bm[2] * f), math.min(1.0, bm[3] * f) }
+  end
   sp.barkTint = { bm[1] / N.bark, bm[2] / N.bark, bm[3] / N.bark }
   -- Glow: the palette's glow colour, through the model's emissive map.
   if (sp.glow or 0) > 0 then

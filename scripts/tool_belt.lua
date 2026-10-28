@@ -172,7 +172,7 @@ defaults = {
   uproot = 0.8,            -- × the species' cutting work
   --@header Laser cut (hold E)
   --@range 1.5 10 --@units m
-  saw_reach = 5.0,         -- from the PLAYER: a cutting torch, not a rifle
+  saw_reach = 6.5,         -- from the PLAYER to the plant's root: a cutting torch, not a rifle (a trunk 6 m off is in reach)
   --@range 0.1 2 --@units m
   saw_grab = 0.6,          -- how near the beam has to pass a stem (a tree's crown is wider)
   --@range 0.2 3
@@ -202,6 +202,7 @@ inUse = false    -- the trigger is held on a tool in hand: the walker faces the 
 atReach = false  -- the bore has run out to arm's length
 laserMode = "dig"  -- "dig" | "fill"
 cutMode = false    -- the laser is in CUT (E held): it saws plants and never digs
+cutAuto = false    -- ...because the trigger was pulled on a trunk (it lasts until the trigger comes up)
 holding = nil    -- { name, mass, strain, kind } while the gravity gun holds something
 strain = 0.0     -- 0..1+ how hard the gravity gun is working
 wantsScroll = false -- the gravity gun is using the wheel (the camera leaves it alone)
@@ -2032,7 +2033,17 @@ end
 local function fire_cut(node, dt)
   local ox, oy, oz, dx, dy, dz = aim_ray(node)
   aimMat, aimDepth = nil, 0
-  if not ox then show_beam(nil) hum_off() saw = nil return end
+  if not ox then
+    -- No aim this frame (the view between cameras, a capture): the cut is
+    -- kept through the lock's grace like any other moment off the plant,
+    -- not dropped — a dropped lock re-aimed onto whatever stood nearest.
+    show_beam(nil) hum_off()
+    if saw then
+      saw.lost = saw.lost or time
+      if time - saw.lost > params.lock_grace then saw = nil end
+    end
+    return
+  end
   local ff = ref("flora_field")
   local back = len(node.x - ox, node.y - oy, node.z - oz)
   -- The beam stops at the ground (or a hull): never past it, never into it.
@@ -2064,14 +2075,19 @@ local function fire_cut(node, dt)
       end
     end
   end
-  if not p and ff and ff.nearestPlant then
+  -- A cut the trigger started on a trunk is that one plant's: once it is
+  -- down the beam idles until the trigger comes up (no sawing on through the
+  -- grass behind it, no dig either).
+  if not p and cutAuto and view.auto_cut then p = nil
+  elseif not p and ff and ff.nearestPlant then
     local lk = saw_look
     if lk and time - lk.t < 0.1 and dx * lk.dx + dy * lk.dy + dz * lk.dz > 0.9999 then
       carry_since(lk, { lk.p })
       p = lk.p
     else
+      -- (a cut the trigger started on a trunk locks that trunk, not the grass at its foot)
       p = ff.nearestPlant(ox, oy, oz, dx, dy, dz, params.saw_reach + back, 2.0, params.saw_grab,
-        { from = { x = node.x, y = node.y, z = node.z }, reach = params.saw_reach, crown = 4.0 })
+        { from = { x = node.x, y = node.y, z = node.z }, reach = params.saw_reach, crown = 4.0, tall = cutAuto and 2.0 or nil })
       saw_look = carry_mark({ t = time, dx = dx, dy = dy, dz = dz, p = p }, node)
     end
     if p and (p.t or 0) > stop_t + 1.0 then p = nil end   -- behind the ground
@@ -2129,21 +2145,54 @@ local function fire_cut(node, dt)
         recoil = recoil + 0.02
       end
       saw, saw_look, progress = nil, nil, 0
+      if cutAuto then view.auto_cut = true end
     end
   else
     progress = 0
     local t = math.min(stop_t, back + params.saw_reach)
     ex, ey, ez = ease_end(ox + dx * t, oy + dy * t, oz + dz * t, dt, 26)
     aimDist, aimX, aimY, aimZ = len(ex - node.x, ey - node.y, ez - node.z), ex, ey, ez
-    prompt = string.format("CUT  ·  no plant on the beam within %.0f m  ·  sweep it through a plant%s  ·  %s",
-      params.saw_reach, hot, pack)
-    reticle_set("cut", "no plant on the beam")
+    if cutAuto and view.auto_cut then
+      prompt = string.format("CUT  ·  cut through  ·  let the trigger up to dig, or pull it on the next trunk  ·  %s", pack)
+      reticle_set("cut", "cut through")
+    else
+      prompt = string.format("CUT  ·  no plant on the beam within %.0f m  ·  sweep it through a plant%s  ·  %s",
+        params.saw_reach, hot, pack)
+      reticle_set("cut", "no plant on the beam")
+    end
   end
   show_beam({ x = ex, y = ey, z = ez }, charge, "cut", { onPlant = biting, dx = dx, dy = dy, dz = dz })
   publish_shake(biting and (0.02 + charge * 0.03) or 0.01)
   -- The hum pitches up as it bites, and climbs with the cut.
   hum_on(SFX.hum, 0.08 + charge * 0.2, 1.25 + charge * 0.3 + (biting and (0.15 + 0.3 * progress) or 0))
   if biting and math.random() < dt * 8 then recoil = recoil + 0.003 end
+end
+
+-- Is the crosshair on a woody STEM within the cut's reach, in front of the
+-- ground: a tree's trunk below its crown, a giant fungus's stalk, a column
+-- cactus? (The trigger pulled there cuts instead of digging.) Asked once, on
+-- the pull. A scatter plant has no collider, so the dig's ray goes straight
+-- through it to the hill behind; the field is asked instead, as the cut does.
+function view.trunkOnAim(node)
+  local ff = ref("flora_field")
+  if not (ff and ff.nearestPlant and ff.axisDistance) then return false end
+  local ox, oy, oz, dx, dy, dz = aim_ray(node)
+  if not ox then return false end
+  local back = len(node.x - ox, node.y - oy, node.z - oz)
+  -- (tall stems only: a grass tuft the line grazes on its way to the trunk
+  -- scores better on the axis test and would hide the tree)
+  local p = ff.nearestPlant(ox, oy, oz, dx, dy, dz, params.saw_reach + back, 2.0, params.saw_grab,
+    { from = { x = node.x, y = node.y, z = node.z }, reach = params.saw_reach, crown = 4.0, tall = 2.0 })
+  local sp = p and p.rec and p.rec.sp
+  if not sp or (p.height or 0) < 2.0 then return false end
+  if not (sp.form == "tree" or sp.form == "fungus" or sp.kind == "cactus") then return false end
+  local g, t, sa = ff.axisDistance(ox, oy, oz, dx, dy, dz, 0, back + params.saw_reach + 1.0,
+    p.x, p.y, p.z, p.ux, p.uy, p.uz, p.height)
+  -- the stem itself (its girth, a hand's slack), below a crown or a cap
+  if g > math.max(params.saw_grab, 0.25 + p.height * 0.03) + 0.15 or sa > p.height * 0.65 then return false end
+  local gh = ray_hit(node, ox, oy, oz, dx, dy, dz, params.saw_reach)
+  if gh and t > len(gh.x - ox, gh.y - oy, gh.z - oz) + 0.5 then return false end
+  return true
 end
 
 -- ── the gravity gun ─────────────────────────────────────────────────────────
@@ -3121,7 +3170,7 @@ end
 local function reset_tool_state(why_)
   progress = 0
   reticleKind, reticleLabel = "none", ""
-  cutMode = false
+  cutMode, cutAuto, view.auto_cut = false, false, nil
   saw_reset()
   charge, cut_progress, focus = 0.0, 0.0, 0.0
   bore_drop()
@@ -3214,6 +3263,8 @@ local function tick(node, dt, carrying)
 
   local id = toolId()
   local firing = btn(0)
+  local fire_was = view.fire_was     -- the trigger last frame (a pull is its edge)
+  view.fire_was = firing
   inUse = firing
   -- "No new catch until the trigger comes up" ends when it comes up, whatever
   -- is in hand: a release missed while another tool (or none) was out left
@@ -3222,9 +3273,17 @@ local function tick(node, dt, carrying)
   if id ~= "gravgun" and grab then release("tool changed", true) end
   if id ~= "gravgun" then wantsScroll = false end
   if id ~= "laser" and cutMode then cutMode = false; saw_reset() end
+  if id ~= "laser" or not firing then cutAuto, view.auto_cut = false, nil end
   if id == "laser" then
-    -- CUT while E is held (and E isn't a door's or a crate's right now).
-    local want_cut = key_e() and e_taken() == nil
+    -- CUT while E is held (and E isn't a door's or a crate's right now) —
+    -- or while the trigger stays down after it was pulled with the crosshair
+    -- on a trunk (view.trunkOnAim): nobody fires a rock laser into a tree's
+    -- stem to dig the hill behind it. (Probe 2026-10-27: the trigger held on
+    -- a trunk for 10 s only bored 16 m into the ground past it.)
+    if firing and not fire_was and not cutMode and laserMode == "dig" and view.trunkOnAim(node) then
+      cutAuto = true
+    end
+    local want_cut = (key_e() and e_taken() == nil) or cutAuto
     if want_cut ~= cutMode then
       cutMode = want_cut
       saw_reset()
@@ -3255,7 +3314,7 @@ local function tick(node, dt, carrying)
       draw_ring(hit, firing, full, params.laser_radius * params.laser_strength, false)
     end
     -- The cut is one key away and says so while the beam is idle.
-    if not firing and prompt ~= "" and e_taken() == nil then prompt = prompt .. "  ·  hold E: cut plants" end
+    if not firing and prompt ~= "" and e_taken() == nil then prompt = prompt .. "  ·  hold E (or fire on a trunk): cut plants" end
   elseif id == "gravgun" then
     if not grab then hum_off() end
     fire_grav(node, dt, firing)

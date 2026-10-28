@@ -293,13 +293,31 @@ local function pkey(face, sgn, i, j)
   return string.format("%d%s%d,%d", face, sgn > 0 and "p" or "n", i, j)
 end
 
+-- A source's seed, from (world seed, face, sign, i, j, species). EXACT 32-bit
+-- arithmetic: Lua numbers are doubles, and the old `s * 16777619 + v` passed
+-- 2^53 on every step, so the low bits — the small terms, the species id last
+-- of all — were rounded away. Every species on a patch got the same seed (on
+-- the new-game world, species 1–3 one seed and 4–12 another), so the engine
+-- laid them out on the SAME places with the SAME instance ids: an elm stood
+-- inside another elm, a bracket fungus inside a shroom. Cut one and the other
+-- stayed exactly where it was — the "ghost" tree (probe 2026-10-27,
+-- tools/perf/fellprobe.sh). The multiply is split in 16-bit halves so no
+-- product passes 2^53, and the end is mixed so neighbouring ids scatter.
+local function mul32(a, b)
+  local ah, al = math.floor(a / 65536), a % 65536
+  return ((ah * b) % 65536 * 65536 + al * b) % 4294967296
+end
 local function hash(...)
   local s = 2166136261
   for _, v in ipairs({ ... }) do
-    s = (s * 16777619 + math.floor(v) % 2147483647) % 4294967296
+    s = (mul32(s, 16777619) + math.floor(v) % 2147483647) % 4294967296
   end
+  s = mul32((s + math.floor(s / 65536)) % 4294967296, 2246822519)
+  s = mul32((s + math.floor(s / 8192)) % 4294967296, 3266489917)
+  s = (s + math.floor(s / 65536)) % 4294967296
   return s % 2147483647 + 1
 end
+seedHash = hash   -- for the smoke test: every species on a patch its own seed
 
 -- The patch frame for up = (ux,uy,uz), as the node's pitch/roll (yaw 0) and
 -- the three axes that rotation produces: R = Rx(pitch)·Rz(roll), so
@@ -2035,6 +2053,14 @@ end
 
 -- For probes: trees coming down right now.
 function felling() return #felled end
+-- For probes: the stand-ins of the trees coming down.
+function fellingParts()
+  local out = {}
+  for _, f in ipairs(felled) do
+    for _, n in ipairs(f.parts) do if n.valid then out[#out + 1] = n end end
+  end
+  return out
+end
 
 local function fell_tick()
   if #felled == 0 then return end
@@ -2915,7 +2941,8 @@ nearQuery = near_query   -- for the smoke test
 -- the line passes within `grab` of; `cone` <= 1 is a SWEEP round the origin
 -- that also takes anything within `reach` at least that far ahead.
 -- `opt` (optional): { from = crew position, reach = metres from the crew to a
--- plant's root }; then only the part of the line near the crew is searched.
+-- plant's root, tall = only plants at least this tall }; with `from` only the
+-- part of the line near the crew is searched.
 -- Returns { pid, x,y,z (root), ax,ay,az (where the line meets it), height,
 -- ux,uy,uz, t, gap, rec } or nil.
 function nearestPlant(x, y, z, dx, dy, dz, reach, cone, grab, opt)
@@ -2974,11 +3001,14 @@ function nearestPlant(x, y, z, dx, dy, dz, reach, cone, grab, opt)
               local gl = len(g1, g2, g3)
               local ux, uy, uz = g1 / gl, g2 / gl, g3 / gl
               local hgt = math.max(0.4, (s.sp.height or 1.0) * (h.scale or 1))
+              -- `opt.tall`: only plants at least this tall (a stem to cut,
+              -- not the grass tuft the line also grazes on its way to it)
+              local short = opt and opt.tall and hgt < opt.tall
               local near_, t, sa = axisDistance(x, y, z, dx, dy, dz, t0, t1, wx, wy, wz, ux, uy, uz, hgt)
               local gr = girth(s.sp, hgt, sa, grab)
               -- On the line ahead (not the root ahead: aimed up a trunk from
               -- beside it, the root is behind and below the eye).
-              if (near_ <= gr and (t > t0 + 0.05 or dot > 0)) or dot >= cone then
+              if not short and ((near_ <= gr and (t > t0 + 0.05 or dot > 0)) or dot >= cone) then
                 local score = (1 - math.min(near_, gr) / gr) * 2.0 - (t - t0) / (t1 - t0 + 1)
                 if score > bestScore then
                   bestScore = score
@@ -3060,6 +3090,20 @@ function harvest(hitrec, cid)
   return got, dropped
 end
 
+-- For probes: what a scatter source id is to this field (nil = not ours).
+function sourceInfo(id)
+  local s = srcs[id]
+  if not s then
+    for _, r in ipairs(retiring) do
+      if r.id == id then return { retiring = true, patch = r.pk, spid = r.spid } end
+    end
+    return nil
+  end
+  local p = patches[s.patch]
+  return { patch = s.patch, spid = s.sp.id, name = s.sp.name, part = s.part, made = s.made,
+           current = p ~= nil and (p.srcs[s.sp.id] == id or p.bark[s.sp.id] == id) }
+end
+
 -- What's growing around here — the survey readout at a base or a landing site.
 function surveyLines(x, y, z, radius)
   radius = radius or 40
@@ -3112,7 +3156,8 @@ function groundAudit(x, y, z, radius, tol)
               end
             end
             if #out.props < 400 then
-              out.props[#out.props + 1] = { src = id, id = h.id, d = d, kind = s.sp.kind, x = h.pos.x, y = h.pos.y, z = h.pos.z }
+              out.props[#out.props + 1] = { src = id, id = h.id, d = d, kind = s.sp.kind, x = h.pos.x, y = h.pos.y, z = h.pos.z,
+                                            height = (s.sp.height or 1.0) * (h.scale or 1), name = s.sp.name }
             end
           end
         end

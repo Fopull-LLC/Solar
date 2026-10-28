@@ -649,14 +649,40 @@ check("nothing new is planted from orbit", ff.sources <= kept)
 ASTRO.x = BODY.x + SURFACE + 1.0
 tick(40)
 
+-- Every species on a patch has a seed of its own. The old hash rounded the
+-- species id away in doubles: all the stands on a patch were laid on the same
+-- places with the same ids, and a cut tree left its twin standing in it.
+check("every species on a patch has its own seed", (function()
+  local seen = {}
+  for id = 1, 16 do
+    local h = ff.seedHash(1911564384, 3, 0, 49998, 49999, id)
+    if seen[h] then return false end
+    seen[h] = true
+  end
+  return true
+end)())
+
 -- ── 5. harvesting ───────────────────────────────────────────────────────────
 -- Aim at a tall plant's trunk from beside it (not at its root).
-local tall
+-- The tallest plant that stands well off its patch's plane (what the band
+-- refuses: the case this section exists for), else the tallest. Which plant
+-- that is depends on the layout, i.e. on the sources' seeds.
+local function plane_off(h)
+  local pn = by_name["Flora " .. BODY.name .. " " .. h.rec.patch]
+  if not pn then return 0 end
+  local _, pey = axes_of(pn)
+  return (h.x - BODY.x - pn.x) * pey[1] + (h.y - BODY.y - pn.y) * pey[2] + (h.z - BODY.z - pn.z) * pey[3]
+end
+local tall, tall_any
 for i = 0, 35 do
   local a = i * 0.1745
   local h = ff.nearestPlant(ASTRO.x, ASTRO.y, ASTRO.z, 0, math.cos(a), math.sin(a), 40, -1)
-  if h and (not tall or h.height > tall.height) then tall = h end
+  if h and h.height > 1.0 then
+    if not tall_any or h.height > tall_any.height then tall_any = h end
+    if math.abs(plane_off(h)) > (h.rec.sp.chunk or 10) + 8 and (not tall or h.height > tall.height) then tall = h end
+  end
 end
+tall = tall or tall_any
 check("there is something tall to aim at", tall ~= nil and tall.height > 1.0, tall and tall.height)
 if tall then
   local ux, uy, uz = tall.ux, tall.uy, tall.uz
