@@ -75,17 +75,13 @@ local axis, st0, raked = A.suspAxis({ ax = a[1], ay = a[2], az = a[3] }, Xf, Yf,
 check("rake the engine can't carry (craft facing Z) falls back to upright", not raked and near(axis[2], 1, 1e-9))
 local axis3, _, raked3 = A.suspAxis({ ax = a[1], ay = a[2], az = a[3] }, { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 }, { 0, 0, 1 })
 check("…and a craft facing X keeps the raked axis", raked3 and near(axis3[1], a[1], 1e-9))
--- the joint itself always slides upright (the raked axis only draws): on a
--- leaning axis the engine's grip budget let a tyre push far harder in
--- reverse than forward (playtest 2026-10-27)
-local ja, js0, jown = A.jointAxis({ ax = a[1], ay = a[2], az = a[3] }, { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 }, { 0, 0, 1 })
-check("jointAxis: the spring slides along the craft's up", near(ja[2], 1, 1e-9) and near(js0, 0, 1e-6))
-check("jointAxis: …and hands back the part's raked axis for the drawing", near(jown[1], a[1], 1e-9))
-local ja2, js2 = A.jointAxis({ ax = 0, ay = 1, az = 0 }, { 0.7071, -0.7071, 0 }, { 0.7071, 0.7071, 0 }, { 0, 0, 1 }, { 0, 0, -1 })
-check("jointAxis: a swing arm turned 45° on its mount still slides upright", near(ja2[2], 1, 1e-9) and near(js2, 0, 1e-6))
-local gf, gr = A.gripShare(1.13, math.rad(45), 1), A.gripShare(1.13, math.rad(45), -1)
-check("gripShare: on a 45° axis forward grip is a fraction of reverse (why the joint is upright)", gf < 0.5 and gr > 3, gf .. " " .. gr)
-check("gripShare: upright, forward and reverse are the same", near(A.gripShare(1.13, 0, 1), A.gripShare(1.13, 0, -1), 1e-12))
+-- the joint slides along the part's own raked axis (engine 0.117.1-dev.1374
+-- fixed the spin lock that braked a raked wheel harder forwards, floptle
+-- 0579; until then a jointAxis here kept every joint upright)
+check("no upright-axis workaround left", A.jointAxis == nil and A.gripShare == nil)
+local ja2, js2, rk2 = A.suspAxis({ ax = 0, ay = 1, az = 0 }, { 0.7071, -0.7071, 0 }, { 0.7071, 0.7071, 0 }, { 0, 0, 1 }, { 0, 0, -1 })
+check("a swing arm turned 45° on its mount slides along its own 45° axis", rk2 and near(ja2[1], 0.7071, 1e-3) and near(ja2[2], 0.7071, 1e-3) and near(js2, 0, 1e-6),
+  table.concat(ja2, ",") .. " " .. tostring(js2))
 local rd = A.rollDir(A.axleOf(up, 0), up)
 check("rollDir: a positive spin about +Z rolls toward −X", near(rd[1], -1, 1e-9))
 

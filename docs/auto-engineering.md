@@ -112,17 +112,14 @@ the joint's axis, so a raked axis can carry a fork on a craft built facing
 ±X (the seat's default). On a craft built facing ±Z it can't: the fork then
 steers about the vertical (it still works; only the rake is lost).
 
-**The joint slides upright (playtest 2026-10-27).** "The bike drives much
-better BACKWARDS than forwards." The engine budgeted a tyre's grip on the
-wheel joint's spring push along the joint's axis, so on an axis that leans
-back the drive unloaded it going forward and loaded it in reverse. Every
-suspension joint slides along the craft's up (`auto_drive.jointAxis`); the
-fork's rake and a turned arm are only drawn. Engine 0.117.1-dev.1368 grips by
-the contact's normal load instead (floptle 0573), but the user's dirt bike on
-its raked axes still made 0.85 m/s² forward against 2.44 in reverse and
-stalled 5 m up the 45% ramp, so the workaround stays: the rolling grip's push
-lands on the light tyre alone, and on a slanted axis its share along the axis
-goes into the spring and the ground rather than the craft (engine card).
+**The joint slides along the part's own axis.** A fork's rake and a turned
+swing arm are the joint's real axes (`auto_drive.suspAxis`; upright only
+where the rake can't carry the axle). From the 2026-10-27 playtest ("the bike
+drives much better BACKWARDS than forwards") to engine 0.117.1-dev.1374 every
+joint slid upright instead (`auto_drive.jointAxis`, now gone): the engine's
+wheel joint locked a wheel's off-axle spin with a rounding error that braked
+every wheel in proportion to its speed, worst on two wheels in line and on a
+raked axis (floptle 0579).
 
 **One friction budget per tyre.** The project sets `wheel_friction:
 Some(Single)` (floptle 0575): a wheel-joint tyre grips by its friction times
@@ -130,7 +127,12 @@ its load, once. Before it, the tyre's ground contact spent its friction too,
 about 2μN. `R2_TYRE_MU` and the drive were retuned with it (vessel_controller
 "The tyre's friction"): tyres of friction 0.9, and
 the traction control's lead adapts to the push it allows (the wheelie cap
-included) up to `R2_LK_MAX`, starting over each time the stick is let go.
+included) up to `R2_LK_MAX`. It is remembered for each way (a raked bike needs
+about three times the lead forwards; learnt only on more than half stick,
+rolling that way and not braking, and a start picks up at most
+`R2_LK_START`, 12), dropped to 1.5 off the stick and forgotten after
+`R2_LK_FORGET` (2 s) let go. The push stays under 0.7 of what
+would lift a bike's front wheel.
 
 ## 3b. Building it any way you like (playtest 2026-10-26)
 

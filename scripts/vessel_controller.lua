@@ -8584,6 +8584,8 @@ R2_WHEEL_TOP = { S = 14.0, M = 22.0, L = 28.0 }      -- m/s on the level, full s
 R2_WHEEL_TORQUE = { S = 0.35, M = 0.9, L = 2.0 }     -- kN·m, rated like thrust (× parts.rating)
 R2_TC = 0.55          -- traction control: g the motors may push the craft at on the level
 R2_LK_MAX = 24.0      -- the most the traction control's lead may be scaled up (drive_tick, THE LEAD ADAPTS)
+R2_LK_START = 12.0    -- …and the most of a remembered lead a start picks up (it adapts on from there)
+R2_LK_FORGET = 2.0    -- s off the stick before the remembered leads (forwards, reverse) are forgotten
 R2_LAT_MU = 0.47      -- the share of the tyres' grip a turn may use, sideways (0.42 g on R2_TYRE_MU, as before it rose)
 R2_LAT_SSF = 0.45     -- …and the share of the rollover threshold (half track / CoM height)
 R2_ANTIROLL = 2.0     -- anti-roll bar: × m·g·track of roll torque per radian of lean
@@ -9888,10 +9890,33 @@ local function drive_tick(node, info, dt)
   -- …and what the lead adapts to (below): that push less the slope's share,
   -- the craft's own acceleration along its front
   R2.want_a = math.max(0.05 * gl, accel - climb)
-  -- off the stick the lead starts over: a lead wound up for the last run
-  -- (or a stop) put a big push into the first tick of the next one, and a
-  -- bike set off backwards on its rear tyre hopping and spinning
-  if math.abs(R2.drive or 0) < 0.02 then R2.lk = 1.5 end
+  -- THE LEAD IS REMEMBERED, one for each way. A raked bike needs about three
+  -- times the lead forwards that it needs in reverse (engine 0.117.1-dev.1374,
+  -- floptle 0579 follow-up), so each run starting over from 1.5 left the
+  -- forward one slow off the line. Off the stick the live lead drops to 1.5;
+  -- the stick pushed again picks up the lead last converged THAT way (only
+  -- one learnt while driving that way, never one wound up by a stop: that
+  -- put a big push into the first tick, and a bike set off backwards on its
+  -- rear tyre hopping and spinning). Let go for R2_LK_FORGET s, both go.
+  do
+    local dsg = (R2.drive or 0) > 0.02 and 1 or ((R2.drive or 0) < -0.02 and -1 or 0)
+    if dsg == 0 then
+      R2.lk_idle = (R2.lk_idle or 0) + dt
+      if R2.lk_idle > R2_LK_FORGET then R2.lkF, R2.lkR = nil, nil end
+      R2.lk, R2.lk_dir = 1.5, 0
+    else
+      R2.lk_idle = 0
+      -- (the stick against the motion is slowing it: that lead starts at 1.5
+      -- and is never kept; once it rolls the stick's way the lead learnt
+      -- for that way takes over)
+      local brk = (R2.vf or 0) * dsg < -0.3
+      if dsg ~= R2.lk_dir or (R2.lk_brk and not brk) then
+        R2.lk = (not brk) and math.min(R2_LK_START, (dsg > 0 and R2.lkF or R2.lkR) or 1.5) or 1.5
+        R2.lk_dir = dsg
+      end
+      R2.lk_brk = brk
+    end
+  end
   -- STALL: driven but barely moving (parked in a dip or a rut, nose against
   -- a bump the chassis slope doesn't see) → after half a second let the
   -- motors work up to their full torque over the next second, so a rover can
@@ -10050,6 +10075,13 @@ local function drive_tick(node, info, dt)
     local want_a = (R2.want_a or R2_TC * gl) * lmot
     local e = (want_a - limited * R2.a_s) / math.max(want_a, 0.1)
     R2.lk = math.max(1, math.min(R2_LK_MAX, (R2.lk or 1.5) * math.exp(math.max(-1, math.min(1, e)) * dt * 6)))
+    -- (remembered for this way only while rolling that way, not slowing,
+    -- on more than half stick: a lead wound up easing into a stop, kept as
+    -- the next start's, threw a rover 1.5 m/s back in its first tick)
+    local d = R2.lk_dir or 0
+    if d ~= 0 and not R2.lk_brk and vf * d > 0.5 and math.abs(R2.drive or 0) > 0.5 then
+      if d > 0 then R2.lkF = R2.lk else R2.lkR = R2.lk end
+    end
   end
   if R2.gear or R2.hasGear then gearOleo(node, info, dt, upv, gl) end
 end
@@ -10256,16 +10288,13 @@ function motoScan()
         D = { F.z, 0, -F.x }
         w.realigned = true
       end
-      -- the joint's spring slides along the craft's UP, never the part's
-      -- raked axis: the engine budgets a tyre's grip on that spring's push,
-      -- and on a leaning axis the drive's own share unloaded it going
-      -- forward and loaded it in reverse (auto_drive.jointAxis; playtest
-      -- 2026-10-27, the bike that was "a beast" only backwards)
-      local a, st0, own
-      if L.jointAxis then a, st0, own = L.jointAxis(s.m, rr.X, rr.Y, rr.Z, D)
-      else a, st0 = L.suspAxis(s.m, rr.X, rr.Y, rr.Z, D); own = a end
-      s.axis, s.partAxis = a, own
-      s.raked = own and math.abs(own[2] or 1) < 0.999 or false
+      -- the joint slides along the part's own axis: a fork's rake, a swing
+      -- arm turned on its mount (upright where the rake can't carry the
+      -- axle). Until engine 0.117.1-dev.1374 it slid upright: the wheel
+      -- joint's spin lock braked a raked wheel harder forwards (floptle 0579)
+      local a, st0, raked = L.suspAxis(s.m, rr.X, rr.Y, rr.Z, D)
+      s.axis, s.partAxis = a, a
+      s.raked = raked and true or false
       w.steer0 = st0
       local rd = L.rollDir(L.axleOf(a, st0), { 0, 1, 0 })
       local along = rd[1] * F.x + rd[3] * F.z
@@ -10298,7 +10327,9 @@ function motoPlan()
   -- the push that would lift the front: g × (CoM ahead of the rear axle) /
   -- (CoM height), with a margin; the traction control stays under it
   local hcg = (R2.plan and R2.plan.hcg) or 0.8
-  R2.wheelieK = 0.6 * math.max(0.05, -amin) / math.max(0.3, hcg)
+  -- (0.7 of it: 0.6 held the dirt bike to 0.37 g on the level, a moped's
+  -- pull; the traction control still halves the push with a wheel up)
+  R2.wheelieK = 0.7 * math.max(0.05, -amin) / math.max(0.3, hcg)
   R2.rider = false
   for u, d in pairs(bp_by_uid) do
     if not integ.gone[u] and ((d.seat or 0) == 1 or d.seat == true) then R2.rider = true end
