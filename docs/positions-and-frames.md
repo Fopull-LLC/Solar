@@ -23,8 +23,12 @@ breaking one of the rules below.
 - **A node's own axes and position can lag the rails carry.** On a craft,
   `node.x` and `basis(node)` were measured 3.4 m behind in orbit
   (vessel_controller.lua `partFrameNow`, `base_of`).
-- **World velocities include the planet's orbit.** A parked rover "moves"
-  hundreds of m/s in world terms.
+- **Velocities the engine reports are already planet-relative, but a speed
+  you work out from world positions is not.** `node.vel` and
+  `assembly.info().vel` are in the frame of the body whose sphere of influence
+  holds them, so a parked craft reads about 0. A position difference
+  (`(x1 - x0) / dt` in world coordinates) also contains the planet's orbit, so
+  a parked rover "moves" hundreds of m/s.
 
 ## The rules
 
@@ -59,10 +63,13 @@ breaking one of the rules below.
 3. **In fixedUpdate, read and write `tickPos`.** Never write `node.x` there;
    that teleports the body to its drawn place.
 
-4. **Measure velocities and speeds relative to the local body.** Subtract the
-   body's `vx,vy,vz` (from `space.body`) before comparing, limiting or showing a
-   speed. Use game time (`space.time()`), not real seconds, for anything that
-   must hold under time warp.
+4. **Measure velocities and speeds relative to the local body.** Use the
+   engine's own velocities (`node.vel`, `assembly.info().vel`): they are
+   already relative to the body. Never difference world positions to get a
+   speed. If you must, difference body-relative positions instead. Use game
+   time (`space.time()`), not real seconds, for anything that must hold under
+   time warp. (The galaxy.lua warp ceiling fell as warp rose because it
+   differenced world positions over real seconds.)
 
 5. **Re-derive aims every frame from what's live now.**
    - Recompute an aim ray from the camera's current pose: planet_camera
