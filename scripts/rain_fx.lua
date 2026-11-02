@@ -385,7 +385,8 @@ function lateUpdate(node, dt)
   if not anc then return off(node) end
 
   local gx = refs.graphics
-  local level = gx and gx.level and gx.level() or "Medium"
+  -- the Graphics tab's Rain and snow row (graphics.levelFor), else the level
+  local level = gx and ((gx.levelFor and gx.levelFor("rain")) or (gx.level and gx.level())) or "Medium"
   local which = BY_LEVEL[level] or "rainFx"
   build_field(which, rate, po, X, Y, Z)
   show(node, which)

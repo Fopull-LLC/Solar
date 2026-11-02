@@ -52,8 +52,24 @@
 --   gx.shafts            … and the sun shafts through it?
 --   gx.notice            a sentence to show the player, or nil (+ gx.noticeAt)
 --   gx.shadowScale       the world-size factor on the level's shadow distance
---   gx.flare, gx.dof     does this level draw the sun flare / the far-field blur?
---   gx.setLook(k, on)    the player's switches: "flare", "dof" (settings.lua)
+--   gx.flare, gx.dof     is the sun flare / the far-field blur on?
+--   gx.opt(key)          one graphics option in force (settings.lua GFX_OPTIONS:
+--                        the level's value, or the player's own on top)
+--   gx.levelFor(kind)    "rain": the tier rain_fx should draw (the Rain and snow row)
+--   gx.wasLowered()      did the auto-lower step down this session?
+--
+-- THE OPTIONS. Since the 2026-11 Graphics tab a level is a bundle of two dozen
+-- dials (settings.lua GFX_OPTIONS holds them and each level's value), and the
+-- player can set any one of them on its own ("Custom"). This script applies
+-- them, live: the engine's own (render scale, sharpening, anti-aliasing, the
+-- Lighting node's shadows / contact shadows / reflections / fog steps, the
+-- Post Processing node's bloom, AO, motion blur and the depth of field, the
+-- decal budget, the terrain memory budget) and the game's own, through the
+-- scripts' published values (flora_field and mineral_field reach and budget,
+-- vehicle_fx's effects tier, crew_strip's portrait redraw budget, and
+-- `volumetric`/`shafts` for atmosphere.lua). Another script's value is only
+-- written while it still holds what this script last wrote (or its own
+-- default), so a probe or a scene that set it on purpose is left alone.
 --
 -- SHADOW DISTANCE AND WORLD SIZE. The levels' distances were set on 250–400 m
 -- worlds. A scale-3 world is 600–950 m across: from a hill or low flight the
@@ -106,7 +122,6 @@ defaults = {
 
 volumetric, shafts = false, false
 flare, dof = false, false
-local look_on = { flare = true, dof = true }   -- the player's switches
 notice, noticeAt = nil, -1
 
 local current = nil
@@ -118,7 +133,7 @@ local ema = nil            -- smoothed frame time, seconds
 local map_ref, bf_ref = nil, nil
 
 local function light()
-  if not lit then
+  if not (lit and lit.valid ~= false) then
     local ln = find("Lighting")
     lit = ln and ln:getcomponent("Light") or nil
   end
@@ -126,6 +141,9 @@ local function light()
 end
 
 -- The settings slot, read or written without losing the save that is loaded.
+-- Only when there is no settings script (settings.lua keeps the store in a
+-- file now: switching save slots waits for the game's slot to reach the disk
+-- and reads it back whole, 70–220 ms on a scene load).
 local function with_settings(fn)
   local cur = save.slot()
   if cur == "settings" then return fn() end
@@ -136,26 +154,69 @@ local function with_settings(fn)
   return r
 end
 
+-- settings.lua: the player's store and the graphics options (GFX_OPTIONS).
+local st_ref, st_miss = nil, -100
+local function settings_script()
+  if st_ref and st_ref.valid ~= false then return st_ref end
+  if time - st_miss < 2 and st_miss > -100 then return nil end
+  st_ref = findScript and findScript("settings", { quiet = true }) or nil
+  if not st_ref then st_miss = time end
+  return st_ref
+end
+
+-- What each level means when there is no settings script (a test, a scene
+-- without one): the old bundles. nil = leave the scene's own value alone.
+local function fallback(key, p)
+  if key == "render_scale" then return p.scale
+  elseif key == "sharpen" then return "auto"
+  elseif key == "shadows" then return p.shadows
+  elseif key == "shadow_distance" then return p.shadowDistance
+  elseif key == "volumetric" then return p.volumetric
+  elseif key == "shafts" then return p.shafts
+  elseif key == "fog_quality" then return p.fogSteps
+  elseif key == "bloom" then return true
+  elseif key == "flare" then return p.flare
+  elseif key == "dof" then return p.dof ~= nil
+  end
+  return nil
+end
+
+-- One option in force at `lv` (default: the current level).
+function opt(key, lv)
+  lv = lv or level()
+  local st = settings_script()
+  if st and st.gfxValue then
+    local v = st.gfxValue(key, lv)
+    if v ~= nil then return v end
+  end
+  return fallback(key, PRESETS[lv] or PRESETS[DEFAULT])
+end
+local function opt_medium(key)
+  local st = settings_script()
+  local o = st and st.GFX_BY_KEY and st.GFX_BY_KEY[key]
+  return o and o.preset and o.preset.Medium
+end
+
 -- Dynamic resolution (the Settings screen's switch, settings.lua): the engine
--- picks the render scale per frame from the GPU time. The level's own scale is
--- its ceiling, so High never renders above native and Low never above 0.6;
--- the floor is half of that. `app.setRenderScale` turns it off (a scale chosen
--- outright is the game's decision), so it is switched back on after every
--- apply.
+-- picks the render scale per frame from the GPU time. The render scale in
+-- force is its ceiling, so High never renders above native and Low never
+-- above 0.6; the floor is half of that. `app.setRenderScale` turns it off (a
+-- scale chosen outright is the game's decision), so it is switched back on
+-- after every apply.
 local dynamic = false
 
--- The player's render scale (Settings ▸ Display ▸ Render scale), over every
--- level's own: nil = the level's. A level still sets everything else.
-local scale_pick = nil
+-- The render scale in force (the Render scale row, else the level's).
 local function scale_of(p)
-  local s = scale_pick or p.scale
+  local s = tonumber(opt("render_scale")) or p.scale
   return math.max(0.25, math.min(1.0, s))
 end
--- The upscale's sharpening for a scale: the level's at its own scale, else
--- harder the bigger the stretch (Medium's 0.25 at 90%, Low's 0.6 at 60%),
--- none at native.
+-- The upscale's sharpening for a scale: the player's, or Auto: the level's at
+-- its own scale, else harder the bigger the stretch (Medium's 0.25 at 90%,
+-- Low's 0.6 at 60%), none at native.
 local function sharpen_of(p, s)
-  if not scale_pick then return p.sharpen or 0.4 end
+  local v = opt("sharpen")
+  if type(v) == "number" then return math.max(0, math.min(1, v)) end
+  if math.abs(s - p.scale) < 1e-3 then return p.sharpen or (s >= 0.999 and 0.0 or 0.4) end
   if s >= 0.999 then return 0.0 end
   return math.max(0.2, math.min(0.7, 0.25 + (0.9 - s) * (0.35 / 0.3)))
 end
@@ -228,24 +289,31 @@ local function post()
   return post_ref and post_ref.c
 end
 
-function setLook(k, on)
-  if look_on[k] == nil then return end
-  look_on[k] = on ~= false
-  post_level = nil
-end
+-- (Before the Graphics tab: the flare and blur switches. They are options
+-- now; this stays for anything that still calls it.)
+function setLook(k, on) post_level = nil end
 
--- Bloom and the flare: once per level change (and on a scene rebuild).
+-- Bloom, AO, motion blur and the flare: once per change (and on a scene
+-- rebuild). AO is the scene's own strength times the option (the scene's
+-- `ao: ScreenSpace` mode is not writable, so Off zeroes the strength).
+local ao_base = nil
 local function apply_post(p)
   local pc = post()
   if not pc then return end
-  local key = level() .. tostring(look_on.flare)
-  if post_level == key and math.abs((pc.bloomThreshold or 0) - p.bloom[1]) < 1e-3 then return end
+  if ao_base == nil then ao_base = pc.aoStrength or 0.85 end
+  local bloom_on = opt("bloom") ~= false
+  local ao = tonumber(opt("ao"))
+  local mb = tonumber(opt("motion_blur"))
+  local key = table.concat({ level(), tostring(flare), tostring(bloom_on), tostring(ao), tostring(mb) }, "|")
+  if post_level == key and (not bloom_on or math.abs((pc.bloomThreshold or 0) - p.bloom[1]) < 1e-3) then return end
   post_level = key
-  pc.bloom = true
+  pc.bloom = bloom_on
   pc.bloomThreshold = p.bloom[1]
   pc.bloomIntensity = p.bloom[2]
+  if ao then pc.aoStrength = ao_base * ao end
+  if mb then pc.motionBlur = mb; if mb > 0 then pc.motionSamples = 8 end end
   if not (flare_ref and flare_ref.valid ~= false) then flare_ref = findScript and findScript("sun_flare") or nil end
-  if flare_ref and flare_ref.setOn then flare_ref.setOn(p.flare == true and look_on.flare) end
+  if flare_ref and flare_ref.setOn then flare_ref.setOn(flare == true) end
 end
 
 local function smooth01(a, b, x)
@@ -279,7 +347,8 @@ end
 
 -- The far-field blur for this frame: focus, range (m) and blur (px), or nil.
 local function dof_want(p)
-  if not (p.dof and look_on.dof) then return nil end
+  if not dof then return nil end
+  local dp = p.dof or PRESETS.Medium.dof
   if time - look_t > 1.0 then
     look_t = time
     if not (at_ref2 and at_ref2.valid ~= false) then at_ref2 = findScript("atmosphere") end
@@ -291,7 +360,7 @@ local function dof_want(p)
   -- (The seat view's cabin is a stacked camera drawn after depth of field,
   -- post = "after" in planet_camera, so the blur reaches only the world
   -- outside the windows.)
-  local px = p.dof[1]
+  local px = dp[1]
   if camera and camera.screenSize then
     local _, h = camera.screenSize()
     if h and h > 0 then px = px * h / 1080 end
@@ -300,7 +369,7 @@ local function dof_want(p)
   -- as it always was: the builder is a workbench, not a photograph).
   if gm_ref2 and gm_ref2.inputOwner == "builder" and bc_ref and bc_ref.dist then
     local d = math.max(1, bc_ref.dist)
-    return d * 1.3, d * 2.0 + 10, math.min(px * 0.8, px / p.dof[1] * 1.4)
+    return d * 1.3, d * 2.0 + 10, math.min(px * 0.8, px / dp[1] * 1.4)
   end
   if not (cam_node and cam_node.valid) then return nil end
   local at = at_ref2
@@ -348,34 +417,125 @@ local function apply_dof(p)
   pc.dofRange = r
   pc.dofNearRange = 1e6          -- nothing in front of the focus ever blurs
   pc.dofBlur = b
-  pc.dofSamples = p.dof[2]
+  pc.dofSamples = (p.dof or PRESETS.Medium.dof)[2]
   pc.dofHighlight = 0
+end
+
+-- The Lighting node's dials, re-asserted (a scene load rebuilds the node,
+-- and the shadow reach follows the world under the camera).
+local L = {}               -- what was last decided: shadows, dist, steps, contact, refl
+local function decide_light()
+  L.shadows = opt("shadows") ~= false
+  L.dist = (tonumber(opt("shadow_distance")) or 140) * shadowScale
+  L.steps = tonumber(opt("fog_quality"))
+  L.contact = opt("contact_shadows")
+  L.refl = opt("reflections")
+end
+local function assert_light(force)
+  local l = light()
+  if not l then return end
+  if force or l.shadows ~= L.shadows or math.abs((l.shadowDistance or 0) - L.dist) > 0.5 then
+    l.shadows = L.shadows
+    l.shadowDistance = L.dist
+  end
+  if L.steps and l.fogSteps ~= L.steps then l.fogSteps = L.steps end
+  if L.contact ~= nil and (force or l.contactShadows ~= L.contact) then l.contactShadows = L.contact end
+  if L.refl ~= nil and (force or l.reflections ~= L.refl) then l.reflections = L.refl end
+end
+
+-- ── the game's own dials: other scripts' published values ────────────────────
+-- A field is written only while it still holds its own default or what this
+-- script last wrote there, so a probe or a scene that set it is left alone.
+-- Each value is the option scaled from the script's own default by the
+-- option's Medium (a reach of 1.0 at Medium leaves the default exactly).
+local wrote = {}           -- "kind.field" → { node id, value written, base }
+local function own(h, kind, tbl, field, value)
+  if value == nil or not tbl then return end
+  local k = kind .. "." .. field
+  local w = wrote[k]
+  local id = h.node and h.node.id
+  if not w or w.id ~= id then w = { id = id, base = tbl[field], val = tbl[field] }; wrote[k] = w end
+  local cur = tbl[field]
+  if cur ~= w.val and cur ~= w.base then return end       -- someone else's now
+  if cur ~= value then tbl[field] = value end
+  w.val = value
+end
+local function scaled(key, base)
+  local v, m = tonumber(opt(key)), tonumber(opt_medium(key))
+  if not (v and m and m ~= 0 and type(base) == "number") then return nil end
+  return base * v / m
+end
+local refs_w = {}
+local function sref(kind)
+  local r = refs_w[kind]
+  if r and r.valid ~= false then return r end
+  if r == false and time - (refs_w[kind .. "_t"] or 0) < 3 then return nil end
+  r = findScript and findScript(kind, { quiet = true }) or nil
+  refs_w[kind], refs_w[kind .. "_t"] = r or false, time
+  return r
+end
+local decals_set, budget_set, aa_set = nil, nil, nil
+local function apply_world()
+  local ff = sref("flora_field")
+  if ff then
+    local pr = ff.params
+    local w = wrote["flora_field.reach"]
+    own(ff, "flora_field", pr, "reach", scaled("foliage_distance", w and w.base or (pr and pr.reach)))
+    w = wrote["flora_field.max_props"]
+    own(ff, "flora_field", pr, "max_props", scaled("foliage_amount", w and w.base or (pr and pr.max_props)))
+  end
+  local mf = sref("mineral_field")
+  if mf then
+    local pr = mf.params
+    local w = wrote["mineral_field.reach"]
+    own(mf, "mineral_field", pr, "reach", scaled("rock_distance", w and w.base or (pr and pr.reach)))
+  end
+  local vf = sref("vehicle_fx")
+  if vf and vf.params then own(vf, "vehicle_fx", vf.params, "tier", opt("effects")) end
+  local cs = sref("crew_strip")
+  if cs then
+    local v = tonumber(opt("portrait_rate"))
+    if v and cs.RT_BUDGET ~= v then cs.RT_BUDGET = v end
+  end
+  local dm = tonumber(opt("decals"))
+  if dm and dm ~= decals_set and decals and decals.setMax then
+    if pcall(decals.setMax, math.floor(dm)) then decals_set = dm end
+  end
+  local tm = tonumber(opt("terrain_memory"))
+  if tm and tm ~= budget_set and terrain and terrain.setBudget then
+    if pcall(terrain.setBudget, tm > 0 and tm * 1048576 or nil) then budget_set = tm end
+  end
+  local aa = opt("antialias")
+  if aa and aa ~= aa_set and app.setAntialias then
+    if not (app.antialias and app.antialias() == aa) then pcall(app.setAntialias, aa) end
+    aa_set = aa
+  end
 end
 
 local function apply(name)
   local p = PRESETS[name] or PRESETS[DEFAULT]
   current = PRESETS[name] and name or DEFAULT
-  volumetric, shafts = p.volumetric, p.shafts
-  flare, dof = p.flare == true, p.dof ~= nil
+  volumetric, shafts = opt("volumetric") == true, opt("shafts") == true
+  flare, dof = opt("flare") == true, opt("dof") == true
   post_level = nil
   local sc = scale_of(p)
-  if app.setRenderScale then app.setRenderScale(sc) end
+  if app.setRenderScale and math.abs((app.renderScale and app.renderScale() or -1) - sc) > 1e-3 then
+    app.setRenderScale(sc)
+  end
   -- The upscale from a lowered scale sharpens edges (0.102); a bigger stretch
   -- wants a harder hand, and at 1.0 there is nothing to sharpen.
   if app.setRenderSharpness then app.setRenderSharpness(sharpen_of(p, sc)) end
   if dynamic then apply_dynamic(p) end
-  local l = light()
-  if l then
-    l.shadows = p.shadows
-    l.shadowDistance = p.shadowDistance * shadowScale
-    if p.fogSteps then l.fogSteps = p.fogSteps end
-  end
+  decide_light()
+  assert_light(true)
+  aa_set = nil
+  apply_world()
 end
 
 -- The world under the camera: its radius sets `shadowScale` (see the header).
 -- Once a second; nil-safe off every world.
 local function world_scale()
-  if time - scale_t < 1.0 then return end
+  if time - scale_t < 1.0 then return false end
   scale_t = time
   if not (cam_node and cam_node.valid) then cam_node = find and find("Camera 1") or nil end
   local k = 1.0
@@ -387,9 +547,18 @@ local function world_scale()
     end
   end
   shadowScale = k
+  return true
 end
 
 function level() return current or DEFAULT end
+function wasLowered() return lowered end
+
+-- The tier rain_fx draws (the Rain and snow row; Ultra draws High's).
+function levelFor(kind)
+  if kind == "rain" then return opt("weather_fx") or level() end
+  if kind == "effects" then return opt("effects") or level() end
+  return level()
+end
 
 -- Called by settings.lua when the player flips the switch (and at startup).
 function setDynamic(on)
@@ -403,55 +572,61 @@ function describe(name) return (PRESETS[name] or PRESETS[DEFAULT]).text end
 
 function scaleOf(name) return scale_of(PRESETS[name or level()] or PRESETS[DEFAULT]) end
 
--- Called by settings.lua (the Render scale row): a number 0.25–1, or nil for
--- the level's own. Applied at once; settings.lua keeps it in the store.
-function setScale(v)
-  v = tonumber(v)
-  if v then v = math.max(0.25, math.min(1.0, v)) end
-  if v == scale_pick then return end
-  scale_pick = v
-  apply(level())
-end
+-- Called by settings.lua (the Render scale row). The value itself is read
+-- through opt("render_scale"); this only applies it now.
+function setScale(v) apply(level()) end
 
+-- The level, applied and remembered (in settings.lua's store; the old
+-- settings slot only when there is no settings script).
 function set(name)
   if not PRESETS[name] then return false end
   apply(name)
-  with_settings(function() save.set("gfx_level", name); save.flush() end)
+  local st = settings_script()
+  if st and st.storeLevel then st.storeLevel(name)
+  else with_settings(function() save.set("gfx_level", name); save.flush() end) end
   slow_for = 0
   return true
 end
 
+local seen_version = nil
 function start(node)
-  local got = with_settings(function()
-    return { level = save.get("gfx_level", nil), dyn = save.get("opt_dynamic_res", false),
-             rscale = save.get("opt_render_scale", nil),
-             flare = save.get("opt_lens_flare", true), dof = save.get("opt_far_blur", true) }
-  end) or {}
-  look_on.flare = got.flare ~= false
-  look_on.dof = got.dof ~= false
-  local saved = got.level
-  dynamic = got.dyn == true
-  scale_pick = tonumber(got.rscale)
-  if scale_pick then scale_pick = math.max(0.25, math.min(1.0, scale_pick)) end
+  local st = settings_script()
+  local saved
+  if st and st.ensureLoaded then
+    st.ensureLoaded()
+    saved = st.storedLevel and st.storedLevel()
+    dynamic = st.get and st.get("dynamic_res") == true
+    seen_version = st.gfxVersion
+  else
+    local got = with_settings(function()
+      return { level = save.get("gfx_level", nil), dyn = save.get("opt_dynamic_res", false) }
+    end) or {}
+    saved = got.level
+    dynamic = got.dyn == true
+  end
   -- nothing saved: a first run, on Medium whatever the screen (see the header)
   apply(saved or DEFAULT)
 end
 
+local world_t = -100
 function update(node, dt)
+  -- An option or the level changed in settings.lua: apply it all now.
+  local st = settings_script()
+  if st and st.gfxVersion ~= seen_version then
+    seen_version = st.gfxVersion
+    apply(level())
+  end
   -- Scene nodes can be rebuilt under us (a scene load keeps this script only
   -- if it rides the swap), so the light is re-asserted rather than trusted.
-  world_scale()
-  local l = light()
+  if world_scale() then decide_light() end
+  assert_light(false)
   local p = PRESETS[level()]
-  local want = p.shadowDistance * shadowScale
-  if l and (math.abs((l.shadowDistance or 0) - want) > 0.5 or l.shadows ~= p.shadows) then
-    l.shadows = p.shadows
-    l.shadowDistance = want
-  end
-  if l and p.fogSteps and l.fogSteps ~= p.fogSteps then l.fogSteps = p.fogSteps end
-  apply_post(p)
+  -- the lens: when something changed (post_level is cleared then), or the
+  -- Post Processing node was rebuilt (post() clears it), and once a second
+  post()
+  if not post_level then apply_post(p) end
   apply_dof(p)
-
+  if time - world_t > 1.0 then world_t = time; post_level = nil; apply_world() end
 
   if not params.autoLower or lowered then return end
   ema = ema and (ema + (dt - ema) * math.min(1, dt * 2)) or dt

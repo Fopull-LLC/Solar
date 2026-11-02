@@ -1354,7 +1354,11 @@ end
 -- Which niches the home world has rare plants in, read from the save
 -- (flora_field writes `rare.<home>` once the world has been scanned). nil
 -- before the scan; an empty set on an airless home.
-local function home_niches()
+-- Held for one prog_tick: it asks for every milestone, and each ask was
+-- three save.get copies of whole tables (the roster, every rare plant, the
+-- world record) in one frame a second. (2026-11 perf.)
+local niches_hold, niches_set = false, nil
+local function home_niches_read()
   local home = progHome()
   if not home then return nil end
   local d = save.get("rare." .. home)
@@ -1364,6 +1368,13 @@ local function home_niches()
   local set = {}
   for _, p in ipairs(d.plants) do set[p.niche] = true end
   return set
+end
+local function home_niches()
+  if niches_hold then
+    if niches_hold == true then niches_set, niches_hold = home_niches_read(), "read" end
+    return niches_set
+  end
+  return home_niches_read()
 end
 
 -- The niche each `rare` goal of a milestone resolves to on this home world:
@@ -1562,7 +1573,14 @@ local function prog_grant(id, why)
   return true
 end
 
+local prog_tick_body
 local function prog_tick()
+  niches_hold = true
+  local ok, err = pcall(prog_tick_body)
+  niches_hold, niches_set = false, nil
+  if not ok then error(err, 0) end
+end
+prog_tick_body = function()
   net_poll()
   net_dirty = false
   local done, perm = prog_done(), prog_perm()

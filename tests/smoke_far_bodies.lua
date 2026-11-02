@@ -351,6 +351,9 @@ do
   local okc = C2 and math.abs(C2[3] - 0.3) < 0.005 and math.abs(C2[6] - 0.5) < 0.005
   check(okh and okc, "cache encode/decode round-trips heights and colours")
   check(fb.decode(s, "k2", 3) == nil, "a cache made for another genspec is refused")
+  -- cache files are written when the session ends (onDestroy, under the
+  -- loading screen), not on the frame they were built
+  if fb.onDestroy then fb.onDestroy() end
   local nfiles = 0
   for p in pairs(files) do if p:match("^user://farlod/slot5/") then nfiles = nfiles + 1 end end
   check(nfiles >= 3, "meshes are kept per save slot (" .. nfiles .. " files)")

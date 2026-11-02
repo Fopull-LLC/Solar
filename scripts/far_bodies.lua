@@ -473,9 +473,12 @@ local function cache_path(body, level)
   return string.format("user://farlod/%s/%s.L%d", slot, body, level)
 end
 
+local pending_w = {}     -- path → bytes not yet on disk (cache_write, below)
 local function cache_read(body, level, key, n, tick)
   if params.cache <= 0 or not (assets and assets.readBytes) then return nil end
-  local ok, s = pcall(assets.readBytes, cache_path(body, level))
+  local path = cache_path(body, level)
+  local ok, s = true, pending_w[path]
+  if not s then ok, s = pcall(assets.readBytes, path) end
   if not ok or type(s) ~= "string" then return nil end
   if data and data.inflate then
     local ok2, raw = pcall(data.inflate, s)
@@ -484,6 +487,14 @@ local function cache_read(body, level, key, n, tick)
   return decode(s, key, n, tick)
 end
 
+-- A built level is ENCODED here (time-sliced, inside the build job) but put
+-- on disk later: assets.writeBytes replaces the file whole, which means an
+-- fsync, and on a busy or spinning disk that is 70–920 ms on the frame
+-- (perfbench rocket, 2026-11: far_bodies:cache_write 918 ms at the reveal,
+-- 91 ms in the ascent). The files wait in `pending_w` and are written when
+-- the scene goes (onDestroy: a scene load, a launch, the menu, quitting —
+-- under the loading curtain); a read finds a waiting one first. A cache lost
+-- to a crash is only built again.
 local function cache_write(body, level, key, H, C, n, tick)
   if params.cache <= 0 or not (assets and assets.writeBytes) then return end
   local s = encode(key, H, C, n, tick)
@@ -491,7 +502,14 @@ local function cache_write(body, level, key, H, C, n, tick)
     local ok, z = pcall(data.deflate, s)
     if ok and type(z) == "string" then s = z end
   end
-  pcall(assets.writeBytes, cache_path(body, level), s)
+  pending_w[cache_path(body, level)] = s
+end
+local function cache_drain(all)
+  for path, s in pairs(pending_w) do
+    pcall(assets.writeBytes, path, s)
+    pending_w[path] = nil
+    if not all then return end
+  end
 end
 
 -- ── bodies ───────────────────────────────────────────────────────────────────
@@ -968,6 +986,7 @@ function lateUpdate(node, dt)
 end
 
 function onDestroy()
+  cache_drain(true)
   for _, e in pairs(B) do
     body_shown(e, true)
     for _, m in pairs(e.mesh) do

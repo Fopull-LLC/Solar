@@ -51,15 +51,153 @@ local PER_VOICE = { Music = true }
 
 local LEVELS = { "Low", "Medium", "High", "Ultra" }   -- graphics.lua's, for the menu
 
+-- ── THE GRAPHICS OPTIONS ────────────────────────────────────────────────────
+-- Every dial the Graphics tab offers, and what each quality level sets it to.
+-- A level is a bundle of these; a player's own choice on any row is an
+-- OVERRIDE (kept in the store as opt_gfx_<key>) and makes the screen say
+-- "Custom". Picking a level again clears the overrides. graphics.lua applies
+-- them (st.gfxValue(key, level)), live; this table is here and not there
+-- because the main menu has a settings screen and no graphics script.
+--
+-- `cost` is the rough price on an RTX 4060 at 1920×1080 (tools/perf/results:
+-- gpu_rc25.md, gfx_look.md, the 2026-11 sweep) so a player knows which rows
+-- buy frames: "free" < 0.3 ms, "low" < 1 ms, "medium" 1–4 ms, "high" more.
+-- Measured 2026-11-02 (tools/perf/gfxshot.sh, at the base, Ultra, 1920×1080,
+-- GPU ms each saves switched off): volumetric air 6.2, its quality 16→8 3.1,
+-- shadows 2.3, reflections 1.4, contact shadows 0.85, FXAA 0.8, bloom 0.5,
+-- flare 0.5, distance blur 0.4, shafts 0.4 (here; far more in open country),
+-- AO 0.0 (engine card: its strength does not skip the pass), render scale
+-- 75% 4.4 of 18.
+-- `live = false` rows take effect as the world around you is rebuilt (the
+-- flora and rocks of a patch are laid out when it is first made).
+GFX_GROUPS = {
+  { id = "res", label = "Resolution and smoothing" },
+  { id = "light", label = "Lighting and shadows" },
+  { id = "air", label = "Atmosphere and weather" },
+  { id = "lens", label = "Lens and post-processing" },
+  { id = "world", label = "World detail" },
+  { id = "ui", label = "Interface" },
+}
+local function onoff() return { { label = "On", value = true }, { label = "Off", value = false } } end
+GFX_OPTIONS = {
+  -- resolution
+  { key = "render_scale", group = "res", label = "Render scale", store = "render_scale", cost = "the strongest lever",
+    opts = { { label = "100%", value = 1.0 }, { label = "90%", value = 0.9 }, { label = "75%", value = 0.75 },
+             { label = "60%", value = 0.6 }, { label = "50%", value = 0.5 } },
+    preset = { Low = 0.6, Medium = 0.9, High = 1.0, Ultra = 1.0 },
+    desc = "The share of the screen the world is drawn at, then sharpened up; the interface stays sharp. "
+      .. "75% cuts the GPU's work by about a third, 60% by half." },
+  { key = "sharpen", group = "res", label = "Upscale sharpening", cost = "free",
+    opts = { { label = "Auto", value = "auto" }, { label = "Off", value = 0.0 }, { label = "Soft", value = 0.25 },
+             { label = "Firm", value = 0.5 }, { label = "Strong", value = 0.75 } },
+    preset = { Low = "auto", Medium = "auto", High = "auto", Ultra = "auto" },
+    desc = "How hard a lowered render scale is sharpened. Auto: harder the lower the scale, none at 100%." },
+  { key = "antialias", group = "res", label = "Anti-aliasing", cost = "low (0.3–0.8 ms)",
+    opts = { { label = "FXAA", value = "Fxaa" }, { label = "Off", value = "Off" } },
+    preset = { Low = "Fxaa", Medium = "Fxaa", High = "Fxaa", Ultra = "Fxaa" },
+    desc = "Smooths stair-stepped edges with one pass over the picture (a touch softer fine texture)." },
+  -- lighting
+  { key = "shadows", group = "light", label = "Sun shadows", cost = "medium (1–2.5 ms)", opts = onoff(),
+    preset = { Low = true, Medium = true, High = true, Ultra = true },
+    desc = "Shadows from the sun on the ground, the crew and every craft." },
+  { key = "shadow_distance", group = "light", label = "Shadow distance", cost = "low",
+    opts = { { label = "70 m", value = 70 }, { label = "140 m", value = 140 }, { label = "220 m", value = 220 },
+             { label = "400 m", value = 400 }, { label = "600 m", value = 600 } },
+    preset = { Low = 70, Medium = 140, High = 220, Ultra = 400 },
+    desc = "How far out things cast shadows (stretched on big worlds). Longer reach is softer up close." },
+  { key = "contact_shadows", group = "light", label = "Contact shadows", cost = "low (0.4–0.9 ms)", opts = onoff(),
+    preset = { Low = false, Medium = false, High = false, Ultra = true },
+    desc = "The thin dark line where things touch the ground: feet, wheels, a crate on a deck." },
+  { key = "reflections", group = "light", label = "Screen reflections", cost = "medium (1.4 ms)", opts = onoff(),
+    preset = { Low = false, Medium = false, High = false, Ultra = true },
+    desc = "Shiny floors and hulls reflect what stands on them, not only the sky." },
+  { key = "ao", group = "light", label = "Ambient occlusion", cost = "none saved yet",
+    opts = { { label = "Full", value = 1.0 }, { label = "Light", value = 0.5 }, { label = "Off", value = 0.0 } },
+    preset = { Low = 0.5, Medium = 1.0, High = 1.0, Ultra = 1.0 },
+    desc = "Soft shade in corners and under overhangs. (Off hides it; the pass itself still runs on this engine build.)" },
+  -- atmosphere
+  { key = "volumetric", group = "air", label = "Volumetric air", cost = "high (6–20 ms)", opts = onoff(),
+    preset = { Low = false, Medium = false, High = true, Ultra = true },
+    desc = "Real fog in the air: valleys fill with mist and hills stand out of it. Off draws the same haze as distance fog." },
+  { key = "fog_quality", group = "air", label = "Volumetric quality", cost = "medium (3–10 ms)",
+    opts = { { label = "Low", value = 8 }, { label = "Medium", value = 12 }, { label = "High", value = 16 },
+             { label = "Max", value = 24 } },
+    preset = { Low = 8, Medium = 12, High = 12, Ultra = 16 },
+    desc = "Samples along each ray of volumetric air. Lower is cheaper and thins thick mist a little." },
+  { key = "shafts", group = "air", label = "Sun shafts", cost = "low to high", opts = onoff(),
+    preset = { Low = false, Medium = false, High = false, Ultra = true },
+    desc = "Beams of sunlight through the volumetric air, behind ridges and buildings." },
+  { key = "weather_fx", group = "air", label = "Rain and snow", cost = "low to medium",
+    opts = { { label = "Low", value = "Low" }, { label = "Medium", value = "Medium" }, { label = "High", value = "High" } },
+    preset = { Low = "Low", Medium = "Medium", High = "High", Ultra = "High" },
+    desc = "Falling rain and snow on the screen and its streaks; Low keeps only the wet look." },
+  -- lens
+  { key = "bloom", group = "lens", label = "Bloom", cost = "low (0.5 ms)", opts = onoff(),
+    preset = { Low = true, Medium = true, High = true, Ultra = true },
+    desc = "Lights, exhaust and the star glow; daylight does not." },
+  { key = "flare", group = "lens", label = "Sun lens flare", store = "lens_flare", cost = "low (0.5 ms)", opts = onoff(),
+    preset = { Low = false, Medium = true, High = true, Ultra = true },
+    desc = "Glare, rays and ghosts from the sun when it is in view (stronger in space)." },
+  { key = "dof", group = "lens", label = "Distance blur", store = "far_blur", cost = "low (0.4 ms)", opts = onoff(),
+    preset = { Low = false, Medium = true, High = true, Ultra = true },
+    desc = "Softens the far ground so its texture does not crawl. Nothing near you is blurred." },
+  { key = "motion_blur", group = "lens", label = "Motion blur", cost = "low",
+    opts = { { label = "Off", value = 0.0 }, { label = "Light", value = 0.3 }, { label = "Strong", value = 0.6 } },
+    preset = { Low = 0.0, Medium = 0.0, High = 0.0, Ultra = 0.0 },
+    desc = "Smears fast movement across the frame, the way a camera's shutter does." },
+  -- world
+  { key = "foliage_distance", group = "world", label = "Plant distance", cost = "medium", live = false,
+    opts = { { label = "Near", value = 0.65 }, { label = "Medium", value = 1.0 }, { label = "Far", value = 1.2 },
+             { label = "Very far", value = 1.4 } },
+    preset = { Low = 0.65, Medium = 1.0, High = 1.0, Ultra = 1.2 },
+    desc = "How far out grass, bushes and trees are drawn. Applies as you move to new ground." },
+  { key = "foliage_amount", group = "world", label = "Plant budget", cost = "low to medium", live = false,
+    opts = { { label = "3,000", value = 3000 }, { label = "6,000", value = 6000 }, { label = "9,000", value = 9000 },
+             { label = "14,000", value = 14000 } },
+    preset = { Low = 3000, Medium = 6000, High = 6000, Ultra = 9000 },
+    desc = "The most plants drawn at once. A lush world fills it; a sparse one never reaches it." },
+  { key = "rock_distance", group = "world", label = "Rock distance", cost = "low", live = false,
+    opts = { { label = "Near", value = 0.55 }, { label = "Medium", value = 0.8 }, { label = "Far", value = 1.0 },
+             { label = "Very far", value = 1.25 } },
+    preset = { Low = 0.55, Medium = 0.8, High = 0.8, Ultra = 1.0 },
+    desc = "How far out gravel, stones and boulders are drawn. Applies as you move to new ground." },
+  { key = "effects", group = "world", label = "Vehicle effects", cost = "low to medium",
+    opts = { { label = "Low", value = "Low" }, { label = "Medium", value = "Medium" }, { label = "High", value = "High" },
+             { label = "Ultra", value = "Ultra" } },
+    preset = { Low = "Low", Medium = "Medium", High = "High", Ultra = "Ultra" },
+    desc = "Dust, smoke, sparks, contrails and heat shimmer, and how many tyre marks stay on the ground." },
+  { key = "decals", group = "world", label = "Ground marks", cost = "low",
+    opts = { { label = "512", value = 512 }, { label = "1,024", value = 1024 }, { label = "2,048", value = 2048 },
+             { label = "4,096", value = 4096 } },
+    preset = { Low = 512, Medium = 1024, High = 1024, Ultra = 2048 },
+    desc = "Marks kept on the ground (tracks, scorch, digging); past this the oldest fades." },
+  { key = "terrain_memory", group = "world", label = "Terrain memory", cost = "memory",
+    opts = { { label = "No limit", value = 0 }, { label = "3 GB", value = 3072 }, { label = "1.5 GB", value = 1536 },
+             { label = "768 MB", value = 768 } },
+    preset = { Low = 0, Medium = 0, High = 0, Ultra = 0 },
+    desc = "On a machine short of memory: past this the far ground keeps less detail. What you can touch is always full." },
+  -- interface
+  { key = "portrait_rate", group = "ui", label = "Crew portraits", cost = "low (0.1 ms)",
+    opts = { { label = "4 / s", value = 4 }, { label = "8 / s", value = 8 }, { label = "12 / s", value = 12 },
+             { label = "20 / s", value = 20 } },
+    preset = { Low = 4, Medium = 12, High = 12, Ultra = 20 },
+    desc = "How many times a second the crew strip's live faces are redrawn, shared by every portrait." },
+}
+GFX_BY_KEY = {}
+local function gfx_store(o) return o.store or ("gfx_" .. o.key) end
+GFX_BY_STORE = {}
+for _, o in ipairs(GFX_OPTIONS) do GFX_BY_KEY[o.key] = o; GFX_BY_STORE[gfx_store(o)] = o end
+-- Bumped whenever an option or the level changes (graphics.lua watches it).
+gfxVersion = 0
+gfxScrollTo = nil   -- probes: scroll the Graphics tab's list there on its next draw
+
 -- key → default. A nil default means "leave the engine's own value alone until
 -- the player has chosen one" (fullscreen, the accessibility options — the
 -- editor's ♿ panel drives those too, and must not be stamped over).
 local DEFAULTS = {
   vol_Master = 1.0, vol_Music = 0.8, vol_SFX = 1.0, vol_Ambient = 1.0, vol_UI = 1.0,
   vsync = "On",
-  frame_cap = "off",          -- "off" | "refresh" | "half"
-  lens_flare = true,          -- the sun flare (graphics.lua; levels that draw one)
-  far_blur = true,            -- the far-field depth of field (graphics.lua; High and up)
+  frame_cap = "off",          -- "off" | "refresh" | "half" | a number of frames a second
   dynamic_res = false,
   fov = 66,                   -- vertical degrees (the scene camera's 1.152 rad)
   look = 1.0,                 -- mouse sensitivity multiplier
@@ -67,10 +205,11 @@ local DEFAULTS = {
 }
 -- …and the ones whose default is "leave it alone" (a nil can't sit in a table).
 local OPTIONAL = { "fullscreen", "display", "text_scale", "captions", "reduced_motion", "color_filter",
-                   "bindings", "ui_scale", "render_scale" }
+                   "bindings", "ui_scale" }
 local KEYS = {}
 for k in pairs(DEFAULTS) do KEYS[#KEYS + 1] = k end
 for _, k in ipairs(OPTIONAL) do KEYS[#KEYS + 1] = k end
+for _, o in ipairs(GFX_OPTIONS) do KEYS[#KEYS + 1] = gfx_store(o) end
 
 -- Published for planet_camera (read every frame, so they are plain values).
 lookScale = 1.0
@@ -156,7 +295,19 @@ local function with_settings(fn)
   return r
 end
 
-local function load_all()
+-- THE STORE IS A FILE (user://settings.json) since the 2026-11 perf pass.
+-- It was the "settings" save slot, and reaching it from a scene with a game
+-- loaded meant two save.slot switches: each waits for the slot it leaves to
+-- reach the disk (an fsync of a megabyte save) and drops it, so the game's
+-- slot is read back whole on the next save.get. Two scripts did that on every
+-- scene load and every launch: 70–220 ms frames (tools/perf/results,
+-- perf_2026-11.md). The file is small and read once per scene. The slot is
+-- read once more, to carry an older install's choices over, and never again.
+STORE = "user://settings.json"
+local loaded = false
+local function file_api() return assets and assets.readJson and assets.writeJson end
+
+local function from_slot()
   with_settings(function()
     for _, k in ipairs(KEYS) do
       local v = save.get("opt_" .. k, nil)
@@ -166,10 +317,103 @@ local function load_all()
   end)
 end
 
+local function load_all()
+  loaded = true
+  if file_api() then
+    local ok, t = pcall(assets.readJson, STORE)
+    if ok and type(t) == "table" then
+      for _, k in ipairs(KEYS) do
+        local v = t["opt_" .. k]
+        if v ~= nil then values[k] = v end
+      end
+      values.gfx_level = t.gfx_level
+    else
+      -- the first run on this store: an older install's slot, carried over
+      from_slot()
+      for _, k in ipairs(KEYS) do if values[k] ~= nil then pending[k] = true end end
+      pending.gfx_level = true
+      pending_at = clock - 10
+    end
+  else
+    from_slot()
+  end
+  -- Before the Graphics tab the flare and the blur were plain switches that
+  -- defaulted On, and a saved On was only that default: it is the level's now.
+  if values.lens_flare == true then values.lens_flare = nil end
+  if values.far_blur == true then values.far_blur = nil end
+  gfxVersion = gfxVersion + 1
+end
+
+-- Read the store now if this scene's start has not yet (graphics.lua asks
+-- from its own start, which may run first).
+function ensureLoaded() if not loaded then load_all() end end
+function storedLevel() return values.gfx_level end
+-- graphics.lua's level choice, kept with everything else.
+function storeLevel(name)
+  values.gfx_level = name
+  pending.gfx_level = true
+  pending_at = clock
+end
+
+-- ── the graphics options: the level's value, or the player's own ────────────
+-- The level in force: graphics.lua's (it may have stepped down for this
+-- session), else the saved one (the menus have no graphics script).
+local function gfx_level_now()
+  local gx = ref("graphics")
+  return (gx and gx.level and gx.level()) or values.gfx_level or "Medium"
+end
+
+-- An option's value at a level (false is a value: never `or` it away).
+local function preset_of(o, lv)
+  local v = o.preset[lv]
+  if v == nil then v = o.preset.Medium end
+  return v
+end
+
+-- The player's own value for option `key`, or nil (the level's).
+function gfxOverride(key)
+  local o = GFX_BY_KEY[key]
+  if not o then return nil end
+  return values[gfx_store(o)]
+end
+
+-- What option `key` is at quality `level` (default: the saved level), with the
+-- player's override on top. graphics.lua asks this for every dial it sets.
+function gfxValue(key, level)
+  local o = GFX_BY_KEY[key]
+  if not o then return nil end
+  local v = values[gfx_store(o)]
+  if v ~= nil then return v end
+  return preset_of(o, level or gfx_level_now())
+end
+
+-- Has the player changed any option from the level's own? ("Custom")
+function gfxCustom()
+  for _, o in ipairs(GFX_OPTIONS) do if values[gfx_store(o)] ~= nil then return true end end
+  return false
+end
+
+-- Every option back to the level's own.
+function gfxReset()
+  for _, o in ipairs(GFX_OPTIONS) do
+    local k = gfx_store(o)
+    if values[k] ~= nil then values[k] = nil; pending[k] = true; pending_at = clock end
+  end
+  gfxVersion = gfxVersion + 1
+end
+
 function flush()
   if not next(pending) then return end
   local keys = pending
   pending, pending_at = {}, nil
+  if file_api() then
+    -- the whole store, every time: it is a few hundred bytes
+    local t = { gfx_level = values.gfx_level }
+    for _, k in ipairs(KEYS) do if values[k] ~= nil then t["opt_" .. k] = values[k] end end
+    local ok, err = pcall(assets.writeJson, STORE, t)
+    if not ok then print("settings: " .. tostring(err)) end
+    return
+  end
   with_settings(function()
     for k in pairs(keys) do
       if k == "gfx_level" then save.set("gfx_level", values[k])
@@ -245,7 +489,8 @@ local function apply_cap()
   local hz = refresh_hz() or 60
   local cap = 0
   if mode == "refresh" then cap = math.floor(hz + 0.5)
-  elseif mode == "half" then cap = math.floor(hz / 2 + 0.5) end
+  elseif mode == "half" then cap = math.floor(hz / 2 + 0.5)
+  elseif type(mode) == "number" then cap = math.floor(mode + 0.5) end
   if cap ~= 0 then cap = math.max(10, math.min(1000, cap)) end
   pcall(app.setFrameCap, cap)
 end
@@ -298,14 +543,6 @@ local APPLY = {
     if gx and gx.setDynamic then gx.setDynamic(dynamicRes) end
   end,
   fov = apply_fov,
-  lens_flare = function()
-    local gx = ref("graphics")
-    if gx and gx.setLook then gx.setLook("flare", get("lens_flare") ~= false) end
-  end,
-  far_blur = function()
-    local gx = ref("graphics")
-    if gx and gx.setLook then gx.setLook("dof", get("far_blur") ~= false) end
-  end,
   look = function() lookScale = get("look") end,
   invert_y = function() invertY = get("invert_y") == true end,
   fullscreen = function()
@@ -343,6 +580,7 @@ local APPLY = {
   -- The render scale, over the graphics level's own (nil = the level's).
   -- graphics.lua owns the scale; it also reads this at its own start.
   render_scale = function()
+    gfxVersion = gfxVersion + 1
     local gx = ref("graphics")
     if gx and gx.setScale then gx.setScale(get("render_scale")) end
   end,
@@ -373,14 +611,27 @@ local APPLY = {
   end,
 }
 for _, b in ipairs(BUSES) do APPLY["vol_" .. b] = function() apply_bus(b) end end
+-- A graphics option: graphics.lua sees the version move and applies it.
+for _, o in ipairs(GFX_OPTIONS) do
+  local k = gfx_store(o)
+  if not APPLY[k] then APPLY[k] = function() gfxVersion = gfxVersion + 1 end end
+end
 
 function set(k, v)
   if k == "gfx_level" then
+    -- A level sets every option: the player's own changes go with it.
+    gfxReset()
     local gx = ref("graphics")
     if gx and gx.set then gx.set(v)          -- graphics.lua applies and saves it
     else values.gfx_level = v; pending.gfx_level = true; pending_at = clock end
+    values.gfx_level = v
+    gfxVersion = gfxVersion + 1
     return
   end
+  -- An option set to exactly what the level gives is no override: it does
+  -- not make the screen "Custom".
+  local o = GFX_BY_STORE[k]
+  if o and v ~= nil and v == preset_of(o, gfx_level_now()) then v = nil end
   if DEFAULTS[k] == nil and APPLY[k] == nil then return end
   values[k] = v
   if APPLY[k] then APPLY[k]() end
@@ -578,19 +829,6 @@ local function mode_rows(out)
   end
 end
 
--- The render scale: the fraction of the screen the 3D world is drawn at,
--- upscaled and sharpened; the interface stays sharp. Auto is the graphics
--- level's own (Low 60%, Medium 90%, High and Ultra 100%).
-RENDER_SCALES = { 1.0, 0.85, 0.75, 0.67, 0.5 }
-local function render_scale_rows(out)
-  local cur = get("render_scale")
-  local opts = { { label = "Auto", value = "auto" } }
-  for _, v in ipairs(RENDER_SCALES) do opts[#opts + 1] = { label = pct(v), value = v } end
-  out[#out + 1] = choice("rsc", "Render scale", opts, type(cur) == "number" and cur or "auto", function(v)
-    set("render_scale", type(v) == "number" and v or nil)
-  end)
-end
-
 -- Interface size: a fader from 70% to 125% and an Auto key.
 function ui_scale_rows(out)
   local chosen = get("ui_scale")
@@ -609,40 +847,90 @@ function ui_scale_rows(out)
 end
 
 local function display_rows(out)
-  local gx = ref("graphics")
-  local cur = (gx and gx.level and gx.level()) or values.gfx_level or "Medium"
-  local opts = {}
-  for _, n in ipairs((gx and gx.LEVELS) or LEVELS) do opts[#opts + 1] = { label = n, value = n } end
   ui_scale_rows(out)
-  out[#out + 1] = choice("gfx", "Graphics quality", opts, cur, function(v) set("gfx_level", v) end)
-  if gx and gx.describe then out[#out + 1] = hint("gfxd", gx.describe(cur)) end
-  out[#out + 1] = on_off("flare", "Sun lens flare", get("lens_flare") ~= false,
-    function(v) set("lens_flare", v) end)
-  out[#out + 1] = on_off("fblur", "Distance blur", get("far_blur") ~= false,
-    function(v) set("far_blur", v) end)
-  out[#out + 1] = hint("lookh", "From Medium up: the sun throws a lens flare (stronger in space), and "
-    .. "the far ground is softened a touch so its texture does not crawl. Nothing near you is blurred.")
-
   local fs = app and app.fullscreen and app.fullscreen()
   out[#out + 1] = choice("fs", "Window", { { label = "Fullscreen", value = true },
     { label = "Windowed", value = false } }, fs == true, function(v) set("fullscreen", v) end)
   mode_rows(out)
-  render_scale_rows(out)
   out[#out + 1] = choice("vs", "Vsync", { { label = "On", value = "On" },
     { label = "Adaptive", value = "Adaptive" }, { label = "Off", value = "Off" } },
     (app and app.vsync and app.vsync()) or get("vsync"), function(v) set("vsync", v) end)
   local hz = refresh_hz()
   out[#out + 1] = choice("cap", "Frame cap", {
     { label = "Off", value = "off" },
-    { label = hz and string.format("%d fps", math.floor(hz + 0.5)) or "Display", value = "refresh" },
-    { label = hz and string.format("%d fps", math.floor(hz / 2 + 0.5)) or "Half", value = "half" },
+    { label = "30", value = 30 },
+    { label = "60", value = 60 },
+    { label = hz and string.format("%d", math.floor(hz / 2 + 0.5)) or "Half", value = "half" },
+    { label = hz and string.format("%d", math.floor(hz + 0.5)) or "Display", value = "refresh" },
   }, get("frame_cap"), function(v) set("frame_cap", v) end)
-  out[#out + 1] = on_off("dyn", "Dynamic resolution", get("dynamic_res"),
-    function(v) set("dynamic_res", v) end)
-  out[#out + 1] = hint("dh", "Dynamic resolution lowers the render scale on its own when a frame "
-    .. "runs long, up to the render scale. Full screen switches the monitor to the "
-    .. "resolution; windowed, the window takes that size. F11 or Alt+Enter also switch "
-    .. "fullscreen, and the editor's own window ignores all of it.")
+  out[#out + 1] = hint("dh", "A frame cap the game can always make reads smoother than a higher rate it keeps "
+    .. "missing; half the display's rate lands every frame on a refresh. Full screen switches the monitor "
+    .. "to the resolution; windowed, the window takes that size. F11 or Alt+Enter also switch "
+    .. "fullscreen, and the editor's own window ignores all of it. Render scale and the rest of the "
+    .. "picture are on the Graphics tab.")
+end
+
+-- ── the Graphics tab ────────────────────────────────────────────────────────
+-- The quality level, then every option grouped, each with what it does and a
+-- rough cost, in a scroll view (there are two dozen of them).
+local COST_W = 104
+local function gfx_row(o, lv)
+  local cur = gfxValue(o.key, lv)
+  local over = gfxOverride(o.key) ~= nil
+  local row = choice("g_" .. o.key, o.label .. (over and " •" or ""), o.opts, cur, function(v)
+    set(gfx_store(o), v)
+  end)
+  row.items[#row.items + 1] = { "text", key = "cost", style = "panel/hint", w = COST_W, h = "fit",
+    textAlign = "end", text = o.cost or "" }
+  return row
+end
+
+local function graphics_rows(out)
+  local gx = ref("graphics")
+  local cur = gfx_level_now()
+  local custom = gfxCustom()
+  local btns = {}
+  for i, n in ipairs((gx and gx.LEVELS) or LEVELS) do
+    btns[#btns + 1] = { "button", key = "o" .. i, style = "panel/choice", w = "grow", h = 30,
+      textAlign = "center", selected = (n == cur and not custom), text = n,
+      onClicked = function()
+        local fx = ref("sfx"); if fx then fx.play("click") end
+        set("gfx_level", n)
+      end }
+  end
+  btns[#btns + 1] = { "button", key = "custom", style = "panel/choice", w = 76, h = 30, textAlign = "center",
+    selected = custom, disabled = not custom, text = "Custom" }
+  out[#out + 1] = line("gfx", { label("Quality preset"),
+    { "row", key = "c", w = "grow", h = "fit", gap = 6, pad = 0, items = btns, function(x) return x end } })
+  local desc = gx and gx.describe and gx.describe(cur) or nil
+  out[#out + 1] = hint("gfxd", (custom and string.format("Custom: %s with your changes (marked •). Pick a "
+      .. "preset to set every option again.", cur) or (desc or "")) .. (gx and gx.wasLowered and gx.wasLowered()
+      and " Lowered for this session to keep the game smooth." or ""))
+  -- the options, grouped, in a scroll view
+  local body = {}
+  local sc = { "scroll", key = "gfxS", w = "100%", h = "fit", maxH = math.max(200, designHeight() - 330),
+    dir = "col", gap = 7, pad = 0, align = "start", scrollFade = 16, items = body, function(x) return x end }
+  -- a probe's picture of a part further down: said once, then the player's again
+  if gfxScrollTo then sc.scrollY = gfxScrollTo; gfxScrollTo = nil end
+  out[#out + 1] = sc
+  local lv = cur
+  for _, g in ipairs(GFX_GROUPS) do
+    body[#body + 1] = { "text", key = "h_" .. g.id, style = "panel/label", w = "100%", h = "fit", text = g.label }
+    for _, o in ipairs(GFX_OPTIONS) do
+      if o.group == g.id then
+        body[#body + 1] = gfx_row(o, lv)
+        body[#body + 1] = hint("d_" .. o.key, o.desc)
+      end
+    end
+    if g.id == "res" then
+      body[#body + 1] = on_off("dyn", "Dynamic resolution", get("dynamic_res"),
+        function(v) set("dynamic_res", v) end)
+      body[#body + 1] = hint("dynh", "Lowers the render scale on its own while a frame runs long, never above "
+        .. "the render scale, and raises it again when there is room.")
+    end
+  end
+  body[#body + 1] = hint("gfxn", "Not here yet (the engine has no switch for them): texture quality, view "
+    .. "distance and terrain detail, shadow map resolution, MSAA.")
 end
 
 local function camera_rows(out)
@@ -842,6 +1130,7 @@ end
 
 local TABS = {
   { id = "display", label = "Display", build = display_rows },
+  { id = "graphics", label = "Graphics", build = graphics_rows },
   { id = "camera", label = "Camera", build = camera_rows },
   { id = "controls", label = "Controls", build = controls_rows, engine = "controls" },
   { id = "audio", label = "Audio", build = audio_rows },
@@ -886,8 +1175,7 @@ end
 -- ── driver ──────────────────────────────────────────────────────────────────
 
 function start(node)
-  values, pending, pending_at = {}, {}, nil
-  load_all()
+  if not loaded then values, pending, pending_at = {}, {}, nil; load_all() end
   applyAll(buses_held())
   apply_ui_scale()
 end

@@ -86,7 +86,7 @@ RON
   rm -f $PJ/save/slot13.ron; rm -rf $PJ/saves/slot13
   # a fresh save is a fresh player: no settings slot left over from a USERSAVE run
   # (graphics.lua would read its level instead of picking the screen's default)
-  [ -n "${USERSAVE:-}" ] || rm -f $PJ/save/settings.ron
+  [ -n "${USERSAVE:-}" ] || rm -f $PJ/save/settings.ron $PJ/save/user/settings.json
   if [ -n "${USERSAVE:-}" ]; then
     # a fresh copy for every mode: the probe plays on it (launches, digs) and must not carry that over
     rm -f $PJ/save/slot1.ron; rm -rf $PJ/saves/slot1

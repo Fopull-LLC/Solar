@@ -229,7 +229,7 @@ local function walk(t, fn)
     if type(build) == "function" then walk(build(item), fn) else walk(item, fn) end
   end
 end
-for _, tab in ipairs({ "display", "camera", "controls", "audio", "access" }) do
+for _, tab in ipairs({ "display", "graphics", "camera", "controls", "audio", "access" }) do
   st2.showTab(tab)
   local rows = st2.rows(580)
   local n, sliders, unkeyed = 0, 0, 0
@@ -354,7 +354,6 @@ stw.start({})
 stw.showTab("display")
 app_state.fullscreen = true
 ok(find_el(stw.rows(580), "resw") ~= nil, "full screen with one mode: a line saying why, and what to do instead")
-ok(find_el(stw.rows(580), "rsc") ~= nil, "...and a Render scale row")
 app_state.fullscreen = false
 local function resw_text() local v = find_el(stw.rows(580), "res"); local t; walk(v, function(e) if e.key == "v" then t = e.text end end); return t end
 ok(find_el(stw.rows(580), "resw") == nil and resw_text():find("1920 × 1080") and resw_text():find("window"),
@@ -377,16 +376,28 @@ ok(#modes_set == 0, "a window size is not forced on a full screen")
 stw.set("fullscreen", false)
 ok(#modes_set == 1 and modes_set[1].width == 1600 and modes_set[1].fullscreen == false,
   "back to Windowed: the chosen window size, not the monitor's")
--- RENDER SCALE: reaches graphics.lua, and Auto hands it back to the level
+-- RENDER SCALE (the Graphics tab): reaches graphics.lua, and the level's own
+-- value (or a preset) hands it back to the level
 local gx_scale = "unset"
 envs.graphics.setScale = function(v) gx_scale = v end
-local rsc = find_el(stw.rows(580), "rsc")
+stw.showTab("graphics")
+local rsc = find_el(stw.rows(580), "g_render_scale")
 local b67
-walk(rsc, function(e) if e.text == "67%" then b67 = e end end)
+walk(rsc, function(e) if e.text == "75%" then b67 = e end end)
 b67.onClicked()
-ok(gx_scale == 0.67 and stw.get("render_scale") == 0.67, "Render scale 67% reaches graphics.setScale")
-walk(find_el(stw.rows(580), "rsc"), function(e) if e.text == "Auto" then e.onClicked() end end)
-ok(gx_scale == nil and stw.get("render_scale") == nil, "Auto gives the scale back to the graphics level")
+ok(gx_scale == 0.75 and stw.get("render_scale") == 0.75, "Render scale 75% reaches graphics.setScale")
+ok(stw.gfxCustom() == true, "...and makes the preset read Custom")
+walk(find_el(stw.rows(580), "g_render_scale"), function(e) if e.text == "100%" then e.onClicked() end end)
+ok(gx_scale == nil and stw.get("render_scale") == nil, "the level's own scale (High: 100%) gives it back to the level")
+ok(stw.gfxCustom() == false, "...and the preset is no longer Custom")
+stw.set("gfx_contact_shadows", true)
+ok(stw.gfxValue("contact_shadows", "High") == true and stw.gfxCustom(), "an option over the level is an override")
+local v0 = stw.gfxVersion
+stw.set("gfx_level", "Low")
+ok(stw.gfxCustom() == false and stw.gfxValue("contact_shadows", "Low") == false and stw.gfxVersion > v0,
+  "picking a preset clears every override and tells graphics.lua")
+ok(find_el(stw.rows(580), "gfxS") ~= nil, "the options sit in a scroll view")
+stw.showTab("display")
 envs.graphics.setScale = nil
 app_state.fullscreen = true
 
