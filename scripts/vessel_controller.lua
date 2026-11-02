@@ -1494,17 +1494,39 @@ function fuelSync()
   return s
 end
 
+-- A TIER is a run of tanks in `tanks` order that leave together: the same
+-- side (booster or not) and the same height, so a symmetry ring's copies are
+-- one tier. A tier drains and fills AS ONE, every tank in proportion: drunk one
+-- tank at a time (the old way, by uid), four radial boosters emptied one after
+-- another and walked the centre of mass 10 cm sideways in the first second —
+-- 110 kN·m of thrust torque against the SAS's 60 per rad/s, and the player's
+-- 31 t rocket went over on the pad (2026-11-02, tools/perf/deepprobe.sh).
+-- Returns the index of the tier's last tank.
+function fuelTierEnd(i)
+  local a = tanks[i]
+  local j = i
+  while tanks[j + 1] and ((tanks[j + 1].branch and 0 or 1) == (a.branch and 0 or 1))
+    and math.abs(tanks[j + 1].y - a.y) <= 1e-3 do j = j + 1 end
+  return j
+end
+
 -- Draw `units` (tanks that leave soonest first). Returns what it got.
 function fuelDraw(units)
   local need = units or 0
-  for _, t in ipairs(tanks) do
-    if need <= 0 then break end
-    local l = t.left or 0
-    if l > 0 then
-      local take = math.min(l, need)
-      t.left = l - take
+  local i = 1
+  while tanks[i] and need > 0 do
+    local j = fuelTierEnd(i)
+    local L = 0.0
+    for k = i, j do L = L + math.max(0, tanks[k].left or 0) end
+    if L > 0 then
+      local take = math.min(L, need)
+      for k = i, j do
+        local t = tanks[k]
+        t.left = math.max(0, (t.left or 0) - take * math.max(0, t.left or 0) / L)
+      end
       need = need - take
     end
+    i = j + 1
   end
   fuelSync()
   return (units or 0) - math.max(0, need)
@@ -1513,11 +1535,19 @@ end
 -- Set the pool to `total` units, filling the tanks that leave LAST first.
 function fuelFill(total)
   local left = math.max(0, total or 0)
-  for i = #tanks, 1, -1 do
-    local t = tanks[i]
-    local f = math.min(t.fuel or 0, left)
-    t.left = f
+  local j = #tanks
+  while j >= 1 do
+    local i = j
+    while i > 1 and fuelTierEnd(i - 1) == j do i = i - 1 end
+    local C = 0.0
+    for k = i, j do C = C + (tanks[k].fuel or 0) end
+    local f = math.min(C, left)
+    for k = i, j do
+      local t = tanks[k]
+      t.left = (C > 0) and f * (t.fuel or 0) / C or 0
+    end
     left = left - f
+    j = i - 1
   end
   fuelSync()
 end

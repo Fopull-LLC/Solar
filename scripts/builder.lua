@@ -1574,6 +1574,23 @@ function launchCheck()
         .. " — watch the apoapsis and cut the throttle"
     end
   end
+  -- LAUNCH BALANCE (2026-11-02, the player's 31 t deep-space rocket that went
+  -- over on the pad): the torque the launch engines put about the loaded CoM
+  -- against what the SAS can hold. The flight steers with reaction wheels
+  -- only (no gimbal): a torque τ leaves a steady turn of τ / authority rad/s.
+  if has.engine then
+    local lb = launchBalance()
+    if lb and lb.k > 0 then
+      if lb.tp / lb.k > 0.05 then
+        warn[#warn + 1] = string.format("the launch engines push %.0f kN·m off the centre of mass (%.0f mm off line%s) — the SAS holds about %.0f: it will tip over. Line the blue thrust line up through the amber CoM (V)",
+          lb.tp, lb.off * 1000, lb.lat > 0.5 and string.format(", %.0f kN sideways", lb.lat) or "", lb.k * 0.05)
+      end
+      if math.abs(lb.tr) / lb.k > 0.1 then
+        warn[#warn + 1] = string.format("the engines are turned round the craft's axis (%.1f°): %.0f kN·m of spin — select a tilted engine or booster and press SPACE to stand it straight",
+          lb.cant, math.abs(lb.tr))
+      end
+    end
+  end
   if not has.chute and has.crewed and not (has.wheel and not has.engine) then
     warn[#warn + 1] = "no parachute — the pod will not survive the landing"
   end
@@ -1592,6 +1609,63 @@ function launchCheck()
     end
   end
   return { warn = warn, has = has }
+end
+
+-- THE LAUNCH STAGE'S BALANCE, as the flight will feel it: the engines below
+-- the lowest axial decoupler (the ones that light at launch; booster engines
+-- included), each pushing along its OWN +Y at its place, about the loaded
+-- (wet) centre of mass. → { tp (pitch/yaw torque, kN·m), tr (roll torque),
+-- lat (sideways thrust, kN), off (thrust line's miss of the CoM, m), cant
+-- (worst engine tilt round the axis, °), k (the SAS's kN·m per rad/s:
+-- vessel_controller's 60 × the powered wheels' torque, capped 1.5),
+-- F, cot, com } or nil with no engine. Global and pure over `parts`.
+function launchBalance()
+  local cut = math.huge
+  for _, p in pairs(parts) do
+    if p.def.decouple and not p.def.radial and p.y < cut then cut = p.y end
+  end
+  local M, cx, cy, cz = 0.0, 0.0, 0.0, 0.0
+  local tk = 0.0
+  for _, p in pairs(parts) do
+    local m = p.def.mass + (p.def.fuel or 0) * FUEL_T_PER_UNIT
+    M, cx, cy, cz = M + m, cx + p.x * m, cy + p.y * m, cz + p.z * m
+    for _, md in ipairs(part_mods(p.def) or {}) do
+      if md.type == "wheel" then tk = tk + (md.torque or 1) end
+    end
+  end
+  if M <= 0 then return nil end
+  cx, cy, cz = cx / M, cy / M, cz / M
+  local F = { x = 0.0, y = 0.0, z = 0.0 }
+  local T = { x = 0.0, y = 0.0, z = 0.0 }
+  local th, tx, ty, tz, cant = 0.0, 0.0, 0.0, 0.0, 0.0
+  for _, p in pairs(parts) do
+    local t = p.def.thrust or 0
+    if t > 0 and p.y < cut - 0.01 then
+      local a = basisOf(p.yaw or 0, p.pitch or 0, p.roll or 0).Y
+      local rx, ry, rz = p.x - cx, p.y - cy, p.z - cz
+      local fx, fy, fz = a.x * t, a.y * t, a.z * t
+      F.x, F.y, F.z = F.x + fx, F.y + fy, F.z + fz
+      T.x, T.y, T.z = T.x + ry * fz - rz * fy, T.y + rz * fx - rx * fz, T.z + rx * fy - ry * fx
+      th, tx, ty, tz = th + t, tx + p.x * t, ty + p.y * t, tz + p.z * t
+      -- the tilt ROUND the axis (what spins it): the axis's share along the
+      -- tangent at the engine's place
+      local rl = math.sqrt(rx * rx + rz * rz)
+      if rl > 0.05 then cant = math.max(cant, math.abs(math.deg(math.asin((-a.x * rz + a.z * rx) / rl)))) end
+    end
+  end
+  if th <= 0 then return nil end
+  tx, ty, tz = tx / th, ty / th, tz / th
+  local fl = math.sqrt(F.x * F.x + F.y * F.y + F.z * F.z)
+  -- the thrust line's miss of the CoM: |(com − cot) × F̂|
+  local dx, dy, dz = cx - tx, cy - ty, cz - tz
+  local off = 0.0
+  if fl > 0 then
+    local ux, uy, uz = F.x / fl, F.y / fl, F.z / fl
+    local qx, qy, qz = dy * uz - dz * uy, dz * ux - dx * uz, dx * uy - dy * ux
+    off = math.sqrt(qx * qx + qy * qy + qz * qz)
+  end
+  return { tp = math.sqrt(T.x * T.x + T.z * T.z), tr = T.y, lat = math.sqrt(F.x * F.x + F.z * F.z), off = off,
+           cant = cant, k = 60.0 * math.min(1.5, tk), F = F, cot = { x = tx, y = ty, z = tz }, com = { x = cx, y = cy, z = cz } }
 end
 
 -- WHAT A WHEELED CRAFT IS MISSING (playtest 2026-10-26: "motorcycles are
@@ -4693,6 +4767,25 @@ end
 
 function draw_engineering()
   if partCount == 0 then return end
+  -- the launch stage's real thrust line (each engine's own axis) through the
+  -- LOADED CoM, red when the launch check says it will tip or spin
+  local lb = W.cache.lb_v == craftVersion and W.cache.lb or launchBalance()
+  W.cache.lb, W.cache.lb_v = lb, craftVersion
+  if lb then
+    local bad = lb.k > 0 and (lb.tp / lb.k > 0.05 or math.abs(lb.tr) / lb.k > 0.1)
+    local r, g, b = 0.3, 0.7, 1.0
+    if bad then r, g, b = 1.0, 0.25, 0.2 end
+    local fl = math.sqrt(lb.F.x ^ 2 + lb.F.y ^ 2 + lb.F.z ^ 2)
+    local c, o = lb.com, lb.cot
+    draw.sphere(c.x, c.y, c.z, 0.16, 1.0, 0.8, 0.2, 1.0)
+    draw.ring(c.x, c.y, c.z, 0, 1, 0, 0.34, 1.0, 0.8, 0.2, 0.7)
+    draw.sphere(o.x, o.y, o.z, 0.13, r, g, b, 1.0)
+    if fl > 0 then
+      local L = math.max(2.2, (c.y - o.y) * 1.3)
+      draw.line(o.x, o.y, o.z, o.x + lb.F.x / fl * L, o.y + lb.F.y / fl * L, o.z + lb.F.z / fl * L, r, g, b, 0.8)
+    end
+    return
+  end
   local e = eng_points()
   local m, cx, cy, cz = e.m, e.cx, e.cy, e.cz
   local th, tx, ty, tz = e.th, e.tx, e.ty, e.tz
