@@ -86,11 +86,21 @@ ITEMS = {
                 worn = { prefab = "ItemO2Tank", bone = "Back" },
                 fill = { cap = 900, what = "o2" },     -- 15 minutes of suit air, full
                 about = "a spare bottle of breathing oxygen for the suit: +15 min of air on a long EVA or a dive" },
+  -- THE FLASHLIGHT (scripts/flashlight.lua): a clamp-on torch strapped to the
+  -- helmet's side while it is in the pack; L switches it, on foot, whatever
+  -- is in the hands. Light and cheap on purpose (0.3 kg, $35): a thing you
+  -- simply carry. Its battery is a FILL (% kept per torch, like the rifle's
+  -- cell): 4 h of light, a brown-out under 10 %, charged aboard or at the base.
+  flashlight = { name = "Flashlight",   kind = "worn",       kg = 0.3,  L = 1,  cost = 35,   shop = true,
+                worn = { prefab = "ItemFlashlight", bone = "Helmet" },
+                fill = { cap = 100, what = "cell" },
+                lamp = { key = "L", cone = 40, range = 30, hours = 4.0 },
+                about = "a clamp-on LED torch for the helmet: L lights the way after dark, in caves and in dust" },
 }
 
 -- The belt's order: tools first, then devices and deployables, then
 -- consumables with a hold. (Worn items are never on the belt.)
-ORDER = { "gravgun", "laser", "surveyor", "beacon", "flag", "repairkit", "medkit", "rcspack", "o2tank" }
+ORDER = { "gravgun", "laser", "surveyor", "beacon", "flag", "repairkit", "medkit", "rcspack", "o2tank", "flashlight" }
 
 -- The Medkit's work (crew.lua runs it): seconds held at it, what it gives,
 -- and the reach from the medic to the patient (m).
@@ -258,6 +268,10 @@ function card(id, live)
   elseif id == "o2tank" and d.fill then
     row("Air", string.format("+%.0f min of suit air, breathed before the suit's own", d.fill.cap / 60))
     row("Refills", "aboard, at a locker or at the base")
+  elseif id == "flashlight" and d.lamp then
+    row("Beam", string.format("a %.0f° warm-white spot, about %.0f m of throw", d.lamp.cone, d.lamp.range))
+    row("Switch", string.format("%s, on foot; it rides strapped to the helmet", d.lamp.key))
+    row("Battery", string.format("%.0f h of light; dims under 10%%; charges aboard or at the base", d.lamp.hours))
   end
   row("Price", string.format("$%d", d.cost or 0))
   row("Sells back", string.format("$%d (%s)", sellPrice(id), pct(SELL_BACK)))

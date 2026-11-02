@@ -2,7 +2,8 @@
 // deploy rules), scripts/item_hand.lua (what the crew member on foot holds
 // in the hand: the belt's non-tool items, deploy mode, the repair work) and
 // scripts/surveyor.lua (the TL-5 Surveyor plasma rifle: its bolts, hits and
-// cells; tool_belt draws and holds it).
+// cells; tool_belt draws and holds it) and scripts/flashlight.lua (the helmet
+// torch: its model on the helmet, its spot light, its battery).
 // Spawned by inventory.lua when the scene carries no node running "items";
 // reached with findScript("items") / ("item_hand") / ("surveyor").
 [
@@ -27,6 +28,11 @@
             ),
             (
                 kind: "surveyor",
+                enabled: true,
+                params: [],
+            ),
+            (
+                kind: "flashlight",
                 enabled: true,
                 params: [],
             ),

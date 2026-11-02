@@ -23,6 +23,8 @@ frame is the one scripts/item_hand.lua carries it in:
                     from the left hand like the repair case), long side along +Z.
   ItemO2Tank        a spare breathing-oxygen bottle with its valve and quick-
                     disconnect, along +Y (clipped beside the PLSS).
+  ItemFlashlight    a clamp-on helmet torch: +Z out of its lens, its clamp
+                    toward -X (strapped to the helmet's side).
 """
 import json
 import math
@@ -388,6 +390,46 @@ def o2_tank():
     return {"grip": [0.0, Lt * 0.5, 0.0]}
 
 
+# ── the FLASHLIGHT: a clamp-on helmet torch ────────────────────────────────
+#
+# A 13.5 cm, 32 mm-bodied tactical torch in worn olive drab with a dark
+# crenellated bezel and a knurled body, a rubber tail switch, and a dark
+# clamp on its inboard (-X) side held by two webbing straps, the way a work
+# light is taped and strapped onto a helmet. Built along +Y, then turned so
+# the lens looks down +Z (ItemFlashlight's frame: +Z out of the lens, the
+# clamp toward -X, +Y up). The lens is its own material ("Lens"), which
+# scripts/flashlight.lua lights when the torch is on.
+
+def flashlight():
+    lathe_y("tail", "Rubber", [(0.0, 0.0), (0.011, 0.0), (0.0145, 0.004), (0.0152, 0.016), (0.0148, 0.020)],
+            segs=20, sharp=50)
+    lathe_y("body", "Olive", [(0.0146, 0.019), (0.0146, 0.088), (0.0168, 0.094), (0.0210, 0.106),
+                              (0.0210, 0.124)], segs=22, sharp=35)
+    lathe_y("bezel", "Dark", [(0.0213, 0.123), (0.0213, 0.131), (0.0172, 0.132), (0.0168, 0.1285)], segs=22, sharp=30)
+    for k in range(6):   # the crenellations on the bezel
+        a = 2 * math.pi * k / 6
+        box(f"cren{k}", "Dark", (0.0205 * math.cos(a), 0.1325, 0.0205 * math.sin(a)), (0.006, 0.003, 0.006),
+            M=Matrix.Rotation(-a, 3, "Y"))
+    cyl("lens", "Lens", (0, 0.1278, 0), (0, 0.1290, 0), 0.0168, segs=22)
+    for k in range(7):   # knurled bands
+        y = 0.030 + k * 0.0075
+        band_y(f"knurl{k}", "Dark", y, y + 0.0035, 0.0151, segs=20)
+    cyl("switch", "Rubber", (0, -0.002, 0), (0, 0.001, 0), 0.0085, segs=14)
+    # the clamp and its straps
+    box("clamp", "Dark", (-0.0205, 0.058, 0.0), (0.010, 0.056, 0.022), bevel=0.002)
+    box("clamp_pad", "Rubber", (-0.0265, 0.058, 0.0), (0.003, 0.050, 0.026))
+    for k, y in enumerate((0.040, 0.076)):
+        band_y(f"strap{k}", "Webbing", y - 0.0045, y + 0.0045, 0.0158, segs=20)
+        box(f"strap_tail{k}", "Webbing", (-0.029, y, 0.0), (0.004, 0.009, 0.034))
+        bolt(f"clamp_bolt{k}", (-0.0255, y + 0.009, 0.0), (-1, 0, 0), r=0.0028)
+    decal("fl_serial", "serial_a", (0, 0.068, 0.0147), (0, 0, 1), (0, 1, 0), 0.006, 0.034)
+    # +Y (the lathe axis) onto +Z: the lens looks ahead
+    R = Matrix.Rotation(math.pi / 2, 4, "X")
+    for ob, _ in OBJS:
+        ob.matrix_world = R @ ob.matrix_world
+    return {"grip": [0.0, 0.0, 0.058], "lens": [0.0, 0.0, 0.1295]}
+
+
 def export():
     dg = bpy.context.evaluated_depsgraph_get()
     out = {}
@@ -431,7 +473,7 @@ def main():
     path = argv[0] if argv else "/tmp/items_mesh.json"
     res = {}
     for name, fn in (("repairkit", repair_kit), ("beacon", beacon_stowed), ("flag", flag_furled), ("o2tank", o2_tank),
-                     ("medkit", medkit)):
+                     ("medkit", medkit), ("flashlight", flashlight)):
         reset()
         anchors = fn()
         geo = export()

@@ -42,6 +42,11 @@ MATS = {
     "Dark":       lambda: mat_ron("metal", color=(0.16, 0.16, 0.17), rough=1.3, metal=0.3, hull=False),
     "Rubber":     lambda: mat_ron("rubber", metal=0.0, hull=False),
     "Copper":     lambda: mat_ron("metal", color=(0.80, 0.50, 0.32), rough=0.75, metal=0.9, hull=False),
+    # the torch's lens: pale frosted glass, dark until scripts/flashlight.lua lights it
+    "Lens":       lambda: ('(\n                color: (0.62, 0.64, 0.62),\n'
+                           '                texture: Some("textures/base/lens.png"),\n'
+                           '                roughness: 0.25,\n                metallic: 0.0,\n'
+                           '                shading: Physical,\n            )'),
     "ToolDecal":  lambda: ('(\n                color: (1.0, 1.0, 1.0),\n'
                            '                texture: Some("textures/tools/tool_decals.png"),\n'
                            '                roughness: 0.6,\n                metallic: 0.0,\n'
@@ -59,6 +64,8 @@ ITEMS = (
      "MEDKIT — a trauma pouch, carried by its grab loop (scripts/item_hand.lua); used on the injured and the downed (scripts/crew.lua)."),
     ("o2tank", "o2_tank.glb", "ItemO2Tank",
      "OXYGEN TANK — a spare breathing-oxygen bottle, clipped beside the suit's PLSS while carried (scripts/item_hand.lua)."),
+    ("flashlight", "flashlight.glb", "ItemFlashlight",
+     "FLASHLIGHT — a clamp-on torch strapped to the helmet's side while carried; L switches it (scripts/flashlight.lua)."),
 )
 
 
@@ -131,8 +138,9 @@ def main():
         write_glb(m, os.path.join(MODELS, glb))
         with open(os.path.join(PREFABS, pf + ".prefab.ron"), "w") as f:
             f.write(prefab(pf, glb, m, about))
-        g = np.asarray(data[key]["anchors"]["grip"], float) - c
-        print(f"  {key:10s} size {np.round(size, 3).tolist()} grip {np.round(g, 3).tolist()} tris {m.tris()}")
+        anc = " ".join(f"{k} {np.round(np.asarray(v, float) - c, 4).tolist()}"
+                       for k, v in sorted(data[key]["anchors"].items()))
+        print(f"  {key:10s} size {np.round(size, 3).tolist()} {anc} tris {m.tris()}")
 
 
 if __name__ == "__main__":

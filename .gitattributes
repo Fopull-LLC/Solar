@@ -3,5 +3,7 @@
 .githooks   export-ignore
 .gitattributes export-ignore
 .gitignore  export-ignore
-tools       export-ignore
-tests       export-ignore
+# Anchored with a leading /: a bare `tools` would also drop models/tools and
+# textures/tools (the held tool models), as it did in the 2026-10-28 demo.
+/tools      export-ignore
+/tests      export-ignore

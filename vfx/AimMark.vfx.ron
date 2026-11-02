@@ -1,6 +1,7 @@
-// The terrain laser's aim mark: a thin ring laid flat on the ground at the bite
-// (the node is stood up on the surface normal), a faint wash under it. The tool
-// belt sizes it with the node's scale and colours it with setTint.
+// The terrain laser's aim mark: a thin ring laid flush on the surface at the bite
+// (the node is stood up on the surface normal: not a Field effect, so a wall's
+// ring stands on the wall), a faint wash under it. The tool belt sizes it with
+// the node's scale and colours it with setTint.
 (
     name: "AimMark",
     lifetime: 0.6,
@@ -45,5 +46,4 @@
         ),
     ],
     seed: 1,
-    gravity_mode: Field,
 )

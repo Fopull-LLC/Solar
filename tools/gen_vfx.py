@@ -631,10 +631,14 @@ with it, each trailing a short streak.""")
         T("Wash", TX + "glow/soft.png", blend="Additive", orient="Horizontal", clips=burst(1, 0, L, cj=0),
           size=1.3, color=C((1, 1, 1, 0.12)), soft=0.1),
     ]
-    effect("AimMark", L, tracks, looping=True, header="""
-The terrain laser's aim mark: a thin ring laid flat on the ground at the bite
-(the node is stood up on the surface normal), a faint wash under it. The tool
-belt sizes it with the node's scale and colours it with setTint.""")
+    # field=False: a Field effect's "up" is against gravity, which laid the
+    # ring level on a wall or a rock face; without it the up is the node's
+    # own +Y, the surface normal tool_belt stands it on (flush on any slope).
+    effect("AimMark", L, tracks, looping=True, field=False, header="""
+The terrain laser's aim mark: a thin ring laid flush on the surface at the bite
+(the node is stood up on the surface normal: not a Field effect, so a wall's
+ring stands on the wall), a faint wash under it. The tool belt sizes it with
+the node's scale and colours it with setTint.""")
 
     # The PLANT MARK: the plant the tool has locked onto. Motes rise along its
     # whole body (the node is scaled to the plant: width across, height up) and
