@@ -15,6 +15,15 @@
 --   * the player's choice (a command part's `ctrl`) wins, the command part
 --     the craft is flown from first, a part that is gone never counts;
 --   * describe() says "Auto: Rover" or the chosen mode;
+--   * SECTIONS (2026-11: "a ship that deploys a rover ... a jet that drops a
+--     ship?"): a craft is cut into sections at decouplers and docking ports,
+--     and Auto and the choice are per section, read from the command part
+--     flown: a rocket carrying a rover is a rocket, the rover away (or flown
+--     from its own body) a rover; a jet carrying a rocket an aircraft, the
+--     rocket away a rocket; a rover on a rocket booster a rover; a shuttle's
+--     orbiter on its tank a rocket until the tank goes; a choice made on one
+--     section stays there; an old craft's single choice (bp.ctrl copied on
+--     every command part) stays with the main section only;
 --   * vessel_controller: an aircraft's and a rocket's wheels never get the
 --     rover's air-lean; a folded gear is no wheel (r2Stowed), and only when
 --     every wheel is folded are there none (r2AllStowed); the fold signature
@@ -46,7 +55,8 @@ local function rec(id, o)
   assert(d, "no part " .. id)
   uid = uid + 1
   local r = { uid = uid, id = id, af = d.af, wheel = d.wheel or "", mass = d.mass, fuel = d.fuel or 0,
-              fuel_t = d.fuel and 0.01 or 0, kind = d.kind, seat = d.seat and 1 or 0, front = d.front and 1 or 0 }
+              fuel_t = d.fuel and 0.01 or 0, kind = d.kind, seat = d.seat and 1 or 0, front = d.front and 1 or 0,
+              thrust = d.thrust or 0, decouple = d.decouple and 1 or 0, dock = d.dock and 1 or 0, label = d.label }
   for k, v in pairs(o or {}) do r[k] = v end
   return r
 end
@@ -133,6 +143,147 @@ check("a lost wing changes Auto's reading", M.autoOf(jet, (function()
   for u, d in pairs(jet) do if d.af and d.af:find("^wing") then g[u] = true end end
   return g
 end)()) == "rover")
+
+-- ── SECTIONS: crafts made of crafts ────────────────────────────────────────
+-- A TREE: each entry { id, parent index (0 = root), overrides }; uids = index.
+local function tree(list)
+  uid = 0
+  local out = {}
+  for _, e in ipairs(list) do
+    local r = rec(e[1], e[3])
+    r.parent = e[2] or 0
+    out[r.uid] = r
+  end
+  return out
+end
+-- the pieces a split leaves: the set that departs at decoupler `dec`, and the
+-- rest, each re-rooted at the seam (what r2SplitCraft / undock hand over)
+local function split(recs, dep)
+  local a, b = {}, {}
+  for u, d in pairs(recs) do
+    local c = {}
+    for k, v in pairs(d) do c[k] = v end
+    local into = dep[u] and a or b
+    if not (into == a and dep[c.parent] or into == b and not dep[c.parent]) then c.parent = 0 end
+    into[u] = c
+  end
+  return a, b
+end
+local function below(recs, from)   -- from and everything hanging off it
+  local set, grew = { [from] = true }, true
+  while grew do
+    grew = false
+    for u, d in pairs(recs) do if not set[u] and set[d.parent] then set[u] = true; grew = true end end
+  end
+  return set
+end
+
+-- 1. A ROCKET CARRYING A ROVER: probe core on top, tanks, an engine; a
+-- decoupler on the side holds a rover (body, four wheels).
+local rr = tree({
+  { "probe", 0 }, { "tankS", 1 }, { "tankS", 2 }, { "engineS", 3 },   -- 1-4
+  { "radialDec", 2 },                                                  -- 5
+  { "roverBody", 5 }, { "wheelM", 6 }, { "wheelM", 6 }, { "wheelM", 6 }, { "wheelM", 6 }, -- 6-10
+})
+local S = M.sections(rr)
+check("the rocket and its rover are two sections", S.of[1] ~= S.of[6] and S.of[1] == S.of[4] and S.of[6] == S.of[10],
+  string.format("%s %s %s %s", tostring(S.of[1]), tostring(S.of[4]), tostring(S.of[6]), tostring(S.of[10])))
+local mo, st, au, wy = M.resolve(rr, 1)
+check("a rocket carrying a rover flies as a rocket (from its probe core)", mo == "rocket", tostring(mo) .. " / " .. tostring(wy))
+check("…though the whole stack has four wheels", M.autoOf(rr) == "rover")
+mo, st, au, wy = M.resolve(rr, 6)
+check("flown from the rover's own body while aboard: a rover", mo == "rover", tostring(mo) .. " / " .. tostring(wy))
+local rover_away, ship_left = split(rr, below(rr, 5))
+check("the rover away: a rover", M.resolve(rover_away, 6) == "rover", M.resolve(rover_away, 6))
+check("the ship left: a rocket", M.resolve(ship_left, 1) == "rocket", M.resolve(ship_left, 1))
+local secs = M.perSection(rr, nil, 1)
+check("perSection: the ship first, then the rover",
+  #secs == 2 and secs[1].cmd == 1 and secs[1].auto == "rocket" and secs[2].cmd == 6 and secs[2].auto == "rover",
+  string.format("%d %s %s", #secs, secs[1] and tostring(secs[1].auto) or "-", secs[2] and tostring(secs[2].auto) or "-"))
+check("short() reads Auto (Rocket)", M.short(nil, "rocket") == "Auto (Rocket)" and M.short("rover", "rocket") == "Rover")
+check("notice() says the keys", M.notice("rover") == "Mode: Rover — W/S drive, A/D steer", M.notice("rover"))
+
+-- 2. AN EXPLICIT CHOICE STAYS ON ITS SECTION. "Rocket" on the ship doesn't
+-- touch the rover's body; "Aircraft" on the rover doesn't touch the ship.
+local n = M.setSection(rr, 1, "rocket")
+check("a choice on the ship writes the ship's command parts only", n == 1 and rr[1].ctrl == "rocket" and rr[6].ctrl == nil,
+  string.format("n %d ship %s rover %s", n, tostring(rr[1].ctrl), tostring(rr[6].ctrl)))
+check("…the rover still Auto (Rover)", M.resolve(rr, 6) == "rover" and select(2, M.resolve(rr, 6)) == nil)
+rover_away = split(rr, below(rr, 5))
+check("…and the rover away drives as a rover", M.resolve(rover_away, 6) == "rover")
+M.setSection(rr, 6, "aircraft")
+check("a choice on the rover stays on the rover", rr[6].ctrl == "aircraft" and rr[1].ctrl == "rocket"
+  and M.resolve(rr, 1) == "rocket" and M.resolve(rr, 6) == "aircraft")
+M.setSection(rr, 6, "auto")
+check("Auto again clears only that section", rr[6].ctrl == nil and rr[1].ctrl == "rocket")
+rr[1].ctrl = nil
+-- an old craft: one choice copied onto every command part (bp.ctrl)
+rr[1].ctrl, rr[6].ctrl = "rocket", "rocket"
+M.legacy(rr, "rocket", 1)
+check("an old craft's one choice stays with the main section only", rr[1].ctrl == "rocket" and rr[6].ctrl == nil,
+  tostring(rr[6].ctrl))
+rr[1].ctrl = nil
+
+-- 3. A JET CARRYING A ROCKET under its belly on a decoupler (a probe core
+-- on the rocket): the jet is an aircraft, the rocket away is a rocket.
+local jr = tree(join({ { "cockpit", 0 }, { "fuseTank", 1 }, { "jet", 2 } },
+  { { "wingL", 2 }, { "wingL", 2 }, { "wingTip", 4 }, { "wingTip", 5 }, { "elevon", 2 }, { "elevon", 2 },
+    { "intake", 1 }, { "intake", 1 }, { "tailFin", 2 }, { "gearM", 2 }, { "gearM", 2 }, { "gearS", 1 } },
+  { { "radialDec", 2 }, { "probe", 16 }, { "tankS", 17 }, { "engineS", 18 } }))   -- 16-19
+mo, st, au, wy = M.resolve(jr, 1)
+check("a jet carrying a rocket is an aircraft", mo == "aircraft", tostring(mo) .. " / " .. tostring(wy))
+local rocket_away, jet_left = split(jr, below(jr, 16))
+check("the released rocket is a rocket", M.resolve(rocket_away, 17) == "rocket", M.resolve(rocket_away, 17))
+check("the jet left is an aircraft", M.resolve(jet_left, 1) == "aircraft")
+-- the carried mass counts against the wings: a big rocket under a small
+-- jet's wings is no aircraft (it can't lift it)
+local _, _, fig = M.autoOf(jr, nil, M.sectionOf(jr, 1))
+check("the jet's wings lift the rocket's mass too", fig.carried > fig.mass,
+  string.format("%.2f t of %.2f", fig.mass, fig.carried))
+
+-- 4. A ROVER WITH A ROCKET BOOSTER (a decoupler under its body, a tank and an
+-- engine): a rover; the booster away is no craft at all (no command part)
+local rb = tree({
+  { "roverBody", 0 }, { "wheelM", 1 }, { "wheelM", 1 }, { "wheelM", 1 }, { "wheelM", 1 },
+  { "decoupler", 1 }, { "tankS", 6 }, { "engineS", 7 },
+})
+check("a rover with a rocket booster is a rover", M.resolve(rb, 1) == "rover", select(4, M.resolve(rb, 1)))
+check("…and its booster section can't be flown", #M.perSection(rb) == 1)
+-- the rover with the rocket engine bolted on (no decoupler): still a rover
+local rb2 = tree({ { "roverBody", 0 }, { "wheelM", 1 }, { "wheelM", 1 }, { "wheelM", 1 }, { "wheelM", 1 }, { "engineS", 1 } })
+check("a rover with an engine bolted on is a rover", M.resolve(rb2, 1) == "rover")
+
+-- 5. A SHUTTLE: a winged orbiter (cockpit, wings) on a big tank and engines
+-- through a radial decoupler. On the tank its wings can't lift the stack: a
+-- rocket; the tank gone, the orbiter is an aircraft.
+local sh = tree(join({ { "cockpit", 0 }, { "fuseTank", 1 } },
+  { { "wingL", 2 }, { "wingL", 2 }, { "elevon", 2 }, { "elevon", 2 }, { "tailFin", 2 } },
+  { { "radialDec", 2 }, { "tankM", 8 }, { "tankM", 9 }, { "skipper", 10 }, { "skipper", 10 } }))
+mo, st, au, wy = M.resolve(sh, 1)
+check("a shuttle on its tank is a rocket", mo == "rocket", tostring(mo) .. " / " .. tostring(wy))
+local _, orbiter = split(sh, below(sh, 8))
+mo, st, au, wy = M.resolve(orbiter, 1)
+check("…the orbiter alone an aircraft", mo == "aircraft", tostring(mo) .. " / " .. tostring(wy))
+
+-- 6. DOCKING PORTS cut sections too: a ship and a rover mated port to port
+local dk = tree({
+  { "probe", 0 }, { "tankS", 1 }, { "engineS", 2 }, { "dockPort", 1 },        -- 1-4
+  { "dockPort", 4 }, { "roverBody", 5 }, { "wheelM", 6 }, { "wheelM", 6 }, { "wheelM", 6 }, -- 5-9
+})
+check("a docked rover is its own section", M.resolve(dk, 1) == "rocket" and M.resolve(dk, 6) == "rover")
+-- a separating part at the tree's root cuts every joint to its children
+local rt = tree({ { "decoupler", 0 }, { "probe", 1 }, { "tankS", 2 }, { "roverBody", 1 },
+  { "wheelM", 4 }, { "wheelM", 4 }, { "wheelM", 4 } })
+local RS = M.sections(rt)
+check("a root decoupler parts both sides", RS.of[2] ~= RS.of[4] and RS.of[1] ~= RS.of[2] and RS.of[4] == RS.of[7])
+-- a gone part still holds its section together
+local gs = M.sections(rr, { [2] = true })
+check("a gone part still holds the stack together", gs.of[1] == gs.of[4])
+-- a rover with a robotic hinge carrying an arm is one section
+local hz = tree({ { "roverBody", 0 }, { "wheelM", 1 }, { "wheelM", 1 }, { "wheelM", 1 }, { "hinge", 1 }, { "probe", 5 } })
+local HS = M.sections(hz)
+check("a hinge is no cut", HS.of[1] == HS.of[6])
+check("…both command parts fly it as a rover", M.resolve(hz, 6) == "rover" and #M.perSection(hz) == 1)
 
 -- ── vessel_controller: the wheel flags ─────────────────────────────────────
 local stub = setmetatable({}, { __index = function() return function() end end,

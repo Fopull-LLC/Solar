@@ -4362,13 +4362,18 @@ local function make_blueprint()
     local lp = save.get("shipyard.lockerPlan")
     if type(lp) == "table" and next(lp) then bp.lockers = tcopy(lp) end
   end
-  -- THE CONTROL MODE (ctrlMode): on the blueprint and on every command part,
-  -- whose records a fleet save, a staging and a docking carry
-  if W.ctrl then
-    bp.ctrl = W.ctrl
-    local L = ctrlLib()
+  -- THE CONTROL MODE (ctrlMode): per SECTION, on that section's command
+  -- parts, whose records a fleet save, a staging and a docking carry (no
+  -- bp.ctrl: one choice for the whole stack flew a deployed rover as a rocket)
+  if W.ctrl and next(W.ctrl) then
+    local set_of, c = {}, ctrlMode()
+    for _, sec in ipairs(c.sections or {}) do
+      if sec.set then for _, u in ipairs(sec.cmds) do set_of[u] = sec.set end end
+    end
+    -- (the rulebook not up yet: each choice on the part it was made on)
+    if not c.ready then for u, m in pairs(W.ctrl) do set_of[u] = m end end
     for _, d in ipairs(bp.parts) do
-      if L and L.isCommand(d) then d.ctrl = W.ctrl end
+      if set_of[d.uid] then d.ctrl = set_of[d.uid] end
     end
   end
   -- ACTION GROUPS: only once the player has edited them. Until then the flight
@@ -4537,16 +4542,24 @@ local function load_blueprint(bp)
   if type(bp.outliner) == "table" then W.outliner = tcopy(bp.outliner) end
   if type(bp.controls) == "table" then W.controls = tcopy(bp.controls) end
   if type(bp.name) == "string" and bp.name ~= "" then W.craft = bp.name end
-  -- the control mode: the blueprint's, or (a fleet craft's records) its
-  -- command parts'
+  -- the control mode, per section: each command part's own `ctrl`. (An old
+  -- craft's one choice, bp.ctrl, was copied onto every command part: it is
+  -- kept on the root's section only, craft_mode.legacy.)
   do
-    local m = bp.ctrl
-    if m == nil then
+    local ok = function(m) return (m == "rover" or m == "aircraft" or m == "rocket") and m or nil end
+    local by = {}
+    if ok(bp.ctrl) then
+      -- (the root command part, read here: craft_root's cache is the last craft's)
+      local r = nil
+      for u in pairs(parts) do if is_command(u) and (not r or u < r) then r = u end end
+      if r then by[r] = ok(bp.ctrl) end
+    else
       for _, d in pairs(bp.parts) do
-        if type(d.ctrl) == "string" and (d.kind == "crewed" or d.kind == "probe") then m = d.ctrl break end
+        local isc = d.kind == "crewed" or d.kind == "probe" or d.seat == 1 or d.seat == true or d.front == 1 or d.front == true
+        if isc and ok(d.ctrl) and d.uid and parts[d.uid] then by[d.uid] = ok(d.ctrl) end
       end
     end
-    W.ctrl = (m == "rover" or m == "aircraft" or m == "rocket") and m or nil
+    W.ctrl = next(by) and by or nil
   end
   struct_changed()
   publish_center(); refresh_stats()
@@ -7219,12 +7232,14 @@ function controlsData() return W.controls end
 
 -- ── THE CONTROL MODE (scripts/craft_mode.lua) ──────────────────────────────
 -- How the craft is driven in flight: Rover, Aircraft or Rocket, or Auto,
--- which reads the whole craft (wings that carry it fly it, wheels that carry
+-- which reads the section flown from (wings that carry it fly it, wheels that carry
 -- it drive it). The mode, not the wheel's part type, says what the wheels do,
 -- so landing gear can be a rover's wheel and rover wheels a plane's gear.
--- W.ctrl is the player's choice (nil = Auto); it rides the blueprint as
--- `bp.ctrl` and on every command part's record (`ctrl`), so the fleet save,
--- a staging and a docking carry it. The rulebook is on the CraftModeLib node,
+-- W.ctrl is the player's choice PER SECTION (craft_mode sections: a craft is
+-- cut at its decouplers and docking ports): { [command uid] = mode }, nil or
+-- missing = Auto. It rides each section's command parts' records (`ctrl`),
+-- so the fleet save, a staging and a docking carry it, and a rover carried
+-- in a ship's bay keeps its own. The rulebook is on the CraftModeLib node,
 -- spawned here when the scene has none; until it answers, Auto says "Auto".
 CTRL_MODES = { "auto", "rover", "aircraft", "rocket" }
 function ctrlLib()
@@ -7237,26 +7252,57 @@ function ctrlLib()
   if L and type(L.resolve) ~= "function" then return nil end
   return L
 end
--- { set (nil = Auto), auto, why, mode, label, labels, tips }, cached per craftVersion.
+-- { set (nil = Auto), auto, why, mode, label, labels, tips } of the PRIMARY
+-- section (the root command part's), and `sections`: one { cmd, cmds, name,
+-- set, auto, why, mode, text } per section with a command part, primary's
+-- first; `summary` "Probe Core: Auto (Rocket) · Rover Body: Auto (Rover)"
+-- when there is more than one. Cached per craftVersion.
 function ctrlMode()
   local c = W.cache
   if c.ctrl and c.ctrl_v == craftVersion and c.ctrl.ready then return c.ctrl end
   local L = ctrlLib()
-  local out = { set = W.ctrl, ready = L ~= nil }
+  if type(W.ctrl) == "string" then W.ctrl = nil end
+  local by = W.ctrl or {}
+  local out = { ready = L ~= nil, sections = {} }
   if L then
     local recs = {}
     for uid, p in pairs(parts) do
       local d = p.def or {}
       recs[uid] = { uid = uid, af = d.af, wheel = d.wheel, mass = d.mass, fuel = d.fuel, fuel_t = FUEL_T_PER_UNIT,
-                    kind = d.kind, seat = d.seat, front = d.front }
+                    kind = d.kind, seat = d.seat, front = d.front, thrust = d.thrust or 0,
+                    decouple = d.decouple, dock = d.dock, parent = p.parent or 0, ctrl = by[uid] }
     end
-    out.auto, out.why = L.autoOf(recs)
-    out.mode = W.ctrl or out.auto
-    out.label = L.describe(W.ctrl, out.auto)
+    local root = craft_root()
+    local secs = L.perSection(recs, nil, root)
+    local names = {}
+    for _, sec in ipairs(secs) do
+      local d = parts[sec.cmd] and parts[sec.cmd].def or {}
+      local nm = d.label or "Command"
+      names[nm] = (names[nm] or 0) + 1
+      if names[nm] > 1 then nm = nm .. " " .. names[nm] end
+      sec.name = nm
+      sec.text = nm .. ": " .. L.short(sec.set, sec.auto)
+      out.sections[#out.sections + 1] = sec
+    end
+    local first = secs[1]
+    if first then
+      out.set, out.auto, out.why, out.cmd = first.set, first.auto, first.why, first.cmd
+    else
+      out.auto, out.why = L.autoOf(recs)
+    end
+    out.mode = out.set or out.auto
+    out.label = L.describe(out.set, out.auto)
+    if #secs > 1 then
+      local t = {}
+      for _, sec in ipairs(secs) do t[#t + 1] = sec.text end
+      out.summary = table.concat(t, " · ")
+    end
     out.labels, out.tips = L.LABEL, L.TIP
   else
-    out.mode = W.ctrl
-    out.label = W.ctrl and (W.ctrl:sub(1, 1):upper() .. W.ctrl:sub(2)) or "Auto"
+    local m = nil
+    for _, v in pairs(by) do m = v break end
+    out.set, out.mode = m, m
+    out.label = m and (m:sub(1, 1):upper() .. m:sub(2)) or "Auto"
   end
   c.ctrl, c.ctrl_v = out, craftVersion
   return out
@@ -8147,14 +8193,35 @@ function CMD.group(a)
 end
 
 -- The craft's control mode (ctrlMode): "auto" | "rover" | "aircraft" | "rocket".
+-- { mode, cmd? }: the choice for the section of command part `cmd` (default:
+-- the primary section's); the other sections keep theirs.
 function CMD.setCtrl(a)
   local m = a.mode
   if m ~= "rover" and m ~= "aircraft" and m ~= "rocket" then m = nil end
-  if m == W.ctrl then return true end
-  tx_run("control mode", {}, function() W.ctrl = m end, nil, true)
+  local c0 = ctrlMode()
+  local sec = nil
+  for _, s2 in ipairs(c0.sections or {}) do
+    if a.cmd == nil or s2.parts[a.cmd] then sec = s2 break end
+  end
+  if not sec then
+    if a.cmd ~= nil then return false end
+    -- (no command part aboard: kept for the first one placed)
+    if m == nil and W.ctrl == nil then return true end
+  elseif sec.set == m then
+    return true
+  end
+  -- a fresh table (the undo snapshot keeps the old one)
+  local nw = {}
+  for u, v in pairs(W.ctrl or {}) do nw[u] = v end
+  if sec then
+    for _, u in ipairs(sec.cmds) do nw[u] = nil end
+    if m then nw[sec.cmd] = m end
+  end
+  tx_run("control mode", {}, function() W.ctrl = next(nw) and nw or nil end, nil, true)
   craftVersion = craftVersion + 1
   local c = ctrlMode()
-  hint("control mode: " .. (c.label or "Auto") .. "   ·   how the craft drives in flight (the command part's menu changes it there)", 3.0)
+  local said = c.summary or ("control mode: " .. (c.label or "Auto"))
+  hint(said .. "   ·   how the craft drives in flight (the command part's menu changes it there)", 3.0)
   return true
 end
 

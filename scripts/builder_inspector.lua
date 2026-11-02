@@ -257,37 +257,56 @@ local function engine_rows(B, def, out)
 end
 
 -- ── the control mode (builder.ctrlMode, scripts/craft_mode.lua) ─────────────
--- How the craft drives in flight. AUTO reads the whole craft and says what it
--- made of it; a key wins over Auto. Shown on THIS CRAFT (nothing selected)
--- and at the top of the CRAFT tab.
+-- How the craft drives in flight. AUTO reads the section flown from and says
+-- what it made of it; a key wins over Auto. A craft cut into SECTIONS by
+-- decouplers or docking ports (a ship carrying a rover) has a mode per
+-- section that can be flown: one summary line, then each section's keys,
+-- and a click changes only that section. Shown on THIS CRAFT (nothing
+-- selected) and at the top of the CRAFT tab.
 local CTRL_SHORT = { auto = "Auto", rover = "Rover", aircraft = "Aircraft", rocket = "Rocket" }
+local function ctrl_keys(B, out, labels, tips, set, cmd, kp)
+  -- two keys a row: four don't fit the plate's width with their names
+  local row
+  for k, m in ipairs(B.CTRL_MODES or { "auto", "rover", "aircraft", "rocket" }) do
+    if k % 2 == 1 then
+      row = { "row", key = kp .. "r" .. k, w = "100%", h = 22, gap = 3, pad = 0, align = "center" }
+      out[#out + 1] = row
+    end
+    local on = (m == "auto" and set == nil) or set == m
+    row[#row + 1] = { "button", key = m, style = "panel/choice", selected = on, w = "grow", h = 22,
+      text = labels[m] or m, textAlign = "center", textValign = "center",
+      tooltip = tips[m], onClicked = function() B.cmd("setCtrl", { mode = m, cmd = cmd }) end }
+  end
+end
+local function ctrl_line(labels, set, auto, why)
+  if set then
+    return string.format("Flies as %s, chosen%s", (labels[set] or set):upper(),
+      auto and auto ~= set and string.format(" (Auto would make it %s)", labels[auto] or auto) or "")
+  elseif auto then
+    return string.format("Auto: %s — %s", (labels[auto] or auto):upper(), why or "")
+  end
+  return "Auto: reading the craft…"
+end
 local function ctrl_rows(B, out)
   if not (B.ctrlMode and B.cmd) then return end
   local c = B.ctrlMode() or {}
   local labels, tips = c.labels or CTRL_SHORT, c.tips or {}
   out[#out + 1] = sublabel("cmh", "CONTROL MODE")
-  -- two keys a row: four don't fit the plate's width with their names
-  local row
-  for k, m in ipairs(B.CTRL_MODES or { "auto", "rover", "aircraft", "rocket" }) do
-    if k % 2 == 1 then
-      row = { "row", key = "cmr" .. k, w = "100%", h = 22, gap = 3, pad = 0, align = "center" }
-      out[#out + 1] = row
+  local secs = c.sections or {}
+  if #secs > 1 then
+    out[#out + 1] = { "text", key = "cms", style = "panel/hint", w = "100%", h = "fit", wrap = true,
+      text = c.summary or "" }
+    for i, sec in ipairs(secs) do
+      out[#out + 1] = sublabel("cmh" .. i, string.upper(sec.name or ("Section " .. i)))
+      ctrl_keys(B, out, labels, tips, sec.set, sec.cmd, "cm" .. i)
+      out[#out + 1] = { "text", key = "cml" .. i, style = "panel/hint", w = "100%", h = "fit", wrap = true,
+        text = ctrl_line(labels, sec.set, sec.auto, sec.why) }
     end
-    local on = (m == "auto" and c.set == nil) or c.set == m
-    row[#row + 1] = { "button", key = m, style = "panel/choice", selected = on, w = "grow", h = 22,
-      text = labels[m] or m, textAlign = "center", textValign = "center",
-      tooltip = tips[m], onClicked = function() B.cmd("setCtrl", { mode = m }) end }
+    return
   end
-  local line
-  if c.set then
-    line = string.format("Flies as %s, chosen%s", (labels[c.set] or c.set):upper(),
-      c.auto and c.auto ~= c.set and string.format(" (Auto would make it %s)", labels[c.auto] or c.auto) or "")
-  elseif c.auto then
-    line = string.format("Auto: %s — %s", (labels[c.auto] or c.auto):upper(), c.why or "")
-  else
-    line = "Auto: reading the craft…"
-  end
-  out[#out + 1] = { "text", key = "cml", style = "panel/hint", w = "100%", h = "fit", wrap = true, text = line }
+  ctrl_keys(B, out, labels, tips, c.set, nil, "cm")
+  out[#out + 1] = { "text", key = "cml", style = "panel/hint", w = "100%", h = "fit", wrap = true,
+    text = ctrl_line(labels, c.set, c.auto, c.why) }
 end
 
 -- ── ABOUT: what a part is, in words (playtest 2026-11: "clicking a part

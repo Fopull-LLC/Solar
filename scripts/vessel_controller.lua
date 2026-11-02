@@ -8968,7 +8968,7 @@ end
 --             (R2.passive)
 -- The player's choice is on the command parts' records (`ctrl`, which the
 -- fleet save, a staging and a docking carry) and wins; with none, Auto reads
--- the whole craft (craft_mode.autoOf). Until the library node answers (it is
+-- the section flown from (craft_mode sections). Until the library node answers (it is
 -- spawned on first use) the tyres wait (wheels_wanted "mode").
 CTRL = { lib = nil, asked = false, t = -100, cap = nil }
 function craftModeLib()
@@ -8985,8 +8985,21 @@ function craftModeLib()
   return L
 end
 
+-- The command part the craft is flown from: the crew's seat when they sit in
+-- one that commands (a rover's seat on a docked rover), else pod_uid.
+function r2CtrlFrom()
+  local L = craftModeLib()
+  local d = stationUid and bp_by_uid[stationUid]
+  if crewAboard and d and not integ.gone[stationUid] and L and L.isCommand(d) then return stationUid end
+  return pod_uid
+end
+
 -- The mode this craft flies by: R2.mode, R2.ctrlSet (the player's, nil =
--- Auto), R2.ctrlAuto and why, and the flags the wheel code reads.
+-- Auto), R2.ctrlAuto and why, and the flags the wheel code reads. Read for
+-- the SECTION flown from (craft_mode sections: a rocket carrying a rover is a
+-- rocket, the rover away or flown from its own body a rover), on every part
+-- set change (a split, an undock, a docking: integ.gen) and whenever the
+-- command part flown from changes (r2ModeTick).
 function r2ResolveMode()
   local L = craftModeLib()
   local prev = R2.mode
@@ -8999,37 +9012,71 @@ function r2ResolveMode()
   for u in pairs(bp_by_uid) do
     if integ.gone[u] or (part_hp[u] or 1) <= 0 then dead[u] = true end
   end
-  local mode, set, auto, why = L.resolve(bp_by_uid, pod_uid, dead)
-  -- (a blueprint whose command parts don't carry it: the builder's own)
-  if not set and bp and L.normalize(bp.ctrl) then set = L.normalize(bp.ctrl); mode = set end
+  -- (an old craft's one choice, bp.ctrl, was copied onto EVERY command part:
+  -- it stays with the section flown from, the others go back to Auto)
+  if bp and bp.ctrl ~= nil and L.legacy then
+    L.legacy(bp_by_uid, bp.ctrl, pod_uid, dead)
+    bp.ctrl = nil
+  end
+  local from = r2CtrlFrom()
+  local mode, set, auto, why = L.resolve(bp_by_uid, from, dead)
+  R2.ctrlFrom = from
   R2.mode, R2.ctrlSet, R2.ctrlAuto, R2.ctrlWhy = mode, set, auto, why
   R2.gear = mode == "aircraft"
   R2.passive = mode == "rocket"
   if prev ~= nil and prev ~= mode then CTRL.t = time end
-  if prev ~= mode then log(string.format("control mode: %s (%s; auto %s: %s)", mode, set and "chosen" or "auto", tostring(auto), tostring(why))) end
+  if prev ~= mode then log(string.format("control mode: %s (%s; auto %s: %s; from %s)", mode, set and "chosen" or "auto", tostring(auto), tostring(why), tostring(from))) end
 end
 
--- Published (HUD, context menu, probes): { mode, set, auto, why, label, t }.
-function ctrlModeInfo()
+-- Each tick: the command part flown from changed (the crew moved seats, a
+-- split recommanded): read the mode again; the craft flown says a new mode
+-- once ("Mode: Rover — W/S drive, A/D steer"), also on being switched to.
+function r2ModeTick()
   local L = craftModeLib()
+  if not L or R2.modeWait then return end
+  if R2.ctrlFrom ~= r2CtrlFrom() then
+    local m = R2.mode
+    r2ResolveMode()
+    if R2.mode ~= m then R2.gen = -1 end
+  end
+  if piloting and R2.mode and CTRL.said ~= R2.mode then
+    CTRL.said, CTRL.t = R2.mode, time
+    if caption and L.notice then caption(L.notice(R2.mode)) end
+  elseif not piloting then
+    CTRL.said = nil
+  end
+end
+
+-- Published (HUD, context menu, probes): { mode, set, auto, why, label, t,
+-- from, notice }. With a command part's uid (its own menu): that part's
+-- section, as it would fly were it flown from there.
+function ctrlModeInfo(uid)
+  local L = craftModeLib()
+  if L and uid and uid ~= R2.ctrlFrom and bp_by_uid[uid] and L.isCommand(bp_by_uid[uid]) then
+    local mode, set, auto, why = L.resolve(bp_by_uid, uid, integ.gone)
+    return { mode = mode, set = set, auto = auto, why = why, label = L.describe(set, auto), t = CTRL.t, from = uid }
+  end
   local label = L and L.describe and L.describe(R2.ctrlSet, R2.ctrlAuto or R2.mode) or tostring(R2.mode)
-  return { mode = R2.mode, set = R2.ctrlSet, auto = R2.ctrlAuto, why = R2.ctrlWhy, label = label, t = CTRL.t }
+  return { mode = R2.mode, set = R2.ctrlSet, auto = R2.ctrlAuto, why = R2.ctrlWhy, label = label, t = CTRL.t,
+           from = R2.ctrlFrom, notice = L and L.notice and R2.mode and L.notice(R2.mode) or nil }
 end
 
 -- The player's choice ("rover" | "aircraft" | "rocket"; "auto" or nil hands
--- it back to Auto): written on every command part aboard and on the
--- blueprint, so it flies, saves and docks with them. The wheels are re-read
--- at once (the tyres come in and go out again the new way).
-function setCtrlMode(m)
+-- it back to Auto): written on the command parts of the SECTION flown from
+-- (or of command part `uid`'s, from its own menu) only (a rover docked in the bay keeps its own), so it flies, saves, stages
+-- and docks with them. The wheels are re-read at once.
+function setCtrlMode(m, uid)
   local L = craftModeLib()
-  m = L and L.normalize(m) or ((m == "rover" or m == "aircraft" or m == "rocket") and m or nil)
-  for u, d in pairs(bp_by_uid) do
-    if L and L.isCommand(d) and not integ.gone[u] then d.ctrl = m end
-  end
-  if bp then bp.ctrl = m end
+  if not L then return false end
+  m = L.normalize(m)
+  local dead = {}
+  for u in pairs(bp_by_uid) do if integ.gone[u] then dead[u] = true end end
+  if bp and bp.ctrl ~= nil then L.legacy(bp_by_uid, bp.ctrl, pod_uid, dead); bp.ctrl = nil end
+  local at = (uid and bp_by_uid[uid] and L.isCommand(bp_by_uid[uid])) and uid or r2CtrlFrom()
+  L.setSection(bp_by_uid, at, m, dead)
   R2.gen = -1
   CTRL.t = time
-  log("control mode set: " .. tostring(m or "auto"))
+  log("control mode set: " .. tostring(m or "auto") .. " (section of " .. tostring(at) .. ")")
   return true
 end
 
@@ -10982,6 +11029,7 @@ function r2Tick(node, info, dt)
   drill_tick(node, info, dt)
   -- (the library node answered: read the mode now)
   if R2.modeWait and craftModeLib() then r2ResolveMode(); R2.gen = -1 end
+  r2ModeTick()
   if R2.autoWait and autoLib() then R2.gen = -1 end
   -- LANDING GEAR FOLDING (G), in any mode. Tyres in: the leg's wheel box
   -- goes and comes with it. Tyres out: the tyres are laid again without the

@@ -613,7 +613,7 @@ local function part_ctrl(t, ctx)
   local isCmd = rec.kind == "crewed" or rec.kind == "probe" or rec.seat == 1 or rec.seat == true or rec.front == 1
   if not isCmd then return {} end
   local function cur()
-    local ok, info = pcall(v.ctrlModeInfo)
+    local ok, info = pcall(v.ctrlModeInfo, rec.uid)
     return ok and info or {}
   end
   local function nxt(set)
@@ -627,7 +627,7 @@ local function part_ctrl(t, ctx)
     hint = "▸ " .. CTRL_NAME[nxt(i.set)],
     act = function()
       local m = nxt(cur().set)
-      local r = v.setCtrlMode(m)
+      local r = v.setCtrlMode(m, rec.uid)
       if ctx.toast then ctx.toast("control mode: " .. CTRL_NAME[m]) end
       return r
     end } }
