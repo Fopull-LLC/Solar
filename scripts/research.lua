@@ -48,6 +48,10 @@ defaults = {}
 TECH = {
   tankM      = { cost = 600,  label = "FT-M Tank" },
   battery    = { cost = 300,  label = "Battery",        mat = "copper" },
+  -- The bike's tank-shaped Battery Pack is the same cells in a moulded shell:
+  -- it comes AFTER the Battery (playtest 2026-11-02: the pack was open from
+  -- the start while the plain battery sat locked, backwards).
+  packB      = { cost = 150,  label = "Battery Pack",   mat = "copper",  after = "battery" },
   engineM    = { cost = 1400, label = "Anvil" },
   -- The relay dish is what a SATELLITE relay is made of: it opens once the
   -- ground network is up (the Relay Network milestone grants it outright), so

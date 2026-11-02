@@ -210,8 +210,11 @@ class Shell:
     def __init__(self):
         self.boxes = []
 
-    def add(self, c, s, q=(0.0, 0.0, 0.0, 1.0)):
+    def add(self, c, s, q=(0.0, 0.0, 0.0, 1.0), friction=None):
         self.boxes.append((np.asarray(c, float), np.asarray(s, float), q))
+        if friction is not None:
+            # a slick surface (the intake's belt: the script is its grip)
+            self.__dict__.setdefault("friction", {})[len(self.boxes) - 1] = friction
 
 
 def B(m, mat, col, x0, x1, y0, y1, z0, z1, sh=None, uv_m=None, var=True):

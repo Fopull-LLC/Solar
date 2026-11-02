@@ -732,7 +732,12 @@ def launch_complex():
             T(m, "Steel", RUST_ORANGE, (w / 2 * sx, y + 0.13, z_end + 0.2), (w / 2 * sx, y + h - 0.13, z0 - 0.4), 0.04, segs=5)
         if hood:
             B(m, "Clad", PAINT, -w / 2 - 0.2, w / 2 + 0.2, y - 0.1, y + h + 0.2, z_end - 0.6, z_end - 0.02)
-    arm(HS_H + 7.0, 2.4)
+    # The crew access arm's floor is a collider: ending 2.4 m from the axis,
+    # 4.6 m over the deck, it caught any craft wider than 4.8 m there on
+    # lift-off (2026-11-02: four radial boosters, r 2.5 m, struck it 0.28 s
+    # after the clamps let go and the rocket went over). It ends at 3.6 m now:
+    # a 7 m wide stack clears it.
+    arm(HS_H + 7.0, 3.6)
     for (y, sx) in ((HS_H + 3.5, -1), (HS_H + 12.0, 1)):
         x0 = (tw / 2 + 0.25) * sx
         B(m, "Steel", RUST_ORANGE, x0, x0 + 4.0 * sx, y, y + 0.9, tz - 2.5, tz - 1.7, var=False)
@@ -802,3 +807,333 @@ def pad_clamps():
             m.color = DARK
             box(m, "Steel", (x - 0.18 * sx, 0.28, z - 0.18 * sz), (0.3, 0.06, 0.3))
     return m
+
+
+# ── the base works (2026-11-02): the materials intake and the repair bay ────
+
+RUST = (0.56, 0.30, 0.19)      # oxide-red cladding, sun-faded and streaked
+GREEN_CAB = (0.26, 0.33, 0.27)  # an electrical cabinet's industrial green
+
+# The intake's conveyor, in its ground frame (scripts/material_intake.lua
+# reads these through the prefab's marker nodes, never as numbers).
+BELT = dict(half=1.30, top=0.45, z_head=2.70, z_wall=4.0, z_mouth=5.45, z_tail=13.60, hood=2.45, hood_h=2.55)
+
+
+def _rot_box(m, sh, mat, col, c, size, M):
+    """A box turned by M (columns = its x, y, z), drawn and, with `sh`, a collider."""
+    m.color = col
+    box(m, mat, c, size, M=M, uv_m=1.0)
+    if sh is not None:
+        from base_models import quat_from_basis
+        sh.add(c, size, quat_from_basis(M), friction=0.15)
+
+
+def _belt_top(m, x0, x1, z0, z1, y, z_tail):
+    """The belt's running surface: one quad per metre, uv.x across (0..1),
+    uv.y = metres along it from the tail toward the head (shaders/conveyor_belt.flsl
+    scrolls its cleats along uv.y)."""
+    m.color = (1.0, 1.0, 1.0)
+    za = z1
+    while za > z0 + 1e-6:
+        zb = max(z0, za - 1.0)
+        P = [(x0, y, zb), (x1, y, zb), (x1, y, za), (x0, y, za)]
+        UV = [(0.0, z_tail - zb), (1.0, z_tail - zb), (1.0, z_tail - za), (0.0, z_tail - za)]
+        m.add("Belt", P, [(0, 1, 0)] * 4, UV, [(0, 2, 1), (0, 3, 2)])
+        za = zb
+
+
+def intake():
+    """MATERIALS INTAKE — a rust-red bulk-handling shed on the Commerce Depot's
+    west side. A troughed feed conveyor runs out of a hole in its front wall,
+    under a steel hood hung with rubber curtain strips, 9.6 m across the yard
+    to a tail hopper: tip rocks and logs onto it from a truck parked alongside
+    or drop them off the gravity gun, and the belt carries them in. Inside
+    (seen only as a dark throat) they are graded and weighed; the take goes
+    along the covered transfer gallery to the depot's warehouse."""
+    m, sh = CModel(17), Shell()
+    W, z0, z1, H, t = 6.0, -6.0, 4.0, 6.8, 0.4
+    b = BELT
+    HX, HY = b["hood"], b["hood_h"]          # the wall's hole: ±HX across, HY tall
+    B(m, "Concrete", CONC, -W - 0.4, W + 0.4, -0.6, 0.12, z0 - 0.4, z1 + 0.3, sh=sh)
+    # walls
+    for sx in (-1, 1):
+        x0, x1 = (W - t, W) if sx > 0 else (-W, -W + t)
+        B(m, "Clad", RUST, x0, x1, -0.5, H, z0, z1)
+        sh.add(((x0 + x1) / 2, H / 2, (z0 + z1) / 2), (t, H, z1 - z0))
+    B(m, "Clad", RUST, -W + t, W - t, -0.5, H, z0, z0 + t, sh=sh)
+    fz0, fz1 = z1 - t, z1
+    for (xa, xb) in ((-W + t, -HX - 0.3), (HX + 0.3, W - t)):
+        B(m, "Clad", RUST, xa, xb, -0.5, H, fz0, fz1)
+        sh.add(((xa + xb) / 2, H / 2, (fz0 + fz1) / 2), (xb - xa, H, t))
+    B(m, "Clad", RUST, -HX - 0.3, HX + 0.3, HY + 0.25, H, fz0, fz1, sh=sh)
+    # corner posts and the parapet
+    for sx in (-1, 1):
+        for sz, zz in ((-1, z0), (1, z1)):
+            B(m, "Steel", GREY, sx * (W - 0.46), sx * (W + 0.15), -0.3, H + 0.5, zz - 0.15 if sz > 0 else zz - 0.15,
+              zz + 0.15 if sz > 0 else zz + 0.31)
+    B(m, "Concrete", CONC_DARK, -W + t, W - t, H - 0.3, H, z0 + t, z1 - t, sh=sh)
+    for (xa, xb, za, zb) in ((-W + 0.46, W - 0.46, z1 - 0.2, z1), (-W + 0.46, W - 0.46, z0, z0 + 0.2),
+                             (W - 0.2, W, z0 + 0.46, z1 - 0.46), (-W, -W + 0.2, z0 + 0.46, z1 - 0.46)):
+        B(m, "Clad", RUST, xa, xb, H, H + 0.42, za, zb)
+    # the hole's frame: two posts and a lintel, a dark throat behind it
+    for sx in (-1, 1):
+        B(m, "Steel", DARK, sx * (HX + 0.02), sx * (HX + 0.3), -0.3, HY, fz0 - 0.04, fz1 + 0.06, var=False)
+    B(m, "Steel", DARK, -HX - 0.3, HX + 0.3, HY, HY + 0.25, fz0 - 0.04, fz1 + 0.06, var=False)
+    B(m, "Steel", (0.05, 0.05, 0.05), -HX, HX, 0.0, HY, b["z_head"] - 0.25, b["z_head"] - 0.05, sh=sh, var=False)
+    for sx in (-1, 1):
+        B(m, "Steel", (0.07, 0.07, 0.07), sx * (HX - 0.12), sx * HX, 0.0, HY, b["z_head"] - 0.05, fz0 - 0.04,
+          sh=sh, var=False)
+    B(m, "Steel", (0.07, 0.07, 0.07), -HX + 0.12, HX - 0.12, HY - 0.12, HY, b["z_head"] - 0.05, fz0 - 0.04, var=False)
+    # THE HOOD over the belt's last metre and a half, its mouth hung with
+    # rubber curtain strips (no collider: what the belt carries pushes through)
+    zm = b["z_mouth"]
+    for sx in (-1, 1):
+        B(m, "Steel", GREY, sx * HX, sx * (HX + 0.1), -0.3, HY, fz1 + 0.06, zm, sh=sh)
+    B(m, "Steel", GREY, -HX - 0.1, HX + 0.1, HY, HY + 0.12, fz1 + 0.06, zm, sh=sh)
+    cuboid(m, (0.0, HY + 0.06, zm + 0.011), (1, 0, 0), (0, 1, 0), 2 * HX + 0.2, 0.12, 0.02,
+           faces={"front": ("Sign", (1, 1, 1), "hazard")}, col=DARK)
+    m.color = RUBBER
+    k, xs = 0, -HX + 0.16
+    while xs < HX - 0.1:
+        dz = 0.012 if k % 2 == 0 else 0.03
+        box(m, "Steel", (xs, (HY + b["top"] + 0.08) / 2, zm - 0.06 - dz), (0.24, HY - b["top"] - 0.08, 0.012))
+        xs += 0.27
+        k += 1
+    B(m, "Steel", DARK, -HX, HX, HY - 0.16, HY, zm - 0.12, zm - 0.02, var=False)
+    plate(m, "conveyor", (HX + 0.1, 1.55, zm - 0.75), (0, 0, -1), (0, 1, 0), 1.3, depth=0.03)
+    # the drive: a motor and gearbox on the hood's east cheek, a guard over the coupling
+    B(m, "Steel", GREYBLUE, HX + 0.1, HX + 0.95, 0.12, 0.95, fz1 + 0.25, fz1 + 1.05, sh=sh)
+    T(m, "Steel", GREYBLUE, (HX + 0.35, 0.6, fz1 + 0.65), (HX + 1.65, 0.6, fz1 + 0.65), 0.28, segs=14)
+    for k2 in range(6):
+        xx = HX + 0.5 + k2 * 0.2
+        T(m, "Steel", GREY, (xx, 0.6, fz1 + 0.65), (xx + 0.04, 0.6, fz1 + 0.65), 0.33, segs=14)
+    B(m, "Steel", SAFETY, HX + 0.1, HX + 0.36, 0.3, 0.9, fz1 + 0.35, fz1 + 0.95, var=False)
+    # THE CONVEYOR: stringers on legs, carrying idlers, the belt, its tail
+    # drum and the return strand underneath
+    zh, zt, y = b["z_head"], b["z_tail"], b["top"]
+    hw = b["half"]
+    for sx in (-1, 1):
+        B(m, "Steel", SAFETY, sx * (hw + 0.02), sx * (hw + 0.14), 0.16, y - 0.06, zh, zt + 0.1)
+        zz = fz1 + 0.5
+        while zz < zt:
+            T(m, "Steel", SAFETY, (sx * (hw + 0.08), 0.0, zz), (sx * (hw + 0.08), 0.16, zz), 0.05, segs=6)
+            zz += 1.8
+    B(m, "Steel", RUBBER, -hw, hw, y - 0.05, y - 0.012, zh, zt, var=False)
+    # the running surface is SLICK to the solver: material_intake.lua grips
+    # what lies on it (drives it to the belt's speed, as far as friction
+    # could), so a static high-friction box can't brake the load it carries
+    sh.add((0.0, y / 2, (zh + zt) / 2), (2 * hw, y, zt - zh), friction=0.05)
+    _belt_top(m, -hw, hw, zh, zt, y, zt)
+    for zz in np.arange(fz1 + 0.8, zt - 0.4, 1.2):
+        T(m, "Steel", GREY, (-hw - 0.02, y - 0.09, zz), (hw + 0.02, y - 0.09, zz), 0.035, segs=8)
+        T(m, "Steel", DARK, (-hw + 0.1, 0.2, zz + 0.6), (hw - 0.1, 0.2, zz + 0.6), 0.05, segs=8)
+    T(m, "Steel", GREY, (-hw - 0.05, y - 0.2, zt + 0.02), (hw + 0.05, y - 0.2, zt + 0.02), 0.17, segs=16)
+    m.color = RUBBER
+    box(m, "Steel", (0.0, 0.16, (zh + zt) / 2), (2 * hw - 0.3, 0.012, zt - zh - 0.4))
+    # skirt boards along the open run (low enough to tip over from a truck
+    # bed), with their rubber seals
+    zs0, zs1 = zm, zt - 3.2
+    for sx in (-1, 1):
+        B(m, "Steel", GREY, sx * (hw - 0.1), sx * (hw - 0.02), y + 0.01, y + 0.28, zs0, zs1)
+        sh.add((sx * (hw - 0.06), y + 0.145, (zs0 + zs1) / 2), (0.08, 0.27, zs1 - zs0), friction=0.15)
+        B(m, "Steel", RUBBER, sx * (hw - 0.14), sx * (hw - 0.1), y + 0.005, y + 0.09, zs0, zs1, var=False)
+    # THE TAIL HOPPER: splayed side plates and a back plate, so a load dropped
+    # on the end lands on the belt
+    zh0, zh1 = zs1, zt + 0.12
+    ang = math.radians(38)
+    L = 1.5
+    for sx in (-1, 1):
+        xa = sx * (hw - 0.06)
+        c = np.array([xa + sx * math.cos(ang) * L / 2, y + 0.02 + math.sin(ang) * L / 2, (zh0 + zh1) / 2])
+        side = np.array([sx * math.cos(ang), math.sin(ang), 0.0])
+        nrm = np.array([-sx * math.sin(ang), math.cos(ang), 0.0])
+        M = np.column_stack([side, nrm, [0.0, 0.0, 1.0]])
+        if np.linalg.det(M) < 0:
+            M = np.column_stack([side, -nrm, [0.0, 0.0, 1.0]])
+        _rot_box(m, sh, "Steel", SAFETY, c, (L, 0.06, zh1 - zh0), M)
+        for zz in (zh0 + 0.1, zh1 - 0.1):
+            T(m, "Steel", SAFETY, (sx * (hw + 0.1), 0.0, zz), (sx * (hw + 0.1 + math.cos(ang) * L * 0.8), y + math.sin(ang) * L * 0.8, zz), 0.045, segs=6)
+    xw = hw + math.cos(ang) * L
+    B(m, "Steel", SAFETY, -xw, xw, y - 0.1, y + 0.02 + math.sin(ang) * L, zh1, zh1 + 0.08, sh=sh)
+    cuboid(m, (0.0, y + 0.25, zh1 + 0.091), (1, 0, 0), (0, 1, 0), 2 * xw - 0.1, 0.16, 0.02,
+           faces={"front": ("Sign", (1, 1, 1), "hazard")}, col=DARK)
+    # emergency pull-cord along the west side, on its posts
+    for zz in (fz1 + 1.6, fz1 + 5.2):
+        T(m, "Steel", SAFETY, (-hw - 0.45, 0.0, zz), (-hw - 0.45, 1.05, zz), 0.03, segs=6)
+    T(m, "Steel", (0.75, 0.16, 0.10), (-hw - 0.45, 1.0, fz1 + 1.6), (-hw - 0.45, 1.0, fz1 + 5.2), 0.01, segs=4)
+    B(m, "Steel", (0.60, 0.12, 0.08), -hw - 0.55, -hw - 0.35, 0.92, 1.12, fz1 + 1.5, fz1 + 1.7, var=False)
+    # the front's dressing: the name, the building number, a personnel door,
+    # the control cabinet, lamps, a downpipe, a scale-house window
+    plate(m, "intake_name", (0.0, 4.55, z1), (1, 0, 0), (0, 1, 0), 5.2, depth=0.05)
+    plate(m, "bldg7", (HX + 1.1, 2.4, z1), (1, 0, 0), (0, 1, 0), 0.6, depth=0.04)
+    B(m, "Steel", GREYBLUE, -W + 1.0, -W + 2.1, 0.12, 2.25, z1, z1 + 0.06, var=False)
+    B(m, "Steel", DARK, -W + 1.85, -W + 1.95, 1.0, 1.15, z1 + 0.06, z1 + 0.11, var=False)
+    lamp_head(m, (-W + 1.55, 2.6, z1 + 0.3), (0, -0.6, 0.8), w=0.4, h=0.25)
+    B(m, "Steel", GREEN_CAB, HX + 1.6, HX + 2.6, 0.12, 1.9, z1, z1 + 0.45, sh=sh)
+    cuboid(m, (HX + 2.1, 1.35, z1 + 0.46), (1, 0, 0), (0, 1, 0), 0.6, 0.34, 0.02,
+           faces={"front": ("Screen", (1, 1, 1), "con_1")}, col=DARK)
+    for (xx, col) in ((HX + 1.85, (0.10, 0.75, 0.15)), (HX + 2.35, (0.85, 0.12, 0.08))):
+        T(m, "Steel", col, (xx, 0.85, z1 + 0.45), (xx, 0.85, z1 + 0.52), 0.04, segs=8)
+    B(m, "Steel", (0.06, 0.07, 0.08), -4.4, -2.8, 2.55, 3.45, z1, z1 + 0.02, var=False)   # the scale-house window, unlit
+    B(m, "Steel", DARK, -4.45, -2.75, 2.5, 2.55, z1, z1 + 0.08, var=False)
+    lamp_head(m, (0.0, HY + 0.85, z1 + 0.5), (0, -0.7, 0.7), w=0.8, h=0.35)
+    for x in (-W + 0.7, W - 0.7):
+        T(m, "Steel", GREY, (x, 0.15, z1 + 0.12), (x, H, z1 + 0.12), 0.07, segs=8)
+    # the roof: a dust cyclone and its duct, a vent stack
+    sub = CModel(); sub.color = LIGHT; sub.ground = False
+    lathe(sub, "Steel", [(0.05, 0.0), (0.18, 0.0), (0.85, 1.6), (0.85, 3.2), (0.0, 3.4)], segs=20)
+    m.merge(sub, None, (-3.0, H + 0.6, -3.0))
+    for (xx, zz) in ((-3.6, -3.6), (-2.4, -3.6), (-3.6, -2.4), (-2.4, -2.4)):
+        T(m, "Steel", GREY, (xx, H, zz), (xx, H + 2.2, zz), 0.05, segs=6)
+    T(m, "Steel", GREY, (-3.0, H + 3.4, -3.0), (2.5, H + 3.4, -3.0), 0.22, segs=12)
+    T(m, "Steel", GREY, (2.5, H + 3.4, -3.0), (2.5, H, -3.0), 0.22, segs=12)
+    T(m, "Steel", DARK, (3.8, H, -4.2), (3.8, H + 2.6, -4.2), 0.18, segs=12)
+    hvac(m, 3.0, H, 0.6, 2.0, 1.4, 0.9, fans=1)
+    # THE TRANSFER GALLERY: a covered conveyor bridge from the shed's east
+    # wall to the depot's west wall (the depot stands 23 m east of the shed's
+    # centre, its west wall 17 m off it), on a trestle
+    gx0, gx1, gy0, gy1, gz0, gz1 = W, 16.95, 4.4, 6.0, -2.9, -1.1
+    B(m, "Clad", RUST, gx0, gx1, gy0 + 0.2, gy1, gz0, gz1)
+    B(m, "Steel", DARK, gx0, gx1, gy0, gy0 + 0.2, gz0 - 0.05, gz1 + 0.05, var=False)
+    for zz in (gz0 - 0.05, gz1 + 0.05):
+        T(m, "Steel", GREY, (gx0 + 0.2, gy0 - 0.05, zz), (gx1 - 0.2, gy0 - 0.05, zz), 0.06, segs=6)
+    for x in np.arange(gx0 + 1.2, gx1 - 0.5, 1.8):
+        for zz in (gz0 - 0.05, gz1 + 0.05):
+            T(m, "Steel", GREY, (x, gy0 - 0.05, zz), (x + 0.9, gy0 + 0.15, zz), 0.03, segs=4)
+    tx = 11.4
+    for zz in (gz0 + 0.1, gz1 - 0.1):
+        T(m, "Steel", OCHRE, (tx, 0.0, zz), (tx, gy0, zz), 0.12, segs=10)
+        B(m, "Concrete", CONC, tx - 0.35, tx + 0.35, -0.3, 0.25, zz - 0.35, zz + 0.35, sh=sh)
+    T(m, "Steel", OCHRE, (tx, 0.6, gz0 + 0.1), (tx, gy0 - 0.3, gz1 - 0.1), 0.05, segs=6)
+    T(m, "Steel", OCHRE, (tx, 0.6, gz1 - 0.1), (tx, gy0 - 0.3, gz0 + 0.1), 0.05, segs=6)
+    sh.add((tx, gy0 / 2, (gz0 + gz1) / 2), (0.3, gy0, gz1 - gz0))
+    lights = [("Intake Light", (0.0, HY + 0.6, zm + 1.6), (1.0, 0.86, 0.66), 2.6, 16.0, (0.0, -1.0, 0.25))]
+    markers = [
+        # the belt's centreline ON its running surface: the tail end and the head
+        ("Belt Tail", (0.0, y, zt)), ("Belt Head", (0.0, y, zh)),
+        # where a load is TAKEN: just behind the curtain strips
+        ("Belt Take", (0.0, y, zm - 0.35)),
+        # where the receipt board hangs (over the hood)
+        ("Intake Board", (0.0, HY + 1.2, zm + 0.1)),
+    ]
+    return m, sh, lights, markers
+
+
+def repair_bay():
+    """REPAIR BAY — a drive-in service shed off Road East: an 11 × 15 m bay
+    under a roll-up door 8.4 m wide, room for a rover or a small lander. A
+    two-post lift against each wall, a gantry hoist, a tyre rack, tool wall
+    and bench, a propellant dispenser and a charger cabinet at the door; the
+    service console stands just inside it."""
+    m, sh = CModel(19), Shell()
+    W, D, H, t = 5.85, 7.85, 7.0, 0.35
+    DW, DH = 4.2, 5.6
+    B(m, "Concrete", CONC, -W - 0.35, W + 0.35, -0.6, 0.12, -D - 0.35, D + 1.2, sh=sh)
+    for sx in (-1, 1):
+        x0, x1 = (W - t, W) if sx > 0 else (-W, -W + t)
+        B(m, "Clad", GREYBLUE, x0, x1, -0.5, H, -D, D)
+        sh.add(((x0 + x1) / 2, H / 2, 0.0), (t, H, 2 * D))
+    B(m, "Clad", GREYBLUE, -W + t, W - t, -0.5, H, -D, -D + t, sh=sh)
+    z0, z1 = D - t, D
+    for (xa, xb) in ((-W + t, -DW - 0.3), (DW + 0.3, W - t)):
+        B(m, "Clad", GREYBLUE, xa, xb, -0.5, H, z0, z1)
+        sh.add(((xa + xb) / 2, H / 2, (z0 + z1) / 2), (xb - xa, H, t))
+    B(m, "Clad", GREYBLUE, -DW - 0.3, DW + 0.3, DH + 0.3, H, z0, z1, sh=sh)
+    for sx in (-1, 1):
+        for zz in (-D, D):
+            B(m, "Steel", GREY, sx * (W - 0.46), sx * (W + 0.15), -0.3, H + 0.5, zz - 0.15 if zz > 0 else zz - 0.15,
+              zz + 0.15 if zz > 0 else zz + 0.31)
+    # the door: posts striped, the roller drum and its guides
+    for sx in (-1, 1):
+        B(m, "Steel", DARK, sx * DW, sx * (DW + 0.3), 0.0, DH, z0 - 0.05, z1 + 0.1, var=False)
+        cuboid(m, (sx * (DW + 0.15), 1.0, z1 + 0.111), (1, 0, 0), (0, 1, 0), 0.26, 1.8, 0.02,
+               faces={"front": ("Sign", (1, 1, 1), "hazard")}, col=DARK)
+        bollard(m, sx * (DW + 0.75), D + 0.7)
+    B(m, "Steel", DARK, -DW - 0.3, DW + 0.3, DH, DH + 0.3, z0 - 0.05, z1 + 0.1, var=False)
+    T(m, "Steel", GREY, (-DW, DH + 0.75, z0 - 0.5), (DW, DH + 0.75, z0 - 0.5), 0.42, segs=16)
+    for k in range(5):
+        ya = DH - 0.55 + k * 0.11
+        B(m, "Steel", GREYBLUE, -DW + 0.03, DW - 0.03, ya, ya + 0.1, z0 - 0.12, z0 - 0.06, var=False)
+    plate(m, "repair_name", (0.0, DH + 0.95, z1), (1, 0, 0), (0, 1, 0), 4.2, depth=0.05)
+    plate(m, "bldg8", (-DW - 1.0, 2.4, z1), (1, 0, 0), (0, 1, 0), 0.6, depth=0.04)
+    plate(m, "bay_rules", (DW + 1.05, 2.3, z1), (1, 0, 0), (0, 1, 0), 1.25, depth=0.03)
+    lamp_head(m, (0.0, DH + 1.6, z1 + 0.5), (0, -0.7, 0.7), w=0.9, h=0.35)
+    for x in (-4.6, 4.6):
+        wall_pack(m, (x, 4.4, z1), (0, 0, 1))
+    # roof slab, parapet, skylights
+    B(m, "Concrete", CONC_DARK, -W + t, W - t, H - 0.3, H, -D + t, D - t, sh=sh)
+    for (xa, xb, za, zb) in ((-W + 0.46, W - 0.46, D - 0.2, D), (-W + 0.46, W - 0.46, -D, -D + 0.2),
+                             (W - 0.2, W, -D + 0.46, D - 0.46), (-W, -W + 0.2, -D + 0.46, D - 0.46)):
+        B(m, "Clad", GREYBLUE, xa, xb, H, H + 0.4, za, zb)
+    m.color = (0.10, 0.12, 0.15)
+    for zz in (-4.0, 0.0, 4.0):
+        box(m, "Glass", (0.0, H + 0.03, zz), (3.0, 0.06, 1.2))
+    # floor markings: the bay box and the stop line, hazard tape at the lifts
+    for (xa, xb, za, zb) in ((-4.0, -3.88, -6.6, 6.6), (3.88, 4.0, -6.6, 6.6), (-3.88, 3.88, -6.6, -6.48)):
+        B(m, "Steel", SAFETY, xa, xb, 0.12, 0.125, za, zb, var=False)
+    # two-post lifts against the side walls, arms swung back
+    for sx in (-1, 1):
+        for zz in (-1.6, 1.6):
+            B(m, "Steel", (0.20, 0.34, 0.52), sx * 4.75, sx * 5.2, 0.12, 3.9, zz - 0.25, zz + 0.25, sh=sh)
+            B(m, "Steel", DARK, sx * 4.7, sx * 5.25, 0.12, 0.2, zz - 0.35, zz + 0.35, var=False)
+            T(m, "Steel", GREY, (sx * 4.75, 0.55, zz), (sx * 4.1, 0.55, zz + (0.9 if zz > 0 else -0.9)), 0.06, segs=6)
+        B(m, "Steel", (0.20, 0.34, 0.52), sx * 4.8, sx * 5.15, 3.9, 4.1, -1.85, 1.85)
+    # the gantry hoist on its runway beams
+    for sx in (-1, 1):
+        B(m, "Steel", OCHRE, sx * 5.0, sx * 5.4, 5.9, 6.25, -D + 0.6, D - 0.9, var=False)
+    B(m, "Steel", OCHRE, -5.0, 5.0, 6.0, 6.35, -0.25, 0.25, var=False)
+    B(m, "Steel", DARK, 0.6, 1.2, 5.55, 6.0, -0.3, 0.3, var=False)
+    T(m, "Steel", DARK, (0.9, 5.55, 0.0), (0.9, 3.3, 0.0), 0.02, segs=4)
+    B(m, "Steel", OCHRE, 0.75, 1.05, 3.0, 3.3, -0.1, 0.1, var=False)
+    # the back wall: bench, tool board, tyre rack, compressor, shelving
+    zb = -D + t
+    B(m, "Steel", SLATE, -4.6, -1.0, 0.12, 0.95, zb, zb + 0.8, sh=sh, var=False)
+    B(m, "Steel", DARK, -4.7, -0.9, 0.95, 1.0, zb, zb + 0.85, var=False)
+    B(m, "Steel", (0.30, 0.31, 0.28), -4.5, -1.1, 1.3, 2.6, zb, zb + 0.04, var=False)
+    for k in range(8):
+        xx = -4.3 + k * 0.42
+        B(m, "Steel", (0.62, 0.15, 0.10) if k % 3 == 0 else GREY, xx, xx + 0.12, 1.5 + (k % 2) * 0.4, 1.95 + (k % 2) * 0.4,
+          zb + 0.04, zb + 0.09, var=False)
+    for k in range(5):
+        yy = 0.45 + k * 0.29
+        T(m, "Steel", RUBBER, (0.4 + (k % 2) * 0.05, yy, zb + 0.42), (0.4 + (k % 2) * 0.05, yy + 0.26, zb + 0.42), 0.36, segs=18)
+        T(m, "Steel", GREY, (0.4 + (k % 2) * 0.05, yy - 0.005, zb + 0.42), (0.4 + (k % 2) * 0.05, yy + 0.265, zb + 0.42), 0.17, segs=12)
+    B(m, "Steel", DARK, -0.1, 1.05, 0.12, 0.2, zb + 0.02, zb + 0.82, var=False)
+    B(m, "Steel", (0.62, 0.15, 0.10), 1.8, 2.8, 0.12, 0.85, zb + 0.1, zb + 0.7, sh=sh, var=False)
+    T(m, "Steel", (0.62, 0.15, 0.10), (1.95, 0.95, zb + 0.4), (2.65, 0.95, zb + 0.4), 0.22, segs=14)
+    for k in range(3):
+        y2 = 0.4 + k * 0.85
+        B(m, "Steel", GREY, 3.3, 5.3, y2, y2 + 0.05, zb + 0.05, zb + 0.65, var=False)
+        for j in range(3):
+            xx = 3.45 + j * 0.62
+            B(m, "Steel", (0.44, 0.36, 0.24) if (j + k) % 2 else (0.32, 0.38, 0.30), xx, xx + 0.48, y2 + 0.05, y2 + 0.45,
+              zb + 0.12, zb + 0.6)
+    for xx in (3.3, 5.25):
+        for zz in (zb + 0.05, zb + 0.6):
+            T(m, "Steel", GREY, (xx, 0.12, zz), (xx, 2.6, zz), 0.025, segs=5)
+    sh.add((4.3, 1.35, zb + 0.35), (2.05, 2.5, 0.65))
+    # at the door: the propellant dispenser (west) and the service console
+    # and charger (east), inside the wall line
+    zd = z0 - 0.9
+    B(m, "Steel", (0.62, 0.15, 0.10), -5.4, -4.6, 0.12, 1.9, zd - 0.35, zd + 0.35, sh=sh)
+    cuboid(m, (-4.59, 1.45, zd), (0, 0, -1), (0, 1, 0), 0.5, 0.3, 0.02,
+           faces={"front": ("Screen", (1, 1, 1), "con_2")}, col=DARK)
+    T(m, "Steel", RUBBER, (-4.6, 1.2, zd + 0.25), (-4.3, 0.4, zd + 0.6), 0.03, segs=6)
+    B(m, "Steel", GREEN_CAB, 4.6, 5.45, 0.12, 2.0, zd - 1.4, zd - 0.6, sh=sh)
+    T(m, "Steel", RUBBER, (4.6, 1.3, zd - 1.0), (4.3, 0.4, zd - 0.7), 0.035, segs=6)
+    # the service console: a pedestal with its screen turned to the bay
+    cx, cz = 4.85, zd + 0.2
+    B(m, "Steel", SLATE, cx - 0.3, cx + 0.3, 0.12, 1.05, cz - 0.25, cz + 0.25, sh=sh, var=False)
+    mt = rot_z(math.radians(18))
+    cuboid(m, (cx - 0.32, 1.25, cz), (0, 0, -1), mt @ np.array([0.0, 1.0, 0.0]), 0.6, 0.38, 0.05,
+           faces={"front": ("Screen", (1, 1, 1), "con_0")}, col=DARK)
+    # interior lamps and the exterior downpipes
+    m.color = LAMP_COOL
+    for zz in (-4.5, 0.0, 4.5):
+        box(m, "Lamp", (0.0, H - 0.33, zz), (0.4, 0.04, 2.4))
+    for x in (-W + 0.7, W - 0.7):
+        T(m, "Steel", GREY, (x, 0.15, D + 0.12), (x, H, D + 0.12), 0.07, segs=8)
+    hvac(m, 2.5, H, -4.5, 2.2, 1.6, 1.0, fans=1)
+    lights = [("Bay Light", (0.0, 5.2, 0.0), (0.94, 0.97, 1.0), 2.6, 15.0, None)]
+    markers = [("Repair Console", (cx - 0.5, 0.12, cz)), ("Bay Floor", (0.0, 0.12, -0.2))]
+    return m, sh, lights, markers

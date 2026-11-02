@@ -812,7 +812,7 @@
     (
         name: "Shell 32",
         transform: (
-            translation: (0.0000, -7.4604, 8.8608),
+            translation: (0.0000, -7.4604, 9.4608),
             rotation: (0.00000, 0.00000, 0.00000, 1.00000),
             scale: (1.0, 1.0, 1.0),
         ),
@@ -825,7 +825,7 @@
             mode: Static,
             radius: 0.5,
             height: 1.0,
-            half_extents: (0.7000, 0.0600, 2.4500),
+            half_extents: (0.7000, 0.0600, 1.8500),
             restitution: 0.0,
             friction: 0.9,
             gravity: false,

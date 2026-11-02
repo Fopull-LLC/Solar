@@ -142,6 +142,12 @@ MATERIALS = {
                          '                unlit: true,\n            )'),
     "Sign":     lambda: (f'(\n                color: (1.0, 1.0, 1.0),\n                texture: Some("{TEX}signs.png"),\n'
                          '                roughness: 0.62,\n                metallic: 0.05,\n                shading: Physical,\n            )'),
+    # The intake's conveyor belt: worn rubber with chevron cleats that scroll
+    # toward the hole (shaders/conveyor_belt.flsl; material_intake.lua feeds
+    # `phase`, the metres the belt has run, so the cleats move with the load).
+    "Belt":     lambda: ('(\n                color: (1.0, 1.0, 1.0),\n                roughness: 0.92,\n'
+                         '                metallic: 0.0,\n                shader: Some("shaders/conveyor_belt.flsl"),\n'
+                         '                shading: Physical,\n            )'),
 }
 
 
@@ -187,7 +193,7 @@ def f3(v):
     return f"({v[0]:.4f}, {v[1]:.4f}, {v[2]:.4f})"
 
 
-def collider_block(half, mode="Static"):
+def collider_block(half, mode="Static", friction=0.9):
     return f'''        rigidbody: Some((
             boxed: true,
             mode: {mode},
@@ -195,7 +201,7 @@ def collider_block(half, mode="Static"):
             height: 1.0,
             half_extents: {f3(half)},
             restitution: 0.0,
-            friction: 0.9,
+            friction: {friction},
             gravity: false,
             lock_pos: (false, false, false),
             lock_rot: (false, false, false),
@@ -204,10 +210,12 @@ def collider_block(half, mode="Static"):
 
 
 def prefab(name, glb, model, about, shell=None, lights=(), shift=(0, 0, 0), root_collider=None, tags=None, markers=(),
-           subs=()):
+           subs=(), scripts=()):
     names = sorted(model.parts.keys())
     mats = ",\n".join(f'            "{n}": {MATERIALS[n]()}' for n in names)
     tag_line = f"        tags: [{', '.join(chr(34) + t + chr(34) for t in tags)}],\n" if tags else ""
+    # scripts the structure runs itself (the base works: its belt, its bay)
+    script_line = ", ".join(f'( kind: "{k}", enabled: true, params: [] )' for k in scripts)
     out = [f'''// {about}
 // Written by tools/gen_base.py — edit the generator, not this file.
 [
@@ -224,7 +232,7 @@ def prefab(name, glb, model, about, shell=None, lights=(), shift=(0, 0, 0), root
         object_materials: {{
 {mats},
         }},
-        scripts: [],
+        scripts: [{script_line}],
 {collider_block(root_collider) if root_collider is not None else ""}    ),
 ''']
     d = np.asarray(shift, float)
@@ -262,7 +270,7 @@ def prefab(name, glb, model, about, shell=None, lights=(), shift=(0, 0, 0), root
         scripts: [],
         parent: Some(0),
         cast_shadow: false,
-{collider_block(s / 2)}    ),
+{collider_block(s / 2, friction=(shell.__dict__.get("friction", {}).get(i, 0.9)))}    ),
 ''')
     # Marker nodes scripts look up by name (no matter, no body).
     for (mname, p) in markers:
@@ -301,8 +309,8 @@ def prefab(name, glb, model, about, shell=None, lights=(), shift=(0, 0, 0), root
     return "".join(out)
 
 
-from base_buildings import (command_centre, depot, fuel_farm, launch_complex, pad_clamps,  # noqa: E402
-                            power, tracking, vab)
+from base_buildings import (command_centre, depot, fuel_farm, intake, launch_complex, pad_clamps,  # noqa: E402
+                            power, repair_bay, tracking, vab)
 from base_models import CModel, zcheck  # noqa: E402
 
 BUILDS = [
@@ -321,6 +329,13 @@ BUILDS = [
      "PROPELLANT FARM — LH2 sphere, LOX tanks, pump house, deluge water tower."),
     ("BasePad", "pad.glb", launch_complex,
      "LAUNCH COMPLEX 1 — hardstand, flame trench and deflector, mount, service tower, lightning masts, floodlights."),
+    # (prefab, glb, builder, about, tags, scripts): the base works
+    ("FacIntake", "intake.glb", intake,
+     "MATERIALS INTAKE — the depot's bulk feed conveyor: rocks, logs and wreckage dropped on the belt are taken in "
+     "and credited (scripts/material_intake.lua).", ["base_works", "intake"], ["material_intake"]),
+    ("FacRepair", "repair.glb", repair_bay,
+     "REPAIR BAY — drive in, stop, service the craft at the console (scripts/repair_bay.lua).",
+     ["base_works", "repair_bay"], ["repair_bay"]),
 ]
 
 
@@ -349,7 +364,16 @@ def main():
         base_tex.main()
     print("prefab        size (x, y, z)                seat     ox      oz     tris  boxes  mats")
     fights = 0
-    for name, glb, fn, about in BUILDS:
+    only = None
+    for a in sys.argv[1:]:
+        if a.startswith("--only="):
+            only = set(a[7:].split(","))
+    for entry in BUILDS:
+        name, glb, fn, about = entry[:4]
+        tags = entry[4] if len(entry) > 4 else None
+        scripts = entry[5] if len(entry) > 5 else ()
+        if only and name not in only:
+            continue
         res = fn()
         m, sh, lights = res[0], res[1], res[2]
         markers = res[3] if len(res) > 3 else ()
@@ -387,7 +411,8 @@ def main():
             sub_nodes.append((sname, sglb, sm, sc))
         about2 = about + f"\n// Ground frame → origin: seat {c[1]:.3f} m, lot offset ox {c[0]:.3f}, oz {c[2]:.3f} (base_facilities FACILITIES)."
         with open(os.path.join(PREFABS, name + ".prefab.ron"), "w") as f:
-            f.write(prefab(name, glb, mc, about2, shell=sh, lights=lights, shift=c, markers=markers, subs=sub_nodes))
+            f.write(prefab(name, glb, mc, about2, shell=sh, lights=lights, shift=c, markers=markers, subs=sub_nodes,
+                           tags=tags, scripts=scripts))
     if not dry:
         # BaseFlood: one apron floodlight (a spot down its −Z). The mast and
         # the lamp housing are in base_facilities' fixtures mesh; this is only

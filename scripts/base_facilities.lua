@@ -64,8 +64,12 @@ STRIPS = {
   { "Apron",       0.0, -24.0,   0.0,   2.6, 24.0, "apron" },
   { "Crawlerway",  0.0,  57.6,   0.0,  96.0,  8.0, "crawler" },
   { "Road East",  24.0,  -8.0,  96.0,  -8.0,  4.0, "road" },
-  { "Road West", -24.0,  -8.0, -66.0,  -8.0,  4.0, "road" },
+  { "Road West", -24.0,  -8.0, -82.0,  -8.0,  4.0, "road" },
   { "Depot Yard", -50.0, -4.0, -50.0,   5.8,  9.0, "yard" },
+  -- the Materials Intake's yard, west of the depot's and abutting it and the
+  -- road (strips may touch, never overlap: two pavings in one plane fight):
+  -- room to park a truck either side of the feed belt
+  { "Intake Yard", -70.5, -4.0, -70.5,  6.0, 11.5, "yard" },
   { "Command Walk", 50.0, -4.0, 50.0,   1.7,  4.0, "walk" },
   { "Power Yard",  84.0,  -4.0,  84.0,  8.0,  3.0, "walk" },
   { "Fuel Spur",   -8.0, 104.0, -31.0, 104.0,  3.0, "road" },
@@ -87,13 +91,22 @@ FACILITIES = {
   { prefab = "FacPower",    u = 84.0,  v = 14.0,  face = "S", seat = 2.570,  ox = 0.013, oz = 0.000,  lot = { 18.0, 12.0 } },
   { prefab = "BaseFuel",    u = -40.0, v = 112.0, face = "W", seat = 8.967,  ox = 0.000, oz = 0.000,  lot = { 28.0, 18.0 } },
   { prefab = "BasePad",     u = 0.0,   v = 125.0, face = "N", seat = 16.520, ox = 0.000, oz = -4.011, lot = { 42.0, 50.0 } },
+  -- THE BASE WORKS (2026-11-02). The Materials Intake stands on the depot's
+  -- west side, its front wall in line with the depot's (v = 6), its feed belt
+  -- running 9.6 m out across the Intake Yard and its transfer gallery meeting
+  -- the depot's west wall (u = -58); scripts/material_intake.lua runs on it.
+  -- The Repair Bay stands south of Road East, its door on the road (its
+  -- floor's front lip at v = -12, the road's south edge); scripts/
+  -- repair_bay.lua runs on it.
+  { prefab = "FacIntake",   u = -75.0, v = 10.0,  face = "S", seat = 5.100,  ox = 5.353, oz = 3.710,  lot = { 23.51, 20.22 }, lift = 0.15 },
+  { prefab = "FacRepair",   u = 46.0,  v = -21.1, face = "N", seat = 3.945,  ox = 0.000, oz = 0.425,  lot = { 12.40, 17.25 }, lift = 0.15 },
 }
 -- Launch Complex 1, in its own ground frame (tools/gen_base.py): the mount is
 -- the lot centre, the hardstand top HS_H over the ground.
 PAD = { u = 0.0, v = 125.0, hs = 2.0 }
 
 -- The fence round the building compound (u0, v0, u1, v1), with its gates.
-FENCE = { u0 = -70.0, v0 = -30.0, u1 = 100.0, v1 = 62.0,
+FENCE = { u0 = -88.0, v0 = -33.0, u1 = 100.0, v1 = 62.0,
           gates = { { side = "S", a = -9.0, b = 9.0 }, { side = "N", a = -11.0, b = 11.0 } } }
 
 -- How far round from C the base reaches (the runway's corners, the pad's
@@ -1233,21 +1246,21 @@ local DIGITS = {
 -- of each tile. Written by tools/gen_base.py between the markers — do not edit.
 -- SIGN_UV begin
 SIGN_UV = {
-  ["blast"] = { 0.43994, 0.73991, 0.88818, 0.79785 },
-  ["g_-"] = { 0.68799, 0.91569, 0.74951, 0.95671 },
-  ["g_0"] = { 0.00439, 0.91569, 0.06592, 0.95671 },
-  ["g_1"] = { 0.07275, 0.91569, 0.13428, 0.95671 },
-  ["g_2"] = { 0.14111, 0.91569, 0.20264, 0.95671 },
-  ["g_3"] = { 0.20947, 0.91569, 0.27100, 0.95671 },
-  ["g_4"] = { 0.27783, 0.91569, 0.33936, 0.95671 },
-  ["g_5"] = { 0.34619, 0.91569, 0.40771, 0.95671 },
-  ["g_6"] = { 0.41455, 0.91569, 0.47607, 0.95671 },
-  ["g_7"] = { 0.48291, 0.91569, 0.54443, 0.95671 },
-  ["g_8"] = { 0.55127, 0.91569, 0.61279, 0.95671 },
-  ["g_9"] = { 0.61963, 0.91569, 0.68115, 0.95671 },
-  ["g_A_dir"] = { 0.82471, 0.91569, 0.88623, 0.95671 },
-  ["g_A_loc"] = { 0.75635, 0.91569, 0.81787, 0.95671 },
-  ["hazard"] = { 0.00439, 0.96126, 0.25342, 0.99186 },
+  ["blast"] = { 0.43994, 0.64537, 0.88818, 0.69503 },
+  ["g_-"] = { 0.55127, 0.87416, 0.61279, 0.90932 },
+  ["g_0"] = { 0.83643, 0.83510, 0.89795, 0.87026 },
+  ["g_1"] = { 0.90479, 0.83510, 0.96631, 0.87026 },
+  ["g_2"] = { 0.00439, 0.87416, 0.06592, 0.90932 },
+  ["g_3"] = { 0.07275, 0.87416, 0.13428, 0.90932 },
+  ["g_4"] = { 0.14111, 0.87416, 0.20264, 0.90932 },
+  ["g_5"] = { 0.20947, 0.87416, 0.27100, 0.90932 },
+  ["g_6"] = { 0.27783, 0.87416, 0.33936, 0.90932 },
+  ["g_7"] = { 0.34619, 0.87416, 0.40771, 0.90932 },
+  ["g_8"] = { 0.41455, 0.87416, 0.47607, 0.90932 },
+  ["g_9"] = { 0.48291, 0.87416, 0.54443, 0.90932 },
+  ["g_A_dir"] = { 0.68799, 0.87416, 0.74951, 0.90932 },
+  ["g_A_loc"] = { 0.61963, 0.87416, 0.68115, 0.90932 },
+  ["hazard"] = { 0.00439, 0.91323, 0.25342, 0.93945 },
   blast_aspect = 0.1939,
 }
 -- SIGN_UV end

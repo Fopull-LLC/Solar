@@ -234,6 +234,23 @@ function recover(id)
   return moved, left
 end
 
+-- Would anything in the crate fit in the pack right now? (playtest
+-- 2026-11-02: a full pack left the marker standing with no word why.)
+FULL_LINE = "Pack full — make room to take it"
+function canTake(id, to)
+  local inv = ref("inventory")
+  if not inv then return false end
+  to = to or "astro"
+  local cid = containerOf(id)
+  for _, it in ipairs(inv.items(cid)) do
+    if (inv.roomFor(to, it.mat, 1) or 0) >= 1 then return true end
+  end
+  for _, g in ipairs(inv.itemList and inv.itemList(cid) or {}) do
+    if (inv.roomForItem(to, g.id, 1) or 0) >= 1 then return true end
+  end
+  return false
+end
+
 -- ── in the world ────────────────────────────────────────────────────────────
 -- A crate's node, parented to its planet (local = body-relative) like the
 -- relay beacons, its +Y up the radial. A fresh one starts where it was dropped
@@ -290,6 +307,7 @@ end
 
 local near = nil         -- the crate entry the prompt is offering
 local near_d = nil
+near_full = false        -- nothing in it fits the pack (the prompt says so)
 local scan_t = -10
 
 -- Is the E prompt up (E means "recover" right now)?
@@ -340,18 +358,19 @@ function update(node, dt)
   local e, d = nearest(a.x, a.y, a.z, params.reach)
   if not e then return end
   near, near_d = e, d
+  near_full = not canTake(e.id)
   if interact_pressed() then
     local moved, left = recover(e.id)
     local msg
     if moved <= 0 and left > 0 then
-      msg = string.format("no room in the pack — %.0f kg still in the crate", left)
+      msg = string.format("%s · %.0f kg still in the crate", FULL_LINE, left)
     elseif left > 0 then
       msg = string.format("%.0f kg back in the pack · %.0f kg won't fit, still in the crate", moved, left)
     else
       msg = string.format("suit pack recovered · %.0f kg", moved)
     end
     local bc = ref("big_caption")
-    if bc and bc.show then bc.show(left > 0 and "SALVAGE" or "PACK RECOVERED", msg .. ".", 3.5)
+    if bc and bc.show then bc.show((moved <= 0 and left > 0) and "PACK FULL" or (left > 0 and "SALVAGE" or "PACK RECOVERED"), msg .. ".", 3.5)
     elseif caption then caption(msg) end
     local fx = ref("sfx")
     if fx and fx.play then fx.play(moved > 0 and "pickup" or "leave") end
@@ -470,8 +489,13 @@ function lateUpdate(node, dt)
   if not vw or vw <= 0 then return end
   local k = vh / uiH()
   if near then
-    tag(vx + vw * 0.5, vy + vh * 0.70, string.format("E   Recover the suit pack  ·  %.0f kg", near.kg or 0),
-        16 * k, 1.0, 0.86, 0.62, 1.0)
+    if near_full then
+      tag(vx + vw * 0.5, vy + vh * 0.70, string.format("%s  ·  %.0f kg in the crate", FULL_LINE, near.kg or 0),
+          16 * k, 1.0, 0.52, 0.36, 1.0)
+    else
+      tag(vx + vw * 0.5, vy + vh * 0.70, string.format("E   Recover the suit pack  ·  %.0f kg", near.kg or 0),
+          16 * k, 1.0, 0.86, 0.62, 1.0)
+    end
   end
   if (params.markers or 1) < 0.5 then return end
   local here = space.dominant and space.dominant(o.x, o.y, o.z)

@@ -217,12 +217,13 @@ do
   list = R.entriesFor(part(5), ctx_for(far))
   local lk = R.byId(list, "locker")
   ok(lk and R.live(lk.value):match("^%d"), "a locker shows its load")
-  local cs = R.byId(list, "open")
+  ok(R.byId(list, "open") == nil, "no separate Contents row: the meter and Take… say it (playtest 2026-11-02)")
+  local cs = R.byId(list, "take_locker:7")
+  ok(cs and cs.enabled == nil, "Take… opens from afar: it is the contents list")
   local rows = cs.sub()
   local found = false
   for _, e in ipairs(rows) do
-    if e.label:match("4 × ") then found = true end
-    ok(e.type == "info" or e.type == "meter", "locker contents are read-only rows")
+    if e.label:match("4 × ") then found = true; ok(e.type == "info", "a material stack is an info row") end
   end
   ok(found, "the locker lists what is in it")
   ok(R.live(R.byId(list, "mass").value) == "92 kg", "a locker's load weighs on the part")

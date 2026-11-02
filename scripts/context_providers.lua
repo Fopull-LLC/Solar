@@ -151,27 +151,6 @@ function contents(inv, mats, cid)
   return out
 end
 
--- A container, READ-ONLY: its load and what is in it. (Moving things in and
--- out is the item work's: a provider of its own, conditioned on the actor and
--- what they hold — see the API at the top of context_registry.lua.)
-local function contents_sub(ctx, cid, name)
-  return function()
-    local inv, mats = R(ctx, "inventory"), R(ctx, "materials")
-    if not inv then return { { type = "info", label = "no inventory in this scene" } } end
-    local out = {}
-    out[#out + 1] = { type = "meter", id = "load", label = string.upper(name),
-      frac = function() local c = inv.cap(cid); return c > 0 and inv.mass(cid) / c or 0 end,
-      value = function() return string.format("%s / %s", kgs(ctx, inv.mass(cid)), kgs(ctx, inv.cap(cid))) end }
-    local inside = contents(inv, mats, cid)
-    if #inside == 0 then out[#out + 1] = { type = "info", id = "empty", label = "— empty —" } end
-    for _, it in ipairs(inside) do
-      out[#out + 1] = { type = "info", id = "c_" .. it.what .. "_" .. it.id,
-        label = string.format("%d × %s", it.n, it.label), value = kgs(ctx, it.kg) }
-    end
-    return out
-  end
-end
-
 -- ── the suit ────────────────────────────────────────────────────────────────
 -- The helmet is the suit's (the EVA-suit work publishes setHelmet / helmetOn
 -- and the reason it won't come off). Asked defensively: whichever script
@@ -464,8 +443,11 @@ function move_rows(out, ctx, t, cid, group, what)
   local function pack() return (ctx.actor and ctx.actor.pack) or "astro" end
   local function reach_ok() return actorReach(ctx, t) ~= nil end
   local function reach_why() local _, d = actorReach(ctx, t); return far_why(d) end
+  -- Take… IS the contents list (playtest 2026-11-02: a separate "Contents"
+  -- row beside the load meter said the same thing twice), so it opens from
+  -- anywhere the menu does; only its rows need the actor at the part.
   out[#out + 1] = { type = "sub", id = "take_" .. cid, group = group, label = "Take…", hint = "▸",
-    title = "TAKE  ·  " .. what, enabled = reach_ok, why = reach_why,
+    title = "TAKE  ·  " .. what,
     sub = function()
       local inv, mats = R(ctx, "inventory"), R(ctx, "materials")
       local list = {}
@@ -482,6 +464,11 @@ function move_rows(out, ctx, t, cid, group, what)
           end }
       end
       local mat_rows = inv.items(cid)
+      for _, it in ipairs(mat_rows) do
+        list[#list + 1] = { type = "info", id = "c_mat_" .. it.mat,
+          label = string.format("%d × %s", it.n, (mats and mats.label and mats.label(it.mat)) or it.mat),
+          value = kgs(ctx, it.kg) }
+      end
       if #mat_rows > 0 then
         list[#list + 1] = { type = "action", id = "take_mats", keep = true, label = "Take the materials",
           hint = string.format("%d kinds", #mat_rows), enabled = reach_ok, why = reach_why,
@@ -536,8 +523,6 @@ local function part_storage(t, ctx)
     out[#out + 1] = { type = "meter", id = "locker", group = "STOWAGE", label = "LOCKER",
       frac = function() local c = inv.cap(cid); return c > 0 and inv.mass(cid) / c or 0 end,
       value = function() return string.format("%s / %s", kgs(ctx, inv.mass(cid)), kgs(ctx, inv.cap(cid))) end }
-    out[#out + 1] = { type = "sub", id = "open", group = "STOWAGE", label = "Contents",
-      hint = "▸", title = "LOCKER  ·  " .. (v.craftName or "craft"), sub = contents_sub(ctx, cid, "Locker") }
     move_rows(out, ctx, t, cid, "STOWAGE", "LOCKER")
     local I = R(ctx, "items")
     if inv.refill and I and I.fillCap then
@@ -571,8 +556,6 @@ local function part_storage(t, ctx)
     out[#out + 1] = { type = "meter", id = "hold", group = "CARGO", label = "HOLD",
       frac = function() local c = inv.cap(hid); return c > 0 and inv.mass(hid) / c or 0 end,
       value = function() return string.format("%s / %s", kgs(ctx, inv.mass(hid)), kgs(ctx, inv.cap(hid))) end }
-    out[#out + 1] = { type = "sub", id = "openhold", group = "CARGO", label = "Contents",
-      hint = "▸", title = "HOLD  ·  " .. (v.craftName or "craft"), sub = contents_sub(ctx, hid, "Hold") }
     move_rows(out, ctx, t, hid, "CARGO", "HOLD")
   end
   return out
@@ -739,8 +722,9 @@ local function crate_provider(t, ctx)
     out[#out + 1] = { type = "info", id = "c_" .. it.id, label = string.format("%d × %s", it.n, it.label), value = kgs(ctx, it.kg) }
   end
   local access, d = actorReach(ctx, t, 1.0)
+  local room = (not sv.canTake) or sv.canTake(t.id, (ctx.actor and ctx.actor.pack) or "astro")
   out[#out + 1] = { type = "action", id = "recover", label = "Take it all back", hint = "E",
-    enabled = access ~= nil, why = far_why(d),
+    enabled = access ~= nil and room, why = access == nil and far_why(d) or (sv.FULL_LINE or "Pack full — make room to take it"),
     act = function()
       local kg, left = sv.recover(t.id)
       if ctx.toast then ctx.toast(string.format("%s back in the pack%s", kgs(ctx, kg or 0),
@@ -759,6 +743,15 @@ local function prop_provider(t, ctx)
   end
   -- (a base supply crate is static: supply_crates.lua gives its own rows)
   if t.node and t.node.hasTag and t.node:hasTag("supply_crate") then return out, "Supply crate" end
+  -- (the base works — the intake, the repair bay — are buildings with their
+  -- own rows: material_intake.lua, repair_bay.lua; no gun carries them)
+  do
+    local n, k = t.node, 0
+    while n and n.valid ~= false and k < 4 do
+      if n.hasTag and n:hasTag("base_works") then return {} end
+      n, k = n.parent, k + 1
+    end
+  end
   if t.mass then out[#out + 1] = { type = "info", id = "mass", label = "MASS", value = tonnes(ctx, t.mass) } end
   out[#out + 1] = { type = "info", id = "grab", label = "", value = "the Gravity Gun can carry it" }
   return out, t.label or (t.node and t.node.name) or "Object"

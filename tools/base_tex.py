@@ -184,7 +184,7 @@ def asphalt():
 # ── the sign atlas ──────────────────────────────────────────────────────────
 
 ATLAS = 1024
-ATLAS_H = 1536
+ATLAS_H = 1792   # 1536 until the base works (2026-11-02) added their plates
 REGIONS = {}   # name -> (u0, v0, u1, v1) in 0..1, v down from the top
 
 
@@ -333,11 +333,18 @@ def signs():
     P.put("depot_name", plate("COMMERCE DEPOT", 440, 76, SLATE_BG, PLATE_FG, seed=13))
     P.put("track_name", plate("TRACKING STATION", 400, 64, SLATE_BG, PLATE_FG, seed=14))
     P.put("power_name", plate("POWER STATION", 340, 64, SLATE_BG, PLATE_FG, seed=15))
-    for k, (code, sub) in enumerate((("1", "VAB"), ("2", "OPS"), ("3", "LOG"), ("4", "TRK"), ("5", "PWR"), ("6", "PROP"))):
+    P.put("intake_name", plate("MATERIALS INTAKE", 400, 64, SLATE_BG, PLATE_FG, seed=16))
+    P.put("repair_name", plate("REPAIR BAY", 300, 64, SLATE_BG, PLATE_FG, seed=17))
+    for k, (code, sub) in enumerate((("1", "VAB"), ("2", "OPS"), ("3", "LOG"), ("4", "TRK"), ("5", "PWR"), ("6", "PROP"),
+                                     ("7", "BULK"), ("8", "SVC"))):
         P.put(f"bldg{code}", plate(code, 112, 136, (226, 226, 220), (38, 42, 48), size=88, border=(38, 42, 48), sub=f"BLDG · {sub}", seed=20 + k))
     P.put("hv", plate("DANGER — HIGH VOLTAGE", 400, 90, (204, 160, 40), (24, 22, 20), border=(24, 22, 20), seed=31))
     P.put("cryo", plate("CRYOGENIC — NO OPEN FLAME", 440, 90, (226, 226, 220), (150, 34, 26), border=(150, 34, 26), seed=32))
     P.put("blast", plate("DANGER — LAUNCH HAZARD AREA", 460, 90, (226, 226, 220), (150, 34, 26), border=(150, 34, 26), seed=33))
+    P.put("conveyor", plate("DANGER — MOVING CONVEYOR · KEEP CLEAR", 420, 64, (204, 160, 40), (24, 22, 20),
+                            border=(24, 22, 20), seed=39))
+    P.put("bay_rules", plate("PARK INSIDE · STOP · SERVICE AT CONSOLE", 420, 64, (226, 226, 220), (34, 46, 70),
+                             border=(34, 46, 70), seed=40))
     P.put("lh2", plate("LH2", 200, 100, (226, 226, 220), (34, 46, 70), font=FONT_STENCIL, border=(34, 46, 70), seed=34))
     P.put("lox", plate("LOX", 200, 100, (226, 226, 220), (34, 46, 70), font=FONT_STENCIL, border=(34, 46, 70), seed=35))
     P.put("wall_l", screen("map", 320, 218, 51))
