@@ -290,9 +290,121 @@ local function ctrl_rows(B, out)
   out[#out + 1] = { "text", key = "cml", style = "panel/hint", w = "100%", h = "fit", wrap = true, text = line }
 end
 
+-- ── ABOUT: what a part is, in words (playtest 2026-11: "clicking a part
+-- should inspect it, its description in INSP" — and the one-line role was
+-- cut off at the plate's side). A paragraph for the parts that need one, then
+-- the part's own numbers read off the registry, in a scroll view of its own
+-- (the wheel scrolls it; its clipped edges fade) so a long one never pushes
+-- the position fields off the plate. It sits ABOVE the plate's own scroll,
+-- not inside it: the engine lets the outermost scroll view clip everything
+-- under it, so a scroll nested in one neither clips nor takes the wheel.
+ABOUT = {
+  pod = "A one-seat capsule: the heart of a first rocket. It commands the craft, carries a battery and a radio home, and its heat shield takes a return from orbit. Hang a parachute on its nose and it lands you.",
+  podMk2 = "A three-seat capsule on a 1 m stack. Room for a crew who can repair, plant flags and walk on other worlds. Its own battery and radio; the hatch faces +X.",
+  cabin = "Four passenger seats and nothing to fly with: put a pod, a cockpit or a command seat on the same craft. Crew in a cabin are safe from the air and the cold.",
+  seat = "An open seat you sit in and drive from, in the open air. It faces +X. It brings no battery and no wheels: a rover needs both.",
+  probe = "Flies the craft with nobody aboard, as long as it has power and a radio link home. No life support, no crew.",
+  chute = "Opens on its stage (or when you press its key) and slows the landing. Wait until you are slow and low: opened too fast it tears.",
+  tankS = "A small fuel tank. Engines under it, or anywhere on the same stage, draw from it. Full it is several times its empty mass.",
+  tankM = "The workhorse fuel tank. Stack two under a pod for a first flight; more fuel means more Δv but a heavier lift.",
+  engineS = "A light, cheap engine for landers and probes. Fine in air or in vacuum, but weak: it will not lift much off the pad.",
+  engineM = "The upper-stage engine: at its best in vacuum, poor at sea level. Put a lifter under it to get off the ground.",
+  skipper = "The lifter: huge thrust at sea level, heavy, and so-so in vacuum. The first stage of anything going far.",
+  decoupler = "Splits the stack in two when its stage fires: everything below it falls away. The stage list shows what it drops.",
+  radialDec = "Holds a side booster or a drop tank on a flank and kicks it away when its stage fires. Ring it with symmetry.",
+  legs = "Landing legs: they fold out on the Gear key and take the bump of a landing on rough ground.",
+  battery = "Stores power for everything aboard: probe cores, wheels, lights and radios. Charge it with solar panels.",
+  solar = "Makes power in sunlight: more nearer the star, none in a planet's shadow. Deploys on its key.",
+  roverBody = "A rover's chassis: a probe core, a battery and lights in one box. Its front is +X. Bolt wheels to its sides.",
+  wheelS = "A small powered wheel. Steering and drive are set per wheel in INSPECT.",
+  wheelM = "A medium powered wheel: the usual rover wheel. Steering, drive and suspension are set per wheel in INSPECT.",
+  wheelL = "A big powered wheel for rough ground and heavy loads. It draws the most power.",
+  locker = "A box with its own 80 kg and 120 L of storage. Buy kit into it in the CREW tab (medkits, beacons, repair kits): it flies with the craft, and the crew take things out of it from its right-click menu.",
+  cargo = "The hold: 250 kg and 1000 L a bay, pooled across every bay aboard. Ore you mine rides home in it, and kit bought in the CREW tab rides out in it.",
+  dockPort = "Two ports brought face to face capture and weld two craft into one. Its UNDOCK control splits them again at that seam.",
+  rcs = "A four-way thruster block for fine moves when docking. Balance them round the hull; a craft with none cannot translate.",
+  fairingS = "A shell that keeps the air off a payload. Press B to draw its shape, or let it fit what is on it. It falls away on its stage.",
+  fairingM = "A shell that keeps the air off a payload. Press B to draw its shape, or let it fit what is on it. It falls away on its stage.",
+  hub = "A node block with six faces. Optional: beams join flush without one, but a hub gives a clean corner to build out from.",
+  hinge = "A servo hinge, ±90°. Bind its two directions to keys in CONTROLS; it holds where it stops.",
+  piston = "Extends 0.8 m on its keys and holds where it stops.",
+  rotor = "Spins whatever is mounted on it, up to 60 rpm.",
+  drill = "Bores into the ground while the craft is landed and fills the hold with what it finds.",
+}
+local function fmt_m(x) return (x >= 1 or x == 0) and string.format("%.2f m", x) or string.format("%.0f cm", x * 100) end
+function aboutText(B, raw, def)
+  def = def or raw or {}
+  local id = raw and raw.id
+  local lines = {}
+  local para = (id and ABOUT[id]) or nil
+  if para then lines[#lines + 1] = para end
+  if def.desc then lines[#lines + 1] = (def.desc:gsub("^%l", string.upper)) end
+  local spec = {}
+  if def.thrust and def.thrust > 0 then
+    local k = def.asl or 1
+    spec[#spec + 1] = def.asl and string.format("Thrust %.0f kN at sea level, %.0f kN in vacuum.", def.thrust * k, def.thrust)
+      or string.format("Thrust %.0f kN.", def.thrust)
+    if def.ve then spec[#spec + 1] = string.format("Exhaust %.0f m/s.", def.ve) end
+  end
+  if (def.fuel or 0) > 0 then
+    local ft = def.fuel_t or (B and B.FUEL_T_PER_UNIT) or 0.01
+    spec[#spec + 1] = string.format("Holds %d fuel: %.2f t full, %.2f t empty.", def.fuel, (def.mass or 0) + def.fuel * ft, def.mass or 0)
+  end
+  local crew = nil
+  for _, m in ipairs(def.mods or {}) do
+    if (m.type == "command" or m.type == "cabin") and (m.crew or 0) > 0 then crew = m.crew end
+  end
+  if type(def.seats) == "table" and #def.seats > 0 then crew = #def.seats end
+  if crew then spec[#spec + 1] = string.format("Seats %d — assign crew in the CREW tab.", crew) end
+  if (def.store or 0) > 0 then spec[#spec + 1] = string.format("Stores %d kg of kit.", def.store) end
+  if (def.cargo or 0) > 0 then spec[#spec + 1] = string.format("Carries %d kg of cargo.", def.cargo) end
+  if (def.ec or 0) > 0 then spec[#spec + 1] = string.format("Stores %d units of power.", def.ec) end
+  if (def.gen or 0) > 0 then spec[#spec + 1] = string.format("Makes %.1f power/s in sunlight.", def.gen) end
+  local fit = {}
+  if def.top or def.bottom then fit[#fit + 1] = "stacks" end
+  if def.side then fit[#fit + 1] = "takes parts on its flanks" end
+  if def.radial_orient then fit[#fit + 1] = "mounts on a flank" end
+  if #fit > 0 then spec[#spec + 1] = "It " .. table.concat(fit, ", ") .. "." end
+  spec[#spec + 1] = string.format("%s tall, %s across.", fmt_m(def.h or 0), fmt_m(2 * (def.rx or 0)))
+  if (def.strength or 0) > 0 then spec[#spec + 1] = string.format("Its joints hold %d kN.", def.strength) end
+  lines[#lines + 1] = table.concat(spec, " ")
+  return table.concat(lines, "\n\n")
+end
+ABOUT_MAX_H = 112
+local function about_rows(B, raw, def, out, top)
+  out = top or out
+  out[#out + 1] = sublabel("abh", "ABOUT")
+  out[#out + 1] = { "scroll", key = "about", name = "InspAbout", w = "100%", h = "fit", maxH = ABOUT_MAX_H,
+    dir = "column", gap = 0, pad = 0, align = "stretch", scrollFade = 12, scrollSpeed = 24,
+    { "text", key = "t", style = "panel/body", w = "100%", h = "fit", wrap = true, text = aboutText(B, raw, def) } }
+end
+
 -- ── INSPECT ─────────────────────────────────────────────────────────────────
-local function inspect(B, out)
+-- The part in your hand (fresh from PARTS, nothing selected): what it is.
+local function inspect_held(B, id, out, top)
+  local raw = B.partInfo and B.partInfo(id)
+  if not raw then return false end
+  local def = (raw.thrust and B.liveDef and B.liveDef(raw)) or raw
+  local r = {}
+  for k, v in pairs(raw) do r[k] = v end
+  r.id = r.id or id
+  top[#top + 1] = { "text", key = "name", style = "panel/title", w = "100%", h = "fit", text = def.label or id,
+    maxLines = 2, wrap = true }
+  top[#top + 1] = { "text", key = "sub", style = "panel/hint", w = "100%", h = 14, maxLines = 1, overflow = "ellipsis",
+    text = "IN HAND  ·  click to place it, ESC puts it back" }
+  about_rows(B, r, def, out, top)
+  out[#out + 1] = figure("m", "MASS", mass_text((def.mass or 0) + (def.fuel or 0) * (B.FUEL_T_PER_UNIT or 0.01)))
+  out[#out + 1] = figure("c", "COST", money(def.cost))
+  if raw.thrust then engine_rows(B, raw, out) end
+  return true
+end
+
+local function inspect(B, out, top)
+  top = top or out
   local sel = B.selection and B.selection() or {}
+  local held = B.heldId and B.heldId() or nil
+  if held and B.holding and B.holding() ~= "part" then held = nil end
+  if held and #sel == 0 and inspect_held(B, held, out, top) then return end
   if #sel == 0 then
     out[#out + 1] = { "text", key = "none", style = "panel/body", w = "100%", h = "fit", wrap = true,
       text = "Nothing selected. Click a part to inspect it, or pick one from PARTS to build." }
@@ -327,14 +439,20 @@ local function inspect(B, out)
   end
   local title = def.label or rec.id
   if n > 1 then title = string.format("%s +%d", title, n - 1) end
-  out[#out + 1] = { "text", key = "name", style = "panel/title", w = "100%", h = "fit", text = title,
+  top[#top + 1] = { "text", key = "name", style = "panel/title", w = "100%", h = "fit", text = title,
     maxLines = 2, wrap = true }
   local ring = rec.sym and (rec.mir and "mirror pair" or "symmetry set") or nil
-  out[#out + 1] = { "text", key = "sub", style = "panel/hint", w = "100%", h = 14, maxLines = 1, overflow = "ellipsis",
-    text = (n > 1 and (n .. " parts selected") or role_line(def)) .. (ring and ("  ·  " .. ring) or "") }
+  top[#top + 1] = { "text", key = "sub", style = "panel/hint", w = "100%", h = 14, maxLines = 1, overflow = "ellipsis",
+    text = (n > 1 and (n .. " parts selected") or (def.kind or "part"):upper()) .. (ring and ("  ·  " .. ring) or "") }
   out[#out + 1] = figure("m", "MASS", mass_text(mass))
   out[#out + 1] = figure("c", "COST", money(cost))
   if raw.thrust and n == 1 then engine_rows(B, raw, out) end
+  if n == 1 then
+    local r = {}
+    for k, v in pairs(raw) do r[k] = v end
+    r.id = rec.id
+    about_rows(B, r, def, out, top)
+  end
   out[#out + 1] = rule("r1")
 
   -- Where it is, in metres in the build frame; ENTER moves it there.
@@ -458,13 +576,50 @@ local function stage_rows(B, out)
       onDropped = function() if st.drag then move(st.drag, to, true) end st.drag = nil end }
   end
   if N > 0 then out[#out + 1] = newzone("ntop", N + 1, "+ NEW STAGE (fires last)") end
+  -- A STAGE IN YOUR HAND (its card's grip dragged): an orange line between
+  -- the cards shows where it will go. Gap k lies between stage k+1 (above)
+  -- and stage k (below), read off the pointer against the cards' laid-out
+  -- rects (node:uiRect), so anywhere over the stack — a card, the space
+  -- between two — is a place to drop it.
+  local sd = st.sdrag
+  local list = { "col", key = "slist", name = "StageList", w = "100%", h = "fit", gap = 3, pad = 0, align = "stretch",
+    dropTarget = sd ~= nil or nil,
+    onDragOver = function() stage_over(N) end,
+    onDropped = function() if st.sdrag then reorder_drop(B, gap_at_mouse(N)) end end }
+  local function target_of(k)                  -- the stage's new index for gap k
+    if not sd then return nil end
+    if k == sd or k == sd - 1 then return nil end
+    return (sd <= k) and k or (k + 1)
+  end
+  local function gap(k)
+    local t = target_of(k)
+    local lit = t ~= nil and st.gap == k
+    return { "box", key = "g" .. k, name = "StageGap" .. k, style = lit and "ctl/fill" or nil, w = "100%",
+      h = lit and 3 or 0 }
+  end
   for n = N, 1, -1 do
     local sg = stages[n]
-    local card = { "col", key = "s" .. n, style = "panel/row", w = "100%", h = "fit", gap = 2, pad = 4, align = "stretch",
+    list[#list + 1] = gap(n)
+    local lifted = sd == n
+    local card = { "col", key = "s" .. n, name = "StageCard" .. n, style = lifted and "panel/rowActive" or "panel/row",
+      w = "100%", h = "fit", gap = 2, pad = 4, align = "stretch", opacity = lifted and 0.6 or nil,
       dropTarget = true,
-      onDropped = function() if st.drag then move(st.drag, n, false) end st.drag = nil end,
+      onDragOver = function() stage_over(N) end,
+      onDropped = function()
+        if st.sdrag then reorder_drop(B, gap_at_mouse(N)) return end
+        if st.drag then move(st.drag, n, false) end st.drag = nil
+      end,
       onHoverStart = function() st.hover = "s" .. n end,
       onHoverEnd = function() if st.hover == "s" .. n then st.hover = nil end end }
+    -- the grip: three ridges across the card's top, a raised key you pick
+    -- the whole stage up by
+    card[#card + 1] = { "button", key = "grip", name = "StageGrip" .. n, style = "panel/choice", w = "100%", h = 12,
+      dir = "column", justify = "center", align = "center", gap = 2, pad = 0, draggable = true, selected = lifted or nil,
+      tooltip = "Drag to move this whole stage up or down the stack",
+      onDragStart = function() st.sdrag, st.gap = n, nil; st.sig = nil end,
+      onDragCancel = function() st.sdrag, st.gap = nil, nil; st.sig = nil end,
+      { "box", key = "r1", style = "panel/rule", w = 28, h = 1 },
+      { "box", key = "r2", style = "panel/rule", w = 28, h = 1 } }
     card[#card + 1] = { "row", key = "h", w = "100%", h = 20, gap = 3, pad = 0, align = "center",
       { "text", key = "n", style = "panel/cellStrong", w = "grow", h = 20, textValign = "center",
         text = string.format("STAGE %d%s", n, n == 1 and "  ·  next SPACE" or "") },
@@ -507,14 +662,75 @@ local function stage_rows(B, out)
       end
       card[#card + 1] = row
     end
-    out[#out + 1] = card
+    list[#list + 1] = card
   end
+  if N > 0 then list[#list + 1] = gap(0); out[#out + 1] = list end
   if N > 0 then out[#out + 1] = newzone("nbot", 1, "+ NEW STAGE (fires first)") end
   local L = v.launch or {}
   out[#out + 1] = { "col", key = "launch", style = "panel/row", w = "100%", h = "fit", gap = 1, pad = 4, align = "stretch",
     { "text", key = "n", style = "panel/cellStrong", w = "100%", h = 18, text = "LAUNCH  ·  SPACE releases the clamps", textValign = "center" },
     { "text", key = "x", style = "panel/cellMuted", w = "100%", h = "fit", wrap = true,
       text = (L.lights and L.lights ~= "") and ("burns " .. L.lights) or "no engine lit at lift-off" } }
+end
+
+-- The gap under the pointer: above the first card (top down) whose middle
+-- the pointer is above, else 0 (below stage 1). uiRect and input.mouse are
+-- both window pixels.
+function gap_at_mouse(N)
+  local _, my = input.mouse()
+  for n = N, 1, -1 do
+    local c = find and find("StageCard" .. n)
+    local x, y, w, h
+    if c and c.uiRect then x, y, w, h = c:uiRect() end
+    if y and h and my < y + h * 0.5 then return n end
+  end
+  return 0
+end
+function stage_over(N)
+  if not st.sdrag then return end
+  local k = gap_at_mouse(N)
+  if k == st.sdrag or k == st.sdrag - 1 then k = nil end
+  if k ~= st.gap then st.gap = k; st.sig = nil end
+end
+-- A dragged stage let go over gap k: one undo step, the stack closes up.
+function reorder_drop(B, k)
+  local sd = st.sdrag
+  st.sdrag, st.gap, st.sig = nil, nil, nil
+  if not (sd and k) then return false end
+  local j
+  if k == sd or k == sd - 1 then return false end
+  j = (sd <= k) and k or (k + 1)
+  if B.cmd then B.cmd("stage", { op = "reorder", i = sd, j = j }) end
+  local sfx = ref("sfx")
+  if sfx and sfx.play then pcall(sfx.play, "click") end
+  return true
+end
+
+-- ── THE CARD IN YOUR HAND ───────────────────────────────────────────────────
+-- The engine moves nothing while a UI drag is on (docs/ui-navigation.md), so
+-- the plate draws what you carry: a small card riding the pointer — a crew
+-- member's face and name, a kit item, a stage. Made once a drag, then kept on
+-- the pointer by ui.bind (no re-describe a frame).
+local GHOST_NAME = "InspDragGhost"
+local function ghost_spec(B)
+  local g
+  if st.sdrag then
+    g = { name = "STAGE " .. st.sdrag, sub = "drop between stages" }
+  else
+    local bc = ref("builder_crew")
+    g = bc and bc.dragGhost and bc.dragGhost() or nil
+  end
+  if not g then return nil end
+  local kids = { "row", key = "ghost", name = GHOST_NAME, style = "panel/rowActive", pin = "topLeft", x = 0, y = 0,
+    w = "fit", h = "fit", gap = 6, pad = 5, align = "center", opacity = 0.92 }
+  if g.kind == "member" then
+    kids[#kids + 1] = g.tex and { "image", key = "f", texture = g.tex, w = 36, h = 36 }
+      or { "box", key = "f", style = "menu/slot", w = 36, h = 36, text = g.initials, textAlign = "center", textValign = "center" }
+  end
+  kids[#kids + 1] = { "col", key = "t", w = "fit", h = "fit", gap = 0, pad = 0,
+    { "text", key = "n", style = "panel/cellStrong", w = "fit", h = 16, text = g.name, textValign = "center" },
+    { "text", key = "s", style = "panel/cellMuted", w = "fit", h = 14, text = g.sub or "", textValign = "center" } }
+  return kids, g
 end
 
 -- ── the plate ───────────────────────────────────────────────────────────────
@@ -526,8 +742,8 @@ function describe(B, L)
       text = t == "CONTROLS" and "CTRLS" or (t == "INSPECT" and "INSP" or t), textAlign = "center", textValign = "center",
       tooltip = t:sub(1, 1) .. t:sub(2):lower() .. "   ·   TAB", onClicked = function() setTab(t) end }
   end
-  local body = {}
-  if st.tab == "INSPECT" then inspect(B, body)
+  local body, top = {}, {}
+  if st.tab == "INSPECT" then inspect(B, body, top)
   elseif st.tab == "CRAFT" then craft(B, body)
   elseif st.tab == "CREW" then
     local bc = ref("builder_crew")
@@ -548,11 +764,12 @@ function describe(B, L)
   -- STAGE and CONTROLS hand the plate's body to the builder's and WP5's
   -- panels: the plate shrinks to its tabs and a line about them.
   local short = st.tab == "CONTROLS"
-  return { "col", key = "plate", style = "panel/frame", pin = "topLeft", x = r.x, y = r.y, w = r.w,
-    h = short and "fit" or r.h, gap = 6, pad = 10, align = "stretch",
-    tabs,
-    { "scroll", key = "body", w = "100%", h = short and "fit" or "grow", dir = "column", gap = 5, pad = 0,
-      align = "stretch", items = body, function(x) return x end } }
+  local plate = { "col", key = "plate", style = "panel/frame", pin = "topLeft", x = r.x, y = r.y, w = r.w,
+    h = short and "fit" or r.h, gap = 6, pad = 10, align = "stretch", tabs }
+  for _, e in ipairs(top) do plate[#plate + 1] = e end
+  plate[#plate + 1] = { "scroll", key = "body", name = "InspBody", w = "100%", h = short and "fit" or "grow", dir = "column",
+    gap = 5, pad = 0, align = "stretch", scrollFade = 14, items = body, function(x) return x end }
+  return plate
 end
 
 -- The plate's body rectangle (design units), for panels that draw in it.
@@ -605,13 +822,54 @@ function update(node, dt)
     if tool then st.tab = "INSPECT" end
   end
   st.t = st.t + (dt or 0)
+  -- A PART CLICKED IN THE VIEW, or picked from PARTS, is a part to inspect:
+  -- from CRAFT or CREW the plate turns to INSPECT (STAGE and CONTROLS keep
+  -- theirs: a click there stages or binds the part).
+  local clicks = B.partClicks or 0
+  local held = B.heldId and B.heldId() or nil
+  if st.clicks == nil then st.clicks, st.held = clicks, held end
+  if (clicks ~= st.clicks or (held and held ~= st.held)) and (st.tab == "CRAFT" or st.tab == "CREW") then
+    setTab("INSPECT")
+  end
+  st.clicks, st.held = clicks, held
   -- the STAGE tab's hovered row lights its parts in the view (for as long as it is hovered)
   if st.tab == "STAGE" and st.hover and B.stageHover then B.stageHover(st.hover) end
+  -- a drag let go over nothing (or outside the plate): the stage goes back
+  if st.sdrag and ui and ui.dragging and not ui.dragging() then st.sdrag, st.gap, st.sig = nil, nil, nil end
   local sel = B.selection()
+  local bc = ref("builder_crew")
+  if bc and bc.state and ui and ui.dragging and not ui.dragging() then
+    local cs = bc.state()
+    if cs and cs.drag then cs.drag, cs.over = nil, nil; if bc.touch then bc.touch() end end
+  end
+  local _, g = ghost_spec(B)
   local sig = table.concat({ math.floor(W), math.floor(H), st.tab, tostring(B.craftVersion), table.concat(sel, ","),
-    tostring(focused_name()), tostring(st.hover), tostring(st.drag),
-    st.tab == "CREW" and tostring(ref("builder_crew") and ref("builder_crew").sig and ref("builder_crew").sig()) or "" }, "|")
+    tostring(focused_name()), tostring(st.hover), tostring(st.drag), tostring(st.sdrag), tostring(st.gap),
+    tostring(held), g and (g.name .. tostring(g.tex)) or "",
+    st.tab == "CREW" and tostring(bc and bc.sig and bc.sig()) or "" }, "|")
   if sig == st.sig and st.t < 1.0 then return end
   st.sig, st.t = sig, 0
-  ui.make(node, { describe(B, st.L) })
+  local tree = { describe(B, st.L) }
+  local gt = ghost_spec(B)
+  if gt then tree[#tree + 1] = gt end
+  ui.make(node, tree)
+  if gt then
+    local gn = find and find(GHOST_NAME)
+    if gn and ui.bind then
+      local Hh = st.L and st.L.H or H
+      local function at(i)
+        return function()
+          local x, y = mouse_du(Hh)
+          if not x then return 0 end
+          -- beside the pointer, toward the middle of the screen (a card
+          -- carried on the right plate rides to its left, never off the edge)
+          if i == 1 then return (x > (st.L and st.L.W or 1280) * 0.5) and (x - 172) or (x + 14) end
+          return y - 10
+        end
+      end
+      ui.bind(gn, "posX", at(1))
+      ui.bind(gn, "posY", at(2))
+    end
+  end
 end
+function ghostUp() return find and find(GHOST_NAME) ~= nil end   -- probes

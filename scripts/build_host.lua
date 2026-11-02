@@ -67,6 +67,15 @@ enterMs = nil         -- E to the builder's first frame, ms (probes)
 local part_icons = {}
 function partIcon(id) return part_icons[id] end
 function keepPartIcon(id, tex) part_icons[id] = tex end
+-- The CREW tab's portraits (member id → "img:N", with the look they were
+-- taken of: a changed look is photographed again), kept the same way.
+local crew_portraits = {}
+function crewPortrait(id)
+  local e = crew_portraits[id]
+  if e then return e.tex, e.key end
+  return nil
+end
+function keepCrewPortrait(id, key, tex) crew_portraits[id] = { tex = tex, key = key } end
 
 local host = nil      -- this script's node
 local frame = nil     -- the BuildFrame node
@@ -320,6 +329,8 @@ function enter()
   end
   enter_t = time
   enterMs = nil
+  -- a kit that never found its craft is not carried into the next one
+  if type(save.get("shipyard.kit")) == "table" then save.set("shipyard.kit", false) end
   -- The cursor comes into the VAB FREE: the first-person look (or a held
   -- RMB orbit) had it locked, and the camera that locked it stands down
   -- now, so nothing else would ever let go (builder_camera then owns it).
@@ -424,6 +435,7 @@ local function rollout_tick(dt)
         -- The site is taken (vessel_spawner has said so on screen, refunded
         -- the hull and brought the crew home): fade back in on the world.
         note("the " .. ro.site .. " is blocked — rollout called off")
+        save.set("shipyard.kit", false)
         ro.phase, ro.t = "in", time
         return
       end
@@ -455,7 +467,10 @@ local function rollout_tick(dt)
     wait_words(words)
     if (st == "ready" and seated) or (st == nil and k > 0.2) or k > hold then
       if k > hold then note("the craft took too long — showing it as it stands (" .. tostring(st) .. ")") end
-      if st == nil then note("the launch was called off — fading back in") end
+      if st == nil then
+        note("the launch was called off — fading back in")
+        if not kit_craft_ready() then save.set("shipyard.kit", false) end
+      end
       wait_words(nil)
       ro.phase, ro.t = "in", time
     end
@@ -468,6 +483,109 @@ local function rollout_tick(dt)
       note("rolled out")
     end
   end
+end
+
+-- THE KIT (docs/crew-and-items.md §5.6; the CREW tab's BUY ▸ on a storage
+-- part). LAUNCH leaves `shipyard.kit` = { lockers = { ["<uid>"] = { [item] = n } },
+-- holds = { ["<uid>"] = true } } — what each Stowage Locker or Cargo Bay of the
+-- blueprint carries. When the craft has come out (its controller has numbered
+-- its lockers, vessel_controller.lockerRegister) each item goes in: from the
+-- base stock while it has one, bought at the shop price (inventory.buyItem,
+-- which charges) for the rest. A launch called off clears it, so nothing is
+-- charged for a craft that never flew. Published: kitFill(vc, kit) → loaded,
+-- bought, spent, lines (probes), lastKit (what the last fill did).
+lastKit = nil
+local kit_seen = nil
+function kitFill(vc, kit)
+  local inv = ref("inventory")
+  if not (inv and vc and type(kit) == "table" and type(kit.lockers) == "table") then return 0, 0, 0, {} end
+  local loaded, bought, spent, lines = 0, 0, 0, {}
+  local keys = {}
+  for k in pairs(kit.lockers) do keys[#keys + 1] = k end
+  table.sort(keys, function(a, b) return (tonumber(a) or 0) < (tonumber(b) or 0) end)
+  for _, k in ipairs(keys) do
+    local uid = tonumber(k)
+    local cid = uid and vc.lockerOf and vc.lockerOf(uid) or nil
+    if not cid and type(kit.holds) == "table" and kit.holds[k] then cid = vc.holdId end
+    if cid then
+      local ids = {}
+      for id in pairs(kit.lockers[k]) do ids[#ids + 1] = id end
+      table.sort(ids)
+      for _, id in ipairs(ids) do
+        local n = math.floor(tonumber(kit.lockers[k][id]) or 0)
+        local took = 0
+        if n > 0 then
+          local have = inv.itemCount("base", id) or 0
+          if have > 0 then took = inv.moveItem("base", cid, id, math.min(have, n)) or 0 end
+          local rest = n - took
+          if rest > 0 then
+            local ok, why = inv.buyItem(cid, id, rest)
+            if ok then
+              bought = bought + rest
+              local I = ref("items")
+              local d = I and I.def and I.def(id)
+              spent = spent + rest * ((d and d.cost) or 0)
+              took = took + rest
+            else
+              lines[#lines + 1] = string.format("%s: %d %s not loaded (%s)", cid, rest, id, tostring(why))
+            end
+          end
+          loaded = loaded + took
+          lines[#lines + 1] = string.format("%s ← %d %s", cid, took, id)
+        end
+      end
+    else
+      lines[#lines + 1] = "no storage for part " .. tostring(k) .. " on the craft"
+    end
+  end
+  if vc.holdApplyMass then pcall(vc.holdApplyMass, vc.node) end
+  lastKit = { loaded = loaded, bought = bought, spent = spent, lines = lines }
+  return loaded, bought, spent, lines
+end
+
+-- The craft just launched — still on its launch spot (vessel_controller's
+-- `leftPad` is false only for a craft rolled out and not yet gone; a parked
+-- or restored craft has left it by definition) and whose storage has every
+-- planned part: the one being flown first, else a probe nobody rides.
+local function kit_craft(kit)
+  local list = findScripts and findScripts("vessel_controller") or {}
+  local function fits(v)
+    if not v.lockerOf then return false end
+    for k in pairs(kit.lockers) do
+      local held = type(kit.holds) == "table" and kit.holds[k]
+      if held then if not v.holdId then return false end
+      elseif not v.lockerOf(tonumber(k)) then return false end
+    end
+    return true
+  end
+  for _, v in ipairs(list) do if v.leftPad == false and v.piloting and fits(v) then return v end end
+  for _, v in ipairs(list) do if v.leftPad == false and fits(v) then return v end end
+  return nil
+end
+
+local function kit_tick()
+  local kit = save.get("shipyard.kit")
+  if type(kit) ~= "table" or type(kit.lockers) ~= "table" then kit_seen = nil return end
+  if state == "rollout" and ro and ro.phase == "out" then return end
+  kit_seen = kit_seen or time
+  local vc = kit_craft(kit)
+  if not vc then
+    if time - kit_seen > 90 then
+      note("the kit found no craft to go into — it stays in the stock")
+      save.set("shipyard.kit", false)
+      kit_seen = nil
+    end
+    return
+  end
+  save.set("shipyard.kit", false)
+  kit_seen = nil
+  local loaded, bought, spent = kitFill(vc, kit)
+  local co = ref("company")
+  local msg = string.format("kit loaded: %d item%s%s", loaded, loaded == 1 and "" or "s",
+    bought > 0 and string.format(" (%d bought, %s)", bought, (co and co.money) and co.money(spent) or ("$" .. spent)) or "")
+  note(msg)
+  local wc = ref("warp_chip")
+  if wc and wc.say then pcall(wc.say, msg) end
 end
 
 -- FADE THROUGH BLACK, for anyone (a revert to launch): fadeThrough(atBlack
@@ -530,7 +648,13 @@ function start(node)
   end
 end
 
+function kit_craft_ready()
+  local kit = save.get("shipyard.kit")
+  return type(kit) == "table" and type(kit.lockers) == "table" and kit_craft(kit) ~= nil
+end
+
 function update(node, dt)
+  if mode == "world" and (state == "idle" or state == "rollout") then kit_tick() end
   if mode == "standalone" then
     if not valid(vab) then vab = find("VabInterior") end
     if valid(vab) then drive_fade(true) end

@@ -247,6 +247,14 @@ do
     order = {}
     for i, g in ipairs(st) do order[i] = table.concat(g, "+") end
     check(table.concat(order, " ") == "c g1 u3 u7+u9", "chutes as a new first stage: " .. table.concat(order, " "))
+    -- a stage dragged by its card's grip: lifted out and put back elsewhere
+    local function ord(t) local o = {}; for i, g in ipairs(t) do o[i] = table.concat(g, "+") end; return table.concat(o, " ") end
+    local rs = SM.reorder({ { "a" }, { "b" }, { "c" }, { "d" } }, 4, 1)
+    check(ord(rs) == "d a b c", "reorder: the top stage dragged to fire first: " .. ord(rs))
+    rs = SM.reorder({ { "a" }, { "b" }, { "c" }, { "d" } }, 1, 3)
+    check(ord(rs) == "b c a d", "reorder: the first stage dragged up two: " .. ord(rs))
+    rs = SM.reorder({ { "a" }, { "b" } }, 2, 9)
+    check(ord(rs) == "a b", "reorder: past the end stays put: " .. ord(rs))
     -- an item that is gone drops, an empty stage closes, a new part slots in by default
     items.u3 = nil
     items.u11 = { key = "u11", y = 4.0, uids = { 11 } }

@@ -280,6 +280,50 @@ C.moveOne("repairkit", "stock", 2)
 C.sync(false)
 ok(C.lockerPlanMap()[2] == nil, "a locker part taken off takes its plan with it")
 
+-- ── 5b. storage and the kit at launch (playtest 2026-11: buy kit into a
+-- craft's storage in the VAB) ────────────────────────────────────────────────
+REG.cargo = { label = "Cargo Bay", kind = "structural", cargo = 250 }
+ITEMS.medkit = { name = "Medkit", kg = 1.5, L = 2, cost = 150 }
+build({ { 1, "pod", 2.0 }, { 2, "locker", 1.0 }, { 5, "cargo", 0.5 }, { 3, "tankS", 0.0 } })
+SAVE["shipyard.lockerPlan"] = {}
+C.sync(true)
+local sto = C.current().lockers
+ok(#sto == 2 and sto[1].kind == "locker" and sto[2].kind == "hold" and sto[2].cap == 250 and sto[2].vol == 1000,
+  "a Stowage Locker and a Cargo Bay are both storage (the bay 250 kg, 1000 L)")
+ok(C.storageTitle(sto[1]) == "LOCKER #1" and C.storageTitle(sto[2]) == "CARGO BAY #1", "…titled by kind")
+BAGS.base.medkit = nil
+ok(C.addToStorage(2, "medkit"), "a medkit bought from the shop into the locker")
+ok(C.addToStorage(5, "beacon"), "…and a beacon into the cargo bay")
+local kit = C.kitForLaunch()
+ok(kit.cost == 150 and kit.buy.medkit == 1 and (kit.take.beacon or 0) == 1,
+  "at launch the medkit (none in stock) is bought, the beacon comes from the stock: " .. tostring(kit.cost))
+ok(kit.pending and kit.pending.lockers["2"].medkit == 1 and kit.pending.lockers["5"].beacon == 1 and kit.pending.holds["5"],
+  "…and the rollout is handed both, the bay marked as the hold")
+ok(BAGS.base.beacon == 6, "planning takes nothing from the stock yet")
+for _ = 1, 52 do C.addToStorage(2, "medkit") end
+local okR, whyR = C.addToStorage(2, "medkit")
+ok(not okR and tostring(whyR):find("no room"), "a locker stops at its 80 kg: " .. tostring(whyR))
+ok(C.removeFromStorage(2, "medkit"), "one taken back out of the plan")
+SAVE["shipyard.lockerPlan"] = {}
+ok(C.kitForLaunch().pending == nil and C.kitForLaunch().cost == 0, "no kit planned: nothing for the rollout")
+-- the shop list as the inventory really answers it (registry rows)
+inv.shopList = function() return { { id = "medkit", name = "Medkit", cost = 150 }, { id = "beacon", name = "Relay Beacon", cost = 80 } } end
+C.state().buying = 2
+local out2 = {}
+C.describe(B, out2)
+local all2 = {}
+for _, r in ipairs(out2) do flat(r, all2) end
+ok(says(all2, "Medkit") and says(all2, "$150"), "BUY ▸ on a locker lists the shop by name and price")
+local plus
+for _, r in ipairs(all2) do if r.name == "CrewBuy_2_medkit" then plus = r end end
+ok(plus and plus.onClicked, "…with a +1 key for each")
+plus.onClicked()
+ok(C.lockerPlanMap()[2] and C.lockerPlanMap()[2].medkit == 1, "+1 plans one into that locker")
+C.state().buying = false
+-- traits
+ok(C.traitsOf({ flights = 0 }, { courage = 0.9, thrill = 0.1 }) == "Fearless · careful · rookie", "traits read off the look")
+ok(C.traitsOf({ flights = 3 }, nil) == "3 flights", "…and the record")
+
 -- ── 6. the Astronaut Complex ────────────────────────────────────────────────
 local P = load("solar/scripts/crew_roster_panel.lua")
 local el = { visible = false }

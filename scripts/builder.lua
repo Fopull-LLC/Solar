@@ -1218,6 +1218,16 @@ function STAGEM.swap(stages, i, j)
   stages[i], stages[j] = stages[j], stages[i]
   return stages
 end
+-- Stage i lifted out and put back at position j (a drag of its card): the
+-- stages between close up. (swap is the one-step case.)
+function STAGEM.reorder(stages, i, j)
+  if not stages[i] then return stages end
+  j = math.max(1, math.min(j or i, #stages))
+  if i == j then return stages end
+  local g = table.remove(stages, i)
+  table.insert(stages, j, g)
+  return stages
+end
 function STAGEM.index(stages, items)
   local out = {}
   for n, g in ipairs(stages) do
@@ -4271,6 +4281,13 @@ local function make_blueprint()
   end
   if W.outliner and #W.outliner > 0 then bp.outliner = tcopy(W.outliner) end
   if W.controls then bp.controls = tcopy(W.controls) end
+  -- WHAT ITS STORAGE CARRIES (the CREW tab's plan, builder_crew): the craft
+  -- keeps its kit — { ["<uid>"] = { [itemId] = n } }; filled at launch
+  -- (build_host.kitFill) and brought back when the craft is opened
+  do
+    local lp = save.get("shipyard.lockerPlan")
+    if type(lp) == "table" and next(lp) then bp.lockers = tcopy(lp) end
+  end
   -- THE CONTROL MODE (ctrlMode): on the blueprint and on every command part,
   -- whose records a fleet save, a staging and a docking carry
   if W.ctrl then
@@ -6468,6 +6485,9 @@ local function click_at(pr)
     end
     sel_apply({ u }, pr.ctrl and "toggle" or (pr.shift and "add" or "set"))
     W.last_click = { uid = u, t = time }
+    -- a part clicked in the view is a part to INSPECT (playtest: the right
+    -- plate follows the click); builder_inspector watches the count
+    partClicks = (partClicks or 0) + 1
     return
   end
   if pr.keep then return end -- a near miss on the gizmo keeps the selection
@@ -6799,6 +6819,7 @@ end
 -- until it actually goes.
 LAUNCH_CONFIRM = 6.0
 launchArmedAt = nil
+partClicks = 0        -- parts clicked in the view (builder_inspector: a click inspects)
 -- The blueprint LAUNCH stored in `shipyard.blueprint`, for the rollout to
 -- start from without reading 1,000 parts back out of the save (build_host
 -- hands it to vessel_spawner.launchNow). nil once anything else is saved.
@@ -6847,13 +6868,22 @@ function doLaunch()
   -- it only means anything if the pad refuses a build you can't pay for.
   local co = company_ref()
   local cost = build_cost()
-  if co and co.afford and not co.afford(cost) then
-    hint(string.format("can't afford this build — it costs %s and the budget is %s. Sell ore at the depot or fly a contract.",
-      co.money(cost), co.money(co.balance())), 4.0)
+  -- THE KIT in its storage (the CREW tab's plan): what the base stock has goes
+  -- from there, the rest is bought — paid as it is loaded at rollout
+  -- (build_host.kitFill), so a launch called off charges none of it. It is
+  -- part of what this launch costs, so it is in the check.
+  local bcrew = findScript and findScript("builder_crew") or nil
+  local kit = (bcrew and bcrew.valid ~= false and bcrew.kitForLaunch) and bcrew.kitForLaunch() or nil
+  local kit_cost = kit and kit.cost or 0
+  if co and co.afford and not co.afford(cost + kit_cost) then
+    hint(string.format("can't afford this build — it costs %s%s and the budget is %s. Sell ore at the depot or fly a contract.",
+      co.money(cost + kit_cost), kit_cost > 0 and (" with " .. co.money(kit_cost) .. " of kit") or "",
+      co.money(co.balance())), 4.0)
     return
   end
   if co and co.spend then co.spend(cost, "hull rollout (" .. partCount .. " parts)") end
   save.set("shipyard.spent", cost)
+  save.set("shipyard.kit", (kit and kit.pending) or false)
   if not saved then W.launch_bp = save_blueprint(true) end
   ui("launch", 1.0)
   save.set("shipyard.launch", 1)
@@ -7714,6 +7744,8 @@ function craftOpen(name, mode)
   load_blueprint(bp)
   W.craft = name
   save.set("shipyard.current", name)
+  -- the craft's own kit comes with it (a craft saved before kit: none)
+  save.set("shipyard.lockerPlan", type(bp.lockers) == "table" and tcopy(bp.lockers) or {})
   hint("opened “" .. name .. "”", 2.0)
   return true
 end
@@ -7726,6 +7758,7 @@ function craftNew()
   groups_state.groups, groups_state.edited = nil, false
   W.craft = nil
   save.set("shipyard.current", nil)
+  save.set("shipyard.lockerPlan", {})
   hint("new craft — the last one is kept in the library (CTRL+O)", 3.0)
   return true
 end
@@ -8132,6 +8165,7 @@ end
 -- STAGE EDITS (one undo step each), from the STAGE tab:
 --   { op = "item", key, to, new }   an event into stage `to` (new: a stage of its own there)
 --   { op = "swap", i, j }           two stages trade places
+--   { op = "reorder", i, j }        stage i dragged to position j
 --   { op = "reset" }                the default order again
 CMD.stage = function(a)
   sync_stage_order()
@@ -8140,6 +8174,8 @@ CMD.stage = function(a)
     stage_order = STAGEM.move(stage_order, a.key, a.to, a.new)
   elseif a.op == "swap" and a.i and a.j then
     stage_order = STAGEM.swap(stage_order, a.i, a.j)
+  elseif a.op == "reorder" and a.i and a.j then
+    stage_order = STAGEM.reorder(stage_order, a.i, a.j)
   elseif a.op == "reset" then
     stage_order, saved_stage = {}, {}
     W.stage_sync_v = nil

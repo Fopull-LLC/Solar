@@ -26,7 +26,7 @@ for p in ([[align border borderB borderColor borderL borderR borderT button case
   frameSlice frameUV gap group groupA groupB groupG groupR groupTint h height image imageFit inset
   interact justify lineHeight margin mask max maxH maxLen maxLines maxW min minH minW numeric opacity
   order overflow pad part pin pivot placeholder pos posX posY radius radiusBL radiusBR radiusTL
-  radiusTR rotation rows scale scaleX scaleY scrollDrag scrollSpeed scrollX scrollY scrollbarAxis
+  radiusTR rotation rows scale scaleX scaleY scrollDrag scrollFade scrollSpeed scrollX scrollY scrollbarAxis
   scrollbarFor selected shader size slice slicePpu sliderDir stretch style surface surfaceOffset
   surfaceTile surfaceTint template text textA textAlign textB textColor textFit textG textR textSize
   textValign texture tiling tint tintA tintB tintG tintR toggle tooltip tooltipBox tracking upper value
