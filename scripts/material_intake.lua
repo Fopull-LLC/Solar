@@ -35,11 +35,12 @@
 -- taken, so a truck parked alongside — or one whose bed hangs over the belt —
 -- is safe, and so is an astronaut walking on it.
 --
--- THE BELT IS PHYSICAL. In fixedUpdate every loose body whose centre of mass
--- is over the belt (and low enough to be on it) is driven toward the belt's
--- speed by an impulse at its centre of mass, limited to what friction could
--- do (`accel`), and eased toward the middle; it rides, slides and tumbles
--- like a load on a belt. All in TICK poses (docs/positions-and-frames.md rule
+-- THE BELT IS PHYSICAL. In fixedUpdate every loose body over the belt that
+-- TOUCHES it is gripped as friction grips: the slip of its foot (the centre
+-- of mass's velocity plus the spin's) is taken out at the foot through its
+-- mass and inertia, limited to `accel`, with a rolling and twisting drag,
+-- and eased toward the middle (grip() below); it rides, slides and tumbles
+-- at a transfer like a load on a belt, and never spins up. All in TICK poses (docs/positions-and-frames.md rule
 -- 2): the bodies' assembly.info against this tick's space.body, and the belt
 -- itself as body-relative geometry (the shed is parented to its planet, so
 -- its node.x/y/z ARE body-relative and its axes never change). The belt's
@@ -435,6 +436,130 @@ local function scan(B, b)
   end
 end
 
+-- Does the load touch the BELT this tick: one of last tick's contacts
+-- (assembly.impacts, each part's hardest) against the shed, at the running
+-- surface (not the hopper's plates, the skirts, the ground or another
+-- load). A load riding on another load is carried by that one's friction,
+-- as on a real belt. The points are last tick's: placed against this tick's
+-- planet as they are, and carried with it (`carry`, metres a tick here), so
+-- either pose finds them.
+local function ours(n)
+  local k = 0
+  while valid(n) and k < 5 do
+    if ROOT and n.id == ROOT.id and n.name == ROOT.name then return true end
+    n = n.parent
+    k = k + 1
+  end
+  return false
+end
+local function belt_contact(root, B, b, carry)
+  if not (assembly and assembly.impacts) then return true end
+  local ok, list = pcall(assembly.impacts, root)
+  if not ok or type(list) ~= "table" then return true end
+  for _, c in ipairs(list) do
+    -- (the shed's static shapes are no node's: impacts gives other = nil
+    -- for them on .1406; a node that is the shed's counts too)
+    if c.x and (c.other == nil or (type(c.other) == "table" and ours(c.other))) then
+      for k = 0, (carry and 1 or 0) do
+        local x, y, z = c.x - b.x, c.y - b.y, c.z - b.z
+        if k == 1 then x, y, z = x + carry.x, y + carry.y, z + carry.z end
+        local _, w, h = beltLocal(B, x, y, z)
+        if h > -0.2 and h < 0.15 and math.abs(w) <= B.half + 0.05 then return true end
+      end
+    end
+  end
+  return false
+end
+
+-- 3×3: rows r1..r3 ({x,y,z}) times v, and the inverse's rows.
+local function mul3(M, x, y, z)
+  return M[1].x * x + M[1].y * y + M[1].z * z, M[2].x * x + M[2].y * y + M[2].z * z, M[3].x * x + M[3].y * y + M[3].z * z
+end
+local function inv3(M)
+  local a, b_, c = M[1].x, M[1].y, M[1].z
+  local d, e, f = M[2].x, M[2].y, M[2].z
+  local g, h, i = M[3].x, M[3].y, M[3].z
+  local A, Bc, C = e * i - f * h, -(d * i - f * g), d * h - e * g
+  local det = a * A + b_ * Bc + c * C
+  if math.abs(det) < 1e-12 then return nil end
+  local k = 1 / det
+  return { { x = A * k, y = -(b_ * i - c * h) * k, z = (b_ * f - c * e) * k },
+           { x = Bc * k, y = (a * i - c * g) * k, z = -(a * f - c * d) * k },
+           { x = C * k, y = -(a * h - b_ * g) * k, z = (a * e - b_ * d) * k } }
+end
+local function cross(ax, ay, az, bx, by, bz) return ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx end
+
+-- THE BELT'S GRIP on a load that touches it, as friction does it.
+--  1. The foot: the point of the running surface under the centre of mass
+--     (the centre of the patch it rests on; a belt's friction acts there).
+--     Its velocity is the centre's PLUS the spin's (ω × r). The impulse that
+--     brings that to the belt's (along `speed`, across `tw`) is the slip over
+--     the load's effective mass there, 1/m + (r×t)·I⁻¹(r×t), capped at what
+--     the grip gives in a tick (m·lim). A load that lands spinning has its
+--     foot sliding, so friction takes the spin out, as it takes the speed in.
+--  2. Rolling and twisting drag (a rubber belt is not a rail): what spin is
+--     left is let down at 5 /s about any axis, the twist about the belt's
+--     normal at 8 /s, as a pure couple (two opposite kicks), no push. A load
+--     at rest on a running belt has no slip and no spin: nothing is applied.
+local function grip(root, inf, B, lim, speed, tw, h, cx, cy, cz, dt)
+  local m = inf.mass
+  if not (m and m > 0) then return end
+  local Iinv = inv3(inf.inertia)
+  if not Iinv then return end
+  local ox, oy, oz = inf.angVel.x, inf.angVel.y, inf.angVel.z
+  local px, py, pz = cx - B.u.x * h, cy - B.u.y * h, cz - B.u.z * h
+  local rx, ry, rz = px - cx, py - cy, pz - cz
+  local sx, sy, sz = cross(ox, oy, oz, rx, ry, rz)
+  local fvx, fvy, fvz = inf.vel.x + sx, inf.vel.y + sy, inf.vel.z + sz
+  -- the slip in the belt's plane (the normal is the solver's business)
+  local ea = speed - (fvx * B.a.x + fvy * B.a.y + fvz * B.a.z)
+  local ew = tw - (fvx * B.w.x + fvy * B.w.y + fvz * B.w.z)
+  local tx, ty, tz = B.a.x * ea + B.w.x * ew, B.a.y * ea + B.w.y * ew, B.a.z * ea + B.w.z * ew
+  local sl = len(tx, ty, tz)
+  local ax, ay, az = 0, 0, 0
+  if sl > 1e-4 then
+    local nx, ny, nz = tx / sl, ty / sl, tz / sl
+    local qx, qy, qz = cross(rx, ry, rz, nx, ny, nz)
+    local ix, iy, iz = mul3(Iinv, qx, qy, qz)
+    local kx, ky, kz = cross(ix, iy, iz, rx, ry, rz)
+    local K = 1 / m + (kx * nx + ky * ny + kz * nz)
+    local j = math.min(sl / math.max(K, 1e-6), m * lim)
+    assembly.impulseAt(root, vec3(nx * j, ny * j, nz * j), vec3(px, py, pz))
+    -- the spin that kick gives, so the drag below works on what is left
+    ax, ay, az = ix * j, iy * j, iz * j
+  end
+  ox, oy, oz = ox + ax, oy + ay, oz + az
+  -- rolling and twisting drag
+  local ou = ox * B.u.x + oy * B.u.y + oz * B.u.z
+  local f_roll = 1 - math.exp(-5 * dt)
+  local f_twist = 1 - math.exp(-8 * dt)
+  local dx = -(ox - B.u.x * ou) * f_roll - B.u.x * ou * f_twist
+  local dy = -(oy - B.u.y * ou) * f_roll - B.u.y * ou * f_twist
+  local dz = -(oz - B.u.z * ou) * f_roll - B.u.z * ou * f_twist
+  -- no more than the grip's own twist could do in a tick (≈ lim over a
+  -- 0.25 m patch), so a hard knock at a transfer still tumbles a little
+  local dl = len(dx, dy, dz)
+  local cap = lim / 0.25
+  if dl > cap then dx, dy, dz = dx * cap / dl, dy * cap / dl, dz * cap / dl; dl = cap end
+  if dl < 1e-4 then return end
+  local I = inf.inertia
+  local Lx, Ly, Lz = mul3(I, dx, dy, dz)
+  local L = len(Lx, Ly, Lz)
+  if L < 1e-9 then return end
+  local lx, ly, lz = Lx / L, Ly / L, Lz / L
+  -- a unit e across L; kicks ±J at com ± e·d make L = 2d (e × J)
+  local ex, ey, ez = cross(lx, ly, lz, B.a.x, B.a.y, B.a.z)
+  local el = len(ex, ey, ez)
+  if el < 0.3 then ex, ey, ez = cross(lx, ly, lz, B.w.x, B.w.y, B.w.z); el = len(ex, ey, ez) end
+  ex, ey, ez = ex / el, ey / el, ez / el
+  local d = 0.5
+  local jx, jy, jz = cross(lx, ly, lz, ex, ey, ez)
+  local s = L / (2 * d)
+  jx, jy, jz = jx * s, jy * s, jz * s
+  assembly.impulseAt(root, vec3(jx, jy, jz), vec3(cx + ex * d, cy + ey * d, cz + ez * d))
+  assembly.impulseAt(root, vec3(-jx, -jy, -jz), vec3(cx - ex * d, cy - ey * d, cz - ez * d))
+end
+
 function fixedUpdate(node, dt)
   if (params.enabled or 1) <= 0 or not live or not G then carried = 0 return end
   local b = space.body(G.body)
@@ -484,26 +609,42 @@ function fixedUpdate(node, dt)
             local vu = rvx * G.u.x + rvy * G.u.y + rvz * G.u.z
             if math.abs(vu) < 2.5 then
               local lim = (params.accel or 5) * dt
-              local da = clamp((params.speed or 0.9) - va, -lim, lim)
-              local dw = clamp(-(vw + 0.8 * w * (math.abs(w) > G.half - 0.35 and 1 or 0.3)), -lim * 0.6, lim * 0.6)
-              local ix = G.a.x * da + G.w.x * dw
-              local iy = G.a.y * da + G.w.y * dw
-              local iz = G.a.z * da + G.w.z * dw
-              -- (a load settled on the belt has gone to sleep, and a
-              -- sleeping body ignores a kick: wake it first)
-              root.asleep = false
+              -- where the belt should carry the foot of the load: its speed
+              -- along, eased toward the middle across
+              local tw = -0.8 * w * (math.abs(w) > G.half - 0.35 and 1 or 0.3)
               if kind == "asm" then
-                -- at the belt's surface under the load, where a belt grips
-                -- (a push at the centre of mass would roll it over the
-                -- solver's friction at its foot)
-                local hx = cx - G.u.x * h
-                local hy = cy - G.u.y * h
-                local hz = cz - G.u.z * h
-                assembly.impulseAt(root, vec3(ix * mass, iy * mass, iz * mass), vec3(hx, hy, hz))
+                -- ONLY WHILE IT TOUCHES THE BELT, and as FRICTION: the slip
+                -- of the load's foot (its centre of mass's speed PLUS its
+                -- spin's, ω × r) against the belt, taken out at the foot
+                -- through the load's own mass and inertia, no more than
+                -- `accel` allows; and a rolling and twisting drag. The push
+                -- used to come every tick at the belt plane under the
+                -- centre of mass whether the load touched it or not, and to
+                -- look only at the centre's speed: a load in the air, or
+                -- tumbling, took a twist of up to 1.6 m × the grip every
+                -- tick that nothing ever took back — crates and crystals
+                -- spun up to 120–340 rad/s (tools/perf/beltshots.sh).
+                local inf = assembly.info(root)
+                -- (impacts give each part's HARDEST contact only: a boulder
+                -- half off the edge reports the ground beside the belt, so a
+                -- load standing on something with its centre over the belt
+                -- counts too; never one in the air)
+                local on = inf and inf.angVel and inf.inertia and
+                  (belt_contact(root, G, b, inf.carry) or (inf.grounded == true and math.abs(w) <= G.half and h <= 1.3))
+                if on then
+                  root.asleep = false
+                  grip(root, inf, G, lim, (params.speed or 0.9), tw, h, cx, cy, cz, dt)
+                  n_c = n_c + 1
+                end
               else
-                root.vel = vec3(vx + ix, vy + iy, vz + iz)
+                -- (a plain body, no assembly: its velocity, through the
+                -- centre, no twist)
+                local da = clamp((params.speed or 0.9) - va, -lim, lim)
+                local dw = clamp(tw - vw, -lim * 0.6, lim * 0.6)
+                root.asleep = false
+                root.vel = vec3(vx + G.a.x * da + G.w.x * dw, vy + G.a.y * da + G.w.y * dw, vz + G.a.z * da + G.w.z * dw)
+                n_c = n_c + 1
               end
-              n_c = n_c + 1
             end
           end
         end
