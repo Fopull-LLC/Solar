@@ -61,6 +61,9 @@ defaults = {
   --- the least an order costs when there is work at all ($)
   --@range 0 100
   min_fee = 10,
+  --- EC/s the bay's charger feeds a serviced craft while it stays in the bay
+  --@range 0 20
+  float_rate = 5.0,
   --- the job's length: base seconds plus this per worn part, at most `secs_max`
   --@range 1 20
   secs = 4.0,
@@ -175,6 +178,17 @@ lastQuote = nil       -- (probes) the order last priced
 dbg = "idle"          -- (probes) where the update got to
 lastJob = nil         -- (probes) "done $86" | "called off: …"
 jobs = 0
+-- THE FLOAT CHARGE. A serviced craft stays plugged into the bay's charger
+-- until it leaves: its own parked draw (a probe core, idling wheel motors, a
+-- radio: ~0.07 EC/s on the refit probe's rover) is fed from the shed, as a
+-- real charger floats a battery, so the service leaves it full for as long
+-- as it stands there, and the work order does not come back as a $10
+-- minimum fee for a fraction of an EC a few seconds later. It feeds at most
+-- `float_rate` EC/s over the time since it last fed (the bay is only
+-- scanned with the crew within 300 m; the charger ran all along). It ends
+-- when the craft is seen out of the bay.
+float_id, float_t = nil, nil
+floatFed = 0          -- (probes) EC the float charge has put in
 
 local function child(n, name)
   for _, c in ipairs(n:children() or {}) do if c.name == name then return c end end
@@ -330,8 +344,25 @@ function service(v)
     local cap = 0
     for _, t in ipairs(v.tankList and v.tankList() or {}) do cap = cap + (t.cap or 0) end
     if cap > 0 and v.fuelFill then v.fuelFill(cap) end
-    local cs = v.controlState and v.controlState()
-    if cs and cs.cap and cs.cap > 0 and v.elecSetCharge then v.elecSetCharge(cs.cap) end
+    -- FULL, by the batteries themselves: elecSetCharge shares what it is
+    -- given over the batteries aboard by capacity and clamps each at full.
+    -- Not by controlState().cap: that is the last 10 Hz power tick's sum, and
+    -- a refit's rebuild (vessel_controller refitFinish → load_bp) zeroes it
+    -- until the next tick, so after every refit the charge on the order was
+    -- paid for and never put in, and the craft left the bay short: the
+    -- "$10 top-up" offered again the moment the service finished. (Without
+    -- the electronics rulebook a craft has no batteries to share: its pooled
+    -- charge is set to the cap it reports.)
+    if v.elecSetCharge then
+      if ref("electronics") then
+        v.elecSetCharge(math.huge)
+      else
+        local cs = v.controlState and v.controlState()
+        if cs and cs.cap and cs.cap > 0 then v.elecSetCharge(cs.cap) end
+      end
+    end
+    -- …and the charger stays on it while it sits in the bay (`float`)
+    float_id, float_t = v.node.id, time or 0
     jobs = jobs + 1
     lastJob = string.format("done %s: %d parts mended, %d refit, %d u, %d EC", money(q.total), mended, refit, q.fuel, q.charge)
     if log then log("repair bay: " .. (v.craftName or "craft") .. " — " .. lastJob) end
@@ -529,6 +560,21 @@ function update(node, dt)
     end
     inside = near and craft_in_bay(node) or nil
     insideName = inside and inside.craftName or nil
+    if float_id and near then
+      local v = inside
+      if v and valid(v.node) and v.node.id == float_id then
+        local now = time or 0
+        local cs = v.controlState and v.controlState()
+        local short = (cs and cs.cap and cs.charge and cs.cap > 0) and (cs.cap - cs.charge) or 0
+        if short > 1e-3 and v.elecSetCharge then
+          local put = math.min(short, (params.float_rate or 5) * math.max(0, now - (float_t or now)))
+          if put > 0 then v.elecSetCharge(cs.charge + put); floatFed = floatFed + put end
+        end
+        float_t = now
+      else
+        float_id, float_t = nil, nil    -- it has left the bay
+      end
+    end
     dbg = string.format("scan: near %s, %d craft, inside %s", tostring(near),
       #(findScripts and findScripts("vessel_controller") or {}), tostring(insideName))
   end

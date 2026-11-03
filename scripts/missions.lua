@@ -38,6 +38,8 @@
 --   recover              bring the craft home and recover it at the base
 --   deliver   mat/class  have this much of a material in the base WAREHOUSE
 --             kg?        (units, or kilograms when `kg` is given)
+--             origin?    …and it must have been MINED ON that body
+--                        (materials.minedOn: the ore's recorded origin)
 --   sample    mat        have HELD this material at all — the discovery set
 --   drive     value      drive this far (m) over the ground in a vehicle you
 --                        are driving (a rover, a bike, a plane taxiing): the
@@ -491,6 +493,7 @@ local GEN_KINDS = {
   land   = { base = 4800, once = true },
   flag   = { base = 5300, once = true },
   haul   = { base = 4800 },
+  orehaul = { base = 4800 },   -- a world's own ore (materials.bodyOres): "ORE HAULS"
   rescue = { base = 5300 },
   cargo  = { base = 8400 },
   -- GROUND WORK (home world, repeatable, priced by the job — `ground_spec`)
@@ -498,7 +501,7 @@ local GEN_KINDS = {
   bulk   = { ground = true },
   trek   = { ground = true },
 }
-local KIND_ORDER = { "survey", "orbit", "land", "flag", "haul", "rescue", "cargo" }
+local KIND_ORDER = { "survey", "orbit", "land", "flag", "haul", "orehaul", "rescue", "cargo" }
 
 -- Which kinds open where, by standing level (company.standing: 2 Contractor,
 -- 3 Trusted, 4 Prime) and the ladder rung you need to have flown. `moon` is a
@@ -507,15 +510,15 @@ local KIND_ORDER = { "survey", "orbit", "land", "flag", "haul", "rescue", "cargo
 TIERS = {
   { level = 2, needs = "highroad", name = "Local space",
     what = "surveys, landings and beacons close to home (your moons, or the nearest planet)",
-    kinds = { moon = { "survey", "orbit", "land", "flag", "haul", "rescue" } } },
+    kinds = { moon = { "survey", "orbit", "land", "flag", "haul", "orehaul", "rescue" } } },
   { level = 3, needs = "orbit", name = "Interplanetary",
     what = "flybys, orbits and landings on the other planets; supply runs",
     kinds = { planet = { "survey", "orbit", "land" },
               home = { "cargo" }, moon = { "cargo" } } },
   { level = 4, needs = "orbit", name = "Deep field",
     what = "beacons, hauls and recoveries across the whole system",
-    kinds = { planet = { "flag", "haul", "rescue", "cargo" },
-              far = { "survey", "orbit", "land", "flag", "haul", "rescue" } } },
+    kinds = { planet = { "flag", "haul", "orehaul", "rescue", "cargo" },
+              far = { "survey", "orbit", "land", "flag", "haul", "orehaul", "rescue" } } },
 }
 
 -- How many generated contracts the board holds, by standing level.
@@ -831,6 +834,58 @@ local function ground_spec(kind, home, seq)
            goals = g, dv = 0, diff = 1.0 }
 end
 
+-- ── ORE HAULS: a world's own ores ──────────────────────────────────────────
+-- Every planet and moon carries ores of its own (materials.bodyOres: an airless
+-- moon its ilmenite and helium-3, a cold one its ices, a dense world its sunken
+-- metals). An ore haul names the body and one of ITS ores the home world has
+-- none of, and asks for some kilograms of it mined there: checked against
+-- where the ore was dug (materials.minedOn, the ore's recorded origin), so
+-- ilmenite from one moon is not a haul from another. The buyer takes the lot.
+-- It pays the round trip (Δv, distance, landing) times the ore's own factor —
+-- rarer and deeper ores are worth more and come in smaller lots:
+--   ORE_HAUL_RARITY  +30% a rarity step over common
+--   ORE_HAUL_DEPTH   up to +50% for an ore that lies 40 m down or more
+-- …plus three times the depot's price of the lot, as a haul's is.
+-- It is offered only for a body the company has REACHED (stood on, flagged,
+-- landed on or orbited) or could plausibly reach: no harder a round trip than
+-- one it has already made (`reach_ok`, in candidates).
+ORE_HAUL_RARITY, ORE_HAUL_DEPTH = 0.30, 0.50
+-- Kilograms of an ore haul by rarity: { a moon of home, anywhere farther }.
+ORE_HAUL_KG = { { 40, 60 }, { 30, 50 }, { 20, 35 }, { 12, 20 }, { 8, 12 } }
+
+-- The ores of `b` the home world has none of, and a pick of one of them by
+-- `seq` (weighted by how much of each the world holds). → mat, { list }
+function bodyOreChoices(home, b, seq)
+  local mats = ref("materials")
+  if not (mats and mats.bodyOres and mats.ORE) then return nil, {} end
+  local have = {}
+  for _, e in ipairs((mats.bodyOres(home.name, home.kind)) or {}) do have[e.mat] = true end
+  local list, total = {}, 0
+  for _, e in ipairs((mats.bodyOres(b.name, b.kind)) or {}) do
+    if not have[e.mat] and mats.ORE[e.mat] and (e.w or 0) > 0 then
+      list[#list + 1] = e
+      total = total + e.w
+    end
+  end
+  if #list == 0 then return nil, list end
+  local h = 7
+  for i = 1, #b.name do h = (h * 31 + b.name:byte(i)) % 1000003 end
+  local pick = mix((seq or 0) * 7 + h) * total
+  for _, e in ipairs(list) do
+    pick = pick - e.w
+    if pick <= 0 then return e.mat, list end
+  end
+  return list[#list].mat, list
+end
+
+-- An ore's factor on the pay: rarer, and lying deeper, is worth more.
+function oreHaulFactor(mat)
+  local mats = ref("materials")
+  local o = mats and mats.ORE and mats.ORE[mat] or {}
+  local r = math.max(1, math.min(5, o.rarity or 1))
+  return (1 + ORE_HAUL_RARITY * (r - 1)) * (1 + ORE_HAUL_DEPTH * math.min(1, (o.minDepth or 0) / 40)), r, o
+end
+
 -- Build one contract spec for (kind, body). Pure data — it goes in the save.
 -- nil when the kind can't be done there (nothing to haul, no plan).
 function genSpec(kind, bname, seq)
@@ -847,7 +902,7 @@ function genSpec(kind, bname, seq)
   local K = GEN_KINDS[kind]
   local dv = need(p, kind)
   local ratio = dv / math.max(p.ascent, 1e-3)
-  local lands = (kind == "land" or kind == "flag" or kind == "haul" or kind == "rescue")
+  local lands = (kind == "land" or kind == "flag" or kind == "haul" or kind == "orehaul" or kind == "rescue")
   local gfac = 1.0
   if lands then
     gfac = 1.0 + 0.35 * math.min(2.0, grav(b) / math.max(grav(home), 1e-3))
@@ -856,7 +911,7 @@ function genSpec(kind, bname, seq)
   local diff = ratio ^ 1.3 * p.dist ^ 0.8 * gfac
   local X = b.name
   local g, title, brief = nil, nil, nil
-  local extra = 0
+  local extra, ofac = 0, 1.0
   local cls = class_of(R, home, b)
   local what = (cls == "moon" or cls == "far") and "moon" or "world"
   if kind == "survey" then
@@ -894,6 +949,28 @@ function genSpec(kind, bname, seq)
     g = { { kind = "flag", body = X, label = "Set foot on " .. X },
           { kind = "deliver", mat = mat, kg = kg, after = 1,
             label = string.format("%d kg of %s in the warehouse", kg, mname) } }
+  elseif kind == "orehaul" then
+    local mat = bodyOreChoices(home, b, seq)
+    if not mat then return nil end
+    local mats = ref("materials")
+    local f, r, o = oreHaulFactor(mat)
+    ofac = f
+    local kg = ORE_HAUL_KG[r][(cls == "moon") and 1 or 2]
+    extra = (mats and mats.value(mat) or 0) / math.max((mats and mats.kg(mat)) or 1, 0.1) * kg * 3
+    local mname = (mats and mats.label(mat)) or mat
+    local lie
+    if o.surface then
+      lie = string.format("It crops out at the surface and runs %d m down.", o.maxDepth or 5)
+    else
+      lie = string.format("It lies %d–%d m down: dig for it.", o.minDepth or 0, o.maxDepth or 60)
+    end
+    title = string.format("Ore haul: %d kg of %s from %s", kg, mname, X)
+    brief = string.format("The survey of %s turned up %s, which %s has none of. %s\n" ..
+      "Mine it there (the lab logs which world every ore was dug on), fly it home\n" ..
+      "and put %d kg through the depot. The buyer takes the lot.", X, mname, home.name, lie, kg)
+    g = { { kind = "flag", body = X, label = "Set foot on " .. X },
+          { kind = "deliver", mat = mat, kg = kg, origin = X, consume = true, after = 1,
+            label = string.format("%d kg of %s from %s in the warehouse", kg, mname, X) } }
   elseif kind == "rescue" then
     title = "Recovery: the " .. X .. " probe"
     brief = string.format("A survey lander on %s stopped answering. Land there, take its\n" ..
@@ -909,7 +986,7 @@ function genSpec(kind, bname, seq)
             label = string.format("Orbit %s with %d kg in the hold, periapsis above %%s", X, kg) } }
   end
   if not g then return nil end
-  local reward = price((K.base * diff + extra) * (company() and company().rewardMult
+  local reward = price((K.base * diff * ofac + extra) * (company() and company().rewardMult
     and company().rewardMult() or 1.0))
   local rp = math.max(1, math.min(5, math.floor(0.5 + math.log(diff * 2) / math.log(2))))
   return { id = string.format("g%d-%s-%s", seq or 0, kind, X), gen = true,
@@ -935,6 +1012,41 @@ local function open_tiers()
     if lvl >= t.level and done[t.needs] then out[i] = true end
   end
   return out
+end
+
+-- Has the company REACHED this body? Stood on it (the Charter's record), a
+-- flag there, or a landing or an orbital survey of it flown.
+function reached(name)
+  if type(name) ~= "string" then return false end
+  if (save.get("mission.visited") or {})[name] or (save.get("mission.flags") or {})[name] then return true end
+  local gd = save.get("mission.gdone") or {}
+  return gd["land:" .. name] == true or gd["flag:" .. name] == true or gd["orbit:" .. name] == true
+end
+
+-- An ore haul from `b`: reached, or no harder a round trip (Δv) than a body
+-- already reached (10% grace). The home world itself never counts as reached
+-- for this: getting off it is not getting anywhere.
+local REACH_GRACE = 1.10
+local function reach_ok(R, home, b)
+  if b.name == home.name then return false end
+  if reached(b.name) then return true end
+  local p = plan(R, home, b)
+  if not p then return false end
+  local want, best = need(p, "orehaul"), nil
+  for _, rb in ipairs(R.bodies) do
+    if rb.name ~= home.name and reached(rb.name) then
+      local rp = plan(R, home, rb)
+      local d = rp and need(rp, "orehaul")
+      if d and (not best or d > best) then best = d end
+    end
+  end
+  return best ~= nil and want <= best * REACH_GRACE
+end
+function reachOk(bname)
+  local R = roster()
+  local home = R and home_entry(R)
+  local b = R and R.by[bname]
+  return (home and b and reach_ok(R, home, b)) or false
 end
 
 -- Every (kind, body) the opened tiers allow, in a stable order.
@@ -984,8 +1096,10 @@ local function candidates()
          or (b.name == stand_in and (k == "survey" or k == "orbit")) then
         local key = k .. ":" .. b.name
         if not (GEN_KINDS[k].once and gdone[key]) then
-          -- A beacon is planted once per world, whichever contract planted it.
-          if not (k == "flag" and (save.get("mission.flags") or {})[b.name]) then
+          -- A beacon is planted once per world, whichever contract planted it;
+          -- an ore haul is offered only where the company can get to.
+          if not (k == "flag" and (save.get("mission.flags") or {})[b.name])
+             and not (k == "orehaul" and not reach_ok(R, home, b)) then
             out[#out + 1] = { kind = k, body = b.name, key = key }
           end
         end
@@ -1920,10 +2034,23 @@ local function measure(g, v, info)
   return nil
 end
 
--- What's in the warehouse toward a delivery goal: units, or kilograms.
+-- Was a delivery goal's material mined where the goal says (`origin`)? The
+-- warehouse does not keep a crate's world, so this is the ore's record:
+-- materials.minedOn (every world it has been dug on), else its first origin.
+local function origin_ok(g)
+  if not (g.origin and g.mat) then return true end
+  local mats = ref("materials")
+  if not mats then return false end
+  if mats.minedOn then return mats.minedOn(g.mat, g.origin) == true end
+  return mats.originOf ~= nil and mats.originOf(g.mat) == g.origin
+end
+
+-- What's in the warehouse toward a delivery goal: units, or kilograms. An
+-- ore that was never mined on the goal's `origin` is none of it.
 local function delivered(g)
   local inv, mats = ref("inventory"), ref("materials")
   if not inv then return 0 end
+  if not origin_ok(g) then return 0 end
   if g.mat then
     local n = inv.count("base", g.mat)
     if g.kg then return n * ((mats and mats.kg(g.mat)) or 1) end
@@ -2140,6 +2267,7 @@ local function tail(i, g)
   if met(i) then return "" end
   if g.kind == "deliver" then
     if not ref("inventory") then return "" end
+    if not origin_ok(g) then return string.format("   (none mined on %s yet)", g.origin) end
     if g.kg then
       return string.format("   (%.0f / %d kg in the warehouse)", delivered(g), g.kg)
     end
@@ -2261,11 +2389,14 @@ function forceComplete()
   local m = active and byId(active)
   if not m then return false end
   -- A forced beacon is still a beacon: the charter counts it.
+  -- (A haul's "set foot on X" is a visit, not a flag.)
   for _, g in ipairs(m.goals) do
     if g.kind == "flag" and g.body then
-      local f = save.get("mission.flags") or {}
-      f[g.body] = true
-      save.set("mission.flags", f)
+      if g.v == 2 or m.kind == "flag" then
+        local f = save.get("mission.flags") or {}
+        f[g.body] = true
+        save.set("mission.flags", f)
+      end
       local v = save.get("mission.visited") or {}
       v[g.body] = true
       save.set("mission.visited", v)
@@ -2358,7 +2489,9 @@ function update(node, dt)
       perm[i] = true
       save.set("mission.perm", perm)
       log("  ✓ " .. goalLabel(g))
-      if g.kind == "flag" and g.body then
+      -- (a haul's "set foot on X" is not a flag: only a flag contract's
+      -- goal records one, or the board stops offering the flag there)
+      if g.kind == "flag" and g.body and (g.v == 2 or m.kind == "flag") then
         local f = save.get("mission.flags") or {}
         f[g.body] = true
         save.set("mission.flags", f)

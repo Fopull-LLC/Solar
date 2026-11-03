@@ -539,8 +539,19 @@ end
 -- WHERE AN ORE CAME FROM. The first body a material was mined on is kept
 -- (`ore.origin` = { [mat] = body }); a loose resource body also carries
 -- `origin:<body>` in its tags (tagResource). The lab reads both.
+-- Every body a material has been mined on is kept too (`ore.minedOn` =
+-- { [mat] = { [body] = true } }, `minedOn(mat, body)`): an ore haul from a
+-- second moon that carries the same ore (missions.lua "orehaul") is checked
+-- against that, not against the first moon it was ever dug on.
 function noteOrigin(mat, body)
   if not (mat and body and save and save.get) then return end
+  local m = save.get("ore.minedOn")
+  if type(m) ~= "table" then m = {} end
+  if type(m[mat]) ~= "table" then m[mat] = {} end
+  if not m[mat][body] then
+    m[mat][body] = true
+    save.set("ore.minedOn", m)
+  end
   local o = save.get("ore.origin")
   if type(o) ~= "table" then o = {} end
   if o[mat] then return end
@@ -550,6 +561,14 @@ end
 function originOf(mat)
   local o = save and save.get and save.get("ore.origin")
   return type(o) == "table" and o[mat] or nil
+end
+-- Has `mat` been mined on `body`? (A save from before `ore.minedOn`: its
+-- recorded origin.)
+function minedOn(mat, body)
+  if not (mat and body and save and save.get) then return false end
+  local m = save.get("ore.minedOn")
+  if type(m) == "table" and type(m[mat]) == "table" and m[mat][body] then return true end
+  return originOf(mat) == body
 end
 
 -- RESEARCH. What one unit of `mat` from `originBody` is worth to the lab:

@@ -320,7 +320,10 @@ local function offworld_step(m, goals, astro, label, pays)
     soi = "A flyby is enough — enter its sphere of influence. M opens the map.",
     orbit = "Keep the periapsis clear of the ground.",
     land = "Intact and stopped counts.",
-    flag = plant and FLAG_HINT or "Standing on it plants the company beacon.",
+    -- (a haul's "set foot on X" is a visit; only a beacon contract signed
+    -- before flags plants anything by standing there)
+    flag = plant and FLAG_HINT or (m.kind == "flag" and "Standing on it plants the company beacon."
+      or "Setting foot on it is what counts; then dig."),
     cargo = "Load the Cargo Bay from your suit pack at the craft.",
   })[g.kind] or "M opens the orbit map."
   if g.kind == "flag" and here == X then
