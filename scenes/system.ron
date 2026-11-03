@@ -2919,6 +2919,11 @@
                     enabled: true,
                     params: [],
                 ),
+                (
+                    kind: "weather_map",
+                    enabled: true,
+                    params: [],
+                ),
             ],
             id: Some(92),
         ),

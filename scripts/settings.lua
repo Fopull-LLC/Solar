@@ -131,6 +131,11 @@ GFX_OPTIONS = {
     opts = { { label = "Low", value = "Low" }, { label = "Medium", value = "Medium" }, { label = "High", value = "High" } },
     preset = { Low = "Low", Medium = "Medium", High = "High", Ultra = "High" },
     desc = "Falling rain and snow on the screen and its streaks; Low keeps only the wet look." },
+  { key = "clouds", group = "air", label = "Clouds", cost = "low to medium (0.1–2.5 ms)",
+    opts = { { label = "Off", value = "Off" }, { label = "Low", value = "Low" }, { label = "Medium", value = "Medium" },
+             { label = "High", value = "High" }, { label = "Ultra", value = "Ultra" } },
+    preset = { Low = "Low", Medium = "Medium", High = "High", Ultra = "Ultra" },
+    desc = "Clouds with volume, lit by the sun and casting shadows. Off draws a flat cloud layer that still follows the weather." },
   -- lens
   { key = "bloom", group = "lens", label = "Bloom", cost = "low (0.5 ms)", opts = onoff(),
     preset = { Low = true, Medium = true, High = true, Ultra = true },

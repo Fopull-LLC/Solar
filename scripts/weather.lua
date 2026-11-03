@@ -108,6 +108,10 @@ defaults = {
   gloom = 1.0,
   --- Print the weather once every few seconds.
   debug = false,
+  --- The weather where you stand comes off the world's weather map
+  --- (weather_map.lua): systems that drift over the sphere. Off: the whole
+  --- world shares one front.
+  localWeather = true,
 }
 
 local sqrt, floor, max, min, exp = math.sqrt, math.floor, math.max, math.min, math.exp
@@ -356,6 +360,9 @@ end
 -- ── the scene ───────────────────────────────────────────────────────────────
 
 sky = nil            -- published for atmosphere.lua
+map_ctx = nil        -- { name, seed, p, clock, spell } for weather_map.lua
+-- What weather_map.lua rolls its systems with: this file's own hash and fronts.
+WX = { hash = function(...) return hash(...) end, front = function(...) return front(...) end }
 local cur = nil      -- the last current() table
 local clock = nil    -- the weather clock, seconds
 local last_rails = nil
@@ -513,7 +520,17 @@ local NAMES = {
 local function compute(name, b, w, x, y, z)
   local p = profile(w)
   local seed = seed_of(name, w)
-  local I, trend, kind, hail = at(seed, p, clock or 0, params.spell)
+  -- Where the weather is: off the world's weather map (weather_map.lua) at the
+  -- point under you, so you stand under the clouds the sky shows. Without
+  -- the map (tests, an old scene), the whole world shares one front, as before.
+  local I, trend, kind, hail, mf
+  local M = params.localWeather ~= false and ref("weather_map") or nil
+  if M and M.localAt and not p.airless then
+    I, trend, kind, hail, mf = M.localAt(WX, seed, p, clock or 0, params.spell, x - b.x, y - b.y, z - b.z)
+  else
+    I, trend, kind, hail = at(seed, p, clock or 0, params.spell)
+  end
+  map_ctx = { name = name, seed = seed, p = p, clock = clock or 0, spell = params.spell or 360 }
   local temp
   if forced then
     local f = forced.def
@@ -537,6 +554,7 @@ local function compute(name, b, w, x, y, z)
   o.tempC = -40 + 90 * temp
   o.body = name
   o.airless = p.airless
+  o.map = mf
   local d = DIRS[floor((o.windFrom + 22.5) / 45) % 8 + 1]
   o.label = (NAMES[o.type] or o.type) .. (p.airless and "" or string.format(" · wind %.0f m/s from the %s", spd, d))
   return o, p, seed
