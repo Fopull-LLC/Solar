@@ -41,8 +41,8 @@ exec(compile(_src, _SRC, "exec"))          # noqa: S102 — our own generator's 
 COAT = (0.83, 0.825, 0.80)        # cotton twill, off-white, laundered a hundred times
 COAT_SH = (0.74, 0.735, 0.71)
 KNIT = (0.66, 0.66, 0.645)
-SHIRT = (0.11, 0.135, 0.20)        # a navy knit
-SHIRT_RIB = (0.09, 0.11, 0.165)
+SHIRT = (0.21, 0.235, 0.30)        # a heathered navy-grey knit
+SHIRT_RIB = (0.17, 0.19, 0.25)
 TROUSER = (0.085, 0.090, 0.100)
 NITRILE = (0.105, 0.215, 0.60)
 SHOE = (0.060, 0.058, 0.056)
@@ -256,13 +256,13 @@ def build_lab(rig):
     ]
     UPPER = [  # y, half-width, front, back, centre z, squareness, V half-angle (rad), lapel width
         (1.315, 0.176, 0.126, 0.118, zc, 2.45, 0.00, 0.000),
-        (1.360, 0.178, 0.130, 0.119, zc, 2.5, 0.16, 0.030),
-        (1.420, 0.182, 0.128, 0.117, zc, 2.6, 0.30, 0.058),
-        (1.470, 0.197, 0.116, 0.110, zc - 0.002, 2.9, 0.42, 0.070),
-        (1.505, 0.198, 0.101, 0.098, zc - 0.004, 3.4, 0.52, 0.062),
-        (1.526, 0.180, 0.092, 0.090, zc - 0.006, 3.4, 0.60, 0.050),   # the shoulder line
-        (1.541, 0.138, 0.086, 0.086, zn + 0.001, 2.8, 0.70, 0.036),
-        (1.553, 0.100, 0.080, 0.083, zn, 2.4, 0.80, 0.024),           # the collar's root
+        (1.360, 0.178, 0.130, 0.119, zc, 2.5, 0.12, 0.030),
+        (1.420, 0.182, 0.128, 0.117, zc, 2.6, 0.23, 0.058),
+        (1.470, 0.197, 0.116, 0.110, zc - 0.002, 2.9, 0.33, 0.070),
+        (1.505, 0.198, 0.101, 0.098, zc - 0.004, 3.4, 0.42, 0.062),
+        (1.526, 0.180, 0.092, 0.090, zc - 0.006, 3.4, 0.50, 0.050),   # the shoulder line
+        (1.541, 0.138, 0.086, 0.086, zn + 0.001, 2.8, 0.60, 0.036),
+        (1.553, 0.100, 0.080, 0.083, zn, 2.4, 0.70, 0.024),           # the collar's root
     ]
 
     def wrinkle(a, y):
@@ -353,7 +353,7 @@ def build_lab(rig):
 
     # THE COLLAR: a stand round the back of the neck from notch to notch, its
     # fall turned down over it (one band folded: base, stand top, fold, edge)
-    hT = 0.80 + 0.036 / 0.09
+    hT = 0.70 + 0.036 / 0.09
     CR = [  # y over the root, radius out from the root ring, back rise, along the arc
         (0.000, 0.000, 0.000), (0.026, -0.004, 0.012), (0.033, 0.003, 0.016),
         (0.020, 0.016, 0.008), (0.000, 0.026, -0.006)]
@@ -400,7 +400,7 @@ def build_lab(rig):
 
     def shirt_w(P):
         return [blend("Back", "Head", float(smooth01(1.548 * k, 1.60 * k, p[1])) * 0.3) for p in P]
-    Piece("Shirt", "LabCloth", Vs, Fs, shirt_w, shirt_col, tile=0.3, dirt="none", mods=[("recalc",), ("subsurf", 1)])
+    Piece("Shirt", "LabKnit", Vs, Fs, shirt_w, shirt_col, tile=0.12, dirt="none", mods=[("recalc",), ("subsurf", 1)])
     tree = bvh(coat)
 
     # the snap placket down the front, and its snaps

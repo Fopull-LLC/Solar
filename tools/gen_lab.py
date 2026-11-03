@@ -837,16 +837,54 @@ def island(K, x0, x1, z0, z1, seed, scope_at=None):
         g.color = (1, 1, 1)
         box(g, "LabGlass", ((x0 + x1) / 2, y + 0.006, zc), (x1 - x0 - 0.2, 0.012, 0.42))
         rng = np.random.default_rng(seed + int(y * 10))
-        xx = x0 + 0.25
-        while xx < x1 - 0.25:
-            if rng.random() < 0.65:
-                r = rng.uniform(0.03, 0.05)
-                h = rng.uniform(0.1, 0.2)
-                col = [(0.30, 0.18, 0.06), (0.88, 0.88, 0.86), (0.10, 0.22, 0.42), (0.88, 0.88, 0.86)][int(rng.integers(0, 4))]
-                zz = zc + rng.uniform(-0.1, 0.1)
-                Tb(m, "LabResin", col, (xx, y + 0.012, zz), (xx, y + 0.012 + h, zz), r, segs=12)
-                Tb(m, "LabResin", DARKP, (xx, y + 0.012 + h, zz), (xx, y + 0.035 + h, zz), r * 0.5, segs=10)
-            xx += rng.uniform(0.11, 0.2)
+        xx = x0 + 0.22
+        # groups, not a row: a run of reagent bottles of mixed sizes, a gap,
+        # binders leaning, a stack of sample boxes, a wash bottle, a gap
+        while xx < x1 - 0.3:
+            if min(abs(xx - u) for u in (x0 + 0.1, (x0 + x1) / 2, x1 - 0.1)) < 0.06:
+                xx += 0.08
+                continue
+            kind = rng.choice(["bottles", "binders", "boxes", "gap", "bottles", "jar"], p=[0.3, 0.15, 0.15, 0.15, 0.15, 0.1])
+            if kind == "gap":
+                xx += rng.uniform(0.15, 0.35)
+                continue
+            if kind == "bottles":
+                for _ in range(int(rng.integers(2, 5))):
+                    r = float(rng.choice([0.022, 0.03, 0.04, 0.052]))
+                    h = r * rng.uniform(2.6, 4.2)
+                    col = [(0.30, 0.18, 0.06), (0.88, 0.88, 0.86), (0.10, 0.22, 0.42), (0.35, 0.12, 0.08),
+                           (0.86, 0.86, 0.84)][int(rng.integers(0, 5))]
+                    zz = zc + rng.uniform(-0.09, 0.09)
+                    Tb(m, "LabResin", col, (xx + r, y + 0.012, zz), (xx + r, y + 0.012 + h, zz), r, segs=12)
+                    Tb(m, "LabResin", (0.08, 0.08, 0.09) if rng.random() < 0.6 else (0.75, 0.15, 0.08),
+                       (xx + r, y + 0.012 + h, zz), (xx + r, y + 0.03 + h, zz), r * 0.55, segs=10)
+                    Bx(m, "LabWall", (0.95, 0.95, 0.93), xx + r * 0.4, xx + r * 1.6, y + 0.012 + h * 0.3,
+                       y + 0.012 + h * 0.65, zz - r - 0.002, zz - r - 0.0005)
+                    xx += 2 * r + rng.uniform(0.008, 0.03)
+            elif kind == "binders":
+                n = int(rng.integers(2, 5))
+                for i in range(n):
+                    col = [(0.12, 0.25, 0.55), (0.15, 0.15, 0.16), (0.55, 0.12, 0.10), (0.85, 0.85, 0.82)][int(rng.integers(0, 4))]
+                    zb = 0.12 - 0.006 * (i % 3)
+                    Bx(m, "LabResin", col, xx, xx + 0.045, y + 0.012, y + 0.30 - 0.008 * (i % 2), zc - 0.13 + 0.004 * (i % 2), zc + zb)
+                    Bx(m, "LabWall", (0.95, 0.95, 0.92), xx + 0.008, xx + 0.037, y + 0.20, y + 0.27,
+                       zc - 0.134 + 0.004 * (i % 2), zc - 0.131 + 0.004 * (i % 2))
+                    xx += 0.051
+                xx += 0.03
+            elif kind == "boxes":
+                hh = y + 0.012
+                for i in range(int(rng.integers(1, 4))):
+                    bw = rng.uniform(0.16, 0.24)
+                    bh = rng.uniform(0.05, 0.09)
+                    col = [(0.80, 0.78, 0.72), (0.30, 0.42, 0.55), (0.92, 0.92, 0.90)][int(rng.integers(0, 3))]
+                    Bx(m, "LabWall", col, xx, xx + bw, hh, hh + bh, zc - 0.12 + 0.01 * i, zc + 0.10 - 0.01 * i)
+                    hh += bh + 0.001
+                xx += 0.26
+            else:   # a wide-mouth sample jar of something
+                Tb(m, "LabResin", (0.86, 0.87, 0.86), (xx + 0.05, y + 0.012, zc), (xx + 0.05, y + 0.13, zc), 0.05, segs=14)
+                Tb(m, "LabResin", [(0.45, 0.25, 0.12), (0.30, 0.30, 0.32)][int(rng.integers(0, 2))],
+                   (xx + 0.05, y + 0.017, zc), (xx + 0.05, y + 0.07, zc), 0.044, segs=14)
+                xx += 0.13
     # what's out on the bench
     rng = np.random.default_rng(seed)
     for s in (-1, 1):
@@ -1550,6 +1588,19 @@ def main():
     out.append("]\n")
     with open(os.path.join(PREFABS, "LabInterior.prefab.ron"), "w") as f:
         f.write("".join(out))
+    # the clipboard a scientist reads (scripts/scientist.lua holds it)
+    cb = CModel(520); cb.ground = False
+    Bx(cb, "LabResin", (0.36, 0.25, 0.14), -0.115, 0.115, -0.16, 0.16, -0.003, 0.003)
+    Bx(cb, "LabWall", (0.95, 0.95, 0.93), -0.105, 0.105, -0.15, 0.13, 0.003, 0.0045)
+    for i in range(9):
+        Bx(cb, "LabWall", (0.35, 0.36, 0.40), -0.085, 0.085 - (0.05 if i % 3 == 2 else 0.0), 0.09 - i * 0.025, 0.093 - i * 0.025,
+           0.0045, 0.0050)
+    Bx(cb, "LabSteel", STEEL, -0.045, 0.045, 0.125, 0.16, 0.003, 0.012)
+    mn_, mx_ = cb.bounds()
+    write_glb(cb.shifted((mn_ + mx_) / 2), os.path.join(MODELS, "clipboard.glb"))
+    with open(os.path.join(PREFABS, "LabClipboard.prefab.ron"), "w") as f:
+        f.write("// LAB CLIPBOARD — read by a Research Lab scientist (tools/gen_lab.py; scripts/scientist.lua places it).\n[\n"
+                + mesh_node("LabClipboard", "clipboard.glb", cb, (0, 0, 0)).replace("        parent: Some(0),\n", "") + "]\n")
     # the capsule
     cm = capsule()
     mn_, mx_ = cm.bounds()

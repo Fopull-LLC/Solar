@@ -87,6 +87,17 @@ def mat_setup():
             nt.links.new(nimg.outputs["Color"], nm.inputs["Color"])
             nt.links.new(nm.outputs["Normal"], bsdf.inputs["Normal"])
             bsdf.inputs["Roughness"].default_value = 0.85
+        elif name == "LabKnit":
+            img = nt.nodes.new("ShaderNodeTexImage")
+            img.image = bpy.data.images.load(os.path.join(ROOT, "textures/lab/knit_albedo.png"))
+            nt.links.new(img.outputs["Color"], mul.inputs["A"])
+            nimg = nt.nodes.new("ShaderNodeTexImage")
+            nimg.image = bpy.data.images.load(os.path.join(ROOT, "textures/lab/knit_normal.png"))
+            nimg.image.colorspace_settings.name = "Non-Color"
+            nm = nt.nodes.new("ShaderNodeNormalMap")
+            nt.links.new(nimg.outputs["Color"], nm.inputs["Color"])
+            nt.links.new(nm.outputs["Normal"], bsdf.inputs["Normal"])
+            bsdf.inputs["Roughness"].default_value = 0.95
         elif name == "LabNitrile":
             bsdf.inputs["Roughness"].default_value = 0.42
         elif name == "LabShoe":

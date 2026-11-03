@@ -502,7 +502,9 @@ function lateUpdate(node, dt)
   -- (the Research Lab's staff stand under a ceiling grid that lights the
   -- tops of heads and little else: a touch, so no face reads as mud)
   if not helmet and root_node and (root_node.name or ""):sub(1, 13) == "LabScientist " then glow = 0.3 end
-  knob(sk, "flush", "flush", math.min(1, ch.flush or 0), nil, nil, 0.02)
+  -- (the lab's staff: a little warmth in the skin, the blood a portrait light finds)
+  local warm = (glow == 0.3) and 0.12 or 0.0
+  knob(sk, "flush", "flush", math.min(1, (ch.flush or 0) + warm), nil, nil, 0.02)
   knob(sk, "pale", "pale", math.min(1, ch.pale or 0), nil, nil, 0.02)
   knob(sk, "glow", "glow", glow, nil, nil, 0.02)
   local ey = mat(node, "FaceEye")

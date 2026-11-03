@@ -338,4 +338,7 @@
     "textures/lab/steel_normal.png": (filter: SmoothMipmaps, wrap: Repeat),
     "textures/lab/steel_orm.png": (filter: SmoothMipmaps, wrap: Repeat),
     "textures/lab/signs.png": (filter: SmoothMipmaps, wrap: Clamp),
+    "textures/lab/knit_albedo.png": (filter: SmoothMipmaps, wrap: Repeat),
+    "textures/lab/knit_normal.png": (filter: SmoothMipmaps, wrap: Repeat),
+    "textures/lab/knit_orm.png": (filter: SmoothMipmaps, wrap: Repeat),
 }

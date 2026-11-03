@@ -65,6 +65,7 @@ inside = false            -- (published) the interior is on
 forceInside = false       -- probes / the talk view keep it on
 crewInLab = false         -- the crew stands in the lab itself (published)
 scientists = {}           -- { node, idx } spawned
+boards = {}               -- the clipboards they hold
 lastReceived = nil        -- { mat, rp, first, t } (the receiving screen, probes)
 received = 0              -- capsules that reached the receiver (probes)
 
@@ -461,7 +462,7 @@ STAFF = {
   { name = "Imani Okafor", role = "Sample receiving", spot = "Sci 1", seed = 811 },
   { name = "Felix Haddad", role = "Petrography", spot = "Sci 2", seed = 812 },
   { name = "Hana Nakamura", role = "Wet chemistry", spot = "Sci 3", seed = 813 },
-  { name = "Ravi Pillai", role = "Analytical chemistry", spot = "Sci 4", seed = 814 },
+  { name = "Ravi Pillai", role = "Analytical chemistry", spot = "Sci 4", seed = 814, clipboard = true },
 }
 local sci_spawned = false
 local function spawn_scientists()
@@ -490,6 +491,16 @@ local function spawn_scientists()
         local sc = n.getScript and n:getScript("scientist")
         if sc and sc.bind then sc.bind(i, st, F, child(interior, st.spot .. " Hands"), look) end
         scientists[#scientists + 1] = { node = n, idx = i, staff = st }
+        -- one of them reads a clipboard (theirs: placed in their hands by
+        -- scientist.lua each frame)
+        if st.clipboard and sc then
+          spawn("LabClipboard", vec3(b.x + p.x, b.y + p.y + 1.2, b.z + p.z), function(cb)
+            cb.castShadow = false
+            sc.holds, sc.board = true, cb
+            cb.enabled = inside
+            boards[#boards + 1] = cb
+          end)
+        end
         -- they live in the interior's world: switched off with it
         n.enabled = inside
       end, planet)
@@ -549,6 +560,7 @@ local function set_inside(on)
   inside = on
   if valid(interior) then interior.enabled = on end
   for _, s in ipairs(scientists) do if valid(s.node) then s.node.enabled = on end end
+  for _, c in ipairs(boards) do if valid(c) then c.enabled = on end end
   if log then log("lab: interior " .. (on and "on" or "off")) end
 end
 

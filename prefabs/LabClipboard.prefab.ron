@@ -1,0 +1,44 @@
+// LAB CLIPBOARD — read by a Research Lab scientist (tools/gen_lab.py; scripts/scientist.lua places it).
+[
+    (
+        name: "LabClipboard",
+        transform: (
+            translation: (0.0000, 0.0000, 0.0000),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Mesh(
+            asset_path: "models/lab/clipboard.glb",
+        ),
+        object_materials: {
+            "LabResin": (
+                color: (1.0, 1.0, 1.0),
+                roughness: 0.24,
+                metallic: 0.0,
+                reflectivity: 0.7,
+                shading: Physical,
+            ),
+            "LabSteel": (
+                color: (1.0, 1.0, 1.0),
+                texture: Some("textures/lab/steel_albedo.png"),
+                normal_map: Some("textures/lab/steel_normal.png"),
+                normal_strength: 0.5,
+                roughness_map: Some("textures/lab/steel_orm.png"),
+                roughness: 1.0,
+                metallic_map: Some("textures/lab/steel_orm.png"),
+                metallic: 0.85,
+                reflectivity: 0.6,
+                shading: Physical,
+            ),
+            "LabWall": (
+                color: (1.0, 1.0, 1.0),
+                texture: Some("textures/lab/wall_albedo.png"),
+                roughness: 0.42,
+                metallic: 0.0,
+                reflectivity: 0.35,
+                shading: Physical,
+            ),
+        },
+        scripts: [],
+    ),
+]

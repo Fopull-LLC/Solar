@@ -45,7 +45,7 @@ from gen_part_textures import normal_from_height  # noqa: E402
 
 OUT_GLB = os.path.join(ROOT, "models", "lab", "scientist.glb")
 TEXDIR = os.path.join(ROOT, "textures", "lab")
-MAT_ORDER = ["LabCloth", "LabNitrile", "LabShoe", "LabPlastic", "SuitHead"]
+MAT_ORDER = ["LabCloth", "LabKnit", "LabNitrile", "LabShoe", "LabPlastic", "SuitHead"]
 
 
 def tex_cloth(n=512):
@@ -75,6 +75,26 @@ def tex_cloth(n=512):
     Image.fromarray((np.clip(nm, 0, 1) * 255).astype(np.uint8) if nm.dtype != np.uint8 else nm).save(os.path.join(TEXDIR, "cloth_normal.png"))
     orm = np.stack([0.85 + 0.15 * crease, 0.90 + 0.06 * (1 - h), np.zeros_like(h)], -1)
     Image.fromarray((np.clip(orm, 0, 1) * 255).astype(np.uint8)).save(os.path.join(TEXDIR, "cloth_orm.png"))
+
+
+def tex_knit(n=256):
+    """A jersey knit: fine vertical wales (the stitches' columns), the courses
+    across them, a heathered fleck of two yarns."""
+    from PIL import ImageFilter
+    rng = np.random.default_rng(23)
+    y, x = np.mgrid[0:n, 0:n].astype(float)
+    wale = 0.5 + 0.5 * np.cos(x * (2 * math.pi / 4.0))
+    course = 0.5 + 0.5 * np.cos(y * (2 * math.pi / 3.0) + (x // 2 % 2) * math.pi)
+    fleck = rng.random((n, n))
+    fleck = np.asarray(Image.fromarray((fleck * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(0.7)), float) / 255
+    h = 0.6 * wale + 0.25 * course + 0.15 * fleck
+    alb = 0.90 + 0.10 * (fleck - 0.5) + 0.05 * (wale - 0.5)
+    Image.fromarray((np.clip(np.stack([alb, alb, alb * 1.01], -1), 0, 1) * 255).astype(np.uint8)).save(
+        os.path.join(TEXDIR, "knit_albedo.png"))
+    nm = normal_from_height(h, strength=2.2)
+    Image.fromarray((np.clip(nm, 0, 1) * 255).astype(np.uint8)).save(os.path.join(TEXDIR, "knit_normal.png"))
+    orm = np.stack([0.75 + 0.25 * wale, 0.92 + 0.0 * h, np.zeros_like(h)], -1)
+    Image.fromarray((np.clip(orm, 0, 1) * 255).astype(np.uint8)).save(os.path.join(TEXDIR, "knit_orm.png"))
 
 
 def run_blender(rig_path, out):
@@ -154,12 +174,7 @@ def neck_check(sk, rig):
     import gen_suit as _g
     sys.path.insert(0, os.path.join(ROOT, "tools", "perf"))
     import neck_check as NC
-    e = sk.parts["LabCloth"]
-    P = np.vstack(e["P"])
-    Wh = np.vstack(e["W"])
-    Jt = np.vstack(e["J"])
-    hi = rig.index["Head"]
-    head_share = (Wh * (Jt == hi)).sum(1)
+    P = np.vstack([np.vstack(sk.parts[m_]["P"]) for m_ in ("LabCloth", "LabKnit") if m_ in sk.parts])
     collar = P[(P[:, 1] > 1.545) & (P[:, 1] < 1.62) & (np.abs(P[:, 0] + 0.5) < 0.1)]
     hb = rig.p("Head")
     worst = 1e9
@@ -202,6 +217,7 @@ def main():
     os.makedirs(os.path.dirname(OUT_GLB), exist_ok=True)
     if not dry:
         tex_cloth()
+        tex_knit()
     rig_path = os.path.join(ROOT, "models", "astronaut", "astronaut_male.glb")
     rig = GS.Rig(rig_path)
     tmp = tempfile.mkdtemp(prefix="gen_lab_")

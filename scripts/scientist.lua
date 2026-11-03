@@ -100,6 +100,12 @@ function lateUpdate(node, dt)
   local u = node:toWorld(vec3(0, 1, 0))
   local ux, uy, uz = u.x - o.x, u.y - o.y, u.z - o.z
   local w = params.work or 0.045
+  stance(node, t, o, rx, ry, rz, fx, fy, fz, ux, uy, uz)
+  if holds then
+    hold_board(node, t, o, rx, ry, rz, fx, fy, fz, ux, uy, uz)
+    look_head(t, rx, ry, rz, ux, uy, uz)
+    return
+  end
   for _, side in ipairs({ { "Left", 1, 0.0 }, { "Right", -1, 1.9 } }) do
     local nm, sg, ph = side[1], side[2], side[3]
     local a = t * (0.9 + 0.13 * sg) + ph
@@ -118,6 +124,81 @@ function lateUpdate(node, dt)
     local pz = o.z + rz * sg * faceSign * 0.30 - fz * 0.22 - uz * 0.55
     pcall(anim.reach, anim, "Hand." .. nm, vec3(tx, ty, tz), { pole = vec3(px, py, pz) })
   end
+  look_head(t, rx, ry, rz, ux, uy, uz)
+end
+
+-- ── the stance: knees soft, the weight shifting, a breath of sway ───────────
+-- The root bone (Back) moves in the armature's space: x = 2·model x,
+-- y = 2·model z, z = −2·model y (the rig's ½-scale, Z-up MaleArm; read from
+-- models/lab/scientist.glb). Lowering it with the feet held planted by IK
+-- bends the knees.
+local feet = nil              -- the feet's planted points, kept in the root's frame
+local function bone_w(name)
+  local ok, p = pcall(model.bonePos, model, name)
+  return ok and p or nil
+end
+function stance(node, t, o, rx, ry, rz, fx, fy, fz, ux, uy, uz)
+  -- the feet, planted where the clip first put them (kept in the root's frame)
+  if not feet then
+    local l, r = bone_w("Foot.Left"), bone_w("Foot.Right")
+    if not (l and r) then return end
+    local function rel(p) return node:toLocal(p) end
+    feet = { L = rel(l), R = rel(r) }
+  end
+  local sway = math.sin(t * 0.31) * 0.5 + math.sin(t * 0.13 + 1.1) * 0.5
+  local drop = 0.016 + 0.003 * math.sin(t * 1.1)               -- soft knees, a breath
+  local side = 0.016 * sway                                     -- the weight going over
+  -- (in the model's own axes: side along +x, drop down -y)
+  pcall(anim.addBonePos, anim, "Back", vec3(2 * side * faceSign, 0, 2 * drop))
+  pcall(anim.addBoneRot, anim, "Back", 0, 0, -0.03 * sway)
+  for _, k in ipairs({ { "Left", 1 }, { "Right", -1 } }) do
+    local lp = feet[k[1] == "Left" and "L" or "R"]
+    local wp = node:toWorld(lp)
+    local pole = vec3(wp.x + fx * 1.0 + ux * 0.5 + rx * k[2] * 0.15, wp.y + fy * 1.0 + uy * 0.5 + ry * k[2] * 0.15,
+                      wp.z + fz * 1.0 + uz * 0.5 + rz * k[2] * 0.15)
+    pcall(anim.reach, anim, "Foot." .. k[1], wp, { pole = pole })
+  end
+end
+
+-- ── holding a clipboard (lab.lua gives one to a scientist or two) ───────────
+holds = false
+board = nil                   -- the clipboard node (top level, placed each frame)
+function hold_board(node, t, o, rx, ry, rz, fx, fy, fz, ux, uy, uz)
+  -- the board at the chest, tipped up to the eyes, the left hand under it and
+  -- the right with a pen on it
+  local c = vec3(o.x + fx * 0.30 + ux * 0.26 + rx * faceSign * 0.04, o.y + fy * 0.30 + uy * 0.26 + ry * faceSign * 0.04,
+                 o.z + fz * 0.30 + uz * 0.26 + rz * faceSign * 0.04)
+  local bob = 0.006 * math.sin(t * 0.9)
+  c = vec3(c.x + ux * bob, c.y + uy * bob, c.z + uz * bob)
+  -- the board's normal: toward the face, tipped 40° up from the horizontal
+  local tip = 0.75
+  local nx, ny, nz = -fx * math.cos(tip) + ux * math.sin(tip), -fy * math.cos(tip) + uy * math.sin(tip),
+    -fz * math.cos(tip) + uz * math.sin(tip)
+  if board and board.valid ~= false then
+    board.x, board.y, board.z = c.x, c.y, c.z
+    -- its +Y up the board (away from the body, tipped), its -Z the normal
+    local ax, ay, az = fx * math.sin(tip) + ux * math.cos(tip), fy * math.sin(tip) + uy * math.cos(tip),
+      fz * math.sin(tip) + uz * math.cos(tip)
+    pcall(board.setUp, board, vec3(ax, ay, az), vec3(-nx, -ny, -nz))
+  end
+  local lh = vec3(c.x - rx * faceSign * 0.10 - ux * 0.06, c.y - ry * faceSign * 0.10 - uy * 0.06,
+                  c.z - rz * faceSign * 0.10 - uz * 0.06)
+  local wr = 0.03 * math.sin(t * 2.3)
+  local rh = vec3(c.x + rx * faceSign * (0.04 + wr) + nx * 0.03, c.y + ry * faceSign * (0.04 + wr) + ny * 0.03,
+                  c.z + rz * faceSign * (0.04 + wr) + nz * 0.03)
+  for _, k in ipairs({ { "Left", lh, 1 }, { "Right", rh, -1 } }) do
+    local pole = vec3(o.x + rx * k[3] * faceSign * 0.35 - fx * 0.15 - ux * 0.5, o.y + ry * k[3] * faceSign * 0.35 - fy * 0.15 - uy * 0.5,
+                      o.z + rz * k[3] * faceSign * 0.35 - fz * 0.15 - uz * 0.5)
+    pcall(anim.reach, anim, "Hand." .. k[1], k[2], { pole = pole })
+  end
+end
+
+function look_head(t, rx, ry, rz, ux, uy, uz)
+  -- reading the clipboard
+  if holds and board and board.valid ~= false then
+    pcall(anim.lookAt, anim, { "Head" }, board.worldPos, { limit = 35, weight = 0.7 })
+    return
+  end
   -- the head: down at the work, now and then a glance up and across
   if look_m and valid(look_m) then
     local lk = to_world(look_m.x, look_m.y, look_m.z)
@@ -129,4 +210,8 @@ function lateUpdate(node, dt)
       pcall(anim.lookAt, anim, { "Head" }, vec3(gx, gy, gz), { limit = 25, weight = 0.55 })
     end
   end
+end
+
+function onDestroy()
+  if board and board.valid ~= false then board:destroy() end
 end
