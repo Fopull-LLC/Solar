@@ -1,9 +1,9 @@
 // Dust and grit off a tyre on loose ground (vehicle_fx.lua, pooled by rate).
 // The dust's albedo sits at about 0.45 before the world's ground tint
 // (vfx.lua dust_tint): lit, it reads a little paler than the ground it came
-// off, not cream on red soil (playtest 11-03c). A lamp near it still blows it
-// out on engine .1406: lit particles take a spot lamp's full light, cone and
-// all (engine card draft, belt-dust/E-card-particle-lamps.md).
+// off, not cream on red soil (playtest 11-03c). lamp_response 0.3 (engine
+// 0623): a vehicle lamp bright enough for the road at 50 m lights the dust at
+// 3 m at a third of a surface's response, so it no longer blows out white.
 (
     name: "TyreDust",
     lifetime: 2.2,
@@ -15,6 +15,7 @@
             render: Billboard(texture: Some("textures/vfx/smoke/clump_a.png")),
             blend: Alpha,
             lit: true,
+            lamp_response: 0.3,
             translucency: 0.6,
             soft: 0.6,
             space: World,
@@ -37,6 +38,7 @@
             render: Billboard(texture: Some("textures/vfx/debris/chip_a.png")),
             blend: Alpha,
             lit: true,
+            lamp_response: 0.3,
             space: World,
             clips: [(start: 0.0, end: 0.8, lifetime_jitter: 0.3, emit: Some(Burst(count: 3, count_jitter: 0.6, pulses: 1, interval: 0.0, interval_jitter: 0.2)))],
             automation: [],

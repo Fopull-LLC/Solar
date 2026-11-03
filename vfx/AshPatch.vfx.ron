@@ -11,6 +11,7 @@
             render: Billboard(texture: Some("textures/vfx/smoke/soot.png")),
             blend: Alpha,
             lit: true,
+            lamp_response: 0.3,
             translucency: 0.6,
             space: World,
             clips: [(start: 0.0, end: 7.5, lifetime_jitter: 0.25, emit: Some(Burst(count: 30, count_jitter: 0.2, pulses: 3, interval: 0.2, interval_jitter: 0.2)))],

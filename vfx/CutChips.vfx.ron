@@ -10,6 +10,7 @@
             render: Billboard(texture: Some("textures/vfx/debris/chip_b.png")),
             blend: Alpha,
             lit: true,
+            lamp_response: 0.3,
             space: World,
             clips: [(start: 0.0, end: 0.8, lifetime_jitter: 0.3, emit: Some(Burst(count: 4, count_jitter: 0.4, pulses: 1, interval: 0.0, interval_jitter: 0.2)))],
             automation: [],

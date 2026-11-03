@@ -84,6 +84,7 @@
             render: Billboard(texture: Some("textures/vfx/smoke/soft.png")),
             blend: Alpha,
             lit: true,
+            lamp_response: 0.3,
             translucency: 0.6,
             soft: 0.4,
             space: Local,
