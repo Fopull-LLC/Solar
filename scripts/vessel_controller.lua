@@ -689,6 +689,9 @@ local function load_bp(override)
       engines[#engines + 1] = { x = d.x, y = d.y, z = d.z, dx = ax, dy = ay, dz = az,
                                 thrust = d.thrust, burn = d.burn or 1,
                                 branch = in_branch[d.uid], uid = d.uid, rec = d,
+                                -- the builder's ignition stage (-1 = lit at launch); none on
+                                -- older builds, which burn by where they sit (engine_active)
+                                ign = ((d.stage or 0) ~= 0) and d.stage or nil,
                                 jet = jet or nil, jk = jet and 0 or nil, jb = jet and 0 or nil }
     end
     if (d.fuel or 0) > 0 then
@@ -754,6 +757,18 @@ local function load_bp(override)
       events[#events + 1] = { kind = "fairing", uid = d.uid, y = d.y, stage = st > 0 and st or 1e9 }
     end
   end
+  -- ENGINE IGNITIONS: engines the builder staged (stage n > 0) light when
+  -- stage n fires, one event per stage number (with that stage's decouplers).
+  do
+    local by_n = {}
+    for _, e in ipairs(engines) do
+      if e.ign and e.ign > 0 then
+        local ev = by_n[e.ign]
+        if not ev then ev = { kind = "engine", uids = {}, stage = e.ign }; by_n[e.ign] = ev; events[#events + 1] = ev end
+        ev.uids[#ev.uids + 1] = e.uid
+      end
+    end
+  end
   for _, ev in ipairs(events) do
     if ev.stage >= 1e9 then
       -- default rank: rings ahead of axial, lower first; chutes dead last.
@@ -775,6 +790,7 @@ local function load_bp(override)
     local stateOf = E and E.stateOf
     if stateOf then for _, d in pairs(bp.parts) do stateOf(d) end end
   end
+  engineIgnLoad()
   bp_by_uid = by_uid
   integ.gone = {}
   part_hp = {}
@@ -819,13 +835,20 @@ end
 -- + every still-attached side booster (boosters light with stage 1 and burn
 -- until their radial decoupler fires).
 local function engine_active(e, cut)
+  -- No propellant it can reach (its section's tanks are dry: fuel does not
+  -- cross a live decoupler, fuelFeedTick) — it cannot burn, lit or not.
+  if e.dry then return false end
   -- Its own switch first: an engine shut down by action stays down; one
-  -- activated by action burns whatever stage it sits in.
+  -- activated by action (or ignited by its stage, fireEvent) burns whatever
+  -- stage it sits in.
   local st = e.rec and e.rec.st
   if st then
     if st.running == false then return false end
     if st.forced then return true end
   end
+  -- An engine the builder put in a stage of its own (`ign`, the blueprint's
+  -- stage on an engine record) waits for that stage to fire it.
+  if e.ign then return false end
   if e.branch then return true end -- attached booster (dropped at separation)
   return e.y < cut - 0.01
 end
@@ -977,6 +1000,7 @@ local function set_navball(on)
   end
 end
 
+NAVBALL = {}   -- the ball's axes in the horizon frame, for the flight HUD (update_navball)
 -- Navball uniforms: the vessel basis in the LOCAL HORIZON frame (x=east,
 -- y=radial up, z=north) + prograde + the SAS aim ring. Same math as the ship.
 local function update_navball(node, nx, ny, nz, fx, fy, fz, tgtx, tgty, tgtz)
@@ -1003,11 +1027,33 @@ local function update_navball(node, nx, ny, nz, fx, fy, fz, tgtx, tgty, tgtz)
            vx * ux + vy * uy + vz * uz,
            vx * nhx + vy * nhy + vz * nhz
   end
+  -- A ROVER (or a bike) reads the ball along the way it DRIVES (2026-11-03:
+  -- "make the navball face forward on vehicles"): its command part usually
+  -- points up, which put the ball at +89° and all sky. The nose becomes the
+  -- drive front (R2.fwd, level in the vessel frame) and the ball's top the
+  -- vessel's up, so a level rover reads the horizon ahead and its heading.
+  if R2 and R2.mode == "rover" and R2.fwd then
+    local vr, vu, vz = basis(node)
+    local F = R2.fwd
+    local ax, ay, az = norm(vr.x * F.x + vz.x * F.z, vr.y * F.x + vz.y * F.z, vr.z * F.x + vz.z * F.z)
+    if ax ~= 0 or ay ~= 0 or az ~= 0 then
+      nx, ny, nz, fx, fy, fz = ax, ay, az, vu.x, vu.y, vu.z
+    end
+  end
   local rx2, ry2, rz2 = cross(fx, fy, fz, nx, ny, nz)
   local bx2, by2, bz2 = cross(nx, ny, nz, rx2, ry2, rz2)
-  navball:setShaderParam("right", toH(rx2, ry2, rz2))
-  navball:setShaderParam("up", toH(bx2, by2, bz2))
-  navball:setShaderParam("nose", toH(nx, ny, nz))
+  -- (published for the flight HUD's overlay marks on the ball: the same
+  -- horizon-frame axes the shader gets, and the frame itself)
+  local NB = NAVBALL
+  NB.rx, NB.ry, NB.rz = toH(rx2, ry2, rz2)
+  NB.ux, NB.uy, NB.uz = toH(bx2, by2, bz2)
+  NB.nx, NB.ny, NB.nz = toH(nx, ny, nz)
+  NB.ex, NB.ey, NB.ez, NB.hx, NB.hy, NB.hz = ex, ey, ez, ux, uy, uz
+  NB.qx, NB.qy, NB.qz = nhx, nhy, nhz
+  NB.t = time
+  navball:setShaderParam("right", NB.rx, NB.ry, NB.rz)
+  navball:setShaderParam("up", NB.ux, NB.uy, NB.uz)
+  navball:setShaderParam("nose", NB.nx, NB.ny, NB.nz)
   local vl = math.sqrt(node.vx ^ 2 + node.vy ^ 2 + node.vz ^ 2)
   if vl > 2.0 then
     navball:setShaderParam("prograde", toH(node.vx / vl, node.vy / vl, node.vz / vl))
@@ -1378,7 +1424,7 @@ function pruneEvents(dep)
   for _, e2 in ipairs(events) do
     if e2.kind == "axial" or e2.kind == "fairing" then
       if not dep[e2.uid] then keep[#keep + 1] = e2 end
-    elseif e2.kind == "chute" then
+    elseif e2.kind == "chute" or e2.kind == "engine" then
       local us = {}
       for _, u in ipairs(e2.uids or {}) do if not dep[u] then us[#us + 1] = u end end
       if #us > 0 then e2.uids = us; keep[#keep + 1] = e2 end
@@ -1540,13 +1586,16 @@ function fuelTierEnd(i)
 end
 
 -- Draw `units` (tanks that leave soonest first). Returns what it got.
-function fuelDraw(units)
+function fuelDraw(units, sec)
   local need = units or 0
   local i = 1
   while tanks[i] and need > 0 do
     local j = fuelTierEnd(i)
     local L = 0.0
-    for k = i, j do L = L + math.max(0, tanks[k].left or 0) end
+    -- (`sec`: one feed section's tanks only, fuelDrawFed; a tier is one height)
+    if not sec or tanks[i].sec == sec then
+      for k = i, j do L = L + math.max(0, tanks[k].left or 0) end
+    end
     if L > 0 then
       local take = math.min(L, need)
       for k = i, j do
@@ -1559,6 +1608,95 @@ function fuelDraw(units)
   end
   fuelSync()
   return (units or 0) - math.max(0, need)
+end
+
+-- FUEL DOES NOT CROSS A LIVE DECOUPLER (2026-11-03 playtest: "after
+-- decoupling my top stage ... was not able to use the engine at all"). The
+-- pool used to be one: once the lower stage's tanks ran dry its engines went
+-- on drinking the UPPER stage's tanks (the drain order reaches them next), so
+-- a stage burnt to the end handed SPACE an upper stage with empty tanks — and
+-- the builder's per-stage Δv was never what flew. Now the live axial cuts
+-- divide the tanks and engines into SECTIONS (by height, the rule
+-- engine_active stages by); an engine drinks its own section's tanks only,
+-- side boosters' tanks feed the bottom section (they drain first, as before),
+-- and an engine whose section is dry is out (`e.dry`) until a cut goes.
+-- RCS and the EVA pack still draw from the whole pool (fuelDraw).
+function feedSec(y, cuts)
+  local s = 0
+  for i = 1, #cuts do if y >= cuts[i] - 0.01 then s = i end end
+  return s
+end
+FEED = { cuts = {}, have = {} }
+function fuelFeedTick()
+  local cuts, have = FEED.cuts, FEED.have
+  for i = #cuts, 1, -1 do cuts[i] = nil end
+  for k in pairs(have) do have[k] = nil end
+  for _, ev in ipairs(events) do if ev.kind == "axial" then cuts[#cuts + 1] = ev.y end end
+  table.sort(cuts)
+  local top = 0
+  for _, t in ipairs(tanks) do
+    local s = t.branch and 0 or feedSec(t.y, cuts)
+    t.sec = s
+    have[s] = (have[s] or 0) + math.max(0, t.left or 0)
+    if s > top then top = s end
+  end
+  for _, e in ipairs(engines) do
+    local s = e.branch and 0 or feedSec(e.y, cuts)
+    -- (a section with no tank at all — a bare engine bolted under the
+    -- decoupler — is fed through it from the nearest section above that has)
+    while have[s] == nil and s < top do s = s + 1 end
+    e.sec = s
+    e.dry = (have[s] or 0) <= 0
+  end
+end
+-- Each section's lit engines draw their burn from its own tanks.
+function fuelDrawFed(throttle, dt, cut)
+  local need = {}
+  for _, e in ipairs(engines) do
+    if engine_active(e, cut) then
+      local s = e.sec or 0
+      need[s] = (need[s] or 0) + throttle * dt * e.burn * (e.jet and (e.jb or 0) / math.max(throttle, 0.05) or 1)
+    end
+  end
+  for s, u in pairs(need) do fuelDraw(u, s) end
+end
+
+-- Staged ignition. An engine the builder staged lights when its stage fires
+-- (`forced`, the same latch an Activate action sets: it rides the record into
+-- a fleet save or a craft split off); one staged at LAUNCH (-1) is lit as it
+-- rolls out. An ignition event whose engines are all lit already (a split-off
+-- craft whose stage fired on the craft it left) is dropped.
+function engineIgnite(uids)
+  local mine, n = {}, 0
+  for _, u in ipairs(uids or {}) do mine[u] = true end
+  for _, e in ipairs(engines) do
+    if mine[e.uid] and e.rec then
+      if type(e.rec.st) ~= "table" then e.rec.st = {} end
+      if e.rec.st.running ~= false then e.rec.st.forced = true; n = n + 1 end
+    end
+  end
+  if n > 0 and caption then caption(n > 1 and string.format("%d engines ignite", n) or "the engine ignites") end
+  return n
+end
+function engineIgnLoad()
+  local lit = {}
+  for _, e in ipairs(engines) do
+    local st = e.rec and e.rec.st
+    if e.ign == -1 and type(st) == "table" and st.running ~= false then st.forced = true end
+    if type(st) == "table" and st.forced then lit[e.uid] = true end
+  end
+  local keep = {}
+  for _, ev in ipairs(events) do
+    if ev.kind == "engine" then
+      local us = {}
+      for _, u in ipairs(ev.uids) do if not lit[u] then us[#us + 1] = u end end
+      ev.uids = us
+      if #us > 0 then keep[#keep + 1] = ev end
+    else
+      keep[#keep + 1] = ev
+    end
+  end
+  events = keep
 end
 
 -- Set the pool to `total` units, filling the tanks that leave LAST first.
@@ -7027,7 +7165,7 @@ function shedSet(node, set, why, sev, blast, at_uid)
   for _, ev in ipairs(events) do
     if ev.kind == "axial" or ev.kind == "fairing" then
       if not set[ev.uid] then keep_ev[#keep_ev + 1] = ev end
-    elseif ev.kind == "chute" then
+    elseif ev.kind == "chute" or ev.kind == "engine" then
       local us = {}
       for _, u in ipairs(ev.uids) do if not set[u] then us[#us + 1] = u end end
       if #us > 0 then ev.uids = us; keep_ev[#keep_ev + 1] = ev end
@@ -8571,10 +8709,17 @@ function stageNext()
     group[#group + 1] = table.remove(events, 1)
   end
   for _, ev in ipairs(group) do
-    if ev.kind ~= "chute" and ev.kind ~= "fairing" then r2Before(node) break end
+    if ev.kind ~= "chute" and ev.kind ~= "fairing" and ev.kind ~= "engine" then r2Before(node) break end
   end
-  for _, ev in ipairs(group) do
-    if node.valid and not destroyed then fireEvent(node, assembly.info(node) or info, ev) end
+  -- the stage's engines light FIRST: an upper stage that leaves as a craft of
+  -- its own on this SPACE takes its engines away already lit (their `forced`
+  -- state rides in the records it is handed)
+  for pass = 1, 2 do
+    for _, ev in ipairs(group) do
+      if (ev.kind == "engine") == (pass == 1) and node.valid and not destroyed then
+        fireEvent(node, assembly.info(node) or info, ev)
+      end
+    end
   end
   return true
 end
@@ -8584,7 +8729,7 @@ end
 function stageEventLive(ev)
   local live = function(u) return bp_by_uid[u] ~= nil and not integ.gone[u] end
   if ev.kind == "axial" or ev.kind == "fairing" then return live(ev.uid) end
-  if ev.kind == "chute" then
+  if ev.kind == "chute" or ev.kind == "engine" then
     local us = {}
     for _, u in ipairs(ev.uids or {}) do if live(u) then us[#us + 1] = u end end
     ev.uids = us
@@ -8691,6 +8836,8 @@ function fireEvent(node, info, ev)
     log("parachutes deployed")
   elseif ev.kind == "fairing" then
     r2Jettison(node, ev.uid)
+  elseif ev.kind == "engine" then
+    engineIgnite(ev.uids)
   elseif ev.kind == "ring" then
     -- A BOOSTER RING: every branch in the ring leaves at once (symmetric
     -- pairs together, so the ship stays balanced). A branch kicks OUTWARD
@@ -8913,6 +9060,45 @@ end
 function r2FullTorque(w, rk)
   local m = w.m or {}
   return math.max(tonumber(m.torque) or 0.6, (R2_WHEEL_TORQUE[w.size or "M"] or 0) * (rk or 1))
+end
+
+-- A BIKE'S EDGE IS ITS POWER (playtest 2026-11: "bikes don't really feel like
+-- they have much torque … they should be so much better at hill climbing").
+-- A rover's figures are a rover's; a two-wheeler's driven wheel is a strong
+-- light motor for its weight, and its rider works the bike:
+--   top     m/s on the level, full stick (a rover's medium wheel: 22)
+--   torque  kN·m at the driven wheel, rated like thrust (× parts.rating)
+--   tc      g the traction control lets it push on the level (a rover: R2_TC)
+--   open    /s the stick opens at (a rover's 0.8: the traction control and
+--           the wheelie control below are what keep a bike's front down)
+--   lean    m the rider's weight goes forward over the bars under power (as
+--           a nose-down torque of lean × m·g on the ground: a seated rider is
+--           a kinematic body and carries no weight of their own)
+--   lift    the share of the push that would lift the front it stays under
+--   land    s after a landing over which the above come back in
+--   wfree   deg over the ground's slope the nose may rise freely…
+--   wheelie …and deg more before the wheelie control has taken the push
+--           back to `wmin` of it
+-- Measured (tools/perf/jumpprobe.sh vhill, the player's dirt bike): see the
+-- report in the 2026-11 notes; the numbers are in drive_tick's BIKE block.
+R2_BIKE = { top = 18.0, torque = 0.8, tc = 0.9, open = 1.8, lean = 0.12, lift = 0.88, wfree = 6.0, wheelie = 14.0, wmin = 0.3, land = 0.6 }
+
+-- WHAT DRIVES A WHEEL: its power source this tick → full torque (kN·m) and top
+-- speed (m/s). Today every driven wheel has its own electric hub motor (the
+-- part's `drive` module, the size floors, a bike's edge), drawing EC (drive_tick
+-- R2.draw). THE HOOK FOR OTHER SOURCES: a wheel chained to an engine (a gas
+-- engine's cc, its torque curve and gearing, its tank) answers here instead —
+-- the torque the chain delivers at this wheel speed and the top its gearing
+-- allows — and drive_tick's traction control, wheelie control, brakes and
+-- leads work on whatever it answers; a dry tank answers 0 (the wheel rolls
+-- free, as an unpowered motor does). `rpm`: the wheel's own (rim m/s / r).
+function r2WheelSource(w, gl, rk, bike)
+  local full, top = r2FullTorque(w, rk), r2TopSpeed(w, gl)
+  if bike then
+    full = math.max(full, R2_BIKE.torque * (rk or 1))
+    top = math.max(top, r2TopSpeed({ m = { speed = R2_BIKE.top }, size = w.size }, gl))
+  end
+  return full, top
 end
 
 -- How hard (m/s²) the rover may turn on a world of gravity g: the lesser of
@@ -10208,8 +10394,9 @@ local function drive_tick(node, info, dt)
   -- at 3/s — eased as a signed value, S opened at the closing rate, a
   -- reverse 3.75× quicker than a forward and a bike that pulled harder
   -- backwards off the line)
+  local open = (R2.bike and not R2.gear and not R2.passive) and R2_BIKE.open or 0.8   -- (a bike: R2_BIKE)
   if dcmd * R2.drive >= 0 and math.abs(dcmd) > math.abs(R2.drive) then
-    R2.drive = R2.drive + (dcmd - R2.drive) * math.min(1, 0.8 * dt / math.max(1e-6, math.abs(dcmd - R2.drive)))
+    R2.drive = R2.drive + (dcmd - R2.drive) * math.min(1, open * dt / math.max(1e-6, math.abs(dcmd - R2.drive)))
   else
     R2.drive = ease(R2.drive, dcmd, 3.0, 3.0)
   end
@@ -10271,9 +10458,94 @@ local function drive_tick(node, info, dt)
     end
   end
   local accel = R2_TC * gl + climb
-  -- a two-wheeler pushes no harder than lifts its front wheel (motoPlan)
-  if R2.bike and R2.wheelieK then accel = math.min(accel, R2.wheelieK * gl + climb) end
-  if (front_up == 0) ~= (rear_up == 0) then accel = accel * 0.5 end
+  R2.bikeCap = nil
+  if R2.bike and R2.bikeAr and not R2.gear and not R2.passive then
+    -- A TWO-WHEELER pushes as hard as it can without lifting its front
+    -- (R2_BIKE). The slope is the GROUND's, read off the chassis while both
+    -- tyres are down and held while the front is up: `climb` above is the
+    -- chassis's own pitch, and in a wheelie that grew with the wheelie and
+    -- let the push grow with it (vhill, engine .1406: 20° nose-up on the
+    -- level, over backwards on 34°).
+    local sn = -(fx * gdir.x + fy * gdir.y + fz * gdir.z) / math.max(gl, 0.1)   -- sin(pitch), + nose up
+    if front_up > 0 and rear_up > 0 then
+      R2.gslope = (R2.gslope or sn) + (sn - (R2.gslope or sn)) * math.min(1, dt * 10)
+    elseif front_up == 0 and rear_up > 0 then
+      -- the front up: the ground's grade where the rear tyre stands (its
+      -- normal, tick pose). Held from the last both-down tick, a ramp's foot
+      -- read as level: the front, kicked up by the face, was a "wheelie" of
+      -- the ramp's whole angle and the push was cut on every steep climb.
+      local gs
+      for _, w in ipairs(R2.wheels) do
+        local t = w.tyre
+        if (w.a or 0) <= 0 and t and t.valid and t.grounded then
+          local p = t.tickPos or t.worldPos
+          local Ux, Uy, Uz = -gdir.x / gl, -gdir.y / gl, -gdir.z / gl
+          local h = raycast(p.x, p.y, p.z, -Ux, -Uy, -Uz, (w.r or 0.33) + 0.4, { ignore = r2Own(node) })
+          if h and h.nx then
+            local fu = fx * Ux + fy * Uy + fz * Uz
+            local hx, hy, hz = fx - Ux * fu, fy - Uy * fu, fz - Uz * fu
+            local hl = math.sqrt(hx * hx + hy * hy + hz * hz)
+            if hl > 0.3 then
+              gs = math.sin(math.atan2(-(hx * h.nx + hy * h.ny + hz * h.nz) / hl, h.nx * Ux + h.ny * Uy + h.nz * Uz))
+            end
+          end
+          break
+        end
+      end
+      if gs then R2.gslope = (R2.gslope or gs) + (gs - (R2.gslope or gs)) * math.min(1, dt * 10) end
+    elseif front_up == 0 and rear_up == 0 then
+      R2.gslope = R2.gslope or sn
+    end
+    local s = math.max(-0.95, math.min(0.95, R2.gslope or sn))
+    local c = math.sqrt(1 - s * s)
+    local need = gl * math.max(0, s)                 -- g · sin(slope) up it
+    -- the rider leans forward under power (on the ground, the stick open)
+    -- LANDING: the bike's edge comes back over R2_BIKE.land s after both
+    -- tyres were off (vjump .1412: a 15 m/s kicker landed into the full push
+    -- and the rider's lean, and the bike wobbled over); until then it pushes
+    -- as the old rule did (wheelieK)
+    if front_up == 0 and rear_up == 0 then R2.bikeAirT = 0 else R2.bikeAirT = (R2.bikeAirT or 9) + dt end
+    local land = math.min(1, (R2.bikeAirT or 9) / R2_BIKE.land)
+    local lw = (rear_up > 0 and (R2.drive or 0) > 0.05) and math.min(1, R2.drive) * land or 0
+    R2.bikeLean = (R2.bikeLean or 0) + (lw - (R2.bikeLean or 0)) * math.min(1, dt * 6)
+    local lift = gl * (c * R2.bikeAr + R2_BIKE.lean * R2.bikeLean) / R2.bikeH   -- the push (per kg) that lifts the front
+    -- (a hill steeper than the margin allows takes the margin up to 0.97:
+    -- crawling up it on a light front beats stalling at its foot)
+    local k = math.max(R2_BIKE.lift, math.min(0.97, (need + 0.05 * gl) / math.max(lift, 1e-3)))
+    accel = math.min(R2_BIKE.tc * gl + need, k * lift)
+    -- WHEELIE CONTROL: the front up, the rear driving → the push comes back as
+    -- the nose rises over the ground's slope past R2_BIKE.wfree, all the way
+    -- to `wmin` of it R2_BIKE.wheelie degrees later
+    if front_up == 0 and rear_up > 0 then
+      R2.wheelie_t = (R2.wheelie_t or 0) + dt
+      -- (less R2_BIKE.wfree: a light front skipping over ripple pitches it a
+      -- degree or two, and a front kicked up by a steeper face is not the
+      -- push's doing: cut there, the bike lost half its speed up a 33° ramp)
+      local phi = math.asin(math.max(-1, math.min(1, sn))) - math.asin(s) - math.rad(R2_BIKE.wfree)
+      if R2.wheelie_t > 0.05 and phi > 0 then
+        accel = accel * math.max(R2_BIKE.wmin, 1 - (1 - R2_BIKE.wmin) * phi / math.rad(R2_BIKE.wheelie))
+      end
+    else
+      R2.wheelie_t = 0
+    end
+    if land < 1 and R2.wheelieK then
+      local old = math.min(R2_TC * gl, R2.wheelieK * gl) + need
+      accel = old + (accel - old) * land
+    end
+    climb = need
+    R2.bikeCap = accel / gl
+    -- the rider's weight forward (R2_BIKE.lean), about the bike's right
+    if R2.bikeLean > 0.01 and rear_up > 0 then
+      local tq = R2_BIKE.lean * R2.bikeLean * (info.mass or 1) * gl
+      local ux, uy, uz = upv.x, upv.y, upv.z
+      -- nose down: about up × front
+      assembly.torque(node, vec3((uy * fz - uz * fy) * tq, (uz * fx - ux * fz) * tq, (ux * fy - uy * fx) * tq))
+    end
+  else
+    -- a two-wheeler pushes no harder than lifts its front wheel (motoPlan)
+    if R2.bike and R2.wheelieK then accel = math.min(accel, R2.wheelieK * gl + climb) end
+    if (front_up == 0) ~= (rear_up == 0) then accel = accel * 0.5 end
+  end
   -- …and what the lead adapts to (below): that push less the slope's share,
   -- the craft's own acceleration along its front
   R2.want_a = math.max(0.05 * gl, accel - climb)
@@ -10359,11 +10631,11 @@ local function drive_tick(node, info, dt)
       local served = (elec.served and elec.served["d" .. w.uid]) or 1
       smin = math.min(smin, served)
       local m = w.m
-      local vmax = r2TopSpeed(w, gl)
+      -- (the wheel's power source: r2WheelSource, the hook for engines)
+      local full, vmax = r2WheelSource(w, gl, R2.rk, R2.bike and not R2.gear and not R2.passive and not w.coast)
       local brakes = st.brakes == true
       j.steer = (w.steer0 or 0) + R2_STEER_SIGN * cmd.steer
       w.steerNow = cmd.steer
-      local full = r2FullTorque(w, R2.rk)
       local torque = math.min(full, accel * (info.mass or 1) * w.r / n_drive)
       torque = (torque + (full - torque) * stall_k) * (c.motor or 1)
       local want = cmd.drive          -- −1…1 of this wheel's top speed, signed along the front
@@ -10822,6 +11094,8 @@ function motoPlan()
   -- (0.7 of it: 0.6 held the dirt bike to 0.37 g on the level, a moped's
   -- pull; the traction control still halves the push with a wheel up)
   R2.wheelieK = 0.7 * math.max(0.05, -amin) / math.max(0.3, hcg)
+  -- (drive_tick's bike traction control: the rear axle behind the CoM, its height)
+  R2.bikeAr, R2.bikeH = math.max(0.05, -amin), math.max(0.3, hcg)
   R2.rider = false
   for u, d in pairs(bp_by_uid) do
     if not integ.gone[u] and ((d.seat or 0) == 1 or d.seat == true) then R2.rider = true end
@@ -12380,6 +12654,7 @@ function fixedUpdate(node, dt)
   end
   throttle = math.max(0.0, math.min(1.0, throttle))
   if fuel <= 0.0 then throttle = 0.0 end
+  fuelFeedTick()
   local burn_total = 0.0
   for _, e in ipairs(engines) do
     -- (a jet burns by what its spool and its air let it: aeroTick's e.jb)
@@ -12390,7 +12665,7 @@ function fixedUpdate(node, dt)
     fuelFill(math.min(fuel_cap, fuel + params.refuel_rate * dt))
     refueling = true
   elseif throttle > 0 and not info.anchored then
-    fuelDraw(throttle * burn_total * dt)
+    fuelDrawFed(throttle, dt, cut)
   end
 
   -- ---- thrust at every ACTIVE engine's offset, along ITS OWN axis --------
@@ -12928,6 +13203,13 @@ function fixedUpdate(node, dt)
         end
       elseif ev.kind == "chute" then
         st.n = #ev.uids
+      elseif ev.kind == "engine" then
+        st.n = #ev.uids
+        local mine = {}
+        for _, u in ipairs(ev.uids) do mine[u] = true end
+        for _, e in ipairs(engines) do
+          if mine[e.uid] then st.eng, st.kn = st.eng + 1, st.kn + e.thrust end
+        end
       elseif ev.kind == "fairing" then
         st.n = 1
       else
@@ -12938,7 +13220,7 @@ function fixedUpdate(node, dt)
           if e2.kind == "axial" and e2.y > ev.y and e2.y < above then above = e2.y end
         end
         for _, e in ipairs(engines) do
-          if not e.branch and e.y >= ev.y and e.y < above - 0.01 then
+          if not e.branch and not e.ign and e.y >= ev.y and e.y < above - 0.01 then
             st.eng, st.kn = st.eng + 1, st.kn + e.thrust
           end
         end

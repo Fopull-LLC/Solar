@@ -204,6 +204,18 @@ local wf = wheels_of(bpf, Ff)
 check("a wheel with its axle along the front is turned to roll along it", math.abs(wf[1].steer0) < 1e-6
   and wf[1].rs ~= 0 and wf[1].realigned == true, tostring(wf[1].steer0) .. " rs " .. tostring(wf[1].rs))
 
+-- the wheel's power source (r2WheelSource): a rover's wheel is its own; a
+-- bike's driven wheel gets the bike's edge (playtest 2026-11)
+do
+  local wb = { size = "B", m = { torque = 0.45 * 1.9, speed = 16 } }
+  local fr, tr = env.r2WheelSource(wm, 9.8, 1.9, false)
+  check("a rover wheel's source is its motor", fr == env.r2FullTorque(wm, 1.9) and tr == env.r2TopSpeed(wm, 9.8))
+  local fb, tb = env.r2WheelSource(wb, 9.8, 1.9, true)
+  local f0, t0 = env.r2WheelSource(wb, 9.8, 1.9, false)
+  check("a bike's driven wheel is stronger and faster than the moto wheel alone", fb > f0 and tb > t0,
+    string.format("%.2f/%.1f vs %.2f/%.1f", fb, tb, f0, t0))
+end
+
 -- a seat facing −X is the front when there is no rover body
 local bps = { [1] = { x = 0, y = 0, z = 0, mass = 0.1, seat = 1, yaw = math.pi } }
 local Fs = env.r2FrontOf(bps, {}, nil, bpbasis)

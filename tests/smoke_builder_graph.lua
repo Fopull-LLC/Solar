@@ -345,7 +345,11 @@ local same = true
 for _, d in ipairs(V1.parts) do
   local r = rec(bp2, d.uid)
   for _, f in ipairs({ "id", "parent", "att", "sym", "stage" }) do
-    if not r or r[f] ~= d[f] then same = false end
+    -- (an engine is a stage item since 2026-11-03: the bottom one is lit at
+    -- launch, saved as stage -1)
+    local want = d[f]
+    if f == "stage" and d.id == "engineS" then want = -1 end
+    if not r or r[f] ~= want then same = false end
   end
   if not r or not near(r.y - rec(bp2, 5).y, d.y - ys[5], 1e-3) then same = false end
   for _, f in ipairs({ "h", "mass", "cost", "thrust", "fuel", "strength", "decouple" }) do

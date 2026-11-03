@@ -270,6 +270,49 @@ do
     -- the per-uid stage index the blueprint carries
     local idx = SM.index(st, items)
     check(idx[10] == 1 and idx[7] == 2 and idx[9] == 2 and idx[4] == 3 and idx[11] == 4, "stage index per part")
+
+    -- ENGINES (2026-11-03): engine items ignite with their stage; a new one
+    -- follows the decoupler under it, one with nothing under it is lit at
+    -- launch (stages[0]); a symmetry group is one item.
+    local it2 = {
+      u1 = { key = "u1", y = 1.0, uids = { 1 } },                          -- the lower decoupler
+      u2 = { key = "u2", y = 5.0, uids = { 2 } },                          -- the upper decoupler
+      eg4 = { key = "eg4", y = 0.5, uids = { 30, 31, 32, 33 }, engine = true, grouped = true, sym = 4 },
+      e40 = { key = "e40", y = 3.0, uids = { 40 }, engine = true, follow = "u1" },
+      e50 = { key = "e50", y = 6.0, uids = { 50 }, engine = true, follow = "u2" },
+    }
+    local es = SM.sync({}, it2, {})
+    order = {}
+    for i, g in ipairs(es) do order[i] = table.concat(g, "+") end
+    check(table.concat(order, " ") == "u1+e40 u2+e50", "engines follow their decouplers: " .. table.concat(order, " "))
+    check(es[0] and #es[0] == 1 and es[0][1] == "eg4", "the bottom engine group is lit at launch")
+    -- the group dragged into stage 2 (both upper events then fire with it)
+    es = SM.move(es, "eg4", 2, false)
+    check(#es[0] == 0 and table.concat(es[2], "+") == "u2+e50+eg4", "an engine group moved into stage 2 as one")
+    -- and to launch again, and an engine into a stage of its own
+    es = SM.move(es, "eg4", 0, false)
+    es = SM.move(es, "e50", 3, true)
+    order = {}
+    for i, g in ipairs(es) do order[i] = table.concat(g, "+") end
+    check(es[0][1] == "eg4" and table.concat(order, " ") == "u1+e40 u2 e50", "engine to its own stage: " .. table.concat(order, " "))
+    -- the blueprint's numbers: launch 0 (saved as -1), each engine its stage
+    local ix = SM.index(es, it2)
+    check(ix[30] == 0 and ix[33] == 0 and ix[40] == 1 and ix[50] == 3, "engine stage index (launch 0)")
+    -- reloaded: the saved numbers put them back, launch included
+    local back = SM.sync({}, it2, { [1] = 1, [2] = 2, [30] = 0, [31] = 0, [32] = 0, [33] = 0, [40] = 1, [50] = 3 })
+    order = {}
+    for i, g in ipairs(back) do order[i] = table.concat(g, "+") end
+    check(back[0][1] == "eg4" and table.concat(order, " ") == "u1+e40 u2 e50", "engine stages reload: " .. table.concat(order, " "))
+    -- split a group into its engines in place, and join them back
+    local sp = SM.replace(es, "eg4", { "e30", "e31", "e32", "e33" })
+    check(#sp[0] == 4 and sp[0][1] == "e30", "split: the group's engines stay in its stage")
+    local jn = SM.replace(sp, "e31", { "eg4" }, { e30 = true, e32 = true, e33 = true })
+    check(#jn[0] == 1 and jn[0][1] == "eg4", "join: one item again")
+    -- an old craft's flat stage list still loads (no engines saved: defaults)
+    local old = SM.sync({ "u1", "u2" }, it2, {})
+    order = {}
+    for i, g in ipairs(old) do order[i] = table.concat(g, "+") end
+    check(table.concat(order, " ") == "u1+e40 u2+e50" and old[0][1] == "eg4", "an old flat list loads: " .. table.concat(order, " "))
   end
 end
 

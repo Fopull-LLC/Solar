@@ -592,7 +592,45 @@ end
 -- NEW STAGE), or with its keys: ▲ fires it a stage later, ▼ a stage sooner,
 -- ⇥ gives it a stage of its own. A card's ▲ ▼ move the whole stage. Hovering a
 -- row lights its parts in the view; clicking it selects them.
-local KIND_TAG = { axial = "STACK", ring = "RADIAL", chute = "CHUTE", fairing = "SHELL" }
+local KIND_TAG = { axial = "STACK", ring = "RADIAL", chute = "CHUTE", fairing = "SHELL", engine = "ENGINE" }
+-- An ENGINE row (2026-11-03: engines are stage items, a symmetry group one
+-- row with its count): it ignites when its stage fires; on the LAUNCH card it
+-- is lit when the clamps let go. Drag it to another stage or onto LAUNCH;
+-- SPLIT gives each engine of the group its own row, JOIN puts them back.
+local function engine_row(B, e, n, N, move, nItems)
+  local key = e.key
+  local split = e.grouped and (e.n or 0) > 1
+  local join = (not e.grouped) and e.sym ~= nil
+  local row = { "button", key = "e" .. key, style = (st.hover == key) and "panel/rowActive" or "panel/row", w = "100%", h = "fit",
+    dir = "column", gap = 1, pad = 3, align = "stretch", draggable = true,
+    tooltip = "Drag onto another stage, or onto LAUNCH to light it at lift-off · click to select",
+    onClicked = function() B.select(e.uids, "set") end,
+    onDragStart = function() st.drag = key; st.dragEngine = true end,
+    onDragCancel = function() st.drag = nil; st.dragEngine = nil end,
+    onHoverStart = function() st.hover = key end,
+    onHoverEnd = function() if st.hover == key then st.hover = nil end end,
+    { "row", key = "t", w = "100%", h = 18, gap = 3, pad = 0, align = "center",
+      { "text", key = "k", style = "panel/keys", w = 50, h = 18, text = "ENGINE", textValign = "center",
+        maxLines = 1, overflow = "clip" },
+      { "text", key = "n", style = "panel/cell", w = "grow", h = 18, text = e.label, textValign = "center",
+        maxLines = 1, overflow = "ellipsis" },
+      { "button", key = "u", style = "panel/choice", w = 20, h = 16, text = "▲", textAlign = "center", textValign = "center",
+        tooltip = "Ignite it a stage later",
+        onClicked = function() move(key, n + 1, n == N) end },
+      { "button", key = "d", style = "panel/choice", w = 20, h = 16, text = "▼", textAlign = "center", textValign = "center",
+        disabled = n == 0, tooltip = n == 1 and "Light it at launch" or "Ignite it a stage sooner",
+        onClicked = function() move(key, n - 1, false) end } },
+    { "text", key = "x", style = "panel/cellMuted", w = "100%", h = "fit", wrap = true,
+      text = n == 0 and "lit when the clamps let go" or "ignites on this SPACE" } }
+  if split or join then
+    table.insert(row[2], 4, { "button", key = "sp", style = "panel/choice", w = 36, h = 16, text = split and "SPLIT" or "JOIN",
+      textAlign = "center", textValign = "center",
+      tooltip = split and "Split the group: each engine its own row, to stage apart"
+        or "Join the symmetry group back into one row, in this stage",
+      onClicked = function() B.cmd("stage", { op = split and "split" or "join", key = key }) end })
+  end
+  return row
+end
 local function stage_rows(B, out)
   local v = B.stageView and B.stageView()
   if not v then return end
@@ -615,7 +653,7 @@ local function stage_rows(B, out)
     return { "box", key = k, style = st.drag and "panel/rowActive" or "panel/row", w = "100%", h = 18, dropTarget = true,
       text = label, textAlign = "center", textValign = "center", opacity = st.drag and 1.0 or 0.55,
       tooltip = "Drop an event here to give it a stage of its own",
-      onDropped = function() if st.drag then move(st.drag, to, true) end st.drag = nil end }
+      onDropped = function() if st.drag then move(st.drag, to, true) end st.drag, st.dragEngine = nil, nil end }
   end
   if N > 0 then out[#out + 1] = newzone("ntop", N + 1, "+ NEW STAGE (fires last)") end
   -- A STAGE IN YOUR HAND (its card's grip dragged): an orange line between
@@ -649,7 +687,7 @@ local function stage_rows(B, out)
       onDragOver = function() stage_over(N) end,
       onDropped = function()
         if st.sdrag then reorder_drop(B, gap_at_mouse(N)) return end
-        if st.drag then move(st.drag, n, false) end st.drag = nil
+        if st.drag then move(st.drag, n, false) end st.drag, st.dragEngine = nil, nil
       end,
       onHoverStart = function() st.hover = "s" .. n end,
       onHoverEnd = function() if st.hover == "s" .. n then st.hover = nil end end }
@@ -672,47 +710,63 @@ local function stage_rows(B, out)
         disabled = n == 1, tooltip = "Fire this whole stage sooner",
         onClicked = function() B.cmd("stage", { op = "swap", i = n, j = n - 1 }) end } }
     for i, e in ipairs(sg.items or {}) do
-      local detail = {}
-      if e.drops then detail[#detail + 1] = "drops " .. e.drops end
-      if e.lights then detail[#detail + 1] = "then burns " .. e.lights end
-      if e.kind == "chute" then detail[#detail + 1] = "open on this SPACE" end
-      if e.kind == "fairing" then detail[#detail + 1] = "the shell falls away" end
-      local key = e.key
-      local row = { "button", key = "e" .. key, style = (st.hover == key) and "panel/rowActive" or "panel/row", w = "100%", h = "fit",
-        dir = "column", gap = 1, pad = 3, align = "stretch", draggable = true,
-        tooltip = "Drag onto another stage · click to select its parts",
-        onClicked = function() B.select(e.uids, "set") end,
-        onDragStart = function() st.drag = key end,
-        onDragCancel = function() st.drag = nil end,
-        onHoverStart = function() st.hover = key end,
-        onHoverEnd = function() if st.hover == key then st.hover = nil end end,
-        { "row", key = "t", w = "100%", h = 18, gap = 3, pad = 0, align = "center",
-          { "text", key = "k", style = "panel/keys", w = 50, h = 18, text = KIND_TAG[e.kind] or "EVENT", textValign = "center",
-            maxLines = 1, overflow = "clip" },
-          { "text", key = "n", style = "panel/cell", w = "grow", h = 18, text = e.label, textValign = "center",
-            maxLines = 1, overflow = "ellipsis" },
-          { "button", key = "u", style = "panel/choice", w = 20, h = 16, text = "▲", textAlign = "center", textValign = "center",
-            tooltip = "Fire it a stage later", onClicked = function() move(key, n + 1, n == N) end },
-          { "button", key = "d", style = "panel/choice", w = 20, h = 16, text = "▼", textAlign = "center", textValign = "center",
-            tooltip = "Fire it a stage sooner", onClicked = function() if n == 1 then move(key, 1, true) else move(key, n - 1, false) end end },
-          { "button", key = "o", style = "panel/choice", w = 20, h = 16, text = "⇥", textAlign = "center", textValign = "center",
-            disabled = #sg.items < 2, tooltip = "Give it a stage of its own, right after this one",
-            onClicked = function() move(key, n + 1, true) end } } }
-      if #detail > 0 then
-        row[#row + 1] = { "text", key = "x", style = "panel/cellMuted", w = "100%", h = "fit", wrap = true,
-          text = table.concat(detail, " · ") }
+      if e.kind == "engine" then
+        card[#card + 1] = engine_row(B, e, n, N, move, #sg.items)
+      else
+        local detail = {}
+        if e.drops then detail[#detail + 1] = "drops " .. e.drops end
+        if e.lights then detail[#detail + 1] = "then burns " .. e.lights end
+        if e.kind == "chute" then detail[#detail + 1] = "open on this SPACE" end
+        if e.kind == "fairing" then detail[#detail + 1] = "the shell falls away" end
+        local key = e.key
+        local row = { "button", key = "e" .. key, style = (st.hover == key) and "panel/rowActive" or "panel/row", w = "100%", h = "fit",
+          dir = "column", gap = 1, pad = 3, align = "stretch", draggable = true,
+          tooltip = "Drag onto another stage · click to select its parts",
+          onClicked = function() B.select(e.uids, "set") end,
+          onDragStart = function() st.drag = key; st.dragEngine = nil end,
+          onDragCancel = function() st.drag = nil end,
+          onHoverStart = function() st.hover = key end,
+          onHoverEnd = function() if st.hover == key then st.hover = nil end end,
+          { "row", key = "t", w = "100%", h = 18, gap = 3, pad = 0, align = "center",
+            { "text", key = "k", style = "panel/keys", w = 50, h = 18, text = KIND_TAG[e.kind] or "EVENT", textValign = "center",
+              maxLines = 1, overflow = "clip" },
+            { "text", key = "n", style = "panel/cell", w = "grow", h = 18, text = e.label, textValign = "center",
+              maxLines = 1, overflow = "ellipsis" },
+            { "button", key = "u", style = "panel/choice", w = 20, h = 16, text = "▲", textAlign = "center", textValign = "center",
+              tooltip = "Fire it a stage later", onClicked = function() move(key, n + 1, n == N) end },
+            { "button", key = "d", style = "panel/choice", w = 20, h = 16, text = "▼", textAlign = "center", textValign = "center",
+              tooltip = "Fire it a stage sooner", onClicked = function() if n == 1 then move(key, 1, true) else move(key, n - 1, false) end end },
+            { "button", key = "o", style = "panel/choice", w = 20, h = 16, text = "⇥", textAlign = "center", textValign = "center",
+              disabled = #sg.items < 2, tooltip = "Give it a stage of its own, right after this one",
+              onClicked = function() move(key, n + 1, true) end } } }
+        if #detail > 0 then
+          row[#row + 1] = { "text", key = "x", style = "panel/cellMuted", w = "100%", h = "fit", wrap = true,
+            text = table.concat(detail, " · ") }
+        end
+        card[#card + 1] = row
       end
-      card[#card + 1] = row
     end
     list[#list + 1] = card
   end
   if N > 0 then list[#list + 1] = gap(0); out[#out + 1] = list end
   if N > 0 then out[#out + 1] = newzone("nbot", 1, "+ NEW STAGE (fires first)") end
   local L = v.launch or {}
-  out[#out + 1] = { "col", key = "launch", style = "panel/row", w = "100%", h = "fit", gap = 1, pad = 4, align = "stretch",
-    { "text", key = "n", style = "panel/cellStrong", w = "100%", h = 18, text = "LAUNCH  ·  SPACE releases the clamps", textValign = "center" },
-    { "text", key = "x", style = "panel/cellMuted", w = "100%", h = "fit", wrap = true,
-      text = (L.lights and L.lights ~= "") and ("burns " .. L.lights) or "no engine lit at lift-off" } }
+  local lcard = { "col", key = "launch", name = "StageLaunch", style = (st.drag and st.dragEngine) and "panel/rowActive" or "panel/row",
+    w = "100%", h = "fit", gap = 2, pad = 4, align = "stretch",
+    dropTarget = true,
+    onDropped = function()
+      if st.drag and st.dragEngine then move(st.drag, 0, false) end
+      st.drag, st.dragEngine = nil, nil
+    end,
+    onHoverStart = function() st.hover = "s0" end,
+    onHoverEnd = function() if st.hover == "s0" then st.hover = nil end end,
+    { "text", key = "n", style = "panel/cellStrong", w = "100%", h = 18, text = "LAUNCH  ·  SPACE releases the clamps", textValign = "center" } }
+  for _, e in ipairs(L.items or {}) do lcard[#lcard + 1] = engine_row(B, e, 0, N, move, #L.items) end
+  if #(L.items or {}) == 0 then
+    lcard[#lcard + 1] = { "text", key = "x", style = "panel/cellMuted", w = "100%", h = "fit", wrap = true,
+      text = "no engine lit at lift-off — drag an engine here" }
+  end
+  out[#out + 1] = lcard
 end
 
 -- The gap under the pointer: above the first card (top down) whose middle

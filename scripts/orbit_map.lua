@@ -1306,6 +1306,43 @@ function burnLead()
   return mnv.t0 - space.time()
 end
 
+-- THE BURN, for the flight view (flight_hud's maneuver readout, 2026-11-03:
+-- "show the important things you need to know outside the map, like KSP").
+-- burnApply(dvx, dvy, dvz) adds the Δv the engines gave the craft (world
+-- vector, m/s, the HUD integrates thrust over mass); burnInfo() → nil, or
+--   { dv = planned m/s, lead = s to the node, dir = world unit or nil,
+--     left = m/s still to burn, lx/ly/lz = its world vector, done = 0..1 }
+-- Editing the node (time or Δv) starts the count again.
+local function burn_key(m)
+  return string.format("%.3f|%.4f|%.4f|%.4f", m.t0, m.pro, m.nor, m.rad)
+end
+function burnApply(dvx, dvy, dvz)
+  if not mnv then return end
+  local k = burn_key(mnv)
+  if mnv.apk ~= k then mnv.apk, mnv.ax, mnv.ay, mnv.az = k, 0, 0, 0 end
+  mnv.ax, mnv.ay, mnv.az = mnv.ax + dvx, mnv.ay + dvy, mnv.az + dvz
+end
+-- (probes: plan a burn `lead` s ahead with these Δv components, m/s; the map
+-- works its direction out on its next recompute while it is open)
+function planBurn(lead, pro, nor, rad)
+  mnv = { t0 = space.time() + (lead or 60), pro = pro or 0, nor = nor or 0, rad = rad or 0, burned = 0.0 }
+  return true
+end
+function burnInfo()
+  if not mnv then return nil end
+  local dv = math.sqrt(mnv.pro ^ 2 + mnv.nor ^ 2 + mnv.rad ^ 2)
+  local out = { dv = dv, lead = mnv.t0 - space.time(), left = dv, done = 0 }
+  if mnv.bwx then
+    out.dir = { x = mnv.bwx, y = mnv.bwy, z = mnv.bwz }
+    local ax, ay, az = 0, 0, 0
+    if mnv.apk == burn_key(mnv) then ax, ay, az = mnv.ax, mnv.ay, mnv.az end
+    out.lx, out.ly, out.lz = mnv.bwx * dv - ax, mnv.bwy * dv - ay, mnv.bwz * dv - az
+    out.left = math.sqrt(out.lx ^ 2 + out.ly ^ 2 + out.lz ^ 2)
+    out.done = dv > 1e-4 and math.max(0, math.min(1, 1 - out.left / dv)) or 0
+  end
+  return out
+end
+
 -- Ease the view to `z` metres from the focus, as the wheel does.
 function setZoom(z)
   zoom_target = math.max(1, math.min(z, zoom_max()))

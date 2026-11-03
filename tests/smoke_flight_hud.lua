@@ -183,8 +183,12 @@ check(has_text(tree, "PERIAPSIS") and not has_text(tree, "-207 m"),
   "on the pad the orbit strip shows no orbit (the planet's spin read as one is noise)")
 check(by_key(tree, "fuel") ~= nil and by_key(tree, "ec") == nil,
   "fuel is shown; charge only on a craft that has any")
-check(made["Flight HUD Overlay"] and made["Flight HUD Overlay"].tooltipBox == true,
-  "the overlay carries the layer's tooltip box")
+-- (the overlay is a list since 2026-11-03: the tooltip box and the navball's
+-- maneuver ◆, which must draw over the ball)
+local ov = made["Flight HUD Overlay"]
+local ov_tip = ov and (ov.tooltipBox == true or (ov[1] and ov[1].tooltipBox == true))
+check(ov_tip, "the overlay carries the layer's tooltip box")
+check(ov and ov[2] and ov[2].name == "NavballNodeMark", "...and the navball's maneuver mark")
 check(nodes["Navball"].__el.posY < 0, "the navball is mounted on the console")
 
 -- THRUST AND TWR ARE WHAT THE ENGINES ARE DOING (review, 2026-10): the console

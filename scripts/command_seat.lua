@@ -182,8 +182,116 @@ local function doll_here(node)
   return d
 end
 
+-- THE HEAD LOOKS WHERE YOU LOOK (playtest 2026-11: "the astronaut turns to
+-- look where my camera is looking, but when riding a vehicle … they don't").
+-- On foot planet_walker `look` turns the head to the view; seated, this does,
+-- for the rider you control: the camera's direction (planet_camera fwd_x…),
+-- this frame, as a yaw and a pitch in THE SEAT'S frame (so the bike's lean and
+-- the craft's turning carry the look with them), smoothed there (rule 7:
+-- frame-rate independent, never a world point), the pitch halved and capped
+-- as on foot (a chase camera looks down at the rider), the yaw held inside
+-- the neck's reach and let go as the view swings round behind. The eyes follow
+-- through face.lua's `gaze` hook, asked for this frame's point when the face
+-- poses (rule 1). Snaps on a new seat or rider.
+local LOOK_YAW, LOOK_UP, LOOK_DOWN = math.rad(75), 0.45, -0.35
+local LOOK_TWIST = 0.45            -- rad: the most the chest turns with the look
+local HIP_Z = 0.01622              -- the Hip joint from Back's origin (planet_walker HIP_Y, HIP_Z)
+local look = { on = false, yaw = 0, pitch = 0, w = 0, t = -1, seat = nil }
+local look_face, look_face_of = nil, nil
+local look_anim, look_node = nil, nil
+local function smooth01(a, b, x)
+  local t = math.max(0, math.min(1, (x - a) / (b - a)))
+  return t * t * (3 - 2 * t)
+end
+local function wrap(a) return (a + math.pi) % (2 * math.pi) - math.pi end
+-- the look as a world direction, from the seat's frame as it is drawn now
+local function look_world(node)
+  local fwd, up, f2 = node:worldRight(), node:worldUp(), node:worldForward()
+  local cp = math.cos(look.pitch)
+  local a, b, c = cp * math.cos(look.yaw), -cp * math.sin(look.yaw), math.sin(look.pitch)
+  -- (right = −forward: a + yaw turns to the rider's right)
+  return vec3(fwd.x * a + f2.x * b + up.x * c, fwd.y * a + f2.y * b + up.y * c, fwd.z * a + f2.z * b + up.z * c)
+end
+-- face.lua's gaze hook: this frame's point and weight
+local function gaze()
+  if not (look.on and look_node and look_node.valid and look_anim) or (time or 0) - look.t > 0.1 then return nil end
+  if look.w < 0.02 then return nil end
+  local h = look_anim:boneWorld("Head")
+  if not h then return nil end
+  local d = look_world(look_node)
+  return h.x + d.x * 10, h.y + d.y * 10, h.z + d.z * 10, 0.9 * look.w
+end
+local function face_of(model)
+  if not (model and model.valid) then return nil end
+  if look_face_of == model.id and look_face then return look_face end
+  look_face_of, look_face = model.id, nil
+  for _, k in ipairs(model:children() or {}) do
+    if k.name == "Face" then look_face = k.getScript and k:getScript("face") or nil end
+  end
+  return look_face
+end
+local function look_off()
+  if look_face and look_face.gaze == gaze then look_face.gaze = nil end
+  look.on = false
+end
+local look_pc = nil
+local function head_look(node, dt, model, anim)
+  if not (look_pc and look_pc.valid ~= false) then look_pc = findScript and findScript("planet_camera") or nil end
+  local pc = look_pc
+  if not (pc and pc.fwd_x) then look_off(); return end
+  local fwd, up, f2 = node:worldRight(), node:worldUp(), node:worldForward()
+  local fx, fy, fz = pc.fwd_x, pc.fwd_y, pc.fwd_z
+  -- (a probe's stand-in for the view: a function giving this frame's world
+  -- direction, so a camera can film the rider from the side)
+  if lookFrom then
+    local ok, x, y, z = pcall(lookFrom)
+    if ok and x then fx, fy, fz = x, y, z end
+  end
+  local a = fx * fwd.x + fy * fwd.y + fz * fwd.z
+  local r = -(fx * f2.x + fy * f2.y + fz * f2.z)
+  local u = fx * up.x + fy * up.y + fz * up.z
+  local yaw = math.atan2(r, a)
+  local pitch = math.max(LOOK_DOWN, math.min(LOOK_UP, math.asin(math.max(-1, math.min(1, u))) * 0.5))
+  local want = 1 - smooth01(math.rad(100), math.rad(130), math.abs(yaw))
+  yaw = math.max(-LOOK_YAW, math.min(LOOK_YAW, yaw))
+  local snap = not look.on or look.seat ~= node.id or (time or 0) - look.t > 0.5
+  if snap then
+    look.yaw, look.pitch, look.w = yaw, pitch, want
+  else
+    local k = 1 - math.exp(-8 * dt)
+    look.yaw = look.yaw + wrap(yaw - look.yaw) * k
+    look.pitch = look.pitch + (pitch - look.pitch) * k
+    look.w = look.w + (want - look.w) * (1 - math.exp(-5 * dt))
+  end
+  look.on, look.seat, look.t = true, node.id, time or 0
+  look_anim, look_node = anim, node
+  local fs = face_of(model)
+  if fs and fs.gaze ~= gaze then fs.gaze = gaze end
+  -- THE CHEST TAKES A SHARE (as planet_walker `lean` does on foot): the
+  -- helmet rides the Back bone, a hard suit's torso, so a head turning inside
+  -- it shows nothing; the rider twists at the waist toward the look, the
+  -- legs turned back so the feet stay on the pegs (the reaches below the
+  -- bone writes put them there anyway). Walker's convention: + y turns left.
+  local y = -math.max(-LOOK_TWIST, math.min(LOOK_TWIST, look.yaw * 0.4)) * look.w
+  if math.abs(y) > 1e-4 then
+    anim:addBoneRot("Back", -y, 0, 0)
+    anim:addBoneRot("Hip", y, 0, 0)
+    anim:addBonePos("Back", vec3(-2 * HIP_Z * math.sin(y), 0, 0))
+  end
+  local h = anim:boneWorld("Head")
+  look.head, look.twist = h ~= nil, -y
+  if h and look.w > 0.01 then
+    local d = look_world(node)
+    anim:lookAt({ "Head" }, vec3(h.x + d.x * 10, h.y + d.y * 10, h.z + d.z * 10), { limit = 75, weight = 0.9 * look.w })
+  end
+end
+
 -- Published for probes: is the rider being seated by this script right now?
 riding = false
+-- …and the head's look in the seat's frame: { yaw, pitch, w } (rad; + right, + up)
+lookState = nil
+-- (probes: a function → x, y, z, the direction the head follows instead of the view's)
+lookFrom = nil
 -- …and is it a doll (a crew member you are not controlling)?
 ridingDoll = false
 -- …and where the hands went: "grips" (a fork's bars) or "reach"
@@ -193,6 +301,7 @@ function lateUpdate(node, dt)
   riding = false
   ridingDoll = false
   hands = nil
+  lookState = nil
   local a, rmodel, ranim
   if seated_here(node) then
     a = find_rider()
@@ -201,6 +310,7 @@ function lateUpdate(node, dt)
     ghost_tyres(a, vessel)
   else
     if next(ghosted) then unghost(astro) end
+    if look.on and look.seat == node.id then look_off() end
     a = doll_here(node)
     if not a then return end
     rmodel, ranim = dollModel, dollAnim
@@ -257,5 +367,10 @@ function lateUpdate(node, dt)
       { pole = at(1.2, 0.0, sg * (params.foot_side + ko)) })
     local h = grip and grip[sg] or at(params.hand_out, params.hand_up + (sg > 0 and (params.hand_lift or 0) or 0.0), sg * params.hand_side)
     anim:reach("Hand." .. nm, h, { pole = at(-0.3, -0.1, sg * 0.6) })
+  end
+  -- the head (and eyes) to where you look: the rider you control only
+  if not ridingDoll then
+    head_look(node, dt, model, anim)
+    lookState = { yaw = look.yaw, pitch = look.pitch, w = look.w, head = look.head, twist = look.twist }
   end
 end

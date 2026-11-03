@@ -399,7 +399,8 @@ local function console(v, t, lv, shift)
   local rows = {
     { "TWR", string.format("%.2f", t.twr or 0) },
     { "THRUST", string.format("%d kN", math.floor((t.thrust_now or 0) + 0.5)) },
-    { "PITCH", string.format("%+.0f°", whole(t.nose or 0)) },
+    -- (the ball's own nose: a rover's is its drive front, update_navball)
+    { "PITCH", string.format("%+.0f°", whole((v.NAVBALL and v.NAVBALL.ny) and math.deg(math.asin(math.max(-1, math.min(1, v.NAVBALL.ny)))) or t.nose or 0)) },
   }
   for i, r in ipairs(rows) do
     local y = 12 + (i - 1) * 46
@@ -810,6 +811,147 @@ local function resources(v, t)
            end }, h
 end
 
+-- ── THE MANEUVER, in flight (2026-11-03: "I want to see the maneuver node
+-- instructions, like when to burn and for how long, even when not in the
+-- map ... like KSP does") ─────────────────────────────────────────────────
+-- While a node is planned (orbit_map burnInfo) a small CRT sits on the
+-- console's top edge, right of the ball: the countdown to the BURN START
+-- (node − half the burn, the KSP rule), the Δv still to burn (it falls as you
+-- burn: the thrust the engines really give, over the craft's mass, summed in
+-- burn_track), the burn's length at full throttle from the engines lit now
+-- and the craft's mass (Tsiolkovsky), the countdown to the node, a bar of the
+-- burn done, and a ◆ HOLD key for the SAS node hold. The node's direction is
+-- a ◆ on the navball (the overlay; nb_mark), on the rim when it is behind.
+local MNV_W, MNV_H = 204, 100
+local burn_t = nil
+-- Every frame (map open too: you fly from the map), Δv the engines gave.
+local function burn_track(v)
+  local om = ref("orbit_map")
+  local n = v and v.node
+  if not (om and om.burnApply and n and n.valid) then burn_t = nil return end
+  local now = space.time and space.time() or time
+  local dt = burn_t and (now - burn_t) or 0
+  burn_t = now
+  if dt <= 0 or dt > 0.5 then return end
+  local F = v.THRUST_LIVE or 0
+  local m = v.tele and v.tele.mass or 0
+  if F <= 0 or m <= 0 then return end
+  -- along the craft's thrust axis: the stack's +Y, an aircraft's nose
+  local ax = v.AERO and v.AERO.frame and v.AERO.frame.n
+  local lx, ly, lz = 0, 1, 0
+  if ax then lx, ly, lz = ax.x, ax.y, ax.z end
+  local o = n:toWorld(vec3(0, 0, 0))
+  local w = n:toWorld(vec3(lx, ly, lz))
+  local dx, dy, dz = w.x - o.x, w.y - o.y, w.z - o.z
+  local l = math.sqrt(dx * dx + dy * dy + dz * dz)
+  if l < 1e-6 then return end
+  local a = F / m * dt / l
+  om.burnApply(dx * a, dy * a, dz * a)
+end
+-- Seconds at full throttle for `dv` m/s on the engines lit now: Tsiolkovsky
+-- with their exhaust speed (thrust over the propellant's mass flow).
+local function burn_secs(t, dv)
+  local F, m = t.thrust or 0, t.mass or 0
+  if F <= 0 or m <= 0 then return nil end
+  local ve = ((t.fuel_t or 0) > 0 and (t.burn_s or 0) > 0) and F * t.burn_s / t.fuel_t or nil
+  if ve and ve > 1 then return m * ve / F * (1 - math.exp(-dv / ve)) end
+  return dv * m / F
+end
+local function tminus(s)
+  local a = math.abs(s)
+  local str = a < 60 and string.format("%.0f s", a) or (a < 3600 and string.format("%dm %02ds", math.floor(a / 60), math.floor(a % 60))
+    or string.format("%dh %02dm", math.floor(a / 3600), math.floor(a / 60) % 60))
+  return (s >= 0 and "T−" or "T+") .. str
+end
+local function maneuver(v, t, shift)
+  local om = ref("orbit_map")
+  local b = om and om.burnInfo and om.burnInfo()
+  if not b or (b.dv or 0) < 0.05 then return nil end
+  local left = b.left or b.dv
+  local tb = burn_secs(t, left)
+  local start = b.lead - (tb or 0) / 2
+  local burning = (v.throttle or 0) > 0.01 and (t.thrust_now or 0) > 0
+  local big, tone
+  if left < 0.3 then
+    big, tone = "BURN DONE", "accent"
+  elseif burning then
+    big, tone = "BURNING", "accent"
+  elseif start <= 0 and start > -math.max(5, (tb or 0)) then
+    big, tone = "BURN NOW", "accent"
+  elseif start <= 0 then
+    big, tone = "LATE " .. tminus(start):sub(4), "warn"
+  else
+    big = tminus(start)
+  end
+  -- Δv the craft can still give on the engines lit now (dv_now): short of the
+  -- burn reads caution
+  local short = (t.dv_now or 0) > 0 and (t.dv_now or 0) < left - 0.5
+  local noeng = (t.thrust or 0) <= 0
+  local x0 = shift - CW / 2 + CW - MNV_W
+  local hold = v.sas_mode == "node"
+  local done = math.floor(math.max(0, math.min(1, b.done or 0)) * (MNV_W - 24) + 0.5)
+  return { "box", key = "mnv", style = "hud/instrument", pin = "bottom", x = x0 + MNV_W / 2, y = -(CB + CH + 6),
+    w = MNV_W, h = MNV_H, tooltip = "The planned burn (M opens the map, N edits it). Start when BURN NOW lights: half the burn before the node.",
+    micro("hd", "◆ MANEUVER", 10, 7, 110, "start"),
+    { "button", key = "hold", style = "hud/sas", x = MNV_W - 62, y = 4, w = 52, h = 18, selected = hold,
+      text = "◆ HOLD", textAlign = "center", textValign = "center", focusable = false,
+      tooltip = hold and "SAS holds the burn — click to let go" or "Point the nose down the burn (SAS node hold, ALT+9)",
+      onClicked = function() if v.setSAS then v.setSAS(hold and "off" or "node") end end },
+    micro("bl", "BURN START", 10, 25, 90, "start"),
+    { "text", key = "big", style = tone == "warn" and "hud/valueWarn" or (tone == "accent" and "hud/valueAccent" or "hud/valueLg"),
+      x = 10, y = 36, w = MNV_W - 20, h = 22, text = big, textAlign = "start", textSize = 20 },
+    micro("dl", "ΔV LEFT", 10, 60, 64, "start"),
+    value("dv", string.format("%.1f m/s", left), 10, 71, 74, "start"),
+    micro("tl", "DURATION", 84, 60, 60, "start"),
+    value("tb", noeng and "no engine" or (tb and duration(tb) or "—"), 84, 71, 60, "start", (short or noeng) and "warn" or nil),
+    micro("nl", "NODE", 148, 60, 46, "start"),
+    value("nd", tminus(b.lead), 148, 71, 50, "start", "dim"),
+    { "box", key = "bar", style = "hud/track", x = 10, y = MNV_H - 9, w = MNV_W - 20, h = 5,
+      { "box", key = "f", x = 1, y = 1, w = done, h = 3, radius = 1, fill = PHOS } } }
+end
+
+-- The node's ◆ on the navball. The ball is a shader under this HUD, so the
+-- mark rides the overlay above it, placed every frame (update) from the
+-- same horizon-frame axes the ball is drawn with (vessel_controller
+-- update_navball → NAVBALL): q = (b·right, b·up) on the ball's disc, the
+-- shader's own projection; behind the ball it sits on the rim, dim.
+local NBM = { on = false, x = 0, y = 0, a = 0, shift = 0 }
+local mk_node = nil
+local function nb_mark(v)
+  NBM.on = false
+  local om = ref("orbit_map")
+  local b = om and om.burnInfo and om.burnInfo()
+  local NB = v and v.NAVBALL
+  if not (b and b.dir and NB and NB.rx and (b.left or 0) > 0.05) then return end
+  local wx, wy, wz = b.dir.x, b.dir.y, b.dir.z
+  if b.lx and b.left > 0.3 then wx, wy, wz = b.lx / b.left, b.ly / b.left, b.lz / b.left end
+  -- world → the ball's horizon frame (x east, y up, z north)
+  local hx = wx * NB.ex + wy * NB.ey + wz * NB.ez
+  local hy = wx * NB.hx + wy * NB.hy + wz * NB.hz
+  local hz = wx * NB.qx + wy * NB.qy + wz * NB.qz
+  local qx = hx * NB.rx + hy * NB.ry + hz * NB.rz
+  local qy = hx * NB.ux + hy * NB.uy + hz * NB.uz
+  local qz = hx * NB.nx + hy * NB.ny + hz * NB.nz
+  local behind = qz < 0
+  if behind then
+    local l = math.sqrt(qx * qx + qy * qy)
+    if l < 1e-6 then qx, qy = 0, -1 else qx, qy = qx / l * 0.92, qy / l * 0.92 end
+  end
+  local R = P.ball[3] / 2
+  NBM.on, NBM.behind = true, behind
+  NBM.x = NBM.shift - CW / 2 + P.ball[1] + R + qx * R
+  NBM.y = (CB + CH - (P.ball[2] + P.ball[4])) + R + qy * R   -- up from the bottom
+end
+
+-- (probes: where the ◆ is, in design units from the bottom centre, and the
+-- ball's own centre the same way)
+function nodeMark()
+  local R = P.ball[3] / 2
+  local e = mk_node and mk_node.valid ~= false and mk_node:getcomponent("UiElement")
+  return { on = NBM.on, behind = NBM.behind, x = NBM.x, y = NBM.y, el = e and { vis = e.visible, x = e.posX, y = e.posY, op = e.opacity } or nil,
+           cx = NBM.shift - CW / 2 + P.ball[1] + R, cy = (CB + CH - (P.ball[2] + P.ball[4])) + R, r = R }
+end
+
 -- The stage stack: one card per SPACE, the next at the bottom. While the
 -- clamps hold, releasing them IS the next stage.
 local function stage_stack(t, lift)
@@ -823,6 +965,9 @@ local function stage_stack(t, lift)
       return string.format("Chutes ×%d", st.n or 0), "deploy"
     elseif st.kind == "fairing" then
       return "Fairing", "jettison"
+    elseif st.kind == "engine" then
+      return (st.n or 0) > 1 and string.format("Ignite ×%d", st.n) or "Ignite",
+        string.format("%d eng · %d kN", st.eng or 0, st.kn or 0)
     end
     return "Decouple", st.eng > 0 and string.format("then %d eng · %d kN", st.eng, st.kn) or "then coast"
   end
@@ -832,8 +977,17 @@ local function stage_stack(t, lift)
     -- a stage of several events (the builder's STAGE tab put them together):
     -- one card, every event named
     for _, o in ipairs(st.also or {}) do
-      local t2 = one(o)
-      title = title .. " + " .. t2
+      -- (an ignition riding with a separation is said by the thrust line:
+      -- "Decouple · 1 eng · 48 kN", not "Decouple + Ignite")
+      if o.kind ~= "engine" then
+        local t2 = one(o)
+        title = title .. " + " .. t2
+      end
+    end
+    if st.kind == "engine" and st.also then
+      for _, o in ipairs(st.also) do
+        if o.kind ~= "engine" then title = (one(o)) break end
+      end
     end
     if st.also then
       sub = st.eng > 0 and string.format("%d eng · %d kN", st.eng, st.kn) or string.format("%d events", #st.also + 1)
@@ -947,6 +1101,18 @@ end
 function update(node, dt)
   if not el then el = node:getcomponent("UiElement") end
   local v = params.enabled >= 0.5 and flown() or nil
+  burn_track(v)
+  nb_mark(v)
+  -- the ◆ is placed every frame, as the instruments are (place)
+  if not (mk_node and mk_node.valid ~= false) and tip_made then mk_node = find("NavballNodeMark") end
+  local mk = mk_node and mk_node:getcomponent("UiElement")
+  if mk then
+    if mk.visible ~= NBM.on then mk.visible = NBM.on end
+    if NBM.on then
+      mk.posX, mk.posY = NBM.x, -(NBM.y - 9)
+      mk.opacity = NBM.behind and 0.45 or 1.0
+    end
+  end
   local om, gm = ref("orbit_map"), ref("game_manager")
   local t = v and v.tele
   if not t or (om and om.map_view) or (gm and (gm.loading or gm.inputOwner == "builder")) then
@@ -973,6 +1139,7 @@ function update(node, dt)
   local dw = design_width()
   local right_limit = dw - M - STAGE_W - 8
   local shift = math.min(0, right_limit - (dw / 2 + CW / 2))
+  NBM.shift = shift
   place_instruments(shift)
 
   -- The debug badge shares the bottom-right corner; the stack stands on it.
@@ -1009,6 +1176,8 @@ function update(node, dt)
   if res then tree[#tree + 1] = res end
   local stack = stage_stack(t, lift)
   if stack then tree[#tree + 1] = stack end
+  local mnv = maneuver(v, t, shift)
+  if mnv then tree[#tree + 1] = mnv end
   local rv = revert_key(res_h)
   if rv then tree[#tree + 1] = rv end
   ui.make(node, tree)
@@ -1018,16 +1187,20 @@ function update(node, dt)
   -- it again every frame would put both back.
   if overlay and not tip_made then
     tip_made = true
-    ui.make(overlay, { "box", key = "tip", style = "hud/tooltip", tooltipBox = true,
-                       w = "fit", h = "fit", pad = 7,
-                       { "text", key = "t", w = "fit", h = "fit", text = "" } })
+    ui.make(overlay, { { "box", key = "tip", style = "hud/tooltip", tooltipBox = true,
+                         w = "fit", h = "fit", pad = 7,
+                         { "text", key = "t", w = "fit", h = "fit", text = "" } },
+                       { "text", key = "nbm", name = "NavballNodeMark", pin = "bottom", x = 0, y = 0, w = 18, h = 18,
+                         text = "◆", textSize = 15, textAlign = "center", textValign = "center",
+                         textColor = ACCENT, visible = false } })
   end
 
   local left = dw / 2 + shift - CW / 2
   layout = {
     consoleLeft = left, consoleRight = left + CW,
-    consoleTop = design_h() - CB - CH + P.hdgWin[2],   -- the heading box is the highest point
-    consoleRise = CB + CH - P.hdgWin[2],                -- …and how far that is above the bottom
+    -- the heading box is the highest point (the maneuver CRT, while it is up)
+    consoleTop = design_h() - CB - CH + (mnv and -(6 + MNV_H) or P.hdgWin[2]),
+    consoleRise = CB + CH + (mnv and (6 + MNV_H) or -P.hdgWin[2]),
     topBottom = below,
     topLeft = top_left,
     rightBottom = M + 28 + 8 + res_h,

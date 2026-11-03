@@ -1123,6 +1123,13 @@ end
 --                            (asNew: a new stage inserted at `to`)
 --   STAGEM.swap(stages, i, j) → stages: two stages trade places
 --   STAGEM.index(stages, items) → uid → stage number (what the blueprint saves)
+-- ENGINES are items too (2026-11-03: "engines should show in the stage UI and
+-- be grouped by symmetry"): a symmetry group of engines "eg<sym>" (one item,
+-- its count), a lone or split-off engine "e<uid>". An engine IGNITES when its
+-- stage fires; `stages[0]` is the LAUNCH group, engines lit from the clamps'
+-- release (saved as stage -1, sync's `saved` reads it as 0). A NEW engine
+-- follows the axial decoupler under it into that decoupler's stage (`follow`:
+-- what the flight always did), or is lit at launch when nothing is under it.
 STAGEM = {}
 function STAGEM.rank(it)
   if it.chute then return 3e6 end
@@ -1146,6 +1153,10 @@ function STAGEM.sortgroup(g, items)
 end
 function STAGEM.sync(stages, items, saved)
   local out, placed = {}, {}
+  local launch = {}
+  for _, k in ipairs(stages and stages[0] or {}) do
+    if items[k] and items[k].engine and not placed[k] then launch[#launch + 1] = k; placed[k] = true end
+  end
   for _, g in ipairs(stages or {}) do
     local ng = {}
     -- (an old save's flat list of keys: each key its own stage)
@@ -1164,9 +1175,11 @@ function STAGEM.sync(stages, items, saved)
       local it, n = items[k], nil
       for _, u in ipairs(it.uids or {}) do
         local su = saved and saved[u]
-        if su and su > 0 and (not n or su < n) then n = su end
+        if su and (su > 0 or (su == 0 and it.engine)) and (not n or su < n) then n = su end
       end
-      if n then
+      if n == 0 then
+        launch[#launch + 1] = k
+      elseif n then
         by_n[n] = by_n[n] or {}
         table.insert(by_n[n], k)
       else
@@ -1186,14 +1199,30 @@ function STAGEM.sync(stages, items, saved)
     if ra ~= rb then return ra < rb end
     return a < b
   end)
+  local fresh_eng = {}
   for _, k in ipairs(fresh) do
-    local r = STAGEM.rank(items[k])
-    local at = 1
-    for i, g in ipairs(out) do
-      if STAGEM.minrank(g, items) < r then at = i + 1 end
+    if items[k].engine then
+      fresh_eng[#fresh_eng + 1] = k
+    else
+      local r = STAGEM.rank(items[k])
+      local at = 1
+      for i, g in ipairs(out) do
+        if STAGEM.minrank(g, items) < r then at = i + 1 end
+      end
+      table.insert(out, at, { k })
     end
-    table.insert(out, at, { k })
   end
+  -- a new engine joins the stage of the decoupler under it, else the launch
+  for _, k in ipairs(fresh_eng) do
+    local f, home = items[k].follow, nil
+    if f then
+      for _, g in ipairs(out) do
+        for _, x in ipairs(g) do if x == f then home = g end end
+      end
+    end
+    table.insert(home or launch, k)
+  end
+  out[0] = launch
   return out
 end
 function STAGEM.move(stages, key, to, asNew)
@@ -1203,14 +1232,45 @@ function STAGEM.move(stages, key, to, asNew)
     for _, k in ipairs(g) do if k ~= key then ng[#ng + 1] = k end end
     out[i] = ng
   end
-  to = math.max(1, math.min(to or 1, #out + 1))
-  if asNew or not out[to] then
-    table.insert(out, to, { key })
+  local L = {}
+  for _, k in ipairs(stages[0] or {}) do if k ~= key then L[#L + 1] = k end end
+  if to == 0 and not asNew then
+    -- (only an engine is lit at launch; the caller says which keys are engines)
+    L[#L + 1] = key
   else
-    table.insert(out[to], key)
+    to = math.max(1, math.min(to or 1, #out + 1))
+    if asNew or not out[to] then
+      table.insert(out, to, { key })
+    else
+      table.insert(out[to], key)
+    end
   end
   local kept = {}
   for _, g in ipairs(out) do if #g > 0 then kept[#kept + 1] = g end end
+  kept[0] = L
+  return kept
+end
+-- Replace item `key` by `keys` in whichever stage holds it (an engine group
+-- split into its engines, or its engines joined back into the group).
+function STAGEM.replace(stages, key, keys, drop)
+  local function fix(g)
+    local ng, hit = {}, false
+    for _, k in ipairs(g) do
+      if k == key then
+        hit = true
+        for _, x in ipairs(keys) do ng[#ng + 1] = x end
+      elseif not (drop and drop[k]) then
+        ng[#ng + 1] = k
+      end
+    end
+    return ng, hit
+  end
+  local out = {}
+  for i, g in ipairs(stages) do out[i] = (fix(g)) end
+  out[0] = (fix(stages[0] or {}))
+  local kept = {}
+  for _, g in ipairs(out) do if #g > 0 then kept[#kept + 1] = g end end
+  kept[0] = out[0]
   return kept
 end
 function STAGEM.swap(stages, i, j)
@@ -1230,6 +1290,10 @@ function STAGEM.reorder(stages, i, j)
 end
 function STAGEM.index(stages, items)
   local out = {}
+  for _, k in ipairs(stages[0] or {}) do
+    local it = items[k]
+    for _, u in ipairs(it and it.uids or {}) do out[u] = 0 end
+  end
   for n, g in ipairs(stages) do
     for _, k in ipairs(g) do
       local it = items[k]
@@ -1266,9 +1330,62 @@ function stage_items()
       if not it then it = { key = "c", uids = {}, chute = true, y = p.y }; items.c = it end
       it.uids[#it.uids + 1] = uid
       it.y = math.max(it.y, p.y)
+    elseif (p.def.thrust or 0) > 0 then
+      -- an ENGINE ignites on its stage; a symmetry group is one item (its
+      -- count) until it is split (W.eng_split)
+      local grouped = p.sym and not (W.eng_split and W.eng_split[p.sym])
+      local key = grouped and ("eg" .. p.sym) or ("e" .. uid)
+      local it = items[key]
+      if not it then
+        it = { key = key, uids = {}, engine = true, y = p.y, sym = p.sym, grouped = grouped or nil }
+        items[key] = it
+      end
+      it.uids[#it.uids + 1] = uid
+      it.y = math.min(it.y, p.y)
     end
   end
   for _, it in pairs(items) do table.sort(it.uids) end
+  -- each engine item's default stage: the axial cut right under it (the
+  -- decoupler that uncovers it, the flight's height rule), none for the
+  -- bottom stage and for an engine on a side booster (lit at launch)
+  local cuts, eng = {}, false
+  for k, it in pairs(items) do
+    if it.engine then eng = true
+    elseif not it.ring and not it.fair and not it.chute then cuts[#cuts + 1] = it end
+  end
+  if eng then
+    local boost = {}
+    for ru, p in pairs(parts) do
+      if p.def.radial and p.def.decouple then
+        for u in pairs(separation_of(ru)) do boost[u] = true end
+      end
+    end
+    for _, it in pairs(items) do
+      if it.engine and not boost[it.uids[1]] then
+        local best = nil
+        for _, c in ipairs(cuts) do
+          if it.y >= c.y - 0.01 and (not best or c.y > best.y) then best = c end
+        end
+        it.follow = best and best.key or nil
+      end
+    end
+    -- a group split before a save comes back split: its engines' saved
+    -- stages differ
+    for _, it in pairs(items) do
+      if it.grouped then
+        local first, differ = nil, false
+        for _, u in ipairs(it.uids) do
+          local v = saved_stage[u]
+          if first == nil then first = v elseif v ~= first then differ = true end
+        end
+        if differ then
+          W.eng_split = W.eng_split or {}
+          W.eng_split[it.sym] = true
+          return stage_items()
+        end
+      end
+    end
+  end
   return items
 end
 
@@ -1296,6 +1413,11 @@ end
 
 -- What a separation event IS, in words: its kind and how many.
 function stageItemLabel(it)
+  if it.engine then
+    local p = parts[it.uids[1]]
+    local nm = p and p.def.label or "Engine"
+    return #it.uids > 1 and string.format("%s ×%d", nm, #it.uids) or nm
+  end
   if it.chute then return #it.uids > 1 and string.format("Parachutes ×%d", #it.uids) or "Parachute" end
   if it.fair then return "Fairing jettison" end
   local p = parts[it.uids[1]]
@@ -1362,36 +1484,28 @@ function stageView()
   local items = sync_stage_order()
   local keep = stageKeep()
   local out = { stages = {}, launch = nil }
-  -- engines by the flight's rule: below the lowest axial cut (and boosters)
-  -- burn from lift-off; each axial cut lights the engines above it, up to the
-  -- next cut
-  local cuts = {}
-  for _, p in pairs(parts) do if p.def.decouple and not p.def.radial then cuts[#cuts + 1] = p.y end end
-  table.sort(cuts)
-  local boost = {}
-  for ru, p in pairs(parts) do
-    if p.def.radial and p.def.decouple then
-      for u in pairs(stageDrops(ru, keep)) do boost[u] = true end
+  -- (engines are stage items: each lights on its stage, stage_order[0] at
+  -- launch; their default is the flight's old height rule, stage_items)
+  -- the engines lit at launch (stage_order[0])
+  local lset, litems = {}, {}
+  for _, k in ipairs(stage_order[0] or {}) do
+    local it = items[k]
+    if it then
+      for _, u in ipairs(it.uids) do lset[u] = true end
+      litems[#litems + 1] = { key = k, label = stageItemLabel(it), uids = it.uids, kind = "engine", n = #it.uids,
+                              grouped = it.grouped, sym = it.sym }
     end
   end
-  local function engines_between(lo, hi, with_boost)
-    local set = {}
-    for u, p in pairs(parts) do
-      if (p.def.thrust or 0) > 0 then
-        if (with_boost and boost[u]) or (not boost[u] and p.y > lo + 0.01 and p.y < hi - 0.01) then set[u] = true end
-      end
-    end
-    return set
-  end
-  local first = cuts[1] or math.huge
-  out.launch = { lights = (countLabels(engines_between(-math.huge, first, true), 3)) }
+  out.launch = { lights = (countLabels(lset, 3)), items = litems }
   for n, g in ipairs(stage_order) do
     local st = { n = n, items = {} }
     for _, k in ipairs(g) do
       local it = items[k]
       if it then
-        local e = { key = k, label = stageItemLabel(it), uids = it.uids, kind = it.chute and "chute" or it.fair and "fairing" or it.ring and "ring" or "axial" }
-        if not it.chute and not it.fair then
+        local e = { key = k, label = stageItemLabel(it), uids = it.uids,
+                    kind = it.engine and "engine" or it.chute and "chute" or it.fair and "fairing" or it.ring and "ring" or "axial",
+                    n = #it.uids, grouped = it.grouped, sym = it.sym }
+        if not it.chute and not it.fair and not it.engine then
           local drop, own = {}, {}
           for _, u in ipairs(it.uids) do
             own[u] = true
@@ -1399,12 +1513,7 @@ function stageView()
           end
           local txt, nk = countLabels(drop, 3, own)
           e.drops = nk > 0 and txt or nil
-          if not it.ring then
-            local hi = math.huge
-            for _, y in ipairs(cuts) do if y > it.y + 0.01 and y < hi then hi = y end end
-            local lit = countLabels(engines_between(it.y, hi, false), 3)
-            e.lights = lit ~= "" and lit or nil
-          end
+          -- (what it lights is the stage's own ENGINE rows now)
         end
         st.items[#st.items + 1] = e
       end
@@ -2431,7 +2540,7 @@ local function snap_parts(uids, extra)
     end
   end
   if extra then
-    S.extra = { stage = tcopy(stage_order), root = W.root, outliner = tcopy(W.outliner),
+    S.extra = { stage = tcopy(stage_order), esplit = tcopy(W.eng_split), root = W.root, outliner = tcopy(W.outliner),
                 groups = tcopy(groups_state.groups), edited = groups_state.edited,
                 controls = tcopy(W.controls), ctrl = W.ctrl }
   end
@@ -2485,6 +2594,7 @@ local function apply_snap(S)
   local X = S.extra
   if X then
     stage_order = tcopy(X.stage) or {}
+    W.eng_split = tcopy(X.esplit) or {}
     W.stage_sync_v = nil
     W.root = X.root
     W.outliner = tcopy(X.outliner) or {}
@@ -3182,6 +3292,22 @@ function symMode() return sym_mirror and "mirror" or sym_n end
 --   "mirror"  a mirrored pair across the host's X or Z plane
 -- A copy is the placed pose ROTATED about the hub's axis (or reflected), the
 -- whole frame with it — so a fin's tilt and roll come round the ring exactly.
+-- A ×2 ring about a LEVEL axis is a LEFT/RIGHT pair (2026-11-03: "placing a
+-- landing gear on the bottom of one wing makes it go on the top of the
+-- other"). Turned 180° about a fuselage lying along the craft, a copy of what
+-- hangs under one wing comes out on top of the other, upside down; under
+-- gravity nobody means that. Such a pair mirrors instead, across the
+-- vertical plane through the axis. → the plane's normal (world) and its name
+-- on `host` ("x" | "z", mirror_axis), or nil (a standing axis, or a plane
+-- that is not one of the host's own: the ring turns as before).
+function levelPairPlane(host, ax)
+  if not (host and ax) or math.abs(ax.y) > 0.5 then return nil end
+  local A = norm3(cross3(ax, { x = 0, y = 1, z = 0 }))
+  local Am, name = mirror_axis(host, A.x, A.y, A.z)
+  if not Am or math.abs(dot3(Am, A)) < 0.98 then return nil end
+  return Am, name
+end
+
 function symCopies(snap, x, y, z, B, n)
   if not snap or not symActive() then return nil end
   local host = parts[snap.uid]
@@ -3190,6 +3316,20 @@ function symCopies(snap, x, y, z, B, n)
     local hub = group_hub(host.sym)
     if not hub then return nil end
     local out = {}
+    -- an old ×2 ring round a level fuselage (the wings): mirror its pair
+    if not host.mir then
+      local mem = group_members(host.sym)
+      local A, name = levelPairPlane(hub, basisOf(hub.yaw, hub.pitch, hub.roll).Y)
+      local other = (#mem == 2) and parts[mem[1] == snap.uid and mem[2] or mem[1]] or nil
+      if A and other then
+        local hx, hy, hz = reflect_pt(hub, A, host.x, host.y, host.z)
+        if (hx - other.x) ^ 2 + (hy - other.y) ^ 2 + (hz - other.z) ^ 2 < 0.05 ^ 2 then
+          local mx, my, mz = reflect_pt(hub, A, x, y, z)
+          return { { x = mx, y = my, z = mz, B = mirrorBasis(A, B), parent = other.uid or (mem[1] == snap.uid and mem[2] or mem[1]),
+                     mir = name, n = n and reflect_vec(A, n) } }, "follow"
+        end
+      end
+    end
     if host.mir then
       local A = axis_of(hub, host.mir)
       for _, m in ipairs(group_members(host.sym)) do
@@ -3223,6 +3363,17 @@ function symCopies(snap, x, y, z, B, n)
                n = n and reflect_vec(A, n) } }, "mirror"
   end
   local hostB = basisOf(host.yaw, host.pitch, host.roll)
+  -- ×2 on the flank of a level fuselage: a mirrored left/right pair
+  if sym_n == 2 and n then
+    local A, name = levelPairPlane(host, hostB.Y)
+    if A and math.abs(dot3(norm3(n), A)) > 0.5 then
+      local mx, my, mz = reflect_pt(host, A, x, y, z)
+      if (mx - x) ^ 2 + (my - y) ^ 2 + (mz - z) ^ 2 >= 0.01 then
+        return { { x = mx, y = my, z = mz, B = mirrorBasis(A, B), parent = snap.uid, mir = name,
+                   n = reflect_vec(A, n) } }, "mirror"
+      end
+    end
+  end
   local out = {}
   for k = 1, sym_n - 1 do
     local a = k * (2 * math.pi / sym_n)
@@ -4611,7 +4762,8 @@ local function make_blueprint()
       x = p.x - centerX, y = p.y - ref_y, z = p.z - centerZ,
       yaw = p.yaw, pitch = p.pitch or 0, roll = p.roll or 0,
       parent = p.parent or 0, att = p.att or "", sym = p.sym or 0,
-      stage = stage_of[uid] or 0,
+      -- (an engine lit at launch is -1: 0 means "no stage" on older builds)
+      stage = (stage_of[uid] == 0) and -1 or (stage_of[uid] or 0),
       h = d.h, mass = d.mass + (p.joints and #p.joints or 0) * 0.001, cost = d.cost, kind = d.kind,
       -- Half-widths ride along too: the flight side needs a part's real
       -- footprint for hull contact, not just its stack height.
@@ -4823,7 +4975,7 @@ local function load_blueprint(bp)
   ghost = nil
   clear_stand()
   stage_order, saved_stage = {}, {}
-  W.stage_sync_v = nil
+  W.stage_sync_v, W.eng_split = nil, {}
   fshapes = {}
   wcfgs = {}
   if shapeStop then shapeStop(false) end
@@ -4833,7 +4985,8 @@ local function load_blueprint(bp)
   end
   for _, d in pairs(bp.parts) do
     if have[d.uid] then
-      if (d.stage or 0) > 0 then saved_stage[d.uid] = d.stage end
+      if (d.stage or 0) > 0 then saved_stage[d.uid] = d.stage
+      elseif d.stage == -1 then saved_stage[d.uid] = 0 end
       if type(d.wcfg) == "table" and next(d.wcfg) then wcfgs[d.uid] = copy_wcfg(d.wcfg) end
       -- a drawn fairing comes back drawn (a craft from before shaping has no
       -- `fsec` and keeps its fitted shell)
@@ -5821,13 +5974,15 @@ function draw_stage_badges()
   if stage_hover and (time or 0) - (W.stage_hover_t or 0) > 0.25 then stage_hover = nil end
   local items = sync_stage_order()
   local k = screen_k and screen_k() or 1
-  for n, g in ipairs(stage_order) do
+  for n = 0, #stage_order do
+    local g = stage_order[n] or {}
     for _, key in ipairs(g) do
       local it = items[key]
       if it then
         local hot = (stage_hover == key) or (stage_hover == ("s" .. n))
         local r, gg, b = 1.0, 0.75, 0.25
         if it.chute then r, gg, b = 0.55, 0.8, 1.0 end
+        if it.engine then r, gg, b = 0.97, 0.55, 0.22 end
         if hot then r, gg, b = 0.3, 1.0, 0.5 end
         for _, uid in ipairs(it.uids) do
           local p = parts[uid]
@@ -5840,7 +5995,7 @@ function draw_stage_badges()
             if draw.text and camera and camera.worldToScreen then
               -- (the builder's camera takes stand-local points: builder_space wrapCamera)
               local sx, sy = camera.worldToScreen(p.x, p.y + 0.15, p.z)
-              if sx then draw.text(sx + 14 * k, sy - 9 * k, tostring(n), 16 * k, r, gg, b, 1.0) end
+              if sx then draw.text(sx + 14 * k, sy - 9 * k, n == 0 and "L" or tostring(n), 16 * k, r, gg, b, 1.0) end
             end
           end
         end
@@ -8229,7 +8384,7 @@ function craftNew()
   if partCount > 0 then craftSave() end
   clear_stand()
   stage_order, saved_stage = {}, {}
-  W.stage_sync_v = nil
+  W.stage_sync_v, W.eng_split = nil, {}
   groups_state.groups, groups_state.edited = nil, false
   W.craft = nil
   save.set("shipyard.current", nil)
@@ -8662,19 +8817,48 @@ end
 --   { op = "item", key, to, new }   an event into stage `to` (new: a stage of its own there)
 --   { op = "swap", i, j }           two stages trade places
 --   { op = "reorder", i, j }        stage i dragged to position j
+--   { op = "split", key }           an engine group into its engines (same stage)
+--   { op = "join", key }            a split engine's group back as one item
 --   { op = "reset" }                the default order again
+-- (`to` = 0 is the LAUNCH group: engines lit when the clamps let go)
 CMD.stage = function(a)
   sync_stage_order()
   local t = tx_begin("staging", {}, nil, true)
   if a.op == "item" and a.key then
+    -- (only an engine can be lit at launch, stage 0)
+    local it = W.stage_items and W.stage_items[a.key]
+    if a.to == 0 and not (it and it.engine) then a.to, a.new = 1, true end
     stage_order = STAGEM.move(stage_order, a.key, a.to, a.new)
   elseif a.op == "swap" and a.i and a.j then
     stage_order = STAGEM.swap(stage_order, a.i, a.j)
   elseif a.op == "reorder" and a.i and a.j then
     stage_order = STAGEM.reorder(stage_order, a.i, a.j)
+  elseif a.op == "split" and a.key then
+    -- an engine group into its engines, each in the group's stage
+    local it = W.stage_items and W.stage_items[a.key]
+    if it and it.grouped and it.sym then
+      W.eng_split = W.eng_split or {}
+      W.eng_split[it.sym] = true
+      local keys = {}
+      for _, u in ipairs(it.uids) do keys[#keys + 1] = "e" .. u end
+      stage_order = STAGEM.replace(stage_order, a.key, keys)
+    end
+  elseif a.op == "join" and a.key then
+    -- a split engine's whole group back as one item, in that engine's stage
+    local it = W.stage_items and W.stage_items[a.key]
+    local sym = it and it.engine and it.sym
+    if sym and W.eng_split and W.eng_split[sym] then
+      W.eng_split[sym] = nil
+      local drop = {}
+      for u, p in pairs(parts) do
+        if p.sym == sym then drop["e" .. u] = true; saved_stage[u] = nil end
+      end
+      drop[a.key] = nil
+      stage_order = STAGEM.replace(stage_order, a.key, { "eg" .. sym }, drop)
+    end
   elseif a.op == "reset" then
     stage_order, saved_stage = {}, {}
-    W.stage_sync_v = nil
+    W.stage_sync_v, W.eng_split = nil, {}
   end
   tx_commit(t)
   craftVersion = craftVersion + 1
