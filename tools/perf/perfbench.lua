@@ -1277,7 +1277,7 @@ local function run_plane()
   vc.releaseClamps()
   vc.setSAS("stability")
   sc_begin("d_takeoff")
-  local t0, ga, air, phase = time, nil, 0, "roll"
+  local t0, ga, air, phase, air_t = time, nil, 0, "roll", nil
   local S
   -- 0526: the every-7th-frame burst. Every roll frame is kept with the
   -- engine's own record (perf.frames) and the craft's place on its planet in
@@ -1369,7 +1369,10 @@ local function run_plane()
         local p = (S.V > 15) and -clamp(3.0 * (D(1) - S.theta) - 1.0 * S.qn, -1, 1) or 0
         vc.AERO.cmd = { p = p, y = yaw, r = clamp(-2.5 * S.bank, -1, 1) }
       else fly(S, D(11), 0, yaw) end
-      if not vc.R2.onWheels and S.alt > ga + 1.5 and S.V > 30 then air = air + 1 / 60 else air = 0 end
+      -- airborne time in game seconds (it counted 1/60 a frame, so a loaded
+      -- machine's lower frame rate stretched the liftoff time)
+      local dt_air = math.max(0, time - (air_t or time)); air_t = time
+      if not vc.R2.onWheels and S.alt > ga + 1.5 and S.V > 30 then air = air + dt_air else air = 0 end
       if air > 0.6 then
         local rel = sub(S.i.com, S.b)
         P("PLANE airborne after %.1f s at %.1f m/s, %.1f m from where the roll began", t, S.V, len(rel.x - ROLL0.x, rel.y - ROLL0.y, rel.z - ROLL0.z))
