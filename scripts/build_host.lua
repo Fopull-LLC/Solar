@@ -64,9 +64,18 @@ enterMs = nil         -- E to the builder's first frame, ms (probes)
 -- The catalogue's tile icons (part id → "img:N"), kept here for the session:
 -- the overlay's own scripts start afresh on every entry, and photographing
 -- every part again took half a minute each time.
+-- The engine keeps a captured texture until assets.release or Stop, not until
+-- the scene goes: a picture replaced, and every one at onDestroy (a menu round
+-- trip or a load), is given back, or each load photographed a new set over the
+-- last one's.
+local function release_tex(t) if t and assets and assets.release then pcall(assets.release, t) end end
 local part_icons = {}
 function partIcon(id) return part_icons[id] end
-function keepPartIcon(id, tex) part_icons[id] = tex end
+function keepPartIcon(id, tex)
+  local old = part_icons[id]
+  if old and old ~= tex then release_tex(old) end
+  part_icons[id] = tex
+end
 -- The CREW tab's portraits (member id → "img:N", with the look they were
 -- taken of: a changed look is photographed again), kept the same way.
 local crew_portraits = {}
@@ -75,7 +84,11 @@ function crewPortrait(id)
   if e then return e.tex, e.key end
   return nil
 end
-function keepCrewPortrait(id, key, tex) crew_portraits[id] = { tex = tex, key = key } end
+function keepCrewPortrait(id, key, tex)
+  local old = crew_portraits[id]
+  if old and old.tex and old.tex ~= tex then release_tex(old.tex) end
+  crew_portraits[id] = { tex = tex, key = key }
+end
 
 local host = nil      -- this script's node
 local frame = nil     -- the BuildFrame node
@@ -646,6 +659,12 @@ function start(node)
     if not find("CrewLib") and spawn then pcall(spawn, "CrewLib", vec3(0, 0, 0)) end
     standalone_start()
   end
+end
+
+-- the scene goes: the session's pictures with it (see release_tex)
+function onDestroy()
+  for id, t in pairs(part_icons) do release_tex(t); part_icons[id] = nil end
+  for id, e in pairs(crew_portraits) do release_tex(e.tex); crew_portraits[id] = nil end
 end
 
 function kit_craft_ready()

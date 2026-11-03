@@ -2466,6 +2466,12 @@ local function beam()
   if ok and name then beam_mesh = name end
   return beam_mesh or nil
 end
+-- the scene goes: the beam mesh with it (the engine keeps a built mesh until
+-- mesh.free or Stop, so every load used to leave one behind)
+function onDestroy()
+  if beam_mesh and mesh and mesh.free then pcall(mesh.free, beam_mesh) end
+  beam_mesh = nil
+end
 
 -- Has the base world's survey mapped `bname`'s rare plants?
 function surveyed(bname)

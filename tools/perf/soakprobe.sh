@@ -27,7 +27,7 @@ s = open(p).read()
 i = s.index('-- ── main ──')
 s = s[:i] + m + s[i:]
 s = s.replace('defaults = { slot = 13,',
-              'defaults = { soak_secs = 280, soak_every = 30, soak_walk = 14, soak_digs = 6, soak_warp = 8, soak_fly = 10, soak_rover = 0, soak_seg = 0,\n             slot = 13,')
+              'defaults = { soak_secs = 280, soak_every = 60, soak_walk = 14, soak_digs = 6, soak_warp = 8, soak_fly = 10, soak_rover = 2, soak_drive = 14, soak_park = 0, soak_save = 1, soak_menu = 3, soak_seg = 0,\n             slot = 13,')
 s = s.replace('    elseif MODE == "plane" then run_plane()',
               '    elseif MODE == "plane" then run_plane()\n'
               '    elseif MODE == "soak" then run_soak()')

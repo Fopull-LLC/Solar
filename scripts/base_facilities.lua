@@ -2042,6 +2042,13 @@ local function finish_siting()
   end
 end
 
+-- The scene goes: the paving's meshes with it (the engine keeps a built mesh
+-- until mesh.free or Stop, so each load used to leave a set behind).
+function onDestroy()
+  if built and mesh and mesh.free then for _, m in ipairs(built.meshes) do pcall(mesh.free, m) end end
+  built = nil
+end
+
 function update(node, dt)
   -- Keep the published base position live: the body is orbiting.
   if baseBody then

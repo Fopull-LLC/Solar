@@ -2379,6 +2379,17 @@ function start(node)
   reload()
 end
 
+-- The scene goes (AgencyLib is spawned again in the next one): every texture
+-- this one made goes with it. The engine keeps a texture until assets.release
+-- or Stop, so each menu visit and load used to leave its emblems behind.
+function onDestroy()
+  if not live then return end   -- a stood-down second AgencyLib owns nothing
+  if cur then release(cur.tex); release(cur.flagTex) end
+  if prev and prev ~= cur then release(prev.tex); release(prev.flagTex) end
+  for k, e in pairs(small) do if e.tex then release(e.tex) end; small[k] = nil end
+  cur, prev = nil, nil
+end
+
 local reported = false
 function update(node, dt)
   pump()

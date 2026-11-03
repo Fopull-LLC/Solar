@@ -679,6 +679,12 @@ function emptyAsset()
   if ok and name then empty_name = name end
   return empty_name
 end
+-- the scene goes: the empty mesh with it (kept by the engine until mesh.free
+-- or Stop otherwise: one more every load)
+function onDestroy()
+  if empty_name and mesh and mesh.free then pcall(mesh.free, empty_name) end
+  empty_name = nil
+end
 
 -- The LOD list a scatter source of `far` metres reach is declared with: the
 -- given bands (asset, fraction of far), ending in a dissolve to nothing, and

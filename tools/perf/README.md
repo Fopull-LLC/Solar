@@ -174,6 +174,32 @@ the apoapsis back up when the deep air takes it off during the coast: the
 Skipper → Anvil two-stage makes orbit (apo 3,527 m, peri 853 m on Naolol). The
 stock starter is a hop by design (builder.lua HOP_MULT), not an orbiter.
 
+## soakprobe.sh + soakprobe_modes.lua + soaktable.py — does a long session get slower?
+
+    WORK=$SCRATCH/soak LOCK=$SCRATCH/engine.lock SECS=840 TMO=960 tools/perf/soakprobe.sh <engine> [segments]
+
+Mixed play in a loop, one `floptle play` per segment (SECS of loop each; the
+first makes a fresh save in slot 14, the rest CONTINUE it; the slot is deleted
+at the end unless KEEPSAVE=1). A cycle: the crew put down on new ground (a
+bearing that turns 137° a cycle, 250–570 m out), a walk and laser digs, the
+inventory, ops board and map, time warp on foot, a crew switch, then either a
+flight (the starter rocket from the VAB, burned `soak_fly` s, reverted to the
+builder, out of the VAB on foot) or, every `soak_rover` (2) cycles, the 6-part
+rover driven `soak_drive` (14) s and reverted the same way (`soak_park=1`
+leaves it parked instead, so the fleet grows); a save (`soak_save`); every
+`soak_menu` (3) cycles the pause menu's MAIN MENU and CONTINUE again in the
+same process. Every `soak_every` (60) s a `SOAK wNN` line (frame p50/p95/p99/
+max, per-script ms, buckets, engine counts, terrain memory) and a census: script
+instances, the node tree under every root found (by root, with rigidbodies),
+Lua memory before and after a full collect, the meshes and textures scripts
+made and have not freed (the probe wraps mesh.build/free, assets.textureFrom*/
+release and camera.captureTexture: the engine keeps them until freed or Stop
+and has no count of them), by the script that made them, and every script's
+global-state size and what grew most (Luau has no debug.getupvalue, so a
+script's `local` tables are out of reach). `SOAKJSON` rows go to
+`$WORK/results/<TAG>/soak.jsonl`; `soaktable.py` tabulates them and fits each
+script's ms/frame slope. results/soak_2026-11-03.md.
+
 ## seaprobe.sh + seaprobe_modes.lua — the sea's Water Volume and stale node handles
 
     WORK=$SCRATCH/sea LOCK=$SCRATCH/engine.lock [PATCHES=x.patch] tools/perf/seaprobe.sh <engine>

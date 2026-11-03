@@ -1480,6 +1480,13 @@ local function start_build(what, fn, put)
   run_build()
 end
 
+-- The scene goes (a menu round trip, a load): the lake and river meshes with
+-- it. The engine keeps a built mesh until mesh.free or Stop, not until the
+-- scene ends, so without this every load left the last world's water behind.
+function onDestroy()
+  pcall(clear_water)
+end
+
 function update(node, dt)
   flood.clock = flood.clock + dt
   if next(flood.jobs) then flood_step(FLOOD_SLICE) end
