@@ -339,6 +339,42 @@ local function ref(kind)
   return r
 end
 
+-- WHAT THE HOME WORLD LACKS (system_generator homeFeatures / bodiesWith). An
+-- ALIEN start (the new-save panel's Home world choice) may have no plants,
+-- ravines or rivers. Nothing is hidden for it: the player can fly to a world
+-- that has the thing and do the job there. A goal that needs it only carries
+-- a note saying where: "none on Kaolun: try Vesh". No generator in the scene,
+-- an older save, or a home that has it = no note. Kept per home world (the
+-- features never change once it is rolled), so it is cheap every frame.
+local note_home, notes = nil, {}
+local function home_note(what)
+  local sg = ref("system_generator")
+  if not (sg and sg.homeFeatures and sg.bodiesWith) then return nil end
+  local h = save.get("system.home")
+  local b1 = type(h) == "table" and type(h.bodies) == "table" and h.bodies[1]
+  local home = type(b1) == "table" and b1.name or nil
+  if not home then return nil end
+  if home ~= note_home then note_home, notes = home, {} end
+  local n = notes[what]
+  if n == nil then
+    n = false
+    local ok, f = pcall(sg.homeFeatures, home)
+    if ok and type(f) == "table" and f[what] == false then
+      local ok2, list = pcall(sg.bodiesWith, what)
+      local there = ok2 and type(list) == "table" and list[1] or nil
+      n = there and string.format("none on %s: try %s", home, there) or string.format("none on %s", home)
+    end
+    notes[what] = n
+  end
+  return n or nil
+end
+-- The note a goal carries, by what it needs (nil = none).
+local function goal_note(g)
+  if g and g.class == "flora" then return home_note("flora") end
+  return nil
+end
+function homeNote(what) return home_note(what) end
+
 -- ── the scale of the world you live on ──────────────────────────────────────
 
 -- The world the base is on. Every flight goal is measured against it, and it
@@ -431,9 +467,12 @@ end
 -- The goal's text with its resolved target in it. A label with no `%s` is a
 -- goal with nothing to fill in (landing, docking, a delivery).
 function goalLabel(g)
-  if not g.label or not g.label:find("%%s") then return g.label or "" end
+  local note = goal_note(g)
+  if not g.label or not g.label:find("%%s") then
+    return (g.label or "") .. (note and (" (" .. note .. ")") or "")
+  end
   local t = target_of(g)
-  return string.format(g.label, t and fmt_m(t) or "…")
+  return string.format(g.label, t and fmt_m(t) or "…") .. (note and (" (" .. note .. ")") or "")
 end
 
 -- Is goal `i` met? Either it latched on this flight, or it's one of the ones
@@ -1597,6 +1636,8 @@ function progGoalLabel(m, i, g, niches)
     if n == false then return "No rare plants of that kind here (waived)" end
     return "A rare plant " .. (NICHE_WHERE[n] or "from somewhere hard to reach")
   end
+  local note = goal_note(g)
+  if note then return (g.label or g.kind) .. " (" .. note .. ")" end
   return g.label or g.kind
 end
 

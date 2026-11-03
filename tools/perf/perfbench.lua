@@ -39,7 +39,7 @@
 -- "PB RESULT" lines and one "BENCHJSON {...}" line for bench.sh to tabulate.
 defaults = { slot = 13, vabidle = 0, seed = 1911564384, quit = 1, onfoot = 30, clicks = 20, hold = 0.5, gap = 0.5,
              mapsecs = 12, flysecs = 45, drivesecs = 45, out = 110, settle = 8, sleepsecs = 20, sample = 0,
-             usersave = 0, standsecs = 20, walksecs = 40, meadow_m = 220, digclicks = 100, parksecs = 45, parksecs2 = 20,
+             usersave = 0, homealien = 0, homeseed = 0, standsecs = 20, walksecs = 40, meadow_m = 220, digclicks = 100, parksecs = 45, parksecs2 = 20,
              burst = 0, gpusecs = 10, gpu_out = 200, fullscreen = 0, circthr = 0.25, starter_cut = 150 }
 
 local MODE = "base"
@@ -424,6 +424,11 @@ local function boot()
                       g_radmin = 600, g_radmax = 950, g_gravmin = 3.5, g_gravmax = 8.5, g_star = 1.0 }) do save.set(k, v) end
   local ns = findScript("menu_newsave")
   save.set("g_scale", math.floor(params.scale or (ns and ns.WORLD_SCALE) or 4))
+  -- the panel's HOME WORLD choice: an alien start (homealien=1) with its seed
+  if (params.homealien or 0) > 0 then
+    save.set("g_homeKind", "alien")
+    save.set("g_homeSeed", math.floor(params.homeseed or 1))
+  end
   end
   perf.enable(true)
   -- the script sampler (rc16) slows tight loops, so it is a separate run's

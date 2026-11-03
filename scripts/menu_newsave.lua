@@ -18,6 +18,11 @@
 --   GAME MODE    Career (today's rules) / Sandbox (unlimited funds, top
 --                reputation, every part unlocked: company.lua, `game.mode`)
 --   CREW SAFETY  Permadeath / Rescue / Invincible (crew.lua's `crew.safety`)
+-- and a third, HOME WORLD: Earth-like (the default, the intended game) or an
+-- Alien world rolled from the whole geology catalogue (system_generator
+-- homeKindFor / alienHomeWorld), with a seed of its own to type (blank = a
+-- random one, kept in the save). Saved as `g_homeKind = "alien"` and
+-- `g_homeSeed`; an Earth-like save writes neither, so it is the save it was.
 
 open = false -- published: menu_slot opens the panel, buttons check it
 
@@ -49,6 +54,8 @@ local AG_X, AG_W, PANEL_W, GAL_W = 604, 336, 960, 600
 local ed = nil             -- scripts/emblem.lua's editor state
 local mode = "career"      -- GAME MODE: "career" | "sandbox"
 local safety = "death"     -- CREW SAFETY: "death" | "rescue" | "invincible"
+local home = "earth"       -- HOME WORLD: "earth" | "alien"
+local hseed_str = ""       -- the alien world's seed as typed ("" = random)
 
 local MODES = {
   { "career", "Career", "Earn every dollar and build a name: contracts, research and standing gate the way up" },
@@ -59,6 +66,11 @@ local SAFETIES = {
   { "rescue", "Rescue", "A crew member who would die is brought home instead, for a fee" },
   { "invincible", "Invincible", "Nothing hurts the crew: no falls, shots, crushes, heat or running out of air" },
 }
+local HOMES = {
+  { "earth", "Earth-like", "Recommended: the mild, living world built for the colony" },
+  { "alien", "Alien", "A challenge: some contracts may need another world" },
+}
+local HSEED_MAX = 9
 local function blurb(list, v)
   for _, o in ipairs(list) do if o[1] == v then return o[3] end end
   return ""
@@ -68,6 +80,12 @@ function options() return mode, safety end
 function setOptions(m, s)
   if m == "career" or m == "sandbox" then mode = m end
   if s == "death" or s == "rescue" or s == "invincible" then safety = s end
+end
+-- …and the home world: kind ("earth" | "alien") and its seed as typed.
+function homeOptions() return home, hseed_str end
+function setHome(k, seedText)
+  if k == "earth" or k == "alien" then home = k end
+  if seedText ~= nil then hseed_str = tostring(seedText):gsub("%D", ""):sub(1, HSEED_MAX) end
 end
 local panel_node = nil
 
@@ -133,6 +151,7 @@ function openFor(n)
   seed_str = ""
   open = true
   mode, safety = "career", "death"
+  home, hseed_str = "earth", ""
   local e = emblem_lib()
   ed = e and e.newEditor and e.newEditor(nil, nil) or nil
   local lbl = find("NG Slot Label")
@@ -208,6 +227,17 @@ function press(role)
     save.set("game.mode", mode)
     save.set("crew.safety", safety)
     save.set("crew.death", safety == "death")
+    -- HOME WORLD: only an alien start writes anything (an Earth-like save is
+    -- exactly the save it always was). A blank seed is a random one, kept.
+    if home == "alien" then
+      local hs = tonumber(hseed_str)
+      if not (hs and hs > 0) then
+        local r = rng and rng() or nil
+        hs = r and r:int(1, 999999999) or (math.floor(os.time() % 999999999) + 1)
+      end
+      save.set("g_homeKind", "alien")
+      save.set("g_homeSeed", math.floor(hs))
+    end
     -- A new galaxy is made at the CURRENT world scale, and keeps it for life
     -- (system_generator SCALES; game_manager reads it back). The sliders above
     -- are already in that scale's units.
@@ -235,9 +265,32 @@ local function describe_agency(e)
   end
   pick("mode", "Mode", MODES, mode, function(v) mode = v end)
   pick("safety", "Crew", SAFETIES, safety, function(v) safety = v end)
+  -- HOME WORLD: the same segmented keys, and for an alien start its seed in a
+  -- small CRT field on the same row (blank = random). One line under it.
+  do
+    local row = { "row", key = "home", w = "100%", h = 28, gap = 6, pad = 0, align = "center",
+      { "text", key = "l", style = "panel/label", w = 74, h = "fit", text = "World" } }
+    for _, o in ipairs(HOMES) do
+      row[#row + 1] = { "button", key = o[1], style = "panel/choice", w = "grow", h = 26, text = o[2],
+        selected = (o[1] == home), textAlign = "center", textValign = "center", tooltip = o[3],
+        onClicked = function() if o[1] ~= home then sfx("click") end; home = o[1] end }
+    end
+    if home == "alien" then
+      local f = ui and ui.focused and ui.focused()
+      local typing = f and f.name == "FieldHomeSeed"
+      row[#row + 1] = { "field", key = "seed", name = "FieldHomeSeed", style = "menu/field", w = 104, h = 26,
+        maxLen = HSEED_MAX, placeholder = "seed: random", text = typing and nil or hseed_str, textValign = "center",
+        tooltip = "The world's seed (digits): the same seed always makes the same world. Blank picks one at random",
+        onChanged = function(n) hseed_str = ((n and n.text) or ""):gsub("%D", ""):sub(1, HSEED_MAX) end,
+        onSubmitted = function(n) hseed_str = ((n and n.text) or ""):gsub("%D", ""):sub(1, HSEED_MAX) end }
+    end
+    rows[#rows + 1] = row
+    rows[#rows + 1] = { "text", key = "home_h", style = "panel/hint", w = "100%", h = "fit", wrap = true,
+                        text = blurb(HOMES, home) }
+  end
   return {
     { "box", key = "vr", pin = "topLeft", x = GAL_W - 2, y = 24, w = 1, h = 564, style = "panel/rule" },
-    { "col", key = "agency", pin = "topLeft", x = AG_X, y = 22, w = AG_W, h = "fit", gap = 7, pad = 0,
+    { "col", key = "agency", pin = "topLeft", x = AG_X, y = 22, w = AG_W, h = "fit", gap = 4, pad = 0,
       align = "start", items = rows, function(x) return x end },
   }
 end
@@ -252,7 +305,7 @@ end
 
 local function name_focused()
   local f = ui and ui.focused and ui.focused()
-  return f ~= nil and f.name == "FieldAgencyName"
+  return f ~= nil and (f.name == "FieldAgencyName" or f.name == "FieldHomeSeed")
 end
 
 function update(node, dt)

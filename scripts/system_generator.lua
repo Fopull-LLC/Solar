@@ -1159,6 +1159,205 @@ LAYERS3.maria = function(q, g, R, o, w)
   return rules
 end
 
+-- ── ALIEN FORMATIONS (`g_alienGen`) ─────────────────────────────────────────
+--
+-- "Far-out alien planets should feel like exploring the universe and finding
+-- something new" (2026-11-03). The layers above make worlds that are right for
+-- a home system: ranges, valleys, mesas. Past it, every world gets a
+-- SIGNATURE, a formation it is known by, pushed as far as the engine's layers
+-- go: FINS (knife-edge ridged walls, holed through by the overhang noise into
+-- windows), ARCHES (mesas eaten by strong 3D overhang noise into bridges and
+-- undercut ledges), HOODOOS (a labyrinth of narrow, stepped walls broken into
+-- stacks with undercut caps), KARST (sinkholes and tower karst), MESAS
+-- (sheer terraced buttes with undercut caprock), RIBS (a few colossal stepped
+-- ridges running round the world) and SPONGE (the ground itself honeycombed:
+-- bridges, tunnels and ledges that seem to float; exotic worlds only).
+--
+-- How strange is set by REACH, 0..1: the home system's bodies 0.08–0.3 (a
+-- touch: an undercut cliff, a few sinkholes, sharper ridges, and only on some
+-- of them), another star's 0.55–0.95, and the exotic chemistries (crystal,
+-- sulfur, greenhouse…) more on top. Everything is drawn from its own stream,
+-- seeded by the body's terrain seed, so a world's formation is deterministic
+-- and the main roll and the layer stream `q` are untouched.
+--
+-- VERSIONED like g_homeGen: a save made before this keeps every world as it
+-- was (its digs stay in the same ground); a fresh one is written ALIEN_GEN.
+-- The built home world (homeOpts3) never comes through here.
+--
+-- What the layers cannot do — a free-standing arch placed on a plain, a
+-- vertical hoodoo column, a crystal pillar field — needs the engine (cards
+-- drafted 2026-11-03: placed SDF features, anisotropic overhang noise).
+ALIEN_GEN = 1
+-- Probes and tests may pin the version (nil = the save's).
+ALIEN_GEN_FORCE = nil
+
+-- The alien recipe a roll runs: the save's `g_alienGen`, else 0 for a save
+-- that has already been played and ALIEN_GEN for a fresh one (written back so
+-- it never changes). No save API (the editor's offline harness): ALIEN_GEN.
+function alienGenFor()
+  if ALIEN_GEN_FORCE ~= nil then return ALIEN_GEN_FORCE end
+  if not (save and save.get) then return ALIEN_GEN end
+  local v = save.get("g_alienGen")
+  if v ~= nil then return tonumber(v) or 0 end
+  local old = save.get("g_played") ~= nil or save.get("base.body") ~= nil
+    or save.get("system.home") ~= nil or save.get("parts.rating") ~= nil
+    or save.get("fleet.next") ~= nil
+  v = old and 0 or ALIEN_GEN
+  if save.set then save.set("g_alienGen", v) end
+  return v
+end
+
+-- How much stranger than its type an exotic chemistry runs.
+ALIEN_EXOTIC = { crystal = 0.3, sulfur = 0.25, greenhouse = 0.2, volcanic = 0.15, titan = 0.15, frost = 0.1, glacial = 0.05 }
+-- Each type's signatures (the first is the fallback when one is out of reach).
+ALIEN_SIGS = {
+  archipelago = { "arches", "hoodoos" }, verdant = { "karst", "arches" }, alpine = { "fins", "hoodoos" },
+  canyon = { "arches", "mesas", "hoodoos" }, steppe = { "mesas", "hoodoos" }, dune = { "fins", "ribs" },
+  saltflat = { "mesas", "karst" }, ironred = { "mesas", "hoodoos", "arches" }, tundra = { "karst", "mesas" },
+  glacial = { "fins", "sponge" }, volcanic = { "karst", "ribs" }, sulfur = { "karst", "mesas", "sponge" },
+  greenhouse = { "ribs", "fins", "sponge" }, crystal = { "fins", "sponge", "hoodoos" }, titan = { "karst", "hoodoos" },
+  frost = { "karst", "sponge" }, regolith = { "karst", "ribs" }, maria = { "karst" },
+}
+
+-- A world's reach: 0 plausible … 1 as strange as the layers go. `homeStar` is
+-- nil while the home system is being built (roll sets it after) and set for
+-- every neighbour (buildNeighbour refuses without it), so it tells the two
+-- apart without a new argument through buildSystem.
+local function alien_reach(a, g)
+  local far = homeStar ~= nil
+  local t
+  if far then t = a:range(0.55, 0.95)
+  else t = a:range(0.08, 0.22) + ((g.Tk or 300) < 150 and 0.06 or 0) end
+  return clamp01(t + (ALIEN_EXOTIC[g.type] or 0) * (far and 1 or 0.5))
+end
+
+-- Never weaken a layer the type already set (its geology, and the type checks
+-- in tests/smoke_geology, rely on it): take the stronger of each number.
+local function alien_overhangs(o, depth, scale, strength)
+  local old = o.overhangs
+  if old then
+    o.overhangs = { depth = math.max(old.depth, depth), scale = scale, strength = math.max(old.strength, strength) }
+  else
+    o.overhangs = { depth = depth, scale = scale, strength = strength }
+  end
+end
+local function alien_mountains(o, R, m)
+  local old = o.mountains
+  if old then
+    m.height = math.max(m.height, old.height)
+    m.sharpness = math.max(m.sharpness, old.sharpness)
+  end
+  m.height = math.min(m.height, R * 0.145)
+  o.mountains = m
+end
+local function alien_warp(o, strength, scale)
+  if not o.warp or o.warp.strength < strength then o.warp = { strength = strength, scale = scale } end
+end
+-- Sinkholes: small, deep spherical pits, added to the world's craters (one
+-- size range, so a cratered world keeps its big ones among them). Every
+-- sample of the fill tests every crater, so the count stays at 30 or under.
+local function alien_sinkholes(o, R, n, rmin, rmax)
+  local n0 = o.craters or 0
+  o.craters = math.min(30, n0 + n)
+  o.craterMin = math.min(n0 > 0 and o.craterMin or 1, rmin / R)
+  o.craterMax = math.max(n0 > 0 and o.craterMax or 0, rmax / R)
+end
+
+ALIEN_FORM = {}
+-- `a` the alien stream, `s` 0..1 how far past plausible, `R` the radius.
+ALIEN_FORM.fins = function(a, g, R, o, s, L)
+  alien_mountains(o, R, { height = R * L(0.06, 0.13), scale = a:range(5, 10), sharpness = L(4, 9),
+    coverage = L(0.4, 0.75), octaves = 2 })
+  alien_warp(o, L(0.06, 0.18), a:range(2, 4))
+  alien_overhangs(o, L(8, 12), a:range(0.06, 0.08), L(3, 6))
+end
+ALIEN_FORM.arches = function(a, g, R, o, s, L)
+  if not o.mountains then
+    alien_mountains(o, R, { height = R * L(0.04, 0.08), scale = a:range(7, 11), sharpness = 1.4,
+      coverage = L(0.45, 0.65), octaves = 3 })
+  end
+  if g.type ~= "glacial" then
+    local top = o.mountains.height * a:range(0.35, 0.5)
+    o.plateau = { height = math.max(o.plateau and o.plateau.height or -1e9, top), smooth = 0.6 }
+    o.terrace = { step = a:range(4, 7), sharpness = math.max(o.terrace and o.terrace.sharpness or 0, L(0.8, 0.95)) }
+  end
+  alien_overhangs(o, L(14, 20), a:range(0.05, 0.065), L(8, 14))
+end
+ALIEN_FORM.hoodoos = function(a, g, R, o, s, L)
+  alien_mountains(o, R, { height = R * L(0.03, 0.07), scale = R / a:range(45, 70), sharpness = L(2.5, 5),
+    coverage = L(0.35, 0.6), octaves = 1 })
+  o.terrace = { step = a:range(3, 5), sharpness = math.max(o.terrace and o.terrace.sharpness or 0, L(0.8, 0.93)) }
+  alien_overhangs(o, L(6, 10), a:range(0.09, 0.13), L(2.5, 6))
+end
+ALIEN_FORM.karst = function(a, g, R, o, s, L)
+  if g.type ~= "maria" then   -- maria stays a flooded plain (its type)
+    alien_mountains(o, R, { height = R * L(0.03, 0.08), scale = R / a:range(50, 80), sharpness = L(3, 6),
+      coverage = L(0.3, 0.5), octaves = 3 })
+    -- a type's own plateau (sulfur's sinter) would shave the towers flat
+    if o.plateau then o.plateau.height = math.max(o.plateau.height, o.mountains.height * 0.8) end
+  end
+  alien_sinkholes(o, R, math.floor(L(12, 28) + 0.5), 5, L(10, 22))
+  alien_overhangs(o, 10, a:range(0.06, 0.08), L(3, 6))
+end
+ALIEN_FORM.mesas = function(a, g, R, o, s, L)
+  if not o.mountains and g.type ~= "maria" then
+    alien_mountains(o, R, { height = R * L(0.05, 0.1), scale = a:range(6, 10), sharpness = 1.0,
+      coverage = L(0.5, 0.7), octaves = 3 })
+  end
+  if g.type ~= "glacial" then
+    local top = (o.mountains and o.mountains.height or o.relief) * a:range(0.3, 0.45)
+    o.plateau = { height = math.max(o.plateau and o.plateau.height or -1e9, top), smooth = 0.5 }
+  end
+  o.terrace = { step = L(4, 9), sharpness = math.max(o.terrace and o.terrace.sharpness or 0, L(0.85, 0.97)) }
+  alien_overhangs(o, 8, a:range(0.06, 0.09), L(2.5, 6))
+end
+ALIEN_FORM.ribs = function(a, g, R, o, s, L)
+  alien_mountains(o, R, { height = R * L(0.07, 0.14), scale = a:range(2.5, 4.5), sharpness = L(3, 8),
+    coverage = L(0.5, 0.9), octaves = 1 })
+  if not o.terrace then o.terrace = { step = L(10, 5), sharpness = L(0.4, 0.75) } end
+  alien_warp(o, L(0.04, 0.12), a:range(2, 3))
+  alien_overhangs(o, 8, a:range(0.07, 0.1), L(2, 5))
+end
+ALIEN_FORM.sponge = function(a, g, R, o, s, L)
+  alien_overhangs(o, L(16, 22), a:range(0.07, 0.09), L(12, 18))
+end
+
+-- The touch a home-system body gets (reach under 0.35): a hint of what its
+-- type would be out there, on some bodies.
+local function alien_touch(a, g, R, o, sig, t)
+  if a:next() > 0.6 then return end
+  if o.overhangs then
+    o.overhangs.strength = o.overhangs.strength * (1 + t)
+  else
+    o.overhangs = { depth = 10, scale = a:range(0.06, 0.09), strength = 1.5 + 4 * t }
+  end
+  if sig == "karst" then alien_sinkholes(o, R, a:int(3, 8), 4, 9)
+  elseif (sig == "fins" or sig == "ribs" or sig == "hoodoos") and o.mountains then
+    o.mountains.sharpness = o.mountains.sharpness * (1 + t)
+  elseif (sig == "mesas" or sig == "arches") and o.terrace then
+    o.terrace.sharpness = math.max(o.terrace.sharpness, 0.6 + t)
+  end
+end
+
+-- Apply a world's formation to its opts (geoOpts3, after every `q` draw).
+-- `reach` nil = from where the body is (alien_reach). Returns the signature
+-- and the reach, for the shape record.
+local function alienFormations(g, R, o, seed, reach)
+  local a = rng(((seed or 1) * 13 + 4111) % 4294967291 + 1)
+  local t = reach or alien_reach(a, g)
+  local sigs = ALIEN_SIGS[g.type] or { "arches" }
+  local sig = sigs[a:int(1, #sigs)]
+  if sig == "sponge" and t < 0.6 then sig = sigs[1] end
+  if t < 0.35 then
+    alien_touch(a, g, R, o, sig, t)
+    return nil, t
+  end
+  local s = clamp01((t - 0.35) / 0.65)
+  local function L(x, y) return x + (y - x) * s end
+  ALIEN_FORM[sig](a, g, R, o, s, L)
+  return sig, t
+end
+
 -- The planet's sea level (metres above the radius) for a geology on scale 3,
 -- or nil when dry. Read by geoOpts3 and by buildSystem, so the water and the
 -- shoreline the terrain paints are one number.
@@ -1170,7 +1369,7 @@ end
 -- Returns the opts and a `shape` table the rest of the generator reads: the
 -- sea's altitude, the highest and lowest ground the layers can make, and
 -- whether the world has rivers (so lakes and rivers are worth asking for).
-function geoOpts3(g, radius, caveScale, sc, seed)
+function geoOpts3(g, radius, caveScale, sc, seed, reach)
   local q = rng(((seed or 1) * 7 + 911) % 4294967291 + 1)
   -- The fbm base: the world's relief fraction (16% cap as on scale 2), then
   -- each world's own share of it — the ranges are the mountains' job now.
@@ -1276,6 +1475,13 @@ function geoOpts3(g, radius, caveScale, sc, seed)
   -- 0.117.0-rc6 (card 0425) a triangle whose corners carry one slot draws
   -- from that slot alone: with no atlas floor the red-subsoil test world
   -- shows 0.19% red from 250 m (rc3: 11.4%), and the floor goes.
+  -- ALIEN FORMATIONS (g_alienGen 1+): the type's signature, as strange as the
+  -- body is far from home (`reach` nil = from where it is). After every `q`
+  -- draw, and before the subsoil and the shape read the overhangs, so an older
+  -- save's worlds come out as they did and a new one's depths follow.
+  local alien = alienGenFor() >= 1
+  local sig, reachT
+  if alien then sig, reachT = alienFormations(g, radius, o, seed, reach) end
   local lean = o.overhangs and o.overhangs.strength or 0
   o.subsoilDepth = math.max(o.subsoilDepth or 0, 2 * o.voxel, lean + o.voxel)
   o.strataDepth = math.max(o.strataDepth or 0, o.subsoilDepth + 4)
@@ -1286,8 +1492,11 @@ function geoOpts3(g, radius, caveScale, sc, seed)
   if o.plateau then hi = math.min(hi, math.max(o.plateau.height, 0) + relief * 0.25 + 2) end
   hi = hi + lean
   local cut = math.max(o.ravines and o.ravines.depth or 0, o.rivers and o.rivers.depth or 0)
+  -- (a sinkhole's floor: its ball is centred 0.3 relief up, ALIEN only so an
+  -- older save's occluder stays where it was)
+  if alien and (o.craters or 0) > 0 then cut = math.max(cut, (o.craterMax or 0) * radius - relief * 0.3) end
   local shape = { seaAlt = seaA, peak = hi, low = relief + cut + lean, rivers = o.rivers ~= nil,
-    snowline = w.snowline }
+    snowline = w.snowline, formation = sig, reach = reachT }
   return o, shape
 end
 
@@ -1679,6 +1888,175 @@ local function homeWorld(spec, p, sc, radius)
     HOME_GEN, geo.label, Tk, opts.seed, opts.mountains.scale, opts.mountains.coverage, shape.home.mask.gap or 0,
     shape.home.mask.capN or 0, shape.home.mask.capS or 0, shape.home.mask.eq or 0, shape.home.mask.searched or 0))
   return spec
+end
+
+-- ── AN ALIEN HOME (`g_homeKind = "alien"`, `g_homeSeed`) ────────────────────
+-- The new-save panel's "Home world" choice. The built Earth-like world above
+-- is the default and the intended game; an ALIEN start rolls the home planet
+-- from the geology catalogue the way every other body is rolled — a dune sea,
+-- a sulfur plain, a hydrocarbon world, a glacier — for other playthroughs and
+-- for dropping in to see other worlds. It is a challenge, on purpose: a world
+-- with no ravines, rivers or plants sends the player to another world for
+-- the jobs that need them (homeFeatures says what home lacks, bodiesWith
+-- where to go instead; the contracts still stand).
+--
+-- What it keeps so the game works at all:
+--   * air, always (rolled density and colour, breathable or not: the suit is
+--     assumed) — parachutes, wings and the starter's landing need some;
+--   * gravity in a playable band (ALIEN_G), published as the home's µ; the
+--     parts are rated for whatever the home world is (builder.lua rating), so
+--     the starter keeps its TWR and its hop;
+--   * no airless rock, no world with no ground to stand on (no lava seas
+--     exist in the catalogue, and archipelagos are mostly water);
+--   * the base is sited by game_manager's dry-site search on the real ground,
+--     which base_facilities then grades, as on a rolled (homeGen 1) home: the
+--     built world's homeSite reads homeHeight, which knows only the home
+--     recipe's layers, not a rolled world's warp, plateaus, craters or dunes.
+--
+-- THE SEED. The home world is made from its own stream, seeded by the home
+-- seed alone: the same home seed is the same world (type, size, gravity, air,
+-- ground) in any galaxy. The rest of the system is the galaxy seed's. Both are
+-- kept in the save, so a reload regenerates the same world. A save without
+-- `g_homeKind` (every save made before, and every default one) never comes here.
+ALIEN_G = { 7.0, 12.5 }         -- the alien home's surface gravity band, m/s²
+ALIEN_AIR = { 0.45, 0.9 }       -- its air density
+ALIEN_T = { 110, 400 }          -- its surface temperature is clamped into (K)
+-- The types an alien home is rolled from, and how often. The Earth-like ones
+-- are rare (that is what the default is for); no airless type, no archipelago.
+ALIEN_TYPES = {
+  { "ironred", 2.5 }, { "crystal", 2.5 }, { "dune", 2 }, { "canyon", 2 }, { "volcanic", 2 },
+  { "titan", 2 }, { "saltflat", 1.5 }, { "glacial", 1.5 }, { "sulfur", 1.5 }, { "greenhouse", 1.5 },
+  { "tundra", 1.5 }, { "alpine", 0.6 }, { "steppe", 0.6 }, { "verdant", 0.4 },
+}
+
+-- The save's home kind: "earth" (the default) or "alien", and the alien
+-- world's seed (nil when the save has none yet). Explicit (`p.homeKind`,
+-- `p.homeSeed`) wins over the save's. Only scale 3+ has a choice.
+function homeKindFor(p)
+  local sc = scaleOf(p.scale)
+  if not sc.layers then return "earth", nil end
+  local k, s = p.homeKind, p.homeSeed
+  if k == nil and save and save.get then
+    k = save.get("g_homeKind")
+    if s == nil then s = save.get("g_homeSeed") end
+  end
+  if k ~= "alien" then return "earth", nil end
+  s = tonumber(s)
+  if s and s > 0 then return "alien", math.floor(s) end
+  return "alien", nil
+end
+
+-- The alien home's type, from its stream.
+local function alien_type(q)
+  local total = 0
+  for _, t in ipairs(ALIEN_TYPES) do total = total + t[2] end
+  local x = q:next() * total
+  for _, t in ipairs(ALIEN_TYPES) do
+    x = x - t[2]
+    if x <= 0 then return t[1] end
+  end
+  return ALIEN_TYPES[#ALIEN_TYPES][1]
+end
+
+-- Turn the rolled first planet into an alien home (see above). `spec` is what
+-- the main roll built: its orbit, name and terrain id stay; everything the
+-- world is made of comes from the home seed. Returns the spec and the radius.
+local function alienHomeWorld(spec, p, sc, seed)
+  -- (mixed and warmed: xorshift's first draws off a small seed are small too,
+  -- so seeds 1, 7, 42 would all pick the first type)
+  local q = rng((seed * 2654435761 + 0x5BD1E995) % 4294967291 + 1)
+  for _ = 1, 4 do q:next() end
+  local id = alien_type(q)
+  local T = GEO_TYPES[id].T
+  local lo, hi = math.max(T[1], ALIEN_T[1]), math.min(T[2], ALIEN_T[2])
+  if hi < lo then lo, hi = ALIEN_T[1], ALIEN_T[2] end
+  local Tk = q:range(lo, hi)
+  local radius = q:range(p.radiusMin, p.radiusMax)
+  local g = q:range(ALIEN_G[1], ALIEN_G[2])
+  local density = q:range(ALIEN_AIR[1], ALIEN_AIR[2])
+  local geo = rollGeology(q, { type = id, Tk = Tk, air = true })
+  local tseed = q:int(1, 1e9)
+  local opts, shape = geoOpts3(geo, radius, p.caveScale, sc, tseed)
+  opts.seed = tseed
+  geo.alienHome = true
+  local cel = spec.cel
+  cel.mu = g * radius * radius
+  cel.bodyRadius = radius + math.max(radius * 0.035, 4)
+  cel.soi = math.max(cel.soi, cel.bodyRadius * (sc.soiFloor or 12))
+  if cel.a then cel.soi = math.min(cel.soi, cel.a * 0.3) end
+  cel.occluderRadius = math.max((radius - (shape and shape.low or opts.relief) - opts.caveDepth) * 0.95, 0)
+  local ga = geo.air or { hue = 0.58, sat = 0.4, clouds = 0.3 }
+  cel.atmoColor = hsv(ga.hue, ga.sat, 0.85)
+  cel.atmoHeight = airTopOf(sc, radius, q:range(0.25, 0.45))
+  cel.atmoDensity = density
+  cel.clouds = ga.clouds
+  spec.airScaleH = sc.airScaleH and cel.atmoHeight * sc.airScaleH or nil
+  spec.geo, spec.opts, spec.shape = geo, opts, shape
+  spec.kind = geo.family
+  spec.sea = (shape and shape.seaAlt) and (radius + shape.seaAlt) or 0
+  spec.temp = tempNorm(Tk)
+  print(string.format("    ALIEN HOME (home seed %d): %s, %.0f K, r %.0f, g %.2f, air %.2f, sea %s",
+    seed, geo.label, Tk, radius, g, density, shape and shape.seaAlt and string.format("%+.1f m", shape.seaAlt) or "none"))
+  return spec, radius
+end
+
+-- What the home world has, for the contracts (missions.lua) and the panels:
+-- the places and things a goal can ask for. Every key is true on the built
+-- Earth-like world. `name` defaults to the save's home (the roster's first).
+--   { kind = "earth"|"alien", type, label, air, breathable, sea, rivers, lakes,
+--     ravines, caves, overhangs, mountains, flora, moon }
+local aero_ref = nil
+function homeFeatures(name)
+  local h = save.get("system.home")
+  local bodies = type(h) == "table" and type(h.bodies) == "table" and h.bodies or {}
+  name = name or (bodies[1] and bodies[1].name)
+  if type(name) ~= "string" then return nil end
+  local w = save.get("world." .. name)
+  if type(w) ~= "table" then return nil end
+  local layers = (type(w.shape) == "table" and type(w.shape.layers) == "table") and w.shape.layers or {}
+  local gs = GENSPEC[name]
+  local o = gs and gs.opts
+  local geo = type(w.geo) == "table" and w.geo or {}
+  local bio = type(w.bio) == "table" and w.bio or {}
+  local air = (w.atmo or 0) > 0.15
+  local moon = false
+  for _, b in ipairs(bodies) do if b.parent == name then moon = true end end
+  local kind = (save.get("g_homeKind") == "alien" and name == (bodies[1] and bodies[1].name)) and "alien" or "earth"
+  if not (aero_ref and aero_ref.valid ~= false) then aero_ref = findScript and findScript("aero") or nil end
+  local ae = aero_ref
+  local oxy = (ae and ae.oxygen) and ae.oxygen(w) or (geo.home and 1 or 0)
+  return {
+    kind = kind, type = geo.type, label = geo.label,
+    air = air,
+    breathable = air and (oxy or 0) >= 0.5,
+    sea = (w.sea or 0) > 0,
+    rivers = layers.rivers == true,
+    lakes = w.hydro == true,
+    ravines = layers.ravines == true,
+    caves = o == nil or (o.caveDepth or 0) > 0,
+    overhangs = layers.overhangs == true,
+    mountains = layers.mountains == true,
+    -- plants grow on land under air (flora_gen speciesFor), and in the sea
+    flora = air or (w.sea or 0) > 0,
+    fertility = bio.fertility,
+    moon = moon,
+  }
+end
+
+-- The other worlds of the home system that have `what` (a homeFeatures key),
+-- in roster order (planets outward, each followed by its moons): where to go
+-- for what the home world lacks. Names only; {} when none does.
+function bodiesWith(what)
+  local h = save.get("system.home")
+  local bodies = type(h) == "table" and type(h.bodies) == "table" and h.bodies or {}
+  local out = {}
+  for i, b in ipairs(bodies) do
+    if i > 1 and type(b.name) == "string" then
+      local f = homeFeatures(b.name)
+      if f and f[what] == true then out[#out + 1] = b.name end
+    end
+  end
+  return out
 end
 
 -- Arc distance (metres on radius R) from unit u to the nearest point of a
@@ -2153,6 +2531,8 @@ lastSpawnX, lastSpawnY, lastSpawnZ = 0, 0, 0
 lastBaseDir, lastHomeSite = nil, nil
 -- The home recipe the last roll ran (see homeGenFor).
 lastHomeGen = 1
+-- The home kind the last roll ran ("earth" | "alien", see homeKindFor).
+lastHomeKind = "earth"
 
 -- The rails ROOT and the galaxy-wide name set, published so `galaxy.lua` can
 -- hang its systems off the right star and never repeat a name. Both are set by
@@ -2358,7 +2738,17 @@ local function buildSystem(r, p, cfg)
       -- homeGen 2: the first planet of a new save is the built home world
       -- (everything above is still drawn, so the rest of the system is the
       -- same as the save would have rolled).
-      if pi == 1 and cfg.home and sc.layers and (p.homeGen or 1) >= 2 then
+      if pi == 1 and cfg.home and sc.layers and p.homeKind == "alien" then
+        -- An alien start (homeKindFor): the home seed's world instead. A save
+        -- that asked for one without a seed takes its terrain seed, kept.
+        local hs = tonumber(p.homeSeed)
+        if not (hs and hs > 0) then
+          hs = opts.seed or 1
+          if save and save.set then save.set("g_homeSeed", hs) end
+        end
+        spec, radius = alienHomeWorld(spec, p, sc, math.floor(hs))
+        kind, sea, temp, opts, cel = spec.kind, spec.sea, spec.temp, spec.opts, spec.cel
+      elseif pi == 1 and cfg.home and sc.layers and (p.homeGen or 1) >= 2 then
         spec = homeWorld(spec, p, sc, radius)
         kind, sea, temp, opts, cel = spec.kind, spec.sea, spec.temp, spec.opts, spec.cel
       end
@@ -2618,6 +3008,7 @@ local function roll(p)
   lastBaseDir, lastHomeSite = nil, nil
   site_wait, homeSitePending = nil, false
   lastHomeGen = tonumber(p.homeGen) or 1
+  lastHomeKind = (p.homeKind == "alien") and "alien" or "earth"
   homeGravGen = tonumber(p.gravGen) or 1
   homeScale = tonumber(p.scale) or 1
   scaleVersion, scale = homeScale, scaleOf(homeScale)
@@ -2672,5 +3063,6 @@ function regenerate(seed, opts)
   p.seed = (seed and seed > 0) and seed or 0
   p.homeGen = homeGenFor(p)
   p.gravGen = gravGenFor(p)
+  p.homeKind, p.homeSeed = homeKindFor(p)
   roll(p)
 end
