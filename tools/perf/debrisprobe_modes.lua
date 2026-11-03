@@ -8,7 +8,8 @@
 --   debris        to orbit, every stage dropped on the way; then the frame
 --                 cost coasting with the debris in the scene (`d_debris_live`,
 --                 debris_pack off) against packed (`d_debris_packed`, on),
---                 and off again (`d_debris_live2`); the PB RESULT lines
+--                 and off again (`d_debris_live2`); `spheres=1` keeps the
+--                 fall tick on through the ascent and d_debris_live; the PB RESULT lines
 --                 carry the frame stats, nodes and draws
 -- One `DB CHECK <name>: PASS|FAIL` line a check and `DB RESULT <mode>`.
 local DB = { fails = 0 }
@@ -132,7 +133,10 @@ end
 local function run_debris()
   local dp = findScript("debris_pack")
   if not DB.check("packer", dp ~= nil, "debris_pack is in the scene") then P("DB RESULT debris: FAIL"); return end
-  dp.active = false
+  -- spheres=1: the fall tick on (falling stages ride on spheres) and
+  -- packing kept out until the packed window, as the game runs it
+  dp.active = (params.spheres or 0) > 0
+  if dp.active then dp.PACK_DIST = 1e9 end
   local vc, nparts = db_launch()
   if not DB.check("rollout", vc ~= nil, "the rocket rolled out") then P("DB RESULT debris: FAIL"); return end
   local vn = vc.node
@@ -185,7 +189,9 @@ local function run_debris()
   DB.check("debris_present", live >= 3, "%d debris root(s) in the scene with packing off", live)
   DB.shot("1_orbit_live")
   coast("d_debris_live", params.coast or 20, vc)
+  P("DB fall tick so far: %d switch(es) to spheres, %d back to boxes", dp.fallStats and dp.fallStats.spheres or -1, dp.fallStats and dp.fallStats.boxes or -1)
   dp.active = true
+  dp.PACK_DIST = 1000
   dp.PACK_HOLD = 1.0
   local tw = time
   wait_for(function() return dp.packedCount() >= live or time - tw > 25 end, 30, "packing")

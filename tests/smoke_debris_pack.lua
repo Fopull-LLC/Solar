@@ -25,6 +25,8 @@ local function node(name, x, y, z, parent)
   function n:addTag(t) self._tags[t] = true end
   function n:hasTag(t) return self._tags[t] == true end
   function n:setAngles(y, p, r) self.yaw, self.pitch, self.roll = y, p, r end
+  n._rb = { shape = 2, half_x = 0.5, half_y = 0.25, half_z = 0.5, radius = 0.5 }
+  function n:getcomponent(k) if k == "RigidBody" then return self._rb end end
   setmetatable(n, { __index = function(t, k)
     if k == "tags" then local o = {}; for tg in pairs(t._tags) do o[#o + 1] = tg end; table.sort(o); return o end
   end })
@@ -41,6 +43,9 @@ local infos = {}
 local queue = {}
 local impulses = {}
 local controllers = {}
+local roots_spawned = {}
+RAY_HIT = nil
+local rebuilds = 0
 local cam = { cam_x = planet.x, cam_y = planet.radius + 2, cam_z = 0, valid = true }
 local fo = { valid = true, landing_surface = function(wx, wy, wz, ux, uy, uz)
   -- the ground at the radius under the point
@@ -62,6 +67,7 @@ local env = setmetatable({
     return o
   end,
   destroy = kill,
+  raycast = function(...) return RAY_HIT end,
   space = {
     body = function(n) if n == "Home" then return planet end end,
     dominant = function() return "Home" end,
@@ -82,13 +88,14 @@ local env = setmetatable({
   },
   assembly = {
     info = function(n) return infos[n.id] or { vel = { x = 0, y = 0, z = 0 }, grounded = false, mass = 1, com = { x = n.x, y = n.y, z = n.z } } end,
-    rebuild = function(n, fn) if fn then fn(n) end end,
+    rebuild = function(n, fn) rebuilds = rebuilds + 1; if fn then fn(n) end end,
     impulseAt = function(n, j) impulses[#impulses + 1] = { n = n, j = j } end,
   },
   createNode = function(name, parent, fn) queue[#queue + 1] = function() fn(node(name, 0, 0, 0, parent)) end end,
   spawn = function(prefab, pos, fn, parent)
     queue[#queue + 1] = function()
       local p = node(prefab, pos.x, pos.y, pos.z, parent)
+      if not parent then roots_spawned[#roots_spawned + 1] = prefab end
       fn(p)
     end
   end,
@@ -162,6 +169,7 @@ if back then
   ok(#kids == 2 and kids[1]:hasTag("craftpart") and kids[1]:hasTag("flight:1"), "...its parts tagged as before (a revert still finds them)")
 end
 ok(#impulses == 0, "a landed piece is not pushed")
+ok(roots_spawned[1] == "DebrisRoot", "its root is a DebrisRoot (a dynamic assembly body; a plain node is no compound): " .. tostring(roots_spawned[1]))
 
 -- an orbiting piece is carried along its conic to now
 store["debris.packed"] = store["debris.packed"] or {}
@@ -193,6 +201,35 @@ cam.cam_x, cam.cam_y, cam.cam_z = planet.x, planet.radius + 2, 0
 env.active = false
 tick(1.0)
 ok(env.packedCount() == 0, "active = false: every packed piece comes back (" .. env.packedCount() .. ")")
+
+-- ── fast-falling debris rides on spheres ────────────────────────────────────
+env.active = true
+cam.cam_x, cam.cam_y, cam.cam_z = planet.x, planet.radius + 2, 0
+local faller = stage("Kestrel stage 3", 0, 1400, 40, "flight:9")
+infos[faller.id] = { vel = { x = 0, y = -60, z = 0 }, grounded = false, mass = 2, com = { x = faller.x, y = faller.y, z = faller.z } }
+RAY_HIT = nil
+local r0 = rebuilds
+tick(0.5)
+local kids = faller:children()
+ok(kids[1]._rb.shape == 0 and math.abs(kids[1]._rb.radius - 0.25) < 1e-9 and rebuilds > r0,
+  "falling fast in the open, its parts' boxes are spheres inside them (radius = the least half-extent), one rebuild")
+-- something ahead within FALL_LOOK: the boxes come back before it gets there
+RAY_HIT = { distance = 40 }
+tick(0.5)
+ok(kids[1]._rb.shape == 2 and kids[2]._rb.shape == 2, "the ground ahead: back on its boxes before it lands")
+-- slow, or grounded: boxes, and it does not go back to spheres
+RAY_HIT = nil
+infos[faller.id].vel = { x = 0, y = -3, z = 0 }
+tick(0.5)
+ok(kids[1]._rb.shape == 2, "slow, it stays on its boxes")
+infos[faller.id].vel = { x = 0, y = -60, z = 0 }; infos[faller.id].grounded = true
+tick(0.5)
+ok(kids[1]._rb.shape == 2, "grounded, it stays on its boxes")
+infos[faller.id].grounded = false
+env.active = false
+tick(0.5)
+ok(kids[1]._rb.shape == 2, "switched off, nothing rides on spheres")
+kill(faller)
 
 if #failures == 0 then
   print(string.format("DEBRIS PACK SMOKE OK — %d checks passed", passed))

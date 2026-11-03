@@ -10,7 +10,7 @@
 -- the camera AND from the craft being flown (or the crew on foot), for
 -- PACK_HOLD seconds, it is written down and taken out of the scene; closer
 -- than UNPACK_DIST it is built again where it is now, the way flight_ops
--- rebuilds a parked craft (a plain root, the parts spawned under it at their
+-- rebuilds a parked craft (a DebrisRoot, the parts spawned under it at their
 -- places, one assembly.rebuild, the velocity given once it has its mass).
 --
 -- Where it is now (docs/positions-and-frames.md: body-relative, never a world
@@ -26,8 +26,10 @@
 -- A piece with a command part of its own leaves as a craft (r2SplitCraft) and
 -- is the fleet's: dormant and cheap already, and on the Tracking Station's board.
 --
+-- Fast-falling debris rides on spheres (FALLING DEBRIS ROLLS ON SPHERES below).
+--
 -- Globals (probes, tests): active (false: nothing is packed, everything packed
--- comes back), PACK_DIST, UNPACK_DIST, PACK_HOLD, packedCount(), packedList(),
+-- comes back, nothing rides on spheres), PACK_DIST, UNPACK_DIST, PACK_HOLD, packedCount(), packedList(),
 -- forgetTag(tag), packAll() (every candidate now, whatever the distance),
 -- unpackAll(), stats = { packed, unpacked, scanned, last_ms }.
 
@@ -177,6 +179,7 @@ local function where(rec)
 end
 
 local far_since = {}       -- root id → when it was first seen far
+local on_spheres = {}      -- root id → true while its parts ride on spheres (FALLING DEBRIS below)
 local building = {}        -- packed id → true while its parts are spawning
 
 local function pack(r)
@@ -186,6 +189,7 @@ local function pack(r)
   packed()[id] = rec
   put()
   far_since[r.id] = nil
+  on_spheres[r.id] = nil
   destroy(r)
   stats.packed = stats.packed + 1
   log(string.format("debris: packed %s (%d parts, %s, %s)", tostring(rec.name), #rec.parts, rec.kind, rec.body))
@@ -213,9 +217,11 @@ local function unpack(id, rec)
   building[id] = true
   local rx, up, rz = basis_of(rec.pitch or 0, rec.yaw or 0, rec.roll or 0)
   local total, landed = #rec.parts, 0
-  createNode(rec.name or "Debris", nil, function(root)
-    root.x, root.y, root.z = wx, wy, wz
+  -- (a plain node is no compound: the root is DebrisRoot, the Vessel's
+  -- dynamic assembly body with no controller)
+  spawn("DebrisRoot", vec3(wx, wy, wz), function(root)
     root:setAngles(rec.yaw or 0, rec.pitch or 0, rec.roll or 0)
+    root.name = rec.name or "Debris"
     for _, d in ipairs(rec.parts) do
       local px = wx + rx[1] * d.x + up[1] * d.y + rz[1] * d.z
       local py = wy + rx[2] * d.x + up[2] * d.y + rz[2] * d.z
@@ -282,13 +288,84 @@ function forgetTag(tag)
   return n
 end
 
-local scan_t = 0.0
+-- ── FALLING DEBRIS ROLLS ON SPHERES ─────────────────────────────────────────
+-- (2026-11-03, tools/perf/sweepprobe.sh) A compound that moves more than half
+-- its thinnest part in a tick is swept against the ground so it stops at the
+-- first touch, and the engine sweeps every box from its eight corners and its
+-- centre, the ground's distance field read at each, every tick, however high
+-- it is: a falling 8-part stage cost 2.7 ms of physics a frame, four of them
+-- 31 ms (the frame then ran slow and every tick cost more). The same stage on
+-- a sphere inside each part's box sweeps one point a part: 0.28 ms, four of
+-- them 1.2 ms. So a bare piece of debris that is moving fast in the open
+-- (over FALL_SPEED, not grounded, nothing along its path for FALL_LOOK
+-- seconds) has its parts' boxes made spheres, and gets them back before it
+-- reaches anything (the ground, a roof, a craft) or once it slows: it lands,
+-- tumbles and lies on its real boxes. A switch is one assembly.rebuild.
+FALL_SPEED = 12.0      -- m/s: faster than this a piece is swept every tick
+FALL_LOOK = 1.5        -- s of travel that must be clear before it rides on spheres
+FALL_EVERY = 0.25      -- s between looks
+fallStats = { spheres = 0, boxes = 0 }
+
+local function set_shapes(r, sphere)
+  for _, c in ipairs(r:children()) do
+    local rb = c.getcomponent and c:getcomponent("RigidBody")
+    if rb then
+      if sphere and rb.shape == 2 then
+        rb.radius = math.max(0.05, math.min(rb.half_x or 0.5, rb.half_y or 0.5, rb.half_z or 0.5))
+        rb.shape = 0
+      elseif not sphere and rb.shape == 0 and c.hasTag and c:hasTag(CRAFT_TAG) then
+        rb.shape = 2
+      end
+    end
+  end
+  assembly.rebuild(r)
+  if sphere then on_spheres[r.id] = true; fallStats.spheres = fallStats.spheres + 1
+  else on_spheres[r.id] = nil; fallStats.boxes = fallStats.boxes + 1 end
+end
+
+-- Is there anything within `secs` of travel along v (or a margin round it)?
+local function path_clear(r, info, secs)
+  local v = info.vel
+  local sp = len(v.x, v.y, v.z)
+  if sp < 1e-3 or not raycast then return false end
+  local c = info.com or { x = r.x, y = r.y, z = r.z }
+  local reach = sp * secs + 25.0
+  local skip = r:children()
+  skip[#skip + 1] = r
+  local hit = raycast(c.x, c.y, c.z, v.x / sp, v.y / sp, v.z / sp, reach, { ignore = skip })
+  return hit == nil
+end
+
+function fallTick()
+  local alive = {}
+  for id, r in pairs(debris_roots()) do
+    local info = assembly.info(r)
+    if info and info.vel then
+      alive[id] = true
+      local sp = len(info.vel.x, info.vel.y, info.vel.z)
+      local open = sp > FALL_SPEED and not info.grounded and not info.anchored
+      if on_spheres[id] then
+        if not open or not path_clear(r, info, FALL_LOOK * 0.6) then set_shapes(r, false) end
+      elseif open and path_clear(r, info, FALL_LOOK) then
+        set_shapes(r, true)
+      end
+    end
+  end
+  for id in pairs(on_spheres) do if not alive[id] then on_spheres[id] = nil end end
+end
+
+local scan_t, fall_t = 0.0, 0.0
 function start(node)
   store = nil
   seq = save.get("debris.seq") or 0
 end
 
 function update(node, dt)
+  fall_t = fall_t + (dt or 0)
+  if fall_t >= FALL_EVERY then
+    fall_t = 0.0
+    if active then fallTick() end
+  end
   scan_t = scan_t + (dt or 0)
   if scan_t < SCAN_EVERY then return end
   scan_t = 0.0
