@@ -10284,7 +10284,7 @@ local function drive_tick(node, info, dt)
   end
   local stall_k = math.max(0, math.min(1, (R2.stall_t - 0.5) / 1.0))
   local n_drive = 0
-  for _, w in ipairs(R2.wheels) do if (w.rs or 0) ~= 0 and w.out then n_drive = n_drive + 1 end end
+  for _, w in ipairs(R2.wheels) do if (w.rs or 0) ~= 0 and w.out and not w.coast then n_drive = n_drive + 1 end end
   n_drive = math.max(1, n_drive)
   -- HILL HOLD: off the stick and rolling DOWNHILL → the motors hold back the
   -- slope and a little more, so a rover let go of on a hill slows to a walk
@@ -10372,7 +10372,7 @@ local function drive_tick(node, info, dt)
         j.motor = 1
         j.motorSpeed = 0
         j.maxForce = math.min(full * 2.0 * (c.brake or 1), hill_a * (info.mass or 1) * w.r / grounded)
-      elseif (w.rs or 0) == 0 or st.motor == false or served < 0.3 or math.abs(want) < 0.02 then
+      elseif (w.rs or 0) == 0 or w.coast or st.motor == false or served < 0.3 or math.abs(want) < 0.02 then
         -- off the stick (or an undriven wheel): it rolls free
         j.motor = 0
         j.motorSpeed = 0
@@ -10770,6 +10770,13 @@ function motoPlan()
   local list = {}
   for _, w in ipairs(R2.wheels) do if not r2Stowed(w) then list[#list + 1] = w end end
   R2.bike = L.isBike(list)
+  -- A BIKE DRIVES ITS REAR WHEEL (as a dirt bike does): its forks are left
+  -- to roll and brake. Going forwards the push lifts weight off the front, so
+  -- a driven front tyre sat at its grip limit and held the bike back (engine
+  -- 0588: forwards 0.69× reverse). A fork told to drive in the builder still does.
+  for _, w in ipairs(R2.wheels) do
+    w.coast = R2.bike and w.susp and (w.susp.m.steer or -1) == 1 and (w.cfg or {}).drive == "auto" or nil
+  end
   local amin, amax = math.huge, -math.huge
   for _, w in ipairs(list) do amin, amax = math.min(amin, w.a or 0), math.max(amax, w.a or 0) end
   R2.wheelbase = math.max(0.3, amax - amin)
