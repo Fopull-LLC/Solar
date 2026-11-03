@@ -1590,6 +1590,31 @@ function launchCheck()
           lb.cant, math.abs(lb.tr))
       end
     end
+    -- THE JOINTS AT FULL THROTTLE (jointStress): one would carry more than it
+    -- holds as the stage accelerates.
+    local js = jointStress()
+    if js and js.ratio > 1.0 then
+      local p, q = parts[js.uid], parts[js.parent]
+      warn[#warn + 1] = string.format("at full throttle %s reaches %.1f g at %s and the joint between the %s and the %s takes %.0f kN — it holds %.0f: it tears above %.1f g. Keep that stage under %d%% throttle, or use a stronger part there",
+        js.stage == 1 and "the launch stage" or ("stage " .. js.stage), js.g, js.at,
+        p and p.def.label or "part", q and q.def.label or "part", js.kn, js.str,
+        js.tear_g, math.floor(100 / js.ratio))
+    end
+    local lbo = looseBoosters()
+    if lbo then
+      warn[#warn + 1] = lbo.n == 1
+        and "a side booster has no radial decoupler — it can't be dropped when it runs dry and rides along empty until its stage goes: put a Radial Decoupler between it and the core"
+        or string.format("%d side boosters have no radial decoupler — they can't be dropped when they run dry and ride along empty until their stage goes: put a Radial Decoupler between each and the core", lbo.n)
+    end
+  end
+  -- A ring a fraction of a degree off true: a hint, not a warning (LAUNCH
+  -- doesn't ask about it).
+  local hints = {}
+  local rt = ringTwist()
+  if rt then
+    local p = parts[rt.uid]
+    hints[#hints + 1] = string.format("the %s ring (×%d) is twisted %.2f° round the craft's axis, off its symmetry — select one and press SPACE to square the whole ring up",
+      p and p.def.label or "part", rt.n, rt.deg)
   end
   if not has.chute and has.crewed and not (has.wheel and not has.engine) then
     warn[#warn + 1] = "no parachute — the pod will not survive the landing"
@@ -1608,7 +1633,7 @@ function launchCheck()
       end
     end
   end
-  return { warn = warn, has = has }
+  return { warn = warn, has = has, hints = hints }
 end
 
 -- THE LAUNCH STAGE'S BALANCE, as the flight will feel it: the engines below
@@ -1666,6 +1691,226 @@ function launchBalance()
   end
   return { tp = math.sqrt(T.x * T.x + T.z * T.z), tr = T.y, lat = math.sqrt(F.x * F.x + F.z * F.z), off = off,
            cant = cant, k = 60.0 * math.min(1.5, tk), F = F, cot = { x = tx, y = ty, z = tz }, com = { x = cx, y = cy, z = cz } }
+end
+
+-- A joint's strength (kN) as the flight rates it: vessel_controller
+-- joint_strength at full health — the part's own `strength`, else a leg 300,
+-- a decoupler 400, else by kind.
+local JOINT_KN = { crewed = 600, tank = 450, engine = 500, structural = 350, canvas = 150 }
+local function joint_kn(d)
+  if (d.strength or 0) > 0 then return d.strength end
+  if d.legs then return 300 end
+  if d.decouple then return 400 end
+  return JOINT_KN[d.kind or "structural"] or 350
+end
+
+-- THE JOINTS AT FULL THROTTLE (2026-11-02: the player's deep-space rocket
+-- tore at its FT-S joint at about 4 g). The flight's stress model
+-- (vessel_controller stressSolve) loads each part's joint to its parent with
+-- what the side beyond it needs to keep up with the craft, less the thrust
+-- already pushing that side: |m_side · a − F_side|, a = thrust / mass (the
+-- proper acceleration; gravity loads nothing in free flight). Read here, per
+-- stage as stageStats flies them (boosters lit with stage 1, their tanks
+-- drunk first and then dropped), at VACUUM thrust, at each stage's ignition
+-- and at its burnout (its own tanks dry, everything above still full), where
+-- the acceleration peaks. The load goes with the throttle, so a joint at
+-- 120 % holds at 83 % throttle. → the worst joint { uid, parent, kn, str, g,
+-- stage (1 = the launch stage), at ("ignition" | "burnout"), ratio, tear_g
+-- (the lowest acceleration it gives at, over every state read) } or nil.
+-- Global and pure over `parts`.
+function jointStress()
+  local U = FUEL_T_PER_UNIT
+  local cuts = {}
+  for _, p in pairs(parts) do
+    if p.def.decouple and not p.def.radial then cuts[#cuts + 1] = p.y end
+  end
+  table.sort(cuts)
+  local boost = {}
+  for uid, p in pairs(parts) do
+    if p.def.radial and p.def.decouple then
+      for u in pairs(separation_of(uid)) do boost[u] = true end
+    end
+  end
+  local kids = {}
+  for uid, p in pairs(parts) do
+    local pp = p.parent
+    if pp and pp ~= 0 and parts[pp] then
+      local t = kids[pp]
+      if not t then t = {}; kids[pp] = t end
+      t[#t + 1] = uid
+    end
+  end
+  local worst, tear = nil, {}
+  -- one state: `set` the parts aboard, `burn` the lit engines, `dry` the
+  -- emptied tanks
+  local function eval(set, burn, dry, stage, at)
+    local M, Fx, Fy, Fz = 0.0, 0.0, 0.0, 0.0
+    local m, fx, fy, fz = {}, {}, {}, {}
+    for u in pairs(set) do
+      local d = liveDef(parts[u].def)
+      local mu = d.mass + (dry[u] and 0 or (d.fuel or 0) * U)
+      local ax, ay, az = 0.0, 0.0, 0.0
+      if burn[u] and (d.thrust or 0) > 0 then
+        local p = parts[u]
+        local Y = basisOf(p.yaw or 0, p.pitch or 0, p.roll or 0).Y
+        ax, ay, az = Y.x * d.thrust, Y.y * d.thrust, Y.z * d.thrust
+      end
+      m[u], fx[u], fy[u], fz[u] = mu, ax, ay, az
+      M, Fx, Fy, Fz = M + mu, Fx + ax, Fy + ay, Fz + az
+    end
+    if M <= 0 or Fx * Fx + Fy * Fy + Fz * Fz <= 0 then return end
+    local ax, ay, az = Fx / M, Fy / M, Fz / M
+    local g = math.sqrt(ax * ax + ay * ay + az * az) / 9.81
+    -- each part's side (its subtree inside `set`), summed leaves-up
+    local sm, sx, sy, sz = {}, {}, {}, {}
+    local function side(u)
+      local a, b, c, e = m[u], fx[u], fy[u], fz[u]
+      for _, k in ipairs(kids[u] or {}) do
+        if set[k] then
+          side(k)
+          a, b, c, e = a + sm[k], b + sx[k], c + sy[k], e + sz[k]
+        end
+      end
+      sm[u], sx[u], sy[u], sz[u] = a, b, c, e
+    end
+    for u in pairs(set) do
+      local pp = parts[u].parent
+      if not (pp and set[pp]) then side(u) end
+    end
+    for u in pairs(set) do
+      local pp = parts[u].parent
+      if pp and set[pp] and sm[u] then
+        local lx, ly, lz = sm[u] * ax - sx[u], sm[u] * ay - sy[u], sm[u] * az - sz[u]
+        local kn = math.sqrt(lx * lx + ly * ly + lz * lz)
+        local str = joint_kn(parts[u].def)
+        local r = kn / str
+        if r > 0 then
+          local tg = g / r
+          if not tear[u] or tg < tear[u] then tear[u] = tg end
+        end
+        if not worst or r > worst.ratio then
+          worst = { uid = u, parent = pp, kn = kn, str = str, g = g, stage = stage, at = at, ratio = r }
+        end
+      end
+    end
+  end
+  for k = 0, #cuts do
+    local lo = (k == 0) and -math.huge or cuts[k]
+    local hi = cuts[k + 1] or math.huge
+    local set, burn, band, bset = {}, {}, {}, {}
+    for uid, p in pairs(parts) do
+      if k == 0 or (not boost[uid] and p.y > lo + 0.01) then
+        set[uid] = true
+        if boost[uid] then bset[uid] = true
+        elseif p.y < hi - 0.01 then band[uid] = true end
+        if band[uid] or boost[uid] then burn[uid] = true end
+      end
+    end
+    eval(set, burn, {}, k + 1, "ignition")
+    if next(bset) then
+      eval(set, burn, bset, k + 1, "burnout")      -- the boosters run dry …
+      for u in pairs(bset) do set[u] = nil end     -- … and go
+      eval(set, burn, {}, k + 1, "ignition")
+    end
+    eval(set, burn, band, k + 1, "burnout")
+  end
+  if worst then worst.tear_g = tear[worst.uid] or worst.g / worst.ratio end
+  return worst
+end
+
+-- SIDE BOOSTERS WITH NO DECOUPLER: an engine on a branch hung off the side of
+-- the craft (a surface or radial attachment somewhere between it and the
+-- root) that carries its own propellant, with no decoupler on the branch, on
+-- a craft that also has an engine on its core. It can never be dropped: it
+-- rides along, dry, until the stage it hangs on goes. Jets are left out (a
+-- plane's engine pods). → { n (branches), uid (one of them) }. Global, pure.
+function looseBoosters()
+  local function side_att(p) local a = p.att; return a ~= nil and a ~= "" and a ~= "top" and a ~= "bottom" end
+  local bases, n, any, core = {}, 0, nil, false
+  for uid, p in pairs(parts) do
+    if (p.def.thrust or 0) > 0 and not tostring(p.def.af or ""):match("^jet") then
+      local base, dec, u, guard = nil, false, uid, 0
+      local dec_at_base = false
+      while u and u ~= 0 and parts[u] and guard < 512 do
+        local q = parts[u]
+        if q.def.decouple then dec = true end
+        if side_att(q) then base = u; dec_at_base = dec end
+        u = q.parent
+        guard = guard + 1
+      end
+      if not base then
+        core = true
+      elseif not dec_at_base and not bases[base] then
+        -- its own propellant on the branch?
+        local fuel = false
+        for v in pairs(subtree(base)) do
+          if parts[v] and (parts[v].def.fuel or 0) > 0 then fuel = true break end
+        end
+        if fuel then bases[base] = true; n = n + 1; any = any or uid end
+      end
+    end
+  end
+  if n == 0 or not core then return nil end
+  return { n = n, uid = any }
+end
+
+-- A TWISTED SYMMETRY RING (2026-11-02: the player's four boosters stood
+-- 0.58° round the craft's axis, off true — a slow spin nobody could see).
+-- For every ring (not a mirror pair), each member's +Y tilt ROUND the ring's
+-- axis (the tangent at its place about the hub's axis) against its squared-up
+-- frame's (squaredFrame): what SPACE (resetSelection squares it up, the ring
+-- with it) takes out. A part tipped more than SQUARE_MAX off every axis of
+-- its mount was tipped on purpose and is left alone.
+-- → the ring nearest the root that is off by more than 0.3°: { uid, sym, n,
+-- deg } or nil. Global, pure.
+function ringTwist()
+  local best, seen = nil, {}
+  for _, p0 in pairs(parts) do
+    local gid = p0.sym
+    if gid and gid ~= 0 and not p0.mir and not seen[gid] then
+      seen[gid] = true
+      local members = group_members(gid)
+      local hub = #members >= 2 and group_hub(gid) or nil
+      if hub then
+        local A = basisOf(hub.yaw or 0, hub.pitch or 0, hub.roll or 0).Y
+        local worst, wu = 0.0, nil
+        for _, m in ipairs(members) do
+          local q = parts[m]
+          if q then
+            local rx, ry, rz = q.x - hub.x, q.y - hub.y, q.z - hub.z
+            local d = rx * A.x + ry * A.y + rz * A.z
+            rx, ry, rz = rx - A.x * d, ry - A.y * d, rz - A.z * d
+            local rl = math.sqrt(rx * rx + ry * ry + rz * rz)
+            if rl > 0.05 then
+              rx, ry, rz = rx / rl, ry / rl, rz / rl
+              -- the tangent t = A × r̂
+              local tx, ty, tz = A.y * rz - A.z * ry, A.z * rx - A.x * rz, A.x * ry - A.y * rx
+              local B = basisOf(q.yaw or 0, q.pitch or 0, q.roll or 0)
+              -- only a part whose long axis is within a few degrees of an
+              -- axis of its mount: one tipped on purpose (an RCS block rolled
+              -- 30°) is not straightened by a hint
+              local G, off = squaredFrame(m)
+              if G and off < SQUARE_MAX then
+                local function tilt(v)
+                  return math.deg(math.asin(math.max(-1, math.min(1, v.x * tx + v.y * ty + v.z * tz))))
+                end
+                local tw = math.abs(tilt(B.Y) - tilt(G.Y))
+                if tw > worst then worst, wu = tw, m end
+              end
+            end
+          end
+        end
+        if wu and worst > 0.3 and worst < 5.0 then
+          local depth, u = 0, wu
+          while u and u ~= 0 and parts[u] and depth < 512 do depth = depth + 1; u = parts[u].parent end
+          if not best or depth < best.depth or (depth == best.depth and worst > best.deg) then
+            best = { uid = wu, sym = gid, n = #members, deg = worst, depth = depth }
+          end
+        end
+      end
+    end
+  end
+  return best
 end
 
 -- WHAT A WHEELED CRAFT IS MISSING (playtest 2026-10-26: "motorcycles are
@@ -3466,12 +3711,51 @@ function rotateSelection(uid, Q)
   refresh_stats()
 end
 
--- SPACE on a placed part: back to its mount's frame (and its ring with it).
+-- The part SQUARED UP: its long axis (+Y: an engine's thrust line, a tank's
+-- length) laid on the axis of its mount's frame it is nearest, by the
+-- smallest turn, so a spin about its own axis (R) is kept. A booster tank
+-- stood upright on a beam's end has its +Y on its mount's X, turned 90°;
+-- 0.6° off that is a slip, not a choice. → G (the squared basis), off (°).
+function squaredFrame(uid)
+  local p = parts[uid]
+  if not p then return nil end
+  local M = mountFrame(uid)
+  local B = basisOf(p.yaw or 0, p.pitch or 0, p.roll or 0)
+  local T, bd = nil, 0.0
+  for _, A in ipairs({ M.X, M.Y, M.Z }) do
+    local d = dot3(A, B.Y)
+    if math.abs(d) > math.abs(bd) then T, bd = A, d end
+  end
+  if not T then return nil end
+  if bd < 0 then T = neg3(T) end
+  local off = math.deg(math.acos(math.max(-1, math.min(1, math.abs(bd)))))
+  local k = cross3(B.Y, T)
+  local kl = math.sqrt(dot3(k, k))
+  if kl < 1e-9 then return B, 0.0 end
+  local R = basisRot({ x = k.x / kl, y = k.y / kl, z = k.z / kl }, math.rad(off))
+  return basisMul(R, B), off
+end
+
+-- SPACE on a placed part: a part whose long axis is a few degrees off an axis
+-- of its mount is SQUARED UP to it first (2026-11-02: the player's boosters stood
+-- 0.6° round the craft's axis, a slip of the gizmo); otherwise, or pressed
+-- again, it goes back to its mount's frame. Its ring comes with it either
+-- way. → "squared" or "reset".
+SQUARE_MAX = 5.0
 function resetSelection(uid)
   local p = parts[uid]
   if not p then return end
-  local Q = basisMul(mountFrame(uid), basisT(basisOf(p.yaw, p.pitch, p.roll)))
+  local B = basisOf(p.yaw, p.pitch, p.roll)
+  local M = mountFrame(uid)
+  local target, how = M, "reset"
+  local G, off = squaredFrame(uid)
+  if G and off > 0.02 and off < SQUARE_MAX
+    and dot3(G.X, M.X) + dot3(G.Y, M.Y) + dot3(G.Z, M.Z) < 2.999 then
+    target, how = G, "squared"
+  end
+  local Q = basisMul(target, basisT(B))
   rotateSelection(uid, basisClean(Q))
+  return how
 end
 
 -- A turn of the part in hand: Q is a WORLD rotation; the ghost keeps it in its
@@ -3508,8 +3792,11 @@ function rotKeysTick(cam_busy)
   end
   if sel and tool ~= "stage" and tool ~= "groups" and not input.key("ctrl") then
     if input.pressed("space") then
-      resetSelection(selected_uid)
-      hint("rotation reset", 1.5)
+      if resetSelection(selected_uid) == "squared" then
+        hint("squared up — it stands on the right angle it was nearly on (SPACE again: back to its mount)", 2.5)
+      else
+        hint("rotation reset", 1.5)
+      end
     end
     local Q = rotKeysQ(basisOf(sel.yaw, sel.pitch, sel.roll), mountNormal(selected_uid), true)
     if Q then rotateMulti(Q) end

@@ -7,6 +7,8 @@
 #   env: WORK LOCK SOLAR TAG PATCHES BENCH_PARAMS as bench.sh, e.g.
 #        BENCH_PARAMS='("straight", 1.0)'   the boosters stood straight
 #        BENCH_PARAMS='("sas", 0.0)'        SAS off
+#        BENCH_PARAMS='("vabonly", 1.0)'    the VAB's launch aids only: the
+#          warnings and hints, SPACE on booster tank `square` (107), no launch
 # The craft file is COPIED into the scratch project as user://probe_deep.json.
 # Look for `DP VAB`, `DP ENG`, `DP T` and `DP RESULT` lines; pictures land in
 # $WORK/proj/save/user/deepshots/.

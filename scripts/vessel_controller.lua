@@ -3432,6 +3432,8 @@ function fleetParts()
   return { parts = out, lost = lost, fuel = fuel, charge = elec.charge, pod = podCrewed == true,
            probe = elec.probePart ~= nil, crew = crewAboard == true,
            station = stationUid, flown = hasFlown ~= false,
+           -- the command part it is flown from (Control from here: commandFrom)
+           from = pod_uid,
            groups = E and E.packGroups(ctlGroups) or nil,
            controls = (clib() and ctlAxes) and clib().pack(ctlAxes) or nil }
 end
@@ -6501,6 +6503,10 @@ function start(node)
     if handoff.crew and podCrewed and avatarSeatedIn(handoff.parts) then boarding = true end
     -- ...in the crew position they were sitting in (a pod, or the seat).
     if handoff.station then setStation(handoff.station) end
+    -- ...and flown from the command part it was flown from ("Control from
+    -- here", fleet record `from`; a record from before it has none: the root
+    -- section's, as at launch).
+    if handoff.from and handoff.from ~= pod_uid and bp_by_uid[handoff.from] then commandFrom(handoff.from) end
     -- A craft saved before it ever flew (released on the pad, a rover driven
     -- off it) is still one that hasn't: no recovery refund for a launch.
     if handoff.flown == false then hasFlown = false end

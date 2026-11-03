@@ -689,8 +689,127 @@ env.pick("engineM") step(2)
 check(done.engineM and FUNDS == 2520, "the second click buys it")
 API.findScript = plain
 
+-- ── 5. the VAB's launch aids on the player's deep-space rocket ─────────────
+-- (2026-11-02, slot 2 `deepspace mission`, 54 parts, on its home Ryia's
+-- catalogue): four Skipper boosters on beams off the lower FT-S with no
+-- radial decoupler, stood 0.58° round the craft's axis; at full throttle
+-- the FT-S under the upper stack tore at about 4 g.
+-- { uid, id, x, y, z, yaw, pitch, roll, parent, att, sym }
+local DEEP = {
+  { 21, "battery", -0.0018, 8.7665, 0.0158, 0.0000, 0.0000, 0.0000, 19, "bottom", 0 },
+  { 20, "chute", -0.0018, 10.2365, 0.0158, 0.0000, 0.0000, 0.0000, 19, "top", 0 },
+  { 36, "solar", 0.0482, 8.5665, 1.0158, 0.0000, 0.0000, 1.5708, 23, "surface", 6 },
+  { 93, "solar", 0.6699, 3.3219, 0.6875, -0.7854, 0.0000, 0.0000, 51, "surface", 16 },
+  { 32, "rcs", 0.0482, 7.9165, 1.4558, -1.5708, 0.0000, 0.5236, 23, "surface", 5 },
+  { 120, "nose", 2.0352, 4.5414, -0.5435, -3.1325, 0.0085, 0.0670, 116, "top", 23 },
+  { 54, "dish", -0.7531, 9.7814, 0.0158, 0.0000, 0.0000, 1.2793, 19, "surface", 0 },
+  { 121, "nose", -0.5611, 4.5414, -2.0213, -1.5617, 0.0085, 0.0670, 117, "top", 23 },
+  { 94, "solar", -0.6736, 3.3219, -0.6560, 2.3562, 0.0000, 0.0000, 51, "surface", 16 },
+  { 41, "legs", -0.0518, 7.0650, -1.2908, 1.5708, 0.0000, -0.1431, 25, "surface", 7 },
+  { 115, "tankS", 0.5488, 3.5936, 1.9893, 1.5799, 0.0085, 0.0670, 107, "top", 22 },
+  { 127, "skipper", -1.7880, 0.8000, 0.5409, 0.0091, 0.0085, 0.0670, 110, "bottom", 24 },
+  { 107, "tankM", 0.5374, 2.3465, 1.9056, 1.5799, 0.0085, 0.0670, 99, "surface", 20 },
+  { 124, "skipper", 0.5233, 0.8000, 1.8019, 1.5799, 0.0085, 0.0670, 107, "bottom", 24 },
+  { 99, "beam1", 0.2570, 2.2665, 0.9817, 1.8326, 0.0000, 1.5708, 53, "surface", 18 },
+  { 108, "tankM", 1.8880, 2.3465, -0.5235, -3.1325, 0.0085, 0.0670, 100, "surface", 20 },
+  { 125, "skipper", 1.7843, 0.8000, -0.5094, -3.1325, 0.0085, 0.0670, 108, "bottom", 24 },
+  { 126, "skipper", -0.5270, 0.8000, -1.7703, -1.5617, 0.0085, 0.0670, 109, "bottom", 24 },
+  { 51, "tankM", -0.0018, 3.6665, 0.0158, 0.0000, 0.0000, 0.0000, 49, "bottom", 0 },
+  { 25, "radialTank", -0.0518, 7.6165, -0.9842, 1.5708, 0.0000, 0.0000, 22, "radial", 3 },
+  { 87, "fins", 0.8482, 3.1665, 0.0158, 0.0000, 0.0000, 0.0000, 53, "surface", 14 },
+  { 37, "solar", 0.9982, 8.5665, -0.0342, 1.5708, 0.0000, 1.5708, 24, "surface", 6 },
+  { 102, "beam1", -0.9678, 2.2665, 0.2746, 0.2618, 0.0000, 1.5708, 53, "surface", 18 },
+  { 34, "rcs", -1.4418, 7.9165, 0.0658, 3.1416, 0.0000, 0.5236, 26, "surface", 5 },
+  { 117, "tankS", -0.5525, 3.5936, -1.9577, -1.5617, 0.0085, 0.0670, 109, "top", 22 },
+  { 31, "rcs", 1.4382, 7.9165, -0.0342, 0.0000, 0.0000, 0.5236, 24, "surface", 5 },
+  { 118, "tankS", -1.9753, 3.5936, 0.5664, 0.0091, 0.0085, 0.0670, 110, "top", 22 },
+  { 46, "decoupler", -0.0018, 5.8415, 0.0158, 0.0000, 0.0000, 0.0000, 45, "bottom", 0 },
+  { 119, "nose", 0.5575, 4.5414, 2.0528, 1.5799, 0.0085, 0.0670, 115, "top", 23 },
+  { 100, "beam1", 0.9641, 2.2665, -0.2430, -2.8798, 0.0000, 1.5708, 53, "surface", 18 },
+  { 86, "fins", -0.0018, 3.1665, 0.8658, -1.5708, 0.0000, 0.0000, 53, "surface", 14 },
+  { 56, "engineM", -0.0018, 1.1165, 0.0158, 0.0000, 0.0000, 0.0000, 53, "bottom", 0 },
+  { 110, "tankM", -1.8917, 2.3465, 0.5551, 0.0091, 0.0085, 0.0670, 102, "surface", 20 },
+  { 35, "solar", -0.0518, 8.5665, -0.9842, 3.1416, 0.0000, 1.5708, 25, "surface", 6 },
+  { 19, "pod", -0.0018, 9.6665, 0.0158, 0.0000, 0.0000, 0.0000, 0, "", 0 },
+  { 33, "rcs", -0.0518, 7.9165, -1.4242, 1.5708, 0.0000, 0.5236, 25, "surface", 5 },
+  { 22, "tankS", -0.0018, 7.7665, 0.0158, 0.0000, 0.0000, 0.0000, 21, "bottom", 0 },
+  { 122, "nose", -2.0389, 4.5414, 0.5751, 0.0091, 0.0085, 0.0670, 118, "top", 23 },
+  { 43, "legs", 1.3048, 7.0650, -0.0342, 0.0000, 0.0000, -0.1431, 24, "surface", 7 },
+  { 101, "beam1", -0.2606, 2.2665, -0.9501, -1.3090, 0.0000, 1.5708, 53, "surface", 18 },
+  { 44, "legs", -1.3084, 7.0650, 0.0658, 3.1416, 0.0000, -0.1431, 26, "surface", 7 },
+  { 24, "radialTank", 0.9982, 7.6165, -0.0342, 0.0000, 0.0000, 0.0000, 22, "radial", 3 },
+  { 85, "fins", -0.8518, 3.1665, 0.0158, -3.1416, 0.0000, 0.0000, 53, "surface", 14 },
+  { 26, "radialTank", -1.0018, 7.6165, 0.0658, 3.1416, 0.0000, 0.0000, 22, "radial", 3 },
+  { 109, "tankM", -0.5411, 2.3465, -1.8741, -1.5617, 0.0085, 0.0670, 101, "surface", 20 },
+  { 23, "radialTank", 0.0482, 7.6165, 1.0158, -1.5708, 0.0000, 0.0000, 22, "radial", 3 },
+  { 45, "engineS", -0.0018, 6.6165, 0.0158, 0.0000, 0.0000, 0.0000, 22, "bottom", 0 },
+  { 42, "legs", 0.0482, 7.0650, 1.3224, -1.5708, 0.0000, -0.1431, 23, "surface", 7 },
+  { 88, "fins", -0.0018, 3.1665, -0.8342, 1.5708, 0.0000, 0.0000, 53, "surface", 14 },
+  { 53, "tankS", -0.0018, 2.4165, 0.0158, 0.0000, 0.0000, 0.0000, 51, "bottom", 0 },
+  { 49, "cabin", -0.0018, 5.0665, 0.0158, 0.0000, 0.0000, 0.0000, 46, "bottom", 0 },
+  { 116, "tankS", 1.9716, 3.5936, -0.5349, -3.1325, 0.0085, 0.0670, 108, "top", 22 },
+  { 55, "dishL", 0.8482, 4.3165, -0.8368, -2.0944, 0.0000, 1.5708, 51, "surface", 0 },
+  { 38, "solar", -1.0018, 8.5665, 0.0658, -1.5708, 0.0000, 1.5708, 26, "surface", 6 },
+}
+local function load_rows(rows, edit)
+  local bp = { parts = {} }
+  for _, r in ipairs(rows) do
+    local d = { uid = r[1], id = r[2], x = r[3], y = r[4], z = r[5], yaw = r[6], pitch = r[7], roll = r[8],
+                parent = r[9], att = r[10], sym = r[11] }
+    if edit then edit(d) end
+    bp.parts[#bp.parts + 1] = d
+  end
+  save_store["shipyard.blueprint"] = bp
+  env.reload() step(2)
+end
+save_store["launch.world"] = { name = "Ryia", g = 9.6128, r = 300, soi = 4000 }
+save_store["parts.rating"] = { name = "Ryia", v = 3, thrust = 1.3732572294452987, ve = 2.4550238323632403 }
+load_rows(DEEP)
+check(env.partCount == 54, "the deep-space rocket loads (" .. env.partCount .. " parts)")
+local js = env.jointStress()
+check(js and js.uid == 53 and js.parent == 51 and js.ratio > 1.0 and js.stage == 1,
+  string.format("the FT-S under the upper stack is the joint that goes: uid %s/%s, %.0f of %.0f kN at %.1f g (%s, stage %s)",
+    tostring(js and js.uid), tostring(js and js.parent), js and js.kn or -1, js and js.str or -1, js and js.g or -1,
+    tostring(js and js.at), tostring(js and js.stage)))
+check(js and js.tear_g > 3.5 and js.tear_g < 5.0,
+  string.format("...and it tears at about 4 g, as it did in flight (%.2f g)", js and js.tear_g or -1))
+chk = env.launchCheck()
+local wj, wb = nil, nil
+for _, w in ipairs(chk.warn) do
+  if w:find("tears above", 1, true) then wj = w end
+  if w:find("no radial decoupler", 1, true) then wb = w end
+end
+check(wj and wj:find("FT-S Tank", 1, true), "LAUNCH warns of the joint: " .. tostring(wj))
+check(wb and wb:find("4 side boosters", 1, true), "...and of the four boosters with no decoupler: " .. tostring(wb))
+local lbo = env.looseBoosters()
+check(lbo and lbo.n == 4, "four loose boosters (" .. tostring(lbo and lbo.n) .. ")")
+local rt = env.ringTwist()
+check(rt and rt.sym == 20 and rt.n == 4 and rt.deg > 0.3 and rt.deg < 1.0,
+  string.format("the booster ring is the twisted one (sym %s ×%s, %.2f°)", tostring(rt and rt.sym), tostring(rt and rt.n), rt and rt.deg or -1))
+check(chk.hints and chk.hints[1] and chk.hints[1]:find("SPACE", 1, true), "...and the hint says SPACE: " .. tostring(chk.hints and chk.hints[1]))
+-- SPACE on one booster tank straightens the ring
+env.resetSelection(107)
+rt = env.ringTwist()
+check(rt == nil or rt.sym ~= 20, "after SPACE on one booster the ring is straight (" .. tostring(rt and rt.sym) .. " " .. tostring(rt and rt.deg) .. ")")
+local lb = env.launchBalance()
+check(lb and lb.cant < 0.05, string.format("...its Skippers ride along, no longer turned round the axis (%.3f°)", lb and lb.cant or -1))
+if os.getenv("SOLAR_AIDS_PRINT") then
+  for _, w in ipairs(chk.warn) do print("WARN " .. w) end
+  for _, w in ipairs(chk.hints or {}) do print("HINT " .. w) end
+end
+-- The upper stack alone (pod down to the decoupler): no joint near its limit.
+local upper = {}
+for _, r in ipairs(DEEP) do if r[4] > 5.5 then upper[#upper + 1] = r end end
+load_rows(upper)
+js = env.jointStress()
+check(js and js.ratio < 1.0, string.format("the upper stage alone holds (%.0f%% at %.1f g)", js and js.ratio * 100 or -1, js and js.g or -1))
+check(env.looseBoosters() == nil, "...and has no side boosters (its radial tanks carry no engine)")
+for _, w in ipairs(env.launchCheck().warn) do
+  check(not w:find("tears above", 1, true), "no joint warning on the upper stage: " .. w)
+end
+
 if #failures == 0 then
-  print("BALANCE SMOKE OK — ten craft on nineteen worlds at three world scales, honest Δv/TWR, LAUNCH validation, two-click research")
+  print("BALANCE SMOKE OK — ten craft on nineteen worlds at three world scales, honest Δv/TWR, LAUNCH validation, two-click research, the joint / booster / ring-twist launch aids")
   os.exit(0)
 else
   print("BALANCE SMOKE FAILURES:")

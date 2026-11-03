@@ -175,7 +175,8 @@ do
   ok(vw and vw[1] == "scroll" and vw.name == T.VIEW_NAME and near(vw.w, L.view_w) and vw.scrollSpeed == L.pitch,
     "the portraits sit in a clipped scroll view, a portrait a wheel notch")
   ok(findk(made, "arL") ~= nil and findk(made, "arR") ~= nil, "both arrows show in the middle of the crew")
-  ok(findk(made, "fl1") ~= nil and findk(made, "fr1") ~= nil, "…and both edges fade")
+  ok(vw and (vw.scrollFade or 0) > 0 and vw.scrollFade == T.SCROLL_FADE and findk(made, "fl1") == nil,
+    "…and its edges fade by the engine's scrollFade, not painted boxes")
   -- hidden: every camera off
   T.setMode("hidden")
   frame()

@@ -130,10 +130,34 @@ local function run_deep()
     P("DP VAB builder stats: %d parts, %.2f t, dry %.2f t, thrust %.0f, TWR %.2f (pad %.2f), dv %.0f (pad %.0f), CoM (%.3f %.3f %.3f) dry (%.3f %.3f %.3f) CoT (%.3f %.3f %.3f)",
       s.parts, s.mass, s.dry, s.thrust, s.twr, s.twr_sl or 0, s.dv, s.dv_sl or 0, s.com.x, s.com.y, s.com.z, s.comDry.x, s.comDry.y, s.comDry.z, s.cot.x, s.cot.y, s.cot.z)
     for _, w in ipairs(s.launch and s.launch.warn or {}) do P("DP VAB launch warning: %s", w) end
+    for _, w in ipairs(s.launch and s.launch.hints or {}) do P("DP VAB launch hint: %s", w) end
   end
+  local js = B.jointStress and B.jointStress()
+  if js then P("DP VAB joint: %s on %s %.0f / %.0f kN at %.2f g (stage %d %s), tears at %.2f g", tostring(js.uid), tostring(js.parent), js.kn, js.str, js.g, js.stage, js.at, js.tear_g or -1) end
   DP.shot("1vab")
   local bc = findScript("builder_camera")
   if bc and bc.frameCraft then pcall(bc.frameCraft); wait(1.0); if bc.settle then pcall(bc.settle) end; wait(0.3); DP.shot("1vab_framed") end
+  -- vabonly=1: SPACE on one booster tank (`square`, default 107) squares its
+  -- ring up; the launch check again, a picture, and no launch
+  if (params.vabonly or 0) > 0 then
+    -- THIS CRAFT (nothing selected) lists the launch check; LAUNCH pressed
+    -- once puts the warnings in the hint bar too, and launches nothing
+    P("DP LAUNCH once: %s", tostring(B.doLaunch()))
+    wait(0.3)
+    P("DP hint bar: %s", tostring(B.hintText and B.hintText()))
+    DP.shot("1vab_launchwarn")
+    local u = params.square or 107
+    if B.resetSelection then P("DP SPACE on %d: %s", u, tostring(B.resetSelection(u))) end
+    wait(1.0)
+    local c = B.launchCheck and B.launchCheck()
+    for _, w in ipairs(c and c.warn or {}) do P("DP VAB after SPACE warning: %s", w) end
+    for _, w in ipairs(c and c.hints or {}) do P("DP VAB after SPACE hint: %s", w) end
+    local lb = B.launchBalance and B.launchBalance()
+    if lb then P("DP VAB after SPACE: engines turned %.3f° round the axis, %.1f kN·m roll", lb.cant, lb.tr) end
+    DP.shot("1vab_squared")
+    P("DP RESULT %s: VAB only", DP.tag)
+    return
+  end
   if B.launchSite and B.launchSite() ~= "pad" and B.toggleLaunchSite then B.toggleLaunchSite() end
   B.doLaunch()
   wait(0.6)

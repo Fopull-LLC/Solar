@@ -287,6 +287,28 @@ local function ctrl_line(labels, set, auto, why)
   end
   return "Auto: reading the craft…"
 end
+-- ── the launch check (builder.launchCheck) on THIS CRAFT ───────────────────
+-- Every warning LAUNCH would ask about, each on its own wrapped line (the
+-- hint bar has room for the first two), then the hints LAUNCH doesn't ask
+-- about (a twisted symmetry ring).
+local function launch_rows(s, out)
+  local L = s.launch
+  if not L then return end
+  local warn, hints = L.warn or {}, L.hints or {}
+  if not L.block and #warn == 0 and #hints == 0 then return end
+  out[#out + 1] = rule("rl")
+  out[#out + 1] = sublabel("lch", "LAUNCH CHECK")
+  if L.block then
+    out[#out + 1] = { "text", key = "lb", style = "panel/hintWarn", w = "100%", h = "fit", wrap = true, text = "⚠ " .. L.block }
+  end
+  for i, w in ipairs(warn) do
+    out[#out + 1] = { "text", key = "lw" .. i, style = "panel/hintWarn", w = "100%", h = "fit", wrap = true, text = "⚠ " .. w }
+  end
+  for i, h in ipairs(hints) do
+    out[#out + 1] = { "text", key = "lh" .. i, style = "panel/hint", w = "100%", h = "fit", wrap = true, text = "· " .. h }
+  end
+end
+
 local function ctrl_rows(B, out)
   if not (B.ctrlMode and B.cmd) then return end
   local c = B.ctrlMode() or {}
@@ -437,6 +459,7 @@ local function inspect(B, out, top)
       perf_rows(s, out)
       out[#out + 1] = rule("rc")
       ctrl_rows(B, out)
+      launch_rows(s, out)
     end
     return
   end

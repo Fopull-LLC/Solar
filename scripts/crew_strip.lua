@@ -14,7 +14,8 @@
 -- crew than fit, the view clips and scrolls: the wheel over it steps one
 -- portrait a notch (the engine's scroll view: a wheel drives X when there is
 -- no Y to drive), ◂ ▸ at the ends show only while there is more that way,
--- and a fade on the clipped side says so too. Switching to a member, or a
+-- and the clipped side fades out too (the view's own scrollFade: the
+-- engine fades only an edge with more past it, and keeps up with the wheel). Switching to a member, or a
 -- member boarding, scrolls them into view (focusMember). A wheel notch or an
 -- arrow moves one portrait.
 --
@@ -87,7 +88,7 @@ INTERIOR_BIT, OFFSTAGE_BIT = 16, 32
 
 CARD_PAD = 6                 -- the strip card's own padding (describe's root)
 ARROW_W, ARROW_GAP = 14, 4   -- the ◂ ▸ keys at the ends of an overflowing view
-FADE_W = 6                   -- one step of the edge fade (three steps)
+SCROLL_FADE = 18             -- the view's edge fade (design units), where more lies past it
 HEAD_MIN = 180               -- the header's width when the cap allows (CREW · name · k/N)
 
 -- ── pure layout ────────────────────────────────────────────────────────────
@@ -454,16 +455,6 @@ end
 function scrollTo(x) scroll_pending = math.max(0, x or 0) end
 function focusMember(id) want_focus = id end
 
-local function fade(key, pin, h, more)
-  local out = {}
-  if not more then return out end
-  for s = 1, 3 do
-    out[#out + 1] = { "box", key = key .. s, pin = pin, x = (pin == "topRight" and -1 or 1) * (s - 1) * FADE_W, y = 0,
-                      w = FADE_W, h = h, fill = { 0.112, 0.116, 0.104, ({ 0.82, 0.55, 0.25 })[s] } }
-  end
-  return out
-end
-
 local function arrow(key, glyph, on, h, d)
   if not on then return { "box", key = key .. "0", w = ARROW_W, h = h } end
   return { "button", key = key, style = "hud/button", w = ARROW_W, h = h, text = glyph, textAlign = "center",
@@ -490,11 +481,10 @@ local function describe(v, list, L, afoot, chips_any, cap_in)
       -- the clipped, scrolling view: every portrait is in it (the clip hides
       -- and the hit test skips the ones out of view; their cameras are off)
       local view = { "scroll", key = "view", name = VIEW_NAME, pin = "topLeft", x = 0, y = 0, w = L.view_w, h = ph + 0.5,
-                     dir = "row", gap = GAP, pad = 0, align = "start", scrollSpeed = L.pitch }
+                     dir = "row", gap = GAP, pad = 0, align = "start", scrollSpeed = L.pitch,
+                     scrollFade = SCROLL_FADE }
       for i, m in ipairs(list) do view[#view + 1] = portrait(i, m, L, hover_id == m.id, v) end
       local framebox = { "box", key = "vf", w = L.view_w, h = ph + 0.5, view }
-      for _, f in ipairs(fade("fl", "topLeft", ph, L.more_l)) do framebox[#framebox + 1] = f end
-      for _, f in ipairs(fade("fr", "topRight", ph, L.more_r)) do framebox[#framebox + 1] = f end
       rows[#rows + 1] = { "row", key = "ports", w = L.row_w, h = "fit", gap = ARROW_GAP, pad = 0, align = "start",
                           arrow("arL", "◂", L.more_l, L.h + 2 * FRAME_PAD, -1), framebox,
                           arrow("arR", "▸", L.more_r, L.h + 2 * FRAME_PAD, 1) }

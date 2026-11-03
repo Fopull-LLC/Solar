@@ -509,7 +509,8 @@ end
 --
 -- save `fleet.craft` = { [fid] = record }, one per craft that has flown:
 --   name, body, x y z (origin, body-relative), vx vy vz (body-relative),
---   pitch yaw roll, landed, fuel, charge, parts = { blueprint records }
+--   pitch yaw roll, landed, fuel, charge, parts = { blueprint records },
+--   station (the crew's seat), from (the command part flown from)
 --
 -- Kept current once a second from the live craft; a craft that disappears
 -- while the scene is running (recovered, destroyed, docked into another) leaves
@@ -559,7 +560,8 @@ local function describe_craft(v)
     local fp = v.fleetParts()
     if fp then
       man = { name = n.name, parts = {}, fuel = fp.fuel, charge = fp.charge, groups = fp.groups, controls = fp.controls,
-              probe = fp.probe, crew = fp.crew, station = fp.station, flown = fp.flown, lost = fp.lost }
+              probe = fp.probe, crew = fp.crew, station = fp.station, flown = fp.flown, lost = fp.lost,
+              from = fp.from }
       for i, d in ipairs(fp.parts) do man.parts[i] = { rec = d } end
     end
   else
@@ -644,6 +646,8 @@ local function describe_craft(v)
     groups = dcopy(man.groups), controls = dcopy(man.controls), probe = man.probe == true, crew = man.crew == true,
     -- the crew position they sit in (a pod or a seat), and whether it ever flew
     station = man.station, flown = man.flown ~= false,
+    -- the command part it is flown from ("Control from here")
+    from = man.from,
     stime = space.time and space.time() or 0,
     pod = (function()
       for _, r in ipairs(recs) do if r.kind == "crewed" or r.id == "pod" then return true end end
@@ -664,7 +668,7 @@ local FLEET_SOFT = 3.0
 local function rec_change(a, b)
   if not b then return "structural" end
   if #a.parts ~= #(b.parts or {}) or a.crew ~= b.crew or a.landed ~= b.landed or a.name ~= b.name
-    or a.body ~= b.body or a.station ~= b.station or a.splashed ~= b.splashed then
+    or a.body ~= b.body or a.station ~= b.station or a.splashed ~= b.splashed or a.from ~= b.from then
     return "structural"
   end
   local function far(x, y, e) return math.abs((x or 0) - (y or 0)) > e end
@@ -926,7 +930,7 @@ local function respawn(fid, rec)
     -- and spun up, because the centre of mass moved under it.
     save.set("dock.handoff." .. tostring(v.id or 0),
       { parts = rec.parts, lost = rec.lost, fuel = rec.fuel, charge = rec.charge, lockout = 2.0, groups = rec.groups, controls = rec.controls,
-        crew = rec.crew, name = rec.name, station = rec.station, flown = rec.flown,
+        crew = rec.crew, name = rec.name, station = rec.station, flown = rec.flown, from = rec.from,
         vel = (not rec.landed) and { x = fvx, y = fvy, z = fvz } or nil })
     for _, d in ipairs(rec.parts) do
       local px = wx + rx[1] * d.x + up[1] * d.y + rz[1] * d.z

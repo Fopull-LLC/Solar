@@ -86,7 +86,7 @@ end
 local SFX = {
   swap = "audio/foley/switch_2.ogg",
   denied = "audio/foley/buzz_denied.ogg",
-  plant = "audio/kenney/impact/impactMetal_002.ogg",
+  plant = "audio/kenney/impact/impactMetal_medium_002.ogg",
   set = "audio/foley/latch_clunk.ogg",
   ratchet = "audio/foley/ratchet_",   -- + 1..5 (an impact wrench)
   weld = "audio/foley/weld_arc.ogg",

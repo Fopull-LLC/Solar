@@ -254,6 +254,55 @@ check(type(fleetish.c1.parts[1].st) == "table" and fleetish.c1.parts[1].st ~= en
 local back = E.decodeState(fleetish.c1.parts[1].st)
 check(type(back) == "table" and back.charge ~= nil, "...and its state reads back")
 
+-- ── "Control from here" survives a save (fleet record `from`) ──────────────
+-- The record names the command part it is flown from; a craft rebuilt from
+-- it (flight_ops' restore handoff) is flown from that part again, not the
+-- root section's. A second probe core rides on the tank, in the root section
+-- (the engine is the tree's root), so a craft rebuilt with no say picks it.
+check(env.fleetParts().from == env.commandUid() and env.commandUid() == 1,
+  "the fleet record names the command part flown from (" .. tostring(env.fleetParts().from) .. ")")
+local craft2 = node("Sat Two", 20000, 400, 50)
+craft2.id = 4343
+local hparts = {}
+for i, d in ipairs(env.fleetParts().parts) do hparts[i] = E.packRecord(d) end
+hparts[#hparts + 1] = E.packRecord(R{ uid = 11, id = "probe", kind = "probe", x = 0.6, y = 1.8, z = 0, parent = 3, att = "radial",
+  mods = { { type = "command", crew = 0, draw = 0.06 }, { type = "battery", ec = 20 } } })
+for _, d in ipairs(hparts) do craft2.kids[#craft2.kids + 1] = node("Part" .. d.id, d.x, d.y, d.z) end
+local env2
+env2 = setmetatable({}, getmetatable(env))
+for _, k in ipairs({ "log", "print", "caption", "vec3", "save", "find", "findScript", "space", "assembly", "input",
+                     "audio", "terrain", "draw", "physics", "camera", "spawn", "spawnEffect", "destroy", "raycast" }) do
+  env2[k] = rawget(env, k)
+end
+env2.time = T
+env2.findScripts = function(k) if k == "vessel_controller" then return { env, env2 } end return {} end
+env2.node, env2.valid = craft2, true
+local chunk2 = assert(loadfile("solar/scripts/vessel_controller.lua"))
+setfenv(chunk2, env2)
+chunk2()
+store["dock.handoff." .. craft2.id] = { parts = hparts, fuel = 40, charge = 100, from = 1, flown = true }
+env2.start(craft2)
+check(env2.commandUid() == 1, "a craft rebuilt from its record is flown from the part it was (" .. tostring(env2.commandUid()) .. ")")
+check(env2.fleetParts().from == 1, "...and its next record says so")
+-- a record from before `from`: the root section's command part, as at launch
+local craft3 = node("Sat Three", 20000, 400, 100)
+craft3.id = 4444
+for _, d in ipairs(hparts) do craft3.kids[#craft3.kids + 1] = node("Part" .. d.id, d.x, d.y, d.z) end
+local env3 = setmetatable({}, getmetatable(env))
+for _, k in ipairs({ "log", "print", "caption", "vec3", "save", "find", "findScript", "space", "assembly", "input",
+                     "audio", "terrain", "draw", "physics", "camera", "spawn", "spawnEffect", "destroy", "raycast" }) do
+  env3[k] = rawget(env, k)
+end
+env3.time = T
+env3.findScripts = function(k) if k == "vessel_controller" then return { env, env3 } end return {} end
+env3.node, env3.valid = craft3, true
+local chunk3 = assert(loadfile("solar/scripts/vessel_controller.lua"))
+setfenv(chunk3, env3)
+chunk3()
+store["dock.handoff." .. craft3.id] = { parts = hparts, fuel = 40, charge = 100, flown = true }
+env3.start(craft3)
+check(env3.commandUid() == 11, "an older record (no `from`) flies from the root section's (" .. tostring(env3.commandUid()) .. ")")
+
 if #failures == 0 then
   print(string.format("ELEC FLIGHT SMOKE OK — %d checks passed", passed))
   os.exit(0)
