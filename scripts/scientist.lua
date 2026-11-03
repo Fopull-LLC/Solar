@@ -8,9 +8,11 @@
 --   * the idle clip breathes under it; both hands are placed by IK on the
 --     station's "Hands" point and move about it in small working loops (a
 --     sample turned over, a focus knob, a pipette), never in step;
---   * the head drifts between the work and a glance up; face.lua turns the
---     head and eyes to the camera when it comes near (so they look at you
---     when you walk up);
+--   * the head drifts between the work and a glance up; when the crew comes
+--     within a few metres (in front of them or to the side) the head turns to
+--     the crew's head, smoothly and within a neck's reach, and the eyes follow
+--     (face.lua's `gaze` hook); walk off and they go back to the work. While
+--     lab_talk.lua has them talking they look at the camera (you);
 --   * while lab_talk.lua has them talking, face.lua's jaw and lip channels
 --     carry a talking rhythm (lab_talk.visemes).
 --
@@ -23,6 +25,8 @@ defaults = {
   work = 0.045,        -- how far the hands move about their point
   --@range 10 60 --@units m
   near = 22.0,         -- the IK runs while the camera is this near
+  --@range 1 6 --@units m
+  look_near = 3.0,     -- the crew this near: they look up at you (leave at +0.6 m)
 }
 
 idx = nil
@@ -83,6 +87,8 @@ end
 
 function lateUpdate(node, dt)
   if not (model and anim) then find_parts(node) end
+  -- (out of the lab the model is switched off: lab.lua)
+  if model and model.enabled == false then gz.init = false return end
   set_look(node)
   if not (anim and hands_m and valid(hands_m)) then return end
   if not (camera and camera.worldToScreen) then return end
@@ -101,9 +107,10 @@ function lateUpdate(node, dt)
   local ux, uy, uz = u.x - o.x, u.y - o.y, u.z - o.z
   local w = params.work or 0.045
   stance(node, t, o, rx, ry, rz, fx, fy, fz, ux, uy, uz)
+  relax_hands()
   if holds then
     hold_board(node, t, o, rx, ry, rz, fx, fy, fz, ux, uy, uz)
-    look_head(t, rx, ry, rz, ux, uy, uz)
+    look_head(node, t, dt, rx, ry, rz, fx, fy, fz, ux, uy, uz)
     return
   end
   for _, side in ipairs({ { "Left", 1, 0.0 }, { "Right", -1, 1.9 } }) do
@@ -124,7 +131,7 @@ function lateUpdate(node, dt)
     local pz = o.z + rz * sg * faceSign * 0.30 - fz * 0.22 - uz * 0.55
     pcall(anim.reach, anim, "Hand." .. nm, vec3(tx, ty, tz), { pole = vec3(px, py, pz) })
   end
-  look_head(t, rx, ry, rz, ux, uy, uz)
+  look_head(node, t, dt, rx, ry, rz, fx, fy, fz, ux, uy, uz)
 end
 
 -- ── the stance: knees soft, the weight shifting, a breath of sway ───────────
@@ -160,6 +167,17 @@ function stance(node, t, o, rx, ry, rz, fx, fy, fz, ux, uy, uz)
   end
 end
 
+-- ── the hands: fingers softly curled, as a hand at rest or at work is (the
+-- rig's rest pose spreads them flat, which read as a glove blown up) ──────
+CURL = -0.45                  -- radians at the knuckle (roll in the bones' frame)
+function relax_hands()
+  for _, sd in ipairs({ "Left", "Right" }) do
+    pcall(anim.addBoneRot, anim, "Fingers1." .. sd, 0, 0, CURL * (holds and 1.3 or 1.0))
+    pcall(anim.addBoneRot, anim, "Fingers2." .. sd, 0, 0, CURL * 0.8)
+    pcall(anim.addBoneRot, anim, "Thumb1." .. sd, 0, 0, CURL * 0.35)
+  end
+end
+
 -- ── holding a clipboard (lab.lua gives one to a scientist or two) ───────────
 holds = false
 board = nil                   -- the clipboard node (top level, placed each frame)
@@ -174,18 +192,22 @@ function hold_board(node, t, o, rx, ry, rz, fx, fy, fz, ux, uy, uz)
   local tip = 0.75
   local nx, ny, nz = -fx * math.cos(tip) + ux * math.sin(tip), -fy * math.cos(tip) + uy * math.sin(tip),
     -fz * math.cos(tip) + uz * math.sin(tip)
+  -- up the board (away from the body, tipped)
+  local ax, ay, az = fx * math.sin(tip) + ux * math.cos(tip), fy * math.sin(tip) + uy * math.cos(tip),
+    fz * math.sin(tip) + uz * math.cos(tip)
   if board and board.valid ~= false then
     board.x, board.y, board.z = c.x, c.y, c.z
     -- its +Y up the board (away from the body, tipped), its -Z the normal
-    local ax, ay, az = fx * math.sin(tip) + ux * math.cos(tip), fy * math.sin(tip) + uy * math.cos(tip),
-      fz * math.sin(tip) + uz * math.cos(tip)
     pcall(board.setUp, board, vec3(ax, ay, az), vec3(-nx, -ny, -nz))
   end
-  local lh = vec3(c.x - rx * faceSign * 0.10 - ux * 0.06, c.y - ry * faceSign * 0.10 - uy * 0.06,
-                  c.z - rz * faceSign * 0.10 - uz * 0.06)
-  local wr = 0.03 * math.sin(t * 2.3)
-  local rh = vec3(c.x + rx * faceSign * (0.04 + wr) + nx * 0.03, c.y + ry * faceSign * (0.04 + wr) + ny * 0.03,
-                  c.z + rz * faceSign * (0.04 + wr) + nz * 0.03)
+  -- (the model's left is +x·faceSign: the left hand holds the board's left
+  -- edge from under it, the right writes on its right half. Swapped, the
+  -- forearms crossed through the coat: playtest 2026-11-03)
+  local lh = vec3(c.x + rx * faceSign * 0.10 - ax * 0.07 - nx * 0.035, c.y + ry * faceSign * 0.10 - ay * 0.07 - ny * 0.035,
+                  c.z + rz * faceSign * 0.10 - az * 0.07 - nz * 0.035)
+  local wr = 0.025 * math.sin(t * 2.3)
+  local rh = vec3(c.x - rx * faceSign * (0.03 + wr) - ax * 0.03 + nx * 0.035, c.y - ry * faceSign * (0.03 + wr) - ay * 0.03 + ny * 0.035,
+                  c.z - rz * faceSign * (0.03 + wr) - az * 0.03 + nz * 0.035)
   for _, k in ipairs({ { "Left", lh, 1 }, { "Right", rh, -1 } }) do
     local pole = vec3(o.x + rx * k[3] * faceSign * 0.35 - fx * 0.15 - ux * 0.5, o.y + ry * k[3] * faceSign * 0.35 - fy * 0.15 - uy * 0.5,
                       o.z + rz * k[3] * faceSign * 0.35 - fz * 0.15 - uz * 0.5)
@@ -193,24 +215,129 @@ function hold_board(node, t, o, rx, ry, rz, fx, fy, fz, ux, uy, uz)
   end
 end
 
-function look_head(t, rx, ry, rz, ux, uy, uz)
-  -- reading the clipboard
-  if holds and board and board.valid ~= false then
-    pcall(anim.lookAt, anim, { "Head" }, board.worldPos, { limit = 35, weight = 0.7 })
-    return
+-- ── where the head looks ─────────────────────────────────────────────────────
+-- Every frame, from what is live now (drawn poses, docs/positions-and-frames):
+-- the idle point (the work, a glance up; or the clipboard) and, when the crew
+-- is near, the crew's head (the camera while they talk to you). The two are
+-- blended as yaw and pitch in the scientist's own frame, clamped to a neck's
+-- reach, and smoothed there (never as a world point); the engagement eases in
+-- and out with hysteresis so it doesn't flicker at the edge.
+NECK_YAW, NECK_UP, NECK_DOWN = 1.15, 0.35, 0.55     -- radians
+gz = { eng = 0, yaw = 0, pitch = 0, init = false, on = false }
+looking = false              -- (published, probes) engaged with the crew
+local astro, astro_head = nil, nil
+local function crew_head()
+  if not valid(astro) then astro, astro_head = find and find("Astronaut") or nil, nil end
+  if not valid(astro) then return nil end
+  if not valid(astro_head) then
+    for _, c in ipairs(astro:children() or {}) do
+      if c.name == "AstroModel" then
+        for _, k in ipairs(c:children() or {}) do if k.name == "Face" then astro_head = k end end
+      end
+    end
   end
-  -- the head: down at the work, now and then a glance up and across
-  if look_m and valid(look_m) then
+  if valid(astro_head) then return astro_head.worldPos end
+  return astro:toWorld(vec3(0, 0.62, 0))
+end
+local function talking_to_me()
+  local lt = findScript and findScript("lab_talk")
+  return lt and lt.isOpen and lt.isOpen() and lt.talkingTo and lt.talkingTo() == idx
+end
+-- This frame's world point to look at (or nil): the camera while talking, else
+-- the crew's head.
+local function target_now()
+  if talking_to_me() then
+    local pc = findScript and findScript("planet_camera")
+    local n = pc and pc.node
+    if valid(n) then return n.worldPos end
+  end
+  return crew_head()
+end
+local function head_now(node)
+  local h = model and bone_w("Head")
+  return h or node:toWorld(vec3(0, 0.72, 0))
+end
+local function yaw_pitch(dx, dy, dz, rx, ry, rz, fx, fy, fz, ux, uy, uz)
+  local a = dx * rx + dy * ry + dz * rz
+  local b = dx * fx + dy * fy + dz * fz
+  local c = dx * ux + dy * uy + dz * uz
+  return math.atan2(a, b), math.atan2(c, math.sqrt(a * a + b * b)), math.sqrt(a * a + b * b + c * c)
+end
+local function wrap(a) return (a + math.pi) % (2 * math.pi) - math.pi end
+local function clamp(v, lo, hi) return math.max(lo, math.min(hi, v)) end
+
+-- (pure, tests) engaged next frame? d metres off, at yaw (rad), was engaged
+function wantsLook(d, yaw, was, near)
+  near = near or 3.0
+  local ay = math.abs(yaw)
+  if was then return d < near + 0.6 and ay < 2.85 end
+  return d < near and ay < 2.65
+end
+
+-- face.lua asks this each frame it poses the eyes: this frame's point and how
+-- much (nil: the face's own business).
+local self_node = nil
+local function gaze()
+  if gz.eng < 0.02 or not valid(self_node) then return nil end
+  local p = target_now()
+  if not p then return nil end
+  return p.x, p.y, p.z, gz.eng
+end
+
+function look_head(node, t, dt, rx, ry, rz, fx, fy, fz, ux, uy, uz)
+  self_node = node
+  if face_s and face_s.gaze ~= gaze then face_s.gaze = gaze end
+  local h = head_now(node)
+  -- the idle point: the clipboard, or the work and now and then a glance up
+  local ip = nil
+  local iw = 0.55
+  if holds and board and board.valid ~= false then
+    ip, iw = board.worldPos, 0.7
+  elseif look_m and valid(look_m) then
     local lk = to_world(look_m.x, look_m.y, look_m.z)
     if lk then
       local g = math.max(0, math.sin(t * 0.21) - 0.75) * 4
-      local gx = lk.x + ux * g * 0.5 + rx * math.sin(t * 0.13) * 0.3
-      local gy = lk.y + uy * g * 0.5 + ry * math.sin(t * 0.13) * 0.3
-      local gz = lk.z + uz * g * 0.5 + rz * math.sin(t * 0.13) * 0.3
-      pcall(anim.lookAt, anim, { "Head" }, vec3(gx, gy, gz), { limit = 25, weight = 0.55 })
+      ip = vec3(lk.x + ux * g * 0.5 + rx * math.sin(t * 0.13) * 0.3, lk.y + uy * g * 0.5 + ry * math.sin(t * 0.13) * 0.3,
+                lk.z + uz * g * 0.5 + rz * math.sin(t * 0.13) * 0.3)
     end
   end
+  local iyaw, ipitch = 0, -0.3
+  if ip then iyaw, ipitch = yaw_pitch(ip.x - h.x, ip.y - h.y, ip.z - h.z, rx, ry, rz, fx, fy, fz, ux, uy, uz) end
+  -- the crew
+  local cp = target_now()
+  local cyaw, cpitch, cd = 0, 0, 1e9
+  if cp then cyaw, cpitch, cd = yaw_pitch(cp.x - h.x, cp.y - h.y, cp.z - h.z, rx, ry, rz, fx, fy, fz, ux, uy, uz) end
+  gz.on = cp ~= nil and (talking_to_me() or wantsLook(cd, cyaw, gz.on, params.look_near))
+  looking = gz.on
+  dt = math.min(0.1, dt or 0.016)
+  gz.eng = gz.eng + ((gz.on and 1 or 0) - gz.eng) * (1 - math.exp(-3.5 * dt))
+  -- blend in the scientist's frame, within the neck's reach
+  iyaw, ipitch = clamp(iyaw, -NECK_YAW, NECK_YAW), clamp(ipitch, -NECK_DOWN, NECK_UP)
+  cyaw, cpitch = clamp(cyaw, -NECK_YAW, NECK_YAW), clamp(cpitch, -NECK_DOWN, NECK_UP)
+  local e = gz.eng * gz.eng * (3 - 2 * gz.eng)
+  local ty = iyaw + wrap(cyaw - iyaw) * e
+  local tp = ipitch + (cpitch - ipitch) * e
+  if not gz.init then
+    gz.yaw, gz.pitch, gz.init = ty, tp, true
+  else
+    local k = 1 - math.exp(-7 * dt)
+    gz.yaw = gz.yaw + wrap(ty - gz.yaw) * k
+    gz.pitch = gz.pitch + (tp - gz.pitch) * k
+  end
+  local cy, sy, cpt, spt = math.cos(gz.yaw), math.sin(gz.yaw), math.cos(gz.pitch), math.sin(gz.pitch)
+  local dx = fx * cpt * cy + rx * cpt * sy + ux * spt
+  local dy = fy * cpt * cy + ry * cpt * sy + uy * spt
+  local dz = fz * cpt * cy + rz * cpt * sy + uz * spt
+  local w = iw + (0.92 - iw) * e
+  pcall(anim.lookAt, anim, { "Head" }, vec3(h.x + dx * 1.5, h.y + dy * 1.5, h.z + dz * 1.5), { limit = 70, weight = w })
+  -- (probes) where the hands went after the IK, in the root's frame
+  if debugHands then
+    local function at(b) local p = bone_w(b); return p and node:toLocal(p) or nil end
+    handsAt = { L = at("Hand.Left"), R = at("Hand.Right"), SL = at("Upperarm.Left"), SR = at("Upperarm.Right") }
+  end
 end
+debugHands = false
+handsAt = nil
 
 function onDestroy()
   if board and board.valid ~= false then board:destroy() end

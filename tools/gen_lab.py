@@ -37,7 +37,8 @@ the lab 21.3 × 13.3 m inside):
 
 DRAW COST. One mesh node per material family, ten materials, about 60 k
 triangles; six real lights (the engine shades the 16 most important) and the
-rest glow. Every walkable surface and solid piece is ONE hidden mesh collider.
+rest glow. Every walkable surface and solid piece is a static box body (LabSolid N),
+never switched off.
 
 Prefabs written: LabInterior; LabCapsule (the sample capsule lab.lua sends
 up the tube).
@@ -377,6 +378,14 @@ def Bx(m, mat, col, x0, x1, y0, y1, z0, z1, sh=None, bevel=0.0):
     box(m, mat, ((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2), (x1 - x0, y1 - y0, z1 - z0), uv_m=1.0, bevel=bevel)
     if sh is not None:
         sh.add(((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2), (x1 - x0, y1 - y0, z1 - z0))
+
+
+def solid(sh, x0, x1, y0, y1, z0, z1):
+    """A collider box only (nothing drawn): the solid volume of something
+    drawn in finer pieces (a hood, a shelf unit, a stool, a coat rail), so the
+    crew can't walk through it and the talk camera's casts see it."""
+    x0, x1 = sorted((x0, x1)); y0, y1 = sorted((y0, y1)); z0, z1 = sorted((z0, z1))
+    sh.add(((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2), (x1 - x0, y1 - y0, z1 - z0))
 
 
 def Tb(m, mat, col, p0, p1, r, segs=12, r1=None):
@@ -724,6 +733,8 @@ def hoods(K):
         for xx in (x0, x1 - 0.06):
             Bx(m, "LabWall", CASE, xx, xx + 0.06, 0.90, 2.40, z0, zf, sh=sh)
         Bx(m, "LabWall", CASE, x0 + 0.004, x1 - 0.004, 2.10, 2.55, z0, zf + 0.004)
+        solid(sh, x0, x1, 0.90, 2.55, z0, zf)
+        solid(sh, xc - 0.18, xc + 0.18, 2.55, CY, z0 + 0.27, z0 + 0.63)
         Bx(m, "LabWall", CASE_SH, x0 + 0.06, x1 - 0.06, 0.90, 2.10, z0, z0 + 0.06)
         for k in range(3):
             Bx(m, "LabResin", (0.25, 0.26, 0.27), x0 + 0.1, x1 - 0.1, 1.05 + k * 0.35, 1.07 + k * 0.35, z0 + 0.06, z0 + 0.065)
@@ -760,6 +771,7 @@ def safety_station(K):
     Bx(m, "LabSteel", SAFETY_G, x + 0.08, x + 0.16, 1.55, 1.65, z - 0.12, z - 0.08)
     # the eyewash: a bowl on a pedestal, two nozzles, a push paddle
     xe = x + 0.75
+    solid(sh, xe - 0.2, xe + 0.2, FT, 1.08, z - 0.42, z + 0.06)
     Tb(m, "LabSteel", SAFETY_G, (xe, FT, z - 0.25), (xe, 0.95, z - 0.25), 0.04, segs=12)
     m.color = SAFETY_G
     sub = CModel(); sub.ground = False; sub.color = SAFETY_G
@@ -791,6 +803,7 @@ def sink_bench(K):
         if k % 2 == 0:
             glass_cyl(g, (-0.66 + k * 0.09, 1.05, z0 + 0.22), 0.03, 0.14, segs=12)
     # wall shelves of reagent bottles over the bench, the periodic table
+    solid(sh, x0 + 0.1, -1.8, 1.55, 2.2, z0, z0 + 0.3)
     for y in (1.55, 1.95):
         Bx(m, "LabSteel", STEEL, x0 + 0.1, -1.8, y, y + 0.02, z0, z0 + 0.3)
         rng = np.random.default_rng(int(y * 100))
@@ -828,7 +841,9 @@ def island(K, x0, x1, z0, z1, seed, scope_at=None):
                 px = xx + 0.18 + k * 0.08
                 Tb(m, "LabSteel", STEEL, (px, 0.97, zc + s * 0.09), (px, 0.97, zc + s * 0.13), 0.008, segs=8)
                 Tb(m, "LabResin", col, (px, 0.97, zc + s * 0.11), (px, 1.0, zc + s * 0.11), 0.012, segs=8)
-    # uprights and two glass shelves
+    # uprights and two glass shelves (one solid unit: nobody stands in it,
+    # and the talk camera must not be put in it)
+    solid(sh, x0 + 0.08, x1 - 0.08, 1.18, 2.25, zc - 0.21, zc + 0.21)
     for xx in (x0 + 0.1, (x0 + x1) / 2, x1 - 0.1):
         Bx(m, "LabSteel", STEEL, xx - 0.02, xx + 0.02, 1.2, 2.05, zc - 0.02, zc + 0.02)
         for y in (1.55, 1.95):
@@ -922,7 +937,7 @@ def wall_bench(K):
     # wall cupboards
     for xx in np.arange(x0, x1 - 0.5, 1.2):
         a, b = xx + 0.02, xx + 1.18
-        Bx(m, "LabWall", CASE, a, b, 1.6, 2.35, z1 - 0.36, z1)
+        Bx(m, "LabWall", CASE, a, b, 1.6, 2.35, z1 - 0.36, z1, sh=sh)
         Bx(m, "LabWall", CASE_SH, a + 0.03, b - 0.03, 1.64, 2.31, z1 - 0.362, z1 - 0.36)
         g.color = (1, 1, 1)
         box(g, "LabGlass", ((a + b) / 2, 1.975, z1 - 0.365), (b - a - 0.12, 0.62, 0.006))
@@ -986,6 +1001,7 @@ def receiving(K):
     x0, x1, z0, z1 = tx - 1.3, tx + 1.3, rz - 0.55, rz + 0.55
     casework(m, sh, x0, x1, z0, z1, top_y=0.95, resin=False, front=-1)
     # the receiver: a steel base ring, a glass bell, a cap where the tube lands
+    solid(sh, tx - 0.21, tx + 0.21, 0.95, 1.56, rz - 0.21, rz + 0.21)
     Tb(m, "LabSteel", STEEL_D, (tx, 0.95, rz), (tx, 1.0, rz), 0.2, segs=24)
     g.color = (1, 1, 1)
     Tb(g, "LabGlass", (1, 1, 1), (tx, 1.0, rz), (tx, 1.42, rz), 0.17, segs=24)
@@ -1023,6 +1039,7 @@ def receiving(K):
                          (x1 + 0.32, x1 + 0.4, z0 - 0.42, ZI)):
         Bx(m, "LabWall", SAFETY_Y, a, b, FT, FT + 0.0015, c, d)
     # the sample archive: wall shelves of labelled jars above the station's west
+    solid(sh, -XI, -XI + 0.32, 1.62, 2.7, 3.3, 5.9)
     for y in (1.65, 2.05, 2.45):
         Bx(m, "LabSteel", STEEL, -XI, -XI + 0.32, y, y + 0.02, 3.3, 5.9)
         rng = np.random.default_rng(int(y * 1000))
@@ -1050,6 +1067,7 @@ def instruments(K):
     Bx(m, "LabResin", DARKP, 3.0, 3.45, 0.77, 0.785, z0 + 0.55, z0 + 0.7)
     Bx(m, "LabWall", (0.86, 0.88, 0.9), 4.8, 6.0, FT, 0.82, z0 + 0.05, z0 + 1.05, sh=sh)
     Bx(m, "LabWall", (0.92, 0.93, 0.94), 5.0, 5.8, 0.82, 1.05, z0 + 0.25, z0 + 0.85, bevel=0.04)
+    solid(sh, 5.2, 5.6, 0.82, 2.05, z0 + 0.35, z0 + 0.75)
     Tb(m, "LabSteel", STEEL, (5.4, 1.05, z0 + 0.55), (5.4, 1.75, z0 + 0.55), 0.18, segs=24)
     Tb(m, "LabSteel", STEEL_D, (5.4, 1.75, z0 + 0.55), (5.4, 1.95, z0 + 0.55), 0.12, segs=20)
     Tb(m, "LabSteel", STEEL, (5.4, 1.95, z0 + 0.55), (5.4, 2.05, z0 + 0.55), 0.16, segs=20)
@@ -1074,6 +1092,7 @@ def instruments(K):
             Bx(m, "LabLamp", ((0.2, 1.0, 0.4) if (k + q) % 3 else (1.0, 0.6, 0.1)), 9.69, 9.695, y + 0.05, y + 0.07,
                -3.8 + q * 0.03, -3.79 + q * 0.03)
     # a lab stool by the SEM desk
+    solid(sh, 3.18, 3.62, FT, 0.68, z0 + 1.03, z0 + 1.47)
     Tb(m, "LabSteel", STEEL_D, (3.4, FT, z0 + 1.25), (3.4, 0.62, z0 + 1.25), 0.025, segs=8)
     Tb(m, "LabResin", (0.10, 0.12, 0.16), (3.4, 0.62, z0 + 1.25), (3.4, 0.68, z0 + 1.25), 0.19, segs=18)
     for k in range(5):
@@ -1114,6 +1133,7 @@ def west_east(K):
         Tb(m, "LabSteel", STEEL_D, c - wn * 0.02, c + wn * 0.04, 0.11, segs=20)
         Tb(m, "LabResin", (0.03, 0.03, 0.035), c - wn * 0.02, c - wn * 0.35 - np.array([0, 0.12, 0]), 0.09, segs=14, r1=0.05)
     # the antechamber: a steel cylinder on the side with its door
+    solid(sh, gx0 + 0.17, gx0 + 0.63, 0.97, 1.43, gz1, gz1 + 0.54)
     Tb(m, "LabSteel", STEEL, (gx0 + 0.4, 1.2, gz1), (gx0 + 0.4, 1.2, gz1 + 0.5), 0.2, segs=22)
     Tb(m, "LabSteel", STEEL_D, (gx0 + 0.4, 1.2, gz1 + 0.5), (gx0 + 0.4, 1.2, gz1 + 0.54), 0.23, segs=22)
     plate(m, "l_glovebox", (gx1 + 0.002, 1.78, (gz0 + gz1) / 2), (0, 0, -1), (0, 1, 0), 1.1, depth=0.004)
@@ -1151,6 +1171,7 @@ def west_east(K):
     Tb(m, "LabWall", (0.95, 0.95, 0.94), (XI - 0.01, 2.75, -0.7), (XI - 0.05, 2.75, -0.7), 0.15, segs=24)
     Tb(m, "LabResin", DARKP, (XI - 0.051, 2.75, -0.7), (XI - 0.053, 2.75, -0.7), 0.13, segs=24)
     # the fire extinguisher by the lab door, a first-aid box
+    solid(sh, 5.7, 5.9, FT, 1.0, ZI - 0.21, ZI)
     Tb(m, "LabWall", RED, (5.8, FT + 0.35, ZI - 0.12), (5.8, FT + 0.92, ZI - 0.12), 0.08, segs=16)
     Tb(m, "LabResin", DARKP, (5.8, FT + 0.92, ZI - 0.12), (5.8, FT + 1.0, ZI - 0.12), 0.03, segs=8)
     plate(m, "l_fire", (5.8, 1.55, ZI - 0.014), (-1, 0, 0), (0, 1, 0), 0.4, depth=0.003)
@@ -1166,11 +1187,14 @@ def west_east(K):
         P[:, 0] *= 0.35          # flattened against the wall
         hang.parts["LabWall"][0][:] = [P]
         m.merge(hang, None, (XI - 0.1, 1.88, zz))
+    solid(sh, XI - 0.14, XI, 0.85, 1.9, 3.75, 5.35)
     Bx(m, "LabWall", CASE, 7.2, 9.6, 0.42, 0.46, VZ + 0.15, VZ + 0.5)
+    solid(sh, 7.2, 9.6, FT, 0.75, VZ + 0.15, VZ + 0.5)     # (taller than the seat: not a step)
     for xx in (7.3, 9.5):
         Bx(m, "LabSteel", STEEL_D, xx - 0.02, xx + 0.02, FT, 0.42, VZ + 0.3, VZ + 0.34)
     Bx(m, "LabWall", TACKY, L["door_x0"] + 0.05, L["door_x1"] - 0.05, FT, FT + 0.004, ZI - 1.0, ZI - 0.08)
     Bx(m, "LabSteel", STEEL, XI - 0.45, XI, 0.82, 0.9, 5.6, 6.2)
+    solid(sh, XI - 0.45, XI, FT, 0.82, 5.6, 6.2)
     Tb(m, "LabSteel", STEEL, (XI - 0.08, 0.9, 5.9), (XI - 0.08, 1.15, 5.9), 0.01, segs=8)
     plate(m, "l_exit", (L["door_x0"] + 1.0, 2.75, ZI - 0.014), (-1, 0, 0), (0, 1, 0), 0.5, depth=0.003)
 
@@ -1309,6 +1333,34 @@ def empty_node(name, pos, parent=0):
 '''
 
 
+def solid_node(name, pos, half, parent=0):
+    return f'''    (
+        name: "{name}",
+        transform: (
+            translation: {f3(pos)},
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+        parent: Some({parent}),
+        cast_shadow: false,
+        rigidbody: Some((
+            boxed: true,
+            mode: Static,
+            radius: 0.5,
+            height: 1.0,
+            half_extents: {f3(half)},
+            restitution: 0.0,
+            friction: 0.9,
+            gravity: false,
+            lock_pos: (false, false, false),
+            lock_rot: (false, false, false),
+        )),
+    ),
+'''
+
+
 def light_node(name, pos, col, inten, rng, aim=None, parent=0, angle=70.0):
     rot = spot_rotation(aim) if aim is not None else (0.0, 0.0, 0.0, 1.0)
     spot = f"            spot: Some((angle: {angle}, softness: 0.6)),\n" if aim is not None else ""
@@ -1332,11 +1384,15 @@ def light_node(name, pos, col, inten, rng, aim=None, parent=0, angle=70.0):
 
 
 # Where the scientists work: (spot, the point they face, where the hands rest)
-SCIENTISTS = [   # (the bench fronts: receiving z 4.0, the islands z 1.18, the hoods z -5.73)
-    ("Sci 1", (L["tube_x"] + 0.35, FT, 3.52), (L["tube_x"] + 0.35, 1.2, 4.6), (L["tube_x"] + 0.35, 1.00, 4.04)),
-    ("Sci 2", (-5.2, FT, 1.58), (-5.2, 1.0, 0.4), (-5.2, 0.96, 1.08)),
-    ("Sci 3", (-7.5, FT, -5.25), (-7.5, 1.25, -6.4), (-7.5, 1.10, -5.72)),
-    ("Sci 4", (3.0, FT, 1.58), (3.0, 1.0, 0.4), (3.0, 0.96, 1.08)),
+# Each stands a hand's breadth off the bench front, the hands' point just over
+# its edge at the worktop: a straight arm of the rig is 0.55 m from shoulder
+# to wrist, so a point half a metre out from a body 0.4 m back held the arms
+# out stiff with the hands in the air short of the bench (playtest 2026-11-03).
+SCIENTISTS = [   # (the bench fronts: receiving z 4.0, the islands z 1.18, the hoods z -5.70)
+    ("Sci 1", (L["tube_x"] + 0.35, FT, 3.80), (L["tube_x"] + 0.35, 1.2, 4.6), (L["tube_x"] + 0.35, 1.04, 4.06)),
+    ("Sci 2", (-5.2, FT, 1.38), (-5.2, 1.0, 0.4), (-5.2, 0.99, 1.12)),
+    ("Sci 3", (-7.5, FT, -5.50), (-7.5, 1.25, -6.4), (-7.5, 1.00, -5.76)),
+    ("Sci 4", (3.0, FT, 1.38), (3.0, 1.0, 0.4), (3.0, 0.99, 1.12)),
 ]
 
 
@@ -1560,31 +1616,17 @@ def main():
               ((8.4, 2.7, 5.0), 1.5, 7.0, None), ((-9.8, 2.2, -0.4), 1.4, 7.0, None)]
     for i, (p, inten, rng, col) in enumerate(LIGHTS):
         out.append(light_node(f"Lab Light {i + 1}", np.asarray(p) - origin, col or (1.0, 0.955, 0.90), inten, rng))
-    # one hidden collider: every bench, partition and cabinet as a mesh
-    wm = CModel(1); wm.ground = False
-    for (c, s, q) in K.sh.boxes:
-        wm.color = (1, 1, 1)
-        box(wm, "Walk", c, s)
-    wmn, wmx = wm.bounds()
-    wc = (wmn + wmx) / 2
-    write_glb(wm.shifted(wc), os.path.join(MODELS, "lab_walk.glb"))
-    out.append(f'''    (
-        name: "LabWalk",
-        transform: (
-            translation: {f3(wc - origin)},
-            rotation: (0.0, 0.0, 0.0, 1.0),
-            scale: (1.0, 1.0, 1.0),
-        ),
-        matter: Mesh(
-            asset_path: "models/lab/lab_walk.glb",
-        ),
-        scripts: [],
-        parent: Some(0),
-        mesh_collider: true,
-        visible: false,
-        cast_shadow: false,
-    ),
-''')
+    # THE SOLIDS: every bench, partition, cabinet and instrument as a static
+    # box body ("LabSolid N"; the scientists carry their own capsules,
+    # prefabs/LabScientist). Children of LabInterior's root that scripts/lab.lua
+    # never switches off (it switches the drawn children only): a collider
+    # whose node is switched off is parked by the engine and, on a planet on
+    # its rails, comes back where the planet was when it left (2026-11-03:
+    # walking through the lab's benches). Boxes, not one mesh: the cheapest
+    # shape for the walker and for the talk camera's casts. cast_shadow off:
+    # a body is a shadow proxy otherwise.
+    for i, (c, s, q) in enumerate(K.sh.boxes):
+        out.append(solid_node(f"LabSolid {i + 1}", np.asarray(c, float) - origin, np.asarray(s, float) / 2))
     out.append("]\n")
     with open(os.path.join(PREFABS, "LabInterior.prefab.ron"), "w") as f:
         f.write("".join(out))

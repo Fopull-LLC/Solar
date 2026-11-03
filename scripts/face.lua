@@ -36,6 +36,11 @@
 --   face.still                     true: no blinks, saccades or drift (probes)
 --   face.mood                      the expression's name, for probes
 --   face.live                      true while the face is animating
+--   face.gaze                      an owner's look hook: a function giving THIS frame's
+--                                  world point and weight (x, y, z, w), or nil. Set, the
+--                                  eyes follow it and the head is the owner's to turn
+--                                  (scientist.lua); unset, the head and eyes turn to a
+--                                  near camera
 
 defaults = {
   near_m = 30.0,
@@ -45,6 +50,7 @@ defaults = {
   look_m = 4.0,          -- the main camera this close: the member looks at it
 }
 local function P(k) return (params and params[k]) or defaults[k] end
+gaze = nil
 
 -- @face-rig BEGIN (tools/gen_faces.py writes this block; don't edit it by hand)
 RIG = {
@@ -480,8 +486,19 @@ function lateUpdate(node, dt)
   end
   local pos, rot = pose(ch, head)
   anim:setBones(idx, pos, rot)
-  -- the head and the eyes turn to the camera when it is close
-  local cx, cy, cz = cam_point()
+  -- an owner's look (scientist.lua): the eyes to its point, asked now so it
+  -- is this frame's (docs/positions-and-frames.md, rule 1)
+  local cx, cy, cz = nil, nil, nil
+  if gaze then
+    local okg, gx, gy, gzz, gw = pcall(gaze)
+    if okg and gx and not dead and (gw or 0) > 0.01 then
+      pcall(anim.lookAt, anim, { "EyeL" }, vec3(gx, gy, gzz), { limit = 30, weight = gw })
+      pcall(anim.lookAt, anim, { "EyeR" }, vec3(gx, gy, gzz), { limit = 30, weight = gw })
+    end
+  else
+    -- the head and the eyes turn to the camera when it is close
+    cx, cy, cz = cam_point()
+  end
   if cx and not dead and model_node then
     local dx, dy, dz = cx - node.x, cy - node.y, cz - node.z
     local d = math.sqrt(dx * dx + dy * dy + dz * dz)

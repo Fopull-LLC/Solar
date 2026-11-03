@@ -124,6 +124,41 @@ for i = 0, 400 do
 end
 ok(maxj > 0.25 and maxj < 0.45 and minj < 0.08, string.format("the jaw opens and closes (%.2f..%.2f)", minj, maxj))
 
+-- ── the solids stay on (playtest 2026-11-03: walked through the benches) ────
+-- A switched-off collider is parked where the planet was; lab.lua switches
+-- the drawn children only.
+ok(LB.isSolid({ name = "LabSolid 12" }) and not LB.isSolid({ name = "LabFurniture" }) and not LB.isSolid({ name = "Lab Light 3" }),
+  "only the LabSolid boxes are kept on")
+local fh = io.open("solar/prefabs/LabInterior.prefab.ron") or io.open("prefabs/LabInterior.prefab.ron")
+local ron = fh and fh:read("*a") or ""
+if fh then fh:close() end
+local nsol = 0
+for _ in ron:gmatch('name: "LabSolid %d+"') do nsol = nsol + 1 end
+ok(nsol >= 50, "the interior has its box solids (" .. nsol .. ")")
+ok(not ron:find("mesh_collider"), "no hidden mesh collider left in the interior")
+local fs = io.open("solar/prefabs/LabScientist.prefab.ron") or io.open("prefabs/LabScientist.prefab.ron")
+local sron = fs and fs:read("*a") or ""
+if fs then fs:close() end
+local rad = tonumber(sron:match("capsule: true,.-radius: ([%d%.]+)"))
+ok(rad and rad >= 0.2, "a scientist's capsule is a person's width (" .. tostring(rad) .. ")")
+ok(sron:find("cast_shadow: false") ~= nil, "a scientist's capsule is no shadow proxy")
+
+-- ── the scientists look at you: in, out, with hysteresis ────────────────────
+local SC = load_script("scripts/scientist.lua", "scientist")
+ok(SC.wantsLook(2.0, 0.3, false, 3.0), "two metres off in front: they look")
+ok(not SC.wantsLook(3.3, 0.3, false, 3.0), "3.3 m off: not yet")
+ok(SC.wantsLook(3.3, 0.3, true, 3.0), "…but once looking, 3.3 m keeps it (hysteresis)")
+ok(not SC.wantsLook(4.0, 0.3, true, 3.0), "four metres: they go back to the work")
+ok(not SC.wantsLook(1.5, math.rad(170), false, 3.0), "right behind them: they don't turn round")
+ok(SC.NECK_YAW <= math.rad(75) and SC.NECK_UP < SC.NECK_DOWN, "the neck has limits")
+
+-- ── the talk camera's spots ─────────────────────────────────────────────────
+local sides = { l = 0, r = 0 }
+for _, sp in ipairs(LT.CLOSE_SPOTS) do if sp[2] > 0 then sides.l = sides.l + 1 elseif sp[2] < 0 then sides.r = sides.r + 1 end end
+ok(sides.l >= 4 and sides.r >= 4, "close-up spots on both sides of the scientist")
+ok(#LT.MEDIUM_SPOTS >= 8, "medium spots to fall back on")
+for _, sp in ipairs(LT.CLOSE_SPOTS) do ok(math.sqrt(sp[1] ^ 2 + sp[2] ^ 2) < 1.2, "a close-up stays close") end
+
 if #failures > 0 then
   for _, f in ipairs(failures) do print("FAIL: " .. f) end
   print(string.format("smoke_lab: %d/%d checks failed", #failures, checks))

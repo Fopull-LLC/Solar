@@ -1,7 +1,8 @@
 // LAB SCIENTIST — one of the Research Lab's staff (scripts/scientist.lua; lab.lua spawns them at
 // their stations): the crew's rig in a lab coat (models/lab/scientist.glb, tools/gen_labwear.py),
-// the crew's own head, hair and face (scripts/face.lua), a static capsule you can't walk through
-// (thin, inside the body: a collider is a shadow proxy, and one round the coat shadowed its own front).
+// the crew's own head, hair and face (scripts/face.lua), a static capsule you can't walk through (a
+// person's width; cast_shadow off, so it is no shadow proxy for the coat). lab.lua never switches this
+// root off, only its LabModel: a switched-off collider is parked and comes back where the planet was.
 [
     (
         name: "LabScientist",
@@ -19,11 +20,12 @@
                 params: [],
             ),
         ],
+        cast_shadow: false,
         rigidbody: Some((
             capsule: true,
             mode: Static,
-            radius: 0.13,
-            height: 1.7,
+            radius: 0.24,
+            height: 1.75,
             half_extents: (0.5, 0.5, 0.5),
             restitution: 0.0,
             friction: 0.3,

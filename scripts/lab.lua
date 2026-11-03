@@ -16,9 +16,10 @@
 --     and a pipe-rack post.
 --   * THE INTERIOR is drawn, lit and simulated only while the crew is in
 --     the lab, its link corridor or the depot, or at the outside door; out
---     of doors the whole node is switched off (node.enabled), so the lab
---     costs nothing from the yard. `forceInside` (probes, the talk view)
---     keeps it on.
+--     of doors its drawn children are switched off (node.enabled), so the
+--     lab costs nothing from the yard. Its solids (static boxes, the
+--     scientists' bodies) stay on: see set_inside. `forceInside` (probes,
+--     the talk view) keeps it on.
 --   * THE DOORS slide open as the crew comes near them (the lab's pair from
 --     the link, the vestibule's, the instrument room's, the link's outside
 --     door), and shut behind.
@@ -464,6 +465,14 @@ STAFF = {
   { name = "Hana Nakamura", role = "Wet chemistry", spot = "Sci 3", seed = 813 },
   { name = "Ravi Pillai", role = "Analytical chemistry", spot = "Sci 4", seed = 814, clipboard = true },
 }
+-- A scientist: its model (and face) on or off, its root (the capsule) kept.
+local function sci_show(n, on)
+  if not valid(n) then return end
+  if n.enabled == false then n.enabled = true end
+  for _, c in ipairs(n:children() or {}) do
+    if c.enabled ~= on then c.enabled = on end
+  end
+end
 local sci_spawned = false
 local function spawn_scientists()
   if sci_spawned or not (valid(interior) and spawn and F) then return end
@@ -501,8 +510,9 @@ local function spawn_scientists()
             boards[#boards + 1] = cb
           end)
         end
-        -- they live in the interior's world: switched off with it
-        n.enabled = inside
+        -- they live in the interior's world: drawn only with it (the root and
+        -- its capsule stay on: set_inside)
+        sci_show(n, inside)
       end, planet)
     end
   end
@@ -515,7 +525,7 @@ function nearAstro(a, reach)
   if not (a and inside) then return nil end
   local best, bd = nil, reach or 2.2
   for _, s in ipairs(scientists) do
-    if valid(s.node) and s.node.enabled ~= false then
+    if valid(s.node) and inside then
       local d = a.distanceTo and a:distanceTo(s.node) or len(a.x - s.node.x, a.y - s.node.y, a.z - s.node.z)
       if d < bd then best, bd = s, d end
     end
@@ -555,11 +565,29 @@ local function find_interior()
   return nil
 end
 
+-- The interior's solids ("LabSolid N" boxes) and the scientists' roots
+-- (their capsules) are never switched off; only what is drawn is. The engine parks a switched-off
+-- node's colliders and brings them back where they were in the WORLD when
+-- they left, but the planet has moved on its rails meanwhile (1.5-6 m a
+-- tick), so after the first trip to the yard every bench, partition and
+-- scientist stood somewhere out in space and the crew walked through them;
+-- a save loaded inside never parked them, so it collided until the crew
+-- went out. (The boxes cost nothing standing still: static bodies.)
+local function is_solid(c)
+  local nm = c.name or ""
+  return nm:sub(1, 9) == "LabSolid "
+end
+function isSolid(c) return valid(c) and is_solid(c) end
 local function set_inside(on)
   if on == inside then return end
   inside = on
-  if valid(interior) then interior.enabled = on end
-  for _, s in ipairs(scientists) do if valid(s.node) then s.node.enabled = on end end
+  if valid(interior) then
+    if interior.enabled == false then interior.enabled = true end
+    for _, c in ipairs(interior:children() or {}) do
+      if not is_solid(c) and c.enabled ~= on then c.enabled = on end
+    end
+  end
+  for _, s in ipairs(scientists) do sci_show(s.node, on) end
   for _, c in ipairs(boards) do if valid(c) then c.enabled = on end end
   if log then log("lab: interior " .. (on and "on" or "off")) end
 end

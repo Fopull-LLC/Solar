@@ -48,6 +48,8 @@ openedAt = -10
 viewMat = nil             -- (probes) the material open in the close-up
 
 function isOpen() return S.open end
+-- (scientist.lua) the station index of who you are talking to, or nil
+function talkingTo() return S.open and S.sci and S.sci.idx or nil end
 
 -- ── the shots (drawn poses, this frame) ─────────────────────────────────────
 -- The scientist's head (the Face node rides the Head bone) and their facing.
@@ -78,30 +80,133 @@ local function facing(sci)
   return (sc and sc.faceSign) or 1
 end
 
+-- WHERE THE CAMERA STANDS, per scientist: every one of them faces a bench,
+-- a hood or a wall, so a fixed spot in front of them put the camera in the
+-- fume hood or through the wall (playtest 2026-11-03). Candidates, in the
+-- scientist's own frame (forward, side, rise from the head; preferred
+-- first), are tried with a sphere cast from the head out to each spot (and
+-- a little past it): the first clear one is the shot. With none clear, the
+-- one with the most room, pulled in short of what it hit (a tighter shot).
+-- Picked when a shot starts and kept as those three numbers (never a world
+-- point); the shot function places it every frame from the head as drawn.
+CLOSE_SPOTS = {
+  { 0.95, 0.30, 0.02 }, { 0.95, -0.30, 0.02 }, { 0.80, 0.55, 0.02 }, { 0.80, -0.55, 0.02 },
+  { 0.55, 0.80, 0.02 }, { 0.55, -0.80, 0.02 }, { 0.25, 0.92, 0.03 }, { 0.25, -0.92, 0.03 },
+  { 0.0, 0.95, 0.04 }, { 0.0, -0.95, 0.04 }, { 0.60, 0.15, 0.0 }, { 0.40, 0.55, 0.0 }, { 0.40, -0.55, 0.0 },
+}
+MEDIUM_SPOTS = {
+  { 1.75, -1.25, 0.12 }, { 1.75, 1.25, 0.12 }, { 1.30, -1.60, 0.12 }, { 1.30, 1.60, 0.12 },
+  { 0.70, -1.90, 0.14 }, { 0.70, 1.90, 0.14 }, { 0.15, -2.0, 0.16 }, { 0.15, 2.0, 0.16 },
+  { -0.40, -1.90, 0.20 }, { -0.40, 1.90, 0.20 }, { 1.10, -0.80, 0.10 }, { 1.10, 0.80, 0.10 },
+}
+SHOT_R = 0.16                -- the camera's clearance (m)
+local function ignore_list(sci)
+  local ig = {}
+  if sci and valid(sci.node) then
+    ig[#ig + 1] = sci.node
+    local sc = sci.node.getScript and sci.node:getScript("scientist")
+    if sc and valid(sc.board) then ig[#ig + 1] = sc.board end
+  end
+  local a = find and find("Astronaut")
+  if valid(a) then ig[#ig + 1] = a end
+  return ig
+end
+-- The camera point for spot `sp` from head `h` along the scientist's axes.
+local function spot_point(h, f, r, u, sp)
+  return { x = h.x + f.x * sp[1] + r.x * sp[2] + u.x * sp[3], y = h.y + f.y * sp[1] + r.y * sp[2] + u.y * sp[3],
+           z = h.z + f.z * sp[1] + r.z * sp[2] + u.z * sp[3] }
+end
+-- How far a ball can go from the head toward a spot (its length if clear).
+-- (On engine .1406 a cast's `ignore` does not skip the scientist's own static
+-- capsule, which the ball starts inside: a hit on an ignored node is stepped
+-- past and the cast goes on from there.)
+local function room_to(h, c, ig)
+  local dx, dy, dz = c.x - h.x, c.y - h.y, c.z - h.z
+  local L = len(dx, dy, dz)
+  if L < 1e-3 then return 0, 0 end
+  dx, dy, dz = dx / L, dy / L, dz / L
+  local reach = L + 0.15
+  local skip = {}
+  for _, n in ipairs(ig) do skip[n.id or n] = true end
+  local from = 0
+  for _ = 1, 4 do
+    local ox, oy, oz = h.x + dx * from, h.y + dy * from, h.z + dz * from
+    local ok, hit = pcall(spherecast, vec3(ox, oy, oz), vec3(dx, dy, dz), SHOT_R, reach - from, { ignore = ig, ignoreStart = true })
+    if not ok then return 0, L, "err " .. tostring(hit) end
+    if not (hit and hit.distance) then return reach, L, "clear" end
+    local hn = hit.node
+    if hn and skip[hn.id or hn] then
+      from = from + hit.distance + 0.5
+      if from >= reach then return reach, L, "clear" end
+    else
+      return from + hit.distance, L, hn and hn.name
+    end
+  end
+  return from, L, "?"
+end
+-- (probes) the last choice: { close = {i, spot, clear}, medium = {...} }
+shotPick = {}
+tries = {}           -- (probes) the last pick's casts
+function pickSpot(sci, close)
+  local h, f, u, r = head_of(sci)
+  local list = close and CLOSE_SPOTS or MEDIUM_SPOTS
+  if not h then return list[1], 1, false end
+  local s = facing(sci)
+  f = { x = f.x * s, y = f.y * s, z = f.z * s }
+  r = { x = r.x * s, y = r.y * s, z = r.z * s }
+  local ig = ignore_list(sci)
+  local best, bi, broom = nil, 1, -1
+  tries = {}
+  -- (the medium shot shows them to the waist: the chest must be in view too,
+  -- not only the head; a receiver bell between hid Dr Okafor)
+  local chest = { x = h.x - u.x * 0.42, y = h.y - u.y * 0.42, z = h.z - u.z * 0.42 }
+  for i, sp in ipairs(list) do
+    local c = spot_point(h, f, r, u, sp)
+    local room, L, what = room_to(h, c, ig)
+    if room >= L + 0.15 - 1e-3 and not close then
+      local r2, L2, w2 = room_to(chest, c, ig)
+      if r2 < L2 - 0.05 then room, what = math.min(room, r2 * L / math.max(L2, 1e-3)), "chest:" .. tostring(w2) end
+    end
+    tries[#tries + 1] = string.format("%d:%.2f/%.2f %s", i, room, L, tostring(what))
+    if room >= L + 0.15 - 1e-3 then
+      shotPick[close and "close" or "medium"] = { i = i, spot = sp, clear = true }
+      return sp, i, true
+    end
+    local frac = room / math.max(L, 1e-3)
+    if frac > broom then best, bi, broom = { sp, room, L }, i, frac end
+  end
+  -- none clear: the roomiest, pulled in short of what it met
+  local sp, room, L = best[1], best[2], best[3]
+  local k = math.max(0.35, (room - SHOT_R - 0.05) / math.max(L, 1e-3))
+  local t = { sp[1] * k, sp[2] * k, sp[3] }
+  shotPick[close and "close" or "medium"] = { i = bi, spot = t, clear = false }
+  return t, bi, false
+end
+
 local function shot_for(close)
+  local sp = pickSpot(S.sci, close)
   return function()
     local h, f, u, r = head_of(S.sci)
     if not h then return nil end
     local s = facing(S.sci)
     f = { x = f.x * s, y = f.y * s, z = f.z * s }
     r = { x = r.x * s, y = r.y * s, z = r.z * s }
-    local d, side, rise, aim_side, aim_drop
-    if close then
-      -- a close-up: head and shoulders, the face on the right third (the
-      -- strip is on the left)
-      d, side, rise, aim_side, aim_drop = 0.95, 0.30, 0.02, -0.20, 0.06
-    else
-      -- a medium shot: from the waist, the scientist on the left third (the
-      -- plate is on the right)
-      d, side, rise, aim_side, aim_drop = 1.75, -1.25, 0.12, 0.45, 0.30
-    end
-    local cx = h.x + f.x * d + r.x * side + u.x * rise
-    local cy = h.y + f.y * d + r.y * side + u.y * rise
-    local cz = h.z + f.z * d + r.z * side + u.z * rise
-    local px = h.x + r.x * aim_side - u.x * aim_drop
-    local py = h.y + r.y * aim_side - u.y * aim_drop
-    local pz = h.z + r.z * aim_side - u.z * aim_drop
-    return cx, cy, cz, px, py, pz, u.x, u.y, u.z
+    local c = spot_point(h, f, r, u, sp)
+    -- the framing, along the CAMERA's own right (whichever side it stands):
+    -- close, the face on the right third (the strip is on the left); medium,
+    -- the scientist on the left third (the plate is on the right)
+    local vx, vy, vz = h.x - c.x, h.y - c.y, h.z - c.z
+    local cx_, cy_, cz_ = vy * u.z - vz * u.y, vz * u.x - vx * u.z, vx * u.y - vy * u.x
+    local cl = len(cx_, cy_, cz_)
+    if cl < 1e-6 then cx_, cy_, cz_, cl = r.x, r.y, r.z, 1 end
+    cx_, cy_, cz_ = cx_ / cl, cy_ / cl, cz_ / cl
+    local d = len(vx, vy, vz)
+    local aside, adrop
+    if close then aside, adrop = -0.21 * d / 0.99, 0.06 else aside, adrop = 0.47 * d / 2.15, 0.30 end
+    local px = h.x + cx_ * aside - u.x * adrop
+    local py = h.y + cy_ * aside - u.y * adrop
+    local pz = h.z + cz_ * aside - u.z * adrop
+    return c.x, c.y, c.z, px, py, pz, u.x, u.y, u.z
   end
 end
 
