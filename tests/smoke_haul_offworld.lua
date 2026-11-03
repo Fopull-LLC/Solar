@@ -10,8 +10,11 @@
 --  * it pays more for rarer and deeper ores, and more for farther bodies;
 --  * it is only offered once the company has reached that body (or one no
 --    easier to get back from), and only inside the tiers that open hauls;
---  * the delivery counts only ore MINED ON that body (materials.minedOn, the
---    ore's recorded origin), and the buyer takes it;
+--  * the delivery counts only ore MINED ON that body: every lot keeps the
+--    body it was dug on through the pack, a hold and the warehouse
+--    (inventory.lua `inv.org.<cid>`), so moon A's ilmenite never fills moon
+--    B's haul, and the buyer takes B's lot only; an old save's untagged ore
+--    falls back to the record (materials.minedOn / legacyMinedOn);
 --  * the haul's "set foot on X" is a visit, not a flag (the old haul text and
 --    latch called it a beacon and stopped the board offering the flag).
 
@@ -235,20 +238,98 @@ check("setting foot on the moon ticks the first goal", mi.goalLines()[1]:sub(1, 
 check("…and is a visit, not a flag (the flag contract stays on offer)",
   not (store["mission.flags"] or {}).Ryethos and (store["mission.visited"] or {}).Ryethos)
 put(astro, "Umunquo", 1)
+-- PER-LOT ORIGIN (inventory.lua `inv.org.<cid>`): ore mined on moon A
+-- (Oskal) and on moon B (Ryethos) is the same material, in separate stacks,
+-- through the pack, a craft's hold and the warehouse.
+check("a new save has no legacy snapshot yet", store["ore.minedOnLegacy"] == nil)
+local function mine(body, n)
+  local took = inv.add("astro", mat, n, body)
+  mats.noteOrigin(mat, body)
+  return took
+end
+check("ore mined on moon A goes in the pack tagged with A", mine("Oskal", units) == units
+  and inv.count("astro", mat) == units and inv.count("astro", mat, "Oskal") == units
+  and inv.count("astro", mat, "Ryethos") == 0 and inv.untagged("astro", mat) == 0)
+check("…and the first tagged lot closes the old record (an empty snapshot)",
+  type(store["ore.minedOnLegacy"]) == "table" and next(store["ore.minedOnLegacy"]) == nil)
+mine("Ryethos", 1)
+mine("Oskal", 2)
+local st = inv.stacks("astro")
+check("the same ore from two moons is two stacks; a second lot from A merges into A's",
+  #st == 2 and st[1].origin == "Oskal" and st[1].n == units + 2 and st[2].origin == "Ryethos" and st[2].n == 1,
+  (function() local t = {} for _, r in ipairs(st) do t[#t + 1] = r.n .. "×" .. r.label end return table.concat(t, ", ") end)())
+check("…and each stack names its world", st[1].label == mats.label(mat) .. " · Oskal"
+  and st[2].label == mats.label(mat) .. " · Ryethos" and st[1].key ~= st[2].key, st[1].label)
+local row = inv.items("astro")[1]
+check("items() keeps one row per material, with its origins", #inv.items("astro") == 1
+  and row.n == units + 3 and row.origins and #row.origins == 2)
+inv.add("astro", "iron", 3, "Umunquo")
+check("home-world ore stays untagged: one plain stack", inv.untagged("astro", "iron") == 3
+  and next(inv.origins("astro", "iron")) == nil and inv.stackLabel("iron", "Umunquo") == mats.label("iron"))
+inv.remove("astro", "iron", 3)
+-- into a craft's hold (part of it: the hold is small), and out at the depot
+inv.setCap("hold:Rover", mats.kg(mat) * 4)
+local into = inv.transferAll("astro", "hold:Rover")
+check("a hold too small takes what fits, origins and all; the rest stays in the pack",
+  into == 4 and inv.count("hold:Rover", mat) == 4 and inv.count("hold:Rover", mat, "Oskal") == 4
+  and inv.count("astro", mat) == units - 1 and inv.count("astro", mat, "Ryethos") == 1, into)
+inv.setCap("hold:Rover", 10000)
+inv.transferAll("astro", "hold:Rover")
+check("…and the rest follows when there is room", inv.count("hold:Rover", mat, "Oskal") == units + 2
+  and inv.count("hold:Rover", mat, "Ryethos") == 1 and inv.isEmpty("astro"))
+inv.transferAll("hold:Rover", "base")
+second()
+check("unloaded at the depot, the lots keep their worlds", inv.count("base", mat, "Oskal") == units + 2
+  and inv.count("base", mat, "Ryethos") == 1 and inv.isEmpty("hold:Rover"))
+check("moon A's ore doesn't fill moon B's haul, though B's ore has been mined",
+  mi.active == s.id and mats.minedOn(mat, "Ryethos"), mi.goalLines()[2])
+check("…and the line counts B's lot alone, and says the rest is from elsewhere",
+  mi.goalLines()[2]:find(string.format("(%.0f / %d kg in the warehouse, ", mats.kg(mat), kg), 1, true)
+  and mi.goalLines()[2]:find("from elsewhere", 1, true), mi.goalLines()[2])
+check("…while the depot keeps it back for the contract", mi.reserves(mat))
 inv.add("base", mat, units)
 second()
-check("the ore in the warehouse with no recorded origin doesn't count", mi.active == s.id, mi.goalLines()[2])
-check("…and the line says why", mi.goalLines()[2]:find("none mined on Ryethos yet", 1, true), mi.goalLines()[2])
-check("…while the depot keeps it back for the contract", mi.reserves(mat))
-mats.noteOrigin(mat, "Oskal")
-second()
-check("ore first mined on another moon doesn't count", mi.active == s.id and mats.originOf(mat) == "Oskal", mi.goalLines()[2])
-mats.noteOrigin(mat, "Ryethos")
+check("untagged ore in a save that has tagged lots doesn't count either", mi.active == s.id, mi.goalLines()[2])
+inv.remove("base", mat, units, false)
 local bal = co.balance()
+mine("Ryethos", units)
+inv.transferAll("astro", "base")
 second()
-check("ore mined on the moon itself pays (its first origin elsewhere notwithstanding)",
-  paid(s) and co.balance() == bal + s.reward, tostring(mi.active))
+check("ore mined on moon B itself pays", paid(s) and co.balance() == bal + s.reward, tostring(mi.active))
+local need = math.ceil(kg / mats.kg(mat) - 1e-6)
+check("…and the buyer takes B's lot only: A's is all still there",
+  inv.count("base", mat, "Oskal") == units + 2 and inv.count("base", mat, "Ryethos") == units + 1 - need,
+  string.format("Oskal %d, Ryethos %d (need %d)", inv.count("base", mat, "Oskal"), inv.count("base", mat, "Ryethos"), need))
+
+-- an OLD SAVE: ore in the warehouse with no lot origins, and the record of
+-- where it had been mined (ore.minedOn, ore.origin) from before the lots
+for _, k in ipairs({ "ore.minedOn", "ore.origin", "ore.minedOnLegacy", "inv.base", "inv.org.base", "inv.astro", "inv.org.astro" }) do store[k] = nil end
+store["inv.base"] = { [mat] = units }
+store["ore.origin"] = { [mat] = "Oskal" }
+s = take("orehaul", "Ryethos", 1)
+put(astro, "Ryethos", 1); second(); put(astro, "Umunquo", 1)
+second()
+check("old save: the untagged ore loads, one plain stack", inv.count("base", mat) == units
+  and #inv.stacks("base") == 1 and inv.stacks("base")[1].origin == nil and inv.untagged("base", mat) == units)
+check("…and, first mined on another moon, doesn't count", mi.active == s.id, mi.goalLines()[2])
+check("…and the line says why", mi.goalLines()[2]:find("none mined on Ryethos yet", 1, true), mi.goalLines()[2])
+store["ore.minedOn"] = { [mat] = { Oskal = true, Ryethos = true } }
+bal = co.balance()
+second()
+check("old save mined on the moon too: the untagged ore falls back to the record and pays",
+  paid(s) and co.balance() == bal + s.reward, tostring(mi.active) .. " " .. tostring(mi.goalLines()[2]))
 check("…and the buyer takes it", inv.count("base", mat) * mats.kg(mat) < kg, inv.count("base", mat))
+-- …and once that old save tags a lot, its record stands as it was before
+store["inv.base"] = { [mat] = units }
+store["ore.minedOn"] = { [mat] = { Oskal = true } }
+store["ore.minedOnLegacy"] = nil
+mine("Ryethos", 1)
+check("an old save's first tagged lot snapshots its record as it stood",
+  store["ore.minedOnLegacy"][mat] and store["ore.minedOnLegacy"][mat].Oskal == true
+  and not store["ore.minedOnLegacy"][mat].Ryethos and mats.legacyMinedOn(mat, "Oskal")
+  and not mats.legacyMinedOn(mat, "Ryethos") and mats.minedOn(mat, "Ryethos"))
+inv.clear("astro")
+check("clear empties the lots too", inv.isEmpty("astro") and next(inv.origins("astro", mat)) == nil)
 
 -- a haul's set-foot no longer plants the flag: the flag is still offered there
 check("a flag contract is still offered on the moon after the haul", (function()

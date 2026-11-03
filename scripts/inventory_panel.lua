@@ -181,14 +181,15 @@ end
 
 -- ── moving cargo ────────────────────────────────────────────────────────────
 
--- Move one stack. Called by a row's click.
-function moveStack(mat)
+-- Move one stack (a material, and with `origin` only the lot mined on that
+-- body: inventory.stacks). Called by a row's click.
+function moveStack(mat, origin)
   local inv = ref("inventory")
   if not (inv and targetId) then return end
-  local have = inv.count("astro", mat)
-  local moved = inv.transfer("astro", targetId, mat, have)
+  local have = inv.count("astro", mat, origin)
+  local moved = inv.transfer("astro", targetId, mat, have, origin)
   local mats = ref("materials")
-  local nm = (mats and mats.label(mat)) or mat
+  local nm = (inv.stackLabel and inv.stackLabel(mat, origin)) or (mats and mats.label(mat)) or mat
   if moved == 0 then
     say(string.format("%s won't fit in the %s", nm, targetLabel or "hold"), true)
   elseif moved < have then
@@ -244,12 +245,12 @@ function takeItem(id)
   else say(string.format("can't take the %s: %s", item_name(inv, id), why or "no room in the pack"), true) end
   return n
 end
-function takeStack(mat)
+function takeStack(mat, origin)
   local inv, mats = ref("inventory"), ref("materials")
   if not (inv and is_crate(targetId)) then return 0 end
-  local have = inv.count(targetId, mat)
-  local moved = inv.transfer(targetId, "astro", mat, have)
-  local nm = (mats and mats.label(mat)) or mat
+  local have = inv.count(targetId, mat, origin)
+  local moved = inv.transfer(targetId, "astro", mat, have, origin)
+  local nm = (inv.stackLabel and inv.stackLabel(mat, origin)) or (mats and mats.label(mat)) or mat
   if moved == 0 then say(string.format("no room in the pack for %s", nm), true)
   elseif moved < have then say(string.format("%d of %d %s taken — the pack is full", moved, have, nm), true)
   else say(string.format("%d × %s → the pack", moved, nm)) end
@@ -322,19 +323,19 @@ local function stack_row(entry, mats, co)
   local ink = TIER_INK[mats and mats.tier(entry.mat) or 1] or TIER_DEFAULT
   local money = (co and co.money) and co.money(entry.value) or ("$" .. entry.value)
   return {
-    "button", key = entry.mat, style = "panel/row", w = "100%", h = 32,
+    "button", key = entry.key or entry.mat, style = "panel/row", w = "100%", h = 32,
     dir = "row", gap = 10, align = "center",
     -- The tint rides the row and its cells inherit it (they set no colour).
     textR = ink[1], textG = ink[2], textB = ink[3],
     { "text", key = "n", style = "panel/cell", w = 34, h = "fit", textAlign = "end",
       text = string.format("%d ×", entry.n) },
-    { "text", key = "name", style = "panel/cell", w = "grow", h = "fit",
-      text = mats and mats.label(entry.mat) or entry.mat },
+    { "text", key = "name", style = "panel/cell", w = "grow", h = "fit", maxLines = 1, overflow = "ellipsis",
+      text = entry.label or (mats and mats.label(entry.mat)) or entry.mat },
     { "text", key = "kg", style = "panel/cell", w = 64, h = "fit", textAlign = "end",
       text = string.format("%.1f kg", entry.kg) },
     { "text", key = "val", style = "panel/cell", w = 64, h = "fit", textAlign = "end",
       text = money },
-    onClicked = function() moveStack(entry.mat) end,
+    onClicked = function() moveStack(entry.mat, entry.origin) end,
   }
 end
 
@@ -691,7 +692,7 @@ function crate_rows(inv, mats, co)
     { "box", key = "f", w = math.max(2, math.floor(METER_W * frac + 0.5)), h = 6, radius = 1,
       fill = frac > 0.85 and { 1.0, 0.80, 0.28 } or { 0.55, 0.60, 0.42 } } }
   local gear = inv.itemList and inv.itemList(cid) or {}
-  local stuff = inv.items(cid)
+  local stuff = (inv.stacks or inv.items)(cid)
   if #gear == 0 and #stuff == 0 then
     out[#out + 1] = { "text", key = "xempty", style = "panel/cellMuted", w = "100%", h = 30, textAlign = "center",
       text = "— empty: click a row of the pack above to stow it —" }
@@ -708,12 +709,13 @@ function crate_rows(inv, mats, co)
   end
   for _, e in ipairs(stuff) do
     local ink = TIER_INK[mats and mats.tier(e.mat) or 1] or TIER_DEFAULT
-    out[#out + 1] = { "button", key = "xm_" .. e.mat, style = "panel/row", w = "100%", h = 30,
+    out[#out + 1] = { "button", key = "xm_" .. (e.key or e.mat), style = "panel/row", w = "100%", h = 30,
       dir = "row", gap = 10, align = "center", textR = ink[1], textG = ink[2], textB = ink[3],
       tooltip = "Take the stack into the pack (what fits)",
-      onClicked = function() takeStack(e.mat) end,
+      onClicked = function() takeStack(e.mat, e.origin) end,
       { "text", key = "n", style = "panel/cell", w = 34, h = "fit", textAlign = "end", text = string.format("%d ×", e.n) },
-      { "text", key = "name", style = "panel/cell", w = "grow", h = "fit", text = mats and mats.label(e.mat) or e.mat },
+      { "text", key = "name", style = "panel/cell", w = "grow", h = "fit", maxLines = 1, overflow = "ellipsis",
+        text = e.label or (mats and mats.label(e.mat)) or e.mat },
       { "text", key = "kg", style = "panel/cell", w = 92, h = "fit", textAlign = "end", text = string.format("%.1f kg", e.kg) },
       { "text", key = "go", style = "panel/cellMuted", w = 40, h = "fit", textAlign = "end", text = "take" } }
   end
@@ -727,7 +729,9 @@ end
 
 local function describe(astro)
   local inv, mats, co, cl = ref("inventory"), ref("materials"), ref("company"), ref("climate")
-  local items = inv and inv.items("astro") or {}
+  -- one row per stack: a material from another world is its own row
+  -- ("Ilmenite · Ryethos", inventory.stacks)
+  local items = inv and (inv.stacks or inv.items)("astro") or {}
   local hint, bad = hint_line(inv)
 
   local rows = {
@@ -772,7 +776,8 @@ local function describe(astro)
       { "text", key = "c", style = "panel/label", w = 72, h = "fit", textAlign = "end", text = "Value" } }
   end
 
-  -- One row per stack, however many there are. `key` is the material id, so a
+  -- One row per stack, however many there are. `key` is the material id (and
+  -- "@<body>" for a lot from another world), so a
   -- stack that survives a transfer keeps its element — and with it the row you
   -- were hovering or had focused.
   rows[#rows + 1] = { "col", key = "stacks", w = "100%", h = "fit", gap = 4, pad = 0,

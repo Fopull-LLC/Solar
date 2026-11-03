@@ -417,4 +417,46 @@ closePanel()
 tick(1)
 ok(_G.open == false, "E again closes it")
 
+-- 12. A LOT FROM ANOTHER WORLD IS ITS OWN ROW (per-lot ore origin,
+-- inventory.stacks): the pack lists "Ilmenite · Ryethos" apart from the home
+-- stack of the same material, and a click on it moves that lot only.
+NAMES.ilm = "Ilmenite"
+pack = { { mat = "ilm", n = 4, kg = 6, value = 40, origin = nil, key = "ilm", label = "Ilmenite" },
+         { mat = "ilm", n = 3, kg = 4.5, value = 30, origin = "Ryethos", key = "ilm@Ryethos", label = "Ilmenite · Ryethos" } }
+inv.stacks = function(_) return pack end
+local stack_moves = {}
+inv.transfer = function(_, dst, mat, n, origin)
+  stack_moves[#stack_moves + 1] = { dst = dst, mat = mat, n = n, origin = origin }
+  return n
+end
+inv.count = function(_, mat, origin)
+  for _, e in ipairs(pack) do if e.mat == mat and e.origin == origin then return e.n end end
+  return 0
+end
+inv.isEmpty = function() return #pack == 0 end
+inv.gearItems = function() return {} end
+refs.supply_crates = nil   -- walked away from the crate, up to the lander
+craft_node.x = astro.x + 4
+press("i"); tick(1)
+ok(_G.open == true and _G.targetId == "hold1", "the pack opens beside the lander's hold (" .. tostring(_G.open) .. ", " .. tostring(_G.targetId) .. ")")
+ok(row_says("Ilmenite · Ryethos"), "an off-world lot names its world in the pack")
+local keys, home_row, moon_row = {}, nil, nil
+local _, bs3 = screen()
+for _, b in ipairs(bs3) do
+  if b.style == "panel/row" then
+    keys[b.key] = (keys[b.key] or 0) + 1
+    if b.text:find("Ryethos", 1, true) then moon_row = b elseif b.text:find("Ilmenite", 1, true) then home_row = b end
+  end
+end
+ok(home_row and moon_row and keys["ilm"] == 1 and keys["ilm@Ryethos"] == 1,
+  "…apart from the home stack of the same ore, each row its own key")
+moon_row.onClicked()
+local sm = stack_moves[#stack_moves]
+ok(sm and sm.dst == "hold1" and sm.origin == "Ryethos" and sm.n == 3, "…and a click moves that lot only, origin and all")
+home_row.onClicked()
+sm = stack_moves[#stack_moves]
+ok(sm and sm.origin == nil and sm.n == 4, "…while the home row moves the untagged units")
+closePanel()
+tick(1)
+
 report("INVENTORY SMOKE OK — " .. checks .. " checks passed")

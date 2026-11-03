@@ -545,6 +545,7 @@ end
 -- against that, not against the first moon it was ever dug on.
 function noteOrigin(mat, body)
   if not (mat and body and save and save.get) then return end
+  legacySnapshot()
   local m = save.get("ore.minedOn")
   if type(m) ~= "table" then m = {} end
   if type(m[mat]) ~= "table" then m[mat] = {} end
@@ -569,6 +570,46 @@ function minedOn(mat, body)
   local m = save.get("ore.minedOn")
   if type(m) == "table" and type(m[mat]) == "table" and m[mat][body] then return true end
   return originOf(mat) == body
+end
+
+-- PER-LOT ORIGIN (inventory.lua `inv.org.<cid>`): ore mined from now on
+-- carries the body it was dug on in every container, so a haul counts the
+-- lot, not this record. Units with NO origin are home ore, stock — or a save
+-- from before the lots were tagged, whose ore could have come from anywhere
+-- it had been mined. For those the haul falls back to this record, but only
+-- as it stood BEFORE the first tagged lot (`ore.minedOnLegacy`, written once
+-- by `legacySnapshot` when inventory.add first sees an origin, or the next
+-- noteOrigin): ore dug on moon B after the update is tagged B, and does not
+-- make an old save's untagged moon-A ilmenite count as B's.
+function legacySnapshot()
+  if not (save and save.get and save.set) then return end
+  if type(save.get("ore.minedOnLegacy")) == "table" then return end
+  local snap = {}
+  local m = save.get("ore.minedOn")
+  if type(m) == "table" then
+    for mat, by in pairs(m) do
+      if type(by) == "table" then
+        for body, yes in pairs(by) do
+          if yes then snap[mat] = snap[mat] or {}; snap[mat][body] = true end
+        end
+      end
+    end
+  end
+  local o = save.get("ore.origin")
+  if type(o) == "table" then
+    for mat, body in pairs(o) do
+      if type(body) == "string" then snap[mat] = snap[mat] or {}; snap[mat][body] = true end
+    end
+  end
+  save.set("ore.minedOnLegacy", snap)
+end
+-- Could an UNTAGGED unit of `mat` have been mined on `body`? (No snapshot
+-- yet: nothing has been tagged in this save, so the whole record stands.)
+function legacyMinedOn(mat, body)
+  if not (mat and body and save and save.get) then return false end
+  local s = save.get("ore.minedOnLegacy")
+  if type(s) ~= "table" then return minedOn(mat, body) end
+  return type(s[mat]) == "table" and s[mat][body] == true
 end
 
 -- RESEARCH. What one unit of `mat` from `originBody` is worth to the lab:

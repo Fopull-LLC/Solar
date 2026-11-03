@@ -139,9 +139,10 @@ end
 -- A container's contents as rows: { { what = "mat"|"gear", id, n, kg, label } }.
 function contents(inv, mats, cid)
   local out = {}
-  for _, it in ipairs(inv.items(cid)) do
-    out[#out + 1] = { what = "mat", id = it.mat, n = it.n, kg = it.kg,
-                      label = (mats and mats.label and mats.label(it.mat)) or it.mat }
+  -- one row per stack: ore from another world is its own ("Ilmenite · Ryethos")
+  for _, it in ipairs((inv.stacks or inv.items)(cid)) do
+    out[#out + 1] = { what = "mat", id = it.mat, key = it.key, n = it.n, kg = it.kg, origin = it.origin,
+                      label = it.label or (mats and mats.label and mats.label(it.mat)) or it.mat }
   end
   for _, g in ipairs(inv.gearItems and inv.gearItems(cid) or {}) do
     local label = g.name
@@ -463,10 +464,10 @@ function move_rows(out, ctx, t, cid, group, what)
             return n > 0, why
           end }
       end
-      local mat_rows = inv.items(cid)
+      local mat_rows = (inv.stacks or inv.items)(cid)
       for _, it in ipairs(mat_rows) do
-        list[#list + 1] = { type = "info", id = "c_mat_" .. it.mat,
-          label = string.format("%d × %s", it.n, (mats and mats.label and mats.label(it.mat)) or it.mat),
+        list[#list + 1] = { type = "info", id = "c_mat_" .. (it.key or it.mat),
+          label = string.format("%d × %s", it.n, it.label or (mats and mats.label and mats.label(it.mat)) or it.mat),
           value = kgs(ctx, it.kg) }
       end
       if #mat_rows > 0 then
@@ -733,7 +734,7 @@ local function crate_provider(t, ctx)
   if not (sv and inv and t.id) then return out, "SALVAGE CRATE" end
   local cid = sv.containerOf(t.id)
   for _, it in ipairs(contents(inv, mats, cid)) do
-    out[#out + 1] = { type = "info", id = "c_" .. it.id, label = string.format("%d × %s", it.n, it.label), value = kgs(ctx, it.kg) }
+    out[#out + 1] = { type = "info", id = "c_" .. (it.key or it.id), label = string.format("%d × %s", it.n, it.label), value = kgs(ctx, it.kg) }
   end
   local access, d = actorReach(ctx, t, 1.0)
   local room = (not sv.canTake) or sv.canTake(t.id, (ctx.actor and ctx.actor.pack) or "astro")

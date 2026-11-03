@@ -1733,7 +1733,7 @@ local function worth_of(n)
   local r = mats and mats.resourceOf and mats.resourceOf(n)
   if r then
     local kind = r.kind == "log" and " log" or ((r.kind == "loose_rock" or r.kind == "boulder") and " chunk" or "")
-    return { mat = r.mat, n = r.qty, label = (w and w.label) or (r.name .. kind) }
+    return { mat = r.mat, n = r.qty, label = (w and w.label) or (r.name .. kind), origin = r.origin }
   end
   if w then return w end
   -- the tags the prefabs carry (tools/gen_props.py)
@@ -1812,7 +1812,7 @@ local function pop_unit(node, hit)
   if live then return end
   local mat, depth, rich = survey(hit.x, hit.y, hit.z)
   if not mat then return end
-  local took = inv.add("astro", mat, rich and 2 or 1)
+  local took = inv.add("astro", mat, rich and 2 or 1, space.dominant and space.dominant(hit.x, hit.y, hit.z) or nil)   -- the lot keeps its world
   -- STAR GEODES: resonant crystal cut out of the deep rock is a geode find
   -- (missions.geodeFind keeps the count and announces the first).
   if took > 0 and mat == "crystal" then
@@ -2591,7 +2591,7 @@ local function stow_held(node)
     return
   end
   if not inv then return end
-  local took = inv.add("astro", w.mat, w.n)
+  local took = inv.add("astro", w.mat, w.n, w.origin)   -- a chunk keeps the world it came off
   if took <= 0 then
     say("PACK FULL — " .. inv.line("astro"))
     play(SFX.denied, { track = "UI", volume = 0.5 })
@@ -2618,7 +2618,7 @@ local function intake_take(g)
   local w = worth_of(n)
   local line
   if w and inv then
-    local took = inv.add("base", w.mat, w.n)
+    local took = inv.add("base", w.mat, w.n, w.origin)
     if took <= 0 then say("the warehouse is full") return false end
     line = string.format("+%d %s → warehouse", took, (mats and mats.label(w.mat)) or w.mat)
   elseif is_debris(n) and co and co.earn then

@@ -2035,8 +2035,8 @@ local function measure(g, v, info)
 end
 
 -- Was a delivery goal's material mined where the goal says (`origin`)? The
--- warehouse does not keep a crate's world, so this is the ore's record:
--- materials.minedOn (every world it has been dug on), else its first origin.
+-- record (materials.minedOn: every world it has been dug on), for the line's
+-- "none mined there yet"; what COUNTS is the lot's own origin, below.
 local function origin_ok(g)
   if not (g.origin and g.mat) then return true end
   local mats = ref("materials")
@@ -2045,14 +2045,39 @@ local function origin_ok(g)
   return mats.originOf ~= nil and mats.originOf(g.mat) == g.origin
 end
 
--- What's in the warehouse toward a delivery goal: units, or kilograms. An
--- ore that was never mined on the goal's `origin` is none of it.
+-- The units of a goal's material in the warehouse that count for its
+-- `origin`: those tagged with that body (inventory.lua keeps every lot's
+-- origin), plus the untagged ones only where the old record says the ore
+-- could have come from there (materials.legacyMinedOn: a save from before
+-- the lots were tagged). → tagged, untagged-that-count
+local function origin_units(inv, g)
+  local mats = ref("materials")
+  if not (inv.untagged and inv.origins) then
+    -- an inventory without lots: the record, as before
+    return 0, (origin_ok(g) and inv.count("base", g.mat) or 0)
+  end
+  local tagged = (inv.origins("base", g.mat) or {})[g.origin] or 0
+  local legacy = 0
+  local ok
+  if mats and mats.legacyMinedOn then ok = mats.legacyMinedOn(g.mat, g.origin) == true
+  else ok = origin_ok(g) end
+  if ok then legacy = inv.untagged("base", g.mat) end
+  return tagged, legacy
+end
+
+-- What's in the warehouse toward a delivery goal: units, or kilograms. Ore
+-- from another body than the goal's `origin` is none of it.
 local function delivered(g)
   local inv, mats = ref("inventory"), ref("materials")
   if not inv then return 0 end
-  if not origin_ok(g) then return 0 end
   if g.mat then
-    local n = inv.count("base", g.mat)
+    local n
+    if g.origin then
+      local a, b = origin_units(inv, g)
+      n = a + b
+    else
+      n = inv.count("base", g.mat)
+    end
     if g.kg then return n * ((mats and mats.kg(g.mat)) or 1) end
     return n
   end
@@ -2269,7 +2294,16 @@ local function tail(i, g)
     if not ref("inventory") then return "" end
     if not origin_ok(g) then return string.format("   (none mined on %s yet)", g.origin) end
     if g.kg then
-      return string.format("   (%.0f / %d kg in the warehouse)", delivered(g), g.kg)
+      local d = delivered(g)
+      -- the same ore from another body is in the warehouse but doesn't count:
+      -- say so, or the number looks stuck
+      local other = ""
+      if g.origin and g.mat then
+        local inv, mats = ref("inventory"), ref("materials")
+        local rest = inv.count("base", g.mat) * ((mats and mats.kg(g.mat)) or 1) - d
+        if rest > 0.5 then other = string.format(", %.0f kg from elsewhere", rest) end
+      end
+      return string.format("   (%.0f / %d kg in the warehouse%s)", d, g.kg, other)
     end
     return string.format("   (%d / %d in the warehouse)", delivered(g), g.value or 1)
   end
@@ -2329,6 +2363,21 @@ local function consume(m)
   for _, g in ipairs(m.goals or {}) do
     if g.kind == "deliver" and g.consume then
       local want = g.kg or g.value or 0
+      if g.origin and g.mat then
+        -- only the lot from the goal's body: its tagged units first, then
+        -- the untagged ones that counted (an old save's), never another
+        -- body's
+        local per = g.kg and ((mats and mats.kg(g.mat)) or 1) or 1
+        local need = math.ceil(want / math.max(per, 1e-3) - 1e-6)
+        local tagged, legacy = origin_units(inv, g)
+        local took = 0
+        local a = math.min(need, tagged)
+        if a > 0 then took = took + ((inv.remove("base", g.mat, a, g.origin)) or 0) end
+        local b = math.min(need - took, legacy)
+        if b > 0 then took = took + ((inv.remove("base", g.mat, b, false)) or 0) end
+        if type(fr) == "table" and fr[g.mat] then fr[g.mat] = math.max(0, fr[g.mat] - took) end
+        want = 0
+      end
       for _, it in ipairs(inv.items("base")) do
         if want <= 0 then break end
         if (g.mat and it.mat == g.mat) or (not g.mat and (not g.class

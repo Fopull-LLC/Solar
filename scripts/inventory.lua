@@ -33,6 +33,8 @@
 --
 --     local inv = findScript("inventory")
 --     inv.add("astro", "iron", 6)                    -- → units actually taken
+--     inv.add("astro", "ilmenite", 4, "Ryethos")     -- …mined there: the lot keeps its world
+--     inv.count("base", "ilmenite", "Ryethos"), inv.stacks("astro")  -- per-lot origin, below
 --     inv.moveItem("locker:3", "astro", "repairkit", 1)  -- → n moved, why
 --     inv.mass("astro"), inv.cap("astro"), inv.volume("astro"), inv.volCap("astro")
 
@@ -162,6 +164,82 @@ local function put(cid, b)
   save.set("inv." .. cid, out)
 end
 
+-- ── WHERE A STACK CAME FROM (per-lot ore origin) ───────────────────────────
+-- An ore haul (missions.lua "orehaul") asks for ore mined on ONE body, so a
+-- unit dug off-world carries the body it was dug on through every container
+-- it moves through: pack, locker, hold, crate, salvage, warehouse. Kept as a
+-- ledger beside the bag, `inv.org.<cid>` = { [mat] = { [body] = units } }:
+-- the bag still holds every unit (so count/mass/items and every caller that
+-- only knows materials keep working), and the ledger says how many of them
+-- came from which world. The rest of a stack is UNTAGGED: ore from the home
+-- world (`add` drops a home origin, so a home stack stays one stack), bought
+-- or processed stock, and everything in a save from before the ledger.
+-- Untagged units fall back to the old record (materials.legacyMinedOn) when
+-- a haul asks; tagged ones count only for their own body.
+-- Units leave a stack untagged first, then by body name (`parts`), and a
+-- transfer re-adds what it took with the same origins, so nothing loses its
+-- tag in transit whichever caller moves it.
+local function home_body()
+  local h = save.get("base.body")
+  return type(h) == "string" and h or nil
+end
+
+local function org_all(cid)
+  local t = save.get("inv.org." .. cid)
+  return type(t) == "table" and t or {}
+end
+
+local function org_put(cid, t)
+  local out = {}
+  for mat, by in pairs(t) do
+    if type(by) == "table" then
+      local row = nil
+      for body, n in pairs(by) do
+        n = math.floor(n or 0)
+        if n > 0 then row = row or {}; row[body] = n end
+      end
+      out[mat] = row
+    end
+  end
+  save.set("inv.org." .. cid, out)
+end
+
+-- The tagged counts of `mat` in a bag holding `have` units, squared up so
+-- they never claim more than the bag holds (a bag written by something that
+-- skipped the ledger): the excess comes off the last bodies by name.
+local function sorted_keys(t)
+  local ks = {}
+  for k in pairs(t) do ks[#ks + 1] = k end
+  table.sort(ks)
+  return ks
+end
+local function tagged_of(cid, mat, have)
+  local by = org_all(cid)[mat]
+  local out, sum = {}, 0
+  if type(by) ~= "table" then return out, 0 end
+  local ks = sorted_keys(by)
+  for _, body in ipairs(ks) do
+    local n = math.max(0, math.floor(by[body] or 0))
+    if n > 0 then out[body] = n; sum = sum + n end
+  end
+  for i = #ks, 1, -1 do
+    if sum <= have then break end
+    local body = ks[i]
+    local cut = math.min(out[body] or 0, sum - have)
+    out[body] = (out[body] or 0) - cut
+    if out[body] <= 0 then out[body] = nil end
+    sum = sum - cut
+  end
+  return out, sum
+end
+
+-- Normalise an origin for the ledger: home (or nothing) is untagged.
+local function tag_of(origin)
+  if type(origin) ~= "string" or origin == "" then return nil end
+  if origin == home_body() then return nil end
+  return origin
+end
+
 -- ── capacity ────────────────────────────────────────────────────────────────
 -- Suit and warehouse are fixed by the params; a vessel registers its hold when
 -- it spawns (the sum of its Cargo Bay parts), so capacity follows the craft you
@@ -202,8 +280,35 @@ end
 
 -- ── contents ────────────────────────────────────────────────────────────────
 
-function count(cid, mat)
-  return bag(R(cid))[mat] or 0
+-- Units of `mat`. With `origin`: only the units from that body (a home
+-- origin, or `false`, asks for the untagged units); nil counts them all.
+function count(cid, mat, origin)
+  cid = R(cid)
+  local have = bag(cid)[mat] or 0
+  if origin == nil then return have end
+  local tagged, sum = tagged_of(cid, mat, have)
+  local t = tag_of(origin)
+  if t then return tagged[t] or 0 end
+  return have - sum
+end
+
+-- Units of `mat` with no origin: home-world ore, stock, an old save's.
+function untagged(cid, mat) return count(cid, mat, false) end
+
+-- { [body] = units } of `mat` tagged with an off-world origin (a copy).
+function origins(cid, mat)
+  cid = R(cid)
+  local t = tagged_of(cid, mat, bag(cid)[mat] or 0)
+  return t
+end
+
+-- "Ilmenite · Ryethos" for an off-world stack, the plain label otherwise.
+function stackLabel(mat, origin)
+  local m = mats()
+  local nm = (m and m.label and m.label(mat)) or mat
+  local t = tag_of(origin)
+  if t then return nm .. " · " .. t end
+  return nm
 end
 
 -- No materials in it. (Items are asked about with `itemList`.)
@@ -211,7 +316,21 @@ function isEmpty(cid)
   return next(bag(R(cid))) == nil
 end
 
--- Contents in the registry's stable order, with the numbers a panel wants.
+-- the off-world origins of a row, as a sorted list { { body, n } } (nil: none)
+local function origin_list(cid, mat, n)
+  local t = tagged_of(cid, mat, n)
+  local out = nil
+  for _, body in ipairs(sorted_keys(t)) do
+    out = out or {}
+    out[#out + 1] = { body = body, n = t[body] }
+  end
+  return out
+end
+
+-- Contents in the registry's stable order, with the numbers a panel wants:
+-- one row per MATERIAL (every unit of it, whatever its origin), with
+-- `origins` = { { body, n } } when some of it was mined off-world.
+-- `stacks` is the same split by origin, for the lists the player reads.
 function items(cid)
   cid = R(cid)
   local b, m = bag(cid), mats()
@@ -222,14 +341,39 @@ function items(cid)
       local n = b[mat]
       if n and n > 0 then
         out[#out + 1] = { mat = mat, n = n, kg = kg_of(mat) * n,
-                          value = (m and m.valueOf(mat, n)) or 0 }
+                          value = (m and m.valueOf(mat, n)) or 0,
+                          origins = origin_list(cid, mat, n) }
       end
     end
   else
     for mat, n in pairs(b) do
-      out[#out + 1] = { mat = mat, n = n, kg = kg_of(mat) * n, value = 0 }
+      out[#out + 1] = { mat = mat, n = n, kg = kg_of(mat) * n, value = 0,
+                        origins = origin_list(cid, mat, n) }
     end
     table.sort(out, function(a, c) return a.mat < c.mat end)
+  end
+  return out
+end
+
+-- One row per STACK: a material's untagged units (home, stock, an old save's),
+-- then one row per off-world body it came from, by name. Rows carry `origin`
+-- (nil for the untagged one), `key` (unique: "ilmenite", "ilmenite@Ryethos")
+-- and `label` ("Ilmenite · Ryethos").
+function stacks(cid)
+  cid = R(cid)
+  local m = mats()
+  local out = {}
+  for _, it in ipairs(items(cid)) do
+    local tagged = 0
+    for _, o in ipairs(it.origins or {}) do tagged = tagged + o.n end
+    local function row(n, origin)
+      out[#out + 1] = { mat = it.mat, n = n, kg = kg_of(it.mat) * n,
+                        value = (m and m.valueOf and m.valueOf(it.mat, n)) or 0,
+                        origin = origin, key = origin and (it.mat .. "@" .. origin) or it.mat,
+                        label = stackLabel(it.mat, origin) }
+    end
+    if it.n - tagged > 0 then row(it.n - tagged, nil) end
+    for _, o in ipairs(it.origins or {}) do row(o.n, o.body) end
   end
   return out
 end
@@ -254,17 +398,32 @@ function roomFor(cid, mat, want)
   return math.min(want or 0, math.floor(free(cid) / k + 1e-9))
 end
 
--- Add up to `n` units. Returns how many actually went in — callers are expected
--- to use it (a mining tool reports the shortfall; a transfer leaves the rest
--- where it was).
-function add(cid, mat, n)
+-- Add up to `n` units, mined on (or come from) `origin` when that is known.
+-- Returns how many actually went in — callers are expected to use it (a
+-- mining tool reports the shortfall; a transfer leaves the rest where it was).
+function add(cid, mat, n, origin)
   cid = R(cid)
   n = math.floor(n or 0)
   if n <= 0 or not mat then return 0 end
   local take = roomFor(cid, mat, n)
   if take <= 0 then return 0 end
   local b = bag(cid)
-  b[mat] = (b[mat] or 0) + take
+  local had = b[mat] or 0
+  local tag = tag_of(origin)
+  if type(origin) == "string" and origin ~= "" then
+    -- the first lot with an origin closes the old save's record (materials.lua)
+    local m = mats()
+    if m and m.legacySnapshot then m.legacySnapshot() end
+  end
+  if tag then
+    -- squared up against what the bag held before this lot went in
+    local all = org_all(cid)
+    local t = tagged_of(cid, mat, had)
+    t[tag] = (t[tag] or 0) + take
+    all[mat] = t
+    org_put(cid, all)
+  end
+  b[mat] = had + take
   put(cid, b)
   -- First sight of a material anywhere is a discovery; research reads this set.
   local seen = save.get("inv.seen") or {}
@@ -277,28 +436,72 @@ function add(cid, mat, n)
   return take
 end
 
--- Remove up to `n`. Returns how many came out.
-function remove(cid, mat, n)
-  cid = R(cid)
-  n = math.floor(n or 0)
-  if n <= 0 then return 0 end
-  local b = bag(cid)
-  local have = b[mat] or 0
-  local took = math.min(have, n)
-  if took <= 0 then return 0 end
-  b[mat] = have - took
-  put(cid, b)
-  return took
+-- Which units `n` of `mat` would come out as: { { tag = body | false, n } }.
+-- origin nil: any (untagged first, then by body); a body: only its units;
+-- false or home: only the untagged.
+local function parts_of(cid, mat, n, origin)
+  local have = bag(cid)[mat] or 0
+  local tagged, sum = tagged_of(cid, mat, have)
+  local parts, left = {}, math.min(n, have)
+  local function take(tag, avail)
+    local k = math.min(left, avail or 0)
+    if k > 0 then parts[#parts + 1] = { tag = tag, n = k }; left = left - k end
+  end
+  if origin == nil then
+    take(false, have - sum)
+    for _, body in ipairs(sorted_keys(tagged)) do take(body, tagged[body]) end
+  else
+    local t = tag_of(origin)
+    if t then take(t, tagged[t]) else take(false, have - sum) end
+  end
+  return parts, tagged
 end
 
--- Move what fits. Nothing is destroyed in transit: whatever the destination
--- can't take stays in the source.
-function transfer(from, to, mat, n)
+-- Remove up to `n` (with `origin`: from that body's stack only, as `count`).
+-- Returns how many came out, and { { origin = body | nil, n } } of what did.
+function remove(cid, mat, n, origin)
+  cid = R(cid)
+  n = math.floor(n or 0)
+  if n <= 0 then return 0, {} end
+  local parts, tagged = parts_of(cid, mat, n, origin)
+  local took, out, touched = 0, {}, false
+  for _, p in ipairs(parts) do
+    took = took + p.n
+    if p.tag then
+      tagged[p.tag] = tagged[p.tag] - p.n
+      if tagged[p.tag] <= 0 then tagged[p.tag] = nil end
+      touched = true
+    end
+    out[#out + 1] = { origin = p.tag or nil, n = p.n }
+  end
+  if took <= 0 then return 0, {} end
+  local b = bag(cid)
+  b[mat] = (b[mat] or 0) - took
+  put(cid, b)
+  if touched or (org_all(cid)[mat] ~= nil and (b[mat] or 0) <= 0) then
+    local all = org_all(cid)
+    all[mat] = next(tagged) and tagged or nil
+    org_put(cid, all)
+  end
+  return took, out
+end
+
+-- Move what fits (with `origin`: only that body's stack). Every unit keeps
+-- its origin on the way. Nothing is destroyed in transit: whatever the
+-- destination can't take stays in the source.
+function transfer(from, to, mat, n, origin)
   from, to = R(from), R(to)
   n = math.min(math.floor(n or 0), count(from, mat))
   if n <= 0 then return 0 end
-  local moved = add(to, mat, n)
-  if moved > 0 then remove(from, mat, moved) end
+  local moved = 0
+  for _, p in ipairs((parts_of(from, mat, n, origin))) do
+    local k = add(to, mat, p.n, p.tag or nil)
+    if k > 0 then
+      remove(from, mat, k, p.tag or false)
+      moved = moved + k
+    end
+    if k < p.n then break end
+  end
   return moved
 end
 
@@ -314,7 +517,9 @@ function transferAll(from, to)
 end
 
 function clear(cid)
-  save.set("inv." .. R(cid), {})
+  cid = R(cid)
+  save.set("inv." .. cid, {})
+  save.set("inv.org." .. cid, {})
 end
 
 -- Have we ever held this material? (The discovery set — research + the depot's
@@ -669,8 +874,16 @@ function adoptPack(from, to)
   local moved = false
   if type(m) == "table" and next(m) then
     local b = bag(to)
-    for k, v in pairs(m) do b[k] = (b[k] or 0) + v end
+    -- the origins come along: the new owner's untagged units stay untagged
+    local all, from_org = org_all(to), org_all(from)
+    for k, v in pairs(m) do
+      local t = tagged_of(to, k, b[k] or 0)
+      for body, n in pairs((tagged_of(from, k, v))) do t[body] = (t[body] or 0) + n end
+      if next(t) then all[k] = t end
+      b[k] = (b[k] or 0) + v
+    end
     put(to, b); moved = true
+    if next(from_org) then org_put(to, all) end
   end
   if type(g) == "table" and next(g) then
     local b = gear_bag(to)
@@ -690,6 +903,7 @@ function adoptPack(from, to)
   end
   if save.get("inv.issued." .. from) == true then save.set("inv.issued." .. to, true) end
   save.set("inv." .. from, {})
+  save.set("inv.org." .. from, {})
   save.set("inv.gear." .. from, {})
   return moved
 end

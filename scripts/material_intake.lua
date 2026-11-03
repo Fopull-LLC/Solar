@@ -332,7 +332,11 @@ local function take(n, e, mass, wx, wy, wz)
     if not inv then return false end
     r.label = (mats and mats.label and mats.label(e.mat)) or e.mat
     r.qty = e.qty
-    local took = inv.add("base", e.mat, e.qty)
+    -- the world it was dug on rides its tags (materials.tagResource) into the
+    -- warehouse with it, so an ore haul counts the lot (inventory.lua)
+    local from = nil
+    for _, t in ipairs(n.tags or {}) do from = t:match("^origin:(.+)$") or from end
+    local took = inv.add("base", e.mat, e.qty, from)
     r.took = took
     -- it came in by the tonne, off a truck or out of the yard: freight
     if took > 0 then

@@ -498,6 +498,11 @@ local function depot_stock()
     for _, it in ipairs(inv.items(cid)) do
       local e = by[it.mat] or { mat = it.mat, n = 0, value = 0, fvalue = 0 }
       e.n, e.value = e.n + it.n, e.value + it.value
+      -- where the off-world lots of it came from (inventory.lua): { [body] = n }
+      for _, o in ipairs(it.origins or {}) do
+        e.from = e.from or {}
+        e.from[o.body] = (e.from[o.body] or 0) + o.n
+      end
       -- freight: what is still in a hold, plus what came off one earlier
       local fu = held[cid] and it.n or (cid == "base" and freight_units(it.mat, it.n) or 0)
       if it.n > 0 then e.fvalue = e.fvalue + it.value * fu / it.n end
@@ -605,6 +610,22 @@ local function depot_rows(show)
     { "col", key = "depotRows", w = "100%", h = "fit", gap = 3, pad = 0, order = 2,
       items = items, function(e)
         local label = string.format("%d × %s", e.n, (mats and mats.label(e.mat)) or e.mat)
+        -- an off-world lot names its world: "Ilmenite · Ryethos", or with
+        -- several, how many from each ("· Ryethos 12, Oskal 4")
+        if e.from then
+          local ks = {}
+          for body in pairs(e.from) do ks[#ks + 1] = body end
+          table.sort(ks)
+          local tagged = 0
+          for _, body in ipairs(ks) do tagged = tagged + e.from[body] end
+          if #ks == 1 and tagged == e.n then
+            label = label .. " · " .. ks[1]
+          else
+            local parts = {}
+            for _, body in ipairs(ks) do parts[#parts + 1] = string.format("%s %d", body, e.from[body]) end
+            label = label .. " · " .. table.concat(parts, ", ")
+          end
+        end
         local tail
         if e.kept then
           tail = "for the contract"
@@ -619,7 +640,7 @@ local function depot_rows(show)
           opacity = e.kept and 0.55 or nil,
           tooltip = e.kept and "Kept back — the contract on the books needs it in the warehouse."
             or (e.first and "Never sold before: the first sale pays a discovery premium." or nil),
-          { "text", key = "what", style = "panel/cell", w = "grow", h = "fit", text = label },
+          { "text", key = "what", style = "panel/cell", w = "grow", h = "fit", maxLines = 1, overflow = "ellipsis", text = label },
           { "text", key = "first", style = e.first and "panel/cellStrong" or "panel/cellMuted",
             w = "fit", h = "fit", text = tail },
           { "text", key = "pay", style = "panel/cellStrong", w = 70, h = "fit", textAlign = "end",

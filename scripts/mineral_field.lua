@@ -610,7 +610,7 @@ local function pocket_break(hit, cid)
   local inv, rs = ref("inventory"), ref("research")
   if rs and rs.registerMaterials then rs.registerMaterials() end
   if not inv then return nil, 0 end
-  local took = inv.add(cid or "astro", POCKET_MAT, 1)
+  local took = inv.add(cid or "astro", POCKET_MAT, 1, hit.body)   -- the lot keeps its world
   if took <= 0 then return POCKET_MAT, 0 end
   local taken = pocket_taken(hit.body)
   taken[hit.pocket] = (taken[hit.pocket] or 0) + took
@@ -747,7 +747,7 @@ function breakAt(hit, cid)
   local k = hit.kind
   local units = k.yield or 1
   local mat = rockMat(hit)
-  local took = inv.add(cid or "astro", mat, units)
+  local took = inv.add(cid or "astro", mat, units, hit.body or cur_body)   -- the lot keeps its world
   if took <= 0 then return mat, 0 end
   scatter.remove(hit.source, hit.id)
   local p = patches[hit.patch]
@@ -1730,7 +1730,7 @@ local function pay(d, y)
           if (t1 or 0) <= 0 then break end
         end
       else
-        took = inv.add(d.cid, m, n)
+        took = inv.add(d.cid, m, n, d.body)   -- the lot keeps its world (inventory.lua)
       end
       if took > 0 and mats.isOre(m) and mats.noteOrigin then mats.noteOrigin(m, d.body) end
       if mats.isOre(m) or m == POCKET_MAT then depth = depth or depth_of(b, d.x, d.y, d.z) end
@@ -1753,7 +1753,7 @@ local function pay(d, y)
   -- its ore, and a chunk of it knocked loose for the tool to show).
   local p, v, j, rec = outcrop_near(wx, wy, wz, 1.0)
   if p then
-    local took = inv.add(d.cid, v.ore, 2)
+    local took = inv.add(d.cid, v.ore, 2, d.body)
     if took > 0 and mats.noteOrigin then mats.noteOrigin(v.ore, d.body) end
     if took > 0 then
       local vr = vein_rec(p.key)

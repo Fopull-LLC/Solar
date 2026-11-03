@@ -11341,7 +11341,7 @@ local function drill_tick(node, info, dt)
           local tb = findScript("tool_belt")
           local mat = tb and tb.survey and tb.survey(hit.x, hit.y, hit.z)
           if inv and mat then
-            local took = inv.add(holdId, mat, 1)
+            local took = inv.add(holdId, mat, 1, space.dominant and space.dominant(hit.x, hit.y, hit.z) or nil)   -- the core keeps its world
             if took and took > 0 then
               holdApplyMass(node)
               dr.cores = (dr.cores or 0) + took
