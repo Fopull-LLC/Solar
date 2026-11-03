@@ -9999,6 +9999,10 @@ function hang_tyre(node, w, info)
   -- Not landing gear yet: a held real-unit wheel skips on sub-cm ripple, and
   -- on a jet's gear that is runway chatter (32 -> 107 contact changes) and a
   -- taxi pitching ~20°, so gear keeps the frequency path and gearOleo.
+  -- (Re-tried on 0.117.1-dev.1406, motoprobe jetgear: the plain taxi is as
+  -- calm or calmer on real units, but the take-off roll still shakes 2-4x
+  -- harder (16-42 m/s² vertical vs 9-10) at sag 0.2-0.45 and ζ 0.7-1.0, and
+  -- the probe's ~2 m/s touchdown bottoms either gear and bounces ~2.3 m.)
   w.real = nil
   if R2_REAL_SUSP and not w.gear then
     local k, cb, cr, lo, hi = wheelReal(w, info, g, c)

@@ -610,7 +610,9 @@ end
 -- third throttle, take-off roll at full throttle, climb to ~12 m, throttle
 -- cut and a gliding landing, the roll-out. On every tick on the wheels: the
 -- CoM's vertical acceleration (radial, |Δv|/dt), the pitch and roll rates and
--- the tyres' contact flicker. One `MP RESULT jetgear` line.
+-- the tyres' contact flicker, the peak pitch and bank. One `MP RESULT jetgear`
+-- line. params taxionly=1: no take-off, the taxi phases straight from the
+-- stand (the gear's own taxi, not one after a hard landing).
 local function jg_defs()
   local R = findScript("parts_registry")
   local pa = findScript("parts_aero")
@@ -709,7 +711,7 @@ local function run_jetgear()
   vc.releaseClamps()
   vc.setSAS("stability")
   local M = {}
-  local function phase(tag) M[tag] = M[tag] or { acc = 0, q = 0, p = 0, n = 0, flick = 0, vmax = 0, slip = 0 }; return M[tag] end
+  local function phase(tag) M[tag] = M[tag] or { acc = 0, q = 0, p = 0, n = 0, flick = 0, vmax = 0, slip = 0, th = 0, bk = 0 }; return M[tag] end
   local prev_vu, prev_g
   local function sample(tag, S)
     local m = phase(tag)
@@ -722,6 +724,8 @@ local function run_jetgear()
       m.n = m.n + 1
       -- sideways speed over the ground (along the right axis)
       m.slip = math.max(m.slip, math.abs(dot(S.i.vel, S.r)))
+      m.th = math.max(m.th, math.abs(math.deg(S.theta)))
+      m.bk = math.max(m.bk, math.abs(math.deg(S.bank)))
     end
     if prev_g and prev_g ~= on then m.flick = m.flick + 1 end
     prev_vu, prev_g = S.vu, on
@@ -777,7 +781,8 @@ local function run_jetgear()
   run("stand", 3, function(S) vc.AERO.cmd = { p = 0, y = 0, r = 0 } end)
   local air, lift = 0, nil
   local D = math.rad
-  run("roll", 45, function(S, t)
+  -- (params taxionly=1: no take-off, the taxi straight from the stand)
+  if (params.taxionly or 0) <= 0 then run("roll", 45, function(S, t)
     vc.setThrottle(1)
     fine_on = S.V > 25 and t < 30
     local yaw = hold_head(S)
@@ -789,7 +794,7 @@ local function run_jetgear()
     end
     if not vc.R2.onWheels and S.agl > 2.5 and S.V > 30 then air = air + dt else air = 0 end
     if air > 0.4 then lift = t; return true end
-  end)
+  end) end
   fine_on = false
   P("MP %s takeoff: %s", MP_TAG, lift and string.format("airborne after %.1f s", lift) or "NO LIFT-OFF")
   local landed = nil
@@ -838,8 +843,8 @@ local function run_jetgear()
   for _, tag in ipairs({ "stand", "roll", "land", "taxi", "taxiL", "taxiR", "square" }) do
     local m = M[tag]
     if m then
-      P("MP %s %s: max vertical accel %.1f m/s², pitch rate %.2f rad/s, roll rate %.2f, side slip %.2f m/s, contact changes %d, top %.1f m/s (%d ticks on wheels)",
-        MP_TAG, tag, m.acc, m.q, m.p, m.slip, m.flick, m.vmax, m.n)
+      P("MP %s %s: max vertical accel %.1f m/s², pitch rate %.2f rad/s, roll rate %.2f, side slip %.2f m/s, contact changes %d, top %.1f m/s (%d ticks on wheels), peak pitch %.1f deg, peak bank %.1f deg",
+        MP_TAG, tag, m.acc, m.q, m.p, m.slip, m.flick, m.vmax, m.n, m.th, m.bk)
       if m.acc > 30 or m.q > 1.0 then fails[#fails + 1] = tag end
     end
   end
