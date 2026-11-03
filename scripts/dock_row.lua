@@ -22,10 +22,22 @@
 defaults = { slot = 1, kind = "port" }
 
 local el, target
+local craft_n, craft_t = nil, -1e9   -- the SWITCH row's craft count, and when it was taken
 
+-- The flown craft, kept between frames: one read while it is still flown (each
+-- row asking the panel to walk every craft in the world, every frame, was
+-- this script's cost in a long session). Asked again at once when it stops
+-- being flown, and four times a second while nothing is.
+local pil_h, pil_t, panel_h = nil, -1e9, nil
 local function vessel()
-  local panel = findScript("peripheral_panel")
-  return panel and panel.pilotedVessel and panel.pilotedVessel()
+  local v = pil_h
+  if v and v.valid ~= false and v.piloting then return v end
+  if not v and (time or 0) - pil_t < 0.25 then return nil end
+  pil_h, pil_t = nil, time or 0
+  if not (panel_h and panel_h.valid ~= false) then panel_h = findScript("peripheral_panel") end
+  v = panel_h and panel_h.pilotedVessel and panel_h.pilotedVessel()
+  pil_h = v or nil
+  return v
 end
 
 -- Every crewed vessel in the scene, in a stable order — the ring `switch`
@@ -130,10 +142,13 @@ function update(node, dt)
   end
 
   if kind == "switch" then
-    local craft = crewedCraft()
-    el.visible = #craft > 1
+    -- (the count is drawn, not acted on: walking every craft in the world is
+    -- done twice a second, not every frame)
+    if not craft_n or (time or 0) - craft_t > 0.5 then craft_n, craft_t = #crewedCraft(), time or 0 end
+    local craft = { n = craft_n }
+    el.visible = craft.n > 1
     target = nil
-    local text = string.format("  ⇄  SWITCH CRAFT      %d in flight", #craft)
+    local text = string.format("  ⇄  SWITCH CRAFT      %d in flight", craft.n)
     if node.text ~= text then node.text = text end
     paint("crt/rowAlt")
     return

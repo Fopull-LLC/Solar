@@ -871,13 +871,27 @@ local function astro()
   return nil
 end
 
+-- The craft controllers, kept for a quarter second: alerts, aboard and
+-- switchList walk them every frame, and a fresh findScripts per call grew
+-- with every craft left in the world (perf pass 2026-11-02). Callers already
+-- skip a controller whose node is gone; a craft split off this instant shows
+-- up within 0.25 s.
+local VESSELS = { list = nil, t = -1 }
 local function vessels()
-  return findScripts and findScripts("vessel_controller") or {}
+  local t = now()
+  if VESSELS.list and t >= VESSELS.t and t - VESSELS.t < 0.25 then return VESSELS.list end
+  VESSELS.list = findScripts and findScripts("vessel_controller") or {}
+  VESSELS.t = t
+  return VESSELS.list
 end
 
 local function vessel_by_id(nid)
-  for _, v in ipairs(vessels()) do
-    if v.node and v.node.valid ~= false and v.node.id == nid then return v end
+  for pass = 1, 2 do
+    for _, v in ipairs(vessels()) do
+      if v.node and v.node.valid ~= false and v.node.id == nid then return v end
+    end
+    -- (a craft spawned since the list was kept: look once more, fresh)
+    if pass == 1 then VESSELS.list = nil end
   end
   return nil
 end

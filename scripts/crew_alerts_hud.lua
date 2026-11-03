@@ -135,14 +135,28 @@ local function set_loop(key)
   hud.loop = key
 end
 
+-- The flown craft, kept between frames: one read while it is still flown, not
+-- a walk over every craft in the world each frame. Walked again at once when
+-- it stops being flown, and four times a second while nothing is.
+local pil_h, pil_t = nil, -1e9
+local function flown()
+  local v = pil_h
+  if v and v.valid ~= false and v.piloting and v.node and v.node.valid ~= false then return v end
+  if not v and (time or 0) - pil_t < 0.25 then return nil end
+  pil_h, pil_t = nil, time or 0
+  for _, w in ipairs(findScripts and findScripts("vessel_controller") or {}) do
+    if w.piloting and w.node and w.node.valid ~= false then pil_h = w; return w end
+  end
+  return nil
+end
+
 local function who()
   local C = ref("crew")
   if not C then return nil end
-  for _, v in ipairs(findScripts and findScripts("vessel_controller") or {}) do
-    if v.piloting and v.node and v.node.valid ~= false then
-      local cmd = v.commander and v.commander()
-      return cmd or (C.activeId and C.activeId()), v
-    end
+  local v = flown()
+  if v then
+    local cmd = v.commander and v.commander()
+    return cmd or (C.activeId and C.activeId()), v
   end
   return C.activeId and C.activeId(), nil
 end

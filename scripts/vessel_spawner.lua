@@ -621,6 +621,28 @@ local function same(a, b)
   return true
 end
 
+-- The ledger entries added since `before` (a copy of the ledger taken earlier):
+-- everything after the newest entry `before` holds. The ledger is capped and
+-- drops its oldest, so this matches on the entries themselves, not on counts.
+-- Global for tests.
+function ledger_since(before, now)
+  now = type(now) == "table" and now or {}
+  before = type(before) == "table" and before or {}
+  local nb = #before
+  if nb == 0 then return now end
+  local last = before[nb]
+  for j = #now, 1, -1 do
+    -- the newest snapshot entry, and the one before it where there is one
+    -- (two identical purchases in one second still line up)
+    if same(now[j], last) and (nb < 2 or j < 2 or same(now[j - 1], before[nb - 1])) then
+      local out = {}
+      for i = j + 1, #now do out[#out + 1] = now[i] end
+      return out
+    end
+  end
+  return now
+end
+
 -- Take the snapshot: called as a launch begins (the hull already paid for).
 local function snapshot(kind, b)
   flight_seq = flight_seq + 1
@@ -668,8 +690,13 @@ local function freshness_tick()
   for _, k in ipairs(BANKED_KEYS) do
     if not same(flight.keys[k], save.get(k)) then return flightClosed("the flight's rewards are banked (" .. k .. ")") end
   end
-  for _, e in ipairs(save.get("co.ledger") or {}) do
-    if type(e) == "table" and (e.amount or 0) > 0 and (e.t or -1) > flight.t0 then
+  -- Only the entries written SINCE the launch count: those after the last one
+  -- the launch's snapshot holds. (Each entry's `t` is the session's clock,
+  -- which restarts at 0 every time the save is loaded: on a CONTINUE'd save,
+  -- money from an earlier session read as "after the launch" and took the
+  -- revert away the moment it was offered.)
+  for _, e in ipairs(ledger_since(flight.keys["co.ledger"], save.get("co.ledger"))) do
+    if type(e) == "table" and (e.amount or 0) > 0 then
       return flightClosed("money came in since the launch (" .. tostring(e.why) .. ")")
     end
   end
@@ -700,17 +727,26 @@ end
 
 -- What a revert would do now: nil when there is no fresh flight; otherwise
 -- { ok, why, builder } — `why` when it can't (docked to an older craft).
-function revertQuote()
+-- (The HUD and the pause menu ask every rebuild; the walk over every craft and
+-- its parts is kept for a quarter of a second. `fresh` walks it now: a revert
+-- itself always does.)
+function revertQuote(fresh)
   if not flight then return nil end
   local q = { ok = true, name = flight.name, kind = flight.kind }
   local bh = ref("build_host")
   q.builder = bh ~= nil and bh.mode == "world" and bh.state == "idle"
-  for _, v in ipairs(findScripts("vessel_controller")) do
-    if ours(v) then
-      if flight.pre[v.node.id] then q.ok, q.why = false, "it is docked to a craft that was there before the launch" end
-      if v.dock and (v.dock.latched or 0) > 0 then q.ok, q.why = false, "it is docked to another craft" end
+  local dq = flight.dock_q
+  if fresh or not dq or (time or 0) - dq.t > 0.25 then
+    dq = { t = time or 0, ok = true }
+    for _, v in ipairs(findScripts("vessel_controller")) do
+      if ours(v) then
+        if flight.pre[v.node.id] then dq.ok, dq.why = false, "it is docked to a craft that was there before the launch" end
+        if v.dock and (v.dock.latched or 0) > 0 then dq.ok, dq.why = false, "it is docked to another craft" end
+      end
     end
+    flight.dock_q = dq
   end
+  q.ok, q.why = dq.ok, dq.why
   return q
 end
 
@@ -809,7 +845,7 @@ local function crew_to(x, y, z, hidden)
 end
 
 function revertToLaunch()
-  local q = revertQuote()
+  local q = revertQuote(true)
   if not (q and q.ok) then return false, q and q.why or "nothing to revert" end
   if want_spawn then return false, "a launch is already under way" end
   local f = flight
@@ -835,7 +871,7 @@ function revertToLaunch()
 end
 
 function revertToBuilder()
-  local q = revertQuote()
+  local q = revertQuote(true)
   if not (q and q.ok) then return false, q and q.why or "nothing to revert" end
   if not q.builder then return false, "the builder is not available here" end
   local f = flight

@@ -216,9 +216,26 @@ end
 
 -- ── what the flight is ──────────────────────────────────────────────────────
 
+-- Every craft controller in the scene, kept for half a second (a handle from
+-- findScripts per craft, every frame, scaled this script with the size of the
+-- fleet); `fresh` walks the scene now. Callers check each handle's node.
+local vcs, vcs_t = nil, -1e9
+local function controllers(fresh)
+  if fresh or not vcs or (time or 0) - vcs_t > 0.5 then
+    vcs, vcs_t = findScripts("vessel_controller"), time or 0
+  end
+  return vcs
+end
+
+-- The craft being flown: kept while it still is (one read a frame); looked for
+-- again at once when it stops, and from the kept list while nothing is flown.
+local pil_h = nil
 local function piloted()
-  for _, v in ipairs(findScripts("vessel_controller")) do
-    if v.piloting then return v end
+  local v = pil_h
+  if v and v.valid ~= false and v.piloting then return v end
+  pil_h = nil
+  for _, w in ipairs(controllers(v ~= nil)) do
+    if w.valid ~= false and w.piloting then pil_h = w; return w end
   end
   return nil
 end
@@ -510,6 +527,20 @@ local function fleet()
   return type(f) == "table" and f or {}
 end
 
+-- The fleet for READING ONLY (the board, the comms network, the restore pass):
+-- a save.get copies every record, so the copy is kept for half a second and
+-- dropped the moment this script writes the key. (Another script's write shows
+-- within the half second.) Never change what this returns: fleet() for that.
+local fview, fview_t = nil, -1e9
+local function fleet_view()
+  if not fview or (time or 0) - fview_t > 0.5 then fview, fview_t = fleet(), time or 0 end
+  return fview
+end
+local function fleet_put(f)
+  save.set(FLEET_KEY, f)
+  fview, fview_t = f, time or 0
+end
+
 local function next_fid()
   local n = (save.get("fleet.next") or 0) + 1
   save.set("fleet.next", n)
@@ -623,10 +654,48 @@ local function describe_craft(v)
   }
 end
 
-function fleetSync()
-  local f = fleet()
+-- What changed in a record since the one last written: "structural" (a part
+-- gone, the crew in or out, down or up, a new name: written at once), "moved"
+-- (written within FLEET_SOFT seconds) or nil (nothing worth a write).
+local FLEET_SOFT = 3.0
+local function rec_change(a, b)
+  if not b then return "structural" end
+  if #a.parts ~= #(b.parts or {}) or a.crew ~= b.crew or a.landed ~= b.landed or a.name ~= b.name
+    or a.body ~= b.body or a.station ~= b.station or a.splashed ~= b.splashed then
+    return "structural"
+  end
+  local function far(x, y, e) return math.abs((x or 0) - (y or 0)) > e end
+  if far(a.x, b.x, 0.05) or far(a.y, b.y, 0.05) or far(a.z, b.z, 0.05)
+    or far(a.vx, b.vx, 0.05) or far(a.vy, b.vy, 0.05) or far(a.vz, b.vz, 0.05)
+    or far(a.pitch, b.pitch, 0.01) or far(a.yaw, b.yaw, 0.01) or far(a.roll, b.roll, 0.01)
+    or far(a.fuel, b.fuel, 1e-3) or far(a.charge, b.charge, 0.5) then
+    return "moved"
+  end
+  return nil
+end
+
+-- The records as last described, by node id: { t = when, rec = the record,
+-- dorm = was the craft dormant then }. A craft only gets described again when
+-- it could have changed: once a second while it is awake (flown, moving, near
+-- the camera), and while it is DORMANT (vessel_controller: parked, asleep or out
+-- in the distant-craft LOD, where nothing on it moves) once as it goes dormant
+-- and then every FLEET_IDLE seconds for its batteries.
+local FLEET_IDLE = 30.0
+local described = {}
+local pending, pending_t = {}, nil   -- fid → record not yet written; since when
+
+-- Bring the saved fleet up to date with the craft in the scene. `force`
+-- describes every craft and writes now (a scene change, a save): otherwise only
+-- what changed is described, and the key is written only when a record did
+-- change, structural changes at once and the rest within FLEET_SOFT seconds.
+-- Never a copy of the whole fleet each second. `force` "now": what changed is
+-- written at once (a control switch makes the record current first).
+function fleetSync(force)
+  local now = time or 0
   local alive = {}
-  for _, v in ipairs(findScripts("vessel_controller")) do
+  local urgent = force ~= nil and force ~= false
+  if force == "now" then force = nil end
+  for _, v in ipairs(controllers(true)) do
     local n = v.node
     -- (a lost craft — its pod gone — is a wreck, not a craft to fly or recover;
     -- `v.destroyed` is the controller's local and always read nil)
@@ -635,32 +704,84 @@ function fleetSync()
     -- leaves the ground, so `hasFlown` alone dropped every rover driven off the
     -- pad from the save. Only a rollout still standing in its clamps is skipped.
     if n and n.valid and (v.hasFlown ~= false or v.leftPad == true) and not (v.isLost and v.isLost()) then
-      local fid = fleet_live[n.id]
-      local rec = describe_craft(v)
-      if rec then
-        if not fid then fid = next_fid(); fleet_live[n.id] = fid end
-        rec.fid = fid
-        f[fid] = rec
+      local id = n.id
+      local fid = fleet_live[id]
+      local d = described[id]
+      local dorm = v.dormant == true
+      local due = force or not fid or not d
+        or (not dorm and now - d.t >= 1.0)
+        or (dorm and (not d.dorm or now - d.t >= FLEET_IDLE))
+      if due then
+        local rec = describe_craft(v)
+        if rec then
+          if not fid then fid = next_fid(); fleet_live[id] = fid end
+          rec.fid = fid
+          local ch = force and "structural" or rec_change(rec, d and d.rec)
+          -- (a craft going dormant is written as it settles: the record a
+          -- continued save rebuilds it from is the one it is resting in)
+          if dorm and d and not d.dorm and not ch then ch = "moved" end
+          -- (and an awake one at least every ten seconds: a part's own state —
+          -- a dish folded, a light switched — is not in the comparison)
+          if not ch and not dorm and now - ((d and d.wt) or -1e9) >= 10.0 then ch = "moved" end
+          described[id] = { t = now, rec = ch and rec or d.rec, dorm = dorm, wt = ch and now or d.wt }
+          if ch then
+            pending[fid] = rec
+            pending_t = pending_t or now
+            if ch == "structural" then urgent = true end
+          end
+        end
       end
       if fid then alive[fid] = true end
     end
   end
   -- A craft that was alive in this scene and isn't now is gone for good.
+  local gone = {}
   for id, fid in pairs(fleet_live) do
-    if not alive[fid] and time - (fleet_born[id] or -100) > 10.0 then
-      f[fid] = nil
+    if not alive[fid] and now - (fleet_born[id] or -100) > 10.0 then
+      gone[#gone + 1] = fid
       fleet_live[id] = nil
+      described[id] = nil
+      pending[fid] = nil
     end
   end
-  save.set(FLEET_KEY, f)
+  if #gone > 0 then urgent = true end
+  local soft = pending_t ~= nil and now - pending_t >= FLEET_SOFT
+  if not (urgent and (next(pending) or #gone > 0)) and not soft and not force then
+    return fleet_view()
+  end
+  -- The write: the key as it stands now (another script may have written a
+  -- record since: a crew seat, a migration), with what changed put over it.
+  local f = fleet()
+  for fid, rec in pairs(pending) do f[fid] = rec end
+  for _, fid in ipairs(gone) do f[fid] = nil end
+  pending, pending_t = {}, nil
+  fleet_put(f)
   return f
 end
 
+-- Scene change: everything as it is now goes into the save, described fresh.
+function onDestroy(node)
+  pcall(fleetSync, true)
+end
+
 -- Is this record's craft alive in the scene? → its controller handle.
+-- (fid → controller, from one walk over the kept list, for a quarter of a
+-- second: the board and the comms network ask for every record, and a walk
+-- over every craft for each of them was the fleet squared.)
+local lmap, lmap_t = nil, -1e9
 local function live_of(fid)
-  for _, v in ipairs(findScripts("vessel_controller")) do
-    if v.node and v.node.valid and fleet_live[v.node.id] == fid then return v end
+  if not lmap or (time or 0) - lmap_t > 0.25 then
+    lmap, lmap_t = {}, time or 0
+    for _, v in ipairs(controllers()) do
+      local n = v.node
+      if n and n.valid then
+        local f = fleet_live[n.id]
+        if f then lmap[f] = v end
+      end
+    end
   end
+  local v = lmap[fid]
+  if v and v.valid ~= false and v.node and v.node.valid and fleet_live[v.node.id] == fid then return v end
   return nil
 end
 
@@ -841,13 +962,17 @@ local function fleet_restore()
     restore_t0 = time
     local alive = {}
     for _, fid in pairs(fleet_live) do alive[fid] = true end
-    for fid, rec in pairs(fleet()) do
+    -- (read fresh: a rescan is asked for right after someone wrote the key)
+    fview = nil
+    for fid, rec in pairs(fleet_view()) do
       if not alive[fid] and type(rec) == "table" and rec.parts then
         restore[fid] = { tries = 0 }
       end
     end
   end
-  local f = fleet()
+  -- (every frame: nothing to read while nothing waits to be rebuilt)
+  if next(restore) == nil then return end
+  local f = fleet_view()
   for fid, st in pairs(restore) do
     local rec = f[fid]
     if not rec then
@@ -889,7 +1014,7 @@ end
 -- for their ground): where they are in the world now, for the comms network.
 function fleetOffline()
   local out = {}
-  for fid, rec in pairs(fleet()) do
+  for fid, rec in pairs(fleet_view()) do
     if type(rec) == "table" and not live_of(fid) then
       local b = rec.body and space.body(rec.body)
       if b then
@@ -909,7 +1034,7 @@ end
 function fleetList()
   local out = {}
   local E = ref("electronics")
-  for fid, rec in pairs(fleet()) do
+  for fid, rec in pairs(fleet_view()) do
     if type(rec) == "table" then
       local v = live_of(fid)
       local link, ls = linked(v)
@@ -1020,7 +1145,7 @@ function takeControlOf(fid)
   local v = live_of(fid)
   if not v then return false, "still being put back on " .. tostring(e.body) end
   if v.piloting then return false, "you're already flying it" end
-  fleetSync()   -- the record is the truth we fall back on: make it current first
+  fleetSync("now")   -- the record is the truth we fall back on: make it current first
   -- crew seated in it (not the avatar): they fly it, free (crew slice 2)
   local cl = ref("crew")
   if cl and cl.takeCraft and v.crewCount and v.crewCount() > 0 and not v.crewAboard then
@@ -1057,10 +1182,10 @@ function switchToVessel(v)
   -- crew seated aboard (and you aren't riding it): you fly it as them
   local cl = ref("crew")
   if cl and cl.takeCraft and v.crewCount and v.crewCount() > 0 and not v.crewAboard then
-    fleetSync()
+    fleetSync("now")
     return (cl.takeCraft(v)) == true
   end
-  fleetSync()
+  fleetSync("now")
   if not v.remoteControl() then return false end
   return true
 end
@@ -1068,7 +1193,7 @@ end
 -- Back to the crew: whatever you're flying is let go (it keeps coasting or
 -- sitting where it is). If the crew is in a craft's seat, that craft is it.
 function switchToCrew()
-  fleetSync()
+  fleetSync("now")
   local seat = nil
   for _, v in ipairs(findScripts("vessel_controller")) do
     if v.crewAboard and v.node and v.node.valid then seat = v end
@@ -1111,7 +1236,8 @@ function terminateFleet(fid)
   local v = live_of(fid)
   local f = fleet()
   f[fid] = nil
-  save.set(FLEET_KEY, f)
+  pending[fid] = nil   -- (a record waiting to be written must not bring it back)
+  fleet_put(f)
   if v and v.node and v.node.valid then
     if v.piloting and v.releaseControl then v.releaseControl() end
     for id, x in pairs(fleet_live) do if x == fid then fleet_live[id] = nil end end
@@ -1130,7 +1256,8 @@ function renameFleet(fid, name)
   local f = fleet()
   if not f[fid] then return false, "no such craft" end
   f[fid].name = name
-  save.set(FLEET_KEY, f)
+  if pending[fid] then pending[fid].name = name end
+  fleet_put(f)
   local v = live_of(fid)
   if v and v.renamed then v.renamed(name) end
   return true
@@ -1148,13 +1275,15 @@ function forgetNodes(ids)
     local fid = fleet_live[id]
     if fid then
       f[fid] = nil
+      pending[fid] = nil
       fleet_live[id] = nil
       if restore then restore[fid] = nil end
       n = n + 1
     end
     fleet_born[id] = nil
+    described[id] = nil
   end
-  if n > 0 then save.set(FLEET_KEY, f) end
+  if n > 0 then fleet_put(f) end
   return n
 end
 

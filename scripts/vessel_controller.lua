@@ -3480,6 +3480,7 @@ function takeControl()
   if not astronaut or not astronaut.valid then astronaut = find("Astronaut") end
   -- Into a pod they vanish; an open COMMAND SEAT keeps its rider in view.
   if astronaut then astronaut.visible = podSeat == true end
+  dormRouse()
   piloting = true
   crewAboard = true
   seatAvatarCheck()
@@ -3501,6 +3502,7 @@ function remoteControl()
   for _, v in ipairs(findScripts("vessel_controller")) do
     if v.releaseControl and v.node and v.node.id ~= node.id then v.releaseControl() end
   end
+  dormRouse()
   piloting = true
   set_navball(true)
   sas_mode, sas_last = "stability", "stability"
@@ -3931,14 +3933,18 @@ function dockTick(node, info, dt)
   -- probes must not cost a per-port sweep sixty times a second.
   local best
   local bx0, by0, bz0 = base_of(node, info)
-  for _, v in ipairs(findScripts("vessel_controller")) do
-    local far = false
-    if v.node and v.node.valid then
-      local tp = v.node.tickPos or v.node   -- (tick pose against our tick origin)
+  -- (the kept list and its nodes: the broad phase is a root distance each,
+  -- and only craft inside it are asked for their port faces)
+  local L, LN = vcList()
+  for i, v in ipairs(L) do
+    local far = true
+    local vn = LN[i]
+    if vn and vn.valid and vn.id ~= node.id then
+      local tp = vn.tickPos or vn   -- (tick pose against our tick origin)
       local dx0, dy0, dz0 = tp.x - bx0, tp.y - by0, tp.z - bz0
       far = (dx0 * dx0 + dy0 * dy0 + dz0 * dz0) > (DOCK_ASSIST_R + 60.0) ^ 2
     end
-    if v.dockFaces and v.node and v.node.valid and v.node.id ~= node.id and not far then
+    if not far and v.dockFaces and v.node and v.node.valid then
       for _, q in ipairs(v.dockFaces()) do
         for _, m in ipairs(mine) do
           local dx, dy, dz = q.x - m.x, q.y - m.y, q.z - m.z
@@ -4380,10 +4386,17 @@ function hullBump(node, info, dt)
   local mine = nil
   local m = math.max(0.1, info.mass or 1.0)
   local bx, by, bz = base_of(node, info)
-  for _, v in ipairs(findScripts("vessel_controller")) do
-    if v.hullSpheres and v.node and v.node.valid and v.node.id ~= node.id then
-      local dx0, dy0, dz0 = v.node.x - bx, v.node.y - by, v.node.z - bz
-      local d0 = math.sqrt(dx0 * dx0 + dy0 * dy0 + dz0 * dz0)
+  local L, LN = vcList()
+  for i, v in ipairs(L) do
+    local vn = LN[i]
+    -- (a root distance first: nobody's hull is 200 m across, and asking a far
+    -- craft for its reach is a call into its script)
+    local d0 = 1e9
+    if vn and vn.valid and vn.id ~= node.id then
+      local dx0, dy0, dz0 = vn.x - bx, vn.y - by, vn.z - bz
+      d0 = math.sqrt(dx0 * dx0 + dy0 * dy0 + dz0 * dz0)
+    end
+    if d0 < my_reach + 200.0 and v.hullSpheres and v.node and v.node.valid then
       local their_reach
       if v.hullReachNow then their_reach = v.hullReachNow() else their_reach = select(2, v.hullSpheres()) end
       local theirs = (d0 < my_reach + their_reach + 2.0) and v.hullSpheres() or nil
@@ -6319,6 +6332,13 @@ end
 
 function start(node)
   dock.node = node
+  -- A new craft in the world: every controller's kept list (vcList) is out of
+  -- date — tell them, so a stage just split off is bumped and docked with on
+  -- its first tick, not a quarter of a second later. (The table is shared.)
+  for _, v in ipairs(findScripts("vessel_controller")) do
+    local l = v.VCL
+    if type(l) == "table" then l.t = -1e9 end
+  end
   -- A craft that just UNDOCKED wakes up with the blueprint the vessel it left
   -- handed it at the seam, keyed by this root's own id (see `undock`) — not the
   -- shipyard's launch build, which describes a completely different ship.
@@ -11660,7 +11680,151 @@ function aeroTick(node, info, dt, thr, sp, sy, sr, ex, ey, ez, apx, apy, apz, ay
   }
 end
 
+-- ── DORMANCY: a craft nobody is near costs (almost) nothing ─────────────────
+-- Every craft left in the world (a spent stage, a wreck, a rover you walked
+-- away from) ran this whole controller every tick and every frame: 0.3 ms a
+-- craft, and they pile up over a session. A craft that nobody flies, nobody
+-- rides, the crew is not standing at and that physics is not moving goes
+-- DORMANT: its physics body is the engine's to keep (asleep on the ground, or
+-- in the distant-craft LOD on its rails), and this script runs a LIGHT tick
+-- once a second instead — power and the comms heartbeat (power_tick), and the
+-- peripherals the Tracking Station can still fold and point. flight_ops reads
+-- `dormant` and leaves the craft's fleet record alone meanwhile.
+--   * Right by the camera (DORM_VIS) it checks `node.asleep` every tick and
+--     wakes the same tick something moves it (a bump, its ground going), so
+--     the hit's damage is still read; its tyres are still drawn.
+--   * Anywhere else the script is put to sleep outright (script.sleep: no
+--     hooks at all) for a quarter of a second at a time inside the live-physics
+--     range (it wakes to a bump within that), half a second beyond it, and
+--     early when the camera comes close; taking control of it wakes it at once
+--     (dormRouse).
+-- Globals, not locals: the main chunk is at Lua's 200-local ceiling.
+dormant = false
+DORM = { born = nil, check = -1e9, quiet = nil, light = nil, far = false, live = false, vis = false, cam = nil, cam_t = -1e9 }
+DORM_NEAR = 40.0      -- the crew within this: boarding prompts, the hatch ring
+DORM_LIVE = 750.0     -- the camera within this: the engine simulates the craft (~700)
+DORM_VIS = 60.0       -- the camera within this: a dormant craft checks every tick, its tyres drawn
+
+-- Should this craft be dormant now? → yes, the camera's distance.
+function dormWanted(node)
+  if piloting or crewAboard or boarding or not info_seen or integ.push or dock.pending
+    or dock.lock or dock.evaGuard or dock.evaPending then return false, 0 end
+  local now = time or 0
+  if now < (integ.handoff_t or 0) or now - (DORM.born or now) < 5.0 then return false, 0 end
+  local nx, ny, nz = node.x, node.y, node.z
+  local a = astronaut
+  if a and a.valid then
+    local dx, dy, dz = a.x - nx, a.y - ny, a.z - nz
+    if dx * dx + dy * dy + dz * dz < DORM_NEAR * DORM_NEAR then return false, 0 end
+  end
+  local c = DORM.cam
+  if not (c and c.valid) and now - DORM.cam_t > 2.0 then
+    DORM.cam_t = now
+    c = find("Camera 1", { quiet = true }) or find("Camera", { quiet = true })
+    DORM.cam = c
+  end
+  local cd = 1e9
+  if c and c.valid then
+    local dx, dy, dz = c.x - nx, c.y - ny, c.z - nz
+    cd = math.sqrt(dx * dx + dy * dy + dz * dz)
+  end
+  -- awake and inside the live-physics range: physics is moving it, and what
+  -- this script does about that (damage, water, the wheels) has to happen
+  if cd < DORM_LIVE and not node.asleep then return false, cd end
+  return true, cd
+end
+
+-- The light tick: what a dormant craft still does, for the time since the last.
+function dormLight(node)
+  local now = time or 0
+  local el = now - (DORM.light or now)
+  DORM.light = now
+  if destroyed or el <= 0 then return end
+  if (elec.gen_seen or -1) >= 0 then update_peripherals(node, el) end
+  local einfo = assembly.info(node)
+  if einfo then power_tick(node, einfo, el) end
+end
+
+-- Back to the full tick (this tick runs it).
+function dormWake(node)
+  if DORM.light then dormLight(node) end
+  dormant, DORM.far, DORM.live, DORM.quiet, DORM.light = false, false, false, nil, nil
+  DORM.check = time or 0
+  return false
+end
+
+-- Something is about to need this craft (control taken, the crew boarding):
+-- out of its sleep now rather than at its next half-second.
+function dormRouse()
+  local n = dock.node
+  if DORM.far and n and n.valid and script and script.wake then pcall(script.wake, n, "vessel_controller") end
+  if dormant and n and n.valid then dormWake(n) end
+end
+
+-- Where the camera is, as the last check found it: near (inside the live
+-- physics, tyres drawn), live, or far (asleep outright between checks).
+function dormPlace(node, cd)
+  DORM.vis, DORM.live = cd < DORM_VIS, cd < DORM_LIVE
+  -- `far` = slept outright between checks: everywhere but right by the camera.
+  -- (Even an early return costs the engine's hook call, twice a tick: 50 µs a
+  -- craft a frame.) Inside the live range a quarter of a second at a time, so
+  -- a bump from something else is answered within it; beyond, half a second.
+  DORM.far = cd >= DORM_VIS
+  if DORM.far and script and script.sleep then
+    -- (a little uneven, so a fleet left together doesn't all wake on one tick)
+    local secs = (cd > DORM_LIVE + 50.0) and 0.45 or 0.22
+    script.sleep({ seconds = secs + 0.06 * ((node.id or 0) % 7) / 7, wakeWithin = DORM_VIS })
+  end
+end
+
+-- fixedUpdate's first word: true = dormant, skip the tick.
+function dormTick(node)
+  local now = time or 0
+  DORM.born = DORM.born or now
+  if dormant then
+    -- woken: control taken, or physics moving it where physics runs (a bump,
+    -- its ground going) — the full tick runs this very tick
+    if piloting or crewAboard or boarding or (DORM.live and not node.asleep) then return dormWake(node) end
+    if not DORM.far and now - DORM.check < 0.5 then return true end
+    DORM.check = now
+    local want, cd = dormWanted(node)
+    if not want then return dormWake(node) end
+    -- (the checks come every quarter second so a bump is answered; the light
+    -- tick itself — the electrical solve — once a second is plenty)
+    if now - (DORM.light or now) >= 1.0 then dormLight(node) end
+    dormPlace(node, cd)
+    return true
+  end
+  if now - DORM.check < 0.5 then return false end
+  DORM.check = now
+  local want, cd = dormWanted(node)
+  if not want then DORM.quiet = nil; return false end
+  -- quiet for a second first (a craft just set down settles, a bump passes)
+  DORM.quiet = DORM.quiet or now
+  if now - DORM.quiet < 1.0 then return false end
+  dormant, DORM.quiet, DORM.light = true, nil, now
+  set_prompt("")
+  dock.target = nil
+  dormPlace(node, cd)
+  return true
+end
+
+-- Every craft controller in the scene and their nodes, kept for a quarter of a
+-- second (dockTick and hullBump walk them every tick; a handle per craft per
+-- tick from findScripts was the fleet squared).
+VCL = { list = {}, nodes = {}, t = -1e9 }
+function vcList()
+  local now = time or 0
+  if now - VCL.t > 0.25 then
+    local l, ns = findScripts("vessel_controller"), {}
+    for i, v in ipairs(l) do ns[i] = v.node or false end
+    VCL.list, VCL.nodes, VCL.t = l, ns, now
+  end
+  return VCL.list, VCL.nodes
+end
+
 function fixedUpdate(node, dt)
+  if dormTick(node) then return end
   if not astronaut or not astronaut.valid then astronaut = find("Astronaut") end
   local info = assembly.info(node)
 
@@ -12555,6 +12719,14 @@ end
 -- (lateUpdate reads post-writeback poses) — drawn from fixedUpdate it floats
 -- a rails-carry beside the hull on any orbiting world.
 function lateUpdate(node, dt)
+  -- DORMANT: nothing but the tyres, and only with the camera close (dormTick)
+  if dormant then
+    if DORM.vis then
+      if R2.live then r2TyreVisuals(node, dt) end
+      if #R2.wheels > 0 and AUTO.lib then motoVisuals(node, dt) end
+    end
+    return
+  end
   -- the live tyres as drawn: along their steered axles, rolling
   if R2.live then r2TyreVisuals(node, dt) end
   -- forks, swing arms and struts follow their wheels (auto-engineering)

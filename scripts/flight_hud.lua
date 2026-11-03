@@ -122,9 +122,20 @@ local function ref(kind)
   return r
 end
 
+-- The craft being flown. Kept between frames: while it is still flown it is
+-- one read, not a walk over every craft in the world (a handle from
+-- findScripts each frame, per craft, was most of this script's cost in a long
+-- session). When it stops being flown the craft are walked again at once (a
+-- switch shows the new one the same frame); with nothing flown, four times a
+-- second.
+local flown_h, flown_t = nil, -1e9
 local function flown()
-  for _, v in ipairs(findScripts("vessel_controller")) do
-    if v.piloting then return v end
+  local v = flown_h
+  if v and v.valid ~= false and v.piloting then return v end
+  if not v and (time or 0) - flown_t < 0.25 then return nil end
+  flown_h, flown_t = nil, time or 0
+  for _, w in ipairs(findScripts("vessel_controller")) do
+    if w.piloting then flown_h = w; return w end
   end
   return nil
 end

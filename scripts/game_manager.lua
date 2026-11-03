@@ -83,6 +83,10 @@ end
 -- The full checkpoint: where the crew is standing and every dug field → the slot.
 function saveGame()
   if not slot then return end
+  -- the fleet as it is now (flight_ops writes a moving craft's record only every
+  -- few seconds, an idle one only when it changes)
+  local fo = findScript("flight_ops", { quiet = true })
+  if fo and fo.fleetSync then pcall(fo.fleetSync, true) end
   local astro = find("Astronaut")
   if astro then save_pos_of(astro, "p") end
   save.set("g_played", (save.get("g_played") or 0) + 1)

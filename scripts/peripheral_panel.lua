@@ -26,9 +26,17 @@ function openPanel() open = true end
 -- The vessel whose console this is: the piloted BUILT vessel, if any. Vessels
 -- spawn and despawn at runtime (a lander undocks into its own craft), so this
 -- is re-fetched every frame across every instance — never cached.
+-- Kept between calls: one read while it is still flown, not a walk over every
+-- craft in the world (dock rows ask every frame); walked again at once when it
+-- stops being flown, and four times a second while nothing is.
+local pil_h, pil_t = nil, -1e9
 function pilotedVessel()
-  for _, v in ipairs(findScripts("vessel_controller")) do
-    if v.piloting then return v end
+  local v = pil_h
+  if v and v.valid ~= false and v.piloting then return v end
+  if not v and (time or 0) - pil_t < 0.25 then return nil end
+  pil_h, pil_t = nil, time or 0
+  for _, w in ipairs(findScripts("vessel_controller")) do
+    if w.piloting then pil_h = w; return w end
   end
   return nil
 end
