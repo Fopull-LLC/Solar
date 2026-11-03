@@ -294,13 +294,15 @@ end
 function setLook(k, on) post_level = nil end
 
 -- Bloom, AO, motion blur and the flare: once per change (and on a scene
--- rebuild). AO is the scene's own strength times the option (the scene's
--- `ao: ScreenSpace` mode is not writable, so Off zeroes the strength).
-local ao_base = nil
+-- rebuild). AO is the scene's own strength times the option; Off also
+-- turns the pass off (aoMode 0, engine 0.117.1-dev.1386), and anything else
+-- puts the scene's own mode back.
+local ao_base, ao_mode = nil, nil
 local function apply_post(p)
   local pc = post()
   if not pc then return end
   if ao_base == nil then ao_base = pc.aoStrength or 0.85 end
+  if ao_mode == nil then local m = pc.aoMode; ao_mode = (m and m ~= 0) and m or false end
   local bloom_on = opt("bloom") ~= false
   local ao = tonumber(opt("ao"))
   local mb = tonumber(opt("motion_blur"))
@@ -310,7 +312,10 @@ local function apply_post(p)
   pc.bloom = bloom_on
   pc.bloomThreshold = p.bloom[1]
   pc.bloomIntensity = p.bloom[2]
-  if ao then pc.aoStrength = ao_base * ao end
+  if ao then
+    pc.aoStrength = ao_base * ao
+    if ao_mode then pc.aoMode = ao > 0 and ao_mode or 0 end
+  end
   if mb then pc.motionBlur = mb; if mb > 0 then pc.motionSamples = 8 end end
   if not (flare_ref and flare_ref.valid ~= false) then flare_ref = findScript and findScript("sun_flare") or nil end
   if flare_ref and flare_ref.setOn then flare_ref.setOn(flare == true) end
@@ -430,6 +435,7 @@ local function decide_light()
   L.steps = tonumber(opt("fog_quality"))
   L.contact = opt("contact_shadows")
   L.refl = opt("reflections")
+  L.map = tonumber(opt("shadow_map"))
 end
 local function assert_light(force)
   local l = light()
@@ -441,6 +447,8 @@ local function assert_light(force)
   if L.steps and l.fogSteps ~= L.steps then l.fogSteps = L.steps end
   if L.contact ~= nil and (force or l.contactShadows ~= L.contact) then l.contactShadows = L.contact end
   if L.refl ~= nil and (force or l.reflections ~= L.refl) then l.reflections = L.refl end
+  -- the sun shadow map's size (engine 0.117.1-dev.1386; made again next frame)
+  if L.map and env and env.shadowMapSize ~= nil and (force or env.shadowMapSize ~= L.map) then env.shadowMapSize = L.map end
 end
 
 -- ── the game's own dials: other scripts' published values ────────────────────

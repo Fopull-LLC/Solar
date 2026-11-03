@@ -105,16 +105,21 @@ GFX_OPTIONS = {
              { label = "400 m", value = 400 }, { label = "600 m", value = 600 } },
     preset = { Low = 70, Medium = 140, High = 220, Ultra = 400 },
     desc = "How far out things cast shadows (stretched on big worlds). Longer reach is softer up close." },
+  { key = "shadow_map", group = "light", label = "Shadow sharpness", cost = "low (GPU memory)",
+    opts = { { label = "Soft (512)", value = 512 }, { label = "Medium (1024)", value = 1024 },
+             { label = "Sharp (2048)", value = 2048 }, { label = "Crisp (4096)", value = 4096 } },
+    preset = { Low = 1024, Medium = 2048, High = 2048, Ultra = 4096 },
+    desc = "The sun shadow map's resolution: crisper shadow edges up close at a higher size." },
   { key = "contact_shadows", group = "light", label = "Contact shadows", cost = "low (0.4–0.9 ms)", opts = onoff(),
     preset = { Low = false, Medium = false, High = false, Ultra = true },
     desc = "The thin dark line where things touch the ground: feet, wheels, a crate on a deck." },
   { key = "reflections", group = "light", label = "Screen reflections", cost = "medium (1.4 ms)", opts = onoff(),
     preset = { Low = false, Medium = false, High = false, Ultra = true },
     desc = "Shiny floors and hulls reflect what stands on them, not only the sky." },
-  { key = "ao", group = "light", label = "Ambient occlusion", cost = "none saved yet",
+  { key = "ao", group = "light", label = "Ambient occlusion", cost = "low (saved when Off)",
     opts = { { label = "Full", value = 1.0 }, { label = "Light", value = 0.5 }, { label = "Off", value = 0.0 } },
     preset = { Low = 0.5, Medium = 1.0, High = 1.0, Ultra = 1.0 },
-    desc = "Soft shade in corners and under overhangs. (Off hides it; the pass itself still runs on this engine build.)" },
+    desc = "Soft shade in corners and under overhangs. Off skips the pass entirely." },
   -- atmosphere
   { key = "volumetric", group = "air", label = "Volumetric air", cost = "high (6–20 ms)", opts = onoff(),
     preset = { Low = false, Medium = false, High = true, Ultra = true },
@@ -935,7 +940,7 @@ local function graphics_rows(out)
     end
   end
   body[#body + 1] = hint("gfxn", "Not here yet (the engine has no switch for them): texture quality, view "
-    .. "distance and terrain detail, shadow map resolution, MSAA.")
+    .. "distance and terrain detail, MSAA.")
 end
 
 local function camera_rows(out)
