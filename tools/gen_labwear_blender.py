@@ -480,6 +480,20 @@ def build_lab(rig):
     npc = Piece("Neck", "SuitHead", V, F, W, (1, 1, 1), dirt="none")
     npc.uvmode = "plain"
 
+    # the shoulder seams: a felled seam round each armhole, where the sleeve
+    # head meets the body (on the body: the dome turns inside it)
+    for side, s in (("Left", 1.0), ("Right", -1.0)):
+        S = J("Upperarm." + side)
+        n = unit(np.array([s * 1.0, 0.25, 0.04]))
+        dd = 0.017 * k
+        rr = math.sqrt((LAB_RB * k) ** 2 - dd ** 2) + 0.0015 * k
+        c = S + n * dd
+        e1 = unit(np.cross(n, Z)); e2 = np.cross(n, e1)
+        pts = [c + (e1 * math.cos(a) + e2 * math.sin(a)) * rr for a in np.linspace(0, TAU, 49)]
+        sr = [dict(c=p_, r=0.0019 * k, w={"Back": 1}, col=COAT_SH) for p_ in pts]
+        Vq, Fq, UVq, Wq, Cq = loft(limb(sr, n), 6, tile=0.1)
+        Piece("Seam." + side, "LabCloth", Vq, Fq, Wq, Cq, UVc=UVq, dirt="none")
+
     # ── SLEEVES and GLOVES ────────────────────────────────────────────────
     for side, s in (("Left", 1.0), ("Right", -1.0)):
         S = Ja("Upperarm." + side)

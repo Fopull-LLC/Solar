@@ -73,7 +73,7 @@ INNER_DOOR = (4.35, 5.55)           # the vestibule's sliding door, along z on x
 INSTR_DOOR = (3.0, 4.2)             # the instrument room's door, along x on z = IZ
 
 # ── colours (vertex colours, linear, on near-white textures) ────────────────
-WALL = (0.90, 0.905, 0.90)
+WALL = (0.93, 0.93, 0.92)
 WALL_SEAM = (0.55, 0.56, 0.56)
 CASE = (0.88, 0.885, 0.88)          # painted steel casework
 CASE_SH = (0.80, 0.81, 0.81)
@@ -537,10 +537,10 @@ def room(K):
                 m.add("LabWall", [(x0, CY, z0), (x1, CY, z0), (x1, CY, z1), (x0, CY, z1)], [(0, -1, 0)] * 4,
                       [(x0, z0), (x1, z0), (x1, z1), (x0, z1)], [(0, 1, 2), (0, 2, 3)])
     for x in gx[1:-1]:
-        Bx(m, "LabSteel", (0.86, 0.865, 0.86), x - 0.012, x + 0.012, CY - 0.022, CY - 0.001, -ZI + 0.014, ZI - 0.014)
+        Bx(m, "LabWall", (0.88, 0.885, 0.88), x - 0.010, x + 0.010, CY - 0.018, CY - 0.001, -ZI + 0.014, ZI - 0.014)
     for z in gz[1:-1]:
         for a, b in zip(gx[:-1], gx[1:]):
-            Bx(m, "LabSteel", (0.86, 0.865, 0.86), max(a + 0.012, -XI + 0.014), min(b - 0.012, XI - 0.014), CY - 0.020, CY - 0.002,
+            Bx(m, "LabWall", (0.88, 0.885, 0.88), max(a + 0.010, -XI + 0.014), min(b - 0.010, XI - 0.014), CY - 0.016, CY - 0.002,
                z - 0.012, z + 0.012)
     # diffusers and sprinklers, a smoke detector or two
     for (x, z) in ((-6.9, -3.3), (-0.9, 1.5), (5.1, -4.5), (-6.9, 4.5), (2.7, 4.5), (8.7, 0.3)):
