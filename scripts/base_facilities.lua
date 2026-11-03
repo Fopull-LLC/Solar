@@ -132,6 +132,12 @@ GRADE = { r = 20.0, step = 13.0, passes = 2, margin = 6.0,
 SEA_MARGIN = 4.0
 -- Paving height over the graded ground.
 PAVE_H = 0.14
+-- Metres per repeat of the paving textures (lay_strip's UVs). Asphalt on the
+-- runway, taxiway and roads: 4 m (was 8; the 512 px stone chips read as a
+-- smear). Concrete on the aprons and the crawlerway: 4 m, the slab the
+-- texture's saw-cut joints are drawn round (tools/base_tex.py).
+ASPHALT_TILE = 4.0
+CONCRETE_TILE = 4.0
 
 -- Published so the objectives HUD can point at the base and the debug keys can
 -- send you home. World coordinates, refreshed every frame the base exists.
@@ -1588,7 +1594,7 @@ local function build_meshes(Fr, runway)
     end
     local sb = breaks(0, L, 4.0, sx)
     local wb = breaks(-HALF - SH, HALF + SH, 6.0, wx)
-    lay_strip(A, O, S, sb, wb, runway_paint(L, n1, n2), PAVE_H, 8.0, 6.0)
+    lay_strip(A, O, S, sb, wb, runway_paint(L, n1, n2), PAVE_H, ASPHALT_TILE, 6.0)
     stats.runway = L
     stats.numbers = n1 .. "/" .. n2
     -- edge lights every 15 m on the shoulders, threshold bars green outside /
@@ -1679,7 +1685,7 @@ local function build_meshes(Fr, runway)
     local half = TAXIWAY.half
     local sb = breaks(0, Tx.L, 4.0)
     local wb = breaks(-half, half, 6.0, { -0.15, 0.15, -half + 0.3, half - 0.3 })
-    lay_strip(A, O, Tx, sb, wb, strip_paint("taxi", Tx.L, half), PAVE_H + 0.02, 8.0, 6.0)
+    lay_strip(A, O, Tx, sb, wb, strip_paint("taxi", Tx.L, half), PAVE_H + 0.02, ASPHALT_TILE, 6.0)
     for s = 3.0, Tx.L - 1, 7.0 do
       for _, w in ipairs({ half + 0.6, -half - 0.6 }) do
         fitting(X, Lm, O, stripDir(Tx, s, w), R, LIGHT.blue, 0.06)
@@ -1699,7 +1705,7 @@ local function build_meshes(Fr, runway)
     local wb = breaks(-half, half, 6.0, extra)
     local M = (kind == "road") and A or C
     local h = PAVE_H + ((kind == "apron" or kind == "crawler") and 0.02 or 0.0)
-    lay_strip(M, O, S, sb, wb, strip_paint(kind, S.L, half), h, kind == "road" and 8.0 or 4.0, 6.0)
+    lay_strip(M, O, S, sb, wb, strip_paint(kind, S.L, half), h, kind == "road" and ASPHALT_TILE or CONCRETE_TILE, 6.0)
     -- street lamps down the roads and the crawlerway
     if kind == "road" or kind == "crawler" then
       local gap = kind == "road" and 18.0 or 16.0
