@@ -640,17 +640,14 @@ end
 -- BODY-RELATIVE centre, then pager_next(pg, body) → the next page (flat, with
 -- F.rx/ry/rz body-relative), or nil once it is all handed out.
 -- * The engine makes the query once, in the planet's frame, on the first page.
--- * A page can start with hits the engine rolled on an EARLIER call (the rest
---   of a chunk it kept for the next page), in world space as of that call: the
---   planet has moved metres since. Each hit's `distance` is measured in the
---   planet's frame, so it says which call's planet pose a hit was placed
---   against: |hit − pose − centre| = distance (the right pose; hits come in
---   call order, so the pose only moves forward along a page).
+-- * Every page is handed out in the world frame of THIS call (engine 0603,
+--   0.117.1-dev.1382): the engine keeps the query's held hits in the source's
+--   own frame, so a page is placed against this frame's body read as-is.
 -- * A cursor the engine has dropped (more than it keeps were paged since)
 --   ends in one whole flat query: judging a prop twice is harmless.
 local NEAR_PAGE = 256
 local function pager(id, rx, ry, rz, r)
-  return { id = id, qx = rx, qy = ry, qz = rz, r = r, cur = nil, done = false, hist = {} }
+  return { id = id, qx = rx, qy = ry, qz = rz, r = r, cur = nil, done = false }
 end
 local function pager_next(pg, body)
   if pg.done then return nil end
@@ -658,39 +655,15 @@ local function pager_next(pg, body)
   local F, cur
   if pg.cur then
     local ok, a, b = pcall(scatter.near, pg.id, q, pg.r, { flat = true, max = NEAR_PAGE, sort = false, after = pg.cur })
-    if ok and a then F, cur = a, b else F, cur = near_flat(pg.id, q, pg.r), nil; pg.hist = {} end
+    if ok and a then F, cur = a, b else F, cur = near_flat(pg.id, q, pg.r), nil end
   else
     F, cur = near_flat(pg.id, q, pg.r, { flat = true, max = NEAR_PAGE, sort = false })
   end
   pg.cur, pg.done = cur, cur == nil
-  local h = pg.hist
-  local last = h[#h]
-  if not last or last[1] ~= body.x or last[2] ~= body.y or last[3] ~= body.z then h[#h + 1] = { body.x, body.y, body.z } end
-  local X, Y, Z, D = F.x, F.y, F.z, F.distance
-  local qx, qy, qz = pg.qx, pg.qy, pg.qz
+  local X, Y, Z = F.x, F.y, F.z
+  local bx, by, bz = body.x, body.y, body.z
   local rx, ry, rz = {}, {}, {}
-  local c, nh = 1, #h
-  for k = 1, F.count do
-    local x, y, z = X[k], Y[k], Z[k]
-    if c < nh then
-      local d = D[k] or 0
-      local b = h[c]
-      local best = math.abs(len(x - b[1] - qx, y - b[2] - qy, z - b[3] - qz) - d)
-      for i = c + 1, nh do
-        b = h[i]
-        local e = math.abs(len(x - b[1] - qx, y - b[2] - qy, z - b[3] - qz) - d)
-        if e < best - 0.005 then best, c = e, i end
-      end
-    end
-    local b = h[c]
-    rx[k], ry[k], rz[k] = x - b[1], y - b[2], z - b[3]
-  end
-  -- what is still to come was rolled on call c or later
-  if c > 1 then
-    local keep = {}
-    for i = c, nh do keep[#keep + 1] = h[i] end
-    pg.hist = keep
-  end
+  for k = 1, F.count do rx[k], ry[k], rz[k] = X[k] - bx, Y[k] - by, Z[k] - bz end
   F.rx, F.ry, F.rz = rx, ry, rz
   return F
 end
