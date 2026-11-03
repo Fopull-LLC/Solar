@@ -314,6 +314,7 @@ local destroyed = false -- the POD is gone: the vessel is lost
 -- the whole subsystem costs the file one local and `fixedUpdate` no upvalue.
 local integ = {
   gone = {},        -- uid → true once that part has left this craft (staged, shed, broken off)
+  lost = {},        -- uid → record: the parts LOST TO DAMAGE (broken, torn or shed off), for the repair bay's refit
   gen = 0,          -- bumped whenever the craft's part set changes (invalidates the caches)
   seated = false,   -- THIS controller made the crew kinematic (and must hand them back)
   seat_t = -10.0,   -- last time the seat's kinematic flag was re-asserted
@@ -797,7 +798,7 @@ local function load_bp(override)
     local h = type(d.st) == "table" and tonumber(d.st.hp) or nil
     if h and h > 0 and h < 1 then part_hp[d.uid] = h end
   end
-  integ.gone, integ.box, integ.strain = {}, {}, {}
+  integ.gone, integ.box, integ.strain, integ.lost = {}, {}, {}, {}
   integ.gen = integ.gen + 1
   -- (elecRescan above already sorted THIS part set — the same records, none
   -- gone, all whole — so the new generation needs no second pass: at 1,000
@@ -3423,8 +3424,12 @@ function fleetParts()
     end
   end
   table.sort(out, function(a, b) return (a.uid or 0) < (b.uid or 0) end)
+  -- the parts lost to damage, for the repair bay's refit after a reload
+  local lost = {}
+  for u, d in pairs(integ.lost) do if not aboard(u) then lost[#lost + 1] = d end end
+  table.sort(lost, function(a, b) return (a.uid or 0) < (b.uid or 0) end)
   local E = elib()
-  return { parts = out, fuel = fuel, charge = elec.charge, pod = podCrewed == true,
+  return { parts = out, lost = lost, fuel = fuel, charge = elec.charge, pod = podCrewed == true,
            probe = elec.probePart ~= nil, crew = crewAboard == true,
            station = stationUid, flown = hasFlown ~= false,
            groups = E and E.packGroups(ctlGroups) or nil,
@@ -4924,6 +4929,122 @@ function partSt(uid, k, v, write)
   return type(d.st) == "table" and d.st[k] or nil
 end
 
+-- ── REFIT (the repair bay, scripts/repair_bay.lua) ─────────────────────────
+-- A part LOST TO DAMAGE (broken off: break_part; torn away, or shed with the
+-- mount that broke: shedSet) is kept in `integ.lost` (uid → its blueprint
+-- record) and rides the fleet record (fleetParts' `lost`, read back in
+-- `start`), so a reloaded craft still knows what it is missing. A part that
+-- left ON PURPOSE (staged, separated, undocked) is not: it is not missing.
+-- `refitParts` builds them again where the blueprint has them, in the craft's
+-- own frame, and the craft takes them on the way a reload does (load_bp over
+-- the parts aboard plus the refit ones: pools, devices, seats, staging, the
+-- stress tree). A refit part is NEW: whole, its seats empty, a new locker, and
+-- its tanks and batteries EMPTY (the bay sells the fill).
+
+-- The lost parts that can go back on now, in uid order: each one next to a
+-- part aboard (its parent, or a child) or to one going back on with it. →
+-- the records, and how many can't (their mount left with a stage or an undock).
+-- (kept until the part set changes: the bay asks every frame someone is in it)
+LOSTC = { gen = -1, src = nil, n = -1, list = {}, stuck = 0 }
+function lostParts()
+  local nl = 0
+  for _ in pairs(integ.lost) do nl = nl + 1 end
+  if LOSTC.gen == integ.gen and LOSTC.src == integ.lost and LOSTC.n == nl then return LOSTC.list, LOSTC.stuck end
+  local wait, n = {}, 0
+  for u, d in pairs(integ.lost) do
+    if not aboard(u) then wait[u] = d; n = n + 1 end
+  end
+  local ok, list = {}, {}
+  local function held(u) return u ~= nil and u ~= 0 and (aboard(u) or ok[u] ~= nil) end
+  local grew = n > 0
+  while grew do
+    grew = false
+    for u, d in pairs(wait) do
+      local by_kid = false
+      for u2, d2 in pairs(bp_by_uid) do
+        if (d2.parent or 0) == u and held(u2) then by_kid = true break end
+      end
+      if not by_kid then
+        for u2, d2 in pairs(ok) do if (d2.parent or 0) == u then by_kid = true break end end
+      end
+      if d.prefab and (held(d.parent) or by_kid) then ok[u], wait[u], grew = d, nil, true end
+    end
+  end
+  for _, d in pairs(ok) do list[#list + 1] = d end
+  table.sort(list, function(a, b) return (a.uid or 0) < (b.uid or 0) end)
+  LOSTC.gen, LOSTC.src, LOSTC.n, LOSTC.list, LOSTC.stuck = integ.gen, integ.lost, nl, list, n - #list
+  return list, n - #list
+end
+
+-- The new parts are all in: the craft takes them (a reload's load_bp).
+function refitFinish(node, job)
+  integ.refit = nil
+  if job.dead or destroyed or not (node and node.valid) then return end
+  local fp = fleetParts()          -- (writes each part's wear into its state)
+  if not fp then return end
+  local parts, back = {}, {}
+  for _, d in ipairs(fp.parts) do parts[#parts + 1] = d end
+  local E = elib()
+  for _, d in ipairs(job.list) do
+    d.st = {}
+    if E and E.stateOf then
+      local st = E.stateOf(d)
+      if st.charge then st.charge = 0 end
+    end
+    parts[#parts + 1] = d
+    back[d.uid] = true
+  end
+  local keep = {}
+  for u, d in pairs(integ.lost) do if not back[u] then keep[u] = d end end
+  local fuel0, st0, from0 = fuel, stationUid, pod_uid
+  assembly.rebuild(node)
+  load_bp({ parts = parts, groups = fp.groups, controls = fp.controls, name = bp and bp.name, crew = bp and bp.crew })
+  integ.lost = keep
+  fuelFill(math.min(fuel_cap, fuel0))
+  if st0 then setStation(st0) end
+  if from0 and from0 ~= pod_uid then commandFrom(from0) end   -- ("Control from here" holds)
+  integ.handoff_t = (time or 0) + 3.0   -- the rebuild's settle is not a solver kick
+  log(string.format("refit: %d part(s) back on %s (%d aboard)", #job.list, craftName, part_total))
+  if job.done then pcall(job.done, #job.list) end
+end
+
+-- Build lost parts `uids` (nil = every one that can go back on) again on the
+-- craft. Asynchronous: `done(n)` runs once they are aboard. → ok, why
+function refitParts(uids, done)
+  local node = dock.node
+  if destroyed or not (node and node.valid) then return false, "the craft is gone" end
+  if integ.refit then return false, "a refit is already under way" end
+  if (dock.latched or 0) > 0 or dock.pending then return false, "it is docked: undock it first" end
+  local can, list = {}, {}
+  for _, d in ipairs((lostParts())) do can[d.uid] = d end
+  if uids then
+    for _, u in ipairs(uids) do if can[u] then list[#list + 1] = can[u] end end
+  else
+    for _, d in pairs(can) do list[#list + 1] = d end
+  end
+  if #list == 0 then return false, "nothing to refit" end
+  dormRouse()
+  local job = { list = list, got = 0, done = done }
+  integ.refit = job
+  local P = findScript("builder_proc")
+  for _, d in ipairs(list) do
+    -- (a world point only for the spawn call; the part is set in the craft's
+    -- frame, at its blueprint pose, the moment it exists)
+    local w = node:toWorld(vec3(d.x or 0, d.y or 0, d.z or 0))
+    spawn(d.prefab, vec3(w.x, w.y, w.z), function(part)
+      if job.dead or not node.valid or integ.refit ~= job then part:destroy() return end
+      part.x, part.y, part.z = d.x or 0, d.y or 0, d.z or 0
+      part:setAngles(d.yaw or 0, d.pitch or 0, d.roll or 0)
+      if part.addTag then part:addTag("craftpart") end
+      if P and P.dress and d.size and d.proc then P.dress(part, { def = d, size = d.size }) end
+      if P and P.dressJoint then for _, j in ipairs(d.joints or {}) do P.dressJoint(part, j) end end
+      job.got = job.got + 1
+      if job.got == #list then refitFinish(node, job) end
+    end, node)
+  end
+  return true, string.format("%d part(s) going back on", #list)
+end
+
 -- ── PART FRAMES, NOW (the crew's repair lock, docs/crew-and-items.md §6.3) ─
 -- Where a part is THIS tick, for a body a script holds against it. The craft's
 -- axes come from `assembly.info` (this tick's, where the node's are a frame's)
@@ -5863,6 +5984,7 @@ break_part = function(node, uid, d, c, hx, hy, hz, depth)
   if c and c.valid and i2 and #i2.parts > 1 then
     local away = clearAway(node, { [uid] = true })
     integ.gone[uid] = true
+    integ.lost[uid] = d
     integ.gen = integ.gen + 1
     quench({ c })
     assembly.split(node, { c }, function(junk)
@@ -6350,6 +6472,13 @@ function start(node)
     local had_state = false
     for _, d in pairs(handoff.parts) do if d.st ~= nil then had_state = true end end
     load_bp(handoff)
+    -- what it had lost to damage (fleetParts' `lost`): the repair bay can refit it
+    for _, d in pairs(type(handoff.lost) == "table" and handoff.lost or {}) do
+      if type(d) == "table" and d.uid then
+        integ.lost[d.uid] = d
+        if d.uid >= dock.next_uid then dock.next_uid = d.uid + 1 end
+      end
+    end
     -- `load_bp` rolls a fresh build out of the VAB with full tanks; an undocked
     -- module arrives with exactly what it was carrying at the seam.
     fuelFill(math.min(fuel_cap, handoff.fuel or fuel_cap))
@@ -6886,6 +7015,7 @@ function shedSet(node, set, why, sev, blast, at_uid)
   if at_uid and set[at_uid] and bp_by_uid[at_uid] then
     label = bp_by_uid[at_uid].label or bp_by_uid[at_uid].id or "part"
   end
+  for u in pairs(set) do if not integ.gone[u] and bp_by_uid[u] then integ.lost[u] = bp_by_uid[u] end end
   drop_set(set)
   local keep_ev = {}
   for _, ev in ipairs(events) do

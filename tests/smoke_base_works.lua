@@ -111,7 +111,24 @@ ok(q.nothing and q.total == 0, "nothing to do is free")
 q = RB.quote({ parts = { { uid = 1, hp = 0.99, cost = 10 } } }, P)
 ok(q.total == P.min_fee, "a scratch costs the minimum fee")
 local lines = RB.orderLines(RB.quote({ parts = { { hp = 0.5, cost = 100, wheel = true } }, fuel = 10, lost = 1 }, P))
-ok(#lines == 3 and lines[1][1]:match("1 wheel") and lines[3][1]:match("broken off"), "the order's lines name wheels and lost parts")
+ok(#lines == 3 and lines[1][1]:match("1 wheel") and lines[3][1]:match("no mount aboard"), "the order's lines name wheels and parts that can't be refit")
+-- REFIT: a part that broke off, at `refit_rate` of its price, one line each;
+-- its tanks and batteries come empty and go on the propellant and charge lines
+q = RB.quote({ parts = {}, refit = { { uid = 7, cost = 40, label = "Stowage Locker" },
+                                     { uid = 10, cost = 150, label = "FT-S Tank", fuel = 80 },
+                                     { uid = 12, cost = 60, label = "Battery", ec = 150 } }, fuel = 0, charge = 0 }, P)
+ok(q.refit == 3 and math.abs(q.refitCost - 250 * P.refit_rate) < 1e-9, "three parts refit at their share of the price")
+ok(q.fuel == 80 and q.charge == 150, "the new tank and battery are filled on the order")
+ok(q.total == math.floor(250 * P.refit_rate + 80 * P.fuel_price + 150 * P.charge_price + 0.5), "…and priced in the total")
+ok(not q.nothing and #q.refitUids == 3, "a refit is work")
+lines = RB.orderLines(q)
+ok(lines[1][1] == "Refit  FT-S Tank" and lines[1][2] == "$" .. math.floor(150 * P.refit_rate + 0.5), "the dearest refit first, priced")
+ok(lines[2][1] == "Refit  Battery" and lines[3][1] == "Refit  Stowage Locker", "every refit part named")
+local many = {}
+for i = 1, 9 do many[i] = { uid = i, cost = 10 * i, label = "P" .. i } end
+lines = RB.orderLines(RB.quote({ refit = many }, P), nil, 6)
+ok(#lines == 6 and lines[6][1] == "Refit  4 more parts" and lines[6][2] == "$" .. math.floor((10 + 20 + 30 + 40) * P.refit_rate + 0.5),
+  "past six, the cheapest are summed on one line")
 ok(RB.inBay(0, 0.5, 0) and RB.inBay(5.0, 0.3, -7.0) and not RB.inBay(6.0, 0.3, 0) and not RB.inBay(0, 6, 0), "the bay floor box")
 
 -- ── progression: the Battery before the Battery Pack ────────────────────────

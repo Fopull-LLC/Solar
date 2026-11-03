@@ -559,7 +559,7 @@ local function describe_craft(v)
     local fp = v.fleetParts()
     if fp then
       man = { name = n.name, parts = {}, fuel = fp.fuel, charge = fp.charge, groups = fp.groups, controls = fp.controls,
-              probe = fp.probe, crew = fp.crew, station = fp.station, flown = fp.flown }
+              probe = fp.probe, crew = fp.crew, station = fp.station, flown = fp.flown, lost = fp.lost }
       for i, d in ipairs(fp.parts) do man.parts[i] = { rec = d } end
     end
   else
@@ -583,15 +583,18 @@ local function describe_craft(v)
   -- ...and save.set holds four tables deep at most, which a fleet record
   -- already is at a part's fields: modules and state go in as strings.
   local E = ref("electronics")
-  local recs = {}
-  for i, p in ipairs(man.parts) do
-    if E and E.packRecord then recs[i] = E.packRecord(p.rec or {})
-    else
-      local r = {}
-      for k, val in pairs(p.rec or {}) do if type(val) ~= "table" then r[k] = val end end
-      recs[i] = r
-    end
+  local function pack(rec)
+    if E and E.packRecord then return E.packRecord(rec or {}) end
+    local r = {}
+    for k, val in pairs(rec or {}) do if type(val) ~= "table" then r[k] = val end end
+    return r
   end
+  local recs = {}
+  for i, p in ipairs(man.parts) do recs[i] = pack(p.rec) end
+  -- the parts it lost to damage (vessel_controller lostParts): the repair bay
+  -- refits them from these records after a reload
+  local lost = nil
+  for _, d in ipairs(man.lost or {}) do lost = lost or {}; lost[#lost + 1] = pack(d) end
   -- Velocity in the dominant body's frame (what the HUD and space.elements
   -- read). For a craft coasting in the distant-craft LOD the node reads its
   -- rails velocity, the same as assembly.info (floptle/0402, 0.117.0-rc3).
@@ -650,7 +653,7 @@ local function describe_craft(v)
       for _, r in ipairs(recs) do if (r.comms or 0) == 1 then return true end end
       return false
     end)(),
-    parts = recs, t = time,
+    parts = recs, lost = lost, t = time,
   }
 end
 
@@ -922,7 +925,7 @@ local function respawn(fid, rec)
     -- masses and lands on the fuelled craft — a 44 m/s orbit restored at 32,
     -- and spun up, because the centre of mass moved under it.
     save.set("dock.handoff." .. tostring(v.id or 0),
-      { parts = rec.parts, fuel = rec.fuel, charge = rec.charge, lockout = 2.0, groups = rec.groups, controls = rec.controls,
+      { parts = rec.parts, lost = rec.lost, fuel = rec.fuel, charge = rec.charge, lockout = 2.0, groups = rec.groups, controls = rec.controls,
         crew = rec.crew, name = rec.name, station = rec.station, flown = rec.flown,
         vel = (not rec.landed) and { x = fvx, y = fvy, z = fvz } or nil })
     for _, d in ipairs(rec.parts) do

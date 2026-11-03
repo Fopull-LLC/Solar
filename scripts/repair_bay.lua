@@ -18,20 +18,28 @@
 --     unit;
 --   * CHARGE: the batteries filled (controlState / elecSetCharge),
 --     `charge_price` an EC;
---   * a part that BROKE OFF has left the craft (vessel_controller's rule: hp 0
---     is wreckage, not a part): the order says so, and the VAB rebuilds it.
+--   * REFIT: every part the craft LOST TO DAMAGE (broken off, torn away, or
+--     shed with the mount that broke: vessel_controller lostParts) is built
+--     again where its launch blueprint has it, in the craft's own frame, and
+--     attached as a reload attaches it (refitParts), at `refit_rate` of the
+--     part's price, each one on its own line. A stage you STAGED away is not
+--     missing and is not refit; a part whose mount left with a stage or an
+--     undock can't be, and the order says so. A refit part is new: whole, its
+--     seats empty, its locker empty, its tanks and batteries EMPTY — and the
+--     same order fills them, on the propellant and charge lines below.
 -- Pressing "Service" runs the work as a timed job in the menu (sparks and the
 -- clank of tools on the worn parts, a progress bar); walking away or driving
 -- off calls it off, and only a finished job is paid for. Cheap on purpose:
 -- this is the company's own shed, and a dented rover should cost a fraction
--- of its price to put right.
+-- of its price to put right. (What is missing rides the fleet record, so a
+-- craft brought in after a reload is refit the same.)
 --
 -- FRAMES (docs/positions-and-frames.md): which craft is in the bay is asked
 -- in drawn poses only — the craft's origin by its node's toWorld, put into
 -- the bay's frame by the bay node's toLocal, both this frame — and nothing
 -- world is kept across frames. The prompt is a screen line, not a marker.
 --
--- Pure parts (luajit, tests/smoke_repair_bay.lua): quote(work, prices),
+-- Pure parts (luajit, tests/smoke_base_works.lua): quote(work, prices),
 -- inBay(lx, lz, …), orderLines(q).
 
 defaults = {
@@ -44,6 +52,12 @@ defaults = {
   --- $ per EC of charge
   --@range 0 1
   charge_price = 0.02,
+  --- the share of a part's price a REFIT costs (a part that broke off, built again)
+  --@range 0 1
+  refit_rate = 0.5,
+  --- the most refit parts the order names one by one (the rest are summed on one line)
+  --@range 1 20
+  refit_lines = 6,
   --- the least an order costs when there is work at all ($)
   --@range 0 100
   min_fee = 10,
@@ -52,6 +66,8 @@ defaults = {
   secs = 4.0,
   --@range 0 5
   secs_part = 0.7,
+  --@range 0 10
+  secs_refit = 1.5,
   --@range 2 60
   secs_max = 14.0,
   --- how near the console (m) the prompt comes up (anywhere on the bay floor counts too)
@@ -72,12 +88,26 @@ function inBay(lx, ly, lz, slack)
 end
 
 -- The work order. `work` = { parts = { { uid, hp, cost, label } }, fuel =
--- units short, charge = EC short, lost = n (broken off) }; `p` the prices.
--- → { parts = n, mend = $, fuel = units, fuelCost = $, charge = EC,
---     chargeCost = $, total = $, nothing = bool, lines = {…} }
+-- units short, charge = EC short, refit = { { uid, cost, label, fuel, ec } }
+-- (broken off, can go back on), lost = n (broken off, can't) }; `p` the
+-- prices. A refit part's tanks and batteries come empty, so its `fuel` and
+-- `ec` are added to the propellant and charge lines.
+-- → { parts = n, mend = $, refit = n, refitCost = $, refits = { { uid,
+--     label, cost } }, refitUids = { uid… }, fuel = units, fuelCost = $,
+--     charge = EC, chargeCost = $, total = $, nothing = bool }
 function quote(work, p)
   p = p or defaults
-  local q = { parts = 0, mend = 0, fuel = 0, fuelCost = 0, charge = 0, chargeCost = 0, lost = work.lost or 0 }
+  local q = { parts = 0, mend = 0, fuel = 0, fuelCost = 0, charge = 0, chargeCost = 0, lost = work.lost or 0,
+              refit = 0, refitCost = 0, refits = {}, refitUids = {} }
+  local add_fuel, add_ec = 0, 0
+  for _, e in ipairs(work.refit or {}) do
+    local c = (e.cost or 20) * (p.refit_rate or 0.5)
+    q.refit = q.refit + 1
+    q.refitCost = q.refitCost + c
+    q.refits[#q.refits + 1] = { uid = e.uid, label = e.label or "part", cost = c }
+    q.refitUids[#q.refitUids + 1] = e.uid
+    add_fuel, add_ec = add_fuel + math.max(0, e.fuel or 0), add_ec + math.max(0, e.ec or 0)
+  end
   local wheels = 0
   for _, e in ipairs(work.parts or {}) do
     local wear = math.max(0, 1 - (e.hp or 1))
@@ -88,27 +118,42 @@ function quote(work, p)
     end
   end
   q.wheels = wheels
-  q.fuel = math.max(0, math.floor((work.fuel or 0) + 0.5))
+  q.fuel = math.max(0, math.floor((work.fuel or 0) + add_fuel + 0.5))
   q.fuelCost = q.fuel * (p.fuel_price or 0.3)
-  q.charge = math.max(0, math.floor((work.charge or 0) + 0.5))
+  q.charge = math.max(0, math.floor((work.charge or 0) + add_ec + 0.5))
   q.chargeCost = q.charge * (p.charge_price or 0.02)
-  local sum = q.mend + q.fuelCost + q.chargeCost
-  q.nothing = q.parts == 0 and q.fuel < 1 and q.charge < 1
+  local sum = q.mend + q.refitCost + q.fuelCost + q.chargeCost
+  q.nothing = q.parts == 0 and q.refit == 0 and q.fuel < 1 and q.charge < 1
   q.total = q.nothing and 0 or math.max(p.min_fee or 10, math.floor(sum + 0.5))
   return q
 end
 
 -- The order as rows of { label, value } for the menu and the probes.
-function orderLines(q, money)
+function orderLines(q, money, most)
   money = money or function(v) return "$" .. tostring(math.floor(v + 0.5)) end
+  most = most or defaults.refit_lines or 6
   local out = {}
+  -- every refit part on its own line, the most costly first; past `most`, the
+  -- rest summed on one
+  local rs = {}
+  for _, r in ipairs(q.refits or {}) do rs[#rs + 1] = r end
+  table.sort(rs, function(a, b) if a.cost ~= b.cost then return a.cost > b.cost end return (a.uid or 0) < (b.uid or 0) end)
+  local named = (#rs > most) and (most - 1) or #rs
+  for i = 1, named do out[#out + 1] = { "Refit  " .. rs[i].label, money(rs[i].cost) } end
+  if #rs > named then
+    local c = 0
+    for i = named + 1, #rs do c = c + rs[i].cost end
+    out[#out + 1] = { string.format("Refit  %d more parts", #rs - named), money(c) }
+  end
   if q.parts > 0 then
     out[#out + 1] = { string.format("Mend %d worn part%s%s", q.parts, q.parts == 1 and "" or "s",
       q.wheels > 0 and string.format(" (%d wheel%s)", q.wheels, q.wheels == 1 and "" or "s") or ""), money(q.mend) }
   end
   if q.fuel >= 1 then out[#out + 1] = { string.format("Propellant  %d u", q.fuel), money(q.fuelCost) } end
   if q.charge >= 1 then out[#out + 1] = { string.format("Charge  %d EC", q.charge), money(q.chargeCost) } end
-  if (q.lost or 0) > 0 then out[#out + 1] = { string.format("%d part%s broken off: rebuild at the VAB", q.lost, q.lost == 1 and "" or "s"), "—" } end
+  if (q.lost or 0) > 0 then
+    out[#out + 1] = { string.format("%d lost part%s with no mount aboard: rebuild at the VAB", q.lost, q.lost == 1 and "" or "s"), "—" }
+  end
   return out
 end
 
@@ -219,7 +264,7 @@ end
 
 -- What the craft needs, read off its controller.
 local function work_of(v)
-  local w = { parts = {}, fuel = 0, charge = 0, lost = 0 }
+  local w = { parts = {}, fuel = 0, charge = 0, lost = 0, refit = {} }
   for _, e in ipairs(v.damagedParts and v.damagedParts() or {}) do
     local rec = v.partRec and v.partRec(e.uid) or {}
     local id = tostring(rec.id or "")
@@ -229,6 +274,20 @@ local function work_of(v)
   for _, t in ipairs(v.tankList and v.tankList() or {}) do w.fuel = w.fuel + math.max(0, (t.cap or 0) - (t.left or 0)) end
   local cs = v.controlState and v.controlState()
   if cs and cs.cap and cs.charge then w.charge = math.max(0, cs.cap - cs.charge) end
+  -- what broke off and can go back on; and what can't (its mount is gone too)
+  if v.lostParts then
+    local list, stuck = v.lostParts()
+    local E = ref("electronics")
+    for _, d in ipairs(list or {}) do
+      local ec = 0
+      for _, m in ipairs(E and E.modsOf and E.modsOf(d) or {}) do
+        if m.type == "battery" then ec = ec + (m.ec or 0) end
+      end
+      w.refit[#w.refit + 1] = { uid = d.uid, cost = d.cost or 20, label = d.label or d.id or "part",
+                                fuel = d.fuel or 0, ec = ec }
+    end
+    w.lost = stuck or 0
+  end
   return w
 end
 
@@ -264,16 +323,34 @@ function service(v)
   for _, e in ipairs(v.damagedParts and v.damagedParts() or {}) do
     if v.repairPart and v.repairPart(e.uid, 1.0) then mended = mended + 1 end
   end
-  local cap = 0
-  for _, t in ipairs(v.tankList and v.tankList() or {}) do cap = cap + (t.cap or 0) end
-  if cap > 0 and v.fuelFill then v.fuelFill(cap) end
-  local cs = v.controlState and v.controlState()
-  if cs and cs.cap and cs.cap > 0 and v.elecSetCharge then v.elecSetCharge(cs.cap) end
-  jobs = jobs + 1
-  lastJob = string.format("done %s: %d parts mended, %d u, %d EC", money(q.total), mended, q.fuel, q.charge)
-  if log then log("repair bay: " .. (v.craftName or "craft") .. " — " .. lastJob) end
-  local fx = ref("sfx")
-  if fx and fx.play then pcall(fx.play, "recover") end
+  -- the propellant and the charge last: a refit part's tanks and batteries
+  -- are filled with the rest, once it is aboard
+  local function fill(refit)
+    if not valid(v.node) then return end
+    local cap = 0
+    for _, t in ipairs(v.tankList and v.tankList() or {}) do cap = cap + (t.cap or 0) end
+    if cap > 0 and v.fuelFill then v.fuelFill(cap) end
+    local cs = v.controlState and v.controlState()
+    if cs and cs.cap and cs.cap > 0 and v.elecSetCharge then v.elecSetCharge(cs.cap) end
+    jobs = jobs + 1
+    lastJob = string.format("done %s: %d parts mended, %d refit, %d u, %d EC", money(q.total), mended, refit, q.fuel, q.charge)
+    if log then log("repair bay: " .. (v.craftName or "craft") .. " — " .. lastJob) end
+    local fx = ref("sfx")
+    if fx and fx.play then pcall(fx.play, "recover") end
+  end
+  if q.refit > 0 then
+    local ok, why = false, "this craft can't be refit"
+    if v.refitParts then ok, why = v.refitParts(q.refitUids, function(n) fill(n or 0) end) end
+    if not ok then
+      -- nothing was refit: the money goes back
+      if co and co.earn then co.earn(q.total, "repair bay: refit called off") end
+      lastJob = "refit refused: " .. tostring(why)
+      return false, "refit: " .. tostring(why)
+    end
+    return true, string.format("%s serviced  ·  %d part%s refit  ·  %s", v.craftName or "Craft", q.refit,
+      q.refit == 1 and "" or "s", money(q.total))
+  end
+  fill(0)
   return true, string.format("%s serviced  ·  %s", v.craftName or "Craft", money(q.total))
 end
 
@@ -311,15 +388,19 @@ local function provider(t, ctx)
   out[#out + 1] = { type = "meter", id = "cond", label = "WORST PART", frac = worst,
     value = q.parts > 0 and string.format("%d%%  ·  %d worn", math.floor(worst * 100 + 0.5), q.parts) or "all whole",
     warn = worst < 0.5 }
+  if q.refit + (q.lost or 0) > 0 then
+    out[#out + 1] = { type = "info", id = "missing", label = "MISSING", warn = true,
+      value = string.format("%d part%s broken off", q.refit + q.lost, q.refit + q.lost == 1 and "" or "s") }
+  end
   if q.nothing then
     out[#out + 1] = { type = "info", id = "ok", label = "", value = "in good order: nothing to do" }
     return out, "REPAIR BAY", "work order"
   end
-  for i, l in ipairs(orderLines(q, money)) do
+  for i, l in ipairs(orderLines(q, money, params.refit_lines)) do
     out[#out + 1] = { type = "info", id = "line" .. i, group = "WORK ORDER", label = l[1], value = l[2] }
   end
   out[#out + 1] = { type = "info", id = "total", group = "WORK ORDER", label = "TOTAL", value = money(q.total) }
-  local secs = math.min(params.secs_max, params.secs + params.secs_part * q.parts)
+  local secs = math.min(params.secs_max, params.secs + params.secs_part * q.parts + params.secs_refit * q.refit)
   local spark_t = 0
   out[#out + 1] = { type = "action", id = "service", group = "WORK ORDER",
     label = string.format("Service  ·  %s", money(q.total)), hint = string.format("%.0f s", secs),
@@ -349,9 +430,19 @@ local function provider(t, ctx)
         if spark_t > 0 then return end
         spark_t = 0.45
         local list = v.damagedParts and v.damagedParts() or {}
-        local e = list[math.random(1, math.max(1, #list))]
+        local gone = v.lostParts and (v.lostParts()) or {}
         local x, y, z
-        if e and v.partPointNow then x, y, z = v.partPointNow(e.uid, 0, 0, 0) end
+        local k = math.random(1, math.max(1, #list + #gone))
+        if k > #list and gone[k - #list] and v.commandUid and v.partPointNow then
+          -- where a missing part goes: its blueprint point, through the
+          -- command part's frame this tick (the craft's axes)
+          local d, cu = gone[k - #list], v.commandUid()
+          local c = cu and v.partRec and v.partRec(cu)
+          if c then x, y, z = v.partPointNow(cu, (d.x or 0) - (c.x or 0), (d.y or 0) - (c.y or 0), (d.z or 0) - (c.z or 0)) end
+        else
+          local e = list[k]
+          if e and v.partPointNow then x, y, z = v.partPointNow(e.uid, 0, 0, 0) end
+        end
         if not x and valid(v.node) then local p = tick_pos(v.node); x, y, z = p.x, p.y, p.z end
         if x and spawnEffect then pcall(spawnEffect, "Sparks", x, y, z) end
         local fx = ref("sfx")
