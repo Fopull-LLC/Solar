@@ -232,6 +232,15 @@ local ANIMS = {
   end,
 }
 
+-- THE FLOODLIGHT'S LAMP when lit (its cone, reach and aim are the prefab's
+-- Lamp: PartLight.prefab.ron). The engine's lamp has no inverse square: it
+-- is colour × intensity × the surface's cosine × (1 − d/range)², so a road
+-- seen at a headlight's grazing angle gets a tenth of it at 10 m. At 2.6
+-- and 30 m (commit 62e8dca) the ground ahead of the bike at night was barely
+-- lit (playtest 2026-11, tools/perf/jumpprobe.sh vlight); a vehicle's lamp
+-- has to light the road to 40–60 m as a real headlight does.
+FLOOD_INTENSITY = 55.0
+
 -- The device KINDS the peripherals console and the old per-kind calls see:
 -- each is a SET of parts (by module), switched together by `setPeripheral` and
 -- shown as one row. The keys are the standard action groups' (G, U, Y, R) and
@@ -2254,7 +2263,7 @@ local function update_peripherals(node, dt)
               if lamp and lamp.valid then
                 local l = lamp:getcomponent("PointLight")
                 if l then
-                  local want = lit and 2.6 or 0.0
+                  local want = lit and FLOOD_INTENSITY or 0.0
                   if math.abs((l.intensity or 0) - want) > 0.01 then l.intensity = want end
                 end
               end
@@ -7808,6 +7817,83 @@ function wheelTorque(node, info, ex, ey, ez, tk, dt)
   assembly.torque(node, vec3(ex * k, ey * k, ez * k))
 end
 
+-- ENGINE GIMBAL (2026-11-02: "big rockets drift and tip"). The attitude law
+-- had only the reaction wheels: a pod's 60 kN·m per rad/s, the same on a
+-- 1 t probe and a 31 t, 1,100 kN rocket, where an 8 mm offset of the centre
+-- of mass leans the stack ~1°/s. A real main engine swings its nozzle a few
+-- degrees, and its authority grows with its thrust and its distance from
+-- the centre of mass. Every burning engine books here (the thrust loop):
+-- f·sin(GIMBAL_DEG)·|lever along its axis| of torque about any axis across
+-- its thrust; the attitude law then asks for I·(rate error)·GIMBAL_K on
+-- those axes, capped at that authority (roll is the wheels' alone: a
+-- gimbal turns a single engine's thrust, it does not roll the stack). The
+-- couple is applied as a torque (the few-degree swing's sideways push is
+-- under 7% of the thrust and is left out). A small craft with a small engine
+-- close to its centre of mass gets little; with the engines off, none.
+GIMBAL_DEG = 4.0
+GIMBAL_K = 4.0          -- 1/s: the rate error taken out per second
+GIMBAL = { tg = 0.0, ax = 0.0, ay = 0.0, az = 0.0 }
+function gimbalBook(info, ex, ey, ez, dx, dy, dz, f, e)
+  if f <= 0 or not info or not info.com or (e and e.jet) then return end
+  local c = info.com
+  local lev = math.abs((ex - c.x) * dx + (ey - c.y) * dy + (ez - c.z) * dz)
+  GIMBAL.tg = GIMBAL.tg + f * math.sin(math.rad(GIMBAL_DEG)) * lev
+  GIMBAL.ax, GIMBAL.ay, GIMBAL.az = GIMBAL.ax + dx * f, GIMBAL.ay + dy * f, GIMBAL.az + dz * f
+end
+function gimbalTorque(node, info, ex, ey, ez, dt)
+  local tg = GIMBAL.tg or 0
+  local I = info.inertia
+  if tg <= 1e-3 or not (I and I[1]) then return end
+  local al = math.sqrt(GIMBAL.ax ^ 2 + GIMBAL.ay ^ 2 + GIMBAL.az ^ 2)
+  if al < 1e-6 then return end
+  local ax, ay, az = GIMBAL.ax / al, GIMBAL.ay / al, GIMBAL.az / al
+  local d = ex * ax + ey * ay + ez * az
+  ex, ey, ez = ex - d * ax, ey - d * ay, ez - d * az
+  local k = math.min(GIMBAL_K, 0.5 / math.max(dt or 1 / 60, 1e-3))
+  local tx = (I[1].x * ex + I[1].y * ey + I[1].z * ez) * k
+  local ty = (I[2].x * ex + I[2].y * ey + I[2].z * ez) * k
+  local tz = (I[3].x * ex + I[3].y * ey + I[3].z * ez) * k
+  local tl = math.sqrt(tx * tx + ty * ty + tz * tz)
+  if tl > tg then tx, ty, tz = tx * tg / tl, ty * tg / tl, tz * tg / tl end
+  GIMBAL.used = math.min(tl, tg)
+  assembly.torque(node, vec3(tx, ty, tz))
+end
+
+-- ATTITUDE HOLD in stability SAS: the heading it was let go at (or stood on
+-- the pad with) is held, not only the rates damped — a stack leaning a
+-- degree a second on a centre-of-mass offset drifted over for good. The
+-- nose and the roll are steered back at SAS_HOLD_K rad/s per rad of error,
+-- never faster than half the stick's rate. Held in WORLD axes (planets only
+-- translate, so that is also the planet's frame), caught again whenever the
+-- stick is touched, the mode changes or the craft stands clamped. Not for
+-- an aircraft (its wings and trim fly it) nor a rover on its wheels.
+SAS_HOLD_K = 1.0
+SAS_REF = nil
+function sasHold(info, wp, wy, wr, rgx, rgy, rgz, fx, fy, fz, nx, ny, nz)
+  if AERO.frame ~= nil or R2.onWheels or info.anchored then SAS_REF = nil; return wp, wy, wr end
+  local R = SAS_REF
+  if not R then
+    SAS_REF = { nx = nx, ny = ny, nz = nz, fx = fx, fy = fy, fz = fz }
+    return wp, wy, wr
+  end
+  -- the turn that takes the nose onto the held one, and the roll that takes
+  -- the top onto the held top (about the nose)
+  local cx, cy, cz = ny * R.nz - nz * R.ny, nz * R.nx - nx * R.nz, nx * R.ny - ny * R.nx
+  local dn = nx * R.nx + ny * R.ny + nz * R.nz
+  local sn = math.sqrt(cx * cx + cy * cy + cz * cz)
+  local ang = math.atan2(sn, dn)
+  local ex, ey, ez = 0, 0, 0
+  if sn > 1e-9 then ex, ey, ez = cx / sn * ang, cy / sn * ang, cz / sn * ang end
+  local rr = (fy * R.fz - fz * R.fy) * nx + (fz * R.fx - fx * R.fz) * ny + (fx * R.fy - fy * R.fx) * nz
+  local rc = fx * R.fx + fy * R.fy + fz * R.fz
+  local ra = math.atan2(rr, rc)
+  ex, ey, ez = ex + nx * ra, ey + ny * ra, ez + nz * ra
+  local cap = 0.5 * params.max_rate
+  local function c(v) return math.max(-cap, math.min(cap, v)) end
+  return c(SAS_HOLD_K * (ex * rgx + ey * rgy + ez * rgz)), c(SAS_HOLD_K * (ex * fx + ey * fy + ez * fz)),
+         c(SAS_HOLD_K * (ex * nx + ey * ny + ez * nz))
+end
+
 -- THE SAFETY NET. Never the thing that makes the craft behave — the things above
 -- are — but whatever slips past them is caught here and logged.
 function safetyTick(node, info, dt)
@@ -8632,8 +8718,10 @@ end
 R2_WHEEL_TOP = { S = 14.0, M = 22.0, L = 28.0 }      -- m/s on the level, full stick
 R2_WHEEL_TORQUE = { S = 0.35, M = 0.9, L = 2.0 }     -- kN·m, rated like thrust (× parts.rating)
 R2_TC = 0.55          -- traction control: g the motors may push the craft at on the level
-R2_LK_MAX = 24.0      -- the most the traction control's lead may be scaled up (drive_tick, THE LEAD ADAPTS)
-R2_LK_START = 12.0    -- …and the most of a remembered lead a start picks up (it adapts on from there)
+R2_LK_MAX = 12.0      -- the most the traction control's lead may be scaled up (drive_tick, THE LEAD ADAPTS; 24 before engine .1376; the push is capped by maxForce)
+R2_LK_START = 3.0     -- …and the most of a remembered lead a start picks up (it adapts on from there; 12 before .1376)
+R2_BK_START = 2.0     -- the brakes' lead a craft starts from (drive_tick, THE BRAKES' LEAD ADAPTS)
+R2_BRAKE_MAX = 1.0    -- g: the most the brakes and the stick against the motion slow it together
 R2_LK_FORGET = 2.0    -- s off the stick before the remembered leads (forwards, reverse) are forgotten
 R2_LAT_MU = 0.47      -- the share of the tyres' grip a turn may use, sideways (0.42 g on R2_TYRE_MU, as before it rose)
 R2_LAT_SSF = 0.45     -- …and the share of the rollover threshold (half track / CoM height)
@@ -9267,6 +9355,8 @@ local function r2_scan(node)
   R2.hasGear = false
   for _, w in ipairs(R2.wheels) do if w.gear then R2.hasGear = true end end
   motoScan()     -- suspension parts, the moto wheel, gyros (auto-engineering)
+  R2.hasSusp = false
+  for _, w in ipairs(R2.wheels) do if w.susp then R2.hasSusp = true end end
   r2Replan()
   motoPlan()     -- …and whether it is a two-wheeler
   -- Each robotic part's MOVING SET: the side of it away from the command
@@ -9933,7 +10023,15 @@ local function drive_tick(node, info, dt)
     if want > cur then return math.min(want, cur + up * dt) end
     return math.max(want, cur - down * dt)
   end
-  R2.drive = ease(R2.drive, dcmd, 0.8, 3.0)
+  -- (eased by its size, not its sign: W and S both open at 0.8/s and close
+  -- at 3/s — eased as a signed value, S opened at the closing rate, a
+  -- reverse 3.75× quicker than a forward and a bike that pulled harder
+  -- backwards off the line)
+  if dcmd * R2.drive >= 0 and math.abs(dcmd) > math.abs(R2.drive) then
+    R2.drive = R2.drive + (dcmd - R2.drive) * math.min(1, 0.8 * dt / math.max(1e-6, math.abs(dcmd - R2.drive)))
+  else
+    R2.drive = ease(R2.drive, dcmd, 3.0, 3.0)
+  end
   R2.steer = ease(R2.steer, scmd, 2.5, 3.0)
   local grounded = 0
   for _, w in ipairs(R2.wheels) do
@@ -10054,7 +10152,17 @@ local function drive_tick(node, info, dt)
   local cmds = r2WheelCmd(R2.wheels, R2.plan, R2.drive, R2.steer, math.abs(vf), r2Lateral(gl, R2.plan, mu * R2_TYRE_MU))
   R2.dt = dt
   -- a TWO-WHEELER: the bars and the lean are the balance's (motoBike)
-  if R2.bike and not R2.gear and not R2.passive and grounded > 0 then motoBike(node, info, cmds, vf, gl, dt, rxv, upv, rzv, gdir) end
+  if R2.bike and not R2.gear and not R2.passive and grounded > 0 then motoBike(node, info, cmds, vf, gl, dt, rxv, upv, rzv, gdir)
+  elseif R2.bike and not R2.gear and not R2.passive then motoAir(node, info, dt, rxv, upv, rzv, gdir, gl) end
+  -- THE STICK IS NEVER LOCKED OUT BY THE BRAKES (playtest 2026-11: brakes
+  -- on, then S held to slow down faster, and it kept going: a braked wheel
+  -- took no drive at all). Pushed the way the craft is rolling, or from a
+  -- stop, the stick drives and the brakes (B, or the parking hold) let go
+  -- while it is held, catching again the moment it is let go; pushed
+  -- against the motion, it adds the motors' push to the brakes.
+  local stick_against = math.abs(R2.drive) > 0.02 and R2.drive * vf < 0 and math.abs(vf) > 0.3
+  local stick_free = math.abs(R2.drive) > 0.02 and not stick_against and dcmd ~= 0
+  local braking_at = nil         -- the deceleration the brakes asked this tick (m/s²)
   local power = 0
   local limited, lmot = nil, 1   -- did the traction control hold a wheel back this tick (and which way)
   local smin = 1                  -- the worst-served motor (published: R2.served)
@@ -10089,16 +10197,23 @@ local function drive_tick(node, info, dt)
       -- deliver that.
       local sk = (math.abs(R2.drive) > 0.02) and (cmd.drive / R2.drive) or 1   -- Ackermann / skid share
       local cur = vf * sk                                                      -- this wheel's ground speed now
-      if brakes or R2.hold_t > 0.15 then
+      if (brakes or R2.hold_t > 0.15) and not stick_free then
         j.motor = 1
         -- at speed the brakes stop it at up to 0.8 g (a hard stop that
-        -- doesn't stand it on its nose); at a crawl they hold with all they have
+        -- doesn't stand it on its nose), and the stick held against the
+        -- motion adds the motors' push to it (up to R2_BRAKE_MAX g); at a
+        -- crawl they hold with all they have
+        local bg = math.min(R2_BRAKE_MAX, 0.8 * (c.brake or 1) + (stick_against and R2_TC * math.abs(R2.drive) or 0))
         local bf = full * 2.0 * (c.brake or 1)
         if spd > 1.5 then
-          bf = math.min(bf, 0.8 * gl * (info.mass or 1) * w.r / math.max(1, grounded))
-          local dv = 0.8 * gl * (c.brake or 1) * dt
+          bf = math.max(math.min(bf, bg * gl * (info.mass or 1) * w.r / math.max(1, grounded)),
+            stick_against and full * (c.motor or 1) * served or 0)
+          -- the rim slows ahead of the ground by the lead the brakes have
+          -- learnt for this craft (R2.bk, below), as the traction control's does
+          local dv = bg * gl * dt * (R2.bk or R2_BK_START)
           local tgt = cur > 0 and math.max(0, cur - dv) or math.min(0, cur + dv)
           j.motorSpeed = w.rs * tgt / w.r * 57.29578
+          braking_at = bg * gl
         else
           j.motorSpeed = 0
         end
@@ -10124,10 +10239,18 @@ local function drive_tick(node, info, dt)
         end
         tgt = math.max(cur - lead, math.min(cur + lead, tgt))
         j.motorSpeed = w.rs * tgt / w.r * 57.29578
-        j.maxForce = full * (c.motor or 1) * served   -- the motor at full; the lead above is the traction control
+        -- THE MOTOR'S PUSH IS THE TRACTION CONTROL'S (engine .1376, floptle
+        -- 0586: a motor and the tyre's grip now solve together, so a rim a
+        -- quarter of a metre a second ahead pushes with 95–98% of its force,
+        -- where it was 10–40% — the reason the lead was scaled up to 24×).
+        -- With the push delivered, the cap on it is what keeps a bike's
+        -- front wheel down and a tall rover off its back: the torque the
+        -- traction control allows (`torque`: R2_TC g, the slope, the wheelie
+        -- limit, up to full when stalled in a rut), not the motor's full.
+        j.maxForce = torque * served
         power = power + (m.draw or 0.8) * math.abs(want)
       end
-      R2.draw["d" .. w.uid] = (m.draw or 0.8) * (brakes and 0 or math.abs(want)) + 0.01
+      R2.draw["d" .. w.uid] = (m.draw or 0.8) * ((brakes and not stick_free) and 0 or math.abs(want)) + 0.01
     end
   end
   R2.power = power
@@ -10191,7 +10314,75 @@ local function drive_tick(node, info, dt)
       if d > 0 then R2.lkF = R2.lk else R2.lkR = R2.lk end
     end
   end
+  -- THE BRAKES' LEAD ADAPTS the same way: the rim slowed 0.8 g·dt ahead of
+  -- the ground each tick, and the light tyre's grip delivered a fraction of
+  -- that (engine .1374, jumpprobe vbrake: the dirt bike slowed from 10 m/s
+  -- at 2.0 m/s², 0.2 g, with 0.8 g asked — weaker than S alone, 3.65).
+  -- Scaled until the craft slows as hard as the brakes ask, and kept for
+  -- the craft (a hard stop starts from the last one's).
+  if braking_at and grounded > 0 then
+    local slow = -R2.a_s * ((vf >= 0) and 1 or -1)
+    local e = (braking_at - slow) / math.max(braking_at, 0.1)
+    R2.bk = math.max(1, math.min(R2_LK_MAX, (R2.bk or R2_BK_START) * math.exp(math.max(-1, math.min(1, e)) * dt * 6)))
+  end
   if R2.gear or R2.hasGear then gearOleo(node, info, dt, upv, gl) end
+  if R2.hasSusp then suspDamper(node, info, dt, gl) end
+end
+
+-- THE SUSPENSION'S DAMPER (playtest 2026-11: "after landing even a tiny jump
+-- the motorcycle starts wobbling out of control and crashes"). A fork's,
+-- swing arm's or strut's spring is the engine's wheel joint, a soft
+-- constraint on the light tyre, and the damping it can carry is capped at
+-- CMAX of the TYRE's mass a tick (auto_drive suspJoint): 1.08 kN·s/m where
+-- the dirt bike's fork wants 2.6 and its arm 4.7, ζ 0.12–0.2 instead of 0.5.
+-- Measured (tools/perf/jumpprobe.sh vjump, engine .1374): off a 0.6 m hump
+-- at 12 m/s the bike landed, sprang back off both tyres for 0.4 s, pitched
+-- ±7° and lost 4 m/s; at 13 m/s it bounced three times, the pitch ran away
+-- nose down and it went over the bars. A real damper works on the stroke
+-- both ways, and harder on the rebound than on the bump (the rebound is what
+-- throws a bike off the ground). So, per suspended wheel whose tyre is down:
+-- the damping the corner wants (springFor: s.c) less what the joint already
+-- gives (s.ce), × SUSP_BUMP compressing and × SUSP_REBOUND extending, on the
+-- stroke rate along the suspension's own (raked) axis, as an impulse on the
+-- hull at the mount — never more than SUSP_DAMP_CAP × the corner's load in a
+-- tick. (The ground carries the other half through the tyre; in the air the
+-- wheel just hangs, and nothing is applied.)
+SUSP_BUMP = 0.9
+SUSP_REBOUND = 1.8
+SUSP_DAMP_CAP = 2.5
+function suspDamper(node, info, dt, gl)
+  if not (dt and dt > 0 and info) then return end
+  local rxv, upv, rzv = basis(node)
+  for _, w in ipairs(R2.wheels) do
+    local s, t = w.susp, w.tyre
+    local j = s and w.jointed and (w.joint_age or 0) > 0.1 and t and t.valid and t:getcomponent("Joint")
+    if j and s.axis and s.c then
+      local x = (j.position or 0) / WHEEL_POS_SCALE            -- + up the leg
+      local raw = s.dmp_x and (x - s.dmp_x) / dt or 0
+      s.dmp_x = x
+      -- (smoothed a little: the light tyre's contact chatter, read raw, made
+      -- the damper a source of bumps, as the oleo's did; light, or the lag
+      -- turns the damper into a spring at the fork's 3 Hz)
+      s.dmp_v = (s.dmp_v or 0) + (raw - (s.dmp_v or 0)) * math.min(1, dt * 40)
+      local v = s.dmp_v
+      local F = 0
+      if t.grounded then
+        local c = math.max(0, (s.c or 0) * (v > 0 and SUSP_BUMP or SUSP_REBOUND) - (s.ce or 0))
+        local load = s.load or ((info.mass or 1) * (gl or 9.8) / math.max(1, #R2.wheels))
+        F = math.max(-SUSP_DAMP_CAP * load, math.min(SUSP_DAMP_CAP * load, c * v))
+        if math.abs(F) > 1e-4 then
+          local ax = s.axis
+          local Ax = rxv.x * ax[1] + upv.x * ax[2] + rzv.x * ax[3]
+          local Ay = rxv.y * ax[1] + upv.y * ax[2] + rzv.y * ax[3]
+          local Az = rxv.z * ax[1] + upv.z * ax[2] + rzv.z * ax[3]
+          local mx, my, mz = v2w(node, info, w.cx, w.cy, w.cz)
+          assembly.impulseAt(node, vec3(Ax * F * dt, Ay * F * dt, Az * F * dt), vec3(mx, my, mz))
+          stressForce(w.uid, Ax * F, Ay * F, Az * F)
+        end
+      end
+      s.dampF = F
+    end
+  end
 end
 
 -- THE OLEO (playtest 2026-10-26: the landing gear "is like fighting and it
@@ -10604,6 +10795,55 @@ function motoBike(node, info, cmds, vf, gl, dt, rxv, upv, rzv, gdir)
   R2.lean, R2.leanT, R2.leanRate, R2.bikeSteer, R2.bikeTorque, R2.alat, R2.yawRate = phi, phiT, rate, steer, tq, alat, yaw
   R2.gl, R2.tmax, R2.share = gl, tmax, share
   R2.gyroSpin = (R2.gyroSpin or 0) + dt * (gt > 0 and 40 or 0)
+end
+
+-- A TWO-WHEELER IN THE AIR (playtest 2026-11: "after landing even a tiny
+-- jump it starts wobbling out of control and crashes"). Off its tyres the
+-- balance (motoBike) had nothing to say, and whatever spin a lip or a tyre
+-- hop gave the bike it kept: jumpprobe vjump, a 0.6 m hump at 14.5 m/s, left
+-- the ground rolling 0.6 rad/s and pitching 1.3 rad/s nose down, and landed
+-- on its front tyre 22° nose down and 16° over. A rider in the air steers the
+-- bike with their body (and a Balance Gyro is a gyro: it works off the
+-- ground too): the same authority the balance has (balanceAuthority: the
+-- gyros, the seated rider) brings the roll back upright and the nose to
+-- BIKE_AIR_PITCH over the local level (back wheel first), damped, within a
+-- few tenths of a second — never more torque than that authority.
+BIKE_AIR_PITCH = math.rad(3)
+BIKE_AIR_W = 5.0        -- rad/s: the attitude loop's natural frequency (critically damped)
+function motoAir(node, info, dt, rxv, upv, rzv, gdir)
+  local L = AUTO.lib
+  if not L or R2.motoOff or not R2.bikeT0 then return end   -- (never before its tyres first touched)
+  local F = R2.fwd or { x = 1, z = 0 }
+  local Fw = L.vec.unit({ rxv.x * F.x + rzv.x * F.z, rxv.y * F.x + rzv.y * F.z, rxv.z * F.x + rzv.z * F.z })
+  local gl2 = math.sqrt(gdir.x * gdir.x + gdir.y * gdir.y + gdir.z * gdir.z)
+  if gl2 < 1e-6 then return end
+  local U = { -gdir.x / gl2, -gdir.y / gl2, -gdir.z / gl2 }
+  local d = Fw[1] * U[1] + Fw[2] * U[2] + Fw[3] * U[3]
+  local Fl = L.vec.unit({ Fw[1] - U[1] * d, Fw[2] - U[2] * d, Fw[3] - U[3] * d })
+  local Rt = L.vec.unit(L.vec.cross(Fl, U))                       -- right, level
+  local w = info.angVel
+  local phi, rate = L.leanOf(Fl, { upv.x, upv.y, upv.z }, U, { w.x, w.y, w.z })
+  local th = math.asin(math.max(-1, math.min(1, d)))              -- + nose up
+  local q = w.x * Rt[1] + w.y * Rt[2] + w.z * Rt[3]               -- + about right lifts the nose
+  local It = info.inertia
+  local function Iabout(a)
+    if not (It and It[1]) then return (info.mass or 0.3) * 0.5 end
+    return a[1] * (It[1].x * a[1] + It[1].y * a[2] + It[1].z * a[3]) + a[2] * (It[2].x * a[1] + It[2].y * a[2] + It[2].z * a[3])
+      + a[3] * (It[3].x * a[1] + It[3].y * a[2] + It[3].z * a[3])
+  end
+  local W = BIKE_AIR_W
+  -- roll (+ leans it left = a turn about −front) and pitch (+ about right)
+  local tr = Iabout(Fl) * (W * W * (0 - phi) - 2 * W * rate)
+  local tp = Iabout(Rt) * (W * W * (BIKE_AIR_PITCH - th) - 2 * W * q)
+  local gt = 0
+  for _, g in ipairs(R2.gyros or {}) do
+    gt = gt + (g.m.torque or 1.5) * ((elec.served and elec.served["g" .. g.uid]) or 1)
+  end
+  local tmax = L.balanceAuthority(gt, R2.rider and crewAboard == true, 99)
+  local tl = math.sqrt(tr * tr + tp * tp)
+  if tl > tmax and tl > 0 then tr, tp = tr * tmax / tl, tp * tmax / tl end
+  assembly.torque(node, vec3(-Fl[1] * tr + Rt[1] * tp, -Fl[2] * tr + Rt[2] * tp, -Fl[3] * tr + Rt[3] * tp))
+  R2.bikeTorque, R2.airPitchTq = tr, tp
 end
 
 -- r2Steady on a bike: the roll is the balance's, not the reaction wheels'
@@ -11752,6 +11992,7 @@ function fixedUpdate(node, dt)
     if engine_active(e, cut) then total_thrust = total_thrust + e.thrust end
   end
   THRUST_LIVE = 0.0 -- what the engines deliver now, in this air (the HUD's THRUST/TWR)
+  GIMBAL.tg, GIMBAL.ax, GIMBAL.ay, GIMBAL.az = 0.0, 0.0, 0.0, 0.0
   if throttle > 0 and not info.anchored and fuel > 0 then
     -- NOZZLES (rating version 3, parts_registry ENGINE NICHES): a rocket's
     -- thrust falls in thick air by its nozzle's sea-level share `asl` (the
@@ -11790,6 +12031,7 @@ function fixedUpdate(node, dt)
         local nk = (asl and asl < 1) and math.max(0.05, 1.0 - (1.0 - asl) * sig) or 1.0
         local f = e.thrust * (e.jet and (e.jk or 0) or throttle * nk)
         THRUST_LIVE = THRUST_LIVE + f
+        gimbalBook(info, ex, ey, ez, wdx, wdy, wdz, f, e)
         assembly.forceAt(node, vec3(wdx * f, wdy * f, wdz * f), vec3(ex, ey, ez))
         stressForce(e.uid, wdx * f, wdy * f, wdz * f) -- (booked on the engine for the stress model)
       end
@@ -12059,6 +12301,9 @@ function fixedUpdate(node, dt)
     if not manual and sas_mode == "off" then
       want_p, want_y, want_r = cur_p, cur_y, cur_r
     end
+    -- (stability holds the heading it was let go at: sasHold)
+    if manual or sas_mode ~= "stability" then SAS_REF = nil
+    else want_p, want_y, want_r = sasHold(info, want_p, want_y, want_r, rgx, rgy, rgz, fx, fy, fz, nx, ny, nz) end
     dwx = rgx * want_p + fx * want_y + nx * want_r
     dwy = rgy * want_p + fy * want_y + ny * want_r
     dwz = rgz * want_p + fz * want_y + nz * want_r
@@ -12129,6 +12374,7 @@ function fixedUpdate(node, dt)
     elec.wheel_use = 0.2
   elseif not info.anchored and warp <= 1.001 then
     wheelTorque(node, info, dwx - w.x, dwy - w.y, dwz - w.z, tk, dt)
+    if sas_on or manual then gimbalTorque(node, info, dwx - w.x, dwy - w.y, dwz - w.z, dt) end
     elec.wheel_use = math.min(1, math.sqrt((dwx - w.x) ^ 2 + (dwy - w.y) ^ 2 + (dwz - w.z) ^ 2) * 2.0)
   else
     elec.wheel_use = 0

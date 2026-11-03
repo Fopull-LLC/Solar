@@ -178,7 +178,7 @@ local function run_deep()
   local first_div = nil
   local maxtilt = 0
   while time - t0 < secs do
-    vc.setThrottle(1)
+    vc.setThrottle(params.thr or 1)
     yield()
     if not vn.valid or vc.destroyed then P("DP craft gone at +%.1f", time - t0); break end
     local i = assembly.info(vn)

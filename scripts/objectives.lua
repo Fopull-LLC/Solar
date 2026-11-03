@@ -719,8 +719,8 @@ current_step_inner = function(astro)
                    goals = goals, pay = pays }
         end
         return { key = "drive", label = label,
-                 task = g.kind == "drive" and "Drive it — one trip, over the ground." or "Park it back at the base.",
-                 hint = g.kind == "drive" and "Any route counts; getting out resets the trip."
+                 task = g.kind == "drive" and "Drive it over the ground." or "Park it back at the base.",
+                 hint = g.kind == "drive" and "Any route counts. Get out to plant a relay; the trip carries on when you're back aboard."
                    or "Stop within a couple of hundred metres of the base.",
                  goals = goals, pay = pays }
       end

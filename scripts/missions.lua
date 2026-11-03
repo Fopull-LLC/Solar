@@ -39,10 +39,12 @@
 --   deliver   mat/class  have this much of a material in the base WAREHOUSE
 --             kg?        (units, or kilograms when `kg` is given)
 --   sample    mat        have HELD this material at all — the discovery set
---   drive     value      drive this far (m) over the ground in one trip, in a
---                        vehicle you are driving (a rover, a bike, a plane
---                        taxiing): the odometer counts while it is on its
---                        wheels and resets when you get out
+--   drive     value      drive this far (m) over the ground in a vehicle you
+--                        are driving (a rover, a bike, a plane taxiing): the
+--                        odometer counts only while it is on its wheels, and
+--                        it is kept per craft for the contract, so getting
+--                        out (to plant a relay beacon, say) and back in
+--                        carries on where it stopped
 --   home                 park the craft you are driving back at the base
 --                        (stopped, within GROUND_PARK of it)
 --
@@ -532,8 +534,9 @@ local SLOTS = { [0] = 0, [1] = 0, [2] = 2, [3] = 3, [4] = 4, [5] = 5 }
 --   bulk    a bulk haul: 160 kg and up of one material — more than a suit
 --           carries, so it is a rover's job (a Cargo Bay or Stowage Lockers)
 --           — at ~3.5× the depot price plus a bigger fee
---   trek    a survey drive: drive 1.2 km and up over the ground in one trip,
---           in a rover or on a bike, and park it back at the base
+--   trek    a survey drive: drive 1.2 km and up over the ground in a rover or
+--           on a bike (stops to get out count nothing and lose nothing), and
+--           park it back at the base
 --
 -- It opens with the First Steps milestone (cut a plant, mine some ore), so the
 -- opening — mine, sell, launch the first rocket with money you earned — is
@@ -815,8 +818,10 @@ local function ground_spec(kind, home, seq)
     reward = price((P.fee + P.feeL * L + m * P.perM) * mult)
     title = string.format("Survey drive: %s", fmt_m(m))
     brief = string.format("The surveyors want ground truth on %s: drive %s over the ground in\n" ..
-      "one trip — a rover or a bike — and bring the vehicle back to the base.", X, fmt_m(m))
-    g = { { kind = "drive", value = m, label = "Drive %s over the ground in one trip" },
+      "a rover or on a bike, and bring the vehicle back to the base. Stop and get\n" ..
+      "out whenever you like (to plant relay beacons along the way): the trip\n" ..
+      "carries on when you climb back aboard.", X, fmt_m(m))
+    g = { { kind = "drive", value = m, label = "Drive %s over the ground" },
           { kind = "home", after = 1, label = "Park it back at the base" } }
   end
   if not g then return nil end
@@ -1921,9 +1926,19 @@ local function delivered(g)
 end
 
 -- THE ODOMETER for `drive` goals: metres the craft you are driving has covered
--- over the ground on this trip, measured in its world's frame (the planet
--- moves metres a tick; a world-space difference would count its orbit).
--- Reset whenever nobody is driving, so one trip is one trip.
+-- over the ground, measured in its world's frame (the planet moves metres a
+-- tick; a world-space difference would count its orbit).
+-- KEPT PER CRAFT FOR THE CONTRACT (playtest 2026-11: "the survey drive resets
+-- its distance when you leave and re-enter the craft" — a survey is where you
+-- stop to plant relay beacons). The metres live in the save, `mission.odo` =
+-- { id = the contract, by = { [craft] = metres } }, so a get-out, a reload or
+-- a revert to launch carries on where the craft stopped. What counts:
+--   * only while you are driving it and it is ON ITS WHEELS (a tyre down; a
+--     craft with no wheels, its hull grounded): no air, no flying;
+--   * only motion between two ticks you were aboard for: whatever happens to
+--     it while nobody drives (towed, carried, pushed by a gravity gun, rolled
+--     down a hill) is never counted, the next entry starts from where it is;
+--   * no step faster than ODO_MAX_SPEED (a teleport, a respawn).
 -- (`odo` itself is declared with the rest of the tracker state, at the top.)
 local ODO_MAX_SPEED = 45.0      -- m/s: a jump faster than this is a teleport, not driving
 
@@ -1933,8 +1948,45 @@ local function on_ground(v, info)
   return (v.r2OnWheels and v.r2OnWheels()) and true or false
 end
 
+-- on its wheels: a wheeled craft's tyres, never its hull sliding on the ground
+local function on_wheels(v, info)
+  if v.r2OnWheels then return v.r2OnWheels() == true end
+  return info ~= nil and info.grounded == true
+end
+
+-- which craft: its name (what the player sees and recognises, kept across a
+-- reload — as the holds are keyed), else this session's node
+local function craft_key(v, n)
+  local nm = v.craftName
+  if type(nm) == "string" and nm ~= "" and nm ~= "Vessel" then return "c:" .. nm end
+  return "n:" .. tostring(n.id or n.__id)
+end
+
+local function trips()
+  local t = save.get("mission.odo")
+  if type(t) ~= "table" or t.id ~= active then
+    t = { id = active, by = {} }
+    save.set("mission.odo", t)
+  end
+  if type(t.by) ~= "table" then t.by = {} end
+  return t
+end
+
+local function odo_store(force)
+  if not odo.key or odo.cid ~= active then return end
+  local moved = math.abs(odo.d - (odo.saved or 0))
+  if moved == 0 or (not force and moved < 1.0) then return end
+  local t = trips()
+  t.by[odo.key] = odo.d
+  save.set("mission.odo", t)
+  odo.saved = odo.d
+end
+
+-- nobody driving: the next tick aboard starts afresh from where the craft is
+-- (the metres stay with the craft)
 local function odo_reset()
-  odo.d, odo.id, odo.body, odo.x = 0.0, nil, nil, nil
+  odo_store(true)
+  odo.id, odo.body, odo.x = nil, nil, nil
 end
 
 local function odo_tick(v, info, dt)
@@ -1944,15 +1996,23 @@ local function odo_tick(v, info, dt)
   local b = bn and space.body(bn)
   if not b then return end
   local x, y, z = n.x - b.x, n.y - b.y, n.z - b.z
-  if odo.id ~= (n.id or n.__id) or odo.body ~= bn or not odo.x then
-    odo.d = (odo.id == (n.id or n.__id)) and odo.d or 0.0
-    odo.id, odo.body, odo.x, odo.y, odo.z = (n.id or n.__id), bn, x, y, z
+  local id = n.id or n.__id
+  if odo.cid ~= active then odo.id, odo.key = nil, nil end   -- another contract: its own trips
+  if odo.id ~= id or odo.body ~= bn or not odo.x then
+    if odo.id ~= id then
+      odo_store(true)
+      odo.key, odo.cid = craft_key(v, n), active
+      odo.d = tonumber(trips().by[odo.key]) or 0.0
+      odo.saved = odo.d
+    end
+    odo.id, odo.body, odo.x, odo.y, odo.z = id, bn, x, y, z
     return
   end
   local step = math.sqrt((x - odo.x) ^ 2 + (y - odo.y) ^ 2 + (z - odo.z) ^ 2)
   odo.x, odo.y, odo.z = x, y, z
-  if on_ground(v, info) and step > 1e-3 and step <= ODO_MAX_SPEED * math.max(dt or 0, 1 / 60) then
+  if on_wheels(v, info) and step > 1e-3 and step <= ODO_MAX_SPEED * math.max(dt or 0, 1 / 60) then
     odo.d = odo.d + step
+    odo_store(false)
   end
 end
 
@@ -1969,7 +2029,8 @@ local function base_dist(v)
   return math.sqrt((n.x - b.x - bx) ^ 2 + (n.y - b.y - by) ^ 2 + (n.z - b.z - bz) ^ 2)
 end
 
--- Published for the card: how far the current trip has driven.
+-- Published for the card: how far the craft being (or last) driven has gone
+-- on this contract.
 function odometer() return odo.d end
 
 -- Is this goal satisfied RIGHT NOW? (Latching is the caller's job — a goal that
@@ -2072,7 +2133,7 @@ local function tail(i, g)
     return string.format("   (%d / %d in the warehouse)", delivered(g), g.value or 1)
   end
   if g.kind == "drive" then
-    return string.format("   (%s / %s this trip)", fmt_m(odo.d), fmt_m(g.value or 0))
+    return string.format("   (%s / %s driven)", fmt_m(odo.d), fmt_m(g.value or 0))
   end
   if g.kind == "home" then
     local v = piloted()
@@ -2226,6 +2287,7 @@ end
 function reloadFromSave()
   start(nil)
   best, last_piloting = {}, false
+  odo.id, odo.key, odo.x = nil, nil, nil   -- the trips come back from the save too
   lastPaid = nil
 end
 

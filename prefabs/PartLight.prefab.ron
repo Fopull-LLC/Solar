@@ -99,11 +99,16 @@
             rotation: (0.0, -0.70710677, 0.0, 0.70710677),
             scale: (1.0, 1.0, 1.0),
         ),
+        // A headlight's throw: a 46° cone down the part's +X (a road's
+        // width at 20 m), out to 110 m, soft most of the way to its centre,
+        // so the ground just ahead of a low lamp (seen off-axis) is not a
+        // blown-out pool while the road far ahead (on the axis) gets the
+        // beam's full strength. Lit at FLOOD_INTENSITY (vessel_controller.lua).
         matter: PointLight(
             color: (1.0, 0.94, 0.82),
             intensity: 0.0,
-            range: 30.0,
-            spot: Some((angle: 55.0, softness: 0.45)),
+            range: 110.0,
+            spot: Some((angle: 46.0, softness: 0.75)),
         ),
         scripts: [],
         parent: Some(0),

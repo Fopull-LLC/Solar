@@ -11,7 +11,7 @@
 --   * parts are priced by what they are for: bike < rover < aircraft < space;
 --   * GROUND WORK — supply orders, bulk hauls and survey drives — opens with
 --     the First Steps milestone, pays well over the depot, takes the goods it
---     buys, counts a drive on the odometer and pays when the vehicle is parked;
+--     buys, counts a drive on the odometer (kept across getting out) and pays when the vehicle is parked;
 --   * Mission Control's ADVANCE steps in when a company that has flown is
 --     broke, is repaid from a quarter of income, and is never stacked;
 --   * a landed craft refunds 85%;
@@ -173,21 +173,43 @@ do
   drive(400)
   check(math.abs(mi.odometer() - 400) < 15, "the odometer counts the ground covered",
     string.format("%.0f", mi.odometer()))
-  check(mi.goalLines()[1]:find("this trip") ~= nil, "...and the card shows it", mi.goalLines()[1])
-  -- getting out resets the trip
+  check(mi.goalLines()[1]:find("driven") ~= nil, "...and the card shows it", mi.goalLines()[1])
+  -- getting out (to plant a relay beacon) keeps the trip, and what happens to
+  -- the craft while nobody drives it never counts
   rover.piloting = false
   mi.update(node, dt)
+  check(math.abs(mi.odometer() - 400) < 15, "getting out keeps the distance", mi.odometer())
+  for _ = 1, 120 do theta = theta + 0.002; at(theta, R); mi.update(node, dt) end   -- pushed about, unridden
   rover.piloting = true
-  check(mi.odometer() == 0, "getting out resets the trip", mi.odometer())
+  mi.update(node, dt)
+  check(math.abs(mi.odometer() - 400) < 15, "...back aboard it carries on, the unridden push not counted", mi.odometer())
+  check(type(store["mission.odo"]) == "table" and store["mission.odo"].id == trek.id, "the trip is kept in the save, for this contract")
+  drive(100)
+  check(math.abs(mi.odometer() - 500) < 20, "...and adds the next leg", mi.odometer())
+  -- another craft starts its own trip; the first one's is kept
+  rover.piloting = false
+  mi.update(node, dt)
+  local node2 = { id = 78, valid = true, x = node.x, y = node.y, z = node.z }
+  local bike = { node = node2, piloting = true, hasFlown = true, craftName = "Dirt Bike", r2OnWheels = function() return onWheels end }
+  W.scripts.vessel_controller = { bike }
+  mi.update(node, dt)
+  check(mi.odometer() == 0, "another craft starts its own trip", mi.odometer())
+  bike.piloting = false
+  mi.update(node, dt)
+  W.scripts.vessel_controller = { rover }
+  rover.piloting = true
+  mi.update(node, dt)
+  check(math.abs(mi.odometer() - 500) < 20, "...and the first craft's is still there", mi.odometer())
+  local kept = mi.odometer()
   -- a hop through the air doesn't count
   onWheels = false
   drive(200)
-  check(mi.odometer() < 1, "the odometer only counts on the ground", mi.odometer())
+  check(math.abs(mi.odometer() - kept) < 1, "the odometer only counts on its wheels", mi.odometer())
   onWheels = true
   -- a teleport doesn't count
   at(theta + 2, 500); mi.update(node, dt)
-  check(mi.odometer() < 1, "a jump isn't driving", mi.odometer())
-  drive(trek.goals[1].value + 20)
+  check(math.abs(mi.odometer() - kept) < 1, "a jump isn't driving", mi.odometer())
+  drive(trek.goals[1].value + 20 - kept)
   check(mi.goalLines()[1]:find("✓") ~= nil, "the distance goal latches", mi.goalLines()[1])
   check(mi.active == trek.id, "...but the job isn't done until it's parked")
   local bal2 = co.balance()
