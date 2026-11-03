@@ -181,6 +181,11 @@ GFX_OPTIONS = {
              { label = "4,096", value = 4096 } },
     preset = { Low = 512, Medium = 1024, High = 1024, Ultra = 2048 },
     desc = "Marks kept on the ground (tracks, scorch, digging); past this the oldest fades." },
+  { key = "terrain_detail", group = "world", label = "Terrain detail", cost = "medium (CPU meshing, GPU)",
+    opts = { { label = "Low", value = 0.5 }, { label = "Medium", value = 0.75 }, { label = "High", value = 1.0 },
+             { label = "Ultra", value = 1.5 } },
+    preset = { Low = 0.5, Medium = 1.0, High = 1.0, Ultra = 1.5 },
+    desc = "How far out the ground keeps its fine shape. The ground near you stays full detail at any setting." },
   { key = "terrain_memory", group = "world", label = "Terrain memory", cost = "memory",
     opts = { { label = "No limit", value = 0 }, { label = "3 GB", value = 3072 }, { label = "1.5 GB", value = 1536 },
              { label = "768 MB", value = 768 } },
@@ -940,7 +945,7 @@ local function graphics_rows(out)
     end
   end
   body[#body + 1] = hint("gfxn", "Not here yet (the engine has no switch for them): texture quality, view "
-    .. "distance and terrain detail, MSAA.")
+    .. "distance, MSAA.")
 end
 
 local function camera_rows(out)

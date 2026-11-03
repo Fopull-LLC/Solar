@@ -482,7 +482,7 @@ local function sref(kind)
   refs_w[kind], refs_w[kind .. "_t"] = r or false, time
   return r
 end
-local decals_set, budget_set, aa_set = nil, nil, nil
+local decals_set, budget_set, aa_set, detail_set = nil, nil, nil, nil
 local function apply_world()
   local ff = sref("flora_field")
   if ff then
@@ -512,6 +512,12 @@ local function apply_world()
   local tm = tonumber(opt("terrain_memory"))
   if tm and tm ~= budget_set and terrain and terrain.setBudget then
     if pcall(terrain.setBudget, tm > 0 and tm * 1048576 or nil) then budget_set = tm end
+  end
+  -- terrain detail: the LOD rings' reach (engine 0.117.1-dev.1388); the
+  -- nearest 64 m stay full at any scale
+  local td = tonumber(opt("terrain_detail"))
+  if td and td ~= detail_set and terrain and terrain.setDetail then
+    if pcall(terrain.setDetail, td) then detail_set = td end
   end
   local aa = opt("antialias")
   if aa and aa ~= aa_set and app.setAntialias then
