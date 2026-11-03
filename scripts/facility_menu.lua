@@ -158,7 +158,8 @@ local near_fac = nil   -- name of the nearest facility in range
 -- nothing else wants it.
 -- (A supply crate within reach takes E too: "Open the crate", below.)
 local crate_near = nil  -- the supply crate the prompt is offering
-function prompting() return (near_fac ~= nil and open_fac == nil) or crate_near ~= nil end
+local talk_near = nil   -- a Research Lab scientist the prompt is offering (talk_prompt)
+function prompting() return (near_fac ~= nil and open_fac == nil) or crate_near ~= nil or talk_near ~= nil end
 function crateNear() return crate_near end
 -- The depot's last receipt ("sold for $412"), shown under the stock list for a
 -- few seconds so the panel confirms what just happened without a popup.
@@ -963,6 +964,28 @@ function crate_prompt(astro)
   return true
 end
 
+-- ── the Research Lab's scientists (lab.lua, lab_talk.lua) ───────────────────
+-- Standing at one: "Talk to Dr … · E"; E opens the talk view (and lab_talk
+-- owns E and Esc from then until it closes). → true when it has E this frame.
+function talk_prompt(astro)
+  local lt = ref("lab_talk")
+  if lt and lt.isOpen and lt.isOpen() then
+    if prompt_el then prompt_el.visible = false end
+    return true
+  end
+  local lab = ref("lab")
+  local s = lab and lab.nearAstro and lab.nearAstro(astro, 2.2) or nil
+  talk_near = s
+  if not s then return false end
+  show_prompt("Talk to Dr " .. ((s.staff and s.staff.name) or "") .. "  ·  research progress   ·   E")
+  if prompt_el then prompt_el.visible = true end
+  if interact_pressed() and lt and lt.open then
+    if prompt_el then prompt_el.visible = false end
+    lt.open(s)
+  end
+  return true
+end
+
 function update(node, dt)
   -- The VAB builder has the keys and the screen: no prompts, no panels.
   local gm = ref("game_manager")
@@ -1012,8 +1035,12 @@ function update(node, dt)
   -- Nearest facility within ITS reach, in world space.
   near_fac = nil
   local standing, nearest_d, nearest_n, best_in = 0, nil, nil, nil
+  -- (standing in the Research Lab, the depot behind its wall is not where you are)
+  local lab = ref("lab")
+  local in_lab = lab ~= nil and lab.crewInLab == true
   for _, name in ipairs(ORDER) do
     local f = find(name)
+    if f and in_lab and name == "FacDepot" then f = nil end
     if f then
       standing = standing + 1
       local dist = apart(astro, f)
@@ -1082,6 +1109,7 @@ function update(node, dt)
   -- stand against the depot's wall): E opens it in the suit pack's panel,
   -- and E again closes it.
   if crate_prompt(astro) then return end
+  if talk_prompt(astro) then return end
   if near_fac then
     local f = FAC[near_fac]
     local say = f.label

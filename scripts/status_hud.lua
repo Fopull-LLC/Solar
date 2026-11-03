@@ -87,6 +87,12 @@ local function readouts()
     out[#out + 1] = { key = "funds", label = "Funds", value = co.money(co.balance()) }
     out[#out + 1] = { key = "rep", label = "Rep", value = (co.isSandbox and co.isSandbox()) and "MAX" or string.format("%+d", co.rep()) }
   end
+  -- RESEARCH: the lab's points (research.lua), earned by what goes in at the
+  -- Materials Intake; they'll buy the research tree's milestones.
+  local rs = ref("research")
+  if rs and rs.points then
+    out[#out + 1] = { key = "rp", label = "Research", value = string.format("%d RP", rs.points()) }
+  end
   if inv and inv.mass then
     local m, cap = inv.mass("astro"), (inv.cap and inv.cap("astro")) or nil
     if cap and cap > 0 then
@@ -114,6 +120,7 @@ local function text_of(rs)
   for _, r in ipairs(rs) do
     if r.key == "o2" then parts[#parts + 1] = "air " .. r.value
     elseif r.key == "rep" then parts[#parts + 1] = "rep " .. r.value
+    elseif r.key == "rp" then parts[#parts + 1] = "research " .. r.value
     elseif r.warn then parts[#parts + 1] = "PACK FULL  " .. r.value
     elseif r.key == "pack" then parts[#parts + 1] = "pack " .. r.value
     else parts[#parts + 1] = r.value end

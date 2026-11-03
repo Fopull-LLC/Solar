@@ -1,0 +1,191 @@
+// LAB SCIENTIST — one of the Research Lab's staff (scripts/scientist.lua; lab.lua spawns them at
+// their stations): the crew's rig in a lab coat (models/lab/scientist.glb, tools/gen_labwear.py),
+// the crew's own head, hair and face (scripts/face.lua), a static capsule you can't walk through
+// (thin, inside the body: a collider is a shadow proxy, and one round the coat shadowed its own front).
+[
+    (
+        name: "LabScientist",
+        tags: ["lab_scientist"],
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [
+            (
+                kind: "scientist",
+                enabled: true,
+                params: [],
+            ),
+        ],
+        rigidbody: Some((
+            capsule: true,
+            mode: Static,
+            radius: 0.13,
+            height: 1.7,
+            half_extents: (0.5, 0.5, 0.5),
+            restitution: 0.0,
+            friction: 0.3,
+            gravity: false,
+            lock_pos: (false, false, false),
+            two_d: false,
+            lock_rot: (false, false, false),
+            align_up: false,
+        )),
+    ),
+    (
+        name: "LabModel",
+        transform: (
+            translation: (0.0, -0.05, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Mesh(
+            asset_path: "models/lab/scientist.glb",
+        ),
+        object_materials: {
+            "LabCloth": (
+                color: (1.0, 1.0, 1.0),
+                texture: Some("textures/lab/cloth_albedo.png"),
+                normal_map: Some("textures/lab/cloth_normal.png"),
+                normal_strength: 0.8,
+                roughness_map: Some("textures/lab/cloth_orm.png"),
+                roughness: 1.0,
+                metallic: 0.0,
+                reflectivity: 0.4,
+                shading: Physical,
+            ),
+            "LabNitrile": (
+                color: (1.0, 1.0, 1.0),
+                roughness: 0.42,
+                metallic: 0.0,
+                shading: Physical,
+            ),
+            "LabShoe": (
+                color: (1.0, 1.0, 1.0),
+                roughness: 0.48,
+                metallic: 0.0,
+                shading: Physical,
+            ),
+            "LabPlastic": (
+                color: (1.0, 1.0, 1.0),
+                roughness: 0.35,
+                metallic: 0.0,
+                shading: Physical,
+            ),
+            "SuitHead": (
+                color: (1.0, 1.0, 1.0),
+                roughness: 0.6,
+                metallic: 0.0,
+                shading: Physical,
+            ),
+        },
+        scripts: [],
+        anim_controller: Some("animation_controllers/character"),
+        parent: Some(0),
+    ),
+    (
+        name: "Face",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Mesh(
+            asset_path: "models/astronaut/faces/head_1.glb",
+        ),
+        object_materials: {
+            "FaceSkin": (
+                color: (1.0, 1.0, 1.0),
+                texture: Some("textures/faces/skin_detail.png"),
+                normal_map: Some("textures/faces/skin_normal.png"),
+                normal_strength: 0.5,
+                roughness: 0.7,
+                metallic: 0.0,
+                shader: Some("shaders/face_skin.flsl"),
+                shading: Physical,
+            ),
+            "FaceEye": (
+                color: (1.0, 1.0, 1.0),
+                roughness: 0.08,
+                metallic: 0.0,
+                shader: Some("shaders/face_eye.flsl"),
+                shading: Physical,
+            ),
+            "FaceMouth": (
+                color: (1.0, 1.0, 1.0),
+                roughness: 0.4,
+                metallic: 0.0,
+                shader: Some("shaders/face_mouth.flsl"),
+                shading: Physical,
+            ),
+        },
+        scripts: [
+            (
+                kind: "face",
+                enabled: true,
+                params: [],
+            ),
+        ],
+        parent: Some(1),
+        attachment: Some((
+            bone: "Head",
+            offset: (
+                translation: (0.0, 0.3024299, 0.0116693),
+                rotation: (-0.0469754, 3e-07, -0.0, 0.998896),
+                scale: (2.0, 2.0, 2.0),
+            ),
+        )),
+    ),
+    (
+        name: "Hair",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Mesh(
+            asset_path: "models/astronaut/faces/hair_crop.glb",
+        ),
+        object_materials: {
+            "Hair": (
+                color: (0.2, 0.15, 0.1),
+                texture: Some("textures/faces/hair_cards.png"),
+                roughness: 0.78,
+                metallic: 0.0,
+                shading: Physical,
+            ),
+        },
+        scripts: [],
+        parent: Some(2),
+    ),
+    (
+        name: "Cap",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Mesh(
+            asset_path: "models/astronaut/faces/cap.glb",
+        ),
+        object_materials: {
+            "CapCloth": (
+                color: (1.0, 1.0, 1.0),
+                texture: Some("textures/suit/fabric_albedo.png"),
+                roughness: 0.9,
+                metallic: 0.0,
+                shading: Physical,
+            ),
+            "CapShell": (
+                color: (1.0, 1.0, 1.0),
+                roughness: 0.45,
+                metallic: 0.1,
+                shading: Physical,
+            ),
+        },
+        scripts: [],
+        parent: Some(2),
+    ),
+]

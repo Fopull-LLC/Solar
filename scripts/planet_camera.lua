@@ -463,6 +463,9 @@ local function panel_open()
   -- the right-click menu (context_menu.lua) needs its pointer too
   local cm = script_ref("context_menu")
   if cm and cm.isOpen and cm.isOpen() then return true end
+  -- …and so does a talk with a scientist (lab_talk.lua: its rows are clicked)
+  local lt = script_ref("lab_talk")
+  if lt and lt.isOpen and lt.isOpen() then return true end
   return false
 end
 
@@ -1531,6 +1534,55 @@ function holdOn(x, y, z, secs)
 end
 function holding() return hold ~= nil end
 
+-- ── A FRAMED SHOT (the Research Lab's talk view, lab_talk.lua) ───────────────
+-- A script asks for a shot: `fn()` answers, THIS frame and in drawn poses,
+-- the camera's point, the point it looks at and its up (world). The view
+-- blends from where the camera would have been to the shot over `secs`, and
+-- back out the same way when the shot is cleared; the blend is in the frame
+-- of the moment (both ends read the same frame), so nothing slides on the
+-- moving planet. Returns nothing; `shotOn()` says whether one is up.
+local shot = nil        -- { fn, w (0..1), dir (+1 in, -1 out), secs }
+function setShot(fn, secs)
+  if type(fn) ~= "function" then return end
+  local w = shot and shot.w or 0
+  shot = { fn = fn, w = w, dir = 1, secs = secs or 0.9 }
+end
+function clearShot(secs)
+  if shot then shot.dir = -1; shot.secs = secs or shot.secs end
+end
+function shotOn() return shot ~= nil and shot.dir > 0 end
+
+local function shot_tick(node, dt)
+  if not shot then return end
+  shot.w = math.max(0, math.min(1, shot.w + shot.dir * (dt or 0) / math.max(0.05, shot.secs)))
+  if shot.dir < 0 and shot.w <= 0 then shot = nil return end
+  local ok, cx, cy, cz, px, py, pz, ux, uy, uz = pcall(shot.fn)
+  if not (ok and cx and px) then
+    if shot.dir < 0 then shot = nil end
+    return
+  end
+  local t = shot.w
+  t = t * t * (3 - 2 * t)
+  local c0 = node.pos
+  local f0 = vec3(fwd_x, fwd_y, fwd_z)
+  -- where the placed view was looking, at the shot's distance
+  local d = math.sqrt((px - cx) ^ 2 + (py - cy) ^ 2 + (pz - cz) ^ 2)
+  local l0 = c0 + f0 * d
+  local c = vec3(c0.x + (cx - c0.x) * t, c0.y + (cy - c0.y) * t, c0.z + (cz - c0.z) * t)
+  local l = vec3(l0.x + (px - l0.x) * t, l0.y + (py - l0.y) * t, l0.z + (pz - l0.z) * t)
+  node.pos = c
+  node:lookAt(l, vec3(ux or 0, uy or 1, uz or 0))
+  local f = (l - c):normalized()
+  fwd_x, fwd_y, fwd_z = f.x, f.y, f.z
+  cam_x, cam_y, cam_z = c.x, c.y, c.z
+  -- a shot frames someone else: the crew's own body stands out of it (the
+  -- placement above shows it again every frame, so nothing is left hidden)
+  if shot.w > 0.35 then
+    local a = find and find("Astronaut")
+    if a and a.valid ~= false then a.visible = false end
+  end
+end
+
 local function hold_tick(node)
   if not hold then return false end
   if time > hold.t1 then hold = nil return false end
@@ -1566,6 +1618,7 @@ function lateUpdate(node, dt)
     -- after the placement, whatever order the two nodes' lateUpdates run in.
     if not (sv_ref and sv_ref.valid) then sv_ref = findScript("surveyor", { quiet = true }) end
     if sv_ref and sv_ref.valid and sv_ref.cameraFollow then sv_ref.cameraFollow(node, dt) end
+    shot_tick(node, dt)
   end
   -- The camera mode / pivot line, for a couple of seconds after a change
   -- (never in cinematic mode: that is for pictures).

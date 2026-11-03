@@ -170,6 +170,9 @@ local function something_else_is_up()
   -- A right-click menu is a rung too: Esc backs out of it (context_menu.lua).
   local cm = ref("context_menu")
   if cm and cm.isOpen and (cm.isOpen() or cm.escTakenAt == time) then return true end
+  -- Talking to a scientist (lab_talk.lua): Esc backs out of the close-up, then the talk.
+  local lt = ref("lab_talk")
+  if lt and lt.isOpen and (lt.isOpen() or lt.escTakenAt == time) then return true end
   -- First person is a level too: the first Esc puts you back on the shoulder,
   -- the second opens this. Backing out one thing at a time is the whole
   -- convention, and skipping a rung is how a menu ambushes you.

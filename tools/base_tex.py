@@ -335,8 +335,14 @@ def signs():
     P.put("power_name", plate("POWER STATION", 340, 64, SLATE_BG, PLATE_FG, seed=15))
     P.put("intake_name", plate("MATERIALS INTAKE", 400, 64, SLATE_BG, PLATE_FG, seed=16))
     P.put("repair_name", plate("REPAIR BAY", 300, 64, SLATE_BG, PLATE_FG, seed=17))
+    P.put("lab_name", plate("RESEARCH LAB", 380, 64, SLATE_BG, PLATE_FG, seed=18))
+    P.put("lab_entry", plate("RESEARCH LAB · CLEAN AREA", 360, 64, (226, 226, 220), (34, 46, 70),
+                             border=(34, 46, 70), seed=42))
+    P.put("lab_way", plate("RESEARCH LAB  ▸", 300, 64, (226, 226, 220), (34, 46, 70), border=(34, 46, 70), seed=43))
+    P.put("tube_sign", plate("SAMPLE TRANSFER · PNEUMATIC", 360, 56, (204, 160, 40), (24, 22, 20),
+                             border=(24, 22, 20), seed=44))
     for k, (code, sub) in enumerate((("1", "VAB"), ("2", "OPS"), ("3", "LOG"), ("4", "TRK"), ("5", "PWR"), ("6", "PROP"),
-                                     ("7", "BULK"), ("8", "SVC"))):
+                                     ("7", "BULK"), ("8", "SVC"), ("9", "R&D"))):
         P.put(f"bldg{code}", plate(code, 112, 136, (226, 226, 220), (38, 42, 48), size=88, border=(38, 42, 48), sub=f"BLDG · {sub}", seed=20 + k))
     P.put("hv", plate("DANGER — HIGH VOLTAGE", 400, 90, (204, 160, 40), (24, 22, 20), border=(24, 22, 20), seed=31))
     P.put("cryo", plate("CRYOGENIC — NO OPEN FLAME", 440, 90, (226, 226, 220), (150, 34, 26), border=(150, 34, 26), seed=32))

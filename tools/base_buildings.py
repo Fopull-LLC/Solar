@@ -324,7 +324,18 @@ def depot():
         x0, x1 = (W - t, W) if sx > 0 else (-W, -W + t)
         B(m, "Clad", WARM, x0, x1, -0.5, H, -D, D)
         sh.add(((x0 + x1) / 2, H / 2, 0.0), (t, H, 2 * D))
-    B(m, "Clad", WARM, -W + t, W - t, -0.5, H, -D, -D + t, sh=sh)
+    # the back wall, with the doorway through to the Research Lab's link
+    # corridor (LAB, link_depot_half) between the racks
+    LDW, LDH = 1.0, LAB["door_h"]
+    for (xa, xb) in ((-W + t, -LDW), (LDW, W - t)):
+        B(m, "Clad", WARM, xa, xb, -0.5, H, -D, -D + t)
+        sh.add(((xa + xb) / 2, H / 2, -D + t / 2), (xb - xa, H, t))
+    B(m, "Clad", WARM, -LDW, LDW, LDH, H, -D, -D + t, sh=sh)
+    for sx in (-1, 1):
+        B(m, "Steel", DARK, sx * (LDW - 0.04), sx * (LDW + 0.12), 0.0, LDH, -D - 0.05, -D + t + 0.05, var=False)
+    B(m, "Steel", DARK, -LDW - 0.13, LDW + 0.13, LDH - 0.06, LDH + 0.1, -D - 0.06, -D + t + 0.06, var=False)
+    plate(m, "lab_way", (0.0, LDH + 0.45, -D + t), (1, 0, 0), (0, 1, 0), 1.6, depth=0.03)
+    link_depot_half(m, sh, W, D, H)
     z0, z1 = D - t, D
     for (xa, xb) in ((-W + t, -DW - 0.25), (DW + 0.25, W - t)):
         B(m, "Clad", WARM, xa, xb, -0.5, H, z0, z1)
@@ -989,6 +1000,17 @@ def intake():
     T(m, "Steel", GREY, (2.5, H + 3.4, -3.0), (2.5, H, -3.0), 0.22, segs=12)
     T(m, "Steel", DARK, (3.8, H, -4.2), (3.8, H + 2.6, -4.2), 0.18, segs=12)
     hvac(m, 3.0, H, 0.6, 2.0, 1.4, 0.9, fans=1)
+    # THE SAMPLE SPLITTER: a riffle box on the roof takes a few grams of every
+    # load off the line and blows them up the transfer tube to the Research
+    # Lab (base_buildings LAB, scripts/lab.lua) in a capsule
+    sx_, sz_ = 4.6, -4.8
+    B(m, "Steel", (0.62, 0.64, 0.66), sx_ - 0.45, sx_ + 0.45, H, H + 0.7, sz_ - 0.45, sz_ + 0.45)
+    B(m, "Steel", DARK, sx_ - 0.48, sx_ + 0.48, H + 0.7, H + 0.76, sz_ - 0.48, sz_ + 0.48, var=False)
+    B(m, "Steel", (0.20, 0.34, 0.52), sx_ + 0.45, sx_ + 0.5, H + 0.15, H + 0.55, sz_ - 0.2, sz_ + 0.2, var=False)
+    T(m, "Steel", GREY, (sx_, H + 0.76, sz_), (sx_, H + 1.0, sz_), 0.16, segs=16)
+    T(m, "Steel", DARK, (sx_, H + 1.0, sz_), (sx_, H + 1.05, sz_), 0.21, segs=16)
+    T(m, "Steel", GREY, (sx_ - 0.45, H + 0.35, sz_), (sx_ - 1.6, H + 0.35, sz_ + 1.4), 0.09, segs=10)
+    T(m, "Steel", GREY, (sx_ - 1.6, H + 0.35, sz_ + 1.4), (sx_ - 1.6, H, sz_ + 1.4), 0.09, segs=10)
     # THE TRANSFER GALLERY: a covered conveyor bridge from the shed's east
     # wall to the depot's west wall (the depot stands 23 m east of the shed's
     # centre, its west wall 17 m off it), on a trestle
@@ -1015,6 +1037,8 @@ def intake():
         ("Belt Take", (0.0, y, zm - 0.35)),
         # where the receipt board hangs (over the hood)
         ("Intake Board", (0.0, HY + 1.2, zm + 0.1)),
+        # the sample tube's start, on the splitter's riser (scripts/lab.lua)
+        ("Tube Out", (sx_, H + 1.05, sz_)),
     ]
     return m, sh, lights, markers
 
@@ -1137,3 +1161,198 @@ def repair_bay():
     lights = [("Bay Light", (0.0, 5.2, 0.0), (0.94, 0.97, 1.0), 2.6, 15.0, None)]
     markers = [("Repair Console", (cx - 0.5, 0.12, cz)), ("Bay Floor", (0.0, 0.12, -0.2))]
     return m, sh, lights, markers
+
+
+# ── THE RESEARCH LAB (2026-11-03) ───────────────────────────────────────────
+# North of the Commerce Depot and joined to it by a glazed link corridor out of
+# the depot's back wall; the Materials Intake's sample tube comes in through its
+# south-west wall. Its interior is tools/gen_lab.py (prefab LabInterior, the
+# same origin), switched on only while someone is inside or near the doors
+# (scripts/lab.lua). The LINK is split between the two models at its middle, so
+# neither half reaches far enough from its own building's centre for the
+# planet's curve to open a step at the joint (a few centimetres, under the
+# depot half's flashing collar and threshold plate).
+LAB = dict(W=11.0, D=7.0, H=5.6, t=0.35,
+           # the link corridor, in the lab's frame: x span, the lab half's
+           # end (where the depot half takes over), the depot's back wall
+           link_x0=6.5, link_x1=9.5, link_z1=11.5, link_h=3.2,
+           # the doorway from the corridor into the lab
+           door_x0=7.0, door_x1=9.0, door_h=2.6,
+           # the outside door in the corridor's east wall
+           xdoor_z0=8.5, xdoor_z1=10.0,
+           # where the tube comes through the south wall
+           tube_x=-8.0, tube_y=3.2)
+WHITE_CLAD = (0.84, 0.85, 0.84)    # the lab's cladding: clean white, a shade cool
+LAB_TRIM = (0.30, 0.38, 0.46)      # the blue-grey band and trim
+
+
+def lab():
+    """RESEARCH LAB — a 22 × 14 m clean single-storey block in white cladding
+    with a blue-grey band, a row of tinted windows, three fume-hood exhaust
+    stacks over the roof, and the half of the glazed link corridor that meets
+    the depot's. No glazing shows the inside from out of doors: the windows
+    are tinted (the room behind them is the interior's own, switched on from
+    within)."""
+    L = LAB
+    m, sh = CModel(23), Shell()
+    W, D, H, t = L["W"], L["D"], L["H"], L["t"]
+    lx0, lx1, lz1, lh = L["link_x0"], L["link_x1"], L["link_z1"], L["link_h"]
+    dx0, dx1, dh = L["door_x0"], L["door_x1"], L["door_h"]
+    B(m, "Concrete", CONC, -W - 0.4, W + 0.4, -0.6, 0.12, -D - 0.4, D + 0.3, sh=sh)
+    # walls: west, east, north whole; the south one holes for the link door
+    for sx in (-1, 1):
+        x0, x1 = (W - t, W) if sx > 0 else (-W, -W + t)
+        B(m, "Clad", WHITE_CLAD, x0, x1, -0.5, H, -D, D)
+        sh.add(((x0 + x1) / 2, H / 2, 0.0), (t, H, 2 * D))
+    B(m, "Clad", WHITE_CLAD, -W + t, W - t, -0.5, H, -D, -D + t, sh=sh)
+    z0, z1 = D - t, D
+    for (xa, xb) in ((-W + t, dx0), (dx1, W - t)):
+        B(m, "Clad", WHITE_CLAD, xa, xb, -0.5, H, z0, z1)
+        sh.add(((xa + xb) / 2, H / 2, (z0 + z1) / 2), (xb - xa, H, t))
+    B(m, "Clad", WHITE_CLAD, dx0, dx1, dh, H, z0, z1, sh=sh)
+    # the blue-grey band at the head of the walls, and the base trim
+    for (xa, xb, za, zb, nx, nz) in ((-W - 0.06, W + 0.06, D, D + 0.06, 0, 1), (-W - 0.06, W + 0.06, -D - 0.06, -D, 0, -1),
+                                     (W, W + 0.06, -D, D, 1, 0), (-W - 0.06, -W, -D, D, -1, 0)):
+        B(m, "Clad", LAB_TRIM, xa, xb, H - 0.95, H - 0.35, za, zb, var=False)
+    # corner posts
+    for sx in (-1, 1):
+        for sz in (-1, 1):
+            B(m, "Steel", GREY, sx * (W - 0.46), sx * (W + 0.15), -0.3, H + 0.5, sz * (D - 0.46), sz * (D + 0.15))
+    # tinted windows down the east and west walls and along the north (the
+    # interior's own walls stand inside them: nothing to see in)
+    m.color = (0.07, 0.09, 0.11)
+    for z in (-4.5, -1.5, 1.5, 4.5):
+        for sx in (-1, 1):
+            xo = sx * (W + 0.01)
+            box(m, "Glass", (xo, 1.95, z), (0.02, 1.25, 2.2))
+            B(m, "Steel", DARK, sx * W, sx * (W + 0.07), 1.25, 1.32, z - 1.18, z + 1.18, var=False)
+            B(m, "Steel", DARK, sx * W, sx * (W + 0.07), 2.58, 2.65, z - 1.18, z + 1.18, var=False)
+            for zz in (z - 1.15, z + 1.15):
+                B(m, "Steel", DARK, sx * W, sx * (W + 0.055), 1.32, 2.58, zz - 0.035, zz + 0.035, var=False)
+    m.color = (0.07, 0.09, 0.11)
+    for x in (-7.5, -3.0, 1.5, 6.0):
+        box(m, "Glass", (x, 1.95, -D - 0.01), (3.2, 1.25, 0.02))
+        B(m, "Steel", DARK, x - 1.68, x + 1.68, 1.25, 1.32, -D - 0.07, -D, var=False)
+        B(m, "Steel", DARK, x - 1.68, x + 1.68, 2.58, 2.65, -D - 0.07, -D, var=False)
+        for xx in (x - 1.65, x, x + 1.65):
+            B(m, "Steel", DARK, xx - 0.035, xx + 0.035, 1.32, 2.58, -D - 0.055, -D, var=False)
+    # the roof: slab, parapet and coping
+    B(m, "Concrete", CONC_DARK, -W + t, W - t, H - 0.3, H, -D + t, D - t, sh=sh)
+    for (xa, xb, za, zb) in ((-W + 0.46, W - 0.46, D - 0.2, D), (-W + 0.46, W - 0.46, -D, -D + 0.2),
+                             (W - 0.2, W, -D + 0.46, D - 0.46), (-W, -W + 0.2, -D + 0.46, D - 0.46)):
+        B(m, "Clad", WHITE_CLAD, xa, xb, H, H + 0.45, za, zb)
+    for (xa, xb, za, zb) in ((-W + 0.4, W - 0.4, D - 0.25, D + 0.05), (-W + 0.4, W - 0.4, -D - 0.05, -D + 0.25),
+                             (W - 0.25, W + 0.05, -D + 0.4, D - 0.4), (-W - 0.05, -W + 0.25, -D + 0.4, D - 0.4)):
+        B(m, "Steel", GREY, xa, xb, H + 0.45, H + 0.53, za, zb, var=False)
+    # on the roof: two air handlers (a clean lab changes its air 10-20 times
+    # an hour), the fume hoods' exhaust stacks with their rain caps, a hatch
+    hvac(m, -5.5, H, 1.5, 3.4, 2.2, 1.4, fans=2)
+    hvac(m, 4.5, H, 2.5, 2.6, 1.8, 1.2, fans=1)
+    for x in (-8.0, -5.0, -2.0):
+        T(m, "Steel", LIGHT, (x, H, -4.6), (x, H + 3.4, -4.6), 0.16, segs=14)
+        T(m, "Steel", GREY, (x, H + 3.4, -4.6), (x, H + 3.48, -4.6), 0.21, segs=14)
+        T(m, "Steel", DARK, (x, H, -4.6), (x, H + 0.35, -4.6), 0.24, segs=14)
+        B(m, "Steel", GREYBLUE, x - 0.5, x + 0.5, H, H + 0.55, -5.4, -3.9)
+        for (ax, az) in ((-1, -1), (1, -1), (-1, 1), (1, 1)):
+            T(m, "Steel", GREY, (x + 0.08 * ax, H + 2.6, -4.6 + 0.08 * az), (x + 0.9 * ax, H, -4.6 + 0.9 * az), 0.012, segs=4)
+    T(m, "Steel", GREY, (-8.0, H + 0.9, -3.9), (-2.0, H + 0.9, -3.9), 0.12, segs=10)
+    B(m, "Steel", GREY, 7.5, 8.5, H, H + 0.9, -4.5, -3.5)
+    cable_tray(m, (-W + 1.0, H + 0.25, -5.8), (W - 1.0, H + 0.25, -5.8), w=0.3)
+    for x in (-W + 0.7, W - 0.7):
+        T(m, "Steel", GREY, (x, 0.15, D + 0.12), (x, H, D + 0.12), 0.07, segs=8)
+    # the name over the link, the building number, lamps
+    plate(m, "lab_name", (0.0, H - 1.7, z1), (1, 0, 0), (0, 1, 0), 4.6, depth=0.05)
+    plate(m, "bldg9", (-3.6, 2.2, z1), (1, 0, 0), (0, 1, 0), 0.6, depth=0.04)
+    for x in (-6.0, 2.5):
+        wall_pack(m, (x, 3.4, z1), (0, 0, 1))
+    for z in (-3.5, 3.5):
+        wall_pack(m, (W, 3.4, z), (1, 0, 0))
+        wall_pack(m, (-W, 3.4, z), (-1, 0, 0))
+    # where the sample tube comes in: a wall sleeve with a flange, a bracket
+    tx, ty = L["tube_x"], L["tube_y"]
+    T(m, "Steel", GREY, (tx, ty, z1 - 0.05), (tx, ty, z1 + 0.22), 0.19, segs=16)
+    T(m, "Steel", DARK, (tx, ty, z1 + 0.22), (tx, ty, z1 + 0.27), 0.23, segs=16)
+    for a in range(8):
+        aa = a * TAU / 8
+        T(m, "Steel", LIGHT, (tx + math.cos(aa) * 0.205, ty + math.sin(aa) * 0.205, z1 + 0.27),
+          (tx + math.cos(aa) * 0.205, ty + math.sin(aa) * 0.205, z1 + 0.30), 0.014, segs=6)
+    plate(m, "tube_sign", (tx, ty + 0.55, z1), (1, 0, 0), (0, 1, 0), 1.3, depth=0.03)
+
+    # THE LINK CORRIDOR's lab half (z from the wall to link_z1)
+    B(m, "Concrete", CONC, lx0 - 0.1, lx1 + 0.1, -0.6, 0.12, D + 0.3, lz1 - 0.02, sh=sh)
+    xd0, xd1 = L["xdoor_z0"], L["xdoor_z1"]
+    for sx, (xa, xb) in ((-1, (lx0, lx0 + 0.25)), (1, (lx1 - 0.25, lx1))):
+        segs_z = [(D, lz1)] if sx < 0 else [(D, xd0), (xd1, lz1)]
+        for (za, zb) in segs_z:
+            B(m, "Clad", WHITE_CLAD, xa, xb, -0.5, 0.95, za, zb)
+            B(m, "Clad", WHITE_CLAD, xa, xb, 2.65, lh, za, zb)
+            sh.add(((xa + xb) / 2, lh / 2, (za + zb) / 2), (xb - xa, lh, zb - za))
+            # glazing between sill and head, mullions every 1.2 m
+            m.color = (0.07, 0.09, 0.11)
+            xo = xb if sx > 0 else xa
+            box(m, "Glass", ((xa + xb) / 2, 1.8, (za + zb) / 2), (0.04, 1.7, zb - za))
+            nmul = max(1, int(round((zb - za) / 1.2)))
+            for q in range(1, nmul):
+                zz = za + (zb - za) * q / nmul
+                B(m, "Steel", DARK, xa - 0.02, xb + 0.02, 0.97, 2.63, zz - 0.04, zz + 0.04, var=False)
+        if sx > 0:
+            B(m, "Clad", WHITE_CLAD, xa, xb, 2.65, lh, xd0, xd1)
+            # the outside door's frame (the leaf is FacLab's "Link Door")
+            for zz in (xd0, xd1):
+                B(m, "Steel", DARK, xa - 0.04, xb + 0.06, 0.12, 2.65, zz - 0.06, zz + 0.06, var=False)
+            B(m, "Steel", DARK, xa - 0.03, xb + 0.05, 2.55, 2.65, xd0, xd1, var=False)
+            plate(m, "lab_entry", (xb, 2.95, (xd0 + xd1) / 2), (0, 0, -1), (0, 1, 0), 1.4, depth=0.03)
+            lamp_head(m, (xb + 0.3, 2.9, xd1 + 0.4), (0.6, -0.8, 0.0), w=0.4, h=0.25)
+            B(m, "Concrete", CONC, xb + 0.1, xb + 1.2, -0.3, 0.11, xd0 - 0.4, xd1 + 0.4, sh=sh)
+    B(m, "Clad", WHITE_CLAD, lx0, lx1, lh, lh + 0.25, D, lz1, sh=sh)
+    B(m, "Steel", GREY, lx0 - 0.05, lx1 + 0.05, lh + 0.25, lh + 0.31, D, lz1, var=False)
+    m.color = LAMP_COOL
+    for zz in (8.3, 10.4):
+        box(m, "Lamp", ((lx0 + lx1) / 2, lh - 0.04, zz), (0.3, 0.04, 1.2))
+    # the outside door's leaf: its own node, slid open by scripts/lab.lua
+    door = CModel(24)
+    door.ground = False
+    dz0, dz1 = xd0 + 0.07, xd1 - 0.07
+    xm = lx1 - 0.125
+    B(door, "Steel", GREY, xm - 0.025, xm + 0.025, 0.13, 2.53, dz0, dz1, var=False)
+    door.color = (0.07, 0.09, 0.11)
+    box(door, "Glass", (xm + 0.026, 1.55, (dz0 + dz1) / 2), (0.004, 1.4, dz1 - dz0 - 0.2))
+    B(door, "Steel", DARK, xm + 0.025, xm + 0.06, 1.0, 1.3, dz0 + 0.08, dz0 + 0.11, var=False)
+    lights = []
+    markers = [
+        ("Tube In", (tx, ty, z1 + 0.30)),          # the outdoor tube's end on the wall
+        ("Lab Door Pos", ((dx0 + dx1) / 2, 0.12, D - t / 2)),
+        ("Link Door Pos", (lx1 - 0.125, 0.12, (xd0 + xd1) / 2)),
+        ("Lab Centre", (0.0, 0.12, 0.0)),
+    ]
+    return m, sh, lights, markers, {"Link Door": door}
+
+
+def link_depot_half(m, sh, W, D, H):
+    """The depot's half of the link corridor to the Research Lab: from the
+    depot's back wall (z = −D) out to meet the lab's half, a flashing collar
+    and a threshold plate over the joint (base_buildings LAB)."""
+    L = LAB
+    # the depot stands 22 m south of the lab and 8 m west: the link's centre
+    # line is the depot's x = 0, the joint 4.5 m out of its back wall
+    hw = (L["link_x1"] - L["link_x0"]) / 2
+    zj = -D - 4.5
+    B(m, "Concrete", CONC, -hw - 0.1, hw + 0.1, -0.6, 0.12, zj - 0.1, -D - 0.4, sh=sh)
+    for sx in (-1, 1):
+        xa, xb = sorted((sx * hw, sx * (hw - 0.25)))
+        B(m, "Clad", WHITE_CLAD, xa, xb, -0.5, 0.95, zj, -D)
+        B(m, "Clad", WHITE_CLAD, xa, xb, 2.65, L["link_h"], zj, -D)
+        sh.add(((xa + xb) / 2, L["link_h"] / 2, (zj - D) / 2), (xb - xa, L["link_h"], -D - zj))
+        m.color = (0.07, 0.09, 0.11)
+        box(m, "Glass", ((xa + xb) / 2, 1.8, (zj - D) / 2), (0.04, 1.7, -D - zj))
+        for zz in np.linspace(zj, -D, 4)[1:-1]:
+            B(m, "Steel", DARK, xa - 0.02, xb + 0.02, 0.97, 2.63, zz - 0.04, zz + 0.04, var=False)
+    B(m, "Clad", WHITE_CLAD, -hw, hw, L["link_h"], L["link_h"] + 0.25, zj, -D, sh=sh)
+    B(m, "Steel", GREY, -hw - 0.05, hw + 0.05, L["link_h"] + 0.25, L["link_h"] + 0.31, zj, -D, var=False)
+    # the flashing collar over the joint, and the threshold plate
+    for sx in (-1, 1):
+        B(m, "Steel", GREY, sx * (hw + 0.0), sx * (hw + 0.08), 0.0, L["link_h"] + 0.35, zj - 0.12, zj + 0.12, var=False)
+    B(m, "Steel", GREY, -hw - 0.09, hw + 0.09, L["link_h"] + 0.31, L["link_h"] + 0.38, zj - 0.13, zj + 0.13, var=False)
+    B(m, "Steel", (0.52, 0.53, 0.54), -hw + 0.25, hw - 0.25, 0.12, 0.135, zj - 0.25, zj + 0.25, var=False)
+    m.color = LAMP_COOL
+    box(m, "Lamp", (0.0, L["link_h"] - 0.04, -D - 2.2), (0.3, 0.04, 1.2))

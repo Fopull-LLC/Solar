@@ -309,7 +309,7 @@ def prefab(name, glb, model, about, shell=None, lights=(), shift=(0, 0, 0), root
     return "".join(out)
 
 
-from base_buildings import (command_centre, depot, fuel_farm, intake, launch_complex, pad_clamps,  # noqa: E402
+from base_buildings import (command_centre, depot, fuel_farm, intake, lab, launch_complex, pad_clamps,  # noqa: E402
                             power, repair_bay, tracking, vab)
 from base_models import CModel, zcheck  # noqa: E402
 
@@ -336,6 +336,9 @@ BUILDS = [
     ("FacRepair", "repair.glb", repair_bay,
      "REPAIR BAY — drive in, stop, service the craft at the console (scripts/repair_bay.lua).",
      ["base_works", "repair_bay"], ["repair_bay"]),
+    ("FacLab", "lab.glb", lab,
+     "RESEARCH LAB — joined to the Commerce Depot by a glazed link; the intake's samples arrive up the tube "
+     "(scripts/lab.lua; the interior is prefabs/LabInterior, tools/gen_lab.py).", ["base_works", "lab"], ["lab"]),
 ]
 
 

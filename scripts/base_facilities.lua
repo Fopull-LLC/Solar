@@ -86,7 +86,7 @@ FACILITIES = {
   { prefab = "FacHangar",   u = 0.0,   v = 28.0,  face = "S", seat = -0.240, ox = 0.000, oz = 0.000,  lot = { 51.4, 59.1 }, lift = 0.15,
     interior = "VabInterior" },
   { prefab = "FacCommand",  u = 50.0,  v = 12.0,  face = "S", seat = 8.954,  ox = 0.874, oz = 2.070,  lot = { 32.2, 18.9 }, lift = 0.15 },
-  { prefab = "FacDepot",    u = -50.0, v = 12.0,  face = "S", seat = 5.204,  ox = 5.065, oz = 0.000,  lot = { 32.5, 18.0 }, lift = 0.15 },
+  { prefab = "FacDepot",    u = -50.0, v = 12.0,  face = "S", seat = 5.204,  ox = 5.065, oz = -0.875, lot = { 32.47, 19.75 }, lift = 0.15 },
   { prefab = "FacTracking", u = 40.0,  v = 46.0,  face = "S", seat = 5.877,  ox = 0.000, oz = -1.333, lot = { 11.1, 15.5 } },
   { prefab = "FacPower",    u = 84.0,  v = 14.0,  face = "S", seat = 2.570,  ox = 0.013, oz = 0.000,  lot = { 18.0, 12.0 } },
   { prefab = "BaseFuel",    u = -40.0, v = 112.0, face = "W", seat = 8.967,  ox = 0.000, oz = 0.000,  lot = { 28.0, 18.0 } },
@@ -100,6 +100,14 @@ FACILITIES = {
   -- repair_bay.lua runs on it.
   { prefab = "FacIntake",   u = -75.0, v = 10.0,  face = "S", seat = 5.100,  ox = 5.353, oz = 3.710,  lot = { 23.51, 20.22 }, lift = 0.15 },
   { prefab = "FacRepair",   u = 46.0,  v = -21.1, face = "N", seat = 3.945,  ox = 0.000, oz = 0.425,  lot = { 12.40, 17.25 }, lift = 0.15 },
+  -- THE RESEARCH LAB (2026-11-03) stands north of the depot, its front wall
+  -- at v = 27, joined to the depot's back wall (v = 18) by a glazed link
+  -- whose centre line is the depot's (u = -50): half of it is each model's
+  -- (tools/base_buildings.py LAB). The intake's sample tube runs to its
+  -- south-west wall; scripts/lab.lua runs on it, and its interior
+  -- (prefabs/LabInterior) shares its origin, switched on only from inside.
+  { prefab = "FacLab",      u = -58.0, v = 34.0,  face = "S", seat = 4.240,  ox = 0.000, oz = 2.050,  lot = { 23.26, 18.90 }, lift = 0.15,
+    interior = "LabInterior" },
 }
 -- Launch Complex 1, in its own ground frame (tools/gen_base.py): the mount is
 -- the lot centre, the hardstand top HS_H over the ground.
@@ -1247,20 +1255,20 @@ local DIGITS = {
 -- SIGN_UV begin
 SIGN_UV = {
   ["blast"] = { 0.43994, 0.64537, 0.88818, 0.69503 },
-  ["g_-"] = { 0.55127, 0.87416, 0.61279, 0.90932 },
-  ["g_0"] = { 0.83643, 0.83510, 0.89795, 0.87026 },
-  ["g_1"] = { 0.90479, 0.83510, 0.96631, 0.87026 },
-  ["g_2"] = { 0.00439, 0.87416, 0.06592, 0.90932 },
-  ["g_3"] = { 0.07275, 0.87416, 0.13428, 0.90932 },
-  ["g_4"] = { 0.14111, 0.87416, 0.20264, 0.90932 },
-  ["g_5"] = { 0.20947, 0.87416, 0.27100, 0.90932 },
-  ["g_6"] = { 0.27783, 0.87416, 0.33936, 0.90932 },
-  ["g_7"] = { 0.34619, 0.87416, 0.40771, 0.90932 },
-  ["g_8"] = { 0.41455, 0.87416, 0.47607, 0.90932 },
-  ["g_9"] = { 0.48291, 0.87416, 0.54443, 0.90932 },
-  ["g_A_dir"] = { 0.68799, 0.87416, 0.74951, 0.90932 },
-  ["g_A_loc"] = { 0.61963, 0.87416, 0.68115, 0.90932 },
-  ["hazard"] = { 0.00439, 0.91323, 0.25342, 0.93945 },
+  ["g_-"] = { 0.14111, 0.95229, 0.20264, 0.98744 },
+  ["g_0"] = { 0.42041, 0.91323, 0.48193, 0.94838 },
+  ["g_1"] = { 0.48877, 0.91323, 0.55029, 0.94838 },
+  ["g_2"] = { 0.55713, 0.91323, 0.61865, 0.94838 },
+  ["g_3"] = { 0.62549, 0.91323, 0.68701, 0.94838 },
+  ["g_4"] = { 0.69385, 0.91323, 0.75537, 0.94838 },
+  ["g_5"] = { 0.76221, 0.91323, 0.82373, 0.94838 },
+  ["g_6"] = { 0.83057, 0.91323, 0.89209, 0.94838 },
+  ["g_7"] = { 0.89893, 0.91323, 0.96045, 0.94838 },
+  ["g_8"] = { 0.00439, 0.95229, 0.06592, 0.98744 },
+  ["g_9"] = { 0.07275, 0.95229, 0.13428, 0.98744 },
+  ["g_A_dir"] = { 0.27783, 0.95229, 0.33936, 0.98744 },
+  ["g_A_loc"] = { 0.20947, 0.95229, 0.27100, 0.98744 },
+  ["hazard"] = { 0.70361, 0.95229, 0.95264, 0.97852 },
   blast_aspect = 0.1939,
 }
 -- SIGN_UV end

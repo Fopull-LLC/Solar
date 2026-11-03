@@ -923,6 +923,9 @@ local function panel_up()
   -- The map owns the whole screen, its readout included.
   local om = ref("orbit_map")
   if om and om.isOpen and om.isOpen() then return true end
+  -- Talking to a Research Lab scientist: the close-up and its plates.
+  local lt = ref("lab_talk")
+  if lt and lt.isOpen and lt.isOpen() then return true end
   return false
 end
 

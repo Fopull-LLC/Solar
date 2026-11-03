@@ -723,6 +723,17 @@
         parent: Some(0),
     ),
     (
+        name: "Tube Out",
+        transform: (
+            translation: (-0.7533, 2.7500, -8.5105),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+        parent: Some(0),
+    ),
+    (
         name: "Intake Light",
         transform: (
             translation: (-5.3533, -1.9500, 3.3395),

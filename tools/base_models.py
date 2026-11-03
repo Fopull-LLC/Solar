@@ -81,9 +81,13 @@ class CModel(Model):
         self.tags.setdefault(mat, []).append(np.full(len(np.asarray(I).reshape(-1, 3)), self.call))
         self.note()
 
+    HELPERS = {"Bx", "Tb", "plate", "screen", "glass_cyl", "casework", "lining", "_panel", "_seam", "glazed"}
+
     def note(self):
         for fr in reversed(traceback.extract_stack()[:-2]):
-            if fr.filename.endswith(("base_buildings.py", "gen_vab.py")):
+            if fr.name in CModel.HELPERS:
+                continue
+            if fr.filename.endswith(("base_buildings.py", "gen_vab.py", "gen_lab.py")):
                 self.__dict__.setdefault("where", {})[self.call] = fr.lineno
                 return
 

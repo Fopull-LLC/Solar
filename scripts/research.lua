@@ -237,3 +237,81 @@ function pendingLines()
   end
   return out
 end
+
+-- ── RESEARCH POINTS (the Research Lab, 2026-11-03) ──────────────────────────
+-- What the lab has learned, as one number you play for: points are earned
+-- when a material goes in at the Materials Intake (material_intake.lua) and a
+-- sample of it is sent up the tube to the lab (lab.lua) to be studied. More
+-- for a kind the lab has never seen. The research tree that will SPEND them is
+-- still to come; for now they are a stat on the HUD and in the save.
+--
+--   res.pts        the points
+--   res.studied    { [mat] = { n = units studied, rp = points from it,
+--                    t = game time first studied, from = { [body] = true } } }
+--
+-- What a unit is worth comes from materials.researchValue(mat, origin,
+-- firstTime) when that exists (the per-planet ores); otherwise from the
+-- placeholder below. A kind's first study is worth at least FIRST_MIN, so
+-- even bulk rock (worth nothing per unit) is worth characterising once.
+FIRST_MIN = 5
+-- the placeholder: points per unit by grade / class, and for scrap per kg
+RP_PLACEHOLDER = { bulk = 0.05, ore = 1.0, flora = 0.6, ice = 0.6, liquid = 0.2, refined = 1.5, scrap_kg = 0.004 }
+RP_TIER = { [0] = 0.5, [1] = 1.0, [2] = 2.5, [3] = 6.0, [4] = 14.0 }
+
+local function mats_ref()
+  return findScript and findScript("materials") or nil
+end
+
+function points() return save.get("res.pts") or 0 end
+function studied() return save.get("res.studied") or {} end
+
+-- (pure, for tests: m = the materials script or nil)
+function valueOf(m, mat, qty, origin, first)
+  qty = qty or 1
+  if mat == "scrap" then
+    return (qty * RP_PLACEHOLDER.scrap_kg) * (first and 5 or 1)
+  end
+  if m and m.researchValue then
+    local ok, v = pcall(m.researchValue, mat, origin, first)
+    if ok and type(v) == "number" then return v * qty end
+  end
+  local g = (m and m.grade and m.grade(mat)) or "ore"
+  local per = RP_PLACEHOLDER[g] or RP_PLACEHOLDER.ore
+  local t = (m and m.tier and m.tier(mat)) or 1
+  per = per * (RP_TIER[t] or 1)
+  return per * qty * (first and 5 or 1)
+end
+
+-- Study `qty` units of `mat` (or, for wreckage, mat = "scrap" and qty in kg).
+-- Returns the points gained (whole), and true when the kind is new to the lab.
+function study(mat, qty, origin)
+  if not mat then return 0, false end
+  local st = studied()
+  local rec = st[mat]
+  local first = rec == nil
+  local m = mats_ref()
+  local v = valueOf(m, mat, qty, origin, first)
+  if first then v = math.max(v, FIRST_MIN) end
+  local carry = save.get("res.frac") or 0
+  local total = v + carry
+  local gained = math.floor(total)
+  save.set("res.frac", total - gained)
+  rec = rec or { n = 0, rp = 0, t = space and space.time and space.time() or (time or 0), from = {} }
+  rec.n = rec.n + (qty or 1)
+  rec.rp = rec.rp + v
+  if origin then rec.from = rec.from or {}; rec.from[origin] = true end
+  st[mat] = rec
+  save.set("res.studied", st)
+  save.set("res.pts", points() + gained)
+  if log then log(string.format("research: studied %s ×%s → +%d RP%s (total %d)", tostring(mat), tostring(qty),
+    gained, first and " (a new kind)" or "", points())) end
+  return gained, first
+end
+
+-- The studied kinds as a list, most recent first: { mat, n, rp, t }.
+function studiedList()
+  local out = {}
+  for mat, r in pairs(studied()) do out[#out + 1] = { mat = mat, n = r.n or 0, rp = r.rp or 0, t = r.t or 0 } end
+  table.sort(out, function(a, b) if a.t ~= b.t then return a.t > b.t end return a.mat < b.mat end)
+  return out
+end

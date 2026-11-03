@@ -367,7 +367,29 @@ local function take(n, e, mass, wx, wy, wz)
     totals.cash = totals.cash + cash
   end
   totals.pieces = totals.pieces + 1
-  say(receiptText(r), e.kind)
+  -- A SAMPLE GOES TO THE LAB: research points for studying it (research.lua),
+  -- and a capsule up the transfer tube into the Research Lab (lab.lua) that
+  -- the player can watch go. The base's own stock teaches nothing.
+  local rp, first = 0, false
+  if e.kind ~= "stock" then
+    local rs = ref("research")
+    local smat, sq = e.mat, e.qty
+    if e.kind == "scrap" then smat, sq = "scrap", e.kg or 0 end
+    local origin = nil
+    for _, t in ipairs(n.tags or {}) do
+      local o = t:match("^origin:(.+)$")
+      if o then origin = o end
+    end
+    if rs and rs.study then
+      local ok, g, f = pcall(rs.study, smat, sq, origin)
+      if ok then rp, first = g or 0, f == true end
+    end
+    local lab = ref("lab")
+    if lab and lab.receive then pcall(lab.receive, smat, sq, rp, first) end
+  end
+  local line = receiptText(r)
+  if rp > 0 then line = line .. string.format("  ·  +%d RP%s", rp, first and " (new)" or "") end
+  say(line, e.kind)
   -- what it looks and sounds like going in: dust at the curtain, motes off
   -- to the depot, the crusher's clank
   local fx = ref("vfx")
@@ -574,6 +596,9 @@ function lateUpdate(node, dt)
   if pm and pm.open then return end
   local ip = ref("inventory_panel")
   if ip and ip.open then return end
+  -- (indoors at the Research Lab next door the board would show through its walls)
+  local lab = ref("lab")
+  if lab and lab.crewInLab then return end
   local a = crew_node()
   if not a then return end
   local vx, vy, vw, vh = camera.screenRect()
