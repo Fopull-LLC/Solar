@@ -74,10 +74,10 @@ How a cut is paid:
 The reticle shows the same answer, from `mineral_field.materialAt(x, y, z)`
 (material, depth, isOre).
 
-On engine 0.117.1, `terrain.slotAt` cannot see paint. It reads the physics
-copy of the field, which a paint op does not refresh (an engine card draft
-covers this). So `materialAt` finds a painted seam by its geometry
-(`veinAt`), while the payout uses `terrain.yields`, which does see the paint.
+`materialAt` reads `terrain.slotAt`, which sees paint and paintTexture from
+the next call on (engine card 0602, 0.117.1-dev.1385 and later). A vein's
+slot is that vein's ore on its world (`oreSlots`), so the reticle and the
+payout (`terrain.yields`) give the same answer.
 
 The laser's bite and bore are divided by `materials.hardness(mat)`. Soil is
 about 0.7, rock 1.0–1.2, ore 1.3–1.55 and crystal 1.65, so cutting into a
@@ -102,6 +102,14 @@ stones and boulders are the bedrock slot a few metres under them
   anything narrower vanishes. The save records this as
   `veins1.<body>.<patch>` = `{ p = { v<i> = slot }, t = { v<i> = outcrops
   broken (bits) }, h = { v<i> = 1 } }`.
+- **Kept off the base.** No seam ball, stain ball or outcrop lands on the
+  base's paving, pad or lots (`base_facilities.keepClear`, the same test the
+  rocks and float use). A ball is dropped when its centre or any of eight
+  points round it is kept clear, measured at the radius it shows over: a slot
+  ball over its whole radius, a colour ball over 0.7 of it. The plan is
+  `mineral_field.seamPlan(ore, g, slot, clear)`, a pure function the smoke
+  test checks. A seam an older save already painted onto paving is left as
+  it is, not repainted.
 - **How it reads at eye level.** Three layers, all made once or instanced:
   - the core, in the ore's slot, recoloured dark in the ore's colour
     (`SEAM_COLOUR`);

@@ -435,6 +435,37 @@ mf.clearAll()
 tick(10)
 check("a gas body has no rock on it", mf.sources == 0, mf.sources)
 
+-- A vein's paint never lands on the base: a seam running east along z = 0
+-- (up = +y) from x = -14 to x = +6 (with a step on the surface), the base's
+-- paving everything at x > 0. No planned ball may reach x > 0 over the radius
+-- it shows at (a slot ball its radius, a colour ball 0.7 of it; the plan
+-- samples eight points round each ball, so 0.93 of that), and the half of the
+-- seam well clear of the paving is still painted.
+do
+  local g = {}
+  for k = 0, 20 do
+    g[#g + 1] = { -14 + k, 0, 0, w = 2.0, ux = 0, uy = 1, uz = 0 }
+  end
+  local paving = function(x, y, z) return x > 0 end
+  local plan = mf.seamPlan("iron", g, 27, paving)
+  local worst, tex, col, west = -1e9, 0, 0, 0
+  for _, o in ipairs(plan) do
+    local shows = (o.op == "tex" and o.r or o.r * 0.7) * math.cos(math.pi / 8)
+    worst = math.max(worst, o.x + shows)
+    if o.op == "tex" then tex = tex + 1 else col = col + 1 end
+    if o.op == "tex" and o.x < -8 then west = west + 1 end
+  end
+  check("a seam's paint and stain stay off the base's paving", worst <= 1e-6, string.format("reaches x = %.2f", worst))
+  check("…while its ground clear of the paving is painted, slot and colour", west >= 8 and col > 10, tex .. " slot, " .. col .. " colour")
+  local open_plan = mf.seamPlan("iron", g, 27, nil)
+  check("…and with no base near it, the whole seam is painted", #open_plan > #plan and #open_plan == 21 * 3 + 6 + 21 + 42,
+    #open_plan .. " ops")
+  local recolour = mf.seamPlan("iron", g, nil, paving)
+  local any_tex = false
+  for _, o in ipairs(recolour) do if o.op == "tex" then any_tex = true end end
+  check("an older seam's stain adds colour only, never its slot again", not any_tex and #recolour > 0, #recolour .. " ops")
+end
+
 local bad = {}
 for _, c in ipairs(checks) do
   if not c.ok then bad[#bad + 1] = "  ✗ " .. c.desc .. (c.detail and ("   [" .. tostring(c.detail) .. "]") or "") end

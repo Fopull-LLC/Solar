@@ -962,16 +962,67 @@ end
 -- not at all (veinAt reads the same width).
 local function seam_r(q) return math.max(1.7, q.w * 1.1) end
 
--- The stain and the core's colour, over a seam already in the ground (colour
--- paints only: no slot, so a dug-out seam's tunnel walls are only tinted).
-local function vein_colour(v, g, body)
-  if not terrain.paint then return end
-  local col = SEAM_COLOUR[v.ore] or { 0.62, 0.62, 0.62 }
-  local st = STAIN_COLOUR[v.ore] or col
-  if v.ore == "crystal" then
+-- KEPT OFF THE BASE. A seam point, its stain and its outcrops never land on
+-- the base's paving, pad or lots (base_facilities `keepClear`, the same test
+-- the rocks and the float use). A ball is dropped when its centre or any of
+-- eight points round it, at the radius it shows over, is kept clear: the
+-- slot paint is hard-edged (its whole radius), a colour paint shows over
+-- about 0.4 of its radius (0.7 tested, for margin).
+local COLOUR_SHOWS = 0.7
+local function ball_clear(x, y, z, ux, uy, uz, r, clear)
+  if clear(x, y, z) then return false end
+  local ax, ay, az = 1, 0, 0
+  if math.abs(ux) > 0.9 then ax, ay = 0, 1 end
+  local ad = ax * ux + ay * uy + az * uz
+  local tx, ty, tz = ax - ux * ad, ay - uy * ad, az - uz * ad
+  local tl = len(tx, ty, tz)
+  tx, ty, tz = tx / tl, ty / tl, tz / tl
+  local bx, by, bz = uy * tz - uz * ty, uz * tx - ux * tz, ux * ty - uy * tx
+  for k = 0, 7 do
+    local a = k * math.pi / 4
+    local c, sn = math.cos(a) * r, math.sin(a) * r
+    if clear(x + tx * c + bx * sn, y + ty * c + by * sn, z + tz * c + bz * sn) then return false end
+  end
+  return true
+end
+
+-- THE SEAM'S PAINT, AS A PLAN: the ops that lay seam `ore` along ground points
+-- `g` (body-relative, with up ux/uy/uz and width w), in order, each one
+-- { op = "tex"|"col", x, y, z (body-relative), r, slot | c = {r,g,b}, s }.
+-- `slot` nil plans the colour only (an older seam's stain). `clear(x,y,z)`
+-- → true where the ground is kept clear (the base). Pure: the smoke test
+-- reads it (tests/smoke_minerals.lua).
+function seamPlan(ore, g, slot, clear)
+  clear = clear or function() return false end
+  local out = {}
+  local function add(o)
+    local shows = o.op == "tex" and o.r or o.r * COLOUR_SHOWS
+    if ball_clear(o.x, o.y, o.z, o.ux, o.uy, o.uz, shows, clear) then
+      o.ux, o.uy, o.uz = nil, nil, nil
+      out[#out + 1] = o
+    end
+  end
+  local col = SEAM_COLOUR[ore] or { 0.62, 0.62, 0.62 }
+  local st = STAIN_COLOUR[ore] or col
+  if ore == "crystal" then
     local h = crystal_tone()
     col = { 0.4 + h[1] * 0.4, 0.4 + h[2] * 0.4, 0.4 + h[3] * 0.4 }
     st = { 0.5 + h[1] * 0.25, 0.5 + h[2] * 0.25, 0.5 + h[3] * 0.25 }
+  end
+  -- A paint of the slot alone keeps the ground's own tint colour (the slot
+  -- is the voxel's alpha byte, its RGB the colour the texture is tinted by),
+  -- so a hematite seam laid in red soil drew as red soil: the seam is
+  -- recoloured too, the ore's own colour in the core and a stain round it.
+  if slot then
+    for _, q in ipairs(g) do
+      local wd = q.w
+      -- the seam where it crops out (centred just under the ground, so its
+      -- whole width reaches the surface), and the lens under it
+      add({ op = "tex", x = q[1] - q.ux * 0.2, y = q[2] - q.uy * 0.2, z = q[3] - q.uz * 0.2, r = seam_r(q), slot = slot, ux = q.ux, uy = q.uy, uz = q.uz })
+      local bx, by, bz = q[1] - q.ux * wd * 1.5, q[2] - q.uy * wd * 1.5, q[3] - q.uz * wd * 1.5
+      add({ op = "tex", x = bx, y = by, z = bz, r = wd * 0.9, slot = slot, ux = q.ux, uy = q.uy, uz = q.uz })
+      if SEAM_COLOUR[ore] then add({ op = "col", x = bx, y = by, z = bz, r = wd * 0.9, c = col, s = 1.0, ux = q.ux, uy = q.uy, uz = q.uz }) end
+    end
   end
   -- The stain first, then the core. Brushes are soft (full only inside a
   -- third of the radius, smoothstep to the rim) and colour lives per voxel
@@ -988,20 +1039,26 @@ local function vein_colour(v, g, body)
     dx, dy, dz = dx / dl, dy / dl, dz / dl
     for j = 1, 3 do
       local t = 2.4 * j
-      terrain.paint(body.x + a[1] + dx * t, body.y + a[2] + dy * t, body.z + a[3] + dz * t, 5.0 - 0.5 * j,
-        st[1], st[2], st[3], 1.0 - 0.2 * j)
+      add({ op = "col", x = a[1] + dx * t, y = a[2] + dy * t, z = a[3] + dz * t, r = 5.0 - 0.5 * j, c = st, s = 1.0 - 0.2 * j, ux = a.ux, uy = a.uy, uz = a.uz })
     end
   end
   for _, q in ipairs(g) do
-    terrain.paint(body.x + q[1], body.y + q[2], body.z + q[3], seam_r(q) + 3.5, st[1], st[2], st[3], 1.0)
+    add({ op = "col", x = q[1], y = q[2], z = q[3], r = seam_r(q) + 3.5, c = st, s = 1.0, ux = q.ux, uy = q.uy, uz = q.uz })
   end
   -- the core twice over (a soft brush gives half its colour at the core's
   -- edge; two coats give three quarters)
   for _ = 1, 2 do
     for _, q in ipairs(g) do
-      local d = 0.2
-      terrain.paint(body.x + q[1] - q.ux * d, body.y + q[2] - q.uy * d, body.z + q[3] - q.uz * d, seam_r(q) * 2.0, col[1], col[2], col[3], 1.0)
+      add({ op = "col", x = q[1] - q.ux * 0.2, y = q[2] - q.uy * 0.2, z = q[3] - q.uz * 0.2, r = seam_r(q) * 2.0, c = col, s = 1.0, ux = q.ux, uy = q.uy, uz = q.uz })
     end
+  end
+  return out
+end
+
+local function seam_apply(plan, body)
+  for _, o in ipairs(plan) do
+    if o.op == "tex" then terrain.paintTexture(body.x + o.x, body.y + o.y, body.z + o.z, o.r, o.slot)
+    elseif terrain.paint then terrain.paint(body.x + o.x, body.y + o.y, body.z + o.z, o.r, o.c[1], o.c[2], o.c[3], o.s) end
   end
 end
 
@@ -1017,7 +1074,10 @@ local function vein_paint(p, v, body, R)
       local g = vein_ground(v, body, R)
       if not g then return false end
       if terrain.capacity and terrain.capacity() < #g * 3 + 40 then return false end
-      vein_colour(v, g, body)
+      -- (an existing seam's slot paint is left as it lies, even where an
+      -- older save laid it onto paving: only the stain and core colour are
+      -- added, and those are kept off the base)
+      seam_apply(seamPlan(v.ore, g, nil, kept_clear), body)
       rec.h = rec.h or {}
       rec.h[v.key] = 1
       vein_save(p.key)
@@ -1057,25 +1117,7 @@ local function vein_paint(p, v, body, R)
     os[tostring(slot)] = v.ore
     save.set("veinslots." .. cur_body, os)
   end
-  -- A paint of the slot alone keeps the ground's own tint colour (the slot
-  -- is the voxel's alpha byte, its RGB the colour the texture is tinted by),
-  -- so a hematite seam laid in red soil drew as red soil. The seam is
-  -- recoloured too (vein_colour): the ore's own colour in the core, and a
-  -- stain bled into the ground round it.
-  for _, q in ipairs(g) do
-    local wd = q.w
-    -- the seam where it crops out (centred just under the ground, so its
-    -- whole width reaches the surface), and the lens under it
-    local ax, ay, az = body.x + q[1] - q.ux * 0.2, body.y + q[2] - q.uy * 0.2, body.z + q[3] - q.uz * 0.2
-    local bx, by, bz = body.x + q[1] - q.ux * wd * 1.5, body.y + q[2] - q.uy * wd * 1.5, body.z + q[3] - q.uz * wd * 1.5
-    terrain.paintTexture(ax, ay, az, seam_r(q), slot)
-    terrain.paintTexture(bx, by, bz, wd * 0.9, slot)
-    if terrain.paint then
-      local col = SEAM_COLOUR[v.ore]
-      if col then terrain.paint(bx, by, bz, wd * 0.9, col[1], col[2], col[3], 1.0) end
-    end
-  end
-  vein_colour(v, g, body)
+  seam_apply(seamPlan(v.ore, g, slot, kept_clear), body)
   rec.p[v.key] = slot
   rec.h = rec.h or {}
   rec.h[v.key] = 1
@@ -1137,7 +1179,8 @@ local function outcrops_make(p, v, w, planet)
     local pz = q[3] + tz * ox + bz * oy - q.uz * sc * (L.sink or 0.3)
     local rec = { x = px, y = py, z = pz, s = sc, k = k }
     v.out[j] = rec
-    if not bit_on(taken, j) and outcrop_n < params.outcrop_max then
+    -- (none on the base's paving, pad or lots)
+    if not bit_on(taken, j) and outcrop_n < params.outcrop_max and ball_clear(px, py, pz, q.ux, q.uy, q.uz, sc, kept_clear) then
       outcrop_n = outcrop_n + 1
       local tilt = r:range(-0.35, 0.35)
       local fa = r:next() * math.pi * 2
@@ -1447,12 +1490,9 @@ function materialAt(x, y, z)
   local pk = pocket_at(x, y, z, 0.2)
   local depth = depthAt(x, y, z)
   if pk then return POCKET_MAT, depth, true end
-  -- (terrain.slotAt reads the physics copy of the ground, which a paint does
-  -- not refresh on engine 0.117.1 (docs/resources.md §2) —
-  -- so a painted seam is found by its geometry; the cut's payout, from
-  -- terrain.yields, does see the paint)
-  local v = veinAt(x, y, z, 0.2)
-  if v then return v.ore, depth, true end
+  -- The slot under the point, paint included (engine card 0602, 0.117.1
+  -- dev.1385+): a vein's slot is that vein's ore on this world (oreSlots),
+  -- the same answer the cut's payout reads from terrain.yields.
   local sl = terrain.slotAt(x, y, z)
   local m = slotMaterial(sl, space.dominant(x, y, z))
   return m, depth, mats.isOre and mats.isOre(m) or false
