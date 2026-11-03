@@ -1052,10 +1052,11 @@ CORE_BRUSH = nil
 -- weight there, and the palette's edge blend smooths the scatter. Half the
 -- ball full and a soft tail out to 1.25 times the old reach keeps the band's
 -- body where it was and breaks its stepped voxel squares into a ragged edge.
--- OFF for now: on 0.117.1-dev.1405 the scattered rim draws pale, hard-edged
--- patches (neither slot) where scattered voxels meet the ground's own slot
--- (tools/perf fellprobe vseam, seam_*_plan). Set it back when the engine's
--- blend over a scattered rim is fixed.
+-- OFF: tried on 0.117.1-dev.1405 (tools/perf fellprobe vseam, brush on vs
+-- off): the scatter breaks the band's rim into lone voxel squares standing
+-- out of the ground, which reads blockier than the plain hard edge, and the
+-- palette's edge blend doesn't soften a slot's square edge. Kept off until
+-- slot edges blend; the plumbing stays (`brush` on the tex ops).
 TEX_BRUSH = nil -- { hardness = 0.5, falloff = "soft" }
 TEX_REACH = 1.0 -- 1.25 with the brush
 

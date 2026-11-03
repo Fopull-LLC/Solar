@@ -713,7 +713,10 @@ local function run_vseam()
     local nb = 0
     for _, o in ipairs(plan) do
       local bb = home()
-      if o.op == "tex" then terrain.paintTexture(bb.x + o.x, bb.y + o.y, bb.z + o.z, o.r, o.slot)
+      if o.op == "tex" then
+        -- the plan's own texture brush (mineral_field TEX_BRUSH), as the game paints it
+        if o.brush then terrain.paintTexture(bb.x + o.x, bb.y + o.y, bb.z + o.z, o.r, o.slot, o.brush)
+        else terrain.paintTexture(bb.x + o.x, bb.y + o.y, bb.z + o.z, o.r, o.slot) end
       else
         local br = var[2](o)
         if br then nb = nb + 1; terrain.paint(bb.x + o.x, bb.y + o.y, bb.z + o.z, o.r * var[3], o.c[1], o.c[2], o.c[3], o.s, br)
