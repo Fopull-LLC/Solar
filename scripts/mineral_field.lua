@@ -83,11 +83,19 @@ defaults = {
   pocket_hint = 35.0,
 
   --@header Ore veins
-  -- Ore lies in VEINS: seams painted into the ground in the ore's own texture,
-  -- with outcrops of it standing out of the seam, a few per patch (see "ore
-  -- veins"). Veins per patch, on average (0 = none).
-  --@range 0 8
-  vein_rate = 2.2,
+  -- Ore lies in VEINS running through the rock, most of them BURIED: you find
+  -- them by digging or caving, and only some of the common ores crop out at
+  -- the surface with outcrops (see "ore veins"). Veins per patch, on average,
+  -- buried and surfaced together (0 = none).
+  --@range 0 16
+  vein_rate = 6.0,
+  -- The share of veins that crop out at the surface (common ores only).
+  --@range 0 1
+  vein_surface = 0.2,
+  -- A buried vein's walls are painted where a cave or a tunnel already opens
+  -- onto it when you come this near (only ground near an open face takes paint).
+  --@range 10 120 --@units m
+  vein_cave = 45.0,
   -- A vein is painted into the ground when you come this near it (the paint
   -- is a terrain edit, kept in the save: only veins someone came near cost
   -- anything).
@@ -805,10 +813,12 @@ end
 -- stays broken (the same record). Every point is body-relative: the planet
 -- moves metres a tick (docs/positions-and-frames.md).
 
-local VEIN_V = 1
+local VEIN_V = 2
 -- vein_saved: patch key → { p = { v<i> = slot painted }, t = { v<i> = outcrops taken (bits) },
 --                          h = { v<i> = 1 once the stain is painted } }
 
+-- (v2: veins mostly buried and per-world ores. A v1 save's seams stay in
+-- the ground as they were painted, and still pay by their slot, oreSlots.)
 local function vein_key(pk) return string.format("veins%d.%s.%s", VEIN_V, cur_body or "?", pk) end
 local function vein_rec(pk)
   local r = vein_saved[pk]
@@ -837,31 +847,56 @@ local OUT_LOOK = {
   uranium  = { model = "models/flora/rock_crystal_l0.gltf", c = { 0.22, 0.27, 0.12 }, e = { 0.45, 0.85, 0.2 }, glow = 0.35, s = { 0.3, 0.6 }, sink = 0.25, cluster = true },
 }
 
+-- An ore's look: materials.ORE[ore].look first (every ore, home and
+-- off-world, keeps its look with its registry entry), these tables after.
+local function look_of(ore)
+  local m = ref("materials")
+  return m and m.oreLook and m.oreLook(ore) or nil
+end
+local function out_look(ore)
+  local l = look_of(ore)
+  return (l and l.out) or OUT_LOOK[ore] or OUT_LOOK.copper
+end
+
 -- The world's veins in a patch: { i, key, ore, pts (unit-sphere points with a
--- width w), seed } — laid out once per patch, a pure function of the seed.
+-- width w and a depth dk under the ground), depth, buried, seed } — laid out
+-- once per patch, a pure function of the seed. Most are buried (depth > 0):
+-- they run through the rock, dipping along their strike, and are found by
+-- digging or caving. `vein_surface` of them crop out, and only ores that do
+-- (materials.ORE surface) — the common ones. Rarer ores lie deeper
+-- (materials.pickVeinOre). Which ores at all is the world's own makeup
+-- (materials.bodyOres).
 local function veins_of(p, w, R)
   if p.veins then return p.veins end
   local out = {}
   p.veins = out
   local mats = ref("materials")
-  if not (mats and mats.veinOres) or params.vein_rate <= 0 then return out end
-  local ores, total = mats.veinOres(w.kind or "barren")
+  if not (mats and mats.bodyOres and mats.pickVeinOre) or params.vein_rate <= 0 then return out end
+  local ores, total = mats.bodyOres(cur_body, w.kind or "barren")
   if not total or total <= 0 then return out end
-  local r = rng(hash(w.seed or 1, p.face, p.sgn + 2, p.i + 70000, p.j + 70000, 9173))
+  local r = rng(hash(w.seed or 1, p.face, p.sgn + 2, p.i + 70000, p.j + 70000, 9173 + VEIN_V))
   local n = math.floor(params.vein_rate * (0.35 + 1.3 * r:next()) + 0.5)
   for vi = 1, n do
     local x = (r:next() * 2 - 1) * p.half * 0.85
     local z = (r:next() * 2 - 1) * p.half * 0.85
-    local pick, ore = r:next() * total, ores[#ores].mat
-    for _, o in ipairs(ores) do
-      pick = pick - o.w
-      if pick <= 0 then ore = o.mat break end
+    -- surfaced or buried, then the ore that fits that depth
+    local depth = 0
+    if r:next() >= params.vein_surface then depth = 4 + 42 * r:next() ^ 1.4 end
+    local ore = mats.pickVeinOre(ores, depth, r:next())
+    if not ore and depth <= 0 then
+      depth = 4 + 20 * r:next()
+      ore = mats.pickVeinOre(ores, depth, r:next())
     end
-    local gem = OUT_LOOK[ore] and OUT_LOOK[ore].cluster
-    local L = gem and r:range(3.0, 5.5) or r:range(6.0, 15.0)
+    ore = ore or "iron"
+    local gem = out_look(ore).cluster
+    local buried = depth > 0
+    local L = buried and r:range(10.0, 26.0) or (gem and r:range(3.0, 5.5) or r:range(6.0, 15.0))
     -- (wide enough to read on ground meshed at 1.5–2.4 m voxels: a seam
     -- narrower than a voxel or two never shows on the surface)
-    local wd = gem and r:range(1.6, 2.1) or r:range(1.6, 2.6)
+    local wd = buried and r:range(1.8, 3.0) or (gem and r:range(1.6, 2.1) or r:range(1.6, 2.6))
+    -- a buried vein dips along its strike (so one end may lie much nearer the
+    -- surface than the other), never closer than 3 m under the ground
+    local dip = buried and r:range(-0.5, 0.5) or 0
     local ang = r:next() * math.pi * 2
     local ca, sa = math.cos(ang), math.sin(ang)
     local K = math.max(3, math.ceil(L / 1.1) + 1)
@@ -876,14 +911,16 @@ local function veins_of(p, w, R)
       local pz = p.cz + p.ex[3] * lx + p.ez[3] * lz
       local l = len(px, py, pz)
       local taper = 1 - 0.45 * math.abs(k / (K - 1) - 0.5) * 2
-      pts[#pts + 1] = { px / l, py / l, pz / l, w = wd * taper * (0.8 + 0.4 * r:next()), lx = lx, lz = lz }
+      local dk = buried and math.max(3.0, depth + dip * t) or 0
+      pts[#pts + 1] = { px / l, py / l, pz / l, w = wd * taper * (0.8 + 0.4 * r:next()), lx = lx, lz = lz, dk = dk }
     end
     local c = pts[math.ceil(K / 2)]
     local f2, g2, u2, v2 = project(c[1] * R, c[2] * R, c[3] * R, R)
     local seed = r:int(1, 999983)
     if f2 == p.face and g2 == p.sgn and math.floor(u2 / p.P) == p.i and math.floor(v2 / p.P) == p.j
        and not kept_clear(c[1] * R, c[2] * R, c[3] * R) then
-      out[#out + 1] = { i = vi, key = "v" .. vi, ore = ore, pts = pts, len = L, width = wd, seed = seed, lx = x, lz = z }
+      out[#out + 1] = { i = vi, key = "v" .. vi, ore = ore, pts = pts, len = L, width = wd, seed = seed, lx = x, lz = z,
+                        depth = depth, buried = buried }
     end
   end
   return out
@@ -903,6 +940,18 @@ local function vein_ground(v, body, R)
     g[k] = { h.pos.x - body.x, h.pos.y - body.y, h.pos.z - body.z, w = q.w, ux = q[1], uy = q[2], uz = q[3] }
   end
   v.g = g
+  -- the vein's own line: the ground's for a seam that crops out, `dk` under
+  -- it for a buried one
+  if v.buried then
+    local b = {}
+    for k, q in ipairs(g) do
+      local d = v.pts[k].dk or 0
+      b[k] = { q[1] - q.ux * d, q[2] - q.uy * d, q[3] - q.uz * d, w = q.w, ux = q.ux, uy = q.uy, uz = q.uz, dk = d }
+    end
+    v.b = b
+  else
+    v.b = g
+  end
   return g
 end
 
@@ -992,8 +1041,9 @@ end
 -- `slot` nil plans the colour only (an older seam's stain). `clear(x,y,z)`
 -- → true where the ground is kept clear (the base). Pure: the smoke test
 -- reads it (tests/smoke_minerals.lua).
-function seamPlan(ore, g, slot, clear)
+function seamPlan(ore, g, slot, clear, opts)
   clear = clear or function() return false end
+  opts = opts or {}
   local out = {}
   local function add(o)
     local shows = o.op == "tex" and o.r or o.r * COLOUR_SHOWS
@@ -1002,8 +1052,9 @@ function seamPlan(ore, g, slot, clear)
       out[#out + 1] = o
     end
   end
-  local col = SEAM_COLOUR[ore] or { 0.62, 0.62, 0.62 }
-  local st = STAIN_COLOUR[ore] or col
+  local lk = look_of(ore) or {}
+  local col = lk.seam or SEAM_COLOUR[ore] or { 0.62, 0.62, 0.62 }
+  local st = lk.stain or STAIN_COLOUR[ore] or col
   if ore == "crystal" then
     local h = crystal_tone()
     col = { 0.4 + h[1] * 0.4, 0.4 + h[2] * 0.4, 0.4 + h[3] * 0.4 }
@@ -1018,10 +1069,13 @@ function seamPlan(ore, g, slot, clear)
       local wd = q.w
       -- the seam where it crops out (centred just under the ground, so its
       -- whole width reaches the surface), and the lens under it
-      add({ op = "tex", x = q[1] - q.ux * 0.2, y = q[2] - q.uy * 0.2, z = q[3] - q.uz * 0.2, r = seam_r(q), slot = slot, ux = q.ux, uy = q.uy, uz = q.uz })
-      local bx, by, bz = q[1] - q.ux * wd * 1.5, q[2] - q.uy * wd * 1.5, q[3] - q.uz * wd * 1.5
+      -- (a buried vein's line is its middle: the core round it, the lens
+      -- reaching a width under it)
+      local up0, lens = opts.buried and 0 or 0.2, opts.buried and 0.9 or 1.5
+      add({ op = "tex", x = q[1] - q.ux * up0, y = q[2] - q.uy * up0, z = q[3] - q.uz * up0, r = seam_r(q), slot = slot, ux = q.ux, uy = q.uy, uz = q.uz })
+      local bx, by, bz = q[1] - q.ux * wd * lens, q[2] - q.uy * wd * lens, q[3] - q.uz * wd * lens
       add({ op = "tex", x = bx, y = by, z = bz, r = wd * 0.9, slot = slot, ux = q.ux, uy = q.uy, uz = q.uz })
-      if SEAM_COLOUR[ore] then add({ op = "col", x = bx, y = by, z = bz, r = wd * 0.9, c = col, s = 1.0, ux = q.ux, uy = q.uy, uz = q.uz }) end
+      if lk.seam or SEAM_COLOUR[ore] then add({ op = "col", x = bx, y = by, z = bz, r = wd * 0.9, c = col, s = 1.0, ux = q.ux, uy = q.uy, uz = q.uz }) end
     end
   end
   -- The stain first, then the core. Brushes are soft (full only inside a
@@ -1032,7 +1086,7 @@ function seamPlan(ore, g, slot, clear)
   -- The stain trails on past each end, along the strike: three balls, fading,
   -- so it reads as a streak along the seam's line, not a round patch.
   local n = #g
-  for e = 1, (n >= 2 and 2 or 0) do
+  for e = 1, ((n >= 2 and opts.trail ~= false) and 2 or 0) do
     local a, b = (e == 1) and g[1] or g[n], (e == 1) and g[2] or g[n - 1]
     local dx, dy, dz = a[1] - b[1], a[2] - b[2], a[3] - b[3]
     local dl = math.max(0.3, len(dx, dy, dz))
@@ -1062,74 +1116,102 @@ local function seam_apply(plan, body)
   end
 end
 
--- Paint the seam into the ground, once (the save says so). → true when done.
--- A seam painted before the stain existed (`p` but no `h` in its record) gets
--- the stain and the new core colour once, colour only.
-local function vein_paint(p, v, body, R)
+-- The slot a vein is painted in on this world, chosen once (the save says
+-- so): the first of the ore's slots (materials.VEIN_SLOTS) that the world's
+-- own ground does not use and no other ore has taken. -1 when every one is
+-- the world's ground: the vein still pays by its geometry (veinAt), its
+-- outcrops still stand, it is just not painted. → the slot, or nil (not yet).
+local function vein_slot(p, v, body, R)
   local rec = vein_rec(p.key)
-  if rec.p[v.key] then
-    local sl = rec.p[v.key]
-    if sl > 0 and not (rec.h and rec.h[v.key]) then
-      -- (v.slot stays unset until this is done: veins_tick asks again)
-      local g = vein_ground(v, body, R)
-      if not g then return false end
-      if terrain.capacity and terrain.capacity() < #g * 3 + 40 then return false end
-      -- (an existing seam's slot paint is left as it lies, even where an
-      -- older save laid it onto paving: only the stain and core colour are
-      -- added, and those are kept off the base)
-      seam_apply(seamPlan(v.ore, g, nil, kept_clear), body)
-      rec.h = rec.h or {}
-      rec.h[v.key] = 1
-      vein_save(p.key)
-    end
-    v.slot = sl
-    return true
-  end
-  if not (terrain.paintTexture and terrain.slotAt) then return false end
+  if rec.p[v.key] then return rec.p[v.key] end
+  if not terrain.slotAt then return nil end
   local mats = ref("materials")
   local slots = mats and mats.VEIN_SLOTS and mats.VEIN_SLOTS[v.ore]
-  if not slots then return false end
+  if not slots then rec.p[v.key] = -1; vein_save(p.key); return -1 end
   local g = vein_ground(v, body, R)
-  if not g then return false end
-  if terrain.capacity and terrain.capacity() < #g * 7 + 40 then return false end
-  local c = g[math.ceil(#g / 2)]
+  if not g then return nil end
+  local c = v.b[math.ceil(#v.b / 2)]
   local cl = ref("climate")
   local reserved = world_reserved(cl and cl.worldOf and cl.worldOf(cur_body))
-  for _, dd in ipairs({ 0.8, 3.0, 6.0 }) do
+  for _, dd in ipairs({ -3.0, 0.8, 3.0, 6.0 }) do
     local h = terrain.slotAt(body.x + c[1] - c.ux * dd, body.y + c[2] - c.uy * dd, body.z + c[3] - c.uz * dd)
     if h then reserved[h] = true end
   end
   local os = oreSlots(cur_body)
-  local slot = nil
+  local slot = -1
   for _, sl in ipairs(slots) do
     local taken = os[tostring(sl)]
     if taken == v.ore or (not taken and not reserved[sl]) then slot = sl break end
   end
-  if not slot then
-    -- every slot this ore could wear is the world's own ground: the vein is
-    -- not painted (its outcrops still stand, and break for ore; its float lies)
-    rec.p[v.key] = -1
-    vein_save(p.key)
-    v.slot = -1
-    return true
-  end
-  if not os[tostring(slot)] then
+  if slot > 0 and not os[tostring(slot)] then
     os[tostring(slot)] = v.ore
     save.set("veinslots." .. cur_body, os)
   end
-  seam_apply(seamPlan(v.ore, g, slot, kept_clear), body)
   rec.p[v.key] = slot
+  vein_save(p.key)
+  return slot
+end
+
+-- Only ground near an open face takes paint, and asking the engine to paint
+-- a ball buried in solid rock still makes it build that rock's voxels: a
+-- buried vein's balls are kept only where a face (a cave, a tunnel, the
+-- surface) comes within the ball (terrain.query, the distance to it).
+local function near_face(plan, body)
+  if not terrain.query then return plan end
+  local out = {}
+  for _, o in ipairs(plan) do
+    local d = terrain.query(body.x + o.x, body.y + o.y, body.z + o.z)
+    if d and math.abs(d) <= o.r then out[#out + 1] = o end
+  end
+  return out
+end
+
+-- Paint a seam that crops out, once, when someone comes near (the save says
+-- so: `h`). → true when done.
+local function vein_paint(p, v, body, R)
+  local slot = vein_slot(p, v, body, R)
+  if not slot then return false end
+  v.slot = slot
+  local rec = vein_rec(p.key)
+  if rec.h and rec.h[v.key] then return true end
+  local g = vein_ground(v, body, R)
+  if not g then return false end
+  if slot > 0 then
+    if not terrain.paintTexture then return false end
+    if terrain.capacity and terrain.capacity() < #g * 7 + 40 then return false end
+    seam_apply(seamPlan(v.ore, g, slot, kept_clear), body)
+    veinsPainted = (veinsPainted or 0) + 1
+  end
   rec.h = rec.h or {}
   rec.h[v.key] = 1
   vein_save(p.key)
-  v.slot = slot
-  veinsPainted = (veinsPainted or 0) + 1
   return true
 end
 
+-- A buried vein's walls where something has opened onto it: a cave it runs
+-- through, a tunnel dug into it. `near` (body-relative point, radius)
+-- narrows it to the line's points within reach of a cut. No trailing stain;
+-- only balls an open face reaches (near_face). Repainting a wall that is
+-- inside the vein is right: that rock IS the vein.
+local function vein_reveal(v, body, near)
+  if not (v.b and v.slot and v.slot > 0 and terrain.paintTexture) then return 0 end
+  local pts = v.b
+  if near then
+    pts = {}
+    for _, q in ipairs(v.b) do
+      if len(q[1] - near[1], q[2] - near[2], q[3] - near[3]) <= near[4] + seam_r(q) then pts[#pts + 1] = q end
+    end
+    if #pts == 0 then return 0 end
+  end
+  local plan = near_face(seamPlan(v.ore, pts, v.slot, kept_clear, { trail = false, buried = v.buried }), body)
+  if terrain.capacity and terrain.capacity() < #plan + 40 then return 0 end
+  seam_apply(plan, body)
+  return #plan
+end
+
 local function outcrop_look(n, ore, w)
-  local L = OUT_LOOK[ore] or OUT_LOOK.copper
-  local c, e = L.c, L.e
+  local L = out_look(ore)
+  local c, e = L.c or { 0.5, 0.5, 0.5 }, L.e
   if ore == "crystal" then
     if not crystal_hue then
       local r = rng(((w and w.seed or 1) % 1000003) + 313)
@@ -1151,7 +1233,7 @@ end
 
 -- Make a vein's outcrops (the ones not broken yet).
 local function outcrops_make(p, v, w, planet)
-  local L = OUT_LOOK[v.ore] or OUT_LOOK.copper
+  local L = out_look(v.ore)
   local g = v.g
   if not g or v.out then return end
   v.out = {}
@@ -1226,7 +1308,7 @@ local FLOAT_COLOUR = {
 local function float_make(p, v, w, R)
   if v.float or params.vein_float <= 0 or not (scatter and scatter.create and p.node and p.node.valid) then return end
   v.float = {}
-  local L = OUT_LOOK[v.ore] or OUT_LOOK.copper
+  local L = out_look(v.ore)
   local half = v.len * 0.5 + 4.5
   local rows = math.max(8, math.min(24, math.ceil(half * 2 / 1.0) + 1))
   -- the grid: distance from each cell to the seam's line (patch-local), soft
@@ -1256,7 +1338,8 @@ local function float_make(p, v, w, R)
     end
   end
   -- the bits' colour: the ore's, a fifth toward the world's rock
-  local c = FLOAT_COLOUR[v.ore] or L.c
+  local lk = look_of(v.ore)
+  local c = (lk and lk.float) or FLOAT_COLOUR[v.ore] or L.c or { 0.5, 0.5, 0.5 }
   local e = L.e
   if v.ore == "crystal" then
     local h = crystal_tone()
@@ -1311,14 +1394,29 @@ end
 local function veins_tick(w, R, body, planet, rx, ry, rz)
   if params.vein_rate <= 0 then return end
   w_seed = w.seed
-  local grounds = 1
+  local grounds, reveals = 1, 1
   for _, p in pairs(patches) do
     local pd = p.dist or patch_dist(p, rx, ry, rz)
     if pd <= params.vein_show + 20 then
       for _, v in ipairs(veins_of(p, w, R)) do
         local c = v.pts[math.ceil(#v.pts / 2)]
         local d = len(c[1] * R - rx, c[2] * R - ry, c[3] * R - rz)
-        if d <= params.vein_show then
+        if v.buried then
+          -- nothing stands over a buried vein: its slot is chosen, and its
+          -- walls painted where a cave already opens onto it, as you come near
+          local reach = params.vein_cave + v.len * 0.5
+          if d <= reach then
+            if not v.g and grounds > 0 then grounds = grounds - 1; vein_ground(v, body, R) end
+            if v.g and not v.slot then v.slot = vein_slot(p, v, body, R) end
+            if v.slot and not v.caved and reveals > 0 then
+              reveals = reveals - 1
+              v.caved = true
+              vein_reveal(v, body, nil)
+            end
+          elseif v.caved and d > reach + 30 then
+            v.caved = nil
+          end
+        elseif d <= params.vein_show then
           if not v.g and grounds > 0 then grounds = grounds - 1; vein_ground(v, body, R) end
           if v.g and d <= params.vein_paint and not v.slot then vein_paint(p, v, body, R) end
           if v.g and not v.out then outcrops_make(p, v, w, planet) end
@@ -1343,8 +1441,11 @@ local function veins_tick(w, R, body, planet, rx, ry, rz)
   end
 end
 
--- The vein (painted) a WORLD point lies in, or nil: { ore, slot, patch, v }.
--- Inside means within the seam's width of its line, down to the lens's foot.
+-- The vein a WORLD point lies in, or nil: { ore, slot, patch, vein, k }.
+-- A seam that crops out: within its width of its line, down to the lens's
+-- foot. A buried one: within its width of its line across, and about a width
+-- above and below it. Painted or not (a buried vein's rock is ore before a
+-- cut opens it: the laser's reticle reads it here, the payout too).
 function veinAt(x, y, z, slack)
   local body = cur_body and space.body(cur_body)
   if not body then return nil end
@@ -1353,17 +1454,19 @@ function veinAt(x, y, z, slack)
   for _, p in pairs(patches) do
     if p.veins and patch_dist(p, rx, ry, rz) <= 20 then
       for _, v in ipairs(p.veins) do
-        local g = v.g
-        if g and v.slot and v.slot > 0 then
+        local g = v.b
+        if g and v.slot then
+          local top, foot = 0.6, 2.4
+          if v.buried then top, foot = 1.2, 1.8 end
           for k = 1, #g do
             local q = g[k]
-            -- the line a little down, as the lens is: a ball round each point
-            -- stretched down the radial
+            -- the line (a little down, as the lens is): a ball round each
+            -- point stretched down the radial
             local dx, dy, dz = rx - q[1], ry - q[2], rz - q[3]
             local du = dx * q.ux + dy * q.uy + dz * q.uz
             local hx, hy, hz = dx - q.ux * du, dy - q.uy * du, dz - q.uz * du
             local hd = len(hx, hy, hz)
-            if hd <= seam_r(q) + slack and du <= q.w * 0.6 + slack and du >= -(q.w * 2.4 + slack) then
+            if hd <= seam_r(q) + slack and du <= q.w * top + slack and du >= -(q.w * foot + slack) then
               return { ore = v.ore, slot = v.slot, patch = p.key, vein = v, k = k }
             end
           end
@@ -1394,7 +1497,8 @@ local function outcrop_near(x, y, z, r)
 end
 
 -- The veins near a WORLD point, for probes and the survey readout:
--- { { ore, slot, painted, x, y, z (world, the seam's middle), len, out = n standing } }.
+-- { { ore, slot, painted, x, y, z (world, the vein line's middle: under the
+-- ground for a buried one), len, out = n standing, buried, depth } }.
 function veinsNear(x, y, z, radius)
   local out = {}
   local body = cur_body and space.body(cur_body)
@@ -1403,13 +1507,14 @@ function veinsNear(x, y, z, radius)
   for _, p in pairs(patches) do
     if p.veins and patch_dist(p, rx, ry, rz) <= radius then
       for _, v in ipairs(p.veins) do
-        local g = v.g
+        local g = v.b
         local c = g and g[math.ceil(#g / 2)]
         if c and len(c[1] - rx, c[2] - ry, c[3] - rz) <= radius then
           local n = 0
           for _, rec in pairs(v.out or {}) do if rec.n and not rec.gone then n = n + 1 end end
           out[#out + 1] = { ore = v.ore, slot = v.slot, painted = v.slot ~= nil, x = body.x + c[1], y = body.y + c[2],
                             z = body.z + c[3], ux = c.ux, uy = c.uy, uz = c.uz, len = v.len, width = v.width, out = n,
+                            buried = v.buried == true, depth = c.dk or 0,
                             sx = g[#g][1] - g[1][1], sy = g[#g][2] - g[1][2], sz = g[#g][3] - g[1][3],
                             d = len(c[1] - rx, c[2] - ry, c[3] - rz) }
         end
@@ -1418,6 +1523,24 @@ function veinsNear(x, y, z, radius)
   end
   table.sort(out, function(a, b) return a.d < b.d end)
   return out
+end
+
+-- Every vein laid out in the patches near you, read or not (probes, the
+-- survey): { total, buried, surfaced, ores = { [ore] = n }, list = { { ore,
+-- buried, depth, len, dir = { x, y, z } (unit, body frame, its middle) } } }.
+function veinCensus()
+  local c = { total = 0, buried = 0, surfaced = 0, ores = {}, list = {} }
+  for _, p in pairs(patches) do
+    for _, v in ipairs(p.veins or {}) do
+      c.total = c.total + 1
+      if v.buried then c.buried = c.buried + 1 else c.surfaced = c.surfaced + 1 end
+      c.ores[v.ore] = (c.ores[v.ore] or 0) + 1
+      local m = v.pts[math.ceil(#v.pts / 2)]
+      c.list[#c.list + 1] = { ore = v.ore, buried = v.buried == true, depth = m.dk or 0, len = v.len,
+                              dir = { x = m[1], y = m[2], z = m[3] } }
+    end
+  end
+  return c
 end
 
 -- ── what a cut removed ──────────────────────────────────────────────────────
@@ -1495,6 +1618,12 @@ function materialAt(x, y, z)
   -- the same answer the cut's payout reads from terrain.yields.
   local sl = terrain.slotAt(x, y, z)
   local m = slotMaterial(sl, space.dominant(x, y, z))
+  if not (mats.isOre and mats.isOre(m)) then
+    -- rock a buried vein runs through reads as its ore before any cut has
+    -- opened it (there is no paint inside solid rock)
+    local v = veinAt(x, y, z, 0.2)
+    if v then return v.ore, depth, true end
+  end
   return m, depth, mats.isOre and mats.isOre(m) or false
 end
 
@@ -1543,6 +1672,27 @@ local function pay(d, y)
       got[m] = (got[m] or 0) + vol
     end
     if (y.untextured or 0) > 0 then got.regolith = (got.regolith or 0) + y.untextured end
+    -- A cut into a vein's rock: the plain rock it took out there was the
+    -- vein's ore (a buried vein is not painted before the cut opens it), all
+    -- of it inside the core, half of it at the edge. What was already
+    -- painted is paid by its slot above. Then the walls the cut opened are
+    -- painted, so the next bite (and the eye) sees the seam.
+    local hit = veinAt(wx, wy, wz, 0.8)
+    if hit and d.body == cur_body then
+      local inner = veinAt(wx, wy, wz, -0.4) ~= nil
+      local f = inner and 1.0 or 0.5
+      for m, vol in pairs(got) do
+        if mats.grade(m) == "bulk" then
+          got[m] = vol * (1 - f)
+          got[hit.ore] = (got[hit.ore] or 0) + vol * f
+        end
+      end
+      local v = hit.vein
+      if (v.revealT or 0) <= time then
+        v.revealT = time + 0.4
+        vein_reveal(v, b, { d.x, d.y, d.z, 2.5 })
+      end
+    end
   end
   local depth = nil
   yieldStats.reports = yieldStats.reports + 1
@@ -1565,6 +1715,7 @@ local function pay(d, y)
       else
         took = inv.add(d.cid, m, n)
       end
+      if took > 0 and mats.isOre(m) and mats.noteOrigin then mats.noteOrigin(m, d.body) end
       if mats.isOre(m) or m == POCKET_MAT then depth = depth or depth_of(b, d.x, d.y, d.z) end
       -- STAR GEODES (missions.geodeFind): only resonant crystal out of the
       -- deep rock — a geode pocket, or the generator's crystal deposits under
@@ -1586,6 +1737,7 @@ local function pay(d, y)
   local p, v, j, rec = outcrop_near(wx, wy, wz, 1.0)
   if p then
     local took = inv.add(d.cid, v.ore, 2)
+    if took > 0 and mats.noteOrigin then mats.noteOrigin(v.ore, d.body) end
     if took > 0 then
       local vr = vein_rec(p.key)
       local mask = vr.t[v.key] or 0
@@ -1648,7 +1800,8 @@ local function loose_live(e) return e.n and e.n.valid and e.n.name == e.name end
 function adoptBody(n, pf, mat, qty, scale)
   if not (n and n.valid ~= false and pf and mat) then return end
   local mats = ref("materials")
-  if mats and mats.tagResource then mats.tagResource(n, mat, qty) end
+  -- (where it came from: the world it was cut or picked up on)
+  if mats and mats.tagResource then mats.tagResource(n, mat, qty, nil, cur_body) end
   for _, e in ipairs(loose) do if e.n == n and e.name == n.name then e.mat, e.qty = mat, qty return end end
   loose[#loose + 1] = { n = n, name = n.name, pf = pf, mat = mat, qty = qty or 1, s = scale }
   while #loose > LOOSE_MAX do

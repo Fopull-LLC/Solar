@@ -16,6 +16,13 @@
 --           player sees it: standing 3 m, 9 m and 25 m off, looking at the
 --           seam's middle, and from 20 m up and 12 m back. How readable the
 --           seam is at eye level (vlook_<k>_<ore>_{3m,9m,25m,up}.png).
+--   vshaft  a new world: every body's ores (materials.bodyOres: the home
+--           world's against its moons' and planets'); veins counted on rings
+--           out from the base, surfaced against buried; then a buried vein
+--           5–14 m down is cut into with an open trench (terrain.dig with
+--           trackDig, as the laser does), what each cut paid by depth, the
+--           reticle's answer on the vein before it was opened, and pictures
+--           of the vein exposed in the trench wall (shaft_*.png).
 --   vbush   a new world: a bush or shrub found, the crew walked into it (the
 --           touch-bend swap): the bend nodes' materials and pictures before,
 --           bent, and after it springs back.
@@ -647,6 +654,221 @@ local function run_vpdiag()
   for _ = 1, 10 do V.place_cam(); yield() end
   V.place_cam = nil
   if cam and cam.valid then cam:destroy() end
+  V.result()
+end
+
+local function run_vshaft()
+  V.tag = "shaft"
+  local Cc = findScript("crew")
+  if Cc and Cc.setSafety then Cc.setSafety("invincible") end
+  wait(4)
+  local mf, mats, cl = findScript("mineral_field"), findScript("materials"), findScript("climate")
+  local hb = home()
+  -- 1. every body's ores
+  local sys = save.get("system.home")
+  local homeOres, offOres = {}, {}
+  for _, b in ipairs(sys and sys.bodies or {}) do
+    local t = mats.bodyTraits(b.name)
+    local l = mats.bodyOres(b.name)
+    local o = {}
+    for _, e in ipairs(l or {}) do o[#o + 1] = string.format("%s %.2f", e.mat, e.w) end
+    P("VP ores of %s (%s%s%s, %s, dense %.2f): %s", b.name, t and t.type or "?", t and t.home and ", HOME" or "",
+      t and t.moon and ", moon" or "", t and (t.airless and "airless" or "air") or "?", t and t.dense or 0, table.concat(o, ", "))
+    for _, e in ipairs(l or {}) do
+      if t and t.home then homeOres[e.mat] = true elseif t then offOres[e.mat] = (offOres[e.mat] or 0) + 1 end
+    end
+  end
+  local own = 0
+  for m in pairs(offOres) do if not homeOres[m] then own = own + 1 end end
+  V.check("the other bodies carry ores the home world does not", own >= 2, "%d ores found only off-world", own)
+  -- 2. veins round the base: surfaced against buried (every vein laid out in
+  -- the patches near the crew: mineral_field.veinCensus)
+  local u, t1, t2, R = base_frame()
+  local dir0 = dir_at(u, t1, 160, R)
+  stand_at({ dir = dir0, r = ground_r(hb, dir0.x, dir0.y, dir0.z, R + 150) })
+  wait(4)
+  local cen = mf.veinCensus()
+  local ol = {}
+  for m, n in pairs(cen.ores) do ol[#ol + 1] = m .. " " .. n end
+  P("VP veins laid out round the crew: %d (%d surfaced, %d buried); ores %s", cen.total, cen.surfaced, cen.buried, table.concat(ol, ", "))
+  V.check("most veins are buried, surface outcrops are few", cen.buried >= cen.surfaced * 2 and cen.total > 0, "%d buried, %d surfaced", cen.buried, cen.surfaced)
+  local deep = {}
+  for _, e in ipairs(cen.list) do
+    if e.buried then deep[#deep + 1] = string.format("%s %.0f m", e.ore, e.depth) end
+  end
+  P("VP buried veins: %s", table.concat(deep, ", "))
+  -- the buried vein to dig into: 5–14 m down, away from the base
+  local pick = nil
+  local bx, by, bz = save.get("base.x"), save.get("base.y"), save.get("base.z")
+  local bl = len(bx, by, bz)
+  local cands = {}
+  for _, e in ipairs(cen.list) do
+    local away = math.acos(math.max(-1, math.min(1, (e.dir.x * bx + e.dir.y * by + e.dir.z * bz) / bl))) * R
+    if e.buried and e.depth >= 5 and e.depth <= 14 and away > 120 then
+      e.near = math.acos(math.max(-1, math.min(1, e.dir.x * dir0.x + e.dir.y * dir0.y + e.dir.z * dir0.z))) * R
+      cands[#cands + 1] = e
+    end
+  end
+  table.sort(cands, function(a, b) return a.near < b.near end)
+  P("VP %d buried veins 5–14 m down, away from the base", #cands)
+  for ci, e in ipairs(cands) do
+    if not pick and ci <= 7 then
+      -- go over it first: the ground there streams in as you come
+      local hb2 = home()
+      local a = astro()
+      a.x, a.y, a.z = hb2.x + e.dir.x * (R + 40), hb2.y + e.dir.y * (R + 40), hb2.z + e.dir.z * (R + 40)
+      a.vx, a.vy, a.vz = 0, 0, 0
+      local gr = wait_for(function()
+        local h3 = home()
+        local aa = astro()
+        aa.x, aa.y, aa.z = h3.x + e.dir.x * (R + 40), h3.y + e.dir.y * (R + 40), h3.z + e.dir.z * (R + 40)
+        aa.vx, aa.vy, aa.vz = 0, 0, 0
+        return ground_r(h3, e.dir.x, e.dir.y, e.dir.z, R + 150)
+      end, 15, "the ground over the vein")
+      local sea = cl.seaRadius and cl.seaRadius(hb.name) or 0
+      P("VP candidate %s %.0f m down, %.0f m off: ground %s (sea %.0f)", e.ore, e.depth, e.near, tostring(gr and gr - R), sea - R)
+      -- (the trench's floor must stay above the sea, or water fills it)
+      if gr and gr > sea + e.depth + 2.5 then
+        stand_at({ dir = e.dir, r = gr })
+        local hit = wait_for(function()
+          local a = astro()
+          for _, v in ipairs(mf.veinsNear(a.x, a.y, a.z, 40)) do
+            if v.buried and v.ore == e.ore and v.slot then return v end
+          end
+        end, 12, "the buried vein read")
+        if hit then
+          local bb = home()
+          pick = { rel = { x = hit.x - bb.x, y = hit.y - bb.y, z = hit.z - bb.z }, ore = hit.ore, depth = hit.depth, width = hit.width,
+                   up = { x = hit.ux, y = hit.uy, z = hit.uz }, strike = { x = hit.sx, y = hit.sy, z = hit.sz }, slot = hit.slot }
+        end
+      end
+    end
+  end
+  V.check("a buried vein 5–14 m down to dig into", pick ~= nil, "%s", pick and string.format("%s %.1f m down, slot %s", pick.ore, pick.depth, tostring(pick.slot)) or "none")
+  if not pick then V.result() return end
+  -- 3. the reticle reads the vein's rock before anything opens it
+  local U = pick.up
+  local side = unit(cross(U, pick.strike))
+  local vw = MP.w(pick.rel)
+  local m0 = mf.materialAt(vw.x, vw.y, vw.z)
+  V.check("the reticle reads a buried vein's rock as its ore", m0 == pick.ore, "%s at the vein's middle", tostring(m0))
+  -- 4. an open trench down to it from 14 m across the strike, so daylight
+  -- reaches the wall: cuts of 3 m every 1.2 m along a ramp, then the floor
+  -- widened across the vein
+  local srel = { x = pick.rel.x + side.x * 14 + U.x * pick.depth, y = pick.rel.y + side.y * 14 + U.y * pick.depth, z = pick.rel.z + side.z * 14 + U.z * pick.depth }
+  local sg = MP.ground_at(srel) or srel
+  MP.stand_off(pick.rel, { x = -side.x, y = -side.y, z = -side.z }, 22.0)
+  wait(1.0)
+  local steps = 16
+  local paid_first = nil
+  for i = 0, steps + 3 do
+    local f = math.min(1, i / steps)
+    local over = math.max(0, i - steps) * 0.9
+    local px, py, pz = sg.x + (pick.rel.x - sg.x) * f, sg.y + (pick.rel.y - sg.y) * f, sg.z + (pick.rel.z - sg.z) * f
+    if i > steps then px, py, pz = pick.rel.x - side.x * over, pick.rel.y - side.y * over, pick.rel.z - side.z * over end
+    local s0 = MP.stats_copy()
+    for _, off in ipairs({ 0, 2.2, -2.2 }) do
+      local b = home()
+      local st = cross(U, side)
+      local wx, wy, wz = b.x + px + st.x * off, b.y + py + st.y * off, b.z + pz + st.z * off
+      local id = terrain.dig(wx, wy, wz, 3.0, 1.0)
+      mf.trackDig(id, wx, wy, wz, "astro")
+    end
+    wait(0.6)
+    local s1 = MP.stats_copy()
+    local parts = {}
+    for m, vol in pairs(s1.vol) do
+      local dv = vol - (s0.vol[m] or 0)
+      if dv > 0.05 then parts[#parts + 1] = string.format("%s %.1f", m, dv) end
+    end
+    local b = home()
+    local depth = mf.depthAt and mf.depthAt(b.x + px, b.y + py, b.z + pz) or -1
+    P("VP cut %d (%.1f m under the ground): %s", i, depth or -1, table.concat(parts, ", "))
+    if not paid_first and ((s1.vol[pick.ore] or 0) - (s0.vol[pick.ore] or 0)) > 0.05 then paid_first = { i = i, depth = depth } end
+  end
+  wait(2.0)
+  V.check("the trench reaches the vein and pays its ore", paid_first ~= nil, "%s", paid_first and string.format("first at cut %d, %.1f m down", paid_first.i, paid_first.depth or -1) or "never")
+  local a = astro()
+  local now = mf.veinsNear(a.x, a.y, a.z, 60)
+  local vw2 = MP.w(pick.rel)
+  P("VP after the trench: slotAt at the vein's middle %s; materialAt %s", tostring(terrain.slotAt(vw2.x, vw2.y, vw2.z)), tostring(mf.materialAt(vw2.x, vw2.y, vw2.z)))
+  -- 5. pictures: from the trench's rim and from its floor, looking at the cut wall
+  local Tw = MP.w(pick.rel)
+  local cam = V.fixed_cam(Tw, U, { x = -side.x, y = -side.y, z = -side.z }, 9.0, pick.depth + 4.0)
+  for _ = 1, 30 do V.place_cam(); yield() end
+  V.shot("rim", false, cam)
+  for _ = 1, 5 do V.place_cam(); yield() end
+  V.place_cam = nil
+  if cam and cam.valid then cam:destroy() end
+  cam = V.fixed_cam(MP.w(pick.rel), U, { x = -side.x, y = -side.y, z = -side.z }, 7.0, 1.5)
+  for _ = 1, 30 do V.place_cam(); yield() end
+  V.shot("wall", false, cam)
+  for _ = 1, 5 do V.place_cam(); yield() end
+  V.place_cam = nil
+  if cam and cam.valid then cam:destroy() end
+  local mats2 = findScript("materials")
+  P("VP research: %s from home %d, ilmenite from a moon %d (first %d)", pick.ore, mats2.researchValue(pick.ore, hb.name),
+    mats2.researchValue("ilmenite", "elsewhere"), mats2.researchValue("ilmenite", "elsewhere", true))
+  -- 6. a moon: the crew put down on it, its veins listed
+  local moon = nil
+  for _, b in ipairs(sys and sys.bodies or {}) do
+    if b.parent == hb.name and not moon then moon = b.name end
+  end
+  if not moon then
+    for _, b in ipairs(sys and sys.bodies or {}) do
+      local t = mats.bodyTraits(b.name)
+      if t and t.moon and not moon then moon = b.name end
+    end
+  end
+  if moon then
+    local mb = space.body(moon)
+    local dir = unit({ x = 0.3, y = 0.9, z = 0.2 })
+    local a = astro()
+    a.x, a.y, a.z = mb.x + dir.x * (mb.radius + 60), mb.y + dir.y * (mb.radius + 60), mb.z + dir.z * (mb.radius + 60)
+    a.vx, a.vy, a.vz = 0, 0, 0
+    local gr = wait_for(function()
+      local m = space.body(moon)
+      local r = ground_r(m, dir.x, dir.y, dir.z, m.radius + 200)
+      local aa = astro()
+      aa.x, aa.y, aa.z = m.x + dir.x * (m.radius + 60), m.y + dir.y * (m.radius + 60), m.z + dir.z * (m.radius + 60)
+      aa.vx, aa.vy, aa.vz = 0, 0, 0
+      return r
+    end, 30, "the moon's ground")
+    local found, mores = 0, {}
+    if gr then
+      for _, off in ipairs({ { 0, 0 }, { 120, 0 }, { 0, 120 }, { -120, 0 } }) do
+        local m = space.body(moon)
+        local A0 = math.abs(dir.y) > 0.9 and { x = 1, y = 0, z = 0 } or { x = 0, y = 1, z = 0 }
+        local e1 = unit(cross(dir, A0)); local e2 = unit(cross(dir, e1))
+        local d2 = unit({ x = dir.x * m.radius + e1.x * off[1] + e2.x * off[2], y = dir.y * m.radius + e1.y * off[1] + e2.y * off[2], z = dir.z * m.radius + e1.z * off[1] + e2.z * off[2] })
+        local r2 = ground_r(m, d2.x, d2.y, d2.z, m.radius + 200)
+        if r2 then
+          local aa = astro()
+          aa.x, aa.y, aa.z = m.x + d2.x * (r2 + 1), m.y + d2.y * (r2 + 1), m.z + d2.z * (r2 + 1)
+          aa.vx, aa.vy, aa.vz = 0, 0, 0
+        end
+        wait(4.0)
+        local aa = astro()
+        for _, v in ipairs(mf.veinsNear(aa.x, aa.y, aa.z, 220)) do
+          local key = string.format("%s%.0f%.0f", v.ore, v.x, v.z)
+          if not mores[key] then mores[key] = v.ore; found = found + 1 end
+        end
+      end
+    end
+    local kinds, homeHas = {}, {}
+    for _, e in ipairs(mats.bodyOres(hb.name)) do homeHas[e.mat] = true end
+    local own = 0
+    for _, o in pairs(mores) do
+      if not kinds[o] then kinds[o] = 0 end
+      kinds[o] = kinds[o] + 1
+    end
+    local kl = {}
+    for o, n in pairs(kinds) do kl[#kl + 1] = o .. " " .. n; if not homeHas[o] then own = own + 1 end end
+    P("VP on the moon %s (mineral_field on %s, %d patches): %d veins: %s", moon, tostring(mf.bodyName), mf.patchCount or -1, found, table.concat(kl, ", "))
+    V.check("a moon's veins are its own ores", mf.bodyName == moon and own > 0, "%d of its ore kinds not on the home world", own)
+  else
+    P("VP no moon in this system")
+  end
   V.result()
 end
 
