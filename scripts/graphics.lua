@@ -482,7 +482,7 @@ local function sref(kind)
   refs_w[kind], refs_w[kind .. "_t"] = r or false, time
   return r
 end
-local decals_set, budget_set, aa_set, detail_set = nil, nil, nil, nil
+local decals_set, budget_set, aa_set, detail_set, tq_set = nil, nil, nil, nil, nil
 local function apply_world()
   local ff = sref("flora_field")
   if ff then
@@ -518,6 +518,14 @@ local function apply_world()
   local td = tonumber(opt("terrain_detail"))
   if td and td ~= detail_set and terrain and terrain.setDetail then
     if pcall(terrain.setDetail, td) then detail_set = td end
+  end
+  -- texture quality (engine 0.117.1-dev.1390): loose textures re-read at once,
+  -- models' pictures as they next load; it resets at Stop, so it is set on
+  -- every scene start from the saved option
+  local tq = opt("texture_quality")
+  if tq and tq ~= tq_set and app.setTextureQuality then
+    if not (app.textureQuality and app.textureQuality() == tq) then pcall(app.setTextureQuality, tq) end
+    tq_set = tq
   end
   local aa = opt("antialias")
   if aa and aa ~= aa_set and app.setAntialias then

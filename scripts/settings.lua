@@ -181,6 +181,10 @@ GFX_OPTIONS = {
              { label = "4,096", value = 4096 } },
     preset = { Low = 512, Medium = 1024, High = 1024, Ultra = 2048 },
     desc = "Marks kept on the ground (tracks, scorch, digging); past this the oldest fades." },
+  { key = "texture_quality", group = "world", label = "Texture quality", cost = "memory (GPU)",
+    opts = { { label = "High", value = "High" }, { label = "Medium", value = "Medium" }, { label = "Low", value = "Low" } },
+    preset = { Low = "Medium", Medium = "High", High = "High", Ultra = "High" },
+    desc = "Texture detail: Medium uses a quarter of the memory, Low a sixteenth. Interface art stays sharp. Models pick it up as they next load." },
   { key = "terrain_detail", group = "world", label = "Terrain detail", cost = "medium (CPU meshing, GPU)",
     opts = { { label = "Low", value = 0.5 }, { label = "Medium", value = 0.75 }, { label = "High", value = 1.0 },
              { label = "Ultra", value = 1.5 } },
@@ -944,8 +948,7 @@ local function graphics_rows(out)
         .. "the render scale, and raises it again when there is room.")
     end
   end
-  body[#body + 1] = hint("gfxn", "Not here yet (the engine has no switch for them): texture quality, view "
-    .. "distance, MSAA.")
+  body[#body + 1] = hint("gfxn", "Not here yet (the engine has no switch for them): view distance, MSAA.")
 end
 
 local function camera_rows(out)
