@@ -499,6 +499,9 @@ function lateUpdate(node, dt)
   -- helmet (behind the visor), and in a cabin (the portraits film dolls by
   -- the instrument light)
   local glow = helmet and 0.6 or ((root_node and root_node.name == "CrewDoll") and 0.7 or 0.0)
+  -- (the Research Lab's staff stand under a ceiling grid that lights the
+  -- tops of heads and little else: a touch, so no face reads as mud)
+  if not helmet and root_node and (root_node.name or ""):sub(1, 13) == "LabScientist " then glow = 0.3 end
   knob(sk, "flush", "flush", math.min(1, ch.flush or 0), nil, nil, 0.02)
   knob(sk, "pale", "pale", math.min(1, ch.pale or 0), nil, nil, 0.02)
   knob(sk, "glow", "glow", glow, nil, nil, 0.02)

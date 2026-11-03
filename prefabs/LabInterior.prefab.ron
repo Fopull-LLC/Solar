@@ -369,7 +369,7 @@
     (
         name: "Sci 1 Hands",
         transform: (
-            translation: (-7.6500, -3.2500, 2.1300),
+            translation: (-7.6500, -3.2400, 1.9900),
             rotation: (0.0, 0.0, 0.0, 1.0),
             scale: (1.0, 1.0, 1.0),
         ),
@@ -402,7 +402,7 @@
     (
         name: "Sci 2 Hands",
         transform: (
-            translation: (-5.2000, -3.3000, -1.0700),
+            translation: (-5.2000, -3.2800, -0.9700),
             rotation: (0.0, 0.0, 0.0, 1.0),
             scale: (1.0, 1.0, 1.0),
         ),
@@ -435,7 +435,7 @@
     (
         name: "Sci 3 Hands",
         transform: (
-            translation: (-7.5000, -3.1200, -7.8500),
+            translation: (-7.5000, -3.1400, -7.7700),
             rotation: (0.0, 0.0, 0.0, 1.0),
             scale: (1.0, 1.0, 1.0),
         ),
@@ -468,7 +468,7 @@
     (
         name: "Sci 4 Hands",
         transform: (
-            translation: (3.0000, -3.3000, -1.0700),
+            translation: (3.0000, -3.2800, -0.9700),
             rotation: (0.0, 0.0, 0.0, 1.0),
             scale: (1.0, 1.0, 1.0),
         ),
@@ -485,8 +485,8 @@
         ),
         matter: PointLight(
             color: (1.0000, 0.9550, 0.9000),
-            intensity: 2.6,
-            range: 12.0,
+            intensity: 2.1,
+            range: 11.0,
         ),
         scripts: [],
         parent: Some(0),
@@ -495,14 +495,14 @@
     (
         name: "Lab Light 2",
         transform: (
-            translation: (-7.6000, -1.5400, 3.2500),
+            translation: (-7.6000, -1.6400, 3.2500),
             rotation: (0.00000, 0.00000, 0.00000, 1.00000),
             scale: (1.0, 1.0, 1.0),
         ),
         matter: PointLight(
-            color: (1.0000, 0.9550, 0.9000),
-            intensity: 2.6,
-            range: 12.0,
+            color: (1.0000, 0.8800, 0.7400),
+            intensity: 2.2,
+            range: 9.0,
         ),
         scripts: [],
         parent: Some(0),
@@ -517,8 +517,8 @@
         ),
         matter: PointLight(
             color: (1.0000, 0.9550, 0.9000),
-            intensity: 2.6,
-            range: 12.0,
+            intensity: 2.1,
+            range: 11.0,
         ),
         scripts: [],
         parent: Some(0),
@@ -527,14 +527,14 @@
     (
         name: "Lab Light 4",
         transform: (
-            translation: (-1.0000, -1.5400, 2.3500),
+            translation: (-1.0000, -1.8400, 3.5500),
             rotation: (0.00000, 0.00000, 0.00000, 1.00000),
             scale: (1.0, 1.0, 1.0),
         ),
         matter: PointLight(
-            color: (1.0000, 0.9550, 0.9000),
-            intensity: 2.4,
-            range: 11.0,
+            color: (1.0000, 0.8800, 0.7400),
+            intensity: 1.9,
+            range: 8.0,
         ),
         scripts: [],
         parent: Some(0),
@@ -549,8 +549,8 @@
         ),
         matter: PointLight(
             color: (1.0000, 0.9550, 0.9000),
-            intensity: 2.4,
-            range: 11.0,
+            intensity: 2.0,
+            range: 10.0,
         ),
         scripts: [],
         parent: Some(0),
@@ -565,8 +565,8 @@
         ),
         matter: PointLight(
             color: (1.0000, 0.9550, 0.9000),
-            intensity: 2.4,
-            range: 10.0,
+            intensity: 2.0,
+            range: 9.0,
         ),
         scripts: [],
         parent: Some(0),
@@ -581,7 +581,7 @@
         ),
         matter: PointLight(
             color: (1.0000, 0.9550, 0.9000),
-            intensity: 1.8,
+            intensity: 1.5,
             range: 7.0,
         ),
         scripts: [],
@@ -597,7 +597,7 @@
         ),
         matter: PointLight(
             color: (1.0000, 0.9550, 0.9000),
-            intensity: 1.6,
+            intensity: 1.4,
             range: 7.0,
         ),
         scripts: [],

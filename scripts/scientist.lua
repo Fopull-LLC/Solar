@@ -107,14 +107,15 @@ function lateUpdate(node, dt)
     local dz = math.cos(a * 1.3) * w * 0.5
     local dy = math.max(0, math.sin(a * 0.7 + ph)) * w * 0.6
     -- the model's left is its root's +x when it faces +z
-    local s = sg * faceSign * 0.16
+    local s = sg * faceSign * 0.13
     local tx = h.x + rx * (s + dx) + fx * dz + ux * dy
     local ty = h.y + ry * (s + dx) + fy * dz + uy * dy
     local tz = h.z + rz * (s + dx) + fz * dz + uz * dy
-    -- the elbows out and back, a little down
-    local px = o.x + rx * sg * faceSign * 0.55 - fx * 0.35 - ux * 0.1
-    local py = o.y + ry * sg * faceSign * 0.55 - fy * 0.35 - uy * 0.1
-    local pz = o.z + rz * sg * faceSign * 0.55 - fz * 0.35 - uz * 0.1
+    -- the elbows down by the sides and a little back, as a person working at
+    -- a bench holds them (out and level read as a mannequin's)
+    local px = o.x + rx * sg * faceSign * 0.30 - fx * 0.22 - ux * 0.55
+    local py = o.y + ry * sg * faceSign * 0.30 - fy * 0.22 - uy * 0.55
+    local pz = o.z + rz * sg * faceSign * 0.30 - fz * 0.22 - uz * 0.55
     pcall(anim.reach, anim, "Hand." .. nm, vec3(tx, ty, tz), { pole = vec3(px, py, pz) })
   end
   -- the head: down at the work, now and then a glance up and across

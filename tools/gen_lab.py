@@ -87,7 +87,8 @@ SAFETY_Y = (0.78, 0.60, 0.05)
 SAFETY_G = (0.05, 0.42, 0.20)
 RED = (0.55, 0.05, 0.04)
 BLUE_GLOVE = (0.10, 0.20, 0.55)
-LAMP = (1.0, 0.985, 0.96)
+LAMP = (0.66, 0.655, 0.635)        # a diffused LED panel: it glows, it doesn't blaze
+LAMP_TASK = (0.80, 0.68, 0.50)     # the warm task strips under cupboards and in the hoods
 TACKY = (0.30, 0.42, 0.58)
 
 
@@ -415,8 +416,8 @@ def room(K):
     m, sh = K.room, K.sh
     # THE FLOOR: sheet vinyl in 0.6 m quads, so the wear can be coloured in:
     # darker in the aisles' traffic, a grey line along the bench fronts
-    xs = np.arange(-XI, XI + 1e-6, 0.6); xs[-1] = XI
-    zs = np.arange(-ZI, ZI + 1e-6, 0.6); zs[-1] = ZI
+    xs = np.arange(-XI, XI + 1e-6, 0.3); xs[-1] = XI
+    zs = np.arange(-ZI, ZI + 1e-6, 0.3); zs[-1] = ZI
     rng = np.random.default_rng(5)
 
     def wear_at(x, z):
@@ -519,8 +520,9 @@ def room(K):
     gx = np.arange(-XI, XI + 1e-6, 0.6); gx[-1] = XI
     gz = np.arange(-ZI, ZI + 1e-6, 0.6); gz[-1] = ZI
     lamp_cells = set()
-    for i in range(1, len(gx) - 2, 4):
-        for j in range(1, len(gz) - 2, 3):
+    # fewer panels, staggered row to row, so the ceiling is not a lit grid
+    for jj, j in enumerate(range(2, len(gz) - 2, 4)):
+        for i in range(2 + (3 if jj % 2 else 0), len(gx) - 2, 6):
             lamp_cells.add((i, j)); lamp_cells.add((i + 1, j))
             ceil_lamps.append(((gx[i] + gx[i + 2]) / 2, (gz[j] + gz[j + 1]) / 2))
     for i in range(len(gx) - 1):
@@ -726,7 +728,7 @@ def hoods(K):
         for k in range(3):
             Bx(m, "LabResin", (0.25, 0.26, 0.27), x0 + 0.1, x1 - 0.1, 1.05 + k * 0.35, 1.07 + k * 0.35, z0 + 0.06, z0 + 0.065)
         # the work surface inside, a lamp strip under the cowl
-        Bx(m, "LabLamp", LAMP, x0 + 0.12, x1 - 0.12, 2.08, 2.095, z0 + 0.25, z0 + 0.45)
+        Bx(m, "LabLamp", LAMP_TASK, x0 + 0.12, x1 - 0.12, 2.08, 2.095, z0 + 0.25, z0 + 0.45)
         # the sash: glass in a frame, raised to 1.45
         sy0, sy1 = 1.45, 2.12
         Bx(m, "LabSteel", STEEL, x0 + 0.06, x1 - 0.06, sy0 - 0.04, sy0, zf - 0.03, zf + 0.0)
@@ -898,7 +900,7 @@ def wall_bench(K):
             Bx(m, "LabWall", col, q, q + w, 1.862, 1.862 + rng.uniform(0.08, 0.2), z1 - 0.3, z1 - 0.1)
             q += w + 0.02
     # a light strip under the cupboards
-    Bx(m, "LabLamp", LAMP, x0 + 0.1, x1 - 0.1, 1.585, 1.6, z1 - 0.3, z1 - 0.26)
+    Bx(m, "LabLamp", LAMP_TASK, x0 + 0.1, x1 - 0.1, 1.585, 1.6, z1 - 0.3, z1 - 0.26)
     # microscopes, the camera monitor beside one
     microscope(m, -4.3, 0.90, z1 - 0.38, face=(0, 0, -1))
     microscope(m, 3.9, 0.90, z1 - 0.38, face=(0, 0, -1))
@@ -1293,11 +1295,112 @@ def light_node(name, pos, col, inten, rng, aim=None, parent=0, angle=70.0):
 
 # Where the scientists work: (spot, the point they face, where the hands rest)
 SCIENTISTS = [   # (the bench fronts: receiving z 4.0, the islands z 1.18, the hoods z -5.73)
-    ("Sci 1", (L["tube_x"] + 0.35, FT, 3.52), (L["tube_x"] + 0.35, 1.2, 4.6), (L["tube_x"] + 0.35, 0.99, 4.18)),
-    ("Sci 2", (-5.2, FT, 1.58), (-5.2, 1.0, 0.4), (-5.2, 0.94, 0.98)),
-    ("Sci 3", (-7.5, FT, -5.25), (-7.5, 1.25, -6.4), (-7.5, 1.12, -5.8)),
-    ("Sci 4", (3.0, FT, 1.58), (3.0, 1.0, 0.4), (3.0, 0.94, 0.98)),
+    ("Sci 1", (L["tube_x"] + 0.35, FT, 3.52), (L["tube_x"] + 0.35, 1.2, 4.6), (L["tube_x"] + 0.35, 1.00, 4.04)),
+    ("Sci 2", (-5.2, FT, 1.58), (-5.2, 1.0, 0.4), (-5.2, 0.96, 1.08)),
+    ("Sci 3", (-7.5, FT, -5.25), (-7.5, 1.25, -6.4), (-7.5, 1.10, -5.72)),
+    ("Sci 4", (3.0, FT, 1.58), (3.0, 1.0, 0.4), (3.0, 0.96, 1.08)),
 ]
+
+
+def floor_shading(K):
+    """Contact shading on the floor, baked into its vertex colours: darker
+    under and against every bench, cabinet and wall foot, as the eye expects
+    a room's corners to be (no light reaches there; the engine's AO is screen
+    space and thin)."""
+    P = K.room.parts["LabFloor"][0][0]
+    C = K.room.cols["LabFloor"][0]
+    rects = []
+    for (c, sz, q) in K.sh.boxes:
+        if sz[0] > 15 or c[1] - sz[1] / 2 > FT + 0.3 or sz[1] < 0.3:
+            continue
+        rects.append((c[0] - sz[0] / 2, c[0] + sz[0] / 2, c[2] - sz[2] / 2, c[2] + sz[2] / 2))
+    x, z = P[:, 0], P[:, 2]
+    occ = np.ones(len(P))
+    for (x0, x1, z0, z1) in rects:
+        dx = np.maximum(np.maximum(x0 - x, x - x1), 0)
+        dz = np.maximum(np.maximum(z0 - z, z - z1), 0)
+        d = np.hypot(dx, dz)
+        occ *= 1 - 0.42 * np.exp(-(d / 0.22) ** 2)
+    dw = np.minimum(XI - np.abs(x), ZI - np.abs(z))
+    occ *= 1 - 0.22 * np.exp(-(dw / 0.25) ** 2)
+    K.room.cols["LabFloor"][0] = C * occ[:, None]
+
+
+def details(K):
+    """A lab people work in: notes and a mug, sample bags waiting with their
+    labels, a spectrum on a desk monitor, a clipboard, a plant by the board."""
+    m, g = K.furn, K.glass
+    rng = np.random.default_rng(77)
+
+    def paper(x, y, z, ang, w=0.21, d=0.297, col=(0.93, 0.93, 0.90)):
+        r = (math.cos(ang), 0.0, math.sin(ang))
+        cuboid(m, (x, y + 0.0015, z), r, (0, 0, 0), w, 0.003, d, col=col, mat="LabWall") if False else None
+        M = np.array([[math.cos(ang), 0, math.sin(ang)], [0, 1, 0], [-math.sin(ang), 0, math.cos(ang)]])
+        m.color = col
+        box(m, "LabWall", (x, y + 0.0015, z), (w, 0.002, d), M=M)
+
+    def mug(x, y, z, col):
+        Tb(m, "LabWall", col, (x, y, z), (x, y + 0.095, z), 0.041, segs=16)
+        Tb(m, "LabResin", (0.10, 0.06, 0.03), (x, y + 0.08, z), (x, y + 0.083, z), 0.036, segs=16)
+        for a0, a1 in ((0.0, 0.74), (0.86, 1.54), (1.66, 2.34), (2.46, 3.14)):
+            pa = (x + 0.041 + 0.024 * math.sin(a0), y + 0.048 + 0.028 * math.cos(a0), z)
+            pb = (x + 0.041 + 0.024 * math.sin(a1), y + 0.048 + 0.028 * math.cos(a1), z)
+            Tb(m, "LabWall", col, pa, pb, 0.006, segs=6)
+
+    def bag(x, y, z, ang, fill):
+        M = np.array([[math.cos(ang), 0, math.sin(ang)], [0, 1, 0], [-math.sin(ang), 0, math.cos(ang)]])
+        m.color = fill
+        box(m, "LabResin", (x, y + 0.012, z), (0.10, 0.02, 0.15), M=M, bevel=0.01)
+        m.color = (0.85, 0.88, 0.90)
+        box(m, "LabWall", (x, y + 0.004, z), (0.12, 0.006, 0.18), M=M)
+        m.color = (0.96, 0.96, 0.94)
+        box(m, "LabWall", (x + 0.02 * math.sin(ang), y + 0.0235, z + 0.02 * math.cos(ang)), (0.07, 0.002, 0.04), M=M)
+        m.color = (0.80, 0.12, 0.08)
+        box(m, "LabWall", (x - 0.055 * math.sin(ang), y + 0.0075, z - 0.055 * math.cos(ang)), (0.12, 0.004, 0.012), M=M)
+
+    # the island benches: notes, a mug, a desk monitor showing a spectrum
+    paper(-6.4, 0.90, 0.92, 0.25)
+    paper(-6.2, 0.903, 0.98, -0.15, col=(0.95, 0.93, 0.80))
+    paper(1.4, 0.90, -0.25, 0.6)
+    mug(-3.0, 0.90, 0.95, (0.15, 0.30, 0.55))
+    mug(4.6, 0.90, -0.30, (0.85, 0.85, 0.82))
+    mx, mz = -2.9, -0.20
+    Bx(m, "LabResin", (0.12, 0.12, 0.13), mx - 0.12, mx + 0.12, 0.90, 0.91, mz - 0.10, mz + 0.06)
+    Bx(m, "LabResin", (0.12, 0.12, 0.13), mx - 0.02, mx + 0.02, 0.91, 1.12, mz - 0.03, mz)
+    screen(m, "l_s_xrf", (mx, 1.30, mz - 0.03), (-1, 0, 0), (0, 0.99, 0.12), 0.52)
+    m.color = (0.95, 0.85, 0.25)
+    for k, (dx, dy) in enumerate(((0.24, 0.12), (0.24, 0.03))):
+        box(m, "LabWall", (mx + dx * 1.05, 1.30 + dy, mz - 0.048), (0.06, 0.06, 0.002))
+    # the receiving counter: sample bags waiting, labelled, a pen
+    tx = L["tube_x"]
+    for i, (dx, dz, a, f) in enumerate(((0.55, 4.22, 0.1, (0.30, 0.13, 0.07)), (0.70, 4.30, -0.2, (0.22, 0.22, 0.23)),
+                                          (0.95, 4.20, 0.3, (0.40, 0.30, 0.18)), (-0.55, 4.25, -0.1, (0.10, 0.10, 0.11)))):
+        bag(tx + dx, 0.95, dz, a, f)
+    paper(tx - 0.95, 0.952, 4.35, 0.1)
+    Tb(m, "LabResin", (0.05, 0.08, 0.25), (tx - 0.9, 0.957, 4.30), (tx - 0.78, 0.957, 4.36), 0.004, segs=6)
+    # a clipboard on a hook by the hoods, a pair of safety glasses on the bench
+    Bx(m, "LabResin", (0.30, 0.22, 0.12), -4.62, -4.60, 1.25, 1.58, -ZI + 0.02, -ZI + 0.25)
+    Bx(m, "LabWall", (0.94, 0.94, 0.92), -4.60, -4.598, 1.27, 1.52, -ZI + 0.04, -ZI + 0.23)
+    Tb(m, "LabResin", (0.05, 0.05, 0.05), (-5.4, 0.915, 0.95), (-5.28, 0.915, 0.95), 0.005, segs=6)
+    m.color = (0.85, 0.90, 0.95)
+    box(g, "LabGlass", (-5.34, 0.93, 0.95), (0.13, 0.04, 0.003))
+    # a plant on the end of the sink bench: a pot, its soil, a fan of leaves
+    px, pz = 1.05, -ZI + 0.38
+    Tb(m, "LabWall", (0.55, 0.30, 0.20), (px, 0.90, pz), (px, 1.05, pz), 0.085, segs=18, r1=0.10)
+    Tb(m, "LabResin", (0.10, 0.07, 0.05), (px, 1.036, pz), (px, 1.043, pz), 0.093, segs=18)
+    for i in range(16):
+        a = i * 2.4 + rng.uniform(-0.2, 0.2)
+        up = rng.uniform(0.45, 1.1)
+        Lf = rng.uniform(0.18, 0.32)
+        d = np.array([math.cos(a) * math.cos(up), math.sin(up), math.sin(a) * math.cos(up)])
+        side = np.cross(d, [0, 1, 0]); side /= max(np.linalg.norm(side), 1e-6)
+        nrm = np.cross(side, d)
+        c = np.array([px, 1.05, pz]) + d * Lf / 2
+        M = np.column_stack([side, d, nrm])
+        if np.linalg.det(M) < 0:
+            M = np.column_stack([-side, d, nrm])
+        m.color = (0.10 + 0.06 * rng.random(), 0.28 + 0.12 * rng.random(), 0.08)
+        box(m, "LabWall", tuple(c), (0.045, Lf, 0.004), M=M)
 
 
 def visible_only(m):
@@ -1350,6 +1453,8 @@ def main():
     tube_pts = receiving(K)
     instruments(K)
     west_east(K)
+    details(K)
+    floor_shading(K)
     D = doors(K)
     fights = 0
     allm = CModel()
@@ -1411,11 +1516,12 @@ def main():
     # themselves glow), a spot into each room behind glass
     # (at 2.7 m, below the ceiling, so they reach the walls and the faces of
     # whoever stands at a bench, not only the floor under them)
-    LIGHTS = [((-7.5, 2.7, -3.0), 2.6, 12.0), ((-7.6, 2.7, 5.3), 2.6, 12.0), ((-1.5, 2.7, -1.2), 2.6, 12.0),
-              ((-1.0, 2.7, 4.4), 2.4, 11.0), ((4.0, 2.7, 2.2), 2.4, 11.0), ((6.0, 2.7, -4.3), 2.4, 10.0),
-              ((8.4, 2.7, 5.0), 1.8, 7.0), ((-9.8, 2.2, -0.4), 1.6, 7.0)]
-    for i, (p, inten, rng) in enumerate(LIGHTS):
-        out.append(light_node(f"Lab Light {i + 1}", np.asarray(p) - origin, (1.0, 0.955, 0.90), inten, rng))
+    LIGHTS = [((-7.5, 2.7, -3.0), 2.1, 11.0, None), ((-7.6, 2.6, 5.3), 2.2, 9.0, (1.0, 0.88, 0.74)),
+              ((-1.5, 2.7, -1.2), 2.1, 11.0, None), ((-1.0, 2.4, 5.6), 1.9, 8.0, (1.0, 0.88, 0.74)),
+              ((4.0, 2.7, 2.2), 2.0, 10.0, None), ((6.0, 2.7, -4.3), 2.0, 9.0, None),
+              ((8.4, 2.7, 5.0), 1.5, 7.0, None), ((-9.8, 2.2, -0.4), 1.4, 7.0, None)]
+    for i, (p, inten, rng, col) in enumerate(LIGHTS):
+        out.append(light_node(f"Lab Light {i + 1}", np.asarray(p) - origin, col or (1.0, 0.955, 0.90), inten, rng))
     # one hidden collider: every bench, partition and cabinet as a mesh
     wm = CModel(1); wm.ground = False
     for (c, s, q) in K.sh.boxes:

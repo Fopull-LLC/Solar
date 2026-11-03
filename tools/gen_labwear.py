@@ -61,13 +61,19 @@ def tex_cloth(n=512):
     slub = np.kron(slub, np.ones((16, 16)))
     from PIL import ImageFilter
     sl = np.asarray(Image.fromarray((slub * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(6)), float) / 255
-    h = 0.45 * rib + 0.15 * weft + 0.4 * sl
+    # soft creases at a few centimetres (the texture tiles every 0.3 m on the
+    # coat): pressed cotton is never flat
+    cr = rng.random((8, 8))
+    cr = np.asarray(Image.fromarray((cr * 255).astype(np.uint8)).resize((n, n), Image.BICUBIC).filter(
+        ImageFilter.GaussianBlur(18)), float) / 255
+    crease = np.abs(np.sin((x * 0.6 + y * 0.25) / n * math.pi * 6 + cr * 6)) ** 0.5
+    h = 0.30 * rib + 0.10 * weft + 0.25 * sl + 0.35 * crease
     alb = 0.94 + 0.012 * (rib - 0.5) + 0.02 * (sl - 0.5)
     A = np.clip(np.stack([alb, alb * 1.002, alb * 0.996], -1), 0, 1)
     Image.fromarray((A * 255).astype(np.uint8)).save(os.path.join(TEXDIR, "cloth_albedo.png"))
-    nm = normal_from_height(h, strength=0.6)
+    nm = normal_from_height(h, strength=1.4)
     Image.fromarray((np.clip(nm, 0, 1) * 255).astype(np.uint8) if nm.dtype != np.uint8 else nm).save(os.path.join(TEXDIR, "cloth_normal.png"))
-    orm = np.stack([0.92 + 0.08 * h, 0.82 + 0.06 * (1 - h), np.zeros_like(h)], -1)
+    orm = np.stack([0.85 + 0.15 * crease, 0.90 + 0.06 * (1 - h), np.zeros_like(h)], -1)
     Image.fromarray((np.clip(orm, 0, 1) * 255).astype(np.uint8)).save(os.path.join(TEXDIR, "cloth_orm.png"))
 
 

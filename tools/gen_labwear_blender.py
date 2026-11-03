@@ -38,9 +38,11 @@ _src = _src[:_src.rindex("\nmain()")]
 exec(compile(_src, _SRC, "exec"))          # noqa: S102 — our own generator's helpers
 
 # ── palette (multipliers on the near-white weave; linear) ────────────────────
-COAT = (0.88, 0.885, 0.875)
-COAT_SH = (0.80, 0.805, 0.795)
-KNIT = (0.74, 0.745, 0.74)
+COAT = (0.83, 0.825, 0.80)        # cotton twill, off-white, laundered a hundred times
+COAT_SH = (0.74, 0.735, 0.71)
+KNIT = (0.66, 0.66, 0.645)
+SHIRT = (0.11, 0.135, 0.20)        # a navy knit
+SHIRT_RIB = (0.09, 0.11, 0.165)
 TROUSER = (0.085, 0.090, 0.100)
 NITRILE = (0.105, 0.215, 0.60)
 SHOE = (0.060, 0.058, 0.056)
@@ -52,7 +54,7 @@ BADGE = (0.86, 0.86, 0.84)
 BADGE_BAND = (0.70, 0.27, 0.07)    # the agency's signal orange stripe
 PHOTO = (0.20, 0.17, 0.15)
 SNAP = (0.72, 0.72, 0.70)
-LAB_RB = 0.046                       # the sleeve head's dome (radius, m)
+LAB_RB = 0.043                       # the sleeve head's dome (radius, m)
 
 
 def sgnpow(v, p):
@@ -170,8 +172,8 @@ def _lab_arm_fn():
         ("bump=lambda a_, i=i: 0.02 * math.sin(4 * a_ + i * 0.9)", "bump=lambda a_, i=i: 0.003 * math.sin(4 * a_ + i * 0.9)"),
         ("""    for t, r, col in ((0.104, 0.075, CLOTH), (0.138, 0.077, CLOTH), (s_ub, 0.077, CLOTH), (0.198, 0.075, CLOTH),
                       (0.240, 0.072, CLOTH)):""",
-         """    for t, r, col in ((0.070, 0.045, CLOTH), (0.115, 0.047, CLOTH), (0.165, 0.047, CLOTH), (0.212, 0.046, CLOTH),
-                      (0.250, 0.045, CLOTH)):"""),
+         """    for t, r, col in ((0.068, 0.042, CLOTH), (0.115, 0.045, CLOTH), (0.165, 0.046, CLOTH), (0.212, 0.045, CLOTH),
+                      (0.250, 0.044, CLOTH)):"""),
         ("""    for dd, r, col in ((-0.046, 0.069, CLOTH), (-0.024, 0.063, CLOTH_SH), (0.0, 0.067, CLOTH),
                        (0.024, 0.062, CLOTH_SH), (0.046, 0.064, CLOTH)):""",
          """    for dd, r, col in ((-0.040, 0.048, CLOTH), (-0.020, 0.0455, CLOTH_SH), (0.0, 0.0475, CLOTH),
@@ -230,9 +232,16 @@ def build_lab(rig):
     def Ja(name):
         return (D[rig.index[name]] @ np.append(J(name), 1.0))[:3]
 
-    # ── THE COAT: hem to the band collar, one surface ──────────────────────
+    # ── THE COAT: hem to the neck, one surface, open in a V at the chest ──
+    # Below Y_V the rings close round the body; above it they open into a V
+    # whose edges fold back over the chest as LAPELS (the same sheet: the
+    # lapel's outer edge, the fold, then the coat round the body), and a
+    # notched COLLAR (its own piece) stands round the back of the neck and
+    # falls over. A crew-neck knit (SHIRT) shows in the V; the head's own neck
+    # rises out of its ribbed neckband with a centimetre to spare.
     zn = -0.055 * k                                   # the neck's centre, front to back
     N_ = 40
+    Y_V = 1.315 * k
     RINGS = [  # y, half-width, front, back, centre z, squareness, back rise
         (0.800, 0.193, 0.140, 0.136, zc, 2.2, 0.0),     # the hem's turned-up inside
         (0.742, 0.212, 0.150, 0.146, zc, 2.2, 0.0),     # the inner edge of the hem
@@ -242,34 +251,85 @@ def build_lab(rig):
         (1.000, 0.195, 0.132, 0.143, zc, 2.3, 0.0),     # the seat
         (1.100, 0.185, 0.125, 0.133, zc, 2.3, 0.0),
         (1.200, 0.173, 0.118, 0.121, zc, 2.35, 0.0),    # the waist
-        (1.280, 0.173, 0.122, 0.118, zc, 2.4, 0.0),
-        (1.360, 0.178, 0.130, 0.119, zc, 2.5, 0.0),     # the chest
-        (1.420, 0.182, 0.128, 0.117, zc, 2.6, 0.0),
-        (1.470, 0.192, 0.116, 0.110, zc - 0.002, 2.9, 0.0),
-        (1.505, 0.193, 0.101, 0.098, zc - 0.004, 3.4, 0.0),
-        (1.526, 0.180, 0.092, 0.090, zc - 0.006, 3.4, 0.0),   # the shoulder line
-        (1.541, 0.138, 0.084, 0.084, zn + 0.001, 2.8, 0.0),
-        (1.553, 0.096, 0.075, 0.081, zn, 2.4, 0.0),           # the collar's root
-        (1.560, 0.089, 0.070, 0.079, zn, 2.4, 0.008),         # the band collar
-        (1.568, 0.087, 0.069, 0.078, zn, 2.4, 0.022),
-        (1.574, 0.0865, 0.0690, 0.0775, zn, 2.4, 0.034),     # its top edge (front 1.574, back 1.608)
-        (1.5755, 0.0835, 0.0662, 0.0745, zn, 2.4, 0.035),    # rolled over
-        (1.570, 0.0800, 0.0632, 0.0715, zn, 2.4, 0.032),     # the inside face
-        (1.554, 0.0790, 0.0622, 0.0705, zn, 2.4, 0.012),
+        (1.260, 0.173, 0.121, 0.118, zc, 2.4, 0.0),
+        (1.315, 0.176, 0.126, 0.118, zc, 2.45, 0.0),    # the V's foot
     ]
-    rings = [body_ring(y * k, hw * k, f * k, b * k, z, sq, N_, dyb * k) for (y, hw, f, b, z, sq, dyb) in RINGS]
-    V, F = quads(rings)
+    UPPER = [  # y, half-width, front, back, centre z, squareness, V half-angle (rad), lapel width
+        (1.315, 0.176, 0.126, 0.118, zc, 2.45, 0.00, 0.000),
+        (1.360, 0.178, 0.130, 0.119, zc, 2.5, 0.16, 0.030),
+        (1.420, 0.182, 0.128, 0.117, zc, 2.6, 0.30, 0.058),
+        (1.470, 0.197, 0.116, 0.110, zc - 0.002, 2.9, 0.42, 0.070),
+        (1.505, 0.198, 0.101, 0.098, zc - 0.004, 3.4, 0.52, 0.062),
+        (1.526, 0.180, 0.092, 0.090, zc - 0.006, 3.4, 0.60, 0.050),   # the shoulder line
+        (1.541, 0.138, 0.086, 0.086, zn + 0.001, 2.8, 0.70, 0.036),
+        (1.553, 0.100, 0.080, 0.083, zn, 2.4, 0.80, 0.024),           # the collar's root
+    ]
+
+    def wrinkle(a, y):
+        """Soft cloth folds as a radial ripple: across the waist where the
+        coat gathers, under the arms, and a long drape down the skirt."""
+        side = abs(math.sin(a))
+        w = 0.0
+        w += 0.010 * side * float(smooth01(1.10, 1.17, y / k) * smooth01(1.30, 1.22, y / k)) * math.sin(9 * a + y * 55)
+        w += 0.008 * side ** 3 * float(smooth01(1.33, 1.38, y / k) * smooth01(1.46, 1.41, y / k)) * math.sin(14 * a + 3)
+        w += 0.006 * float(smooth01(1.02, 0.85, y / k)) * math.sin(7 * a + 1.3) * (0.6 + 0.4 * math.sin(3 * a))
+        return 1.0 + w
+
+    def ring_pt(y, hw, hdf, hdb, zcc, sq, a, out=0.0):
+        sa, ca = math.sin(a), math.cos(a)
+        r = wrinkle(a, y)
+        x = X0 + (hw * r + out) * sgnpow(sa, 2.0 / sq)
+        hd = (hdf if ca >= 0 else hdb) * r + out
+        z = zcc + hd * sgnpow(ca, 2.0 / sq)
+        return np.array([x, y, z])
+
+    Vl, idx = [], []
+    for (y, hw, f, b, z, sq, dyb) in RINGS:
+        row = []
+        for i in range(N_):
+            row.append(len(Vl))
+            Vl.append(ring_pt(y * k, hw * k, f * k, b * k, z, sq, TAU * i / N_))
+        idx.append(row)
+    Fl = []
+    for r0, r1 in zip(idx[:-1], idx[1:]):
+        for i in range(N_):
+            j = (i + 1) % N_
+            Fl.append((r0[i], r0[j], r1[j], r1[i]))
+    # the upper rows: [lapel edge L, fold L, arc a = h .. 2π−h (N_+1), fold R, lapel edge R]
+    top = idx[-1]
+    rows = []
+    for ri, (y, hw, f, b, z, sq, h, lw) in enumerate(UPPER):
+        y, hw, f, b, lw = y * k, hw * k, f * k, b * k, lw * k
+        if ri == 0:
+            row = [top[0], top[0]] + [top[j % N_] for j in range(N_ + 1)] + [top[0], top[0]]
+            rows.append(row)
+            continue
+        row = []
+        # how far round the body a lapel of width lw reaches, as an angle
+        da = lw / max(1e-6, 0.5 * (hw + f))
+        pts = [ring_pt(y, hw, f, b, z, sq, h + da, out=0.007 * k), ring_pt(y, hw, f, b, z, sq, h, out=0.0035 * k)]
+        pts += [ring_pt(y, hw, f, b, z, sq, h + (TAU - 2 * h) * j / N_) for j in range(N_ + 1)]
+        pts += [ring_pt(y, hw, f, b, z, sq, TAU - h, out=0.0035 * k), ring_pt(y, hw, f, b, z, sq, TAU - h - da, out=0.007 * k)]
+        for p_ in pts:
+            row.append(len(Vl))
+            Vl.append(p_)
+        rows.append(row)
+    for r0, r1 in zip(rows[:-1], rows[1:]):
+        for i in range(len(r0) - 1):
+            q = [r0[i], r0[i + 1], r1[i + 1], r1[i]]
+            u = []
+            for v_ in q:
+                if v_ not in u:
+                    u.append(v_)
+            if len(u) >= 3:
+                Fl.append(tuple(u))
+    V, F = np.array(Vl), Fl
     y_collar = 1.553 * k
 
     def coat_w(P):
         out = []
         for p in P:
             y = p[1]
-            if y > y_collar - 0.004 * k:
-                # the band collar: its top a third onto the head
-                h = float(smooth01(y_collar, 1.600 * k, y)) * 0.34
-                out.append(blend("Back", "Head", h))
-                continue
             back_ = float(smooth01(1.17 * k, 1.33 * k, y))
             sd = float(smooth01(X0 - 0.06 * k, X0 + 0.06 * k, p[0]))
             th = float(smooth01(0.98 * k, 0.74 * k, y)) * 0.30    # the skirt follows the thighs a little
@@ -279,13 +339,68 @@ def build_lab(rig):
 
     def coat_col(P, N):
         n1 = _noise_b(P, 3, 11.0)
-        C = np.tile(COAT, (len(P), 1)) * (0.975 + 0.05 * n1)[:, None]
-        # a pristine coat, but worn: the cuffs' and the hem's edge a shade greyer
-        C *= (1 - 0.06 * smooth01(0.80 * k, 0.735 * k, P[:, 1]))[:, None]
+        n2 = _noise_b(P, 9, 37.0)
+        C = np.tile(COAT, (len(P), 1)) * (0.97 + 0.04 * n1 + 0.02 * n2)[:, None]
+        # worn, not dirty: the hem's edge greyer, a shade round the hips where hands go
+        C *= (1 - 0.07 * smooth01(0.80 * k, 0.735 * k, P[:, 1]))[:, None]
+        sides = smooth01(0.12 * k, 0.19 * k, np.abs(P[:, 0] - X0)) * smooth01(0.85 * k, 0.95 * k, P[:, 1]) * \
+            smooth01(1.12 * k, 1.02 * k, P[:, 1])
+        C *= (1 - 0.05 * sides * (0.5 + 0.5 * n2))[:, None]
         return C
     # (the loft's quads are wound however its rings run: made consistent and
     # outward before the subdivision, or half the coat shades as its inside)
     coat = Piece("Coat", "LabCloth", V, F, coat_w, coat_col, tile=0.30, dirt="none", mods=[("recalc",), ("subsurf", 1)])
+
+    # THE COLLAR: a stand round the back of the neck from notch to notch, its
+    # fall turned down over it (one band folded: base, stand top, fold, edge)
+    hT = 0.80 + 0.036 / 0.09
+    CR = [  # y over the root, radius out from the root ring, back rise, along the arc
+        (0.000, 0.000, 0.000), (0.026, -0.004, 0.012), (0.033, 0.003, 0.016),
+        (0.020, 0.016, 0.008), (0.000, 0.026, -0.006)]
+    hw_r, f_r, b_r = 0.100 * k, 0.080 * k, 0.083 * k
+    cv, crows = [], []
+    for (dy, dr, rise) in CR:
+        row = []
+        for j in range(N_ + 1):
+            a = hT + (TAU - 2 * hT) * j / N_
+            ca = math.cos(a)
+            p_ = ring_pt(y_collar - 0.002 * k + dy * k, hw_r - 0.006 * k + dr * k, f_r - 0.006 * k + dr * k,
+                         b_r - 0.006 * k + dr * k, zn, 2.4, a)
+            p_[1] += rise * k * (1 - ca) / 2
+            row.append(len(cv))
+            cv.append(p_)
+        crows.append(row)
+    cf = []
+    for r0, r1 in zip(crows[:-1], crows[1:]):
+        for i in range(N_):
+            cf.append((r0[i], r0[i + 1], r1[i + 1], r1[i]))
+
+    def collar_w(P):
+        return [blend("Back", "Head", float(smooth01(y_collar, 1.60 * k, p[1])) * 0.25) for p in P]
+    Piece("Collar", "LabCloth", np.array(cv), cf, collar_w, COAT, tile=0.3, dirt="none", mods=[("recalc",), ("subsurf", 1)])
+
+    # THE SHIRT: a crew-neck knit under the coat, seen in the V
+    SH = [(1.280, 0.165, 0.116, 0.110, zc, 2.4), (1.360, 0.168, 0.122, 0.112, zc, 2.5),
+          (1.430, 0.172, 0.118, 0.108, zc - 0.002, 2.6), (1.490, 0.170, 0.100, 0.096, zc - 0.004, 3.0),
+          (1.525, 0.150, 0.086, 0.086, zn + 0.002, 2.8), (1.540, 0.100, 0.074, 0.080, zn, 2.4)]
+    # a knitted mock neck (the band stands up the neck, as a lab's under-coat
+    # knit does): the head's own neck flares into its shoulders below it
+    NB = [(1.546, 0.0850, 0.0670, 0.0765, 0.000), (1.555, 0.0820, 0.0648, 0.0738, 0.012),
+          (1.563, 0.0798, 0.0634, 0.0720, 0.026), (1.566, 0.0780, 0.0620, 0.0704, 0.029),
+          (1.560, 0.0760, 0.0602, 0.0686, 0.027)]
+    srings = [body_ring(y * k, hw * k, f * k, b * k, z, sq, N_) for (y, hw, f, b, z, sq) in SH]
+    srings += [body_ring(y * k, hw * k, f * k, b * k, zn, 2.4, N_, dyb * k) for (y, hw, f, b, dyb) in NB]
+    Vs, Fs = quads(srings)
+    nsh = len(SH) * N_
+
+    def shirt_col(P, N):
+        C = np.tile(SHIRT, (len(P), 1))
+        C[P[:, 1] > 1.543 * k] = SHIRT_RIB
+        return C * (0.96 + 0.06 * _noise_b(P, 5, 60.0))[:, None]
+
+    def shirt_w(P):
+        return [blend("Back", "Head", float(smooth01(1.548 * k, 1.60 * k, p[1])) * 0.3) for p in P]
+    Piece("Shirt", "LabCloth", Vs, Fs, shirt_w, shirt_col, tile=0.3, dirt="none", mods=[("recalc",), ("subsurf", 1)])
     tree = bvh(coat)
 
     # the snap placket down the front, and its snaps
@@ -293,7 +408,7 @@ def build_lab(rig):
         hit, nrm = surf_point(tree, (x, y, 0.6), (0, 0, -1), (x, y, zc + 0.13 * k))
         return hit, nrm
     pl = []
-    ys = np.linspace(0.745 * k, 1.546 * k, 34)
+    ys = np.linspace(0.745 * k, 1.310 * k, 24)
     for y in ys:
         row = []
         for dx in (-0.019, 0.019):
@@ -313,7 +428,7 @@ def build_lab(rig):
     for i in range(1, len(pl)):
         Fp.append((2 * (i - 1), 2 * i, n0 + i, n0 + i - 1))
     Piece("Placket", "LabCloth", np.array(Vp), Fp, coat_w, COAT_SH, tile=0.3, dirt="none")
-    for y in np.arange(0.86, 1.52, 0.096) * k:
+    for y in np.arange(0.86, 1.29, 0.105) * k:
         h, nrm = front(X0 + 0.012 * k, y)
         nrm = unit(nrm)
         V, F = cyl_mesh(h + nrm * 0.002 * k, h + nrm * 0.0055 * k, 0.0062 * k, segs=10)
@@ -324,13 +439,13 @@ def build_lab(rig):
         V, F = slab_on(tree, lambda s_, t_: (xc - w / 2 + w * s_, y0 + (y1 - y0) * t_, 0.0), 4, 4, 0.0015 * k,
                        0.0022 * k, (0, 0, 1))
         Piece(name, "LabCloth", V, F, coat_w, COAT_SH, tile=0.3, dirt="none", smooth=False, sharp=50)
-    pocket("PocketBreast", X0 + 0.085 * k, 1.330 * k, 1.448 * k, 0.110 * k)
+    pocket("PocketBreast", X0 + 0.105 * k, 1.200 * k, 1.305 * k, 0.100 * k)
     pocket("PocketLowL", X0 + 0.110 * k, 0.905 * k, 1.075 * k, 0.150 * k)
     pocket("PocketLowR", X0 - 0.110 * k, 0.905 * k, 1.075 * k, 0.150 * k)
     # pens in the breast pocket, their clips over its lip
-    for dx, col in ((0.058, PEN_BLUE), (0.072, PEN_BLACK)):
+    for dx, col in ((0.080, PEN_BLUE), (0.094, PEN_BLACK)):
         x = X0 + dx * k
-        h, nrm = front(x, 1.448 * k)
+        h, nrm = front(x, 1.305 * k)
         nrm = unit(nrm)
         b0 = h + nrm * 0.006 * k - Y * 0.030 * k
         V, F = cyl_mesh(b0, b0 + Y * 0.062 * k, 0.0046 * k, segs=10, r1=0.0042 * k)
@@ -338,8 +453,8 @@ def build_lab(rig):
         V, F = box_mesh(b0 + Y * 0.044 * k + nrm * 0.0058 * k, (0.0028 * k, 0.034 * k, 0.0016 * k))
         Piece("PenClip", "LabPlastic", V, F, {"Back": 1}, CLIP, tile=0.1, dirt="none", smooth=False)
     # the ID badge, clipped to the pocket's lip and hanging over it
-    bx = X0 + 0.110 * k
-    h, nrm = front(bx, 1.405 * k)
+    bx = X0 + 0.128 * k
+    h, nrm = front(bx, 1.262 * k)
     nrm = unit(nrm)
     Mb = np.column_stack([unit(np.cross(Y, nrm)), Y, nrm])
     bc = h + nrm * 0.0075 * k

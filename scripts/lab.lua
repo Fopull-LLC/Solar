@@ -248,7 +248,7 @@ local function tube_mesh(planet)
   end
   local outdoor = {}
   for k = 1, PATH.outdoor_n do outdoor[k] = PATH.pts[k] end
-  ring_tube(G, outdoor, 0.09, 18)
+  ring_tube(G, outdoor, 0.125, 20)
   -- couplers every ~2.5 m, and at both ends
   local s = arcLengths(outdoor)
   local L = s[#s]
@@ -256,7 +256,7 @@ local function tube_mesh(planet)
   while d <= L do
     local p1 = along(outdoor, s, math.max(0, d - 0.05))
     local p2 = along(outdoor, s, math.min(L, d + 0.05))
-    ring_tube(S, { p1, p2 }, 0.105, 18)
+    ring_tube(S, { p1, p2 }, 0.15, 20)
     d = d + (d < 0.1 and 2.4 or 2.5)
   end
   -- the pipe-rack post under the run's middle: down the averaged vertical to
@@ -283,7 +283,7 @@ local function tube_mesh(planet)
   -- (the outdoor run is blended glass, not transmissive: a capsule inside a
   -- refracting tube seen from 15 m was lost in it)
   for _, kv in ipairs({ { "Lab Tube Glass", G, { color = { 0.86, 0.93, 0.96 }, roughness = 0.05, metallic = 0.0,
-                                                 alpha = 0.32, blend = "blend", reflectivity = 1.0, shading = "physical" } },
+                                                 alpha = 0.30, blend = "blend", reflectivity = 1.0, shading = "physical" } },
                         { "Lab Tube Steel", S, { texture = "textures/lab/steel_albedo.png",
                                                  roughnessMap = "textures/lab/steel_orm.png", metallicMap = "textures/lab/steel_orm.png",
                                                  color = { 0.85, 0.86, 0.87 }, roughness = 1.0, metallic = 0.85,
@@ -399,6 +399,10 @@ local function step_capsules(dt, planet, b)
       local a, bb = PATH.pts[seg], PATH.pts[seg + 1]
       local t = unit({ x = bb.x - a.x, y = bb.y - a.y, z = bb.z - a.z })
       c.node.x, c.node.y, c.node.z = p.x, p.y, p.z
+      -- outdoors the carrier is the big one the wide run takes, readable from
+      -- the yard; it steps down to the indoor bore inside the wall
+      local sc = (c.d < PATH.s[PATH.outdoor_n]) and 1.7 or 1.0
+      if c.node.scale_x ~= sc then c.node.scale_x, c.node.scale_y, c.node.scale_z = sc, sc, sc end
       local up = math.abs(t.y) < 0.95 and { x = 0, y = 1, z = 0 } or { x = 1, y = 0, z = 0 }
       local sx = unit(cross(up, t))
       local u2 = cross(t, sx)
