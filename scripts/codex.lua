@@ -258,6 +258,9 @@ end
 function entry(id)
   local e = CODEX[id]
   local mats = ref("materials")
+  -- the per-world ores keep their write-ups beside their rules (materials.lua
+  -- ORE_CODEX, the same shape): read them from there
+  if not e and mats and type(mats.ORE_CODEX) == "table" then e = mats.ORE_CODEX[id] end
   local name = (e and e.name) or (mats and mats.label and mats.label(id)) or id
   if e then
     return { id = id, name = name, summary = e.summary or "", facts = e.facts or {}, fictional = e.fictional == true,
@@ -271,8 +274,12 @@ end
 
 -- Every id with an entry (sorted), for tests and the other agent's checks.
 function ids()
-  local out = {}
-  for k in pairs(CODEX) do out[#out + 1] = k end
+  local out, seen = {}, {}
+  for k in pairs(CODEX) do out[#out + 1] = k; seen[k] = true end
+  local mats = ref("materials")
+  if mats and type(mats.ORE_CODEX) == "table" then
+    for k in pairs(mats.ORE_CODEX) do if not seen[k] then out[#out + 1] = k end end
+  end
   table.sort(out)
   return out
 end
