@@ -1525,6 +1525,10 @@ function launchCheck()
     if okb and why then return { block = why, warn = {}, has = has } end
   end
   local warn = {}
+  -- how bad each warning is (by its index; unset = 2): 0 the craft breaks or
+  -- won't fly, 1 it tips, spins or falls over, 2 advice. Sorted at the end,
+  -- so the hint bar's first one or two are the worst.
+  local rank = {}
   if bcrew and bcrew.launchWarn then
     local okw, lines = pcall(bcrew.launchWarn)
     if okw and type(lines) == "table" then for _, l in ipairs(lines) do warn[#warn + 1] = l end end
@@ -1542,6 +1546,7 @@ function launchCheck()
   if islands then
     local comps = islands()
     if comps and #comps > 1 then
+      rank[#warn + 1] = 0
       warn[#warn + 1] = string.format("%d loose part group%s not attached to the craft (orange)", #comps - 1,
         #comps == 2 and "" or "s")
     end
@@ -1560,12 +1565,14 @@ function launchCheck()
     end
   end
   if not has.engine and not has.wheel then
+    rank[#warn + 1] = 0
     warn[#warn + 1] = "no engine — it will sit on the pad"
   else
     local s = stageStats()
     -- lift-off happens in the pad's air: the sea-level TWR decides it
     local lift = s.nozzles and s.twr_sl or s.twr
     if (lift or 0) > 0 and lift < 1.0 then
+      rank[#warn + 1] = 0
       warn[#warn + 1] = string.format("TWR %.2f%s — too heavy to lift off %s", lift,
         s.nozzles and " at the pad" or "", s.world.name or "this world")
     end
@@ -1582,11 +1589,13 @@ function launchCheck()
     local lb = launchBalance()
     if lb and lb.k > 0 then
       if lb.tp / lb.k > 0.05 then
+        rank[#warn + 1] = 1
         warn[#warn + 1] = string.format("the launch engines push %.0f kN·m off the centre of mass (%.0f mm off line%s) — the SAS holds about %.0f: it will tip over. Line the blue thrust line up through the amber CoM (V)",
           lb.tp, lb.off * 1000, lb.lat > 0.5 and string.format(", %.0f kN sideways", lb.lat) or "", lb.k * 0.05)
       end
       if math.abs(lb.tr) / lb.k > 0.1 then
-        warn[#warn + 1] = string.format("the engines are turned round the craft's axis (%.1f°): %.0f kN·m of spin — select a tilted engine or booster and press SPACE to stand it straight",
+        rank[#warn + 1] = 1
+        warn[#warn + 1] = string.format("the engines are turned round the craft's axis (%.1f°): %.0f kN·m of spin — select the engine (or the tank it hangs on) and press SPACE: it squares the tank and the engine with it",
           lb.cant, math.abs(lb.tr))
       end
     end
@@ -1595,6 +1604,7 @@ function launchCheck()
     local js = jointStress()
     if js and js.ratio > 1.0 then
       local p, q = parts[js.uid], parts[js.parent]
+      rank[#warn + 1] = 0
       warn[#warn + 1] = string.format("at full throttle %s reaches %.1f g at %s and the joint between the %s and the %s takes %.0f kN — it holds %.0f: it tears above %.1f g. Keep that stage under %d%% throttle, or use a stronger part there",
         js.stage == 1 and "the launch stage" or ("stage " .. js.stage), js.g, js.at,
         p and p.def.label or "part", q and q.def.label or "part", js.kn, js.str,
@@ -1602,6 +1612,7 @@ function launchCheck()
     end
     local lbo = looseBoosters()
     if lbo then
+      rank[#warn + 1] = 0
       warn[#warn + 1] = lbo.n == 1
         and "a side booster has no radial decoupler — it can't be dropped when it runs dry and rides along empty until its stage goes: put a Radial Decoupler between it and the core"
         or string.format("%d side boosters have no radial decoupler — they can't be dropped when they run dry and ride along empty until their stage goes: put a Radial Decoupler between each and the core", lbo.n)
@@ -1617,10 +1628,11 @@ function launchCheck()
       p and p.def.label or "part", rt.n, rt.deg)
   end
   if not has.chute and has.crewed and not (has.wheel and not has.engine) then
+    rank[#warn + 1] = 0
     warn[#warn + 1] = "no parachute — the pod will not survive the landing"
   end
   if has.wheel then
-    for _, w in ipairs(wheelChecks()) do warn[#warn + 1] = w end
+    for _, w in ipairs(wheelChecks()) do rank[#warn + 1] = 1; warn[#warn + 1] = w end
   end
   -- A probe with nothing aboard to keep it powered is a probe that goes dark
   -- before it gets anywhere. Say how long it has.
@@ -1633,7 +1645,16 @@ function launchCheck()
       end
     end
   end
-  return { warn = warn, has = has, hints = hints }
+  local order = {}
+  for i = 1, #warn do order[i] = i end
+  table.sort(order, function(x, y)
+    local rx, ry = rank[x] or 2, rank[y] or 2
+    if rx ~= ry then return rx < ry end
+    return x < y
+  end)
+  local sorted = {}
+  for i, k in ipairs(order) do sorted[i] = warn[k] end
+  return { warn = sorted, has = has, hints = hints }
 end
 
 -- THE LAUNCH STAGE'S BALANCE, as the flight will feel it: the engines below
@@ -3752,6 +3773,24 @@ function resetSelection(uid)
   if G and off > 0.02 and off < SQUARE_MAX
     and dot3(G.X, M.X) + dot3(G.Y, M.Y) + dot3(G.Z, M.Z) < 2.999 then
     target, how = G, "squared"
+  elseif dot3(B.X, M.X) + dot3(B.Y, M.Y) + dot3(B.Z, M.Z) > 2.9999 then
+    -- Already as its mount holds it (a Skipper under a booster tank leaning
+    -- with it): SPACE squares what it is STACKED on, the first part down the
+    -- stack that stands a few degrees off — the tank, and the engine with it.
+    local cur = uid
+    for _ = 1, 64 do
+      local q = parts[cur]
+      local att = q and q.att
+      if not (q and q.parent and parts[q.parent]) then break end
+      if not (att == nil or att == "" or att == "top" or att == "bottom") then break end
+      cur = q.parent
+      local Gc, offc = squaredFrame(cur)
+      if Gc and offc > 0.02 and offc < SQUARE_MAX then
+        local c = parts[cur]
+        rotateSelection(cur, basisClean(basisMul(Gc, basisT(basisOf(c.yaw, c.pitch, c.roll)))))
+        return "squared", cur
+      end
+    end
   end
   local Q = basisMul(target, basisT(B))
   rotateSelection(uid, basisClean(Q))
@@ -3792,7 +3831,11 @@ function rotKeysTick(cam_busy)
   end
   if sel and tool ~= "stage" and tool ~= "groups" and not input.key("ctrl") then
     if input.pressed("space") then
-      if resetSelection(selected_uid) == "squared" then
+      local how, under = resetSelection(selected_uid)
+      if how == "squared" and under then
+        hint(string.format("squared up the %s it stands on — it was a few degrees off, and this rides on it",
+          parts[under] and parts[under].def.label or "part"), 3.0)
+      elseif how == "squared" then
         hint("squared up — it stands on the right angle it was nearly on (SPACE again: back to its mount)", 2.5)
       else
         hint("rotation reset", 1.5)

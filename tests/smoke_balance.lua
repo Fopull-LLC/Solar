@@ -787,8 +787,20 @@ local rt = env.ringTwist()
 check(rt and rt.sym == 20 and rt.n == 4 and rt.deg > 0.3 and rt.deg < 1.0,
   string.format("the booster ring is the twisted one (sym %s ×%s, %.2f°)", tostring(rt and rt.sym), tostring(rt and rt.n), rt and rt.deg or -1))
 check(chk.hints and chk.hints[1] and chk.hints[1]:find("SPACE", 1, true), "...and the hint says SPACE: " .. tostring(chk.hints and chk.hints[1]))
--- SPACE on one booster tank straightens the ring
-env.resetSelection(107)
+-- LAUNCH CHECK is worst first: what breaks the craft, then what tips or
+-- spins it, then advice
+check(chk.warn[1] and chk.warn[1]:find("tears above", 1, true) and chk.warn[2] and chk.warn[2]:find("no radial decoupler", 1, true),
+  "the craft-breaking warnings come first: " .. tostring(chk.warn[1]) .. " | " .. tostring(chk.warn[2]))
+local i_tip, i_esc = nil, nil
+for i, w in ipairs(chk.warn) do
+  if w:find("tip over", 1, true) then i_tip = i end
+  if w:find("escapes", 1, true) then i_esc = i end
+end
+check(i_tip and i_esc and i_tip < i_esc, "...tipping before advice (" .. tostring(i_tip) .. " < " .. tostring(i_esc) .. ")")
+-- SPACE on a booster's ENGINE (already as its tank holds it) squares the tank
+-- it hangs on, the ring and the engine with it
+local how, under = env.resetSelection(124)
+check(how == "squared" and under == 107, "SPACE on a Skipper squares the FT-M it hangs on (" .. tostring(how) .. ", " .. tostring(under) .. ")")
 rt = env.ringTwist()
 check(rt == nil or rt.sym ~= 20, "after SPACE on one booster the ring is straight (" .. tostring(rt and rt.sym) .. " " .. tostring(rt and rt.deg) .. ")")
 local lb = env.launchBalance()
