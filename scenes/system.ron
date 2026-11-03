@@ -2478,6 +2478,11 @@
                     enabled: true,
                     params: [],
                 ),
+                (
+                    kind: "debris_pack",
+                    enabled: true,
+                    params: [],
+                ),
             ],
             id: Some(75),
             parent_id: Some(16),

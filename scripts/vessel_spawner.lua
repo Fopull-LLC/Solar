@@ -827,6 +827,9 @@ local function clear_flight()
   spawn_q, build_q = nil, nil
   local fo = ref("flight_ops")
   if fo and fo.forgetNodes then fo.forgetNodes(ids) end
+  -- what the flight shed and debris_pack took out of the scene goes too
+  local dp = ref("debris_pack")
+  if dp and dp.forgetTag then dp.forgetTag(flight.tag) end
   -- the clamp pins of anything just removed
   local keep = {}
   for _, p in ipairs(pins) do if not roots[p.node.id] then keep[#keep + 1] = p end end
