@@ -181,6 +181,15 @@ GFX_OPTIONS = {
              { label = "4,096", value = 4096 } },
     preset = { Low = 512, Medium = 1024, High = 1024, Ultra = 2048 },
     desc = "Marks kept on the ground (tracks, scorch, digging); past this the oldest fades." },
+  -- particles.setMax (engine 0.117.1-dev.1402): past the budget every effect
+  -- is thinned alike (a burst keeps at least one). The busiest scenes measured
+  -- (a launch's plume and pad dust, the jet's take-off roll, the gameplay
+  -- smoke) peak near 6,000, so High's 8,000 changes nothing seen.
+  { key = "particles", group = "world", label = "Particle density", cost = "low to medium",
+    opts = { { label = "2,000", value = 2000 }, { label = "4,000", value = 4000 }, { label = "8,000", value = 8000 },
+             { label = "16,000", value = 16000 }, { label = "No limit", value = 0 } },
+    preset = { Low = 2000, Medium = 4000, High = 8000, Ultra = 16000 },
+    desc = "The most smoke, dust and spark particles alive at once. Past it every effect is thinned alike; none goes out." },
   { key = "texture_quality", group = "world", label = "Texture quality", cost = "memory (GPU)",
     opts = { { label = "High", value = "High" }, { label = "Medium", value = "Medium" }, { label = "Low", value = "Low" } },
     preset = { Low = "Medium", Medium = "High", High = "High", Ultra = "High" },

@@ -294,6 +294,72 @@ local MAIN = function()
     s.override = full({ jaw_open = 1, lip_down = 1, lip_up = 1 })
     wait(0.4)
     shot("rig_side_open", 720, 720)
+  elseif CASE == "mouth" then
+    -- engine card 0584: the face's vertex alpha is data (the cavities: the
+    -- mouth's lining, the nostrils, behind the lids), not opacity. Every actor
+    -- wears actor 1's look; actor 1 keeps vertexAlphaData off, actor 2 has it
+    -- on (setMaterial over every part). Mouth open (a talking syllable's peak,
+    -- then wide), front and three quarters, each in the plain look and in
+    -- face_skin's debug view (debugView.x = 1 draws the vertex alpha flat:
+    -- the lining near black, so a hole cut in it shows the head's inside,
+    -- alpha 1, white).
+    for k = 2, params.n do local _, sk = actor(k); if sk and sk.setLook then sk.setLook(L[1]) end end
+    for k = 1, params.n do
+      local fk, sk, mk = actor(k)
+      for _, c in ipairs(mk:children()) do if c.name == "Helmet" then c.visible = false end end
+      sk.forceHelmet = false
+      sk.still = true
+      if fk and fk.setMaterial then pcall(fk.setMaterial, fk, { vertexAlphaData = k >= 2 }) end
+    end
+    wait(1.0)
+    local function dbg(on)
+      for k = 1, params.n do
+        local fk = actor(k)
+        local m = fk and fk.material and fk:material("FaceSkin")
+        if m and m.setShaderParam then pcall(m.setShaderParam, m, "debugView", on and 1 or 0, 0, 0) end
+      end
+    end
+    local poses = { { "talk", { jaw_open = 0.37, lip_down = 0.25, smile_L = 0.11, smile_R = 0.11 } },
+                    { "wide", { jaw_open = 1, lip_down = 1, lip_up = 1 } } }
+    local views = { { "front", 0.48, 0.0, 0.0 }, { "3q", 0.44, 0.03, 0.30 } }
+    for _, ps in ipairs(poses) do
+      for k = 1, params.n do local _, sk = actor(k); sk.override = full(ps[2]) end
+      for _, d in ipairs({ false, true }) do
+        dbg(d)
+        for k = 1, math.min(2, params.n) do
+          local fk = actor(k)
+          for _, v in ipairs(views) do
+            frame_face(fk, v[2], v[3], v[4])
+            wait(0.4)
+            shot(string.format("mouth_%s_%s_%s%s", ps[1], v[1], k >= 2 and "vad" or "off", d and "_alpha" or ""), 720, 720)
+          end
+        end
+      end
+    end
+    dbg(false)
+    -- the same actor, the same frame state, the flag flipped: the suits'
+    -- animators stopped (setSpeed 0) so the pictures can be compared pixel
+    -- for pixel; off, on, off again (the noise floor)
+    for k = 1, params.n do
+      local _, _, mk = actor(k)
+      local an = mk and mk:animator()
+      if an and an.setSpeed then pcall(an.setSpeed, an, 0) end
+    end
+    local f1 = actor(1)
+    for _, ps in ipairs(poses) do
+      for k = 1, params.n do local _, sk = actor(k); sk.override = full(ps[2]) end
+      for _, v in ipairs(views) do
+        frame_face(f1, v[2], v[3], v[4])
+        for pass, on in ipairs({ false, true, false }) do
+          pcall(f1.setMaterial, f1, { vertexAlphaData = on })
+          wait(0.5)
+          shot(string.format("same_%s_%s_%d%s", ps[1], v[1], pass, on and "vad" or "off"), 720, 720)
+        end
+      end
+    end
+    local f = actor(1)
+    local ms = f.materials and f:materials() or {}
+    for _, m in ipairs(ms) do P("MAT object %s material %s overridden %s", tostring(m.object), tostring(m.material), tostring(m.overridden)) end
   elseif CASE == "perf" then
     if perf and perf.enable then perf.enable(true) end
     local fa = face_frame(actor(1))

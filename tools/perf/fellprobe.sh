@@ -1,7 +1,7 @@
 #!/bin/bash
 # fellprobe.sh — felling trees with the terrain laser, driven as a player (fellprobe_modes.lua).
 #
-#   fellprobe.sh <engine> [modes]   modes: vfell, vmine vlook vshaft vlog vbush (mineprobe_modes.lua), and verifyprobe's
+#   fellprobe.sh <engine> [modes]   modes: vfell, vmine vlook vshaft vseam vlog vbush (mineprobe_modes.lua), and verifyprobe's
 #   env: WORK LOCK TAG PATCHES BENCH_PARAMS as bench.sh (TMO defaults to 330 s a mode)
 #        USERSAVE=1 for vflora vplants vobj vjitter: the player's save, copied from
 #        SAVESRC (default ~/.local/share/solar, else the repo's save/ and saves/) into the
@@ -44,7 +44,7 @@ m = "\n".join(open(f).read() for f in sys.argv[2:])
 s = open(p).read()
 i = s.index('-- ── main ──')
 s = s[:i] + m + s[i:]
-modes = ('vbike', 'vvab', 'vflora', 'vplants', 'vobj', 'vjitter', 'vnose', 'vfell', 'vmine', 'vlog', 'vbush', 'vflick', 'vpaint', 'vlook', 'vpdiag', 'vshaft')
+modes = ('vbike', 'vvab', 'vflora', 'vplants', 'vobj', 'vjitter', 'vnose', 'vfell', 'vmine', 'vlog', 'vbush', 'vflick', 'vpaint', 'vlook', 'vpdiag', 'vshaft', 'vseam')
 s = s.replace('    elseif MODE == "plane" then run_plane()',
               '    elseif MODE == "plane" then run_plane()' + ''.join('\n    elseif MODE == "%s" then run_%s()' % (m, m) for m in modes))
 open(p, 'w').write(s)

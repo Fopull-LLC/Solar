@@ -64,7 +64,7 @@
 -- them, live: the engine's own (render scale, sharpening, anti-aliasing, the
 -- Lighting node's shadows / contact shadows / reflections / fog steps, the
 -- Post Processing node's bloom, AO, motion blur and the depth of field, the
--- decal budget, the terrain memory budget) and the game's own, through the
+-- decal and particle budgets, the terrain memory budget) and the game's own, through the
 -- scripts' published values (flora_field and mineral_field reach and budget,
 -- vehicle_fx's effects tier, crew_strip's portrait redraw budget, and
 -- `volumetric`/`shafts` for atmosphere.lua). Another script's value is only
@@ -482,7 +482,7 @@ local function sref(kind)
   refs_w[kind], refs_w[kind .. "_t"] = r or false, time
   return r
 end
-local decals_set, budget_set, aa_set, detail_set, tq_set = nil, nil, nil, nil, nil
+local decals_set, budget_set, aa_set, detail_set, tq_set, parts_set = nil, nil, nil, nil, nil, nil
 local function apply_world()
   local ff = sref("flora_field")
   if ff then
@@ -508,6 +508,12 @@ local function apply_world()
   local dm = tonumber(opt("decals"))
   if dm and dm ~= decals_set and decals and decals.setMax then
     if pcall(decals.setMax, math.floor(dm)) then decals_set = dm end
+  end
+  -- the particle budget (engine 0.117.1-dev.1402, particles.setMax; 0 = none).
+  -- It lasts until Stop, so it is set on every scene start like the rest.
+  local pm = tonumber(opt("particles"))
+  if pm and pm ~= parts_set and particles and particles.setMax then
+    if pcall(particles.setMax, pm > 0 and math.floor(pm) or nil) then parts_set = pm end
   end
   local tm = tonumber(opt("terrain_memory"))
   if tm and tm ~= budget_set and terrain and terrain.setBudget then

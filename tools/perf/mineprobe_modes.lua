@@ -657,6 +657,89 @@ local function run_vpdiag()
   V.result()
 end
 
+-- vseam: the seam's own paint (mineral_field.seamPlan, the ops a vein that
+-- crops out is painted with), four straight 14 m copper seams in a 2 x 2 grid
+-- on open ground `seam_out` (160) m out (`seam_dir` 0..3: +t2, +t1, -t2,
+-- -t1; 2 is open meadow on the probe seed): "default" every colour op on
+-- the engine's default brush at the old stain size (the paint before engine
+-- card 0604), "plan" as mineral_field paints it now (STAIN_BRUSH at
+-- STAIN_REACH), "soft0" the soft fall with no core at the old size,
+-- "lin10x13" hardness 0.1 linear at the new size. Pictured from a person's
+-- eye height (1.7 m) 9 m back from each, and from 20 m up and 8 m back.
+-- strs seam_ore (copper: its green stain stands out on any soil).
+local function run_vseam()
+  V.tag = "seam"
+  local Cc = findScript("crew")
+  if Cc and Cc.setSafety then Cc.setSafety("invincible") end
+  wait(4)
+  local mf, mats = findScript("mineral_field"), findScript("materials")
+  local ore = params.seam_ore or "copper"
+  local slots = mats and mats.VEIN_SLOTS and mats.VEIN_SLOTS[ore]
+  local slot = slots and slots[1] or 27
+  local u, t1, t2, R = base_frame()
+  local tb = ({ t2, t1, { x = -t2.x, y = -t2.y, z = -t2.z }, { x = -t1.x, y = -t1.y, z = -t1.z } })[(params.seam_dir or 0) + 1]
+  local dir = dir_at(u, tb, params.seam_out or 160, R)
+  stand_at({ dir = dir, r = ground_r(home(), dir.x, dir.y, dir.z, R + 150) })
+  wait(4)
+  local a = astro()
+  local U = V.up(a)
+  local A = math.abs(U.y) > 0.9 and { x = 1, y = 0, z = 0 } or { x = 0, y = 1, z = 0 }
+  local e1 = unit(cross(U, A)); local e2 = unit(cross(U, e1))
+  local b = home()
+  local variants = {
+    { "default", function(o) return nil end, 1.0 / (mf.STAIN_REACH or 1) },
+    { "plan", function(o) return o.brush end, 1.0 },
+    { "soft0", function(o) return o.brush and { hardness = 0.0, falloff = "soft" } or nil end, 1.0 / (mf.STAIN_REACH or 1) },
+    { "lin10x13", function(o) return o.brush and { hardness = 0.1, falloff = "linear" } or nil end, 1.0 },
+  }
+  if params.seam_only then variants = { variants[1], variants[2] } end
+  local centres = {}
+  for vi, var in ipairs(variants) do
+    -- a 2 x 2 grid: 13 m either side, 14 and 32 m out
+    local off = ((vi - 1) % 2 == 0) and -13 or 13
+    local fw = (vi <= 2) and 14 or 32
+    local g = {}
+    for k = 0, 9 do
+      local sd = off - 7 + k * 1.55
+      local p = { x = a.x + e1.x * fw + e2.x * sd, y = a.y + e1.y * fw + e2.y * sd, z = a.z + e1.z * fw + e2.z * sd }
+      local q = MP.ground_at(sub(p, b))
+      if q then
+        local l = len(q.x, q.y, q.z)
+        g[#g + 1] = { q.x, q.y, q.z, w = 1.3, ux = q.x / l, uy = q.y / l, uz = q.z / l }
+      end
+    end
+    centres[vi] = g[math.ceil(#g / 2)]
+    local plan = mf.seamPlan(ore, g, slot, nil)
+    local nb = 0
+    for _, o in ipairs(plan) do
+      local bb = home()
+      if o.op == "tex" then terrain.paintTexture(bb.x + o.x, bb.y + o.y, bb.z + o.z, o.r, o.slot)
+      else
+        local br = var[2](o)
+        if br then nb = nb + 1; terrain.paint(bb.x + o.x, bb.y + o.y, bb.z + o.z, o.r * var[3], o.c[1], o.c[2], o.c[3], o.s, br)
+        else terrain.paint(bb.x + o.x, bb.y + o.y, bb.z + o.z, o.r * (o.brush and var[3] or 1), o.c[1], o.c[2], o.c[3], o.s) end
+      end
+    end
+    P("VP seam %s: %d points, %d ops, %d with a brush", var[1], #g, #plan, nb)
+  end
+  wait(3.0)
+  for vi, var in ipairs(variants) do
+    local c = centres[vi]
+    if c then
+      for _, view in ipairs({ { "eye", 9.0, 1.7 }, { "up", 8.0, 20.0 } }) do
+        local cam = V.fixed_cam(MP.w({ x = c[1], y = c[2], z = c[3] }), U, e1, view[2], view[3])
+        for _ = 1, 20 do V.place_cam(); yield() end
+        V.shot(view[1] .. "_" .. var[1], false, cam)
+        for _ = 1, 20 do V.place_cam(); yield() end
+        V.place_cam = nil
+        if cam and cam.valid then cam:destroy() end
+      end
+    end
+  end
+  V.check("every seam painted", #centres == #variants, "%d of %d", #centres, #variants)
+  V.result()
+end
+
 local function run_vshaft()
   V.tag = "shaft"
   local Cc = findScript("crew")

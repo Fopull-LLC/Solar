@@ -29,6 +29,21 @@ function VP.shot(nm)
   VP.shots = VP.shots + 1
 end
 
+-- strs gfx = Low | Medium | High | Ultra: the graphics level (and with it the
+-- particle budget, particles.setMax) set before the run; pmax = a number
+-- overrides the budget (0 = none) for an A/B
+function VP.level()
+  if VP.leveled then return end
+  VP.leveled = true
+  local gx = findScript("graphics")
+  if params.gfx and gx and gx.set then gx.set(tostring(params.gfx)) end
+  if params.pmax and particles and particles.setMax then
+    wait(1)
+    particles.setMax(params.pmax > 0 and params.pmax or nil)
+  end
+  P("VFX LEVEL %s particles.max %s", tostring(gx and gx.level and gx.level()), tostring(particles and particles.max and particles.max()))
+end
+
 function VP.stats(tag)
   local vf = findScript("vehicle_fx")
   local s = vf and vf.stats and vf.stats() or {}
@@ -36,7 +51,7 @@ function VP.stats(tag)
   P("VFX STATS %s: tier %s jets %s heat %s hot %s writes %s marks %s quads %s decalsLaid %s quadsLaid %s dust %s smoke %s sparks %s shorts %s skid_m %.1f wake %s | particles %s effects %s effectsDropped %s decals %s decalTris %s lights %s draws %s",
     tag, tostring(s.tier), tostring(s.jets), tostring(s.heat), tostring(s.hot), tostring(s.writes), tostring(s.marks), tostring(s.quads),
     tostring(s.decals), tostring(s.laidQuads), tostring(s.dust), tostring(s.smoke), tostring(s.sparks), tostring(s.shorts), s.skid_m or 0,
-    tostring(s.wake), tostring(c.particles), tostring(c.effects), tostring(c.effectsDropped), tostring(c.decals), tostring(c.decalTris),
+    tostring(s.wake), tostring(c.particles) .. "/" .. tostring(particles and particles.max and particles.max()), tostring(c.effects), tostring(c.effectsDropped), tostring(c.decals), tostring(c.decalTris),
     tostring(c.lights), tostring(c.draws))
   local ms = perf.scriptMs and perf.scriptMs("vehicle_fx") or -1
   P("VFX COST %s: vehicle_fx %.3f ms, vfx %.3f ms (smoothed)", tag, ms, perf.scriptMs and perf.scriptMs("vfx") or -1)
@@ -166,6 +181,7 @@ end
 -- ── vfxjet ─────────────────────────────────────────────────────────────────
 function VP.run_jet()
   VP.TAG = "jet"
+  VP.level()
   local vc = VP.launch_plane()
   if not vc then P("VFX RESULT jet: no craft"); return end
   local vn = vc.node
@@ -269,6 +285,7 @@ function VP.wheels_line(tag)
 end
 function VP.run_rover()
   VP.TAG = "rover"
+  VP.level()
   local vc = launch_via_builder(ROVER, "runway", 6)
   if not vc then P("VFX RESULT rover: no craft"); return end
   local vn = vc.node
@@ -371,6 +388,7 @@ end
 -- ── vfxrocket: engine heat, then reentry ───────────────────────────────────
 function VP.run_rocket()
   VP.TAG = "rocket"
+  VP.level()
   local vc = launch_via_builder(rocket_bp(2), "pad", 5)
   if not vc then P("VFX RESULT rocket: no craft"); return end
   local vn = vc.node
@@ -487,6 +505,7 @@ end
 -- ── vfxdamage ──────────────────────────────────────────────────────────────
 function VP.run_damage()
   VP.TAG = "damage"
+  VP.level()
   local vc = launch_via_builder(ROVER, "runway", 6)
   if not vc then P("VFX RESULT damage: no craft"); return end
   local vn = vc.node

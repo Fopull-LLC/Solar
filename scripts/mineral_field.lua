@@ -1035,9 +1035,23 @@ local function ball_clear(x, y, z, ux, uy, uz, r, clear)
   return true
 end
 
+-- THE BRUSHES (engine 0.117.1-dev.1402, terrain.paint's brush table). The
+-- stain is the soft one: full over its inner quarter, then a square fall to
+-- the rim (a long faint tail), on balls 1.3 times as wide, so over the
+-- 1.5–2.4 m voxels it shades off through several of them into the ground
+-- instead of stopping in a stepped ring at the old smoothstep's edge. Soft
+-- with no full core at the old size read as a faint smear a third as wide;
+-- linear at 1.3x kept a hard-looking rim (tools/perf mineprobe vseam). The
+-- core keeps the engine's default (a third of its radius full, smoothstep
+-- out): it is the ore itself and should read as a band.
+STAIN_BRUSH = { hardness = 0.25, falloff = "soft" }
+STAIN_REACH = 1.3
+CORE_BRUSH = nil
+
 -- THE SEAM'S PAINT, AS A PLAN: the ops that lay seam `ore` along ground points
 -- `g` (body-relative, with up ux/uy/uz and width w), in order, each one
--- { op = "tex"|"col", x, y, z (body-relative), r, slot | c = {r,g,b}, s }.
+-- { op = "tex"|"col", x, y, z (body-relative), r, slot | c = {r,g,b}, s,
+-- brush } (brush: terrain.paint's, nil the engine's default).
 -- `slot` nil plans the colour only (an older seam's stain). `clear(x,y,z)`
 -- → true where the ground is kept clear (the base). Pure: the smoke test
 -- reads it (tests/smoke_minerals.lua).
@@ -1075,7 +1089,7 @@ function seamPlan(ore, g, slot, clear, opts)
       add({ op = "tex", x = q[1] - q.ux * up0, y = q[2] - q.uy * up0, z = q[3] - q.uz * up0, r = seam_r(q), slot = slot, ux = q.ux, uy = q.uy, uz = q.uz })
       local bx, by, bz = q[1] - q.ux * wd * lens, q[2] - q.uy * wd * lens, q[3] - q.uz * wd * lens
       add({ op = "tex", x = bx, y = by, z = bz, r = wd * 0.9, slot = slot, ux = q.ux, uy = q.uy, uz = q.uz })
-      if lk.seam or SEAM_COLOUR[ore] then add({ op = "col", x = bx, y = by, z = bz, r = wd * 0.9, c = col, s = 1.0, ux = q.ux, uy = q.uy, uz = q.uz }) end
+      if lk.seam or SEAM_COLOUR[ore] then add({ op = "col", x = bx, y = by, z = bz, r = wd * 0.9, c = col, s = 1.0, brush = CORE_BRUSH, ux = q.ux, uy = q.uy, uz = q.uz }) end
     end
   end
   -- The stain first, then the core. Brushes are soft (full only inside a
@@ -1093,17 +1107,17 @@ function seamPlan(ore, g, slot, clear, opts)
     dx, dy, dz = dx / dl, dy / dl, dz / dl
     for j = 1, 3 do
       local t = 2.4 * j
-      add({ op = "col", x = a[1] + dx * t, y = a[2] + dy * t, z = a[3] + dz * t, r = 5.0 - 0.5 * j, c = st, s = 1.0 - 0.2 * j, ux = a.ux, uy = a.uy, uz = a.uz })
+      add({ op = "col", x = a[1] + dx * t, y = a[2] + dy * t, z = a[3] + dz * t, r = (5.0 - 0.5 * j) * STAIN_REACH, c = st, s = 1.0 - 0.2 * j, brush = STAIN_BRUSH, ux = a.ux, uy = a.uy, uz = a.uz })
     end
   end
   for _, q in ipairs(g) do
-    add({ op = "col", x = q[1], y = q[2], z = q[3], r = seam_r(q) + 3.5, c = st, s = 1.0, ux = q.ux, uy = q.uy, uz = q.uz })
+    add({ op = "col", x = q[1], y = q[2], z = q[3], r = (seam_r(q) + 3.5) * STAIN_REACH, c = st, s = 1.0, brush = STAIN_BRUSH, ux = q.ux, uy = q.uy, uz = q.uz })
   end
   -- the core twice over (a soft brush gives half its colour at the core's
   -- edge; two coats give three quarters)
   for _ = 1, 2 do
     for _, q in ipairs(g) do
-      add({ op = "col", x = q[1] - q.ux * 0.2, y = q[2] - q.uy * 0.2, z = q[3] - q.uz * 0.2, r = seam_r(q) * 2.0, c = col, s = 1.0, ux = q.ux, uy = q.uy, uz = q.uz })
+      add({ op = "col", x = q[1] - q.ux * 0.2, y = q[2] - q.uy * 0.2, z = q[3] - q.uz * 0.2, r = seam_r(q) * 2.0, c = col, s = 1.0, brush = CORE_BRUSH, ux = q.ux, uy = q.uy, uz = q.uz })
     end
   end
   return out
@@ -1112,7 +1126,10 @@ end
 local function seam_apply(plan, body)
   for _, o in ipairs(plan) do
     if o.op == "tex" then terrain.paintTexture(body.x + o.x, body.y + o.y, body.z + o.z, o.r, o.slot)
-    elseif terrain.paint then terrain.paint(body.x + o.x, body.y + o.y, body.z + o.z, o.r, o.c[1], o.c[2], o.c[3], o.s) end
+    elseif terrain.paint then
+      if o.brush then terrain.paint(body.x + o.x, body.y + o.y, body.z + o.z, o.r, o.c[1], o.c[2], o.c[3], o.s, o.brush)
+      else terrain.paint(body.x + o.x, body.y + o.y, body.z + o.z, o.r, o.c[1], o.c[2], o.c[3], o.s) end
+    end
   end
 end
 

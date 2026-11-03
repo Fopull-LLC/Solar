@@ -360,8 +360,16 @@ function collider(rec)
 end
 
 -- ── engine side (only when the engine is there) ─────────────────────────────
+-- The meshes last the scene (engine 0.117.1-dev.1402, `scene = true`): the
+-- engine frees them at the next scene load, when this cache (a script's
+-- state) goes too. Without it every load left the last scene's meshes on
+-- the GPU and the next instance built them again (perf.counts scriptMeshes
+-- climbed each menu round trip). Not `owner = node`: the builder overlay is
+-- additive and both scenes run this script, so a mesh one instance made may
+-- be worn by a node of the other scene (findScript answers the first one);
+-- a scene load is the one moment nothing still draws any of them.
 local cache, builds = {}, 0
-local function strip(M) return { positions = M.positions, normals = M.normals, uvs = M.uvs, colors = M.colors, indices = M.indices } end
+local function strip(M) return { positions = M.positions, normals = M.normals, uvs = M.uvs, colors = M.colors, indices = M.indices, scene = true } end
 function meshName(key, fn, env)
   local m = (env and env.mesh) or mesh
   if cache[key] then return cache[key] end
