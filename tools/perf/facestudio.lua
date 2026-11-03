@@ -309,7 +309,8 @@ local MAIN = function()
       for _, c in ipairs(mk:children()) do if c.name == "Helmet" then c.visible = false end end
       sk.forceHelmet = false
       sk.still = true
-      if fk and fk.setMaterial then pcall(fk.setMaterial, fk, { vertexAlphaData = k >= 2 }) end
+      -- (the vertexAlphaData flag this case once toggled is gone since engine
+      -- 0.117.1-dev.1405: a shader's vertex alpha is always data)
     end
     wait(1.0)
     local function dbg(on)
@@ -351,7 +352,6 @@ local MAIN = function()
       for _, v in ipairs(views) do
         frame_face(f1, v[2], v[3], v[4])
         for pass, on in ipairs({ false, true, false }) do
-          pcall(f1.setMaterial, f1, { vertexAlphaData = on })
           wait(0.5)
           shot(string.format("same_%s_%s_%d%s", ps[1], v[1], pass, on and "vad" or "off"), 720, 720)
         end

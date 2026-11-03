@@ -1047,6 +1047,17 @@ end
 STAIN_BRUSH = { hardness = 0.25, falloff = "soft" }
 STAIN_REACH = 1.3
 CORE_BRUSH = nil
+-- The seam's texture slot (engine 0609): a voxel holds one slot, so past the
+-- brush's full core each voxel takes it by chance, its chance the brush's
+-- weight there, and the palette's edge blend smooths the scatter. Half the
+-- ball full and a soft tail out to 1.25 times the old reach keeps the band's
+-- body where it was and breaks its stepped voxel squares into a ragged edge.
+-- OFF for now: on 0.117.1-dev.1405 the scattered rim draws pale, hard-edged
+-- patches (neither slot) where scattered voxels meet the ground's own slot
+-- (tools/perf fellprobe vseam, seam_*_plan). Set it back when the engine's
+-- blend over a scattered rim is fixed.
+TEX_BRUSH = nil -- { hardness = 0.5, falloff = "soft" }
+TEX_REACH = 1.0 -- 1.25 with the brush
 
 -- THE SEAM'S PAINT, AS A PLAN: the ops that lay seam `ore` along ground points
 -- `g` (body-relative, with up ux/uy/uz and width w), in order, each one
@@ -1086,9 +1097,9 @@ function seamPlan(ore, g, slot, clear, opts)
       -- (a buried vein's line is its middle: the core round it, the lens
       -- reaching a width under it)
       local up0, lens = opts.buried and 0 or 0.2, opts.buried and 0.9 or 1.5
-      add({ op = "tex", x = q[1] - q.ux * up0, y = q[2] - q.uy * up0, z = q[3] - q.uz * up0, r = seam_r(q), slot = slot, ux = q.ux, uy = q.uy, uz = q.uz })
+      add({ op = "tex", x = q[1] - q.ux * up0, y = q[2] - q.uy * up0, z = q[3] - q.uz * up0, r = seam_r(q) * TEX_REACH, slot = slot, brush = TEX_BRUSH, ux = q.ux, uy = q.uy, uz = q.uz })
       local bx, by, bz = q[1] - q.ux * wd * lens, q[2] - q.uy * wd * lens, q[3] - q.uz * wd * lens
-      add({ op = "tex", x = bx, y = by, z = bz, r = wd * 0.9, slot = slot, ux = q.ux, uy = q.uy, uz = q.uz })
+      add({ op = "tex", x = bx, y = by, z = bz, r = wd * 0.9 * TEX_REACH, slot = slot, brush = TEX_BRUSH, ux = q.ux, uy = q.uy, uz = q.uz })
       if lk.seam or SEAM_COLOUR[ore] then add({ op = "col", x = bx, y = by, z = bz, r = wd * 0.9, c = col, s = 1.0, brush = CORE_BRUSH, ux = q.ux, uy = q.uy, uz = q.uz }) end
     end
   end
@@ -1125,7 +1136,9 @@ end
 
 local function seam_apply(plan, body)
   for _, o in ipairs(plan) do
-    if o.op == "tex" then terrain.paintTexture(body.x + o.x, body.y + o.y, body.z + o.z, o.r, o.slot)
+    if o.op == "tex" then
+      if o.brush then terrain.paintTexture(body.x + o.x, body.y + o.y, body.z + o.z, o.r, o.slot, o.brush)
+      else terrain.paintTexture(body.x + o.x, body.y + o.y, body.z + o.z, o.r, o.slot) end
     elseif terrain.paint then
       if o.brush then terrain.paint(body.x + o.x, body.y + o.y, body.z + o.z, o.r, o.c[1], o.c[2], o.c[3], o.s, o.brush)
       else terrain.paint(body.x + o.x, body.y + o.y, body.z + o.z, o.r, o.c[1], o.c[2], o.c[3], o.s) end
