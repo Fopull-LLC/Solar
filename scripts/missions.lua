@@ -1307,8 +1307,19 @@ end
 --
 -- Only the HOME world's finds tick the programme (as for the rare plants); a
 -- find anywhere is announced.
+--
+-- WHO MAY REPORT ONE (playtest 2026-11: "picking up some grass counted as a
+-- Star Geode"). The dig once measured "depth" with a ray that met whatever
+-- stood over the cut — a tree, an overhang, the crew — and rolled crystal out
+-- of a noise field, so a cut at a plant's foot could read as deep crystal.
+-- Now a find needs its SOURCE: "pocket" (a geode pocket's volume, cut out —
+-- mineral_field) or "deposit" (crystal-slot rock the cut removed, outside the
+-- surface veins, under GEODE_DEPTH of ground read from the terrain's own
+-- field). Anything else — a plant, a plucked or broken outcrop, a surface
+-- vein, an untagged caller — is refused.
 GEODE_DEPTH = 3.0
 GEODE_MATS = { geode = true, crystal = true }
+GEODE_SOURCES = { pocket = true, deposit = true }
 
 -- Pure: does a dug unit of `mat` at `depth` m count as a Star Geode find?
 function isGeodeFind(mat, depth)
@@ -1327,9 +1338,11 @@ function geodeFinds(body)
 end
 
 -- The dig reports a unit it took: `body` the world, `mat` what came out, `n`
--- units, `depth` metres under the surface. → true if it counted as a find.
+-- units, `depth` metres under the surface, `src` where it came from (above).
+-- → true if it counted as a find.
 lastGeode = nil
-function geodeFind(body, mat, n, depth)
+function geodeFind(body, mat, n, depth, src)
+  if not GEODE_SOURCES[src or ""] then return false end
   if not (body and isGeodeFind(mat, depth)) or (n or 0) <= 0 then return false end
   if mat == "geode" then return true end   -- the pocket keeps its own count
   local g = save.get("rare.geo." .. body)

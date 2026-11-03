@@ -569,6 +569,10 @@ control, beside its dolls, in the same `lateUpdate` placement.
 
 ## 5. Physical items (D)
 
+Loose resource bodies (logs, rock chunks, plucked rocks) are a separate
+thing: world bodies tagged `resource`, `mat:<id>` and `qty:<n>`, read with
+`materials.resourceOf(node)`. See `docs/resources.md` §4.
+
 ### 5.1 One item model: `items.lua` (a pure rulebook, loads in luajit)
 
 `inventory.GEAR` becomes `items.ITEMS`. `inventory.GEAR` stays as an alias table for one

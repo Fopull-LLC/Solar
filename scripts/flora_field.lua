@@ -497,6 +497,7 @@ end
 -- ~1 m tall inside the footprint radius; low grass between the strips.)
 local BASE_CLEAR = { fade = 14.0, margin = 2.0, lot = 6.0, perM = 0.8, tall = 1.0, reach = 40.0 }
 local base_l = { key = nil }
+local base_layout_read
 
 -- What the base clearing (and the ground audit) took off a stand, by patch and
 -- species: re-applied the moment the stand is declared again (make_source), the
@@ -522,6 +523,14 @@ local function cleared_of(p, spid)
 end
 
 local function base_layout()
+  -- Asked for every prop the clearing judges (baseKeep): its seven save
+  -- reads once a frame, not once a prop.
+  if base_l.at == time and base_l.key then return base_l.ok and base_l or nil end
+  local L = base_layout_read()
+  base_l.at, base_l.ok = time, L ~= nil
+  return L
+end
+base_layout_read = function()
   local bf = ref("base_facilities")
   if not (bf and bf.frameOf and bf.uvOf and bf.FACILITIES) then return nil end
   if save.get("base.body") ~= cur_body then return nil end
@@ -1196,21 +1205,36 @@ local function convert_holes()
 end
 
 -- Cuts older than `regrow` grow back: restored in the engine (both twins).
+-- Every species of every patch ever built has a list here (cuts_of), so the
+-- table grows with the ground walked: an hour on one world is thousands of
+-- lists, and this ran over all of them seven times a second, a string match
+-- and a table each (the soak probe, 2026-11). Now a list is looked at only
+-- when its OLDEST cut is due (lists are oldest first), its key is parsed
+-- once, and an empty list whose patch has gone is forgotten (cuts_of reads
+-- the save again if the patch comes back).
+local cut_keys = {}   -- ck → { pk, spid }
 local function regrow()
   for ck, list in pairs(cuts) do
-    local keep = {}
-    local pk, spid = ck:match("^(.*)|(%d+)$")
-    spid = tonumber(spid)
-    local p = patches[pk]
-    for _, c in ipairs(list) do
-      if time - c.t < params.regrow then
-        keep[#keep + 1] = c
-      elseif p then
-        if p.srcs[spid] then scatter.restore(p.srcs[spid], c.id) end
-        if p.bark[spid] then scatter.restore(p.bark[spid], c.id) end
-      end
+    local kk = cut_keys[ck]
+    if not kk then
+      local pk, spid = ck:match("^(.*)|(%d+)$")
+      kk = { pk, tonumber(spid) }
+      cut_keys[ck] = kk
     end
-    if #keep ~= #list then
+    local pk, spid = kk[1], kk[2]
+    local p = patches[pk]
+    if #list == 0 then
+      if not p then cuts[ck], cut_keys[ck] = nil, nil end
+    elseif time - list[1].t >= params.regrow then
+      local keep = {}
+      for _, c in ipairs(list) do
+        if time - c.t < params.regrow then
+          keep[#keep + 1] = c
+        elseif p then
+          if p.srcs[spid] then scatter.restore(p.srcs[spid], c.id) end
+          if p.bark[spid] then scatter.restore(p.bark[spid], c.id) end
+        end
+      end
       cuts[ck] = keep
       save_cuts(pk, spid)
     end
@@ -1975,8 +1999,13 @@ local FELL_T, FELL_HOLD, FELL_SINK, FELL_MAX = 1.5, 0.8, 0.7, 3
 -- spawned — the oldest's handle read `valid` again on some other node, which
 -- was destroyed in its place (engine card 0552). A log goes only if the node
 -- still answers to its name.
+-- A tree leaves as many logs as its trunk makes (a 3 m section per ~4.5 m of
+-- tree, up to four), each sized to the tree, tagged with what it is
+-- (materials.tagResource: timber, units by its size) and adopted by
+-- mineral_field, which keeps the world's loose bodies in the save. LOG_MAX
+-- counts sections; the registry caps every loose body together.
 local logs = {}
-local LOG_MAX = 6
+LOG_MAX = 16   -- (published: the stale-handle smoke fills it)
 local log_seq = 0
 function logCount() return #logs end
 
@@ -1999,8 +2028,22 @@ end
 -- gen_flora_prefabs.py): its colour is set there and the rest is kept. A bare
 -- model has none, and setMaterial on it changes only the keys given over each
 -- part's own look (textures, cut-out leaves) — so the colour goes that way.
+--
+-- WHY IT IS A TINT NOW (playtest 2026-11: "brushing against a bush makes its
+-- textures disappear"). A bush has no prefab: its bend node is createNode +
+-- `n.model = …`, and the colour went through setMaterial in the same
+-- callback. The engine applies a pass's setMaterial BEFORE that pass's model
+-- swap (floptle-script host.rs flush_writes: rich sets, then model_changes),
+-- so it met an Empty node, not a model, and gave it a whole default Material
+-- of its own — which supersedes every part's imported look: the bush drew
+-- flat, untextured, until it was handed back (engine card draft in the
+-- report). node:setTint is a separate component, a multiply over whatever the
+-- node draws, which is exactly what the scatter's `tint` does to the
+-- instance it stands in for — so the stand-in now matches it, textures and
+-- prefab colours kept, whatever order the engine applies things in.
 function tint_whole(n, tint)
   local col = { tint[1], tint[2], tint[3] }
+  if n.setTint and pcall(n.setTint, n, col) then return end
   local done = pcall(function()
     local m = n:material()
     if not (m and m.texture and m.texture ~= "") then error("no material of its own") end
@@ -2081,32 +2124,46 @@ local function fell_tick()
           fx.harvest(body.x + f.rx + f.hx * h, body.y + f.ry + f.hy * h, body.z + f.rz + f.hz * h, 1.5)
         end
       end
-      -- ...and the trunk is left lying there as a log, along the fall.
+      -- ...and the trunk is left lying there in logs, end to end along the
+      -- fall: as many sections as the trunk was long (a 3 m log per ~4.5 m
+      -- of tree, up to four), thicker for a bigger tree.
       if body and spawn and f.height >= 3.0 then
-        while #logs >= LOG_MAX do
-          local old = table.remove(logs, 1)
-          if old and old.n.valid and old.n.name == old.name then old.n:destroy() end
+        local count = math.max(1, math.min(4, math.floor(f.height / 4.5 + 0.5)))
+        local k = math.max(0.6, math.min(1.6, 0.45 + f.height / 14.0))
+        local seg = 2.96 * k + 0.25
+        local mats, mf = ref("materials"), ref("mineral_field")
+        -- timber by the log's wood: a 3 m section at scale 1 is 3 units,
+        -- growing with its volume (k³)
+        local units = math.max(1, math.floor(3 * k * k * k + 0.5))
+        for i = 1, count do
+          while #logs >= LOG_MAX do
+            local old = table.remove(logs, 1)
+            if old and old.n.valid and old.n.name == old.name then old.n:destroy() end
+          end
+          local along = seg * (i - 0.5) + 0.6
+          local lift = 0.35 * k + 0.05 * i
+          local lx = body.x + f.rx + f.hx * along + f.ux * lift
+          local ly = body.y + f.ry + f.hy * along + f.uy * lift
+          local lz = body.z + f.rz + f.hz * along + f.uz * lift
+          local slot = #logs + 1
+          logs[slot] = false
+          local ux, uy, uz, hx, hy, hz = f.ux, f.uy, f.uz, f.hx, f.hy, f.hz
+          local kk = k * (1 - 0.12 * (i - 1))   -- the crown end is thinner
+          spawn("LooseLog", vec3(lx, ly, lz), function(n)
+            log_seq = log_seq + 1
+            local nm = "LooseLog " .. log_seq
+            n.name = nm
+            logs[slot] = { n = n, name = nm }
+            n.scale = kk
+            -- the log's long axis is its X: setUp(up, fwd) puts Y up and Z on
+            -- fwd, and X = up × fwd, so fwd = h × up lays X along the fall
+            local fx_, fy_, fz_ = hy * uz - hz * uy, hz * ux - hx * uz, hx * uy - hy * ux
+            if n.setUp then n:setUp(vec3(ux, uy, uz), vec3(fx_, fy_, fz_)) end
+            if mf and mf.adoptBody then mf.adoptBody(n, "LooseLog", "timber", units, kk)
+            elseif mats and mats.tagResource then mats.tagResource(n, "timber", units) end
+            if assembly and assembly.rebuild then assembly.rebuild(n) end
+          end)
         end
-        local k = math.max(0.55, math.min(1.5, f.height / 8.0))
-        local along = 1.6 * k + 0.35
-        local lx = body.x + f.rx + f.hx * along + f.ux * 0.3 * k
-        local ly = body.y + f.ry + f.hy * along + f.uy * 0.3 * k
-        local lz = body.z + f.rz + f.hz * along + f.uz * 0.3 * k
-        local slot = #logs + 1
-        logs[slot] = false
-        local ux, uy, uz, hx, hy, hz = f.ux, f.uy, f.uz, f.hx, f.hy, f.hz
-        spawn("LooseLog", vec3(lx, ly, lz), function(n)
-          log_seq = log_seq + 1
-          local nm = "LooseLog " .. log_seq
-          n.name = nm
-          logs[slot] = { n = n, name = nm }
-          n.scale = k
-          -- the log's long axis is its X: setUp(up, fwd) puts Y up and Z on
-          -- fwd, and X = up × fwd, so fwd = h × up lays X along the fall
-          local fx_, fy_, fz_ = hy * uz - hz * uy, hz * ux - hx * uz, hx * uy - hy * ux
-          if n.setUp then n:setUp(vec3(ux, uy, uz), vec3(fx_, fy_, fz_)) end
-          if assembly and assembly.rebuild then assembly.rebuild(n) end
-        end)
       end
       if audio and audio.play then
         audio.play("audio/kenney/impact/impactWood_heavy_00" .. tostring(math.random(0, 4)) .. ".ogg",
@@ -2570,6 +2627,22 @@ local function rare_hydro(bname, w, cl)
   return nil
 end
 
+-- The world's rare record, as rare_tick reads it EVERY FRAME: a save.get
+-- copies the whole table (every plant and pocket) each time, so it is kept
+-- here, written through by this script's own writes and read again from the
+-- save every few seconds (or for another body).
+local rare_rec = { body = nil, d = nil, t = -100 }
+local function rare_saved(bname)
+  if rare_rec.body ~= bname or time - rare_rec.t > 4.0 or time < rare_rec.t then
+    rare_rec.body, rare_rec.d, rare_rec.t = bname, save.get("rare." .. bname), time
+  end
+  return rare_rec.d
+end
+local function rare_store(bname, d)
+  save.set("rare." .. bname, d)
+  rare_rec.body, rare_rec.d, rare_rec.t = bname, d, time
+end
+
 rare_tick = function(dt)
   local gm = ref("game_manager")
   if gm and gm.loading then rareStatus = "waiting for the world"; return end
@@ -2595,7 +2668,7 @@ rare_tick = function(dt)
   if not (w and cl.rareScan and fg and fg.rareFor) then return end
   -- Too far up for the ground to be the one we are standing over: nothing.
   local alt = len(obs.x - body.x, obs.y - body.y, obs.z - body.z) - (w.radius or body.radius)
-  local d = save.get("rare." .. bname)
+  local d = rare_saved(bname)
   if not rare_valid(d, w, cl) then
     if alt > (w.radius or 300) * 2 then return end
     if time < rare.retry_t then return end
@@ -2621,7 +2694,7 @@ rare_tick = function(dt)
     rareStatus = string.format("scanning %s (%d reads)", bname, rare.scan.reads)
     if st == "done" then
       local res = rare.scan.result
-      save.set("rare." .. bname, res)
+      rare_store(bname, res)
       local tally = {}
       for _, p in ipairs(res.plants) do tally[p.niche] = (tally[p.niche] or 0) + 1 end
       local parts = {}
@@ -2651,7 +2724,7 @@ rare_tick = function(dt)
     end
     if not short then
       d.home = cl.RARE_HOME_V or 1
-      save.set("rare." .. bname, d)
+      rare_store(bname, d)
       log(string.format("rare: %s home guarantee: every niche already has %d, %d pockets", bname,
         cl.RARE_HOME_KEEP or 3, #(d.ores or {})))
       return
@@ -2691,7 +2764,7 @@ rare_tick = function(dt)
       for _, o in ipairs(res.ores) do d.ores[#d.ores + 1] = o end
       d.home = cl.RARE_HOME_V or 1
       d.forced = rare.ens.forced
-      save.set("rare." .. bname, d)
+      rare_store(bname, d)
       if (rare.ens.dug or 0) > 0 and terrain.flush then pcall(terrain.flush) end
       local tally = {}
       for _, p in ipairs(d.plants) do tally[p.niche] = (tally[p.niche] or 0) + 1 end

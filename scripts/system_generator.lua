@@ -1874,6 +1874,11 @@ local function bioOf(g, starClass)
     mats = {
       high = g.high and g.high.slot, low = g.low and g.low.slot,
       patch = (g.cap or g.patch) and (g.cap or g.patch).slot,
+      -- the layers under it (mineral_field keeps its ore veins' slots off
+      -- every slot the world's own ground is made of, so a hematite seam
+      -- reads as iron only where it is a seam)
+      subsoil = g.subsoil and g.subsoil.slot, rock = g.strata and g.strata.slot,
+      deep = g.deep and g.deep.slot, dust = g.dust and g.dust.slot,
     },
   }
 end

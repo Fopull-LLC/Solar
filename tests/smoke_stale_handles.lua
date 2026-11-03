@@ -85,9 +85,12 @@ local function fell_one()
   return nil
 end
 
+-- (the cap is the field's LOG_MAX: log sections, 16 since a tree leaves
+-- several; a 6 m tree leaves one)
+local CAP = env.LOG_MAX or 6
 local logs = {}
-for i = 1, 6 do logs[i] = fell_one() end
-check("six logs lie on the ground", #logs == 6 and env.logCount() == 6)
+for i = 1, CAP do logs[i] = fell_one() end
+check("a full cap of logs lies on the ground", #logs == CAP and env.logCount() == CAP)
 check("each log has a name of its own", logs[1] and logs[2] and logs[1].name ~= logs[2].name,
   tostring(logs[1] and logs[1].name))
 
@@ -97,9 +100,9 @@ logs[1]:destroy()
 logs[1].valid, logs[1].name, logs[1].destroyed = true, "Flora 12:7", nil
 
 local seventh = fell_one()
-check("a seventh log falls", seventh ~= nil)
+check("one more log falls", seventh ~= nil)
 check("the node now in the first log's slot is not destroyed in its place", not logs[1].destroyed)
-check("...and the list moved on: six again", env.logCount() == 6)
+check("...and the list moved on: full again", env.logCount() == CAP)
 
 -- A log still lying there goes as before: the eighth takes the second.
 fell_one()

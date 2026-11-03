@@ -49,6 +49,28 @@ REG = {
   crystal  = { name = "Resonant Crystal", kg = 1.1, value = 60,  tier = 3, class = "ore" },
   uranium  = { name = "Uranite",          kg = 3.2, value = 110, tier = 3, class = "ore" },
 
+  -- WHAT THE GROUND IS MADE OF (the terrain palette, `SLOT` below): what the
+  -- laser cuts out of a hillside is the rock you can see in it. Bulk, cheap,
+  -- heavy — the spoil a tunnel makes on the way to the ore. `grade` tells
+  -- them apart from the ore proper (class stays "ore" so the depot, the fill
+  -- canister and the old contracts treat all dug rock alike).
+  soil      = { name = "Soil",             kg = 1.5, value = 1,   tier = 0, class = "ore", grade = "bulk" },
+  sand      = { name = "Sand",             kg = 1.6, value = 1,   tier = 0, class = "ore", grade = "bulk" },
+  clay      = { name = "Clay",             kg = 1.7, value = 2,   tier = 0, class = "ore", grade = "bulk" },
+  gravel    = { name = "Gravel",           kg = 1.9, value = 1,   tier = 0, class = "ore", grade = "bulk" },
+  ash       = { name = "Volcanic Ash",     kg = 0.9, value = 1,   tier = 0, class = "ore", grade = "bulk" },
+  basalt    = { name = "Basalt",           kg = 2.9, value = 3,   tier = 0, class = "ore", grade = "bulk" },
+  granite   = { name = "Granite",          kg = 2.7, value = 3,   tier = 0, class = "ore", grade = "bulk" },
+  sandstone = { name = "Sandstone",        kg = 2.3, value = 2,   tier = 0, class = "ore", grade = "bulk" },
+  limestone = { name = "Limestone",        kg = 2.5, value = 3,   tier = 0, class = "ore", grade = "bulk" },
+  shale     = { name = "Shale",            kg = 2.4, value = 2,   tier = 0, class = "ore", grade = "bulk" },
+  slate     = { name = "Slate",            kg = 2.7, value = 3,   tier = 0, class = "ore", grade = "bulk" },
+  rustrock  = { name = "Rust Rock",        kg = 2.6, value = 3,   tier = 0, class = "ore", grade = "bulk" },
+  veinstone = { name = "Veinstone",        kg = 2.6, value = 4,   tier = 0, class = "ore", grade = "bulk" },
+  hematite  = { name = "Hematite Earth",   kg = 3.0, value = 5,   tier = 0, class = "ore", grade = "bulk" },
+  salt      = { name = "Rock Salt",        kg = 2.1, value = 3,   tier = 0, class = "ore", grade = "bulk" },
+  onyx      = { name = "Banded Onyx",      kg = 2.6, value = 8,   tier = 1, class = "ore", grade = "bulk" },
+
   timber   = { name = "Timber",           kg = 1.2, value = 4,   tier = 1, class = "flora" },
   fiber    = { name = "Plant Fiber",      kg = 0.3, value = 1,   tier = 1, class = "flora" },
   biomass  = { name = "Biomass",          kg = 0.6, value = 2,   tier = 1, class = "flora" },
@@ -220,4 +242,120 @@ function oresOf(kind)
   local out = {}
   for _, b in ipairs(BANDS[kind] or BANDS.barren) do out[#out + 1] = b.mat end
   return out
+end
+
+-- ── what the ground is made of ──────────────────────────────────────────────
+-- The terrain palette (terrain/system.palette, system_generator GEO_SLOT): each
+-- slot is a texture, and the material a dig takes out of it is the one the
+-- texture shows. The laser asks `terrain.slotAt` before it cuts (the reticle)
+-- and `terrain.yields` after (what the cut actually removed, by slot), and both
+-- answer through this table — so the crosshair never promises what the cut
+-- does not deliver, and nothing comes out of a hillside that isn't in it.
+--
+-- Slots 5–8 are what the generator lays as DEPOSITS: veinstone seams (a low
+-- copper-bearing rock) and the glow slots its ore pockets and seams are painted in (6 magma veins:
+-- uranite; 7 amethyst, 8 blue crystal: resonant crystal). Everything else is
+-- the country rock and soil. The ore veins mineral_field paints near the
+-- surface use the slots in `VEIN_SLOTS`; a slot shared with a world's own
+-- ground (hematite deserts, sulfur plains) reads as that ground everywhere
+-- except inside a vein (mineral_field.veinAt), where it is the vein's ore.
+SLOT = {
+  [1] = "rustrock", [2] = "soil", [3] = "slate", [4] = "onyx", [5] = "veinstone",
+  [6] = "uranium", [7] = "crystal", [8] = "crystal", [9] = "slate", [10] = "regolith",
+  [11] = "regolith", [12] = "ice", [13] = "basalt", [14] = "granite", [15] = "sandstone",
+  [16] = "sand", [17] = "regolith", [18] = "salt", [19] = "clay", [20] = "soil",
+  [21] = "ash", [22] = "ice", [23] = "ice", [24] = "gravel", [25] = "limestone",
+  [26] = "sulfur", [27] = "hematite", [28] = "soil", [29] = "basalt", [30] = "shale",
+  [31] = "soil", [32] = "soil",
+}
+
+-- The material of a palette slot (nil / 0 = untextured ground: regolith).
+function ofSlot(slot)
+  return (slot and SLOT[slot]) or "regolith"
+end
+
+-- How hard a material is to cut, against plain rock (1). The laser's bite and
+-- its pace are divided by it: soil goes fast, an ore seam a little slower than
+-- the rock round it, crystal slowest — so breaking into a vein is felt.
+local HARD_GRADE = { bulk = 1.0 }
+HARD = {
+  soil = 0.7, sand = 0.7, ash = 0.7, gravel = 0.8, clay = 0.85, regolith = 0.85, ice = 0.8,
+  salt = 0.9, sandstone = 0.95, shale = 0.95, limestone = 1.0, rustrock = 1.0, slate = 1.05,
+  veinstone = 1.1, hematite = 1.0, basalt = 1.15, granite = 1.2, onyx = 1.2, obsidian = 1.25,
+  silica = 1.0, iron = 1.45, copper = 1.4, sulfur = 1.3, uranium = 1.55, crystal = 1.65, geode = 1.7,
+}
+function hardness(id)
+  return HARD[id] or HARD_GRADE[grade(id)] or 1.0
+end
+
+-- "bulk" (rock and soil), "ore" (what veins and pockets hold), or "flora"/
+-- "liquid"/"refined" from the class.
+function grade(id)
+  local d = REG[id]
+  if not d then return "ore" end
+  if d.grade then return d.grade end
+  if d.class == "ore" then return id == "regolith" and "bulk" or "ore" end
+  return d.class
+end
+function isOre(id) return grade(id) == "ore" end
+
+-- The palette slots an ore's VEINS are painted in, best first: the texture is
+-- the ore's look (hematite for iron, the orange veinstone for copper, sulfur,
+-- the glow crystal and magma slots for crystal and uranite). mineral_field
+-- takes the first slot that is not the ground the vein crops out of.
+VEIN_SLOTS = {
+  iron = { 27, 4, 9, 1 }, copper = { 5, 1 }, sulfur = { 26, 5 }, obsidian = { 4, 13 },
+  crystal = { 7, 8 }, uranium = { 6 },
+}
+
+-- The ores a world of archetype `kind` carries in its veins, with weights:
+-- BANDS without the bulk fillers, the deep-gated ones rarer by their gate.
+function veinOres(kind)
+  local out, total = {}, 0
+  for _, b in ipairs(BANDS[kind] or BANDS.barren) do
+    if VEIN_SLOTS[b.mat] then
+      local w = b.w / (1 + (b.minDepth or 0) / 8)
+      out[#out + 1] = { mat = b.mat, w = w }
+      total = total + w
+    end
+  end
+  return out, total
+end
+
+-- ── loose resource bodies (logs, rocks, chunks) ─────────────────────────────
+-- A body you can carry with the gravity gun, load on a truck and drop at the
+-- depot carries what it is in its TAGS, so any script can read it without
+-- knowing who made it (docs/resources.md):
+--   "resource"          every such body
+--   "mat:<id>"          the material (an id of REG)
+--   "qty:<n>"           units of it (whole units)
+-- plus the prefab's own kind tag ("log", "loose_rock", "boulder", "crystal").
+function tagResource(n, mat, qty, extra)
+  if not (n and mat) then return end
+  local keep = {}
+  for _, t in ipairs(n.tags or {}) do
+    if t ~= "resource" and t:sub(1, 4) ~= "mat:" and t:sub(1, 4) ~= "qty:" then keep[#keep + 1] = t end
+  end
+  keep[#keep + 1] = "resource"
+  keep[#keep + 1] = "mat:" .. mat
+  keep[#keep + 1] = "qty:" .. tostring(math.max(1, math.floor((qty or 1) + 0.5)))
+  for _, t in ipairs(extra or {}) do keep[#keep + 1] = t end
+  n.tags = keep
+end
+
+-- What a resource body is: { mat, qty, name, kg, value, grade, kind } or nil.
+-- `value` is the depot's base price for the lot at reputation 0 (a hint: the
+-- depot applies standing and the discovery premium); `kg` the lot's mass.
+function resourceOf(n)
+  if not (n and n.valid ~= false and n.tags) then return nil end
+  local mat, qty, kind
+  for _, t in ipairs(n.tags) do
+    if t:sub(1, 4) == "mat:" then mat = t:sub(5)
+    elseif t:sub(1, 4) == "qty:" then qty = tonumber(t:sub(5))
+    elseif t == "log" or t == "loose_rock" or t == "boulder" or t == "crystal" then kind = t end
+  end
+  if not mat then return nil end
+  qty = qty or 1
+  return { mat = mat, qty = qty, name = label(mat), kg = massOf(mat, qty), value = valueOf(mat, qty),
+           grade = grade(mat), kind = kind }
 end

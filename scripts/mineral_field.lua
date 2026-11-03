@@ -82,6 +82,31 @@ defaults = {
   --@range 0 80 --@units m
   pocket_hint = 35.0,
 
+  --@header Ore veins
+  -- Ore lies in VEINS: seams painted into the ground in the ore's own texture,
+  -- with outcrops of it standing out of the seam, a few per patch (see "ore
+  -- veins"). Veins per patch, on average (0 = none).
+  --@range 0 8
+  vein_rate = 2.2,
+  -- A vein is painted into the ground when you come this near it (the paint
+  -- is a terrain edit, kept in the save: only veins someone came near cost
+  -- anything).
+  --@range 20 150 --@units m
+  vein_paint = 75.0,
+  -- Its outcrops are drawn within this range.
+  --@range 30 300 --@units m
+  vein_show = 150.0,
+  -- Outcrop nodes kept at once, all veins together.
+  --@range 0 200
+  outcrop_max = 72,
+  -- Cubic metres of cut ground per unit in the pack: the laser pays out by
+  -- the volume it actually removed, of the material it removed
+  -- (terrain.yields), not by a timer. The laser takes out ~35–45 m³ a
+  -- second at full power (measured, engine 0.117.1), so 30 m³ keeps the old
+  -- pace of about a unit a second in plain ground; ore is 0.4 of it.
+  --@range 0.05 20 --@units m3
+  dig_unit = 30.0,
+
   enabled = 1,
 }
 
@@ -104,7 +129,7 @@ count = 0
 -- samples it into the grid, and placement has to stay derivable.
 local KINDS = {
   {
-    id = "gravel", mat = "regolith", area = 14 * 1.0 / (34 * 34), chunk = 18, far = 60,
+    id = "gravel", mat = "gravel", area = 14 * 1.0 / (34 * 34), chunk = 18, far = 60,
     scale = { 0.5, 1.1 },
     lod = { "models/flora/rock_pebbles_l0.gltf", "models/flora/rock_pebbles_l1.gltf" },
     yield = 1,
@@ -115,7 +140,7 @@ local KINDS = {
     end,
   },
   {
-    id = "stone", mat = "silica", area = 14 * 0.55 / (34 * 34), chunk = 22, far = 95,
+    id = "stone", mat = "silica", host = true, area = 14 * 0.55 / (34 * 34), chunk = 22, far = 95,
     scale = { 0.8, 1.6 },
     lod = { "models/flora/rock_stone_l0.gltf", "models/flora/rock_stone_l1.gltf" },
     yield = 2,
@@ -125,7 +150,7 @@ local KINDS = {
     end,
   },
   {
-    id = "boulder", mat = "iron", area = 14 * 0.22 / (34 * 34), chunk = 32, far = 170,
+    id = "boulder", mat = "basalt", host = true, area = 14 * 0.22 / (34 * 34), chunk = 32, far = 170,
     scale = { 1.1, 2.4 },
     lod = { "models/flora/rock_boulder_l0.gltf", "models/flora/rock_boulder_l1.gltf" },
     yield = 3,
@@ -220,6 +245,9 @@ local next_t = 0
 local frame_checked = false
 
 local function len(x, y, z) return math.sqrt(x * x + y * y + z * z) end
+local outcrops_drop  -- (ore veins, below)
+local vein_saved, outcrop_n, crystal_hue = {}, 0, nil
+local oreslot_cache = {}
 
 -- ── patch geometry (mirrors flora_field; see its notes) ─────────────────────
 local AX = { { 1, 2, 3 }, { 2, 3, 1 }, { 3, 1, 2 } }
@@ -333,6 +361,7 @@ local function drop_patch(key)
   if not p then return end
   sweep_retiring(key)
   for _, id in pairs(p.srcs) do if id then drop_source(id) end end
+  if outcrops_drop then outcrops_drop(p) end
   if p.node and p.node.valid then p.node:destroy() end
   patches[key] = nil
 end
@@ -342,6 +371,8 @@ local function tear_down()
   for id in pairs(srcs) do drop_source(id) end
   sweep_retiring(nil, true)
   patches, srcs, breaks, convert = {}, {}, {}, {}
+  vein_saved, outcrop_n, crystal_hue = {}, 0, nil
+  oreslot_cache = {}
   gw_regions, gw_queue, gw_queued = {}, {}, {}
   sources, patchCount, count, cur_body, bodyName = 0, 0, 0, nil, nil
 end
@@ -631,6 +662,37 @@ function rocksNear(x, y, z, radius)
   return out
 end
 
+-- WHAT A ROCK IS MADE OF. A stone or a boulder is a piece of the bedrock it
+-- lies on (the palette slot a few metres under it, the first that is rock
+-- rather than soil); gravel is gravel and a crystal outcrop crystal. Read at
+-- the rock's own place, once, when it is broken or plucked.
+local SOFT = { soil = true, sand = true, clay = true, ash = true, gravel = true, regolith = true }
+function rockMat(hit)
+  local k = hit and hit.kind
+  if not k then return "regolith" end
+  if not k.host then return k.mat end
+  local mats = ref("materials")
+  local p = hit.pos
+  if not (mats and mats.ofSlot and p and terrain.slotAt) then return k.mat end
+  local name = space.dominant(p.x, p.y, p.z)
+  local b = name and space.body(name)
+  if not b then return k.mat end
+  local dx, dy, dz = p.x - b.x, p.y - b.y, p.z - b.z
+  local l = len(dx, dy, dz)
+  if l < 1 then return k.mat end
+  dx, dy, dz = dx / l, dy / l, dz / l
+  local first
+  for _, d in ipairs({ 2.5, 5.0, 8.0 }) do
+    local sl = terrain.slotAt(p.x - dx * d, p.y - dy * d, p.z - dz * d)
+    if sl then
+      local m = mats.ofSlot(sl)
+      first = first or m
+      if not SOFT[m] and mats.isOre and not mats.isOre(m) then return m end
+    end
+  end
+  return (first and not SOFT[first] and first) or k.mat
+end
+
 -- Break it: the yield goes to `cid`, the rock goes (`scatter.remove` by its
 -- id, saved), and the field grows back on its timer.
 --
@@ -644,8 +706,9 @@ function breakAt(hit, cid)
   if not (inv and mats) then return nil, 0 end
   local k = hit.kind
   local units = k.yield or 1
-  local took = inv.add(cid or "astro", k.mat, units)
-  if took <= 0 then return k.mat, 0 end
+  local mat = rockMat(hit)
+  local took = inv.add(cid or "astro", mat, units)
+  if took <= 0 then return mat, 0 end
   scatter.remove(hit.source, hit.id)
   local p = patches[hit.patch]
   if p then
@@ -654,7 +717,7 @@ function breakAt(hit, cid)
     while #list > MAX_BREAKS do scatter.restore(hit.source, table.remove(list, 1).id) end
     save_breaks(hit.patch, k.id)
   end
-  return k.mat, took
+  return mat, took
 end
 
 -- The record `pluck` (or breakAt) wants for a rock `rocksNear` listed: by its
@@ -671,9 +734,11 @@ end
 -- Pluck it out WHOLE: the rock goes (saved as a break, so it grows back on the
 -- field's timer) and nothing is paid out here — the gravity gun has it in hand
 -- as a body now (tool_belt spawns the Loose* prefab), and what it is worth
--- comes when that is stowed or dropped at the depot. Returns the kind.
+-- comes when that is stowed or dropped at the depot. Returns the kind and
+-- the material it is made of (rockMat).
 function pluck(hit)
   if not (hit and hit.source and hit.kind) or hit.pocket then return nil end
+  local mat = rockMat(hit)
   scatter.remove(hit.source, hit.id)
   local p = patches[hit.patch]
   if p then
@@ -682,7 +747,745 @@ function pluck(hit)
     while #list > MAX_BREAKS do scatter.restore(hit.source, table.remove(list, 1).id) end
     save_breaks(hit.patch, hit.kind.id)
   end
-  return hit.kind
+  return hit.kind, mat
+end
+
+-- ── ore veins ───────────────────────────────────────────────────────────────
+--
+-- ORE IS A PLACE. A few veins per patch: a seam of the ore's own texture
+-- (materials.VEIN_SLOTS: hematite for iron, the orange veinstone for copper,
+-- sulfur, the glowing crystal and magma slots) painted into the ground along a
+-- wandering strike line 3–15 m long, a lens reaching about two and a half of
+-- its widths down, with outcrops of the ore standing out of it (iron as dark
+-- metallic knobs, copper as green-stained stone, sulfur yellow, crystal and
+-- uranite as glowing clusters). You see one from a hundred metres, walk over,
+-- and cut INTO it: what the laser removes there is ore, by the volume of ore
+-- removed (terrain.yields), and the rock round it is the rock it is.
+--
+-- DATA, NOT NODES. Where a patch's veins lie is a pure function of the world
+-- seed and the patch (rng), laid out when the patch is; the ground under them
+-- is read when someone is near (terrain.raycast, the ground's own field).
+-- The paint is a terrain edit, made once, when someone comes within
+-- `vein_paint` (the save remembers which veins are painted, `veins1.<body>.
+-- <patch>`; painting again over a dug-out vein would grow the ore back on the
+-- tunnel walls). Outcrops are plain model nodes under the planet, made within
+-- `vein_show` and capped (`outcrop_max`), gone with their patch; a broken one
+-- stays broken (the same record). Every point is body-relative: the planet
+-- moves metres a tick (docs/positions-and-frames.md).
+
+local VEIN_V = 1
+-- vein_saved: patch key → { p = { v<i> = slot painted }, t = { v<i> = outcrops taken (bits) } }
+
+local function vein_key(pk) return string.format("veins%d.%s.%s", VEIN_V, cur_body or "?", pk) end
+local function vein_rec(pk)
+  local r = vein_saved[pk]
+  if r then return r end
+  r = save.get(vein_key(pk))
+  if type(r) ~= "table" then r = {} end
+  if type(r.p) ~= "table" then r.p = {} end
+  if type(r.t) ~= "table" then r.t = {} end
+  vein_saved[pk] = r
+  return r
+end
+local function vein_save(pk)
+  local r = vein_saved[pk]
+  if r then save.set(vein_key(pk), (next(r.p) or next(r.t)) and r or nil) end
+end
+local function bit_on(mask, j) return math.floor((mask or 0) / 2 ^ (j - 1)) % 2 == 1 end
+
+-- The outcrops' looks, by ore: the rock meshes (painted in a neutral ramp,
+-- ROCK_NEUTRAL) tinted to the mineral, with its sheen or glow.
+local OUT_LOOK = {
+  iron     = { model = "models/flora/rock_boulder_l0.gltf", c = { 0.42, 0.13, 0.08 }, s = { 0.45, 0.85 }, sink = 0.3 },
+  copper   = { model = "models/flora/rock_stone_l0.gltf", c = { 0.12, 0.50, 0.38 }, s = { 0.55, 1.0 }, sink = 0.3 },
+  sulfur   = { model = "models/flora/rock_stone_l0.gltf", c = { 0.95, 0.80, 0.12 }, s = { 0.5, 0.95 }, sink = 0.3 },
+  obsidian = { model = "models/flora/rock_stone_l0.gltf", c = { 0.07, 0.06, 0.08 }, rough = 0.15, s = { 0.35, 0.7 }, sink = 0.3 },
+  crystal  = { model = "models/flora/rock_crystal_l0.gltf", c = nil, glow = 0.55, s = { 0.4, 0.85 }, sink = 0.2, cluster = true },
+  uranium  = { model = "models/flora/rock_crystal_l0.gltf", c = { 0.22, 0.27, 0.12 }, e = { 0.45, 0.85, 0.2 }, glow = 0.35, s = { 0.3, 0.6 }, sink = 0.25, cluster = true },
+}
+
+-- The world's veins in a patch: { i, key, ore, pts (unit-sphere points with a
+-- width w), seed } — laid out once per patch, a pure function of the seed.
+local function veins_of(p, w, R)
+  if p.veins then return p.veins end
+  local out = {}
+  p.veins = out
+  local mats = ref("materials")
+  if not (mats and mats.veinOres) or params.vein_rate <= 0 then return out end
+  local ores, total = mats.veinOres(w.kind or "barren")
+  if not total or total <= 0 then return out end
+  local r = rng(hash(w.seed or 1, p.face, p.sgn + 2, p.i + 70000, p.j + 70000, 9173))
+  local n = math.floor(params.vein_rate * (0.35 + 1.3 * r:next()) + 0.5)
+  for vi = 1, n do
+    local x = (r:next() * 2 - 1) * p.half * 0.85
+    local z = (r:next() * 2 - 1) * p.half * 0.85
+    local pick, ore = r:next() * total, ores[#ores].mat
+    for _, o in ipairs(ores) do
+      pick = pick - o.w
+      if pick <= 0 then ore = o.mat break end
+    end
+    local gem = OUT_LOOK[ore] and OUT_LOOK[ore].cluster
+    local L = gem and r:range(3.0, 5.5) or r:range(6.0, 15.0)
+    -- (wide enough to read on ground meshed at 1.5–2.4 m voxels: a seam
+    -- narrower than a voxel or two never shows on the surface)
+    local wd = gem and r:range(1.6, 2.1) or r:range(1.6, 2.6)
+    local ang = r:next() * math.pi * 2
+    local ca, sa = math.cos(ang), math.sin(ang)
+    local K = math.max(3, math.ceil(L / 1.1) + 1)
+    local pts = {}
+    for k = 0, K - 1 do
+      local t = (k / (K - 1) - 0.5) * L
+      -- a seam wanders a little off its strike, and pinches and swells
+      local sway = math.sin(t * 0.45 + vi * 1.7) * 0.35 * wd
+      local lx, lz = x + ca * t - sa * sway, z + sa * t + ca * sway
+      local px = p.cx + p.ex[1] * lx + p.ez[1] * lz
+      local py = p.cy + p.ex[2] * lx + p.ez[2] * lz
+      local pz = p.cz + p.ex[3] * lx + p.ez[3] * lz
+      local l = len(px, py, pz)
+      local taper = 1 - 0.45 * math.abs(k / (K - 1) - 0.5) * 2
+      pts[#pts + 1] = { px / l, py / l, pz / l, w = wd * taper * (0.8 + 0.4 * r:next()) }
+    end
+    local c = pts[math.ceil(K / 2)]
+    local f2, g2, u2, v2 = project(c[1] * R, c[2] * R, c[3] * R, R)
+    local seed = r:int(1, 999983)
+    if f2 == p.face and g2 == p.sgn and math.floor(u2 / p.P) == p.i and math.floor(v2 / p.P) == p.j
+       and not kept_clear(c[1] * R, c[2] * R, c[3] * R) then
+      out[#out + 1] = { i = vi, key = "v" .. vi, ore = ore, pts = pts, len = L, width = wd, seed = seed }
+    end
+  end
+  return out
+end
+
+-- The ground under a vein's points (body-relative), read from the ground's
+-- own field; nil until all of it is made exactly.
+local function vein_ground(v, body, R)
+  if v.g then return v.g end
+  if not terrain.raycast then return nil end
+  local g = {}
+  local top = R + 240
+  for k, q in ipairs(v.pts) do
+    local h = terrain.raycast(vec3(body.x + q[1] * top, body.y + q[2] * top, body.z + q[3] * top),
+      vec3(-q[1], -q[2], -q[3]), 480)
+    if not (h and h.pos) or h.exact == false then return nil end
+    g[k] = { h.pos.x - body.x, h.pos.y - body.y, h.pos.z - body.z, w = q.w, ux = q[1], uy = q[2], uz = q[3] }
+  end
+  v.g = g
+  return g
+end
+
+-- WHICH SLOTS ARE ORE ON THIS WORLD: `veinslots.<body>` = { ["27"] = "iron" },
+-- written when a vein is first painted in a slot. A slot is only ever taken
+-- for veins if the world's own ground (its surface paints and the layers
+-- under them, bio.mats; and the slots found under the seam itself) never uses
+-- it — so on this world every voxel of that slot IS a seam, and the cut reads
+-- it as ore by the slot alone (no geometry: a bore deep through a lens, or a
+-- wall cut from the side, pays exactly what was painted).
+function oreSlots(bname)
+  bname = bname or cur_body
+  if not bname then return {} end
+  local c = oreslot_cache[bname]
+  if c then return c end
+  c = save.get("veinslots." .. bname)
+  if type(c) ~= "table" then c = {} end
+  oreslot_cache[bname] = c
+  return c
+end
+local function world_reserved(w)
+  local r = {}
+  local m = type(w) == "table" and type(w.bio) == "table" and w.bio.mats
+  if type(m) == "table" then for _, sl in pairs(m) do if type(sl) == "number" then r[sl] = true end end end
+  return r
+end
+
+-- The colour a seam is painted in (the texture is tinted by it, ×1.6 in the
+-- shader: 0.62 is the texture as authored): iron's hematite black, copper's
+-- verdigris, sulfur's yellow, uranite's sickly green over the magma glow.
+SEAM_COLOUR = {
+  iron = { 0.26, 0.23, 0.23 }, copper = { 0.36, 0.62, 0.52 }, sulfur = { 0.80, 0.74, 0.36 },
+  obsidian = { 0.30, 0.29, 0.32 }, uranium = { 0.55, 0.68, 0.38 },
+}
+local w_seed = nil
+
+-- Paint the seam into the ground, once (the save says so). → true when done.
+local function vein_paint(p, v, body, R)
+  local rec = vein_rec(p.key)
+  if rec.p[v.key] then v.slot = rec.p[v.key] return true end
+  if not (terrain.paintTexture and terrain.slotAt) then return false end
+  local mats = ref("materials")
+  local slots = mats and mats.VEIN_SLOTS and mats.VEIN_SLOTS[v.ore]
+  if not slots then return false end
+  local g = vein_ground(v, body, R)
+  if not g then return false end
+  if terrain.capacity and terrain.capacity() < #g * 4 + 32 then return false end
+  local c = g[math.ceil(#g / 2)]
+  local cl = ref("climate")
+  local reserved = world_reserved(cl and cl.worldOf and cl.worldOf(cur_body))
+  for _, dd in ipairs({ 0.8, 3.0, 6.0 }) do
+    local h = terrain.slotAt(body.x + c[1] - c.ux * dd, body.y + c[2] - c.uy * dd, body.z + c[3] - c.uz * dd)
+    if h then reserved[h] = true end
+  end
+  local os = oreSlots(cur_body)
+  local slot = nil
+  for _, sl in ipairs(slots) do
+    local taken = os[tostring(sl)]
+    if taken == v.ore or (not taken and not reserved[sl]) then slot = sl break end
+  end
+  if not slot then
+    -- every slot this ore could wear is the world's own ground: the vein is
+    -- not painted (its outcrops still stand, and break for ore)
+    rec.p[v.key] = -1
+    vein_save(p.key)
+    v.slot = -1
+    return true
+  end
+  if not os[tostring(slot)] then
+    os[tostring(slot)] = v.ore
+    save.set("veinslots." .. cur_body, os)
+  end
+  -- A paint of the slot alone keeps the ground's own tint colour (the slot
+  -- is the voxel's alpha byte, its RGB the colour the texture is tinted by),
+  -- so a hematite seam laid in red soil drew as red soil. The seam is
+  -- recoloured too: the ore's own colour, which is what makes it read from
+  -- a hundred metres.
+  local col = SEAM_COLOUR[v.ore] or { 0.62, 0.62, 0.62 }
+  if v.ore == "crystal" then
+    local r = rng(((w_seed or 1) % 1000003) + 313)
+    local h = CRYSTAL_HUES[r:int(1, #CRYSTAL_HUES)]
+    col = { 0.4 + h[1] * 0.4, 0.4 + h[2] * 0.4, 0.4 + h[3] * 0.4 }
+  end
+  for _, q in ipairs(g) do
+    local wd = q.w
+    -- the seam where it crops out, and the lens under it
+    local ax, ay, az = body.x + q[1] - q.ux * wd * 0.3, body.y + q[2] - q.uy * wd * 0.3, body.z + q[3] - q.uz * wd * 0.3
+    local bx, by, bz = body.x + q[1] - q.ux * wd * 1.5, body.y + q[2] - q.uy * wd * 1.5, body.z + q[3] - q.uz * wd * 1.5
+    terrain.paintTexture(ax, ay, az, wd, slot)
+    terrain.paintTexture(bx, by, bz, wd * 0.9, slot)
+    if terrain.paint then
+      terrain.paint(ax, ay, az, wd, col[1], col[2], col[3], 1.0)
+      terrain.paint(bx, by, bz, wd * 0.9, col[1], col[2], col[3], 1.0)
+    end
+  end
+  rec.p[v.key] = slot
+  vein_save(p.key)
+  v.slot = slot
+  veinsPainted = (veinsPainted or 0) + 1
+  return true
+end
+
+local function outcrop_look(n, ore, w)
+  local L = OUT_LOOK[ore] or OUT_LOOK.copper
+  local c, e = L.c, L.e
+  if ore == "crystal" then
+    if not crystal_hue then
+      local r = rng(((w and w.seed or 1) % 1000003) + 313)
+      crystal_hue = CRYSTAL_HUES[r:int(1, #CRYSTAL_HUES)]
+    end
+    c = { crystal_hue[1] * 0.55, crystal_hue[2] * 0.55, crystal_hue[3] * 0.55 }
+    e = crystal_hue
+  end
+  local t = { color = { c[1] / ROCK_NEUTRAL, c[2] / ROCK_NEUTRAL, c[3] / ROCK_NEUTRAL } }
+  if e then t.emissive, t.emissiveStrength = e, L.glow or 0.4 end
+  if n.setTint then pcall(n.setTint, n, t) end
+  -- (and once more a pass later, with the sheen: veins_tick)
+  -- The sheen is a material patch over the rock's own parts, and it must
+  -- wait a pass: in the pass a node is made a model, setMaterial lands before
+  -- the model does and would give it a whole Material of its own, dropping
+  -- the rock's textures (flora_field tint_whole). veins_tick lays it.
+  return { tint = t, mat = (L.metallic or L.rough) and { shading = "physical", metallic = L.metallic or 0, roughness = L.rough or 0.8 } or nil }
+end
+
+-- Make a vein's outcrops (the ones not broken yet).
+local function outcrops_make(p, v, w, planet)
+  local L = OUT_LOOK[v.ore] or OUT_LOOK.copper
+  local g = v.g
+  if not g or v.out then return end
+  v.out = {}
+  local taken = vein_rec(p.key).t[v.key]
+  local r = rng(v.seed + 17)
+  local count = L.cluster and r:int(5, 8) or math.max(3, math.floor(#g / 1.4))
+  for j = 1, count do
+    local k = L.cluster and math.ceil(#g / 2) + r:int(-1, 1) or math.max(1, math.min(#g, math.floor((j - 0.5) / count * #g) + 1))
+    k = math.max(1, math.min(#g, k))
+    local q = g[k]
+    -- a sideways step off the seam's line, in the ground's plane
+    local ax, ay, az = 1, 0, 0
+    if math.abs(q.ux) > 0.9 then ax, ay = 0, 1 end
+    local ad = ax * q.ux + ay * q.uy + az * q.uz
+    local tx, ty, tz = ax - q.ux * ad, ay - q.uy * ad, az - q.uz * ad
+    local tl = len(tx, ty, tz)
+    tx, ty, tz = tx / tl, ty / tl, tz / tl
+    local bx, by, bz = q.uy * tz - q.uz * ty, q.uz * tx - q.ux * tz, q.ux * ty - q.uy * tx
+    local a = r:next() * math.pi * 2
+    local off = r:range(0, q.w * 0.55)
+    local sc = r:range(L.s[1], L.s[2]) * (L.cluster and 1 or (0.7 + 0.5 * q.w))
+    local ox, oy, oz = math.cos(a) * off, math.sin(a) * off, 0
+    local px = q[1] + tx * ox + bx * oy - q.ux * sc * (L.sink or 0.3)
+    local py = q[2] + ty * ox + by * oy - q.uy * sc * (L.sink or 0.3)
+    local pz = q[3] + tz * ox + bz * oy - q.uz * sc * (L.sink or 0.3)
+    local rec = { x = px, y = py, z = pz, s = sc, k = k }
+    v.out[j] = rec
+    if not bit_on(taken, j) and outcrop_n < params.outcrop_max then
+      outcrop_n = outcrop_n + 1
+      local tilt = r:range(-0.35, 0.35)
+      local fa = r:next() * math.pi * 2
+      createNode("Ore " .. v.ore, planet, function(n)
+        if not v.out or v.out[j] ~= rec or rec.gone then n:destroy() outcrop_n = outcrop_n - 1 return end
+        n.model = L.model
+        n.x, n.y, n.z = px, py, pz
+        n.scale_x, n.scale_y, n.scale_z = sc, sc * (L.cluster and 1.25 or 0.8), sc
+        local ux, uy, uz = q.ux + tx * tilt, q.uy + ty * tilt, q.uz + tz * tilt
+        local ul = len(ux, uy, uz)
+        local fx, fy, fz = tx * math.cos(fa) + bx * math.sin(fa), ty * math.cos(fa) + by * math.sin(fa), tz * math.cos(fa) + bz * math.sin(fa)
+        if n.setUp then n:setUp(vec3(ux / ul, uy / ul, uz / ul), vec3(fx, fy, fz)) end
+        n.tags = { "rocks", "ore_outcrop" }
+        rec.sheen = outcrop_look(n, v.ore, w)
+        rec.n = n
+      end)
+    end
+  end
+end
+
+local function outcrop_gone(rec)
+  rec.gone = true
+  if rec.n then
+    if rec.n.valid then rec.n:destroy() end
+    rec.n = nil
+    outcrop_n = math.max(0, outcrop_n - 1)
+  end
+end
+
+outcrops_drop = function(p)
+  for _, v in ipairs(p.veins or {}) do
+    for _, rec in pairs(v.out or {}) do outcrop_gone(rec) end
+    v.out = nil
+  end
+end
+
+-- Paint the veins coming into reach and grow or put away their outcrops: a
+-- little a tick (one vein's ground read, one paint, a few nodes).
+local function veins_tick(w, R, body, planet, rx, ry, rz)
+  if params.vein_rate <= 0 then return end
+  w_seed = w.seed
+  local grounds = 1
+  for _, p in pairs(patches) do
+    local pd = p.dist or patch_dist(p, rx, ry, rz)
+    if pd <= params.vein_show + 20 then
+      for _, v in ipairs(veins_of(p, w, R)) do
+        local c = v.pts[math.ceil(#v.pts / 2)]
+        local d = len(c[1] * R - rx, c[2] * R - ry, c[3] * R - rz)
+        if d <= params.vein_show then
+          if not v.g and grounds > 0 then grounds = grounds - 1; vein_ground(v, body, R) end
+          if v.g and d <= params.vein_paint and not v.slot then vein_paint(p, v, body, R) end
+          if v.g and not v.out then outcrops_make(p, v, w, planet) end
+          for _, rec in pairs(v.out or {}) do
+            if rec.sheen and rec.n and rec.n.valid then
+              if rec.sheen.mat then pcall(rec.n.setMaterial, rec.n, rec.sheen.mat) end
+              if rec.n.setTint then pcall(rec.n.setTint, rec.n, rec.sheen.tint) end
+              rec.sheen = nil
+            end
+          end
+        elseif v.out and d > params.vein_show + 30 then
+          for _, rec in pairs(v.out) do outcrop_gone(rec) end
+          v.out = nil
+        end
+      end
+    end
+  end
+end
+
+-- The vein (painted) a WORLD point lies in, or nil: { ore, slot, patch, v }.
+-- Inside means within the seam's width of its line, down to the lens's foot.
+function veinAt(x, y, z, slack)
+  local body = cur_body and space.body(cur_body)
+  if not body then return nil end
+  slack = slack or 0.4
+  local rx, ry, rz = x - body.x, y - body.y, z - body.z
+  for _, p in pairs(patches) do
+    if p.veins and patch_dist(p, rx, ry, rz) <= 20 then
+      for _, v in ipairs(p.veins) do
+        local g = v.g
+        if g and v.slot and v.slot > 0 then
+          for k = 1, #g do
+            local q = g[k]
+            -- the line a little down, as the lens is: a ball round each point
+            -- stretched down the radial
+            local dx, dy, dz = rx - q[1], ry - q[2], rz - q[3]
+            local du = dx * q.ux + dy * q.uy + dz * q.uz
+            local hx, hy, hz = dx - q.ux * du, dy - q.uy * du, dz - q.uz * du
+            local hd = len(hx, hy, hz)
+            if hd <= q.w + 0.6 + slack and du <= q.w * 0.6 + slack and du >= -(q.w * 2.4 + slack) then
+              return { ore = v.ore, slot = v.slot, patch = p.key, vein = v, k = k }
+            end
+          end
+        end
+      end
+    end
+  end
+  return nil
+end
+
+-- The outcrop (still standing) within r of a WORLD point.
+local function outcrop_near(x, y, z, r)
+  local body = cur_body and space.body(cur_body)
+  if not body then return nil end
+  local rx, ry, rz = x - body.x, y - body.y, z - body.z
+  for _, p in pairs(patches) do
+    if p.veins and patch_dist(p, rx, ry, rz) <= r + 20 then
+      for _, v in ipairs(p.veins) do
+        for j, rec in pairs(v.out or {}) do
+          if rec.n and not rec.gone and len(rx - rec.x, ry - rec.y, rz - rec.z) <= r + rec.s * 0.8 then
+            return p, v, j, rec
+          end
+        end
+      end
+    end
+  end
+  return nil
+end
+
+-- The veins near a WORLD point, for probes and the survey readout:
+-- { { ore, slot, painted, x, y, z (world, the seam's middle), len, out = n standing } }.
+function veinsNear(x, y, z, radius)
+  local out = {}
+  local body = cur_body and space.body(cur_body)
+  if not body then return out end
+  local rx, ry, rz = x - body.x, y - body.y, z - body.z
+  for _, p in pairs(patches) do
+    if p.veins and patch_dist(p, rx, ry, rz) <= radius then
+      for _, v in ipairs(p.veins) do
+        local g = v.g
+        local c = g and g[math.ceil(#g / 2)]
+        if c and len(c[1] - rx, c[2] - ry, c[3] - rz) <= radius then
+          local n = 0
+          for _, rec in pairs(v.out or {}) do if rec.n and not rec.gone then n = n + 1 end end
+          out[#out + 1] = { ore = v.ore, slot = v.slot, painted = v.slot ~= nil, x = body.x + c[1], y = body.y + c[2],
+                            z = body.z + c[3], ux = c.ux, uy = c.uy, uz = c.uz, len = v.len, width = v.width, out = n,
+                            sx = g[#g][1] - g[1][1], sy = g[#g][2] - g[1][2], sz = g[#g][3] - g[1][3],
+                            d = len(c[1] - rx, c[2] - ry, c[3] - rz) }
+        end
+      end
+    end
+  end
+  table.sort(out, function(a, b) return a.d < b.d end)
+  return out
+end
+
+-- ── what a cut removed ──────────────────────────────────────────────────────
+-- The laser hands every bite's receipt here (trackDig); the report arrives a
+-- frame or more later through terrain.yields (drained once, here — no other
+-- script reads it) with the volume taken out by palette slot. Each slot's
+-- volume is that slot's material (materials.SLOT), the vein's ore inside a
+-- vein, Star Geode inside a geode pocket; volume becomes units (`dig_unit` m³
+-- each, ore 0.6 of that) carried over between bites. What came out is queued
+-- for the tool (takeYields) to show, sound and knock loose.
+
+local digs = {}           -- receipt → { cid, body, x, y, z (body-relative), t, from }
+local acc = {}            -- material → m³ cut and not paid out yet
+local events = {}         -- for the tool: { mat, n, took, full, outcrop, x, y, z (body-rel), body, depth }
+-- true where the engine measures what a dig removed (terrain.yields): the
+-- laser then pays by volume here, and its timer only breaks surface rocks
+yieldsLive = (terrain ~= nil and terrain.yields ~= nil) or false
+lastYield = nil
+-- (probes) everything the cuts have removed this session: m³ and units by
+-- material, and how many reports
+yieldStats = { vol = {}, units = {}, reports = 0, removed = 0 }
+
+function trackDig(id, x, y, z, cid)
+  if not id or id == 0 or not terrain.yields then return false end
+  local name = space.dominant(x, y, z)
+  local b = name and space.body(name)
+  if not b then return false end
+  digs[id] = { cid = cid or "astro", body = name, x = x - b.x, y = y - b.y, z = z - b.z, t = time }
+  return true
+end
+
+local function unit_of(mat)
+  local mats = ref("materials")
+  local u = params.dig_unit
+  if mats and mats.isOre and mats.isOre(mat) then u = u * 0.4 end
+  return math.max(0.01, u)
+end
+
+-- How far the next unit of `mat` has come (0..1).
+function progressOf(mat)
+  return mat and math.min(1, (acc[mat] or 0) / unit_of(mat)) or 0
+end
+
+-- Metres of ground over a body-relative point, read along its radial from the
+-- ground's own field (not a collider: a tree, a roof or the crew above the
+-- dig is not rock over it).
+local function depth_of(body, rx, ry, rz)
+  local l = len(rx, ry, rz)
+  if l < 1 or not terrain.raycast then return 0 end
+  local ux, uy, uz = rx / l, ry / l, rz / l
+  local top = l + 260
+  local h = terrain.raycast(vec3(body.x + ux * top, body.y + uy * top, body.z + uz * top), vec3(-ux, -uy, -uz), 520)
+  if not (h and h.pos) then return 0 end
+  return math.max(0, len(h.pos.x - body.x, h.pos.y - body.y, h.pos.z - body.z) - l)
+end
+depthAt = function(x, y, z)
+  local name = space.dominant(x, y, z)
+  local b = name and space.body(name)
+  if not b then return 0 end
+  return depth_of(b, x - b.x, y - b.y, z - b.z)
+end
+
+-- WHAT THE GROUND IS AT A WORLD POINT, as the cut will pay it: material id,
+-- depth (m of ground over it), and whether it is ore (a vein, a pocket or a
+-- deposit slot). nil where the engine cannot say (no slotAt): the caller
+-- falls back to its own survey.
+function materialAt(x, y, z)
+  local mats = ref("materials")
+  if not (terrain.slotAt and mats and mats.ofSlot) then return nil end
+  local pk = pocket_at(x, y, z, 0.2)
+  local depth = depthAt(x, y, z)
+  if pk then return POCKET_MAT, depth, true end
+  -- (terrain.slotAt reads the physics copy of the ground, which a paint does
+  -- not refresh on engine 0.117.1 (docs/resources.md §2) —
+  -- so a painted seam is found by its geometry; the cut's payout, from
+  -- terrain.yields, does see the paint)
+  local v = veinAt(x, y, z, 0.2)
+  if v then return v.ore, depth, true end
+  local sl = terrain.slotAt(x, y, z)
+  local m = slotMaterial(sl, space.dominant(x, y, z))
+  return m, depth, mats.isOre and mats.isOre(m) or false
+end
+
+-- The material a palette slot is on body `bname`: a vein slot's ore, else
+-- the registry's.
+function slotMaterial(slot, bname)
+  local mats = ref("materials")
+  if slot then
+    local o = oreSlots(bname)[tostring(slot)]
+    if o then return o end
+  end
+  return mats and mats.ofSlot and mats.ofSlot(slot) or "regolith"
+end
+
+local POCKET_SLOT = { ice = 8, frost = 8 }
+local pocket_painted = {}
+local function pocket_reveal(hit)
+  -- the walls of a broken-into pocket glow in its crystal: paint the pocket's
+  -- ball (only the ground near the surface takes paint — the walls you cut)
+  local key = hit.body .. hit.pocket
+  if pocket_painted[key] and time - pocket_painted[key] < 1.5 then return end
+  pocket_painted[key] = time
+  if not terrain.paintTexture then return end
+  local list = pocket_list(hit.body)
+  local o = list and list[hit.pocket]
+  local b = space.body(hit.body)
+  if not (o and b) then return end
+  local cl = ref("climate")
+  local w = cl and cl.worldOf and cl.worldOf(hit.body)
+  terrain.paintTexture(b.x + o.x, b.y + o.y, b.z + o.z, (o.r or 2.5) + 0.4, POCKET_SLOT[w and w.kind or ""] or 7)
+end
+
+local function pay(d, y)
+  local inv, mats = ref("inventory"), ref("materials")
+  local b = space.body(d.body)
+  if not (inv and mats and b and mats.ofSlot) then return end
+  local wx, wy, wz = b.x + d.x, b.y + d.y, b.z + d.z
+  local got = {}
+  local pk = pocket_at(wx, wy, wz, 0.6)
+  if pk then
+    got[POCKET_MAT] = (got[POCKET_MAT] or 0) + (y.removed or 0)
+    pocket_reveal(pk)
+  else
+    for slot, vol in pairs(y.slots or {}) do
+      local m = slotMaterial(slot, d.body)
+      got[m] = (got[m] or 0) + vol
+    end
+    if (y.untextured or 0) > 0 then got.regolith = (got.regolith or 0) + y.untextured end
+  end
+  local depth = nil
+  yieldStats.reports = yieldStats.reports + 1
+  yieldStats.removed = yieldStats.removed + (y.removed or 0)
+  for m, vol in pairs(got) do
+    yieldStats.vol[m] = (yieldStats.vol[m] or 0) + vol
+    acc[m] = (acc[m] or 0) + vol
+    local u = unit_of(m)
+    local n = math.floor(acc[m] / u)
+    if n > 0 then
+      acc[m] = acc[m] - n * u
+      local took
+      if m == POCKET_MAT then
+        took = 0
+        for _ = 1, n do
+          local _, t1 = pocket_break(pk, d.cid)
+          took = took + (t1 or 0)
+          if (t1 or 0) <= 0 then break end
+        end
+      else
+        took = inv.add(d.cid, m, n)
+      end
+      if mats.isOre(m) or m == POCKET_MAT then depth = depth or depth_of(b, d.x, d.y, d.z) end
+      -- STAR GEODES (missions.geodeFind): only resonant crystal out of the
+      -- deep rock — a geode pocket, or the generator's crystal deposits under
+      -- three metres of ground. A surface vein's crystal, a plant, a plucked
+      -- outcrop are crystal, never a geode.
+      if took > 0 and (m == POCKET_MAT or (m == "crystal" and not veinAt(wx, wy, wz, 0.6))) then
+        local mi = ref("missions")
+        if mi and mi.geodeFind then pcall(mi.geodeFind, d.body, m, took, depth or 0, m == POCKET_MAT and "pocket" or "deposit") end
+      end
+      yieldStats.units[m] = (yieldStats.units[m] or 0) + took
+      local e = { mat = m, n = n, took = took, full = took < n, x = d.x, y = d.y, z = d.z, body = d.body, depth = depth }
+      events[#events + 1] = e
+      lastYield = e
+      if took < n then acc[m] = math.min(acc[m], u * 0.99) end
+    end
+  end
+  -- An outcrop where the cut is: it breaks out whole (a couple of units of
+  -- its ore, and a chunk of it knocked loose for the tool to show).
+  local p, v, j, rec = outcrop_near(wx, wy, wz, 1.0)
+  if p then
+    local took = inv.add(d.cid, v.ore, 2)
+    if took > 0 then
+      local vr = vein_rec(p.key)
+      local mask = vr.t[v.key] or 0
+      if not bit_on(mask, j) then vr.t[v.key] = mask + 2 ^ (j - 1) end
+      vein_save(p.key)
+      outcrop_gone(rec)
+      local e = { mat = v.ore, n = 2, took = took, full = took < 2, outcrop = true, x = rec.x, y = rec.y, z = rec.z, body = d.body }
+      events[#events + 1] = e
+      lastYield = e
+    else
+      events[#events + 1] = { mat = v.ore, n = 2, took = 0, full = true, outcrop = true, x = rec.x, y = rec.y, z = rec.z, body = d.body }
+    end
+  end
+end
+
+local function drain_yields()
+  if not terrain.yields then return end
+  local list = terrain.yields()
+  if list and #list > 0 then
+    for _, y in ipairs(list) do
+      local d = y.id and digs[y.id]
+      if d then
+        digs[y.id] = nil
+        pay(d, y)
+      end
+    end
+  end
+  for id, d in pairs(digs) do
+    if time - d.t > 15 then digs[id] = nil end
+  end
+end
+
+-- The tool's share: what came out since it last asked.
+function takeYields()
+  if #events == 0 then return nil end
+  local e = events
+  events = {}
+  return e
+end
+
+-- ── loose resource bodies ───────────────────────────────────────────────────
+-- Logs, chunks and plucked rocks are bodies that STAY: carried with the
+-- gravity gun, loaded on a truck, dropped at the depot. Every one is tagged
+-- with what it is (materials.tagResource: "resource", "mat:<id>",
+-- "qty:<n>"; docs/resources.md) and adopted here, so it is in the save:
+-- `loose.bodies` = { { b = body, pf = prefab, x, y, z (body-relative), m =
+-- material, q = units, s = scale } }, written every few seconds, and the
+-- bodies of the world you are on are spawned again when you come back to it
+-- (when the ground under each is made). At most LOOSE_MAX, the oldest going.
+LOOSE_MAX = 32
+local LOOSE_KEY = "loose.bodies"
+local loose = {}
+local loose_seq = 0
+local loose_t = 0
+local loose_restored = {}
+local loose_wait = 0
+
+local function loose_live(e) return e.n and e.n.valid and e.n.name == e.name end
+
+function adoptBody(n, pf, mat, qty, scale)
+  if not (n and n.valid ~= false and pf and mat) then return end
+  local mats = ref("materials")
+  if mats and mats.tagResource then mats.tagResource(n, mat, qty) end
+  for _, e in ipairs(loose) do if e.n == n and e.name == n.name then e.mat, e.qty = mat, qty return end end
+  loose[#loose + 1] = { n = n, name = n.name, pf = pf, mat = mat, qty = qty or 1, s = scale }
+  while #loose > LOOSE_MAX do
+    local old = table.remove(loose, 1)
+    if loose_live(old) then old.n:destroy() end
+  end
+end
+
+function looseBodies()
+  local out = {}
+  for _, e in ipairs(loose) do if loose_live(e) then out[#out + 1] = e end end
+  return out
+end
+
+local loose_pending = {}   -- body → saved entries not spawned yet
+local loose_since = {}
+
+local function copy_entry(e)
+  return { b = e.b, pf = e.pf, x = e.x, y = e.y, z = e.z, m = e.m, q = e.q, s = e.s }
+end
+
+local function loose_tick()
+  if time < loose_t then return end
+  loose_t = time + 2.0
+  if not (cur_body and spawn) then return end
+  local body = space.body(cur_body)
+  if not body then return end
+  local saved = save.get(LOOSE_KEY)
+  if type(saved) ~= "table" then saved = {} end
+  -- Coming back to a world (a load, a scene hop, a flight home): its bodies
+  -- again, each once the ground under it is made.
+  if not loose_restored[cur_body] then
+    loose_restored[cur_body] = true
+    loose_since[cur_body] = time
+    local list = {}
+    for _, e in ipairs(saved) do
+      if e.b == cur_body and type(e.x) == "number" and e.pf and e.m then list[#list + 1] = copy_entry(e) end
+    end
+    loose_pending[cur_body] = list
+  end
+  local pend = loose_pending[cur_body] or {}
+  local keep = {}
+  for _, e in ipairs(pend) do
+    local wx, wy, wz = body.x + e.x, body.y + e.y, body.z + e.z
+    if not terrain.ready or terrain.ready(wx, wy, wz, 3.0) then
+      loose_wait = loose_wait + 1
+      loose_seq = loose_seq + 1
+      local nm = string.format("%s r%d", e.pf, loose_seq)
+      spawn(e.pf, vec3(wx, wy, wz), function(n)
+        loose_wait = math.max(0, loose_wait - 1)
+        n.name = nm
+        if e.s and e.s ~= 1 then n.scale = e.s end
+        adoptBody(n, e.pf, e.m, e.q, e.s)
+        if assembly and assembly.rebuild then assembly.rebuild(n) end
+      end)
+    else
+      keep[#keep + 1] = e
+    end
+  end
+  loose_pending[cur_body] = keep
+  if loose_wait > 0 then return end
+  -- The save: other worlds' bodies as they were, this world's as they are
+  -- (and the ones still waiting for their ground).
+  local out = {}
+  for _, e in ipairs(saved) do
+    if not loose_restored[e.b] then out[#out + 1] = copy_entry(e) end
+  end
+  for b, list in pairs(loose_pending) do
+    for _, e in ipairs(list) do out[#out + 1] = copy_entry(e) end
+  end
+  local seen = {}
+  for _, e in ipairs(loose) do
+    if loose_live(e) and not seen[e.name] then
+      seen[e.name] = true
+      local n = e.n
+      local bn = space.dominant(n.x, n.y, n.z)
+      local bb = bn and space.body(bn)
+      if bb then
+        out[#out + 1] = { b = bn, pf = e.pf, x = n.x - bb.x, y = n.y - bb.y, z = n.z - bb.z, m = e.mat, q = e.qty, s = e.s }
+      end
+    end
+  end
+  while #out > LOOSE_MAX do table.remove(out, 1) end
+  save.set(LOOSE_KEY, #out > 0 and out or nil)
 end
 
 -- ── driver ──────────────────────────────────────────────────────────────────
@@ -697,20 +1500,32 @@ local function observer()
   return astro
 end
 
+-- (as flora_field's cuts: a list per kind per patch ever built, so the walk
+-- looks only at lists whose OLDEST break is due, parses each key once, and
+-- forgets an empty list whose patch has gone — breaks_of reads it back)
+local break_keys = {}   -- hk → { pk, kid }
 local function regrow()
   if params.regrow <= 0 then return end
   for hk, list in pairs(breaks) do
-    local keep = {}
-    local pk, kid = hk:match("^(.*)|(%a+)$")
-    local p = patches[pk]
-    for _, c in ipairs(list) do
-      if time - c.t < params.regrow then
-        keep[#keep + 1] = c
-      elseif p and p.srcs[kid] then
-        scatter.restore(p.srcs[kid], c.id)
-      end
+    local kk = break_keys[hk]
+    if not kk then
+      local pk, kid = hk:match("^(.*)|(%a+)$")
+      kk = { pk, kid }
+      break_keys[hk] = kk
     end
-    if #keep ~= #list then
+    local pk, kid = kk[1], kk[2]
+    local p = patches[pk]
+    if #list == 0 then
+      if not p then breaks[hk], break_keys[hk] = nil, nil end
+    elseif time - list[1].t >= params.regrow then
+      local keep = {}
+      for _, c in ipairs(list) do
+        if time - c.t < params.regrow then
+          keep[#keep + 1] = c
+        elseif p and p.srcs[kid] then
+          scatter.restore(p.srcs[kid], c.id)
+        end
+      end
       breaks[hk] = keep
       save_breaks(pk, kid)
     end
@@ -881,7 +1696,10 @@ function update(node, dt)
     if cur_body then tear_down() end
     return
   end
+  drain_yields()
+  if #events > 32 then for _ = 1, #events - 32 do table.remove(events, 1) end end
   if cur_body then audit_tick(observer()) end
+  loose_tick()
   if time < next_t then return end
   next_t = time + 0.2
   local gm = ref("game_manager")
@@ -1021,6 +1839,7 @@ function update(node, dt)
   convert_holes(body)
   regrow()
   ground_tick(w, R)
+  veins_tick(w, R, body, planet, rx, ry, rz)
 
   if not frame_checked then
     for _, p in pairs(patches) do
@@ -1099,7 +1918,7 @@ end
 -- of a WORLD point against the terrain where it lies (+ over, − under).
 function groundAudit(x, y, z, radius, tol)
   tol = tol or 0.3
-  local out = { checked = 0, floating = 0, buried = 0, worst = 0, examples = {} }
+  local out = { checked = 0, floating = 0, buried = 0, worst = 0, examples = {}, props = {} }
   local body = cur_body and space.body(cur_body)
   if not (body and scatter and scatter.near) then return out end
   for id, s in pairs(srcs) do
@@ -1117,6 +1936,9 @@ function groundAudit(x, y, z, radius, tol)
               if #out.examples < 12 then
                 out.examples[#out.examples + 1] = { src = id, id = h.id, d = d, kind = s.kind.id, x = h.pos.x, y = h.pos.y, z = h.pos.z }
               end
+            end
+            if #out.props < 400 then
+              out.props[#out.props + 1] = { src = id, id = h.id, d = d, kind = s.kind.id, x = h.pos.x, y = h.pos.y, z = h.pos.z }
             end
           end
         end

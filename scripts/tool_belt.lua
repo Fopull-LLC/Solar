@@ -225,7 +225,7 @@ sim = nil
 TOOL_ORDER = { "gravgun", "laser", "surveyor", "beacon" }
 TOOLDEF = {
   gravgun = { label = "Gravity Gun", prefab = "ToolGravGun", fp_prefab = "ToolGravGunFP",
-              hint = "hold LMB to grab (rocks, crates, logs, debris, a beacon)  ·  scroll nearer / further  ·  R throw  ·  E stow what you hold  ·  let go in the depot's intake to deposit or recycle it  ·  aim at a plant to uproot it" },
+              hint = "hold LMB to grab (rocks, crates, logs, debris, a beacon)  ·  scroll nearer / further  ·  R throw  ·  E stow what you hold  ·  drop it on the Materials Intake's belt to deposit or recycle it  ·  aim at a plant to uproot it" },
   laser   = { label = "Terrain Laser", prefab = "ToolLaser", fp_prefab = "ToolLaserFP",
               hint = "hold LMB to dig  ·  Q switches DIG / FILL  ·  hold E: cut plants" },
   -- the TL-5 Surveyor plasma rifle: drawn and held here, fired by scripts/surveyor.lua
@@ -517,6 +517,10 @@ end
 -- ── what the rock is ────────────────────────────────────────────────────────
 
 local function depth_at(body, x, y, z)
+  -- The ground's own field over the point (mineral_field.depthAt: a terrain
+  -- ray, so a tree, a roof or the crew over the cut is not "rock above").
+  local mf = ref("mineral_field")
+  if mf and mf.depthAt and terrain.raycast then return mf.depthAt(x, y, z) end
   local dx, dy, dz = x - body.x, y - body.y, z - body.z
   local r = len(dx, dy, dz)
   if r < 1e-3 then return 0 end
@@ -537,6 +541,15 @@ function survey(x, y, z)
   local cl = ref("climate")
   local body = space.body(space.dominant(x, y, z) or "")
   if not (body and mats) then return nil, 0 end
+  -- THE GROUND YOU SEE: the palette slot at the point (a vein's ore inside a
+  -- vein, Star Geode inside a pocket) — what terrain.yields will pay for the
+  -- same cut (mineral_field.materialAt). The noise roll below is for an
+  -- engine with no slotAt.
+  local mf = ref("mineral_field")
+  if mf and mf.materialAt then
+    local m, depth, ore = mf.materialAt(x, y, z)
+    if m then return m, depth or 0, ore == true end
+  end
   local w = cl and cl.worldOf(body.name)
   local depth = depth_at(body, x, y, z)
   local seed = (w and w.seed or 1) % 4096
@@ -1483,42 +1496,70 @@ local RING = {
   fill = { 0.45, 0.78, 1.00 },
 }
 
--- THE MARK'S SIZE ON SCREEN (playtest 2026-10-27: "the aim circle is too big
--- up close and blocks the view"). A ring the cut radius across, or a plant's
--- spread, is a fair size a few metres off and fills the view at arm's length
--- (the laser's 1.2 m bite at 1.5 m is half the screen). So the ring keeps its
--- size in the world only while its radius on screen stays under RING_CAP of
--- the view's height; nearer, it shrinks to hold that, and dims with it, so
--- the closest marks are the smallest and the faintest. → radius, dim (0..1].
-RING_CAP = { laser = 0.08, plant = 0.07, dim = 0.45 }
+-- THE MARK'S SIZE ON SCREEN (playtests 2026-10-27 and 10-28: "the aim
+-- circle is too big up close and blocks the view"). The ring is a marker, not
+-- the cut's footprint: its radius ON SCREEN is a share of the view's height
+-- set by the camera's distance to it, small up close (RING_CAP.near_frac at
+-- `near` m and nearer: the laser's mark at arm's length is a reticle-sized
+-- loop, not half the screen) and a little larger far off (far_frac at `far` m
+-- and beyond, so a mark 20 m out still reads), eased between on the log of the
+-- distance. Its world radius follows from that, so it lies flush on the
+-- surface (paint_ring stands it on the normal) as an ellipse in perspective.
+-- Nearer marks are also a little fainter (dim). → radius (m), dim (0..1].
+-- (`r`, the mark's own size, is only the fallback with no camera.)
+ringR = nil   -- (probes) the laser mark's radius as last drawn, m
+RING_CAP = {
+  laser = { near = 1.5, far = 20, near_frac = 0.028, far_frac = 0.042, near_dim = 0.7 },
+  plant = { near = 1.5, far = 20, near_frac = 0.032, far_frac = 0.048, near_dim = 0.7 },
+}
 function ring_on_screen(x, y, z, nx, ny, nz, r, cap)
-  if not (camera and camera.worldToScreen and camera.screenRect) or r <= 0 then return r, 1 end
-  local sx, sy, _, on = camera.worldToScreen(x, y, z)
-  if not (sx and on) then return r, 1 end
-  -- two tangents across the mark: its widest look on screen
-  local ax, ay, az = 1, 0, 0
-  if math.abs(nx) > 0.9 then ax, ay, az = 0, 1, 0 end
-  local tx, ty, tz = ny * az - nz * ay, nz * ax - nx * az, nx * ay - ny * ax
-  local tl = len(tx, ty, tz)
-  if tl < 1e-6 then return r, 1 end
-  tx, ty, tz = tx / tl, ty / tl, tz / tl
-  local bx, by, bz = ny * tz - nz * ty, nz * tx - nx * tz, nx * ty - ny * tx
-  local px = 0
-  for _, d in ipairs({ { tx, ty, tz }, { bx, by, bz } }) do
-    local qx, qy, _, qon = camera.worldToScreen(x + d[1] * r, y + d[2] * r, z + d[3] * r)
-    if qx and qon ~= false then px = math.max(px, len(qx - sx, qy - sy, 0)) end
-  end
-  local _, _, _, vh = camera.screenRect()
-  local lim = (vh or 720) * cap
-  if px <= lim or px < 1e-3 then return r, 1 end
-  local k = lim / px
-  return r * k, math.max(RING_CAP.dim, k)
+  if type(cap) ~= "table" then cap = RING_CAP.laser end
+  -- the camera's distance to the mark and its vertical field of view: a
+  -- radius of frac × the view's height at distance d is frac × 2d·tan(fov/2)
+  -- (exact for a mark facing the camera; one lying on the ground keeps that
+  -- radius across the view and is foreshortened the other way, as a ring on
+  -- the ground looks). No projection, so a mark at arm's length or under the
+  -- view's edge is sized as surely as one in the middle.
+  -- The distance is the crew's eye to the mark plus, in third person, the
+  -- camera's boom: both from this frame's drawn poses. (The camera node itself
+  -- is placed later this frame by planet_camera, so read here it is a tick of
+  -- the planet's travel stale: metres. docs/positions-and-frames.md rule 2.)
+  local cn = cam_node()
+  local a = find("Astronaut")
+  if not (cn and a) or r <= 0 then return r, 1 end
+  local cp = cam.params or {}
+  local fp = first_person()
+  local eh = (fp and cp.eye_height or cp.height) or 0.85
+  local ex, ey, ez = a.x + (a.up_x or 0) * eh, a.y + (a.up_y or 1) * eh, a.z + (a.up_z or 0) * eh
+  local d = len(x - ex, y - ey, z - ez)
+  if not fp then d = d + (cp.distance or 0) end
+  d = math.max(0.3, d)
+  local fov = cp.fov_y or 1.15
+  local cc = cn.getcomponent and cn:getcomponent("Camera")
+  if cc and (cc.fovY or 0) > 0.01 then fov = cc.fovY end
+  local t = (math.log(d) - math.log(cap.near)) / (math.log(cap.far) - math.log(cap.near))
+  t = math.max(0, math.min(1, t))
+  t = t * t * (3 - 2 * t)
+  local frac = cap.near_frac + (cap.far_frac - cap.near_frac) * t
+  return frac * 2 * d * math.tan(fov * 0.5), cap.near_dim + (1 - cap.near_dim) * t
 end
 
--- The laser's AIM MARK: a thin ring laid on the ground at the bite (the
--- AimMark effect stood up on the surface normal), the cut radius across, in
--- the state's colour. Progress is on the screen reticle's pips.
-local function paint_ring(hit, firing, full, radius, fill)
+-- The size a mark is drawn at, eased (docs/positions-and-frames.md rule 7):
+-- the radius is a scalar, so it is smoothed as it is; `st` is the mark's
+-- smoothing state (its place is kept in the body frame by the caller) and a
+-- new state (a new target) starts at the size it wants. (A global, as is
+-- MARKS below: the main chunk is at Lua's 200-local limit.)
+function ring_eased(st, want, dt)
+  if not (st and st.r) or not dt then if st then st.r = want end return want end
+  st.r = st.r + (want - st.r) * (1 - math.exp(-14 * dt))
+  return st.r
+end
+
+-- The laser's AIM MARK: a thin ring laid flush on the surface at the bite
+-- (the AimMark effect stood up on the surface normal), sized by distance
+-- (ring_on_screen), in the state's colour. Progress is on the screen
+-- reticle's pips. `st`/`dt`: the smoothing state and the frame's step.
+local function paint_ring(hit, firing, full, radius, fill, st, dt)
   if not hit then return end
   local c = RING.idle
   if full then c = RING.full
@@ -1531,8 +1572,10 @@ local function paint_ring(hit, firing, full, radius, fill)
   if nl < 1e-4 then nx, ny, nz, nl = 0, 1, 0, 1 end
   nx, ny, nz = nx / nl, ny / nl, nz / nl
   -- the ring in the texture sits at 0.78 of the half-size: size = r / 0.39
-  -- (held under RING_CAP.laser of the view near the crew: ring_on_screen)
+  -- (its size on screen by the camera's distance: ring_on_screen)
   local rr, dim = ring_on_screen(hit.x, hit.y, hit.z, nx, ny, nz, math.max(0.4, radius), RING_CAP.laser)
+  rr = ring_eased(st, rr, dt)
+  ringR = rr
   fx_use("AimMark", { x = hit.x + nx * 0.06, y = hit.y + ny * 0.06, z = hit.z + nz * 0.06,
                       ux = nx, uy = ny, uz = nz, scale = rr / 0.39,
                       power = (firing and 1.0 or 0.75) * dim, r = c[1], g = c[2], b = c[3] })
@@ -1669,23 +1712,40 @@ local rock_seq = 0
 -- came out of; a plucked boulder, stone or crystal its kind's ore; a felled
 -- log timber. Read when it is stowed (E) or dropped at the depot. Weak keys:
 -- a destroyed node takes its record with it.
+-- The record is also the node's TAGS ("resource", "mat:<id>", "qty:<n>":
+-- materials.tagResource, docs/resources.md) — what the depot, a truck's bed or
+-- any other script reads — and the body is adopted by mineral_field, which
+-- keeps it in the save. `pf` is the prefab it was spawned from.
 local worth = setmetatable({}, { __mode = "k" })
-local function set_worth(n, mat, units, label)
-  if n then worth[n] = { mat = mat, n = units, label = label } end
+local function set_worth(n, mat, units, label, pf)
+  if not n then return end
+  worth[n] = { mat = mat, n = units, label = label }
+  local mf, mats = ref("mineral_field"), ref("materials")
+  if mf and mf.adoptBody and pf then mf.adoptBody(n, pf, mat, units)
+  elseif mats and mats.tagResource then mats.tagResource(n, mat, units) end
 end
 local function worth_of(n)
   if not n then return nil end
   local w = worth[n]
+  local mats = ref("materials")
+  local r = mats and mats.resourceOf and mats.resourceOf(n)
+  if r then
+    local kind = r.kind == "log" and " log" or ((r.kind == "loose_rock" or r.kind == "boulder") and " chunk" or "")
+    return { mat = r.mat, n = r.qty, label = (w and w.label) or (r.name .. kind) }
+  end
   if w then return w end
   -- the tags the prefabs carry (tools/gen_props.py)
   if n.hasTag then
     if n:hasTag("log") then return { mat = "timber", n = 2, label = "Felled Log" } end
-    if n:hasTag("boulder") then return { mat = "iron", n = 3, label = "Boulder" } end
+    if n:hasTag("boulder") then return { mat = "basalt", n = 3, label = "Boulder" } end
     if n:hasTag("crystal") then return { mat = "crystal", n = 2, label = "Crystal Outcrop" } end
     if n:hasTag("loose_rock") then return { mat = "regolith", n = 1, label = "Loose Rock" } end
   end
   return nil
 end
+-- (the Materials Intake reads what a loose body is worth through this:
+-- scripts/material_intake.lua, for a chunk priced here before it was tagged)
+function worthOf(n) return worth_of(n) end
 local function knock_loose(x, y, z, nx, ny, nz, mat)
   if params.rocks_max <= 0 or not spawn then return end
   while #rocks >= params.rocks_max do
@@ -1701,7 +1761,7 @@ local function knock_loose(x, y, z, nx, ny, nz, mat)
     n.name = nm
     rocks[slot] = { n = n, name = nm }
     local mats = ref("materials")
-    set_worth(n, mat or "regolith", 2, ((mats and mat) and mats.label(mat) or "Rock") .. " chunk")
+    set_worth(n, mat or "regolith", 2, ((mats and mat) and mats.label(mat) or "Rock") .. " chunk", "LooseRock")
     n:setAngles(math.random() * 6.28, math.random() * 6.28, math.random() * 6.28)
     if assembly and assembly.rebuild then
       assembly.rebuild(n, function(r)
@@ -1720,14 +1780,20 @@ end
 function knockLoose(x, y, z, nx, ny, nz, mat) knock_loose(x, y, z, nx, ny, nz, mat) end
 
 local function pop_unit(node, hit)
+  local SURFACE_ROCKS = { gravel = true, stone = true, boulder = true, crystal = true }
   local inv, mats = ref("inventory"), ref("materials")
   if not (inv and mats) then return end
   -- SURFACE ROCK FIRST: a boulder where the beam is cutting is what the
   -- player is pointing at (scattered props have no colliders, so the field
   -- is asked by proximity).
   local mf = ref("mineral_field")
+  -- With the engine's measured yields the ground pays by what the cut removed
+  -- (mineral_field.trackDig / takeYields, see dig_yields below), so the timer
+  -- only breaks the surface rocks in the beam — never a geode pocket, which
+  -- pays by the volume cut out of it.
+  local live = mf and mf.yieldsLive
   if mf and mf.nearest then
-    local rock = mf.nearest(hit.x, hit.y, hit.z)
+    local rock = mf.nearest(hit.x, hit.y, hit.z, nil, live and SURFACE_ROCKS or nil)
     if rock then
       local rmat, rtook = mf.breakAt(rock, "astro")
       if rtook and rtook > 0 then
@@ -1741,6 +1807,7 @@ local function pop_unit(node, hit)
       end
     end
   end
+  if live then return end
   local mat, depth, rich = survey(hit.x, hit.y, hit.z)
   if not mat then return end
   local took = inv.add("astro", mat, rich and 2 or 1)
@@ -1748,7 +1815,7 @@ local function pop_unit(node, hit)
   -- (missions.geodeFind keeps the count and announces the first).
   if took > 0 and mat == "crystal" then
     local mi = ref("missions")
-    if mi and mi.geodeFind then pcall(mi.geodeFind, space.dominant(hit.x, hit.y, hit.z), mat, took, depth or 0) end
+    if mi and mi.geodeFind then pcall(mi.geodeFind, space.dominant(hit.x, hit.y, hit.z), mat, took, depth or 0, "deposit") end
   end
   if took <= 0 then
     if time - denied_t > 2.5 then
@@ -1773,6 +1840,45 @@ local function pop_unit(node, hit)
   end
 end
 
+-- WHAT THE CUT TOOK OUT (mineral_field.takeYields): each bite's measured
+-- volume, by the material it was, turned into units in the pack there. Here
+-- it is felt: the line, the crack of breaking ore, a chunk of it knocked loose
+-- every `rock_every` units (a body of THAT material, to carry). (Not a local:
+-- this file's main chunk is at Lua's 200-local limit.)
+function digYields(node)
+  local mf = ref("mineral_field")
+  local list = mf and mf.takeYields and mf.takeYields()
+  if not list then return end
+  local inv, mats = ref("inventory"), ref("materials")
+  if not (inv and mats) then return end
+  for _, e in ipairs(list) do
+    local b = e.body and space.body(e.body)
+    local x, y, z = b and b.x + e.x, b and b.y + e.y, b and b.z + e.z
+    if (e.took or 0) <= 0 then
+      if time - denied_t > 2.5 then
+        denied_t = time
+        play(SFX.denied, { track = "UI", volume = 0.5 })
+        say("pack full — " .. inv.line("astro"))
+      end
+    else
+      local ore = mats.isOre and mats.isOre(e.mat)
+      local fx = ref("vfx")
+      if x and (ore or e.outcrop) then
+        if fx and fx.oreBreak then fx.oreBreak(x, y, z) else spawnEffect("OreBreak", x, y, z) end
+      end
+      play(SFX.ore .. tostring(math.floor(math.random() * 5)) .. ".ogg",
+        { track = "SFX", volume = ore and 0.7 or 0.45, pitch = (ore and 0.75 or 0.95) + math.random() * 0.25 })
+      say(string.format("%s ×%d%s", mats.label(e.mat), e.took, e.outcrop and "  ·  an outcrop broke out" or ""))
+      units_mined = units_mined + e.took
+      if x and (e.outcrop or (params.rock_every > 0 and units_mined % params.rock_every < e.took and bored < 1.5)) then
+        local ux, uy, uz = gravity_at(x, y, z)
+        knock_loose(x, y, z, ux, uy, uz, e.mat)
+        collected_say(string.format("a chunk of %s broke loose — grab it", mats.label(e.mat)))
+      end
+    end
+  end
+end
+
 local function laser_cool(dt)
   charge = math.max(0.0, charge - dt * 4.0)
   heat = math.max(0.0, heat - dt / math.max(0.5, params.cool_time))
@@ -1782,6 +1888,7 @@ local function laser_cool(dt)
 end
 
 local function fire_dig(node, dt, firing)
+  digYields(node)
   local ox, oy, oz, dx, dy, dz = aim_ray(node)
   if not ox then
     bore_drop(); show_beam(nil); hum_off()
@@ -1793,7 +1900,10 @@ local function fire_dig(node, dt, firing)
   local hit = entry
   if firing then
     charge = math.min(1.0, charge + dt / math.max(0.01, params.spin))
-    local bx, by, bz = bore_step(node, dt, ox, oy, oz, dx, dy, dz, entry)
+    -- (hard ground slows the bore as it slows the bite: `aimHard` is the
+    -- material under the beam, materials.hardness; soft ground bites more
+    -- per shot but the bore keeps its pace)
+    local bx, by, bz = bore_step(node, dt / math.max(1, aimHard or 1), ox, oy, oz, dx, dy, dz, entry)
     if bx then
       hit = { x = bx, y = by, z = bz, nx = -dx, ny = -dy, nz = -dz,
               range = len(bx - node.x, by - node.y, bz - node.z) }
@@ -1808,7 +1918,10 @@ local function fire_dig(node, dt, firing)
     aimDist = hit.range or len(hit.x - node.x, hit.y - node.y, hit.z - node.z)
     aimMat, aimDepth = survey(hit.x, hit.y, hit.z)
     aimX, aimY, aimZ = hit.x, hit.y, hit.z
+    local mh = ref("materials")
+    aimHard = (aimMat and mh and mh.hardness and mh.hardness(aimMat)) or 1
   else
+    aimHard = 1
     aimDist, aimMat, aimDepth = nil, nil, 0
     aimX, aimY, aimZ = nil, nil, nil
   end
@@ -1826,7 +1939,7 @@ local function fire_dig(node, dt, firing)
       end
     end
     last_hit = { hit.x, hit.y, hit.z }
-    cut_progress = cut_progress + dt * charge * throttle * (1.0 + 0.6 * focus) / math.max(0.05, params.yield)
+    cut_progress = cut_progress + dt * charge * throttle * (1.0 + 0.6 * focus) / math.max(0.05, params.yield * (aimHard or 1))
     while cut_progress >= 1.0 do
       cut_progress = cut_progress - 1.0
       pop_unit(node, hit)
@@ -1834,8 +1947,15 @@ local function fire_dig(node, dt, firing)
     if time - last_t >= params.laser_rate then
       last_t = time
       quiet_ground(hit.x, hit.y, hit.z)
-      terrain.dig(hit.x, hit.y, hit.z, params.laser_radius,
-        params.laser_strength * (0.55 + 0.45 * charge))
+      -- The receipt goes to the mineral field, which pays the cut by the
+      -- volume and material it actually removed (terrain.yields).
+      -- (in hard ground the bite is smaller too: the volume a bite takes
+      -- goes with the cube of its radius, so ore ÷ √hardness cuts at about
+      -- half the rate of the rock round it)
+      local rid = terrain.dig(hit.x, hit.y, hit.z, params.laser_radius / math.sqrt(math.max(1, aimHard or 1)),
+        params.laser_strength * (0.55 + 0.45 * charge) / (aimHard or 1))
+      local mfd = ref("mineral_field")
+      if mfd and mfd.trackDig then mfd.trackDig(rid, hit.x, hit.y, hit.z, "astro") end
       groundChanged(hit.x, hit.y, hit.z, params.laser_radius)
     end
     show_beam(hit, charge, "dig")
@@ -1863,8 +1983,11 @@ local function fire_dig(node, dt, firing)
     elseif aimMat then
       local where = aimDepth >= 1.0 and string.format("%.0f m down", aimDepth)
         or string.format("%.0f m out", aimDist or 0)
-      head = string.format("%s  ·  %s  ·  next unit %d%%%s%s",
-        mats and mats.label(aimMat) or aimMat, where, math.floor(cut_progress * 100 + 0.5),
+      local mfp = ref("mineral_field")
+      local nextp = (mfp and mfp.yieldsLive and mfp.progressOf) and mfp.progressOf(aimMat) or cut_progress
+      head = string.format("%s%s  ·  %s  ·  next unit %d%%%s%s",
+        mats and mats.label(aimMat) or aimMat, (mats and mats.isOre and mats.isOre(aimMat)) and " (ore)" or "",
+        where, math.floor(nextp * 100 + 0.5),
         bored > 0.5 and string.format("  bore %.1f m", bored) or "",
         focus > 0.05 and string.format("  focus +%d%%", math.floor(focus * 60 + 0.5)) or "")
     end
@@ -1875,7 +1998,8 @@ local function fire_dig(node, dt, firing)
     end
   end
   if guarded then prompt = "DIG  ·  " .. guarded .. "  ·  " .. pack end
-  progress = cut_progress
+  local mfq = ref("mineral_field")
+  progress = (mfq and mfq.yieldsLive and mfq.progressOf and aimMat) and mfq.progressOf(aimMat) or cut_progress
   -- The reticle: the material and where it is, or nothing.
   if hit and aimMat then
     reticle_set(full and "full" or "dig", string.format("%s  ·  %s", mats and mats.label(aimMat) or aimMat,
@@ -1989,6 +2113,9 @@ local function e_taken()
   if fm and fm.prompting and fm.prompting() then return "E is the building's door" end
   local sv = ref("salvage")
   if sv and sv.prompting and sv.prompting() then return "E recovers the crate" end
+  local rb = find("FacRepair")
+  local rbs = rb and rb.getScript and rb:getScript("repair_bay")
+  if rbs and rbs.prompting and rbs.prompting() then return "E is the repair bay's console" end
   return nil
 end
 
@@ -2278,6 +2405,10 @@ local function depot_pos()
   return d.x, d.y, d.z
 end
 local function in_intake(x, y, z)
+  -- The Materials Intake's belt (scripts/material_intake.lua, on FacIntake)
+  -- is where loads go in now: the old let-go-near-the-depot take stands down
+  -- while the shed stands, so a log is carried in, not vanished at 22 m.
+  if find("FacIntake") then return false end
   local dx, dy, dz = depot_pos()
   if not dx then return false end
   return len(x - dx, y - dy, z - dz) <= params.intake
@@ -2413,7 +2544,8 @@ end
 local function pluck_rock(node, cand, h)
   local mf = ref("mineral_field")
   local rk = cand.rock
-  local kind = mf and mf.pluck and mf.pluck(rk)
+  local kind, rmat = nil, nil
+  if mf and mf.pluck then kind, rmat = mf.pluck(rk) end
   if not (kind and spawn) then return false end
   local ux, uy, uz = gravity_at(rk.pos.x, rk.pos.y, rk.pos.z)
   local sc = rk.scale or 1
@@ -2424,10 +2556,12 @@ local function pluck_rock(node, cand, h)
   play(SFX.ore .. tostring(math.floor(math.random() * 5)) .. ".ogg", { track = "SFX", volume = 0.6, pitch = 0.7 + math.random() * 0.2 })
   local mats = ref("materials")
   local label = cand.name
+  if rmat and mats and kind.id ~= "crystal" then label = mats.label(rmat) .. " " .. string.lower(cand.name) end
   grab = carry_mark({ kind = "pending", name = label, mass = cand.mass, t0 = time, x = px, y = py, z = pz }, node)
   holding = { name = label, mass = cand.mass, strain = 0, kind = "asm" }
-  spawn(ROCK_PREFAB[kind.id] or "LooseRock", vec3(px, py, pz), function(n)
-    set_worth(n, kind.mat, kind.yield or 1, label)
+  local pf = ROCK_PREFAB[kind.id] or "LooseRock"
+  spawn(pf, vec3(px, py, pz), function(n)
+    set_worth(n, rmat or kind.mat, kind.yield or 1, label, pf)
     n:setAngles(math.random() * 6.28, (rk.yaw or 0), math.random() * 0.4)
     if kind.id == "stone" and sc ~= 1 then n.scale = math.max(0.7, math.min(1.6, sc)) end
     local function take(r)
@@ -2968,7 +3102,9 @@ end
 -- The PLANT MARK: motes rising through the whole plant (PlantMark, the node
 -- scaled to the plant's body: its spread across, its height up) and a ring at
 -- its foot (AimMark), in the target colour, warming as the work goes on.
-local function paint_plant(req)
+-- MARKS.plant: the plant ring's eased foot (body frame), radius and target key
+MARKS = { plant = nil }
+local function paint_plant(req, dt)
   local w = to_world(req.h)
   local ux, uy, uz = req.ux or 0, req.uy or 1, req.uz or 0
   local h = math.max(0.4, math.min(12, req.height or 1))
@@ -2983,6 +3119,21 @@ local function paint_plant(req)
       if hit2 then hit = { x = hit2.x, y = hit2.y, z = hit2.z, distance = (hit.distance or 0) + 0.05 + (hit2.distance or 0), node = hit2.node } end
     end
     if hit and (hit.distance or 0) > 0.25 then w = { x = hit.x, y = hit.y, z = hit.z } end
+  end
+  -- The foot eased in the planet's frame (rule 7: a ray down a trunk can
+  -- flicker between ground and root); a new plant, or a jump past 2 m, snaps.
+  do
+    local fb = to_body(w)
+    local key = tostring(req.src) .. ":" .. tostring(req.inst) .. ":" .. tostring(req.sp)
+    local ps = MARKS.plant
+    if ps and fb.body and ps.body == fb.body and ps.key == key and dt
+       and (fb.x - ps.x) ^ 2 + (fb.y - ps.y) ^ 2 + (fb.z - ps.z) ^ 2 < 4 then
+      local k = 1 - math.exp(-16 * dt)
+      ps.x, ps.y, ps.z = ps.x + (fb.x - ps.x) * k, ps.y + (fb.y - ps.y) * k, ps.z + (fb.z - ps.z) * k
+    else
+      MARKS.plant = { body = fb.body, key = key, x = fb.x, y = fb.y, z = fb.z }
+    end
+    if MARKS.plant.body then w = to_world(MARKS.plant) end
   end
   local ff = ref("flora_field")
   local wide = (ff and ff.girthOf and req.sp) and ff.girthOf(req.sp, h, h * 0.6, 0.3) or (h * 0.3)
@@ -3008,6 +3159,7 @@ local function paint_plant(req)
                           scale = wide, sy = h, power = 0.6 + 0.8 * k, r = r, g = g, b = b })
   end
   local mr, dim = ring_on_screen(w.x, w.y, w.z, ux, uy, uz, math.max(0.5, wide * 0.9), RING_CAP.plant)
+  mr = ring_eased(MARKS.plant, mr, dt)
   fx_use("AimMark", { x = w.x + ux * 0.06, y = w.y + uy * 0.06, z = w.z + uz * 0.06, ux = ux, uy = uy, uz = uz,
                       scale = mr / 0.39, power = 0.7 * dim, r = r, g = g, b = b })
 end
@@ -3128,19 +3280,21 @@ function lateUpdate(node, dt)
       s.x, s.y, s.z = s.x + (h.x - s.x) * k, s.y + (h.y - s.y) * k, s.z + (h.z - s.z) * k
       local ax, ay, az = s.nx or 0, s.ny or 1, s.nz or 0
       local bx, by, bz = h.nx or ax, h.ny or ay, h.nz or az
+      -- over a sharp edge (ground to a wall, past 40°) the ring turns at once
+      if ax * bx + ay * by + az * bz < 0.77 then kn = 1 end
       ax, ay, az = ax + (bx - ax) * kn, ay + (by - ay) * kn, az + (bz - az) * kn
       local l = len(ax, ay, az)
       if l > 1e-6 then s.nx, s.ny, s.nz = ax / l, ay / l, az / l end
     else
       ring_s = { body = h.body, x = h.x, y = h.y, z = h.z, nx = h.nx, ny = h.ny, nz = h.nz }
     end
-    paint_ring(to_world(ring_s), ring_req.firing, ring_req.full, ring_req.r, ring_req.fill)
+    paint_ring(to_world(ring_s), ring_req.firing, ring_req.full, ring_req.r, ring_req.fill, ring_s, dt)
   else
     ring_s = nil
   end
   ring_req = nil
 
-  if plant_req then paint_plant(plant_req) end
+  if plant_req then paint_plant(plant_req, dt) else MARKS.plant = nil end
   plant_req = nil
   if rock_req then paint_rock(rock_req) end
   rock_req = nil

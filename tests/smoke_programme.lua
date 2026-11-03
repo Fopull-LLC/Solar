@@ -224,11 +224,17 @@ check("the rule: a pocket's geode always counts", mi.isGeodeFind("geode", 0))
 check("…crystal from 3 m down or deeper counts", mi.isGeodeFind("crystal", 3.0) and mi.isGeodeFind("crystal", 22))
 check("…a surface scrape of crystal doesn't", not mi.isGeodeFind("crystal", 0.5))
 check("…and nothing else counts at any depth", not mi.isGeodeFind("iron", 40) and not mi.isGeodeFind("uranium", 40))
-check("shallow crystal on home is no find", mi.geodeFind("Umunquo", "crystal", 1, 1.0) == false and mi.geodeFinds("Umunquo") == 0)
-check("deep crystal on a MOON is a find there", mi.geodeFind("Ryethos", "crystal", 2, 21) == true)
+check("shallow crystal on home is no find", mi.geodeFind("Umunquo", "crystal", 1, 1.0, "deposit") == false and mi.geodeFinds("Umunquo") == 0)
+-- (playtest 2026-11: grass counted as a Star Geode) a find needs a physical
+-- source — a pocket or a deposit the cut removed — never a plant, an outcrop
+-- or a caller that does not say
+check("…deep crystal with no source is no find", mi.geodeFind("Umunquo", "crystal", 1, 8.5) == false
+  and mi.geodeFind("Umunquo", "crystal", 1, 8.5, "plant") == false and mi.geodeFind("Umunquo", "crystal", 1, 8.5, "outcrop") == false
+  and mi.geodeFinds("Umunquo") == 0)
+check("deep crystal on a MOON is a find there", mi.geodeFind("Ryethos", "crystal", 2, 21, "deposit") == true)
 second()
 check("…but does not tick the home geode goal", not ticked("rare_finds", 3))
-check("deep crystal dug on home counts as a Star Geode find", mi.geodeFind("Umunquo", "crystal", 1, 8.5) == true
+check("deep crystal dug on home counts as a Star Geode find", mi.geodeFind("Umunquo", "crystal", 1, 8.5, "deposit") == true
   and mi.geodeFinds("Umunquo") == 1 and store["rare.geo.Umunquo"].deep == 8.5)
 second()
 check("peak + a home geode (deep crystal) finish Rare Finds", state_of("rare_finds") == "done", state_of("rare_finds"))
