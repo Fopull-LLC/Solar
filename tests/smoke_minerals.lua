@@ -196,8 +196,10 @@ API.scatter = {
         densityRows = 1, parent = 1, tint = 1, emissive = 1, emissiveStrength = 1 })[k]
       if not okk then error("scatter.create: unknown option " .. k) end
     end
-    assert(o.center and o.center.x == 0 and o.center.y == 0 and o.center.z == 0,
-      "an anchored region's centre is in its parent's frame (0,0,0)")
+    -- a patch's rock sources sit at its node (0,0,0); a vein's float region
+    -- is offset within the patch plane (y 0)
+    assert(o.center and o.center.y == 0 and math.abs(o.center.x) <= 400 and math.abs(o.center.z) <= 400,
+      "an anchored region's centre is in its parent's frame, in its plane")
     assert(o.halfX and o.parent, "surface props use Ground regions anchored to a patch node")
     assert(by_name[o.parent], "parent node exists: " .. tostring(o.parent))
     if type(o.density) == "table" then

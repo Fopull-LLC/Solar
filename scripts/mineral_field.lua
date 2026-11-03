@@ -99,6 +99,14 @@ defaults = {
   -- Outcrop nodes kept at once, all veins together.
   --@range 0 200
   outcrop_max = 72,
+  -- Float: broken bits of the ore lying along a seam and just past it, the
+  -- way a prospector finds a vein (an instanced scatter per vein, no nodes).
+  -- Multiplies how thickly it lies (0 = none).
+  --@range 0 3
+  vein_float = 1.0,
+  -- Float is laid out within this range of a vein, and drawn out to ~70 m.
+  --@range 30 200 --@units m
+  float_show = 90.0,
   -- Cubic metres of cut ground per unit in the pack: the laser pays out by
   -- the volume it actually removed, of the material it removed
   -- (terrain.yields), not by a timer. The laser takes out ~35–45 m³ a
@@ -798,7 +806,8 @@ end
 -- moves metres a tick (docs/positions-and-frames.md).
 
 local VEIN_V = 1
--- vein_saved: patch key → { p = { v<i> = slot painted }, t = { v<i> = outcrops taken (bits) } }
+-- vein_saved: patch key → { p = { v<i> = slot painted }, t = { v<i> = outcrops taken (bits) },
+--                          h = { v<i> = 1 once the stain is painted } }
 
 local function vein_key(pk) return string.format("veins%d.%s.%s", VEIN_V, cur_body or "?", pk) end
 local function vein_rec(pk)
@@ -867,14 +876,14 @@ local function veins_of(p, w, R)
       local pz = p.cz + p.ex[3] * lx + p.ez[3] * lz
       local l = len(px, py, pz)
       local taper = 1 - 0.45 * math.abs(k / (K - 1) - 0.5) * 2
-      pts[#pts + 1] = { px / l, py / l, pz / l, w = wd * taper * (0.8 + 0.4 * r:next()) }
+      pts[#pts + 1] = { px / l, py / l, pz / l, w = wd * taper * (0.8 + 0.4 * r:next()), lx = lx, lz = lz }
     end
     local c = pts[math.ceil(K / 2)]
     local f2, g2, u2, v2 = project(c[1] * R, c[2] * R, c[3] * R, R)
     local seed = r:int(1, 999983)
     if f2 == p.face and g2 == p.sgn and math.floor(u2 / p.P) == p.i and math.floor(v2 / p.P) == p.j
        and not kept_clear(c[1] * R, c[2] * R, c[3] * R) then
-      out[#out + 1] = { i = vi, key = "v" .. vi, ore = ore, pts = pts, len = L, width = wd, seed = seed }
+      out[#out + 1] = { i = vi, key = "v" .. vi, ore = ore, pts = pts, len = L, width = wd, seed = seed, lx = x, lz = z }
     end
   end
   return out
@@ -922,25 +931,107 @@ local function world_reserved(w)
 end
 
 -- The colour a seam is painted in (the texture is tinted by it, ×1.6 in the
--- shader: 0.62 is the texture as authored): iron's hematite black, copper's
--- verdigris, sulfur's yellow, uranite's sickly green over the magma glow.
+-- shader: 0.62 is the texture as authored): iron's rusty hematite black,
+-- copper's verdigris, sulfur's yellow, uranite's sickly green over the magma
+-- glow. Dark and saturated enough to read against the ground round it at
+-- eye level (the 0.26 grey it had drew paler than most ground).
 SEAM_COLOUR = {
-  iron = { 0.26, 0.23, 0.23 }, copper = { 0.36, 0.62, 0.52 }, sulfur = { 0.80, 0.74, 0.36 },
-  obsidian = { 0.30, 0.29, 0.32 }, uranium = { 0.55, 0.68, 0.38 },
+  iron = { 0.30, 0.15, 0.11 }, copper = { 0.24, 0.56, 0.44 }, sulfur = { 0.86, 0.76, 0.26 },
+  obsidian = { 0.16, 0.15, 0.18 }, uranium = { 0.50, 0.66, 0.26 },
+}
+-- The stain a seam bleeds into the ground round it (a colour paint only, over
+-- the ground's own tint, so the host rock keeps its texture; the brush's own
+-- soft rim feathers it out): the rust of an iron gossan, copper's green wash,
+-- sulfur's pale yellow bloom. It runs on past both ends of the seam along its
+-- strike, fainter. What reads first from twenty metres is a discoloured streak
+-- wider and longer than the seam, the seam a dark core inside it.
+STAIN_COLOUR = {
+  iron = { 0.66, 0.32, 0.16 }, copper = { 0.34, 0.60, 0.48 }, sulfur = { 0.84, 0.76, 0.36 },
+  obsidian = { 0.30, 0.28, 0.30 }, uranium = { 0.62, 0.70, 0.34 },
 }
 local w_seed = nil
 
+local function crystal_tone()
+  local r = rng(((w_seed or 1) % 1000003) + 313)
+  local h = CRYSTAL_HUES[r:int(1, #CRYSTAL_HUES)]
+  return h
+end
+
+-- The radius a seam's core is painted at a point: never under 1.7 m, because
+-- the ground meshes at 1.5–2.4 m voxels and a narrower paint shows as a dot or
+-- not at all (veinAt reads the same width).
+local function seam_r(q) return math.max(1.7, q.w * 1.1) end
+
+-- The stain and the core's colour, over a seam already in the ground (colour
+-- paints only: no slot, so a dug-out seam's tunnel walls are only tinted).
+local function vein_colour(v, g, body)
+  if not terrain.paint then return end
+  local col = SEAM_COLOUR[v.ore] or { 0.62, 0.62, 0.62 }
+  local st = STAIN_COLOUR[v.ore] or col
+  if v.ore == "crystal" then
+    local h = crystal_tone()
+    col = { 0.4 + h[1] * 0.4, 0.4 + h[2] * 0.4, 0.4 + h[3] * 0.4 }
+    st = { 0.5 + h[1] * 0.25, 0.5 + h[2] * 0.25, 0.5 + h[3] * 0.25 }
+  end
+  -- The stain first, then the core. Brushes are soft (full only inside a
+  -- third of the radius, smoothstep to the rim) and colour lives per voxel
+  -- (1.5–2.4 m here): measured on engine 0.117.1 (mineprobe vpdiag), a
+  -- colour paint reads over about 0.4 of its radius, so the radii are far
+  -- larger than the look they give.
+  -- The stain trails on past each end, along the strike: three balls, fading,
+  -- so it reads as a streak along the seam's line, not a round patch.
+  local n = #g
+  for e = 1, (n >= 2 and 2 or 0) do
+    local a, b = (e == 1) and g[1] or g[n], (e == 1) and g[2] or g[n - 1]
+    local dx, dy, dz = a[1] - b[1], a[2] - b[2], a[3] - b[3]
+    local dl = math.max(0.3, len(dx, dy, dz))
+    dx, dy, dz = dx / dl, dy / dl, dz / dl
+    for j = 1, 3 do
+      local t = 2.4 * j
+      terrain.paint(body.x + a[1] + dx * t, body.y + a[2] + dy * t, body.z + a[3] + dz * t, 5.0 - 0.5 * j,
+        st[1], st[2], st[3], 1.0 - 0.2 * j)
+    end
+  end
+  for _, q in ipairs(g) do
+    terrain.paint(body.x + q[1], body.y + q[2], body.z + q[3], seam_r(q) + 3.5, st[1], st[2], st[3], 1.0)
+  end
+  -- the core twice over (a soft brush gives half its colour at the core's
+  -- edge; two coats give three quarters)
+  for _ = 1, 2 do
+    for _, q in ipairs(g) do
+      local d = 0.2
+      terrain.paint(body.x + q[1] - q.ux * d, body.y + q[2] - q.uy * d, body.z + q[3] - q.uz * d, seam_r(q) * 2.0, col[1], col[2], col[3], 1.0)
+    end
+  end
+end
+
 -- Paint the seam into the ground, once (the save says so). → true when done.
+-- A seam painted before the stain existed (`p` but no `h` in its record) gets
+-- the stain and the new core colour once, colour only.
 local function vein_paint(p, v, body, R)
   local rec = vein_rec(p.key)
-  if rec.p[v.key] then v.slot = rec.p[v.key] return true end
+  if rec.p[v.key] then
+    local sl = rec.p[v.key]
+    if sl > 0 and not (rec.h and rec.h[v.key]) then
+      -- (v.slot stays unset until this is done: veins_tick asks again)
+      local g = vein_ground(v, body, R)
+      if not g then return false end
+      if terrain.capacity and terrain.capacity() < #g * 3 + 40 then return false end
+      vein_colour(v, g, body)
+      rec.h = rec.h or {}
+      rec.h[v.key] = 1
+      vein_save(p.key)
+    end
+    v.slot = sl
+    return true
+  end
   if not (terrain.paintTexture and terrain.slotAt) then return false end
   local mats = ref("materials")
   local slots = mats and mats.VEIN_SLOTS and mats.VEIN_SLOTS[v.ore]
   if not slots then return false end
   local g = vein_ground(v, body, R)
   if not g then return false end
-  if terrain.capacity and terrain.capacity() < #g * 4 + 32 then return false end
+  if terrain.capacity and terrain.capacity() < #g * 7 + 40 then return false end
   local c = g[math.ceil(#g / 2)]
   local cl = ref("climate")
   local reserved = world_reserved(cl and cl.worldOf and cl.worldOf(cur_body))
@@ -956,7 +1047,7 @@ local function vein_paint(p, v, body, R)
   end
   if not slot then
     -- every slot this ore could wear is the world's own ground: the vein is
-    -- not painted (its outcrops still stand, and break for ore)
+    -- not painted (its outcrops still stand, and break for ore; its float lies)
     rec.p[v.key] = -1
     vein_save(p.key)
     v.slot = -1
@@ -969,27 +1060,25 @@ local function vein_paint(p, v, body, R)
   -- A paint of the slot alone keeps the ground's own tint colour (the slot
   -- is the voxel's alpha byte, its RGB the colour the texture is tinted by),
   -- so a hematite seam laid in red soil drew as red soil. The seam is
-  -- recoloured too: the ore's own colour, which is what makes it read from
-  -- a hundred metres.
-  local col = SEAM_COLOUR[v.ore] or { 0.62, 0.62, 0.62 }
-  if v.ore == "crystal" then
-    local r = rng(((w_seed or 1) % 1000003) + 313)
-    local h = CRYSTAL_HUES[r:int(1, #CRYSTAL_HUES)]
-    col = { 0.4 + h[1] * 0.4, 0.4 + h[2] * 0.4, 0.4 + h[3] * 0.4 }
-  end
+  -- recoloured too (vein_colour): the ore's own colour in the core, and a
+  -- stain bled into the ground round it.
   for _, q in ipairs(g) do
     local wd = q.w
-    -- the seam where it crops out, and the lens under it
-    local ax, ay, az = body.x + q[1] - q.ux * wd * 0.3, body.y + q[2] - q.uy * wd * 0.3, body.z + q[3] - q.uz * wd * 0.3
+    -- the seam where it crops out (centred just under the ground, so its
+    -- whole width reaches the surface), and the lens under it
+    local ax, ay, az = body.x + q[1] - q.ux * 0.2, body.y + q[2] - q.uy * 0.2, body.z + q[3] - q.uz * 0.2
     local bx, by, bz = body.x + q[1] - q.ux * wd * 1.5, body.y + q[2] - q.uy * wd * 1.5, body.z + q[3] - q.uz * wd * 1.5
-    terrain.paintTexture(ax, ay, az, wd, slot)
+    terrain.paintTexture(ax, ay, az, seam_r(q), slot)
     terrain.paintTexture(bx, by, bz, wd * 0.9, slot)
     if terrain.paint then
-      terrain.paint(ax, ay, az, wd, col[1], col[2], col[3], 1.0)
-      terrain.paint(bx, by, bz, wd * 0.9, col[1], col[2], col[3], 1.0)
+      local col = SEAM_COLOUR[v.ore]
+      if col then terrain.paint(bx, by, bz, wd * 0.9, col[1], col[2], col[3], 1.0) end
     end
   end
+  vein_colour(v, g, body)
   rec.p[v.key] = slot
+  rec.h = rec.h or {}
+  rec.h[v.key] = 1
   vein_save(p.key)
   v.slot = slot
   veinsPainted = (veinsPainted or 0) + 1
@@ -1069,6 +1158,94 @@ local function outcrops_make(p, v, w, planet)
   end
 end
 
+-- FLOAT: broken bits of the ore strewn along the seam and a little past it,
+-- the sign a prospector walks up a slope to find. Two GPU-instanced scatter
+-- sources per vein near you (pebbly grit and fist-sized fragments), on a small
+-- Ground region round the seam in its patch's frame, whose density grid is the
+-- seam itself: 1 on the line, fading out ~2 m past the seam's edge. No nodes;
+-- the engine drops each bit on the real ground and re-settles it when the
+-- ground is dug. Tinted as the outcrops are (OUT_LOOK), a little toward the
+-- world's rock so it stays stone, not paint. Decoration only: it does not
+-- break for ore (the seam under it does).
+local FLOAT_KINDS = {
+  { id = "grit", lod = { "models/flora/rock_pebbles_l0.gltf", "models/flora/rock_pebbles_l1.gltf" },
+    scale = { 0.45, 0.9 }, area = 0.45, chunk = 8, far = 45 },
+  { id = "frag", lod = { "models/flora/rock_stone_l0.gltf", "models/flora/rock_stone_l1.gltf" },
+    gem = { "models/flora/rock_crystal_l0.gltf", "models/flora/rock_crystal_l1.gltf" },
+    scale = { 0.16, 0.42 }, area = 0.32, chunk = 8, far = 70 },
+}
+-- The bits' colour by ore: weathered, lighter than the outcrops' fresh faces
+-- (iron's float is rusted through; dark tints draw blue-grey under the sky).
+local FLOAT_COLOUR = {
+  iron = { 0.64, 0.30, 0.14 }, copper = { 0.22, 0.58, 0.42 }, sulfur = { 0.92, 0.80, 0.22 },
+  obsidian = { 0.09, 0.08, 0.10 }, uranium = { 0.40, 0.50, 0.18 },
+}
+local function float_make(p, v, w, R)
+  if v.float or params.vein_float <= 0 or not (scatter and scatter.create and p.node and p.node.valid) then return end
+  v.float = {}
+  local L = OUT_LOOK[v.ore] or OUT_LOOK.copper
+  local half = v.len * 0.5 + 4.5
+  local rows = math.max(8, math.min(24, math.ceil(half * 2 / 1.0) + 1))
+  -- the grid: distance from each cell to the seam's line (patch-local), soft
+  local data, pts = {}, v.pts
+  for r = 0, rows - 1 do
+    for c = 0, rows - 1 do
+      local x = v.lx + (c / (rows - 1) - 0.5) * 2 * half
+      local z = v.lz + (r / (rows - 1) - 0.5) * 2 * half
+      local best, bw = 1e9, 1
+      for k = 1, #pts - 1 do
+        local a, b = pts[k], pts[k + 1]
+        local ex, ez = b.lx - a.lx, b.lz - a.lz
+        local t = math.max(0, math.min(1, ((x - a.lx) * ex + (z - a.lz) * ez) / math.max(1e-6, ex * ex + ez * ez)))
+        local dx, dz = x - (a.lx + ex * t), z - (a.lz + ez * t)
+        local d = math.sqrt(dx * dx + dz * dz)
+        if d < best then best, bw = d, a.w + (b.w - a.w) * t end
+      end
+      local core = math.max(1.2, bw)
+      local d = best <= core * 0.6 and 1 or math.max(0, 1 - (best - core * 0.6) / (core * 0.6 + 2.2))
+      if d > 0 then
+        -- nothing on the base's paving, pad or lots
+        local px, py, pz = p.cx + p.ex[1] * x + p.ez[1] * z, p.cy + p.ex[2] * x + p.ez[2] * z, p.cz + p.ex[3] * x + p.ez[3] * z
+        local l = len(px, py, pz)
+        if kept_clear(px / l * R, py / l * R, pz / l * R) then d = 0 end
+      end
+      data[r * rows + c + 1] = d * d
+    end
+  end
+  -- the bits' colour: the ore's, a fifth toward the world's rock
+  local c = FLOAT_COLOUR[v.ore] or L.c
+  local e = L.e
+  if v.ore == "crystal" then
+    local h = crystal_tone()
+    c, e = { h[1] * 0.55, h[2] * 0.55, h[3] * 0.55 }, h
+  end
+  local rock = lookOf(KINDS[2], w).tint
+  local tint = { c[1] / ROCK_NEUTRAL, c[2] / ROCK_NEUTRAL, c[3] / ROCK_NEUTRAL }
+  tint = mix3(tint, rock, 0.15)
+  local fg = ref("flora_gen")
+  local empty = params.fade_out > 0 and fg and fg.emptyAsset and fg.emptyAsset() or nil
+  for i, k in ipairs(FLOAT_KINDS) do
+    local lod = (L.cluster and k.gem) or k.lod
+    local bands = { { asset = lod[1], distance = k.far * 0.4 }, { asset = lod[2], distance = k.far } }
+    if empty then bands[#bands + 1] = { asset = empty, distance = k.far + 0.5 } end
+    local per = math.max(1, math.floor(k.area * k.chunk * k.chunk * params.vein_float + 0.5))
+    local ok, id = pcall(scatter.create, {
+      seed = hash(w.seed or 1, v.seed, 4241 + i),
+      center = vec3(v.lx, 0, v.lz), halfX = half, halfZ = half,
+      perChunk = per, chunk = k.chunk, align = "surface",
+      scaleMin = k.scale[1], scaleMax = k.scale[2], fade = params.fade,
+      lod = bands, density = data, densityRows = rows, parent = p.name,
+      tint = tint, emissive = e, emissiveStrength = e and (L.glow or 0.4) * 0.5 or nil,
+    })
+    if ok and id then v.float[#v.float + 1] = id
+    elseif not ok then print("mineral field: float scatter refused: " .. tostring(id)) end
+  end
+end
+local function float_drop(v)
+  for _, id in ipairs(v.float or {}) do scatter.destroy(id) end
+  v.float = nil
+end
+
 local function outcrop_gone(rec)
   rec.gone = true
   if rec.n then
@@ -1080,6 +1257,7 @@ end
 
 outcrops_drop = function(p)
   for _, v in ipairs(p.veins or {}) do
+    float_drop(v)
     for _, rec in pairs(v.out or {}) do outcrop_gone(rec) end
     v.out = nil
   end
@@ -1101,6 +1279,10 @@ local function veins_tick(w, R, body, planet, rx, ry, rz)
           if not v.g and grounds > 0 then grounds = grounds - 1; vein_ground(v, body, R) end
           if v.g and d <= params.vein_paint and not v.slot then vein_paint(p, v, body, R) end
           if v.g and not v.out then outcrops_make(p, v, w, planet) end
+          -- (only once the ground under it is made: a bit settled onto
+          -- missing ground keeps that height)
+          if v.g and not v.float and d <= params.float_show then float_make(p, v, w, R)
+          elseif v.float and d > params.float_show + 30 then float_drop(v) end
           for _, rec in pairs(v.out or {}) do
             if rec.sheen and rec.n and rec.n.valid then
               if rec.sheen.mat then pcall(rec.n.setMaterial, rec.n, rec.sheen.mat) end
@@ -1108,9 +1290,10 @@ local function veins_tick(w, R, body, planet, rx, ry, rz)
               rec.sheen = nil
             end
           end
-        elseif v.out and d > params.vein_show + 30 then
-          for _, rec in pairs(v.out) do outcrop_gone(rec) end
+        elseif (v.out or v.float) and d > params.vein_show + 30 then
+          for _, rec in pairs(v.out or {}) do outcrop_gone(rec) end
           v.out = nil
+          float_drop(v)
         end
       end
     end
@@ -1137,7 +1320,7 @@ function veinAt(x, y, z, slack)
             local du = dx * q.ux + dy * q.uy + dz * q.uz
             local hx, hy, hz = dx - q.ux * du, dy - q.uy * du, dz - q.uz * du
             local hd = len(hx, hy, hz)
-            if hd <= q.w + 0.6 + slack and du <= q.w * 0.6 + slack and du >= -(q.w * 2.4 + slack) then
+            if hd <= seam_r(q) + slack and du <= q.w * 0.6 + slack and du >= -(q.w * 2.4 + slack) then
               return { ore = v.ore, slot = v.slot, patch = p.key, vein = v, k = k }
             end
           end

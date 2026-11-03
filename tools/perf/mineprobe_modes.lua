@@ -11,6 +11,11 @@
 --   vlog    a new world: a broadleaf or conifer felled with the laser, the
 --           logs it leaves (tags, what materials.resourceOf reads, the save's
 --           loose.bodies), one picked up with the gravity gun (picture).
+--   vlook   a new world: up to `looks` (3) painted veins found on rings out
+--           from the base (distinct ores first); each one pictured as a
+--           player sees it: standing 3 m, 9 m and 25 m off, looking at the
+--           seam's middle, and from 20 m up and 12 m back. How readable the
+--           seam is at eye level (vlook_<k>_<ore>_{3m,9m,25m,up}.png).
 --   vbush   a new world: a bush or shrub found, the crew walked into it (the
 --           touch-bend swap): the bend nodes' materials and pictures before,
 --           bent, and after it springs back.
@@ -533,6 +538,118 @@ end
 -- which a paint does not refresh), so the test is a dig: a 1.5 m ball of slot 7
 -- (crystal) painted at a ground point, then small digs at it and 2.5 m to
 -- each side, each dig's measured yield (mineral_field.trackDig / yieldStats).
+local function run_vlook()
+  V.tag = "look"
+  local Cc = findScript("crew")
+  if Cc and Cc.setSafety then Cc.setSafety("invincible") end
+  wait(4)
+  local mf, cl = findScript("mineral_field"), findScript("climate")
+  local hb = home()
+  local want = math.floor(params.looks or 3)
+  local u, t1, t2, R = base_frame()
+  local picks, ores, keys = {}, {}, {}
+  for _, dist in ipairs({ 110, 170, 240, 330, 430, 560 }) do
+    for k = 0, 7 do
+      if #picks >= want then break end
+      local ang = k * math.pi / 4 + dist * 0.013
+      local t = unit({ x = t1.x * math.cos(ang) + t2.x * math.sin(ang), y = t1.y * math.cos(ang) + t2.y * math.sin(ang), z = t1.z * math.cos(ang) + t2.z * math.sin(ang) })
+      local dir = dir_at(u, t, dist, R)
+      local gr = ground_r(hb, dir.x, dir.y, dir.z, R + 150)
+      local sea = cl.seaRadius and cl.seaRadius(hb.name) or 0
+      if gr and gr > sea + 1 then
+        stand_at({ dir = dir, r = gr })
+        wait(3.0)
+        local a = astro()
+        for _, v in ipairs(mf.veinsNear(a.x, a.y, a.z, 140)) do
+          local bb = home()
+          local key = string.format("%.0f/%.0f/%.0f", v.x - bb.x, v.y - bb.y, v.z - bb.z)
+          local bx, by, bz = save.get("base.x"), save.get("base.y"), save.get("base.z")
+          local off_base = len(v.x - bb.x - bx, v.y - bb.y - by, v.z - bb.z - bz) > 90
+          local fp = findScript("base_facilities") and findScript("base_facilities").footprint
+          if type(fp) == "table" and type(fp.x) == "number" and len(v.x - bb.x - fp.x, v.y - bb.y - fp.y, v.z - bb.z - fp.z) < (fp.radius or 200) * 0.5 then
+            off_base = false
+          end
+          if #picks < want and not keys[key] and off_base and len(v.x - bb.x, v.y - bb.y, v.z - bb.z) > sea + 1.5
+             and (not ores[v.ore] or dist >= 330) then
+            keys[key] = true
+            ores[v.ore] = true
+            picks[#picks + 1] = { rel = { x = v.x - bb.x, y = v.y - bb.y, z = v.z - bb.z }, ore = v.ore, len = v.len, width = v.width,
+                                  up = { x = v.ux, y = v.uy, z = v.uz }, strike = { x = v.sx, y = v.sy, z = v.sz } }
+          end
+        end
+      end
+    end
+    if #picks >= want then break end
+  end
+  V.check("veins in reach", #picks > 0, "%d picked", #picks)
+  for i, pick in ipairs(picks) do
+    local U = pick.up
+    local side = unit(cross(U, pick.strike))
+    MP.stand_off(pick.rel, side, 9.0)
+    local painted = wait_for(function()
+      local a = astro()
+      local l = mf.veinsNear(a.x, a.y, a.z, 30)
+      return l[1] and l[1].painted
+    end, 12, "vein painted")
+    wait(1.5)
+    local a = astro()
+    local now = mf.veinsNear(a.x, a.y, a.z, 30)[1]
+    P("VP look %d: %s, %.1f m long, %.1f m wide, painted %s slot %s", i, pick.ore, pick.len or 0, pick.width or 0, tostring(painted), tostring(now and now.slot))
+    local Tc = function() return MP.w(pick.rel) end
+    for _, D in ipairs({ 3, 9, 25 }) do
+      MP.stand_off(pick.rel, side, D)
+      wait(1.0)
+      for _ = 1, 60 do FP.aim_step(Tc); yield() end
+      V.shot(string.format("%d_%s_%dm", i, pick.ore, D), false)
+    end
+    local cam = V.fixed_cam(MP.w(pick.rel), U, side, 12.0, 20.0)
+    for _ = 1, 20 do V.place_cam(); yield() end
+    V.shot(string.format("%d_%s_up", i, pick.ore), false, cam)
+    for _ = 1, 20 do V.place_cam(); yield() end
+    V.place_cam = nil
+    if cam and cam.valid then cam:destroy() end
+  end
+  V.result()
+end
+
+-- vpdiag: what a colour paint does to the ground. Five discs 8 m apart in a
+-- row 12 m in front of the crew: rust (0.66 0.32 0.16) r 3 once; the same
+-- four times over; rust r 6; black r 6 three times; slot 27 r 3. Pictured
+-- from 12 m back and 14 m up. On 0.117.1 a colour paint reads over only ~0.4
+-- of its radius (the brush is soft, colour is per 1.5–2.4 m voxel); a slot
+-- paint is hard-edged over its whole radius.
+local function run_vpdiag()
+  V.tag = "pdiag"
+  wait(4)
+  local u, t1, t2, R = base_frame()
+  local dir = dir_at(u, t2, 160, R)
+  stand_at({ dir = dir, r = ground_r(home(), dir.x, dir.y, dir.z, R + 150) })
+  wait(4)
+  local a = astro()
+  local U = V.up(a)
+  local A = math.abs(U.y) > 0.9 and { x = 1, y = 0, z = 0 } or { x = 0, y = 1, z = 0 }
+  local e1 = unit(cross(U, A)); local e2 = unit(cross(U, e1))
+  local rels = {}
+  for i, o in ipairs({ -16, -8, 0, 8, 16 }) do
+    rels[i] = MP.ground_at(sub({ x = a.x + e1.x * 12 + e2.x * o, y = a.y + e1.y * 12 + e2.y * o, z = a.z + e1.z * 12 + e2.z * o }, home()))
+  end
+  local b = home()
+  local function W(i) return b.x + rels[i].x, b.y + rels[i].y, b.z + rels[i].z end
+  local x, y, z = W(1); terrain.paint(x, y, z, 3, 0.66, 0.32, 0.16, 1.0)
+  x, y, z = W(2); for _ = 1, 4 do terrain.paint(x, y, z, 3, 0.66, 0.32, 0.16, 1.0) end
+  x, y, z = W(4); for _ = 1, 3 do terrain.paint(x, y, z, 6, 0, 0, 0, 1.0) end
+  x, y, z = W(5); terrain.paintTexture(x, y, z, 3, 27)
+  x, y, z = W(3); terrain.paint(x, y, z, 6, 0.66, 0.32, 0.16, 1.0)
+  wait(2.0)
+  local cam = V.fixed_cam(MP.w(rels[3]), U, e1, 12.0, 22.0)
+  for _ = 1, 30 do V.place_cam(); yield() end
+  V.shot("colours", false, cam)
+  for _ = 1, 10 do V.place_cam(); yield() end
+  V.place_cam = nil
+  if cam and cam.valid then cam:destroy() end
+  V.result()
+end
+
 local function run_vpaint()
   V.tag = "paint"
   wait(4)

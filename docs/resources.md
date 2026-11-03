@@ -97,9 +97,28 @@ stones and boulders are the bedrock slot a few metres under them
   (`materials.VEIN_SLOTS`: hematite for iron, veinstone for copper, sulfur,
   amethyst or blue crystal, magma for uranite). The seam runs 3–15 m along a
   wandering strike and its lens reaches about 2.5 widths down. It is painted
-  once, when someone comes within `vein_paint` m. The save records this as
+  once, when someone comes within `vein_paint` m. The core is painted at
+  least 1.7 m wide (`seam_r`), since the ground meshes at 1.5–2.4 m voxels and
+  anything narrower vanishes. The save records this as
   `veins1.<body>.<patch>` = `{ p = { v<i> = slot }, t = { v<i> = outcrops
-  broken (bits) } }`.
+  broken (bits) }, h = { v<i> = 1 } }`.
+- **How it reads at eye level.** Three layers, all made once or instanced:
+  - the core, in the ore's slot, recoloured dark in the ore's colour
+    (`SEAM_COLOUR`);
+  - a stain bled into the ground round it and on past both ends along the
+    strike (`STAIN_COLOUR`: an iron gossan's rust, copper's green, sulfur's
+    yellow). It is a colour paint only, so the host keeps its texture. A soft
+    colour brush reads over only about 0.4 of its radius on 0.117.1, so the
+    radii are large. A seam painted before the stain existed (`p` set, `h`
+    not) gets the stain and core colour once, colour only, so a dug-out
+    seam's tunnel walls are tinted but never turned back into ore;
+  - **float**: broken bits of the ore strewn along the seam and just past it.
+    Two GPU-instanced scatter sources per vein within `float_show` m (grit and
+    fragments, drawn to 45 and 70 m), on a small Ground region round the seam
+    whose density grid is the seam's own line. They are kept off the base's
+    paving and lots, and tinted by `FLOAT_COLOUR`. Float is decoration only:
+    it doesn't break for ore, but the seam under it does. `vein_float` scales
+    how thickly it lies, and 0 turns it off.
 - **Outcrops.** Model nodes under the planet (tag `ore_outcrop`) stand along
   the seam within `vein_show` m, up to `outcrop_max` at once. A cut within 1 m
   of an outcrop breaks it out: 2 units of the ore, and a chunk body is knocked
