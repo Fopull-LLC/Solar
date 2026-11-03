@@ -245,6 +245,25 @@ local next_t = 0
 local frame_checked = false
 
 local function len(x, y, z) return math.sqrt(x * x + y * y + z * z) end
+-- scatter.near as parallel arrays { ids, x, y, z, distance, scale, param, yaw,
+-- settled, count } (engine 0.117.1-dev.1379, card 0596: no table and two vec3s
+-- a hit). An older engine or a test stub answers rows: turned into the same
+-- arrays (plus `up`). flora_field near_flat, the same.
+local NEAR_FLAT = { flat = true }
+local function near_flat(id, q, r)
+  local res = scatter.near(id, q, r, NEAR_FLAT)
+  if res and res.ids then return res end
+  local F = { ids = {}, x = {}, y = {}, z = {}, distance = {}, scale = {}, param = {}, yaw = {}, settled = {}, up = {} }
+  local n = 0
+  for _, h in ipairs(res or {}) do
+    n = n + 1
+    F.ids[n], F.x[n], F.y[n], F.z[n] = h.id, h.pos.x, h.pos.y, h.pos.z
+    F.distance[n], F.scale[n], F.param[n], F.yaw[n] = h.distance, h.scale, h.param, h.yaw
+    F.settled[n], F.up[n] = h.settled, h.up
+  end
+  F.count = n
+  return F
+end
 local outcrops_drop  -- (ore veins, below)
 local vein_saved, outcrop_n, crystal_hue = {}, 0, nil
 local oreslot_cache = {}
@@ -500,10 +519,13 @@ local function make_source(p, k, w, R)
   local bx, by, bz = save.get("base.x"), save.get("base.y"), save.get("base.z")
   if ff and ff.baseKeep and body and scatter.near and save.get("base.body") == cur_body and type(bx) == "number"
      and len(p.cx - bx, p.cy - by, p.cz - bz) < p.half * 1.5 + 260 then
-    for _, it in ipairs(scatter.near(id, vec3(body.x + bx, body.y + by, body.z + bz), 230) or {}) do
-      local keep = ff.baseKeep(it.pos.x - body.x, it.pos.y - body.y, it.pos.z - body.z, 0.6)
-      if keep < 1 and (((it.id % 2147483647) * 48271 + 7) % 2147483647) / 2147483647 >= keep then
-        scatter.remove(id, it.id)
+    local F = near_flat(id, vec3(body.x + bx, body.y + by, body.z + bz), 230)
+    local ids, X, Y, Z = F.ids, F.x, F.y, F.z
+    for k = 1, F.count do
+      local iid = ids[k]
+      local keep = ff.baseKeep(X[k] - body.x, Y[k] - body.y, Z[k] - body.z, 0.6)
+      if keep < 1 and (((iid % 2147483647) * 48271 + 7) % 2147483647) / 2147483647 >= keep then
+        scatter.remove(id, iid)
       end
     end
   end
@@ -615,10 +637,10 @@ function nearest(x, y, z, radius, kinds)
       local qx = body.x + p.cx + p.ex[1] * lx + p.ez[1] * lz
       local qy = body.y + p.cy + p.ex[2] * lx + p.ez[2] * lz
       local qz = body.z + p.cz + p.ex[3] * lx + p.ez[3] * lz
-      local hits = scatter.near(id, vec3(qx, qy, qz), radius + 1.0)
-      for n = 1, math.min(#hits, 8) do
-        local h = hits[n]
-        local hx, hy, hz = h.pos.x - body.x, h.pos.y - body.y, h.pos.z - body.z
+      local F = near_flat(id, vec3(qx, qy, qz), radius + 1.0)
+      for n = 1, math.min(F.count, 8) do
+        local h = { id = F.ids[n], scale = F.scale[n] }
+        local hx, hy, hz = F.x[n] - body.x, F.y[n] - body.y, F.z[n] - body.z
         local gx, gy, gz = ground_along(body, hx, hy, hz, -p.ey[1], -p.ey[2], -p.ey[3])
         local d = len(gx - rx, gy - ry, gz - rz)
         if d <= radius and (not best or d < best.distance) then
@@ -650,11 +672,13 @@ function rocksNear(x, y, z, radius)
     local br = k and BUMP_R[k.id]
     local p = patches[s.patch]
     if br and p and patch_dist(p, rx, ry, rz) <= radius + 3 then
-      for _, h in ipairs(scatter.near(id, vec3(x, y, z), radius) or {}) do
-        local r = br * (h.scale or 1)
-        if h.settled ~= false and r >= 0.3 then
-          out[#out + 1] = { x = h.pos.x, y = h.pos.y, z = h.pos.z, r = r, d = h.distance,
-                            key = "r" .. id .. ":" .. tostring(h.id), src = id, inst = h.id, scale = h.scale }
+      local F = near_flat(id, vec3(x, y, z), radius)
+      for k = 1, F.count do
+        local hid, hsc = F.ids[k], F.scale[k]
+        local r = br * (hsc or 1)
+        if F.settled[k] ~= false and r >= 0.3 then
+          out[#out + 1] = { x = F.x[k], y = F.y[k], z = F.z[k], r = r, d = F.distance[k],
+                            key = "r" .. id .. ":" .. tostring(hid), src = id, inst = hid, scale = hsc }
         end
       end
     end
@@ -1627,7 +1651,7 @@ auditRemoved, auditRedropped = 0, 0
 local function audit_tick(obs)
   local ff = ref("flora_field")
   local A = ff and ff.AUDIT
-  if not (A and obs and cur_body and scatter.near and A.every > 0) then return end
+  if not (A and ff.nearPager and obs and cur_body and scatter.near and A.every > 0) then return end
   local body = space.body(cur_body)
   if not body then return end
   if not au.job then
@@ -1640,7 +1664,7 @@ local function audit_tick(obs)
       if p and patch_dist(p, rx, ry, rz) <= A.radius then list[#list + 1] = id end
     end
     if #list == 0 then return end
-    au.job = { list = list, si = 1, hits = nil, i = 1 }
+    au.job = { list = list, si = 1, pg = nil, F = nil, i = 1 }
   end
   local j = au.job
   local t0 = (app and app.wallClock and app.wallClock()) or os.clock()
@@ -1649,21 +1673,29 @@ local function audit_tick(obs)
     local sid = j.list[j.si]
     local sr = srcs[sid]
     if not sr then
-      j.si, j.hits = j.si + 1, nil
+      j.si, j.pg, j.F = j.si + 1, nil, nil
     else
-      if not j.hits then
-        j.hits, j.i = scatter.near(sid, vec3(obs.x, obs.y, obs.z), A.radius) or {}, 1
-        -- body-relative: the job runs over frames on a moving planet
-        for _, it in ipairs(j.hits) do it.rx, it.ry, it.rz = it.pos.x - body.x, it.pos.y - body.y, it.pos.z - body.z end
-      end
-      while j.i <= #j.hits do
-        local it = j.hits[j.i]
-        j.i, n = j.i + 1, n + 1
-        if it.settled then
-          local px, py, pz = body.x + it.rx, body.y + it.ry, body.z + it.rz
+      -- a page at a time, round the observer as it stands when this source's
+      -- turn comes, body-relative: the job runs over frames on a moving planet
+      -- (flora_field pager)
+      if not j.pg then j.pg, j.F = ff.nearPager(sid, obs.x - body.x, obs.y - body.y, obs.z - body.z, A.radius), nil end
+      if not j.F or j.i > j.F.count then j.F, j.i = ff.nearPagerNext(j.pg, body), 1 end
+      local F = j.F
+      while F and j.i <= F.count do
+        local k = j.i
+        j.i, n = k + 1, n + 1
+        if F.settled[k] then
+          local it = { id = F.ids[k] }
+          local px, py, pz = body.x + F.rx[k], body.y + F.ry[k], body.z + F.rz[k]
           local d = terrain.query(px, py, pz)
           if d and math.abs(d) > A.tol then
-            local up = it.up or vec3(0, 1, 0)
+            -- (flat answers carry no `up`: ask for this one rock)
+            local up = F.up and F.up[k]
+            if not up and d > 0 and scatter.instance then
+              local row = scatter.instance(sid, it.id)
+              up = row and row.up
+            end
+            up = up or vec3(0, 1, 0)
             local hit = d > 0 and raycast(vec3(px + up.x * 0.3, py + up.y * 0.3, pz + up.z * 0.3),
               vec3(-up.x, -up.y, -up.z), 0.6) or nil
             -- (once a session per stand, not per rock: flora_field AUDIT)
@@ -1685,7 +1717,8 @@ local function audit_tick(obs)
         end
         if n % 32 == 0 and (((app and app.wallClock and app.wallClock()) or os.clock()) - t0) * 1000 >= A.ms then return end
       end
-      j.si, j.hits = j.si + 1, nil
+      if not F then j.si, j.pg, j.F = j.si + 1, nil, nil end
+      if (((app and app.wallClock and app.wallClock()) or os.clock()) - t0) * 1000 >= A.ms then return end
     end
   end
   au.job = nil
@@ -1924,9 +1957,11 @@ function groundAudit(x, y, z, radius, tol)
   for id, s in pairs(srcs) do
     local p = patches[s.patch]
     if p and patch_dist(p, x - body.x, y - body.y, z - body.z) <= radius then
-      for _, h in ipairs(scatter.near(id, vec3(x, y, z), radius) or {}) do
-        if h.settled then
-          local d = terrain.query(h.pos.x, h.pos.y, h.pos.z)
+      local F = near_flat(id, vec3(x, y, z), radius)
+      for k = 1, F.count do
+        if F.settled[k] then
+          local hid, hx, hy, hz = F.ids[k], F.x[k], F.y[k], F.z[k]
+          local d = terrain.query(hx, hy, hz)
           if d then
             out.checked = out.checked + 1
             if math.abs(d) > math.abs(out.worst) then out.worst = d end
@@ -1934,11 +1969,11 @@ function groundAudit(x, y, z, radius, tol)
             if bad then
               out[bad] = out[bad] + 1
               if #out.examples < 12 then
-                out.examples[#out.examples + 1] = { src = id, id = h.id, d = d, kind = s.kind.id, x = h.pos.x, y = h.pos.y, z = h.pos.z }
+                out.examples[#out.examples + 1] = { src = id, id = hid, d = d, kind = s.kind.id, x = hx, y = hy, z = hz }
               end
             end
             if #out.props < 400 then
-              out.props[#out.props + 1] = { src = id, id = h.id, d = d, kind = s.kind.id, x = h.pos.x, y = h.pos.y, z = h.pos.z }
+              out.props[#out.props + 1] = { src = id, id = hid, d = d, kind = s.kind.id, x = hx, y = hy, z = hz }
             end
           end
         end

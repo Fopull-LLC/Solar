@@ -612,32 +612,119 @@ function baseKeep(rx, ry, rz, h, foot)
   return keep
 end
 
+-- ── scatter.near, flat and paged ────────────────────────────────────────────
+-- A row and two vec3s a hit: one query round the base cost 12.5 ms of a
+-- 22.7 ms frame (perf pass 2026-11). Since engine 0.117.1-dev.1379 (card 0596)
+-- `{ flat = true }` answers parallel arrays { ids, x, y, z, distance, scale,
+-- param, yaw, settled, count } (no `up`), and `{ max, sort = false, after }`
+-- hands a big query out a page at a time. An older engine, or a test stub,
+-- answers rows and ignores the options: they are turned into the same arrays
+-- here (plus `up`), one page holding everything and no cursor.
+local NEAR_FLAT = { flat = true }
+local function near_flat(id, q, r, opt)
+  local res, cur = scatter.near(id, q, r, opt or NEAR_FLAT)
+  if res and res.ids then return res, cur end
+  local F = { ids = {}, x = {}, y = {}, z = {}, distance = {}, scale = {}, param = {}, yaw = {}, settled = {}, up = {} }
+  local n = 0
+  for _, h in ipairs(res or {}) do
+    n = n + 1
+    F.ids[n], F.x[n], F.y[n], F.z[n] = h.id, h.pos.x, h.pos.y, h.pos.z
+    F.distance[n], F.scale[n], F.param[n], F.yaw[n] = h.distance, h.scale, h.param, h.yaw
+    F.settled[n], F.up[n] = h.settled, h.up
+  end
+  F.count = n
+  return F, nil
+end
+
+-- A paged query, read over frames: pager(id, rx, ry, rz, r) round a
+-- BODY-RELATIVE centre, then pager_next(pg, body) → the next page (flat, with
+-- F.rx/ry/rz body-relative), or nil once it is all handed out.
+-- * The engine makes the query once, in the planet's frame, on the first page.
+-- * A page can start with hits the engine rolled on an EARLIER call (the rest
+--   of a chunk it kept for the next page), in world space as of that call: the
+--   planet has moved metres since. Each hit's `distance` is measured in the
+--   planet's frame, so it says which call's planet pose a hit was placed
+--   against: |hit − pose − centre| = distance (the right pose; hits come in
+--   call order, so the pose only moves forward along a page).
+-- * A cursor the engine has dropped (more than it keeps were paged since)
+--   ends in one whole flat query: judging a prop twice is harmless.
+local NEAR_PAGE = 256
+local function pager(id, rx, ry, rz, r)
+  return { id = id, qx = rx, qy = ry, qz = rz, r = r, cur = nil, done = false, hist = {} }
+end
+local function pager_next(pg, body)
+  if pg.done then return nil end
+  local q = vec3(body.x + pg.qx, body.y + pg.qy, body.z + pg.qz)
+  local F, cur
+  if pg.cur then
+    local ok, a, b = pcall(scatter.near, pg.id, q, pg.r, { flat = true, max = NEAR_PAGE, sort = false, after = pg.cur })
+    if ok and a then F, cur = a, b else F, cur = near_flat(pg.id, q, pg.r), nil; pg.hist = {} end
+  else
+    F, cur = near_flat(pg.id, q, pg.r, { flat = true, max = NEAR_PAGE, sort = false })
+  end
+  pg.cur, pg.done = cur, cur == nil
+  local h = pg.hist
+  local last = h[#h]
+  if not last or last[1] ~= body.x or last[2] ~= body.y or last[3] ~= body.z then h[#h + 1] = { body.x, body.y, body.z } end
+  local X, Y, Z, D = F.x, F.y, F.z, F.distance
+  local qx, qy, qz = pg.qx, pg.qy, pg.qz
+  local rx, ry, rz = {}, {}, {}
+  local c, nh = 1, #h
+  for k = 1, F.count do
+    local x, y, z = X[k], Y[k], Z[k]
+    if c < nh then
+      local d = D[k] or 0
+      local b = h[c]
+      local best = math.abs(len(x - b[1] - qx, y - b[2] - qy, z - b[3] - qz) - d)
+      for i = c + 1, nh do
+        b = h[i]
+        local e = math.abs(len(x - b[1] - qx, y - b[2] - qy, z - b[3] - qz) - d)
+        if e < best - 0.005 then best, c = e, i end
+      end
+    end
+    local b = h[c]
+    rx[k], ry[k], rz[k] = x - b[1], y - b[2], z - b[3]
+  end
+  -- what is still to come was rolled on call c or later
+  if c > 1 then
+    local keep = {}
+    for i = c, nh do keep[#keep + 1] = h[i] end
+    pg.hist = keep
+  end
+  F.rx, F.ry, F.rz = rx, ry, rz
+  return F
+end
+-- (mineral_field's audit pages its rocks the same way)
+nearPager, nearPagerNext = pager, pager_next
+
 -- Take a freshly declared source's props off the base's ground (see above).
 -- A JOB, not a call: a patch reaching the base asks `scatter.near` for every
 -- prop within the base's radius (a grass source: a few thousand), and judging
--- them all in the frame it was declared was 190–250 ms (rc7, Kail). The hits
--- are queued and judged CLEAR_MS of wall time a frame (`clear_tick`, from
--- update, every frame); a prop on the paving stands there for those frames.
+-- them all in the frame it was declared was 190–250 ms (rc7, Kail). The source
+-- is queued, its props asked for a page at a time (pager, above: one query of
+-- them all at once was 22.7 ms) and judged CLEAR_MS of wall time a frame
+-- (`clear_tick`, from update, every frame); a prop on the paving stands there
+-- for those frames. Only the queue's head is paged, so the engine keeps one
+-- clearing cursor at a time.
 local CLEAR_MS = 2.0
 local clear_q = {}
 local function clear_wall() return (app and app.wallClock and app.wallClock()) or os.clock() end
+-- → 1 when the source was queued (its patch reaches the base), else 0
 local function clear_base(id, p, sp)
   local L = base_layout()
   local body = cur_body and space.body(cur_body)
   if not (L and body and scatter.near) then return 0 end
   -- Only a patch that reaches the base.
   if len(p.cx - L.x, p.cy - L.y, p.cz - L.z) > p.half * 1.5 + L.r then return 0 end
-  local hits = scatter.near(id, vec3(body.x + L.x, body.y + L.y, body.z + L.z), L.r) or {}
-  if #hits == 0 then return 0 end
   local h = (sp.height or 1) * (sp.scaleMax or 1)
   -- Grass and ground cover are the verge, however tall a blade: a clean edge.
   if sp.role == "carpet" or sp.kind == "grass" or sp.kind == "moss" then h = math.min(h, BASE_CLEAR.tall) end
   local fg = ref("flora_gen")
   local foot0 = fg and fg.footprint and fg.footprint(sp) or nil
-  -- body-relative now: the planet moves on its rails while the job runs
-  for _, it in ipairs(hits) do it.rx, it.ry, it.rz = it.pos.x - body.x, it.pos.y - body.y, it.pos.z - body.z end
-  clear_q[#clear_q + 1] = { id = id, p = p, sp = sp, hits = hits, i = 1, h = h, foot0 = foot0, L = L }
-  return #hits
+  -- body-relative centre: the planet moves on its rails while the job runs
+  clear_q[#clear_q + 1] = { id = id, p = p, sp = sp, pg = pager(id, L.x, L.y, L.z, L.r), F = nil, i = 1,
+                            h = h, foot0 = foot0, L = L }
+  return 1
 end
 
 -- Judge queued props for CLEAR_MS (one prop at the least).
@@ -645,46 +732,59 @@ local function clear_tick()
   if #clear_q == 0 then return end
   local t0 = clear_wall()
   local body = cur_body and space.body(cur_body)
+  local n = 0
   while #clear_q > 0 do
     local j = clear_q[1]
     if not (body and srcs[j.id]) then
       table.remove(clear_q, 1)            -- the source went (or the world did)
     else
       local p, sp, L = j.p, j.sp, j.L
-      while j.i <= #j.hits do
-        local it = j.hits[j.i]
-        j.i = j.i + 1
-        local px, py, pz = it.rx, it.ry, it.rz
-        local foot = j.foot0 and j.foot0 * (it.scale or 1)
-        -- A prop not yet dropped answers on its patch's PLANE, which off the
-        -- patch's centre stands metres over the ground; the engine drops it along
-        -- the patch's -Y. Near an edge, where a metre decides it, drop it here
-        -- the same way (a few signed-distance steps) before judging it.
-        if not it.settled and foot then
-          local clr = select(1, base_clearance(L, px, py, pz))
-          if clr < foot + 0.4 + CARPET_FADE + 4 then
-            local t = 0
-            for _ = 1, 8 do
-              local q = terrain.query(body.x + px - p.ey[1] * t, body.y + py - p.ey[2] * t, body.z + pz - p.ey[3] * t)
-              if not q then break end
-              t = t + q
-              if math.abs(q) < 0.03 then break end
-            end
-            px, py, pz = px - p.ey[1] * t, py - p.ey[2] * t, pz - p.ey[3] * t
-          end
-        end
-        local keep = baseKeep(px, py, pz, j.h, foot)
-        if keep < 1 then
-          local roll = (((it.id % 2147483647) * 48271 + 11) % 2147483647) / 2147483647
-          if roll >= keep then
-            scatter.remove(j.id, it.id)
-            if p.bark[sp.id] then scatter.remove(p.bark[sp.id], it.id) end
-            keep_cleared(p, sp.id, it.id)
-          end
-        end
-        if j.i % 16 == 0 and (clear_wall() - t0) * 1000 >= CLEAR_MS then return end
+      if not j.F or j.i > j.F.count then
+        j.F, j.i = pager_next(j.pg, body), 1
       end
-      table.remove(clear_q, 1)
+      local F = j.F
+      if not F then
+        table.remove(clear_q, 1)          -- every page judged
+      else
+        local ids, sc, st, RX, RY, RZ = F.ids, F.scale, F.settled, F.rx, F.ry, F.rz
+        while j.i <= F.count do
+          local k = j.i
+          j.i = k + 1
+          n = n + 1
+          local iid = ids[k]
+          local px, py, pz = RX[k], RY[k], RZ[k]
+          local foot = j.foot0 and j.foot0 * (sc[k] or 1)
+          -- A prop not yet dropped answers on its patch's PLANE, which off the
+          -- patch's centre stands metres over the ground; the engine drops it along
+          -- the patch's -Y. Near an edge, where a metre decides it, drop it here
+          -- the same way (a few signed-distance steps) before judging it.
+          if not st[k] and foot then
+            local clr = select(1, base_clearance(L, px, py, pz))
+            if clr < foot + 0.4 + CARPET_FADE + 4 then
+              local t = 0
+              for _ = 1, 8 do
+                local q = terrain.query(body.x + px - p.ey[1] * t, body.y + py - p.ey[2] * t, body.z + pz - p.ey[3] * t)
+                if not q then break end
+                t = t + q
+                if math.abs(q) < 0.03 then break end
+              end
+              px, py, pz = px - p.ey[1] * t, py - p.ey[2] * t, pz - p.ey[3] * t
+            end
+          end
+          local keep = baseKeep(px, py, pz, j.h, foot)
+          if keep < 1 then
+            local roll = (((iid % 2147483647) * 48271 + 11) % 2147483647) / 2147483647
+            if roll >= keep then
+              scatter.remove(j.id, iid)
+              if p.bark[sp.id] then scatter.remove(p.bark[sp.id], iid) end
+              keep_cleared(p, sp.id, iid)
+            end
+          end
+          if n % 16 == 0 and (clear_wall() - t0) * 1000 >= CLEAR_MS then return end
+        end
+        -- (the next page, or the next source, while the frame's time lasts)
+        if (clear_wall() - t0) * 1000 >= CLEAR_MS then return end
+      end
     end
   end
 end
@@ -700,7 +800,7 @@ local function base_sweep()
     local p = patches[sr.patch]
     if p and sr.part ~= "bark" and sr.sp and p.srcs[sr.sp.id] == id then n = n + clear_base(id, p, sr.sp) end
   end
-  if n > 0 then diag(string.format("base sited: %d plants near its ground to judge", n)) end
+  if n > 0 then diag(string.format("base sited: %d stands near its ground to judge", n)) end
 end
 
 -- What stands on the base's ground now (probes, the debug console): props of
@@ -718,14 +818,15 @@ function baseSurvey()
     if sr.part ~= "bark" and sr.sp then
       local h = (sr.sp.height or 1) * (sr.sp.scaleMax or 1)
       local foot0 = fg and fg.footprint and fg.footprint(sr.sp) or 0.6
-      for _, it in ipairs(scatter.near(id, vec3(body.x + L.x, body.y + L.y, body.z + L.z), L.r) or {}) do
-        local px, py, pz = it.pos.x - body.x, it.pos.y - body.y, it.pos.z - body.z
+      local F = near_flat(id, vec3(body.x + L.x, body.y + L.y, body.z + L.z), L.r)
+      for k = 1, F.count do
+        local px, py, pz = F.x[k] - body.x, F.y[k] - body.y, F.z[k] - body.z
         out.total = out.total + 1
         local clr = base_clearance(L, px, py, pz)
         local keep = baseKeep(px, py, pz, h)
-        if it.settled then
+        if F.settled[k] then
           out.settled = out.settled + 1
-          if clr < foot0 * (it.scale or 1) then out.overPaving = out.overPaving + 1 end
+          if clr < foot0 * (F.scale[k] or 1) then out.overPaving = out.overPaving + 1 end
         end
         if clr < 0 then out.onBuilt = out.onBuilt + 1 end
         if keep <= 0 then out.inMargin = out.inMargin + 1 elseif keep < 1 then out.fading = out.fading + 1 end
@@ -811,7 +912,7 @@ local function make_source(p, sp, fg, w)
   if not id then return false end
   if sp.twin then p.bark[sp.id] = declare("bark") or nil end
   local nb = clear_base(id, p, sp)
-  if nb > 0 then diag(string.format("judging %d %s near the base on %s", nb, sp.name or "plants", p.key)) end
+  if nb > 0 then diag(string.format("judging the %s near the base on %s", sp.name or "plants", p.key)) end
   return id
 end
 
@@ -1113,7 +1214,7 @@ local function audit_tick(obs)
       if p and sr.part ~= "bark" and sr.sp and patch_dist(p, rx, ry, rz) <= AUDIT.radius then list[#list + 1] = id end
     end
     if #list == 0 then return end
-    au.job = { list = list, si = 1, hits = nil, i = 1 }
+    au.job = { list = list, si = 1, pg = nil, F = nil, i = 1 }
   end
   local j = au.job
   local t0 = clear_wall()
@@ -1122,24 +1223,31 @@ local function audit_tick(obs)
     local sid = j.list[j.si]
     local sr = srcs[sid]
     if not sr then
-      j.si, j.hits = j.si + 1, nil
+      j.si, j.pg, j.F = j.si + 1, nil, nil
     else
-      if not j.hits then
-        j.hits = scatter.near(sid, vec3(obs.x, obs.y, obs.z), AUDIT.radius) or {}
-        j.i = 1
-        -- body-relative now: the job runs over frames and the planet moves
-        -- metres a tick, so a world position read now is wrong next frame
-        for _, it in ipairs(j.hits) do it.rx, it.ry, it.rz = it.pos.x - body.x, it.pos.y - body.y, it.pos.z - body.z end
-      end
-      while j.i <= #j.hits do
-        local it = j.hits[j.i]
-        j.i = j.i + 1
+      -- a page at a time (pager): a grass source round the crew is thousands.
+      -- Round the observer as it stands when this source's turn comes, kept
+      -- body-relative: the job runs over frames and the planet moves metres
+      -- a tick, so a world point read now is wrong next frame.
+      if not j.pg then j.pg, j.F = pager(sid, obs.x - body.x, obs.y - body.y, obs.z - body.z, AUDIT.radius), nil end
+      if not j.F or j.i > j.F.count then j.F, j.i = pager_next(j.pg, body), 1 end
+      local F = j.F
+      while F and j.i <= F.count do
+        local k = j.i
+        j.i = k + 1
         n = n + 1
-        if it.settled then
-          local px, py, pz = body.x + it.rx, body.y + it.ry, body.z + it.rz
+        if F.settled[k] then
+          local it = { id = F.ids[k] }
+          local px, py, pz = body.x + F.rx[k], body.y + F.ry[k], body.z + F.rz[k]
           local d = terrain.query(px, py, pz)
           if d and math.abs(d) > AUDIT.tol then
-            local up = it.up or vec3(0, 1, 0)
+            -- (flat answers carry no `up`: ask for this one prop)
+            local up = F.up and F.up[k]
+            if not up and d > 0 and scatter.instance then
+              local row = scatter.instance(sid, it.id)
+              up = row and row.up
+            end
+            up = up or vec3(0, 1, 0)
             local hit = d > 0 and raycast(vec3(px + up.x * 0.3, py + up.y * 0.3, pz + up.z * 0.3),
               vec3(-up.x, -up.y, -up.z), 0.6) or nil
             local key = sr.patch .. "|" .. tostring(sr.sp and sr.sp.id)
@@ -1162,7 +1270,8 @@ local function audit_tick(obs)
         end
         if n % 32 == 0 and (clear_wall() - t0) * 1000 >= AUDIT.ms then return end
       end
-      j.si, j.hits = j.si + 1, nil
+      if not F then j.si, j.pg, j.F = j.si + 1, nil, nil end
+      if (clear_wall() - t0) * 1000 >= AUDIT.ms then return end
     end
   end
   au.job = nil
@@ -2213,9 +2322,11 @@ function lateUpdate(node, dt)
     local s = srcs[id]
     local p = patches[s.patch]
     if p then
-      local hits = scatter.near(id, vec3(obs.x, obs.y, obs.z), params.mote_range + 20)
-      for k = 1, math.min(#hits, 6) do
-        spots[#spots + 1] = { id = id, h = hits[k], sp = s.sp, p = p, d = hits[k].distance }
+      local F = near_flat(id, vec3(obs.x, obs.y, obs.z), params.mote_range + 20)
+      for k = 1, math.min(F.count, 6) do
+        local h = { id = F.ids[k], pos = { x = F.x[k], y = F.y[k], z = F.z[k] }, scale = F.scale[k],
+                    settled = F.settled[k], distance = F.distance[k] }
+        spots[#spots + 1] = { id = id, h = h, sp = s.sp, p = p, d = h.distance }
       end
     end
   end
@@ -3052,19 +3163,19 @@ function nearestPlant(x, y, z, dx, dy, dz, reach, cone, grab, opt)
     local p = patches[s.patch]
     if p and s.part ~= "bark" and patch_dist(p, mx, my, mz) <= rh + 2 then
       local qx, qy, qz, qr = near_query(p, mx, my, mz, gx, gy, gz, rh, slack, s.sp.chunk or 10)
-      local hits = scatter.near(id, vec3(body.x + qx, body.y + qy, body.z + qz), qr)
+      local F = near_flat(id, vec3(body.x + qx, body.y + qy, body.z + qz), qr)
       -- PHANTOM PLANTS (playtest 2026-10-23, "Ulmash Blade" harvested off bare
       -- rock). `near` answers instances that are not drawn: ones never
       -- settled (`settled = false`, at the region's nominal surface), and —
       -- engine side — ones whose re-settle after a dig found no ground, which
       -- keep their OLD landed place. So: only settled plants, at the engine's
       -- landed place, and only where there is still ground at its root.
-      for k = 1, math.min(#hits, 160) do
-        local h = hits[k]
-        if h.settled then
-          local q = terrain and terrain.query and terrain.query(h.pos.x, h.pos.y, h.pos.z)
+      for k = 1, math.min(F.count, 160) do
+        if F.settled[k] then
+          local wx, wy, wz = F.x[k], F.y[k], F.z[k]
+          local q = terrain and terrain.query and terrain.query(wx, wy, wz)
           if q and q < 0.7 and q > -1.2 then
-            local wx, wy, wz = h.pos.x, h.pos.y, h.pos.z
+            local hid, hsc = F.ids[k], F.scale[k] or 1
             local ex, ey, ez = wx - x, wy - y, wz - z
             local d = len(ex, ey, ez)
             local fd = from and len(wx - from.x, wy - from.y, wz - from.z) or d
@@ -3073,7 +3184,7 @@ function nearestPlant(x, y, z, dx, dy, dz, reach, cone, grab, opt)
               local g1, g2, g3 = wx - body.x, wy - body.y, wz - body.z
               local gl = len(g1, g2, g3)
               local ux, uy, uz = g1 / gl, g2 / gl, g3 / gl
-              local hgt = math.max(0.4, (s.sp.height or 1.0) * (h.scale or 1))
+              local hgt = math.max(0.4, (s.sp.height or 1.0) * hsc)
               -- `opt.tall`: only plants at least this tall (a stem to cut,
               -- not the grass tuft the line also grazes on its way to it)
               local short = opt and opt.tall and hgt < opt.tall
@@ -3086,14 +3197,14 @@ function nearestPlant(x, y, z, dx, dy, dz, reach, cone, grab, opt)
                 if score > bestScore then
                   bestScore = score
                   local dx_, dy_, dz_ = g1 - p.cx, g2 - p.cy, g3 - p.cz
-                  best = { pid = id .. ":" .. tostring(h.id), dist = d, t = t, gap = near_, x = wx, y = wy, z = wz,
+                  best = { pid = id .. ":" .. tostring(hid), dist = d, t = t, gap = near_, x = wx, y = wy, z = wz,
                            ax = wx + ux * sa, ay = wy + uy * sa, az = wz + uz * sa,
                            height = hgt, ux = ux, uy = uy, uz = uz,
-                           rec = { sp = s.sp, src = id, inst = h.id, patch = s.patch,
+                           rec = { sp = s.sp, src = id, inst = hid, patch = s.patch,
                                    lx = dx_ * p.ex[1] + dy_ * p.ex[2] + dz_ * p.ex[3],
                                    lz = dx_ * p.ez[1] + dy_ * p.ez[2] + dz_ * p.ez[3],
-                                   seedn = h.id % 2147483647, rx = g1, ry = g2, rz = g3,
-                                   scale = h.scale or 1, yaw = h.yaw } }
+                                   seedn = hid % 2147483647, rx = g1, ry = g2, rz = g3,
+                                   scale = hsc, yaw = F.yaw[k] } }
                 end
               end
             end
@@ -3186,7 +3297,7 @@ function surveyLines(x, y, z, radius)
   for id, s in pairs(srcs) do
     local p = patches[s.patch]
     if p and s.part ~= "bark" and patch_dist(p, x - body.x, y - body.y, z - body.z) <= radius then
-      local n = #scatter.near(id, vec3(x, y, z), radius)
+      local n = near_flat(id, vec3(x, y, z), radius).count
       if n > 0 then
         local nm = s.sp.name
         if not tally[nm] then tally[nm] = 0; order[#order + 1] = nm end
@@ -3215,9 +3326,11 @@ function groundAudit(x, y, z, radius, tol)
   for id, s in pairs(srcs) do
     local p = patches[s.patch]
     if p and s.part ~= "bark" and patch_dist(p, x - body.x, y - body.y, z - body.z) <= radius then
-      for _, h in ipairs(scatter.near(id, vec3(x, y, z), radius) or {}) do
-        if h.settled then
-          local d = terrain.query(h.pos.x, h.pos.y, h.pos.z)
+      local F = near_flat(id, vec3(x, y, z), radius)
+      for k = 1, F.count do
+        if F.settled[k] then
+          local hid, hx, hy, hz = F.ids[k], F.x[k], F.y[k], F.z[k]
+          local d = terrain.query(hx, hy, hz)
           if d then
             out.checked = out.checked + 1
             if math.abs(d) > math.abs(out.worst) then out.worst = d end
@@ -3225,12 +3338,12 @@ function groundAudit(x, y, z, radius, tol)
             if bad then
               out[bad] = out[bad] + 1
               if #out.examples < 12 then
-                out.examples[#out.examples + 1] = { src = id, id = h.id, d = d, kind = s.sp.kind, x = h.pos.x, y = h.pos.y, z = h.pos.z }
+                out.examples[#out.examples + 1] = { src = id, id = hid, d = d, kind = s.sp.kind, x = hx, y = hy, z = hz }
               end
             end
             if #out.props < 400 then
-              out.props[#out.props + 1] = { src = id, id = h.id, d = d, kind = s.sp.kind, x = h.pos.x, y = h.pos.y, z = h.pos.z,
-                                            height = (s.sp.height or 1.0) * (h.scale or 1), name = s.sp.name }
+              out.props[#out.props + 1] = { src = id, id = hid, d = d, kind = s.sp.kind, x = hx, y = hy, z = hz,
+                                            height = (s.sp.height or 1.0) * (F.scale[k] or 1), name = s.sp.name }
             end
           end
         end
