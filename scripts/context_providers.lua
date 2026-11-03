@@ -622,7 +622,20 @@ local function part_ctrl(t, ctx)
     return "auto"
   end
   local i = cur()
-  return { { type = "action", id = "ctrlmode", group = "CONTROL MODE", keep = true,
+  local out = {}
+  -- CONTROL FROM HERE (vessel_controller commandFrom): a command part that
+  -- isn't the one the craft is flown from takes over (a crewed rover in a
+  -- ship's bay: its mode is the rover's from then on)
+  if v.commandFrom and v.commandUid and v.commandUid() ~= rec.uid then
+    out[#out + 1] = { type = "action", id = "ctrlfrom", group = "CONTROL MODE", keep = true,
+      label = "Control from here", hint = CTRL_NAME[i.mode or ""] or "",
+      act = function()
+        local ok, why = v.commandFrom(rec.uid)
+        if ctx.toast then ctx.toast(ok and "controlling from here" or ("can't: " .. tostring(why))) end
+        return ok
+      end }
+  end
+  out[#out + 1] = { type = "action", id = "ctrlmode", group = "CONTROL MODE", keep = true,
     label = "Mode  " .. (i.set and CTRL_NAME[i.set] or ("Auto: " .. (CTRL_NAME[i.auto or i.mode or ""] or "…"))),
     hint = "▸ " .. CTRL_NAME[nxt(i.set)],
     act = function()
@@ -630,7 +643,8 @@ local function part_ctrl(t, ctx)
       local r = v.setCtrlMode(m, rec.uid)
       if ctx.toast then ctx.toast("control mode: " .. CTRL_NAME[m]) end
       return r
-    end } }
+    end }
+  return out
 end
 
 -- ── the builder ─────────────────────────────────────────────────────────────

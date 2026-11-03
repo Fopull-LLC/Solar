@@ -24,6 +24,10 @@
 --     orbiter on its tank a rocket until the tank goes; a choice made on one
 --     section stays there; an old craft's single choice (bp.ctrl copied on
 --     every command part) stays with the main section only;
+--   * vessel_controller: at launch the ROOT section's command part commands
+--     (r2PickCommand): a probe ship carrying a crewed rover is a Rocket on the
+--     pad, its crew passengers in the rover's seat, and the rover away is a
+--     Rover commanded from that seat;
 --   * vessel_controller: an aircraft's and a rocket's wheels never get the
 --     rover's air-lean; a folded gear is no wheel (r2Stowed), and only when
 --     every wheel is folded are there none (r2AllStowed); the fold signature
@@ -319,6 +323,40 @@ check("…so a rover with its gear folded still has wheels", not venv.r2AllStowe
 check("the fold signature changes with the gear", venv.r2StowSig() ~= s0)
 R2.wheels = { { uid = 3, gear = true } }
 check("a plane with every gear folded has none", venv.r2AllStowed())
+
+-- ── vessel_controller: who commands at launch (r2PickCommand) ─────────────
+-- A probe-core ship carrying a CREWED rover (a seat on it): the probe core in
+-- the root section commands, so it flies as a Rocket on the pad; the crew
+-- ride the rover's seat as passengers. Once the rover is away, its seat
+-- commands it and it drives as a Rover.
+local cr = tree({
+  { "probe", 0 }, { "tankS", 1 }, { "tankS", 2 }, { "engineS", 3 },   -- 1-4
+  { "radialDec", 3 },                                                  -- 5
+  { "roverBody", 5 }, { "wheelM", 6 }, { "wheelM", 6 }, { "wheelM", 6 }, { "wheelM", 6 }, -- 6-10
+  { "seat", 6 },                                                       -- 11
+})
+local cmd, crew = venv.r2PickCommand(cr, cr)
+check("a probe ship with a crewed rover is commanded from its probe core", cmd and cmd.uid == 1,
+  cmd and tostring(cmd.uid))
+check("…the crew ride the rover's seat", crew and crew.uid == 11, crew and tostring(crew.uid))
+check("…so it is a Rocket on the pad", cmd and M.resolve(cr, cmd.uid) == "rocket", cmd and M.resolve(cr, cmd.uid))
+local crover = split(cr, below(cr, 5))
+local rcmd, rcrew = venv.r2PickCommand(crover, crover)
+check("the crewed rover away is commanded from its seat", rcmd and rcmd.uid == 11 and rcrew == rcmd, rcmd and tostring(rcmd.uid))
+check("…and is a Rover", rcmd and M.resolve(crover, rcmd.uid) == "rover", rcmd and M.resolve(crover, rcmd.uid))
+-- a crewed pod ship with a crewed rover: the ship's pod commands and seats them
+local cp = tree({ { "pod", 0 }, { "tankS", 1 }, { "engineS", 2 }, { "radialDec", 2 },
+  { "roverBody", 4 }, { "wheelM", 5 }, { "wheelM", 5 }, { "wheelM", 5 }, { "seat", 5 } })
+cmd, crew = venv.r2PickCommand(cp, cp)
+check("a crewed ship commands from its own pod, crew in it", cmd and cmd.uid == 1 and crew == cmd)
+-- a seat in the ROOT section beats the rover body there (crewed first)
+local rs = tree({ { "roverBody", 0 }, { "wheelM", 1 }, { "wheelM", 1 }, { "wheelM", 1 }, { "seat", 1 } })
+cmd = venv.r2PickCommand(rs, rs)
+check("a crewed rover commands from its seat", cmd and cmd.uid == 5)
+-- no command part in the root section: the best one anywhere
+local nr = tree({ { "tankS", 0 }, { "decoupler", 1 }, { "probe", 2 } })
+cmd = venv.r2PickCommand(nr, nr)
+check("with none in the root section, the payload's commands", cmd and cmd.uid == 3)
 
 if #failures > 0 then
   print("smoke_craft_mode: " .. #failures .. " FAILED, " .. passes .. " passed")

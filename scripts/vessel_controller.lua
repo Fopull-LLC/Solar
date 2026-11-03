@@ -573,6 +573,46 @@ local function part_axis_x(d)
   return cy * cz + sy * sx * sz, cx * sz, -sy * cz + cy * sx * sz
 end
 
+-- THE COMMAND POD at launch: (command record, crewed record or nil). A stack
+-- can carry MORE THAN ONE command part (a lander riding its mothership, a
+-- crewed rover in a probe ship's bay), and `pairs` order is arbitrary, so the
+-- pick is ranked and tie-broken by uid: the same blueprint always flies the
+-- same way (axial_departing keeps the pod side, so a coin-flip there undocked
+-- the MOTHERSHIP instead of the lander).
+--   * the command part is in the ROOT section (the section holding the tree's
+--     root: craft_mode sections, cut at decouplers and docking ports), crewed
+--     before uncrewed only within it; nearest the root; a real pod before an
+--     open seat. With none in the root section, the best anywhere.
+--   * the crew's part is the best crewed part by the same rank: the command
+--     part when it is crewed, else a payload's seat they ride as passengers.
+function r2PickCommand(parts, by_uid)
+  local function sep(d) return d and ((d.decouple or 0) == 1 or d.decouple == true or (d.dock or 0) == 1 or d.dock == true) end
+  local best, brank, crew, crank = nil, nil, nil, nil
+  for _, d in pairs(parts) do
+    local isc = d.kind == "crewed" or d.kind == "probe"
+    if isc then
+      local depth, u, guard, cut = 0, d.uid, 0, false
+      while by_uid[u] and (by_uid[u].parent or 0) ~= 0 and guard < 64 do
+        local c, p = by_uid[u], by_uid[by_uid[u].parent]
+        if not p then break end
+        if sep(c) or (sep(p) and (p.parent or 0) == 0) then cut = true end
+        u = c.parent
+        depth, guard = depth + 1, guard + 1
+      end
+      local base = depth * 1e6 + d.uid + (((d.seat or 0) == 1) and 1e9 or 0)
+      local rank = (cut and 4e12 or 0) + (d.kind == "crewed" and 0 or 2e12) + base
+      if not brank or rank < brank then best, brank = d, rank end
+      if d.kind == "crewed" then
+        local cr = (cut and 4e12 or 0) + base
+        if not crank or cr < crank then crew, crank = d, cr end
+      end
+    end
+  end
+  -- (the command part is crewed: the crew sit in it)
+  if best and best.kind == "crewed" then crew = best end
+  return best, crew
+end
+
 -- `override` is the blueprint an UNDOCKED module is handed at the seam (see
 -- `undock`); without one we're the shipyard's launch and read the saved build.
 local function load_bp(override)
@@ -588,44 +628,23 @@ local function load_bp(override)
   local by_uid = {}
   for _, d in pairs(bp.parts) do by_uid[d.uid] = d end
   local kids = SPLIT.kids(bp.parts)
-  -- THE COMMAND POD. A stack can carry MORE THAN ONE crewed part — a lander
-  -- riding its mothership through a docking seam is exactly that — and `pairs`
-  -- order is arbitrary, so "whichever crewed part came last" made `pod_uid`
-  -- nondeterministic. That matters: `axial_departing` inverts its cut to keep
-  -- the pod side, so a coin-flip there undocked the MOTHERSHIP instead of the
-  -- lander. Pick the crewed part nearest the tree root (the primary craft's
-  -- pod), tie-broken by uid so the same blueprint always flies the same way.
-  local best_pod, best_rank
-  -- (no crewed part: the PROBE CORE nearest the root commands the craft)
-  local want_kind = nil
-  for _, d in pairs(bp.parts) do
-    if d.kind == "crewed" then want_kind = "crewed" break end
-    if d.kind == "probe" then want_kind = "probe" end
-  end
-  for _, d in pairs(bp.parts) do
-    if d.kind == want_kind then
-      local depth, u, guard = 0, d.uid, 0
-      while by_uid[u] and (by_uid[u].parent or 0) ~= 0 and guard < 64 do
-        u = by_uid[u].parent
-        depth, guard = depth + 1, guard + 1
-      end
-      -- A real pod outranks an open COMMAND SEAT: with both aboard the crew
-      -- flies from the pod, and a seat only commands when it is all there is.
-      local rank = depth * 1e6 + d.uid + (((d.seat or 0) == 1) and 1e9 or 0)
-      if not best_rank or rank < best_rank then best_rank, best_pod = rank, d end
-    end
-  end
+  -- THE COMMAND POD (r2PickCommand): the command part in the ROOT section
+  -- that commands, and the crewed part the crew sits in (a crewed rover in a
+  -- probe ship's bay: the probe core commands, the crew ride the rover's seat
+  -- as passengers until it separates or they take control from it).
+  local best_pod, crew_at = r2PickCommand(bp.parts, by_uid)
   if best_pod then
-    pod = { x = best_pod.x, y = best_pod.y, z = best_pod.z }
+    local at = crew_at or best_pod
+    pod = { x = at.x, y = at.y, z = at.z }
     pod_uid = best_pod.uid
   end
-  podCrewed = best_pod ~= nil and best_pod.kind == "crewed"
+  podCrewed = crew_at ~= nil
   -- An OPEN SEAT (the builder's `seat`): its rider stays in view, seated
   -- (scripts/command_seat.lua poses them); a pod hides its crew.
-  podSeat = podCrewed and (best_pod.seat or 0) == 1
-  -- Every place the crew can sit (see `crewSeats`); they start in the command
-  -- pod, which a real pod wins over a seat (the rank above).
-  stationUid = podCrewed and best_pod.uid or nil
+  podSeat = podCrewed and (crew_at.seat or 0) == 1
+  -- Every place the crew can sit (see `crewSeats`); they start in the crewed
+  -- part picked, which a real pod wins over a seat (the rank below).
+  stationUid = podCrewed and crew_at.uid or nil
   -- Radial-decoupler BRANCHES: each = what that decoupler throws off (the
   -- side without the crew, SPLIT.sides); they separate as one group, their
   -- engines burn from the start and their tanks drain first.
@@ -8985,13 +9004,25 @@ function craftModeLib()
   return L
 end
 
--- The command part the craft is flown from: the crew's seat when they sit in
--- one that commands (a rover's seat on a docked rover), else pod_uid.
-function r2CtrlFrom()
+-- The command part the craft is flown from: pod_uid (the root section's at
+-- launch, r2PickCommand). A crew riding a payload's seat are passengers: the
+-- payload's mode is theirs once it separates, or once they take control from
+-- its command part (commandFrom).
+function r2CtrlFrom() return pod_uid end
+
+-- "CONTROL FROM HERE": command part `uid` commands the craft from now on (its
+-- section's mode, the rover's front, the side a staging keeps). The crew stay
+-- where they sit. Returns true, or false and why.
+function commandFrom(uid)
   local L = craftModeLib()
-  local d = stationUid and bp_by_uid[stationUid]
-  if crewAboard and d and not integ.gone[stationUid] and L and L.isCommand(d) then return stationUid end
-  return pod_uid
+  local d = uid and bp_by_uid[uid]
+  if not d or integ.gone[uid] then return false, "no such part" end
+  if L and not L.isCommand(d) then return false, "not a command part" end
+  if uid == pod_uid then return true end
+  pod_uid = uid
+  R2.gen = -1
+  log("control from " .. tostring(d.label or d.id or uid))
+  return true
 end
 
 -- The mode this craft flies by: R2.mode, R2.ctrlSet (the player's, nil =

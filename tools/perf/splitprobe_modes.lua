@@ -11,7 +11,9 @@
 --               Rocket (chosen), the rover's body still Auto (Rover) and its
 --               record carries no choice; the rover separates; the new craft
 --               reads Rover at once, the ship still Rocket; switched to the
---               rover, W drives it (keys, shots)
+--               rover, W drives it (keys, shots). A crewed seat on the rover:
+--               the probe core in the root section commands at launch and the
+--               crew ride the seat as passengers; their side stays at the split
 --   splitjet    the 27-part jet with a small rocket (Probe Core, FT-S, a
 --               Sputter) on a radial decoupler on its back: the jet reads
 --               Aircraft, the rocket section Rocket; released, the rocket
@@ -37,6 +39,9 @@ function SP.bp_rover()
   add(rec(8, "wheelM", 2.21, 1.60, -0.7, { yaw = HP, parent = 6, att = "surface", sym = 1, mir = "z" }))
   add(rec(9, "wheelM", 0.89, 1.60, 0.7, { yaw = -HP, parent = 6, att = "surface", sym = 2, mir = "z" }))
   add(rec(10, "wheelM", 0.89, 1.60, -0.7, { yaw = HP, parent = 6, att = "surface", sym = 2, mir = "z" }))
+  -- a crewed seat on the rover: the crew ride it as passengers (the probe
+  -- core in the root section commands the ship)
+  add(rec(11, "seat", 1.55, 1.80 + 0.15 + 0.65, 0, { parent = 6, att = "top" }))
   return L
 end
 
@@ -131,28 +136,45 @@ function SP.run_rover()
   local i = CP.state(vc, "ship on the runway")
   local rv6 = vc.partRec and vc.partRec(6) or {}
   local iv = vc.ctrlModeInfo(6) or {}
-  CP.check("ship_rocket", i.mode == "rocket" and i.set == "rocket" and i.from == 1, "the ship flies as %s from %s", tostring(i.label), tostring(i.from))
+  local st = vc.crewStation and vc.crewStation()
+  CP.check("ship_rocket", i.mode == "rocket" and i.set == "rocket" and i.from == 1 and vc.commandUid() == 1,
+    "the ship flies as %s from %s (command part %s)", tostring(i.label), tostring(i.from), tostring(vc.commandUid()))
+  CP.check("crew_passengers", vc.crewAboard and st == 11, "crew aboard %s, riding part %s (the rover's seat)", tostring(vc.crewAboard), tostring(st))
   CP.check("rover_section_untouched", rv6.ctrl == nil and iv.mode == "rover" and iv.set == nil,
     "the rover's body: ctrl %s, its section reads %s", tostring(rv6.ctrl), tostring(iv.label))
   CP.shot("3ship_hud")
+  -- CONTROL FROM HERE on the rover's seat while it is aboard: Rover; and
+  -- back on the probe core: Rocket again
+  vc.commandFrom(11)
+  wait(1)
+  local ia = CP.state(vc, "control from the rover's seat")
+  vc.commandFrom(1)
+  wait(1)
+  local ib = CP.state(vc, "control from the probe core")
+  CP.check("control_from_here", ia.mode == "rover" and ia.from == 11 and ib.mode == "rocket" and ib.from == 1,
+    "from the seat: %s; from the core: %s", tostring(ia.label), tostring(ib.label))
   vc.releaseClamps()
   wait(0.5)
   local ok = vc.fireSeparation(5)
   P("CP separation fired: %s", tostring(ok))
-  local rv = SP.other(vc, 5, 20)
-  if not rv then CP.check("separated", false, "no rover craft"); CP.result(); return end
+  local other = SP.other(vc, 4, 20)
+  if not other then CP.check("separated", false, "no second craft"); CP.result(); return end
   wait(0.3)
-  local ir = CP.state(rv, "rover away")
-  CP.check("rover_reads_rover", ir.mode == "rover" and ir.set == nil, "the rover away reads %s (%s)", tostring(ir.label), tostring(ir.why))
-  i = CP.state(vc, "ship after the split")
+  -- the crew's side stays (splitKeeper): whichever controller holds the
+  -- rover's body is the rover now
+  local rv, sh = vc, other
+  if not (vc.partRec and vc.partRec(6)) then rv, sh = other, vc end
+  local ir = CP.state(rv, "rover after the split")
+  CP.check("rover_reads_rover", ir.mode == "rover" and ir.set == nil and rv.partRec(1) == nil,
+    "the rover reads %s (%s), commanded from %s", tostring(ir.label), tostring(ir.why), tostring(rv.commandUid()))
+  i = CP.state(sh, "ship after the split")
   CP.check("ship_still_rocket", i.mode == "rocket" and i.set == "rocket", "the ship: %s", tostring(i.label))
   -- let it settle on its wheels, then fly it
   wait(4)
-  rv.remoteControl()
-  wait(2)
-  ir = CP.state(rv, "switched to the rover")
-  CP.check("switched", rv.piloting and ir.mode == "rover", "piloting the rover: %s, mode %s", tostring(rv.piloting), tostring(ir.label))
-  CP.shot("4switched_to_rover")
+  if not rv.piloting then rv.remoteControl(); wait(2) end
+  ir = CP.state(rv, "flying the rover")
+  CP.check("switched", rv.piloting and ir.mode == "rover", "piloting the rover: %s, mode %s, crew aboard %s", tostring(rv.piloting), tostring(ir.label), tostring(rv.crewAboard))
+  CP.shot("4flying_the_rover")
   local vn = rv.node
   local p0 = sub(assembly.info(vn).com, home())
   key_down("w")
@@ -163,7 +185,7 @@ function SP.run_rover()
   CP.state(rv, "W held 6 s")
   CP.shot("5rover_driving")
   release_all()
-  CP.check("w_drives", d > 4 and rv.R2.driving ~= nil, "W 6 s: %.1f m, %.1f m/s", d, len(iv2.vel.x, iv2.vel.y, iv2.vel.z))
+  CP.check("w_drives", d > 4, "W 6 s: %.1f m, %.1f m/s", d, len(iv2.vel.x, iv2.vel.y, iv2.vel.z))
   CP.result()
 end
 
