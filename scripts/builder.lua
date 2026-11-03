@@ -5423,6 +5423,12 @@ function free_shell(uid)
   for _, m in ipairs(sh.meshes or {}) do if mesh and mesh.free then mesh.free(m) end end
   shells[uid] = nil
 end
+-- The overlay goes (leaving the VAB): the fairing preview shells' meshes with
+-- it. The engine keeps a built mesh until mesh.free or Stop, not until its
+-- node or scene goes, so every VAB visit with a fairing left its shells behind.
+function onDestroy()
+  for uid in pairs(shells) do pcall(free_shell, uid) end
+end
 
 function roundTwoTick()
   -- the rover's front and every wheel's roll and steer (wheelArrows)
