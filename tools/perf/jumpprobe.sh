@@ -1,6 +1,6 @@
 #!/bin/bash
 # jumpprobe.sh — the player's bike over kickers, its brakes and its Floodlight at night
-# (jumpprobe_modes.lua: vjump vbrake vlight).
+# (jumpprobe_modes.lua: vjump vride vbrake vlight).
 #
 #   jumpprobe.sh <engine> [modes]          (default: vjump)
 #   env: BIKE   the craft file (default ~/.local/share/solar/user/library/slot1/bike1.json)
@@ -34,7 +34,7 @@ p = sys.argv[1]
 m = "\n".join(open(f).read() for f in sys.argv[2:])
 s = open(p).read()
 i = s.index('-- ── main ──')
-s = s[:i] + "do\n" + m + "\nJP_RUN = { vjump = run_vjump, vbrake = run_vbrake, vlight = run_vlight }\nend\n" + s[i:]
+s = s[:i] + "do\n" + m + "\nJP_RUN = { vjump = run_vjump, vride = run_vride, vbrake = run_vbrake, vlight = run_vlight }\nend\n" + s[i:]
 s = s.replace('    elseif MODE == "plane" then run_plane()',
               '    elseif MODE == "plane" then run_plane()\n    elseif JP_RUN[MODE] then JP_RUN[MODE]()')
 open(p, 'w').write(s)
@@ -42,6 +42,6 @@ PY
 luajit -e "assert(loadfile('$S/tools/perfbench.lua'))" || exit 3
 TMO=${TMO:-330} SOLAR=$SN WORK=$S bash $S/tools/bench.sh $eng ${*:-vjump}
 rc=$?
-for m in ${*:-vjump}; do grep -a "JP R\|JP B\|JP kicker\|JP bike\|JP beam\|JP lamp\|JP lights\|JP night\|JP sun\|JP fell\|VP \|moto:" $S/results/*/$m.log 2>/dev/null | cut -c1-420; done
+for m in ${*:-vjump}; do grep -a "JP R\|JP RIDE\|JP B\|JP kicker\|JP bike\|JP beam\|JP lamp\|JP lights\|JP night\|JP sun\|JP fell\|VP \|moto:" $S/results/*/$m.log 2>/dev/null | cut -c1-420; done
 rm -f $S/proj/save/slot13.ron; rm -rf $S/proj/saves/slot13
 exit $rc

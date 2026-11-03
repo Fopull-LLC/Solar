@@ -9993,9 +9993,30 @@ function hang_tyre(node, w, info)
   -- damper, along its own axis (motoSpring)
   local axis, damp = vec3(0, 1, 0), 0.7 * (c.damper or 1)
   if w.susp and w.susp.axis and AUTO.lib then f, damp, axis = motoSpring(w, info, mt, g, c) end
-  t:setJoint{ kind = "wheel", to = node, axis = axis, otherAnchor = vec3(w.cx, w.cy, w.cz),
-              stiffness = f, damping = damp, motorSpeed = 0, maxForce = (m.torque or 0.6),
-              steer = w.steer0 or 0 }
+  local spec = { kind = "wheel", to = node, axis = axis, otherAnchor = vec3(w.cx, w.cy, w.cz),
+                 motorSpeed = 0, maxForce = (m.torque or 0.6), steer = w.steer0 or 0 }
+  -- IN REAL UNITS where the engine has them (floptle 0598): wheelReal.
+  -- Not landing gear yet: a held real-unit wheel skips on sub-cm ripple, and
+  -- on a jet's gear that is runway chatter (32 -> 107 contact changes) and a
+  -- taxi pitching ~20°, so gear keeps the frequency path and gearOleo.
+  w.real = nil
+  if R2_REAL_SUSP and not w.gear then
+    local k, cb, cr, lo, hi = wheelReal(w, info, g, c)
+    spec.springRate, spec.damperBump, spec.damperRebound = k, cb, cr
+    spec.min, spec.max, spec.limit = lo, hi, true
+    if pcall(t.setJoint, t, spec) then
+      w.real = true
+    else
+      -- (an engine without them refuses the keys: the frequency path, for good)
+      R2_REAL_SUSP = false
+      spec.springRate, spec.damperBump, spec.damperRebound, spec.min, spec.max, spec.limit = nil, nil, nil, nil, nil, nil
+      log("wheels: no springRate in this engine; suspension by frequency and ratio")
+    end
+  end
+  if not w.real then
+    spec.stiffness, spec.damping = f, damp
+    t:setJoint(spec)
+  end
   w.jointed = true
   w.joint_age = 0   -- seconds of ticks since it was hung, counted in drive_tick
 end
@@ -10502,7 +10523,9 @@ end
 -- stroke rate along the suspension's own (raked) axis, as an impulse on the
 -- hull at the mount — never more than SUSP_DAMP_CAP × the corner's load in a
 -- tick. (The ground carries the other half through the tyre; in the air the
--- wheel just hangs, and nothing is applied.)
+-- wheel just hangs, and nothing is applied.) Since floptle 0598 a joint in
+-- real units (wheelReal) carries the whole damper; this is the fallback for
+-- an engine without them.
 SUSP_BUMP = 0.9
 SUSP_REBOUND = 1.8
 SUSP_DAMP_CAP = 2.5
@@ -10522,7 +10545,8 @@ function suspDamper(node, info, dt, gl)
       s.dmp_v = (s.dmp_v or 0) + (raw - (s.dmp_v or 0)) * math.min(1, dt * 40)
       local v = s.dmp_v
       local F = 0
-      if t.grounded then
+      -- (a joint in real units damps the stroke itself, against the frame: wheelReal)
+      if t.grounded and not w.real then
         local c = math.max(0, (s.c or 0) * (v > 0 and SUSP_BUMP or SUSP_REBOUND) - (s.ce or 0))
         local load = s.load or ((info.mass or 1) * (gl or 9.8) / math.max(1, #R2.wheels))
         F = math.max(-SUSP_DAMP_CAP * load, math.min(SUSP_DAMP_CAP * load, c * v))
@@ -10592,6 +10616,8 @@ function gearOleo(node, info, dt, upv, gl)
         local F = R2_OLEO_C * load * sd
         -- (never more than 1.5 × its load either way: one tick must not fling it)
         F = math.max(-1.5 * load, math.min(1.5 * load, F))
+        -- (a joint in real units is the oleo itself: wheelReal; the caps below stay)
+        if w.real then F = 0 end
         if math.abs(F) > 1e-4 then
           local mx, my, mz = v2w(node, info, w.cx, w.cy, w.cz)
           assembly.impulseAt(node, vec3(upv.x * F * dt, upv.y * F * dt, upv.z * F * dt), vec3(mx, my, mz))
@@ -10839,6 +10865,76 @@ function motoSpring(w, info, mt, g, c)
   local f, z, ke, ce = L.suspJoint(k, cd, mt, R2.dt or (1 / 60))
   s.ke, s.ce = ke, ce
   return f, z, vec3(s.axis[1], s.axis[2], s.axis[3])
+end
+
+-- THE SPRING AND DAMPER IN REAL UNITS (floptle 0598, engine 0.117.1-dev.1402).
+-- A frequency and ratio on the wheel joint act on the light tyre's own mass,
+-- so the damping a heavy frame needed was out of reach: the user's bike
+-- (playtest 2026-11-02, "wobbles and lands badly") bounced off both tyres
+-- after a small jump and suspDamper's impulses made up only part of it. With
+-- springRate (kN/m, masses in tonnes), damperBump and damperRebound (kN·s/m)
+-- the engine solves the spring implicitly against the frame's mass, and a
+-- tyre on the ground is held by it. Every wheel is sized from what it carries
+-- (motoLoad: a bike's ends by the lever rule, else an even share):
+--   k = load / (sag × travel)  (the craft's weight sits it `sag` into its travel)
+--   c = 2 ζ √(k × load / g)    (ζ of critical on that wheel's sprung mass)
+-- a suspension part by its own travel, sag and ζ (auto_drive springFor), a
+-- wheel on the hull by its travel (the builder's, else the part's) at
+-- R2_WHEEL_SAG and R2_WHEEL_ZETA, a landing gear's oleo at R2_GEAR_SAG and
+-- R2_GEAR_ZETA; the builder's spring and damper settings scale k and c. The
+-- rebound is damped harder than the bump (R2_REAL_BUMP / R2_REAL_REBOUND: the
+-- rebound is what throws a tyre off). Bump stops at the end of the travel
+-- (+, up the leg) and R2_REAL_DROOP of it hanging. Returns k, bump, rebound,
+-- min, max.
+R2_REAL_SUSP = true     -- false once an engine refuses the keys (hang_tyre)
+R2_REAL_BUMP = 0.8
+R2_REAL_REBOUND = 1.25
+R2_REAL_DROOP = 0.5
+R2_WHEEL_SAG, R2_WHEEL_ZETA = 0.25, 0.5
+R2_GEAR_SAG, R2_GEAR_ZETA = 0.3, 0.7
+R2_WHEEL_TRAVEL = { S = 0.10, M = 0.15, L = 0.20, B = 0.04 }   -- parts_registry, parts_auto
+R2_GEAR_TRAVEL = { S = 0.12, M = 0.16 }                          -- parts_aero
+-- The load on one wheel by the lever rule between the wheels ahead of the
+-- centre of mass and those behind it (r2SteerPlan's w.a), shared evenly
+-- within each end: a jet's nose gear carries a fraction of what its mains
+-- do, and sized for an even share it ran stiff while the mains sagged onto
+-- their stops (motoprobe jetgear). An even share when every wheel is on one
+-- side, and a two-wheeler's by motoLoad.
+function r2AxleLoad(w, info, g)
+  local list = {}
+  for _, o in ipairs(R2.wheels) do if not r2Stowed(o) then list[#list + 1] = o end end
+  if #list <= 2 then return motoLoad(w, info, g) end
+  local W = (info.mass or 1) * g
+  local nf, nr, sf, sr = 0, 0, 0, 0
+  for _, o in ipairs(list) do
+    if (o.a or 0) > 0 then nf, sf = nf + 1, sf + o.a else nr, sr = nr + 1, sr + (o.a or 0) end
+  end
+  if nf == 0 or nr == 0 then return W / #list end
+  local af, ar = sf / nf, sr / nr
+  local front = math.max(0.1, math.min(0.9, -ar / math.max(0.05, af - ar)))
+  if (w.a or 0) > 0 then return W * front / nf end
+  return W * (1 - front) / nr
+end
+function wheelReal(w, info, g, c)
+  local s = w.susp
+  local k, cd, travel
+  if s and s.k and s.c then
+    k, cd, travel = s.k, s.c, s.travel or 0.15
+  else
+    g = math.max(0.1, g or 9.8)
+    local gear = w.gear or R2.gear
+    -- (the craft record carries no travel: the catalogue's, by size)
+    local cat = w.gear and R2_GEAR_TRAVEL or R2_WHEEL_TRAVEL
+    travel = math.max(0.03, c.travel or tonumber(w.d.travel) or cat[w.size or "M"] or 0.15)
+    local sag = gear and R2_GEAR_SAG or R2_WHEEL_SAG
+    local zeta = gear and R2_GEAR_ZETA or R2_WHEEL_ZETA
+    local load = math.max(1e-3, r2AxleLoad(w, info, g))
+    k = load / (sag * travel) * (c.spring or 1)
+    cd = 2 * zeta * math.sqrt(k * load / g) * (c.damper or 1)
+    w.realLoad = load
+  end
+  w.realK, w.realC, w.realTravel = k, cd, travel
+  return k, cd * R2_REAL_BUMP, cd * R2_REAL_REBOUND, -R2_REAL_DROOP * travel, travel
 end
 
 -- Every tick, per suspended wheel: how far it is compressed (the drawing and
@@ -11110,7 +11206,7 @@ function motoState()
     local s = w.susp
     if s then
       o.susp[#o.susp + 1] = { uid = w.uid, kind = s.m.kind, comp = s.comp, peak = s.peak, travel = s.travel, k = s.k,
-                              c = s.c, ke = s.ke, ce = s.ce, load = s.load, raked = s.raked, steer0 = w.steer0 }
+                              c = s.c, ke = s.ke, ce = s.ce, load = s.load, raked = s.raked, steer0 = w.steer0, real = w.real == true }
     end
   end
   return o

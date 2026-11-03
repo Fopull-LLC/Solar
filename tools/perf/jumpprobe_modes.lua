@@ -44,12 +44,18 @@ function JP.down(vc)
   return f, r
 end
 -- where the bike is along / across the strip (planet frame)
+-- (in the strip's own measure: V.ground and JP.kicker place d at the
+-- direction of rel0 + F d, so d is the tangent's, not the projection on it;
+-- on the home world, R ~1 km, the projection read 283 m at the 295 m kicker
+-- and the lip was "reached" after the bike had landed)
 function JP.along(vc)
   local S = V.strip
   local c = sub(assembly.info(vc.node).com, home())
-  local rel = sub(c, S.rel0)
+  local R0 = len(S.rel0.x, S.rel0.y, S.rel0.z)
+  local u, u0 = unit(c), unit(S.rel0)
   local L = unit(cross(S.U, S.F))
-  return dot(rel, S.F), dot(rel, L)
+  local k = R0 / math.max(1e-3, dot(u, u0))
+  return dot(u, S.F) * k, dot(u, L) * k
 end
 -- a kicker: grade g over len m from d0 (on the sphere through the strip's start)
 function JP.kicker(d0, len_, g)
@@ -137,7 +143,9 @@ function JP.cruise(vc, vt, hands)
     local vh = sub(vr, scl(U, dot(vr, U)))
     local L = unit(cross(S.U, S.F))
     local head = (len(vh.x, vh.y, vh.z) > 1.0) and math.atan2(dot(vh, L), dot(vh, S.F)) or 0
-    local want = clamp(math.atan2(-lat, 12), -0.5, 0.5)
+    -- (the look-ahead grows with speed: at a fixed 12 m the lean's lag made
+    -- the line swing ±2.8 m at 15 m/s, off the 3 m strip and past the kicker)
+    local want = clamp(math.atan2(-lat, math.max(12, 1.6 * sp)), -0.5, 0.5)
     st = clamp(1.2 * (want - head), -0.5, 0.5)
   end
   return drive, st
@@ -174,9 +182,10 @@ function JP.jump(vc, k)
       roll_td, yaw_td, pitch_td, v_td = roll, yaw, pitch, sp
     end
     if not t_lip and time >= (JP.alog or 0) then
-      JP.alog = time + 0.5
-      P("JP A %s d %.1f lat %.2f v %.2f roll %.1f yaw %.3f st %.2f served %.2f lk %.2f drive %.2f pitch %.1f", tag, d, lat, sp, math.deg(roll), yaw, st,
-        vc.R2.served or -1, vc.R2.lk or -1, vc.R2.drive or 0, math.deg(pitch))
+      -- (alog: the approach's log interval, s; default 0.5)
+      JP.alog = time + (tonumber(params.alog) or 0.5)
+      P("JP A %s d %.1f lat %.2f v %.2f roll %.1f yaw %.3f st %.2f served %.2f lk %.2f drive %.2f pitch %.1f gr %d%d comp %s", tag, d, lat, sp, math.deg(roll), yaw, st,
+        vc.R2.served or -1, vc.R2.lk or -1, vc.R2.drive or 0, math.deg(pitch), f, r, susp(vc))
       JP.p0 = pitch
     end
     if t_lip and time >= log_next then
@@ -271,6 +280,108 @@ local function run_vjump()
       "%s at %.0f m/s (lip %.1f, air %.2f s): peak roll %.1f deg, peak yaw %.2f rad/s, settled (both tyres down, pitch, roll, yaw) in %.2f s, %d roll swings, %.1f m/s lost%s",
       r.kick, r.v, r.v_lip or -1, r.air, r.peak_roll, r.peak_yaw, r.settle, r.swings, r.vloss or 0, r.fell and ", FELL" or "")
   end
+  vc.R2.cmd = { drive = 0, steer = 0 }
+  V.result()
+end
+
+-- ── vride ───────────────────────────────────────────────────────────────────
+-- The straight-line ride on the flat strip: at each of `speeds` (strs, default
+-- "8,12,15") a 30 m lead-in and then `seg` m (default 100) held on the line,
+-- hands on; then full W for `topsecs` s (default 10) for the top speed. Per
+-- segment a `JP RIDE` line: tyre-off ticks (front, rear, both) and how many
+-- times a tyre left the ground, pitch (sd, peak), roll peak, yaw rate peak,
+-- the bars' sd and the suspension's travel (min..max) each end.
+local function ride_seg(vc, tag, vt, lead, seg, full)
+  local d0 = JP.along(vc)
+  local n, offF, offR, both, events = 0, 0, 0, 0, 0
+  local lastF, lastR = 1, 1
+  local sp_, sp2, pmax, rmax, ymax, b1, b2, vmax = 0, 0, 0, 0, 0, 0, 0, 0
+  local cmin, cmax = { 9, 9 }, { -9, -9 }
+  local t0 = time
+  while true do
+    local d = JP.along(vc)
+    local drive, st = JP.cruise(vc, vt, true)
+    if full then drive = 1 end
+    vc.R2.cmd = { drive = drive, steer = st }
+    hold_w(drive > 0.5)
+    yield()
+    local roll, pitch, yaw = JP.att(vc)
+    local f, r = JP.down(vc)
+    if V.upness(vc.node) < 0.5 then hold_w(false); return { fell = true } end
+    local sp = V.speed(vc)
+    local measuring = (full and time - t0 > 0) or (not full and d - d0 >= lead)
+    if measuring then
+      n = n + 1
+      if f == 0 then offF = offF + 1 end
+      if r == 0 then offR = offR + 1 end
+      if f + r == 0 then both = both + 1 end
+      if (f == 0 and lastF == 1) or (r == 0 and lastR == 1) then events = events + 1 end
+      sp_, sp2 = sp_ + pitch, sp2 + pitch * pitch
+      pmax, rmax, ymax = math.max(pmax, math.abs(pitch)), math.max(rmax, math.abs(roll)), math.max(ymax, math.abs(yaw))
+      local bs = vc.R2.bikeSteer or 0
+      b1, b2 = b1 + bs, b2 + bs * bs
+      vmax = math.max(vmax, sp)
+      for i, w in ipairs(vc.R2.wheels or {}) do
+        local c = w.susp and w.susp.comp
+        if c and i <= 2 then cmin[i], cmax[i] = math.min(cmin[i], c), math.max(cmax[i], c) end
+      end
+    end
+    -- (rtrace = v: every tick of that segment's measure, the tyres' gap to
+    -- the ground under them (m), their speed along the local up and the
+    -- suspension: what lifts a tyre on the flat)
+    if measuring and (tonumber(params.rtrace) or -1) == vt and n <= 240 then
+      local U = V.up(assembly.info(vc.node).com)
+      local g = {}
+      for _, w in ipairs(vc.R2.wheels or {}) do
+        local tn = w.tyre
+        if tn and tn.valid then
+          local p = tn.tickPos or tn.worldPos
+          local h = raycast(p.x + U.x * 0.5, p.y + U.y * 0.5, p.z + U.z * 0.5, -U.x, -U.y, -U.z, 3, { ignore = { vc.node, tn } })
+          local tv = tn.vel or { x = 0, y = 0, z = 0 }
+          g[#g + 1] = string.format("%.3f:%.2f:%.3f", h and (h.distance - 0.5 - (w.r or 0.3)) or -9, dot(tv, U), (w.susp and w.susp.comp) or 0)
+        end
+      end
+      P("JP RT %s %d gr %d%d pitch %.2f vup %.3f | %s", tag, n, f, r, math.deg(pitch), dot(assembly.info(vc.node).vel, U), table.concat(g, " "))
+    end
+    -- (rlog = s: a line that often through every segment)
+    if (tonumber(params.rlog) or 0) > 0 and time >= (JP.rlog_t or 0) then
+      JP.rlog_t = time + tonumber(params.rlog)
+      P("JP RL %s d %.1f lat %.2f v %.2f roll %.1f pitch %.1f yaw %.3f bars %.2f gr %d%d drive %.2f comp %s", tag, d, select(2, JP.along(vc)), sp, math.deg(roll),
+        math.deg(pitch), yaw, vc.R2.bikeSteer or 0, f, r, vc.R2.drive or 0, susp(vc))
+    end
+    lastF, lastR = f, r
+    if full and time - t0 >= (tonumber(params.topsecs) or 10) then break end
+    if not full and d - d0 >= lead + seg then break end
+    if time - t0 > 60 then break end
+  end
+  hold_w(false)
+  local function sd(a, a2) return n > 1 and math.sqrt(math.max(0, a2 / n - (a / n) ^ 2)) or 0 end
+  P("JP RIDE %s v %.0f: %d ticks, tyre off front %d rear %d both %d, %d lift-offs, pitch sd %.2f peak %.1f deg, roll peak %.1f deg, yaw peak %.3f, bars sd %.3f, top %.2f m/s, comp F %.3f..%.3f R %.3f..%.3f, lat %.1f",
+    tag, vt, n, offF, offR, both, events, math.deg(sd(sp_, sp2)), math.deg(pmax), math.deg(rmax), ymax, sd(b1, b2), vmax,
+    cmin[1], cmax[1], cmin[2], cmax[2], select(2, JP.along(vc)))
+  return { events = events, both = both, vmax = vmax }
+end
+local function run_vride()
+  local vc = JP.bike("ride")
+  if not vc then return end
+  local speeds = jsplit(params.speeds or "8,12,15")
+  local seg = tonumber(params.seg or 100)
+  local total = #speeds * (30 + seg) + 200
+  if not JP.strip(vc, -15, total) then return end
+  wait_for(function() return (terrain.pending and terrain.pending() or 0) == 0 end, 60, "the whole strip")
+  P("JP strip profile (every 20 m): %s", JP.heights(vc, 0, total, 20))
+  P("JP strip ripple (every 0.5 m, 100..130): %s", JP.heights(vc, 100, 130, 0.5))
+  P("JP strip far (every 1 m): %s", JP.heights(vc, total - 230, total, 1.0))
+  local ok = true
+  for _, v in ipairs(speeds) do
+    local r = ride_seg(vc, "v" .. v, v, 30, seg, false)
+    if r.fell then P("JP RIDE v%d: FELL", v); ok = false; break end
+  end
+  if ok then
+    local r = ride_seg(vc, "top", 99, 0, 0, true)
+    if r.fell then P("JP RIDE top: FELL"); ok = false end
+  end
+  V.check("ride", ok, "rode every segment upright")
   vc.R2.cmd = { drive = 0, steer = 0 }
   V.result()
 end
