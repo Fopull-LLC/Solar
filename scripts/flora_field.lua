@@ -218,6 +218,9 @@ local wash                -- defined below update (ground wash)
 local preload_t = 0
 local swept = false
 local retiring = {} -- { id, pk, spid, t }: re-settled stands' old sources, still drawn until t
+local base_wait_t = nil     -- when the field began waiting for the base's layout
+local BASE_WAIT = 30.0
+local clear_q = {}  -- stands being judged against the base (JUDGED BEFORE IT IS DRAWN)
 -- Ground edits waiting to re-drop the props on them (see "the ground moved").
 local gw_regions = {}            -- { x, y, z, r, t }: body-relative, t = the last edit in it
 local gw_queue, gw_queued = {}, {}
@@ -369,11 +372,36 @@ end
 -- species (the oldest grows back early).
 local MAX_CUTS = 40
 
+-- Has the stand that replaces a retiring source dropped its props onto the
+-- ground round the crew? The engine settles arriving props ~96 a frame across
+-- every source, so a stand redeclared beside a dozen others can take longer
+-- than the hold; the old source going first left a hole in the stand for the
+-- frames until its replacement's props landed. A sample of the replacement's
+-- props in reach (any order, one page) all settled is the sign.
+local RETIRE_WAIT = 6.0   -- s past the hold at the most
+local function replacement_settled(r)
+  local p = patches[r.pk]
+  local nid = p and (r.part == "bark" and p.bark[r.spid] or p.srcs[r.spid])
+  local s = nid and srcs[nid]
+  if not s then return true end
+  local o = observer()
+  if not (o and scatter.near) then return true end
+  local reach = math.min((s.sp and s.sp.far or 60) * params.reach, 150)
+  local ok, F = pcall(scatter.near, nid, vec3(o.x, o.y, o.z), reach, { flat = true, max = 256, sort = false, fields = { "settled" } })
+  if not (ok and F and F.settled) then return true end
+  for k = 1, F.count or #F.settled do
+    if not F.settled[k] then return false end
+  end
+  return true
+end
+
 -- Destroy retiring sources whose hold is over (or all of a patch's, or all).
 local function sweep_retiring(pk, all)
   local keep = {}
   for _, r in ipairs(retiring) do
-    if all or r.pk == pk or time >= r.t then
+    local due = all or r.pk == pk
+    if not due and time >= r.t then due = time >= r.t + RETIRE_WAIT or replacement_settled(r) end
+    if due then
       if scatter and scatter.destroy then scatter.destroy(r.id) end
     else
       keep[#keep + 1] = r
@@ -417,6 +445,10 @@ end
 function clearAll()
   if touchClear then touchClear() end
   sweep_retiring(nil, true)
+  for i = #clear_q, 1, -1 do
+    if scatter and scatter.destroy and clear_q[i].judge then scatter.destroy(clear_q[i].judge) end
+    clear_q[i] = nil
+  end
   for key in pairs(patches) do drop_patch(key) end
   for id in pairs(srcs) do drop_source(id) end
   for _, m in ipairs(motes) do if m and m.valid then m:destroy() end end
@@ -511,7 +543,7 @@ local function keep_cleared(p, spid, iid)
   p.cleared = p.cleared or {}
   local c = p.cleared[spid]
   if not c or c.key ~= base_l.key then
-    c = { key = base_l.key, ids = {} }
+    c = { key = base_l.key, ids = {}, done = false }
     p.cleared[spid] = c
   end
   c.ids[iid] = true
@@ -670,46 +702,121 @@ end
 -- (mineral_field's audit pages its rocks the same way)
 nearPager, nearPagerNext = pager, pager_next
 
--- Take a freshly declared source's props off the base's ground (see above).
--- A JOB, not a call: a patch reaching the base asks `scatter.near` for every
--- prop within the base's radius (a grass source: a few thousand), and judging
--- them all in the frame it was declared was 190–250 ms (rc7, Kail). The source
--- is queued, its props asked for a page at a time (pager, above: one query of
--- them all at once was 22.7 ms) and judged CLEAR_MS of wall time a frame
--- (`clear_tick`, from update, every frame); a prop on the paving stands there
--- for those frames. Only the queue's head is paged, so the engine keeps one
--- clearing cursor at a time.
-local CLEAR_MS = 2.0
-local clear_q = {}
+-- JUDGED BEFORE IT IS DRAWN (playtest 2026-11-03: "near the base, most when
+-- you first spawn, plants and trees pop in and out rapidly"). A stand that
+-- reaches the base is judged against the paving FIRST and declared after,
+-- with what the judgement took off already removed, so no plant is ever drawn
+-- on the paving and then taken away. Before this the real source was
+-- declared, drawn, and cleared a page at a time over the next frames (a grass
+-- stand by the base is a few thousand props): every stand round the spawn
+-- showed its plants on the apron and the lots, then lost them by the hundred
+-- a frame, and again whenever a stand was declared anew.
+--
+-- The judgement needs the stand's props, and only the engine knows where its
+-- seed puts them, so it asks a JUDGE: a source with the stand's own seed,
+-- region, density and chunking (the same ids in the same places: an id is
+-- (seed, chunk, index), placement is a pure function of those) that draws
+-- nothing (one empty band a centimetre deep, so it never even settles). Its
+-- props are paged out (pager, above: one query of them all at once was
+-- 22.7 ms) and judged CLEAR_MS of wall time a frame (`clear_tick`, every
+-- frame; more under the loading curtain), one stand at a time, nearest first;
+-- then the judge goes and the stand is declared (make_source applies
+-- `cleared_of`). The judgement is kept per patch and species against the
+-- layout it was made for (base_l.key), so a stand declared again (the ground
+-- re-drop, a walk away and back) is declared at once, already clear.
+-- A stand that was ALREADY drawing when it came to be judged (declared before
+-- the base was sited, or a moved base) loses everything judged off it in ONE
+-- frame, at the end, not a page at a time.
+local CLEAR_MS, CLEAR_MS_CURTAIN = 2.0, 8.0
 local function clear_wall() return (app and app.wallClock and app.wallClock()) or os.clock() end
--- → 1 when the source was queued (its patch reaches the base), else 0
-local function clear_base(id, p, sp)
+
+-- Does this stand need judging against the base before it may be drawn?
+local function needs_judging(p, sp)
+  local L = base_layout()
+  if not (L and scatter.near and scatter.create) then return false end
+  -- Only a patch that reaches the base.
+  if len(p.cx - L.x, p.cy - L.y, p.cz - L.z) > p.half * 1.5 + L.r then return false end
+  local c = p.cleared and p.cleared[sp.id]
+  return not (c and c.key == base_l.key and c.done)
+end
+
+-- Start judging a stand (opts: the stand's scatter.create options, from
+-- make_source). → true when a judgement is under way.
+local function judge_start(p, sp, opts, fg)
+  p.judging = p.judging or {}
+  if p.judging[sp.id] then return true end
   local L = base_layout()
   local body = cur_body and space.body(cur_body)
-  if not (L and body and scatter.near) then return 0 end
-  -- Only a patch that reaches the base.
-  if len(p.cx - L.x, p.cy - L.y, p.cz - L.z) > p.half * 1.5 + L.r then return 0 end
+  if not (L and body) then return false end
+  local empty = fg and fg.emptyAsset and fg.emptyAsset() or nil
+  if not empty then return false end
+  local ok, jid = pcall(scatter.create, {
+    seed = opts.seed, center = opts.center, halfX = opts.halfX, halfZ = opts.halfZ,
+    perChunk = opts.perChunk, chunk = opts.chunk, align = opts.align,
+    scaleMin = opts.scaleMin, scaleMax = opts.scaleMax,
+    density = opts.density, densityRows = opts.densityRows, parent = opts.parent,
+    lod = { { asset = empty, distance = 0.01 } },
+  })
+  if not ok then
+    diag("judge refused: " .. tostring(jid))
+    return false
+  end
   local h = (sp.height or 1) * (sp.scaleMax or 1)
   -- Grass and ground cover are the verge, however tall a blade: a clean edge.
   if sp.role == "carpet" or sp.kind == "grass" or sp.kind == "moss" then h = math.min(h, BASE_CLEAR.tall) end
-  local fg = ref("flora_gen")
   local foot0 = fg and fg.footprint and fg.footprint(sp) or nil
+  -- a fresh judgement for this layout (keep_cleared keeps what the audit took)
+  p.cleared = p.cleared or {}
+  local c = p.cleared[sp.id]
+  if not c or c.key ~= base_l.key then p.cleared[sp.id] = { key = base_l.key, ids = {}, done = false } end
+  p.judging[sp.id] = true
   -- body-relative centre: the planet moves on its rails while the job runs
-  clear_q[#clear_q + 1] = { id = id, p = p, sp = sp, pg = pager(id, L.x, L.y, L.z, L.r), F = nil, i = 1,
-                            h = h, foot0 = foot0, L = L }
-  return 1
+  clear_q[#clear_q + 1] = { judge = jid, p = p, sp = sp, pg = pager(jid, L.x, L.y, L.z, L.r), F = nil, i = 1,
+                            h = h, foot0 = foot0, L = L, key = base_l.key }
+  return true
+end
+
+local make_source, redeclare   -- (below)
+-- A judgement finished: the judge goes; a stand already drawing loses what was
+-- judged off it, all at once; one waiting for it is declared.
+local function judge_done(j, ok)
+  if scatter.destroy then scatter.destroy(j.judge) end
+  local p, sp = j.p, j.sp
+  if p.judging then p.judging[sp.id] = nil end
+  if patches[p.key] ~= p then return end          -- the patch went meanwhile
+  local c = p.cleared and p.cleared[sp.id]
+  if not ok or not c or c.key ~= j.key then return end
+  c.done = true
+  local live = p.srcs[sp.id]
+  if live and srcs[live] then
+    for iid in pairs(c.ids) do
+      scatter.remove(live, iid)
+      if p.bark[sp.id] then scatter.remove(p.bark[sp.id], iid) end
+    end
+    if p.redeclare_after and p.redeclare_after[sp.id] then
+      p.redeclare_after[sp.id] = nil
+      redeclare(p, sp)
+    end
+  elseif live == nil and p.dist and p.dist < sp.far * params.reach + 40 then
+    local cl, fg = ref("climate"), ref("flora_gen")
+    local w = cl and cl.worldOf(cur_body)
+    if fg and w then p.srcs[sp.id] = make_source(p, sp, fg, w) end
+  end
 end
 
 -- Judge queued props for CLEAR_MS (one prop at the least).
 local function clear_tick()
   if #clear_q == 0 then return end
   local t0 = clear_wall()
+  local gm = ref("game_manager")
+  local budget = (gm and gm.curtain) and CLEAR_MS_CURTAIN or CLEAR_MS
   local body = cur_body and space.body(cur_body)
   local n = 0
   while #clear_q > 0 do
     local j = clear_q[1]
-    if not (body and srcs[j.id]) then
-      table.remove(clear_q, 1)            -- the source went (or the world did)
+    if not body or patches[j.p.key] ~= j.p then
+      table.remove(clear_q, 1)            -- the patch went (or the world did)
+      judge_done(j, false)
     else
       local p, sp, L = j.p, j.sp, j.L
       if not j.F or j.i > j.F.count then
@@ -718,6 +825,7 @@ local function clear_tick()
       local F = j.F
       if not F then
         table.remove(clear_q, 1)          -- every page judged
+        judge_done(j, true)
       else
         local ids, sc, st, RX, RY, RZ = F.ids, F.scale, F.settled, F.rx, F.ry, F.rz
         while j.i <= F.count do
@@ -747,31 +855,32 @@ local function clear_tick()
           local keep = baseKeep(px, py, pz, j.h, foot)
           if keep < 1 then
             local roll = (((iid % 2147483647) * 48271 + 11) % 2147483647) / 2147483647
-            if roll >= keep then
-              scatter.remove(j.id, iid)
-              if p.bark[sp.id] then scatter.remove(p.bark[sp.id], iid) end
-              keep_cleared(p, sp.id, iid)
-            end
+            if roll >= keep then keep_cleared(p, sp.id, iid) end
           end
-          if n % 16 == 0 and (clear_wall() - t0) * 1000 >= CLEAR_MS then return end
+          if n % 16 == 0 and (clear_wall() - t0) * 1000 >= budget then return end
         end
-        -- (the next page, or the next source, while the frame's time lasts)
-        if (clear_wall() - t0) * 1000 >= CLEAR_MS then return end
+        -- (the next page, or the next stand, while the frame's time lasts)
+        if (clear_wall() - t0) * 1000 >= budget then return end
       end
     end
   end
 end
 
--- Sources declared before the base was sited (a new save's first patches):
--- cleared once the layout appears, or when it changes.
+-- Stands declared before the base was sited (a new save's first patches), or
+-- judged against a layout that has since changed: judged now, and what the
+-- judgement takes off goes in one frame.
 local function base_sweep()
   local L = base_layout()
   if not L or L.swept then return end
   L.swept = true
   local n = 0
+  local fg = ref("flora_gen")
   for id, sr in pairs(srcs) do
     local p = patches[sr.patch]
-    if p and sr.part ~= "bark" and sr.sp and p.srcs[sr.sp.id] == id then n = n + clear_base(id, p, sr.sp) end
+    if p and sr.part ~= "bark" and sr.sp and p.srcs[sr.sp.id] == id and sr.opts and needs_judging(p, sr.sp)
+       and judge_start(p, sr.sp, sr.opts, fg) then
+      n = n + 1
+    end
   end
   if n > 0 then diag(string.format("base sited: %d stands near its ground to judge", n)) end
 end
@@ -813,7 +922,7 @@ end
 -- for a node, see "touch"); trunks, cacti and succulents do not.
 local BEND_KIND = { grass = true, fern = true, reed = true, bush = true, shrub = true, moss = true }
 
-local function make_source(p, sp, fg, w)
+function make_source(p, sp, fg, w)
   local rows = p.rows
   local data, any = {}, false
   local sum = 0
@@ -828,6 +937,14 @@ local function make_source(p, sp, fg, w)
   if not any then return false end
   local far = sp.far * params.reach
   local seed = hash(w.seed or 1, p.face, p.sgn + 2, p.i + 50000, p.j + 50000, sp.id)
+  -- Where the stand's props are (the judge's options: JUDGED BEFORE IT IS
+  -- DRAWN, above). A stand that reaches the base is declared once judged.
+  local where = {
+    seed = seed, center = vec3(0, 0, 0), halfX = p.half, halfZ = p.half,
+    perChunk = sp.per, chunk = sp.chunk, align = sp.upright and "world" or "surface",
+    scaleMin = sp.scaleMin, scaleMax = sp.scaleMax, density = data, densityRows = rows, parent = p.name,
+  }
+  if needs_judging(p, sp) and judge_start(p, sp, where, fg) then return nil end
   local list = cuts_of(p.key, sp.id)
   local function declare(part)
     -- Every band cross-dissolves into the next, and the last into nothing
@@ -837,15 +954,8 @@ local function make_source(p, sp, fg, w)
       bands[#bands + 1] = { asset = fg.assetFor(sp, l, part), at = sp.lodAt[l + 1] or 1.0 }
     end
     local lod, fade = fg.fadeBands(bands, far, params.fade_out > 0 and fg.emptyAsset and fg.emptyAsset() or nil)
-    local opts = {
-      seed = seed,
-      center = vec3(0, 0, 0), halfX = p.half, halfZ = p.half,
-      perChunk = sp.per, chunk = sp.chunk, align = sp.upright and "world" or "surface",
-      scaleMin = sp.scaleMin, scaleMax = sp.scaleMax,
-      fade = fade, lod = lod,
-      density = data, densityRows = rows,
-      parent = p.name,
-    }
+    local opts = { fade = fade, lod = lod }
+    for k, v in pairs(where) do opts[k] = v end
     -- Each patch's stand of a species is shaded a little differently (a
     -- deterministic roll per patch): the engine already varies every prop's
     -- brightness ±15 %, and this keeps one hillside's grass from being the
@@ -878,14 +988,13 @@ local function make_source(p, sp, fg, w)
     -- …and what the base clearing took off here stays off (keep_cleared).
     local gone = cleared_of(p, sp.id)
     if gone then for iid in pairs(gone) do scatter.remove(id, iid) end end
-    srcs[id] = { patch = p.key, sp = sp, fill = sum / (rows * rows), part = part, made = time, tint = opts.tint }
+    srcs[id] = { patch = p.key, sp = sp, fill = sum / (rows * rows), part = part, made = time, tint = opts.tint,
+                 opts = where }
     return id
   end
   local id = declare(nil)
   if not id then return false end
   if sp.twin then p.bark[sp.id] = declare("bark") or nil end
-  local nb = clear_base(id, p, sp)
-  if nb > 0 then diag(string.format("judging the %s near the base on %s", sp.name or "plants", p.key)) end
   return id
 end
 
@@ -1002,10 +1111,19 @@ end
 -- The old sources keep drawing for `resettle_hold` seconds while the new
 -- ones' props settle in, then go (sweep_retiring): drop-then-declare left the
 -- stand missing for the frames its props took to arrive.
-local function redeclare(p, sp)
+function redeclare(p, sp)
+  -- Not judged against the base's layout yet: the stand keeps drawing as it
+  -- is until it has been, and is declared again then (judge_done).
+  local cur = p.srcs[sp.id] and srcs[p.srcs[sp.id]]
+  if cur and cur.opts and needs_judging(p, sp) and judge_start(p, sp, cur.opts, ref("flora_gen")) then
+    p.redeclare_after = p.redeclare_after or {}
+    p.redeclare_after[sp.id] = true
+    return
+  end
   for _, id in ipairs({ p.srcs[sp.id], p.bark[sp.id] }) do
     if id then
-      retiring[#retiring + 1] = { id = id, pk = p.key, spid = sp.id, t = time + params.resettle_hold }
+      retiring[#retiring + 1] = { id = id, pk = p.key, spid = sp.id, t = time + params.resettle_hold,
+                                  part = srcs[id] and srcs[id].part }
       srcs[id] = nil
     end
   end
@@ -1034,7 +1152,7 @@ end
 -- (`redeclare`: same seed, same plants, cuts kept, the old source drawn for
 -- resettle_hold seconds, so nothing blinks), one source a tick. A source
 -- near the base is judged against the paving again when it is redeclared
--- (make_source → clear_base), so nothing is left on a lot or the paving.
+-- (make_source: judged before it is drawn), so nothing is left on a lot or the paving.
 GROUND = { wait = 1.2, merge = 6.0, cap = 150.0, pad = 3.0, most = 48 }
 
 -- Fold an edit (centre, radius, time) into `list`: inside a region it only
@@ -1638,6 +1756,21 @@ function update(node, dt)
     clearAll()
     cur_body, bodyName = bname, bname
   end
+  -- THE BASE FIRST. On a new save the field used to start a second or more
+  -- before the base was laid out: the stands round the spawn were declared
+  -- with no clearing, drawn, and then judged and declared again once the
+  -- layout came (their density grids changed, so plants well off the paving
+  -- went too). Where a base is still to be laid out on this world, the field
+  -- waits for it (BASE_WAIT s at the most).
+  local bf = ref("base_facilities")
+  local bb = save.get("base.body")
+  if bf and not (type(bf.footprint) == "table" and bf.footprint.body == bname) and (bb == nil or bb == bname) then
+    base_wait_t = base_wait_t or time
+    if time - base_wait_t < BASE_WAIT then
+      diag("waiting for the base to be laid out")
+      return
+    end
+  end
   base_sweep()
   local w = cl.worldOf(bname)
   local species = w and fg.speciesFor(bname) or {}
@@ -1818,7 +1951,7 @@ function update(node, dt)
       for _, sp in ipairs(species) do
         local far = sp.far * params.reach
         local id = p.srcs[sp.id]
-        if id == nil and p.dist < far + 5 and built < 1 then
+        if id == nil and p.dist < far + 5 and built < 1 and not (p.judging and p.judging[sp.id]) then
           if count < params.max_props then
             p.srcs[sp.id] = make_source(p, sp, fg, w)
             built = built + 1

@@ -153,6 +153,7 @@ local function mix32(a)
   return a
 end
 local SRC, next_src = {}, 0
+local judges_made = 0   -- judge sources made (flora_field: judged before it is drawn)
 local near_refused = 0   -- `near` calls the height band answered with nothing
 -- Frames the engine's draw driver has run (it runs after the scripts' update
 -- each frame, and is what drops props onto the ground).
@@ -219,12 +220,14 @@ API.scatter = {
       assert(#o.density >= o.densityRows * o.densityRows, "density grid has rows² values")
     end
     for _, b in ipairs(o.lod or {}) do
-      local f = io.open("solar/" .. b.asset, "r")
+      -- (a script-built mesh, mesh.build's "mesh:N", is no file)
+      local f = b.asset:sub(1, 5) == "mesh:" and true or io.open("solar/" .. b.asset, "r")
       assert(f, "scatter asset exists on disk: " .. b.asset)
-      f:close()
+      if f ~= true then f:close() end
     end
     if o.tint then assert(#o.tint == 3, "tint is {r,g,b}") end
     next_src = next_src + 1
+    if o.lod and #o.lod == 1 and o.lod[1].asset == "mesh:empty" then judges_made = judges_made + 1 end
     o.id = next_src
     o.removed = {}
     o.born = DRAWN   -- settles once the draw driver has run after this
@@ -861,6 +864,71 @@ do
   local q, qd = {}, {}
   check("a job is queued once", ff.groundQueue(q, qd, "a", 3) and not ff.groundQueue(q, qd, "a", 3)
     and ff.groundQueue(q, qd, "a", 4) and #q == 2)
+end
+
+-- ── the base's ground: judged before it is drawn ────────────────────────────
+-- (playtest 2026-11-03: plants near the base popped in and out.) A stand that
+-- reaches the base is judged against its paving before it is declared, so no
+-- plant is ever DRAWN on a lot and then taken off; a stand declared again
+-- (the ground re-drop) is clear from its first frame.
+do
+  API.mesh = { build = function() return "mesh:empty" end, free = function() end }
+  -- a 30 x 30 m building lot under the crew, in a frame tangent at the crew's ground
+  local cx, cy, cz = 1, 0, 0
+  local F = { c = { x = cx, y = cy, z = cz }, eu = { x = 0, y = 0, z = 1 }, ev = { x = 0, y = 1, z = 0 } }
+  local function uv(p)
+    local l = math.sqrt(p.x * p.x + p.y * p.y + p.z * p.z)
+    local a = math.acos(math.max(-1, math.min(1, p.x / l))) * SURFACE
+    local tl = math.sqrt(p.y * p.y + p.z * p.z)
+    if tl < 1e-9 then return 0, 0 end
+    return a * p.z / tl, a * p.y / tl
+  end
+  envs.base_facilities = {
+    frameOf = function() return F end, uvOf = function(_, p) return uv(p) end,
+    FACILITIES = { { u = 0, v = 0, lot = { 30, 30 }, face = "S" } }, STRIPS = {}, FOOTPRINT_RADIUS = 60,
+    footprint = { body = BODY.name, x = SURFACE, y = 0, z = 0, radius = 60 },
+    keepClear = function(_, x, y, z) local u, v = uv({ x = x, y = y, z = z }); return math.abs(u) < 18 and math.abs(v) < 18 end,
+  }
+  store["base.body"], store["base.x"], store["base.y"], store["base.z"] = BODY.name, SURFACE, 0, 0
+  store["base.r"], store["base.heading"] = SURFACE, 0
+  -- every DRAWN prop (any source but a judge) standing on the lot itself
+  local function on_lot()
+    local n = 0
+    for _, src in pairs(SRC) do
+      local judge = src.lod and #src.lod == 1 and src.lod[1].asset == "mesh:empty"
+      if not judge then
+        local node = by_name[src.parent]
+        local ex, _, ez = axes_of(node)
+        for _, i in ipairs(live(src)) do
+          local u, v = uv({ x = node.x + ex[1] * i.lx + ez[1] * i.lz, y = node.y + ex[2] * i.lx + ez[2] * i.lz,
+                            z = node.z + ex[3] * i.lx + ez[3] * i.lz })
+          if math.abs(u) < 14 and math.abs(v) < 14 then n = n + 1 end
+        end
+      end
+    end
+    return n
+  end
+  ff.clearAll()
+  local worst, judged0 = 0, judges_made
+  for _ = 1, 160 do tick(1); worst = math.max(worst, on_lot()) end
+  check("stands by the base are judged before they are declared", judges_made > judged0 and ff.sources > 0,
+    (judges_made - judged0) .. " judged, " .. ff.sources .. " sources")
+  check("…no plant is ever drawn on a building's lot, not for a frame", worst == 0, worst .. " at the worst frame")
+  local judges = 0
+  for _, src in pairs(SRC) do if src.lod and #src.lod == 1 and src.lod[1].asset == "mesh:empty" then judges = judges + 1 end end
+  check("…and every judge is gone once it has judged", judges == 0, judges .. " judges left")
+  -- the ground re-dropped: every stand declared again, clear from its first frame
+  local judged1, made1 = judges_made, next_src
+  ff.groundChanged(ASTRO.x, ASTRO.y, ASTRO.z, 30.0, true)
+  worst = 0
+  for _ = 1, 60 do tick(1); worst = math.max(worst, on_lot()) end
+  check("a stand declared again by the base is clear at once, with no new judgement",
+    worst == 0 and next_src > made1 and judges_made == judged1,
+    string.format("%d on the lot, %d created, %d judged", worst, next_src - made1, judges_made - judged1))
+  ff.clearAll()
+  envs.base_facilities = nil
+  store["base.body"] = nil
+  API.mesh = nil
 end
 
 -- ── report ──────────────────────────────────────────────────────────────────
