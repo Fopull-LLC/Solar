@@ -1577,7 +1577,13 @@ local function stand_down(node, dt, ux, uy, uz, fx, fy, fz, on_ground, swimming)
   if model then
     local want
     local ct = is_held and ref("crew_task")
-    if ct and ct.aimNow and cl.activeId then
+    -- on a rope (rope_climb): face the wall the line hangs against
+    local rc = is_held and ref("rope_climb")
+    local rdx, rdy, rdz = nil, nil, nil
+    if rc and rc.faceDir then rdx, rdy, rdz = rc.faceDir() end
+    if rdx then
+      want = local_yaw(node, rdx, rdy, rdz)
+    elseif ct and ct.aimNow and cl.activeId then
       local ax, ay, az = ct.aimNow(cl.activeId())
       if ax then want = local_yaw(node, ax - node.x, ay - node.y, az - node.z) end
     else

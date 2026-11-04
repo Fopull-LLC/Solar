@@ -825,6 +825,7 @@ FP_ITEMS = {
   gascan = { prefab = "ItemGasCanFP", at = { -0.145, -0.450, -0.402 }, grip = { -0.005, 0.350, -0.048 } },
   beacon = { prefab = "ItemBeaconStowedFP", at = { 0.295, -0.465, -0.295 }, grip = { -0.095, 0.335, -0.205 } },
   flag = { prefab = "ItemFlagFurledFP", at = { 0.165, 0.057, -0.297 }, grip = { 0.035, -0.217, -0.183 } },
+  rope = { prefab = "ItemRopeKitFP", at = { -0.220, -0.340, -0.435 }, grip = { 0.070, 0.240, 0.005 } },
 }
 local vm = { layer = nil, bit = nil, cam = nil, making = false, on = false, main = nil }
 
@@ -2168,6 +2169,15 @@ local function e_taken()
   local rbs = rb and rb.getScript and rb:getScript("repair_bay")
   -- the bay draws its own prompt (service, pump), so the reticle stays quiet
   if rbs and rbs.prompting and rbs.prompting() then return "E is the repair bay's console", true end
+  -- a Rope Kit's line or davit within reach (rope_climb draws its own prompt;
+  -- most scenes have no RopeLib, so a miss is asked again only every 2 s)
+  -- (no new main-chunk local here: this file is at Lua's 200)
+  local rc = refs.rope_climb
+  if not (rc and rc.valid) and (time or 0) - (refs.rope_miss_t or -10) > 2.0 then
+    rc = findScript("rope_climb"); refs.rope_climb = rc
+    if not rc then refs.rope_miss_t = time or 0 end
+  end
+  if rc and rc.valid and rc.prompting and rc.prompting() then return "E is the rope's", true end
   return nil
 end
 

@@ -54,6 +54,8 @@ FLAG_ORIGIN = 0.9425
 KINDS = {
   flag = { prefab = "Flag", origin = FLAG_ORIGIN, item = "flag", label = "Flag" },
   remains = { prefab = "Remains", origin = 0.18, item = nil, label = "Remains" },
+  -- a Rope Kit's edge davit (scripts/rope.lua, rope_climb.lua; tools/gen_rope.py ORIGIN)
+  rope = { prefab = "RopePylon", origin = 0.75, item = "rope", label = "Rope" },
 }
 
 version = 0

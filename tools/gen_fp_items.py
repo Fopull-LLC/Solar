@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """First-person view models of the held items (playtest 2026-11-04: "add
 first-person models for holding each holdable item"): the Repair Kit, the
-Medkit, the Gas Can, the stowed Relay Beacon and the furled Company Flag, each
+Medkit, the Gas Can, the stowed Relay Beacon, the furled Company Flag and the
+Rope Kit (tools/gen_rope.py's bag), each
 in the crew's gloved hands (tools/fp_hands.py).
 
     python3 tools/gen_fp_items.py [item …]     (only those; default all)
@@ -55,6 +56,10 @@ _ITEMS = {}
 def item_mesh(key):
     """(the item's Model in its own frame, centred as its glb is, and the
     offset its generator's raw coordinates have to that centre)."""
+    if key == "rope":
+        import gen_rope as G
+        m, c, _ = G.centred(G.kit_model())
+        return m, c
     if key == "gascan":
         import gen_gas_parts as G
         m, c = recenter(G.gas_can())
@@ -121,6 +126,13 @@ DESIGNS = {
                    Y=(-0.10, 1.0, 0.18), Z=(0.0, 0.0, -1.0), at=(0.200, -0.130, -0.50),
                    grip=(0.0, LB * 0.875, 0.0), axis=(0, 1, 0), r=0.0415, side="R",
                    dorsal=(0.85, 0.0, 0.55), elbow=(0.27, -0.50, -0.10), slide=0.0),
+    # the Rope Kit's bag by the webbing grab handle across its mouth, a hook
+    # grip like the medkit's loop, the bag and the strapped davit hanging below
+    "rope": dict(prefab="ItemRopeKit", fp="ItemRopeKitFP", glb="fp_rope_kit.glb",
+                 about="ROPE KIT, first person — the rope bag carried by its grab handle in the left glove (scripts/tool_belt.lua FP_ITEMS).",
+                 Y=(0.10, 1.0, 0.30), Z=(0.30, -0.06, -1.0), at=(-0.150, -0.100, -0.43),
+                 grip=(-0.045, 0.320, 0.0), axis=(0, 0, 1), r=0.0085, side="L",
+                 dorsal=(-1.0, 0.55, 0.15), elbow=(-0.24, -0.48, -0.10), slide=0.0),
     # the furled flag by its pole, the sleeve leaning up and away
     "flag": dict(prefab="ItemFlagFurled", fp="ItemFlagFurledFP", glb="fp_flag_furled.glb",
                  about="COMPANY FLAG, first person — the furled flag carried by its pole in the right glove (scripts/tool_belt.lua FP_ITEMS).",

@@ -831,6 +831,14 @@ local function deploy_paint()
     local ux, uy, uz = req.ux, req.uy, req.uz
     local fx, fy, fz = 1 - ux * ux, -ux * uy, -ux * uz
     if fx * fx + fy * fy + fz * fz < 1e-4 then fx, fy, fz = 0, 0, 1 end
+    local a = req.d.faceOut and astro()
+    if a then
+      -- (a Rope Kit's boom points away from the crew, as deployables plants it)
+      local dx, dy, dz = x - a.x, y - a.y, z - a.z
+      local du = dx * ux + dy * uy + dz * uz
+      dx, dy, dz = dx - ux * du, dy - uy * du, dz - uz * du
+      if dx * dx + dy * dy + dz * dz > 1e-4 then fx, fy, fz = dx, dy, dz end
+    end
     g:setUp(vec3(ux, uy, uz), vec3(fx, fy, fz))
     g.x, g.y, g.z = x + ux * half, y + uy * half, z + uz * half
     if not g.visible then g.visible = true end

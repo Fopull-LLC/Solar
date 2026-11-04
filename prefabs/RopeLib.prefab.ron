@@ -1,0 +1,22 @@
+// ROPE LIBRARY — scripts/rope_climb.lua: clipping on to a Rope Kit's line,
+// climbing it, the prompts, and the lines' layouts. Spawned by the first rope
+// pylon in a scene that has none; reached with findScript("rope_climb").
+// Written by tools/gen_rope.py — edit the generator, not this file.
+[
+    (
+        name: "RopeLib",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [
+            (
+                kind: "rope_climb",
+                enabled: true,
+                params: [],
+            ),
+        ],
+    ),
+]

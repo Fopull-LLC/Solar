@@ -109,11 +109,21 @@ ITEMS = {
                 fill = { cap = 100, what = "cell" },
                 lamp = { key = "L", cone = 40, range = 30, hours = 4.0 },
                 about = "a clamp-on LED torch for the helmet: L lights the way after dark, in caves and in dust" },
+  -- THE ROPE KIT (scripts/rope_climb.lua, rope.lua): 30 m of 11 mm static
+  -- line (2.1 kg), a collapsible aluminium edge davit with its sheave and
+  -- brake drum (5.5 kg), four rock stakes, and a battery rope ascender with
+  -- its descender (3.4 kg): 12 kg and 22 L in its canvas bag. Planted at an
+  -- edge, its line drops up to 30 m; E clips on, W and S climb and lower.
+  rope      = { name = "Rope Kit",      kind = "deployable", kg = 12.0, L = 22, cost = 180,  shop = true,
+                hold = { prefab = "ItemRopeKit", grip = "shoulder" },
+                deploy = { store = "deployables", kind = "rope", ghost = "RopePylonGhost", bad = "RopePylonGhostBad",
+                           slope = 0.6, spacing = 3.0, pick = 2.2, secs = 3.0, faceOut = true },
+                about = "an edge davit, 30 m of static line and a powered ascender: set it at a drop, clip on (E), climb with W and S" },
 }
 
 -- The belt's order: tools first, then devices and deployables, then
 -- consumables with a hold. (Worn items are never on the belt.)
-ORDER = { "gravgun", "laser", "surveyor", "beacon", "flag", "repairkit", "medkit", "gascan", "rcspack", "o2tank", "flashlight" }
+ORDER = { "gravgun", "laser", "surveyor", "beacon", "flag", "rope", "repairkit", "medkit", "gascan", "rcspack", "o2tank", "flashlight" }
 
 -- The Medkit's work (crew.lua runs it): seconds held at it, what it gives,
 -- and the reach from the medic to the patient (m).
@@ -289,6 +299,11 @@ function card(id, live)
     row("Beam", string.format("a %.0f° warm-white spot, about %.0f m of throw", d.lamp.cone, d.lamp.range))
     row("Switch", string.format("%s, on foot; it rides strapped to the helmet", d.lamp.key))
     row("Battery", string.format("%.0f h of light; dims under 10%%; charges aboard or at the base", d.lamp.hours))
+  elseif id == "rope" then
+    row("Line", "30 m of 11 mm static line over a sheave on a 1.4 m edge davit")
+    row("Climb", "a powered ascender: about 0.8 m/s up at 1 g with a full pack, faster on light worlds")
+    row("Lower", "1.6 m/s through the descender (SHIFT 2.8)")
+    row("Set", "at a ledge or cliff edge, boom out over the drop; 3 s to stake it; hold E at it to take it down")
   end
   row("Price", string.format("$%d", d.cost or 0))
   row("Sells back", string.format("$%d (%s)", sellPrice(id), pct(SELL_BACK)))
