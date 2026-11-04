@@ -111,8 +111,11 @@ do
   check(by[29].att == "surface", "normalize: a weld attaches as a surface joint")
   local kids = SPLIT.kids(parts)
   -- the crew in the cockpit: the ROCKET is what leaves, the jet stays with them
+  -- (the spent decoupler goes with the rocket it sits on: playtest 11-03c)
   local dep = SPLIT.sides(by, kids, 49, 29)
-  check(set_eq(dep, ROCKET), "crew in the jet: the rocket leaves (" .. keys(dep) .. ")")
+  local rk = { 49 }
+  for _, u in ipairs(ROCKET) do rk[#rk + 1] = u end
+  check(set_eq(dep, rk), "crew in the jet: the rocket leaves, the decoupler with it (" .. keys(dep) .. ")")
   -- no crew aboard, the controls on the rocket (a probe there): the jet leaves whole
   dep = SPLIT.sides(by, kids, 49, 46)
   local want = { 49 }
@@ -141,9 +144,11 @@ do
   local bu = { rec(1, 0, ""), rec(2, 1, "top"), rec(3, 2, "top", { decouple = 1 }), rec(4, 3, "top"),
                rec(5, 4, "top"), rec(6, 5, "top", { decouple = 1 }), rec(7, 6, "top"), rec(8, 7, "top", { kind = "crewed" }) }
   by, kids = by_of(bu), SPLIT.kids(bu)
-  check(set_eq(SPLIT.sides(by, kids, 3, 8), { 1, 2 }), "bottom-up: the first cut drops the stage below, the decoupler stays up")
-  gone = { [1] = true, [2] = true }
-  check(set_eq(SPLIT.sides(by, kids, 6, 8, function(u) return not gone[u] end), { 3, 4, 5 }), "bottom-up: the second cut")
+  -- the spent decoupler drops with the stage below, not stuck on the upper
+  -- engine (playtest 11-03c)
+  check(set_eq(SPLIT.sides(by, kids, 3, 8), { 1, 2, 3 }), "bottom-up: the first cut drops the stage below and its decoupler")
+  gone = { [1] = true, [2] = true, [3] = true }
+  check(set_eq(SPLIT.sides(by, kids, 6, 8, function(u) return not gone[u] end), { 4, 5, 6 }), "bottom-up: the second cut")
 end
 
 -- ── 3. radial boosters, a symmetric pair, and a booster on a booster ───────
@@ -178,7 +183,7 @@ do
   check(by[10].parent == 11 and by[10].att == "top", "the lander's pod hangs back on its tank's top (" .. tostring(by[10].parent) .. "/" .. tostring(by[10].att) .. ")")
   check(by[13].parent == 10, "and what was built on the pod stays on it")
   local dep = SPLIT.sides(by, SPLIT.kids(l), 2, 10)
-  check(set_eq(dep, { 1 }), "crew in the lander: the carrier leaves (" .. keys(dep) .. ")")
+  check(set_eq(dep, { 1, 2 }), "crew in the lander: the carrier leaves with its decoupler (" .. keys(dep) .. ")")
   -- a tree hung by a part deep inside it turns round on the way to its root
   local m = { rec(1, 0, ""), rec(20, 0, ""), rec(21, 20, "top"), rec(22, 21, "top") }
   SPLIT.normalize(m, { { a = 1, b = 22, k = "surface", sa = "surface", sb = "surface" } }, 1)

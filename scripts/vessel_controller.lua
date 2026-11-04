@@ -1239,7 +1239,7 @@ end
 -- decoupler `dec` fires: the cut is the decoupler's own joint (dec → its
 -- parent); the decoupler leaves with what is built onto it, unless `keep`
 -- (the part the crew sits in, else the command part) is on that side — then
--- the parent's side leaves and the decoupler stays with the crew. A radial
+-- the parent's side leaves and takes the decoupler with it. A radial
 -- decoupler is the same cut: a jet hung on a rocket's radial decoupler with
 -- the crew in the jet keeps the jet and drops the rocket. `alive(u)` (optional)
 -- says a part is still aboard.
@@ -1367,7 +1367,11 @@ function SPLIT.sides(by, kids, dec, keep, alive)
   if p ~= 0 and ok(p) then
     local sub = grow(dec)
     if keep and sub[keep] and keep ~= dec then
-      local inv = {}
+      -- the crew is on the side built onto it (a craft built bottom up): the
+      -- parent's side leaves, and the spent decoupler goes WITH it, as it
+      -- would off the stage it sits on (playtest 11-03c: it stayed on the
+      -- firing upper engine)
+      local inv = { [dec] = true }
       for u in pairs(by) do if not sub[u] and ok(u) then inv[u] = true end end
       return inv
     end
