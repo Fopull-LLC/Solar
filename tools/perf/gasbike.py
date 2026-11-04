@@ -77,6 +77,8 @@ def part_entry(pid):
             d[k] = v.strip('"') if v.startswith('"') else float(v)
         mods.append(d)
     out["mods"] = mods
+    af = re.search(r'\baf = "([^"]*)"', body)
+    out["af"] = af.group(1) if af else None
     return out
 
 
@@ -90,6 +92,8 @@ def record(base, uid, pid, x, y, z, yaw, pitch, roll, parent, att, extra=None):
                   parent=parent, att=att, mir="", wheel="", robo=""))
     if e["mods"]:
         r["mods"] = e["mods"]
+    if e["af"]:
+        r["af"] = e["af"]
     if extra:
         r.update(extra)
     return r
@@ -106,13 +110,25 @@ def main():
     for p in bp["parts"]:
         for k in ("x", "y", "z", "yaw", "pitch", "roll"):
             p[k] = dec(p[k])
+        # (the registry's aero spec, as the VAB's rollout gives it: the
+        # library file predates it)
+        try:
+            af = part_entry(p["id"])["af"]
+        except ValueError:
+            af = None
+        if af and not p.get("af"):
+            p["af"] = af
     sad, gy, arm, rw, fw = P[3], P[6], P[8], P[9], P[5]
     E = part_entry(eng)
     m = E["mods"][0]
     hy = E["h"] / 2
     # the engine on the saddle's bottom, where the gyro was
     ey = sad["y"] - sad["h"] / 2 - hy
-    ex = sad["x"]
+    # (set back by its length past the 250's, so the gyro on its front face
+    # sits where it does on the 250 and clears the fork: on the 500, 3 cm
+    # further forward, the builder's launch check called the gyro buried in
+    # the fork)
+    ex = sad["x"] - (E["rx"] - 0.18)
     EU = 20
     engine = record(bp, EU, eng, ex, ey, sad["z"], 0.0, 0.0, 0.0, 3, "bottom")
     # the gyro on the engine's front face
@@ -149,7 +165,7 @@ def main():
     if pure:
         fw["wcfg"] = {"drive": "off"}
     links = [l for l in bp.get("links", []) if not (l.get("b") in (6, 8))]
-    links += [dict(a=3, b=EU, k="stack", sa="bottom", sb="top", prim=1, pa=dict(x=0, y=-sad["h"] / 2, z=0), pb=dict(x=0, y=hy, z=0), n=dict(x=0, y=-1, z=0)),
+    links += [dict(a=3, b=EU, k="stack", sa="bottom", sb="top", prim=1, pa=dict(x=ex - sad["x"], y=-sad["h"] / 2, z=0), pb=dict(x=0, y=hy, z=0), n=dict(x=0, y=-1, z=0)),
               dict(a=EU, b=6, k="surface", sa="surface", sb="surface", prim=1, pa=dict(x=E["rx"], y=0, z=0), pb=dict(x=-gy["rx"], y=0, z=0), n=dict(x=1, y=0, z=0)),
               dict(a=EU, b=8, k="surface", sa="surface", sb="surface", prim=1, pa=dict(x=-E["rx"], y=arm["y"] - ey, z=0), pb=dict(x=-arm["rx"], y=0, z=0), n=dict(x=-1, y=0, z=0)),
               dict(a=6, b=TU, k="stack", sa="top", sb="bottom", prim=1, pa=dict(x=0, y=gy["h"] / 2, z=0), pb=dict(x=0, y=-T["h"] / 2, z=0), n=dict(x=0, y=1, z=0)),

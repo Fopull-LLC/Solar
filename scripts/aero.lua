@@ -15,6 +15,15 @@
 --     BEHIND another in the flow — the next tank down a stack, the engine under
 --     it — has its end faces hidden by however much of it the part ahead
 --     covers (a simple occlusion of the two parts' discs seen along the flow).
+--     The wake hides every face the part shows the flow, not only its ends:
+--     a bike's rear wheel rides behind its front one, a radial booster in a
+--     crossflow behind the core.
+--   * OPEN FRAMES. A part whose box is mostly air (a fork's two tubes and its
+--     bars, a spoked wheel, a swing arm, a lattice) carries `fill` in its spec:
+--     the share of its box's silhouette that is solid. Its drag is that share
+--     of a solid box's, and it hides only that share of what is behind it.
+--     (Playtest 2026-11-03c: a dirt bike's boxes drew 2.7 m² of drag area, a
+--     real bike and rider 0.6–0.9, and its 500 topped out at 26 m/s of 31.)
 --
 --   * LIFT. A lifting surface (a wing, a fin, a control surface, a rocket's
 --     tail fins) is a thin plate: span along its local +X (out from the root),
@@ -386,10 +395,12 @@ function build(parts, opts)
           side, cf, cb, round = 0.55, 0.25, 0.8, true
         end
         local Ay = round and PI * hx * hz or 4 * hx * hz
+        -- (an open frame: the solid share of its silhouette, `fill`)
+        local fill = clamp(tonumber(a and a.fill) or 1, 0.02, 1)
         M.bodies[#M.bodies + 1] = {
           uid = d.uid, X = X, Y = Y, Z = Z, x = bx, y = by, z = bz,
           Ax = 4 * hy * hz * sf, Ay = Ay * sf, Az = 4 * hx * hy * sf,
-          cdx = side, cdz = side, cdF = cf, cdB = cb, sh = 0.0,
+          cdx = side, cdz = side, cdF = cf, cdB = cb, sh = 0.0, fill = fill,
         }
       end
       if a and a.jet then
@@ -416,7 +427,8 @@ local function lens(r1, r2, d)
 end
 
 -- For motion along unit u (craft frame), each body's shielded share: how much
--- of its disc, seen along the flow, a part AHEAD of it covers (×SHIELD).
+-- of its disc, seen along the flow, a part AHEAD of it covers (×SHIELD, × the
+-- solid share of the part ahead: an open frame hides little).
 function shield(M, ux, uy, uz)
   local B = M.bodies
   local n = #B
@@ -437,7 +449,7 @@ function shield(M, ux, uy, uz)
         local dx, dy, dz = qx[i] - qx[j], qy[i] - qy[j], qz[i] - qz[j]
         local d = sqrt(dx * dx + dy * dy + dz * dz)
         if d < R[i] + R[j] then
-          local c = lens(R[i], R[j], d) / (PI * R[i] * R[i])
+          local c = lens(R[i], R[j], d) / (PI * R[i] * R[i]) * (B[j].fill or 1)
           if c > cov then cov = c end
         end
       end
@@ -481,8 +493,8 @@ function bodyForce(b, vx, vy, vz, rho, mk)
   local cx = ux * b.X.x + uy * b.X.y + uz * b.X.z
   local cy = ux * b.Y.x + uy * b.Y.y + uz * b.Y.z
   local cz = ux * b.Z.x + uy * b.Z.y + uz * b.Z.z
-  local cda = abs(cx) * b.Ax * b.cdx + abs(cz) * b.Az * b.cdz
-            + abs(cy) * b.Ay * (cy > 0 and b.cdF or b.cdB) * (1 - (b.sh or 0))
+  local cda = (abs(cx) * b.Ax * b.cdx + abs(cz) * b.Az * b.cdz
+            + abs(cy) * b.Ay * (cy > 0 and b.cdF or b.cdB)) * (1 - (b.sh or 0)) * (b.fill or 1)
   local k = -0.5 * rho * V2 * cda * (mk or 1) / 1000.0
   return k * ux, k * uy, k * uz
 end

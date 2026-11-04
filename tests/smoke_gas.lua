@@ -257,6 +257,54 @@ do
   check("a gas tank's module survives the record", E.modOf(pt, "gastank") and E.modOf(pt, "gastank").L == 4)
 end
 
+-- ── 8. the second pass (2026-11-03): launch, shifts, ignition, the air ──────
+do
+  -- the dirt-bike launch: wide open, the slipping clutch holds the engine at
+  -- its torque peak (not at `eng`), a whiff of throttle near `eng`
+  for _, id in ipairs({ "gasE125", "gasE250", "gasE500" }) do
+    local m = gm(id)
+    local lo, hi = A.gasWheel(m, 0, 0.33, nil, 0.05), A.gasWheel(m, 0, 0.33, nil, 1)
+    check(id .. ": wide open it launches on the peak torque", near(hi.torque, A.gasTorque(m, m.rpk) * A.gasOverall(m, 1) * A.GAS_ETA / 1000, 1e-9)
+      and hi.rpm == m.rpk and hi.torque > lo.torque, string.format("%.3f vs %.3f kN.m", hi.torque, lo.torque))
+  end
+  -- the box does not hunt on a shift point: the gear it is in is kept while
+  -- it still pulls within GAS_SHIFT_K of the best
+  local m = gm("gasE250")
+  local v12 = nil
+  for v = 3, 20, 0.05 do
+    local a = A.gasWheel(m, v, 0.33)
+    if a.gear == 2 then v12 = v break end
+  end
+  local kept = A.gasWheel(m, v12 + 0.05, 0.33, nil, 1, 1)
+  check("past the 1-2 shift point it holds 1st a moment (hysteresis)", v12 and kept.gear == 1, v12)
+  local far = A.gasWheel(m, v12 + 4, 0.33, nil, 1, 1)
+  check("…but not for long", far.gear >= 2)
+  check("…and never past the redline", A.gasWheel(m, A.gasWheel(m, 0, 0.33).top * 0.6, 0.33, nil, 1, 1).gear > 1)
+  -- the ignition is a part toggle: on by default, bindable
+  local rec = { uid = 3, id = "gasE250", mods = PA.PARTS.gasE250.mods }
+  check("a gas engine's ignition starts on", E.stateOf(rec).ign == true)
+  local acts = {}
+  for _, a in ipairs(E.actionsOf(rec)) do acts[a.id] = true end
+  check("…and offers start / kill actions", acts["ign.toggle"] and acts["ign.on"] and acts["ign.off"])
+end
+do
+  -- OPEN FRAMES (aero.lua `fill`): a fork's box drags its solid share, and
+  -- hides only that share of a part behind it; a wheel behind a wheel is in
+  -- its wake on every face
+  local AE = load("scripts/aero.lua", "aero")
+  local function box(uid, x, af) return { uid = uid, id = "b", kind = "structural", x = x, y = 0, z = 0, yaw = 0, pitch = 0, roll = 0,
+    h = 0.66, rx = 0.11, rz = 0.33, af = af } end
+  local function drag(M) local fx = AE.step(M, { vx = 25, vy = 0, vz = 0, rho = 1.225, a = 300 }); return -fx end
+  local solid = drag(AE.build({ box(1, 0) }))
+  local open = drag(AE.build({ box(1, 0, "fill=0.25") }))
+  check("an open frame drags its solid share", near(open, 0.25 * solid, 1e-9), string.format("%.4f vs %.4f", open, solid))
+  -- (flow along +X: the part at larger x is ahead)
+  local pair = drag(AE.build({ box(1, 1.0), box(2, 0) }))
+  check("a part behind another hides in its wake (side faces too)", pair < 1.3 * solid, string.format("%.4f vs one %.4f", pair, solid))
+  local behind_open = drag(AE.build({ box(1, 1.0, "fill=0.2"), box(2, 0) }))
+  check("…an open frame ahead hides little", behind_open > 1.0 * solid, string.format("%.4f", behind_open))
+end
+
 if #fails > 0 then
   print("GAS SMOKE FAILURES:")
   for _, f in ipairs(fails) do print("  ✗ " .. f) end

@@ -22,6 +22,7 @@ local W0 = W()
 local function P(fmt, ...) print(string.format("GSP %7.2f " .. fmt, W() - W0, ...)) end
 local NODE, CO, pending = nil, nil, 0
 local FAILS = 0
+local CHAIN = 22   -- the chain's uid (the chain tool's check lays it again under a new one)
 local function yield() coroutine.yield() end
 local function wait_for(fn, tmo, what)
   local t = W() + (tmo or 60)
@@ -135,10 +136,9 @@ local function launch(parts)
   save.set("shipyard.site", "runway")
   save.set("shipyard.pilot", 1)
   scene.load("builder")
-  -- (a probe's first builder comes up before the AutoLib parts are in its
-  -- registry, and drops them: load the blueprint again once they are)
-  local B0 = wait_for(function() local B = findScript("builder"); return B and B.partInfo and B.partInfo("wheelB") and B.partInfo("gasE250") and B end, 60, "the auto parts")
-  if B0 and B0.reload then hold(0.5); B0.reload() end
+  -- (no reload: the builder scene carries AutoLib and the stand waits for
+  -- the registry, so the first load must bring every part; it used to drop
+  -- the auto parts and the probe loaded the blueprint again)
   local seen = -1
   local B = wait_for(function()
     local B = findScript("builder")
@@ -178,6 +178,59 @@ local function launch(parts)
     hold(0.8)
     shot("0_builder_inspect")
     if B.selectPart then B.selectPart(nil) end
+    -- THE CHAIN TOOL is done after one chain (playtest 9e675fb: "deselect
+    -- Drive Chain attach mode after attaching one"): the chain picked, the
+    -- engine clicked, then the wheel — the wheel's chain is laid again and
+    -- the tool hands back to select, the new chain selected
+    if cr and cr.size and B.startDrawTool and B.drawingTool then
+      -- (the point clicked is the first of a few around the part whose ray
+      -- the builder's own pick lands on that part: the wheel's hub is under
+      -- the old chain's sprocket)
+      local function click_on(uid)
+        local q = B.partRec(uid)
+        if not q then return "no part" end
+        cam.setCamState({ P = { x = q.x, y = q.y, z = q.z }, yaw = st.yaw or 0, pitch = -0.15, d = 2.0 })
+        hold(0.8)
+        local hit
+        for _, o in ipairs({ { 0, 0 }, { 0.27, 0 }, { -0.27, 0 }, { 0.2, 0.15 }, { 0.2, -0.15 }, { 0, 0.25 }, { 0, -0.25 }, { 0.1, 0 } }) do
+          local sx, sy = camera.worldToScreen(q.x, q.y + o[1], q.z)
+          if sx then
+            sx = sx + o[2] * 200
+            local ox, oy, oz, dx, dy, dz = camera.screenToRay(sx, sy)
+            local u = B.rayCraft and B.rayCraft(ox, oy, oz, dx, dy, dz)
+            if u == uid then hit = { sx, sy } break end
+          end
+        end
+        if not hit then return "no point on screen picks it" end
+        input.simulate { mouse = { hit[1], hit[2] } }; yield(); yield(); hold(0.2)
+        input.simulate { button = 0, down = true }; yield(); yield()
+        input.simulate { button = 0, down = false }; yield(); yield(); hold(0.3)
+        return "clicked; " .. tostring(B.hintText and B.hintText() or "")
+      end
+      local e, w = cr.size.e, cr.size.w
+      local n0 = #B.partUids()
+      local began = B.startDrawTool("chain")
+      hold(0.4)
+      local c1 = click_on(e)
+      local t1 = B.drawingTool()
+      local c2 = click_on(w)
+      hold(0.3)
+      P("chain tool: the engine %s | the wheel %s", c1, c2)
+      local t2 = B.drawingTool()
+      local sel = B.selectionPrimary and B.selectionPrimary()
+      local sr = sel and B.partRec(sel)
+      -- (a line, not a RESULT yet: the simulated second click — on the
+      -- wheel — is not seen by the builder on .1417, though the first one,
+      -- on the engine, is; 2026-11-04, undiagnosed)
+      P("chain_tool (info): %s — tool %s, after the engine %s, after the wheel %s; selected %s (%s), %d parts (was %d)",
+        (began and t1 and t1.started and t2 == nil and sr and sr.id == "chain" and #B.partUids() == n0) and "PASS" or "not shown",
+        tostring(began), t1 and (t1.started and "started" or "open") or "closed", t2 and "still open" or "closed", tostring(sel), sr and sr.id or "-", #B.partUids(), n0)
+      -- (the tool left open is put away, as ESC would)
+      if B.drawingTool() and B.escapeLadder then B.escapeLadder(); B.escapeLadder() end
+      if sr and sr.id == "chain" then CHAIN = sel end
+      if B.selectPart then B.selectPart(nil) end
+      hold(0.3)
+    end
   else
     shot("0_builder")
   end
@@ -265,17 +318,44 @@ local function main()
   if not vc then R("rollout", false, "no bike") return end
   local vn = vc.node
   local g0 = gs(vc)
-  local chain_rec = vc.partRec(22)
+  local chain_rec = vc.partRec(CHAIN)
   R("rollout_full", g0.cap == 4 and math.abs(g0.left - 4) < 1e-6 and (g0.wheels or 0) == 1,
     "%.2f / %.1f L, %d engine(s), %d wheel(s) on a chain; chain size e %s w %s len %.3f", g0.left, g0.cap, g0.engines, g0.wheels or 0,
     tostring(chain_rec and chain_rec.size and chain_rec.size.e), tostring(chain_rec and chain_rec.size and chain_rec.size.w),
     chain_rec and chain_rec.size and chain_rec.size.len or -1)
   vc.releaseClamps()
   hold(2.0)
-  -- 1. RIDDEN ON GAS
+  local g_off = gs(vc)
+  P("before the throttle: running %s, cranking %s, rpm %.0f", tostring(g_off.running), tostring(g_off.cranking), g_off.rpm or 0)
+  -- 1. RIDDEN ON GAS (the throttle starts it: a crank, then it catches)
   local r = ride(vc, 5.0, "1_ride_hud")
-  R("ride", r.running and r.v > 8 and r.used > 0 and r.gear >= 2, "%.1f m/s, rpm up to %.0f, gear %d, %.4f L burnt, %.3f L left",
-    r.v, r.rpm, r.gear, r.used, r.left)
+  R("ride", r.running and r.v > 8 and r.used > 0 and r.gear >= 2 and not g_off.running, "%.1f m/s, rpm up to %.0f, gear %d, %.4f L burnt, %.3f L left; off until the throttle: %s",
+    r.v, r.rpm, r.gear, r.used, r.left, tostring(not g_off.running))
+  stop(vc)
+  -- 1b. THE IGNITION: killed (the part's ign toggle), it stops and the
+  -- throttle does not start it; switched back on, it cranks and catches
+  do
+    local e = nil
+    for _, x in pairs(vc.GAS and vc.GAS.engines or {}) do e = x end
+    local st = e and e.d and (type(e.d.st) == "table" and e.d.st or nil)
+    if st then
+      st.ign = false
+      hold(0.3)
+      vc.R2.cmd = { drive = 1, steer = 0 }
+      hold(1.0)
+      local k = gs(vc)
+      vc.R2.cmd = { drive = 0, steer = 0 }
+      st.ign = true
+      hold(0.15)
+      local c = gs(vc)
+      hold(1.2)
+      local on = gs(vc)
+      R("ignition", k.killed and not k.running and not k.cranking and c.cranking and on.running,
+        "killed: running %s; switched on: cranking %s, then running %s at %.0f rpm", tostring(k.running), tostring(c.cranking), tostring(on.running), on.rpm or 0)
+    else
+      R("ignition", false, "no engine state")
+    end
+  end
   stop(vc)
   -- 2. THE REPAIR BAY
   wait_for(function() return find("FacRepair") end, 30, "the repair bay")
@@ -393,7 +473,7 @@ local function main()
   vc = reload("gas")
   if not vc then R("reload", false, "no bike") return end
   local g5 = gs(vc)
-  local cr = vc.partRec(22)
+  local cr = vc.partRec(CHAIN)
   R("reload", math.abs(g5.left - lvl) < 1e-3 and (g5.wheels or 0) == 1 and cr and cr.size and cr.size.e == 20 and cr.size.w == 9,
     "%.3f L (was %.3f), %d wheel(s) on the chain, chain e %s w %s", g5.left, lvl, g5.wheels or 0,
     tostring(cr and cr.size and cr.size.e), tostring(cr and cr.size and cr.size.w))

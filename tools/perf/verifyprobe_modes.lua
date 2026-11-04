@@ -155,6 +155,45 @@ function V.ground(vc, F, U, from_d, to_d, grade, rel0)
   end
   wait_for(function() return (terrain.pending and terrain.pending() or 0) == 0 end, 25, "sculpt")
   wait(0.8)
+  -- LEVEL GROUND, CHECKED (2026-11-03): past ~400 m the natural ground lies
+  -- far from the start's sphere, one flatten pass left 2-10 cm scallops a
+  -- stroke apart, and a bike at 24+ m/s bottomed both suspensions on them.
+  -- Up to V.GROUND_PASSES more passes, each only where the centreline still
+  -- sits more than V.GROUND_TOL off the sphere (raycast). `JP ground pass`
+  -- lines say how many points were left each time.
+  if grade == 0 then
+    local R0 = len(rel0.x, rel0.y, rel0.z)
+    -- (the craft and its live tyres out of the rays: the 60 cm "ridge" at
+    -- the start was the bike's own tyres)
+    local ign = { vc.node }
+    for _, w in ipairs(vc.R2 and vc.R2.wheels or {}) do if w.tyre and w.tyre.valid then ign[#ign + 1] = w.tyre end end
+    for pass = 1, V.GROUND_PASSES or 3 do
+      local redo, worst, worst_d, redo_at = 0, 0, nil, {}
+      local dd = from_d
+      while dd <= to_d do
+        local bb = home()
+        local nn = unit({ x = rel0.x + F.x * dd, y = rel0.y + F.y * dd, z = rel0.z + F.z * dd })
+        local p = { x = bb.x + nn.x * R0, y = bb.y + nn.y * R0, z = bb.z + nn.z * R0 }
+        local h = raycast(p.x + nn.x * 8, p.y + nn.y * 8, p.z + nn.z * 8, -nn.x, -nn.y, -nn.z, 20, { ignore = ign })
+        local off = h and math.abs(8 - h.distance) or 1
+        if off > worst then worst, worst_d = off, dd end
+        if off > (V.GROUND_TOL or 0.02) and #redo_at < 12 then redo_at[#redo_at + 1] = string.format("%.0f:%.0f", dd, 100 * (h and (8 - h.distance) or -1)) end
+        if off > (V.GROUND_TOL or 0.02) then
+          redo = redo + 1
+          for _, lat in ipairs({ -1.4, 0, 1.4 }) do
+            local q = { x = p.x + L.x * lat, y = p.y + L.y * lat, z = p.z + L.z * lat }
+            terrain.sculpt(q.x, q.y, q.z, 1.9, 1.0, "flatten", { normal = vec3(nn.x, nn.y, nn.z) })
+            made = made + 1
+          end
+        end
+        dd = dd + 0.45
+      end
+      P("JP ground pass %d: %d points over %.0f cm (worst %.1f cm at %.0f m; d:cm %s)", pass, redo, 100 * (V.GROUND_TOL or 0.02), 100 * worst, worst_d or -1, table.concat(redo_at, " "))
+      if redo == 0 then break end
+      wait_for(function() return (terrain.pending and terrain.pending() or 0) == 0 end, 25, "sculpt")
+      wait(0.5)
+    end
+  end
   return rel0, made
 end
 -- the grade along the centreline (mean, steepest 3 m) between d0 and d1

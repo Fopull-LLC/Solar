@@ -381,20 +381,42 @@ end
 --   gear    which one it is in
 --   kw      the power that torque is at this rpm (what full throttle burns)
 --   ratio   the overall ratio in that gear
-function gasWheel(m, v, r, teeth)
+-- thr (0…1, optional): the throttle. A rider pulling away hard holds the
+-- engine on the clutch where it pulls (the dirt-bike launch): the slipping
+-- clutch holds it at `eng` on a whiff of throttle and up toward the torque
+-- peak `rpk` wide open, and passes that torque on. (Held at `eng` always,
+-- a 125 left the line on 79% of its torque.)
+-- keep (optional): the gear it is in now. It stays there while that gear
+-- still pulls within GAS_SHIFT_K of the best (and is under the redline), so a
+-- road speed sitting on a shift point does not hunt between two gears.
+GAS_SHIFT_K = 0.96
+function gasWheel(m, v, r, teeth, thr, keep)
   r = math.max(0.05, r or 0.33)
   local w = math.abs(v or 0) / r                 -- wheel rad/s
   local G = gasGears(m)
   local eng, red = m.eng or 3000, m.red or 10000
-  local best, bg, brpm, bratio = -1, 1, eng, gasOverall(m, 1, teeth)
+  local slip = eng
+  if thr and thr > 0 then
+    slip = eng + (math.max(eng, math.min(red, m.rpk or eng)) - eng) * math.min(1, thr)
+  end
+  local best, bg, brpm, bratio = -1, 1, slip, gasOverall(m, 1, teeth)
   for i = 1, #G do
     local ratio = gasOverall(m, i, teeth)
     local rpm = w * ratio * RPM
     if rpm <= red or i == #G then
-      local run = math.max(rpm, eng)
+      local run = math.max(rpm, slip)
       local t = gasTorque(m, math.min(run, red)) * ratio
       if rpm > red then t = 0 end
       if t > best then best, bg, brpm, bratio = t, i, run, ratio end
+    end
+  end
+  if keep and keep ~= bg and keep >= 1 and keep <= #G then
+    local ratio = gasOverall(m, keep, teeth)
+    local rpm = w * ratio * RPM
+    if rpm <= red then
+      local run = math.max(rpm, slip)
+      local t = gasTorque(m, math.min(run, red)) * ratio
+      if t >= best * GAS_SHIFT_K then best, bg, brpm, bratio = t, keep, run, ratio end
     end
   end
   local top = red / gasOverall(m, #G, teeth) / RPM * r

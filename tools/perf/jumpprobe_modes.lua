@@ -224,16 +224,32 @@ function JP.bike(name)
   local bp = V.dirtbike()
   if not bp then V.check("craft", false, "no craft file"); V.result(); return end
   local seat
-  for _, d in ipairs(bp.parts) do if (d.seat == 1 or d.seat == true) then seat = d.uid end end
+  JP.ids = {}
+  for _, d in ipairs(bp.parts) do JP.ids[d.uid] = d.id; if (d.seat == 1 or d.seat == true) then seat = d.uid end end
   local vc = iv_launch(bp.parts, { links = bp.links, root = bp.root, v = bp.v, name = "Dirt Bike", controls = bp.controls, groups = bp.groups, turned = bp.turned },
     "runway", seat and { { uid = seat, slot = 1, id = 1 } } or nil)
   if not vc then V.check("rollout", false, "no craft"); V.result(); return end
+  -- A/B switches: ride2=0 the rider before BIKE_RIDE2; ftrav / rtrav the
+  -- fork's and the swing arm's travel (m, as the wheel's Travel setting)
+  if params.ride2 and tonumber(params.ride2) == 0 then vc.BIKE_RIDE2 = false end
+  -- govoff=1: the gas governor off (GAS_SAFE_V nil), gov=v: set to v m/s
+  if (tonumber(params.govoff) or 0) > 0 then vc.GAS_SAFE_V = nil elseif tonumber(params.gov) then vc.GAS_SAFE_V = tonumber(params.gov) end
+  for _, w in ipairs(vc.R2.wheels or {}) do
+    local kind = w.susp and w.susp.m and w.susp.m.kind
+    local tv = (kind == "fork" and tonumber(params.ftrav)) or (kind == "arm" and tonumber(params.rtrav)) or nil
+    if tv then
+      w.d.wcfg = type(w.d.wcfg) == "table" and w.d.wcfg or {}
+      w.d.wcfg.travel = tv
+    end
+  end
   wait(2)
   vc.releaseClamps()
   wait(2)
   local i = assembly.info(vc.node)
-  P("JP bike: mass %.3f t, %d wheels, bike %s, wheelbase %.2f, hcg %.2f, gyros %d, rider %s", i.mass or -1, #(vc.R2.wheels or {}), tostring(vc.R2.bike),
-    vc.R2.wheelbase or -1, vc.R2.plan and vc.R2.plan.hcg or -1, #(vc.R2.gyros or {}), tostring(vc.R2.rider))
+  local tr = {}
+  for _, w in ipairs(vc.R2.wheels or {}) do if w.susp then tr[#tr + 1] = string.format("%s %.2f", tostring(w.susp.m.kind), w.susp.travel or -1) end end
+  P("JP bike: mass %.3f t, %d wheels, bike %s, wheelbase %.2f, hcg %.2f, gyros %d, rider %s, ride2 %s, gov %s, travel %s", i.mass or -1, #(vc.R2.wheels or {}), tostring(vc.R2.bike),
+    vc.R2.wheelbase or -1, vc.R2.plan and vc.R2.plan.hcg or -1, #(vc.R2.gyros or {}), tostring(vc.R2.rider), tostring(vc.BIKE_RIDE2), tostring(vc.GAS_SAFE_V), table.concat(tr, ", "))
   return vc
 end
 function JP.strip(vc, from_d, to_d)
@@ -650,8 +666,12 @@ function JP.hill_build(vc, k)
   P("JP hill g %.2f (%.0f deg): %d sculpts, built mean %.2f (%.1f deg), steepest 1.5 m %.2f, worst short %.2f m; heights %s", k.g, math.deg(math.atan(k.g)), made,
     k.mean, math.deg(math.atan(k.mean)), k.steep, worst, JP.heights(vc, k.toe - 1, k.d_end + 1, 1.0))
 end
--- the craft moved along the strip to d (level ground, stopped), same heading
+-- the craft moved along the strip to d (level ground, stopped), square to
+-- the strip again: JP.reset's hold (vbump). (It used to keep the heading it
+-- had, and a bike that had wandered off the line's heading met the next
+-- hill at an angle: the 125's 37° climb from 1.35 m/s, 2026-11-03.)
 function JP.place(vc, d)
+  if (tonumber(params.oldplace) or 0) == 0 then return JP.reset(vc, d) end
   local S = V.strip
   local i = assembly.info(vc.node)
   local bb = home()
@@ -732,6 +752,89 @@ function JP.gas(vc)
   if ok and g and ((g.cap or 0) > 0 or (g.engines or 0) > 0) then return g end
   return nil
 end
+-- THE FORCES ALONG THE ROAD (ftrace=1, every 0.5 s): the air's drag (the
+-- aero model's, kN) and the six parts that drag most, the engine's push at
+-- the wheel (auto_drive gasWheel: torque / r, and the traction control's cap
+-- on it, the joint's maxForce), the slope's share, and what is left over
+-- once m·a is taken off: the tyres' rolling loss and anything else unmodelled.
+function JP.forces(vc, tag)
+  local R2, AE = vc.R2, vc.AERO
+  local i = assembly.info(vc.node)
+  local m = i.mass or 0.4
+  local h = AE and AE.hud or {}
+  local M = AE and AE.model
+  local parts = {}
+  if M then
+    for _, b in ipairs(M.bodies) do
+      local f = math.sqrt((b.fx or 0) ^ 2 + (b.fy or 0) ^ 2 + (b.fz or 0) ^ 2)
+      parts[#parts + 1] = { f = f, id = (JP.ids and JP.ids[b.uid] or "?") .. b.uid }
+    end
+    table.sort(parts, function(a, b) return a.f > b.f end)
+  end
+  local top = {}
+  for k = 1, math.min(6, #parts) do top[#top + 1] = string.format("%s %.0f", parts[k].id, parts[k].f * 1000) end
+  local AL = vc.autoLib and vc.autoLib()
+  local push, cap, gtxt = 0, 0, ""
+  for _, w in ipairs(R2.wheels or {}) do
+    local j = w.tyre and w.tyre.valid and w.tyre:getcomponent("Joint")
+    if w.gas and AL then
+      local q = AL.gasWheel(w.gas.e.m, R2.vf or 0, w.r or 0.33, w.gas.teeth)
+      local full = q.torque * (R2.rk or 1)
+      push = push + full / (w.r or 0.33)
+      cap = cap + math.min(full, j and j.maxForce or full) / (w.r or 0.33)
+      local rim = j and (j.speed or 0) / 57.29578 * (w.r or 0.33) * (w.rs or 1) or 0
+      local tgt = j and (j.motorSpeed or 0) / 57.29578 * (w.r or 0.33) * (w.rs or 1) or 0
+      gtxt = gtxt .. string.format(" | gas %s g%d %.0f rpm full %.3f kN.m (%.2f kN) cap %.3f top %.1f rim %.2f tgt %.2f motor %s", w.gas.e.label or "?", q.gear, q.rpm,
+        full, full / (w.r or 0.33), j and j.maxForce or -1, q.top, rim, tgt, tostring(j and j.motor))
+    elseif j and j.motor == 1 and (j.maxForce or 0) > 0 then
+      cap = cap + (j.maxForce or 0) / (w.r or 0.33)
+      gtxt = gtxt .. string.format(" | elec mF %.3f", j.maxForce or 0)
+    end
+  end
+  local g = 9.8
+  local slope = (R2.gslope or 0) * g * m
+  local ma = m * (R2.a_s or 0)
+  local rest = cap - (h.drag or 0) - slope - ma
+  P("JP F %s v %.2f a %.2f m %.3f | drag %.3f kN (rho %.3f q %.0f CdA %.2f m2) [%s] | push cap %.3f kN slope %.3f ma %.3f rest %.3f kN (%.3f g)%s",
+    tag, V.speed(vc), R2.a_s or 0, m, h.drag or 0, h.rho or 0, h.q or 0, (h.q or 0) > 1 and (h.drag or 0) * 1000 / h.q or 0,
+    table.concat(top, ", "), cap, slope, ma, rest, rest / (m * g), gtxt)
+end
+-- coast=s: after the run, the wheels let roll free that long (no engine
+-- braking, no motors), the first half with the air off (AERO.scale = 0):
+-- the tyres' rolling loss alone, then the air's on top of it.
+function JP.coast(vc, secs)
+  local R2 = vc.R2
+  local was = {}
+  for k, w in ipairs(R2.wheels or {}) do was[k] = w.coast; w.coast = true end
+  vc.R2.cmd = { drive = 0, steer = 0 }
+  local t0 = time
+  local seg = {}
+  local function mark(nm)
+    seg[nm] = { t = time, v = V.speed(vc) }
+  end
+  vc.AERO.scale = 0
+  wait(0.3)
+  mark("a0")
+  while time - t0 < secs * 0.5 do
+    local _, st = JP.cruise(vc, 0, true); vc.R2.cmd = { drive = 0, steer = st }; yield()
+    if time >= (JP.ft_t or 0) then JP.ft_t = time + 0.5; JP.forces(vc, "coast_noair") end
+  end
+  mark("a1")
+  vc.AERO.scale = nil
+  wait(0.3)
+  mark("b0")
+  while time - t0 < secs do
+    local _, st = JP.cruise(vc, 0, true); vc.R2.cmd = { drive = 0, steer = st }; yield()
+    if time >= (JP.ft_t or 0) then JP.ft_t = time + 0.5; JP.forces(vc, "coast_air") end
+  end
+  mark("b1")
+  for k, w in ipairs(R2.wheels or {}) do w.coast = was[k] end
+  local m = assembly.info(vc.node).mass or 0.4
+  local function dec(a, b) return (seg[a].v - seg[b].v) / math.max(1e-3, seg[b].t - seg[a].t) end
+  local da, db = dec("a0", "a1"), dec("b0", "b1")
+  P("JP COAST no air %.2f -> %.2f m/s: %.3f m/s2 (%.3f kN, %.3f g) | with air %.2f -> %.2f: %.3f m/s2 (%.3f kN)", seg.a0.v, seg.a1.v, da, da * m, da / 9.8,
+    seg.b0.v, seg.b1.v, db, db * m)
+end
 function JP.accel(vc, secs)
   local t0 = time
   local d0 = JP.along(vc)
@@ -763,10 +866,12 @@ function JP.accel(vc, secs)
         mf[#mf + 1] = string.format("%.0f/%s", j and j.maxForce or -1, tostring(j and j.motor))
       end
       local g = JP.gas(vc)
-      P("JP AT t %.2f v %.2f pitch %.1f gr %d%d drive %.2f a_s %.2f lk %.2f slope %.3f cap %.2f mF %s%s", time - t0, sp, math.deg(pitch - p0), f, select(2, JP.down(vc)),
+      local roll_ = JP.att(vc)
+      P("JP AT t %.2f v %.2f pitch %.1f roll %.1f susp %s gr %d%d drive %.2f a_s %.2f lk %.2f slope %.3f cap %.2f mF %s%s", time - t0, sp, math.deg(pitch - p0), math.deg(roll_), susp(vc), f, select(2, JP.down(vc)),
         vc.R2.drive or 0, vc.R2.a_s or 0, vc.R2.lk or 0, vc.R2.gslope or 0, vc.R2.bikeCap or -1, table.concat(mf, " "),
-        g and string.format(" gas %.0f rpm g%d vf %.2f", g.rpm or 0, g.gear or 0, vc.R2.vf or 0) or "")
+        g and string.format(" gas %.0f rpm g%d vf %.2f ap %.3f", g.rpm or 0, g.gear or 0, vc.R2.vf or 0, vc.R2.aeroPitch or 0) or "")
     end
+    if (tonumber(params.ftrace) or 0) > 0 and time >= (JP.ft_t or 0) then JP.ft_t = time + 0.5; JP.forces(vc, "drive") end
     local g = JP.gas(vc)
     if g then gmax, gearmax = math.max(gmax, g.rpm or 0), math.max(gearmax, g.gear or 0) end
     if V.upness(vc.node) < 0.4 then P("JP ACC FELL"); break end
@@ -804,7 +909,7 @@ local function run_vhill()
     d = d + 80
   end
   local acc0 = d - 50
-  local total = acc0 + 20 + 22 * (tonumber(params.topsecs) or 10)
+  local total = acc0 + 20 + 28 * (tonumber(params.topsecs) or 10) + 25 * (tonumber(params.coast) or 0)
   if not JP.strip(vc, -15, total) then return end
   wait_for(function() return (terrain.pending and terrain.pending() or 0) == 0 end, 60, "the whole strip")
   if (tonumber(params.acconly) or 0) > 0 then hills = {} end   -- (acconly=1: the flat run alone)
@@ -816,6 +921,7 @@ local function run_vhill()
   -- plane is past the flatten's reach, and a run into it is no flat run)
   P("JP accel strip (every 10 m): %s", JP.heights(vc, acc0, total, 10))
   local acc = JP.accel(vc, tonumber(params.topsecs) or 10)
+  if (tonumber(params.coast) or 0) > 0 then JP.coast(vc, tonumber(params.coast)) end
   V.stop(vc)
   for i, k in ipairs(hills) do
     JP.place(vc, k.toe - 45)
@@ -935,5 +1041,341 @@ local function run_vlook()
   ok = ok and (lb.w or 1) < 0.2
   cs.lookFrom = nil
   V.check("look", ok, "the head followed the seat view ahead, left and right, let go behind, and eased in")
+  V.result()
+end
+
+-- ── vbump ───────────────────────────────────────────────────────────────────
+-- FLIPS OVER ROUGH GROUND (playtest 9e675fb: "the slightest bumps when going
+-- fast make entire bikes flip over"). On the flat strip: `bapp` m of
+-- approach (default 110), then `bn` whoops (default 14: 0.10..`bhmax` m high,
+-- default 0.30, 1.6-3.6 m long, 5-11 m apart, the same every run), then a
+-- kicker (`bkg` grade, default 0.2, over 3.5 m; 0 = none) and a run-out.
+-- Each of `speeds` (strs, default "15,20,24") is ridden `reps` times (default
+-- 2), every pass from a standstill at the strip's start: the probe holds the
+-- bike up in the air, square to the strip and still, and sets it down
+-- (JP.reset: a pure hold in fixedUpdate, no teleport of its attitude), so a
+-- fall costs one pass, not the run. A pass ends at a fall (upness < 0.5, or
+-- roll or pitch past 50°), the probe catching it at once.
+-- `JP BUMP` per pass: its speed into the whoops, the airborne hops, peak
+-- pitch (off the ground's) and roll, the worst suspension, fell and where;
+-- `JP BUMPS` the tally, falls of passes at each speed.
+function JP.bumps()
+  local B, seed = {}, 12345
+  local function rnd() seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648 end
+  local d = tonumber(params.bapp or 110)
+  local hmax = tonumber(params.bhmax or 0.30)
+  for _ = 1, tonumber(params.bn or 14) do
+    local w = 1.6 + 2.0 * rnd()
+    B[#B + 1] = { d = d + w / 2, w = w, h = 0.10 + (hmax - 0.10) * rnd() }
+    d = d + w + 5 + 6 * rnd()
+  end
+  return B, d
+end
+function JP.bump_h(B, d)
+  local h = 0
+  for _, b in ipairs(B) do
+    local x = (d - b.d) / (b.w / 2)
+    if math.abs(x) < 1 then h = math.max(h, b.h * 0.5 * (1 + math.cos(math.pi * x))) end
+  end
+  return h
+end
+-- the whoops built to their profile: raised where short, flattened to the
+-- plane through the profile with its slope (hill_build's method, finer)
+function JP.bumps_build(vc, B, d0, d1)
+  local S = V.strip
+  local R0 = len(S.rel0.x, S.rel0.y, S.rel0.z)
+  local L = unit(cross(S.U, S.F))
+  local made, worst = 0, 0
+  for pass = 1, 10 do
+    worst = 0
+    local d = d0
+    while d <= d1 do
+      local h = JP.bump_h(B, d)
+      local sl = (JP.bump_h(B, d + 0.2) - JP.bump_h(B, d - 0.2)) / 0.4
+      local bb = home()
+      local Ud = unit({ x = S.rel0.x + S.F.x * d, y = S.rel0.y + S.F.y * d, z = S.rel0.z + S.F.z * d })
+      local nn = unit(sub(Ud, scl(S.F, sl)))
+      for _, lat in ipairs({ -1.0, 0, 1.0 }) do
+        local top = { x = bb.x + Ud.x * (R0 + 10) + L.x * lat, y = bb.y + Ud.y * (R0 + 10) + L.y * lat, z = bb.z + Ud.z * (R0 + 10) + L.z * lat }
+        local hit = raycast(top.x, top.y, top.z, -Ud.x, -Ud.y, -Ud.z, 30, { ignore = { vc.node } })
+        local cur = hit and (10 - hit.distance) or 0
+        local off = h - cur
+        if lat == 0 then worst = math.max(worst, math.abs(off)) end
+        if off > 0.08 then
+          local g = { x = bb.x + Ud.x * (R0 + cur) + L.x * lat, y = bb.y + Ud.y * (R0 + cur) + L.y * lat, z = bb.z + Ud.z * (R0 + cur) + L.z * lat }
+          terrain.sculpt(g.x, g.y, g.z, 0.9, 0.6, "raise")
+          made = made + 1
+        end
+        if math.abs(off) > 0.025 then
+          local q = { x = bb.x + Ud.x * (R0 + h) + L.x * lat, y = bb.y + Ud.y * (R0 + h) + L.y * lat, z = bb.z + Ud.z * (R0 + h) + L.z * lat }
+          terrain.sculpt(q.x, q.y, q.z, 0.9, 1.0, "flatten", { normal = vec3(nn.x, nn.y, nn.z) })
+          made = made + 1
+        end
+      end
+      d = d + 0.35
+    end
+    wait_for(function() return (terrain.pending and terrain.pending() or 0) == 0 end, 25, "whoops")
+    wait(0.2)
+    P("JP whoops pass %d: worst %.1f cm off", pass, 100 * worst)
+    if worst < 0.05 then break end
+  end
+  return made, worst
+end
+-- THE HOLD (fixedUpdate, JP_TICK): gravity taken off and the velocity damped
+-- (the engine's, already the ground's: no positions mixed across frames),
+-- the attitude brought square to the strip at d, critically damped.
+function JP.hold_tick(dt)
+  local H, vc = JP.HOLD, JP.vc
+  if not (H and vc and vc.node and vc.node.valid) then return end
+  local i = assembly.info(vc.node)
+  if not (i and i.up and i.right) then return end
+  local S = V.strip
+  local m = i.mass or 0.4
+  local U = V.up(i.com)
+  local v, w = i.vel, i.angVel
+  local g = H.g or 9.8
+  local kd = 5.0
+  -- (H.sink: of gravity let through, to set it down)
+  local k = 1 - (H.sink or 0)
+  assembly.force(vc.node, vec3(m * (g * k * U.x - kd * v.x), m * (g * k * U.y - kd * v.y), m * (g * k * U.z - kd * v.z)))
+  local up = unit(i.up)
+  local rt = unit(i.right)
+  local Z = cross(rt, up)
+  local F = vc.R2.fwd or { x = 1, z = 0 }
+  local fw = unit({ x = rt.x * F.x + Z.x * F.z, y = rt.y * F.x + Z.y * F.z, z = rt.z * F.x + Z.z * F.z })
+  local Ft = unit(sub(S.F, scl(U, dot(S.F, U))))
+  local e1, e2 = cross(up, U), cross(fw, Ft)
+  -- (facing backwards the cross is ~0: turn it about the up first)
+  if dot(fw, Ft) < 0 then e2 = scl(U, (dot(cross(fw, Ft), U) >= 0) and 1 or -1) end
+  local e = { x = e1.x + e2.x, y = e1.y + e2.y, z = e1.z + e2.z }
+  local I = 0.35 * m
+  local W = 4.0
+  assembly.torque(vc.node, vec3(I * (W * W * e.x - 2 * W * w.x), I * (W * W * e.y - 2 * W * w.y), I * (W * W * e.z - 2 * W * w.z)))
+  H.err = len(e.x, e.y, e.z)
+  H.v = len(v.x, v.y, v.z)
+  H.w = len(w.x, w.y, w.z)
+end
+JP_TICK = function(dt) JP.hold_tick(dt) end
+-- put the bike at d on the strip's line, upright and square to it, still
+function JP.reset(vc, d)
+  local S = V.strip
+  JP.vc = vc
+  -- (the wear of the last pass mended: each pass starts on a whole bike, or
+  -- the saddle wore through over a dozen passes and the craft was lost)
+  if vc.damagedParts and vc.repairPart then
+    local worn = {}
+    for _, e in ipairs(vc.damagedParts()) do
+      worn[#worn + 1] = string.format("%s %.2f", JP.ids and JP.ids[e.uid] or tostring(e.uid), e.hp)
+      vc.repairPart(e.uid)
+    end
+    if #worn > 0 then P("JP worn (mended): %s", table.concat(worn, ", ")) end
+  end
+  JP.g = JP.g or vc.R2.gl or 9.8
+  if not JP.hc0 then
+    local i0 = assembly.info(vc.node)
+    local c0 = sub(i0.com, home())
+    JP.hc0 = len(c0.x, c0.y, c0.z) - len(S.rel0.x, S.rel0.y, S.rel0.z)
+  end
+  hold_w(false)
+  vc.R2.cmd = { drive = 0, steer = 0 }
+  vc.R2.motoOff = true
+  vc.AERO.scale = 0
+  JP.HOLD = { g = JP.g or 9.8 }
+  wait(0.3)
+  -- lifted clear over the strip at d (a translation: its attitude is the hold's)
+  local i = assembly.info(vc.node)
+  local bb = home()
+  local R0 = len(S.rel0.x, S.rel0.y, S.rel0.z)
+  local Ud = unit({ x = S.rel0.x + S.F.x * d, y = S.rel0.y + S.F.y * d, z = S.rel0.z + S.F.z * d })
+  -- (0.3 m up, and down within ~2 s: past 2.5 s aloft the tyres fold in)
+  local hh = R0 + (JP.hc0 or 0.9) + 0.3
+  local to = { x = bb.x + Ud.x * hh, y = bb.y + Ud.y * hh, z = bb.z + Ud.z * hh }
+  local dl = sub(to, i.com)
+  local o = i.origin
+  assembly.teleport(vc.node, vec3(o.x + dl.x, o.y + dl.y, o.z + dl.z))
+  local t0 = time
+  -- (square to the strip within a few degrees: a bike's own rest pitch is
+  -- its wheels', not the hold's, and it takes it back on its tyres)
+  while time - t0 < 1.4 do
+    yield()
+    local H = JP.HOLD
+    if time - t0 > 0.6 and (H.err or 9) < 0.06 and (H.v or 9) < 0.15 and (H.w or 9) < 0.1 then break end
+  end
+  local held = time - t0
+  -- set down: a third of gravity through, damped (~0.65 m/s)
+  JP.HOLD.sink = 0.33
+  local t1 = time
+  while time - t1 < 2 do
+    yield()
+    local f, r = JP.down(vc)
+    if f + r == 2 then break end
+  end
+  wait(0.4)
+  JP.HOLD = nil
+  vc.R2.motoOff = nil
+  vc.AERO.scale = nil
+  wait(0.8)
+  V.stop(vc)
+  local roll, pitch = JP.att(vc)
+  local _, lat = JP.along(vc)
+  P("JP reset to %.0f m: held %.1f s, down in %.1f s, roll %.1f pitch %.1f lat %.2f, upness %.3f", d, held, time - t1, math.deg(roll), math.deg(pitch), lat, V.upness(vc.node))
+end
+-- one pass: from the start at vt over the whoops and the kicker
+function JP.bump_pass(vc, tag, vt, B, b0, b1, kick, dEnd)
+  local t0 = time
+  local inz, fell, fell_d = false, false, nil
+  local v_in, hops, lastAir = nil, 0, false
+  local pmax, rmax, airmax, air_t0 = 0, 0, 0, nil
+  local cmax = { -9, -9 }
+  local dmax = 0
+  while time - t0 < 60 do
+    local d = JP.along(vc)
+    local drive, st = JP.cruise(vc, vt, true)
+    vc.R2.cmd = { drive = drive, steer = st }
+    hold_w(drive > 0.5)
+    yield()
+    d = JP.along(vc)
+    dmax = math.max(dmax, d)
+    local roll, pitch = JP.att(vc)
+    local f, r = JP.down(vc)
+    if not inz and d >= b0 - 1 then inz = true; v_in = V.speed(vc) end
+    if inz then
+      -- (pitch off the ground's: the whoops' slope under the wheelbase is
+      -- small next to a bike going over, so off the local level)
+      pmax = math.max(pmax, math.abs(pitch))
+      rmax = math.max(rmax, math.abs(roll))
+      local air = f + r == 0
+      if air and not lastAir then hops = hops + 1; air_t0 = time end
+      if air and air_t0 then airmax = math.max(airmax, time - air_t0) end
+      lastAir = air
+      for k, w in ipairs(vc.R2.wheels or {}) do
+        local c = w.susp and w.susp.comp
+        if c and k <= 2 then cmax[k] = math.max(cmax[k], c) end
+        -- (a picture of the fork deep in its travel, once a run: the
+        -- sliders on their stanchions)
+        if c and w.susp.m.kind == "fork" and c > 0.7 * (w.susp.travel or 0.13) and not JP.fork_shot then
+          JP.fork_shot = true
+          V.shot("fork_deep_" .. string.format("%.0f", c * 100), false)
+        end
+      end
+      if (tonumber(params.blog) or 0) > 0 and time >= (JP.blog_t or 0) then
+        JP.blog_t = time + tonumber(params.blog)
+        local gs = vc.R2.gyroT or -1
+        local _, _, yawr, rrate, Uu, Fl = JP.att(vc)
+        local vv = assembly.info(vc.node).vel
+        local Rt = unit(cross(Fl, Uu))
+        P("JP BT %s yaw %.2f rr %.2f vlat %.2f vup %.2f | d %.1f v %.2f roll %.1f pitch %.1f gr %d%d tq %.2f ptq %.2f atq %.2f aim %.1f tmax %.2f gyro %.2f drive %.2f comp %s", tag, yawr, rrate, dot(vv, Rt), dot(vv, Uu), d, V.speed(vc), math.deg(roll), math.deg(pitch), f, r,
+          vc.R2.bikeTorque or 0, vc.R2.pitchTq or 0, vc.R2.airPitchTq or 0, math.deg(vc.R2.airAim or 0), vc.R2.tmax or -1, gs, vc.R2.drive or 0, susp(vc))
+      end
+    end
+    -- (a breakup: the craft is no longer flown, and the run is over)
+    if not (vc.node and vc.node.valid) or not vc.piloting then fell, fell_d, JP.dead = true, d, true; break end
+    if V.upness(vc.node) < 0.5 or math.abs(roll) > math.rad(50) or math.abs(pitch) > math.rad(50) then fell, fell_d = true, d; break end
+    if d >= dEnd then break end
+  end
+  hold_w(false)
+  vc.R2.cmd = { drive = 0, steer = 0 }
+  -- (to a stop on the strip, on the line: S held, steering still)
+  if not fell and not JP.dead then
+    local ts = time
+    while time - ts < 8 and V.speed(vc) > 1.0 do
+      local _, st = JP.cruise(vc, 0, true)
+      vc.R2.cmd = { drive = -1, steer = st }
+      yield()
+      if V.upness(vc.node) < 0.5 then break end
+    end
+    vc.R2.cmd = { drive = 0, steer = 0 }
+  end
+  local where = fell_d and (fell_d < b0 and "approach" or (fell_d < b1 and "whoops" or (kick and fell_d < kick + 30 and "kicker" or "run-out"))) or "-"
+  P("JP BUMP %s v %.0f: in at %.2f m/s, %d hops (longest %.2f s), peak pitch %.1f roll %.1f deg, comp F %.3f R %.3f, %s%s",
+    tag, vt, v_in or -1, hops, airmax, math.deg(pmax), math.deg(rmax), cmax[1], cmax[2], JP.dead and "BROKE UP" or (fell and "FELL" or "upright"),
+    fell and string.format(" at %.1f m (%s)", fell_d, where) or "")
+  return { fell = fell, where = where, v_in = v_in }
+end
+function JP.press(vc)
+  JP.reset(vc, 20)
+  local pc = V.pc()
+  local i = assembly.info(vc.node)
+  local U = V.up(i.com)
+  local Fw = V.fwdW(vc)
+  local Rt = unit(cross(Fw, U))
+  if pc and pc.face then pc.face(Rt.x, Rt.y, Rt.z, -0.08); if pc.setCamMode then pc.setCamMode("chase") end end
+  wait(1.5)
+  local function comps()
+    local t = {}
+    for _, w in ipairs(vc.R2.wheels or {}) do if w.susp then t[#t + 1] = string.format("%s %.3f/%.2f", w.susp.m.kind, w.susp.comp or 0, w.susp.travel or 0) end end
+    return table.concat(t, ", ")
+  end
+  V.shot("press_rest", false)
+  P("JP press rest: %s", comps())
+  vc.R2.motoOff = true
+  JP.HOLD = { g = JP.g or 9.8, sink = 3.0 }
+  wait(1.2)
+  P("JP press 3 g: %s", comps())
+  V.shot("press_3g", false)
+  JP.HOLD.sink = -0.6
+  wait(1.0)
+  P("JP press lifted: %s", comps())
+  V.shot("press_lifted", false)
+  JP.HOLD.sink = 0.33
+  wait(1.5)
+  JP.HOLD = nil
+  vc.R2.motoOff = nil
+  wait(1.0)
+end
+local function run_vbump()
+  local vc = JP.bike("bump")
+  if not vc then return end
+  JP.vc = vc
+  local speeds = jsplit(params.speeds or "15,20,24")
+  local reps = tonumber(params.reps or 2)
+  local B, b1 = JP.bumps()
+  local b0 = B[1].d - B[1].w / 2
+  local kg = tonumber(params.bkg or 0.2)
+  local kick = (kg > 0) and (b1 + 10) or nil
+  local dEnd = (kick and kick + 3.5 + 45) or (b1 + 20)
+  -- (60 m past the end to stop in: braking from 20 m/s off the strip's
+  -- end onto the natural ground broke the bike up, 2026-11-04)
+  if not JP.strip(vc, -15, dEnd + 90) then return end
+  wait_for(function() return (terrain.pending and terrain.pending() or 0) == 0 end, 60, "the whole strip")
+  local made, worst = JP.bumps_build(vc, B, b0 - 0.5, b1 + 0.5)
+  P("JP whoops %d from %.0f to %.0f m: %d sculpts, worst %.1f cm; profile %s", #B, b0, b1, made, 100 * worst, JP.heights(vc, b0 - 1, b1 + 1, 0.5))
+  if kick then
+    JP.kicker(kick, 3.5, kg)
+    P("JP kicker at %.0f m: profile %s", kick, JP.heights(vc, kick - 2, kick + 8, 0.5))
+  end
+  -- the CoM's height at rest and the world's gravity, for the hold
+  JP.g = vc.R2.gl or 9.8
+  do
+    local i = assembly.info(vc.node)
+    local c = sub(i.com, home())
+    local S = V.strip
+    JP.hc0 = len(c.x, c.y, c.z) - len(S.rel0.x, S.rel0.y, S.rel0.z)
+  end
+  P("JP bump course: approach %.0f m, whoops %.0f..%.0f m, kicker %s, end %.0f m; CoM %.2f m up, g %.2f", b0, b0, b1, kick and string.format("%.0f m (%.0f%%)", kick, kg * 100) or "none", dEnd, JP.hc0, JP.g)
+  local tally = {}
+  for _, v in ipairs(speeds) do
+    tally[v] = { n = 0, fell = 0, where = {} }
+    for rep = 1, reps do
+      JP.reset(vc, 0)
+      local r = JP.bump_pass(vc, string.format("v%d#%d", v, rep), v, B, b0, b1, kick, dEnd)
+      local t = tally[v]
+      t.n = t.n + 1
+      if r.fell then t.fell = t.fell + 1; t.where[#t.where + 1] = r.where .. (JP.dead and "!" or "") end
+      if JP.dead then break end
+      V.stop(vc)
+    end
+    if JP.dead then P("JP bump: the bike broke up, the rest is skipped"); break end
+  end
+  local parts = {}
+  for _, v in ipairs(speeds) do
+    local t = tally[v] or { n = 0, fell = 0, where = {} }
+    parts[#parts + 1] = string.format("%d m/s %d/%d%s", v, t.fell, t.n, #t.where > 0 and (" (" .. table.concat(t.where, ",") .. ")") or "")
+  end
+  P("JP BUMPS %s: falls %s", V.tag, table.concat(parts, " | "))
+  -- THE FORK DEEP IN ITS TRAVEL AND HANGING, from the side (bpress=0: no):
+  -- the bike held square, pressed down at 3 g and then lifted, a picture each
+  if not JP.dead and (tonumber(params.bpress) or 1) > 0 then JP.press(vc) end
+  V.check("bump", true, "the course ridden")
   V.result()
 end

@@ -768,7 +768,9 @@ local function resources(v, t)
     local eng = ""
     if (gs.engines or 0) > 0 then
       eng = gs.running and string.format(" · %s %.0f rpm, gear %d", gs.label or "engine", gs.rpm or 0, gs.gear or 1)
-        or string.format(" · %s off", gs.label or "engine")
+        or (gs.cranking and string.format(" · %s starting…", gs.label or "engine"))
+        or (gs.killed and string.format(" · %s killed (its Engine start / kill action starts it)", gs.label or "engine"))
+        or string.format(" · %s off · W starts it", gs.label or "engine")
       if gs.running and (gs.lph or 0) > 0.05 and (gs.left or 0) > 0 then
         eng = eng .. string.format(" · %.1f L/h, %s left at this", gs.lph, duration((gs.left or 0) / gs.lph * 3600))
       end

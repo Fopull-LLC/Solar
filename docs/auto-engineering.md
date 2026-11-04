@@ -21,8 +21,8 @@ rover code in `vessel_controller.lua` (R2) and the engine's wheel joint
 | Part | Mounts | Takes | Role |
 |---|---|---|---|
 | **Moto Wheel** | on a fork's or swing arm's hub (centred), or by an axle end on any face | anything on either axle end | 0.33 m spoked wheel, hub motor, disc brake. Its axle runs right through: it is the through-axle wheel. |
-| **Telescopic Fork** | a FRONT face (stands upright whatever it is on) | a Moto Wheel between its legs | Steers on A/D about a 24° raked head; 13 cm of travel; the bars turn with it. |
-| **Swing Arm** | a REAR face | a Moto Wheel in its jaws | Rear suspension: pivot and monoshock, 12 cm; never steers. |
+| **Telescopic Fork** | a FRONT face (stands upright whatever it is on) | a Moto Wheel between its legs | Steers on A/D about a 24° raked head; 22 cm of travel (a dirt bike's 250–300 mm); the bars turn with it. |
+| **Swing Arm** | a REAR face | a Moto Wheel in its jaws | Rear suspension: pivot and monoshock, 20 cm at the axle; never steers. |
 | **Coil-over Strut** | a flank (car, rover, trike axle) | any wheel on its hub flange | 18 cm of travel; a strut ahead of the centre of mass steers about its own axis. |
 | **Balance Gyro** | anywhere | — | Holds a two-wheeler up at any speed, crewed or not (draws power while it works). |
 | **Battery Pack** | stack or any face | — | A tank-shaped 200 EC pack: a seat carries no battery, and a bike needs one. |
@@ -238,6 +238,91 @@ Throttle shut, it drags its wheel (`gasBrake`). `r2WheelSource` answers for a
 chained wheel; the traction control, wheelie control and brakes act on that.
 On a craft with a chain, a hub motor past its own top speed freewheels
 instead of braking (a hybrid's 18 m/s front motor threw the bike down at 20).
+
+**Second pass (2026-11-03):**
+- *Starting.* An engine is off until the rider opens the throttle: the
+  starter cranks it for 0.65 s (`engine_crank.ogg`, no drive yet), then it
+  catches, idles off the throttle and pulls on it. It stops when the rider
+  gets off, the gas runs out, or the ignition is killed: the engine part's
+  `ign` toggle (electronics `gasengine`, "Engine start / kill"), bindable to
+  any group key in the controls panel; switching it back on cranks it at once.
+  Every letter is already a flight key, so auto-start on W is the default and
+  the kill switch is an action rather than a fixed key.
+- *Launch.* Wide open, the slipping clutch holds the engine at its torque
+  peak (`rpk`), not at `eng` (gasWheel `thr`): +21–27 % off the line.
+- *Shifts.* The box keeps its gear while it pulls within 4 % of the best
+  (`GAS_SHIFT_K`: no hunting on a shift point), and a change cuts the drive
+  to a quarter for 0.1 s, heard as a dip in the loop.
+- *Mass.* A tank weighs its petrol (0.74 kg/L), written to the part's mass in
+  0.25 L steps (massSync), about once a minute flat out.
+- *Air.* Open frames carry `af = "fill=…"` (aero.lua): the moto wheel 0.55,
+  the fork 0.22, the swing arm 0.35. A part's drag is that share of a solid
+  box's and it hides only that share of what is behind it; the wake now
+  hides every face of a part behind another, not only its ends. The
+  player's bike went from CdA 2.7 m² to 1.4 (its rider 0.5, its locker,
+  pack and solar panel most of the rest).
+- *At speed.* A bike's push keeps more of the front's load past 14 m/s
+  (R2_BIKE `liftHi` 0.55 by 24 m/s) and takes the nose-up of the drag on
+  the rider off the budget (aeroTick's torque). The traction control's lead
+  no longer winds up chasing a push the engine cannot make (R2.srcF).
+- *Governor (gone):* `GAS_SAFE_V` held a chained wheel to 24 m/s while the
+  tyres skipped past ~25 m/s (engine card 0628; the pure 500 fell in 3 of 4
+  flat-out runs). On engine .1417 with the third pass it is nil: the pure 500
+  ran flat out to 30.9 m/s 4 of 4 without a fall. The gearing's tops are 28
+  (250) and 31 m/s (500).
+- *The 125 on a 0.4 t bike:* 10.5 N·m is a real 125 four-stroke's, and first
+  gear (39:1 overall) is already lower than a CRF125F's (27.5:1). Its 1.1 kN
+  at the wheel is 0.29 g on 0.4 t: no 125 climbs 31° from a stop with that
+  load. It climbs on a ~0.2 t bike. The moto parts weigh 2–4× a real dirt
+  bike's (wheel 50 kg, fork 30, saddle 30, swing arm 25), which is the lever
+  if lighter bikes are wanted.
+
+**Third pass (playtest 9e675fb):**
+- *The loop always stops.* Off, the engine's loop runs down over a tenth
+  of a second and is stopped, not left muted (SFX.gas). Every frame
+  (lateUpdate, dormant or not) a watchdog fades the drive and engine loops
+  when no tick has fed them (the pause menu's `physics.pause`, a craft gone
+  dormant, a wreck) and stops them after 0.8 s (SFX.watch). With every
+  engine gone the loop still hears it is off. Wheels stowed with the rider
+  still aboard (a long jump) keep the engine idling; with no one aboard it
+  stops. (Pass 1 left `run` set when the wheels stowed after the rider got
+  off, and the loop played again forever.) `tests/smoke_gas_sound.lua`.
+- *A stator.* A running engine supplies `alt` EC/s (0.45 to 1.0 by size,
+  a third of it at idle): a gas bike needs no battery for its gyro and
+  lights. The player's gas bike had no battery, so its Balance Gyro never
+  had any power.
+- *Suspension travel.* Fork 22 cm, swing arm 20 cm (a dirt bike's
+  250-300 mm). At 13 and 12 cm both bottomed on every pass over the bump
+  course, and a landing on the bump stops kicked the bike 10-20° over in a
+  tick. A wheel still droops no more than 6.5 cm (`R2_MOTO_DROOP`: how far
+  the fork's sliders are drawn below their stanchions).
+- *Riding technique* (`BIKE_RIDE2`): in the air the nose aims at the slope
+  it will land on (the centre of mass's arc cast to the ground,
+  `motoLandSlope`), measured off the wheel line (`motoPitch0`: a bike built
+  with its rear wheel hung high sits nose up), rear wheel first. Throttle
+  (W) lifts the nose 6°, the rear brake (S) drops it 10°. The front is
+  held along the flight (the wheels' gyroscopic stiffness and the rider's
+  hips, `RIDER_YAW`): loose, a bike yawed off a kicker, landed 4-6° across
+  its own path, kicked to 1 rad/s of yaw on the tyres and slid out. On the ground
+  past 4 m/s the rider stands on the pegs: pitch the ground did not ask for
+  is damped, and past 10° off the ground's slope it is sprung back
+  (`motoPitch`, `RIDER_PITCH` 1.4 kN·m plus half the gyros'), 1.8 times as
+  hard for half a second after a landing, and for a second after it a yaw
+  the lean does not ask for is damped too (landed with the throttle open,
+  the rear stepped out and the bike spun out sideways). The gyros' torque is one budget
+  shared by roll and pitch in the air, and the rider's body adds its own on
+  each axis.
+- *The gyro* acts through `assembly.torque` on the whole craft, so where
+  it sits does not change its torque (as for a real control-moment gyro).
+  Its 60 kg moves the centre of mass, which is why moving it near the engine
+  changed the handling a little.
+- *The bump course* (jumpprobe `vbump`): 14 whoops, a kicker and a
+  run-out on the flat strip, ridden from a standstill at each speed.
+  Between passes the probe holds the bike in the air, square to the strip,
+  and sets it down (`JP.reset`; `JP.place` now does the same, so a hill is
+  never met at an angle).
+- *The Drive Chain tool* is done after one chain: back to select, with the
+  new chain selected.
 
 **Heard and seen**: a running loop per craft (`audio/foley/engine_four.ogg`,
 `engine_two.ogg`, `tools/gen_engine_audio.py`) pitched by rpm, and a

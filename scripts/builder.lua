@@ -5001,6 +5001,25 @@ end
 local function load_blueprint(bp)
   bp = bp or save.get("shipyard.blueprint")
   if not bp or not bp.parts then return end
+  -- THE REGISTRY FIRST: the aircraft and auto parts join it from their
+  -- libraries' nodes (registry()), which may come up a frame or two after
+  -- the builder. A part whose id is not in it yet would be dropped from the
+  -- stand, so the load waits (up to ~2 s) while any id is still unknown and a
+  -- library has not joined.
+  do
+    local R = REGISTRY
+    registry()
+    if not (R.reg and R.aero and R.auto) and (W.reg_wait or 0) < 120 then
+      local missing = false
+      for _, d in pairs(bp.parts) do if not REG[d.id] then missing = true break end end
+      if missing then
+        W.reg_wait = (W.reg_wait or 0) + 1
+        W.load_wait, W.load_bp = true, bp
+        return
+      end
+    end
+    W.reg_wait, W.load_bp = nil, nil
+  end
   refit_chutes(bp.parts)
   -- A rover rolled out turned 90° (finishBlueprint: wheel axles on Z) comes
   -- back onto the stand the way it was built.
@@ -6127,7 +6146,7 @@ function frameTick()
   end
   if W.load_wait and (W.F or W.load_wait_n and W.load_wait_n > 30) then
     W.load_wait = nil
-    load_blueprint()
+    load_blueprint(W.load_bp)
   elseif W.load_wait then
     W.load_wait_n = (W.load_wait_n or 0) + 1
   end
@@ -7026,8 +7045,14 @@ function chainToolTick(d, A, clicked, cam_busy)
       for u, q in pairs(parts) do
         if q.def.proc == "chain" and q.size and q.size.w == hu then CMD["delete"]({ uid = u, only = true }) end
       end
-      draw_place(A, d, m)
-      d.p0 = nil
+      -- one chain, then the tool is done: back to select, the new chain
+      -- selected (its sprockets are in the inspector), playtest 9e675fb
+      local pe0 = parts[d.p0.host]
+      local elabel = pe0 and pe0.def.label or "the engine"
+      local u = draw_place(A, d, m)
+      W.drawing, click_cool = nil, 0.15
+      if u and parts[u] then sel_only(u) end
+      hint("chain on — " .. elabel .. " drives " .. (hp and hp.def.label or "the wheel") .. " · the sprocket's teeth are in the inspector", 3.0)
     else
       hint("click the wheel this engine drives", 2.0)
     end

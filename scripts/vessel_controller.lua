@@ -545,6 +545,7 @@ function SFX.drive(node, live, spd, effort, on_ground, ms)
     L.gravel = audio.play(SFX.gravel, node, { track = "SFX", loop = true, mode = "spatial",
       falloff = "inverse", minDistance = 4.0, maxDistance = 90.0, volume = 0.0 })
   end
+  L.fed, L.vm, L.vg = true, mv, gv
   if L.motor then
     L.motor:setVolume(mv)
     L.motor:setPitch(0.55 + 0.75 * roll + 0.10 * push)
@@ -558,9 +559,14 @@ end
 -- A GAS ENGINE: one running loop per craft (its biggest engine), pitched by
 -- the rpm (the loops are recorded at 3000) and opened by the throttle; a
 -- two-stroke has its own (tools/gen_engine_audio.py). Silent when it is off.
+-- Off, it runs down: the loop fades over about a tenth of a second (the
+-- pitch sagging with it) and is then STOPPED, not left muted, so nothing is
+-- left playing that a missed tick could leave audible (playtest 9e675fb: "the
+-- motor sound gets stuck playing endlessly").
 function SFX.gas(node, st)
   if not audio then return end
   local L = SFX.live
+  L.fed = true
   local on = st and st.running
   local file = (st and st.stroke == 2) and "audio/foley/engine_two.ogg" or "audio/foley/engine_four.ogg"
   if on and L.gas_file ~= file and L.gas then L.gas:stop(); L.gas = nil end
@@ -572,12 +578,43 @@ function SFX.gas(node, st)
   if L.gas then
     if on then
       local cc = math.max(50, st.cc or 250)
-      L.gas:setVolume(math.min(1.0, (0.22 + 0.55 * (st.effort or 0)) * (0.6 + 0.4 * math.min(1, cc / 250))))
-      L.gas:setPitch(math.max(0.4, math.min(4.0, (st.rpm or 1500) / 3000)))
+      -- (a gear change: the drive cut for a moment, heard as a dip)
+      L.vgas = math.min(1.0, (0.22 + 0.55 * (st.effort or 0)) * (0.6 + 0.4 * math.min(1, cc / 250)) * (st.shift and 0.55 or 1))
+      L.pgas = math.max(0.4, math.min(4.0, (st.rpm or 1500) / 3000))
     else
-      L.gas:setVolume(0.0)
+      L.vgas, L.pgas = (L.vgas or 0) * 0.85, math.max(0.3, (L.pgas or 0.5) * 0.97)
+    end
+    if not on and L.vgas < 0.01 then
+      L.gas:stop(); L.gas, L.vgas = nil, 0
+    else
+      L.gas:setVolume(L.vgas)
+      L.gas:setPitch(L.pgas)
     end
   end
+end
+
+-- THE LOOPS' WATCHDOG, every frame (lateUpdate, dormant or not): the rover's
+-- and the gas engine's loops are fed by the craft's tick (r2Tick). A frame
+-- with no tick since the last (the pause menu's physics.pause, a craft gone
+-- dormant, the tick skipped for a wreck or a lost assembly) counts as quiet;
+-- 0.12 s of it fades them, 0.8 s stops them. The next tick that wants them
+-- plays them again.
+function SFX.watch(dt)
+  local L = SFX.live
+  if L.fed then L.fed, L.quiet = false, 0 return end
+  if not (L.gas or L.motor or L.gravel) then return end
+  L.quiet = (L.quiet or 0) + (dt or 0)
+  if L.quiet < 0.12 then return end
+  if L.quiet > 0.8 then
+    if L.gas then L.gas:stop(); L.gas, L.vgas = nil, 0 end
+    if L.motor then L.motor:stop(); L.motor = nil end
+    if L.gravel then L.gravel:stop(); L.gravel = nil end
+    return
+  end
+  local f = math.exp(-(L.quiet - 0.12) * 8)
+  if L.gas then L.gas:setVolume((L.vgas or 0) * f) end
+  if L.motor then L.motor:setVolume((L.vm or 0) * f) end
+  if L.gravel then L.gravel:setVolume((L.vg or 0) * f) end
 end
 
 -- Stop the vessel's persistent loops (EVA, breakup) — silence, don't leak.
@@ -587,7 +624,7 @@ local function silence_loops()
   local L = SFX.live
   if L.motor then L.motor:stop(); L.motor = nil end
   if L.gravel then L.gravel:stop(); L.gravel = nil end
-  if L.gas then L.gas:stop(); L.gas = nil end
+  if L.gas then L.gas:stop(); L.gas, L.vgas = nil, 0 end
 end
 
 -- ── blueprint ───────────────────────────────────────────────────────────────
@@ -2060,6 +2097,13 @@ function massSync(node, info)
   for _, t in ipairs(tanks) do
     if t.uid and fuel_t[t.uid] == nil then fuel_t[t.uid] = (t.left or 0) * (t.ft or 0) end
   end
+  -- …and each gas tank's petrol (GAS_KG_L a litre), in steps of GAS_MASS_STEP
+  -- litres: a bike's tank goes down a quarter litre a minute flat out, so its
+  -- part's mass is written about once a minute, not every tick
+  for _, t in ipairs(GAS.tanks) do
+    local L = math.floor(gasTankLeft(t) / GAS_MASS_STEP + 0.5) * GAS_MASS_STEP
+    fuel_t[t.uid] = (fuel_t[t.uid] or 0) + L * GAS_KG_L / 1000
+  end
   for _, e in ipairs(ms.list) do
     local d = e.d
     local m = math.max(0.001, (d.mass or 0) + (fuel_t[e.uid] or 0.0)
@@ -2912,6 +2956,15 @@ local function power_tick(node, info, dt)
   -- they asked for this tick (R2.draw, by load id).
   for id, rate in pairs(R2.draw) do
     if rate > 0 then loads[#loads + 1] = { id = id, rate = rate, pri = 4 } end
+  end
+  -- A RUNNING GAS ENGINE's stator, as every dirt bike has for its lights and
+  -- ignition: its `alt` EC/s from the torque peak up, a third of it at idle.
+  -- (A gas bike with no battery had a Balance Gyro with no power at all:
+  -- playtest 9e675fb, "the balance gyro … helped but not much".)
+  for _, e in pairs(GAS.engines) do
+    if e.run then
+      supply = supply + (e.m.alt or 0.5) * math.max(0.35, math.min(1, (e.rpm or 0) / math.max(1, e.m.rpk or 7000)))
+    end
   end
   -- SUNLIGHT over the step: integrated along the craft's and its world's
   -- motion (a long warp step spans a good part of a day, or several orbits).
@@ -6464,6 +6517,15 @@ local function damage_tick(node, info, dt)
     local d = uid and bp_by_uid[uid]
     local hp = uid and part_hp[uid]
     if uid and touch then touch[uid] = (touch[uid] or 0) + math.max(0, h.impulse or 0) end
+    -- A WHEEL WITH ITS TYRE OUT is no hull: its part is a 5 cm stub at the
+    -- hub (wheel_collider) and the live tyre carries it. A stub brushing the
+    -- ground as the tyre climbs a face is the tyre's business: judged as a
+    -- 20 m/s ram it broke a gas bike up on a kicker (vbump, 2026-11-04).
+    if d and R2.live and d.wheel then
+      for _, w in ipairs(R2.wheels) do
+        if w.uid == uid and w.jointed and w.tyre and w.tyre.valid then d = nil break end
+      end
+    end
     if d and hp and hp > 0 and not (h.x and walkerNear(h.x, h.y, h.z)) then
       local nrm = h.speed or 0
       local energy = math.max(h.speedAbs or 0, nrm)             -- total closing speed
@@ -6488,7 +6550,7 @@ local function damage_tick(node, info, dt)
       hits[#hits + 1] = { uid = uid, c = c, d = d, hp = hp,
                           e = feel, slide = slide, x = h.x, y = h.y, z = h.z, raw = h.speedAbs, imp = h.impulse }
       if energy > worst then worst, wx, wy, wz = energy, h.x, h.y, h.z end
-      if nrm > worst_normal then worst_normal = nrm end
+      if nrm > worst_normal then worst_normal, integ.worst_hit = nrm, { uid = uid, id = d.id, nrm = nrm, abs = h.speedAbs or 0, imp = h.impulse or 0 } end
     end
   end
   -- The parts that touched, for the stress model (stressContact): each by its
@@ -6527,6 +6589,11 @@ local function damage_tick(node, info, dt)
   -- ship sliding along the surface is a ship being torn up part by part, and the
   -- loop below is what does that.
   if not destroyed and worst_normal >= SHATTER_SPEED and wx then
+    -- (which part, and how hard: a breakup with nothing to show for it is
+    -- otherwise a mystery in the log)
+    local wh = integ.worst_hit or {}
+    log(string.format("CRASH: %s #%s struck at %.1f m/s into the surface (%.1f total, impulse %.2f, own %.1f m/s)",
+      tostring(wh.id), tostring(wh.uid), wh.nrm or 0, wh.abs or 0, wh.imp or 0, own))
     shatter(node, wx, wy, wz, worst_normal, info)
     return
   end
@@ -9127,7 +9194,9 @@ end
 --           back to `wmin` of it
 -- Measured (tools/perf/jumpprobe.sh vhill, the player's dirt bike): see the
 -- report in the 2026-11 notes; the numbers are in drive_tick's BIKE block.
-R2_BIKE = { top = 18.0, torque = 0.8, tc = 0.9, open = 1.8, lean = 0.12, lift = 0.88, wfree = 6.0, wheelie = 14.0, wmin = 0.3, land = 0.6 }
+--   liftHi  …the share of it at vHi m/s and over (from vLo, blended)
+R2_BIKE = { top = 18.0, torque = 0.8, tc = 0.9, open = 1.8, lean = 0.12, lift = 0.88, liftHi = 0.55, vLo = 14.0, vHi = 24.0,
+            wfree = 6.0, wheelie = 14.0, wmin = 0.3, land = 0.6 }
 
 -- WHAT DRIVES A WHEEL: its power source this tick → full torque (kN·m) and top
 -- speed (m/s). Today every driven wheel has its own electric hub motor (the
@@ -9166,6 +9235,19 @@ end
 -- craft and every rollout start full), so a fleet save, a split and a
 -- docking carry it with the part.
 GAS = { engines = {}, tanks = {}, byWheel = {}, cap = 0, any = false, dry_said = false, runT = 0 }
+-- A GOVERNOR (m/s) on a chained wheel: none. It held them to 24 m/s while
+-- the tyres skipped on flat ground past ~25 (engine card 0628). On engine
+-- .1417, with 22/20 cm of travel and the rider's technique, the pure 500 ran
+-- flat out to 30.9 m/s in 4 of 4 runs without a fall and the user's 500
+-- crossed the bump course at 29.7 m/s 3 of 3 (jumpprobe vhill / vbump,
+-- 2026-11-04). A number here caps every gas wheel's top speed again.
+GAS_SAFE_V = nil
+GAS_CRANK_T = 0.65     -- s the starter turns it over before it catches
+GAS_SHIFT_T = 0.10     -- s a gear change cuts the drive for…
+GAS_SHIFT_CUT = 0.25   -- …to this share of it
+GAS_CRANK_SFX = "audio/foley/engine_crank.ogg"
+GAS_KG_L = 0.74        -- petrol, kg a litre (auto_drive GAS_RHO): the tanks weigh what they hold (massSync)
+GAS_MASS_STEP = 0.25   -- litres: the tank's mass follows its level in these steps
 function gasTankLeft(t)
   local st = type(t.d.st) == "table" and t.d.st or nil
   local v = st and tonumber(st.gas)
@@ -9254,6 +9336,8 @@ function gasState()
   end
   if best then
     out.running, out.rpm, out.gear, out.label, out.cc = best.run == true, best.rpm, best.gear, best.label, best.m.cc
+    out.cranking = best.crank ~= nil
+    out.killed = not gasIgn(best)
     out.kw = best.kw
     out.lph = GAS.lph or 0
     out.wheels = 0
@@ -9268,10 +9352,16 @@ function gasWheelSource(w, gl, rk)
   local L = autoLib()
   local vk = math.max(0.6, math.min(1.0, math.sqrt(math.max(gl or R2_G_REF, 0) / R2_G_REF)))
   if not (L and L.gasWheel) then return 0, 10 end
-  local q = L.gasWheel(e.m, R2.vf or 0, w.r or 0.33, g.teeth)
+  local q = L.gasWheel(e.m, R2.vf or 0, w.r or 0.33, g.teeth, math.abs(R2.drive or 0), e.run and e.gear or nil)
+  -- A GEAR CHANGE: the drive is cut for GAS_SHIFT_T while the box shifts (an
+  -- upshift on the throttle is heard as a dip, and felt as a nod)
+  if e.run and e.gear and q.gear ~= e.gear then e.shift_t = GAS_SHIFT_T end
   e.rpm, e.gear, e.kw, e.ratio = q.rpm, q.gear, q.kw, q.ratio
-  if not e.run then return 0, q.top * vk end
-  return q.torque * (rk or 1), q.top * vk
+  -- (GAS_SAFE_V: a governor, off since engine .1417; see GAS above)
+  local top = math.min(q.top, GAS_SAFE_V or math.huge) * vk
+  if not e.run then return 0, top end
+  local k = ((e.shift_t or 0) > 0) and GAS_SHIFT_CUT or 1
+  return q.torque * (rk or 1) * k, top
 end
 -- THE ENGINE HEARD AND SEEN: the running loop (SFX.gas) and a puff out of
 -- each running engine's tailpipe (vfx TailpipePuff, its +Y the pipe), more
@@ -9283,7 +9373,16 @@ function gasFx(node, info, dt)
   for _, e in pairs(GAS.engines) do
     if not best or (e.m.cc or 0) > (best.m.cc or 0) then best = e end
   end
-  SFX.gas(node, best and { running = best.run, rpm = best.rpm, effort = best.fx_eff or 0, stroke = best.m.stroke, cc = best.m.cc })
+  SFX.gas(node, best and { running = best.run, rpm = best.rpm, effort = best.fx_eff or 0, stroke = best.m.stroke, cc = best.m.cc,
+    shift = (best.shift_t or 0) > 0 })
+  -- the starter, once each time it cranks
+  if GAS.crank_sfx then
+    GAS.crank_sfx = nil
+    if audio and audio.play then
+      pcall(audio.play, GAS_CRANK_SFX, node, { track = "SFX", mode = "spatial", falloff = "inverse",
+        minDistance = 4.0, maxDistance = 120.0, volume = 0.8 })
+    end
+  end
   if not spawnEffect then return end
   for _, e in pairs(GAS.engines) do
     if e.run then
@@ -9308,22 +9407,54 @@ function gasFx(node, info, dt)
   end
 end
 
--- Once a tick after the wheels: the engines run while the craft is driven
--- and has gas, and burn what the stick asked of them.
+-- THE IGNITION (the part's `ign` toggle, electronics MODULES.gasengine):
+-- on unless the rider killed it.
+function gasIgn(e)
+  local E = elib()
+  if not (E and E.stateOf and e.d) then return true end
+  return E.stateOf(e.d).ign ~= false
+end
+-- Once a tick after the wheels. An engine is OFF, CRANKING or RUNNING:
+--   off → cranking  the rider opens the throttle (W) with the ignition on and
+--                   gas aboard, or switches the ignition back on (the part's
+--                   "Engine start / kill", bindable to any group key): the
+--                   starter turns it over for GAS_CRANK_T s (no drive yet)…
+--   → running       …then it catches: it idles off the throttle and pulls on it,
+--                   and burns what the stick asks of it;
+--   → off           the rider gets off (no one drives), the ignition is
+--                   killed, or the gas runs out.
 function gasTick(dt, ctl)
   if not next(GAS.engines) then return end
   local L = autoLib()
   local left = gasLeft()
   local burn, lph = 0, 0
+  local stick = math.abs(R2.dcmd or 0) > 0.05
   for _, e in pairs(GAS.engines) do
     local was = e.run
-    e.run = ctl == true and left > 1e-4
+    local ign = gasIgn(e)
+    local can = ctl == true and left > 1e-4 and ign
+    if not can then
+      e.run, e.crank = false, nil
+    elseif not e.run then
+      if e.crank then
+        e.crank = e.crank - dt
+        if e.crank <= 0 then e.run, e.crank = true, nil end
+      elseif stick or (ign and e.ign_was == false) then
+        e.crank = GAS_CRANK_T
+        GAS.crank_sfx = true
+      end
+    end
+    e.ign_was = ign
     if e.run and L and L.gasBurn then
       local b = L.gasBurn(e.m, e.effort or 0, e.kw or 0, dt)
       burn = burn + b
       lph = lph + b / math.max(dt, 1e-6) * 3600
     end
-    if not e.run then e.rpm = 0 elseif (e.effort or 0) < 0.02 and math.abs(R2.vf or 0) < 0.5 then e.rpm = e.m.idle or 1500 end
+    if e.crank then
+      e.rpm = 250 + 200 * (1 - e.crank / GAS_CRANK_T)      -- the starter's speed
+    elseif not e.run then e.rpm = 0
+    elseif (e.effort or 0) < 0.02 and math.abs(R2.vf or 0) < 0.5 then e.rpm = e.m.idle or 1500 end
+    if (e.shift_t or 0) > 0 then e.shift_t = e.shift_t - dt end
     e.fx_eff = (e.fx_eff or 0) + ((e.effort or 0) - (e.fx_eff or 0)) * math.min(1, 6 * dt)
     e.effort = 0
     if was and not e.run and ctl and left <= 1e-4 and not GAS.dry_said then
@@ -10643,6 +10774,7 @@ local function drive_tick(node, info, dt)
   R2.onWheels = grounded > 0
   R2.driving = ctl and grounded > 0 and not R2.gear and not R2.passive
   R2.ctl = ctl
+  R2.dcmd = dcmd
   local v = info.vel
   local spd = math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z)
   R2.speed = spd
@@ -10744,9 +10876,29 @@ local function drive_tick(node, info, dt)
     local lw = (rear_up > 0 and (R2.drive or 0) > 0.05) and math.min(1, R2.drive) * land or 0
     R2.bikeLean = (R2.bikeLean or 0) + (lw - (R2.bikeLean or 0)) * math.min(1, dt * 6)
     local lift = gl * (c * R2.bikeAr + R2_BIKE.lean * R2.bikeLean) / R2.bikeH   -- the push (per kg) that lifts the front
+    -- …less what the AIR takes off the front: the drag on the rider and
+    -- what rides high pitches the bike nose-up about its centre of mass (a
+    -- 500 at 26 m/s: ~0.5 kN·m, a quarter of the front's load), so the push
+    -- that lifts it is that much less (aeroTick's torque, last tick)
+    local mt = math.max(info.mass or 1, 1e-3)
+    local aq = (AERO.active and AERO.tq) or nil
+    if aq then
+      -- nose-up is about front × up
+      local nx, ny, nz = fy * upv.z - fz * upv.y, fz * upv.x - fx * upv.z, fx * upv.y - fy * upv.x
+      local mp = aq.x * nx + aq.y * ny + aq.z * nz
+      R2.aeroPitch = mp
+      lift = math.max(0.1 * lift, lift - math.max(0, mp) / (mt * R2.bikeH))
+    end
+    -- AT SPEED THE FRONT KEEPS MORE OF ITS LOAD: the push may lift it by
+    -- R2_BIKE.lift of the way at a walk, R2_BIKE.liftHi by R2_BIKE.vHi m/s (a
+    -- modern bike's wheelie control, and any rider in top gear: a front
+    -- skimming at 25 m/s is a front that skips; the pure 500 fell in every
+    -- flat-out run, the 250 with half its push did not)
+    local vb = math.max(0, math.min(1, ((spd or 0) - R2_BIKE.vLo) / (R2_BIKE.vHi - R2_BIKE.vLo)))
+    local kb = R2_BIKE.lift + (R2_BIKE.liftHi - R2_BIKE.lift) * vb
     -- (a hill steeper than the margin allows takes the margin up to 0.97:
     -- crawling up it on a light front beats stalling at its foot)
-    local k = math.max(R2_BIKE.lift, math.min(0.97, (need + 0.05 * gl) / math.max(lift, 1e-3)))
+    local k = math.max(kb, math.min(0.97, (need + 0.05 * gl) / math.max(lift, 1e-3)))
     accel = math.min(R2_BIKE.tc * gl + need, k * lift)
     -- WHEELIE CONTROL: the front up, the rear driving → the push comes back as
     -- the nose rises over the ground's slope past R2_BIKE.wfree, all the way
@@ -10854,6 +11006,7 @@ local function drive_tick(node, info, dt)
   local power = 0
   local limited, lmot = nil, 1   -- did the traction control hold a wheel back this tick (and which way)
   local smin = 1                  -- the worst-served motor (published: R2.served)
+  R2.srcF = 0                     -- the push the sources could give this tick (kN; the lead's aim below)
   for k, w in ipairs(R2.wheels) do
     local t = w.tyre
     if w.jointed then w.joint_age = (w.joint_age or 0) + dt end
@@ -10938,6 +11091,7 @@ local function drive_tick(node, info, dt)
           limited = (tgt > cur) and 1 or -1
           lmot = math.min(lmot, (c.motor or 1) * served)
         end
+        R2.srcF = R2.srcF + full * (c.motor or 1) * served / math.max(0.05, w.r or 0.33)
         tgt = math.max(cur - lead, math.min(cur + lead, tgt))
         j.motorSpeed = w.rs * tgt / w.r * 57.29578
         -- THE MOTOR'S PUSH IS THE TRACTION CONTROL'S (engine .1376, floptle
@@ -11013,6 +11167,18 @@ local function drive_tick(node, info, dt)
   R2.a_s = (R2.a_s or 0) + (am - (R2.a_s or 0)) * math.min(1, dt * 6)
   if limited and grounded > 0 then
     local want_a = (R2.want_a or R2_TC * gl) * lmot
+    -- (…or what the motors or the engine CAN give, if that is less: the
+    -- push their torque makes less the air's drag and the climb. A gas
+    -- engine near its top, or a motor at its torque, never makes the traction
+    -- control's push, and chasing it wound the lead up to R2_LK_MAX: the rim
+    -- ran a metre a second ahead of the ground at 25 m/s, spun up in every
+    -- hop and kicked the bike on landing, playtest 2026-11-03c)
+    if (R2.srcF or 0) > 0 and limited > 0 then
+      local m = math.max(info.mass or 1, 1e-3)
+      local drag = (AERO.active and AERO.hud and AERO.hud.drag) or 0
+      local can = (R2.srcF - drag) / m - climb
+      want_a = math.max(0.05 * gl * lmot, math.min(want_a, can))
+    end
     local e = (want_a - limited * R2.a_s) / math.max(want_a, 0.1)
     R2.lk = math.max(1, math.min(R2_LK_MAX, (R2.lk or 1.5) * math.exp(math.max(-1, math.min(1, e)) * dt * 6)))
     -- (remembered for this way only while rolling that way, not slowing,
@@ -11240,7 +11406,7 @@ end
 AUTO = { lib = nil, asked = false }
 function autoLib()
   local L = AUTO.lib
-  if L and type(L.suspJoint) == "function" then return L end
+  if L and L.valid ~= false and type(L.suspJoint) == "function" then return L end
   L = findScript and findScript("auto_drive") or nil
   if L and type(L.suspJoint) ~= "function" then return nil end
   if not L and not AUTO.asked and spawn then
@@ -11424,6 +11590,7 @@ R2_REAL_SUSP = true     -- false once an engine refuses the keys (hang_tyre)
 R2_REAL_BUMP = 0.8
 R2_REAL_REBOUND = 1.25
 R2_REAL_DROOP = 0.5
+R2_MOTO_DROOP = 0.065   -- m: the most a suspension part's wheel hangs (its old 13 cm fork's half)
 R2_WHEEL_SAG, R2_WHEEL_ZETA = 0.25, 0.5
 R2_GEAR_SAG, R2_GEAR_ZETA = 0.3, 0.7
 R2_WHEEL_TRAVEL = { S = 0.10, M = 0.15, L = 0.20, B = 0.04 }   -- parts_registry, parts_auto
@@ -11468,7 +11635,11 @@ function wheelReal(w, info, g, c)
     w.realLoad = load
   end
   w.realK, w.realC, w.realTravel = k, cd, travel
-  return k, cd * R2_REAL_BUMP, cd * R2_REAL_REBOUND, -R2_REAL_DROOP * travel, travel
+  -- (a fork's or swing arm's droop held to R2_MOTO_DROOP: the fork's
+  -- sliders are drawn on its stanchions only that far below where it hangs)
+  local droop = R2_REAL_DROOP * travel
+  if s then droop = math.min(droop, R2_MOTO_DROOP) end
+  return k, cd * R2_REAL_BUMP, cd * R2_REAL_REBOUND, -droop, travel
 end
 
 -- Every tick, per suspended wheel: how far it is compressed (the drawing and
@@ -11566,6 +11737,7 @@ function motoBike(node, info, cmds, vf, gl, dt, rxv, upv, rzv, gdir)
     local served = (elec.served and elec.served["g" .. g.uid]) or 1
     gt = gt + (g.m.torque or 1.5) * served
   end
+  R2.gyroT = gt   -- (published: the gyros' torque as powered, probes)
   local rider = R2.rider and crewAboard == true
   -- eased in from 40 % over BIKE_EASE s once a tyre is down: at full
   -- authority the moment the tyres came out, the torque on a craft still
@@ -11583,7 +11755,9 @@ function motoBike(node, info, cmds, vf, gl, dt, rxv, upv, rzv, gdir)
   -- level front is part yaw, and the balance spun the bike on the spot.
   local Fb = L.vec.unit(Fw)
   assembly.torque(node, vec3(-Fb[1] * tq, -Fb[2] * tq, -Fb[3] * tq))
-  if gt > 0 then draw_k = math.min(1, math.abs(tq) / math.max(0.1, gt)) end
+  -- …and fore and aft: the rider on the pegs (and what the gyros have left)
+  local ptq = motoPitch(node, info, dt, Fw, U, vf, gt * ease, rider) or 0
+  if gt > 0 then draw_k = math.min(1, (math.abs(tq) + 0.5 * math.abs(ptq)) / math.max(0.1, gt)) end
   for _, g in ipairs(R2.gyros or {}) do R2.draw["g" .. g.uid] = (g.m.draw or 0.4) * (0.15 + 0.85 * draw_k) end
   R2.lean, R2.leanT, R2.leanRate, R2.bikeSteer, R2.bikeTorque, R2.alat, R2.yawRate = phi, phiT, rate, steer, tq, alat, yaw
   R2.gl, R2.tmax, R2.share = gl, tmax, share
@@ -11603,6 +11777,95 @@ end
 -- few tenths of a second — never more torque than that authority.
 BIKE_AIR_PITCH = math.rad(3)
 BIKE_AIR_W = 5.0        -- rad/s: the attitude loop's natural frequency (critically damped)
+-- THE RIDER'S TECHNIQUE (playtest 9e675fb: "the slightest bumps when going
+-- fast make entire bikes flip over instead of the rider making a clean
+-- landing using actual riding techniques"). BIKE_RIDE2 = false gives back
+-- the rider before it (probes A/B it).
+--   in the air   the nose is set to the slope it will LAND on (the ground
+--                where the arc meets it, BIKE_AIR_PITCH rear wheel first),
+--                not to the level: a kicker's landing ramp and a whoop's
+--                back side are met square. The stick is the motocross
+--                rider's: throttle (W) lifts the nose BIKE_AIR_W_UP, the
+--                rear brake (S) drops it BIKE_AIR_S_DN.
+--   on the ground standing on the pegs: arms and legs soak up a pitch the
+--                ground did not ask for (a tyre kicked up by a bump, the
+--                other unloaded) — the pitch rate damped, and past
+--                BIKE_PITCH_FREE off the ground's slope sprung back, with
+--                the rider's RIDER_PITCH and half the gyros' torque.
+--   landing      for BIKE_LAND_T s after the tyres come back, weight back and
+--                knees bent: that damping BIKE_LAND_K times as hard.
+BIKE_RIDE2 = true
+BIKE_AIR_W_UP = math.rad(6)
+BIKE_AIR_S_DN = math.rad(10)
+BIKE_AIR_LOOK = 1.6       -- s of the arc searched for the landing
+RIDER_PITCH = 1.4         -- kN·m: a rider standing on the pegs, fore and aft
+RIDER_YAW = 0.8           -- kN·m: the hips and the wheels' gyroscopic stiffness, holding it straight in the air
+BIKE_PITCH_V = 4.0        -- m/s: from here up (a walk is the rider's own)
+BIKE_PITCH_D = 7.0        -- 1/s: the pitch rate's damping
+BIKE_PITCH_W = 4.0        -- rad/s: the spring past the free band
+BIKE_PITCH_FREE = math.rad(10)
+BIKE_LAND_T, BIKE_LAND_K = 0.5, 1.8
+-- The craft's moment of inertia about the unit world axis a (t·m²).
+function motoIabout(info, a)
+  local It = info.inertia
+  if not (It and It[1]) then return (info.mass or 0.3) * 0.5 end
+  return a[1] * (It[1].x * a[1] + It[1].y * a[2] + It[1].z * a[3]) + a[2] * (It[2].x * a[1] + It[2].y * a[2] + It[2].z * a[3])
+    + a[3] * (It[3].x * a[1] + It[3].y * a[2] + It[3].z * a[3])
+end
+-- The pitch (rad, + rising ahead) of the ground the bike will land on: its
+-- centre of mass's arc (tick pose, the engine's velocity) stepped 0.1 s at a
+-- time up to BIKE_AIR_LOOK s, the ground under each step found straight
+-- down; where the arc comes within BIKE_AIR_TD m of it, the slope between
+-- the ground 0.8 m behind and 0.8 m ahead of that point along the level
+-- front Fl. (Cast along the arc itself, the rays met the kicker's flanks
+-- and a 35° "landing" pitched a bike over its own lip, vbump 2026-11-04.)
+-- nil when nothing is met. Kept as an angle only (no world point outlives
+-- the tick).
+BIKE_AIR_TD = 1.1
+function motoLandSlope(node, info, U, Fl, gl)
+  local c, v = info.com, info.vel
+  if not (c and v) then return nil end
+  local own = r2Own(node)
+  local function down(x, y, z)
+    local h = raycast(x + U[1] * 0.5, y + U[2] * 0.5, z + U[3] * 0.5, -U[1], -U[2], -U[3], 40, { ignore = own })
+    return h and (h.distance - 0.5) or nil
+  end
+  local h = 0.1
+  local vu = v.x * U[1] + v.y * U[2] + v.z * U[3]
+  for k = 1, math.floor(BIKE_AIR_LOOK / h) do
+    local t = k * h
+    -- (only where it is coming down: on the way up off a lip, the lip)
+    if vu - gl * t < 0 then
+      local px = c.x + v.x * t - 0.5 * U[1] * gl * t * t
+      local py = c.y + v.y * t - 0.5 * U[2] * gl * t * t
+      local pz = c.z + v.z * t - 0.5 * U[3] * gl * t * t
+      local g = down(px, py, pz)
+      if g and g < BIKE_AIR_TD then
+        local a = down(px - Fl[1] * 0.8, py - Fl[2] * 0.8, pz - Fl[3] * 0.8)
+        local b = down(px + Fl[1] * 0.8, py + Fl[2] * 0.8, pz + Fl[3] * 0.8)
+        if not (a and b) then return nil end
+        return math.max(-0.35, math.min(0.35, math.atan2(a - b, 1.6)))
+      end
+    end
+  end
+  return nil
+end
+-- The chassis's pitch (rad, + nose up) with both tyres on level ground: the
+-- line through the wheel centres, seen from its front. A bike built with its
+-- rear wheel hung higher than the front (the user's 500: 6.6°) sits nose up,
+-- and an attitude aimed off the chassis alone landed it front first.
+function motoPitch0()
+  local f, r
+  for _, w in ipairs(R2.wheels or {}) do
+    if not f or (w.a or 0) > (f.a or 0) then f = w end
+    if not r or (w.a or 0) < (r.a or 0) then r = w end
+  end
+  if not (f and r and f ~= r and f.cx and r.cx) then return 0 end
+  local F = R2.fwd or { x = 1, z = 0 }
+  local dl = (f.cx - r.cx) * F.x + (f.cz - r.cz) * F.z
+  if math.abs(dl) < 0.3 then return 0 end
+  return -math.atan2((f.cy - (f.r or 0.33)) - (r.cy - (r.r or 0.33)), dl)
+end
 function motoAir(node, info, dt, rxv, upv, rzv, gdir)
   local L = AUTO.lib
   if not L or R2.motoOff or not R2.bikeT0 then return end   -- (never before its tyres first touched)
@@ -11625,18 +11888,109 @@ function motoAir(node, info, dt, rxv, upv, rzv, gdir)
       + a[3] * (It[3].x * a[1] + It[3].y * a[2] + It[3].z * a[3])
   end
   local W = BIKE_AIR_W
+  -- the nose's aim: the local level, or (BIKE_RIDE2) the landing's slope,
+  -- looked for every few ticks, and the rider's stick on top
+  local aim = BIKE_AIR_PITCH
+  if BIKE_RIDE2 then
+    aim = aim + math.max(-0.35, math.min(0.35, motoPitch0()))
+    R2.landN = (R2.landN or 0) - 1
+    if R2.landN <= 0 then
+      R2.landN = 3
+      R2.landSlope = motoLandSlope(node, info, U, Fl, gl2)
+    end
+    local sl = R2.landSlope
+    if sl then aim = aim + sl end
+    local dc = R2.dcmd or 0
+    if dc > 0.05 then aim = aim + BIKE_AIR_W_UP * math.min(1, dc) elseif dc < -0.05 then aim = aim - BIKE_AIR_S_DN * math.min(1, -dc) end
+    R2.airAim = aim
+  end
   -- roll (+ leans it left = a turn about −front) and pitch (+ about right)
   local tr = Iabout(Fl) * (W * W * (0 - phi) - 2 * W * rate)
-  local tp = Iabout(Rt) * (W * W * (BIKE_AIR_PITCH - th) - 2 * W * q)
+  local tp = Iabout(Rt) * (W * W * (aim - th) - 2 * W * q)
   local gt = 0
   for _, g in ipairs(R2.gyros or {}) do
     gt = gt + (g.m.torque or 1.5) * ((elec.served and elec.served["g" .. g.uid]) or 1)
   end
-  local tmax = L.balanceAuthority(gt, R2.rider and crewAboard == true, 99)
-  local tl = math.sqrt(tr * tr + tp * tp)
-  if tl > tmax and tl > 0 then tr, tp = tr * tmax / tl, tp * tmax / tl end
-  assembly.torque(node, vec3(-Fl[1] * tr + Rt[1] * tp, -Fl[2] * tr + Rt[2] * tp, -Fl[3] * tr + Rt[3] * tp))
-  R2.bikeTorque, R2.airPitchTq = tr, tp
+  local rider = R2.rider and crewAboard == true
+  local ty = 0
+  if BIKE_RIDE2 then
+    -- KEPT STRAIGHT: the bike's front held along its flight (the spinning
+    -- wheels' gyroscopic stiffness and the rider's hips). Loose, it yawed
+    -- ~0.07 rad/s off a kicker and landed 4-6° across its own path: the
+    -- tyres bit sideways, the yaw kicked to 1 rad/s and it slid out (vbump,
+    -- 2026-11-04).
+    local v = info.vel
+    local vu = v.x * U[1] + v.y * U[2] + v.z * U[3]
+    local hx, hy, hz = v.x - U[1] * vu, v.y - U[2] * vu, v.z - U[3] * vu
+    local hl = math.sqrt(hx * hx + hy * hy + hz * hz)
+    if hl > 3 and (hx * Fl[1] + hy * Fl[2] + hz * Fl[3]) > 0 then
+      hx, hy, hz = hx / hl, hy / hl, hz / hl
+      -- (+ the path is to the front's left: a turn about +U)
+      local sn = (Fl[2] * hz - Fl[3] * hy) * U[1] + (Fl[3] * hx - Fl[1] * hz) * U[2] + (Fl[1] * hy - Fl[2] * hx) * U[3]
+      local yr = w.x * U[1] + w.y * U[2] + w.z * U[3]
+      ty = Iabout(U) * (W * W * math.asin(math.max(-1, math.min(1, sn))) - 2 * W * yr)
+    end
+    -- the gyros' torque is one budget for the three axes; the rider's body
+    -- rolls it with RIDER_TORQUE, pitches it with RIDER_PITCH and turns it
+    -- with RIDER_YAW on top
+    local rr, rp, ry = rider and L.RIDER_TORQUE or 0, rider and RIDER_PITCH or 0, rider and RIDER_YAW or 0
+    local tl = math.sqrt(tr * tr + tp * tp + ty * ty)
+    local gr, gp, gy = 0, 0, 0
+    if tl > 0 then gr, gp, gy = gt * math.abs(tr) / tl, gt * math.abs(tp) / tl, gt * math.abs(ty) / tl end
+    tr = math.max(-(gr + rr), math.min(gr + rr, tr))
+    tp = math.max(-(gp + rp), math.min(gp + rp, tp))
+    ty = math.max(-(gy + ry), math.min(gy + ry, ty))
+  else
+    local tmax = L.balanceAuthority(gt, rider, 99)
+    local tl = math.sqrt(tr * tr + tp * tp)
+    if tl > tmax and tl > 0 then tr, tp = tr * tmax / tl, tp * tmax / tl end
+  end
+  assembly.torque(node, vec3(-Fl[1] * tr + Rt[1] * tp + U[1] * ty, -Fl[2] * tr + Rt[2] * tp + U[2] * ty, -Fl[3] * tr + Rt[3] * tp + U[3] * ty))
+  R2.bikeTorque, R2.airPitchTq, R2.airYawTq = tr, tp, ty
+  R2.landT = 0
+end
+
+-- STANDING ON THE PEGS (BIKE_RIDE2, motoBike's, on the ground): a pitch the
+-- ground did not ask for, soaked up. Returns the torque (kN·m, + nose up)
+-- it put in about the level right Rt.
+function motoPitch(node, info, dt, Fw, U, vf, gt, rider)
+  if not BIKE_RIDE2 or math.abs(vf or 0) < BIKE_PITCH_V then R2.pitchTq = 0 return 0 end
+  local L = AUTO.lib
+  local d = Fw[1] * U[1] + Fw[2] * U[2] + Fw[3] * U[3]
+  local Fl = L.vec.unit({ Fw[1] - U[1] * d, Fw[2] - U[2] * d, Fw[3] - U[3] * d })
+  local Rt = L.vec.unit(L.vec.cross(Fl, U))
+  local w = info.angVel
+  local th = math.asin(math.max(-1, math.min(1, d)))
+  local q = w.x * Rt[1] + w.y * Rt[2] + w.z * Rt[3]
+  local gs = math.asin(math.max(-0.95, math.min(0.95, R2.gslope or 0)))
+  local err = th - gs
+  local over = 0
+  if err > BIKE_PITCH_FREE then over = err - BIKE_PITCH_FREE elseif err < -BIKE_PITCH_FREE then over = err + BIKE_PITCH_FREE end
+  -- (a wheelie the rider asked for is the wheelie control's, R2_BIKE: the
+  -- spring only brings the nose back down while the throttle is shut)
+  if over > 0 and (R2.drive or 0) > 0.3 then over = 0 end
+  R2.landT = (R2.landT or 9) + dt
+  local kd = BIKE_PITCH_D * ((R2.landT < BIKE_LAND_T) and BIKE_LAND_K or 1)
+  local I = motoIabout(info, Rt)
+  local W = BIKE_PITCH_W
+  local tp = I * (-W * W * over - kd * q)
+  local cap = (rider and RIDER_PITCH or 0) + 0.5 * (gt or 0)
+  tp = math.max(-cap, math.min(cap, tp))
+  -- …and for a second after a landing, kept straight: a yaw the lean does
+  -- not ask for (g tan φ / v) damped by the hips (RIDER_YAW) and the gyros.
+  -- Landed with the throttle open, the rear stepped out at 0.5 rad/s and the
+  -- bike spun to 3 rad/s and slid out sideways (vbump, 2026-11-04).
+  local ty = 0
+  if R2.landT < 2 * BIKE_LAND_T then
+    local yr = w.x * U[1] + w.y * U[2] + w.z * U[3]
+    local want = (L.leanOf and R2.lean) and (9.8 * math.tan(math.max(-0.7, math.min(0.7, R2.lean or 0))) / math.max(3, math.abs(vf))) or 0
+    local Iu = motoIabout(info, U)
+    local ycap = (rider and RIDER_YAW or 0) + 0.5 * (gt or 0)
+    ty = math.max(-ycap, math.min(ycap, -Iu * BIKE_PITCH_D * (yr - want)))
+  end
+  assembly.torque(node, vec3(Rt[1] * tp + U[1] * ty, Rt[2] * tp + U[2] * ty, Rt[3] * tp + U[3] * ty))
+  R2.pitchTq, R2.landYawTq = tp, ty
+  return tp
 end
 
 -- r2Steady on a bike: the roll is the balance's, not the reaction wheels'
@@ -12129,9 +12483,17 @@ function r2Tick(node, info, dt)
     drive_tick(node, info, dt)
   else
     R2.driving, R2.onWheels = false, false
+    -- (wheels stowed: with no one aboard its engines stop; a rider still on
+    -- it — a long jump, a warp — keeps them idling, and no stick cranks one)
+    if next(GAS.engines) then
+      R2.dcmd = 0
+      gasTick(dt, piloting and R2.why ~= "unpiloted" and elec.control ~= false and not dock.plan)
+    end
   end
   SFX.drive(node, R2.live and not R2.gear and not R2.passive, R2.speed or 0, R2.drive or 0, R2.onWheels, GAS.elecShare)
-  if next(GAS.engines) then gasFx(node, info, dt) end
+  -- (with every engine gone — torn off, the craft rebuilt — the loop still
+  -- hears that it is off, and runs down)
+  if next(GAS.engines) or SFX.live.gas then gasFx(node, info, dt) end
 end
 
 -- Before the craft is cut (staging, undocking, a part tearing off, docking):
@@ -12412,6 +12774,9 @@ function aeroTick(node, info, dt, thr, sp, sy, sr, ex, ey, ez, apx, apy, apz, ay
   -- (A parked craft is pushed by the breeze too: since engine rc33 a sleeper
   -- absorbs force changes under a fifth of its weight, so this no longer
   -- keeps it awake — tools/perf/results/rc33.md.)
+  -- (the air's torque about the centre of mass, world: a bike's push budget
+  -- takes the nose-up the drag on its rider makes off it, drive_tick)
+  AERO.tq = { x = rx.x * tx + up.x * ty + rz.x * tz, y = rx.y * tx + up.y * ty + rz.y * tz, z = rx.z * tx + up.z * ty + rz.z * tz }
   if fm > 0 and ks > 0 then
     assembly.force(node, vec3(rx.x * fx + up.x * fy + rz.x * fz, rx.y * fx + up.y * fy + rz.y * fz, rx.z * fx + up.z * fy + rz.z * fz))
     assembly.torque(node, vec3(rx.x * tx + up.x * ty + rz.x * tz, rx.y * tx + up.y * ty + rz.y * tz, rx.z * tx + up.z * ty + rz.z * tz))
@@ -13501,6 +13866,8 @@ end
 -- (lateUpdate reads post-writeback poses) — drawn from fixedUpdate it floats
 -- a rails-carry beside the hull on any orbiting world.
 function lateUpdate(node, dt)
+  -- the drive and engine loops die with the tick that feeds them (paused, dormant)
+  SFX.watch(dt)
   -- DORMANT: nothing but the tyres, and only with the camera close (dormTick)
   if dormant then
     if DORM.vis then

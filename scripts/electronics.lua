@@ -171,6 +171,16 @@ MODULES = {
     readouts = { "speed" },
     pri = 5,
   },
+  -- A GAS ENGINE's ignition (parts_auto, vessel_controller GAS): on, it
+  -- starts itself the moment the rider opens the throttle (the starter turns
+  -- it over for a moment, then it catches and idles); off is the kill switch,
+  -- and switching it back on cranks it straight away. It stops when the rider
+  -- gets off or the gas runs out.
+  gasengine = {
+    label = "Gas engine",
+    toggles = { { state = "ign", on = "Start engine", off = "Kill engine", toggle = "Engine start / kill", default = true } },
+    readouts = { "rpm" },
+  },
   claw = {
     label = "Landing claw",
     toggles = { { state = "armed", on = "Arm claw", off = "Disarm claw", toggle = "Arm / disarm claw", default = false } },

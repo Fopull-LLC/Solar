@@ -22,6 +22,10 @@ STANDALONE = {
   ["Company"] = true, ["Materials"] = true, ["Inventory"] = true, ["Research"] = true,
   ["Settings"] = true, ["Electronics"] = true, ["Debug"] = true,
   ["Build Host"] = true,
+  -- (the standalone builder carries AutoLib so its parts are registered when
+  -- the stand loads; over the system scene the builder finds or spawns the
+  -- live one, and its load waits for the registry: builder.lua load_blueprint)
+  ["AutoLib"] = true,
 }
 
 -- Split a scene file into its header, its node blocks (each with the comment

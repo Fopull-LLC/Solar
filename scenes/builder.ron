@@ -1351,6 +1351,35 @@
                 ),
             ],
         ),
+        // AutoLib: the auto-engineering libraries (scripts/parts_auto.lua, the
+        // moto, rover and gas parts, and scripts/auto_drive.lua), copied from
+        // prefabs/AutoLib.prefab.ron like AeroLib above. Inline so its parts
+        // are in the registry when the standalone builder puts the craft on
+        // the stand (spawned on first ask, it came up a frame after the load).
+        // Not in the overlay (tools/gen_builder_overlay.lua STANDALONE): over
+        // the system scene the builder finds or spawns the live one, and the
+        // stand's load waits for the registry (builder.lua load_blueprint).
+        (
+            name: "AutoLib",
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Empty,
+            scripts: [
+                (
+                    kind: "parts_auto",
+                    enabled: true,
+                    params: [],
+                ),
+                (
+                    kind: "auto_drive",
+                    enabled: true,
+                    params: [],
+                ),
+            ],
+        ),
         // PANEL HOSTS: hidden children of Builder UI, one per panel script.
         // catalog_panel and groups_panel already have theirs ("Catalogue" and
         // "GroupsPanel" above), so they are not repeated here.
