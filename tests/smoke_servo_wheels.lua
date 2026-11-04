@@ -119,8 +119,17 @@ do
       P{ uid = 7, id = "chain", x = -0.4, y = 0.55, z = 0, parent = 2, att = "surface", size = { e = 2, w = 5, teeth = 48 } },
     } }
   end
-  local function warnings(hx, hy)
-    store["shipyard.blueprint"] = bike(hx, hy)
+  -- the engine on the hinge instead (on the saddle), both wheels on the frame:
+  -- the engine's sprocket swings, the wheel's stays
+  local function engBike(hx, hy)
+    local b = bike(hx, hy)
+    b.parts[4].parent, b.parts[4].att = 1, "bottom"
+    b.parts[2].parent, b.parts[2].att = 4, "surface"
+    b.parts[5].parent = 1
+    return b
+  end
+  local function warnings(hx, hy, mk)
+    store["shipyard.blueprint"] = (mk or bike)(hx, hy)
     local env = setmetatable({}, { __index = function(_, k) if k == "time" then return 0 end return API[k] or _G[k] end })
     local chunk = assert(loadfile("solar/scripts/builder.lua"))
     setfenv(chunk, env)
@@ -144,6 +153,47 @@ do
   check("a hinge high above the sprocket: the wheel checks say how far it keeps the drive", far_w ~= nil and far_w:find("Servo Hinge", 1, true), far_w)
   check("…a warning, never a block", far_chk and not ours(far_chk), far_chk and far_chk.block)
   if far_w then print("  (" .. far_w .. ")") end
+  local eng_w, eng_chk = warnings(0, 1.0, engBike)
+  check("the engine on a hinge above it: the wheel checks say how far its chain keeps the drive",
+    eng_w ~= nil and eng_w:find("on its joint", 1, true) and eng_w:find("Servo Hinge", 1, true), eng_w)
+  check("…a warning, never a block", eng_chk and not ours(eng_chk), eng_chk and eng_chk.block)
+  if eng_w then print("  (" .. eng_w .. ")") end
+end
+
+-- ── builder symmetry: a mirror pair of robotic parts ────────────────────────
+-- The builder's mirror copy is a proper rotation (mirrorBasis: X and Y
+-- reflected, Z = X × Y). The same hinge angle about Z and the same piston
+-- push along Y are each other's mirror image; the same rotor turn about Y is
+-- not, so the copy rotor turns reversed (electronics mirrorSpin).
+do
+  local function rot(v, k, a)
+    local c, s = math.cos(a), math.sin(a)
+    local d = v[1] * k[1] + v[2] * k[2] + v[3] * k[3]
+    local cx, cy, cz = k[2] * v[3] - k[3] * v[2], k[3] * v[1] - k[1] * v[3], k[1] * v[2] - k[2] * v[1]
+    return { v[1] * c + cx * s + k[1] * d * (1 - c), v[2] * c + cy * s + k[2] * d * (1 - c), v[3] * c + cz * s + k[3] * d * (1 - c) }
+  end
+  local function refl(v) return { v[1], v[2], -v[3] } end      -- across the z = 0 plane
+  local function cross(a, b) return { a[2] * b[3] - a[3] * b[2], a[3] * b[1] - a[1] * b[3], a[1] * b[2] - a[2] * b[1] } end
+  local X, Y = { 1, 0, 0 }, { 0, 0.6, 0.8 }
+  local Z = cross(X, Y)
+  local X2, Y2 = refl(X), refl(Y)
+  local Z2 = cross(X2, Y2)
+  local p = { 0.6, 0.5, 0.3 }                                    -- a child, from the pivot
+  local function same(a, b) return near(a[1], b[1], 1e-9) and near(a[2], b[2], 1e-9) and near(a[3], b[3], 1e-9) end
+  check("a mirrored hinge's swing is the mirror image at the same angle", same(refl(rot(p, Z, 0.7)), rot(refl(p), Z2, 0.7)))
+  check("a mirrored rotor's turn is the mirror image only reversed", same(refl(rot(p, Y, 0.7)), rot(refl(p), Y2, -0.7))
+    and not same(refl(rot(p, Y, 0.7)), rot(refl(p), Y2, 0.7)))
+  local E = load("scripts/electronics.lua")
+  local RM, HM = { { type = "rotor", torque = 2 } }, { { type = "hinge", torque = 3 } }
+  local flip = E.mirrorSpin({
+    [3] = { uid = 3, id = "rotor", mods = RM, sym = 2, mir = "z" },
+    [7] = { uid = 7, id = "rotor", mods = RM, sym = 2, mir = "z" },
+    [9] = { uid = 9, id = "rotor", mods = RM, sym = 0, mir = "" },
+    [5] = { uid = 5, id = "hinge", mods = HM, sym = 4, mir = "z" },
+    [6] = { uid = 6, id = "hinge", mods = HM, sym = 4, mir = "z" },
+  })
+  check("mirrorSpin: the copy rotor of a mirror pair turns reversed, the first and lone ones don't, hinges never",
+    flip[7] == -1 and flip[3] == nil and flip[9] == nil and flip[5] == nil and flip[6] == nil)
 end
 
 if #fails > 0 then

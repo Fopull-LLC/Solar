@@ -422,6 +422,9 @@ local function test_begin(B, E, C)
     end
   end
   table.sort(robo, function(a, b) if a.depth ~= b.depth then return a.depth < b.depth end return a.uid < b.uid end)
+  -- (a mirrored pair's copy rotor turns the other way, as in flight: electronics mirrorSpin)
+  local flip = E.mirrorSpin and E.mirrorSpin(recs) or {}
+  for _, rb in ipairs(robo) do rb.spin = flip[rb.uid] or 1 end
   local chain = {}
   for _, rb in ipairs(robo) do
     for u in pairs(rb.set) do
@@ -573,7 +576,7 @@ local function test_tick(B, E, C, dt)
     local spd = math.max(0.1, (st.speed or 100) / 100)
     if not st.locked then
       if rb.kind == "rotor" then
-        if st.spin then rb.cur = (rb.cur + (st.rpm or 0) * 6 * dt) % 360 end
+        if st.spin then rb.cur = (rb.cur + (st.rpm or 0) * 6 * (rb.spin or 1) * dt) % 360 end
       else
         local want = (rb.kind == "hinge") and math.max(-90, math.min(90, st.angle or 0))
           or math.max(0, math.min(0.8, st.extension or 0))

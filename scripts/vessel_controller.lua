@@ -9788,6 +9788,11 @@ function r2WheelCmd(wheels, plan, drive, steer, spd, alat)
       end
     end
   end
+  -- NO WHEEL STEERS (every one set to steer off, or a loader steered by a
+  -- hinge): A/D still turn it, by skid steering every wheel, as a tank
+  -- does, rather than doing nothing at all (servoprobe smid skid)
+  local auto_skid = not (R2 and R2.bike) and #wheels >= 2
+  for _, w in ipairs(wheels) do if w.steers then auto_skid = false end end
   for k, w in ipairs(wheels) do
     local c = w.cfg or {}
     local st, scale = 0, 1
@@ -9801,7 +9806,7 @@ function r2WheelCmd(wheels, plan, drive, steer, spd, alat)
       scale = math.sqrt(arm * arm + lat * lat) / math.abs(R)
     end
     local dv = (drive or 0) * scale
-    if c.skid and math.abs(steer or 0) > 1e-3 then
+    if (c.skid or auto_skid) and math.abs(steer or 0) > 1e-3 then
       -- skid steer on top: the wheels on the inside of the turn hold back
       local side = (w.l or 0) >= 0 and 1 or -1
       dv = dv - steer * side * (math.abs(drive or 0) > 0.05 and 0.6 or 1.0)
@@ -10143,6 +10148,9 @@ local function r2_scan(node)
     local st = E.stateOf(d)
     r.cur = st.cur or 0
   end
+  -- (a mirrored pair's copy rotor turns the other way: electronics mirrorSpin)
+  local flip = E.mirrorSpin and E.mirrorSpin(bp_by_uid) or {}
+  for _, r in ipairs(R2.robo) do r.spin = flip[r.uid] or 1 end
   -- Per part, the robotic parts that move it, innermost (nearest the part) first.
   for _, r in ipairs(R2.robo) do
     for u in pairs(r.set) do
@@ -10298,27 +10306,27 @@ function roboMountScan()
       local s = w.susp
       w.mount0 = { c = { w.cx, w.cy, w.cz }, axle = { w.axle[1], w.axle[2], w.axle[3] },
                    axis = s and s.axis and { s.axis[1], s.axis[2], s.axis[3] } or nil, steer0 = w.steer0 or 0 }
-      local g = w.gas
-      local cd = g and bp_by_uid[g.chain]
-      local cr, wr = g and R2.rest[g.chain], R2.rest[w.uid]
-      local L = cd and (tonumber(type(cd.size) == "table" and cd.size.len) or tonumber(cd.h))
-      if cr and wr and L and L > 0.05 and not (R2.chain[g.chain]) then
-        local h = L * 0.5
-        local a = { cr.x - cr.Y[1] * h, cr.y - cr.Y[2] * h, cr.z - cr.Y[3] * h }
-        local b = { cr.x + cr.Y[1] * h, cr.y + cr.Y[2] * h, cr.z + cr.Y[3] * h }
-        local d = { b[1] - wr.x, b[2] - wr.y, b[3] - wr.z }
-        g.run = { a = a, b = b, L = L, lb = { d[1] * wr.X[1] + d[2] * wr.X[2] + d[3] * wr.X[3],
-          d[1] * wr.Y[1] + d[2] * wr.Y[2] + d[3] * wr.Y[3], d[1] * wr.Z[1] + d[2] * wr.Z[2] + d[3] * wr.Z[3] } }
-        g.k, g.stretch = 1, 0
-      end
+    end
+    -- the run of a Drive Chain to it, when a joint moves the wheel, the
+    -- engine or the chain (each end in the frame of the part it is on)
+    local g = w.gas
+    local cd = g and bp_by_uid[g.chain]
+    local cr = g and R2.rest[g.chain]
+    local L = cd and (tonumber(type(cd.size) == "table" and cd.size.len) or tonumber(cd.h))
+    if g then g.run, g.k, g.stretch = nil, 1, 0 end
+    if cr and L and L > 0.05 and (R2.chain[w.uid] or R2.chain[g.e.uid] or R2.chain[g.chain]) then
+      local h = L * 0.5
+      g.run = { L = L, eu = g.e.uid, a = { cr.x - cr.Y[1] * h, cr.y - cr.Y[2] * h, cr.z - cr.Y[3] * h },
+                b = { cr.x + cr.Y[1] * h, cr.y + cr.Y[2] * h, cr.z + cr.Y[3] * h } }
     end
   end
   R2.chainSaid = nil
 end
 
--- THE CHAIN OVER A MOVING MOUNT (robo_write, after the parts are posed). The
--- engine's sprocket stays put; the wheel's goes where the joints carry it.
--- The chain runs between them (its part re-laid along the new run, drawn
+-- THE CHAIN OVER A MOVING MOUNT (robo_write, after the parts are posed). Each
+-- sprocket goes where the joints carrying its part put it: the wheel's on a
+-- servo'd swing arm, the engine's on a servo'd engine mount, both together
+-- when one joint carries the engine and the wheel. The chain runs between them (its part re-laid along the new run, drawn
 -- stretched by the few % it gives), and how far the sprockets are from the
 -- length it was built at decides how much of the engine reaches the wheel
 -- (auto_drive chainShare): all of it within the chain's slack (a spring
@@ -10332,30 +10340,24 @@ function roboChains(node)
   for _, w in ipairs(R2.wheels) do
     local g = w.gas
     local run = g and g.run
-    if run and w.mount0 then
-      local wr = R2.rest[w.uid]
-      local p, B = robo_pose(w.uid)
-      if p and wr then
-        local lb = run.lb
-        local b = { p[1] + B[1][1] * lb[1] + B[2][1] * lb[2] + B[3][1] * lb[3],
-                    p[2] + B[1][2] * lb[1] + B[2][2] * lb[2] + B[3][2] * lb[3],
-                    p[3] + B[1][3] * lb[1] + B[2][3] * lb[2] + B[3][3] * lb[3] }
-        local a = run.a
+    if run then
+      do
+        -- each sprocket where the joints carrying its part have it now
+        local a, b = roboPoint(run.eu, run.a), roboPoint(w.uid, run.b)
         local dx, dy, dz = b[1] - a[1], b[2] - a[2], b[3] - a[3]
         local L1 = math.sqrt(dx * dx + dy * dy + dz * dz)
         g.stretch = L1 - run.L
         g.k = (AL and AL.chainShare) and AL.chainShare(g.stretch, run.L) or 1
         if g.k < 0.999 and not R2.chainSaid then
           R2.chainSaid = true
-          if caption then caption(g.k > 0 and "the chain is past its slack — it skips on the sprocket" or "the chain is off its sprocket — the wheel rolls free") end
+          roboSay("CHAIN SKIPPING", g.k > 0 and "The joint has pulled the chain past its slack: it skips on the sprocket, and the wheel gets part of the engine." or "The joint has pulled the chain off its sprocket: the wheel rolls free until the joint comes back.")
         elseif g.k >= 0.999 then
           R2.chainSaid = nil
         end
         local n = r2NodeOf(node, g.chain)
         if n and L1 > 0.05 and not integ.gone[g.chain] then
           local Y = { dx / L1, dy / L1, dz / L1 }
-          local ax = B[1]
-          if w.gear then ax = B[3] end
+          local ax = roboTurn(w.uid, w.axle)
           local k = ax[1] * Y[1] + ax[2] * Y[2] + ax[3] * Y[3]
           local X = { ax[1] - Y[1] * k, ax[2] - Y[2] * k, ax[3] - Y[3] * k }
           local xl = math.sqrt(X[1] * X[1] + X[2] * X[2] + X[3] * X[3])
@@ -10410,6 +10412,97 @@ function roboMounts(node, info)
           or math.abs(w.steer0 - (h.steer or 0)) > ROBO_REHANG_DEG then
           roboRehang(node, w, info)
         end
+      end
+    end
+  end
+  roboReplan()
+end
+
+-- What the joints have done to the drive, said to whoever rides or flies it:
+-- the middle of the screen (big_caption) — a caption alone is the sound
+-- subtitles' channel and is off unless the player turned captions on — and
+-- the log.
+function roboSay(head, line)
+  if log then log("robotics: " .. line) end
+  if not (piloting or crewAboard) then return end
+  local bc = findScript and findScript("big_caption")
+  if bc and bc.show then bc.show(head, line, 4.0)
+  elseif caption then caption(line) end
+end
+
+-- THE PLAN AS THE JOINTS POSE IT (roboMounts, whenever a joint moved). The
+-- steering plan, the wheelbase, the centre of mass's height and each wheel's
+-- lever about it were worked out from the blueprint at the scan; a piston
+-- that stretches a bike's wheelbase by 0.8 m, or a servo that folds a
+-- loader's front half round, changes all of them. So they are worked out
+-- again from the parts where the joints have them now. A two-wheeler bent
+-- so far its wheels are out of line is past what its balance assist can
+-- do (it steers and leans as a rigid frame): the rider is told so.
+function roboReplan()
+  local posed = {}
+  for u, d in pairs(bp_by_uid) do
+    local p = R2.chain[u] and robo_pose(u)
+    posed[u] = p and { x = p[1], y = p[2], z = p[3], mass = d.mass } or d
+  end
+  local list = {}
+  for _, w in ipairs(R2.wheels) do if not r2Stowed(w) then list[#list + 1] = w end end
+  r2SteerPlan(list, R2.fwd, posed, integ.gone)
+  if not R2.bike then return end
+  local amin, amax, lmin, lmax = math.huge, -math.huge, math.huge, -math.huge
+  for _, w in ipairs(list) do
+    amin, amax = math.min(amin, w.a or 0), math.max(amax, w.a or 0)
+    lmin, lmax = math.min(lmin, w.l or 0), math.max(lmax, w.l or 0)
+  end
+  if amax < amin then return end
+  -- (as motoPlan has them)
+  local hcg = (R2.plan and R2.plan.hcg) or 0.8
+  R2.wheelbase = math.max(0.3, amax - amin)
+  R2.wheelieK = 0.7 * math.max(0.05, -amin) / math.max(0.3, hcg)
+  R2.bikeAr, R2.bikeH = math.max(0.05, -amin), math.max(0.3, hcg)
+  local out = lmax - lmin
+  if out > 0.3 and not R2.bentSaid then
+    R2.bentSaid = true
+    roboSay("WHEELS OUT OF LINE", string.format("The joints have bent the wheels %.0f cm out of line: the balance assist can't hold a bike like that. Straighten the frame to ride.", out * 100))
+  elseif out < 0.2 then
+    R2.bentSaid = nil
+  end
+end
+
+-- THE CENTRE OF MASS IN THE HULL'S FRAME, from one tick pose (info): the
+-- origin, right and up the sim has this tick, so no drawn pose is mixed in.
+function r2HullCom(info)
+  local c, o, X, Y = info and info.com, info and info.origin, info and info.right, info and info.up
+  if not (c and o and X and Y) then return nil end
+  local Z = { x = X.y * Y.z - X.z * Y.y, y = X.z * Y.x - X.x * Y.z, z = X.x * Y.y - X.y * Y.x }
+  local dx, dy, dz = c.x - o.x, c.y - o.y, c.z - o.z
+  return { dx * X.x + dy * X.y + dz * X.z, dx * Y.x + dy * Y.y + dz * Y.z, dx * Z.x + dy * Z.y + dz * Z.z }
+end
+
+-- EVERY TYRE AFTER A RE-WEIGH (robo_tick, each tick on a craft with robotic
+-- parts). The engine keeps a joint's hull-side anchor in the compound's
+-- centre-of-mass frame as it was when the joint was made, so when a joint
+-- moves mass across the craft (a piston pushing the front half 0.8 m out
+-- moved a bike's centre of mass 15 cm) every tyre NOT on the moving side
+-- drifts with the centre of mass: the bike's rear tyre crept 15 cm forward
+-- of its swing arm and the wheelbase came out 15 % short of the frame's
+-- (servoprobe smid pext/curl; engine card 0636). So a tyre whose centre of
+-- mass has moved more than ROBO_REHANG_M in the hull's frame since it was
+-- hung is hung again where its mount is. (Measured: the bike's centre of
+-- mass went 0.010 → 0.161 m forward and its rear tyre −0.807 → −0.656 m with
+-- it, the joint's own otherAnchor reading −0.786 throughout.)
+function roboComCheck(node, info)
+  local c = r2HullCom(info)
+  if not c then return end
+  local lim = ROBO_REHANG_M * ROBO_REHANG_M
+  for _, w in ipairs(R2.wheels) do
+    local h, t = w.hung, w.tyre
+    if w.jointed and h and h.com and t and t.valid and h.id == t.id then
+      local dx, dy, dz = c[1] - h.com[1], c[2] - h.com[2], c[3] - h.com[3]
+      if dx * dx + dy * dy + dz * dz > lim then
+        -- (the same anchor again would be kept as it was: the engine keeps a
+        -- joint made the same way, stale centre of mass and all)
+        w.nudge = ((w.nudge or 0) > 0) and -1e-4 or 1e-4
+        roboRehang(node, w, info)
       end
     end
   end
@@ -10495,7 +10588,7 @@ local function robo_tick(node, info, dt)
     if not st.locked and served > 0.5 then
       if r.kind == "rotor" then
         if st.spin then
-          local w = (st.rpm or 0) * 6.0        -- deg/s
+          local w = (st.rpm or 0) * 6.0 * (r.spin or 1)   -- deg/s
           if math.abs(w) > 0.01 then
             r.cur = (r.cur + w * dt) % 360
             moving = true
@@ -10527,6 +10620,7 @@ local function robo_tick(node, info, dt)
     R2.posed = true
     roboMounts(node, info)
   end
+  roboComCheck(node, info)
 end
 
 -- ── wheels ──────────────────────────────────────────────────────────────────
@@ -10793,7 +10887,10 @@ function hang_tyre(node, w, info)
   -- damper, along its own axis (motoSpring)
   local axis, damp = vec3(0, 1, 0), 0.7 * (c.damper or 1)
   if w.susp and w.susp.axis and AUTO.lib then f, damp, axis = motoSpring(w, info, mt, g, c) end
-  local spec = { kind = "wheel", to = node, axis = axis, otherAnchor = vec3(w.cx, w.cy, w.cz),
+  -- (w.nudge: a tenth of a millimetre either way, so a joint made again at
+  -- the same mount is a different joint to the engine and is rebuilt
+  -- against the compound's centre of mass as it is now: roboComCheck)
+  local spec = { kind = "wheel", to = node, axis = axis, otherAnchor = vec3(w.cx, w.cy + (w.nudge or 0), w.cz),
                  motorSpeed = 0, maxForce = (m.torque or 0.6), steer = w.steer0 or 0 }
   -- IN REAL UNITS where the engine has them (floptle 0598): wheelReal.
   -- Not landing gear yet: a held real-unit wheel skips on sub-cm ripple, and
@@ -10827,7 +10924,8 @@ function hang_tyre(node, w, info)
   w.joint_age = 0   -- seconds of ticks since it was hung, counted in drive_tick
   -- where it was hung (a wheel on a robotic part is hung again when that moves)
   local sa = w.susp and w.susp.axis
-  w.hung = { id = t.id, x = w.cx, y = w.cy, z = w.cz, steer = w.steer0 or 0, ax = sa and { sa[1], sa[2], sa[3] } or nil }
+  w.hung = { id = t.id, x = w.cx, y = w.cy, z = w.cz, steer = w.steer0 or 0, ax = sa and { sa[1], sa[2], sa[3] } or nil,
+             com = r2HullCom(info) }
 end
 
 -- THE TYRES AS DRAWN. The live tyre is a ball to the physics, held to spin
@@ -11056,9 +11154,14 @@ local function drive_tick(node, info, dt)
   -- (not a two-wheeler: a parked wheel holds the spot it stopped on, and a
   -- bike rocking on its feet or gyro tore its light tyres off those spots —
   -- it stands on its rider or gyro and rolls free, B still brakes it)
-  if dcmd == 0 and spd < 0.8 and grounded >= math.min(3, #R2.wheels) and not R2.bike then
+  -- (but on a craft where no wheel steers, A/D skid-steer it, r2WheelCmd:
+  -- there steering IS driving, so it lets go of the brakes and pivots)
+  local skid_only = not R2.bike and #R2.wheels >= 2
+  for _, w in ipairs(R2.wheels) do if w.steers then skid_only = false end end
+  local scmd_drive = skid_only and scmd ~= 0
+  if dcmd == 0 and not scmd_drive and spd < 0.8 and grounded >= math.min(3, #R2.wheels) and not R2.bike then
     R2.hold_t = R2.hold_t + dt
-  elseif dcmd ~= 0 or spd > 1.2 then
+  elseif dcmd ~= 0 or scmd_drive or spd > 1.2 then
     R2.hold_t = 0
   end
   -- TRACTION CONTROL: the motors may push the craft no harder than R2_TC g
@@ -11321,7 +11424,9 @@ local function drive_tick(node, info, dt)
   -- while it is held, catching again the moment it is let go; pushed
   -- against the motion, it adds the motors' push to the brakes.
   local stick_against = math.abs(R2.drive) > 0.02 and R2.drive * vf < 0 and math.abs(vf) > 0.3
-  local stick_free = math.abs(R2.drive) > 0.02 and not stick_against and dcmd ~= 0
+  local wyaw = info.angVel and (info.angVel.x * upv.x + info.angVel.y * upv.y + info.angVel.z * upv.z) or 0   -- yaw rate, + to the left
+  local stick_free = (math.abs(R2.drive) > 0.02 and not stick_against and dcmd ~= 0)
+    or (scmd_drive and math.abs(R2.drive) <= 0.02 and math.abs(R2.steer) > 0.02)
   local braking_at = nil         -- the deceleration the brakes asked this tick (m/s²)
   local power = 0
   local limited, lmot = nil, 1   -- did the traction control hold a wheel back this tick (and which way)
@@ -11361,6 +11466,17 @@ local function drive_tick(node, info, dt)
       -- deliver that.
       local sk = (math.abs(R2.drive) > 0.02) and (cmd.drive / R2.drive) or 1   -- Ackermann / skid share
       local cur = vf * sk                                                      -- this wheel's ground speed now
+      -- (skid steering: the wheel's own ground speed, the craft's yaw
+      -- included — from a standstill each side's rim may only lead the
+      -- ground by the traction control's lead, and with the craft's speed
+      -- (0) standing in for it a tank turn crawled round at 2°/s)
+      if (skid_only or c.skid) and math.abs(R2.steer) > 0.02 then
+        cur = vf - wyaw * (w.l or 0)
+        -- (and the motors' whole torque as the turn asks for it: the
+        -- traction control's R2_TC g is a straight-line cap, and a tank turn
+        -- has to scrub every tyre sideways — about μ g of push — to turn)
+        torque = math.max(torque, full * (c.motor or 1) * math.min(1, math.abs(R2.steer)))
+      end
       if (brakes or R2.hold_t > 0.15) and not stick_free then
         j.motor = 1
         -- at speed the brakes stop it at up to 0.8 g (a hard stop that

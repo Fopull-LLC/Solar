@@ -1744,6 +1744,7 @@ function launchCheck()
     for _, w in ipairs(wheelChecks()) do rank[#warn + 1] = 1; warn[#warn + 1] = w end
   end
   for _, w in ipairs(roboLoopChecks({})) do rank[#warn + 1] = 1; warn[#warn + 1] = w end
+  for _, w in ipairs(roboTowChecks({})) do rank[#warn + 1] = 2; warn[#warn + 1] = w end
   -- A probe with nothing aboard to keep it powered is a probe that goes dark
   -- before it gets anywhere. Say how long it has.
   if has.probe and not has.crewed then
@@ -2063,7 +2064,8 @@ end
 -- the wheel rolls free until the joint comes back. So the builder only says
 -- how much of the joint's travel keeps the drive, when that is less than all
 -- of it, for every hinge or piston between the wheel and the frame that the
--- engine is not carried by too. → out, with the lines added
+-- engine is not carried by too, and the same for an engine on a joint the
+-- wheel is not on. → out, with the lines added
 function chainJointChecks(out)
   local AD = lib("auto_drive")
   if not (AD and AD.chainRange) then return out end
@@ -2079,55 +2081,63 @@ function chainJointChecks(out)
       local B = basisOf(p.yaw, p.pitch, p.roll)
       local a = { x = p.x - B.Y.x * L / 2, y = p.y - B.Y.y * L / 2, z = p.z - B.Y.z * L / 2 }
       local b = { x = p.x + B.Y.x * L / 2, y = p.y + B.Y.y * L / 2, z = p.z + B.Y.z * L / 2 }
-      local eng_up = {}
-      for _, q in ipairs(anc(sz.e)) do eng_up[q] = true end
-      eng_up[sz.e] = true
-      local prev = sz.w
-      for _, h in ipairs(anc(sz.w)) do
-        local hp = parts[h]
-        local kind = hp.def.robo
-        if eng_up[h] then break end      -- the engine rides it too: the run doesn't change
-        if kind == "hinge" or kind == "piston" then
-          local HB = basisOf(hp.yaw, hp.pitch, hp.roll)
-          -- the side it moves: the child on the wheel's path, above or below its middle (vessel_controller r.sign)
-          local c = parts[prev]
-          local up = ((c.x - hp.x) * HB.Y.x + (c.y - hp.y) * HB.Y.y + (c.z - hp.z) * HB.Y.z) >= 0
-          local sg = up and 1 or -1
-          local f
-          if kind == "hinge" then
-            local k = HB.Z
-            f = function(deg)
-              local t = math.rad(deg) * sg
-              local cs, sn = math.cos(t), math.sin(t)
-              local vx, vy, vz = b.x - hp.x, b.y - hp.y, b.z - hp.z
-              local d = vx * k.x + vy * k.y + vz * k.z
-              local cx, cy, cz = k.y * vz - k.z * vy, k.z * vx - k.x * vz, k.x * vy - k.y * vx
-              local rx = hp.x + vx * cs + cx * sn + k.x * d * (1 - cs) - a.x
-              local ry = hp.y + vy * cs + cy * sn + k.y * d * (1 - cs) - a.y
-              local rz = hp.z + vz * cs + cz * sn + k.z * d * (1 - cs) - a.z
-              return math.sqrt(rx * rx + ry * ry + rz * rz)
-            end
-            local lo, hi = AD.chainRange(f, L, -90, 90, 1)
-            if lo and (lo > -90 or hi < 90) then
-              out[#out + 1] = string.format("the Drive Chain to the %s keeps its drive only from %d° to %d° of the %s's ±90° — past that it skips and the wheel rolls free (a joint nearer the engine's sprocket keeps the chain tight)",
-                parts[sz.w].def.label or "wheel", lo, hi, hp.def.label or "hinge")
-            end
-          else
-            local k = HB.Y
-            f = function(e)
-              local s = e * sg
-              local rx, ry, rz = b.x + k.x * s - a.x, b.y + k.y * s - a.y, b.z + k.z * s - a.z
-              return math.sqrt(rx * rx + ry * ry + rz * rz)
-            end
-            local _, hi = AD.chainRange(f, L, 0, 0.8, 0.01)
-            if hi and hi < 0.8 - 1e-6 then
-              out[#out + 1] = string.format("the Drive Chain to the %s keeps its drive only for the first %.2f m of the %s's 0.8 m — past that it skips and the wheel rolls free",
-                parts[sz.w].def.label or "wheel", hi, hp.def.label or "piston")
+      -- each end in turn: the wheel's sprocket carried by the joints under
+      -- the wheel and not under the engine (the other end fixed), then the
+      -- engine's by those under the engine and not the wheel
+      local function side(mu, fu, mv, fx, what, tip)
+        local fixed_up = {}
+        for _, q in ipairs(anc(fu)) do fixed_up[q] = true end
+        fixed_up[fu] = true
+        local prev = mu
+        for _, h in ipairs(anc(mu)) do
+          local hp = parts[h]
+          local kind = hp.def.robo
+          if fixed_up[h] then break end   -- both ends ride it: the run doesn't change
+          if kind == "hinge" or kind == "piston" then
+            local HB = basisOf(hp.yaw, hp.pitch, hp.roll)
+            -- the side it moves: the child on the moving end's path, above or below its middle (vessel_controller r.sign)
+            local c = parts[prev]
+            local up = ((c.x - hp.x) * HB.Y.x + (c.y - hp.y) * HB.Y.y + (c.z - hp.z) * HB.Y.z) >= 0
+            local sg = up and 1 or -1
+            local f
+            if kind == "hinge" then
+              local k = HB.Z
+              f = function(deg)
+                local t = math.rad(deg) * sg
+                local cs, sn = math.cos(t), math.sin(t)
+                local vx, vy, vz = mv.x - hp.x, mv.y - hp.y, mv.z - hp.z
+                local d = vx * k.x + vy * k.y + vz * k.z
+                local cx, cy, cz = k.y * vz - k.z * vy, k.z * vx - k.x * vz, k.x * vy - k.y * vx
+                local rx = hp.x + vx * cs + cx * sn + k.x * d * (1 - cs) - fx.x
+                local ry = hp.y + vy * cs + cy * sn + k.y * d * (1 - cs) - fx.y
+                local rz = hp.z + vz * cs + cz * sn + k.z * d * (1 - cs) - fx.z
+                return math.sqrt(rx * rx + ry * ry + rz * rz)
+              end
+              local lo, hi = AD.chainRange(f, L, -90, 90, 1)
+              if lo and (lo > -90 or hi < 90) then
+                out[#out + 1] = string.format("the Drive Chain %s keeps its drive only from %d° to %d° of the %s's ±90° — past that it skips and the wheel rolls free (%s)",
+                  what, lo, hi, hp.def.label or "hinge", tip)
+              end
+            else
+              local k = HB.Y
+              f = function(e)
+                local s = e * sg
+                local rx, ry, rz = mv.x + k.x * s - fx.x, mv.y + k.y * s - fx.y, mv.z + k.z * s - fx.z
+                return math.sqrt(rx * rx + ry * ry + rz * rz)
+              end
+              local _, hi = AD.chainRange(f, L, 0, 0.8, 0.01)
+              if hi and hi < 0.8 - 1e-6 then
+                out[#out + 1] = string.format("the Drive Chain %s keeps its drive only for the first %.2f m of the %s's 0.8 m — past that it skips and the wheel rolls free",
+                  what, hi, hp.def.label or "piston")
+              end
             end
           end
+          prev = h
         end
-        prev = h
       end
+      side(sz.w, sz.e, b, a, "to the " .. (parts[sz.w].def.label or "wheel"), "a joint nearer the engine's sprocket keeps the chain tight")
+      side(sz.e, sz.w, a, b, "from the " .. (parts[sz.e].def.label or "engine") .. " (on its joint)",
+        "a joint that carries the engine and the wheel together keeps the chain tight")
     end
   end
   return out
@@ -2156,6 +2166,51 @@ function roboLoopChecks(out)
   if n > 0 then
     out[#out + 1] = string.format("%s%s joined to the frame a second way (a loop): in flight it moves what is built on it and the other joint comes away — drive joints side by side together with one key group, or take the second link off",
       n == 1 and ("the " .. (parts[first].def.label or "joint") .. " is") or (n .. " robotic joints are"), n == 1 and "" or "")
+  end
+  return out
+end
+-- A HINGE AS A TOW HITCH. Every robotic joint is driven: it holds what is
+-- built on it at the angle it is driven to (the craft is one rigid body;
+-- vessel_controller robo_apply), so a Servo Hinge with an upright axis and
+-- wheels on its far side, with wheels on this side too, is an articulated
+-- rover — the hinge steers it — never a trailer that swings free behind. A
+-- free hitch needs the trailer to be a body of its own on a real joint: the
+-- engine has that (setJoint with an assembly at either end, lua-api), but a
+-- Solar craft is one compound under one controller (its damage, tyres,
+-- staging and fleet record all assume it), so until a craft can be made of
+-- jointed sections the builder says what the build will do instead of
+-- letting a towed trailer surprise the player by dragging sideways.
+function roboTowChecks(out)
+  local kids = {}
+  for u, p in pairs(parts) do
+    if p.parent then kids[p.parent] = kids[p.parent] or {}; table.insert(kids[p.parent], u) end
+  end
+  local function wheelsUnder(u)
+    local n, st, seen = 0, { u }, {}
+    while #st > 0 do
+      local x = table.remove(st)
+      for _, k in ipairs(kids[x] or {}) do
+        if not seen[k] then
+          seen[k] = true
+          if parts[k].def.wheel then n = n + 1 end
+          st[#st + 1] = k
+        end
+      end
+    end
+    return n
+  end
+  local total = 0
+  for _, p in pairs(parts) do if p.def.wheel then total = total + 1 end end
+  for u, p in pairs(parts) do
+    if p.def.robo == "hinge" then
+      local B = basisOf(p.yaw, p.pitch, p.roll)
+      local n = wheelsUnder(u)
+      if math.abs(B.Z.y) > 0.7 and n > 0 and total > n then
+        out[#out + 1] = string.format("the %s holds the %d wheel%s on it at the angle you drive it to — it steers the craft like an articulated loader, but never swings free like a towed trailer (a free tow hitch needs a joint between two craft, not in the game yet)",
+          p.def.label or "hinge", n, n == 1 and "" or "s")
+        break
+      end
+    end
   end
   return out
 end

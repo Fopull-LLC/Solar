@@ -457,6 +457,33 @@ function modOf(rec, ty)
   return nil
 end
 
+-- MIRRORED ROTORS (builder symmetry, M). A mirror pair's members are proper
+-- rotations of each other (builder mirrorBasis: X and Y reflected, Z
+-- re-derived), which makes a hinge's swing about its Z and a piston's push
+-- along its Y come out as each other's mirror image at the same setpoint —
+-- but a turn about Y does not: the same rpm about a reflected axis is the
+-- mirror image turned backwards, so a left and right rotor driven by one key
+-- spun one wheel forwards and the other back. The later member of each pair
+-- (the copy) turns the other way. `recs`: uid → record (or a list of them).
+-- → { [uid] = -1 } for each rotor that turns reversed.
+function mirrorSpin(recs)
+  local by = {}
+  for k, r in pairs(recs or {}) do
+    local u = (type(r) == "table" and r.uid) or k
+    if type(r) == "table" and (r.mir or "") ~= "" and (tonumber(r.sym) or 0) ~= 0 and modOf(r, "rotor") then
+      local g = by[r.sym] or {}
+      g[#g + 1] = u
+      by[r.sym] = g
+    end
+  end
+  local out = {}
+  for _, g in pairs(by) do
+    table.sort(g)
+    for i = 2, #g do out[g[i]] = -1 end
+  end
+  return out
+end
+
 -- A part's live state, created with every module's defaults the first time
 -- it's asked for. `launch` is the state a fresh rollout starts in.
 function stateOf(rec)

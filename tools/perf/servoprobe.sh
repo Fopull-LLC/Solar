@@ -6,6 +6,7 @@
 #               copied, never written)
 #        BENCH_PARAMS e.g. '("ang", 25.0), ("vt", 8.0)'
 #        WORK TMO as bench.sh; LOCK defaults to the shared engine lock
+#        MODE   sservo (default) or smid (servomid_modes.lua: pext curl seatp engs skid loader trailer hop nest loop spin)
 #        SCRIPTS another scripts/ to run (an A/B against the tree's)
 # Builds a snapshot of the Solar tree under $WORK/solar (assets linked; scripts,
 # scenes, prefabs, project.ron copied), splices ivaprobe, verifyprobe,
@@ -28,7 +29,7 @@ mkdir -p $SN/save $SN/saves
 BIKE=${BIKE:-$HOME/.local/share/solar/user/library/slot1/untitled.json}
 cp "$BIKE" $S/proj/save/user/probe_dirtbike.json || exit 2
 cp $HERE/bench.sh $HERE/table.py $HERE/perfbench.lua $S/tools/
-python3 - "$S/tools/perfbench.lua" "$HERE/ivaprobe_modes.lua" "$HERE/verifyprobe_modes.lua" "$HERE/jumpprobe_modes.lua" "$HERE/servoprobe_modes.lua" <<'PY'
+python3 - "$S/tools/perfbench.lua" "$HERE/ivaprobe_modes.lua" "$HERE/verifyprobe_modes.lua" "$HERE/jumpprobe_modes.lua" "$HERE/servoprobe_modes.lua" "$HERE/servomid_modes.lua" <<'PY'
 import sys
 p = sys.argv[1]
 m = "\n".join(open(f).read() for f in sys.argv[2:])
@@ -45,10 +46,10 @@ rc=0
 BP0=${BENCH_STRS:-}
 for rig in ${*:-none arm}; do
   BENCH_STRS="(\"rig\", \"$rig\")${BP0:+, $BP0}" TAG=servo-$rig-$(date +%m%d-%H%M%S) LOCK=${LOCK:-/mnt/disks/3tb/.floptle-shared/engine.lock} \
-    TMO=${TMO:-330} SOLAR=$SN WORK=$S bash $S/tools/bench.sh $eng sservo > $S/last-$rig.txt 2>&1 || rc=$?
-  log=$(ls -td $S/results/servo-$rig-*/ | head -1)sservo.log
+    TMO=${TMO:-330} SOLAR=$SN WORK=$S bash $S/tools/bench.sh $eng ${MODE:-sservo} > $S/last-$rig.txt 2>&1 || rc=$?
+  log=$(ls -td $S/results/servo-$rig-*/ | head -1)${MODE:-sservo}.log
   echo "== rig $rig ($log)"
-  grep -a "SP \|VP \|JP ACC\|JP GAS\|rover:\|ERROR\|error" $log 2>/dev/null | grep -v "SP T \|ALSA" | cut -c1-400
+  grep -a "SP \|SM \|VP \|JP ACC\|JP GAS\|rover:\|ERROR\|error" $log 2>/dev/null | grep -v "SP T \|ALSA" | cut -c1-400
 done
 rm -f $S/proj/save/slot13.ron; rm -rf $S/proj/saves/slot13
 exit $rc
