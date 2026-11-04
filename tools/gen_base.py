@@ -27,6 +27,10 @@ atlas. Nothing is pixel lettering.
 NO Z-FIGHTING. Every model is checked for coplanar, same-facing, overlapping
 faces (base_models.zcheck) before it is written, and the build fails on any.
 
+FOOTINGS. After the models are written, tools/base_foundations.py reads them
+back and writes where each meets the ground into base_facilities'
+FOUNDATIONS block: the concrete footings laid under them there.
+
 DRAW COST. One glb per structure, at most six materials (Concrete, Clad,
 Steel, Glass, Lamp, Sign).
 
@@ -446,6 +450,10 @@ def main():
         sys.exit(1)
     if not dry:
         write_sign_uv()
+        # the footings under every structure, read back from the models just
+        # written (tools/base_foundations.py -> base_facilities FOUNDATIONS)
+        import base_foundations
+        base_foundations.write()
     pc = pad_clamps()
     mn, mx = pc.bounds()
     c = (mn + mx) / 2

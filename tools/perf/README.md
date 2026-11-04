@@ -445,3 +445,23 @@ conic for the relay against where it is ~10 min of game later), one_relay
 (the snapshot spikes, nothing is held), three, three_held, heavy_warp, saved.
 `map` plays in a window with the orbit map open and writes `cov_one.png` and
 `cov_three.png` (camera.capture) to `$OUT`. The slot is deleted afterwards.
+
+## fdnprobe.sh + fdnprobe.lua — the base buildings' footings
+
+    WORK=$SCRATCH LOCK=$SCRATCH/engine.lock tools/perf/fdnprobe.sh <engine> <TAG>
+    FP_PARAMS='("alien", 1.0), ("homeseed", 55555.0)'   # an alien home world
+
+A new save (Earth-like, or Alien with its home seed). Once the base stands,
+one `FP LOT` line per facility: the ground under its lot box's edge and a ring
+2 m inside, measured along the building's own up as model y (0 = the model's
+ground plane; the slabs' bottoms are at -0.6), the sphere the grade aims at
+there, and the grade's residual (ground - sphere). Then (`shots=1`) a picture
+from `eyeh` (1.0) m over the ground, `out` (3.0) m out from two opposite
+corners of every lot, at the corner's foot (`only=FacDepot` for one).
+Pictures in `$WORK/fdnprobe/<TAG>/png`; the probe's slot 15 is deleted.
+
+2026-11-03 (0.117.1-dev.1415): the grade holds +0.03..+0.25 m over the sphere
+on both an Earth-like (R 892) and an alien home (R 687); the gaps under the
+buildings were the sphere falling away from their flat floors (VAB corners
+-0.98 / -1.19 m under a 0.6 m slab). Fixed by the footings
+(tools/base_foundations.py -> base_facilities FOUNDATIONS).

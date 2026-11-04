@@ -113,6 +113,130 @@ FACILITIES = {
 -- the lot centre, the hardstand top HS_H over the ground.
 PAD = { u = 0.0, v = 125.0, hs = 2.0 }
 
+-- THE FOOTINGS. A building is flat and the ground under it is graded to the
+-- sphere, which falls away from the floor's plane by s²/2R s metres from the
+-- point the building stands on: at the VAB's corners 0.9 m on a 900 m world,
+-- 1.3 m on a 600 m one, under a slab cast 0.6 m deep (the grade itself holds
+-- within +0.03..+0.25 m of the sphere: tools/perf/fdnprobe.sh). So under
+-- everything a model stands on the ground with — slabs, docks, crane feet and
+-- rails, mast bases, stair feet — a concrete footing goes down to `bottom`
+-- (model y; at least `depth` under its own top). Each row is a rectangle in
+-- the model's ground frame: x0, x1, z0, z1, top (just under the geometry
+-- there, a little proud of it). Built into the concrete mesh (build_meshes):
+-- no draw call or collider of their own, nothing per frame.
+-- Written by tools/base_foundations.py (gen_base.py runs it) — do not edit.
+-- FOUNDATIONS begin
+FOUNDATIONS = {
+  bottom = -3.00, depth = 1.00,
+  FacHangar = {
+    { -25.75, 25.75, -29.25, 29.25, -0.610 },
+  },
+  FacCommand = {
+    { -10.50, 10.50, -7.50, 7.50, -0.610 },
+    { 12.25, 16.25, -5.00, -1.00, -0.410 },
+    { -15.25, -12.75, 0.75, 3.25, -0.410 },
+    { -14.50, -13.50, 3.25, 3.75, -0.360 },
+    { -2.25, -1.75, 7.50, 8.25, -0.360 },
+    { 1.75, 2.25, 7.50, 8.25, -0.360 },
+    { -3.50, -2.75, 9.75, 10.25, -0.360 },
+    { 2.75, 3.25, 9.75, 10.25, -0.360 },
+    { -3.25, -3.00, 11.00, 11.25, -0.210 },
+    { 3.00, 3.25, 11.00, 11.25, -0.210 },
+    { -3.50, -2.75, 11.25, 11.50, -0.210 },
+    { 2.75, 3.50, 11.25, 11.50, -0.210 },
+    { -3.25, -2.75, 11.50, 11.75, -0.210 },
+    { 2.75, 3.25, 11.50, 11.75, -0.210 },
+  },
+  FacDepot = {
+    { -1.75, 1.75, -10.75, -6.50, -0.610 },
+    { 12.75, 13.25, -9.25, 9.25, -0.062 },
+    { 20.25, 20.75, -9.25, 9.25, -0.062 },
+    { -8.50, 8.50, -6.50, 6.50, -0.610 },
+    { 12.50, 12.75, -5.75, -4.25, -0.010 },
+    { 13.25, 13.50, -5.75, -4.25, -0.010 },
+    { 20.00, 20.25, -5.75, -4.25, -0.010 },
+    { 20.75, 21.00, -5.75, -4.25, -0.010 },
+    { 8.50, 11.75, -5.25, 5.25, -0.560 },
+    { -11.25, -8.50, -3.00, -0.25, -0.360 },
+    { -11.25, -8.50, 0.00, 2.75, -0.360 },
+    { 12.50, 12.75, 4.25, 5.75, -0.010 },
+    { 13.25, 13.50, 4.25, 5.75, -0.010 },
+    { 20.00, 20.25, 4.25, 5.75, -0.010 },
+    { 20.75, 21.00, 4.25, 5.75, -0.010 },
+    { -3.75, -3.25, 6.50, 6.75, -0.210 },
+    { 3.25, 3.75, 6.50, 6.75, -0.210 },
+    { 9.25, 9.50, 6.50, 6.75, -0.360 },
+    { 10.25, 10.75, 6.50, 6.75, -0.360 },
+  },
+  FacTracking = {
+    { -2.75, 2.75, -9.25, -5.00, -0.410 },
+    { 2.75, 4.00, -8.00, -6.00, 0.050 },
+    { -3.75, 3.75, -3.75, 3.75, -0.610 },
+  },
+  FacPower = {
+    { -9.25, 9.25, -6.25, 6.25, -0.610 },
+  },
+  BaseFuel = {
+    { -14.25, 14.25, -9.25, 9.25, -0.610 },
+  },
+  BasePad = {
+    { -8.25, 8.25, -29.25, -16.25, -2.970 },
+    { -16.25, -9.25, -27.25, -20.75, -0.410 },
+    { -21.25, -18.75, -21.25, -18.75, -0.610 },
+    { 18.75, 21.25, -21.25, -18.75, -0.610 },
+    { -17.25, -8.25, -17.25, -16.25, -0.810 },
+    { 8.25, 17.25, -17.25, -16.25, -0.810 },
+    { -17.25, 17.25, -16.25, -3.00, -0.810 },
+    { -21.25, 21.25, -3.00, 3.00, -0.810 },
+    { -17.25, 17.25, 3.00, 17.25, -0.810 },
+    { -21.25, -18.75, 18.75, 21.25, -0.610 },
+    { 18.75, 21.25, 18.75, 21.25, -0.610 },
+  },
+  FacIntake = {
+    { -6.50, 6.50, -6.50, 4.50, -0.610 },
+    { 11.00, 12.00, -3.25, -3.00, -0.310 },
+    { 11.00, 11.75, -3.00, -2.50, -0.360 },
+    { 11.75, 12.00, -3.00, -2.50, -0.310 },
+    { 11.00, 12.00, -2.50, -2.25, -0.310 },
+    { 11.00, 12.00, -1.75, -1.50, -0.310 },
+    { 11.00, 11.75, -1.50, -1.00, -0.360 },
+    { 11.75, 12.00, -1.50, -1.00, -0.310 },
+    { 11.00, 12.00, -1.00, -0.75, -0.310 },
+    { -2.75, -2.25, 4.50, 5.50, -0.310 },
+    { -1.50, -1.25, 4.50, 4.75, -0.010 },
+    { 1.25, 1.50, 4.50, 4.75, -0.010 },
+    { 2.25, 2.50, 4.50, 5.25, -0.310 },
+    { 2.50, 3.50, 4.50, 5.25, -0.360 },
+    { 2.25, 2.75, 5.25, 5.50, -0.310 },
+    { -2.00, -1.50, 5.50, 5.75, -0.360 },
+    { -1.50, -1.25, 6.00, 6.50, -0.010 },
+    { 1.25, 1.50, 6.00, 6.50, -0.010 },
+    { -1.50, -1.25, 8.00, 8.25, -0.010 },
+    { 1.25, 1.50, 8.00, 8.25, -0.010 },
+    { -2.00, -1.50, 9.00, 9.50, -0.360 },
+    { -1.50, -1.25, 9.75, 10.00, -0.010 },
+    { 1.25, 1.50, 9.75, 10.00, -0.010 },
+    { -1.75, -1.25, 10.25, 10.75, -0.038 },
+    { 1.25, 1.75, 10.25, 10.75, -0.038 },
+    { -1.50, -1.25, 11.50, 12.00, -0.010 },
+    { 1.25, 1.50, 11.50, 12.00, -0.010 },
+    { -1.50, -1.25, 13.25, 13.50, -0.010 },
+    { 1.25, 1.50, 13.25, 13.50, -0.010 },
+    { -1.75, -1.25, 13.50, 13.75, -0.038 },
+    { -1.25, 1.25, 13.50, 13.75, 0.070 },
+    { 1.25, 1.75, 13.50, 13.75, -0.038 },
+  },
+  FacRepair = {
+    { -6.25, 6.25, -8.25, 9.25, -0.610 },
+  },
+  FacLab = {
+    { -11.50, 11.50, -7.50, 7.50, -0.610 },
+    { 6.25, 9.75, 7.50, 11.75, -0.610 },
+    { 9.75, 10.75, 8.00, 10.50, -0.310 },
+  },
+}
+-- FOUNDATIONS end
+
 -- The fence round the building compound (u0, v0, u1, v1), with its gates.
 FENCE = { u0 = -88.0, v0 = -33.0, u1 = 100.0, v1 = 62.0,
           gates = { { side = "S", a = -9.0, b = 9.0 }, { side = "N", a = -11.0, b = 11.0 } } }
@@ -1560,6 +1684,48 @@ local LIGHT = {
 }
 
 -- Build the three meshes. O is the mesh nodes' origin (body-relative: C on R).
+-- THE FOOTINGS (FOUNDATIONS above) into mesh M: each rectangle's four sides
+-- from its top down to the footing's bottom, and a cap, in the building's own
+-- frame as place_facility stands it (the model's ground plane `lift` over the
+-- sphere at its lot point, +X = up × front). Concrete as cast, a little
+-- stained by the ground it stands in; UVs in metres / CONCRETE_TILE like the
+-- buildings' own concrete.
+FOOTING_COL = { 0.72, 0.71, 0.68 }
+local function lay_footings(M, O, Fr)
+  local FT = FOUNDATIONS
+  if not FT then return 0 end
+  local n, T, col = 0, CONCRETE_TILE, FOOTING_COL
+  for _, f in ipairs(FACILITIES) do
+    local list = FT[f.prefab]
+    if list and #list > 0 then
+      local up = dirAt(Fr, f.u, f.v)
+      local fwd = face_at(Fr, up, f.face)
+      local right = cross(up, fwd)
+      local g = add(mul(up, Fr.R + (f.lift or 0)), O, -1)
+      local function P(x, y, z) return add(add(add(g, right, x), fwd, z), up, y) end
+      local back, left = mul(fwd, -1), mul(right, -1)
+      for _, r in ipairs(list) do
+        work(1)
+        local x0, x1, z0, z1, top = r[1], r[2], r[3], r[4], r[5]
+        local bot = math.min(FT.bottom or -3.0, top - (FT.depth or 1.0))
+        local vt, vb = -top / T, -bot / T
+        quad(M, P(x0, top, z0), P(x1, top, z0), P(x1, bot, z0), P(x0, bot, z0), back, col,
+          { x0 / T, vt, x1 / T, vt, x1 / T, vb, x0 / T, vb })
+        quad(M, P(x1, top, z1), P(x0, top, z1), P(x0, bot, z1), P(x1, bot, z1), fwd, col,
+          { -x1 / T, vt, -x0 / T, vt, -x0 / T, vb, -x1 / T, vb })
+        quad(M, P(x1, top, z0), P(x1, top, z1), P(x1, bot, z1), P(x1, bot, z0), right, col,
+          { z0 / T, vt, z1 / T, vt, z1 / T, vb, z0 / T, vb })
+        quad(M, P(x0, top, z1), P(x0, top, z0), P(x0, bot, z0), P(x0, bot, z1), left, col,
+          { -z1 / T, vt, -z0 / T, vt, -z0 / T, vb, -z1 / T, vb })
+        quad(M, P(x0, top, z0), P(x1, top, z0), P(x1, top, z1), P(x0, top, z1), up, col,
+          { x0 / T, z0 / T, x1 / T, z0 / T, x1 / T, z1 / T, x0 / T, z1 / T })
+        n = n + 1
+      end
+    end
+  end
+  return n
+end
+
 local function build_meshes(Fr, runway)
   local R = Fr.R
   local O = mul(Fr.c, R)
@@ -1779,6 +1945,9 @@ local function build_meshes(Fr, runway)
     stats.fencePosts = nposts
   end
 
+  -- THE FOOTINGS under the buildings, in the concrete mesh
+  stats.footings = lay_footings(C, O, Fr)
+
   stats.verts = { asphalt = A.nv, concrete = C.nv, fixtures = X.nv, lamps = Lm.nv, signs = G.nv }
   return { asphalt = A, concrete = C, fixtures = X, lamps = Lm, signs = G, origin = O, stats = stats }
 end
@@ -1831,8 +2000,9 @@ function lay_paving(Fr, runway, planet_node)
     show_meshes(B, planet_node)
     lastBuild = B.stats
     local v = B.stats.verts
-    log(string.format("base: paving and fittings built — %d + %d + %d + %d vertices%s", v.asphalt, v.concrete,
-      v.fixtures, v.lamps, B.stats.numbers and (", runway " .. B.stats.numbers) or ""))
+    log(string.format("base: paving and fittings built — %d + %d + %d + %d vertices%s; %d footings under the buildings",
+      v.asphalt, v.concrete, v.fixtures, v.lamps, B.stats.numbers and (", runway " .. B.stats.numbers) or "",
+      B.stats.footings or 0))
   else
     log("base: could not build the paving — " .. tostring(B))
   end
