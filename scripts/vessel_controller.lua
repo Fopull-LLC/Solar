@@ -9200,6 +9200,28 @@ end
 -- and how fast (/s) the load it reads is smoothed. nil: no cap.
 R2_GRIP_K, R2_GRIP_RATE = 1.0, 25
 R2_GRIP_V0, R2_GRIP_V1 = 6.0, 10.0   -- m/s: the cap in full below V0, gone by V1
+-- TRACTION CONTROL AT ANY SPEED (drive_tick's bike block, the last rule
+-- on the push, after the landing's blend): the push held to R2_TC2_K of what the driven tyre's load can carry
+-- (so the rest of its grip is left to hold it sideways), but only while the
+-- rear is in trouble, never on low load alone (a full-speed load cap cut the
+-- push on every whoop crest and the nose dropped into the next whoop):
+--   for R2_TC2_LAND s after a flight of R2_TC2_FLY s or more (a kicker:
+--     the rear came down on 13% of the weight at full throttle and stepped out)
+--   while the rear slides across its tread past R2_TC2_SLIDE m/s (all of it
+--     by R2_TC2_SLIDE + R2_TC2_SLIDE_W)
+--   while the rear carries under half its share and its rim runs ahead of
+--     the ground past R2_TC2_SPIN m/s (spinning up on a light tyre)
+-- The load it reads is 0 in the air, drops at once and comes back at
+-- R2_TC2_RISE /s (a landing's spike is no grip to spend). nil: none.
+R2_TC2_K = 0.7
+R2_TC2_LAND, R2_TC2_FLY = 0.6, 0.3
+R2_TC2_SLIDE, R2_TC2_SLIDE_W = 0.3, 0.7
+R2_TC2_SPIN = 0.6
+R2_TC2_RISE = 8.0
+-- In the air a driven rim is held to the ground speed it will land on, give
+-- or take this much (m/s): run R2.lk leads ahead, it spun up a metre a
+-- second in every hop and kicked the push into the landing.
+R2_AIR_LEAD = 0.15
 R2_BIKE = { top = 18.0, torque = 0.8, tc = 0.9, open = 1.8, lean = 0.12, lift = 0.88, liftHi = 0.55, vLo = 14.0, vHi = 24.0,
             wfree = 6.0, wheelie = 14.0, wmin = 0.3, land = 0.6 }
 
@@ -10884,7 +10906,14 @@ local function drive_tick(node, info, dt)
           break
         end
       end
-      if gs then R2.gslope = (R2.gslope or gs) + (gs - (R2.gslope or gs)) * math.min(1, dt * 10) end
+      -- (in the chassis's frame, as the both-down reading is: a bike built
+      -- nose up (motoPitch0, the user's 500: 6.6 deg) sits that much over
+      -- the ground's slope, and the ground's own slope here read every
+      -- skip of the front as a 7 deg wheelie and cut the push at speed)
+      if gs then
+        gs = math.sin(math.max(-1.25, math.min(1.25, math.asin(math.max(-1, math.min(1, gs))) + motoPitch0())))
+        R2.gslope = (R2.gslope or gs) + (gs - (R2.gslope or gs)) * math.min(1, dt * 10)
+      end
     elseif front_up == 0 and rear_up == 0 then
       R2.gslope = R2.gslope or sn
     end
@@ -10896,7 +10925,13 @@ local function drive_tick(node, info, dt)
     -- tyres were off (vjump .1412: a 15 m/s kicker landed into the full push
     -- and the rider's lean, and the bike wobbled over); until then it pushes
     -- as the old rule did (wheelieK)
-    if front_up == 0 and rear_up == 0 then R2.bikeAirT = 0 else R2.bikeAirT = (R2.bikeAirT or 9) + dt end
+    if front_up == 0 and rear_up == 0 then
+      if (R2.bikeAirT or 9) > 0 then R2.bikeFly = 0 end
+      R2.bikeAirT = 0
+      R2.bikeFly = (R2.bikeFly or 0) + dt
+    else
+      R2.bikeAirT = (R2.bikeAirT or 9) + dt
+    end
     local land = math.min(1, (R2.bikeAirT or 9) / R2_BIKE.land)
     local lw = (rear_up > 0 and (R2.drive or 0) > 0.05) and math.min(1, R2.drive) * land or 0
     R2.bikeLean = (R2.bikeLean or 0) + (lw - (R2.bikeLean or 0)) * math.min(1, dt * 6)
@@ -10965,6 +11000,38 @@ local function drive_tick(node, info, dt)
     if land < 1 and R2.wheelieK then
       local old = math.min(R2_TC * gl, R2.wheelieK * gl) + need
       accel = old + (accel - old) * land
+    end
+    -- TRACTION CONTROL AT ANY SPEED (R2_TC2_*): the rear in trouble → the
+    -- push no more than R2_TC2_K of what its load can carry
+    -- (last of the rules, after the landing's blend: before it, the blend
+    -- gave the full push back in the very tick the rear came down)
+    R2.tcK = 0
+    if rear_up == 0 then R2.tcN = 0 end   -- (off the ground it carries nothing)
+    if R2_TC2_K and rear_up > 0 then
+      local nd, slide, spin, ld = 0, 0, 0, 0
+      local Rx, Ry, Rz = fy * upv.z - fz * upv.y, fz * upv.x - fx * upv.z, fx * upv.y - fy * upv.x   -- the bike's right
+      local rl = math.sqrt(Rx * Rx + Ry * Ry + Rz * Rz)
+      if rl > 1e-6 then Rx, Ry, Rz = Rx / rl, Ry / rl, Rz / rl end
+      for _, w in ipairs(R2.wheels) do
+        if (w.rs or 0) ~= 0 and not w.coast and w.down then
+          nd = nd + (w.load or 0) * ((w.cfg and w.cfg.friction) or 1)
+          ld = ld + (w.load or 0)
+          local tv = w.tyre and w.tyre.vel
+          if tv then slide = math.max(slide, math.abs(tv.x * Rx + tv.y * Ry + tv.z * Rz)) end
+          if w.rim then spin = math.max(spin, (w.rim - (R2.vf or 0)) * ((R2.vf or 0) >= 0 and 1 or -1)) end
+        end
+      end
+      if nd < (R2.tcN or nd) then R2.tcN = nd else R2.tcN = (R2.tcN or nd) + (nd - (R2.tcN or nd)) * math.min(1, dt * R2_TC2_RISE) end
+      local kl = ((R2.bikeFly or 0) >= R2_TC2_FLY) and math.max(0, 1 - (R2.bikeAirT or 9) / R2_TC2_LAND) or 0
+      local ks = math.max(0, math.min(1, (slide - R2_TC2_SLIDE) / R2_TC2_SLIDE_W))
+      local share = mt * gl * math.max(0.05, 1 - R2.bikeAr / math.max(R2.wheelbase or 1, 0.3))   -- the rear's share at rest (kN)
+      local kp = (ld < 0.5 * share) and math.max(0, math.min(1, (spin - R2_TC2_SPIN) / R2_TC2_SPIN)) or 0
+      local kk = math.max(kl, ks, kp)
+      R2.tcK, R2.tcSlide, R2.tcSpin = kk, slide, spin
+      if kk > 0 then
+        local capped = math.max(0.05 * gl, R2_TC2_K * R2_TYRE_MU * R2.tcN / mt)
+        if capped < accel then accel = accel + (capped - accel) * kk end
+      end
     end
     climb = need
     R2.bikeCap = accel / gl
@@ -11059,6 +11126,9 @@ local function drive_tick(node, info, dt)
     if w.jointed then w.joint_age = (w.joint_age or 0) + dt end
     local j = w.jointed and (w.joint_age or 0) > 0.05 and t and t.valid and t:getcomponent("Joint")
     if j and w.susp then motoSusp(w, j) end
+    -- (the rim's own speed along the ground, m/s: the traction control's
+    -- spin, read the next tick)
+    w.rim = j and (j.speed or 0) / 57.29578 * (w.r or 0.33) * (w.rs or 1) or nil
     if j then
       local c = w.cfg or {}
       local cmd = cmds[k]
@@ -11127,6 +11197,9 @@ local function drive_tick(node, info, dt)
         -- run ahead of (or, slowing, behind) the ground speed it has now
         -- (stalled in a rut: up to a further 1 g to crawl out)
         local lead = (accel + stall_k * gl) * (c.motor or 1) * served * dt * (R2.lk or 1.5)
+        -- (a bike's driven tyre off the ground: its rim kept to the ground
+        -- speed it will land on, R2_AIR_LEAD)
+        if R2.bike and R2_AIR_LEAD and not w.down and want * cur >= 0 then lead = math.min(lead, R2_AIR_LEAD) end
         local tgt = want * vmax
         -- (on a craft with a gas engine, a hub motor already past its own
         -- top speed freewheels rather than hold the craft back: the engine
@@ -11778,6 +11851,24 @@ function motoBike(node, info, cmds, vf, gl, dt, rxv, upv, rzv, gdir)
       if w.steers and cmds[k] then cmds[k].steer = steer * (w.ssign or 1) end
     end
   end
+  -- THE FRONT ALONE ON THE GROUND past a walk (a landing's first touch, the
+  -- rear kicked off a whoop): the bars held near straight, as a rider lands.
+  -- A steered front tyre with nothing behind it on the ground only turns the
+  -- bike about its centre: the balance's bars on a landing front, loaded at
+  -- 5 W, kicked it to 1.3 rad/s of yaw before the rear came down, and it
+  -- landed sliding at 3 m/s (vbump v24, 2026-11-04)
+  if BIKE_FRONT_ONLY_K and math.abs(vf) > BIKE_PITCH_V then
+    local fd, rd = false, false
+    for _, w in ipairs(R2.wheels) do
+      if w.down then if (w.a or 0) > 0 then fd = true else rd = true end end
+    end
+    if fd and not rd then
+      steer = steer * BIKE_FRONT_ONLY_K
+      for k, w in ipairs(R2.wheels) do
+        if w.steers and cmds[k] then cmds[k].steer = steer * (w.ssign or 1) end
+      end
+    end
+  end
   -- the torque: the gyros (served by the power) and the rider
   local gt, draw_k = 0, 0
   for _, g in ipairs(R2.gyros or {}) do
@@ -11852,6 +11943,7 @@ BIKE_PITCH_D = 7.0        -- 1/s: the pitch rate's damping
 BIKE_PITCH_W = 4.0        -- rad/s: the spring past the free band
 BIKE_PITCH_FREE = math.rad(10)
 BIKE_LAND_T, BIKE_LAND_K = 0.5, 1.8
+BIKE_FRONT_ONLY_K = 0.25   -- the balance's bars kept with the front tyre alone down (motoBike); nil: all of them
 -- The craft's moment of inertia about the unit world axis a (t·m²).
 function motoIabout(info, a)
   local It = info.inertia
@@ -11981,9 +12073,15 @@ function motoAir(node, info, dt, rxv, upv, rzv, gdir)
     -- rolls it with RIDER_TORQUE, pitches it with RIDER_PITCH and turns it
     -- with RIDER_YAW on top
     local rr, rp, ry = rider and L.RIDER_TORQUE or 0, rider and RIDER_PITCH or 0, rider and RIDER_YAW or 0
-    local tl = math.sqrt(tr * tr + tp * tp + ty * ty)
-    local gr, gp, gy = 0, 0, 0
-    if tl > 0 then gr, gp, gy = gt * math.abs(tr) / tl, gt * math.abs(tp) / tl, gt * math.abs(ty) / tl end
+    -- (roll first: what the rider's body cannot take of the roll is the
+    -- gyros' before any pitch or yaw is. Shared out evenly, a long flight
+    -- nose-high spent 95% of the gyros on pitch, and a bike that left a
+    -- kicker rolling came down still rolling)
+    local gr = math.min(gt, math.max(0, math.abs(tr) - rr))
+    local rest = gt - gr
+    local tl = math.sqrt(tp * tp + ty * ty)
+    local gp, gy = 0, 0
+    if tl > 0 then gp, gy = rest * math.abs(tp) / tl, rest * math.abs(ty) / tl end
     tr = math.max(-(gr + rr), math.min(gr + rr, tr))
     tp = math.max(-(gp + rp), math.min(gp + rp, tp))
     ty = math.max(-(gy + ry), math.min(gy + ry, ty))

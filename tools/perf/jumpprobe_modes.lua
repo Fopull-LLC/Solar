@@ -285,7 +285,7 @@ function JP.strip(vc, from_d, to_d)
   local F = V.fwdW(vc)
   F = unit(sub(F, scl(U, dot(F, U))))
   local rel0, made = V.ground(vc, F, U, from_d, to_d, 0)
-  V.strip = { rel0 = rel0, F = F, U = U }
+  V.strip = { rel0 = rel0, F = F, U = U, d1 = to_d }
   P("JP flat strip %d..%d m: %d sculpts", from_d, to_d, made)
   V.stop(vc)
   return true
@@ -387,6 +387,23 @@ local function ride_seg(vc, tag, vt, lead, seg, full)
       end
       P("JP RT %s %d gr %d%d pitch %.2f vup %.3f | %s", tag, n, f, r, math.deg(pitch), dot(assembly.info(vc.node).vel, U), table.concat(g, " "))
     end
+    -- (ttrace = n: every tick of the flat-out segment, up to n lines: the
+    -- push the control lets out and why, the loads, the engine and the
+    -- rider's torques — what lifts the front at speed)
+    if full and (tonumber(params.ttrace) or 0) > 0 and n <= tonumber(params.ttrace) then
+      local R = vc.R2
+      local g = JP.gas(vc) or {}
+      local rw
+      for _, w in ipairs(R.wheels or {}) do if (w.a or 0) <= 0 then rw = w end end
+      local j = rw and rw.tyre and rw.tyre.valid and rw.tyre:getcomponent("Joint")
+      local rim = j and (j.speed or 0) / 57.29578 * (rw.r or 0.3) * (rw.rs or 1) or 0
+      local A = vc.AERO and vc.AERO.hud or {}
+      P("JP TT %.2f d %.1f lat %.2f v %.2f p %.1f r %.1f gs %.1f gr %d%d L %.2f/%.2f dr %.2f cap %.3f gA %.3f wt %.2f g%d %.0f mF %.0f rim %.2f vf %.2f lk %.2f ap %.3f pT %.3f aT %.3f aim %.1f lean %.2f drag %.3f ry %.2f sl %.1f tc %.2f sld %.2f spn %.2f",
+        time - t0, d, select(2, JP.along(vc)), sp, math.deg(pitch), math.deg(roll), math.deg(math.asin(math.max(-1, math.min(1, R.gslope or 0)))), f, r, lf, lr, R.drive or 0,
+        R.bikeCap or -1, (R.gripA or 0) / (R.gl or 9.8), R.wheelie_t or 0, g.gear or 0, g.rpm or 0, j and j.maxForce or -1, rim, R.vf or 0, R.lk or 0,
+        R.aeroPitch or 0, R.pitchTq or 0, R.airPitchTq or 0, math.deg(R.airAim or 0), R.bikeLean or 0, A.drag or 0, yaw,
+        math.deg(R.landSlope or 0), R.tcK or 0, R.tcSlide or 0, R.tcSpin or 0)
+    end
     -- (rlog = s: a line that often through every segment)
     if (tonumber(params.rlog) or 0) > 0 and time >= (JP.rlog_t or 0) then
       JP.rlog_t = time + tonumber(params.rlog)
@@ -395,6 +412,10 @@ local function ride_seg(vc, tag, vt, lead, seg, full)
     end
     lastF, lastR = f, r
     if full and time - t0 >= (tonumber(params.topsecs) or 10) then break end
+    -- (the flat-out run stops 40 m short of the strip's end: past it the
+    -- natural ground stands up like a wall, and at 29 m/s the bike hit it
+    -- nose first, a "58 degree wheelie" that was a crash, 2026-11-04)
+    if full and V.strip and V.strip.d1 and d > V.strip.d1 - 40 then P("JP RIDE %s: the strip ends at %.0f m, stopped at %.0f m", tag, V.strip.d1, d); break end
     if not full and d - d0 >= lead + seg then break end
     if time - t0 > 60 then break end
   end
@@ -414,7 +435,7 @@ local function run_vride()
   local seg = tonumber(params.seg or 100)
   -- (the flat-out run's 30 m a second on top: on 200 m the 500 ran off the
   -- strip's end into the natural ground at 26 m/s)
-  local total = #speeds * (30 + seg) + 80 + 30 * (tonumber(params.topsecs) or 10)
+  local total = #speeds * (30 + seg) + 80 + 40 * (tonumber(params.topsecs) or 10)
   if not JP.strip(vc, -15, total) then return end
   wait_for(function() return (terrain.pending and terrain.pending() or 0) == 0 end, 60, "the whole strip")
   P("JP strip profile (every 20 m): %s", JP.heights(vc, 0, total, 20))
@@ -752,10 +773,10 @@ function JP.climb(vc, k, still)
       if sp < 0.25 then stall_t = stall_t + 1 / 60 else stall_t = 0 end
       if d >= k.crest - 0.2 then t_crest, v_crest = time, sp end
     end
-    if t_toe and time >= nextl then
+    if (t_toe or (tonumber(params.happ) or 0) > 0) and time >= nextl then
       nextl = time + 0.25
-      P("JP HT %s t %.2f d %.2f v %.2f pitch %.1f gr %d%d drive %.2f lk %.2f served %.2f tq %s", tag, time - t_toe, d - k.toe, sp, math.deg(pitch), f, r,
-        vc.R2.drive or 0, vc.R2.lk or 0, vc.R2.served or 0, tostring(vc.R2.tq_dbg))
+      P("JP HT %s t %.2f d %.2f v %.2f pitch %.1f gr %d%d drive %.2f lk %.2f served %.2f tq %s cap %.2f tc %.2f sld %.2f spn %.2f", tag, time - (t_toe or time), d - k.toe, sp, math.deg(pitch), f, r,
+        vc.R2.drive or 0, vc.R2.lk or 0, vc.R2.served or 0, tostring(vc.R2.tq_dbg), vc.R2.bikeCap or -1, vc.R2.tcK or 0, vc.R2.tcSlide or 0, vc.R2.tcSpin or 0)
     end
     if V.upness(vc.node) < 0.4 then fell = true; break end
     if t_toe and not t_crest and (stall_t > 1.2 or sp < -0.5) then break end
@@ -907,6 +928,9 @@ function JP.accel(vc, secs)
     local g = JP.gas(vc)
     if g then gmax, gearmax = math.max(gmax, g.rpm or 0), math.max(gearmax, g.gear or 0) end
     if V.upness(vc.node) < 0.4 then P("JP ACC FELL"); break end
+    -- (stopped 30 m short of the strip's end: the natural ground past it is a
+    -- wall at 30 m/s, and a run that reached it read as a 20 degree wheelie)
+    if V.strip and V.strip.d1 and JP.along(vc) > V.strip.d1 - 30 then P("JP ACC: the strip ends at %.0f m, stopped %.1f s in", V.strip.d1, time - t0); break end
   end
   hold_w(false)
   vc.R2.cmd = { drive = 0, steer = 0 }
@@ -943,7 +967,7 @@ local function run_vhill()
   local acc0 = d - 50
   -- (33 m a second of the flat run: the 500 covers 475 m in 16 s, and at 28
   -- it ran off the strip's end into the natural ground at 30 m/s)
-  local total = acc0 + 20 + 33 * (tonumber(params.topsecs) or 10) + 25 * (tonumber(params.coast) or 0)
+  local total = acc0 + 20 + 40 * (tonumber(params.topsecs) or 10) + 25 * (tonumber(params.coast) or 0)
   if not JP.strip(vc, -15, total) then return end
   wait_for(function() return (terrain.pending and terrain.pending() or 0) == 0 end, 60, "the whole strip")
   if (tonumber(params.acconly) or 0) > 0 then hills = {} end   -- (acconly=1: the flat run alone)
@@ -1263,6 +1287,10 @@ function JP.bump_pass(vc, tag, vt, B, b0, b1, kick, dEnd)
   local cmax = { -9, -9 }
   local lpk, wt = { 0, 0 }, JP.weight(vc)
   local dmax = 0
+  -- (by zone: the whoops' and the kicker's peak roll, the slide off the lip
+  -- (m/s across the bike's own front while leaving the kicker) and, for a
+  -- second after the kicker's landing, the rear's least load in weights)
+  local rW, rK, vlatK, rearMin, landT = 0, 0, 0, 9, nil
   while time - t0 < 60 do
     local d = JP.along(vc)
     local drive, st = JP.cruise(vc, vt, true)
@@ -1282,6 +1310,16 @@ function JP.bump_pass(vc, tag, vt, B, b0, b1, kick, dEnd)
       local air = f + r == 0
       if air and not lastAir then hops = hops + 1; air_t0 = time end
       if air and air_t0 then airmax = math.max(airmax, time - air_t0) end
+      if kick and d >= kick - 1 then
+        rK = math.max(rK, math.abs(roll))
+        local _, _, _, _, Uu, Fl = JP.att(vc)
+        local Rt = unit(cross(Fl, Uu))
+        if d <= kick + 6 then vlatK = math.max(vlatK, math.abs(dot(assembly.info(vc.node).vel, Rt))) end
+        if lastAir and not air and d > kick + 6 and not landT then landT = time end
+        if landT and time - landT < 1.0 and (vc.R2.drive or 0) > 0.5 then rearMin = math.min(rearMin, lr / math.max(1e-6, wt)) end
+      else
+        rW = math.max(rW, math.abs(roll))
+      end
       lastAir = air
       lpk[1], lpk[2] = math.max(lpk[1], lf), math.max(lpk[2], lr)
       for k, w in ipairs(vc.R2.wheels or {}) do
@@ -1300,8 +1338,9 @@ function JP.bump_pass(vc, tag, vt, B, b0, b1, kick, dEnd)
         local _, _, yawr, rrate, Uu, Fl = JP.att(vc)
         local vv = assembly.info(vc.node).vel
         local Rt = unit(cross(Fl, Uu))
-        P("JP BT %s yaw %.2f rr %.2f vlat %.2f vup %.2f | d %.1f v %.2f roll %.1f pitch %.1f gr %d%d ld %.2f/%.2f tq %.2f ptq %.2f atq %.2f aim %.1f tmax %.2f gyro %.2f drive %.2f comp %s", tag, yawr, rrate, dot(vv, Rt), dot(vv, Uu), d, V.speed(vc), math.deg(roll), math.deg(pitch), f, r, lf, lr,
-          vc.R2.bikeTorque or 0, vc.R2.pitchTq or 0, vc.R2.airPitchTq or 0, math.deg(vc.R2.airAim or 0), vc.R2.tmax or -1, gs, vc.R2.drive or 0, susp(vc))
+        P("JP BT %s yaw %.2f rr %.2f vlat %.2f vup %.2f | d %.1f v %.2f roll %.1f pitch %.1f gr %d%d ld %.2f/%.2f tq %.2f ptq %.2f atq %.2f aim %.1f tmax %.2f gyro %.2f drive %.2f comp %s tc %.2f sld %.2f spn %.2f cap %.2f", tag, yawr, rrate, dot(vv, Rt), dot(vv, Uu), d, V.speed(vc), math.deg(roll), math.deg(pitch), f, r, lf, lr,
+          vc.R2.bikeTorque or 0, vc.R2.pitchTq or 0, vc.R2.airPitchTq or 0, math.deg(vc.R2.airAim or 0), vc.R2.tmax or -1, gs, vc.R2.drive or 0, susp(vc),
+          vc.R2.tcK or 0, vc.R2.tcSlide or 0, vc.R2.tcSpin or 0, vc.R2.bikeCap or -1)
       end
     end
     -- (a breakup: the craft is no longer flown, and the run is over)
@@ -1326,6 +1365,8 @@ function JP.bump_pass(vc, tag, vt, B, b0, b1, kick, dEnd)
   P("JP BUMP %s v %.0f: in at %.2f m/s, %d hops (longest %.2f s), peak pitch %.1f roll %.1f deg, comp F %.3f R %.3f, peak load F %.1f R %.1f W, %s%s",
     tag, vt, v_in or -1, hops, airmax, math.deg(pmax), math.deg(rmax), cmax[1], cmax[2], lpk[1] / math.max(1e-6, wt), lpk[2] / math.max(1e-6, wt),
     JP.dead and "BROKE UP" or (fell and "FELL" or "upright"), fell and string.format(" at %.1f m (%s)", fell_d, where) or "")
+  P("JP BZ %s v %.0f: roll whoops %.1f kicker %.1f deg, slide off the lip %.2f m/s, rear load after the landing (1 s, throttle open) least %.2f W", tag, vt,
+    math.deg(rW), math.deg(rK), vlatK, rearMin < 9 and rearMin or -1)
   return { fell = fell, where = where, v_in = v_in }
 end
 function JP.press(vc)

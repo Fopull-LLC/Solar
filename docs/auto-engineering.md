@@ -349,6 +349,52 @@ landing grip is honest.
   info.mass × g, 90-91.5 % of chassis and tyres (asked of the engine:
   `work/gas/card-0629-acceptance-solar.md`).
 
+**Fourth pass (2026-11-04, engine .1426): flat out, landings under power.**
+- *The "wheelie" flat out was a crash.* The 39-58° peaks the vride and
+  vhill flat-out runs reported were the bike reaching the end of the probe's
+  strip at 29 m/s: the natural ground there stands up like a wall (front
+  load 72 kN, 29 to 5 m/s in a tenth of a second). Both runs now stop 30-40 m
+  short of the strip's end. On the strip itself the 500 holds its nose within
+  3-5° of its seated pitch from 20 to 29 m/s. The front skims (off the ground
+  about half the ticks past 25 m/s) because a light front tyre hops on the
+  strip's ripple, not because the push lifts it: at 25 m/s the engine's
+  0.55 g is well under the 0.88 g that would lift the front.
+- *The slope while the front is up* is read in the chassis's frame, as it
+  is with both tyres down (the rear contact's normal plus `motoPitch0`).
+  Read as the ground's own slope, every skip of the user's 500's front (built
+  6.6° nose up) counted as a 7° wheelie and cut the push.
+- *In the air a driven rim keeps to the ground speed* (`R2_AIR_LEAD`,
+  0.15 m/s). Led by `R2.lk`, it spun up 1-1.6 m/s ahead in every hop and
+  landed with the push saturating the tyre: no grip left sideways, so the
+  touchdown yawed at 1 rad/s and slid 3.6 m/s.
+- *Traction control at any speed* (`R2_TC2_*`, the last rule on the push,
+  after the landing's blend). The push is held to 0.7 × μ × the driven
+  tyre's load (0 in the air, dropping at once, coming back at 8 /s), which
+  leaves the rest of the grip to hold the tyre sideways. It acts only while
+  the rear is in trouble, never on low load alone:
+  - for 0.6 s after a flight of 0.3 s or more;
+  - while the rear tyre slides across its tread faster than 0.3 m/s (fully
+    by 1.0);
+  - while the rear carries under half its share and its rim runs ahead of
+    the ground by more than 0.6 m/s.
+- *The front alone on the ground* past a walk (a landing's first touch, the
+  rear kicked off a whoop): the balance's bars keep a quarter of their angle
+  (`BIKE_FRONT_ONLY_K`). A steered front tyre loaded at 5 W, with nothing on
+  the ground behind it, yawed the bike at 1.3 rad/s before the rear came
+  down.
+- *In the air the gyros serve roll first* (motoAir): whatever roll the
+  rider's body cannot take comes from the gyros before any pitch or yaw.
+  Shared out by size, a long nose-high flight spent almost all of the gyros
+  on pitch.
+- *Probes:* `JP BZ` reports each bump pass's roll in the whoops and at the
+  kicker, the slide off the lip and the rear's least load after the landing.
+  `ttrace=n` traces the flat-out run tick by tick (the push and its caps, the
+  loads, the gear, the rider's torques, the traction control). At 28 m/s, pass 2
+  of 3 hit the kicker's face hard in two of four runs, losing 3-13 m/s in a
+  tick (the fork bottoms, 3.4 rad/s of yaw, a 4.7-7.4 m/s "slide off the
+  lip"). That is the course's sculpt (three 1.7 m brushes across), not the
+  run-up: on the other passes the bike leaves the lip at under 0.2 m/s across.
+
 **Heard and seen**: a running loop per craft (`audio/foley/engine_four.ogg`,
 `engine_two.ogg`, `tools/gen_engine_audio.py`) pitched by rpm, and a
 `TailpipePuff` out of each running engine's tailpipe (lamp_response 0.3).
