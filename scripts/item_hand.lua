@@ -1103,11 +1103,20 @@ local function pose_treat(T, dt)
   local ux, uy, uz = up_at(a.x, a.y, a.z)
   local U = vec3(ux, uy, uz)
   local downed = T.kind == "revive"
-  -- the chest: lying, a hand's breadth off the ground; standing, at the chest
+  local self_ = T.target == T.by
+  -- the chest: lying, a hand's breadth off the ground; standing, the FRONT of
+  -- their chest, toward the medic. (Both bodies' nodes are their capsules'
+  -- centres, 0.94 m over the soles: a hand sent to a node's point is inside
+  -- that torso — playtest 2026-11-04, "the medkit animation has your arms
+  -- inside your body".)
   local chest = vec3(px, py, pz) + U * (downed and -0.55 or 0.25)
-  if T.target == T.by then chest = vec3(a.x, a.y, a.z) + U * 0.2 end
+  if not self_ and not downed then
+    local d = vec3(a.x - px, a.y - py, a.z - pz)
+    d = d - U * d:dot(U)
+    if d:length() > 1e-3 then chest = chest + d:normalized() * 0.24 end
+  end
   local m, an = model()
-  if m and T.target ~= T.by then
+  if m and not self_ then
     local l = a:toLocal(chest)
     if l.x * l.x + l.z * l.z > 1e-4 then m.yaw = math.atan2(l.x, l.z) end
   end
@@ -1120,8 +1129,19 @@ local function pose_treat(T, dt)
     local wob = math.sin(now() * 5.0) * 0.02
     local sh = an:boneWorld("Upperarm.Right")
     local sl = an:boneWorld("Upperarm.Left")
-    if sh then pcall(an.reach, an, "Hand.Right", chest + Rt * (0.06 + wob) + U * 0.05, { pole = sh - Uu * 0.45 + Rt * 0.3, weight = k }) end
-    if sl then pcall(an.reach, an, "Hand.Left", chest - Rt * (0.06 - wob) + U * 0.05, { pole = sl - Uu * 0.45 - Rt * 0.3, weight = k }) end
+    local rh = chest + Rt * (0.06 + wob) + U * 0.05
+    local lh = chest - Rt * (0.06 - wob) + U * 0.05
+    if self_ then
+      -- on themselves: the left forearm held across in front of the chest,
+      -- the right hand working a dressing along it — a forearm's length out
+      -- from the capsule's centre, clear of the suit's front (0.17 m)
+      local c = vec3(a.x, a.y, a.z)
+      lh = c + U * 0.30 + F * 0.31 - Rt * 0.07
+      rh = c + U * 0.35 + F * 0.34 + Rt * (0.04 + wob * 1.5)
+      chest = (lh + rh) * 0.5
+    end
+    if sh then pcall(an.reach, an, "Hand.Right", rh, { pole = sh - Uu * 0.45 + Rt * 0.3, weight = k }) end
+    if sl then pcall(an.reach, an, "Hand.Left", lh, { pole = sl - Uu * 0.45 - Rt * 0.3, weight = k }) end
     pcall(an.lookAt, an, { "Back", "Head" }, chest, { limit = 60, weight = 0.8 })
   end
   -- the pouch, open on the ground beside them

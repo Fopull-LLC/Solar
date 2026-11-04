@@ -811,6 +811,21 @@ local swap_t, swap_from = -10.0, nil
 local SWAP_SECS = 0.36
 -- The tools with models of their own, drawn and held here.
 HELD_MODELS = { "gravgun", "laser", "surveyor" }
+-- FIRST PERSON, the held items (playtest 2026-11-04): each view model is the
+-- item in the crew's gloves, built in the VIEW's own frame by
+-- tools/gen_fp_items.py (which prints these lines) — the cases by their
+-- handles in the left hand, low left; the beacon and the flag in the right,
+-- low right. `at` is the model's centre in the view (the engine recentres a
+-- model on its box), `grip` the hand's hold from that centre, which the sway
+-- turns about. Third person is item_hand's. (A global: this file is at Lua's
+-- 200 main-chunk locals.)
+FP_ITEMS = {
+  repairkit = { prefab = "ItemRepairKitFP", at = { -0.145, -0.452, -0.417 }, grip = { -0.005, 0.347, -0.033 } },
+  medkit = { prefab = "ItemMedkitFP", at = { -0.120, -0.451, -0.337 }, grip = { -0.025, 0.356, -0.083 } },
+  gascan = { prefab = "ItemGasCanFP", at = { -0.145, -0.450, -0.402 }, grip = { -0.005, 0.350, -0.048 } },
+  beacon = { prefab = "ItemBeaconStowedFP", at = { 0.295, -0.465, -0.295 }, grip = { -0.095, 0.335, -0.205 } },
+  flag = { prefab = "ItemFlagFurledFP", at = { 0.165, 0.057, -0.297 }, grip = { 0.035, -0.217, -0.183 } },
+}
 local vm = { layer = nil, bit = nil, cam = nil, making = false, on = false, main = nil }
 
 local function hand()
@@ -846,6 +861,7 @@ local function model_of(set, id, parent, place)
   if m and m.valid then return m end
   local d = TOOLDEF[id]
   local prefab = d and (set == "fp" and d.fp_prefab or d.prefab)
+  if not prefab and set == "fp" and FP_ITEMS[id] then prefab = FP_ITEMS[id].prefab end
   if not (prefab and parent and spawn) then return nil end
   models[set][id] = "spawning"
   spawn(prefab, parent.worldPos or vec3(parent.x, parent.y, parent.z), function(n)
@@ -866,6 +882,13 @@ local function place_tp(n, id)
 end
 
 local function place_fp(n, id)
+  local fi = FP_ITEMS[id]
+  if fi then
+    n.scale = 1.0
+    n.x, n.y, n.z = fi.at[1], fi.at[2], fi.at[3]
+    n:setAngles(0, 0, 0)
+    return
+  end
   local g = RIG_FP[id].grip
   local yw, pt = math.atan(VIEW_AT[1] / VIEW_TOE), math.atan(-VIEW_AT[2] / VIEW_TOE)
   local gx, gy, gz = vm_rot(yw, pt, VIEW_CANT, g[1] * VIEW_SCALE, g[2] * VIEW_SCALE, g[3] * VIEW_SCALE)
@@ -979,6 +1002,17 @@ local function show_models(node, dt, carrying)
     local fon = on and fp and not scoped_fp
     if fv and fv.visible ~= fon then fv.visible = fon end
   end
+  -- the held items' view models (none while a job holds the hands: the
+  -- repair and the Medkit put the kit down; item_hand draws that)
+  local IH = FP_ITEMS[want or ""] and ref("item_hand") or nil
+  if IH and IH.busy and IH.busy() then want = nil end
+  local CR = IH and ref("crew")
+  if CR and CR.treating and CR.treating() then want = nil end
+  for id in pairs(FP_ITEMS) do
+    local fv = (cn and (want == id or models.fp[id])) and model_of("fp", id, cn, place_fp) or nil
+    local fon = fp and want == id
+    if fv and fv.visible ~= fon then fv.visible = fon end
+  end
   if cn then view_model_cam(cn, fp and want ~= nil and not scoped_fp) end
   if not (fp and want and cn) then return end
   local fv = models.fp[want]
@@ -1022,6 +1056,21 @@ local function show_models(node, dt, carrying)
   -- one up; a held trigger brings the tool in a touch toward the middle.
   local dip = swap_dip()
   local lean = inUse and 0.012 or 0.0
+  local fi = FP_ITEMS[want]
+  if fi then
+    -- an item: the sway, the bob and a swap's dip, turned about the hand's
+    -- hold; the Gas Can tips forward while it pours (item_hand POUR)
+    local POUR = IH and IH.POUR
+    view.pour = (view.pour or 0) + (((POUR and POUR.on) and 1 or 0) - (view.pour or 0)) * (1 - math.exp(-6 * dt))
+    local yw, pt, rl = view.sx * 1.2, view.sy * 1.0 - dip * 0.7 - view.pour * 0.75, -view.sx * 1.5
+    local g = fi.grip
+    local gx, gy, gz = vm_rot(yw, pt, rl, g[1], g[2], g[3])
+    fv.x = fi.at[1] + g[1] - gx + view.sx + bx
+    fv.y = fi.at[2] + g[2] - gy + view.sy - by - dip * 0.22 + view.pour * 0.05
+    fv.z = fi.at[3] + g[3] - gz - view.pour * 0.06
+    fv:setAngles(yw, pt, rl)
+    return
+  end
   -- Toed in toward the crosshair VIEW_TOE out, then the sway's lag and the
   -- kick; turned about the grip, so the hand stays where VIEW_AT puts it.
   local yw, pt, rl = vm_angles()

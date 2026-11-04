@@ -41,6 +41,15 @@ defaults = {
   -- air". Zero pins you to the ground and you will catch on every seam.
   --@range 0 8 --@units m/s
   step_pop = 1.6,
+  -- The slope you walk is read off a ray straight down (1) rather than the
+  -- contact's normal (0), which a facet's seam tilts toward you.
+  --@range 0 1
+  slope_ray = 1,
+  -- A contact's climb is kept only as far as the ground a stride ahead
+  -- steps up (1), or always, up to step_pop (0: the old rule, which kept a
+  -- facet seam's kick and bounced the body on level ground).
+  --@range 0 1
+  kerb_pop = 1,
   -- Terminal velocity. A long fall that outruns the collider goes through it.
   --@range 5 200 --@units m/s
   fall_max = 60.0,
@@ -1247,6 +1256,10 @@ local sw_sent = {}
 local sw_pitch, sw_bank, sw_lift = 0.0, 0.0, 0.0
 local depth_s = 0.0
 -- What the swim is doing, for probes and tests (updated in place).
+-- The up axis's last frame (update), for probes: the contact, whether the
+-- slope came from the down ray, the climb it asked for, the kept pop and the
+-- snap-down gap (tools/perf/jitterprobe.sh).
+vertState = { contact = false, ray = false, slope = 0, pop = 0, snap = 0 }
 swimState = { w = 0, f = 0, s = 0, v = 0, side = 0, vert = 0, pitch = 0, bank = 0, lift = 0,
               under = false, rate = 1, vf = 0, vs = 0, vu = 0 }
 
@@ -1906,18 +1919,48 @@ function update(node, dt)
     -- is climbed at the speed you asked for instead of being shoved up it by
     -- the solver one contact at a time — and walking down it keeps the feet on
     -- it instead of skipping off in little ballistic hops.
+    --
+    -- From the ground UNDER the body, not the contact's normal (playtest
+    -- 2026-11-04, "I jitter up and down in third person"). The ground is a
+    -- surface-nets mesh; where the capsule's round bottom rides onto a seam
+    -- between two facets the contact normal points from that edge back at the
+    -- capsule's centre, tilted toward the walker, and at 4 m/s it asked for
+    -- ~0.8 m/s of climb on level ground: the body rose 10-14 cm over ten frames
+    -- and fell back in one tick, three times a second (tools/perf/
+    -- jitterprobe.sh: the body's height d2 rms 27 mm/frame walking, the
+    -- camera's 4). A ray straight down from the centre lands on the facet that
+    -- is under the body, which is the hill really being walked.
     local slope = 0.0
-    local n = node.groundNormal
+    local n = nil
+    local vs = vertState
+    vs.contact, vs.ray, vs.snap = contact, false, 0.0
+    if contact then
+      n = node.groundNormal
+      if (params.slope_ray or 1) > 0 then
+        local gh = raycast(node.x, node.y, node.z, -ux, -uy, -uz, params.ground_ray, node)
+        if gh and gh.nx then n = vec3(gh.nx, gh.ny, gh.nz); vs.ray = true end
+      end
+    elseif ground_hit and ground_hit.nx and (params.slope_ray or 1) > 0 then
+      n = vec3(ground_hit.nx, ground_hit.ny, ground_hit.nz)
+      vs.ray = true
+    end
     if n then
       local nu = n.x * ux + n.y * uy + n.z * uz
       if nu > 0.35 then slope = -(mvx * n.x + mvy * n.y + mvz * n.z) / nu end
     end
+    vs.slope = slope
     -- SNAP DOWN. Walking off a crest or down a step, the contact goes a frame
     -- before the probe does; the body would sail on at its old height and come
-    -- down a moment later. Pulled back onto the ground the probe still sees.
-    if not contact and was_contact and ground_hit then
+    -- down a moment later. Pulled back onto the ground the probe still sees —
+    -- every frame it is a kerb's height or less off it (not only the frame the
+    -- contact went), so a facet's crest never launches a ballistic hop. Past
+    -- that it is a drop, and gravity has it.
+    if not contact and ground_hit then
       local gap = ground_hit.distance - (node.height or 2.0) * 0.5
-      if gap > 0.02 then slope = math.min(slope, -math.min(8.0, gap / math.max(dt, 1e-3))) end
+      if gap > 0.02 and (was_contact or gap < 0.35) then
+        slope = math.min(slope, -math.min(8.0, gap / math.max(dt, 1e-3)))
+        vs.snap = gap
+      end
     end
     swim_vup = vup
     if not downed and (input.pressed("space") or (steer_f and steer_jump)) then
@@ -1928,7 +1971,32 @@ function update(node, dt)
       slope = 0.0
       local fx = ref("sfx"); if fx and fx.playAt then fx.playAt("jump", node) end
     else
-      vup = slope + math.min(vup - slope_vup, params.step_pop)
+      -- THE KERB'S POP, only for a kerb. A contact's climb is kept (up to
+      -- step_pop) so the body can walk up a step; but on level ground the
+      -- capsule meets a facet's seam every few strides and the solver ejects
+      -- it at ~0.85 m/s, which was kept as well: the body rose 10-14 cm and
+      -- the snap-down dropped it back in a tick (jitterprobe A/B: the slope
+      -- was not it; `pop` was). The ground a stride ahead says whether there
+      -- is a step to climb: the pop allowed is that step's height over the
+      -- soles, climbed in about a tenth of a second.
+      local pop = vup - slope_vup
+      if pop > 0 and (params.kerb_pop or 1) > 0 then
+        local h = 0.0
+        local hx, hy, hz = mvx, mvy, mvz
+        local hl = math.sqrt(hx * hx + hy * hy + hz * hz)
+        if hl > 0.2 then
+          local half = (node.height or 2.0) * 0.5
+          local o = 0.5                     -- the capsule's radius and a little
+          local px, py, pz = node.x + hx / hl * o + ux * 0.6, node.y + hy / hl * o + uy * 0.6, node.z + hz / hl * o + uz * 0.6
+          local fh = raycast(px, py, pz, -ux, -uy, -uz, half + 1.0, node)
+          if fh and fh.distance then h = half + 0.6 - fh.distance end
+        else
+          h = 1.0                            -- standing or shoved: as before
+        end
+        pop = math.min(pop, math.max(0.0, h) * 10.0)
+      end
+      vs.pop = math.min(pop, params.step_pop)
+      vup = slope + vs.pop
     end
     slope_vup = slope
   else

@@ -342,6 +342,8 @@ def surveyor():
 FP_CENTRE = {
     "gravgun_fp": (-0.09172205158580735, -0.14120499599902658, 0.09168546816154502),
     "laser_fp": (-0.09129929678446527, -0.14607702949859874, 0.030868770701170667),
+    # (pinned when the hands were rebuilt, 2026-11-04: RIG_FP's surveyor line)
+    "surveyor_fp": (-0.054, -0.152, -0.007),
 }
 
 
@@ -361,94 +363,63 @@ def pin_centre(rig, want):
     return m
 
 
-def capsule(m, p0, p1, thick, wide, palm_n, segs=12, back="Glove", front="Palm"):
-    """A flattened capsule from p0 to p1: `thick` the half-depth along palm_n
-    (the side facing palm_n is the dark palm), `wide` the half-width across."""
-    p0, p1 = np.asarray(p0, float), np.asarray(p1, float)
-    d = p1 - p0
-    L = float(np.linalg.norm(d))
-    ax = d / L
-    nx = np.asarray(palm_n, float)
-    nx = nx - ax * (nx @ ax)
-    nx /= np.linalg.norm(nx)
-    nz = np.cross(nx, ax)
-    # radius 1 (scaled to thick / wide), the ends domed
-    dome = min(thick, wide)
-    pr = [(0.0, -dome), (0.5, -dome * 0.87), (0.87, -dome * 0.5), (1.0, 0.0),
-          (1.0, L), (0.87, L + dome * 0.5), (0.5, L + dome * 0.87), (0.0, L + dome)]
-    for mat, a0, a1 in ((front, -math.pi / 2, math.pi / 2), (back, math.pi / 2, 3 * math.pi / 2)):
-        sub = Model()
-        lathe(sub, mat, pr, segs=segs // 2, smooth=True, a0=a0, a1=a1, uv_m=4.0)
-        # lathe's (r, y): r scales by thick / wide in x / z; y is the true length
-        out = Model()
-        for k, (Ps, Ns, UVs, Is, _) in sub.parts.items():
-            P = np.vstack(Ps); N = np.vstack(Ns)
-            P2 = P[:, [0]] * (nx * thick) + P[:, [1]] * ax + P[:, [2]] * (nz * wide)
-            N2 = N[:, [0]] * (nx / thick) + N[:, [1]] * ax + N[:, [2]] * (nz / wide)
-            out.add(k, P2, N2, np.vstack(UVs), np.vstack(Is))
-        m.merge(out, None, p0)
+# The hands are tools/fp_hands.py's: an anatomical gloved hand (metacarpals,
+# phalanges, thenar and hypothenar pads, knuckles, creases, RTV grip and tip
+# caps) laid on each grip as a cylinder and closed round it joint by joint.
+# A pistol grip is an oblong 41 x 54 mm; it is held as a 24 mm-radius bar
+# whose axis runs down its middle, raked back. The palm sits on its back and
+# right side (the backstrap in the web of the hand), the fingers round its
+# front, the thumb down its left flank.
+PG_TOP = np.array([0.0, -0.030, 0.058])          # the pistol grip's axis (dz = 0)
+PG_BOT = np.array([0.0, -0.100, 0.0795])
+PG_R = 0.024
+# the thumb as it lies on a grip: lifted off the palm, swung across, turned to
+# face the fingers (fp_hands.Pose; wrap() bends its two joints to touch)
+GRIP_THUMB = dict(abd=0.8, flex=0.45, rot=-0.4)
 
 
-def fp_glove(m, wrist, elbow, palm, fingers, palm_n, thumb, wide=0.05, thick=0.03):
-    """A gloved hand: the palm (wrist end to knuckles) and the fingers (bent
-    on from the knuckles) as flattened capsules with dark palms toward
-    `palm_n`, the thumb, a flared gauntlet, the wrist bearing and the suit
-    sleeve back to `elbow`."""
-    capsule(m, palm[0], palm[1], thick, wide, palm_n)
-    # four fingers, as the suit's glove has them (tools/gen_suit_blender.py):
-    # side by side across the hand's width, the middle finger longest, the
-    # little finger short and set back, each its own padded capsule
-    f0, f1 = np.asarray(fingers[0], float), np.asarray(fingers[1], float)
-    fn = np.asarray(fingers[2] if len(fingers) > 2 else palm_n, float)
-    ax = (f1 - f0) / float(np.linalg.norm(f1 - f0))
-    nx = fn - ax * (fn @ ax)
-    nx /= np.linalg.norm(nx)
-    nz = np.cross(nx, ax)
-    L = float(np.linalg.norm(f1 - f0))
-    fw = wide * 0.94 / 4
-    for i, (ln, back) in enumerate(((0.92, 0.03), (1.0, 0.0), (0.94, 0.03), (0.76, 0.10))):
-        o = nz * fw * (1.5 - i) * 2
-        capsule(m, f0 + o - ax * back * L, f0 + o + ax * (ln - back) * L, thick * 0.66, fw * 0.92, fn, segs=8)
-    capsule(m, thumb[0], thumb[1], 0.016, 0.018, thumb[2] if len(thumb) > 2 else palm_n, segs=8)
-    wrist, elbow = np.asarray(wrist, float), np.asarray(elbow, float)
-    d = elbow - wrist
-    u = d / float(np.linalg.norm(d))
-    # the gauntlet: from the heel of the hand, flaring to the bearing
-    tube(m, "Glove", np.asarray(palm[0], float), wrist + u * 0.035, 0.034, segs=14, r1=0.045)
-    # the wrist disconnect: a bright bearing and its darker lock collar
-    tube(m, "SuitMetal", wrist + u * 0.035, wrist + u * 0.056, 0.049, segs=18)
-    tube(m, "Dark", wrist + u * 0.056, wrist + u * 0.064, 0.045, segs=18)
-    tube(m, "Suit", wrist + u * 0.064, elbow, 0.045, segs=16, r1=0.062)
+def grip_hand(m, side, c, u, r, dorsal, elbow_off, slide=0.0, thumb=None, index_gap=0.0):
+    """A gloved hand closed round the bar through c along u (u toward the
+    index finger's end), radius r, its back toward `dorsal`; the sleeve runs
+    to the wrist + elbow_off."""
+    import fp_hands as H
+    pose = H.Pose(curl=0.0, thumb=dict(GRIP_THUMB, **(thumb or {})))
+    # the hand turned round the grip until it lines up with the forearm, which
+    # runs from the wrist toward elbow_off (a straight wrist, not a broken one)
+    M = H.on_cylinder(c, u, dorsal, r, side=side, slide=slide, forearm=elbow_off)
+    H.wrap(pose, M, c, u, r, side=side, fingers=("middle", "ring", "little"), thumb=True)
+    H.wrap(pose, M, c, u, r, side=side, fingers=("index",), gap=index_gap)
+    H.glove(m, M, pose, side=side, elbow=float(np.linalg.norm(elbow_off)))
+    return M
 
 
-def fore_grip_hand(m, Y, z):
-    """The left glove round a vertical fore-grip whose top is under the
-    barrel at depth z (the grip raked a little forward)."""
-    w = np.array([-0.052, Y - 0.150, z + 0.050])
-    fp_glove(m, w, w + np.array([-0.20, -0.30, 0.36]),
-             palm=((-0.046, Y - 0.122, z + 0.028), (-0.040, Y - 0.108, z - 0.018)),
-             fingers=((-0.026, Y - 0.106, z - 0.036), (0.022, Y - 0.104, z - 0.030), (0.0, 0.0, 1.0)),
-             palm_n=(1.0, 0.0, 0.0),
-             thumb=((-0.040, Y - 0.072, z + 0.022), (0.004, Y - 0.066, z + 0.016), (0.0, -1.0, 0.0)),
-             wide=0.040, thick=0.024)
+def pistol_hand(m, dz):
+    """The right glove on the family's pistol grip (moved dz along Z)."""
+    top, bot = PG_TOP + [0, 0, dz], PG_BOT + [0, 0, dz]
+    u = (top - bot) / np.linalg.norm(top - bot)
+    c = top - u * 0.032
+    grip_hand(m, "R", c, u, PG_R, (0.55, 0.0, 0.83), (0.13, -0.30, 0.42))
+
+
+def fore_hand(m, top, bot, r):
+    """The left glove round a raked fore-grip from `top` down to `bot`: the
+    palm on its left, the fingers round its front, the thumb over the right."""
+    top, bot = np.asarray(top, float), np.asarray(bot, float)
+    u = (top - bot) / np.linalg.norm(top - bot)
+    grip_hand(m, "L", top - u * 0.036, u, r + 0.002, (-0.80, 0.0, 0.60), (-0.20, -0.30, 0.36))
 
 
 def fp_gravity_gun():
     rig = gravity_gun()
     m = rig.body
-    # Right hand round the raked pistol grip: the palm down its back, the
-    # fingers across its front, the thumb up the receiver's left flank.
-    w = np.array([0.012, -0.10, 0.125])
-    fp_glove(m, w, w + np.array([0.13, -0.30, 0.42]),
-             palm=((0.012, -0.095, 0.10), (0.008, -0.02, 0.07)),
-             fingers=((-0.004, -0.03, 0.03), (0.0, -0.09, 0.012), (0.0, 0.0, 1.0)),
-             palm_n=(-0.2, 0.0, -1.0),
-             thumb=((-0.045, -0.035, 0.09), (-0.074, 0.008, 0.03), (1.0, 0.0, 0.0)), wide=0.042, thick=0.026)
-    # Left hand round the fore-grip under the coil body: the palm on its
-    # left, the fingers curled round its front, the thumb over the top behind;
-    # the forearm runs back and down out of the view, under the gun, so the
-    # coil, the bell and the claws stay in sight.
-    fore_grip_hand(m, Y=0.05, z=-0.155)
+    # Right hand round the raked pistol grip.
+    pistol_hand(m, 0.0)
+    # Left hand round the fore-grip under the coil body (tools/gen_tools_blender
+    # gravity_gun: from (0, Y - 0.058, -0.150) to (0, Y - 0.140, -0.168), r
+    # 16.5 mm with its ribs); the forearm runs back and down out of the view,
+    # under the gun, so the coil, the bell and the claws stay in sight.
+    Y = float(rig.anchors["muzzle"][1])
+    fore_hand(m, (0.0, Y - 0.058, -0.150), (0.0, Y - 0.140, -0.168), 0.0175)
     return rig
 
 
@@ -461,19 +432,14 @@ def fp_surveyor():
 
 
 def fp_laser_hands(rig):
-    """The gloves on a laser-family tool (the TL-7's grip, a fore-grip at the
-    design's `fore` anchor)."""
+    """The gloves on a laser-family tool: the pistol grip 3 cm back of the
+    gravity gun's, and the fore-grip whose middle is the design's `fore`
+    anchor (each design's runs 80 mm down, raked 16 mm forward, r 15.5 mm)."""
     m = rig.body
-    # Right hand on the pistol grip.
-    w = np.array([0.012, -0.095, 0.155])
-    fp_glove(m, w, w + np.array([0.13, -0.30, 0.40]),
-             palm=((0.012, -0.09, 0.13), (0.008, -0.015, 0.10)),
-             fingers=((-0.004, -0.025, 0.06), (0.0, -0.085, 0.042), (0.0, 0.0, 1.0)),
-             palm_n=(-0.2, 0.0, -1.0),
-             thumb=((-0.04, -0.03, 0.12), (-0.066, 0.008, 0.06), (1.0, 0.0, 0.0)), wide=0.042, thick=0.026)
-    # Left hand round the fore-grip under the barrel, as the gravity gun's
-    # (every design keeps its fore-grip about here: its `fore` anchor).
-    fore_grip_hand(m, Y=0.05, z=float(rig.anchors["fore"][2]) + 0.004)
+    pistol_hand(m, 0.030)
+    f = rig.anchors["fore"]
+    d = np.array([0.0, 0.040, 0.008])
+    fore_hand(m, f + d, f - d, 0.0155)
     return rig
 
 

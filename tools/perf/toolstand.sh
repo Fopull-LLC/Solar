@@ -47,7 +47,17 @@ read TOE <<< "$(num 'local VIEW_TOE = [0-9.]*')"
 read CANT <<< "$(num 'local VIEW_CANT = -*[0-9.]*')"
 read GGX GGY GGZ <<< "$(awk '/^RIG_FP = /{f=1} f&&/gravgun/{print; exit}' "$TB" | grep -o 'grip = {[^}]*}' | grep -oE -- '-?[0-9.]+' | tr '\n' ' ')"
 read LGX LGY LGZ <<< "$(awk '/^RIG_FP = /{f=1} f&&/laser/{print; exit}' "$TB" | grep -o 'grip = {[^}]*}' | grep -oE -- '-?[0-9.]+' | tr '\n' ' ')"
-P="(\"toe\", ${TOE:-7.0}), (\"cant\", ${CANT:-0.0}), (\"vax\", $VAX), (\"vay\", $VAY), (\"vaz\", $VAZ), (\"vmfov\", $VMF), (\"ggx\", $GGX), (\"ggy\", $GGY), (\"ggz\", $GGZ), (\"lgx\", $LGX), (\"lgy\", $LGY), (\"lgz\", $LGZ)${STAND_PARAMS:+, $STAND_PARAMS}"
+# tool_belt's FP_ITEMS: each held item's view-model centre and hold
+FPI=""
+for pair in repairkit:kit medkit:med gascan:gas beacon:bea flag:flg; do
+  k=${pair%%:*}; t=${pair##*:}
+  L=$(grep -E "^  $k = \{ prefab = \"Item" "$TB" | head -1)
+  [ -n "$L" ] || continue
+  read AX AY AZ <<< "$(echo "$L" | grep -o 'at = {[^}]*}' | grep -oE -- '-?[0-9.]+' | tr '\n' ' ')"
+  read GX GY GZ <<< "$(echo "$L" | grep -o 'grip = {[^}]*}' | grep -oE -- '-?[0-9.]+' | tr '\n' ' ')"
+  FPI="$FPI, (\"${t}x\", $AX), (\"${t}y\", $AY), (\"${t}z\", $AZ), (\"${t}gx\", $GX), (\"${t}gy\", $GY), (\"${t}gz\", $GZ)"
+done
+P="(\"toe\", ${TOE:-7.0}), (\"cant\", ${CANT:-0.0}), (\"vax\", $VAX), (\"vay\", $VAY), (\"vaz\", $VAZ), (\"vmfov\", $VMF), (\"ggx\", $GGX), (\"ggy\", $GGY), (\"ggz\", $GGZ), (\"lgx\", $LGX), (\"lgy\", $LGY), (\"lgz\", $LGZ)$FPI${STAND_PARAMS:+, $STAND_PARAMS}"
 cat > "$PJ/scenes/toolstand.ron" <<RON
 (
     nodes: [

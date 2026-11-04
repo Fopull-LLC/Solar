@@ -12,7 +12,9 @@
 -- charge / heat: the energy uniforms the ordinary stand's tools wear.
 defaults = { quit = 1, pose = 1, toe = 7.0, cant = 0.0, sweep = 0, vax = 0.21, vay = -0.265, vaz = -0.6, vmfov = 0.95,
   ggx = 0, ggy = 0, ggz = 0, lgx = 0, lgy = 0, lgz = 0, protos = 0, charge = 0.3, heat = 0.0, wcharge = 0.9,
-  wheat = 0.7 }
+  wheat = 0.7,
+  -- the held items' FP_ITEMS (toolstand.sh reads them from tool_belt.lua)
+  kitx = 0, kity = 0, kitz = 0, kitgx = 0, kitgy = 0, kitgz = 0, medx = 0, medy = 0, medz = 0, medgx = 0, medgy = 0, medgz = 0, gasx = 0, gasy = 0, gasz = 0, gasgx = 0, gasgy = 0, gasgz = 0, beax = 0, beay = 0, beaz = 0, beagx = 0, beagy = 0, beagz = 0, flgx = 0, flgy = 0, flgz = 0, flggx = 0, flggy = 0, flggz = 0 }
 
 local W = function() return app.wallClock and app.wallClock() or os.clock() end
 local W0 = W()
@@ -208,6 +210,45 @@ local function main()
   end
   fp_shot("grav", made.ToolGravGunFP, { params.ggx, params.ggy, params.ggz })
   fp_shot("laser", made.ToolLaserFP, { params.lgx, params.lgy, params.lgz })
+  -- the gloves up close (playtest 2026-11-04: the hands), the model square on
+  local function hands_close(tag, n, grip, fore)
+    n:setAngles(0, 0, 0)
+    local g = vec3(n.x + grip[1], n.y + grip[2], n.z + grip[3])
+    view(g, 0.45, math.rad(-35), math.rad(25), tag .. "_hand_r_back")
+    view(g, 0.45, math.rad(150), math.rad(10), tag .. "_hand_r_front")
+    view(g, 0.45, math.rad(-110), math.rad(5), tag .. "_hand_r_thumb")
+    local f = vec3(n.x + fore[1], n.y + fore[2], n.z + fore[3])
+    view(f, 0.45, math.rad(-80), math.rad(20), tag .. "_hand_l_back")
+    view(f, 0.45, math.rad(100), math.rad(10), tag .. "_hand_l_inside")
+  end
+  hands_close("grav", made.ToolGravGunFP, { params.ggx, params.ggy, params.ggz }, { params.ggx, 0.091, -0.251 })
+  hands_close("laser", made.ToolLaserFP, { params.lgx, params.lgy, params.lgz }, { params.lgx, 0.078, -0.189 })
+  -- THE HELD ITEMS' view models (tool_belt FP_ITEMS: each built in the view's
+  -- frame, placed at its centre `at`), framed as the game frames them, then
+  -- from beside and up close
+  for i, it in ipairs({ { "kit", "ItemRepairKitFP", "kit" }, { "med", "ItemMedkitFP", "med" }, { "gas", "ItemGasCanFP", "gas" },
+                        { "beacon", "ItemBeaconStowedFP", "bea" }, { "flag", "ItemFlagFurledFP", "flg" } }) do
+    local ox = 60 + i * 10
+    local n
+    spawn(it[2], vec3(ox, 0, 0), function(x) n = x end)
+    frames(20)
+    if not n then P("MISSING %s", it[2]) else
+      local at = { params[it[3] .. "x"] or 0, params[it[3] .. "y"] or 0, params[it[3] .. "z"] or 0 }
+      local gp = { params[it[3] .. "gx"] or 0, params[it[3] .. "gy"] or 0, params[it[3] .. "gz"] or 0 }
+      n.x, n.y, n.z = ox + at[1], at[2], at[3]
+      n:setAngles(0, 0, 0)
+      cam.x, cam.y, cam.z = ox, 0, 0
+      cam:setAngles(0, 0, 0)
+      cam:setCamera { fovY = VM_FOV }
+      frames(6)
+      shot("item_" .. it[1] .. "_fp")
+      frames(4)
+      local g = vec3(n.x + gp[1], n.y + gp[2], n.z + gp[3])
+      local s = at[1] < 0 and -1 or 1
+      view(g, 0.5, math.rad(s * 70), math.rad(20), "item_" .. it[1] .. "_side")
+      view(g, 0.32, math.rad(s * 25 + 180), math.rad(35), "item_" .. it[1] .. "_hand")
+    end
+  end
   -- the articulation
   if params.pose > 0 then
     for _, k in ipairs({ "ToolGravGun", "ToolLaser", "ToolGravGunFP", "ToolLaserFP" }) do
