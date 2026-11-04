@@ -293,10 +293,12 @@ local function apply_look(l)
     local function ch(x) return math.min(1, x * (1 - g) + 0.42 * g) end
     pcall(function() hm.color = { ch(h[1]), ch(h[2]), ch(h[3]) } end)
   end
-  -- the suit's neck: the same skin
+  -- the suit's neck: the same skin. A material's colour is linear light, as
+  -- the face shader's knob is (handed the sRGB look it drew every neck a
+  -- pale ring: a dark skin's 0.50 sRGB shown as 0.50 linear, 2026-11-04)
   local nk = mat(model_node, "SuitHead")
   if nk then
-    local ok, err = pcall(function() nk.color = { s[1], s[2], s[3] } end)
+    local ok, err = pcall(function() nk.color = { lin(s[1]), lin(s[2]), lin(s[3]) } end)
     if not ok and not warned then warned = true; print("face: neck colour: " .. tostring(err)) end
     pcall(function() nk.texture = "" end)
     pcall(function() nk.roughness = 0.6 end)

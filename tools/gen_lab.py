@@ -452,6 +452,11 @@ def room(K):
     m.add("LabFloor", P, N, UV, I)
     m.cols["LabFloor"][-1] = np.array(C)
     sh.add((0, FT / 2, 0), (2 * XI, FT, 2 * ZI))
+    # the ceiling is solid too: the shell's roof slab is 1.85 m above the
+    # tiles, and a 5.2 m/s jump on a light world lifts the feet 3-4 m, so
+    # without it the crew jumped up through the tiles into the void
+    # (playtest 2026-11-04). 0.3 m thick, from the tiles' face up.
+    sh.add((0, CY + 0.15, 0), (2 * XI, 0.3, 2 * ZI))
     # THE WALL LINING: panels 1.2 m wide, a 4 mm shadow seam between them; a
     # brushed coved skirting; holes for the doorway and (left whole) behind
     # the vestibule's and instrument room's own panels
@@ -619,6 +624,11 @@ def partitions(K):
                 Bx(m, "LabSteel", ALU, fixed - 0.035, fixed + 0.035, CY - 0.06, CY - 0.002, s0 + 0.025, s1 - 0.025)
                 sh.add((fixed, CY / 2, (s0 + s1) / 2), (0.08, CY, s1 - s0))
         for (g0, g1) in gaps:   # a head over each doorway, to the ceiling
+            # (solid: the glass over a door stops a jump as the panes beside it do)
+            if axis == "x":
+                sh.add(((g0 + g1) / 2, (2.3 + CY) / 2, fixed), (g1 - g0, CY - 2.3, 0.08))
+            else:
+                sh.add((fixed, (2.3 + CY) / 2, (g0 + g1) / 2), (0.08, CY - 2.3, g1 - g0))
             if axis == "x":
                 Bx(m, "LabSteel", ALU, g0, g1, 2.3, 2.36, fixed - 0.05, fixed + 0.05)
                 g.color = (1, 1, 1)

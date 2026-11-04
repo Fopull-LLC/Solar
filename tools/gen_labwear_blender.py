@@ -471,12 +471,40 @@ def build_lab(rig):
     V, F = box_mesh(bc + Y * 0.047 * k, (0.012 * k, 0.016 * k, 0.003 * k), Mb)
     Piece("BadgeClip", "LabPlastic", V, F, {"Back": 1}, CLIP, tile=0.1, dirt="none", smooth=False)
 
-    # the neck under the collar (SuitHead: the wearer's skin, face.lua)
+    # the neck under the collar (SuitHead: the wearer's skin, face.lua): the
+    # HEAD'S NECK CONTINUED. Every crew head's own neck ends in a ragged edge
+    # at y 1.559-1.574, level with the mock neck's rim, so this carries it on
+    # down into the knit: rigid on the Head bone where it meets the head (so
+    # the join never opens however the head turns), 3 mm inside the edge
+    # just under it and 4-5.5 mm inside the head's neck above it (hidden), the
+    # twist to the Back bone down inside the band, and a foot that flares out
+    # under the knit so a look down past the neck finds skin. NECK_E/NECK_U
+    # are the narrowest of the eight heads' necks (models/astronaut/faces) by
+    # direction round the neck's axis (x -0.5 bind, z = zn), every 22.5°
+    # from +x towards the front (+z): at the edge, and at y 1.575-1.585.
+    # (Until 2026-11-04 it was an ellipse 49 mm deep in front up to 1.585:
+    # it came out through every head's throat as a pale ring, its colour sRGB
+    # in a linear slot.) tools/gen_labwear.py --neck checks it.
+    NECK_E = (58.4, 50.9, 45.1, 47.0, 50.0, 47.0, 45.1, 50.9, 58.4, 63.7, 56.6, 51.5, 49.5, 51.5, 56.6, 63.7)
+    NECK_U = (56.6, 50.8, 45.1, 47.0, 50.0, 47.0, 45.1, 50.8, 56.6, 62.1, 56.6, 51.5, 49.5, 51.5, 56.6, 62.1)
+
+    def neck_r(tab, d_mm, scale=1.0):
+        def rad(a):
+            u = (a % TAU) / TAU * 16
+            i = int(u) % 16
+            f = u - int(u)
+            return ((tab[i] * (1 - f) + tab[(i + 1) % 16] * f) * scale + d_mm) * 0.001 * k
+        return rad
     nr = []
-    for y, r, w in ((1.500, 0.050, {"Back": 1}), (1.530, 0.049, blend("Back", "Head", 0.3)),
-                    (1.560, 0.047, blend("Back", "Head", 0.6)), (1.585, 0.045, blend("Back", "Head", 0.8))):
-        nr.append(dict(c=(X0, y * k, zn + 0.004 * k), e1=X, e2=Z, r1=r * k * 1.12, r2=r * k * 0.96, w=w))
-    V, F, UVc, W, C = loft(nr, 16, tile=0.25)
+    for y, tab, d_mm, sc, w in ((1.475, NECK_E, 12.0, 1.0, {"Back": 1}),
+                                (1.498, NECK_E, 0.0, 0.97, blend("Back", "Head", 0.15)),
+                                (1.515, NECK_E, -3.0, 1.0, blend("Back", "Head", 0.4)),
+                                (1.540, NECK_E, -3.0, 1.0, blend("Back", "Head", 0.75)),
+                                (1.557, NECK_E, -3.0, 1.0, {"Head": 1}),
+                                (1.575, NECK_U, -4.0, 1.0, {"Head": 1}),
+                                (1.587, NECK_U, -5.5, 1.0, {"Head": 1})):
+        nr.append(dict(c=(X0, y * k, zn), e1=X, e2=Z, r1=1e-5, r2=1e-5, rad=neck_r(tab, d_mm, sc), w=w))
+    V, F, UVc, W, C = loft(nr, 32, tile=0.25)
     npc = Piece("Neck", "SuitHead", V, F, W, (1, 1, 1), dirt="none")
     npc.uvmode = "plain"
 

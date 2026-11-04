@@ -25,7 +25,10 @@ y 1.48 m. The coat's band collar stands round it: `--neck` casts rays out
 from the neck's axis at every height the collar covers and checks the head's
 neck is inside the collar's inner face with clearance, for all eight heads
 and the head turned through its idle range (yaw ±20°, pitch ±12°); it
-exits 1 when any pokes through.
+exits 1 when any pokes through. It also checks the coat's own short neck
+(SuitHead, skin-coloured: the head's neck carried on down into the knit)
+stays inside every head's neck above the head's lower edge, so it never
+shows through as a ring, and sits close under that edge.
 """
 import json
 import math
@@ -211,6 +214,98 @@ def neck_check(sk, rig):
     return worst * 1000
 
 
+def _head_skin(h):
+    sys.path.insert(0, os.path.join(ROOT, "tools", "perf"))
+    import neck_check as NC
+    j, B = NC.read_glb(os.path.join(ROOT, "models", "astronaut", "faces", f"head_{h}.glb"))
+    p = j["meshes"][0]["primitives"][0]          # FaceSkin
+    P = NC.acc(j, B, p["attributes"]["POSITION"]).astype(float)
+    I = NC.acc(j, B, p["indices"]).reshape(-1, 3).astype(int)
+    return P, I
+
+
+def _ray_hits(segs, c, ang):
+    """(radius, y) where a ray from c at angle ang (x = cos, z = sin) crosses
+    each of the 3-D segments (their xz shadow)."""
+    d = np.array([math.cos(ang), math.sin(ang)])
+    out = []
+    for a, b in segs:
+        pa = np.array([a[0] - c[0], a[2] - c[1]]); pb = np.array([b[0] - c[0], b[2] - c[1]])
+        M = np.array([[pb[0] - pa[0], -d[0]], [pb[1] - pa[1], -d[1]]])
+        if abs(np.linalg.det(M)) < 1e-12:
+            continue
+        t, s_ = np.linalg.solve(M, -pa)
+        if 0 <= t <= 1 and s_ > 0:
+            out.append((s_, a[1] + (b[1] - a[1]) * t))
+    return out
+
+
+def _section(P, I, y0):
+    """The segments where the triangles cross the plane y = y0."""
+    A = P[I]
+    d = A[:, :, 1] - y0
+    segs = []
+    for t in np.where((d.min(1) < 0) & (d.max(1) > 0))[0]:
+        q = []
+        for a, b in ((0, 1), (1, 2), (2, 0)):
+            if (d[t, a] > 0) != (d[t, b] > 0):
+                u = d[t, a] / (d[t, a] - d[t, b])
+                q.append(A[t, a] + (A[t, b] - A[t, a]) * u)
+        if len(q) == 2:
+            segs.append((q[0], q[1]))
+    return segs
+
+
+def filler_check(sk, rig):
+    """The coat's little neck (SuitHead: it carries the head's neck on down
+    into the knit, rigid on the Head bone where they meet) against each head's
+    own neck, round the neck's axis every 15°: above the head's ragged lower
+    edge it must stay inside the head's neck (or it shows through as a ring),
+    and just under the edge it must sit close inside it (or the neck steps in
+    where they join). Returns the worst depth inside (mm; < 0 pokes out)."""
+    from collections import Counter
+    c = np.array([-0.5, -0.055])
+    Pf = np.vstack(sk.parts["SuitHead"]["P"])
+    If = sk.faces("SuitHead")
+    fsegs = {y: _section(Pf, If, y) for y in (1.5755, 1.5845)}
+    worst, wstep = 1e9, 0.0
+    for h in range(1, 9):
+        P, I = _head_skin(h)
+        # the head's open edge round the neck (its boundary edges low on it)
+        key = np.round(P, 5)
+        _, inv = np.unique(key, axis=0, return_inverse=True)
+        inv = inv.ravel()
+        E = Counter()
+        for t in inv[I]:
+            for a, b in ((t[0], t[1]), (t[1], t[2]), (t[2], t[0])):
+                E[(min(a, b), max(a, b))] += 1
+        U = np.zeros((inv.max() + 1, 3)); U[inv] = P
+        edge = [(U[a], U[b]) for (a, b), n in E.items() if n == 1
+                and (U[a][1] + U[b][1]) / 2 < 1.6 and math.hypot((U[a][0] + U[b][0]) / 2 - c[0], (U[a][2] + U[b][2]) / 2 - c[1]) < 0.09]
+        hsegs = {y: _section(P, I, y) for y in fsegs}
+        mind, step = 1e9, 0.0
+        for i in range(24):
+            ang = i * math.pi / 12
+            for y, fs in fsegs.items():
+                hn = [r for r, _ in _ray_hits(hsegs[y], c, ang) if 0.03 < r < 0.075]
+                fr = [r for r, _ in _ray_hits(fs, c, ang)]
+                if hn and fr:
+                    mind = min(mind, max(hn) - max(fr))
+            eh = _ray_hits(edge, c, ang)
+            if eh:
+                er, ey = min(eh)
+                # the filler's radius just under the edge
+                fs = _section(Pf, If, ey - 0.002)
+                fr = [r for r, _ in _ray_hits(fs, c, ang)]
+                if fr:
+                    mind = min(mind, er - max(fr))
+                    step = max(step, er - max(fr))
+        print(f"  head {h}: the coat's neck {mind * 1000:4.1f} mm inside the head's neck at the least, "
+              f"its join steps in {step * 1000:4.1f} mm at the most")
+        worst, wstep = min(worst, mind), max(wstep, step)
+    return worst * 1000, wstep * 1000
+
+
 def main():
     dry = "--dry" in sys.argv
     os.makedirs(TEXDIR, exist_ok=True)
@@ -234,7 +329,9 @@ def main():
         if "--neck" in sys.argv:
             w = neck_check(sk, rig)
             print(f"neck: worst clearance {w:.1f} mm")
-            if w < 0:
+            wf, ws = filler_check(sk, rig)
+            print(f"neck: the coat's neck at least {wf:.1f} mm inside the heads' necks, joins stepping in {ws:.1f} mm at most")
+            if w < 0 or wf < 0.5 or ws > 20.0:
                 sys.exit(1)
         if not dry:
             write(sk, rig, OUT_GLB)

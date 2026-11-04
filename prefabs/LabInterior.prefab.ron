@@ -631,6 +631,30 @@
     (
         name: "LabSolid 2",
         transform: (
+            translation: (0.0000, -0.6400, -2.0500),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+        parent: Some(0),
+        cast_shadow: false,
+        rigidbody: Some((
+            boxed: true,
+            mode: Static,
+            radius: 0.5,
+            height: 1.0,
+            half_extents: (10.6200, 0.1500, 6.6200),
+            restitution: 0.0,
+            friction: 0.9,
+            gravity: false,
+            lock_pos: (false, false, false),
+            lock_rot: (false, false, false),
+        )),
+    ),
+    (
+        name: "LabSolid 3",
+        transform: (
             translation: (8.3900, -2.5150, 1.3500),
             rotation: (0.0, 0.0, 0.0, 1.0),
             scale: (1.0, 1.0, 1.0),
@@ -653,7 +677,7 @@
         )),
     ),
     (
-        name: "LabSolid 3",
+        name: "LabSolid 4",
         transform: (
             translation: (6.2000, -2.5150, 1.8450),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -677,7 +701,7 @@
         )),
     ),
     (
-        name: "LabSolid 4",
+        name: "LabSolid 5",
         transform: (
             translation: (6.2000, -2.5150, 4.0050),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -701,7 +725,31 @@
         )),
     ),
     (
-        name: "LabSolid 5",
+        name: "LabSolid 6",
+        transform: (
+            translation: (6.2000, -1.3650, 2.9000),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+        parent: Some(0),
+        cast_shadow: false,
+        rigidbody: Some((
+            boxed: true,
+            mode: Static,
+            radius: 0.5,
+            height: 1.0,
+            half_extents: (0.0400, 0.5750, 0.6000),
+            restitution: 0.0,
+            friction: 0.9,
+            gravity: false,
+            lock_pos: (false, false, false),
+            lock_rot: (false, false, false),
+        )),
+    ),
+    (
+        name: "LabSolid 7",
         transform: (
             translation: (2.2700, -2.5150, -4.0500),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -725,7 +773,7 @@
         )),
     ),
     (
-        name: "LabSolid 6",
+        name: "LabSolid 8",
         transform: (
             translation: (7.3900, -2.5150, -4.0500),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -749,7 +797,31 @@
         )),
     ),
     (
-        name: "LabSolid 7",
+        name: "LabSolid 9",
+        transform: (
+            translation: (3.6000, -1.3650, -4.0500),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+        parent: Some(0),
+        cast_shadow: false,
+        rigidbody: Some((
+            boxed: true,
+            mode: Static,
+            radius: 0.5,
+            height: 1.0,
+            half_extents: (0.6000, 0.5750, 0.0400),
+            restitution: 0.0,
+            friction: 0.9,
+            gravity: false,
+            lock_pos: (false, false, false),
+            lock_rot: (false, false, false),
+        )),
+    ),
+    (
+        name: "LabSolid 10",
         transform: (
             translation: (1.5000, -2.5150, -6.3600),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -773,7 +845,7 @@
         )),
     ),
     (
-        name: "LabSolid 8",
+        name: "LabSolid 11",
         transform: (
             translation: (-9.3500, -3.6825, -8.2100),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -797,7 +869,7 @@
         )),
     ),
     (
-        name: "LabSolid 9",
+        name: "LabSolid 12",
         transform: (
             translation: (-10.2200, -2.5900, -8.2100),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -821,7 +893,7 @@
         )),
     ),
     (
-        name: "LabSolid 10",
+        name: "LabSolid 13",
         transform: (
             translation: (-8.4800, -2.5900, -8.2100),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -845,7 +917,7 @@
         )),
     ),
     (
-        name: "LabSolid 11",
+        name: "LabSolid 14",
         transform: (
             translation: (-9.3500, -2.5150, -8.2100),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -869,7 +941,7 @@
         )),
     ),
     (
-        name: "LabSolid 12",
+        name: "LabSolid 15",
         transform: (
             translation: (-9.3500, -1.2400, -8.2200),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -893,7 +965,7 @@
         )),
     ),
     (
-        name: "LabSolid 13",
+        name: "LabSolid 16",
         transform: (
             translation: (-7.5000, -3.6825, -8.2100),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -917,7 +989,7 @@
         )),
     ),
     (
-        name: "LabSolid 14",
+        name: "LabSolid 17",
         transform: (
             translation: (-8.3700, -2.5900, -8.2100),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -941,7 +1013,7 @@
         )),
     ),
     (
-        name: "LabSolid 15",
+        name: "LabSolid 18",
         transform: (
             translation: (-6.6300, -2.5900, -8.2100),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -965,7 +1037,7 @@
         )),
     ),
     (
-        name: "LabSolid 16",
+        name: "LabSolid 19",
         transform: (
             translation: (-7.5000, -2.5150, -8.2100),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -989,7 +1061,7 @@
         )),
     ),
     (
-        name: "LabSolid 17",
+        name: "LabSolid 20",
         transform: (
             translation: (-7.5000, -1.2400, -8.2200),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -1013,7 +1085,7 @@
         )),
     ),
     (
-        name: "LabSolid 18",
+        name: "LabSolid 21",
         transform: (
             translation: (-5.6500, -3.6825, -8.2100),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -1037,7 +1109,7 @@
         )),
     ),
     (
-        name: "LabSolid 19",
+        name: "LabSolid 22",
         transform: (
             translation: (-6.5200, -2.5900, -8.2100),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -1061,7 +1133,7 @@
         )),
     ),
     (
-        name: "LabSolid 20",
+        name: "LabSolid 23",
         transform: (
             translation: (-4.7800, -2.5900, -8.2100),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -1085,7 +1157,7 @@
         )),
     ),
     (
-        name: "LabSolid 21",
+        name: "LabSolid 24",
         transform: (
             translation: (-5.6500, -2.5150, -8.2100),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -1109,7 +1181,7 @@
         )),
     ),
     (
-        name: "LabSolid 22",
+        name: "LabSolid 25",
         transform: (
             translation: (-5.6500, -1.2400, -8.2200),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -1133,7 +1205,7 @@
         )),
     ),
     (
-        name: "LabSolid 23",
+        name: "LabSolid 26",
         transform: (
             translation: (-3.4000, -3.6250, -8.4000),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -1157,7 +1229,7 @@
         )),
     ),
     (
-        name: "LabSolid 24",
+        name: "LabSolid 27",
         transform: (
             translation: (-1.0500, -3.6825, -8.2950),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -1181,7 +1253,7 @@
         )),
     ),
     (
-        name: "LabSolid 25",
+        name: "LabSolid 28",
         transform: (
             translation: (-2.5500, -2.3650, -8.5200),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -1205,7 +1277,7 @@
         )),
     ),
     (
-        name: "LabSolid 26",
+        name: "LabSolid 29",
         transform: (
             translation: (-5.2000, -3.6825, -1.3000),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -1229,7 +1301,7 @@
         )),
     ),
     (
-        name: "LabSolid 27",
+        name: "LabSolid 30",
         transform: (
             translation: (-5.2000, -3.6825, -2.1000),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -1253,7 +1325,7 @@
         )),
     ),
     (
-        name: "LabSolid 28",
+        name: "LabSolid 31",
         transform: (
             translation: (-5.2000, -3.2000, -1.7000),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -1277,7 +1349,7 @@
         )),
     ),
     (
-        name: "LabSolid 29",
+        name: "LabSolid 32",
         transform: (
             translation: (-5.2000, -2.5250, -1.7000),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -1301,7 +1373,7 @@
         )),
     ),
     (
-        name: "LabSolid 30",
+        name: "LabSolid 33",
         transform: (
             translation: (3.1000, -3.6825, -1.3000),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -1325,7 +1397,7 @@
         )),
     ),
     (
-        name: "LabSolid 31",
+        name: "LabSolid 34",
         transform: (
             translation: (3.1000, -3.6825, -2.1000),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -1349,7 +1421,7 @@
         )),
     ),
     (
-        name: "LabSolid 32",
+        name: "LabSolid 35",
         transform: (
             translation: (3.1000, -3.2000, -1.7000),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -1373,7 +1445,7 @@
         )),
     ),
     (
-        name: "LabSolid 33",
+        name: "LabSolid 36",
         transform: (
             translation: (3.1000, -2.5250, -1.7000),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -1397,7 +1469,7 @@
         )),
     ),
     (
-        name: "LabSolid 34",
+        name: "LabSolid 37",
         transform: (
             translation: (0.0000, -3.6825, 4.1950),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -1421,7 +1493,7 @@
         )),
     ),
     (
-        name: "LabSolid 35",
+        name: "LabSolid 38",
         transform: (
             translation: (-5.0000, -2.2650, 4.3900),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -1445,7 +1517,7 @@
         )),
     ),
     (
-        name: "LabSolid 36",
+        name: "LabSolid 39",
         transform: (
             translation: (-3.8000, -2.2650, 4.3900),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -1469,7 +1541,7 @@
         )),
     ),
     (
-        name: "LabSolid 37",
+        name: "LabSolid 40",
         transform: (
             translation: (-2.6000, -2.2650, 4.3900),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -1493,7 +1565,7 @@
         )),
     ),
     (
-        name: "LabSolid 38",
+        name: "LabSolid 41",
         transform: (
             translation: (-1.4000, -2.2650, 4.3900),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -1517,7 +1589,7 @@
         )),
     ),
     (
-        name: "LabSolid 39",
+        name: "LabSolid 42",
         transform: (
             translation: (-0.2000, -2.2650, 4.3900),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -1541,7 +1613,7 @@
         )),
     ),
     (
-        name: "LabSolid 40",
+        name: "LabSolid 43",
         transform: (
             translation: (1.0000, -2.2650, 4.3900),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -1565,7 +1637,7 @@
         )),
     ),
     (
-        name: "LabSolid 41",
+        name: "LabSolid 44",
         transform: (
             translation: (2.2000, -2.2650, 4.3900),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -1589,7 +1661,7 @@
         )),
     ),
     (
-        name: "LabSolid 42",
+        name: "LabSolid 45",
         transform: (
             translation: (3.4000, -2.2650, 4.3900),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -1613,7 +1685,7 @@
         )),
     ),
     (
-        name: "LabSolid 43",
+        name: "LabSolid 46",
         transform: (
             translation: (4.6000, -2.2650, 4.3900),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -1637,7 +1709,7 @@
         )),
     ),
     (
-        name: "LabSolid 44",
+        name: "LabSolid 47",
         transform: (
             translation: (-8.0000, -3.6575, 2.5000),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -1661,7 +1733,7 @@
         )),
     ),
     (
-        name: "LabSolid 45",
+        name: "LabSolid 48",
         transform: (
             translation: (-8.0000, -2.9850, 2.5000),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -1685,7 +1757,7 @@
         )),
     ),
     (
-        name: "LabSolid 46",
+        name: "LabSolid 49",
         transform: (
             translation: (-10.4600, -2.0800, 2.5500),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -1709,7 +1781,7 @@
         )),
     ),
     (
-        name: "LabSolid 47",
+        name: "LabSolid 50",
         transform: (
             translation: (3.4000, -3.7950, -8.2700),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -1733,7 +1805,7 @@
         )),
     ),
     (
-        name: "LabSolid 48",
+        name: "LabSolid 51",
         transform: (
             translation: (5.4000, -3.7550, -8.1200),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -1757,7 +1829,7 @@
         )),
     ),
     (
-        name: "LabSolid 49",
+        name: "LabSolid 52",
         transform: (
             translation: (5.4000, -2.8050, -8.1200),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -1781,7 +1853,7 @@
         )),
     ),
     (
-        name: "LabSolid 50",
+        name: "LabSolid 53",
         transform: (
             translation: (7.2500, -3.6825, -8.2950),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -1805,7 +1877,7 @@
         )),
     ),
     (
-        name: "LabSolid 51",
+        name: "LabSolid 54",
         transform: (
             translation: (9.4000, -3.3900, -8.1700),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -1829,7 +1901,7 @@
         )),
     ),
     (
-        name: "LabSolid 52",
+        name: "LabSolid 55",
         transform: (
             translation: (10.0500, -3.1150, -5.4500),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -1853,7 +1925,7 @@
         )),
     ),
     (
-        name: "LabSolid 53",
+        name: "LabSolid 56",
         transform: (
             translation: (3.4000, -3.8250, -7.4200),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -1877,7 +1949,7 @@
         )),
     ),
     (
-        name: "LabSolid 54",
+        name: "LabSolid 57",
         transform: (
             translation: (-10.2100, -3.3650, -2.7000),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -1901,7 +1973,7 @@
         )),
     ),
     (
-        name: "LabSolid 55",
+        name: "LabSolid 58",
         transform: (
             translation: (-10.3950, -2.8650, -2.7000),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -1925,7 +1997,7 @@
         )),
     ),
     (
-        name: "LabSolid 56",
+        name: "LabSolid 59",
         transform: (
             translation: (-10.2200, -3.0400, -1.1800),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -1949,7 +2021,7 @@
         )),
     ),
     (
-        name: "LabSolid 57",
+        name: "LabSolid 60",
         transform: (
             translation: (-10.3200, -3.0650, -0.4500),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -1973,7 +2045,7 @@
         )),
     ),
     (
-        name: "LabSolid 58",
+        name: "LabSolid 61",
         transform: (
             translation: (-10.3450, -3.5650, 0.7250),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -1997,7 +2069,7 @@
         )),
     ),
     (
-        name: "LabSolid 59",
+        name: "LabSolid 62",
         transform: (
             translation: (10.1950, -3.1650, 0.2250),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -2021,7 +2093,7 @@
         )),
     ),
     (
-        name: "LabSolid 60",
+        name: "LabSolid 63",
         transform: (
             translation: (10.2700, -3.3150, -1.0000),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -2045,7 +2117,7 @@
         )),
     ),
     (
-        name: "LabSolid 61",
+        name: "LabSolid 64",
         transform: (
             translation: (5.8000, -3.6650, 4.4650),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -2069,7 +2141,7 @@
         )),
     ),
     (
-        name: "LabSolid 62",
+        name: "LabSolid 65",
         transform: (
             translation: (10.5500, -2.8650, 2.5000),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -2093,7 +2165,7 @@
         )),
     ),
     (
-        name: "LabSolid 63",
+        name: "LabSolid 66",
         transform: (
             translation: (8.4000, -3.7900, 1.6750),
             rotation: (0.0, 0.0, 0.0, 1.0),
@@ -2117,7 +2189,7 @@
         )),
     ),
     (
-        name: "LabSolid 64",
+        name: "LabSolid 67",
         transform: (
             translation: (10.3950, -3.7550, 3.8500),
             rotation: (0.0, 0.0, 0.0, 1.0),
