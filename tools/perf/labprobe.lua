@@ -174,7 +174,7 @@ local function cam_fn(fn) findScript("planet_camera").setShot(fn, 0.05) end
 local function cam_off() local pc = findScript("planet_camera"); if pc.clearShot then pc.clearShot(0.05) end end
 local function stand_lab(gx, gz)
   local p = labpt(gx, 0.6, gz)
-  if p then stand_at(p.x, p.y, p.z, 3) end
+  if p then stand_at(p.x, p.y, p.z, 1.6) end
 end
 
 -- Frame time with vsync off (the CPU's wall clock a frame) and the GPU's own
@@ -381,7 +381,7 @@ local function talk()
   local sg = sc and sc.faceSign or 1
   local o = n.worldPos
   local f = n:toWorld(vec3(0, 0, sg))
-  stand_at(o.x + (f.x - o.x) * 1.3, o.y + (f.y - o.y) * 1.3, o.z + (f.z - o.z) * 1.3, 3)
+  stand_at(o.x + (f.x - o.x) * 1.3, o.y + (f.y - o.y) * 1.3, o.z + (f.z - o.z) * 1.3, 1.6)
   hold(1.0)
   local fm = findScript("facility_menu")
   local near = L.nearAstro(find("Astronaut"), 2.2)

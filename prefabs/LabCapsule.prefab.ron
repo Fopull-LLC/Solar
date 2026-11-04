@@ -24,7 +24,6 @@
                 transmission: 0.93,
                 ior: 1.5,
                 thickness: 0.01,
-                thin: true,
                 shading: Physical,
             ),
             "LabLamp": (

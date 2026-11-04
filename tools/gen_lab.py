@@ -1293,7 +1293,7 @@ def _mat(name):
         "LabResin": '(\n                color: (1.0, 1.0, 1.0),\n                roughness: 0.24,\n                metallic: 0.0,\n'
                     '                reflectivity: 0.7,\n                shading: Physical,\n            )',
         "LabGlass": '(\n                color: (0.93, 0.97, 0.97),\n                roughness: 0.03,\n                metallic: 0.0,\n'
-                    '                transmission: 0.93,\n                ior: 1.5,\n                thickness: 0.01,\n                thin: true,\n'
+                    '                transmission: 0.93,\n                ior: 1.5,\n                thickness: 0.01,\n'
                     '                shading: Physical,\n            )',
         "LabLamp": '(\n                color: (1.0, 1.0, 1.0),\n                unlit: true,\n                fog: false,\n            )',
         "LabScreen": f'(\n                color: (1.0, 1.0, 1.0),\n                texture: Some("{t}signs.png"),\n'
