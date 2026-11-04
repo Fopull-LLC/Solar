@@ -215,6 +215,11 @@ REG = {
   -- what's inside weighs on this part (vessel_controller's lockers) and the
   -- right-click menu lists it.
   locker    = { prefab = "PartLocker",    label = "Stowage Locker", h = 0.50, rx = 0.30, rz = 0.30, mass = 0.08, cost = 40, top = true, bottom = true, kind = "structural", store = 80, side = true, strength = 300 },
+  -- and two smaller ones (`vol` = their litres; the Stowage Locker's are
+  -- items.VOL.locker): a steel field case for a rover's deck, and a pannier
+  -- that hangs on a bike's flank (its frame side -Z, so it side-mounts flat).
+  lockerS   = { prefab = "PartLockerS",   label = "Small Locker",   h = 0.35, rx = 0.20, rz = 0.20, mass = 0.012, cost = 25, top = true, bottom = true, kind = "structural", store = 40, vol = 50, side = true, strength = 200 },
+  saddleBox = { prefab = "PartSaddleBox", label = "Saddle Box",     h = 0.30, rx = 0.20, rz = 0.09, mass = 0.005, cost = 15, top = true, bottom = true, kind = "structural", store = 15, vol = 20, side = true, strength = 120 },
 
   -- ── FRAME: struts, beams, panels, plates and adapters ─────────────────────
   -- Light and cheap, and they attach every way: stack nodes on both ends,
@@ -405,6 +410,8 @@ DESC = {
   drill = "core drill · bores while landed · fills the hold",
   beacon = "relay beacon · always on · relays a few hundred m over the ground",
   locker = "stowage locker · 80 kg of its own · right-click for its contents",
+  lockerS = "small locker · 40 kg / 50 L of its own · right-click for its contents",
+  saddleBox = "saddle box · 15 kg / 20 L of its own · hangs on a bike's flank",
 }
 for id, d in pairs(DESC) do if REG[id] then REG[id].desc = d end end
 
@@ -426,7 +433,7 @@ CATALOGUE = {
   { "FRAME",     { "strut1", "strut2", "strut3", "beam1", "beam2", "ibeam2", "ibeam3",
                    "panel1", "panel2", "panel3", "plate", "hub", "adapter",
                    "beamP", "panelP", "brace" } },
-  { "PAYLOAD",   { "cargo", "locker", "dockPort", "fairingS", "fairingM" } },
+  { "PAYLOAD",   { "cargo", "locker", "lockerS", "saddleBox", "dockPort", "fairingS", "fairingM" } },
   { "ROVER",     { "roverBody", "wheelS", "wheelM", "wheelL" } },
   { "ROBOTICS",  { "hinge", "piston", "rotor", "claw", "drill" } },
 }

@@ -160,7 +160,7 @@ function storageParts(parts, vol)
     local cap = lockerCap(d)
     if cap > 0 then
       out[#out + 1] = { uid = p.uid, label = d.label or p.id or "Locker", kind = "locker", cap = cap,
-                        vol = vol.locker or 120, y = p.y or 0 }
+                        vol = tonumber(d.vol) or vol.locker or 120, y = p.y or 0 }
     elseif (tonumber(d.cargo) or 0) > 0 then
       out[#out + 1] = { uid = p.uid, label = d.label or p.id or "Cargo Bay", kind = "hold", cap = tonumber(d.cargo),
                         vol = (vol.bay or 1000) * math.max(1, math.ceil(tonumber(d.cargo) / 250 - 1e-9)), y = p.y or 0 }

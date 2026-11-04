@@ -291,6 +291,11 @@ local sto = C.current().lockers
 ok(#sto == 2 and sto[1].kind == "locker" and sto[2].kind == "hold" and sto[2].cap == 250 and sto[2].vol == 1000,
   "a Stowage Locker and a Cargo Bay are both storage (the bay 250 kg, 1000 L)")
 ok(C.storageTitle(sto[1]) == "LOCKER #1" and C.storageTitle(sto[2]) == "CARGO BAY #1", "…titled by kind")
+-- the small lockers carry their own litres (parts_registry `vol`)
+local sp = C.storageParts({ { uid = 7, def = { label = "Saddle Box", store = 15, vol = 20 }, y = 0 },
+                            { uid = 8, def = { label = "Stowage Locker", store = 80 }, y = 0 } }, { locker = 120, bay = 1000 })
+ok(#sp == 2 and sp[1].vol == 20 and sp[1].cap == 15 and sp[2].vol == 120,
+  "a Saddle Box holds 15 kg / 20 L, a Stowage Locker still 120 L")
 BAGS.base.medkit = nil
 ok(C.addToStorage(2, "medkit"), "a medkit bought from the shop into the locker")
 ok(C.addToStorage(5, "beacon"), "…and a beacon into the cargo bay")

@@ -4993,6 +4993,9 @@ end
 LOCKERS = {}       -- { { uid, cid, cap } }
 LOCKER_T = {}      -- uid → tonnes in that locker
 LOCKER_STORE = { locker = 80 }  -- kg by part id, for records saved before `store`
+-- litres by part id (parts_registry `vol`; the blueprint carries only `store`),
+-- nil = items.VOL.locker
+LOCKER_VOL = { lockerS = 50, saddleBox = 20 }
 function lockerRegister()
   LOCKERS, LOCKER_T = {}, {}
   local inv = findScript("inventory")
@@ -5009,7 +5012,11 @@ function lockerRegister()
         st.locker = n
       end
       local cid = "locker:" .. tostring(st.locker)
-      if inv then inv.setCap(cid, cap) end
+      if inv then
+        inv.setCap(cid, cap)
+        -- a locker's litres: its own `vol` (the small ones), else items.VOL.locker
+        if inv.setVolCap then inv.setVolCap(cid, tonumber(d.vol) or LOCKER_VOL[d.id or ""]) end
+      end
       LOCKERS[#LOCKERS + 1] = { uid = u, cid = cid, cap = cap }
     end
   end
