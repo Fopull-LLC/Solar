@@ -467,6 +467,8 @@ PROFILES = {
   ibeam = { rx = 0.12, rz = 0.13, mass = 0.030, cost = 23, strength = 650, label = "I-beam" },
   truss = { rx = 0.20, rz = 0.18, mass = 0.025, cost = 30, strength = 520, label = "truss" },
   brace = { rx = 0.035, rz = 0.035, mass = 0.004, cost = 8, strength = 200, label = "brace" },
+  -- the Drive Chain (parts_auto): 520 roller chain, ~1.6 kg a metre
+  chain = { rx = 0.02, rz = 0.02, mass = 0.0016, cost = 4, strength = 60, label = "chain" },
 }
 
 -- A part's mass, cost and joint strength at a procedural size (§5.5):
@@ -474,16 +476,17 @@ PROFILES = {
 --           profile's per-metre figures; strength is the profile's (a joint
 --           is no stronger for a longer member);
 --   brace   size = { len }: as a member, plus 6 $ for its two lugs;
+--   chain   size = { len, teeth }: as a member, plus 6 $ for its sprockets;
 --   panel   size = { w, d, t }: per square metre, a 0.10 deck 2.4× a sheet.
 -- Fixed parts (or no size) answer their catalogue figures.
 function sizeOf(def, size)
   if type(def) == "string" then def = REG[def] end
   if not def then return nil end
   if def.proc and size then
-    if def.proc == "member" or def.proc == "brace" then
-      local P = PROFILES[size.prof or def.prof or "box"] or PROFILES.box
+    if def.proc == "member" or def.proc == "brace" or def.proc == "chain" then
+      local P = PROFILES[(def.proc == "chain" and "chain") or size.prof or def.prof or "box"] or PROFILES.box
       local L = size.len or def.h
-      local extra = def.proc == "brace" and 6 or 0
+      local extra = (def.proc == "brace" or def.proc == "chain") and 6 or 0
       return { mass = P.mass * L, cost = math.floor(P.cost * L + extra + 0.5), strength = P.strength,
                rx = P.rx, rz = P.rz, h = L }
     elseif def.proc == "panel" then

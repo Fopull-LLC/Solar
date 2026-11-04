@@ -2117,7 +2117,8 @@ local function e_taken()
   if sv and sv.prompting and sv.prompting() then return "E recovers the crate" end
   local rb = find("FacRepair")
   local rbs = rb and rb.getScript and rb:getScript("repair_bay")
-  if rbs and rbs.prompting and rbs.prompting() then return "E is the repair bay's console" end
+  -- the bay draws its own prompt (service, pump), so the reticle stays quiet
+  if rbs and rbs.prompting and rbs.prompting() then return "E is the repair bay's console", true end
   return nil
 end
 
@@ -3739,8 +3740,8 @@ function update(node, dt)
   -- A door or a crate wants E: the reticle says so over whatever the tool
   -- would have shown, unless the tool is working.
   if carrying and not inUse and reticleKind == "none" then
-    local t = e_taken()
-    if t then reticle_set("interact", t) end
+    local t, quiet = e_taken()
+    if t and not quiet then reticle_set("interact", t) end
   end
   -- The aim point is a WORLD point of this update; the ticks then carry the
   -- planet (and the crew on it) on along its orbit before lateUpdate poses

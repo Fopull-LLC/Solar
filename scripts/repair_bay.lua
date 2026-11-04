@@ -18,6 +18,8 @@
 --     unit;
 --   * CHARGE: the batteries filled (controlState / elecSetCharge),
 --     `charge_price` an EC;
+--   * GAS: the gas engines' tanks filled (gasState / gasFill), `gas_price`
+--     a litre;
 --   * REFIT: every part the craft LOST TO DAMAGE (broken off, torn away, or
 --     shed with the mount that broke: vessel_controller lostParts) is built
 --     again where its launch blueprint has it, in the craft's own frame, and
@@ -39,8 +41,12 @@
 -- the bay's frame by the bay node's toLocal, both this frame — and nothing
 -- world is kept across frames. The prompt is a screen line, not a marker.
 --
+-- THE GAS PUMP (playtest 2026-11-03c) stands against the west wall: with a
+-- Gas Can in hand, hold E at it to fill the can, `gas_price` a litre, paid
+-- as each dollar's worth goes in (pumpTick; the cents carry over).
+--
 -- Pure parts (luajit, tests/smoke_base_works.lua): quote(work, prices),
--- inBay(lx, lz, …), orderLines(q).
+-- inBay(lx, lz, …), orderLines(q), pumpTick(st, dt, room, funds, prices).
 
 defaults = {
   --- the share of a part's price one full unit of wear costs to mend
@@ -52,6 +58,15 @@ defaults = {
   --- $ per EC of charge
   --@range 0 1
   charge_price = 0.02,
+  --- $ per litre of gas (the work order and the pump)
+  --@range 0 5
+  gas_price = 0.6,
+  --- litres a second the pump runs at
+  --@range 0.2 5
+  pump_rate = 1.2,
+  --- how near the pump (m) a can is filled
+  --@range 0.5 4 --@units m
+  pump_reach = 1.4,
   --- the share of a part's price a REFIT costs (a part that broke off, built again)
   --@range 0 1
   refit_rate = 0.5,
@@ -91,7 +106,7 @@ function inBay(lx, ly, lz, slack)
 end
 
 -- The work order. `work` = { parts = { { uid, hp, cost, label } }, fuel =
--- units short, charge = EC short, refit = { { uid, cost, label, fuel, ec } }
+-- units short, charge = EC short, gas = litres short, refit = { { uid, cost, label, fuel, ec } }
 -- (broken off, can go back on), lost = n (broken off, can't) }; `p` the
 -- prices. A refit part's tanks and batteries come empty, so its `fuel` and
 -- `ec` are added to the propellant and charge lines.
@@ -100,7 +115,7 @@ end
 --     charge = EC, chargeCost = $, total = $, nothing = bool }
 function quote(work, p)
   p = p or defaults
-  local q = { parts = 0, mend = 0, fuel = 0, fuelCost = 0, charge = 0, chargeCost = 0, lost = work.lost or 0,
+  local q = { parts = 0, mend = 0, fuel = 0, fuelCost = 0, charge = 0, chargeCost = 0, gas = 0, gasCost = 0, lost = work.lost or 0,
               refit = 0, refitCost = 0, refits = {}, refitUids = {} }
   local add_fuel, add_ec = 0, 0
   for _, e in ipairs(work.refit or {}) do
@@ -125,8 +140,11 @@ function quote(work, p)
   q.fuelCost = q.fuel * (p.fuel_price or 0.3)
   q.charge = math.max(0, math.floor((work.charge or 0) + add_ec + 0.5))
   q.chargeCost = q.charge * (p.charge_price or 0.02)
-  local sum = q.mend + q.refitCost + q.fuelCost + q.chargeCost
-  q.nothing = q.parts == 0 and q.refit == 0 and q.fuel < 1 and q.charge < 1
+  -- gas to the tenth of a litre (a bike's tank is 4 L)
+  q.gas = math.max(0, math.floor((work.gas or 0) * 10 + 0.5) / 10)
+  q.gasCost = q.gas * (p.gas_price or 0.6)
+  local sum = q.mend + q.refitCost + q.fuelCost + q.chargeCost + q.gasCost
+  q.nothing = q.parts == 0 and q.refit == 0 and q.fuel < 1 and q.charge < 1 and q.gas < 0.1
   q.total = q.nothing and 0 or math.max(p.min_fee or 10, math.floor(sum + 0.5))
   return q
 end
@@ -154,10 +172,30 @@ function orderLines(q, money, most)
   end
   if q.fuel >= 1 then out[#out + 1] = { string.format("Propellant  %d u", q.fuel), money(q.fuelCost) } end
   if q.charge >= 1 then out[#out + 1] = { string.format("Charge  %d EC", q.charge), money(q.chargeCost) } end
+  if (q.gas or 0) >= 0.1 then out[#out + 1] = { string.format("Gas  %.1f L", q.gas), money(q.gasCost) } end
   if (q.lost or 0) > 0 then
     out[#out + 1] = { string.format("%d lost part%s with no mount aboard: rebuild at the VAB", q.lost, q.lost == 1 and "" or "s"), "—" }
   end
   return out
+end
+
+-- THE PUMP's tick (pure): `st` = { owed = $ not yet paid }, held for dt with
+-- `room` litres free in the cans in hand, `funds` the balance (nil: no
+-- company). → litres to put in, whole dollars to pay now, and why it stops
+-- (nil while it runs).
+function pumpTick(st, dt, room, funds, p)
+  p = p or defaults
+  if (room or 0) <= 1e-6 then return 0, 0, "full" end
+  local price = p.gas_price or 0.6
+  local L = math.min(room, (p.pump_rate or 1.2) * math.max(0, dt or 0))
+  if funds and funds < (st.owed or 0) + L * price then
+    L = math.max(0, (funds - (st.owed or 0)) / math.max(price, 1e-9))
+    if L <= 1e-6 then return 0, 0, "not enough funds" end
+  end
+  st.owed = (st.owed or 0) + L * price
+  local pay = math.floor(st.owed)
+  st.owed = st.owed - pay
+  return L, pay, nil
 end
 
 -- ── in the world ────────────────────────────────────────────────────────────
@@ -171,7 +209,11 @@ local function valid(n) return n ~= nil and n.valid ~= false end
 local function len(x, y, z) return math.sqrt(x * x + y * y + z * z) end
 
 local ROOT = nil
-local floor_l, console_l = nil, nil   -- marker points in the bay's own frame
+local floor_l, console_l, pump_l = nil, nil, nil   -- marker points in the bay's own frame
+pumped = 0            -- (probes) litres the pump has put in cans
+pumping = false       -- (published) E held at the pump, filling
+sim_pump = nil        -- (probes) true: E is held at the pump
+atPump = false        -- (published) the crew is at the pump (its prompt is up)
 inside = nil          -- (published) the craft in the bay: its controller handle
 insideName = nil
 lastQuote = nil       -- (probes) the order last priced
@@ -288,6 +330,8 @@ local function work_of(v)
   for _, t in ipairs(v.tankList and v.tankList() or {}) do w.fuel = w.fuel + math.max(0, (t.cap or 0) - (t.left or 0)) end
   local cs = v.controlState and v.controlState()
   if cs and cs.cap and cs.charge then w.charge = math.max(0, cs.cap - cs.charge) end
+  local gs = v.gasState and v.gasState()
+  if gs and (gs.cap or 0) > 0 then w.gas = math.max(0, gs.cap - (gs.left or 0)) end
   -- what broke off and can go back on; and what can't (its mount is gone too)
   if v.lostParts then
     local list, stuck = v.lostParts()
@@ -344,6 +388,7 @@ function service(v)
     local cap = 0
     for _, t in ipairs(v.tankList and v.tankList() or {}) do cap = cap + (t.cap or 0) end
     if cap > 0 and v.fuelFill then v.fuelFill(cap) end
+    if v.gasFill then v.gasFill(math.huge) end
     -- FULL, by the batteries themselves: elecSetCharge shares what it is
     -- given over the batteries aboard by capacity and clamps each at full.
     -- Not by controlState().cap: that is the last 10 Hz power tick's sum, and
@@ -364,7 +409,7 @@ function service(v)
     -- …and the charger stays on it while it sits in the bay (`float`)
     float_id, float_t = v.node.id, time or 0
     jobs = jobs + 1
-    lastJob = string.format("done %s: %d parts mended, %d refit, %d u, %d EC", money(q.total), mended, refit, q.fuel, q.charge)
+    lastJob = string.format("done %s: %d parts mended, %d refit, %d u, %d EC, %.1f L gas", money(q.total), mended, refit, q.fuel, q.charge, q.gas or 0)
     if log then log("repair bay: " .. (v.craftName or "craft") .. " — " .. lastJob) end
     local fx = ref("sfx")
     if fx and fx.play then pcall(fx.play, "recover") end
@@ -514,6 +559,58 @@ end
 prompt = nil          -- (published) the line on screen, or nil
 function prompting() return prompt ~= nil end
 
+-- THE GAS PUMP: the crew at it (bay-floor frame lx, ly, lz) → true when it
+-- has the prompt. With a Gas Can in hand, E held fills it.
+local pump_st, pump_snd_t = nil, 0
+function pumpAt(lx, ly, lz, dt)
+  local px, py, pz = pump_l[1] - floor_l[1], pump_l[2] - floor_l[2], pump_l[3] - floor_l[3]
+  if len(lx - px, (ly - py) * 0.5, lz - pz) > (params.pump_reach or 1.4) then return false end
+  atPump = true
+  local H, V = ref("item_hand"), ref("inventory")
+  local price = params.gas_price or 0.6
+  local tag = string.format("GAS PUMP  ·  $%.2f a litre", price)
+  local n = V and V.itemCount and V.itemCount("astro", "gascan") or 0
+  if n <= 0 then
+    prompt = tag .. "  ·  no Gas Can in the pack (the depot sells them)"
+    return true
+  end
+  if not (H and H.held and H.held() == "gascan") then
+    prompt = tag .. "  ·  take the Gas Can in hand to fill it"
+    return true
+  end
+  local fl = V.fills and V.fills("astro", "gascan") or {}
+  local have, cap = 0, 0
+  local I = ref("items")
+  local fc = (I and I.fillCap and I.fillCap("gascan")) or 10
+  for _, f in ipairs(fl) do have, cap = have + f, cap + fc end
+  local held_e = sim_pump == true or (input.key and input.key("e") == true)
+  if held_e then
+    pump_st = pump_st or { owed = tonumber(save.get("repair.pumpOwed")) or 0 }
+    local co = ref("company")
+    local funds = (co and co.balance) and co.balance() or nil
+    local L, pay, why = pumpTick(pump_st, dt or 0, cap - have, funds, params)
+    if pay > 0 and co and co.spend then co.spend(pay, "gas pump") end
+    if L > 0 and V.addFill then
+      local put = V.addFill("astro", "gascan", L)
+      pumped = pumped + put
+      have = have + put
+      pumping = true
+    end
+    save.set("repair.pumpOwed", pump_st.owed)
+    if why == "full" then prompt = string.format("GAS PUMP  ·  the can%s full  ·  %.1f / %.0f L", n > 1 and "s are" or " is", have, cap)
+    elseif why then prompt = "GAS PUMP  ·  " .. why
+    else prompt = string.format("GAS PUMP  ·  filling  ·  %.1f / %.0f L", have, cap) end
+  else
+    prompt = string.format("E (hold)   Fill the Gas Can  ·  %.1f / %.0f L  ·  $%.2f a litre", have, cap, price)
+  end
+  -- the pump's motor while it runs
+  if pumping and audio and audio.play and pump_snd_t < (time or 0) then
+    pump_snd_t = (time or 0) + 0.9
+    pcall(audio.play, "audio/foley/servo_short.ogg", { track = "SFX", volume = 0.35, pitch = 0.7 })
+  end
+  return true
+end
+
 -- Open the work order (E at the console; probes).
 function openOrder()
   local cm = ref("context_menu")
@@ -541,9 +638,10 @@ function update(node, dt)
   end
   if not floor_l and (time or 0) - look_t > 0.5 then
     look_t = time or 0
-    local f, c = child(node, "Bay Floor"), child(node, "Repair Console")
+    local f, c, g = child(node, "Bay Floor"), child(node, "Repair Console"), child(node, "Gas Pump")
     if f then floor_l = { f.x, f.y, f.z } end
     if c then console_l = { c.x, c.y, c.z } end
+    if g then pump_l = { g.x, g.y, g.z } end
   end
   if not floor_l then dbg = "no floor marker" return end
   local a = crew_afoot()
@@ -579,9 +677,12 @@ function update(node, dt)
       #(findScripts and findScripts("vessel_controller") or {}), tostring(insideName))
   end
   prompt = nil
+  pumping = false
+  atPump = false
   if not a or blocked() then return end
   local lx, ly, lz = bay_local(node, tick_pos(a))
   if not lx then return end
+  if pump_l and pumpAt(lx, ly, lz, dt) then return end
   local at_console = false
   if console_l then
     local cx, cy, cz = lx - (console_l[1] - floor_l[1]), ly - (console_l[2] - floor_l[2]), lz - (console_l[3] - floor_l[3])

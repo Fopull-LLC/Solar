@@ -1,0 +1,36 @@
+// A gas engine's exhaust: a small grey puff out of the tailpipe, its +Y the
+// pipe's direction (vessel_controller gasFx: one every 0.1–0.45 s, denser and
+// darker under load; a two-stroke's is bluer, tinted by the caller). Lit, and
+// lamp_response 0.3 so a headlamp does not blow it out white. One particle a
+// puff: cheap.
+(
+    name: "TailpipePuff",
+    lifetime: 1.6,
+    playback: OneShot,
+    end: Destroy,
+    tracks: [
+        (
+            name: "Puff",
+            render: Billboard(texture: Some("textures/vfx/smoke/billow_b.png")),
+            blend: Alpha,
+            lit: true,
+            lamp_response: 0.3,
+            translucency: 0.6,
+            soft: 0.4,
+            space: Local,
+            clips: [(start: 0.0, end: 1.6, lifetime_jitter: 0.3, emit: Some(Burst(count: 1, count_jitter: 0.0, pulses: 1, interval: 0.0, interval_jitter: 0.0)))],
+            automation: [],
+            shape: Sphere(radius: 0.02, shell: false),
+            velocity: Range(Vec3((-0.15, 0.9, -0.15)), Vec3((0.15, 1.6, 0.15))),
+            size: CurveRange((keys: [(t: 0.0, v: F32(0.06), interp: Linear), (t: 0.25, v: F32(0.28), interp: Linear), (t: 1.0, v: F32(0.75), interp: Linear)], extrapolate: Clamp), (keys: [(t: 0.0, v: F32(0.05), interp: Linear), (t: 0.25, v: F32(0.2), interp: Linear), (t: 1.0, v: F32(0.55), interp: Linear)], extrapolate: Clamp)),
+            rotation: Range(Vec3((0.0, 0.0, 0.0)), Vec3((0.0, 0.0, 6.283))),
+            angular_velocity: Range(Vec3((0.0, 0.0, -0.8)), Vec3((0.0, 0.0, 0.8))),
+            color: CurveRange((keys: [(t: 0.0, v: Rgba((0.42, 0.42, 0.43, 0.0)), interp: Linear), (t: 0.08, v: Rgba((0.40, 0.40, 0.42, 0.45)), interp: Linear), (t: 1.0, v: Rgba((0.55, 0.55, 0.56, 0.0)), interp: Linear)], extrapolate: Clamp), (keys: [(t: 0.0, v: Rgba((0.36, 0.36, 0.37, 0.0)), interp: Linear), (t: 0.08, v: Rgba((0.34, 0.34, 0.36, 0.35)), interp: Linear), (t: 1.0, v: Rgba((0.5, 0.5, 0.51, 0.0)), interp: Linear)], extrapolate: Clamp)),
+            gravity: -0.05,
+            drag: 1.2,
+            forces: [Wind(coupling: 0.8), Turbulence(frequency: 0.6, strength: 0.4)],
+        ),
+    ],
+    seed: 3,
+    gravity_mode: Field,
+)

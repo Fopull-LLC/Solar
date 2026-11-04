@@ -2071,9 +2071,36 @@ function wheelChecks()
     if E.modOf(r, "gyro") then gyro = true end
     if (tonumber(r.thrust) or 0) > 0 then engine = true end
   end
+  -- GAS: the chains, the engines they run from, the tanks they drink
+  local chained, gas_e, gas_t, chained_e, bad_chain = {}, 0, 0, {}, 0
+  for u, p in pairs(parts) do
+    if gasModOf(p.def) then gas_e = gas_e + 1 end
+    for _, m in ipairs(type(p.def.mods) == "table" and p.def.mods or {}) do if m.type == "gastank" then gas_t = gas_t + 1 end end
+    if p.def.proc == "chain" then
+      local sz = p.size or {}
+      local pe, pw2 = parts[sz.e or -1], parts[sz.w or -1]
+      if pe and pw2 and gasModOf(pe.def) and pw2.def.wheel then chained[sz.w] = true; chained_e[sz.e] = true
+      else bad_chain = bad_chain + 1 end
+    end
+  end
+  local n_chained = 0
+  for _ in pairs(chained) do n_chained = n_chained + 1 end
+  if bad_chain > 0 then
+    out[#out + 1] = string.format("%d Drive Chain%s not on an engine and a wheel: it powers nothing — chain an engine to a wheel again", bad_chain, bad_chain == 1 and " is" or "s are")
+  end
+  if n_chained > 0 and gas_t == 0 then
+    out[#out + 1] = "a gas engine and no gas tank — the engine has nothing to run on: add a Gas Tank"
+  end
+  for u, p in pairs(parts) do
+    if gasModOf(p.def) and not chained_e[u] then
+      out[#out + 1] = (p.def.label or "a gas engine") .. " drives nothing — run a Drive Chain from it to a wheel"
+      break
+    end
+  end
   if #wheels == 0 then return out end
-  if driven > 0 and (pw.store or 0) <= 0 and (pw.solar or 0) <= 0 then
-    out[#out + 1] = "no battery — the wheel motors have no power (a seat carries none): add a Battery Pack"
+  if driven > n_chained and (pw.store or 0) <= 0 and (pw.solar or 0) <= 0 then
+    out[#out + 1] = (n_chained > 0) and "no battery — the wheels with no chain run on hub motors and have no power: add a Battery Pack, or set their Drive off"
+      or "no battery — the wheel motors have no power (a seat carries none): add a Battery Pack"
   end
   if driven == 0 and not engine then
     out[#out + 1] = "no driven wheel — landing gear only rolls: add a wheel with a motor (Wheel S/M/L, Moto Wheel)"
@@ -2156,6 +2183,25 @@ function elec_lines()
       -- Wheels, actuators and the drill draw only while they work.
       out = out .. string.format("\nMOTORS  −%.1f/s flat out  ·  %s of driving on battery", s.motors,
         fmt_secs(s.store / math.max(1e-6, s.motors + s.idle)))
+    end
+  end
+  -- GAS: the tanks, the engines on chains, and how long a tank lasts flat out
+  do
+    local L, kw, lph, n = 0, 0, 0, 0
+    local AD = lib("auto_drive")
+    for _, p in pairs(parts) do
+      for _, m in ipairs(type(p.def.mods) == "table" and p.def.mods or {}) do
+        if m.type == "gastank" then L = L + (m.L or 0) end
+        if m.type == "gasengine" then
+          n = n + 1
+          local pk = (AD and AD.gasPeak) and AD.gasPeak(m) or 0
+          kw, lph = kw + pk, lph + (m.lph or 0.3) + pk * (m.bsfc or 0.4)
+        end
+      end
+    end
+    if n > 0 or L > 0 then
+      out = out .. string.format("\nGAS  %.0f L  ·  %d engine%s %.0f kW", L, n, n == 1 and "" or "s", kw)
+        .. ((lph > 0 and L > 0) and ("  ·  " .. fmt_secs(L / lph * 3600) .. " flat out") or "")
     end
   end
   if s.antenna.any > 0 then
@@ -6803,13 +6849,14 @@ function startDrawTool(id)
   local def = REG[id]
   if not (A and def and def.proc and A.pointOn) then return false end
   local kind = def.proc
-  W.drawing = { id = id, kind = kind, prof = (kind == "member") and (W.draw_prof or def.prof or "box") or "brace",
+  W.drawing = { id = id, kind = kind, prof = (kind == "member") and (W.draw_prof or def.prof or "box") or (kind == "chain" and "chain" or "brace"),
                 thick = W.draw_thick or 0.04, p0 = nil }
   click_cool = 0.15
   ui("tool", 0.7)
   hint(kind == "member" and "BEAM — click a start, then the end (ALT: end in the air · SHIFT+click chains · [ ] profile · ESC ends)"
     or (kind == "panel" and "PANEL — click one corner, then the opposite one ([ ] sheet or deck · ESC ends)"
-    or "BRACE — click point A on a part, then point B on another (ESC ends)"), 6.0)
+    or (kind == "chain" and "CHAIN — click a gas engine, then the wheel it drives (ESC ends)"
+    or "BRACE — click point A on a part, then point B on another (ESC ends)")), 6.0)
   return true
 end
 function drawingTool() return W.drawing and { id = W.drawing.id, kind = W.drawing.kind, prof = W.drawing.prof,
@@ -6889,10 +6936,141 @@ local function draw_place(A, d, m)
   return u
 end
 
+-- ── THE DRIVE CHAIN (parts_auto `chain`) ─────────────────────────────────────
+-- Click a gas engine (it snaps to the engine's sprocket), then a wheel (the
+-- rear sprocket goes on its hub, in line with the engine's): the chain is
+-- drawn between them (builder_attach chainBetween) and links the two. Its
+-- size carries which engine and which wheel it joins (e, w) and its
+-- sprockets (front: the engine's gearbox sprocket; teeth: the wheel's), so
+-- the flight powers that wheel from that engine, and every copy, undo and
+-- reload carries them. When either end moves the chain is drawn again to
+-- fit (chainRefit).
+function gasModOf(def)
+  if not (def and type(def.mods) == "table") then return nil end
+  for _, m in ipairs(def.mods) do if m.type == "gasengine" then return m end end
+  return nil
+end
+CHAIN_TYRE_W = { S = 0.18, M = 0.26, L = 0.38 }   -- (globals here: the chunk is at its 200 locals)
+-- a wheel part's tyre: its offset along the axle (+X) and how far along it
+-- a sprocket can sit (a moto wheel's sprocket stands off its hub on a carrier, out to
+-- 0.18 m, so the chain clears a swing arm's leg)
+function chainWheelOpts(def)
+  if not (def and def.wheel) then return nil end
+  local centred = false
+  for _, m in ipairs(type(def.mods) == "table" and def.mods or {}) do if m.type == "drive" and m.centred then centred = true end end
+  if centred then return { tx = 0, hub = 0.18 } end
+  local tw = CHAIN_TYRE_W[def.wheel] or 0.26
+  return { tx = (def.rx or 0.2) - tw / 2, hub = tw * 0.4 }
+end
+-- The chain from engine uid e to wheel uid w as it would be drawn now (nil
+-- when either is gone or not what it should be).
+function chainShape(e, w, teeth)
+  local A = attach_v2()
+  local pe, pw = parts[e], parts[w]
+  if not (A and A.chainBetween and pe and pw) then return nil end
+  local m = gasModOf(pe.def)
+  local o = chainWheelOpts(pw.def)
+  if not (m and o) then return nil end
+  local sh = A.chainBetween(arec(e), m, arec(w), o)
+  if sh then
+    sh.size.e, sh.size.w = e, w
+    sh.size.front = m.front or 13
+    sh.size.teeth = teeth or 48
+    sh.ends.a.host, sh.ends.b.host = e, w
+  end
+  return sh
+end
+function chainToolTick(d, A, clicked, cam_busy)
+  local mx, my = input.mouse()
+  local ox, oy, oz, dx, dy, dz = camera.screenToRay(mx, my)
+  local hu = ray_craft(ox, oy, oz, dx, dy, dz)
+  local hp = hu and parts[hu]
+  local m
+  if not d.p0 then
+    if hp and gasModOf(hp.def) then
+      outline(hp, 1.0, 0.62, 0.22, 0.9)
+      local g = gasModOf(hp.def)
+      local r = arec(hu)
+      local q = basisApply(r.B, { x = g.sx or 0, y = g.sy or 0, z = g.sz or 0 })
+      draw.ring(r.x + q.x, r.y + q.y, r.z + q.z, r.B.Z.x, r.B.Z.y, r.B.Z.z, 0.06, 1.0, 0.62, 0.22, 1.0)
+      stext(mx + 16, my + 8, (hp.def.label or "engine") .. "  ·  click: the chain starts here", 15, 0.55, 1.0, 0.6, 1.0)
+    elseif hp then
+      outline(hp, 0.97, 0.34, 0.25, 0.6)
+      stext(mx + 16, my + 8, "a chain starts on a gas engine's sprocket", 15, 0.97, 0.6, 0.4, 1.0)
+    end
+  else
+    local pe = parts[d.p0.host]
+    if not pe then d.p0 = nil return end
+    outline(pe, 1.0, 0.62, 0.22, 0.9)
+    if hp and hu ~= d.p0.host and chainWheelOpts(hp.def) then
+      m = chainShape(d.p0.host, hu)
+      if m then
+        outline(hp, 1.0, 0.62, 0.22, 0.9)
+        local sh = A.shapeOf(REG[d.id], m.size)
+        drawObb(m.x, m.y, m.z, m.B, 0.03, sh.hy, 0.13, 1.0, 0.62, 0.22, 0.9)
+        stext(mx + 16, my + 8, string.format("%.2f m  ·  %s → %s", m.size.len, pe.def.label or "engine", hp.def.label or "wheel"), 15, 0.55, 1.0, 0.6, 1.0)
+      else
+        outline(hp, 0.97, 0.34, 0.25, 0.6)
+        stext(mx + 16, my + 8, "too close, or not in line with the wheel", 15, 0.97, 0.6, 0.4, 1.0)
+      end
+    elseif hp and hu ~= d.p0.host then
+      outline(hp, 0.97, 0.34, 0.25, 0.6)
+      stext(mx + 16, my + 8, "a chain ends on a wheel's hub", 15, 0.97, 0.6, 0.4, 1.0)
+    end
+  end
+  if clicked and not cam_busy then
+    if not d.p0 then
+      if hp and gasModOf(hp.def) then d.p0 = { host = hu } else hint("click a gas engine: the chain starts on its sprocket", 2.0) end
+    elseif m then
+      -- one chain per wheel: a wheel already chained is re-chained to this engine
+      for u, q in pairs(parts) do
+        if q.def.proc == "chain" and q.size and q.size.w == hu then CMD["delete"]({ uid = u, only = true }) end
+      end
+      draw_place(A, d, m)
+      d.p0 = nil
+    else
+      hint("click the wheel this engine drives", 2.0)
+    end
+  end
+end
+
+-- Draw every chain again whose engine or wheel has moved. Cheap: only when
+-- the craft changed. (A chain whose engine or wheel is gone stays where it
+-- was: the launch check names it, and the flight powers nothing through it.)
+function chainRefit()
+  if W.chain_seen == craftVersion then return 0 end
+  W.chain_seen = craftVersion
+  local n = 0
+  for u, p in pairs(parts) do
+    if p.def.proc == "chain" and not p.carried and type(p.size) == "table" and p.size.e and p.size.w then
+      local m = chainShape(p.size.e, p.size.w, p.size.teeth)
+      if m then
+        local dl = math.abs((p.size.len or 0) - m.size.len)
+        local dp = math.abs(p.x - m.x) + math.abs(p.y - m.y) + math.abs(p.z - m.z)
+        local B = basisOf(p.yaw, p.pitch, p.roll)
+        local da = math.abs(dot3(B.Y, m.B.Y) - 1) + math.abs(dot3(B.X, m.B.X) - 1)
+        if dl > 0.002 or dp > 0.002 or da > 1e-4 then
+          p.size = m.size
+          p.def = def_of(p.id, p.size) or p.def
+          p.x, p.y, p.z = m.x, m.y, m.z
+          p.yaw, p.pitch, p.roll = basisEuler(m.B)
+          p.pv = (p.pv or 0) + 1
+          if p.node then destroy(p.node); p.node = nil; request_node(u, p) end
+          hash_put(u, p)
+          n = n + 1
+        end
+      end
+    end
+  end
+  if n > 0 then craftVersion = craftVersion + 1; W.chain_seen = craftVersion end
+  return n
+end
+
 function drawToolTick(clicked, cam_busy)
   local d = W.drawing
   local A = attach_v2()
   if not A then W.drawing = nil return end
+  if d.kind == "chain" then chainToolTick(d, A, clicked, cam_busy) return end
   local mx, my = input.mouse()
   local ox, oy, oz, dx, dy, dz = camera.screenToRay(mx, my)
   local hu, ht, hP, hn = ray_craft(ox, oy, oz, dx, dy, dz)
@@ -7342,6 +7520,7 @@ function update(node, dt)
   if W.F and W.F.beginQueue then W.F.beginQueue() end
   saveJobTick()
   W.visits = 0
+  chainRefit()
   frameTick()
   statsTick()
   if W.overlay >= 1 and not aeroDrawsOverlays() then draw_engineering() end

@@ -338,6 +338,10 @@ function packRecord(rec)
   for k, v in pairs(rec) do
     if k == "mods" then out.mods = encodeMods(v)
     elseif k == "st" then out.st = encodeState(v)
+    -- a drawn part's size (a member's length and profile, a Drive Chain's
+    -- ends and sprockets) and its joint plates (strings): a fleet record
+    -- dropped them, and a reloaded craft's drawn parts lost their shape
+    elseif (k == "size" or k == "joints") and type(v) == "table" then out[k] = copy(v)
     elseif type(v) ~= "table" then out[k] = v end
   end
   return out

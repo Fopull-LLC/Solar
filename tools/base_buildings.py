@@ -1145,6 +1145,22 @@ def repair_bay():
     T(m, "Steel", RUBBER, (-4.6, 1.2, zd + 0.25), (-4.3, 0.4, zd + 0.6), 0.03, segs=6)
     B(m, "Steel", GREEN_CAB, 4.6, 5.45, 0.12, 2.0, zd - 1.4, zd - 0.6, sh=sh)
     T(m, "Steel", RUBBER, (4.6, 1.3, zd - 1.0), (4.3, 0.4, zd - 0.7), 0.035, segs=6)
+    # THE GAS PUMP (playtest 2026-11-03c; scripts/repair_bay.lua): against
+    # the west wall between the lift and the propellant dispenser, its face to
+    # the bay and clear of the bay box; E held at it fills a Gas Can
+    petrol = (0.58, 0.11, 0.07)
+    px0, px1, pz0, pz1 = -5.48, -4.90, 4.12, 4.72
+    pzc = (pz0 + pz1) / 2
+    B(m, "Steel", DARK, px0 - 0.02, px1 + 0.04, 0.12, 0.2, pz0 - 0.04, pz1 + 0.04, var=False)
+    B(m, "Steel", petrol, px0, px1, 0.2, 1.7, pz0, pz1, sh=sh)
+    B(m, "Steel", DARK, px0 - 0.01, px1 + 0.02, 1.7, 1.78, pz0 - 0.02, pz1 + 0.02, var=False)
+    cuboid(m, (px1 + 0.011, 1.38, pzc), (0, 0, -1), (0, 1, 0), 0.34, 0.24, 0.02,
+           faces={"front": ("Screen", (1, 1, 1), "con_2")}, col=DARK)
+    B(m, "Steel", SAFETY, px1, px1 + 0.012, 0.92, 1.04, pz0 + 0.06, pz1 - 0.06, var=False)
+    B(m, "Steel", GREY, px1, px1 + 0.08, 0.98, 1.12, pz0 + 0.07, pz0 + 0.13, var=False)
+    T(m, "Steel", RUBBER, (px1 - 0.02, 1.45, pz0 + 0.02), (px1 + 0.22, 0.32, pz0 - 0.08), 0.016, segs=6)
+    T(m, "Steel", RUBBER, (px1 + 0.22, 0.32, pz0 - 0.08), (px1 + 0.05, 0.99, pz0 + 0.10), 0.016, segs=6)
+    T(m, "Steel", GREY, (px1 + 0.05, 1.08, pz0 + 0.10), (px1 + 0.17, 1.14, pz0 + 0.10), 0.013, segs=6)
     # the service console: a pedestal with its screen turned to the bay
     cx, cz = 4.85, zd + 0.2
     B(m, "Steel", SLATE, cx - 0.3, cx + 0.3, 0.12, 1.05, cz - 0.25, cz + 0.25, sh=sh, var=False)
@@ -1159,7 +1175,8 @@ def repair_bay():
         T(m, "Steel", GREY, (x, 0.15, D + 0.12), (x, H, D + 0.12), 0.07, segs=8)
     hvac(m, 2.5, H, -4.5, 2.2, 1.6, 1.0, fans=1)
     lights = [("Bay Light", (0.0, 5.2, 0.0), (0.94, 0.97, 1.0), 2.6, 15.0, None)]
-    markers = [("Repair Console", (cx - 0.5, 0.12, cz)), ("Bay Floor", (0.0, 0.12, -0.2))]
+    markers = [("Repair Console", (cx - 0.5, 0.12, cz)), ("Bay Floor", (0.0, 0.12, -0.2)),
+               ("Gas Pump", (px1 + 0.5, 0.12, pzc))]
     return m, sh, lights, markers
 
 

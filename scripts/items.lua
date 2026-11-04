@@ -91,6 +91,19 @@ ITEMS = {
   -- is in the hands. Light and cheap on purpose (0.3 kg, $35): a thing you
   -- simply carry. Its battery is a FILL (% kept per torch, like the rifle's
   -- cell): 4 h of light, a brown-out under 10 %, charged aboard or at the base.
+  -- THE GAS CAN (playtest 2026-11-03c): a 10 L steel jerry can of petrol
+  -- for the gas engines. Held by its handle (grip "left"); beside a craft
+  -- with a gas tank, hold LMB to pour (item_hand: `pour.rate` L/s, from
+  -- `pour.reach` m of the craft). Its petrol is a FILL in litres, kept per
+  -- can like an oxygen tank's air; it comes full, and refills only at the
+  -- Repair Bay's gas pump, paid by the litre (`keep`: the warehouse keeps
+  -- a can's level as it is, where it tops other fills up for free). The
+  -- mass is a can about half full: 3.5 kg of steel and ~5 kg of petrol.
+  gascan    = { name = "Gas Can",       kind = "device",     kg = 7.0,  L = 13, cost = 25,   shop = true,
+                hold = { prefab = "ItemGasCan", grip = "left" },
+                fill = { cap = 10, what = "gas", keep = true },
+                pour = { rate = 2.5, reach = 2.6 },
+                about = "a 10 L steel jerry can of petrol: beside a craft's gas tank, hold LMB to pour it in; refill it at the Repair Bay's pump" },
   flashlight = { name = "Flashlight",   kind = "worn",       kg = 0.3,  L = 1,  cost = 35,   shop = true,
                 worn = { prefab = "ItemFlashlight", bone = "Helmet" },
                 fill = { cap = 100, what = "cell" },
@@ -100,7 +113,7 @@ ITEMS = {
 
 -- The belt's order: tools first, then devices and deployables, then
 -- consumables with a hold. (Worn items are never on the belt.)
-ORDER = { "gravgun", "laser", "surveyor", "beacon", "flag", "repairkit", "medkit", "rcspack", "o2tank", "flashlight" }
+ORDER = { "gravgun", "laser", "surveyor", "beacon", "flag", "repairkit", "medkit", "gascan", "rcspack", "o2tank", "flashlight" }
 
 -- The Medkit's work (crew.lua runs it): seconds held at it, what it gives,
 -- and the reach from the medic to the patient (m).
@@ -212,7 +225,7 @@ end
 -- the card never quotes a number the game doesn't use. Without them the
 -- figures below are those scripts' defaults.
 KIND_WORD = { tool = "Tool · two hands", consumable = "Consumable · one use", deployable = "Deployable · planted",
-              worn = "Worn · on the suit" }
+              worn = "Worn · on the suit", device = "Device · in one hand" }
 local LIVE_DEFAULT = {
   laser_reach = 24, grav_reach = 16, yield = 1.0,
   bolt_speed = 380, bolt_range = 450, full_range = 60, cell_cost = { 5, 10 }, recharge = 4,
@@ -268,6 +281,10 @@ function card(id, live)
   elseif id == "o2tank" and d.fill then
     row("Air", string.format("+%.0f min of suit air, breathed before the suit's own", d.fill.cap / 60))
     row("Refills", "aboard, at a locker or at the base")
+  elseif id == "gascan" and d.fill then
+    row("Holds", string.format("%.0f L of petrol; it comes full", d.fill.cap))
+    row("Pours", string.format("%.1f L/s into a craft's gas tanks, held LMB within %.1f m", d.pour.rate, d.pour.reach))
+    row("Refills", "at the Repair Bay's gas pump, by the litre")
   elseif id == "flashlight" and d.lamp then
     row("Beam", string.format("a %.0f° warm-white spot, about %.0f m of throw", d.lamp.cone, d.lamp.range))
     row("Switch", string.format("%s, on foot; it rides strapped to the helmet", d.lamp.key))
@@ -342,6 +359,7 @@ function fillText(id, level)
   local d = ITEMS[id]
   local what = d and d.fill and d.fill.what or "o2"
   if what == "cell" then return string.format("%.0f%%", 100 * (level or 0) / (d.fill.cap or 100)), "%" end
+  if what == "gas" then return string.format("%.1f", level or 0), "L" end
   return string.format("%.0f", (level or 0) / 60), "min"
 end
 

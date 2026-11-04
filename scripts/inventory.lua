@@ -598,6 +598,28 @@ function drawFill(cid, id, amount)
   fill_put(cid, id, list)
   return got
 end
+-- Add `amount` to the pieces' levels, the fullest piece that has room first
+-- (a can being filled at a pump is finished before the next is opened).
+-- → added
+function addFill(cid, id, amount)
+  cid = R(cid)
+  local fc = fill_cap(id)
+  if not fc then return 0 end
+  local list = fills(cid, id)
+  local want, put = math.max(0, amount or 0), 0
+  while want - put > 1e-9 do
+    local best = nil
+    for i, f in ipairs(list) do
+      if f < fc - 1e-9 and (not best or f > list[best]) then best = i end
+    end
+    if not best then break end
+    local t = math.min(fc - list[best], want - put)
+    list[best] = list[best] + t
+    put = put + t
+  end
+  if put > 0 then fill_put(cid, id, list) end
+  return put
+end
 -- Every piece full → the amount added.
 function refill(cid, id)
   cid = R(cid)
@@ -699,7 +721,10 @@ function addItem(cid, id, n, opts)
     local given = opts and opts.fills or {}
     for i = 1, fit do
       local f = given[i] or fc
-      if cid == "base" then f = fc end
+      -- (the warehouse tops a fill up — but a Gas Can's petrol is bought at
+      -- the pump: `keep` items keep their level)
+      local dd = idef(id)
+      if cid == "base" and not (dd and dd.fill and dd.fill.keep) then f = fc end
       list[#list + 1] = math.max(0, math.min(fc, f))
     end
     fill_put(cid, id, list)

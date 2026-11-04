@@ -53,6 +53,7 @@ PROFILES = {
   ibeam = { rx = 0.12, rz = 0.13 },
   truss = { rx = 0.20, rz = 0.18 },
   brace = { rx = 0.035, rz = 0.035 },
+  chain = { rx = 0.02, rz = 0.02 },
 }
 
 -- ── vector helpers ──────────────────────────────────────────────────────────
@@ -133,6 +134,8 @@ function shapeOf(def, size)
   elseif def.proc == "panel" then
     s.hx, s.hz = (size.w or 1) * 0.5, (size.d or 1) * 0.5
     s.len = size.t or def.h
+  elseif def.proc == "chain" then
+    s.hx, s.hz, s.len = PROFILES.chain.rx, PROFILES.chain.rz, size.len or def.h
   else
     s.hx, s.hz, s.len = def.rx, def.rz, def.h
   end
@@ -827,6 +830,49 @@ function braceBetween(p0, p1)
            ends = { a = p0, b = p1 } }
 end
 
+-- THE DRIVE CHAIN (parts_auto `chain`): from an ENGINE's sprocket (its
+-- `gasengine` module's sx, sy, sz, in the engine's frame) to a WHEEL's hub
+-- (its tyre centre: the part centre, out along its +X axle by `tx`). The
+-- rear sprocket sits on the hub as far along the axle as the engine's
+-- sprocket is from the wheel's mid-plane (at most `hub` m, the axle end),
+-- so the run is straight when the engine is in line with the wheel. The
+-- chain's frame: Y along the run, A (the engine) at −Y; X the wheel's axle
+-- made square to the run, so the loop (and its two sprockets) lies in the
+-- chain's Y–Z plane, the plane the wheel turns in. eng/wheel are records
+-- { x,y,z, B } (world or craft frame, the same for both); m = the engine's
+-- module; opts = { tx = the tyre's offset along the axle, hub = 0.18 }.
+-- → { x,y,z, B, size = { len, prof = "chain" }, ends = { a, b } }, or nil
+-- when the run is too short or more than 30° out of the wheel's plane
+function chainBetween(eng, m, wheel, opts)
+  opts = opts or {}
+  if not (eng and wheel and m) then return nil end
+  local a = add(v(eng.x, eng.y, eng.z), apply(eng.B, v(m.sx or 0, m.sy or 0, m.sz or 0)))
+  local ax = norm(wheel.B.X)
+  local tx = opts.tx or 0
+  local c = add(v(wheel.x, wheel.y, wheel.z), mul(ax, tx))
+  local off = dot(sub(a, c), ax)
+  local hub = opts.hub or 0.11
+  off = clamp(off, -hub, hub)
+  local b = add(c, mul(ax, off))
+  local d = sub(b, a)
+  local L = len(d)
+  if L < 0.12 then return nil end
+  d = mul(d, 1 / L)
+  -- a chain runs in the wheel's plane: more than 30° out of it, it can't
+  -- (the engine beside the wheel, not ahead of or behind it)
+  if math.abs(dot(ax, d)) > 0.5 then return nil end
+  local X = sub(ax, mul(d, dot(ax, d)))
+  X = norm(X)
+  local Z = cross(X, d)
+  local mid = add(a, mul(d, L * 0.5))
+  -- hubx: from the rear sprocket to the wheel's mid-plane along the chain's
+  -- X (the sprocket's carrier, drawn by builder_proc)
+  local hubx = -off * dot(ax, X)
+  return { x = mid.x, y = mid.y, z = mid.z, B = { X = X, Y = d, Z = Z },
+           size = { len = L, prof = "chain", hubx = math.floor(hubx * 1000 + 0.5) / 1000 },
+           ends = { a = a, b = b } }
+end
+
 -- The link (and joint visual) for one end of a placed member against a host:
 -- the joint is classified by where the end lands on it.
 function endLink(rec, which, host)
@@ -838,7 +884,7 @@ function endLink(rec, which, host)
   local outN = mul(rec.B.Y, -s)                -- from the end toward the host
   local k = "surface"
   local style
-  if rec.def.proc == "brace" then
+  if rec.def.proc == "brace" or rec.def.proc == "chain" then
     k = "brace"
   elseif hs.member and sh.member then
     local nl = applyT(host.B, neg(outN))

@@ -250,6 +250,102 @@ BUILD.brace = function(M, L)
   end
 end
 
+-- ── THE DRIVE CHAIN (parts_auto `chain`) ────────────────────────────────────
+-- A 520 roller chain looped over two sprockets in the part's Y–Z plane: the
+-- engine's at −L/2 (rf), the wheel's at +L/2 (rr), both turning about X (the
+-- wheel's axle). One link plate every PITCH along the loop, inner and outer
+-- plates alternating, and the sprockets as toothed discs.
+CHAIN_PITCH = 0.015875
+local CHAIN = { 0.24, 0.22, 0.20, 1 }
+local CHAIN_PIN = { 0.42, 0.40, 0.37, 1 }
+local SPROCKET = { 0.62, 0.62, 0.60, 1 }
+-- a sprocket's pitch radius from its teeth
+function sprocketR(teeth) return CHAIN_PITCH / (2 * math.sin(math.pi / math.max(6, teeth or 14))) end
+-- A toothed disc about X at (0, y, z): n teeth, outer radius r, thickness t.
+local function sprocket(M, y, z, r, n, t, col, hole)
+  local P = {}
+  local k = 2 * n
+  for i = 0, k - 1 do
+    local a = i / k * 2 * math.pi
+    local rr = (i % 2 == 0) and (r + 0.004) or (r - 0.005)
+    P[#P + 1] = { math.cos(a) * rr, math.sin(a) * rr }
+  end
+  for _, sx in ipairs({ 1, -1 }) do
+    local n3 = { sx, 0, 0 }
+    local c = vtx(M, { sx * t / 2, y, z }, n3, 0, 0, col)
+    local ids = {}
+    for i, q in ipairs(P) do ids[i] = vtx(M, { sx * t / 2, y + q[1], z + q[2] }, n3, q[1], q[2], col) end
+    for i = 1, #P do
+      local j = i % #P + 1
+      if sx > 0 then tri(M, c, ids[i], ids[j]) else tri(M, c, ids[j], ids[i]) end
+    end
+  end
+  for i = 1, #P do
+    local a, b = P[i], P[i % #P + 1]
+    local nrm = vnorm({ 0, (a[1] + b[1]) * 0.5, (a[2] + b[2]) * 0.5 })
+    quad(M, { -t / 2, y + a[1], z + a[2] }, { -t / 2, y + b[1], z + b[2] }, { t / 2, y + b[1], z + b[2] }, { t / 2, y + a[1], z + a[2] }, nrm, col)
+  end
+  if hole then prism(M, { -t / 2 - 0.004, y, z }, { t / 2 + 0.004, y, z }, hole, 10, DARK, true) end
+end
+function chainArrays(L, rf, rr, hubx)
+  local M = newMesh()
+  local h = L / 2
+  rf, rr = rf or sprocketR(13), rr or sprocketR(48)
+  -- the loop: upper strand, round the wheel's sprocket, lower strand, round
+  -- the engine's (y, z in the plane; the tangents of two circles of radii
+  -- rf at y = −h and rr at y = +h)
+  local sp = math.max(-0.95, math.min(0.95, (rr - rf) / L))
+  local cp = math.sqrt(1 - sp * sp)
+  local th = math.atan2(cp, -sp)           -- the upper tangent's normal angle
+  local path = {}
+  local function arc(cy, r, a0, a1, n)
+    for i = 0, n do local a = a0 + (a1 - a0) * i / n; path[#path + 1] = { cy + r * math.cos(a), r * math.sin(a) } end
+  end
+  path[#path + 1] = { -h + rf * math.cos(th), rf * math.sin(th) }
+  arc(h, rr, th, -th, 24)                  -- over the rear sprocket's far side
+  arc(-h, rf, -th, -2 * math.pi + th, 12)  -- …and round the engine's
+  -- walk it at the chain's pitch
+  local acc, k = 0, 0
+  for i = 1, #path do
+    local a, b = path[i], path[i % #path + 1]
+    local dy, dz = b[1] - a[1], b[2] - a[2]
+    local seg = math.sqrt(dy * dy + dz * dz)
+    if seg > 1e-6 then
+      local ty, tz = dy / seg, dz / seg
+      local s = (acc > 0) and (CHAIN_PITCH - acc) or 0
+      while s <= seg do
+        local y, z = a[1] + ty * s, a[2] + tz * s
+        local c = { 0, y, z }
+        local ax = { { 1, 0, 0 }, { 0, ty, tz }, { 0, -tz, ty } }
+        local outer = (k % 2 == 0)
+        obox(M, c, ax, { outer and 0.0085 or 0.006, CHAIN_PITCH * 0.55, 0.0045 }, CHAIN)
+        if outer then prism(M, { -0.0095, y, z }, { 0.0095, y, z }, 0.0022, 5, CHAIN_PIN, true) end
+        k = k + 1
+        s = s + CHAIN_PITCH
+      end
+      acc = seg - (s - CHAIN_PITCH)
+    end
+  end
+  sprocket(M, -h, 0, rf, math.max(10, math.floor(2 * math.pi * rf / CHAIN_PITCH + 0.5)), 0.006, SPROCKET, 0.012)
+  sprocket(M, h, 0, rr, math.max(20, math.floor(2 * math.pi * rr / CHAIN_PITCH + 0.5)), 0.005, SPROCKET, 0.03)
+  -- the rear sprocket's carrier: a spacer drum to the hub, six bolts on a ring
+  if hubx and math.abs(hubx) > 0.01 then
+    prism(M, { 0, h, 0 }, { hubx, h, 0 }, 0.04, 14, DARK, true)
+    prism(M, { 0, h, 0 }, { hubx * 0.15, h, 0 }, 0.055, 14, SPROCKET, true)
+  end
+  for i = 0, 5 do
+    local a = i / 6 * 2 * math.pi
+    local y, z = h + 0.045 * math.cos(a), 0.045 * math.sin(a)
+    prism(M, { -0.006, y, z }, { 0.006, y, z }, 0.005, 6, DARK, true)
+  end
+  return M
+end
+-- the chain's sprocket radii from its size (front: the engine's gearbox
+-- sprocket, rear: size.teeth on the hub)
+local function chainRadii(s)
+  return sprocketR(tonumber(s.front) or 13), sprocketR(tonumber(s.teeth) or 48)
+end
+
 local function quantLen(L) return math.max(STEP, math.floor(L / STEP + 0.5) * STEP) end
 
 function memberArrays(prof, L)
@@ -336,6 +432,11 @@ function keyOf(rec)
   local def, s = sizeOfRec(rec)
   if def.proc == "member" then return "m:" .. (s.prof or def.prof or "box") .. ":" .. string.format("%.2f", quantLen(s.len or def.h)) end
   if def.proc == "brace" then return "b:" .. string.format("%.2f", quantLen(s.len or def.h)) end
+  if def.proc == "chain" then
+    -- (a chain is drawn at its exact length, to the centimetre: it must end
+    -- on both sprockets)
+    return string.format("c:%.2f:%d:%d:%.2f", s.len or def.h, tonumber(s.front) or 13, tonumber(s.teeth) or 48, tonumber(s.hubx) or 0)
+  end
   if def.proc == "panel" then
     return "p:" .. string.format("%.2f:%.2f:%.2f", quantLen(s.w or 1), quantLen(s.d or 1), s.t or def.h or 0.04)
   end
@@ -345,6 +446,10 @@ function arraysOf(rec)
   local def, s = sizeOfRec(rec)
   if def.proc == "member" then return memberArrays(s.prof or def.prof or "box", quantLen(s.len or def.h)) end
   if def.proc == "brace" then return braceArrays(quantLen(s.len or def.h)) end
+  if def.proc == "chain" then
+    local rf, rr = chainRadii(s)
+    return chainArrays(math.floor((s.len or def.h) * 100 + 0.5) / 100, rf, rr, tonumber(s.hubx))
+  end
   if def.proc == "panel" then return panelArrays(quantLen(s.w or 1), quantLen(s.d or 1), s.t or def.h or 0.04) end
   return nil
 end
@@ -356,6 +461,9 @@ function collider(rec)
     return p[1], (s.len or def.h) * 0.5, p[2]
   end
   if def.proc == "panel" then return (s.w or 1) * 0.5, (s.t or def.h or 0.04) * 0.5, (s.d or 1) * 0.5 end
+  -- a chain carries no load and must not knock its own tyre: a token box at
+  -- its middle (between the engine and the hub, inside the frame)
+  if def.proc == "chain" then return 0.01, 0.01, 0.01 end
   return def.rx, (def.h or 1) * 0.5, def.rz
 end
 

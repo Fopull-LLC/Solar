@@ -130,6 +130,7 @@ function tank_levels(g)
     local unit
     for i = #g.fills, 1, -1 do parts[#parts + 1], unit = I.fillText(g.id, g.fills[i]) end
     if unit == "%" then return table.concat(parts, " · ") end
+    if unit == "L" then return table.concat(parts, " · ") .. " L" end
     return table.concat(parts, " · ") .. " min"
   end
   for i = #g.fills, 1, -1 do parts[#parts + 1] = string.format("%.0f", g.fills[i] / 60) end

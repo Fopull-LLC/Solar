@@ -213,6 +213,50 @@ both in vessel_controller's wheel code:
   at the centre of mass, at most 4 g a tick, booked through it). Unbooked, the
   first versions of the last two read as a shock and tore the gear off.
 
+## 3d. Gas engines (playtest 2026-11-03c)
+
+"Add a motor engine vs an electric one to power vehicles … different-cc gas
+engines. You place a chain item which snaps to an engine on one end and a
+wheel on the other." Electric stays the default: a wheel with no chain runs
+on its hub motor exactly as before.
+
+| Part | What it is |
+|---|---|
+| **Gas Engine 50 / 125 / 250 / 500cc** | A single with its clutch and gearbox in one case (X forward, the gearbox sprocket on the left −Z, the exhaust on the right). 3 / 9 / 25 / 41 kW; 3 or 5 speeds. Stacks or sits on any face. |
+| **Drive Chain** | A drawn part, placed like the Brace: click an engine (it snaps to the sprocket), then a wheel (the rear sprocket goes on the hub, in line). Its `size` carries the engine and the wheel (`e`, `w`), the sprockets (`front`, `teeth`) and its length; it is drawn again whenever either end moves (builder `chainRefit`). One chain powers one wheel; an engine can drive several. More than 30° out of the wheel's plane is refused. |
+| **Gas Tank 4 L / 12 L** | Petrol (`gastank` L). Full on every rollout; all tanks drain and fill together. The level is part state (`st.gas`, nil = full), so fleet saves, splits and docking carry it. |
+| **Gas Can** (item) | 10 L, a fill in litres kept per can. Beside a craft's gas tank, LMB held pours 2.5 L/s. The warehouse keeps its level (`fill.keep`). |
+
+**The engine** (`auto_drive` §5): a torque curve through the peak, a clutch
+that slips below `eng` rpm (so it pulls from a standstill and never stalls),
+an automatic gearbox that is always in the gear that pulls hardest at the
+road speed, the redline in top gear as the wheel's top speed, crank torque ×
+overall ratio × 0.9 at the wheel (× the save's rating, like every motor). It
+burns `lph` at idle plus `bsfc` L/kWh of the work the traction control lets it
+do, only while the craft is driven; dry, it dies and its wheels roll free.
+Throttle shut, it drags its wheel (`gasBrake`). `r2WheelSource` answers for a
+chained wheel; the traction control, wheelie control and brakes act on that.
+On a craft with a chain, a hub motor past its own top speed freewheels
+instead of braking (a hybrid's 18 m/s front motor threw the bike down at 20).
+
+**Heard and seen**: a running loop per craft (`audio/foley/engine_four.ogg`,
+`engine_two.ogg`, `tools/gen_engine_audio.py`) pitched by rpm, and a
+`TailpipePuff` out of each running engine's tailpipe (lamp_response 0.3).
+The flight HUD has a GAS bar beside FUEL and CHARGE when the craft carries
+gas (its tooltip: the engine, rpm, gear, burn and time left).
+
+**Refuelling**: the Repair Bay's work order fills the gas (`gas_price`, $0.6
+a litre); the bay's gas pump (west wall, between the lift and the propellant
+dispenser) fills a Gas Can in hand while E is held, paid by the dollar.
+
+Files: `scripts/parts_auto.lua` (parts), `scripts/auto_drive.lua` §5 (maths),
+`scripts/vessel_controller.lua` GAS, `scripts/builder.lua` (the chain tool,
+`chainRefit`, launch checks, the GAS header line), `builder_attach.chainBetween`,
+`builder_proc.chainArrays`, `scripts/items.lua` / `item_hand.lua` (the can),
+`scripts/repair_bay.lua` (order line, pump), `tools/gen_gas_parts.py`
+(meshes, prefabs), `tools/base_buildings.py` (the pump), `tests/smoke_gas.lua`,
+`tools/perf/gasbike.py`, `gasprobe.lua` / `gasshots.sh`, jumpprobe `JP GAS`.
+
 ## 4. Controls summary
 
 | Key | Rover / car / trike | Bike |

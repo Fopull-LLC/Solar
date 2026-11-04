@@ -107,9 +107,66 @@ PARTS = {
   saddle   = { prefab = "PartSaddle", label = "Moto Saddle", h = 1.30, rx = 0.36, rz = 0.17, mass = 0.03, cost = 15,
                top = false, bottom = true, kind = "crewed", seat = true, strength = 260,
                mods = { { type = "command", crew = 1, draw = 0.0, seat = true } } },
+
+  -- ── GAS (playtest 2026-11-03c: "a motor engine vs an electric one … gas
+  -- needs a fuel tank on the craft"). A GAS ENGINE is a single-cylinder
+  -- petrol engine with its clutch and gearbox in one case (X forward, the
+  -- cylinder up, the gearbox sprocket on the LEFT, −Z, the exhaust on the
+  -- right). It drives nothing until a DRIVE CHAIN runs from its sprocket to
+  -- a wheel's hub: that wheel is then powered by the engine through the
+  -- chain's gearing (auto_drive §5), drinking from the craft's GAS TANKS.
+  -- A wheel with no chain keeps its electric hub motor, so every craft built
+  -- before is unchanged. The `gasengine` module is the engine's spec sheet
+  -- (auto_drive.gasWheel reads it); sx/sy/sz is the sprocket (part frame,
+  -- the chain's end), ex/ey/ez the tailpipe and its direction exd.
+  gasE50   = { prefab = "PartGasE50", label = "Gas Engine 50cc", h = 0.26, rx = 0.13, rz = 0.10, mass = 0.011, cost = 20,
+               top = true, bottom = true, side = true, kind = "structural", strength = 300,
+               mods = { { type = "gasengine", cc = 50, stroke = 2, nm = 4.2, rpk = 6500, idle = 1800, eng = 3800, red = 8500,
+                          prim = 3.6, front = 13, g1 = 3.8, g2 = 2.37, g3 = 1.58, bsfc = 0.70, lph = 0.15,
+                          sx = -0.04, sy = -0.07, sz = -0.135, ex = -0.13, ey = -0.08, ez = 0.07 } } },
+  gasE125  = { prefab = "PartGasE125", label = "Gas Engine 125cc", h = 0.32, rx = 0.16, rz = 0.12, mass = 0.022, cost = 35,
+               top = true, bottom = true, side = true, kind = "structural", strength = 340,
+               mods = { { type = "gasengine", cc = 125, stroke = 4, nm = 10.5, rpk = 7500, idle = 1600, eng = 3500, red = 10500,
+                          prim = 3.2, front = 14, g1 = 3.58, g2 = 2.55, g3 = 2.0, g4 = 1.63, g5 = 1.38, bsfc = 0.40, lph = 0.22,
+                          sx = -0.05, sy = -0.09, sz = -0.155, ex = -0.16, ey = -0.10, ez = 0.085 } } },
+  gasE250  = { prefab = "PartGasE250", label = "Gas Engine 250cc", h = 0.38, rx = 0.18, rz = 0.13, mass = 0.028, cost = 48,
+               top = true, bottom = true, side = true, kind = "structural", strength = 380,
+               mods = { { type = "gasengine", cc = 250, stroke = 4, nm = 25, rpk = 9000, idle = 1700, eng = 4000, red = 12000,
+                          prim = 3.0, front = 13, g1 = 3.48, g2 = 2.48, g3 = 1.94, g4 = 1.58, g5 = 1.34, bsfc = 0.40, lph = 0.35,
+                          sx = -0.06, sy = -0.11, sz = -0.165, ex = -0.18, ey = -0.12, ez = 0.09 } } },
+  gasE500  = { prefab = "PartGasE500", label = "Gas Engine 500cc", h = 0.44, rx = 0.21, rz = 0.15, mass = 0.036, cost = 60,
+               top = true, bottom = true, side = true, kind = "structural", strength = 420,
+               mods = { { type = "gasengine", cc = 500, stroke = 4, nm = 50, rpk = 7000, idle = 1500, eng = 3200, red = 10500,
+                          prim = 2.9, front = 15, g1 = 3.28, g2 = 2.33, g3 = 1.83, g4 = 1.49, g5 = 1.26, bsfc = 0.38, lph = 0.50,
+                          sx = -0.07, sy = -0.13, sz = -0.185, ex = -0.21, ey = -0.14, ez = 0.105 } } },
+  -- DRIVE CHAIN: a roller chain (520 pitch) drawn from an engine's sprocket
+  -- to a wheel's hub, with a rear sprocket on the hub (size.teeth, 48 unless
+  -- set: more teeth pull harder and top out lower). Placed like the Brace:
+  -- pick the chain, click the engine, click the wheel (builder: the chain
+  -- tool). size = { len, prof = "chain", e = engine uid, w = wheel uid,
+  -- teeth, front }. One chain powers one wheel; an engine may drive several.
+  chain    = { prefab = "PartChain", label = "Drive Chain", h = 1.00, rx = 0.02, rz = 0.02, mass = 0.0016, cost = 6,
+               top = false, bottom = false, proc = "chain", prof = "chain", kind = "structural", strength = 60 },
+  -- GAS TANKS: petrol for the engines (litres, `gastank` L), full on every
+  -- new craft and rollout; the engines draw from all of them together. The
+  -- small one is a bike's tank, the medium a steel jerry tank for a rover.
+  -- Refilled at the base's Repair Bay or from a Gas Can.
+  gasTankS = { prefab = "PartGasTankS", label = "Gas Tank 4 L", h = 0.20, rx = 0.17, rz = 0.10, mass = 0.0055, cost = 12,
+               top = true, bottom = true, side = true, kind = "structural", strength = 260,
+               mods = { { type = "gastank", L = 4 } } },
+  gasTankM = { prefab = "PartGasTankM", label = "Gas Tank 12 L", h = 0.34, rx = 0.18, rz = 0.09, mass = 0.014, cost = 20,
+               top = true, bottom = true, side = true, kind = "structural", strength = 300,
+               mods = { { type = "gastank", L = 12 } } },
 }
 
 DESC = {
+  gasE50 = "gas engine · 50cc two-stroke · 3 kW · 3 gears · chain it to a wheel",
+  gasE125 = "gas engine · 125cc · 9 kW · 5 gears · chain it to a wheel",
+  gasE250 = "gas engine · 250cc · 25 kW · 5 gears · chain it to a wheel",
+  gasE500 = "gas engine · 500cc single · 41 kW · 5 gears · chain it to a wheel",
+  chain = "drive chain · click an engine, then a wheel · that wheel runs on gas",
+  gasTankS = "gas tank · 4 L · full at rollout · feeds every gas engine",
+  gasTankM = "gas tank · 12 L · full at rollout · feeds every gas engine",
   wheelB = "moto wheel · r 0.33 m · through-axle: parts on both ends",
   forkT = "telescopic fork · front face · steers A/D · 13 cm travel",
   swingArm = "swing arm · rear face · monoshock · 12 cm travel",
@@ -122,7 +179,8 @@ for id, d in pairs(DESC) do if PARTS[id] then PARTS[id].desc = d end end
 
 -- Where they go in the catalogue: after the rover's own parts.
 SECTION = "ROVER"
-ORDER = { "wheelB", "forkT", "swingArm", "strutS", "gyro", "packB", "saddle" }
+ORDER = { "wheelB", "forkT", "swingArm", "strutS", "gyro", "packB", "saddle",
+          "gasE50", "gasE125", "gasE250", "gasE500", "chain", "gasTankS", "gasTankM" }
 
 
 

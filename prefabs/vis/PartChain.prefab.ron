@@ -1,0 +1,16 @@
+// VISUAL-ONLY variant of prefabs/PartChain.prefab.ron for the builder stand: no body, no scripts.
+// Written by tools/gen_gas_parts.py — regenerate, don't edit.
+// DRIVE CHAIN — a roller chain from a gas engine's sprocket to a wheel's hub (size: len, e, w, teeth,
+// front); meshed by scripts/builder_proc.lua chainArrays. Written by tools/gen_gas_parts.py.
+[
+    (
+        name: "PartChain",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+    ),
+]

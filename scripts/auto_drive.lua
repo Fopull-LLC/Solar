@@ -296,3 +296,159 @@ function poseOf(kind, s, steerDeg, len)
   end
   return { slide = s, steer = math.rad(steerDeg or 0), arm = 0 }
 end
+
+-- ── 5. GAS ENGINES (playtest 2026-11-03c: "a motor engine vs an electric
+-- one … different-cc gas engines … a chain item which snaps to an engine on
+-- one end and a wheel on the other") ─────────────────────────────────────────
+-- A single-cylinder petrol engine with a clutch and a gearbox, driving a
+-- wheel through a roller chain (parts_auto: the Gas Engines, the Drive
+-- Chain, the Gas Tanks). Its module (`gasengine`, on the engine part) is the
+-- engine's own figures, as a spec sheet gives them:
+--
+--   cc, stroke   displacement and 2 / 4 stroke (sound and exhaust only)
+--   nm, rpk      peak torque (N·m, at the crank) and the rpm it comes at
+--   idle, eng    idle rpm, and the rpm the clutch is fully in by: below it
+--                the clutch slips, the engine held at `eng` and its torque
+--                passed on (so it pulls away from a standstill and never
+--                stalls)
+--   red          the redline (rpm): the top of every gear
+--   prim         primary reduction (crank to gearbox)
+--   g1…g6        the gearbox's ratios (0 = no such gear); it shifts itself,
+--                always to the gear that pulls hardest at the road speed
+--   front        the gearbox sprocket's teeth (the chain's rear sprocket,
+--                REAR_T teeth unless the chain is set otherwise, gives the
+--                final drive: rear / front)
+--   bsfc         fuel per energy delivered (L/kWh: a 4-stroke ~0.40, a
+--                2-stroke ~0.70), lph its idle burn (L/h)
+--
+-- The torque curve is a parabola through the peak, down to LOW_K of it at
+-- idle and HIGH_K at the redline: the shape of a small single's dyno sheet.
+-- Torque at the wheel is crank torque × overall ratio × ETA; the wheel's
+-- top speed is the redline in top gear.
+GAS_ETA = 0.90        -- primary, gearbox and chain together
+GAS_RHO = 0.74        -- kg of petrol a litre
+GAS_LOW_K = 0.45      -- the torque curve's fall to idle (of the peak)…
+GAS_HIGH_K = 0.38     -- …and to the redline
+REAR_T = 48           -- a chain's rear sprocket unless it is set
+TEETH_MIN, TEETH_MAX = 36, 62
+GAS_BRAKE = 0.14      -- engine braking: of the peak torque at the crank, at the redline
+local RPM = 60 / (2 * math.pi)
+
+function gasGears(m)
+  local out = {}
+  for i = 1, 6 do
+    local g = tonumber(m and m["g" .. i]) or 0
+    if g > 0 then out[#out + 1] = g end
+  end
+  if #out == 0 then out[1] = 1 end
+  return out
+end
+
+-- Crank torque (N·m) at rpm (0 past the redline: the limiter cuts it).
+function gasTorque(m, rpm)
+  local pk, rp = m.nm or 10, m.rpk or 7000
+  local lo, hi = m.idle or 1500, m.red or 10000
+  if rpm > hi + 1 then return 0 end
+  local x
+  if rpm < rp then x = (rpm - rp) / math.max(1, rp - lo); return pk * math.max(0.2, 1 - GAS_LOW_K * x * x) end
+  x = (rpm - rp) / math.max(1, hi - rp)
+  return pk * math.max(0.2, 1 - GAS_HIGH_K * x * x)
+end
+
+-- The overall ratio (crank turns per wheel turn) in gear i.
+function gasOverall(m, i, teeth)
+  local G = gasGears(m)
+  local g = G[math.max(1, math.min(#G, i or 1))]
+  return (m.prim or 3) * g * ((teeth or REAR_T) / (m.front or 14))
+end
+
+-- Peak power (kW) and the rpm it comes at, off the curve.
+function gasPeak(m)
+  local best, at = 0, m.rpk or 7000
+  for rpm = m.idle or 1500, m.red or 10000, 50 do
+    local p = gasTorque(m, rpm) * rpm / RPM / 1000
+    if p > best then best, at = p, rpm end
+  end
+  return best, at
+end
+
+-- THE ENGINE AT THIS ROAD SPEED: v = the wheel's rim speed (m/s, its sign
+-- ignored), r = its radius (m), teeth = the chain's rear sprocket. →
+--   torque  kN·m the wheel can be driven with (the best gear's, the clutch
+--           slipping below `eng`)
+--   top     m/s: the redline in top gear
+--   rpm     the engine's (the clutch's `eng` while it slips)
+--   gear    which one it is in
+--   kw      the power that torque is at this rpm (what full throttle burns)
+--   ratio   the overall ratio in that gear
+function gasWheel(m, v, r, teeth)
+  r = math.max(0.05, r or 0.33)
+  local w = math.abs(v or 0) / r                 -- wheel rad/s
+  local G = gasGears(m)
+  local eng, red = m.eng or 3000, m.red or 10000
+  local best, bg, brpm, bratio = -1, 1, eng, gasOverall(m, 1, teeth)
+  for i = 1, #G do
+    local ratio = gasOverall(m, i, teeth)
+    local rpm = w * ratio * RPM
+    if rpm <= red or i == #G then
+      local run = math.max(rpm, eng)
+      local t = gasTorque(m, math.min(run, red)) * ratio
+      if rpm > red then t = 0 end
+      if t > best then best, bg, brpm, bratio = t, i, run, ratio end
+    end
+  end
+  local top = red / gasOverall(m, #G, teeth) / RPM * r
+  local tq = math.max(0, best) * GAS_ETA / 1000
+  local kw = gasTorque(m, math.min(brpm, red)) * math.min(brpm, red) / RPM / 1000
+  return { torque = tq, top = top, rpm = brpm, gear = bg, kw = kw, ratio = bratio }
+end
+
+-- Engine braking at the wheel (kN·m) while the throttle is shut: the pumping
+-- and friction losses, rising with the rpm, through the gear it is in.
+function gasBrake(m, rpm, ratio)
+  local k = math.max(0, math.min(1, ((rpm or 0) - (m.idle or 1500)) / math.max(1, (m.red or 10000) - (m.idle or 1500))))
+  return GAS_BRAKE * (m.nm or 10) * k * (ratio or 1) * GAS_ETA / 1000
+end
+
+-- Litres burnt over dt at `effort` (0…1: the throttle times the share of the
+-- available torque actually asked for) with kw available: the idle's, plus
+-- the work done at its specific consumption.
+function gasBurn(m, effort, kw, dt)
+  effort = math.max(0, math.min(1, effort or 0))
+  local lps = ((m.lph or 0.3) + effort * (kw or 0) * (m.bsfc or 0.4)) / 3600
+  return lps * (dt or 0)
+end
+
+-- Hours a tank of `L` litres lasts: at full power, and at `share` of it.
+function gasHours(m, L, share)
+  local kw = gasPeak(m)
+  local lph = (m.lph or 0.3) + (share or 1) * kw * (m.bsfc or 0.4)
+  return L / math.max(1e-6, lph)
+end
+
+-- THE TANKS: a craft's gas tanks drain and fill together, each in proportion
+-- (to what it holds when drawn from, to the room it has when filled), so no
+-- tank runs dry while another is full. `tanks` = { { cap, left }, … }
+-- (changed in place). → litres drawn / put in.
+function gasDrawFrom(tanks, L)
+  local have = 0
+  for _, t in ipairs(tanks) do have = have + math.max(0, t.left or 0) end
+  if have <= 0 or (L or 0) <= 0 then return 0 end
+  local take = math.min(have, L)
+  for _, t in ipairs(tanks) do
+    local l = math.max(0, t.left or 0)
+    t.left = math.max(0, l - take * l / have)
+  end
+  return take
+end
+function gasFillInto(tanks, L)
+  local room = 0
+  for _, t in ipairs(tanks) do room = room + math.max(0, (t.cap or 0) - (t.left or 0)) end
+  if room <= 1e-9 or (L or 0) <= 0 then return 0 end
+  local put = math.min(room, L)
+  for _, t in ipairs(tanks) do
+    local r = math.max(0, (t.cap or 0) - (t.left or 0))
+    t.left = math.min(t.cap or 0, (t.left or 0) + put * r / room)
+  end
+  return put
+end

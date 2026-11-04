@@ -726,9 +726,17 @@ function JP.climb(vc, k, still)
     ahold and string.format(", holds its speed up to %.1f deg", ahold) or "")
   return r
 end
+-- the craft's gas (vessel_controller gasState), when it carries any
+function JP.gas(vc)
+  local ok, g = pcall(function() return vc.gasState and vc.gasState() end)
+  if ok and g and ((g.cap or 0) > 0 or (g.engines or 0) > 0) then return g end
+  return nil
+end
 function JP.accel(vc, secs)
   local t0 = time
   local d0 = JP.along(vc)
+  local g0 = JP.gas(vc)
+  local gmax, gearmax = 0, 0
   local marks = {}
   local vmax, foff, n, pmax = 0, 0, 0, 0
   local p0
@@ -754,13 +762,25 @@ function JP.accel(vc, secs)
         local j = w.tyre and w.tyre.valid and w.tyre:getcomponent("Joint")
         mf[#mf + 1] = string.format("%.0f/%s", j and j.maxForce or -1, tostring(j and j.motor))
       end
-      P("JP AT t %.2f v %.2f pitch %.1f gr %d%d drive %.2f a_s %.2f lk %.2f slope %.3f cap %.2f mF %s", time - t0, sp, math.deg(pitch - p0), f, select(2, JP.down(vc)),
-        vc.R2.drive or 0, vc.R2.a_s or 0, vc.R2.lk or 0, vc.R2.gslope or 0, vc.R2.bikeCap or -1, table.concat(mf, " "))
+      local g = JP.gas(vc)
+      P("JP AT t %.2f v %.2f pitch %.1f gr %d%d drive %.2f a_s %.2f lk %.2f slope %.3f cap %.2f mF %s%s", time - t0, sp, math.deg(pitch - p0), f, select(2, JP.down(vc)),
+        vc.R2.drive or 0, vc.R2.a_s or 0, vc.R2.lk or 0, vc.R2.gslope or 0, vc.R2.bikeCap or -1, table.concat(mf, " "),
+        g and string.format(" gas %.0f rpm g%d vf %.2f", g.rpm or 0, g.gear or 0, vc.R2.vf or 0) or "")
     end
+    local g = JP.gas(vc)
+    if g then gmax, gearmax = math.max(gmax, g.rpm or 0), math.max(gearmax, g.gear or 0) end
     if V.upness(vc.node) < 0.4 then P("JP ACC FELL"); break end
   end
   hold_w(false)
   vc.R2.cmd = { drive = 0, steer = 0 }
+  local g1 = JP.gas(vc)
+  if g0 and g1 then
+    local used, dt_ = (g0.left or 0) - (g1.left or 0), time - t0
+    local lph = used / math.max(dt_, 1e-3) * 3600
+    P("JP GAS %s: %.3f L in %.1f s full stick (%.2f L/h), rpm up to %.0f, gear up to %d; a full %.0f L tank lasts %.0f min at that, %s",
+      g1.label or "engine", used, dt_, lph, gmax, gearmax, g1.cap or 0, (g1.cap or 0) / math.max(lph, 1e-6) * 60,
+      string.format("%.2f / %.1f L left", g1.left or 0, g1.cap or 0))
+  end
   local function m(v) return marks[v] and string.format("%.2f", marks[v]) or "-" end
   P("JP ACC from a stop, full stick %.0f s: 0-5 %s s, 0-10 %s s, 0-15 %s s, 0-20 %s s, top %.2f m/s, %.0f m, front tyre off %.0f%%, worst nose-up %.1f deg",
     secs, m(5), m(10), m(15), m(20), vmax, JP.along(vc) - d0, 100 * foff / math.max(1, n), math.deg(pmax))

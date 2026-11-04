@@ -65,3 +65,7 @@ their 100 ms envelope varies 0.4–3.7 dB — none of them pulses.
 ## audio/incoming/
 
 Drop sounds found by hand here (see audio/incoming/README.md for the list the game wants).
+
+- `foley/engine_four.ogg`, `foley/engine_two.ogg` — the gas engines' running
+  loops (a four-stroke and a two-stroke single at 3000 rpm), synthesised by
+  `tools/gen_engine_audio.py`; no recorded source.

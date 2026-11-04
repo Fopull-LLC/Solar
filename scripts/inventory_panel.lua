@@ -356,7 +356,7 @@ PREVIEW_TARGET = "itempreview"
 local PV = { px = 256, fov = 0.40, bit = 3, layer = "viewmodel", up = 1500 }
 -- Each model's largest extent (m), for the framing.
 PREVIEW_SIZE = { gravgun = 0.95, laser = 1.05, surveyor = 1.15, repairkit = 0.40, medkit = 0.26,
-                 beacon = 1.30, flag = 1.30, rcspack = 0.75, o2tank = 0.70 }
+                 beacon = 1.30, flag = 1.30, rcspack = 0.75, o2tank = 0.70, gascan = 0.34 }
 local pv = { cam = nil, making = false, item = nil, id = nil, want = nil, ready = false, spin = 0,
              on = false, dist = 2, planet = nil, frame = nil, frame_t = -10 }
 previewId = nil   -- the item on the stand (probes)
@@ -807,7 +807,17 @@ local function describe(astro)
       -- each Oxygen Tank's air (each rifle's cell), fullest first
       local I = ref("items")
       local cellish = I and I.def and I.def(g.id) and I.def(g.id).fill and I.def(g.id).fill.what == "cell"
-      if g.fills and g.fillCap and cellish then
+      local gas = I and I.def and I.def(g.id) and I.def(g.id).fill and I.def(g.id).fill.what == "gas"
+      if g.fills and g.fillCap and gas then
+        -- each Gas Can's petrol, fullest first
+        local lv = {}
+        for i = #g.fills, 1, -1 do lv[#lv + 1] = g.fills[i] <= 0.05 and "empty" or string.format("%.1f L", g.fills[i]) end
+        rows[#rows + 1] = { "row", key = "fill_" .. g.id, w = "100%", h = 22, gap = 10, pad = 0, align = "center",
+          { "box", key = "p", w = 34, h = 1 },
+          { "text", key = "t", style = "panel/cellMuted", w = "grow", h = "fit", maxLines = 1, overflow = "ellipsis",
+            text = string.format("petrol  ·  %s  ·  %.1f of %.0f L  ·  fill at the Repair Bay's gas pump",
+              table.concat(lv, " · "), g.fill or 0, #g.fills * g.fillCap) } }
+      elseif g.fills and g.fillCap and cellish then
         local lv = {}
         for i = #g.fills, 1, -1 do lv[#lv + 1] = string.format("%.0f%%", 100 * g.fills[i] / g.fillCap) end
         rows[#rows + 1] = { "row", key = "fill_" .. g.id, w = "100%", h = 22, gap = 10, pad = 0, align = "center",

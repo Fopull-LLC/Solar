@@ -760,6 +760,27 @@ local function resources(v, t)
         .. (((t.dv or 0) > 0) and string.format(" · Δv %.0f m/s · %.1f s at full throttle",
           t.dv, t.burn_s or 0) or "")) }
   end
+  -- GAS (the gas engines' tanks, vessel_controller GAS): only on a craft
+  -- that carries gas tanks or a gas engine
+  local gs = v.gasState and v.gasState()
+  if gs and ((gs.cap or 0) > 0 or (gs.engines or 0) > 0) then
+    local f = (gs.cap or 0) > 0 and (gs.left or 0) / gs.cap or 0
+    local eng = ""
+    if (gs.engines or 0) > 0 then
+      eng = gs.running and string.format(" · %s %.0f rpm, gear %d", gs.label or "engine", gs.rpm or 0, gs.gear or 1)
+        or string.format(" · %s off", gs.label or "engine")
+      if gs.running and (gs.lph or 0) > 0.05 and (gs.left or 0) > 0 then
+        eng = eng .. string.format(" · %.1f L/h, %s left at this", gs.lph, duration((gs.left or 0) / gs.lph * 3600))
+      end
+      if (gs.wheels or 0) == 0 then eng = eng .. " · no Drive Chain to a wheel" end
+    end
+    rows[#rows + 1] = { key = "gas", label = "GAS", frac = f,
+      color = f <= 0 and DANGER or (f < 0.15 and WARN or PHOS),
+      tone = f <= 0 and "danger" or (f < 0.15 and "warn" or nil),
+      value = string.format("%.1fL", gs.left or 0),
+      tip = string.format("%.1f / %.0f L of gas", gs.left or 0, gs.cap or 0) .. eng
+        .. ((gs.cap or 0) <= 0 and " · no gas tank aboard" or "") }
+  end
   if (t.ec_cap or 0) > 0 or t.comms or (t.ec_gen or 0) > 0 then
     local f = (t.ec_cap or 0) > 0 and t.ec / t.ec_cap or 0
     local notes = {}

@@ -488,6 +488,30 @@
     (
         name: "Shell 18",
         transform: (
+            translation: (-5.1900, -2.9950, 3.9950),
+            rotation: (0.00000, 0.00000, 0.00000, 1.00000),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+        parent: Some(0),
+        cast_shadow: false,
+        rigidbody: Some((
+            boxed: true,
+            mode: Static,
+            radius: 0.5,
+            height: 1.0,
+            half_extents: (0.2900, 0.7500, 0.3000),
+            restitution: 0.0,
+            friction: 0.9,
+            gravity: false,
+            lock_pos: (false, false, false),
+            lock_rot: (false, false, false),
+        )),
+    ),
+    (
+        name: "Shell 19",
+        transform: (
             translation: (4.8500, -3.5950, 6.3750),
             rotation: (0.00000, 0.00000, 0.00000, 1.00000),
             scale: (1.0, 1.0, 1.0),
@@ -524,6 +548,17 @@
         name: "Bay Floor",
         transform: (
             translation: (0.0000, -3.8250, -0.6250),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+        parent: Some(0),
+    ),
+    (
+        name: "Gas Pump",
+        transform: (
+            translation: (-4.4000, -3.8250, 3.9950),
             rotation: (0.0, 0.0, 0.0, 1.0),
             scale: (1.0, 1.0, 1.0),
         ),

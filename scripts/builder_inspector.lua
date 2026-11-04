@@ -176,6 +176,28 @@ local function wheel_rows(B, uid, rec, out)
       onClicked = function() if B.wheelApply then B.wheelApply(uid, "all") end end } }
 end
 
+-- ── a Drive Chain's rear sprocket (parts_auto `chain`): more teeth pull
+-- harder and top out lower (auto_drive gasWheel) ─────────────────────────────
+CHAIN_TEETH = { 40, 44, 48, 52, 56, 60 }
+function chain_rows(B, uid, rec, out)
+  local sz = rec.size or {}
+  local cur = tonumber(sz.teeth) or 48
+  out[#out + 1] = sublabel("chd", "CHAIN")
+  local row = { "row", key = "teeth", w = "100%", h = 22, gap = 3, pad = 0, align = "center",
+    { "text", key = "l", style = "panel/cell", w = 54, h = 22, text = "Sprocket", textValign = "center" } }
+  for _, t in ipairs(CHAIN_TEETH) do
+    row[#row + 1] = { "button", key = "t" .. t, style = "panel/choice", selected = cur == t, w = "grow", h = 22,
+      text = tostring(t), textAlign = "center", textValign = "center",
+      tooltip = string.format("%d teeth on the rear sprocket: %s", t, t > 48 and "more pull, a lower top speed"
+        or (t < 48 and "a higher top speed, less pull" or "as the engine was geared")),
+      onClicked = function() if B.cmd then B.cmd("setParam", { uid = uid, key = "teeth", value = t }) end end }
+  end
+  out[#out + 1] = row
+  out[#out + 1] = { "text", key = "chi", style = "panel/cellMuted", w = "100%", h = "fit",
+    text = string.format("%.2f m  ·  engine → wheel  ·  %d / %d teeth (final drive %.2f)", sz.len or 0,
+      cur, tonumber(sz.front) or 13, cur / (tonumber(sz.front) or 13)) }
+end
+
 -- ── the part's controls (electronics actions) ───────────────────────────────
 -- Shared with the context menu: { { id, label, key } … } for a part record.
 function controlsOf(B, rec)
@@ -530,6 +552,7 @@ local function inspect(B, out, top)
       textValign = "center", tooltip = "Frame it in the view",
       onClicked = function() local c = ref("builder_camera"); if c and c.frameSelection then c.frameSelection() end end } }
   if def.wheel then out[#out + 1] = rule("r2"); wheel_rows(B, uid, rec, out) end
+  if def.proc == "chain" then out[#out + 1] = rule("r2"); chain_rows(B, uid, rec, out) end
   controls_rows(B, rec, sel, out)
 end
 

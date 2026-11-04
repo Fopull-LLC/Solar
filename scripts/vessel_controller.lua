@@ -528,12 +528,14 @@ end
 -- The ROVER: the drive motors whine up with the wheel speed and the effort
 -- on the stick, and the tyres crunch over the ground while they are on it.
 -- Two loops that live with the craft and are muted, not stopped, at rest.
-function SFX.drive(node, live, spd, effort, on_ground)
+function SFX.drive(node, live, spd, effort, on_ground, ms)
   if not audio then return end
   local L = SFX.live
   local roll = live and math.min(1.0, spd / 10.0) or 0.0
   local push = live and math.min(1.0, math.abs(effort or 0)) or 0.0
-  local mv = (roll > 0.02 or push > 0.05) and (0.10 + 0.30 * roll + 0.20 * push) or 0.0
+  -- (ms: the share of the drive that is electric — a craft on gas engines
+  -- alone has no hub motor to whine)
+  local mv = (roll > 0.02 or push > 0.05) and (0.10 + 0.30 * roll + 0.20 * push) * (ms or 1) or 0.0
   local gv = (live and on_ground and spd > 0.4) and (0.15 + 0.55 * roll) or 0.0
   if mv > 0 and not L.motor then
     L.motor = audio.play(SFX.motor, node, { track = "SFX", loop = true, mode = "spatial",
@@ -553,6 +555,31 @@ function SFX.drive(node, live, spd, effort, on_ground)
   end
 end
 
+-- A GAS ENGINE: one running loop per craft (its biggest engine), pitched by
+-- the rpm (the loops are recorded at 3000) and opened by the throttle; a
+-- two-stroke has its own (tools/gen_engine_audio.py). Silent when it is off.
+function SFX.gas(node, st)
+  if not audio then return end
+  local L = SFX.live
+  local on = st and st.running
+  local file = (st and st.stroke == 2) and "audio/foley/engine_two.ogg" or "audio/foley/engine_four.ogg"
+  if on and L.gas_file ~= file and L.gas then L.gas:stop(); L.gas = nil end
+  if on and not L.gas then
+    L.gas = audio.play(file, node, { track = "SFX", loop = true, mode = "spatial",
+      falloff = "inverse", minDistance = 5.0, maxDistance = 260.0, volume = 0.0 })
+    L.gas_file = file
+  end
+  if L.gas then
+    if on then
+      local cc = math.max(50, st.cc or 250)
+      L.gas:setVolume(math.min(1.0, (0.22 + 0.55 * (st.effort or 0)) * (0.6 + 0.4 * math.min(1, cc / 250))))
+      L.gas:setPitch(math.max(0.4, math.min(4.0, (st.rpm or 1500) / 3000)))
+    else
+      L.gas:setVolume(0.0)
+    end
+  end
+end
+
 -- Stop the vessel's persistent loops (EVA, breakup) — silence, don't leak.
 local function silence_loops()
   if engine_sfx then engine_sfx:stop(); engine_sfx = nil end
@@ -560,6 +587,7 @@ local function silence_loops()
   local L = SFX.live
   if L.motor then L.motor:stop(); L.motor = nil end
   if L.gravel then L.gravel:stop(); L.gravel = nil end
+  if L.gas then L.gas:stop(); L.gas = nil end
 end
 
 -- ── blueprint ───────────────────────────────────────────────────────────────
@@ -9097,12 +9125,200 @@ R2_BIKE = { top = 18.0, torque = 0.8, tc = 0.9, open = 1.8, lean = 0.12, lift = 
 -- leads work on whatever it answers; a dry tank answers 0 (the wheel rolls
 -- free, as an unpowered motor does). `rpm`: the wheel's own (rim m/s / r).
 function r2WheelSource(w, gl, rk, bike)
+  -- A WHEEL ON A DRIVE CHAIN runs on its gas engine (GAS, below)
+  if w.gas then return gasWheelSource(w, gl, rk) end
   local full, top = r2FullTorque(w, rk), r2TopSpeed(w, gl)
   if bike then
     full = math.max(full, R2_BIKE.torque * (rk or 1))
     top = math.max(top, r2TopSpeed({ m = { speed = R2_BIKE.top }, size = w.size }, gl))
   end
   return full, top
+end
+
+-- ══ GAS: ENGINES ON CHAINS AND THE TANKS THEY DRINK FROM ═══════════════════
+-- (playtest 2026-11-03c; parts_auto's Gas Engines, Drive Chain and Gas
+-- Tanks; the engine's maths is auto_drive §5.) A wheel a Drive Chain runs to
+-- from a gas engine (the chain's size: e = the engine's uid, w = the
+-- wheel's, teeth = its rear sprocket) is powered by that engine instead of
+-- its hub motor: the torque the engine gives through its gearbox and the
+-- chain at the speed the craft rolls (the clutch slipping below `eng`, so it
+-- pulls away from a stop), up to the redline in top gear. It burns gas while
+-- someone drives (an idle, plus the work it does), from every gas tank aboard
+-- together. Dry, the engine dies and its wheels roll free; shut, the throttle
+-- drags them a little (engine braking). Every other wheel is electric as
+-- before, so a craft with no chain flies exactly as it did.
+--
+-- A tank's level is its part state (`st.gas`, litres; nil = full: a new
+-- craft and every rollout start full), so a fleet save, a split and a
+-- docking carry it with the part.
+GAS = { engines = {}, tanks = {}, byWheel = {}, cap = 0, any = false, dry_said = false, runT = 0 }
+function gasTankLeft(t)
+  local st = type(t.d.st) == "table" and t.d.st or nil
+  local v = st and tonumber(st.gas)
+  if not v then return t.cap end
+  return math.max(0, math.min(t.cap, v))
+end
+function gasScan(E)
+  local old = GAS.engines
+  GAS.engines, GAS.tanks, GAS.byWheel, GAS.cap = {}, {}, {}, 0
+  for u, d in pairs(bp_by_uid) do
+    if not integ.gone[u] and (part_hp[u] or 1) > 0 then
+      local m = E.modOf(d, "gasengine")
+      if m then
+        local e = old[u] or { uid = u, rpm = m.idle or 1500, gear = 1, kw = 0, effort = 0, ratio = 1 }
+        e.d, e.m, e.label = d, m, d.label or "gas engine"
+        GAS.engines[u] = e
+      end
+      local t = E.modOf(d, "gastank")
+      if t and (t.L or 0) > 0 then
+        GAS.tanks[#GAS.tanks + 1] = { uid = u, d = d, cap = t.L }
+        GAS.cap = GAS.cap + t.L
+      end
+    end
+  end
+  for u, d in pairs(bp_by_uid) do
+    if d.proc == "chain" and not integ.gone[u] and type(d.size) == "table" then
+      local e = GAS.engines[tonumber(d.size.e) or -1]
+      local wu = tonumber(d.size.w)
+      if e and wu and bp_by_uid[wu] and not integ.gone[wu] then
+        GAS.byWheel[wu] = { e = e, teeth = tonumber(d.size.teeth) or 48, chain = u }
+      end
+    end
+  end
+  GAS.chained = false
+  for _, w in ipairs(R2.wheels or {}) do
+    w.gas = GAS.byWheel[w.uid]
+    if w.gas then GAS.chained = true end
+  end
+  GAS.any = next(GAS.engines) ~= nil or #GAS.tanks > 0
+  -- (how much of the drive is electric, for the hub motors' whine)
+  local nel, ng = 0, 0
+  for _, w in ipairs(R2.wheels or {}) do
+    if w.gas then ng = ng + 1 elseif not (w.cfg and w.cfg.drive == "off") then nel = nel + 1 end
+  end
+  GAS.elecShare = (ng > 0) and (nel / (nel + ng)) or 1
+  table.sort(GAS.tanks, function(a, b) return a.uid < b.uid end)
+end
+-- Litres aboard (and the tanks' capacity).
+function gasLeft()
+  local s = 0
+  for _, t in ipairs(GAS.tanks) do s = s + gasTankLeft(t) end
+  return s, GAS.cap
+end
+function gasSet(t, v)   -- (a global: the chunk is at its 200 locals)
+  if type(t.d.st) ~= "table" then t.d.st = {} end
+  t.d.st.gas = math.max(0, math.min(t.cap, v))
+end
+-- Draw L litres from every tank in proportion to what it holds, or pour L
+-- in by the room each has (auto_drive gasDrawFrom / gasFillInto). → litres
+function gasTanksDo(fn, L)
+  local AL = autoLib()
+  local f = AL and AL[fn]
+  if not f then return 0 end
+  local list = {}
+  for i, t in ipairs(GAS.tanks) do list[i] = { cap = t.cap, left = gasTankLeft(t) } end
+  local n = f(list, L)
+  for i, t in ipairs(GAS.tanks) do gasSet(t, list[i].left) end
+  return n
+end
+function gasDraw(L) return gasTanksDo("gasDrawFrom", L) end
+function gasFill(L)
+  local put = gasTanksDo("gasFillInto", L)
+  if put > 0 then GAS.dry_said = false end
+  return put
+end
+-- For the HUD, the Repair Bay and the gas can: { cap, left, engines, running,
+-- rpm, gear, label, cc, kw, lph } (nil fields when there is no engine).
+function gasState()
+  local left, cap = gasLeft()
+  local out = { cap = cap, left = left, engines = 0, running = false, tanks = {} }
+  for i, t in ipairs(GAS.tanks) do out.tanks[i] = t.uid end
+  local best
+  for _, e in pairs(GAS.engines) do
+    out.engines = out.engines + 1
+    if not best or (e.m.cc or 0) > (best.m.cc or 0) then best = e end
+  end
+  if best then
+    out.running, out.rpm, out.gear, out.label, out.cc = best.run == true, best.rpm, best.gear, best.label, best.m.cc
+    out.kw = best.kw
+    out.lph = GAS.lph or 0
+    out.wheels = 0
+    for _, w in ipairs(R2.wheels or {}) do if w.gas then out.wheels = out.wheels + 1 end end
+  end
+  return out
+end
+-- The wheel's torque and top speed off its engine now (r2WheelSource).
+function gasWheelSource(w, gl, rk)
+  local g = w.gas
+  local e = g.e
+  local L = autoLib()
+  local vk = math.max(0.6, math.min(1.0, math.sqrt(math.max(gl or R2_G_REF, 0) / R2_G_REF)))
+  if not (L and L.gasWheel) then return 0, 10 end
+  local q = L.gasWheel(e.m, R2.vf or 0, w.r or 0.33, g.teeth)
+  e.rpm, e.gear, e.kw, e.ratio = q.rpm, q.gear, q.kw, q.ratio
+  if not e.run then return 0, q.top * vk end
+  return q.torque * (rk or 1), q.top * vk
+end
+-- THE ENGINE HEARD AND SEEN: the running loop (SFX.gas) and a puff out of
+-- each running engine's tailpipe (vfx TailpipePuff, its +Y the pipe), more
+-- often and darker the harder it works and the faster it turns. Tick poses
+-- (partPointNow, this tick's frame): spawnEffect places the point against
+-- the world as it is now.
+function gasFx(node, info, dt)
+  local best
+  for _, e in pairs(GAS.engines) do
+    if not best or (e.m.cc or 0) > (best.m.cc or 0) then best = e end
+  end
+  SFX.gas(node, best and { running = best.run, rpm = best.rpm, effort = best.fx_eff or 0, stroke = best.m.stroke, cc = best.m.cc })
+  if not spawnEffect then return end
+  for _, e in pairs(GAS.engines) do
+    if e.run then
+      e.puff_t = (e.puff_t or 0) - (dt or 0)
+      if e.puff_t <= 0 then
+        local eff = e.fx_eff or 0
+        e.puff_t = 0.45 - 0.33 * math.min(1, eff * 0.7 + (e.rpm or 0) / (e.m.red or 10000) * 0.3)
+        local m = e.m
+        local x, y, z = partPointNow(e.uid, m.ex or 0, m.ey or 0, m.ez or 0)
+        local x2, y2, z2 = partPointNow(e.uid, (m.ex or 0) - 1, m.ey or 0, m.ez or 0)
+        if x and x2 then
+          local v = info and info.vel
+          local two = (m.stroke or 4) == 2
+          pcall(spawnEffect, "TailpipePuff", vec3(x, y, z), {
+            normal = vec3(x2 - x, y2 - y, z2 - z),
+            vel = v and vec3(v.x, v.y, v.z) or nil,
+            scale = 0.7 + 0.6 * eff,
+            tint = two and { 0.80, 0.86, 1.0 } or { 1.0 - 0.35 * eff, 1.0 - 0.35 * eff, 1.0 - 0.35 * eff } })
+        end
+      end
+    end
+  end
+end
+
+-- Once a tick after the wheels: the engines run while the craft is driven
+-- and has gas, and burn what the stick asked of them.
+function gasTick(dt, ctl)
+  if not next(GAS.engines) then return end
+  local L = autoLib()
+  local left = gasLeft()
+  local burn, lph = 0, 0
+  for _, e in pairs(GAS.engines) do
+    local was = e.run
+    e.run = ctl == true and left > 1e-4
+    if e.run and L and L.gasBurn then
+      local b = L.gasBurn(e.m, e.effort or 0, e.kw or 0, dt)
+      burn = burn + b
+      lph = lph + b / math.max(dt, 1e-6) * 3600
+    end
+    if not e.run then e.rpm = 0 elseif (e.effort or 0) < 0.02 and math.abs(R2.vf or 0) < 0.5 then e.rpm = e.m.idle or 1500 end
+    e.fx_eff = (e.fx_eff or 0) + ((e.effort or 0) - (e.fx_eff or 0)) * math.min(1, 6 * dt)
+    e.effort = 0
+    if was and not e.run and ctl and left <= 1e-4 and not GAS.dry_said then
+      GAS.dry_said = true
+      if caption then caption("out of gas — the engine dies") end
+    end
+  end
+  GAS.lph = lph
+  if burn > 0 then gasDraw(burn) end
 end
 
 -- How hard (m/s²) the rover may turn on a world of gravity g: the lesser of
@@ -9700,6 +9916,7 @@ local function r2_scan(node)
   table.sort(R2.wheels, function(a, b) return a.uid < b.uid end)
   R2.hasGear = false
   for _, w in ipairs(R2.wheels) do if w.gear then R2.hasGear = true end end
+  gasScan(E)     -- gas engines, their chains and tanks (GAS)
   motoScan()     -- suspension parts, the moto wheel, gyros (auto-engineering)
   R2.hasSusp = false
   for _, w in ipairs(R2.wheels) do if w.susp then R2.hasSusp = true end end
@@ -10632,7 +10849,7 @@ local function drive_tick(node, info, dt)
       local c = w.cfg or {}
       local cmd = cmds[k]
       local st = E and E.stateOf(w.d) or {}
-      local served = (elec.served and elec.served["d" .. w.uid]) or 1
+      local served = w.gas and 1 or ((elec.served and elec.served["d" .. w.uid]) or 1)
       smin = math.min(smin, served)
       local m = w.m
       -- (the wheel's power source: r2WheelSource, the hook for engines)
@@ -10679,6 +10896,13 @@ local function drive_tick(node, info, dt)
         j.motor = 1
         j.motorSpeed = 0
         j.maxForce = math.min(full * 2.0 * (c.brake or 1), hill_a * (info.mass or 1) * w.r / grounded)
+      elseif w.gas and w.gas.e.run and (w.rs or 0) ~= 0 and not w.coast and math.abs(want) < 0.02 and math.abs(vf) > 1.0 then
+        -- ENGINE BRAKING: a gas engine's throttle shut, in gear, drags its
+        -- wheel down (auto_drive gasBrake: the pumping losses through the gear)
+        local AL = autoLib()
+        j.motor = 1
+        j.motorSpeed = 0
+        j.maxForce = (AL and AL.gasBrake) and AL.gasBrake(w.gas.e.m, w.gas.e.rpm, w.gas.e.ratio) * (R2.rk or 1) or 0
       elseif (w.rs or 0) == 0 or w.coast or st.motor == false or served < 0.3 or math.abs(want) < 0.02 then
         -- off the stick (or an undriven wheel): it rolls free
         j.motor = 0
@@ -10690,6 +10914,12 @@ local function drive_tick(node, info, dt)
         -- (stalled in a rut: up to a further 1 g to crawl out)
         local lead = (accel + stall_k * gl) * (c.motor or 1) * served * dt * (R2.lk or 1.5)
         local tgt = want * vmax
+        -- (on a craft with a gas engine, a hub motor already past its own
+        -- top speed freewheels rather than hold the craft back: the engine
+        -- runs it faster than the motor would, and a front motor braking at
+        -- 18 m/s under a 28 m/s engine threw the bike down)
+        local free = GAS.chained and not w.gas and want * cur > 0 and math.abs(cur) >= math.abs(tgt)
+        if free then tgt = cur end
         if math.abs(tgt - cur) > lead then
           limited = (tgt > cur) and 1 or -1
           lmot = math.min(lmot, (c.motor or 1) * served)
@@ -10705,14 +10935,22 @@ local function drive_tick(node, info, dt)
         -- traction control allows (`torque`: R2_TC g, the slope, the wheelie
         -- limit, up to full when stalled in a rut), not the motor's full.
         j.maxForce = torque * served
-        power = power + (m.draw or 0.8) * math.abs(want)
+        if free then j.motor = 0; j.maxForce = 0 end
+        if w.gas then
+          -- the engine works as hard as the push it is let give
+          local e = w.gas.e
+          e.effort = math.max(e.effort or 0, math.abs(want) * math.min(1, torque / math.max(full, 1e-6)))
+        else
+          power = power + (m.draw or 0.8) * math.abs(want)
+        end
       end
-      R2.draw["d" .. w.uid] = (m.draw or 0.8) * ((brakes and not stick_free) and 0 or math.abs(want)) + 0.01
+      R2.draw["d" .. w.uid] = w.gas and 0 or ((m.draw or 0.8) * ((brakes and not stick_free) and 0 or math.abs(want)) + 0.01)
     end
   end
   R2.power = power
   R2.vf = vf
   R2.served = smin
+  gasTick(dt, ctl)
   -- ANTI-ROLL (r2Steady applies it): how far the body leans over its tyres —
   -- the left tyres hanging lower on their springs than the right ones means
   -- the left side has risen — asked back level at 3 rad/s per rad, about the
@@ -11878,7 +12116,8 @@ function r2Tick(node, info, dt)
   else
     R2.driving, R2.onWheels = false, false
   end
-  SFX.drive(node, R2.live and not R2.gear and not R2.passive, R2.speed or 0, R2.drive or 0, R2.onWheels)
+  SFX.drive(node, R2.live and not R2.gear and not R2.passive, R2.speed or 0, R2.drive or 0, R2.onWheels, GAS.elecShare)
+  if next(GAS.engines) then gasFx(node, info, dt) end
 end
 
 -- Before the craft is cut (staging, undocking, a part tearing off, docking):

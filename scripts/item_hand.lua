@@ -940,6 +940,10 @@ local function pose_carry(id, dt, fp)
   local m, an = model()
   if fp or not (m and an and an.boneWorld) then if p.visible then p.visible = false end return end
   local o, U, F, Rt = frame_of(m)
+  if id == "gascan" and POUR.on and posePour(p, m, an, o, U, F, Rt) then
+    if not p.visible then p.visible = true end
+    return
+  end
   if grip == "left" then
     -- a case by its handle: the handle in the left fist, the case hanging
     -- plumb below it, its long side along the stride
@@ -1173,6 +1177,129 @@ local function pose_plant()
   pcall(an.addBoneRot, an, "Back", 0, 0.5 * w, 0, w)
 end
 
+-- ── THE GAS CAN: pouring into a craft's gas tanks (playtest 2026-11-03c) ──
+-- With the Gas Can in hand, beside a craft that carries a gas tank (within
+-- items' `pour.reach` of one of its tanks), LMB held pours: `pour.rate` L/s
+-- out of the cans (the emptiest first: inventory drawFill) into the craft's
+-- tanks (vessel_controller gasFill), until the tanks are full or the can is
+-- dry. The crew lifts the can over the tank and tips it, a thin stream runs
+-- from the spout to the filler, and it glugs. Which craft and which tank are
+-- picked every frame from drawn poses only (the crew's node and the tank's
+-- partPointNow(rendered)), and nothing world is kept.
+POUR = { on = false, v = nil, uid = nil, gl_t = 0, poured = 0, name = nil }
+lastPour = nil        -- (probes) { litres, craft, t }
+local function pour_rules()
+  local I = items()
+  local d = I and I.def("gascan")
+  return (d and d.pour) or { rate = 2.5, reach = 2.6 }
+end
+-- The craft with a gas tank nearest the crew, and that tank: v, uid, d, gs
+function pourTarget()
+  local a = astro()
+  if not a then return nil end
+  local reach = pour_rules().reach or 2.6
+  local best, bu, bd, bgs = nil, nil, math.huge, nil
+  for _, v in ipairs(findScripts and findScripts("vessel_controller") or {}) do
+    if v.node and v.node.valid ~= false and v.gasState and v.partPointNow then
+      local ok, gs = pcall(v.gasState)
+      if ok and gs and (gs.cap or 0) > 0 then
+        for _, u in ipairs(gs.tanks or {}) do
+          local x, y, z = v.partPointNow(u, 0, 0, 0, true)
+          if x then
+            local d = len(x - a.x, y - a.y, z - a.z)
+            if d < bd then best, bu, bd, bgs = v, u, d, gs end
+          end
+        end
+      end
+    end
+  end
+  if best and bd <= reach then return best, bu, bd, bgs end
+  return nil, nil, bd
+end
+local function pour_tick(firing, dt)
+  local V = inv()
+  local I = items()
+  if not (V and I) then POUR.on = false return end
+  local cans = V.fills and V.fills(PACK, "gascan") or {}
+  local inCan = 0
+  for _, f in ipairs(cans) do inCan = inCan + f end
+  local v, uid, d, gs = pourTarget()
+  POUR.v, POUR.uid = v, uid
+  local was = POUR.on
+  POUR.on = false
+  if not v then
+    -- (at the Repair Bay's gas pump its own prompt says what E does)
+    local rb = ref("repair_bay")
+    if rb and rb.atPump then prompt = "" return end
+    prompt = string.format("Gas Can  ·  %.1f L  ·  walk up to a craft's gas tank to pour%s  ·  H put it away", inCan,
+      (d and d < 12) and string.format(" (%.0f m)", d) or "")
+    if was and POUR.poured > 0 then lastPour = { litres = POUR.poured, craft = POUR.name, t = now() } end
+    POUR.poured = 0
+    return
+  end
+  local name = v.craftName or "the craft"
+  local room = (gs.cap or 0) - (gs.left or 0)
+  if inCan <= 1e-3 then
+    prompt = string.format("Gas Can empty  ·  fill it at the Repair Bay's gas pump  ·  %s: %.1f / %.0f L", name, gs.left or 0, gs.cap or 0)
+  elseif room <= 0.02 then
+    prompt = string.format("%s's tank is full  ·  %.1f / %.0f L  ·  Gas Can %.1f L", name, gs.left or 0, gs.cap or 0, inCan)
+  elseif firing then
+    local want = math.min(room, inCan, (pour_rules().rate or 2.5) * (dt or 0))
+    local got = V.drawFill(PACK, "gascan", want)
+    local put = (got > 0 and v.gasFill) and v.gasFill(got) or 0
+    -- (what the tanks could not take goes back in the can)
+    if got - put > 1e-6 and V.addFill then V.addFill(PACK, "gascan", got - put) end
+    POUR.poured = POUR.poured + put
+    POUR.name = name
+    POUR.on = true
+    prompt = string.format("pouring into %s  ·  %.1f / %.0f L  ·  Gas Can %.1f L", name, (gs.left or 0) + put, gs.cap or 0, inCan - put)
+    if now() > POUR.gl_t then
+      POUR.gl_t = now() + 0.55 + math.random() * 0.25
+      local x, y, z = v.partPointNow(uid, 0, 0, 0, true)
+      if x and audio and audio.play then
+        pcall(audio.play, "audio/sfx/bubbles_" .. math.random(1, 3) .. ".ogg", x, y, z,
+          { track = "SFX", volume = 0.35, pitch = 0.75 + math.random() * 0.15, mode = "spatial", minDistance = 1.5, maxDistance = 20 })
+      end
+    end
+  else
+    prompt = string.format("LMB (hold)   Pour into %s  ·  %.1f / %.0f L  ·  Gas Can %.1f L", name, gs.left or 0, gs.cap or 0, inCan)
+  end
+  if was and not POUR.on and POUR.poured > 0 then
+    lastPour = { litres = POUR.poured, craft = POUR.name, t = now() }
+    POUR.poured = 0
+  end
+end
+-- the pour: the can lifted over the tank and tipped toward it, the left hand
+-- on its handle, a stream from the spout (lateUpdate: drawn poses only)
+function posePour(p, m, an, o, U, F, Rt)   -- (global: pose_carry, above, calls it)
+  local v, uid = POUR.v, POUR.uid
+  if not (v and uid and v.partPointNow) then return false end
+  local tx, ty, tz = v.partPointNow(uid, 0, 0, 0, true)
+  if not tx then return false end
+  local T = vec3(tx, ty, tz)
+  local d = T - o
+  local dh = d - U * (d.x * U.x + d.y * U.y + d.z * U.z)
+  local dl = math.sqrt(dh.x * dh.x + dh.y * dh.y + dh.z * dh.z)
+  local dir = dl > 1e-3 and dh * (1 / dl) or F
+  local tip = math.rad(68)
+  local Yc = (U * math.cos(tip) + dir * math.sin(tip)):normalized()
+  local Zc = (dir * math.cos(tip) - U * math.sin(tip)):normalized()
+  -- the can's centre: over the filler and a little short of it
+  local c = T + U * 0.30 - dir * 0.10
+  p:setUp(Yc, Zc)
+  p.x, p.y, p.z = c.x, c.y, c.z
+  local sh = an:boneWorld("Upperarm.Left")
+  if sh and an.reach then
+    pcall(an.reach, an, "Hand.Left", c + Yc * 0.16, { pole = sh - U * 0.3 - Rt * 0.4, weight = 1.0 })
+  end
+  -- the stream: from the spout (the can's front top, in its own frame) to the filler
+  local spout = p:toWorld(vec3(0, 0.13, 0.11))
+  if draw and draw.line then
+    draw.line(spout.x, spout.y, spout.z, tx, ty + 0.0, tz, 0.78, 0.62, 0.22, 0.85)
+  end
+  return true
+end
+
 -- ── the frame ───────────────────────────────────────────────────────────────
 local carrying = false
 local function treating()
@@ -1214,10 +1341,15 @@ function update(node, dt)
   if id and I and I.deployOf(id) then
     local firing = (sim and sim.lmb) or (input and input.button and input.button(0) == true)
     deploy_tick(id, firing == true)
+  elseif id == "gascan" then
+    D.req, D.plant = nil, nil
+    local firing = (sim and sim.lmb) or (input and input.button and input.button(0) == true)
+    pour_tick(firing == true, dt)
   else
     D.req, D.plant = nil, nil
     if id and I and not I.isTool(id) then prompt = hint() end
   end
+  if id ~= "gascan" then POUR.on = false end
 end
 
 function fixedUpdate(node, dt)
