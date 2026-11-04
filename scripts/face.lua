@@ -286,11 +286,14 @@ local function apply_look(l)
   local e = l.eye or { 0.35, 0.25, 0.15 }
   knob(ey, "iris", "iris", e[1] ^ 2.2, e[2] ^ 2.2, e[3] ^ 2.2)
   -- the hair cards' material is a plain one: its tint is the colour (the
-  -- atlas is grey strands), grey coming in with age
+  -- atlas is grey strands), grey coming in with age. Blended in sRGB like the
+  -- look, then made linear: a material's colour is linear light, the same as
+  -- the skin shader's "hair" knob the scalp and stubble draw with (handed the
+  -- sRGB value the cards came out lighter than the scalp under them)
   local hm = mat(hair_node, "Hair")
   if hm then
     local g = (l.grey or 0) * 0.6
-    local function ch(x) return math.min(1, x * (1 - g) + 0.42 * g) end
+    local function ch(x) return lin(math.min(1, x * (1 - g) + 0.42 * g)) end
     pcall(function() hm.color = { ch(h[1]), ch(h[2]), ch(h[3]) } end)
   end
   -- the suit's neck: the same skin. A material's colour is linear light, as
