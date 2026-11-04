@@ -242,6 +242,8 @@ function press(role)
     -- (system_generator SCALES; game_manager reads it back). The sliders above
     -- are already in that scale's units.
     save.set("g_scale", WORLD_SCALE)
+    -- and names its worlds from the whole-name list too (system_generator NAMES)
+    save.set("g_names", 2)
     scene.load("system")
   end
 end

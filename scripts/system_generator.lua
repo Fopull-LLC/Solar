@@ -187,10 +187,43 @@ end
 local SYL_A = { "Ka", "Ve", "Zor", "Ath", "Or", "Ta", "Dra", "Pel", "Na", "Gol", "Bry", "Um", "Sol", "Ry" }
 local SYL_B = { "ru", "il", "un", "mi", "quo", "os", "ver", "eth", "and", "ol", "ia", "ex" }
 
+-- WHOLE NAMES (the user's list, 2026-11-04), mixed in with the syllable
+-- rolls from naming version 2 on (`g_names`, written by a new galaxy only:
+-- names key a save's records, so an older save keeps every name it has).
+-- The choice hangs off the rolled name, not a draw of its own, so a seed
+-- still builds the same worlds.
+NAMES = { "Inky", "Unky", "Jurkle", "Eorkle", "Bortle", "Hortle", "Thoulmus", "Uralnus", "Yalnus", "Ispy",
+  "Esse", "Shniste", "Hisstie", "Uwinnie", "Itty", "Yitty", "Hitty", "Dashy", "Sasher", "Gnasher", "Baster",
+  "Ulaster", "Jaster", "Drister", "Sister", "Hinster" }
+NAMES_VERSION = 2
+
+local function name_hash(n)
+  local h = 5381
+  for i = 1, #n do h = (h * 33 + n:byte(i)) % 2147483647 end
+  return h
+end
+
+local function namesV()
+  return tonumber(save and save.get and save.get("g_names")) or 1
+end
+
+-- The whole name a rolled syllable name gives way to (half of them), or nil.
+function wholeName(n, taken)
+  local h = name_hash(n)
+  if h % 2 ~= 0 then return nil end
+  for k = 0, #NAMES - 1 do
+    local w = NAMES[(math.floor(h / 2) + k) % #NAMES + 1]
+    if not taken[w] then return w end
+  end
+  return nil
+end
+
 local function rollName(r, taken)
+  local whole = namesV() >= 2
   while true do
     local n = r:pick(SYL_A) .. r:pick(SYL_B)
     if r:next() < 0.5 then n = n .. r:pick(SYL_B) end
+    if whole then n = wholeName(n, taken) or n end
     if not taken[n] then
       taken[n] = true
       return n

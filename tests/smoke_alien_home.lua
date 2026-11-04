@@ -227,6 +227,33 @@ local s5, b5 = regen(GAL[1], { g_homeKind = "alien", g_homeSeed = s4.g_homeSeed 
 local _, _, o5, c5 = homeOf(s5, b5)
 check("…which regenerates the same world", same_world(o4, c4, o5, c5))
 
+-- ── names: the whole-name list (g_names 2, new galaxies only) ──────────────
+do
+  local function names_of(s)
+    local out, list = {}, {}
+    for _, b in ipairs(s["system.home"].bodies) do out[b.name] = true; list[#list + 1] = b.name end
+    return out, list
+  end
+  local isList = {}
+  for _, n in ipairs(env.NAMES) do isList[n] = true end
+  local sa, ba = regen(GAL[1])
+  local sb, bb = regen(GAL[1], { g_names = 2 })
+  local _, la = names_of(sa)
+  local _, lb = names_of(sb)
+  local listed, old = 0, 0
+  for _, n in ipairs(la) do if isList[n] then old = old + 1 end end
+  for _, n in ipairs(lb) do if isList[n] then listed = listed + 1 end end
+  check("an older save names no world from the list", old == 0, table.concat(la, ","))
+  check("a new galaxy names some worlds from the list", listed > 0, table.concat(lb, ","))
+  check("…and as many worlds as before", #la == #lb)
+  local _, _, oa, ca = homeOf(sa, ba)
+  local _, _, ob, cb = homeOf(sb, bb)
+  check("…and the same home world from the same seed", same_world(oa, ca, ob, cb))
+  local sc, _ = regen(GAL[1], { g_names = 2 })
+  local _, lc = names_of(sc)
+  check("…and the same names again", table.concat(lb, ",") == table.concat(lc, ","))
+end
+
 if failed == 0 then
   print(string.format("✓ alien home: %d checks — default saves untouched, alien homes rolled from %d seeds (%d types), same seed same world", count, #HSEEDS, nt))
   os.exit(0)
