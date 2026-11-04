@@ -4002,6 +4002,7 @@ function undock(port_uid)
       -- one record format the fleet and the dock both read.)
       local rec = E and E.packRecord(d) or {}
       if not E then for k, val in pairs(d) do rec[k] = val end end
+      roboBake(u, rec, dep)
       rec.stage = 0
       if not dep[rec.parent or 0] then rec.parent = 0 end -- the seam is its new root
       sub.parts[n] = rec
@@ -7092,8 +7093,17 @@ local function part_box(node, uid)
   end
   local Xx, Xy, Xz = part_axis_x(d)
   local Yx, Yy, Yz = part_axis(d)
+  local cx, cy, cz = d.x, d.y, d.z
+  -- (a part a joint has moved: its box where the joint has it, roboFlight
+  -- dropping the cached one whenever a joint moves)
+  if R2 and R2.chain[uid] and roboPoint then
+    local p = roboPoint(uid, { d.x, d.y, d.z })
+    local X, Y = roboTurn(uid, { Xx, Xy, Xz }), roboTurn(uid, { Yx, Yy, Yz })
+    cx, cy, cz = p[1], p[2], p[3]
+    Xx, Xy, Xz, Yx, Yy, Yz = X[1], X[2], X[3], Y[1], Y[2], Y[3]
+  end
   local Zx, Zy, Zz = Xy * Yz - Xz * Yy, Xz * Yx - Xx * Yz, Xx * Yy - Xy * Yx
-  b = { cx = d.x, cy = d.y, cz = d.z, m = math.max(0.01, d.mass or 0.5),
+  b = { cx = cx, cy = cy, cz = cz, m = math.max(0.01, d.mass or 0.5),
         ex = math.abs(Xx) * hx + math.abs(Yx) * hy + math.abs(Zx) * hz,
         ey = math.abs(Xy) * hx + math.abs(Yy) * hy + math.abs(Zy) * hz,
         ez = math.abs(Xz) * hx + math.abs(Yz) * hy + math.abs(Zz) * hz,
@@ -8723,12 +8733,23 @@ function r2SplitCraft(node, info, dec_uid, dep, parts_nodes, nx, ny, nz)
   local E = elib()
   local sub, n = { parts = {} }, 0
   local sub_charge = 0
+  -- (which live node is which part, and which parts a joint that leaves
+  -- with them has moved off their records: splitRebase)
+  local ids, now = {}, {}
+  for _, ch in ipairs(parts_nodes) do if ch.id then ids[ch.id] = eid_uid[ch.id] end end
+  for u in pairs(dep) do
+    local r0 = R2.rest[u]
+    local d = bp_by_uid[u]
+    if r0 then now[u] = roboPoint(u, { r0.x, r0.y, r0.z }) elseif d then now[u] = { d.x, d.y, d.z } end
+  end
   for u in pairs(dep) do
     local d = bp_by_uid[u]
     if d and not integ.gone[u] then
       n = n + 1
       if type(d.st) == "table" and d.st.charge then sub_charge = sub_charge + d.st.charge end
       local rec = E and E.packRecord(d) or {}
+      -- (where the joints that stay behind have put it: roboBake)
+      roboBake(u, rec, dep)
       -- its own staging order rides along (its decouplers fire in the order
       -- the builder gave them, on the new craft's SPACE)
       if not dep[rec.parent or 0] then rec.parent = 0 end
@@ -8793,6 +8814,7 @@ function r2SplitCraft(node, info, dec_uid, dep, parts_nodes, nx, ny, nz)
       local ly = dx * up.x + dy * up.y + dz * up.z
       local lz = dx * rz.x + dy * rz.y + dz * rz.z
       for _, rec in ipairs(sub.parts) do rec.x, rec.y, rec.z = rec.x - lx, rec.y - ly, rec.z - lz end
+      splitRebase(stage, sub.parts, ids, now, lx, ly, lz)
       sub.name = name
       save.set("dock.handoff." .. tostring(stage.id or 0), sub)
       local m = math.max(0.1, si.mass or 1)
@@ -8802,6 +8824,34 @@ function r2SplitCraft(node, info, dec_uid, dep, parts_nodes, nx, ny, nz)
     log(string.format("STAGED — %s away as its own craft (%d parts)", name, n))
   end, "Vessel")
   return true
+end
+
+-- THE NEW CRAFT'S RECORDS AGAINST ITS PARTS. The handoff's records are
+-- re-based by the new root's offset from ours, read from two assemblies'
+-- infos in the split callback; on a craft climbing at 6 m/s every part came
+-- out 0.10 m off its record (a tick of travel), so the first time a joint on
+-- the new craft wrote its parts' poses from the records it jumped them that
+-- far against the rest (servoprobe sair stage). The offset is measured
+-- instead from the new craft's own part nodes: each one's place in its
+-- frame against where it was in ours (`now`, as the joints had it, less the
+-- same offset), and every record moved by the mean.
+function splitRebase(stage, recs, ids, now, lx, ly, lz)
+  if not (stage and stage.valid ~= false and stage.children) then return end
+  local by = {}
+  for _, rec in ipairs(recs) do if rec.uid then by[rec.uid] = rec end end
+  local sx, sy, sz, n = 0, 0, 0, 0
+  for _, ch in ipairs(stage:children()) do
+    local u = ch.id and ids[ch.id]
+    local q = u and by[u] and now[u]
+    if q then
+      sx, sy, sz, n = sx + (ch.x or 0) - (q[1] - lx), sy + (ch.y or 0) - (q[2] - ly), sz + (ch.z or 0) - (q[3] - lz), n + 1
+    end
+  end
+  if n == 0 then return end
+  local ox, oy, oz = sx / n, sy / n, sz / n
+  if ox * ox + oy * oy + oz * oz < 1e-6 or ox * ox + oy * oy + oz * oz > 400 then return end
+  for _, rec in ipairs(recs) do rec.x, rec.y, rec.z = rec.x + ox, rec.y + oy, rec.z + oz end
+  log(string.format("split: the new craft's records re-based by (%.3f, %.3f, %.3f) from its %d parts", ox, oy, oz, n))
 end
 
 -- STAGING: what SPACE does once the clamps are off — the next event in the
@@ -10246,6 +10296,8 @@ local function robo_write(node)
   end
   -- (a Drive Chain to a wheel the joints carry runs to where its sprocket is now)
   if moved then roboChains(node) end
+  -- (an engine's thrust, a wing's lift: where the joints have them now)
+  if moved then roboFlight() end
   if moved then
     assembly.syncColliders(node)
     -- re-derive mass, centre of mass and inertia (floptle/0406): nudge one
@@ -10294,6 +10346,147 @@ function roboPoint(u, q)
   if not (rest and p) then return q end
   local d = roboTurn(u, { q[1] - rest.x, q[2] - rest.y, q[3] - rest.z })
   return { p[1] + d[1], p[2] + d[2], p[3] + d[3] }
+end
+
+-- THRUST AND AIR WHERE THE JOINTS PUT THEM (robo_write, whenever a joint
+-- moved). The engine list and the aero model are built from the blueprint,
+-- so an engine on a servo hinge pushed along its blueprint axis whatever the
+-- hinge did (no thrust vectoring), and a wing folded up on a hinge kept
+-- lifting as if it were flat. Each engine on a joint now pushes from where
+-- its part is, along its part's +Y as posed; each surface, body and intake
+-- of the aero model (aeroPose) follows its part the same way. The centre of
+-- mass follows by the compound's re-weigh (robo_write's nudge), and the
+-- centre of lift by the surfaces' own places.
+function roboFlight()
+  R2.roboGen = (R2.roboGen or 0) + 1
+  -- (the parts' collision boxes, for the stress model, contacts and a
+  -- staging's clearance: made again where the joints have them)
+  for u in pairs(R2.chain) do integ.box[u] = nil end
+  for _, e in ipairs(engines) do
+    if e.uid and R2.chain[e.uid] and not integ.gone[e.uid] then
+      local p, B = robo_pose(e.uid)
+      if p then
+        e.x, e.y, e.z = p[1], p[2], p[3]
+        e.dx, e.dy, e.dz = B[2][1], B[2][2], B[2][3]
+      end
+    end
+  end
+  aeroPose()
+end
+-- A PIECE THAT LEAVES FROM A JOINT (a decoupler under a servo, a stage on a
+-- piston; r2SplitCraft and undock). Its records carry their blueprint
+-- (rest) poses, and the joints that posed them stay on this craft, so the
+-- new craft would have thrust, wheels, aero and its own joints laid out as
+-- if those joints were at zero, while its parts fly where they really are.
+-- Each departing record is given the pose the joints staying behind put it
+-- in (the departing joints keep their own state: the new craft drives them
+-- from that pose on).
+function roboBake(u, rec, dep)
+  -- (a joint that leaves: its moving half back at rest, where the new craft
+  -- reads its rest from before posing it at its angle again)
+  for _, r in ipairs(R2.robo) do
+    local n = (r.uid == u) and r.pose0 and R2.node[u]
+    if n and n.valid then
+      for nm, p in pairs(r.pose0) do
+        local c = child_named(n, nm)
+        if c then c.x, c.y, c.z = p.x, p.y, p.z; c:setAngles(0, 0, 0) end
+      end
+    end
+  end
+  local ch = R2.chain[u] or {}
+  local rest = R2.rest[u]
+  if not (rest and rec) then return end
+  local flip = roboFlips(dep)
+  local p, B = { rest.x, rest.y, rest.z }, { rest.X, rest.Y, rest.Z }
+  local any, seen = false, {}
+  for _, r in ipairs(ch) do
+    if not dep[r.uid] or flip[r.uid] then p, B = robo_apply(r, p, B); any = true end
+    seen[r.uid] = true
+  end
+  -- (a flipped joint turns the whole piece, the side it did not move and
+  -- itself as well: on the new craft it moves that side back by the angle)
+  for _, r in ipairs(R2.robo) do
+    if flip[r.uid] and not seen[r.uid] then p, B = robo_apply(r, p, B); any = true end
+  end
+  if not any then return end
+  rec.x, rec.y, rec.z = p[1], p[2], p[3]
+  rec.yaw, rec.pitch, rec.roll = r2_euler(B[1], B[2], B[3])
+  -- (a flipped joint's own body turns with its piece: its halves, posed from
+  -- it on the new craft, then sit on the parts they carry)
+  local jn = flip[u] and R2.node[u]
+  if jn and jn.valid then jn:setAngles(rec.yaw, rec.pitch, rec.roll) end
+end
+-- THE JOINTS A LEAVING PIECE TURNS ROUND. A joint moves the side of it away
+-- from the command part. A joint that leaves with a piece whose own command
+-- part is on the side it moved here (pod | decoupler | tank – hinge – probe
+-- core) moves the OTHER side on the new craft, by the same angle the other
+-- way. Its piece is handed over turned by that angle (roboBake), so the
+-- flipped joint puts every part just where it is. (Memoised per departing set.)
+function roboFlips(dep)
+  if R2.flipDep == dep then return R2.flips end
+  local E = elib()
+  local out = {}
+  for _, r in ipairs(R2.robo) do
+    if dep[r.uid] and r.set then
+      local cin, cout = false, false
+      for u in pairs(dep) do
+        local d = bp_by_uid[u]
+        if u ~= r.uid and d and not integ.gone[u] and E and E.modOf(d, "command") then
+          if r.set[u] then cin = true else cout = true end
+        end
+      end
+      -- (only a craft moved by no joint staying behind: a joint inside another's
+      -- moving set is left to its own pose)
+      local outer = false
+      for _, q in ipairs(R2.chain[r.uid] or {}) do if not dep[q.uid] then outer = true end end
+      if cin and not cout and not outer then out[r.uid] = true end
+    end
+  end
+  R2.flipDep, R2.flips = dep, out
+  return out
+end
+
+-- Each engine's place and thrust axis as the thrust loop uses them (vessel
+-- frame; a copy), for probes and readouts.
+function engineAxes()
+  local out = {}
+  for _, e in ipairs(engines) do
+    out[#out + 1] = { uid = e.uid, x = e.x, y = e.y, z = e.z, dx = e.dx, dy = e.dy, dz = e.dz, thrust = e.thrust, jet = e.jet }
+  end
+  return out
+end
+
+-- The aero model's elements on moving parts, posed (aeroTick calls it too:
+-- a model rebuilt from the blueprint, a gear folding, starts at rest).
+function aeroPose()
+  local M = AERO.model
+  if not M or M.roboGen == (R2.roboGen or 0) then return end
+  M.roboGen = R2.roboGen or 0
+  local function v3(a) return { a.x, a.y, a.z } end
+  local function xyz(a) return { x = a[1], y = a[2], z = a[3] } end
+  local moved = false
+  local function pose(el, axes)
+    local u = el.uid
+    if not (u and R2.chain[u] and R2.rest[u]) then return end
+    -- (each element's rest as the blueprint built it, kept the first time)
+    local r0 = el.r0
+    if not r0 then
+      r0 = { p = { el.x or 0, el.y or 0, el.z or 0 } }
+      for _, k in ipairs(axes) do r0[k] = v3(el[k]) end
+      el.r0 = r0
+    end
+    if el.x then
+      local p = roboPoint(u, r0.p)
+      el.x, el.y, el.z = p[1], p[2], p[3]
+    end
+    for _, k in ipairs(axes) do el[k] = xyz(roboTurn(u, r0[k])) end
+    moved = true
+  end
+  for _, s in ipairs(M.surfs or {}) do pose(s, { "X", "Y", "Z" }) end
+  for _, b in ipairs(M.bodies or {}) do pose(b, { "X", "Y", "Z" }) end
+  for _, it in ipairs(M.intakes or {}) do pose(it, { "Y" }) end
+  -- (the wake is cut again for the parts' new places)
+  if moved then M.flow = nil end
 end
 
 -- r2_scan, once the robotic chains are known: each moving wheel's rest mount,
@@ -10526,13 +10719,55 @@ function roboRehang(node, w, info)
   R2.rehangs = (R2.rehangs or 0) + 1
 end
 
+-- THE WEIGHT A JOINT FEELS. A joint lifts what it carries against the
+-- weight the craft's parts FEEL: gravity on the ground, nothing in a coast
+-- (an orbit, a ballistic fall, a hop off a ramp), and the thrust's push
+-- under power (a rocket at 2 g makes everything on a joint twice as heavy,
+-- AWAY from the engines). That is gravity less the craft's own
+-- acceleration, measured from its body-relative velocity tick to tick
+-- (smoothed, a contact's spike or a change of sphere of influence left
+-- out). (The load was gravity always: a servo in orbit stalled on a part
+-- that weighed nothing there, and one under thrust felt only 1 g.)
+ROBO_FELT_K = 8.0       -- 1/s: how fast the measured acceleration is followed
+function roboFeltTick(info, dt)
+  local cm = info.com or info.origin
+  local gx, gy, gz = 0, 0, 0
+  if space.gravity then
+    local x, y, z = space.gravity(cm.x, cm.y, cm.z)
+    if x then gx, gy, gz = x, y, z end
+  end
+  local v = info.vel
+  local A = R2.acc
+  if info.anchored or info.grounded or not v then
+    -- (held up by the ground or the clamps: its weight is all gravity)
+    R2.acc = v and { vx = v.x, vy = v.y, vz = v.z, ax = 0, ay = 0, az = 0 } or nil
+    R2.felt = { gx, gy, gz }
+    return
+  end
+  if not A then
+    A = { vx = v.x, vy = v.y, vz = v.z, ax = 0, ay = 0, az = 0 }
+  elseif (dt or 0) > 0 then
+    local ax, ay, az = (v.x - A.vx) / dt, (v.y - A.vy) / dt, (v.z - A.vz) / dt
+    if ax * ax + ay * ay + az * az < 250 * 250 then
+      local k = 1 - math.exp(-ROBO_FELT_K * dt)
+      A.ax, A.ay, A.az = A.ax + (ax - A.ax) * k, A.ay + (ay - A.ay) * k, A.az + (az - A.az) * k
+    end
+    A.vx, A.vy, A.vz = v.x, v.y, v.z
+  end
+  R2.acc = A
+  R2.felt = { gx - A.ax, gy - A.ay, gz - A.az }
+end
+function roboFelt()
+  local f = R2.felt
+  if not f then return nil end
+  return f[1], f[2], f[3]
+end
+
 -- The gravity torque (about a hinge's or rotor's axis) or force (along a
 -- piston) the moving set puts on the motor, vessel frame: what it has to
 -- beat to move the load AGAINST gravity.
 local function robo_load(node, info, r)
-  if not space.gravity then return 0 end
-  local cm = info.com or info.origin
-  local gx, gy, gz = space.gravity(cm.x, cm.y, cm.z)
+  local gx, gy, gz = roboFelt()
   if not gx then return 0 end
   local rx, up, rz = basis(node)
   local g = { gx * rx.x + gy * rx.y + gz * rx.z, gx * up.x + gy * up.y + gz * up.z, gx * rz.x + gy * rz.y + gz * rz.z }
@@ -10568,6 +10803,7 @@ end
 local function robo_tick(node, info, dt)
   local E = elib()
   if not E or #R2.robo == 0 then return end
+  roboFeltTick(info, dt)
   local changed = not R2.posed
   for _, r in ipairs(R2.robo) do
     local d = r.d
@@ -13094,7 +13330,23 @@ end
 
 -- A landing gear folded away (G): its fold, by the same per-part animation the
 -- legs use.
-function gearIsUp(uid) return (panim[uid] or 1) < 0.5 end
+function gearIsUp(uid) return (panim[uid] or 1) < 0.5 or roboGearFolded(uid) end
+-- A LANDING GEAR FOLDED BY A JOINT (a gear leg on a Servo Hinge swung up
+-- into the wing): past ROBO_GEAR_FOLD_DEG from where it was built it is
+-- stowed exactly as G stows it, its tyre in, its box a stub, its drag a
+-- faired leg's; swung back down past that it is down again. (Left out, its
+-- live tyre hung on a mount folded into the airframe and threw the jet out
+-- of the sky: servoprobe sair plane.)
+ROBO_GEAR_FOLD_DEG = 45
+function roboGearFolded(uid)
+  local rest = R2.rest[uid]
+  if not (rest and R2.chain[uid]) then return false end
+  local d = bp_by_uid[uid]
+  if not afHas(d, "gear") then return false end
+  local X = roboTurn(uid, rest.X)
+  local c = X[1] * rest.X[1] + X[2] * rest.X[2] + X[3] * rest.X[3]
+  return c < math.cos(math.rad(ROBO_GEAR_FOLD_DEG))
+end
 function gearState()
   local up = false
   for _, w in ipairs(R2.wheels) do if w.gear and gearIsUp(w.uid) then up = true end end
@@ -13201,6 +13453,8 @@ function aeroTick(node, info, dt, thr, sp, sy, sr, ex, ey, ez, apx, apy, apz, ay
     end
   end
   local M = AERO.model
+  -- (its parts where the joints have them: roboFlight)
+  aeroPose()
   if rho <= 0 and #M.jets == 0 then AERO.hud = nil return end
   -- into the vessel frame: the centre of mass, the air past it, the spin
   local rx, up, rz = basis(node)

@@ -454,6 +454,48 @@ That is a warning only; the craft still launches.
 Probe: `tools/perf/servoprobe.sh <engine> [none arm direct elec far]`
 (`servoprobe_modes.lua`). Smoke: `tests/smoke_servo_wheels.lua`.
 
+## 3g. Robotics on flying craft (2026-11-04)
+
+Robotic parts are kinematic inside one compound: `robo_write` poses the
+moved parts' nodes and the compound re-weighs. Everything the flight builds
+from the blueprint has to follow them too (`vessel_controller` `roboFlight`,
+called whenever a joint moved):
+
+- **Thrust.** An engine on a joint pushes from where its part is, along its
+  part's +Y as posed. A Sputter on a Servo Hinge is a real thrust-vectoring
+  gimbal, and engines on hinges tilt from lift to push (VTOL).
+- **Air.** Each surface, drag body and intake of the aero model follows its
+  part (`aeroPose`), so a wing folded on a hinge stops lifting, a hinge-driven
+  canard or flap acts by its angle, and the centre of lift moves with them.
+  The centre of mass follows by the re-weigh.
+- **Boxes.** The collision boxes the stress model, contacts and a staging's
+  clearance use (`part_box`) are made again where the joints have the parts.
+- **The weight a joint lifts** (`roboFeltTick`) is what the craft's parts
+  feel: gravity on the ground, nothing in a coast or an orbit, the thrust's
+  push under power (gravity less the craft's measured acceleration).
+- **Landing gear on a joint.** A gear leg a joint has swung more than
+  `ROBO_GEAR_FOLD_DEG` (45°) from where it was built is stowed exactly as G
+  stows it (`roboGearFolded` in `gearIsUp`): its tyre comes in, its box is a
+  stub and its drag a faired leg's. Swung back, it is down again. (A live
+  tyre left on a mount folded into the airframe threw the jet out of the sky.)
+- **Staging.** A piece that leaves from a joint that stays behind (a
+  decoupler under a servo) is handed over with the pose that joint gave it
+  (`roboBake`), so the new craft's thrust, wheels and own joints start where
+  its parts really are. A joint that leaves keeps its angle, its moving half
+  back at rest for the new craft to pose again. A joint whose new craft has
+  its command part on the side it moved here (pod | decoupler | tank – hinge
+  – probe core) moves the other side there, so its piece is handed over
+  turned by its angle (`roboFlips`) and nothing jumps. The handoff's records
+  are re-based from the new craft's own part nodes (`splitRebase`): read from
+  two assemblies' infos, a craft climbing at 6 m/s came out a tick of travel
+  (0.10 m) off, and the first joint write jumped its parts that far.
+- **The SAS.** A joint bound to the stick (W/S, A/D, Q/E) moves with it, and
+  the SAS lets go of that axis while the stick is held. A joint moved by any
+  other key is not the stick: the SAS keeps holding the heading against it.
+
+Probe: `MODE=sair tools/perf/servoprobe.sh <engine> gimbal tilt plane stage
+stage2 keep` (`servoair_modes.lua`).
+
 ## 3f. Part masses (audit 2026-11-04)
 
 The bike parts weighed 2–4× their real counterparts, so a gas 500 built from
