@@ -356,7 +356,7 @@ PREVIEW_TARGET = "itempreview"
 local PV = { px = 256, fov = 0.40, bit = 3, layer = "viewmodel", up = 1500 }
 -- Each model's largest extent (m), for the framing.
 PREVIEW_SIZE = { gravgun = 0.95, laser = 1.05, surveyor = 1.15, repairkit = 0.40, medkit = 0.26,
-                 beacon = 1.30, flag = 1.30, rcspack = 0.75, o2tank = 0.70, gascan = 0.34 }
+                 beacon = 1.30, flag = 1.30, rcspack = 0.75, o2tank = 0.70, gascan = 0.34, rope = 0.89 }
 local pv = { cam = nil, making = false, item = nil, id = nil, want = nil, ready = false, spin = 0,
              on = false, dist = 2, planet = nil, frame = nil, frame_t = -10 }
 previewId = nil   -- the item on the stand (probes)

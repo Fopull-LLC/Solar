@@ -131,6 +131,10 @@ local on_rock = 0
 for k = 3, math.floor(L3.total) - 3 do if (R.wallAt(L3, k) or 9) < 0.1 then on_rock = on_rock + 1 end end
 check(on_rock >= 3, string.format("lying on the slab, the feet find the rock (%d metres)", on_rock))
 check(L3.s_max > L3.s_top + 5, "and it climbs")
+-- the feet's wall distance blends between the metres
+check(near(R.wallSmooth({ wd = { 0.2, 0.4 } }, 0.25), 0.25, 1e-9) and R.wallSmooth({ wd = { -1, -1 } }, 0.5) == nil
+  and near(R.wallSmooth(L3, 4.5), ((R.wallAt(L3, 4) or 0) + (R.wallAt(L3, 5) or 0)) / 2, 1e-9),
+  "the wall's distance blends between the metres")
 
 -- 3. a 50 m drop: the line hangs free and ends in the air
 local cast3 = world(function(z) return z > 0 and 50 or 0 end)
@@ -204,6 +208,60 @@ s_a = st.s
 R.move(st, 1, 0.02, up1, dn1, L)
 local fast = s_a - st.s
 check(fast > 2 * slow, string.format("the stroke: slow as the cam bites, fast as it pulls (%.4f vs %.4f)", slow, fast))
+
+
+-- THE DIG GUARD: a box round the davit's plate and staked stays, under the
+-- ground, in the body's frame (base_facilities.guard_dist's measure)
+local function gdist(g, q)
+  local rx, ry, rz = q[1] - g.c.x, q[2] - g.c.y, q[3] - g.c.z
+  local a = rx * g.t.x + ry * g.t.y + rz * g.t.z
+  local b = rx * g.up.x + ry * g.up.y + rz * g.up.z
+  local s = rx * g.n.x + ry * g.n.y + rz * g.n.z
+  local ea, es = math.max(0, math.abs(a) - g.ht), math.max(0, math.abs(s) - g.hn)
+  local eb = b < g.lo and g.lo - b or (b > g.hi and b - g.hi or 0)
+  return math.sqrt(ea * ea + es * es + eb * eb)
+end
+do
+  -- a davit on a 600 m world at its north pole, planted from +z (its boom −z)
+  local e = { b = "Rock", x = 0, y = 600, z = 0, fx = 0, fy = 0, fz = 3 }
+  local g = R.guardBox(e)
+  local function dt(a, b) return a.x * b.x + a.y * b.y + a.z * b.z end
+  check(near(dt(g.t, g.up), 0, 1e-9) and near(dt(g.t, g.n), 0, 1e-9) and near(dt(g.up, g.n), 0, 1e-9)
+    and near(g.up.y, 1, 1e-9) and near(g.n.z, 1, 1e-9), "guard: its axes are the davit's (up, toward the planter, side)")
+  check(gdist(g, { 0, 599.5, 0 }) == 0, "guard: the ground under the plate is guarded")
+  check(gdist(g, { 0.42, 599.7, 0.52 }) == 0 and gdist(g, { -0.42, 599.7, 0.52 }) == 0, "guard: under both stakes")
+  check(gdist(g, { 0, 599.0, 0.2 }) == 0, "guard: 1 m down")
+  check(gdist(g, { 0, 598.4, 0 }) > 0.25, "guard: but not 1.6 m down")
+  check(gdist(g, { 0, 599.5, -2.0 }) > 1.4, "guard: the drop in front of the boom can be dug")
+  check(gdist(g, { 2.0, 599.5, 0 }) > 1.3, "guard: and 2 m to the side")
+  check(gdist(g, { 0, 599.0, -1.3 }) > 0.6, "guard: a laser's 0.6 m ball 1.3 m out in front is clear of it")
+  -- groups: near davits (one grid cell) share an owner, far ones and other worlds get their own
+  local recs = {
+    e, { b = "Rock", x = 20, y = 599.6, z = 5, fx = 1, fy = 0, fz = 0 }, { b = "Rock", x = 30, y = 599.1, z = 10, fx = 0, fy = 0, fz = -1 },
+    { b = "Rock", x = 0, y = 0, z = 600, fx = 1, fy = 0, fz = 0 }, { b = "Moon", x = 0, y = 300, z = 0, fx = 1, fy = 0, fz = 0 },
+  }
+  local G = R.guardGroups(recs)
+  local owners, boxes, biggest = 0, 0, 0
+  for k, o in pairs(G) do
+    owners = owners + 1
+    boxes = boxes + #o.list
+    biggest = math.max(biggest, #o.list)
+    check(k:sub(1, 5) == "rope:" and (o.body == "Rock" or o.body == "Moon"), "guard: owner " .. k)
+  end
+  check(owners == 3 and boxes == 5 and biggest == 3, string.format("guard: 5 davits in 3 owners (%d owners, %d boxes)", owners, boxes))
+  -- many davits stay cheap: 400 across a world, a dig tests few boxes
+  local many = {}
+  for i = 1, 400 do
+    local a, z = i * 2.39996, 1 - 2 * (i - 0.5) / 400
+    local r = math.sqrt(1 - z * z)
+    many[i] = { b = "Rock", x = 600 * r * math.cos(a), y = 600 * r * math.sin(a), z = 600 * z, fx = 0, fy = 0, fz = 1 }
+  end
+  local M = R.guardGroups(many)
+  local n, mx = 0, 0
+  for _, o in pairs(M) do n = n + 1; mx = math.max(mx, #o.list) end
+  check(n > 20 and mx < 40, string.format("guard: 400 davits spread over %d owners, at most %d in one", n, mx))
+  check(next(R.guardGroups({})) == nil, "guard: no davits, no owners")
+end
 
 for _, f in ipairs(failures) do print("FAIL " .. f) end
 print(string.format("smoke_rope: %d passed, %d failed", passed, #failures))

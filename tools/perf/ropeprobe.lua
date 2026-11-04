@@ -16,6 +16,10 @@
 --   9. a reload (scene.load): the davit and its line are there again, the
 --      layout from the save
 --  10. E held at the davit: taken down, back in the pack, the save clean
+--  11. (follow-ups) the depot's card turns the kit on its stand; the dig guard
+--      under a planted davit (refused there, free out over the pit, gone with
+--      the kit); a number key while clipped on swaps nothing; both fists on
+--      the line (the fist's miss, every frame of the climb)
 --
 -- Pictures (1280×720) to user://ropeshots/, lines "RPB ", one RESULT a check.
 defaults = { quit = 1, slot = 23, seed = 5150, scale = 4, reload = 1 }
@@ -155,8 +159,49 @@ local function astro_rel()
   return { x = a.x - ox, y = a.y - oy, z = a.z - oz }
 end
 
+local function wpos(n) return n.worldPos or vec3(n.worldX, n.worldY, n.worldZ) end
+local function face_pt(tx, ty, tz, pitch)
+  local cam = findScript("planet_camera")
+  local a = find("Astronaut")
+  local b = home()
+  local u = unit({ x = a.x - b.x, y = a.y - b.y, z = a.z - b.z })
+  local ex, ey, ez = a.x + u.x * 1.5, a.y + u.y * 1.5, a.z + u.z * 1.5
+  local dx, dy, dz = tx - ex, ty - ey, tz - ez
+  local v = dx * u.x + dy * u.y + dz * u.z
+  local hx, hy, hz = dx - u.x * v, dy - u.y * v, dz - u.z * v
+  local hl = len(hx, hy, hz)
+  if cam and cam.face and hl > 1e-3 then cam.face(hx / hl, hy / hl, hz / hl, pitch or -0.18) end
+end
+-- Stand the crew `d` m from a world point, on the side toward `from`, on the ground.
+local function stand_near(p, from, d)
+  local C = findScript("crew")
+  local b = home()
+  local a = find("Astronaut")
+  local u = unit({ x = p.x - b.x, y = p.y - b.y, z = p.z - b.z })
+  local o = { x = from.x - p.x, y = from.y - p.y, z = from.z - p.z }
+  local k = o.x * u.x + o.y * u.y + o.z * u.z
+  local t = unit({ x = o.x - u.x * k, y = o.y - u.y * k, z = o.z - u.z * k })
+  local px, py, pz = p.x + t.x * d, p.y + t.y * d, p.z + t.z * d
+  local pu = unit({ x = px - b.x, y = py - b.y, z = pz - b.z })
+  local gr = ground_r(b, pu.x, pu.y, pu.z, len(px - b.x, py - b.y, pz - b.z) + 30)
+  if not gr then return false end
+  a.x, a.y, a.z = b.x + pu.x * (gr + 1.1), b.y + pu.y * (gr + 1.1), b.z + pu.z * (gr + 1.1)
+  a.vx, a.vy, a.vz = 0, 0, 0
+  if C and C.quietMonitors then C.quietMonitors(1.0) end
+  return true
+end
+
 -- 8. the frames, measured every frame while a climb runs (lateUpdate)
 local FR = { on = false, n = 0, max = 0, sum = 0 }
+-- 11. the fists' miss from the line, every frame on the line (rope_climb.poseInfo)
+local GR = { n = 0, R = 0, L = 0, Rmax = 0, Lmax = 0, R0max = 0, L0max = 0, cR = 1, cL = 1 }
+local function grip_line(tag)
+  local pi = findScript("rope_climb").poseInfo
+  if not pi then P("grip %s: no pose", tag) return end
+  P("grip %s: right %.3f m (first reach %.3f), left %.3f m (first %.3f); curl R %.2f L %.2f; feet on the wall %s (wall %.2f m); lean %.2f rad (head %.2f m out past the hips); s %.2f",
+    tag, pi.gripR or -1, pi.gripR0 or -1, pi.gripL or -1, pi.gripL0 or -1, pi.curlR or -9, pi.curlL or -9, tostring(pi.feet),
+    pi.wall or -1, pi.lean or 0, pi.lead or -9, pi.s or -1)
+end
 function lateUpdate(node, dt)
   place_cam()
   if not (FR.on and F and F.id) then return end
@@ -168,6 +213,15 @@ function lateUpdate(node, dt)
   local bx, by, bz = rc.bodyAt(L, st.s)
   local e = len(p.x - bx, p.y - by, p.z - bz)
   FR.n, FR.sum, FR.max = FR.n + 1, FR.sum + e, math.max(FR.max, e)
+  local pi = rc.poseInfo
+  if pi and pi.gripR and pi.gripL and (pi.w or 0) > 0.99 then
+    GR.n, GR.R, GR.L = GR.n + 1, GR.R + pi.gripR, GR.L + pi.gripL
+    if pi.gripR > GR.Rmax then GR.Rs = pi.s end
+    if pi.gripL > GR.Lmax then GR.Ls = pi.s end
+    GR.Rmax, GR.Lmax = math.max(GR.Rmax, pi.gripR), math.max(GR.Lmax, pi.gripL)
+    GR.R0max, GR.L0max = math.max(GR.R0max, pi.gripR0 or 0), math.max(GR.L0max, pi.gripL0 or 0)
+    GR.cR, GR.cL = math.min(GR.cR, pi.curlR or -9), math.min(GR.cL, pi.curlL or -9)
+  end
 end
 
 local function main()
@@ -184,6 +238,38 @@ local function main()
   R("shop", listed ~= nil and listed.cost == 180 and okb and b0 - co.balance() == 180 and inv.itemCount("astro", "rope") == 1,
     "listed %s ($%s, %s kg, %s L); bought: %s %s; in the pack %d", tostring(listed ~= nil), tostring(listed and listed.cost),
     tostring(listed and listed.kg), tostring(listed and listed.L), tostring(okb), tostring(whyb), inv.itemCount("astro", "rope"))
+  -- 11a. the depot's card: the kit on its stand
+  do
+    local ip, depn = findScript("inventory_panel"), find("FacDepot")
+    if ip and depn and ip.openCounters then
+      local hb = home()
+      local mid = { x = hb.x + save.get("base.x"), y = hb.y + save.get("base.y"), z = hb.z + save.get("base.z") }
+      stand_near(wpos(depn), mid, 11)
+      hold(1.0)
+      local dw = wpos(depn)
+      face_pt(dw.x, dw.y, dw.z)
+      hold(0.5)
+      ip.openCounters("buy")
+      ip.detailId = "rope"
+      local ready = wait_for(function() return ip.previewReady() and ip.previewId == "rope" end, 15, "the kit on the stand")
+      hold(1.5)
+      shot("00_depot_card")
+      frames(3)
+      wait_for(function()
+        local an = ip.previewSpin and ip.previewSpin() or 0
+        return math.abs(0.45 * math.cos(an) + 0.78 * math.sin(an)) < 0.12
+      end, 10, "the kit side-on")
+      shot("00b_depot_card_side")
+      frames(3)
+      R("depot_card", ready ~= nil and ip.shownId == "rope" and ip.PREVIEW_SIZE and ip.PREVIEW_SIZE.rope ~= nil,
+        "preview %s, shown %s, framed for %s m", tostring(ready ~= nil), tostring(ip.shownId),
+        tostring(ip.PREVIEW_SIZE and ip.PREVIEW_SIZE.rope))
+      if ip.closePanel then ip.closePanel() end
+      hold(0.5)
+    else
+      P("no depot here (inventory_panel %s, FacDepot %s)", tostring(ip ~= nil), tostring(depn ~= nil))
+    end
+  end
   -- 2. the pit
   local b, bname = home()
   local bx, by, bz = save.get("base.x"), save.get("base.y"), save.get("base.z")
@@ -262,6 +348,21 @@ local function main()
   if not id then return end
   F.id = id
   local rc = wait_for(function() return findScript("rope_climb") end, 10, "RopeLib")
+  -- 11b. the dig guard under the davit
+  do
+    local bf = findScript("base_facilities")
+    wait_for(function() return (rc.guardCount or 0) >= 1 end, 5, "the davit's dig guard")
+    b = home()
+    local under = add(gp, F.u, -0.5)
+    local stake = add(add(gp, F.u, -0.3), F.t2, 0.5)
+    local out = add(add(gp, F.u, -1.0), F.t2, -2.0)
+    local why_u = bf.digRefused(b.x + under.x, b.y + under.y, b.z + under.z, 0.6)
+    local why_s = bf.digRefused(b.x + stake.x, b.y + stake.y, b.z + stake.z, 0.3)
+    local why_o = bf.digRefused(b.x + out.x, b.y + out.y, b.z + out.z, 0.6)
+    R("dig_guard", why_u ~= nil and why_s ~= nil and why_o == nil and rc.guardCount == 1,
+      "under the plate: %s; under a stake: %s; 2 m out over the pit: %s; davits guarded %d", tostring(why_u), tostring(why_s),
+      tostring(why_o), rc.guardCount or -1)
+  end
   local L = rc and wait_for(function() return rc.layoutOf(id) end, 20, "the layout")
   local pn = wait_for(function() return dep.nodeOf(id) end, 10, "the davit node")
   local line = pn and wait_for(function()
@@ -314,6 +415,24 @@ local function main()
   R("clip_top", s1 and s1.mode == "on" and math.abs(s1.s - L.s_top) < 0.02 and C.held(),
     "climbing %s mode %s s %.2f (top %.2f); held %s", tostring(rc.climbing()), tostring(s1 and s1.mode), s1 and s1.s or -1,
     L.s_top, tostring(C.held()))
+  -- 11c. a number key while clipped on: nothing comes out of the pack
+  do
+    local _, swt0 = H.swapState()
+    tap("1")
+    frames(6)
+    local _, swt1 = H.swapState()
+    local held1 = H.held()
+    tap("2")
+    frames(6)
+    local _, swt2 = H.swapState()
+    local okh2, whyh2 = H.hold("gravgun")
+    frames(3)
+    R("hotbar_on_rope", held1 == nil and H.held() == nil and swt1 == swt0 and swt2 == swt0 and not okh2 and rc.climbing(),
+      "after 1: held %s, swap %s; after 2: swap %s (t0 %s); hold(gravgun) → %s %s", tostring(held1), tostring(swt1 ~= swt0),
+      tostring(swt2 ~= swt0), tostring(swt0), tostring(okh2), tostring(whyh2))
+  end
+  hold(0.4)
+  grip_line("hanging at the top")
   -- the top hang, from out over the pit
   cam_at(function() local p = astro_rel(); return add(add(add(p, F.t2, -2.8), F.t1, 1.4), F.u, 0.5) end,
          function() local p = astro_rel(); return add(p, F.u, 0.2) end)
@@ -340,16 +459,18 @@ local function main()
       cam_at(function() local p = astro_rel(); return add(add(add(p, F.t2, -2.6), F.t1, 1.6), F.u, 0.4) end,
              function() local p = astro_rel(); return add(p, F.u, 0.3) end)
       shot("5_lowering_mid")
+      grip_line("lowering")
     end
     return st.s >= L.s_max - 0.01
   end, 40, "the floor")
   key("s", false)
   local t_down = W() - t0
+  grip_line("at the bottom")
   local s2 = rc.state()
   R("lower", s2 and math.abs(s2.s - L.s_max) < 0.02 and s2.kind == "bottom",
     "%.1f m in %.1f s (top speed %.2f m/s); at the bottom: %s", L.s_max - L.s_top, t_down, vmax, tostring(s2 and s2.kind))
-  cam_at(function() local p = astro_rel(); return add(add(add(p, F.t2, -3.0), F.t1, 1.8), F.u, 0.2) end,
-         function() local p = astro_rel(); return add(p, F.u, 0.0) end)
+  cam_at(function() local p = astro_rel(); return add(add(add(p, F.t2, -2.0), F.t1, 1.4), F.u, 1.1) end,
+         function() local p = astro_rel(); return add(p, F.u, 0.2) end)
   hold(0.6)
   shot("6_at_the_bottom")
   frames(3)
@@ -382,6 +503,7 @@ local function main()
       cam_at(function() local p = astro_rel(); return add(add(add(p, F.t2, -1.6), F.t1, -1.0), F.u, 0.8) end,
              function() local p = astro_rel(); return add(p, F.u, 0.5) end)
       shot("7_climbing_close")
+      grip_line("climbing")
     end
     return st.s <= L.s_top + 0.01
   end, 60, "the top")
@@ -396,6 +518,10 @@ local function main()
   FR.on = false
   R("frames", FR.n > 100 and FR.max < 0.25, "the suit's drawn place vs the line's, %d frames: mean %.3f m, max %.3f m",
     FR.n, FR.sum / math.max(1, FR.n), FR.max)
+  R("grips", GR.n > 100 and GR.Rmax < 0.04 and GR.Lmax < 0.04 and GR.cR > 0.2 and GR.cL > 0.2,
+    "both fists on the line, %d frames: right mean %.3f max %.3f m (first reach max %.3f), left mean %.3f max %.3f m (first %.3f); fingers closed R %.2f L %.2f; worst at s %.2f / %.2f",
+    GR.n, GR.R / math.max(1, GR.n), GR.Rmax, GR.R0max, GR.L / math.max(1, GR.n), GR.Lmax, GR.L0max, GR.cR, GR.cL, GR.Rs or -1, GR.Ls or -1)
+  grip_line("back at the top")
   cam_at(function() local p = astro_rel(); return add(add(add(p, F.t2, -2.8), F.t1, 2.4), F.u, 1.0) end,
          function() local p = astro_rel(); return add(p, F.u, 0.3) end)
   hold(0.6)
@@ -425,6 +551,24 @@ local function main()
   wait_for(function() local st = rc.state(); return not st or st.s > st.s_top + 0.3 end, 30, "off the top")
   rc.sim = { move = 0 }
   hold(0.5)
+  -- 11d. hanging still on the line: the fists and the stance, close and side-on
+  grip_line("hanging still")
+  cam_at(function() local p = astro_rel(); return add(add(add(p, F.t2, -1.1), F.t1, 0.75), F.u, 0.85) end,
+         function() local p = astro_rel(); return add(add(p, F.u, 0.45), F.t2, 0.25) end)
+  hold(0.5)
+  shot("11_hands_close")
+  frames(3)
+  cam_at(function() local p = astro_rel(); return add(add(add(p, F.t2, -1.0), F.t1, -0.8), F.u, 0.9) end,
+         function() local p = astro_rel(); return add(add(p, F.u, 0.45), F.t2, 0.25) end)
+  hold(0.4)
+  shot("11b_hands_close_left")
+  frames(3)
+  cam_at(function() local p = astro_rel(); return add(add(add(p, F.t1, 3.2), F.t2, 0.3), F.u, 0.2) end,
+         function() local p = astro_rel(); return add(add(p, F.t2, 0.3), F.u, -0.1) end)
+  hold(0.4)
+  shot("12_side_on")
+  frames(3)
+  cam_off()
   local s4 = rc.state()
   local hpb = C.get(C.activeId()).hp or 1
   P("letting go at %.2f m with %.2f m under the feet: prompt %q", s4 and s4.s or -1, s4 and s4.drop or -1, tostring(rc.promptText))
@@ -476,9 +620,11 @@ local function main()
     local line2 = pn2 and wait_for(function()
       for _, c in ipairs(pn2:children()) do if c.name == "Rope Line" and c.model and c.model ~= "" then return c end end
     end, 10, "the line after reload")
-    R("persist", type(key_saved) == "table" and pn2 ~= nil and L2 ~= nil and math.abs(L2.total - L.total) < 0.01 and line2 ~= nil,
-      "saved %s; davit %s; layout %.2f m (was %.2f); line %s", tostring(type(key_saved) == "table"), tostring(pn2 ~= nil),
-      L2 and L2.total or -1, L.total, tostring(line2 ~= nil))
+    wait_for(function() return rc and (rc.guardCount or 0) >= 1 end, 5, "the dig guard after reload")
+    R("persist", type(key_saved) == "table" and pn2 ~= nil and L2 ~= nil and math.abs(L2.total - L.total) < 0.01 and line2 ~= nil
+      and rc.guardCount == 1,
+      "saved %s; davit %s; layout %.2f m (was %.2f); line %s; davits guarded %d", tostring(type(key_saved) == "table"),
+      tostring(pn2 ~= nil), L2 and L2.total or -1, L.total, tostring(line2 ~= nil), rc and rc.guardCount or -1)
     hold(1.0)
     cam_at(add(add(add(mast, F.t2, 3.0), F.t1, -2.4), F.u, 1.2), add(add(mast, F.t2, -1.0), F.u, -1.5))
     hold(0.8)
@@ -502,9 +648,9 @@ local function main()
   key("e", false)
   hold(0.5)
   R("take_down", dep.get(id) == nil and inv.itemCount("astro", "rope") == n0 + 1 and save.get("rope." .. tostring(id)) == nil
-    and dep.nodeOf(id) == nil,
-    "record %s; in the pack %d → %d; save key %s; while held: %q", tostring(dep.get(id) ~= nil), n0,
-    inv.itemCount("astro", "rope"), tostring(save.get("rope." .. tostring(id)) ~= nil), tostring(mid))
+    and dep.nodeOf(id) == nil and (rc.guardCount or 0) == 0,
+    "record %s; in the pack %d → %d; save key %s; while held: %q; davits guarded after %d", tostring(dep.get(id) ~= nil), n0,
+    inv.itemCount("astro", "rope"), tostring(save.get("rope." .. tostring(id)) ~= nil), tostring(mid), rc.guardCount or -1)
   wait_for(function() return pending == 0 end, 10, "the pictures")
   P("DONE fails %d", FAILS)
 end

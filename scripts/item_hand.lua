@@ -177,6 +177,19 @@ local function set_hand(id)
   play(SFX.swap, { track = "UI", volume = 0.45 })
 end
 
+-- Clipped on to a Rope Kit's line (rope_climb)? Most scenes have no RopeLib,
+-- so a miss is asked again only every 2 s.
+local function on_rope()
+  local rc = refs.rope_climb
+  if not (rc and rc.valid ~= false) then
+    if now() - (refs.rope_miss_t or -10) < 2.0 then return false end
+    rc = findScript and findScript("rope_climb") or nil
+    refs.rope_climb = rc
+    if not rc then refs.rope_miss_t = now() return false end
+  end
+  return rc.climbing ~= nil and rc.climbing() == true
+end
+
 -- Take an item in hand (nil: empty hands). → ok, why
 function hold(id)
   if id == nil then set_hand(nil) return true end
@@ -187,6 +200,7 @@ function hold(id)
   if not I.holdable(id) then return false, "it can't be held" end
   if not in_belt(id) then return false, "no " .. I.nameOf(id) .. " in the pack" end
   if busy() then return false, "the hands are at the work" end
+  if on_rope() then return false, "the hands are on the rope" end
   set_hand(id)
   return true
 end
@@ -1358,6 +1372,19 @@ function update(node, dt)
   if not carrying then D.req = nil return end
   -- the belt: number keys by position, the same slot again or H = empty hands
   local b = belt()
+  if on_rope() then
+    -- clipped on to a Rope Kit's line: both hands are on it, so a number key
+    -- takes nothing out (one short note, no swap)
+    for i = 1, #b do
+      if pressed(tostring(i)) and now() - (D.rope_note or -10) > 1.5 then
+        D.rope_note = now()
+        say("the hands are on the rope")
+      end
+    end
+    pressed("h")
+    D.req, D.plant, POUR.on = nil, nil, false
+    return
+  end
   for i, s in ipairs(b) do
     if pressed(tostring(i)) then
       if s.id == held() then set_hand(nil) else set_hand(s.id) end

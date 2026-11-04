@@ -41,6 +41,7 @@
 --   clipOn(id [, s]) → ok, why    unclip() → kind      takeDown(id) → ok, why
 --   prompting() → bool (E is the rope's)                sim = { move, fast }
 --   faceDir() → dx,dy,dz (the walker faces the wall while held)
+--   guardGroups(recs), guardCount: the dig guards under the davits (base_facilities)
 
 defaults = {
   --@header Ascender
@@ -72,6 +73,7 @@ ROPE = {
   body_kg = 120.0,     -- crew and suit; the pack's contents are added
   hang = 0.65,         -- m: the suit's centre under the upper hand
   away = 0.38,         -- m: … and out from the line, away from the wall
+  feet_max = 0.55,     -- m: a wall this far from the line is out of the feet's reach
   foot = 1.0,          -- m: the suit's centre over its soles
   top = 0.45,          -- m of line from the sheave to the upper hand, at the top
   knot = 0.35,         -- m of tail under a stopper knot at a free end
@@ -207,6 +209,18 @@ function wallAt(L, s)
   local d = wd[k]
   if not d or d < 0 then return nil end
   return d
+end
+
+-- … blended between the metres where both have a wall (else the nearest).
+function wallSmooth(L, s)
+  local wd = L.wd
+  if not wd or #wd == 0 then return nil end
+  local f = max(0, s)
+  local k = floor(f)
+  f = f - k
+  local a, b = wd[min(#wd, k + 1)], wd[min(#wd, k + 2)]
+  if a and b and a >= 0 and b >= 0 then return a * (1 - f) + b * f end
+  return wallAt(L, s)
 end
 
 -- The climbable point nearest a suit centre (body-relative): → s, distance.
@@ -364,6 +378,45 @@ function buildLayout(G, u, out, length, cast)
   return L
 end
 
+-- THE DIG GUARD. The ground under a planted davit can't be dug (base_facilities
+-- setGuards / digClamp, which the laser, craters, the drill and the surveyor
+-- ask): a box round its plate and its two staked back stays (tools/gen_rope.py:
+-- the plate at the mast, the stakes 0.42 m to each side and 0.52 m back, +Z
+-- toward the planter), DIG_GUARD.depth under the ground. The box is in the body's
+-- frame from the record (ground point, facing): body-relative, never world.
+-- Davits are grouped by body and a DIG_GUARD.cell grid, one guard owner per
+-- group ("rope:<body>:<cell>"), so a dig far from any davit costs one sphere
+-- test a group, and a dig near a few tests only those few boxes.
+DIG_GUARD = { side = 0.60, back = 0.70, front = 0.45, depth = 1.1, height = 0.5, cell = 250,
+              why = "The rope davit's footing — can't dig under it" }
+
+function guardBox(e)
+  local ux, uy, uz, fx, fy, fz = facing(e.x, e.y, e.z, e.fx or 0, e.fy or 0, e.fz or 0)
+  local mid = (DIG_GUARD.back - DIG_GUARD.front) / 2
+  -- side = up × toward-the-planter
+  local sx, sy, sz = norm3(uy * fz - uz * fy, uz * fx - ux * fz, ux * fy - uy * fx)
+  return { c = { x = e.x + fx * mid, y = e.y + fy * mid, z = e.z + fz * mid },
+           t = { x = sx, y = sy, z = sz }, up = { x = ux, y = uy, z = uz }, n = { x = fx, y = fy, z = fz },
+           ht = DIG_GUARD.side, hn = (DIG_GUARD.back + DIG_GUARD.front) / 2, lo = -DIG_GUARD.depth, hi = DIG_GUARD.height,
+           why = DIG_GUARD.why }
+end
+
+-- The guard owners for a list of davit records { b, x, y, z, fx, fy, fz }:
+-- → { [owner] = { body = name, list = { box … } } }
+function guardGroups(recs)
+  local out = {}
+  local C = DIG_GUARD.cell
+  for _, e in ipairs(recs) do
+    if e.b and e.x and e.y and e.z then
+      local key = string.format("rope:%s:%d:%d:%d", e.b, floor(e.x / C), floor(e.y / C), floor(e.z / C))
+      local g = out[key]
+      if not g then g = { body = e.b, list = {} }; out[key] = g end
+      g.list[#g.list + 1] = guardBox(e)
+    end
+  end
+  return out
+end
+
 -- The save's copy (plain numbers; save.set keeps four tables deep).
 local function r4(v) return floor(v * 1e4 + 0.5) / 1e4 end
 function toSave(L)
@@ -486,6 +539,31 @@ local function prune()
       version = version + 1
     end
   end
+end
+
+-- The dig guards under every davit, set again only when the records change
+-- (deployables.version: a plant, a take-down, a revert, a load) or the base's
+-- library is a new one (a scene load).
+local guard_owners, guard_ver, guard_bf = {}, nil, nil
+guardCount = 0   -- probes: davits guarded
+local function sync_guards()
+  local dep, bf = ref("deployables"), ref("base_facilities")
+  if not (dep and dep.list and bf and bf.setGuards) then return end
+  local v = dep.version
+  if v == guard_ver and bf == guard_bf then return end
+  guard_ver, guard_bf = v, bf
+  local groups = guardGroups(dep.list("rope"))
+  for owner in pairs(guard_owners) do
+    if not groups[owner] then pcall(bf.setGuards, owner, nil) end
+  end
+  guard_owners = {}
+  local n = 0
+  for owner, g in pairs(groups) do
+    pcall(bf.setGuards, owner, g.body, g.list)
+    guard_owners[owner] = true
+    n = n + #g.list
+  end
+  guardCount = n
 end
 
 -- For probes: forget the cached layouts (they are read from the save again).
@@ -804,7 +882,13 @@ function update(node, dt)
     if C == nil then node:destroy() end
     return
   end
-  if now() - prune_t > 1.0 then prune_t = now(); prune() end
+  if now() - prune_t > 1.0 then
+    prune_t = now(); prune(); sync_guards()
+  elseif guard_ver ~= nil then
+    -- a plant or a take-down is guarded that frame
+    local dep = ref("deployables")
+    if dep and dep.version ~= guard_ver then sync_guards() end
+  end
   promptText, readout = nil, nil
   local pw = ref("planet_walker")
   local a = astro()
@@ -924,7 +1008,77 @@ local function model()
   return model_n, anim_n
 end
 
-poseInfo = nil   -- probes: { hands, feet (on the wall?), wall }
+poseInfo = nil   -- probes: { gripR/gripL (the fists' miss off the line, m), curlR/curlL, feet (on the wall?), wall, lean, lead }
+
+-- THE GRIP. Both fists closed round the line, thumbs up, the right hand above
+-- the left: each hand to the right / left of the rope, its fingers reaching
+-- forward round it toward the wall, the palm on the rope. The rig's hand
+-- (models/astronaut): +Y wrist → knuckles, +Z the knuckle line toward the
+-- index (the thumb's side), the palm −X on the right hand and +X on the left;
+-- the fingers curl about Z (GRIP.curl1/curl2, signed per hand). `reach` places the
+-- WRIST, so the fist's centre — GRIP.into of the way to the knuckles and
+-- GRIP.palm off the palm — is measured from the bones once the hand is
+-- placed and turned, and the wrist moved by the miss (a second reach, the
+-- same frame: nothing kept).
+GRIP = { into = 0.85, palm = 0.022, curl1 = 1.25, curl2 = 1.15, thumb = 0.55, upper = 0.02, lower = 0.30,
+         lean_wall = 0.30, lean_free = 0.06, leg = 0.80, hip = 0.10, sole = 0.10, bend = 0.08 }
+
+local function bw(an, bone)
+  local ok, p = pcall(an.boneWorld, an, bone)
+  if ok and p and p.x then return p end
+  return nil
+end
+
+-- The fist's centre from the bones (world), and its palm's way.
+local function fist(an, nm, sg)
+  local H, F1, T1 = bw(an, "Hand." .. nm), bw(an, "Fingers1." .. nm), bw(an, "Thumb1." .. nm)
+  if not (H and F1 and T1) then return nil end
+  local yx, yy, yz, yl = norm3(F1.x - H.x, F1.y - H.y, F1.z - H.z)
+  if yl < 1e-4 then return nil end
+  local tx, ty, tz = T1.x - H.x, T1.y - H.y, T1.z - H.z
+  local d = tx * yx + ty * yy + tz * yz
+  local zx, zy, zz = norm3(tx - yx * d, ty - yy * d, tz - yz * d)
+  -- X = Y × Z; the palm is −X on the right hand, +X on the left
+  local px, py, pz = yy * zz - yz * zy, yz * zx - yx * zz, yx * zy - yy * zx
+  px, py, pz = -sg * px, -sg * py, -sg * pz
+  local k = GRIP.into * yl
+  return vec3(H.x + yx * k + px * GRIP.palm, H.y + yy * k + py * GRIP.palm, H.z + yz * k + pz * GRIP.palm), H,
+         { px, py, pz }
+end
+
+-- One hand onto the line at `p` (world vec3): curl, reach, turn, measure,
+-- reach again by the miss. → the fist's miss from the line (m), first and last.
+local function grip(an, nm, sg, p, pole, w, ax, ay, az, sx, sy, sz, ux, uy, uz)
+  local hand = "Hand." .. nm
+  -- a fist (bone writes run before the reaches)
+  pcall(an.addBoneRot, an, "Fingers1." .. nm, 0, 0, sg * GRIP.curl1, w)
+  pcall(an.addBoneRot, an, "Fingers2." .. nm, 0, 0, sg * GRIP.curl2, w)
+  pcall(an.addBoneRot, an, "Thumb1." .. nm, 0, 0, sg * GRIP.thumb, w)
+  -- first guess: the wrist behind the rope (toward the body) and to its side
+  local g = vec3(p.x + ax * 0.09 + sx * sg * 0.03, p.y + ay * 0.09 + sy * sg * 0.03, p.z + az * 0.09 + sz * sg * 0.03)
+  local function turn(at)
+    -- the fingers forward round the rope (toward the wall), the knuckle line up it
+    pcall(an.lookAt, an, { hand }, vec3(at.x - ax, at.y - ay, at.z - az), { axis = vec3(0, 1, 0), limit = 170, weight = w })
+    pcall(an.lookAt, an, { hand }, vec3(at.x + ux, at.y + uy, at.z + uz), { axis = vec3(0, 0, 1), limit = 170, weight = w })
+  end
+  pcall(an.reach, an, hand, g, { pole = pole, weight = w })
+  if an.lookAt then turn(g) end
+  local c = fist(an, nm, sg)
+  if not c then return nil end
+  local e0 = len3(c.x - p.x, c.y - p.y, c.z - p.z)
+  local g2 = vec3(g.x + (p.x - c.x) * w, g.y + (p.y - c.y) * w, g.z + (p.z - c.z) * w)
+  pcall(an.reach, an, hand, g2, { pole = pole, weight = w })
+  if an.lookAt then turn(g2) end
+  local c2, _, palm = fist(an, nm, sg)
+  -- (probes) how far the fingers close toward the palm: + curled, − bent back
+  local F1, F2 = bw(an, "Fingers1." .. nm), bw(an, "Fingers2." .. nm)
+  local cu = nil
+  if palm and F1 and F2 then
+    local fx, fy, fz = norm3(F2.x - F1.x, F2.y - F1.y, F2.z - F1.z)
+    cu = fx * palm[1] + fy * palm[2] + fz * palm[3]
+  end
+  return e0, c2 and len3(c2.x - p.x, c2.y - p.y, c2.z - p.z) or nil, cu
+end
 
 local function pose(dt)
   local L = layoutOf(C.id)
@@ -948,31 +1102,60 @@ local function pose(dt)
   local u = L.u
   local s = C.s
   local sw = 0.06 * math.sin(2 * math.pi * (C.phase or 0))
-  local hx, hy, hz, ax, ay, az = at(L, s - 0.02 - sw)
-  local lx, ly, lz = at(L, s + 0.30 + sw)
+  local W = function(x, y, z) return vec3(ox + x, oy + y, oz + z) end
+  local _, _, _, ax, ay, az = at(L, s)
   -- the side (right as the crew faces the wall): up × away
   local sx, sy, sz = norm3(u[2] * az - u[3] * ay, u[3] * ax - u[1] * az, u[1] * ay - u[2] * ax)
   local bx, by, bz = bodyAt(L, s)
-  local W = function(x, y, z) return vec3(ox + x, oy + y, oz + z) end
+  -- the feet: on the wall where there is one in reach, else hanging
+  -- (the legs near straight: the ankles a leg's length from the hips, which
+  -- are GRIP.hip under the suit's centre, as low on the wall as that puts them)
+  local fs = s + ROPE.hang + 0.55
+  local wd = wallSmooth(L, fs)
+  if wd and wd < ROPE.feet_max then
+    local h = ROPE.away + wd - GRIP.sole
+    fs = s + ROPE.hang + GRIP.hip + sqrt(max(0.25 * 0.25, GRIP.leg * GRIP.leg - h * h))
+    wd = wallSmooth(L, fs) or wd
+  end
+  local on_wall = wd ~= nil and wd < ROPE.feet_max and C.s < L.s_max - 0.05
+  local free = not on_wall and C.s < L.s_max - 0.05
+  -- the body: leant back off the line, legs out to the wall (an L: the
+  -- harness takes the weight, the soles flat on the rock); hanging free,
+  -- nearly plumb. (Back is the rig's root: the bone writes come first.)
+  local lean = on_wall and GRIP.lean_wall or (free and GRIP.lean_free or 0)
+  C.lean = (C.lean or lean) + (lean - (C.lean or lean)) * (1 - math.exp(-6 * (dt or 0.016)))
+  if C.lean > 0.005 then pcall(an.addBoneRot, an, "Back", 0, -C.lean * w, 0, w) end
+  -- the hands: the right above, the left below, fists on the line
+  local hx, hy, hz = at(L, s - GRIP.upper - sw)
+  local lx, ly, lz = at(L, s + GRIP.lower + sw)
+  -- where the line bends over a lip under the upper hand, the rope between
+  -- the fists is taut off the rock (the climber's weight): the lower fist
+  -- stays within GRIP.bend of plumb under the upper one, never out of reach
+  do
+    local dx, dy, dz = lx - hx, ly - hy, lz - hz
+    local d = dx * u[1] + dy * u[2] + dz * u[3]
+    dx, dy, dz = dx - u[1] * d, dy - u[2] * d, dz - u[3] * d
+    local l = len3(dx, dy, dz)
+    if l > GRIP.bend then
+      local k = 1 - GRIP.bend / l
+      lx, ly, lz = lx - dx * k, ly - dy * k, lz - dz * k
+    end
+  end
   local elbow = function(sg) return W(bx + sx * 0.45 * sg - u[1] * 0.25 + ax * 0.05, by + sy * 0.45 * sg - u[2] * 0.25 + ay * 0.05,
                                       bz + sz * 0.45 * sg - u[3] * 0.25 + az * 0.05) end
-  pcall(an.reach, an, "Hand.Left", W(hx - sx * 0.02, hy - sy * 0.02, hz - sz * 0.02), { pole = elbow(-1), weight = w })
-  pcall(an.reach, an, "Hand.Right", W(lx + sx * 0.02, ly + sy * 0.02, lz + sz * 0.02), { pole = elbow(1), weight = w })
-  -- the feet: on the wall where there is one in reach, else hanging
-  local fs = s + ROPE.hang + 0.55
-  local wd = wallAt(L, fs)
-  local fx, fy, fz, fax, fay, faz = at(L, fs)
-  local on_wall = false
-  if wd and wd < 0.55 and C.s < L.s_max - 0.05 then
-    on_wall = true
-    local px, py, pz = fx - fax * (wd - 0.03), fy - fay * (wd - 0.03), fz - faz * (wd - 0.03)
+  local r0, r1, rc = grip(an, "Right", 1, W(hx, hy, hz), elbow(1), w, ax, ay, az, sx, sy, sz, u[1], u[2], u[3])
+  local l0, l1, lc = grip(an, "Left", -1, W(lx, ly, lz), elbow(-1), w, ax, ay, az, sx, sy, sz, u[1], u[2], u[3])
+  if on_wall then
+    local fx, fy, fz, fax, fay, faz = at(L, fs)
+    -- the ankles a sole's depth off the rock, shoulder-width apart
+    local px, py, pz = fx - fax * (wd - GRIP.sole), fy - fay * (wd - GRIP.sole), fz - faz * (wd - GRIP.sole)
     for _, sg in ipairs({ -1, 1 }) do
-      local t = W(px + sx * 0.15 * sg, py + sy * 0.15 * sg, pz + sz * 0.15 * sg)
-      local pole = W(px + sx * 0.18 * sg + fax * 0.7 + u[1] * 0.35, py + sy * 0.18 * sg + fay * 0.7 + u[2] * 0.35,
-                     pz + sz * 0.18 * sg + faz * 0.7 + u[3] * 0.35)
+      local t = W(px + sx * 0.17 * sg, py + sy * 0.17 * sg, pz + sz * 0.17 * sg)
+      local pole = W(px + sx * 0.22 * sg + fax * 0.7 + u[1] * 0.35, py + sy * 0.22 * sg + fay * 0.7 + u[2] * 0.35,
+                     pz + sz * 0.22 * sg + faz * 0.7 + u[3] * 0.35)
       pcall(an.reach, an, sg < 0 and "Foot.Left" or "Foot.Right", t, { pole = pole, weight = w })
     end
-  elseif C.s < L.s_max - 0.05 then
+  elseif free then
     -- hanging free: knees a little bent, toes toward the line
     for _, sg in ipairs({ -1, 1 }) do
       local t = W(bx - u[1] * 0.92 - ax * 0.10 + sx * 0.11 * sg, by - u[2] * 0.92 - ay * 0.10 + sy * 0.11 * sg,
@@ -985,7 +1168,11 @@ local function pose(dt)
   -- the head looks up the line
   local tx, ty, tz = at(L, s - 1.2)
   if an.lookAt then pcall(an.lookAt, an, { "Head" }, W(tx, ty, tz), { limit = 40, weight = 0.6 * w }) end
-  poseInfo = { hand = W(hx, hy, hz), feet = on_wall, wall = wd, s = s, w = w }
+  -- (probes) the lean: the head's lead over the hips, out from the wall
+  local hd, hp = bw(an, "Head"), bw(an, "Hip")
+  local lead = hd and hp and ((hd.x - hp.x) * ax + (hd.y - hp.y) * ay + (hd.z - hp.z) * az) or nil
+  poseInfo = { lead = lead, gripR = r1, gripL = l1, gripR0 = r0, gripL0 = l0, curlR = rc, curlL = lc, feet = on_wall,
+               wall = wd, s = s, w = w, lean = C.lean }
 end
 
 local function uiH()
