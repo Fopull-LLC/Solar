@@ -105,6 +105,12 @@ defaults = {
   -- Dissolve every layer out at the edge of its reach instead of cutting it
   -- (flora_gen.fadeBands). 0 = the old hard edge.
   fade_out = 1,
+  -- Seconds a plant takes to dissolve in when it starts being drawn for any
+  -- reason but distance: its ground settling as you arrive, a stand declared
+  -- near the camera, a plant put back (scatter `appear`, engine 0.117.1-dev.1426).
+  -- 0 = drawn at once (the first-spawn blinks popprobe saw).
+  --@range 0 2 --@units s
+  appear = 0.3,
 
   --@header Harvest
   regrow = 900.0,   -- seconds before a cut plant grows back
@@ -955,6 +961,7 @@ function make_source(p, sp, fg, w)
     end
     local lod, fade = fg.fadeBands(bands, far, params.fade_out > 0 and fg.emptyAsset and fg.emptyAsset() or nil)
     local opts = { fade = fade, lod = lod }
+    if (params.appear or 0) > 0 then opts.appear = params.appear end
     for k, v in pairs(where) do opts[k] = v end
     -- Each patch's stand of a species is shaded a little differently (a
     -- deterministic roll per patch): the engine already varies every prop's
