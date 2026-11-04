@@ -474,3 +474,43 @@ function gasFillInto(tanks, L)
   end
   return put
 end
+
+-- ── §6 THE CHAIN OVER A MOVING MOUNT ───────────────────────────────────────
+-- A Drive Chain to a wheel a servo, a hinge or a piston carries (a tilting
+-- swing arm, a lowering rear): the engine's sprocket stays put and the
+-- wheel's moves, so the run between them grows or shrinks. A real swing arm
+-- pivots beside the gearbox sprocket and its chain barely changes; a long-
+-- travel arm carries a spring tensioner that takes up the rest. So the chain
+-- here has a tensioner's take-up, its SLACK: CHAIN_SLACK_K of its run, at
+-- least CHAIN_SLACK_MIN m, either way. Within it the engine's whole torque
+-- reaches the wheel; past it the chain skips teeth and passes less and less,
+-- none once it is a whole slack further out (off the sprocket: the wheel
+-- rolls free, and drives again when the mount comes back). It never locks the
+-- wheel or tears the craft apart: an over-ambitious build still rolls.
+--   chainSlack(L) → m either way the chain takes up, for a run of L m
+--   chainShare(stretch, L) → 0…1 of the engine's torque the chain passes
+--       when the sprockets are `stretch` m further apart than it was built at
+--   chainRange(f, L, lo, hi, step) → the part of lo…hi (a servo's degrees, a
+--       piston's metres) over which f(x) — the run at x — keeps the chain
+--       within its slack around x = 0: lo1, hi1 (nil when even 0 is out)
+CHAIN_SLACK_K = 0.08
+CHAIN_SLACK_MIN = 0.04
+function chainSlack(L)
+  return math.max(CHAIN_SLACK_MIN, CHAIN_SLACK_K * math.max(0, L or 0))
+end
+function chainShare(stretch, L)
+  local s = chainSlack(L)
+  local x = math.abs(stretch or 0)
+  if x <= s then return 1 end
+  return math.max(0, 1 - (x - s) / s)
+end
+function chainRange(f, L, lo, hi, step)
+  local s = chainSlack(L)
+  local function ok(x) return math.abs(f(x) - L) <= s end
+  if not ok(0) then return nil end
+  step = step or 1
+  local a, b = 0, 0
+  while a - step >= lo - 1e-9 and ok(a - step) do a = a - step end
+  while b + step <= hi + 1e-9 and ok(b + step) do b = b + step end
+  return a, b
+end

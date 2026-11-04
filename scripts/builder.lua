@@ -2054,6 +2054,83 @@ end
 --                   Balance Gyro: it falls over; its wheels a few cm out of
 --                   line: it crabs
 -- Global and pure over the craft records, for the smoke tests.
+--
+-- A DRIVE CHAIN TO A WHEEL A JOINT MOVES (playtest 2026-11-04: a servo under
+-- the rear wheel). The build is allowed and flies: the wheel rolls, steers
+-- and springs as any other, and the chain drives it while its sprockets stay
+-- within the chain's slack (auto_drive chainShare); past that it skips and
+-- the wheel rolls free until the joint comes back. So the builder only says
+-- how much of the joint's travel keeps the drive, when that is less than all
+-- of it, for every hinge or piston between the wheel and the frame that the
+-- engine is not carried by too. → out, with the lines added
+function chainJointChecks(out)
+  local AD = lib("auto_drive")
+  if not (AD and AD.chainRange) then return out end
+  local function anc(u)                  -- u's parents, nearest first
+    local l, seen, q = {}, {}, parts[u] and parts[u].parent
+    while q and parts[q] and not seen[q] do seen[q] = true; l[#l + 1] = q; q = parts[q].parent end
+    return l
+  end
+  for _, p in pairs(parts) do
+    local sz = p.size
+    if p.def.proc == "chain" and type(sz) == "table" and parts[sz.e or -1] and parts[sz.w or -1] and (tonumber(sz.len) or 0) > 0.05 then
+      local L = tonumber(sz.len)
+      local B = basisOf(p.yaw, p.pitch, p.roll)
+      local a = { x = p.x - B.Y.x * L / 2, y = p.y - B.Y.y * L / 2, z = p.z - B.Y.z * L / 2 }
+      local b = { x = p.x + B.Y.x * L / 2, y = p.y + B.Y.y * L / 2, z = p.z + B.Y.z * L / 2 }
+      local eng_up = {}
+      for _, q in ipairs(anc(sz.e)) do eng_up[q] = true end
+      eng_up[sz.e] = true
+      local prev = sz.w
+      for _, h in ipairs(anc(sz.w)) do
+        local hp = parts[h]
+        local kind = hp.def.robo
+        if eng_up[h] then break end      -- the engine rides it too: the run doesn't change
+        if kind == "hinge" or kind == "piston" then
+          local HB = basisOf(hp.yaw, hp.pitch, hp.roll)
+          -- the side it moves: the child on the wheel's path, above or below its middle (vessel_controller r.sign)
+          local c = parts[prev]
+          local up = ((c.x - hp.x) * HB.Y.x + (c.y - hp.y) * HB.Y.y + (c.z - hp.z) * HB.Y.z) >= 0
+          local sg = up and 1 or -1
+          local f
+          if kind == "hinge" then
+            local k = HB.Z
+            f = function(deg)
+              local t = math.rad(deg) * sg
+              local cs, sn = math.cos(t), math.sin(t)
+              local vx, vy, vz = b.x - hp.x, b.y - hp.y, b.z - hp.z
+              local d = vx * k.x + vy * k.y + vz * k.z
+              local cx, cy, cz = k.y * vz - k.z * vy, k.z * vx - k.x * vz, k.x * vy - k.y * vx
+              local rx = hp.x + vx * cs + cx * sn + k.x * d * (1 - cs) - a.x
+              local ry = hp.y + vy * cs + cy * sn + k.y * d * (1 - cs) - a.y
+              local rz = hp.z + vz * cs + cz * sn + k.z * d * (1 - cs) - a.z
+              return math.sqrt(rx * rx + ry * ry + rz * rz)
+            end
+            local lo, hi = AD.chainRange(f, L, -90, 90, 1)
+            if lo and (lo > -90 or hi < 90) then
+              out[#out + 1] = string.format("the Drive Chain to the %s keeps its drive only from %d° to %d° of the %s's ±90° — past that it skips and the wheel rolls free (a joint nearer the engine's sprocket keeps the chain tight)",
+                parts[sz.w].def.label or "wheel", lo, hi, hp.def.label or "hinge")
+            end
+          else
+            local k = HB.Y
+            f = function(e)
+              local s = e * sg
+              local rx, ry, rz = b.x + k.x * s - a.x, b.y + k.y * s - a.y, b.z + k.z * s - a.z
+              return math.sqrt(rx * rx + ry * ry + rz * rz)
+            end
+            local _, hi = AD.chainRange(f, L, 0, 0.8, 0.01)
+            if hi and hi < 0.8 - 1e-6 then
+              out[#out + 1] = string.format("the Drive Chain to the %s keeps its drive only for the first %.2f m of the %s's 0.8 m — past that it skips and the wheel rolls free",
+                parts[sz.w].def.label or "wheel", hi, hp.def.label or "piston")
+            end
+          end
+        end
+        prev = h
+      end
+    end
+  end
+  return out
+end
 function wheelChecks()
   local out = {}
   local E = elib()
@@ -2088,6 +2165,7 @@ function wheelChecks()
   if bad_chain > 0 then
     out[#out + 1] = string.format("%d Drive Chain%s not on an engine and a wheel: it powers nothing — chain an engine to a wheel again", bad_chain, bad_chain == 1 and " is" or "s are")
   end
+  if n_chained > 0 then chainJointChecks(out) end
   if n_chained > 0 and gas_t == 0 then
     out[#out + 1] = "a gas engine and no gas tank — the engine has nothing to run on: add a Gas Tank"
   end

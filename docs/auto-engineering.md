@@ -413,6 +413,46 @@ Files: `scripts/parts_auto.lua` (parts), `scripts/auto_drive.lua` §5 (maths),
 (meshes, prefabs), `tools/base_buildings.py` (the pump), `tests/smoke_gas.lua`,
 `tools/perf/gasbike.py`, `gasprobe.lua` / `gasshots.sh`, jumpprobe `JP GAS`.
 
+## 3e. Wheels on servos, hinges and pistons (playtest 2026-11-04)
+
+"I tried adding a servo joint and then attaching my back wheel to it … when
+a wheel is attached to a servo joint it just doesn't work whatsoever." A
+wheel moved by a robotic part (built on a hinge, a piston or a rotor, or on a
+swing arm hung from one) used to ride rigid: its tyre never came out, so the
+bike sat on that wheel's box and could not roll at all, chain or no chain.
+
+**Now it is a wheel like any other.** Its tyre comes out and hangs on the
+wheel joint at the mount *as the joints have posed it*
+(`vessel_controller` `roboMountScan` / `roboMounts`): the rest mount, the
+suspension part's axis and the axle carried through every robotic part that
+moves the wheel (`robo_pose`). A turn of the axle about the suspension's axis
+is added to the wheel's base steer, so a servo that swings an axle round
+steers it. When the servo moves the mount more than `ROBO_REHANG_M` (4 mm)
+or turns it more than `ROBO_REHANG_DEG` (0.5°), the joint is made again
+there, keeping the motor, brake and bars that `drive_tick` left on it. So
+the wheel drives, brakes, steers and springs through the move, and the servo
+works while you ride: a tilting swing arm, a lowering rear, a ride-height
+servo.
+
+**The chain (auto_drive §6).** The engine's sprocket stays put and the
+wheel's moves, so the run between them changes. The chain is re-laid along
+the new run (`roboChains`). It is given a spring tensioner's take-up, its
+**slack**: 8 % of its run, at least 4 cm, either way (`CHAIN_SLACK_K`,
+`CHAIN_SLACK_MIN`). Within that slack the engine's whole torque reaches the
+wheel. Past it the chain skips teeth, and the drive fades to nothing over
+another slack's length (`chainShare`). The wheel then rolls free until the
+servo brings it back. A caption says so once. The chain never locks the
+wheel and never breaks the build. A real swing arm pivots beside the gearbox
+sprocket, so its chain barely changes over the arm's travel; a hinge there
+keeps the drive over most of its ±90°. A hinge far from the sprocket soon
+pulls the chain past its slack. The builder says so before launch
+(`builder.chainJointChecks`, in the wheel checks): "the Drive Chain to the
+Moto Wheel keeps its drive only from -7° to 7° of the Servo Hinge's ±90°…".
+That is a warning only; the craft still launches.
+
+Probe: `tools/perf/servoprobe.sh <engine> [none arm direct elec far]`
+(`servoprobe_modes.lua`). Smoke: `tests/smoke_servo_wheels.lua`.
+
 ## 4. Controls summary
 
 | Key | Rover / car / trike | Bike |
