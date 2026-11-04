@@ -8,6 +8,8 @@
 #        SRC=worktree  the working tree's tracked and new (not ignored) files, minus what
 #                      .gitattributes export-ignores: check uncommitted changes the same way
 #        KEEP=1        keep $WORK/xc-src and $WORK/xc-out (the build) afterwards
+#        LOCAL=0       leave out textures/env_local (the commercial textures; default: a
+#                      local build carries them, see tools/import_textures.py --stage)
 #
 # 1. the source: a clean archive (SRC=head) or the working tree's files (SRC=worktree);
 # 2. `floptle export <src> <out> linux-x86_64 --title Solar` through the shared lock;
@@ -49,6 +51,13 @@ for f in keep:
 open(out_list, "w").write("\n".join(files) + "\n")
 print(f"EXPORTCHECK source: the working tree, {len(keep)} of {len(files)} files ({len(files) - len(keep)} export-ignored)")
 PY
+fi
+# The commercial-licence textures (textures/env_local, git-ignored: never in an
+# archive or a commit) go into a LOCAL build: tools/import_textures.py --stage copies
+# the folder in and points the terrain palettes' slots at their local layers. LOCAL=0
+# checks the public build (what the demo zip and a clean checkout give: CC0 only).
+if [ "${LOCAL:-1}" = 1 ] && [ -d "$SOL/textures/env_local" ]; then
+  python3 -I "$SOL/tools/import_textures.py" --stage "$S" | sed 's/^/EXPORTCHECK /'
 fi
 # what the archive itself dropped, among the folders the game loads from
 python3 -I - "$L" "$S" <<'PY'

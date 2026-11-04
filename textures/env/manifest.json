@@ -1,0 +1,2707 @@
+{
+ "about": "Solar's environment texture library, converted by tools/import_textures.py. CC0 output (textures/env) is committed; commercial output (textures/env_local) is git-ignored and must never be committed. Each set: albedo.png (sRGB), normal.png (OpenGL), orm.png (R AO, G rough, B metal), height.png.",
+ "library": "gametexturesdotcom (a local folder: --lib)",
+ "sets": [
+  {
+   "id": "AgedPolishedCopper",
+   "source": "AgedPolishedCopper_PbrGenericMetallic2kBitmap.zip",
+   "note": null,
+   "licence": "commercial",
+   "format": "substance",
+   "kind": "metal",
+   "committed": false,
+   "out": "textures/env_local/sets/AgedPolishedCopper/",
+   "resolution": 1024,
+   "maps": [
+    "ao",
+    "color",
+    "emissive",
+    "height",
+    "metal",
+    "normal",
+    "opacity",
+    "rough"
+   ],
+   "conversion": {
+    "normal": "GL (measured against its height map)",
+    "roughness": "roughness map",
+    "ao": "AO map",
+    "metal": "metal map",
+    "notes": [],
+    "size": 1024
+   },
+   "use": [
+    "wave 3: vehicle parts, hangar and VAB metal (replace textures/parts, textures/hangar, textures/vab)"
+   ]
+  },
+  {
+   "id": "Bark016",
+   "source": "Bark016_2K-PNG.zip",
+   "note": null,
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "bark",
+   "committed": true,
+   "out": "textures/env/sets/Bark016/",
+   "resolution": 512,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_dx",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": {
+    "normal": "GL (as shipped)",
+    "roughness": "roughness map",
+    "ao": "AO map",
+    "metal": "constant 0.0",
+    "notes": [],
+    "size": 512
+   },
+   "use": [
+    "wave 4: tree bark (replace textures/flora bark_*)"
+   ]
+  },
+  {
+   "id": "Basic_Wood_Grain",
+   "source": "Basic_Wood_Grain.zip",
+   "note": null,
+   "licence": "commercial",
+   "format": "older",
+   "kind": "wood",
+   "committed": false,
+   "out": "textures/env_local/sets/Basic_Wood_Grain/",
+   "resolution": 1024,
+   "maps": [
+    "color",
+    "height",
+    "normal",
+    "rough"
+   ],
+   "conversion": {
+    "normal": "GL (measured against its height map)",
+    "roughness": "roughness map",
+    "ao": "from height",
+    "metal": "constant 0.0",
+    "notes": [],
+    "size": 1024
+   },
+   "use": [
+    "wave 4: crates, props and felled-log ends"
+   ]
+  },
+  {
+   "id": "ChristmasTreeOrnament021",
+   "source": "ChristmasTreeOrnament021_2K-PNG Use as maybe the star geode replacement mat.zip",
+   "note": "Use as maybe the star geode replacement mat",
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "crystal",
+   "committed": true,
+   "out": "textures/env/sets/ChristmasTreeOrnament021/",
+   "resolution": 512,
+   "maps": [
+    "color",
+    "height",
+    "metal",
+    "normal_dx",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": {
+    "normal": "GL (as shipped)",
+    "roughness": "roughness map",
+    "ao": "from height",
+    "metal": "metal map",
+    "notes": [],
+    "size": 512
+   },
+   "use": [
+    "terrain slot 7 amethyst (crystal)",
+    "terrain slot 8 bluecrystal (crystal)"
+   ]
+  },
+  {
+   "id": "Concrete_02",
+   "source": "Concrete_02.zip",
+   "note": null,
+   "licence": "commercial",
+   "format": "older",
+   "kind": "concrete",
+   "committed": false,
+   "out": "textures/env_local/sets/Concrete_02/",
+   "resolution": 1024,
+   "maps": [
+    "color",
+    "height",
+    "normal",
+    "rough"
+   ],
+   "conversion": {
+    "normal": "GL (measured against its height map)",
+    "roughness": "roughness map",
+    "ao": "from height",
+    "metal": "constant 0.0",
+    "notes": [],
+    "size": 1024
+   },
+   "use": [
+    "wave 2: base pads, foundations and buildings (replace textures/base concrete)"
+   ]
+  },
+  {
+   "id": "Cracked_Asphalt",
+   "source": "Cracked_Asphalt.zip",
+   "note": null,
+   "licence": "commercial",
+   "format": "older",
+   "kind": "road",
+   "committed": false,
+   "out": "textures/env_local/sets/Cracked_Asphalt/",
+   "resolution": 1024,
+   "maps": [
+    "ao",
+    "diff",
+    "height",
+    "normal",
+    "spec"
+   ],
+   "conversion": {
+    "normal": "GL (measured against its height map)",
+    "roughness": "1 - 0.8 x specular map",
+    "ao": "AO map",
+    "metal": "constant 0.0",
+    "notes": [
+     "albedo from _DIFF (may carry baked light)"
+    ],
+    "size": 1024
+   },
+   "use": [
+    "terrain slot 18 salt (salt), local builds"
+   ]
+  },
+  {
+   "id": "Damaged_Wood_Grain",
+   "source": "Damaged_Wood_Grain.zip",
+   "note": null,
+   "licence": "commercial",
+   "format": "older",
+   "kind": "wood",
+   "committed": false,
+   "out": "textures/env_local/sets/Damaged_Wood_Grain/",
+   "resolution": 1024,
+   "maps": [
+    "color",
+    "height",
+    "normal",
+    "rough"
+   ],
+   "conversion": {
+    "normal": "GL (measured against its height map)",
+    "roughness": "roughness map",
+    "ao": "from height",
+    "metal": "constant 0.0",
+    "notes": [],
+    "size": 1024
+   },
+   "use": [
+    "wave 4: crates, props and felled-log ends"
+   ]
+  },
+  {
+   "id": "DeadLeafBranches",
+   "source": "DeadLeafBranches_PbrGenericMetallic2kBitmap.zip",
+   "note": null,
+   "licence": "commercial",
+   "format": "substance",
+   "kind": "foliage",
+   "committed": false,
+   "out": "textures/env_local/sets/DeadLeafBranches/",
+   "resolution": 1024,
+   "maps": [
+    "ao",
+    "color",
+    "emissive",
+    "height",
+    "metal",
+    "normal",
+    "opacity",
+    "rough"
+   ],
+   "conversion": {
+    "normal": "GL (measured against its height map)",
+    "roughness": "roughness map",
+    "ao": "AO map",
+    "metal": "metal map",
+    "notes": [],
+    "size": 1024
+   },
+   "use": [
+    "wave 4: leaf cards (replace textures/flora foliage_*)"
+   ]
+  },
+  {
+   "id": "DiamondPlate008C",
+   "source": "DiamondPlate008C_2K-PNG.zip",
+   "note": null,
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "metal",
+   "committed": true,
+   "out": "textures/env/sets/DiamondPlate008C/",
+   "resolution": 512,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "metal",
+    "normal_dx",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": {
+    "normal": "GL (as shipped)",
+    "roughness": "roughness map",
+    "ao": "AO map",
+    "metal": "metal map",
+    "notes": [],
+    "size": 512
+   },
+   "use": [
+    "wave 3: vehicle parts, hangar and VAB metal (replace textures/parts, textures/hangar, textures/vab)"
+   ]
+  },
+  {
+   "id": "Diamond_Plate",
+   "source": "Diamond_Plate.zip",
+   "note": null,
+   "licence": "commercial",
+   "format": "older",
+   "kind": "metal",
+   "committed": false,
+   "out": "textures/env_local/sets/Diamond_Plate/",
+   "resolution": 1024,
+   "maps": [
+    "color",
+    "diff",
+    "height",
+    "metal",
+    "rough"
+   ],
+   "conversion": {
+    "normal": "made from the height map",
+    "roughness": "roughness map",
+    "ao": "from height",
+    "metal": "metal map",
+    "notes": [],
+    "size": 1024
+   },
+   "use": [
+    "wave 3: vehicle parts, hangar and VAB metal (replace textures/parts, textures/hangar, textures/vab)"
+   ]
+  },
+  {
+   "id": "Dirt",
+   "source": "Dirt.zip",
+   "note": null,
+   "licence": "commercial",
+   "format": "older",
+   "kind": "ground",
+   "committed": false,
+   "out": "textures/env_local/sets/Dirt/",
+   "resolution": 1024,
+   "maps": [
+    "ao",
+    "diff",
+    "height",
+    "normal",
+    "rough",
+    "spec"
+   ],
+   "conversion": {
+    "normal": "GL (measured against its height map)",
+    "roughness": "roughness map",
+    "ao": "AO map",
+    "metal": "constant 0.0",
+    "notes": [
+     "albedo from _DIFF (may carry baked light)"
+    ],
+    "size": 1024
+   },
+   "use": [
+    "terrain variety reserve: later palettes and ground decals"
+   ]
+  },
+  {
+   "id": "Dirty_Concrete",
+   "source": "Dirty_Concrete.zip",
+   "note": null,
+   "licence": "commercial",
+   "format": "older",
+   "kind": "ground",
+   "committed": false,
+   "out": "textures/env_local/sets/Dirty_Concrete/",
+   "resolution": 1024,
+   "maps": [
+    "diff",
+    "height",
+    "normal",
+    "rough",
+    "spec"
+   ],
+   "conversion": {
+    "normal": "DX -> GL (measured against its height map)",
+    "roughness": "roughness map",
+    "ao": "from height",
+    "metal": "constant 0.0",
+    "notes": [
+     "albedo from _DIFF (may carry baked light)"
+    ],
+    "size": 1024
+   },
+   "use": [
+    "terrain variety reserve: later palettes and ground decals"
+   ]
+  },
+  {
+   "id": "Dirty_Grass",
+   "source": "Dirty_Grass.zip",
+   "note": null,
+   "licence": "commercial",
+   "format": "older",
+   "kind": "ground",
+   "committed": false,
+   "out": "textures/env_local/sets/Dirty_Grass/",
+   "resolution": 1024,
+   "maps": [
+    "diff",
+    "height",
+    "spec"
+   ],
+   "conversion": {
+    "normal": "made from the height map",
+    "roughness": "1 - 0.8 x specular map",
+    "ao": "from height",
+    "metal": "constant 0.0",
+    "notes": [
+     "albedo from _DIFF (may carry baked light)"
+    ],
+    "size": 1024
+   },
+   "use": [
+    "terrain slot 28 tundra (soil), local builds"
+   ]
+  },
+  {
+   "id": "FineClumpySand",
+   "source": "FineClumpySand_PbrGenericMetallic2kBitmap.zip",
+   "note": null,
+   "licence": "commercial",
+   "format": "substance",
+   "kind": "ground",
+   "committed": false,
+   "out": "textures/env_local/sets/FineClumpySand/",
+   "resolution": 1024,
+   "maps": [
+    "ao",
+    "color",
+    "emissive",
+    "height",
+    "metal",
+    "normal",
+    "opacity",
+    "rough"
+   ],
+   "conversion": {
+    "normal": "GL (measured against its height map)",
+    "roughness": "roughness map",
+    "ao": "AO map",
+    "metal": "metal map",
+    "notes": [],
+    "size": 1024
+   },
+   "use": [
+    "terrain variety reserve: later palettes and ground decals"
+   ]
+  },
+  {
+   "id": "Galvanized_Metal",
+   "source": "Galvanized Metal.zip",
+   "note": null,
+   "licence": "commercial",
+   "format": "older",
+   "kind": "metal",
+   "committed": false,
+   "out": "textures/env_local/sets/Galvanized_Metal/",
+   "resolution": 1024,
+   "maps": [
+    "diff",
+    "height",
+    "spec"
+   ],
+   "conversion": {
+    "normal": "made from the height map",
+    "roughness": "1 - 0.8 x specular map",
+    "ao": "from height",
+    "metal": "constant 1.0",
+    "notes": [
+     "albedo from _DIFF (may carry baked light)"
+    ],
+    "size": 1024
+   },
+   "use": [
+    "wave 3: vehicle parts, hangar and VAB metal (replace textures/parts, textures/hangar, textures/vab)"
+   ]
+  },
+  {
+   "id": "Generated_Checker_Tiles",
+   "source": "Generated_Checker_Tiles.zip",
+   "note": null,
+   "licence": "commercial",
+   "format": "older",
+   "kind": "pattern",
+   "committed": false,
+   "out": "textures/env_local/sets/Generated_Checker_Tiles/",
+   "resolution": 512,
+   "maps": [
+    "ao",
+    "diff",
+    "height",
+    "normal",
+    "rough"
+   ],
+   "conversion": {
+    "normal": "GL (measured against its height map)",
+    "roughness": "roughness map",
+    "ao": "AO map",
+    "metal": "constant 0.0",
+    "notes": [
+     "albedo from _DIFF (may carry baked light)"
+    ],
+    "size": 512
+   },
+   "use": [
+    "test pattern only (scale checks)"
+   ]
+  },
+  {
+   "id": "Grass004",
+   "source": "Grass004_2K-PNG.zip",
+   "note": null,
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "ground",
+   "committed": true,
+   "out": "textures/env/sets/Grass004/",
+   "resolution": 512,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_dx",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": {
+    "normal": "GL (as shipped)",
+    "roughness": "roughness map",
+    "ao": "AO map",
+    "metal": "constant 0.0",
+    "notes": [],
+    "size": 512
+   },
+   "use": [
+    "terrain slot 28 tundra (soil)",
+    "terrain slot 32 litter (soil)"
+   ]
+  },
+  {
+   "id": "Ground037",
+   "source": "Ground037_2K-PNG.zip",
+   "note": null,
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "ground",
+   "committed": true,
+   "out": "textures/env/sets/Ground037/",
+   "resolution": 512,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_dx",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": {
+    "normal": "GL (as shipped)",
+    "roughness": "roughness map",
+    "ao": "AO map",
+    "metal": "constant 0.0",
+    "notes": [],
+    "size": 512
+   },
+   "use": [
+    "terrain slot 20 moss (soil)"
+   ]
+  },
+  {
+   "id": "Ground039",
+   "source": "Ground039_2K-PNG.zip",
+   "note": null,
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "ground",
+   "committed": true,
+   "out": "textures/env/sets/Ground039/",
+   "resolution": 512,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_dx",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": {
+    "normal": "GL (as shipped)",
+    "roughness": "roughness map",
+    "ao": "AO map",
+    "metal": "constant 0.0",
+    "notes": [],
+    "size": 512
+   },
+   "use": [
+    "terrain slot 2 soil (soil)",
+    "terrain slot 17 regolith (regolith)",
+    "terrain slot 19 mudcrack (clay)",
+    "terrain slot 28 tundra (soil), the ground under its cover"
+   ]
+  },
+  {
+   "id": "Ground085",
+   "source": "Ground085_2K-PNG.zip",
+   "note": null,
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "ground",
+   "committed": true,
+   "out": "textures/env/sets/Ground085/",
+   "resolution": 512,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_dx",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": {
+    "normal": "GL (as shipped)",
+    "roughness": "roughness map",
+    "ao": "AO map",
+    "metal": "constant 0.0",
+    "notes": [],
+    "size": 512
+   },
+   "use": [
+    "terrain slot 27 hematite (hematite)",
+    "terrain slot 32 litter (soil), the ground under its cover"
+   ]
+  },
+  {
+   "id": "Ground093B",
+   "source": "Ground093B_2K-PNG.zip",
+   "note": null,
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "ground",
+   "committed": true,
+   "out": "textures/env/sets/Ground093B/",
+   "resolution": 512,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_dx",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": {
+    "normal": "GL (as shipped)",
+    "roughness": "roughness map",
+    "ao": "AO map",
+    "metal": "constant 0.0",
+    "notes": [],
+    "size": 512
+   },
+   "use": [
+    "terrain slot 11 dust (regolith)",
+    "terrain slot 16 sand (sand)"
+   ]
+  },
+  {
+   "id": "Ground110",
+   "source": "Ground110_2K-PNG.zip",
+   "note": null,
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "ground",
+   "committed": true,
+   "out": "textures/env/sets/Ground110/",
+   "resolution": 512,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_dx",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": {
+    "normal": "GL (as shipped)",
+    "roughness": "roughness map",
+    "ao": "AO map",
+    "metal": "constant 0.0",
+    "notes": [],
+    "size": 512
+   },
+   "use": [
+    "terrain slot 10 gravelregolith (regolith)",
+    "terrain slot 21 ash (ash)",
+    "terrain slot 24 scree (gravel)"
+   ]
+  },
+  {
+   "id": "LeafSet024",
+   "source": "LeafSet024_2K-PNG.zip",
+   "note": null,
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "foliage",
+   "committed": true,
+   "out": "textures/env/sets/LeafSet024/",
+   "resolution": 512,
+   "maps": [
+    "color",
+    "height",
+    "normal_dx",
+    "normal_gl",
+    "opacity",
+    "rough"
+   ],
+   "conversion": {
+    "normal": "GL (as shipped)",
+    "roughness": "roughness map",
+    "ao": "from height",
+    "metal": "constant 0.0",
+    "notes": [],
+    "size": 512
+   },
+   "use": [
+    "wave 4: leaf cards (replace textures/flora foliage_*)"
+   ]
+  },
+  {
+   "id": "LeafSet030",
+   "source": "LeafSet030_2K-PNG.zip",
+   "note": null,
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "foliage",
+   "committed": true,
+   "out": "textures/env/sets/LeafSet030/",
+   "resolution": 512,
+   "maps": [
+    "color",
+    "height",
+    "normal_dx",
+    "normal_gl",
+    "opacity",
+    "rough"
+   ],
+   "conversion": {
+    "normal": "GL (as shipped)",
+    "roughness": "roughness map",
+    "ao": "from height",
+    "metal": "constant 0.0",
+    "notes": [],
+    "size": 512
+   },
+   "use": [
+    "wave 4: leaf cards (replace textures/flora foliage_*)"
+   ]
+  },
+  {
+   "id": "MarsSmoothRock",
+   "source": "MarsSmoothRock_PbrGenericMetallic2kBitmap.zip",
+   "note": null,
+   "licence": "commercial",
+   "format": "substance",
+   "kind": "rock",
+   "committed": false,
+   "out": "textures/env_local/sets/MarsSmoothRock/",
+   "resolution": 1024,
+   "maps": [
+    "ao",
+    "color",
+    "emissive",
+    "height",
+    "metal",
+    "normal",
+    "opacity",
+    "rough"
+   ],
+   "conversion": {
+    "normal": "GL (measured against its height map)",
+    "roughness": "roughness map",
+    "ao": "AO map",
+    "metal": "metal map",
+    "notes": [],
+    "size": 1024
+   },
+   "use": [
+    "terrain slot 1 rust (rustrock), local builds",
+    "terrain slot 19 mudcrack (clay), local builds"
+   ]
+  },
+  {
+   "id": "Metal034",
+   "source": "Metal034_2K-PNG.zip",
+   "note": null,
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "metal",
+   "committed": true,
+   "out": "textures/env/sets/Metal034/",
+   "resolution": 512,
+   "maps": [
+    "color",
+    "height",
+    "metal",
+    "normal_dx",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": {
+    "normal": "GL (as shipped)",
+    "roughness": "roughness map",
+    "ao": "from height",
+    "metal": "metal map",
+    "notes": [],
+    "size": 512
+   },
+   "use": [
+    "wave 3: vehicle parts, hangar and VAB metal (replace textures/parts, textures/hangar, textures/vab)"
+   ]
+  },
+  {
+   "id": "Metal048C",
+   "source": "Metal048C_2K-PNG.zip",
+   "note": null,
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "metal",
+   "committed": true,
+   "out": "textures/env/sets/Metal048C/",
+   "resolution": 512,
+   "maps": [
+    "color",
+    "height",
+    "metal",
+    "normal_dx",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": {
+    "normal": "GL (as shipped)",
+    "roughness": "roughness map",
+    "ao": "from height",
+    "metal": "metal map",
+    "notes": [],
+    "size": 512
+   },
+   "use": [
+    "wave 3: vehicle parts, hangar and VAB metal (replace textures/parts, textures/hangar, textures/vab)"
+   ]
+  },
+  {
+   "id": "Metal050A",
+   "source": "Metal050A_2K-PNG.zip",
+   "note": null,
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "metal",
+   "committed": true,
+   "out": "textures/env/sets/Metal050A/",
+   "resolution": 512,
+   "maps": [
+    "color",
+    "height",
+    "metal",
+    "normal_dx",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": {
+    "normal": "GL (as shipped)",
+    "roughness": "roughness map",
+    "ao": "from height",
+    "metal": "metal map",
+    "notes": [],
+    "size": 512
+   },
+   "use": [
+    "wave 3: vehicle parts, hangar and VAB metal (replace textures/parts, textures/hangar, textures/vab)"
+   ]
+  },
+  {
+   "id": "Metal052C",
+   "source": "Metal052C_2K-PNG.zip",
+   "note": null,
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "metal",
+   "committed": true,
+   "out": "textures/env/sets/Metal052C/",
+   "resolution": 512,
+   "maps": [
+    "color",
+    "height",
+    "metal",
+    "normal_dx",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": {
+    "normal": "GL (as shipped)",
+    "roughness": "roughness map",
+    "ao": "from height",
+    "metal": "metal map",
+    "notes": [],
+    "size": 512
+   },
+   "use": [
+    "wave 3: vehicle parts, hangar and VAB metal (replace textures/parts, textures/hangar, textures/vab)"
+   ]
+  },
+  {
+   "id": "Metal053B",
+   "source": "Metal053B_2K-PNG.zip",
+   "note": null,
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "metal",
+   "committed": true,
+   "out": "textures/env/sets/Metal053B/",
+   "resolution": 512,
+   "maps": [
+    "color",
+    "height",
+    "metal",
+    "normal_dx",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": {
+    "normal": "GL (as shipped)",
+    "roughness": "roughness map",
+    "ao": "from height",
+    "metal": "metal map",
+    "notes": [],
+    "size": 512
+   },
+   "use": [
+    "wave 3: vehicle parts, hangar and VAB metal (replace textures/parts, textures/hangar, textures/vab)"
+   ]
+  },
+  {
+   "id": "MetalCrateXCorrugatedPainted",
+   "source": "MetalCrateXCorrugatedPainted_PbrGenericMetallic2kBitmap.zip",
+   "note": null,
+   "licence": "commercial",
+   "format": "substance",
+   "kind": "metal",
+   "committed": false,
+   "out": "textures/env_local/sets/MetalCrateXCorrugatedPainted/",
+   "resolution": 1024,
+   "maps": [
+    "ao",
+    "color",
+    "emissive",
+    "height",
+    "metal",
+    "normal",
+    "opacity",
+    "rough"
+   ],
+   "conversion": {
+    "normal": "GL (measured against its height map)",
+    "roughness": "roughness map",
+    "ao": "AO map",
+    "metal": "metal map",
+    "notes": [],
+    "size": 1024
+   },
+   "use": [
+    "wave 3: vehicle parts, hangar and VAB metal (replace textures/parts, textures/hangar, textures/vab)"
+   ]
+  },
+  {
+   "id": "MetalWalkway014",
+   "source": "MetalWalkway014_2K-PNG.zip",
+   "note": null,
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "metal",
+   "committed": true,
+   "out": "textures/env/sets/MetalWalkway014/",
+   "resolution": 512,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "metal",
+    "normal_dx",
+    "normal_gl",
+    "opacity",
+    "rough"
+   ],
+   "conversion": {
+    "normal": "GL (as shipped)",
+    "roughness": "roughness map",
+    "ao": "AO map",
+    "metal": "metal map",
+    "notes": [],
+    "size": 512
+   },
+   "use": [
+    "wave 3: vehicle parts, hangar and VAB metal (replace textures/parts, textures/hangar, textures/vab)"
+   ]
+  },
+  {
+   "id": "MossAndSmallFerns",
+   "source": "MossAndSmallFerns_PbrGenericMetallic2kBitmap.zip",
+   "note": null,
+   "licence": "commercial",
+   "format": "substance",
+   "kind": "ground",
+   "committed": false,
+   "out": "textures/env_local/sets/MossAndSmallFerns/",
+   "resolution": 1024,
+   "maps": [
+    "ao",
+    "color",
+    "emissive",
+    "height",
+    "metal",
+    "normal",
+    "opacity",
+    "rough"
+   ],
+   "conversion": {
+    "normal": "GL (measured against its height map)",
+    "roughness": "roughness map",
+    "ao": "AO map",
+    "metal": "metal map",
+    "notes": [],
+    "size": 1024
+   },
+   "use": [
+    "terrain slot 20 moss (soil), local builds"
+   ]
+  },
+  {
+   "id": "Mossy_Rock",
+   "source": "Mossy_Rock.zip",
+   "note": null,
+   "licence": "commercial",
+   "format": "older",
+   "kind": "rock",
+   "committed": false,
+   "out": "textures/env_local/sets/Mossy_Rock/",
+   "resolution": 1024,
+   "maps": [
+    "ao",
+    "diff",
+    "height",
+    "normal",
+    "spec"
+   ],
+   "conversion": {
+    "normal": "DX -> GL (measured against its height map)",
+    "roughness": "1 - 0.8 x specular map",
+    "ao": "AO map",
+    "metal": "constant 0.0",
+    "notes": [
+     "albedo from _DIFF (may carry baked light)"
+    ],
+    "size": 1024
+   },
+   "use": [
+    "terrain slot 15 sandstone (sandstone), local builds"
+   ]
+  },
+  {
+   "id": "New_Concrete",
+   "source": "New_Concrete.zip",
+   "note": null,
+   "licence": "commercial",
+   "format": "older",
+   "kind": "concrete",
+   "committed": false,
+   "out": "textures/env_local/sets/New_Concrete/",
+   "resolution": 1024,
+   "maps": [
+    "diff",
+    "height",
+    "normal",
+    "spec"
+   ],
+   "conversion": {
+    "normal": "GL (measured against its height map)",
+    "roughness": "1 - 0.8 x specular map",
+    "ao": "from height",
+    "metal": "constant 0.0",
+    "notes": [
+     "albedo from _DIFF (may carry baked light)"
+    ],
+    "size": 1024
+   },
+   "use": [
+    "wave 2: base pads, foundations and buildings (replace textures/base concrete)"
+   ]
+  },
+  {
+   "id": "Old_Rocks",
+   "source": "Old_Rocks.zip",
+   "note": null,
+   "licence": "commercial",
+   "format": "older",
+   "kind": "rock",
+   "committed": false,
+   "out": "textures/env_local/sets/Old_Rocks/",
+   "resolution": 1024,
+   "maps": [
+    "ao",
+    "color",
+    "diff",
+    "height",
+    "normal",
+    "spec"
+   ],
+   "conversion": {
+    "normal": "GL (measured against its height map)",
+    "roughness": "1 - 0.8 x specular map",
+    "ao": "AO map",
+    "metal": "constant 0.0",
+    "notes": [],
+    "size": 1024
+   },
+   "use": [
+    "terrain slot 3 flagstone (slate), local builds"
+   ]
+  },
+  {
+   "id": "Old_Wood",
+   "source": "Old_Wood.zip",
+   "note": null,
+   "licence": "commercial",
+   "format": "older",
+   "kind": "wood",
+   "committed": false,
+   "out": "textures/env_local/sets/Old_Wood/",
+   "resolution": 1024,
+   "maps": [
+    "ao",
+    "diff",
+    "height",
+    "normal",
+    "spec"
+   ],
+   "conversion": {
+    "normal": "GL (measured against its height map)",
+    "roughness": "1 - 0.8 x specular map",
+    "ao": "AO map",
+    "metal": "constant 0.0",
+    "notes": [
+     "albedo from _DIFF (may carry baked light)"
+    ],
+    "size": 1024
+   },
+   "use": [
+    "wave 4: crates, props and felled-log ends"
+   ]
+  },
+  {
+   "id": "Olive_Wood",
+   "source": "Olive_Wood.zip",
+   "note": null,
+   "licence": "commercial",
+   "format": "older",
+   "kind": "wood",
+   "committed": false,
+   "out": "textures/env_local/sets/Olive_Wood/",
+   "resolution": 1024,
+   "maps": [
+    "color",
+    "height",
+    "normal",
+    "rough"
+   ],
+   "conversion": {
+    "normal": "GL (measured against its height map)",
+    "roughness": "roughness map",
+    "ao": "from height",
+    "metal": "constant 0.0",
+    "notes": [],
+    "size": 1024
+   },
+   "use": [
+    "wave 4: crates, props and felled-log ends"
+   ]
+  },
+  {
+   "id": "Onyx006",
+   "source": "Onyx006_2K-PNG.zip",
+   "note": null,
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "rock",
+   "committed": true,
+   "out": "textures/env/sets/Onyx006/",
+   "resolution": 512,
+   "maps": [
+    "color",
+    "height",
+    "normal_dx",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": {
+    "normal": "GL (as shipped)",
+    "roughness": "roughness map",
+    "ao": "from height",
+    "metal": "constant 0.0",
+    "notes": [],
+    "size": 512
+   },
+   "use": [
+    "terrain slot 4 onyx (onyx)",
+    "terrain slot 12 bandedice (ice)"
+   ]
+  },
+  {
+   "id": "Onyx010",
+   "source": "Onyx010_2K-PNG.zip",
+   "note": null,
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "rock",
+   "committed": true,
+   "out": "textures/env/sets/Onyx010/",
+   "resolution": 512,
+   "maps": [
+    "color",
+    "height",
+    "normal_dx",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": {
+    "normal": "GL (as shipped)",
+    "roughness": "roughness map",
+    "ao": "from height",
+    "metal": "constant 0.0",
+    "notes": [],
+    "size": 512
+   },
+   "use": [
+    "terrain slot 15 sandstone (sandstone)"
+   ]
+  },
+  {
+   "id": "OrangePineTreeBark",
+   "source": "OrangePineTreeBark_PbrGenericMetallic2kBitmap.zip",
+   "note": null,
+   "licence": "commercial",
+   "format": "substance",
+   "kind": "bark",
+   "committed": false,
+   "out": "textures/env_local/sets/OrangePineTreeBark/",
+   "resolution": 1024,
+   "maps": [
+    "ao",
+    "color",
+    "emissive",
+    "height",
+    "metal",
+    "normal",
+    "opacity",
+    "rough"
+   ],
+   "conversion": {
+    "normal": "GL (measured against its height map)",
+    "roughness": "roughness map",
+    "ao": "AO map",
+    "metal": "metal map",
+    "notes": [],
+    "size": 1024
+   },
+   "use": [
+    "wave 4: tree bark (replace textures/flora bark_*)"
+   ]
+  },
+  {
+   "id": "Potato",
+   "source": "Potato.zip",
+   "note": null,
+   "licence": "commercial",
+   "format": "older",
+   "kind": "ground",
+   "committed": false,
+   "out": "textures/env_local/sets/Potato/",
+   "resolution": 1024,
+   "maps": [
+    "color",
+    "height",
+    "normal",
+    "rough"
+   ],
+   "conversion": {
+    "normal": "GL (measured against its height map)",
+    "roughness": "roughness map",
+    "ao": "from height",
+    "metal": "constant 0.0",
+    "notes": [],
+    "size": 1024
+   },
+   "use": [
+    "terrain slot 26 sulfur (sulfur), local builds"
+   ]
+  },
+  {
+   "id": "Red_Asphalt",
+   "source": "Red_Asphalt.zip",
+   "note": null,
+   "licence": "commercial",
+   "format": "older",
+   "kind": "road",
+   "committed": false,
+   "out": "textures/env_local/sets/Red_Asphalt/",
+   "resolution": 1024,
+   "maps": [
+    "diff",
+    "height",
+    "normal"
+   ],
+   "conversion": {
+    "normal": "DX -> GL (measured against its height map)",
+    "roughness": "constant 0.90",
+    "ao": "from height",
+    "metal": "constant 0.0",
+    "notes": [
+     "albedo from _DIFF (may carry baked light)"
+    ],
+    "size": 1024
+   },
+   "use": [
+    "wave 2: base roads and pads (replace textures/base asphalt)"
+   ]
+  },
+  {
+   "id": "Regular_Pavement",
+   "source": "Regular_Pavement.zip",
+   "note": null,
+   "licence": "commercial",
+   "format": "older",
+   "kind": "road",
+   "committed": false,
+   "out": "textures/env_local/sets/Regular_Pavement/",
+   "resolution": 1024,
+   "maps": [
+    "diff",
+    "height",
+    "normal",
+    "rough",
+    "spec"
+   ],
+   "conversion": {
+    "normal": "GL (measured against its height map)",
+    "roughness": "roughness map",
+    "ao": "from height",
+    "metal": "constant 0.0",
+    "notes": [
+     "albedo from _DIFF (may carry baked light)"
+    ],
+    "size": 1024
+   },
+   "use": [
+    "wave 2: base roads and pads (replace textures/base asphalt)"
+   ]
+  },
+  {
+   "id": "Road008C",
+   "source": "Road008C_2K-PNG.zip",
+   "note": null,
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "road",
+   "committed": true,
+   "out": "textures/env/sets/Road008C/",
+   "resolution": 512,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_dx",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": {
+    "normal": "GL (as shipped)",
+    "roughness": "roughness map",
+    "ao": "AO map",
+    "metal": "constant 0.0",
+    "notes": [],
+    "size": 512
+   },
+   "use": [
+    "wave 2: base roads and pads (replace textures/base asphalt)"
+   ]
+  },
+  {
+   "id": "Road009A",
+   "source": "Road009A_2K-PNG.zip",
+   "note": null,
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "road",
+   "committed": true,
+   "out": "textures/env/sets/Road009A/",
+   "resolution": 512,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_dx",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": {
+    "normal": "GL (as shipped)",
+    "roughness": "roughness map",
+    "ao": "AO map",
+    "metal": "constant 0.0",
+    "notes": [],
+    "size": 512
+   },
+   "use": [
+    "wave 2: base roads and pads (replace textures/base asphalt)"
+   ]
+  },
+  {
+   "id": "Road010A",
+   "source": "Road010A_2K-PNG.zip",
+   "note": null,
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "road",
+   "committed": true,
+   "out": "textures/env/sets/Road010A/",
+   "resolution": 512,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_dx",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": {
+    "normal": "GL (as shipped)",
+    "roughness": "roughness map",
+    "ao": "AO map",
+    "metal": "constant 0.0",
+    "notes": [],
+    "size": 512
+   },
+   "use": [
+    "wave 2: base roads and pads (replace textures/base asphalt)"
+   ]
+  },
+  {
+   "id": "Road011A",
+   "source": "Road011A_2K-PNG.zip",
+   "note": null,
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "road",
+   "committed": true,
+   "out": "textures/env/sets/Road011A/",
+   "resolution": 512,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_dx",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": {
+    "normal": "GL (as shipped)",
+    "roughness": "roughness map",
+    "ao": "AO map",
+    "metal": "constant 0.0",
+    "notes": [],
+    "size": 512
+   },
+   "use": [
+    "wave 2: base roads and pads (replace textures/base asphalt)"
+   ]
+  },
+  {
+   "id": "Rock035",
+   "source": "Rock035_2K-PNG.zip",
+   "note": null,
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "rock",
+   "committed": true,
+   "out": "textures/env/sets/Rock035/",
+   "resolution": 512,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_dx",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": {
+    "normal": "GL (as shipped)",
+    "roughness": "roughness map",
+    "ao": "AO map",
+    "metal": "constant 0.0",
+    "notes": [],
+    "size": 512
+   },
+   "use": [
+    "terrain slot 13 basalt (basalt)"
+   ]
+  },
+  {
+   "id": "Rock051",
+   "source": "Rock051_2K-PNG.zip",
+   "note": null,
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "rock",
+   "committed": true,
+   "out": "textures/env/sets/Rock051/",
+   "resolution": 512,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "metal",
+    "normal_dx",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": {
+    "normal": "GL (as shipped)",
+    "roughness": "roughness map",
+    "ao": "AO map",
+    "metal": "metal map",
+    "notes": [],
+    "size": 512
+   },
+   "use": [
+    "terrain slot 25 limestone (limestone)",
+    "terrain slot 30 shale (shale)"
+   ]
+  },
+  {
+   "id": "Rock058",
+   "source": "Rock058_2K-PNG.zip",
+   "note": null,
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "rock",
+   "committed": true,
+   "out": "textures/env/sets/Rock058/",
+   "resolution": 512,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_dx",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": {
+    "normal": "GL (as shipped)",
+    "roughness": "roughness map",
+    "ao": "AO map",
+    "metal": "constant 0.0",
+    "notes": [],
+    "size": 512
+   },
+   "use": [
+    "terrain slot 5 veinstone (veinstone)",
+    "terrain slot 6 magma (uranium)",
+    "terrain slot 9 slate (slate)",
+    "terrain slot 29 pahoehoe (basalt)"
+   ]
+  },
+  {
+   "id": "Rock060",
+   "source": "Rock060_2K-PNG.zip",
+   "note": null,
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "rock",
+   "committed": true,
+   "out": "textures/env/sets/Rock060/",
+   "resolution": 512,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_dx",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": {
+    "normal": "GL (as shipped)",
+    "roughness": "roughness map",
+    "ao": "AO map",
+    "metal": "constant 0.0",
+    "notes": [],
+    "size": 512
+   },
+   "use": [
+    "terrain slot 14 granite (granite)"
+   ]
+  },
+  {
+   "id": "Rock063",
+   "source": "Rock063_2K-PNG.zip",
+   "note": null,
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "rock",
+   "committed": true,
+   "out": "textures/env/sets/Rock063/",
+   "resolution": 512,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_dx",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": {
+    "normal": "GL (as shipped)",
+    "roughness": "roughness map",
+    "ao": "AO map",
+    "metal": "constant 0.0",
+    "notes": [],
+    "size": 512
+   },
+   "use": [
+    "terrain slot 31 peat (soil)"
+   ]
+  },
+  {
+   "id": "Rock_01",
+   "source": "Rock_01.zip",
+   "note": null,
+   "licence": "commercial",
+   "format": "older",
+   "kind": "rock",
+   "committed": false,
+   "out": "textures/env_local/sets/Rock_01/",
+   "resolution": 1024,
+   "maps": [
+    "ao",
+    "diff",
+    "height",
+    "normal",
+    "spec"
+   ],
+   "conversion": {
+    "normal": "GL (measured against its height map)",
+    "roughness": "1 - 0.8 x specular map",
+    "ao": "AO map",
+    "metal": "constant 0.0",
+    "notes": [
+     "albedo from _DIFF (may carry baked light)"
+    ],
+    "size": 1024
+   },
+   "use": [
+    "terrain variety reserve: later palettes, boulders and cave props"
+   ]
+  },
+  {
+   "id": "Rock_02",
+   "source": "Rock_02.zip",
+   "note": null,
+   "licence": "commercial",
+   "format": "older",
+   "kind": "rock",
+   "committed": false,
+   "out": "textures/env_local/sets/Rock_02/",
+   "resolution": 1024,
+   "maps": [
+    "ao",
+    "diff",
+    "height",
+    "normal",
+    "spec"
+   ],
+   "conversion": {
+    "normal": "GL (measured against its height map)",
+    "roughness": "1 - 0.8 x specular map",
+    "ao": "AO map",
+    "metal": "constant 0.0",
+    "notes": [
+     "albedo from _DIFF (may carry baked light)"
+    ],
+    "size": 1024
+   },
+   "use": [
+    "terrain variety reserve: later palettes, boulders and cave props"
+   ]
+  },
+  {
+   "id": "Rock_03",
+   "source": "Rock_03.zip",
+   "note": null,
+   "licence": "commercial",
+   "format": "older",
+   "kind": "rock",
+   "committed": false,
+   "out": "textures/env_local/sets/Rock_03/",
+   "resolution": 1024,
+   "maps": [
+    "ao",
+    "diff",
+    "height",
+    "normal",
+    "spec"
+   ],
+   "conversion": {
+    "normal": "GL (measured against its height map)",
+    "roughness": "1 - 0.8 x specular map",
+    "ao": "AO map",
+    "metal": "constant 0.0",
+    "notes": [
+     "albedo from _DIFF (may carry baked light)"
+    ],
+    "size": 1024
+   },
+   "use": [
+    "terrain slot 30 shale (shale), local builds"
+   ]
+  },
+  {
+   "id": "Rock_04",
+   "source": "Rock_04.zip",
+   "note": null,
+   "licence": "commercial",
+   "format": "older",
+   "kind": "rock",
+   "committed": false,
+   "out": "textures/env_local/sets/Rock_04/",
+   "resolution": 1024,
+   "maps": [
+    "ao",
+    "diff",
+    "height",
+    "normal",
+    "spec"
+   ],
+   "conversion": {
+    "normal": "GL (measured against its height map)",
+    "roughness": "1 - 0.8 x specular map",
+    "ao": "AO map",
+    "metal": "constant 0.0",
+    "notes": [
+     "albedo from _DIFF (may carry baked light)"
+    ],
+    "size": 1024
+   },
+   "use": [
+    "terrain slot 25 limestone (limestone), local builds"
+   ]
+  },
+  {
+   "id": "Rock_05",
+   "source": "Rock_05.zip",
+   "note": null,
+   "licence": "commercial",
+   "format": "older",
+   "kind": "rock",
+   "committed": false,
+   "out": "textures/env_local/sets/Rock_05/",
+   "resolution": 1024,
+   "maps": [
+    "ao",
+    "diff",
+    "height",
+    "normal",
+    "rough",
+    "spec"
+   ],
+   "conversion": {
+    "normal": "GL (measured against its height map)",
+    "roughness": "roughness map",
+    "ao": "AO map",
+    "metal": "constant 0.0",
+    "notes": [
+     "albedo from _DIFF (may carry baked light)"
+    ],
+    "size": 1024
+   },
+   "use": [
+    "terrain slot 14 granite (granite), local builds"
+   ]
+  },
+  {
+   "id": "Rock_Wall",
+   "source": "Rock_Wall.zip",
+   "note": null,
+   "licence": "commercial",
+   "format": "older",
+   "kind": "rock",
+   "committed": false,
+   "out": "textures/env_local/sets/Rock_Wall/",
+   "resolution": 1024,
+   "maps": [
+    "ao",
+    "diff",
+    "height",
+    "normal",
+    "spec"
+   ],
+   "conversion": {
+    "normal": "GL (measured against its height map)",
+    "roughness": "1 - 0.8 x specular map",
+    "ao": "AO map",
+    "metal": "constant 0.0",
+    "notes": [
+     "albedo from _DIFF (may carry baked light)"
+    ],
+    "size": 1024
+   },
+   "use": [
+    "terrain slot 9 slate (slate), local builds"
+   ]
+  },
+  {
+   "id": "Rocks011",
+   "source": "Rocks011_2K-PNG.zip",
+   "note": null,
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "rock",
+   "committed": true,
+   "out": "textures/env/sets/Rocks011/",
+   "resolution": 512,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_dx",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": {
+    "normal": "GL (as shipped)",
+    "roughness": "roughness map",
+    "ao": "AO map",
+    "metal": "constant 0.0",
+    "notes": [],
+    "size": 512
+   },
+   "use": [
+    "terrain slot 1 rust (rustrock)",
+    "terrain slot 3 flagstone (slate)",
+    "terrain slot 26 sulfur (sulfur)"
+   ]
+  },
+  {
+   "id": "Snow008A",
+   "source": "Snow008A_2K-PNG.zip",
+   "note": null,
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "snow",
+   "committed": true,
+   "out": "textures/env/sets/Snow008A/",
+   "resolution": 512,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_dx",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": {
+    "normal": "GL (as shipped)",
+    "roughness": "roughness map",
+    "ao": "AO map",
+    "metal": "constant 0.0",
+    "notes": [],
+    "size": 512
+   },
+   "use": [
+    "terrain slot 23 glacier (ice)"
+   ]
+  },
+  {
+   "id": "Snow014",
+   "source": "Snow014_2K-PNG.zip",
+   "note": null,
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "snow",
+   "committed": true,
+   "out": "textures/env/sets/Snow014/",
+   "resolution": 512,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_dx",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": {
+    "normal": "GL (as shipped)",
+    "roughness": "roughness map",
+    "ao": "AO map",
+    "metal": "constant 0.0",
+    "notes": [],
+    "size": 512
+   },
+   "use": [
+    "terrain slot 18 salt (salt)",
+    "terrain slot 22 snow (ice)"
+   ]
+  },
+  {
+   "id": "Snow015",
+   "source": "Snow015_2K-PNG.zip",
+   "note": null,
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "snow",
+   "committed": true,
+   "out": "textures/env/sets/Snow015/",
+   "resolution": 512,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_dx",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": {
+    "normal": "GL (as shipped)",
+    "roughness": "roughness map",
+    "ao": "AO map",
+    "metal": "constant 0.0",
+    "notes": [],
+    "size": 512
+   },
+   "use": [
+    "terrain variety reserve"
+   ]
+  },
+  {
+   "id": "SpaceLabWallOld",
+   "source": "SpaceLabWallOld_PbrGenericMetallic2kBitmap.zip",
+   "note": null,
+   "licence": "commercial",
+   "format": "substance",
+   "kind": "scifi",
+   "committed": false,
+   "out": "textures/env_local/sets/SpaceLabWallOld/",
+   "resolution": 1024,
+   "maps": [
+    "ao",
+    "color",
+    "emissive",
+    "height",
+    "metal",
+    "normal",
+    "opacity",
+    "rough"
+   ],
+   "conversion": {
+    "normal": "GL (measured against its height map)",
+    "roughness": "roughness map",
+    "ao": "AO map",
+    "metal": "metal map",
+    "notes": [],
+    "size": 1024
+   },
+   "use": [
+    "wave 3: lab, hangar and station interiors (textures/lab, textures/hangar)"
+   ]
+  },
+  {
+   "id": "SpaceStationWallKit5Metallic",
+   "source": "SpaceStationWallKit5Metallic_PbrGenericMetallic2kBitmap.zip",
+   "note": null,
+   "licence": "commercial",
+   "format": "substance",
+   "kind": "scifi",
+   "committed": false,
+   "out": "textures/env_local/sets/SpaceStationWallKit5Metallic/",
+   "resolution": 1024,
+   "maps": [
+    "ao",
+    "color",
+    "emissive",
+    "height",
+    "metal",
+    "normal",
+    "opacity",
+    "rough"
+   ],
+   "conversion": {
+    "normal": "GL (measured against its height map)",
+    "roughness": "roughness map",
+    "ao": "AO map",
+    "metal": "metal map",
+    "notes": [],
+    "size": 1024
+   },
+   "use": [
+    "wave 3: lab, hangar and station interiors (textures/lab, textures/hangar)"
+   ]
+  },
+  {
+   "id": "Stone_01",
+   "source": "Stone_01.zip",
+   "note": null,
+   "licence": "commercial",
+   "format": "older",
+   "kind": "rock",
+   "committed": false,
+   "out": "textures/env_local/sets/Stone_01/",
+   "resolution": 1024,
+   "maps": [
+    "ao",
+    "diff",
+    "normal",
+    "spec"
+   ],
+   "conversion": {
+    "normal": "assumed GL (no height map to test against)",
+    "roughness": "1 - 0.8 x specular map",
+    "ao": "AO map",
+    "metal": "constant 0.0",
+    "notes": [
+     "albedo from _DIFF (may carry baked light)"
+    ],
+    "size": 1024
+   },
+   "use": [
+    "terrain variety reserve: later palettes, boulders and cave props"
+   ]
+  },
+  {
+   "id": "Stone_Pavement",
+   "source": "Stone_Pavement.zip",
+   "note": null,
+   "licence": "commercial",
+   "format": "older",
+   "kind": "road",
+   "committed": false,
+   "out": "textures/env_local/sets/Stone_Pavement/",
+   "resolution": 1024,
+   "maps": [
+    "ao",
+    "diff",
+    "height",
+    "normal",
+    "spec"
+   ],
+   "conversion": {
+    "normal": "GL (measured against its height map)",
+    "roughness": "1 - 0.8 x specular map",
+    "ao": "AO map",
+    "metal": "constant 0.0",
+    "notes": [
+     "albedo from _DIFF (may carry baked light)"
+    ],
+    "size": 1024
+   },
+   "use": [
+    "wave 2: base roads and pads (replace textures/base asphalt)"
+   ]
+  },
+  {
+   "id": "White_Stones",
+   "source": "White_Stones.zip",
+   "note": null,
+   "licence": "commercial",
+   "format": "older",
+   "kind": "ground",
+   "committed": false,
+   "out": "textures/env_local/sets/White_Stones/",
+   "resolution": 1024,
+   "maps": [
+    "ao",
+    "diff",
+    "height",
+    "normal",
+    "spec"
+   ],
+   "conversion": {
+    "normal": "GL (measured against its height map)",
+    "roughness": "1 - 0.8 x specular map",
+    "ao": "AO map",
+    "metal": "constant 0.0",
+    "notes": [
+     "albedo from _DIFF (may carry baked light)"
+    ],
+    "size": 1024
+   },
+   "use": [
+    "terrain variety reserve: later palettes and ground decals"
+   ]
+  },
+  {
+   "id": "Wood062",
+   "source": "Wood062_2K-PNG.zip",
+   "note": null,
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "wood",
+   "committed": true,
+   "out": "textures/env/sets/Wood062/",
+   "resolution": 512,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_dx",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": {
+    "normal": "GL (as shipped)",
+    "roughness": "roughness map",
+    "ao": "AO map",
+    "metal": "constant 0.0",
+    "notes": [],
+    "size": 512
+   },
+   "use": [
+    "wave 4: crates, props and felled-log ends"
+   ]
+  },
+  {
+   "id": "Wood_Grain_02",
+   "source": "Wood_Grain_02.zip",
+   "note": null,
+   "licence": "commercial",
+   "format": "older",
+   "kind": "wood",
+   "committed": false,
+   "out": "textures/env_local/sets/Wood_Grain_02/",
+   "resolution": 1024,
+   "maps": [
+    "diff",
+    "height",
+    "normal"
+   ],
+   "conversion": {
+    "normal": "GL (measured against its height map)",
+    "roughness": "constant 0.75",
+    "ao": "from height",
+    "metal": "constant 0.0",
+    "notes": [
+     "albedo from _DIFF (may carry baked light)"
+    ],
+    "size": 1024
+   },
+   "use": [
+    "wave 4: crates, props and felled-log ends"
+   ]
+  },
+  {
+   "id": "bolted-fan-housing-wall-001",
+   "source": "bolted-fan-housing-wall-001.png",
+   "note": null,
+   "licence": "commercial",
+   "format": "loose",
+   "kind": "scifi",
+   "committed": false,
+   "out": "textures/env_local/sets/bolted-fan-housing-wall-001/",
+   "resolution": 1024,
+   "maps": [
+    "color"
+   ],
+   "conversion": {
+    "normal": "flat (no normal or height)",
+    "roughness": "constant 0.60",
+    "ao": "none (white)",
+    "metal": "constant 0.0",
+    "notes": [],
+    "size": 1024
+   },
+   "use": [
+    "wave 3: lab, hangar and station interiors (textures/lab, textures/hangar)"
+   ]
+  },
+  {
+   "id": "maintenance-hatch-floor-001",
+   "source": "maintenance-hatch-floor-001.png",
+   "note": null,
+   "licence": "commercial",
+   "format": "loose",
+   "kind": "scifi",
+   "committed": false,
+   "out": "textures/env_local/sets/maintenance-hatch-floor-001/",
+   "resolution": 1024,
+   "maps": [
+    "color"
+   ],
+   "conversion": {
+    "normal": "flat (no normal or height)",
+    "roughness": "constant 0.60",
+    "ao": "none (white)",
+    "metal": "constant 0.0",
+    "notes": [],
+    "size": 1024
+   },
+   "use": [
+    "wave 3: lab, hangar and station interiors (textures/lab, textures/hangar)"
+   ]
+  },
+  {
+   "id": "worn-safety-stripes-001",
+   "source": "worn-safety-stripes-001.png",
+   "note": null,
+   "licence": "commercial",
+   "format": "loose",
+   "kind": "scifi",
+   "committed": false,
+   "out": "textures/env_local/sets/worn-safety-stripes-001/",
+   "resolution": 1024,
+   "maps": [
+    "color"
+   ],
+   "conversion": {
+    "normal": "flat (no normal or height)",
+    "roughness": "constant 0.60",
+    "ao": "none (white)",
+    "metal": "constant 0.0",
+    "notes": [],
+    "size": 1024
+   },
+   "use": [
+    "wave 3: lab, hangar and station interiors (textures/lab, textures/hangar)"
+   ]
+  }
+ ],
+ "terrain": [
+  {
+   "slot": 1,
+   "name": "rust",
+   "material": "rustrock",
+   "replaces": "textures/terrain/planet_rust_rock.png",
+   "cc0": {
+    "set": "Rocks011",
+    "file": "textures/env/terrain/01_rust.png"
+   },
+   "local": {
+    "set": "MarsSmoothRock",
+    "file": "textures/env_local/terrain/01_rust.png"
+   },
+   "size": 256,
+   "scale": 1.6,
+   "glow": false
+  },
+  {
+   "slot": 2,
+   "name": "soil",
+   "material": "soil",
+   "replaces": "textures/terrain/planet_purple_dirt.png",
+   "cc0": {
+    "set": "Ground039",
+    "file": "textures/env/terrain/02_soil.png"
+   },
+   "local": null,
+   "size": 256,
+   "scale": 2.2,
+   "glow": false
+  },
+  {
+   "slot": 3,
+   "name": "flagstone",
+   "material": "slate",
+   "replaces": "textures/terrain/planet_purple_slate.png",
+   "cc0": {
+    "set": "Rocks011",
+    "file": "textures/env/terrain/03_flagstone.png"
+   },
+   "local": {
+    "set": "Old_Rocks",
+    "file": "textures/env_local/terrain/03_flagstone.png"
+   },
+   "size": 256,
+   "scale": 1.4,
+   "glow": false
+  },
+  {
+   "slot": 4,
+   "name": "onyx",
+   "material": "onyx",
+   "replaces": "textures/terrain/planet_banded_onyx.png",
+   "cc0": {
+    "set": "Onyx006",
+    "file": "textures/env/terrain/04_onyx.png"
+   },
+   "local": null,
+   "size": 256,
+   "scale": 1.2,
+   "glow": false
+  },
+  {
+   "slot": 5,
+   "name": "veinstone",
+   "material": "veinstone",
+   "replaces": "textures/terrain/cave_orange_veinstone.png",
+   "cc0": {
+    "set": "Rock058",
+    "file": "textures/env/terrain/05_veinstone.png"
+   },
+   "local": null,
+   "size": 256,
+   "scale": 1.6,
+   "glow": false
+  },
+  {
+   "slot": 6,
+   "name": "magma",
+   "material": "uranium",
+   "replaces": "textures/terrain/cave_magma_veins.png",
+   "cc0": {
+    "set": "Rock058",
+    "file": "textures/env/terrain/06_magma.png"
+   },
+   "local": null,
+   "size": 256,
+   "scale": 1.4,
+   "glow": true
+  },
+  {
+   "slot": 7,
+   "name": "amethyst",
+   "material": "crystal",
+   "replaces": "textures/terrain/cave_amethyst.png",
+   "cc0": {
+    "set": "ChristmasTreeOrnament021",
+    "file": "textures/env/terrain/07_amethyst.png"
+   },
+   "local": null,
+   "size": 256,
+   "scale": 1.3,
+   "glow": true
+  },
+  {
+   "slot": 8,
+   "name": "bluecrystal",
+   "material": "crystal",
+   "replaces": "textures/terrain/cave_blue_crystal.png",
+   "cc0": {
+    "set": "ChristmasTreeOrnament021",
+    "file": "textures/env/terrain/08_bluecrystal.png"
+   },
+   "local": null,
+   "size": 256,
+   "scale": 1.3,
+   "glow": true
+  },
+  {
+   "slot": 9,
+   "name": "slate",
+   "material": "slate",
+   "replaces": "textures/terrain/moon_silver_slate.png",
+   "cc0": {
+    "set": "Rock058",
+    "file": "textures/env/terrain/09_slate.png"
+   },
+   "local": {
+    "set": "Rock_Wall",
+    "file": "textures/env_local/terrain/09_slate.png"
+   },
+   "size": 256,
+   "scale": 1.6,
+   "glow": false
+  },
+  {
+   "slot": 10,
+   "name": "gravelregolith",
+   "material": "regolith",
+   "replaces": "textures/terrain/moon_gray_regolith.png",
+   "cc0": {
+    "set": "Ground110",
+    "file": "textures/env/terrain/10_gravelregolith.png"
+   },
+   "local": null,
+   "size": 256,
+   "scale": 2.2,
+   "glow": false
+  },
+  {
+   "slot": 11,
+   "name": "dust",
+   "material": "regolith",
+   "replaces": "textures/terrain/moon_crater_dust.png",
+   "cc0": {
+    "set": "Ground093B",
+    "file": "textures/env/terrain/11_dust.png"
+   },
+   "local": null,
+   "size": 256,
+   "scale": 2.0,
+   "glow": false
+  },
+  {
+   "slot": 12,
+   "name": "bandedice",
+   "material": "ice",
+   "replaces": "textures/terrain/moon_teal_ice.png",
+   "cc0": {
+    "set": "Onyx006",
+    "file": "textures/env/terrain/12_bandedice.png"
+   },
+   "local": null,
+   "size": 256,
+   "scale": 1.2,
+   "glow": false
+  },
+  {
+   "slot": 13,
+   "name": "basalt",
+   "material": "basalt",
+   "replaces": "textures/terrain/geo_basalt.png",
+   "cc0": {
+    "set": "Rock035",
+    "file": "textures/env/terrain/13_basalt.png"
+   },
+   "local": null,
+   "size": 256,
+   "scale": 1.5,
+   "glow": false
+  },
+  {
+   "slot": 14,
+   "name": "granite",
+   "material": "granite",
+   "replaces": "textures/terrain/geo_granite.png",
+   "cc0": {
+    "set": "Rock060",
+    "file": "textures/env/terrain/14_granite.png"
+   },
+   "local": {
+    "set": "Rock_05",
+    "file": "textures/env_local/terrain/14_granite.png"
+   },
+   "size": 256,
+   "scale": 1.8,
+   "glow": false
+  },
+  {
+   "slot": 15,
+   "name": "sandstone",
+   "material": "sandstone",
+   "replaces": "textures/terrain/geo_sandstone.png",
+   "cc0": {
+    "set": "Onyx010",
+    "file": "textures/env/terrain/15_sandstone.png"
+   },
+   "local": {
+    "set": "Mossy_Rock",
+    "file": "textures/env_local/terrain/15_sandstone.png"
+   },
+   "size": 256,
+   "scale": 1.0,
+   "glow": false
+  },
+  {
+   "slot": 16,
+   "name": "sand",
+   "material": "sand",
+   "replaces": "textures/terrain/geo_sand.png",
+   "cc0": {
+    "set": "Ground093B",
+    "file": "textures/env/terrain/16_sand.png"
+   },
+   "local": null,
+   "size": 256,
+   "scale": 2.0,
+   "glow": false
+  },
+  {
+   "slot": 17,
+   "name": "regolith",
+   "material": "regolith",
+   "replaces": "textures/terrain/geo_regolith.png",
+   "cc0": {
+    "set": "Ground039",
+    "file": "textures/env/terrain/17_regolith.png"
+   },
+   "local": null,
+   "size": 256,
+   "scale": 2.0,
+   "glow": false
+  },
+  {
+   "slot": 18,
+   "name": "salt",
+   "material": "salt",
+   "replaces": "textures/terrain/geo_salt.png",
+   "cc0": {
+    "set": "Snow014",
+    "file": "textures/env/terrain/18_salt.png"
+   },
+   "local": {
+    "set": "Cracked_Asphalt",
+    "file": "textures/env_local/terrain/18_salt.png"
+   },
+   "size": 256,
+   "scale": 1.2,
+   "glow": false
+  },
+  {
+   "slot": 19,
+   "name": "mudcrack",
+   "material": "clay",
+   "replaces": "textures/terrain/geo_mudcrack.png",
+   "cc0": {
+    "set": "Ground039",
+    "file": "textures/env/terrain/19_mudcrack.png"
+   },
+   "local": {
+    "set": "MarsSmoothRock",
+    "file": "textures/env_local/terrain/19_mudcrack.png"
+   },
+   "size": 256,
+   "scale": 1.6,
+   "glow": false
+  },
+  {
+   "slot": 20,
+   "name": "moss",
+   "material": "soil",
+   "replaces": "textures/terrain/geo_moss.png",
+   "cc0": {
+    "set": "Ground037",
+    "file": "textures/env/terrain/20_moss.png"
+   },
+   "local": {
+    "set": "MossAndSmallFerns",
+    "file": "textures/env_local/terrain/20_moss.png"
+   },
+   "size": 256,
+   "scale": 1.8,
+   "glow": false
+  },
+  {
+   "slot": 21,
+   "name": "ash",
+   "material": "ash",
+   "replaces": "textures/terrain/geo_ash.png",
+   "cc0": {
+    "set": "Ground110",
+    "file": "textures/env/terrain/21_ash.png"
+   },
+   "local": null,
+   "size": 256,
+   "scale": 2.2,
+   "glow": false
+  },
+  {
+   "slot": 22,
+   "name": "snow",
+   "material": "ice",
+   "replaces": "textures/terrain/geo_snow.png",
+   "cc0": {
+    "set": "Snow014",
+    "file": "textures/env/terrain/22_snow.png"
+   },
+   "local": null,
+   "size": 256,
+   "scale": 1.8,
+   "glow": false
+  },
+  {
+   "slot": 23,
+   "name": "glacier",
+   "material": "ice",
+   "replaces": "textures/terrain/geo_glacier.png",
+   "cc0": {
+    "set": "Snow008A",
+    "file": "textures/env/terrain/23_glacier.png"
+   },
+   "local": null,
+   "size": 256,
+   "scale": 1.0,
+   "glow": false
+  },
+  {
+   "slot": 24,
+   "name": "scree",
+   "material": "gravel",
+   "replaces": "textures/terrain/geo_scree.png",
+   "cc0": {
+    "set": "Ground110",
+    "file": "textures/env/terrain/24_scree.png"
+   },
+   "local": null,
+   "size": 256,
+   "scale": 1.8,
+   "glow": false
+  },
+  {
+   "slot": 25,
+   "name": "limestone",
+   "material": "limestone",
+   "replaces": "textures/terrain/geo_limestone.png",
+   "cc0": {
+    "set": "Rock051",
+    "file": "textures/env/terrain/25_limestone.png"
+   },
+   "local": {
+    "set": "Rock_04",
+    "file": "textures/env_local/terrain/25_limestone.png"
+   },
+   "size": 256,
+   "scale": 1.5,
+   "glow": false
+  },
+  {
+   "slot": 26,
+   "name": "sulfur",
+   "material": "sulfur",
+   "replaces": "textures/terrain/geo_sulfur.png",
+   "cc0": {
+    "set": "Rocks011",
+    "file": "textures/env/terrain/26_sulfur.png"
+   },
+   "local": {
+    "set": "Potato",
+    "file": "textures/env_local/terrain/26_sulfur.png"
+   },
+   "size": 256,
+   "scale": 1.6,
+   "glow": false
+  },
+  {
+   "slot": 27,
+   "name": "hematite",
+   "material": "hematite",
+   "replaces": "textures/terrain/geo_hematite.png",
+   "cc0": {
+    "set": "Ground085",
+    "file": "textures/env/terrain/27_hematite.png"
+   },
+   "local": null,
+   "size": 256,
+   "scale": 2.0,
+   "glow": false
+  },
+  {
+   "slot": 28,
+   "name": "tundra",
+   "material": "soil",
+   "replaces": "textures/terrain/geo_tundra.png",
+   "cc0": {
+    "set": "Grass004",
+    "file": "textures/env/terrain/28_tundra.png"
+   },
+   "local": {
+    "set": "Dirty_Grass",
+    "file": "textures/env_local/terrain/28_tundra.png"
+   },
+   "size": 256,
+   "scale": 1.6,
+   "glow": false
+  },
+  {
+   "slot": 29,
+   "name": "pahoehoe",
+   "material": "basalt",
+   "replaces": "textures/terrain/geo_pahoehoe.png",
+   "cc0": {
+    "set": "Rock058",
+    "file": "textures/env/terrain/29_pahoehoe.png"
+   },
+   "local": null,
+   "size": 256,
+   "scale": 1.25,
+   "glow": false
+  },
+  {
+   "slot": 30,
+   "name": "shale",
+   "material": "shale",
+   "replaces": "textures/terrain/geo_shale.png",
+   "cc0": {
+    "set": "Rock051",
+    "file": "textures/env/terrain/30_shale.png"
+   },
+   "local": {
+    "set": "Rock_03",
+    "file": "textures/env_local/terrain/30_shale.png"
+   },
+   "size": 256,
+   "scale": 1.5,
+   "glow": false
+  },
+  {
+   "slot": 31,
+   "name": "peat",
+   "material": "soil",
+   "replaces": "textures/terrain/geo_peat.png",
+   "cc0": {
+    "set": "Rock063",
+    "file": "textures/env/terrain/31_peat.png"
+   },
+   "local": null,
+   "size": 256,
+   "scale": 1.4,
+   "glow": false
+  },
+  {
+   "slot": 32,
+   "name": "litter",
+   "material": "soil",
+   "replaces": "textures/terrain/geo_litter.png",
+   "cc0": {
+    "set": "Grass004",
+    "file": "textures/env/terrain/32_litter.png"
+   },
+   "local": null,
+   "size": 256,
+   "scale": 2.0,
+   "glow": false
+  }
+ ]
+}

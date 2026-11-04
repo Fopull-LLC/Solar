@@ -39,6 +39,9 @@ local env = setmetatable({ rng = rng, print = function() end, log = function() e
 local chunk = assert(loadfile(SOL .. "/scripts/system_generator.lua"))
 setfenv(chunk, env)
 chunk()
+-- MATGEN=1 pins the material version (system_generator MAT_GEN): 1 = the rocks every
+-- world rolled before 2026-11-04, unset = the newest.
+env.MAT_GEN_FORCE = tonumber(os.getenv("MATGEN") or "")
 
 local TK = { canyon = 290, ironred = 260, crystal = 250, sulfur = 400, saltflat = 320, greenhouse = 420,
   frost = 150, glacial = 200, dune = 330, alpine = 270, regolith = 200, maria = 220, titan = 120,

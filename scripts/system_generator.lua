@@ -496,6 +496,73 @@ local ROCKS = { "granite", "basalt", "shale", "limestone", "sandstone", "slate" 
 local function rock(r, list) return r:pick(list or ROCKS) end
 -- `slate` is the old silver slate slot; same idea, different grain.
 GEO_SLOT.slate = 9
+-- The realistic palette's names for the old slots (tools/import_textures.py
+-- TERRAIN): 2 is a pebbly soil, 3 a grey flagstone, 10 a gravel regolith, 12
+-- banded ice. The old names stay (the version-1 lists below use them).
+GEO_SLOT.soil, GEO_SLOT.flagstone, GEO_SLOT.gravelregolith, GEO_SLOT.bandedice = 2, 3, 10, 12
+
+-- ── MATERIAL VERSION (`g_matGen`) ───────────────────────────────────────────
+-- Version 2 (2026-11-04, the realistic terrain textures) lets each world type
+-- reach for the rock that suits it: the strata a world's cliffs and cave walls
+-- are cut from, its basement and its subsoil come from per-family lists (a
+-- volcanic world's cliffs are basalt and ropy lava, an alpine one's granite and
+-- slate, a canyon's sandstone and banded onyx), and the airless and icy moons
+-- pick from more grounds and outcrops. Every pick draws exactly the rng calls
+-- version 1 drew (only the list differs), so a version-2 world has the same
+-- shape, seas, caves and layers as version 1 would; only what it is made of
+-- changes. VERSIONED like g_alienGen: a save made before keeps version 1 (its
+-- digs stay in the same rock); a fresh one is written MAT_GEN.
+MAT_GEN = 2
+-- Probes and tests may pin the version (nil = the save's).
+MAT_GEN_FORCE = nil
+-- The version the roll in progress runs (set by rollGeology).
+local matGen = MAT_GEN
+
+function matGenFor()
+  if MAT_GEN_FORCE ~= nil then return MAT_GEN_FORCE end
+  if not (save and save.get) then return MAT_GEN end
+  local v = save.get("g_matGen")
+  if v ~= nil then return tonumber(v) or 1 end
+  local old = save.get("g_played") ~= nil or save.get("base.body") ~= nil
+    or save.get("system.home") ~= nil or save.get("parts.rating") ~= nil
+    or save.get("fleet.next") ~= nil
+  v = old and 1 or MAT_GEN
+  if save.set then save.set("g_matGen", v) end
+  return v
+end
+
+-- `v1` on a version-1 roll, `v2` from version 2 (see MAT_GEN).
+local function mats(v1, v2) return (matGen >= 2 and v2) or v1 end
+
+-- Version 2's depth layers by family: the strata (what cliffs and cave walls
+-- cut through), the basement rock, the subsoil. Repeats weight a pick.
+local STRATA2 = {
+  canyon  = { "sandstone", "sandstone", "limestone", "shale", "onyx", "flagstone", "rust" },
+  dune    = { "sandstone", "sandstone", "limestone", "onyx", "rust" },
+  ice     = { "granite", "slate", "shale", "limestone", "flagstone" },
+  frost   = { "slate", "granite", "basalt", "bandedice" },
+  lava    = { "basalt", "basalt", "pahoehoe", "shale", "slate" },
+  crystal = { "slate", "flagstone", "onyx", "shale" },
+  barren  = { "basalt", "granite", "slate", "flagstone", "shale" },
+}
+local DEEP2 = {
+  canyon  = { "granite", "basalt", "slate", "veinstone", "flagstone" },
+  dune    = { "granite", "sandstone", "veinstone", "basalt" },
+  ice     = { "granite", "granite", "slate", "basalt" },
+  frost   = { "slate", "basalt", "granite" },
+  lava    = { "basalt", "pahoehoe", "veinstone", "slate" },
+  crystal = { "slate", "veinstone", "granite" },
+  barren  = { "basalt", "granite", "slate", "veinstone" },
+}
+local SUBSOIL2 = {
+  canyon  = { "soil", "scree", "mudcrack", "regolith" },
+  dune    = { "sand", "mudcrack", "scree" },
+  ice     = { "scree", "gravelregolith", "regolith", "soil" },
+  frost   = { "gravelregolith", "regolith", "scree" },
+  lava    = { "ash", "scree", "gravelregolith" },
+  crystal = { "regolith", "scree", "gravelregolith" },
+  barren  = { "gravelregolith", "regolith", "scree", "dust" },
+}
 
 BUILD.archipelago = function(r, g)
   local h = r:range(0.05, 0.14)
@@ -751,9 +818,9 @@ BUILD.frost = function(r, g)
   local blue = r:range(0.5, 0.6)
   g.relief = r:range(0.04, 0.07)
   g.bumpFreq = r:range(2.5, 4.0)
-  g.high = M(r, r:pick({ "snow", "tealice" }), blue, r:range(0.0, 0.1), r:range(0.66, 0.74))
-  g.low = M(r, r:pick({ "glacier", "oldregolith" }), blue, r:range(0.0, 0.12), r:range(0.58, 0.68))
-  g.patch = M(r, "regolith", blue, 0.05, 0.6)
+  g.high = M(r, r:pick(mats({ "snow", "tealice" }, { "snow", "tealice", "glacier", "salt" })), blue, r:range(0.0, 0.1), r:range(0.66, 0.74))
+  g.low = M(r, r:pick(mats({ "glacier", "oldregolith" }, { "glacier", "oldregolith", "regolith", "snow" })), blue, r:range(0.0, 0.12), r:range(0.58, 0.68))
+  g.patch = M(r, mats("regolith", "slate"), blue, 0.05, 0.6)
   g.bias, g.thr = r:range(0.3, 0.8), r:range(-0.1, 0.1)
   g.cap, g.capLat = M(r, "snow", blue, 0.0, 0.78), r:range(0.6, 0.8)
   g.dust = M(r, "dust", blue, 0.05, 0.66)
@@ -766,9 +833,9 @@ BUILD.regolith = function(r, g)
   local h = r:next()
   g.relief = r:range(0.04, 0.08)
   g.bumpFreq = r:range(2.5, 5.0)
-  g.high = M(r, r:pick({ "regolith", "oldregolith" }), h, r:range(0.0, 0.06), r:range(0.58, 0.72))
-  g.low = M(r, r:pick({ "regolith", "dust" }), h, r:range(0.0, 0.06), r:range(0.56, 0.68))
-  g.patch = M(r, r:pick({ "scree", "granite", "basalt" }), h, 0.03, 0.6)
+  g.high = M(r, r:pick(mats({ "regolith", "oldregolith" }, { "regolith", "oldregolith", "dust", "ash" })), h, r:range(0.0, 0.06), r:range(0.58, 0.72))
+  g.low = M(r, r:pick(mats({ "regolith", "dust" }, { "regolith", "dust", "oldregolith", "regolith" })), h, r:range(0.0, 0.06), r:range(0.56, 0.68))
+  g.patch = M(r, r:pick(mats({ "scree", "granite", "basalt" }, { "scree", "granite", "basalt", "flagstone", "slate", "onyx" })), h, 0.03, 0.6)
   g.bias, g.thr = r:range(0.2, 0.6), r:range(-0.2, 0.1)
   g.dust = M(r, r:pick({ "dust", "regolith" }), h, 0.03, 0.74)
   g.craters = { r:int(14, 30), 1.3, 3.2 }
@@ -780,7 +847,7 @@ BUILD.maria = function(r, g)
   local h = r:range(0.05, 0.12)
   g.relief = r:range(0.04, 0.07)
   g.bumpFreq = r:range(2.0, 4.0)
-  g.high = M(r, r:pick({ "regolith", "dust", "granite" }), h, r:range(0.0, 0.08), r:range(0.66, 0.76))
+  g.high = M(r, r:pick(mats({ "regolith", "dust", "granite" }, { "regolith", "dust", "granite", "limestone" })), h, r:range(0.0, 0.08), r:range(0.66, 0.76))
   g.low = M(r, "basalt", h, r:range(0.0, 0.08), r:range(0.62, 0.72))
   g.patch = M(r, "scree", h, 0.03, 0.62)
   g.band = { alt = r:range(-0.15, 0.1), bias = r:range(1.5, 3) }
@@ -793,6 +860,7 @@ end
 -- Roll a body's geology. `ctx`: radius, Tk (equilibrium K), air (bool),
 -- moon (bool), spawn (bool), avoid (a type not to repeat), tidal (bool).
 function rollGeology(r, ctx)
+  matGen = matGenFor()
   local id = ctx.type or pickGeoType(r, ctx.Tk, ctx.air, ctx)
   local t = GEO_TYPES[id]
   local g = { type = id, label = t.label, family = t.family, Tk = ctx.Tk }
@@ -805,9 +873,10 @@ function rollGeology(r, ctx)
   g.cave = r:range(0.22, 0.4)
   g.pocketThr = r:range(0.36, 0.52)
   -- Depth layers: soil, then the sedimentary record, then basement rock.
-  g.subsoil = M(r, g.subsoilMat or r:pick({ "mudcrack", "scree", "regolith", "sand" }), r:next(), r:range(0, 0.1), 0.58)
-  g.strata = M(r, r:pick({ "sandstone", "shale", "limestone", "onyx" }), r:next(), r:range(0, 0.12), 0.6)
-  g.deep = M(r, r:pick({ "granite", "basalt", "slate", "veinstone" }), r:next(), r:range(0, 0.1), 0.56)
+  local fam = g.family
+  g.subsoil = M(r, g.subsoilMat or r:pick(mats({ "mudcrack", "scree", "regolith", "sand" }, SUBSOIL2[fam])), r:next(), r:range(0, 0.1), 0.58)
+  g.strata = M(r, r:pick(mats({ "sandstone", "shale", "limestone", "onyx" }, STRATA2[fam])), r:next(), r:range(0, 0.12), 0.6)
+  g.deep = M(r, r:pick(mats({ "granite", "basalt", "slate", "veinstone" }, DEEP2[fam])), r:next(), r:range(0, 0.1), 0.56)
   g.subsoilDepth = r:range(1.5, 4.0)
   g.strataDepth = r:range(6.0, 14.0)
   -- The world's seas: liquid water between freezing and boiling (under some

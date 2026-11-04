@@ -22,3 +22,8 @@ __pycache__/
 *.swp
 .DS_Store
 .floptle/library/
+
+# Commercial-licence textures, converted from the user's library by
+# tools/import_textures.py. Never commit: the repo is public. Builds pick them
+# up through `tools/import_textures.py --stage` (tools/perf/exportcheck.sh).
+/textures/env_local/

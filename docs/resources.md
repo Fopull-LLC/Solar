@@ -34,19 +34,21 @@ Calls: `label(id)`, `kg(id)`, `value(id)`, `massOf(id, n)`, `valueOf(id, n)`,
 
 The terrain palette (`terrain/system.palette`) maps to materials in
 `materials.SLOT[slot]`, and `materials.ofSlot(slot)` reads it. Untextured
-ground is regolith.
+ground is regolith. The palette and its layers (textures/env/terrain/) are
+written by `tools/import_textures.py` from the realistic texture library; each
+slot keeps the geology below, whatever photograph it is baked from.
 
 | Slot | Texture | Material |
 |---|---|---|
 | 1 | rust rock | rustrock |
-| 2, 20, 28, 31, 32 | purple dirt, moss, tundra, peat, leaf litter | soil |
-| 3, 9 | slate | slate |
+| 2, 20, 28, 31, 32 | pebbly soil, moss, tundra, peat, leaf litter | soil |
+| 3, 9 | flagstone, slate | slate |
 | 4 | banded onyx | onyx |
-| 5 | orange veinstone | veinstone |
+| 5 | veinstone (dark rock, orange seams) | veinstone |
 | 6 | magma veins (glow) | uranium |
-| 7, 8 | amethyst, blue crystal (glow) | crystal |
-| 10, 11, 17 | regolith, crater dust | regolith |
-| 12, 22, 23 | teal ice, snow, glacier | ice |
+| 7, 8 | amethyst, blue crystal (faceted geode lining, glow) | crystal |
+| 10, 11, 17 | gravel regolith, crater dust, regolith | regolith |
+| 12, 22, 23 | banded ice, snow, glacier | ice |
 | 13, 29 | basalt, pahoehoe | basalt |
 | 14 | granite | granite |
 | 15 | sandstone | sandstone |

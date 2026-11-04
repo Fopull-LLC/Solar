@@ -1,0 +1,8 @@
+{
+ "normal": "GL (as shipped)",
+ "roughness": "roughness map",
+ "ao": "AO map",
+ "metal": "constant 0.0",
+ "notes": [],
+ "size": 512
+}

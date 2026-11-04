@@ -6,8 +6,12 @@
 -- level 12 m out, toward the horizon, 25 m up) and the steepest (12 m and 3 m
 -- off, eye height).
 --
--- params: first, last (world indices), settle (s).
-defaults = { first = 1, last = 99, settle = 3, quit = 1 }
+-- params: first, last (world indices), settle (s), cave (1: also carve a chamber
+-- 14 m under the flat ground, paint seam / magma / crystal pockets on its walls and
+-- photograph them by a lamp at the camera: the depth layers and the glow slots),
+-- graze (1: a low view along the flat ground to the horizon, the tiling at a
+-- grazing angle).
+defaults = { first = 1, last = 99, settle = 3, quit = 1, cave = 0, graze = 0 }
 
 local W = function() return app.wallClock and app.wallClock() or os.clock() end
 local W0 = W()
@@ -104,6 +108,38 @@ local function main()
       view(cam, eye, along(d, t, 12, R, top, 0), d, tag .. "_eye")
       view(cam, eye, along(d, t, 80, R, top, 0), d, tag .. "_far")
       view(cam, along(d, t, 0, R, top, 25), along(d, t, 60, R, top, 0), d, tag .. "_high")
+      if params.graze > 0 then
+        view(cam, along(d, t, 0, R, top, 0.6), along(d, t, 300, R, top, 0), d, tag .. "_graze")
+      end
+      if params.cave > 0 then
+        local g = ground(d, R, top) or R
+        local c = d * (g - 14)
+        local t2 = d:cross(t):normalized()
+        for _, o in ipairs({ vec3(0, 0, 0), t * 5, t * -5, t2 * 5, t2 * -5 }) do
+          local q = c + o
+          terrain.dig(q.x, q.y, q.z, 8, 4, { hardness = 1, falloff = "linear" })
+        end
+        yield(); wait_for(function() return not terrain.busy() end, 60)
+        -- what the generator lays in pockets and seams, on the walls (slots 5, 6 and the world's crystal)
+        local paints = { { t, 5 }, { t2, 6 }, { t2 * -1, (o.pockets and o.pockets.slot) or 7 } }
+        for _, pp in ipairs(paints) do
+          local w = c + pp[1] * 12.5 - d * 1.0
+          terrain.paintTexture(w.x, w.y, w.z, 3.0, pp[2], { hardness = 0.6, falloff = "smooth" })
+        end
+        yield(); wait_for(function() return not terrain.busy() end, 60)
+        local lamp
+        createNode("Lamp", nil, function(n) lamp = n end)
+        wait_for(function() return lamp end, 5)
+        lamp.x, lamp.y, lamp.z = c.x, c.y, c.z
+        lamp:setPointLight({ color = { 1.0, 0.93, 0.82 }, intensity = 3.0, range = 30 })
+        local eye = c - t * 3 - t2 * 3
+        view(cam, eye, c + t * 12, d, tag .. "_cave_seam")
+        view(cam, eye, c + t2 * 12, d, tag .. "_cave_magma")
+        view(cam, c + t * 3 + t2 * 3, c - t2 * 12, d, tag .. "_cave_crystal")
+        lamp.x, lamp.y, lamp.z = c.x + 0, c.y, c.z
+        view(cam, c + d * 4, c - d * 9 + t * 4, t, tag .. "_cave_floor")
+        lamp:setPointLight({ intensity = 0 })
+      end
     end
     if steep then
       local d = steep
