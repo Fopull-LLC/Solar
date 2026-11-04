@@ -53,6 +53,7 @@ PROFILES = {
   ibeam = { rx = 0.12, rz = 0.13 },
   truss = { rx = 0.20, rz = 0.18 },
   brace = { rx = 0.035, rz = 0.035 },
+  frame = { rx = 0.025, rz = 0.025 },
   chain = { rx = 0.02, rz = 0.02 },
 }
 

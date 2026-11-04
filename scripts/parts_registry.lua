@@ -111,7 +111,7 @@ REG = {
   -- and press F to sit, F again to get off. The crew stays in view, seated.
   -- It faces its +X (a rover's front). h is the whole chair: base plate to
   -- headrest; its centre is where the rider's hips sit.
-  seat      = { prefab = "PartSeat",      label = "Command Seat", h = 1.30, rx = 0.45, rz = 0.30, mass = 0.05, cost = 40, top = false, bottom = true,  kind = "crewed", seat = true, strength = 320,
+  seat      = { prefab = "PartSeat",      label = "Command Seat", h = 1.30, rx = 0.45, rz = 0.30, mass = 0.025, cost = 40, top = false, bottom = true,  kind = "crewed", seat = true, strength = 320,
                 mods = { { type = "command", crew = 1, draw = 0.0, seat = true } },
                 -- an open seat is its own exit: no hatch
                 seats = { { x = 0, y = 0, z = 0, yaw = 0, open = true } } },
@@ -141,7 +141,7 @@ REG = {
   -- batteries while the sun is on it. It tracks about its own long axis, so it
   -- loses output only as the sun swings toward that axis — and nothing at all in
   -- a planet's shadow. gen = EC/s at home-orbit sunlight (more nearer the star).
-  solar     = { prefab = "PartSolar",     label = "Solar Panel",  h = 0.70, rx = 0.45, rz = 0.06, mass = 0.05, cost = 600, top = false, bottom = false, kind = "structural", solar = true, gen = 1.0, radial_orient = true, strength = 80,
+  solar     = { prefab = "PartSolar",     label = "Solar Panel",  h = 0.70, rx = 0.45, rz = 0.06, mass = 0.012, cost = 600, top = false, bottom = false, kind = "structural", solar = true, gen = 1.0, radial_orient = true, strength = 80,
                 mods = { { type = "solar", gen = 1.0 }, { type = "deploy", anim = "solar" } } },
   -- ANTENNAS. The whip is OMNI and short: it reaches home from the near planets
   -- and talks craft to craft over tens of km, folded for launch. The dishes are
@@ -149,7 +149,7 @@ REG = {
   -- real power while out — and RELAY: a craft carrying one passes everybody
   -- else's signal on, which is how a web of satellites gets you home from
   -- behind a moon or from the next star.
-  antenna   = { prefab = "PartAntenna",   label = "Comm Whip",    h = 0.90, rx = 0.12, rz = 0.12, mass = 0.01, cost = 120,  top = false, bottom = false, kind = "structural", radial_orient = true, strength = 60,
+  antenna   = { prefab = "PartAntenna",   label = "Comm Whip",    h = 0.90, rx = 0.12, rz = 0.12, mass = 0.003, cost = 120,  top = false, bottom = false, kind = "structural", radial_orient = true, strength = 60,
                 mods = { { type = "antenna", power = 2250, rate = 4, draw = 0.12, omni = true },
                          { type = "deploy", anim = "whip" } } },
   dish      = { prefab = "PartDish",      label = "Relay Dish",   h = 0.80, rx = 0.40, rz = 0.40, mass = 0.08, cost = 900, top = true,  bottom = true,  kind = "structural", comms = true, side = true, strength = 100,
@@ -165,7 +165,7 @@ REG = {
                 mods = { { type = "antenna", power = 1500, relay = true, rate = 2, draw = 0.0, omni = true } } },
   -- FLOODLIGHT: a lamp for landing at night and for working in a shadow. It is
   -- what the Lights group (Y) switches; it draws power while it's on.
-  light     = { prefab = "PartLight",     label = "Floodlight",   h = 0.30, rx = 0.15, rz = 0.15, mass = 0.01, cost = 20,  top = false, bottom = false, kind = "structural", radial_orient = true, strength = 60,
+  light     = { prefab = "PartLight",     label = "Floodlight",   h = 0.30, rx = 0.15, rz = 0.15, mass = 0.004, cost = 20,  top = false, bottom = false, kind = "structural", radial_orient = true, strength = 60,
                 mods = { { type = "light", draw = 0.2 } } },
   decoupler = { prefab = "PartDecoupler", label = "Decoupler",    h = 0.25, rx = 0.51, rz = 0.51, mass = 0.06, cost = 150,  top = true,  bottom = true,  kind = "structural", decouple = true, strength = 400 },
   -- The RADIAL decoupler mounts on a flank and kicks its outboard branch
@@ -209,12 +209,12 @@ REG = {
   -- a planet full of ore and the warehouse. The bay's own mass is the EMPTY
   -- mass — what's inside is added in flight from the manifest, so a full hold
   -- genuinely flies worse than an empty one.
-  cargo     = { prefab = "PartCargo",     label = "Cargo Bay",    h = 1.20, rx = 0.50, rz = 0.50, mass = 0.4,  cost = 150, top = true,  bottom = true,  kind = "structural", cargo = 250, side = true, strength = 500 },
+  cargo     = { prefab = "PartCargo",     label = "Cargo Bay",    h = 1.20, rx = 0.50, rz = 0.50, mass = 0.15, cost = 150, top = true,  bottom = true,  kind = "structural", cargo = 250, side = true, strength = 500 },
   -- STOWAGE LOCKER: a small box with its OWN container (`store` kg) — unlike
   -- the bays, which pool into one hold. Tools, samples and spares ride in it;
   -- what's inside weighs on this part (vessel_controller's lockers) and the
   -- right-click menu lists it.
-  locker    = { prefab = "PartLocker",    label = "Stowage Locker", h = 0.50, rx = 0.30, rz = 0.30, mass = 0.08, cost = 40, top = true, bottom = true, kind = "structural", store = 80, side = true, strength = 300 },
+  locker    = { prefab = "PartLocker",    label = "Stowage Locker", h = 0.50, rx = 0.30, rz = 0.30, mass = 0.03, cost = 40, top = true, bottom = true, kind = "structural", store = 80, side = true, strength = 300 },
   -- and two smaller ones (`vol` = their litres; the Stowage Locker's are
   -- items.VOL.locker): a steel field case for a rover's deck, and a pannier
   -- that hangs on a bike's flank (its frame side -Z, so it side-mounts flat).
@@ -467,13 +467,20 @@ function partInfo(id)
 end
 
 -- Drawn-member profiles: per-metre mass (t) and cost, and the joint
--- strength (kN). The half-widths match builder_attach.PROFILES.
+-- strength (kN). The half-widths match builder_attach.PROFILES. Lightest to
+-- heaviest: frame tube 2.4 kg/m, tube 12, box 20, truss 25, I-beam 30 — the
+-- light ones give at a lower load, so a frame is built light where it can be
+-- and heavy where it must carry.
 PROFILES = {
   tube  = { rx = 0.07, rz = 0.07, mass = 0.012, cost = 15, strength = 250, label = "tube" },
   box   = { rx = 0.12, rz = 0.07, mass = 0.020, cost = 20, strength = 380, label = "box" },
   ibeam = { rx = 0.12, rz = 0.13, mass = 0.030, cost = 23, strength = 650, label = "I-beam" },
   truss = { rx = 0.20, rz = 0.18, mass = 0.025, cost = 30, strength = 520, label = "truss" },
   brace = { rx = 0.035, rz = 0.035, mass = 0.004, cost = 8, strength = 200, label = "brace" },
+  -- FRAME TUBE: 50 mm chromoly, 2 mm wall (~2.4 kg a metre), what a bike's
+  -- or a buggy's frame is welded from: a fifth of the tube's weight, two
+  -- thirds of its joint strength, and a little dearer a metre (the steel)
+  frame = { rx = 0.025, rz = 0.025, mass = 0.0024, cost = 18, strength = 160, label = "frame tube" },
   -- the Drive Chain (parts_auto): 520 roller chain, ~1.6 kg a metre
   chain = { rx = 0.02, rz = 0.02, mass = 0.0016, cost = 4, strength = 60, label = "chain" },
 }

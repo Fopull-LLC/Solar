@@ -52,14 +52,25 @@
 --   mount on: the fork on a FRONT face (+X ahead), the swing arm on a REAR
 --   face (+X back), the strut on a flank (+X outboard); +Y up, Z across.
 
+-- MASSES (dry, tonnes; audited 2026-11-04 against real dirt-bike parts, so a
+-- bike built from them weighs what a real one does, ~0.15–0.25 t, not 2–4×
+-- that): Moto Wheel 26 kg (a 21" wheel and tyre ~13 + its hub motor),
+-- Spoked Wheel 14 (no motor, 12 of it spinning; the Moto Wheel spins 16), fork 13 (legs, triple clamps, bars), swing arm
+-- 10 (alloy arm, monoshock, linkage), coil-over 15, gyro 30 (a 1.5 kN·m
+-- control-moment gyro), pack 40 (~3 kWh), saddle 12 (seat, shroud and its
+-- subframe), engines 11–36 (a 50cc two-stroke to a 500 single with its
+-- box), tanks 1.5 and 4 kg empty. The light and heavy choices are the
+-- engineering: a hub motor in every wheel or a chain, a pack or a tank.
 local DRIVE_B = { type = "drive", torque = 0.45, speed = 16.0, draw = 0.3, r = 0.33, centred = true }
+-- (the Spoked Wheel's: no motor, the same brake)
+local DRIVE_BS = { type = "drive", torque = 0.45, speed = 16.0, draw = 0.0, r = 0.33, centred = true, motor = false, spin = 0.85 }
 
 PARTS = {
   -- MOTO WHEEL: a 0.33 m spoked wheel with a hub motor and a disc brake,
   -- centred on its own part: its axle runs right through (±0.11 m), so a fork
   -- or swing arm clamps it in the middle and either end takes another part (a
   -- strut each side, a fender, a beam). On a flank it mounts by an axle end.
-  wheelB   = { prefab = "PartWheelB", label = "Moto Wheel", h = 0.66, rx = 0.11, rz = 0.33, mass = 0.05, cost = 35,
+  wheelB   = { prefab = "PartWheelB", label = "Moto Wheel", h = 0.66, rx = 0.11, rz = 0.33, mass = 0.026, cost = 35,
                top = false, bottom = false, radial_orient = true, kind = "structural", strength = 260, wheel = "B", travel = 0.04,
                af = "fill=0.55",
                hubpt = { 0, 0, 0 }, hubax = { 1, 0, 0 },
@@ -67,11 +78,26 @@ PARTS = {
                         { kind = "end", p = { 0.11, 0, 0 }, n = { 1, 0, 0 } },
                         { kind = "end", p = { -0.11, 0, 0 }, n = { -1, 0, 0 } } },
                mods = { DRIVE_B } },
+  -- SPOKED WHEEL: the Moto Wheel's rim, spokes, tyre and disc brake with a
+  -- plain hub, no motor in it (14 kg against the Moto Wheel's 26: a 21"
+  -- dirt-bike wheel and tyre, 12 kg of it spinning: `spin` 0.85). It rolls and brakes but never drives by
+  -- itself: the front of any bike (a bike's fork wheel coasts anyway), or a
+  -- rear wheel a Drive Chain runs to from a gas engine. `motor = false` on
+  -- its drive module is what the flight reads (vessel_controller motoPlan:
+  -- it coasts unless chained); torque is its brake's rating.
+  wheelBS  = { prefab = "PartWheelBS", label = "Spoked Wheel", h = 0.66, rx = 0.11, rz = 0.33, mass = 0.014, cost = 20,
+               top = false, bottom = false, radial_orient = true, kind = "structural", strength = 240, wheel = "B", travel = 0.04,
+               af = "fill=0.55",
+               hubpt = { 0, 0, 0 }, hubax = { 1, 0, 0 },
+               hubs = { { kind = "hub", p = { 0, 0, 0 }, n = { 1, 0, 0 } },
+                        { kind = "end", p = { 0.11, 0, 0 }, n = { 1, 0, 0 } },
+                        { kind = "end", p = { -0.11, 0, 0 }, n = { -1, 0, 0 } } },
+               mods = { DRIVE_BS } },
   -- TELESCOPIC FORK: bolts to a FRONT face; a wheel clamps between its legs.
   -- It steers (A/D) about its raked head and rides 22 cm of travel (a dirt
   -- bike's 250-300 mm, playtest 9e675fb: 13 cm bottomed on every landing);
   -- the handlebar turns with it.
-  forkT    = { prefab = "PartForkT", label = "Telescopic Fork", h = 0.9588, rx = 0.4416, rz = 0.3585, mass = 0.03, cost = 40,
+  forkT    = { prefab = "PartForkT", label = "Telescopic Fork", h = 0.9588, rx = 0.4416, rz = 0.3585, mass = 0.013, cost = 40,
                top = false, bottom = false, radial_orient = true, upright = true, mountpt = { -0.4416, 0.3116, 0 },
                kind = "structural", strength = 300, af = "fill=0.22",
                hubpt = { 0.0606, -0.4067, 0 }, hubax = { 0, 0, 1 },
@@ -80,7 +106,7 @@ PARTS = {
                           ax = -0.4067, ay = 0.9135, az = 0, px = -0.2716, py = 0.2116, pz = 0 } } },
   -- SWING ARM: hinges off a REAR face; a wheel clamps in its jaws. A
   -- monoshock gives it 20 cm of travel at the axle; it never steers.
-  swingArm = { prefab = "PartSwingArm", label = "Swing Arm", h = 0.3348, rx = 0.335, rz = 0.1505, mass = 0.025, cost = 25,
+  swingArm = { prefab = "PartSwingArm", label = "Swing Arm", h = 0.3348, rx = 0.335, rz = 0.1505, mass = 0.010, cost = 25,
                top = false, bottom = false, radial_orient = true, upright = true, kind = "structural", strength = 300, af = "fill=0.35",
                hubpt = { 0.265, -0.1326, 0 }, hubax = { 0, 0, 1 },
                hubs = { { kind = "hub", p = { 0.265, -0.1326, 0 }, n = { 0, 0, 1 } } },
@@ -88,14 +114,14 @@ PARTS = {
                           ax = 0, ay = 1, az = 0, px = -0.285, py = -0.0626, pz = 0, len = 0.5544 } } },
   -- COIL-OVER STRUT: on a flank (a car's, a rover's), a wheel bolted to its
   -- hub flange. 18 cm of travel; a front strut steers about its own axis.
-  strutS   = { prefab = "PartStrutS", label = "Coil-over Strut", h = 0.625, rx = 0.1235, rz = 0.13, mass = 0.04, cost = 30,
+  strutS   = { prefab = "PartStrutS", label = "Coil-over Strut", h = 0.625, rx = 0.1235, rz = 0.13, mass = 0.015, cost = 30,
                top = false, bottom = false, radial_orient = true, upright = true, kind = "structural", strength = 420,
                hubs = { { kind = "end", p = { 0.1235, -0.2275, 0 }, n = { 1, 0, 0 } } },
                mods = { { type = "susp", kind = "strut", travel = 0.18, sag = 0.33, zeta = 0.5, steer = -1,
                           ax = 0, ay = 1, az = 0, sx = 0.0165, px = -0.0935, py = -0.2675, pz = 0, len = 0.15 } } },
   -- BALANCE GYRO: a flywheel that holds a two-wheeler up at a standstill and
   -- leans it into its turns. Anywhere on the craft.
-  gyro     = { prefab = "PartGyro", label = "Balance Gyro", h = 0.355, rx = 0.2, rz = 0.1824, mass = 0.06, cost = 60,
+  gyro     = { prefab = "PartGyro", label = "Balance Gyro", h = 0.355, rx = 0.2, rz = 0.1824, mass = 0.03, cost = 60,
                top = true, bottom = true, side = true, kind = "structural", strength = 400,
                mods = { { type = "gyro", torque = 1.5, draw = 0.4 } } },
   -- BATTERY PACK: a tank-shaped 200 EC pack, the power a bike's hub motors
@@ -113,7 +139,7 @@ PARTS = {
   -- view, a bike counts them as its rider) and scripts/command_seat.lua sits
   -- them astride it, feet on the pegs, hands on a fork's grips (the
   -- prefab's params; tools/gen_auto_parts.py moto_saddle).
-  saddle   = { prefab = "PartSaddle", label = "Moto Saddle", h = 1.30, rx = 0.36, rz = 0.17, mass = 0.03, cost = 15,
+  saddle   = { prefab = "PartSaddle", label = "Moto Saddle", h = 1.30, rx = 0.36, rz = 0.17, mass = 0.012, cost = 15,
                top = false, bottom = true, kind = "crewed", seat = true, strength = 260,
                mods = { { type = "command", crew = 1, draw = 0.0, seat = true } } },
 
@@ -162,10 +188,10 @@ PARTS = {
   -- new craft and rollout; the engines draw from all of them together. The
   -- small one is a bike's tank, the medium a steel jerry tank for a rover.
   -- Refilled at the base's Repair Bay or from a Gas Can.
-  gasTankS = { prefab = "PartGasTankS", label = "Gas Tank 4 L", h = 0.20, rx = 0.17, rz = 0.10, mass = 0.0055, cost = 12,
+  gasTankS = { prefab = "PartGasTankS", label = "Gas Tank 4 L", h = 0.20, rx = 0.17, rz = 0.10, mass = 0.0015, cost = 12,
                top = true, bottom = true, side = true, kind = "structural", strength = 260,
                mods = { { type = "gastank", L = 4 } } },
-  gasTankM = { prefab = "PartGasTankM", label = "Gas Tank 12 L", h = 0.34, rx = 0.18, rz = 0.09, mass = 0.014, cost = 20,
+  gasTankM = { prefab = "PartGasTankM", label = "Gas Tank 12 L", h = 0.34, rx = 0.18, rz = 0.09, mass = 0.004, cost = 20,
                top = true, bottom = true, side = true, kind = "structural", strength = 300,
                mods = { { type = "gastank", L = 12 } } },
 }
@@ -178,7 +204,8 @@ DESC = {
   chain = "drive chain · click an engine, then a wheel · that wheel runs on gas",
   gasTankS = "gas tank · 4 L · full at rollout · feeds every gas engine",
   gasTankM = "gas tank · 12 L · full at rollout · feeds every gas engine",
-  wheelB = "moto wheel · r 0.33 m · through-axle: parts on both ends",
+  wheelB = "moto wheel · r 0.33 m · hub motor · 26 kg · parts on both ends",
+  wheelBS = "spoked wheel · r 0.33 m · no motor · 14 kg · a bike's front, or chain it to a gas engine",
   forkT = "telescopic fork · front face · steers A/D · 22 cm travel",
   swingArm = "swing arm · rear face · monoshock · 20 cm travel",
   strutS = "coil-over strut · on a flank · wheel on its flange · 18 cm",
@@ -190,7 +217,7 @@ for id, d in pairs(DESC) do if PARTS[id] then PARTS[id].desc = d end end
 
 -- Where they go in the catalogue: after the rover's own parts.
 SECTION = "ROVER"
-ORDER = { "wheelB", "forkT", "swingArm", "strutS", "gyro", "packB", "saddle",
+ORDER = { "wheelB", "wheelBS", "forkT", "swingArm", "strutS", "gyro", "packB", "saddle",
           "gasE50", "gasE125", "gasE250", "gasE500", "chain", "gasTankS", "gasTankM" }
 
 

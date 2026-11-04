@@ -530,7 +530,11 @@ def main():
     if not dry:
         G.write_prefab("PartWheelB", "MOTO WHEEL — r 0.33 m spoked through-axle wheel, centred on its part (+X = the"
                        " axle). The Tyre child hides while the live tyre body rolls; the Axle's ends take parts"
-                       " on both sides.", None, half, 0.05,
+                       " on both sides.", None, half, 0.026,
+                       children=[("Tyre", "wheel_b_tyre", wm, wc), ("Axle", "wheel_b_axle", am, ac)])
+        # the SPOKED WHEEL: the same wheel and axle with a plain hub (no motor), lighter
+        G.write_prefab("PartWheelBS", "SPOKED WHEEL — the Moto Wheel with no hub motor (r 0.33 m, centred, +X = the"
+                       " axle): it rolls and brakes; a Drive Chain from a gas engine drives it.", None, half, 0.014,
                        children=[("Tyre", "wheel_b_tyre", wm, wc), ("Axle", "wheel_b_axle", am, ac)])
         q = (0.0, -0.7071068, 0.0, 0.7071068)
         body = f"""// LIVE TYRE B (the Moto Wheel) — spawned by vessel_controller in flight and hung
@@ -569,7 +573,7 @@ def main():
     if not dry:
         G.write_prefab("PartForkT", f"TELESCOPIC FORK — on a front face (+X forward); steering axis raked {RAKE:g}° through"
                        " ForkRake; ForkSteer turns with the steering, ForkSlide rides the suspension.",
-                       None, half, 0.03,
+                       None, half, 0.013,
                        children=[("ForkHead", "fork_head", hm, hc)],
                        tail_nodes=empty("ForkRake", Q, 0, quat_z(RAKE)) + empty("ForkSteer", (0, 0, 0), 2)
                        + G.prefab_node("ForkUpper", "fork_upper", um, uc, 3) + empty("ForkSlide", (0, 0, 0), 3)
@@ -586,7 +590,7 @@ def main():
     frames["swingArm"] = dict(half=half, hub=r4(HUB - C), pivot=r4(PIV - C), len=round(float(np.linalg.norm(HUB - PIV)), 4))
     if not dry:
         G.write_prefab("PartSwingArm", "SWING ARM — on a rear face (+X back); the Arm turns about ArmPivot (local Z)"
-                       " with the rear wheel's suspension.", None, half, 0.025,
+                       " with the rear wheel's suspension.", None, half, 0.010,
                        children=[("ArmMount", "swingarm_mount", mm, mc)],
                        tail_nodes=empty("ArmPivot", PIV - C, 0) + G.prefab_node("Arm", "swingarm_arm", am2, ac2, 2))
 
@@ -605,7 +609,7 @@ def main():
     if not dry:
         G.write_prefab("PartStrutS", "COIL-OVER STRUT — on a flank (+X out); a wheel bolts to the hub flange at +X. The"
                        " StrutSlide (knuckle, rod, flange) rides the suspension and steers about the strut's axis;"
-                       " the wishbone turns about ArmPivot.", None, half, 0.04,
+                       " the wishbone turns about ArmPivot.", None, half, 0.015,
                        children=[("StrutUpper", "strut_upper", sm, sc)],
                        tail_nodes=empty("StrutSlide", slide0, 0) + G.prefab_node("StrutLower", "strut_lower", lm2, lc2, 2)
                        + empty("ArmPivot", SPIV - C, 0) + G.prefab_node("StrutArm", "strut_arm", am3, ac3, 4))
@@ -620,7 +624,7 @@ def main():
     frames["gyro"] = dict(half=half)
     if not dry:
         G.write_prefab("PartGyro", "BALANCE GYRO — a flywheel (axis X) that holds a two-wheeler upright and leans it"
-                       " into turns; the Flywheel caps spin while it works.", None, half, 0.06,
+                       " into turns; the Flywheel caps spin while it works.", None, half, 0.03,
                        children=[("GyroBody", "gyro_body", bm, bc), ("Flywheel", "gyro_wheel", fm, fc)])
 
     # BATTERY PACK ------------------------------------------------------------------------
@@ -643,7 +647,7 @@ def main():
         G.write_prefab("PartSaddle", "MOTO SADDLE — a crew part: a motorcycle saddle and tank-tail shroud on a short"
                        " subframe, X forward; stacks by its bottom (the mount cradle) and its footpegs hang either"
                        " side of the frame below. scripts/command_seat.lua seats the rider astride it (the params).",
-                       None, half, 0.03, children=[("Saddle", "moto_saddle", sm2, sc2 + np.array([0.0, -SADDLE_LIFT, 0.0]))])
+                       None, half, 0.012, children=[("Saddle", "moto_saddle", sm2, sc2 + np.array([0.0, -SADDLE_LIFT, 0.0]))])
         # the rider's pose (command_seat.lua): astride, leaning forward, feet on
         # the pegs, hands on a fork's grips (ForkSteer frame, the fork() bar)
         sx, sy = SADDLE_SIT
@@ -666,7 +670,7 @@ def main():
         print("FRAME", k, v)
     if not dry:
         os.makedirs(G.VIS_DIR, exist_ok=True)
-        for prefab in ("PartWheelB", "PartForkT", "PartSwingArm", "PartStrutS", "PartGyro", "PartPackB", "PartSaddle"):
+        for prefab in ("PartWheelB", "PartWheelBS", "PartForkT", "PartSwingArm", "PartStrutS", "PartGyro", "PartPackB", "PartSaddle"):
             src = open(os.path.join(G.PREFABS, prefab + ".prefab.ron")).read()
             vis = G.strip_scripts(G.strip_block(src, "rigidbody: Some(("))
             head_ = ("// VISUAL-ONLY variant of prefabs/" + prefab + ".prefab.ron for the builder stand: no body,"

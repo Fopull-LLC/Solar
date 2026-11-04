@@ -1516,6 +1516,21 @@ local function run_vload()
   P("JP LOAD parked: front %.3f rear %.3f sum %.3f kN (%.3f..%.3f) vs weight %.3f kN = %.1f%%; with the tyres' own %.3f kN: %.1f%%",
     lf, lr, lf + lr, mn, mx, wt, 100 * (lf + lr) / math.max(1e-6, wt), tyres * (vc.R2.gl or 9.8),
     100 * (lf + lr) / math.max(1e-6, wt + tyres * (vc.R2.gl or 9.8)))
+  -- the sag, parked: each suspended wheel's compression against its travel
+  -- (the springs are sized to sit `sag` of it down), its spring and the load
+  -- it was sized for, and the hull's centre of mass over the ground (ride height)
+  do
+    local t = {}
+    for _, w in ipairs(vc.R2.wheels or {}) do
+      local s = w.susp
+      if s then
+        t[#t + 1] = string.format("%s comp %.3f of %.2f m (%.0f%%, sized %.0f%%) k %.2f kN/m load %.3f kN tyre %.1f kg",
+          tostring(s.m and s.m.kind), s.comp or 0, s.travel or 0, 100 * (s.comp or 0) / math.max(1e-6, s.travel or 1),
+          100 * ((s.m and s.m.sag) or 0), w.realK or s.k or 0, w.realLoad or s.load or 0, 1000 * (s.mt or 0))
+      end
+    end
+    P("JP SAG parked: %s | g %.3f", table.concat(t, " | "), vc.R2.gl or -1)
+  end
   for _, v in ipairs(jsplit(params.speeds or "0.5,5,10,15,20")) do
     local ts = time
     while time - ts < 12 and math.abs(V.speed(vc) - v) > math.max(0.3, 0.05 * v) do

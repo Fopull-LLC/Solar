@@ -44,6 +44,6 @@ PY
 luajit -e "assert(loadfile('$S/tools/perfbench.lua'))" || exit 3
 TMO=${TMO:-330} SOLAR=$SN WORK=$S bash $S/tools/bench.sh $eng ${*:-vjump}
 rc=$?
-for m in ${*:-vjump}; do grep -a "JP LOAD\|JP MASS\|JP BUMP\|JP reset\|JP whoops\|JP ground pass\|JP GAS\|JP accel\|JP LOOK\|JP AT\|JP H \|JP HILL\|JP ACC\|JP hill\|JP R\|JP RIDE\|JP B\|JP kicker\|JP bike\|JP beam\|JP lamp\|JP lights\|JP night\|JP sun\|JP fell\|VP \|moto:" $S/results/*/$m.log 2>/dev/null | cut -c1-420; done
+for m in ${*:-vjump}; do grep -a "JP LOAD\|JP SAG\|JP MASS\|JP BUMP\|JP reset\|JP whoops\|JP ground pass\|JP GAS\|JP accel\|JP LOOK\|JP AT\|JP H \|JP HILL\|JP ACC\|JP hill\|JP R\|JP RIDE\|JP B\|JP kicker\|JP bike\|JP beam\|JP lamp\|JP lights\|JP night\|JP sun\|JP fell\|VP \|moto:" $S/results/*/$m.log 2>/dev/null | cut -c1-420; done
 rm -f $S/proj/save/slot13.ron; rm -rf $S/proj/saves/slot13
 exit $rc

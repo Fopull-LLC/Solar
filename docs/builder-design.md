@@ -537,9 +537,12 @@ another member offers these joints:
      the grid with a phosphor length tag on the cursor.
   3. Click the end. Each end makes its joint as in 5.3.
   4. Shift+click chains the next member from that end; Esc ends the chain.
-- **Profiles:** tube strut (Ø 0.14), box (0.24 × 0.14), I-beam (0.24 × 0.26) and
-  lattice truss (0.4 triangular). Length runs 0.25–12 m in 0.05 m steps. Mass, cost
-  and joint strength scale linearly with length from the catalogue figures.
+- **Profiles:** frame tube (Ø 0.05 chromoly, 2.4 kg/m, joint 160 kN: a bike's or
+  a buggy's frame), tube strut (Ø 0.14, 12 kg/m), box (0.24 × 0.14, 20 kg/m), I-beam
+  (0.24 × 0.26, 30 kg/m) and lattice truss (0.4 triangular, 25 kg/m). The light ones
+  give at a lower load. Length runs 0.25–12 m in 0.05 m steps. Mass and cost scale
+  linearly with length from the per-metre figures (parts_registry PROFILES); joint
+  strength is the profile's.
   Selecting a member shows **end handles** to drag its length.
 - **Panel tool.** Drag a rectangle on a face or on the floor grid to get a procedural
   panel (thickness 4 cm or deck 10 cm). It has edge handles.

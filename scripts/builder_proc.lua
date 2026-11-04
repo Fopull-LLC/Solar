@@ -196,6 +196,15 @@ BUILD.tube = function(M, L)
   prism(M, { 0, h - 0.03, 0 }, { 0, h, 0 }, 0.07, 12, METAL, true)
   prism(M, { 0, -h, 0 }, { 0, -h + 0.03, 0 }, 0.07, 12, METAL, true)
 end
+-- the frame tube (parts_registry PROFILES.frame): a 50 mm chromoly tube,
+-- painted, with a welded sleeve at each end where it joins
+local FRAME_PAINT = { 0.16, 0.17, 0.19, 1 }
+BUILD.frame = function(M, L)
+  local h = L / 2
+  prism(M, { 0, -h + 0.02, 0 }, { 0, h - 0.02, 0 }, 0.022, 12, FRAME_PAINT, false)
+  prism(M, { 0, h - 0.02, 0 }, { 0, h, 0 }, 0.025, 12, METAL, true)
+  prism(M, { 0, -h, 0 }, { 0, -h + 0.02, 0 }, 0.025, 12, METAL, true)
+end
 BUILD.box = function(M, L)
   local h = L / 2
   box(M, 0, 0, 0, 0.1, h - 0.02, 0.05, ANOD)
@@ -453,7 +462,8 @@ function arraysOf(rec)
   if def.proc == "panel" then return panelArrays(quantLen(s.w or 1), quantLen(s.d or 1), s.t or def.h or 0.04) end
   return nil
 end
-local PROF = { tube = { 0.07, 0.07 }, box = { 0.12, 0.07 }, ibeam = { 0.12, 0.13 }, truss = { 0.20, 0.18 }, brace = { 0.035, 0.035 } }
+local PROF = { tube = { 0.07, 0.07 }, box = { 0.12, 0.07 }, ibeam = { 0.12, 0.13 }, truss = { 0.20, 0.18 }, brace = { 0.035, 0.035 },
+               frame = { 0.025, 0.025 } }
 function collider(rec)
   local def, s = sizeOfRec(rec)
   if def.proc == "member" or def.proc == "brace" then

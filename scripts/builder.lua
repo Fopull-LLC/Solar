@@ -1743,6 +1743,7 @@ function launchCheck()
   if has.wheel then
     for _, w in ipairs(wheelChecks()) do rank[#warn + 1] = 1; warn[#warn + 1] = w end
   end
+  for _, w in ipairs(roboLoopChecks({})) do rank[#warn + 1] = 1; warn[#warn + 1] = w end
   -- A probe with nothing aboard to keep it powered is a probe that goes dark
   -- before it gets anywhere. Say how long it has.
   if has.probe and not has.crewed then
@@ -2128,6 +2129,33 @@ function chainJointChecks(out)
         prev = h
       end
     end
+  end
+  return out
+end
+-- A ROBOTIC PART IN A LOOP: what its moving face carries is also joined to
+-- the frame another way (a second piston beside it, a strut, a weld across).
+-- The flight moves what is built ON the joint and leaves the other path
+-- where it is: two pistons side by side driven together (one key group, the
+-- same travel) move as one, but driven apart, or with a strut across, the
+-- far joint comes away from what it was joined to. It never fights the
+-- physics — the craft is one rigid body — so it is said, not refused.
+-- (A Drive Chain is no loop: it runs over its sprockets, chainJointChecks.)
+function roboLoopChecks(out)
+  local G, L = graph(), lib("builder_graph")
+  if not (G and L and L.hingeLocked) then return out end
+  local alive = {}
+  for u, p in pairs(parts) do if p.def.proc ~= "chain" then alive[u] = true end end
+  local n, first = 0, nil
+  for u, p in pairs(parts) do
+    local k = p.def.robo
+    if (k == "hinge" or k == "piston" or k == "rotor") and L.hingeLocked(G, alive, u) then
+      n = n + 1
+      if not first or u < first then first = u end
+    end
+  end
+  if n > 0 then
+    out[#out + 1] = string.format("%s%s joined to the frame a second way (a loop): in flight it moves what is built on it and the other joint comes away — drive joints side by side together with one key group, or take the second link off",
+      n == 1 and ("the " .. (parts[first].def.label or "joint") .. " is") or (n .. " robotic joints are"), n == 1 and "" or "")
   end
   return out
 end
@@ -6937,10 +6965,10 @@ end
 -- Beam: click a start (a node, a face on the host grid, the floor grid), move
 -- (a live member stretches, its length snapped, a phosphor tag at the cursor),
 -- click the end; SHIFT+click chains the next member from that end, ESC ends
--- the chain and then the tool. [ / ] change the profile (tube, box, I-beam,
--- truss). Panel: two corners on a face or the floor ([ / ] sheet or deck).
+-- the chain and then the tool. [ / ] change the profile (frame tube, tube,
+-- box, I-beam, truss: light to heavy, parts_registry PROFILES). Panel: two corners on a face or the floor ([ / ] sheet or deck).
 -- Brace: point A on a part, point B on another.
-local DRAW_PROFILES = { "tube", "box", "ibeam", "truss" }
+local DRAW_PROFILES = { "frame", "tube", "box", "ibeam", "truss" }
 function startDrawTool(id)
   local A = attach_v2()
   local def = REG[id]
@@ -6966,7 +6994,10 @@ function drawToolCycle(dir)
     for k, n in ipairs(DRAW_PROFILES) do if n == d.prof then i = k end end
     d.prof = DRAW_PROFILES[(i - 1 + dir) % #DRAW_PROFILES + 1]
     W.draw_prof = d.prof
-    hint("profile: " .. d.prof, 1.5)
+    -- (its name and weight a metre, parts_registry PROFILES: the light ones are weaker)
+    local P = REGISTRY.lib and REGISTRY.lib.PROFILES and REGISTRY.lib.PROFILES[d.prof]
+    hint(P and string.format("profile: %s · %.1f kg/m · joint %d kN", P.label or d.prof, (P.mass or 0) * 1000, P.strength or 0)
+      or ("profile: " .. d.prof), 1.5)
   elseif d.kind == "panel" then
     d.thick = (d.thick >= 0.08) and 0.04 or 0.10
     W.draw_thick = d.thick

@@ -2080,7 +2080,7 @@ function massSync(node, info)
       local d = u and bp_by_uid[u]
       local rb = d and not integ.gone[u] and c:getcomponent("RigidBody")
       if rb then
-        list[#list + 1] = { rb = rb, uid = u, d = d, eid = c.id }
+        list[#list + 1] = { rb = rb, uid = u, d = d, eid = c.id, ts = tyreShareOf(d) }
         if (d.cargo or 0) > 0 then bays = bays + 1 end
       end
     end
@@ -2109,7 +2109,7 @@ function massSync(node, info)
     local m = math.max(0.001, (d.mass or 0) + (fuel_t[e.uid] or 0.0)
       + (((d.cargo or 0) > 0) and share or 0.0) + (LOCKER_T[e.uid] or 0.0))
     -- a powered wheel whose tyre is out: the tyre body carries its share
-    if R2.live and (d.wheel or "") ~= "" then m = math.max(0.001, m * (1 - TYRE_SHARE)) end
+    if R2.live and (d.wheel or "") ~= "" then m = math.max(0.001, m * (1 - (e.ts or TYRE_SHARE))) end
     local was = ms.last[e.eid]
     if not was or math.abs(m - was) > 1e-6 then
       e.rb.mass = m
@@ -9018,6 +9018,20 @@ end
 -- 60-upvalue ceiling. State lives in the one `R2` table.
 
 TYRE_SHARE = 0.6
+-- A wheel part's own share of its mass in the spinning tyre body (its drive
+-- module's `spin`, else TYRE_SHARE): a plain spoked wheel is nearly all
+-- rim, spokes and tyre (parts_auto's Spoked Wheel 0.85), a hub-motor wheel
+-- leaves its stator on the bracket. The rotating mass is what the air roll,
+-- a landing and the gyros feel.
+function tyreShareOf(d)
+  local mods = d and d.mods
+  if type(mods) == "table" then
+    for _, m in ipairs(mods) do
+      if m.type == "drive" and tonumber(m.spin) then return math.max(0.1, math.min(0.95, tonumber(m.spin))) end
+    end
+  end
+  return TYRE_SHARE
+end
 R2_TYRE_RATIO = 12.0   -- a tyre weighs at least 1/12 of the load it carries (hang_tyre)
 R2 = {
   gen = -1,           -- integ.gen the part lists were built for
@@ -9317,7 +9331,7 @@ function gasScan(E)
   -- (how much of the drive is electric, for the hub motors' whine)
   local nel, ng = 0, 0
   for _, w in ipairs(R2.wheels or {}) do
-    if w.gas then ng = ng + 1 elseif not (w.cfg and w.cfg.drive == "off") then nel = nel + 1 end
+    if w.gas then ng = ng + 1 elseif not (w.cfg and w.cfg.drive == "off") and not (w.m and w.m.motor == false) then nel = nel + 1 end
   end
   GAS.elecShare = (ng > 0) and (nel / (nel + ng)) or 1
   table.sort(GAS.tanks, function(a, b) return a.uid < b.uid end)
@@ -10741,7 +10755,7 @@ function hang_tyre(node, w, info)
   -- The tyre, hub and motor are most of a powered wheel's mass (60 %; the
   -- bracket keeps the rest, massSync): a tyre feather-light against the
   -- hull it carries spins on a slope instead of gripping.
-  local mt = math.max(0.005, (w.d.mass or 0.12) * TYRE_SHARE)
+  local mt = math.max(0.005, (w.d.mass or 0.12) * tyreShareOf(w.d))
   local g = 7.0
   if space.gravity then
     local gx, gy, gz = space.gravity(info.com.x, info.com.y, info.com.z)
@@ -11428,7 +11442,7 @@ local function drive_tick(node, info, dt)
           power = power + (m.draw or 0.8) * math.abs(want)
         end
       end
-      R2.draw["d" .. w.uid] = w.gas and 0 or ((m.draw or 0.8) * ((brakes and not stick_free) and 0 or math.abs(want)) + 0.01)
+      R2.draw["d" .. w.uid] = (w.gas or m.motor == false) and 0 or ((m.draw or 0.8) * ((brakes and not stick_free) and 0 or math.abs(want)) + 0.01)
     end
   end
   R2.power = power
@@ -11820,8 +11834,12 @@ function motoPlan()
   -- to roll and brake. Going forwards the push lifts weight off the front, so
   -- a driven front tyre sat at its grip limit and held the bike back (engine
   -- 0588: forwards 0.69× reverse). A fork told to drive in the builder still does.
+  -- A WHEEL WITH NO MOTOR (parts_auto's Spoked Wheel: its drive module's
+  -- `motor = false`) coasts on any craft unless a Drive Chain runs to it from
+  -- a gas engine (gasScan, before this): it rolls and brakes, never pushes.
   for _, w in ipairs(R2.wheels) do
     w.coast = R2.bike and w.susp and (w.susp.m.steer or -1) == 1 and (w.cfg or {}).drive == "auto" or nil
+    if w.m and w.m.motor == false and not w.gas then w.coast = true end
   end
   local amin, amax = math.huge, -math.huge
   for _, w in ipairs(list) do amin, amax = math.min(amin, w.a or 0), math.max(amax, w.a or 0) end

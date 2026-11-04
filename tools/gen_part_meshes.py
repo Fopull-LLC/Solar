@@ -2509,7 +2509,7 @@ def build_new_parts(dry=False, only=()):
             write_prefab("PartSolar", "SOLAR PANEL — a radial blade (+X out off the flank, like a fin): a Yoke on"
                          " the hull and a cell Wing hinged to it (SolarWingPivot). Flight folds the wing"
                          " flat along the hull for launch and swings it open on Deploy (U).",
-                         None, (0.45, 0.34, 0.05), 0.05,
+                         None, (0.45, 0.34, 0.05), 0.012,
                          children=[("SolarYoke", "solar", ym, yc)], tail_nodes=pivot)
     return ok
 

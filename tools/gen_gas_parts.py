@@ -320,8 +320,8 @@ def main():
         written.append(spec["prefab"])
 
     for pid, fn, prefab, half, mass, about in (
-            ("gasTankS", tank_s, "PartGasTankS", (0.17, 0.10, 0.10), 0.0055, "GAS TANK 4 L — a bike's petrol tank; X forward, the filler on top."),
-            ("gasTankM", tank_m, "PartGasTankM", (0.18, 0.17, 0.09), 0.014, "GAS TANK 12 L — a steel jerry tank in a strap cradle.")):
+            ("gasTankS", tank_s, "PartGasTankS", (0.17, 0.10, 0.10), 0.0015, "GAS TANK 4 L — a bike's petrol tank; X forward, the filler on top."),
+            ("gasTankM", tank_m, "PartGasTankM", (0.18, 0.17, 0.09), 0.004, "GAS TANK 12 L — a steel jerry tank in a strap cradle.")):
         m = fn()
         clip_check(pid, m, half, allow_z=0.0)
         if dry:

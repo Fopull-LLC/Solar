@@ -101,7 +101,7 @@ def prefab_text(model):
             gravity: true,
             lock_pos: (false, false, false),
             lock_rot: (false, false, false),
-            mass: 0.05,
+            mass: 0.025,
         )),
     ),
 ]

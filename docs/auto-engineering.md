@@ -16,11 +16,12 @@ rover code in `vessel_controller.lua` (R2) and the engine's wheel joint
   sidecar, a six-wheeled chopper, a trike with lamps on its hubs) is just as
   easy.
 
-## 2. The parts (seven, in the ROVER section)
+## 2. The parts (eight, in the ROVER section)
 
 | Part | Mounts | Takes | Role |
 |---|---|---|---|
-| **Moto Wheel** | on a fork's or swing arm's hub (centred), or by an axle end on any face | anything on either axle end | 0.33 m spoked wheel, hub motor, disc brake. Its axle runs right through: it is the through-axle wheel. |
+| **Moto Wheel** | on a fork's or swing arm's hub (centred), or by an axle end on any face | anything on either axle end | 0.33 m spoked wheel, hub motor, disc brake. Its axle runs right through: it is the through-axle wheel. 26 kg. |
+| **Spoked Wheel** | as the Moto Wheel | as the Moto Wheel | The same wheel with a plain hub and no motor, 14 kg (12 of it in the spinning tyre body, `spin` 0.85; the Moto Wheel spins 16 of its 26): it rolls and brakes and never drives by itself (`motor = false`: it coasts unless a Drive Chain runs to it). A bike's front, or a gas bike's chained rear. |
 | **Telescopic Fork** | a FRONT face (stands upright whatever it is on) | a Moto Wheel between its legs | Steers on A/D about a 24° raked head; 22 cm of travel (a dirt bike's 250–300 mm); the bars turn with it. |
 | **Swing Arm** | a REAR face | a Moto Wheel in its jaws | Rear suspension: pivot and monoshock, 20 cm at the axle; never steers. |
 | **Coil-over Strut** | a flank (car, rover, trike axle) | any wheel on its hub flange | 18 cm of travel; a strut ahead of the centre of mass steers about its own axis. |
@@ -273,9 +274,9 @@ instead of braking (a hybrid's 18 m/s front motor threw the bike down at 20).
 - *The 125 on a 0.4 t bike:* 10.5 N·m is a real 125 four-stroke's, and first
   gear (39:1 overall) is already lower than a CRF125F's (27.5:1). Its 1.1 kN
   at the wheel is 0.29 g on 0.4 t: no 125 climbs 31° from a stop with that
-  load. It climbs on a ~0.2 t bike. The moto parts weigh 2–4× a real dirt
-  bike's (wheel 50 kg, fork 30, saddle 30, swing arm 25), which is the lever
-  if lighter bikes are wanted.
+  load. It climbs on a ~0.2 t bike. The moto parts weighed 2–4× a real dirt
+  bike's (wheel 50 kg, fork 30, saddle 30, swing arm 25) until the mass
+  audit of 2026-11-04 (below).
 
 **Third pass (playtest 9e675fb):**
 - *The loop always stops.* Off, the engine's loop runs down over a tenth
@@ -314,8 +315,8 @@ instead of braking (a hybrid's 18 m/s front motor threw the bike down at 20).
   each axis.
 - *The gyro* acts through `assembly.torque` on the whole craft, so where
   it sits does not change its torque (as for a real control-moment gyro).
-  Its 60 kg moves the centre of mass, which is why moving it near the engine
-  changed the handling a little.
+  Its mass (60 kg then, 30 now) moves the centre of mass, which is why moving
+  it near the engine changed the handling a little.
 - *The bump course* (jumpprobe `vbump`): 14 whoops, a kicker and a
   run-out on the flat strip, ridden from a standstill at each speed.
   Between passes the probe holds the bike in the air, square to the strip,
@@ -452,6 +453,33 @@ That is a warning only; the craft still launches.
 
 Probe: `tools/perf/servoprobe.sh <engine> [none arm direct elec far]`
 (`servoprobe_modes.lua`). Smoke: `tests/smoke_servo_wheels.lua`.
+
+## 3f. Part masses (audit 2026-11-04)
+
+The bike parts weighed 2–4× their real counterparts, so a gas 500 built from
+them came out at 0.34–0.47 t (a real 500 MX bike is 0.11–0.12 t). Each was set
+against a real part of its size: Moto Wheel 50 → 26 kg (wheel and tyre plus
+its hub motor), fork 30 → 13, swing arm 25 → 10, coil-over 40 → 15, gyro
+60 → 30, saddle 30 → 12, gas tanks 5.5 → 1.5 and 14 → 4 kg empty; the
+engines (11–36 kg) and the pack (40) were already right. With them the
+player's 500 is 0.18 t and the pure 500 0.24 t. The other ground parts that
+were heavy for what they are went the same way (Command Seat 25 kg, Floodlight
+4, Comm Whip 3, Solar Panel 12, Stowage Locker 30, Cargo Bay 150); rocket
+parts did not change. The full table is in the work notes (mass/audit.md).
+
+Light and heavy choices: the **Spoked Wheel** (14 kg, no motor; the Moto
+Wheel's 26 carries one), the **frame tube** drawn profile (2.4 kg/m, joint
+160 kN, against the tube's 12 kg/m and 250 kN), the small and big engines,
+pack or tank. `spin` on a drive module is its share of the part's mass in
+the spinning tyre body (default TYRE_SHARE 0.6, the Spoked Wheel 0.85), so
+the rotating mass stays a real wheel's: 15.6 kg a Moto Wheel, 11.9 a Spoked.
+
+The springs are sized from the load (motoSpring, wheelReal), so they follow
+the mass by themselves: parked on .1427, the lighter 500 sits 31 % / 37 % into
+its fork and arm travel (sized 33 %), as the heavy one did (32 / 36 %), on
+springs half as stiff (11 / 13 kN/m from 20 / 25), and its tyres carry 100 %
+of its weight. The VAB rebuilds each part's mass from the registry when it loads a craft, so a
+craft rolled out of the VAB again gets the new masses (one flying already keeps its old ones).
 
 ## 4. Controls summary
 
