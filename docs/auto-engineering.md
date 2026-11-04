@@ -324,6 +324,31 @@ instead of braking (a hybrid's 18 m/s front motor threw the bike down at 20).
 - *The Drive Chain tool* is done after one chain: back to select, with the
   new chain selected.
 
+**A tyre's load (engine .1421/.1423, card 0629).** `node.contactForce` on a
+tyre is the ground's push over the last step (kN, 0 the tick it leaves), and
+since .1421 a held tyre's load over ripple is no longer counted twice, so
+landing grip is honest.
+- *Read once a tick* (`r2Contacts`, r2Tick): each wheel's `w.down`
+  (grounded) and `w.load` (contactForce), `R2.loadF` / `R2.loadR` at the
+  ends. Every reader that tick (the wheel count, the wheelie control, the
+  hill hold, the dampers, the oleo, roundTwoState) uses them, not the node.
+- *The rear tyre's slope* in a wheelie is its contact's `groundNormal`, not a
+  ray cast down from it.
+- *The grip cap* (`R2_GRIP_K`, the bike block): at a launch and a crawl the
+  push is held to the driven tyres' friction × their load (smoothed at
+  `R2_GRIP_RATE`), faded out from `R2_GRIP_V0` to `R2_GRIP_V1` (6 to 10 m/s).
+  It stops the rear stepping out off the line (the electric bike: 17° of roll
+  at 3-4 m/s, now 0.5-3.7°). Kept on at speed it cut the push on every whoop's
+  crest and the nose dropped into the next: 3 falls in 3 at 28 m/s.
+- *Probes*: jumpprobe counts a tyre off by its load (`JP.down`, and how often
+  `grounded` disagreed: `odd`), JP RIDE and JP BUMP give the loads in weights
+  (a landing on the bump course peaks at 5-11 W), and `vload` compares a
+  parked or rolling bike's loads with its mass. `assembly.info().mass` leaves
+  out the tyres (bodies of their own) and the seated rider (a kinematic body,
+  0.14 t, in no mass), and a parked bike's tyres carry 105-109 % of
+  info.mass × g, 90-91.5 % of chassis and tyres (asked of the engine:
+  `work/gas/card-0629-acceptance-solar.md`).
+
 **Heard and seen**: a running loop per craft (`audio/foley/engine_four.ogg`,
 `engine_two.ogg`, `tools/gen_engine_audio.py`) pitched by rpm, and a
 `TailpipePuff` out of each running engine's tailpipe (lamp_response 0.3).

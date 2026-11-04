@@ -9195,6 +9195,11 @@ end
 -- Measured (tools/perf/jumpprobe.sh vhill, the player's dirt bike): see the
 -- report in the 2026-11 notes; the numbers are in drive_tick's BIKE block.
 --   liftHi  …the share of it at vHi m/s and over (from vLo, blended)
+-- THE GRIP CAP (drive_tick's bike block, engine card 0629): a share of the
+-- driven tyres' friction × their load (node.contactForce) the push may use,
+-- and how fast (/s) the load it reads is smoothed. nil: no cap.
+R2_GRIP_K, R2_GRIP_RATE = 1.0, 25
+R2_GRIP_V0, R2_GRIP_V1 = 6.0, 10.0   -- m/s: the cap in full below V0, gone by V1
 R2_BIKE = { top = 18.0, torque = 0.8, tc = 0.9, open = 1.8, lean = 0.12, lift = 0.88, liftHi = 0.55, vLo = 14.0, vHi = 24.0,
             wfree = 6.0, wheelie = 14.0, wmin = 0.3, land = 0.6 }
 
@@ -10387,6 +10392,26 @@ end
 
 -- Should the tyres be out? The active bubble only: piloted, at 1× warp, not
 -- clamped, the craft assembled, on or just over the ground, not too fast.
+-- THE TYRES' CONTACT, read once a tick (r2Tick, before anything else asks):
+-- on the ground (node.grounded) and the load the ground carries
+-- (node.contactForce, kN with masses in tonnes, engine card 0629: what it
+-- pushed back with over the last step, 0 in the tick the tyre leaves). The
+-- rest of the tick reads w.down and w.load, never the tyre node again: one
+-- read per wheel, and every reader agrees. R2.loadF / R2.loadR: the loads at
+-- the ends (ahead of the centre of mass, behind), R2.nDown the tyres down.
+function r2Contacts()
+  local lf, lr, n = 0, 0, 0
+  for _, w in ipairs(R2.wheels) do
+    local t = w.tyre
+    local down = (R2.live and w.jointed and t ~= nil and t.valid and t.grounded == true) or false
+    local load = down and (t.contactForce or 0) or 0
+    w.down, w.load = down, load
+    if down then n = n + 1 end
+    if (w.a or 0) > 0 then lf = lf + load else lr = lr + load end
+  end
+  R2.loadF, R2.loadR, R2.nDown = lf, lr, n
+end
+
 local function wheels_wanted(node, info)
   if #R2.wheels == 0 or destroyed or not piloting then return false, "unpiloted" end
   if info.anchored then return false, "clamped" end
@@ -10412,7 +10437,7 @@ local function wheels_wanted(node, info)
     -- out: they stay out while any tyre is on the ground, and for a couple
     -- of seconds of air (a bump, a hop) before they fold back into the hull
     for _, w in ipairs(R2.wheels) do
-      if w.tyre and w.tyre.valid and w.tyre.grounded then R2.air_t = time return true end
+      if w.down then R2.air_t = time return true end
     end
     if info.grounded then R2.air_t = time return true end
     return time - (R2.air_t or time) < 2.5, "airborne"
@@ -10769,7 +10794,7 @@ local function drive_tick(node, info, dt)
   R2.steer = ease(R2.steer, scmd, 2.5, 3.0)
   local grounded = 0
   for _, w in ipairs(R2.wheels) do
-    if w.jointed and w.tyre and w.tyre.valid and w.tyre.grounded then grounded = grounded + 1 end
+    if w.down then grounded = grounded + 1 end   -- (r2Contacts: jointed, valid, grounded)
   end
   R2.onWheels = grounded > 0
   R2.driving = ctl and grounded > 0 and not R2.gear and not R2.passive
@@ -10820,7 +10845,7 @@ local function drive_tick(node, info, dt)
   local climb = math.abs(fx * gdir.x + fy * gdir.y + fz * gdir.z)   -- g · sin(slope)
   local front_up, rear_up = 0, 0
   for _, w in ipairs(R2.wheels) do
-    if w.tyre and w.tyre.valid and w.tyre.grounded then
+    if w.down then
       if (w.a or 0) > 0 then front_up = front_up + 1 else rear_up = rear_up + 1 end
     end
   end
@@ -10837,23 +10862,23 @@ local function drive_tick(node, info, dt)
     if front_up > 0 and rear_up > 0 then
       R2.gslope = (R2.gslope or sn) + (sn - (R2.gslope or sn)) * math.min(1, dt * 10)
     elseif front_up == 0 and rear_up > 0 then
-      -- the front up: the ground's grade where the rear tyre stands (its
-      -- normal, tick pose). Held from the last both-down tick, a ramp's foot
-      -- read as level: the front, kicked up by the face, was a "wheelie" of
-      -- the ramp's whole angle and the push was cut on every steep climb.
+      -- the front up: the ground's grade where the rear tyre stands (the
+      -- normal of its contact, node.groundNormal, this tick's). Held from the
+      -- last both-down tick, a ramp's foot read as level: the front, kicked
+      -- up by the face, was a "wheelie" of the ramp's whole angle and the
+      -- push was cut on every steep climb. (A ray down from the tyre until
+      -- engine card 0629; the contact's own normal is the patch it stands on.)
       local gs
       for _, w in ipairs(R2.wheels) do
-        local t = w.tyre
-        if (w.a or 0) <= 0 and t and t.valid and t.grounded then
-          local p = t.tickPos or t.worldPos
-          local Ux, Uy, Uz = -gdir.x / gl, -gdir.y / gl, -gdir.z / gl
-          local h = raycast(p.x, p.y, p.z, -Ux, -Uy, -Uz, (w.r or 0.33) + 0.4, { ignore = r2Own(node) })
-          if h and h.nx then
+        if (w.a or 0) <= 0 and w.down then
+          local n = w.tyre.groundNormal
+          if n then
+            local Ux, Uy, Uz = -gdir.x / gl, -gdir.y / gl, -gdir.z / gl
             local fu = fx * Ux + fy * Uy + fz * Uz
             local hx, hy, hz = fx - Ux * fu, fy - Uy * fu, fz - Uz * fu
             local hl = math.sqrt(hx * hx + hy * hy + hz * hz)
             if hl > 0.3 then
-              gs = math.sin(math.atan2(-(hx * h.nx + hy * h.ny + hz * h.nz) / hl, h.nx * Ux + h.ny * Uy + h.nz * Uz))
+              gs = math.sin(math.atan2(-(hx * n.x + hy * n.y + hz * n.z) / hl, n.x * Ux + n.y * Uy + n.z * Uz))
             end
           end
           break
@@ -10900,6 +10925,28 @@ local function drive_tick(node, info, dt)
     -- crawling up it on a light front beats stalling at its foot)
     local k = math.max(kb, math.min(0.97, (need + 0.05 * gl) / math.max(lift, 1e-3)))
     accel = math.min(R2_BIKE.tc * gl + need, k * lift)
+    -- THE GRIP (engine card 0629): the driven tyres push no harder than
+    -- R2_GRIP_K × their friction × the load the ground carries on them now
+    -- (w.load, node.contactForce; smoothed at R2_GRIP_RATE). It takes in the
+    -- weight thrown back under power and a tyre unloaded on a crest, which
+    -- the lever rule above cannot see: asked for more, the rim spins up past
+    -- the ground and kicks the bike when the load comes back.
+    if R2_GRIP_K then
+      local nd = 0
+      for _, w in ipairs(R2.wheels) do
+        if (w.rs or 0) ~= 0 and not w.coast and w.down then nd = nd + (w.load or 0) * ((w.cfg and w.cfg.friction) or 1) end
+      end
+      R2.gripN = (R2.gripN or nd) + (nd - (R2.gripN or nd)) * math.min(1, dt * R2_GRIP_RATE)
+      R2.gripA = R2_GRIP_K * R2_TYRE_MU * R2.gripN / mt
+      -- (at a launch and a crawl only, faded out from R2_GRIP_V0 to R2_GRIP_V1
+      -- m/s: at speed over whoops it cut the push on every crest and the
+      -- nose dropped into the next one, 3 falls in 3 at 28 m/s, vbump .1421)
+      local kv = math.max(0, math.min(1, (R2_GRIP_V1 - (spd or 0)) / (R2_GRIP_V1 - R2_GRIP_V0)))
+      if rear_up > 0 and kv > 0 then
+        local capped = math.min(accel, math.max(0.05 * gl, R2.gripA))
+        accel = accel + (capped - accel) * kv
+      end
+    end
     -- WHEELIE CONTROL: the front up, the rear driving → the push comes back as
     -- the nose rises over the ground's slope past R2_BIKE.wfree, all the way
     -- to `wmin` of it R2_BIKE.wheelie degrees later
@@ -11059,7 +11106,7 @@ local function drive_tick(node, info, dt)
           j.motorSpeed = 0
         end
         j.maxForce = bf
-      elseif hill_hold and w.tyre.grounded then
+      elseif hill_hold and w.down then
         j.motor = 1
         j.motorSpeed = 0
         j.maxForce = math.min(full * 2.0 * (c.brake or 1), hill_a * (info.mass or 1) * w.r / grounded)
@@ -11244,7 +11291,7 @@ function suspDamper(node, info, dt, gl)
       local v = s.dmp_v
       local F = 0
       -- (a joint in real units damps the stroke itself, against the frame: wheelReal)
-      if t.grounded and not w.real then
+      if w.down and not w.real then
         local c = math.max(0, (s.c or 0) * (v > 0 and SUSP_BUMP or SUSP_REBOUND) - (s.ce or 0))
         local load = s.load or ((info.mass or 1) * (gl or 9.8) / math.max(1, #R2.wheels))
         F = math.max(-SUSP_DAMP_CAP * load, math.min(SUSP_DAMP_CAP * load, c * v))
@@ -11309,7 +11356,7 @@ function gearOleo(node, info, dt, upv, gl)
       w.oleo_s = s
       w.oleo_sd = (w.oleo_sd or 0) + (raw - (w.oleo_sd or 0)) * math.min(1, dt * 20)
       local sd = w.oleo_sd
-      if t.grounded and (w.joint_age or 0) > 0.1 then
+      if w.down and (w.joint_age or 0) > 0.1 then
         down = true
         local F = R2_OLEO_C * load * sd
         -- (never more than 1.5 × its load either way: one tick must not fling it)
@@ -11744,7 +11791,7 @@ function motoBike(node, info, cmds, vf, gl, dt, rxv, upv, rzv, gdir)
   -- settling onto its springs threw it end over end (probe: 7.8 m/s, both
   -- tyres in the air, a second after a parked bike's tyres came out)
   local down = 0
-  for _, w in ipairs(R2.wheels) do if w.tyre and w.tyre.valid and w.tyre.grounded then down = down + 1 end end
+  for _, w in ipairs(R2.wheels) do if w.down then down = down + 1 end end
   if down >= 1 and not R2.bikeT0 then R2.bikeT0 = time end
   local ease = R2.bikeT0 and math.min(1, 0.4 + 0.6 * (time - R2.bikeT0) / BIKE_EASE) or 0
   local tmax = L.balanceAuthority(gt, rider, vf) * ease
@@ -12472,6 +12519,7 @@ function r2Tick(node, info, dt)
     R2.stow_sig = sig
   end
   motoRiderShape(node)
+  r2Contacts()
   local want, why = wheels_wanted(node, info)
   R2.why = want and "out" or why   -- published: why the tyres are in (HUD, probes)
   if want and not R2.live then tyres_out(node, info)
@@ -12551,9 +12599,10 @@ function r2OnWheels() return R2.onWheels == true end
 -- What the HUD and probes read: the rover, the robots, the claw, the drill.
 function roundTwoState()
   local out = { live = R2.live, driving = R2.driving, speed = R2.speed, parked = R2.live and R2.hold_t > 0.15,
-                wheels = #R2.wheels, grounded = 0, robo = {}, claws = {}, drills = {} }
+                wheels = #R2.wheels, grounded = 0, robo = {}, claws = {}, drills = {},
+                loadF = R2.loadF or 0, loadR = R2.loadR or 0 }   -- (kN, this tick's: r2Contacts)
   for _, w in ipairs(R2.wheels) do
-    if w.tyre and w.tyre.valid and w.tyre.grounded then out.grounded = out.grounded + 1 end
+    if w.down then out.grounded = out.grounded + 1 end
   end
   for _, r in ipairs(R2.robo) do
     out.robo[#out.robo + 1] = { uid = r.uid, kind = r.kind, cur = r.cur, stalled = r.stalled, n = 0 }
