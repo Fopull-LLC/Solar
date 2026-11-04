@@ -99,6 +99,10 @@ local function bstate(B)
   local st = B.stats and B.stats() or nil
   s.block = st and st.launch and st.launch.block or nil
   s.warn = st and st.launch and st.launch.warn or nil
+  -- over budget (builder_statusbar's COST against FUNDS): LAUNCH would refuse
+  local sb = ref("builder_statusbar")
+  local fs = (sb and sb.fundsState and st) and sb.fundsState(st.cost or 0) or nil
+  s.over = fs and fs.over and fs.funds or nil
   return s
 end
 
@@ -186,6 +190,7 @@ local function row1(B, s)
   r[#r + 1] = key("leave", "◂ LEAVE", 68, { style = "panel/secondary",
     tip = "Save and go back to the base — buys nothing", click = function() if B.doLeave then B.doLeave() end end })
   local launch_tip = s.block and ("Can't launch — " .. s.block)
+    or (s.over and ("Can't launch — the craft costs more than the agency's funds (" .. s.over .. ")"))
     or (s.warn and #s.warn > 0 and ("⚠ " .. table.concat(s.warn, " · ")) or "Buy the hull and roll it out")
   r[#r + 1] = key("launch", "LAUNCH ▸", 84, { style = "panel/action", disabled = s.block ~= nil, tip = launch_tip,
     click = function() if B.doLaunch then B.doLaunch() end end })
@@ -402,7 +407,7 @@ local function signature(s, L, B)
   local fr = C and C.heightFrac and C.heightFrac() or 0
   return table.concat({ s.tool, tostring(s.sym), tostring(s.mirror), tostring(s.grid), tostring(s.angle),
     s.space, tostring(s.test), tostring(s.overlay), s.site, s.name, tostring(s.canUndo), tostring(s.canRedo),
-    tostring(s.block), s.warn and #s.warn or 0, tostring(s.typing), math.floor(L.W), math.floor(L.H),
+    tostring(s.block), s.warn and #s.warn or 0, tostring(s.over), tostring(s.typing), math.floor(L.W), math.floor(L.H),
     math.floor(fr * 200), tostring(keysOpen), tostring(libraryOpen),
     libraryOpen and B.craftList and #B.craftList() or 0 }, "|")
 end

@@ -391,6 +391,33 @@ tick()
 check(not VS.canRevert(), "taking control of another craft ends the revert")
 plane.piloting = false
 
+-- Getting off on the launch site takes it away; a CRASH there does not
+-- (playtest 2026-11-04: "you should still be able to revert after your craft
+-- crashes" — a wreck by the pad read as the crew stepping off).
+local function fresh_flight()
+  store["shipyard.pilot"] = 1
+  VS.launchNow("pad", { force = true })
+  tick()
+  local root
+  for _, n in ipairs(spawned) do if n.name == "Vessel" and n.valid then root = n end end
+  local v = controller("Kestrel I", root)
+  v.piloting, v.crewAboard = true, true
+  tick()
+  return v
+end
+local hop = fresh_flight()
+check(VS.canRevert(), "a fresh flight, aboard on the pad")
+hop.piloting, hop.crewAboard = false, false
+tick()
+check(not VS.canRevert() and tostring(VS.revertGone):find("launch site", 1, true), "off the craft on the launch site: no revert (" .. tostring(VS.revertGone) .. ")")
+local wreck = fresh_flight()
+wreck.piloting, wreck.crewAboard = false, false
+wreck.isLost = function() return true end   -- the pod is gone (vessel_controller)
+tick()
+tick()
+check(VS.canRevert() and VS.revertQuote() and VS.revertQuote().ok, "wrecked on the launch site, the crew thrown clear: still revertable")
+wreck.isLost = function() return false end
+
 -- Revert to the builder hands the hull back.
 VS.launchNow("pad", { force = true })
 tick()

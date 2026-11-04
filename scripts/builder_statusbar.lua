@@ -1,7 +1,7 @@
 -- BUILDER_STATUSBAR — the CRT strip along the bottom of the Vehicle Assembly
 -- (docs/builder-design.md §4.4; WP2), and the hint line under it.
 --
---   ▐ PARTS 312 ▐ MASS 18.40 t ▐ ΔV 1 240 m/s ▐ TWR 1.42 ▐ MARGIN +6 % ▐ COST $12 400 ▐ 3.1 ms ▐
+--   ▐ PARTS 312 ▐ MASS 18.40 t ▐ ΔV 1 240 m/s ▐ TWR 1.42 ▐ MARGIN +6 % ▐ COST $12 400 ▐ FUNDS $19 526 ▐ 3.1 ms ▐
 --   hint: drag to move · Alt+drag moves only this · RMB for its menu          [?] KEYS
 --
 -- Live figures are phosphor numbers on a screen (hud/instrument, hud/value*):
@@ -37,6 +37,33 @@ local function group(n)
   return (out:gsub("^%s+", ""))
 end
 
+-- The budget against a hull costing `cost`: { funds = text | nil (no company),
+-- kit = the CREW tab's kit bought at launch, over = can't pay it,
+-- unlimited = sandbox or the debug account }. builder.doLaunch refuses on the
+-- same sum (company.afford(cost + kit)).
+local FS = { t = -1e9, cost = nil, v = nil }
+function fundsState(cost)
+  -- (the toolbar asks every frame: kept a quarter second per cost)
+  local now = time or 0
+  if FS.v and FS.cost == cost and now >= FS.t and now - FS.t < 0.25 then return FS.v end
+  local co = ref("company")
+  local out = { funds = nil, kit = 0, over = false, unlimited = false }
+  if not (co and co.balance) then return out end
+  local bc = ref("builder_crew")
+  local kit = (bc and bc.kitForLaunch) and bc.kitForLaunch() or nil
+  out.kit = math.max(0, math.floor((kit and kit.cost) or 0))
+  local bal = co.balance() or 0
+  out.unlimited = (co.isSandbox and co.isSandbox()) or (co.isRich and co.isRich()) or false
+  if out.unlimited then
+    out.funds = "∞"
+  else
+    out.funds = co.money and co.money(bal) or ("$" .. group(bal))
+    out.over = (cost or 0) + out.kit > bal
+  end
+  FS.t, FS.cost, FS.v = now, cost, out
+  return out
+end
+
 -- The figures, as data: { { key, label, value, tone } } — tone nil | "warn" |
 -- "danger" | "dim".
 function figures(B)
@@ -58,8 +85,17 @@ function figures(B)
   if A and A.statusFigures then
     for i, f in ipairs(A.statusFigures() or {}) do add("a" .. i, f.label or f[1], f.value or f[2], f.warn and "warn" or f.tone) end
   end
+  -- COST, and beside it what the agency has to pay it with (FUNDS). Over
+  -- budget — the hull and any kit bought for its storage (builder_crew), the
+  -- sum LAUNCH asks the company for — both turn red, as LAUNCH would refuse.
+  -- A sandbox's (or the debug account's) money is no object: FUNDS ∞, dim,
+  -- and the cost is never red.
   local co = ref("company")
-  add("cost", "COST", (co and co.money) and co.money(s.cost or 0) or ("$" .. group(s.cost or 0)))
+  local fs = fundsState(s.cost or 0)
+  local cost_s = (co and co.money) and co.money(s.cost or 0) or ("$" .. group(s.cost or 0))
+  if fs.kit > 0 then cost_s = cost_s .. " + " .. ((co and co.money) and co.money(fs.kit) or ("$" .. group(fs.kit))) .. " kit" end
+  add("cost", "COST", cost_s, fs.over and "danger" or nil)
+  if fs.funds then add("funds", "FUNDS", fs.funds, fs.over and "danger" or (fs.unlimited and "dim" or nil)) end
   local ms = B.frameMs and B.frameMs() or nil
   if not ms and perf and perf.scriptMs then
     local ok, v = pcall(perf.scriptMs, "builder")

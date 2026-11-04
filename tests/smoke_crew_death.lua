@@ -189,10 +189,34 @@ tick(C4, 15)
 a4.vy = 0
 tick(C4, 1)
 check(C4.get(1).status == "afoot" and C4.living() == 3, "a fatal fall with death off: rescued, alive")
-check(a4.x == 5 and L4.spent > 0, "...at the base, for the fee")
+check(a4.x == 5 and L4.spent == C4.defaults.rescue_fee, "...at the base, for the fee ($" .. tostring(L4.spent) .. ")")
+-- rescued, not spared (playtest 2026-11-04: "recover mode … treats it like
+-- invincibility"): they wake hurt, and the caption says so
+check(math.abs(C4.get(1).hp - C4.defaults.rescue_hp) < 1e-6, "...hurt: hp " .. tostring(C4.get(1).hp))
+check(L4.caps[#L4.caps]:find("^CREW RESCUED") and L4.caps[#L4.caps]:find("hurt"), "...and told so: " .. tostring(L4.caps[#L4.caps]))
+check(C4.lastRescue and C4.lastRescue.id == 1 and C4.lastRescue.cause == "impact", "lastRescue records it")
+check(C4.rescueHp(0.2) == 0.2 and C4.rescueHp(1.0) == C4.defaults.rescue_hp and C4.rescueHp(0.5, true) == 1.0,
+  "rescueHp: never better than rescue_hp, a worse wound stays; free (invincible) is unhurt")
 C4.patch(2, { status = "aboard" })
 C4.cabinLost(nil, 4, { 2 }, 0, 0, 0)
-check(C4.get(2).status == "base", "a destroyed cabin with death off: they wake at base")
+check(C4.get(2).status == "base" and math.abs(C4.get(2).hp - C4.defaults.rescue_hp) < 1e-6,
+  "a destroyed cabin with death off: they wake at base, hurt")
+-- the pilot of a craft whose open seat cooks them: out of the seat, home
+do
+  local s4b = { g_seed = 6 }
+  local C4b, a4b, L4b, sc4b = make(s4b)
+  C4b.start()
+  C4b.time = C4b.time + 4
+  C4b.setSafety("rescue")
+  local stood = false
+  local ride = { valid = true, crewAboard = true, node = { valid = true, id = 50 } }
+  ride.standDown = function() stood = true; ride.crewAboard = false end
+  C4b.findScripts = function(k) if k == "vessel_controller" then return { ride } end return {} end
+  C4b.kill(1, "heat")
+  check(stood and not ride.crewAboard and a4b.x == 5 and C4b.get(1).status == "afoot",
+    "Rescue: a pilot who would burn is stood down and brought home (" .. tostring(C4b.get(1).status) .. ")")
+  check(math.abs(C4b.get(1).hp - C4b.defaults.rescue_hp) < 1e-6 and L4b.spent == C4b.defaults.rescue_fee, "...hurt, for the fee")
+end
 check(C4.blackoutEnd("suit") == false, "out of air with death off: planet_walker's own rescue")
 C4.setDeath(true)
 check(C4.blackoutEnd("hold") == true and C4.get(1).died.cause == "drowned", "out of air with death on: drowned")

@@ -1119,6 +1119,7 @@ local function show(on)
   if overlay_el and overlay_el.visible ~= on then overlay_el.visible = on end
 end
 
+local foot_sig = nil   -- the on-foot REVERT key as last made (update)
 function update(node, dt)
   if not el then el = node:getcomponent("UiElement") end
   local v = params.enabled >= 0.5 and flown() or nil
@@ -1137,10 +1138,25 @@ function update(node, dt)
   local om, gm = ref("orbit_map"), ref("game_manager")
   local t = v and v.tele
   if not t or (om and om.map_view) or (gm and (gm.loading or gm.inputOwner == "builder")) then
-    show(false)
     layout, warning, made_v = nil, nil, nil
+    -- ON FOOT, the flight still revertable (thrown clear of a wreck, an
+    -- EVA): the REVERT key alone stays up, where it was (playtest
+    -- 2026-11-04: "you should still be able to revert after your craft
+    -- crashes" — the key went with the console).
+    local pm = ref("pause_menu")
+    local rv = not t and not (om and om.map_view) and not (gm and (gm.loading or gm.inputOwner == "builder"))
+      and not (pm and pm.open) and revert_key(0) or nil
+    if rv then
+      show(true)
+      local sig = tostring(rv.text) .. "|" .. tostring(rv.x) .. "|" .. tostring(rv.y)
+      if sig ~= foot_sig then foot_sig = sig; ui.make(node, { rv }) end
+      return
+    end
+    foot_sig = nil
+    show(false)
     return
   end
+  foot_sig = nil
   show(true)
   -- O folds the Controls card (read before the rebuild gate: a press is one frame)
   if input and input.pressed("o") then ctl_card.open = not ctl_card.open; made_v = nil end

@@ -63,7 +63,7 @@ local MODES = {
 }
 local SAFETIES = {
   { "death", "Permadeath", "Astronauts can be lost: every danger is warned of first, and the roster keeps a memorial" },
-  { "rescue", "Rescue", "A crew member who would die is brought home instead, for a fee" },
+  { "rescue", "Rescue", "A crew member who would die is knocked out and brought home hurt instead, for a fee" },
   { "invincible", "Invincible", "Nothing hurts the crew: no falls, shots, crushes, heat or running out of air" },
 }
 local HOMES = {

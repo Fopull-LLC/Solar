@@ -159,8 +159,10 @@ C3.setDeath(false)
 C3.patch(2, { status = "afoot", body = "Vever", x = 30, y = 100, z = 0 })
 C3.hurt(2, 0.7, "shot", "by X, 10 m")
 hp = C3.hurt(2, 0.7, "shot", "by X, 10 m")
-check(hp == 0 and C3.get(2).status == "base" and C3.get(2).hp == 1 and #C3.memorial() == 0,
-  "death off: rescued to the base, whole, no memorial")
+-- (rescued hurt, not whole: playtest 2026-11-04, "recover mode … treats it
+-- like invincibility")
+check(hp == 0 and C3.get(2).status == "base" and math.abs(C3.get(2).hp - math.min(0.3, C3.defaults.rescue_hp)) < 1e-6 and #C3.memorial() == 0,
+  "death off: rescued to the base, hurt, no memorial")
 
 -- ── the cells ──────────────────────────────────────────────────────────────
 local cstore = {}

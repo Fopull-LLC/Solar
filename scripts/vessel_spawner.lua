@@ -714,6 +714,8 @@ local function freshness_tick()
     if v.piloting and not ours(v) then return flightClosed("you are flying another craft") end
     if ours(v) then
       if v.piloting then aboard = true end
+      -- a crash is not "getting off": a wreck keeps the offer wherever it lies
+      if v.isLost and v.isLost() then flight.wrecked = true end
       local n = v.node
       if body and n and n.valid ~= false then
         local dx, dy, dz = n.x - (body.x + st.x), n.y - (body.y + st.y), n.z - (body.z + st.z)
@@ -722,7 +724,7 @@ local function freshness_tick()
     end
   end
   if aboard then flight.boarded = true
-  elseif flight.boarded and not flight.flew then return flightClosed("the crew got off on the launch site") end
+  elseif flight.boarded and not flight.flew and not flight.wrecked then return flightClosed("the crew got off on the launch site") end
 end
 
 -- What a revert would do now: nil when there is no fresh flight; otherwise

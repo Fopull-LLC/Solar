@@ -134,6 +134,12 @@ defaults = {
   -- a rescue should be a run, not a lottery).
   bleed_secs = 180.0,
   bleed_min = 60.0,
+  -- RESCUE (CREW SAFETY "rescue"): whoever would have died is knocked out
+  -- and wakes at the base hurt — hp at most rescue_hp, mending as any knock
+  -- does — for rescue_fee. Not invincible: the craft still breaks, the
+  -- injury shows, and the flight is over for them.
+  rescue_hp = 0.35,
+  rescue_fee = 250,
   -- CREW BODIES (§4.1)
   body_range = 2500.0,    -- m from the focus: further, a record only
   body_spawn = 2000.0,    -- m: a record comes back as a body inside this
@@ -1677,8 +1683,14 @@ function cancelTask(id, why)
   return true
 end
 
+-- ON A ROPE (scripts/rope_climb.lua): the member clipped on is held by the
+-- line (kinematic, placed every tick), so the walker, the RCS Pack and the
+-- impact monitor stand down as they do for a job.
+local rope_by = nil
+function setRopeHold(id) rope_by = id end
 function held(id)
   if TREAT and TREAT.by == (id or activeId()) then return true end
+  if rope_by ~= nil and rope_by == (id or activeId()) then return true end
   local ct = ref("crew_task")
   if ct and ct.isHeld then return ct.isHeld(id or activeId()) == true end
   return false
@@ -1902,19 +1914,33 @@ local function handoff(dead_id, from_v)
   caption((r and r.name or "crew") .. " walks out of the Command Centre")
 end
 
--- Rescue instead (death off): blacked out, they wake at base for the fee.
+-- Rescue instead (death off): blacked out, they wake at base, hurt (hp at
+-- most rescue_hp), for the fee. `free` (invincible, with no wreck to stand
+-- by): home for nothing, unhurt.
+function rescueHp(hp, free)
+  if free then return 1.0 end
+  return math.max(0.05, math.min(hp or 1.0, P("rescue_hp")))
+end
+lastRescue = nil
 local function rescue(id, cause, free)
   local r = get(id)
+  -- the controlled member, still riding (heat in an open seat): out of the
+  -- seat first, so they come home rather than the record going on ahead
+  local ride = id == activeId() and avatarCraft() or nil
+  if ride and ride.standDown then pcall(ride.standDown, ride.node) end
   local is_avatar = id == activeId() and not avatarCraft()
   local co = ref("company")
   local fo = ref("flight_ops")
-  local fee = free and 0 or 250
-  if co and co.afford and co.afford(fee) and co.spend then co.spend(fee, "crew rescue") end
+  local fee = free and 0 or math.floor(P("rescue_fee"))
+  local paid = fee > 0 and co and co.afford and co.afford(fee) and co.spend and co.spend(fee, "crew rescue") or false
+  local hp = rescueHp(r and r.hp, free)
+  if TREAT and (TREAT.target == id or TREAT.by == id) then cancel_treat(id == TREAT.target and "they were rescued" or "you were rescued") end
+  if r and r.downed then r.downed = nil; put(r) end
   local v, uid, slot = craftOf(id)
   if v and v.seatMember then v.seatMember(uid, slot, nil) end
   despawn_body(id)
   despawn_doll(id)
-  patch(id, { hp = 1.0, heat = 0, o2 = 1.0 })
+  patch(id, { hp = hp, heat = 0, o2 = 1.0 })
   if is_avatar then
     local a = astro()
     local hx, hy, hz = nil, nil, nil
@@ -1926,9 +1952,16 @@ local function rescue(id, cause, free)
     patch(id, { status = "base", craft = false, body = false, x = false, y = false, z = false })
   end
   local bc = ref("big_caption")
-  if bc and bc.show and r then bc.show("CREW RESCUED", string.format("%s blacked out (%s). The agency brought them back to the base.",
-    r.name, CAUSE_TEXT[cause] or cause), 6.0) end
-  log_(string.format("crew: #%d rescued (%s)", id, tostring(cause)))
+  if bc and bc.show and r then
+    local text = free and string.format("%s is unhurt (%s). The agency brought them back to the base.", r.name, CAUSE_TEXT[cause] or cause)
+      or string.format("%s was knocked out (%s) and is hurt: %d%% health. The agency brought them back to the base%s.",
+        r.name, CAUSE_TEXT[cause] or cause, math.floor(hp * 100 + 0.5),
+        paid and string.format(" (rescue: %s)", (co and co.money) and co.money(fee) or ("$" .. fee)) or "")
+    bc.show("CREW RESCUED", text, 6.0)
+  end
+  lastRescue = { id = id, cause = cause, hp = hp, fee = paid and fee or 0, t = now() }
+  log_(string.format("crew: #%d rescued (%s): hp %.2f, fee %s", id, tostring(cause), hp, paid and ("$" .. fee) or "none"))
+  bump()
   return true
 end
 

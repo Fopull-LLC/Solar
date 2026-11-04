@@ -1151,7 +1151,7 @@ local function agency_rows(out)
     local sandbox = co and co.isSandbox and co.isSandbox()
     out[#out + 1] = hint("csh", (sandbox and "A Sandbox save: unlimited funds, top reputation, every part unlocked. "
       or "A Career save. ") .. "Crew safety applies to this save only: Permadeath can lose an astronaut, "
-      .. "Rescue brings them home for a fee, Invincible means nothing hurts them.")
+      .. "Rescue brings them home hurt, for a fee, Invincible means nothing hurts them.")
   end
 end
 

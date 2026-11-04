@@ -199,6 +199,11 @@ plaque. Generated in-world: one line per name on a dark plate, the agency emblem
 - with Rescue, every cause above blacks out and the member wakes at base for the
   rescue fee. This is today's out-of-air rule, which already exists, so it costs
   almost nothing to keep, and it makes the game a pure sandbox for players who want one.
+  - Rescued is not spared (playtest 2026-11-04): the craft still breaks, a pilot in a
+    lost cabin is not set down beside the wreck but brought home, and they wake hurt
+    (hp at most `rescue_hp`, 35 %, mending like any knock) for `rescue_fee` ($250).
+    Only **Invincible** walks away from a wreck unhurt. (Out of air the walker's own
+    rescue applies: the blackout, the pack left as a salvage crate, home for the fee.)
 
 It is not the default, because the user asked for real death.
 

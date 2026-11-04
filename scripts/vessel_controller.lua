@@ -5689,7 +5689,7 @@ function avatarBoard(id)
 end
 -- A crewed part broke (hp 0) or the craft came apart around it: its
 -- occupants die (crew.kill; with death off they're rescued). The avatar is
--- left to the caller (standDown) when death is off.
+-- left to the caller (standDown) only when the crew is invincible.
 function crewPartBroken(node, uid, x, y, z)
   local c = crewLibNow()
   local d = uid and bp_by_uid[uid]
@@ -5707,6 +5707,13 @@ function crewPartBroken(node, uid, x, y, z)
   for _, id in ipairs(ids) do
     if id == active and crewAboard then
       if c.deathOn and c.deathOn() then
+        pcall(c.kill, id, "cabin", nil, { x = x, y = y, z = z, craft = craftName })
+      elseif not (c.invincible and c.invincible()) then
+        -- CREW SAFETY "rescue": out of the seat first (so crew.lua sees them
+        -- on foot), then the rescue: knocked out, hurt, home for the fee.
+        -- Only "invincible" walks away from the wreck (playtest 2026-11-04:
+        -- "recover mode … treats it like invincibility").
+        standDown(node, x, y, z, 0, 0, 0)
         pcall(c.kill, id, "cabin", nil, { x = x, y = y, z = z, craft = craftName })
       end
     else

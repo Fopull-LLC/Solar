@@ -198,11 +198,15 @@ local s6 = { g_seed = 8 }
 local C6, a6 = make(s6)
 C6.setSafety("rescue")
 fall(C6, a6, 24)
-check(not C6.get(1).downed and C6.get(1).status == "afoot" and C6.get(1).hp == 1, "Rescue: rescued, never down")
+-- (rescued, not spared: they wake at the base hurt — playtest 2026-11-04,
+-- "recover mode … treats it like invincibility")
+check(not C6.get(1).downed and C6.get(1).status == "afoot" and math.abs(C6.get(1).hp - C6.defaults.rescue_hp) < 1e-6,
+  "Rescue: rescued hurt (hp " .. tostring(C6.get(1).hp) .. "), never down")
 C6.setSafety("invincible")
 tick(C6, 200)
+local hp6 = C6.get(1).hp
 fall(C6, a6, 24)
-check(not C6.get(1).downed and C6.get(1).hp == 1, "Invincible: never down")
+check(not C6.get(1).downed and C6.get(1).hp == hp6, "Invincible: never down, nothing lost")
 
 if #failures > 0 then
   for _, m in ipairs(failures) do print("FAIL: " .. m) end
