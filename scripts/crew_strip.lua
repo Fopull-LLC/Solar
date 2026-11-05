@@ -152,6 +152,15 @@ function shortName(name)
   return (f:sub(1, 1) .. "." .. l):upper()
 end
 
+-- A role chip (J7): one stencilled letter on a dark plate, `size` square
+-- (design units). The roster panel and the VAB's crew tab draw the same.
+ROLE_CHIP = 14
+function roleChip(key, letter, size, style)
+  size = size or ROLE_CHIP
+  return { "text", key = key, style = style or "hud/role", w = size, h = size, text = letter,
+           textAlign = "center", textValign = "center", maxLines = 1 }
+end
+
 -- The chips a portrait wears, from crew.alerts / the record: {text, style}.
 function chipsFor(a, m)
   local out = {}
@@ -409,8 +418,12 @@ local function portrait(i, m, L, hov, v)
   local C = ref("crew")
   local a = (C and C.alerts and C.alerts(m.id)) or {}
   local name = shortName(m.name) .. (m.commander and " ★" or "")
-  local plate = { "row", key = "pl" .. i, w = L.w, h = PLATE_H, gap = 2, pad = 0, align = "center",
-                  { "text", key = "nm" .. i, style = "hud/micro", w = "grow", h = PLATE_H, text = name } }
+  local nm = { "text", key = "nm" .. i, style = "hud/micro", w = "grow", h = PLATE_H, text = name }
+  local plate = { "row", key = "pl" .. i, w = L.w, h = PLATE_H, gap = 3, pad = 0, align = "center" }
+  -- the role chip (J7): P / S / E stencilled on, before the name
+  local letter = C and C.roleLetter and C.roleLetter(m.id)
+  if letter then plate[#plate + 1] = roleChip("rl" .. i, letter) end
+  plate[#plate + 1] = nm
   if hov then
     local ok, why, warn = true, nil, nil
     if C and C.evaCheck then ok, why, warn = C.evaCheck(m.id) end
@@ -423,7 +436,7 @@ local function portrait(i, m, L, hov, v)
     plate[#plate + 1] = { "button", key = "mv" .. i, style = "hud/button", w = 22, h = PLATE_H - 2, text = "⇄",
                           textAlign = "center", onClicked = function() moveSeat(v, m) end }
     if not ok and why then
-      plate[1].text = shortName(m.name) .. " · " .. why
+      nm.text = shortName(m.name) .. " · " .. why
     end
   end
   -- a member whose camera has never been made (never in view) shows the

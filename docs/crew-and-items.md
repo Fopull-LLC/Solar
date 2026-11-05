@@ -83,26 +83,17 @@ There is one save key per member, `crew.m.<id>`, the same pattern as `comms.beac
   hand = "repairkit",        -- the item in hand (nil = empty hands)
   task = nil,                -- a running job (§6.3), or nil
   flights = 4, eva_s = 1830, flags = 1, repairs = 2,  -- service record, for the roster panel
+  landings = 0, dockings = 0, built = 0, crafted = 0, studied = 0,  -- the role counters (crew.credit)
+  worlds = { Vever = true }, -- bodies landed on (level 2); away = { kind, body, t }: the first off the home world (level 3)
+  role = "engineer",         -- "pilot" | "scientist" | "engineer" (§2.6)
+  retrain = nil,             -- { from, to, t0, done } while retraining; retrained = <agency clock> of the last
   -- once dead (§2.3):
   died = nil,                -- { st = space.time(), date = "Day 41 Y2", cause = "impact", body = "Nami",
                              --   x,y,z = body-relative, craft = "Kestrel I" | nil, remains = <dep id> }
 }
 ```
 
-**Roles and traits are not in this upgrade.** There is no `role` field until the
-base crew system works. See §9, "Later".
-
-Other keys:
-
-- `crew.roster`: the id list in hire order, including the dead (the memorial reads it).
-- `crew.seq`: the last id issued.
-- `crew.active`: the id the `Astronaut` node is now, or `false` when it is unbound (§4.1).
-- `crew.offers`: the three applicants on the board.
-- `crew.version`: the migration stamp (`1`).
-- `crew.death`: `true` by default; the forgiving option (§2.3).
-
-Each crew member's pack is an ordinary inventory container, **`crew:<id>`**. Its
-capacity rule is the suit's: `cap("crew:*") = suit_kg`.
+**Roles (§2.6).** Every member holds exactly one role. Traits are still later (§9).
 
 ### 2.2 Starting crew and hiring
 
@@ -308,6 +299,42 @@ only its path.
 - In `start` it calls `setMaterial{ texture = emblem.tex() }`. It also listens for
   `emblem.version` changes, so a rename in Settings repaints every plate, flag and
   header live.
+
+### 2.6 Roles (built 2026-11-05; deep-space addendum §1, J1–J3, J7–J8)
+
+- **Three roles**: Pilot, Scientist, Engineer, `rec.role`. The founding three are one
+  of each; the applicants' board always holds one of each (`fillOfferRoles`), and a hire
+  keeps the applicant's role.
+- **Retrain** at the Astronaut Complex (Command Centre): $2,000, a member at base only,
+  out of service one game day on the agency clock (nobody can seat them; `busy`), once
+  per 30 days. The new role is theirs when the day ends.
+- **Level 1–3, derived, never stored** (`levelOf`): level 2 at the first of 5 flights,
+  landings on 3 different bodies, 20 structures built or 10 samples studied; level 3 at
+  a first landing, build or study on a world other than the home one.
+- **Old saves** (crew version 3): a member without a role gets one from the record,
+  once (`assignRoles`): the outright leader in repairs is the Engineer, in flights the
+  Pilot; the rest take whatever the roster has fewest of, so a tied three-member roster
+  ends up one of each. One line on the THE CREW notice says who got what.
+- **UI**: a stencilled P / S / E chip before the name on the crew strip's portraits
+  (`hud/role`), the role chip and a ROLE column ("ENGINEER · L2") in the roster
+  (`panel/role`), the role and level on the VAB crew tab's cards and seats.
+- **Hooks** for the role effects still to come (pilot SAS gate, Build Kit, scientist
+  devices, fabricator; J4–J6): `crew.role(m)`, `level(m)`, `hasRole(craft|list, role,
+  minLevel)`, `credit(id, counter, n, {body})`, `busy(id)`. Today only repairs and flags
+  are counted where they happen (and flights on a recovery); landings, dockings, built,
+  crafted and studied are counted by the steps that add those actions.
+
+Other keys:
+
+- `crew.roster`: the id list in hire order, including the dead (the memorial reads it).
+- `crew.seq`: the last id issued.
+- `crew.active`: the id the `Astronaut` node is now, or `false` when it is unbound (§4.1).
+- `crew.offers`: the three applicants on the board.
+- `crew.version`: the migration stamp (`1`).
+- `crew.death`: `true` by default; the forgiving option (§2.3).
+
+Each crew member's pack is an ordinary inventory container, **`crew:<id>`**. Its
+capacity rule is the suit's: `cap("crew:*") = suit_kg`.
 
 ## 3. Seats, pods and hatches (B)
 
@@ -1105,7 +1132,7 @@ verbs the same way, with no menu code changes.
    memorial.
 4. **Crew economy**: three free starters; a one-time hire fee after that; no wages; a
    free newbie when everyone is dead (§2.2).
-5. **Roles and traits**: deferred (see "Later").
+5. **Roles**: built later (§2.6). **Traits**: deferred (see "Later").
 
 **Later (not in this upgrade):** crew roles and traits, once the base crew system works.
 For example: engineers repair faster, pilots fly without a probe core, scientists get

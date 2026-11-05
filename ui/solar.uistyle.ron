@@ -753,6 +753,37 @@
         ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
+    // A crew member's role (P / S / E): one stencilled letter on a small
+    // dark enamel plate with a painted rim, beside the name — a marking, not
+    // a state, so it stays neutral ink (crew_strip, the roster, the VAB).
+    "hud/role": (
+        base: (
+            fill: (0.060, 0.062, 0.056, 0.96),
+            radius: 1.0,
+            border: 1.0,
+            border_color: "bezelLo",
+            text_color: "ink",
+            text_size: 11.0,
+            font: "stencil",
+            tracking: 0.0,
+            text_shadow: ( color: (0.0, 0.0, 0.0, 0.7), offset: (0.0, 1.0) ),
+        ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    "panel/role": (
+        base: (
+            fill: (0.060, 0.062, 0.056, 0.96),
+            radius: 1.0,
+            border: 1.0,
+            border_color: "bezelLo",
+            text_color: "ink",
+            text_size: 14.0,
+            font: "stencil",
+            tracking: 0.0,
+            text_shadow: ( color: (0.0, 0.0, 0.0, 0.7), offset: (0.0, 1.0) ),
+        ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
     "hud/lampDanger": (
         base: (
             fill: (0.72, 0.16, 0.10, 0.98),

@@ -90,6 +90,9 @@
 --   launchAs(id, craft)          the launch's commander becomes the avatar (vessel_controller)
 --   noteAboard / noteAfoot / noteHome(id)   status bookkeeping the controller calls
 --   showInterior                 WS2 sets true to draw the dolls in closed pods (crew cams, IVA)
+--   role(m) / roleName / roleLetter / level(m) / levelWhy(m) / hasRole(who, role, minLevel?)
+--   credit(id, counter, n?, {body}?) / busy(id) / training(id) / retrain(id, role) / retrainWhyNot
+--                                the crew roles (J1–J3, J8): see "roles" below
 --   version                      bumps on any change (panels poll it)
 --
 -- vessel_controller's side (globals): seatsOf(), crewIds(), crewCount(),
@@ -145,7 +148,7 @@ defaults = {
   body_spawn = 2000.0,    -- m: a record comes back as a body inside this
 }
 
-VERSION = 2
+VERSION = 3
 version = 0
 -- The last death (WS2's camera hold and caption read it; probes too).
 lastDeath = nil
@@ -157,6 +160,7 @@ showInterior = false
 local function P(k) return (params and params[k]) or defaults[k] end
 local function bump() version = (version or 0) + 1 end
 local go_down, down_monitor, treat_tick, cancel_treat   -- (the downed and the Medkit, below)
+local is_role, assign_missing                            -- (roles, below)
 
 local refs = {}
 local function ref(kind)
@@ -418,7 +422,7 @@ function launchPlan(parts, plan, avail, active)
     local def = d and seatDef(d)
     local key = tostring(e.uid) .. "/" .. tostring(e.slot)
     if def and e.id and (e.slot or 0) >= 1 and e.slot <= #def.seats and not slots[key] and not seen[e.id]
-      and (not avail or avail(e.id)) then
+      and (not avail or avail(e.id)) and not busy(e.id) then
       out[#out + 1] = { uid = e.uid, slot = e.slot, id = e.id }
       seen[e.id], slots[key] = true, true
     end
@@ -432,7 +436,7 @@ function launchPlan(parts, plan, avail, active)
   for _, d in ipairs(tmp) do tby[d.uid] = d end
   for _, e in ipairs(out) do setMemberAt(tby[e.uid], e.slot, e.id) end
   local cmdr = commanderOf(tmp)
-  if not cmdr and active and (not avail or avail(active)) and not seen[active] then
+  if not cmdr and active and (not avail or avail(active)) and not seen[active] and not busy(active) then
     -- nobody at the controls: the avatar takes the best command slot
     local best, rank, slot = nil, nil, nil
     for _, d in ipairs(tmp) do
@@ -461,7 +465,8 @@ local function key(id) return "crew.m." .. tostring(id) end
 function newRecord(id, name, fields)
   local r = { id = id, name = name, hired = 0, cost = 0, starter = false, status = "base",
               o2 = 1.0, breath = 1.0, hp = 1.0, heat = 0.0, helmet = true, rcs = nil,
-              hand = nil, task = nil, flights = 0, eva_s = 0, flags = 0, repairs = 0 }
+              hand = nil, task = nil, flights = 0, eva_s = 0, flags = 0, repairs = 0,
+              landings = 0, dockings = 0, built = 0, crafted = 0, studied = 0 }
   for k, v in pairs(fields or {}) do r[k] = v end
   return r
 end
@@ -484,6 +489,9 @@ end
 --   version 1: member #1 from the single astronaut (slice 1)
 --   version 2: the three-astronaut start — #2 and #3 join at base (slice 2);
 --              a v1 save keeps its member #1, their pack and progress.
+--   version 3: crew roles (J8). A member without a role gets one from the
+--              service record (assignRoles), once, with a one-line notice;
+--              a new save's starters are one of each.
 local ensured = false
 
 local function move_bag(from, to)
@@ -606,6 +614,8 @@ function migrate()
   if v ~= nil and added > 0 then
     save.set("crew.notice", string.format("%d more astronauts have joined the agency. They wait at the base.", added))
   end
+  -- v3: roles. An old save hears about it; a new one's starters just have them.
+  assign_missing(v ~= nil or save.get("g_played") ~= nil)
   save.set("crew.version", VERSION)
   return true
 end
@@ -667,7 +677,7 @@ end
 -- Merge fields into a record (other crew scripts use this; panels poll
 -- `version`). `nil` can't be merged, so a field is cleared with `false`.
 local CLEAR = { task = true, hand = true, craft = true, died = true, body = true, x = true, y = true, z = true,
-                yaw = true, anchor = true, face = true, downed = true }
+                yaw = true, anchor = true, face = true, downed = true, retrain = true }
 function patch(id, fields)
   local r = get(id)
   if not r then return false end
@@ -721,13 +731,37 @@ function offers()
     save.set("crew.offerSeq", n)
     save.set("crew.offers", o)
   end
+  -- every applicant has a role, and the board holds one of each (J2): a
+  -- board from before roles, or one an applicant just left, fills in the
+  -- roles it lacks
+  if fillOfferRoles(o) then save.set("crew.offers", o) end
   local fee = hireFee()
   local free = living() == 0
   local out = {}
   for i, a in ipairs(o) do
-    out[i] = { name = a.name, cost = (free and i == 1) and 0 or fee, free = (free and i == 1) or nil }
+    out[i] = { name = a.name, cost = (free and i == 1) and 0 or fee, free = (free and i == 1) or nil, role = a.role }
   end
   return out
+end
+
+-- Pure: give the applicants in `o` without a role (or with a role a second
+-- one holds while another is missing) the roles the board lacks, ROLES order.
+-- → changed
+function fillOfferRoles(o)
+  local have, changed = {}, false
+  for _, a in ipairs(o) do
+    if is_role(a.role) and not have[a.role] then have[a.role] = true
+    elseif a.role ~= nil then a.role = nil; changed = true end
+  end
+  for _, a in ipairs(o) do
+    if not a.role then
+      for _, k in ipairs(ROLES) do
+        if not have[k] then a.role, have[k], changed = k, true, true; break end
+      end
+      if not a.role then a.role, changed = ROLES[1], true end
+    end
+  end
+  return changed
 end
 
 -- Hire applicant i. opts.free: no fee and the kit is free (the newbie).
@@ -745,7 +779,8 @@ function hire(i, opts)
   end
   local id = (save.get("crew.seq") or 0) + 1
   save.set("crew.seq", id)
-  local rec = newRecord(id, a.name, { hired = (space and space.time and space.time()) or 0, cost = cost })
+  local rec = newRecord(id, a.name, { hired = (space and space.time and space.time()) or 0, cost = cost,
+                                      role = a.role })
   put(rec)
   local r = ids()
   r[#r + 1] = id
@@ -756,11 +791,371 @@ function hire(i, opts)
   -- the standard issue (§5.1): whatever the inventory offers for it
   local inv = ref("inventory")
   if inv and inv.ensureKit then pcall(inv.ensureKit, packOf(id), cost == 0 and { free = true } or nil) end
-  log_(string.format("crew: hired %s (#%d) for $%d", a.name, id, cost))
+  log_(string.format("crew: hired %s (#%d), %s, for $%d", a.name, id, tostring(a.role), cost))
   return id, nil
 end
 
 function log_(s) if log then log(s) end end
+
+-- ── roles (deep-space addendum §1, J1–J3, J8) ──────────────────────────────
+-- Every member has exactly one ROLE: "pilot", "scientist" or "engineer"
+-- (`rec.role`). The founding three are one of each; the applicants' board
+-- always holds one of each; a role changes only by a paid RETRAIN at the
+-- Command Centre (the Astronaut Complex): retrain_cost, the member out of
+-- service retrain_secs of the agency's clock, once per retrain_every.
+-- LEVEL 1–3 is derived from the service record, never stored: level 2 at the
+-- first of lvl2_flights flights · lvl2_bodies bodies landed on ·
+-- lvl2_built structures · lvl2_studied samples studied; level 3 at a first
+-- (a landing, a build, a study) on a world other than the home one.
+--
+-- THE HOOKS other code calls (the pilot's SAS gate, the Build Kit, the
+-- scientist's devices, the fabricator; J4–J6 — none of those effects exist
+-- yet):
+--   role(m) → "pilot"|"scientist"|"engineer"   m = a record or an id
+--   roleName(m|role) → "Pilot"…   roleLetter(m|role) → "P"|"S"|"E"
+--   level(m) → 1..3               levelWhy(m) → level, "5 flights" (what earned it)
+--   hasRole(who, role, minLevel?) → bool, rec   who = a craft (vessel_controller:
+--                                 its crewIds(), or aboard(v)), a list of ids or
+--                                 records, a record, or an id
+--   credit(id, counter, n?, {body}?) → new count   counter = "landings" |
+--                                 "dockings" | "built" | "crafted" | "studied" |
+--                                 "flights" | "repairs" | "flags" | "eva_s";
+--                                 with a body, landings/built/studied also
+--                                 note the world (level 2's bodies, level 3's
+--                                 first away from home)
+--   busy(id) → why|nil            out of service (retraining); nobody seats them
+--   training(id) → {to, left}|nil
+--   retrainWhyNot(id, role) → why|nil   retrain(id, role) → ok, why
+--   retrainCost() → $
+-- Pure, for tests: levelOf(rec, home) · assignRoles(recs) → {[id] = role}
+ROLES = { "pilot", "engineer", "scientist" }       -- also the order a tie is filled in
+ROLE_NAME = { pilot = "Pilot", scientist = "Scientist", engineer = "Engineer" }
+ROLE_LETTER = { pilot = "P", scientist = "S", engineer = "E" }
+COUNTERS = { landings = true, dockings = true, built = true, crafted = true, studied = true,
+             flights = true, repairs = true, flags = true, eva_s = true }
+-- (tuning lives in `defaults` so a scene's params can change it; read with P)
+defaults.retrain_cost = 2000
+defaults.retrain_secs = 86400          -- one game day out of service
+defaults.retrain_every = 30 * 86400    -- one retrain per member per 30 days
+defaults.lvl2_flights = 5
+defaults.lvl2_bodies = 3
+defaults.lvl2_built = 20
+defaults.lvl2_studied = 10
+
+is_role = function(r) return r == "pilot" or r == "scientist" or r == "engineer" end
+
+-- The agency's clock (game seconds since the save began, warp included;
+-- deployables keeps it). The sim clock restarts every session, so a
+-- retrain's day is counted on this one.
+local function clock()
+  local dp = ref("deployables")
+  if dp and dp.agencyClock then
+    local ok, t = pcall(dp.agencyClock)
+    if ok and type(t) == "number" then return t end
+  end
+  return tonumber(save and save.get and save.get("agency.clock")) or 0
+end
+
+local function rec_of(m)
+  if type(m) == "table" then return m end
+  if m == nil or not (save and save.get) then return nil end
+  return get(m)
+end
+
+-- A record's leaning, from what they have done (J8's rule): more repairs
+-- than flights → engineer; more flights → pilot; otherwise none.
+local function lean(r)
+  local f, rp = tonumber(r.flights) or 0, tonumber(r.repairs) or 0
+  if rp > f then return "engineer" end
+  if f > rp then return "pilot" end
+  return nil
+end
+
+-- The role with the fewest holders in `count`; `prefer` wins among the
+-- fewest, then ROLES order.
+local function least_held(count, prefer)
+  local lo = math.huge
+  for _, k in ipairs(ROLES) do lo = math.min(lo, count[k] or 0) end
+  if prefer and (count[prefer] or 0) == lo then return prefer end
+  for _, k in ipairs(ROLES) do if (count[k] or 0) == lo then return k end end
+  return ROLES[1]
+end
+
+-- J8, pure: roles for the members of `recs` that have none, from the
+-- service record. The living are weighed together: the one with the most
+-- repairs is the Engineer and the one with the most flights the Pilot (only
+-- when they lead outright, and a member who leads both takes the one they
+-- lean to); everyone else, in id order, takes the role the roster has
+-- fewest of (their own leaning breaks a tie) — so a three-member roster
+-- whose record is a tie ends up one of each. The dead take their leaning,
+-- else Scientist, and count for nothing. Members that already have a role
+-- keep it and count. → { [id] = role }
+function assignRoles(recs)
+  local out, count, pend = {}, { pilot = 0, scientist = 0, engineer = 0 }, {}
+  for _, r in ipairs(recs or {}) do
+    if type(r) == "table" and r.id ~= nil then
+      if is_role(r.role) then
+        if r.status ~= "dead" then count[r.role] = count[r.role] + 1 end
+      elseif r.status == "dead" then
+        out[r.id] = lean(r) or "scientist"
+      else
+        pend[#pend + 1] = r
+      end
+    end
+  end
+  table.sort(pend, function(a, b) return (tonumber(a.id) or 0) < (tonumber(b.id) or 0) end)
+  local function leader(field, skip)
+    local best, n, tie = nil, 0, false
+    for _, r in ipairs(pend) do
+      if not out[r.id] and r.id ~= skip then
+        local v = tonumber(r[field]) or 0
+        if v > n then best, n, tie = r, v, false elseif v == n and v > 0 then tie = true end
+      end
+    end
+    if tie then return nil end
+    return best
+  end
+  if count.engineer == 0 or count.pilot == 0 then
+    local eng = count.engineer == 0 and leader("repairs") or nil
+    local pil = count.pilot == 0 and leader("flights") or nil
+    if eng and pil and eng == pil then
+      -- one member leads both: they take what they lean to, the other role
+      -- goes to the next leader
+      if lean(eng) == "pilot" then eng = leader("repairs", pil.id) else pil = leader("flights", eng.id) end
+    end
+    if eng then out[eng.id] = "engineer"; count.engineer = count.engineer + 1 end
+    if pil and not out[pil.id] then out[pil.id] = "pilot"; count.pilot = count.pilot + 1 end
+  end
+  for _, r in ipairs(pend) do
+    if not out[r.id] then
+      local k = least_held(count, lean(r))
+      out[r.id] = k
+      count[k] = count[k] + 1
+    end
+  end
+  return out
+end
+
+-- Give every member without a role one (J8). `announce`: a one-line news
+-- item (the crew notice, shown as THE CREW caption on the next scene).
+-- → the number assigned to the living.
+assign_missing = function(announce)
+  local recs = {}
+  for _, id in ipairs(ids()) do
+    local r = save.get(key(id))
+    if type(r) == "table" then recs[#recs + 1] = r end
+  end
+  local got = assignRoles(recs)
+  local parts, n = {}, 0
+  for _, r in ipairs(recs) do
+    local k = got[r.id]
+    if k then
+      r.role = k
+      put(r)
+      if r.status ~= "dead" then
+        n = n + 1
+        parts[#parts + 1] = string.format("%s %s", tostring(r.name), ROLE_NAME[k])
+      end
+    end
+  end
+  if announce and n > 0 then
+    local line = "Crew roles, from the service record: " .. table.concat(parts, ", ") .. "."
+    local prev = save.get("crew.notice")
+    save.set("crew.notice", (type(prev) == "string" and prev ~= "") and (prev .. " " .. line) or line)
+    log_("crew: " .. line)
+  end
+  return n
+end
+
+function role(m)
+  local r = rec_of(m)
+  if not r then return nil end
+  local t = r.retrain
+  if type(t) == "table" and is_role(t.to) and clock() >= (tonumber(t.done) or 0) then return t.to end
+  if is_role(r.role) then return r.role end
+  return lean(r) or "scientist"      -- (a record J8 has not seen yet: never nil)
+end
+
+function roleName(m)
+  local k = is_role(m) and m or role(m)
+  return k and ROLE_NAME[k] or nil
+end
+
+function roleLetter(m)
+  local k = is_role(m) and m or role(m)
+  return k and ROLE_LETTER[k] or nil
+end
+
+local function bodies_of(r)
+  local b = type(r.worlds) == "table" and r.worlds or {}
+  local n = 0
+  for _ in pairs(b) do n = n + 1 end
+  return n
+end
+
+-- Pure: the level a record has earned, and why. `home` = the home world's
+-- name (a first anywhere else is level 3).
+function levelOf(r, home)
+  if type(r) ~= "table" then return 1, nil end
+  local away = type(r.away) == "table" and r.away or nil
+  if away and away.body and away.body ~= home then
+    return 3, string.format("first %s on %s", tostring(away.kind or "visit"), tostring(away.body))
+  end
+  if type(r.worlds) == "table" and home then
+    for b, _ in pairs(r.worlds) do
+      if b ~= home then return 3, "landed on " .. tostring(b) end
+    end
+  end
+  local f = tonumber(r.flights) or 0
+  if f >= P("lvl2_flights") then return 2, string.format("%d flights", f) end
+  local nb = bodies_of(r)
+  if nb >= P("lvl2_bodies") then return 2, string.format("landed on %d worlds", nb) end
+  local b = tonumber(r.built) or 0
+  if b >= P("lvl2_built") then return 2, string.format("%d structures built", b) end
+  local s = tonumber(r.studied) or 0
+  if s >= P("lvl2_studied") then return 2, string.format("%d samples studied", s) end
+  return 1, nil
+end
+
+local function home_body() return save and save.get and save.get("base.body") or nil end
+
+function level(m)
+  local lv = levelOf(rec_of(m), home_body())
+  return lv
+end
+
+function levelWhy(m) return levelOf(rec_of(m), home_body()) end
+
+-- Does anyone in `who` hold `role_` (at minLevel or better)? `who` is a
+-- craft (a vessel_controller: crewIds(), or aboard(v)), a list of ids or
+-- records, one record or one id. A member out of service doesn't count.
+function hasRole(who, role_, minLevel)
+  if not is_role(role_) then return false, nil end
+  local list
+  if type(who) == "table" and (type(who.crewIds) == "function" or who.node ~= nil) then
+    list = {}
+    if type(who.crewIds) == "function" then
+      local ok, l = pcall(who.crewIds)
+      if ok and type(l) == "table" then list = l end
+    end
+    if #list == 0 then
+      for _, a in ipairs(aboard and aboard(who) or {}) do list[#list + 1] = a.id end
+    end
+  elseif type(who) == "table" and who.id ~= nil and who.name ~= nil then
+    list = { who }
+  elseif type(who) == "table" then
+    list = who
+  else
+    list = { who }
+  end
+  for _, m in ipairs(list) do
+    local r = rec_of(m)
+    if r and r.status ~= "dead" and not busy(r) and role(r) == role_
+       and (not minLevel or levelOf(r, home_body()) >= minLevel) then
+      return true, r
+    end
+  end
+  return false, nil
+end
+
+-- Count something a member did. → the new count (nil: no such member).
+function credit(id, counter, n, opts)
+  if not COUNTERS[counter] then return nil end
+  local r = get(id)
+  if not r or r.status == "dead" then return nil end
+  r[counter] = (tonumber(r[counter]) or 0) + (n or 1)
+  local body = opts and opts.body
+  if body and (counter == "landings" or counter == "built" or counter == "studied") then
+    if counter == "landings" then
+      r.worlds = type(r.worlds) == "table" and r.worlds or {}
+      r.worlds[body] = true
+    end
+    local home = home_body()
+    if home and body ~= home and not (type(r.away) == "table" and r.away.body) then
+      local kind = counter == "landings" and "landing" or (counter == "built" and "build" or "study")
+      r.away = { kind = kind, body = body, t = clock() }
+    end
+  end
+  put(r)
+  return r[counter]
+end
+
+-- ── retraining (J2) ──
+function retrainCost() return P("retrain_cost") end
+
+function training(id)
+  local r = rec_of(id)
+  local t = r and r.retrain
+  if type(t) ~= "table" then return nil end
+  local left = (tonumber(t.done) or 0) - clock()
+  if left <= 0 then return nil end
+  return { to = t.to, from = t.from, left = left }
+end
+
+function busy(m)
+  local t = training(m)
+  if t then
+    local h = math.ceil(t.left / 3600)
+    return string.format("retraining as %s (%d h left)", ROLE_NAME[t.to] or "?", h)
+  end
+  return nil
+end
+
+-- Why member `id` can't retrain as `to` now, or nil.
+function retrainWhyNot(id, to)
+  local r = rec_of(id)
+  if not r then return "no such crew member" end
+  if not is_role(to) then return "no such role" end
+  if r.status == "dead" then return "dead" end
+  if role(r) == to then return "already a " .. ROLE_NAME[to] end
+  if training(r) then return busy(r) end
+  if r.status ~= "base" then return "only at base" end
+  local last = tonumber(r.retrained)
+  if last then
+    local wait = last + P("retrain_every") - clock()
+    if wait > 0 then return string.format("retrained lately: again in %d days", math.ceil(wait / 86400)) end
+  end
+  local co = ref("company")
+  if co and co.afford and not co.afford(P("retrain_cost")) then return "not enough money" end
+  return nil
+end
+
+-- Retrain: pay, and the member is out of service for a day; the new role
+-- is theirs when it ends (role() reads it from then on; finish_retrains
+-- writes it down).
+function retrain(id, to)
+  local why = retrainWhyNot(id, to)
+  if why then return false, why end
+  local r = get(id)
+  local co = ref("company")
+  if co and co.spend then
+    if not co.spend(P("retrain_cost"), "crew retrain: " .. tostring(r.name) .. " → " .. ROLE_NAME[to]) then
+      return false, "not enough money"
+    end
+  end
+  local t0 = clock()
+  r.retrain = { from = role(r), to = to, t0 = t0, done = t0 + P("retrain_secs") }
+  r.retrained = t0
+  put(r)
+  log_(string.format("crew: %s retrains as %s", tostring(r.name), ROLE_NAME[to]))
+  return true, nil
+end
+
+-- A finished retrain becomes the record's role (and the record forgets it).
+function finish_retrains()
+  local now_c = clock()
+  for _, id in ipairs(ids()) do
+    local r = save.get(key(id))
+    local t = type(r) == "table" and r.retrain
+    if type(t) == "table" and now_c >= (tonumber(t.done) or 0) then
+      if is_role(t.to) then r.role = t.to end
+      r.retrain = nil
+      put(r)
+    end
+  end
+end
+rolesTick = finish_retrains   -- (tests and probes)
+roles_t = 0
 
 -- ── death settings (§2.3): CREW SAFETY ─────────────────────────────────────
 -- "death": permadeath (the default); "rescue": whoever would die is brought
@@ -2563,6 +2958,9 @@ end
 -- first frame the alias is there (then this costs one flag test).
 function update(node, dt)
   if not ensured then ensure() end
+  -- a retrain that has run its day becomes the member's role
+  roles_t = (roles_t or 0) + (dt or 0.016)
+  if roles_t > 2.0 then roles_t = 0; finish_retrains() end
   -- the Medkit's work: in the frame, where the avatar and the bodies are
   -- read at the same moment (a physics tick sees them a rails carry apart)
   treat_tick(dt or 0.016)

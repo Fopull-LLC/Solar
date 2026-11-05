@@ -230,7 +230,19 @@ function available(rec, active)
   if rec.status == "afoot" and rec.id ~= active then
     return false, "away on foot" .. (rec.body and (" on " .. tostring(rec.body)) or "")
   end
+  -- out of service (retraining for a new role, J2)
+  local why = call(ref("crew"), "busy", rec)
+  if why then return false, why end
   return true, nil
+end
+
+-- "Engineer L2" (J7: the seat plan shows roles, so a trip with no Engineer
+-- aboard is seen before launch). nil when the crew has no roles.
+function roleOf(r)
+  local c = ref("crew")
+  local name = r and call(c, "roleName", r)
+  if not name then return nil end
+  return string.format("%s L%d", name, call(c, "level", r) or 1)
 end
 
 local function find_rec(roster, id)
@@ -1203,7 +1215,8 @@ local function seat_rows(out, plan, roster, active)
           { "text", key = "n", style = r and "panel/cellStrong" or "panel/cellMuted", w = "100%", h = 16, text = text,
             textValign = "center", maxLines = 1, overflow = "ellipsis" },
           r and { "text", key = "x", style = "panel/cellMuted", w = "100%", h = 14, textValign = "center",
-            maxLines = 1, overflow = "ellipsis", text = star ~= "" and "commander" or (c.command and "crew" or "passenger") } or nil } }
+            maxLines = 1, overflow = "ellipsis", text = (roleOf(r) and (roleOf(r) .. " · ") or "")
+              .. (star ~= "" and "commander" or (c.command and "crew" or "passenger")) } or nil } }
     end
     out[#out + 1] = row
   end
@@ -1250,7 +1263,7 @@ local function roster_rows(out, plan, roster, active)
           { "text", key = "n", style = "panel/cellStrong", w = "100%", h = 16, textValign = "center", opacity = op,
             maxLines = 1, overflow = "ellipsis", text = shortName(r.name) .. tag },
           { "text", key = "x", style = "panel/cellMuted", w = "100%", h = 14, textValign = "center",
-            maxLines = 1, overflow = "ellipsis", text = traitsOf(r, look) },
+            maxLines = 1, overflow = "ellipsis", text = (roleOf(r) and (roleOf(r) .. " · ") or "") .. traitsOf(r, look) },
           { "text", key = "w", style = "panel/cellMuted", w = "100%", h = 14, textValign = "center",
             maxLines = 1, overflow = "ellipsis", text = where } } }
     end
@@ -1271,7 +1284,8 @@ local function roster_rows(out, plan, roster, active)
     local offers = call(c, "offers") or {}
     for i, a in ipairs(offers) do
       out[#out + 1] = { "row", key = "ap" .. i, w = "100%", h = 22, gap = 4, pad = 0, align = "center",
-        { "text", key = "n", style = "panel/cell", w = "grow", h = 22, text = a.name, textValign = "center",
+        { "text", key = "n", style = "panel/cell", w = "grow", h = 22, textValign = "center",
+          text = a.name .. (a.role and (" · " .. (call(c, "roleName", a.role) or a.role)) or ""),
           maxLines = 1, overflow = "ellipsis" },
         { "text", key = "c", style = "panel/cellMuted", w = "fit", h = 22, textValign = "center",
           text = (a.free or (a.cost or 0) <= 0) and "FREE" or money(a.cost) },

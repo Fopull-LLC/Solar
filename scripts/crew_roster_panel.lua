@@ -2,13 +2,17 @@
 --
 -- The agency's people, at the Command Centre. Three tabs:
 --
---   ROSTER       every living member: name, status, where, and the service
---                record (flights, EVA time, flags, repairs, hire date).
+--   ROSTER       every living member: the role chip (P / S / E), name, ROLE
+--                and level ("ENGINEER · L2", crew.roleName / crew.level),
+--                status, where, and the service record (flights, EVA time,
+--                flags, repairs, the role counters, hire date).
 --                Rename · Go to (crew.control: switch to an on-foot member)
 --                · Recall (an on-foot member brought home for the pickup fee,
 --                flight_ops.pickupFee; arms on the first press, pays on the
---                second, like the Ops Board's ABANDON)
---   APPLICANTS   crew.offers(): name and the one-time fee; HIRE is
+--                second, like the Ops Board's ABANDON) · Retrain (a member
+--                at base: pick one of the two other roles, crew.retrain —
+--                $2,000, a day out of service, once a month)
+--   APPLICANTS   crew.offers(): role, name and the one-time fee; HIRE is
 --                crew.hire(i). When every astronaut is dead the first one
 --                is a FREE volunteer.
 --   MEMORIAL     crew.memorial(): name, hire date, date and place of death,
@@ -54,8 +58,9 @@ function uiDesignH()
 end
 
 local W, PAD = 720, 18
+local ROLE_W, STATUS_W = 118, 150   -- the ROLE and STATUS columns (the header lines up with them)
 TABS = { "ROSTER", "APPLICANTS", "MEMORIAL" }
-local st = { tab = "ROSTER", renaming = nil, msg = nil, msgT = -1e9, armed = nil, armedT = -1e9, sig = nil, t = 0 }
+local st = { tab = "ROSTER", renaming = nil, retraining = nil, msg = nil, msgT = -1e9, armed = nil, armedT = -1e9, sig = nil, t = 0 }
 local ARM_TIME = 3.0
 
 local function now() return time or 0 end
@@ -66,7 +71,7 @@ function typing() return st.renaming ~= nil end
 
 function openPanel(t)
   st.tab = (t and t:upper()) or st.tab or "ROSTER"
-  st.renaming, st.armed, st.sig = nil, nil, nil
+  st.renaming, st.armed, st.sig, st.retraining = nil, nil, nil, nil
   if el then el.visible = true end
   sfx("open")
 end
@@ -74,7 +79,7 @@ end
 function close()
   if el and el.visible then sfx("close") end
   if el then el.visible = false end
-  st.renaming, st.armed = nil, nil
+  st.renaming, st.armed, st.retraining = nil, nil, nil
   if ui and ui.focus then pcall(ui.focus, nil) end
 end
 
@@ -106,9 +111,31 @@ local function plural(n, one, many)
 end
 
 function serviceLine(r)
-  return table.concat({ plural(r.flights, "flight"), evaText(r.eva_s), plural(r.flags, "flag"),
-                        plural(r.repairs, "repair") }, " · ")
+  local out = { plural(r.flights, "flight"), evaText(r.eva_s), plural(r.flags, "flag"),
+                plural(r.repairs, "repair") }
+  -- the role counters (J3) only once there is something to say
+  if (r.landings or 0) > 0 then out[#out + 1] = plural(r.landings, "landing") end
+  if (r.dockings or 0) > 0 then out[#out + 1] = plural(r.dockings, "docking") end
+  if (r.built or 0) > 0 then out[#out + 1] = plural(r.built, "structure") .. " built" end
+  if (r.crafted or 0) > 0 then out[#out + 1] = plural(r.crafted, "part") .. " made" end
+  if (r.studied or 0) > 0 then out[#out + 1] = plural(r.studied, "sample") .. " studied" end
+  return table.concat(out, " · ")
 end
+
+-- "ENGINEER · L2" (the ROLE column), from the crew hooks.
+function roleText(c, r)
+  local name = call(c, "roleName", r) or "—"
+  local lv = call(c, "level", r) or 1
+  return string.format("%s · L%d", name:upper(), lv)
+end
+
+-- The role chip (crew_strip's, at panel size): P / S / E stencilled on.
+local function role_chip(key, letter)
+  return { "text", key = key, style = "panel/role", w = 20, h = 20, text = letter or "?", textAlign = "center",
+           textValign = "center", maxLines = 1 }
+end
+
+local function hours(s) return math.max(1, math.ceil((s or 0) / 3600)) end
 
 -- The cause, in plain words (§2.3's table).
 CAUSE = {
@@ -189,6 +216,13 @@ local function roster_rows(c, rows)
   local active = call(c, "activeId")
   local list = call(c, "roster") or {}
   local n = 0
+  -- the column heads, over the row's own layout (pad 8, gap 8, the 20 px chip)
+  rows[#rows + 1] = { "row", key = "colh", w = "100%", h = "fit", gap = 8, pad = 0, align = "center",
+    { "box", key = "p", w = 8 + 20, h = 1 },
+    { "text", key = "n", style = "panel/label", w = "grow", h = "fit", text = "Name" },
+    { "text", key = "r", style = "panel/label", w = ROLE_W, h = "fit", text = "Role" },
+    { "text", key = "s", style = "panel/label", w = STATUS_W, h = "fit", text = "Status" },
+    { "box", key = "q", w = 3 * 72 + 2 * 8 + 8, h = 1 } }
   for _, r in ipairs(list) do
     if r.status ~= "dead" then
       n = n + 1
@@ -212,12 +246,16 @@ local function roster_rows(c, rows)
         name = { "text", key = "n", style = "panel/cellStrong", w = "grow", h = "fit", maxLines = 1, overflow = "ellipsis",
           text = r.name }
       end
-      rows[#rows + 1] = { "col", key = "m" .. r.id, style = r.id == active and "panel/rowActive" or "panel/row",
+      local tr = call(c, "training", r.id)
+      local row = { "col", key = "m" .. r.id, style = r.id == active and "panel/rowActive" or "panel/row",
         w = "100%", h = "fit", gap = 4, pad = 8, align = "stretch",
         { "row", key = "a", w = "100%", h = "fit", gap = 8, pad = 0, align = "center",
+          role_chip("rl", call(c, "roleLetter", r)),
           name,
-          { "text", key = "s", style = "panel/cell", w = 190, h = "fit", maxLines = 1, overflow = "ellipsis",
-            text = statusText(r, active) },
+          { "text", key = "ro", style = "panel/cellStrong", w = ROLE_W, h = "fit", maxLines = 1, overflow = "ellipsis",
+            text = roleText(c, r) },
+          { "text", key = "s", style = "panel/cell", w = STATUS_W, h = "fit", maxLines = 1, overflow = "ellipsis",
+            text = tr and string.format("To %s · %d h", call(c, "roleName", tr.to) or "?", hours(tr.left)) or statusText(r, active) },
           small_button("rn", st.renaming == r.id and "Cancel" or "Rename", type(c and c.rename) ~= "function",
             "Give them another name", function()
               st.renaming = (st.renaming ~= r.id) and r.id or nil
@@ -243,9 +281,45 @@ local function roster_rows(c, rows)
                 sfx("arm")
               end
             end, armed and "panel/danger" or "panel/secondary") },
-        { "text", key = "b", style = "panel/cellMuted", w = "100%", h = "fit", wrap = true,
-          text = serviceLine(r) .. " · hired " .. dateOf(r.hired) .. ((r.cost or 0) > 0 and (" for " .. money(r.cost)) or
-            (r.starter and " · founding crew" or "")) } }
+        { "row", key = "b", w = "100%", h = "fit", gap = 8, pad = 0, align = "center",
+          { "text", key = "t", style = "panel/cellMuted", w = "grow", h = "fit", wrap = true,
+            text = serviceLine(r) .. " · hired " .. dateOf(r.hired) .. ((r.cost or 0) > 0 and (" for " .. money(r.cost)) or
+              (r.starter and " · founding crew" or "")) },
+          small_button("rt", st.retraining == r.id and "Cancel" or "Retrain",
+            type(c and c.retrain) ~= "function" or tr ~= nil or r.status ~= "base",
+            tr and (r.name .. " is retraining") or (r.status ~= "base" and "Only at base")
+              or string.format("Change their role: %s, a day out of service, once a month", money(call(c, "retrainCost") or 0)),
+            function() st.retraining = (st.retraining ~= r.id) and r.id or nil end) } }
+      if st.retraining == r.id then
+        -- the two other roles, each with its price or why not
+        local pick = { "row", key = "c", w = "100%", h = "fit", gap = 8, pad = 0, align = "center",
+          { "text", key = "l", style = "panel/label", w = "fit", h = "fit", text = "Retrain as" } }
+        local now_role = call(c, "role", r)
+        for _, k in ipairs(c.ROLES or {}) do
+          if k ~= now_role then
+            local why = call(c, "retrainWhyNot", r.id, k)
+            pick[#pick + 1] = { "button", key = "to" .. k, style = "panel/action", w = 150, h = 26,
+              text = string.format("%s · %s", call(c, "roleName", k) or k, money(call(c, "retrainCost") or 0)),
+              textAlign = "center", textValign = "center", disabled = why ~= nil or nil, tooltip = why,
+              onClicked = function()
+                local ok, why2 = call(c, "retrain", r.id, k)
+                st.retraining = nil
+                if ok then
+                  sfx("sign")
+                  say(string.format("%s starts retraining as %s: back tomorrow", r.name, call(c, "roleName", k) or k))
+                else say("can't retrain — " .. tostring(why2 or "no answer")) end
+              end }
+          end
+        end
+        row[#row + 1] = pick
+        local note = nil
+        for _, k in ipairs(c.ROLES or {}) do
+          local why = k ~= now_role and call(c, "retrainWhyNot", r.id, k)
+          if why and not note then note = why end
+        end
+        if note then row[#row + 1] = wrapped("cw", "panel/hintWarn", note) end
+      end
+      rows[#rows + 1] = row
     end
   end
   if n == 0 then
@@ -261,11 +335,15 @@ local function applicant_rows(c, rows)
   rows[#rows + 1] = wrapped("about", "panel/body", living == 0
     and "Every astronaut is lost. The first applicant volunteers for nothing, kit included."
     or "A one-time hiring fee and no wages: once they're on the roster they cost nothing. "
-       .. "A new hire starts at base with the standard issue.")
+       .. "A new hire starts at base with the standard issue. Each comes trained for one role; "
+       .. "the board always has a Pilot, a Scientist and an Engineer.")
   for i, a in ipairs(offers) do
     local free = a.free == true or (a.cost or 0) <= 0
     rows[#rows + 1] = { "row", key = "o" .. i, style = "panel/row", w = "100%", h = "fit", gap = 10, pad = 8, align = "center",
+      role_chip("rl", call(c, "roleLetter", a.role)),
       { "text", key = "n", style = "panel/cellStrong", w = "grow", h = "fit", maxLines = 1, overflow = "ellipsis", text = a.name },
+      { "text", key = "ro", style = "panel/cell", w = ROLE_W, h = "fit", maxLines = 1, overflow = "ellipsis",
+        text = (call(c, "roleName", a.role) or ""):upper() },
       { "text", key = "c", style = free and "panel/cellStrong" or "panel/figure", w = "fit", h = "fit",
         text = free and "FREE · a volunteer" or money(a.cost) },
       { "button", key = "h", style = "panel/action", w = 96, h = 30, text = "Hire", textAlign = "center", textValign = "center",
@@ -319,7 +397,7 @@ function describe()
   for _, t in ipairs(TABS) do
     tabs[#tabs + 1] = { "button", key = "t" .. t, style = "panel/choice", selected = st.tab == t, w = 124, h = 28,
       text = t, textAlign = "center", textValign = "center",
-      onClicked = function() if st.tab ~= t then sfx("click") end st.tab = t; st.renaming = nil; st.armed = nil end }
+      onClicked = function() if st.tab ~= t then sfx("click") end st.tab = t; st.renaming = nil; st.armed = nil; st.retraining = nil end }
   end
   local rows = {}
   if not c then

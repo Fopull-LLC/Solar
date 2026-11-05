@@ -187,6 +187,22 @@ local function panel_case(tab)
     c.patch(2, { flights = 3, eva_s = 1260, flags = 1 })
     P("patched #2 %s dead: %s", tostring(r and r.name), tostring(r and r.status))
   end
+  if tab == "ROSTER" and c.credit and c.retrain then
+    -- roles (J7): one member at level 2 by five flights, one retraining
+    local ids = {}
+    for _, r in ipairs(c.roster()) do if r.status ~= "dead" then ids[#ids + 1] = r end end
+    if ids[2] then for _ = 1, 5 do c.credit(ids[2].id, "flights", 1) end end
+    local tr = ids[3]
+    local to = tr and (c.role(tr) == "engineer" and "pilot" or "engineer")
+    local okr, whyr = false, "no third member"
+    if tr then okr, whyr = c.retrain(tr.id, to) end
+    local line = {}
+    for _, r in ipairs(c.roster()) do
+      line[#line + 1] = string.format("#%d %s L%d%s", r.id, c.roleLetter(r.id), c.level(r.id), c.busy(r.id) and " busy" or "")
+    end
+    P("roles: %s; retrain #%s → %s: %s %s", table.concat(line, ", "), tostring(tr and tr.id), tostring(to),
+      tostring(okr), tostring(whyr))
+  end
   stand_in_cc()
   local fm = findScript("facility_menu")
   local ok = fm and fm.openRoster and fm.openRoster(tab)
