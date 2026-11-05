@@ -155,7 +155,7 @@ TERRAIN = [
     dict(slot=4, name="onyx", was="planet_banded_onyx", mat="onyx", scale=1.2, blend=0.8, rough=0.7,
          cc0=("Onyx006", G(sat=0.85, flatten=0.0))),
     dict(slot=5, name="veinstone", was="cave_orange_veinstone", mat="veinstone", scale=1.6, blend=0.8, rough=0.7,
-         cc0=("Rock058", G(make="veins", vein=(1.0, 0.45, 0.16), veinGain=3.5, base=1.5))),
+         cc0=("Rock058", G(make="copper", cover=0.48))),
     dict(slot=6, name="magma", was="cave_magma_veins", mat="uranium", scale=1.4, glow=True,
          cc0=("Rock058", G(make="magma"))),
     dict(slot=7, name="amethyst", was="cave_amethyst", mat="crystal", scale=1.3, glow=True,
@@ -657,6 +657,46 @@ def make_veins(alb, n, ao, g, glow=False):
     return np.clip(c * (1 - mask[..., None]) + vein * mask[..., None] * g.get("veinGain", 1.0) * c.mean(), 0, 1)
 
 
+def make_copper(alb, n, ao, g):
+    """Slot 5, copper's vein stone (materials.VEIN_SLOTS copper): Rock058 graded to a grey host rock,
+    broadly stained with the copper carbonates (malachite green, azurite-leaning blue-green, as
+    materials ORE.copper: seam 0.24,0.56,0.44, stain 0.34,0.60,0.48) over `cover` of the tile, its own
+    warm veins kept as copper-oxide orange with a rusty halo. The stains follow the veins (they are
+    where the water ran) and broad wrap noise, so a seam reads as copper from mining distance, not as
+    hairlines on grey (playtest 2026-11-04: copper couldn't be found)."""
+    N = alb.shape[0]
+    rng = np.random.default_rng(505)
+    rock = grade(alb, n, ao, dict(sat=0.3, flatten=0.6)) * 1.25
+    L = np.maximum(lum(rock), 1e-4)
+    detail = np.clip(L / L.mean(), 0.45, 1.6)[..., None]          # the rock's grain, kept under the stain
+    r, gg, b = alb[..., 0], alb[..., 1], alb[..., 2]
+    warm = np.clip((r - b) / np.maximum(r + gg + b, 1e-4) * 3.0, 0, 1)
+    bright = np.clip(lum(alb) / max(1e-4, np.percentile(lum(alb), 97)), 0, 1)
+    vein = np.clip((warm * bright - 0.05) * 6.0, 0, 1)
+    vein = np.maximum(vein, blur_wrap(vein, 3.0) * 0.8)
+
+    def noise(sigma):
+        f = blur_wrap(rng.standard_normal((N, N)), sigma)
+        return (f - f.mean()) / (f.std() + 1e-9)
+    field = noise(N / 9) * 0.8 + noise(N / 30) * 0.35 + blur_wrap(vein, N / 40) / (blur_wrap(vein, N / 40).std() + 1e-9) * 0.6
+    thr = np.percentile(field, 100 * (1 - g.get("cover", 0.42)))
+    stain = np.clip((field - thr) * 2.2, 0, 1)
+    stain = stain * (0.75 + 0.25 * np.clip(noise(N / 80) * 0.5 + 0.5, 0, 1))  # patchy within
+    hue = np.clip(noise(N / 14) * 0.5 + 0.5, 0, 1)[..., None]
+    green = srgb_to_lin(np.array([0.24, 0.56, 0.44], np.float32))
+    stain_c = srgb_to_lin(np.array([0.34, 0.60, 0.48], np.float32))
+    azure = srgb_to_lin(np.array([0.18, 0.48, 0.56], np.float32))
+    oxide = srgb_to_lin(np.array([0.66, 0.33, 0.13], np.float32))
+    col = green * (1 - hue) + azure * hue * 0.6 + stain_c * hue * 0.4
+    col = col * detail * 1.1
+    c = rock * (1 - stain[..., None]) + col * stain[..., None]
+    halo = np.clip(blur_wrap(vein, 6.0) * 1.8, 0, 1)[..., None] * 0.55
+    c = c * (1 - halo) + oxide * detail * halo
+    m = vein[..., None]
+    c = c * (1 - m) + oxide * 1.25 * m
+    return np.clip(c, 0, 1)
+
+
 def make_crystal(alb, n, g):
     """The faceted band of ChristmasTreeOrnament021 (the user's Star Geode note) as a
     crystal lining: its facets shaded from fixed lights through its normal map (the
@@ -746,13 +786,22 @@ def layer_job(args):
         raise SystemExit("slot %d: cc0 layer from a commercial set (%s)" % (t["slot"], src[0]))
     rel = layer_path(root, t)
     p = os.path.join(ROOT, rel)
-    st = stamp_of(s, [LAYER, BAKE, src[1], RECIPE_HASH()])
+    extra = [LAYER, BAKE, src[1], RECIPE_HASH()]
+    if src[1].get("make") == "copper":
+        import inspect
+        extra.append(hashlib.sha1(inspect.getsource(make_copper).encode()).hexdigest()[:12])
+    st = stamp_of(s, extra)
     stf = p + ".import" if which == "local" else os.path.join(ROOT, root, "terrain", ".import-%02d" % t["slot"])
     if not force and os.path.exists(p) and os.path.exists(stf) and open(stf).read().strip() == st:
         return t["slot"], which, "up to date", rel
     if dry:
         return t["slot"], which, "would bake", rel
-    a = bake_layer(LIB_PATH[0], sets, src)
+    if src[1].get("make") == "copper":   # its own recipe (outside RECIPE_HASH, so no other layer re-bakes)
+        alb, n, ao, _ = load_for_layer(LIB_PATH[0], s)
+        a = resize(lin_to_srgb(make_copper(alb, n, ao, src[1])), LAYER, linear=True)
+        a = np.clip(a + 0.3 * (a - blur_wrap(a, 0.9)), 0, 1)
+    else:
+        a = bake_layer(LIB_PATH[0], sets, src)
     save_png(a, p, "RGB")
     open(stf, "w").write(st + "\n")
     return t["slot"], which, "baked", rel
