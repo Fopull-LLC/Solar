@@ -397,26 +397,90 @@ local function ctrl_line(labels, set, auto, why)
   end
   return "Auto: reading the craft…"
 end
--- ── the launch check (builder.launchCheck) on THIS CRAFT ───────────────────
--- Every warning LAUNCH would ask about, each on its own wrapped line (the
--- hint bar has room for the first two), then the hints LAUNCH doesn't ask
--- about (a twisted symmetry ring).
-local function launch_rows(s, out)
+-- ── THE CRAFT CHECK (builder.launchCheck rows; scripts/craft_check.lua) ────
+-- One row per rule, worst first: an annunciator lamp (red: it won't fly or
+-- breaks, yellow: it fights you or it is advice, green: what the flight will
+-- do), the short line, and under it the sentence with the numbers (the first
+-- three in full; the rest on their tooltip). HOVER a row and its parts light
+-- in the view in its colour (builder.checkHighlight, each frame while the
+-- pointer is on it); CLICK it and they are selected; a FIX key runs the
+-- row's fix as one history step (FIT, DEFAULT ORDER) or puts the part it
+-- needs in the hand (ADD INTAKE, ADD CHUTE). Notes sit under a rule.
+CHECK_LAMP = { danger = "hud/lampDanger", warn = "hud/lampWarn", done = "hud/lampOn" }
+function checkTone(r)
+  if r.sev == "block" or (r.sev == "warn" and (r.rank or 2) == 0) then return "danger" end
+  if r.sev == "warn" then return "warn" end
+  return "done"
+end
+CHECK_FULL = 3
+-- The height (design units) a wrapped line of `text` takes at width w: the
+-- label face's SemiBold capitals measured narrower than they draw, and a
+-- fitted head of two lines laid its second over the sentence under it (VAB
+-- probe, 2026-11-05). ~0.5 em a character at caption size, 17 a line.
+function checkLinesH(text, w, em)
+  local n = 0
+  for _ in tostring(text or ""):gmatch("[%z\1-\127\194-\244][\128-\191]*") do n = n + 1 end
+  local per = math.max(8, math.floor(w / (em or 6.9)))
+  return 17 * math.max(1, math.ceil(n / per))
+end
+local function check_row(B, r, i, full, out)
+  local tone = checkTone(r)
+  local id = r.id
+  -- (fixed widths: a wrapped line measures its height at the width it is
+  -- given, and a "grow" one nested in a fitted key measured one line short)
+  local inner = math.floor(((st.L and st.L.right and st.L.right.w) or 256) - 20 - 12)
+  local btn = { "button", key = "k" .. i, name = "ChkRow" .. i, style = "panel/row", w = "100%", h = "fit",
+    dir = "column", align = "start", gap = 2, pad = 6,
+    tooltip = (not full) and r.text or ((r.uids and #r.uids > 0) and "Click to select its parts" or nil),
+    onClicked = function() if B.checkSelect then B.checkSelect(id) end end,
+    onHoverStart = function() st.chk = { id = id, uids = r.uids or {}, tone = tone } end,
+    onHoverEnd = function() if st.chk and st.chk.id == id then st.chk = nil end end,
+    { "row", key = "r", w = inner, h = "fit", gap = 7, pad = 0, align = "start",
+      { "box", key = "lamp", style = CHECK_LAMP[tone], w = 9, h = 9 },
+      { "text", key = "h", style = "panel/cellStrong", w = inner - 16, h = checkLinesH(r.head, inner - 16), wrap = true, text = r.head } } }
+  if full and r.text then
+    btn[#btn + 1] = { "text", key = "t", style = "panel/body", w = inner, h = "fit", wrap = true, text = r.text }
+  end
+  out[#out + 1] = btn
+  if r.fix then
+    out[#out + 1] = { "row", key = "f" .. i, w = "100%", h = 20, gap = 0, pad = 0, justify = "end",
+      { "box", key = "sp", w = "grow", h = 1 },
+      { "button", key = "b", style = "panel/secondary", w = 96, h = 20, text = r.fix.label, textAlign = "center",
+        textValign = "center", tooltip = r.fix.hold and "Put one in your hand to place" or "One step: CTRL+Z undoes it",
+        onClicked = function() if B.checkFix then B.checkFix(id) end end } }
+  end
+end
+local function check_rows(B, s, out)
   local L = s.launch
   if not L then return end
-  local warn, hints = L.warn or {}, L.hints or {}
-  if not L.block and #warn == 0 and #hints == 0 then return end
   out[#out + 1] = rule("rl")
-  out[#out + 1] = sublabel("lch", "LAUNCH CHECK")
-  if L.block then
-    out[#out + 1] = { "text", key = "lb", style = "panel/hintWarn", w = "100%", h = "fit", wrap = true, text = "⚠ " .. L.block }
+  out[#out + 1] = sublabel("lch", "CRAFT CHECK")
+  local warn, note, kind = {}, {}, nil
+  for _, r in ipairs(L.rows or {}) do
+    if r.id == "C1" then kind = r
+    elseif r.sev == "note" then note[#note + 1] = r
+    else warn[#warn + 1] = r end
   end
-  for i, w in ipairs(warn) do
-    out[#out + 1] = { "text", key = "lw" .. i, style = "panel/hintWarn", w = "100%", h = "fit", wrap = true, text = "⚠ " .. w }
+  if kind then
+    local kt = kind.head .. "  ·  " .. string.format("%.2f t", s.mass or 0)
+    out[#out + 1] = { "text", key = "lk", style = "panel/cellMuted", w = "100%", h = checkLinesH(kt, 230, 6.4), wrap = true,
+      text = kt, tooltip = kind.text }
   end
-  for i, h in ipairs(hints) do
-    out[#out + 1] = { "text", key = "lh" .. i, style = "panel/hint", w = "100%", h = "fit", wrap = true, text = "· " .. h }
+  if #warn == 0 then
+    out[#out + 1] = { "row", key = "lok", w = "100%", h = "fit", gap = 7, pad = 0, align = "center",
+      { "box", key = "lamp", style = "hud/lampOn", w = 9, h = 9 },
+      { "text", key = "t", style = "panel/cellStrong", w = "grow", h = "fit", wrap = true,
+        text = "Nothing to report. Press LAUNCH." } }
   end
+  for i, r in ipairs(warn) do check_row(B, r, i, i <= CHECK_FULL, out) end
+  if #note > 0 then
+    out[#out + 1] = rule("rln")
+    for i, r in ipairs(note) do check_row(B, r, 100 + i, false, out) end
+  end
+end
+-- the hovered row's parts, lit in the view (a frame's call; it lapses)
+function checkHoverTick(B)
+  if st.chk and B.checkHighlight then B.checkHighlight(st.chk.uids, st.chk.tone) end
 end
 
 local function ctrl_rows(B, out)
@@ -570,7 +634,7 @@ local function inspect(B, out, top)
       heat_rows(B, out)
       out[#out + 1] = rule("rc")
       ctrl_rows(B, out)
-      launch_rows(s, out)
+      check_rows(B, s, out)
     end
     return
   end
@@ -1058,6 +1122,8 @@ function update(node, dt)
   st.clicks, st.held = clicks, held
   -- the STAGE tab's hovered row lights its parts in the view (for as long as it is hovered)
   if st.tab == "STAGE" and st.hover and B.stageHover then B.stageHover(st.hover) end
+  -- …and a CRAFT CHECK row its parts
+  if st.tab == "INSPECT" then checkHoverTick(B) else st.chk = nil end
   -- a drag let go over nothing (or outside the plate): the stage goes back
   if st.sdrag and ui and ui.dragging and not ui.dragging() then st.sdrag, st.gap, st.sig = nil, nil, nil end
   local sel = B.selection()

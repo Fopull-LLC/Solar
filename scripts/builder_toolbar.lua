@@ -191,7 +191,8 @@ local function row1(B, s)
     tip = "Save and go back to the base — buys nothing", click = function() if B.doLeave then B.doLeave() end end })
   local launch_tip = s.block and ("Can't launch — " .. s.block)
     or (s.over and ("Can't launch — the craft costs more than the agency's funds (" .. s.over .. ")"))
-    or (s.warn and #s.warn > 0 and ("⚠ " .. table.concat(s.warn, " · ")) or "Buy the hull and roll it out")
+    or (s.warn and #s.warn > 0 and ("⚠ " .. table.concat(s.warn, " · ", 1, math.min(4, #s.warn))
+      .. (#s.warn > 4 and string.format(" · +%d more in CRAFT CHECK", #s.warn - 4) or "")) or "Buy the hull and roll it out")
   r[#r + 1] = key("launch", "LAUNCH ▸", 84, { style = "panel/action", disabled = s.block ~= nil, tip = launch_tip,
     click = function() if B.doLaunch then B.doLaunch() end end })
   for _, site in ipairs({ { "pad", "PAD", 40 }, { "runway", "RUNWAY", 60 } }) do

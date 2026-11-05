@@ -816,7 +816,7 @@ number aero.lua doesn't give, WP4 asks the aero agent for it by patch.
    - **CoT** (`centerOfThrust`), a blue disc and thrust line;
    - **CoL** (`centerOfLift`, alpha 5°), a cyan disc and lift arrow.
 
-   The CRT strip shows **MARGIN** from `staticMargin` in mean chords (caution yellow
+   (**Built 2026-11-05**, §7.3: `builder_aero.statusFigures`.) The CRT strip shows **MARGIN** from `staticMargin` in mean chords (caution yellow
    under +0.03 MAC, red at or under 0) and **STALL ≈ v** from `stallSpeed` at the
    wet mass, the launch world's gravity and its sea-level density. This replaces
    today's always-on `draw_engineering`.
@@ -825,7 +825,8 @@ number aero.lua doesn't give, WP4 asks the aero agent for it by patch.
    mixing (the same sign rule the flight uses). With overlays on, each surface shows
    its force arrow, so a reversed aileron or a rudder that also rolls is obvious
    before launch.
-6. **Gear check** (RUNWAY site), drawn on the floor:
+6. **Gear check** (RUNWAY site; **built 2026-11-05 as craft-check rows A6/A7**, §7.3 — the
+   floor drawing is still to do), drawn on the floor:
    - the ground line through the lowest tyres;
    - the main-gear contact line;
    - the **tip-back** test: the CoM must be ahead of the main gear, and the nose gear
@@ -833,13 +834,79 @@ number aero.lua doesn't give, WP4 asks the aero agent for it by patch.
    - the tail-strike rotation angle against the stall angle of attack.
 
    Each failure is a LAUNCH warning with the part outlined.
-7. **Jets.** The INSPECT panel of a jet shows its intake supply: the sum of `intake=`
+7. **Jets** (**built 2026-11-05 as rows A1/A2**, §7.3). The INSPECT panel of a jet shows its intake supply: the sum of `intake=`
    over the craft against `air=` per jet, a ratio such as 0.12 / 0.12. LAUNCH warns
    "jets starved of air" below 1.0 when standing still. A world without oxygen
    (`aero.oxygen`) gets a warning: "this world's air won't light a jet".
 8. **Runway.** The LAUNCH split key picks PAD or RUNWAY, latched. The default is
    RUNWAY when the craft has gear or wheels and a lifting surface, and PAD otherwise.
    The vessel spawner already supports the runway.
+
+### 7.3 The craft check (built 2026-11-05; work/vabcheck/PLAN.md phases 1–3)
+
+"The VAB should try to give you accurate warnings to the craft you're making as best
+as possible." `scripts/craft_check.lua` is a pure rulebook on the **CraftCheckLib**
+node (spawned by the builder, `prefabs/CraftCheckLib.prefab.ron`). The rule: **a
+warning is a number the flight will produce, read off the function the flight reads
+it from**; what can't be computed that way is a note, and an estimate says "about".
+
+- **Plumbing.** `builder.launchCheck()` keeps `block / warn / hints / has` for every
+  caller and adds `rows` (`{ id, sev = block|warn|note, rank 0|1|2, head, text, uids,
+  fix }`) and `kind`. Its own rules (joints, boosters, wheels, overlaps…) are rows
+  with the parts they are about; `checkRun()` adds craft_check's, from a context
+  (`checkContext()`) built once per edit and cached on craftVersion, the fairings'
+  shape version, the site, the launch world and the crew plan. Nothing runs per
+  frame; a hovered row outlines its uid list (`checkHighlight`). An **aircraft**
+  (craft_mode's verdict) no longer hears the rocket's lift-off TWR, thrust-line,
+  escape or parachute lines.
+- **The rules** (the flight function each reads):
+  C1 what the flight flies it as and where it rolls out (`craft_mode.autoOf`; a jet
+  with too little wing to be a plane, r1) · C3 a probe with no antenna or no power
+  (`electronics.summary`) · A1 jets with no / too little intake, and an intake facing
+  off the nose (`aero.step` standing still at full throttle: `M.diag.air`, Σ jk ×
+  thrust; `aero.intakeFace`) · A2 no oxygen / no air for a jet (`aero.oxygen`) · A3
+  built standing up (`R2.noseUp`, `r2UprightGear`) · A4 lift ahead of the mass, wet
+  and dry (`aero.staticMargin`) · A5 no pitch / roll control, tailplanes made of
+  yaw-only fins, pitch surfaces at the CoM (`aero.step`'s mixing; the reaction wheels
+  quoted) · A6 no gear, gear in one line, mains ahead of the CoM, nose load under 5 %
+  or over 20 % (the gear's tyre contact, statics) · A7 tail strike at rotation against
+  the angle the wing needs at 1.15 × stall ("about"; aero's lift) · A8 the take-off
+  roll against the 262 m runway ("about", before drag; `aero.stallSpeed`) · A9 jets
+  with no fuel in their section (`feedSec`) · R6 the landing speed under the chutes
+  against the touching part's crash tolerance (the canopy drag 1.3·n, `part_tolerance`)
+  · R7 a stage whose engine has no tank, or tanks no engine (`feedSec`) · R8 staging
+  order: an upper decoupler first, an engine lit after its stage is dropped, chutes
+  before an engine (`STAGEM.index`, the separation) · R11 a fairing that doesn't cover
+  its payload (`fairingFit`) · V2 the steepest hill straight up: torque, the driven
+  tyres' grip with the load moving aft on the slope, and the tip-over (`r2WheelSource`,
+  `auto_drive.gasWheel`, `R2_TYRE_MU`), with a sprocket / engine that clears 30° · V3
+  CoM high on its track (`r2Lateral`'s stability factor) · V9 a driven wheel that can't
+  reach the ground even at full droop.
+- **The flight's constants** are read through `craft_check.flight(name)`: the running
+  vessel_controller's own global, else `FLIGHT`, which `tests/smoke_craft_check.lua`
+  holds equal to vessel_controller.lua line by line (and base_facilities' runway). A
+  tuning there fails that test until it is mirrored.
+- **UI.** The CRT strip's **CHECK** chip (✓, or "n ⚠", red when a row means it won't
+  fly; a key that opens INSPECT on the craft). INSPECT with nothing selected: **CRAFT
+  CHECK**, the kind line, then a row per rule with a lamp (red / yellow / green), its
+  head, the sentence (the first three in full, the rest on the tooltip), hover →
+  outline, click → select, a **FIX** key (ADD INTAKE, ADD CHUTE: a part in the hand;
+  FIT, DEFAULT ORDER: one history step). The hint line shows the worst rank 0–1 row once
+  the craft is whole (a plane or rover counts); the two-press LAUNCH lists rank 0–1
+  heads only; the LAUNCH tooltip at most four.
+- **Phase 4** (built the same day, on deep-space step 3), registered through
+  `builder.checkHook` (`craft_check.heatRules`, `crewRules`): H1 the heat loop settling
+  over the 90 % SCRAM line at full output, radiators out in full sun (`thermal.settle` via
+  `builder.thermalBudget`; rank 0 past 100 %, with the hu and Radiator Panels it needs) or
+  a note of where it settles; H2 crew in a reactor's cone (`thermal.doseRate`: unshielded
+  and lethal inside two hours, rank 0 with ADD SHIELD; shielded, a note with the hours);
+  H3 too few fuel rods in the base store for the racks (`rodsAtLaunch` fills from it);
+  C4 the crew and their roles, and a reactor with no Engineer aboard (an EVA rod swap
+  8 s against 4, vessel_thermal). Lab / Repair Bay / Drill role notes wait for those
+  roles to do something in code (J4-J6): a note now would be a guess.
+- **Cost** (luajit, 1,000 parts, per edit): about 2 ms for the check;
+  `tests/smoke_craft_check.lua` holds it under 4. `tools/perf/vabcheck.sh` loads crafts
+  in the real VAB, prints the rows and photographs the plate and the hover outline.
 
 ## 8. Large-craft support
 

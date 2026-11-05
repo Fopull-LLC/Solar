@@ -85,6 +85,26 @@ function figures(B)
   if A and A.statusFigures then
     for i, f in ipairs(A.statusFigures() or {}) do add("a" .. i, f.label or f[1], f.value or f[2], f.warn and "warn" or f.tone) end
   end
+  -- THE CRAFT CHECK (builder.launchCheck rows): ✓, or how many warnings —
+  -- red when one means it won't fly. A key: it opens INSPECT on the craft.
+  local L = s.launch
+  if n > 0 and L then
+    local nw, worst = 0, nil
+    for _, r in ipairs(L.rows or {}) do
+      if r.sev == "block" then worst = "danger"; nw = nw + 1
+      elseif r.sev == "warn" then
+        nw = nw + 1
+        if (r.rank or 2) == 0 then worst = "danger" elseif not worst then worst = "warn" end
+      end
+    end
+    add("check", "CHECK", nw == 0 and "✓" or (nw .. " ⚠"), nw == 0 and nil or worst)
+    out[#out].click = function()
+      if B.select then B.select({}, "set") end
+      local ins = ref("builder_inspector")
+      if ins and ins.setTab then ins.setTab("INSPECT") end
+    end
+    out[#out].tip = nw == 0 and "The craft check has nothing to report" or "The craft check: what the flight will do with it   ·   click for the list"
+  end
   -- COST, and beside it what the agency has to pay it with (FUNDS). Over
   -- budget — the hull and any kit bought for its storage (builder_crew), the
   -- sum LAUNCH asks the company for — both turn red, as LAUNCH would refuse.
@@ -142,9 +162,15 @@ function describe(B, L)
   local cells = {}
   for i, f in ipairs(figures(B)) do
     if i > 1 then cells[#cells + 1] = { "box", key = "sep" .. i, style = "panel/rule", w = 1, h = 14 } end
-    cells[#cells + 1] = { "row", key = f.key, w = "fit", h = 22, gap = 5, pad = 0, align = "center",
+    local cell = { "row", key = f.key, w = "fit", h = 22, gap = 5, pad = 0, align = "center",
       { "text", key = "l", style = "hud/micro", w = "fit", h = 22, text = f.label, textValign = "center" },
       { "text", key = "v", style = TONE[f.tone] or "hud/value", w = "fit", h = 22, text = f.value, textValign = "center" } }
+    -- (a figure with a click is a key on the glass: the CHECK chip)
+    if f.click then
+      cell = { "button", key = f.key, w = "fit", h = 22, pad = 0, tooltip = f.tip, onClicked = f.click,
+        { "row", key = "r", w = "fit", h = 22, gap = 5, pad = 0, align = "center", cell[2], cell[3] } }
+    end
+    cells[#cells + 1] = cell
   end
   local hint, warn = hint_text(B)
   local tree = {

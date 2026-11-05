@@ -25,6 +25,15 @@
 --   stats()             { parts, mass, dry, cost, thrust, dv, twr, hop, stages,
 --                       com, comDry, cot, launch, islands, loose, version };
 --                       cached per craftVersion (≤ 2 a second during a drag).
+--                       launch = launchCheck(): block, warn, rows (THE CRAFT
+--                       CHECK, scripts/craft_check.lua: { id, sev, rank, head,
+--                       text, uids, fix }), kind.
+--   checkHighlight(uids, tone) · checkSelect(id) · checkFix(id) · checkRow(id)
+--                       the INSPECT plate's CRAFT CHECK rows: hover outlines
+--                       the parts, click selects them, FIX runs the row's fix
+--                       (one history step, or a part in the hand) ·
+--                       checkHook(name, fn) adds a rule (phase 4: crew roles,
+--                       heat) · checkContext() · checkRun()
 --   frame()             the adapter: identity, node, toLocal/toWorld/
 --                       dirToLocal/dirToWorld(x,y,z) (. or :), ray(mx,my).
 --   root() · links(uid) · dependents(uids) · components() · separation(uid) ·
@@ -1651,6 +1660,14 @@ end
 --           and the flight has nobody to put in it.
 --   warn    things that are legal and almost certainly a mistake — no engine,
 --           no parachute, too heavy to lift. LAUNCH asks before it charges.
+--           (the `head` of every warning row, worst first)
+--   rows    THE CRAFT CHECK (scripts/craft_check.lua): every block, warning
+--           and note as { id, sev, rank, head, text, uids, fix } — the parts
+--           each one is about, so the INSPECT plate outlines and selects
+--           them. The rules here (the joints, the boosters, the wheels …) are
+--           rows too; craft_check adds the flight's own aero, wheel, chute
+--           and staging numbers, cached per edit (checkRun).
+--   kind    what the flight flies it as (craft_mode Auto, or the pinned mode)
 function launchCheck()
   local has, n = {}, 0
   for _, p in pairs(parts) do
@@ -1661,22 +1678,29 @@ function launchCheck()
     if p.def.wheel then has.wheel = true; has.wheels = (has.wheels or 0) + 1 end
   end
   has.command = has.crewed or has.probe
-  if n == 0 then return { block = "nothing to launch — build something first", warn = {}, has = has } end
+  local function blocked(why, uids, extra)
+    local out = { block = why, warn = {}, has = has,
+                  rows = { { id = "B", sev = "block", rank = 0, head = why, uids = uids or {} } } }
+    for k, v in pairs(extra or {}) do out[k] = v end
+    return out
+  end
+  if n == 0 then return blocked("nothing to launch — build something first") end
   if not has.command then
-    return { block = "no command part — add a Pod Mk1 (crewed) or a Probe Core", warn = {}, has = has }
+    return blocked("no command part — add a Pod Mk1 (crewed) or a Probe Core")
   end
   -- THE CREW (docs/crew-and-items.md §5.6; builder_crew.lua): crewed command
   -- parts with nobody planned at the controls and no probe core can't fly.
   local bcrew = findScript and findScript("builder_crew") or nil
   if bcrew and bcrew.launchBlock then
     local okb, why = pcall(bcrew.launchBlock)
-    if okb and why then return { block = why, warn = {}, has = has } end
+    if okb and why then return blocked(why, checkUids(function(p) return p.def.kind == "crewed" end)) end
   end
   local warn = {}
   -- how bad each warning is (by its index; unset = 2): 0 the craft breaks or
   -- won't fly, 1 it tips, spins or falls over, 2 advice. Sorted at the end,
-  -- so the hint bar's first one or two are the worst.
-  local rank = {}
+  -- so the hint bar's first one or two are the worst. `wuid`: the parts each
+  -- is about (by its index), for the craft check's outline.
+  local rank, wuid = {}, {}
   if bcrew and bcrew.launchWarn then
     local okw, lines = pcall(bcrew.launchWarn)
     if okw and type(lines) == "table" then for _, l in ipairs(lines) do warn[#warn + 1] = l end end
@@ -1685,9 +1709,9 @@ function launchCheck()
   if detachedParts then
     local det = detachedParts()
     if #det > 0 then
-      return { block = string.format("%d part%s not touching what %s attached to — move %s back", #det,
+      return blocked(string.format("%d part%s not touching what %s attached to — move %s back", #det,
         #det == 1 and " is" or "s are", #det == 1 and "it is" or "they are", #det == 1 and "it" or "them"),
-        warn = {}, has = has, detached = det }
+        det, { detached = det })
     end
   end
   -- loose islands (§5.2): only the root's island is the craft
@@ -1695,6 +1719,9 @@ function launchCheck()
     local comps = islands()
     if comps and #comps > 1 then
       rank[#warn + 1] = 0
+      local lu = {}
+      for _, k in ipairs(comps) do if not k.root then for _, u in ipairs(k) do if #lu < 200 then lu[#lu + 1] = u end end end end
+      wuid[#warn + 1] = lu
       warn[#warn + 1] = string.format("%d loose part group%s not attached to the craft (orange)", #comps - 1,
         #comps == 2 and "" or "s")
     end
@@ -1708,10 +1735,20 @@ function launchCheck()
       local q = parts[ov[1].sunk == ov[1].a and ov[1].b or ov[1].a]
       local what = (p and p.def.label or "a part") .. " is " .. string.format("%.0f cm", ov[1].depth * 100)
         .. " inside " .. (q and q.def.label or "another part")
+      local ou = {}
+      for k = 1, math.min(#ov, 24) do ou[#ou + 1] = ov[k].sunk end
+      wuid[#warn + 1] = ou
       warn[#warn + 1] = (#ov == 1 and what or string.format("%d parts overlap (red) — %s", #ov, what))
         .. ((p and (p.def.wheel or p.def.legs)) and " — it may not reach the ground" or "")
     end
   end
+  local engines = checkUids(function(p) return (p.def.thrust or 0) > 0 end)
+  -- AN AIRCRAFT (what the flight will fly it as: craft_mode) rolls down a
+  -- runway on its wings: the rocket's checks — lift-off TWR, the thrust line
+  -- through the CoM standing up, straight-up escape, a parachute for the pod
+  -- — are not its; the craft check's aircraft rules are (craft_check A1-A9)
+  local cm = ctrlMode and ctrlMode() or nil
+  local plane = cm and cm.mode == "aircraft"
   if not has.engine and not has.wheel then
     rank[#warn + 1] = 0
     warn[#warn + 1] = "no engine — it will sit on the pad"
@@ -1719,12 +1756,13 @@ function launchCheck()
     local s = stageStats()
     -- lift-off happens in the pad's air: the sea-level TWR decides it
     local lift = s.nozzles and s.twr_sl or s.twr
-    if (lift or 0) > 0 and lift < 1.0 then
+    if (lift or 0) > 0 and lift < 1.0 and not plane then
       rank[#warn + 1] = 0
+      wuid[#warn + 1] = engines
       warn[#warn + 1] = string.format("TWR %.2f%s — too heavy to lift off %s", lift,
         s.nozzles and " at the pad" or "", s.world.name or "this world")
     end
-    if s.hop == math.huge then
+    if s.hop == math.huge and not plane then
       warn[#warn + 1] = "full throttle straight up escapes " .. (s.world.name or "this world")
         .. " — watch the apoapsis and cut the throttle"
     end
@@ -1734,15 +1772,17 @@ function launchCheck()
   -- against what the SAS can hold. The flight steers with reaction wheels
   -- only (no gimbal): a torque τ leaves a steady turn of τ / authority rad/s.
   if has.engine then
-    local lb = launchBalance()
+    local lb = (not plane) and launchBalance() or nil
     if lb and lb.k > 0 then
       if lb.tp / lb.k > 0.05 then
         rank[#warn + 1] = 1
+        wuid[#warn + 1] = engines
         warn[#warn + 1] = string.format("the launch engines push %.0f kN·m off the centre of mass (%.0f mm off line%s) — the SAS holds about %.0f: it will tip over. Line the blue thrust line up through the amber CoM (V)",
           lb.tp, lb.off * 1000, lb.lat > 0.5 and string.format(", %.0f kN sideways", lb.lat) or "", lb.k * 0.05)
       end
       if math.abs(lb.tr) / lb.k > 0.1 then
         rank[#warn + 1] = 1
+        wuid[#warn + 1] = engines
         warn[#warn + 1] = string.format("the engines are turned round the craft's axis (%.1f°): %.0f kN·m of spin — select the engine (or the tank it hangs on) and press SPACE: it squares the tank and the engine with it",
           lb.cant, math.abs(lb.tr))
       end
@@ -1753,6 +1793,7 @@ function launchCheck()
     if js and js.ratio > 1.0 then
       local p, q = parts[js.uid], parts[js.parent]
       rank[#warn + 1] = 0
+      wuid[#warn + 1] = { js.uid, js.parent }
       warn[#warn + 1] = string.format("at full throttle %s reaches %.1f g at %s and the joint between the %s and the %s takes %.0f kN — it holds %.0f: it tears above %.1f g. Keep that stage under %d%% throttle, or use a stronger part there",
         js.stage == 1 and "the launch stage" or ("stage " .. js.stage), js.g, js.at,
         p and p.def.label or "part", q and q.def.label or "part", js.kn, js.str,
@@ -1761,6 +1802,7 @@ function launchCheck()
     local lbo = looseBoosters()
     if lbo then
       rank[#warn + 1] = 0
+      wuid[#warn + 1] = { lbo.uid }
       warn[#warn + 1] = lbo.n == 1
         and "a side booster has no radial decoupler — it can't be dropped when it runs dry and rides along empty until its stage goes: put a Radial Decoupler between it and the core"
         or string.format("%d side boosters have no radial decoupler — they can't be dropped when they run dry and ride along empty until their stage goes: put a Radial Decoupler between each and the core", lbo.n)
@@ -1768,43 +1810,277 @@ function launchCheck()
   end
   -- A ring a fraction of a degree off true: a hint, not a warning (LAUNCH
   -- doesn't ask about it).
-  local hints = {}
+  local hints, huid = {}, {}
   local rt = ringTwist()
   if rt then
     local p = parts[rt.uid]
+    huid[#hints + 1] = checkUids(function(q) return q.sym == rt.sym end)
     hints[#hints + 1] = string.format("the %s ring (×%d) is twisted %.2f° round the craft's axis, off its symmetry — select one and press SPACE to square the whole ring up",
       p and p.def.label or "part", rt.n, rt.deg)
   end
-  if not has.chute and has.crewed and not (has.wheel and not has.engine) then
+  if not has.chute and has.crewed and not (has.wheel and not has.engine) and not plane then
     rank[#warn + 1] = 0
+    wuid[#warn + 1] = checkUids(function(p) return p.def.kind == "crewed" end)
     warn[#warn + 1] = "no parachute — the pod will not survive the landing"
   end
   if has.wheel then
-    for _, w in ipairs(wheelChecks()) do rank[#warn + 1] = 1; warn[#warn + 1] = w end
+    local wu = checkUids(function(p) return p.def.wheel ~= nil end)
+    for _, w in ipairs(wheelChecks()) do rank[#warn + 1] = 1; wuid[#warn + 1] = wu; warn[#warn + 1] = w end
   end
-  for _, w in ipairs(roboLoopChecks({})) do rank[#warn + 1] = 1; warn[#warn + 1] = w end
-  for _, w in ipairs(roboTowChecks({})) do rank[#warn + 1] = 2; warn[#warn + 1] = w end
+  local ru = nil
+  for _, w in ipairs(roboLoopChecks({})) do
+    ru = ru or checkUids(function(p) return p.def.robo ~= nil end)
+    rank[#warn + 1] = 1; wuid[#warn + 1] = ru; warn[#warn + 1] = w
+  end
+  for _, w in ipairs(roboTowChecks({})) do
+    ru = ru or checkUids(function(p) return p.def.robo ~= nil end)
+    rank[#warn + 1] = 2; wuid[#warn + 1] = ru; warn[#warn + 1] = w
+  end
   -- A probe with nothing aboard to keep it powered is a probe that goes dark
   -- before it gets anywhere. Say how long it has.
   if has.probe and not has.crewed then
     local pw = powerStats()
-    if pw and pw.solar <= 0 and pw.idle > 0 then
+    if pw and pw.solar <= 0 and pw.idle > 0 and pw.store > 0 then
       local secs = pw.store / pw.idle
       if secs < 600 then
+        wuid[#warn + 1] = checkUids(function(p) return p.def.kind == "probe" end)
         warn[#warn + 1] = string.format("no solar panels — the probe runs flat after ≈ %d min idle", math.floor(secs / 60 + 0.5))
       end
     end
   end
-  local order = {}
-  for i = 1, #warn do order[i] = i end
-  table.sort(order, function(x, y)
-    local rx, ry = rank[x] or 2, rank[y] or 2
-    if rx ~= ry then return rx < ry end
-    return x < y
-  end)
+  -- THE CRAFT CHECK's rows: the lines above (their text is their head), then
+  -- craft_check's (cached per edit)
+  local rows = {}
+  for i = 1, #warn do
+    rows[#rows + 1] = { id = "L" .. i, sev = "warn", rank = rank[i] or 2, head = warn[i], uids = wuid[i] or {} }
+  end
+  for i = 1, #hints do
+    rows[#rows + 1] = { id = "H" .. i, sev = "note", rank = 2, head = hints[i], uids = huid[i] or {} }
+  end
+  local res = checkRun()
+  for _, r in ipairs(res and res.rows or {}) do rows[#rows + 1] = r end
+  local CC = checkLib()
+  if CC and CC.sortRows then CC.sortRows(rows) else checkSort(rows) end
   local sorted = {}
-  for i, k in ipairs(order) do sorted[i] = warn[k] end
-  return { warn = sorted, has = has, hints = hints }
+  for _, r in ipairs(rows) do if r.sev == "warn" then sorted[#sorted + 1] = r.head end end
+  return { warn = sorted, has = has, hints = hints, rows = rows, kind = res and res.kind or nil, check = res }
+end
+
+-- ── THE CRAFT CHECK (scripts/craft_check.lua on the CraftCheckLib node) ─────
+-- The rulebook is pure: the builder hands it a context (checkContext) and
+-- keeps its answer per edit (checkRun: keyed on the craft's version, the
+-- fairings' shapes, the launch site, the world and the crew plan). Nothing
+-- here runs per frame; a hovered row's outline is drawn from its uid list.
+function checkLib()
+  local L = lib("craft_check")
+  if not L and not W.chk_asked and spawn then
+    W.chk_asked = true
+    pcall(spawn, "CraftCheckLib", vec3(0, 0, 0))
+  end
+  if L and type(L.run) ~= "function" then return nil end
+  -- PHASE 4 (§3.4, §3.5): heat, radiation and rods (thermal.lua), crew roles
+  if L and not W.chk_p4 then
+    W.chk_p4 = true
+    W.chk_hooks = W.chk_hooks or {}
+    W.chk_hooks.heat = W.chk_hooks.heat or L.heatRules
+    W.chk_hooks.crew = W.chk_hooks.crew or L.crewRules
+  end
+  return L
+end
+-- the parts a predicate picks, sorted (at most 200)
+function checkUids(pred)
+  local out = {}
+  for u, p in pairs(parts) do if pred(p) then out[#out + 1] = u end end
+  table.sort(out)
+  while #out > 200 do out[#out] = nil end
+  return out
+end
+CHK_SEV = { block = 0, warn = 1, note = 2 }
+function checkSort(rows)
+  for i, r in ipairs(rows) do r._i = r._i or i end
+  table.sort(rows, function(a, b)
+    local sa, sb = CHK_SEV[a.sev] or 1, CHK_SEV[b.sev] or 1
+    if sa ~= sb then return sa < sb end
+    if (a.rank or 2) ~= (b.rank or 2) then return (a.rank or 2) < (b.rank or 2) end
+    return a._i < b._i
+  end)
+  return rows
+end
+-- Who rides where, in tonnes (vessel_controller CREW_TU: CREW_T a seat): the
+-- CREW tab's plan, else the one who walked in, at the first command seat.
+function checkCrew(CT)
+  local out = {}
+  local bc = findScript and findScript("builder_crew") or nil
+  local plan = (bc and bc.valid ~= false and bc.seatPlan) and bc.seatPlan() or nil
+  local any = false
+  for uid, slots in pairs(plan or {}) do
+    if parts[uid] then
+      for _, m in pairs(slots) do if m then out[uid] = (out[uid] or 0) + CT; any = true end end
+    end
+  end
+  if not any then
+    local best
+    for u, p in pairs(parts) do
+      local crewed = p.def.seat or (p.def.kind == "crewed" and not (p.def.mods and checkCabinOnly(p.def)))
+      if crewed and (not best or u < best) then best = u end
+    end
+    if best then out[best] = CT end
+  end
+  return out
+end
+function checkCabinOnly(def)
+  for _, m in ipairs(def.mods or {}) do if m.type == "command" then return false end end
+  return true
+end
+function checkContext()
+  local CC = checkLib()
+  local w = launchWorld()
+  local A, CM, AD, E = lib("aero"), ctrlLib(), lib("auto_drive"), elib()
+  local cp = {}
+  for u, p in pairs(parts) do
+    if not p.carried then
+      cp[u] = { uid = u, id = p.id, def = liveDef(p.def) or p.def, x = p.x, y = p.y, z = p.z, yaw = p.yaw or 0,
+                pitch = p.pitch or 0, roll = p.roll or 0, parent = p.parent, att = p.att, sym = p.sym, size = p.size,
+                cfg = p.def.wheel and wheelCfg(u) or nil }
+    end
+  end
+  local keep = stageKeep()
+  local dmemo = {}
+  local fits = {}
+  local chains = {}
+  for u, p in pairs(parts) do
+    if p.def.fairing then fits[u] = fairingFit(u) or false end
+    if p.def.proc == "chain" and type(p.size) == "table" then
+      local e, wh = parts[p.size.e or -1], p.size.w
+      local m = e and gasModOf(e.def)
+      if m and parts[wh or -1] then chains[wh] = { e = p.size.e, mod = m, teeth = tonumber(p.size.teeth) or 48 } end
+    end
+  end
+  local fx, fz = craftFront()
+  local ok, items = pcall(sync_stage_order)
+  return {
+    parts = cp, world = w, worldRec = w.name and save.get("world." .. w.name) or nil, sigma = padAir(w),
+    site = launchSite(), fuel_t = FUEL_T_PER_UNIT, rk = rating().thrust,
+    stageIdx = ok and STAGEM.index(stage_order, items or {}) or nil,
+    drops = function(u)
+      local d = dmemo[u]
+      if not d then d = stageDrops(u, keep); dmemo[u] = d end
+      return d
+    end,
+    fairings = fits, power = powerStats, mode = ctrlMode(), front = { x = fx, z = fz },
+    rec = function(u) local p = parts[u]; return p and { uid = u, id = p.id, mods = part_mods(p.def) } or nil end,
+    crew = checkCrew(CC and CC.flight and CC.flight("CREW_T") or 0.1),
+    def = function(id) return REG[id] end,
+    gasEngines = function()
+      local list = {}
+      for _, id in ipairs(registryIds()) do
+        local d = REG[id]
+        local m = d and gasModOf(d)
+        if m then list[#list + 1] = { id = id, label = d.label or id, mod = m, mass = d.mass } end
+      end
+      table.sort(list, function(a, b) return (a.mod.nm or 0) < (b.mod.nm or 0) end)
+      return list
+    end,
+    chains = chains, libs = { aero = A, craft_mode = CM, auto_drive = AD, electronics = E, thermal = thermal_lib() },
+    flight = findScript and findScript("vessel_controller") or nil,
+    hooks = W.chk_hooks,
+    thermal = thermalBudget,
+    rods = function()
+      if save.get("game.mode") == "sandbox" then return math.huge end
+      local inv = findScript and findScript("inventory") or nil
+      return (inv and inv.itemCount and inv.itemCount("base", "fuelRod")) or 0
+    end,
+    seated = function()
+      local bc2 = findScript and findScript("builder_crew") or nil
+      local cr = findScript and findScript("crew") or nil
+      local plan = (bc2 and bc2.valid ~= false and bc2.seatPlan) and bc2.seatPlan() or nil
+      local outl = {}
+      for uid, slots in pairs(plan or {}) do
+        if parts[uid] then
+          for _, id in pairs(slots) do
+            if id then
+              local role = cr and cr.role and cr.role(id) or nil
+              local rec = cr and cr.get and cr.get(id) or nil
+              outl[#outl + 1] = { id = id, uid = uid, role = role, roleName = cr and cr.roleName and cr.roleName(id) or nil,
+                                  level = cr and cr.level and cr.level(id) or nil, name = rec and rec.name or tostring(id) }
+            end
+          end
+        end
+      end
+      table.sort(outl, function(a, b) return tostring(a.id) < tostring(b.id) end)
+      return outl
+    end,
+  }
+end
+-- The craft check's answer for the craft as it stands: run once per edit.
+-- (perfCounters().check_ms: what the last run cost)
+function checkRun()
+  local CC = checkLib()
+  if not (CC and lib("aero")) then return nil end
+  local c = W.cache
+  -- (the key: the craft, its fairings' shapes, the site, the launch world,
+  -- the crew plan, and whether the mode library has answered yet)
+  local bc = findScript and findScript("builder_crew") or nil
+  local csig = (bc and bc.valid ~= false and bc.sig) and bc.sig() or ""
+  local lw = save.get("launch.world")
+  local wk = type(lw) == "table" and lw.name or save.get("g_scale")
+  local k = c.chk_k
+  if c.chk and k and k[1] == craftVersion and k[2] == W.sv and k[3] == (W.shape_v or 0) and k[4] == partCount
+    and k[5] == launchSiteChoice and k[6] == wk and k[7] == csig and k[8] == (ctrlLib() ~= nil) then
+    return c.chk
+  end
+  local key = { craftVersion, W.sv, W.shape_v or 0, partCount, launchSiteChoice, wk, csig, ctrlLib() ~= nil }
+  local t0 = libClock()
+  local ok, res = pcall(function() return CC.run(checkContext()) end)
+  if not ok then
+    if log then log("craft check: " .. tostring(res)) end
+    res = { rows = {} }
+  end
+  res.total_ms = (libClock() - t0) * 1000
+  W.check_ms = res.total_ms
+  c.chk, c.chk_k = res, key
+  return res
+end
+-- PHASE 4 (work/vabcheck/PLAN.md §3.4 crew roles, §3.5 heat and RTGs): a
+-- rule another script adds — fn(ctx, out, k) appends rows to `out` the way
+-- craft_check's own rules do (ctx is checkContext's; k the run's shared
+-- figures). nil removes it. The check runs again on the next ask.
+function checkHook(name, fn)
+  W.chk_hooks = W.chk_hooks or {}
+  W.chk_hooks[name] = fn
+  W.cache.chk = nil
+end
+-- A row by its id, from the cached check.
+function checkRow(id)
+  local L = stats().launch
+  for _, r in ipairs(L and L.rows or {}) do if r.id == id then return r end end
+  return nil
+end
+-- THE PANEL'S HOVER: a row's parts outlined in its colour while the pointer
+-- is on it (called each frame by the INSPECT plate while hovered; it lapses
+-- 0.15 s after the last call). tone "danger" | "warn" | "done".
+function checkHighlight(uids, tone)
+  W.chk_hi = { uids = uids or {}, tone = tone, t = time or 0 }
+end
+-- Click: select the row's parts (the inspector follows them).
+function checkSelect(id)
+  local r = checkRow(id)
+  if not (r and r.uids and #r.uids > 0) then return false end
+  select(r.uids, "set")
+  local n = #r.uids
+  local p = parts[r.uids[1]]
+  hint(string.format("selected %s%s — ESC to come back", n == 1 and "the " or (n .. " parts: the "),
+    p and p.def.label or "part"), 3.0)
+  return true
+end
+-- The row's FIX key: one history step (a command) or a part in the hand.
+function checkFix(id)
+  local r = checkRow(id)
+  local f = r and r.fix
+  if not f then return false end
+  if f.hold then return hold(f.hold) end
+  if f.cmd then return cmd(f.cmd, f.args) end
+  return false
 end
 
 -- THE LAUNCH STAGE'S BALANCE, as the flight will feel it: the engines below
@@ -2341,9 +2617,14 @@ end
 function powerStats()
   local E = elib()
   if not E then return nil end
+  -- (one summary per edit: the launch check, the wheel checks and the
+  -- readout all ask)
+  local c = W.cache
+  if c.pw and c.pw_v == craftVersion and c.pw_n == partCount then return c.pw end
   local recs = craft_records()
   local s = E.summary(recs, 1.0)
   s.records = recs
+  c.pw, c.pw_v, c.pw_n = s, craftVersion, partCount
   return s
 end
 
@@ -2507,7 +2788,13 @@ function refreshStatsNow()
   local status = chk.block and ("⚠ " .. chk.block) or next_step(chk.has)
   local whole = (chk.has.engine and (chk.has.chute or not chk.has.crewed) and chk.has.tank)
     or (chk.has.wheel and not chk.has.engine and (chk.has.wheels or 0) >= 3)
-  if not chk.block and whole and #chk.warn > 0 then status = "⚠ " .. chk.warn[1] end
+    or (chk.kind == "aircraft" and chk.has.engine) or (chk.kind == "rover" and chk.has.wheel)
+  -- (the craft check's worst warning that matters in the air: rank 0 or 1)
+  if not chk.block and whole then
+    for _, r in ipairs(chk.rows or {}) do
+      if r.sev == "warn" and (r.rank or 2) <= 1 then status = "⚠ " .. r.head break end
+    end
+  end
   local mass_s = (mass > dry + 1e-6) and string.format("%.2f t (%.2f dry)", mass, dry)
     or string.format("%.2f t", mass)
   set_stats(string.format("%d %s  ·  %s%s\n%s\n%s\ntool: %s%s%s%s",
@@ -5589,6 +5876,8 @@ function start(node)
   -- parts spawn INTO the frame: if builder_space isn't reachable yet (script
   -- start order), the load waits for the first frame that has it
   if W.F then load_blueprint() else W.load_wait = true end
+  -- (the rulebooks the craft check reads come up now, not on the first ask)
+  checkLib(); ctrlLib()
   refreshStatsNow()
 end
 
@@ -6861,7 +7150,24 @@ end
 -- huge function stays under LuaJIT's 60-upvalue-per-function ceiling.
 function handle_staging(clicked, lmb, grab_mode)
   draw_stage_badges()
+  draw_check_highlight()
   return false
+end
+-- THE CRAFT CHECK's hovered row (checkHighlight): its parts in its colour,
+-- for as long as the INSPECT plate keeps asking (the pointer is on the plate,
+-- so this draws whoever owns the mouse)
+function draw_check_highlight()
+  local hi = W.chk_hi
+  if hi and (time or 0) - hi.t < 0.15 then
+    local cr, cg, cb = 1.0, 0.80, 0.28
+    if hi.tone == "danger" then cr, cg, cb = 0.97, 0.34, 0.25 elseif hi.tone == "done" then cr, cg, cb = 0.55, 0.85, 0.42 end
+    for k = 1, math.min(#hi.uids, 200) do
+      local p = parts[hi.uids[k]]
+      if p and not p.carried then outline(p, cr, cg, cb, 1.0) end
+    end
+  elseif hi then
+    W.chk_hi = nil
+  end
 end
 
 -- THE MODES, always on screen (bottom centre): symmetry as a row of chips —
@@ -8426,7 +8732,16 @@ function doLaunch()
   end
   if #chk.warn > 0 and not (launchArmedAt and time - launchArmedAt <= LAUNCH_CONFIRM) then
     launchArmedAt = time
-    hint("⚠ " .. table.concat(chk.warn, "  ·  ") .. "  —  press LAUNCH again to fly it anyway", LAUNCH_CONFIRM)
+    -- (rank 2 advice doesn't nag: it is counted, and lives in CRAFT CHECK)
+    local worst, rest = {}, 0
+    for _, r in ipairs(chk.rows or {}) do
+      if r.sev == "warn" then
+        if (r.rank or 2) <= 1 and #worst < 3 then worst[#worst + 1] = r.head else rest = rest + 1 end
+      end
+    end
+    if #worst == 0 then worst = { chk.warn[1] }; rest = #chk.warn - 1 end
+    hint("⚠ " .. table.concat(worst, "  ·  ") .. (rest > 0 and string.format("  ·  +%d more in CRAFT CHECK", rest) or "")
+      .. "  —  press LAUNCH again to fly it anyway", LAUNCH_CONFIRM)
     ui("tool", 0.7)
     return false
   end
@@ -8617,7 +8932,11 @@ function stats()
     cot = (th > 0) and { x = tx / th, y = ty / th, z = tz / th } or nil,
     launch = launchCheck(), version = craftVersion, islands = #(comps or {}), loose = nl,
   }
-  API.stats, API.stats_cv, API.stats_t = out, craftVersion, time
+  -- (until the craft check's and the mode's libraries have come up — they
+  -- are spawned on the first ask and answer a frame later — the answer is
+  -- not kept, so the first craft on the stand gets its check too)
+  local ready = checkLib() ~= nil and ctrlLib() ~= nil
+  API.stats, API.stats_cv, API.stats_t = out, ready and craftVersion or -1, time
   return out
 end
 
@@ -8710,7 +9029,7 @@ function frameMs()
 end
 function perfCounters()
   return { visits = W.visits, hashParts = W.H and W.H:count() or 0, hashVisits = W.H and W.H.visits or 0,
-           links = W.G and W.G:count() or 0, queued = #W.queue - W.qhead + 1 }
+           links = W.G and W.G:count() or 0, queued = #W.queue - W.qhead + 1, check_ms = W.check_ms }
 end
 function hiddenUids()
   local out = {}

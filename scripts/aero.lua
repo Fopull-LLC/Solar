@@ -509,6 +509,26 @@ function jetMach(M, mmax)
   return (1 + 0.15 * M * M) * exp(-(M / m2) ^ 4)
 end
 
+-- THE JETS' AIR: what the intakes take in flying at velocity v (craft frame)
+-- and Mach M against what the jets need. An intake facing the flow takes all
+-- of its area, one square to it 60 %, one facing back 60 %; ram air adds 80 %
+-- at Mach 1. Standing still (V ≤ 0.5) every intake counts as facing the flow.
+-- → the share of their air the jets get (0…1), the supply and the demand
+-- (m²). step() lights the jets on this; the builder's craft check reads it.
+function intakeFace(it, vx, vy, vz)
+  local V = sqrt(vx * vx + vy * vy + vz * vz)
+  local face = V > 0.5 and (it.Y.x * vx + it.Y.y * vy + it.Y.z * vz) / V or 1
+  return 0.6 + 0.4 * max(0, face)
+end
+function airShareOf(M, vx, vy, vz, Mach)
+  local supply, demand = 0, 0
+  for _, it in ipairs(M.intakes) do
+    supply = supply + it.A * intakeFace(it, vx, vy, vz) * (1 + 0.8 * (Mach or 0))
+  end
+  for _, j in ipairs(M.jets) do demand = demand + j.need end
+  return demand > 0 and min(1, supply / demand) or 0, supply, demand
+end
+
 -- THE TICK. env (craft frame unless said):
 --   vx,vy,vz   the centre of mass's velocity through the AIR (wind removed)
 --   wx,wy,wz   angular velocity
@@ -588,13 +608,7 @@ function step(M, env)
     lift = sqrt(px * px + py * py + pz * pz)
   end
   -- JETS: spool toward the throttle; thrust by the air they get
-  local supply, demand = 0, 0
-  for _, it in ipairs(M.intakes) do
-    local face = V > 0.5 and (it.Y.x * vx + it.Y.y * vy + it.Y.z * vz) / V or 1
-    supply = supply + it.A * (0.6 + 0.4 * max(0, face)) * (1 + 0.8 * Mach)
-  end
-  for _, j in ipairs(M.jets) do demand = demand + j.need end
-  local airf = demand > 0 and min(1, supply / demand) or 0
+  local airf = airShareOf(M, vx, vy, vz, Mach)
   local sigma = rho / RHO0
   local o2 = env.o2 or 1
   for _, j in ipairs(M.jets) do
@@ -654,7 +668,7 @@ end
 -- i.e. m²·CL / 1000) and its direction; nil when nothing lifts.
 function centerOfLift(parts, opts)
   opts = opts or {}
-  local M = build(parts, opts)
+  local M = opts.model or build(parts, opts)
   local n, t = frameOf(parts)
   if opts.nose then n = opts.nose end
   if opts.top then t = opts.top end
@@ -692,13 +706,14 @@ end
 
 -- STATIC MARGIN: how far the centre of lift sits behind the centre of mass
 -- along the nose, in metres (positive = stable) and in mean chords.
+-- (opts.model: a model already built from these parts, reused by both reads)
 function staticMargin(parts, opts)
   local lx, ly, lz = centerOfLift(parts, opts)
   local mx, my, mz = centerOfMass(parts)
   if not (lx and mx) then return nil end
   local n = frameOf(parts)
   local d = (mx - lx) * n.x + (my - ly) * n.y + (mz - lz) * n.z
-  local M = build(parts, opts)
+  local M = (opts and opts.model) or build(parts, opts)
   local S, c = 0, 0
   for _, s in ipairs(M.surfs) do if not s.ctl then S, c = S + s.S, c + s.S * s.mac end end
   return d, S > 0 and d / (c / S) or nil
@@ -706,8 +721,9 @@ end
 
 -- Wing area and the speed it stalls at for mass m (t) on a world of gravity g
 -- in air of density rho, level flight: v = √(2·m·g / (ρ·S·CLmax)).
-function stallSpeed(parts, m, g, rho)
-  local M = build(parts)
+-- (opts.model: a model already built from these parts, reused)
+function stallSpeed(parts, m, g, rho, opts)
+  local M = (opts and opts.model) or build(parts)
   local _, top = frameOf(parts)
   local S, CLmax = 0, 0
   for _, s in ipairs(M.surfs) do
