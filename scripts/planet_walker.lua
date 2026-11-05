@@ -8,6 +8,9 @@
 --
 --   W A S D   move (camera-relative)      SPACE  jump (when grounded)
 --   SHIFT     hold to sprint
+--   CTRL      hold to crouch               C      crouch (the Crouch action:
+--             rebindable, toggle or hold by Settings ▸ Controls)
+--   SHIFT + crouch at a run: a slide
 
 defaults = {
   --@header Movement
@@ -59,6 +62,61 @@ defaults = {
   -- the RCS Pack own it; see `stand_down`.
   --@range 10 60 --@units m/s
   float_fast = 15.0,
+
+  --@header Load (the pack's weight)
+  -- A pack this light is not felt at all (kg of what it holds).
+  --@range 0 60 --@units kg
+  pack_free = 15.0,
+  -- …and at this much the load is all the legs can take (the pack's 90 kg
+  -- cap): between the two the effect rises smoothly, slow at first.
+  --@range 20 200 --@units kg
+  pack_heavy = 90.0,
+  -- What a full load takes off: the walk, the sprint (a run suffers most),
+  -- the jump's speed and how quickly you get going (shares, 0..1).
+  --@range 0 1
+  pack_walk = 0.25,
+  --@range 0 1
+  pack_run = 0.45,
+  --@range 0 1
+  pack_jump = 0.3,
+  --@range 0 1
+  pack_accel = 0.35,
+
+  --@header Crouch and slide
+  -- The capsule's height crouched (standing: the scene's 2.0 m).
+  --@range 0.8 2 --@units m
+  crouch_h = 1.3,
+  -- The crouched walk, as a share of the walk.
+  --@range 0.1 1
+  crouch_speed = 0.45,
+  -- How much lower the eyes go than the capsule's own drop (m).
+  --@range 0 0.6 --@units m
+  crouch_eye = 0.25,
+  -- A slide starts from a sprint at least this fast, and ends below
+  -- `slide_end` (into a crouch).
+  --@range 2 12 --@units m/s
+  slide_min = 5.5,
+  --@range 0.5 6 --@units m/s
+  slide_end = 2.2,
+  -- Kinetic friction of a suit on the ground: on the flat a 9 m/s slide
+  -- runs ~1.3 s and ~7 m; a slope adds its own pull (down 25° it barely slows).
+  --@range 0.1 1.5
+  slide_mu = 0.55,
+  -- How fast a slide can be steered (rad/s).
+  --@range 0 4 --@units rad/s
+  slide_steer = 1.0,
+
+  --@header Walls
+  -- Friction of a steep face you are sliding down in the air: the face takes
+  -- part of your weight (its cos to the vertical) and this much of that load
+  -- comes off your speed along it. 0: a frictionless chute.
+  --@range 0 1.5
+  wall_mu = 0.6,
+  -- A contact against a face no taller than this over the soles is a step
+  -- (the kerb's pop climbs it); a taller one is a wall and the walk into it
+  -- is taken out, so you slide along it at the speed along it.
+  --@range 0.1 1 --@units m
+  step_h = 0.45,
 
   --@header Character model
   -- Facing offset (radians) added to the character's yaw — flip by π if the
@@ -188,11 +246,79 @@ local FOOTSTEPS = "audio/kenney/impact/footstep_concrete_00"
 -- keys. `f`/`s` are forward and right (−1..1) in the camera's frame; `jump`
 -- jumps once, the next time the feet are down; `climb` is SPACE (+1) or CTRL
 -- (−1) in the water.
+-- `crouch` holds the crouch (a slide, at a sprint).
 local steer_f, steer_s, steer_sprint, steer_jump, steer_climb = nil, 0.0, false, false, 0
-function steer(f, s, sprint, jump, climb)
+local steer_crouch = false
+function steer(f, s, sprint, jump, climb, crouch)
   steer_f, steer_s, steer_sprint, steer_jump = f, s or 0.0, sprint == true, jump == true
   steer_climb = climb or 0
+  steer_crouch = crouch == true
 end
+
+-- ── LOAD, CROUCH, SLIDE, IMPACTS: the pure rules (tests/smoke_walker.lua) ───
+-- How much the pack's load bears on the legs, 0..1, from what it holds (kg):
+-- nothing up to `free`, all of it at `heavy`, a smoothstep between — a few
+-- kilos of ore are not felt, a full pack is a slog.
+function encumbranceOf(kg, free, heavy)
+  free, heavy = free or 15, heavy or 90
+  if not kg or kg <= free then return 0 end
+  local t = math.min(1, (kg - free) / math.max(1e-3, heavy - free))
+  return t * t * (3 - 2 * t)
+end
+-- The multipliers a load of encumbrance `e` puts on the walk, the sprint,
+-- the jump's speed and the pick-up (p: the walker's params).
+function loadMults(e, p)
+  p = p or defaults
+  return 1 - (p.pack_walk or 0.25) * e, 1 - (p.pack_run or 0.45) * e,
+         1 - (p.pack_jump or 0.3) * e, 1 - (p.pack_accel or 0.35) * e
+end
+-- One frame of a slide: the velocity (vx, vy, vz, in the tangent plane), the
+-- ground's downhill pull (nh: the ground normal's part across the tangent
+-- plane, |nh| = sin of the slope, pointing downhill; nu: its cos), g, the
+-- friction and dt → the new velocity. The slope pulls g·cos·sin downhill and
+-- friction takes µ·g·cos off the speed: on the flat a slide only bleeds, down
+-- a slope steeper than atan(µ) it gathers speed.
+function slideStep(vx, vy, vz, nhx, nhy, nhz, nu, g, mu, dt)
+  local k = g * nu * dt
+  vx, vy, vz = vx + nhx * k, vy + nhy * k, vz + nhz * k
+  local sp = math.sqrt(vx * vx + vy * vy + vz * vz)
+  if sp < 1e-6 then return 0, 0, 0 end
+  local ns = math.max(0, sp - mu * k)
+  local f = ns / sp
+  return vx * f, vy * f, vz * f
+end
+-- THE IMPACT a landing takes: the speed INTO the surface met (the velocity
+-- just before touchdown against that surface's normal), never the speed along
+-- it. Falling flat onto level ground is the whole fall speed; landing on a
+-- 45° slope is 71% of it; brushing down a wall, or running into a step, is
+-- nothing.
+function impactOf(vx, vy, vz, nx, ny, nz)
+  return math.max(0, -(vx * nx + vy * ny + vz * nz))
+end
+
+-- Published: the load (`packKg`, `encumbrance` 0..1), the crouch (`crouching`,
+-- `crouchAmount` 0..1 eased, `eyeDrop` m below the standing eye), the slide
+-- (`sliding`), the last landing (`landSeq`, `landSpeed` m/s into the ground)
+-- and the last impact the fall rule judges (`impactSeq`, `impactSpeed`).
+packKg = 0
+encumbrance = 0.0
+packOverride = nil      -- probes: a pack weight (kg) in place of the pack's own
+crouching = false
+crouchAmount = 0.0
+eyeDrop = 0.0
+sliding = false
+moveSpeed = 0.0         -- ground speed (m/s) this frame
+fallSpeed = 0.0         -- m/s down, in the air
+landSeq, landSpeed = 0, 0.0
+impactSeq, impactSpeed = 0, 0.0
+local crouch_toggled = false
+local crouch_in_prev = false
+local crouch_was = false
+local low = false        -- the capsule is at its crouched height
+local low_shift = 0.0    -- how far the capsule's centre sits under its standing place (m)
+local slide_t = 0.0
+local last_vup = 0.0     -- the up speed written last frame (the air's contact cap)
+local imp = { air = 0.0, v = nil, px = nil, py = nil, pz = nil, contact = true }
 
 -- Cross-script singletons, resolved once and kept: `findScript` walks the whole
 -- scene (floptle/0063), and asking every frame is what made this project do a
@@ -766,9 +892,12 @@ local function footstep(node, from, to)
   if not (vfx_ref and vfx_ref.valid) then vfx_ref = findScript and findScript("vfx") end
   if vfx_ref then vfx_ref.step(node.x, node.y, node.z) end
   local n = math.floor(time * 137.0) % 5
+  -- Crouched, a step is placed, not planted: a third of the sound, carried a
+  -- third as far; a heavy pack lands a little harder.
+  local q = 1 - 0.68 * crouchAmount
   audio.play(FOOTSTEPS .. n .. ".ogg", node,
-    { track = "SFX", volume = 0.5, mode = "spatial", falloff = "inverse",
-      minDistance = 3.0, maxDistance = 60.0 })
+    { track = "SFX", volume = 0.5 * q * (1 + 0.25 * encumbrance), mode = "spatial", falloff = "inverse",
+      minDistance = 3.0, maxDistance = 60.0 * q })
 end
 
 -- Drive the layers from what the body is actually doing.
@@ -883,6 +1012,12 @@ local HIP_Y, HIP_Z = -0.30701, 0.01622   -- the Hip joint from Back's origin
 local ANKLE = 0.0722        -- the ankle over the sole, standing flat
 local TOE = vec3(0.0, -0.2546, 0.9671)   -- a foot's rest heel-to-toe, skeleton space
 local HIP_DROP_MAX = 0.3    -- under a bent leg's reach, or the low foot can't get there
+local CROUCH_DROP = 0.42    -- how far a crouch lowers the hips (the knees take it)
+-- The steepest ground walked up (the engine's own slope limit is 60°; a
+-- suited walker on loose ground is done well before that).
+local WALK_SLOPE = math.rad(52)
+local WALK_SLOPE_COS, WALK_SLOPE_TAN = math.cos(WALK_SLOPE), math.tan(WALK_SLOPE)
+local CLIMB_MAX = 3.0       -- m/s of climb the legs make up a slope (unloaded)
 local REACH_UP, REACH_DOWN = 0.5, 0.6    -- how far above / below the soles a foot looks
 
 local bank_s, pitch_s, twist_s = 0.0, 0.0, 0.0
@@ -953,9 +1088,11 @@ local function lean(dt, spd, on_ground)
     accel_s = 0.0
   end
   last_spd = spd
+  -- Crouched, the chest leans over the knees; sliding, it sits back.
+  local lean_k = sliding and -0.32 or 0.34
   local k = 1 - math.exp(-8 * dt)
   bank_s = bank_s + (math.clamp(bank, -0.3, 0.3) - bank_s) * k
-  pitch_s = pitch_s + (math.clamp(pitch, -0.2, 0.25) - pitch_s) * k
+  pitch_s = pitch_s + (math.clamp(pitch, -0.2, 0.25) + lean_k * crouchAmount - pitch_s) * k
 
   local b = bank_s * 0.7
   if math.abs(b) > 1e-4 then
@@ -1196,11 +1333,16 @@ local function plant(node, dt, up, stand_want, stride_want)
   end
   plant_drop = plant_drop + (math.min(HIP_DROP_MAX, -low) - plant_drop) * (1 - math.exp(-10 * dt))
   local wsum = math.min(1.0, plant_w + stride_w)
-  anim:addBonePos("MaleArm", vec3(0, -plant_drop * wsum, 0))
-  ma_dy = ma_dy - plant_drop * wsum
-  feet.plant, feet.stride, feet.drop = plant_w, stride_w, plant_drop * wsum
+  -- CROUCHED the hips go down on top of that, and the legs, still reaching
+  -- for the same ground, fold (the knees bend forward over the toes);
+  -- a slide sits lower still.
+  local cd = crouchAmount * (sliding and CROUCH_DROP + 0.1 or CROUCH_DROP) * wsum
+  local drop = plant_drop * wsum + cd
+  anim:addBonePos("MaleArm", vec3(0, -drop, 0))
+  ma_dy = ma_dy - drop
+  feet.plant, feet.stride, feet.drop = plant_w, stride_w, drop
   -- The hip joints, after that drop: what each leg can reach from.
-  local hips = ma - up * (plant_drop * wsum) - up * (MA_UP - 0.974)
+  local hips = ma - up * drop - up * (MA_UP - 0.974)
   for _, side in ipairs(SIDES) do
     local h = hits[side]
     local out_dir = left * (side == "Left" and 1 or -1)
@@ -1738,6 +1880,135 @@ local function ground_net(node, ux, uy, uz, on_ground, swimming)
   return true
 end
 
+-- The capsule's height now (crouched or not).
+function body_h(node)
+  return (rig and rig.height) or WALK_H or 2.0
+end
+
+-- The local gravity (m/s²) at the body, from the world under it.
+local function local_g(node)
+  if space and space.dominant then
+    local name = space.dominant(node.x, node.y, node.z)
+    local b = name and space.body(name)
+    if b and b.mu then
+      local r2 = (node.x - b.x) ^ 2 + (node.y - b.y) ^ 2 + (node.z - b.z) ^ 2
+      if r2 > 1 then return b.mu / r2 end
+    end
+  end
+  return 9.8
+end
+
+-- Move the body along up by d metres in the TICK channel (the drawn pose
+-- follows at the next writeback): the frame-safe way to shift a body the
+-- planet is carrying metres a tick. A harness without tick poses moves x/y/z.
+local function shift_up(node, ux, uy, uz, d)
+  local ok = pcall(function()
+    local p = node.tickPos
+    node.tickPos = vec3(p.x + ux * d, p.y + uy * d, p.z + uz * d)
+  end)
+  if not ok then node.x, node.y, node.z = node.x + ux * d, node.y + uy * d, node.z + uz * d end
+end
+
+-- Room to stand: a ball swept up from the crouched centre to where the
+-- standing capsule's top would be. (A roof, a tunnel, the underside of a
+-- craft: you stay down until you are out from under it.)
+function standRoom(node, ux, uy, uz)
+  if not (low and spherecast) then return true end
+  local r = math.max(0.1, (WALK_R or 0.33) - 0.04)
+  local reach = (WALK_H - params.crouch_h) * (low_shift > 0.01 and 1.0 or 0.5) + params.crouch_h * 0.5 - r + 0.03
+  local ok, h = pcall(spherecast, vec3(node.x, node.y, node.z), vec3(ux, uy, uz), r, reach, node)
+  return not (ok and h and h.distance and not (h.node and h.node.id == node.id))
+end
+
+-- The capsule down to its crouched height, or back up. On the ground the
+-- feet stay where they are (the centre moves with the top); in the air the
+-- legs tuck (the centre stays). → true when it changed.
+local function set_low(node, want, ux, uy, uz, on_ground)
+  if not rig or want == low then return false end
+  local d = (WALK_H - params.crouch_h) * 0.5
+  if want then
+    rig.height = params.crouch_h
+    if on_ground then shift_up(node, ux, uy, uz, -d); low_shift = d else low_shift = 0.0 end
+    low = true
+  else
+    if not standRoom(node, ux, uy, uz) then return false end
+    rig.height = WALK_H
+    -- (in the air the legs come down only if there is air under them)
+    local up_by = low_shift
+    if not on_ground and raycast then
+      local h = raycast(node.x, node.y, node.z, -ux, -uy, -uz, WALK_H * 0.5 + 0.05, node)
+      if h and h.distance then up_by = math.max(up_by, WALK_H * 0.5 - h.distance + 0.02) end
+    end
+    if up_by > 0.001 then shift_up(node, ux, uy, uz, up_by) end
+    low, low_shift = false, 0.0
+  end
+  return true
+end
+
+-- WALLS (playtest 2026-11-05: "better physics with the character controller
+-- when interacting with walls right now it feels super slidy"). The walk into
+-- a wall used to be left in the velocity the controller holds: the solver took
+-- it out again every tick and turned what it could into speed along the face,
+-- so a run at a wall at 35° skated along it at 7-8 m/s instead of the 5.4 the
+-- angle leaves, and into the full sprint as the view followed (walkprobe
+-- wall_skim: 7.0 → 9.4 m/s along the wall). Now:
+--   * the part of the walk INTO a wall (node.wallNormal, the steepest face
+--     pressed this step) is taken out, so you slide along it at the speed
+--     along it, and stop dead against it head-on; a face no taller than
+--     `step_h` is a step, not a wall, and the kerb's pop still climbs it;
+--   * in the air a steep face you slide down carries part of your weight
+--     (its normal's up share), and Coulomb friction (`wall_mu`) takes that
+--     load off your speed along it: a slide down a rock face is slower than
+--     the drop it replaces, and the impact at its foot smaller.
+-- → the up speed (the friction can take some of it off).
+wallState = { pressed = false, cut = 0.0, rub = 0.0 }   -- probes
+function walls(node, dt, ux, uy, uz, vup, airborne)
+  local ws = wallState
+  ws.pressed, ws.cut, ws.rub = false, 0.0, 0.0
+  local wn = node.wallNormal
+  if not (wn and wn.x) then return vup end
+  local wu = wn.x * ux + wn.y * uy + wn.z * uz
+  local hx, hy, hz = wn.x - ux * wu, wn.y - uy * wu, wn.z - uz * wu
+  local hl = math.sqrt(hx * hx + hy * hy + hz * hz)
+  if hl < 0.2 then return vup end
+  hx, hy, hz = hx / hl, hy / hl, hz / hl
+  ws.pressed = true
+  -- A WALL, OR AN EDGE? The face at the height of a step over the soles:
+  -- there, it is a wall. (A kerb's face, and — in the air — the edge of a
+  -- ledge you are leaving, whose corner reads as a steep face behind you,
+  -- are not: taking the walk "into" that corner out stopped a sprint dead at
+  -- the lip of a drop and dropped the crew straight down it.)
+  local tall = false
+  if raycast then
+    local lift = -body_h(node) * 0.5 + params.step_h
+    local ox, oy, oz = node.x + ux * lift, node.y + uy * lift, node.z + uz * lift
+    local h = raycast(ox, oy, oz, -hx, -hy, -hz, (WALK_R or 0.33) + 0.25, node)
+    tall = h ~= nil and h.distance ~= nil
+  end
+  ws.tall = tall
+  if not tall then return vup end
+  local into = mvx * hx + mvy * hy + mvz * hz
+  if into < 0 then
+    mvx, mvy, mvz = mvx - hx * into, mvy - hy * into, mvz - hz * into
+    ws.cut = -into
+  end
+  if airborne and wu > 0.02 and (params.wall_mu or 0) > 0 then
+    local vx, vy, vz = mvx + ux * vup, mvy + uy * vup, mvz + uz * vup
+    local vn = vx * wn.x + vy * wn.y + vz * wn.z
+    local tx, ty, tz = vx - wn.x * vn, vy - wn.y * vn, vz - wn.z * vn
+    local tl = math.sqrt(tx * tx + ty * ty + tz * tz)
+    if tl > 1e-4 then
+      local cut = math.min(tl, params.wall_mu * local_g(node) * wu * dt)
+      local k = (tl - cut) / tl
+      vx, vy, vz = tx * k + wn.x * vn, ty * k + wn.y * vn, tz * k + wn.z * vn
+      vup = vx * ux + vy * uy + vz * uz
+      mvx, mvy, mvz = vx - ux * vup, vy - uy * vup, vz - uz * vup
+      ws.rub = cut
+    end
+  end
+  return vup
+end
+
 function update(node, dt)
   if not cam then cam = ref("planet_camera") end
   -- The character model rides as a child; keep its visibility mirrored to us so
@@ -1781,13 +2052,27 @@ function update(node, dt)
   -- (scenes/system.ron: radius 0.33, height 2.0)
   if rig and (rig.radius or WALK_R) < 0.1 then
     rig.radius, rig.height = WALK_R, WALK_H
+    low, low_shift = false, 0.0
     log("walker: the capsule was still a seat's point on foot — given its size back")
+  end
+  -- (and its height is the crouch's or the standing one, nothing a seat left)
+  if rig then
+    local want_h = low and params.crouch_h or WALK_H
+    if math.abs((rig.height or want_h) - want_h) > 0.02 then
+      if low then low, low_shift = false, 0.0 end
+      rig.height = WALK_H
+    end
   end
   -- (the pack's weight on the body: bodyMass, written when it moves)
   if rig then
     local m = bodyMass()
     if math.abs((rig.mass or 0) - m) > 1e-4 then rig.mass = m end
   end
+  -- THE LOAD ON THE LEGS (playtest 2026-11-05, "heavy pack should slow your
+  -- walking"): what the pack holds, over the 100 kg of person and suit.
+  packKg = packOverride or math.max(0, (bodyMass() - ((params and params.mass) or 0.10)) * 1000)
+  encumbrance = encumbranceOf(packKg, params.pack_free, params.pack_heavy)
+  local m_walk, m_run, m_jump, m_acc = loadMults(encumbrance, params)
   local cam_hides = cam ~= nil and cam.hidesBody == true
   if not node.visible and not cam_hides then node.visible = true end
   if model then model.visible = node.visible end
@@ -1820,18 +2105,40 @@ function update(node, dt)
   local rz = fx * uy - fy * ux
 
   local f, s, sprint = 0, 0, false
+  local crouch_in
   if steer_f then
     f, s, sprint = steer_f, steer_s, steer_sprint
+    crouch_in = steer_crouch
   else
     if input.key("w") then f = f + 1 end
     if input.key("s") then f = f - 1 end
     if input.key("d") then s = s + 1 end
     if input.key("a") then s = s - 1 end
     sprint = input.key("shift")
+    -- CROUCH: CTRL held, or the Crouch action (C unless rebound) — a toggle
+    -- or a hold, the player's choice (Settings ▸ Controls).
+    local act = input.action and input.action("Crouch") == true
+    local st = ref("settings")
+    if st == nil or st.crouchToggle ~= false then
+      local tap = act and not crouch_in_prev
+      crouch_in_prev = act
+      if tap then crouch_toggled = not crouch_toggled end
+      -- (a sprint from a toggled crouch stands you up, as the key's
+      -- convention has it; at a run the crouch press is the slide)
+      if crouch_toggled and not tap and input.pressed("shift") and not sliding then crouch_toggled = false end
+      crouch_in = crouch_toggled
+    else
+      crouch_in_prev, crouch_toggled = act, false
+      crouch_in = act
+    end
+    if input.key("ctrl") then crouch_in = true end
   end
   local il = math.sqrt(f * f + s * s)
   if il > 1 then f, s = f / il, s / il end
-  local speed = sprint and params.run or params.walk
+  local speed = sprint and params.run * m_run or params.walk * m_walk
+  -- (Crouched you creep, and a sprint is no sprint: from a run it is a
+  -- slide. See "crouch and slide", below.)
+  local sprint_key = sprint
 
   -- Grounding with forgiveness: contact flag OR a short probe along −up.
   local contact = node.grounded == true
@@ -1853,7 +2160,7 @@ function update(node, dt)
     local th = terrain.raycast(vec3(node.x, node.y, node.z), vec3(-ux, -uy, -uz), params.ground_ray)
     if th and th.distance then
       ground_hit = { distance = th.distance, field = true }
-      local half = (node.height or 2.0) * 0.5
+      local half = body_h(node) * 0.5
       if th.distance < half - 0.02 then field_sunk = half - th.distance end
     end
   end
@@ -1873,17 +2180,86 @@ function update(node, dt)
     speed = sprint and params.swim_fast or params.swim
   end
 
+  -- THE IMPACT (playtest 2026-11-05: "fall damage extremely annoying and
+  -- dangerous"). crew.lua used to judge a fall by the fastest the body had
+  -- fallen while the walker called it airborne: a slide down a steep face
+  -- (airborne, by the walker's probe) was judged as though it had been a
+  -- drop of its whole height onto the floor below, whatever the slope in
+  -- between had already taken off. The impact is what the landing actually
+  -- takes: the velocity of the last frame before the first ground contact,
+  -- against the normal of the ground met (impactOf). The velocities are the
+  -- engine's, which are the planet's frame already (the ground is at rest).
+  do
+    local px, py, pz = node.x, node.y, node.z
+    local d = space and space.dominant and space.dominant(px, py, pz)
+    local b = d and space.body(d)
+    if b then px, py, pz = px - b.x, py - b.y, pz - b.z end
+    -- a teleport (a rescue, a switch, a probe, the net) is no fall
+    if imp.px and (px - imp.px) ^ 2 + (py - imp.py) ^ 2 + (pz - imp.pz) ^ 2
+        > (5 + (math.sqrt((node.vx or 0) ^ 2 + (node.vy or 0) ^ 2 + (node.vz or 0) ^ 2) * dt * 3)) ^ 2 then
+      imp.air, imp.v = 0.0, nil
+    end
+    imp.px, imp.py, imp.pz = px, py, pz
+    local touched = contact or (ground_hit ~= nil and ground_hit.field == true and field_sunk ~= nil)
+    if swimming then
+      imp.air, imp.v = 0.0, nil
+    elseif touched then
+      if not imp.contact and imp.v and imp.air >= 0.12 then
+        local n = node.groundNormal
+        local nx, ny, nz = ux, uy, uz
+        if n and n.x then nx, ny, nz = n.x, n.y, n.z end
+        impactSpeed = impactOf(imp.v[1], imp.v[2], imp.v[3], nx, ny, nz)
+        impactSeq = impactSeq + 1
+      end
+      imp.air, imp.v = 0.0, nil
+    else
+      imp.air = imp.air + dt
+      local v = imp.v or {}
+      v[1], v[2], v[3] = node.vx or 0, node.vy or 0, node.vz or 0
+      imp.v = v
+    end
+    imp.contact = touched
+  end
+
   -- BREATH: the helmet sits ~0.75 m above the capsule's centre. Out of air,
   -- the keys go dead and the body drifts until the rescue.
   -- (Depth is radial, so the helmet's is the body's less that height.)
-  local head_r = (node.height or 2.0) * 0.5 - 0.25
+  local head_r = body_h(node) * 0.5 - 0.25
   local hd = depth and (depth - head_r) or nil
   if breathe(node, dt, hd ~= nil and hd > 0.05, false, ux, uy, uz) then
     f, s, sprint = 0, 0, false
     speed = 0
   end
   if not downed and not holding and ground_net(node, ux, uy, uz, on_ground, swimming) then return end
-  if stand_down(node, dt, ux, uy, uz, fx, fy, fz, on_ground, swimming) then return end
+  if stand_down(node, dt, ux, uy, uz, fx, fy, fz, on_ground, swimming) then
+    -- (gravity and the pack own the body: whatever it does is its own)
+    last_vup = node.vx * ux + node.vy * uy + node.vz * uz
+    sliding = false
+    return
+  end
+
+  -- ── crouch and slide ─────────────────────────────────────────────────────────
+  -- Crouched, the capsule is `crouch_h` tall (it fits under 1.5 m), you creep
+  -- at `crouch_speed`, quietly, and you stand again only where there is room.
+  -- Crouch at a sprint and it is a SLIDE: the legs stop driving, the ground's
+  -- friction bleeds the speed off (slideStep) and a slope adds or takes its
+  -- share; it ends in a crouch once it is down to a walk.
+  local airborne_now = (not on_ground) or (time - jump_t) < JUMP_LOCKOUT
+  local crouch_edge = crouch_in and not crouch_was
+  crouch_was = crouch_in
+  local mspd = math.sqrt(mvx * mvx + mvy * mvy + mvz * mvz)
+  if not sliding and crouch_edge and sprint_key and not airborne_now and not swimming and mspd >= params.slide_min then
+    sliding, slide_t = true, 0.0
+    local fx2 = ref("sfx"); if fx2 and fx2.playAt then fx2.playAt("land", node, 0.35) end
+  end
+  if sliding and (swimming or not crouch_in or (not on_ground and air_t > 0.3)) then sliding = false end
+  if swimming then crouch_toggled = false end
+  -- (the feet stay put only when they are ON the ground: over it, the legs tuck)
+  set_low(node, (crouch_in or sliding) and not swimming, ux, uy, uz, contact)
+  crouching = low
+  crouchAmount = crouchAmount + ((low and 1 or 0) - crouchAmount) * (1 - math.exp(-12 * dt))
+  eyeDrop = crouchAmount * params.crouch_eye + (sliding and 0.08 or 0)
+  if low and not sliding then speed, sprint = params.walk * params.crouch_speed * m_walk, false end
 
   -- ── the tangent velocity ────────────────────────────────────────────────────
   -- Eased toward what the keys ask for rather than set to it, so a start has a
@@ -1906,7 +2282,7 @@ function update(node, dt)
   end
   local md = mvx * ux + mvy * uy + mvz * uz
   mvx, mvy, mvz = mvx - ux * md, mvy - uy * md, mvz - uz * md
-  local rate = swimming and params.swim_accel or (on_ground and params.accel or params.air_accel)
+  local rate = swimming and params.swim_accel or (on_ground and params.accel * m_acc or params.air_accel)
   if swimming then
     -- Speeding up is the strokes' work (`swim_accel`); slowing down is the
     -- water's drag (`swim_drag`), quadratic like water's: fast is shed quickly,
@@ -1917,8 +2293,35 @@ function update(node, dt)
       rate = params.swim_drag * (0.5 + math.min(1.0, math.sqrt(have2) / math.max(0.1, params.swim)))
     end
   end
-  local k = 1 - math.exp(-rate * dt)
-  mvx, mvy, mvz = mvx + (tx - mvx) * k, mvy + (ty - mvy) * k, mvz + (tz - mvz) * k
+  if sliding and on_ground then
+    -- THE SLIDE: no legs, only the ground. Its slope from a ray straight
+    -- down (as the walk's is), its pull and friction (slideStep), and a
+    -- little steering from the keys.
+    slide_t = slide_t + dt
+    local nx, ny, nz = ux, uy, uz
+    local gh = raycast(node.x, node.y, node.z, -ux, -uy, -uz, params.ground_ray, node)
+    if gh and gh.nx then nx, ny, nz = gh.nx, gh.ny, gh.nz end
+    local nu = nx * ux + ny * uy + nz * uz
+    if nu < 0.35 then nx, ny, nz, nu = ux, uy, uz, 1.0 end
+    local hx, hy, hz = nx - ux * nu, ny - uy * nu, nz - uz * nu
+    mvx, mvy, mvz = slideStep(mvx, mvy, mvz, hx, hy, hz, nu, local_g(node), params.slide_mu, dt)
+    local tl = math.sqrt(tx * tx + ty * ty + tz * tz)
+    local ml = math.sqrt(mvx * mvx + mvy * mvy + mvz * mvz)
+    if tl > 0.1 and ml > 0.1 then
+      -- turn toward the keys, at most slide_steer rad/s, about the up
+      local c = (mvy * tz - mvz * ty) * ux + (mvz * tx - mvx * tz) * uy + (mvx * ty - mvy * tx) * uz
+      local d = (mvx * tx + mvy * ty + mvz * tz)
+      local ang = math.atan2(c, d)
+      local a = math.max(-params.slide_steer * dt, math.min(params.slide_steer * dt, ang))
+      local ca, sa = math.cos(a), math.sin(a)
+      local px, py, pz = uy * mvz - uz * mvy, uz * mvx - ux * mvz, ux * mvy - uy * mvx
+      mvx, mvy, mvz = mvx * ca + px * sa, mvy * ca + py * sa, mvz * ca + pz * sa
+    end
+    if ml < params.slide_end then sliding = false end
+  else
+    local k = 1 - math.exp(-rate * dt)
+    mvx, mvy, mvz = mvx + (tx - mvx) * k, mvy + (ty - mvy) * k, mvz + (tz - mvz) * k
+  end
 
   -- ── the up axis ─────────────────────────────────────────────────────────────
   -- WHATEVER THE SOLVER DID TO US THIS FRAME arrives here as `vup`, and this
@@ -1985,6 +2388,28 @@ function update(node, dt)
     if n then
       local nu = n.x * ux + n.y * uy + n.z * uz
       if nu > 0.35 then slope = -(mvx * n.x + mvy * n.y + mvz * n.z) / nu end
+      -- NO CLIMBING WALLS (walkprobe pit_wall, 2026-11-05). At the foot of a
+      -- terrain wall the ray straight down lands on the wall's curve, whose
+      -- normal is barely over the 0.35 cut: the slope's climb, the walk over
+      -- that cos, asked 21 m/s of the up axis at a sprint and the crew went
+      -- 5.6 m up the side of a pit and off its rim. Up a face steeper than
+      -- WALK_SLOPE there is no climb (it is a wall: walls() takes the walk
+      -- into it out), and no slope asks more climb than its own angle at the
+      -- speed you walk; walking down stays as it was.
+      if slope > 0 then
+        if nu < WALK_SLOPE_COS then slope = 0.0
+        else slope = math.min(slope, math.sqrt(mvx * mvx + mvy * mvy + mvz * mvz) * WALK_SLOPE_TAN) end
+      end
+      -- …AND A CLIMB IS SLOW. Legs lift a suited body a few metres a second
+      -- at most (less under a load): up a steep hill the walk slows until
+      -- the climb is what they can make, rather than the sprint carrying on
+      -- up a 45° bank at 9 m/s (and off its top).
+      local cmax = CLIMB_MAX * (1 - 0.4 * encumbrance)
+      if slope > cmax then
+        local k = cmax / slope
+        mvx, mvy, mvz = mvx * k, mvy * k, mvz * k
+        slope = cmax
+      end
     end
     vs.slope = slope
     -- SNAP DOWN. Walking off a crest or down a step, the contact goes a frame
@@ -1993,8 +2418,11 @@ function update(node, dt)
     -- every frame it is a kerb's height or less off it (not only the frame the
     -- contact went), so a facet's crest never launches a ballistic hop. Past
     -- that it is a drop, and gravity has it.
-    if not contact and ground_hit then
-      local gap = ground_hit.distance - (node.height or 2.0) * 0.5
+    -- (Not while falling: a fall the probe sees coming is no crest, and the
+    -- pull added on top of it nearly doubled the speed of the last half
+    -- metre of every drop.)
+    if not contact and ground_hit and vup > -3.0 then
+      local gap = ground_hit.distance - body_h(node) * 0.5
       if gap > 0.02 and (was_contact or gap < 0.35) then
         slope = math.min(slope, -math.min(8.0, gap / math.max(dt, 1e-3)))
         vs.snap = gap
@@ -2003,10 +2431,12 @@ function update(node, dt)
     swim_vup = vup
     if not downed and (input.pressed("space") or (steer_f and steer_jump)) then
       steer_jump = false
-      vup = params.jump
+      -- (a heavy pack takes some of the spring out of the legs)
+      vup = params.jump * m_jump
       jump_t = time
       jumped = true
       slope = 0.0
+      sliding = false
       local fx = ref("sfx"); if fx and fx.playAt then fx.playAt("jump", node) end
     else
       -- THE KERB'S POP, only for a kerb. A contact's climb is kept (up to
@@ -2018,27 +2448,46 @@ function update(node, dt)
       -- is a step to climb: the pop allowed is that step's height over the
       -- soles, climbed in about a tenth of a second.
       local pop = vup - slope_vup
+      -- (on ground too steep to walk there is no kerb: a contact's climb
+      -- there is the solver pushing the body up the face, and kept it walked
+      -- the crew up pit walls and held it on a 60° slab — walkprobe)
+      if pop > 0 and n and (n.x * ux + n.y * uy + n.z * uz) < WALK_SLOPE_COS then pop = 0.0 end
       if pop > 0 and (params.kerb_pop or 1) > 0 then
         local h = 0.0
         local hx, hy, hz = mvx, mvy, mvz
         local hl = math.sqrt(hx * hx + hy * hy + hz * hz)
         if hl > 0.2 then
-          local half = (node.height or 2.0) * 0.5
+          local half = body_h(node) * 0.5
           local o = 0.5                     -- the capsule's radius and a little
           local px, py, pz = node.x + hx / hl * o + ux * 0.6, node.y + hy / hl * o + uy * 0.6, node.z + hz / hl * o + uz * 0.6
           local fh = raycast(px, py, pz, -ux, -uy, -uz, half + 1.0, node)
           if fh and fh.distance then h = half + 0.6 - fh.distance end
+          -- (the rise a slope already explains is the slope's, not a step's)
+          h = h - o * math.max(0.0, slope) / hl
         else
           h = 1.0                            -- standing or shoved: as before
         end
         pop = math.min(pop, math.max(0.0, h) * 10.0)
       end
       vs.pop = math.min(pop, params.step_pop)
-      vup = slope + vs.pop
+      if vs.snap > 0 then
+        -- the snap is the pull, not a pull on top of the body's own fall
+        vup = math.min(slope, vup)
+      else
+        vup = slope + vs.pop
+      end
     end
     slope_vup = slope
   else
     vup = math.max(-params.fall_max, math.min(vup, params.jump))
+    -- IN THE AIR A CONTACT MAY STOP A FALL, NEVER START A CLIMB. Falling or
+    -- jumping along a steep face, the solver pushes the capsule out of it
+    -- along the face's normal, and on anything short of vertical that has a
+    -- component up the face: the body was handed up to the jump's 5.2 m/s
+    -- by it, every tick, and walked off the top of a 70° face it rose 0.9 m
+    -- before it fell (walkprobe face70). The up speed may rise above last
+    -- frame's (or zero) by a hair, no more.
+    vup = math.min(vup, math.max(last_vup, 0.0) + 0.3)
     swim_vup = vup
     slope_vup = 0.0
   end
@@ -2049,13 +2498,17 @@ function update(node, dt)
   end
   bump(node, dt, ux, uy, uz)
   press(node, dt, ux, uy, uz, on_ground, swimming)
+  -- (sliding down a face too steep to be ground is the face's friction too,
+  -- whether the probe calls it ground or not: no contact holds the feet)
+  if not swimming then vup = walls(node, dt, ux, uy, uz, vup, (airborne or not contact) and not jumped) end
   node.vx = mvx + ux * vup
   node.vy = mvy + uy * vup
   node.vz = mvz + uz * vup
+  last_vup = vup
 
   -- Standing still on a slope: max friction so you don't slide downhill.
   if rig then
-    if f == 0 and s == 0 and on_ground then
+    if f == 0 and s == 0 and on_ground and not sliding then
       rig.friction = 1
     else
       rig.friction = 0
@@ -2069,6 +2522,8 @@ function update(node, dt)
   local bu = bvx * ux + bvy * uy + bvz * uz
   bvx, bvy, bvz = bvx - ux * bu, bvy - uy * bu, bvz - uz * bu
   local spd = math.sqrt(bvx * bvx + bvy * bvy + bvz * bvz)
+  moveSpeed = spd
+  fallSpeed = airborne and math.max(0, -bu) or 0.0
 
   -- Face the way you are going; while AIMING — behind the eyes, shift-locked,
   -- or the tool in your hand is running — face the view instead, so the body
@@ -2126,18 +2581,22 @@ function update(node, dt)
   if input.key("space") or (steer_f and steer_climb > 0) then climb = 1 end
   if input.key("ctrl") or (steer_f and steer_climb < 0) then climb = -1 end
   swim_drive(node, dt, vec3(ux, uy, uz), swimming, depth, feet_down, climb)
-  animate(node, dt, spd, not airborne, jumped, swimming, landed)
+  -- (a slide is no gait: the legs stop and the feet ride the ground)
+  animate(node, dt, sliding and 0.0 or spd, not airborne, jumped, swimming, landed)
   -- The pose itself is lateUpdate's (see WHEN, above): what it needs from
   -- this frame's movement is kept for it.
   if anim then
     local down = not (airborne or jumped or swimming or flying)
     local r = pose_req
-    r.on, r.spd, r.ground = true, spd, not airborne and not swimming
+    r.on, r.spd, r.ground = true, sliding and 0.0 or spd, not airborne and not swimming
     r.stand, r.stride = down and (1 - gait_amt) or 0.0, down and gait_amt or 0.0
   end
 
   if model then
     model.yaw = face_yaw
-    if model_y then model.y = model_y - land_dip * gait_amt end
+    -- (crouched, the capsule is shorter and its centre lower or its bottom
+    -- higher: the model's soles stay on the capsule's)
+    local lift = low and (WALK_H - params.crouch_h) * 0.5 or 0.0
+    if model_y then model.y = model_y + lift - land_dip * gait_amt end
   end
 end

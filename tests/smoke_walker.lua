@@ -1114,6 +1114,136 @@ API.terrain = nil
 floor_y = 0.0
 ASTRO.y = 1.0
 
+-- ── 9. LOAD, CROUCH, SLIDE, IMPACT (playtest 2026-11-05) ────────────────────
+-- "heavy pack should slow your walking and we should add crouching and
+-- sliding … fall damage extremely annoying and dangerous"
+local P9 = walker.params
+local function hspeed() return math.sqrt(ASTRO.vx ^ 2 + ASTRO.vz ^ 2) end
+-- THE LOAD: a smoothstep from pack_free (15 kg) to pack_heavy (90 kg)
+local E = walker.encumbranceOf
+check("a light pack (≤ 15 kg) is not felt at all", E(0, 15, 90) == 0 and E(15, 15, 90) == 0)
+check("a small load is barely felt (25 kg < 6%)", E(25, 15, 90) < 0.06, string.format("%.3f", E(25, 15, 90)))
+check("halfway (52.5 kg) bears half", math.abs(E(52.5, 15, 90) - 0.5) < 1e-9)
+check("a full pack (90 kg, and more) bears it all", E(90, 15, 90) == 1 and E(140, 15, 90) == 1)
+local mono = true
+for kg = 0, 100, 2 do if E(kg + 2, 15, 90) < E(kg, 15, 90) then mono = false end end
+check("…rising all the way", mono)
+local mw, mr, mj, ma = walker.loadMults(1.0, P9)
+check("a full load: walk ×0.75, sprint ×0.55, jump ×0.7, pick-up ×0.65",
+  math.abs(mw - 0.75) < 1e-9 and math.abs(mr - 0.55) < 1e-9 and math.abs(mj - 0.7) < 1e-9 and math.abs(ma - 0.65) < 1e-9)
+local function sprint_speed(kg)
+  walker.packOverride = kg
+  walker.steer(1, 0, true)
+  tick(150)
+  local v = hspeed()
+  walker.steer(0, 0, false)
+  tick(40)
+  return v
+end
+local v0, v40, v90 = sprint_speed(0), sprint_speed(40), sprint_speed(90)
+check("unloaded, the sprint is the full run", math.abs(v0 - P9.run) < 0.05, string.format("%.2f m/s", v0))
+check("40 kg slows it a little", v40 < v0 - 0.3 and v40 > v0 * 0.8, string.format("%.2f m/s", v40))
+check("90 kg slows it clearly (×0.55)", math.abs(v90 - P9.run * 0.55) < 0.1, string.format("%.2f m/s", v90))
+check("…and the load is published", walker.encumbrance == 1 and walker.packKg == 90)
+walker.packOverride = 90
+tick(2)
+press("space")
+tick(1)
+check("a full pack jumps at 70% of the speed", math.abs(vup() - P9.jump * 0.7) < 1e-3, string.format("%.2f m/s", vup()))
+tick(30)
+walker.packOverride = nil
+walker.steer(nil)
+ASTRO.vy = 0
+tick(20)
+
+-- THE SLIDE's decay, pure (slideStep): on the flat it only bleeds
+local g9 = 9.8
+local function slide_run(v, slope_deg, downhill)
+  local a = math.rad(slope_deg)
+  local nu, sn = math.cos(a), math.sin(a) * (downhill and 1 or -1)
+  local vx, t, dist = v, 0, 0
+  local marks = {}
+  while vx > P9.slide_end and t < 10 do
+    vx = walker.slideStep(vx, 0, 0, sn, 0, 0, nu, g9, P9.slide_mu, TICK)
+    t, dist = t + TICK, dist + vx * TICK
+    if #marks < 4 and t >= (#marks + 1) * 0.5 then marks[#marks + 1] = vx end
+  end
+  return t, dist, marks
+end
+local tf, df, mf = slide_run(9.4, 0, true)
+check("a 9.4 m/s slide on the flat runs about 1.3 s and 6-8 m", tf > 1.1 and tf < 1.6 and df > 6 and df < 8.5,
+  string.format("%.2f s, %.1f m", tf, df))
+check("…losing speed steadily (µg ≈ 5.4 m/s²)", mf[1] and math.abs((9.4 - mf[1]) / 0.5 - P9.slide_mu * g9) < 0.2,
+  string.format("%.2f m/s after 0.5 s", mf[1] or -1))
+local td = select(1, slide_run(9.4, 25, true))
+local tu = select(1, slide_run(9.4, 25, false))
+check("down a 25° slope it runs much longer, up one much shorter", td > tf * 2.5 and tu < tf * 0.7,
+  string.format("down %.2f s, flat %.2f s, up %.2f s", td, tf, tu))
+local vx35 = 6.0
+for _ = 1, 60 do vx35 = walker.slideStep(vx35, 0, 0, math.sin(math.rad(35)), 0, 0, math.cos(math.rad(35)), g9, P9.slide_mu, TICK) end
+check("down a 35° slope (past atan µ) it gathers speed", vx35 > 6.0, string.format("%.2f m/s after 1 s", vx35))
+
+-- THE SLIDE in the walker: sprint, crouch, and it bleeds off into a crouch
+walker.steer(1, 0, true)
+tick(120)
+local vs0 = hspeed()
+walker.steer(1, 0, true, false, 0, true)
+tick(1)
+check("crouching at a sprint starts a slide", walker.sliding == true and walker.crouching == true,
+  string.format("sliding %s crouching %s at %.2f m/s", tostring(walker.sliding), tostring(walker.crouching), vs0))
+tick(30)
+local vs1 = hspeed()
+check("…which bleeds speed (not the walk's ease back up)", vs1 < vs0 - 2.0 and vs1 > 3.0, string.format("%.2f → %.2f m/s in 0.5 s", vs0, vs1))
+tick(90)
+check("…and ends in a crouch at a creep", walker.sliding == false and walker.crouching == true
+  and hspeed() <= P9.walk * P9.crouch_speed + 0.05, string.format("sliding %s, %.2f m/s", tostring(walker.sliding), hspeed()))
+
+-- THE CROUCH: lower, slower, and no standing up under a roof
+check("crouched, the capsule is crouch_h tall", walker.body_h(ASTRO) == P9.crouch_h, string.format("%.2f", walker.body_h(ASTRO)))
+check("…the eyes drop with it", walker.eyeDrop > 0.2, string.format("%.2f m", walker.eyeDrop))
+local SROOF = roof_at
+roof_at = 0.6
+walker.steer(0, 0, false, false, 0, false)
+tick(10)
+check("let go of the crouch under a roof: still crouched", walker.crouching == true)
+roof_at = nil
+tick(10)
+check("…out from under it: standing again", walker.crouching == false and walker.body_h(ASTRO) == walker.WALK_H)
+roof_at = SROOF
+walker.steer(nil)
+tick(30)
+ASTRO.y = 1.0
+
+-- THE IMPACT: the speed INTO the ground met, not along it
+check("falling flat onto level ground is the whole fall", math.abs(walker.impactOf(0, -12, 0, 0, 1, 0) - 12) < 1e-9)
+local s45 = math.sqrt(0.5)
+check("landing on a 45° slope is 71% of it", math.abs(walker.impactOf(0, -12, 0, s45, s45, 0) - 12 * s45) < 1e-9)
+check("brushing down a wall, nothing", walker.impactOf(0, -12, 0, 1, 0, 0) == 0)
+check("moving away from a surface, nothing", walker.impactOf(0, 3, 0, 0, 1, 0) == 0)
+-- …and the walker measures it at the first contact, from the frame before
+local function drop_onto(n, vy, frames)
+  local seq0 = walker.impactSeq
+  ground_under, ASTRO.grounded, ASTRO.groundNormal = false, false, nil
+  for _ = 1, frames do ASTRO.vy = vy; tick(1) end
+  ASTRO.grounded, ASTRO.groundNormal, ASTRO.vy = true, n, 0
+  ground_under = true
+  tick(1)
+  local hit = walker.impactSeq - seq0
+  ASTRO.groundNormal = nil
+  tick(5)
+  return hit, walker.impactSpeed
+end
+local n1, sp1 = drop_onto(vec3(0, 1, 0), -12, 20)
+check("a 12 m/s fall onto the flat is judged once, at 12 m/s (crew: an injury past 9)", n1 == 1 and math.abs(sp1 - 12) < 0.4,
+  string.format("%d impacts, %.2f m/s", n1, sp1))
+local n2, sp2 = drop_onto(vec3(s45 * 1.0, s45, 0), -12, 20)
+check("the same fall onto a 45° slope is 8.5 m/s (no injury)", n2 == 1 and math.abs(sp2 - 12 * s45) < 0.4 and sp2 < 9,
+  string.format("%d impacts, %.2f m/s", n2, sp2))
+local n3 = drop_onto(vec3(0, 1, 0), -6, 4)
+check("a hop off a kerb (under 0.12 s in the air) is no impact", n3 == 0)
+ASTRO.vy = 0
+tick(10)
+
 -- ── report ──────────────────────────────────────────────────────────────────
 local bad = {}
 for _, c in ipairs(checks) do

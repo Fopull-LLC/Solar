@@ -1027,6 +1027,107 @@ local function craft_yaw_step(ex, ey, ez, up)
   return math.atan2(a:cross(b):dot(up), a:dot(b))
 end
 
+-- ── FEEL: the landing's dip, the shake of a hit, the speed's field of view ──
+-- (playtest 2026-11-05: "would be nice to have immersive fov changes and
+-- camera shake etc."). All of it presentation: the published view, the
+-- walker's forward and every aim stay steady. Two dials in Settings ▸ Camera,
+-- both off with Reduced motion: Camera shake (the craft's rumble too) and
+-- Speed field of view.
+--   LANDING   the walker's impact (impactSeq / impactSpeed, the speed into
+--             the ground): the eye dips with the knees, up to ~0.3 m for a
+--             hard one, on a damped spring (~0.35 s), and shakes past 4 m/s.
+--   SHAKE     trauma 0..1 (addShake: a hit, a landing, a blast nearby),
+--             falling off at 1.4/s; the view turns by trauma² × a few
+--             tenths of a degree of smooth noise (yaw, pitch, a little roll).
+--   FOV       + up to 4° at a full sprint, +6° in a slide, + up to 8° falling
+--             8 → 25 m/s; eased in at 3/s, out at 2/s.
+local feel = { dip = 0.0, dipv = 0.0, trauma = 0.0, seq = nil, fov = 0.0, t = 0.0, blast_t = nil }
+fovKick = 0.0          -- radians over the player's field of view (settings.lua adds it)
+shakeTrauma = 0.0      -- published for probes
+function addShake(a)
+  feel.trauma = math.min(1.0, feel.trauma + math.max(0, a or 0))
+end
+-- The Camera shake setting, 0 with Reduced motion.
+function camShakeScale()
+  if access and access.reducedMotion and access.reducedMotion() then return 0.0 end
+  local st = script_ref("settings")
+  return (st and st.camShake) or 1.0
+end
+local function fov_fx_scale()
+  if access and access.reducedMotion and access.reducedMotion() then return 0.0 end
+  local st = script_ref("settings")
+  return (st and st.fovFx) or 1.0
+end
+local function smooth01(a, b, x)
+  local t = math.clamp((x - a) / (b - a), 0.0, 1.0)
+  return t * t * (3 - 2 * t)
+end
+local cam_comp_h = nil
+-- → the dip (m along up, negative down) and the shake's yaw, pitch, roll (rad)
+function feel_tick(node, dt, shake_k, on_foot)
+  dt = math.min(dt or 0.016, 0.1)
+  feel.t = feel.t + dt
+  local wk = script_ref("planet_walker")
+  -- a landing
+  local seq = wk and wk.impactSeq
+  if seq ~= nil and feel.seq ~= nil and seq ~= feel.seq and on_foot then
+    local v = wk.impactSpeed or 0
+    if v > 2.0 then
+      feel.dipv = feel.dipv - math.min(3.2, (v - 1.0) * 0.24)
+      if v > 4.0 then addShake(math.min(0.85, (v - 4.0) / 11.0)) end
+    end
+  end
+  feel.seq = seq
+  -- a blast nearby (vfx.lastBlast: where, how big; the shake falls with distance)
+  local vx = script_ref("vfx")
+  local lb = vx and vx.lastBlast
+  if lb and lb.t ~= feel.blast_t then
+    feel.blast_t = lb.t
+    local b = lb.body and space and space.body(lb.body)
+    local c = node and node.pos
+    if b and c then
+      local dx, dy, dz = b.x + lb.x - c.x, b.y + lb.y - c.y, b.z + lb.z - c.z
+      local d = math.sqrt(dx * dx + dy * dy + dz * dz)
+      local reach = lb.big and 140 or 60
+      if d < reach then addShake((lb.big and 0.9 or 0.5) * (1 - d / reach) ^ 2) end
+    end
+  end
+  -- the dip's spring (critically damped-ish: down fast, back in ~0.35 s)
+  local k, c = 140.0, 17.0
+  feel.dipv = feel.dipv + (-k * feel.dip - c * feel.dipv) * dt
+  feel.dip = math.max(-0.32, math.min(0.06, feel.dip + feel.dipv * dt))
+  feel.trauma = math.max(0.0, feel.trauma - 1.4 * dt)
+  shakeTrauma = feel.trauma
+  -- the field of view
+  local want = 0.0
+  local ff = on_foot and fov_fx_scale() or 0.0
+  if ff > 0 and wk and wk.onFoot then
+    local run = (wk.params and wk.params.run) or 8
+    local walk = (wk.params and wk.params.walk) or 4.5
+    local sp = smooth01(walk + 0.8, run, wk.moveSpeed or 0) * 4.0
+    if wk.sliding then sp = math.max(sp, 6.0) end
+    want = math.rad((sp + smooth01(8, 25, wk.fallSpeed or 0) * 8.0) * ff)
+  end
+  feel.fov = feel.fov + (want - feel.fov) * (1 - math.exp(-(want > feel.fov and 3.0 or 2.0) * dt))
+  if math.abs(feel.fov) < 1e-4 and want == 0 then feel.fov = 0.0 end
+  if math.abs(feel.fov - fovKick) > 0.0005 or (feel.fov == 0 and fovKick ~= 0) then
+    fovKick = feel.fov
+    local st = script_ref("settings")
+    local base = st and st.get and st.get("fov")
+    if base and not cam_comp_h and node and node.getcomponent then cam_comp_h = node:getcomponent("Camera") end
+    if cam_comp_h and base then cam_comp_h.fovY = math.rad(base) + fovKick end
+  end
+  local dip = feel.dip * shake_k
+  if not on_foot then return 0, 0, 0, 0 end
+  local a = feel.trauma * feel.trauma * shake_k
+  if a < 1e-4 then return dip, 0, 0, 0 end
+  local t = feel.t
+  local yaw = a * 0.030 * (math.sin(t * 23.1) + 0.6 * math.sin(t * 41.7 + 1.3))
+  local pitch = a * 0.030 * (math.sin(t * 27.3 + 2.1) + 0.6 * math.sin(t * 37.9 + 0.4))
+  local roll = a * 0.020 * math.sin(t * 19.7 + 4.2)
+  return dip, yaw, pitch, roll
+end
+
 local function place_camera(node, dt)
   -- Map mode: the orbit map owns the camera while it's open — orbiting the
   -- focused body, not the player. Stand down entirely.
@@ -1337,6 +1438,9 @@ local function place_camera(node, dt)
       base = base + up * (pivot_r - r)
     end
     head = base + up * (firstPerson and params.eye_height or params.height)
+    -- (crouched or sliding the eyes go lower than the capsule's own drop)
+    local wk0 = script_ref("planet_walker")
+    if firstPerson and wk0 and (wk0.eyeDrop or 0) > 0.001 then head = head - up * wk0.eyeDrop end
     -- The pivot itself must be in the open. Under a low roof — a bore the
     -- laser cuts is 2.2–4 m tall (2.4 × 0.85 × charge) and the pivot sits 2.2 m
     -- over the floor — it was inside the rock, and the wall clip below sweeps
@@ -1472,20 +1576,36 @@ local function place_camera(node, dt)
   -- for it, but it cannot tell which of a game's movement is the game — so the
   -- shake is ours to switch off, and this is the only place in the project that
   -- moves the view for effect. (v0.33.0, ⚙ Settings → ♿ Accessibility.)
-  local sh = save.get("cam.shake") or 0.0
-  if access.reducedMotion() then sh = 0.0 end
+  -- (the player's Camera shake slider scales it: Settings ▸ Camera)
+  local shake_k = camShakeScale()
+  local sh = (save.get("cam.shake") or 0.0) * shake_k
   if sh > 0.002 then
     local amp = sh * sh * 0.5
     place = place
       + ref * ((math.random() * 2 - 1) * amp)
       + up * ((math.random() * 2 - 1) * amp)
   end
+  -- ON FOOT: the landing's dip and the hits' shake (feel_tick), presented
+  -- only — the published view (fwd_x…, the walker's forward and every aim)
+  -- is the steady one.
+  local look_fwd, look_up = fwd, up
+  if not piloting then
+    local dip, yaw_j, pitch_j, roll_j = feel_tick(node, dt, shake_k, true)
+    if dip ~= 0 then place = place + up * dip end
+    if yaw_j ~= 0 or pitch_j ~= 0 or roll_j ~= 0 then
+      local right = fwd:cross(up):normalized()
+      look_fwd = (fwd + right * yaw_j + up * pitch_j):normalized()
+      look_up = (up + right * roll_j):normalized()
+    end
+  else
+    feel_tick(node, dt, 0, false)
+  end
   node.pos = place
 
   -- Point the camera down `fwd` with the LOCAL up overhead, so the horizon
   -- reads level all the way around the planet. `lookAt` with an `up` sets the
   -- roll too — that is the entire twenty-line undo-yaw-then-pitch dance.
-  node:lookAt(place + fwd, up)
+  node:lookAt(place + look_fwd, look_up)
 
   -- Publish the basis for the walker + dig tool.
   fwd_x, fwd_y, fwd_z = fwd.x, fwd.y, fwd.z

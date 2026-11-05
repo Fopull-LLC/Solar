@@ -248,7 +248,7 @@ for _, tab in ipairs({ "display", "graphics", "camera", "controls", "audio", "ac
   ok(n > 5, tab .. " tab draws something")
   ok(unkeyed == 0, tab .. " tab: every container is keyed and every slider is draggable")
   if tab == "audio" then ok(sliders == 5, "the audio tab has a slider per bus (5), got " .. sliders) end
-  if tab == "camera" then ok(sliders == 2, "the camera tab has FOV and sensitivity sliders") end
+  if tab == "camera" then ok(sliders == 4, "the camera tab has FOV, sensitivity, camera shake and speed-FOV sliders, got " .. sliders) end
 end
 ok(st2.currentTab() == "access", "showTab switches the page")
 

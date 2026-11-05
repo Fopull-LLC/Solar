@@ -104,9 +104,13 @@ local function readouts()
                           value = string.format("%.0f kg — sell at the Commerce Depot", cap),
                           warn = true, frac = 1 }
       else
-        out[#out + 1] = { key = "pack", label = "Pack",
+        -- THE LOAD (planet_walker encumbrance): the readout turns caution
+        -- amber once the pack starts to slow you (from ~33 kg), and says so
+        -- past the middle of the curve (~52 kg).
+        local enc = (pw and pw.encumbrance) or 0
+        out[#out + 1] = { key = "pack", label = enc >= 0.5 and "Heavy pack" or "Pack",
                           value = string.format("%.1f / %.0f kg", m, cap),
-                          frac = math.max(0, math.min(1, m / cap)) }
+                          frac = math.max(0, math.min(1, m / cap)), heavy = enc >= 0.15 }
       end
     else
       out[#out + 1] = { key = "pack", label = "Pack", value = string.format("%.1f kg", m) }
@@ -140,11 +144,11 @@ local function chip(r)
   local kids = {
     { "text", key = "l", style = "hud/chipLabel", w = "fit", h = "fit",
       text = r.label },
-    { "text", key = "v", style = r.warn and "hud/chipWarnText" or "hud/chipValue",
+    { "text", key = "v", style = (r.warn or r.heavy) and "hud/chipWarnText" or "hud/chipValue",
       w = "fit", h = "fit", text = r.value },
   }
   if r.frac and (not r.warn or r.gauge == "air") then
-    local hot = r.frac > 0.85
+    local hot = r.frac > 0.85 or r.heavy
     local fillc = hot and { 1.0, 0.80, 0.28 } or { 0.77, 0.75, 0.68 }
     if r.gauge == "air" then
       -- Air runs the other way: low is the danger (warn yellow, danger red).

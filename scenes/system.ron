@@ -3412,5 +3412,36 @@
                 order: 9,
             )),
         ),
+        // the injury screen: blood loss, a hit's flash, the heartbeat (scripts/injury_fx.lua), under every other HUD element
+        (
+            name: "Injury FX",
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Empty,
+            scripts: [
+                (
+                    kind: "injury_fx",
+                    enabled: true,
+                    params: [],
+                ),
+            ],
+            id: Some(651),
+            parent_id: Some(16),
+            parent: Some(15),
+            ui: Some((
+                place: Stretch(
+                    min: (0.0, 0.0),
+                    max: (1.0, 1.0),
+                    margin: (0.0, 0.0, 0.0, 0.0),
+                ),
+                size: (Pct(1.0), Pct(1.0)),
+                visible: false,
+                opacity: 1.0,
+                order: -2,
+            )),
+        ),
     ],
 )

@@ -50,11 +50,19 @@ function airLevel(frac, secs)
   return nil
 end
 
+-- The cause of a hit, as the chip names it (crew.lastHit's `cause`).
+HIT_CAUSE = { impact = "FALL", shot = "SHOT", crush = "CRUSHED", heat = "BURN", blast = "BLAST",
+              explosion = "BLAST" }
+
 -- The chips for one member's alerts: { {text, level = "warn"|"danger"} … }
 function chipsOf(a)
   local out = {}
   if not a then return out end
-  if a.hit then out[#out + 1] = { "HIT −" .. pct(a.hit.amount) .. "%", "danger" } end
+  -- (what hit them, said in the chip: a fall reads differently from a shot)
+  if a.hit then
+    local why = HIT_CAUSE[a.hit.cause or ""]
+    out[#out + 1] = { "HIT −" .. pct(a.hit.amount) .. "%" .. (why and (" · " .. why) or ""), "danger" }
+  end
   local lv = a.o2_level or airLevel(a.o2, a.air_s)
   if lv == "min" then out[#out + 1] = { "O2 1 MIN", "danger" }
   elseif lv == "crit" then out[#out + 1] = { "O2 " .. pct(a.o2) .. "%", "danger" }
@@ -224,7 +232,9 @@ function lateUpdate(node, dt)
   end
   local danger_rim = false
   for _, c in ipairs(chips) do
-    if c[1] == "O2 1 MIN" or c[1] == "PINNED" or (c[1]:find("^BREATH") and c[2] == "danger") or c[1]:find("^HIT") then
+    -- (a hit's flash is injury_fx's now: a vignette in the colour of what hit)
+    if c[1] == "O2 1 MIN" or c[1] == "PINNED" or (c[1]:find("^BREATH") and c[2] == "danger")
+      or (c[1]:find("^HIT") and not ref("injury_fx")) then
       danger_rim = true
     end
   end

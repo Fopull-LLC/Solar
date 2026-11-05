@@ -366,8 +366,14 @@ end
 -- ════════════════════════════════════════════════════════════════════════════
 
 -- A craft or part blowing up. `big` = a tank or engine (fuel), else a strut.
+-- The last blast, for the camera's shake (planet_camera feel_tick): its time,
+-- the body it was on and where on it (body-relative: the planet moves), its size.
+lastBlast = nil
 function explode(x, y, z, vx, vy, vz, big)
   local name, b, ux, uy, uz, air = frame(x, y, z)
+  if b and name then
+    lastBlast = { t = time or 0, body = name, x = x - b.x, y = y - b.y, z = z - b.z, big = big == true }
+  end
   -- In air the fire and smoke stop with the air; in vacuum they keep the
   -- wreck's momentum, because there is nothing to stop them. (The fireball
   -- and smoke are Local tracks: carried() — a quarter of the wreck's speed

@@ -238,6 +238,8 @@
     "textures/tools/tool_decals.png": (filter: SmoothMipmaps, wrap: Repeat),
     "textures/ui/hardware.png": (filter: SmoothMipmaps, wrap: Repeat),
     "textures/ui/plates.png": (filter: SmoothMipmaps, wrap: Repeat),
+    "textures/ui/injury_vignette.png": (filter: SmoothMipmaps, wrap: Clamp),
+    "textures/ui/injury_blood.png": (filter: SmoothMipmaps, wrap: Clamp),
     "textures/vfx/beam/core.png": (filter: SmoothMipmaps, wrap: Repeat),
     "textures/vfx/beam/glow.png": (filter: SmoothMipmaps, wrap: Repeat),
     "textures/vfx/beam/shimmer.png": (filter: SmoothMipmaps, wrap: Repeat),

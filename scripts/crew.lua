@@ -2744,10 +2744,15 @@ local function avatar_monitor(dt)
   -- from a pod on the pad is not a fall
   if MON.rode and not ride then quiet_monitors(1.5) end
   MON.rode = ride ~= nil
+  -- the walker's own impacts (planet_walker impactSeq/impactSpeed): one
+  -- judged per touchdown, the speed INTO the ground met
+  local pw0 = ref("planet_walker")
+  local wseq = pw0 and pw0.impactSeq
   if ride or now() < hold_imp or held(id) then
     MON.vx = nil
     MON.fall, MON.pinned, MON.crush_t = 0, false, 0
     MON.air, MON.peak = 0, 0
+    MON.imp_seq = wseq
     return
   end
   local vx, vy, vz = a.vx or 0, a.vy or 0, a.vz or 0
@@ -2780,7 +2785,18 @@ local function avatar_monitor(dt)
         local r0 = MON.vx * ux + MON.vy * uy + MON.vz * uz
         local r1 = vx * ux + vy * uy + vz * uz
         local down = 0
-        if not on_ground then
+        if wseq ~= nil then
+          -- THE IMPACT, AS THE WALKER MEASURED IT (playtest 2026-11-05: "fall
+          -- damage extremely annoying and dangerous"): the velocity of the
+          -- last frame before the first ground contact against the normal of
+          -- the ground met. The rule below it judged the fastest the body had
+          -- fallen while the walker's probe called it airborne, so a slide
+          -- down a steep face counted as a drop of its whole height, and a
+          -- landing on a slope as one on the flat.
+          if MON.imp_seq ~= nil and wseq ~= MON.imp_seq then down = pw0.impactSpeed or 0 end
+          MON.imp_seq = wseq
+          MON.air, MON.peak = 0, 0
+        elseif not on_ground then
           MON.air = (MON.air or 0) + dt
           MON.peak = math.max(MON.peak or 0, -r1)
         else
@@ -2806,6 +2822,8 @@ local function avatar_monitor(dt)
       local r = get(id)
       local hp = math.max(0, (r and r.hp or 1) - loss)
       patch(id, { hp = hp })
+      -- (the hit the screen and the chips show, and what it was)
+      lastHit[id] = { t = now(), amount = loss, cause = "impact", hp = hp, dv = dv }
       log_(string.format("crew: #%d hurt (%.1f m/s), hp %.2f", id, dv, hp))
       if hp <= 0 then kill(id, "impact", string.format("%.0f m/s", dv), { over = 1.0 }) return end
     end

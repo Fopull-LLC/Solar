@@ -265,6 +265,37 @@ check(L5.rep == 0 and L5.spent == 0, "...no reputation lost, no fee")
 C5.setSafety("death")
 check(C5.deathOn() and s5["crew.death"] == true, "back to Permadeath")
 
+-- ── the walker's impact (playtest 2026-11-05) ──────────────────────────────
+-- With a walker that measures impacts (planet_walker impactSeq/impactSpeed:
+-- the speed INTO the ground met), only those are judged: a long fast slide
+-- (the body falling fast with no impact) hurts nobody, and one landing is
+-- judged once.
+local s6 = { g_seed = 3 }
+local C6, astro6, L6, sc6 = make(s6)
+C6.start()
+C6.time = C6.time + 4
+local pw6 = sc6.planet_walker
+rawset(pw6, "impactSeq", 0)
+rawset(pw6, "impactSpeed", 0)
+astro6.vy = 0
+tick(C6, 3)
+astro6.vy = -16          -- sliding down a steep face, fast, for half a second
+tick(C6, 30)
+astro6.vy = 0
+tick(C6, 2)
+check((C6.get(1).hp or 1) == 1, "a 16 m/s slide the walker reports no impact for: nothing (" .. tostring(C6.get(1).hp) .. ")")
+rawset(pw6, "impactSeq", 1)
+rawset(pw6, "impactSpeed", 14.5)
+tick(C6, 1)
+check(math.abs((C6.get(1).hp or 1) - 0.5) < 0.01, "a walker impact of 14.5 m/s: hurt to hp 0.5 (" .. tostring(C6.get(1).hp) .. ")")
+check(C6.lastHit[1] and C6.lastHit[1].cause == "impact", "…recorded as a hit, cause impact (the screen and the chip say FALL)")
+tick(C6, 30)
+check(math.abs((C6.get(1).hp or 1) - 0.5) < 0.01, "…judged once, not again every tick")
+rawset(pw6, "impactSeq", 2)
+rawset(pw6, "impactSpeed", 8.5)
+tick(C6, 1)
+check(math.abs((C6.get(1).hp or 1) - 0.5) < 0.01, "an 8.5 m/s impact (a 12 m/s fall onto a 45° slope): nothing")
+
 if #failures > 0 then
   for _, m in ipairs(failures) do print("FAIL: " .. m) end
   print(string.format("smoke_crew_death: %d passed, %d FAILED", passed, #failures))

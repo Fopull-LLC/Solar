@@ -230,6 +230,9 @@ local DEFAULTS = {
   fov = 66,                   -- vertical degrees (the scene camera's 1.152 rad)
   look = 1.0,                 -- mouse sensitivity multiplier
   invert_y = false,
+  cam_shake = 1.0,            -- camera shake: landings, hits, blasts, a craft's rumble (0..1)
+  fov_fx = 1.0,               -- the field of view's widening at speed (0..1)
+  crouch_toggle = true,       -- the Crouch key (C) toggles; false: hold (CTRL always holds)
 }
 -- …and the ones whose default is "leave it alone" (a nil can't sit in a table).
 local OPTIONAL = { "fullscreen", "display", "text_scale", "captions", "reduced_motion", "color_filter",
@@ -243,6 +246,9 @@ for _, o in ipairs(GFX_OPTIONS) do KEYS[#KEYS + 1] = gfx_store(o) end
 lookScale = 1.0
 invertY = false
 dynamicRes = false
+camShake = 1.0       -- planet_camera's feel (Reduced motion turns both off there)
+fovFx = 1.0
+crouchToggle = true  -- planet_walker
 
 -- ── the interface size ──────────────────────────────────────────────────────
 -- Each screen layer is MatchHeight over 720 design units (the scenes'
@@ -534,7 +540,9 @@ local function apply_fov()
     cam_comp = cam_node and cam_node:getcomponent("Camera") or nil
   end
   if cam_comp then
-    local want = math.rad(get("fov"))
+    -- (plus planet_camera's widening at speed, which it writes itself)
+    local pc = ref("planet_camera")
+    local want = math.rad(get("fov")) + ((pc and pc.fovKick) or 0)
     if math.abs((cam_comp.fovY or 0) - want) > 1e-4 then cam_comp.fovY = want end
   end
 end
@@ -573,6 +581,9 @@ local APPLY = {
   fov = apply_fov,
   look = function() lookScale = get("look") end,
   invert_y = function() invertY = get("invert_y") == true end,
+  cam_shake = function() camShake = tonumber(get("cam_shake")) or 1.0 end,
+  fov_fx = function() fovFx = tonumber(get("fov_fx")) or 1.0 end,
+  crouch_toggle = function() crouchToggle = get("crouch_toggle") ~= false end,
   fullscreen = function()
     local v = get("fullscreen")
     if v ~= nil and app and app.setFullscreen then pcall(app.setFullscreen, v) end
@@ -968,8 +979,14 @@ local function camera_rows(out)
     function(v) return string.format("×%.2f", v) end,
     function(v) set("look", math.floor(v * 20 + 0.5) / 20) end)
   out[#out + 1] = on_off("inv", "Invert mouse Y", get("invert_y"), function(v) set("invert_y", v) end)
+  out[#out + 1] = slider("shake", "Camera shake", 0, 1, get("cam_shake"), pct,
+    function(v) set("cam_shake", math.floor(v * 20 + 0.5) / 20) end)
+  out[#out + 1] = slider("fovfx", "Speed field of view", 0, 1, get("fov_fx"), pct,
+    function(v) set("fov_fx", math.floor(v * 20 + 0.5) / 20) end)
   out[#out + 1] = hint("ch", "The field of view is vertical. Sensitivity turns the on-foot "
-    .. "and flight camera; the orbit map keeps its own drag.")
+    .. "and flight camera; the orbit map keeps its own drag. Camera shake is the jolt of a hard "
+    .. "landing, a hit or a blast nearby, and a craft's rumble; the speed field of view widens a "
+    .. "little at a sprint, in a slide and in a long fall. Both are off with Reduced motion.")
 end
 
 local BUS_LABEL = { Master = "Master", Music = "Music", SFX = "Effects", Ambient = "Ambience",
@@ -1068,6 +1085,10 @@ local REBINDABLE = { Jump = true, Interact = true, Sprint = true, Crouch = true,
                      Pause = true, LookEnable = true, ShiftLock = true, Zoom = true }
 
 local function controls_rows(out)
+  out[#out + 1] = choice("crouch", "Crouch key", { { label = "Toggle", value = true }, { label = "Hold", value = false } },
+    get("crouch_toggle") ~= false, function(v) set("crouch_toggle", v) end)
+  out[#out + 1] = hint("crh", "The Crouch key (C unless you rebind it) toggles the crouch or works while held; "
+    .. "CTRL always crouches while held. Crouch at a sprint to slide.")
   local page = engine_rows("controls")
   if not page then
     out[#out + 1] = hint("kn", "Rebinding is not available on this engine build.")
