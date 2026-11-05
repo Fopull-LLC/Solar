@@ -1028,8 +1028,25 @@ local function run_jetland()
       end
     end
     local hc = vc.r2HullCom and vc.r2HullCom(S.i) or { 0, 0, 0 }
-    P("JT %s %.4f %.2f %.3f %.3f %.2f %.3f %.3f %.2f %.3f %.4f %.4f %.4f %.4f %d | %s", PH, time - T0, S.V, S.agl, S.vu, math.deg(S.theta), S.q, S.p, math.deg(S.herr or 0),
-      vc.R2.gearCapped or 0, hc[1], hc[2], hc[3], S.i.mass or 0, vc.R2.rehangs or 0, table.concat(td, " "))
+    -- (where along the runway, from the site, and what the ground under the
+    -- centre of mass is: its hit's height over the runway's radius, its node)
+    local sa, gh, gn = 0, 0, "-"
+    local bb = site and space.body(site.body)
+    if bb then
+      local c = S.i.com
+      local Pr = { x = c.x - bb.x, y = c.y - bb.y, z = c.z - bb.z }
+      local Ph = unit(Pr)
+      local s0 = unit({ x = site.x, y = site.y, z = site.z })
+      local Rs = len(site.x, site.y, site.z)
+      sa = math.atan2(dot(Ph, unit(site.fwd)), dot(Ph, s0)) * Rs
+      local h = raycast(c.x, c.y, c.z, -S.U.x, -S.U.y, -S.U.z, 40, { ignore = { vn } })
+      if h then
+        gh = len(h.x - bb.x, h.y - bb.y, h.z - bb.z) - Rs
+        gn = h.node and h.node.valid and (h.node.name or "?"):gsub("%s", "_") or "terrain"
+      end
+    end
+    P("JT %s %.4f %.2f %.3f %.3f %.2f %.3f %.3f %.2f %.3f %.4f %.4f %.4f %.4f %d %.2f %.3f %s | %s", PH, time - T0, S.V, S.agl, S.vu, math.deg(S.theta), S.q, S.p, math.deg(S.herr or 0),
+      vc.R2.gearCapped or 0, hc[1], hc[2], hc[3], S.i.mass or 0, vc.R2.rehangs or 0, sa, gh, gn, table.concat(td, " "))
   end
   local function run(tag2, secs, ctl)
     PH = tag2
@@ -1107,6 +1124,53 @@ local function run_jetland()
     local N = nav()
     local tgt = N and clamp(math.deg(math.atan(N.xt / 120)), -20, 20) or 0
     return hold_head(S, tgt), N
+  end
+  -- strs drops = "0.1,0.25,1": the craft lifted that many metres off its
+  -- parked place, stopped, and dropped straight onto its gear (no airspeed,
+  -- so no wing: the gear alone), 6 s each. `MP jetland drop k` says the sink
+  -- at the first contact, how far the centre of mass came back up over where
+  -- it was at that contact (the rebound), the time with every tyre off the
+  -- ground after it, and where it settled against the parked height.
+  -- (a craft without an elevator, the player's jet, can be tested only so)
+  local dk = 0
+  for hs in tostring(params.drops or ""):gmatch("[^,]+") do
+    local hd = tonumber(hs)
+    if hd then
+      dk = dk + 1
+      local i0 = assembly.info(vn)
+      local S = st()
+      assembly.teleport(vn, vec3(i0.origin.x + S.U.x * hd, i0.origin.y + S.U.y * hd, i0.origin.z + S.U.z * hd))
+      yield(); yield()
+      local i3 = assembly.info(vn)
+      local m3 = i3.mass or 1
+      for _, w in ipairs(vc.R2.wheels or {}) do
+        local rb = w.tyre and w.tyre.valid and w.tyre:getcomponent("RigidBody")
+        if rb then m3 = m3 + (rb.mass or 0) end
+      end
+      -- (dropv=V: rolling at V m/s along the nose as it lands, the runway's
+      -- way: a touchdown on the roll for a craft that cannot fly a circuit)
+      local dv = params.dropv or 0
+      local Sn = st()
+      assembly.impulseAt(vn, vec3((Sn.n.x * dv - i3.vel.x) * m3, (Sn.n.y * dv - i3.vel.y) * m3, (Sn.n.z * dv - i3.vel.z) * m3), vec3(i3.com.x, i3.com.y, i3.com.z))
+      local c0, peak, air, lowest, upseen = nil, -1e9, 0, 1e9, false
+      local agl_c, sink_c
+      run("drop" .. dk, 6, function(S2)
+        vc.setThrottle(0)
+        vc.AERO.cmd = { p = 0, y = 0, r = 0 }
+        local any = false
+        for _, w in ipairs(vc.R2.wheels or {}) do if w.tyre and w.tyre.valid and w.tyre.grounded then any = true end end
+        if any and not c0 then c0, agl_c, sink_c = time, S2.agl, -S2.vu end
+        if c0 then
+          lowest = math.min(lowest, S2.agl)
+          if S2.vu > 0.05 then upseen = true end
+          if upseen then peak = math.max(peak, S2.agl) end
+          if not any then air = air + FDT end
+        end
+      end)
+      local Sx = st()
+      P("MP %s drop %d from %.2f m: sink at contact %.2f m/s, rebound %.3f m over the contact height (%.3f m), %.2f s with every tyre off after it, lowest %.3f, settled %.3f (parked %.3f)",
+        tag, dk, hd, sink_c or -1, upseen and (peak - (agl_c or 0)) or 0, agl_c or -1, air, lowest, Sx and Sx.agl or -1, agl0)
+    end
   end
   local nland = params.landings or 1
   local sink = params.sink or 1.5
@@ -1270,6 +1334,11 @@ local function run_jetland()
       -- rudder stay the probe's
       if (params.assist or 0) > 0 and vc.LAND and vc.LAND.state == "flare" then
         vc.AERO.cmd.p = 0
+        -- (idle through the flare, as a pilot does: the probe's throttle holds
+        -- the angle of attack, so as the assist raised the nose it added
+        -- power, and the jet floated 250 m, off the runway's far end onto the
+        -- plain, and was thrown 2.4 m up there: idleflare=0 keeps it)
+        if (params.idleflare or 1) > 0 then vc.setThrottle(0) end
         LAND.flared = LAND.flared or (time - T0)
       end
       if t > 2 and vc.R2.onWheels then touched = t; return true end

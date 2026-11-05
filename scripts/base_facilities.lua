@@ -985,6 +985,24 @@ function blendDiscs(Fr, runway)
   return out
 end
 
+-- The real offset of the ground at radius R along d (+ the ground below it,
+-- − above it), where terrain.query reads its clamp: a ray down the radial
+-- from R (air there: the hole's floor), or from GRADE_PROBE_TOP over it (rock
+-- there: the hill's top). nil when no ray finds it.
+GRADE_CLAMP = 5.9
+GRADE_PROBE_TOP = 80.0
+function clamp_depth(body, d, R, q)
+  if q > 0 then
+    local hit = terrain.raycast(V(body.x + d.x * R, body.y + d.y * R, body.z + d.z * R), V(-d.x, -d.y, -d.z), GRADE_PROBE_TOP)
+    if hit and hit.distance then return hit.distance end
+    return GRADE_PROBE_TOP
+  end
+  local top = R + GRADE_PROBE_TOP
+  local hit = terrain.raycast(V(body.x + d.x * top, body.y + d.y * top, body.z + d.z * top), V(-d.x, -d.y, -d.z), GRADE_PROBE_TOP)
+  if hit and hit.distance then return -(GRADE_PROBE_TOP - hit.distance) end
+  return nil
+end
+
 -- Is the graded ground still where it was left? A handful of points on the
 -- sphere: the field's distance there is ~0 when the grade stands.
 local function grade_holds(body, Fr, runway)
@@ -993,18 +1011,27 @@ local function grade_holds(body, Fr, runway)
     for k = 0, 4 do pts[#pts + 1] = { RUNWAY.u0 + 10 + (RUNWAY.u1 - RUNWAY.u0 - 20) * k / 4, RUNWAY.v } end
   end
   for _, f in ipairs(FACILITIES) do pts[#pts + 1] = { f.u, f.v } end
-  local worst = 0
+  local worst, why = 0, nil
   for _, p in ipairs(pts) do
     local d = dirAt(Fr, p[1], p[2])
     local q = terrain.query(body.x + d.x * Fr.R, body.y + d.y * Fr.R, body.z + d.z * Fr.R)
     if not q then return false, 1e9 end
-    worst = math.max(worst, abs(q))
+    -- THE FIELD IS CLAMPED at ±6 m (four voxels; docs lua-api terrain.query):
+    -- a reading at the clamp says "6 m or more", not how far. There the
+    -- ground is found along the radial instead (an alien home's hole by the
+    -- pad read "6.00 m" on every check, whatever its depth).
+    if abs(q) >= GRADE_CLAMP and terrain.raycast then
+      local real = clamp_depth(body, d, Fr.R, q)
+      if real then q = real end
+    end
+    if abs(q) > worst then worst, why = abs(q), string.format("ground %+.2f m at u %.0f v %.0f", q, p[1], p[2]) end
     -- and nothing hanging over it: rock above the grade is a roof
     for _, hh in ipairs({ 6.0, 11.0, 16.0, 22.0 }) do
       local qa = terrain.query(body.x + d.x * (Fr.R + hh), body.y + d.y * (Fr.R + hh), body.z + d.z * (Fr.R + hh))
-      if qa and qa < 0.5 then worst = math.max(worst, hh) end
+      if qa and qa < 0.5 and hh > worst then worst, why = hh, string.format("rock %.2f m from a point %.0f m over u %.0f v %.0f", qa, hh, p[1], p[2]) end
     end
   end
+  GRADE_WHY = why
   return worst < 0.35, worst
 end
 
@@ -1172,6 +1199,25 @@ local function grade(body, Fr, runway)
     local h = -3.0
     local q = terrain.query(b.x + d.x * (Fr.R + h), b.y + d.y * (Fr.R + h), b.z + d.z * (Fr.R + h))
     if q and q > 0.3 then
+      -- A HOLE DEEPER THAN THE FIELD READS (the query clamps at ±6 m): one
+      -- ball under the grade hung in open air over it, and the hole stayed
+      -- (an alien home's canyon floor by the pad: "the grade still does not
+      -- hold (6.00 m)" after every regrade). Such a hole is filled from its
+      -- floor up, a ball every fillR, the way a hill is cut from its top down.
+      -- (a raise far from any ground adds only part of its ball: a 24 m
+      -- canyon by the Soleth pad took the two regrades to fill, then held)
+      if q >= GRADE_CLAMP - 3.0 and terrain.raycast then
+        work(4)
+        local depth = clamp_depth(b, d, Fr.R, 1.0)
+        if depth and depth > 2 * GRADE.fillR then
+          local c = Fr.R - math.min(depth, GRADE_PROBE_TOP) + GRADE.fillR * 0.5
+          while c < Fr.R - GRADE.fillR do
+            list[#list + 1] = { "raise", d.x * c, d.y * c, d.z * c, GRADE.fillR, 1.0 }
+            fills = fills + 1
+            c = c + GRADE.fillR
+          end
+        end
+      end
       list[#list + 1] = { "raise", d.x * (Fr.R - GRADE.fillR), d.y * (Fr.R - GRADE.fillR), d.z * (Fr.R - GRADE.fillR), GRADE.fillR, 1.0 }
       fills = fills + 1
     end
@@ -2290,7 +2336,7 @@ function update(node, dt)
       if not ok and not relooked then
         -- read again a second later before anything is regraded
         relooked, check_now, check_at = true, true, time + 1.0
-        log(string.format("base: the grade reads %.2f m off — looking again in a second", worst))
+        log(string.format("base: the grade reads %.2f m off (%s) — looking again in a second", worst, tostring(GRADE_WHY)))
       elseif ok then
         save.set("base.graded", LAYOUT_VERSION)
         log(string.format("base: the grade holds (%.2f m) — recorded", worst))
@@ -2302,7 +2348,7 @@ function update(node, dt)
       else
         -- recorded anyway: grading this ground again changes nothing
         save.set("base.graded", LAYOUT_VERSION)
-        log(string.format("base: the grade still does not hold (%.2f m) — leaving it", worst))
+        log(string.format("base: the grade still does not hold (%.2f m: %s) — leaving it", worst, tostring(GRADE_WHY)))
       end
     end
     if not (grade_later and grade_later.now) and not grade_job and not check_now
@@ -2373,7 +2419,7 @@ function update(node, dt)
     end
     if not ok and not relooked then
       relooked, recheck_at = true, time + 1.0
-      log(string.format("base: the grade reads %.2f m off — looking again in a second", worst))
+      log(string.format("base: the grade reads %.2f m off (%s) — looking again in a second", worst, tostring(GRADE_WHY)))
     elseif not ok and regrades < 2 and not grade_stuck(worst) then
       regrades = regrades + 1
       grade_later = { runway = save.get("base.runway") ~= false, now = true,
@@ -2381,7 +2427,7 @@ function update(node, dt)
       log("base: the grade did not hold — " .. grade_later.why .. ", grading again")
     elseif not ok then
       save.set("base.graded", LAYOUT_VERSION)
-      log(string.format("base: the grade still does not hold (%.2f m) — leaving it", worst))
+      log(string.format("base: the grade still does not hold (%.2f m: %s) — leaving it", worst, tostring(GRADE_WHY)))
     end
   end
   if not want_spawn then return end

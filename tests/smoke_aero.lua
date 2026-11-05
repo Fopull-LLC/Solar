@@ -561,6 +561,79 @@ do
     R.vstall or 0, R.astall or 0, R.vstall0 or 0, R.trec or -1, (R.arc or 0) - (R.minalt or 0)))
 end
 
+-- ── THE SHIELD ON A GRID gives the all-pairs numbers (2026-11-05) ──────────
+-- shield() finds overlapping pairs on a grid across the flow; the cover must be
+-- exactly what every body against every other gave: 1,000 bodies in a spine
+-- with fins and clusters, several flow directions, shares compared bit for bit.
+do
+  local function allpairs(M, ux, uy, uz)
+    local B, n = M.bodies, #M.bodies
+    local s, qx, qy, qz, R = {}, {}, {}, {}, {}
+    for i = 1, n do
+      local b = B[i]
+      local si = b.x * ux + b.y * uy + b.z * uz
+      s[i] = si
+      qx[i], qy[i], qz[i] = b.x - si * ux, b.y - si * uy, b.z - si * uz
+      local Ar = math.abs(b.X.x * ux + b.X.y * uy + b.X.z * uz) * b.Ax + math.abs(b.Y.x * ux + b.Y.y * uy + b.Y.z * uz) * b.Ay
+              + math.abs(b.Z.x * ux + b.Z.y * uy + b.Z.z * uz) * b.Az
+      R[i] = math.sqrt(math.max(Ar, 1e-6) / math.pi)
+    end
+    local out = {}
+    for i = 1, n do
+      local cov = 0
+      for j = 1, n do
+        if j ~= i and s[j] > s[i] + 0.05 then
+          local dx, dy, dz = qx[i] - qx[j], qy[i] - qy[j], qz[i] - qz[j]
+          local d = math.sqrt(dx * dx + dy * dy + dz * dz)
+          if d < R[i] + R[j] then
+            local c
+            -- (lens is local to aero.lua: the overlap's share recomputed here as it does)
+            local r1, r2 = R[i], R[j]
+            local L
+            if d >= r1 + r2 then L = 0
+            elseif d <= math.abs(r1 - r2) then local r = math.min(r1, r2); L = math.pi * r * r
+            else
+              local a = r1 * r1 * math.acos(math.max(-1, math.min(1, (d * d + r1 * r1 - r2 * r2) / (2 * d * r1))))
+              local b2 = r2 * r2 * math.acos(math.max(-1, math.min(1, (d * d + r2 * r2 - r1 * r1) / (2 * d * r2))))
+              local c2 = 0.5 * math.sqrt(math.max(0, (-d + r1 + r2) * (d + r1 - r2) * (d - r1 + r2) * (d + r1 + r2)))
+              L = a + b2 - c2
+            end
+            c = L / (math.pi * R[i] * R[i]) * (B[j].fill or 1)
+            if c > cov then cov = c end
+          end
+        end
+      end
+      out[i] = A.SHIELD * math.min(1, cov)
+    end
+    return out
+  end
+  local X, Y, Z = { x = 1, y = 0, z = 0 }, { x = 0, y = 1, z = 0 }, { x = 0, y = 0, z = 1 }
+  local bodies = {}
+  local seed = 12345
+  local function rnd() seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648 end
+  for k = 1, 1000 do
+    local spine = k <= 400
+    bodies[k] = { x = spine and 0 or (rnd() - 0.5) * 6, y = spine and k * 0.5 or rnd() * 200, z = spine and 0 or (rnd() - 0.5) * 6,
+                  X = X, Y = Y, Z = Z, Ax = 0.2 + rnd(), Ay = 0.2 + rnd() * 2, Az = 0.2 + rnd(), fill = rnd() < 0.2 and 0.3 or nil }
+  end
+  local M = { bodies = bodies }
+  local same, worst = true, 0
+  for _, u in ipairs({ { 0, 1, 0 }, { 0, -1, 0 }, { 0.6, 0.8, 0 }, { 1, 0, 0 }, { 0.2, 0.3, 0.9327379 }, { 0, 0, 1 } }) do
+    local l = math.sqrt(u[1] ^ 2 + u[2] ^ 2 + u[3] ^ 2)
+    local ux, uy, uz = u[1] / l, u[2] / l, u[3] / l
+    local want = allpairs(M, ux, uy, uz)
+    A.shield(M, ux, uy, uz)
+    for i = 1, #bodies do
+      if bodies[i].sh ~= want[i] then same = false; worst = math.max(worst, math.abs(bodies[i].sh - want[i])) end
+    end
+  end
+  ok(same, string.format("the grid shield gives every body's all-pairs share exactly (worst %.3g)", worst))
+  local t0 = os.clock()
+  A.shield(M, 0.6, 0.8, 0)
+  local ms = (os.clock() - t0) * 1000
+  print(string.format("SHIELD 1,000 bodies on the grid: %.2f ms", ms))
+end
+
 -- ── verdict ─────────────────────────────────────────────────────────────────
 if #failures == 0 then
   print(string.format("SMOKE OK — aero: %d checks", checks))

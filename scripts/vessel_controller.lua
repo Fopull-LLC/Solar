@@ -8107,12 +8107,36 @@ end
 -- window after release. The load through each joint is stressSolve's (above):
 -- what its leaving side needs to move with the craft, less the external
 -- forces already on that side.
+STRESS_SLEEP_SEV = 0.8       -- a sleeper whose worst joint is under this of its strength…
+STRESS_SLEEP_RECHECK = 0.25  -- …is solved again only this often (s) while it sleeps
 function stressTick(node, info, dt)
   if destroyed or info.anchored or (launch_mode and not released) or dt <= 0 then
     integ.af, integ.wprev, integ.vprev = nil, nil, nil
+    integ.sleepOK, integ.strainSkip = nil, nil
     stressForcesDrop(true)
     if not destroyed and (info.anchored or (launch_mode and not released)) then stressWarm(node, info) end
     return
+  end
+  -- A SLEEPING CRAFT'S LOADS DON'T CHANGE (2026-11-05: stressTick 1.4 ms a
+  -- tick for the 1,002-part craft asleep on the pad, the gameplay smoke's
+  -- big_release). The engine moves nothing asleep: its velocity, spin and
+  -- support are the same every tick, so every joint's load is the last
+  -- solve's. Once a solve finds every joint under STRESS_SLEEP_SEV of its
+  -- strength (nothing straining, nothing failing), the craft is solved again
+  -- only every STRESS_SLEEP_RECHECK s while it sleeps, and the ticks between
+  -- heal its strain all at once at the next solve (the same decay, summed).
+  -- Awake, every tick as before. (The filters keep last tick's velocity: a
+  -- sleeper's is the same, so the first tick awake reads the true change.)
+  if node.asleep and integ.sleepOK and time - integ.sleepOK < STRESS_SLEEP_RECHECK and time >= integ.sleepOK then
+    integ.strainSkip = (integ.strainSkip or 0) + dt
+    stressForcesDrop(false)
+    return
+  end
+  integ.sleepOK = nil
+  if (integ.strainSkip or 0) > 0 then
+    local heal = integ.strainSkip * 0.05
+    for u, st in pairs(integ.strain) do integ.strain[u] = math.max(0, st - heal) end
+    integ.strainSkip = 0
   end
   local v, w = info.vel, info.angVel
   -- A spin past the safety net's ceiling is being braked this very tick (see
@@ -8258,6 +8282,7 @@ function stressTick(node, info, dt)
   -- force — physics that can't happen — switches the load check off; the
   -- pressure checks stay)
   local loads_on = physTune.loads ~= false
+  local maxsev = 0
   for kk = 1, #list do
     local j = list[kk]
     kn[kk] = nil
@@ -8288,6 +8313,7 @@ function stressTick(node, info, dt)
           sev, why = cs, 3
         end
       end
+      if sev > maxsev then maxsev = sev end
       if sev > 1.0 then
         integ.strain[j.uid] = (integ.strain[j.uid] or 0) + (sev - 1.0) * dt
       else
@@ -8313,6 +8339,8 @@ function stressTick(node, info, dt)
       end
     end
   end
+  -- (asleep with every joint well inside its strength: the next solves can wait)
+  if node.asleep and not worst_j and maxsev < STRESS_SLEEP_SEV then integ.sleepOK = time end
   -- One failure per tick, the worst: the craft is a different shape afterwards
   -- and every load is re-read next tick against the new one.
   if worst_why == 2 then
@@ -8768,6 +8796,28 @@ function waterTick(node, info, dt)
   else
     WATER.still, WATER.still_t = false, 0
   end
+  -- STILL CLEAR OF THE SEA (2026-11-05): a tall craft on a pad by the sea is
+  -- inside WATER.reach, and every part's box was placed and tested every
+  -- tick to find them all dry (waterTick 0.9 ms a tick for the 1,002-part
+  -- craft asleep on the pad). The last full pass that found every part dry
+  -- keeps its clearance (WATER.dry: the least over the parts, each part's
+  -- reach taken whole either way); while the craft's origin has not moved,
+  -- nor its parts turned about it, further than that (a part at most
+  -- WATER.reach out moves at most 2·|Δaxes|·reach as it turns), every part
+  -- is still dry, and the answer is the same.
+  local D = WATER.dry
+  if D and sea and not lake and D.gen == integ.gen and D.robo == (R2.roboGen or 0) and D.body == d and D.R == R then
+    local rx0, up0 = basis(node)
+    local ox, oy, oz = base_of(node, info)
+    local dx, dy, dz = ox - b.x - D.px, oy - b.y - D.py, oz - b.z - D.pz
+    local turn = math.abs(rx0.x - D.rx[1]) + math.abs(rx0.y - D.rx[2]) + math.abs(rx0.z - D.rx[3])
+      + math.abs(up0.x - D.up[1]) + math.abs(up0.y - D.up[2]) + math.abs(up0.z - D.up[3])
+    if turn < 0.3 and math.sqrt(dx * dx + dy * dy + dz * dz) + 2 * turn * WATER.reach < D.clear - 1e-3 then
+      WATER.wet, WATER.splashed = 0, false
+      return
+    end
+  end
+  WATER.dry = nil
   local ux, uy, uz = px / dist, py / dist, pz / dist        -- the water's up (radial)
   local g = 7.0
   if space.gravity then
@@ -8778,6 +8828,7 @@ function waterTick(node, info, dt)
   local bx, by, bz = base_of(node, info)
   local m = math.max(0.05, info.mass or 1)
   local cells, wetV, totV, csum = {}, 0, 0, 0
+  local clear = 1e9
   -- (each vector's components read once: a vec3's `.x` is a call)
   local rxx, rxy, rxz, upx, upy, upz = rx.x, rx.y, rx.z, up.x, up.y, up.z
   local rzx, rzy, rzz = rz.x, rz.y, rz.z
@@ -8805,8 +8856,13 @@ function waterTick(node, info, dt)
         local mx = bx + rxx * bxx.cx + upx * bxx.cy + rzx * bxx.cz - bdx
         local my = by + rxy * bxx.cx + upy * bxx.cy + rzy * bxx.cz - bdy
         local mz = bz + rxz * bxx.cx + upz * bxx.cy + rzz * bxx.cz - bdz
-        dry = R - math.sqrt(mx * mx + my * my + mz * mz) + rad + hu < -1e-3
+        local mr = math.sqrt(mx * mx + my * my + mz * mz)
+        dry = R - mr + rad + hu < -1e-3
+        -- (the clearance kept for the ticks after: hu at its largest, rad)
+        local cl0 = mr - R - rad - math.max(rad, 0.02)
+        if cl0 < clear then clear = cl0 end
       end
+      if not dry then clear = -1 end
       if dry then for _ = 0, 7 do totV = totV + Vc end end
       for k = 0, dry and -1 or 7 do
         local ox = bxx.cx + ((k % 2 == 0) and -hx or hx)
@@ -8862,6 +8918,10 @@ function waterTick(node, info, dt)
   end
   WATER.wet = totV > 0 and wetV / totV or 0
   WATER.splashed = WATER.wet > 0.02
+  if sea and not lake and clear > 1e-3 and clear < 1e9 and #cells == 0 then
+    WATER.dry = { gen = integ.gen, robo = R2.roboGen or 0, body = d, R = R, clear = clear,
+                  px = bx - bdx, py = by - bdy, pz = bz - bdz, rx = { rxx, rxy, rxz }, up = { upx, upy, upz } }
+  end
   if #cells == 0 then return end
   -- one tick of drag can at most take 80 % of the speed away, never reverse it
   local kcap = math.min(1, 0.8 * m / (dt * math.max(csum, 1e-9)))
@@ -14150,7 +14210,9 @@ LAND_K_CLIMB = 4.0       -- deg of nose-down per m/s climbing (no balloon)
 LAND_HOLD = 3.0          -- m over LAND_AGL a flare already begun keeps on
 LAND_K_RATE = 2.5        -- /s, pitch error to pitch rate
 LAND_RATE_MAX = 0.35     -- rad/s
-LAND_K_STICK, LAND_K_STICK_Q = 8.0, 2.0   -- elevator per rad of pitch error, per rad/s of pitch rate
+LAND_K_FLOAT = 0.5       -- deg of nose-down per m/s sinking slower than the line
+LAND_PITCH_AT = 0.4      -- of the flare's height still to go: LAND_PITCH is reached there and held to the touch
+LAND_K_STICK, LAND_K_STICK_Q = 12.0, 2.5  -- elevator per rad of pitch error, per rad/s of pitch rate
 LAND = { state = nil, agl = nil, t = 0 }   -- published: state "armed" | "flare" | nil
 function landAssistOn()
   local st = findScript and findScript("settings")
@@ -14222,7 +14284,16 @@ function landAssist(node, info, nx, ny, nz)
   LAND.state, LAND.was, LAND.t = "flare", true, time
   local f = math.max(0, math.min(1, agl / LAND.h0))          -- 1 at the start, 0 at the touch
   local aim = -(LAND_SINK + (LAND.s0 - LAND_SINK) * f)
-  local th_t = LAND.th0 + (LAND_PITCH - LAND.th0) * (1 - f) + LAND_K_SINK * (aim - vu) - LAND_K_CLIMB * math.max(0, vu)
+  -- THE NOSE IS UP BEFORE THE TOUCH (2026-11-05: the touch came at +0.8 deg
+  -- against 3): the pitch ramp is done with LAND_PITCH_AT of the height to go, not at
+  -- the ground, and floating (sinking slower than the line) eases the nose
+  -- down only gently once the nose is up (LAND_K_FLOAT, the last LAND_PITCH_AT
+  -- of the height; higher, the full gain, so it does not level off at 5 m and
+  -- float the runway away): at a 0.8 m/s sink on a 1.5 m/s line the
+  -- full gain took a degree off the touch. A climb still takes it right off.
+  local ramp = math.min(1, (1 - f) / (1 - LAND_PITCH_AT))
+  local ds = aim - vu
+  local th_t = LAND.th0 + (LAND_PITCH - LAND.th0) * ramp + ((ds > 0 or f > LAND_PITCH_AT) and LAND_K_SINK or LAND_K_FLOAT) * ds - LAND_K_CLIMB * math.max(0, vu)
   th_t = math.max(math.min(LAND.th0, LAND_PITCH) - 2, th_t)
   th_t = math.min(LAND_PITCH_MAX, th_t)
   local err = math.rad(th_t - theta)
@@ -14243,6 +14314,8 @@ end
 -- THE TICK, from fixedUpdate's attitude block: the stick (sp, sy, sr), the
 -- SAS's rate error (ex, ey, ez, world), and the stick's rotation axes in the
 -- world (pitch ap, yaw ay, roll ar).
+AERO_SLEEP_SHARE = 0.1     -- of the weight: the most air a sleeper may wait on (the engine absorbs a fifth)
+AERO_SLEEP_RECHECK = 0.25  -- s between a sleeper's air steps
 function aeroTick(node, info, dt, thr, sp, sy, sr, ex, ey, ez, apx, apy, apz, ayx, ayy, ayz, arx, ary, arz)
   AERO.active = false
   if AERO.gen ~= integ.gen then aeroScan() end
@@ -14256,6 +14329,19 @@ function aeroTick(node, info, dt, thr, sp, sy, sr, ex, ey, ez, apx, apy, apz, ay
     if input.pressed("x") then T.p, T.y, T.r = 0, 0, 0 end
   end
   if info.anchored or dt <= 0 or space.warp() > 1.001 then return end
+  -- A SLEEPER IN A BREEZE (2026-11-05: aeroTick 2.2 ms a tick for the
+  -- 1,002-part craft asleep on the pad). The engine keeps a sleeping body
+  -- still against any change of force under a fifth of its weight (rc33), so
+  -- the breeze on a parked craft moves nothing. While it sleeps with the
+  -- engines idle and the last step's air under AERO_SLEEP_SHARE of its weight,
+  -- the air is worked out again only every AERO_SLEEP_RECHECK s; a gust past
+  -- that share is pushed with every tick, awake or not.
+  local AR = AERO.rest
+  if AR and node.asleep and (thr or 0) <= 0 and time - AR.t < AERO_SLEEP_RECHECK and time >= AR.t then
+    AERO.active = true
+    return
+  end
+  AERO.rest = nil
   local A = aeroLib()
   -- (a library node spawned this tick answers before its script has loaded)
   if not (A and A.airAt and A.build and A.step) then return end
@@ -14343,6 +14429,12 @@ function aeroTick(node, info, dt, thr, sp, sy, sr, ex, ey, ez, apx, apy, apz, ay
     local k = 0.5 * V * m / (fm * dt)
     capk = k
     fx, fy, fz, tx, ty, tz = fx * k, fy * k, fz * k, tx * k, ty * k, tz * k
+  end
+  -- (a sleeper whose air is under its share of its weight: the next steps can wait)
+  if node.asleep and (thr or 0) <= 0 and fm < AERO_SLEEP_SHARE * m * (b.mu or 0) / ((R + alt) * (R + alt)) then
+    local spun = false
+    for _, j in ipairs(M.jets) do if (j.s or 0) > 1e-4 then spun = true end end
+    if not spun then AERO.rest = { t = time } end
   end
   -- (AERO.scale: a probe's A/B switch on the air's force; 1 in the game)
   local ks = AERO.scale or 1

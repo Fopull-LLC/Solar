@@ -289,6 +289,19 @@ was really wrong:
   With that, the jet ran 0 to 59 m/s in 8 s on the same runway.
 - That jet also has no elevator (its tail fins are `ctl=y`), so only the cockpit's reaction wheel can rotate it.
 
+**"Bounces 2.4 m after touchdown" was the runway's end, not the gear (2026-11-05).**
+- The gear alone (motoprobe jetland `drops`: lifted, stopped and dropped onto its wheels;
+  `dropv` rolls it along the nose as it lands) comes back up at most 4 cm on the probe jet
+  (0.9, 1.6 and 2.7 m/s) and 6 cm on the player's jet (0.9, 1.2, 2.4 m/s; rolling at 30 m/s
+  and 1.5 m/s, none).
+- The 2.4 m came from the probe's long, fast flat approaches (54-65 m/s): the jet floated,
+  touched down 120-240 m along the 242 m runway, and ran off its far end at ~50 m/s onto the
+  plain, which rises 2 m in 20 m there. `JT` lines now carry the metres along the runway and
+  the ground under the centre of mass; `jetland.py` counts the bounce on the runway only and
+  says when the jet ran off it.
+- Flown so it stops on the runway, the landings bounced 0.21-0.36 m at 2.4-3.1 m/s sinks (harder
+  than asked for); the gear soaks a 1-2 m/s touch with under 0.1 m.
+
 ## 3d. Gas engines (playtest 2026-11-03c)
 
 "Add a motor engine vs an electric one to power vehicles … different-cc gas

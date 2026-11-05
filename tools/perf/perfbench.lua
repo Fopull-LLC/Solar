@@ -93,10 +93,24 @@ local function new_rec(name)
 end
 local function sc_begin(name)
   local r = RECS[name]
-  if not r then r = new_rec(name); RECS[name] = r; ORDER[#ORDER + 1] = name; r.lp0 = LP_SNAP and LP_SNAP() else r.active = true end
+  if not r then r = new_rec(name); RECS[name] = r; ORDER[#ORDER + 1] = name; r.lp0 = LP_SNAP and LP_SNAP()
+  elseif not r.active and not r.done then r.active = true; r.lp0 = LP_SNAP and LP_SNAP() end
   return r
 end
-local function sc_pause(name) if RECS[name] then RECS[name].active = false end end
+-- THE LUA FUNCTION TIMES ARE THE SCENARIO'S OWN (2026-11-05): they are summed
+-- only while it is active, as its frames are. A paused scenario's delta used to
+-- run on to the end of the mode: a_onfoot30 (paused after 4 s in every other
+-- mode, ended by finish_all) was charged every vessel_controller call of the
+-- whole gameplay smoke, 217 s of it, over its 242 frames — aeroTick "8.8 ms
+-- a frame" with no craft in the scene.
+local function lp_bank(r)
+  if r and r.active and r.lp0 and LP_DIFF then
+    r.lpd = r.lpd or {}
+    for k, v in pairs(LP_DIFF(r.lp0)) do r.lpd[k] = (r.lpd[k] or 0) + v end
+    r.lp0 = nil
+  end
+end
+local function sc_pause(name) local r = RECS[name]; if r then lp_bank(r); r.active = false end end
 local function sc_note(name, k, v) local r = RECS[name]; if r then r.notes[k] = v end end
 
 local function stats(list)
@@ -257,6 +271,7 @@ end
 local function sc_end(name)
   local r = RECS[name]
   if not r or r.done then return end
+  lp_bank(r)
   r.active, r.done = false, true
   local n = #r.dts
   local st = stats(r.dts)
@@ -298,7 +313,7 @@ local function sc_end(name)
   end
   local notes = {}
   for k, v in pairs(r.notes) do notes[k] = v end
-  local lpd = (r.lp0 and LP_DELTA) and LP_DELTA(r.lp0, n) or {}
+  local lpd = (r.lpd and LP_PER) and LP_PER(r.lpd, n) or {}
   if #lpd > 0 then P("RESULT [%s] lua functions (inclusive ms/frame): %s", name, fmtk(lpd)) end
   P("RESULT [%s] ticks: %.2f per engine frame over %d frames (max %d in one update); physics %.2f ms/frame = %.3f ms/tick", name,
     (r.tk or 0) / math.max(r.tf or 0, 1), r.tf or 0, r.tkmax or 0, (r.b.physics or 0) / math.max(r.tf or 0, 1), (r.b.physics or 0) / math.max(r.tk or 0, 1))
@@ -355,9 +370,14 @@ local function lua_prof(inst, prefix, names)
 end
 local function lp_snapshot() local s = {}; for k, v in pairs(LP) do s[k] = v.ms end; return s end
 LP_SNAP = lp_snapshot
-LP_DELTA = function(snap, frames)
+LP_DIFF = function(snap)
   local d = {}
-  for k, v in pairs(LP) do local x = v.ms - (snap[k] or 0); if x > 0.001 then d[k] = x / math.max(frames, 1) end end
+  for k, v in pairs(LP) do local x = v.ms - (snap[k] or 0); if x > 0 then d[k] = x end end
+  return d
+end
+LP_PER = function(sum, frames)
+  local d = {}
+  for k, v in pairs(sum) do if v > 0.001 then d[k] = v / math.max(frames, 1) end end
   return topk(d, 12)
 end
 

@@ -456,15 +456,54 @@ function shield(M, ux, uy, uz)
             + abs(b.Z.x * ux + b.Z.y * uy + b.Z.z * uz) * b.Az
     R[i] = sqrt(max(A, 1e-6) / PI)
   end
+  -- THE PAIRS ARE FOUND ON A GRID across the flow (2026-11-05): every body
+  -- against every other was 1,000,000 pairs on the 1,002-part craft, cut
+  -- again whenever the breeze on a parked craft turned 4° (aeroTick 1.5 ms a
+  -- tick asleep on the pad, the gameplay smoke's big_release). Two discs
+  -- overlap only within R[i] + R[j] ≤ 2·Rmax of each other across the flow,
+  -- so a cell that size and its eight neighbours hold every pair that can;
+  -- each pair is weighed exactly as before and the cover is their maximum,
+  -- so the shares are the same numbers.
+  local rmax = 0
+  for i = 1, n do if R[i] > rmax then rmax = R[i] end end
+  local cell = 2 * rmax * 1.001 + 1e-6
+  local ax, ay, az
+  if abs(ux) < 0.9 then ax, ay, az = 0, uz, -uy else ax, ay, az = -uz, 0, ux end
+  local al = sqrt(ax * ax + ay * ay + az * az)
+  ax, ay, az = ax / al, ay / al, az / al
+  local bx, by, bz = uy * az - uz * ay, uz * ax - ux * az, ux * ay - uy * ax
+  local grid, ci, cj = {}, {}, {}
+  for i = 1, n do
+    local a = math.floor((qx[i] * ax + qy[i] * ay + qz[i] * az) / cell)
+    local b = math.floor((qx[i] * bx + qy[i] * by + qz[i] * bz) / cell)
+    ci[i], cj[i] = a, b
+    local row = grid[a]
+    if not row then row = {}; grid[a] = row end
+    local c = row[b]
+    if not c then c = {}; row[b] = c end
+    c[#c + 1] = i
+  end
   for i = 1, n do
     local cov = 0
-    for j = 1, n do
-      if j ~= i and s[j] > s[i] + 0.05 then
-        local dx, dy, dz = qx[i] - qx[j], qy[i] - qy[j], qz[i] - qz[j]
-        local d = sqrt(dx * dx + dy * dy + dz * dz)
-        if d < R[i] + R[j] then
-          local c = lens(R[i], R[j], d) / (PI * R[i] * R[i]) * (B[j].fill or 1)
-          if c > cov then cov = c end
+    local si, Ri = s[i] + 0.05, R[i]
+    for da = -1, 1 do
+      local row = grid[ci[i] + da]
+      if row then
+        for db = -1, 1 do
+          local c = row[cj[i] + db]
+          if c then
+            for k = 1, #c do
+              local j = c[k]
+              if j ~= i and s[j] > si then
+                local dx, dy, dz = qx[i] - qx[j], qy[i] - qy[j], qz[i] - qz[j]
+                local d = sqrt(dx * dx + dy * dy + dz * dz)
+                if d < Ri + R[j] then
+                  local cv = lens(Ri, R[j], d) / (PI * Ri * Ri) * (B[j].fill or 1)
+                  if cv > cov then cov = cv end
+                end
+              end
+            end
+          end
         end
       end
     end

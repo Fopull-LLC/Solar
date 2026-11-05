@@ -14,6 +14,9 @@ import sys
 import numpy as np
 
 
+RUNWAY_END = 242.0   # m from the launch site (RUNWAY.blast + 14 past u0) to the paved end (u1)
+
+
 def parse(path):
     rows = []
     g = 7.0
@@ -32,6 +35,10 @@ def parse(path):
                  q=float(h[6]), p=float(h[7]), herr=float(h[8]), cap=float(h[9]), w={})
         if len(h) >= 15:
             r.update(cx=float(h[10]), cy=float(h[11]), cz=float(h[12]), m=float(h[13]), rh=int(h[14]))
+        if len(h) >= 18:
+            # (since 2026-11-05: metres along the runway from the launch site,
+            # the ground's height over the runway's radius under the CoM, its node)
+            r.update(s=float(h[15]), gh=float(h[16]), gn=h[17])
         tok = tail.split()
         # each wheel: uid:G pos load oleo [rim m/s] (the rim speed since 2026-11-05)
         starts = [k for k, x in enumerate(tok) if ":" in x] + [len(tok)]
@@ -108,6 +115,14 @@ def landings(rows, g):
             # the bounce: the highest the CoM got above its touchdown height,
             # after the gear first pushed it up
             up = np.argmax(vu > 0.05) if np.any(vu > 0.05) else len(vu) - 1
+            # (on the runway only: past its far end, RUNWAY_END m from the
+            # launch site, the jet is on the plain, and a rise there is not the gear)
+            on = np.array([x.get("s", 0.0) < RUNWAY_END for x in seq])
+            over = None
+            if not on.all():
+                k_off = int(np.argmin(on))
+                over = seq[k_off]
+                agl = agl[:k_off] if k_off > 0 else agl[:1]
             bounce = float(np.max(agl[up:]) - td["agl"]) if up < len(agl) else 0.0
             air = [not any(w["g"] for w in x["w"].values()) for x in seq]
             air_s = sum(air) * dt
@@ -133,6 +148,10 @@ def landings(rows, g):
                       n, td["V"], -td["vu"], td["th"], first, bounce, air_s, 1 + a3.max() / g, 1 + a.max() / g,
                       ("%.2f s" % settle) if settle is not None else "never", np.max(np.abs(herr - herr[0])) if len(herr) else 0,
                       th.min(), th.max(), {u: round(v) for u, v in pos.items()}, ch))
+            if "s" in td:
+                print("  touched down %.0f m along the runway (its end at %.0f)%s" % (
+                    td["s"], RUNWAY_END, (" | RAN OFF ITS END at %.1f m/s, %.1f s after the touch (the bounce above is counted on the runway only)"
+                                          % (over["V"], over["t"] - td["t"])) if over else ""))
             i += len(rs)
         else:
             i += 1
