@@ -79,6 +79,8 @@ There is one save key per member, `crew.m.<id>`, the same pattern as `comms.beac
   breath = 1.0,              -- held breath under water / helmet off in bad air, 0..1
   hp = 1.0,                  -- injuries, 0..1 (heals 0.02/min aboard or at base)
   heat = 0.0,                -- exposure to re-entry heating, 0..1
+  dose = 0.0,                -- radiation dose, 0..1 (1 = death, "radiation"; docs/heat-and-nuclear.md §4).
+                             -- An old record has none and reads as 0; heals by half in 2 game days at base
   helmet = true, rcs = 4.0,  -- helmet state; RCS Pack fill while carried (§5.7)
   hand = "repairkit",        -- the item in hand (nil = empty hands)
   task = nil,                -- a running job (§6.3), or nil
@@ -145,6 +147,7 @@ jump off a ledge, a swim) never kills anyone.
 | **Impact on foot** (falls, being hit by a craft or boulder) | The body's velocity changes by more than **13 m/s within one tick** (Δv is read off the body each tick; that covers a fall and a hit the same way). **6–13 m/s** injures instead: `hp` drops by `(Δv − 6) / 7`, a limp and a hurt grunt play, and at hp 0 the member dies. | The fall indicator: while airborne, a chip shows the fall speed relative to the ground. It turns amber at 6 m/s and red at 12 m/s with a "FATAL FALL" warning. On a low-g moon it rarely gets there. Injured members show an hp bar on their portrait and chip. | None at the impact. The warning is the fall indicator, and the threshold is a 9 m drop at 9.8 m/s². |
 | **Crushed** | Something solid fills the suit's middle: `overlapSphere` (r 0.15 at the capsule's centre) hits a dynamic body or craft for 0.4 s in a row. Examples: pinned under a toppled rover, under a dropped boulder. | The first tick of overlap: a "PINNED" chip, a strained breath, and a red vignette. | **0.4 s**. Anything that moves the weight or the body clears it. |
 | **Burned on re-entry** | A member **exposed** to re-entry heating (in an open seat, or on EVA) gets `heat += vessel heating × 2 × dt`. They die at 1.0. A closed pod protects its crew until the pod itself fails (the first row). | **"HEAT"** on the portrait from heat 0.2, and an alarm from 0.6. The crew strip header shows the craft's heating rate whenever an open-seat rider is aboard. | Heat cools at 0.1/s once heating stops, so climbing out of the heat in time saves them. |
+| **Radiation sickness** (2026-11-05, deep-space A4) | `dose` reaches 1.0. A reactor's 30° cone up its stack doses seated and on-foot crew in it, by the inverse square and through any Shadow Shield or full tank between (counted by part record). A spent fuel rod in a pack doses its carrier. | A **DOSE n%** chip from the first dose (▲ while rising, red past 50 %). The VAB draws the cone and colours the seats in it; the inspector says "N seat(s) in the cone, unshielded". | Slow: an unshielded seat 2 m over an Ember at full output takes about 25 minutes, a shielded one days. Leaving the cone, shutting the core down or going home stops it; the base heals it by half every two game days. |
 
 **What happens at the moment of death:**
 

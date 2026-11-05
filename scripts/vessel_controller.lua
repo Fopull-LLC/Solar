@@ -2473,6 +2473,7 @@ function elecRescan()
     end
   end
   elec.gen_seen = integ.gen
+  thermalRescan(E)
   -- A device kind is "on" when most of its parts are (without the rulebook the
   -- parts carry no state and the kind's own switch stands).
   for id, dev in pairs(DEVICES) do
@@ -2950,6 +2951,69 @@ function controlTick()
   elec.control, elec.mode, elec.why = can, mode, why
 end
 
+-- ── HEAT AND NUCLEAR (scripts/vessel_thermal.lua, the rules in thermal.lua) ──
+-- A craft with a reactor, an isotope cell or a radiator hands the thermal
+-- library a view of itself inside the electrical tick; any other craft never
+-- gets here (`elec.thermal` is nil). The state is `elec.th`; the HUD reads
+-- `thermalHud()`.
+TH_LIB = { ref = nil }
+function thermalRescan(E)
+  local th, eng = nil, nil
+  if E then
+    for _, u in ipairs(elec.parts) do
+      local d = bp_by_uid[u]
+      for _, m in ipairs(E.modsOf(d)) do
+        local ty = m.type
+        if ty == "reactor" or ty == "rtg" or ty == "radiator" then
+          th = th or {}
+          if th[#th] ~= u then th[#th + 1] = u end
+        elseif ty == "engine" then
+          eng = eng or {}
+          eng[#eng + 1] = u
+        end
+      end
+    end
+  end
+  elec.thermal = th ~= nil or nil
+  elec.th_uids, elec.th_eng = th, eng or {}
+  if th then
+    elec.th = elec.th or {}
+    elec.th.gen = (elec.th.gen or 0) + 1
+  else
+    elec.th = nil
+  end
+end
+TH_VIEW = {}
+function thermalTick(node, info, dt, E, loads, burning)
+  local L = TH_LIB.ref
+  if not (L and L.valid ~= false) then
+    L = findScript and findScript("vessel_thermal") or nil
+    TH_LIB.ref = L
+  end
+  if not (L and elec.th) then return 0 end
+  local V = TH_VIEW
+  V.node, V.recs, V.hp, V.anim, V.gone = node, bp_by_uid, part_hp, panim, integ.gone
+  V.served, V.uids, V.eng, V.loads = elec.served, elec.th_uids, elec.th_eng, loads
+  V.throttle, V.burning, V.bodies, V.E, V.S = throttle, burning, elec.bodies, E, elec.th
+  V.ref, V.gen, V.real_dt = elec.ref, elec.th.gen, elec.real_dt or 0.1
+  V.rx, V.up, V.rz = basis(node)
+  V.wear = V.wear or function(uid, hp) wearPart(uid, hp) end
+  V.label = V.label or function(uid) local d = bp_by_uid[uid] return d and (d.label or d.id) or "part" end
+  -- the tanks' fill (a full one shields)
+  local tf = V.tank_fill or {}
+  for _, t in ipairs(tanks) do if t.uid then tf[t.uid] = (t.fuel or 0) > 0 and (t.left or 0) / t.fuel or 0 end end
+  V.tank_fill = tf
+  local ok, s = pcall(L.tick, V, dt)
+  if not ok then
+    if not elec.th.err then elec.th.err = true; log("vessel_thermal: " .. tostring(s)) end
+    return 0
+  end
+  return s or 0
+end
+function thermalHud() return elec.th and elec.th.hud or nil end
+-- (a rod loaded or pulled: the HUD's numbers follow at once)
+function thermalTouch() if elec.th then elec.th.hud_t = nil end end
+
 -- ELECTRICAL tick, 10 Hz: supply, demand, the batteries, the radios, the link,
 -- and who has control. Runs piloted or derelict — a dead-stick probe on panels
 -- keeps its radio up and stays on the network.
@@ -2957,6 +3021,7 @@ local function power_tick(node, info, dt)
   elec.acc = (elec.acc or 0) + dt
   if elec.acc < 0.1 then return end
   dt, elec.acc = elec.acc, 0
+  elec.real_dt = dt
   local E = elib()
   if (elec.gen_seen or -1) ~= integ.gen then elecRescan() end
   if not E then
@@ -3009,7 +3074,7 @@ local function power_tick(node, info, dt)
           plist[#plist + 1] = { gen = m.gen or 0, ax = wx, ay = wy, az = wz, deployed = panim[u] or 0,
                                 x = x, y = y, z = z }
           panels = panels + 1
-        elseif ty == "rtg" then
+        elseif ty == "rtg" and not elec.thermal then
           supply = supply + (m.gen or 0)
         elseif ty == "engine" then
           if burning and st.running ~= false then
@@ -3074,6 +3139,9 @@ local function power_tick(node, info, dt)
     supply = supply + sun_out
     sunlit = sun_out > 0 or (lit or 0) > 0
   end
+  -- HEAT AND NUCLEAR (scripts/vessel_thermal.lua): only a craft that carries
+  -- a reactor, an isotope cell or a radiator runs it.
+  if elec.thermal then supply = supply + thermalTick(node, info, dt, E, loads, burning) end
   local rep = E.powerStep({ supply = supply, loads = loads, cells = cells }, dt)
   for _, c in ipairs(cells) do c.st.charge = c.charge end
   -- isolated batteries still count toward what's aboard
@@ -15049,6 +15117,8 @@ function fixedUpdate(node, dt)
       chute_open = chute_anim,
       -- the air (aeroTick): aoa, slip, mach, q, stall, trim, jet
       aero = AERO.hud,
+      -- the heat loop (vessel_thermal): only on a craft with a heat source
+      heat = elec.th and elec.th.hud or nil,
     }
     local dom = space.dominant(node.x, node.y, node.z)
     local b = dom and space.body(dom)

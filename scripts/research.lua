@@ -69,6 +69,18 @@ TECH = {
   rcs        = { cost = 2600, label = "RCS Block",      after = "engineM", rep = 3 },
   skipper    = { cost = 4500, label = "Skipper",        mat = "iron",    after = "engineM", rep = 8 },
   dockPort   = { cost = 3800, label = "Docking Port",   mat = "copper",  rep = 6, after = "rcs" },
+  -- THE NUCLEAR TIER (deep-space G1; scripts/parts_nuclear.lua). The Isotope
+  -- Cell wants uranium ore held: the deep band the Deep Core contract sends
+  -- you to. Radiators come with it; the Ember wants standing and the panel
+  -- radiators it can't run without. (G2's "Critical" milestone will grant
+  -- the Pile NTR and the fuel chain later; until then the Ember's research
+  -- also opens Fuel Fabrication at the Materials Intake.)
+  rtg          = { cost = 2000, label = "Isotope Cell",   mat = "uranium" },
+  radFin       = { cost = 300,  label = "Radiator Fin",   after = "rtg" },
+  radPanel     = { cost = 1200, label = "Radiator Panel", after = "rtg" },
+  radTruss     = { cost = 3200, label = "Truss Radiator", after = "radPanel", rep = 6 },
+  ember        = { cost = 9000, label = "Ember Reactor",  mat = "uranium", after = "radPanel", rep = 6 },
+  shadowShield = { cost = 1800, label = "Shadow Shield",  after = "ember" },
 }
 
 -- Published for panels.

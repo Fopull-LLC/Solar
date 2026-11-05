@@ -1,0 +1,118 @@
+// VISUAL-ONLY variant of prefabs/PartShadowShield.prefab.ron for the builder stand: no body, no scripts.
+// Written by tools/gen_nuclear_parts.py — regenerate, don't edit.
+// SHADOW SHIELD — a 1 m tungsten and lithium-hydride disc for a stack (parts_nuclear shadowShield).
+// Written by tools/gen_part_meshes.py (write_prefab) — edit the generator, not this file.
+[
+    (
+        name: "PartShadowShield",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+    ),
+    (
+        name: "Body",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Mesh(
+            asset_path: "models/parts/nuke_shield.glb",
+        ),
+        object_materials: {
+            "Dark": (
+                color: (0.3, 0.3, 0.32),
+                texture: Some("textures/parts/metal_albedo.png"),
+                normal_map: Some("textures/parts/metal_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/parts/metal_orm.png"),
+                roughness: 1.2,
+                metallic_map: Some("textures/parts/metal_orm.png"),
+                metallic: 0.4,
+                ao_map: Some("textures/parts/metal_orm.png"),
+                shader: Some("shaders/hullPanels.flsl"),
+                shader_params: {
+                    "tint": (0.3, 0.3, 0.32, 1.0),
+                },
+                shading: Physical,
+            ),
+            "Paint3": (
+                color: (0.22, 0.23, 0.25),
+                texture: Some("textures/parts/paint_albedo.png"),
+                normal_map: Some("textures/parts/paint_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/parts/paint_orm.png"),
+                roughness: 1.0,
+                metallic_map: Some("textures/parts/paint_orm.png"),
+                metallic: 1.0,
+                ao_map: Some("textures/parts/paint_orm.png"),
+                shader: Some("shaders/hullPanels.flsl"),
+                shader_params: {
+                    "tint": (0.22, 0.23, 0.25, 1.0),
+                },
+                shading: Physical,
+            ),
+            "Steel": (
+                color: (0.7, 0.7, 0.68),
+                texture: Some("textures/parts/metal_albedo.png"),
+                normal_map: Some("textures/parts/metal_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/parts/metal_orm.png"),
+                roughness: 0.8,
+                metallic_map: Some("textures/parts/metal_orm.png"),
+                metallic: 0.6,
+                ao_map: Some("textures/parts/metal_orm.png"),
+                shader: Some("shaders/hullPanels.flsl"),
+                shader_params: {
+                    "tint": (0.7, 0.7, 0.68, 1.0),
+                },
+                shading: Physical,
+            ),
+            "Stencil": (
+                color: (0.06, 0.06, 0.07),
+                texture: Some("textures/parts/markings.png"),
+                roughness: 0.6,
+                metallic: 0.0,
+                shading: Physical,
+            ),
+            "Tungsten": (
+                color: (0.42, 0.43, 0.45),
+                texture: Some("textures/parts/metal_albedo.png"),
+                normal_map: Some("textures/parts/metal_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/parts/metal_orm.png"),
+                roughness: 0.9,
+                metallic_map: Some("textures/parts/metal_orm.png"),
+                metallic: 0.7,
+                ao_map: Some("textures/parts/metal_orm.png"),
+                shader: Some("shaders/hullPanels.flsl"),
+                shader_params: {
+                    "tint": (0.42, 0.43, 0.45, 1.0),
+                },
+                shading: Physical,
+            ),
+            "Yellow": (
+                color: (0.95, 0.72, 0.12),
+                texture: Some("textures/parts/paint_albedo.png"),
+                normal_map: Some("textures/parts/paint_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/parts/paint_orm.png"),
+                roughness: 1.0,
+                metallic_map: Some("textures/parts/paint_orm.png"),
+                metallic: 1.0,
+                ao_map: Some("textures/parts/paint_orm.png"),
+                shader: Some("shaders/hullPanels.flsl"),
+                shader_params: {
+                    "tint": (0.95, 0.72, 0.12, 1.0),
+                },
+                shading: Physical,
+            ),
+        },
+        scripts: [],
+        parent: Some(0),
+    ),
+]

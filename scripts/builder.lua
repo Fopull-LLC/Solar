@@ -183,6 +183,15 @@ local function registry()
       pcall(spawn, "AutoLib", vec3(0, 0, 0))
     end
   end
+  -- THE HEAT AND NUCLEAR PARTS (scripts/parts_nuclear.lua on the Electronics
+  -- node, beside thermal.lua): the NUCLEAR section.
+  if R.lib and not R.nuke then
+    local pn = findScript and findScript("parts_nuclear") or nil
+    if pn and pn.register and R.lib.extend then
+      R.lib.extend(pn)
+      R.nuke = true
+    end
+  end
   return R.lib
 end
 local REG = setmetatable({}, { __index = function(_, id)
@@ -5660,6 +5669,145 @@ function draw_engineering()
 end
 
 
+-- ── HEAT AND RADIATION ON THE STAND (scripts/thermal.lua) ───────────────────
+-- What the heat loop will do at full output, every radiator out and the sun
+-- full on them (the worst case), and the radiation cone of each reactor drawn
+-- from the SAME rule the flight doses the crew by (thermal.doseRate): every
+-- seat is a sphere — red in a cone unshielded, amber in one behind its
+-- shielding, nothing outside. Cached per craftVersion; nothing at all on a
+-- craft with no reactor, isotope cell or radiator.
+TH_CACHE = { v = -1, out = nil }
+function thermal_lib() return findScript and findScript("thermal") or nil end
+function thermalBudget()
+  if TH_CACHE.v == craftVersion then return TH_CACHE.out end
+  TH_CACHE.v = craftVersion
+  TH_CACHE.out = nil
+  local TH = thermal_lib()
+  if not TH or partCount == 0 then return nil end
+  local ents, cores, blk, seats, any = {}, {}, {}, {}, false
+  for uid, p in pairs(parts) do
+    local d = liveDef(p.def) or p.def
+    local mods = part_mods(d) or {}
+    local B = nil
+    for _, m in ipairs(mods) do
+      local ty = m.type
+      if ty == "reactor" or ty == "rtg" or ty == "radiator" then
+        any = true
+        local st = nil
+        if ty == "reactor" then
+          local c = TH.coreOf(m)
+          st = { critical = true, output = 100, rods = c.rack, life = c.rack * c.life }
+          B = B or basisOf(p.yaw, p.pitch, p.roll)
+          cores[#cores + 1] = { uid = uid, x = p.x, y = p.y, z = p.z, ax = B.Y.x, ay = B.Y.y, az = B.Y.z,
+                                rad = c.rad, share = 1, label = d.label, h = d.h }
+        end
+        ents[#ents + 1] = { m = m, st = st, deploy = 1, hp = 1, pump = 1 }
+      elseif ty == "engine" then
+        ents[#ents + 1] = { m = m, throttle = 1 }
+      elseif ty == "shield" then
+        B = B or basisOf(p.yaw, p.pitch, p.roll)
+        local hx, hy, hz = visHalf(p.id, d)
+        blk[#blk + 1] = { uid = uid, x = p.x, y = p.y, z = p.z, X = B.X, Y = B.Y, Z = B.Z, hx = hx, hy = hy, hz = hz,
+                          k = TH.blockerK(mods, d) }
+      end
+    end
+    if d.kind == "tank" and (d.fuel or 0) > 0 then
+      B = B or basisOf(p.yaw, p.pitch, p.roll)
+      local hx, hy, hz = visHalf(p.id, d)
+      blk[#blk + 1] = { uid = uid, x = p.x, y = p.y, z = p.z, X = B.X, Y = B.Y, Z = B.Z, hx = hx, hy = hy, hz = hz,
+                        k = TH.blockerK(mods, d, 1.0) }
+    end
+    if d.kind == "crewed" or (d.seats and #d.seats > 0) then seats[#seats + 1] = { uid = uid, x = p.x, y = p.y, z = p.z } end
+  end
+  if not any then return nil end
+  local M = TH.vesselModel(ents, 1)
+  local out = { eq = TH.settle(M, 0), Q = 0, S = M.S, cores = cores, seats = seats, n = M.n, scram = TH.THERMAL.scram }
+  out.Q = out.eq * M.S
+  for _, s in ipairs(seats) do
+    s.rate, s.inside = 0, false
+    for _, c in ipairs(cores) do
+      local r, inside, nb = TH.doseRate(c, s.x, s.y, s.z, blk, { [c.uid] = true, [s.uid] = true })
+      if inside then s.inside = true; s.rate = s.rate + r; s.blocked = (s.blocked or 0) + (nb or 0) end
+    end
+  end
+  TH_CACHE.out = out
+  return out
+end
+
+function draw_thermal()
+  local tb = thermalBudget()
+  if not (tb and #tb.cores > 0) then return end
+  local TH = thermal_lib()
+  local half = math.rad(TH and TH.THERMAL.cone_deg or 30)
+  local tn = math.tan(half)
+  for _, c in ipairs(tb.cores) do
+    local ax, ay, az = c.ax, c.ay, c.az
+    -- two axes across the cone's axis
+    local ux, uy, uz = 1, 0, 0
+    if math.abs(ax) > 0.9 then ux, uy, uz = 0, 0, 1 end
+    local vx, vy, vz = ay * uz - az * uy, az * ux - ax * uz, ax * uy - ay * ux
+    local vl = math.sqrt(vx * vx + vy * vy + vz * vz)
+    vx, vy, vz = vx / vl, vy / vl, vz / vl
+    ux, uy, uz = vy * az - vz * ay, vz * ax - vx * az, vx * ay - vy * ax
+    local L = 9.0
+    local x0, y0, z0 = c.x, c.y, c.z
+    for k = 0, 7 do
+      local a = k / 8 * math.pi * 2
+      local ca, sa = math.cos(a) * tn * L, math.sin(a) * tn * L
+      draw.line(x0, y0, z0, x0 + ax * L + ux * ca + vx * sa, y0 + ay * L + uy * ca + vy * sa,
+        z0 + az * L + uz * ca + vz * sa, 0.97, 0.34, 0.25, 0.45)
+    end
+    for _, d in ipairs({ 3.0, 6.0, 9.0 }) do
+      draw.ring(x0 + ax * d, y0 + ay * d, z0 + az * d, ax, ay, az, d * tn, 0.97, 0.34, 0.25, d == 3.0 and 0.8 or 0.5)
+    end
+  end
+  for _, s in ipairs(tb.seats) do
+    if s.inside then
+      -- red: a lethal dose inside two hours at full output; amber: shielded
+      local bad = s.rate * 7200 >= 1
+      local r, g, b = 1.0, 0.8, 0.28
+      if bad then r, g, b = 0.97, 0.34, 0.25 end
+      -- (the sphere sits inside the hull: a ring round the seat's part shows outside it)
+      draw.sphere(s.x, s.y, s.z, 0.22, r, g, b, 1.0)
+      draw.ring(s.x, s.y, s.z, tb.cores[1].ax, tb.cores[1].ay, tb.cores[1].az, 0.75, r, g, b, 1.0)
+      draw.ring(s.x, s.y, s.z, tb.cores[1].ax, tb.cores[1].ay, tb.cores[1].az, 0.80, r, g, b, 1.0)
+    end
+  end
+end
+
+-- FUEL RODS AT ROLLOUT (B5): each reactor's rack is filled from the base's
+-- stores, as far as they go, and the rods leave the warehouse with the craft.
+-- `bp` the launch blueprint (its parts get `st.rods`, `st.life`). → loaded,
+-- wanted.
+function rodsAtLaunch(bp)
+  local TH, inv = thermal_lib(), findScript and findScript("inventory") or nil
+  local E = elib()
+  if not (TH and E and bp and bp.parts) then return 0, 0 end
+  local have = (inv and inv.itemCount and inv.itemCount("base", "fuelRod")) or 0
+  -- (a sandbox has the catalogue open, and its rods too)
+  local free = save.get("game.mode") == "sandbox"
+  if free then have = math.huge end
+  local loaded, wanted = 0, 0
+  for _, d in ipairs(bp.parts) do
+    local mods = type(d.mods) == "string" and E.decodeMods(d.mods) or d.mods
+    for _, m in ipairs(mods or {}) do
+      if m.type == "reactor" then
+        local c = TH.coreOf(m)
+        wanted = wanted + c.rack
+        local n = math.min(c.rack, have - loaded)
+        if n > 0 then
+          d.st = type(d.st) == "table" and d.st or {}
+          d.st.rods, d.st.life = n, n * c.life
+          loaded = loaded + n
+        end
+      end
+    end
+  end
+  if loaded > 0 and not free and inv and inv.removeItem then inv.removeItem("base", "fuelRod", loaded) end
+  if wanted > 0 then save.set("shipyard.blueprint", bp) end
+  return loaded, wanted
+end
+
 -- ── WHEEL SETTINGS (SCRATCH wheel_spec.md; the flight reads them) ──────────
 -- Every wheel can be told how to steer and drive and how its suspension and
 -- tyre behave. Kept per uid like fairing shapes, written to the wheel's craft
@@ -8191,6 +8339,7 @@ function update(node, dt)
   frameTick()
   statsTick()
   if W.overlay >= 1 and not aeroDrawsOverlays() then draw_engineering() end
+  if W.overlay >= 1 then draw_thermal() end
   if not toolbarOwnsModes() then drawModes() end
   roundTwoTick()
   fit_header()
@@ -8328,6 +8477,11 @@ function doLaunch()
   save.set("shipyard.spent", cost)
   save.set("shipyard.kit", (kit and kit.pending) or false)
   if not saved then W.launch_bp = save_blueprint(true) end
+  -- the reactors' fuel rods go with it from the base's stores (B5)
+  local rl, rw = rodsAtLaunch(W.launch_bp)
+  if rw > rl then
+    hint(string.format("%d of %d fuel rod(s) loaded from stores — fabricate more at the Materials Intake", rl, rw), 5.0)
+  end
   ui("launch", 1.0)
   save.set("shipyard.launch", 1)
   save.set("shipyard.site", launchSite())

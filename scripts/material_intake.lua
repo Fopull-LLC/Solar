@@ -679,7 +679,98 @@ local function provider(t, ctx)
   for i = 1, math.min(3, #receipts) do
     out[#out + 1] = { type = "info", id = "r" .. i, group = "LAST TAKEN", label = receipts[i].text }
   end
+  fab_rows(out, ctx)
   return out, "MATERIALS INTAKE", "the depot's bulk feed belt"
+end
+
+-- ── FUEL FABRICATION (deep-space B6; the rules in scripts/thermal.lua) ──────
+-- The Intake's radiological wing: 20 units of uranium ore from the warehouse,
+-- $400 and ten game minutes in the press make one Fuel Rod, delivered to the
+-- base's stores (the VAB loads reactors from there at rollout). An Engineer
+-- on foot at the shed sets each one up and is credited with it ("crafted").
+-- The queue (`fab.rods`, two at most) runs on the game clock, so a rod
+-- started before a long warp, or a save quit mid-press, is ready when its
+-- time is up. Spent rods come back here too: the wing takes them off your
+-- hands (reprocessing returns 4 units of the ore).
+FAB_KEY = "fab.rods"
+local function fab_queue()
+  local q = save.get(FAB_KEY)
+  return type(q) == "table" and q or {}
+end
+local function game_now() return (space and space.time and space.time()) or (time or 0) end
+function fab_rows(out, ctx)
+  local TH, inv, co, rs, cl = ref("thermal"), ref("inventory"), ref("company"), ref("research"), ref("crew")
+  if not (TH and inv) then return end
+  local F = TH.FUEL_FAB
+  local unlocked = not rs or not rs.isUnlocked or rs.isUnlocked("ember")
+  local a = ctx and ctx.actor
+  local function engineer()
+    if not (a and a.kind == "crew" and a.id) then return false end
+    if not (cl and cl.hasRole) then return true end
+    return cl.hasRole(a.id, "engineer") == true
+  end
+  local function why()
+    local q = fab_queue()
+    return TH.fabWhyNot(inv.count("base", F.ore) or 0, co and co.balance and co.balance() or nil, q, engineer(), unlocked)
+  end
+  out[#out + 1] = { type = "info", id = "fabq", group = "FUEL FABRICATION · RADIOLOGICAL", label = "PRESS", value = function()
+      local q = fab_queue()
+      if #q == 0 then return string.format("idle · %d units of uranium ore in the warehouse", inv.count("base", F.ore) or 0) end
+      local now = game_now()
+      local p = TH.fabProgress(q, now) or 0
+      return string.format("%d rod(s) in the press · %d%% · %s left", #q, math.floor(p * 100),
+        string.format("%.0f min", math.max(0, (q[1].t1 or now) - now) / 60))
+    end }
+  out[#out + 1] = { type = "action", id = "fabrod", group = "FUEL FABRICATION · RADIOLOGICAL", label = "Fabricate a fuel rod",
+    hint = string.format("%d ore · $%d · %d min", F.units, F.cost, math.floor(F.secs / 60)),
+    enabled = function() return why() == nil end, why = why,
+    act = function()
+      local w = why()
+      if w then return false, w end
+      if co and co.spend and not co.spend(F.cost, "fuel fabrication") then return false, "not enough funds" end
+      inv.remove("base", F.ore, F.units)
+      local q = fab_queue()
+      TH.fabQueue(q, game_now(), a and a.id)
+      save.set(FAB_KEY, q)
+      say(string.format("fuel rod in the press — ready in %d min", math.floor(F.secs / 60)), "fab")
+      return true
+    end }
+  local pack = a and a.pack
+  local spent = (inv.itemCount("base", "spentRod") or 0) + ((pack and inv.itemCount(pack, "spentRod")) or 0)
+  if spent > 0 then
+    out[#out + 1] = { type = "action", id = "fabret", group = "FUEL FABRICATION · RADIOLOGICAL",
+      label = string.format("Return %d spent rod(s)", spent), hint = "+4 ore each",
+      act = function()
+        local n = inv.removeItem("base", "spentRod", 99)
+        if pack then n = n + inv.removeItem(pack, "spentRod", 99) end
+        if n > 0 then inv.add("base", F.ore, 4 * n) end
+        say(string.format("%d spent rod(s) into the cask · %d units of ore reclaimed", n, 4 * n), "fab")
+        return true
+      end }
+  end
+end
+
+-- The press on the game clock (once a second while the shed is loaded).
+local fab_t = 0
+local function fab_tick(dt)
+  fab_t = fab_t + (dt or 0)
+  if fab_t < 1.0 then return end
+  fab_t = 0
+  local q = save.get(FAB_KEY)
+  if type(q) ~= "table" or #q == 0 then return end
+  local TH, inv = ref("thermal"), ref("inventory")
+  if not (TH and inv) then return end
+  local done = TH.fabTake(q, game_now())
+  if #done == 0 then return end
+  save.set(FAB_KEY, q)
+  local cl = ref("crew")
+  for _, j in ipairs(done) do
+    inv.addItem("base", TH.FUEL_FAB.item, 1, { force = true })
+    if j.by and cl and cl.credit then pcall(cl.credit, j.by, "crafted") end
+  end
+  say(string.format("%d fuel rod(s) out of the press — in the base's stores", #done), "fab")
+  local bc = ref("big_caption")
+  if bc and bc.show then pcall(bc.show, "FUEL ROD READY", "In the base's stores — the VAB loads reactors from there.", 4.0) end
 end
 local provider_on = false
 
@@ -692,6 +783,7 @@ end
 local look_t = -10
 function update(node, dt)
   ROOT = node
+  fab_tick(dt)
   if not provider_on then
     local reg = ref("context_registry")
     if reg and reg.register then

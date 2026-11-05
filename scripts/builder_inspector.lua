@@ -327,6 +327,45 @@ local function engine_rows(B, def, out)
   if d.ve then out[#out + 1] = figure("ev", "EXHAUST", pairText(d.asl and d.ve * k or nil, d.ve, "%.0f", " m/s", "sea")) end
 end
 
+-- ── HEAT AND RADIATION (builder.thermalBudget, scripts/thermal.lua) ─────────
+-- On a craft with a reactor, an isotope cell or a radiator: where its heat
+-- loop settles at full output with every radiator out in full sun (the
+-- worst case), and whether any seat sits in a reactor's radiation cone —
+-- the same rule the VAB draws the cone by and the flight doses the crew by.
+local function heat_rows(B, out, reactor)
+  local tb = B.thermalBudget and B.thermalBudget()
+  if not tb then return end
+  local pct = function(x) return math.floor((x or 0) * 100 + 0.5) end
+  out[#out + 1] = rule("rh")
+  out[#out + 1] = sublabel("hh", "HEAT  full output · radiators out · in sun")
+  local over = (tb.eq or 0) >= (tb.scram or 0.9)
+  out[#out + 1] = figure("he", "SETTLES", string.format("%d%%%s", pct(math.min(tb.eq or 0, 9.99)),
+    over and "  ⚠ scrams at 90%" or ""))
+  out[#out + 1] = figure("hq", "IN · OUT", string.format("%.1f heat in · sheds up to %.1f", tb.Q or 0, tb.S or 0))
+  if over then
+    out[#out + 1] = { "text", key = "hw", style = "panel/hint", w = "100%", h = "fit", wrap = true,
+      text = "Not enough radiator for full output: add radiators, or fly it throttled down." }
+  end
+  if #(tb.cores or {}) > 0 then
+    local hot, shaded = 0, 0
+    for _, s in ipairs(tb.seats or {}) do
+      if s.inside then if (s.rate or 0) * 7200 >= 1 then hot = hot + 1 else shaded = shaded + 1 end end
+    end
+    local txt = (hot > 0 and string.format("%d in the cone · bare", hot))
+      or (shaded > 0 and string.format("%d in the cone · shielded", shaded)) or "clear of the cone"
+    out[#out + 1] = figure("hc", "CREW", txt)
+    if hot > 0 then
+      out[#out + 1] = { "text", key = "hcw", style = "panel/hint", w = "100%", h = "fit", wrap = true,
+        text = "The red cone is the reactor's radiation. Put a Shadow Shield or full tanks between it and the crew, or the reactor below them." }
+    end
+  end
+  if reactor then
+    local inv = ref("inventory")
+    local n = inv and inv.itemCount and inv.itemCount("base", "fuelRod") or 0
+    out[#out + 1] = figure("hr", "RODS", string.format("%d at rollout · %d in stores", reactor.rack or 1, n))
+  end
+end
+
 -- ── the control mode (builder.ctrlMode, scripts/craft_mode.lua) ─────────────
 -- How the craft drives in flight. AUTO reads the section flown from and says
 -- what it made of it; a key wins over Auto. A craft cut into SECTIONS by
@@ -528,6 +567,7 @@ local function inspect(B, out, top)
       out[#out + 1] = figure("cm", "MASS", mass_text(s.mass or 0))
       out[#out + 1] = figure("cc", "COST", money(s.cost))
       perf_rows(s, out)
+      heat_rows(B, out)
       out[#out + 1] = rule("rc")
       ctrl_rows(B, out)
       launch_rows(s, out)
@@ -603,6 +643,17 @@ local function inspect(B, out, top)
   if def.wheel then out[#out + 1] = rule("r2"); wheel_rows(B, uid, rec, out) end
   if def.proc == "chain" then out[#out + 1] = rule("r2"); chain_rows(B, uid, rec, out) end
   if def.fairing and n == 1 then out[#out + 1] = rule("r2"); fairing_rows(B, uid, out) end
+  if n == 1 and type(raw.mods) == "table" then
+    local core, thermal = nil, false
+    for _, m in ipairs(raw.mods) do
+      if m.type == "reactor" or m.type == "rtg" or m.type == "radiator" or m.type == "shield" then thermal = true end
+      if m.type == "reactor" then
+        local TH = ref("thermal")
+        core = TH and TH.coreOf and TH.coreOf(m) or { rack = m.rack or 1 }
+      end
+    end
+    if thermal then heat_rows(B, out, core) end
+  end
   controls_rows(B, rec, sel, out)
 end
 

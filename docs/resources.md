@@ -271,6 +271,12 @@ body). Rules:
 | other planets with air | iron, copper, monazite; lava: sulfur, obsidian, uranite; dune: sulfur; crystal: resonant crystal, phasite |
 | dense (over 1.25× the system's middle density), not home | kamacite and sperrylite added |
 
+**Uranium is fuel now (2026-11-05, deep-space B6).** Holding uranium ore
+opens the Isotope Cell's research. 20 units of it in the warehouse, with $400
+and ten game minutes in the Materials Intake's press, make one Fuel Rod for a
+reactor (docs/heat-and-nuclear.md §3). A spent rod handed back at the Intake
+returns 4 units.
+
 Weights vary per world (seeded), so two maria moons hold the same ores in
 different measure. A world with no record (scale 1, a test) falls back on
 its archetype's `BANDS` (`veinOres`).

@@ -466,7 +466,7 @@ function newRecord(id, name, fields)
   local r = { id = id, name = name, hired = 0, cost = 0, starter = false, status = "base",
               o2 = 1.0, breath = 1.0, hp = 1.0, heat = 0.0, helmet = true, rcs = nil,
               hand = nil, task = nil, flights = 0, eva_s = 0, flags = 0, repairs = 0,
-              landings = 0, dockings = 0, built = 0, crafted = 0, studied = 0 }
+              landings = 0, dockings = 0, built = 0, crafted = 0, studied = 0, dose = 0 }
   for k, v in pairs(fields or {}) do r[k] = v end
   return r
 end
@@ -2189,8 +2189,11 @@ function alerts(id)
       if d.id ~= id and d.dist and d.dist < 600 then near = d break end
     end
   end
+  local ds = doseSeen[id]
   return { o2 = o2, air_s = air_s, breath = breath, hp = r.hp or 1.0, heat = r.heat or 0.0, hit = hit,
            downed = own, down = near,
+           dose = tonumber(r.dose) or 0, dose_rising = (ds and now() - ds.t < 3.0 and (ds.rate or 0) > 0) or false,
+           dose_rate = (ds and now() - ds.t < 3.0) and ds.rate or 0, dose_src = ds and ds.src or nil,
            fall = is_avatar and MON.fall or 0.0, pinned = is_avatar and MON.pinned or false,
            blackout = blackout, cabin = cabin, cabin_tol = tol,
            o2_level = airLevel(o2, air_s), breath_level = (breath < 1) and airLevel(breath, nil) or nil }
@@ -2250,8 +2253,63 @@ end
 CAUSE_TEXT = {
   impact = "impact", cabin = "the cabin failed", oxygen = "out of oxygen", drowned = "drowned",
   crushed = "crushed", heat = "burned on re-entry", lost = "lost with the craft", shot = "shot",
-  explosion = "caught in an explosion",
+  explosion = "caught in an explosion", radiation = "radiation sickness",
 }
+
+-- ── RADIATION DOSE (deep-space A4; scripts/thermal.lua) ────────────────────
+-- `rec.dose`: 0 none … 1 a lethal dose (the seventh cause, "radiation"). An
+-- old record has none, and reads as 0: nothing is migrated. A reactor's cone
+-- (vessel_thermal, twice a second) and a spent rod in someone's pack add to
+-- it; the base heals it slowly (thermal.doseStep: half in two game days).
+-- Shown on the HUD only once it is above zero (crew_alerts_hud's DOSE chip).
+doseSeen = {}   -- id → { t (real), rate (a game second), src }: the chip's ▲
+function doseOf(id)
+  local r = get(id)
+  return r and (tonumber(r.dose) or 0) or 0
+end
+function addDose(id, amount, src, rate)
+  local r = get(id)
+  if not r or r.status == "dead" or (amount or 0) <= 0 then return nil end
+  local d = (tonumber(r.dose) or 0) + amount
+  doseSeen[id] = { t = now(), rate = rate or 0, src = src }
+  if invincible() then d = math.min(d, 0.99) end
+  r.dose = d
+  put(r)
+  if d >= 1 then
+    kill(id, "radiation", src)
+    local r2 = get(id)
+    -- rescued, not killed (CREW SAFETY): they wake at the base past the worst of it
+    if r2 and r2.status ~= "dead" and (tonumber(r2.dose) or 0) >= 1 then r2.dose = 0.7; put(r2) end
+  end
+  return d
+end
+
+-- The dose step for every member, over `gs` game seconds (crew's heal pass):
+-- healing at the base, a spent rod in a pack dosing whoever carries it.
+local function dose_tick(gs)
+  if gs <= 0 then return end
+  local TH = ref("thermal")
+  local inv = ref("inventory")
+  if not TH then return end
+  for _, r in ipairs(roster()) do
+    if r.status ~= "dead" then
+      local d = tonumber(r.dose) or 0
+      local hot = 0
+      if inv and inv.itemCount and r.status ~= "base" then hot = inv.itemCount(packOf(r.id), "spentRod") or 0 end
+      if hot > 0 then
+        local rate = hot * (TH.SPENT_DOSE or 0)
+        addDose(r.id, rate * gs, "a spent rod in the pack", rate)
+      elseif d > 0 and r.status == "base" then
+        local nd = TH.doseStep(d, 0, true, gs)
+        if math.abs(nd - d) > 1e-6 or nd == 0 then
+          r.dose = nd
+          save.set(key(r.id), r)
+          bump()
+        end
+      end
+    end
+  end
+end
 
 -- The control handoff when the controlled member is gone.
 local function handoff(dead_id, from_v)
@@ -2945,11 +3003,18 @@ end
 
 -- Heal 0.02/min aboard or at base.
 local heal_t = 0
+local dose_st = nil   -- the game clock at the last dose pass
 local function heal(dt)
   heal_t = heal_t + dt
   if heal_t < 5 then return end
   local s = heal_t
   heal_t = 0
+  -- (dose by GAME time: warp heals and doses faster, as it ages everything)
+  local gst = space and space.time and space.time() or nil
+  if gst then
+    if dose_st and gst > dose_st then dose_tick(math.min(gst - dose_st, 86400)) end
+    dose_st = gst
+  end
   for _, r in ipairs(roster()) do
     if (r.status == "base" or r.status == "aboard") and (r.hp or 1) < 1 then
       r.hp = math.min(1, (r.hp or 1) + P("heal_per_min") * s / 60)

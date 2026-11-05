@@ -10,6 +10,8 @@
 --                 rim flashes red
 --     HP 62%      injured (amber; red under 35%)
 --     HEAT        from heat 0.2 (amber), the alarm from 0.6 (red)
+--     DOSE 12% ▲  radiation (crew.addDose): shown once above zero; red while
+--                 past 50 % or rising toward a lethal dose within two hours
 --     FALL 12 m/s  airborne: amber past crew.impact_injure, red "FATAL FALL" near impact_kill
 --     PINNED      a red vignette and the chip
 --     CABIN FAILING · hold under 9 m/s   the crew part under 35%
@@ -72,6 +74,13 @@ function chipsOf(a)
   elseif bl == "low" then out[#out + 1] = { "BREATH " .. pct(a.breath) .. "%", "warn" } end
   if (a.hp or 1) < 0.99 then out[#out + 1] = { "HP " .. pct(a.hp) .. "%", (a.hp or 1) < 0.35 and "danger" or "warn" } end
   if (a.heat or 0) >= 0.2 then out[#out + 1] = { "HEAT " .. pct(a.heat) .. "%", (a.heat or 0) >= 0.6 and "danger" or "warn" } end
+  -- RADIATION (thermal.lua A4): only once there is any; ▲ while it is rising
+  if (a.dose or 0) > 0 then
+    local d = a.dose
+    local txt = "DOSE " .. (d < 0.01 and "<1" or tostring(pct(d))) .. "%" .. (a.dose_rising and " ▲" or "")
+    -- red past half, or while it rises fast enough to kill within two hours
+    out[#out + 1] = { txt, (d >= 0.5 or (a.dose_rate or 0) * 7200 >= 1) and "danger" or "warn" }
+  end
   local f = a.fall or 0
   local cl = findScript and findScript("crew")
   local inj = cl and cl.params and cl.params.impact_injure or 9

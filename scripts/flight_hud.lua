@@ -815,6 +815,37 @@ local function resources(v, t)
           table.concat(t.path or { "Ground station" }, " → "))
         or "No path home — extend an antenna (U), or get a relay overhead" }
   end
+  -- HEAT (scripts/vessel_thermal.lua): the craft's heat loop — only on a
+  -- craft with a heat source (a reactor, an isotope cell, a radiator). The
+  -- tick on the bar is the SCRAM line.
+  local hh = t.heat
+  if hh then
+    local T = hh.T or 0
+    local hot = T >= (hh.scram_at or 0.9) - 0.05 or hh.scrammed
+    local warm = T >= 0.7 or (hh.eq or 0) >= (hh.scram_at or 0.9)
+    local bits = { string.format("loop %d%% · settles at %d%% · scram at %d%%", pct(T), math.floor(math.min(hh.eq or 0, 9.99) * 100 + 0.5),
+      pct(hh.scram_at or 0.9)) }
+    bits[#bits + 1] = string.format("heat in %.1f · radiators, hull and cores shed up to %.1f", hh.Q or 0, hh.sink or 0)
+    if (hh.cores or 0) > 0 then
+      if (hh.live or 0) > 0 then
+        bits[#bits + 1] = string.format("reactor critical, %d%% output", pct(hh.out or 0))
+      elseif hh.scrammed then
+        bits[#bits + 1] = hh.cool and string.format("SCRAMMED — restart in %d s, below 50%%", math.ceil(hh.cool))
+          or "SCRAMMED — restart it below 50% (its Start reactor action)"
+      else
+        bits[#bits + 1] = "reactor shut down"
+      end
+      bits[#bits + 1] = string.format("rods %d/%d · %.0f min at full output", hh.rods or 0, hh.rods_cap or 0,
+        (hh.life or 0) * 60)
+    end
+    if (hh.sun or 0) > 0.05 then bits[#bits + 1] = "radiators in sunlight" end
+    if hh.msg and hh.msg_t and time - hh.msg_t < 12 then bits[#bits + 1] = hh.msg end
+    rows[#rows + 1] = { key = "heat", label = hh.scrammed and "SCRAM" or "HEAT", frac = math.min(1, T),
+      color = hot and DANGER or (warm and WARN or PHOS),
+      tone = hot and "danger" or (warm and "warn" or nil),
+      mark = hh.scram_at or 0.9,
+      tip = table.concat(bits, " · ") }
+  end
   if #rows == 0 then return nil, 0 end
   local BAR = RES_W - 20 - 50 - 44 - 12
   local h = 20 + #rows * 18 + (#rows - 1) * 6
@@ -828,7 +859,9 @@ local function resources(v, t)
                         textAlign = "start" },
                       { "box", key = "t", style = "hud/track", w = BAR, h = 8,
                         { "box", key = "f", x = 1, y = 1, w = len, h = 6, radius = 1,
-                          fill = r.color } },
+                          fill = r.color },
+                        r.mark and { "box", key = "m", x = math.floor(r.mark * (BAR - 2) + 0.5), y = -2, w = 1, h = 12,
+                          fill = DANGER } or nil },
                       { "text", key = "v", style = TONE[r.tone] or "hud/value", w = 44, h = 16,
                         text = r.value or string.format("%d%%", pct(r.frac)), textAlign = "end" } }
            end }, h

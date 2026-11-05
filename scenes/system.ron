@@ -2855,6 +2855,24 @@
                     enabled: true,
                     params: [],
                 ),
+                // THERMAL: the heat / nuclear rulebook (scripts/thermal.lua), the
+                // flight's heat loop and rod menus (vessel_thermal.lua) and the
+                // NUCLEAR parts (parts_nuclear.lua) — deep-space step 3.
+                (
+                    kind: "thermal",
+                    enabled: true,
+                    params: [],
+                ),
+                (
+                    kind: "vessel_thermal",
+                    enabled: true,
+                    params: [],
+                ),
+                (
+                    kind: "parts_nuclear",
+                    enabled: true,
+                    params: [],
+                ),
                 // builder_proc: meshes and colliders for drawn frame parts
                 // (vessel_spawner dresses them before assembly.rebuild).
                 (

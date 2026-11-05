@@ -123,9 +123,27 @@ ITEMS = {
                 about = "an edge davit, 30 m of static line and a powered ascender: set it at a drop, clip on (E), climb with W and S" },
 }
 
+-- FUEL RODS (deep-space B5; scripts/thermal.lua): a reactor's fuel, made at
+-- the Materials Intake's radiological wing (FUEL_FAB) from 20 units of
+-- uranium ore. A rod is a 1.1 m zirconium-clad cartridge in its carry frame,
+-- 40 kg: over the shoulder, and a 90 kg pack takes two. Held, it brings
+-- "Load fuel rod" to a reactor's right-click (vessel_thermal's provider).
+-- A fresh rod is barely radioactive (unburnt uranium); the SPENT rod that
+-- comes out of a core is hot — carried in a pack it doses its carrier
+-- (thermal SPENT_DOSE), so it goes into a locker or the Intake's return.
+-- `body` is the loose physics prefab (a 40 kg box collider, ready for the
+-- gravity gun to lift once rods can be dropped in the world).
+ITEMS.fuelRod = { name = "Fuel Rod", kind = "consumable", kg = 40.0, L = 14, cost = 0,
+                  hold = { prefab = "ItemFuelRod", grip = "shoulder" }, body = "FuelRodBody",
+                  use = { target = "part", provider = "rods" },
+                  about = "a reactor fuel rod in its carry frame: hold it at a reactor and right-click to load it" }
+ITEMS.spentRod = { name = "Spent Rod", kind = "consumable", kg = 40.0, L = 14, cost = 0, hot = true,
+                   hold = { prefab = "ItemSpentRod", grip = "shoulder" }, body = "SpentRodBody",
+                   about = "a burnt-out fuel rod, hot with fission products: don't carry it in a pack for long. The Materials Intake takes it back" }
+
 -- The belt's order: tools first, then devices and deployables, then
 -- consumables with a hold. (Worn items are never on the belt.)
-ORDER = { "gravgun", "laser", "surveyor", "beacon", "flag", "rope", "repairkit", "medkit", "gascan", "rcspack", "o2tank", "flashlight" }
+ORDER = { "gravgun", "laser", "surveyor", "beacon", "flag", "rope", "repairkit", "medkit", "gascan", "fuelRod", "spentRod", "rcspack", "o2tank", "flashlight" }
 
 -- The Medkit's work (crew.lua runs it): seconds held at it, what it gives,
 -- and the reach from the medic to the patient (m).

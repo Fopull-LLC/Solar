@@ -89,6 +89,27 @@ MODULES = {
     label = "Generator",
     readouts = { "output" },
   },
+  -- NUCLEAR AND HEAT (scripts/thermal.lua holds the rules, vessel_thermal.lua
+  -- runs them in flight). A REACTOR starts cold: "Start reactor" pulls the
+  -- control rods (refused while it cools after a scram, or with no fuel); its
+  -- Output is a setpoint like an actuator's; "Shut down" drives the rods in.
+  -- A RADIATOR's pump is a load (pri 8: cooling outlasts the radio); a
+  -- deployable one folds with the solar panels' deploy module. A SHIELD is a
+  -- blocker the radiation cone counts by record.
+  reactor = {
+    label = "Reactor",
+    toggles = { { state = "critical", on = "Start reactor", off = "Shut down", toggle = "Start / shut down", default = false } },
+    axes = { { id = "output", label = "Output", min = 10, max = 100, rate = 25, unit = "%", default = 100, center = 100, presets = true } },
+    readouts = { "heat", "rods" },
+  },
+  radiator = {
+    label = "Radiator",
+    readouts = { "heat" },
+    pri = 8,
+  },
+  shield = {
+    label = "Shadow shield",
+  },
   antenna = {
     label = "Antenna",
     readouts = { "signal", "range" },
@@ -204,7 +225,7 @@ STANDARD_GROUPS = {
   { id = "brakes", label = "Brakes", key = "b",         auto = { "brakes.toggle" } },
   { id = "rcs",    label = "RCS",    key = "r",         auto = {} },
   { id = "sas",    label = "SAS",    key = "t",         auto = {} },
-  { id = "abort",  label = "Abort",  key = "backspace", auto = {} },
+  { id = "abort",  label = "Abort",  key = "backspace", auto = { "critical.off@reactor" } },
 }
 CUSTOM_KEYS = { "1", "2", "3", "4", "5", "6", "7", "8", "9", "0" }
 
@@ -819,6 +840,8 @@ ACTUATOR_KEYS = {
   { module = "rotor",  keys = { { name = "Rotor", acts = { "spin.toggle" } } } },
   { module = "drill",  keys = { { name = "Drill", acts = { "deployed.toggle", "drilling.toggle" } } } },
   { module = "claw",   keys = { { name = "Claw", acts = { "armed.toggle" } } } },
+  { module = "reactor", keys = { { name = "Reactor", acts = { "critical.toggle" } },
+                                 { name = "Output +", acts = { "output.inc" } }, { name = "Output −", acts = { "output.dec" } } } },
 }
 
 -- Is this record an actuator the player drives (rather than a switch)?
@@ -1990,6 +2013,8 @@ function summary(recs, sun)
       if m.type == "battery" then s.store = s.store + (m.ec or 0)
       elseif m.type == "solar" then s.solar = s.solar + (m.gen or 0) * sun
       elseif m.type == "rtg" then s.rtg = s.rtg + (m.gen or 0)
+      elseif m.type == "reactor" then s.reactor = (s.reactor or 0) + (m.ec or 0)
+      elseif m.type == "radiator" then s.idle = s.idle + (m.draw or 0)
       elseif m.type == "engine" then s.alt = s.alt + (m.alt or 0)
       elseif m.type == "command" then
         s.idle = s.idle + (m.draw or 0)
