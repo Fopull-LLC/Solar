@@ -2391,6 +2391,10 @@ function launchSite()
 end
 function toggleLaunchSite()
   launchSiteChoice = launchSite() == "pad" and "runway" or "pad"
+  if launchSiteChoice == "runway" and save.get("base.runway") == false then
+    hint("this spaceport has NO RUNWAY (water lies across its line): the craft rolls out on the pad   ·   L for the pad", 4.0)
+    return
+  end
   hint(launchSiteChoice == "runway"
     and "launch site: RUNWAY — the craft rolls out at the threshold, facing down it   ·   L for the pad"
     or "launch site: PAD — Launch Complex 1, on the hold-downs   ·   L for the runway", 3.0)

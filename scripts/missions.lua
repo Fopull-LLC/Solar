@@ -196,7 +196,7 @@ local CATALOGUE = {
 --   2  Rare Finds      a plant from a ravine floor, one from a peak,
 --                      a Star Geode (a pocket, or deep crystal)        (home)
 --   3  Relay Network   ground relays until 10 / 25 % of the home
---                      planet's ground has a link home                 → Relay Dish
+--                      planet's ground has a link home   → Probe Core, Battery Pack, Relay Dish
 --   4  Eyes in the Sky relay satellites in orbit grow the network to
 --                      50 / 80 % of the planet (ground + satellites)   → Deep Space Dish
 --   5  Beyond          link a moon, then another planet
@@ -250,7 +250,9 @@ PROGRAMME = {
             "ringing in the rock that means geodes. The labs want a specimen of each.\n" ..
             "Each rare plant stands under a beam of light. Open the Tracking Station\n" ..
             "at the base to survey the planet: it maps them all.",
-    reward = 1200, rep = 1, grants = { "battery" },
+    -- (It granted the Battery until 2026-11-04; the Battery now wants copper
+    -- found, researched with the milestone's money.)
+    reward = 1200, rep = 1,
     goals = {
       { kind = "rare", niche = "ravine", alt = { "river", "lake", "cave" }, pay = 500 },
       { kind = "rare", niche = "peak", alt = { "cave", "lake", "river" }, pay = 500 },
@@ -272,7 +274,7 @@ PROGRAMME = {
     reward = 3000, rep = 2, grants = { "dish" },
     goals = {
       { kind = "groundcov", frac = 0.10, pay = 800, grant = "probe", label = "10% of the ground has a link home" },
-      { kind = "groundcov", frac = 0.25, pay = 1500, label = "25% of the ground has a link home" },
+      { kind = "groundcov", frac = 0.25, pay = 1500, grant = "packB", label = "25% of the ground has a link home (unlocks the Battery Pack)" },
     },
   },
   {

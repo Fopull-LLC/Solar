@@ -248,7 +248,7 @@ end
 second()
 check("peak + a home geode finish Rare Finds", state_of("rare_finds") == "done", state_of("rare_finds"))
 check("…paying both stages and the milestone", co.balance() == f1 + 500 + 500 + 700 + 1200, co.balance() - f1)
-check("…and granting the Battery", rs.isUnlocked("battery"))
+check("…and no longer granting the Battery (it wants copper)", not rs.isUnlocked("battery"))
 -- An airless home waives the plant goals rather than stranding them.
 do
   local w = store["world.Umunquo"]
@@ -303,6 +303,7 @@ hooked()
 tick(1)
 check("the change hook re-polls on the next frame", ticked("relay_net", 2))
 check("25% completes the Relay Network", state_of("relay_net") == "done")
+check("…and grants the Battery Pack", rs.isUnlocked("packB"))
 check("…granting the Relay Dish (satellite relays)", rs.isUnlocked("dish") and rs.blockedBy("dish") == nil)
 check("…and opens Eyes in the Sky", state_of("sky") == "active")
 check("Deep Space Dish is locked behind Eyes in the Sky",

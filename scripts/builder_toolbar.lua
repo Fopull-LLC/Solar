@@ -196,7 +196,9 @@ local function row1(B, s)
     click = function() if B.doLaunch then B.doLaunch() end end })
   for _, site in ipairs({ { "pad", "PAD", 40 }, { "runway", "RUNWAY", 60 } }) do
     r[#r + 1] = key("site" .. site[1], site[2], site[3], { selected = s.site == site[1],
-      tip = "Launch site: " .. site[2],
+      tip = (site[1] == "runway" and save.get("base.runway") == false)
+        and "Launch site: RUNWAY — this spaceport has none (water across its line), so the craft goes to the pad"
+        or ("Launch site: " .. site[2]),
       click = function()
         if s.site ~= site[1] then
           if B.setLaunchSite then B.setLaunchSite(site[1]) elseif B.toggleLaunchSite then B.toggleLaunchSite() end

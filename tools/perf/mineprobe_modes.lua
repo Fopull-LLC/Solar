@@ -619,6 +619,107 @@ local function run_vlook()
   V.result()
 end
 
+-- vcopper: the home world's guaranteed copper (mineral_field COPPER_SITES).
+-- Every site: a surfaced copper vein with outcrops within 25 m of it, the
+-- crosshair reading copper on its seam; the first one mined 6 s with the
+-- laser (the pack must get Copper Ore). Pictures from 9 m and from above.
+local function run_vcopper()
+  V.tag = "copper"
+  local Cc = findScript("crew")
+  if Cc and Cc.setSafety then Cc.setSafety("invincible") end
+  wait(4)
+  local mf, inv = findScript("mineral_field"), findScript("inventory")
+  local u, t1, t2, R = base_frame()
+  local sites = mf.homeCopper()
+  V.check("copper sites on the home world", #sites >= 3, "%d sites", #sites)
+  local bx, by, bz = save.get("base.x"), save.get("base.y"), save.get("base.z")
+  local bl = len(bx, by, bz)
+  local found, mined = 0, false
+  for i, s in ipairs(sites) do
+    local away = math.acos(math.max(-1, math.min(1, (s.x * bx + s.y * by + s.z * bz) / bl))) * R
+    local gr = ground_r(home(), s.x, s.y, s.z, R + 150)
+    stand_at({ dir = { x = s.x, y = s.y, z = s.z }, r = gr or R })
+    local pick, rel = nil, nil
+    wait_for(function()
+      local a, h = astro(), home()
+      for _, v in ipairs(mf.veinsNear(a.x, a.y, a.z, 40)) do
+        if v.ore == "copper" and not v.buried and v.d <= 25 then
+          pick, rel = v, { x = v.x - h.x, y = v.y - h.y, z = v.z - h.z }
+          return true
+        end
+      end
+      return false
+    end, 15, "copper vein near site " .. i)
+    for _, l in ipairs(mf.copperState()) do
+      if l.k == s.k then P("VP   site %d patch %s loaded %s keyed %s: top %s, deep %s", i, tostring(l.patch), tostring(l.loaded), l.cu_key, l.top, l.deep) end
+    end
+    local a = astro()
+    local deep = 0
+    for _, v in ipairs(mf.veinsNear(a.x, a.y, a.z, 40)) do if v.ore == "copper" and v.buried then deep = deep + 1 end end
+    do local a, h = astro(), home(); P("VP   crew %.1f m from site %d", len(a.x - h.x - s.x * gr, a.y - h.y - s.y * gr, a.z - h.z - s.z * gr), i) end
+    P("VP copper site %d: %.0f m from the base, surfaced vein %s (%s outcrops, slot %s), buried copper veins near: %d", i, away,
+      pick and string.format("%.1f m off", pick.d) or "NONE", pick and tostring(pick.out) or "-", pick and tostring(pick.slot) or "-", deep)
+    if pick then
+      found = found + 1
+      local U = { x = pick.ux or u.x, y = pick.uy or u.y, z = pick.uz or u.z }
+      local side = unit(cross(U, { x = pick.sx, y = pick.sy, z = pick.sz }))
+      local Tc = function() return MP.w(rel) end
+      MP.stand_off(rel, side, 9.0)
+      wait(2.0)
+      for _ = 1, 60 do FP.aim_step(Tc); yield() end
+      V.shot(string.format("site%d_9m", i), false)
+      if not mined then
+        V.select_tool("laser")
+        inv.clear("astro")
+        MP.stand_off(rel, { x = -side.x, y = -side.y, z = -side.z }, 3.5)
+        wait(1.5)
+        local Tv = function() local w = MP.w(rel); return { x = w.x - U.x * 0.4, y = w.y - U.y * 0.4, z = w.z - U.z * 0.4 } end
+        local dig = MP.dig(Tv, 6.0, 2.5, string.format("site%d_mining", i))
+        P("VP copper dig: %s; the pack got %s; the crosshair read %s", dig.line, dig.got, dig.aim)
+        V.check("the guaranteed seam gives Copper Ore", (dig.inv.copper or 0) > 0, "%d units", dig.inv.copper or 0)
+        mined = true
+      end
+      local cam = V.fixed_cam(MP.w(rel), U, side, 12.0, 20.0)
+      for _ = 1, 20 do V.place_cam(); yield() end
+      V.shot(string.format("site%d_up", i), false, cam)
+      V.place_cam = nil
+      if cam and cam.valid then cam:destroy() end
+    end
+  end
+  V.check("every site has a surfaced copper vein", found == #sites and found > 0, "%d of %d", found, #sites)
+  V.result()
+end
+
+-- vrunway (USERSAVE, a base that left its runway out): the runway re-check
+-- (base_facilities base.rwcheck): base.runway after siting, what
+-- launchSite("runway") answers, and pictures over the runway's threshold.
+local function run_vrunway()
+  V.tag = "runway"
+  local Cc = findScript("crew")
+  if Cc and Cc.setSafety then Cc.setSafety("invincible") end
+  wait(8)
+  local bf = findScript("base_facilities")
+  local st = bf.launchSite("runway")
+  P("VP runway: base.body %s, base.runway %s, rwcheck %s, launchSite(runway) kind %s", tostring(save.get("base.body")),
+    tostring(save.get("base.runway")), tostring(save.get("base.rwcheck")), tostring(st and st.kind))
+  V.check("the runway is laid", save.get("base.runway") == true and st and st.kind == "runway", "kind %s", tostring(st and st.kind))
+  if st then
+    local hb = home()
+    local l = len(st.x, st.y, st.z)
+    stand_at({ dir = { x = st.x / l, y = st.y / l, z = st.z / l }, r = (ground_r(hb, st.x / l, st.y / l, st.z / l, l + 60) or l) })
+    wait(20)   -- the grade and the paving
+    P("VP runway after: base.graded %s", tostring(save.get("base.graded")))
+    local rel = { x = st.x + st.fwd.x * 60, y = st.y + st.fwd.y * 60, z = st.z + st.fwd.z * 60 }
+    local side = unit(cross(st.up, st.fwd))
+    local cam = V.fixed_cam(MP.w(rel), st.up, side, 30.0, 60.0)
+    for _ = 1, 30 do V.place_cam(); yield() end
+    V.shot("runway_up", false, cam)
+    V.place_cam = nil
+    if cam and cam.valid then cam:destroy() end
+  end
+  V.result()
+end
+
 -- vpdiag: what a colour paint does to the ground. Five discs 8 m apart in a
 -- row 12 m in front of the crew: rust (0.66 0.32 0.16) r 3 once; the same
 -- four times over; rust r 6; black r 6 three times; slot 27 r 3. Pictured

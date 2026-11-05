@@ -825,6 +825,22 @@ local function water_at(body, d, g)
   return ok and wl or nil
 end
 
+-- Runway samples still under water once the deck is graded to R, on a sited
+-- frame (the re-check of a base that left its runway out under the old rule).
+local function runway_wet_at(body, Fr, R)
+  local top = R + 40.0
+  local n = 0
+  for _, sp in ipairs(fit_samples()) do
+    if sp[3] == "runway" then
+      local d = dirAt(Fr, sp[1], sp[2])
+      local g = ground_r(body, d, top) or R
+      local w = water_at(body, d, g)
+      if w and g < w + 0.5 and R < w + 0.5 then n = n + 1 end
+    end
+  end
+  return n
+end
+
 -- FIT THE LAYOUT to the ground around C: the graded radius R (the ground at
 -- the core, never under the water), and the heading that needs the least
 -- earthwork and puts nothing in the water. East–west wins a tie, so on the
@@ -866,7 +882,10 @@ function fitLayout(body, c)
       local w = water_at(body, d, g)
       if w and g < w + 0.5 then
         wet = wet + 1
-        if sp[3] == "runway" then rw_wet = rw_wet + 1 end
+        -- the runway is only lost to water the grade can't lift its deck
+        -- over (playtest 2026-11-04: a pond under one sample of 33 dropped
+        -- a sandbox base's runway, and every plane went to the pad)
+        if sp[3] == "runway" and R < w + 0.5 then rw_wet = rw_wet + 1 end
       end
     end
     cost = cost + wet * 400 + math.min(k, 24 - k) * 0.05
@@ -2069,6 +2088,21 @@ local function try_place()
   local R, heading = save.get("base.r"), save.get("base.heading")
   local runway = save.get("base.runway") ~= false
   local fresh = (save.get("base.layout") or 0) < LAYOUT_VERSION or not (R and heading)
+  -- A sited base that left its runway out is asked again, once, by today's
+  -- rule (only water over the graded deck loses it): if the grade lifts it
+  -- clear, the runway is laid and graded in.
+  if not fresh and not first and not runway and save.get("base.rwcheck") ~= 1 then
+    local nw = runway_wet_at(body, frameOf(unit(c), heading, R), R)
+    save.set("base.rwcheck", 1)
+    if nw == 0 then
+      runway = true
+      save.set("base.runway", true)
+      save.set("base.graded", false)
+      log("base: the runway left out under water is clear once graded — laying it")
+    else
+      log(string.format("base: the runway stays out (%d of its samples under water over the deck)", nw))
+    end
+  end
   -- AN OLDER LAYOUT ON A SITED BASE (layout 3 brought the 50 m VAB and moved
   -- three buildings out for it) is RE-LAID, not RE-FITTED: the same centre,
   -- radius, heading and runway, so the pad, the runway and every strip stay
@@ -2187,7 +2221,7 @@ function resite()
   built = nil
   clear_slabs()
   setGuards("base", nil)
-  for _, k in ipairs({ "base.body", "base.x", "base.y", "base.z", "base.r", "base.heading", "base.runway", "base.layout", "base.graded" }) do
+  for _, k in ipairs({ "base.body", "base.x", "base.y", "base.z", "base.r", "base.heading", "base.runway", "base.layout", "base.graded", "base.rwcheck" }) do
     save.set(k, false)
   end
   done, placed, sited, footprint, F = {}, 0, false, nil, nil

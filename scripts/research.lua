@@ -48,10 +48,12 @@ defaults = {}
 TECH = {
   tankM      = { cost = 600,  label = "FT-M Tank" },
   battery    = { cost = 300,  label = "Battery",        mat = "copper" },
-  -- The bike's tank-shaped Battery Pack is the same cells in a moulded shell:
-  -- it comes AFTER the Battery (playtest 2026-11-02: the pack was open from
-  -- the start while the plain battery sat locked, backwards).
-  packB      = { cost = 150,  label = "Battery Pack",   mat = "copper",  after = "battery" },
+  -- The bike's tank-shaped Battery Pack: the small cells. The ground network
+  -- earns it (playtest 2026-11-04): the Relay Network's 25 % goal grants it
+  -- (missions.lua), no copper needed; the big Battery still wants a sample of
+  -- copper. `progGrant`: a save that already finished the milestone has it.
+  packB      = { cost = 150,  label = "Battery Pack",   prog = "relay_net", progGrant = true,
+                 progLabel = "Relay Network (25% of the ground linked)" },
   engineM    = { cost = 1400, label = "Anvil" },
   -- The relay dish is what a SATELLITE relay is made of: it opens once the
   -- ground network is up (the Relay Network milestone grants it outright), so
@@ -122,6 +124,7 @@ end
 function isUnlocked(id)
   if not TECH[id] then return true end
   if save.get("game.mode") == "sandbox" then return true end
+  if TECH[id].progGrant and (save.get("prog.done") or {})[TECH[id].prog] then return true end
   return done()[id] == true
 end
 

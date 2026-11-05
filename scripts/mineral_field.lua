@@ -858,6 +858,134 @@ local function out_look(ore)
   return (l and l.out) or OUT_LOOK[ore] or OUT_LOOK.copper
 end
 
+-- One vein's record laid along its strike from (x, z) in the patch's plane,
+-- or nil when its middle falls outside the patch or on the base's paving.
+local function vein_build(p, r, vi, x, z, depth, ore, R, key)
+  local gem = out_look(ore).cluster
+  local buried = depth > 0
+  local L = buried and r:range(10.0, 26.0) or (gem and r:range(3.0, 5.5) or r:range(6.0, 15.0))
+  -- (wide enough to read on ground meshed at 1.5–2.4 m voxels: a seam
+  -- narrower than a voxel or two never shows on the surface)
+  local wd = buried and r:range(1.8, 3.0) or (gem and r:range(1.6, 2.1) or r:range(1.6, 2.6))
+  -- a buried vein dips along its strike (so one end may lie much nearer the
+  -- surface than the other), never closer than 3 m under the ground
+  local dip = buried and r:range(-0.5, 0.5) or 0
+  local ang = r:next() * math.pi * 2
+  local ca, sa = math.cos(ang), math.sin(ang)
+  local K = math.max(3, math.ceil(L / 1.1) + 1)
+  local pts = {}
+  for k = 0, K - 1 do
+    local t = (k / (K - 1) - 0.5) * L
+    -- a seam wanders a little off its strike, and pinches and swells
+    local sway = math.sin(t * 0.45 + vi * 1.7) * 0.35 * wd
+    local lx, lz = x + ca * t - sa * sway, z + sa * t + ca * sway
+    local px = p.cx + p.ex[1] * lx + p.ez[1] * lz
+    local py = p.cy + p.ex[2] * lx + p.ez[2] * lz
+    local pz = p.cz + p.ex[3] * lx + p.ez[3] * lz
+    local l = len(px, py, pz)
+    local taper = 1 - 0.45 * math.abs(k / (K - 1) - 0.5) * 2
+    local dk = buried and math.max(3.0, depth + dip * t) or 0
+    pts[#pts + 1] = { px / l, py / l, pz / l, w = wd * taper * (0.8 + 0.4 * r:next()), lx = lx, lz = lz, dk = dk }
+  end
+  local c = pts[math.ceil(K / 2)]
+  local f2, g2, u2, v2 = project(c[1] * R, c[2] * R, c[3] * R, R)
+  local seed = r:int(1, 999983)
+  if f2 == p.face and g2 == p.sgn and math.floor(u2 / p.P) == p.i and math.floor(v2 / p.P) == p.j
+     and not kept_clear(c[1] * R, c[2] * R, c[3] * R) then
+    return { i = vi, key = key or ("v" .. vi), ore = ore, pts = pts, len = L, width = wd, seed = seed, lx = x, lz = z,
+             depth = depth, buried = buried }
+  end
+  return nil
+end
+
+-- THE HOME WORLD'S COPPER (playtest 2026-11-04: an hour of mining found
+-- none). Copper gates the first research (the Battery, the Probe Core, the
+-- Relay Dish), so the home world always carries it within a walk of the base:
+-- `COPPER_SITES` outcrops round the base's footprint, each with a buried seam
+-- running under it, on top of whatever the random veins hold. Body-relative
+-- unit directions, worked out once per base position.
+COPPER_SITES = {
+  -- { bearing (deg, from the base's local north), metres past the footprint's edge }
+  { 35, 45 }, { 160, 80 }, { 265, 60 }, { 110, 220 },
+}
+local copper_sites, copper_key = nil, nil
+local function home_copper(R)
+  local bx, by, bz = save.get("base.x"), save.get("base.y"), save.get("base.z")
+  if save.get("base.body") ~= cur_body or type(bx) ~= "number" or type(by) ~= "number" or type(bz) ~= "number" then
+    copper_key, copper_sites = "none:" .. tostring(cur_body), {}
+    return copper_sites
+  end
+  local key = string.format("%s:%.2f:%.2f:%.2f:%.1f", tostring(cur_body), bx, by, bz, R)
+  if copper_key == key then return copper_sites end
+  copper_key, copper_sites = key, {}
+  local bl = len(bx, by, bz)
+  if bl < 1 then return copper_sites end
+  local ux, uy, uz = bx / bl, by / bl, bz / bl
+  -- local north: the world's +Y pole projected on the ground (X if the base
+  -- sits on the pole)
+  local nx, ny, nz = -ux * uy, 1 - uy * uy, -uz * uy
+  if len(nx, ny, nz) < 1e-3 then nx, ny, nz = 1 - ux * ux, -uy * ux, -uz * ux end
+  local nl = len(nx, ny, nz); nx, ny, nz = nx / nl, ny / nl, nz / nl
+  local ex, ey, ez = uy * nz - uz * ny, uz * nx - ux * nz, ux * ny - uy * nx
+  local bf = ref("base_facilities")
+  local fp = bf and bf.footprint
+  local edge = (type(fp) == "table" and fp.body == cur_body and fp.radius) or 200
+  for k, s in ipairs(COPPER_SITES) do
+    local a = math.rad(s[1])
+    local ca, sa = math.cos(a), math.sin(a)
+    -- step out until the ground is off the base's paving and lots
+    for step = 0, 4 do
+      local th = (edge + s[2] + step * 30) / R
+      local ct, st = math.cos(th), math.sin(th)
+      local dx, dy, dz = nx * ca + ex * sa, ny * ca + ey * sa, nz * ca + ez * sa
+      local px, py, pz = ux * ct + dx * st, uy * ct + dy * st, uz * ct + dz * st
+      if not kept_clear(px * R, py * R, pz * R) or step == 4 then
+        copper_sites[#copper_sites + 1] = { px, py, pz, k = k }
+        break
+      end
+    end
+  end
+  return copper_sites
+end
+
+-- The guaranteed copper sites, body-relative unit directions (for probes and
+-- the codex): { { x, y, z, k } … }, or {} off the base's world.
+function homeCopper()
+  local body = cur_body and space.body(cur_body)
+  local cl = ref("climate")
+  local w = cl and cl.worldOf and cl.worldOf(cur_body)
+  local R = (w and w.radius) or (body and body.radius)
+  if not R then return {} end
+  local out = {}
+  for _, s in ipairs(home_copper(R) or {}) do out[#out + 1] = { x = s[1], y = s[2], z = s[3], k = s.k } end
+  return out
+end
+
+-- For probes: each copper site's patch and whether its veins are laid out
+-- ("cu<k>" surfaced, "cub<k>" buried; ground made = b).
+function copperState()
+  local out = {}
+  local cl = ref("climate")
+  local w = cl and cl.worldOf and cl.worldOf(cur_body)
+  local R = w and w.radius
+  if not R then return out end
+  for _, s in ipairs(copper_sites or {}) do
+    local f2, g2, u2, v2 = project(s[1] * R, s[2] * R, s[3] * R, R)
+    local line = { k = s.k, patch = "?", loaded = false, top = "-", deep = "-", cu_key = "-" }
+    for _, p in pairs(patches) do
+      if p.face == f2 and p.sgn == g2 and p.i == math.floor(u2 / p.P) and p.j == math.floor(v2 / p.P) then
+        line.patch, line.loaded, line.cu_key = p.key, p.veins ~= nil, tostring(p.cu_key == copper_key)
+        for _, v in ipairs(p.veins or {}) do
+          if v.key == "cu" .. s.k then line.top = v.b and "ground" or "laid" end
+          if v.key == "cub" .. s.k then line.deep = v.b and "ground" or "laid" end
+        end
+      end
+    end
+    out[#out + 1] = line
+  end
+  return out
+end
+
 -- The world's veins in a patch: { i, key, ore, pts (unit-sphere points with a
 -- width w and a depth dk under the ground), depth, buried, seed } — laid out
 -- once per patch, a pure function of the seed. Most are buried (depth > 0):
@@ -865,9 +993,36 @@ end
 -- digging or caving. `vein_surface` of them crop out, and only ores that do
 -- (materials.ORE surface) — the common ones. Rarer ores lie deeper
 -- (materials.pickVeinOre). Which ores at all is the world's own makeup
--- (materials.bodyOres).
+-- (materials.bodyOres). The home world's guaranteed copper (home_copper) is
+-- added by the patch each site falls in.
+-- The guaranteed copper sites that fall in patch p, added to its list once
+-- (the patch may have been laid out before the base was sited: then they join
+-- it when the sites appear).
+local function copper_into(p, w, R, out)
+  local sites = copper_sites
+  if p.cu_key == copper_key then return end
+  p.cu_key = copper_key
+  for _, s in ipairs(sites or {}) do
+    local f2, g2, u2, v2 = project(s[1] * R, s[2] * R, s[3] * R, R)
+    if f2 == p.face and g2 == p.sgn and math.floor(u2 / p.P) == p.i and math.floor(v2 / p.P) == p.j then
+      -- the site in the patch's plane (p.c is on the sphere at R)
+      local qx, qy, qz = s[1] * R - p.cx, s[2] * R - p.cy, s[3] * R - p.cz
+      local x = qx * p.ex[1] + qy * p.ex[2] + qz * p.ex[3]
+      local z = qx * p.ez[1] + qy * p.ez[2] + qz * p.ez[3]
+      local gr = rng(hash(w.seed or 1, 7717, s.k))
+      local top = vein_build(p, gr, 40 + s.k, x, z, 0, "copper", R, "cu" .. s.k)
+      if top then out[#out + 1] = top end
+      local deep = vein_build(p, gr, 50 + s.k, x, z, 5 + 3 * gr:next(), "copper", R, "cub" .. s.k)
+      if deep then out[#out + 1] = deep end
+    end
+  end
+end
+
 local function veins_of(p, w, R)
-  if p.veins then return p.veins end
+  if p.veins then
+    if p.cu_key ~= copper_key then copper_into(p, w, R, p.veins) end
+    return p.veins
+  end
   local out = {}
   p.veins = out
   local mats = ref("materials")
@@ -887,42 +1042,11 @@ local function veins_of(p, w, R)
       depth = 4 + 20 * r:next()
       ore = mats.pickVeinOre(ores, depth, r:next())
     end
-    ore = ore or "iron"
-    local gem = out_look(ore).cluster
-    local buried = depth > 0
-    local L = buried and r:range(10.0, 26.0) or (gem and r:range(3.0, 5.5) or r:range(6.0, 15.0))
-    -- (wide enough to read on ground meshed at 1.5–2.4 m voxels: a seam
-    -- narrower than a voxel or two never shows on the surface)
-    local wd = buried and r:range(1.8, 3.0) or (gem and r:range(1.6, 2.1) or r:range(1.6, 2.6))
-    -- a buried vein dips along its strike (so one end may lie much nearer the
-    -- surface than the other), never closer than 3 m under the ground
-    local dip = buried and r:range(-0.5, 0.5) or 0
-    local ang = r:next() * math.pi * 2
-    local ca, sa = math.cos(ang), math.sin(ang)
-    local K = math.max(3, math.ceil(L / 1.1) + 1)
-    local pts = {}
-    for k = 0, K - 1 do
-      local t = (k / (K - 1) - 0.5) * L
-      -- a seam wanders a little off its strike, and pinches and swells
-      local sway = math.sin(t * 0.45 + vi * 1.7) * 0.35 * wd
-      local lx, lz = x + ca * t - sa * sway, z + sa * t + ca * sway
-      local px = p.cx + p.ex[1] * lx + p.ez[1] * lz
-      local py = p.cy + p.ex[2] * lx + p.ez[2] * lz
-      local pz = p.cz + p.ex[3] * lx + p.ez[3] * lz
-      local l = len(px, py, pz)
-      local taper = 1 - 0.45 * math.abs(k / (K - 1) - 0.5) * 2
-      local dk = buried and math.max(3.0, depth + dip * t) or 0
-      pts[#pts + 1] = { px / l, py / l, pz / l, w = wd * taper * (0.8 + 0.4 * r:next()), lx = lx, lz = lz, dk = dk }
-    end
-    local c = pts[math.ceil(K / 2)]
-    local f2, g2, u2, v2 = project(c[1] * R, c[2] * R, c[3] * R, R)
-    local seed = r:int(1, 999983)
-    if f2 == p.face and g2 == p.sgn and math.floor(u2 / p.P) == p.i and math.floor(v2 / p.P) == p.j
-       and not kept_clear(c[1] * R, c[2] * R, c[3] * R) then
-      out[#out + 1] = { i = vi, key = "v" .. vi, ore = ore, pts = pts, len = L, width = wd, seed = seed, lx = x, lz = z,
-                        depth = depth, buried = buried }
-    end
+    local v = vein_build(p, r, vi, x, z, depth, ore or "iron", R)
+    if v then out[#out + 1] = v end
   end
+  home_copper(R)
+  copper_into(p, w, R, out)
   return out
 end
 
@@ -1424,6 +1548,7 @@ end
 -- little a tick (one vein's ground read, one paint, a few nodes).
 local function veins_tick(w, R, body, planet, rx, ry, rz)
   if params.vein_rate <= 0 then return end
+  home_copper(R)   -- (the sites, and copper_key, for this tick's patches)
   w_seed = w.seed
   local grounds, reveals = 1, 1
   for _, p in pairs(patches) do
