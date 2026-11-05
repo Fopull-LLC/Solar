@@ -818,6 +818,16 @@ def RECIPE_HASH():
     return hashlib.sha1(src.encode()).hexdigest()[:12]
 
 
+# Engine 0626 (dev .1434): |antitile= lays a slot in randomly shifted, turned
+# hexagons so no grid shows from afar (3 texture reads instead of 1, so only
+# where it reads), and |macro= a slow light/dark swell |macrosize= m across.
+# Banded, layered or tiled looks turn little; the glow slots keep their look.
+ANTITILE_LOW = {"onyx": 0.2, "bandedice": 0.2, "shale": 0.25, "sandstone": 0.25, "flagstone": 0.15,
+                "slate": 0.3, "pahoehoe": 0.5, "glacier": 0.6}
+MACRO = 0.35
+MACRO_SIZE = 60
+
+
 def palette_line(t, path):
     line = path
     if t.get("glow"):
@@ -825,6 +835,8 @@ def palette_line(t, path):
     line += "|scale=%g" % t["scale"]
     if not t.get("glow"):
         line += "|blend=%g|rough=%g" % (t.get("blend", 0.8), t.get("rough", 0.7))
+        line += "|antitile=%g|macro=%g|macrosize=%g" % (
+            t.get("antitile", ANTITILE_LOW.get(t["name"], 1.0)), t.get("macro", MACRO), t.get("macrosize", MACRO_SIZE))
     return line
 
 
