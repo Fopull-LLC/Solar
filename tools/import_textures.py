@@ -116,13 +116,13 @@ METAL_DEFAULT = {"metal": 1.0}
 # Where each set is meant to go next (the manifest's `use` for sets no terrain
 # slot takes yet): the plan for the later waves.
 PLANNED = {
-    "metal": "wave 3: vehicle parts, hangar and VAB metal (replace textures/parts, textures/hangar, textures/vab)",
+    "metal": "reserve: later props and station hardware (wave 3 dressed the parts from the CC0 metals, tools/parts_pbr.py)",
     "concrete": "wave 2: base pads, foundations and buildings (replace textures/base concrete)",
     "road": "wave 2: base roads and pads (replace textures/base asphalt)",
     "wood": "wave 4: crates, props and felled-log ends",
     "bark": "wave 4: tree bark (replace textures/flora bark_*)",
     "foliage": "wave 4: leaf cards (replace textures/flora foliage_*)",
-    "scifi": "wave 3: lab, hangar and station interiors (textures/lab, textures/hangar)",
+    "scifi": "reserve: station interiors (their baked panel layouts fight the meshes' own seams; wave 3 left them out)",
     "pattern": "test pattern only (scale checks)",
     "rock": "terrain variety reserve: later palettes, boulders and cave props",
     "ground": "terrain variety reserve: later palettes and ground decals",
@@ -896,12 +896,13 @@ def write_manifest(sets, results, dry):
                 if t[which][1].get("under"):
                     uses.setdefault(t[which][1]["under"][0], []).append(
                         "terrain slot %d %s (%s), the ground under its cover" % (t["slot"], t["name"], t["mat"]))
-    try:  # the base wave's sets (tools/base_pbr.py)
-        import base_pbr
-        for sid, u in base_pbr.USES.items():
+    for mod in ("base_pbr", "parts_pbr"):  # the base wave's and the parts wave's sets
+        try:
+            m = __import__(mod)
+        except ImportError:
+            continue
+        for sid, u in m.USES.items():
             uses.setdefault(sid, []).extend(u)
-    except ImportError:
-        pass
     rows = []
     for sid, s in sorted(sets.items()):
         r = results.get(sid, {})

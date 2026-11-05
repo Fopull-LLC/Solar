@@ -138,6 +138,10 @@ def textures():
     sr = 0.30 + (s - 0.5) * 0.25 + (_blur_noise(n, rng, 32, 10) - 0.5) * 0.1
     _save(np.stack([np.ones_like(sr), sr, np.ones_like(sr)], -1), "steel_orm.png")
     _save(normal_from_height((s - 0.5) * 0.3, 1.0), "steel_normal.png")
+    # the wall, floor and steel rebuilt from the realistic PBR library over these (wave 3,
+    # tools/parts_pbr.py); without the library they stay as drawn here
+    import parts_pbr
+    parts_pbr.bake(groups=("lab",))
     signs()
 
 

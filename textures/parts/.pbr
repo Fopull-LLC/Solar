@@ -1,0 +1,29 @@
+{
+ "recipe": "995c29a33a854883",
+ "files": {
+  "paint_albedo.png": "2b52cd865418",
+  "paint_normal.png": "2174f89ebf68",
+  "paint_orm.png": "8d141f25018c",
+  "metal_albedo.png": "00c455b9fe8b",
+  "metal_normal.png": "49a051587205",
+  "metal_orm.png": "95c23ed04c9a",
+  "tiles_albedo.png": "e17e4c4185e7",
+  "tiles_normal.png": "fb24f4d1123c",
+  "tiles_orm.png": "683d8ba0dab8",
+  "ablative_albedo.png": "e2a7aa8d532d",
+  "ablative_normal.png": "ec27b9e5f2ba",
+  "ablative_orm.png": "96fc42b5cf0a",
+  "bell_albedo.png": "945eae629ea3",
+  "bell_normal.png": "dd08b3be3d6e",
+  "bell_orm.png": "045925ba9e23",
+  "foil_albedo.png": "8b5f9e17b093",
+  "foil_normal.png": "2f0549e3c0f0",
+  "foil_orm.png": "086b3608ddb9",
+  "tread_albedo.png": "f4b2731b9868",
+  "tread_normal.png": "bb0333265e4c",
+  "tread_orm.png": "020fde53048b",
+  "rubber_albedo.png": "037aaf39cfec",
+  "rubber_normal.png": "9bcc3a07d6c1",
+  "rubber_orm.png": "79b97c066da5"
+ }
+}

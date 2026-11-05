@@ -31,7 +31,7 @@
     "size": 1024
    },
    "use": [
-    "wave 3: vehicle parts, hangar and VAB metal (replace textures/parts, textures/hangar, textures/vab)"
+    "reserve: later props and station hardware (wave 3 dressed the parts from the CC0 metals, tools/parts_pbr.py)"
    ]
   },
   {
@@ -270,7 +270,7 @@
     "size": 512
    },
    "use": [
-    "wave 3: vehicle parts, hangar and VAB metal (replace textures/parts, textures/hangar, textures/vab)"
+    "wave 3: part tread plate (textures/parts/tread)"
    ]
   },
   {
@@ -299,7 +299,7 @@
     "size": 1024
    },
    "use": [
-    "wave 3: vehicle parts, hangar and VAB metal (replace textures/parts, textures/hangar, textures/vab)"
+    "reserve: later props and station hardware (wave 3 dressed the parts from the CC0 metals, tools/parts_pbr.py)"
    ]
   },
   {
@@ -452,7 +452,7 @@
     "size": 1024
    },
    "use": [
-    "wave 3: vehicle parts, hangar and VAB metal (replace textures/parts, textures/hangar, textures/vab)"
+    "reserve: later props and station hardware (wave 3 dressed the parts from the CC0 metals, tools/parts_pbr.py)"
    ]
   },
   {
@@ -794,7 +794,7 @@
     "size": 512
    },
    "use": [
-    "wave 3: vehicle parts, hangar and VAB metal (replace textures/parts, textures/hangar, textures/vab)"
+    "reserve: later props and station hardware (wave 3 dressed the parts from the CC0 metals, tools/parts_pbr.py)"
    ]
   },
   {
@@ -824,7 +824,7 @@
     "size": 512
    },
    "use": [
-    "wave 3: vehicle parts, hangar and VAB metal (replace textures/parts, textures/hangar, textures/vab)"
+    "wave 3: part alloy, nozzle and foil (textures/parts metal, bell, foil), lab steel"
    ]
   },
   {
@@ -854,7 +854,7 @@
     "size": 512
    },
    "use": [
-    "wave 3: vehicle parts, hangar and VAB metal (replace textures/parts, textures/hangar, textures/vab)"
+    "wave 3: lab wall enamel (textures/lab/wall)"
    ]
   },
   {
@@ -884,7 +884,8 @@
     "size": 512
    },
    "use": [
-    "wave 2: base steel (textures/base/steel); the CC0 concrete's mottling"
+    "wave 2: base steel (textures/base/steel); the CC0 concrete's mottling",
+    "wave 3: part paint and alloy scratches (textures/parts paint, metal), lab floor and steel scuffs, lab wall mottle"
    ]
   },
   {
@@ -946,7 +947,7 @@
     "size": 1024
    },
    "use": [
-    "wave 3: vehicle parts, hangar and VAB metal (replace textures/parts, textures/hangar, textures/vab)"
+    "reserve: later props and station hardware (wave 3 dressed the parts from the CC0 metals, tools/parts_pbr.py)"
    ]
   },
   {
@@ -978,7 +979,7 @@
     "size": 512
    },
    "use": [
-    "wave 3: vehicle parts, hangar and VAB metal (replace textures/parts, textures/hangar, textures/vab)"
+    "reserve: later props and station hardware (wave 3 dressed the parts from the CC0 metals, tools/parts_pbr.py)"
    ]
   },
   {
@@ -1429,7 +1430,8 @@
     "size": 512
    },
    "use": [
-    "wave 2: base asphalt (textures/base/asphalt); the CC0 concrete's grain"
+    "wave 2: base asphalt (textures/base/asphalt); the CC0 concrete's grain",
+    "wave 3: tyre grain (textures/parts/rubber), lab floor fleck"
    ]
   },
   {
@@ -1489,7 +1491,8 @@
     "size": 512
    },
    "use": [
-    "terrain slot 13 basalt (basalt)"
+    "terrain slot 13 basalt (basalt)",
+    "wave 3: thermal tile pores (textures/parts/tiles)"
    ]
   },
   {
@@ -1614,7 +1617,8 @@
     "size": 512
    },
    "use": [
-    "terrain slot 31 peat (soil)"
+    "terrain slot 31 peat (soil)",
+    "wave 3: heat-shield char (textures/parts/ablative)"
    ]
   },
   {
@@ -1956,7 +1960,7 @@
     "size": 1024
    },
    "use": [
-    "wave 3: lab, hangar and station interiors (textures/lab, textures/hangar)"
+    "reserve: station interiors (their baked panel layouts fight the meshes' own seams; wave 3 left them out)"
    ]
   },
   {
@@ -1988,7 +1992,7 @@
     "size": 1024
    },
    "use": [
-    "wave 3: lab, hangar and station interiors (textures/lab, textures/hangar)"
+    "reserve: station interiors (their baked panel layouts fight the meshes' own seams; wave 3 left them out)"
    ]
   },
   {
@@ -2164,7 +2168,7 @@
     "size": 1024
    },
    "use": [
-    "wave 3: lab, hangar and station interiors (textures/lab, textures/hangar)"
+    "reserve: station interiors (their baked panel layouts fight the meshes' own seams; wave 3 left them out)"
    ]
   },
   {
@@ -2189,7 +2193,7 @@
     "size": 1024
    },
    "use": [
-    "wave 3: lab, hangar and station interiors (textures/lab, textures/hangar)"
+    "reserve: station interiors (their baked panel layouts fight the meshes' own seams; wave 3 left them out)"
    ]
   },
   {
@@ -2214,7 +2218,7 @@
     "size": 1024
    },
    "use": [
-    "wave 3: lab, hangar and station interiors (textures/lab, textures/hangar)"
+    "reserve: station interiors (their baked panel layouts fight the meshes' own seams; wave 3 left them out)"
    ]
   }
  ],

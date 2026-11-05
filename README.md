@@ -206,7 +206,9 @@ every part (proper UVs, bevels, bolts) and `tools/gen_part_textures.py` paints a
 small shared library in `textures/parts/` — painted skin, brushed metal, tiles,
 heat shield, nozzle, insulation, solar cells, a decal atlas and the cabin — with
 albedo, normal and packed occlusion/roughness/metal maps on the engine's
-Physical shading. Every part draws from the same few maps (≈ 51 MB of GPU
+Physical shading; `tools/parts_pbr.py` then lays photographic CC0 surface detail
+(paint wear, alloy streaks, ceramic pores, char, rubber grit) over the hull maps'
+drawn seams and rivets. Every part draws from the same few maps (≈ 51 MB of GPU
 texture in all), so the whole fleet costs about what one set does. Rerun both
 scripts after changing them; the mesh script rewrites each part prefab's
 `object_materials` and refuses a mesh whose box would move a part off its

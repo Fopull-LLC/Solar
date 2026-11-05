@@ -5,6 +5,12 @@ Everything here is PROCEDURAL — random fields, geometry and text drawn with
 numpy + PIL from fixed seeds — so the set is reproducible byte for byte and
 carries no third-party image licence. See textures/parts/SOURCES.md.
 
+Since wave 3 of the texture upgrade (2026-11-04) the HULL surfaces drawn here (paint, metal,
+tiles, ablative, bell, foil, tread, rubber) are the STRUCTURE only: tools/parts_pbr.py runs
+these generators into a temporary folder and lays CC0 photographic surfaces from the realistic
+PBR library over their seams, rivets, bolts and cells; main() runs it last. The decal and cabin
+atlases and the solar cells stay as drawn here.
+
     python3 tools/gen_part_textures.py            # writes textures/parts/*.png
 
 The set is a small SHARED library, not one picture per part: every part's mesh
@@ -806,6 +812,11 @@ def main():
             continue
         fn()
         print("wrote", name)
+    # The hull surfaces (paint, metal, tiles, ablative, bell, foil, tread, rubber) are rebuilt
+    # from the realistic PBR library over what was just written, on the same structure (wave 3,
+    # tools/parts_pbr.py); without the library they stay as drawn here.
+    import parts_pbr
+    parts_pbr.bake(groups=("parts",))
 
 
 if __name__ == "__main__":
