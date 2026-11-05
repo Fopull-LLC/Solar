@@ -9605,15 +9605,13 @@ function gasFx(node, info, dt)
         local x, y, z = partPointNow(e.uid, m.ex or 0, m.ey or 0, m.ez or 0)
         local x2, y2, z2 = partPointNow(e.uid, (m.ex or 0) - 1, m.ey or 0, m.ez or 0)
         if x and x2 then
-          -- (no velocity: a puff in air stops where it leaves the pipe. The
-          -- engine drags a one-shot's Local tracks along its `vel` undamped
-          -- for its whole life, card 0643, so fired with the bike's it rode
-          -- beside the bike for 1.6 s and ran on ahead when it braked or
-          -- turned. vfx.lua carried(v, air) gives 0 in air; a petrol engine
-          -- only ever runs in air. Workaround until the card lands.)
+          -- (fired with the bike's velocity: since card 0643 the puff takes
+          -- it as its own motion and its drag and the wind slow it, so it
+          -- leaves the pipe at the bike's speed and falls behind)
           local two = (m.stroke or 4) == 2
+          local v = info and info.vel
           pcall(spawnEffect, "TailpipePuff", vec3(x, y, z), {
-            normal = vec3(x2 - x, y2 - y, z2 - z),
+            normal = vec3(x2 - x, y2 - y, z2 - z), vel = v and vec3(v.x, v.y, v.z) or nil,
             scale = 0.7 + 0.6 * eff,
             tint = two and { 0.80, 0.86, 1.0 } or { 1.0 - 0.35 * eff, 1.0 - 0.35 * eff, 1.0 - 0.35 * eff } })
         end
