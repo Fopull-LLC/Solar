@@ -997,7 +997,7 @@ local function stage_stack(t, lift)
     elseif st.kind == "chute" then
       return string.format("Chutes ×%d", st.n or 0), "deploy"
     elseif st.kind == "fairing" then
-      return "Fairing", "jettison"
+      return "Fairing", st.auto and string.format("drops at %d %% air", st.auto) or "jettison"
     elseif st.kind == "engine" then
       return (st.n or 0) > 1 and string.format("Ignite ×%d", st.n) or "Ignite",
         string.format("%d eng · %d kN", st.eng or 0, st.kn or 0)

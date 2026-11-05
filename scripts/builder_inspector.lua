@@ -198,6 +198,55 @@ function chain_rows(B, uid, rec, out)
       cur, tonumber(sz.front) or 13, cur / (tonumber(sz.front) or 13)) }
 end
 
+-- ── a fairing base's shell (fairing redesign E1–E6): its pieces, its top,
+-- when it drops itself, FIT and reset. The shape itself is the orange
+-- handles in the view. ────────────────────────────────────────────────────
+FAIRING_AUTO = { 0, 50, 70, 90, 99 }
+function fairing_rows(B, uid, out)
+  local f = B.fairingInfo and B.fairingInfo(uid)
+  if not f then return end
+  local function op(a) a.uid = uid; if B.cmd then B.cmd("fairing", a) end end
+  local function choice(key, label, opts)
+    local row = { "row", key = key, w = "100%", h = 22, gap = 3, pad = 0, align = "center",
+      { "text", key = "l", style = "panel/cell", w = 54, h = 22, text = label, textValign = "center" } }
+    for i, o in ipairs(opts) do
+      row[#row + 1] = { "button", key = "o" .. i, style = "panel/choice", selected = o.on, w = "grow", h = 22,
+        text = o.text, textAlign = "center", textValign = "center", tooltip = o.tip, onClicked = o.click }
+    end
+    return row
+  end
+  out[#out + 1] = sublabel("fhd", "SHELL")
+  out[#out + 1] = { "text", key = "fsum", style = "panel/cellMuted", w = "100%", h = "fit", wrap = true,
+    text = (f.kind == "none") and "No shell yet: stack the payload on its top (or hang it under the payload)."
+      or string.format("%.2f m wide · %.2f m tall · %.0f kg · holds %d of %d parts%s", f.rmax * 2, f.height,
+        f.mass * 1000, f.nin, f.nin + f.nout, f.nout > 0 and "  ·  ⚠ some stick out" or "") }
+  out[#out + 1] = choice("fsplit", "Pieces", {
+    { text = "2", on = f.split ~= 3, tip = "Two halves, leaving to either side", click = function() op({ op = "split", n = 2 }) end },
+    { text = "3", on = f.split == 3, tip = "Three pieces at 120°", click = function() op({ op = "split", n = 3 }) end } })
+  out[#out + 1] = choice("ftop", "Top", {
+    { text = "Nose", on = not f.open, tip = "Closed over the payload with a nose", click = function() op({ op = "open", on = false }) end },
+    { text = "Open", on = f.open, tip = "An inter-stage skirt: open at a top ring under the stage above",
+      click = function() op({ op = "open", on = true }) end } })
+  local autos = {}
+  for _, v in ipairs(FAIRING_AUTO) do
+    autos[#autos + 1] = { text = v == 0 and "off" or (v .. "%"), on = (f.auto or 0) == v,
+      tip = v == 0 and "Drops when its stage fires (SPACE)"
+        or string.format("Drops itself once %d %% of the air is below the craft", v),
+      click = function() op({ op = "auto", pct = v }) end }
+  end
+  out[#out + 1] = choice("fauto", "Auto drop", autos)
+  out[#out + 1] = { "row", key = "fbtn", w = "100%", h = 22, gap = 3, pad = 0,
+    { "button", key = "fit", style = "panel/secondary", w = "grow", h = 22, text = "FIT", textAlign = "center",
+      textValign = "center", disabled = (f.nout or 0) == 0, tooltip = "Grow the shell just enough to hold what sticks out",
+      onClicked = function() op({ op = "fit" }) end },
+    { "button", key = "reset", style = "panel/secondary", w = "grow", h = 22, text = "Reset", textAlign = "center",
+      textValign = "center", tooltip = "Back to the shell that fits itself to the payload",
+      onClicked = function() op({ op = "reset" }) end },
+    { "button", key = "adv", style = "panel/secondary", w = "grow", h = 22, text = "Rings…", textAlign = "center",
+      textValign = "center", tooltip = "ADVANCED: draw the shell ring by ring (B)",
+      onClicked = function() if B.shapeStart then B.shapeStart(uid) end end } }
+end
+
 -- ── the part's controls (electronics actions) ───────────────────────────────
 -- Shared with the context menu: { { id, label, key } … } for a part record.
 function controlsOf(B, rec)
@@ -386,8 +435,8 @@ ABOUT = {
   cargo = "The hold: 250 kg and 1000 L a bay, pooled across every bay aboard. Ore you mine rides home in it, and kit bought in the CREW tab rides out in it.",
   dockPort = "Two ports brought face to face capture and weld two craft into one. Its UNDOCK control splits them again at that seam.",
   rcs = "A four-way thruster block for fine moves when docking. Balance them round the hull; a craft with none cannot translate.",
-  fairingS = "A shell that keeps the air off a payload. Press B to draw its shape, or let it fit what is on it. It falls away on its stage.",
-  fairingM = "A shell that keeps the air off a payload. Press B to draw its shape, or let it fit what is on it. It falls away on its stage.",
+  fairingS = "A shell that keeps the air off a payload. It fits what stands on it (or what it hangs under); drag the orange handles to shape it, or open its top as an inter-stage skirt. It swings open and falls away on its stage.",
+  fairingM = "A shell that keeps the air off a payload. It fits what stands on it (or what it hangs under); drag the orange handles to shape it, or open its top as an inter-stage skirt. It swings open and falls away on its stage.",
   hub = "A node block with six faces. Optional: beams join flush without one, but a hub gives a clean corner to build out from.",
   hinge = "A servo hinge, ±90°. Bind its two directions to keys in CONTROLS; it holds where it stops.",
   piston = "Extends 0.8 m on its keys and holds where it stops.",
@@ -553,6 +602,7 @@ local function inspect(B, out, top)
       onClicked = function() local c = ref("builder_camera"); if c and c.frameSelection then c.frameSelection() end end } }
   if def.wheel then out[#out + 1] = rule("r2"); wheel_rows(B, uid, rec, out) end
   if def.proc == "chain" then out[#out + 1] = rule("r2"); chain_rows(B, uid, rec, out) end
+  if def.fairing and n == 1 then out[#out + 1] = rule("r2"); fairing_rows(B, uid, out) end
   controls_rows(B, rec, sel, out)
 end
 
@@ -740,7 +790,11 @@ local function stage_rows(B, out)
         if e.drops then detail[#detail + 1] = "drops " .. e.drops end
         if e.lights then detail[#detail + 1] = "then burns " .. e.lights end
         if e.kind == "chute" then detail[#detail + 1] = "open on this SPACE" end
-        if e.kind == "fairing" then detail[#detail + 1] = "the shell falls away" end
+        if e.kind == "fairing" then
+          detail[#detail + 1] = (e.fauto and e.fauto > 0)
+            and string.format("FAIRING · falls away at %d %% of the air", e.fauto)
+            or "FAIRING · the shell falls away on this SPACE"
+        end
         local key = e.key
         local row = { "button", key = "e" .. key, style = (st.hover == key) and "panel/rowActive" or "panel/row", w = "100%", h = "fit",
           dir = "column", gap = 1, pad = 3, align = "stretch", draggable = true,

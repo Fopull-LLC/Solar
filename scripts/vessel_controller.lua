@@ -8989,6 +8989,12 @@ function stageNext()
   -- the stage's engines light FIRST: an upper stage that leaves as a craft of
   -- its own on this SPACE takes its engines away already lit (their `forced`
   -- state rides in the records it is handed)
+  -- (a fairing in a stage that also cuts the stack lets its pieces go at
+  -- once: its base may leave with the other side before the hinge is done)
+  R2.fair_instant = false
+  for _, ev in ipairs(group) do
+    if ev.kind == "axial" or ev.kind == "ring" then R2.fair_instant = true end
+  end
   for pass = 1, 2 do
     for _, ev in ipairs(group) do
       if (ev.kind == "engine") == (pass == 1) and node.valid and not destroyed then
@@ -8996,6 +9002,7 @@ function stageNext()
       end
     end
   end
+  R2.fair_instant = false
   return true
 end
 
@@ -13385,63 +13392,167 @@ function r2Faired(d)
   return not (type(f.st) == "table" and f.st.jettisoned)
 end
 
--- Split the shell: its clamshell pieces (2 or 3, `fsplit`) come away as
--- debris, each pushed straight out from the axis on its own side. Each piece
--- is a fresh FairingHalf body carrying a copy of its shell mesh;
--- it is spawned KINEMATIC and seated on the hull for a few ticks from the
--- physics pose (a body spawned free on an orbiting planet lands one tick of
--- the orbit behind — ~6 m at scale 3, reported on 0420), then let go with
--- the hull's velocity and the springs' push. The shell on the base hides as
--- it leaves.
-function r2Jettison(node, uid)
+-- JETTISON LIKE A REAL FAIRING (fairing redesign E4, E5). Three phases:
+--   1. UNLATCH: a pyro flash, gas and a bang at every seam (vfx.unlatch, its
+--      one-shots handed vfx's carried() share of the hull's velocity, so in air
+--      they stay where they fired instead of sailing off with the craft);
+--   2. HINGE OPEN for FAIRING_OPEN_S (counted in fixed ticks, like the
+--      hold-off): each piece's shell swings out about its hinge line on the
+--      base ring, FAIRING_OPEN_DEG, as a child of the base (still the hull's,
+--      no collider) — the clamshell opening every real fairing does;
+--   3. RELEASE: each piece is spawned as a FairingHalf body at its OPENED pose
+--      (electronics fairingPieceBody), moving with the hull at that point plus
+--      FAIRING_PUSH out along the opened piece's normal and FAIRING_FWD along
+--      the stack (so it never falls back down the hull). Its collider is a THIN
+--      BOX at the shell's outer skin, never round the payload it held; it
+--      passes through the craft for FAIRING_IGNORE_S and through the other
+--      pieces for its whole life. Cheap debris as before: 25 s, then gone.
+-- Every point is read from the tick pose when it is used (assembly.info's
+-- origin and axes; the opened pose is the part frame's), nothing is cached
+-- in the world. A stage that also cuts the stack (a decoupler on the same
+-- SPACE) lets the pieces go at once: the base may leave with the other side.
+-- (The engine can't spin a plain body yet — no angular velocity or impulse
+-- at a point for a non-assembly body — so the pieces don't tumble: card.)
+
+-- The tick pose's axes (assembly.info right/up; basis(node) without one).
+function r2FairAxes(node, info)
+  if info and info.right and info.up then
+    local a, b = info.right, info.up
+    return a, b, vec3(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x)
+  end
+  return basis(node)
+end
+
+-- Base-frame point / direction of fairing record d → world, this tick.
+function r2FairW(node, info, d, v, dir)
+  local X, Y, Z = r2_basis(d.yaw, d.pitch, d.roll)
+  local lx = X[1] * v[1] + Y[1] * v[2] + Z[1] * v[3]
+  local ly = X[2] * v[1] + Y[2] * v[2] + Z[2] * v[3]
+  local lz = X[3] * v[1] + Y[3] * v[2] + Z[3] * v[3]
+  local rx, up, rz = r2FairAxes(node, info)
+  if dir then
+    return rx.x * lx + up.x * ly + rz.x * lz, rx.y * lx + up.y * ly + rz.y * lz, rx.z * lx + up.z * ly + rz.z * lz
+  end
+  local bx, by, bz = base_of(node, info)
+  lx, ly, lz = lx + d.x, ly + d.y, lz + d.z
+  return bx + rx.x * lx + up.x * ly + rz.x * lz, by + rx.y * lx + up.y * ly + rz.y * lz,
+         bz + rx.z * lx + up.z * ly + rz.z * lz
+end
+
+function r2Jettison(node, uid, instant)
   local E = elib()
   local d = bp_by_uid[uid]
   if not (E and d and node and node.valid) then return false end
   local st = E.stateOf(d)
   if st.jettisoned then return false end
   st.jettisoned = true
-  local sh = R2.shells[uid]
-  local shellm = d.shellm or 0
-  local X, Y, Z = r2_basis(d.yaw, d.pitch, d.roll)
+  R2.fairFireT = time
   local prof = E.fairingProfileOf and E.fairingProfileOf(d)
   local pieces = prof and (d.fsplit or 2) or 2
+  local info = assembly.info(node)
+  -- 1. unlatch: the seams fire
+  if prof and E.fairingSeams then
+    local pts = {}
+    local y0, y1 = prof[1][2], prof[#prof][2]
+    for _, s in ipairs(E.fairingSeams(pieces)) do
+      local c, sn = math.cos(s), math.sin(s)
+      for _, y in ipairs({ y0 + 0.08, y0 + (y1 - y0) * 0.45 }) do
+        local r = (E.fairingRadiusAt(prof, y) or prof[1][1]) + 0.02
+        local wx, wy, wz = r2FairW(node, info, d, { r * c, y, r * sn })
+        local nx, ny, nz = r2FairW(node, info, d, { c, 0, sn }, true)
+        pts[#pts + 1] = { wx, wy, wz, nx, ny, nz }
+      end
+    end
+    local fx = fxd()
+    local v = info and info.vel or { x = 0, y = 0, z = 0 }
+    if fx and fx.unlatch then fx.unlatch(pts, v.x, v.y, v.z)
+    elseif spawnEffect and pts[1] then spawnEffect("SepPuff", pts[1][1], pts[1][2], pts[1][3]) end
+  end
+  local bx, by, bz = base_of(node, info)
+  sfx3(SFX.stage, bx, by, bz, 0.8, 1.3)
+  caption(pieces == 3 and "the fairing splits three ways" or "the fairing splits away")
+  log("fairing jettisoned")
+  -- 2. the hinge (or straight away: an older rulebook, a stage that cuts too)
+  if instant or R2.fair_instant or not (prof and E.fairingPieceBody and R2.shells[uid]) then
+    r2FairingRelease(node, uid, 0)
+  else
+    R2.opening = R2.opening or {}
+    R2.opening[uid] = { t = 0, n = pieces, prof = prof }
+  end
+  return true
+end
+
+-- The swing, every tick, and the release at its end. A base that has left
+-- the craft (or gone) takes its opening with it.
+function r2FairingTick(node, info, dt)
+  if not R2.opening then return end
+  local E = elib()
+  for uid, o in pairs(R2.opening) do
+    local sh = R2.shells[uid]
+    if not (E and bp_by_uid[uid] and not integ.gone[uid] and sh) then
+      R2.opening[uid] = nil
+    else
+      o.t = o.t + (dt or 0)
+      local f = math.min(1, o.t / (E.FAIRING_OPEN_S or 0.35))
+      -- (eased: the springs push hardest at the start)
+      local th = math.rad(E.FAIRING_OPEN_DEG or 28) * (1 - (1 - f) * (1 - f))
+      for k = 1, o.n do
+        local c = sh.nodes[k]
+        if c and c.valid then
+          local H = E.fairingHinge(o.prof, k, o.n, th)
+          c.x, c.y, c.z = H.pos[1], H.pos[2], H.pos[3]
+          c:setAngles(r2_euler(H.X, H.Y, H.Z))
+        end
+      end
+      if f >= 1 then
+        R2.opening[uid] = nil
+        r2FairingRelease(node, uid, th)
+      end
+    end
+  end
+  if next(R2.opening) == nil then R2.opening = nil end
+end
+
+-- 3. The pieces let go at their pose `th` (0: shut, the old way out).
+function r2FairingRelease(node, uid, th)
+  local E = elib()
+  local d = bp_by_uid[uid]
+  if not (E and d and node and node.valid) then return false end
+  local sh = R2.shells[uid]
+  local shellm = d.shellm or 0
+  local prof = E.fairingProfileOf and E.fairingProfileOf(d)
+  local pieces = prof and (d.fsplit or 2) or 2
+  local born = {}
   for k = 1, pieces do
-    -- piece k's centre (ox, oy, oz) and outward way (dx, dz), in the base's
-    -- frame (electronics.fairingPieceInfo); the fitted halves as before when
-    -- the rulebook can't say
-    local pi = prof and E.fairingPieceInfo(prof, k, pieces) or nil
-    if not pi then
+    local body = prof and E.fairingPieceBody and E.fairingPieceBody(prof, k, pieces, th or 0) or nil
+    if not body then
+      -- (an older rulebook: the fitted halves, a box round each)
       local sgn = (k == 1) and 1 or -1
       local hh = (d.fhc + d.fhn - (d.fy0 or 0.1)) * 0.5
-      pi = { ox = 0, oy = ((d.fy0 or 0.1) + d.fhc + d.fhn) * 0.5, oz = sgn * d.fr * 0.5, dx = 0, dz = sgn,
-             hx = d.fr * 0.8, hy = math.max(0.1, hh), hz = d.fr * 0.4 }
+      body = { O = { 0, ((d.fy0 or 0.1) + d.fhc + d.fhn) * 0.5, sgn * d.fr * 0.5 },
+               BX = { 1, 0, 0 }, BY = { 0, 1, 0 }, BZ = { 0, 0, 1 }, N = { 0, 0, sgn },
+               hx = d.fr * 0.8, hy = math.max(0.1, hh), hz = d.fr * 0.4,
+               cpos = { 0, -((d.fy0 or 0.1) + d.fhc + d.fhn) * 0.5, -sgn * d.fr * 0.5 },
+               cX = { 1, 0, 0 }, cY = { 0, 1, 0 }, cZ = { 0, 0, 1 } }
     end
-    local out = { X[1] * pi.dx + Z[1] * pi.dz, X[2] * pi.dx + Z[2] * pi.dz, X[3] * pi.dx + Z[3] * pi.dz }
-    local deb = { half = k - 1, mesh = sh and sh.meshes[k], shell = sh and sh.nodes[k],
-                  lx = d.x + X[1] * pi.ox + Y[1] * pi.oy + Z[1] * pi.oz,
-                  ly = d.y + X[2] * pi.ox + Y[2] * pi.oy + Z[2] * pi.oz,
-                  lz = d.z + X[3] * pi.ox + Y[3] * pi.oy + Z[3] * pi.oz,
-                  Z = out, part = { d.yaw or 0, d.pitch or 0, d.roll or 0 },
+    local deb = { mesh = sh and sh.meshes[k], shell = sh and sh.nodes[k], body = body,
                   m = math.max(0.005, shellm / pieces) }
-    local info = assembly.info(node)
-    local wx, wy, wz = v2w(node, info, deb.lx, deb.ly, deb.lz)
+    local info0 = assembly.info(node)
+    local wx, wy, wz = r2FairW(node, info0, d, body.O)
     spawn("FairingHalf", vec3(wx, wy, wz), function(h)
-      -- Let go DYNAMIC, where the shell stands now, moving with the craft
-      -- plus a push out: a fresh body lands where it is placed on a moving
-      -- planet since 0.117.0-rc3 (floptle/0449), so the "spawn kinematic and
-      -- seat it for 3 ticks" workaround is gone.
+      -- Let go DYNAMIC at the opened pose, read from this tick's pose (a fresh
+      -- body lands where it is placed on a moving planet since 0.117.0-rc3,
+      -- floptle/0449)
       if not (node and node.valid) then destroy(h) return end
       local ci = assembly.info(node)
-      local rx, up, rz = basis(node)
-      local function w(v) return { rx.x * v[1] + up.x * v[2] + rz.x * v[3], rx.y * v[1] + up.y * v[2] + rz.y * v[3],
-                                   rx.z * v[1] + up.z * v[2] + rz.z * v[3] } end
-      local Xp, Yp, Zp = r2_basis(deb.part[1], deb.part[2], deb.part[3])
-      h:setAngles(r2_euler(w(Xp), w(Yp), w(Zp)))
-      local hx, hy, hz = v2w(node, ci, deb.lx, deb.ly, deb.lz)
-      h.x, h.y, h.z = hx, hy, hz
+      local b = deb.body
+      local function wd(v) local x, y, z = r2FairW(node, ci, d, v, true); return { x, y, z } end
+      h:setAngles(r2_euler(wd(b.BX), wd(b.BY), wd(b.BZ)))
+      local px, py, pz = r2FairW(node, ci, d, b.O)
+      h.x, h.y, h.z = px, py, pz
       local rb = h:getcomponent("RigidBody")
       if rb then
-        rb.half_x, rb.half_y, rb.half_z = pi.hx, pi.hy, pi.hz
+        rb.half_x, rb.half_y, rb.half_z = b.hx, b.hy, b.hz
         rb.mass = deb.m
         rb.kinematic = 0
       end
@@ -13450,32 +13561,97 @@ function r2Jettison(node, uid)
           c.model = deb.mesh
           c:setMaterial{ texture = "textures/parts/paint_albedo.png", normalMap = "textures/parts/paint_normal.png",
                          roughnessMap = "textures/parts/paint_orm.png", shading = "physical", roughness = 0.75, metallic = 0.25 }
-          c.x, c.y, c.z = -pi.ox, -pi.oy, -pi.oz
+          c.x, c.y, c.z = b.cpos[1], b.cpos[2], b.cpos[3]
+          c:setAngles(r2_euler(b.cX, b.cY, b.cZ))
         end)
       end
-      local o = w(deb.Z)
+      -- the hull's velocity AT the piece (its spin included), the push out
+      -- along the opened normal and the nudge forward along the stack
       local v = ci and ci.vel or { x = 0, y = 0, z = 0 }
-      h.vx = v.x + o[1] * 3.0 + up.x * 0.5
-      h.vy = v.y + o[2] * 3.0 + up.y * 0.5
-      h.vz = v.z + o[3] * 3.0 + up.z * 0.5
-      physics.ignorePair(h, node, 1.5)
+      local w = ci and ci.angVel
+      local vx, vy, vz = v.x, v.y, v.z
+      if w and ci.com then
+        local rx, ry, rz = px - ci.com.x, py - ci.com.y, pz - ci.com.z
+        vx, vy, vz = vx + w.y * rz - w.z * ry, vy + w.z * rx - w.x * rz, vz + w.x * ry - w.y * rx
+      end
+      local o = wd(b.N)
+      local u = wd({ 0, 1, 0 })
+      local push, fwd = E.FAIRING_PUSH or 3.0, E.FAIRING_FWD or 0.5
+      h.vx = vx + o[1] * push + u[1] * fwd
+      h.vy = vy + o[2] * push + u[2] * fwd
+      h.vz = vz + o[3] * push + u[3] * fwd
+      physics.ignorePair(h, node, E.FAIRING_IGNORE_S or 1.5)
+      log(string.format("fairing piece let go: %.1f m/s out along its opened normal (%.0f° back), %.1f m/s forward",
+        push, math.deg(math.asin(math.max(-1, math.min(1, -(o[1] * u[1] + o[2] * u[2] + o[3] * u[3]))))), fwd))
+      -- the pieces never catch on each other
+      for _, o2 in ipairs(born) do
+        if o2.valid then physics.ignorePair(h, o2, 26.0) end
+      end
+      born[#born + 1] = h
       if deb.shell and deb.shell.valid then deb.shell.visible = false end
       deb.node = h
+      -- (the pieces in the air, for probes: fairingPieces())
+      local keep = {}
+      for _, p in ipairs(R2.fairPieces or {}) do if p.valid and p.name == "FairingHalf" then keep[#keep + 1] = p end end
+      keep[#keep + 1] = h
+      R2.fairPieces = keep
       -- (and only if it is still a fairing half: one the depot took is gone,
       -- and its handle — a bare slot number — can read `valid` again on the
       -- next node spawned; engine card 0552)
       after(25.0, function() if h.valid and h.name == "FairingHalf" then destroy(h) end end)
     end)
   end
+  R2.fairRelT = time   -- (game time: probes measure the hinge)
   -- the shells' mass leaves with them
   d.mass = math.max(0.01, (d.mass or 0) - shellm)
   d.shellm = 0
   integ.gen = integ.gen + 1
-  local bx, by, bz = base_of(node, assembly.info(node))
-  sfx3(SFX.stage, bx, by, bz, 0.8, 1.3)
-  caption(pieces == 3 and "the fairing splits three ways" or "the fairing splits away")
-  log("fairing jettisoned")
   return true
+end
+
+-- The fairing pieces this craft let go that are still flying (probes), and
+-- whether one is still swinging open.
+function fairingPieces()
+  local out = {}
+  for _, p in ipairs(R2.fairPieces or {}) do if p.valid and p.name == "FairingHalf" then out[#out + 1] = p end end
+  return out, R2.opening ~= nil, R2.fairFireT, R2.fairRelT
+end
+
+-- E6: AUTO-JETTISON. A fairing set to drop at N % of the air (`fauto`) goes
+-- once the air left at the craft (airBandAt) is under 1 − N/100 — off the
+-- pad and climbing only, and only on a world with air. Checked four times a
+-- second, and only while such a fairing is aboard.
+function r2FairingAuto(node, info, dt)
+  R2.fauto_t = (R2.fauto_t or 0) - (dt or 0)
+  if R2.fauto_t > 0 then return end
+  R2.fauto_t = 0.25
+  local E = elib()
+  if not (E and E.fairingAutoDue) or not info or info.anchored or info.grounded then return end
+  local due = nil
+  for _, f in ipairs(R2.fairings) do
+    local d = f.d
+    if (tonumber(d.fauto) or 0) > 0 and not (type(d.st) == "table" and d.st.jettisoned) then due = due or {}; due[#due + 1] = d end
+  end
+  if not due then return end
+  local o = info.origin or node
+  local dom = space.dominant(o.x, o.y, o.z)
+  local db = dom and space.body(dom)
+  if not (db and db.radius) then return end
+  local dx, dy, dz = o.x - db.x, o.y - db.y, o.z - db.z
+  local r = math.sqrt(dx * dx + dy * dy + dz * dz)
+  local band = airBandAt(db, r - db.radius)
+  local w = AIRBAND.w
+  local airy = w == nil or (w.atmo or 0) > 0.005
+  -- climbing: the velocity has an outward part
+  local v = info.vel
+  local climbing = v and r > 0 and (v.x * dx + v.y * dy + v.z * dz) / r > 0.5
+  if not climbing then return end
+  for _, d in ipairs(due) do
+    if E.fairingAutoDue(tonumber(d.fauto), band, airy) then
+      if not fireSeparation(d.uid) then r2Jettison(node, d.uid) end
+      log(string.format("fairing auto-jettison at %d %% of the air (band %.2f)", tonumber(d.fauto), band))
+    end
+  end
 end
 
 -- ── rollout ────────────────────────────────────────────────────────────────
@@ -13535,6 +13711,9 @@ function r2Tick(node, info, dt)
     motoStand(node)
     fairing_build(node)
   end
+  -- a fairing swinging open, and one set to drop itself (E4, E6)
+  if R2.opening then r2FairingTick(node, info, dt) end
+  if #R2.fairings > 0 then r2FairingAuto(node, info, dt) end
   robo_tick(node, info, dt)
   claw_tick(node, info, dt)
   drill_tick(node, info, dt)
@@ -14952,6 +15131,9 @@ function fixedUpdate(node, dt)
         end
       elseif ev.kind == "fairing" then
         st.n = 1
+        -- (its auto-drop, for the card: "drops at 70 % air")
+        local fd = bp_by_uid[ev.uid]
+        st.auto = fd and (tonumber(fd.fauto) or 0) > 0 and tonumber(fd.fauto) or nil
       else
         -- The engines this cut uncovers: above it, below the next cut up.
         local above = math.huge

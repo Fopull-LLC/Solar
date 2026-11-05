@@ -965,7 +965,7 @@ function stageStats()
     for uid, p in pairs(parts) do
       if not booster_uids[uid] and p.y > lo + 0.01 then
         local d = liveDef(p.def)
-        s.m = s.m + d.mass + (d.fuel or 0) * U
+        s.m = s.m + d.mass + (d.fuel or 0) * U + (p.def.fairing and fairingShellT(uid) or 0)
         if p.y < hi - 0.01 then
           s.fu = s.fu + (d.fuel or 0)
           if (d.thrust or 0) > 0 then
@@ -986,7 +986,7 @@ function stageStats()
       local p = parts[u]
       if p then
         local d = liveDef(p.def)
-        bm = bm + d.mass + (d.fuel or 0) * U
+        bm = bm + d.mass + (d.fuel or 0) * U + (p.def.fairing and fairingShellT(u) or 0)
         bfu = bfu + (d.fuel or 0)
         bth = bth + (d.thrust or 0)
         bth_sl = bth_sl + (d.thrust or 0) * nozzle_k(d.asl, sig)
@@ -1136,6 +1136,28 @@ function STAGEM.rank(it)
   if it.ring then return 1e6 + (it.y or 0) end
   return 1e6 + 1e3 + (it.y or 0)
 end
+-- WHERE A NEW FAIRING GOES (fairing redesign E6): a stage of its own just
+-- before the first stage that fires a decoupler above the fairing's base
+-- (what would let the payload go inside the shell), i.e. after the lifter
+-- and before the upper stage or the payload leaves. nil when no decoupler
+-- sits above it: then it follows the last cut below it (the rank rule) —
+-- after the lifter, never after the chutes.
+function STAGEM.fairAt(stages, items, it)
+  for i, g in ipairs(stages) do
+    for _, key in ipairs(g) do
+      local x = items[key]
+      if x and not x.engine and not x.chute and not x.fair and (x.y or 0) > (it.y or 0) + 0.01 then return i end
+    end
+  end
+  local at = nil
+  for i, g in ipairs(stages) do
+    for _, key in ipairs(g) do
+      local x = items[key]
+      if x and not x.engine and not x.chute and not x.fair and (x.y or 0) < (it.y or 0) then at = i + 1 end
+    end
+  end
+  return at
+end
 function STAGEM.minrank(stage, items)
   local m = math.huge
   for _, k in ipairs(stage) do
@@ -1204,10 +1226,13 @@ function STAGEM.sync(stages, items, saved)
     if items[k].engine then
       fresh_eng[#fresh_eng + 1] = k
     else
-      local r = STAGEM.rank(items[k])
-      local at = 1
-      for i, g in ipairs(out) do
-        if STAGEM.minrank(g, items) < r then at = i + 1 end
+      local at = items[k].fair and STAGEM.fairAt(out, items, items[k]) or nil
+      if not at then
+        local r = STAGEM.rank(items[k])
+        at = 1
+        for i, g in ipairs(out) do
+          if STAGEM.minrank(g, items) < r then at = i + 1 end
+        end
       end
       table.insert(out, at, { k })
     end
@@ -1505,6 +1530,11 @@ function stageView()
         local e = { key = k, label = stageItemLabel(it), uids = it.uids,
                     kind = it.engine and "engine" or it.chute and "chute" or it.fair and "fairing" or it.ring and "ring" or "axial",
                     n = #it.uids, grouped = it.grouped, sym = it.sym }
+        -- a fairing's auto-drop (E6): the card says when it falls away
+        if it.fair then
+          local fs = fshapes[it.uids[1]]
+          e.fauto = fs and fs.auto or nil
+        end
         if not it.chute and not it.fair and not it.engine then
           local drop, own = {}, {}
           for _, u in ipairs(it.uids) do
@@ -4718,17 +4748,46 @@ end
 -- reaches above the base and how far out from its axis — so the shell is
 -- built to fit it. nil when nothing stands on it.
 SHELL_T_PER_M2 = 0.012   -- composite shell, tonnes per square metre
+
+-- What stands on a fairing base's TOP (and everything built onto that): the
+-- parts on its top node or surface-mounted above it, AND (E2) the part it
+-- hangs UNDER — a base attached by its top node to the bottom of a payload
+-- or an upper stage built from the top down is the payload's parent's child,
+-- not its parent, and its shell grew round nothing. Read off the links (any
+-- direction), so the tree's direction no longer matters. uid → true.
+function fairing_above(uid)
+  local b = parts[uid]
+  local _, Y = rot_basis(b.yaw, b.pitch, b.roll)
+  local function above(q) return q and ((q.x - b.x) * Y.x + (q.y - b.y) * Y.y + (q.z - b.z) * Y.z) > 0 end
+  -- (a neighbour's centre over the ring's middle: the part on its top node,
+  -- or the one it hangs from; not a radial part on its rim. By position, not
+  -- by the link's node names: an old blueprint's links all say "top")
+  local function over(q)
+    return q and ((q.x - b.x) * Y.x + (q.y - b.y) * Y.y + (q.z - b.z) * Y.z) > b.def.h * 0.25
+  end
+  local seeds = {}
+  for u, q in pairs(parts) do
+    if q.parent == uid and (q.att == "top" or q.att == "surface") and above(q) then seeds[u] = true end
+  end
+  if b.parent and over(parts[b.parent]) then seeds[b.parent] = true end
+  local G = graph()
+  if G then
+    for _, l in ipairs(G:incident(uid)) do
+      local o = (l.a == uid) and l.b or l.a
+      if over(parts[o]) then seeds[o] = true end
+    end
+  end
+  local load = {}
+  for u in pairs(seeds) do for v in pairs(beyond_of(u, uid)) do load[v] = true end end
+  load[uid] = nil
+  return load
+end
+
 function fairingEnvelope(uid)
   local b = parts[uid]
   if not (b and b.def.fairing) then return nil end
   local X, Y, Z = rot_basis(b.yaw, b.pitch, b.roll)
-  local load = {}
-  for u, q in pairs(parts) do
-    if q.parent == uid and (q.att == "top" or q.att == "surface") then
-      local up = (q.x - b.x) * Y.x + (q.y - b.y) * Y.y + (q.z - b.z) * Y.z
-      if up > 0 then for v in pairs(beyond_of(u, uid)) do load[v] = true end end
-    end
-  end
+  local load = fairing_above(uid)
   local top, rad, n = 0.0, 0.0, 0
   for u in pairs(load) do
     local q = parts[u]
@@ -4763,7 +4822,14 @@ end
 -- still gets). Kept per uid, apart from `parts`, so a scrap + CTRL+Z brings a
 -- base back with its shape:
 --
---   fshapes[uid] = { secs = { { r =, h = }, … }, closed = bool, split = 2 | 3 }
+--   fshapes[uid] = { secs = { { r =, h = }, … }, closed = bool, split = 2 | 3,
+--                    hp = handles (electronics fairingHandleProfile) | nil,
+--                    auto = 0 | 50 | 70 | 90 | 99 (auto-jettison, % of the air below) }
+--
+-- Since the fairing redesign (E1) the default way to shape one is HANDLES on
+-- the shell (fairingHandlesTick): `hp` wins over drawn rings, and drawing
+-- rings (shapeStart, B or SHAPE ▸ ADVANCED) clears it. An entry may hold only
+-- `split` / `auto` (a fitted shell in 3 pieces, dropping itself).
 fshapes = {}
 
 function copy_wcfg(w)
@@ -4774,9 +4840,21 @@ end
 
 function copy_shape(sh)
   if not sh then return nil end
-  local out = { secs = {}, closed = sh.closed, split = sh.split or 2 }
+  local out = { secs = {}, closed = sh.closed, split = sh.split or 2, auto = sh.auto }
   for i, sc in ipairs(sh.secs or {}) do out.secs[i] = { r = sc.r, h = sc.h } end
+  if sh.hp then
+    local h = sh.hp
+    out.hp = { rb = h.rb, rs = h.rs, hs = h.hs, rt = h.rt, ht = h.ht, hn = h.hn, open = h.open == true }
+  end
   return out
+end
+
+-- An entry that says nothing (no rings, no handles, 2 pieces, no auto) goes.
+function shape_tidy(uid)
+  local sh = fshapes[uid]
+  if sh and #(sh.secs or {}) == 0 and not sh.hp and (sh.split or 2) == 2 and (sh.auto or 0) == 0 then
+    fshapes[uid] = nil
+  end
 end
 
 -- Everything that stands on the base's top node (and everything built onto
@@ -4785,13 +4863,7 @@ end
 function fairing_payload(uid)
   local b = parts[uid]
   local X, Y, Z = rot_basis(b.yaw, b.pitch, b.roll)
-  local load = {}
-  for u, q in pairs(parts) do
-    if q.parent == uid and (q.att == "top" or q.att == "surface") then
-      local up = (q.x - b.x) * Y.x + (q.y - b.y) * Y.y + (q.z - b.z) * Y.z
-      if up > 0 then for v in pairs(beyond_of(u, uid)) do load[v] = true end end
-    end
-  end
+  local load = fairing_above(uid)
   local out = {}
   for u in pairs(load) do
     local q = parts[u]
@@ -4819,31 +4891,68 @@ end
 function fairingFit(uid)
   local b = parts[uid]
   if not (b and b.def.fairing) then return nil end
+  -- (asked every frame while the base is selected: one answer per edit;
+  -- the ring drawing edits its rings in place, so it always asks afresh)
+  if shapingUid and shapingUid() == uid then return fairing_fit_now(uid, b) end
+  local all = W.cache.ffit
+  if not all or all.v ~= craftVersion or all.sv ~= (W.shape_v or 0) then
+    all = { v = craftVersion, sv = W.shape_v or 0, by = {} }
+    W.cache.ffit = all
+  end
+  local fit = all.by[uid]
+  if fit == nil then
+    fit = fairing_fit_now(uid, b) or false
+    all.by[uid] = fit
+  end
+  return fit or nil
+end
+
+-- The shell's tonnes, as the flight will carry them (finishBlueprint adds the
+-- same to the base's record): the readout's mass and Δv count it too.
+function fairingShellT(uid)
+  local fit = fairingFit(uid)
+  if not fit then return 0 end
+  if fit.prof then return (fit.closed or fit.open) and (fit.mass or 0) or 0 end
+  return fit.env and fit.env.mass or 0
+end
+
+function fairing_fit_now(uid, b)
   local E = elib()
   local sh = fshapes[uid]
   local y0 = b.def.h * 0.5
-  local prof, shaped
-  if sh and #sh.secs > 0 and E then
+  local prof, shaped, kind, open
+  local split = (sh and sh.split) or 2
+  if sh and sh.hp and E and E.fairingHandleProfile then
+    prof = E.fairingHandleProfile(sh.hp, y0)
+    shaped, kind, open = true, "handles", sh.hp.open == true
+  elseif sh and #(sh.secs or {}) > 0 and E then
     prof = E.fairingSectionsProfile(b.def.fairing, y0, sh.secs, sh.closed)
-    shaped = true
+    shaped, kind = true, "rings"
   else
     local env = fairingEnvelope(uid)
     if not env then return nil end
+    kind = "fitted"
     if E then prof = E.fairingAutoProfile(env.r, env.y0, env.hc, env.hn) end
     if not prof then
-      return { env = env, load = env.load, out = {}, mass = env.mass, split = 2, shaped = false, y0 = y0 }
+      return { env = env, load = env.load, out = {}, mass = env.mass, split = 2, shaped = false, y0 = y0, kind = kind }
     end
   end
   local area, rmax, height = E.fairingStats(prof)
-  local load, out, nin, nout = {}, {}, 0, 0
-  local closed = (not shaped) or (sh and sh.closed)
-  for u, pl in pairs(fairing_payload(uid)) do
-    if closed and E.fairingHolds(prof, pl.lo, pl.hi, pl.rad) then load[u] = true; nin = nin + 1
-    else out[u] = true; nout = nout + 1 end
+  local closed = (not shaped) or (kind == "handles" and not open) or (kind == "rings" and sh.closed)
+  local pls = fairing_payload(uid)
+  local load, out, above, nin, nout = {}, {}, {}, 0, 0
+  if (closed or open) and E.fairingSort then
+    load, out, above, nin, nout = E.fairingSort(prof, pls, open)
+  else
+    for u, pl in pairs(pls) do
+      if closed and E.fairingHolds(prof, pl.lo, pl.hi, pl.rad) then load[u] = true; nin = nin + 1
+      else out[u] = true; nout = nout + 1 end
+    end
   end
   return { prof = prof, area = area, rmax = rmax, height = height, mass = area * SHELL_T_PER_M2,
-           load = load, out = out, nin = nin, nout = nout, split = (sh and sh.split) or 2,
-           shaped = shaped == true, closed = closed, y0 = y0 }
+           load = load, out = out, above = above, nin = nin, nout = nout, split = split,
+           shaped = shaped == true, closed = closed, open = open == true, kind = kind, y0 = y0, pls = pls,
+           env = (kind == "fitted") and fairingEnvelope(uid) or nil }
 end
 
 -- The shape's rings as a flat list for the blueprint (r1, h1, r2, h2 …) and back.
@@ -4888,21 +4997,30 @@ function finishBlueprint(bp)
   local E = elib()
   for _, d in ipairs(bp.parts) do
     if (d.fairing or 0) > 0 then
-      local fit = fairingFit(d.uid)
+      local fit = parts[d.uid] and fairing_fit_now(d.uid, parts[d.uid]) or nil   -- (fresh: a save is rare)
       local sh = fshapes[d.uid]
-      if sh and #sh.secs > 0 then
+      if sh and #(sh.secs or {}) > 0 and not sh.hp then
         -- the drawn rings ride along so the builder can open the shape again
         d.fsec = secs_flat(sh)
         d.fclosed = sh.closed and 1 or 0
       end
-      if fit and fit.prof and fit.closed then
+      -- the handles (E1), so the builder opens the same shape again
+      if sh and sh.hp and E.fairingHandlesFlat then d.fhp = E.fairingHandlesFlat(sh.hp) end
+      -- auto-jettison (E6): % of the air below the craft, 0 = off
+      if sh and (sh.auto or 0) > 0 then d.fauto = sh.auto end
+      if fit and fit.prof and (fit.closed or fit.open) then
         local p = fit.prof
         -- fr / fy0 / fhc / fhn describe the fitted shell, and stand in for a
         -- drawn one wherever the flight only knows those (a widest-radius
         -- cylinder and nose), so an older flight still flies a sensible shell.
         local top = p[#p][2]
         local hn = math.max(0.15, fit.rmax * 1.1)
-        if fit.shaped then
+        if fit.open then
+          -- an inter-stage skirt: no nose, open at its top ring
+          d.fr, d.fy0, d.fhc, d.fhn = fit.rmax, fit.y0, math.max(fit.y0 + 0.05, top), 0.0
+          d.fprof = E.fairingFlat(p)
+          d.fopen = 1
+        elseif fit.shaped then
           d.fr, d.fy0, d.fhc, d.fhn = fit.rmax, fit.y0, math.max(fit.y0 + 0.05, top - hn), hn
           d.fprof = E.fairingFlat(p)
         else
@@ -5207,6 +5325,7 @@ local function load_blueprint(bp)
   stage_order, saved_stage = {}, {}
   W.stage_sync_v, W.eng_split = nil, {}
   fshapes = {}
+  W.cache.ffit = nil
   wcfgs = {}
   if shapeStop then shapeStop(false) end
   local have = {}
@@ -5223,6 +5342,18 @@ local function load_blueprint(bp)
       if (d.fairing or 0) > 0 and type(d.fsec) == "table" and #d.fsec >= 2 then
         fshapes[d.uid] = { secs = secs_unflat(d.fsec), closed = (d.fclosed or 1) ~= 0,
                            split = (d.fsplit == 3) and 3 or 2 }
+      end
+      -- the handles, the piece count of a fitted shell and the auto-jettison
+      -- come back too (E1, E6)
+      if (d.fairing or 0) > 0 then
+        local E = elib()
+        local hp = type(d.fhp) == "table" and E and E.fairingHandlesUnflat and E.fairingHandlesUnflat(d.fhp) or nil
+        local auto = tonumber(d.fauto) or 0
+        if hp or auto > 0 or d.fsplit == 3 then
+          local sh = fshapes[d.uid] or { secs = {}, closed = true, split = (d.fsplit == 3) and 3 or 2 }
+          sh.hp, sh.auto = hp, auto > 0 and auto or nil
+          fshapes[d.uid] = sh
+        end
       end
       local an = (d.anx and d.any and d.anz) and { x = d.anx, y = d.any, z = d.anz } or nil
       local p = add_part(d.uid, { id = d.id, x = d.x, y = d.y + params.floor_y, z = d.z,
@@ -5825,8 +5956,11 @@ function roundTwoTick()
   -- (only fairings, and their fit only when the craft changed or one is being shaped)
   local fl = parts_with("fairing")
   if #fl == 0 then return end
-  if W.cache.shell_v == craftVersion and W.cache.shell_l == W.landed and not (shapingUid and shapingUid()) then return end
-  W.cache.shell_v, W.cache.shell_l = craftVersion, W.landed
+  -- (a handle drag moves W.shape_v, not craftVersion: the shell re-lathes
+  -- when its profile changed and nothing else is re-derived until the drop)
+  if W.cache.shell_v == craftVersion and W.cache.shell_l == W.landed and W.cache.shell_s == (W.shape_v or 0)
+     and not (shapingUid and shapingUid()) then return end
+  W.cache.shell_v, W.cache.shell_l, W.cache.shell_s = craftVersion, W.landed, W.shape_v or 0
   for _, uid in ipairs(fl) do
     local p = parts[uid]
     if p.def.fairing and p.node and p.node.valid then
@@ -5961,8 +6095,16 @@ function shapeStart(uid)
   if shaping then shapeStop(true) end
   local prev = copy_shape(fshapes[uid])
   local sh = fshapes[uid] or { secs = {}, closed = false, split = 2 }
+  sh.secs = sh.secs or {}
+  -- (ADVANCED: rings win over the handles; a handle shape starts as its
+  -- shoulder and top rings, so drawing on goes on from what was there)
+  if sh.hp then
+    if #sh.secs == 0 then sh.secs = { { r = sh.hp.rs, h = sh.hp.hs }, { r = sh.hp.rt, h = sh.hp.ht } } end
+    sh.hp = nil
+  end
   sh.closed = false
   fshapes[uid] = sh
+  W.fmenu = nil
   craftVersion = craftVersion + 1
   shaping = { uid = uid, prev = prev }
   sel_only(uid)
@@ -5980,7 +6122,7 @@ function shapeStop(commit)
   local uid = shaping.uid
   local sh = fshapes[uid]
   if sh then
-    if #sh.secs == 0 then fshapes[uid] = nil
+    if #sh.secs == 0 then shape_tidy(uid)
     elseif not sh.closed then sh.closed = true end
   end
   craftVersion = craftVersion + 1
@@ -5990,7 +6132,7 @@ function shapeStop(commit)
   if commit == false or not parts[uid] then return end
   push_undo({ type = "shape", uid = uid, prev = prev })
   local fit = fairingFit(uid)
-  if fshapes[uid] and fit and fit.prof then
+  if fshapes[uid] and #(fshapes[uid].secs or {}) > 0 and fit and fit.prof then
     hint(string.format("fairing shaped — %d ring%s · %.0f kg shell · %d piece%s · holds %d of %d parts%s  (CTRL+Z undoes it)",
       #fshapes[uid].secs, #fshapes[uid].secs == 1 and "" or "s", fit.mass * 1000, fit.split, fit.split == 1 and "" or "s",
       fit.nin, fit.nin + fit.nout, fit.nout > 0 and "  ⚠ some stick out" or ""), 5.0)
@@ -6059,23 +6201,350 @@ function shape_hud(sh, cur, pv, nin, nout)
     (nout or 0) > 0 and 0.55 or 0.8, 1.0)
 end
 
--- The SHAPE FAIRING button under a selected base; true = it took the click.
+-- ── SHAPING BY HANDLES (fairing redesign E1, E3) ────────────────────────────
+-- A selected fairing base shows FOUR orange handles on its shell, on the
+-- side of it facing the camera's right: BASE (its radius), SHOULDER and TOP
+-- (radius and height each) and the NOSE tip (its height). Drag one and the
+-- shell re-lathes as you go; SHIFT snaps to 5 cm; nothing is refused (a
+-- handle pushes its neighbours). The drag moves W.shape_v only, so the shell
+-- is rebuilt when its profile changes and nothing else is re-derived until
+-- the drop (one undo step). Parts sticking out outline red and a FIT button
+-- grows the shell just enough to hold them. Drawing rings is ADVANCED,
+-- under the SHAPE button (or B).
+FH = { R = { 0.97, 0.55, 0.22 } }   -- signal orange (docs/ui-style.md `accent`)
+
+-- The handles a base shows now (nil: a ring shape, or no shell): its own, or
+-- the fitted shell's, as handles.
+function fairing_handles_of(uid, fit)
+  local E = elib()
+  if not (E and E.fairingHandlesFit) then return nil end
+  local sh = fshapes[uid]
+  if sh and sh.hp then return sh.hp end
+  if sh and #(sh.secs or {}) > 0 then return nil end
+  local env = fit and fit.env or fairingEnvelope(uid)
+  if not env then return nil end
+  return E.fairingHandlesFit(env.r, env.y0, env.hc, env.hn)
+end
+
+-- The meridian the handles sit on: the one facing the camera's right, as an
+-- angle about the base's axis (from its X toward its Z), and the camera's
+-- distance (handles keep their size on screen).
+function fairing_view(b, X, Y, Z)
+  if not (camera and camera.screenToRay) then return 0, 10 end
+  local sw, sh = 1280, 720
+  if camera.screenSize then sw, sh = camera.screenSize() end
+  local ox, oy, oz, dx, dy, dz = camera.screenToRay((sw or 1280) * 0.5, (sh or 720) * 0.5)
+  if not dx then return 0, 10 end
+  -- right = view × axis
+  local rx, ry, rz = dy * Y.z - dz * Y.y, dz * Y.x - dx * Y.z, dx * Y.y - dy * Y.x
+  local cx = rx * X.x + ry * X.y + rz * X.z
+  local cz = rx * Z.x + ry * Z.y + rz * Z.z
+  local a = (math.abs(cx) + math.abs(cz) > 1e-6) and math.atan2(cz, cx) or 0
+  local ddx, ddy, ddz = b.x - ox, b.y - oy, b.z - oz
+  return a, math.max(1, math.sqrt(ddx * ddx + ddy * ddy + ddz * ddz))
+end
+
+-- A handle drag `key` of base `uid` to radius r, height h above its ring
+-- (what the mouse does each frame; probes call it straight). Returns true
+-- when the shell changed.
+function fairingHandleSet(uid, key, r, h, snap)
+  local E = elib()
+  local b = parts[uid]
+  if not (E and b and b.def.fairing and E.fairingHandleDrag) then return false end
+  local hp = fairing_handles_of(uid, fairingFit(uid))
+  if not hp then return false end
+  if snap then
+    r, h = E.fairingSnap(r), E.fairingSnap(h)
+  else
+    -- (to the centimetre: a mouse twitch is not a new shell)
+    r, h = math.floor(r * 100 + 0.5) / 100, math.floor(h * 100 + 0.5) / 100
+  end
+  local n, changed = E.fairingHandleDrag(hp, key, r, h)
+  if not changed then return false end
+  local sh = fshapes[uid] or { secs = {}, closed = true, split = 2 }
+  sh.hp = n
+  sh.secs = {}
+  fshapes[uid] = sh
+  W.shape_v = (W.shape_v or 0) + 1
+  return true
+end
+
+-- The drop: one undo step, the craft's figures re-derived, a line about it.
+function fairing_drag_end()
+  local d = W.fdrag
+  W.fdrag = nil
+  if not d then return end
+  W.shape_v = (W.shape_v or 0) + 1
+  if not d.moved then return end
+  push_undo({ type = "shape", uid = d.uid, prev = d.prev })
+  craftVersion = craftVersion + 1
+  refresh_stats()
+  local fit = fairingFit(d.uid)
+  if fit and fit.prof then
+    hint(string.format("fairing — %.2f m wide · %.2f m tall · %.0f kg · holds %d of %d parts%s   (CTRL+Z undoes it)",
+      fit.rmax * 2, fit.height, fit.mass * 1000, fit.nin, fit.nin + fit.nout,
+      fit.nout > 0 and "  ⚠ some stick out: FIT" or ""), 4.0)
+  end
+  ui("place", 0.7)
+end
+
+-- Every frame a fairing base is selected (and no ring drawing): draw the
+-- handles, and own the mouse while one is pressed or dragged.
+function fairingHandlesTick(clicked, cam_busy)
+  local uid = selected_uid
+  local b = parts[uid]
+  local E = elib()
+  if not (b and E and E.fairingHandlePoints) then return false end
+  local fit = fairingFit(uid)
+  -- what sticks out shows red while the base is selected (E3)
+  if fit and fit.out then
+    for u in pairs(fit.out) do local q = parts[u]; if q then outline(q, 1.0, 0.3, 0.25, 0.95) end end
+  end
+  local hp = fairing_handles_of(uid, fit)
+  if not hp then return false end
+  local _, X, Y, Z, y0 = shape_frame(uid)
+  local a, dist = fairing_view(b, X, Y, Z)
+  if W.fdrag and W.fdrag.uid == uid then a = W.fdrag.a end
+  local k = screen_k()
+  local mx, my = input.mouse()
+  local pts = E.fairingHandlePoints(hp, y0)
+  local prof = E.fairingHandleProfile(hp, y0)
+  local O = FH.R
+  -- the profile you are shaping, on the handles' meridian
+  local line = {}
+  for _, q in ipairs(prof) do
+    local x, y, z = shape_pt(b, X, Y, Z, q[1], a, q[2])
+    line[#line + 1] = x; line[#line + 1] = y; line[#line + 1] = z
+  end
+  if #line >= 6 then draw.polyline(line, O[1], O[2], O[3], 0.9) end
+  local hot = nil
+  local best = 15 * k
+  for _, p in ipairs(pts) do
+    local x, y, z = shape_pt(b, X, Y, Z, p.r, a, p.y)
+    p.x, p.y3, p.z = x, y, z
+    local sx, sy, on = screen_of(x, y, z)
+    if on and sx then
+      local dd = math.sqrt((sx - mx) ^ 2 + (sy - my) ^ 2)
+      if dd < best then best, hot = dd, p.key end
+    end
+  end
+  local dragging = W.fdrag and W.fdrag.uid == uid and W.fdrag.key or nil
+  for _, p in ipairs(pts) do
+    local lit = (dragging == p.key) or (not dragging and hot == p.key)
+    local rr = dist * (lit and 0.019 or 0.013)
+    draw.sphere(p.x, p.y3, p.z, rr, O[1], O[2], O[3], 1.0)
+    if lit then
+      -- its section, and a spoke to the axis so the radius reads
+      if p.r > 0.01 then shape_ring(b, Y, p.r, p.y, O[1], O[2], O[3], 0.7) end
+      local ax, ay, az = shape_pt(b, X, Y, Z, 0, a, p.y)
+      draw.line(ax, ay, az, p.x, p.y3, p.z, O[1], O[2], O[3], 0.6)
+    end
+  end
+  if dragging then
+    if not input.button(0) then fairing_drag_end() return true end
+    local r, h = shape_cursor(b, X, Y, Z, y0)
+    if r then
+      local cur = fshapes[uid] and fshapes[uid].hp or hp
+      if dragging == "base" then h = 0 end
+      if dragging == "nose" then r = cur.rt end
+      if fairingHandleSet(uid, dragging, r, h, input.key("shift")) then W.fdrag.moved = true end
+    end
+    local s = fshapes[uid] and fshapes[uid].hp or hp
+    local tip = ({ base = string.format("BASE  r %.2f m", s.rb),
+                   shoulder = string.format("SHOULDER  r %.2f m · h %.2f m", s.rs, s.hs),
+                   top = string.format("TOP  r %.2f m · h %.2f m", s.rt, s.ht),
+                   nose = string.format("NOSE  %.2f m long", s.hn or 0) })[dragging]
+    if tip then
+      stext(mx + 18 * k, my - 6 * k, tip .. (input.key("shift") and "   ·   5 cm steps" or "   ·   SHIFT snaps"), 13 * k,
+        0.92, 0.89, 0.81, 1.0)
+    end
+    return true
+  end
+  if hot and clicked and not cam_busy then
+    W.fdrag = { uid = uid, key = hot, a = a, prev = copy_shape(fshapes[uid]), moved = false }
+    W.fmenu = nil
+    W.shape_v = (W.shape_v or 0) + 1
+    ui("pickup", 0.6)
+    return true
+  end
+  return false
+end
+
+-- E3: FIT — grow the shell just enough to hold what sticks out of it.
+function fairingFitNow(uid)
+  local E = elib()
+  local b = parts[uid]
+  if not (E and b and b.def.fairing and E.fairingFitHandles) then return false end
+  local fit = fairingFit(uid)
+  if not fit or (fit.nout or 0) == 0 then return false end
+  local y0 = b.def.h * 0.5
+  local sh = fshapes[uid] or { secs = {}, closed = true, split = 2 }
+  if fit.kind == "rings" then
+    sh.secs = E.fairingFitRings(b.def.fairing, y0, sh.secs, fit.pls)
+    sh.closed = true
+  else
+    local hp = fairing_handles_of(uid, fit)
+    if not hp then return false end
+    sh.hp = E.fairingFitHandles(hp, y0, fit.pls)
+    sh.secs = {}
+  end
+  fshapes[uid] = sh
+  return true
+end
+
+-- E2: the shell as an INTER-STAGE skirt (an open top) or closed over a nose.
+-- Opened, its top ring goes under the first part above that is as wide as
+-- the base (the stage it skirts up to), round what stands below it.
+function fairingOpenTop(uid, on)
+  local E = elib()
+  local b = parts[uid]
+  if not (E and b and b.def.fairing and E.fairingHandlesFit) then return false end
+  local fit = fairingFit(uid)
+  local hp = fairing_handles_of(uid, fit)
+  local y0 = b.def.h * 0.5
+  local R0 = b.def.fairing
+  local pls = fit and fit.pls or fairing_payload(uid)
+  if on then
+    local top = nil
+    for _, pl in pairs(pls) do
+      if pl.rad >= R0 - 0.05 and pl.lo > y0 + 0.1 and (not top or pl.lo < top) then top = pl.lo end
+    end
+    if not top then
+      for _, pl in pairs(pls) do top = math.max(top or y0 + 0.3, pl.hi + 0.03) end
+    end
+    top = top or (y0 + 0.5)
+    local rad = 0
+    for _, pl in pairs(pls) do if pl.hi <= top + 0.01 then rad = math.max(rad, pl.rad) end end
+    local R = math.max(R0, rad + (E.FAIRING_MARGIN or 0.08))
+    hp = E.fairingHandlesFit(R, y0, top, R * 1.1)
+    hp.open = true
+  else
+    if not hp then return false end
+    hp = E.fairingHandlesCopy(hp)
+    hp.open = false
+    hp.hn = math.max(0.15, hp.rt * 1.1)
+  end
+  local sh = fshapes[uid] or { secs = {}, closed = true, split = 2 }
+  sh.hp, sh.secs = hp, {}
+  fshapes[uid] = sh
+  return true
+end
+
+-- The button row under a selected base: SHAPE ▾ (its menu: ADVANCED ring
+-- drawing, nose / open top, 2 / 3 pieces, auto-drop, reset) and, when parts
+-- stick out, FIT. True = it took the click.
+function fairing_button(x, y, w, h, label, hotc, warn)
+  local mx, my = input.mouse()
+  local k = screen_k()
+  local hot = mx >= x and mx <= x + w and my >= y and my <= y + h
+  local ink = { 0.92, 0.89, 0.81 }
+  if warn then ink = { 1.0, 0.80, 0.28 } end
+  srect(x, y, w, h, hot and 0.19 or 0.12, hot and 0.195 or 0.124, hot and 0.18 or 0.112, 0.95, 4 * k)
+  if hot then sframe(x, y, w, h, 1.0, 0.80, 0.58, 1.0, 1.5 * k)
+  else sframe(x, y, w, h, warn and 1.0 or 0.70, warn and 0.80 or 0.67, warn and 0.28 or 0.59, warn and 0.9 or 0.55, 1.0 * k) end
+  stext(x + 10 * k, y + (h - 13 * k) * 0.5, label, 13 * k, ink[1], ink[2], ink[3], 1.0)
+  if hotc then stext(x + w - 10 * k, y + (h - 13 * k) * 0.5, hotc, 13 * k, FH.R[1], FH.R[2], FH.R[3], 1.0, "right") end
+  return hot
+end
+
 function shape_button(clicked, cam_busy)
   local uid = selected_uid
   local b, X, Y, Z, y0 = shape_frame(uid)
   local sx, sy, on = screen_of(b.x - Y.x * y0, b.y - Y.y * y0, b.z - Y.z * y0)
   if not on then return false end
   local k = screen_k()
-  local w, h = 210 * k, 30 * k
-  local bx, by = sx - w * 0.5, sy + 36 * k
-  local mx, my = input.mouse()
-  local hot = mx >= bx and mx <= bx + w and my >= by and my <= by + h
-  srect(bx, by, w, h, 0.05, 0.16, 0.19, hot and 0.97 or 0.86, 6 * k)
-  sframe(bx, by, w, h, 0.4, 0.95, 0.8, 1.0, (hot and 2.0 or 1.2) * k)
-  stext(bx + w * 0.5, by + 7 * k, (fshapes[uid] and "✎  RESHAPE FAIRING   [B]" or "✎  SHAPE FAIRING   [B]"),
-    14 * k, 0.75, 1.0, 0.9, 1.0, "center")
-  if hot and clicked and not cam_busy then return shapeStart(uid) end
-  return false
+  local fit = fairingFit(uid)
+  local sh = fshapes[uid] or {}
+  local w, h, gap = 176 * k, 26 * k, 4 * k
+  local nout = fit and fit.nout or 0
+  local total = w + ((nout > 0) and (gap + 150 * k) or 0)
+  local bx, by = sx - total * 0.5, sy + 36 * k
+  local took = false
+  local open = W.fmenu == uid
+  stext(bx, by - 17 * k, (fit and fit.kind == "rings") and "drawn with rings  ·  SHAPE ▸ RESET for handles"
+    or "drag the orange handles  ·  SHIFT snaps 5 cm", 12 * k, 0.77, 0.75, 0.68, 0.95)
+  if fairing_button(bx, by, w, h, "✎  SHAPE", open and "▴" or "▾") and clicked and not cam_busy then
+    W.fmenu = (not open) and uid or nil
+    ui("tool", 0.6)
+    took = true
+  end
+  if nout > 0 then
+    local fx = bx + w + gap
+    if fairing_button(fx, by, 150 * k, h, string.format("⚠ %d STICK OUT", nout), "FIT", true) and clicked and not cam_busy then
+      cmd("fairing", { uid = uid, op = "fit" })
+      took = true
+    end
+  end
+  if W.fmenu == uid then
+    local hp = sh.hp
+    local auto = sh.auto or 0
+    local rows = {
+      { "ADVANCED  ·  draw rings", "B", function() W.fmenu = nil; shapeStart(uid) end },
+      { (hp and hp.open) and "TOP  ·  open (inter-stage)" or "TOP  ·  nose", "⇄",
+        function() cmd("fairing", { uid = uid, op = "open", on = not (hp and hp.open) }) end },
+      { string.format("PIECES  ·  %d", sh.split or 2), "⇄",
+        function() cmd("fairing", { uid = uid, op = "split", n = ((sh.split or 2) == 3) and 2 or 3 }) end },
+      { auto > 0 and string.format("AUTO DROP  ·  at %d %% of the air", auto) or "AUTO DROP  ·  off", "⇄",
+        function() cmd("fairing", { uid = uid, op = "auto", pct = fairing_next_auto(auto) }) end },
+      { "RESET  ·  fit to the payload", "", function() cmd("fairing", { uid = uid, op = "reset" }) end },
+    }
+    local mw = 236 * k
+    for i, r in ipairs(rows) do
+      local ry = by + h + gap + (i - 1) * (h + 2 * k)
+      if fairing_button(bx, ry, mw, h, r[1], r[2]) and clicked and not cam_busy then
+        r[3]()
+        ui("tool", 0.6)
+        took = true
+      end
+    end
+    -- a click anywhere else closes the menu (and goes on to whatever it was)
+    if clicked and not took then W.fmenu = nil end
+  end
+  return took
+end
+
+-- The handles' own version (moves on every re-lathe; craftVersion only on
+-- the drop) and the drag in progress, for tests and probes.
+function fairingShapeVersion() return W.shape_v or 0 end
+function fairingDragging() return W.fdrag and W.fdrag.key or nil end
+function fairingMenuOpen() return W.fmenu end
+function fairingMenu(uid) W.fmenu = uid end
+-- Where handle `key` of base `uid` is on screen now (probes drive the mouse to it).
+function fairingHandleScreen(uid, key)
+  local E = elib()
+  local b = parts[uid or -1]
+  if not (E and b and b.def.fairing) then return nil end
+  local hp = fairing_handles_of(uid, fairingFit(uid))
+  if not hp then return nil end
+  local _, X, Y, Z, y0 = shape_frame(uid)
+  local a = fairing_view(b, X, Y, Z)
+  for _, p in ipairs(E.fairingHandlePoints(hp, y0)) do
+    if p.key == key then
+      local sx, sy, on = screen_of(shape_pt(b, X, Y, Z, p.r, a, p.y))
+      if on then return sx, sy end
+    end
+  end
+  return nil
+end
+
+-- What the inspector shows of a fairing base (nil: not one).
+function fairingInfo(uid)
+  local p = parts[uid or -1]
+  if not (p and p.def.fairing) then return nil end
+  local fit = fairingFit(uid)
+  local sh = fshapes[uid] or {}
+  return { split = sh.split or 2, auto = sh.auto or 0, open = (sh.hp and sh.hp.open) == true,
+           kind = fit and fit.kind or "none", nin = fit and fit.nin or 0, nout = fit and fit.nout or 0,
+           mass = fit and fit.mass or 0, rmax = fit and fit.rmax or 0, height = fit and fit.height or 0 }
+end
+
+function fairing_next_auto(cur)
+  local E = elib()
+  local steps = (E and E.FAIRING_AUTO_STEPS) or { 0, 50, 70, 90, 99 }
+  for i, v in ipairs(steps) do
+    if v == cur then return steps[i % #steps + 1] end
+  end
+  return steps[1]
 end
 
 -- Every frame, before anything else in `update` takes input. Returns true when
@@ -6083,11 +6552,16 @@ end
 function shapeTick(clicked, cam_busy)
   if not shaping then
     local sel = selected_uid and parts[selected_uid]
-    if ghost or not (sel and sel.def.fairing) or tool == "stage" or tool == "groups" or gizmo_drag then return false end
+    if W.fdrag and not (sel and W.fdrag.uid == selected_uid) then fairing_drag_end() end
+    if ghost or not (sel and sel.def.fairing) or tool == "stage" or tool == "groups" or gizmo_drag then
+      W.fmenu = nil
+      return false
+    end
     -- B shapes a fairing only while WP5's bind prompt (builder_bind.begin)
     -- isn't there to take the key
     local bd = findScript and findScript("builder_bind")
     if input.pressed("b") and not input.key("ctrl") and not (bd and bd.begin) then return shapeStart(selected_uid) end
+    if fairingHandlesTick(clicked, cam_busy) then return true end
     return shape_button(clicked, cam_busy)
   end
   local uid = shaping.uid
@@ -7001,7 +7475,7 @@ function placeHeld(snap, x, y, z, sym_slots, sym_kind)
       placeCopies(placed, sym_slots, sym_kind, n_mount)
     end
     if placed and parts[placed] and parts[placed].def.fairing then
-      hint("fairing base placed — stack the payload on it, then SHAPE FAIRING under it draws its shell", 5.0)
+      hint("fairing base placed — stack the payload on it (or hang it under one); drag the orange handles to shape the shell", 5.0)
     end
     if placed and parts[placed] and parts[placed].def.dock then
       local host = host_uid and parts[host_uid]
@@ -9033,6 +9507,58 @@ function CMD.setParam(a)
   hash_put(a.uid, p)
   craftVersion = craftVersion + 1
   refresh_stats()
+  return true
+end
+
+-- A FAIRING's shell (fairing redesign E1–E6): { uid, op } with op
+--   "fit"              grow it just enough to hold what sticks out (E3)
+--   "open", on         an open top (inter-stage skirt) or a nose (E2)
+--   "split", n         2 or 3 clamshell pieces
+--   "auto", pct        drop itself at pct % of the air below (0 = off; E6)
+--   "reset"            back to the shell that fits itself (keeps pieces, auto)
+--   "handles", hp      these handles (probes, a typed shape)
+-- One undo step each.
+function CMD.fairing(a)
+  local uid = a.uid or selected_uid
+  local p = parts[uid or -1]
+  if not (p and p.def.fairing) then return false end
+  local E = elib()
+  local prev = copy_shape(fshapes[uid])
+  local sh = fshapes[uid] or { secs = {}, closed = true, split = 2 }
+  fshapes[uid] = sh
+  local ok, msg = true, nil
+  if a.op == "fit" then
+    ok = fairingFitNow(uid)
+    msg = ok and "FIT: the shell grew just enough to hold it all" or "nothing sticks out"
+  elseif a.op == "open" then
+    ok = fairingOpenTop(uid, a.on ~= false)
+    msg = (a.on ~= false) and "an open top: an inter-stage skirt up to the stage above" or "closed over a nose"
+  elseif a.op == "split" then
+    sh.split = (a.n == 3) and 3 or 2
+    msg = string.format("the shell splits into %d pieces at staging", sh.split)
+  elseif a.op == "auto" then
+    local v = tonumber(a.pct) or 0
+    sh.auto = v > 0 and v or nil
+    msg = v > 0 and string.format("it drops itself at %d %% of the air", v) or "it drops on its stage"
+  elseif a.op == "reset" then
+    sh.hp, sh.secs, sh.closed = nil, {}, true
+    msg = "the shell fits whatever stands on it"
+  elseif a.op == "handles" and type(a.hp) == "table" and E and E.fairingHandlesCopy then
+    sh.hp, sh.secs = E.fairingHandlesCopy(a.hp), {}
+  else
+    ok = false
+  end
+  shape_tidy(uid)
+  if not ok then
+    fshapes[uid] = prev and copy_shape(prev) or nil
+    if msg then hint(msg, 2.0) end
+    return false
+  end
+  W.shape_v = (W.shape_v or 0) + 1
+  craftVersion = craftVersion + 1
+  push_undo({ type = "shape", uid = uid, prev = prev })
+  refresh_stats()
+  if msg then hint(msg, 2.5) end
   return true
 end
 

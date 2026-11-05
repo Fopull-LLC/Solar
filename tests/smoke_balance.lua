@@ -415,6 +415,12 @@ local CRAFT = {
   { key = "moonship", list = { "chute", "pod", "tankS", "engineS", "|", "tankM", "tankM", "engineM" }, legs = 4,
     upper_legs = true },
   { key = "K-stage",  list = { "chute", "pod", "tankM", "engineM", "|", "tankM", "tankM", "tankM", "tankM", "tankM", "skipper" } },
+  -- a FAIRED PAYLOAD (the fairing redesign): a probe and its battery inside
+  -- the fitted shell of a 1.25 m base on an FT-M and a Sputter, built from the
+  -- top down (the base hangs under the probe: E2). The readout counts the
+  -- shell's mass, as the flight carries it.
+  { key = "faired",   list = { "battery", "probe", "fairingS", "tankM", "engineS" }, fairing = 3 },
+  { key = "unfaired", list = { "battery", "probe", "tankM", "engineS" } },
 }
 local TABLE = os.getenv("SOLAR_BALANCE_TABLE")
 for _, w in ipairs(WORLDS) do
@@ -444,6 +450,13 @@ for _, w in ipairs(WORLDS) do
         if d.thrust then eng = id end
       end
       m0 = m0 + (c.legs or 0) * env.liveDef("legs").mass
+      -- (the shell: its skin area × the composite's t/m², what the flight flies)
+      if c.fairing then
+        local fit = env.fairingFit(c.fairing)
+        r.shell = fit and fit.mass or 0
+        r.faired_n = fit and (fit.nin or (fit.env and fit.env.n)) or 0
+        m0 = m0 + r.shell
+      end
       local dv, d = tsiolkovsky(eng, m0, mf)
       check(math.abs(s1.m - m0) < 1e-6 and math.abs(st.dv - dv) < 1e-6
         and math.abs(st.twr - d.thrust / (m0 * w.g)) < 1e-9,
@@ -536,6 +549,16 @@ for _, w in ipairs(WORLDS) do
     + env.liveDef("tankM").fuel * U + env.liveDef("engineM").mass
   check(math.abs(k2.m - up_m0) < 1e-6 and math.abs(k2.dv - tsiolkovsky("engineM", up_m0, env.liveDef("tankM").fuel * U)) < 1e-6,
     string.format("%s: the upper stage's Δv is its own tank under its own mass (%.1f m/s)", w.name, k2.dv))
+  -- THE FAIRED PAYLOAD: its shell counts (a few kg of composite, every
+  -- payload part inside), it still lifts off, and the readout is Tsiolkovsky
+  -- with the shell aboard (checked in the loop above).
+  local FP, UF = S.faired, S.unfaired
+  check(FP.shell and FP.shell > 0.02 and FP.shell < 0.3 and FP.faired_n == 2,
+    string.format("%s: the faired payload's shell weighs %.1f kg and holds both payload parts (%d)", w.name,
+      (FP.shell or 0) * 1000, FP.faired_n or -1))
+  check(math.abs(FP.m0 - UF.m0 - FP.shell - env.liveDef("fairingS").mass) < 1e-9 and FP.dv < UF.dv and FP.twr >= 1.2,
+    string.format("%s: ...the base and its shell are the only difference to the bare stack (%.3f t), it costs Δv (%.0f < %.0f m/s) and still lifts off (TWR %.2f)",
+      w.name, FP.m0 - UF.m0, FP.dv, UF.dv, FP.twr))
   if TABLE then
     print(string.format("\n%s  r %d  g %.1f  escape %.0f m/s  ·  First Flight %d m, High Road %d m, orbit %d m  ·  moon trip %.0f, planet orbit %.0f, planet trip %.0f m/s",
       w.name, w.r, w.g, esc, first, high, orbit_alt, B.moon_trip, B.planet_orbit, B.planet_trip))
@@ -821,7 +844,7 @@ for _, w in ipairs(env.launchCheck().warn) do
 end
 
 if #failures == 0 then
-  print("BALANCE SMOKE OK — ten craft on nineteen worlds at three world scales, honest Δv/TWR, LAUNCH validation, two-click research, the joint / booster / ring-twist launch aids")
+  print("BALANCE SMOKE OK — twelve craft (one faired) on nineteen worlds at three world scales, honest Δv/TWR, LAUNCH validation, two-click research, the joint / booster / ring-twist launch aids")
   os.exit(0)
 else
   print("BALANCE SMOKE FAILURES:")

@@ -399,6 +399,24 @@ function separate(x, y, z, vx, vy, vz)
   flash(x, y, z, 1.0, 0.85, 0.6, 5, 9, 0.25)
 end
 
+-- A fairing unlatching (vessel_controller r2Jettison): a small pyro puff
+-- and sparks out of each seam point { x, y, z, nx, ny, nz } (world, the
+-- normal out of the shell), one flash for them all. The gas is a Local track,
+-- so it gets carried(): in air it stays where the seam fired.
+function unlatch(pts, vx, vy, vz)
+  if not (pts and pts[1]) then return end
+  local p1 = pts[1]
+  local _, b, _, _, _, air = frame(p1[1], p1[2], p1[3])
+  local v = carried(rel(b, vx, vy, vz), air)
+  local cx, cy, cz = 0, 0, 0
+  for _, p in ipairs(pts) do
+    fire("SepPuff", p[1], p[2], p[3], { normal = vec3(p[4], p[5], p[6]), vel = v, scale = 0.45, intensity = 0.7 })
+    cx, cy, cz = cx + p[1], cy + p[2], cz + p[3]
+  end
+  local n = #pts
+  flash(cx / n, cy / n, cz / n, 1.0, 0.85, 0.6, 7, 12, 0.3)
+end
+
 -- The chute mortar firing: the puff is left in the air the craft falls
 -- through (its tracks are Local: carried(), so in air it stays put).
 function chute(x, y, z, vx, vy, vz)

@@ -2225,3 +2225,348 @@ function fairingMeshOf(d, k, segs)
   if not prof then return nil end
   return fairingPiece(prof, k, d.fsplit or 2, segs)
 end
+
+-- ── THE PROFILE YOU DRAG (fairing redesign E1–E5) ───────────────────────────
+-- A shell is shaped by FOUR HANDLES on the fitted shell in the builder, not by
+-- drawing rings: the BASE radius (where it sits on the ring), the SHOULDER
+-- (radius and height: a boat-tail or a hammerhead below it), the TOP of the
+-- barrel (radius and height) and the NOSE tip (its height). Every handle is
+-- clamped and pushes its neighbours instead of refusing a drag. An OPEN top
+-- has no nose: an inter-stage skirt, from the base up to a top ring under the
+-- stage above. Heights are above the base ring's top `y0`, in the base frame.
+--
+--   hp = { rb =, rs =, hs =, rt =, ht =, hn =, open = bool }
+--
+-- The record carries it flat (`fhp`, fairingHandlesFlat) beside the profile
+-- it makes (`fprof`), so a flight from before handles still flies `fprof`.
+
+FAIRING_R_MIN = 0.10
+FAIRING_R_MAX = 6.0
+FAIRING_H_MAX = 40.0
+FAIRING_GAP = 0.05        -- shoulder and top stay this far apart
+FAIRING_MARGIN = 0.08     -- FIT's clearance: the fitted shell's (radius + 8 cm)
+FAIRING_SNAP = 0.05       -- shift-drag steps
+
+local function fclamp(x, a, b) if x < a then return a elseif x > b then return b end return x end
+
+function fairingHandleProfile(hp, y0)
+  local prof = { { hp.rb, y0 }, { hp.rs, y0 + hp.hs }, { hp.rt, y0 + hp.ht } }
+  if not hp.open then
+    ogive(prof, hp.rt, y0 + hp.ht, math.max(0.15, hp.hn or hp.rt * FAIRING_NOSE_K))
+  end
+  return prof
+end
+
+-- The fitted shell (a cylinder of radius r from y0 to hc, an ogive hn tall)
+-- as handles: the same shape, so grabbing a handle never makes it jump.
+function fairingHandlesFit(r, y0, hc, hn)
+  local ht = math.max(0.1, (hc or y0 + 0.3) - y0)
+  local hs = fclamp(ht * 0.2, FAIRING_GAP, math.min(0.5, ht - FAIRING_GAP))
+  return { rb = r, rs = r, hs = hs, rt = r, ht = ht, hn = math.max(0.15, hn or r * FAIRING_NOSE_K), open = false }
+end
+
+function fairingHandlesCopy(hp)
+  if not hp then return nil end
+  return { rb = hp.rb, rs = hp.rs, hs = hp.hs, rt = hp.rt, ht = hp.ht, hn = hp.hn, open = hp.open == true }
+end
+
+function fairingHandlesFlat(hp)
+  return { hp.rb, hp.rs, hp.hs, hp.rt, hp.ht, hp.hn or 0, hp.open and 1 or 0 }
+end
+
+function fairingHandlesUnflat(f)
+  if type(f) ~= "table" or #f < 6 then return nil end
+  return { rb = f[1], rs = f[2], hs = f[3], rt = f[4], ht = f[5], hn = f[6], open = (f[7] or 0) ~= 0 }
+end
+
+-- Where the handles are: { key, r, y } in the base frame (the nose tip on the
+-- axis; none on an open top).
+function fairingHandlePoints(hp, y0)
+  local pts = {
+    { key = "base", r = hp.rb, y = y0 },
+    { key = "shoulder", r = hp.rs, y = y0 + hp.hs },
+    { key = "top", r = hp.rt, y = y0 + hp.ht },
+  }
+  if not hp.open then pts[#pts + 1] = { key = "nose", r = 0, y = y0 + hp.ht + math.max(0.15, hp.hn or 0) } end
+  return pts
+end
+
+-- Drag handle `key` to radius r, height h (above y0). Returns the new handles
+-- and whether anything changed. Nothing is refused: a shoulder pulled above
+-- the top lifts the top, a top pulled under the shoulder pushes it down.
+function fairingHandleDrag(hp, key, r, h)
+  local n = fairingHandlesCopy(hp)
+  r = fclamp(r or 0, FAIRING_R_MIN, FAIRING_R_MAX)
+  h = h or 0
+  if key == "base" then
+    n.rb = r
+  elseif key == "shoulder" then
+    n.rs = r
+    n.hs = fclamp(h, FAIRING_GAP, FAIRING_H_MAX - FAIRING_GAP)
+    if n.hs > n.ht - FAIRING_GAP then n.ht = n.hs + FAIRING_GAP end
+  elseif key == "top" then
+    n.rt = r
+    n.ht = fclamp(h, 2 * FAIRING_GAP, FAIRING_H_MAX)
+    if n.ht < n.hs + FAIRING_GAP then n.hs = math.max(FAIRING_GAP, n.ht - FAIRING_GAP) end
+  elseif key == "nose" then
+    n.hn = fclamp(h - n.ht, 0.15, FAIRING_H_MAX)
+  else
+    return n, false
+  end
+  local changed = false
+  for _, k in ipairs({ "rb", "rs", "hs", "rt", "ht", "hn" }) do
+    if math.abs((n[k] or 0) - (hp[k] or 0)) > 1e-6 then changed = true end
+  end
+  return n, changed
+end
+
+-- Snap a cursor value to `step` (shift-drag: 5 cm).
+function fairingSnap(x, step)
+  step = step or FAIRING_SNAP
+  return math.floor(x / step + 0.5) * step
+end
+
+-- What a profile does with each payload part ({ lo, hi, rad } in the base
+-- frame): HELD inside, sticking OUT, or ABOVE an open top (the stage over an
+-- inter-stage skirt, which isn't meant to be inside it).
+function fairingSort(prof, pls, open)
+  local load, out, above = {}, {}, {}
+  local nin, nout = 0, 0
+  local top = prof[#prof] and prof[#prof][2] or 0
+  for u, pl in pairs(pls or {}) do
+    if fairingHolds(prof, pl.lo, pl.hi, pl.rad) then load[u] = true; nin = nin + 1
+    elseif open and pl.lo >= top - 0.05 then above[u] = true
+    else out[u] = true; nout = nout + 1 end
+  end
+  return load, out, above, nin, nout
+end
+
+-- ── E3: FIT — grow the shell just enough to hold what sticks out ────────────
+-- `ctl` is the profile's control rings { { r, y }, … } bottom to top (the
+-- first may be `lock`ed: a drawn shape's base ring), closed by `nose` (a
+-- length, "auto" for a drawn shape's own nose, false for an open top). Each
+-- part that isn't held gets the radius it lacks added to the rings round it
+-- (both ends of each span it crosses rise by the worst shortfall, so a taper
+-- keeps its taper), and a part reaching into the nose lengthens the nose
+-- (a bisection on its length) or, too wide for any nose, the barrel.
+local function ctl_profile(ctl, nose)
+  local prof = {}
+  for i, c in ipairs(ctl) do prof[i] = { c[1], c[2] } end
+  if nose == "auto" then fairingNose(prof)
+  elseif nose then local l = prof[#prof]; ogive(prof, l[1], l[2], math.max(0.15, nose)) end
+  return prof
+end
+
+function fairingGrow(ctl, nose, pls, margin, open)
+  margin = margin or FAIRING_MARGIN
+  local c = {}
+  for i, p in ipairs(ctl) do c[i] = { p[1], p[2], lock = p.lock } end
+  local list = {}
+  for _, pl in pairs(pls or {}) do list[#list + 1] = pl end
+  table.sort(list, function(a, b) return a.lo < b.lo end)
+  local function holds(pl)
+    return fairingHolds(ctl_profile(c, nose), pl.lo, pl.hi, pl.rad)
+  end
+  local function wants(pl)
+    return pl.lo >= c[1][2] - 0.05 and not (open and pl.lo >= c[#c][2] - 0.05) and not holds(pl)
+  end
+  local function grow_span(lo, hi, need)
+    for i = 1, #c - 1 do
+      local a, b = c[i], c[i + 1]
+      local s0, s1 = math.max(lo, a[2]), math.min(hi, b[2])
+      if s1 >= s0 - 1e-9 and b[2] > a[2] + 1e-9 then
+        local function r_at(y) return a[1] + (b[1] - a[1]) * (y - a[2]) / (b[2] - a[2]) end
+        local d = math.max(need - r_at(s0), need - r_at(s1), 0)
+        if d > 1e-9 then
+          if a.lock then
+            -- only the upper ring can move: enough at the worst point
+            for _, y in ipairs({ s0, s1 }) do
+              local t = (y - a[2]) / (b[2] - a[2])
+              if t > 1e-3 then b[1] = math.max(b[1], a[1] + (need - a[1]) / t) end
+            end
+          else
+            a[1] = a[1] + d; b[1] = b[1] + d
+          end
+        end
+      end
+    end
+  end
+  for _ = 1, 8 do
+    local bad = false
+    for _, pl in ipairs(list) do
+      if wants(pl) then
+        bad = true
+        local top = c[#c][2]
+        local need = pl.rad + margin
+        local lo = math.max(pl.lo, c[1][2])
+        if lo <= top then grow_span(lo, math.min(pl.hi, top), need) end
+        if pl.hi > top - 1e-6 then
+          local hi = pl.hi + 0.03
+          if not nose then
+            -- an open top rises over it
+            c[#c][2] = hi
+            c[#c][1] = math.max(c[#c][1], need)
+          elseif nose == "auto" then
+            -- a drawn shape: one more ring over it, at the radius it needs
+            c[#c + 1] = { math.max(c[#c][1], need), hi }
+          else
+            local rt = c[#c][1]
+            local want_rad = pl.rad + margin * 0.5
+            local function ok(L) return fairingHolds(ctl_profile(c, L), pl.lo, hi, want_rad) end
+            if need < rt * 0.8 and ok(FAIRING_H_MAX) then
+              local a, b = nose, FAIRING_H_MAX
+              if ok(a) then b = a end
+              for _ = 1, 40 do
+                if b - a < 0.005 then break end
+                local m = (a + b) * 0.5
+                if ok(m) then b = m else a = m end
+              end
+              nose = math.max(nose, b)
+            else
+              -- too wide for a nose to cover: the barrel goes up to it
+              c[#c][2] = math.max(c[#c][2], hi)
+              c[#c][1] = math.max(c[#c][1], need)
+            end
+          end
+        end
+      end
+    end
+    if not bad then break end
+  end
+  -- anything still out (rounding at a nose segment): a last even nudge
+  for _ = 1, 20 do
+    local still = false
+    for _, pl in ipairs(list) do if wants(pl) then still = true end end
+    if not still then break end
+    for i, p in ipairs(c) do if not (i == 1 and p.lock) then p[1] = p[1] + 0.02 end end
+    if type(nose) == "number" then nose = nose + 0.05 end
+  end
+  return c, nose
+end
+
+-- FIT on handles: the grown handles (the shoulder keeps its height).
+function fairingFitHandles(hp, y0, pls, margin)
+  local ctl = { { hp.rb, y0 }, { hp.rs, y0 + hp.hs }, { hp.rt, y0 + hp.ht } }
+  local c, nose = fairingGrow(ctl, (not hp.open) and math.max(0.15, hp.hn or 0) or false, pls, margin, hp.open)
+  local n = fairingHandlesCopy(hp)
+  n.rb, n.rs, n.rt = math.min(FAIRING_R_MAX, c[1][1]), math.min(FAIRING_R_MAX, c[2][1]), math.min(FAIRING_R_MAX, c[3][1])
+  n.hs, n.ht = c[2][2] - y0, c[3][2] - y0
+  if not hp.open then n.hn = nose end
+  return n
+end
+
+-- FIT on a drawn ring shape: its rings grown (the base ring R0 stays).
+function fairingFitRings(R0, y0, secs, pls, margin)
+  local ctl = { { R0, y0, lock = true } }
+  for _, s in ipairs(secs or {}) do ctl[#ctl + 1] = { s.r or s[1], y0 + (s.h or s[2]) } end
+  local c = fairingGrow(ctl, "auto", pls, margin, false)
+  local out = {}
+  for i = 2, #c do out[#out + 1] = { r = c[i][1], h = c[i][2] - y0 } end
+  return out
+end
+
+-- ── E4 / E5: HOW A PIECE OPENS AND FLIES ────────────────────────────────────
+-- A piece unlatches (pyro at the seams), swings out about its HINGE (the base
+-- ring under its middle) for FAIRING_OPEN_S, then is let go at that opened
+-- pose. Piece k of n is centred at (k − ½)·2π/n about the stack axis from the
+-- base's X toward its Z: halves leave along ±Z, three pieces at 120°, with a
+-- seam on +X (no piece leaves along it).
+FAIRING_OPEN_DEG = 28      -- how far a piece swings out before it lets go
+FAIRING_OPEN_S = 0.35      -- seconds of the swing
+FAIRING_PUSH = 4.0         -- m/s out along the opened piece's normal
+FAIRING_FWD = 1.0          -- m/s forward along the stack, so it never falls back along the hull
+FAIRING_SPIN = 1.6         -- rad/s about the hinge (where the engine lets a body be spun)
+FAIRING_IGNORE_S = 3.0     -- seconds it passes through the craft it left
+FAIRING_SKIN_T = 0.05      -- the debris box: half-thickness at the outer skin
+
+function fairingPieceAngle(k, n)
+  n = math.max(2, math.min(3, n or 2))
+  return (k - 0.5) * 2 * math.pi / n
+end
+
+-- The seams' angles (where the pieces meet), n of them.
+function fairingSeams(n)
+  n = math.max(2, math.min(3, n or 2))
+  local out = {}
+  for k = 1, n do out[k] = (k - 1) * 2 * math.pi / n end
+  return out
+end
+
+local function rot_about(v, k, a)
+  local c, s = math.cos(a), math.sin(a)
+  local d = v[1] * k[1] + v[2] * k[2] + v[3] * k[3]
+  return { v[1] * c + (k[2] * v[3] - k[3] * v[2]) * s + k[1] * d * (1 - c),
+           v[2] * c + (k[3] * v[1] - k[1] * v[3]) * s + k[2] * d * (1 - c),
+           v[3] * c + (k[1] * v[2] - k[2] * v[1]) * s + k[3] * d * (1 - c) }
+end
+fairingRot = rot_about
+
+-- Piece k of n swung out by `th` radians about its hinge, in the base frame:
+-- the pivot p, the hinge axis A (the top of the piece goes outward for th > 0),
+-- the outward way d, the rotation R (columns X, Y, Z) and the shell's local
+-- pose under the base (pos = p − R·p, axes R): what the hinge phase poses.
+function fairingHinge(prof, k, n, th)
+  local ac = fairingPieceAngle(k, n)
+  local dx, dz = math.cos(ac), math.sin(ac)
+  local rb = prof[1][1]
+  local y0 = prof[1][2]
+  local p = { rb * dx, y0, rb * dz }
+  local A = { dz, 0, -dx }
+  local X, Y, Z = rot_about({ 1, 0, 0 }, A, th), rot_about({ 0, 1, 0 }, A, th), rot_about({ 0, 0, 1 }, A, th)
+  local Rp = { X[1] * p[1] + Y[1] * p[2] + Z[1] * p[3], X[2] * p[1] + Y[2] * p[2] + Z[2] * p[3],
+               X[3] * p[1] + Y[3] * p[2] + Z[3] * p[3] }
+  return { p = p, A = A, d = { dx, 0, dz }, X = X, Y = Y, Z = Z,
+           pos = { p[1] - Rp[1], p[2] - Rp[2], p[3] - Rp[3] }, ac = ac }
+end
+
+-- The body a piece flies as, at its opened pose `th` (base frame): its centre
+-- O, its axes (BX along the hinge, BY up the piece, BZ out of it), the THIN
+-- BOX at the outer skin (half-extents hx along the hinge, hy up, hz through
+-- the skin: FAIRING_SKIN_T, its outer face 2 cm outside the skin, so its inner
+-- face is at rmax − 8 cm, the fitted shell's clearance — it never reaches the
+-- payload it held), the shell mesh's pose under the body (`cpos`, axes
+-- `cX/cY/cZ`), the opened outward normal N and the share of the skin.
+function fairingPieceBody(prof, k, n, th)
+  n = math.max(2, math.min(3, n or 2))
+  local H = fairingHinge(prof, k, n, th or 0)
+  local area, rmax = fairingStats(prof)
+  local y0 = prof[1][2]
+  -- the full part of the shell: up to where it narrows under 60 % of its widest
+  local y1 = y0 + 0.2
+  for _, q in ipairs(prof) do if q[1] >= rmax * 0.6 then y1 = math.max(y1, q[2]) end end
+  local hy = math.max(0.1, (y1 - y0) * 0.5)
+  local ym = y0 + hy
+  local hz = FAIRING_SKIN_T
+  local cr = math.max(hz, rmax + 0.02 - hz)
+  local hx = rmax * ((n == 2) and 0.7 or 0.6)
+  local d = H.d
+  local c0 = { cr * d[1], ym, cr * d[3] }
+  local v = { c0[1] - H.p[1], c0[2] - H.p[2], c0[3] - H.p[3] }
+  local O = { H.p[1] + H.X[1] * v[1] + H.Y[1] * v[2] + H.Z[1] * v[3],
+              H.p[2] + H.X[2] * v[1] + H.Y[2] * v[2] + H.Z[2] * v[3],
+              H.p[3] + H.X[3] * v[1] + H.Y[3] * v[2] + H.Z[3] * v[3] }
+  local function R(u) return { H.X[1] * u[1] + H.Y[1] * u[2] + H.Z[1] * u[3],
+                               H.X[2] * u[1] + H.Y[2] * u[2] + H.Z[2] * u[3],
+                               H.X[3] * u[1] + H.Y[3] * u[2] + H.Z[3] * u[3] } end
+  local BX, BY, BZ = R(H.A), R({ 0, 1, 0 }), R(d)
+  -- the shell mesh is built in the base frame and stands swung as
+  -- H(v) = pos + R·v; under the body (B = R·B0, B0's columns A, up, d) it sits
+  -- at Bᵀ(pos − O), turned by Bᵀ·R = B0ᵀ
+  local function dotv(a, b) return a[1] * b[1] + a[2] * b[2] + a[3] * b[3] end
+  local rel = { H.pos[1] - O[1], H.pos[2] - O[2], H.pos[3] - O[3] }
+  local cpos = { dotv(BX, rel), dotv(BY, rel), dotv(BZ, rel) }
+  local A = H.A
+  local cX, cY, cZ = { A[1], 0, d[1] }, { A[2], 1, d[2] }, { A[3], 0, d[3] }
+  return { O = O, BX = BX, BY = BY, BZ = BZ, hx = hx, hy = hy, hz = hz, cpos = cpos, cX = cX, cY = cY, cZ = cZ,
+           N = BZ, A = H.A, hinge = H, rmax = rmax, cr = cr, area = area / n }
+end
+
+-- ── E6: AUTO-JETTISON ───────────────────────────────────────────────────────
+-- A fairing can drop itself once `pct` % of the air is below the craft (off
+-- by default): `band` is the share of the ground's air left where it is
+-- (vessel_controller airBandAt), so "70 % of the air" is a band of 0.3.
+FAIRING_AUTO_STEPS = { 0, 50, 70, 90, 99 }
+function fairingAutoDue(pct, band, airy)
+  if not pct or pct <= 0 or not airy then return false end
+  return (band or 0) <= 1 - pct / 100
+end
