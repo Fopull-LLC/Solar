@@ -8,7 +8,8 @@
     python3 tools/import_textures.py --sheet DIR  # contact sheets (terrain layers, sets) into DIR
     python3 tools/import_textures.py --stage DIR  # make a project copy at DIR use the local sets:
                                                   # copy textures/env_local in, point the terrain
-                                                  # palettes' slots at their local versions
+                                                  # palettes' slots at their local versions, lay
+                                                  # the local overlays (OVERLAYS) over textures/base
     python3 tools/import_textures.py --lib PATH   # another library folder
     python3 tools/import_textures.py --means --write  # far_bodies.lua's PAL (each layer's mean
                                                   # colour) from the committed layers
@@ -895,6 +896,12 @@ def write_manifest(sets, results, dry):
                 if t[which][1].get("under"):
                     uses.setdefault(t[which][1]["under"][0], []).append(
                         "terrain slot %d %s (%s), the ground under its cover" % (t["slot"], t["name"], t["mat"]))
+    try:  # the base wave's sets (tools/base_pbr.py)
+        import base_pbr
+        for sid, u in base_pbr.USES.items():
+            uses.setdefault(sid, []).extend(u)
+    except ImportError:
+        pass
     rows = []
     for sid, s in sorted(sets.items()):
         r = results.get(sid, {})
@@ -931,6 +938,10 @@ def write_manifest(sets, results, dry):
 # What a build carries of textures/env_local: only what the game references. The full
 # sets (sets/<id>/) wait for the wave that uses them; that wave adds its folders here.
 STAGE_DIRS = ["terrain"]
+# Local versions of committed files: textures/env_local/<dir>/<file> replaces <target>/<file> in a
+# local build (same path, so nothing that names it changes). base: the spaceport's concrete
+# (tools/base_pbr.py), whose committed file is a CC0 fallback.
+OVERLAYS = {"base": "textures/base"}
 
 
 def stage(dst):
@@ -950,6 +961,19 @@ def stage(dst):
                     shutil.rmtree(os.path.join(to, sub))
                 shutil.copytree(os.path.join(src, sub), os.path.join(to, sub),
                                 ignore=shutil.ignore_patterns(".import*", "*.import", "info.json"))
+    nov = 0
+    for sub, target in OVERLAYS.items():
+        d = os.path.join(src, sub)
+        if not os.path.isdir(d):
+            continue
+        if os.path.realpath(os.path.join(dst, target)).startswith(os.path.realpath(ROOT) + os.sep):
+            raise SystemExit("--stage: %s/%s is this checkout's own folder; stage a copy" % (dst, target))
+        for f in sorted(os.listdir(d)):
+            t = os.path.join(dst, target, f)
+            if f.endswith(".png") and os.path.exists(t):   # only ever replaces a committed file
+                shutil.copy2(os.path.join(d, f), t)
+                nov += 1
+    print("STAGE: %d local overlay files (%s)" % (nov, ", ".join("%s/%s -> %s" % (OUT_LOCAL, k, v) for k, v in OVERLAYS.items())))
     write_palettes(False, dst, local=True)
     if os.path.exists(os.path.join(dst, TEXRON)):
         write_texture_settings(False, dst)

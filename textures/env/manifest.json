@@ -362,7 +362,7 @@
     "size": 1024
    },
    "use": [
-    "terrain variety reserve: later palettes and ground decals"
+    "wave 2: base concrete (textures/base/concrete), local builds"
    ]
   },
   {
@@ -884,7 +884,7 @@
     "size": 512
    },
    "use": [
-    "wave 3: vehicle parts, hangar and VAB metal (replace textures/parts, textures/hangar, textures/vab)"
+    "wave 2: base steel (textures/base/steel); the CC0 concrete's mottling"
    ]
   },
   {
@@ -914,7 +914,7 @@
     "size": 512
    },
    "use": [
-    "wave 3: vehicle parts, hangar and VAB metal (replace textures/parts, textures/hangar, textures/vab)"
+    "wave 2: base cladding (textures/base/cladding)"
    ]
   },
   {
@@ -1399,7 +1399,7 @@
     "size": 512
    },
    "use": [
-    "wave 2: base roads and pads (replace textures/base asphalt)"
+    "wave 2: base asphalt (textures/base/asphalt)"
    ]
   },
   {
@@ -1429,7 +1429,7 @@
     "size": 512
    },
    "use": [
-    "wave 2: base roads and pads (replace textures/base asphalt)"
+    "wave 2: base asphalt (textures/base/asphalt); the CC0 concrete's grain"
    ]
   },
   {

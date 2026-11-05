@@ -3,30 +3,29 @@
 
     python3 tools/base_tex.py          (tools/gen_base.py runs it too)
 
-Everything is procedural — numpy fields and PIL drawing from fixed seeds — so
-the set is reproducible byte for byte and carries no image licence. The signs
+The four SURFACES (concrete, cladding, steel, asphalt) are baked from the
+realistic PBR texture library by tools/base_pbr.py, which main() runs: see its
+docstring for the sets, the tiles and the licensing (a CC0 fallback committed,
+a commercial version for local builds only). They were procedural until wave 2
+of the texture upgrade (2026-11-04).
+
+The rest here is procedural (numpy fields and PIL drawing from fixed seeds), so
+it is reproducible byte for byte and carries no image licence. The signs
 are set in the project's own label faces (fonts/SolarLabel.ttf = Barlow Semi
 Condensed SemiBold, fonts/SolarStencil.ttf = Saira Stencil One, both SIL OFL;
 see tools/build_ui_font.py), rendered at a resolution that reads cleanly at
 the size the plates are hung.
 
-Per surface: `<name>_albedo.png`, `<name>_normal.png` (tangent space, OpenGL
+Surface maps: `<name>_albedo.png`, `<name>_normal.png` (tangent space, OpenGL
 +Y) and `<name>_orm.png` (R = ambient occlusion, G = roughness, B = metallic),
-the layout the engine's ao_map / roughness_map / metallic_map read — the same
-convention as textures/parts. Colour is kept near neutral and LIGHT: the
-models multiply their paint colour in as a vertex colour, so one cladding map
-serves a white VAB, a warm-grey depot and a blue-grey switch house.
+the layout the engine's ao_map / roughness_map / metallic_map read. Colour is
+kept near neutral and LIGHT: the models multiply their paint colour in as a
+vertex colour, so one cladding map serves a white VAB, a warm-grey depot and a
+blue-grey switch house.
 
-  concrete   4 m tile: cast slab, broom finish, aggregate, saw-cut expansion
-             joints on the tile edge, rust and water staining, grime
-  cladding   2 m tile: trapezoidal ribbed steel sheet (ribs 0.25 m apart,
-             carried in the normal map, not painted on), rain streaks down
-             the ribs, chalky weathering, no horizontal seams (no grid)
-  steel      1 m tile: painted plate, orange-peel, scratches to bare metal,
-             rust specks and runs, grime
-  asphalt    8 m tile: dark binder, stone chips, crack sealant, wear
   signs      the atlas: building plates, warning plates, the agency emblem,
              hazard striping, the pad's deck marking, taxiway glyphs
+  lens       the lamp lens
 """
 import math
 import os
@@ -36,7 +35,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from gen_part_textures import normal_from_height, smoothstep, spectral  # noqa: E402
+from gen_part_textures import smoothstep, spectral  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = os.path.join(ROOT, "textures", "base")
@@ -48,137 +47,6 @@ N = 512
 def save_rgb(arr, name):
     a = np.clip(arr, 0, 1)
     Image.fromarray((a * 255 + 0.5).astype(np.uint8), "RGB").save(os.path.join(OUT, name), optimize=True)
-
-
-def save_set(name, albedo, height, strength, ao, rough, metal):
-    save_rgb(albedo, f"{name}_albedo.png")
-    save_rgb(normal_from_height(height, strength), f"{name}_normal.png")
-    save_rgb(np.stack([ao, rough, metal], -1), f"{name}_orm.png")
-
-
-def specks(rng, shape, density, radius):
-    """A field of soft round specks (0..1), wrapping."""
-    H, W = shape
-    out = np.zeros(shape, np.float32)
-    n = int(H * W * density)
-    ys, xs = rng.integers(0, H, n), rng.integers(0, W, n)
-    rs = rng.uniform(0.4, 1.0, n) * radius
-    yy, xx = np.mgrid[-4:5, -4:5]
-    for y, x, r in zip(ys, xs, rs):
-        k = np.clip(1 - (xx * xx + yy * yy) / (r * r + 1e-6), 0, 1)
-        out[(yy + y) % H, (xx + x) % W] = np.maximum(out[(yy + y) % H, (xx + x) % W], k)
-    return out
-
-
-def concrete():
-    rng = np.random.default_rng(101)
-    low = spectral(N, N, rng, beta=2.2, lo=1.5)
-    mid = spectral(N, N, rng, beta=1.6, lo=6)
-    fine = spectral(N, N, rng, beta=0.9, lo=40)
-    v = 0.60 + (low - 0.5) * 0.10 + (mid - 0.5) * 0.06 + (fine - 0.5) * 0.05
-    agg = specks(rng, (N, N), 0.004, 2.2)
-    v += agg * rng.choice([-0.10, 0.08], size=1)[0] * 0.6
-    pits = specks(rng, (N, N), 0.002, 1.3)
-    v -= pits * 0.12
-    # saw-cut expansion joints on the tile edge (every 4 m), a little spalled
-    yy, xx = np.mgrid[0:N, 0:N]
-    dj = np.minimum(np.minimum(xx, N - 1 - xx), np.minimum(yy, N - 1 - yy)).astype(np.float32)
-    joint = 1 - smoothstep(0.5, 2.2, dj)
-    spall = (spectral(N, N, rng, beta=1.0, lo=30) > 0.72) * (1 - smoothstep(1, 5, dj))
-    v -= joint * 0.30 + spall * 0.06
-    # water staining and rust blooms, and a darker damp patch
-    stain = smoothstep(0.62, 0.85, spectral(N, N, rng, beta=2.0, lo=2))
-    rust = smoothstep(0.80, 0.92, spectral(N, N, rng, beta=1.8, lo=4))
-    v -= stain * 0.06
-    alb = np.stack([v, v * 0.985, v * 0.955], -1)
-    alb[..., 0] += rust * 0.06
-    alb[..., 2] -= rust * 0.06
-    hgt = fine * 0.5 + agg * 0.6 - pits * 0.8 - joint * 2.5 - spall * 0.6
-    ao = 1 - joint * 0.5 - pits * 0.2
-    rough = 0.86 + (fine - 0.5) * 0.08 - stain * 0.08
-    save_set("concrete", alb, hgt, 2.2, ao, rough, np.zeros_like(v))
-
-
-def cladding():
-    rng = np.random.default_rng(202)
-    x = (np.arange(N) / N) * 8.0           # 8 ribs across the 2 m tile
-    ph = x % 1.0
-    # trapezoid profile: crest 0.10, slopes 0.12, pan 0.66 (fractions of a rib)
-    prof = np.interp(ph, [0.0, 0.10, 0.22, 0.88, 1.0], [1.0, 1.0, 0.0, 0.0, 1.0])
-    prof += np.interp(ph, [0.45, 0.50, 0.55], [0.0, 0.10, 0.0])   # a stiffening minor rib
-    hgt = np.tile(prof[None, :], (N, 1)).astype(np.float32)
-    dents = spectral(N, N, rng, beta=2.4, lo=3) - 0.5
-    hgt += dents * 0.25
-    # weathering: rain streaks running down from crests, chalky fade, grime
-    streak = spectral(N, N, rng, beta=1.4, sx=1.0, sy=0.04, lo=4)
-    streak = smoothstep(0.45, 0.85, streak)
-    mott = spectral(N, N, rng, beta=2.2, lo=1.5)
-    chalk = smoothstep(0.55, 0.9, spectral(N, N, rng, beta=1.8, lo=3))
-    v = 0.84 + (mott - 0.5) * 0.07 - streak * 0.10 + chalk * 0.04
-    # the slopes catch less light in the albedo's own AO, not as painted bands
-    slope = np.abs(np.gradient(np.tile(prof[None, :], (N, 1)), axis=1)) * N / 8
-    v -= np.clip(slope, 0, 1) * 0.015
-    alb = np.stack([v, v * 0.995, v * 0.985], -1)
-    alb[..., 0] += streak * 0.012
-    ao = 0.82 + 0.18 * hgt.clip(0, 1)
-    rough = 0.50 + streak * 0.18 + chalk * 0.12 + (mott - 0.5) * 0.08
-    metal = 0.25 - chalk * 0.12
-    save_set("cladding", alb, hgt, 9.0, ao, rough, metal)
-
-
-def steel():
-    rng = np.random.default_rng(303)
-    peel = spectral(N, N, rng, beta=1.0, lo=60)
-    mott = spectral(N, N, rng, beta=2.0, lo=2)
-    v = 0.80 + (mott - 0.5) * 0.08 + (peel - 0.5) * 0.02
-    img = Image.new("L", (N, N), 0)
-    d = ImageDraw.Draw(img)
-    for _ in range(70):
-        x, y = rng.uniform(0, N, 2)
-        a = rng.uniform(0, math.pi)
-        L = rng.uniform(6, 40)
-        d.line([(x, y), (x + math.cos(a) * L, y + math.sin(a) * L)], fill=int(rng.uniform(120, 255)), width=1)
-    scratch = np.asarray(img, np.float32) / 255
-    rust = specks(rng, (N, N), 0.0012, 2.6) * smoothstep(0.5, 0.8, spectral(N, N, rng, beta=1.6, lo=3))
-    runs = spectral(N, N, rng, beta=1.3, sx=1.0, sy=0.05, lo=5)
-    runs = smoothstep(0.7, 0.92, runs) * 0.6
-    alb = np.stack([v, v, v * 0.99], -1)
-    for c, k in zip(range(3), (0.30, 0.16, 0.06)):
-        alb[..., c] = alb[..., c] * (1 - rust - runs * 0.35) + (rust + runs * 0.35) * k * 1.6
-    alb += scratch[..., None] * 0.08
-    hgt = peel * 0.3 - scratch * 0.6 + rust * 0.5
-    ao = np.ones_like(v) - rust * 0.2
-    rough = 0.48 + (mott - 0.5) * 0.1 + rust * 0.35 + runs * 0.15 - scratch * 0.15
-    metal = 0.12 + scratch * 0.6
-    save_set("steel", alb, hgt, 1.6, ao, rough, metal)
-
-
-def asphalt():
-    rng = np.random.default_rng(404)
-    low = spectral(N, N, rng, beta=2.0, lo=1.5)
-    fine = spectral(N, N, rng, beta=0.8, lo=60)
-    chips = specks(rng, (N, N), 0.010, 1.6)
-    v = 0.55 + (low - 0.5) * 0.10 + (fine - 0.5) * 0.06 + chips * 0.22
-    # crack sealant: a few meandering dark bands
-    img = Image.new("L", (N, N), 0)
-    d = ImageDraw.Draw(img)
-    for _ in range(3):
-        x, y = rng.uniform(0, N, 2)
-        pts = [(x, y)]
-        a = rng.uniform(0, math.tau)
-        for _ in range(30):
-            a += rng.normal(0, 0.35)
-            x, y = x + math.cos(a) * 9, y + math.sin(a) * 9
-            pts.append((x % N, y % N))
-        for p, q in zip(pts, pts[1:]):
-            if abs(p[0] - q[0]) < 20 and abs(p[1] - q[1]) < 20:
-                d.line([p, q], fill=255, width=4)
-    seal = np.asarray(img.filter(ImageFilter.GaussianBlur(1.0)), np.float32) / 255
-    v = v * (1 - seal * 0.3)
-    alb = np.stack([v, v, v * 1.01], -1)
-    hgt = chips * 0.8 + fine * 0.3 - seal * 0.3
-    rough = 0.90 - seal * 0.25 + (fine - 0.5) * 0.06
-    save_set("asphalt", alb, hgt, 2.5, 1 - chips * 0.1, rough, np.zeros_like(v))
 
 
 # ── the sign atlas ──────────────────────────────────────────────────────────
@@ -435,10 +303,8 @@ def lens():
 def main():
     os.makedirs(OUT, exist_ok=True)
     lens()
-    concrete()
-    cladding()
-    steel()
-    asphalt()
+    import base_pbr
+    base_pbr.bake()
     signs()
     return REGIONS
 
