@@ -221,6 +221,42 @@ local bps = { [1] = { x = 0, y = 0, z = 0, mass = 0.1, seat = 1, yaw = math.pi }
 local Fs = env.r2FrontOf(bps, {}, nil, bpbasis)
 check("a command seat's facing is the front", Fs.x < -0.99, string.format("%.2f %.2f", Fs.x, Fs.z))
 
+-- a bike up a climb (playtest 2026-11-05): the rider leans just far enough
+-- forward to keep the front down (the attack position), within his reach
+do
+  local g = 9.8
+  local function lift(s, base, x) local c = math.sqrt(1 - s * s); return g * (c * 0.74 + base + x) / 1.17 end
+  local x0 = env.r2AttackLean(0, 0, 1, 0.74, 1.17, 0.12, 0.2, 0.88, g)
+  check("no extra lean on the level", x0 == 0, tostring(x0))
+  local s = math.sin(math.rad(30))
+  local x30 = env.r2AttackLean(g * s, 0, math.cos(math.rad(30)), 0.74, 1.17, 0.12, 0.2, 0.88, g)
+  check("up 30 deg the rider leans forward, within his reach", x30 > 0 and x30 <= 0.08 + 1e-9, tostring(x30))
+  check("…and with it 0.88 of the front's lift carries the slope and hillA g more",
+    math.abs(0.88 * lift(s, 0.12, x30) - (g * s + env.R2_BIKE.hillA * g)) < 1e-6 or x30 == 0.08, string.format("%.3f", 0.88 * lift(s, 0.12, x30)))
+  local x45 = env.r2AttackLean(g * math.sin(math.rad(45)), 0.5, math.cos(math.rad(45)), 0.74, 1.17, 0.12, 0.2, 0.88, g)
+  check("past what he can reach the lean stops at his reach", math.abs(x45 - 0.08) < 1e-9, tostring(x45))
+end
+-- a bike's push goes to its wheels by their load; one about to freewheel takes none
+do
+  local R2 = env.R2
+  local was = { bike = R2.bike, gear = R2.gear, passive = R2.passive, drive = R2.drive }
+  R2.bike, R2.gear, R2.passive, R2.drive = true, nil, nil, 1
+  local wf = { rs = 1, out = true, down = true, load = 0.3, m = { speed = 16, torque = 0.86 }, size = "M" }
+  local wr = { rs = 1, out = true, down = true, load = 2.4 }
+  local sh = env.r2DriveShares({ wf, wr }, 3, 9.8, 2)
+  check("the loaded rear takes most of a bike's push", sh and math.abs(sh[2] - 2.4 / 2.7) < 1e-6 and math.abs(sh[1] - 0.3 / 2.7) < 1e-6,
+    sh and string.format("%.2f/%.2f", sh[1], sh[2]) or "nil")
+  wf.down = false
+  local sh2 = env.r2DriveShares({ wf, wr }, 3, 9.8, 2)
+  check("…all of it with the front in the air (a token share stays: 0 is uncapped)", sh2 and sh2[2] == 1 and sh2[1] > 0 and sh2[1] < 0.05,
+    sh2 and string.format("%.3f/%.3f", sh2[1], sh2[2]) or "nil")
+  wr.down = false
+  check("…and with both off the ground the even split", env.r2DriveShares({ wf, wr }, 3, 9.8, 2) == nil)
+  R2.bike = false
+  check("not a bike: the even split", env.r2DriveShares({ wf, wr }, 3, 9.8, 2) == nil)
+  R2.bike, R2.gear, R2.passive, R2.drive = was.bike, was.gear, was.passive, was.drive
+end
+
 if #failures > 0 then
   for _, f in ipairs(failures) do print("FAIL " .. f) end
   print(string.format("%d passed, %d failed", passes, #failures))

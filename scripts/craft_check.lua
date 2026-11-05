@@ -62,6 +62,9 @@ FLIGHT = {
   R2_WHEEL_TOP = { S = 14.0, M = 22.0, L = 28.0 },    -- r2TopSpeed's floors
   R2_BIKE_TORQUE = 0.8,      -- R2_BIKE.torque: a bike's driven wheel (× rating)
   R2_BIKE_TOP = 18.0,        -- R2_BIKE.top
+  R2_BIKE_LEAN = 0.12,       -- R2_BIKE.lean: the rider's weight forward under power (m of the bike's)
+  R2_BIKE_LEANMAX = 0.6,     -- R2_BIKE.leanMax: how far forward the rider's own weight goes up a climb (m)
+  R2_LIFT_MAX = 0.97,        -- the most of the front's lift a bike's push uses on a steep climb
   R2_G_REF = 9.8,
   CREW_T = 0.100,            -- a seated crew member (t), crewSeatT with an empty pack
   CHUTE_K = 1.3,             -- the canopy drag: 1.3 · #chutes (parachute drag block)
@@ -75,7 +78,8 @@ FLIGHT = {
   RUNWAY_LEN = 262.0,        -- base_facilities RUNWAY: u1 − u0
   ROD_SECS = 8.0,            -- vessel_thermal: an EVA fuel-rod swap (an Engineer's takes half)
 }
-local FLIGHT_GLOBAL = { R2_BIKE_TORQUE = { "R2_BIKE", "torque" }, R2_BIKE_TOP = { "R2_BIKE", "top" } }
+local FLIGHT_GLOBAL = { R2_BIKE_TORQUE = { "R2_BIKE", "torque" }, R2_BIKE_TOP = { "R2_BIKE", "top" },
+  R2_BIKE_LEAN = { "R2_BIKE", "lean" }, R2_BIKE_LEANMAX = { "R2_BIKE", "leanMax" } }
 local CTX = nil
 function flight(name)
   local vc = CTX and CTX.flight
@@ -774,7 +778,13 @@ end
 --           axle's static share, h = the CoM's height, L = the wheelbase)
 --   tip     it goes over backwards once the CoM is behind the rear contact:
 --           tan θ = (CoM ahead of the rear axle) / h
--- → θ, and which limit it is ("torque" | "grip" | "tip"), and each.
+--   lift    a BIKE (ax.lean set): the push that climbs lifts the front first
+--           (drive_tick's bike block): F h ≤ k (W cos θ · a + W · lean), k
+--           R2_LIFT_MAX, lean the rider's weight forward in the attack
+--           position (R2_BIKE.lean, up to crew weight × leanMax / mass), so
+--           h sin θ − k a cos θ = k lean. The tall saddles of 2026-11-05 put
+--           the 500's at 34°: the climb's real limit, not its torque.
+-- → θ, and which limit it is ("torque" | "grip" | "tip" | "lift"), and each.
 function climbLimits(F, W, mu, ax, h)
   local lim = {}
   lim.torque = math.asin(min(1, F / max(W, 1e-9)))
@@ -785,8 +795,14 @@ function climbLimits(F, W, mu, ax, h)
     lim.grip = den > 1e-6 and math.atan(mu * ax.s / den) or rad(90)
   end
   if ax.back and ax.back > 0 and h > 0.05 then lim.tip = math.atan(ax.back / h) end
+  if ax.lean and ax.back and h > 0.05 then
+    local k = flight("R2_LIFT_MAX")
+    local R = math.sqrt(h * h + (k * ax.back) ^ 2)
+    lim.lift = math.atan2(k * ax.back, h) + math.asin(min(1, k * ax.lean / R))
+    lim.tip = nil   -- (the lift comes first: it is the tip under power)
+  end
   local best, why = rad(90), "torque"
-  for _, k in ipairs({ "torque", "grip", "tip" }) do
+  for _, k in ipairs({ "torque", "grip", "tip", "lift" }) do
     if lim[k] and lim[k] < best - 1e-9 then best, why = lim[k], k end
   end
   return best, why, lim
@@ -849,6 +865,12 @@ local function rule_wheels(ctx, out, k)
   if bike then mu = mu * flight("R2_GRIP_K") end
   -- the axles along the front: the driven group against the rest
   local ax = { back = -amin }
+  -- (a bike: the rider leans as far forward as their weight reaches, r2AttackLean)
+  if bike then
+    local crewT = 0
+    for _, t in pairs(ctx.crew or {}) do crewT = crewT + t end
+    ax.lean = max(flight("R2_BIKE_LEAN"), crewT * flight("R2_BIKE_LEANMAX") / max(plan.mass, 1e-3))
+  end
   local dset = {}
   for _, w in ipairs(drv) do dset[w.uid] = true end
   if #drv == #ws then ax.all = true
@@ -885,7 +907,11 @@ local function rule_wheels(ctx, out, k)
       because = fmt("the driven tyre%s spin%s first: %s carr%s %.0f %% of the weight standing level (μ %.2f)",
         s_(#drv), #drv == 1 and "s" or "", #drv == 1 and "it" or "they", #drv == 1 and "ies" or "y", (ax.s or 1) * 100, mu)
       fixes[#fixes + 1] = fmt("the battery and tanks over the driven wheel%s", s_(#drv))
-      if #drv < #ws then fixes[#fixes + 1] = fmt("every wheel driving (%.0f°)", deg((climbLimits(F, W, mu, { all = true, back = ax.back }, plan.hcg)))) end
+      if #drv < #ws then fixes[#fixes + 1] = fmt("every wheel driving (%.0f°)", deg((climbLimits(F, W, mu, { all = true, back = ax.back, lean = ax.lean }, plan.hcg)))) end
+    elseif why == "lift" then
+      because = fmt("its front lifts first: the centre of mass stands %.2f m up and %.2f m ahead of the rear wheel, and the rider can lean only so far over the bars", plan.hcg, ax.back)
+      fixes[#fixes + 1] = "a lower saddle and the heavy parts low and forward"
+      fixes[#fixes + 1] = "a longer wheelbase"
     elseif why == "tip" then
       because = fmt("its centre of mass stands %.2f m up and only %.2f m ahead of the rear wheel, so it goes over backwards", plan.hcg, ax.back)
       fixes[#fixes + 1] = "the heavy parts lower down or further forward"
@@ -917,7 +943,7 @@ local function rule_wheels(ctx, out, k)
           local full = wheel_source(ctx, w, bike)
           Fall = Fall + full * ((w.cfg or {}).motor or 1) / max(0.05, w.r)
         end
-        fixes[#fixes + 1] = fmt("all %d wheels driving (%.0f°)", #ws, deg((climbLimits(Fall, W, mu, { all = true, back = ax.back }, plan.hcg))))
+        fixes[#fixes + 1] = fmt("all %d wheels driving (%.0f°)", #ws, deg((climbLimits(Fall, W, mu, { all = true, back = ax.back, lean = ax.lean }, plan.hcg))))
       end
       fixes[#fixes + 1] = "less weight"
     end
@@ -928,7 +954,7 @@ local function rule_wheels(ctx, out, k)
   else
     row(out, { id = "V2n", sev = "note", kind = "rover", uids = uids,
       head = fmt("Climbs up to %.0f° · top %.0f m/s", deg(th), top),
-      text = fmt("%s; the %s sets the limit.", push, why == "tip" and "tip-over backwards" or (why == "grip" and "tyres' grip" or "torque")) })
+      text = fmt("%s; the %s sets the limit.", push, why == "tip" and "tip-over backwards" or (why == "lift" and "front lifting" or (why == "grip" and "tyres' grip" or "torque"))) })
   end
   k.climb, k.climbWhy = th, why
   -- V3: how tall it stands on its track (r2Lateral; three wheels or more)

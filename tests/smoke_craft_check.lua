@@ -63,7 +63,7 @@ local VSRC = src("scripts/vessel_controller.lua")
 -- ── 1. the mirrored constants are the flight's ─────────────────────────────
 do
   local F = CC.FLIGHT
-  for _, k in ipairs({ "R2_TYRE_MU", "R2_GRIP_K", "R2_LAT_MU", "R2_LAT_SSF", "R2_G_REF", "CREW_T" }) do
+  for _, k in ipairs({ "R2_TYRE_MU", "R2_GRIP_K", "R2_LAT_MU", "R2_LAT_SSF", "R2_G_REF", "CREW_T", "R2_LIFT_MAX" }) do
     check(rawget(VC, k) == F[k], string.format("FLIGHT.%s = %s, vessel_controller has %s", k, tostring(F[k]), tostring(rawget(VC, k))))
   end
   for _, sz in ipairs({ "S", "M", "L" }) do
@@ -71,6 +71,7 @@ do
     check(VC.R2_WHEEL_TOP[sz] == F.R2_WHEEL_TOP[sz], "R2_WHEEL_TOP." .. sz .. " mirrored")
   end
   check(VC.R2_BIKE.torque == F.R2_BIKE_TORQUE and VC.R2_BIKE.top == F.R2_BIKE_TOP, "R2_BIKE torque and top mirrored")
+  check(VC.R2_BIKE.lean == F.R2_BIKE_LEAN and VC.R2_BIKE.leanMax == F.R2_BIKE_LEANMAX, "R2_BIKE lean and leanMax mirrored")
   -- the flight's locals, read from its source
   local tol = VSRC:match("local TOLERANCE = (%b{})")
   local T = assert(loadstring("return " .. tol))()
@@ -495,6 +496,20 @@ do
   local L5 = bike("bike500")
   local r5 = byId(L5, "V2") or byId(L5, "V2n")
   check(r5 and r5.id == "V2n", "the 500 clears 30°: " .. tostring(r5 and r5.head))
+  -- a bike's front lifts before it tips (drive_tick's bike block): the
+  -- climb where h sin θ − k a cos θ = k lean, k R2_LIFT_MAX (the 500 of
+  -- 2026-11-05: a 0.74 m, h 1.17 m, the rider's 0.2 m reach: 37°)
+  local kL = CC.FLIGHT.R2_LIFT_MAX
+  local thl, whyl = CC.climbLimits(99, 1, 9, { back = 0.74, lean = 0.2 }, 1.17)
+  check(whyl == "lift" and math.abs(1.17 * math.sin(thl) - kL * 0.74 * math.cos(thl) - kL * 0.2) < 1e-9,
+    string.format("V2 lift: h sin θ − k a cos θ = k lean (%s, %.1f°)", tostring(whyl), math.deg(thl)))
+  check(math.deg(thl) > 34 and math.deg(thl) < 40, string.format("…the tall 500 reaches %.1f° on its lean (34-40°)", math.deg(thl)))
+  local tht, whyt = CC.climbLimits(99, 1, 9, { back = 0.74 }, 1.17)
+  check(whyt == "tip" and math.abs(math.deg(tht) - math.deg(math.atan(0.74 / 1.17))) < 1e-6, "…a rover (no lean) still tips at atan(a / h)")
+  local thg, whyg = CC.climbLimits(99, 1, 0.5, { all = true, back = 0.74, lean = 0.2 }, 1.17)
+  check(whyg == "grip" and math.abs(thg - math.atan(0.5)) < 1e-9, "…and the least of the limits wins (grip, mu 0.5)")
+  local q5 = tonumber((r5 and r5.head or ""):match("(%d+)°"))
+  check(q5 and q5 <= 45, "the 500's climb is held to its front's lift: " .. tostring(r5 and r5.head))
   local Le = bike("bike_elec")
   check(byId(Le, "V2") or byId(Le, "V2n"), "the electric bike's climb is read")
 end

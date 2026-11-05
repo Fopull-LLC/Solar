@@ -651,11 +651,49 @@ the bike:
   every jump read the whole 2.5 s. It is now the pitch off the bike's own level (its
   approach, both tyres down), and the first moment from which it stays in the band
   for 0.5 s; a one-tick skip of the front on the strip's ripple does not count.
-- *Tried and dropped:* more rider lean up a hill (`leanHill`): on 36° the bike is
-  traction-limited (the rear spins 1 m/s on 59% of the weight), and leaning forward only
-  moved load off the rear. Climbing 36° from a stop again needs more tyre grip
-  (`R2_TYRE_MU`, every wheel's) or a lower bike.
+- *Tried and dropped (then):* more rider lean up a hill (`leanHill`): on 36° the bike
+  was traction-limited (the rear spun 1 m/s on 59% of the weight), and leaning forward
+  only moved load off the rear. That was before `R2.groundS` read the grade from the
+  tyres; see the climbing pass below.
 - *The rider's pack* weighs on the seat with them (`crewSeatT`, crew-and-items §5.9).
+
+**Climbing (playtest 2026-11-05, "still struggling to climb hills … even the 500cc").**
+Measured on engine .1435 (jumpprobe `vhill` with `hh` 5 m hills, `vnat` on the home
+world's own ground; work notes in `work/bikeclimb/NOTES.md`):
+- *What limits a climb is the bike's shape, not its power.* The 500 gives 4.1 kN at
+  the wheel in first (1.4 g on the user's 0.28 t bike). Up 30° from a stop it pushes
+  at 0.58 g against the slope's 0.50, with the front tyre at 0-0.6 kN and the rear at
+  2.0-2.6 of 2.7 kN: it is on its front's last kilos. The user's bikes sit the rider's
+  100 kg at the saddle 1.55-1.77 m up, so the centre of mass is 1.0-1.17 m over the
+  ground and the steady climb that would lift the front is atan(a_r / h): 31° (the
+  electric bike), 34° (the 500), 39° (bendy bike 1), 44° (the long hinged bike). Past
+  that the bike is at grip (tan θ = μ × the rear's share, μ 0.9) around 36-38°.
+- *The attack position* (`R2_BIKE.leanMax`, `hillA`, `leanRate`, `r2AttackLean`): up a
+  climb the rider leans as far forward as keeps the front down with `hillA` g in hand
+  (over the slope and the air), up to their own weight (crew and pack, `CREW_TT`)
+  `leanMax` m forward, never for more push than the rear could give with the whole
+  weight on it (μ g cos θ). Without a rider nobody leans. It is a crawl's
+  technique, in full below `leanV0` (6 m/s) and gone by `leanV1` (10): leaned at
+  speed, the 500 left the big kicker at 13.1 m/s instead of 10-11 and landed yawing
+  at 1.1 rad/s.
+- *The margin counts the air.* A hill steeper than `R2_BIKE.lift` allows takes the
+  push up to 0.97 of the front's lift by the slope + 0.05 g; it now adds the drag
+  (`AERO.hud.drag`): at 10 m/s into the wind the 500 meets ~0.1 g of air, and every
+  run-up lost speed on hills past 22°.
+- *The push goes where the load is* (`r2DriveShares`): a bike whose fork is set to
+  drive splits the push by the driven tyres' loads instead of evenly (a front lifted
+  on a climb wasted half). A rear-driven bike (the default) is unchanged.
+- *A kink at a hill's foot* (the probe's ramps start with no transition) costs the
+  bike 6-7 m/s at 11 m/s into 30° in a tenth of a second; `hfil` eases the foot in.
+  Natural hills near the base have their own transitions and are gentle: within
+  300 m of the base 98.6 % of the ground is under 20° and 1.1 % is over 40° (faces
+  no bike climbs).
+- *The pack*: a full pack sits in the saddle with the rider (high, and heavy): a
+  40 kg pack is measured in `packkg` runs.
+- *The VAB says so* (craft_check V2): a bike's climb is the least of torque, grip and
+  the front's lift at the rider's reach (h sin θ − k a cos θ = k · lean, k
+  `R2_LIFT_MAX`, lean up to crew weight × `leanMax` / mass), with "a lower saddle and
+  the heavy parts low and forward" or "a longer wheelbase" as the fix.
 
 ## 4. Controls summary
 

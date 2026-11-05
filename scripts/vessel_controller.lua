@@ -9473,8 +9473,12 @@ R2_TC2_RISE = 8.0
 -- or take this much (m/s): run R2.lk leads ahead, it spun up a metre a
 -- second in every hop and kicked the push into the landing.
 R2_AIR_LEAD = 0.15
+--   leanMax m the rider's own weight can go forward up a climb (standing,
+--           chest over the bars: the attack position), hillA the g it keeps
+--           in hand to accelerate up the slope, leanRate /s it gets there at,
+--           in full below leanV0 m/s and gone by leanV1 (a crawl's technique)
 R2_BIKE = { top = 18.0, torque = 0.8, tc = 0.9, open = 1.8, lean = 0.12, lift = 0.88, liftHi = 0.55, vLo = 14.0, vHi = 24.0,
-            wfree = 6.0, wheelie = 14.0, wmin = 0.3, land = 0.6 }
+            wfree = 6.0, wheelie = 14.0, wmin = 0.3, land = 0.6, leanMax = 0.6, hillA = 0.12, leanRate = 4.0, leanV0 = 6.0, leanV1 = 10.0 }
 
 -- WHAT DRIVES A WHEEL: its power source this tick → full torque (kN·m) and top
 -- speed (m/s). Today every driven wheel has its own electric hub motor (the
@@ -11673,6 +11677,61 @@ function r2TyreSlope(gdir, gl)
   return du / math.sqrt(du * du + hl * hl)
 end
 
+-- A BIKE'S PUSH GOES WHERE ITS LOAD IS (playtest 2026-11-05: "still
+-- struggling to climb hills with bikes even the more powerful 500cc
+-- motors"). The traction control's push used to be split evenly between
+-- the driven wheels, and a gas bike's front Moto Wheel still has its hub
+-- motor: the rear tyre, carrying 60-95 % of the weight on a climb, was
+-- allowed half the push and the light front the other half, which it could
+-- not put down (off the ground 40-55 % of a climb) or did not give at all
+-- (a hub motor past its own top freewheels on a chained bike). So each
+-- driven wheel on the ground takes the share of the push its load is of the
+-- driven wheels' (node.contactForce, r2Contacts, × its Grip), the way a
+-- rider's throttle and a real AWD bike's traction control put it down.
+-- A wheel about to freewheel takes none. Off the ground (all of them),
+-- or not a bike: nil, the even split as before. Each share is at least
+-- R2_SHARE_MIN of an even one (a motor capped at 0 is uncapped to the engine).
+R2_SHARE_MIN = 0.05
+-- the most of the lift that would raise a bike's front its push may use on a
+-- climb steeper than R2_BIKE.lift allows (drive_tick; craft_check V2 reads it)
+R2_LIFT_MAX = 0.97
+-- THE ATTACK POSITION's lean (drive_tick's bike block): how much further
+-- forward than `base` (m of the whole bike's weight, as R2_BIKE.lean) the
+-- rider leans so that kb of the lift that would raise the front carries the
+-- slope's pull `need` and the air's `drag` (m/s² each) and R2_BIKE.hillA g
+-- besides; never past `lmax`, never less than 0. c = cos(slope), ar = the
+-- rear contact to the centre of mass along the bike, h = its height (m).
+-- The push it leans for is never more than the driving tyre could give with
+-- the whole weight on it (mu·g·cos): leaning for more only unloads the
+-- tyre that pushes (vhill 37 deg: the rear down to 1.4 of 2.2 kN, stalled
+-- at the lip). mu: the driven tyres' friction.
+function r2AttackLean(need, drag, c, ar, h, base, lmax, kb, gl, mu)
+  local push = math.min(need + (drag or 0) + R2_BIKE.hillA * gl, (mu or R2_TYRE_MU) * c * gl)
+  local req = push * h / (math.max(0.1, kb) * gl) - c * ar - base
+  return math.max(0, math.min(lmax - base, req))
+end
+function r2DriveShares(wheels, vf, gl, n_drive)
+  if not (R2.bike and not R2.gear and not R2.passive) then return nil end
+  local ld, tot = {}, 0
+  for k, w in ipairs(wheels) do
+    if (w.rs or 0) ~= 0 and w.out and not w.coast and w.down then
+      local x = math.max(0, w.load or 0) * ((w.cfg and w.cfg.friction) or 1)
+      -- (a hub motor on a chained bike past its own top freewheels: no push)
+      if GAS.chained and not w.gas then
+        local full, top = r2WheelSource(w, gl, R2.rk, true)
+        if math.abs(vf or 0) >= top * math.abs(R2.drive or 0) - 0.05 then x = 0 end
+      end
+      ld[k] = x
+      tot = tot + x
+    end
+  end
+  if tot <= 1e-6 then return nil end
+  local even = 1 / math.max(1, n_drive)
+  local out = {}
+  for k = 1, #wheels do out[k] = math.max(R2_SHARE_MIN * even, (ld[k] or 0) / tot) end
+  return out
+end
+
 -- Drive, steer, brake and park, every tick the tyres are out
 -- (wheel_spec.md). W/S drive every driven wheel along the craft's front,
 -- each by the spin sign its mount gives it; A/D STEER the steerable wheels
@@ -11853,7 +11912,35 @@ local function drive_tick(node, info, dt)
     local land = math.min(1, (R2.bikeAirT or 9) / R2_BIKE.land)
     local lw = (rear_up > 0 and (R2.drive or 0) > 0.05) and math.min(1, R2.drive) * land or 0
     R2.bikeLean = (R2.bikeLean or 0) + (lw - (R2.bikeLean or 0)) * math.min(1, dt * 6)
-    local lift = gl * (c * R2.bikeAr + R2_BIKE.lean * R2.bikeLean) / R2.bikeH   -- the push (per kg) that lifts the front
+    local mt = math.max((info.mass or 1) + r2TyresT(), 1e-3)
+    -- THE ATTACK POSITION (playtest 2026-11-05: the 500 crawled up 30-36 deg
+    -- on its front's last few kilos, grip to spare: front 0-0.6 kN, rear
+    -- 2.0-2.6 of 2.7, the push 0.58 g against the 0.50 g the slope takes).
+    -- Up a climb a rider stands and puts his chest over the bars, as far
+    -- forward as the climb needs to keep the front down, never more (more
+    -- only takes load off the driving tyre): the lean whose lift carries the
+    -- slope's pull and R2_BIKE.hillA g besides, up to the rider's own weight
+    -- R2_BIKE.leanMax m forward (CREW_TT: who sits aboard). As a nose-down
+    -- couple it moves load front exactly as moving the mass would. Without a
+    -- rider (a gyro bike) nobody leans.
+    local lx = 0
+    if R2.rider and crewAboard == true and (CREW_TT or 0) > 0 and need > 0 and lw > 0 then
+      local lmax = (CREW_TT or 0) * R2_BIKE.leanMax / mt
+      -- (against the share of the lift a push may use at this speed, kb below:
+      -- the front keeps its margin of load)
+      local vb0 = math.max(0, math.min(1, ((spd or 0) - R2_BIKE.vLo) / (R2_BIKE.vHi - R2_BIKE.vLo)))
+      local kb0 = R2_BIKE.lift + (R2_BIKE.liftHi - R2_BIKE.lift) * vb0
+      local drag0 = ((AERO.active and AERO.hud and AERO.hud.drag) or 0) / mt
+      -- (a crawl's technique: faded out from leanV0 to leanV1 m/s. At speed a rider
+      -- rides a face neutral: leaned for the climb, the 500 left the big kicker
+      -- at 13.1 m/s instead of 10-11 and landed yawing at 1.1 rad/s, vjump .1436)
+      local kv = math.max(0, math.min(1, (R2_BIKE.leanV1 - (spd or 0)) / (R2_BIKE.leanV1 - R2_BIKE.leanV0)))
+      lx = r2AttackLean(need, drag0, c, R2.bikeAr, R2.bikeH, R2_BIKE.lean * R2.bikeLean, lmax, kb0, gl) * lw * kv
+    end
+    R2.bikeLeanX = (R2.bikeLeanX or 0) + (lx - (R2.bikeLeanX or 0)) * math.min(1, dt * R2_BIKE.leanRate)
+    local leanM = R2_BIKE.lean * R2.bikeLean + R2.bikeLeanX   -- m of the whole bike's weight forward
+    R2.bikeLeanM = leanM
+    local lift = gl * (c * R2.bikeAr + leanM) / R2.bikeH   -- the push (per kg) that lifts the front
     -- …less what the AIR takes off the front: the drag on the rider and
     -- what rides high pitches the bike nose-up about its centre of mass (a
     -- 500 at 26 m/s: ~0.5 kN·m, a quarter of the front's load), so the push
@@ -11862,7 +11949,6 @@ local function drive_tick(node, info, dt)
     -- info.mass leaves out. The lever above is the plan's, which weighs the
     -- wheels whole, and the push sized on the hull alone fell 11% short of
     -- it on the user's 500: 31 kg of its 289)
-    local mt = math.max((info.mass or 1) + r2TyresT(), 1e-3)
     R2.bikeM = mt
     local aq = (AERO.active and AERO.tq) or nil
     if aq then
@@ -11881,7 +11967,11 @@ local function drive_tick(node, info, dt)
     local kb = R2_BIKE.lift + (R2_BIKE.liftHi - R2_BIKE.lift) * vb
     -- (a hill steeper than the margin allows takes the margin up to 0.97:
     -- crawling up it on a light front beats stalling at its foot)
-    local k = math.max(kb, math.min(0.97, (need + 0.05 * gl) / math.max(lift, 1e-3)))
+    -- (the margin is over the slope AND the air: at 10 m/s into a breeze the
+    -- user's 500 meets 0.1 g of drag, and a push of the slope + 0.05 g lost
+    -- speed up every hill past 22 deg, playtest 2026-11-05)
+    local dragA = ((AERO.active and AERO.hud and AERO.hud.drag) or 0) / mt
+    local k = math.max(kb, math.min(R2_LIFT_MAX, (need + dragA + 0.05 * gl) / math.max(lift, 1e-3)))
     accel = math.min(R2_BIKE.tc * gl + need, k * lift)
     -- THE GRIP (engine card 0629): the driven tyres push no harder than
     -- R2_GRIP_K × their friction × the load the ground carries on them now
@@ -11958,9 +12048,10 @@ local function drive_tick(node, info, dt)
     end
     climb = need
     R2.bikeCap = accel / gl
-    -- the rider's weight forward (R2_BIKE.lean), about the bike's right
-    if R2.bikeLean > 0.01 and rear_up > 0 then
-      local tq = R2_BIKE.lean * R2.bikeLean * mt * gl
+    -- the rider's weight forward (R2_BIKE.lean, and up a climb the attack
+    -- position's R2.bikeLeanX), about the bike's right
+    if leanM > 0.001 and rear_up > 0 then
+      local tq = leanM * mt * gl
       local ux, uy, uz = upv.x, upv.y, upv.z
       -- nose down: about up × front
       assembly.torque(node, vec3((uy * fz - uz * fy) * tq, (uz * fx - ux * fz) * tq, (ux * fy - uy * fx) * tq))
@@ -12046,6 +12137,7 @@ local function drive_tick(node, info, dt)
   local limited, lmot = nil, 1   -- did the traction control hold a wheel back this tick (and which way)
   local smin = 1                  -- the worst-served motor (published: R2.served)
   R2.srcF = 0                     -- the push the sources could give this tick (kN; the lead's aim below)
+  local dshare = r2DriveShares(R2.wheels, vf, gl, n_drive)
   for k, w in ipairs(R2.wheels) do
     local t = w.tyre
     if w.jointed then w.joint_age = (w.joint_age or 0) + dt end
@@ -12066,7 +12158,7 @@ local function drive_tick(node, info, dt)
       local brakes = st.brakes == true
       j.steer = (w.steer0 or 0) + R2_STEER_SIGN * cmd.steer
       w.steerNow = cmd.steer
-      local torque = math.min(full, accel * (R2.bikeCap and R2.bikeM or info.mass or 1) * w.r / n_drive)
+      local torque = math.min(full, accel * (R2.bikeCap and R2.bikeM or info.mass or 1) * w.r * (dshare and dshare[k] or 1 / n_drive))
       torque = (torque + (full - torque) * stall_k) * (c.motor or 1)
       local want = cmd.drive          -- −1…1 of this wheel's top speed, signed along the front
       -- THE RIM SPEED IS RATE-LIMITED, not just the torque. On 0.117.0-rc6

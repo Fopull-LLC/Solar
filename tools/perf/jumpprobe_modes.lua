@@ -279,6 +279,9 @@ function JP.bike(name)
   -- A/B switches: ride2=0 the rider before BIKE_RIDE2; ftrav / rtrav the
   -- fork's and the swing arm's travel (m, as the wheel's Travel setting)
   if params.ride2 and tonumber(params.ride2) == 0 then vc.BIKE_RIDE2 = false end
+  -- packkg=kg: the rider carries that much in the pack (as crewSeatT reads
+  -- a full pack: it sits in the saddle with them)
+  if tonumber(params.packkg) then vc.CREW_T = 0.1 + tonumber(params.packkg) / 1000 end
   -- govoff=1: the gas governor off (GAS_SAFE_V nil), gov=v: set to v m/s
   if (tonumber(params.govoff) or 0) > 0 then vc.GAS_SAFE_V = nil elseif tonumber(params.gov) then vc.GAS_SAFE_V = tonumber(params.gov) end
   -- grip=k: the traction control's load cap (R2_GRIP_K, card 0629) at k; grip=0 off
@@ -288,6 +291,8 @@ function JP.bike(name)
     if params.bleanh then vc.R2_BIKE.leanHill = params.bleanh end
     if params.blift then vc.R2_BIKE.lift = params.blift end
     if params.bvh1 then vc.R2_BIKE.vHill1 = params.bvh1 end
+    -- bleanmax: the attack position's reach (R2_BIKE.leanMax; 0 = never past R2_BIKE.lean)
+    if tonumber(params.bleanmax) then vc.R2_BIKE.leanMax = tonumber(params.bleanmax) end
   end
   for _, w in ipairs(vc.R2.wheels or {}) do
     local kind = w.susp and w.susp.m and w.susp.m.kind
@@ -677,11 +682,23 @@ end
 -- wheelie (pitch over the ramp's). Then, past the last hill, full stick from a
 -- standstill for `topsecs` s (default 10): the time to 5, 10 and 15 m/s and the
 -- top speed. `JP H` per attempt, `JP ACC`, and a `JP HILL` summary.
+-- (k.f, strs-param `hfil` m: the foot eased in over that far, the grade
+-- rising from 0 to k.g along it, as a real hill's foot does; 0: a kink. Ridden
+-- at 11 m/s into a 30 deg kink the 500 lost 7 m/s in a tenth of a second.)
+function JP.hill_slope(k, x)
+  local f = k.f or 0
+  if x <= 0 then return 0 end
+  if f > 0 and x < f then return k.g * x / f end
+  return k.g
+end
+function JP.hill_up(k) return k.hh / k.g + (k.f or 0) / 2 end
 function JP.hill_h(k, d)
   local x = d - k.toe
   if x <= 0 then return 0 end
-  local up = k.hh / k.g
-  if x <= up then return x * k.g end
+  local up = JP.hill_up(k)
+  local f = k.f or 0
+  if f > 0 and x < f then return k.g * x * x / (2 * f) end
+  if x <= up then return k.g * (x - f / 2) end
   if x <= up + 8 then return k.hh end
   return math.max(0, k.hh - (x - up - 8) * 0.35)
 end
@@ -689,7 +706,7 @@ function JP.hill_build(vc, k)
   local S = V.strip
   local R0 = len(S.rel0.x, S.rel0.y, S.rel0.z)
   local L = unit(cross(S.U, S.F))
-  local up = k.hh / k.g
+  local up = JP.hill_up(k)
   local d_end = k.toe + up + 8 + k.hh / 0.35
   local made, worst = 0, 0
   for pass = 1, 14 do
@@ -701,7 +718,7 @@ function JP.hill_build(vc, k)
       local h = JP.hill_h(k, d)
       local x = d - k.toe
       local nn = Ud
-      if x > 0 and x <= up then nn = unit(sub(Ud, scl(S.F, k.g)))
+      if x > 0 and x <= up then nn = unit(sub(Ud, scl(S.F, JP.hill_slope(k, x))))
       elseif x > up + 8 and h > 0 then local e = scl(S.F, 0.35); nn = unit({ x = Ud.x + e.x, y = Ud.y + e.y, z = Ud.z + e.z }) end
       for _, lat in ipairs({ -1.2, 0, 1.2 }) do
         local top = { x = bb.x + Ud.x * (R0 + h + 10) + L.x * lat, y = bb.y + Ud.y * (R0 + h + 10) + L.y * lat, z = bb.z + Ud.z * (R0 + h + 10) + L.z * lat }
@@ -805,8 +822,10 @@ function JP.climb(vc, k, still)
     end
     if (t_toe or (tonumber(params.happ) or 0) > 0) and time >= nextl then
       nextl = time + 0.25
-      P("JP HT %s t %.2f d %.2f v %.2f pitch %.1f gr %d%d drive %.2f lk %.2f served %.2f tq %s cap %.2f tc %.2f sld %.2f spn %.2f", tag, time - (t_toe or time), d - k.toe, sp, math.deg(pitch), f, r,
-        vc.R2.drive or 0, vc.R2.lk or 0, vc.R2.served or 0, tostring(vc.R2.tq_dbg), vc.R2.bikeCap or -1, vc.R2.tcK or 0, vc.R2.tcSlide or 0, vc.R2.tcSpin or 0)
+      local _, _, lf_, lr_ = JP.down(vc)
+      P("JP HT %s t %.2f d %.2f v %.2f pitch %.1f gr %d%d loads %.2f/%.2f W %.2f gs %.3f drive %.2f lk %.2f served %.2f cap %.2f grip %.2f tc %.2f sld %.2f spn %.2f", tag, time - (t_toe or time), d - k.toe, sp, math.deg(pitch), f, r,
+        lf_, lr_, (vc.R2.bikeM or 0) * (vc.R2.gl or 9.8), vc.R2.groundS or -9,
+        vc.R2.drive or 0, vc.R2.lk or 0, vc.R2.served or 0, vc.R2.bikeCap or -1, (vc.R2.gripA or 0) / (vc.R2.gl or 9.8), vc.R2.tcK or 0, vc.R2.tcSlide or 0, vc.R2.tcSpin or 0)
     end
     if V.upness(vc.node) < 0.4 then fell = true; break end
     if t_toe and not t_crest and (stall_t > 1.2 or sp < -0.5) then break end
@@ -950,7 +969,9 @@ function JP.accel(vc, secs)
       end
       local g = JP.gas(vc)
       local roll_ = JP.att(vc)
-      P("JP AT t %.2f v %.2f pitch %.1f roll %.1f susp %s gr %d%d drive %.2f a_s %.2f lk %.2f slope %.3f ground %.3f cap %.2f mF %s%s", time - t0, sp, math.deg(pitch - p0), math.deg(roll_), susp(vc), f, select(2, JP.down(vc)),
+      local _, _, lf_, lr_ = JP.down(vc)
+      P("JP AT t %.2f v %.2f pitch %.1f roll %.1f loads %.2f/%.2f W %.2f susp %s gr %d%d drive %.2f a_s %.2f lk %.2f slope %.3f ground %.3f cap %.2f mF %s%s", time - t0, sp, math.deg(pitch - p0), math.deg(roll_),
+        lf_, lr_, (vc.R2.bikeM or 0) * (vc.R2.gl or 9.8), susp(vc), f, select(2, JP.down(vc)),
         vc.R2.drive or 0, vc.R2.a_s or 0, vc.R2.lk or 0, vc.R2.gslope or 0, vc.R2.groundS or -9, vc.R2.bikeCap or -1, table.concat(mf, " "),
         g and string.format(" gas %.0f rpm g%d vf %.2f ap %.3f", g.rpm or 0, g.gear or 0, vc.R2.vf or 0, vc.R2.aeroPitch or 0) or "")
     end
@@ -991,8 +1012,8 @@ local function run_vhill()
   local vat = tonumber(params.vat or 10)
   local hills, d = {}, 55
   for _, g in ipairs(grades) do
-    hills[#hills + 1] = { g = g, hh = hh, toe = d, v = vat }
-    d = d + 80
+    hills[#hills + 1] = { g = g, hh = hh, toe = d, v = vat, f = tonumber(params.hfil) or 0 }
+    d = d + (tonumber(params.hgap) or 80)   -- (hgap: hill to hill, m; a run-up starts 45 m short of a toe)
   end
   local acc0 = d - 50
   -- (33 m a second of the flat run: the 500 covers 475 m in 16 s, and at 28
@@ -1574,6 +1595,220 @@ local function run_vload()
   end
   vc.R2.cmd = { drive = 0, steer = 0 }
   V.check("load", true, "measured")
+  V.result()
+end
+
+-- ── vnat ────────────────────────────────────────────────────────────────────
+-- REAL TERRAIN HILLS (playtest 2026-11-05: "still struggling to climb hills
+-- with bikes even the more powerful 500cc motors"). The probe hills above are
+-- sculpted; this one rides the home world's own ground. Out past 95 m, the
+-- terrain within `nr` m (default 150) is sampled on a `ngrid` m grid
+-- (default 3) in the tangent plane, and for each grade band (strs `bands`,
+-- deg, default "15,20,25,30,35,40": each ±2.5) the straightest climb of
+-- `nlen` m (default 14) is picked: its grade within ±0.12 of the mean the whole
+-- way, its cross slope under 0.2, the ground before its foot gentler than 0.15
+-- over `nrun` m (default 22). Each is ridden twice, like vhill: from a run-up
+-- (`vat` m/s, default 10, from `nrun` m back, full stick 3 m before the foot)
+-- and from a standstill 1.5 m before the foot. `JP N` per attempt (OVER /
+-- STALLED / FELL, how far up, least speed, the traction control at its least)
+-- and a `JP NAT` summary.
+function JP.nat_scan(vc)
+  local nr, ng = tonumber(params.nr) or 150, tonumber(params.ngrid) or 3
+  local i = assembly.info(vc.node)
+  local b = home()
+  local c = sub(i.com, b)
+  local U0 = unit(c)
+  local E = unit(cross(U0, math.abs(U0.y) < 0.9 and { x = 0, y = 1, z = 0 } or { x = 1, y = 0, z = 0 }))
+  local N = cross(E, U0)
+  local h0 = raycast(i.com.x, i.com.y, i.com.z, -U0.x, -U0.y, -U0.z, 20, { ignore = { vc.node } })
+  local R0 = len(c.x, c.y, c.z) - (h0 and h0.distance or 0.9)
+  JP.hc0 = h0 and h0.distance or 0.9
+  local G, n, miss = {}, math.floor(nr / ng), 0
+  for ix = -n, n do
+    G[ix] = {}
+    for iy = -n, n do
+      local bb = home()
+      local p = { x = U0.x * R0 + E.x * ix * ng + N.x * iy * ng, y = U0.y * R0 + E.y * ix * ng + N.y * iy * ng, z = U0.z * R0 + E.z * ix * ng + N.z * iy * ng }
+      local u = unit(p)
+      local top = { x = bb.x + u.x * (R0 + 80), y = bb.y + u.y * (R0 + 80), z = bb.z + u.z * (R0 + 80) }
+      local hit = raycast(top.x, top.y, top.z, -u.x, -u.y, -u.z, 200, { ignore = { vc.node } })
+      if hit then G[ix][iy] = 80 - hit.distance else miss = miss + 1 end
+    end
+    if ix % 10 == 0 then yield() end
+  end
+  local S = { G = G, n = n, ng = ng, U0 = U0, E = E, N = N, R0 = R0 }
+  -- the height at tangent-plane (x, y) m, bilinear (nil off the grid / a miss)
+  function S.h(x, y)
+    local fx, fy = x / ng, y / ng
+    local ix, iy = math.floor(fx), math.floor(fy)
+    if ix < -n or iy < -n or ix + 1 > n or iy + 1 > n then return nil end
+    local a, b2, c2, d = G[ix][iy], G[ix + 1][iy], G[ix][iy + 1], G[ix + 1][iy + 1]
+    if not (a and b2 and c2 and d) then return nil end
+    local tx, ty = fx - ix, fy - iy
+    return (a * (1 - tx) + b2 * tx) * (1 - ty) + (c2 * (1 - tx) + d * tx) * ty
+  end
+  P("JP nat grid: %d x %d at %.0f m, %d misses, base radius %.1f", 2 * n + 1, 2 * n + 1, ng, miss, R0)
+  -- how steep the ground around is (the steepest grade at each node, over 2 cells)
+  local hist, cnt = { 0, 0, 0, 0, 0, 0, 0, 0, 0 }, 0
+  for ix = -n + 1, n - 1 do
+    for iy = -n + 1, n - 1 do
+      local a, b2, c2, d = G[ix + 1][iy], G[ix - 1][iy], G[ix][iy + 1], G[ix][iy - 1]
+      if a and b2 and c2 and d then
+        local gx, gy = (a - b2) / (2 * ng), (c2 - d) / (2 * ng)
+        local deg = math.deg(math.atan(math.sqrt(gx * gx + gy * gy)))
+        local k = math.min(9, 1 + math.floor(deg / 5))
+        hist[k] = hist[k] + 1
+        cnt = cnt + 1
+      end
+    end
+  end
+  local ht = {}
+  for k = 1, 9 do ht[#ht + 1] = string.format("%s%d: %.1f%%", k == 9 and ">" or "<", k == 9 and 40 or 5 * k, 100 * hist[k] / math.max(1, cnt)) end
+  P("JP nat slopes within %.0f m: %s", nr, table.concat(ht, ", "))
+  return S
+end
+function JP.nat_pick(S, deg)
+  local L, run = tonumber(params.nlen) or 14, tonumber(params.nrun) or 22
+  local best
+  local want = math.tan(math.rad(deg))
+  local lim = S.n * S.ng - L - 4
+  local ng = S.ng
+  for x = -lim, lim, ng do
+    for y = -lim, lim, ng do
+      if x * x + y * y > 25 * 25 then
+        local h0 = S.h(x, y)
+        for k = 0, 23 do
+          local a = k * math.pi / 12
+          local dx, dy = math.cos(a), math.sin(a)
+          local h1 = S.h(x + dx * L, y + dy * L)
+          if h0 and h1 then
+            local m = (h1 - h0) / L
+            if math.abs(math.deg(math.atan(m)) - deg) <= 2.5 then
+              local ok, dev = true, 0
+              for s = 2, L, 2 do
+                local ha, hb = S.h(x + dx * (s - 2), y + dy * (s - 2)), S.h(x + dx * s, y + dy * s)
+                if not (ha and hb) then ok = false; break end
+                dev = math.max(dev, math.abs((hb - ha) / 2 - m))
+                local hl, hr = S.h(x + dx * s - dy * 1.5, y + dy * s + dx * 1.5), S.h(x + dx * s + dy * 1.5, y + dy * s - dx * 1.5)
+                if not (hl and hr) or math.abs(hl - hr) / 3 > (tonumber(params.nside) or 0.2) then ok = false; break end
+              end
+              if ok and dev <= (tonumber(params.ndev) or 0.12) then
+                local hr0 = S.h(x - dx * run, y - dy * run)
+                if hr0 and math.abs(h0 - hr0) / run < (tonumber(params.nrung) or 0.15) then
+                  local rdev = 0
+                  for s = 2, run, 2 do
+                    local ha, hb = S.h(x - dx * s, y - dy * s), S.h(x - dx * (s - 2), y - dy * (s - 2))
+                    if not (ha and hb) then rdev = 9; break end
+                    rdev = math.max(rdev, math.abs(hb - ha) / 2)
+                  end
+                  local score = dev + 0.5 * math.max(0, rdev - 0.1) + math.abs(m - want) * 0.5
+                  if rdev < (tonumber(params.nrunmax) or 0.25) and (not best or score < best.score) then
+                    best = { x = x, y = y, dx = dx, dy = dy, m = m, dev = dev, rdev = rdev, score = score, h0 = h0, L = L }
+                  end
+                end
+              end
+            end
+          end
+        end
+      end
+    end
+    yield()
+  end
+  return best
+end
+-- ride the natural climb (V.strip set along it): from a standstill or a run-up
+function JP.nat_ride(vc, k, still)
+  local tag = string.format("%s %.0f", still and "still" or "speed", k.deg)
+  local t0 = time
+  local L = k.L
+  local best, vmin, stall_t, fell, top, foff, n = 0, nil, 0, false, false, 0, 0
+  local v_toe, t_toe, low
+  local nextl = 0
+  while time - t0 < 30 do
+    local d = JP.along(vc)
+    local sp = V.speed(vc)
+    local drive, st = JP.cruise(vc, k.v, true)
+    if still or d >= -3 then drive = 1 end
+    if top then drive = (sp > 3) and -1 or 0 end
+    vc.R2.cmd = { drive = drive, steer = st }
+    hold_w(drive > 0.5)
+    yield()
+    sp = V.speed(vc)
+    d = JP.along(vc)
+    local f, r, lf, lr = JP.down(vc)
+    if not t_toe and d >= 0 then t_toe, v_toe = time, sp end
+    if t_toe and not top then
+      best = math.max(best, d)
+      n = n + 1
+      if f == 0 then foff = foff + 1 end
+      if d > 1 and (not vmin or sp < vmin) then
+        vmin = sp
+        low = string.format("d %.1f v %.2f cap %.2f tc %.2f spin %.2f loads %.2f/%.2f kN lk %.1f", d, sp, vc.R2.bikeCap or -1, vc.R2.tcK or 0, vc.R2.tcSpin or 0, lf, lr, vc.R2.lk or 0)
+      end
+      if sp < 0.25 then stall_t = stall_t + 1 / 60 else stall_t = 0 end
+      if d >= L then top = true; P("JP N %s: at the top %.1f s from the foot, toe %.2f m/s, %.2f at the top", tag, time - t_toe, v_toe or -1, sp) end
+    end
+    if t_toe and time >= nextl and (tonumber(params.ntrace) or 0) > 0 then
+      nextl = time + 0.25
+      local _, pitch = JP.att(vc)
+      P("JP NT %s t %.2f d %.2f v %.2f pitch %.1f gr %d%d loads %.2f/%.2f cap %.2f tc %.2f spin %.2f lk %.1f gs %.3f", tag, time - t_toe, d, sp, math.deg(pitch), f, r, lf, lr,
+        vc.R2.bikeCap or -1, vc.R2.tcK or 0, vc.R2.tcSpin or 0, vc.R2.lk or 0, vc.R2.groundS or -9)
+    end
+    if V.upness(vc.node) < 0.4 then fell = true; break end
+    if t_toe and not top and (stall_t > 1.5 or sp < -0.5) then break end
+    if top and (d > L + 6 or sp < 0.5) then break end
+    if not t_toe and time - t0 > 20 then break end
+  end
+  hold_w(false)
+  vc.R2.cmd = { drive = 0, steer = 0 }
+  local res = top and "OVER" or (fell and "FELL" or "STALLED")
+  P("JP N %s (%.1f deg over %.0f m, run-up steepest %.2f): %s, %.0f%% up, toe %.2f, least %s, front off %.0f%%", tag, math.deg(math.atan(k.m)), L, k.rdev,
+    res, 100 * math.min(1, best / L), v_toe or -1, low or "-", 100 * foff / math.max(1, n))
+  return { top = top, fell = fell, got = best / L }
+end
+local function run_vnat()
+  local vc = JP.bike("nat")
+  if not vc then return end
+  if not V.out(vc, tonumber(params.nout) or 95) then V.check("out", false, "fell on the way out"); V.result(); return end
+  V.stop(vc)
+  wait_for(function() return (terrain.pending and terrain.pending() or 0) == 0 end, 30, "terrain")
+  local S = JP.nat_scan(vc)
+  local bands = jsplit(params.bands or "15,20,25,30,35,40")
+  local out, ok = {}, true
+  for _, deg in ipairs(bands) do
+    local k = JP.nat_pick(S, deg)
+    if not k then
+      P("JP N %.0f: no such climb within %.0f m", deg, S.n * S.ng)
+      out[#out + 1] = string.format("%.0f°: none", deg)
+    else
+      k.deg, k.v = deg, tonumber(params.vat) or 10
+      local p = { x = S.U0.x * S.R0 + S.E.x * k.x + S.N.x * k.y, y = S.U0.y * S.R0 + S.E.y * k.x + S.N.y * k.y, z = S.U0.z * S.R0 + S.E.z * k.x + S.N.z * k.y }
+      local u = unit(p)
+      local foot = scl(u, S.R0 + k.h0)
+      local F = { x = S.E.x * k.dx + S.N.x * k.dy, y = S.E.y * k.dx + S.N.y * k.dy, z = S.E.z * k.dx + S.N.z * k.dy }
+      F = unit(sub(F, scl(u, dot(F, u))))
+      V.strip = { rel0 = foot, F = F, U = u, d1 = k.L + 40 }
+      local prof = {}
+      for s = -6, k.L + 2, 2 do
+        local hh = S.h(k.x + k.dx * s, k.y + k.dy * s)
+        prof[#prof + 1] = string.format("%d:%.1f", s, (hh or 0) - k.h0)
+      end
+      P("JP nat %.0f: at (%.0f, %.0f) heading %.0f, grade %.2f (%.1f deg) dev %.2f, run-up %.2f; profile %s", deg, k.x, k.y, math.deg(math.atan2(k.dy, k.dx)), k.m,
+        math.deg(math.atan(k.m)), k.dev, k.rdev, table.concat(prof, " "))
+      JP.reset(vc, -(tonumber(params.nrun) or 22))
+      local a = JP.nat_ride(vc, k, false)
+      V.stop(vc)
+      JP.reset(vc, -1.5)
+      local c = JP.nat_ride(vc, k, true)
+      V.stop(vc)
+      if a.fell or c.fell then ok = false end
+      out[#out + 1] = string.format("%.0f° (%.1f): speed %s still %s", deg, math.deg(math.atan(k.m)),
+        a.top and "over" or (a.fell and "FELL" or string.format("%.0f%%", 100 * math.min(1, a.got))),
+        c.top and "over" or (c.fell and "FELL" or string.format("%.0f%%", 100 * math.min(1, c.got))))
+    end
+  end
+  P("JP NAT %s: %s", V.tag, table.concat(out, " | "))
+  V.check("nat", ok, "upright on every natural hill")
   V.result()
 end
 
