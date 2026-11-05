@@ -685,9 +685,13 @@ do
   -- The TRUE mass is the blueprint's dry parts + propellant, and it is what
   -- the physics flies: every part's RigidBody carries its own dry mass plus
   -- what its tank still holds (massSync, floptle/0406 — no push is rescaled).
+  -- (+ the seated crew: CREW_T each, on the part they sit in, crewMassScan)
+  local crew = c.CREW_TT or 0
+  check(math.abs(crew - (c.crewAboard and c.CREW_T or 0)) < 1e-9,
+    string.format("the crew aboard weighs on the craft (%.3f t, aboard %s)", crew, tostring(c.crewAboard)))
   local dry, wet = c.trueMass()
-  check(math.abs(dry - 6.07) < 1e-9 and math.abs(wet - (6.07 + fm)) < 1e-9,
-    string.format("true mass: the blueprint's dry parts + propellant (%.3f / %.3f t)", dry, wet))
+  check(math.abs(dry - (6.07 + crew)) < 1e-9 and math.abs(wet - (6.07 + crew + fm)) < 1e-9,
+    string.format("true mass: the blueprint's dry parts + crew + propellant (%.3f / %.3f t)", dry, wet))
   check(c.massK == nil, "no push is rescaled to a 'true' mass any more (massK is gone)")
   local function part_at(px, py, pz)
     local root = c.dock and c.dock.node
@@ -706,11 +710,11 @@ do
     string.format("the burning tank's rigidbody weighs its shell + what it still holds (%s t)", tostring(m2)))
   check(m11 and math.abs(m11 - (0.2 + 40 * 0.01)) < 1e-6,
     string.format("...and the full one its shell + 0.4 t (%s t)", tostring(m11)))
-  check(pod and math.abs(pod.components.RigidBody.mass - 1.2) < 1e-9,
-    "a part with no tank weighs its blueprint dry mass")
+  check(pod and math.abs(pod.components.RigidBody.mass - (1.2 + crew)) < 1e-9,
+    "a part with no tank weighs its blueprint dry mass (the pod: + its crew)")
   step(6)   -- let the 10 Hz telemetry catch up
   local tm = tele()
-  check(tm.mass and math.abs(tm.mass - (6.07 + c.fuelMass())) < 0.02,
+  check(tm.mass and math.abs(tm.mass - (6.07 + crew + c.fuelMass())) < 0.02,
     string.format("the HUD's mass is the true wet mass (%.2f t)", tm.mass or -1))
   check((tm.dv or 0) > 0 and (tm.burn_s or 0) > 0, "the HUD knows the Δv and burn time left")
   -- BIG-CRAFT CACHES (perf): the stress model sums every joint's leaving

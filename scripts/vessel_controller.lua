@@ -710,7 +710,7 @@ local function load_bp(override)
   local best_pod, crew_at = r2PickCommand(bp.parts, by_uid)
   if best_pod then
     local at = crew_at or best_pod
-    pod = { x = at.x, y = at.y, z = at.z }
+    pod = { x = at.x, y = at.y, z = at.z, uid = at.uid }
     pod_uid = best_pod.uid
   end
   podCrewed = crew_at ~= nil
@@ -933,9 +933,12 @@ end
 local function pod_world(node, info)
   local rx, up, rz = basis(node)
   local bx, by, bz = base_of(node, info)
-  return bx + rx.x * pod.x + up.x * pod.y + rz.x * pod.z,
-         by + rx.y * pod.x + up.y * pod.y + rz.y * pod.z,
-         bz + rx.z * pod.x + up.z * pod.y + rz.z * pod.z
+  -- (a seat on a joint: where the joint has it, partPosed)
+  local x, y, z = pod.x, pod.y, pod.z
+  if pod.uid and R2.chain[pod.uid] then x, y, z = posedPoint(pod.uid, x, y, z) end
+  return bx + rx.x * x + up.x * y + rz.x * z,
+         by + rx.y * x + up.y * y + rz.y * z,
+         bz + rx.z * x + up.z * y + rz.z * z
 end
 
 -- Boarding reach: distance to the vessel's SPINE (base → pod), not to the pod
@@ -976,12 +979,16 @@ local function board_dist(node, a, info)
   local best, bd = nil, nil
   for _, st in ipairs(crewSeats) do
     if not integ.gone[st.uid] and (part_hp[st.uid] or 1) > 0 then
-      local d = to(st.x, st.y, st.z, not st.seat)
+      local x, y, z = st.x, st.y, st.z
+      if R2.chain[st.uid] then x, y, z = posedPoint(st.uid, x, y, z) end
+      local d = to(x, y, z, not st.seat)
       if not bd or d < bd then best, bd = st, d end
     end
   end
   if best then return bd, best end
-  return to(pod.x, pod.y, pod.z, true), nil
+  local x, y, z = pod.x, pod.y, pod.z
+  if pod.uid and R2.chain[pod.uid] then x, y, z = posedPoint(pod.uid, x, y, z) end
+  return to(x, y, z, true), nil
 end
 
 -- Rebuild `crewSeats` from a part list (the blueprint; after a docking, the
@@ -1010,9 +1017,9 @@ function setStation(st)
   end
   if not st then return false end
   stationUid = st.uid
-  pod = { x = st.x, y = st.y, z = st.z }
+  pod = { x = st.x, y = st.y, z = st.z, uid = st.uid }
   podSeat = st.seat == true
-  podLX, podLY, podLZ = st.x, st.y, st.z
+  podPublish()
   focusHeight = st.y
   return true
 end
@@ -1529,7 +1536,7 @@ function splitRecommand(dep)
     pod_uid = best.uid
     podCrewed = best.kind == "crewed"
     if not (crewAboard and stationUid and not dep[stationUid]) then
-      pod = { x = best.x, y = best.y, z = best.z }
+      pod = { x = best.x, y = best.y, z = best.z, uid = best.uid }
       podLX, podLY, podLZ = best.x, best.y, best.z
       focusHeight = best.y
       podSeat = podCrewed and (best.seat or 0) == 1
@@ -1821,7 +1828,7 @@ function trueMass()
   for u, d in pairs(bp_by_uid or {}) do
     if not integ.gone[u] and (part_hp[u] or 1) > 0 then dry = dry + (d.mass or 0) end
   end
-  dry = dry + (holdT or 0) + lockerT()
+  dry = dry + (holdT or 0) + lockerT() + (CREW_TT or 0)   -- (the crew aboard: crewMassScan)
   return dry, dry + fuelMass()
 end
 
@@ -2054,6 +2061,53 @@ local function uid_of_child(node, eid, kids)
   return nil
 end
 
+local mass_sync = { gen = -1, t = -10.0, list = {}, bays = 0, last = {}, np = -1, crewW = {} }
+-- THE CREW WEIGHS ON IT TOO (2026-11-04: "the bike rides as if empty"). The
+-- seated crew are kinematic passengers (seatCrew), no body of the craft's, so
+-- a bike carried no rider at all. Each member in a seat adds CREW_T, the suit
+-- and its wearer (eva_pack `suit_kg`), to the part they sit in: on the
+-- craft's mass, its centre of mass and its inertia while they sit, gone the
+-- tick they are off. Read from the seats (seatsOf: the avatar and the crew
+-- left aboard alike) at most every CREW_SCAN_S, and at once when the avatar
+-- boards or steps off. The mass lands at the seat part's own origin (a part's
+-- mass has no offset on the engine: card in the report), a saddle's within
+-- ~0.2 m of a rider's hips. → CREW_TU (uid → t), CREW_TT (the craft's total).
+CREW_T = 0.100
+CREW_SCAN_S = 0.5
+CREW_TU, CREW_TT = {}, 0
+function crewMassScan(node, info)
+  local ms = mass_sync
+  if ms.crewAboard == crewAboard and ms.crewGen == integ.gen and time - (ms.crewT or -1e9) < CREW_SCAN_S then return false end
+  ms.crewAboard, ms.crewGen, ms.crewT = crewAboard, integ.gen, time
+  local t, n, tot = {}, 0, 0
+  if not destroyed then
+    if crewLibNow() then
+      for _, s in ipairs(seatsOf()) do
+        if s.taken then t[s.uid] = (t[s.uid] or 0) + CREW_T; n = n + 1 end
+      end
+    end
+    -- (the avatar aboard with no seat record yet: a harness, an older save's
+    -- craft before seatAvatarCheck)
+    local u = stationUid or pod_uid
+    if crewAboard and n == 0 and u and bp_by_uid[u] then t[u] = CREW_T; n = 1 end
+  end
+  local same = true
+  for u, m in pairs(t) do tot = tot + m; if CREW_TU[u] ~= m then same = false end end
+  for u in pairs(CREW_TU) do if not t[u] then same = false end end
+  if same then return false end
+  CREW_TU, CREW_TT = t, tot
+  -- (the springs are sized from the load: sized again at the next lay; tyres
+  -- still in wait for the re-weigh before they come out, and tyres out are
+  -- hung again on the moved centre of mass, card 0636: roboComCheck)
+  for _, w in ipairs(R2.wheels) do if w.susp then w.susp.load = nil end end
+  -- (the plan's centre of mass with them: each end's load, a bike's wheelie
+  -- limit and its traction control's lever, r2SteerPlan through roboReplan)
+  if #R2.wheels > 0 and R2.gen == integ.gen then roboReplan() end
+  if R2.live then R2.comWatch = time + 0.5 else R2.holdoff = math.max(R2.holdoff or 0, 0.1) end
+  log(string.format("vessel: %d crew aboard, %.0f kg on the craft", n, tot * 1000))
+  return true
+end
+
 -- THE CRAFT WEIGHS WHAT IT CARRIES (floptle/0406: `rb.mass` is live). Each
 -- part's RigidBody is given its blueprint dry mass, plus the propellant its
 -- tank still holds, plus its share of the hold's cargo (`holdT`); the engine
@@ -2066,7 +2120,6 @@ end
 -- 13 ms read of every part at 1,000 parts, perfbench g_launch_pad). A big
 -- craft's parts arrive over several frames: each weighs what it carries the
 -- tick its compound counts it.
-local mass_sync = { gen = -1, t = -10.0, list = {}, bays = 0, last = {}, np = -1 }
 function massSync(node, info)
   local ms = mass_sync
   local np = info and info.parts and #info.parts or ms.np
@@ -2088,6 +2141,12 @@ function massSync(node, info)
   end
   local share = (ms.bays > 0) and (holdT or 0) / ms.bays or 0.0
   local total = 0.0
+  crewMassScan(node, info)
+  local crewU = CREW_TU
+  -- (a tyre hung before the re-weigh is hung again on the new centre of mass)
+  if R2.comWatch and #R2.robo == 0 then
+    if time > R2.comWatch then R2.comWatch = nil elseif R2.live and info then roboComCheck(node, info) end
+  end
   -- Each part's propellant by uid, from one pass over the tanks. tankFuelT
   -- scans every tank for every part, every tick: parts × tanks (perfbench:
   -- 1,000 parts, 40 tanks — massSync led vessel_controller on the pad).
@@ -2107,13 +2166,21 @@ function massSync(node, info)
   for _, e in ipairs(ms.list) do
     local d = e.d
     local m = math.max(0.001, (d.mass or 0) + (fuel_t[e.uid] or 0.0)
-      + (((d.cargo or 0) > 0) and share or 0.0) + (LOCKER_T[e.uid] or 0.0))
+      + (((d.cargo or 0) > 0) and share or 0.0) + (LOCKER_T[e.uid] or 0.0) + (crewU[e.uid] or 0.0))
     -- a powered wheel whose tyre is out: the tyre body carries its share
     if R2.live and (d.wheel or "") ~= "" then m = math.max(0.001, m * (1 - (e.ts or TYRE_SHARE))) end
     local was = ms.last[e.eid]
     if not was or math.abs(m - was) > 1e-6 then
       e.rb.mass = m
       ms.last[e.eid] = m
+      -- (the crew's weight landing on its body, which may be ticks after
+      -- crewMassScan saw them while the compound gathers its parts: the
+      -- tyres wait for the re-weigh, or are hung again on it, card 0636)
+      local cw = crewU[e.uid] or 0
+      if (ms.crewW[e.eid] or 0) ~= cw then
+        ms.crewW[e.eid] = cw
+        if R2.live then R2.comWatch = time + 0.5 else R2.holdoff = math.max(R2.holdoff or 0, 0.1) end
+      end
     end
     total = total + m
   end
@@ -3536,12 +3603,19 @@ local function dock_world(node, info, p)
   local R, U, Z = DOCKM.tickAxes(node, info)
   local bx, by, bz = base_of(node, info)
   local kx, ky, kz = DOCKM.keyLocal(bp_by_uid[p.uid])
-  return bx + R.x * p.x + U.x * p.y + Z.x * p.z,
-         by + R.y * p.x + U.y * p.y + Z.y * p.z,
-         bz + R.z * p.x + U.z * p.y + Z.z * p.z,
-         R.x * p.ax + U.x * p.ay + Z.x * p.az,
-         R.y * p.ax + U.y * p.ay + Z.y * p.az,
-         R.z * p.ax + U.z * p.ay + Z.z * p.az,
+  local x, y, z, ax, ay, az = p.x, p.y, p.z, p.ax, p.ay, p.az
+  -- (a port on a joint: where the joint has it, its face and key turned with it)
+  if R2.chain[p.uid] then
+    x, y, z = posedPoint(p.uid, x, y, z)
+    ax, ay, az = posedDir(p.uid, ax, ay, az)
+    kx, ky, kz = posedDir(p.uid, kx, ky, kz)
+  end
+  return bx + R.x * x + U.x * y + Z.x * z,
+         by + R.y * x + U.y * y + Z.y * z,
+         bz + R.z * x + U.z * y + Z.z * z,
+         R.x * ax + U.x * ay + Z.x * az,
+         R.y * ax + U.y * ay + Z.y * az,
+         R.z * ax + U.z * ay + Z.z * az,
          R.x * kx + U.x * ky + Z.x * kz,
          R.y * kx + U.y * ky + Z.y * kz,
          R.z * kx + U.z * ky + Z.z * kz
@@ -4687,10 +4761,15 @@ function dockGuidePose(t0)
   local node = dock.node
   local p = dock_port(t0.port)
   if not (node and node.valid and p) then return nil end
-  local function face(n, q)
+  -- (`ctl`: the controller whose port it is, for a port on a joint: posedPoint)
+  local function face(n, q, ctl)
     if not n.toWorld then return dock_world(n, assembly.info(n), q) end   -- (a test rig's node)
-    local o = n:toWorld(vec3(q.x, q.y, q.z))
-    local a = n:toWorld(vec3(q.x + q.ax, q.y + q.ay, q.z + q.az))
+    local x, y, z, ax, ay, az = q.x, q.y, q.z, q.ax, q.ay, q.az
+    local pp, pd = posedPoint, posedDir
+    if ctl then pp, pd = ctl.posedPoint, ctl.posedDir end
+    if pp and pd then x, y, z = pp(q.uid, x, y, z); ax, ay, az = pd(q.uid, ax, ay, az) end
+    local o = n:toWorld(vec3(x, y, z))
+    local a = n:toWorld(vec3(x + ax, y + ay, z + az))
     return o.x, o.y, o.z, a.x - o.x, a.y - o.y, a.z - o.z
   end
   local t = {}
@@ -4702,7 +4781,7 @@ function dockGuidePose(t0)
       for _, q in ipairs(v.dock.ports) do
         if q.uid == t0.uid then
           local ax, ay, az
-          t.qx, t.qy, t.qz, ax, ay, az = face(v.node, q)
+          t.qx, t.qy, t.qz, ax, ay, az = face(v.node, q, v)
           t.max, t.may, t.maz = -ax, -ay, -az
           found = true
         end
@@ -5285,10 +5364,11 @@ end
 -- by: the same compensation the seat uses, see base_of / board_dist). The
 -- frame's origin is the part's blueprint point and its axes are the craft's,
 -- so a point stored in it rides the part however the craft turns or the
--- planet moves. The same frame serves a point picked off the screen: measured
--- on 0.117.0-rc27 in lateUpdate, node:toWorld (the drawn pose) agrees with
--- this to the millimetre, while node.x/basis(node) read a rails carry behind
--- (3.4 m in orbit). `rendered` is accepted for callers that pass it and
+-- planet moves; a part beyond a moved joint has its origin where the joint
+-- put it and the axes turned with it (partPosed). The same frame serves a
+-- point picked off the screen: measured on 0.117.0-rc27 in lateUpdate,
+-- node:toWorld (the drawn pose) agrees with this to the millimetre, while
+-- node.x/basis(node) read a rails carry behind (3.4 m in orbit). `rendered` is accepted for callers that pass it and
 -- changes nothing. → a table, or nil when the part or the craft is gone.
 function partFrameNow(uid, rendered)
   rendered = false
@@ -5307,10 +5387,23 @@ function partFrameNow(uid, rendered)
   end
   local bx, by, bz
   if rendered or not info then bx, by, bz = node.x, node.y, node.z else bx, by, bz = base_of(node, info) end
+  -- A part a joint has moved (partPosed): its origin where the joint has it,
+  -- and the frame turned with it, so a point or axis kept in the part's frame
+  -- (a port's face, a hatch, a seat, a repair spot) rides the joint. With the
+  -- joints at rest, and on a part no joint carries, nothing changes.
+  local px, py, pz = d.x, d.y, d.z
+  local P = R2.chain[uid] and partPosed(uid)
+  if P then px, py, pz = P.x, P.y, P.z end
+  local ox, oy, oz = bx + R.x * px + U.x * py + Z.x * pz, by + R.y * px + U.y * py + Z.y * pz, bz + R.z * px + U.z * py + Z.z * pz
+  if P then
+    local function W(a, b, c) return { x = R.x * a + U.x * b + Z.x * c, y = R.y * a + U.y * b + Z.y * c, z = R.z * a + U.z * b + Z.z * c } end
+    -- (into new locals first: on the engine's Luau, `R, U, Z = W(..), W(..),
+    -- W(..)` assigned U before the third W read it through the closure)
+    local R1, U1, Z1 = W(P.ax, P.ay, P.az), W(P.bx, P.by, P.bz), W(P.cx, P.cy, P.cz)
+    R, U, Z = R1, U1, Z1
+  end
   local F = {
-    ox = bx + R.x * d.x + U.x * d.y + Z.x * d.z,
-    oy = by + R.y * d.x + U.y * d.y + Z.y * d.z,
-    oz = bz + R.z * d.x + U.z * d.y + Z.z * d.z,
+    ox = ox, oy = oy, oz = oz,
     rx = R.x, ry = R.y, rz = R.z, ux = U.x, uy = U.y, uz = U.z, zx = Z.x, zy = Z.y, zz = Z.z,
     vx = 0, vy = 0, vz = 0, wx = 0, wy = 0, wz = 0, cx = bx, cy = by, cz = bz,
   }
@@ -5558,8 +5651,10 @@ function seatsOf()
     local def = c.seatDef(d)
     if def then
       for k, s in ipairs(def.seats) do
+        local x, y, z = d.x + s.x, d.y + s.y, d.z + s.z
+        if R2.chain[u] then x, y, z = posedPoint(u, x, y, z) end   -- (a seat on a joint)
         out[#out + 1] = { uid = u, slot = k, open = def.open == true, command = def.command == true,
-                          taken = c.memberAt(d, k), x = d.x + s.x, y = d.y + s.y, z = d.z + s.z,
+                          taken = c.memberAt(d, k), x = x, y = y, z = z,
                           label = d.label or d.id, hatch = def.hatch ~= nil }
       end
     end
@@ -9741,12 +9836,15 @@ end
 
 -- Where each wheel sits about the centre of mass (a along the front, l to the
 -- left), which wheels steer, and the line the turn pivots on.
+-- (The seated crew count where they sit, CREW_TU: the craft's real centre of
+-- mass, so a bike's ends, its wheelie limit and its springs carry the rider.)
 function r2SteerPlan(wheels, F, bp, gone)
   F = F or { x = 1, z = 0 }
   local m, cx, cz = 0, 0, 0
+  local crew = CREW_TU or {}
   for u, d in pairs(bp or {}) do
     if not (gone and gone[u]) then
-      local dm = math.max(0.001, d.mass or 0.1)
+      local dm = math.max(0.001, d.mass or 0.1) + (crew[u] or 0)
       m, cx, cz = m + dm, cx + d.x * dm, cz + d.z * dm
     end
   end
@@ -9782,7 +9880,7 @@ function r2SteerPlan(wheels, F, bp, gone)
     local my, mm = 0, 0
     for u, d in pairs(bp or {}) do
       if not (gone and gone[u]) then
-        local dm = math.max(0.001, d.mass or 0.1)
+        local dm = math.max(0.001, d.mass or 0.1) + (crew[u] or 0)
         my, mm = my + (d.y or 0) * dm, mm + dm
       end
     end
@@ -10348,6 +10446,74 @@ function roboPoint(u, q)
   return { p[1] + d[1], p[2] + d[2], p[3] + d[3] }
 end
 
+-- WHAT THE CREW AND OTHER CRAFT REACH ON A PART A JOINT HAS MOVED. Docking
+-- ports, hatches, seats, repair spots, a doll's place, an item set down on a
+-- part: all are built from the part's blueprint point and the craft's axes
+-- (partFrameNow, dock_world, pod_world, seatsOf), so on a part beyond a moved
+-- servo, hinge or piston they sat where the part was built, not where
+-- robo_write has it. partPosed(uid): the part's pose in the vessel frame as
+-- the joints have it, → { x, y, z, the posed origin; ax..cz, the craft's X, Y
+-- and Z turned as the joints turned the part (vessel frame) }, or nil for a
+-- part no joint moves, or every joint that moves it at rest (callers then
+-- keep the blueprint pose: no work for a craft without joints). Cached until
+-- a joint moves (R2.roboGen, roboFlight) or the part set changes (R2.gen).
+-- (Globals: the chunk is at its 200 locals.)
+function partPosed(uid)
+  local ch = uid and R2.chain[uid]
+  if not ch or R2.gen ~= integ.gen then return nil end
+  local c = R2.posedC
+  local g = R2.roboGen or 0
+  if not c or c.g ~= g or c.s ~= R2.gen then c = { g = g, s = R2.gen }; R2.posedC = c end
+  local P = c[uid]
+  if P == nil then
+    P = false
+    local moved = false
+    for _, r in ipairs(ch) do if (r.cur or 0) ~= 0 then moved = true break end end
+    local rest = R2.rest[uid]
+    local p, B = nil, nil
+    if moved and rest then p, B = robo_pose(uid) end
+    if p then
+      local X, Y, Z = rest.X, rest.Y, rest.Z
+      -- D e_i = Σ_k B_k (rest_k · e_i): the rest-to-posed turn on each craft axis
+      local function col(i)
+        return B[1][1] * X[i] + B[2][1] * Y[i] + B[3][1] * Z[i],
+               B[1][2] * X[i] + B[2][2] * Y[i] + B[3][2] * Z[i],
+               B[1][3] * X[i] + B[2][3] * Y[i] + B[3][3] * Z[i]
+      end
+      P = { x = p[1], y = p[2], z = p[3], rx = rest.x, ry = rest.y, rz = rest.z }
+      P.ax, P.ay, P.az = col(1)
+      P.bx, P.by, P.bz = col(2)
+      P.cx, P.cy, P.cz = col(3)
+    end
+    c[uid] = P
+  end
+  return P or nil
+end
+-- A vessel-frame point of part `uid` at its blueprint pose → where the joints
+-- have it now (unchanged for a part no moved joint carries). → x, y, z
+function posedPoint(uid, x, y, z)
+  local P = partPosed(uid)
+  if not P then return x, y, z end
+  local qx, qy, qz = x - P.rx, y - P.ry, z - P.rz
+  return P.x + P.ax * qx + P.bx * qy + P.cx * qz,
+         P.y + P.ay * qx + P.by * qy + P.cy * qz,
+         P.z + P.az * qx + P.bz * qy + P.cz * qz
+end
+-- …and a vessel-frame direction on it. → x, y, z
+function posedDir(uid, x, y, z)
+  local P = partPosed(uid)
+  if not P then return x, y, z end
+  return P.ax * x + P.bx * y + P.cx * z, P.ay * x + P.by * y + P.cy * z, P.az * x + P.bz * y + P.cz * z
+end
+-- The crew position's point as published (podLX/Y/Z: command_seat poses the
+-- rider at the seat whose node is there, planet_camera centres on it): where
+-- the joints have the station now. setStation and roboFlight call it.
+function podPublish()
+  local x, y, z = pod.x, pod.y, pod.z
+  if pod.uid and R2.chain[pod.uid] then x, y, z = posedPoint(pod.uid, x, y, z) end
+  podLX, podLY, podLZ = x, y, z
+end
+
 -- THRUST AND AIR WHERE THE JOINTS PUT THEM (robo_write, whenever a joint
 -- moved). The engine list and the aero model are built from the blueprint,
 -- so an engine on a servo hinge pushed along its blueprint axis whatever the
@@ -10372,6 +10538,8 @@ function roboFlight()
     end
   end
   aeroPose()
+  -- (the crew position, where a seat on a joint has gone: partPosed)
+  if pod.uid and R2.chain[pod.uid] then podPublish() end
 end
 -- A PIECE THAT LEAVES FROM A JOINT (a decoupler under a servo, a stage on a
 -- piston; r2SplitCraft and undock). Its records carry their blueprint
@@ -10779,7 +10947,7 @@ local function robo_load(node, info, r)
     local a = B[2]
     for u in pairs(r.set) do
       local d = bp_by_uid[u]
-      if d then total = total + ((d.mass or 0) + tankFuelT(u)) * (g[1] * a[1] + g[2] * a[2] + g[3] * a[3]) end
+      if d then total = total + ((d.mass or 0) + tankFuelT(u) + (CREW_TU[u] or 0)) * (g[1] * a[1] + g[2] * a[2] + g[3] * a[3]) end
     end
     return total * r.sign
   end
@@ -10788,7 +10956,7 @@ local function robo_load(node, info, r)
     local d = bp_by_uid[u]
     local p = d and robo_pose(u)
     if p then
-      local m = (d.mass or 0) + tankFuelT(u)
+      local m = (d.mass or 0) + tankFuelT(u) + (CREW_TU[u] or 0)
       local vx, vy, vz = p[1] - q[1], p[2] - q[2], p[3] - q[3]
       -- (v × m g) · a
       local tx = vy * g[3] - vz * g[2]
@@ -14361,9 +14529,11 @@ function fixedUpdate(node, dt)
           if q.uid == t.port then p = q end
         end
         if p then
-          cur_x = rx.x * p.ax + up.x * p.ay + rz.x * p.az
-          cur_y = rx.y * p.ax + up.y * p.ay + rz.y * p.az
-          cur_z = rx.z * p.ax + up.z * p.ay + rz.z * p.az
+          local ax, ay, az = p.ax, p.ay, p.az
+          if R2.chain[p.uid] then ax, ay, az = posedDir(p.uid, ax, ay, az) end   -- (a port on a joint)
+          cur_x = rx.x * ax + up.x * ay + rz.x * az
+          cur_y = rx.y * ax + up.y * ay + rz.y * az
+          cur_z = rx.z * ax + up.z * ay + rz.z * az
           tx, ty, tz = t.max, t.may, t.maz
         end
       end
@@ -14643,8 +14813,10 @@ function lateUpdate(node, dt)
   -- the ring marks the crew position F will board (the nearest one)
   local q = st or pod
   local rx, up, rz = basis(node)
-  local px = node.x + rx.x * q.x + up.x * q.y + rz.x * q.z
-  local py = node.y + rx.y * q.x + up.y * q.y + rz.y * q.z
-  local pz = node.z + rx.z * q.x + up.z * q.y + rz.z * q.z
+  local qx, qy, qz = q.x, q.y, q.z
+  if q.uid and R2.chain[q.uid] then qx, qy, qz = posedPoint(q.uid, qx, qy, qz) end
+  local px = node.x + rx.x * qx + up.x * qy + rz.x * qz
+  local py = node.y + rx.y * qx + up.y * qy + rz.y * qz
+  local pz = node.z + rx.z * qx + up.z * qy + rz.z * qz
   if not cinematicUp() then draw.ring(px, py, pz, up.x, up.y, up.z, 0.75, 0.3, 0.95, 1.0, 0.9) end
 end

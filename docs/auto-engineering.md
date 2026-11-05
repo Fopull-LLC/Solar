@@ -493,8 +493,21 @@ called whenever a joint moved):
   the SAS lets go of that axis while the stick is held. A joint moved by any
   other key is not the stick: the SAS keeps holding the heading against it.
 
+- **What the crew and other craft reach on a jointed part.** Docking ports,
+  hatches, seats, repair spots, a doll's place and anything kept in a part's
+  frame are built from the blueprint point and the craft's axes. On a part
+  beyond a moved joint they now follow it (`partPosed`, cached until a joint
+  moves; `posedPoint` / `posedDir`): `partFrameNow` gives the posed origin
+  and the craft's axes turned with the part, the port faces (`dock_world`,
+  the guides, the SAS's dock hold, targeting's drawn lines), the crew
+  position (`pod_world`, `podLX`, the boarding ring, `seatsOf`) all read the
+  posed part. A part no joint moves, or every joint at rest, keeps the
+  blueprint pose with no extra work.
+
 Probe: `MODE=sair tools/perf/servoprobe.sh <engine> gimbal tilt plane stage
-stage2 keep` (`servoair_modes.lua`).
+stage2 keep` (`servoair_modes.lua`); `MODE=sjf ... frames`
+(`jointframe_modes.lua`: a seat and a docking port on hinges). Smoke:
+`tests/smoke_joint_frames.lua`.
 
 ## 3f. Part masses (audit 2026-11-04)
 
@@ -515,6 +528,18 @@ Wheel's 26 carries one), the **frame tube** drawn profile (2.4 kg/m, joint
 pack or tank. `spin` on a drive module is its share of the part's mass in
 the spinning tyre body (default TYRE_SHARE 0.6, the Spoked Wheel 0.85), so
 the rotating mass stays a real wheel's: 15.6 kg a Moto Wheel, 11.9 a Spoked.
+
+**The rider weighs on it** (`crewMassScan`): each crew member in a seat adds
+`CREW_T` (100 kg, the suit and its wearer, eva_pack `suit_kg`) to the part
+they sit in, so the craft's mass, centre of mass and inertia carry them while
+they sit and drop them the tick they step off. The mass sits at the seat
+part's origin (the engine has no per-part mass offset). The steering plan's
+centre of mass (`r2SteerPlan`) counts them too, so each end's spring load, a
+bike's wheelie limit and its traction control's lever carry the rider (with
+the physics heavier but the plan still empty, the 500 lifted its front 89 %
+of a full-stick start and flipped on the first hill). Tyres still in wait for
+the re-weigh before they come out; tyres out are hung again on the moved
+centre of mass (`roboComCheck`, card 0636).
 
 The springs are sized from the load (motoSpring, wheelReal), so they follow
 the mass by themselves: parked on .1427, the lighter 500 sits 31 % / 37 % into

@@ -438,8 +438,14 @@ local function port_drawn(v, uid)
   local p = port_rec(v, uid)
   local n = v and v.node
   if not (p and n and n.valid and n.toWorld) then return nil end
-  local o = n:toWorld(vec3(p.x or 0, p.y or 0, p.z or 0))
-  local a = n:toWorld(vec3((p.x or 0) + (p.ax or 0), (p.y or 0) + (p.ay or 1), (p.z or 0) + (p.az or 0)))
+  local x, y, z, ax, ay, az = p.x or 0, p.y or 0, p.z or 0, p.ax or 0, p.ay or 1, p.az or 0
+  -- (a port on a joint: where the joint has it, vessel_controller partPosed)
+  if v.posedPoint and v.posedDir then
+    x, y, z = v.posedPoint(uid, x, y, z)
+    ax, ay, az = v.posedDir(uid, ax, ay, az)
+  end
+  local o = n:toWorld(vec3(x, y, z))
+  local a = n:toWorld(vec3(x + ax, y + ay, z + az))
   return o.x, o.y, o.z, a.x - o.x, a.y - o.y, a.z - o.z
 end
 -- The target's drawn point: a world as this pass's space.body() has it, a
@@ -453,7 +459,9 @@ local function drawn_point(T)
   if t.kind == "part" then
     local d = v.partRec and v.partRec(t.uid)
     if d and v.node.toWorld then
-      local o = v.node:toWorld(vec3(d.x or 0, d.y or 0, d.z or 0))
+      local x, y, z = d.x or 0, d.y or 0, d.z or 0
+      if v.posedPoint then x, y, z = v.posedPoint(t.uid, x, y, z) end   -- (a part on a joint)
+      local o = v.node:toWorld(vec3(x, y, z))
       return o.x, o.y, o.z
     end
   end

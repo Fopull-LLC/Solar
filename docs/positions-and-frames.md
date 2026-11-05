@@ -45,6 +45,10 @@ breaking one of the rules below.
        (tool_belt.lua, for caches), comms.lua's pinned nodes and `place()`.
    - **Part-relative** (a point on a craft that turns): store it in the part's
      frame, and place it with `partFrameNow(uid)` (vessel_controller.lua).
+     On a part a servo, hinge or piston has moved, that frame is the posed
+     part's (its axes turned with it), so the point rides the joint. A
+     vessel-frame point read off the blueprint (`d.x`, a port record) goes
+     through `posedPoint` / `posedDir` first.
 
 2. **Mix only positions from the same read and the same pose.** When you
    compute a direction from A to B, take both A and B from the same moment:
