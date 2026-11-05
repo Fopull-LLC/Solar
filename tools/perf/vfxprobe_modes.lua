@@ -79,9 +79,12 @@ function lateUpdate(node, dt)
   fc.body = name
   fc.rel = pos
   local d = vec3(tgt.x - eye.x, tgt.y - eye.y, tgt.z - eye.z)
-  local h = d:flatten(u)
+  -- (not d:flatten(u): that is renormalised, and its length of 1 tipped
+  -- every camera steeply down)
+  local du = d:dot(u)
+  local h = d - u * du
   fc.ref = h:normalized()
-  fc.pitch = math.atan2(d:dot(u), h:length())
+  fc.pitch = math.atan2(du, h:length())
 end
 function VP.cam_off()
   VP.cam = nil

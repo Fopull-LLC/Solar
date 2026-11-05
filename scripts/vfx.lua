@@ -28,6 +28,17 @@
 --     the same mistake the other way.)
 --   * `opts.normal` is the effect's +Y: a cone fires off the surface, a ring
 --     lies on it, and Field gravity still points at the planet.
+--   * `opts.vel` also MOVES THE EMIT POINT, for the effect's whole life and
+--     undamped, and a Local track's particles ride the emit point: a fireball
+--     or a puff fired with a craft's velocity slides on in a straight line at
+--     that speed until it dies, whatever its drag or the wind (engine card
+--     "a detached effect's inherited motion ignores drag and wind"). In vacuum
+--     that is the physics; in air it is a puff sailing off ahead of a craft
+--     that brakes or turns. So an effect with long-lived Local tracks gets
+--     only `carried()` of the velocity: all of it in vacuum, none in air.
+--     World tracks are not affected (they inherit at birth and their Wind
+--     force brings them to the air's speed). WORKAROUND: when the engine
+--     card lands, pass the plain velocity again (search "carried(").
 --
 -- What is still a node: the engine plumes (on the engine parts), the laser's
 -- beam and impact, the launch blast (one looping node per planet, parented to
@@ -121,6 +132,17 @@ end
 local function rel(b, vx, vy, vz)
   if not vx then return nil end
   return vec3(vx, vy, vz)
+end
+
+-- The share of a velocity to hand an effect whose LOCAL tracks would ride
+-- it (see THE FRAME): 1 in vacuum, 0 once there is air enough to stop a puff
+-- (air 0.15 of sea level and up). WORKAROUND for the engine's undamped
+-- inherited motion; remove with it.
+local function carried(v, air)
+  if not v then return nil end
+  local s = math.max(0, 1 - (air or 0) / 0.15)
+  if s <= 0.001 then return nil end
+  return vec3(v.x * s, v.y * s, v.z * s)
 end
 
 -- Dust takes the colour of the ground it comes off: the generator's surface
@@ -347,14 +369,15 @@ end
 function explode(x, y, z, vx, vy, vz, big)
   local name, b, ux, uy, uz, air = frame(x, y, z)
   -- In air the fire and smoke stop with the air; in vacuum they keep the
-  -- wreck's momentum, because there is nothing to stop them.
-  local k = 0.25 + 0.75 * (1 - math.min(1, air * 2))
+  -- wreck's momentum, because there is nothing to stop them. (The fireball
+  -- and smoke are Local tracks: carried() — a quarter of the wreck's speed
+  -- in air slid them along the ground for their whole six seconds.)
   local v = rel(b, vx, vy, vz)
   -- Born a little off the ground so the fireball is not half buried.
   local sd = terrain and terrain.query and terrain.query(x, y, z)
   local lift = (sd and sd < 1.5) and (1.5 - sd) or 0
   fire(big and "Explosion" or "ExplosionSmall", x + ux * lift, y + uy * lift, z + uz * lift,
-    { vel = v and vec3(v.x * k, v.y * k, v.z * k) })
+    { vel = carried(v, air) })
   flash(x + ux * 2, y + uy * 2, z + uz * 2, 1.0, 0.62, 0.3, big and 40 or 16, big and 45 or 22, big and 1.4 or 0.8)
   -- the part itself coming apart: shards of plate and skin (the explosion's
   -- own debris is rock, thrown out of the ground)
@@ -369,17 +392,18 @@ end
 -- A decoupler, a dock latch, a joint snapping.
 function separate(x, y, z, vx, vy, vz)
   local _, b, _, _, _, air = frame(x, y, z)
-  -- In air the gas puff is caught by it; in vacuum it keeps the craft's motion.
-  local k = 1 - math.min(1, air * 2) * 0.6
+  -- In air the gas puff is caught by it; in vacuum it keeps the craft's
+  -- motion (the gas is a Local track: carried()).
   local v = rel(b, vx, vy, vz)
-  fire("SepPuff", x, y, z, { vel = v and vec3(v.x * k, v.y * k, v.z * k) })
+  fire("SepPuff", x, y, z, { vel = carried(v, air) })
   flash(x, y, z, 1.0, 0.85, 0.6, 5, 9, 0.25)
 end
 
--- The chute mortar firing (rides the craft's motion).
+-- The chute mortar firing: the puff is left in the air the craft falls
+-- through (its tracks are Local: carried(), so in air it stays put).
 function chute(x, y, z, vx, vy, vz)
-  local _, b = body_at(x, y, z)
-  fire("ChutePuff", x, y, z, { vel = rel(b, vx, vy, vz) })
+  local name, b = body_at(x, y, z)
+  fire("ChutePuff", x, y, z, { vel = carried(rel(b, vx, vy, vz), air_at(x, y, z, name, b)) })
 end
 
 -- A hull grinding on the ground: sparks carry the hull's motion, dust stays.

@@ -349,6 +349,28 @@ rover worn to 15–30 % (shorting sparks, smoke). Each phase is a perfbench scen
 are vehicle_fx.stats() with the engine's counts, `VFX WHEELS` each tyre's slip and
 surface. Pictures (1280×720): `$WORK/proj/save/user/vfxshots/`.
 
+## fxdrift.sh + fxdrift_modes.lua — do effects stay with the moving ground?
+
+    WORK=$SCRATCH/fxdrift LOCK=$SCRATCH/engine.lock tools/perf/fxdrift.sh <engine> [fxjet fxrocket fxgame fxpuff]
+
+The home world moves ~240 m/s on its rails; an effect that does not ride it
+streaks off along the orbit. Cameras are fixed to the ground (planet-relative,
+placed from drawn poses), so anything that moves in a picture moved over the
+ground. `fxgame`: the A/B emitter test — slow World puffs from an FxJet copy
+under the craft's root (A, red ball) and one under the planet's node (B, green
+ball), at 1x and under time warp (`fdwarp`, default 20: the rails run 20x, so a
+frame an effect did not ride would be 80 m), a yellow line along the way a
+particle left in the star's frame would go; then the jet spooling up seen from
+the game's own camera. `fxjet`: A/B soot columns with the jet parked, the roll
+past a camera 60 m ahead, flight from a chase and a fixed camera (A's soot
+trails behind). `fxrocket`: the same on the pad, lift-off and the climb.
+`fxpuff`: one-shots fired with a velocity through the game's paths
+(vfx.explode/separate, the tailpipe puff as vessel_controller fires it) next to
+the same with none, and a bike's exhaust: a point moving at `fdv` m/s (15)
+firing tailpipe puffs, stopping dead after 1.2 s. Engines do not run on the
+clamps (`jets 0`, the flame not playing), so the parked cases use the A/B
+copies. Pictures: `$WORK/proj/save/user/vfxshots/fd*`.
+
 ## rain.sh + rainprobe.lua — the weather's haze, rain on the ground, the depth of field
 
     WORK=$SCRATCH/rainfx LOCK=/mnt/disks/3tb/.floptle-shared/engine.lock tools/perf/rain.sh <engine> [TAG]
