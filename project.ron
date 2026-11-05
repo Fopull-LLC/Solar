@@ -6,8 +6,7 @@
     matter: true,
     title: Some("Floptle Solar"),
     entry_scene: Some("scenes/menu.ron"),
-    engine_version: Some("0.117.1-dev.1429.ecf6f08"),
-    glass_refraction: Some(Auto),
+    engine_version: Some("0.117.1-dev.1430.eeb0196"),
     data_id: Some("solar"),
     layers: [
         "entity",
@@ -20,6 +19,7 @@
     terrain_generator: Some(3),
     script_vec3: Some(Exact),
     model_texture_filter: Some(Smooth),
+    glass_refraction: Some(Auto),
     imported_materials: Some(Classic),
     antialias: Some(Fxaa),
     wheel_friction: Some(Single),
