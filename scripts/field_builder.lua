@@ -1,5 +1,5 @@
--- FIELD BUILDER — the Engineer's build mode on foot (deep-space addendum K1–K4,
--- K8, K13, N1; docs/base-building.md). The VAB, but you stand in the world and
+-- FIELD BUILDER — the Engineer's build mode on foot (deep-space addendum K1–K10,
+-- K13, N1; docs/base-building.md). The VAB, but you stand in the world and
 -- the craft is the ground: the same parts column, a ghost on the ground under
 -- the cursor, a click to buy, truck out and set the part down.
 --
@@ -8,45 +8,60 @@
 --               number key or B; the cursor is free while it is up (the
 --               camera leaves first person and shift-lock; RMB held still
 --               looks round, WASD still walks). B again folds the parts column
---               to a tab and back; Esc drops the part in hand, then closes the
---               kit; H or another number key puts it away like any item.
+--               to a 36 px tab and back; Esc drops the part in hand, then
+--               closes the kit; H or another number key puts it away.
 --               Non-Engineers have no kit: B says so.
 --   THE PANEL   catalog_panel.lua re-hosted (a FieldCatalogue node spawned
 --               under the HUD while the kit is up, destroyed when it closes):
---               this script is its host (the dozen methods below). Search,
---               ALL · ★ · RECENT · BASE, the cards, the spinning preview.
---               The SUB-ASSY tab is hidden, and each card's lines read
---               "$1,040" / "$900 + $140 shipping · Pell Groundworks".
+--               this script is its host (the dozen methods below).
 --   THE GHOST   the part's own prefab, spawned once per pick without its
 --               bodies (spawn opts body = false: no collider, no physics),
 --               parented to the planet, and made a hologram by ghost.apply
 --               (green: it can go there; red: it can't, with the reason on the
---               hint line). Moved every frame by its local position, retinted
---               only when its state changes: no mesh is rebuilt per frame.
+--               hint line). A footing under it shows as a second hologram.
 --   THE AIM     a ray through the cursor (camera.screenToRay) in lateUpdate,
 --               after the camera has placed itself for the frame, against
 --               terrain and colliders, at most 24 m from the Engineer. The hit
---               is kept in its planet's frame at once; the ghost is drawn
---               from it against the same frame's read.
---   PLACE       LMB: valid → charged (N1: price + 10 % + $50 shipping, at
---               placement), a STRUCTURE record written (structures.lua: body
---               frame, a blueprint part list), the part spawned, the member
+--               is kept in its planet's frame at once.
+--   SNAPPING    (K5, base_snap.lua) a plate beside a plate takes the free edge
+--               slot nearest the cursor; a shed or hab aimed at a plate stands
+--               on its deck, square to it; anything else on the ground is a
+--               new structure on a 0.5 m grid square to the nearest structure
+--               (or the spaceport's layout). Shift frees grid and steps.
+--   ROTATE      (K6) scroll turns the part in hand 15° (Shift: 5°), R a
+--               quarter turn, PgUp / PgDn raise it on a taller footing (0–2 m),
+--               Backspace resets both. (Base parts stand upright: pitch and
+--               roll keys come with parts that can lie down.)
+--   THE GROUND  (K7) the terrain under a ground part is sampled; up to the
+--               part's `grade` it is levelled to the part's base and a cast
+--               footing fills where it falls away; past that it is refused.
+--   PLACE       LMB: valid → charged (N1: price + 10 % + $50 shipping, and
+--               the footing's concrete, at placement), a STRUCTURE part
+--               written (structures.lua), the ground levelled, the member
 --               credited one "built". Shift+LMB keeps a copy in hand. RMB
---               tapped drops the ghost. Ctrl+Z within 60 s takes the last
---               placement back for a full refund (base_economy.UNDO_SECS).
+--               tapped drops the ghost.
+--   UNDO        (K9) Ctrl+Z / Ctrl+Shift+Z (or Ctrl+Y) walk a builder_history
+--               ring of placements and removals; a step older than 60 s is
+--               refused ("deconstruct it instead"). An undone placement is a
+--               full refund; an undone removal puts the parts back and takes
+--               the refund back.
+--   DECONSTRUCT (K10) RMB on a placed part (the context menu) → Deconstruct,
+--               3 s, Engineers only. What stands on its deck comes down with
+--               it. Refund: base_economy.deconstructRefund (within 60 s all of
+--               it, later the price: the fee and footing are kept).
 --
 -- Gated: the active member is an Engineer (crew.hasRole), on foot, on a world
 -- (EVA building is K11), with no other panel up. Off the home world nothing is
 -- placed yet (materials and the Fabricator are step 13): the card says why.
 --
--- STEP 5's HOOKS: `validity(req)` is the one place a placement is judged (K7
--- adds foundations, keep-outs, crew in the footprint); `pose(hit)` the one
--- place a ground hit becomes a pose (K5 snapping, K6 rotation: `yawOffset`);
--- `place(sid, partId, pose, payer)` the pure-shaped placement (K12); UNDO is
--- a list of { sid, t } (K9's ring replaces it).
+-- THE HOOKS: `pose(hit)` is the one place a hit becomes a pose (snapping);
+-- `validity(id, pose)` the one place a placement is judged; `place(sid,
+-- partId, pose, payer)` the placement (K12's shape: sid = the structure it
+-- joins or nil); `deconstruct(sid, uid)` the removal.
 --
 -- Probes: isOpen(), open(), close(), pick(id), req, lastPlace, lastUndo,
--- placeAt(x, y, z) (a world point, this frame), undo(), sim = { lmb, shift }.
+-- lastDecon, placeAt(x, y, z), undo(), redo(), deconstruct(sid, uid),
+-- history(), sim = { lmb, shift, mouse = {x, y} }, yawOffset, raise.
 
 defaults = {
   --@range 4 60 --@units m
@@ -60,14 +75,19 @@ open_ = false
 collapsed = false
 heldPart = nil        -- the part id in hand (nil = none)
 req = nil             -- this frame's placement request (see `validity`)
-lastPlace = nil       -- { sid, id, total, t }
+lastPlace = nil       -- { sid, uid, id, total, t }
 lastUndo = nil        -- { sid, refund, t }
+lastDecon = nil       -- { sid, uids, refund, t }
 gate = "starting up"
 escTakenAt = -1
 sim = nil             -- probes: { lmb = bool, shift = bool, mouse = {x, y} }
+wantsScroll = false   -- planet_camera: the wheel turns the part, not the view
+yawOffset = 0.0       -- the turn dialled (rad)
+raise = 0.0           -- the stilts dialled (m)
 
 local KIT = "buildkit"
 local GREEN, RED = { 0.30, 0.95, 0.65 }, { 1.0, 0.28, 0.20 }
+local UNDO_RING = 50
 
 local refs = {}
 local function ref(kind)
@@ -100,6 +120,7 @@ local function agency_now()
   return tonumber(save.get("agency.clock")) or 0
 end
 local function home_body() return save.get("base.body") end
+local function money(v) local E = ref("base_economy"); return E and E.money(v) or ("$" .. tostring(v)) end
 
 -- ── who may build ───────────────────────────────────────────────────────────
 local function member() local c = ref("crew"); return c and c.activeId and c.activeId() or nil end
@@ -109,7 +130,6 @@ function isEngineer(id)
   local ok, yes = pcall(c.hasRole, id or member(), "engineer")
   return ok and yes == true
 end
-local function pack() local c = ref("crew"); local id = member(); return (c and c.packOf and id) and c.packOf(id) or "astro" end
 local function has_kit() local V = ref("inventory"); return V and V.itemCount and V.itemCount("astro", KIT) > 0 end
 
 -- THE ISSUE: every Engineer gets one Build Kit, once (a kit left in a locker
@@ -170,23 +190,24 @@ function hint(text, secs) if text then say(text) end end
 local panel = nil
 function registerPanel(s) panel = s return true end
 function previewPrefab(id) local d = partInfo(id); return d and d.prefab or nil end
--- (the preview stand rides with the crew, INSIDE the planet under them: the
--- catalogue's stand sits 2.4 km up its frame, so the frame is put 2.4 km plus
--- half the world's radius down. The studio cameras draw no terrain; the main
--- camera can't see through the ground. The VAB's layer, viewmodel. The live
--- plate works; the 64 px card icons come out as bare sky in the world on
--- either layer — open, see docs/base-building.md §2.)
-function previewLayer() return "viewmodel", 3 end
+function isCollapsed() return collapsed end
+function unfold() collapsed = false end
+-- THE PREVIEW STAND rides with the crew, 2.4 km up its frame, on the
+-- `offstage` layer the main camera never draws (planet_camera.cullBase), as
+-- lab_talk's stand does. (Step 4 hid it INSIDE the planet on `viewmodel`;
+-- the live plate drew it, but camera.captureTexture renders through a camera
+-- with every draw on — terrain, fog, sky — whatever its setCamera{terrain =
+-- false, fog = false} says, so down there the 64 px card icons came out as
+-- bare fog-coloured sky. Up here those draws find nothing to hide the part
+-- behind. NOTES: the engine card proposal.)
+function previewLayer() return "offstage", 5 end
 local pv_frame, pv_making = nil, false
 function frameNodeOrNil()
   if pv_frame and pv_frame.valid ~= false then return pv_frame end
   local a = astro()
   if a and createNode and not pv_making then
     pv_making = true
-    local bn = space.dominant(a.x, a.y, a.z)
-    local bb = bn and space.body(bn)
-    local down = 2400 + ((bb and bb.radius) or 600) * 0.5
-    createNode("FieldPreviewFrame", a, function(n) pv_making = false; pv_frame = n; n.x, n.y, n.z = 0, -down, 0 end)
+    createNode("FieldPreviewFrame", a, function(n) pv_making = false; pv_frame = n; n.x, n.y, n.z = 0, 0, 0 end)
   end
   return nil
 end
@@ -196,13 +217,13 @@ local function section_of(id)
   for _, s in ipairs(catalogue()) do for _, x in ipairs(s.ids) do if x == id then return s.title end end end
   return nil
 end
-local function quote_of(id)
+local function quote_of(id, footVol)
   local E = ref("base_economy")
   local def = partInfo(id)
   if not (E and def) then return nil end
   local a = astro()
   local body = a and space.dominant(a.x, a.y, a.z) or home_body()
-  return E.quote(def, section_of(id), body, home_body())
+  return E.quote(def, section_of(id), body, home_body(), footVol)
 end
 function cardLines(id, def, locked)
   local E = ref("base_economy")
@@ -227,11 +248,7 @@ local cat = { node = nil, making = false }
 local function hud() return find and find("Ship HUD") or nil end
 local function cat_show(on)
   if on then
-    if cat.node and cat.node.valid ~= false then
-      local el = cat.node:getcomponent("UiElement")
-      if el and el.visible ~= (not collapsed) then el.visible = not collapsed end
-      return
-    end
+    if cat.node and cat.node.valid ~= false then return end
     if cat.making then return end
     local h = hud()
     if not (h and spawn) then return end
@@ -250,7 +267,6 @@ local function cat_show(on)
   end
 end
 local function over_panel()
-  if collapsed then return false end
   local cp = panel
   if cp and cp.ownsMouse then local ok, r = pcall(cp.ownsMouse); return ok and r == true end
   return false
@@ -265,35 +281,7 @@ local function mouse_xy()
   if sim and sim.mouse then return sim.mouse[1], sim.mouse[2] end
   return input.mouse()
 end
--- A ground hit → the pose a ground part takes there: on the ground point, up
--- = the radial up, its front (+Z) turned toward the Engineer. (Step 5: grid
--- snap, yaw steps, snapping to a structure's nodes.) → pose | nil, why
-yawOffset = 0.0
-function pose(hit)
-  local bname = space.dominant(hit.x, hit.y, hit.z)
-  local b = bname and space.body(bname)
-  if not b then return nil, "not on a world" end
-  local x, y, z = hit.x - b.x, hit.y - b.y, hit.z - b.z
-  local ux, uy, uz = norm(x, y, z)
-  local a = astro()
-  local fx, fy, fz = 0, 0, 1
-  if a then fx, fy, fz = a.x - hit.x, a.y - hit.y, a.z - hit.z end
-  local d = fx * ux + fy * uy + fz * uz
-  fx, fy, fz = fx - ux * d, fy - uy * d, fz - uz * d
-  local _, _, _, l = norm(fx, fy, fz)
-  if l < 1e-3 then fx, fy, fz = 1 - ux * ux, -ux * uy, -ux * uz end
-  fx, fy, fz = norm(fx, fy, fz)
-  if yawOffset ~= 0 then
-    local rx, ry, rz = uy * fz - uz * fy, uz * fx - ux * fz, ux * fy - uy * fx
-    local c, s = math.cos(yawOffset), math.sin(yawOffset)
-    fx, fy, fz = fx * c + rx * s, fy * c + ry * s, fz * c + rz * s
-  end
-  -- (wx, wy, wz: the hit as the ray found it, for this frame's physics
-  -- queries only: never kept past the frame)
-  return { body = bname, x = x, y = y, z = z, wx = hit.x, wy = hit.y, wz = hit.z,
-           up = { x = ux, y = uy, z = uz }, fwd = { x = fx, y = fy, z = fz },
-           nx = hit.nx or ux, ny = hit.ny or uy, nz = hit.nz or uz, node = hit.node }
-end
+local function shift_held() return (sim and sim.shift) or (input and input.key and input.key("shift")) or false end
 
 local function is_ground(n, bname)
   if not n then return true end
@@ -302,65 +290,208 @@ local function is_ground(n, bname)
   return ok and t ~= nil and t ~= false
 end
 
--- THE ONE PLACE a placement is judged. → req (with .bad = the reason, or nil)
+-- The spaceport's layout as a frame (the ground grid with no structure near).
+local layout_ref = { F = nil, fr = nil }
+local function layout_frame(bname)
+  local bf, SN = ref("base_facilities"), ref("base_snap")
+  local F = bf and bf.F
+  if not (F and SN and bf.baseBody == bname) then return nil end
+  if layout_ref.F ~= F then
+    layout_ref.F = F
+    layout_ref.fr = SN.frameOf({ x = F.c.x * F.R, y = F.c.y * F.R, z = F.c.z * F.R, ux = F.c.x, uy = F.c.y, uz = F.c.z,
+                                 fx = F.ev.x, fy = F.ev.y, fz = F.ev.z })
+  end
+  return layout_ref.fr
+end
+
+-- The parts round a point (structures' cell index), kept while the cursor
+-- stays within 0.5 m and nothing was built or taken down.
+local near_memo = { key = nil, list = nil }
+local function near_parts(ST, bname, x, y, z, rad)
+  local key = string.format("%s|%d|%d|%d|%d", bname, math.floor(x * 2), math.floor(y * 2), math.floor(z * 2), ST.version or 0)
+  if near_memo.key ~= key then near_memo.key, near_memo.list = key, ST.partsNear(bname, x, y, z, rad) end
+  return near_memo.list
+end
+
+-- A hit → the pose the held part takes there (K5 snapping, K6 turns).
+-- → pose { body, x, y, z (its ground point, body frame), up, fwd, mode,
+--          sid (the structure it joins) | nil, lx, ly, lz, yaw (in it),
+--          anchor, hitRec, hitPart, nx, ny, nz, node, wx, wy, wz } | nil, why
+function pose(hit, id)
+  id = id or heldPart
+  local bname = space.dominant(hit.x, hit.y, hit.z)
+  local b = bname and space.body(bname)
+  if not b then return nil, "not on a world" end
+  local x, y, z = hit.x - b.x, hit.y - b.y, hit.z - b.z
+  local ux, uy, uz = norm(x, y, z)
+  local a = astro()
+  local tx, ty, tz = 0, 0, 1
+  if a then tx, ty, tz = a.x - hit.x, a.y - hit.y, a.z - hit.z end
+  local def = id and partInfo(id)
+  local ST, SN = ref("structures"), ref("base_snap")
+  local hrec, hpart = nil, nil
+  if hit.node and ST and ST.partOfNode then hrec, hpart = ST.partOfNode(hit.node) end
+  local p
+  if def and SN and ST then
+    local s = SN.snap({ def = def, P = { x = x, y = y, z = z }, U = { x = ux, y = uy, z = uz }, toward = { x = tx, y = ty, z = tz },
+      hit = hrec and { rec = hrec, part = hpart } or nil, near = near_parts(ST, bname, x, y, z, SN.NEAR_R),
+      defs = partInfo, free = shift_held(), yawOff = yawOffset, ref = layout_frame(bname) })
+    p = { body = bname, x = s.x, y = s.y, z = s.z, up = s.up, fwd = s.fwd, mode = s.mode, sid = s.rec and s.rec.id or nil,
+          lx = s.lx, ly = s.ly, lz = s.lz, yaw = s.yaw, anchor = s.anchor }
+  else
+    -- (no rulebook: step 4's pose, the front toward the Engineer)
+    local d = tx * ux + ty * uy + tz * uz
+    local fx, fy, fz = norm(tx - ux * d, ty - uy * d, tz - uz * d)
+    p = { body = bname, x = x, y = y, z = z, up = { x = ux, y = uy, z = uz }, fwd = { x = fx, y = fy, z = fz }, mode = "free" }
+  end
+  p.hitRec, p.hitPart = hrec, hpart
+  p.nx, p.ny, p.nz, p.node = hit.nx or ux, hit.ny or uy, hit.nz or uz, hit.node
+  -- (wx, wy, wz: the pose's ground point in this frame's world, for this
+  -- frame's physics queries only: never kept past the frame)
+  p.wx, p.wy, p.wz = b.x + p.x, b.y + p.y, b.z + p.z
+  return p
+end
+
+-- The part's own axes at a pose: right, up, front (body-frame vectors).
+local function axes(p)
+  local U, F = p.up, p.fwd
+  return { x = U.y * F.z - U.z * F.y, y = U.z * F.x - U.x * F.z, z = U.x * F.y - U.y * F.x }, U, F
+end
+
+-- The ground under a ground part's footprint: heights (m along up from the
+-- pose's ground point, + above) at base_snap.footPoints, by terrain rays.
+local function sample_ground(def, p)
+  local SN = ref("base_snap")
+  local b = space.body(p.body)
+  if not (SN and b) then return nil end
+  local R, U, F = axes(p)
+  local cast = (terrain and terrain.raycast) and function(ox, oy, oz, dx, dy, dz, d)
+    local h = terrain.raycast(vec3(ox, oy, oz), vec3(dx, dy, dz), d)
+    return h and h.distance
+  end or function(ox, oy, oz, dx, dy, dz, d)
+    local ok, h = pcall(raycast, ox, oy, oz, dx, dy, dz, d, { ignore = astro() })
+    return ok and h and len(h.x - ox, h.y - oy, h.z - oz) or nil
+  end
+  local top = (def.grade or 2) + 2.5
+  local out = {}
+  for i, q in ipairs(SN.footPoints(def, 0, 0, 0, 0.10)) do
+    local ox = b.x + p.x + R.x * q.x + F.x * q.z + U.x * top
+    local oy = b.y + p.y + R.y * q.x + F.y * q.z + U.y * top
+    local oz = b.z + p.z + R.z * q.x + F.z * q.z + U.z * top
+    local d = cast(ox, oy, oz, -U.x, -U.y, -U.z, 2 * top + 1)
+    out[i] = d and (top - d) or false
+  end
+  return out
+end
+
+-- THE ONE PLACE a placement is judged. → req { id, def, pose, quote, plan
+-- (the ground: base_snap.foundation), base (m the part sits over the pose's
+-- ground point), bad = the reason or nil }
 local ov = { key = nil, hit = nil, t = -10 }
 local vmemo = { key = nil, t = -10 }   -- the last judged pose (lateUpdate)
 function validity(id, p)
   local def = partInfo(id)
-  local r = { id = id, def = def, pose = p }
+  local r = { id = id, def = def, pose = p, base = 0 }
   if not def then r.bad = "no such part" return r end
-  local q = quote_of(id)
-  r.quote = q
+  local SN = ref("base_snap")
+  local q0 = quote_of(id)
+  r.quote = q0
   local up = p.up
-  if q and q.mode == "away" then r.bad = q.why return r end
-  local slope = p.nx * up.x + p.ny * up.y + p.nz * up.z
-  if slope < (def.slope or 0.8) then r.bad = string.format("too steep for a %s (%.0f°)", def.label, math.deg(math.acos(math.max(-1, math.min(1, slope))))) return r end
-  -- the ray stopped on something that isn't ground (a placed part, a crate,
-  -- a facility): standing a part on another is snapping's (step 5, K5a)
-  if p.node and not is_ground(p.node, p.body) then
+  if q0 and q0.mode == "away" then r.bad = q0.why return r end
+  -- reach: the snapped spot, not only the cursor's
+  local a = astro()
+  local reach = params.reach or 24
+  if a and p.wx and len(p.wx - a.x, p.wy - a.y, p.wz - a.z) > reach + 2 then
+    r.bad = string.format("out of reach (%.0f m)", reach) return r
+  end
+  -- the ray stopped on something: a placed part is snapping's, anything else
+  -- (a crate, a facility) is in the way
+  local mode = p.mode or "free"
+  if p.hitRec and mode ~= "edge" and mode ~= "deck" then
+    local hd = partInfo(p.hitPart.id) or {}
+    if def.tile and hd.tile == def.tile then r.bad = "no free edge on that " .. tostring(hd.label) .. " there"
+    elseif def.onDeck and not hd.deck then r.bad = "the " .. tostring(hd.label) .. " has no deck to stand on"
+    else r.bad = string.format("on the %s: a %s goes on the ground%s", tostring(hd.label), def.label,
+      def.tile and " or beside another" or "") end
+    return r
+  end
+  if not p.hitRec and p.node and not is_ground(p.node, p.body) then
     local n = p.node
     local nm = tostring(n.name or "something")
     if nm:match("^Wall %d+$") or nm:match("^Shell") then
       local okp, par = pcall(function() return n.parent end)
       if okp and par and par.name then nm = tostring(par.name) end
     end
-    r.bad = "on the " .. nm .. ": building on top of a part comes with snapping"
+    r.bad = "on the " .. nm
     return r
   end
-  local wx, wy, wz = p.wx, p.wy, p.wz
+  if mode ~= "deck" then
+    local slope = p.nx * up.x + p.ny * up.y + p.nz * up.z
+    if mode ~= "edge" and slope < (def.slope or 0.6) then
+      r.bad = string.format("too steep for a %s (%.0f°)", def.label, math.deg(math.acos(math.max(-1, math.min(1, slope))))) return r
+    end
+  end
+  -- THE GROUND (K7): standing on a deck, or levelled with a footing
+  if mode == "deck" then
+    local ST = ref("structures")
+    local rec = ST and ST.get(p.sid)
+    if not (SN and rec) then r.bad = "that structure is gone" return r end
+    local ok, n = SN.supported(rec, partInfo, def, p.lx, p.ly, p.lz, p.yaw)
+    if ok < n then
+      r.bad = string.format("hangs off the deck (%d of %d points unsupported): set a plate beside it", n - ok, n)
+      return r
+    end
+  elseif SN then
+    local hs = sample_ground(def, p)
+    local plan = hs and SN.foundation(def, hs, mode == "edge" and 0 or nil, mode ~= "edge" and raise or 0)
+    if not plan then r.bad = "can't read the ground here" return r end
+    r.plan = plan
+    if not plan.ok then r.bad = plan.why return r end
+    r.base = plan.base
+    if plan.vol and plan.vol > 0 then r.quote = quote_of(id, plan.vol) end
+  end
+  local bx, by, bz = p.wx + up.x * r.base, p.wy + up.y * r.base, p.wz + up.z * r.base
   local cl = ref("climate")
-  local dep = cl and cl.seaDepth and cl.seaDepth(wx, wy, wz)
+  local dep = cl and cl.seaDepth and cl.seaDepth(bx, by, bz)
   if dep and dep > 0.05 then r.bad = "under water" return r end
   local bf = ref("base_facilities")
-  if bf and bf.keepClear then
-    local ok, kc = pcall(bf.keepClear, p.body, p.x, p.y, p.z)
-    if ok and kc then r.bad = "inside the spaceport: build out past its paving" return r end
+  if bf and bf.keepClear and SN then
+    local R, _, F = axes(p)
+    for _, c in ipairs({ { 0, 0 }, { 1, 1 }, { 1, -1 }, { -1, 1 }, { -1, -1 } }) do
+      local kx, kz = c[1] * def.half.x, c[2] * def.half.z
+      local ok, kc = pcall(bf.keepClear, p.body, p.x + R.x * kx + F.x * kz, p.y + R.y * kx + F.y * kz, p.z + R.z * kx + F.z * kz)
+      if ok and kc then r.bad = "on the spaceport's ground: build out past its paving" return r end
+    end
   end
   -- something in the way (placement.overlapObb; cached while the ghost holds still)
   local pl = ref("placement")
   if pl and pl.overlapObb and def.half then
-    local key = string.format("%s|%.1f|%.1f|%.1f|%.2f|%.2f", id, p.x, p.y, p.z, p.fwd.x, p.fwd.z)
+    local key = string.format("%s|%.1f|%.1f|%.1f|%.2f|%.2f|%.2f", id, p.x, p.y, p.z, p.fwd.x, p.fwd.z, r.base)
     if key ~= ov.key or now() - ov.t > 0.5 then
       local h = def.half
       local lift = 0.25
-      local cx, cy, cz = wx + up.x * (h.y + lift), wy + up.y * (h.y + lift), wz + up.z * (h.y + lift)
-      local rx, ry, rz = up.y * p.fwd.z - up.z * p.fwd.y, up.z * p.fwd.x - up.x * p.fwd.z, up.x * p.fwd.y - up.y * p.fwd.x
+      local cx, cy, cz = bx + up.x * (h.y + lift), by + up.y * (h.y + lift), bz + up.z * (h.y + lift)
+      local R = axes(p)
       local shrink = { x = math.max(0.1, h.x - 0.05), y = math.max(0.1, h.y), z = math.max(0.1, h.z - 0.05) }
-      local hit = pl.overlapObb({ x = cx, y = cy, z = cz }, shrink, { r = { x = rx, y = ry, z = rz }, u = up, f = p.fwd },
+      local hit = pl.overlapObb({ x = cx, y = cy, z = cz }, shrink, { r = R, u = up, f = p.fwd },
         { skip = function(n) return is_ground(n, p.body) or (ghost_node and n == ghost_node) end })
       ov.key, ov.hit, ov.t = key, hit, now()
     end
     if ov.hit then
       local n = ov.hit.node
-      local a = astro()
+      local ST = ref("structures")
+      local orec, opart = nil, nil
+      if n and ST and ST.partOfNode then orec, opart = ST.partOfNode(n) end
       r.bad = (a and n and n.id == a.id) and "you're standing where it goes"
+        or (opart and ("the " .. tostring((partInfo(opart.id) or {}).label) .. " is in the way"))
+        or (n and n.name == "CrewBody" and "someone is standing where it goes")
         or ("something's in the way" .. (n and n.name and (": " .. tostring(n.name)) or ""))
       return r
     end
   end
   local co = ref("company")
-  if q and co and co.afford and not co.afford(q.total) then
-    r.bad = string.format("can't afford it: %s", ref("base_economy").money(q.total))
+  if r.quote and co and co.afford and not co.afford(r.quote.total) then
+    r.bad = string.format("can't afford it: %s", money(r.quote.total))
     return r
   end
   return r
@@ -376,8 +507,7 @@ local function aim()
   local a = astro()
   local reach = params.reach or 24
   local range = reach + (a and len(a.x - ox, a.y - oy, a.z - oz) or 0)
-  local ig = { a }
-  local okr, h = pcall(raycast, ox, oy, oz, dx, dy, dz, range, { ignore = ig })
+  local okr, h = pcall(raycast, ox, oy, oz, dx, dy, dz, range, { ignore = { a } })
   if not okr or not h then return nil, string.format("no ground within %.0f m of the cursor", reach) end
   if a and len(h.x - a.x, h.y - a.y, h.z - a.z) > reach then return nil, string.format("out of reach (%.0f m)", reach) end
   return h
@@ -385,14 +515,17 @@ end
 
 -- ── the ghost ───────────────────────────────────────────────────────────────
 ghost_node = nil
-local G = { id = nil, body = nil, making = false, color = nil }
+ghost_foot = nil
+local G = { id = nil, body = nil, making = false, color = nil, fcolor = nil, fmaking = false, fbody = nil }
 local function ghost_drop()
   if ghost_node and ghost_node.valid ~= false then ghost_node:destroy() end
-  ghost_node, G.id, G.body, G.color = nil, nil, nil, nil
+  if ghost_foot and ghost_foot.valid ~= false then ghost_foot:destroy() end
+  ghost_node, ghost_foot, G.id, G.body, G.color, G.fcolor, G.fbody = nil, nil, nil, nil, nil, nil, nil
 end
 local function ghost_want(id, body)
   if G.id == id and G.body == body and (G.making or (ghost_node and ghost_node.valid ~= false)) then return ghost_node end
-  ghost_drop()
+  if ghost_node and ghost_node.valid ~= false then ghost_node:destroy() end
+  ghost_node, G.color = nil, nil
   local def = partInfo(id)
   local planet = find and find(body)
   if not (def and planet and spawn) then return nil end
@@ -407,114 +540,381 @@ local function ghost_want(id, body)
   end, { parent = planet, body = false })
   return nil
 end
+-- The footing's hologram: one unit cube, scaled to the footing.
+local function foot_want(body)
+  if G.fbody == body and (G.fmaking or (ghost_foot and ghost_foot.valid ~= false)) then return ghost_foot end
+  if ghost_foot and ghost_foot.valid ~= false then ghost_foot:destroy() end
+  ghost_foot, G.fcolor = nil, nil
+  local planet = find and find(body)
+  if not (planet and createNode) then return nil end
+  G.fbody, G.fmaking = body, true
+  createNode("BuildGhostFooting", planet, function(n)
+    G.fmaking = false
+    if not heldPart then n:destroy() return end
+    pcall(function() n:setPrimitive("Cube", { 0.6, 0.6, 0.6 }) end)
+    n.visible = false
+    ghost_foot = n
+  end)
+  return nil
+end
 local function ghost_paint()
   if not (heldPart and req and req.pose and open_) then
     if ghost_node and ghost_node.valid ~= false and ghost_node.visible then ghost_node.visible = false end
+    if ghost_foot and ghost_foot.valid ~= false and ghost_foot.visible then ghost_foot.visible = false end
     return
   end
   local p = req.pose
   local g = ghost_want(heldPart, p.body)
-  if not g then return end
   local def = req.def
-  local sx, sy, sz = p.x + p.up.x * def.seat, p.y + p.up.y * def.seat, p.z + p.up.z * def.seat
-  g:setUp(vec3(p.up.x, p.up.y, p.up.z), vec3(-p.fwd.x, -p.fwd.y, -p.fwd.z))
-  g.x, g.y, g.z = sx, sy, sz
   local col = req.bad and RED or GREEN
-  if G.color ~= col then
-    G.color = col
-    local gh = ref("ghost")
-    if gh and gh.apply then gh.apply(g, col, req.bad and 0.55 or 0.6) end
+  local gh = ref("ghost")
+  local base = req.base or 0
+  if g then
+    local s = def.seat + base
+    g:setUp(vec3(p.up.x, p.up.y, p.up.z), vec3(-p.fwd.x, -p.fwd.y, -p.fwd.z))
+    g.x, g.y, g.z = p.x + p.up.x * s, p.y + p.up.y * s, p.z + p.up.z * s
+    if G.color ~= col then
+      G.color = col
+      if gh and gh.apply then gh.apply(g, col, req.bad and 0.55 or 0.6) end
+    end
+    if not g.visible then g.visible = true end
   end
-  if not g.visible then g.visible = true end
+  local ft = req.plan and req.plan.footing
+  if ft then
+    local f = foot_want(p.body)
+    if f then
+      local c = base - ft.d / 2 - 0.02
+      f:setUp(vec3(p.up.x, p.up.y, p.up.z), vec3(-p.fwd.x, -p.fwd.y, -p.fwd.z))
+      f.x, f.y, f.z = p.x + p.up.x * c, p.y + p.up.y * c, p.z + p.up.z * c
+      f.scale_x, f.scale_y, f.scale_z = 2 * ft.hx, ft.d, 2 * ft.hz
+      if G.fcolor ~= col then
+        G.fcolor = col
+        if gh and gh.apply then gh.apply(f, col, 0.35) end
+      end
+      if not f.visible then f.visible = true end
+    end
+  elseif ghost_foot and ghost_foot.valid ~= false and ghost_foot.visible then
+    ghost_foot.visible = false
+  end
 end
--- ── placing ─────────────────────────────────────────────────────────────────
-local UNDO = {}        -- { { sid, t } … } newest last (K9's ring replaces this)
 
--- THE PLACEMENT (K12's shape: a pure function of what, where and who pays).
--- sid = nil: a new structure. pose = { body, x, y, z, up, fwd } (body frame).
--- payer = "money". → sid | nil, why
+-- ── the ground work (K7) ────────────────────────────────────────────────────
+-- Level the ground under a part to its base: flatten discs in its plane
+-- (terrain.sculpt "flatten", the plane named by the part's up), sent now in
+-- this frame's world (the engine lands each where it was aimed).
+local function level_ground(def, rec, part)
+  local SN = ref("base_snap")
+  local ST = ref("structures")
+  local b = space and space.body and space.body(rec.b)
+  if not (SN and ST and b and terrain and terrain.sculpt) then return 0 end
+  local gx, gy, gz, U, F = ST.partPose(rec, part, 0)
+  local R = { x = U.y * F.z - U.z * F.y, y = U.z * F.x - U.x * F.z, z = U.x * F.y - U.y * F.x }
+  local discs, rad = SN.gradeDiscs(def)
+  local n = 0
+  -- (two passes, as the base's grade: one flatten moves deep fill only part
+  -- of the way; the probe measured 0.32 m left after one over a 1.7 m fall)
+  for pass = 1, 2 do for _, d in ipairs(discs) do
+    local x = b.x + gx + R.x * d.x + F.x * d.z
+    local y = b.y + gy + R.y * d.x + F.y * d.z
+    local z = b.z + gz + R.z * d.x + F.z * d.z
+    local ok = pcall(terrain.sculpt, x, y, z, rad, 1.0, "flatten",
+      { normal = vec3(U.x, U.y, U.z), hardness = 0.75, falloff = "smooth" })
+    if ok then n = n + 1 end
+  end end
+  return n
+end
+
+-- ── the history (K9) ────────────────────────────────────────────────────────
+local HIST = nil
+function history()
+  if HIST then return HIST end
+  local bh = ref("builder_history")
+  if bh and bh.newHistory then HIST = bh.newHistory(UNDO_RING) end
+  return HIST
+end
+local function hist_push(e)
+  local H = history()
+  if H then H:push(e); H:seal() end
+end
+local function label_of(id) return (partInfo(id) or {}).label or "part" end
+local function copy(t)
+  if type(t) ~= "table" then return t end
+  local o = {}
+  for k, v in pairs(t) do o[k] = copy(v) end
+  return o
+end
+-- A structure's header (no parts), to put it back after its last part went.
+local function header(rec)
+  local h = copy(rec)
+  h.bp = {}
+  return h
+end
+-- Put parts back into structure `sid` (re-made from `hdr` if it is gone).
+local function restore(sid, hdr, list)
+  local ST = ref("structures")
+  if ST.get(sid) then
+    for _, p in ipairs(list) do ST.addPart(sid, copy(p)) end
+  else
+    local r = copy(hdr)
+    r.id = sid
+    r.bp = {}
+    for _, p in ipairs(list) do r.bp[#r.bp + 1] = copy(p) end
+    ST.add(r)
+  end
+  if ST.spawnNow then ST.spawnNow(sid) end
+end
+
+-- ── placing ─────────────────────────────────────────────────────────────────
+
+-- THE PLACEMENT (K12's shape: a function of what, where and who pays).
+-- sid = the structure it joins (a snap: p.lx/ly/lz/yaw in its frame) or nil
+-- (a new one at p's ground point). p = a pose (body frame); p.base / p.plan
+-- = the judged ground (validity's r.base, r.plan) if any. payer = "money".
+-- → sid, nil, quote, uid | nil, why
 function place(sid, partId, p, payer)
   local def = partInfo(partId)
   if not def then return nil, "no such part" end
   local E, ST, co = ref("base_economy"), ref("structures"), ref("company")
   if not (E and ST and co) then return nil, "the building rules aren't in this scene" end
-  if sid ~= nil then return nil, "joining a structure comes with snapping (step 5)" end
-  local q = E.quote(def, section_of(partId), p.body, home_body())
+  local plan = p.plan
+  local q = E.quote(def, section_of(partId), p.body, home_body(), plan and plan.vol or 0)
   if q.mode ~= "money" or payer ~= "money" then return nil, q.why or "nothing to pay with" end
+  if sid ~= nil and not ST.get(sid) then return nil, "that structure is gone" end
   if not co.spend(q.total, E.ledgerWhy(def.label, q)) then return nil, "can't afford it: " .. E.money(q.total) end
   local t = agency_now()
-  local dp = ref("deployables")
   local by = member()
-  local rec = ST.newRecord(nil, p.body, p.x, p.y, p.z, p.up, p.fwd, partId,
-    { by = by, t = t, d = dp and dp.dateOf and dp.dateOf(t) or nil, name = def.label,
-      paid = { cost = q.cost, ship = q.ship, total = q.total, t = t, supplier = q.supplier, by = by } })
-  local id = ST.add(rec)
-  if ST.spawnNow then ST.spawnNow(id) end
+  local paid = { cost = q.cost, ship = q.ship, foot = q.foot, total = q.total, t = t, supplier = q.supplier, by = by }
+  local base = p.base or 0
+  local ft = plan and plan.footing and { d = plan.footing.d, hx = plan.footing.hx, hz = plan.footing.hz } or nil
+  local uid
+  if sid ~= nil then
+    uid = ST.addPart(sid, { id = partId, x = p.lx or 0, y = (p.ly or 0) + base, z = p.lz or 0, yaw = p.yaw or 0, paid = paid, ft = ft })
+  else
+    local dp = ref("deployables")
+    local up = p.up
+    local rec = ST.newRecord(nil, p.body, p.x + up.x * base, p.y + up.y * base, p.z + up.z * base, up, p.fwd, partId,
+      { by = by, t = t, d = dp and dp.dateOf and dp.dateOf(t) or nil, name = def.label, paid = paid })
+    rec.bp[1].paid, rec.bp[1].ft = paid, ft
+    sid = ST.add(rec)
+    uid = 1
+    if ST.spawnNow then ST.spawnNow(sid) end
+  end
+  local rec = ST.get(sid)
+  local part = ST.getPart and ST.getPart(sid, uid)
+  if plan and plan.level and rec and part then level_ground(def, rec, part) end
   local c = ref("crew")
   if c and c.credit and by then pcall(c.credit, by, "built", 1, { body = p.body }) end
-  UNDO[#UNDO + 1] = { sid = id, t = t }
-  while #UNDO > 16 do table.remove(UNDO, 1) end
-  lastPlace = { sid = id, id = partId, total = q.total, cost = q.cost, ship = q.ship, t = t }
-  return id, nil, q
+  lastPlace = { sid = sid, uid = uid, id = partId, total = q.total, cost = q.cost, ship = q.ship, foot = q.foot, t = t, mode = p.mode }
+  -- the ring: undo = a full refund within the minute; redo = buy it again
+  local e = { label = "place " .. def.label, kind = "place", t = t, sid = sid, uid = uid, partId = partId,
+              hdr = rec and header(rec) or nil, part = part and copy(part) or nil }
+  e.undo = function()
+    local amount = math.floor((e.part and e.part.paid and e.part.paid.total) or 0)
+    ST.removeParts(e.sid, { e.uid })
+    if co.refund then co.refund(amount, "returned: " .. def.label .. " (undone within a minute)") else co.earn(amount, "returned: " .. def.label) end
+    if c and c.credit and by then pcall(c.credit, by, "built", -1) end
+    e.res = amount
+  end
+  e.redo = function()
+    local q2 = E.quote(def, section_of(partId), e.hdr.b, home_body(), (e.part.ft and plan and plan.vol) or 0)
+    if not co.spend(q2.total, E.ledgerWhy(def.label, q2)) then e.res = nil return end
+    local t2 = agency_now()
+    e.part.paid = { cost = q2.cost, ship = q2.ship, foot = q2.foot, total = q2.total, t = t2, supplier = q2.supplier, by = by }
+    e.t = t2
+    restore(e.sid, e.hdr, { e.part })
+    if c and c.credit and by then pcall(c.credit, by, "built", 1, { body = e.hdr.b }) end
+    e.res = q2.total
+  end
+  hist_push(e)
+  return sid, nil, q, uid
 end
 
--- Take the last placement back (Ctrl+Z): a full refund within 60 s. → refund | nil, why
+-- K10: take part `uid` of structure `sid` down, with what stands on its deck.
+-- Refund each by base_economy.deconstructRefund. → refund, { uid … } | nil, why
+function deconstruct(sid, uid)
+  local E, ST, co, SN = ref("base_economy"), ref("structures"), ref("company"), ref("base_snap")
+  if not (E and ST and co and SN) then return nil, "the building rules aren't in this scene" end
+  local rec = ST.get(sid)
+  local part = rec and ST.getPart(sid, uid)
+  if not part then return nil, "it's already gone" end
+  local uids = { uid }
+  for _, u in ipairs(SN.dependents(rec, partInfo, uid)) do uids[#uids + 1] = u end
+  local t = agency_now()
+  local total, full = 0, true
+  for _, u in ipairs(uids) do
+    local p = ST.getPart(sid, u)
+    local amt, rule = E.deconstructRefund(p and p.paid, t)
+    total = total + amt
+    if rule ~= "full" then full = false end
+  end
+  local hdr = header(rec)
+  local taken = ST.removeParts(sid, uids)
+  local saved = {}
+  for _, p in ipairs(taken) do saved[#saved + 1] = copy(p) end
+  local lbl = label_of(part.id)
+  local why = string.format("taken down: %s%s · %s", lbl, #uids > 1 and string.format(" and %d on it", #uids - 1) or "",
+    full and "all of it back (within a minute)" or "the price back, fee kept")
+  if co.refund then co.refund(total, why) else co.earn(total, why) end
+  lastDecon = { sid = sid, uids = uids, refund = total, full = full, t = t }
+  local e = { label = "take down " .. lbl, kind = "decon", t = t, sid = sid, hdr = hdr, parts = saved, refund = total }
+  e.undo = function()
+    if not co.spend(e.refund, "put back: " .. lbl .. " (undone within a minute)") then e.res = nil return end
+    restore(e.sid, e.hdr, e.parts)
+    e.res = e.refund
+  end
+  e.redo = function()
+    local us = {}
+    for _, p in ipairs(e.parts) do us[#us + 1] = p.uid end
+    ST.removeParts(e.sid, us)
+    co.refund(e.refund, "taken down again: " .. lbl)
+    e.t = agency_now()
+    e.res = e.refund
+  end
+  hist_push(e)
+  return total, uids
+end
+
+-- What deconstructing would return now. → refund, n parts, full
+function deconstructQuote(sid, uid)
+  local E, ST, SN = ref("base_economy"), ref("structures"), ref("base_snap")
+  local rec = ST and ST.get(sid)
+  if not (E and rec and SN) then return 0, 0, false end
+  local uids = { uid }
+  for _, u in ipairs(SN.dependents(rec, partInfo, uid)) do uids[#uids + 1] = u end
+  local total, full, t = 0, true, agency_now()
+  for _, u in ipairs(uids) do
+    local amt, rule = E.deconstructRefund((ST.getPart(sid, u) or {}).paid, t)
+    total = total + amt
+    if rule ~= "full" then full = false end
+  end
+  return total, #uids, full
+end
+
+-- Ctrl+Z: the newest step in the ring, if it is under a minute old.
+-- → amount | nil, why
 function undo()
-  local E, ST, co = ref("base_economy"), ref("structures"), ref("company")
-  if not (E and ST and co) then return nil, "nothing to undo" end
-  local u = UNDO[#UNDO]
-  while u and not ST.get(u.sid) do table.remove(UNDO); u = UNDO[#UNDO] end
-  if not u then return nil, "nothing to undo" end
-  local rec = ST.get(u.sid)
-  local amount, why = E.undoRefund(rec, agency_now())
-  if not amount then return nil, why end
-  table.remove(UNDO)
-  ST.remove(u.sid)
-  local label = (rec.bp[1] and partInfo(rec.bp[1].id) or {}).label or "part"
-  if co.refund then co.refund(amount, "returned: " .. label .. " (undone within a minute)")
-  else co.earn(amount, "returned: " .. label) end
-  local c = ref("crew")
-  if c and c.credit and rec.by then pcall(c.credit, rec.by, "built", -1) end
-  lastUndo = { sid = u.sid, refund = amount, t = agency_now() }
-  return amount
+  local E, H = ref("base_economy"), history()
+  if not (E and H) then return nil, "nothing to undo" end
+  local e = H:top()
+  if not e then return nil, "nothing to undo" end
+  local age = agency_now() - (e.t or -1e9)
+  if age > E.UNDO_SECS + 1e-6 then
+    return nil, string.format("%s was %.0f s ago: only the last %d s can be undone (deconstruct it instead)",
+      e.label, age, E.UNDO_SECS)
+  end
+  e.res = nil
+  H:undo()
+  if e.res == nil then
+    H.index = H.index + 1   -- (it could not be undone: the ring stays as it was)
+    return nil, "couldn't undo " .. e.label .. " (can't afford to put it back)"
+  end
+  lastUndo = { sid = e.sid, refund = e.res, kind = e.kind, t = agency_now() }
+  return e.res, e
+end
+-- Ctrl+Shift+Z: the step just undone, again. → amount | nil, why
+function redo()
+  local H = history()
+  if not (H and H:canRedo()) then return nil, "nothing to redo" end
+  local e = H.items[H.index + 1]
+  e.res = nil
+  H:redo()
+  if e.res == nil then H.index = H.index - 1 return nil, "couldn't redo " .. e.label .. " (can't afford it)" end
+  return e.res, e
 end
 
 local function do_place(keep)
   if not (req and heldPart) then return end
   if req.bad then play("denied"); say(req.bad) return end
-  local sid, why, q = place(nil, heldPart, req.pose, "money")
+  local p = req.pose
+  p.base, p.plan = req.base, req.plan
+  local sid, why, q = place(p.sid, heldPart, p, "money")
   if not sid then play("denied"); say(why or "it wouldn't go there") return end
   play("place", 0.6)
-  local E = ref("base_economy")
-  say(string.format("%s placed · %s (%s + %s shipping) · Ctrl+Z within a minute returns it", req.def.label,
-    E.money(q.total), E.money(q.cost), E.money(q.ship)))
+  say(string.format("%s placed · %s (%s + %s shipping%s) · Ctrl+Z within a minute returns it", req.def.label,
+    money(q.total), money(q.cost), money(q.ship), (q.foot or 0) > 0 and (" + " .. money(q.foot) .. " footing") or ""))
   ov.key, vmemo.key = nil, nil
   if not keep then heldPart = nil end
 end
 
 -- A probe's way: put the held part at a world point (this frame's), as a click would.
-function placeAt(x, y, z, nx, ny, nz)
+function placeAt(x, y, z, nx, ny, nz, node)
   if not heldPart then return nil, "nothing in hand" end
-  local p, why = pose({ x = x, y = y, z = z, nx = nx, ny = ny, nz = nz })
+  local p, why = pose({ x = x, y = y, z = z, nx = nx, ny = ny, nz = nz, node = node })
   if not p then return nil, why end
   ov.key = nil
   req = validity(heldPart, p)
   if req.bad then return nil, req.bad end
-  local sid, why2 = place(nil, heldPart, p, "money")
-  return sid, why2
+  p.base, p.plan = req.base, req.plan
+  return place(p.sid, heldPart, p, "money")
+end
+
+-- ── deconstruct from the context menu (K10) ─────────────────────────────────
+local function provider(t, ctx)
+  if not (t and t.node) then return {} end
+  local ST = ref("structures")
+  if not (ST and ST.partOfNode) then return {} end
+  local rec, part = ST.partOfNode(t.node)
+  if not part then return {} end
+  local def = partInfo(part.id) or {}
+  local sid, uid = rec.id, part.uid
+  local function ask()
+    local amt, n, full = deconstructQuote(sid, uid)
+    return string.format("%s back%s%s", money(amt), full and "" or " (fee kept)",
+      n > 1 and string.format(" · takes %d part%s with it", n - 1, n > 2 and "s" or "") or "")
+  end
+  return {
+    { id = "bk_what", type = "info", label = def.label or "Part", value = function()
+        local r = ST.get(sid)
+        return string.format("structure %d · %d part%s", sid, r and #r.bp or 0, (r and #r.bp or 0) == 1 and "" or "s")
+      end, group = "Base" },
+    { id = "bk_decon", type = "action", label = "Deconstruct", group = "Base", danger = true, value = ask,
+      hint = "3 s", enabled = function() return isEngineer() end, why = "Engineers only",
+      job = { secs = 3.0, label = "Taking the " .. tostring(def.label) .. " down",
+        check = function()
+          if not ST.getPart(sid, uid) then return false, "it's gone" end
+          return true
+        end,
+        tick = function() end,
+        done = function()
+          local amt, w = deconstruct(sid, uid)
+          if ctx and ctx.toast then ctx.toast(amt and string.format("taken down · %s back", money(amt)) or tostring(w), amt == nil) end
+          if amt then play("undo", 0.6) end
+          return amt ~= nil, w
+        end } },
+  }, def.label
+end
+providerFn = provider   -- (probes)
+local provider_on = false
+local function register_provider()
+  if provider_on then return end
+  local reg = ref("context_registry")
+  if reg and reg.register then
+    reg.register("prop", provider, { id = "field_builder", order = 6 })
+    provider_on = true
+  end
 end
 
 -- ── the hint line (item_hand shows it under the belt: items.lua hintFrom) ──
+local MODE_TXT = { edge = "EDGE TO EDGE", deck = "ON THE DECK", grid = "GRID 0.5 m", free = "FREE" }
 function hintLine()
   if not open_ then return "Build Kit  ·  B opens it" end
-  local keys = (collapsed and "B unfolds the parts" or "B folds the parts") .. "  ·  Esc " .. (heldPart and "drops the part" or "closes the kit") .. "  ·  Ctrl+Z undo (60 s)"
-  if not heldPart then return "Build Kit  ·  pick a part from the column  ·  RMB held looks round  ·  " .. keys end
-  if not req then return string.format("%s  ·  %s  ·  %s", partInfo(heldPart).label, aim_why or "aim at the ground", keys) end
+  local keys = (collapsed and "B unfolds the parts" or "B folds the parts") .. "  ·  Esc " .. (heldPart and "drops the part" or "closes the kit") .. "  ·  Ctrl+Z undo"
+  if not heldPart then return "Build Kit  ·  pick a part  ·  RMB tap a placed part to take it down  ·  " .. keys end
+  local turn = "scroll turns  ·  R quarter  ·  PgUp/PgDn raise  ·  Shift frees"
+  if not req then return string.format("%s  ·  %s  ·  %s", partInfo(heldPart).label, aim_why or "aim at the ground", turn) end
   if req.bad then return string.format("%s  ·  %s  ·  RMB tap drops it", req.def.label, req.bad) end
-  local E = ref("base_economy")
   local q = req.quote
-  return string.format("%s  ·  LMB place for %s (%s + %s shipping)  ·  Shift+LMB keeps one  ·  RMB tap drops  ·  %s",
-    req.def.label, E.money(q.total), E.money(q.cost), E.money(q.ship), keys)
+  local extra = {}
+  local p = req.pose
+  extra[#extra + 1] = MODE_TXT[p.mode or "free"] or ""
+  if math.abs(yawOffset) > 1e-3 then extra[#extra + 1] = string.format("%+.0f°", math.deg(yawOffset)) end
+  if raise > 1e-3 then extra[#extra + 1] = string.format("raised %.2f m", raise) end
+  local pl = req.plan
+  if pl and pl.footing then extra[#extra + 1] = string.format("footing %.1f m", pl.footing.d)
+  elseif pl and pl.level then extra[#extra + 1] = "levelled" end
+  return string.format("%s  ·  %s  ·  LMB place for %s (%s + %s shipping%s)  ·  %s",
+    req.def.label, table.concat(extra, " · "), money(q.total), money(q.cost), money(q.ship),
+    (q.foot or 0) > 0 and (" + " .. money(q.foot) .. " footing") or "", turn)
 end
 aim_why = nil
 
@@ -557,13 +957,30 @@ function start(node)
   open_, heldPart, req = false, nil, nil
 end
 
+-- K6: the turn and raise keys, with a part in hand.
+local function turn_keys()
+  if typing() then return end
+  local fine = shift_held()
+  local dz = (input.scroll and not over_panel()) and input.scroll() or 0
+  local SN = ref("base_snap")
+  local step = SN and (fine and SN.YAW_FINE or SN.YAW_STEP) or math.rad(15)
+  if dz ~= 0 then yawOffset = SN.wrap(yawOffset + (dz > 0 and step or -step)) end
+  if input.pressed("r") then yawOffset = SN.wrap(yawOffset + SN.QUARTER) end
+  local rs, rm = SN and SN.RAISE_STEP or 0.25, SN and SN.RAISE_MAX or 2.0
+  if input.pressed("pageup") then raise = math.min(rm, raise + rs) end
+  if input.pressed("pagedown") then raise = math.max(0, raise - rs) end
+  if input.pressed("backspace") then yawOffset, raise = 0, 0 end
+end
+
 local closed_t = -10
 local DIGITS = { "b", "1", "2", "3", "4", "5", "6", "7", "8", "9" }
 function update(node, dt)
   issue_tick()
+  register_provider()
   -- Closed, the kit costs one look a fifth of a second (or on a belt key):
   -- item_hand.held() walks the pack.
   if not open_ then
+    wantsScroll = false
     local key = false
     for _, k in ipairs(DIGITS) do if input.pressed(k) then key = true break end end
     if not key and now() - closed_t < 0.2 then return end
@@ -592,12 +1009,22 @@ function update(node, dt)
     escTakenAt = now()
     if heldPart then heldPart = nil else close() return end
   end
-  -- Ctrl+Z
-  if input.key("ctrl") and input.pressed("z") and not typing() then
-    local amt, w = undo()
-    if amt then play("undo", 0.6); say(string.format("returned · %s back", ref("base_economy").money(amt)))
-    else play("denied"); say(w) end
+  -- Ctrl+Z / Ctrl+Shift+Z (Ctrl+Y)
+  if input.key("ctrl") and not typing() then
+    local redo_k = (input.pressed("z") and shift_held()) or input.pressed("y")
+    if redo_k then
+      local amt, w = redo()
+      if amt then play("place", 0.5); say(string.format("redone · %s", w.label)) else play("denied"); say(w) end
+    elseif input.pressed("z") then
+      local amt, w = undo()
+      if amt then
+        play("undo", 0.6)
+        say(w.kind == "decon" and string.format("put back · %s charged again", money(amt)) or string.format("returned · %s back", money(amt)))
+      else play("denied"); say(w) end
+    end
   end
+  wantsScroll = heldPart ~= nil and not over_panel()
+  if heldPart and not input.key("ctrl") then turn_keys() end
   -- RMB: a tap drops the ghost; held, the camera looks round
   local r_down = input.button and input.button(1) == true
   if r_down and not rmb.down then rmb.t = now(); rmb.x, rmb.y = mouse_xy() end
@@ -617,7 +1044,8 @@ function lateUpdate(node, dt)
       if p then
         -- judged again only when the ghost has moved 2 cm or turned, or
         -- every quarter second (money, a crate rolled in)
-        local key = string.format("%s|%s|%.2f|%.2f|%.2f|%.2f|%.2f", heldPart, p.body, p.x, p.y, p.z, p.fwd.x, p.fwd.z)
+        local key = string.format("%s|%s|%s|%.2f|%.2f|%.2f|%.3f|%.3f|%.2f", heldPart, p.body, tostring(p.mode), p.x, p.y, p.z,
+          p.fwd.x, p.fwd.z, raise)
         if key ~= vmemo.key or now() - vmemo.t > 0.25 or not req then
           req = validity(heldPart, p)
           vmemo.key, vmemo.t = key, now()
@@ -636,8 +1064,7 @@ function lateUpdate(node, dt)
   -- LMB (an edge, off the panel and the HUD's buttons)
   local l = (sim and sim.lmb) or (input.button and input.button(0) == true)
   if l and not lmb_was and heldPart and not over_panel() and not typing() then
-    local shift = (sim and sim.shift) or input.key("shift")
-    do_place(shift == true)
+    do_place(shift_held() == true)
   end
   lmb_was = l == true
 end

@@ -3,9 +3,11 @@
 This is the field version of the VAB. You stand in the world and the ground is
 the craft: the same parts column, a ghost of the part under the cursor, and a
 click to buy it, ship it out and set it down. This doc covers **deep-space
-step 4**: addendum items K1–K4, K8, K13 and N1. Steps 5–8 (snapping, validity,
-undo ring, deconstruct, stands, the tower, the base grid) build on the hooks
-named at the end.
+steps 4 and 5**: addendum items K1–K10, K13 and N1. Step 4 opened the kit and
+placed single parts; step 5 (§7) snaps parts to each other, lays them on a
+grid, levels the ground and casts footings, judges every placement in full,
+keeps an undo ring and takes parts down for a refund. Steps 6–8 (stands, the
+tower, the base grid) build on the hooks named at the end.
 
 Read `docs/positions-and-frames.md` first. Everything here is kept in a body's
 frame.
@@ -52,20 +54,30 @@ frame.
   - `cardLines(id, def, locked)` gives the price and role lines.
   - `noSubAssy` hides the SUB-ASSY tab.
   - `previewLayer()` names the layer the spinning preview and the card icons
-    are photographed on. It is the VAB's own, `viewmodel`. The stand's frame
-    is put inside the planet under the crew (2.4 km plus half the radius
-    down), so the main camera can't see it. The studio cameras draw no
-    terrain.
+    are photographed on: `offstage` (bit 5), the layer the main camera never
+    draws (`planet_camera.cullBase`), as lab_talk's stand uses. The stand is
+    2.4 km up the crew's frame, in open sky.
   - `layout(W, H)` places the column. It is the VAB's 228 px column, starting
     below the HUD's top-left chips.
   - `footText()` sets the footer line.
 - **Kept from the VAB:** search (`/`), the tabs ALL · ★ · RECENT · BASE, the
   cards and the spinning preview plate.
-- **Open:** in the world, the cards' 64 px icons (`camera.captureTexture`
-  through the stand's icon camera) come back as plain sky. That happens on
-  both the `offstage` and `viewmodel` layers, while the live render-target
-  plate on the same stand draws the part. It is not yet known whether the VAB
-  hits the same thing.
+- **The card icons (fixed in step 5).** Step 4's icons came back as plain sky
+  because its stand was inside the planet. `camera.captureTexture` (and
+  `camera.capture`) render through a camera node with every draw on: terrain,
+  fog, sky and shadows, whatever the camera's own `setCamera{ terrain = false,
+  fog = false }` says. The engine's `resolve_camera` keeps only the FOV and
+  cull mask, and `render_frame_texture` passes `CameraDraws::default()`. The
+  live render-target plate honours those flags, so it drew the part. Under the
+  ground the capture saw only fog. The VAB's stand is 2.4 km up in open sky,
+  so its icons were never hit. The stand now sits up there too, on
+  `offstage`. The probe captures the same camera in both places
+  (`icon_sky.png`, `icon_underground.png`). The engine card proposal is in
+  step 5's NOTES.
+- **Folded (K3).** B folds the column to a **36 px tab** in its corner
+  (`catalog_panel` draws it when the host's `isCollapsed()` is true). The tab
+  reads PARTS · B, and clicking its ▸ (`unfold()`) or pressing B brings the
+  column back.
 - **Hidden:** the toolbar, inspector, staging, symmetry and SUB-ASSY.
 - **A card's lines** read `$1,040` and `$900 + $140 shipping · Pell Groundworks`.
   Off the home world they read `made here` and `needs materials + $180 fittings`.
@@ -128,13 +140,26 @@ frame.
 - **Green means it can go there; red means it can't.** The reason shows on
   the hint line, which is `field_builder.hintLine()` (`items.lua` `hintFrom`).
 
-### What step 4 judges (`field_builder.validity`)
+### What a placement must pass (`field_builder.validity`, step 5's full set)
+
+In this order; the first that fails is the red ghost's reason.
 
 - **Off the home world:** refused, with the reason (N2 comes at step 13).
-- **Slope:** the ground normal against up must be at least the part's `slope`
-  (0.95 for the slab, 0.96 for the shed, 0.97 for the hab: about 16° to 14° until step 5 lays foundations).
-- **Not under water** (`climate.seaDepth`).
-- **Not on the spaceport's paving** (`base_facilities.keepClear`).
+- **Reach:** the snapped spot within the kit's 24 m (+2 m for a snap that
+  moved it).
+- **What the ray hit:** a placed part is snapping's (an edge or a deck,
+  §7). Aimed at one that offers neither, the reason says why: "no free edge
+  on that Pad Plate", "the Equipment Shed has no deck". Any other thing (a
+  crate, a facility) is in the way.
+- **Slope:** the ground normal at the cursor against up, at least 0.6 (the
+  flag's gate). The footing judges the rest.
+- **The ground (K7):** on a deck, every footprint sample must stand on a
+  deck of that structure at that height (`base_snap.supported`). On the
+  ground, the terrain under the footprint is sampled and the ground may
+  rise into it or fall under it by at most the part's `grade` (§7).
+- **Not under water** (`climate.seaDepth`, at the part's base).
+- **Not on the spaceport's ground** (`base_facilities.keepClear`, at the
+  centre and the four corners). That includes the runway's overruns.
 - **Nothing in the way**, via **`placement.overlapObb(center, half, rot)`**
   (`scripts/placement.lua`). Its fallback until EN12:
   - it calls `overlapSphere` over the box's half-diagonal;
@@ -142,10 +167,15 @@ frame.
     the builder's oriented-box signed distance (`builder_attach.boxSdf` in
     world axes);
   - the ground is skipped;
-  - your own body names itself ("you're standing where it goes");
+  - your own body names itself ("you're standing where it goes"), another
+    crew member says "someone is standing where it goes", and a placed part
+    names itself ("the Equipment Shed is in the way");
+  - the box starts 0.25 m over the part's base, so the deck it stands on and
+    the plate beside it are not in it;
   - the result is cached while the ghost holds still (0.5 s, or a move over
     0.1 m).
-- **Affordable:** `company.afford`.
+- **Affordable:** `company.afford`, for the part, its shipping and its
+  footing's concrete.
 
 ## 4. Placing, money and shipping (K8, N1)
 
@@ -159,11 +189,13 @@ frame.
   4. The member is credited one `built` (crew levels count 20).
   5. A plain click empties the hand; **Shift+LMB** keeps a copy in hand.
 - **RMB tapped** (under 0.25 s) drops the ghost.
-- **Ctrl+Z** takes the last placement back if it is under 60 s old (Q18):
-  - every dollar comes back, fee included, through `company.refund`;
+- **Ctrl+Z** takes the newest step of the undo ring back if it is under 60 s
+  old (Q18; the ring is §7's K9):
+  - every dollar comes back, fee and footing included, through
+    `company.refund`;
   - a refund isn't income, so an advance takes no share;
   - the `built` credit is taken back.
-  - After 60 s an undo is refused with "deconstruct it instead" (step 5).
+  - After 60 s an undo is refused with "deconstruct it instead".
 - **The VAB still charges at launch, with no fee.** That's the agency's own yard.
 - **The VAB's suppliers are already listed** (`base_economy.SUPPLIERS`), one
   per section, for step 13's part items: Marrow & Vance Propulsion, Teller
@@ -183,9 +215,21 @@ A structure is a **blueprint at a pose**, kept in its body's frame:
 struct.list, struct.seq
 struct.<id> = { id, b = body, x, y, z (body-relative ground point), ux, uy, uz (up),
                 fx, fy, fz (front = the parts' +Z), n, by, t (agency clock), d,
-                bp = { { uid, id, x, y, z, yaw, pitch, roll, parent, att, sym, mir, stage } },
-                st = { [uid] = {} }, paid = { cost, ship, total, t, supplier, by } }
+                bp = { { uid, id, x, y, z, yaw, pitch, roll, parent, att, sym, mir, stage,
+                         paid = { cost, ship, foot, total, t, supplier, by },   -- step 5
+                         ft = { d, hx, hz } } },                                -- step 5: a footing
+                st = { [uid] = {} }, paid = { … the founding part's … } }
 ```
+
+- **Step 5: parts join and leave.** `addPart(id, part)` and
+  `removeParts(id, uids)` do this; the record goes with its last part. Each
+  part carries its own `paid`, which its undo and deconstruct read.
+  - `partOfNode(node)` maps a hit node (or its `Wall N` child) to its part,
+    through a node-id map kept at spawn.
+  - `partsNear(body, x, y, z, r)` reads a 32 m cell index kept on add and
+    remove, and on load. Nothing scans every structure.
+  - A footing is a concrete block (`mesh.build`, one mesh per size, UVs in
+    metres) on a node parented to the planet beside its part.
 
 - **`bp` is the builder's blueprint part shape.** It is in the structure's
   frame (+X right, +Y up, +Z front), at the part's ground point.
@@ -204,48 +248,172 @@ struct.<id> = { id, b = body, x, y, z (body-relative ground point), ux, uy, uz (
 
 ## 6. Tests and probes
 
-- `luajit solar/tests/smoke_base_build.lua` runs 55 checks:
+- `luajit solar/tests/smoke_base_build.lua` runs 107 checks. Step 4's 55:
   - the BASE parts;
   - shipping, quotes and card lines;
   - the 60 s refund and Q16's reach order;
-  - records, frames and poses, the save round-trip, ids never reused;
+  - records, frames and poses, the save round trip, ids never reused;
   - the Engineer gate on the real `crew.lua` (one kit, to the Engineer, once);
   - place → charge → record → credit, undo → refund, a refused spend that
     changes nothing, off-world refused;
   - the Build Kit on the belt.
-- `tools/perf/buildkitprobe.sh <engine>` covers the whole flow in the engine.
-  It does these, in order:
+
+  Step 5 adds 52:
+  - footing costs and the deconstruct refund rule;
+  - `base_snap`: frames, edge snap (a taken slot never offered), deck snap
+    with the grid and 15° turns, a hab on one plate refused and on two
+    supported, dependents, the ground grid square to the layout or the
+    nearest structure, Shift free, foundations (flat, slope, too steep, a
+    joined plate's skirt, raised), flatten discs covering the footprint;
+  - `structures`: addPart / removeParts / partsNear, the reload rebuilding
+    the index, the record going with its last part;
+  - `field_builder`: joining by edge and deck, a footed part billed, the ring
+    (four undos newest first, a redo bought again, refused after 60 s),
+    deconstruct (the price back with the fee kept, the shed on the plate
+    with it), the undo of a deconstruct, the last part down.
+- `tools/perf/buildkitprobe.sh <engine>` (PATCHES=funds.patch) covers the
+  whole flow in the engine. Step 4's run:
   1. the Pilot's B is refused, then the Engineer is issued a kit;
   2. B opens the kit and the column, and the card lines are checked;
   3. the Pad Plate ghost is checked green, with its foot on the ground every
      frame while the planet moves;
   4. it is placed ($1,040 charged, ledger checked) and Ctrl+Z refunds it;
   5. it is placed again with Shift held, a red ghost is shown over it, and a
-     shed is placed beside it;
-  6. Esc closes the kit; idle costs are measured;
-  7. save and reload: both stand on their records, and a ray hits the shed's
-     roof collider;
-  8. pictures are taken from three cameras.
+     shed is placed beside it on the grid.
+
+  Then step 5's run:
+  6. a plate edge to edge (4.000 m between centres, level);
+  7. a hab across the two plates;
+  8. a third plate along the row, with a shed on its deck (1.548 m over the
+     plate's origin) and a ray on the shed's roof resolving to its part;
+  9. a mound raised beside the crew, with a shed on its flank: the footing,
+     the bill, the ground levelled under it;
+  10. Deconstruct from the context menu's entry: the third plate past its
+      minute and the shed on it;
+  11. the ring: Ctrl+Z puts them back, Ctrl+Z returns the footed shed,
+      Ctrl+Shift+Z buys it again, and past its minute Ctrl+Z refuses;
+  12. B folds the column to its tab;
+  13. the icon camera is captured in the sky and underground;
+  14. idle costs are measured;
+  15. save and reload: every part stands on its record, the footing is
+      drawn, and the shed is still on its deck.
 
   Look for `BK PASS|FAIL` and `BK RESULT`.
 
-## 7. Hooks for step 5 (K5–K7, K9–K10)
+## 7. Step 5: snapping, the ground, undo and deconstruct (K5–K7, K9–K10)
 
-- **`field_builder.pose(hit)`** is the one place a hit becomes a pose. Step 5
-  adds snapping to a structure's nodes (`builder_attach.candidates`), the
-  0.5 m grid and yaw steps (`yawOffset` is already read), and Shift to free
-  both.
-- **`field_builder.validity(id, pose)`** is the one place a placement is
-  judged. Step 5 adds foundations, flattening, crew in the footprint and the
-  vein keep-out.
-- **`field_builder.place(sid, partId, pose, payer)`** is pure-shaped (K12).
-  `sid ~= nil` is where joining a structure goes: `structures.bp` is already a
-  list.
-- **The undo list** `{ sid, t }` (16 deep) is replaced by K9's
-  `builder_history` ring. `base_economy.undoRefund` already says when an undo
-  turns into a deconstruct (K10: price back, fee kept).
+### Snapping (K5, `scripts/base_snap.lua`)
+
+`base_snap` is a pure rulebook. `field_builder.pose(hit)` asks it once per
+frame with the part in hand, the hit (body frame), the radial up, the way
+toward the Engineer, and the placed part the ray stopped on
+(`structures.partOfNode`). It also passes the parts within 30 m
+(`structures.partsNear`, memoised while the cursor stays in a 0.5 m cell and
+nothing was built). Three answers:
+
+| Mode | When | Where it goes |
+|---|---|---|
+| `edge` | A part with a `tile` (the Pad Plate) within 0.8 tile of a free slot beside one of the same tile | That slot: edge to edge, square, level. It joins that structure. |
+| `deck` | An `onDeck` part (shed, hab) aimed at a part with a `deck` (the plate) | On the deck's top, on the structure's 0.5 m grid, square in 90° steps toward you plus the turn dialled. It joins the structure. Supported only if all 9 footprint samples stand on a deck of the structure at that height, so a hab needs two plates edge to edge. |
+| `grid` | The ground | A new structure on the 0.5 m grid of the nearest structure within 30 m, or of the spaceport's layout frame. Square to it, plus the turn dialled. |
+| `free` | Shift held | The cursor's point, its front toward you, plus the turn. No snap. |
+
+Why not `builder_attach.candidates`: its nodes are a craft's stack and flank
+nodes, captured in screen pixels on a hull. Base parts are slabs on a grid,
+so the edge and deck rules are a page of their own. They are tested in luajit.
+
+**Flat structures on a small world.** A structure's frame is the plane at its
+first part. A home world is 600–950 m in radius, so a row of plates 20 m long
+stands about 30 cm off the sphere at its far end. The parts stay level with
+each other, which a hab across two plates needs. The ground under each is
+levelled to its base, and footings take up the difference.
+
+### Turning and raising (K6)
+
+With a part in hand:
+- the **wheel** turns it 15° (5° with Shift), and `planet_camera` leaves the
+  zoom alone while `field_builder.wantsScroll` is set;
+- **R** turns a quarter;
+- **PgUp / PgDn** raise it 0–2 m in 0.25 m steps, standing it on a taller
+  footing;
+- **Backspace** resets.
+
+Base parts stand upright, so the addendum's pitch (R) and roll (T) wait for
+parts that can lie down (cables, catwalks). R is the quarter turn until then.
+
+### The ground (K7)
+
+A ground part (`grid`, `free`, or an `edge` plate) casts 9 terrain rays down
+its footprint (`terrain.raycast`, only when the pose changes or every
+0.25 s). `base_snap.foundation` then decides:
+
+- **Base:** the mean of the samples plus the raise, or the structure's level
+  for a part that joins one.
+- **Refused** if the ground rises into the part or falls under it by more
+  than its `grade`: 2.0 m for the slab and the hab, 1.6 m for the shed.
+- **Levelled** at placement: flatten discs
+  (`terrain.sculpt(…, "flatten", { normal = the part's up, hardness = 0.75 })`)
+  cover the footprint and 0.3 m beyond it, centred on the base plane.
+- **A footing** is cast where the ground falls more than 0.3 m under the
+  base (or the slab's own 0.40 m skirt). It is a concrete block, footprint
+  plus 0.15–0.25 m, reaching to the lowest sample and 0.3 m into the ground,
+  billed at $160 a m³ with the part. The ghost shows it as a second
+  hologram.
+
+### The undo ring (K9)
+
+`builder_history.newHistory(50)` holds placements and removals.
+- **Ctrl+Z** undoes the newest step if it is under 60 s old; otherwise it is
+  refused. An undone placement is a full refund. An undone deconstruct puts
+  the parts back (the structure is re-made with the same id if it went) and
+  takes the refund back.
+- **Ctrl+Shift+Z** or **Ctrl+Y** redoes the step: a placement is bought
+  again at today's price.
+- The ring lives for the session. Nothing older than a minute can be undone,
+  so there is nothing to save.
+
+### Deconstruct (K10)
+
+A tap of RMB on a placed part opens the context menu (a `prop` provider
+registered by `field_builder`). It shows the part, its structure, and
+**Deconstruct**: a 3 s job, Engineers only, whose row gives the refund and
+the parts that come with it.
+
+- **Dependents:** what stands on the part's deck comes down with it
+  (`base_snap.dependents`, transitively).
+- **Refund** (`base_economy.deconstructRefund`), per part: within its minute
+  everything; later the price only, with the shipping fee and the footing
+  kept.
+- The parts go straight back to funds; nothing is left loose.
+- The structure goes with its last part.
+
+### Cost
+
+Per tick, nothing is added for a placed structure: no script, no body that
+moves. `structures.update` is the same 1 Hz streaming pass. With the kit
+open, `pose` does one cell-index lookup when the cursor crosses a 0.5 m cell
+(memoised), and `validity` casts 9 terrain rays when the snapped pose
+changes. A snapped pose only moves when the cursor crosses a grid cell.
+
+## 8. Hooks for step 6 (L1–L2, L4: craft stands)
+
+- **A stand is a BASE part with a deck and a height** (L1). It can be another
+  `tile` (stands edge to edge) or `deck` part in `parts_base`, which gets
+  snapping, footings, the ring and deconstruct for free. Its height (L1's
+  slider) is a per-part `bp` field like `ft`.
+- **`field_builder.place(sid, partId, pose, payer)`** takes `pose.lx/ly/lz/yaw`
+  in a structure's frame. A craft under construction (L2) can be a structure
+  part whose `st[uid]` holds the blueprint.
+- **`structures.partOfNode` / `nodeOf` / `partsNear`** are the lookups a
+  stand's "build here" needs.
 - **`placement.overlapObb`** becomes EN12's one call; `ghost.apply` becomes
   EN10's.
+- **Open from step 5:**
+  - the mineral-vein keep-out;
+  - pitch and roll for parts that may lie down;
+  - a "crew in the footprint" check, which only covers bodies with colliders
+    (`overlapObb` sees the Astronaut and CrewBody capsules);
+  - the depot stocking the kit (M3).
 - **Machines and power (M6, N4):** a structure whose parts carry electronics
   becomes an anchored assembly with a 10 Hz power step. Static prefabs stay
   for slabs and sheds.

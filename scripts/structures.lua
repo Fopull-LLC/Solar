@@ -37,6 +37,20 @@
 --   reloadFromSave()                    forget the cache, read the save again
 --   version                             bumps on every change
 --
+-- Step 5 (K5, K7, K9, K10): a structure grows and shrinks part by part.
+--   addPart(id, part) → uid            join a part (a bp entry; uid assigned)
+--   removeParts(id, { uid … }) → { part … }   take parts out (the record goes
+--                                       with its last part)
+--   partOfNode(node) → rec, part        a hit node (or a child of one: a
+--                                       "Wall N" collider) → its structure part
+--   partsNear(body, x, y, z, r) → { { rec, part, d } … }  nearest first, from
+--                                       a 32 m cell index kept on add/remove
+--                                       (never a scan of every structure)
+--   nodeOf(id, uid)                     a part's live node
+-- A bp entry may carry `paid` (what placing it charged: its undo and
+-- deconstruct read it) and `ft` = { d, hx, hz } (a cast footing under it: a
+-- concrete block from its ground point d m down, hx × hz half-size).
+--
 -- STREAMING. A structure's parts are spawned, parented to their planet (as
 -- the base facilities and deployables are), only while the focus is on that
 -- world or within 20 km of it, and unloaded otherwise; the check is once a
@@ -57,7 +71,10 @@ version = 0
 
 local recs = nil      -- id → record
 local order = {}      -- ids, in building order
-local live = {}       -- id → { nodes = { [uid] = node }, spawning = n }
+local live = {}       -- id → { nodes = { [uid] = node }, feet = { [uid] = node }, spawning = n }
+local owner = {}      -- live node id → { sid, uid }
+local cells = {}      -- index cell key → { [sid .. ":" .. uid] = { sid, uid } }
+local CELL = 32.0
 
 local function S() return save end
 
@@ -74,8 +91,10 @@ local function plain(r)
   return o
 end
 
+local reindex
 local function load()
   recs, order = {}, {}
+  cells = {}
   local sv = S()
   if not (sv and sv.get) then return end
   for _, id in ipairs(sv.get("struct.list") or {}) do
@@ -87,6 +106,7 @@ local function load()
       order[#order + 1] = id
     end
   end
+  reindex()
 end
 local function ensure() if not recs then load() end end
 local function bump() version = version + 1 end
@@ -147,6 +167,67 @@ function newRecord(id, body, x, y, z, up, fwd, partId, opts)
   return r
 end
 
+-- ── the index (where parts are, by 32 m cell of their body's frame) ──────────
+
+local function cell_of(b, x, y, z)
+  return string.format("%s|%d|%d|%d", tostring(b), math.floor(x / CELL), math.floor(y / CELL), math.floor(z / CELL))
+end
+local function index_part(r, p, on)
+  local x, y, z = partPose(r, p, 0)
+  local k = cell_of(r.b, x, y, z)
+  local c = cells[k]
+  local key = tostring(r.id) .. ":" .. tostring(p.uid)
+  if on then
+    if not c then c = {}; cells[k] = c end
+    c[key] = { sid = r.id, uid = p.uid }
+  elseif c then
+    c[key] = nil
+    if next(c) == nil then cells[k] = nil end
+  end
+end
+reindex = function()
+  cells = {}
+  for _, id in ipairs(order) do
+    local r = recs[id]
+    for _, p in ipairs(r.bp) do index_part(r, p, true) end
+  end
+end
+
+local function part_in(r, uid)
+  for i, p in ipairs(r.bp) do if p.uid == uid then return p, i end end
+  return nil
+end
+
+-- The placed parts round a body-relative point, nearest first (by their
+-- ground points). → { { rec, part, d } … }
+function partsNear(body, x, y, z, rad)
+  ensure()
+  rad = rad or 10.0
+  local n = math.ceil(rad / CELL)
+  local cx, cy, cz = math.floor(x / CELL), math.floor(y / CELL), math.floor(z / CELL)
+  local out = {}
+  for i = cx - n, cx + n do
+    for j = cy - n, cy + n do
+      for k = cz - n, cz + n do
+        local c = cells[string.format("%s|%d|%d|%d", tostring(body), i, j, k)]
+        if c then
+          for _, e in pairs(c) do
+            local r = recs[e.sid]
+            local p = r and part_in(r, e.uid)
+            if p then
+              local px, py, pz = partPose(r, p, 0)
+              local d = math.sqrt((px - x) ^ 2 + (py - y) ^ 2 + (pz - z) ^ 2)
+              if d <= rad then out[#out + 1] = { rec = r, part = p, d = d } end
+            end
+          end
+        end
+      end
+    end
+  end
+  table.sort(out, function(a, b) return a.d < b.d end)
+  return out
+end
+
 -- ── the store ───────────────────────────────────────────────────────────────
 
 function nextId()
@@ -161,11 +242,59 @@ function add(r)
   if r.id == nil then r.id = nextId() end
   recs[r.id] = r
   order[#order + 1] = r.id
+  for _, p in ipairs(r.bp) do index_part(r, p, true) end
   write(r)
   write_index()
   bump()
   return r.id
 end
+
+local spawn_part, despawn_part
+-- Join a part to structure `id` (a bp entry in its frame; uid is assigned).
+-- Spawned at once when the structure is. → uid | nil
+function addPart(id, part)
+  ensure()
+  local r = recs[id]
+  if not r then return nil end
+  local u = 0
+  for _, p in ipairs(r.bp) do u = math.max(u, p.uid or 0) end
+  part.uid = part.uid and not part_in(r, part.uid) and part.uid or (u + 1)
+  part.yaw, part.pitch, part.roll = part.yaw or 0, part.pitch or 0, part.roll or 0
+  part.parent, part.att, part.sym, part.mir, part.stage = part.parent or 0, part.att or "", part.sym or 0, part.mir or "", part.stage or 0
+  r.bp[#r.bp + 1] = part
+  index_part(r, part, true)
+  write(r)
+  bump()
+  if live[id] and spawn_part then spawn_part(r, live[id], part) end
+  return part.uid
+end
+
+-- Take parts out of structure `id`; the record goes with its last part.
+-- → { part … } (the entries taken, for an undo), rec_gone
+function removeParts(id, uids)
+  ensure()
+  local r = recs[id]
+  if not r then return {}, false end
+  local out = {}
+  for _, u in ipairs(uids or {}) do
+    local p, i = part_in(r, u)
+    if p then
+      index_part(r, p, false)
+      if despawn_part then despawn_part(id, u) end
+      table.remove(r.bp, i)
+      out[#out + 1] = p
+    end
+  end
+  if #r.bp == 0 then
+    remove(id)
+    return out, true
+  end
+  write(r)
+  bump()
+  return out, false
+end
+
+function getPart(id, uid) ensure() local r = recs[id]; return r and part_in(r, uid) or nil end
 
 -- Re-write a record already in the store (a part state, a rename).
 function put(r)
@@ -183,6 +312,7 @@ function remove(id)
   local r = recs[id]
   if not r then return nil end
   if despawn then despawn(id) end
+  for _, p in ipairs(r.bp) do index_part(r, p, false) end
   recs[id] = nil
   for i = #order, 1, -1 do if order[i] == id then table.remove(order, i) end end
   forget(id)
@@ -226,11 +356,26 @@ local function parts_lib()
   return findScript and findScript("parts_base") or nil
 end
 
+-- (a part node, or its footing, leaves: its owner entry goes with it)
+local function drop_node(n)
+  if not n then return end
+  pcall(function() owner[n.id] = nil end)
+  if n.valid then n:destroy() end
+end
+
 despawn = function(id)
   local L = live[id]
   if not L then return end
-  for _, n in pairs(L.nodes) do if n and n.valid then n:destroy() end end
+  for _, n in pairs(L.nodes) do drop_node(n) end
+  for _, n in pairs(L.feet or {}) do drop_node(n) end
   live[id] = nil
+end
+
+despawn_part = function(id, uid)
+  local L = live[id]
+  if not L then return end
+  drop_node(L.nodes[uid]); L.nodes[uid] = nil
+  if L.feet then drop_node(L.feet[uid]); L.feet[uid] = nil end
 end
 
 function nodesOf(id)
@@ -243,6 +388,99 @@ function nodesOf(id)
   end
   return out
 end
+function nodeOf(id, uid) local L = live[id]; local n = L and L.nodes[uid]; return (n and n.valid) and n or nil end
+function footOf(id, uid) local L = live[id]; local n = L and L.feet and L.feet[uid]; return (n and n.valid) and n or nil end
+
+-- A hit node, or one of its children up to three deep (a "Wall N" collider,
+-- the hab's Shell), → its structure record and part, or nil.
+function partOfNode(n)
+  ensure()
+  for _ = 0, 3 do
+    if not n then return nil end
+    local ok, nid = pcall(function() return n.id end)
+    local e = ok and owner[nid]
+    if e then
+      local r = recs[e.sid]
+      local p = r and part_in(r, e.uid)
+      if p then return r, p end
+      return nil
+    end
+    local okp, par = pcall(function() return n.parent end)
+    n = okp and par or nil
+  end
+  return nil
+end
+
+-- THE FOOTING: a cast concrete block under a part on sloping ground, built
+-- once per size (mesh.build, UVs in metres so the concrete keeps its scale),
+-- drawn on a node parented to the planet like the part. Visual: the ground
+-- under it is levelled to the part's base, which is what holds it up.
+local foot_mesh = {}
+local FOOT_MAT = { texture = "textures/base/concrete_albedo.png", normalMap = "textures/base/concrete_normal.png",
+                   roughnessMap = "textures/base/concrete_orm.png", occlusionMap = "textures/base/concrete_orm.png",
+                   color = { 0.92, 0.91, 0.88 }, roughness = 1.0, metallic = 0.0, shading = "physical" }
+local function footing_mesh(ft)
+  local key = string.format("%.2f|%.2f|%.2f", ft.hx, ft.hz, ft.d)
+  if foot_mesh[key] then return foot_mesh[key] end
+  if not (mesh and mesh.build) then return nil end
+  local hx, hz, top, bot = ft.hx, ft.hz, -0.02, -ft.d
+  local P, I, N, UV = {}, {}, {}, {}
+  local function quad(a, b, c, d, n, uw, vh)
+    local base = #P / 3
+    for _, v in ipairs({ a, b, c, d }) do P[#P + 1] = v[1]; P[#P + 1] = v[2]; P[#P + 1] = v[3]; N[#N + 1] = n[1]; N[#N + 1] = n[2]; N[#N + 1] = n[3] end
+    for _, t in ipairs({ { 0, 0 }, { uw, 0 }, { uw, vh }, { 0, vh } }) do UV[#UV + 1] = t[1] / 2; UV[#UV + 1] = t[2] / 2 end
+    for _, k in ipairs({ 1, 2, 3, 1, 3, 4 }) do I[#I + 1] = base + k end
+  end
+  local h = top - bot
+  quad({ -hx, top, hz }, { hx, top, hz }, { hx, top, -hz }, { -hx, top, -hz }, { 0, 1, 0 }, 2 * hx, 2 * hz)
+  quad({ -hx, top, hz }, { -hx, bot, hz }, { hx, bot, hz }, { hx, top, hz }, { 0, 0, 1 }, h, 2 * hx)
+  quad({ hx, top, -hz }, { hx, bot, -hz }, { -hx, bot, -hz }, { -hx, top, -hz }, { 0, 0, -1 }, h, 2 * hx)
+  quad({ hx, top, hz }, { hx, bot, hz }, { hx, bot, -hz }, { hx, top, -hz }, { 1, 0, 0 }, h, 2 * hz)
+  quad({ -hx, top, -hz }, { -hx, bot, -hz }, { -hx, bot, hz }, { -hx, top, hz }, { -1, 0, 0 }, h, 2 * hz)
+  local ok, name = pcall(mesh.build, { positions = P, indices = I, normals = N, uvs = UV, scene = true })
+  if not ok then if log then log("structures: footing mesh failed: " .. tostring(name)) end return nil end
+  foot_mesh[key] = name
+  return name
+end
+
+spawn_part = function(r, L, p)
+  local pb = parts_lib()
+  local planet = find and find(r.b)
+  local b = space and space.body and space.body(r.b)
+  local def = pb and pb.partInfo(p.id)
+  if not (def and def.prefab and planet and b and spawn) then return end
+  local x, y, z, U, F = partPose(r, p, def.seat)
+  local function mine() return live[r.id] == L and recs and recs[r.id] == r and part_in(r, p.uid) == p end
+  L.spawning = L.spawning + 1
+  local ok = pcall(spawn, def.prefab, vec3(b.x + x, b.y + y, b.z + z), function(inst)
+    L.spawning = L.spawning - 1
+    if not mine() then inst:destroy() return end
+    -- (setUp points −Z along the vector given: +Z, the part's front, faces F)
+    inst:setUp(vec3(U.x, U.y, U.z), vec3(-F.x, -F.y, -F.z))
+    inst.x, inst.y, inst.z = x, y, z
+    inst.name = def.prefab
+    L.nodes[p.uid] = inst
+    owner[inst.id] = { sid = r.id, uid = p.uid }
+  end, planet)
+  if not ok then L.spawning = L.spawning - 1 end
+  local ft = p.ft
+  if type(ft) == "table" and ft.d and ft.d > 0.05 and createNode then
+    local m = footing_mesh(ft)
+    if m then
+      local gx, gy, gz = partPose(r, p, 0)
+      createNode("BaseFooting", planet, function(n)
+        if not mine() then n:destroy() return end
+        n:setUp(vec3(U.x, U.y, U.z), vec3(-F.x, -F.y, -F.z))
+        n.x, n.y, n.z = gx, gy, gz
+        n.model = m
+        pcall(n.setMaterial, n, FOOT_MAT)
+        L.feet = L.feet or {}
+        L.feet[p.uid] = n
+        owner[n.id] = { sid = r.id, uid = p.uid }
+      end)
+    end
+  end
+end
 
 local function spawn_rec(r)
   if live[r.id] then return end
@@ -250,25 +488,9 @@ local function spawn_rec(r)
   local planet = find and find(r.b)
   local b = space and space.body and space.body(r.b)
   if not (pb and planet and b and spawn) then return end
-  local L = { nodes = {}, spawning = 0 }
+  local L = { nodes = {}, feet = {}, spawning = 0 }
   live[r.id] = L
-  for _, p in ipairs(r.bp) do
-    local def = pb.partInfo(p.id)
-    if def and def.prefab then
-      local x, y, z, U, F = partPose(r, p, def.seat)
-      L.spawning = L.spawning + 1
-      local ok = pcall(spawn, def.prefab, vec3(b.x + x, b.y + y, b.z + z), function(inst)
-        L.spawning = L.spawning - 1
-        if live[r.id] ~= L or not (recs and recs[r.id] == r) then inst:destroy() return end
-        -- (setUp points −Z along the vector given: +Z, the part's front, faces F)
-        inst:setUp(vec3(U.x, U.y, U.z), vec3(-F.x, -F.y, -F.z))
-        inst.x, inst.y, inst.z = x, y, z
-        inst.name = def.prefab
-        L.nodes[p.uid] = inst
-      end, planet)
-      if not ok then L.spawning = L.spawning - 1 end
-    end
-  end
+  for _, p in ipairs(r.bp) do spawn_part(r, L, p) end
 end
 
 -- Spawn this one now (a placement: no waiting for the 1 Hz check).
@@ -288,6 +510,7 @@ function start(node)
   end
   recs = nil
   live = {}
+  owner = {}
   load()
 end
 

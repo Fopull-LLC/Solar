@@ -55,6 +55,19 @@ LAYOUT_VERSION = 3   -- 3: the 50 × 50 × 72 m VAB (tools/vab_dims.py); Command
 
 -- The runway, 250 × 18 m paved plus 6 m blast pads, 3 m shoulders.
 RUNWAY = { v = -62.0, u0 = -131.0, u1 = 131.0, blast = 6.0, half = 9.0, shoulder = 3.0 }
+-- THE OVERRUN (playtest 2026-11-05: a fast landing ran off the far end onto
+-- a 2 m lip that threw the plane up): past each end a runway end safety
+-- area, OVERRUN.len m of ground graded flat to the runway's level and
+-- 2 × OVERRUN.half wide, unpaved, kept clear of plants and rocks (keepClear),
+-- so a plane that rolls long runs out on level ground. (A real RESA is
+-- 90–240 m.) Old saves pick it up through GRADED: their grade is checked
+-- once more, now with points on the overrun, and laid again if it is missing.
+OVERRUN = { len = 150.0, half = 18.0 }
+-- What `base.graded` records once the grade holds: the layout, and .1 for the
+-- overrun (a save graded before it reads 3 and is checked again).
+GRADED = LAYOUT_VERSION + 0.1
+-- How far from the base centre the overruns' far corners reach.
+OVERRUN_REACH = math.sqrt((RUNWAY.u1 + OVERRUN.len) ^ 2 + (math.abs(RUNWAY.v) + OVERRUN.half) ^ 2)
 -- The taxiway from the runway's north shoulder to the VAB apron.
 TAXIWAY = { u = 0.0, v0 = -50.0, v1 = -24.0, half = 6.0 }
 
@@ -453,6 +466,12 @@ end
 local function runway_strip(Fr)
   return stripOf(Fr, RUNWAY.u0, RUNWAY.v, RUNWAY.u1, RUNWAY.v)
 end
+-- The two overruns (graded, unpaved), west and east, each running away from
+-- its runway end.
+function overrunStrips(Fr)
+  return { stripOf(Fr, RUNWAY.u0, RUNWAY.v, RUNWAY.u0 - OVERRUN.len, RUNWAY.v),
+           stripOf(Fr, RUNWAY.u1, RUNWAY.v, RUNWAY.u1 + OVERRUN.len, RUNWAY.v) }
+end
 
 -- ── where a launch rolls out ─────────────────────────────────────────────────
 
@@ -516,11 +535,21 @@ end
 function keepClear(bodyName, rx, ry, rz)
   if not footprint or bodyName ~= footprint.body or not F then return false end
   local dx, dy, dz = rx - footprint.x, ry - footprint.y, rz - footprint.z
-  if dx * dx + dy * dy + dz * dz > (FOOTPRINT_RADIUS + 10) ^ 2 then return false end
+  local d2 = dx * dx + dy * dy + dz * dz
+  local rw = save.get("base.runway") ~= false
+  -- (the overruns reach past the footprint: a wider pre-check for them alone)
+  if d2 > (FOOTPRINT_RADIUS + 10) ^ 2 then
+    if not rw or d2 > (OVERRUN_REACH + 10) ^ 2 then return false end
+    local u, v = uvOf(F, V(rx, ry, rz))
+    return in_strip(u, v, RUNWAY.u0 - OVERRUN.len, RUNWAY.v, RUNWAY.u1 + OVERRUN.len, RUNWAY.v, OVERRUN.half + 2)
+  end
   local u, v = uvOf(F, V(rx, ry, rz))
   local m = 3.0
-  if save.get("base.runway") ~= false and
-     in_strip(u, v, RUNWAY.u0 - 4, RUNWAY.v, RUNWAY.u1 + 4, RUNWAY.v, RUNWAY.half + RUNWAY.shoulder + m + 2) then
+  if rw and in_strip(u, v, RUNWAY.u0 - 4, RUNWAY.v, RUNWAY.u1 + 4, RUNWAY.v, RUNWAY.half + RUNWAY.shoulder + m + 2) then
+    return true
+  end
+  if rw and in_strip(u, v, RUNWAY.u0 - OVERRUN.len, RUNWAY.v, RUNWAY.u1 + OVERRUN.len, RUNWAY.v, OVERRUN.half + 2)
+     and (u < RUNWAY.u0 or u > RUNWAY.u1) then
     return true
   end
   if in_strip(u, v, TAXIWAY.u, TAXIWAY.v0, TAXIWAY.u, TAXIWAY.v1, TAXIWAY.half + m) then return true end
@@ -797,6 +826,11 @@ local function fit_samples()
     out[#out + 1] = { u, RUNWAY.v + RUNWAY.half, "runway" }
     out[#out + 1] = { u, RUNWAY.v - RUNWAY.half, "runway" }
   end
+  -- the overruns weigh in the earthwork and the water, never lose the runway
+  for _, du in ipairs({ 50, 100, 145 }) do
+    out[#out + 1] = { RUNWAY.u0 - du, RUNWAY.v, "overrun" }
+    out[#out + 1] = { RUNWAY.u1 + du, RUNWAY.v, "overrun" }
+  end
   for _, f in ipairs(FACILITIES) do
     local cu, cv, hu = lotRect(f)
     out[#out + 1] = { cu, cv, f.prefab }
@@ -911,7 +945,10 @@ function gradeDiscs(Fr, runway)
       end
     end
   end
-  if runway then strip(runway_strip(Fr), RUNWAY.half + RUNWAY.shoulder) end
+  if runway then
+    strip(runway_strip(Fr), RUNWAY.half + RUNWAY.shoulder)
+    for _, S in ipairs(overrunStrips(Fr)) do strip(S, OVERRUN.half) end
+  end
   strip(stripOf(Fr, TAXIWAY.u, TAXIWAY.v0 - 4, TAXIWAY.u, TAXIWAY.v1), TAXIWAY.half)
   for _, s in ipairs(STRIPS) do strip(stripOf(Fr, s[2], s[3], s[4], s[5]), s[6]) end
   for _, f in ipairs(FACILITIES) do
@@ -967,7 +1004,11 @@ function blendDiscs(Fr, runway)
     end
     for _, s in ipairs({ -GRADE.r * 0.6, S.L + GRADE.r * 0.6 }) do out[#out + 1] = stripDir(S, s, 0) end
   end
-  if runway then strip(runway_strip(Fr), RUNWAY.half + RUNWAY.shoulder) end
+  if runway then
+    strip(runway_strip(Fr), RUNWAY.half + RUNWAY.shoulder)
+    -- (an overrun's own sides and far end; its near end is the runway's)
+    for _, S in ipairs(overrunStrips(Fr)) do strip(S, OVERRUN.half) end
+  end
   strip(stripOf(Fr, TAXIWAY.u, TAXIWAY.v0 - 4, TAXIWAY.u, TAXIWAY.v1), TAXIWAY.half)
   for _, st in ipairs(STRIPS) do strip(stripOf(Fr, st[2], st[3], st[4], st[5]), st[6]) end
   for _, f in ipairs(FACILITIES) do
@@ -1009,6 +1050,13 @@ local function grade_holds(body, Fr, runway)
   local pts = { { 0, 0 }, { 0, -15 }, { 40, -8 }, { -50, -8 }, { 0, 60 }, { PAD.u, PAD.v - 20 }, { 40, 12 }, { -50, 12 } }
   if runway then
     for k = 0, 4 do pts[#pts + 1] = { RUNWAY.u0 + 10 + (RUNWAY.u1 - RUNWAY.u0 - 20) * k / 4, RUNWAY.v } end
+    -- the overruns: their ground only (no roof reads: the check is one frame's
+    -- work), and a point standing in water is the sea's, not the grade's
+    for _, du in ipairs({ 60, 130 }) do
+      for _, u in ipairs({ RUNWAY.u0 - du, RUNWAY.u1 + du }) do
+        if not water_at(body, dirAt(Fr, u, RUNWAY.v), Fr.R) then pts[#pts + 1] = { u, RUNWAY.v, true } end
+      end
+    end
   end
   for _, f in ipairs(FACILITIES) do pts[#pts + 1] = { f.u, f.v } end
   local worst, why = 0, nil
@@ -1026,7 +1074,7 @@ local function grade_holds(body, Fr, runway)
     end
     if abs(q) > worst then worst, why = abs(q), string.format("ground %+.2f m at u %.0f v %.0f", q, p[1], p[2]) end
     -- and nothing hanging over it: rock above the grade is a roof
-    for _, hh in ipairs({ 6.0, 11.0, 16.0, 22.0 }) do
+    for _, hh in ipairs(p[3] and {} or { 6.0, 11.0, 16.0, 22.0 }) do
       local qa = terrain.query(body.x + d.x * (Fr.R + hh), body.y + d.y * (Fr.R + hh), body.z + d.z * (Fr.R + hh))
       if qa and qa < 0.5 and hh > worst then worst, why = hh, string.format("rock %.2f m from a point %.0f m over u %.0f v %.0f", qa, hh, p[1], p[2]) end
     end
@@ -1267,7 +1315,7 @@ function tell_ground(force)
   if not (ff and ff.groundChanged and b and footprint) then return false end
   ground_told = true
   ff.groundChanged(b.x + footprint.x, b.y + footprint.y, b.z + footprint.z,
-    FOOTPRINT_RADIUS + GRADE.r * 1.25 + 12.0, force == true)
+    math.max(FOOTPRINT_RADIUS, save.get("base.runway") ~= false and OVERRUN_REACH or 0) + GRADE.r * 1.25 + 12.0, force == true)
   return true
 end
 
@@ -2203,7 +2251,7 @@ local function try_place()
   local holds, worst = true, 0
   -- A base graded and checked before keeps its ground: the edits are in the
   -- slot's saved terrain, so a resume sends nothing (`base.graded`).
-  if not fresh and save.get("base.graded") ~= LAYOUT_VERSION then holds, worst = grade_holds(body, F, runway) end
+  if not fresh and save.get("base.graded") ~= GRADED then holds, worst = grade_holds(body, F, runway) end
   if fresh or not holds then
     local cd = len(V(crew.x - (body.x + cu.x * R), crew.y - (body.y + cu.y * R), crew.z - (body.z + cu.z * R)))
     -- (a save that has played streams its saved ground back in. The engine
@@ -2338,7 +2386,7 @@ function update(node, dt)
         relooked, check_now, check_at = true, true, time + 1.0
         log(string.format("base: the grade reads %.2f m off (%s) — looking again in a second", worst, tostring(GRADE_WHY)))
       elseif ok then
-        save.set("base.graded", LAYOUT_VERSION)
+        save.set("base.graded", GRADED)
         log(string.format("base: the grade holds (%.2f m) — recorded", worst))
       elseif regrades < 2 and not grade_stuck(worst) then
         regrades = regrades + 1
@@ -2347,7 +2395,7 @@ function update(node, dt)
         log("base: the grade did not hold — " .. grade_later.why .. ", grading again before the curtain goes")
       else
         -- recorded anyway: grading this ground again changes nothing
-        save.set("base.graded", LAYOUT_VERSION)
+        save.set("base.graded", GRADED)
         log(string.format("base: the grade still does not hold (%.2f m: %s) — leaving it", worst, tostring(GRADE_WHY)))
       end
     end
@@ -2414,7 +2462,7 @@ function update(node, dt)
     local b = space.body(baseBody)
     local ok, worst = grade_holds(b, F, save.get("base.runway") ~= false)
     if ok then
-      save.set("base.graded", LAYOUT_VERSION)
+      save.set("base.graded", GRADED)
       log(string.format("base: the grade holds (%.2f m) — recorded", worst))
     end
     if not ok and not relooked then
@@ -2426,7 +2474,7 @@ function update(node, dt)
                       why = string.format("check after grading: %.2f m off", worst) }
       log("base: the grade did not hold — " .. grade_later.why .. ", grading again")
     elseif not ok then
-      save.set("base.graded", LAYOUT_VERSION)
+      save.set("base.graded", GRADED)
       log(string.format("base: the grade still does not hold (%.2f m: %s) — leaving it", worst, tostring(GRADE_WHY)))
     end
   end

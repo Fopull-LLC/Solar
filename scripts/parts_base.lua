@@ -15,12 +15,27 @@
 --   half       the footprint's half-extents { x, y, z } (m), for the overlap
 --              test and the ghost (placement.overlapObb).
 --   slope      the steepest ground it stands on: the cosine between the
---              ground's normal and up (step 5's foundations relax it).
+--              ground's normal and up (relaxed to the flag's 0.6 in step 5:
+--              `grade` and the footing judge the ground now).
 --   hull       how the module's walls become a body in the engine's
 --              interiors Stage 1 (EN1): "subShape" (flat walls: its "Wall N"
 --              boxes) or "shell" (a curved hull: its "Shell" child mesh);
 --              nil for a slab. Nothing reads it yet; it says what the prefab
 --              was built for.
+--
+-- Step 5 (K5–K7) adds what snapping and foundations read:
+--   deck       a part others may stand on: its top is `deck` m over its
+--              ground point (the Pad Plate's 0.20 m proud slab).
+--   tile       a part that tiles edge to edge with others of the same `tile`
+--              (m between centres): plates beside plates, square to them.
+--   onDeck     may stand on a deck (sheds and habs on plates).
+--   grade      the most the ground may fall across the footprint (m) before
+--              the part refuses it; up to that the ground under it is
+--              levelled (terrain.sculpt "flatten") and a footing is cast
+--              where it falls more than FOOTING_FROM.
+--   footPad    how far the footing reaches past the footprint (m).
+--   skirt      how deep the part's own footing already goes (the slab's
+--              0.40 m): no cast footing is needed for a fall shallower.
 --
 -- Numbers are the real things' (tools/gen_base_parts.py has the sources):
 --   Pad Plate       4 x 4 m precast slab, 0.30 m: 11.5 t of concrete
@@ -34,14 +49,15 @@ SECTION = "BASE"
 PARTS = {
   padPlate = { prefab = "BasePadPlate", label = "Pad Plate", h = 0.60, rx = 2.0, rz = 2.0, mass = 11.5, cost = 900,
                kind = "structural", fieldOnly = true, seat = -0.0475, half = { x = 2.0, y = 0.30, z = 2.0 },
-               slope = 0.95, desc = "4 x 4 m precast slab · 11.5 t · a level deck to build on" },
+               slope = 0.6, deck = 0.20, tile = 4.0, grade = 2.0, footPad = 0.15, skirt = 0.40,
+               desc = "4 x 4 m precast slab · 11.5 t · a level deck to build on" },
   shed     = { prefab = "BaseShed", label = "Equipment Shed", h = 2.60, rx = 1.6, rz = 1.32, mass = 1.6, cost = 1400,
                kind = "structural", fieldOnly = true, seat = 1.30, half = { x = 1.55, y = 1.30, z = 1.25 },
-               slope = 0.96, hull = "subShape",
+               slope = 0.6, onDeck = true, grade = 1.6, footPad = 0.20, hull = "subShape",
                desc = "3.0 x 2.4 m steel shelter · 1.6 t · racks and a bench inside" },
   hab      = { prefab = "BaseHab", label = "Surface Hab", h = 4.36, rx = 3.5, rz = 2.2, mass = 7.5, cost = 6500,
                kind = "structural", fieldOnly = true, seat = 2.104, half = { x = 3.45, y = 2.18, z = 2.05 },
-               slope = 0.97, hull = "shell",
+               slope = 0.6, onDeck = true, grade = 2.0, footPad = 0.25, hull = "shell",
                desc = "4 x 6 m pressure can on saddles · 7.5 t · a home for four, one day" },
 }
 

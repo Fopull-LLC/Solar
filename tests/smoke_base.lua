@@ -279,6 +279,26 @@ assert(BF.keepClear(planet.name, rel(0, 125)), "the pad must be kept clear")
 assert(not BF.keepClear(planet.name, rel(120, 40)), "open ground NE of the compound is not paved")
 assert(not BF.keepClear(planet.name, rel(0, -110)), "open ground south of the runway is not paved")
 assert(not BF.keepClear("Elsewhere", rel(0, 0)), "another world's ground is never the base's")
+-- the runway's overruns (playtest 2026-11-05): graded and kept clear 150 m past each end
+assert(BF.keepClear(planet.name, rel(BF.RUNWAY.u1 + 100, BF.RUNWAY.v)), "the east overrun must be kept clear")
+assert(BF.keepClear(planet.name, rel(BF.RUNWAY.u0 - 140, BF.RUNWAY.v + 10)), "the west overrun must be kept clear")
+assert(not BF.keepClear(planet.name, rel(BF.RUNWAY.u1 + 175, BF.RUNWAY.v)), "past the overrun is open ground")
+assert(not BF.keepClear(planet.name, rel(BF.RUNWAY.u1 + 60, BF.RUNWAY.v + 30)), "beside the overrun is open ground")
+do
+  local far_w, far_e = false, false
+  for _, d in ipairs(BF.gradeDiscs(Fr, true)) do
+    local u, v = BF.uvOf(Fr, d)
+    if math.abs(v - BF.RUNWAY.v) < 20 and u < BF.RUNWAY.u0 - BF.OVERRUN.len + 5 then far_w = true end
+    if math.abs(v - BF.RUNWAY.v) < 20 and u > BF.RUNWAY.u1 + BF.OVERRUN.len - 5 then far_e = true end
+  end
+  assert(far_w and far_e, "the grade reaches the far end of both overruns")
+  local none = true
+  for _, d in ipairs(BF.gradeDiscs(Fr, false)) do
+    local u = BF.uvOf(Fr, d)
+    if u > BF.RUNWAY.u1 + 40 then none = false end
+  end
+  assert(none, "a base with no runway grades no overrun")
+end
 
 -- 9. the floor and its foundations: every strip is a row of static slabs on the
 -- sphere, parented to the planet in body-relative coords, their tops SLAB.top
@@ -338,7 +358,7 @@ end
 
 -- the grade is checked once it has landed and recorded: a resume sends nothing
 for _ = 1, 400 do time = time + TICK; BF.update({}, TICK) end
-assert(STORE["base.graded"] == BF.LAYOUT_VERSION, "a grade that holds is recorded in the save")
+assert(STORE["base.graded"] == BF.GRADED, "a grade that holds is recorded in the save")
 
 -- ── session 2: reload; the ground holds, nothing is graded again ───────────
 spawned, created, meshes = {}, {}, {}
@@ -503,7 +523,7 @@ do
   assert(BF.sited, "the paced grade never finished")
   assert(dropped == 0, dropped .. " edits dropped by the engine's queue")
   assert(peak <= 300 + 1, "the grade kept " .. peak .. " edits waiting (window 300)")
-  assert(STORE["base.graded"] == BF.LAYOUT_VERSION and checked_at_zero, "the grade was checked before it had landed")
+  assert(STORE["base.graded"] == BF.GRADED and checked_at_zero, "the grade was checked before it had landed")
   terrain.pending, terrain.sculpt, terrain.paint = nil, sculpt0, paint0
   print(string.format("  paced: %d ops, at most %d waiting, none dropped", sent, peak))
 end

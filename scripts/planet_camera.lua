@@ -1176,8 +1176,11 @@ local function place_camera(node, dt)
   -- The Build Kit (field_builder.lua) frees the cursor: no first person and no
   -- shift-lock while it is up (RMB held still looks round).
   local kit = (not piloting) and script_ref("field_builder")
+  local kit_h = kit
   kit = kit and kit.isOpen and kit.isOpen() or false
   if kit then firstPerson, shiftlock = false, false end
+  -- …and with a part in hand its wheel turns the part (K6), not the view
+  if kit and kit_h.wantsScroll == true then dz = 0.0 end
   -- The gravity gun uses the wheel for its hold distance while it holds
   -- something (tool_belt.wantsScroll): the view must not zoom with it.
   do

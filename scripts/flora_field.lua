@@ -581,7 +581,8 @@ base_layout_read = function()
     local ok, F = pcall(bf.frameOf, { x = bx, y = by, z = bz }, hd, R)
     if not ok then return nil end
     base_l = { key = key, F = F, bf = bf, x = bx, y = by, z = bz,
-               r = (bf.FOOTPRINT_RADIUS or 175) + BASE_CLEAR.reach }
+               r = math.max(bf.FOOTPRINT_RADIUS or 175, save.get("base.runway") ~= false and bf.OVERRUN_REACH or 0)
+                   + BASE_CLEAR.reach }
   end
   return base_l
 end
@@ -612,6 +613,11 @@ local function base_clearance(L, rx, ry, rz)
   local RW, TW = bf.RUNWAY, bf.TAXIWAY
   if RW and save.get("base.runway") ~= false then
     best = math.min(best, seg(RW.u0 - (RW.blast or 0), RW.v, RW.u1 + (RW.blast or 0), RW.v, RW.half + (RW.shoulder or 0)))
+    -- the runway's overruns: graded ground a plane may roll out onto
+    local OV = bf.OVERRUN
+    if OV then
+      best = math.min(best, seg(RW.u0 - OV.len, RW.v, RW.u0, RW.v, OV.half), seg(RW.u1, RW.v, RW.u1 + OV.len, RW.v, OV.half))
+    end
   end
   if TW then best = math.min(best, seg(TW.u, TW.v0, TW.u, TW.v1, TW.half)) end
   local fence = math.huge

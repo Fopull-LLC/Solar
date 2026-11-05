@@ -3481,6 +3481,8 @@
                 ( kind: "structures", enabled: true, params: [] ),
                 ( kind: "ghost", enabled: true, params: [] ),
                 ( kind: "placement", enabled: true, params: [] ),
+                ( kind: "base_snap", enabled: true, params: [] ),
+                ( kind: "builder_history", enabled: true, params: [] ),
                 ( kind: "field_builder", enabled: true, params: [] ),
             ],
             id: Some(652),

@@ -246,8 +246,10 @@ end
 local function pv_camera(B)
   if pv_valid(pv.cam) then return pv.cam end
   if pv.making or not createNode then return nil end
+  local par = pv_parent(B)
+  if not par then return nil end
   pv.making = true
-  createNode("PartPreviewCam", pv_parent(B), function(n)
+  createNode("PartPreviewCam", par, function(n)
     pv.making, pv.cam = false, n
     n.x, n.y, n.z = 0, PV.alt, pv.dist
     if n.setAngles then n:setAngles(0, 0, 0) end
@@ -382,11 +384,17 @@ local function icon_store()
 end
 -- The icon camera: a plain off-screen camera beside the preview's (the
 -- render-target camera itself photographed nothing but its sky on rc33).
+-- (only under the stand's frame: a host whose frame is made lazily — the
+-- Build Kit's rides the crew — answers nil at first, and a camera made then
+-- landed at the scene's root, 2.4 km over the world's origin, and
+-- photographed empty sky: the blank card icons of step 4)
 local function icon_camera(B)
   if pv_valid(icq.cam) then return icq.cam end
   if icq.making or not createNode then return nil end
+  local par = pv_parent(B)
+  if not par then return nil end
   icq.making = true
-  createNode("PartIconCam", pv_parent(B), function(n)
+  createNode("PartIconCam", par, function(n)
     icq.making, icq.cam = false, n
     pcall(function() n:setCamera { fovY = PV.fov, active = false, cullMask = 2 ^ PV.bit } end)
     studio_camera(n)
@@ -394,7 +402,11 @@ local function icon_camera(B)
   return nil
 end
 local function icon_tick(B)
-  if icq.done or icq.busy or not (camera and camera.captureTexture) then return false end
+  if icq.done or not (camera and camera.captureTexture) then return false end
+  -- a picture asked for renders on a later frame: the stand stays as it was
+  -- posed (part on, studio lit) until it answers
+  if icq.busy then return true end
+  if not pv_parent(B) then return true end
   local cat = B.catalogue and B.catalogue() or {}
   local store = not icq.seeded and icon_store() or nil
   icq.seeded = true
@@ -460,10 +472,12 @@ function iconCount() return icq.n end
 local function preview_tick(B, dt)
   local want = st.hover or st.held
   previewId = want
+  if icq.busy then return end      -- (a tile icon is being taken off the stand)
   if not want then
     if not icon_tick(B) then pv_show(false); if rig.on ~= false then rig_tick(B, false) end end
     return
   end
+  if not pv_parent(B) then return end
   pv_camera(B)
   stage_want(B, want)
   pv_show(true)
@@ -612,8 +626,23 @@ function describe(B, L)
 end
 
 
+-- THE FOLDED COLUMN (K3): a host that folds the parts away (the Build Kit's
+-- B) shows a 36 px tab in the column's corner instead, so the view stays
+-- clear; clicking it (or B) unfolds the column.
+TAB = { w = 36, h = 146 }
+local function folded(B) return B.isCollapsed ~= nil and B.isCollapsed() == true end
+local function folded_tab(B, L)
+  local r = L.left
+  return { "col", key = "tab", style = "panel/frame", pin = "topLeft", x = r.x, y = r.y, w = TAB.w, h = TAB.h,
+    gap = 4, pad = 4, align = "center",
+    { "button", key = "open", style = "panel/choice", w = 28, h = 28, text = "▸", textAlign = "center", textValign = "center",
+      tooltip = "Unfold the parts (B)", onClicked = function() if B.unfold then B.unfold() end end },
+    { "text", key = "lbl", style = "panel/label", w = 28, h = 86, text = "P\nA\nR\nT\nS", textAlign = "center", wrap = true },
+    { "text", key = "k", style = "panel/hint", w = 28, h = 14, text = "B", textAlign = "center" } }
+end
+
 -- ── panel plumbing ──────────────────────────────────────────────────────────
-local LAST = { L = nil }
+local LAST = { L = nil, folded = false }
 local function mouse_du(H)
   if not (camera and camera.screenSize) then return nil end
   local sw, sh = camera.screenSize()
@@ -628,7 +657,9 @@ function ownsMouse()
   if not L then return false end
   local x, y = mouse_du(L.H)
   local r = L.left
-  return x ~= nil and x >= r.x and x <= r.x + r.w and y >= r.y and y <= r.y + r.h
+  local w, h = r.w, r.h
+  if LAST.folded then w, h = TAB.w, TAB.h end
+  return x ~= nil and x >= r.x and x <= r.x + w and y >= r.y and y <= r.y + h
 end
 function ownsKeys()
   local f = ui and ui.focused and ui.focused()
@@ -655,15 +686,18 @@ function update(node, dt)
   if tb and tb.fitHost then tb.fitHost(el, W, H) end
   local L = (B.layout and B.layout(W, H)) or layout(W, H)
   LAST.L = L
+  local fold = folded(B)
+  LAST.folded = fold
   st.t = st.t + (dt or 0)
   st.held = B.heldId and B.heldId() or nil
   -- (no card hovered while the pointer is off the panel: the plate goes)
-  if st.hover and not ownsMouse() then st.hover = nil end
+  if st.hover and (fold or not ownsMouse()) then st.hover = nil end
   preview_tick(B, dt)
   local sig = table.concat({ math.floor(W), math.floor(H), st.tab, st.query, tostring(st.held), tostring(st.hover),
-    tostring(pv.ready) }, "|")
-  if not st.dirty and sig == st.sig and st.t < 1.0 then scroll_top_tick() return end
+    tostring(pv.ready), tostring(fold) }, "|")
+  if not st.dirty and sig == st.sig and st.t < 1.0 then if not fold then scroll_top_tick() end return end
   st.dirty, st.sig, st.t = false, sig, 0
+  if fold then ui.make(node, { folded_tab(B, L) }) return end
   local tree = { describe(B, L) }
   local plate = preview_plate(B, L)
   if plate then tree[#tree + 1] = plate end
