@@ -2227,7 +2227,7 @@
    "slot": 1,
    "name": "rust",
    "material": "rustrock",
-   "replaces": "textures/terrain/planet_rust_rock.png",
+   "was_psx": "planet_rust_rock",
    "cc0": {
     "set": "Rocks011",
     "file": "textures/env/terrain/01_rust.png"
@@ -2244,7 +2244,7 @@
    "slot": 2,
    "name": "soil",
    "material": "soil",
-   "replaces": "textures/terrain/planet_purple_dirt.png",
+   "was_psx": "planet_purple_dirt",
    "cc0": {
     "set": "Ground039",
     "file": "textures/env/terrain/02_soil.png"
@@ -2258,7 +2258,7 @@
    "slot": 3,
    "name": "flagstone",
    "material": "slate",
-   "replaces": "textures/terrain/planet_purple_slate.png",
+   "was_psx": "planet_purple_slate",
    "cc0": {
     "set": "Rocks011",
     "file": "textures/env/terrain/03_flagstone.png"
@@ -2275,7 +2275,7 @@
    "slot": 4,
    "name": "onyx",
    "material": "onyx",
-   "replaces": "textures/terrain/planet_banded_onyx.png",
+   "was_psx": "planet_banded_onyx",
    "cc0": {
     "set": "Onyx006",
     "file": "textures/env/terrain/04_onyx.png"
@@ -2289,7 +2289,7 @@
    "slot": 5,
    "name": "veinstone",
    "material": "veinstone",
-   "replaces": "textures/terrain/cave_orange_veinstone.png",
+   "was_psx": "cave_orange_veinstone",
    "cc0": {
     "set": "Rock058",
     "file": "textures/env/terrain/05_veinstone.png"
@@ -2303,7 +2303,7 @@
    "slot": 6,
    "name": "magma",
    "material": "uranium",
-   "replaces": "textures/terrain/cave_magma_veins.png",
+   "was_psx": "cave_magma_veins",
    "cc0": {
     "set": "Rock058",
     "file": "textures/env/terrain/06_magma.png"
@@ -2317,7 +2317,7 @@
    "slot": 7,
    "name": "amethyst",
    "material": "crystal",
-   "replaces": "textures/terrain/cave_amethyst.png",
+   "was_psx": "cave_amethyst",
    "cc0": {
     "set": "ChristmasTreeOrnament021",
     "file": "textures/env/terrain/07_amethyst.png"
@@ -2331,7 +2331,7 @@
    "slot": 8,
    "name": "bluecrystal",
    "material": "crystal",
-   "replaces": "textures/terrain/cave_blue_crystal.png",
+   "was_psx": "cave_blue_crystal",
    "cc0": {
     "set": "ChristmasTreeOrnament021",
     "file": "textures/env/terrain/08_bluecrystal.png"
@@ -2345,7 +2345,7 @@
    "slot": 9,
    "name": "slate",
    "material": "slate",
-   "replaces": "textures/terrain/moon_silver_slate.png",
+   "was_psx": "moon_silver_slate",
    "cc0": {
     "set": "Rock058",
     "file": "textures/env/terrain/09_slate.png"
@@ -2362,7 +2362,7 @@
    "slot": 10,
    "name": "gravelregolith",
    "material": "regolith",
-   "replaces": "textures/terrain/moon_gray_regolith.png",
+   "was_psx": "moon_gray_regolith",
    "cc0": {
     "set": "Ground110",
     "file": "textures/env/terrain/10_gravelregolith.png"
@@ -2376,7 +2376,7 @@
    "slot": 11,
    "name": "dust",
    "material": "regolith",
-   "replaces": "textures/terrain/moon_crater_dust.png",
+   "was_psx": "moon_crater_dust",
    "cc0": {
     "set": "Ground093B",
     "file": "textures/env/terrain/11_dust.png"
@@ -2390,7 +2390,7 @@
    "slot": 12,
    "name": "bandedice",
    "material": "ice",
-   "replaces": "textures/terrain/moon_teal_ice.png",
+   "was_psx": "moon_teal_ice",
    "cc0": {
     "set": "Onyx006",
     "file": "textures/env/terrain/12_bandedice.png"
@@ -2404,7 +2404,7 @@
    "slot": 13,
    "name": "basalt",
    "material": "basalt",
-   "replaces": "textures/terrain/geo_basalt.png",
+   "was_psx": "geo_basalt",
    "cc0": {
     "set": "Rock035",
     "file": "textures/env/terrain/13_basalt.png"
@@ -2418,7 +2418,7 @@
    "slot": 14,
    "name": "granite",
    "material": "granite",
-   "replaces": "textures/terrain/geo_granite.png",
+   "was_psx": "geo_granite",
    "cc0": {
     "set": "Rock060",
     "file": "textures/env/terrain/14_granite.png"
@@ -2435,7 +2435,7 @@
    "slot": 15,
    "name": "sandstone",
    "material": "sandstone",
-   "replaces": "textures/terrain/geo_sandstone.png",
+   "was_psx": "geo_sandstone",
    "cc0": {
     "set": "Onyx010",
     "file": "textures/env/terrain/15_sandstone.png"
@@ -2452,7 +2452,7 @@
    "slot": 16,
    "name": "sand",
    "material": "sand",
-   "replaces": "textures/terrain/geo_sand.png",
+   "was_psx": "geo_sand",
    "cc0": {
     "set": "Ground093B",
     "file": "textures/env/terrain/16_sand.png"
@@ -2466,7 +2466,7 @@
    "slot": 17,
    "name": "regolith",
    "material": "regolith",
-   "replaces": "textures/terrain/geo_regolith.png",
+   "was_psx": "geo_regolith",
    "cc0": {
     "set": "Ground039",
     "file": "textures/env/terrain/17_regolith.png"
@@ -2480,7 +2480,7 @@
    "slot": 18,
    "name": "salt",
    "material": "salt",
-   "replaces": "textures/terrain/geo_salt.png",
+   "was_psx": "geo_salt",
    "cc0": {
     "set": "Snow014",
     "file": "textures/env/terrain/18_salt.png"
@@ -2497,7 +2497,7 @@
    "slot": 19,
    "name": "mudcrack",
    "material": "clay",
-   "replaces": "textures/terrain/geo_mudcrack.png",
+   "was_psx": "geo_mudcrack",
    "cc0": {
     "set": "Ground039",
     "file": "textures/env/terrain/19_mudcrack.png"
@@ -2514,7 +2514,7 @@
    "slot": 20,
    "name": "moss",
    "material": "soil",
-   "replaces": "textures/terrain/geo_moss.png",
+   "was_psx": "geo_moss",
    "cc0": {
     "set": "Ground037",
     "file": "textures/env/terrain/20_moss.png"
@@ -2531,7 +2531,7 @@
    "slot": 21,
    "name": "ash",
    "material": "ash",
-   "replaces": "textures/terrain/geo_ash.png",
+   "was_psx": "geo_ash",
    "cc0": {
     "set": "Ground110",
     "file": "textures/env/terrain/21_ash.png"
@@ -2545,7 +2545,7 @@
    "slot": 22,
    "name": "snow",
    "material": "ice",
-   "replaces": "textures/terrain/geo_snow.png",
+   "was_psx": "geo_snow",
    "cc0": {
     "set": "Snow014",
     "file": "textures/env/terrain/22_snow.png"
@@ -2559,7 +2559,7 @@
    "slot": 23,
    "name": "glacier",
    "material": "ice",
-   "replaces": "textures/terrain/geo_glacier.png",
+   "was_psx": "geo_glacier",
    "cc0": {
     "set": "Snow008A",
     "file": "textures/env/terrain/23_glacier.png"
@@ -2573,7 +2573,7 @@
    "slot": 24,
    "name": "scree",
    "material": "gravel",
-   "replaces": "textures/terrain/geo_scree.png",
+   "was_psx": "geo_scree",
    "cc0": {
     "set": "Ground110",
     "file": "textures/env/terrain/24_scree.png"
@@ -2587,7 +2587,7 @@
    "slot": 25,
    "name": "limestone",
    "material": "limestone",
-   "replaces": "textures/terrain/geo_limestone.png",
+   "was_psx": "geo_limestone",
    "cc0": {
     "set": "Rock051",
     "file": "textures/env/terrain/25_limestone.png"
@@ -2604,7 +2604,7 @@
    "slot": 26,
    "name": "sulfur",
    "material": "sulfur",
-   "replaces": "textures/terrain/geo_sulfur.png",
+   "was_psx": "geo_sulfur",
    "cc0": {
     "set": "Rocks011",
     "file": "textures/env/terrain/26_sulfur.png"
@@ -2621,7 +2621,7 @@
    "slot": 27,
    "name": "hematite",
    "material": "hematite",
-   "replaces": "textures/terrain/geo_hematite.png",
+   "was_psx": "geo_hematite",
    "cc0": {
     "set": "Ground085",
     "file": "textures/env/terrain/27_hematite.png"
@@ -2635,7 +2635,7 @@
    "slot": 28,
    "name": "tundra",
    "material": "soil",
-   "replaces": "textures/terrain/geo_tundra.png",
+   "was_psx": "geo_tundra",
    "cc0": {
     "set": "Grass004",
     "file": "textures/env/terrain/28_tundra.png"
@@ -2652,7 +2652,7 @@
    "slot": 29,
    "name": "pahoehoe",
    "material": "basalt",
-   "replaces": "textures/terrain/geo_pahoehoe.png",
+   "was_psx": "geo_pahoehoe",
    "cc0": {
     "set": "Rock058",
     "file": "textures/env/terrain/29_pahoehoe.png"
@@ -2666,7 +2666,7 @@
    "slot": 30,
    "name": "shale",
    "material": "shale",
-   "replaces": "textures/terrain/geo_shale.png",
+   "was_psx": "geo_shale",
    "cc0": {
     "set": "Rock051",
     "file": "textures/env/terrain/30_shale.png"
@@ -2683,7 +2683,7 @@
    "slot": 31,
    "name": "peat",
    "material": "soil",
-   "replaces": "textures/terrain/geo_peat.png",
+   "was_psx": "geo_peat",
    "cc0": {
     "set": "Rock063",
     "file": "textures/env/terrain/31_peat.png"
@@ -2697,7 +2697,7 @@
    "slot": 32,
    "name": "litter",
    "material": "soil",
-   "replaces": "textures/terrain/geo_litter.png",
+   "was_psx": "geo_litter",
    "cc0": {
     "set": "Grass004",
     "file": "textures/env/terrain/32_litter.png"

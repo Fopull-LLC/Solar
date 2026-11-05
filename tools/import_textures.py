@@ -925,7 +925,7 @@ def write_manifest(sets, results, dry):
             maps=sorted(k for k in s["members"]), conversion=r or None,
             use=uses.get(sid) or [PLANNED.get(s["kind"], "reserve")],
         ))
-    layers = [dict(slot=t["slot"], name=t["name"], material=t["mat"], replaces="textures/terrain/%s.png" % t["was"],
+    layers = [dict(slot=t["slot"], name=t["name"], material=t["mat"], was_psx=t["was"],
                    cc0=dict(set=t["cc0"][0], file=layer_path(OUT_CC0, t)),
                    local=dict(set=t["local"][0], file=layer_path(OUT_LOCAL, t)) if t.get("local") else None,
                    size=LAYER, scale=t["scale"], glow=bool(t.get("glow"))) for t in TERRAIN]
