@@ -1,0 +1,16 @@
+// The placement ghost's one material (scripts/ghost.lua, shaders/hologram.flsl):
+// additive, untextured, tinted at runtime through the shader's `tint` and `alpha`.
+(
+    color: (1.0, 1.0, 1.0),
+    emissive: (0.0, 0.0, 0.0),
+    emissive_strength: 0.0,
+    specular: (1.0, 1.0, 1.0),
+    shininess: 16.0,
+    specular_strength: 0.0,
+    rim: (0.0, 0.0, 0.0),
+    rim_strength: 0.0,
+    unlit: true,
+    ambient: 1.0,
+    alpha: 1.0,
+    shader: Some("shaders/hologram.flsl"),
+)

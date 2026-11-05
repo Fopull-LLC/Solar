@@ -198,6 +198,24 @@ function earn(amount, why)
   if s and s.play then s.play("cash") end
 end
 
+-- A REFUND: money handed back for something returned (the Build Kit's 60 s
+-- undo, base_economy.UNDO_SECS). Not income: an advance on the books takes
+-- no share of it, and it makes no till sound.
+function refund(amount, why)
+  amount = math.max(0, math.floor(amount or 0))
+  if amount == 0 then return end
+  if isSandbox() or rich() then
+    record(amount, why)
+    log(string.format("company: +$%d  (%s)   [refund]", amount, why or "—"))
+    return
+  end
+  local b = balance()
+  save.set("co.funds", b + amount)
+  funds = b + amount
+  record(amount, why)
+  log(string.format("company: +$%d  (%s)   balance $%d", amount, why or "—", funds))
+end
+
 -- ── THE ADVANCE: nobody is ever stuck ──────────────────────────────────────
 -- Playtest 2026-10-26: "it's very hard to make money back up to where you were
 -- and progress again". Three rockets in a crater could leave a company with

@@ -1,0 +1,31 @@
+[
+    (
+        // THE BUILD KIT'S PARTS COLUMN (deep-space K3): catalog_panel.lua
+        // re-hosted in the world. scripts/field_builder.lua spawns this under
+        // the Ship HUD while the kit is up and destroys it when it closes, so
+        // a scene only ever holds one catalogue (the VAB's, or this).
+        name: "Field Catalogue",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [
+            (
+                kind: "catalog_panel",
+                enabled: true,
+                params: [],
+            ),
+        ],
+        ui: Some((
+            place: Pin(
+                anchor: TopLeft,
+                offset: (0.0, 0.0),
+            ),
+            size: (Fixed(10.0), Fixed(10.0)),
+            visible: true,
+            opacity: 1.0,
+        )),
+    ),
+]

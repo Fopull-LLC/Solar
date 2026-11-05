@@ -141,9 +141,20 @@ ITEMS.spentRod = { name = "Spent Rod", kind = "consumable", kg = 40.0, L = 14, c
                    hold = { prefab = "ItemSpentRod", grip = "shoulder" }, body = "SpentRodBody",
                    about = "a burnt-out fuel rod, hot with fission products: don't carry it in a pack for long. The Materials Intake takes it back" }
 
+-- THE BUILD KIT (deep-space addendum K1; scripts/field_builder.lua): the
+-- Engineer's field tablet in its hard carry frame. Every Engineer is issued
+-- one (field_builder, once per member: an Engineers-only issue, so not
+-- `issue`); in hand it opens build mode, the parts column and the ghost.
+-- Carried by its top handle like the Repair Kit. `hintFrom`: the line under
+-- the belt is that script's (hintLine), as live as the ghost it describes.
+-- Not sold yet: the Depot stocks it once the 10 % coverage unlock (M3) lands.
+ITEMS.buildkit = { name = "Build Kit", kind = "device", kg = 1.6, L = 3, cost = 400,
+                   hold = { prefab = "ItemBuildKit", grip = "left" }, hintFrom = "field_builder", role = "engineer",
+                   about = "an Engineer's field tablet: pick a part, see its ghost on the ground, click to buy and ship it out (B)" }
+
 -- The belt's order: tools first, then devices and deployables, then
 -- consumables with a hold. (Worn items are never on the belt.)
-ORDER = { "gravgun", "laser", "surveyor", "beacon", "flag", "rope", "repairkit", "medkit", "gascan", "fuelRod", "spentRod", "rcspack", "o2tank", "flashlight" }
+ORDER = { "gravgun", "laser", "surveyor", "buildkit", "beacon", "flag", "rope", "repairkit", "medkit", "gascan", "fuelRod", "spentRod", "rcspack", "o2tank", "flashlight" }
 
 -- The Medkit's work (crew.lua runs it): seconds held at it, what it gives,
 -- and the reach from the medic to the patient (m).

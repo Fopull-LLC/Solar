@@ -219,6 +219,11 @@ function hint()
   local I = items()
   local d = I and I.def(id)
   if not d then return "" end
+  if d.hintFrom then
+    -- an item whose line is another script's, as live as what it shows (the Build Kit)
+    local s = ref(d.hintFrom)
+    if s and s.hintLine then local ok, line = pcall(s.hintLine); if ok and line then return line end end
+  end
   if d.deploy then return string.format("%s  ·  LMB set it down where the ghost is teal  ·  H put it away", d.name) end
   if d.use and d.use.provider == "repair" then
     return "Repair Kit in hand  ·  walk up to a damaged part, right-click it → Repair  ·  H put it away"

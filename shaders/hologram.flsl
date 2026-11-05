@@ -1,0 +1,19 @@
+// hologram — the placement ghost (scripts/ghost.lua; materials/hologram.ron):
+// a part shown where it would go, before it is bought. Additive, so it needs
+// no sorting and never hides what it stands in: a faint fill, a rim that
+// brightens toward the silhouette (the shape reads from any side), and a
+// little of the key light so its faces stay apart. No textures: one material
+// serves every part. `tint` is green where it can go and red where it can't;
+// `alpha` scales the whole of it.
+shader hologram {
+  stage fragment
+  blend additive
+  uniform tint:  color = #4CF2BF
+  uniform alpha: float = 0.6 range(0, 1)
+
+  let face = saturate(abs(dot(normal, viewDir)))
+  let rim = pow(1.0 - face, 2.2)
+  let lit = 0.12 + 0.18 * saturate(dot(normal, lightDir))
+  let k = (0.10 + lit + 0.85 * rim) * alpha
+  output color = vec4(tint.rgb * k, 1.0)
+}

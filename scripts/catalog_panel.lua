@@ -27,6 +27,19 @@ local function ref(kind)
   return r
 end
 
+-- THE HOST: the VAB's builder, or (deep-space K3) the Build Kit's
+-- field_builder while the kit is up in the world. The host supplies the
+-- methods this panel calls (catalogue, partInfo, hold, heldId, …) and may add
+-- cardLines(id, def, locked) → price, role; noSubAssy; previewLayer() →
+-- name, bit; layout(W, H) → { left = { x, y, w, h } }; footText().
+local function host()
+  local B = ref("builder")
+  if B then return B end
+  local F = ref("field_builder")
+  if F and F.isOpen and F.isOpen() then return F end
+  return nil
+end
+
 -- What a part is FOR, in a few words under its name: its own `desc` when it
 -- has one, otherwise read off the registry's numbers.
 local function role(def)
@@ -152,7 +165,7 @@ end
 
 -- Put a part in the hand (the builder's research gate included).
 function pickPart(id)
-  local B = ref("builder")
+  local B = host()
   if not (B and id) then return false end
   -- A fresh part already in hand: its own card puts it back, another card
   -- swaps it (a lifted or pasted craft piece is never dropped from here).
@@ -493,6 +506,10 @@ local function card(B, rs, co, it)
   local price_text = locked and ("unlock " .. money(price)) or money(price)
   if armed then price_text = "confirm " .. money(price) .. "?" end
   local role_text = needs and ("locked · " .. needs) or role(def)
+  if B.cardLines and not locked then
+    local p, r = B.cardLines(id, def, locked)
+    price_text, role_text = p or price_text, r or role_text
+  end
   local fav = st.favs[id] == true
   -- the card of the part in your hand is latched in, orange-rimmed, "IN HAND"
   local inhand = st.held == id
@@ -525,6 +542,7 @@ end
 
 local function tabs(B)
   local list = { { "ALL", "ALL" }, { "FAV", "★" }, { "RECENT", "RECENT" }, { "SUB", "SUB-ASSY" } }
+  if B.noSubAssy then table.remove(list, 4) end
   for _, sec in ipairs(B.catalogue and B.catalogue() or {}) do list[#list + 1] = { sec.title, short(sec.title) } end
   return { "row", key = "tabs", w = "100%", h = "fit", wrap = true, gap = 3, pad = 0,
     items = list, function(t)
@@ -589,7 +607,7 @@ function describe(B, L)
     { "scroll", key = "list", name = LIST_NODE, w = "100%", h = "grow", dir = "column", gap = 3, pad = 0, align = "stretch",
       scrollSpeed = 48, items = rows, function(x) return x end },
     { "text", key = "foot", style = "panel/hint", w = "100%", h = 14, maxLines = 1, overflow = "ellipsis",
-      text = st.held and "IN HAND — click it again to put it back · ESC drops" or "click to hold · ENTER picks the first match" },
+      text = (B.footText and B.footText()) or (st.held and "IN HAND — click it again to put it back · ESC drops" or "click to hold · ENTER picks the first match") },
   }
 end
 
@@ -623,15 +641,19 @@ function start(node)
 end
 
 function update(node, dt)
-  local B = ref("builder")
+  local B = host()
   if not (B and B.catalogue and B.partInfo) then return end
+  if B.previewLayer and not st.layer_set then
+    st.layer_set = true
+    PV.layer, PV.bit = B.previewLayer()
+  end
   if not registered and B.registerPanel then registered = B.registerPanel(findScript("catalog_panel")) end
   if not el then el = node:getcomponent("UiElement") end
   local tb = ref("builder_toolbar")
   local W, H = 1280, 720
   if tb and tb.layerSize then W, H = tb.layerSize() end
   if tb and tb.fitHost then tb.fitHost(el, W, H) end
-  local L = layout(W, H)
+  local L = (B.layout and B.layout(W, H)) or layout(W, H)
   LAST.L = L
   st.t = st.t + (dt or 0)
   st.held = B.heldId and B.heldId() or nil

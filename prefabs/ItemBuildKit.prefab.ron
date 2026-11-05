@@ -1,0 +1,47 @@
+// BUILD KIT — the Engineer's field tablet, carried by its handle (scripts/field_builder.lua).
+// Written by tools/gen_base_parts.py — edit the generator, not this file.
+[
+    (
+        name: "ItemBuildKit",
+        tags: ["base_part"],
+        transform: (
+            translation: (0.0000, 0.0000, 0.0000),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Mesh(
+            asset_path: "models/items/build_kit.glb",
+        ),
+        object_materials: {
+            "Dark": (
+                color: (1.0, 1.0, 1.0),
+                texture: Some("textures/parts/metal_albedo.png"),
+                normal_map: Some("textures/parts/metal_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/parts/metal_orm.png"),
+                roughness: 1.2,
+                metallic_map: Some("textures/parts/metal_orm.png"),
+                metallic: 0.3,
+                ao_map: Some("textures/parts/metal_orm.png"),
+                shading: Physical,
+            ),
+            "Glass": (
+                color: (0.16, 0.20, 0.24),
+                roughness: 0.06,
+                metallic: 0.5,
+                shading: Physical,
+            ),
+            "Rubber": (
+                color: (1.0, 1.0, 1.0),
+                texture: Some("textures/parts/rubber_albedo.png"),
+                normal_map: Some("textures/parts/rubber_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/parts/rubber_orm.png"),
+                roughness: 1.0,
+                ao_map: Some("textures/parts/rubber_orm.png"),
+                shading: Physical,
+            ),
+        },
+        scripts: [],
+    ),
+]

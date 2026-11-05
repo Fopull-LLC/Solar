@@ -572,6 +572,9 @@ local function rmb_tap()
   -- scope): its press is never a tap (holster with H, or pad Y, for the menu)
   local sv = ref("surveyor")
   if sv and sv.ownsRmb and sv.ownsRmb() then st.rmb = nil return nil end
+  -- …and so does the Build Kit with a part's ghost in hand (a tap drops it)
+  local fb = ref("field_builder")
+  if fb and fb.ownsRmb and fb.ownsRmb() then st.rmb = nil return nil end
   local down = input.button(1) == true
   local R = st.rmb
   if down and not R then
