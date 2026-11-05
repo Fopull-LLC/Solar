@@ -9855,6 +9855,31 @@ function r2WheelSetup(w, F)
   return w
 end
 
+-- LANDING GEAR ON A CRAFT BUILT STANDING UP (playtest 2026-11-04: "my wheels
+-- on my jets were bouncing like they were fighting"; the player's jet is a
+-- VAB spaceplane: its nose the vessel's +Y, its gear legs along its +Z). The
+-- engine's wheel turns about the hull's Z swung about the joint's axis by its
+-- steer (floptle-physics wheel_axle; card 0562 asks for an axle of its own),
+-- and the joint's axis is the hull's Y — here the nose. Laid "across the
+-- front" as a rover's (the front read level in the vessel's X-Z: the wing),
+-- each tyre turned about the vertical once the jet lay level: it could not
+-- roll, skidded at the landing speed, slid its leg to its stop and threw the
+-- jet over (motoprobe jetland airstart: 55 m/s to 21 in a second, pitched
+-- 48 deg, banked 70). Until the engine can carry the axle, each leg's tyre
+-- turns about the axle across the nose and the leg (Y × leg, swung 90 deg
+-- about Y): it rolls along the runway. Its spring still works along the
+-- nose, so the leg is stiff upright: no suspension, no oleo, and it does not
+-- steer (a steer about the nose would lean the tyre, not turn it).
+function r2UprightGear(w, leg)
+  local ax, az = leg[3], -leg[1]
+  local l = math.sqrt(ax * ax + az * az)
+  if l < 0.3 then return end   -- (a leg along the nose: nothing better to do)
+  ax, az = ax / l, az / l
+  local th = math.deg(math.atan2(ax, az))
+  if th > 90 then th = th - 180 elseif th <= -90 then th = th + 180 end
+  w.steer0, w.upright, w.realigned = th, true, true
+end
+
 -- Where each wheel sits about the centre of mass (a along the front, l to the
 -- left), which wheels steer, and the line the turn pivots on.
 -- (The seated crew count where they sit, CREW_TU: the craft's real centre of
@@ -9886,6 +9911,7 @@ function r2SteerPlan(wheels, F, bp, gone)
     if c.steer == "off" or c.steerMax <= 0 then w.steers = false
     elseif c.steer == "on" or c.steer == "invert" then w.steers = true
     else w.steers = span > 0.3 and w.a > 0.2 * span end
+    if w.upright then w.steers = false end   -- (r2UprightGear)
     w.ssign = (c.steer == "invert") and -1 or 1
     if not w.steers then piv_n, piv = piv_n + 1, piv + w.a end
   end
@@ -10207,6 +10233,9 @@ local function r2_scan(node)
     local rf = r2RollFront(E, R2.fwd, mf)
     if rf then R2.fwd, R2.fwdWhy = rf, "the wheels' rolling line" end
   end
+  -- a craft flown nose-first whose nose is the vessel's ±Y (a spaceplane
+  -- built standing up in the VAB): its gear is laid by r2UprightGear
+  R2.noseUp = an and math.abs(an.y) > 0.7 and (R2.mode == "aircraft" or afHas(pd, "cockpit")) or nil
   R2.front = (math.abs(R2.fwd.x) >= math.abs(R2.fwd.z) and R2.fwd.x < 0) and -1 or 1
   local depth = {}
   local function depth_of(u)
@@ -10246,6 +10275,7 @@ local function r2_scan(node)
         end
         w.side = (w.cz >= 0) and 1 or -1
         r2WheelSetup(w, R2.fwd)
+        if w.gear and R2.noseUp then r2UprightGear(w, X) end
         -- an aircraft's or a rocket's wheels roll free: no motor pushes them
         -- (a rover's, landing gear too, drive)
         if R2.gear or R2.passive then w.rs = 0 end
@@ -11319,17 +11349,21 @@ function hang_tyre(node, w, info)
   local spec = { kind = "wheel", to = node, axis = axis, otherAnchor = vec3(w.cx, w.cy + (w.nudge or 0), w.cz),
                  motorSpeed = 0, maxForce = (m.torque or 0.6), steer = w.steer0 or 0 }
   -- IN REAL UNITS where the engine has them (floptle 0598): wheelReal.
-  -- Not landing gear yet: a held real-unit wheel skips on sub-cm ripple, and
-  -- on a jet's gear that is runway chatter (32 -> 107 contact changes) and a
-  -- taxi pitching ~20°, so gear keeps the frequency path and gearOleo.
-  -- (Re-tried on 0.117.1-dev.1406, motoprobe jetgear: the plain taxi is as
-  -- calm or calmer on real units, but the take-off roll still shakes 2-4x
-  -- harder (16-42 m/s² vertical vs 9-10) at sag 0.2-0.45 and ζ 0.7-1.0, and
-  -- the probe's ~2 m/s touchdown bottoms either gear and bounces ~2.3 m.)
+  -- Not landing gear (R2_REAL_GEAR off). Re-measured 2026-11-05 (motoprobe
+  -- jetland, engine .1434, after the engine's bump stops stopped rather than
+  -- sprang and its held tyre followed a ripple down): legs sized by the lever
+  -- rule at R2_GEAR_SAG, damped 0.5 / 1.0 of critical, the nose leg sized for
+  -- a braking stop, parked and taxied as calmly as the frequency path, but a
+  -- flared 0.7 m/s touchdown rolled the probe jet off one main onto the other
+  -- (its first contact's damper, 28 kN at once) and bounced it 0.9 m, its nose
+  -- leg sat on its stop under the brakes, and the take-off roll's tyres left
+  -- the ground more often (33/23/33 contact changes against 23/21/25). So
+  -- gear keeps the frequency path and gearOleo. (Tried before on .1406: a held
+  -- tyre skipped on sub-cm ripple, 32 -> 107 contact changes.)
   -- (made again at a moving mount, roboMounts: the motor and brake carry over)
   if w.keepMotor then for k, v in pairs(w.keepMotor) do spec[k] = v end end
   w.real = nil
-  if R2_REAL_SUSP and not w.gear then
+  if R2_REAL_SUSP and (R2_REAL_GEAR or not w.gear) then
     local k, cb, cr, lo, hi = wheelReal(w, info, g, c)
     spec.springRate, spec.damperBump, spec.damperRebound = k, cb, cr
     spec.min, spec.max, spec.limit = lo, hi, true
@@ -12243,33 +12277,49 @@ end
 -- the craft off its gear at well under that, and once the tyres are off the
 -- ground the cap lets go.
 R2_OLEO_C = 1.2      -- s/m: the damper's force per m/s of stroke, × the static load
+R2_OLEO_LP = 30.0    -- 1/s: how fast the stroke rate is followed (it was 20, on a rate read every tick)
+R2_OLEO_STILL = 2.5  -- ticks with the stroke unchanged before the leg reads as still
 R2_GEAR_VUP = 1.5    -- m/s: the most the gear may push the craft up
 R2_GEAR_HOLD = 0.4   -- s after the last tyre left the ground
 R2_GEAR_CAPG = 4.0   -- g: the most the cap takes off in a tick
 R2_GEAR_QMAX = 0.35  -- rad/s: the most the gear may pitch the craft
+R2_GEAR_THR = 0.5    -- the climb cap acts below this throttle (a landing's, not a take-off's)
 function gearOleo(node, info, dt, upv, gl)
   if not (dt and dt > 0 and info) then return end
   local n = math.max(1, R2.nOut or #R2.wheels)
   local load = (info.mass or 1) * (gl or 9.8) / n
-  local down = false
+  local down, real = false, nil
   for _, w in ipairs(R2.wheels) do
     local t = w.tyre
     local j = (w.gear or R2.gear) and w.jointed and t and t.valid and t:getcomponent("Joint")
     if j then
+      if real == nil or not w.real then real = w.real == true end
       local s = (j.position or 0) / WHEEL_POS_SCALE            -- + up the leg
       -- (the stroke rate smoothed over a few ticks: the light tyre's contact
       -- chatter read raw made the damper itself a source of bumps)
-      local raw = w.oleo_s and (s - w.oleo_s) / dt or 0
-      w.oleo_s = s
-      w.oleo_sd = (w.oleo_sd or 0) + (raw - (w.oleo_sd or 0)) * math.min(1, dt * 20)
-      local sd = w.oleo_sd
+      -- THE STROKE AS THE ENGINE HANDS IT OVER: a joint's `position` is
+      -- written once a frame, so with two ticks in a frame (30 fps) every
+      -- other tick read the same stroke, the rate came out 0 then twice what
+      -- it was, and smoothed it lagged ~80 ms: at the hull's 2-4 Hz on its
+      -- legs a damper that late loses half or more of its damping (motoprobe
+      -- jetland). The rate is taken over the time the stroke took to change,
+      -- and read as still only once it has not changed for R2_OLEO_STILL ticks.
+      local age = w.oleo_t and (time - w.oleo_t) or 0
+      if not w.oleo_s or s ~= w.oleo_s or age > R2_OLEO_STILL * dt then
+        local span = math.max(dt, age)
+        local raw = w.oleo_s and (s - w.oleo_s) / span or 0
+        w.oleo_s, w.oleo_t = s, time
+        w.oleo_sd = (w.oleo_sd or 0) + (raw - (w.oleo_sd or 0)) * math.min(1, span * R2_OLEO_LP)
+      end
+      local sd = w.oleo_sd or 0
       if w.down and (w.joint_age or 0) > 0.1 then
         down = true
         local F = R2_OLEO_C * load * sd
         -- (never more than 1.5 × its load either way: one tick must not fling it)
         F = math.max(-1.5 * load, math.min(1.5 * load, F))
         -- (a joint in real units is the oleo itself: wheelReal; the caps below stay)
-        if w.real then F = 0 end
+        -- (an upright craft's leg slides along the nose, not up the leg: r2UprightGear)
+        if w.real or w.upright then F = 0 end
         if math.abs(F) > 1e-4 then
           local mx, my, mz = v2w(node, info, w.cx, w.cy, w.cz)
           assembly.impulseAt(node, vec3(upv.x * F * dt, upv.y * F * dt, upv.z * F * dt), vec3(mx, my, mz))
@@ -12282,9 +12332,24 @@ function gearOleo(node, info, dt, upv, gl)
       end
     end
   end
+  -- THE CLIMB CAP IS A LANDING'S (playtest 2026-11-04, "my wheels on my jets
+  -- were bouncing like they were fighting"): it acts below R2_GEAR_THR of
+  -- throttle. With the engines pushing for a take-off (or a go-around) it
+  -- fought the lift-off: the wing's lift taken off at up to 4 g a tick while
+  -- a tyre was still down, every leg was slammed onto its stop (160 mm,
+  -- 40-60 kN on the probe jet's 7 kN mains) for the last 0.3 s of the roll,
+  -- and a jet that skipped off the runway once was held on it (motoprobe
+  -- jetland). (Armed by a touchdown instead, that skip armed it.) The pitch
+  -- cap stays on the ground throughout: a rotation is slower than it, and it
+  -- is what keeps a jet with its mains near its centre of mass off its nose
+  -- under the brakes (off with the climb cap, the player's jet pitched 40 deg
+  -- stopping from 6 m/s).
   if down then R2.gearDown_t = time end
+  local armed = (throttle or 0) < R2_GEAR_THR
   -- (an Aircraft's only: a rover with a landing gear climbs a hill faster than that)
-  if R2.gear and R2.gearDown_t and time - R2.gearDown_t < R2_GEAR_HOLD and space.gravity then
+  -- (and only on the frequency path: a real-unit leg's spring stores no tick
+  -- of push it could throw the craft with)
+  if R2.gear and not real and R2.gearDown_t and time - R2.gearDown_t < R2_GEAR_HOLD and space.gravity then
     local c = info.com or info.origin
     local gx, gy, gz = space.gravity(c.x, c.y, c.z)
     local gm = gx and math.sqrt(gx * gx + gy * gy + gz * gz) or 0
@@ -12292,7 +12357,7 @@ function gearOleo(node, info, dt, upv, gl)
       local Ux, Uy, Uz = -gx / gm, -gy / gm, -gz / gm
       local v = info.vel
       local vu = v.x * Ux + v.y * Uy + v.z * Uz
-      if vu > R2_GEAR_VUP then
+      if vu > R2_GEAR_VUP and armed then
         -- (at most R2_GEAR_CAPG g a tick, and booked through the centre of
         -- mass for the stress model: unbooked, it read as a 900 kN shock and
         -- tore the gear off)
@@ -12315,7 +12380,8 @@ function gearOleo(node, info, dt, upv, gl)
       local Rx, Ry, Rz = ny * Uz - nz * Uy, nz * Ux - nx * Uz, nx * Uy - ny * Ux   -- right = nose × up
       local rl = math.sqrt(Rx * Rx + Ry * Ry + Rz * Rz)
       local It = info.inertia
-      if rl > 0.5 and It and It[1] then
+      -- (R2.fwd is no nose on a craft built standing up: r2UprightGear)
+      if rl > 0.5 and It and It[1] and not R2.noseUp then
         Rx, Ry, Rz = Rx / rl, Ry / rl, Rz / rl
         local w = info.angVel
         local q = w.x * Rx + w.y * Ry + w.z * Rz
@@ -12553,6 +12619,10 @@ R2_WHEEL_SAG, R2_WHEEL_ZETA = 0.25, 0.5
 R2_GEAR_SAG, R2_GEAR_ZETA = 0.3, 0.7
 R2_WHEEL_TRAVEL = { S = 0.10, M = 0.15, L = 0.20, B = 0.04 }   -- parts_registry, parts_auto
 R2_GEAR_STOPS = true    -- a gear leg's travel ends in bump stops (hang_tyre); false once an engine refuses them
+R2_REAL_GEAR = false    -- landing gear on the real-unit spring and damper too (wheelReal; see hang_tyre)
+R2_GEAR_BUMP, R2_GEAR_REBOUND = 0.5, 1.0   -- a gear leg's damping, of critical on its sprung mass
+R2_GEAR_BRAKE_G = 0.8   -- g: the braking stop a nose leg is sized to carry…
+R2_GEAR_FULL = 0.85     -- …in this much of its travel
 R2_GEAR_TRAVEL = { S = 0.12, M = 0.16 }                          -- parts_aero
 -- The load on one wheel by the lever rule between the wheels ahead of the
 -- centre of mass and those behind it (r2SteerPlan's w.a), shared evenly
@@ -12590,8 +12660,41 @@ function wheelReal(w, info, g, c)
     local zeta = gear and R2_GEAR_ZETA or R2_WHEEL_ZETA
     local load = math.max(1e-3, r2AxleLoad(w, info, g))
     k = load / (sag * travel) * (c.spring or 1)
-    cd = 2 * zeta * math.sqrt(k * load / g) * (c.damper or 1)
     w.realLoad = load
+    if w.gear then
+      -- (a landing gear part on real units: R2_REAL_GEAR, hang_tyre)
+      -- A LEG AHEAD OF THE CENTRE OF MASS (a nose gear) carries a braking
+      -- stop too: R2_GEAR_BRAKE_G of deceleration moves m·a·h/L of the weight
+      -- onto it, and sized for its static share alone (a tenth of the weight
+      -- on a jet) it sat on its stop under the brakes and the nose went into
+      -- the runway (motoprobe jetland). It takes that load in R2_GEAR_FULL
+      -- of its travel.
+      local plan = R2.plan or {}
+      local nf, amin, amax = 0, math.huge, -math.huge
+      for _, o in ipairs(R2.wheels) do
+        if not r2Stowed(o) then
+          if (o.a or 0) > 0 then nf = nf + 1 end
+          amin, amax = math.min(amin, o.a or 0), math.max(amax, o.a or 0)
+        end
+      end
+      local wb = amax - amin
+      local carry = load
+      if (w.a or 0) > 0 and nf > 0 and amin < 0 and wb > 0.3 then
+        local W = (info.mass or 1) * g
+        local brake = W * R2_GEAR_BRAKE_G * math.max(0.3, plan.hcg or 0.8) / wb / nf
+        carry = load + brake
+        k = math.max(k, carry / (R2_GEAR_FULL * travel) * (c.spring or 1))
+      end
+      -- …damped like an oleo, on the mass the leg is sized to carry: the
+      -- bump near half critical, the rebound at critical (what throws a jet
+      -- back off the runway is the rebound). (On its static share alone a
+      -- nose leg sized for the brakes was a stiff spring with a weak damper:
+      -- the probe jet stopping from 6 m/s dived 11 deg and rocked back 10.)
+      local cc = 2 * math.sqrt(k * carry / g) * (c.damper or 1)
+      w.realK, w.realC, w.realTravel = k, cc * R2_GEAR_ZETA, travel
+      return k, cc * R2_GEAR_BUMP, cc * R2_GEAR_REBOUND, -R2_REAL_DROOP * travel, travel
+    end
+    cd = 2 * zeta * math.sqrt(k * load / g) * (c.damper or 1)
   end
   w.realK, w.realC, w.realTravel = k, cd, travel
   -- (a fork's or swing arm's droop held to R2_MOTO_DROOP: the fork's

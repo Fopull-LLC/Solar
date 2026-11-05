@@ -220,9 +220,62 @@ its travel: at touchdown the light tyre went 0.45-0.62 m up a 0.16 m leg, its sp
 stored 180-210 kN on the 3 t probe jet and threw it back up at 8.6 m/s; one landing in
 two tore the gear apart (pitch rates of thousands of rad/s after it). The leg's stroke
 (`R2_GEAR_TRAVEL`, or the wheel's Travel setting) is now a stop either way (setJoint's
-min/max with `limit`, `R2_GEAR_STOPS`). Still open: a flat touchdown lands on the nose
-gear, which bottoms and pitches the nose up 6°, and the wing at 46 m/s lifts the jet
-~3 m off the runway (the probe's approach flies 1-3° nose up, with no flare).
+min/max with `limit`, `R2_GEAR_STOPS`).
+
+**What fought (2026-11-05, motoprobe `jetland`: the probe jet and the player's jet, every
+tick of every leg traced).** The 3.3-3.8 m bounces and the nose-first landings came from
+the old probe's approach (no flare, a rudder-only heading hold that flew it crabbed, a
+take-off roll that ran off the 250 m runway's end onto the plain). `jetland` flies a
+circuit round the planet onto the runway, holds the line by banking and flares; flown
+that way the stock gear lands the probe jet at ~2.5 m/s with a 0.05-0.15 m skip, under 5 g. What
+was really wrong:
+
+- **A spaceplane built standing up rolls on tyres that cannot roll.** The player's jet
+  is built in the VAB: the cockpit's +Y (the nose) is the vessel's +Y, the gear legs run
+  along its +Z. The wheel code reads the craft's front level in the vessel's X-Z (the
+  wing, here), lays every gear's axle across it (the vessel's Z, vertical once the jet
+  lies level) and hangs the tyre on a joint whose axis is the vessel's Y (the nose).
+  Each tyre turned about the vertical: at a 0.05 m/s touchdown at 55 m/s it skidded,
+  slid its leg 160 mm along the fuselage to its stop at 6 g and threw the jet over
+  (55 to 21 m/s in a second, 48° of pitch, 70° of bank). The engine turns a wheel's axle
+  out of the hull's Z about the joint's axis, so a hull whose Z is vertical cannot carry
+  a wheel that both springs upright and rolls (card 0562, item 4: an `axle` option).
+  Until it can, `r2UprightGear` lays such a craft's tyres to roll along the nose (the
+  axle across the nose and the leg) and they don't steer; the leg is stiff upright (its
+  spring works along the nose), so a landing on one leg still kicks hard. Build runway
+  planes lying down (the cockpit's nose along the floor) for gear that springs.
+- **The climb cap fought every take-off.** `R2_GEAR_VUP` (the gear may not lift the
+  craft faster than 1.5 m/s) took the wing's lift off at up to 4 g a tick while a tyre
+  was still down: every leg was slammed onto its stop (160 mm, 40-60 kN on 7 kN legs)
+  for the last 0.3 s of the roll, and a jet that skipped off the runway once was held
+  on it. It now acts only below `R2_GEAR_THR` (0.5) of throttle: a landing's rebound,
+  not a take-off's or a touch-and-go's climb. The pitch cap (`R2_GEAR_QMAX`) stays on
+  the ground throughout: a rotation is slower, and it keeps a jet whose mains sit near
+  its centre of mass off its nose under the brakes.
+- **The oleo damped late.** A joint's `position` is handed to the script once a frame:
+  at two ticks a frame (30 fps) every other tick read the same stroke, the rate came out
+  0 then twice what it was, and smoothed at 20/s it lagged ~80 ms: half or more of the
+  damping gone at the hull's 2-4 Hz on its legs. The rate is now the stroke's change over
+  the time it took (`R2_OLEO_STILL`, `R2_OLEO_LP` 30/s).
+- **Not the cause:** traction control and engine braking (gear has no drive, `w.rs` 0),
+  the rover anti-roll and its wheel torques (only on a driven rover), the re-hang
+  (`roboComCheck`: no re-hang in any run until a crash broke parts off), `gearIsUp` (no
+  robotics on these craft, G never pressed).
+- **Real-unit gear (`R2_REAL_GEAR`, off).** Sized by the lever rule at `R2_GEAR_SAG`,
+  damped 0.5 / 1.0 of critical, the nose leg for a braking stop (`R2_GEAR_BRAKE_G`,
+  `R2_GEAR_FULL`): it parks and taxis as calmly, but a flared 0.7 m/s touchdown rolled the
+  probe jet off one main onto the other and bounced it 0.9 m, and the take-off roll's
+  tyres left the ground more often. The frequency path stays.
+- **Still open:** a flat, nose-first touchdown at 57-60 m/s bottoms the nose leg, the
+  nose comes up and the wing lifts the jet 1.7-2.9 m off again (a real jet porpoises the
+  same way; flared, it doesn't). The probe jet's nose tyre leaves the ground 8 times on a
+  roll to 30 m/s and 18-25 to 40-55 m/s (it carries 2.3 kN, a tenth of the jet; the hull
+  hardly moves, ±5 mm at the nose). The player's jet, laid flat, rocks ±5-10 mm on its
+  nose leg at ~4 Hz for its first seconds on the runway, and ground-loops above
+  ~15 m/s (its mains are 0.25 m behind its centre of mass). Probe:
+  `tools/perf/motoprobe.sh <engine> jetland` (`CRAFT=` a craft file with
+  `("craft", "file")`; `airstart`, `layflat`, `flat`, `sink`, `landings`, `rollto`,
+  `set`), per-tick legs in `JT` lines, `tools/perf/jetland.py` for the tables.
 
 ## 3d. Gas engines (playtest 2026-11-03c)
 

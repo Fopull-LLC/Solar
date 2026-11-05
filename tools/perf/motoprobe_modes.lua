@@ -692,7 +692,7 @@ local function run_jetgear()
     local U = unit(sub(i.com, b))
     local r = unit(cross(n, U))
     local S = { i = i, U = U, n = n, r = r, V = len(i.vel.x, i.vel.y, i.vel.z), vu = dot(i.vel, U),
-      theta = math.asin(clamp(dot(n, U), -1, 1)), bank = math.asin(clamp(dot(r, unit(W({ x = 0, y = 1, z = 0 }))), -1, 1)),
+      theta = math.asin(clamp(dot(n, U), -1, 1)), bank = math.asin(clamp(dot(r, unit(W(F and F.f or { x = 0, y = 1, z = 0 }))), -1, 1)),
       q = dot(i.angVel, r), p = dot(i.angVel, n) }
     local h = raycast(i.com.x, i.com.y, i.com.z, -U.x, -U.y, -U.z, 400, { ignore = { vn } })
     S.agl = h and h.distance or 999
@@ -854,6 +854,442 @@ local function run_jetgear()
   end
   P("MP RESULT %s: %s — take-off %s, landing %s%s", MP_TAG, (#fails == 0 and lift and landed) and "PASS" or "FAIL",
     lift and "yes" or "NO", landed and "yes" or "no", #fails > 0 and (" | bouncing in " .. table.concat(fails, ",")) or "")
+end
+
+-- ── JETLAND: a jet's gear parked, taxied, rolled and landed, every tick traced ──
+-- (playtest 2026-11-04: "sometimes my wheels on my jets were bouncing like they
+-- were fighting"). params:
+--   craft  = probe (the 27-part probe jet, jetgear 0) | file (user://probe_craft.json,
+--            motoprobe.sh copies $CRAFT there) — strs
+--   drop   = "34" a part uid whose subtree is left off (the user's jet without its booster)
+--   sink   = the touchdown sink the flare aims for (m/s, default 1.5)
+--   tdpitch = the nose-up the flare holds at touchdown (deg, default 3)
+--   flat=1 : no flare — the nose level, ~2 m/s down onto the runway (sink)
+--   landings = how many touch-and-goes (default 2), taxi=0 skips the taxi
+-- Every tick (perfbench's fixedUpdate, TICK_HOOK): `JT <phase> <t> V agl vu theta
+-- q p herr | uid:G/- pos load oleo …` for tools/perf/jetland.py. Summary lines
+-- `MP jetland …` and `MP RESULT jetland`.
+local function run_jetland()
+  local tag = "jetland"
+  MP_TAG = tag
+  local co = findScript("company")
+  if co and co.earn then co.earn(80000, "probe") end
+  mp_builder_scene()
+  local recs, extra
+  if (params.craft or "probe") == "file" then
+    local ok, raw = pcall(assets.readJson, "user://probe_craft.json")
+    if not ok or type(raw) ~= "table" then P("MP RESULT %s: no user://probe_craft.json (%s)", tag, tostring(raw)); return end
+    local function dec(v)
+      local t = type(v)
+      if t == "string" then
+        if v:sub(1, 1) ~= "\0" then return v end
+        local tg, rest = v:sub(2, 3), v:sub(4)
+        if tg == "s:" then return rest end
+        if tg == "d:" then local m, e = rest:match("^(-?%d+):(-?%d+)$"); if m then return math.ldexp(tonumber(m), tonumber(e)) end end
+        return v
+      elseif t ~= "table" then return v end
+      local out = {}
+      for k, x in pairs(v) do out[k] = dec(x) end
+      return out
+    end
+    local bp = dec(raw.bp)
+    local drop = {}
+    if params.drop then
+      local d0 = tonumber(params.drop)
+      drop[d0] = true
+      local grew = true
+      while grew do
+        grew = false
+        for _, r in ipairs(bp.parts) do if not drop[r.uid] and drop[r.parent] then drop[r.uid] = true; grew = true end end
+      end
+    end
+    recs = {}
+    for _, r in ipairs(bp.parts) do if not drop[r.uid] then recs[#recs + 1] = r end end
+    -- layflat=1: a craft built standing (its nose +Y, its belly +Z: a VAB
+    -- spaceplane) laid along the runway the way the probe jet is built
+    -- (nose +X, top +Y), as it is once it flies level and comes in to land
+    if (params.layflat or 0) > 0 then
+      local function R(v) return { x = v.y, y = -v.z, z = -v.x } end
+      for _, r in ipairs(recs) do
+        local X, Y, Z = basis(r)
+        local p = R({ x = r.x, y = r.y, z = r.z })
+        r.x, r.y, r.z = p.x, p.y, p.z
+        r.yaw, r.pitch, r.roll = eulerOf(R(X), R(Y), R(Z))
+      end
+    end
+    local links = {}
+    for _, l in ipairs(bp.links or {}) do
+      local a, b = l.a or l[1], l.b or l[2]
+      if not (drop[a] or drop[b]) then links[#links + 1] = l end
+    end
+    extra = { links = links, root = bp.root, v = bp.v, name = "Probe Jet", catalogue = bp.catalogue }
+    P("MP %s craft file: %d parts (%d left off), root %s", tag, #recs, #bp.parts - #recs, tostring(bp.root))
+  else
+    local def = jg_defs()
+    local k = save.get("parts.rating") or { thrust = 1.4, ve = 1 }
+    recs = {}
+    for _, r in ipairs(jg_bp(0)) do
+      local d = def(r.id)
+      if d then recs[#recs + 1] = full(r, d, k) end
+    end
+    extra = { catalogue = { thrust = k.thrust, ve = k.ve } }
+  end
+  local bp = { parts = recs }
+  for k2, v2 in pairs(extra) do bp[k2] = v2 end
+  save.set("shipyard.blueprint", bp)
+  save.set("shipyard.launch", 1)
+  save.set("shipyard.site", "runway")
+  save.set("shipyard.pilot", 1)
+  scene.load("system")
+  yield()
+  local vc = wait_craft(math.max(2, #recs - 2), 150)
+  wait_regrade()
+  if not vc then P("MP RESULT %s: no craft", tag); return end
+  local vn = vc.node
+  local bf = findScript("base_facilities")
+  local site = bf and bf.launchSite and bf.launchSite("runway")
+  local function W(vv)
+    local rx, up, fw = vn:worldRight(), vn:worldUp(), vn:worldForward()
+    return { x = rx.x * vv.x + up.x * vv.y - fw.x * vv.z, y = rx.y * vv.x + up.y * vv.y - fw.y * vv.z, z = rx.z * vv.x + up.z * vv.y - fw.z * vv.z }
+  end
+  -- the state, from this tick's assembly info and the local up (gravity)
+  local function st()
+    local i = assembly.info(vn)
+    if not (i and i.com) then return nil end
+    local gx, gy, gz = space.gravity(i.com.x, i.com.y, i.com.z)
+    local gm = len(gx, gy, gz)
+    local U = { x = -gx / gm, y = -gy / gm, z = -gz / gm }
+    local F = vc.AERO and vc.AERO.frame
+    local n = W(F and F.n or { x = 1, y = 0, z = 0 })
+    local r = unit(cross(n, U))
+    local S = { i = i, U = U, n = n, r = r, g = gm, V = len(i.vel.x, i.vel.y, i.vel.z), vu = dot(i.vel, U),
+      theta = math.asin(clamp(dot(n, U), -1, 1)), bank = math.asin(clamp(dot(r, unit(W(F and F.f or { x = 0, y = 1, z = 0 }))), -1, 1)),
+      q = dot(i.angVel, r), p = dot(i.angVel, n) }
+    local h = raycast(i.com.x, i.com.y, i.com.z, -U.x, -U.y, -U.z, 400, vn)
+    S.agl = h and h.distance or 999
+    if site then
+      local Ng = unit(cross({ x = site.x, y = site.y, z = site.z }, site.fwd))
+      local trk = unit(cross(Ng, U))
+      local hn = unit(sub(n, scl(U, dot(n, U))))
+      S.herr = math.atan2(dot(cross(hn, trk), U), dot(hn, trk))
+    end
+    return S
+  end
+  local S0 = st()
+  P("MP %s craft: %.3f t (hull) on %d wheels, g %.2f", tag, S0 and S0.i.mass or -1, #(vc.R2.wheels or {}), S0 and S0.g or -1)
+  for _, w in ipairs(vc.R2.wheels or {}) do
+    local rb = w.tyre and w.tyre.valid and w.tyre:getcomponent("RigidBody")
+    local j = w.tyre and w.tyre.valid and w.tyre:getcomponent("Joint")
+    P("MP %s wheel %d %s gear %s a %.2f l %.2f r %.2f tyre %.3f t f %.1f Hz z %.2f realLoad %s", tag, w.uid, w.d.id or "?", tostring(w.gear), w.a or 0, w.l or 0, w.r or 0,
+      rb and rb.mass or -1, j and j.stiffness or -1, j and j.damping or -1, tostring(w.realLoad))
+  end
+  -- strs set = "NAME=value,…": the controller's tuning globals for this run
+  -- (before the tyres are hung, at the release)
+  for kv in tostring(params.set or ""):gmatch("[^,]+") do
+    local k2, v2 = kv:match("^%s*([%w_]+)%s*=%s*(.-)%s*$")
+    if k2 then
+      local val = (v2 == "true") or ((v2 ~= "false") and tonumber(v2)) or false
+      vc[k2] = val
+      P("MP %s set %s = %s", tag, k2, tostring(val))
+    end
+  end
+  vc.releaseClamps()
+  vc.setSAS(params.sas or "stability")
+  local PH = "stand"
+  local T0 = time
+  -- every tick: the hull and each wheel
+  local tick_n = 0
+  TICK_HOOK = function(dt)
+    if not (vn and vn.valid) then return end
+    local S = st()
+    if not S then return end
+    tick_n = tick_n + 1
+    local td = {}
+    for _, w in ipairs(vc.R2.wheels or {}) do
+      local t = w.tyre
+      if t and t.valid then
+        local j = t:getcomponent("Joint")
+        td[#td + 1] = string.format("%d:%s %.4f %.2f %.2f", w.uid, t.grounded and "G" or "-", j and (j.position or 0) / 57.29578 or -1,
+          t.contactForce or 0, w.oleoF or 0)
+      end
+    end
+    local hc = vc.r2HullCom and vc.r2HullCom(S.i) or { 0, 0, 0 }
+    P("JT %s %.4f %.2f %.3f %.3f %.2f %.3f %.3f %.2f %.3f %.4f %.4f %.4f %.4f %d | %s", PH, time - T0, S.V, S.agl, S.vu, math.deg(S.theta), S.q, S.p, math.deg(S.herr or 0),
+      vc.R2.gearCapped or 0, hc[1], hc[2], hc[3], S.i.mass or 0, vc.R2.rehangs or 0, table.concat(td, " "))
+  end
+  local function run(tag2, secs, ctl)
+    PH = tag2
+    local t0 = time
+    local nextl = 0
+    local tp = time
+    while time - t0 < secs do
+      local S = st()
+      if not S then break end
+      FDT = math.max(0, time - tp); tp = time
+      local stop = ctl(S, time - t0)
+      yield()
+      if time - t0 >= nextl then
+        nextl = nextl + 1.0
+        local N = NAV and NAV()
+        P("MP %s [%s+%.1f] V %.1f agl %.2f vu %.2f theta %.1f bank %.1f herr %.1f on %s | togo %.0f xt %.1f h %.1f", tag, tag2, time - t0, S.V, S.agl, S.vu,
+          math.deg(S.theta), math.deg(S.bank), math.deg(S.herr or 0), tostring(vc.R2.onWheels), N and N.togo or -1, N and N.xt or 0, N and N.h or 0)
+      end
+      if stop then break end
+    end
+  end
+  local D = math.rad
+  -- (a pilot's rudder: the heading error and the yaw rate, gently — at 3 per
+  -- rad and no rate the user's jet weaved and diverged off the runway)
+  local function hold_head(S, tgt)
+    local yr = dot(S.i.angVel, S.U)   -- + turning left
+    return clamp(1.5 * ((S.herr or 0) - D(tgt or 0)) - 0.8 * yr, -1, 1)
+  end
+  local function pitch_to(S, th) return -clamp(4.0 * (th - S.theta) - 1.6 * S.q, -1, 1) end
+  local function brakes(on)
+    for _, w in ipairs(vc.R2.wheels or {}) do vc.partAction(w.uid, on and "brakes.on" or "brakes.off") end
+  end
+  vc.setThrottle(0)
+  run("stand", 5, function(S) vc.AERO.cmd = { p = 0, y = 0, r = 0 } end)
+  local agl0 = st().agl
+  -- (an air start's craft stood on its tail: its CoM sits that high parked on its gear)
+  if (params.airstart or 0) > 0 then agl0 = params.agl0 or 1.5 end
+  P("MP %s parked CoM height %.3f m", tag, agl0)
+  local h0
+  -- THE CIRCUIT. The runway (250 m) is too short to land beyond a take-off
+  -- from it, and the plain past its end is not a runway, so the jet flies once
+  -- round the planet along the runway's great circle and lands on it from its
+  -- threshold. Navigation is body-relative and from drawn poses only (the
+  -- node's place against space.body in the same pass, docs/positions-and-frames).
+  local Rw = len(site.x, site.y, site.z)
+  local Fw = unit(site.fwd)
+  local Ng = unit(cross(unit({ x = site.x, y = site.y, z = site.z }), Fw))   -- left of the runway's way
+  local aim = unit({ x = site.x + Fw.x * (params.aim or 50), y = site.y + Fw.y * (params.aim or 50), z = site.z + Fw.z * (params.aim or 50) })
+  local function nav()
+    local b = space.body(site.body)
+    if not b then return nil end
+    -- (the centre of mass as drawn: its place in the hull, through the node's drawn pose)
+    local hc = vc.r2HullCom and vc.r2HullCom(assembly.info(vn))
+    local cw = hc and vn:toWorld(vec3(hc[1], hc[2], hc[3])) or { x = vn.x, y = vn.y, z = vn.z }
+    local P0 = { x = cw.x - b.x, y = cw.y - b.y, z = cw.z - b.z }
+    local r = len(P0.x, P0.y, P0.z)
+    local Ph = scl(P0, 1 / r)
+    local phi = math.atan2(dot(cross(aim, Ph), Ng), dot(aim, Ph))   -- + past the aim point
+    local togo = (phi < 0 and -phi or (2 * math.pi - phi)) * Rw
+    return { togo = togo, xt = dot(Ph, Ng) * r, h = r - Rw }
+  end
+  NAV = nav
+  h0 = agl0   -- (nav's h is the CoM's over the runway's radius)
+  local function track(S)   -- the yaw that flies the centreline: nose right while left of it
+    local N = nav()
+    local tgt = N and clamp(math.deg(math.atan(N.xt / 120)), -20, 20) or 0
+    return hold_head(S, tgt), N
+  end
+  local nland = params.landings or 1
+  local sink = params.sink or 1.5
+  local tdp = params.tdpitch or 3
+  local flat = (params.flat or 0) > 0
+  local aoa_t = params.aoa or (flat and 2 or (tdp + 2))
+  local LAND = {}
+  local thr = 0.6
+  local vi = 0
+  -- the stick flies a climb rate (with a little integral), the throttle holds
+  -- the angle of attack (power for speed, so the attitude a landing has comes
+  -- from the speed it is flown at)
+  local function fly(S, vt, aoa)
+    local gam = math.asin(clamp(S.vu / math.max(S.V, 1), -1, 1))
+    thr = clamp(thr + 0.12 * math.deg(S.theta - gam - D(aoa)) * FDT, 0, 1)
+    vc.setThrottle(thr)
+    vi = clamp(vi + (vt - S.vu) * FDT, -10, 10)
+    local th = clamp(D(aoa) + math.asin(clamp(vt / math.max(S.V, 1), -1, 1)) + 0.03 * (vt - S.vu) + 0.01 * vi, D(-8), D(14))
+    -- in the air the line is flown by banking, as a pilot does (a rudder-only
+    -- heading hold flew the jet crabbed 8 deg along a line 20 m off the
+    -- centreline, and it touched down sideways): the track over the ground
+    -- turned toward the centreline, the bank that turns it, the rudder idle
+    local N = nav()
+    local v = S.i.vel
+    local vh = sub(v, scl(S.U, dot(v, S.U)))
+    local trk = unit(cross(Ng, S.U))
+    local chi = math.atan2(dot(cross(trk, vh), S.U), dot(trk, vh))   -- + the track left of the runway's way
+    local chi_t = -clamp(math.atan((N and N.xt or 0) / 150), D(-20), D(20))
+    local bank_t = clamp(1.5 * (chi - chi_t), D(-25), D(25))
+    vc.AERO.cmd = { p = pitch_to(S, th), y = 0, r = clamp(2.5 * (bank_t - S.bank), -1, 1) }
+  end
+  -- airstart=1: the craft as it was built, put in the air: lifted 120 m,
+  -- turned nose-first along the runway and given 50 m/s along its nose, its
+  -- engines lit, then the circuit and the landing as from a take-off. (A VAB
+  -- spaceplane stands on its tail on the runway; this is how one comes in to
+  -- land after its climb, with its own vessel frame.)
+  local airstart = (params.airstart or 0) > 0
+  if airstart then
+    local i0 = assembly.info(vn)
+    local S = st()
+    local up = params.airup or 400
+    assembly.teleport(vn, vec3(i0.origin.x + S.U.x * up, i0.origin.y + S.U.y * up, i0.origin.z + S.U.z * up))
+    yield(); yield()
+    local function couple(L)
+      local i = assembly.info(vn)
+      local c = i.com
+      local Ll = len(L.x, L.y, L.z)
+      if Ll < 1e-9 then return end
+      local a = unit(L)
+      local e = unit(cross(a, math.abs(a.y) < 0.9 and { x = 0, y = 1, z = 0 } or { x = 1, y = 0, z = 0 }))
+      -- impulses ±J at c ± e, J = (L × e) / 2 (|e| = 1): 2 e × J = L
+      local J = scl(cross(L, e), 0.5)
+      assembly.impulseAt(vn, vec3(J.x, J.y, J.z), vec3(c.x + e.x, c.y + e.y, c.z + e.z))
+      assembly.impulseAt(vn, vec3(-J.x, -J.y, -J.z), vec3(c.x - e.x, c.y - e.y, c.z - e.z))
+    end
+    local function Iw(w)
+      local It = assembly.info(vn).inertia
+      return { x = It[1].x * w.x + It[1].y * w.y + It[1].z * w.z, y = It[2].x * w.x + It[2].y * w.y + It[2].z * w.z,
+               z = It[3].x * w.x + It[3].y * w.y + It[3].z * w.z }
+    end
+    local Fw = unit(site.fwd)
+    vc.setThrottle(1)
+    -- turn the nose onto the runway's way at up to 1 rad/s, then stop the turn
+    local t0 = time
+    while time - t0 < 6 do
+      local S2 = st()
+      local ax = cross(S2.n, Fw)
+      local ang = math.asin(clamp(len(ax.x, ax.y, ax.z), -1, 1))
+      if dot(S2.n, Fw) < 0 then ang = math.pi - ang end
+      local want = (ang > 0.02) and scl(unit(ax), math.min(1.0, 2.0 * ang)) or { x = 0, y = 0, z = 0 }
+      local w = S2.i.angVel
+      couple(Iw({ x = want.x - w.x, y = want.y - w.y, z = want.z - w.z }))
+      vc.AERO.cmd = { p = 0, y = 0, r = 0 }
+      yield()
+      if ang < 0.03 and len(w.x, w.y, w.z) < 0.05 then break end
+    end
+    local S3 = st()
+    local i3 = assembly.info(vn)
+    local m3 = i3.mass or 1
+    for _, w in ipairs(vc.R2.wheels or {}) do
+      local rb = w.tyre and w.tyre.valid and w.tyre:getcomponent("RigidBody")
+      if rb then m3 = m3 + (rb.mass or 0) end
+    end
+    -- (the whole velocity set: 50 m/s along the nose, the fall during the turn taken out)
+    local dvv = { x = S3.n.x * 50 - i3.vel.x, y = S3.n.y * 50 - i3.vel.y, z = S3.n.z * 50 - i3.vel.z }
+    assembly.impulseAt(vn, vec3(dvv.x * m3, dvv.y * m3, dvv.z * m3), vec3(i3.com.x, i3.com.y, i3.com.z))
+    yield()
+    local i4 = assembly.info(vn)
+    P("MP %s air start: %.1f m/s after the push (%.1f along the nose)", tag, len(i4.vel.x, i4.vel.y, i4.vel.z), dot(i4.vel, S3.n))
+    P("MP %s air start: turned in %.1f s, %.0f m up, nose %.1f deg off the runway's way, bank %.1f", tag, time - t0, S3.agl, math.deg(math.acos(clamp(dot(S3.n, Fw), -1, 1))), math.deg(S3.bank))
+  end
+  for li = 1, nland do
+    local air = 0
+    local lift
+    if not (airstart and li == 1) then run("roll" .. li, 45, function(S, t)
+      vc.setThrottle(1)
+      local yaw = track(S)
+      -- stick neutral to the rotation, then 7 deg nose-up
+      local p = 0
+      if S.V >= (params.vr or 38) then p = pitch_to(S, D(7)) end
+      vc.AERO.cmd = { p = p, y = yaw, r = clamp(-2.5 * S.bank, -1, 1) }
+      if not vc.R2.onWheels and S.agl > agl0 + 1.0 then air = air + FDT else air = 0 end
+      if air > 0.3 then lift = t; return true end
+    end) else lift = 0 end
+    P("MP %s takeoff %d: %s", tag, li, lift and string.format("airborne after %.1f s", lift) or "NO LIFT-OFF")
+    if not lift then break end
+    thr, vi = 1, 0
+    local cruise = params.cruise or 150
+    -- the glide path to the aim point: 3 deg over the last 500 m, 9 deg
+    -- before (the hills short of the runway stand ~60 m over it 900 m out)
+    local function path(togo) return togo < 500 and togo * 0.052 or 26 + (togo - 500) * 0.158 end
+    -- the hills: the ground under where the jet will be in 3 and 6 s, less
+    -- than 40 m under its height over the planet's centre, means climb
+    local function ahead(S, margin)
+      local b = space.body(site.body)
+      if not b then return false end
+      local v, c, U = S.i.vel, S.i.com, S.U
+      local vh = sub(v, scl(U, dot(v, U)))
+      local r = len(c.x - b.x, c.y - b.y, c.z - b.z)
+      for _, T in ipairs({ 3, 6 }) do
+        local o = { x = c.x + vh.x * T + U.x * 300, y = c.y + vh.y * T + U.y * 300, z = c.z + vh.z * T + U.z * 300 }
+        local h = raycast(o.x, o.y, o.z, -U.x, -U.y, -U.z, 900, vn)
+        if h and h.distance then
+          local g = { x = o.x - U.x * h.distance - b.x, y = o.y - U.y * h.distance - b.y, z = o.z - U.z * h.distance - b.z }
+          if r - len(g.x, g.y, g.z) < (margin or 40) then return true end
+        end
+      end
+      return false
+    end
+    run("lap" .. li, 240, function(S, t)
+      local N = nav()
+      local vt = clamp(0.25 * (cruise - N.h), -5, 6)
+      if S.agl < 40 or ahead(S) then vt = 8 end
+      fly(S, vt, aoa_t)
+      return t > 20 and N.h > 10 and N.togo < 3000 and path(N.togo) < N.h
+    end)
+    local touched
+    run("appr" .. li, 90, function(S, t)
+      local N = nav()
+      -- the height over the runway's own level (the planet's radius there,
+      -- less where the node sits parked): the ground before the threshold is
+      -- hills, and the path is the runway's
+      local h = N.h - h0
+      if N.togo < 400 and S.agl > agl0 + 0.3 and S.agl < 30 then h = math.min(h, S.agl - agl0) end
+      local hp = path(N.togo)
+      local slope = N.togo < 500 and 0.052 or 0.158
+      local vt
+      if flat then
+        vt = clamp(-S.V * slope + 0.3 * (hp - h), -10, 0)
+        if h < 6 then vt = -2.0 end
+      else
+        vt = clamp(-S.V * slope + 0.3 * (hp - h), -10, 0)
+        -- the flare: from 6 m the sink comes down to `sink` at the touchdown
+        local fh = 6
+        if h < fh then vt = -(sink + (math.max(sink, -vt) - sink) * math.max(0, h) / fh) end
+      end
+      if h > 30 and ahead(S, 25) then vt = 6 end
+      fly(S, vt, aoa_t)
+      if t > 2 and vc.R2.onWheels then touched = t; return true end
+    end)
+    if not touched then P("MP %s landing %d: never touched down", tag, li); break end
+    local S1 = st()
+    local N1 = nav()
+    LAND[li] = { V = S1.V, vu = S1.vu, theta = math.deg(S1.theta), t = time - T0 }
+    P("MP %s touchdown %d at %.2f s: V %.1f sink %.2f theta %.1f herr %.1f, %.0f m from the aim point, %.1f m off the centreline", tag, li, time - T0,
+      S1.V, -S1.vu, math.deg(S1.theta), math.deg(S1.herr or 0), N1 and (N1.togo > Rw * math.pi and N1.togo - 2 * math.pi * Rw or N1.togo) or -1, N1 and N1.xt or -1)
+    local last = li == nland
+    local th0 = S1.theta
+    run("land" .. li, last and 30 or 5, function(S, t)
+      vc.setThrottle(0)
+      -- the nose held off a second, then lowered at 2 deg/s, then let go
+      local p = 0
+      if t < 3 then p = pitch_to(S, math.max(D(0), th0 - D(2) * math.max(0, t - 1))) end
+      vc.AERO.cmd = { p = p, y = track(S), r = clamp(-2.5 * S.bank, -1, 1) }
+      if last and t > 3 then brakes(true) end
+      if last and S.V < 0.5 and t > 4 then return true end
+    end)
+    if last then brakes(false) end
+  end
+  -- rollto=V (with landings=0): the take-off roll to V m/s, stick neutral,
+  -- then the brakes to a stop — the roll's chatter without the lift-off
+  if nland == 0 and (params.rollto or 0) > 0 then
+    run("roll0", 30, function(S) vc.setThrottle(1); vc.AERO.cmd = { p = 0, y = track(S), r = clamp(-2.5 * S.bank, -1, 1) }
+      return S.V >= params.rollto end)
+    brakes(true)
+    run("stop0", 20, function(S, t) vc.setThrottle(0); vc.AERO.cmd = { p = 0, y = track(S), r = clamp(-2.5 * S.bank, -1, 1) }
+      return S.V < 0.5 and t > 2 end)
+    brakes(false)
+  end
+  -- the taxi (after the landing: the take-off has the runway's whole length)
+  if (params.taxi or 1) > 0 then
+    local function taxi(S, tgt, v)
+      vc.setThrottle(S.V < (v or 6) and 0.35 or 0)
+      vc.AERO.cmd = { p = 0, y = hold_head(S, tgt), r = 0 }
+    end
+    run("taxi", 5, function(S) taxi(S, 0) end)
+    run("taxiL", 3, function(S) taxi(S, -20) end)
+    run("taxiR", 4, function(S) taxi(S, 20) end)
+    run("taxiS", 3, function(S) taxi(S, 0) end)
+    brakes(true)
+    run("brake", 4, function(S) vc.setThrottle(0); vc.AERO.cmd = { p = 0, y = hold_head(S), r = 0 } end)
+    run("parked", 4, function(S) vc.setThrottle(0); vc.AERO.cmd = { p = 0, y = 0, r = 0 } end)
+    brakes(false)
+  end
+  run("end", 2, function(S) vc.setThrottle(0); vc.AERO.cmd = { p = 0, y = 0, r = 0 } end)
+  TICK_HOOK, NAV = nil, nil
+  P("MP RESULT %s: %d ticks traced, %d landing(s)", tag, tick_n, #LAND)
 end
 
 -- ── BIKELAB: a motorcycle built several ways, driven, climbed, slalomed, parked ──

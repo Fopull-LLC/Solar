@@ -2178,6 +2178,8 @@ local function dump_park(vc, vn)
 end
 function fixedUpdate(node, dt)
   local calls = trace_tick()
+  -- (a probe's per-tick trace: motoprobe jetland)
+  if TICK_HOOK then TICK_HOOK(dt) end
   local D = DUMP
   if not D then return end
   local b = home()

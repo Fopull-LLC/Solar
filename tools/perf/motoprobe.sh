@@ -16,6 +16,9 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 S=${WORK:-${TMPDIR:-/tmp}/solar-moto}
 eng=${1:?usage: motoprobe.sh <engine> [modes]}; shift
 mkdir -p $S/tools
+# CRAFT: a craft file (a library slot's .json) for jetland craft=file, copied
+# into the scratch project as user://probe_craft.json (the original is only read)
+if [ -n "${CRAFT:-}" ]; then mkdir -p $S/proj/save/user; cp "$CRAFT" $S/proj/save/user/probe_craft.json; fi
 cp $HERE/bench.sh $HERE/table.py $HERE/perfbench.lua $S/tools/
 python3 - "$S/tools/perfbench.lua" "$HERE/motoprobe_modes.lua" <<'PY'
 import sys
@@ -32,6 +35,7 @@ s = s.replace('    elseif MODE == "plane" then run_plane()',
               '    elseif MODE == "trike" then run_trike()\n'
               '    elseif MODE == "motoshop" then run_motoshop()\n'
               '    elseif MODE == "jetgear" then run_jetgear()\n'
+              '    elseif MODE == "jetland" then run_jetland()\n'
               '    elseif MODE == "bikelab" then run_bikelab()\n'
               '    elseif MODE == "snapbuild" then run_snapbuild()')
 open(p, 'w').write(s)
