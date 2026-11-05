@@ -156,7 +156,7 @@ TOOL_MATS = {
                           '                roughness: 0.6,\n                metallic: 0.0,\n'
                           '                shading: Physical,\n            )'),
     "Rock":      lambda: ('(\n                color: (0.78, 0.74, 0.68),\n'
-                          '                texture: Some("textures/terrain/geo_granite.png"),\n'
+                          '                texture: Some("textures/env/terrain/14_granite.png"),\n'
                           '                roughness: 0.92,\n                metallic: 0.0,\n'
                           '                shading: Physical,\n            )'),
 }

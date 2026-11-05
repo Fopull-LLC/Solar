@@ -37,7 +37,7 @@
         object_materials: {
             "Rock": (
                 color: (0.78, 0.74, 0.68),
-                texture: Some("textures/terrain/geo_granite.png"),
+                texture: Some("textures/env/terrain/14_granite.png"),
                 roughness: 0.92,
                 metallic: 0.0,
                 shading: Physical,
