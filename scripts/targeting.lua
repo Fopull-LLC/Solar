@@ -1333,7 +1333,8 @@ function update(node, dt)
   local om = ref("orbit_map")
   if om and om.isOpen and om.isOpen() and input then
     local tap = map_tap()
-    if tap then
+    -- (a tap on the maneuver node is the node's menu: orbit_map opens it)
+    if tap and not (om.mnvAt and om.mnvAt(tap.x, tap.y)) then
       local pick = mapPick(tap.x, tap.y)
       if pick then openMapMenu(pick, tap.x, tap.y) end
     end

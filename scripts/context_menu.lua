@@ -507,6 +507,15 @@ local function mouse_in_menu()
   return x >= r.x - 4 and x <= r.x + r.w + 4 and y >= r.y - 4 and y <= r.y + r.h + 4
 end
 function ownsMouse() return open and mouse_in_menu() end
+-- The open menu's plate in screen pixels (x, y, w, h), or nil: for screen
+-- drawing that should keep off it (the orbit map's name tags).
+function screenRect()
+  local r = open and st.rect
+  if not r then return nil end
+  local ox, oy, _, h = screen()
+  local k = h / design_h()
+  return ox + r.x * k, oy + r.y * k, r.w * k, r.h * k
+end
 
 -- ── each frame ──────────────────────────────────────────────────────────────
 -- Is something else up that owns the screen? (Then no menu, and an open one

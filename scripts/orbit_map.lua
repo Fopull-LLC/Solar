@@ -14,7 +14,17 @@
 --   open — throttle, stick, SAS and staging all stay live, because watching the
 --   trajectory bend as you burn is the whole reason to fly on instruments.
 --
---   PLANNING A BURN. `N` enters PLAN mode, which is a mode precisely because
+--   PLANNING A BURN, WITH THE MOUSE. Hover your orbit and click it: a node
+--   goes there (a click on a line is nothing the stick uses, so no mode is
+--   needed). Its gizmo has six handles in the burn frame — prograde and
+--   retrograde, normal and anti-normal, radial out and in: drag one to change
+--   Δv along it (the longer the drag, the faster), drag the node's disc to
+--   slide it along the orbit, scroll on either for fine steps (SHIFT halves,
+--   CTRL ×5), and right-click it for Delete, ±1 orbit, Warp here, Zero ΔV and
+--   Lock. A CRT tag beside it reads the Δv, the time to it, the burn's
+--   length and the orbit it leaves you on.
+--
+--   PLANNING A BURN, WITH THE KEYS. `N` enters PLAN mode, which is a mode precisely because
 --   the flight stick and the burn tuner want the same six keys. In plan mode
 --   W/S/A/D/Q/E move ΔV instead of the craft, ←/→ slide the node along the
 --   orbit, and the vessel's stick is frozen (vessel_controller reads
@@ -40,6 +50,14 @@ defaults = {
   -- Points per trajectory walk. More is smoother and costs linearly.
   --@range 40 400
   segments = 140,
+  --@header Maneuver node
+  -- Width of the node gizmo's rings, in pixels (its stalks are the map's
+  -- 1-pixel lines until the engine's line layer takes a width).
+  --@range 1 4 --@units px
+  gizmo_stroke = 1,
+  -- Size of the node gizmo (disc, stalks, knobs, hit areas) × the design sizes.
+  --@range 0.6 2.0
+  gizmo_size = 1.0,
 }
 
 -- Published: planet_camera stands down while the map owns the screen, and
@@ -187,7 +205,12 @@ local subj_cache, subj_t = nil, -10.0
 -- now, split into prograde / normal / radial ΔV. Nil until you press N in the
 -- map. Editing it re-projects the resulting orbit and re-walks the patched
 -- conic for SOI encounters, all game-side on top of `space.propagate`.
-local mnv = nil -- { t, pro, nor, rad }
+-- A node is { t0 = absolute sim time, pro, nor, rad = Δv m/s in the burn
+-- frame at the node, locked, burned, mark = the gizmo's place until the next
+-- walk }. The node is stored as a LIST (MNV.nodes, ordered by time) so that
+-- several nodes (proposal F7) is a cap change and a loop; `mnv` is the one
+-- being flown and edited: MNV.nodes[1].
+local mnv = nil
 -- The patched-conic walk is heavy (hundreds of two-body evals across SOI
 -- changes), so it's recomputed at ~8 Hz and the resulting world polyline +
 -- encounter markers are cached here and redrawn every frame (draw.line is
@@ -195,6 +218,163 @@ local mnv = nil -- { t, pro, nor, rad }
 -- path (nil unless a node exists).
 local traj_t = -10.0
 local traj_now, traj_mnv = nil, nil
+
+-- ── THE NODE, CLICK AND DRAG: the rules as numbers (deep-space proposal §7,
+-- F1–F6, F8). Pure: no scene, no input — tests/smoke_mnvnode.lua holds them.
+MNV = {
+  nodes = {},          -- every planned node, by time (MNV.CAP of them)
+  CAP = 1,             -- one for now; several nodes (F7) raise it
+  DRAG_K = 0.006,      -- Δv per pixel dragged along a handle, × orbital speed
+  VORB_MIN = 50.0,     -- (m/s: the floor under that speed, so a crawl still edits)
+  SCROLL_DV = 0.01,    -- Δv per wheel notch over a handle, × orbital speed
+  SCROLL_T = 0.01,     -- node time per wheel notch over the disc, × the period
+  LEAD_MIN = 1.0,      -- a node never slides closer than now + this (s)
+  WARP_LEAD = 10.0,    -- warp to node lands this long before the burn starts (s)
+  WARP_REAL = 0.5,     -- …stepping down while less than this much REAL time is left at a rung
+}
+-- Set (or clear, nil) THE node: the list and the edited node agree.
+function mnvSet(n)
+  mnv = n
+  MNV.nodes = n and { n } or {}
+  return n
+end
+-- How a drag speeds up the longer it goes (KSP's rule): ×1 for the first
+-- half second, ×3 at 1 s, ×8 from 2 s — eased between, so the rate never jumps.
+function MNV.ramp(held)
+  held = held or 0
+  if held <= 0.5 then return 1.0 end
+  if held <= 1.0 then return 1.0 + (held - 0.5) * 4.0 end
+  if held <= 2.0 then return 3.0 + (held - 1.0) * 5.0 end
+  return 8.0
+end
+-- SHIFT halves, CTRL ×5 (both: ×2.5).
+function MNV.mods(shift, ctrl)
+  local k = 1.0
+  if shift then k = k * 0.5 end
+  if ctrl then k = k * 5.0 end
+  return k
+end
+-- Δv for `px` pixels dragged along a handle, `held` s into the drag.
+function MNV.dragDv(px, held, vorb, k)
+  return px * MNV.DRAG_K * math.max(vorb or 0, MNV.VORB_MIN) * MNV.ramp(held) * (k or 1.0)
+end
+function MNV.scrollDv(notches, vorb, k)
+  return notches * MNV.SCROLL_DV * math.max(vorb or 0, MNV.VORB_MIN) * (k or 1.0)
+end
+-- A node time kept ahead of now (and inside the path it slides on).
+function MNV.clampT(t, now, tmax)
+  if tmax and t > tmax then t = tmax end
+  return math.max(t, now + MNV.LEAD_MIN)
+end
+-- The burn frame at a state relative to its body: prograde, orbit normal,
+-- radial out (each a unit; world axes, since celestial frames only translate).
+function MNV.basis(rx, ry, rz, vx, vy, vz)
+  local px, py, pz = norm(vx, vy, vz)
+  local nx, ny, nz = norm(cross(rx, ry, rz, vx, vy, vz))
+  local ox, oy, oz = cross(px, py, pz, nx, ny, nz)
+  return { px = px, py = py, pz = pz, nx = nx, ny = ny, nz = nz, rx = ox, ry = oy, rz = oz }
+end
+-- Δv components in a frame → the world vector, and back. A node slid along
+-- its orbit keeps its components, so the burn turns with the new frame.
+function MNV.burnWorld(B, pro, nor, rad)
+  return B.px * pro + B.nx * nor + B.rx * rad,
+         B.py * pro + B.ny * nor + B.ry * rad,
+         B.pz * pro + B.nz * nor + B.rz * rad
+end
+function MNV.components(B, x, y, z)
+  return B.px * x + B.py * y + B.pz * z, B.nx * x + B.ny * y + B.nz * z, B.rx * x + B.ry * y + B.rz * z
+end
+-- The conic a state is on: periapsis radius, apoapsis radius (nil on an
+-- escape) and the period (nil on an escape).
+function MNV.conic(rx, ry, rz, vx, vy, vz, mu)
+  if not mu or mu <= 0 then return nil end
+  local r = math.sqrt(rx * rx + ry * ry + rz * rz)
+  if r < 1e-6 then return nil end
+  local v2 = vx * vx + vy * vy + vz * vz
+  local hx, hy, hz = cross(rx, ry, rz, vx, vy, vz)
+  local h2 = hx * hx + hy * hy + hz * hz
+  local en = v2 / 2 - mu / r
+  local e = math.sqrt(math.max(0, 1 + 2 * en * h2 / (mu * mu)))
+  local p = h2 / mu
+  local pe = p / (1 + e)
+  if e >= 1 or en >= 0 then return pe, nil, nil end
+  local a = -mu / (2 * en)
+  return pe, p / (1 - e), 2 * math.pi * math.sqrt(a * a * a / mu)
+end
+-- ±n orbits (F6): the node one period later or earlier, or nil + why.
+function MNV.shiftOrbits(t0, period, n, now)
+  if not period or period ~= period or period <= 0 or period == math.huge then
+    return nil, "not on a closed orbit"
+  end
+  local t = t0 + n * period
+  if t < now + MNV.LEAD_MIN then return nil, "less than an orbit away" end
+  return t
+end
+-- Seconds at full throttle for `dv` on the engines lit now (the flight HUD's
+-- Tsiolkovsky: exhaust speed = thrust over the propellant's mass flow).
+-- `t` is the vessel's telemetry (thrust, mass, fuel_t, burn_s); nil = no engine.
+function MNV.burnSecs(t, dv)
+  local F, m = t and t.thrust or 0, t and t.mass or 0
+  if F <= 0 or m <= 0 then return nil end
+  local ve = ((t.fuel_t or 0) > 0 and (t.burn_s or 0) > 0) and F * t.burn_s / t.fuel_t or nil
+  if ve and ve > 1 then return m * ve / F * (1 - math.exp(-dv / ve)) end
+  return dv * m / F
+end
+-- Warp to node (F8) lands here: half the burn before the node, less a margin.
+function MNV.landing(t0, burn)
+  return t0 - (burn or 0) / 2 - MNV.WARP_LEAD
+end
+-- The rung of the warp ladder to sit on with `remaining` sim seconds to go:
+-- the highest one (under `cap`) that still has more than WARP_REAL seconds of
+-- real time left at it (and four frames of `dt`). 1 means "arrived: stop".
+function MNV.warpStep(remaining, steps, cap, dt)
+  local best = 1
+  local real = math.max(MNV.WARP_REAL, 4 * (dt or 0))
+  for _, w in ipairs(steps) do
+    if w <= (cap or math.huge) + 0.001 and remaining > w * real and w > best then best = w end
+  end
+  return best
+end
+-- The point of segment a→b nearest to m, on the screen: → u (0..1), d².
+function MNV.segNearest(ax, ay, bx, by, mx, my)
+  local dx, dy = bx - ax, by - ay
+  local l2 = dx * dx + dy * dy
+  local u = 0
+  if l2 > 1e-9 then u = math.max(0, math.min(1, ((mx - ax) * dx + (my - ay) * dy) / l2)) end
+  local qx, qy = ax + dx * u - mx, ay + dy * u - my
+  return u, qx * qx + qy * qy
+end
+-- "+2:14", "+1:02:09", "−0:03" — a lead a person reads.
+function MNV.clock(s)
+  local sg = s < 0 and "−" or "+"
+  s = math.floor(math.abs(s) + 0.5)
+  local h, m, sec = math.floor(s / 3600), math.floor(s / 60) % 60, s % 60
+  if h > 0 then return string.format("%s%d:%02d:%02d", sg, h, m, sec) end
+  return string.format("%s%d:%02d", sg, m, sec)
+end
+
+-- THE GIZMO's look, in one place (screen pixels at the 720-line design
+-- height; the map scales them with the interface). `stroke` is the line and
+-- ring width: 1 until the engine's line layer takes a width (card EN6), then
+-- one number to raise. Colours are the Flight Hardware palette, one per axis.
+GIZMO = {
+  disc = 12, stalk = 36, knob = 9, hit = 11, line_hit = 24, stroke = 1,
+  pro = { 0.97, 0.55, 0.22 },   -- accent: prograde / retrograde
+  nor = { 0.66, 0.80, 0.86 },   -- signal: normal / anti-normal
+  rad = { 0.55, 0.85, 0.42 },   -- done: radial out / in
+  ink = { 0.92, 0.89, 0.81 }, dim = { 0.56, 0.55, 0.50 },
+  phos = { 0.64, 0.93, 0.56 }, phosDim = { 0.38, 0.56, 0.34 },
+  sunken = { 0.028, 0.040, 0.032 }, bezel = { 0.70, 0.67, 0.59 },
+}
+-- The six handles: which component, which way, which colour, filled or open.
+GIZMO.HANDLES = {
+  { id = "pro+", comp = "pro", sign = 1, col = "pro", fill = true, name = "prograde" },
+  { id = "pro-", comp = "pro", sign = -1, col = "pro", fill = false, name = "retrograde" },
+  { id = "nor+", comp = "nor", sign = 1, col = "nor", fill = true, name = "normal" },
+  { id = "nor-", comp = "nor", sign = -1, col = "nor", fill = false, name = "anti-normal" },
+  { id = "rad+", comp = "rad", sign = 1, col = "rad", fill = true, name = "radial out" },
+  { id = "rad-", comp = "rad", sign = -1, col = "rad", fill = false, name = "radial in" },
+}
 
 -- Orbital-plane basis + conic from a relative state vector: returns
 -- has_orbit, p, ecc, ê1 (periapsis dir), ê2 (in-plane, motion side).
@@ -579,32 +759,6 @@ local function draw_rel_polyline(rpts, anch, bodies, r, g, b, a)
   if m >= 6 then draw.polyline(run, r, g, b, a) end
 end
 
--- The trajectory point nearest the cursor in SCREEN space (KSP click-on-line).
--- Projects each rest-frame point at its anchor's LIVE position (so you click the
--- orbit you SEE). Returns index k (0-based), the live world point, and its
--- time-from-now, or nil if nothing is within the pixel threshold / no camera.
-local function pick_traj_point(traj, bodies)
-  if not traj or not camera or not camera.exists() then return nil end
-  local mx, my = input.mouse()
-  local n = math.floor(#traj.rpts / 3)
-  local bk, bd, bx, by, bz
-  for k = 0, n - 1 do
-    local px, py, pz = rel_world(bodies, traj.anch[k + 1],
-      traj.rpts[k * 3 + 1], traj.rpts[k * 3 + 2], traj.rpts[k * 3 + 3])
-    if px then
-      local sx, sy, _, on = camera.worldToScreen(px, py, pz)
-      if on then
-        local d = (sx - mx) ^ 2 + (sy - my) ^ 2
-        if not bd or d < bd then bd, bk, bx, by, bz = d, k, px, py, pz end
-      end
-    end
-  end
-  if bd and bd < (24 * 24) then
-    return bk, bx, by, bz, (traj.t0 or 0) + bk * (traj.step or 0)
-  end
-  return nil
-end
-
 -- A little 3D diamond marker (used for the node + encounter points).
 local function draw_diamond(x, y, z, s, r, g, b)
   depth(false)
@@ -699,7 +853,9 @@ local function recompute_trajectories(node, db, bodies, pidx, o, thr)
   -- at each anchor's LIVE position. `step`/`t0` give each point a TIME (offset
   -- from now), which is what click-to-place reads to drop the node at the
   -- right spot on the orbit.
-  traj_now = { rpts = rpts, anch = anch, enc = enc, t0 = toff, step = span / segs }
+  -- `ta` is the ABSOLUTE sim instant of point 0 (the frozen ref's), so a pick
+  -- on the path reads an exact time, never one a recompute stale.
+  traj_now = { rpts = rpts, anch = anch, enc = enc, t0 = toff, ta = traj_ref.t, step = span / segs }
 
   if mnv then
     -- Walk the CURRENT patched conic to the node time, CROSSING any SOI between
@@ -723,12 +879,9 @@ local function recompute_trajectories(node, db, bodies, pidx, o, thr)
     local nvx, nvy, nvz = ns.rvx, ns.rvy, ns.rvz
     -- Burn basis at the node, IN ITS dominant body's frame: prograde / normal /
     -- radial-out (world axes — celestial frames only translate).
-    local px, py, pz = norm(nvx, nvy, nvz)
-    local hnx, hny, hnz = norm(cross(nrx, nry, nrz, nvx, nvy, nvz))
-    local rdx, rdy, rdz = cross(px, py, pz, hnx, hny, hnz)
-    local bx = px * mnv.pro + hnx * mnv.nor + rdx * mnv.rad
-    local by = py * mnv.pro + hny * mnv.nor + rdy * mnv.rad
-    local bz = pz * mnv.pro + hnz * mnv.nor + rdz * mnv.rad
+    -- (MNV.basis: the gizmo's six handles are drawn along these same axes)
+    local B = MNV.basis(nrx, nry, nrz, nvx, nvy, nvz)
+    local bx, by, bz = MNV.burnWorld(B, mnv.pro, mnv.nor, mnv.rad)
     -- Post-burn seed: node WORLD position unchanged, WORLD velocity += the burn.
     local mwvx, mwvy, mwvz = ns.wvx + bx, ns.wvy + by, ns.wvz + bz
     -- Post-burn timescale about the node's body (bound → its year; escape → the
@@ -750,14 +903,424 @@ local function recompute_trajectories(node, db, bodies, pidx, o, thr)
     -- Cache the burn's WORLD direction so the SAS "node" hold can point at it in
     -- flight (where recompute doesn't run).
     if dv > 1e-4 then mnv.bwx, mnv.bwy, mnv.bwz = norm(bx, by, bz) else mnv.bwx = nil end
+    -- For the node's readout (F5): the orbit the burn leaves you on, about the
+    -- node's own body; and the period of the orbit it sits on (±1 orbit, F6).
+    local pe_r, ap_r = MNV.conic(nrx, nry, nrz, bvx, bvy, bvz, ns.mu)
+    local _, _, pre_T = MNV.conic(nrx, nry, nrz, nvx, nvy, nvz, ns.mu)
+    local nrad = (bodies[ndb] and bodies[ndb].radius) or 0
     traj_mnv = {
       rpts = mrpts, anch = manch, enc = menc,
       m_anchor = ndb, m_rx = nrx, m_ry = nry, m_rz = nrz, -- node marker (its body's frame)
-      bx = bx, by = by, bz = bz,
+      bx = bx, by = by, bz = bz, B = B,
       dv = dv, t0 = t_node, step = mspan / segs,
+      tabs = mnv.t0, node = mnv,    -- the node and the instant this walk was made for
+      vnode = math.sqrt(nvx * nvx + nvy * nvy + nvz * nvz), period = pre_T,
+      pe = pe_r and (pe_r - nrad), ap = ap_r and (ap_r - nrad),
+      body = bodies[ndb] and bodies[ndb].name,
     }
   else
     traj_mnv = nil
+  end
+end
+
+-- ── THE NODE GIZMO, each frame ──────────────────────────────────────────────
+-- Hover an orbit and a soft ring shows where a click would put a node, with
+-- its time; a click places one (no PLAN mode needed: a click on a line is
+-- nothing the stick uses). The node is a disc with six handles on stalks in
+-- the burn frame there: drag a handle to change Δv along it, drag the disc to
+-- slide the node along its orbit, the wheel over either for fine steps,
+-- right-click for the menu. Everything is placed against THIS frame's body
+-- read (the node is stored relative to its body, never as a world point) and
+-- picked with the very projection it is drawn with, so the gizmo stays on the
+-- line while the planet carries it. Globals, not locals: update_map3d is near
+-- the upvalue ceiling.
+GZ = { hot = nil, drag = nil, lmb = false, rmb = nil, geo = nil, hover = nil,
+       note = nil, note_t = -10, mx = 0, my = 0 }
+-- Published: while true, vessel_controller keeps SHIFT/CTRL (the drag's fine
+-- and coarse keys) off the throttle — the cursor is on the node or dragging it.
+gizmoBusy = false
+
+-- The nearest point of a cached path to a screen pixel, segment by segment
+-- (each point at its anchor body's LIVE position: the path as drawn), or nil
+-- past `maxpx`. The path runs 1.6 orbits, so its loops lie on each other on
+-- the screen: of the points within a pixel and a half of the nearest, the
+-- EARLIEST wins (the orbit you mean is the next one), and `tlo`..`thi` (sim
+-- times, optional) keep a slide on the loop it is on. → { t = absolute sim
+-- time, anchor, rx, ry, rz (body-relative), dx, dy, dz (the chord's
+-- direction: the motion there), d = pixels }.
+local PICK_U, PICK_D = {}, {}   -- per-segment scratch, reused every frame
+local function pick_path(traj, bodies, mx, my, maxpx, tlo, thi)
+  if not traj or not camera or not camera.exists() then return nil end
+  local n = math.floor(#traj.rpts / 3)
+  local ta, step = traj.ta or 0, traj.step or 0
+  local dmin = maxpx and maxpx * maxpx or math.huge
+  local pa, psx, psy, pon = nil, 0, 0, false
+  local R, A = traj.rpts, traj.anch
+  for k = 0, n - 1 do
+    local a = A[k + 1]
+    local wx, wy, wz = rel_world(bodies, a, R[k * 3 + 1], R[k * 3 + 2], R[k * 3 + 3])
+    local sx, sy, on = 0, 0, false
+    if wx then
+      local _d
+      sx, sy, _d, on = camera.worldToScreen(wx, wy, wz)
+    end
+    PICK_D[k] = nil
+    if on and pon and pa == a then
+      local t1 = ta + k * step   -- the segment spans t1 − step .. t1
+      if (not tlo or t1 >= tlo) and (not thi or t1 - step <= thi) then
+        local u, d2 = MNV.segNearest(psx, psy, sx, sy, mx, my)
+        PICK_U[k - 1], PICK_D[k - 1] = u, d2
+        if d2 < dmin then dmin = d2 end
+      end
+    end
+    pa, psx, psy, pon = a, sx, sy, on
+  end
+  PICK_D[n - 1] = nil
+  if dmin == math.huge or (maxpx and dmin > maxpx * maxpx) then return nil end
+  local lim = (math.sqrt(dmin) + 1.5) ^ 2
+  local bk, bu, bd = nil, 0, 0
+  for k = 0, n - 2 do
+    local d2 = PICK_D[k]
+    if d2 and d2 <= lim and (not maxpx or d2 <= maxpx * maxpx) then bk, bu, bd = k, PICK_U[k], d2 break end
+  end
+  if not bk then return nil end
+  local i0, i1 = bk * 3, (bk + 1) * 3
+  local dx, dy, dz = R[i1 + 1] - R[i0 + 1], R[i1 + 2] - R[i0 + 2], R[i1 + 3] - R[i0 + 3]
+  return { t = (traj.ta or 0) + (bk + bu) * (traj.step or 0), anchor = A[bk + 1],
+           rx = R[i0 + 1] + dx * bu, ry = R[i0 + 2] + dy * bu, rz = R[i0 + 3] + dz * bu,
+           dx = dx, dy = dy, dz = dz, d = math.sqrt(bd) }
+end
+-- The last instant a cached path reaches (a node can't slide past it).
+local function path_end(traj)
+  if not traj then return nil end
+  return (traj.ta or 0) + (math.floor(#traj.rpts / 3) - 1) * (traj.step or 0)
+end
+
+-- Where the node is drawn this frame, and its burn frame: the walk's own
+-- node state once it is for this node at this instant, else the point the
+-- click or the slide put it on (until the next walk catches up).
+local function node_place(bodies)
+  local m = mnv
+  if not m then return nil end
+  local T = traj_mnv
+  if T and T.node == m and T.tabs == m.t0 and T.B then
+    local x, y, z = rel_world(bodies, T.m_anchor, T.m_rx, T.m_ry, T.m_rz)
+    if x then m.mark = nil return x, y, z, T.B end
+  end
+  local K = m.mark
+  if K then
+    local x, y, z = rel_world(bodies, K.anchor, K.rx, K.ry, K.rz)
+    if x then return x, y, z, K.B end
+  end
+  if T and T.node == m and T.B then
+    local x, y, z = rel_world(bodies, T.m_anchor, T.m_rx, T.m_ry, T.m_rz)
+    if x then return x, y, z, T.B end
+  end
+  return nil
+end
+local function gz_axis(B, comp)
+  if comp == "pro" then return B.px, B.py, B.pz end
+  if comp == "nor" then return B.nx, B.ny, B.nz end
+  return B.rx, B.ry, B.rz
+end
+-- This frame's gizmo on the screen: the disc, and each handle's knob at the
+-- end of its stalk (a stalk is GIZMO.stalk px long wherever the node is).
+local function gizmo_geo(bodies, px_at, lk)
+  if not (camera and camera.worldToScreen) then return nil end
+  local x, y, z, B = node_place(bodies)
+  if not (x and B) then return nil end
+  local sx, sy, _d, on = camera.worldToScreen(x, y, z)
+  if not on then return nil end
+  local sz = (params.gizmo_size or 1.0) * lk
+  local L = px_at(x, y, z, GIZMO.stalk * sz)
+  local G = { x = x, y = y, z = z, sx = sx, sy = sy, B = B, sz = sz, h = {} }
+  for i, H in ipairs(GIZMO.HANDLES) do
+    local ax, ay, az = gz_axis(B, H.comp)
+    local ex, ey, ez = x + ax * H.sign * L, y + ay * H.sign * L, z + az * H.sign * L
+    local kx, ky, _k, kon = camera.worldToScreen(ex, ey, ez)
+    G.h[i] = { H = H, ex = ex, ey = ey, ez = ez, kx = kx, ky = ky, on = kon == true }
+  end
+  return G
+end
+-- What of the gizmo is under a screen pixel: "disc", a handle's index, or nil.
+-- The nearest wins, the disc by a few pixels: a handle seen nearly end-on
+-- (its axis toward the camera) sits close to the disc and must stay reachable
+-- on its own side, while the disc's middle is always the disc.
+local function gizmo_hit(G, mx, my)
+  if not G then return nil end
+  local best, bd = nil, GIZMO.hit * G.sz
+  local dd = math.sqrt((mx - G.sx) ^ 2 + (my - G.sy) ^ 2)
+  if dd <= (GIZMO.disc * 0.5 + 3) * G.sz then best, bd = "disc", dd - 3 * G.sz end
+  for i, h in ipairs(G.h) do
+    if h.on then
+      local d = math.sqrt((mx - h.kx) ^ 2 + (my - h.ky) ^ 2)
+      if d < bd then best, bd = i, d end
+    end
+  end
+  return best
+end
+-- (targeting.lua asks before it opens a world's menu for the same right-click)
+function mnvAt(sx, sy)
+  return map_view and gizmo_hit(GZ.geo, sx, sy) ~= nil or false
+end
+local function gz_note(msg)
+  GZ.note, GZ.note_t = msg, time or 0
+end
+-- A cached findScript (a scene scan: a miss is asked again after 2 s).
+local gz_refs, gz_miss = {}, {}
+local function gz_ref(kind)
+  local r = gz_refs[kind]
+  if not (r and r.valid ~= false) then
+    if (time or 0) - (gz_miss[kind] or -10) < 2.0 then return nil end
+    r = findScript and findScript(kind) or nil
+    gz_refs[kind] = r
+    if not r then gz_miss[kind] = time or 0 end
+  end
+  return r
+end
+-- The node's period (the orbit it sits on) and the orbital speed there.
+local function node_period(m, oe)
+  local T = traj_mnv
+  if T and T.node == m and T.period then return T.period end
+  return oe and oe.period or nil
+end
+local function node_vorb(m, vref)
+  local T = traj_mnv
+  if T and T.node == m and T.vnode then return T.vnode end
+  return vref
+end
+-- Put the node at a picked point of the path (a click, or the slide).
+local function node_to(m, pk, now, tmax)
+  local t = MNV.clampT(pk.t, now, tmax)
+  m.t0, m.burned = t, 0.0
+  if t == pk.t then
+    m.mark = { anchor = pk.anchor, rx = pk.rx, ry = pk.ry, rz = pk.rz,
+               B = MNV.basis(pk.rx, pk.ry, pk.rz, pk.dx, pk.dy, pk.dz) }
+  else
+    m.mark = nil  -- clamped off the cursor: the next walk places it
+  end
+end
+
+-- Input for the gizmo and the path, then this frame's geometry for drawing.
+-- `vref` = the craft's orbital speed now, `oe` its conic.
+function mnvFrame(bodies, px_at, lk, oe, vref)
+  local mx, my = input.mouse()
+  local cm = gz_ref("context_menu")
+  local ui_busy = (cm and cm.ownsMouse and cm.ownsMouse()) or false
+  local now = space.time()
+  local G = gizmo_geo(bodies, px_at, lk)
+  local hot = (not ui_busy) and gizmo_hit(G, mx, my) or nil
+  local lmb = input.button(0) == true
+  local rmb = input.button(1) == true
+  local press = lmb and not GZ.lmb
+  GZ.lmb = lmb
+  local m = mnv
+  local tmax = path_end(traj_now)
+  if GZ.drag and (not lmb or not m) then GZ.drag = nil end
+  local D = GZ.drag
+  -- the soft ring on the orbit under the cursor (where a click plans a burn)
+  GZ.hover = nil
+  if not D and not hot and not ui_busy and not rmb then
+    -- (only ahead of the craft: the path starts a little in the past)
+    GZ.hover = pick_path(traj_now, bodies, mx, my, GIZMO.line_hit * lk, now + MNV.LEAD_MIN, nil)
+  end
+  if press and not ui_busy then
+    if hot and m and m.locked then
+      gz_note("LOCKED · right-click to unlock")
+    elseif hot == "disc" then
+      GZ.drag = { kind = "slide", t = time }
+    elseif hot then
+      local h = G.h[hot]
+      local ddx, ddy = h.kx - G.sx, h.ky - G.sy
+      local l = math.sqrt(ddx * ddx + ddy * ddy)
+      if l < 1 then ddx, ddy, l = 0, -1, 1 end
+      GZ.drag = { kind = "dv", i = hot, H = h.H, t = time, mx = mx, my = my, dx = ddx / l, dy = ddy / l }
+    elseif GZ.hover then
+      -- a click on the orbit: the node goes there (one node for now: a click
+      -- with one planned moves it, its Δv kept)
+      if not m then m = mnvSet({ t0 = now, pro = 0.0, nor = 0.0, rad = 0.0, burned = 0.0 }) end
+      if m.locked then gz_note("LOCKED · right-click the node to unlock")
+      else node_to(m, GZ.hover, now, tmax) end
+      GZ.hover = nil
+    end
+    D = GZ.drag
+  end
+  if D and m then
+    if D.kind == "dv" then
+      -- along the handle's screen direction, read again each frame (the view
+      -- can turn); a handle seen end-on keeps the direction it had
+      local h = G and G.h[D.i]
+      if h and h.on then
+        local ddx, ddy = h.kx - G.sx, h.ky - G.sy
+        local l = math.sqrt(ddx * ddx + ddy * ddy)
+        if l > 4 then D.dx, D.dy = ddx / l, ddy / l end
+      end
+      local px = (mx - D.mx) * D.dx + (my - D.my) * D.dy
+      D.mx, D.my = mx, my
+      if px ~= 0 then
+        local k = MNV.mods(input.key("shift"), input.key("ctrl"))
+        m[D.H.comp] = m[D.H.comp] + D.H.sign * MNV.dragDv(px, time - D.t, node_vorb(m, vref), k)
+      end
+    elseif D.kind == "slide" then
+      -- within half an orbit of where the node is: it slides along the loop
+      -- it sits on, never jumping to the same spot one orbit on (or back
+      -- across the craft onto the end of the path)
+      local T = node_period(m, oe) or (tmax and (tmax - now) / 1.6) or 600
+      local pk = pick_path(traj_now, bodies, mx, my, nil, m.t0 - 0.5 * T, m.t0 + 0.5 * T)
+      if pk then node_to(m, pk, now, tmax) end
+    end
+  end
+  -- the wheel over the gizmo is the node's, not the zoom's (update_map3d
+  -- reads GZ.hot from the frame before)
+  local sc = input.scroll()
+  if sc and sc ~= 0 and hot and m and not D then
+    if m.locked then
+      gz_note("LOCKED · right-click to unlock")
+    elseif hot == "disc" then
+      local T = node_period(m, oe) or (tmax and (tmax - now) / 1.6)
+      if T then
+        m.t0, m.burned, m.mark = MNV.clampT(m.t0 + sc * MNV.SCROLL_T * T, now, nil), 0.0, nil
+      end
+    else
+      local H = GIZMO.HANDLES[hot]
+      local k = MNV.mods(input.key("shift"), input.key("ctrl"))
+      m[H.comp] = m[H.comp] + H.sign * MNV.scrollDv(sc, node_vorb(m, vref), k)
+    end
+  end
+  -- a right-button TAP on the node opens its menu (a held or dragged right
+  -- button is still the view's). Pressed where the cursor was the frame
+  -- before: the press itself locks the pointer for the view.
+  local R = GZ.rmb
+  if rmb and not R then
+    GZ.rmb = { x = GZ.mx, y = GZ.my, t = time, moved = 0, on = GZ.hot ~= nil and m ~= nil }
+  elseif rmb and R then
+    local dx, dy = input.mouse_delta()
+    R.moved = R.moved + math.abs(dx or 0) + math.abs(dy or 0)
+  elseif R then
+    GZ.rmb = nil
+    if R.on and time - R.t <= 0.35 and R.moved <= 6 and mnv then mnvMenu(R.x, R.y) end
+  end
+  GZ.mx, GZ.my = mx, my
+  GZ.hot = hot
+  gizmoBusy = GZ.drag ~= nil or hot ~= nil
+  -- this frame's geometry after the edits (a slide moved the disc)
+  GZ.geo = gizmo_geo(bodies, px_at, lk)
+  GZ.t = time   -- (probes: which frame the geometry is from)
+end
+
+-- The node's CRT tag (F5) and the gizmo, in the map's pass. `vc` = the craft
+-- flown (its telemetry gives the burn time).
+function mnvDraw(bodies, px_at, lk, vc)
+  local s = (params.gizmo_stroke or 1)
+  local now = space.time()
+  local hidden = cineHidden()
+  -- the hover ring and its time tag
+  local Hv = GZ.hover
+  local cm0 = gz_ref("context_menu")
+  if cm0 and cm0.open then Hv = nil end   -- (not over an open menu)
+  if Hv and not hidden then
+    local wx, wy, wz = rel_world(bodies, Hv.anchor, Hv.rx, Hv.ry, Hv.rz)
+    local sx, sy, _d, on
+    if wx then sx, sy, _d, on = camera.worldToScreen(wx, wy, wz) end
+    if on then
+      local c = GIZMO.nor
+      draw.circleOutline(sx, sy, 8 * lk, c[1], c[2], c[3], 0.85, s)
+      local txt = MNV.clock(Hv.t - now)
+      local fs = 12 * lk
+      local w = (#txt * 0.62 + 1) * fs
+      draw.rect(sx + 10 * lk, sy - 24 * lk, w, fs * 1.45, 0.028, 0.040, 0.032, 0.85, 2 * lk)
+      draw.text(sx + 10 * lk + fs * 0.5, sy - 24 * lk + fs * 0.18, txt, fs, c[1], c[2], c[3], 1.0, "left", "fonts/SolarMono.ttf")
+    end
+  end
+  local G = GZ.geo
+  local m = mnv
+  if not (G and m) then return end
+  local a = m.locked and 0.45 or 1.0
+  -- the stalks: world lines from the node along the burn frame (drawn
+  -- through the planet: the gizmo is a control, it is never hidden)
+  depth(false)
+  for _, h in ipairs(G.h) do
+    local c = GIZMO[h.H.col]
+    draw.line(G.x, G.y, G.z, h.ex, h.ey, h.ez, c[1], c[2], c[3], a)
+  end
+  if hidden then return end
+  -- the knobs: filled for the + way, open for the − way; the hot one larger
+  local D = GZ.drag
+  for i, h in ipairs(G.h) do
+    if h.on then
+      local c = GIZMO[h.H.col]
+      local hi = (GZ.hot == i) or (D and D.i == i)
+      local r = GIZMO.knob * 0.5 * G.sz * (hi and 1.35 or 1.0)
+      draw.circle(h.kx, h.ky, r + 1.5 * G.sz, 0.0, 0.0, 0.0, 0.55 * a)
+      if h.H.fill then
+        draw.circle(h.kx, h.ky, r, c[1], c[2], c[3], a)
+      else
+        draw.circleOutline(h.kx, h.ky, r - s * 0.5, c[1], c[2], c[3], a, s + 1)
+      end
+      if hi then draw.circleOutline(h.kx, h.ky, r + 2.5 * G.sz, 1.0, 0.80, 0.58, 0.9, s) end
+    end
+  end
+  -- the disc
+  local rd = GIZMO.disc * 0.5 * G.sz
+  local ink = GIZMO.ink
+  draw.circle(G.sx, G.sy, rd + 1.5 * G.sz, 0.0, 0.0, 0.0, 0.6)
+  draw.circle(G.sx, G.sy, rd, 0.028, 0.040, 0.032, 0.9)
+  draw.circleOutline(G.sx, G.sy, rd, ink[1], ink[2], ink[3], a, s + 1)
+  local ac = GIZMO.pro
+  draw.circle(G.sx, G.sy, rd * 0.35, ac[1], ac[2], ac[3], a)
+  if GZ.hot == "disc" or (D and D.kind == "slide") then
+    draw.circleOutline(G.sx, G.sy, rd + 3 * G.sz, 1.0, 0.80, 0.58, 0.9, s)
+  end
+  -- THE READOUT (F5): a small CRT beside the node (not while a menu is up:
+  -- screen drawing lands over the interface, and the node's menu reads the
+  -- same numbers)
+  local cm = gz_ref("context_menu")
+  if cm and cm.open then return end
+  local dv = math.sqrt(m.pro ^ 2 + m.nor ^ 2 + m.rad ^ 2)
+  local lead = m.t0 - now
+  local tb = vc and MNV.burnSecs(vc.tele, dv)
+  local T = traj_mnv
+  local orbit = "—"
+  if T and T.node == m then
+    if T.pe and T.ap then
+      orbit = string.format("Pe %s  Ap %s", (T.pe < 0 and "−" or "") .. fmt_dist(T.pe), fmt_dist(T.ap))
+    elseif T.pe then
+      orbit = string.format("Pe %s  ESCAPE", (T.pe < 0 and "−" or "") .. fmt_dist(T.pe))
+    end
+  end
+  local burn
+  if dv < 0.05 then burn = "—" elseif tb then burn = MNV.clock(tb):sub(2) else burn = "no engine" end
+  local rows = {
+    { "ΔV", string.format("%.1f m/s", dv) },
+    { "NODE", (lead >= 0 and "T−" or "T+") .. MNV.clock(lead):sub(2) },
+    { "BURN", burn },
+    { "", orbit },
+  }
+  if m.locked then rows[#rows + 1] = { "", "LOCKED" } end
+  if GZ.note and (time or 0) - GZ.note_t < 2.5 then rows[#rows + 1] = { "", GZ.note } end
+  local fs = 11.5 * lk
+  local rh = fs * 1.3
+  local W, Hh = 168 * lk, rh * #rows + 8 * lk
+  local x0, y0 = G.sx + 18 * G.sz, G.sy + 14 * G.sz
+  if camera.screenRect then
+    local vx, vy, vw, vh = camera.screenRect()
+    if vw and vw > 0 then
+      if x0 + W > vx + vw - 4 then x0 = G.sx - 18 * G.sz - W end
+      if y0 + Hh > vy + vh - 4 then y0 = G.sy - 14 * G.sz - Hh end
+    end
+  end
+  local bz, sk = GIZMO.bezel, GIZMO.sunken
+  draw.rect(x0 - 1.5 * lk, y0 - 1.5 * lk, W + 3 * lk, Hh + 3 * lk, bz[1] * 0.5, bz[2] * 0.5, bz[3] * 0.5, 0.9, 3 * lk)
+  draw.rect(x0, y0, W, Hh, sk[1], sk[2], sk[3], 0.94, 2 * lk)
+  local ph, pd = GIZMO.phos, GIZMO.phosDim
+  for i, r in ipairs(rows) do
+    local yy = y0 + 4 * lk + (i - 1) * rh
+    if r[1] ~= "" then
+      draw.text(x0 + 6 * lk, yy, r[1], fs * 0.85, pd[1], pd[2], pd[3], a, "left", "fonts/SolarMono.ttf")
+      draw.text(x0 + 46 * lk, yy, r[2], fs, ph[1], ph[2], ph[3], a, "left", "fonts/SolarMono.ttf")
+    else
+      draw.text(x0 + 6 * lk, yy, r[2], fs, ph[1], ph[2], ph[3], a, "left", "fonts/SolarMono.ttf")
+    end
   end
 end
 
@@ -895,7 +1458,8 @@ local function update_map3d(node, dt)
     end
   end
   local sc = input.scroll()
-  if sc and sc ~= 0 then zoom_target = zoom_target * math.exp(-sc * 0.12) end
+  -- (the wheel over the node's gizmo is the node's: mnvFrame, GZ.hot)
+  if sc and sc ~= 0 and not GZ.hot then zoom_target = zoom_target * math.exp(-sc * 0.12) end
   if input.key("up") then zoom_target = zoom_target * math.exp(-1.5 * dt) end
   if input.key("down") then zoom_target = zoom_target * math.exp(1.5 * dt) end
   zoom_target = math.max(fradius * 1.6, math.min(zoom_target, zoom_max()))
@@ -955,6 +1519,13 @@ local function update_map3d(node, dt)
       local x, y, w, h = n:uiRect()
       if x then blocked[#blocked + 1] = { x - 6, y - 6, w + 12, h + 12 } end
     end
+  end
+  -- (and an open right-click menu: a world's tag drew over its rows)
+  do
+    local cm = gz_ref("context_menu")
+    local x, y, w, h = nil, nil, nil, nil
+    if cm and cm.open and cm.screenRect then x, y, w, h = cm.screenRect() end
+    if x then blocked[#blocked + 1] = { x - 6, y - 6, w + 12, h + 12 } end
   end
   local function covered(x, y, w, h)
     for _, r in ipairs(blocked) do
@@ -1069,11 +1640,16 @@ local function update_map3d(node, dt)
   -- Plan a burn and watch the resulting orbit — and where it drops you into
   -- another body's sphere of influence.
   local oe = db and space.elements(node.x, node.y, node.z, node.vx, node.vy, node.vz)
-  local hover_x, hover_y, hover_z -- the orbit point under the cursor (draw below)
   if craft_flying and db and not node.grounded then
     local pidx = parent_indices(bodies)
     local vref = math.sqrt(node.vx ^ 2 + node.vy ^ 2 + node.vz ^ 2)
     local dvrate = math.max(0.5, vref * 0.12)
+    MNV.lastPeriod = oe and oe.period or nil
+
+    -- THE MOUSE plans burns in any mode: hover the orbit, click it, drag the
+    -- node's handles and its disc (mnvFrame, above). PLAN mode is the keyboard
+    -- way to do the same.
+    mnvFrame(bodies, px_at, lk, oe, vref)
 
     -- PLANNING IS A MODE, and it has to be. A craft flies from the map — that
     -- is the point of flying on instruments — so the stick owns W/S/A/D/Q/E,
@@ -1084,19 +1660,9 @@ local function update_map3d(node, dt)
     -- The old answer was to give planning to the scout ship and nothing else,
     -- which meant the craft you actually built could never plan a burn.
     if planning then
-      -- CLICK-ON-ORBIT placement (KSP): hover the current-orbit line, LEFT-click or
-      -- drag to create/move the burn at that exact point (RMB is the camera, so LMB
-      -- is free). Picks against the cached forward path, whose points carry a time —
-      -- so the click lands the node at the right spot on the orbit.
-      local pk_k, px, py, pz, pk_t = pick_traj_point(traj_now, bodies)
-      if pk_k then hover_x, hover_y, hover_z = px, py, pz end
-      if pk_t and input.button(0) then
-        -- Store the node as an ABSOLUTE instant (now + the clicked point's lead) so it
-        -- stays fixed on the orbit as you coast toward it instead of running ahead.
-        local t0 = space.time() + pk_t
-        if mnv then mnv.t0, mnv.burned = t0, 0.0
-        else mnv = { t0 = t0, pro = 0.0, nor = 0.0, rad = 0.0, burned = 0.0 } end
-      end
+      -- (A click on the orbit places or moves the node in this mode too:
+      -- mnvFrame. The node is an ABSOLUTE instant, so it stays fixed on the
+      -- orbit as you coast toward it instead of running ahead.)
 
       -- Entering the mode with nothing planned puts a node a quarter-orbit
       -- ahead, so plan mode always has something to tune. A mode that needs a
@@ -1104,14 +1670,20 @@ local function update_map3d(node, dt)
       -- conclude is broken.
       if not mnv then
         local lead = (oe and oe.period and oe.period * 0.25) or 60.0
-        mnv = { t0 = space.time() + lead, pro = 0.0, nor = 0.0, rad = 0.0, burned = 0.0 }
+        mnvSet({ t0 = space.time() + lead, pro = 0.0, nor = 0.0, rad = 0.0, burned = 0.0 })
       end
       -- BACKSPACE abandons the burn outright (X only zeroes its ΔV).
       if input.pressed("backspace") then
-        mnv = nil
+        mnvDelete()
         planning = false
       end
-      if mnv then
+      -- A locked node (its menu's Lock) holds still for the keys as for the mouse.
+      if mnv and mnv.locked then
+        if input.key("w") or input.key("s") or input.key("a") or input.key("d") or input.key("q")
+          or input.key("e") or input.key("left") or input.key("right") or input.pressed("x") then
+          GZ.note, GZ.note_t = "LOCKED · right-click to unlock", time
+        end
+      elseif mnv then
         -- ←/→ fine-tune the node time; W/S/A/D/Q/E tune the ΔV; X zeroes it.
         local tref = (oe and oe.period) or 600.0
         local horizon = (oe and oe.period and oe.period * 1.5) or (tref * 6)
@@ -1124,6 +1696,7 @@ local function update_map3d(node, dt)
         if sliding then
           local now = space.time()
           mnv.t0 = math.max(now + 1.0, math.min(mnv.t0, now + horizon))
+          mnv.mark = nil -- (the walk places it: the clicked point is behind it now)
         end
         if input.key("w") then mnv.pro = mnv.pro + dvrate * dt end
         if input.key("s") then mnv.pro = mnv.pro - dvrate * dt end
@@ -1139,8 +1712,9 @@ local function update_map3d(node, dt)
       recompute_trajectories(node, db, bodies, pidx, oe, subj_throttle)
     end
   else
-    mnv = nil
+    mnvSet(nil)
     traj_now, traj_mnv = nil, nil
+    GZ.drag, GZ.geo, GZ.hover, GZ.hot, gizmoBusy = nil, nil, nil, nil, false
   end
 
   -- Draw the cached walks in the dominant body's REST FRAME: every point rides
@@ -1159,22 +1733,9 @@ local function update_map3d(node, dt)
       end
     end
   end
-  -- The orbit point under the cursor (a soft ring) — where a click drops the node.
-  if hover_x and not mnv then
-    draw_diamond(hover_x, hover_y, hover_z, px_at(hover_x, hover_y, hover_z, 7), 0.7, 0.95, 1.0)
-  end
   if traj_mnv then
     if map_show.orbits then
       draw_rel_polyline(traj_mnv.rpts, traj_mnv.anch, bodies, 1.0, 0.55, 0.15, 0.95) -- post-burn (amber)
-    end
-    local mx, my, mz = rel_world(bodies, traj_mnv.m_anchor, traj_mnv.m_rx, traj_mnv.m_ry, traj_mnv.m_rz)
-    if mx then
-      draw_diamond(mx, my, mz, px_at(mx, my, mz, 9), 1.0, 0.7, 0.2)
-      if traj_mnv.dv > 1e-4 then
-        local bnx, bny, bnz = norm(traj_mnv.bx, traj_mnv.by, traj_mnv.bz)
-        local bl = px_at(mx, my, mz, 36)
-        draw.line(mx, my, mz, mx + bnx * bl, my + bny * bl, mz + bnz * bl, 1.0, 0.85, 0.3, 1.0)
-      end
     end
     if map_show.markers then
       for _, e in ipairs(traj_mnv.enc) do
@@ -1188,6 +1749,8 @@ local function update_map3d(node, dt)
       end
     end
   end
+  -- The node's gizmo, its readout and the hover ring (drawn last: on top).
+  if craft_flying then mnvDraw(bodies, px_at, lk, vc) end
 
   -- Focused-body info panel (the flight HUD stands down while the map is open).
   if time - map_hud_t >= 0.1 then
@@ -1243,15 +1806,14 @@ local function update_map3d(node, dt)
       end
       lines[#lines + 1] = planning
         and "Click the orbit  move it  ·  W/S prograde  ·  A/D radial  ·  Q/E normal  ·  ← →  slide  ·  X  zero  ·  ⌫  delete  ·  N  fly"
-        or  "N  plan the burn — until you do, the stick flies the craft"
+        or  "Drag a handle  ΔV   ·   drag the node  slide it   ·   scroll on either  fine   ·   right-click it  menu   ·   N  keys"
     elseif craft_flying and not node.grounded then
       if traj_now and #traj_now.enc > 0 then
         local e = traj_now.enc[1]
         local verb = e.kind == "enter" and "ENCOUNTER" or (e.kind == "impact" and "IMPACT" or "SOI exit")
-        lines[#lines + 1] = string.format("%s %s in %.0f s   ·   N  plan a burn", verb, e.name, e.t)
-      else
-        lines[#lines + 1] = "N  plan a burn on this orbit"
+        lines[#lines + 1] = string.format("%s %s in %.0f s", verb, e.name, e.t)
       end
+      lines[#lines + 1] = "Click an orbit to plan a burn  ·  drag its handles   ·   N  plan with the keys"
     end
     local function sw(on) return on and "●" or "○" end
     lines[#lines + 1] = string.format("1 %s orbits     2 %s SOI rings     3 %s labels & markers     4 %s comms links",
@@ -1325,9 +1887,240 @@ end
 -- (probes: plan a burn `lead` s ahead with these Δv components, m/s; the map
 -- works its direction out on its next recompute while it is open)
 function planBurn(lead, pro, nor, rad)
-  mnv = { t0 = space.time() + (lead or 60), pro = pro or 0, nor = nor or 0, rad = rad or 0, burned = 0.0 }
+  mnvSet({ t0 = space.time() + (lead or 60), pro = pro or 0, nor = nor or 0, rad = rad or 0, burned = 0.0 })
   return true
 end
+
+-- ── the node's own actions (its right-click menu, F6; probes) ──────────────
+-- Each answers ok [, why] as a context-menu action does.
+function mnvDelete()
+  if WARPTO then warpCancel("Warp to node · the node is gone") end
+  mnvSet(nil)
+  traj_mnv = nil
+  GZ.drag = nil
+  return true
+end
+function mnvZero()
+  if not mnv then return false, "no burn planned" end
+  if mnv.locked then return false, "the node is locked" end
+  mnv.pro, mnv.nor, mnv.rad = 0.0, 0.0, 0.0
+  return true
+end
+function mnvLock(on)
+  if not mnv then return false, "no burn planned" end
+  mnv.locked = on and true or nil
+  GZ.drag = nil
+  return true, on and "locked: the handles hold still" or "unlocked"
+end
+-- One orbit later (n = 1) or earlier (−1): the period of the orbit the node
+-- sits on (the walk's), else the craft's own.
+function mnvOrbits(n)
+  if not mnv then return false, "no burn planned" end
+  if mnv.locked then return false, "the node is locked" end
+  local T = traj_mnv
+  local per = (T and T.node == mnv and T.period) or MNV.lastPeriod
+  local t, why = MNV.shiftOrbits(mnv.t0, per, n, space.time())
+  if not t then return false, why end
+  mnv.t0, mnv.burned, mnv.mark = t, 0.0, nil
+  return true
+end
+-- Probes and the menu: the node as it is ({ t0, lead, pro, nor, rad, locked,
+-- dv, period, pe, ap }), and the gizmo where it is drawn this frame ({ sx, sy,
+-- handles = { [id] = { x, y, on } } }).
+function mnvState()
+  local m = mnv
+  if not m then return nil end
+  local T = traj_mnv
+  local mine = T and T.node == m
+  return { t0 = m.t0, lead = m.t0 - space.time(), pro = m.pro, nor = m.nor, rad = m.rad,
+           locked = m.locked == true, dv = math.sqrt(m.pro ^ 2 + m.nor ^ 2 + m.rad ^ 2),
+           period = mine and T.period or nil, pe = mine and T.pe or nil, ap = mine and T.ap or nil,
+           fresh = mine and T.tabs == m.t0 or false, n = #MNV.nodes }
+end
+function mnvGizmo()
+  local G = GZ.geo
+  if not G then return nil end
+  local out = { sx = G.sx, sy = G.sy, hot = GZ.hot, drag = GZ.drag and GZ.drag.kind or nil, handles = {}, t = GZ.t }
+  for _, h in ipairs(G.h) do out.handles[h.H.id] = { x = h.kx, y = h.ky, on = h.on } end
+  if GZ.hover then out.hover = { t = GZ.hover.t, d = GZ.hover.d } end
+  return out
+end
+-- (probes: a body-relative node point, to check it rides the planet)
+function mnvRel()
+  local T = traj_mnv
+  if not (T and mnv and T.node == mnv) then return nil end
+  return { anchor = T.m_anchor, x = T.m_rx, y = T.m_ry, z = T.m_rz }
+end
+
+-- (tests: seat the cached paths the gizmo picks on, as a walk would leave them)
+function mnvPaths(now_path, post_path)
+  traj_now, traj_mnv = now_path, post_path
+end
+
+-- The right-click menu on the node (context_registry kind "mnvnode").
+local function mnv_rows(_, _ctx)
+  local m = mnv
+  if not m then return {} end
+  local unlocked = function() return mnv ~= nil and not mnv.locked end
+  local out = {
+    { type = "info", id = "dv", label = "ΔV", value = function()
+        local n = mnv
+        return n and string.format("%.1f m/s", math.sqrt(n.pro ^ 2 + n.nor ^ 2 + n.rad ^ 2)) or "—"
+      end },
+    { type = "info", id = "lead", label = "Node in", value = function()
+        return mnv and MNV.clock(mnv.t0 - space.time()) or "—"
+      end },
+    { type = "action", id = "warp", label = WARPTO and "Stop the warp" or "Warp here", hint = "▸▸",
+      act = function()
+        if WARPTO then warpCancel("Warp to node · stopped") return true end
+        return warpToNode()
+      end },
+    { type = "action", id = "orbit_up", label = "+1 orbit", keep = true, enabled = unlocked, why = "the node is locked",
+      act = function() return mnvOrbits(1) end },
+    { type = "action", id = "orbit_down", label = "−1 orbit", keep = true, enabled = unlocked, why = "the node is locked",
+      act = function() return mnvOrbits(-1) end },
+    { type = "action", id = "zero", label = "Zero ΔV", keep = true, enabled = unlocked, why = "the node is locked",
+      act = function() return mnvZero() end },
+    { type = "toggle", id = "lock", label = "Lock", on = function() return mnv ~= nil and mnv.locked == true end,
+      act = function(want) return mnvLock(want) end },
+    { type = "action", id = "delete", label = "Delete", danger = true, act = function() return mnvDelete() end },
+  }
+  return out, "MANEUVER NODE", "the planned burn"
+end
+local mnv_reg_with, mnv_reg_t = nil, -10.0
+function mnvRegister(now)
+  if mnv_reg_with and mnv_reg_with.valid ~= false then return true end
+  -- (findScript is a scene scan: asked again at most every two seconds)
+  if not now and (time or 0) - mnv_reg_t < 2.0 then return false end
+  mnv_reg_t = time or 0
+  local r = findScript and findScript("context_registry")
+  if not (r and r.register) then return false end
+  r.register("mnvnode", mnv_rows, { id = "orbit_map", order = 5 })
+  mnv_reg_with = r
+  return true
+end
+function mnvMenu(sx, sy)
+  mnvRegister(true)
+  local cm = findScript and findScript("context_menu")
+  if not (cm and cm.openFor and cm.actorNow) then return false end
+  local who = cm.actorNow()
+  if not who then return false end
+  return cm.openFor({ kind = "mnvnode", map = true, label = "Maneuver node" }, who, sx, sy)
+end
+
+-- ── WARP TO NODE (F8) ────────────────────────────────────────────────────────
+-- Rails warp up the ladder and back down, to land half the burn and
+-- MNV.WARP_LEAD seconds before the node. The craft's own warp rules hold:
+-- refused while the throttle is open or anyone is on EVA in space, and any
+-- control that drops the warp (the stick, the warp keys) ends it.
+local WARP_LADDER = { 1, 5, 10, 50, 100, 1000, 10000 } -- vessel_controller's WARP_STEPS
+WARPTO = nil   -- { t = landing sim time, set = the warp we last asked for, vc }
+local function warp_vc()
+  for _, s in ipairs(findScripts("vessel_controller")) do
+    if s.piloting and s.node and s.node.valid then return s end
+  end
+  return nil
+end
+-- A notice said in the log and on the warp chip (vessel_controller.warpSay).
+local function warp_say(vc, msg)
+  if vc and vc.warpSay then pcall(vc.warpSay, msg) elseif log then log(msg) end
+end
+-- …and the running status, on the chip only, every frame. A warp request
+-- lands on the next tick, and frames can outrun ticks: warp_chip calls any
+-- drop nobody "said" in the frame it shows up "stopped by the physics", so
+-- warp to node keeps saying what it is doing until the warp reads what it
+-- asked for.
+local function warp_status(msg)
+  local wc = gz_ref("warp_chip")
+  if wc and wc.say then pcall(wc.say, msg) end
+end
+-- End it: back to ×1, saying why until the warp reads ×1 (warpDrive).
+function warpCancel(msg)
+  local W = WARPTO
+  if not W or W.settle then return end
+  if space.warp() > 1.001 then space.warp(1) end
+  msg = msg or "Warp to node · stopped"
+  warp_say(W.vc, msg)
+  WARPTO = { settle = true, msg = msg, vc = W.vc, t_end = (time or 0) + 1.0 }
+end
+-- Why the warp may not run now, or nil.
+local function warp_refusal(vc)
+  if not vc then return "nobody is flying" end
+  if (vc.throttle or 0) > 0.01 then return "cut the throttle first" end
+  local ok, eva = pcall(function() return vc.evaBlocksWarp and vc.evaBlocksWarp() end)
+  if ok and eva then return "crew on EVA in space" end
+  return nil
+end
+function warpToNode()
+  local m = mnv
+  if not m then return false, "no burn planned" end
+  if WARPTO and not WARPTO.settle then return true end
+  local vc = warp_vc()
+  local why = warp_refusal(vc)
+  if why then warp_say(vc, "Warp to node · " .. why) return false, why end
+  local dv = math.sqrt(m.pro ^ 2 + m.nor ^ 2 + m.rad ^ 2)
+  local land = MNV.landing(m.t0, MNV.burnSecs(vc.tele, dv) or 0)
+  if land - space.time() < 1.0 then
+    warp_say(vc, "Warp to node · the burn starts in under " .. math.floor(MNV.WARP_LEAD) .. " s")
+    return false, "the burn is about to start"
+  end
+  WARPTO = { t = land, node = m, set = space.warp(), vc = vc }
+  warp_say(vc, string.format("Warp to node · %s to go", MNV.clock(land - space.time()):sub(2)))
+  return true
+end
+-- Each frame, map open or not.
+function warpDrive(dt)
+  local W = WARPTO
+  if not W then return end
+  local cur = space.warp()
+  -- settling at ×1 (arrived, or called off): say so until it reads ×1
+  if W.settle then
+    if cur > 1.001 and (time or 0) < W.t_end then
+      space.warp(1)
+      warp_status(W.msg)
+      return
+    end
+    WARPTO = nil
+    if W.final then warp_say(W.vc, W.final) end
+    return
+  end
+  if mnv ~= W.node then warpCancel("Warp to node · the node is gone") return end
+  if not (W.vc and W.vc.valid ~= false and W.vc.piloting) then warpCancel("Warp to node · stopped") return end
+  local why = warp_refusal(W.vc)
+  if why then warpCancel("Warp to node · " .. why) return end
+  -- dropped by someone else (the stick, the , key, the galaxy's ceiling): a
+  -- fall we did not ask for ends it — the warp is theirs now
+  if W.last and cur < W.last - 0.001 and W.set >= W.last - 0.001 then
+    WARPTO = nil
+    warp_say(W.vc, "Warp to node · stopped")
+    return
+  end
+  W.last = cur
+  local cap = math.huge
+  local gx = gz_ref("galaxy")
+  if gx and gx.maxWarp then
+    local ok, lim = pcall(gx.maxWarp)
+    if ok and type(lim) == "number" then cap = lim end
+  end
+  local left = W.t - space.time()
+  local w = MNV.warpStep(left, WARP_LADDER, cap, dt)
+  if w <= 1 then
+    -- arrived: ×1, then the burn's countdown in the log and on the chip
+    if cur > 1.001 then space.warp(1) end
+    local msg = string.format("Warp ×1 · the burn starts in %.0f s", left + MNV.WARP_LEAD)
+    WARPTO = { settle = true, msg = msg, final = msg, vc = W.vc, t_end = (time or 0) + 1.0, arrived = true }
+    warp_status(msg)
+    if cur <= 1.001 then WARPTO = nil warp_say(W.vc, msg) end
+    return
+  end
+  if math.abs(w - W.set) > 0.001 or math.abs(w - cur) > 0.001 then space.warp(w) end
+  W.set = w
+  warp_status(string.format("Warp to node · ×%d · %s to go", w, MNV.clock(left):sub(2)))
+end
+-- True while warping toward the node (not while settling back to ×1).
+function warpingToNode() return WARPTO ~= nil and not WARPTO.settle end
+-- True until the warp is back at ×1 after warp to node (probes).
+function warpSettling() return WARPTO ~= nil end
 function burnInfo()
   if not mnv then return nil end
   local dv = math.sqrt(mnv.pro ^ 2 + mnv.nor ^ 2 + mnv.rad ^ 2)
@@ -1727,6 +2520,7 @@ function toggle()
   -- Map lines at the window's own resolution, crisp at any render scale.
   if draw.nativeLines then draw.nativeLines(map_view) end
   map_lens(map_view)
+  GZ.drag, GZ.geo, GZ.hover, GZ.hot, GZ.rmb, gizmoBusy = nil, nil, nil, nil, nil, false
   if not map_view then
     planning = false
     if fb_ref and fb_ref.valid ~= false and fb_ref.focus then fb_ref.focus(nil) end
@@ -1754,6 +2548,9 @@ function lateUpdate(node, dt)
   -- (not while the VAB builder has the keys: M is its mirror there)
   if not gm_ref or not gm_ref.valid then gm_ref = findScript("game_manager") end
   if gm_ref and gm_ref.inputOwner == "builder" then return end
+  -- warp to node runs with the map shut too (the flight readout's WARP key)
+  warpDrive(dt)
+  mnvRegister()
   if input.pressed("m") then toggle() end
   if not map_view then return end
   -- N enters and leaves PLAN mode, but only for a craft that has a trajectory

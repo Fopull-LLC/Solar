@@ -912,10 +912,20 @@ local function maneuver(v, t, shift)
   local noeng = (t.thrust or 0) <= 0
   local x0 = shift - CW / 2 + CW - MNV_W
   local hold = v.sas_mode == "node"
+  local warping = om.warpingToNode ~= nil and om.warpingToNode() == true
   local done = math.floor(math.max(0, math.min(1, b.done or 0)) * (MNV_W - 24) + 0.5)
   return { "box", key = "mnv", style = "hud/instrument", pin = "bottom", x = x0 + MNV_W / 2, y = -(CB + CH + 6),
     w = MNV_W, h = MNV_H, tooltip = "The planned burn (M opens the map, N edits it). Start when BURN NOW lights: half the burn before the node.",
-    micro("hd", "◆ MANEUVER", 10, 7, 110, "start"),
+    micro("hd", "◆ MANEUVER", 10, 7, 74, "start"),
+    -- WARP TO NODE (orbit_map warpToNode): rails warp, landing half the burn
+    -- and 10 s before the node; refused under thrust or with crew on EVA
+    { "button", key = "warp", style = "hud/sas", x = MNV_W - 118, y = 4, w = 52, h = 18, selected = warping,
+      text = warping and "■ STOP" or "▸▸ WARP", textAlign = "center", textValign = "center", focusable = false,
+      tooltip = warping and "Stop the warp to the node" or "Warp to the burn: lands 10 s before it starts",
+      onClicked = function()
+        if om.warpingToNode and om.warpingToNode() then om.warpCancel("Warp to node · stopped")
+        elseif om.warpToNode then om.warpToNode() end
+      end },
     { "button", key = "hold", style = "hud/sas", x = MNV_W - 62, y = 4, w = 52, h = 18, selected = hold,
       text = "◆ HOLD", textAlign = "center", textValign = "center", focusable = false,
       tooltip = hold and "SAS holds the burn — click to let go" or "Point the nose down the burn (SAS node hold, ALT+9)",

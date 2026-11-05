@@ -204,6 +204,12 @@ ok(says("W A S D"), "...which names how to walk")
 ok(says("first person"), "...and how to get to first person, which nothing else says")
 ok(says("gravity gun"), "...and what the number keys are")
 ok(says("TAB"), "...and how to open the bag")
+-- The maneuver node is planned with the mouse (orbit_map's gizmo): the page
+-- says how, and the keys stay listed beside it.
+ok(says("CLICK THE ORBIT"), "...and that a click on the orbit plans a burn")
+ok(says("DRAG A HANDLE") and says("DRAG THE NODE"), "...and how to shape and slide it")
+ok(says("RIGHT-CLICK THE NODE"), "...and where the node's menu is")
+ok(says("W S  A D  Q E"), "...and the PLAN mode keys still")
 
 -- Esc backs out of the page before it backs out of the menu. One level at a
 -- time is the whole convention; skipping one is how a menu feels like it is
@@ -274,6 +280,14 @@ for _, g in ipairs(pause.controlsTable()) do
 end
 ok(#missing == 0, "every key on the controls card is a key some script reads: "
   .. table.concat(missing, ", "))
+-- …and the map's own legend says the same thing the card does.
+do
+  local f = io.open("solar/scripts/orbit_map.lua")
+  local src = f and f:read("*a") or ""
+  if f then f:close() end
+  ok(src:find("Click an orbit to plan a burn  ·  drag its handles", 1, true) ~= nil,
+    "the orbit map's legend says how to plan a burn with the mouse")
+end
 
 -- ── report ──────────────────────────────────────────────────────────────────
 if #failures == 0 then

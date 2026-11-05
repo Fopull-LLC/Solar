@@ -14267,6 +14267,9 @@ function fixedUpdate(node, dt)
   local map_open = (m and m.map_view) or false
   dock.map = map_open
   dock.plan = map_open and m and m.planning or false
+  -- …and while the cursor is on the node's gizmo (or dragging it), SHIFT and
+  -- CTRL are the drag's fine and coarse keys, not the throttle's.
+  dock.edit = map_open and m and m.gizmoBusy or false
   -- Flying from the map pulls the camera far back; keep this vessel exempt from
   -- distant-craft LOD while it's open so throttle/steering stay live and our
   -- orbital velocity keeps feeding the trajectory. Released when the map closes.
@@ -14366,7 +14369,7 @@ function fixedUpdate(node, dt)
   -- holds in the map too now: the map is a live flying view, so any control
   -- input there should still drop warp, same as out of it.)
   if warp > 1.001 then
-    local touched = input.key("shift") or input.key("ctrl") or input.key("z")
+    local touched = (not dock.edit and (input.key("shift") or input.key("ctrl"))) or input.key("z")
       or input.key("w") or input.key("a") or input.key("s") or input.key("d")
       or input.key("q") or input.key("e")
     if touched then
@@ -14380,8 +14383,8 @@ function fixedUpdate(node, dt)
   -- No control (a probe out of contact or dark): the throttle stays where it
   -- was left, except that a dark probe's engines have nobody to keep them lit.
   if elec.control ~= false then
-    if input.key("shift") then throttle = throttle + params.throttle_rate * dt end
-    if input.key("ctrl") then throttle = throttle - params.throttle_rate * dt end
+    if input.key("shift") and not dock.edit then throttle = throttle + params.throttle_rate * dt end
+    if input.key("ctrl") and not dock.edit then throttle = throttle - params.throttle_rate * dt end
     if input.key("x") and not input.key("alt") then throttle = 0.0 end
     if input.key("z") then throttle = 1.0 end
   elseif elec.why and elec.why:sub(1, 8) == "NO POWER" then
