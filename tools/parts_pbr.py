@@ -385,11 +385,15 @@ def lab_floor():
     v = 0.90 * (1 + 0.10 * fleck + 0.012 * mot - 0.05 * scuff)
     alb = np.stack([v, v * 0.995, v * 0.985], 2)
     alb = grade(alb, LAB_MEAN["floor"], 1.0)
-    # a sheet floor is flat: only the scuffs and the odd fleck in the normal (a mottle there broke the
-    # lamps' reflections into a hammered-metal wobble, the 11-04 shots)
-    nxy = height_nxy(fleck * 0.02 - scuff * 0.12, 1.0)
-    rough = np.clip(0.30 + 0.02 * mot + 0.10 * scuff + 0.03 * np.abs(fleck), 0.15, 0.8)
-    rough = match(rough, 0.301, 0.15, 0.8)
+    # A sheet vinyl or epoxy floor gives a smooth, slightly soft sheen. Any relief or fine roughness
+    # variation breaks the lamps' reflections into a speckled orange-peel (the 11-04 shots: first a
+    # mottle in the normal, then the flecks and scuffs in the roughness), so the normal is flat and
+    # the roughness holds a tight range round its mean: broad, soft wear and faint scuffs only.
+    nxy = np.zeros((N, N, 2), np.float32)
+    soft = IT.blur_wrap(mot, 6.0)
+    soft = soft / (np.abs(soft).max() + 1e-6)
+    rough = 0.30 + 0.012 * soft + 0.015 * IT.blur_wrap(scuff, 1.5)
+    rough = match(rough, 0.301, 0.27, 0.33)
     return alb, nxy, np.ones_like(rough), rough, np.zeros_like(rough)
 
 
