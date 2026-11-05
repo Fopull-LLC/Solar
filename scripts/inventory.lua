@@ -48,8 +48,13 @@ defaults = {
   base_kg = 1000000,  -- the home warehouse: a number, but not one you'll hit
 }
 
+-- (kept: the pack is weighed twice a second for the walker's and the
+-- rider's mass, one look-up per material in it)
+local mats_ref
 local function mats()
-  return findScript("materials")
+  if mats_ref and mats_ref.valid ~= false then return mats_ref end
+  mats_ref = findScript and findScript("materials") or nil
+  return mats_ref
 end
 
 local function kg_of(mat)
@@ -101,6 +106,16 @@ local function idef(id)
   return I and I.ITEMS[id] or nil
 end
 local function ikg(id) local d = idef(id); return d and d.kg or 1.0 end
+-- A piece that weighs what it holds (the Gas Can's petrol): `fill.kg` per
+-- unit of its fill on top of the empty piece's `kg`. nil: its fill is weightless.
+local function ifkg(id) local d = idef(id); return d and d.fill and d.fill.kg or nil end
+-- …and the most a piece can weigh (full): what room is checked against, so
+-- a can carried in never takes the pack over when it is topped up
+local function ikgFull(id)
+  local d = idef(id)
+  local fk = d and d.fill and d.fill.kg
+  return ikg(id) + (fk and (d.fill.cap or 0) * fk or 0)
+end
 local function iL(id) local d = idef(id); return d and d.L or 1.0 end
 
 -- ── the "astro" alias ──────────────────────────────────────────────────────
@@ -667,7 +682,11 @@ end
 function itemMass(cid)
   cid = R(cid)
   local t = 0
-  for id, n in pairs(gear_bag(cid)) do t = t + ikg(id) * n end
+  for id, n in pairs(gear_bag(cid)) do
+    t = t + ikg(id) * n
+    local fk = ifkg(id)
+    if fk then for _, f in ipairs(fills(cid, id)) do t = t + f * fk end end
+  end
   return t
 end
 gearMass = itemMass
@@ -683,7 +702,7 @@ gearCount = itemCount
 function roomForItem(cid, id, want)
   cid = R(cid)
   if not idef(id) and registry() then return 0, "no such item" end
-  local k, L = ikg(id), iL(id)
+  local k, L = ikgFull(id), iL(id)
   local by_kg = k > 0 and math.floor(free(cid) / k + 1e-9) or math.huge
   local vc = volCap(cid)
   local by_L = (L > 0 and vc < math.huge) and math.floor((vc - volume(cid)) / L + 1e-9) or math.huge
@@ -817,6 +836,7 @@ function itemList(cid)
         local t = 0
         for _, f in ipairs(e.fills) do t = t + f end
         e.fill = t
+        if ifkg(id) then e.kg = e.kg + t * ifkg(id) end
       end
       out[#out + 1] = e
     end

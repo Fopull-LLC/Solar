@@ -413,12 +413,16 @@ local function item_def(id)
   return nil
 end
 
+-- (a piece that weighs its fill, the Gas Can, is planned full: the most it weighs)
+local function plan_kg(d)
+  return (d.kg or 1) + ((d.fill and d.fill.kg) and (d.fill.cap or 0) * d.fill.kg or 0)
+end
 function lockerLoad(items, defOf)
   defOf = defOf or item_def
   local kg, L = 0, 0
   for id, n in pairs(items or {}) do
     local d = defOf(id) or {}
-    kg = kg + (d.kg or 1) * n
+    kg = kg + plan_kg(d) * n
     L = L + (d.L or 1) * n
   end
   return kg, L
@@ -429,7 +433,7 @@ function lockerRoom(items, id, cap, volCap, defOf)
   defOf = defOf or item_def
   local d = defOf(id) or {}
   local kg, L = lockerLoad(items, defOf)
-  if kg + (d.kg or 1) > cap + 1e-6 then return false, string.format("no room: %.0f kg free", math.max(0, cap - kg)) end
+  if kg + plan_kg(d) > cap + 1e-6 then return false, string.format("no room: %.0f kg free", math.max(0, cap - kg)) end
   if volCap and L + (d.L or 1) > volCap + 1e-6 then
     return false, string.format("no room: %.0f L free", math.max(0, volCap - L))
   end

@@ -4,7 +4,16 @@
 -- it only ever names an id.
 --
 -- A unit is "one handful you can carry" — the numbers are per unit, and mass is
--- what actually limits you (a suit carries ~45 kg; a cargo hold hundreds).
+-- what actually limits you (a suit pack carries 90 kg; a cargo hold hundreds).
+-- A unit of ground (ore, rock, ice, loose soil) is a LITRE of it, so its kg
+-- is its density: solid rock at its own (granite 2.7, basalt 2.9), loose
+-- ground at its bulk (soil 1.5, gravel 1.9, regolith 1.8), an ore at a rich
+-- ore's, about 60% of the mineral in its rock (iron ore 4.2 of hematite's
+-- 5.3, uranite 6.8 of uraninite's 9.5, sperrylite 7.4 of 10.6). Until the
+-- audit of 2026-11-04 the ores weighed like common rock (iron ore 2.6,
+-- uranite 3.2, kamacite metal 4.6, silica and resonant crystal at half of
+-- quartz's 2.65); each one's price per unit moved with its weight, so a
+-- pack of it is worth what it was. Flora is counted in pieces, not litres.
 -- Value is what the depot pays at reputation 0; standing moves the price, the
 -- registry doesn't.
 --
@@ -39,15 +48,15 @@ defaults = {}
 -- class: "ore" | "ice" | "flora" | "liquid" | "refined"
 REG = {
   regolith = { name = "Regolith",         kg = 1.8, value = 2,   tier = 0, class = "ore" },
-  silica   = { name = "Silica",           kg = 1.6, value = 5,   tier = 1, class = "ore" },
-  iron     = { name = "Iron Ore",         kg = 2.6, value = 8,   tier = 1, class = "ore" },
-  copper   = { name = "Copper Ore",       kg = 2.4, value = 12,  tier = 1, class = "ore" },
-  ice      = { name = "Water Ice",        kg = 1.0, value = 4,   tier = 1, class = "ice" },
+  silica   = { name = "Silica",           kg = 2.6, value = 8,   tier = 1, class = "ore" },
+  iron     = { name = "Iron Ore",         kg = 4.2, value = 13,  tier = 1, class = "ore" },
+  copper   = { name = "Copper Ore",       kg = 3.6, value = 18,  tier = 1, class = "ore" },
+  ice      = { name = "Water Ice",        kg = 0.92, value = 4,   tier = 1, class = "ice" },
   water    = { name = "Water",            kg = 1.0, value = 3,   tier = 1, class = "liquid" },
-  sulfur   = { name = "Sulfur",           kg = 1.4, value = 14,  tier = 2, class = "ore" },
-  obsidian = { name = "Obsidian",         kg = 2.2, value = 22,  tier = 2, class = "ore" },
-  crystal  = { name = "Resonant Crystal", kg = 1.1, value = 60,  tier = 3, class = "ore" },
-  uranium  = { name = "Uranite",          kg = 3.2, value = 110, tier = 3, class = "ore" },
+  sulfur   = { name = "Sulfur",           kg = 2.0, value = 20,  tier = 2, class = "ore" },
+  obsidian = { name = "Obsidian",         kg = 2.4, value = 24,  tier = 2, class = "ore" },
+  crystal  = { name = "Resonant Crystal", kg = 2.6, value = 142, tier = 3, class = "ore" },
+  uranium  = { name = "Uranite",          kg = 6.8, value = 234, tier = 3, class = "ore" },
 
   -- WHAT THE GROUND IS MADE OF (the terrain palette, `SLOT` below): what the
   -- laser cuts out of a hillside is the rock you can see in it. Bulk, cheap,
@@ -82,13 +91,13 @@ REG = {
   -- OFF-WORLD ORES (`ORE` below says where each forms): what the moons and the
   -- other planets hold that the home world does not. Dense in $/kg and in
   -- research, because each one is a trip.
-  ilmenite    = { name = "Ilmenite",             kg = 2.8, value = 30,  tier = 2, class = "ore" },
+  ilmenite    = { name = "Ilmenite",             kg = 3.9, value = 42,  tier = 2, class = "ore" },
   he3         = { name = "Helium-3 Regolith",    kg = 1.6, value = 70,  tier = 3, class = "ore" },
   kreep       = { name = "KREEP Basalt",         kg = 2.9, value = 45,  tier = 2, class = "ore" },
-  kamacite    = { name = "Kamacite",             kg = 4.6, value = 40,  tier = 2, class = "ore" },
-  sperrylite  = { name = "Sperrylite",           kg = 6.0, value = 260, tier = 4, class = "ore" },
-  monazite    = { name = "Monazite",             kg = 3.0, value = 90,  tier = 3, class = "ore" },
-  ammonia_ice = { name = "Ammonia Ice",          kg = 0.9, value = 18,  tier = 2, class = "ore" },
+  kamacite    = { name = "Kamacite",             kg = 7.5, value = 65,  tier = 2, class = "ore" },
+  sperrylite  = { name = "Sperrylite",           kg = 7.4, value = 321, tier = 4, class = "ore" },
+  monazite    = { name = "Monazite",             kg = 4.1, value = 123, tier = 3, class = "ore" },
+  ammonia_ice = { name = "Ammonia Ice",          kg = 0.82, value = 16,  tier = 2, class = "ore" },
   clathrate   = { name = "Methane Clathrate",    kg = 0.9, value = 26,  tier = 2, class = "ore" },
   tholin      = { name = "Tholin Tar",           kg = 1.3, value = 50,  tier = 3, class = "ore" },
   -- (fictional, under scripts/codex.lua's rules of this universe)

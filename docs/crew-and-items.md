@@ -858,6 +858,30 @@ of suit air; several stack. It never takes the hand slot, and it goes anywhere i
   breathes any shortfall from the suit's own supply), `refillO2(cid) → added`.
 - **Shown** on the crew's context menu (total air and each tank) and in the pack panel.
 
+### 5.9 What the pack weighs on its wearer (2026-11-04)
+
+"Whatever's in your backpack should affect the weight." The suited crew weigh 100 kg
+(the person and the suit: eva_pack `suit_kg`, planet_walker `mass` 0.10 t, the craft's
+`CREW_T`). On top of that, what their pack holds now (`inventory.mass` of their pack:
+materials and items, to the kilogram):
+
+- **On foot** (`planet_walker.bodyMass`, read every 0.5 s): the capsule's RigidBody
+  mass, so a crew carrying ore weighs more on a rover deck or a part they stand on, and
+  their shove's grip (`push_grip` × weight) grows with it. The walk speed does not
+  change: there is no encumbrance (an open decision).
+- **Seated** (`vessel_controller.crewSeatT`, in `crewMassScan`): each member weighs
+  CREW_T plus their pack on the seat they sit in: the craft's mass, centre of mass,
+  inertia and steering plan carry it. A rider with a full 90 kg pack weighs 190 kg.
+- **On EVA** in space: unchanged, `suit_kg` plus the pack (eva_pack).
+
+**The pack's limit** is still the suit's 90 kg (`inventory.suit_kg`) and 60 L.
+
+**Items that hold something weigh it.** An item whose `fill` has a `kg` (kg per unit
+of fill) weighs its empty `kg` plus its level: the Gas Can is 3 kg of steel can and
+0.74 kg a litre of petrol, 10.4 kg full (it was a flat 7 kg). Room is checked against a
+full one (`roomForItem`, the VAB's locker plan), so a can carried in never takes a
+pack over when it is filled. The other fills (air, cells) are weightless.
+
 ## 6. Repair as a task (E)
 
 ### 6.1 The flow (the same on the ground and in space)

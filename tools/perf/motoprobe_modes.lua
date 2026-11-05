@@ -758,6 +758,10 @@ local function run_jetgear()
   run = function(tag, secs, ctl)
     return base_run(tag, secs, function(S, t)
       local r = ctl(S, t)
+      -- (fineall=1: every tick of every phase, parked and taxiing too: the
+      -- gear's own oscillation, playtest 2026-11-04 "wheels on my jets
+      -- bouncing like they were fighting")
+      if (params.fineall or 0) > 0 then fine_on = true end
       if fine_on and (params.finelog or 1) > 0 then
         local on = 0
         local td = {}

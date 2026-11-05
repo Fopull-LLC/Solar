@@ -188,7 +188,9 @@ T.frames = function(vc)
   local i = assembly.info(vc.node)
   P("JF MASS info %.4f t, trueMass %.4f t, crew %.4f t on %s (aboard %s)", i.mass or -1, (vc.trueMass and vc.trueMass()) or -1, vc.CREW_TT or -1,
     (function() local s = {} for u, m in pairs(vc.CREW_TU or {}) do s[#s + 1] = u .. "=" .. m end return table.concat(s, ",") end)(), tostring(vc.crewAboard))
-  V.check("crew_mass", math.abs((vc.CREW_TT or 0) - 0.1) < 1e-6, "the crew in the pod weighs on the craft (%.3f t)", vc.CREW_TT or -1)
+  -- (the suit and wearer, CREW_T, and what their pack holds: crewSeatT)
+  local want = vc.crewSeatT and vc.crewSeatT(findScript("crew") and findScript("crew").activeId and findScript("crew").activeId() or nil) or 0.1
+  V.check("crew_mass", math.abs((vc.CREW_TT or 0) - want) < 1e-6 and want >= 0.1 - 1e-9, "the crew in the pod weighs on the craft with their pack (%.3f t, want %.3f)", vc.CREW_TT or -1, want)
   local m0 = JF.measure(vc, "rest")
   V.check("rest", ok_m(m0, 0.005), "at rest every read is the part's blueprint pose")
   set(vc, H1, 40); set(vc, H2, -35)

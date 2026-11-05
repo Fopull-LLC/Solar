@@ -25,6 +25,18 @@ One registry, `REG[id] = { name, kg, value, tier, class, grade }`.
 | ore | iron, copper, sulfur, obsidian, crystal, uranium, silica, geode (Star Geode, registered by research.lua); off-world: ilmenite, he3, kreep, kamacite, sperrylite, monazite, ammonia_ice, clathrate, tholin, phasite, cryovolt |
 | flora | timber, fiber, biomass, resin, spores, kelp, glowsap |
 
+**A unit of ground is a litre of it** (audit 2026-11-04), so its `kg` is its density:
+solid rock at its own (granite 2.7, basalt 2.9), loose ground at its bulk density (soil
+1.5, gravel 1.9, regolith 1.8), an ore at a rich ore's, about 60% of the mineral in its
+rock: iron ore 4.2 (hematite 5.3), copper ore 3.6, uranite 6.8 (uraninite 9.5),
+kamacite 7.5 (meteoritic iron), sperrylite 7.4 (10.6), monazite 4.1, ilmenite 3.9;
+silica and resonant crystal 2.6 (quartz), sulfur 2.0, obsidian 2.4, water ice 0.92,
+ammonia ice 0.82. Before it the ores weighed like common rock (iron ore 2.6, uranite 3.2,
+kamacite 4.6, crystal 1.1). Each ore's `value` moved with its mass, so its price per kg,
+and a full pack's worth, is what it was. A pack holds fewer units of a dense ore, so
+research (points per unit) per trip of uranite, kamacite and iron is lower. Flora is
+counted in pieces, not litres; the Star Geode (research.lua) is hollow, 1.4.
+
 Calls: `label(id)`, `kg(id)`, `value(id)`, `massOf(id, n)`, `valueOf(id, n)`,
 `hardness(id)`, `grade(id)`, `isOre(id)`, `list()`. For ores: `oreInfo(id)`,
 `oreLook(id)`, `bodyOres(body)`, `researchValue(id, origin, first)`,

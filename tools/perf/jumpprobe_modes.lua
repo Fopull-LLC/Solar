@@ -174,6 +174,7 @@ function JP.cruise(vc, vt, hands)
   return drive, st
 end
 
+JP_SETTLE_HOLD = 0.5   -- s inside the band that make a landing settled
 -- one jump: from where it is to the kicker at k.d0, at k.v; logged to k.d0 + 60
 function JP.jump(vc, k)
   local tag = k.tag
@@ -186,6 +187,16 @@ function JP.jump(vc, k)
   local log_next = 0
   local n_sign, last_sign = 0, 0
   local v_min
+  -- (the pitch it sits at on the level, both tyres down and at its speed on
+  -- the approach's flat: the settle's pitch is measured from it. Measured
+  -- from 0, the user's 500, built 7 deg nose up, never "settled" and every
+  -- jump read 2.5 s, the whole window. `one`: how long only one tyre has
+  -- been down; a light front skipping a tick on the strip's ripple is not
+  -- an unsettled landing, a front or rear off for 0.15 s is.)
+  local p_flat, p_n, one = 0, 0, 0
+  local settled_at
+  JP.calm = nil
+  local p_all, p_an = 0, 0   -- (every flat tick, if it never held its speed there)
   while time - t0 < 40 do
     local d, lat = JP.along(vc)
     local hands = (d < k.d0 - 3) or (td and time - td > 2.5)
@@ -198,7 +209,10 @@ function JP.jump(vc, k)
     local roll, pitch, yaw, rr = JP.att(vc)
     local f, r = JP.down(vc)
     local sp = V.speed(vc)
-    if not t_lip and d >= lip - 0.3 then t_lip = time; roll_lip, yaw_lip, pitch_lip, v_lip = roll, yaw, pitch, sp end
+    if not t_lip and d < k.d0 - 3 and d > k.d0 - 30 and f + r == 2 and math.abs(sp - k.v) < 1.5 then p_flat, p_n = p_flat + pitch, p_n + 1 end
+    if not t_lip and d < k.d0 - 3 and d > k.d0 - 30 and f + r == 2 then p_all, p_an = p_all + pitch, p_an + 1 end
+    if f + r == 1 then JP.t_one = JP.t_one or time; one = time - JP.t_one else JP.t_one, one = nil, 0 end
+    if not t_lip and d >= lip - 0.3 then t_lip = time; roll_lip, yaw_lip, pitch_lip, v_lip = roll, yaw, pitch, sp; JP.lat_lip = lat end
     if t_lip and not air and f + r == 0 then air = true; t_air0 = time end
     if air and not td and f + r > 0 then
       td = time; airtime = time - t_air0
@@ -223,7 +237,16 @@ function JP.jump(vc, k)
       peak_roll = math.max(peak_roll, math.abs(roll))
       peak_yaw = math.max(peak_yaw, math.abs(yaw))
       peak_bars = math.max(peak_bars, math.abs(vc.R2.bikeSteer or 0))
-      if math.abs(roll) > math.rad(3) or math.abs(yaw) > 0.15 or f + r == 0 or math.abs(pitch) > math.rad(5) then settle = dt_ end
+      local p0 = (p_n > 0) and p_flat / p_n or ((p_an > 0) and p_all / p_an or 0)
+      -- SETTLED: the first moment from which it stays inside the band
+      -- (roll, yaw, pitch off its level, tyres down) for JP_SETTLE_HOLD s.
+      -- (It was the LAST moment out of the band in the 2.5 s window, so a hop
+      -- on the strip's ripple two seconds on, nothing to do with the
+      -- landing, read as an unsettled landing.)
+      local out = math.abs(roll) > math.rad(3) or math.abs(yaw) > 0.15 or f + r == 0 or one > 0.15 or math.abs(pitch - p0) > math.rad(5)
+      if out then JP.calm = nil elseif not JP.calm then JP.calm = dt_ end
+      if not settled_at and JP.calm and dt_ - JP.calm >= JP_SETTLE_HOLD then settled_at = JP.calm end
+      settle = settled_at or dt_
       v_min = math.min(v_min or sp, sp)
       local sg = roll > math.rad(1) and 1 or (roll < -math.rad(1) and -1 or 0)
       if sg ~= 0 and sg ~= last_sign then if last_sign ~= 0 then n_sign = n_sign + 1 end; last_sign = sg end
@@ -236,9 +259,10 @@ function JP.jump(vc, k)
   hold_w(false)
   local r = { tag = tag, v = k.v, kick = string.format("%.0f%% x %.1f m", k.g * 100, k.len), v_lip = v_lip, air = airtime,
     pitch_lip = pitch_lip and math.deg(pitch_lip), pitch_td = pitch_td and math.deg(pitch_td), roll_td = roll_td and math.deg(roll_td),
-    yaw_td = yaw_td, peak_roll = math.deg(peak_roll), peak_yaw = peak_yaw, peak_bars = peak_bars, settle = settle, swings = n_sign, fell = fell, landed = td ~= nil, vloss = (v_td or 0) - (v_min or v_td or 0), lat = select(2, JP.along(vc)) }
-  P("JP R %s v %.0f kicker %s: lip %.1f m/s, air %.2f s, pitch lip %.1f td %.1f, roll td %.1f, yaw td %.3f | after: peak roll %.1f deg, peak yaw %.2f rad/s, peak bars %.1f, settle %.2f s, roll swings %d, speed lost %.1f m/s, fell %s, lat %.1f",
-    tag, k.v, r.kick, v_lip or -1, airtime, r.pitch_lip or -99, r.pitch_td or -99, r.roll_td or -99, yaw_td or -99, r.peak_roll, peak_yaw, peak_bars, settle, n_sign, r.vloss, tostring(fell), r.lat)
+    yaw_td = yaw_td, peak_roll = math.deg(peak_roll), peak_yaw = peak_yaw, peak_bars = peak_bars, settle = settle, swings = n_sign, fell = fell, landed = td ~= nil, vloss = (v_td or 0) - (v_min or v_td or 0), lat = select(2, JP.along(vc)),
+    p_flat = (p_n > 0) and math.deg(p_flat / p_n) or ((p_an > 0) and math.deg(p_all / p_an) or nil), lat_lip = JP.lat_lip }
+  P("JP R %s v %.0f kicker %s: lip %.1f m/s, air %.2f s, pitch lip %.1f td %.1f (level %.1f), roll td %.1f, yaw td %.3f | after: peak roll %.1f deg, peak yaw %.2f rad/s, peak bars %.1f, settle %.2f s, roll swings %d, speed lost %.1f m/s, fell %s, lat %.1f (at the lip %.1f)",
+    tag, k.v, r.kick, v_lip or -1, airtime, r.pitch_lip or -99, r.pitch_td or -99, r.p_flat or -99, r.roll_td or -99, yaw_td or -99, r.peak_roll, peak_yaw, peak_bars, settle, n_sign, r.vloss, tostring(fell), r.lat, r.lat_lip or -99)
   return r
 end
 
@@ -259,6 +283,12 @@ function JP.bike(name)
   if (tonumber(params.govoff) or 0) > 0 then vc.GAS_SAFE_V = nil elseif tonumber(params.gov) then vc.GAS_SAFE_V = tonumber(params.gov) end
   -- grip=k: the traction control's load cap (R2_GRIP_K, card 0629) at k; grip=0 off
   if tonumber(params.grip) then vc.R2_GRIP_K = (tonumber(params.grip) > 0) and tonumber(params.grip) or nil end
+  -- bleanh / blift / bvh1: R2_BIKE's leanHill, lift and vHill1 (A/B, any mode)
+  if vc.R2_BIKE then
+    if params.bleanh then vc.R2_BIKE.leanHill = params.bleanh end
+    if params.blift then vc.R2_BIKE.lift = params.blift end
+    if params.bvh1 then vc.R2_BIKE.vHill1 = params.bvh1 end
+  end
   for _, w in ipairs(vc.R2.wheels or {}) do
     local kind = w.susp and w.susp.m and w.susp.m.kind
     local tv = (kind == "fork" and tonumber(params.ftrav)) or (kind == "arm" and tonumber(params.rtrav)) or nil
@@ -920,8 +950,8 @@ function JP.accel(vc, secs)
       end
       local g = JP.gas(vc)
       local roll_ = JP.att(vc)
-      P("JP AT t %.2f v %.2f pitch %.1f roll %.1f susp %s gr %d%d drive %.2f a_s %.2f lk %.2f slope %.3f cap %.2f mF %s%s", time - t0, sp, math.deg(pitch - p0), math.deg(roll_), susp(vc), f, select(2, JP.down(vc)),
-        vc.R2.drive or 0, vc.R2.a_s or 0, vc.R2.lk or 0, vc.R2.gslope or 0, vc.R2.bikeCap or -1, table.concat(mf, " "),
+      P("JP AT t %.2f v %.2f pitch %.1f roll %.1f susp %s gr %d%d drive %.2f a_s %.2f lk %.2f slope %.3f ground %.3f cap %.2f mF %s%s", time - t0, sp, math.deg(pitch - p0), math.deg(roll_), susp(vc), f, select(2, JP.down(vc)),
+        vc.R2.drive or 0, vc.R2.a_s or 0, vc.R2.lk or 0, vc.R2.gslope or 0, vc.R2.groundS or -9, vc.R2.bikeCap or -1, table.concat(mf, " "),
         g and string.format(" gas %.0f rpm g%d vf %.2f ap %.3f", g.rpm or 0, g.gear or 0, vc.R2.vf or 0, vc.R2.aeroPitch or 0) or "")
     end
     if (tonumber(params.ftrace) or 0) > 0 and time >= (JP.ft_t or 0) then JP.ft_t = time + 0.5; JP.forces(vc, "drive") end
@@ -954,7 +984,7 @@ local function run_vhill()
   if vc.R2_BIKE then
     if params.blean then vc.R2_BIKE.lean = params.blean end
     if params.btop then vc.R2_BIKE.top = params.btop end
-    P("JP R2_BIKE top %.1f lean %.2f tc %.2f", vc.R2_BIKE.top, vc.R2_BIKE.lean, vc.R2_BIKE.tc)
+    P("JP R2_BIKE top %.1f lean %.2f leanHill %.2f lift %.2f tc %.2f", vc.R2_BIKE.top, vc.R2_BIKE.lean, vc.R2_BIKE.leanHill or 0, vc.R2_BIKE.lift, vc.R2_BIKE.tc)
   end
   local grades = jsplit(params.grades or "0.36,0.58,0.84,1.0")
   local hh = tonumber(params.hh or 2.5)

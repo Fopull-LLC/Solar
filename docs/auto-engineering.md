@@ -214,6 +214,16 @@ both in vessel_controller's wheel code:
   at the centre of mass, at most 4 g a tick, booked through it). Unbooked, the
   first versions of the last two read as a shock and tore the gear off.
 
+**Bump stops (playtest 2026-11-04: "my wheels on my jets were bouncing like they were
+fighting").** A gear leg's joint (the frequency path, not real units) had no end to
+its travel: at touchdown the light tyre went 0.45-0.62 m up a 0.16 m leg, its spring
+stored 180-210 kN on the 3 t probe jet and threw it back up at 8.6 m/s; one landing in
+two tore the gear apart (pitch rates of thousands of rad/s after it). The leg's stroke
+(`R2_GEAR_TRAVEL`, or the wheel's Travel setting) is now a stop either way (setJoint's
+min/max with `limit`, `R2_GEAR_STOPS`). Still open: a flat touchdown lands on the nose
+gear, which bottoms and pitches the nose up 6°, and the wing at 46 m/s lifts the jet
+~3 m off the runway (the probe's approach flies 1-3° nose up, with no flare).
+
 ## 3d. Gas engines (playtest 2026-11-03c)
 
 "Add a motor engine vs an electric one to power vehicles … different-cc gas
@@ -547,6 +557,40 @@ its fork and arm travel (sized 33 %), as the heavy one did (32 / 36 %), on
 springs half as stiff (11 / 13 kN/m from 20 / 25), and its tyres carry 100 %
 of its weight. The VAB rebuilds each part's mass from the registry when it loads a craft, so a
 craft rolled out of the VAB again gets the new masses (one flying already keeps its old ones).
+
+**Ridden, tuned (2026-11-04, after the rider's weight).** With the rider in the
+physics the 500 went 0–15 m/s in 3.6 s and stalled from a stop on 34°. Most of it was
+not power (first gear gives 4.5 kN at the wheel); it was how the traction control read
+the bike:
+- *Two slopes.* The push's budget read the chassis's own pitch as the ground's grade.
+  The user's 500 sits 7° nose up on level ground (`motoPitch0`) and squats 2–3° more
+  under power, so it "climbed" 9° on the flat: the lever that lifts the front was cut by
+  cos 9° and 1.5 m/s² went on a slope that was not there, and a 34° hill read as 41°.
+  `R2.groundS` is now the ground's grade from the end tyres' centres (`r2TyreSlope`,
+  this tick's poses, less the difference of their radii; the rear contact's normal with
+  the front up). `R2.gslope` stays the chassis's, for the wheelie control and the pegs.
+- *The whole bike.* The push was sized on `info.mass`, which leaves out the tyre bodies,
+  against a lever from the plan, which weighs the wheels whole: 31 kg of the 289 short.
+  A bike's push, grip cap and lean torque now use the hull and its tyres (`r2TyresT`).
+- *Engine braking never locks the rear.* Throttle shut, a chained wheel was held to a
+  rim speed of 0 at the engine-braking torque: in a hop's half second the light rear
+  rim stopped dead and the bike came down on a skidding tyre (2.4 rad/s of yaw, 16 m
+  off the line, vjump .1429). It now drags the rim only down to its idle's road speed
+  in that gear, and in the air keeps it to the ground speed, as `R2_AIR_LEAD` does for
+  a driven rim.
+- *Landing.* With the landing in sight (`R2.landSlope`), the throttle's nose-up in the
+  air is a third of `BIKE_AIR_W_UP` (`BIKE_AIR_W_LAND`): held to touchdown, the big
+  kicker's flat landing came down 8° over level and the rear bottomed and kicked up.
+- *The probe's settle* (jumpprobe vjump) measured the pitch from 0 and took the last
+  moment out of its band in the window: the 500, built 7° nose up, never settled and
+  every jump read the whole 2.5 s. It is now the pitch off the bike's own level (its
+  approach, both tyres down), and the first moment from which it stays in the band
+  for 0.5 s; a one-tick skip of the front on the strip's ripple does not count.
+- *Tried and dropped:* more rider lean up a hill (`leanHill`): on 36° the bike is
+  traction-limited (the rear spins 1 m/s on 59% of the weight), and leaning forward only
+  moved load off the rear. Climbing 36° from a stop again needs more tyre grip
+  (`R2_TYRE_MU`, every wheel's) or a lower bike.
+- *The rider's pack* weighs on the seat with them (`crewSeatT`, crew-and-items §5.9).
 
 ## 4. Controls summary
 

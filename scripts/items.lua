@@ -97,11 +97,13 @@ ITEMS = {
   -- `pour.reach` m of the craft). Its petrol is a FILL in litres, kept per
   -- can like an oxygen tank's air; it comes full, and refills only at the
   -- Repair Bay's gas pump, paid by the litre (`keep`: the warehouse keeps
-  -- a can's level as it is, where it tops other fills up for free). The
-  -- mass is a can about half full: 3.5 kg of steel and ~5 kg of petrol.
-  gascan    = { name = "Gas Can",       kind = "device",     kg = 7.0,  L = 13, cost = 25,   shop = true,
+  -- a can's level as it is, where it tops other fills up for free). It
+  -- weighs what it holds: 3 kg of empty steel can (a 20 L jerry can is 4)
+  -- and 0.74 kg a litre of petrol (`fill.kg`), 10.4 kg full; the pack's
+  -- room is checked against a full one. (A fixed 7 kg before: a can half full.)
+  gascan    = { name = "Gas Can",       kind = "device",     kg = 3.0,  L = 13, cost = 25,   shop = true,
                 hold = { prefab = "ItemGasCan", grip = "left" },
-                fill = { cap = 10, what = "gas", keep = true },
+                fill = { cap = 10, what = "gas", keep = true, kg = 0.74 },
                 pour = { rate = 2.5, reach = 2.6 },
                 about = "a 10 L steel jerry can of petrol: beside a craft's gas tank, hold LMB to pour it in; refill it at the Repair Bay's pump" },
   flashlight = { name = "Flashlight",   kind = "worn",       kg = 0.3,  L = 1,  cost = 35,   shop = true,
@@ -250,7 +252,11 @@ function card(id, live)
   local function L(k) local v = live[k]; if v == nil then v = LIVE_DEFAULT[k] end return v end
   local rows = {}
   local function row(a, b) rows[#rows + 1] = { a, b } end
-  row("Mass", string.format("%.1f kg", d.kg or 0))
+  if d.fill and d.fill.kg then
+    row("Mass", string.format("%.1f kg empty, %.1f kg full", d.kg or 0, (d.kg or 0) + (d.fill.cap or 0) * d.fill.kg))
+  else
+    row("Mass", string.format("%.1f kg", d.kg or 0))
+  end
   row("Bulk", string.format("%.0f L of a %d L suit pack", d.L or 0, VOL.pack))
   if id == "medkit" then
     row("Treats", string.format("+%s health over %.0f s of held work", pct(MEDKIT.heal), MEDKIT.heal_secs))

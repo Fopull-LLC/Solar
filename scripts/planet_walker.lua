@@ -104,11 +104,15 @@ defaults = {
   swim_turn = 5.0,
 
   --@header Body and push
-  -- The suited crew's mass in the game's unit (tonnes): ~85 kg of person and
-  -- ~55 kg of suit and pack. The capsule used to be the engine's default 1.0,
-  -- a one-tonne battering ram the controller drove at walking speed.
+  -- The suited crew's mass in the game's unit (tonnes), before the pack's
+  -- contents: the person and the suit, 100 kg (eva_pack `suit_kg`, the
+  -- craft's CREW_T). What the pack holds is added on top as it changes
+  -- (bodyMass: inventory.mass of the pack, a 90 kg pack's worth at most), so
+  -- a crew loaded with ore shoves harder and weighs more on what they stand
+  -- on. The capsule used to be the engine's default 1.0, a one-tonne
+  -- battering ram the controller drove at walking speed; then a fixed 0.14.
   --@range 0.03 1 --@units t
-  mass = 0.14,
+  mass = 0.10,
   -- The most a crew member can shove with (kN): a braced push with the legs.
   -- What actually reaches the thing is also capped by the boots' grip
   -- (`push_grip` × weight), so on a light world the shove is weaker.
@@ -531,6 +535,26 @@ function onCollisionStay(node, other, hit)
 end
 onCollisionEnter = onCollisionStay
 
+-- THE BODY'S MASS (t): the suited crew (`mass`) and their pack's contents
+-- (inventory.mass of "astro", the pack of whoever is on foot) to the
+-- kilogram, read every PACK_MASS_S s: the capsule's RigidBody and the shove's
+-- grip both use it.
+PACK_MASS_S = 0.5
+local body_t, body_at = nil, -1e9
+function bodyMass()
+  local now = time or 0
+  if body_t and now - body_at < PACK_MASS_S and now >= body_at then return body_t end
+  body_at = now
+  local kg = 0
+  local inv = ref("inventory")
+  if inv and inv.mass then
+    local ok, m = pcall(inv.mass, "astro")
+    if ok and type(m) == "number" then kg = m end
+  end
+  body_t = ((params and params.mass) or 0.10) + math.floor(math.max(0, kg) + 0.5) / 1000
+  return body_t
+end
+
 -- What `other` is to a push: its mass (t), velocity, and how to push it.
 local function push_target(other)
   if not (other and other.valid ~= false) then return nil end
@@ -610,7 +634,7 @@ local function press(node, dt, ux, uy, uz, on_ground, swimming)
       if r2 > 1 then g = b.mu / r2 end
     end
   end
-  local m = (params and params.mass) or 0.14
+  local m = bodyMass()
   local grip = on_ground and (params.push_grip * m * g) or (swimming and 0.15 * params.push_force or 0)
   local F = math.min(params.push_force, grip) * math.min(1.0, best / 1.5)
   if F <= 0 then return end
@@ -799,7 +823,10 @@ function start(node)
   rig = node:getcomponent("RigidBody")
   if rig and (rig.radius or 0) >= 0.1 then WALK_R, WALK_H = rig.radius, rig.height or WALK_H end
   -- A suited person's mass, not the engine's default tonne (see PUSHING THINGS).
-  if rig and params.mass and math.abs((rig.mass or 0) - params.mass) > 1e-4 then rig.mass = params.mass end
+  if rig and params.mass then
+    local m = bodyMass()
+    if math.abs((rig.mass or 0) - m) > 1e-4 then rig.mass = m end
+  end
   cam = ref("planet_camera")
   -- SALVAGE (scripts/salvage.lua): the crates a blackout leaves. Its node is
   -- spawned when the scene carries none, as the aero library is.
@@ -1755,6 +1782,11 @@ function update(node, dt)
   if rig and (rig.radius or WALK_R) < 0.1 then
     rig.radius, rig.height = WALK_R, WALK_H
     log("walker: the capsule was still a seat's point on foot — given its size back")
+  end
+  -- (the pack's weight on the body: bodyMass, written when it moves)
+  if rig then
+    local m = bodyMass()
+    if math.abs((rig.mass or 0) - m) > 1e-4 then rig.mass = m end
   end
   local cam_hides = cam ~= nil and cam.hidesBody == true
   if not node.visible and not cam_hides then node.visible = true end

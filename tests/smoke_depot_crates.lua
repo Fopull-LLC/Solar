@@ -49,7 +49,7 @@ local function load_script(path, kind)
 end
 
 local I = load_script("scripts/items.lua", "items")
-load_script("scripts/materials.lua", "materials")
+local MAT = load_script("scripts/materials.lua", "materials")
 local inv = load_script("scripts/inventory.lua", "inventory")
 local money, earned, ledger = 10000, 0, {}
 envs.company = { valid = true,
@@ -133,7 +133,8 @@ ok(inv.volume("crate:1") <= 480, "…and the crate is not over its litres (" .. 
 -- the mass binds too
 inv.add("base", "uranium", 200)
 local u = inv.transfer("base", "crate:2", "uranium", 200)
-ok(u == math.floor(400 / 3.2) and inv.mass("crate:2") <= 400, "mass binds a crate: " .. u .. " uranite (3.2 kg each) in")
+local ukg = MAT.kg("uranium")
+ok(u == math.floor(400 / ukg + 1e-9) and inv.mass("crate:2") <= 400, "mass binds a crate: " .. u .. " uranite (" .. ukg .. " kg each) in")
 -- tanks keep their levels through a crate
 inv.drawFill("astro", "o2tank", 100)
 local lv = inv.fills("astro", "o2tank")[1]
