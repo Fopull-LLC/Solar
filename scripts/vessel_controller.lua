@@ -11208,7 +11208,16 @@ function motoRiderShape(node)
   if not rb then return end
   local d = pod_uid and bp_by_uid[pod_uid]
   local seat = d and ((d.seat or 0) == 1 or d.seat == true)
-  local on = crewAboard == true and seat and not destroyed
+  -- …and in a closed cockpit or pod over live tyres (playtest 2026-11-05: "my
+  -- wheels just roll me backwards"). The crew rides there as the same 2 m
+  -- capsule, parked at the pod's centre: under the player's jet's cockpit
+  -- (centre 1.3 m up, the nose gear's tyre top 0.30 m) its foot sat on the
+  -- nose tyre, and the moment the leg gave a centimetre the kinematic body
+  -- shoved the tyre down and back — 5 kN to 580 kN in half a second, the
+  -- nose driven onto its stop and the jet thrown backwards at 5 m/s, on the
+  -- clamps' release or a few metres into the roll (motoprobe jetland,
+  -- the player's jet on its alien home).
+  local on = crewAboard == true and (seat or R2.live) and not destroyed
   if on and not R2.riderShape then
     -- (never remember a point as the size to give back: another craft's
     -- seat may have shrunk it already — the walker's own size then)
@@ -14029,6 +14038,116 @@ local function aero_pivot(node, uid)
   return pv
 end
 
+-- ── THE LANDING ASSIST: SAS flares an aircraft onto its gear ───────────────
+-- An Aircraft (R2.gear) with SAS on and its gear down, coming down within
+-- LAND_AGL of the ground under its tyres, has its pitch flown by the assist:
+-- the nose eased from where it was up to LAND_PITCH at the touch, and the
+-- sink flown down a line from the one it came in with to LAND_SINK at the
+-- ground (a flare; landAssist). Only the pitch axis, and only while the
+-- pitch stick is free: W or S take it back at once, and yaw, roll and the
+-- throttle stay the pilot's. Off at the first tyre on the ground (stability
+-- then holds the attitude it touched down at), or in Settings ▸ Controls.
+-- Tick poses throughout (the tyres' tickPos, info.vel, the gravity's up).
+LAND_AGL = 5.0           -- m, the lowest tyre over the ground: the flare starts
+LAND_ARM_AGL = 40.0      -- m: under this the HUD shows the assist armed
+LAND_PITCH = 3.0         -- deg, the nose-up at the touch
+LAND_PITCH_MAX = 9.0
+LAND_SINK = 1.5          -- m/s, the sink it aims to touch at
+LAND_K_SINK = 1.5        -- deg of nose-up per m/s off the sink line (either way)
+LAND_K_CLIMB = 4.0       -- deg of nose-down per m/s climbing (no balloon)
+LAND_HOLD = 3.0          -- m over LAND_AGL a flare already begun keeps on
+LAND_K_RATE = 2.5        -- /s, pitch error to pitch rate
+LAND_RATE_MAX = 0.35     -- rad/s
+LAND_K_STICK, LAND_K_STICK_Q = 8.0, 2.0   -- elevator per rad of pitch error, per rad/s of pitch rate
+LAND = { state = nil, agl = nil, t = 0 }   -- published: state "armed" | "flare" | nil
+function landAssistOn()
+  local st = findScript and findScript("settings")
+  return not (st and st.landAssist == false)
+end
+-- The pitch rate (about the ship's right, + nose down, as want_p) the assist
+-- flies, or nil when it isn't flying. n: the nose, world (this tick's axes).
+function landAssist(node, info, nx, ny, nz)
+  LAND.state = nil
+  if not (R2.gear and gear_deployed and sas_mode ~= "off" and elec.control ~= false and landAssistOn()) then
+    LAND.agl = nil
+    return nil
+  end
+  if info.anchored or info.grounded or R2.onWheels then
+    if LAND.was then SAS_REF = nil end   -- (stability takes the attitude it touched down at)
+    LAND.was, LAND.agl = nil, nil
+    return nil
+  end
+  for _, w in ipairs(R2.wheels or {}) do if w.down then LAND.was = nil return nil end end
+  local c = info.com
+  local gx, gy, gz = space.gravity(c.x, c.y, c.z)
+  local gm = math.sqrt(gx * gx + gy * gy + gz * gz)
+  if gm < 1e-6 then return nil end
+  local Ux, Uy, Uz = -gx / gm, -gy / gm, -gz / gm
+  local v = info.vel
+  local vu = v.x * Ux + v.y * Uy + v.z * Uz
+  -- the height of the lowest tyre over whatever is under it (a runway deck too)
+  -- (a hit on a part of this craft, or one at the ray's very start — begun
+  -- inside some volume — is not the ground: at 180 m on a circuit both read
+  -- as "0 m" and flared the jet for 5 s, motoprobe jetland assist=1)
+  local own = r2Own(node)
+  local function ground(x, y, z)
+    local h = raycast(x, y, z, -Ux, -Uy, -Uz, LAND_ARM_AGL + 5, { ignore = own })
+    if not (h and h.distance) or h.distance < 0.02 then return nil end
+    local p = h.node
+    for _ = 1, 8 do
+      if not p then break end
+      if p.id == node.id then return nil end
+      p = p.parent
+    end
+    return h.distance
+  end
+  local agl
+  for _, w in ipairs(R2.wheels or {}) do
+    local t = w.tyre
+    if w.out and t and t.valid then
+      local p = t.tickPos or t
+      local d = ground(p.x, p.y, p.z)
+      if d then
+        d = d - (w.r or 0.33)
+        if not agl or d < agl then agl = d end
+      end
+    end
+  end
+  LAND.agl = agl
+  if not agl or agl > LAND_ARM_AGL then LAND.was = nil return nil end
+  LAND.state = "armed"
+  -- (once flaring it keeps on to the touch: a balloon a metre or two over
+  -- LAND_AGL handed the pitch back mid-flare, jetland assist=1)
+  if agl > (LAND.was and LAND_AGL + LAND_HOLD or LAND_AGL) or (vu > -0.2 and not LAND.was) then LAND.was = nil return nil end
+  local theta = math.deg(math.asin(math.max(-1, math.min(1, nx * Ux + ny * Uy + nz * Uz))))
+  -- THE FLARE, from where it began: the pitch rises from the attitude it was
+  -- flying at to LAND_PITCH at the touch, and the sink is flown down a line
+  -- from the sink it came in with (at least LAND_SINK) to LAND_SINK at the
+  -- ground; off that line by K deg per m/s, either way. (A fixed 3° held from
+  -- 5 m levelled the probe jet off at 5 m, floated it 5 s, and it fell the
+  -- last metres at 2.1 m/s; jetland assist=1.) Climbing, the nose comes down.
+  if not LAND.was then LAND.th0, LAND.s0, LAND.h0 = theta, math.max(LAND_SINK, -vu), math.max(agl, 0.5) end
+  LAND.state, LAND.was, LAND.t = "flare", true, time
+  local f = math.max(0, math.min(1, agl / LAND.h0))          -- 1 at the start, 0 at the touch
+  local aim = -(LAND_SINK + (LAND.s0 - LAND_SINK) * f)
+  local th_t = LAND.th0 + (LAND_PITCH - LAND.th0) * (1 - f) + LAND_K_SINK * (aim - vu) - LAND_K_CLIMB * math.max(0, vu)
+  th_t = math.max(math.min(LAND.th0, LAND_PITCH) - 2, th_t)
+  th_t = math.min(LAND_PITCH_MAX, th_t)
+  local err = math.rad(th_t - theta)
+  local rate = math.max(-LAND_RATE_MAX, math.min(LAND_RATE_MAX, LAND_K_RATE * err))
+  -- …and the elevators flown on the attitude itself (aeroTick): the SAS's
+  -- rate error alone moved them a fifth of their travel for a 5° error at
+  -- 57 m/s, and a 3 m/s sink went onto the gear nose-down
+  -- (q: the nose-up rate, about nose × up)
+  local Rx, Ry, Rz = ny * Uz - nz * Uy, nz * Ux - nx * Uz, nx * Uy - ny * Ux
+  local rl = math.sqrt(Rx * Rx + Ry * Ry + Rz * Rz)
+  local w = info.angVel
+  local q = rl > 1e-6 and (w.x * Rx + w.y * Ry + w.z * Rz) / rl or 0
+  LAND.stick = -math.max(-1, math.min(1, LAND_K_STICK * err - LAND_K_STICK_Q * q))
+  LAND.target = th_t
+  return -rate
+end
+
 -- THE TICK, from fixedUpdate's attitude block: the stick (sp, sy, sr), the
 -- SAS's rate error (ex, ey, ez, world), and the stick's rotation axes in the
 -- world (pitch ap, yaw ay, roll ar).
@@ -14057,8 +14176,13 @@ function aeroTick(node, info, dt, thr, sp, sy, sr, ex, ey, ez, apx, apy, apz, ay
   local alt = math.sqrt(dx * dx + dy * dy + dz * dz) - R
   if AERO.world_name ~= dom or time - AERO.world_t > 5 or time < AERO.world_t then
     AERO.world, AERO.world_name, AERO.world_t = save.get("world." .. dom), dom, time
+    -- (is it the home world: system.home's first body; the jets breathe there, aero.jetOxygen)
+    local h = save.get("system.home")
+    local hb = type(h) == "table" and type(h.bodies) == "table" and h.bodies[1]
+    AERO.world_home = type(hb) == "table" and hb.name == dom
   end
   local rho, a, o2 = A.airAt(AERO.world, alt, (b.mu or 0) / (R * R), R)
+  if A.jetOxygen then o2 = A.jetOxygen(AERO.world, AERO.world_home) end
   -- the model: rebuilt when the craft changes or a gear folds
   local gu = R2.hasGear and r2StowSig() or false
   if not AERO.model or AERO.gu ~= gu then
@@ -14112,6 +14236,8 @@ function aeroTick(node, info, dt, thr, sp, sy, sr, ex, ey, ez, apx, apy, apz, ay
     if sp == 0 then cp = cp + math.max(-1, math.min(1, 1.2 * ks * (ex * apx + ey * apy + ez * apz))) end
     if sy == 0 then cyw = cyw + math.max(-1, math.min(1, 1.2 * ks * (ex * ayx + ey * ayy + ez * ayz))) end
     if sr == 0 then cr = cr + math.max(-1, math.min(1, 1.2 * ks * (ex * arx + ey * ary + ez * arz))) end
+    -- (the landing assist's flare flies the elevators on the attitude: landAssist)
+    if sp == 0 and LAND.state == "flare" and LAND.stick then cp = T.p + LAND.stick end
   end
   if elec.control == false then cp, cyw, cr = T.p, T.y, T.r end
   env.ctl = { p = math.max(-1, math.min(1, cp)), y = math.max(-1, math.min(1, cyw)), r = math.max(-1, math.min(1, cr)) }
@@ -14173,7 +14299,7 @@ function aeroTick(node, info, dt, thr, sp, sy, sr, ex, ey, ez, apx, apy, apz, ay
     aoa = V > 1 and math.deg(math.atan2(-vf, vn)) or 0, slip = V > 1 and math.deg(math.atan2(vr, vn)) or 0,
     mach = D.mach or 0, q = D.q or 0, stall = D.stall or 0, lift = D.lift or 0, drag = D.drag or 0,
     rho = rho, airspeed = V, trim = { p = T.p, y = T.y, r = T.r },
-    jet = jn > 0 and { spool = jk / jn, air = air, n = jn } or nil,
+    jet = jn > 0 and { spool = jk / jn, air = air, n = jn, out = D.jetOut } or nil,
   }
 end
 
@@ -14949,6 +15075,7 @@ function fixedUpdate(node, dt)
   -- about the rover's front, so W rolled a jumping rover to the right
   -- (playtest 2026-10-26). The stick's own k.y is the lean key and k.r the
   -- turn key, so the keys are handed over swapped: lean = Q − E, turn = D − A.
+  LAND.state = nil
   if r2AirMode(info) then
     R2.air0 = R2.air0 or {}
     dwx, dwy, dwz = r2AirStick({ p = p, y = -r, r = -y }, rx, up, rz, w, sas_on, nil, R2.air_up, R2.air0)
@@ -14969,6 +15096,11 @@ function fixedUpdate(node, dt)
     -- (stability holds the heading it was let go at: sasHold)
     if manual or sas_mode ~= "stability" then SAS_REF = nil
     else want_p, want_y, want_r = sasHold(info, want_p, want_y, want_r, rgx, rgy, rgz, fx, fy, fz, nx, ny, nz) end
+    -- (the landing assist's flare flies the pitch while the pitch stick is free)
+    if sas_on then
+      local lp = landAssist(node, info, nx, ny, nz)
+      if lp and p == 0 then want_p = lp end
+    else LAND.state = nil end
     dwx = rgx * want_p + fx * want_y + nx * want_r
     dwy = rgy * want_p + fy * want_y + ny * want_r
     dwz = rgz * want_p + fz * want_y + nz * want_r

@@ -277,6 +277,18 @@ was really wrong:
   `("craft", "file")`; `airstart`, `layflat`, `flat`, `sink`, `landings`, `rollto`,
   `set`), per-tick legs in `JT` lines, `tools/perf/jetland.py` for the tables.
 
+**Thrown backwards (playtest 2026-11-05: "my wheels just roll me backwards").**
+- The crew rides a closed cockpit as the walker's 2 m kinematic capsule, parked at the pod's centre every tick.
+- On the player's jet the Swift Cockpit's centre is 1.3 m up, so the capsule's foot sat on the nose tyre's top (0.30 m).
+- The first centimetre the nose leg gave, the kinematic body shoved the tyre down and back.
+  - The tyre's contact went from 5 kN to 580 kN in half a second, with no stroke on its leg.
+  - The leg was driven onto its stop, the mains came off, and the jet was thrown backwards at 4-6 m/s.
+  - It happened on the clamps' release, rolling in a tail wind with the jets dark, and a few metres into every take-off roll.
+- Ruled out by A/B (motoprobe jetland, the rim-speed column in `JT`): the bump stops, the tail wheel, the build's axes, the runway (the probe jet rolled cleanly on it).
+- `motoRiderShape` now shrinks the capsule to a point whenever the crew is aboard a craft with live tyres, not only on a seat.
+  With that, the jet ran 0 to 59 m/s in 8 s on the same runway.
+- That jet also has no elevator (its tail fins are `ctl=y`), so only the cockpit's reaction wheel can rotate it.
+
 ## 3d. Gas engines (playtest 2026-11-03c)
 
 "Add a motor engine vs an electric one to power vehicles … different-cc gas

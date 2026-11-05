@@ -33,9 +33,14 @@ def parse(path):
         if len(h) >= 15:
             r.update(cx=float(h[10]), cy=float(h[11]), cz=float(h[12]), m=float(h[13]), rh=int(h[14]))
         tok = tail.split()
-        for k in range(0, len(tok) - 3, 4):
-            uid, gs = tok[k].split(":")
-            r["w"][int(uid)] = dict(g=gs == "G", pos=float(tok[k + 1]), load=float(tok[k + 2]), oleo=float(tok[k + 3]))
+        # each wheel: uid:G pos load oleo [rim m/s] (the rim speed since 2026-11-05)
+        starts = [k for k, x in enumerate(tok) if ":" in x] + [len(tok)]
+        for a, b in zip(starts, starts[1:]):
+            if b - a < 4:
+                continue
+            uid, gs = tok[a].split(":")
+            r["w"][int(uid)] = dict(g=gs == "G", pos=float(tok[a + 1]), load=float(tok[a + 2]), oleo=float(tok[a + 3]),
+                                    rim=float(tok[a + 4]) if b - a > 4 else None)
         rows.append(r)
     return rows, g
 

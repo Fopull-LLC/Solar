@@ -364,6 +364,29 @@ do
   env0.o2 = 0
   for _ = 1, 50 do A.step(M, env0) end
   ok(j.jk == 0, "no oxygen, no thrust")
+  ok(M.diag and M.diag.jetOut == "o2", "a dark jet says it has no oxygen (" .. tostring(M.diag and M.diag.jetOut) .. ")")
+  -- AN ALIEN HOME (playtest 2026-11-05: "my jets arent thrusting anymore"):
+  -- rolled from the catalogue, a canyon home has no geo.home and no oxygen
+  -- in OXY, so its jets read o2 0 and never lit. Its jets breathe
+  -- (jetOxygen), its suit still does not (oxygen).
+  local ALIEN = { atmo = 0.81, atmoHeight = 540, radius = 715, atmoScaleH = 243,
+                  geo = { type = "canyon", label = "Ochre canyonlands", family = "canyon" } }
+  local _, _, o2a = A.airAt(ALIEN, -12, 7.8, 715)
+  ok(o2a == 0, "an alien canyon home's air has no oxygen to breathe")
+  ok(A.jetOxygen(ALIEN, true) == 1, "but the home's jets breathe it")
+  ok(A.jetOxygen(ALIEN, false) == 0, "the same air on another world feeds no jet")
+  ok(A.jetOxygen(HOME, false) == 1, "a built home breathes whichever way it is asked")
+  ok(A.jetOxygen({ atmo = 0 }, true) == 0, "no air is no air, home or not")
+  for _, ty in ipairs({ "canyon", "ironred", "saltflat", "glacial", "crystal", "volcanic", "sulfur", "titan", "greenhouse" }) do
+    ok(A.jetOxygen({ atmo = 0.6, geo = { type = ty } }, true) == 1, "an alien " .. ty .. " home lights its jets")
+  end
+  local envA = {}
+  for k, v in pairs(env) do envA[k] = v end
+  envA.rho = A.airAt(ALIEN, -12, 7.8, 715)
+  envA.o2 = A.jetOxygen(ALIEN, true)
+  local MA = A.build(PLANE)
+  for _ = 1, 600 do A.step(MA, envA) end
+  ok(MA.jets[1].jk > 0.9 and MA.diag.jetOut == nil, string.format("on the alien home's runway the jet spools to full (%.2f)", MA.jets[1].jk))
   local bare = A.build({ PLANE[3] })
   for _ = 1, 300 do A.step(bare, env) end
   ok(bare.jets[1].jk == 0, "no intake, no thrust")

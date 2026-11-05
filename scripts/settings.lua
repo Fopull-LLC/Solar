@@ -233,6 +233,7 @@ local DEFAULTS = {
   cam_shake = 1.0,            -- camera shake: landings, hits, blasts, a craft's rumble (0..1)
   fov_fx = 1.0,               -- the field of view's widening at speed (0..1)
   crouch_toggle = true,       -- the Crouch key (C) toggles; false: hold (CTRL always holds)
+  land_assist = true,         -- SAS flares an Aircraft onto its gear (vessel_controller landAssist)
 }
 -- …and the ones whose default is "leave it alone" (a nil can't sit in a table).
 local OPTIONAL = { "fullscreen", "display", "text_scale", "captions", "reduced_motion", "color_filter",
@@ -249,6 +250,7 @@ dynamicRes = false
 camShake = 1.0       -- planet_camera's feel (Reduced motion turns both off there)
 fovFx = 1.0
 crouchToggle = true  -- planet_walker
+landAssist = true    -- vessel_controller (the SAS landing assist)
 
 -- ── the interface size ──────────────────────────────────────────────────────
 -- Each screen layer is MatchHeight over 720 design units (the scenes'
@@ -584,6 +586,7 @@ local APPLY = {
   cam_shake = function() camShake = tonumber(get("cam_shake")) or 1.0 end,
   fov_fx = function() fovFx = tonumber(get("fov_fx")) or 1.0 end,
   crouch_toggle = function() crouchToggle = get("crouch_toggle") ~= false end,
+  land_assist = function() landAssist = get("land_assist") ~= false end,
   fullscreen = function()
     local v = get("fullscreen")
     if v ~= nil and app and app.setFullscreen then pcall(app.setFullscreen, v) end
@@ -1089,6 +1092,9 @@ local function controls_rows(out)
     get("crouch_toggle") ~= false, function(v) set("crouch_toggle", v) end)
   out[#out + 1] = hint("crh", "The Crouch key (C unless you rebind it) toggles the crouch or works while held; "
     .. "CTRL always crouches while held. Crouch at a sprint to slide.")
+  out[#out + 1] = on_off("land", "SAS landing assist", get("land_assist") ~= false, function(v) set("land_assist", v) end)
+  out[#out + 1] = hint("landh", "An aircraft with SAS on and its gear down flares itself in the last 5 m: the nose 3° up, "
+    .. "the sink eased to about 1.5 m/s at the touch. W or S take the pitch back.")
   local page = engine_rows("controls")
   if not page then
     out[#out + 1] = hint("kn", "Rebinding is not available on this engine build.")

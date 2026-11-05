@@ -396,16 +396,21 @@ local function console(v, t, lv, shift)
   -- times ("TWR 1.38 / THRUST 55 kN" at 0% with empty tanks), against 9.81
   -- rather than this world's gravity. The full-throttle TWR is on the Launch
   -- card while the clamps hold, where it matches the builder's figure.
+  -- (jets asked for and dark: why, in place of a bare 0 kN — no oxygen in
+  -- this air, too thin, or the intakes starve them; aero.lua's jetOut)
+  local jet = t.aero and t.aero.jet
+  local jet_out = jet and jet.out and thr > 0.02 and (t.thrust_now or 0) < 0.5
+    and ({ o2 = "NO O2", air = "NO AIR", intake = "INTAKE" })[jet.out] or nil
   local rows = {
     { "TWR", string.format("%.2f", t.twr or 0) },
-    { "THRUST", string.format("%d kN", math.floor((t.thrust_now or 0) + 0.5)) },
+    { "THRUST", jet_out or string.format("%d kN", math.floor((t.thrust_now or 0) + 0.5)), jet_out and "warn" or nil },
     -- (the ball's own nose: a rover's is its drive front, update_navball)
     { "PITCH", string.format("%+.0f°", whole((v.NAVBALL and v.NAVBALL.ny) and math.deg(math.asin(math.max(-1, math.min(1, v.NAVBALL.ny)))) or t.nose or 0)) },
   }
   for i, r in ipairs(rows) do
     local y = 12 + (i - 1) * 46
     kids[#kids + 1] = micro("fl" .. i, r[1], 540, y, 62, "start")
-    kids[#kids + 1] = value("fv" .. i, r[2], 540, y + 14, 62, "start")
+    kids[#kids + 1] = value("fv" .. i, r[2], 540, y + 14, 62, "start", r[3])
   end
 
   kids[#kids + 1] = warp_pill(t)
@@ -539,6 +544,25 @@ local function dock_line(v, tx)
            { "box", key = "l", w = 2, h = 1 },
            { "text", key = "k", style = "hud/micro", w = "fit", h = 12, text = "DOCK" },
            { "text", key = "v", style = "hud/value", w = "fit", h = 16, text = text },
+           { "box", key = "r", w = 2, h = 1 } }
+end
+
+-- The SAS landing assist (vessel_controller landAssist): LAND ASSIST, muted,
+-- while it is armed (an Aircraft, SAS on, gear down, under 40 m), FLARE lit
+-- while it flies the pitch; the lowest tyre's height and the sink beside it.
+local function land_line(v, lv, tx, y)
+  local L = v.LAND
+  if not (L and L.state) then return nil end
+  local flare = L.state == "flare"
+  local text = string.format("%.1f m   %s %.1f m/s", math.max(0, L.agl or 0), "sink", math.max(0, -(lv and lv.vspd or 0)))
+  return { "row", key = "landline", style = "hud/instrument", pin = "top", x = tx,
+           y = y, w = "fit", h = 24, pad = 0, gap = 8, align = "center",
+           tooltip = "SAS landing assist: under 5 m with the gear down it holds the nose 3° up and eases the sink to "
+             .. "about 1.5 m/s. W or S take the pitch back. Off in Settings ▸ Controls.",
+           { "box", key = "l", w = 2, h = 1 },
+           { "text", key = "k", style = flare and "hud/valueAccent" or "hud/micro", w = "fit", h = flare and 16 or 12,
+             text = flare and "FLARE" or "LAND ASSIST" },
+           { "text", key = "v", style = flare and "hud/value" or "hud/valueMuted", w = "fit", h = 16, text = text },
            { "box", key = "r", w = 2, h = 1 } }
 end
 
@@ -1247,6 +1271,11 @@ function update(node, dt)
   }
   if dline then tree[#tree + 1] = dline end
   local below = M + STRIP_H + 6 + LAMP_H + (dline and (6 + 24) or 0)
+  local lline = land_line(v, lv, tx, below + 6)
+  if lline then
+    tree[#tree + 1] = lline
+    below = below + 6 + 24
+  end
   local lw = controlWarning(t) or leaveWarning(t, t.body and space.body(t.body), v.throttle, v.fuel)
   warning = lw
   if lw then

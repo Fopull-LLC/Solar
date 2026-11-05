@@ -865,6 +865,8 @@ end
 --   sink   = the touchdown sink the flare aims for (m/s, default 1.5)
 --   tdpitch = the nose-up the flare holds at touchdown (deg, default 3)
 --   flat=1 : no flare — the nose level, ~2 m/s down onto the runway (sink)
+--   assist=1 : the probe lets go of the pitch while the SAS landing assist
+--            flares (with flat=1: the assist alone takes the 2 m/s glide onto the gear)
 --   landings = how many touch-and-goes (default 2), taxi=0 skips the taxi
 -- Every tick (perfbench's fixedUpdate, TICK_HOOK): `JT <phase> <t> V agl vu theta
 -- q p herr | uid:G/- pos load oleo …` for tools/perf/jetland.py. Summary lines
@@ -910,6 +912,17 @@ local function run_jetland()
     -- (nose +X, top +Y), as it is once it flies level and comes in to land
     if (params.layflat or 0) > 0 then
       local function R(v) return { x = v.y, y = -v.z, z = -v.x } end
+      for _, r in ipairs(recs) do
+        local X, Y, Z = basis(r)
+        local p = R({ x = r.x, y = r.y, z = r.z })
+        r.x, r.y, r.z = p.x, p.y, p.z
+        r.yaw, r.pitch, r.roll = eulerOf(R(X), R(Y), R(Z))
+      end
+    end
+    -- turnx=1: a craft built nose along +Z turned a quarter about the vertical
+    -- to nose +X, the way the probe jet is built (an A/B for the build's axes)
+    if (params.turnx or 0) > 0 then
+      local function R(v) return { x = v.z, y = v.y, z = -v.x } end
       for _, r in ipairs(recs) do
         local X, Y, Z = basis(r)
         local p = R({ x = r.x, y = r.y, z = r.z })
@@ -980,8 +993,9 @@ local function run_jetland()
   for _, w in ipairs(vc.R2.wheels or {}) do
     local rb = w.tyre and w.tyre.valid and w.tyre:getcomponent("RigidBody")
     local j = w.tyre and w.tyre.valid and w.tyre:getcomponent("Joint")
-    P("MP %s wheel %d %s gear %s a %.2f l %.2f r %.2f tyre %.3f t f %.1f Hz z %.2f realLoad %s", tag, w.uid, w.d.id or "?", tostring(w.gear), w.a or 0, w.l or 0, w.r or 0,
-      rb and rb.mass or -1, j and j.stiffness or -1, j and j.damping or -1, tostring(w.realLoad))
+    P("MP %s wheel %d %s gear %s a %.2f l %.2f r %.2f tyre %.3f t f %.1f Hz z %.2f realLoad %s steer0 %.1f rs %s realigned %s upright %s fwd %.2f,%.2f", tag, w.uid, w.d.id or "?", tostring(w.gear), w.a or 0, w.l or 0, w.r or 0,
+      rb and rb.mass or -1, j and j.stiffness or -1, j and j.damping or -1, tostring(w.realLoad), w.steer0 or 0, tostring(w.rs), tostring(w.realigned), tostring(w.upright),
+      vc.R2.fwd and vc.R2.fwd.x or 0, vc.R2.fwd and vc.R2.fwd.z or 0)
   end
   -- strs set = "NAME=value,…": the controller's tuning globals for this run
   -- (before the tyres are hung, at the release)
@@ -1009,8 +1023,8 @@ local function run_jetland()
       local t = w.tyre
       if t and t.valid then
         local j = t:getcomponent("Joint")
-        td[#td + 1] = string.format("%d:%s %.4f %.2f %.2f", w.uid, t.grounded and "G" or "-", j and (j.position or 0) / 57.29578 or -1,
-          t.contactForce or 0, w.oleoF or 0)
+        td[#td + 1] = string.format("%d:%s %.4f %.2f %.2f %.1f", w.uid, t.grounded and "G" or "-", j and (j.position or 0) / 57.29578 or -1,
+          t.contactForce or 0, w.oleoF or 0, j and (j.speed or 0) / 57.29578 * (w.r or 0.33) or 0)
       end
     end
     local hc = vc.r2HullCom and vc.r2HullCom(S.i) or { 0, 0, 0 }
@@ -1031,8 +1045,18 @@ local function run_jetland()
       if time - t0 >= nextl then
         nextl = nextl + 1.0
         local N = NAV and NAV()
-        P("MP %s [%s+%.1f] V %.1f agl %.2f vu %.2f theta %.1f bank %.1f herr %.1f on %s | togo %.0f xt %.1f h %.1f", tag, tag2, time - t0, S.V, S.agl, S.vu,
-          math.deg(S.theta), math.deg(S.bank), math.deg(S.herr or 0), tostring(vc.R2.onWheels), N and N.togo or -1, N and N.xt or 0, N and N.h or 0)
+        -- (along the nose: the craft's speed, the wind's, and the grade under it, + rising ahead)
+        local vf = dot(S.i.vel, S.n)
+        local wn = 0
+        if weather and weather.windAt then
+          local okw, wv = pcall(weather.windAt, vec3(S.i.com.x, S.i.com.y, S.i.com.z))
+          if okw and wv then wn = (wv.x or 0) * S.n.x + (wv.y or 0) * S.n.y + (wv.z or 0) * S.n.z end
+        end
+        local gh = raycast(S.i.com.x, S.i.com.y, S.i.com.z, -S.U.x, -S.U.y, -S.U.z, 400, vn)
+        local grade = (gh and gh.normal) and -dot(gh.normal, S.n) or 0
+        P("MP %s [%s+%.1f] V %.1f agl %.2f vu %.2f theta %.1f bank %.1f herr %.1f on %s | togo %.0f xt %.1f h %.1f | vf %.2f wind %.2f grade %.4f thr %.2f", tag, tag2, time - t0, S.V, S.agl, S.vu,
+          math.deg(S.theta), math.deg(S.bank), math.deg(S.herr or 0), tostring(vc.R2.onWheels), N and N.togo or -1, N and N.xt or 0, N and N.h or 0,
+          vf, wn, grade, vc.THRUST_LIVE or -1)
       end
       if stop then break end
     end
@@ -1241,14 +1265,23 @@ local function run_jetland()
       end
       if h > 30 and ahead(S, 25) then vt = 6 end
       fly(S, vt, aoa_t)
+      -- assist=1: the stick's pitch let go while the SAS landing assist
+      -- flares (vessel_controller landAssist); the throttle, bank and
+      -- rudder stay the probe's
+      if (params.assist or 0) > 0 and vc.LAND and vc.LAND.state == "flare" then
+        vc.AERO.cmd.p = 0
+        LAND.flared = LAND.flared or (time - T0)
+      end
       if t > 2 and vc.R2.onWheels then touched = t; return true end
     end)
     if not touched then P("MP %s landing %d: never touched down", tag, li); break end
     local S1 = st()
     local N1 = nav()
     LAND[li] = { V = S1.V, vu = S1.vu, theta = math.deg(S1.theta), t = time - T0 }
-    P("MP %s touchdown %d at %.2f s: V %.1f sink %.2f theta %.1f herr %.1f, %.0f m from the aim point, %.1f m off the centreline", tag, li, time - T0,
-      S1.V, -S1.vu, math.deg(S1.theta), math.deg(S1.herr or 0), N1 and (N1.togo > Rw * math.pi and N1.togo - 2 * math.pi * Rw or N1.togo) or -1, N1 and N1.xt or -1)
+    P("MP %s touchdown %d at %.2f s: V %.1f sink %.2f theta %.1f herr %.1f, %.0f m from the aim point, %.1f m off the centreline%s", tag, li, time - T0,
+      S1.V, -S1.vu, math.deg(S1.theta), math.deg(S1.herr or 0), N1 and (N1.togo > Rw * math.pi and N1.togo - 2 * math.pi * Rw or N1.togo) or -1, N1 and N1.xt or -1,
+      LAND.flared and string.format(" | assist flared from %.2f s", LAND.flared) or "")
+    LAND.flared = nil
     local last = li == nland
     local th0 = S1.theta
     run("land" .. li, last and 30 or 5, function(S, t)

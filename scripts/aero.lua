@@ -139,6 +139,20 @@ function oxygen(w)
   return (w.atmo or 0) > 0.3 and 1 or 0
 end
 
+-- THE JETS' OXYGEN. A jet burns the oxygen in the air it swallows
+-- (oxygen()), except on the home world, where the agency's jets are built for
+-- the air they fly in, as every part is rated for the home world's gravity
+-- (builder.lua's rating). An alien home (g_homeKind "alien") is rolled from
+-- the planet catalogue and has no `geo.home`, so a canyon, iron-red, salt-pan
+-- or glacial home read oxygen 0 and no jet ever lit there (playtest
+-- 2026-11-05: "my jets arent thrusting anymore even though my throttle is
+-- on"). Its air stays unbreathable for the suit: suit.lua reads oxygen().
+-- `home`: this world is the save's home (system.home's first body).
+function jetOxygen(w, home)
+  if home and type(w) == "table" and (w.atmo or 0) > 0.005 then return 1 end
+  return oxygen(w)
+end
+
 -- Air at altitude `alt` (m over the body's nominal radius) on world record
 -- `w` (save "world.<name>": atmo, atmoHeight, radius, geo) of surface gravity
 -- g and radius R. Returns density (kg/m³), the speed of sound (m/s) and the
@@ -621,8 +635,13 @@ function step(M, env)
     j.jk, j.jb, j.lit = k, lit and j.s * sigma ^ 0.7 * airf or 0, lit
   end
   M.kept = true   -- every body and surface holds this step's force (fx, fy, fz)
+  -- (why an asked-for jet is dark, for the HUD: the first thing missing)
+  local out = nil
+  if #M.jets > 0 then
+    if sigma <= 0.03 then out = "air" elseif o2 <= 0.05 then out = "o2" elseif airf <= 0.15 then out = "intake" end
+  end
   M.diag = { q = 0.5 * rho * V * V, mach = Mach, lift = lift, drag = drag, v = V,
-             stall = Sw > 0 and Ss / Sw or 0, air = airf, rho = rho }
+             stall = Sw > 0 and Ss / Sw or 0, air = airf, rho = rho, o2 = o2, jetOut = out }
   return Fx, Fy, Fz, Tx, Ty, Tz
 end
 
