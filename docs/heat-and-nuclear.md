@@ -143,8 +143,19 @@ while a core gives any. The order of work:
    `shield` module counts 0.02; a propellant tank at ≥ 95 % counts 0.3. This
    never counts "the ray hit a solid", so it keeps working once modules are
    hollow (engine interiors stage 1).
-3. **The terrain**, only for crew on foot: a `terrain.raycast` from the core
+3. **Placed walls** (step 8, M6c), only for crew on foot: every BASE part
+   with a `shield` (the Shield Wall, k 0.05) that the core→member segment
+   crosses, by its record (`base_shield.wallFactor`, the same
+   `shieldFactor`). See docs/base-building.md §12.
+4. **The terrain**, only for crew on foot: a `terrain.raycast` from the core
    to them.
+
+Since step 8 a BASE part can be a source of its own (`rad` in parts_base):
+the Isotope Skid's cells give a weak field all round (0.002 at 5 m), traced
+by `base_shield.pass` against members on foot with the same walls and
+terrain ray. With the Build Kit open, every ground source and live craft core
+nearby is drawn the VAB's way, with each member on foot marked red (in the
+open) or amber (shielded) from the numbers the dose pass wrote.
 
 All positions are drawn poses, read in lateUpdate.
 

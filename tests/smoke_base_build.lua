@@ -66,19 +66,24 @@ end
 -- ── parts_base ──────────────────────────────────────────────────────────────
 local PB = load_script("parts_base.lua", env({}, {}))
 local cat = PB.catalogue()
-check(#cat == 1 and cat[1].title == "BASE" and #cat[1].ids == 7, "one BASE section with seven parts (the stand: step 6; the tower and its two sources: step 7)")
+check(#cat == 1 and cat[1].title == "BASE" and #cat[1].ids == 10, "one BASE section with ten parts (the stand: step 6; the tower and its two sources: step 7; the Battery Bank, the Shield Wall and the Power Cable: step 8)")
 for _, id in ipairs(cat[1].ids) do
   local d = PB.partInfo(id)
   check(d and d.fieldOnly == true, id .. ": fieldOnly (the VAB never lists it)")
   local f = d and io.open("solar/prefabs/" .. d.prefab .. ".prefab.ron")
   check(f ~= nil, id .. ": its prefab " .. tostring(d and d.prefab) .. " is on disk")
   if f then f:close() end
-  check(d and d.mass >= 0.15 and d.cost > 0 and type(d.seat) == "number" and d.half and d.half.x > 0, id .. ": mass, cost, seat, footprint")
+  if d and d.cable then
+    -- (a cable is a run, not a part set down: its numbers are a metre's)
+    check(d.cable.max > 0 and d.cable.kgm > 0 and d.cable.perm > 0 and type(d.seat) == "number", id .. ": a run's length limit, mass and price a metre")
+  else
+    check(d and d.mass >= 0.15 and d.cost > 0 and type(d.seat) == "number" and d.half and d.half.x > 0, id .. ": mass, cost, seat, footprint")
+  end
 end
 check(near(PB.partInfo("padPlate").mass, 4 * 4 * 0.30 * 2.4, 0.05), "the Pad Plate weighs its concrete (4 x 4 x 0.30 m at 2.4 t/m³)")
 check(PB.partInfo("shed").hull == "subShape" and PB.partInfo("hab").hull == "shell", "flat walls → subShapes, the curved can → a shell")
 local REG, CATL = {}, {}
-check(PB.register(REG, CATL) == 7 and REG.padPlate and CATL[1][1] == "BASE", "register() adds the BASE section to a registry")
+check(PB.register(REG, CATL) == 10 and REG.padPlate and CATL[1][1] == "BASE", "register() adds the BASE section to a registry")
 
 -- ── base_economy ────────────────────────────────────────────────────────────
 local EC = load_script("base_economy.lua", env({}, {}))

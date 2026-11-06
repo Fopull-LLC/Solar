@@ -255,6 +255,11 @@ end
 function cardLines(id, def, locked)
   local E = ref("base_economy")
   if locked or not E then return nil, nil end
+  -- (step 8, B9b: a cable is billed by the metre when its run is laid)
+  if def and def.cable then
+    return string.format("$%g a metre", def.cable.perm or 3),
+      string.format("%.1f kg/m · up to %.1f km a run · + shipping", def.cable.kgm or 1.4, (def.cable.max or 1500) / 1000)
+  end
   return E.cardLines(quote_of(id))
 end
 function footText()
@@ -614,9 +619,17 @@ local function foot_want(body)
   return nil
 end
 local function ghost_paint()
-  if not (heldPart and req and req.pose and open_) then
+  if not (heldPart and req and (req.pose or req.cable) and open_) then
     if ghost_node and ghost_node.valid ~= false and ghost_node.visible then ghost_node.visible = false end
     if ghost_foot and ghost_foot.valid ~= false and ghost_foot.visible then ghost_foot.visible = false end
+    return
+  end
+  if req.cable then
+    -- (a cable has no ghost: its run is drawn, base_cable.drawPreview)
+    if ghost_node and ghost_node.valid ~= false and ghost_node.visible then ghost_node.visible = false end
+    if ghost_foot and ghost_foot.valid ~= false and ghost_foot.visible then ghost_foot.visible = false end
+    local CB = ref("base_cable")
+    if CB and CB.drawPreview then CB.drawPreview() end
     return
   end
   local p = req.pose
@@ -692,6 +705,8 @@ local function hist_push(e)
   local H = history()
   if H then H:push(e); H:seal() end
 end
+-- (step 8) another script's step in the ring: base_cable's laid cable
+function pushHistory(e) hist_push(e) end
 local function label_of(id) return (partInfo(id) or {}).label or "part" end
 local function copy(t)
   if type(t) ~= "table" then return t end
@@ -909,8 +924,32 @@ function redo()
   return e.res, e
 end
 
+-- B9b: the Power Cable in hand. The first click makes it off at a part, the
+-- second (on another structure's part) lays the run and bills it.
+local function cable_click()
+  local CB = ref("base_cable")
+  if not (CB and req) then return end
+  if not CB.pending then
+    if req.bad then play("denied"); say(req.bad) return end
+    CB.makeOff(req.hitRec, req.hitPart)
+    play("pick", 0.5)
+    say(string.format("Power Cable made off at the %s · walk it out to a part on another structure and click it (up to %.1f km)",
+      tostring(req.label or "part"), ((partInfo("powerCable") or {}).cable or {}).max and (partInfo("powerCable").cable.max / 1000) or 1.5))
+    return
+  end
+  if req.bad then play("denied"); say(req.bad) return end
+  local id, why, q, L = CB.lay(CB.pending, { sid = req.hitRec.id, uid = req.hitPart.uid })
+  if not id then play("denied"); say(why or "it wouldn't lay there") return end
+  CB.clearPending()
+  play("place", 0.6)
+  say(string.format("Power Cable laid · %.0f m, %.1f t · %s (%s + %s shipping) · Ctrl+Z within a minute takes it up",
+    L or 0, (q and q.mass) or 0, money(q.total), money(q.cost), money(q.ship)))
+  heldPart = nil
+end
+
 local function do_place(keep)
   if not (req and heldPart) then return end
+  if req.cable then cable_click() return end
   if req.bad then play("denied"); say(req.bad) return end
   local p = req.pose
   p.base, p.plan = req.base, req.plan
@@ -988,6 +1027,17 @@ function hintLine()
   if not open_ then return "Build Kit  ·  B opens it" end
   local keys = (collapsed and "B unfolds the parts" or "B folds the parts") .. "  ·  Esc " .. (heldPart and "drops the part" or "closes the kit") .. "  ·  Ctrl+Z undo"
   if not heldPart then return "Build Kit  ·  pick a part  ·  RMB tap a placed part to take it down  ·  " .. keys end
+  local hdef = partInfo(heldPart)
+  if hdef and hdef.cable then
+    local CB = ref("base_cable")
+    local pend = CB and CB.pending
+    if not req then return string.format("Power Cable  ·  %s", aim_why or "aim at a placed part") end
+    if req.bad then return string.format("Power Cable  ·  %s  ·  RMB tap drops it", req.bad) end
+    if not pend then return string.format("Power Cable  ·  LMB makes it off at the %s  ·  then walk it out to another structure", tostring(req.label or "part")) end
+    local q = req.quote or {}
+    return string.format("Power Cable from the %s  ·  %.0f m, %.1f t  ·  LMB lays it for %s (%s + %s shipping)",
+      tostring(pend.label), req.len or 0, q.mass or 0, money(q.total or 0), money(q.cost or 0), money(q.ship or 0))
+  end
   local turn = "scroll turns  ·  R quarter  ·  PgUp/PgDn raise  ·  Shift frees"
   if not req then return string.format("%s  ·  %s  ·  %s", partInfo(heldPart).label, aim_why or "aim at the ground", turn) end
   if req.bad then return string.format("%s  ·  %s  ·  RMB tap drops it", req.def.label, req.bad) end
@@ -1124,7 +1174,21 @@ end
 
 function lateUpdate(node, dt)
   if not open_ then ghost_paint() return end
-  if heldPart then
+  local hdef = heldPart and partInfo(heldPart)
+  if hdef and hdef.cable then
+    local h, w = aim()
+    local CB = ref("base_cable")
+    if h == "keep" then
+      -- (held still under a held RMB)
+    elseif h and CB and CB.aimTick then
+      req = CB.aimTick(h)
+      req.cable, req.id, req.def = true, heldPart, hdef
+      aim_why = nil
+    else
+      req, aim_why = nil, w
+      if CB and CB.pending and CB.drawPreview then CB.drawPreview() end
+    end
+  elseif heldPart then
     local h, w = aim()
     if h == "keep" then
       -- (held still under a held RMB)

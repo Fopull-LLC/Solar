@@ -400,6 +400,27 @@ function radiation(V, L, M, cores, gs)
       end
     end
   end
+  -- M6c (step 8): the cores, body-relative, for the Build Kit's cone draw, and
+  -- the placed walls (base_shield, by part record) for crew on foot
+  local bsh = ref("base_shield")
+  local bn, bb = nil, nil
+  if bsh and rx and space and space.dominant then
+    bn = space.dominant(ox, oy, oz)
+    bb = bn and space.body(bn)
+    if bb and bsh.publish then
+      local pub = {}
+      for _, c in ipairs(srcs) do
+        local cx = ox + rx.x * c.x + up.x * c.y + rz.x * c.z - bb.x
+        local cy = oy + rx.y * c.x + up.y * c.y + rz.y * c.z - bb.y
+        local cz = oz + rx.z * c.x + up.z * c.y + rz.z * c.z - bb.z
+        local ax = rx.x * c.ax + up.x * c.ay + rz.x * c.az
+        local ay = rx.y * c.ax + up.y * c.ay + rz.y * c.az
+        local az = rx.z * c.ax + up.z * c.ay + rz.z * c.az
+        pub[#pub + 1] = { x = cx, y = cy, z = cz, ax = ax, ay = ay, az = az, rad = c.rad, share = c.share, label = c.label }
+      end
+      pcall(bsh.publish, n.id, bn, pub)
+    end
+  end
   if #who == 0 then return end
   local blk = nil
   local hud = {}
@@ -407,13 +428,26 @@ function radiation(V, L, M, cores, gs)
     local rate_sum, from = 0, nil
     for _, c in ipairs(srcs) do
       -- the cheap test first: one dot product
-      local inside = L.coneAt(c, w.x, w.y, w.z)
+      local inside, bare = L.coneAt(c, w.x, w.y, w.z)
       if inside then
         blk = blk or blockers_of(V, L, S)
         local skip = { [c.uid] = true }
         if w.seat then skip[w.seat] = true end
         local rate = L.doseRate(c, w.x, w.y, w.z, blk, skip)
-        -- the ground between (on foot only): a ray from the core to them
+        -- on foot only: the placed walls between (by record), then the ground
+        -- (a ray from the core to them)
+        if rate > 0 and w.foot and rx then
+          local cx = ox + rx.x * c.x + up.x * c.y + rz.x * c.z
+          local cy = oy + rx.y * c.x + up.y * c.y + rz.y * c.z
+          local cz = oz + rx.z * c.x + up.z * c.y + rz.z * c.z
+          if bb and bsh and bsh.wallFactor then
+            local okf, f = pcall(bsh.wallFactor, bn, cx - bb.x, cy - bb.y, cz - bb.z, w.wx - bb.x, w.wy - bb.y, w.wz - bb.z, L)
+            if okf and f then rate = rate * f end
+          end
+          if bsh and bsh.note and bb then
+            pcall(bsh.note, w.id, rate, bare or rate, c.label, bn, cx - bb.x, cy - bb.y, cz - bb.z)
+          end
+        end
         if rate > 0 and w.foot and terrain and terrain.raycast and rx then
           local cx = ox + rx.x * c.x + up.x * c.y + rz.x * c.z
           local cy = oy + rx.y * c.x + up.y * c.y + rz.y * c.z

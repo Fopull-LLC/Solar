@@ -28,11 +28,13 @@
 --                               home world (not buildable before step 13) a
 --                               powered tower is a 4.0e5 relay: home only
 --                               through a path to the real one.
---   POWER          until the base grid (M6, step 8) a tower counts the
---                  sources on its OWN STRUCTURE (the same pads): Solar Arrays
---                  (3 EC/s in full sun, tracking; nothing in a planet's
---                  shadow) and Isotope Skids (2 EC/s, always). Worked out
---                  at most every 2 s, only when the solve asks.
+--   POWER          the base grid (M6, step 8; base_grid.lua): every
+--                  structure within 150 m of the tower, and any joined to it
+--                  by a Power Cable, shares one grid with the tower's 2 EC/s
+--                  as a load. Solar Arrays, Isotope Skids and Battery Banks
+--                  on it decide whether it is a ground station (its load
+--                  served) or a mast (shed). This script only reads the
+--                  grid's answer.
 --   THE MAP (M5)   bases() lists every base for the map's glyph and the
 --                  Tracking Station's BASES section: the home base #0 first,
 --                  then each tower with its power, its link and its world's
@@ -175,67 +177,44 @@ end
 
 function towerOf(bid) return tw[bid] end
 
--- ── power (until the base grid: the sources on the tower's own structure) ──
-local pw_cache = {}   -- bid → { t, supply, need, powered, src }
-local ref_flux_v = nil
-local function ref_flux(E, bodies)
-  if ref_flux_v then return ref_flux_v end
-  local name = home_body()
-  local b = name and space.body(name)
-  if not (b and E.sunOf) then return nil end
-  local sun = E.sunOf(b.x, b.y, b.z, bodies, nil)
-  if not sun or sun.name == b.name then return nil end
-  ref_flux_v = sun.mu / math.max((sun.x - b.x) ^ 2 + (sun.y - b.y) ^ 2 + (sun.z - b.z) ^ 2, 1)
-  return ref_flux_v
-end
-
--- What a structure's sources give now: → supply, { { id, label, kind, gen, out, why } }
--- (pure given the structures record, parts_base, electronics and the bodies)
-function sourcesOf(rec, pb, E, bodies, ST)
-  local out, supply = {}, 0
-  local by = {}
-  for _, b in ipairs(bodies or {}) do by[b.name] = b end
-  local body = by[rec.b]
-  for _, p in ipairs(rec.bp or {}) do
-    local def = pb.partInfo(p.id)
-    local pw = def and def.power
-    if pw then
-      local o, why = 0, nil
-      if pw.kind == "rtg" then
-        o = pw.gen or 0
-      elseif pw.kind == "solar" and E and E.solarOutput and body then
-        local gx, gy, gz, U, F = ST.partPose(rec, p, pw.lift or 1.0)
-        -- the cells track about the part's +X (= up × front)
-        local ax, ay, az = U.y * F.z - U.z * F.y, U.z * F.x - U.x * F.z, U.x * F.y - U.y * F.x
-        local blk
-        o, _, _, blk = E.solarOutput(pw.gen or 0, body.x + gx, body.y + gy, body.z + gz, ax, ay, az, bodies, ref_flux(E, bodies))
-        o = o or 0
-        if blk then why = "night: " .. tostring(blk) .. " is in the way of the sun" end
-      end
-      supply = supply + o
-      out[#out + 1] = { id = p.id, uid = p.uid, label = def.label, kind = pw.kind, gen = pw.gen, out = o, why = why }
-    end
-  end
-  return supply, out
-end
-
--- The tower of base `bid`: { supply, need, powered, src, t }, worked out at
--- most every power_every seconds (bodies: the caller's read, or now).
+-- ── power: the base grid (M6, step 8; base_grid.lua) ────────────────────────
+-- The tower of base `bid` on its grid: { supply, need, draw, powered, stored,
+-- cap, grid, src, … } (base_grid.towerPower). The grid is solved on change
+-- and every couple of seconds; this only reads its answer. (`bodies` and
+-- `force` are kept for the old callers: a force advances the grid now.)
 function power(bid, bodies, force)
-  local c = pw_cache[bid]
-  local every = (params and params.power_every) or 2.0
-  if c and not force and now() - c.t < every then return c end
-  local T, ST, pb, E = tw[bid], ref("structures"), parts(), ref("electronics")
-  local def = towerDef()
-  local need = (def and def.tower and def.tower.draw) or 2.0
-  c = { t = now(), supply = 0, need = need, powered = false, src = {} }
-  local rec = T and ST and ST.get(T.sid)
-  if rec and pb then
-    c.supply, c.src = sourcesOf(rec, pb, E, bodies or space.bodies() or {}, ST)
-    c.powered = c.supply + 1e-6 >= need
+  local G = ref("base_grid")
+  if not (G and G.towerPower) then
+    local def = towerDef()
+    local need = (def and def.tower and def.tower.draw) or 2.0
+    return { supply = 0, need = need, draw = need, powered = false, stored = 0, cap = 0, src = {} }
   end
-  pw_cache[bid] = c
-  return c
+  if force then
+    if G.markDirty then G.markDirty() end
+    if G.rebuildNow then G.rebuildNow() end
+  end
+  return G.towerPower(bid)
+end
+
+-- One line for a tower's grid (the menu, the station's card):
+-- "battery 1,840 / 4,000 EC (46 %) · 3 structures · 1 cable"
+local function thousands(v)
+  local s = string.format("%d", math.floor((v or 0) + 0.5))
+  local out = s:reverse():gsub("(%d%d%d)", "%1,"):reverse()
+  return (out:gsub("^,", ""))
+end
+function gridLine(pw)
+  local bits = {}
+  if (pw.cap or 0) > 0 then
+    bits[#bits + 1] = string.format("battery %s / %s EC (%d %%)", thousands(pw.stored), thousands(pw.cap),
+      math.floor((pw.stored or 0) / pw.cap * 100 + 0.5))
+  else
+    bits[#bits + 1] = "no storage"
+  end
+  if pw.structures then bits[#bits + 1] = string.format("%d structure%s", pw.structures, pw.structures == 1 and "" or "s") end
+  if (pw.cables or 0) > 0 then bits[#bits + 1] = string.format("%d cable%s", pw.cables, pw.cables == 1 and "" or "s") end
+  if (pw.towers or 0) > 1 then bits[#bits + 1] = string.format("%d towers", pw.towers) end
+  return table.concat(bits, " · ")
 end
 
 -- ── the relay (comms.solve calls this every solve) ──────────────────────────
@@ -304,6 +283,31 @@ function bases(opts)
     end
     return n
   end
+  -- (step 8) the crew at each base: on foot within its radius (their records'
+  -- body-relative points), or at the spaceport for the home base
+  local roster = nil
+  local function crew_at(body, x, y, z, home)
+    local cl = ref("crew")
+    if not (cl and cl.roster) then return nil end
+    roster = roster or cl.roster()
+    local n, R = 0, (B and B.RADIUS) or 150
+    for _, c in ipairs(roster) do
+      if home and c.status == "base" then n = n + 1
+      elseif c.status == "afoot" then
+        -- (a member in the scene: where their body is now, against this
+        -- read of their world; otherwise the record's body-relative point)
+        local cx, cy, cz, cb = tonumber(c.x), tonumber(c.y), tonumber(c.z), c.body
+        local nb = cl.bodyOf and cl.bodyOf(c.id)
+        if nb and nb.valid ~= false and space and space.dominant then
+          cb = space.dominant(nb.x, nb.y, nb.z)
+          local w = cb and space.body(cb)
+          if w then cx, cy, cz = nb.x - w.x, nb.y - w.y, nb.z - w.z end
+        end
+        if cb == body and cx and cy and cz and math.sqrt((cx - x) ^ 2 + (cy - y) ^ 2 + (cz - z) ^ 2) <= R then n = n + 1 end
+      end
+    end
+    return n
+  end
   if bf and bf.baseBody and net and net.station then
     local sx, sy, sz = net.station()
     local b = space.body(bf.baseBody)
@@ -313,7 +317,8 @@ function bases(opts)
       out[#out + 1] = { id = 0, home = true, name = (an and an ~= "") and (an .. " Spaceport") or "The Spaceport", body = bf.baseBody,
                         x = sx, y = sy, z = sz, gx = sx, gy = sy, gz = sz, tier = "ground station", powered = true,
                         linked = true, strength = 1, hops = 0, coverage = cov_of(bf.baseBody),
-                        structures = count_near(bf.baseBody, sx - b.x, sy - b.y, sz - b.z) }
+                        structures = count_near(bf.baseBody, sx - b.x, sy - b.y, sz - b.z),
+                        crew = crew_at(bf.baseBody, sx - b.x, sy - b.y, sz - b.z, true) }
     end
   end
   if B then
@@ -330,7 +335,11 @@ function bases(opts)
                           need = pw.need, src = pw.src, linked = (s and s.connected) or false, strength = s and s.strength or 0,
                           hops = s and s.hops or 0, via = s and s.names or nil, why = s and s.why or nil,
                           coverage = cov_of(r.b), structures = count_near(r.b, T.gx, T.gy, T.gz),
-                          founded = r.d, by = r.by, sid = T.sid, uid = T.uid }
+                          founded = r.d, by = r.by, sid = T.sid, uid = T.uid,
+                          -- (step 8, M6: its grid)
+                          grid = pw.grid, draw = pw.draw, stored = pw.stored, cap = pw.cap, gridStructures = pw.structures,
+                          cables = pw.cables, towers = pw.towers, solar = pw.solar, rtg = pw.rtg, short = pw.short,
+                          gridLine = gridLine(pw), crew = crew_at(r.b, T.gx, T.gy, T.gz, false) }
       end
     end
   end
@@ -392,7 +401,7 @@ function commitName(s)
   local net = ref("comms")
   if net and net.refreshNow then pcall(net.refreshNow) end
   say(string.format("%s founded · its tower is %s", r and r.n or "the base",
-    (power(bid, nil, true).powered and "a ground station") or "a mast until it has 2 EC/s on its pads"))
+    (power(bid, nil, true).powered and "a ground station") or "a mast until its grid has 2 EC/s"))
   return true, r and r.n
 end
 function cancelName() if prompt then return commitName("") end return false end
@@ -404,8 +413,8 @@ local function prompt_tree()
   local where = r and r.b or "?"
   local line = "Base Station Tower on " .. tostring(where)
   local pw = power(prompt.bid)
-  local tier = pw.powered and string.format("a ground station (%.1f EC/s on its pads)", pw.supply)
-    or string.format("a mast until it has %.0f EC/s: stand a Solar Array or an Isotope Skid on its pads", pw.need)
+  local tier = pw.powered and string.format("a ground station (%.1f EC/s on its grid)", pw.supply)
+    or string.format("a mast until its grid has %.0f EC/s: a Solar Array or an Isotope Skid within 150 m, a Battery Bank for the night", pw.draw or pw.need)
   local function submit(n)
     local ok, w = commitName((n and n.text) or prompt.text)
     if not ok and w then prompt.err = w end
@@ -471,6 +480,7 @@ local function provider(t, ctx)
         local pw = power(bid)
         return string.format("%.1f / %.1f EC/s · %s", pw.supply, pw.need, pw.powered and "ground station" or "mast")
       end },
+    { id = "bt_grid", type = "info", label = "Grid", group = "Tower", value = function() return gridLine(power(bid)) end },
     { id = "bt_link", type = "info", label = "Link", group = "Tower", value = function()
         local net = ref("comms")
         local s = net and net.statusOf and net.statusOf("t:" .. tostring(bid))
@@ -500,8 +510,8 @@ function start(node)
     local all = findScripts("base_tower")
     if #all > 1 and all[1].node and all[1].node.id ~= node.id then node:destroy() return end
   end
-  tw, nodes, pw_cache, guard_owners = {}, {}, {}, {}
-  st_ver, bs_ver, ref_flux_v, prompt = nil, nil, nil, nil
+  tw, nodes, guard_owners = {}, {}, {}
+  st_ver, bs_ver, prompt = nil, nil, nil
 end
 
 function update(node, dt)

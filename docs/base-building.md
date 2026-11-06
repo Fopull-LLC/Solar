@@ -9,8 +9,9 @@ grid, levels the ground and casts footings, judges every placement in full,
 keeps an undo ring and takes parts down for a refund. Step 6 (§9) adds the
 Build Stand: a craft put on it, commissioned into a live craft, released,
 driven off and returned to it (L1, L2, L4). Step 7 (§11) adds the Base Station
-Tower: founding a base, the relay tiers, the map and the 10 % unlock. Step 8 (the base
-grid) builds on its hooks.
+Tower: founding a base, the relay tiers, the map and the 10 % unlock. Step 8
+(§12) adds the shared base grid with its storage, the Power Cable and the
+Shield Wall (M6, B9b, M6c).
 
 Read `docs/positions-and-frames.md` first. Everything here is kept in a body's
 frame.
@@ -802,22 +803,11 @@ against its single read of the bodies.
   makes the coverage "moving".
 - `noLinkWhy` names the **nearest** home root.
 
-### Power: the tower's own structure (until the base grid, step 8)
+### Power (step 7's rule, replaced by the base grid in step 8)
 
-- **The choice:** a tower counts the sources on **its own structure**, meaning
-  the same pads. There is no built-in battery.
-- **Example:** a Pad Plate with the tower, and a second plate edge to edge
-  carrying an Isotope Skid, makes 2.0 EC/s. That makes the tower a ground
-  station.
-- `base_tower.power(bid)` sums `sourcesOf(rec)`:
-  - Isotope Skid: `gen`;
-  - Solar Array: `electronics.solarOutput` at the array, 1.35 m up, against
-    the home-orbit flux. These worlds don't turn, so a spot's day is its
-    world's year, and an array on the night side gives nothing.
-- It is worked out at most every 2 s, and only when the solve, the menu or
-  the list asks.
-- **There is no storage.** A solar-only tower falls back to a mast at night.
-  Step 8's shared grid, its storage and its cables replace this rule.
+Step 7 counted only the sources on the tower's own structure, with no
+storage. Step 8 (§12) replaced that: `base_tower.power(bid)` now reads the
+tower's base grid (`base_grid.towerPower`), and `sourcesOf` is gone.
 
 ### On the map and in the station (M5)
 
@@ -902,3 +892,186 @@ against its single read of the bodies.
   - save and reload.
 
   Pictures are t1..t7; the other modes call `BK.unlock()` first.
+
+## 12. Step 8: the base grid, the Power Cable and the Shield Wall (M6, B9b, M6c)
+
+Q19 is settled: **every structure within 150 m of a base's tower shares one
+grid automatically; a Power Cable joins grids beyond that.**
+
+### The parts (`parts_base`, `tools/gen_base_parts.py`)
+
+| Part | Prefab | Real size | Mass | Price | What it does |
+|---|---|---|---|---|---|
+| Battery Bank | `BaseBattery` | 2.4 × 1.2 × 2.2 m outdoor battery cabinet on a skid: two pairs of doors, a thermal unit with its fan on one end, a DC junction box on the other | 2.6 t | $3,500 | stores 4,000 EC for its grid, charged at 92 %; arrives half charged |
+| Shield Wall | `BaseShieldWall` | 2 × 2 × 0.5 m precast concrete block (2.3 t/m³): chamfered arrises, a shear key, two lifting loops, a stencilled plate | 4.6 t | $1,100 | `shield.k = 0.05`: lets 5 % of a core's dose through, by its record |
+| Power Cable | `BaseCableDrum` (the card's drum) | 4-core 16 mm² steel-wire-armoured cable, 32 mm across | 1.4 kg/m | $3 a metre | a run from one placed part to another, up to 1.5 km (three 500 m drums spliced) |
+
+- The bank and the wall are `onDeck` parts like the step-7 sources, with
+  collider boxes (`Wall N`). The wall is one box; nobody hides inside it.
+- The Isotope Skid gains `rad = { rad = 0.002, omni = true }`: its four cells
+  in their cage give a weak field all round (about 0.3 % of a lethal dose an
+  hour at 4 m, 2 % at the cage). That is the first ground source; step 11's
+  ground reactors add cones.
+- The addendum gave the wall 2.4 t; 2 m³ of ordinary concrete is 4.6 t, so
+  the part weighs that.
+
+### The grid (M6; `scripts/base_grid.lua`)
+
+- **Members.** `buildGrids` is a union-find over structures. A structure
+  with any part within 150 m of a standing tower joins that tower's base,
+  and a cable joins the structures at its two ends. A grid is a connected
+  set. A set with nothing that makes, stores or draws power is no grid.
+- **The model** (`gridModel`):
+  - sources: Isotope Skids (`rtg`, their EC/s always) and Solar Arrays
+    (`solar`);
+  - loads: each tower's 2 EC/s, in base order (and any part with
+    `power.kind = "load"`: none yet, because the shed and the hab are not
+    lived in);
+  - storage: the Battery Banks, one pool. Every bank in a grid sits at the
+    same state of charge.
+- **The light is periodic.** These worlds don't turn, so a spot's day is its
+  world's year. The year (from the world's conic round its sun) is cut into
+  96 slots, anchored once on the agency clock (`grid.a0`). Each array's output
+  in each slot is worked out once (`slotLight`: the world moved along its
+  conic with `electronics.kepler`, then `electronics.solarOutput` there) and
+  cached by the array's pose. The profile is rebuilt only when the grid
+  changes.
+- **The store is exact** (`advance`). Within a slot the supply is constant,
+  so the charge is a straight line, clamped:
+  - a surplus charges at the banks' efficiency up to full;
+  - a deficit drains to empty, then the loads are shed (towers in base order)
+    until the supply covers them again;
+  - so one call of any length lands where any number of small calls do
+    (to 1e-6 in the smoke test), the pattern of step 3's thermal `advance`;
+  - a long step skips whole years: a year that comes back to where it began
+    repeats, and one that never touches full or empty adds the same every year
+    until it would.
+- **When it is solved.** On change (structures, bases or cables) and every
+  2 s, never in a frame. A question asked right after a change
+  (`towerPower`, `gridOfStruct`) rebuilds on the spot.
+- **The catch-up.** On load, the grids advance from `grid.a` (the agency
+  clock of the last advance) to now in one step, capped at 30 game days.
+- **Save:** `grid.a0`, `grid.a`, and `grid.e = { ["sid:uid"] = EC }` for each
+  bank.
+- **The tower** (`base_tower.power(bid)` → `base_grid.towerPower`) is a
+  ground station while its load is served and a mast while it is shed.
+  `sourcesOf` is gone. The comms solve, the name field, the tower's menu
+  (Power, and a new Grid row) and the station read it.
+- **`bases()`** gains, per base: `grid`, `draw`, `stored`, `cap`,
+  `gridStructures`, `cables`, `towers`, `solar`, `rtg`, `short`, a one-line
+  `gridLine`, and `crew`. `crew` counts members on foot within 150 m of the
+  tower, or at the spaceport for base #0.
+- **The station's base card** (`tracking_station` `base_card`) shows the
+  tower's tier and draw, a CRT block (GRID IN / OUT EC/s, BATTERY %, and how
+  long the battery lasts with no sun), and the grid line with the crew count.
+  Nothing else in the station changed.
+
+### The Power Cable (B9b; `scripts/base_cable.lua`)
+
+- **Laying it** is the Build Kit with the drum in hand. The first click on a
+  placed part makes the cable off there. The Engineer walks or drives the
+  run out, with a green or red preview line drawn from the end along the
+  ground. A click on a part of another structure lays it, billed by the metre
+  plus shipping (`base_economy.quote`), with its mass on the hint.
+- **The rules:**
+  - both ends on placed parts of two different structures not already on one
+    grid;
+  - at most 1.5 km along the ground;
+  - on the home world.
+- **The drawing** is one mesh per cable (`mesh.build`, a 6-sided tube in the
+  rubber set). It leaves each part's side 0.6 m up, hangs down to the ground
+  in a curve that meets it tangentially 1.6 m out, and lies along the great
+  circle between, 3 cm over the ground. The ground comes from the terrain's
+  distance field (`terrain.query`), sampled every 3 m when the cable is laid,
+  and the heights are kept in the record, so a load does no terrain work.
+  The mesh is parented to its planet and spawned while the focus is on that
+  world.
+- **Taking it up:**
+  - Ctrl+Z within a minute takes it up for a full refund (a step in
+    `field_builder`'s ring, through `pushHistory`), and Ctrl+Shift+Z lays it
+    again.
+  - Right-click either end part → **Take up the cable** (3 s) gives the price
+    back past the minute, with the fee kept (`deconstructRefund`).
+  - A part taken down takes its cables up with it, on the same rule.
+- **Records:** `cable.list`, `cable.seq`,
+  `cable.<id> = { id, b, a = { sid, uid }, z = { sid, uid }, len, h = { radius … }, t, d, by, paid }`.
+- **Not modelled:** line losses. A 1.5 km low-voltage run would lose real
+  power; the grid treats a cable as lossless.
+
+### The Shield Wall (M6c; `scripts/base_shield.lua`)
+
+- **The rule is step 3's.** What stands between a core and a crew member is
+  counted **by part record**, never by a ray hitting a solid. A placed part
+  with a `shield` is an oriented box in its body's frame:
+  - `blockersOn(body, a, b)` returns the boxes near a segment;
+  - `wallFactor` returns the product of their `k` through
+    `thermal.shieldFactor`;
+  - one wall lets 5 % through, two 0.25 %.
+- **Crew on foot only.** A4 traces the terrain only for crew on foot. A
+  seated member is behind their own craft's parts, which the craft's pass
+  counts. The walls are added to the on-foot path:
+  - **Craft reactors:** `vessel_thermal.radiation` multiplies the rate of
+    each member on foot in a core's cone by `wallFactor`, the core and the
+    member placed against one body read, before the terrain ray.
+  - **Ground sources** (`base_shield.pass`, twice a second, only while one
+    exists): each member on foot on the source's world gets a distance test,
+    then the inverse square from the part's `rad`, the walls, and the terrain
+    ray. It is written to the crew record every 2 s through `crew.addDose`.
+- **The draw agrees with the dose by construction.** With the kit open,
+  `base_shield.drawFields` draws:
+  - every ground source within 80 m (an omni source as three rings, where the
+    field falls to 1 %, 0.5 % and 0.2 % an hour);
+  - every live craft core within 120 m, the VAB's way (eight lines, three
+    rings). `vessel_thermal` publishes them body-relative.
+  - a VAB marker on each member on foot that a pass reached: red in the
+    open, amber behind shielding.
+
+  The marker's colour is read from the numbers the dose pass just wrote
+  (`noted`), so the draw and the dose cannot disagree.
+
+### Cost
+
+- **Per frame:** `base_grid` compares three version numbers. `base_cable`
+  checks the structures' version and runs a 1 Hz spawn pass. `base_shield`
+  costs nothing with no source and the kit closed.
+- **Every 2 s**, the grids advance: a few multiplies per slot crossed. At 1x
+  that is none or one slot; at 1000x about a hundred.
+- **On a change**, the grids are rebuilt: `buildGrids` is parts × towers, and
+  the profiles come from the cache. The probe's numbers are in step 8's NOTES.
+
+### Tests and the probe
+
+- `luajit solar/tests/smoke_base_grid.lua` covers:
+  - the parts;
+  - membership (150 m, a cable, two bases on one cable);
+  - the year from the conic, and an array's year of slots;
+  - one big step against thousands of uneven small ones (3.7 years; a short
+    grid that sheds; 20 days with whole years skipped; a straight year);
+  - night storage, with a bank and without;
+  - the scene half: the solve only every 2 s, the catch-up on load, the
+    charge saved, `bases()` with grid and crew;
+  - cables: the geometry (ends on the parts' sides, the hang, the run on the
+    ground), the rules, the bill, the ring's undo and redo, a part taken down
+    taking its cable up, the save.
+- `smoke_thermal` adds the walls: their boxes by record, one and two walls,
+  past the wall's end, another world, the ground-source pass, the draw's
+  numbers, and `vessel_thermal`'s pass with a craft core on its side and a
+  member on foot behind two walls.
+- `tools/perf/buildkitprobe.sh <engine> grid` (PATCHES=funds.patch; the mode
+  is `tools/perf/gridprobe_modes.lua`) covers, on the far side:
+  - a tower, two Solar Arrays and a Battery Bank on one grid;
+  - the night under 50x warp, a ground station all night;
+  - the station's card at night;
+  - an Isotope Skid's dose in the open and behind a Shield Wall;
+  - a second base 1.05 km on, with a cable walked back to the first: one grid;
+  - the costs, save and reload.
+
+  Pictures are g1..g7.
+
+### Open for later steps
+
+- **Off-world grids.** A moon's light needs its own slots, because its
+  sunlight follows its own orbit. Off-world building is step 13's.
+- **Reactors as ground sources** (step 11) join the grid's sources and
+  `base_shield`'s cones; the rulebook already takes them.
+- **Loads for the shed and the hab** come once they are lived in (EN1/EN2).

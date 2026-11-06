@@ -1307,8 +1307,23 @@ base_card = function(e, rows)
   local b = e.outpost or {}
   local bt = ref("base_tower")
   local pw = bt and bt.power and e.baseId and bt.power(e.baseId) or b
-  rows[#rows + 1] = txt("tw", pw.powered and "panel/keys" or "panel/cell", string.format("Tower: %s  ·  %.1f / %.1f EC/s from its pads",
-    pw.powered and "a ground station" or "a mast", pw.supply or 0, pw.need or 2))
+  rows[#rows + 1] = txt("tw", pw.powered and "panel/keys" or "panel/cell", string.format("Tower: %s  ·  draws %.1f EC/s",
+    pw.powered and "a ground station" or "a mast", pw.draw or pw.need or 2))
+  -- (step 8, M6) the base grid: in, out, the battery, what is on it
+  local gl = { string.format("GRID  IN %.1f  OUT %.1f EC/s", pw.supply or 0, pw.need or 0) }
+  if (pw.cap or 0) > 0 then
+    gl[#gl + 1] = string.format("BATTERY %d %%  %d / %d EC", math.floor((pw.stored or 0) / pw.cap * 100 + 0.5), math.floor((pw.stored or 0) + 0.5), math.floor(pw.cap + 0.5))
+  end
+  local bg = ref("base_grid")
+  local left = bg and bg.nightLeft and pw.grid and bg.nightLeft(pw.grid)
+  if left and (pw.cap or 0) > 0 then
+    gl[#gl + 1] = string.format("NO SUN  %s ON THE BATTERY", left >= 3600 and string.format("%.1f H", left / 3600) or string.format("%d MIN", math.floor(left / 60)))
+  end
+  rows[#rows + 1] = crt("grid", gl)
+  local bits = {}
+  if bt and bt.gridLine then bits[#bits + 1] = bt.gridLine(pw) end
+  if b.crew then bits[#bits + 1] = string.format("%d crew here", b.crew) end
+  if #bits > 0 then rows[#rows + 1] = txt("gr", "panel/cellMuted", table.concat(bits, "  ·  ")) end
   if b.linked and (b.hops or 0) == 0 then
     rows[#rows + 1] = txt("sig", "panel/cellMuted", "A root of the network: craft that hear it are home.")
   elseif b.linked then
@@ -1318,7 +1333,7 @@ base_card = function(e, rows)
   end
   if b.coverage then rows[#rows + 1] = txt("cov", "panel/cellMuted", string.format("%s ground %d%% linked", e.body or "?", pct(b.coverage))) end
   if not pw.powered then
-    rows[#rows + 1] = txt("ab", "panel/hint", "Stand a Solar Array or an Isotope Skid on its pads: 2 EC/s makes the tower a ground station.")
+    rows[#rows + 1] = txt("ab", "panel/hint", "A Solar Array or an Isotope Skid within 150 m (or cabled to it) and a Battery Bank for the night: 2 EC/s makes the tower a ground station.")
   end
   if e.date then rows[#rows + 1] = txt("by", "panel/cellMuted", "Founded " .. e.date) end
 end

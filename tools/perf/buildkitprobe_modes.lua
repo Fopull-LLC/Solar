@@ -208,7 +208,7 @@ function BK.run()
   BK.check("panel", catn ~= nil, "the parts column is up (Field Catalogue node)")
   local cp = findScript("catalog_panel")
   local list = cp and cp.listFor and cp.listFor(fb, "ALL", "") or {}
-  BK.check("cards", #list == 7 and list[1].id == "padPlate", "ALL lists the BASE parts: %d", #list)
+  BK.check("cards", #list == 10 and list[1].id == "padPlate", "ALL lists the BASE parts: %d", #list)
   local p1, p2 = fb.cardLines("padPlate", fb.partInfo("padPlate"), false)
   BK.check("price", p1 == "$1,040" and p2 == "$900 + $140 shipping · Pell Groundworks", "the Pad Plate card: %s / %s", tostring(p1), tostring(p2))
   wait(4)
@@ -848,7 +848,7 @@ function BK.run_stand()
   local list = cp and cp.listFor and cp.listFor(fb, "ALL", "") or {}
   local has = false
   for _, e in ipairs(list) do if e.id == "stand" then has = true end end
-  BK.check("card", #list == 7 and has, "the BASE column lists the Build Stand (%d cards)", #list)
+  BK.check("card", #list == 10 and has, "the BASE column lists the Build Stand (%d cards)", #list)
   cp.pickPart("stand")
   BK.aim_at(8, 0)
   BK.settle(30)
@@ -1201,7 +1201,7 @@ function BK.run_tower()
   local list = cp and cp.listFor and cp.listFor(fb, "ALL", "") or {}
   local has = {}
   for _, e in ipairs(list) do has[e.id] = true end
-  BK.check("cards", #list == 7 and has.tower and has.solarArray and has.isotopeSkid, "the BASE column lists the tower and its two sources (%d cards)", #list)
+  BK.check("cards", #list == 10 and has.tower and has.solarArray and has.isotopeSkid, "the BASE column lists the tower and its two sources (%d cards)", #list)
   local p1, p2 = fb.cardLines("tower", fb.partInfo("tower"), false)
   P("BK tower card: %s / %s", tostring(p1), tostring(p2))
   -- 3. A PAD PLATE, THE TOWER ON ITS DECK

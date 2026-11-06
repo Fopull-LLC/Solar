@@ -45,6 +45,9 @@
 --   Station Tower   a 12 m self-supporting lattice and a 3 m dish: 1.5 t of steel
 --   Solar Array     two 1.2 x 2.0 m modules on a single-axis tracker: 0.18 t
 --   Isotope Skid    four MMRTG-class cells (45 kg each) in a caged rack: 0.3 t
+--   Battery Bank    a 2.4 x 1.2 x 2.2 m outdoor battery cabinet on a skid: 2.6 t
+--   Shield Wall     a 2 x 2 x 0.5 m precast concrete block (2.3 t/m3): 4.6 t
+--   Power Cable     4-core 16 mm2 steel-wire-armoured cable: 1.4 kg a metre
 --
 -- Step 6 (L1) adds, for parts with behaviour:
 --   script     the scene script that owns the part's state (craft_stand for
@@ -112,10 +115,37 @@ PARTS = {
                kind = "structural", fieldOnly = true, seat = 0.5460, half = { x = 0.85, y = 0.55, z = 0.60 },
                slope = 0.6, onDeck = true, grade = 1.0, footPad = 0.15,
                power = { kind = "rtg", gen = 2.0 },
-               desc = "four Isotope Cells in a caged rack · 0.3 t · 2 EC/s day and night" },
+               -- (step 8, M6c: the cells' own gamma, unshielded but for the cage:
+               -- a weak field all round, base_shield.lua's ground-source pass)
+               rad = { rad = 0.002, omni = true },
+               desc = "four Isotope Cells in a caged rack · 0.3 t · 2 EC/s day and night · keep clear of the cage" },
+  -- Step 8 (M6): the base grid's storage. `power`: kind "store" = cap EC the
+  -- grid can hold, charged at `eff` (base_grid.lua). A new bank arrives at
+  -- `fill` of its capacity (batteries ship part charged).
+  batteryBank = { prefab = "BaseBattery", label = "Battery Bank", h = 2.26, rx = 1.35, rz = 0.65, mass = 2.6, cost = 3500,
+               kind = "structural", fieldOnly = true, seat = 1.1300, half = { x = 1.35, y = 1.13, z = 0.65 },
+               slope = 0.6, onDeck = true, grade = 1.2, footPad = 0.20,
+               power = { kind = "store", cap = 4000, eff = 0.92, fill = 0.5 },
+               desc = "outdoor battery cabinet on a skid · 2.6 t · stores 4,000 EC for the base grid's night" },
+  -- Step 8 (M6c): the Shield Wall. `shield.k` = the share of a core's dose
+  -- that gets through it (thermal.shieldFactor, by part record: never a ray
+  -- hit). Half a metre of ordinary concrete.
+  shieldWall = { prefab = "BaseShieldWall", label = "Shield Wall", h = 2.14, rx = 1.0, rz = 0.26, mass = 4.6, cost = 1100,
+               kind = "structural", fieldOnly = true, seat = 1.0675, half = { x = 1.0, y = 1.0, z = 0.25 },
+               slope = 0.6, onDeck = true, grade = 1.0, footPad = 0.15,
+               shield = { k = 0.05 },
+               desc = "2 x 2 x 0.5 m precast shielding block · 4.6 t · lets 5 % of a reactor's dose through" },
+  -- Step 8 (B9b): the Power Cable. Not a part set down but a RUN laid from one
+  -- placed part to another (base_cable.lua): `cable` = the longest run (m), its
+  -- mass and price a metre, how high it leaves a part. The prefab is the
+  -- drum, for the card.
+  powerCable = { prefab = "BaseCableDrum", label = "Power Cable", h = 1.45, rx = 0.65, rz = 0.65, mass = 0.0014, cost = 3,
+               kind = "structural", fieldOnly = true, seat = 0.7250,
+               cable = { max = 1500, kgm = 1.4, perm = 3.0, lift = 0.6, r = 0.018 },
+               desc = "4-core 16 mm² armoured cable · 1.4 kg/m · $3 a metre · joins two grids, up to 1.5 km a run" },
 }
 
-ORDER = { "padPlate", "shed", "hab", "stand", "tower", "solarArray", "isotopeSkid" }
+ORDER = { "padPlate", "shed", "hab", "stand", "tower", "solarArray", "isotopeSkid", "batteryBank", "shieldWall", "powerCable" }
 
 -- The panel's sections: { { title, ids } } (catalog_panel's host shape).
 function catalogue()

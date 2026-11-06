@@ -45,7 +45,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gen_part_meshes import ROOT, PREFABS, box, disk, lathe, rot_x, rot_z, tube  # noqa: E402
-from base_models import (CModel, CONC, CONT_BLUE, DARK, GREY, LIGHT, PAINT, RUBBER, SAFETY, Shell,  # noqa: E402
+from base_models import (CModel, CONC, CONC_DARK, CONT_BLUE, DARK, GREY, LIGHT, PAINT, RUBBER, SAFETY, Shell,  # noqa: E402
                          SLATE, WARM, LAMP_WARM, zcheck, lattice_column, dish, yagi, railing, obstruction, quat_x)
 import gen_base  # noqa: E402
 
@@ -611,6 +611,122 @@ def isotope_skid():
     return m, sh
 
 
+# ── BATTERY BANK (step 8: the base grid's storage) ──────────────────────────
+# An outdoor battery cabinet on a steel skid, the size of a utility
+# battery-energy-storage enclosure: 2.4 (x) x 1.2 (z) x 2.2 m, LFP racks
+# behind two pairs of front doors, a thermal-management unit (a split-case
+# air conditioner with its fan) on the right end, louvres low on the back, a
+# DC junction box with its conduit on the left end and the warning placards.
+# 2.6 t fitted; 4,000 EC.
+
+def battery_bank():
+    m = CModel(seed=97)
+    sh = Shell()
+    L, D, H, k = 2.4, 1.2, 2.05, 0.15
+    for s in (-1, 1):
+        bx(m, "Steel", DARK, (0, k / 2, s * (D / 2 - 0.07)), (L + 0.1, k, 0.14))
+    for x in (-0.9, 0.0, 0.9):
+        bx(m, "Steel", DARK, (x, k / 2, 0), (0.12, k, D - 0.28))
+    bx(m, "Clad", PAINT, (0, k + H / 2, 0), (L, H, D))
+    bx(m, "Steel", GREY, (0, k + H + 0.03, 0), (L + 0.08, 0.06, D + 0.08))
+    sh.add((0, (k + H) / 2 + 0.015, 0), (L + 0.1, k + H + 0.03, D + 0.08))
+    # the doors: two pairs on the front (+Z), their seams, handles and hinges
+    for c in (-0.6, 0.6):
+        for s in (-1, 1):
+            x = c + s * 0.29
+            bx(m, "Clad", WARM, (x, k + H / 2, D / 2 + 0.006), (0.56, H - 0.16, 0.012))
+        bx(m, "Steel", DARK, (c, k + H / 2, D / 2 + 0.014), (0.012, H - 0.16, 0.006))
+        for s in (-1, 1):
+            tb(m, "Steel", LIGHT, (c + s * 0.05, k + H / 2 - 0.15, D / 2 + 0.035), (c + s * 0.05, k + H / 2 + 0.15, D / 2 + 0.035), 0.012, segs=6)
+            for hy in (0.35, H - 0.35):
+                bx(m, "Steel", GREY, (c + s * 0.57, k + hy, D / 2 + 0.018), (0.03, 0.10, 0.02))
+    # the placards: a hazard square on each pair, a rating plate
+    for c in (-0.6, 0.6):
+        bx(m, "Steel", SAFETY, (c + 0.25, k + 1.55, D / 2 + 0.016), (0.20, 0.20, 0.004))
+        bx(m, "Steel", DARK, (c + 0.25, k + 1.55, D / 2 + 0.0195), (0.10, 0.10, 0.003))
+    bx(m, "Steel", LIGHT, (0.0, k + 1.15, D / 2 + 0.016), (0.10, 0.07, 0.004))
+    # louvres low on the back
+    for i in range(6):
+        bx(m, "Steel", DARK, (-0.6 + i * 0.24, k + 0.35, -D / 2 - 0.012), (0.18, 0.14, 0.02))
+        for j in range(4):
+            bx(m, "Steel", GREY, (-0.6 + i * 0.24, k + 0.30 + j * 0.035, -D / 2 - 0.024), (0.17, 0.008, 0.012))
+    # the thermal unit on the right end (+X): a case, its fan guard and coil
+    bx(m, "Clad", LIGHT, (L / 2 + 0.17, k + 1.25, 0), (0.34, 0.80, 0.90))
+    fan = CModel(seed=3)
+    fan.ground = False
+    m.color = DARK
+    lathe(fan, "Steel", [(0.30, 0.0), (0.31, 0.02), (0.05, 0.02), (0.0, 0.03)], segs=24)
+    m.merge(fan, M=rot_z(-math.pi / 2), t=(L / 2 + 0.345, k + 1.30, 0))
+    for j in range(5):
+        tb(m, "Steel", GREY, (L / 2 + 0.36, k + 1.30 - 0.24 + j * 0.12, -0.30), (L / 2 + 0.36, k + 1.30 - 0.24 + j * 0.12, 0.30), 0.006, segs=4)
+    sh.add((L / 2 + 0.17, k + 1.25, 0), (0.34, 0.80, 0.90))
+    # the DC junction box on the left end, its conduit to the skid
+    bx(m, "Clad", PAINT, (-L / 2 - 0.07, k + 0.95, 0.15), (0.14, 0.40, 0.34))
+    bx(m, "Steel", SAFETY, (-L / 2 - 0.145, k + 1.08, 0.15), (0.004, 0.08, 0.20))
+    tb(m, "Steel", GREY, (-L / 2 - 0.07, k + 0.75, 0.15), (-L / 2 - 0.07, k + 0.02, 0.15), 0.03, segs=8)
+    return m, sh
+
+
+# ── SHIELD WALL (M6c: blocks the A4 radiation cone by its record) ───────────
+# A precast concrete shielding block, 2.0 (x) x 2.0 (h) x 0.5 m (z): ordinary
+# concrete (2.3 t/m3: 4.6 t), chamfered arrises, a shear key along the top and
+# a groove under it so blocks stack, two cast-in lifting loops, a stencilled
+# number plate. Half a metre of concrete lets about 5 % of a core's gamma
+# through (parts_base shieldWall.shield.k).
+
+def shield_wall():
+    m = CModel(seed=99)
+    sh = Shell()
+    W, H, T, c = 2.0, 2.0, 0.5, 0.03
+    bx(m, "Concrete", CONC, (0, H / 2, 0), (W - 2 * c, H, T))
+    bx(m, "Concrete", CONC, (0, H / 2, 0), (W, H - 2 * c, T - 2 * c))
+    # the shear key along the top
+    bx(m, "Concrete", CONC_DARK, (0, H + 0.04, 0), (W - 0.3, 0.08, 0.16))
+    sh.add((0, H / 2, 0), (W, H, T))
+    # lifting loops, cast in near each end
+    for s in (-1, 1):
+        ring = CModel(seed=2)
+        ring.ground = False
+        m.color = GREY
+        lathe(ring, "Steel", [(0.06, 0.0), (0.075, 0.015), (0.06, 0.03), (0.045, 0.015), (0.06, 0.0)], segs=12)
+        m.merge(ring, M=rot_z(math.pi / 2), t=(s * 0.7, H + 0.06, 0))
+        bx(m, "Steel", DARK, (s * 0.7, H + 0.002, 0), (0.14, 0.004, 0.14))
+    # the stencilled plate, on both faces
+    for f in (-1, 1):
+        bx(m, "Steel", SAFETY, (0.55, 1.55, f * (T / 2 + 0.004)), (0.42, 0.16, 0.008))
+        bx(m, "Steel", DARK, (0.55, 1.55, f * (T / 2 + 0.009)), (0.30, 0.06, 0.004))
+        bx(m, "Steel", DARK, (-0.62, 0.22, f * (T / 2 + 0.003)), (0.36, 0.03, 0.006))
+    return m, sh
+
+
+# ── CABLE DRUM (B9b: the Power Cable's card and hold model) ─────────────────
+# A 500 m drum of 4-core 16 mm2 steel-wire-armoured cable: two 1.3 m plywood
+# flanges on a steel barrel, the black cable wound between, its end tied off,
+# on a steel jack stand. (The cable a run lays is a mesh: base_cable.lua.)
+
+def cable_drum():
+    m = CModel(seed=101)
+    Rf, Wd, ax = 0.65, 0.80, 0.80
+    for s in (-1, 1):
+        m.color = WARM
+        tube(m, "Clad", (s * Wd / 2 - 0.02 * s, ax, 0), (s * Wd / 2 + 0.02 * s, ax, 0), Rf, segs=28, uv_m=0.5)
+    m.color = RUBBER
+    tube(m, "Dark", (-Wd / 2 + 0.02, ax, 0), (Wd / 2 - 0.02, ax, 0), 0.52, segs=28, uv_m=2.0)
+    for i in range(7):
+        x = -Wd / 2 + 0.06 + i * (Wd - 0.12) / 6
+        tube(m, "Dark", (x - 0.03, ax, 0), (x + 0.03, ax, 0), 0.535, segs=28, uv_m=2.0)
+    tb(m, "Steel", GREY, (-Wd / 2 - 0.25, ax, 0), (Wd / 2 + 0.25, ax, 0), 0.04, segs=10)
+    # the jack stands
+    for s in (-1, 1):
+        x = s * (Wd / 2 + 0.18)
+        for z in (-0.45, 0.45):
+            tb(m, "Steel", SAFETY, (x, 0.02, z), (x, ax, 0), 0.03, segs=6)
+        bx(m, "Steel", DARK, (x, 0.02, 0), (0.12, 0.04, 1.0))
+    # the tail, tied off to a flange
+    tb(m, "Dark", RUBBER, (0.2, ax + 0.53, 0.0), (0.38, ax + 0.30, 0.42), 0.014, segs=8)
+    return m, Shell()
+
+
 # ── BUILD KIT (the item) ─────────────────────────────────────────────────────
 # A rugged field tablet in a hard carry frame: 0.30 x 0.22 x 0.035 m with
 # rubber corner bumpers and a top carry handle, 1.6 kg. Carried by the handle
@@ -758,6 +874,15 @@ def main():
     im, ish = isotope_skid()
     write_part("BaseIsotope", "ISOTOPE SKID — four Isotope Cells in a caged rack (BASE section; powers a tower on its structure).",
                ("isotope_skid.glb", im), ish, [], dry)
+    bm, bsh = battery_bank()
+    write_part("BaseBattery", "BATTERY BANK — an outdoor battery cabinet on a skid (BASE section; the base grid's storage, scripts/base_grid.lua).",
+               ("battery_bank.glb", bm), bsh, [], dry)
+    wm, wsh = shield_wall()
+    write_part("BaseShieldWall", "SHIELD WALL — a 2 x 2 x 0.5 m precast shielding block (BASE section; blocks the radiation cone by its record, scripts/base_shield.lua).",
+               ("shield_wall.glb", wm), wsh, [], dry)
+    dm, _ = cable_drum()
+    write_part("BaseCableDrum", "CABLE DRUM — the Power Cable's card and hold model (BASE section; the cable itself is a mesh, scripts/base_cable.lua).",
+               ("cable_drum.glb", dm), None, [], dry)
     km = build_kit()
     write_part("ItemBuildKit", "BUILD KIT — the Engineer's field tablet, carried by its handle (scripts/field_builder.lua).",
                ("build_kit.glb", km), None, [], dry, folder="models/items")

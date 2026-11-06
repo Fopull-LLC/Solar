@@ -161,6 +161,10 @@ scripts.field_builder = setmetatable({}, { __index = function(_, k) if k == "las
 local BT = load_script("base_tower.lua", env(s, scripts, { space = SPACE }))
 scripts.base_tower = BT
 BT.start({ id = 1 })
+-- (step 8: the tower's power is its base grid's)
+local BG = load_script("base_grid.lua", env(s, scripts, { space = SPACE }))
+scripts.base_grid = BG
+BG.start({ id = 2 })
 local BS = scripts.bases
 local up, fwd = { x = 0, y = 0, z = 1 }, { x = 1, y = 0, z = 0 }   -- the far side: Vever's +Z pole
 local rec = ST.newRecord(nil, "Vever", 0, 0, R, up, fwd, "padPlate", { by = 2 })
@@ -197,7 +201,7 @@ BT.update({}, 0.016)
 check(not BS.get(bid).down and #BS.list(true) == 1 and ST.getPart(sid, tuid).base == bid,
   "a placement's redo (a copy with no base id): the base standing down there is its own")
 
--- ── power from its own structure ────────────────────────────────────────────
+-- ── power from its base grid (step 8: base_grid.lua) ────────────────────────
 local pw = BT.power(bid, nil, true)
 check(pw.supply == 0 and pw.need == 2.0 and not pw.powered, "a tower alone: 0 / 2 EC/s, a mast")
 local by = {}
@@ -211,7 +215,7 @@ check(n1.frame == "Vever" and near(n1.rz, R + 0.2 + T.tower.mast, 1e-6) and near
 ST.addPart(sid, { id = "isotopeSkid", x = 0, y = 0.2, z = 1.4 })   -- (a second plate would carry it; the record is what counts)
 BT.update({}, 0.016)
 pw = BT.power(bid, nil, true)
-check(near(pw.supply, 2.0) and pw.powered and #pw.src == 1 and pw.src[1].label == "Isotope Skid", "an Isotope Skid on its structure: 2 / 2 EC/s, a ground station")
+check(near(pw.supply, 2.0) and pw.powered and #pw.src == 1 and pw.src[1].label == "Isotope Skid", "an Isotope Skid on its grid: 2 / 2 EC/s, a ground station")
 local nodes2 = BT.commsNodes(by, bodies, E)
 check(nodes2[1].home == true and near(nodes2[1].power, E.COMMS.station) and nodes2[1].tower, "powered on the home world: a second home root at 4.0e5")
 s["base.body"] = "Elsewhere"
@@ -219,18 +223,22 @@ BT.power(bid, nil, true)
 local nodes3 = BT.commsNodes(by, bodies, E)
 check(not nodes3[1].home and near(nodes3[1].relay, E.COMMS.station) and nodes3[1].landed, "off the home world: a 4.0e5 relay, home only through a path")
 s["base.body"] = "Vever"
--- solar: a stand-in for the sun's answer (electronics.solarOutput)
+-- solar: an array's light slot by slot (base_grid.slotLight), against a
+-- stand-in for the sun's answer (electronics.solarOutput) and the real one
 local sun_says = { o = 3.0, blk = nil }
 local Esun = setmetatable({ solarOutput = function(gen) return sun_says.blk and 0 or gen, 1, 1, sun_says.blk end,
   sunOf = function() return bodies[2], 1 end }, { __index = E })
 local srec = ST.newRecord(nil, "Vever", R, 0, 0, { x = 1, y = 0, z = 0 }, { x = 0, y = 0, z = 1 }, "solarArray")
-local sup, src = BT.sourcesOf(srec, PB, Esun, bodies, ST)
-check(near(sup, 3.0) and src[1].kind == "solar", "a Solar Array in the sun: 3 EC/s")
+local arr = BG.gridModel({ bases = {}, parts = { { rec = srec, p = srec.bp[1], def = SA } } }, ST.partPose, 2.0).arrays[1]
+local ctx = { E = Esun, body = bodies[1], sun = bodies[2], ref = 1, L = 10, N = 4, lead = 0 }
+local lit = BG.slotLight(arr, ctx)
+check(near(lit[1], 3.0) and near(lit[4], 3.0), "a Solar Array in the sun: 3 EC/s in every slot")
 sun_says.blk = "Vever"
-sup, src = BT.sourcesOf(srec, PB, Esun, bodies, ST)
-check(sup == 0 and tostring(src[1].why):find("night", 1, true), "...at night: nothing (" .. tostring(src[1].why) .. ")")
-local sup3 = BT.sourcesOf(srec, PB, E, bodies, ST)
-check(type(sup3) == "number" and sup3 >= 0 and sup3 <= 3.0 * 4, "the real solarOutput answers for an array on the ground (" .. string.format("%.2f", sup3) .. ")")
+lit = BG.slotLight(arr, ctx)
+check(lit[1] == 0 and lit[3] == 0, "...at night: nothing")
+ctx.E = E
+local lit3 = BG.slotLight(arr, ctx)
+check(type(lit3[1]) == "number" and lit3[1] >= 0 and lit3[1] <= 3.0 * 4, "the real solarOutput answers for an array on the ground (" .. string.format("%.2f", lit3[1]) .. ")")
 
 -- ── the network (the real solveNetwork) ─────────────────────────────────────
 local W = { { name = "Vever", x = 0, y = 0, z = 0, radius = R } }

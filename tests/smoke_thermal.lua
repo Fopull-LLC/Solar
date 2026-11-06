@@ -268,6 +268,117 @@ do
   check(#done == 2 and #q == 0, "catching up on the save clock: both rods out at once")
 end
 
+-- ── M6c (step 8): Shield Walls on the ground, by part record ────────────────
+-- base_shield.lua against the real parts_base / structures, a stub save, a
+-- stub crew on foot; and vessel_thermal's dose pass with a wall between a
+-- craft's core and a member on foot.
+do
+  local function envS(store, scripts, extra)
+    local e = setmetatable({ time = 5.0,
+      save = { get = function(k) return store[k] end, set = function(k, v) store[k] = v end,
+               delete = function(k) store[k] = nil end },
+      findScript = function(k) return scripts[k] end, findScripts = function() return {} end,
+      find = function() return nil end, log = function() end }, { __index = _G })
+    for k, v in pairs(extra or {}) do e[k] = v end
+    return e
+  end
+  local function load_s(path, e)
+    local f = assert(loadfile("solar/scripts/" .. path))
+    setfenv(f, e)
+    f()
+    e.params = {}
+    for k, v in pairs(e.defaults or {}) do e.params[k] = v end
+    return e
+  end
+  local R = 800
+  local planet = { name = "Vever", x = 5000, y = 0, z = 0, radius = R }
+  local SPACE = { body = function(n) return n == "Vever" and planet or nil end, bodies = function() return { planet } end,
+                  dominant = function() return "Vever" end, time = function() return 100 end }
+  local store = {}
+  local sc = { thermal = T }
+  sc.parts_base = load_s("parts_base.lua", envS({}, {}))
+  local ST = load_s("structures.lua", envS(store, sc, { space = SPACE }))
+  sc.structures = ST
+  local BS = load_s("base_shield.lua", envS(store, sc, { space = SPACE }))
+  sc.base_shield = BS
+  BS.start({ id = 1 })
+  -- the ground at the +Y pole: up +Y, front +Z (a part's +X is +X)
+  local U, F = { x = 0, y = 1, z = 0 }, { x = 0, y = 0, z = 1 }
+  local skid = ST.add(ST.newRecord(nil, "Vever", 0, R, 0, U, F, "isotopeSkid"))
+  local wall = ST.add(ST.newRecord(nil, "Vever", 0, R, 2.0, U, F, "shieldWall"))
+  BS.update({}, 0.016)
+  local W, S = BS.walls(), BS.sources()
+  check(#W == 1 and near(W[1].k, 0.05) and near(W[1].y, R + 1.0, 1e-9) and near(W[1].hz, 0.25),
+    "a placed Shield Wall is a blocker box in its body's frame, by its record (k 0.05, centred 1 m up)")
+  check(#S == 1 and S[1].omni and near(S[1].rad, 0.002), "the Isotope Skid's cells: a weak source all round")
+  -- the wall between the skid and a point behind it, and beside it
+  local sx, sy, sz = S[1].x, S[1].y, S[1].z
+  local f1, n1 = BS.wallFactor("Vever", sx, sy, sz, 0, R + 1.4, 4.0, T)
+  local f2, n2 = BS.wallFactor("Vever", sx, sy, sz, 3.0, R + 1.4, 4.0, T)
+  local f3 = BS.wallFactor("Vever", sx, sy, sz, 0, R + 1.4, -4.0, T)
+  check(n1 == 1 and near(f1, 0.05), "behind the wall: 5 % gets through")
+  check(n2 == 0 and near(f2, 1), "off past its end: nothing in the way")
+  check(near(f3, 1), "on the far side of the source: the wall doesn't count")
+  check(near(BS.wallFactor("Elsewhere", sx, sy, sz, 0, R + 1.4, 4.0, T), 1), "a wall on another world doesn't count")
+  ST.add(ST.newRecord(nil, "Vever", 0, R, 3.0, U, F, "shieldWall"))
+  BS.update({}, 0.016)
+  local f4, n4 = BS.wallFactor("Vever", sx, sy, sz, 0, R + 1.4, 4.0, T)
+  check(n4 == 2 and near(f4, 0.0025), "two walls: 0.25 %")
+  -- the ground sources' pass: a member on foot behind the walls, one in the open
+  local doses = {}
+  local bodies = { [7] = { x = 5000 + 0, y = R + 1.0, z = 4.0 }, [8] = { x = 5000 - 3.0, y = R + 1.0, z = 0 } }
+  sc.crew = { roster = function() return { { id = 7, status = "afoot" }, { id = 8, status = "afoot" }, { id = 9, status = "base" } } end,
+              bodyOf = function(id) return bodies[id] end,
+              addDose = function(id, d, src, rate) doses[id] = (doses[id] or 0) + d end }
+  local rep = BS.pass(2.0)
+  local o7, o8 = rep.out[7], rep.out[8]
+  local cl8 = math.sqrt(3.0 ^ 2 + (R + 1.0) ^ 2)
+  local chest = { x = -3.0 * (1 + 0.4 / cl8), y = (R + 1.0) * (1 + 0.4 / cl8), z = 0 }
+  local bare8 = BS.omniRate(S[1], math.sqrt((chest.x - sx) ^ 2 + (chest.y - sy) ^ 2 + (chest.z - sz) ^ 2), TH)
+  check(o8 and near(o8.rate, bare8, 1e-12) and near(o8.bare, bare8, 1e-12), string.format("3 m from the skid in the open: %.2f %% of a lethal dose an hour", bare8 * 360000))
+  check(o7 and near(o7.rate, o7.bare * 0.0025, 1e-15), "behind the two walls: 0.25 % of it")
+  check(BS.noted(7) and BS.noted(7).f < 0.01 and BS.noted(8).f == 1, "the draw reads the same numbers (shielded / in the open)")
+  check(rep.traced == 2 and not rep.out[9], "only members on foot are traced")
+  BS.pass(2.0)
+  getfenv(BS.pass).time = 20
+  BS.pass(2.0)
+  check(doses[8] and doses[7] and doses[8] > 100 * doses[7], "...and written to their records, the open one far more")
+  -- vessel_thermal: a craft's Ember lying on its side, its cone along +Z
+  -- toward a member on foot, with a wall between (by record), then without
+  local VT = load_s("vessel_thermal.lua", envS({}, sc, { space = SPACE }))
+  local L = { THERMAL = TH, coneAt = T.coneAt, doseRate = T.doseRate, shieldFactor = T.shieldFactor, blockerK = T.blockerK,
+              radShare = function() return 1 end }
+  local hits = {}
+  sc.crew = { seatedIn = function() return {} end,
+              roster = function() return { { id = 5, status = "afoot" } } end,
+              bodyOf = function(id) return { x = 5000, y = R + 1.0, z = 6.0 } end,
+              addDose = function(id, d, src, rate) hits[#hits + 1] = rate end }
+  local function run(with_wall)
+    hits = {}
+    local S2 = {}
+    local V = { S = S2, recs = {}, gone = {}, hp = {}, gen = 1, E = { modsOf = function() return {} end },
+                node = { x = 5000, y = R + 1.0, z = -3.0, id = 77 }, rx = { x = 1, y = 0, z = 0 }, up = { x = 0, y = 1, z = 0 },
+                rz = { x = 0, y = 0, z = 1 } }
+    -- (the core at the craft's origin, its +Y turned to the craft's +Z)
+    local M = { cores = { { c = { rad = 0.5 } } } }
+    local cores = { { uid = 1, d = { x = 0, y = 0, z = 0, pitch = math.pi / 2, yaw = 0, roll = 0 } } }
+    if not with_wall then
+      for _, w in ipairs(ST.list()) do if w.bp[1].id == "shieldWall" then ST.remove(w.id) end end
+      BS.update({}, 0.016)
+    end
+    VT.radiation(V, L, M, cores, 1.0)
+    VT.flush_dose(S2, sc.crew, true)
+    return hits[1] or 0, BS.noted(5)
+  end
+  local rw, nw = run(true)
+  local ro, no = run(false)
+  check(ro > 0 and nw and no, string.format("the flight's pass: a member on foot 9 m down a reactor's cone takes %.1f %% an hour in the open", ro * 360000))
+  check(rw > 0 and near(rw, ro * 0.0025, ro * 1e-9), "...behind the two placed walls 0.25 % of it: the walls count by record")
+  check(nw and near(nw.f, 0.0025, 1e-9) and no and near(no.f, 1, 1e-9), "...and the Build Kit's cone draw is told the same")
+  check(BS.live[77] and #BS.live[77].cores == 1 and near(BS.live[77].cores[1].az, 1, 1e-9),
+    "the core is published body-relative for the draw, its cone along +Z")
+end
+
 -- ── the result ─────────────────────────────────────────────────────────────
 if #failures > 0 then
   print(string.format("SMOKE thermal: %d passed, %d FAILED", passed, #failures))

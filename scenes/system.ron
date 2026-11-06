@@ -3548,6 +3548,7 @@
         // what a placement costs (base_economy), the structures it leaves (structures),
         // the Build Stand and the craft on it (craft_stand, step 6),
         // the bases and their Base Station Towers (bases, base_tower, step 7),
+        // the base grid, its cables and the Shield Wall's rule (base_grid, base_cable, base_shield, step 8),
         // the one ghost function (ghost) and the overlap query (placement). Last in the
         // scene on purpose: its lateUpdate aims through the cursor after the camera
         // has placed itself for the frame.
@@ -3566,6 +3567,9 @@
                 ( kind: "craft_stand", enabled: true, params: [] ),
                 ( kind: "bases", enabled: true, params: [] ),
                 ( kind: "base_tower", enabled: true, params: [] ),
+                ( kind: "base_cable", enabled: true, params: [] ),
+                ( kind: "base_grid", enabled: true, params: [] ),
+                ( kind: "base_shield", enabled: true, params: [] ),
                 ( kind: "craft_orient", enabled: true, params: [] ),
                 ( kind: "ghost", enabled: true, params: [] ),
                 ( kind: "placement", enabled: true, params: [] ),
