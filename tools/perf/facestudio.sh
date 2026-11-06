@@ -15,7 +15,7 @@ mkdir -p "$PJ/save" "$PJ/saves" "$PJ/.floptle"
 # MODELS_DIR: draw models from another tree (an A/B against older faces)
 rm -f "$PJ/models"; [ -n "${MODELS_DIR:-}" ] && ln -s "$MODELS_DIR" "$PJ/models"
 for d in models textures animation_controllers animations audio docs fonts materials shaders terrain tests tools ui vfx input.ron .luarc.json; do
-  [ -e "$PJ/$d" ] || ln -s "$SOL/$d" "$PJ/$d"
+  if [ -L "$PJ/$d" ] || [ ! -e "$PJ/$d" ]; then ln -sfn "$SOL/$d" "$PJ/$d"; fi
 done
 rm -rf "$PJ/scripts" "$PJ/scenes" "$PJ/prefabs"; mkdir -p "$PJ/scripts" "$PJ/scenes"
 cp "$SOL"/scripts/*.lua "$PJ/scripts/"; cp -r "$SOL/prefabs" "$PJ/prefabs"

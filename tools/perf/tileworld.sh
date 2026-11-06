@@ -17,7 +17,7 @@ ALSA=${ALSA:-$(dirname "$LOCK")/silent-alsa.conf}
 PJ=$WORK/tworldproj
 mkdir -p "$PJ/save" "$PJ/saves" "$PJ/.floptle" "$PJ/terrain"
 for d in fonts materials models shaders textures input.ron; do
-  [ -e "$PJ/$d" ] || ln -s "$SOL/$d" "$PJ/$d"
+  if [ -L "$PJ/$d" ] || [ ! -e "$PJ/$d" ]; then ln -sfn "$SOL/$d" "$PJ/$d"; fi
 done
 # the probe's own terrain folder: a field it fills is written here, never in Solar's
 cp "${PALETTE:-$SOL/terrain/system.palette}" "$PJ/terrain/tileworld.palette"

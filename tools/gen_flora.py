@@ -1005,17 +1005,17 @@ def cushion(seed, lod, radius=0.6, height=0.35, lumps=5, tname_moss=True, flower
 #   kind    what the brain reasons about when casting a world
 #   h       nominal height (m) of the LOD-0 mesh
 #   bark    bark texture type (rough/smooth/palm/stalk) or None
-#   lods    number of LOD meshes (1 grass … 3 trees)
+#   lods    number of LOD meshes (2 grass and ground plants … 3 trees)
 #   tags    climate affinities: wet dry cold hot temperate alien aquatic tall
 #           (+ "dense" = can carpet ground, "glow" = glow-capable)
 
 LIB = [
     # grasses — the carpets
-    ("grass_tuft", tussock, dict(height=0.55, width=2.0, cards=9), dict(form="grass", kind="grass", h=0.55, bark=None, lods=1, tags="temperate wet cold dense")),
-    ("grass_tall", tussock, dict(height=1.1, width=2.0, cards=9, lean=0.25), dict(form="grass", kind="grass", h=1.1, bark=None, lods=1, tags="temperate wet hot dense")),
-    ("grass_seed", tussock, dict(height=0.85, width=2.0, cards=9, tname="seedgrass"), dict(form="grass", kind="grass", h=0.85, bark=None, lods=1, tags="temperate dry hot dense")),
-    ("grass_low", tussock, dict(height=0.3, width=1.8, cards=8, lean=0.5), dict(form="grass", kind="grass", h=0.3, bark=None, lods=1, tags="cold dry temperate dense")),
-    ("meadow", tussock, dict(height=0.5, width=1.9, cards=8, flowers=4), dict(form="grass", kind="grass", h=0.5, bark=None, lods=1, tags="temperate wet dense")),
+    ("grass_tuft", tussock, dict(height=0.55, width=2.0, cards=9), dict(form="grass", kind="grass", h=0.55, bark=None, lods=2, tags="temperate wet cold dense")),
+    ("grass_tall", tussock, dict(height=1.1, width=2.0, cards=9, lean=0.25), dict(form="grass", kind="grass", h=1.1, bark=None, lods=2, tags="temperate wet hot dense")),
+    ("grass_seed", tussock, dict(height=0.85, width=2.0, cards=9, tname="seedgrass"), dict(form="grass", kind="grass", h=0.85, bark=None, lods=2, tags="temperate dry hot dense")),
+    ("grass_low", tussock, dict(height=0.3, width=1.8, cards=8, lean=0.5), dict(form="grass", kind="grass", h=0.3, bark=None, lods=2, tags="cold dry temperate dense")),
+    ("meadow", tussock, dict(height=0.5, width=1.9, cards=8, flowers=4), dict(form="grass", kind="grass", h=0.5, bark=None, lods=2, tags="temperate wet dense")),
     # ground plants
     ("fern_a", fern, dict(fronds=9, length=1.2), dict(form="shrub", kind="fern", h=0.9, bark=None, lods=2, tags="wet temperate hot")),
     ("fern_tall", fern, dict(fronds=7, length=1.8, rise=1.3, spread_k=0.6), dict(form="shrub", kind="fern", h=1.6, bark=None, lods=2, tags="wet hot")),

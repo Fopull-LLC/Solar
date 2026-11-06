@@ -21,7 +21,7 @@ if [ -x "$eng" ]; then F=$eng; VER=$(basename $(dirname $eng)); else F=$HOME/.lo
 [ -f $S/silent-alsa.conf ] || printf 'pcm.!default { type null }\nctl.!default { type hw card 0 }\n' > $S/silent-alsa.conf
 mkdir -p $PJ/save $PJ/saves $PJ/.floptle
 for d in animation_controllers animations audio docs fonts materials models shaders terrain tests textures tools ui vfx input.ron .luarc.json; do
-  [ -e $PJ/$d ] || ln -s $SOL/$d $PJ/$d
+  if [ -L "$PJ/$d" ] || [ ! -e "$PJ/$d" ]; then ln -sfn "$SOL/$d" "$PJ/$d"; fi
 done
 rm -rf $PJ/scripts $PJ/scenes $PJ/prefabs
 mkdir -p $PJ/scripts $PJ/scenes

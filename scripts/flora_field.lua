@@ -149,9 +149,15 @@ defaults = {
   -- 0.00 on every frame, and 100 laser bites on the meadow cost decalRelay
   -- 2.0 ms at most (0.14 mean on the first 25, 0 after). Standing still costs
   -- nothing on any engine.
+  -- WALKING still pays: laying the washes that come into range is the
+  -- terrain bucket's extra on Earth (route soak 2026-11-06, .1453, 1920x1080,
+  -- 150 s walk: terrain 1.27 ms/frame with washes to 130 m, 0.57 with none,
+  -- 0.93-1.03 at 90 m, against the alien's 0.47). 90 m keeps the meadow
+  -- colour under and around you (the outer 40 % fades anyway) at about half
+  -- the decals (81 → 44, 74k → 41k triangles).
   tint = 1,
   --@range 40 250 --@units m
-  tint_range = 130.0,
+  tint_range = 90.0,
   --@range 8 40 --@units m
   tint_step = 18.0,
   --@range 0 400
@@ -3420,6 +3426,14 @@ function harvest(hitrec, cid)
   end
   settled[rec.src .. ":" .. tostring(rec.inst)] = nil
   return got, dropped
+end
+
+-- For probes: every live source id (sourceInfo says what each is).
+function sourceIds()
+  local out = {}
+  for id in pairs(srcs) do out[#out + 1] = id end
+  table.sort(out)
+  return out
 end
 
 -- For probes: what a scatter source id is to this field (nil = not ours).

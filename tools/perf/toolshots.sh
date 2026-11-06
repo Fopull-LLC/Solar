@@ -27,7 +27,7 @@ for d in models textures; do
   for e in "$SOL/$d"/*; do ln -s "$e" "$PJ/$d/$(basename "$e")"; done
 done
 for d in animation_controllers animations audio docs fonts materials shaders terrain tests tools ui vfx input.ron .luarc.json; do
-  [ -e "$PJ/$d" ] || ln -s "$SOL/$d" "$PJ/$d"
+  if [ -L "$PJ/$d" ] || [ ! -e "$PJ/$d" ]; then ln -sfn "$SOL/$d" "$PJ/$d"; fi
 done
 rm -rf "$PJ/scripts" "$PJ/scenes" "$PJ/prefabs"
 mkdir -p "$PJ/scripts" "$PJ/scenes"

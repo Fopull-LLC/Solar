@@ -19,9 +19,9 @@ eng=${1:?usage: jumpprobe.sh <engine> [modes]}; shift
 mkdir -p $S/tools $S/solar $S/proj/save/user
 SN=$S/solar
 for d in $(ls -A $SOL); do
-  case $d in scripts|scenes|prefabs|project.ron|save|saves|.git|tools) ;; *) [ -e $SN/$d ] || ln -s $SOL/$d $SN/$d ;; esac
+  case $d in scripts|scenes|prefabs|project.ron|save|saves|.git|tools) ;; *) if [ -L "$SN/$d" ] || [ ! -e "$SN/$d" ]; then ln -sfn "$SOL/$d" "$SN/$d"; fi ;; esac
 done
-[ -e $SN/tools ] || ln -s $SOL/tools $SN/tools
+if [ -L "$SN/tools" ] || [ ! -e "$SN/tools" ]; then ln -sfn "$SOL/tools" "$SN/tools"; fi
 rm -rf $SN/scripts $SN/scenes $SN/prefabs; rm -f $SN/project.ron
 cp -r $SOL/scripts $SOL/scenes $SOL/prefabs $SN/; cp $SOL/project.ron $SN/
 mkdir -p $SN/save $SN/saves

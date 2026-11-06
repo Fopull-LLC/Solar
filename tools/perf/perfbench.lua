@@ -40,7 +40,7 @@
 defaults = { slot = 13, vabidle = 0, seed = 1911564384, quit = 1, onfoot = 30, clicks = 20, hold = 0.5, gap = 0.5,
              mapsecs = 12, flysecs = 45, drivesecs = 45, out = 110, settle = 8, sleepsecs = 20, sample = 0,
              usersave = 0, homealien = 0, homeseed = 0, standsecs = 20, walksecs = 40, meadow_m = 220, digclicks = 100, parksecs = 45, parksecs2 = 20,
-             burst = 0, gpusecs = 10, gpu_out = 200, fullscreen = 0, circthr = 0.25, starter_cut = 150 }
+             burst = 0, shots = 0, gpusecs = 10, gpu_out = 200, fullscreen = 0, circthr = 0.25, starter_cut = 150 }
 
 local MODE = "base"
 local W = function() return app.wallClock and app.wallClock() or os.clock() end
@@ -2844,7 +2844,207 @@ end
 -- A toggle is { set = { field = value, … } } on the Lighting component (the
 -- prior values are kept and put back), or { on =, off = } for the rest.
 local function LT(t) return { set = t } end
+-- ── flora: what grows round the camera, and per-kind toggles (2026-11-06) ──
+-- FLORA lines: every species of the world (kind, shape, LODs and their
+-- triangles, reach, density knobs) with what its sources hold resident
+-- (scatter.cost) and how many of its props stand in each distance ring round
+-- the crew, plus an estimate of the triangles they draw (each ring at the LOD
+-- band it falls in). The toggles below take whole kinds out (the world's
+-- species list filtered, the field cleared and grown again) or change a
+-- species knob in place, so a kind's GPU cost is measured at one spot.
+local FLORA_KINDS = {
+  grass = { grass = true },
+  ground = { moss = true, fern = true, reed = true, succulent = true },
+  bush = { bush = true, shrub = true },
+  tree = { broadleaf = true, conifer = true, palm = true, bulb = true, coral = true, cactus = true },
+}
+local RINGS = { 10, 20, 30, 45, 60, 90, 120, 170 }
+local function flora_inventory(tag)
+  local fg, ff = findScript("flora_gen"), findScript("flora_field")
+  local bname = ff and ff.bodyName
+  local a = astro()
+  if not (fg and ff and bname and a and ff.sourceIds) then P("FLORA %s: no field (%s)", tag, tostring(bname)); return end
+  local lib = {}
+  for _, l in ipairs(fg.LIBRARY or {}) do lib[l.id] = l end
+  local by = {}
+  local eye = vec3(a.x, a.y, a.z)
+  for _, id in ipairs(ff.sourceIds()) do
+    local inf = ff.sourceInfo(id)
+    if inf and not inf.retiring then
+      local key = inf.spid .. (inf.part == "bark" and ":bark" or "")
+      local spf, spl
+      for _, sp in ipairs(fg.speciesFor(bname) or {}) do if sp.id == inf.spid then spf, spl = sp.far * (ff.params.reach or 1), sp.lodAt end end
+      local e = by[key] or { srcs = 0, props = 0, rings = {}, n = 0, bands = {} }
+      by[key] = e
+      e.srcs = e.srcs + 1
+      local c = scatter.cost(id)
+      e.props = e.props + ((c and c.props) or 0)
+      local cur, guard = nil, 0
+      repeat
+        local ok, F, nx = pcall(scatter.near, id, eye, RINGS[#RINGS], { flat = true, max = 4096, sort = false, after = cur })
+        if not ok or not F or not F.distance then break end
+        for k = 1, F.count do
+          local d = F.distance[k]
+          if not (spf and d > spf + 0.5) then   -- past its reach: rolled, not drawn
+            for i, r in ipairs(RINGS) do if d < r then e.rings[i] = (e.rings[i] or 0) + 1; break end end
+            e.n = e.n + 1
+            local bd = #(spl or { 1 })
+            for l = 1, #(spl or {}) do if d < spf * spl[l] then bd = l; break end end
+            e.bands[bd] = (e.bands[bd] or 0) + 1
+          end
+        end
+        cur, guard = nx, guard + 1
+      until cur == nil or guard > 50
+    end
+  end
+  local tot_n, tot_tris = 0, 0
+  for _, sp in ipairs(fg.speciesFor(bname) or {}) do
+    for _, part in ipairs({ "", ":bark" }) do
+      local e = by[sp.id .. part]
+      if e or part == "" then
+        e = e or { srcs = 0, props = 0, rings = {}, n = 0, bands = {} }
+        local bs = {}
+        for l = 1, sp.lods or 1 do bs[#bs + 1] = string.format("l%d %d", l - 1, e.bands[l] or 0) end
+        local L = lib[sp.shape] or {}
+        local tris = L.tris or {}
+        local far = sp.far * (ff.params.reach or 1)
+        local est, lo = 0, 0
+        for i, r in ipairs(RINGS) do
+          local mid = (lo + r) / 2
+          local band = #tris
+          for l = 1, #(sp.lodAt or {}) do if mid < far * sp.lodAt[l] then band = l; break end end
+          est = est + (e.rings[i] or 0) * (tris[math.min(band, #tris)] or 0)
+          lo = r
+        end
+        if part == ":bark" then est = 0 end   -- the trunk's mesh is not in the library table
+        local rs = {}
+        for i = 1, #RINGS do rs[#rs + 1] = tostring(e.rings[i] or 0) end
+        P("FLORA %s sp %-14s %-9s %-13s%s lods %d tris %-16s far %5.1f per %d chunk %4.1f lodAt %-16s scale %.2f-%.2f | srcs %3d resident %6d | within %s m: %s = %d | by LOD %s | est tris %d",
+          tag, tostring(sp.id), tostring(sp.kind), tostring(sp.shape), part, sp.lods or 1, table.concat(tris, "/"), far, sp.per or 0, sp.chunk or 0,
+          table.concat(sp.lodAt or {}, "/"), sp.scaleMin or 0, sp.scaleMax or 0, e.srcs, e.props,
+          table.concat(RINGS, "/"), table.concat(rs, "/"), e.n, table.concat(bs, " "), est)
+        tot_n, tot_tris = tot_n + e.n, tot_tris + est
+      end
+    end
+  end
+  local c = perf.counts() or {}
+  local ub = {}
+  for k, v in pairs(c.unbatchedBy or {}) do ub[#ub + 1] = k .. "=" .. tostring(v) end
+  P("FLORA %s total props within %d m: %d, est leaf tris %d | field count %s sources %s patches %s | counts draws %s instances %s props %s propsDropped %s unbatched %s (%s) culled %s",
+    tag, RINGS[#RINGS], tot_n, tot_tris, tostring(ff.count), tostring(ff.sources), tostring(ff.patchCount),
+    tostring(c.draws), tostring(c.instances), tostring(c.props), tostring(c.propsDropped), tostring(c.unbatched), table.concat(ub, " "), tostring(c.culled))
+end
+-- Pictures of the flora round the crew (params.shots > 0): the free camera at
+-- eye height on four headings, and a fifth from 7 m up looking along the
+-- ground, 1920x1080 into user://flora/<tag>_<view>.png (floraprobe's camera).
+local shots_pending = 0
+local function flora_shots(tag)
+  if (params.shots or 0) <= 0 then return end
+  local cam = findScript("planet_camera")
+  if not (cam and cam.setShot and astro() and home()) then P("SHOTS: no camera shot hook"); return end
+  -- planet_camera's framed shot: the eye and the point it looks at are worked
+  -- out every frame from this frame's astronaut and body (the planet moves
+  -- metres a tick), never kept as world points
+  local view = { head = 0, h = 1.7, pitch = 4 }
+  cam.setShot(function()
+    local a, b = astro(), home()
+    if not (a and b) then return nil end
+    local rx, ry, rz = a.x - b.x, a.y - b.y, a.z - b.z
+    local r = len(rx, ry, rz)
+    local up = vec3(rx / r, ry / r, rz / r)
+    local fwd = up:cross(vec3(1, 0, 0)):normalized():rotatedAround(up, view.head * math.pi / 2)
+    local eye = vec3(a.x, a.y, a.z) + up * (view.h - 0.9)
+    local look = eye + fwd * 20 + up * (20 * math.tan(math.rad(view.pitch)))
+    return eye.x, eye.y, eye.z, look.x, look.y, look.z, up.x, up.y, up.z
+  end, 0.05)
+  local views = { { "h0", 0, 1.7, 4 }, { "h1", 1, 1.7, 4 }, { "h2", 2, 1.7, 4 }, { "h3", 3, 1.7, 4 }, { "up", 0, 7.0, -6 } }
+  for _, v in ipairs(views) do
+    view.head, view.h, view.pitch = v[2], v[3], v[4]
+    wait(2.5)
+    local name = tag .. "_" .. v[1]
+    shots_pending = shots_pending + 1
+    local ok, err = pcall(camera.capture, "Camera 1", { w = 1920, h = 1080, ui = false, draws = false }, function(bytes, why)
+      shots_pending = shots_pending - 1
+      if bytes then assets.writeBytes("user://flora/" .. name .. ".png", bytes); P("SHOT %s", name)
+      else P("SHOT %s failed %s", name, tostring(why)) end
+    end)
+    if not ok then shots_pending = shots_pending - 1; P("SHOT capture error %s", tostring(err)) end
+    wait(0.5)
+  end
+  local t0 = time
+  while shots_pending > 0 and time - t0 < 20 do wait(0.2) end
+  cam.clearShot(0.05)
+  wait(1)
+end
+-- Wait for the field to grow back after a clear: its source count still for 5 s.
+local function flora_refill(c, tmo)
+  local t0, last, lastT = time, "", time
+  wait(3)
+  while time - t0 < (tmo or 75) do
+    local n = c.fl and c.fl.sources or 0
+    local k = tostring(n) .. "/" .. tostring(c.fl and c.fl.count) .. "/" .. tostring(c.fl and c.fl.patchCount)
+    if k ~= last then last, lastT = k, time end
+    if n > 0 and time - lastT > 9 then break end
+    wait(0.5)
+  end
+  P("GPU flora refilled after %.0f s: %s sources, %s props", time - t0, tostring(c.fl and c.fl.sources), tostring(c.fl and c.fl.count))
+end
+local fl_species = nil
+local function flora_drop(c, kinds)
+  local fg = findScript("flora_gen")
+  if not (fg and c.fl) then return end
+  fl_species = fl_species or fg.speciesFor
+  if kinds then
+    local orig = fl_species
+    fg.speciesFor = function(n, w)
+      local out = {}
+      for _, sp in ipairs(orig(n, w) or {}) do if not kinds[sp.kind] then out[#out + 1] = sp end end
+      return out
+    end
+  else
+    fg.speciesFor = fl_species
+  end
+  c.fl.clearAll()
+  flora_refill(c)
+end
+-- a species knob changed in place on every species of some kinds (fn(sp) → the
+-- old values to put back), the field grown again
+local function flora_knob(kinds, fn)
+  return {
+    on = function(c)
+      local fg = findScript("flora_gen")
+      c.knob = {}
+      for _, sp in ipairs(fg.speciesFor(c.fl.bodyName) or {}) do
+        if not kinds or kinds[sp.kind] then
+          local old = {}
+          for k, v in pairs(sp) do old[k] = v end
+          c.knob[sp] = old
+          fn(sp)
+        end
+      end
+      c.fl.clearAll(); flora_refill(c)
+    end,
+    off = function(c)
+      for sp, old in pairs(c.knob or {}) do for k, v in pairs(old) do sp[k] = v end end
+      c.fl.clearAll(); flora_refill(c)
+    end,
+    refill = true,
+  }
+end
 local TOGGLES = {
+  wash0        = { on = function(c) if c.fl then c.fl.params.tint = 0 end end, off = function(c) if c.fl then c.fl.params.tint = 1 end end },
+  grass0       = { on = function(c) flora_drop(c, FLORA_KINDS.grass) end, off = function(c) flora_drop(c, nil) end, refill = true },
+  ground0      = { on = function(c) flora_drop(c, FLORA_KINDS.ground) end, off = function(c) flora_drop(c, nil) end, refill = true },
+  bush0        = { on = function(c) flora_drop(c, FLORA_KINDS.bush) end, off = function(c) flora_drop(c, nil) end, refill = true },
+  tree0        = { on = function(c) flora_drop(c, FLORA_KINDS.tree) end, off = function(c) flora_drop(c, nil) end, refill = true },
+  -- grass at half its reach (13 m), and at half its density
+  grassnear    = flora_knob(FLORA_KINDS.grass, function(sp) sp.far = sp.far * 0.5 end),
+  grasshalf    = flora_knob(FLORA_KINDS.grass, function(sp) sp.per = math.max(1, math.floor(sp.per / 2 + 0.5)) end),
+  -- grass's l1 hand-off earlier (needs a grass l1: lods = 2)
+  grasslod35   = flora_knob(FLORA_KINDS.grass, function(sp) if (sp.lods or 1) > 1 then sp.lodAt = { 0.35, 1.0 } end end),
+  grasslod25   = flora_knob(FLORA_KINDS.grass, function(sp) if (sp.lods or 1) > 1 then sp.lodAt = { 0.25, 1.0 } end end),
+  -- trees drawn to 100 m instead of 150, LOD bands as fractions of it
+  treenear     = flora_knob(FLORA_KINDS.tree, function(sp) sp.far = sp.far * 0.67 end),
   contact0     = LT{ contactShadows = false },
   contact1     = LT{ contactShadows = true },
   fogvol0      = { on = function(c) if c.at then c.at.params.volumetric = false end end, off = function(c) if c.at then c.at.params.volumetric = true end end },
@@ -2922,6 +3122,8 @@ local function ab_toggles(prefix)
   if not ok then P("GPU: cannot silence graphics.update (%s): the shadow toggles will be overwritten", tostring(err)) end
   settle_chunks(90)
   P("GPU state at %s: %s", prefix, lstate(c))
+  flora_inventory(prefix)
+  flora_shots(prefix)
   local list = {}
   for t in string.gmatch(tostring(params.toggles or ""), "[^,%s]+") do list[#list + 1] = t end
   local function run(name)
@@ -2943,6 +3145,7 @@ local function ab_toggles(prefix)
       if not okn then P("GPU: toggle %s failed: %s", t, tostring(e)) end
       wait(1.5)
       P("GPU state with %s: %s", t, lstate(c))
+      if T.refill then flora_inventory(prefix .. "_" .. t) end
       local m = run(prefix .. "_" .. t)
       local okf, e2 = pcall(T.off, c)
       if not okf then P("GPU: restore %s failed: %s", t, tostring(e2)) end
