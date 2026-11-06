@@ -195,9 +195,12 @@ function gridModel(g, pose, towerNeed)
                                   gen = pw.gen or 0, x = gx, y = gy, z = gz, ax = ax, ay = ay, az = az, b = r.b }
       M.sources = M.sources + 1
     elseif pw and pw.kind == "store" then
-      M.stores[#M.stores + 1] = { key = key, cap = pw.cap or 0, eff = pw.eff or 1, fill = pw.fill or 0 }
+      -- (J6: `effk` on the part = the installing Engineer's bonus, fixed at placement)
+      local eff = pw.eff or 1
+      if tonumber(p.effk) then eff = math.max(eff, math.min(0.99, eff + tonumber(p.effk))) end
+      M.stores[#M.stores + 1] = { key = key, cap = pw.cap or 0, eff = eff, fill = pw.fill or 0 }
       M.C = M.C + (pw.cap or 0)
-      effw, capw = effw + (pw.eff or 1) * (pw.cap or 0), capw + (pw.cap or 0)
+      effw, capw = effw + eff * (pw.cap or 0), capw + (pw.cap or 0)
     elseif pw and pw.kind == "load" then
       M.loads[#M.loads + 1] = { kind = "load", need = pw.use or 0, label = e.def.label }
       M.need = M.need + (pw.use or 0)

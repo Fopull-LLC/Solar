@@ -109,6 +109,25 @@ local function has_pack(id)
   return c and c.hasPack and c.hasPack(id) or false
 end
 
+-- J4 L2, steady hands: a Pilot from level 2 gets 25 % more Δv from the same
+-- fill (crew.perk "rcs_dv"); looked up once a second.
+DV_PERK = { t = -10, id = nil, v = 1.0 }
+function dvPerk(id)
+  local D = DV_PERK
+  if D.id == id and (time or 0) - D.t < 1.0 then return D.v end
+  D.t, D.id, D.v = time or 0, id, 1.0
+  local c = crew()
+  if c and c.perk and id ~= nil then
+    local ok, v = pcall(c.perk, id, "rcs_dv")
+    if ok and type(v) == "number" and v > 0 then D.v = v end
+  end
+  return D.v
+end
+-- The Δv a fill gives this member (m/s), for the HUD and probes.
+function dvOf(id, units)
+  return (units or R("prop")) / math.max(1e-6, R("prop")) * R("isp_dv") * dvPerk(id)
+end
+
 -- ── propellant ─────────────────────────────────────────────────────────────
 function rcsLeft(id)
   id = id or active_id()
@@ -431,7 +450,7 @@ function fixedUpdate(node, dt)
   local mass = P("suit_kg") + ((inv and inv.mass and inv.mass(crew().packOf(id))) or 30)
   local thrust = R("thrust") * (c.burst and R("burst") or 1.0)
   local amax = thrust / mass
-  local per_dv = R("prop") / math.max(1, R("isp_dv"))
+  local per_dv = R("prop") / math.max(1, R("isp_dv") * dvPerk(id))
   local dvx, dvy, dvz = 0, 0, 0
   if steer_w then
     last_key_t = time

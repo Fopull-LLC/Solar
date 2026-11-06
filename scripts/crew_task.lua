@@ -85,11 +85,21 @@ end
 local function len(x, y, z) return math.sqrt(x * x + y * y + z * z) end
 
 -- ── the repair rules (items.lua's when WS3's library is there) ─────────────
-function repairSecs(hp)
+-- `id`: who does it (their perk: an Engineer is faster, J6).
+function repairMult(id)
+  local c = ref("crew")
+  if not (c and c.perk) then return 1 end
+  local who = id or (c.activeId and c.activeId())
+  if who == nil then return 1 end
+  local ok, m = pcall(c.perk, who, "repair_time")
+  return (ok and tonumber(m)) or 1
+end
+function repairSecs(hp, id)
+  local mult = repairMult(id)
   local I = ref("items")
-  if I and I.repairSecs then return I.repairSecs(hp) end
+  if I and I.repairSecs then return I.repairSecs(hp, mult) end
   hp = math.max(0, math.min(1, hp or 1))
-  return 6 + 16 * (1 - hp)
+  return (6 + 16 * (1 - hp)) * mult
 end
 
 local function repairable(hp)
@@ -180,7 +190,7 @@ function repairTask(vc, uid, hx, hy, hz, nx, ny, nz, opts)
   local lx, ly, lz = vc.partLocalNow(uid, hx, hy, hz, opts.rendered)
   local px, py, pz = vc.partLocalNow(uid, sx, sy, sz, opts.rendered)
   if not lx then return nil, "that part isn't on this craft" end
-  local secs = repairSecs(hp)
+  local secs = repairSecs(hp, opts.id)
   local name = nil
   local rec = vc.partRec and vc.partRec(uid)
   if rec then name = rec.label or rec.name or rec.id end

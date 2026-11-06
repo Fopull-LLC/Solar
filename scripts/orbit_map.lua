@@ -339,8 +339,9 @@ function MNV.burnSecs(t, dv)
   return dv * m / F
 end
 -- Warp to node (F8) lands here: half the burn before the node, less a margin.
-function MNV.landing(t0, burn)
-  return t0 - (burn or 0) / 2 - MNV.WARP_LEAD
+-- `lead`: the margin (s), MNV.WARP_LEAD unless a level-3 Pilot is aboard (J4).
+function MNV.landing(t0, burn, lead)
+  return t0 - (burn or 0) / 2 - (lead or MNV.WARP_LEAD)
 end
 -- The rung of the warp ladder to sit on with `remaining` sim seconds to go:
 -- the highest one (under `cap`) that still has more than WARP_REAL seconds of
@@ -2124,6 +2125,25 @@ local function warp_refusal(vc)
   if ok and eva then return "crew on EVA in space" end
   return nil
 end
+-- J4 L3, the Pilot's countdown: the margin warp to node lands at for craft
+-- `vc` (crew.bestPerk "node_lead" over its crew) → s | nil (no such Pilot).
+-- Asked by the HUD every frame, so it is looked up once a second.
+NODE_LEAD = { t = -10, v = nil, id = nil }
+function nodeLead(vc)
+  vc = vc or warp_vc()
+  if not vc then return nil end
+  local L = NODE_LEAD
+  local id = vc.node and vc.node.id
+  if L.id == id and (time or 0) - L.t < 1.0 then return L.v end
+  L.t, L.id, L.v = time or 0, id, nil
+  local cl = findScript and findScript("crew")
+  if cl and cl.bestPerk then
+    local ok, v = pcall(cl.bestPerk, vc, "node_lead")
+    if ok and type(v) == "number" then L.v = v end
+  end
+  return L.v
+end
+
 function warpToNode()
   local m = mnv
   if not m then return false, "no burn planned" end
@@ -2132,7 +2152,7 @@ function warpToNode()
   local why = warp_refusal(vc)
   if why then warp_say(vc, "Warp to node · " .. why) return false, why end
   local dv = math.sqrt(m.pro ^ 2 + m.nor ^ 2 + m.rad ^ 2)
-  local land = MNV.landing(m.t0, MNV.burnSecs(vc.tele, dv) or 0)
+  local land = MNV.landing(m.t0, MNV.burnSecs(vc.tele, dv) or 0, nodeLead(vc))
   if land - space.time() < 1.0 then
     warp_say(vc, "Warp to node · the burn starts in under " .. math.floor(MNV.WARP_LEAD) .. " s")
     return false, "the burn is about to start"

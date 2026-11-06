@@ -303,6 +303,7 @@ ok(env.mnvZero() == true and env.mnvState().dv == 0, "Zero ΔV zeroes it, unlock
 
 -- ── 6. WARP TO NODE (F8) ────────────────────────────────────────────────────
 ok(M.landing(1000, 40) == 970, "warp lands half the burn and 10 s before the node")
+ok(M.landing(1000, 40, 5) == 975, "J4 L3, the Pilot's countdown: 5 s before the burn")
 ok(M.warpStep(1e6, { 1, 5, 10, 50, 100, 1000, 10000 }, math.huge, 1 / 60) == 10000, "far out, the top of the ladder")
 ok(M.warpStep(1e6, { 1, 5, 10, 50, 100, 1000, 10000 }, 100, 1 / 60) == 100, "…under the galaxy's ceiling")
 ok(M.warpStep(1.0, { 1, 5, 10, 50, 100, 1000, 10000 }, math.huge, 1 / 60) == 1, "close in, ×1: arrived")

@@ -1088,6 +1088,57 @@ local function draw_marker(T, R, vx, vy, vw, vh, k)
   return where, x, y
 end
 
+-- THE CLOSING-RATE LADDER (J4): the safe closing speed for the range left,
+-- one rung a band, beside the docking indicator. Everyone sees it inside
+-- LADDER_FROM m; a level-2 Pilot aboard reads it from 4× as far out
+-- (crew.perk "dock_ladder"), so the approach is set up early.
+LADDER = { { 200, 5.0 }, { 100, 3.0 }, { 50, 2.0 }, { 20, 1.0 }, { 10, 0.5 }, { 5, 0.3 }, { 2, 0.15 } }
+LADDER_FROM = 60.0
+-- → the rung index and its safe speed for `range` (the first rung at or past it)
+function ladderRung(range)
+  local k = 1
+  for i = #LADDER, 1, -1 do
+    if range <= LADDER[i][1] then k = i break end
+  end
+  return k, LADDER[k][2]
+end
+LADDER_PERK = { t = -10, id = nil, v = 1.0 }
+function ladderFrom(me)
+  local L = LADDER_PERK
+  local id = me and me.node and me.node.id
+  if L.id ~= id or (time or 0) - L.t > 1.0 then
+    L.t, L.id, L.v = time or 0, id, 1.0
+    local cl = ref("crew")
+    if cl and cl.bestPerk and me then
+      local ok, v = pcall(cl.bestPerk, me, "dock_ladder")
+      if ok and type(v) == "number" then L.v = v end
+    end
+  end
+  return LADDER_FROM * L.v
+end
+local function draw_ladder(R, x1, y0, k)
+  local n = #LADDER
+  local w, rh = 66 * k, 15 * k
+  local x0 = x1 - w - 8 * k
+  local cur, safe = ladderRung(R.range or 0)
+  local cl = R.closing or 0
+  draw.rect(x0 - 4 * k, y0 - 22 * k, w + 6 * k, rh * n + 40 * k, 0.04, 0.035, 0.03, 0.78, 6 * k)
+  draw.text(x0, y0 - 18 * k, "CLOSING", 11 * k, 0.75, 0.72, 0.66, 1.0, "left")
+  for i, r in ipairs(LADDER) do
+    local y = y0 + (i - 1) * rh
+    local on = i == cur
+    local a = on and 1.0 or 0.45
+    local c = { 0.75, 0.72, 0.66 }
+    if on then
+      if cl <= safe then c = { 0.35, 1.0, 0.5 } elseif cl <= safe * 1.5 then c = { 1.0, 0.75, 0.3 } else c = { 1.0, 0.35, 0.3 } end
+      draw.rect(x0 - 2 * k, y - 1 * k, w + 2 * k, rh - 1 * k, c[1], c[2], c[3], 0.16, 2 * k)
+    end
+    draw.text(x0, y, string.format("%d m", r[1]), 11 * k, c[1], c[2], c[3], a, "left")
+    draw.text(x0 + w - 4 * k, y, string.format("%.2g", r[2]), 11 * k, c[1], c[2], c[3], a, "right")
+  end
+  draw.text(x0, y0 + rh * n + 2 * k, string.format("%+.2f m/s", cl), 11 * k, 0.75, 0.72, 0.66, 1.0, "left")
+end
+
 -- KSP's docking mode, small: a cross-hair where the dot is the MISS (our port
 -- off their centreline) and the ring the TILT (where their axis points from
 -- ours), a tick on the rim the ROLL; the figures under it. Green inside the
@@ -1141,6 +1192,7 @@ local function draw_indicator(me, R, vx, vy, vw, vh, k)
   local sm = me.sas_mode
   draw.text(x0 + S, ty0 + 28 * k, (sm == "target") and "SAS ◉" or "SAS —", fs, 0.75, 0.72, 0.66, 1.0, "right")
   draw.text(x0, ty0 + 42 * k, string.format("from port %s", tostring(R.myPort)), fs * 0.9, 0.6, 0.58, 0.54, 1.0, "left")
+  if (R.range or 1e9) <= ladderFrom(me) then draw_ladder(R, x0 - 6 * k, y0, k) end
 end
 
 -- THE GUIDES, in the camera pass, both ends from DRAWN poses read in this

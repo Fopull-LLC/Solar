@@ -436,6 +436,12 @@ function validity(id, p)
   local def = partInfo(id)
   local r = { id = id, def = def, pose = p, base = 0 }
   if not def then r.bad = "no such part" return r end
+  -- J6: building is an Engineer's (the kit already is; a Shield Wall's
+  -- placement says so in its own words)
+  if not isEngineer() then
+    r.bad = def.shield and "Engineers only: a Shield Wall is set by an Engineer" or "Engineers only"
+    return r
+  end
   local SN = ref("base_snap")
   local q0 = quote_of(id)
   r.quote = q0
@@ -767,6 +773,7 @@ function place(sid, partId, p, payer)
   local E, ST, co = ref("base_economy"), ref("structures"), ref("company")
   if not (E and ST and co) then return nil, "the building rules aren't in this scene" end
   local plan = p.plan
+  if not isEngineer() then return nil, def.shield and "Engineers only: a Shield Wall is set by an Engineer" or "Engineers only" end
   local q = E.quote(def, section_of(partId), p.body, home_body(), plan and plan.vol or 0)
   if q.mode ~= "money" or payer ~= "money" then return nil, q.why or "nothing to pay with" end
   if sid ~= nil and not ST.get(sid) then return nil, "that structure is gone" end
@@ -777,9 +784,19 @@ function place(sid, partId, p, payer)
   local base = p.base or 0
   local ft = plan and plan.footing and { d = plan.footing.d, hx = plan.footing.hx, hz = plan.footing.hz } or nil
   local uid
+  -- J6: a Battery Bank set up by an Engineer from level 2 charges better
+  -- (crew.perk "battery_eff", fixed at placement: base_grid reads `effk`)
+  local effk = nil
+  if def.power and def.power.kind == "store" then
+    local c = ref("crew")
+    local okp, k = false, nil
+    if c and c.perk and by ~= nil then okp, k = pcall(c.perk, by, "battery_eff") end
+    if okp and type(k) == "number" and k > 0 then effk = k end
+  end
   -- (a part's own fields, as it starts: a stand's deck height)
   local function own(entry)
     for k, v in pairs(def.fields or {}) do if entry[k] == nil then entry[k] = v end end
+    if effk then entry.effk = effk end
     return entry
   end
   if sid ~= nil then

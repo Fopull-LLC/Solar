@@ -367,9 +367,11 @@ REPAIR = {
   max_accel = 0.5,             -- m/s² of thrust that pushes the crew off
 }
 
-function repairSecs(hp)
+-- `mult`: the worker's perk (crew.perk(id, "repair_time"): an Engineer 0.5,
+-- 0.35 from level 2; anyone else 1).
+function repairSecs(hp, mult)
   hp = math.max(0, math.min(1, hp or 1))
-  return REPAIR.secs0 + REPAIR.secs_k * (1 - hp)
+  return (REPAIR.secs0 + REPAIR.secs_k * (1 - hp)) * (tonumber(mult) or 1)
 end
 
 -- Is a part repairable at this health? → ok, why

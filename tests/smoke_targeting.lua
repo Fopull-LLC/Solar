@@ -207,6 +207,23 @@ do
   ok(near(ky, 1) and near(kx, 0), "a radial port's key: its +Y")
 end
 
+-- ── J4: the closing-rate ladder (step 9) ────────────────────────────────────
+do
+  local k, v = env.ladderRung(150)
+  ok(k == 1 and v == 5.0, "the ladder: 150 m out, the 200 m rung (5 m/s)")
+  k, v = env.ladderRung(30)
+  ok(k == 3 and v == 2.0, "30 m: the 50 m rung (2 m/s)")
+  k, v = env.ladderRung(1.0)
+  ok(k == #env.LADDER and v == 0.15, "1 m: the last rung (0.15 m/s)")
+  ok(env.ladderRung(900) == 1, "beyond the ladder: its top rung")
+  local me = { node = { id = 7 } }
+  ok(env.ladderFrom(me) == env.LADDER_FROM, "no Pilot: the ladder from " .. env.LADDER_FROM .. " m")
+  local crew = { valid = true, bestPerk = function(who, name) return name == "dock_ladder" and 4.0 or nil end }
+  API.findScript = function(kind) if kind == "context_registry" then return reg elseif kind == "crew" then return crew end end
+  env.LADDER_PERK.t = -10
+  ok(env.ladderFrom({ node = { id = 8 } }) == env.LADDER_FROM * 4, "a level-2 Pilot aboard: from 4× as far (" .. env.ladderFrom({ node = { id = 8 } }) .. " m)")
+end
+
 if #failures > 0 then
   for _, f in ipairs(failures) do print("FAIL " .. f) end
   print(string.format("smoke_targeting: %d/%d checks failed", #failures, checks))

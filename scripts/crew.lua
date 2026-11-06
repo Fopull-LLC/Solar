@@ -808,9 +808,9 @@ function log_(s) if log then log(s) end end
 -- lvl2_built structures · lvl2_studied samples studied; level 3 at a first
 -- (a landing, a build, a study) on a world other than the home one.
 --
--- THE HOOKS other code calls (the pilot's SAS gate, the Build Kit, the
--- scientist's devices, the fabricator; J4–J6 — none of those effects exist
--- yet):
+-- THE HOOKS other code calls (the pilot's SAS gate and perks J4, the
+-- Engineer's Build Kit, repairs and perks J6 — built at step 9; the
+-- scientist's devices J5 at step 16):
 --   role(m) → "pilot"|"scientist"|"engineer"   m = a record or an id
 --   roleName(m|role) → "Pilot"…   roleLetter(m|role) → "P"|"S"|"E"
 --   level(m) → 1..3               levelWhy(m) → level, "5 flights" (what earned it)
@@ -827,7 +827,12 @@ function log_(s) if log then log(s) end end
 --   training(id) → {to, left}|nil
 --   retrainWhyNot(id, role) → why|nil   retrain(id, role) → ok, why
 --   retrainCost() → $
--- Pure, for tests: levelOf(rec, home) · assignRoles(recs) → {[id] = role}
+--   perk(m, name) → value|nil     what their role and level give (PERKS)
+--   bestPerk(who, name) → value, rec   the best over a crew
+--   onDuty(role) → id|nil         the member on duty for it at the base
+--   sasAllows(mode, {crew, pilot, probe}) → ok, why   the pilot's gate (Q14)
+-- Pure, for tests: levelOf(rec, home) · assignRoles(recs) → {[id] = role} ·
+-- perkOf(role, level, name)
 ROLES = { "pilot", "engineer", "scientist" }       -- also the order a tie is filled in
 ROLE_NAME = { pilot = "Pilot", scientist = "Scientist", engineer = "Engineer" }
 ROLE_LETTER = { pilot = "P", scientist = "S", engineer = "E" }
@@ -1056,6 +1061,135 @@ function hasRole(who, role_, minLevel)
     end
   end
   return false, nil
+end
+
+-- ── what a role gives (J4 Pilot, J6 Engineer; J5 Scientist's hook) ─────────
+-- PERKS[name][role] = { level 1, level 2, level 3 }; anyone without the role
+-- (or out of service) gets PERK_NONE[name]. `false` in a row means "none".
+-- Pure: tests read the table and perkOf; the scripts ask perk(m, name).
+PERKS = {
+  -- J6: × a repair's seconds (crew_task / items.repairSecs)
+  repair_time = { engineer = { 0.5, 0.35, 0.35 } },
+  -- J6: the WEAR tag over a damaged part under the cursor (context_menu)
+  wear_read   = { engineer = { false, true, true } },
+  -- J6: × the Power Cable's price a metre (base_cable.quote): less spoil
+  cable_cost  = { engineer = { 1.0, 0.9, 0.8 } },
+  -- J6: + a Battery Bank's charge efficiency, for the one who set it up
+  battery_eff = { engineer = { 0.0, 0.03, 0.05 } },
+  -- J6 L3 (step 13's hook, off-world deconstruct): share of the materials back
+  salvage     = { engineer = { 0.8, 0.8, 1.0 } },
+  -- J4: × the RCS Pack's Δv (eva_pack): steady hands
+  rcs_dv      = { pilot = { 1.0, 1.25, 1.25 } },
+  -- J4: × the range the docking ladder shows from (targeting)
+  dock_ladder = { pilot = { 1.0, 4.0, 4.0 } },
+  -- J4 L3: warp to node lands this many s before the burn starts (orbit_map),
+  -- and the burn readout counts IGNITE IN
+  node_lead   = { pilot = { false, false, 5.0 } },
+  -- J5 (step 16): × the RP of a lot a Scientist studies at a bench
+  study_mult  = { scientist = { 1.5, 2.0, 3.0 } },
+}
+PERK_NONE = { repair_time = 1.0, wear_read = false, cable_cost = 1.0, battery_eff = 0.0, salvage = 0.8,
+              rcs_dv = 1.0, dock_ladder = 1.0, node_lead = false, study_mult = 1.0 }
+-- Which way is better, for bestPerk over a crew: "low" (a time, a price) or
+-- "high" (everything else; true beats false).
+PERK_LOW = { repair_time = true, cable_cost = true }
+
+-- Pure: the perk `name` for `role_` at `lvl`. → value (nil for "none")
+function perkOf(role_, lvl, name)
+  local row = PERKS[name] and PERKS[name][role_]
+  local v
+  if row then
+    lvl = math.max(1, math.min(3, math.floor(tonumber(lvl) or 1)))
+    v = row[lvl]
+  else
+    v = PERK_NONE[name]
+  end
+  if v == false then return nil end
+  return v
+end
+
+-- A member's perk (m = an id or a record). Out of service or dead: none.
+function perk(m, name)
+  local r = rec_of(m)
+  if not r or r.status == "dead" or busy(r) then
+    local v = PERK_NONE[name]
+    if v == false then return nil end
+    return v
+  end
+  return perkOf(role(r), levelOf(r, home_body()), name)
+end
+
+local function better(name, a, b)
+  if a == nil then return false end
+  if b == nil then return true end
+  if type(a) == "boolean" or type(b) == "boolean" then return a == true and b ~= true end
+  if PERK_LOW[name] then return a < b end
+  return a > b
+end
+
+-- The best of `name` over a crew (`who` as hasRole takes it). → value, rec
+function bestPerk(who, name)
+  local list
+  if type(who) == "table" and (type(who.crewIds) == "function" or who.node ~= nil) then
+    list = {}
+    if type(who.crewIds) == "function" then
+      local ok, l = pcall(who.crewIds)
+      if ok and type(l) == "table" then list = l end
+    end
+  elseif type(who) == "table" and who.id ~= nil and who.name ~= nil then
+    list = { who }
+  elseif type(who) == "table" then
+    list = who
+  else
+    list = { who }
+  end
+  local best, br = nil, nil
+  local none = PERK_NONE[name]
+  if none == false then none = nil end
+  for _, m in ipairs(list) do
+    local r = rec_of(m)
+    if r then
+      local v = perk(r, name)
+      if br == nil or better(name, v, best) then best, br = v, r end
+    end
+  end
+  if br == nil then return none, nil end
+  return best, br
+end
+
+-- The member on duty for a role at the base: the one being played if they
+-- hold it, else the senior living member of it at the base (status base or
+-- on foot), lowest id on a tie. Out of service members don't count.
+-- → id | nil (J3's "studied" credit at the Intake; J5's bench)
+function onDuty(role_)
+  local a = activeId and activeId() or nil
+  if a and hasRole(a, role_) then return a end
+  local best, bl = nil, 0
+  for _, id in ipairs(ids()) do
+    local r = get(id)
+    if r and (r.status == "base" or r.status == "afoot" or r.status == nil) and r.status ~= "dead"
+       and not busy(r) and role(r) == role_ then
+      local lv = levelOf(r, home_body())
+      if lv > bl then best, bl = id, lv end
+    end
+  end
+  return best
+end
+
+-- J4, PURE: may a craft hold SAS mode `mode`? Q14 (Ty, 2026-11-05): crew at
+-- the controls without a Pilot or a probe core aboard get stability and
+-- prograde / retrograde only; every other hold (normal, radial, TARGET, DOCK,
+-- NODE) needs a Pilot or a probe core. A probe core flying, or no crew
+-- library, is never gated. Nothing is impossible: docking is just harder.
+-- ctx = { crew = bool (crew fly it), pilot = bool, probe = bool (a live core
+-- aboard) }. → ok, why
+SAS_BASIC = { off = true, stability = true, prograde = true, retrograde = true }
+SAS_NEEDS = "needs a Pilot or a probe core aboard"
+function sasAllows(mode, ctx)
+  if SAS_BASIC[mode] then return true, nil end
+  if not (ctx and ctx.crew) then return true, nil end
+  if ctx.pilot or ctx.probe then return true, nil end
+  return false, SAS_NEEDS
 end
 
 -- Count something a member did. → the new count (nil: no such member).

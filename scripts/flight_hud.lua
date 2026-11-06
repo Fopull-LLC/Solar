@@ -287,7 +287,8 @@ local function sas_block(v, t)
   local kids = {
     { "button", key = "sas", style = "hud/sasWord", x = x0, y = y0, w = P.sas[3], h = 18,
       text = "SAS", textAlign = "center", textValign = "center", selected = on, focusable = false,
-      tooltip = on and "Autopilot on — click or T to let go" or "Autopilot off — click or T to hold",
+      tooltip = (on and "Autopilot on — click or T to let go" or "Autopilot off — click or T to hold")
+        .. ((v.sasAllowed and not v.sasAllowed("target")) and "\nNo Pilot aboard: stability and prograde / retrograde only" or ""),
       onClicked = function()
         if v.setSAS then v.setSAS(on and "off" or sas_prev) end
       end },
@@ -306,12 +307,18 @@ local function sas_block(v, t)
           if has and v.setPeripheral then v.setPeripheral("rcs") end
         end }
     else
+      -- J4: without a Pilot or a probe core aboard only stability and
+      -- prograde / retrograde hold; the rest are greyed with the reason
+      local okm, why = true, nil
+      if v.sasAllowed then okm, why = v.sasAllowed(h.mode) end
       kids[#kids + 1] = { "button", key = h.mode, style = "hud/sas", x = x, y = y, w = 34, h = 20,
         text = h.glyph, textAlign = "center", textValign = "center", focusable = false,
-        selected = v.sas_mode == h.mode,
-        tooltip = h.name .. (h.key ~= "" and ("   [" .. h.key .. "]") or ""),
+        selected = okm and v.sas_mode == h.mode, disabled = not okm,
+        textColor = (not okm) and { DIM[1], DIM[2], DIM[3], 0.5 } or nil,
+        tooltip = h.name .. (h.key ~= "" and ("   [" .. h.key .. "]") or "")
+          .. (okm and "" or ("\n" .. (why or "not on this craft"))),
         onClicked = function()
-          if not v.setSAS then return end
+          if not v.setSAS or not okm then return end
           -- The lit hold is the off switch too: the grid never needs an OFF cell.
           if v.sas_mode == h.mode then v.setSAS("off") else v.setSAS(h.mode) end
         end }
@@ -969,6 +976,13 @@ local function maneuver(v, t, shift)
   local noeng = (t.thrust or 0) <= 0
   local x0 = shift - CW / 2 + CW - MNV_W
   local hold = v.sas_mode == "node"
+  local node_ok, node_why = true, nil
+  if v.sasAllowed then node_ok, node_why = v.sasAllowed("node") end
+  -- J4 L3, the countdown: a level-3 Pilot aboard reads IGNITE IN, and warp
+  -- to node lands 5 s before the burn instead of 10
+  local lead = om.nodeLead and om.nodeLead(v) or nil
+  local ignite = lead ~= nil
+  if ignite and tone == nil and start < 60 then big = string.format("T−%.1f s", start) end
   local warping = om.warpingToNode ~= nil and om.warpingToNode() == true
   local done = math.floor(math.max(0, math.min(1, b.done or 0)) * (MNV_W - 24) + 0.5)
   return { "box", key = "mnv", style = "hud/instrument", pin = "bottom", x = x0 + MNV_W / 2, y = -(CB + CH + 6),
@@ -978,16 +992,18 @@ local function maneuver(v, t, shift)
     -- and 10 s before the node; refused under thrust or with crew on EVA
     { "button", key = "warp", style = "hud/sas", x = MNV_W - 118, y = 4, w = 52, h = 18, selected = warping,
       text = warping and "■ STOP" or "▸▸ WARP", textAlign = "center", textValign = "center", focusable = false,
-      tooltip = warping and "Stop the warp to the node" or "Warp to the burn: lands 10 s before it starts",
+      tooltip = warping and "Stop the warp to the node"
+        or string.format("Warp to the burn: lands %d s before it starts%s", math.floor((lead or 10) + 0.5), ignite and " (the Pilot's countdown)" or ""),
       onClicked = function()
         if om.warpingToNode and om.warpingToNode() then om.warpCancel("Warp to node · stopped")
         elseif om.warpToNode then om.warpToNode() end
       end },
-    { "button", key = "hold", style = "hud/sas", x = MNV_W - 62, y = 4, w = 52, h = 18, selected = hold,
-      text = "◆ HOLD", textAlign = "center", textValign = "center", focusable = false,
-      tooltip = hold and "SAS holds the burn — click to let go" or "Point the nose down the burn (SAS node hold, ALT+9)",
-      onClicked = function() if v.setSAS then v.setSAS(hold and "off" or "node") end end },
-    micro("bl", "BURN START", 10, 25, 90, "start"),
+    { "button", key = "hold", style = "hud/sas", x = MNV_W - 62, y = 4, w = 52, h = 18, selected = hold and node_ok,
+      text = "◆ HOLD", textAlign = "center", textValign = "center", focusable = false, disabled = not node_ok,
+      tooltip = (not node_ok) and ("SAS node hold " .. (node_why or "not on this craft"))
+        or (hold and "SAS holds the burn — click to let go" or "Point the nose down the burn (SAS node hold, ALT+9)"),
+      onClicked = function() if v.setSAS and node_ok then v.setSAS(hold and "off" or "node") end end },
+    micro("bl", ignite and "IGNITE IN" or "BURN START", 10, 25, 90, "start"),
     { "text", key = "big", style = tone == "warn" and "hud/valueWarn" or (tone == "accent" and "hud/valueAccent" or "hud/valueLg"),
       x = 10, y = 36, w = MNV_W - 20, h = 22, text = big, textAlign = "start", textSize = 20 },
     micro("dl", "ΔV LEFT", 10, 60, 64, "start"),

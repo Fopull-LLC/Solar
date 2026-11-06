@@ -228,6 +228,30 @@ local carried = 0
 for _, r in ipairs(fp.parts) do if type(r.st) == "table" and r.st.crew3 then carried = carried + 1 end end
 check(carried == 1, "the fleet manifest carries the slots")
 
+-- J4, the Pilot's SAS gate (Q14): crew at the controls with no Pilot and no
+-- probe core aboard hold stability and prograde / retrograde only
+store["crew.m.2"] = { id = 2, name = "Eng", role = "engineer", status = "aboard" }
+store["crew.m.3"] = { id = 3, name = "Pil", role = "pilot", status = "base" }
+for u, k in pairs({ [6] = 3, [7] = 1 }) do for s2 = 1, k do VE.seatMember(u, s2, nil) end end
+VE.seatMember(6, 1, 2)
+check(VE.crewIds()[1] == 2 and #VE.crewIds() == 1, "an Engineer alone at the controls")
+check(VE.sasAllowed("prograde") == true and VE.sasAllowed("retrograde") == true and VE.sasAllowed("stability") == true,
+  "J4: a non-pilot holds stability and prograde / retrograde")
+local okT, whyT = VE.sasAllowed("target")
+check(okT == false and tostring(whyT):match("Pilot"), "J4: no TARGET hold without a Pilot (" .. tostring(whyT) .. ")")
+check(VE.sasAllowed("dock") == false and VE.sasAllowed("node") == false and VE.sasAllowed("normal") == false,
+  "J4: nor DOCK, NODE or normal")
+VE.sas_mode = "stability"
+check(VE.setSAS("target") == false and VE.sas_mode == "stability", "J4: setSAS refuses a gated hold and keeps the one flown")
+check(VE.setSAS("prograde") == true and VE.sas_mode == "prograde", "J4: ...and takes prograde")
+VE.seatMember(6, 2, 3)
+check(VE.sasAllowed("target") == true and VE.sasAllowed("node") == true, "J4: a Pilot seated beside them unlocks every hold")
+check(VE.setSAS("target") == true and VE.sas_mode == "target", "J4: TARGET held with the Pilot aboard")
+VE.seatMember(6, 2, nil)
+VE.sasGateTick()
+check(VE.sas_mode == "stability", "J4: the Pilot gone, the TARGET hold drops to stability (" .. tostring(VE.sas_mode) .. ")")
+VE.seatMember(6, 1, nil)
+
 if #failures > 0 then
   for _, m in ipairs(failures) do print("FAIL: " .. m) end
   print(string.format("smoke_crew_seats: %d passed, %d FAILED", passed, #failures))

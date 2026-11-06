@@ -17,7 +17,13 @@
 --     once per 30 days, at base only, not to the role they hold;
 --   * hasRole over a craft, a list of ids, records, with a minimum level;
 --   * a save with roles round-trips: plain values only, a reload keeps roles,
---     retrain and counters and assigns nothing.
+--     retrain and counters and assigns nothing;
+--   * step 9 (J4, J6, J5's hook): the PERKS table by role and level (repair
+--     ×0.5 / ×0.35, the wear tag, cable ×0.9 / ×0.8, bank +3 / +5 points,
+--     RCS Pack +25 %, the ladder ×4, the 5 s countdown, study ×1.5–3); perk()
+--     follows the level and gives nothing out of service; bestPerk over a
+--     crew; the SAS gate (Q14: stability / prograde / retrograde without a
+--     Pilot or a probe core); onDuty; items.repairSecs takes the perk.
 --
 --   luajit solar/tests/smoke_crew_roles.lua
 
@@ -320,6 +326,96 @@ check(R2.training(other) and R2.training(other).to == "scientist", "a retrain in
 check(R2.get(sci).retrained == s7["crew.m." .. sci].retrained, "...and the last-retrain date")
 check(s8["crew.notice"] == false, "a save with roles hears no J8 news on reload")
 check(board_one_each(R2), "the saved board still holds one of each")
+
+-- ── step 9: what a role gives (J4 Pilot, J6 Engineer, J5's hook) ───────────
+local s9 = { g_seed = 7, ["base.body"] = "Vever" }
+CLOCK.t = 0
+local K = make(s9)
+K.start()
+local P9, E9, S9
+for _, r in ipairs(K.roster()) do
+  if r.role == "pilot" then P9 = r.id elseif r.role == "engineer" then E9 = r.id else S9 = r.id end
+end
+check(P9 and E9 and S9, "step 9: a roster of one of each")
+-- the pure table
+check(K.perkOf("engineer", 1, "repair_time") == 0.5 and K.perkOf("engineer", 2, "repair_time") == 0.35
+  and K.perkOf("engineer", 3, "repair_time") == 0.35, "J6: an Engineer repairs at ×0.5, ×0.35 from level 2")
+check(K.perkOf("pilot", 3, "repair_time") == 1.0 and K.perkOf("scientist", 1, "repair_time") == 1.0,
+  "J6: anyone else at ×1")
+check(K.perkOf("engineer", 1, "wear_read") == nil and K.perkOf("engineer", 2, "wear_read") == true
+  and K.perkOf("pilot", 3, "wear_read") == nil, "J6: the wear tag from level 2, Engineers only")
+check(K.perkOf("engineer", 2, "cable_cost") == 0.9 and K.perkOf("engineer", 3, "cable_cost") == 0.8
+  and K.perkOf("engineer", 1, "cable_cost") == 1.0, "J6: cable ×0.9 at level 2, ×0.8 at 3")
+check(K.perkOf("engineer", 1, "battery_eff") == 0 and K.perkOf("engineer", 2, "battery_eff") == 0.03
+  and K.perkOf("engineer", 3, "battery_eff") == 0.05 and K.perkOf("scientist", 3, "battery_eff") == 0,
+  "J6: a bank they set up charges +3 / +5 points from level 2")
+check(K.perkOf("engineer", 3, "salvage") == 1.0 and K.perkOf("pilot", 1, "salvage") == 0.8,
+  "J6 L3 hook: an Engineer's deconstruct returns everything (others 80 %)")
+check(K.perkOf("pilot", 1, "rcs_dv") == 1.0 and K.perkOf("pilot", 2, "rcs_dv") == 1.25
+  and K.perkOf("engineer", 3, "rcs_dv") == 1.0, "J4 L2: steady hands, the RCS Pack +25 % Δv")
+check(K.perkOf("pilot", 2, "dock_ladder") == 4.0 and K.perkOf("pilot", 1, "dock_ladder") == 1.0,
+  "J4 L2: the closing-rate ladder from 4× as far")
+check(K.perkOf("pilot", 3, "node_lead") == 5.0 and K.perkOf("pilot", 2, "node_lead") == nil
+  and K.perkOf("scientist", 3, "node_lead") == nil, "J4 L3: the countdown (5 s), level-3 Pilots only")
+check(K.perkOf("scientist", 1, "study_mult") == 1.5 and K.perkOf("scientist", 2, "study_mult") == 2.0
+  and K.perkOf("scientist", 3, "study_mult") == 3.0 and K.perkOf("engineer", 3, "study_mult") == 1.0,
+  "J5 hook: a Scientist's lot ×1.5 / ×2 / ×3")
+check(K.perkOf("engineer", 9, "repair_time") == 0.35 and K.perkOf("engineer", 0, "repair_time") == 0.5,
+  "perkOf clamps the level to 1..3")
+check(K.perkOf("pilot", 1, "nonsense") == nil, "an unknown perk is none")
+-- a member's, by their level now
+check(K.perk(E9, "repair_time") == 0.5 and K.perk(S9, "repair_time") == 1.0, "perk(): the Engineer at level 1")
+for _ = 1, 20 do K.credit(E9, "built", 1, { body = "Vever" }) end
+check(K.level(E9) == 2 and K.perk(E9, "repair_time") == 0.35 and K.perk(E9, "wear_read") == true,
+  "20 structures: level 2, ×0.35 and the wear tag")
+check(K.perk(K.get(E9), "cable_cost") == 0.9, "perk() takes a record too")
+-- out of service: nothing
+s9["crew.m." .. S9].status = "base"
+local bank9 = { bal = 1e6 }
+local K2 = make(s9, { company = { afford = function() return true end, spend = function(n) bank9.bal = bank9.bal - n return true end } })
+K2.start()
+check(K2.retrain(S9, "pilot"), "a Scientist retrains as a Pilot")
+check(K2.perk(S9, "rcs_dv") == 1.0 and K2.hasRole({ S9 }, "pilot") == false, "...and while training gets no perk")
+-- the best over a crew
+local craft9 = { node = {}, crewIds = function() return { S9, E9 } end }
+local v9, who9 = K.bestPerk(craft9, "repair_time")
+check(v9 == 0.35 and who9.id == E9, "bestPerk: the fastest hands aboard (lower is better for a time)")
+check(K.bestPerk({ S9, P9 }, "dock_ladder") == 1.0, "bestPerk: a level-1 Pilot's ladder is the standard one")
+for _ = 1, 5 do K.credit(P9, "flights", 1) end
+check(K.bestPerk({ S9, P9 }, "dock_ladder") == 4.0 and K.bestPerk({ S9, P9 }, "rcs_dv") == 1.25,
+  "bestPerk: a level-2 Pilot aboard (5 flights) lifts the ladder and the pack")
+check(K.bestPerk({ S9, E9 }, "node_lead") == nil, "bestPerk: no level-3 Pilot, no countdown")
+check(K.bestPerk({}, "repair_time") == 1.0, "bestPerk of nobody: the default")
+K.credit(P9, "landings", 1, { body = "Moonlet" })
+check(K.level(P9) == 3 and K.bestPerk({ P9 }, "node_lead") == 5.0, "a landing on another world: level 3, the countdown")
+-- J4, the SAS gate (Q14)
+local ctx_np = { crew = true, pilot = false, probe = false }
+for _, m in ipairs({ "off", "stability", "prograde", "retrograde" }) do
+  check(K.sasAllows(m, ctx_np) == true, "Q14: a non-pilot holds " .. m)
+end
+for _, m in ipairs({ "normal", "antinormal", "radialin", "radialout", "target", "antitarget", "dock", "node" }) do
+  local ok9, why9 = K.sasAllows(m, ctx_np)
+  check(ok9 == false and why9 == K.SAS_NEEDS, "Q14: no " .. m .. " hold without a Pilot or a probe core")
+end
+check(K.sasAllows("target", { crew = true, pilot = true }) == true, "Q14: a Pilot aboard unlocks TARGET")
+check(K.sasAllows("dock", { crew = true, probe = true }) == true, "Q14: a probe core aboard unlocks DOCK")
+check(K.sasAllows("node", { crew = false }) == true, "Q14: a probe core flying is never gated")
+check(K.sasAllows("node", nil) == true, "Q14: no context (a harness): never gated")
+-- who is on duty (the Intake's "studied", J5's bench)
+s9["crew.active"] = P9
+check(K.onDuty("scientist") == nil, "onDuty: the one Scientist is in training: nobody")
+check(K.onDuty("pilot") == P9, "onDuty: the member played, when they hold the role")
+check(K.onDuty("engineer") == E9, "onDuty: else the senior one at base")
+-- the repair rule takes the perk (items.lua, pure)
+do
+  local IE = setmetatable({}, { __index = _G })
+  local fi = assert(loadfile("solar/scripts/items.lua"))
+  setfenv(fi, IE)
+  fi()
+  check(math.abs(IE.repairSecs(0.4) - 15.6) < 1e-9, "items.repairSecs: 15.6 s at 40 % for anyone")
+  check(math.abs(IE.repairSecs(0.4, 0.5) - 7.8) < 1e-9 and math.abs(IE.repairSecs(0.4, 0.35) - 5.46) < 1e-9,
+    "items.repairSecs: an Engineer's 7.8 s, 5.46 s from level 2")
+end
 
 if #failures > 0 then
   for _, m in ipairs(failures) do print("FAIL: " .. m) end

@@ -294,13 +294,43 @@ function sampleGround(b, E, R, step)
   return h, n, d
 end
 
-function quote(L)
-  local E = ref("base_economy")
+-- J6: a cable run is an Engineer's job (the kit is theirs already; this is
+-- the rule itself, for any other way in). → why | nil
+ENGINEERS_ONLY = "Engineers only: laying a Power Cable is an Engineer's job"
+function layerWhyNot(id)
+  local c = ref("crew")
+  if not (c and c.hasRole) then return nil end
+  id = id or (c.activeId and c.activeId())
+  if id == nil then return ENGINEERS_ONLY end
+  local ok, yes = pcall(c.hasRole, id, "engineer")
+  if ok and yes == true then return nil end
+  return ENGINEERS_ONLY
+end
+-- The layer's price a metre: an Engineer from level 2 wastes less of the
+-- drum (crew.perk "cable_cost": ×0.9, ×0.8 at level 3).
+local function perm_for(by)
   local C = cdef()
-  local cost = math.ceil((L or 0) * (C.perm or 3))
+  local c = ref("crew")
+  local k = 1
+  if c and c.perk then
+    by = by or (c.activeId and c.activeId())
+    if by ~= nil then
+      local ok, v = pcall(c.perk, by, "cable_cost")
+      if ok and type(v) == "number" then k = v end
+    end
+  end
+  return (C.perm or 3) * k, k
+end
+
+function quote(L, by)
+  local E = ref("base_economy")
+  local perm, k = perm_for(by)
+  local cost = math.ceil((L or 0) * perm)
   local q = E and E.quote({ cost = cost, label = "Power Cable" }, "BASE", nil, nil, 0)
                  or { mode = "money", cost = cost, ship = 0, foot = 0, total = cost }
+  local C = cdef()
   q.mass = (L or 0) * (C.kgm or 1.4) / 1000
+  q.perk = k < 1 and k or nil
   return q
 end
 
@@ -311,6 +341,8 @@ function validity(e1, hit, body)
   local ST, BG = ref("structures"), ref("base_grid")
   local home = save and save.get and save.get("base.body")
   local r = {}
+  r.bad = layerWhyNot()
+  if r.bad then return r end
   if home and body and body ~= home then r.bad = "off the home world a cable is made, not shipped: step 13" return r end
   if not (hit and hit.rec and hit.part) then
     r.bad = e1 and "aim at a part on another structure to make the far end off" or "aim at a placed part to make the cable off there"
@@ -348,6 +380,8 @@ end
 -- Lay a cable from end a to end z ({ sid, uid } each). → id | nil, why
 function lay(a, z, opts)
   opts = opts or {}
+  local gate = layerWhyNot()
+  if gate then return nil, gate end
   local ST, co, EC = ref("structures"), ref("company"), ref("base_economy")
   if not (ST and co and EC) then return nil, "the building rules aren't in this scene" end
   local ra = ST.get(a.sid)
@@ -357,9 +391,10 @@ function lay(a, z, opts)
   if v.bad then return nil, v.bad end
   local b = space.body(ra.b)
   if not b then return nil, "not on a world" end
+  local c0 = ref("crew")
   local h, n, d = sampleGround(b, v.E, b.radius, (params and params.step) or 3.0)
   local pts, L = polyline(v.E, h, b.radius)
-  local q = quote(L)
+  local q = quote(L, c0 and c0.activeId and c0.activeId() or nil)
   if not co.spend(q.total, EC.ledgerWhy("Power Cable", q) .. string.format(" · %.0f m", L)) then return nil, "can't afford it: " .. money(q.total) end
   local t = agency_now()
   local c = ref("crew")
@@ -587,6 +622,8 @@ local function provider(t, ctx)
         local amt = EC and EC.deconstructRefund and EC.deconstructRefund(c.paid, agency_now()) or 0
         return money(amt) .. " back"
       end, hint = "3 s",
+      enabled = function() return layerWhyNot() == nil end,
+      why = function() return layerWhyNot() and "Engineers only" or nil end,
       job = { secs = 3.0, label = "Taking up the cable",
         check = function() if not get(cid) then return false, "it's gone" end return true end,
         tick = function() end,

@@ -378,9 +378,9 @@ function repairTask(t)
   if not nx then nx, ny, nz = -dx, -dy, -dz end
   local ct = ref("crew_task")
   if ct and ct.repairTask then
-    local ok, tk, why = pcall(ct.repairTask, v, uid, hx, hy, hz, nx, ny, nz, { rendered = true })
+    local ok, tk, why = pcall(ct.repairTask, v, uid, hx, hy, hz, nx, ny, nz, { rendered = true, id = memberId() })
     if ok and type(tk) == "table" then
-      tk.secs = tk.secs or I.repairSecs(v.partHp(uid))
+      tk.secs = tk.secs or I.repairSecs(v.partHp(uid), ct.repairMult and ct.repairMult(memberId()) or 1)
       tk.item = tk.item or "repairkit"
       tk.label = tk.label or (t.rec and t.rec.label) or tk.name
       tk.frame = "part"
@@ -410,7 +410,7 @@ function repairTask(t)
   return { kind = "repair", craft = v.node.id, uid = uid, frame = frame,
            lx = lx, ly = ly, lz = lz, sx = wx, sy = wy, sz = wz,
            nx = nlx - lx, ny = nly - ly, nz = nlz - lz,
-           secs = I.repairSecs(hp), done = 0, item = "repairkit", label = (t.rec and t.rec.label) or "part",
+           secs = I.repairSecs(hp, ct and ct.repairMult and ct.repairMult(memberId()) or 1), done = 0, item = "repairkit", label = (t.rec and t.rec.label) or "part",
            ground = pw and pw.grounded == true }
 end
 

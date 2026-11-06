@@ -1237,6 +1237,42 @@ local function set_flames(node, pct, cut)
   end
 end
 
+-- ── the crew's service record (J3): landings and dockings ──────────────────
+-- creditCrew(counter, ids, body?) counts one for each member in `ids`.
+function creditCrew(counter, ids, body)
+  local c = crewLibNow()
+  if not (c and c.credit) then return end
+  for _, id in ipairs(ids or {}) do pcall(c.credit, id, counter, 1, body and { body = body } or nil) end
+end
+-- A LANDING: after a flight (hasFlown), off the ground for LAND_AIR s and
+-- then down and still (under 1.5 m/s for LAND_STILL s): one for each member
+-- aboard, on the world under them. Called from fixedUpdate (game time);
+-- state in a global (that function is at the upvalue ceiling).
+TOUCHDOWN = { air = 0, still = 0, armed = false, n = 0, last = nil }
+LAND_AIR, LAND_STILL = 3.0, 1.0
+function landingTick(node, info, dt)
+  local L = TOUCHDOWN
+  local down = info.grounded or (R2 and R2.onWheels)
+  if not down then
+    L.air, L.still = L.air + dt, 0
+    if L.air >= LAND_AIR then L.armed = true end
+    return
+  end
+  L.air = 0
+  if not L.armed then return end
+  local v = info.vel
+  if math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z) >= 1.5 then L.still = 0 return end
+  L.still = L.still + dt
+  if L.still < LAND_STILL then return end
+  L.armed, L.still = false, 0
+  local ids = crewIds()
+  if #ids == 0 then return end
+  local body = space.dominant(node.x, node.y, node.z)
+  creditCrew("landings", ids, body)
+  L.n, L.last = L.n + 1, { body = body, t = time, ids = ids }
+  log(string.format("crew: a landing on %s for %s", tostring(body), table.concat(ids, ",")))
+end
+
 -- ── SAS ─────────────────────────────────────────────────────────────────────
 local SAS_KEYS = {
   ["1"] = "stability", ["2"] = "prograde", ["3"] = "retrograde",
@@ -1244,9 +1280,66 @@ local SAS_KEYS = {
   ["7"] = "radialout", ["8"] = "dock", ["9"] = "node", ["0"] = "target",
 }
 
+-- J4, THE PILOT'S SAS GATE (Q14; crew.sasAllows holds the rule): crew at the
+-- controls with no Pilot and no live probe core aboard hold stability and
+-- prograde / retrograde only. SAS_GATE is refreshed at 1 Hz (and on a seat
+-- change) from the 10 Hz electrical tick; `why` nil = every hold.
+SAS_GATE = { t = -10, why = nil, gen = -1, crew = false, pilot = false, probe = false }
+function sasGateNow(force)
+  local G = SAS_GATE
+  local now = time or 0
+  local gen = (integ.gen or 0) * 2 + (crewAboard and 1 or 0)
+  if not force and now - G.t < 1.0 and G.gen == gen then return G end
+  G.t, G.gen = now, gen
+  local c = crewLibNow()
+  if not (c and c.sasAllows) then G.why, G.crew = nil, false return G end
+  local ids = crewIds()
+  G.crew = elec.mode == "crew" or (elec.mode == nil and #ids > 0)
+  local ok, yes = pcall(c.hasRole, ids, "pilot")
+  G.pilot = ok and yes == true
+  local u = elec.probePart
+  local st = u and bp_by_uid[u] and bp_by_uid[u].st
+  G.probe = u ~= nil and not (st and st.hibernate) and ((elec.served and elec.served[u]) or 1) >= 0.5
+  local _, why = c.sasAllows("target", G)
+  G.why = why
+  return G
+end
+-- May this craft hold `m` now? → ok, why (the HUD greys a cell with `why`)
+function sasAllowed(m)
+  local G = sasGateNow()
+  local c = crewLibNow()
+  if not (c and c.sasAllows) then return true, nil end
+  return c.sasAllows(m, G)
+end
+-- The 10 Hz tick: a hold the crew lost (the Pilot went on EVA, the core went
+-- dark) drops to stability, said once.
+function sasGateTick()
+  if sas_mode == "off" or sas_mode == "stability" then
+    if sas_last and not sasAllowed(sas_last) then sas_last = "stability" end
+    return
+  end
+  local ok, why = sasAllowed(sas_mode)
+  if not ok then
+    local was = sas_mode
+    sas_mode, sas_last = "stability", "stability"
+    if piloting and caption then pcall(caption, string.format("SAS %s hold %s · holding stability", was, why)) end
+  end
+end
+
 function setSAS(m)
+  if m ~= "off" then
+    local ok, why = sasAllowed(m)
+    if not ok then
+      if piloting then
+        if caption then pcall(caption, string.format("SAS %s hold %s", tostring(m), why)) end
+        log(string.format("SAS %s refused: %s", tostring(m), tostring(why)))
+      end
+      return false, why
+    end
+  end
   sas_mode = m
   if m ~= "off" then sas_last = m end
+  return true
 end
 
 -- SAS TARGET / ANTI-TARGET (modes "target", "antitarget"): the hold is worked
@@ -3214,6 +3307,7 @@ local function power_tick(node, info, dt)
     elec.link, elec.signal, elec.hops = ant.n > 0, ant.n > 0 and 1 or 0, ant.n > 0 and 1 or 0
   end
   controlTick()
+  sasGateTick()
   -- Tracker heartbeat (1 Hz): the comms.ships registry the Command Centre counts.
   if now - (elec.ptime or -10) > 1.0 then
     elec.ptime = now
@@ -4418,6 +4512,11 @@ function dockTick(node, info, dt)
       -- No tyre joint may hang off either hull through the weld.
       r2Before(node)
       if best.v.r2Before then best.v.r2Before(best.v.node) end
+      -- J3: a docking for everyone aboard either craft (read before the merge)
+      local theirs = {}
+      if best.v.crewIds then local okc, l = pcall(best.v.crewIds); if okc and type(l) == "table" then theirs = l end end
+      creditCrew("dockings", theirs)
+      creditCrew("dockings", crewIds())
       best.v.dockAbsorbed()
       assembly.merge(node, best.v.node)
       dock.pending = { port = best.m.p, manifest = man, t = time, snap = true }
@@ -5780,6 +5879,7 @@ function commander()
 end
 -- Seat member `id` in (uid, slot), or empty it (id nil). → ok, why
 function seatMember(uid, slot, id)
+  SAS_GATE.t = -10     -- (who is aboard changed: the pilot's gate looks again)
   local c = crewLibNow()
   local d = uid and bp_by_uid[uid]
   if not (c and d) then return false, "no such part" end
@@ -15436,6 +15536,8 @@ function fixedUpdate(node, dt)
       if (ox - q[1]) ^ 2 + (oy - q[2]) ^ 2 + (oz - q[3]) ^ 2 > 16.0 then leftPad = true end
     end
   end
+
+  if hasFlown and not info.anchored then landingTick(node, info, dt) end
 
   -- ---- telemetry (10 Hz) → `tele`, drawn by scripts/flight_hud.lua ---------
   -- This function only MEASURES. Everything the pilot reads is laid out by the

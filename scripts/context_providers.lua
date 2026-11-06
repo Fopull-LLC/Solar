@@ -812,7 +812,9 @@ local function held_repair(t, ctx)
                why = has and ("hold the Repair Kit (" .. slot_key(H, "repairkit") .. ")")
                  or "needs a Repair Kit — lockers, or the VAB" } }
   end
-  local secs = I.repairSecs(hp)
+  -- (at the worker's pace: an Engineer's is half, J6)
+  local CT = R(ctx, "crew_task")
+  local secs = I.repairSecs(hp, CT and CT.repairMult and CT.repairMult() or 1)
   local v = t.vessel
   local rprog = (v and v.partSt) and v.partSt(t.uid, "rprog") or (t.rec and t.rec.st or {}).rprog
   local kept = I.keptProgress(rprog, (space and space.time and space.time()) or (time or 0), secs)

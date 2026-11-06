@@ -1075,3 +1075,15 @@ grid automatically; a Power Cable joins grids beyond that.**
 - **Reactors as ground sources** (step 11) join the grid's sources and
   `base_shield`'s cones; the rulebook already takes them.
 - **Loads for the shed and the hab** come once they are lived in (EN1/EN2).
+
+### Step 9: the Engineer's rules and perks (J6; docs/crew-and-items.md §2.6.1)
+
+- **Gates in the actions.** Placing any part (`field_builder.validity` / `place`), laying
+  or taking up a Power Cable (`base_cable.layerWhyNot`) is refused to anyone but an
+  Engineer, with the reason ("Engineers only"; for a Shield Wall "a Shield Wall is set by
+  an Engineer"). The kit itself was Engineers only from step 4.
+- **Cable price.** A level-2 Engineer lays cable at ×0.9 a metre, level 3 at ×0.8
+  (`quote(L, by)`; shipping unchanged).
+- **Battery Bank.** A bank set up by a level-2 Engineer charges at +3 points (level 3: +5),
+  capped at 99 %. The bonus is written on the part as `effk` when it is placed, so the
+  grid's closed-form step stays exact: nothing about it changes with who is standing near.

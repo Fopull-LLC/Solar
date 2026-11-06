@@ -391,6 +391,13 @@ local function take(n, e, mass, wx, wy, wz)
     end
     local lab = ref("lab")
     if lab and lab.receive then pcall(lab.receive, smat, sq, rp, first) end
+    -- J3: a sample (not scrap) studied is the duty Scientist's ("studied"),
+    -- counted on the world it is studied on (the home Lab's)
+    if e.kind ~= "scrap" then
+      local cl = ref("crew")
+      local who = cl and cl.onDuty and cl.onDuty("scientist")
+      if who and cl.credit then pcall(cl.credit, who, "studied", 1, { body = save.get("base.body") }) end
+    end
   end
   local line = receiptText(r)
   if rp > 0 then line = line .. string.format("  ·  +%d RP%s", rp, first and " (new)" or "") end

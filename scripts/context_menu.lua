@@ -594,6 +594,84 @@ local function rmb_tap()
   return nil
 end
 
+-- ── J6: THE WEAR TAG ────────────────────────────────────────────────────────
+-- An Engineer from level 2 (crew.perk "wear_read") on foot reads a damaged
+-- part's wear at a glance: the part under the cursor (the crosshair in first
+-- person or shift-lock) within `wear_range` m gets a tag, "WEAR 60% · repair
+-- 8 s" at their own pace. Picked at 10 Hz while the menu is closed (one ray);
+-- the tag is placed in lateUpdate at the part node's DRAWN pose, so it rides
+-- the part as it is drawn. Published: wearTag = { uid, label, wear, secs } | nil.
+-- Probes: wearSim = { x, y } (screen px) stands in for the cursor.
+wearTag = nil
+wearSim = nil
+WEAR_RANGE = 15.0
+local wear = { gate_t = -10, on = false, t = -10, tgt = nil }
+local function wear_gate()
+  local now = time or 0
+  if now - wear.gate_t < 1.0 then return wear.on end
+  wear.gate_t = now
+  local c = ref("crew")
+  local id = c and c.activeId and c.activeId()
+  local ok, v = false, nil
+  if c and c.perk and id ~= nil then ok, v = pcall(c.perk, id, "wear_read") end
+  wear.on = ok and v == true
+  return wear.on
+end
+local function wear_tick()
+  if not wear_gate() then wear.tgt, wearTag = nil, nil return end
+  local now = time or 0
+  if now - wear.t < 0.1 then return end
+  wear.t = now
+  local who = actorNow()
+  if not (who and who.kind == "crew") then wear.tgt, wearTag = nil, nil return end
+  local sx, sy
+  if wearSim then sx, sy = wearSim[1], wearSim[2]
+  else
+    local pc = ref("planet_camera")
+    if eyes() or (pc and pc.shiftlock) then sx, sy = crosshair() else sx, sy = input.mouse() end
+  end
+  local t = sx and pick(sx, sy, who) or nil
+  if not (t and t.kind == "part" and t.vessel and t.vessel.partHp) then wear.tgt, wearTag = nil, nil return end
+  local hp = t.vessel.partHp(t.uid)
+  local a = who.node and who.node.worldPos
+  if not hp or hp >= 0.999 or hp <= 0 then wear.tgt, wearTag = nil, nil return end
+  if a and t.wx and math.sqrt((t.wx - a.x) ^ 2 + (t.wy - a.y) ^ 2 + (t.wz - a.z) ^ 2) > WEAR_RANGE then
+    wear.tgt, wearTag = nil, nil return
+  end
+  local I, CT = ref("items"), ref("crew_task")
+  local secs = I and I.repairSecs and I.repairSecs(hp, CT and CT.repairMult and CT.repairMult() or 1) or nil
+  wear.tgt = t
+  wearTag = { uid = t.uid, label = t.label or (t.rec and t.rec.label) or "part", wear = 1 - hp, secs = secs }
+end
+local function wear_draw()
+  local W, t = wearTag, wear.tgt
+  if not (W and t and t.vessel and t.vessel.node and t.vessel.node.valid ~= false and draw and draw.text) then return end
+  -- the part's drawn pose this frame: its node, else its record on the root
+  local x, y, z
+  local n = t.node
+  if n and n.valid ~= false and n.worldPos then
+    local w = n.worldPos; x, y, z = w.x, w.y, w.z
+  elseif t.rec and t.vessel.node.toWorld then
+    local w = t.vessel.node:toWorld(vec3(t.rec.x or 0, t.rec.y or 0, t.rec.z or 0)); x, y, z = w.x, w.y, w.z
+  end
+  if not x then return end
+  local sx, sy, _, on = camera.worldToScreen(x, y, z)
+  if not (sx and on ~= false) then return end
+  local _, _, _, vh = screen()
+  local k = (vh or 720) / 720
+  local hp = 1 - W.wear
+  local c = hp < 0.45 and { 1.0, 0.35, 0.3 } or (hp < 0.75 and { 1.0, 0.72, 0.32 } or { 0.85, 0.82, 0.62 })
+  local line = string.format("WEAR %d%%%s", math.floor(W.wear * 100 + 0.5), W.secs and string.format("  ·  repair %.0f s", W.secs) or "")
+  local tw = 9.0 * k * #line * 0.62 + 16 * k
+  draw.rect(sx - tw / 2, sy - 34 * k, tw, 34 * k, 0.04, 0.035, 0.03, 0.78, 4 * k)
+  draw.text(sx, sy - 31 * k, tostring(W.label):upper(), 10 * k, 0.75, 0.72, 0.66, 1.0, "center")
+  draw.text(sx, sy - 18 * k, line, 12 * k, c[1], c[2], c[3], 1.0, "center")
+end
+function lateUpdate(node, dt)
+  if open then return end
+  wear_draw()
+end
+
 function start(node)
   el = node.getcomponent and node:getcomponent("UiElement") or nil
   if el then el.visible = false end
@@ -607,6 +685,7 @@ function update(node, dt)
   if blocked() then
     if open then close() end
     st.rmb = nil
+    wearTag, wear.tgt = nil, nil
     return
   end
   -- the opening gestures
@@ -625,7 +704,7 @@ function update(node, dt)
       end
     end
   end
-  if not open then return end
+  if not open then wear_tick() return end
   if not still_valid() then close() return end
   -- the pointer is the menu's while it is up
   input.setMouseLocked(false)

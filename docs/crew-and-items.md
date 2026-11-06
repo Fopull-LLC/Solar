@@ -321,11 +321,76 @@ only its path.
 - **UI**: a stencilled P / S / E chip before the name on the crew strip's portraits
   (`hud/role`), the role chip and a ROLE column ("ENGINEER · L2") in the roster
   (`panel/role`), the role and level on the VAB crew tab's cards and seats.
-- **Hooks** for the role effects still to come (pilot SAS gate, Build Kit, scientist
-  devices, fabricator; J4–J6): `crew.role(m)`, `level(m)`, `hasRole(craft|list, role,
-  minLevel)`, `credit(id, counter, n, {body})`, `busy(id)`. Today only repairs and flags
-  are counted where they happen (and flights on a recovery); landings, dockings, built,
-  crafted and studied are counted by the steps that add those actions.
+- **Hooks**: `crew.role(m)`, `level(m)`, `hasRole(craft|list, role, minLevel)`,
+  `credit(id, counter, n, {body})`, `busy(id)`, and since step 9 `perk(m, name)`,
+  `bestPerk(craft|list, name)`, `onDuty(role)` and `sasAllows(mode, ctx)`.
+- **Counters, where they are credited** (step 9 finished the set):
+
+  | Counter | Where |
+  |---|---|
+  | flights | a recovery (`crew.noteHome`) |
+  | repairs | a finished repair (crew_task, item_hand) |
+  | flags | a flag planted (item_hand) |
+  | landings | `vessel_controller.landingTick`: after the craft has flown, 3 s off the ground, then down and under 1.5 m/s for 1 s: one each for everyone aboard, on the world under them (so level 2's "3 worlds" and level 3's "a landing away from home" count) |
+  | dockings | the hard dock (the master's merge): everyone aboard both craft |
+  | built | a part placed with the Build Kit, a cable laid (field_builder, base_cable); undone, taken back |
+  | crafted | a job set up at the Intake's fabrication (material_intake) |
+  | studied | a sample (not stock, not scrap) through the Intake to the Lab: the duty Scientist (`onDuty("scientist")`: the member played if a Scientist, else the senior one at base), on the home world |
+
+#### 2.6.1 What the roles give (step 9: J4 Pilot, J6 Engineer; built 2026-11-06)
+
+One table, `crew.PERKS[name][role] = { L1, L2, L3 }`, read through `crew.perk(m, name)`;
+anyone without the role, or out of service, gets `PERK_NONE`. Tests read the table.
+
+| Perk | Role | L1 | L2 | L3 | Where it acts |
+|---|---|---|---|---|---|
+| full SAS | Pilot | yes | yes | yes | the SAS gate below |
+| `rcs_dv` steady hands | Pilot | ×1 | ×1.25 | ×1.25 | eva_pack: the RCS Pack's Δv from the same fill |
+| `dock_ladder` | Pilot | ×1 | ×4 | ×4 | targeting: the closing-rate ladder beside the docking indicator shows inside 60 m, a level-2 Pilot aboard from 240 m |
+| `node_lead` the countdown | Pilot | — | — | 5 s | orbit_map: warp to node lands 5 s before the burn (10 s otherwise); the burn readout says IGNITE IN with tenths under a minute |
+| `repair_time` | Engineer | ×0.5 | ×0.35 | ×0.35 | items.repairSecs(hp, mult): the task, the menu's hint, the tag |
+| `wear_read` | Engineer | — | yes | yes | context_menu: the WEAR tag |
+| `cable_cost` | Engineer | ×1 | ×0.9 | ×0.8 | base_cable.quote: the price a metre |
+| `battery_eff` | Engineer | +0 | +0.03 | +0.05 | a Battery Bank they set up (`effk` on the part, fixed at placement; base_grid, capped at 0.99) |
+| `salvage` | Engineer | 0.8 | 0.8 | 1.0 | hook only: off-world deconstruct (step 13) |
+| `study_mult` | Scientist | ×1.5 | ×2 | ×3 | hook only: J5 (step 16) |
+
+**The Pilot's SAS gate (Q14, settled by Ty 2026-11-05).** Crew at the controls with no
+Pilot and no live probe core aboard (powered, not hibernating) hold **stability and
+prograde / retrograde only**. Normal, radial, TARGET, anti-target, DOCK and NODE need a
+Pilot or a probe core. A craft a probe core flies is never gated. Nothing becomes
+impossible: docking is only harder.
+
+- The rule is pure (`crew.sasAllows(mode, {crew, pilot, probe})`); the craft asks it
+  through `vessel_controller.sasAllowed(m)`, cached at 1 Hz in `SAS_GATE` and refreshed at
+  once on a seat change.
+- `setSAS` refuses a gated hold with a caption ("SAS target hold needs a Pilot or a probe
+  core aboard"); ALT+digit keys go through it.
+- The 10 Hz electrical tick (`sasGateTick`) drops a hold the crew lost (the Pilot went on
+  EVA, the core went dark) to stability, and says so.
+- The HUD's SAS grid greys a gated cell (dimmed glyph, `disabled`) with the reason in its
+  tooltip; the SAS key's tooltip adds "No Pilot aboard: stability and prograde /
+  retrograde only"; the maneuver panel's ◆ HOLD is greyed the same way.
+
+**The Engineer's gates.** The Build Kit opens for Engineers only (step 4). Step 9 puts the
+rule in the actions themselves too: `field_builder.validity` and `place` refuse a
+non-Engineer ("Engineers only"; for a Shield Wall "a Shield Wall is set by an Engineer"),
+and `base_cable.validity`, `lay` and the "Take up the cable" row refuse one
+(`layerWhyNot`). Deconstruct was already Engineers only.
+
+**The WEAR tag.** A level-2 Engineer on foot sees, over a damaged part under the cursor
+(the crosshair in first person or shift-lock) within 15 m, "PART · WEAR 60 % · repair 5 s"
+at their own pace. Picked at 10 Hz with one ray while the context menu is closed, drawn in
+lateUpdate at the part node's drawn pose. Probes: `context_menu.wearTag`, `wearSim`.
+
+**J5 hooks left ready.** `PERKS.study_mult`, `onDuty("scientist")` (who studies at a bench)
+and `bestPerk` over a lab's crew; the Intake already credits "studied" to the duty
+Scientist.
+
+**Smoke crafts.** The gameplay smoke flies member #1 of a new save, the Pilot, and holds
+only stability and prograde, which nobody loses: it needs no probe core.
+
+Probe: `tools/perf/rolesprobe.sh <engine>` (mode `roles9`, 21 checks).
 
 Other keys:
 

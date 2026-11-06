@@ -162,6 +162,16 @@ check(#M1.arrays == 2 and M1.need == 2.0 and M1.C == 4000 and M1.base == 0 and #
 local g2, bys2 = BG.buildGrids(ST.list(), scripts.bases.list(), { { a = { sid = s_bat, uid = 1 }, z = { sid = s_far, uid = 1 } } }, PB.partInfo, ST.partPose)
 check(#g2 == 1 and bys2[s_far] == bys2[tsid] and bys2[tsid].cables == 1, "a cable from the bank to the skid: one grid")
 check(BG.gridModel(bys2[tsid], ST.partPose, 2.0).base == 2.0, "...and the skid's 2 EC/s is on it")
+-- J6 (step 9): a bank set up by a level-2 Engineer carries `effk` and charges better
+local beff = PB.partInfo("batteryBank").power.eff
+check(math.abs(M1.eff - beff) < 1e-9, string.format("the bank charges at its own %.2f", beff))
+ST.getPart(s_bat, 1).effk = 0.03
+local M1e = BG.gridModel(g1, ST.partPose, 2.0)
+check(math.abs(M1e.eff - (beff + 0.03)) < 1e-9 and math.abs(M1e.stores[1].eff - (beff + 0.03)) < 1e-9,
+  string.format("set up by a level-2 Engineer: %.2f", M1e.eff))
+ST.getPart(s_bat, 1).effk = 0.5
+check(math.abs(BG.gridModel(g1, ST.partPose, 2.0).eff - 0.99) < 1e-9, "...capped at 0.99")
+ST.getPart(s_bat, 1).effk = nil
 
 -- ── the year's light (pure) ─────────────────────────────────────────────────
 local L = Y / BG.SLOTS
