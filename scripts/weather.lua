@@ -517,6 +517,7 @@ local NAMES = {
   duststorm = "Dust storm", ash = "Ash fall", ashstorm = "Ash storm", none = "No air",
 }
 
+local local_cache = nil   -- the last weather_map.localAt read (compute)
 local function compute(name, b, w, x, y, z)
   local p = profile(w)
   local seed = seed_of(name, w)
@@ -526,7 +527,22 @@ local function compute(name, b, w, x, y, z)
   local I, trend, kind, hail, mf
   local M = params.localWeather ~= false and ref("weather_map") or nil
   if M and M.localAt and not p.airless then
-    I, trend, kind, hail, mf = M.localAt(WX, seed, p, clock or 0, params.spell, x - b.x, y - b.y, z - b.z)
+    -- Read a few times a second, not every frame: localAt lays out every
+    -- system on the world three times (now and 15 s either side), ~100
+    -- tables a call, and at 60 fps that was 4 MB/s of garbage, the most of
+    -- any script on foot (soakprobe 2026-11-06). The weather here moves over
+    -- tens of seconds and hundreds of metres; it is read again at once on a
+    -- new world, 25 m from the last read, or 2 s of weather clock (warp).
+    local rx, ry, rz = x - b.x, y - b.y, z - b.z
+    local c = local_cache
+    if not (c and c.name == name and c.seed == seed and time - c.t < 0.25 and time >= c.t
+            and math.abs((clock or 0) - c.clock) < 2.0
+            and (rx - c.rx) ^ 2 + (ry - c.ry) ^ 2 + (rz - c.rz) ^ 2 < 625) then
+      local i1, t1, k1, h1, f1 = M.localAt(WX, seed, p, clock or 0, params.spell, rx, ry, rz)
+      c = { name = name, seed = seed, t = time, clock = clock or 0, rx = rx, ry = ry, rz = rz, I = i1, trend = t1, kind = k1, hail = h1, mf = f1 }
+      local_cache = c
+    end
+    I, trend, kind, hail, mf = c.I, c.trend, c.kind, c.hail, c.mf
   else
     I, trend, kind, hail = at(seed, p, clock or 0, params.spell)
   end

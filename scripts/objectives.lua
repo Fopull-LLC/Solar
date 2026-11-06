@@ -1022,14 +1022,25 @@ local function sig_of(e, acc)
   return acc
 end
 
+REFRESH = 0.1   -- s between two workings of the card (tests set 0)
+local upd_t = -100
 function update(node, dt)
   if not el then el = node:getcomponent("UiElement") end
   local gmo = ref("game_manager")
-  if input.pressed("o") and not (gmo and gmo.inputOwner == "builder") then shown = not shown end
+  local poke = false
+  if input.pressed("o") and not (gmo and gmo.inputOwner == "builder") then shown = not shown; poke = true end
   -- / steps to the next objective (and brings a card hidden with O back).
   if input.pressed("/") and switch_ok() then
     if cycle(1) then shown = true end
+    poke = true
   end
+  -- The card is worked out ten times a second, not every frame: the list, the
+  -- step and its description are built afresh each time (missions, salvage
+  -- and the save are asked), which was 1.5-4.5 MB/s of garbage on foot, the
+  -- second most of any script (soakprobe 2026-11-06). A distance read a tenth
+  -- of a second late is the same sentence; a key press is answered at once.
+  if not poke and time >= upd_t and time - upd_t < (REFRESH or 0) then return end
+  upd_t = time
 
   local astro = find("Astronaut")
   local afoot = crew_afoot()

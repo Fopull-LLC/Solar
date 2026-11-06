@@ -652,7 +652,10 @@ local function view_el()
   return view_node and view_node:getcomponent("UiElement") or nil
 end
 
+REFRESH = 0.1   -- s between two describes of an unchanged strip (tests set 0)
+local make_key, make_t = nil, -100
 local function hide(node)
+  make_key = nil
   if el.visible then el.visible = false end
   all_off()
   strip.shown, strip.n, strip.overflow = 0, 0, false
@@ -756,7 +759,16 @@ function lateUpdate(node, dt)
   strip.shown, strip.live, strip.n = nvis, live, #list
   strip.overflow, strip.scroll, strip.maxScroll, strip.viewW = L.overflow, L.scroll, L.max_scroll, L.view_w
   strip.width, strip.cap, strip.visible = L.strip_w, maxW, L.visible
-  ui.make(node, describe(v, list, L, afoot, chips_any, (maxW or 1e9) - 2 * CARD_PAD))
+  -- The strip's description is built ten times a second, not every frame (the
+  -- whole tree is made afresh each time: 1.0-1.6 MB/s of garbage on foot,
+  -- soakprobe 2026-11-06), and at once when anything you act on changes: the
+  -- mode, who is listed, the hover, the scroll, a confirm or the picker.
+  local key = string.format("%s|%d|%d|%d|%s|%.1f|%s|%s|%s|%s|%s", mode, #list, nvis, #afoot, tostring(hover_id), L.scroll or 0,
+    tostring(confirm ~= nil and confirm ~= false), tostring(pickerOpen), tostring(chips_any), tostring(active), tostring(craft))
+  if key ~= make_key or not (time >= make_t and time - make_t < (REFRESH or 0)) then
+    make_key, make_t = key, time
+    ui.make(node, describe(v, list, L, afoot, chips_any, (maxW or 1e9) - 2 * CARD_PAD))
+  end
   lift_ops(node, true)
 end
 

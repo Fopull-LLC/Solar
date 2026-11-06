@@ -200,6 +200,29 @@ script's `local` tables are out of reach). `SOAKJSON` rows go to
 `$WORK/results/<TAG>/soak.jsonl`; `soaktable.py` tabulates them and fits each
 script's ms/frame slope. results/soak_2026-11-03.md.
 
+**The route soak** (`ROUTE=1`, 2026-11-06: the 11-05b "a few minutes of walking
+and it is unbearable" report) is one long play on a NEW save: the crew put down
+250–570 m out and WALKED (W + Shift, the view turned away from the base with a
+slow ±30° wander; stuck 12 s → put down elsewhere) for `WALK` (360) s, the
+6-part rover driven away from the base for `DRIVE` (180) s, a last walk of
+`WALK2` (90) s. `HOMEW=alien` (+ `HOMESEED`) starts on an alien home world;
+`WEATHER=rain` (any `weather.force` kind) holds a weather, unset it runs free
+(perfbench's boot forces clear: a player's does not). Every `EVERY` (10) s an
+`RT wNN` line and a SOAKJSON row: the window's frame p50/p95/p99/max, frames
+over 33 ms, the hitches (>= 50 ms) with the buckets, parts and scripts they
+spent, the engine counts that can grow (nodes, props, decals, particles,
+effects, lights, voices, draws, chunks, fieldChunks/fieldEdited/fieldStandIns,
+meshesPending/InFlight, textureBytes, scriptMeshes/Textures), Lua memory, the
+scripts' ms/frame, perf.gpu passes, the weather, and each script's ALLOCATION
+rate (perf.scriptMemory's rises summed frame by frame: the garbage it makes,
+KB/s). The census (a full collect) only at the start and the end. `pb_frames`
+3 (perfbench reads 3 frames of perf.frames a frame, not 8: at 8 the probe
+itself made 7.8 MB/s of garbage). `rttable.py` prints the windows, the first
+third against the last, and the whole run's hitch buckets/parts/scripts and
+allocators.
+
+    WORK=$SCRATCH/soak LOCK=.../engine2.lock ROUTE=1 [HOMEW=alien] [WEATHER=storm] tools/perf/soakprobe.sh <engine>
+
 ## seaprobe.sh + seaprobe_modes.lua — the sea's Water Volume and stale node handles
 
     WORK=$SCRATCH/sea LOCK=$SCRATCH/engine.lock [PATCHES=x.patch] tools/perf/seaprobe.sh <engine>

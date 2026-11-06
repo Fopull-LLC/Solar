@@ -3765,6 +3765,8 @@ local function draw_reticle()
 end
 
 local hud
+HUD_REFRESH = 0.1   -- s between two describes of an unchanged hotbar (tests set 0)
+HUDK = { key = nil, t = -100 }   -- the hotbar last described (draw_hud; a global: the chunk is at its 200 locals)
 local function draw_hud(carrying)
   if not hud then hud = find("Tool HUD") end
   if not hud then return end
@@ -3792,7 +3794,18 @@ local function draw_hud(carrying)
   end
   if carrying and prompt == "" and gate ~= "in hand" then prompt = gate end
   hudText = carrying and hudLine() or ("tools stowed  ·  " .. gate)
-  if up and ui and ui.make then ui.make(hud, hotbar(carrying)) end
+  -- The hotbar is described ten times a second, and at once when what it says
+  -- changes (the tool, the prompt, the line, shown again): a fresh tree every
+  -- frame was ~1 MB/s of garbage on foot (soakprobe 2026-11-06).
+  if up and ui and ui.make then
+    local key = tostring(carrying) .. "|" .. tostring(toolId()) .. "|" .. tostring(prompt) .. "|" .. tostring(hudText) .. "|" .. tostring(gate)
+    if grab or key ~= HUDK.key or not (time >= HUDK.t and time - HUDK.t < (HUD_REFRESH or 0)) then
+      HUDK.key, HUDK.t = key, time
+      ui.make(hud, hotbar(carrying))
+    end
+  else
+    HUDK.key = nil
+  end
   reticle_draw = (reticle_up and carrying and gate == "in hand") and draw_reticle or nil
 end
 

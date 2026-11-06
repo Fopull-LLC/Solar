@@ -172,7 +172,7 @@ local function measure()
   local bod, smp = nil, nil
   local xt, xtf = nil, 0
   if perf.frames then
-    local fr = perf.frames(8) or {}
+    local fr = perf.frames(math.floor(params.pb_frames or 8)) or {}
     local xb, xs, xp = {}, {}, {}
     local got = false
     bod, smp = {}, {}

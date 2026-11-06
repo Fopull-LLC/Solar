@@ -1260,8 +1260,35 @@ function seamPlan(ore, g, slot, clear, opts)
   return out
 end
 
+-- Paints wait in a queue and are laid PAINT_PER_FRAME a frame (paint_drain,
+-- from update): a vein's whole plan (50-60 terrain edits) on one frame was
+-- one of the walking hitches, its chunks re-meshed together (soakprobe
+-- 2026-11-06). The ops are body-relative, placed against their world as it
+-- is on the frame each is laid.
+PAINT_PER_FRAME = 12
+local paintq, paintq_head = {}, 1
+local paint_one
+local function paint_drain(n)
+  while n > 0 and paintq_head <= #paintq do
+    local e = paintq[paintq_head]
+    paintq[paintq_head] = false
+    paintq_head = paintq_head + 1
+    local b = e.body and space.body(e.body)
+    if b then paint_one(e.o, b) end
+    n = n - 1
+  end
+  if paintq_head > #paintq then paintq, paintq_head = {}, 1 end
+end
+function paintsQueued() return #paintq - paintq_head + 1 end
 local function seam_apply(plan, body)
+  local name = body.name or cur_body
   for _, o in ipairs(plan) do
+    -- (where the world cannot be named again, it is laid now)
+    if name then paintq[#paintq + 1] = { o = o, body = name } else paint_one(o, body) end
+  end
+end
+paint_one = function(o, body)
+  do
     if o.op == "tex" then
       if o.brush then terrain.paintTexture(body.x + o.x, body.y + o.y, body.z + o.z, o.r, o.slot, o.brush)
       else terrain.paintTexture(body.x + o.x, body.y + o.y, body.z + o.z, o.r, o.slot) end
@@ -1334,7 +1361,7 @@ local function vein_paint(p, v, body, R)
   if not g then return false end
   if slot > 0 then
     if not terrain.paintTexture then return false end
-    if terrain.capacity and terrain.capacity() < #g * 7 + 40 then return false end
+    if terrain.capacity and terrain.capacity() - paintsQueued() < #g * 7 + 40 then return false end
     seam_apply(seamPlan(v.ore, g, slot, kept_clear), body)
     veinsPainted = (veinsPainted or 0) + 1
   end
@@ -1360,7 +1387,7 @@ local function vein_reveal(v, body, near)
     if #pts == 0 then return 0 end
   end
   local plan = near_face(seamPlan(v.ore, pts, v.slot, kept_clear, { trail = false, buried = v.buried }), body)
-  if terrain.capacity and terrain.capacity() < #plan + 40 then return 0 end
+  if terrain.capacity and terrain.capacity() - paintsQueued() < #plan + 40 then return 0 end
   seam_apply(plan, body)
   return #plan
 end
@@ -2293,6 +2320,7 @@ function update(node, dt)
     return
   end
   drain_yields()
+  paint_drain(PAINT_PER_FRAME or 12)
   if #events > 32 then for _ = 1, #events - 32 do table.remove(events, 1) end end
   if cur_body then audit_tick(observer()) end
   loose_tick()

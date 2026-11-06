@@ -50,6 +50,10 @@ defaults = {
   -- Density-grid resolution per patch side (the climate is sampled rows² times).
   --@range 6 24
   rows = 14,
+  -- Density-grid rows sampled a field update (a patch's grid is gathered over
+  -- rows / sample_rows updates rather than in one frame).
+  --@range 1 24
+  sample_rows = 4,
   -- Seconds between field updates.
   interval = 0.15,
   -- Above this height nothing new is planted (flying, not walking).
@@ -1022,14 +1026,25 @@ local function sample_patch(p, body, w, cl)
   -- streams, and keeps that height — planting before the ground exists is how
   -- plants end up hanging in the air.
   if not terrain.query(body.x + p.cx, body.y + p.cy, body.z + p.cz) then return false end
-  p.samples = {}
-  -- Rivers and lakes near this patch (scale 3): their banks and shores are
-  -- wet ground, where the wet-loving species crowd in and the dry ones thin
-  -- out (flora_gen.densityAt reads `riparian`), and a lake's water grows no
-  -- land plants. One list per patch, so each sample tests only a few dozen
-  -- segments.
-  local wet = cl.wetNear and w.hydro and cl.wetNear(body.name or cur_body, p.cx, p.cy, p.cz, half * 1.5) or nil
-  for r = 0, rows - 1 do
+  -- A few rows a call (`sample_rows`), the patch's samples handed over once
+  -- all are in: all 196 in one frame was the field's worst burst while
+  -- walking, 10-35 ms in the hitches (soakprobe 2026-11-06). The points are
+  -- body-relative, so rows taken on different frames agree.
+  local sm = p.sampling
+  if not sm then
+    -- Rivers and lakes near this patch (scale 3): their banks and shores are
+    -- wet ground, where the wet-loving species crowd in and the dry ones thin
+    -- out (flora_gen.densityAt reads `riparian`), and a lake's water grows no
+    -- land plants. One list per patch, so each sample tests only a few dozen
+    -- segments.
+    sm = { buf = {}, row = 0,
+           wet = cl.wetNear and w.hydro and cl.wetNear(body.name or cur_body, p.cx, p.cy, p.cz, half * 1.5) or nil }
+    p.sampling = sm
+  end
+  local wet = sm.wet
+  local r0 = sm.row
+  local r1 = math.min(rows - 1, r0 + math.max(1, math.floor(params.sample_rows or rows)) - 1)
+  for r = r0, r1 do
     for c = 0, rows - 1 do
       local x = (c / (rows - 1) - 0.5) * 2 * half
       local z = (r / (rows - 1) - 0.5) * 2 * half
@@ -1054,9 +1069,12 @@ local function sample_patch(p, body, w, cl)
           s.density = 0
         end
       end
-      p.samples[r * rows + c + 1] = s
+      sm.buf[r * rows + c + 1] = s
     end
   end
+  sm.row = r1 + 1
+  if sm.row < rows then return false end
+  p.samples, p.sampling = sm.buf, nil
   p.sampled_t = time
   return true
 end

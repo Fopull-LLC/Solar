@@ -549,16 +549,41 @@ local function sk_sample()
   SK.win = SK.win + 1
   sc_begin(string.format("soak_w%02d", SK.win))
 end
+local RT = { win = 0, w0 = nil, next_t = nil, phase = "boot", unstuck = 0, last = nil, path_m = 0 }
+local rt_sample   -- the route soak's sample, below
 -- called from update() every frame (outside the coroutine)
+-- per script, every frame: perf.scriptMemory's rises summed (what each script
+-- allocated, less what the collector took back from it inside the frame) =
+-- its allocation rate; and what it holds now (growth = a table never emptied)
+RT.alloc, RT.mem0, RT.prevm = {}, nil, nil
+local function rt_mem()
+  if not (perf.scriptMemory and RT.next_t) then return end
+  local m = perf.scriptMemory()
+  if not m then return end
+  local pm = RT.prevm
+  if pm then
+    for k, v in pairs(m) do
+      local d = v - (pm[k] or v)
+      if d > 0 and k ~= "total" then RT.alloc[k] = (RT.alloc[k] or 0) + d end
+    end
+  end
+  RT.prevm = m
+  RT.mem0 = RT.mem0 or m
+end
 function soak_tick()
-  if not SK.next_t then return end
-  if W() >= SK.next_t then
+  rt_mem()
+  if RT.next_t and W() >= RT.next_t then
+    RT.next_t = RT.next_t + params.soak_every
+    rt_sample()
+  elseif SK.next_t and W() >= SK.next_t then
     SK.next_t = SK.next_t + params.soak_every
     sk_sample()
   end
 end
 
+local run_route   -- below: the long-walk-and-drive soak (soak_route=1)
 local function run_soak()
+  if (params.soak_route or 0) > 0 then return run_route() end
   local secs = params.soak_secs
   wait_ready(120)
   sk_quiet()
@@ -599,4 +624,208 @@ local function run_soak()
   sk_sample()
   SK.next_t = nil
   P("SOAK end: %d cycles", SK.cycles)
+end
+
+-- ── the route soak (soak_route=1): what Ty did on 11-05b, without teleports ─
+-- A new save, the crew put down 250-570 m from the base (sk_spot), then
+-- WALKED (W + Shift held, a short strafe every 20 s so the line wanders) for
+-- `soak_walksecs`, the 6-part rover driven away from the base for
+-- `soak_drivesecs`, and a last walk of `soak_walk2` s. Every `soak_every`
+-- (10) s one RT line and one SOAKJSON row: the window's frame p50/p95/p99/max,
+-- frames over 33 ms, the hitches (>= 50 ms) with the buckets, parts and
+-- scripts they spent, the counts that can grow (nodes, props, decals,
+-- particles, effects, lights, voices, draws, chunks, fieldChunks /
+-- fieldStandIns, meshesPending/InFlight, textureBytes, scriptMeshes /
+-- Textures), Lua memory, script ms/frame, perf.gpu, and how far the crew is
+-- from the base. The census (with its full collect) runs only at the start,
+-- after the walk and at the end, so the windows show the GC as the game has it.
+local function rt_pos()
+  local v = pilot()
+  if v and v.node and v.node.valid then local i = assembly.info(v.node); if i then return sub(i.com, home()) end end
+  local n = astro()
+  return n and sub(n, home()) or nil
+end
+local function rt_from_base(p)
+  if not p then return -1 end
+  local u, _, _, R = base_frame()
+  return math.acos(clamp(dot(unit(p), u), -1, 1)) * R
+end
+local RT_COUNTS = { "nodes", "culled", "instances", "draws", "unbatched", "chunks", "fieldChunks", "fieldEdited", "fieldStandIns", "meshesPending",
+                    "meshesInFlight", "props", "propsDropped", "particles", "effects", "lights", "voices", "animators", "decals", "decalTris",
+                    "shadowProxies", "shadowVolumes", "textureBytes", "scriptMeshes", "scriptMeshBytes", "scriptTextures", "scriptTextureBytes", "rays", "sweeps" }
+rt_sample = function()
+  local name = string.format("rt_w%02d", RT.win)
+  local r = RECS[name]
+  local st = r and stats(r.dts) or { p50 = 0, p95 = 0, p99 = 0, max = 0, mean = 0, n = 0 }
+  local n = math.max(#(r and r.dts or {}), 1)
+  local over33 = 0
+  for _, v in ipairs(r and r.dts or {}) do if v > 33.3 then over33 = over33 + 1 end end
+  local scr = r and topk(r.s, 10, n) or {}
+  local bm = {}
+  if r then for k, v in pairs(r.b) do bm[k] = v / n end end
+  local hb = r and topk(r.hb or {}, 5) or {}
+  local hp = r and topk(r.hp or {}, 6) or {}
+  -- the scripts the worst hitches spent (the engine's own per-hitch record)
+  local hs = {}
+  for _, e in ipairs(r and r.hw or {}) do for _, x in ipairs(e.s or {}) do hs[x[1]] = (hs[x[1]] or 0) + x[2] end end
+  local hits, hms = r and r.hit.n or 0, r and r.hms or 0
+  local gp = r and topk(r.gp or {}, 6, math.max(r.gn, 1)) or {}
+  local gpu = r and r.gn > 0 and r.gpu / r.gn or -1
+  local worst = r and r.hw and r.hw[1]
+  local sp = r and topk(r.ssp or {}, 4, math.max(r.nsp, 1)) or {}
+  local sbk = r and topk(r.sb or {}, 4, math.max(r.nsp, 1)) or {}
+  if r then r.active, r.done = false, true end   -- printed here, not by finish_all
+  local c = perf.counts() or {}
+  local cc = {}
+  for _, k in ipairs(RT_COUNTS) do cc[k] = c[k] or 0 end
+  local p = rt_pos()
+  local fb = rt_from_base(p)
+  if RT.last and p then
+    local d = len(p.x - RT.last.x, p.y - RT.last.y, p.z - RT.last.z)
+    if d < 400 then RT.path_m = RT.path_m + d end
+  end
+  RT.last = p
+  local kb = collectgarbage("count")
+  local ff = findScript("flora_field", { quiet = true })
+  P("RT w%02d t=%.0f %s: p50 %.1f p95 %.1f p99 %.1f max %.0f (%d fr, >33ms %d) | hitches %d %.0f ms: %s | parts %s | hitch scripts %s | lua %.0f KB | from base %.0f m path %.0f m | nodes %d props %d decals %d particles %d effects %d lights %d voices %d draws %d chunks %d field %d/%d standIns %d pending %d/%d tex %.0f MB sMesh %d sTex %d | flora %s | gpu %.2f",
+    RT.win, W() - RT.w0, RT.phase, st.p50, st.p95, st.p99, st.max, st.n, over33, hits, hms, fmtk(hb), fmtk(hp), fmtk(topk(hs, 4)), kb, fb, RT.path_m,
+    cc.nodes, cc.props, cc.decals, cc.particles, cc.effects, cc.lights, cc.voices, cc.draws, cc.chunks, cc.fieldChunks, cc.fieldEdited, cc.fieldStandIns,
+    cc.meshesPending, cc.meshesInFlight, cc.textureBytes / 1048576, cc.scriptMeshes, cc.scriptTextures, tostring(ff and ff.patchCount), gpu)
+  P("RT w%02d scripts: %s | buckets %s | >33ms frames: buckets %s scripts %s | gpu %s", RT.win, fmtk(scr), fmtk(topk(bm, 8)), fmtk(sbk), fmtk(sp), fmtk(gp))
+  if worst then
+    P("RT w%02d worst %.0f ms: %s | parts %s | scripts %s | lines %s", RT.win, worst.ms, fmtk(worst.b), fmtk(worst.p), fmtk(worst.s), fmtk(worst.sm or {}))
+  end
+  local wsecs = math.max(params.soak_every, 1)
+  local al = topk(RT.alloc, 10, wsecs)
+  local atot = 0
+  for _, v in pairs(RT.alloc) do atot = atot + v end
+  RT.alloc = {}
+  local held, grow = {}, {}
+  for k, v in pairs(RT.prevm or {}) do
+    if k ~= "total" then held[k] = v; grow[k] = v - ((RT.mem0 or {})[k] or v) end
+  end
+  P("RT w%02d alloc %.0f KB/s: %s | held top: %s | grown since start: %s", RT.win, atot / wsecs, fmtk(al), fmtk(topk(held, 6)), fmtk(topk(grow, 6)))
+  local ts = terrain.stats and terrain.stats() or {}
+  local function tmb(k) return (ts[k] or 0) / 1048576 end
+  local tline = string.format("total %.0f MB field %.0f standIns %.0f meshesGpu %.0f meshesCpu %.0f collision %.0f shadow %.0f | dataChunks %s standInChunks %s",
+    tmb("total"), tmb("field"), tmb("standIns"), tmb("meshesGpu"), tmb("meshesCpu"), tmb("collision"), tmb("shadow"), tostring(ts.dataChunks), tostring(ts.standInChunks))
+  P("RT w%02d terrain: %s | fieldChunks+standIns %d", RT.win, tline, (cc.fieldChunks or 0) + (cc.fieldStandIns or 0))
+  local wxs = findScript("weather", { quiet = true })
+  local wc = wxs and wxs.current and wxs.current() or {}
+  local at = findScript("atmosphere", { quiet = true })
+  local wxline = string.format("%s precip %.2f storm %.2f particles %s sun %.2f", tostring(wc.type), wc.precip or 0, wc.storm or 0,
+    tostring(wc.particles), at and at.sun_now or -1)
+  P("RT w%02d weather: %s", RT.win, wxline)
+  print("SOAKJSON " .. json({ win = RT.win, t = W() - RT.w0, game = time, phase = RT.phase, p50 = st.p50, p95 = st.p95, p99 = st.p99, max = st.max,
+    mean = st.mean, frames = st.n, over33 = over33, hitches = hits, hitchMs = hms, hitchBuckets = hb, hitchParts = hp, hitchScripts = topk(hs, 6),
+    spikeBuckets = sbk, spikeScripts = sp, lua_kb = kb, from_base = fb, path_m = RT.path_m, counts = cc, scripts = scr, buckets = topk(bm, 12),
+    gpu = gpu, gpuPasses = gp, flora = ff and ff.patchCount or -1, unstuck = RT.unstuck, weather = wxline, terrainMB = tmb("total"), terrainFieldMB = tmb("field"), terrainMeshMB = tmb("meshesGpu"), terrainLine = tline, alloc = al, allocKBs = atot / wsecs, held = topk(held, 12), grown = topk(grow, 12) }))
+  RT.win = RT.win + 1
+  sc_begin(string.format("rt_w%02d", RT.win))
+end
+-- `home_to` (a body-relative point, optional): walk TOWARD it instead (the
+-- way back of an out-and-back), no wander, and stop within 8 m of it
+local function rt_walk(secs, k0, home_to)
+  local t0, k = time, k0
+  local chk, chkp = time, rt_pos()
+  local pc = findScript("planet_camera")
+  local lastface = -1
+  while time - t0 < secs do
+    -- the view (so the walk) away from the base, wandering ±30° slowly; the
+    -- direction is worked out from the crew's place on the planet each time
+    if pc and pc.face and time - lastface > 0.5 then
+      lastface = time
+      local p = rt_pos()
+      local u = base_frame()
+      if p then
+        local up = unit(p)
+        local aw = home_to and sub(unit(home_to), up) or sub(up, scl(u, 1))
+        aw = sub(aw, scl(up, dot(aw, up)))
+        if len(aw.x, aw.y, aw.z) > 1e-6 then
+          aw = unit(aw)
+          local sd = cross(up, aw)
+          local th = home_to and 0 or 0.5 * math.sin((time - t0) / 25)
+          local f = { x = aw.x * math.cos(th) + sd.x * math.sin(th), y = aw.y * math.cos(th) + sd.y * math.sin(th), z = aw.z * math.cos(th) + sd.z * math.sin(th) }
+          pcall(pc.face, f.x, f.y, f.z, -0.1)
+        end
+      end
+    end
+    if home_to then
+      local p = rt_pos()
+      if p and len(p.x - home_to.x, p.y - home_to.y, p.z - home_to.z) < 8 then P("RT back at the start after %.0f s", time - t0); break end
+    end
+    if not HELD.w then key_down("w") end
+    if not HELD.shift then key_down("shift") end
+    yield()
+    -- stuck (a cliff, water, a wall): put down somewhere new
+    if time - chk > 12 then
+      local p = rt_pos()
+      if p and chkp and len(p.x - chkp.x, p.y - chkp.y, p.z - chkp.z) < 6 then
+        k = k + 1
+        local spot = sk_spot(k)
+        if spot and sk_put(spot) then RT.unstuck = RT.unstuck + 1; RT.last = nil; P("RT stuck: put down %d m out on bearing %d", spot.d, k) end
+        p = rt_pos()
+      end
+      chk, chkp = time, p
+    end
+  end
+  release_all()
+  return k
+end
+run_route = function()
+  wait_ready(120)
+  -- boot() forces clear weather; a player's weather runs free (strs
+  -- soak_weather: "free" the default, or a weather.force kind, e.g. "rain")
+  do
+    local wx = findScript("weather")
+    local want = tostring(params.soak_weather or "free")
+    if wx and wx.force then
+      if want == "free" then wx.force(nil) else wx.force(want) end
+    end
+    P("RT weather: %s", want)
+  end
+  sk_quiet()
+  sk_wrap()
+  sk_census("start")
+  local hb = home()
+  P("RT start: home %s R %.0f kind %s, walk %d s, drive %d s, walk2 %d s, a sample every %d s",
+    hb and hb.name or "?", hb and hb.radius or -1, tostring(save.get("g_homeKind")), params.soak_walksecs, params.soak_drivesecs, params.soak_walk2, params.soak_every)
+  RT.w0 = W()
+  RT.next_t = W() + params.soak_every
+  sc_begin("rt_w00")
+  local k = 1
+  local spot = sk_spot(k)
+  if spot then sk_put(spot) end
+  wait(3)
+  RT.last = rt_pos()
+  RT.phase = "walk"
+  local start_p = rt_pos()
+  k = rt_walk(params.soak_walksecs, k)
+  -- the out-and-back (soak_return=1): back along the way to where the walk
+  -- began, then stand there (`soak_stand` s): does fieldChunks come back down?
+  -- (E's test of a residency ramp against a leak)
+  if (params.soak_return or 0) > 0 and start_p then
+    RT.phase = "back"
+    P("RT turning back: %.0f m from the start", (function() local p = rt_pos(); return p and len(p.x - start_p.x, p.y - start_p.y, p.z - start_p.z) or -1 end)())
+    rt_walk(params.soak_walksecs * 1.5, k, start_p)
+    RT.phase = "stand"
+    wait(params.soak_stand or 25)
+  end
+  RT.phase = "drive"
+  if params.soak_drivesecs > 0 then
+    local ok, err = pcall(function()
+      local vc = run_rover({ name = "rt_drive", secs = params.soak_drivesecs, out = 1e9 })
+      sk_quiet()
+      if vc then tap("f"); wait(2) end
+    end)
+    if not ok then P("RT drive error %s", tostring(err)); release_all() end
+  end
+  RT.last = rt_pos()
+  RT.phase = "walk2"
+  rt_walk(params.soak_walk2, k + 10)
+  rt_sample()
+  RT.next_t = nil
+  do local r = RECS[string.format("rt_w%02d", RT.win)]; if r then r.active, r.done = false, true end end
+  sk_census("end")
+  P("RT end: %d windows, path %.0f m, unstuck %d", RT.win, RT.path_m, RT.unstuck)
 end

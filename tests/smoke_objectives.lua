@@ -142,8 +142,18 @@ ok(card.__el.visible == true, "the card shows once the world is up")
 ok(says("base is going up"), "step 1 should say the colony is being sited: " ..
   table.concat(lines(), " | "))
 
--- 2. Sited, nothing signed: go and sign the first contract.
+-- The card is worked out at most every REFRESH s (soakprobe 2026-11-06: it was
+-- rebuilt every frame): a change within that window waits for the next one.
 base.sited = true
+update(card, 1 / 60)
+ok(says("base is going up"), "the card is not worked out again within REFRESH s")
+_G.time = _G.time + 0.11
+update(card, 1 / 60)
+ok(says("Sign your first contract"), "the card is worked out again once REFRESH s have passed")
+-- the rest of the walk-through drives the card frame by frame
+REFRESH = 0
+
+-- 2. Sited, nothing signed: go and sign the first contract.
 update(card, 1 / 60)
 ok(says("Sign your first contract"), "step 2 should send you to sign a contract")
 ok(says("Command Centre"), "step 2 should name the Command Centre")
@@ -502,6 +512,7 @@ ok(says("Recover M. Moreau's pack"), "◂ steps back to the pack")
 
 -- A reload keeps the pick (the script starts afresh; the save does not).
 chunk()
+REFRESH = 0
 _G.params = { enabled = 1, arrived = 24.0 }
 start(card)
 update(card, 1 / 60)
