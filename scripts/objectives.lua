@@ -428,6 +428,12 @@ local function prog_guidance(mi, astro, m, g, niche)
     local hint = "Each Relay Beacon only has to see one that is already linked: put them on high ground, a few hundred metres apart."
     if net.api then
       hint = string.format("%s of the ground has a link home. %s", pct(net.ground), hint)
+      -- (deep-space M3: past the first tenth the Build Kit is out, and a far
+      -- side outpost is a ground station of its own)
+      if (net.ground or 0) >= 0.10 and (g.frac or 0) > 0.10 then
+        hint = hint .. " Or found an outpost where the map is dark: an Engineer's Build Kit puts up a Base Station Tower,"
+          .. " and a powered one is a ground station of its own."
+      end
     end
     return string.format("Spread Relay Beacons across %s.", home or "the planet"), hint
   elseif g.kind == "orbitrelay" then

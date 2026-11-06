@@ -86,6 +86,7 @@ yawOffset = 0.0       -- the turn dialled (rad)
 raise = 0.0           -- the stilts dialled (m)
 
 local KIT = "buildkit"
+VEIN_CLEAR = 30        -- M8: no building this close to a vein being mined (m)
 local GREEN, RED = { 0.30, 0.95, 0.65 }, { 1.0, 0.28, 0.20 }
 local UNDO_RING = 50
 
@@ -133,15 +134,41 @@ end
 local function has_kit() local V = ref("inventory"); return V and V.itemCount and V.itemCount("astro", KIT) > 0 end
 
 -- THE ISSUE: every Engineer gets one Build Kit, once (a kit left in a locker
--- stays there). Checked every few seconds: hires, retrains and old saves.
+-- stays there), once the kit is unlocked (M3: the Relay Network's first goal,
+-- 10 % of the ground linked) and the next time they are at the base (in it, or
+-- on foot within 400 m of it). Checked every few seconds: hires, retrains and
+-- old saves. (A save whose Engineers already had one keeps it.)
+function kitUnlocked()
+  local rs = ref("research")
+  if rs and rs.isUnlocked then return rs.isUnlocked(KIT) == true end
+  return true
+end
+local function at_base(r)
+  if r.status ~= "afoot" then return r.status == "base" or r.status == nil end
+  local bf = ref("base_facilities")
+  local fp = bf and bf.footprint
+  if not fp then return false end
+  -- (the one walking: where the walker is this frame, not the roster's last note)
+  local a = astro()
+  local b = space and space.body and space.body(fp.body)
+  if a and b and r.id == member() then
+    if space.dominant(a.x, a.y, a.z) ~= fp.body then return false end
+    return len(a.x - b.x - fp.x, a.y - b.y - fp.y, a.z - b.z - fp.z) <= 400
+  end
+  if not (r.body == fp.body and r.x and r.y and r.z) then return false end
+  return len(r.x - fp.x, r.y - fp.y, r.z - fp.z) <= 400
+end
 local issue_t = -10
 local function issue_tick()
   if now() - issue_t < 3.0 then return end
   issue_t = now()
   local c, V = ref("crew"), ref("inventory")
   if not (c and c.roster and V and V.addItem and V.itemCount) then return end
+  -- M3: the kit is the Relay Network's 10 % unlock (research `buildkit`):
+  -- before it nobody is issued one; after it every Engineer is, at the base
+  if not kitUnlocked() then return end
   for _, r in ipairs(c.roster()) do
-    if r.status ~= "dead" and isEngineer(r) then
+    if r.status ~= "dead" and isEngineer(r) and at_base(r) then
       local cid = c.packOf(r.id)
       local key = "inv.issued.buildkit." .. cid
       if save.get(key) ~= true then
@@ -237,6 +264,12 @@ end
 -- Take a part in hand (the card click). → ok
 function hold(id)
   if not partInfo(id) then return false end
+  -- (a BASE part behind a craft part's research: the Isotope Skid's cells)
+  local rs = ref("research")
+  if rs and rs.isUnlocked and not rs.isUnlocked(id) then
+    play("denied"); say((rs.labelOf and rs.labelOf(id) or id) .. ": " .. tostring(rs.lockLine and rs.lockLine(id) or "locked"))
+    return false
+  end
   if heldPart ~= id then heldPart = id; play("pick", 0.35) end
   return true
 end
@@ -273,7 +306,12 @@ local function over_panel()
 end
 local function typing()
   local f = ui and ui.focused and ui.focused()
-  return f ~= nil and f.name == "FieldPartSearch"
+  return f ~= nil and (f.name == "FieldPartSearch" or f.name == "FieldBaseName")
+end
+-- A new base's name field is up (base_tower.lua): the kit's keys and clicks wait.
+local function naming()
+  local bt = ref("base_tower")
+  return bt ~= nil and bt.prompting ~= nil and bt.prompting() == true
 end
 
 -- ── the aim and the pose ────────────────────────────────────────────────────
@@ -461,6 +499,24 @@ function validity(id, p)
       local kx, kz = c[1] * def.half.x, c[2] * def.half.z
       local ok, kc = pcall(bf.keepClear, p.body, p.x + R.x * kx + F.x * kz, p.y + R.y * kx + F.y * kz, p.z + R.z * kx + F.z * kz)
       if ok and kc then r.bad = "on the spaceport's ground: build out past its paving" return r end
+    end
+  end
+  -- M8: not within 30 m of a vein being mined (one a cut has taken ore from,
+  -- or whose outcrops were broken: mineral_field.workedVeinNear)
+  local mf = ref("mineral_field")
+  if mf and mf.workedVeinNear then
+    local ok, v, d = pcall(mf.workedVeinNear, bx, by, bz, VEIN_CLEAR + math.max(def.half.x or 0, def.half.z or 0))
+    if ok and v then
+      r.bad = string.format("%.0f m from a %s vein being mined: build %d m clear of it", d or 0, tostring(v.ore or "mined"), VEIN_CLEAR)
+      return r
+    end
+  end
+  -- a part's own rules (its parts_base `script`: a tower stands 1 km from the next)
+  if def.script then
+    local sc = ref(def.script)
+    if sc and sc.placeWhy then
+      local ok, why = pcall(sc.placeWhy, id, def, p)
+      if ok and why then r.bad = why return r end
     end
   end
   -- something in the way (placement.overlapObb; cached while the ghost holds still)
@@ -1035,6 +1091,7 @@ function update(node, dt)
   if want and not open_ then set_open(true) end
   if not open_ then return end
   cat_show(true)
+  if naming() then wantsScroll = false return end
   -- (planet_camera keeps third person and lets go of shift-lock while isOpen())
   -- Esc: the part in hand first, then the kit
   if input.pressed("escape") then
@@ -1095,7 +1152,7 @@ function lateUpdate(node, dt)
   ghost_paint()
   -- LMB (an edge, off the panel and the HUD's buttons)
   local l = (sim and sim.lmb) or (input.button and input.button(0) == true)
-  if l and not lmb_was and heldPart and not over_panel() and not typing() then
+  if l and not lmb_was and heldPart and not over_panel() and not typing() and not naming() then
     do_place(shift_held() == true)
   end
   lmb_was = l == true

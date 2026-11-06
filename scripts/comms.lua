@@ -68,6 +68,11 @@
 --   the GROUND STATION   the Tracking Station's dish at the base, on the home
 --                        world. DSN-scale power: the root of the network.
 --   every RELAY BEACON   planted on the ground (above)
+--   every BASE STATION   (deep-space M2, scripts/base_tower.lua commsNodes): a
+--   TOWER                mast is a beacon-class relay; a powered one (2 EC/s
+--                        from its pads) is a SECOND HOME ROOT at the station's
+--                        power, so a far-side base is a ground station of its
+--                        own. statusOf("t:<base id>").
 --   every LIVE craft     what its powered, extended antennas add up to
 --                        (vessel_controller `commsNode`)
 --   every craft OFF the  a fleet record not rebuilt yet (flight_ops
@@ -397,6 +402,7 @@ local function aloft(x, y, z, body)
 end
 
 local last_sig = ""
+local tower_err = false
 
 -- ── one instant ─────────────────────────────────────────────────────────────
 -- EVERY position the network uses is kept RELATIVE TO ITS WORLD (`frame` =
@@ -495,6 +501,19 @@ local function solve()
       local nd = E.beaconNode("b:" .. tostring(id), b.name, x, y, z)
       nd.body = b.body
       list[#list + 1] = pin(nd, by, bodies, b.body)
+    end
+  end
+  -- BASE STATION TOWERS (deep-space M2; scripts/base_tower.lua): a mast is a
+  -- beacon-class relay, a powered one a second home root at the station's
+  -- power. Already pinned to their worlds, placed against this read.
+  local BT = ref("base_tower")
+  if BT and BT.commsNodes then
+    local ok, tl = pcall(BT.commsNodes, by, bodies, E)
+    if ok and type(tl) == "table" then
+      for _, nd in ipairs(tl) do list[#list + 1] = nd end
+    elseif not ok and not tower_err then
+      tower_err = true
+      log("comms: the towers failed: " .. tostring(tl))
     end
   end
   for _, v in ipairs(findScripts("vessel_controller")) do
@@ -631,7 +650,7 @@ local function solve()
 end
 
 -- A craft's link home (by its root node id, or "f:<fid>" for one off the
--- scene, "b:<id>" for a beacon). nil before the first solve or for a craft
+-- scene, "b:<id>" for a beacon, "t:<base id>" for a Base Station Tower). nil before the first solve or for a craft
 -- with no radio.
 function statusOf(id)
   return status[id]
@@ -715,8 +734,17 @@ function relayStats()
     local st = status["b:" .. tostring(id)]
     if st and st.connected then add(s.linked.ground, b.body); s.linked.total = s.linked.total + 1 end
   end
+  -- a Base Station Tower stands on its world: a ground relay, mast or station
   for _, nd in ipairs(list_last) do
-    if not nd.home and not nd.beacon and (nd.relay or 0) > 0 then
+    if nd.tower and nd.body then
+      add(s.ground, nd.body)
+      s.total = s.total + 1
+      local st = status[nd.id]
+      if st and st.connected then add(s.linked.ground, nd.body); s.linked.total = s.linked.total + 1 end
+    end
+  end
+  for _, nd in ipairs(list_last) do
+    if not nd.home and not nd.beacon and not nd.tower and (nd.relay or 0) > 0 then
       local bn = nd.frame or dominant(nd.x, nd.y, nd.z)
       local st = status[nd.id]
       local linked = st and st.connected
@@ -757,7 +785,7 @@ end
 -- (the station, beacons and relay craft standing on the ground, reaching it
 -- through each other only), and all of them. Kept pinned to their worlds
 -- (`frame`, `rx..rz`): coverage places them against its own read.
-local function is_ground(nd) return nd.home or nd.beacon or nd.landed end
+local function is_ground(nd) return nd.home or nd.beacon or nd.landed or nd.tower end
 local function relay_sets()
   if derived.relays then return derived.relays.ground, derived.relays.all end
   local E = ref("electronics")
@@ -774,7 +802,7 @@ local function relay_sets()
     if up > 0 then
       local st = status[nd.id]
       local r = { id = nd.id, x = nd.x, y = nd.y, z = nd.z, power = up, beacon = nd.beacon, home = nd.home,
-                  agl = nd.agl, landed = nd.landed, frame = nd.frame, rx = nd.rx, ry = nd.ry, rz = nd.rz }
+                  agl = nd.agl, landed = nd.landed, tower = nd.tower, frame = nd.frame, rx = nd.rx, ry = nd.ry, rz = nd.rz }
       if st and st.connected then all[#all + 1] = r end
       if is_ground(nd) and gst[nd.id] and gst[nd.id].connected then ground[#ground + 1] = r end
     end
@@ -904,7 +932,7 @@ local function compute_cover(name)
   local n = #grid
   -- moving relays (anything not on the ground) make the answer go stale
   local moving = false
-  for _, r in ipairs(a_rel) do if not (r.home or r.beacon) then moving = true end end
+  for _, r in ipairs(a_rel) do if not (r.home or r.beacon or r.tower) then moving = true end end
   local c = { t = now(), version = networkVersion, ground = ng / n, sky = ns / n, samples = n,
               flags = flags, r = rs, moving = moving, radiiDone = radii.done }
   cover[name] = c

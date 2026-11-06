@@ -42,6 +42,9 @@
 --   Equipment Shed  3.0 x 2.4 x 2.6 m steel shelter on skids: 1.6 t fitted
 --   Surface Hab     a 4 m x 6 m pressure can on saddles: 7.5 t dry
 --   Build Stand     a 0.9 m steel deck on a telescoping column, 0.5-4.0 m: 0.4 t
+--   Station Tower   a 12 m self-supporting lattice and a 3 m dish: 1.5 t of steel
+--   Solar Array     two 1.2 x 2.0 m modules on a single-axis tracker: 0.18 t
+--   Isotope Skid    four MMRTG-class cells (45 kg each) in a caged rack: 0.3 t
 --
 -- Step 6 (L1) adds, for parts with behaviour:
 --   script     the scene script that owns the part's state (craft_stand for
@@ -83,9 +86,36 @@ PARTS = {
                fields = { h = 1.0 },
                stand = { min = 0.5, max = 4.0, step = 0.1, low = 0.28, deck = 0.45, deckOff = 2.0385 },
                desc = "0.9 m deck on a telescoping column · 0.5–4.0 m · 0.4 t · build a craft on it" },
+  -- Step 7 (M1): the Base Station Tower founds a base (scripts/bases.lua) and
+  -- is a ground relay (scripts/base_tower.lua, comms.lua). `tower`: its
+  -- antenna's height over the ground point (`mast`), what it draws to be a
+  -- ground station (`draw`, EC/s), and the spacing and base radius the
+  -- addendum sets (1 km between towers; every structure within 150 m belongs
+  -- to its base). Unpowered it is a mast: a beacon-class relay.
+  tower    = { prefab = "BaseTower", label = "Base Station Tower", h = 13.51, rx = 1.3, rz = 1.3, mass = 1.5, cost = 4000,
+               kind = "structural", fieldOnly = true, seat = 6.7540, half = { x = 1.30, y = 6.6, z = 1.30 },
+               slope = 0.6, onDeck = true, grade = 1.5, footPad = 0.25, script = "base_tower",
+               tower = { mast = 11.6, draw = 2.0, spacing = 1000, radius = 150 },
+               desc = "12 m lattice mast, 3 m dish · 1.5 t · founds a base; powered (2 EC/s) it is a ground station" },
+  -- Step 7: the tower's power. Until the base grid (M6, step 8) its sources
+  -- are the ones on its own STRUCTURE (the same pads). `power`: kind "solar"
+  -- = gen EC/s in home-orbit sunlight, the cells tracking about the part's +X
+  -- (electronics.solarOutput: nothing in a planet's shadow); kind "rtg" =
+  -- gen EC/s day and night.
+  solarArray = { prefab = "BaseSolar", label = "Solar Array", h = 1.92, rx = 1.3, rz = 0.92, mass = 0.18, cost = 1800,
+               kind = "structural", fieldOnly = true, seat = 0.9576, half = { x = 1.30, y = 0.96, z = 0.92 },
+               slope = 0.6, onDeck = true, grade = 1.2, footPad = 0.15,
+               power = { kind = "solar", gen = 3.0, lift = 1.35 },
+               desc = "4.8 m² single-axis tracker · 0.18 t · 3 EC/s in full sun, nothing at night" },
+  -- (behind the Isotope Cell's research: research.lua ALIAS, isotopeSkid is rtg)
+  isotopeSkid = { prefab = "BaseIsotope", label = "Isotope Skid", h = 1.09, rx = 0.85, rz = 0.6, mass = 0.30, cost = 10000,
+               kind = "structural", fieldOnly = true, seat = 0.5460, half = { x = 0.85, y = 0.55, z = 0.60 },
+               slope = 0.6, onDeck = true, grade = 1.0, footPad = 0.15,
+               power = { kind = "rtg", gen = 2.0 },
+               desc = "four Isotope Cells in a caged rack · 0.3 t · 2 EC/s day and night" },
 }
 
-ORDER = { "padPlate", "shed", "hab", "stand" }
+ORDER = { "padPlate", "shed", "hab", "stand", "tower", "solarArray", "isotopeSkid" }
 
 -- The panel's sections: { { title, ids } } (catalog_panel's host shape).
 function catalogue()

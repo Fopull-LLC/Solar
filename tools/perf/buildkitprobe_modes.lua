@@ -196,6 +196,7 @@ function BK.run()
   tap("b"); wait(0.5)
   BK.check("gate", not fb.isOpen(), "the Pilot's B opens nothing (gate: %s)", tostring(fb.gate))
   -- make them the Engineer (the probe's shortcut for a retrain) and wait for the issue
+  BK.unlock()   -- (the kit is the 10 % coverage unlock since step 7, M3)
   C.patch(act, { role = "engineer" })
   wait(3.5)
   local inv = findScript("inventory")
@@ -207,7 +208,7 @@ function BK.run()
   BK.check("panel", catn ~= nil, "the parts column is up (Field Catalogue node)")
   local cp = findScript("catalog_panel")
   local list = cp and cp.listFor and cp.listFor(fb, "ALL", "") or {}
-  BK.check("cards", #list == 4 and list[1].id == "padPlate", "ALL lists the BASE parts: %d", #list)
+  BK.check("cards", #list == 7 and list[1].id == "padPlate", "ALL lists the BASE parts: %d", #list)
   local p1, p2 = fb.cardLines("padPlate", fb.partInfo("padPlate"), false)
   BK.check("price", p1 == "$1,040" and p2 == "$900 + $140 shipping · Pell Groundworks", "the Pad Plate card: %s / %s", tostring(p1), tostring(p2))
   wait(4)
@@ -810,6 +811,7 @@ function BK.run_stand()
   local fb, ST, co, C, CS = findScript("field_builder"), findScript("structures"), findScript("company"), findScript("crew"), findScript("craft_stand")
   if not BK.check("scene", fb and ST and co and C and CS, "field_builder %s structures %s craft_stand %s",
     tostring(fb ~= nil), tostring(ST ~= nil), tostring(CS ~= nil)) then BK.result() return end
+  BK.unlock()
   C.patch(C.activeId(), { role = "engineer" })
   -- 1. THE VAB'S ROVER INTO THE LIBRARY
   local BH = enter_vab("stand_vab")
@@ -846,7 +848,7 @@ function BK.run_stand()
   local list = cp and cp.listFor and cp.listFor(fb, "ALL", "") or {}
   local has = false
   for _, e in ipairs(list) do if e.id == "stand" then has = true end end
-  BK.check("card", #list == 4 and has, "the BASE column lists the Build Stand (%d cards)", #list)
+  BK.check("card", #list == 7 and has, "the BASE column lists the Build Stand (%d cards)", #list)
   cp.pickPart("stand")
   BK.aim_at(8, 0)
   BK.settle(30)
@@ -1054,5 +1056,398 @@ function BK.run_stand()
   top, U = BK.stand_top(ST, CS, sid)
   if top then BK.view("s7_released_again", top, U, BK.F, 6.0, -3.5, 1.8) end
   BK.cost("an empty stand", 3)
+  BK.result()
+end
+
+-- ════ STEP 7 (M1–M3, M5, M8–M9): the Base Station Tower ═══════════════════
+-- `buildkitprobe.sh <engine> tower`: on a fresh save the Engineer has no kit
+-- (the 10 % unlock); granted, they are issued one at the base. Out to the far
+-- side of the home world (where the map is dark): a Pad Plate, a Base Station
+-- Tower on its deck (a base founded, the name field typed into: "Far Side");
+-- unpowered, a mast (a beacon-class relay, no path home on its own); a second
+-- plate and an Isotope Skid on it: 2 EC/s, the tower a ground station (a
+-- second home root), the home world's ground coverage up; a second tower
+-- 60 m off refused (1 km apart); the base on the map (the glyph) and in the
+-- Tracking Station's BASES list; the tower's menu; a dig under it refused;
+-- the idle cost; save and reload: the same base, its name, its tier, its
+-- coverage. Pictures: t1..t8 in save/user/buildshots/.
+
+function BK.unlock()
+  local rs = findScript("research")
+  if rs and rs.grant then rs.grant("buildkit", "probe") end
+end
+
+-- The flattest dry ground on the far side of the home world: at least 1.8 km
+-- round from the base, lit if any is (pictures), never under water.
+function BK.far_spot()
+  local b = home()
+  local u, t1, t2, R = base_frame()
+  local cl = findScript("climate")
+  local E = findScript("electronics")
+  local sun = E and E.sunOf and E.sunOf(b.x, b.y, b.z, space.bodies() or {}) or nil
+  local sd = sun and unit(sub(sun, b)) or nil
+  local best
+  for _, frac in ipairs({ 0.98, 0.9, 0.8, 0.72 }) do
+    for k = 0, 23 do
+      local ang = k * math.pi / 12
+      local t = unit({ x = t1.x * math.cos(ang) + t2.x * math.sin(ang), y = t1.y * math.cos(ang) + t2.y * math.sin(ang), z = t1.z * math.cos(ang) + t2.z * math.sin(ang) })
+      local d = math.pi * R * frac
+      local dir = dir_at(u, t, d, R)
+      local g0 = ground_r(b, dir.x, dir.y, dir.z, R + 150)
+      if g0 then
+        local tt = unit(sub(t, scl(dir, dot(t, dir))))
+        local s = unit(cross(dir, tt))
+        local rough, n = 0, 0
+        for _, e in ipairs({ { 4, 0 }, { -4, 0 }, { 0, 4 }, { 0, -4 }, { 8, 0 }, { 0, 8 }, { -8, 0 }, { 0, -8 } }) do
+          local dd = unit({ x = dir.x * R + tt.x * e[1] + s.x * e[2], y = dir.y * R + tt.y * e[1] + s.y * e[2], z = dir.z * R + tt.z * e[1] + s.z * e[2] })
+          local g = ground_r(b, dd.x, dd.y, dd.z, R + 150)
+          if g then rough = rough + math.abs(g - g0); n = n + 1 end
+        end
+        local p = { x = b.x + dir.x * g0, y = b.y + dir.y * g0, z = b.z + dir.z * g0 }
+        local wet = cl and cl.isUnderwater and cl.isUnderwater(p.x, p.y + 0.5, p.z)
+        local lit = sd and dot(dir, sd) or 0
+        if n >= 7 and not wet then
+          local score = rough / n + (lit > 0.25 and 0 or 0.6) + (1 - frac) * 0.3
+          if not best or score < best.score then best = { dir = dir, r = g0, t = tt, d = d, score = score, lit = lit } end
+        end
+      end
+    end
+  end
+  return best
+end
+
+-- These worlds don't turn: a spot's day is its world's year. The far side
+-- can be in night for the whole run, so the probe warps the rails on until
+-- the sun stands over it (for the pictures; nothing measured depends on it).
+function BK.daylight(dir, tmo)
+  local E = findScript("electronics")
+  local function lit()
+    local b = home()
+    local sun = E and E.sunOf and E.sunOf(b.x, b.y, b.z, space.bodies() or {})
+    return sun and dot(dir, unit(sub(sun, b))) or 1
+  end
+  local l0 = lit()
+  if l0 >= 0.35 then P("BK daylight: already (%.2f)", l0) return end
+  local t0 = W()
+  space.warp(tonumber(params.daywarp) or 50)
+  while W() - t0 < (tmo or 90) and lit() < 0.45 do yield() end
+  space.warp(1)
+  wait(1.0)
+  P("BK daylight: the sun from %.2f to %.2f over the spot (%.0f s of warp)", l0, lit(), W() - t0)
+end
+
+-- the tower's comms node, its status and the home world's ground coverage
+function BK.net_line(net, bid, tag)
+  local nd = net.nodeOf and net.nodeOf("t:" .. tostring(bid))
+  local st = net.statusOf and net.statusOf("t:" .. tostring(bid))
+  local c = net.coverage(home().name)
+  P("BK NET %s: node %s home=%s power=%s relay=%s any=%s | status connected=%s hops=%s why=%s | ground %.1f %% (ready %s) sky %.1f %%",
+    tag, tostring(nd ~= nil), tostring(nd and nd.home), tostring(nd and nd.power), tostring(nd and nd.relay), tostring(nd and nd.any),
+    tostring(st and st.connected), tostring(st and st.hops), tostring(st and st.why), (c.ground or 0) * 100, tostring(c.ready), (c.sky or 0) * 100)
+  return nd, st, c
+end
+
+function BK.run_tower()
+  BK.tag = params.tag or "tower"
+  wait_ready(120)
+  wait(2)
+  local fb, ST, co, C, net = findScript("field_builder"), findScript("structures"), findScript("company"), findScript("crew"), findScript("comms")
+  local BT, BS, rs, inv = findScript("base_tower"), findScript("bases"), findScript("research"), findScript("inventory")
+  if not BK.check("scene", fb and ST and co and C and net and BT and BS and rs, "field_builder, structures, comms, base_tower, bases, research") then BK.result() return end
+  -- 1. M3: no kit before the 10 % unlock; issued at the base after it
+  C.patch(C.activeId(), { role = "engineer" })
+  wait(3.5)
+  BK.check("locked", not rs.isUnlocked("buildkit") and inv.itemCount("astro", "buildkit") == 0,
+    "a fresh save: the Build Kit is locked (%s), the Engineer has none", tostring(rs.blockedBy("buildkit")))
+  local shop0 = false
+  for _, g in ipairs(inv.shopList()) do if g.id == "buildkit" then shop0 = true end end
+  BK.unlock()
+  rs.grant("rtg", "probe")
+  wait(3.5)
+  local shop1 = false
+  for _, g in ipairs(inv.shopList()) do if g.id == "buildkit" then shop1 = true end end
+  BK.check("issued", inv.itemCount("astro", "buildkit") == 1 and not shop0 and shop1,
+    "granted: issued one at the base (%d), and on the Depot's counter (before %s, after %s)", inv.itemCount("astro", "buildkit"), tostring(shop0), tostring(shop1))
+  -- the coverage before: the spaceport's station alone
+  wait_for(function() local c = net.coverage(home().name); return c and c.ready end, 15, "coverage ready")
+  net.refreshNow()
+  wait(1.0)
+  local _, _, c0 = BK.net_line(net, 0, "before")
+  local cov0 = c0.ground or 0
+  -- 2. OUT TO THE FAR SIDE
+  local spot = BK.far_spot()
+  if not BK.check("spot", spot ~= nil, "far-side ground %.0f m round from the base, roughness %.2f m, sun %.2f", spot and spot.d or -1,
+    spot and spot.score or -1, spot and spot.lit or -1) then BK.result() return end
+  BK.daylight(spot.dir)
+  stand_at(spot)
+  BK.F = spot.t
+  wait(6)
+  key_down("w"); wait(0.6); key_up("w"); wait(1.5)
+  do
+    local pc0 = findScript("planet_camera")
+    local U = unit(sub(astro(), home()))
+    local f = { x = pc0.fwd_x or BK.F.x, y = pc0.fwd_y or BK.F.y, z = pc0.fwd_z or BK.F.z }
+    BK.F = unit(sub(f, scl(U, dot(f, U))))
+  end
+  local a = astro()
+  local bb = home()
+  local bxs, bys, bzs = save.get("base.x"), save.get("base.y"), save.get("base.z")
+  local rel = sub(a, bb)
+  local arc = BS.groundDist(bb.radius, rel.x, rel.y, rel.z, bxs, bys, bzs)
+  P("BK far side: %.0f m round from the base (world radius %.0f m)", arc, bb.radius)
+  tap("b"); wait(1.5)
+  BK.check("open", fb.isOpen(), "B opens the kit on the far side (gate %s)", tostring(fb.gate))
+  local cp = findScript("catalog_panel")
+  local list = cp and cp.listFor and cp.listFor(fb, "ALL", "") or {}
+  local has = {}
+  for _, e in ipairs(list) do has[e.id] = true end
+  BK.check("cards", #list == 7 and has.tower and has.solarArray and has.isotopeSkid, "the BASE column lists the tower and its two sources (%d cards)", #list)
+  local p1, p2 = fb.cardLines("tower", fb.partInfo("tower"), false)
+  P("BK tower card: %s / %s", tostring(p1), tostring(p2))
+  -- 3. A PAD PLATE, THE TOWER ON ITS DECK
+  cp.pickPart("padPlate")
+  BK.aim_at(10, 0)
+  BK.settle(30)
+  BK.check("plate_ghost", fb.req and not fb.req.bad, "the plate's ghost: %s", fb.req and tostring(fb.req.bad or "valid") or "no req")
+  BK.click(false)
+  wait(1.0)
+  local sid = fb.lastPlace and fb.lastPlace.sid
+  if not BK.check("plate", sid ~= nil, "a Pad Plate placed (structure %s)", tostring(sid)) then BK.result() return end
+  -- a second plate edge to edge (now, before the tower stands over the aim)
+  local slot = BK.far_slot(ST, sid, 1, astro())
+  cp.pickPart("padPlate")
+  -- (aimed past the slab's far edge, as step 5's probe does)
+  BK.aim_local(ST, sid, (slot and slot.lx or 4) * 1.15, 0, (slot and slot.lz or 0) * 1.15)
+  BK.settle(40)
+  local edge_ok = fb.req and fb.req.pose and fb.req.pose.mode == "edge" and fb.req.pose.sid == sid and not fb.req.bad
+  P("BK plate2 ghost under the cursor: %s %s (slot %s, %s)", fb.req and fb.req.pose and tostring(fb.req.pose.mode) or "-",
+    fb.req and tostring(fb.req.bad or "valid") or "no req", tostring(slot and slot.lx), tostring(slot and slot.lz))
+  if edge_ok then
+    BK.click(false)
+  else
+    -- (the probe's way, as a click on the slot's ground would)
+    local w = BK.lw(ST, ST.get(sid), slot and slot.lx or 4, 0, slot and slot.lz or 0)
+    local U = unit(sub(w, home()))
+    local h = raycast(w.x + U.x * 5, w.y + U.y * 5, w.z + U.z * 5, -U.x, -U.y, -U.z, 12, { ignore = astro() })
+    local okp, whyp = fb.placeAt(h and h.x or w.x, h and h.y or w.y, h and h.z or w.z, U.x, U.y, U.z, h and h.node or nil)
+    P("BK plate2 placed the probe's way: %s %s", tostring(okp), tostring(whyp))
+  end
+  wait(1.0)
+  local p2uid = fb.lastPlace and fb.lastPlace.sid == sid and fb.lastPlace.uid or nil
+  local p2 = p2uid and ST.getPart(sid, p2uid)
+  BK.check("plate2", p2 and p2.id == "padPlate" and fb.lastPlace.sid == sid, "...placed, joining structure %s", tostring(sid))
+  cp.pickPart("tower")
+  BK.aim_local(ST, sid, 0, 0.2, 0)
+  BK.settle(40)
+  local rq = fb.req
+  BK.check("tower_ghost", rq and rq.pose and rq.pose.mode == "deck" and not rq.bad, "the tower's ghost on the plate's deck: %s %s",
+    rq and rq.pose and tostring(rq.pose.mode) or "-", rq and tostring(rq.bad or "valid") or "no req")
+  BK.shot("t1_tower_ghost")
+  local f0 = co.balance()
+  BK.click(false)
+  wait(1.5)
+  local tuid = fb.lastPlace and fb.lastPlace.uid
+  local tp = tuid and ST.getPart(sid, tuid)
+  local bid = tp and tp.base
+  local brec = bid and BS.get(bid)
+  BK.check("founded", tp and tp.id == "tower" and brec and brec.n == "Outpost 1" and f0 - co.balance() == 4450,
+    "the tower placed ($%s: $4,000 + $450 shipping) founds %s (base %s)", tostring(f0 - co.balance()), brec and brec.n or "?", tostring(bid))
+  if not brec then BK.result() return end
+  BK.check("prompt", BT.prompting() and find("Base Name Prompt") ~= nil, "the name field is open (%s)", tostring(find("FieldBaseName") ~= nil))
+  wait(0.5)
+  input.simulate { text = "Far Side" }
+  wait(0.5)
+  BK.shot("t2_name_field")
+  P("BK name field holds '%s'", tostring(BT.prompt and BT.prompt.text))
+  local okn = BT.commitName(nil)
+  wait(0.5)
+  BK.check("named", okn and BS.get(bid).n == "Far Side" and not BT.prompting() and find("Base Name Prompt") == nil,
+    "typed and founded: %s", tostring(BS.get(bid).n))
+  local err = BK.part_err(ST, sid, tuid)
+  BK.check("tower_spawned", err and err < 0.01, "the tower stands where its record says (%.4f m)", err or -1)
+  -- 4. UNPOWERED: A MAST
+  net.refreshNow()
+  wait(1.0)
+  local nd, st = BK.net_line(net, bid, "mast")
+  local E = findScript("electronics")
+  BK.check("mast", nd and not nd.home and nd.beacon and math.abs((nd.relay or 0) - E.COMMS.beacon.power) < 1e-6 and st and not st.connected,
+    "unpowered: a beacon-class relay (%s; a probe core hears it %.0f m off), no path home alone: %s", tostring(nd and nd.relay),
+    E.linkRange(E.COMMS.coverRx, E.COMMS.beacon.power), tostring(st and st.why))
+  local pw = BT.power(bid, nil, true)
+  BK.check("unpowered", not pw.powered and pw.supply == 0, "power %.1f / %.1f EC/s", pw.supply, pw.need)
+  -- 5. POWERED: AN ISOTOPE SKID ON THE SECOND PLATE (the same structure)
+  BK.shot("t2b_mast")
+  cp.pickPart("isotopeSkid")
+  -- (aimed at the plate's far half: the tower's mast can stand between the
+  -- camera and its middle)
+  local ox, oz = 0, 0
+  if p2 then ox, oz = (p2.x ~= 0) and (p2.x > 0 and 0.8 or -0.8) or 0, (p2.z ~= 0) and (p2.z > 0 and 0.8 or -0.8) or 0 end
+  BK.aim_local(ST, sid, (p2 and p2.x or 4) + ox, 0.2, (p2 and p2.z or 0) + oz)
+  BK.settle(40)
+  local skid_ok = fb.req and fb.req.pose and fb.req.pose.mode == "deck" and fb.req.pose.sid == sid and not fb.req.bad
+  P("BK skid ghost under the cursor: %s %s", fb.req and fb.req.pose and tostring(fb.req.pose.mode) or "-", fb.req and tostring(fb.req.bad or "valid") or "no req")
+  if skid_ok then
+    BK.click(false)
+  else
+    -- (the probe's way, as a click would: the deck's own point, its node)
+    local w = BK.lw(ST, ST.get(sid), (p2 and p2.x or 4) + ox, 0.2, (p2 and p2.z or 0) + oz)
+    local U = unit(sub(w, home()))
+    local okp, whyp = fb.placeAt(w.x, w.y, w.z, U.x, U.y, U.z, ST.nodeOf(sid, p2uid))
+    P("BK skid placed the probe's way: %s %s", tostring(okp), tostring(whyp))
+  end
+  wait(1.5)
+  local sk = fb.lastPlace
+  fb.heldPart = nil
+  BK.check("skid", sk and sk.id == "isotopeSkid" and sk.sid == sid and sk.mode == "deck", "the Isotope Skid on the second plate's deck (%s, structure %s)",
+    sk and tostring(sk.mode) or "-", sk and tostring(sk.sid) or "-")
+  pw = BT.power(bid, nil, true)
+  net.refreshNow()
+  wait(1.5)
+  nd, st = BK.net_line(net, bid, "station")
+  BK.check("powered", pw.powered and math.abs(pw.supply - 2.0) < 1e-6, "the skid on its structure: %.1f / %.1f EC/s", pw.supply, pw.need)
+  BK.check("station", nd and nd.home == true and math.abs((nd.power or 0) - E.COMMS.station) < 1 and st and st.connected and (st.hops or 0) == 0,
+    "powered: a ground station, a second home root (%s)", tostring(nd and nd.power))
+  wait_for(function() local c = net.coverage(home().name); return c and (c.ground or 0) > cov0 + 0.005 end, 20, "coverage up")
+  local c1 = net.coverage(home().name)
+  BK.check("coverage", (c1.ground or 0) > cov0 + 0.02, "the home world's ground coverage: %.1f %% → %.1f %%", cov0 * 100, (c1.ground or 0) * 100)
+  -- a receiver beside the tower (where a probe would land) hears a root
+  local tn = BT.nodeOfBase(bid)
+  if tn then
+    local w = tn.worldPos
+    local U = unit(sub(w, home()))
+    local rx = { x = w.x + BK.F.x * 120 + U.x * 1, y = w.y + BK.F.y * 120 + U.y * 1, z = w.z + BK.F.z * 120 + U.z * 1 }
+    P("BK a receiver 120 m from the tower hears: %.2f", E.hears(rx.x, rx.y, rx.z, E.COMMS.coverRx, { { x = nd.x, y = nd.y, z = nd.z, power = nd.power, agl = nd.agl } }, space.bodies()))
+  end
+  -- views of the outpost
+  do
+    local n = ST.nodeOf(sid, tuid)
+    if n then
+      local b = home()
+      local w = sub(n.worldPos, b)
+      local Uw = unit(w)
+      local Rr = unit(cross(BK.F, Uw))
+      local function view(nm, fwd, side, hgt, look)
+        local eye = { x = w.x + BK.F.x * fwd + Rr.x * side + Uw.x * hgt, y = w.y + BK.F.y * fwd + Rr.y * side + Uw.y * hgt, z = w.z + BK.F.z * fwd + Rr.z * side + Uw.z * hgt }
+        VP.cam_fixed(eye, { x = w.x + Uw.x * (look or 0), y = w.y + Uw.y * (look or 0), z = w.z + Uw.z * (look or 0) })
+        wait(1.4)
+        BK.shot(nm, false)
+      end
+      view("t3_outpost_a", -22, -14, 4, 0)
+      view("t4_outpost_b", 16, 18, 9, 1)
+      VP.cam_off()
+    end
+  end
+  -- 6. A SECOND TOWER 60 m OFF: REFUSED
+  cp.pickPart("tower")
+  BK.aim_at(16, 12)
+  BK.settle(30)
+  local bad = fb.req and fb.req.bad
+  BK.check("spacing", bad and tostring(bad):find("1.0 km apart", 1, true) ~= nil, "a second tower nearby: red, \"%s\"", tostring(bad))
+  BK.shot("t5_spacing_red")
+  fb.heldPart = nil
+  -- 7. THE MENU, THE STATION'S LIST, THE MAP
+  local rows = BK.menu(tn or ST.nodeOf(sid, tuid))
+  local e_pw = BK.entry(rows, "bt_power")
+  local e_ln = BK.entry(rows, "bt_link")
+  local vpw = e_pw and e_pw.value and e_pw.value() or "-"
+  local vln = e_ln and e_ln.value and e_ln.value() or "-"
+  BK.check("menu", e_pw and tostring(vpw):find("2.0 / 2.0", 1, true) and BK.entry(rows, "bt_rename") ~= nil, "the tower's menu: Power %s · Link %s", tostring(vpw), tostring(vln))
+  -- the station's FLEET column (fleet_view's snapshot): a BASES group
+  local fv = findScript("fleet_view")
+  local snapv = fv and fv.snapshot and fv.snapshot(true)
+  local found = snapv and snapv.byId and snapv.byId["o:" .. tostring(bid)]
+  BK.check("station_list", found and found.group == "BASES" and found.name == "Far Side" and found.sub == "base · ground station",
+    "the station's FLEET: %s in %s, \"%s\" (coverage %s)", found and found.name or "?", found and found.group or "?", found and found.sub or "?",
+    found and found.outpost and found.outpost.coverage and string.format("%.0f %%", found.outpost.coverage * 100) or "?")
+  fb.close()
+  wait(0.5)
+  -- the station open on it: the FLEET row and the SELECTED card
+  local ts = findScript("tracking_station")
+  if ts and ts.open and found then
+    ts.open()
+    wait(1.5)
+    if ts.selectCraft then ts.selectCraft(found.id) end
+    wait(1.5)
+    BK.check("station_card", ts.isOpen() and ts.selectedId() == found.id, "the station open, Far Side selected (%s)", tostring(ts.selectedId()))
+    BK.shot("t6b_station")
+    ts.close()
+    wait(1.0)
+  end
+  local om = findScript("orbit_map")
+  if om and not om.isOpen() then om.toggle() end
+  wait(1.0)
+  if om.setZoom then om.setZoom(home().radius * 4.5) end
+  wait(2.0)
+  local bl = BT.bases({ brief = true })
+  local onmap = nil
+  for _, e in ipairs(bl) do if e.id == bid then onmap = e end end
+  local sx, sy, on
+  if onmap then sx, sy, _, on = camera.worldToScreen(onmap.gx, onmap.gy, onmap.gz) end
+  BK.check("map", om.isOpen() and om.mapBases ~= nil and onmap and onmap.powered and onmap.linked,
+    "on the map: %s, a ground station, linked (screen %s, %s %s)", onmap and onmap.name or "?", tostring(sx and math.floor(sx)), tostring(sy and math.floor(sy)), tostring(on))
+  BK.shot("t6_map")
+  om.toggle()
+  wait(1.0)
+  -- 8. M8: a dig under the tower is refused
+  local bf = findScript("base_facilities")
+  if tn and bf and bf.digRefused then
+    local w = tn.worldPos
+    local U = unit(sub(w, home()))
+    local q = { x = w.x - U.x * 7.5, y = w.y - U.y * 7.5, z = w.z - U.z * 7.5 }
+    local why = bf.digRefused(q.x, q.y, q.z, 1.0)
+    local q2 = { x = q.x + BK.F.x * 40, y = q.y + BK.F.y * 40, z = q.z + BK.F.z * 40 }
+    local why2 = bf.digRefused(q2.x, q2.y, q2.z, 1.0)
+    BK.check("dig_guard", why ~= nil and why2 == nil, "a dig under the tower: \"%s\"; 40 m off: %s", tostring(why), tostring(why2 or "allowed"))
+  end
+  -- 9. THE COST
+  local fr0 = FRAME
+  wait(3)
+  P("BK COST tower idle (kit open): base_tower %.4f ms/frame, bases %.4f, comms %.4f, structures %.4f (%d frames)",
+    perf.scriptMs and perf.scriptMs("base_tower") or -1, perf.scriptMs and perf.scriptMs("bases") or -1,
+    perf.scriptMs and perf.scriptMs("comms") or -1, perf.scriptMs and perf.scriptMs("structures") or -1, FRAME - fr0)
+  fb.close()
+  wait(1.0)
+  fr0 = FRAME
+  wait(3)
+  P("BK COST tower idle (kit closed): base_tower %.4f ms/frame, bases %.4f, comms %.4f, structures %.4f (%d frames)",
+    perf.scriptMs and perf.scriptMs("base_tower") or -1, perf.scriptMs and perf.scriptMs("bases") or -1,
+    perf.scriptMs and perf.scriptMs("comms") or -1, perf.scriptMs and perf.scriptMs("structures") or -1, FRAME - fr0)
+  -- 10. SAVE AND RELOAD
+  local cov1 = c1.ground or 0
+  local b0 = home()
+  local bp0 = { x = b0.x, y = b0.y, z = b0.z }
+  if save.flush then save.flush() end
+  scene.load("system")
+  yield()
+  wait_for(function()
+    local pw2, gm, bf2 = findScript("planet_walker"), findScript("game_manager"), findScript("base_facilities")
+    return pw2 and gm and bf2 and bf2.sited and not gm.loading and not gm.curtain
+  end, 300, "the reload")
+  wait(4)
+  ST, BS, BT, net = findScript("structures"), findScript("bases"), findScript("base_tower"), findScript("comms")
+  net.refreshNow()
+  wait(1.5)
+  local r2 = BS.get(bid)
+  local err2 = BK.part_err(ST, sid, tuid)
+  local nd2, st2 = BK.net_line(net, bid, "reload")
+  local b1 = home()
+  BK.check("reload", r2 and r2.n == "Far Side" and not r2.down and err2 and err2 < 0.01 and nd2 and nd2.home and st2 and st2.connected,
+    "after a reload: %s, its tower on its record (%.4f m) on a planet that moved %.0f m, a ground station again",
+    r2 and r2.n or "?", err2 or -1, len(b1.x - bp0.x, b1.y - bp0.y, b1.z - bp0.z))
+  wait_for(function() local c = net.coverage(home().name); return c and c.ready and math.abs((c.ground or 0) - cov1) < 0.011 end, 30, "coverage again")
+  local c2 = net.coverage(home().name)
+  BK.check("reload_cov", math.abs((c2.ground or 0) - cov1) < 0.011, "...and the coverage it gave: %.1f %% (was %.1f %%)", (c2.ground or 0) * 100, cov1 * 100)
+  BK.check("reload_once", #BS.list() == 1 and #BS.list(true) == 1, "one base, once (%d standing, %d records)", #BS.list(), #BS.list(true))
+  local tn2 = BT.nodeOfBase(bid)
+  if tn2 then
+    local w = sub(tn2.worldPos, b1)
+    local Uw = unit(w)
+    local F = BK.F
+    local Rr = unit(cross(F, Uw))
+    VP.cam_fixed({ x = w.x - F.x * 26 + Rr.x * 10 + Uw.x * 6, y = w.y - F.y * 26 + Rr.y * 10 + Uw.y * 6, z = w.z - F.z * 26 + Rr.z * 10 + Uw.z * 6 }, w)
+    wait(1.5)
+    BK.shot("t7_after_reload", false)
+    VP.cam_off()
+  end
   BK.result()
 end

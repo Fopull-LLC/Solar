@@ -30,12 +30,12 @@
 -- attention(e), situation(e), keyNumber(e), groupOf(e), GLYPHS, PRIO.
 
 GLYPHS = { crew = "◉", rocket = "◆", probe = "◇", plane = "✈", rover = "⊡", bike = "⊚", station = "⊕",
-           debris = "✕", relay = "▲", flag = "▮", remains = "◌", structure = "⌂", base = "⌂", target = "◎",
+           debris = "✕", relay = "▲", flag = "▮", remains = "◌", structure = "⌂", base = "⌂", outpost = "⌂", target = "◎",
            recover = "↺" }
 -- Layout priority (map_labels): the selected and hovered are lifted above these.
-PRIO = { crew = 70, rocket = 66, station = 64, plane = 62, rover = 60, bike = 60, probe = 50, base = 46,
+PRIO = { crew = 70, rocket = 66, station = 64, plane = 62, rover = 60, bike = 60, probe = 50, base = 46, outpost = 46,
          relay = 40, flag = 38, structure = 36, remains = 30, debris = 10 }
-GROUPS = { "ATTENTION", "CREW", "CREWED", "PROBES", "LANDED", "DEBRIS", "RELAYS", "FLAGS", "STRUCTURES" }
+GROUPS = { "ATTENTION", "CREW", "CREWED", "PROBES", "LANDED", "DEBRIS", "RELAYS", "FLAGS", "BASES", "STRUCTURES" }
 RATE = 1.0          -- s between rebuilds while nothing says it changed (a source
                     -- that changes rebuilds it at once; live craft are placed
                     -- from their nodes every frame anyway)
@@ -128,6 +128,7 @@ function situation(e)
   if e.kind == "remains" then return "remains" end
   if e.kind == "structure" then return "structure" .. (e.date and (" · " .. e.date) or "") end
   if e.kind == "base" then return "spaceport" end
+  if e.kind == "outpost" then return "base · " .. (e.tier or "mast") end
   if e.kind == "debris" then
     if e.dkind == "landed" then return "debris · down on " .. tostring(e.body) end
     if e.dkind == "orbit" then return "debris · orbiting " .. tostring(e.body) end
@@ -170,6 +171,7 @@ function groupOf(e)
   if e.kind == "debris" then return "DEBRIS" end
   if e.kind == "relay" then return "RELAYS" end
   if e.kind == "flag" or e.kind == "remains" then return "FLAGS" end
+  if e.kind == "outpost" then return "BASES" end
   return "STRUCTURES"
 end
 
@@ -449,6 +451,7 @@ local function debris_entries(out)
   end
 end
 
+local base_entries
 local function infra_entries(out)
   local net = ref("comms")
   if net and net.beaconList then
@@ -485,6 +488,26 @@ local function infra_entries(out)
   local fp = bf and bf.footprint
   if fp and fp.body then
     out[#out + 1] = { id = "base", kind = "base", name = "Spaceport", body = fp.body, rx = fp.x, ry = fp.y, rz = fp.z, st = 0 }
+  end
+  base_entries(out)
+end
+
+-- THE BASES (deep-space step 7, M5): each Base Station Tower's base, from
+-- base_tower.bases() (the home base #0 is the spaceport entry above), as an
+-- entry "o:<base id>" at its tower's ground point (body-relative).
+base_entries = function(out)
+  local bt = ref("base_tower")
+  if not (bt and bt.bases) then return end
+  local ok, list = pcall(bt.bases, { brief = true })
+  if not ok or type(list) ~= "table" then return end
+  for _, b in ipairs(list) do
+    local gb = not b.home and b.body and space.body(b.body)
+    if gb and b.gx then
+      out[#out + 1] = { id = "o:" .. tostring(b.id), kind = "outpost", name = b.name, body = b.body,
+                        rx = b.gx - gb.x, ry = b.gy - gb.y, rz = b.gz - gb.z, st = 0, outpost = b, baseId = b.id,
+                        tier = b.tier, link = b.linked, signal = b.strength, hops = b.hops, path = b.via, date = b.founded }
+      out[#out].dist = home_dist(b.body, out[#out].rx, out[#out].ry, out[#out].rz)
+    end
   end
 end
 

@@ -397,8 +397,14 @@ local function sim_pressed(k)
   if sim and sim.pressed and sim.pressed[k] then sim.pressed[k] = nil return true end
   return false
 end
+-- A text field has the keys (the Build Kit's part search, a new base's name:
+-- every "Field…" node): letters and digits typed there aren't game keys.
+function text_focus()   -- (global: this file is at the 200-locals ceiling)
+  local f = ui and ui.focused and ui.focused()
+  return f ~= nil and type(f.name) == "string" and f.name:sub(1, 5) == "Field"
+end
 local function pressed(k)
-  return sim_pressed(k) or input.pressed(k) == true
+  return sim_pressed(k) or (input.pressed(k) == true and not text_focus())
 end
 -- The two letter keys the belt owns, spelt out so the controls card's lint
 -- (tests/smoke_pause.lua) can see them read.

@@ -892,9 +892,15 @@ local function on_foot()
   return true
 end
 
+-- A text field has the keys (the Build Kit's part search, a new base's name:
+-- every "Field…" node): letters and digits typed there aren't game keys.
+local function text_focus()
+  local f = ui and ui.focused and ui.focused()
+  return f ~= nil and type(f.name) == "string" and f.name:sub(1, 5) == "Field"
+end
 local function pressed(k)
   if sim and sim.pressed and sim.pressed[k] then sim.pressed[k] = nil return true end
-  return input and input.pressed and input.pressed(k) == true
+  return input and input.pressed and input.pressed(k) == true and not text_focus()
 end
 
 -- ── the visuals: the item in the hand, the work on the hull ─────────────────

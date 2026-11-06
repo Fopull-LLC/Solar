@@ -118,6 +118,7 @@ function BK.run_standedit()
   local fb, ST, co, C, CS = findScript("field_builder"), findScript("structures"), findScript("company"), findScript("crew"), findScript("craft_stand")
   local BH, CO, FO = findScript("build_host"), findScript("craft_orient"), findScript("flight_ops")
   if not BK.check("scene", fb and ST and co and C and CS and BH and CO, "kit, structures, craft_stand, build_host, craft_orient") then BK.result() return end
+  BK.unlock()
   C.patch(C.activeId(), { role = "engineer" })
   -- the library: the rover, and the same rover saved lying on its side
   local VBH = enter_vab("se_vab")

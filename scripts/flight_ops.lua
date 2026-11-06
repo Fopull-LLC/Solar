@@ -1535,6 +1535,13 @@ function update(node, dt)
   local covered = (pm and pm.open) or (ip and ip.open)
     or (fm and fm.isOpen and fm.isOpen()) or (ob and ob.isOpen and ob.isOpen())
     or (ts and ts.isOpen and ts.isOpen())
+  -- (the Build Kit's column sits where the card does, and Enter in its search
+  -- or a new base's name field is that field's, never "call for pickup")
+  if not covered then
+    local fb = ref("field_builder")
+    local f = ui and ui.focused and ui.focused()
+    covered = (fb and fb.isOpen and fb.isOpen()) or (f ~= nil and type(f.name) == "string" and f.name:sub(1, 5) == "Field")
+  end
   -- In flight the cockpit owns the screen; the card comes back when you're down.
   if not st or covered or st.mode == "flying" then
     if el then el.visible = false end

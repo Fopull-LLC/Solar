@@ -66,19 +66,19 @@ end
 -- ── parts_base ──────────────────────────────────────────────────────────────
 local PB = load_script("parts_base.lua", env({}, {}))
 local cat = PB.catalogue()
-check(#cat == 1 and cat[1].title == "BASE" and #cat[1].ids == 4, "one BASE section with four parts (the Build Stand: step 6)")
+check(#cat == 1 and cat[1].title == "BASE" and #cat[1].ids == 7, "one BASE section with seven parts (the stand: step 6; the tower and its two sources: step 7)")
 for _, id in ipairs(cat[1].ids) do
   local d = PB.partInfo(id)
   check(d and d.fieldOnly == true, id .. ": fieldOnly (the VAB never lists it)")
   local f = d and io.open("solar/prefabs/" .. d.prefab .. ".prefab.ron")
   check(f ~= nil, id .. ": its prefab " .. tostring(d and d.prefab) .. " is on disk")
   if f then f:close() end
-  check(d and d.mass >= 0.4 and d.cost > 0 and type(d.seat) == "number" and d.half and d.half.x > 0, id .. ": mass, cost, seat, footprint")
+  check(d and d.mass >= 0.15 and d.cost > 0 and type(d.seat) == "number" and d.half and d.half.x > 0, id .. ": mass, cost, seat, footprint")
 end
 check(near(PB.partInfo("padPlate").mass, 4 * 4 * 0.30 * 2.4, 0.05), "the Pad Plate weighs its concrete (4 x 4 x 0.30 m at 2.4 t/m³)")
 check(PB.partInfo("shed").hull == "subShape" and PB.partInfo("hab").hull == "shell", "flat walls → subShapes, the curved can → a shell")
 local REG, CATL = {}, {}
-check(PB.register(REG, CATL) == 4 and REG.padPlate and CATL[1][1] == "BASE", "register() adds the BASE section to a registry")
+check(PB.register(REG, CATL) == 7 and REG.padPlate and CATL[1][1] == "BASE", "register() adds the BASE section to a registry")
 
 -- ── base_economy ────────────────────────────────────────────────────────────
 local EC = load_script("base_economy.lua", env({}, {}))

@@ -71,6 +71,7 @@ local collapsed = { DEBRIS = true, STRUCTURES = true }
 local msg, msg_t, msg_dur = "", -100, 6.0
 local armed = nil             -- { id, t } TERMINATE / REMOVE waiting for its second press
 local renaming = nil          -- an entry id being renamed
+local base_rename, base_card  -- (deep-space step 7: a base's rename and card)
 local rename_text = ""
 local from_dish, opened_t = false, -10
 local last_click = { id = nil, t = -10 }
@@ -675,11 +676,21 @@ local function switch_to(id)
   if ok then sfx("click"); close_for_action() else say(why) end
 end
 
+-- (a base, deep-space step 7: bases.rename, and the list picks the name up now)
+base_rename = function(e, text)
+  local B = ref("bases")
+  if not B then return false, "no bases in this scene" end
+  local ok, why = B.rename(e.baseId, text)
+  local fv = ref("fleet_view")
+  if ok and fv and fv.snapshot then fv.snapshot(true) end
+  return ok, why
+end
 local function rename_submit(e, text)
   local fo, dep = ref("flight_ops"), ref("deployables")
   local ok, why
   if e.craft then ok, why = fo.renameFleet(e.id, text)
-  elseif e.kind == "flag" then ok, why = dep.rename(e.flagId, text) end
+  elseif e.kind == "flag" then ok, why = dep.rename(e.flagId, text)
+  elseif e.kind == "outpost" then ok, why = base_rename(e, text) end
   if ok then sfx("click"); renaming = nil; dirty_all = true else say(why) end
 end
 
@@ -1009,9 +1020,31 @@ local function card_crew(e, rows)
     key_btn("foc", "panel/secondary", "Focus", "grow", 30, e.rx == nil and e.node == nil, nil, function() focus_on(e, true) end) }
 end
 
+-- A base's card (deep-space step 7, M5: base_tower.bases()): its tower's
+-- tier and power, its link, its world's ground coverage, when it was founded.
+base_card = function(e, rows)
+  local b = e.outpost or {}
+  local bt = ref("base_tower")
+  local pw = bt and bt.power and e.baseId and bt.power(e.baseId) or b
+  rows[#rows + 1] = txt("tw", pw.powered and "panel/keys" or "panel/cell", string.format("Tower: %s  ·  %.1f / %.1f EC/s from its pads",
+    pw.powered and "a ground station" or "a mast", pw.supply or 0, pw.need or 2))
+  if b.linked and (b.hops or 0) == 0 then
+    rows[#rows + 1] = txt("sig", "panel/cellMuted", "A root of the network: craft that hear it are home.")
+  elseif b.linked then
+    rows[#rows + 1] = txt("sig", "panel/cellMuted", "Home via " .. table.concat(b.via or {}, " → "))
+  else
+    rows[#rows + 1] = txt("sig", "panel/hintWarn", tostring(b.why or "No path home"))
+  end
+  if b.coverage then rows[#rows + 1] = txt("cov", "panel/cellMuted", string.format("%s ground %d%% linked", e.body or "?", pct(b.coverage))) end
+  if not pw.powered then
+    rows[#rows + 1] = txt("ab", "panel/hint", "Stand a Solar Array or an Isotope Skid on its pads: 2 EC/s makes the tower a ground station.")
+  end
+  if e.date then rows[#rows + 1] = txt("by", "panel/cellMuted", "Founded " .. e.date) end
+end
+
 local function card_other(e, rows, co)
   local dep = ref("deployables")
-  header(e, rows, e.kind == "flag")
+  header(e, rows, e.kind == "flag" or e.kind == "outpost")
   local lines = {}
   if e.body and e.rx then lines[#lines + 1] = string.format("%s  %s", string.upper(e.body), latlon(e.rx, e.ry, e.rz)) end
   if e.dist then lines[#lines + 1] = "FROM BASE " .. fmt_alt(e.dist) end
@@ -1031,6 +1064,8 @@ local function card_other(e, rows, co)
   elseif e.kind == "debris" then
     rows[#rows + 1] = txt("ab", "panel/cellMuted", string.format("%s%s", e.parts and string.format("%d part%s · ", e.parts, e.parts == 1 and "" or "s") or "",
       e.dkind == "landed" and "down on the ground: salvage it where it lies" or (e.dkind == "orbit" and "on its own orbit" or "adrift")))
+  elseif e.kind == "outpost" then
+    base_card(e, rows)
   elseif e.kind == "structure" then
     rows[#rows + 1] = txt("ab", "panel/cellMuted", string.format("%d part%s%s", e.parts or 0, (e.parts or 0) == 1 and "" or "s", e.date and (" · founded " .. e.date) or ""))
   elseif e.kind == "base" then

@@ -81,7 +81,19 @@ TECH = {
   radTruss     = { cost = 3200, label = "Truss Radiator", after = "radPanel", rep = 6 },
   ember        = { cost = 9000, label = "Ember Reactor",  mat = "uranium", after = "radPanel", rep = 6 },
   shadowShield = { cost = 1800, label = "Shadow Shield",  after = "ember" },
+  -- THE BUILD KIT (deep-space M3): not bought, GIVEN: the Relay Network's
+  -- first goal (10 % of the ground linked) grants it (missions.lua), and from
+  -- then the Depot stocks it and every Engineer is issued one at the base
+  -- (field_builder). `grantOnly`: no price, no click; `permGrant`: a save
+  -- that already passed that goal has it.
+  buildkit     = { cost = 0, label = "Build Kit", grantOnly = true, permGrant = { "relay_net", 1 },
+                   grantLabel = "10% of the ground linked (Relay Network)" },
 }
+
+-- BASE parts behind a craft part's research (the BASE section's ids are not
+-- tech ids): the Isotope Skid is four Isotope Cells.
+ALIAS = { isotopeSkid = "rtg" }
+local function tid(id) return ALIAS[id] or id end
 
 -- Published for panels.
 spent = 0
@@ -134,26 +146,34 @@ end
 -- A SANDBOX save (company.lua, `game.mode`) has the whole catalogue open from
 -- the start: money is no object there, so a research price is only a click.
 function isUnlocked(id)
+  id = tid(id)
   if not TECH[id] then return true end
   if save.get("game.mode") == "sandbox" then return true end
   if TECH[id].progGrant and (save.get("prog.done") or {})[TECH[id].prog] then return true end
+  local pg = TECH[id].permGrant
+  if pg then
+    local pm = (save.get("prog.perm") or {})[pg[1]]
+    if (save.get("prog.done") or {})[pg[1]] or (type(pm) == "table" and (pm[pg[2]] or pm[tostring(pg[2])])) then return true end
+  end
   return done()[id] == true
 end
 
 function costOf(id)
-  local t = TECH[id]
+  local t = TECH[tid(id)]
   return t and t.cost or 0
 end
 
 function labelOf(id)
-  local t = TECH[id]
+  local t = TECH[tid(id)]
   return t and t.label or id
 end
 
 -- What's standing in the way, as a sentence — or nil when nothing is.
 function blockedBy(id)
+  id = tid(id)
   local t = TECH[id]
   if not t or isUnlocked(id) then return nil end
+  if t.grantOnly then return "needs " .. (t.grantLabel or "a milestone") end
   if t.after and not isUnlocked(t.after) then
     return "needs " .. labelOf(t.after)
   end
@@ -183,6 +203,7 @@ end
 -- The one line a locked catalogue card shows. Reads as an instruction, never as
 -- a "no": either what to go and find, or what to click.
 function lockLine(id)
+  id = tid(id)
   if isUnlocked(id) then return nil end
   local co = findScript("company")
   local money = co and co.money(costOf(id)) or ("$" .. costOf(id))
@@ -194,6 +215,7 @@ end
 
 -- Buy the unlock. Returns ok, reason.
 function unlock(id)
+  id = tid(id)
   if isUnlocked(id) then return true, "already unlocked" end
   local why = blockedBy(id)
   if why then return false, why end
@@ -216,6 +238,7 @@ end
 -- Given, not bought: a programme milestone's reward (missions.lua). No money,
 -- no gates — the milestone was the gate. Returns true if it was new.
 function grant(id, why)
+  id = tid(id)
   if not TECH[id] or isUnlocked(id) then return false end
   local d = done()
   d[id] = true

@@ -201,8 +201,9 @@ local CATALOGUE = {
 --                      50 / 80 % of the planet (ground + satellites)   → Deep Space Dish
 --   5  Beyond          link a moon, then another planet
 --
--- Each goal can pay on its own (`pay`, `grant`) — a staged goal is a reward
--- per stage — and the milestone pays its own reward when the last goal ticks.
+-- Each goal can pay on its own (`pay`, `grant`: one tech id or a list of
+-- them) — a staged goal is a reward per stage — and the milestone pays its
+-- own reward when the last goal ticks. `ops`: what Ops says when it ticks.
 -- Every programme goal LATCHES: coverage that dips after a beacon is picked up
 -- never takes a paid stage back.
 --
@@ -273,7 +274,10 @@ PROGRAMME = {
             "until a quarter of the ground has a link home. Then go up.",
     reward = 3000, rep = 2, grants = { "dish" },
     goals = {
-      { kind = "groundcov", frac = 0.10, pay = 800, grant = "probe", label = "10% of the ground has a link home" },
+      -- (deep-space M3: the 10 % stage also opens the Build Kit, `buildkit`:
+      -- the Depot stocks it, every Engineer is issued one at the base)
+      { kind = "groundcov", frac = 0.10, pay = 800, grant = { "probe", "buildkit" }, label = "10% of the ground has a link home",
+        ops = "You can hear us from a tenth of the ground. Time to build somewhere else." },
       { kind = "groundcov", frac = 0.25, pay = 1500, grant = "packB", label = "25% of the ground has a link home (unlocks the Battery Pack)" },
     },
   },
@@ -1777,8 +1781,16 @@ prog_tick_body = function()
             local pay = (g.kind == "rare" and niches[i] == false) and 0 or (g.pay or 0)
             local c = company()
             if pay > 0 and c and c.earn then c.earn(pay, m.title .. ": " .. label) end
-            if g.grant then prog_grant(g.grant, m.title) end
+            if type(g.grant) == "table" then
+              for _, t in ipairs(g.grant) do prog_grant(t, m.title) end
+            elseif g.grant then
+              prog_grant(g.grant, m.title)
+            end
             if pay > 0 then prog_announce(label, pay, m.title:upper()) end
+            if g.ops then
+              log("OPS: " .. g.ops)
+              if caption then pcall(caption, "Ops: " .. g.ops) end
+            end
           else
             all = false
           end

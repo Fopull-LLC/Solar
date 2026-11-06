@@ -1511,8 +1511,15 @@ local function fmt_km(m)
 end
 function noLinkWhy(nd, nodes, bodies)
   if (nd.any or 0) <= 0 then return nd.silent or "radio silent — no powered antenna" end
-  local home
-  for _, h in ipairs(nodes) do if h.home then home = h end end
+  -- (the NEAREST home root: the spaceport's station, or a powered Base
+  -- Station Tower, deep-space M2)
+  local home, hd = nil, math.huge
+  for _, h in ipairs(nodes) do
+    if h.home then
+      local d = (nd.x - h.x) ^ 2 + (nd.y - h.y) ^ 2 + (nd.z - h.z) ^ 2
+      if d < hd then home, hd = h, d end
+    end
+  end
   if not home then return "no ground station" end
   local range = linkRange(nd.any, home.power or COMMS.station)
   local d = math.sqrt((nd.x - home.x) ^ 2 + (nd.y - home.y) ^ 2 + (nd.z - home.z) ^ 2)

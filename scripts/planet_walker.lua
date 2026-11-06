@@ -381,6 +381,12 @@ lastDrop = nil            -- the salvage crate id the last blackout left (probes
 local down_t = 0.0
 
 -- Where the crew wakes: the colony, else straight up out of the water.
+-- A text field has the keys (the Build Kit's part search, a new base's name:
+-- every "Field…" node): letters and digits typed there aren't game keys.
+local function text_focus()
+  local f = ui and ui.focused and ui.focused()
+  return f ~= nil and type(f.name) == "string" and f.name:sub(1, 5) == "Field"
+end
 local function rescue_point(node, ux, uy, uz)
   local name = save.get("base.body")
   local bx, by, bz = save.get("base.x"), save.get("base.y"), save.get("base.z")
@@ -2110,10 +2116,12 @@ function update(node, dt)
     f, s, sprint = steer_f, steer_s, steer_sprint
     crouch_in = steer_crouch
   else
-    if input.key("w") then f = f + 1 end
-    if input.key("s") then f = f - 1 end
-    if input.key("d") then s = s + 1 end
-    if input.key("a") then s = s - 1 end
+    if not text_focus() then
+      if input.key("w") then f = f + 1 end
+      if input.key("s") then f = f - 1 end
+      if input.key("d") then s = s + 1 end
+      if input.key("a") then s = s - 1 end
+    end
     sprint = input.key("shift")
     -- CROUCH: CTRL held, or the Crouch action (C unless rebound) — a toggle
     -- or a hold, the player's choice (Settings ▸ Controls).

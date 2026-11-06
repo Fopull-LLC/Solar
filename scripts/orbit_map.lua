@@ -2329,6 +2329,46 @@ local function map_relay_sats(net, px_at, label, lk, at)
   draw.depthTest(was and true or false)
 end
 
+-- THE BASES (deep-space M5): each Base Station Tower from base_tower.bases()
+-- (the hook the Tracking Station's list reads too): a beacon's ring and mast,
+-- bigger, with its dish tipped off the mast head and its name; a second ring
+-- round the foot when it is powered (a ground station). Teal with a path
+-- home, red without. The home base (#0) is the station's own ring.
+local bases_ref = nil
+local function map_bases(px_at, label, lk, show)
+  if not (bases_ref and bases_ref.valid ~= false) then bases_ref = findScript and findScript("base_tower") or nil end
+  local bt = bases_ref
+  if not (bt and bt.bases and camera and camera.worldToScreen) then return end
+  local ok, list = pcall(bt.bases, { brief = true })
+  if not ok or type(list) ~= "table" then return end
+  for _, e in ipairs(list) do
+    if not e.home and e.gx then
+      local ux, uy, uz = e.ux or 0, e.uy or 1, e.uz or 0
+      local s = px_at(e.gx, e.gy, e.gz, 10)
+      local c = e.linked and { 0.35, 1.0, 0.8 } or { 1.0, 0.45, 0.35 }
+      draw.ring(e.gx, e.gy, e.gz, ux, uy, uz, s, c[1], c[2], c[3], 1)
+      if e.powered then draw.ring(e.gx, e.gy, e.gz, ux, uy, uz, s * 1.55, c[1], c[2], c[3], 0.8) end
+      local tx, ty, tz = e.gx + ux * s * 3.2, e.gy + uy * s * 3.2, e.gz + uz * s * 3.2
+      draw.line(e.gx, e.gy, e.gz, tx, ty, tz, c[1], c[2], c[3], 1)
+      -- the dish: a small ring off the mast head, tipped between up and a tangent
+      local ax, ay, az = 1 - ux * ux, -ux * uy, -ux * uz
+      if ax * ax + ay * ay + az * az < 1e-4 then ax, ay, az = -uy * ux, 1 - uy * uy, -uy * uz end
+      local al = math.sqrt(ax * ax + ay * ay + az * az)
+      ax, ay, az = ax / al, ay / al, az / al
+      local nx, ny, nz = ax * 0.82 + ux * 0.57, ay * 0.82 + uy * 0.57, az * 0.82 + uz * 0.57
+      draw.ring(tx + ax * s * 0.5, ty + ay * s * 0.5, tz + az * s * 0.5, nx, ny, nz, s * 0.75, c[1], c[2], c[3], 1)
+      if label and (show.markers or show.links) then
+        local px, py, _, on = camera.worldToScreen(tx, ty, tz)
+        if on then
+          label(px, py - 16 * (lk or 1), string.format("%s · %s", e.name or "Base", e.powered and "ground station" or "mast"),
+            11 * (lk or 1))
+        end
+      end
+    end
+  end
+end
+mapBases = map_bases   -- (probes; the station's map)
+
 local function mmss(s)
   s = math.max(0, math.floor((s or 0) + 0.5))
   return string.format("%d:%02d", math.floor(s / 60), s % 60)
@@ -2421,6 +2461,8 @@ function mapComms(subject, px_at, label, lk, show)
       end
     end
   end
+  -- (in STATION mode the station draws the base's icon and tag: the glyph only)
+  if show.markers or show.links then map_bases(px_at, (not station) and label or nil, lk, show) end
   -- THE AGENCY'S FLAGS (scripts/deployables.lua): a short pole with a pennant
   -- in signal orange, and its name — the Tracking Station's MAP lands here.
   local dep = findScript and findScript("deployables")

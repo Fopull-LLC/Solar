@@ -44,9 +44,9 @@ import sys
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from gen_part_meshes import ROOT, PREFABS, box, disk, lathe, rot_z, tube  # noqa: E402
+from gen_part_meshes import ROOT, PREFABS, box, disk, lathe, rot_x, rot_z, tube  # noqa: E402
 from base_models import (CModel, CONC, CONT_BLUE, DARK, GREY, LIGHT, PAINT, RUBBER, SAFETY, Shell,  # noqa: E402
-                         SLATE, WARM, LAMP_WARM, zcheck)
+                         SLATE, WARM, LAMP_WARM, zcheck, lattice_column, dish, yagi, railing, obstruction, quat_x)
 import gen_base  # noqa: E402
 
 MODELS = os.path.join(ROOT, "models", "base", "parts")
@@ -423,6 +423,194 @@ def write_stand(dry):
     return seat, deck_off
 
 
+# ── BASE STATION TOWER (step 7, M1) ─────────────────────────────────────────
+# A 12 m galvanised lattice mast, 1.2 m square (four legs, X-braced every
+# 2 m), on a bolted steel base frame with a concrete pad under each leg. At
+# 11 m a grated work platform with a guard rail; on its front a 3 m solid
+# parabolic dish on a yoke, tipped 35 deg up (the outpost's link home); a Yagi
+# on the back face, a whip and an aviation obstruction light on top. At the
+# foot an equipment cabinet (the radio, the power controller), its conduit up
+# a leg, and a caged ladder face. 1.5 t: a real 12 m self-supporting lattice
+# with a 3 m dish is 1.2-1.8 t of steel. Footprint 2.6 x 2.6 m: it stands on
+# the ground or on a Pad Plate's deck. Colliders ("Wall N"): the base frame,
+# the mast as one box, the cabinet, the platform (no one climbs it before
+# EN2; no kinematic fakes).
+
+TOWER = dict(frame=2.6, frame_h=0.16, mast_w=1.2, mast_top=11.0, plat=1.9, dish_r=1.5)
+
+
+def tower():
+    m = CModel(seed=91)
+    sh = Shell()
+    F, fh, w, top = TOWER["frame"], TOWER["frame_h"], TOWER["mast_w"], TOWER["mast_top"]
+    hw = w / 2
+    # the base frame: two skids, two cross members, a deck plate between the legs
+    for s in (-1, 1):
+        bx(m, "Steel", DARK, (0, fh / 2, s * (F / 2 - 0.08)), (F, fh, 0.16))
+        bx(m, "Steel", DARK, (s * (F / 2 - 0.08), fh / 2, 0), (0.16, fh, F - 0.32))
+    bx(m, "Steel", GREY, (0, fh - 0.01, 0), (w + 0.3, 0.02, w + 0.3))
+    sh.add((0, fh / 2, 0), (F, fh, F))
+    # a concrete pad and a base plate under each leg, its four bolts
+    for sx in (-1, 1):
+        for sz in (-1, 1):
+            bx(m, "Concrete", CONC, (sx * hw, fh + 0.062, sz * hw), (0.36, 0.12, 0.36))
+            bx(m, "Steel", GREY, (sx * hw, fh + 0.13, sz * hw), (0.24, 0.02, 0.24))
+            for bxs in (-1, 1):
+                for bzs in (-1, 1):
+                    tb(m, "Steel", LIGHT, (sx * hw + bxs * 0.08, fh + 0.14, sz * hw + bzs * 0.08),
+                       (sx * hw + bxs * 0.08, fh + 0.18, sz * hw + bzs * 0.08), 0.012, segs=6)
+    y0 = fh + 0.14
+    lattice_column(m, LIGHT, (0, y0, 0), top, w, step=2.0, r=0.055, rb=0.028)
+    sh.add((0, (y0 + top) / 2, 0), (w + 0.12, top - y0, w + 0.12))
+    # the work platform at the top: grating, toe boards, a rail all round
+    P = TOWER["plat"]
+    bx(m, "Steel", GREY, (0, top + 0.03, 0), (P, 0.05, P))
+    for s in (-1, 1):
+        bx(m, "Steel", SAFETY, (0, top + 0.112, s * (P / 2 - 0.025)), (P - 0.03, 0.10, 0.02))
+        bx(m, "Steel", SAFETY, (s * (P / 2 - 0.025), top + 0.112, 0), (0.02, 0.10, P - 0.08))
+    c = [(-P / 2, -P / 2), (P / 2, -P / 2), (P / 2, P / 2), (-P / 2, P / 2)]
+    for i in range(4):
+        (ax, az), (bx_, bz) = c[i], c[(i + 1) % 4]
+        railing(m, SAFETY, (ax, top + 0.05, az), (bx_, top + 0.05, bz), h=1.05, posts=0.95)
+    sh.add((0, top + 0.05, 0), (P, 0.12, P))
+    # a whip mast and the obstruction light over the platform
+    tb(m, "Steel", LIGHT, (0, top + 0.05, 0), (0, top + 2.2, 0), 0.05, segs=10)
+    obstruction(m, (0, top + 2.36, 0))
+    tb(m, "Steel", DARK, (0.25, top + 1.0, 0), (0.25, top + 2.0, 0), 0.012, segs=6)
+    # THE DISH: 3 m, on a yoke off the platform's front, tipped 35 deg up
+    R = TOWER["dish_r"]
+    el = math.radians(35)
+    axis = (0.0, math.sin(el), math.cos(el))
+    dc = np.array([0.0, top - 0.25, P / 2 + 0.35])
+    dish(m, tuple(dc), axis, R, R * 0.62, col=PAINT, feed=True)
+    # the yoke: two arms from the platform edge to the dish's back, a hub drum
+    back = dc - np.array(axis) * 0.05
+    m.color = GREY
+    tube(m, "Steel", tuple(back - np.array(axis) * 0.32), tuple(back), 0.16, segs=16, uv_m=1.0)
+    for s in (-1, 1):
+        tb(m, "Steel", GREY, (s * 0.55, top + 0.02, P / 2 - 0.05), tuple(back - np.array(axis) * 0.25 + np.array([s * 0.12, 0, 0])), 0.05, segs=8)
+        tb(m, "Steel", GREY, (s * 0.55, top - 1.2, hw), (s * 0.55, top + 0.02, P / 2 - 0.05), 0.045, segs=8)
+    # a Yagi on the back face, pointing out behind
+    yagi(m, (0, top - 1.4, -hw - 0.05), (0, 0.05, -1.0), n=7, L=1.8)
+    # the ladder up the back face: two rails, a rung every 0.3 m, hoops above 2.4 m
+    lz = -hw - 0.22
+    for s in (-1, 1):
+        tb(m, "Steel", GREY, (s * 0.22, y0 + 0.02, lz), (s * 0.22, top + 0.02, lz), 0.022, segs=6)
+    y = y0 + 0.3
+    while y < top - 0.05:
+        tb(m, "Steel", LIGHT, (-0.22, y, lz), (0.22, y, lz), 0.014, segs=5)
+        y += 0.3
+    for k in range(12):
+        yy = 2.4 + k * 0.72
+        if yy > top - 0.2:
+            break
+        sub = CModel(); sub.color = SAFETY; sub.ground = False
+        lathe(sub, "Steel", [(0.36, -0.015), (0.36, 0.015), (0.33, 0.015), (0.33, -0.015), (0.36, -0.015)], segs=14,
+              a0=math.pi * 1.08, a1=math.pi * 1.92)
+        m.merge(sub, None, (0, yy, lz + 0.02))
+    # THE EQUIPMENT CABINET at the foot, on the frame's front right, and its conduit up a leg
+    cx, cz = 0.92, 0.75
+    bx(m, "Steel", DARK, (cx, fh + 0.052, cz), (0.62, 0.10, 0.52))
+    bx(m, "Clad", PAINT, (cx, fh + 0.10 + 0.75, cz), (0.56, 1.5, 0.46))
+    bx(m, "Steel", GREY, (cx, fh + 0.10 + 1.53, cz), (0.62, 0.05, 0.52))
+    bx(m, "Steel", WARM, (cx, fh + 0.10 + 0.75, cz + 0.235), (0.50, 1.40, 0.012))
+    bx(m, "Steel", DARK, (cx - 0.20, fh + 0.10 + 0.85, cz + 0.25), (0.03, 0.14, 0.03))
+    for i in range(6):
+        bx(m, "Steel", DARK, (cx + 0.285, fh + 0.4 + i * 0.07, cz), (0.012, 0.035, 0.30))
+    bx(m, "Lamp", LAMP_WARM, (cx + 0.12, fh + 0.10 + 1.40, cz + 0.243), (0.06, 0.02, 0.006))
+    sh.add((cx, fh + 0.10 + 0.78, cz), (0.62, 1.58, 0.52))
+    tb(m, "Steel", GREY, (cx - 0.15, fh + 1.65, cz - 0.10), (hw + 0.02, fh + 1.65, hw + 0.02), 0.03, segs=6)
+    tb(m, "Steel", GREY, (hw + 0.02, fh + 1.65, hw + 0.02), (hw + 0.02, top - 0.3, hw + 0.02), 0.03, segs=6)
+    # a grounding rod and its strap at the back left corner
+    tb(m, "Steel", WARM, (-F / 2 + 0.2, 0.0, -F / 2 + 0.2), (-F / 2 + 0.2, fh + 0.3, -F / 2 + 0.2), 0.012, segs=6)
+    return m, sh
+
+
+# ── SOLAR ARRAY (step 7: a source for the tower) ────────────────────────────
+# A ground-mount single-axis tracker: two 1.2 x 2.0 m modules (4.8 m2) on a
+# torque tube along X, 1.35 m up on two driven steel posts with concrete
+# footings, drawn at 25 deg of tilt. Its cells turn about the tube toward the
+# sun (electronics.panelExposure, open), as a real tracker's drive does.
+
+def solar_array():
+    m = CModel(seed=93)
+    sh = Shell()
+    hub = 1.35
+    for s in (-1, 1):
+        bx(m, "Concrete", CONC, (s * 0.9, 0.08, 0), (0.36, 0.16, 0.36))
+        bx(m, "Steel", GREY, (s * 0.9, (0.16 + hub) / 2, 0), (0.10, hub - 0.16, 0.14))
+        bx(m, "Steel", GREY, (s * 0.9, 0.17, 0), (0.22, 0.02, 0.22))
+        sh.add((s * 0.9, hub / 2, 0), (0.36, hub, 0.36))
+    tb(m, "Steel", LIGHT, (-1.3, hub, 0), (1.3, hub, 0), 0.06, segs=12)
+    # the slew drive and its junction box on the left post
+    bx(m, "Steel", DARK, (-0.9, hub, 0.0), (0.18, 0.22, 0.22))
+    bx(m, "Clad", PAINT, (-0.9, 0.75, 0.13), (0.22, 0.28, 0.10))
+    tilt = math.radians(25)
+    Mt = rot_x(-tilt)
+    # two modules either side of the centre, rails under them
+    for s in (-1, 1):
+        cxm = s * 0.62
+        c = np.array([cxm, hub + 0.12, 0.0])
+        bx(m, "Steel", DARK, tuple(c), (1.18, 0.035, 1.98), M=Mt)
+        m.color = (1.0, 1.0, 1.0)
+        box(m, "Solar", tuple(c + Mt @ np.array([0, 0.019, 0])), (1.12, 0.004, 1.92), M=Mt, uv_m=0.5)
+        for e in (-1, 1):
+            bx(m, "Steel", LIGHT, tuple(c + Mt @ np.array([e * 0.585, 0.0, 0])), (0.03, 0.05, 1.98), M=Mt)
+            bx(m, "Steel", LIGHT, tuple(c + Mt @ np.array([0, 0.0, e * 0.985])), (1.14, 0.05, 0.03), M=Mt)
+        for z in (-0.6, 0.6):
+            bx(m, "Steel", GREY, tuple(np.array([cxm, hub + 0.06, 0.0]) + Mt @ np.array([0, 0, z])), (1.1, 0.06, 0.06), M=Mt)
+    sh.add((0, hub + 0.12, 0), (2.5, 0.12, 2.0), quat_x(-tilt))
+    return m, sh
+
+
+# ── ISOTOPE SKID (step 7: a source for the tower) ───────────────────────────
+# Four Isotope Cells (parts_nuclear `rtg`, an MMRTG each: 0.64 m, 45 kg,
+# finned) bolted upright in a 2 x 2 rack on a steel skid, with a guard cage
+# and a power junction box. 0.5 EC/s each, day and night: 2.0 EC/s, one
+# tower's draw. 0.3 t.
+
+def isotope_skid():
+    m = CModel(seed=95)
+    sh = Shell()
+    L, W, k = 1.7, 1.2, 0.12
+    for s in (-1, 1):
+        bx(m, "Steel", DARK, (0, k / 2, s * (W / 2 - 0.08)), (L, k, 0.14))
+    for x in (-0.7, 0.0, 0.7):
+        bx(m, "Steel", DARK, (x, k / 2, 0), (0.12, k, W - 0.3))
+    bx(m, "Steel", GREY, (0, k + 0.012, 0), (L - 0.05, 0.02, W - 0.05))
+    sh.add((0, k / 2, 0), (L, k, W))
+    for sx in (-1, 1):
+        for sz in (-1, 1):
+            x, z = sx * 0.38, sz * 0.26
+            bx(m, "Steel", DARK, (x, k + 0.04, z), (0.36, 0.04, 0.36))
+            m.color = (0.30, 0.30, 0.32)
+            tube(m, "Steel", (x, k + 0.06, z), (x, k + 0.70, z), 0.115, segs=16, uv_m=1.0)
+            m.color = DARK
+            tube(m, "Steel", (x, k + 0.70, z), (x, k + 0.74, z), 0.13, segs=16, uv_m=1.0)
+            for f in range(8):
+                a = f * TAU / 8 + TAU / 16
+                ca, sa = math.cos(a), math.sin(a)
+                bx(m, "Steel", (0.10, 0.10, 0.11), (x + ca * 0.17, k + 0.38, z + sa * 0.17), (0.11, 0.58, 0.012),
+                   M=np.array([[ca, 0, -sa], [0, 1, 0], [sa, 0, ca]]))
+    # the guard cage: corner posts, top rails, a mesh panel each long side
+    H = 0.95
+    for sx in (-1, 1):
+        for sz in (-1, 1):
+            tb(m, "Steel", SAFETY, (sx * (L / 2 - 0.05), k, sz * (W / 2 - 0.05)), (sx * (L / 2 - 0.05), k + H, sz * (W / 2 - 0.05)), 0.025, segs=6)
+    for s in (-1, 1):
+        tb(m, "Steel", SAFETY, (-(L / 2 - 0.05), k + H, s * (W / 2 - 0.05)), ((L / 2 - 0.05), k + H, s * (W / 2 - 0.05)), 0.022, segs=6)
+        tb(m, "Steel", SAFETY, (s * (L / 2 - 0.05), k + H, -(W / 2 - 0.05)), (s * (L / 2 - 0.05), k + H, (W / 2 - 0.05)), 0.022, segs=6)
+        for i in range(9):
+            x = -L / 2 + 0.2 + i * (L - 0.4) / 8
+            tb(m, "Steel", GREY, (x, k + 0.08, s * (W / 2 - 0.05)), (x, k + H - 0.03, s * (W / 2 - 0.05)), 0.008, segs=4)
+    sh.add((0, k + H / 2, 0), (L - 0.05, H, W - 0.05))
+    # the junction box on the front, its conduit down to the skid
+    bx(m, "Clad", PAINT, (0.0, k + 0.45, W / 2 + 0.02), (0.30, 0.36, 0.10))
+    bx(m, "Steel", SAFETY, (0.0, k + 0.66, W / 2 + 0.075), (0.18, 0.05, 0.004))
+    tb(m, "Steel", GREY, (0.0, k + 0.27, W / 2 + 0.02), (0.0, k + 0.02, W / 2 + 0.02), 0.025, segs=6)
+    return m, sh
+
+
 # ── BUILD KIT (the item) ─────────────────────────────────────────────────────
 # A rugged field tablet in a hard carry frame: 0.30 x 0.22 x 0.035 m with
 # rubber corner bumpers and a top carry handle, 1.6 kg. Carried by the handle
@@ -451,6 +639,11 @@ ITEM_MATS = {
              '                roughness_map: Some("textures/parts/metal_orm.png"),\n                roughness: 1.2,\n'
              '                metallic_map: Some("textures/parts/metal_orm.png"),\n                metallic: 0.3,\n'
              '                ao_map: Some("textures/parts/metal_orm.png"),\n                shading: Physical,\n            )'),
+    "Solar": ('(\n                color: (1.0, 1.0, 1.0),\n                texture: Some("textures/parts/solar_albedo.png"),\n'
+              '                normal_map: Some("textures/parts/solar_normal.png"),\n                normal_strength: 1.0,\n'
+              '                roughness_map: Some("textures/parts/solar_orm.png"),\n                roughness: 1.0,\n'
+              '                metallic_map: Some("textures/parts/solar_orm.png"),\n                metallic: 1.0,\n'
+              '                ao_map: Some("textures/parts/solar_orm.png"),\n                shading: Physical,\n            )'),
     "Rubber": ('(\n                color: (1.0, 1.0, 1.0),\n                texture: Some("textures/parts/rubber_albedo.png"),\n'
                '                normal_map: Some("textures/parts/rubber_normal.png"),\n                normal_strength: 1.0,\n'
                '                roughness_map: Some("textures/parts/rubber_orm.png"),\n                roughness: 1.0,\n'
@@ -556,6 +749,15 @@ def main():
                ("hab_frame.glb", hm), hsh,
                [("Shell", "hab_shell.glb", hab_shell()), ("Interior", "hab_interior.glb", hab_interior())], dry)
     write_stand(dry)
+    tm, tsh = tower()
+    write_part("BaseTower", "BASE STATION TOWER — a 12 m lattice mast and a 3 m dish (BASE section; scripts/base_tower.lua).",
+               ("tower.glb", tm), tsh, [], dry)
+    am, ash = solar_array()
+    write_part("BaseSolar", "SOLAR ARRAY — a 4.8 m2 single-axis tracker (BASE section; powers a tower on its structure).",
+               ("solar_array.glb", am), ash, [], dry)
+    im, ish = isotope_skid()
+    write_part("BaseIsotope", "ISOTOPE SKID — four Isotope Cells in a caged rack (BASE section; powers a tower on its structure).",
+               ("isotope_skid.glb", im), ish, [], dry)
     km = build_kit()
     write_part("ItemBuildKit", "BUILD KIT — the Engineer's field tablet, carried by its handle (scripts/field_builder.lua).",
                ("build_kit.glb", km), None, [], dry, folder="models/items")

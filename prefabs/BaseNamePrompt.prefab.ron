@@ -1,0 +1,31 @@
+[
+    (
+        // THE NAME FIELD a new base opens (deep-space M1): scripts/base_tower.lua
+        // spawns this under the Ship HUD when a Base Station Tower is placed,
+        // draws it with ui.make while it is open and destroys it on Found / Keep / Esc.
+        name: "Base Name Prompt",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+        ui: Some((
+            place: Pin(
+                anchor: Center,
+                offset: (0.0, -120.0),
+            ),
+            size: (Fixed(420.0), Fit),
+            stack: Some((
+                dir: Column,
+                gap: 0.0,
+                pad: 0.0,
+                align: Start,
+                justify: Start,
+            )),
+            visible: true,
+            opacity: 1.0,
+        )),
+    ),
+]

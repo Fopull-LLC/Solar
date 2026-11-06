@@ -8,8 +8,9 @@ placed single parts; step 5 (§7) snaps parts to each other, lays them on a
 grid, levels the ground and casts footings, judges every placement in full,
 keeps an undo ring and takes parts down for a refund. Step 6 (§9) adds the
 Build Stand: a craft put on it, commissioned into a live craft, released,
-driven off and returned to it (L1, L2, L4). Steps 7–8 (the tower, the base
-grid) build on the hooks named at the end.
+driven off and returned to it (L1, L2, L4). Step 7 (§11) adds the Base Station
+Tower: founding a base, the relay tiers, the map and the 10 % unlock. Step 8 (the base
+grid) builds on its hooks.
 
 Read `docs/positions-and-frames.md` first. Everything here is kept in a body's
 frame.
@@ -22,8 +23,9 @@ frame.
 - **Issue.** Every Engineer gets one Build Kit, once per member.
   `field_builder.issue_tick` checks every 3 s and stamps
   `inv.issued.buildkit.<cid>`. That covers hires, retrains and old saves. It is
-  not part of the standard `issue` (that goes to everyone), and it isn't sold
-  yet. The Depot stocks it once the 10 % coverage unlock lands (M3, step 7).
+  not part of the standard `issue` (that goes to everyone). Since step 7 (M3,
+  §11) the kit is the Relay Network's 10 % unlock: nobody is issued one before
+  it; after it the Depot stocks it and Engineers get theirs at the base.
 - **The gate.** The kit opens only when all of these hold:
   - the active member is an Engineer (`crew.hasRole`, from the roles commit 578c13a);
   - they are on foot (`planet_walker.onFoot`) and not swimming;
@@ -412,7 +414,7 @@ changes. A snapped pose only moves when the cursor crosses a grid cell.
   - pitch and roll for parts that may lie down;
   - a "crew in the footprint" check, which only covers bodies with colliders
     (`overlapObb` sees the Astronaut and CrewBody capsules);
-  - the depot stocking the kit (M3).
+  - the depot stocking the kit (M3: done in step 7, §11).
 - **Machines and power (M6, N4):** a structure whose parts carry electronics
   becomes an anchored assembly with a 10 Hz power step. Static prefabs stay
   for slabs and sheds.
@@ -708,3 +710,195 @@ The toolbar's LAUNCH reads COMMISSION ▸.
 - `tools/perf/buildkitprobe.sh <engine> standedit` (PATCHES=funds.patch,
   `tools/perf/standeditprobe_modes.lua`) writes pictures se1..se12 and logs
   `BK RESULT standedit`.
+
+## 11. Step 7: the Base Station Tower and the bases (M1–M3, M5, M8–M9)
+
+A **base** is a Base Station Tower and every structure within 150 m of it.
+The home base is base #0: the spaceport, with the Tracking Station as its
+tower. Nothing in `base.*` changes shape, and base #0 isn't stored anywhere.
+Every other base is founded by placing a tower with the Build Kit.
+
+### The parts (`parts_base`, `tools/gen_base_parts.py`)
+
+| Part | Prefab | Real size | Mass | Price | What it does |
+|---|---|---|---|---|---|
+| Base Station Tower | `BaseTower` | 12 m galvanised lattice mast, 1.2 m square, on a 2.6 m base frame; a grated platform at 11 m; a 3 m dish on a yoke, tipped 35° up; a Yagi, a whip and an obstruction light; an equipment cabinet and a ladder | 1.5 t | $4,000 | founds a base; a relay (below) |
+| Solar Array | `BaseSolar` | two 1.2 × 2.0 m modules on a single-axis tracker, 1.35 m up | 0.18 t | $1,800 | 3 EC/s in full sun, tracking about its +X; nothing in a planet's shadow |
+| Isotope Skid | `BaseIsotope` | four Isotope Cells in a caged rack on a steel skid | 0.3 t | $10,000 | 2 EC/s, day and night; behind the Isotope Cell's research (`research.ALIAS`) |
+
+- All three are `onDeck`: they stand on the ground or on a Pad Plate's deck.
+- They are built 1:1 like the step-4 modules. Their collider boxes are
+  `Wall N`: the tower's frame, mast, cabinet and platform.
+- Nobody climbs the tower before EN2, and there are no kinematic interior fakes.
+
+### Founding and naming (M1; `scripts/bases.lua`, `scripts/base_tower.lua`)
+
+- **Every tower part in the structures is a base.** `base_tower.reconcile`
+  runs whenever `structures.version` or `bases.version` changes. It founds a
+  base for a new tower and keeps the base's id on the tower's bp entry
+  (`base`).
+- **The name field.** When the tower the player just placed founds its base
+  (it matches `field_builder.lastPlace`), a name field opens:
+  - the `BaseNamePrompt` node goes under the Ship HUD and is drawn with
+    `ui.make`;
+  - the default is "Outpost <n>";
+  - **Found it** or Enter keeps what was typed; **Keep …** or Esc keeps the
+    default.
+  - While it is open, the kit's keys and clicks wait (`field_builder` asks
+    `base_tower.prompting()`).
+  - A focused `Field…` node keeps WASD, the belt's keys and the stranded
+    card's Enter for itself (`planet_walker`, `tool_belt`, `item_hand`,
+    `flight_ops`). The kit's part search had the same problem.
+- **Renaming** is on the tower's menu ("Rename the base") and in the Tracking
+  Station's BASES detail.
+  - Names are trimmed and clipped to 32 characters.
+  - Two standing bases never share a name.
+- **Taken down.** A tower that is deconstructed, or whose placement is undone,
+  marks its base `down` and keeps the record under its name. The minute's
+  undo, or a redo, stands the same base again. A redo's copy of the part has
+  no `base` id (it was copied before the base was founded), so the base
+  standing down at that tower's sid/uid is reused.
+
+```
+bases.list, bases.seq
+bases.<id> = { id, b, x, y, z (the tower's ground point, body-relative), n, t, d, by, sid, uid, down }
+```
+
+### The rules (M8, and the addendum's spacing)
+
+- **Towers stand 1 km apart along the ground**, the spaceport's Tracking
+  Station included (`base_tower.placeWhy`). This is the red ghost's reason:
+  "14 m from Far Side's tower: towers stand 1.0 km apart".
+- **No building within 30 m of a vein being mined.**
+  - A vein is "being mined" once a cut has paid ore from it. That sets
+    `veins2.<body>.<patch>.w[<vein>]`, which is saved.
+  - A vein whose outcrops were broken also counts.
+  - The check is `mineral_field.workedVeinNear`, in `field_builder.validity`.
+- **No dig reaches under a structure.**
+  - `base_tower` syncs one `base_facilities.setGuards("struct:<sid>", …)`
+    owner per structure, on every records change.
+  - Each part's guard box runs from 2 m under its footing to 1 m over its
+    top, 0.5 m wider than its footprint.
+  - The laser, craters, the drill and the surveyor already ask `digClamp`.
+- Building inside the home base's footprint and building under water were
+  already refused in step 5.
+
+### The relay (M2; Q20 tiered)
+
+`comms.solve` adds `base_tower.commsNodes(by, bodies, E)` after the beacons.
+Each standing tower is a transmitter whose antenna is 11.6 m up its own up
+axis. It is pinned to its world (`frame`, `rx..rz`), so the solve places it
+against its single read of the bodies.
+
+| Tower | Node | What it means |
+|---|---|---|
+| Unpowered (a mast) | `E.beaconNode`: `any = relay = 1500`, `beacon = true` | a beacon-class relay: it needs a path home through other relays. A probe core hears it from 387 m. |
+| Powered, home world | `home = true, power = COMMS.station` (4.0e5) | a **second home root**: `solveNetwork` already gives every `home` a cost of 0 |
+| Powered, another world | `any = relay = 4.0e5`, `landed = true` | home only through a path to the real home. Off-world building is refused until step 13. |
+
+- `statusOf("t:<base id>")` gives a tower's link.
+- `relayStats` counts towers as ground relays.
+- `relay_sets` and the coverage treat a tower as ground (`tower`). It never
+  makes the coverage "moving".
+- `noLinkWhy` names the **nearest** home root.
+
+### Power: the tower's own structure (until the base grid, step 8)
+
+- **The choice:** a tower counts the sources on **its own structure**, meaning
+  the same pads. There is no built-in battery.
+- **Example:** a Pad Plate with the tower, and a second plate edge to edge
+  carrying an Isotope Skid, makes 2.0 EC/s. That makes the tower a ground
+  station.
+- `base_tower.power(bid)` sums `sourcesOf(rec)`:
+  - Isotope Skid: `gen`;
+  - Solar Array: `electronics.solarOutput` at the array, 1.35 m up, against
+    the home-orbit flux. These worlds don't turn, so a spot's day is its
+    world's year, and an array on the night side gives nothing.
+- It is worked out at most every 2 s, and only when the solve, the menu or
+  the list asks.
+- **There is no storage.** A solar-only tower falls back to a mast at night.
+  Step 8's shared grid, its storage and its cables replace this rule.
+
+### On the map and in the station (M5)
+
+- **`base_tower.bases(opts)` is the hook.** It returns the home base #0
+  first, then each tower's base with:
+  - its tier, power, link, path, why;
+  - its world's ground coverage;
+  - its structure count within 150 m (left out with `brief`);
+  - when it was founded, and its tower's sid/uid.
+
+  The station's rebuild can show this list as it is.
+- **The map glyph** is `orbit_map.map_bases` (`mapBases`):
+  - a beacon's ring and mast, bigger, with a small dish ring off the mast head;
+  - a second ring round the foot when it is powered;
+  - teal with a path home, red without;
+  - the label "Far Side · ground station".
+  In STATION mode the station draws the icon and tag itself, so the glyph
+  is drawn without its label.
+- **The station** (docs/tracking-station.md):
+  - `fleet_view` adds a BASES group (before STRUCTURES) with one entry
+    `"o:<base id>"` per tower's base (kind `outpost`), at the tower's ground
+    point, body-relative. Its situation line is "base · ground station" or
+    "base · mast".
+  - The SELECTED card (`tracking_station` `base_card`) shows the tower's tier
+    and power, its link, its world's ground coverage and when it was
+    founded, with Rename (`base_rename`, through `bases.rename`) and Focus.
+  - "Target" is not offered, because `targeting` has no ground-spot kind yet.
+
+### The 10 % unlock (M3)
+
+- `research.TECH.buildkit`:
+  - `grantOnly`: it has no price and can't be bought;
+  - `permGrant = { "relay_net", 1 }`: a save already past the goal has it.
+- The Relay Network's 10 % goal grants `{ "probe", "buildkit" }`. A goal's
+  `grant` may be a list.
+- Ops says "You can hear us from a tenth of the ground. Time to build
+  somewhere else." through `caption`.
+- From then on:
+  - the Depot stocks the kit (`items` `shop = true, tech = "buildkit"`;
+    `shopList` hides it until the tech is open);
+  - every Engineer is issued one the next time they are at the base (in it,
+    or on foot within 400 m of it);
+  - a save whose Engineers already had a kit keeps it.
+- Past 10 %, the objectives card's ground-coverage hint points at the far
+  side.
+
+### Cost
+
+- An idle tower is a static prefab like any placed part.
+- `base_tower.update` compares two version numbers a frame; `bases` has no
+  update.
+- The solve's call is a cached list with power memoised for 2 s.
+- The probe's numbers are in step 7's NOTES.
+
+### Tests and the probe
+
+- `luajit solar/tests/smoke_tower.lua` covers:
+  - the parts;
+  - `bases`: founding, names, spacing, the 150 m membership, down and up, the
+    save round trip;
+  - `base_tower`: founding, the name field, the undo and the redo copy;
+  - power: none, an Isotope Skid, solar day and night;
+  - the three relay tiers on the real `solveNetwork`, including a far-side
+    probe that goes home through a powered tower, but not through a lone
+    mast unless beacons chain it;
+  - M4's row (below);
+  - the dig guards, the idle cost, the research grant, the Depot and the
+    goal's grant list.
+- **M4, measured:** on a smooth 800 m world the station alone covers 6.5 % of
+  the ground, and with a powered far-side tower 14.0 %. The tower doubles
+  coverage, as the addendum guessed, but one outpost does not reach 25 %.
+  That still needs beacons from both stations.
+- `smoke_base_build` counts seven BASE parts.
+- `tools/perf/buildkitprobe.sh <engine> tower` (PATCHES=funds.patch) covers:
+  - the locked kit, its grant and issue;
+  - the far side, with the rails warped on until the sun is over it for the
+    pictures;
+  - two plates and the tower: the base founded and the name typed;
+  - the mast tier, then the skid and the station tier, and coverage up;
+  - a second tower refused, the menu, the station's list, the map glyph, a
+    dig refused, the cost;
+  - save and reload.
+
+  Pictures are t1..t7; the other modes call `BK.unlock()` first.

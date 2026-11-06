@@ -147,8 +147,10 @@ ITEMS.spentRod = { name = "Spent Rod", kind = "consumable", kg = 40.0, L = 14, c
 -- `issue`); in hand it opens build mode, the parts column and the ghost.
 -- Carried by its top handle like the Repair Kit. `hintFrom`: the line under
 -- the belt is that script's (hintLine), as live as the ghost it describes.
--- Not sold yet: the Depot stocks it once the 10 % coverage unlock (M3) lands.
-ITEMS.buildkit = { name = "Build Kit", kind = "device", kg = 1.6, L = 3, cost = 400,
+-- The Depot stocks it (a spare, or one for a kit left behind) once the
+-- Relay Network's 10 % stage has granted it (M3, research `buildkit`; `tech`:
+-- shopList leaves it off the counter until then).
+ITEMS.buildkit = { name = "Build Kit", kind = "device", kg = 1.6, L = 3, cost = 400, shop = true, tech = "buildkit",
                    hold = { prefab = "ItemBuildKit", grip = "left" }, hintFrom = "field_builder", role = "engineer",
                    about = "an Engineer's field tablet: pick a part, see its ghost on the ground, click to buy and ship it out (B)" }
 
@@ -228,11 +230,18 @@ function issueList()
 end
 
 -- What the depot's BUY counter and the VAB's stock sell, cheapest first.
+-- An item with a `tech` is on the counter only once that research is open.
+function tech_open(id)
+  if not id then return true end
+  local rs = findScript and findScript("research")
+  if not (rs and rs.isUnlocked) then return true end
+  return rs.isUnlocked(id) == true
+end
 function shopList()
   local out = {}
   for _, id in ipairs(ids()) do
     local d = ITEMS[id]
-    if d.shop and d.cost then
+    if d.shop and d.cost and tech_open(d.tech) then
       out[#out + 1] = { id = id, name = d.name, cost = d.cost, kg = d.kg, L = d.L, kind = d.kind, about = d.about }
     end
   end

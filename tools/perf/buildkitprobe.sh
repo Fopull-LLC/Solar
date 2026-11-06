@@ -5,7 +5,8 @@
 # charged), undone (a full refund), placed again with an Equipment Shed, a red
 # ghost, save and reload on the moving planet, the colliders, the costs.
 #
-#   buildkitprobe.sh <engine> [modes]     modes: buildkit (default)
+#   buildkitprobe.sh <engine> [modes]     modes: buildkit (default), stand,
+#                                         standedit, tower (step 7: the far side)
 #   env: WORK LOCK SOLAR TAG PATCHES BENCH_PARAMS as bench.sh
 #
 # Splices vfxprobe_modes.lua (its freecam) and buildkitprobe_modes.lua into a
@@ -24,7 +25,7 @@ s = open(p).read()
 i = s.index('-- ── main ──')
 s = s[:i] + m1 + m2 + s[i:]
 s = s.replace('    elseif MODE == "plane" then run_plane()',
-              '    elseif MODE == "plane" then run_plane()\n    elseif MODE == "buildkit" then BK.run()\n    elseif MODE == "stand" then BK.run_stand()\n    elseif MODE == "standedit" then BK.run_standedit()')
+              '    elseif MODE == "plane" then run_plane()\n    elseif MODE == "buildkit" then BK.run()\n    elseif MODE == "stand" then BK.run_stand()\n    elseif MODE == "standedit" then BK.run_standedit()\n    elseif MODE == "tower" then BK.run_tower()')
 open(p, 'w').write(s)
 PY
 rm -rf $S/proj/save/user/buildshots

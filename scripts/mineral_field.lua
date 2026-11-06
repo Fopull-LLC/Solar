@@ -815,7 +815,8 @@ end
 
 local VEIN_V = 2
 -- vein_saved: patch key → { p = { v<i> = slot painted }, t = { v<i> = outcrops taken (bits) },
---                          h = { v<i> = 1 once the stain is painted } }
+--                          h = { v<i> = 1 once the stain is painted },
+--                          w = { v<i> = 1 once a cut has taken its ore: WORKED } }
 
 -- (v2: veins mostly buried and per-world ores. A v1 save's seams stay in
 -- the ground as they were painted, and still pay by their slot, oreSlots.)
@@ -832,7 +833,7 @@ local function vein_rec(pk)
 end
 local function vein_save(pk)
   local r = vein_saved[pk]
-  if r then save.set(vein_key(pk), (next(r.p) or next(r.t)) and r or nil) end
+  if r then save.set(vein_key(pk), (next(r.p) or next(r.t) or (r.w and next(r.w))) and r or nil) end
 end
 local function bit_on(mask, j) return math.floor((mask or 0) / 2 ^ (j - 1)) % 2 == 1 end
 
@@ -1633,6 +1634,32 @@ function veinAt(x, y, z, slack)
   return nil
 end
 
+-- A vein BEING MINED within r of a WORLD point: one a cut has taken ore from,
+-- or one whose outcrops were broken out (deep-space M8: the Build Kit builds
+-- nothing within 30 m of one). Measured to the nearest point of its line, on
+-- this world's patches near you. → { ore, vein }, d | nil
+function workedVeinNear(x, y, z, r)
+  local body = cur_body and space.body(cur_body)
+  if not body then return nil end
+  local rx, ry, rz = x - body.x, y - body.y, z - body.z
+  local best, bd = nil, r
+  for _, p in pairs(patches) do
+    if p.veins and patch_dist(p, rx, ry, rz) <= r + 20 then
+      local vr = vein_rec(p.key)
+      for _, v in ipairs(p.veins) do
+        if (vr.w and vr.w[v.key]) or (vr.t[v.key] or 0) > 0 then
+          for _, q in ipairs(v.b or v.pts or {}) do
+            local d = len(rx - q[1], ry - q[2], rz - q[3])
+            if d < bd then best, bd = { ore = v.ore, vein = v, patch = p.key }, d end
+          end
+        end
+      end
+    end
+  end
+  if best then return best, bd end
+  return nil
+end
+
 -- The outcrop (still standing) within r of a WORLD point.
 local function outcrop_near(x, y, z, r)
   local body = cur_body and space.body(cur_body)
@@ -1844,6 +1871,10 @@ local function pay(d, y)
         end
       end
       local v = hit.vein
+      -- the vein is being mined (deep-space M8: nothing is built within 30 m)
+      local vr = vein_rec(hit.patch)
+      vr.w = vr.w or {}
+      if not vr.w[v.key] then vr.w[v.key] = 1; vein_save(hit.patch) end
       if (v.revealT or 0) <= time then
         v.revealT = time + 0.4
         vein_reveal(v, b, { d.x, d.y, d.z, 2.5 })
