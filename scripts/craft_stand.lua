@@ -487,16 +487,35 @@ end
 -- its footprint's corners and centre, along the stand's up from its ground
 -- point (m; + = above). Looks past the stand. nil when no ray found ground.
 -- A ray that passes through what it is told to (the stand, a craft, the
--- crew): any hit on a node that is, or hangs under, one of `roots` (a set of
--- node ids) is stepped past and the ray goes on. (The engine's `ignore` list
--- names nodes; the stand's colliders are its children's and a craft's are its
--- parts', so a list of roots let the ray stop on them: probe 2026-11-05.)
+-- crew): `roots` is a root set (rootSet: node ids as keys, the nodes in
+-- `.nodes`), and the engine skips each root's whole subtree
+-- (ignoreChildren, card 0649: the stand's colliders are its children's and a
+-- craft's are its parts'). A set without `.nodes` falls back to stepping past
+-- hits under a root.
 -- → the hit, with `distance` from the first origin, or nil
+function rootSet(nodes)
+  local s = { nodes = {} }
+  for _, n in ipairs(nodes or {}) do
+    if n and n.valid ~= false then
+      local ok, id = pcall(function() return n.id end)
+      if ok and id and not s[id] then s[id] = true; s.nodes[#s.nodes + 1] = n end
+    end
+  end
+  return s
+end
 function rayPast(ox, oy, oz, dx, dy, dz, maxd, roots, ignore)
   if not raycast then return nil end
+  local opts = ignore and { ignore = ignore } or nil
+  if roots.nodes and #roots.nodes > 0 then
+    local list = {}
+    for _, n in ipairs(roots.nodes) do if n.valid ~= false then list[#list + 1] = n end end
+    if ignore then list[#list + 1] = ignore end
+    opts = { ignore = list, ignoreChildren = true }
+  end
   local gone = 0
   for _ = 1, 8 do
-    local ok, h = pcall(raycast, ox, oy, oz, dx, dy, dz, maxd - gone, ignore and { ignore = ignore } or nil)
+    local ok, h = pcall(raycast, ox, oy, oz, dx, dy, dz, maxd - gone, opts)
+    if not ok and not RAYPAST_ERR and log then RAYPAST_ERR = true; log("stand: raycast refused: " .. tostring(h)) end
     if not (ok and h and h.distance) then return nil end
     local n, mine = h.node, false
     for _ = 0, 4 do
@@ -507,6 +526,13 @@ function rayPast(ox, oy, oz, dx, dy, dz, maxd, roots, ignore)
       n = okp and par or nil
     end
     if not mine then h.distance = h.distance + gone; return h end
+    -- (a hit under a root the engine was told to skip: say so once, for the
+    -- engine card, then step past it as before)
+    if opts and opts.ignoreChildren and not RAYPAST_WARNED and log then
+      RAYPAST_WARNED = true
+      local okn, nm = pcall(function() return h.node.name end)
+      log("stand: ignoreChildren let a ray stop on " .. tostring(okn and nm or "?") .. " under a skipped root")
+    end
     local step = h.distance + 0.02
     gone = gone + step
     ox, oy, oz = ox + dx * step, oy + dy * step, oz + dz * step
@@ -515,10 +541,10 @@ function rayPast(ox, oy, oz, dx, dy, dz, maxd, roots, ignore)
   return nil
 end
 function standRoots(sid, uid, extra)
-  local roots = {}
-  for _, n in ipairs(stand_nodes(keyOf(sid, uid))) do roots[n.id] = true end
-  for _, n in ipairs(extra or {}) do if n and n.valid ~= false then roots[n.id] = true end end
-  return roots
+  local nodes = {}
+  for _, n in ipairs(stand_nodes(keyOf(sid, uid))) do nodes[#nodes + 1] = n end
+  for _, n in pairs(extra or {}) do nodes[#nodes + 1] = n end
+  return rootSet(nodes)
 end
 
 local function ground_rise(sid, uid, cp, extra)
@@ -985,7 +1011,7 @@ function returnWhy(v, sid, uid)
       local ux, uy, uz = c.x - b.x, c.y - b.y, c.z - b.z
       local l = len(ux, uy, uz)
       if l > 1e-3 then
-        local h = rayPast(c.x, c.y, c.z, -ux / l, -uy / l, -uz / l, 4.0, { [v.node.id] = true })
+        local h = rayPast(c.x, c.y, c.z, -ux / l, -uy / l, -uz / l, 4.0, rootSet({ v.node }))
         down = h ~= nil and h.distance <= 3.0
       end
     end
