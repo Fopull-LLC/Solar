@@ -64,6 +64,16 @@
   "texel_mm": 0.54,
   "method": "tools/gen_rope.py braid height"
  },
+ "textures/kit/decals_height.png": {
+  "depth_mm": 0.231,
+  "texel_mm": 3.906,
+  "method": "decal alpha as a paint film over the hull paint's grain"
+ },
+ "textures/kit/grime_height.png": {
+  "depth_mm": 0.205,
+  "texel_mm": 7.812,
+  "method": "decal alpha as a paint film over the hull paint's grain"
+ },
  "textures/lab/cloth_height.png": {
   "depth_mm": 1.039,
   "texel_mm": 0.977,

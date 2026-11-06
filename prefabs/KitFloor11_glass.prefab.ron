@@ -24,15 +24,6 @@
             asset_path: "models/kit/floor11_glass.glb",
         ),
         object_materials: {
-            "Pane": (
-                color: (0.90, 0.95, 0.96),
-                roughness: 0.04,
-                metallic: 0.0,
-                transmission: 0.9,
-                ior: 1.5,
-                thickness: 0.012,
-                shading: Physical,
-            ),
             "Steel": (
                 color: (1.0, 1.0, 1.0),
                 texture: Some("textures/base/steel_albedo.png"),
@@ -72,5 +63,29 @@
             lock_pos: (false, false, false),
             lock_rot: (false, false, false),
         )),
+    ),
+    (
+        name: "Glass",
+        transform: (
+            translation: (0.0000, 0.1820, 0.0000),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Mesh(
+            asset_path: "models/kit/floor11_glass_glass.glb",
+        ),
+        object_materials: {
+            "Pane": (
+                color: (0.90, 0.95, 0.96),
+                roughness: 0.04,
+                metallic: 0.0,
+                transmission: 0.9,
+                ior: 1.5,
+                thickness: 0.012,
+                shading: Physical,
+            ),
+        },
+        scripts: [],
+        parent: Some(0),
     ),
 ]

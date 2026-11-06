@@ -1,0 +1,46 @@
+// KIT PIECE — decalNum2 in film (the modular structure kit; scripts/parts_kit.lua).
+// Root = the ground point; Mesh, its colliders (Wall N) and its live children.
+// Written by tools/gen_kit_parts.py — edit the generator, not this file.
+[
+    (
+        name: "KitDecalNum2_film",
+        tags: ["base_part", "kit"],
+        transform: (
+            translation: (0.0000, 0.0000, 0.0000),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+    ),
+    (
+        name: "Mesh",
+        transform: (
+            translation: (0.0000, 0.0030, 0.0000),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Mesh(
+            asset_path: "models/kit/decalNum2_film.glb",
+        ),
+        object_materials: {
+            "Decal": (
+                color: (1.0, 1.0, 1.0),
+                texture: Some("textures/kit/decals.png"),
+                normal_map: Some("textures/kit/decals_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/kit/decals_orm.png"),
+                roughness: 1.0,
+                metallic_map: Some("textures/kit/decals_orm.png"),
+                metallic: 1.0,
+                ao_map: Some("textures/kit/decals_orm.png"),
+                alpha_cutoff: 0.45,
+                blend: Some(Cutout),
+                shading: Physical,
+            ),
+        },
+        scripts: [],
+        parent: Some(0),
+        cast_shadow: false,
+    ),
+]

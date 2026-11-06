@@ -1298,8 +1298,8 @@ stands where its record says.
 
 ### Open for S4 and later
 
-Paint and decals, blueprints in files and the BLUEPRINTS tab, the whole VAB
-catalogue in the kit, and bake-when-idle (card 0655). Rooms and air are §14.
+The whole VAB catalogue in the kit, and bake-when-idle (card 0655). Rooms and
+air are §14; paint, decals, props and blueprints are §15.
 
 ## 14. Sandbox S3: rooms and air
 
@@ -1477,3 +1477,161 @@ ROOMS, AIR, LEAK and LIFE SUPP lines read the same.
   then forced open from its menu (the leak alarm, the helmet back on),
   refilled, save and reload. Pictures
   `save/user/buildshots/r*.png`; numbers in `work/sandbox_s3/NOTES.md`.
+
+## 15. Sandbox S4: bases get character
+
+The plan is `work/sandbox/PLAN.md` §5, §1.4 and §6 (S4). Ty, 11-06: "building
+a base right now basically feels like it has no character"; a curated palette
+of about 12 swatches; the Shed and the Hab stay one-click prefabs. Four new
+tabs in the kit's column: **PAINT**, **PROPS**, **DECALS** and **BLUEPRINTS**.
+
+### Paint (`scripts/kit_paint.lua`, pure + a small driver)
+
+- **The palette:** twelve enamels drawn from the UI tokens
+  (`ui/solar.tokens.ron`): Hull White (bezel), Bone (ink), Primer Grey,
+  Gunmetal, Enamel Olive, Hab Green (phosDim), Signal Grey-Blue (signal),
+  Regolith Tan, Signal Orange (accent), Oxide Red (accentDim), Safety Yellow
+  (warn), and the **Agency Colour**, the company emblem's field colour worn to
+  an enamel (it follows a new emblem). Each swatch is the albedo the painted
+  surface should average, in linear light, already a little dusty.
+- **How it sits:** `node:setTint` multiplies over what a node draws and keeps
+  its textures, so paint is the tint that turns the piece's material average
+  into the swatch (`tintFor` = swatch / `BASE[mat]`, per channel, at most
+  3×). The normal, roughness and AO maps and the albedo's own stains, seams
+  and pitting all show through: an orange coat on concrete still looks like
+  concrete under paint. Tint never splits a draw (engine `perf.counts`), so a
+  painted wall row still batches; the probe measures it (below).
+- **Two faces:** `tools/gen_kit_parts.py` splits every wall-class piece's
+  model at its middle plane after building it: what is behind (z < 0) is a
+  `MeshIn` child, and a hab can's lining and deck (inside its hull) likewise.
+  `paint` is the outside (or the whole piece), `paintIn` the inside. Panes
+  and lamp lenses go into a `Glass` child on every paintable piece: a painted
+  window is never orange glass. No piece function changed for it.
+- **What takes paint:** kit pieces and props. Not a light's lens, a wall
+  screen, a switch, a lamp, a decal or a VAB fitting (`paintable`).
+- **The tool:** a swatch card in hand. LMB paints what the cursor is on: a
+  wall's face (the side you see), any other piece whole; **Shift** both
+  faces; **Ctrl** every piece of that kind on the structure; a piece in the
+  Alt-selection paints the whole selection. **I** held (or the Eyedropper
+  card) takes the face's colour into the hand; **Strip Paint** takes it off.
+  The piece under the cursor is rimmed orange. A coat is $30 a piece
+  (`PAINT_COST`), free in Creative, one step in the undo ring, refunded
+  within the minute like a placement.
+- **The record:** a structure's bp entry carries `paint`, `paintIn` and `pt`
+  (when it was painted), so paint saves with the structure, copies with
+  Ctrl+C and travels in a blueprint. `structures.spawn_part` calls
+  `kit_paint.applyPart` as a piece's node lands.
+
+### Weather, the light pass (`kit_paint` `dustOf`)
+
+An exterior piece (the structural sections: foundation, floor, wall, roof,
+frame, hab, shield) gathers dust with its age since it was placed or last
+painted: `cap × (1 − e^(−days/60))`, cap 0.55 on a dry world, 0.28 where rain
+washes it (`climate.worldOf`: air and seas), toward the world's own dust
+colour (by its kind). It goes on the outside skin only (a wall's `MeshIn`,
+props and fittings stay clean). Levels are quantised to 1/20 and a piece is
+re-tinted only when its level steps: a few times a game month at 1×. The
+driver knows when each piece's level next steps (`nextStepDays`, closed
+form), so a structure is looked at again only when its earliest step is due
+or the structures change; idle, that is one comparison a structure every 2 s.
+Repainting is washing.
+
+### Props (`PROPS`; `tools/gen_kit_props.py`)
+
+Cargo Crate, Small Crate, Drum, Shelving (stocked), Table, Chair, Bunk (two
+berths, mattresses and blankets in the lab's cloth), Workbench (drawers, a
+vice, a pegboard of tools), Coffee Maker, Desk Monitor, Potted Plant (the
+flora atlas's leafy shrub on crossed cards), Cable Reel; on walls and
+ceilings Tool Rack, Pipe Run, Cable Run, Fire Extinguisher; and two lamps,
+the warm Desk Lamp and the 5,000 K Work Light, pooled with the kit's lights
+(`kit_live`, their lens a `Lens` child) and loads on the base grid.
+
+- Snap class **`prop`**: a block on a 0.25 m grid (a monitor on a desk, a
+  crate in a corner), on any top face (a table's, a crate's), square toward
+  you; R and the wheel turn it. Wall things are `mount`s.
+- **Colliders** where the crew would bump into them (one box, or a table's
+  top and its two leg frames); none for small clutter (`clutter`: the lamps,
+  the monitor, the coffee maker, the plant). One model each, so they batch.
+
+### Decals and signs (`DECALS`)
+
+- **Films, not engine decals.** `decals.add` lays a mark only on the collider
+  of a node that draws, and a kit piece's colliders are Empties beside its
+  Mesh. So a decal is a thin quad a piece of its own (`mount` snap, material
+  `film`, `film = true`): it saves, copies, mirrors and travels in a
+  blueprint, overlaps nothing (paint goes over paint: `kit_snap.overlapIn`),
+  nothing blocks it, and every quad of a kind batches.
+- **Stock (29: 24 marks, 5 grime):** Hazard Stripe 2 m and 1 m, Hazard Panel, Arrow, Chevrons,
+  NO ENTRY, AIRLOCK, PRESSURE DOOR, Load Rating, O2 Line Marker, DANGER 400 V,
+  EXIT, the Halden Structural and Pell Groundworks marks (the game's own
+  suppliers), numbers 0–9, and grime: Streaks, Floor Scuffs, Rust Run,
+  Scorch, Oil Stain. One atlas (`textures/kit/decals.png`, 512 px a metre,
+  cutout) drawn by the generator in the project's fonts to `ui-style.md`'s
+  signage rules, and the grime's own (`grime.png`, blended); both with a
+  paint-film normal, ORM and height from `tools/detail_maps.decals`.
+- **T turns a mount on its face** (a decal, a sign, a rack):
+  `kit_snap.spinPose` composes Ry(yaw)·Rx(pitch)·Ry(spin) back into the
+  record's yaw, pitch and roll (on a wall a quarter spin is pitch 0 and a
+  quarter roll).
+- **Signs:** Sign Plate (riveted, 0.9 × 0.3 m), Name Board (2 × 0.5 m) and
+  Stencilled Words (sprayed on, cut out). `kit_live` draws each into a picture
+  (`img:text` in SolarStencil / SolarLabel) once: the part state's `text`, or
+  with none **the base's name** (`bases.baseAt`), redrawn when either changes
+  (a rename reaches the board within 2 s while the crew is near). Right-click:
+  **Write the words…** (a prompt; empty = the base's name). Each sign is its
+  own texture, so its own draw. **Agency Emblem**: the emblem's texture
+  (`emblem.tex()`), sprayed on.
+- **Clicking one:** a ray passes through a film to the wall, so
+  `field_builder.pickAt` / `pickTarget` find the mount at the hit point
+  (`kit_snap.mountAt`, the smallest wins); `context_menu` now keeps a prop
+  target's click point body-relative at the pick. Deconstruct, the sign's
+  words, Alt-select and the eyedropper all use it.
+
+### Blueprints (`scripts/blueprints.lua`, pure + the library)
+
+- **A blueprint** `{ v, name, by, made, n, mass, cost, pieces = { { id, x, y,
+  z, yaw, pitch, roll, paint, paintIn, text } } }` in the frame of its
+  anchor (the lowest piece, then the first placed), exactly the shape of the
+  Ctrl+C clipboard: a blueprint in hand is a paste, with its composite ghost,
+  R and the wheel turning it, the anchor snapping as a piece would.
+- **One bill:** the pieces' prices and **one delivery's** shipping (10 % +
+  $50 on the sum), charged once before anything goes down; each piece's
+  `paid` carries its share, so one Ctrl+Z refunds the whole bill; pieces that
+  don't fit are refunded and named. Pastes (Ctrl+V) now bill the same way.
+- **Saving:** the **Save as Blueprint** card (the Alt-selection, else the
+  structure you stand at), or right-click a piece → **Save structure as
+  blueprint** / **Save the N selected as blueprint**. A name prompt, then the
+  code, shown and written beside the file.
+- **Files:** `user://blueprints/<slug>.json` (one library for every save) and
+  `<slug>.code.txt`. A `.json` or a code file dropped on the window joins the
+  library (`filesDropped`); **Import a Code** takes a pasted one.
+- **The code:** `SOLBP1.<payload>.<check>`: base64url of a compact text (the
+  name, each piece id once, one line a piece in centimetres, degrees and
+  palette keys), and four base36 digits of an Adler-32, so a code mistyped or
+  cut short in a chat is refused instead of building half a hab. Pure Lua
+  (luajit checks it). The 31-piece stock hut is 1.3 kB.
+- **Stock:** Crew Hut 4 × 4 (furnished, a name board, a kick stripe, grime)
+  and Tool Shack 2 × 2 beside the Shed and the Hab, which stay one-click
+  prefabs. The card's picture is a plan drawing of its pieces.
+- **The engine has no clipboard API** for a game: the code is shown in a
+  read-only field and written to a file. A general `clipboard.get/set` would
+  make sharing one keystroke (proposed in work/sandbox_s4/NOTES.md).
+
+### Tests and the probe
+
+- `luajit solar/tests/smoke_character.lua`: the palette and its tint maths,
+  what takes paint, faces, dust; spin and the mount pick; paint through
+  field_builder (a face, both, a selection, the cost, undo/redo, Creative,
+  the saved records after a reload); a sign's words; the tool cards;
+  blueprints (from a structure with paint and words, the code and back, a
+  damaged code refused, the JSON file and the library, the stock hut's code
+  under 4 kB, one bill and each share); placing the stock hut (every piece,
+  charged once, its paint, turned, one undo refunds it), every stock
+  blueprint whole, and a saved one built again with its sign's words.
+- `tools/perf/kitprobe.sh <engine> character` (PATCHES=funds.patch;
+  `tools/perf/charprobe_modes.lua`): a hab built through the kit, the base
+  named, painted through the paint tool's own functions, signs and decals,
+  props inside, pictures, a blueprint saved and placed again, a 500-piece
+  base + 100 props + 20 decals in view painted and then bare (tint keeps the
+  batches), save and reload. Pictures `save/user/buildshots/c*.png`; numbers
+  in `work/sandbox_s4/NOTES.md`.

@@ -218,18 +218,82 @@ local function parts() if not PB or PB.valid == false then PB = ref("parts_base"
 -- (S1: the modular kit's sections follow the BASE section, each piece in the
 -- material picked; S2: FITTINGS, the VAB parts that work where they're put)
 material = "steel"     -- the material the next kit pieces take (M cycles it)
+-- (S4: the PAINT and BLUEPRINTS sections are the kit's tools, not parts:
+-- "paint:<swatch>" (and paint:pick, the eyedropper; paint:strip) and
+-- "bp:<key>" (a saved or stock blueprint; bp:save and bp:import are actions))
+local tool_secs = { v = nil, list = nil }
+local function tool_sections()
+  local BP, KP = ref("blueprints"), ref("kit_paint")
+  local v = tostring(BP and BP.version or 0) .. "|" .. tostring(KP ~= nil)
+  if tool_secs.v == v and tool_secs.list then return tool_secs.list end
+  local out = {}
+  if KP and KP.PALETTE then
+    local ids = { "paint:pick", "paint:strip" }
+    for _, s in ipairs(KP.PALETTE) do ids[#ids + 1] = "paint:" .. s.key end
+    out[#out + 1] = { title = "PAINT", ids = ids }
+  end
+  if BP and BP.all then
+    local ids = { "bp:save", "bp:import" }
+    for _, e in ipairs(BP.all()) do ids[#ids + 1] = "bp:" .. e.key end
+    out[#out + 1] = { title = "BLUEPRINTS", ids = ids }
+  end
+  tool_secs.v, tool_secs.list = v, out
+  return out
+end
 function catalogue()
   local p = parts()
   local out = {}
   for _, s in ipairs(p and p.catalogue() or {}) do out[#out + 1] = s end
   local K = ref("parts_kit")
   if K and K.catalogue then for _, s in ipairs(K.catalogue(material)) do out[#out + 1] = s end end
+  for _, s in ipairs(tool_sections()) do out[#out + 1] = s end
   return out
 end
-function partInfo(id) local p = parts(); return p and p.partInfo(id) or nil end
+-- A tool's card: { label, desc, cost, tool = "paint" | "bp" | "action" }
+local tool_defs = {}
+function toolDef(id)
+  if type(id) ~= "string" then return nil end
+  local kind, key = id:match("^(%a+):(.+)$")
+  if kind ~= "paint" and kind ~= "bp" then return nil end
+  local BP, KP = ref("blueprints"), ref("kit_paint")
+  local ck = id .. "|" .. tostring(BP and BP.version or 0)
+  if tool_defs[ck] then return tool_defs[ck] end
+  local d
+  if kind == "paint" and KP then
+    if key == "pick" then d = { label = "Eyedropper", desc = "click a piece to take its colour · I with a paint in hand", tool = "pick", cost = 0 }
+    elseif key == "strip" then d = { label = "Strip Paint", desc = "back to the bare material", tool = "paint", paint = nil, strip = true, cost = 0 }
+    else
+      local s = KP.swatch(key)
+      if s then d = { label = s.label, desc = "enamel over the piece's own surface · its wear shows through", tool = "paint", paint = key, cost = KP.PAINT_COST } end
+    end
+  elseif kind == "bp" and BP then
+    if key == "save" then d = { label = "Save as Blueprint", desc = "the Alt-selected pieces, or the structure you stand at", tool = "action", cost = 0 }
+    elseif key == "import" then d = { label = "Import a Code", desc = "paste a SOLBP1 code someone shared · or drop a .json on the window", tool = "action", cost = 0 }
+    else
+      local bp = BP.get(key)
+      if bp then
+        local b = blueprintBill(bp)
+        d = { label = bp.name, tool = "bp", bp = bp, key = key, cost = b.total, bill = b,
+              desc = string.format("%d pieces · %.1f t%s", b.n, b.mass, #b.missing > 0 and string.format(" · %d unknown", #b.missing) or "") }
+      end
+    end
+  end
+  if d then d.section = kind == "paint" and "PAINT" or "BLUEPRINTS"; d.mass = d.mass or 0; d.id = id end
+  tool_defs[ck] = d or false
+  return d
+end
+function partInfo(id)
+  local p = parts()
+  local d = p and p.partInfo(id) or nil
+  if d then return d end
+  return toolDef(id) or nil
+end
 function liveDef(id) return nil end
-function heldId() return heldPart end
+heldBp = nil          -- (S4) the blueprint card in hand ("bp:<key>"), its clip pasting
+function heldId() return heldBp or heldPart end
 function holding() return heldPart and "part" or nil end
+local function is_tool(id) local d = id and toolDef(id); return d ~= nil and (d.tool == "paint" or d.tool == "pick") end
+isTool = is_tool
 function researchPending() return false end
 subAssemblies = nil
 noSubAssy = true
@@ -237,6 +301,17 @@ function hint(text, secs) if text then say(text) end end
 local panel = nil
 function registerPanel(s) panel = s return true end
 function previewPrefab(id) local d = partInfo(id); return d and d.prefab or nil end
+-- (S4) a tool card's icon: the swatch chip, a blueprint's plan drawing
+function iconFor(id)
+  local d = toolDef(id)
+  if not d then return nil end
+  local KP, BP = ref("kit_paint"), ref("blueprints")
+  if d.tool == "paint" or d.tool == "pick" then
+    return KP and KP.iconOf and KP.iconOf(d.strip and "strip" or (d.tool == "pick" and "pick") or d.paint) or nil
+  end
+  if d.tool == "bp" then return blueprintIcon(d) end
+  return nil
+end
 function isCollapsed() return collapsed end
 function unfold() collapsed = false end
 -- THE PREVIEW STAND rides with the crew, 2.4 km up its frame, on the
@@ -275,6 +350,14 @@ end
 function cardLines(id, def, locked)
   local E = ref("base_economy")
   if locked or not E then return nil, nil end
+  -- (S4) the tools: a coat of paint, a blueprint's one bill, the actions
+  if def and def.tool == "paint" then return def.strip and "strip" or (creative() and "free" or money(def.cost) .. " a coat"), def.desc end
+  if def and def.tool == "pick" then return "pick", def.desc end
+  if def and def.tool == "action" then return "…", def.desc end
+  if def and def.tool == "bp" then
+    local b = def.bill
+    return money(b.total), string.format("%d pieces · %.1f t · %s + %s one delivery", b.n, b.mass, money(b.cost), money(b.ship))
+  end
   -- (step 8, B9b: a cable is billed by the metre when its run is laid)
   if def and def.cable then
     return string.format("$%g a metre", def.cable.perm or 3),
@@ -283,12 +366,28 @@ function cardLines(id, def, locked)
   return E.cardLines(quote_of(id))
 end
 function footText()
+  if heldPart and is_tool(heldPart) then return "PAINT — LMB paints · Shift both faces · Ctrl all of a kind · I picks · RMB tap drops" end
+  if heldBp then return "BLUEPRINT — LMB builds it (one bill) · R / wheel turns · RMB tap drops" end
   return heldPart and "IN HAND — LMB places · Shift+LMB keeps one · RMB tap drops" or "click a part to hold its ghost · B folds this"
 end
 
 -- Take a part in hand (the card click). → ok
 function hold(id)
   if not partInfo(id) then return false end
+  -- (S4) the tools: paint and the eyedropper in hand; a blueprint as a paste;
+  -- the save and import actions run and hold nothing
+  local td = toolDef(id)
+  if td then
+    if td.tool == "action" then
+      if id == "bp:save" then saveBlueprint() elseif id == "bp:import" then importBlueprint() end
+      return false
+    end
+    if td.tool == "bp" then return holdBlueprint(td.key) end
+    heldBp, pasting = nil, false
+    if heldPart ~= id then heldPart = id; play("pick", 0.35) end
+    return true
+  end
+  heldBp = nil
   -- (a BASE part behind a craft part's research: the Isotope Skid's cells)
   local rs = ref("research")
   local d0 = partInfo(id)
@@ -304,7 +403,7 @@ function hold(id)
   end
   return true
 end
-function dropHeld() heldPart = nil end
+function dropHeld() heldPart, heldBp = nil, nil end
 pick = hold
 
 -- ── the FieldCatalogue node ─────────────────────────────────────────────────
@@ -337,11 +436,13 @@ local function over_panel()
 end
 local function typing()
   local f = ui and ui.focused and ui.focused()
-  return f ~= nil and (f.name == "FieldPartSearch" or f.name == "FieldBaseName")
+  return f ~= nil and (f.name == "FieldPartSearch" or f.name == "FieldBaseName" or f.name == "FieldKitText" or f.name == "FieldKitCode")
 end
--- A new base's name field is up (base_tower.lua): the kit's keys and clicks wait.
+-- A new base's name field is up (base_tower.lua), or the kit's own prompt (a
+-- blueprint's name, a sign's words, a code: blueprints.lua): keys and clicks wait.
 local function naming()
-  local bt = ref("base_tower")
+  local bt, BP = ref("base_tower"), ref("blueprints")
+  if BP and BP.prompting and BP.prompting() then return true end
   return bt ~= nil and bt.prompting ~= nil and bt.prompting() == true
 end
 
@@ -410,6 +511,8 @@ function pose(hit, id)
   if kf then
     -- (S1: a face snap, then the storeys and the pitch / roll dialled)
     local yaw, pitch, roll = kf.yaw, kf.pitch + pitchOff, rollOff
+    -- (S4: T turns a mount — a decal, a sign, a rack — on its own face)
+    if def.snap == "mount" and KS.spinPose and math.abs(rollOff) > 1e-6 then yaw, pitch, roll = KS.spinPose(kf.yaw, kf.pitch + pitchOff, rollOff) end
     local lx, ly, lz = kf.lx, kf.ly + storey * STOREY, kf.lz
     local fr = KS.frameOf(hrec)
     local lu, lf = KS.localAxes(yaw, pitch, roll)
@@ -684,7 +787,8 @@ function validity(id, p)
   -- something in the way (placement.overlapObb; cached while the ghost holds still)
   local pl = ref("placement")
   if mode == "face" then
-    local why = kit_obstacle(def, p)
+    -- (a film of paint is never in anyone's way, nor they in its)
+    local why = not def.film and kit_obstacle(def, p) or nil
     if why then r.bad = why return r end
   elseif pl and pl.overlapObb and def.half then
     local key = string.format("%s|%.1f|%.1f|%.1f|%.2f|%.2f|%.2f", id, p.x, p.y, p.z, p.fwd.x, p.fwd.z, r.base)
@@ -1007,7 +1111,12 @@ function place(sid, partId, p, payer, opts)
   local q = E.quote(def, section_of(partId), p.body, home_body(), plan and plan.vol or 0)
   if q.mode ~= "money" or payer ~= "money" then return nil, q.why or "nothing to pay with" end
   if sid ~= nil and not ST.get(sid) then return nil, "that structure is gone" end
-  if not co.spend(q.total, E.ledgerWhy(def.label, q)) then return nil, "can't afford it: " .. E.money(q.total) end
+  -- (S4: a paste or a blueprint is ONE bill, paid before its pieces go down;
+  -- each piece's record carries its share, so an undo refunds the bill)
+  local pre = opts and opts.prepaid
+  if pre then
+    q = { mode = "money", cost = pre.cost, ship = pre.ship, foot = 0, total = pre.cost + pre.ship, supplier = q.supplier }
+  elseif not co.spend(q.total, E.ledgerWhy(def.label, q)) then return nil, "can't afford it: " .. E.money(q.total) end
   local t = agency_now()
   local by = member()
   local paid = { cost = q.cost, ship = q.ship, foot = q.foot, total = q.total, t = t, supplier = q.supplier, by = by }
@@ -1027,6 +1136,8 @@ function place(sid, partId, p, payer, opts)
   local function own(entry)
     for k, v in pairs(def.fields or {}) do if entry[k] == nil then entry[k] = v end end
     if effk then entry.effk = effk end
+    -- (S4) what the piece carries from a paste or a blueprint: its paint
+    for k, v in pairs((opts and opts.fields) or {}) do entry[k] = v end
     return entry
   end
   if sid ~= nil then
@@ -1342,12 +1453,21 @@ end
 -- placed with one bill and one step in the ring; Ctrl+D copies and holds.
 local function sel_key(sid, uid) return tostring(sid) .. ":" .. tostring(uid) end
 local function sel_tint(sid, uid, on)
-  local ST = ref("structures")
+  local ST, KP = ref("structures"), ref("kit_paint")
   local n = ST and ST.nodeOf(sid, uid)
-  if n and n.setTint then
-    if on then pcall(n.setTint, n, { color = { 0.6, 0.9, 1.0 }, rim = { 0.2, 0.7, 1.0 }, rimStrength = 0.8 })
-    else pcall(n.setTint, n) end
+  if not (n and n.setTint) then return end
+  -- (S4: on the piece's own surfaces — the root draws nothing — and its paint
+  -- and dust back when it is let go)
+  if KP and KP.highlight then
+    local rec, p = ST.get(sid), ST.getPart(sid, uid)
+    local def = p and partInfo(p.id)
+    local d, c = 0, nil
+    if rec and p and def and def.exterior and KP.dustOf then d, c = KP.dustOf(rec, p) end
+    KP.highlight(n, on, p, def, d, c)
+    return
   end
+  if on then pcall(n.setTint, n, { color = { 0.6, 0.9, 1.0 }, rim = { 0.2, 0.7, 1.0 }, rimStrength = 0.8 })
+  else pcall(n.setTint, n) end
 end
 function selectToggle(sid, uid)
   local k = sel_key(sid, uid)
@@ -1373,10 +1493,13 @@ function copyParts(sid, uids)
   local out = {}
   for _, p in ipairs(list) do
     local dx, dz = (p.x or 0) - (a.x or 0), (p.z or 0) - (a.z or 0)
+    local st = ST.partState(sid, p.uid)
     out[#out + 1] = { id = p.id, dx = dx * c - dz * s, dy = (p.y or 0) - (a.y or 0), dz = dx * s + dz * c,
-                      yaw = (p.yaw or 0) - (a.yaw or 0), pitch = p.pitch or 0, roll = p.roll or 0 }
+                      yaw = (p.yaw or 0) - (a.yaw or 0), pitch = p.pitch or 0, roll = p.roll or 0,
+                      paint = p.paint, paintIn = p.paintIn, text = st and st.text or nil }
   end
   clip = { parts = out, n = #out, label = (partInfo(a.id) or {}).label }
+  heldBp = nil
   return #out
 end
 local function copy_now()
@@ -1408,38 +1531,386 @@ function clipPose(p, e)
   return { lx = (p.lx or 0) + e.dx * c + e.dz * s, ly = (p.ly or 0) + e.dy, lz = (p.lz or 0) - e.dx * s + e.dz * c,
            yaw = (p.yaw or 0) + e.yaw, pitch = e.pitch, roll = e.roll }
 end
+-- (S4) ONE BILL for a clipboard or a blueprint: the pieces' prices, one
+-- delivery's shipping (blueprints.bill). → { cost, ship, total, mass, n, missing }
+function blueprintBill(bp)
+  local BP, E = ref("blueprints"), ref("base_economy")
+  local function price(id)
+    local d = partInfo(id)
+    if not (d and d.kit) then return nil end
+    return math.floor(d.cost or 0)
+  end
+  local function mass(id) local d = partInfo(id); return d and d.mass or 0 end
+  if not BP then return { cost = 0, ship = 0, total = 0, mass = 0, n = 0, missing = {} } end
+  return BP.bill(bp, price, mass, E and E.shipping or nil)
+end
+local function clip_bill(c)
+  local ps = {}
+  for _, e in ipairs(c.parts) do ps[#ps + 1] = { id = e.id } end
+  return blueprintBill({ pieces = ps })
+end
+clipBill = clip_bill
 function paste_click(p)
-  local ST, KS = ref("structures"), ref("kit_snap")
+  local ST, KS, co = ref("structures"), ref("kit_snap"), ref("company")
+  local BP = ref("blueprints")
   local list, placed, skipped, total = {}, 0, 0, 0
-  local sid, _, q = place(p.sid, clip.parts[1].id, p, "money", { collect = list })
-  if not sid then play("denied"); say("couldn't paste there") return end
+  -- the bill, paid once, before anything goes down
+  local b = clip_bill(clip)
+  local what = (heldBp and clip.label) and ("blueprint " .. tostring(clip.label)) or string.format("paste of %d pieces", clip.n)
+  if not co.spend(b.total, string.format("%s · %s + %s shipping, one delivery", what, money(b.cost), money(b.ship))) then
+    play("denied"); say("can't afford it: " .. money(b.total)) return
+  end
+  local function pre(id)
+    local d = partInfo(id)
+    local c = math.floor((d and d.cost) or 0)
+    return { cost = c, ship = BP and BP.shareOf(b, c) or 0 }
+  end
+  local refund = 0
+  local why_skip = {}
+  local function fields(e) return { paint = e.paint, paintIn = e.paintIn } end
+  local function words(s2, uid, e)
+    if e.text and uid then ST.setPartState(s2, uid, { text = e.text }) end
+  end
+  local a0 = clip.parts[1]
+  local sid, _, q, uid0 = place(p.sid, a0.id, p, "money", { collect = list, prepaid = pre(a0.id), fields = fields(a0) })
+  if not sid then co.refund(b.total, "returned: " .. what .. " (it couldn't go there)"); play("denied"); say("couldn't build it there") return end
+  words(sid, uid0, a0)
   total = total + q.total
   placed = 1
   local rec = ST.get(sid)
   local anchor = p.mode == "face" and { lx = p.lx, ly = p.ly, lz = p.lz, yaw = p.yaw } or { lx = 0, ly = 0, lz = 0, yaw = 0 }
   local fr = KS.frameOf(rec)
-  -- (lowest first: a wall goes on after the floor it stands on)
+  -- (lowest first: a wall goes on after the floor it stands on; mounts last)
   local order = {}
   for i = 2, #clip.parts do order[#order + 1] = clip.parts[i] end
-  table.sort(order, function(a, b) return a.dy < b.dy end)
+  local function mnt(e) local d = partInfo(e.id); return (d and d.snap == "mount") and 1 or 0 end
+  table.sort(order, function(x, y)
+    if mnt(x) ~= mnt(y) then return mnt(x) < mnt(y) end
+    return x.dy < y.dy
+  end)
   for _, e in ipairs(order) do
     local def = partInfo(e.id)
     local cp = clipPose(anchor, e)
     local m = { body = p.body, mode = "face", sid = sid, lx = cp.lx, ly = cp.ly, lz = cp.lz, yaw = cp.yaw, pitch = cp.pitch, roll = cp.roll,
                 x = fr.O.x + fr.R.x * cp.lx + fr.U.x * cp.ly + fr.F.x * cp.lz, y = fr.O.y + fr.R.y * cp.lx + fr.U.y * cp.ly + fr.F.y * cp.lz,
                 z = fr.O.z + fr.R.z * cp.lx + fr.U.z * cp.ly + fr.F.z * cp.lz, up = fr.U, fwd = fr.F }
-    if def and not kitWhy(def, m, e.id) then
-      local s2, _, q2 = place(sid, e.id, m, "money", { collect = list })
-      if s2 then placed = placed + 1; total = total + q2.total else skipped = skipped + 1 end
-    else skipped = skipped + 1 end
+    local pe = pre(e.id)
+    local kw = def and def.kit and kitWhy(def, m, e.id) or (def and not def.kit and "not a kit piece") or (not def and "unknown")
+    if not kw then
+      local s2, w2, q2, u2 = place(sid, e.id, m, "money", { collect = list, prepaid = pe, fields = fields(e) })
+      if s2 then placed = placed + 1; total = total + q2.total; words(s2, u2, e)
+      else skipped = skipped + 1; refund = refund + pe.cost + pe.ship; why_skip[#why_skip + 1] = e.id .. ": " .. tostring(w2) end
+    else
+      skipped = skipped + 1
+      if def and def.kit then refund = refund + pe.cost + pe.ship end
+      why_skip[#why_skip + 1] = e.id .. ": " .. tostring(kw)
+    end
   end
-  push_group(list, string.format("paste %d pieces", placed))
-  lastPaste = { sid = sid, placed = placed, skipped = skipped, total = total }
+  if refund > 0 then co.refund(refund, string.format("returned: %d piece%s of the %s that didn't fit", skipped, skipped == 1 and "" or "s", what)) end
+  push_group(list, heldBp and ("build " .. tostring(clip.label)) or string.format("paste %d pieces", placed))
+  lastPaste = { sid = sid, placed = placed, skipped = skipped, total = total, bill = b, bp = heldBp, why = why_skip }
+  if #why_skip > 0 and log then log("build: didn't fit: " .. table.concat(why_skip, " · ")) end
   play("place", 0.6)
-  say(string.format("pasted %d piece%s · %s%s · Ctrl+Z within a minute takes them back", placed, placed == 1 and "" or "s", money(total),
-    skipped > 0 and string.format(" · %d didn't fit", skipped) or ""))
+  say(string.format("%s %d piece%s · %s, one delivery%s · Ctrl+Z within a minute takes them back", heldBp and "built" or "pasted",
+    placed, placed == 1 and "" or "s", money(total), skipped > 0 and string.format(" · %d didn't fit (refunded)", skipped) or ""))
   ov.key, vmemo.key = nil, nil
 end
+
+-- ── BLUEPRINTS (S4; blueprints.lua) ─────────────────────────────────────────
+-- A blueprint card in hand is a paste: its clip, its composite ghost, its one
+-- bill; R and the wheel turn it, its anchor snaps as a piece would.
+function holdBlueprint(key)
+  local BP = ref("blueprints")
+  local bp = BP and BP.get(key)
+  if not bp then play("denied"); say("that blueprint is gone") return false end
+  local c = BP.toClip(bp)
+  -- (pieces this Solar doesn't know are left out, and said)
+  local keep, miss = {}, 0
+  for _, e in ipairs(c.parts) do if partInfo(e.id) then keep[#keep + 1] = e else miss = miss + 1 end end
+  if #keep == 0 then play("denied"); say("none of its pieces are in this kit") return false end
+  -- (the anchor must stay first: re-anchored on the first known piece)
+  if keep[1] ~= c.parts[1] then
+    local a = keep[1]
+    local ax, ay, az, ayaw = a.dx, a.dy, a.dz, a.yaw
+    local ca, sa = math.cos(ayaw), math.sin(ayaw)
+    for _, e in ipairs(keep) do
+      local dx, dz = e.dx - ax, e.dz - az
+      e.dx, e.dy, e.dz, e.yaw = dx * ca - dz * sa, e.dy - ay, dx * sa + dz * ca, e.yaw - ayaw
+    end
+  end
+  clip = { parts = keep, n = #keep, label = bp.name, bp = bp }
+  heldBp = "bp:" .. key
+  heldPart, pasting = keep[1].id, true
+  yawOffset, pitchOff, rollOff, storey = 0, 0, 0, 0
+  play("pick", 0.4)
+  local b = clip_bill(clip)
+  say(string.format("%s · %d pieces · %s one delivery · LMB builds it, R turns it%s", bp.name, #keep, money(b.total),
+    miss > 0 and string.format(" · %d unknown pieces left out", miss) or ""))
+  return true
+end
+-- the card's picture: a plan drawing (top-down, ink on enamel), kept per key
+local bp_icons = {}
+function blueprintIcon(d)
+  local k = tostring(d.key) .. "|" .. tostring(d.bp and d.bp.n)
+  if bp_icons[k] ~= nil then return bp_icons[k] or nil end
+  local BP = ref("blueprints")
+  if not (BP and image and image.new) then return nil end
+  local rects, lo, hi = BP.planOf(d.bp, partInfo)
+  local ok, img = pcall(image.new, 64, 64, 0.12, 0.13, 0.115, 1)
+  if not ok or not img then bp_icons[k] = false return nil end
+  local w, h = math.max(0.5, hi[1] - lo[1]), math.max(0.5, hi[2] - lo[2])
+  local sc = 52 / math.max(w, h)
+  local ox, oz = 32 - (lo[1] + w / 2) * sc, 32 - (lo[2] + h / 2) * sc
+  table.sort(rects, function(a, b) return (a[6] or 0) < (b[6] or 0) end)
+  for _, r in ipairs(rects) do
+    local x0, z0 = ox + r[1] * sc, oz + r[2] * sc
+    local rw, rh = math.max(1, (r[3] - r[1]) * sc), math.max(1, (r[4] - r[2]) * sc)
+    local c = ((r[5] == "slab" or r[5] == "floor") and { 0.40, 0.40, 0.37 }) or (r[5] == "wall" and { 0.92, 0.89, 0.81 })
+      or (r[5] == "prop" and { 0.97, 0.55, 0.22 }) or { 0.70, 0.67, 0.59 }
+    pcall(img.fill, img, x0, z0, rw, rh, c[1], c[2], c[3], (r[5] == "slab" or r[5] == "floor") and 0.6 or 1)
+  end
+  local okt, tex = pcall(img.texture, img)
+  bp_icons[k] = (okt and tex) or false
+  return bp_icons[k] or nil
+end
+-- Save the Alt-selection (or the whole structure `sid`, or the one the crew
+-- stands at) as a blueprint: the name prompt, then its code. → ok, why
+lastBlueprint = nil
+function saveBlueprint(sid, uids, name)
+  local ST, BP = ref("structures"), ref("blueprints")
+  if not (ST and BP) then return false, "no blueprint library here" end
+  if not sid then
+    local s0, us = nil, {}
+    for _, e in pairs(selection) do s0 = s0 or e.sid; if e.sid == s0 then us[#us + 1] = e.uid end end
+    if s0 then sid, uids = s0, us end
+  end
+  if not sid then
+    local a = astro()
+    local bname = a and space.dominant(a.x, a.y, a.z)
+    local b = bname and space.body(bname)
+    local near = b and ST.partsNear(bname, a.x - b.x, a.y - b.y, a.z - b.z, 30)
+    if near and near[1] then sid = near[1].rec.id end
+  end
+  local rec = sid and ST.get(sid)
+  if not rec then play("denied"); say("Save as Blueprint: Alt+click pieces to choose them, or stand at a structure") return false, "nothing chosen" end
+  local bp, why = BP.fromParts(rec, uids, partInfo, { name = (rec.n and rec.n ~= "Structure") and rec.n or "My Build", by = member(), made = agency_now(),
+    texts = function(uid) local st = ST.partState(sid, uid); return st and st.text or nil end })
+  if not bp then play("denied"); say("Save as Blueprint: " .. tostring(why)) return false, why end
+  local b = blueprintBill(bp)
+  local function finish(text)
+    if type(text) == "string" and text:match("%S") then bp.name = text:sub(1, BP.NAME_MAX) end
+    local s, path, code = BP.saveBp(bp)
+    if not s then return false, path end
+    play("place", 0.5)
+    lastBlueprint = { slug = s, path = path, code = code, n = bp.n, name = bp.name }
+    BP.prompt({ title = "Saved: " .. bp.name, readOnly = true, code = code, ok = "Done", cancel = "Close",
+      line = string.format("In your blueprints (%s), and in the BLUEPRINTS tab. To share it, send the file, or this code (%d characters):",
+        (tostring(path):gsub("^user://", "")), #code),
+      hint = "The code is also written beside the file as " .. s .. ".code.txt",
+      onOk = function() return true end })
+    return true
+  end
+  -- (a probe names it: no prompt)
+  if name then return finish(name) end
+  BP.prompt({ title = "Save as a blueprint", maxLen = BP.NAME_MAX, ok = "Save it", text = "", placeholder = bp.name,
+    line = string.format("%d pieces · %.1f t · %s to build again, one delivery%s", bp.n, b.mass, money(b.total),
+      uids and "  ·  the pieces you chose" or "  ·  the whole structure"),
+    onOk = finish })
+  return true
+end
+function importBlueprint(code)
+  local BP = ref("blueprints")
+  if not BP then return false end
+  local function take(text)
+    local s, why = BP.importCode(text)
+    if not s then return false, why end
+    play("place", 0.5)
+    say(string.format("blueprint \"%s\" added · it's in the BLUEPRINTS tab", BP.get(s).name))
+    return true, s
+  end
+  if code then return take(code) end
+  BP.prompt({ title = "Import a blueprint code", maxLen = BP.CODE_MAX, ok = "Import", placeholder = "SOLBP1.…",
+    line = "Paste a code someone shared (SOLBP1.…). A blueprint's .json file dropped on the window works too.",
+    onOk = take })
+  return true
+end
+
+-- ── PAINT (S4; kit_paint.lua) ───────────────────────────────────────────────
+-- A swatch in hand paints what the cursor is on: a wall's face (the side you
+-- see; Shift both), any other piece whole; Ctrl every piece of that kind on
+-- the structure; a piece in the Alt-selection paints the selection. I (or the
+-- Eyedropper card) takes a piece's colour into the hand. One step in the undo
+-- ring a click, refunded within the minute like a placement.
+paintReq = nil        -- { rec, part, def, face, bad } (this frame's aim)
+lastPaint = nil       -- { n, key, face, cost, t } (probes)
+local hover = { sid = nil, uid = nil }
+local function rim(sid, uid, on)
+  local ST, KP = ref("structures"), ref("kit_paint")
+  local n = ST and ST.nodeOf(sid, uid)
+  if not (n and KP) then return end
+  local out, inn = KP.surfaces(n)
+  local t = on and { rim = { 1.0, 0.62, 0.30 }, rimStrength = 0.7 } or { rimStrength = 0 }
+  for _, c in ipairs(out) do pcall(c.setTint, c, t) end
+  for _, c in ipairs(inn) do pcall(c.setTint, c, t) end
+end
+local function hover_set(sid, uid)
+  if hover.sid == sid and hover.uid == uid then return end
+  if hover.sid then rim(hover.sid, hover.uid, false) end
+  hover.sid, hover.uid = sid, uid
+  if sid then rim(sid, uid, true) end
+end
+function hoverClear() hover_set(nil, nil) end
+-- The piece under a hit: a mount (decal, sign, fitting) at the hit point
+-- first — a ray passes through them to the wall — else the hit piece.
+-- → rec, part, (nx, ny, nz: the hit normal in its structure's frame)
+function pickAt(node, body, rx, ry, rz, wnx, wny, wnz)
+  local ST, KS = ref("structures"), ref("kit_snap")
+  if not (ST and node) then return nil end
+  local rec, part = ST.partOfNode(node)
+  if not rec then return nil end
+  if not (KS and body == rec.b and rx) then return rec, part end
+  local fr = KS.frameOf(rec)
+  local dx, dy, dz = rx - fr.O.x, ry - fr.O.y, rz - fr.O.z
+  local lx = dx * fr.R.x + dy * fr.R.y + dz * fr.R.z
+  local ly = dx * fr.U.x + dy * fr.U.y + dz * fr.U.z
+  local lz = dx * fr.F.x + dy * fr.F.y + dz * fr.F.z
+  local nx, ny, nz
+  if wnx then
+    nx = wnx * fr.R.x + wny * fr.R.y + wnz * fr.R.z
+    ny = wnx * fr.U.x + wny * fr.U.y + wnz * fr.U.z
+    nz = wnx * fr.F.x + wny * fr.F.y + wnz * fr.F.z
+  end
+  local m = KS.mountAt and KS.mountAt(rec, partInfo, lx, ly, lz)
+  if m then part = m end
+  return rec, part, nx, ny, nz
+end
+-- (a context menu target: the click point was kept body-relative at the pick)
+function pickTarget(t)
+  if not (t and t.node) then return nil end
+  if t._kit ~= nil then
+    local ST = ref("structures")
+    if not t._kit then return nil end
+    local r = ST.get(t._kit[1])
+    return r, r and ST.getPart(t._kit[1], t._kit[2])
+  end
+  local rec, part = pickAt(t.node, t.body, t.rx, t.ry, t.rz)
+  t._kit = (rec and part) and { rec.id, part.uid } or false
+  return rec, part
+end
+local function hit_pick(h)
+  local bname = space.dominant(h.x, h.y, h.z)
+  local b = bname and space.body(bname)
+  if not b then return nil end
+  return pickAt(h.node, bname, h.x - b.x, h.y - b.y, h.z - b.z, h.nx, h.ny, h.nz)
+end
+hitPick = hit_pick
+local function paint_aim()
+  local h = aim()
+  if h == "keep" then return paintReq end
+  if type(h) ~= "table" or not h.node then return nil end
+  local rec, part, nx, _, nz = hit_pick(h)
+  if not part then return nil end
+  local def = partInfo(part.id)
+  local KP = ref("kit_paint")
+  if not (def and KP) then return nil end
+  local r = { rec = rec, part = part, def = def, face = "both" }
+  if def.faces2 and nx then r.face = KP.faceOf(part.yaw or 0, nx, nz) end
+  local hd = toolDef(heldPart)
+  if hd and hd.tool == "paint" and not KP.paintable(def) then
+    r.bad = (def.film and "paint goes on pieces, not on decals") or (def.live and "a fitting keeps its own finish") or "that doesn't take paint"
+  end
+  return r
+end
+paintAim = paint_aim
+-- Paint parts { uid … } of structure `sid` with `key` (nil strips) on `face`
+-- ("out" | "in" | "both"). → n | nil, why
+function paintParts(sid, uids, key, face)
+  local ST, KP, co = ref("structures"), ref("kit_paint"), ref("company")
+  local rec = ST and ST.get(sid)
+  if not (rec and KP and co) then return nil, "nothing to paint" end
+  local targets = {}
+  for _, u in ipairs(uids) do
+    local p = ST.getPart(sid, u)
+    local d = p and partInfo(p.id)
+    if p and d and KP.paintable(d) then targets[#targets + 1] = p end
+  end
+  if #targets == 0 then return nil, "nothing there takes paint" end
+  local cost = key and KP.costOf(#targets, creative()) or 0
+  if cost > 0 and not co.spend(cost, string.format("paint: %d piece%s, %s", #targets, #targets == 1 and "" or "s", KP.swatch(key).label)) then
+    return nil, "can't afford the paint: " .. money(cost)
+  end
+  local t = agency_now()
+  local before = {}
+  for _, p in ipairs(targets) do
+    before[#before + 1] = { uid = p.uid, paint = p.paint, paintIn = p.paintIn, pt = p.pt }
+    local f = KP.painted(p, key, (face == "both" or not partInfo(p.id).faces2) and "both" or face, t)
+    p.paint, p.paintIn, p.pt = f.paint, f.paintIn, f.pt
+  end
+  ST.put(rec)
+  for _, p in ipairs(targets) do KP.refresh(sid, p.uid) end
+  local function restore_to(list)
+    local r2 = ST.get(sid)
+    if not r2 then return end
+    for _, b in ipairs(list) do
+      local p = ST.getPart(sid, b.uid)
+      if p then p.paint, p.paintIn, p.pt = b.paint, b.paintIn, b.pt end
+    end
+    ST.put(r2)
+    for _, b in ipairs(list) do KP.refresh(sid, b.uid) end
+  end
+  local after = {}
+  for _, p in ipairs(targets) do after[#after + 1] = { uid = p.uid, paint = p.paint, paintIn = p.paintIn, pt = p.pt } end
+  local lbl = key and KP.swatch(key).label or "bare"
+  local e = { label = string.format("paint %d %s", #targets, lbl), kind = "paint", t = t, sid = sid }
+  e.undo = function()
+    restore_to(before)
+    if cost > 0 then co.refund(cost, "paint taken back (undone within a minute)") end
+    e.res = cost
+  end
+  e.redo = function()
+    if cost > 0 and not co.spend(cost, "paint again") then e.res = nil return end
+    restore_to(after)
+    e.t = agency_now()
+    e.res = cost
+  end
+  hist_push(e)
+  lastPaint = { n = #targets, key = key, face = face, cost = cost, t = t }
+  return #targets
+end
+local function paint_click(ctrl, shift)
+  local r = paintReq
+  local KP = ref("kit_paint")
+  local hd = toolDef(heldPart)
+  if not (r and hd and KP) then play("denied"); say("aim at a piece of a structure") return end
+  if hd.tool == "pick" or (input and input.key and input.key("i")) then
+    local k = KP.pick(r.part, r.face)
+    if k then hold("paint:" .. k); say(string.format("picked up %s from the %s", KP.swatch(k).label, tostring(r.def.label)))
+    else say(string.format("the %s is bare %s", tostring(r.def.label), tostring(r.def.matLabel or ""):lower())) end
+    return
+  end
+  if r.bad then play("denied"); say(r.bad) return end
+  local key = hd.paint
+  local uids, face = { r.part.uid }, (shift and "both") or r.face
+  local skey = sel_key(r.rec.id, r.part.uid)
+  if selection[skey] then
+    uids, face = {}, "both"
+    for _, e in pairs(selection) do if e.sid == r.rec.id then uids[#uids + 1] = e.uid end end
+  elseif ctrl then
+    uids = {}
+    for _, p in ipairs(r.rec.bp) do
+      local d = partInfo(p.id)
+      if d and d.piece == r.def.piece then uids[#uids + 1] = p.uid end
+    end
+  end
+  local n, why = paintParts(r.rec.id, uids, key, face)
+  if not n then play("denied"); say(why) return end
+  play("place", 0.45)
+  local where = (#uids > 1 and string.format("%d pieces", n)) or (face == "in" and "its inside") or (face == "out" and "its outside") or "it"
+  say(string.format("%s %s · %s%s", key and "painted" or "stripped", where, key and KP.swatch(key).label or "bare",
+    (lastPaint.cost or 0) > 0 and (" · " .. money(lastPaint.cost)) or ""))
+end
+paintClick = paint_click
+
 lastPaste = nil
 
 -- ── a Ctrl+drag RUN (S1): pieces laid as the snapped ghost moves, one step ──
@@ -1474,7 +1945,8 @@ local function provider(t, ctx)
   if not (t and t.node) then return {} end
   local ST = ref("structures")
   if not (ST and ST.partOfNode) then return {} end
-  local rec, part = ST.partOfNode(t.node)
+  -- (S4: a decal or a sign under the click, not the wall behind it)
+  local rec, part = pickTarget(t)
   if not part then return {} end
   local def = partInfo(part.id) or {}
   local sid, uid = rec.id, part.uid
@@ -1483,7 +1955,7 @@ local function provider(t, ctx)
     return string.format("%s back%s%s", money(amt), full and "" or " (fee kept)",
       n > 1 and string.format(" · takes %d part%s with it", n - 1, n > 2 and "s" or "") or "")
   end
-  return {
+  local rows = {
     { id = "bk_what", type = "info", label = def.label or "Part", value = function()
         local r = ST.get(sid)
         return string.format("structure %d · %d part%s", sid, r and #r.bp or 0, (r and #r.bp or 0) == 1 and "" or "s")
@@ -1503,7 +1975,19 @@ local function provider(t, ctx)
           if amt then play("undo", 0.6) end
           return amt ~= nil, w
         end } },
-  }, def.label
+  }
+  -- (S4) blueprints from here: the whole structure, or the Alt-selection
+  if def.kit then
+    rows[#rows + 1] = { id = "bk_bp", type = "action", label = "Save structure as blueprint", group = "Base", hint = "▣",
+      act = function() if ctx and ctx.close then ctx.close() end saveBlueprint(sid, nil); return true end }
+    local n = 0
+    for _, e in pairs(selection) do if e.sid == sid then n = n + 1 end end
+    if n > 0 then
+      rows[#rows + 1] = { id = "bk_bpsel", type = "action", label = string.format("Save the %d selected as blueprint", n), group = "Base", hint = "▣",
+        act = function() if ctx and ctx.close then ctx.close() end saveBlueprint(); return true end }
+    end
+  end
+  return rows, def.label
 end
 providerFn = provider   -- (probes)
 local provider_on = false
@@ -1526,6 +2010,15 @@ function hintLine()
   local keys = (collapsed and "B unfolds the parts" or "B folds the parts") .. "  ·  Esc " .. (heldPart and "drops the part" or "closes the kit") .. "  ·  Ctrl+Z undo  ·  F1 rooms"
   if not heldPart then return "Build Kit  ·  pick a part  ·  RMB tap a placed part to take it down  ·  " .. keys end
   local hdef = partInfo(heldPart)
+  -- (S4) paint and the eyedropper
+  if hdef and (hdef.tool == "paint" or hdef.tool == "pick") then
+    local r = paintReq
+    local what = r and string.format("%s%s", tostring(r.def.label), (r.def.faces2 and r.face ~= "both") and (r.face == "in" and " (inside)" or " (outside)") or "") or (aim_why or "aim at a piece")
+    if hdef.tool == "pick" then return string.format("Eyedropper  ·  %s  ·  LMB takes its colour  ·  RMB tap drops it", what) end
+    if r and r.bad then return string.format("%s  ·  %s  ·  %s", hdef.label, what, r.bad) end
+    return string.format("%s  ·  %s  ·  LMB paints %s%s  ·  Shift both faces  ·  Ctrl every one of its kind  ·  Alt-selected: all of them  ·  hold I + LMB picks a colour",
+      hdef.label, what, (r and r.def.faces2) and "this side" or "it", hdef.strip and "" or (creative() and " (free)" or (" for " .. money(hdef.cost))))
+  end
   if hdef and hdef.cable then
     local CB = ref("base_cable")
     local pend = CB and CB.pending
@@ -1553,7 +2046,10 @@ function hintLine()
   if req.def.kit and req.def.matLabel and not req.def.live then extra[#extra + 1] = req.def.matLabel:lower() .. string.format(" %.2f t", req.def.mass or 0) end
   if storey > 0 then extra[#extra + 1] = string.format("+%d storey", storey) end
   if sym then extra[#extra + 1] = "SYM " .. sym.axis:upper() end
-  if pasting and clip then extra[#extra + 1] = string.format("PASTE %d", clip.n) end
+  if pasting and clip then
+    local b = clip_bill(clip)
+    extra[#extra + 1] = string.format("%s %d · %s one delivery", heldBp and ("BLUEPRINT " .. tostring(clip.label)) or "PASTE", clip.n, money(b.total))
+  end
   if math.abs(yawOffset) > 1e-3 then extra[#extra + 1] = string.format("%+.0f°", math.deg(yawOffset)) end
   if raise > 1e-3 then extra[#extra + 1] = string.format("raised %.2f m", raise) end
   local pl = req.plan
@@ -1675,9 +2171,10 @@ function update(node, dt)
   if naming() then wantsScroll = false return end
   -- (planet_camera keeps third person and lets go of shift-lock while isOpen())
   -- Esc: the part in hand first, then the kit
-  if input.pressed("escape") then
+  -- (an Esc the kit's own prompt took this frame — blueprints.lua — is spent)
+  if input.pressed("escape") and escTakenAt ~= now() then
     escTakenAt = now()
-    if heldPart then heldPart, pasting = nil, false
+    if heldPart then heldPart, pasting, heldBp = nil, false, nil
     elseif next(selection) then selectClear()
     else close() return end
   end
@@ -1714,10 +2211,11 @@ function update(node, dt)
   end
   if not heldPart then pasting = false end
   if heldPart and pasting and clip and heldPart ~= clip.parts[1].id then pasting = false end
+  if not pasting then heldBp = nil end
   -- RMB: a tap drops the ghost; held, the camera looks round
   local r_down = input.button and input.button(1) == true
   if r_down and not rmb.down then rmb.t = now(); rmb.x, rmb.y = mouse_xy() end
-  if not r_down and rmb.down and now() - rmb.t < 0.25 then heldPart = nil end
+  if not r_down and rmb.down and now() - rmb.t < 0.25 then heldPart, heldBp = nil, nil end
   rmb.down = r_down
   if heldPart then rmb_own_t = now() end
 end
@@ -1738,6 +2236,12 @@ function lateUpdate(node, dt)
       req, aim_why = nil, w
       if CB and CB.pending and CB.drawPreview then CB.drawPreview() end
     end
+  elseif heldPart and is_tool(heldPart) then
+    -- (S4) paint or the eyedropper: what the cursor is on, its rim lit
+    req = nil
+    paintReq = paint_aim()
+    aim_why = paintReq == nil and "aim at a piece of a structure" or nil
+    if paintReq then hover_set(paintReq.rec.id, paintReq.part.uid) else hover_set(nil, nil) end
   elseif heldPart then
     local h, w = aim()
     if h == "keep" then
@@ -1763,6 +2267,10 @@ function lateUpdate(node, dt)
   else
     req = nil
   end
+  if not (heldPart and is_tool(heldPart)) then
+    paintReq = nil
+    if hover.sid then hover_set(nil, nil) end
+  end
   ghost_paint()
   -- LMB (an edge, off the panel and the HUD's buttons)
   local l = (sim and sim.lmb) or (input.button and input.button(0) == true)
@@ -1774,8 +2282,10 @@ function lateUpdate(node, dt)
       local h = aim()
       local ST = ref("structures")
       local rec, part = nil, nil
-      if type(h) == "table" and h.node and ST then rec, part = ST.partOfNode(h.node) end
+      if type(h) == "table" and h.node and ST then rec, part = hit_pick(h) end
       if part and (partInfo(part.id) or {}).kit then selectToggle(rec.id, part.uid); play("pick", 0.3) end
+    elseif heldPart and is_tool(heldPart) then
+      paint_click(ctrl, shift_held() == true)
     elseif heldPart then
       local hd = partInfo(heldPart)
       if ctrl and hd and hd.kit and not pasting then

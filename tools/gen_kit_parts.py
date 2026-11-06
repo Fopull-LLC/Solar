@@ -60,6 +60,10 @@ MATS["Screen"] = lambda: ('(\n                color: (0.05, 0.07, 0.08),\n      
                           '                metallic: 0.0,\n                emissive: (0.02, 0.05, 0.07),\n                shading: Physical,\n            )')
 
 
+import gen_kit_props  # noqa: E402  (S4: decals, signs, props; its own materials)
+MATS.update(gen_kit_props.MATERIALS)
+
+
 # ── primitives (no automatic footing: a piece stands where it is put) ───────
 
 def bx(m, mat, col, x0, x1, y0, y1, z0, z1, sh=None, M=None):
@@ -1131,6 +1135,77 @@ PIECES = {
 }
 
 
+# ── S4: the character pieces (tools/gen_kit_props.py) ────────────────────────
+PIECES.update(gen_kit_props.pieces(sys.modules[__name__]))
+
+# ── S4: PAINT SURFACES. node:setTint tints everything a node draws, so what
+# paint must not touch, and a wall's second face, are split into children of
+# their own after the piece is built (no piece function changes):
+#   "MeshIn"  a two-faced piece's inside: a wall's triangles behind its middle
+#             plane (z < 0), a hab can's inside its hull (radius under the
+#             hull's inner skin): its lining and deck. kit_paint tints it apart.
+#   "Glass"   panes and lamp lenses (never painted: a painted window is not
+#             orange glass), on every paintable piece.
+FACES2 = {
+    "z": {"wall", "halfWall", "wall12", "doorWall", "doorWallM", "doubleDoor", "windowWall", "porthole", "airlockWall",
+          "openFrame", "ventWall", "leadWall", "gable"},
+    "ring": {"habSeg", "habWindow"},
+}
+NO_PAINT = {"lightFitting", "wallScreen", "switchPlate", "lampDesk", "lampFloor"}
+UNPAINTED = {"Pane", "Lamp", "Screen"}
+
+
+def faces2_of(piece):
+    for k, names in FACES2.items():
+        if piece in names:
+            return k
+    return None
+
+
+def split_model(m, take):
+    """(kept, taken): the model's triangles split by take(mat, centroid) → bool. Vertices are
+    re-indexed per part, so each half's bounds are its own."""
+    from gen_part_meshes import Model as _Model
+    keep, got = CModel(seed=7), CModel(seed=8)
+    keep.ground = got.ground = False
+    for mat, (Ps, Ns, UVs, Is, _) in m.parts.items():
+        P = np.vstack(Ps); N = np.vstack(Ns); UV = np.vstack(UVs); I = np.vstack(Is)
+        C = np.vstack(m.cols[mat])
+        cen = (P[I[:, 0]] + P[I[:, 1]] + P[I[:, 2]]) / 3
+        sel = np.array([bool(take(mat, c)) for c in cen], bool)
+        for model, mask in ((got, sel), (keep, ~sel)):
+            if not mask.any():
+                continue
+            J = I[mask]
+            used = np.unique(J)
+            remap = -np.ones(len(P), np.int64)
+            remap[used] = np.arange(len(used))
+            _Model.add(model, mat, P[used], N[used], UV[used], remap[J])
+            model.cols.setdefault(mat, []).append(C[used])
+            model.tags.setdefault(mat, []).append(np.zeros(len(J), np.int64))
+    return keep, got
+
+
+def paint_split(piece, m, children):
+    """The piece's model less its Glass and MeshIn, and those as extra mesh children."""
+    if piece in NO_PAINT or piece.startswith(("decal", "grime", "sign")):
+        return m, children
+    kids = list(children)
+    if any(mat in UNPAINTED for mat in m.parts):
+        m, g = split_model(m, lambda mat, c: mat in UNPAINTED)
+        if g.parts:
+            kids.append(("Glass", "mesh", (g, (0, 0, 0))))
+    f2 = faces2_of(piece)
+    inn = None
+    if f2 == "z":
+        m, inn = split_model(m, lambda mat, c: c[2] < -1e-4)
+    elif f2 == "ring":
+        m, inn = split_model(m, lambda mat, c: math.hypot(c[0], c[1] - HAX) < HR - HT * 0.5 and abs(c[2]) < 1.0 + 1e-3)
+    if inn is not None and inn.parts:
+        kids.append(("MeshIn", "mesh", (inn, (0, 0, 0))))
+    return m, kids
+
+
 # ── writing ──────────────────────────────────────────────────────────────────
 
 def f3(v):
@@ -1201,10 +1276,12 @@ def centre(model):
 
 def write_piece(piece, mat, fn, dry, fixture):
     m, sh, children = fn(mat)
+    m, children = paint_split(piece, m, children)
     name = "Kit" + piece[0].upper() + piece[1:] + "_" + mat
     glb = f"{piece}_{mat}.glb"
     c, lo, hi = centre(m)
-    small = (hi - lo).max() < 0.7
+    small = (hi - lo).max() < 0.7 or mat == "film"
+    mesh_lo, mesh_hi = lo.copy(), hi.copy()
     nodes = [node_empty(name, (0, 0, 0), None, tags=["base_part", "kit"]),
              node_mesh("Mesh", f"{FOLDER}/{glb}", m, c, 0, cast=not small)]
     for i, (bc, bs, q) in enumerate(sh.boxes):
@@ -1218,8 +1295,13 @@ def write_piece(piece, mat, fn, dry, fixture):
         elif kind == "mesh":
             cm, at = data
             cc, clo, chi = centre(cm)
-            nodes.append(node_mesh(cname, f"{FOLDER}/{piece}_{mat}_{cname.lower()}.glb", cm, np.asarray(at) + cc, 0, cast=False))
+            # (S4: a wall's inside and a piece's glass are as much of it as its Mesh: they cast)
+            cast = cname in ("MeshIn", "Glass") and not small
+            nodes.append(node_mesh(cname, f"{FOLDER}/{piece}_{mat}_{cname.lower()}.glb", cm, np.asarray(at) + cc, 0, cast=cast))
             extra.append((f"{piece}_{mat}_{cname.lower()}.glb", cm))
+            if True:   # (every drawn child is the piece's: the fixture's bounds hold them all)
+                mesh_lo = np.minimum(mesh_lo, np.asarray(at) + clo)
+                mesh_hi = np.maximum(mesh_hi, np.asarray(at) + chi)
         elif kind == "door":
             dm, dsh, at = data
             at = np.asarray(at, float)
@@ -1234,6 +1316,7 @@ def write_piece(piece, mat, fn, dry, fixture):
             extra.append((f"{piece}_{mat}_{cname.lower()}.glb", dm))
             all_lo, all_hi = np.minimum(all_lo, at + dlo), np.maximum(all_hi, at + dhi)
     tris = m.tris() + sum(e[1].tris() for e in extra)
+    lo, hi = mesh_lo, mesh_hi
     fixture.append(f'  {name} = {{ lo = {{ {lo[0]:.3f}, {lo[1]:.3f}, {lo[2]:.3f} }}, hi = {{ {hi[0]:.3f}, {hi[1]:.3f}, {hi[2]:.3f} }}, '
                    f'colliders = {ncol}, tris = {tris}, children = {{ {", ".join(chr(34) + ch[0] + chr(34) for ch in children)} }} }},')
     print(f"{name:26s} lo {f3(lo)} hi {f3(hi)}  tris {tris:5d}  colliders {ncol}")
@@ -1254,7 +1337,10 @@ def main():
     dry = "--dry" in sys.argv
     only = [a for a in sys.argv[1:] if not a.startswith("--")]
     os.makedirs(MODELS, exist_ok=True)
-    fixture = ["-- Written by tools/gen_kit_parts.py: each kit prefab's mesh bounds (ground frame),", "-- its collider count and live children. tests/smoke_kit.lua reads it.", "return {"]
+    # (S4) the decal and grime atlases and their maps, the sign's blank face
+    if not dry and (not only or "--tex" in sys.argv):
+        gen_kit_props.textures()
+    fixture =["-- Written by tools/gen_kit_parts.py: each kit prefab's mesh bounds (ground frame),", "-- its collider count and live children. tests/smoke_kit.lua reads it.", "return {"]
     for piece, (fn, mats) in PIECES.items():
         if only and piece not in only:
             continue

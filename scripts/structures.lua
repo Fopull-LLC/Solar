@@ -556,6 +556,11 @@ spawn_part = function(r, L, p)
     inst.name = def.prefab
     L.nodes[p.uid] = inst
     owner[inst.id] = { sid = r.id, uid = p.uid }
+    -- (S4: its paint and the dust it has gathered; kit_paint.lua)
+    if def.kit then
+      local KP = findScript and findScript("kit_paint")
+      if KP and KP.applyPart then pcall(KP.applyPart, r, p, def, inst) end
+    end
     if def.script then
       local h = findScript and findScript(def.script)
       if h and h.spawned then

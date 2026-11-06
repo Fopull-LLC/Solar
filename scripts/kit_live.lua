@@ -73,6 +73,7 @@ local function partsDef(id) local pb = ref("parts_base"); return pb and pb.partI
 local E = {}            -- key → { sid, uid, node, def, doors = { { node, rest, slide, open } }, light, screen, lit }
 local near = {}         -- the entries with doors within REACH (rebuilt every SCAN)
 local scan_t, pool_t = -10, -10
+local paint_sign, paint_emblem   -- (S4: signs and the emblem, below)
 
 function entries() return E end
 
@@ -94,10 +95,16 @@ function spawned(rec, part, node)
   end
   if def.light then
     e.light = child(node, "Light")
-    e.lamp = def.kit and child(node, "Mesh") or nil   -- (a kit fitting's lens; never a whole shed)
+    -- (a kit fitting's lens; a lamp's own "Lens" child (S4); never a whole shed)
+    e.lamp = def.kit and ((def.lens and child(node, "Lens")) or child(node, "Mesh")) or nil
   end
   if def.screen then e.screen = child(node, "Screen") end
+  -- (S4) a sign's face (its words drawn on spawn, again when they or the
+  -- base's name change) and the agency emblem's
+  if def.sign or def.emblem then e.face = child(node, "Face"); e.sign_t = -10 end
   E[key(rec.id, part.uid)] = e
+  if def.sign then paint_sign(e) end
+  if def.emblem then paint_emblem(e) end
   scan_t = -10
   pool_t = -10
 end
@@ -369,16 +376,125 @@ local function paint_screen(e)
   end
 end
 
+-- ── signs and the emblem (S4) ───────────────────────────────────────────────
+-- A sign shows its own words (the part state's `text`) or, with none, its
+-- base's name (bases.baseAt), redrawn when either changes. Drawn once into a
+-- picture (img:text in the project's fonts, docs/ui-style.md signage: the
+-- stencil face for names and big lettering, the label face for placards),
+-- never per frame: each sign is its own texture, so its own draw.
+NAME_EVERY = 2.0
+function signWords(sid, uid)
+  local ST, B = ref("structures"), ref("bases")
+  local st = ST and ST.partState(sid, uid)
+  if st and type(st.text) == "string" and st.text:match("%S") then return st.text, false end
+  local rec = ST and ST.get(sid)
+  local base = rec and B and B.baseAt and B.baseAt(rec.b, rec.x, rec.y, rec.z)
+  if base and base.n then return tostring(base.n), true end
+  return (rec and rec.n and rec.n ~= "Structure") and tostring(rec.n) or "OUTPOST", true
+end
+function setSignWords(sid, uid, text)
+  local ST = ref("structures")
+  if not ST then return false end
+  local st = ST.partState(sid, uid) or {}
+  local t = {}
+  for k, v in pairs(st) do t[k] = v end
+  t.text = (type(text) == "string" and text:match("%S")) and text:sub(1, 40) or nil
+  ST.setPartState(sid, uid, next(t) and t or nil)
+  local e = E[key(sid, uid)]
+  if e then paint_sign(e) end
+  return true
+end
+function signText(sid, uid) local e = E[key(sid, uid)]; return e and e.words or nil end
+
+local INK = { 0.92, 0.89, 0.81 }
+paint_sign = function(e)
+  local S = e.def.sign
+  if not (S and image and image.new and valid(e.face)) then return end
+  local words = signWords(e.sid, e.uid)
+  words = string.upper(words)
+  if e.words == words and e.tex then return end
+  e.words = words
+  local W = S.px or 512
+  local H = math.max(32, math.floor(W * S.h / S.w + 0.5))
+  local stencil = S.style == "stencil"
+  local img = e.img
+  if not img or img.width ~= W then
+    local ok, im = pcall(image.new, W, H)
+    if not ok or not im then return end
+    img, e.img = im, im
+  end
+  pcall(img.clear, img)
+  local font = (S.style == "plate") and "fonts/SolarLabel.ttf" or "fonts/SolarStencil.ttf"
+  local k = (S.style == "plate") and 0.52 or 0.62
+  if not stencil then
+    -- dark enamel, a ruled inner border; the board gets a second rule
+    pcall(img.fill, img, 0, 0, W, H, 0.16, 0.17, 0.155, 1)
+    local m = math.floor(H * 0.07)
+    pcall(img.fill, img, m, m, W - 2 * m, 3, INK[1], INK[2], INK[3], 0.85)
+    pcall(img.fill, img, m, H - m - 3, W - 2 * m, 3, INK[1], INK[2], INK[3], 0.85)
+    pcall(img.fill, img, m, m, 3, H - 2 * m, INK[1], INK[2], INK[3], 0.85)
+    pcall(img.fill, img, W - m - 3, m, 3, H - 2 * m, INK[1], INK[2], INK[3], 0.85)
+  end
+  local size = math.min(H * (stencil and 0.78 or 0.6), (W * 0.86) / math.max(1, #words * k))
+  pcall(img.text, img, W / 2, (H - size * 1.12) / 2, words, size, INK[1], INK[2], INK[3], 1, "center", font)
+  -- wear: a few rubbed spots, softer on a plate than on sprayed paint
+  local seed = (e.uid or 1) * 7919 + #words * 104729
+  for i = 1, (stencil and 28 or 10) do
+    seed = (seed * 1103515245 + 12345) % 2147483648
+    local x = seed % W
+    local y = math.floor(seed / W) % H
+    local r = 1 + seed % 3
+    if stencil then pcall(img.fill, img, x, y, r, r, 0, 0, 0, 0)
+    else pcall(img.blend, img, x, y, r * 2, r, 0.30, 0.29, 0.26, 0.5) end
+  end
+  local ok, tex = pcall(img.texture, img)
+  if ok and tex then
+    if e.tex ~= tex then
+      e.tex = tex
+      pcall(e.face.setMaterial, e.face, { texture = tex, color = { 1, 1, 1 } })
+    end
+  end
+  e.sign_t = now()
+end
+paint_emblem = function(e)
+  if not valid(e.face) then return end
+  local em = ref("emblem")
+  if not em and spawn and not e.em_asked then e.em_asked = true; pcall(spawn, "AgencyLib", vec3(0, 0, 0)) return end
+  local tex = em and em.tex and em.tex()
+  if tex and (e.tex ~= tex or e.em_v ~= em.version) then
+    e.tex, e.em_v = tex, em.version
+    pcall(e.face.setMaterial, e.face, { texture = tex, color = { 1, 1, 1 } })
+  end
+end
+
 -- ── the menu: switch a light, every light, read the screen ──────────────────
 local function provider(t, ctx)
   if not (t and t.node) then return {} end
   local ST = ref("structures")
   if not (ST and ST.partOfNode) then return {} end
-  local rec, part = ST.partOfNode(t.node)
+  -- (S4: a click on a decal, a sign or a fitting lands on the wall behind it:
+  -- field_builder.pickTarget finds the mount at the click point)
+  local FB = ref("field_builder")
+  local rec, part
+  if FB and FB.pickTarget then rec, part = FB.pickTarget(t) else rec, part = ST.partOfNode(t.node) end
   if not part then return {} end
   local def = partsDef(part.id) or {}
   local sid, uid = rec.id, part.uid
   local out = {}
+  if def.sign then
+    out[#out + 1] = { id = "kl_words", type = "info", label = "Words", group = "Sign",
+      value = function() local w, isBase = signWords(sid, uid); return isBase and (w .. " (the base's name)") or w end }
+    out[#out + 1] = { id = "kl_write", type = "action", label = "Write the words…", group = "Sign", hint = "✎",
+      act = function()
+        local BP = ref("blueprints")
+        if not (BP and BP.prompt) then return false end
+        local cur, isBase = signWords(sid, uid)
+        BP.prompt({ title = "What the sign says", line = "Leave it empty for the base's name (it follows a rename).",
+          text = isBase and "" or cur, placeholder = cur, maxLen = 40, ok = "Paint it",
+          onOk = function(text) setSignWords(sid, uid, text); return true end })
+        return true
+      end }
+  end
   if def.light then
     out[#out + 1] = { id = "kl_light", type = "toggle", label = "Light", group = "Fitting", keep = true,
       on = function() local e = E[key(sid, uid)]; return e and light_on(e) or false end,
@@ -445,6 +561,11 @@ function update(node, dt)
         end
         if (#e.doors > 0) and (d < REACH or e.open > 0) then near[#near + 1] = e end
         if e.screen and d < SCREEN_R and t - (e.scr_t or -10) >= SCREEN_EVERY then e.scr_t = t; paint_screen(e) end
+        -- (S4) a sign showing the base's name follows a rename; the emblem a new one
+        if e.face and d < SCREEN_R and t - (e.sign_t or -10) >= NAME_EVERY then
+          e.sign_t = t
+          if e.def.sign then paint_sign(e) elseif e.def.emblem then paint_emblem(e) end
+        end
       end
     end
   end

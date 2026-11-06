@@ -95,7 +95,9 @@ for name, P in pairs(K.PIECES) do
         local up = (P.snap == "block" and b[4] > 0.5) and 1.1 or 0.1
         check(sh.lo[2] >= b[3] - 0.11 and sh.hi[2] <= b[4] + up and sh.hi[2] >= b[4] - 0.1,
           string.format("%s: mesh y %.2f..%.2f vs box %.2f..%.2f", id, sh.lo[2], sh.hi[2], b[3], b[4]))
-        if P.snap ~= "mount" then check(sh.colliders >= 1, id .. ": static colliders to walk on and bump into") end
+        -- (S4: small clutter — a lamp, a monitor, a plant — has none: the crew walks past it)
+        if P.snap ~= "mount" and not P.clutter then check(sh.colliders >= 1, id .. ": static colliders to walk on and bump into") end
+        if P.clutter then check(sh.colliders == 0, id .. ": clutter has no collider") end
         if P.door then
           local has = false
           for _, c in ipairs(sh.children) do if c == "Door" then has = true end end

@@ -64,7 +64,9 @@ end
 
 -- Short keycap legends for the sections (§4.4: CMD PROP AERO STR FRM ELEC ROV ROBO PAY).
 local SHORT = { COMMAND = "CMD", PROPULSION = "PROP", AIRCRAFT = "AERO", STRUCTURE = "STR", FRAME = "FRM",
-                ELECTRICAL = "ELEC", ROVER = "ROV", ROBOTICS = "ROBO", PAYLOAD = "PAY" }
+                ELECTRICAL = "ELEC", ROVER = "ROV", ROBOTICS = "ROBO", PAYLOAD = "PAY",
+                -- (the Build Kit's character sections, sandbox S4)
+                PROPS = "PROPS", DECALS = "DECAL", PAINT = "PAINT", BLUEPRINTS = "BLUEPRINTS" }
 local function short(title) return SHORT[title] or title:sub(1, 4) end
 
 -- ── state (favourites and recents ride in the save slot) ────────────────────
@@ -528,7 +530,7 @@ local function card(B, rs, co, it)
   -- the card of the part in your hand is latched in, orange-rimmed, "IN HAND"
   local inhand = st.held == id
   if inhand then price_text = "IN HAND" end
-  local icon = ICONS[id]
+  local icon = ICONS[id] or (B.iconFor and B.iconFor(id)) or nil
   return { "row", key = id, w = "100%", h = 40, gap = 3, pad = 0, align = "center",
     icon and { "image", key = "ic", texture = icon, w = 36, h = 36, opacity = locked and 0.55 or 1.0 }
       or { "box", key = "ic", style = "panel/rule", w = 36, h = 36, opacity = 0.35 },
@@ -560,7 +562,7 @@ local function tabs(B)
   for _, sec in ipairs(B.catalogue and B.catalogue() or {}) do list[#list + 1] = { sec.title, short(sec.title) } end
   return { "row", key = "tabs", w = "100%", h = "fit", wrap = true, gap = 3, pad = 0,
     items = list, function(t)
-      local w = (t[1] == "RECENT" or t[1] == "SUB") and 70 or 48
+      local w = (t[1] == "RECENT" or t[1] == "SUB") and 70 or (#t[2] > 6 and 90) or 48
       return { "button", key = "t" .. t[1], style = "panel/choice", selected = st.tab == t[1] and st.query == "",
         w = w, h = 22, text = t[2], textAlign = "center", textValign = "center",
         tooltip = t[1] == "FAV" and "Your favourites" or (SHORT[t[1]] and t[1]:sub(1, 1) .. t[1]:sub(2):lower() or nil),

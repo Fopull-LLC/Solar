@@ -78,7 +78,27 @@
 --           its lamp outside) is placed as its MIRRORED VARIANT, a hidden
 --           piece of its own built reflected (tools/gen_kit_parts.py)
 
-SECTION_ORDER = { "FOUNDATION", "FLOOR", "WALL", "ROOF", "FRAME", "HAB", "SHIELD", "UTILITY", "LIFE", "FITTINGS" }
+--
+-- ── CHARACTER (S4; tools/gen_kit_props.py, scripts/kit_paint.lua) ───────────
+--   PROPS   furniture, storage, machines' dressing, lamps: `prop` snap (on a
+--           top face on a 0.25 m grid, square toward you; beside one of its
+--           kind), or `mount` for what hangs on a wall. `clutter` = no
+--           collider (small things the crew walks past); the rest have a box.
+--   DECALS  thin quads on a face (`mount`, material "film", `film` = they
+--           overlap nothing and nothing blocks them): hazard stripes,
+--           numbers, arrows, placards, supplier marks, grime. `sign` pieces
+--           carry text kit_live draws (img:text in the project's fonts; the
+--           base's name until the player writes their own); `emblem` the
+--           agency's emblem. T turns any mount on its face (kit_snap.spinPose).
+--   faces2  a two-faced piece (a wall, a hab can): its "MeshIn" child is its
+--           inside, painted apart (kit_paint `paintIn`)
+--   exterior  dust gathers on it with age (structural sections only)
+
+SECTION_ORDER = { "FOUNDATION", "FLOOR", "WALL", "ROOF", "FRAME", "HAB", "SHIELD", "UTILITY", "LIFE", "FITTINGS", "PROPS", "DECALS" }
+EXTERIOR = { FOUNDATION = true, FLOOR = true, WALL = true, ROOF = true, FRAME = true, HAB = true, SHIELD = true }
+FACES2 = { wall = true, halfWall = true, wall12 = true, doorWall = true, doorWallM = true, doubleDoor = true, windowWall = true,
+           porthole = true, airlockWall = true, openFrame = true, ventWall = true, leadWall = true, gable = true,
+           habSeg = true, habWindow = true }
 
 MATS = {
   steel     = { label = "Steel", kgm3 = 7850, strength = 180, k = 0.9, u = 1.4, seal = true,
@@ -89,6 +109,9 @@ MATS = {
                 desc = "regolith concrete mixed on site · the cheapest wall there is" },
   glass     = { label = "Glass", kgm3 = 2500, strength = 60, k = 0.95, u = 2.8, seal = true, blend = true,
                 desc = "laminated pane in a steel frame · light comes in" },
+  -- (S4: a decal's own "material": a film of paint, nothing structural)
+  film      = { label = "Paint", kgm3 = 1200, strength = 1, k = 1.0, u = 0, seal = false,
+                desc = "a film of paint on a face" },
 }
 MAT_ORDER = { "steel", "concrete", "regocrete", "glass" }
 COSTK = { steel = 1.0, concrete = 0.58, regocrete = 0.47, glass = 1.5 }
@@ -289,6 +312,103 @@ PIECES = {
                 desc = "three 200 bar cylinders of air on a regulator · fills a room to 1 atm · 60 m³" },
 }
 
+-- ── PROPS (S4: clutter and character; tools/gen_kit_props.py) ───────────────
+-- masses are the things' own (an empty steel crate, a bunk with its mattresses)
+local function prop(t)
+  t.section = "PROPS"
+  t.mats = t.mats or { "steel" }
+  t.fill = "solid"
+  t.vol = t.vol or 0.01
+  return t
+end
+for k, t in pairs({
+  crate     = { label = "Cargo Crate", snap = "prop", box = B(-0.6, 0.6, 0, 0.8, -0.4, 0.4), mass = { steel = 0.065 }, cost = 180,
+                desc = "a 1.2 m steel-framed crate · stacks · the gravity gun can't lift a placed one" },
+  crateS    = { label = "Small Crate", snap = "prop", box = B(-0.3, 0.3, 0, 0.45, -0.225, 0.225), mass = { steel = 0.018 }, cost = 90,
+                desc = "a 0.6 m crate for the shelf or the corner" },
+  drum      = { label = "Drum", snap = "prop", box = B(-0.3, 0.3, 0, 0.9, -0.3, 0.3), mass = { steel = 0.022 }, cost = 120,
+                desc = "a 200 litre steel drum" },
+  shelf     = { label = "Shelving", snap = "prop", box = B(-0.6, 0.6, 0, 2.0, -0.225, 0.225), mass = { steel = 0.055 }, cost = 260,
+                desc = "a 2 m steel shelf unit, stocked" },
+  table     = { label = "Table", snap = "prop", box = B(-0.8, 0.8, 0, 0.74, -0.4, 0.4), mass = { steel = 0.04 }, cost = 220,
+                desc = "a 1.6 m mess table · things go on its top" },
+  chair     = { label = "Chair", snap = "prop", box = B(-0.22, 0.22, 0, 0.92, -0.25, 0.2), mass = { steel = 0.008 }, cost = 80,
+                desc = "a steel stacking chair" },
+  bunk      = { label = "Bunk", snap = "prop", box = B(-1, 1, 0, 1.75, -0.45, 0.45), mass = { steel = 0.11 }, cost = 650,
+                desc = "two berths, mattresses and blankets · a crew room's heart" },
+  workbench = { label = "Workbench", snap = "prop", box = B(-0.9, 0.9, 0, 1.9, -0.375, 0.375), mass = { steel = 0.16 }, cost = 900,
+                desc = "a steel bench with drawers, a vice and a pegboard of tools" },
+  coffee    = { label = "Coffee Maker", snap = "prop", box = B(-0.12, 0.34, 0, 0.38, -0.14, 0.125), mass = { steel = 0.004 }, cost = 60,
+                clutter = true, desc = "a brewer and two mugs · goes on a table or bench" },
+  monitor   = { label = "Desk Monitor", snap = "prop", box = B(-0.28, 0.28, 0, 0.5, -0.09, 0.2), mass = { steel = 0.006 }, cost = 300,
+                clutter = true, desc = "a screen and keyboard · goes on a table or bench" },
+  plant     = { label = "Potted Plant", snap = "prop", box = B(-0.3, 0.3, 0, 0.9, -0.27, 0.27), mass = { steel = 0.012 }, cost = 45,
+                clutter = true, desc = "something green that isn't mould" },
+  cableReel = { label = "Cable Reel", snap = "prop", box = B(-0.35, 0.5, 0, 0.7, -0.24, 0.27), mass = { steel = 0.05 }, cost = 140,
+                desc = "a drum of power cable, some of it run out" },
+  toolRack  = { label = "Tool Rack", snap = "mount", box = B(-0.6, 0.6, 0, 0.07, -0.4, 0.4), mass = { steel = 0.02 }, cost = 240,
+                desc = "a wall board of hung tools" },
+  pipeRun   = { label = "Pipe Run 2 m", snap = "mount", box = B(-1, 1, 0, 0.24, -0.16, 0.16), mass = { steel = 0.03 }, cost = 180,
+                desc = "two service pipes on brackets, a valve · walls and ceilings" },
+  cableRun  = { label = "Cable Run 2 m", snap = "mount", box = B(-1, 1, 0, 0.17, -0.08, 0.32), mass = { steel = 0.008 }, cost = 90,
+                desc = "a bundle of cables in clips, one sagging free" },
+  extinguisher = { label = "Fire Extinguisher", snap = "mount", box = B(-0.08, 0.08, 0, 0.19, -0.32, 0.25), mass = { steel = 0.012 }, cost = 70,
+                desc = "a CO2 extinguisher on its wall bracket" },
+  lampDesk  = { label = "Desk Lamp", snap = "prop", box = B(-0.08, 0.08, 0, 0.49, -0.09, 0.28), mass = { steel = 0.002 }, cost = 55,
+                clutter = true, lens = true, light = { color = { 1.0, 0.80, 0.58 }, intensity = 1.4, range = 4, draw = 0.01 },
+                desc = "a warm task lamp · right-click switches it · 0.01 EC/s" },
+  lampFloor = { label = "Work Light", snap = "prop", box = B(-0.25, 0.33, 0, 1.74, -0.29, 0.29), mass = { steel = 0.006 }, cost = 160,
+                clutter = true, lens = true, light = { color = { 0.86, 0.92, 1.0 }, intensity = 3.2, range = 10, draw = 0.05 },
+                desc = "a 5,000 K floodlight on a tripod · right-click switches it · 0.05 EC/s" },
+}) do PIECES[k] = prop(t) end
+
+-- ── DECALS AND SIGNS (S4): films and plates on a face ───────────────────────
+-- (sizes are the generator's atlas cells at 512 px a metre, grime at 256)
+local function film(label, w, h, cost, desc, extra)
+  local t = { label = label, section = "DECALS", snap = "mount", box = B(-w / 2, w / 2, 0, 0.004, -h / 2, h / 2),
+              mats = { "film" }, vol = w * h * 0.0001, fill = "solid", mass = { film = 0.0005 + w * h * 0.0004 }, cost = cost,
+              film = true, desc = desc }
+  for k, v in pairs(extra or {}) do t[k] = v end
+  return t
+end
+local D = 512
+for k, t in pairs({
+  decalHaz     = { "Hazard Stripe 2 m", 1024 / D, 104 / D, 30, "black and safety yellow at 45° · edges, steps, anything that bites" },
+  decalHazS    = { "Hazard Stripe 1 m", 512 / D, 52 / D, 15, "a narrow band · door edges, kerbs" },
+  decalHazSq   = { "Hazard Panel", 256 / D, 256 / D, 15, "a 0.5 m chevron square · pillars, machinery" },
+  decalArrow   = { "Arrow", 256 / D, 154 / D, 12, "a stencilled arrow · T turns it on the face" },
+  decalChev    = { "Chevrons", 410 / D, 128 / D, 15, "three chevrons · this way" },
+  decalNoEntry = { "NO ENTRY", 410 / D, 154 / D, 20, "a placard in danger red" },
+  decalAirlock = { "AIRLOCK", 512 / D, 128 / D, 20, "stencilled black on safety yellow" },
+  decalPress   = { "PRESSURE DOOR", 410 / D, 128 / D, 20, "PRESSURE DOOR · KEEP CLEAR WHILE CYCLING" },
+  decalLoad    = { "Load Rating", 256 / D, 128 / D, 15, "a MAX LOAD 500 kg plate" },
+  decalO2      = { "O2 Line Marker", 307 / D, 77 / D, 10, "a pipe band: OXYGEN and its flow" },
+  decalVolt    = { "DANGER 400 V", 307 / D, 77 / D, 10, "a voltage warning band" },
+  decalExit    = { "EXIT", 307 / D, 102 / D, 15, "an exit placard with its arrow" },
+  decalHalden  = { "Halden Structural", 512 / D, 205 / D, 25, "the supplier's mark · structure" },
+  decalPell    = { "Pell Groundworks", 512 / D, 205 / D, 25, "the supplier's mark · groundworks" },
+  grimeStreaks = { "Grime: Streaks", 2.0, 563 / 256, 10, "run-off down a wall, splash at its foot", { grime = true } },
+  grimeScuff   = { "Grime: Floor Scuffs", 2.0, 2.0, 10, "boot traffic worn into a deck", { grime = true } },
+  grimeLeak    = { "Grime: Rust Run", 154 / 256, 307 / 256, 10, "a weep of rust under a bolt or a seam", { grime = true } },
+  grimeSoot    = { "Grime: Scorch", 1.0, 1.0, 10, "soot from a vent, a welder, a fire", { grime = true } },
+  grimeOil     = { "Grime: Oil Stain", 1.0, 1.0, 10, "an oil patch on a floor", { grime = true } },
+}) do PIECES[k] = film(t[1], t[2], t[3], t[4], t[5], t[6]) end
+for d = 0, 9 do
+  PIECES["decalNum" .. d] = film("Number " .. d, 154 / D, 205 / D, 10, "a 0.4 m stencilled numeral · door and bay numbers", { order = 100 + d })
+end
+-- signs: text kit_live draws (`sign`), or the agency's emblem (`emblem`)
+PIECES.signPlate   = { label = "Sign Plate", section = "DECALS", snap = "mount", box = B(-0.47, 0.47, 0, 0.014, -0.17, 0.17), order = 1,
+                       mats = { "steel" }, vol = 0.002, fill = "solid", mass = { steel = 0.004 }, cost = 60,
+                       sign = { w = 0.9, h = 0.3, style = "plate", px = 512 },
+                       desc = "a riveted plate · your words, or the base's name · right-click to write it" }
+PIECES.signBoard   = { label = "Name Board", section = "DECALS", snap = "mount", box = B(-1.02, 1.02, 0, 0.014, -0.27, 0.27), order = 2,
+                       mats = { "steel" }, vol = 0.006, fill = "solid", mass = { steel = 0.012 }, cost = 180,
+                       sign = { w = 2.0, h = 0.5, style = "board", px = 1024 },
+                       desc = "a 2 m board over a door · the base's name in stencil, or yours" }
+PIECES.signStencil = film("Stencilled Words", 1.6, 0.32, 40, "letters sprayed straight on the wall · right-click to write them",
+                          { sign = { w = 1.6, h = 0.32, style = "stencil", px = 1024 }, order = 3 })
+PIECES.decalEmblem = film("Agency Emblem", 0.8, 0.8, 50, "the company's own emblem, sprayed on", { emblem = true, order = 4 })
+
 -- ── FITTINGS: VAB parts placed live (S2) ─────────────────────────────────────
 -- The registry figures they carry are parts_registry's (and parts_aero's,
 -- parts_nuclear's), copied here because the world scene carries no registry;
@@ -396,7 +516,11 @@ local function resolve(piece, mat)
     tile = P.tile, deck = P.deck, deckTop = P.deckTop, slopeZ = P.slopeZ, triangle = P.triangle,
     door = P.door, light = P.light, screen = P.screen, switch = P.switch, life = P.life,
     sym = P.sym or "x", mirror = P.mirror, hidden = P.hidden,
-    script = (P.door or P.light or P.screen or P.switch) and "kit_live" or nil,
+    -- (S4) character: films, clutter, signs, the emblem, a lamp's own lens;
+    -- what takes paint on two faces and what gathers dust
+    film = P.film, clutter = P.clutter, grime = P.grime, sign = P.sign, emblem = P.emblem, lens = P.lens,
+    faces2 = FACES2[piece] == true, exterior = EXTERIOR[P.section] == true, noPaint = P.film or nil,
+    script = (P.door or P.light or P.screen or P.switch or P.sign or P.emblem) and "kit_live" or nil,
     seals = (P.seals == "door" or P.seals == "ring" or P.seals == "y" or P.seals == "z") and P.seals or nil,
     u = M.u, matk = M.k, strength = M.strength,
     desc = string.format("%s · %s · %.2f t", P.desc or "", M.label, massOf(piece, mat)),

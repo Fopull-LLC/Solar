@@ -14,7 +14,12 @@
 #                                    walked in through the airlock, its air
 #                                    breathed helmet off, the seat tick's cost,
 #                                    a far door opened: the leak alarm; refilled;
-#                                    save and reload)
+#                                    save and reload), character (S4: the hab
+#                                    painted, a sign with the base's name,
+#                                    decals, props inside, saved as a
+#                                    blueprint and a copy placed, a 500-piece
+#                                    base + 100 props + 20 decals in view,
+#                                    painted and bare; save and reload)
 #   env: WORK LOCK SOLAR TAG PATCHES BENCH_PARAMS as bench.sh
 #
 # Splices vfxprobe_modes.lua (its freecam), buildkitprobe_modes.lua (the BK
@@ -27,7 +32,7 @@ S=${WORK:-${TMPDIR:-/tmp}/solar-kit}
 eng=${1:?usage: kitprobe.sh <engine> [modes]}; shift
 mkdir -p $S/tools
 cp $HERE/bench.sh $HERE/table.py $HERE/perfbench.lua $S/tools/
-python3 - "$S/tools/perfbench.lua" "$HERE/vfxprobe_modes.lua" "$HERE/buildkitprobe_modes.lua" "$HERE/kitprobe_modes.lua" <<'PY'
+python3 - "$S/tools/perfbench.lua" "$HERE/vfxprobe_modes.lua" "$HERE/buildkitprobe_modes.lua" "$HERE/kitprobe_modes.lua" "$HERE/charprobe_modes.lua" <<'PY'
 import sys
 p = sys.argv[1]
 m = "".join(open(a).read() for a in sys.argv[2:])
@@ -35,7 +40,7 @@ s = open(p).read()
 i = s.index('-- ── main ──')
 s = s[:i] + m + s[i:]
 s = s.replace('    elseif MODE == "plane" then run_plane()',
-              '    elseif MODE == "plane" then run_plane()\n    elseif MODE == "kit" then KIT.run()\n    elseif MODE == "kitperf" then KIT.run_perf()\n    elseif MODE == "rooms" then KIT.run_rooms()')
+              '    elseif MODE == "plane" then run_plane()\n    elseif MODE == "kit" then KIT.run()\n    elseif MODE == "kitperf" then KIT.run_perf()\n    elseif MODE == "rooms" then KIT.run_rooms()\n    elseif MODE == "character" then CH.run()\n    elseif MODE == "tint" then CH.run_tint()')
 open(p, 'w').write(s)
 PY
 rm -rf $S/proj/save/user/buildshots

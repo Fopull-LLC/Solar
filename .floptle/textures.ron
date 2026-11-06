@@ -397,4 +397,13 @@
     "models/iva/tex/cushion_height.png": (filter: SmoothMipmaps, wrap: Repeat),
     "models/iva/tex/strap_height.png": (filter: SmoothMipmaps, wrap: Repeat),
     "models/iva/tex/panel_height.png": (filter: SmoothMipmaps, wrap: Repeat),
+    "textures/kit/decals.png": (filter: SmoothMipmaps, wrap: Repeat),
+    "textures/kit/grime.png": (filter: SmoothMipmaps, wrap: Repeat),
+    "textures/kit/sign_blank.png": (filter: SmoothMipmaps, wrap: Repeat),
+    "textures/kit/decals_normal.png": (filter: SmoothMipmaps, wrap: Repeat),
+    "textures/kit/decals_orm.png": (filter: SmoothMipmaps, wrap: Repeat),
+    "textures/kit/decals_height.png": (filter: SmoothMipmaps, wrap: Repeat),
+    "textures/kit/grime_normal.png": (filter: SmoothMipmaps, wrap: Repeat),
+    "textures/kit/grime_orm.png": (filter: SmoothMipmaps, wrap: Repeat),
+    "textures/kit/grime_height.png": (filter: SmoothMipmaps, wrap: Repeat),
 }

@@ -3564,6 +3564,7 @@
         // the modular kit's pieces, snapping and live fittings, and the structure vessel
         // for VAB parts placed live (parts_kit, kit_snap, kit_live, struct_live; sandbox S1/S2),
         // the rooms the pieces close and their air, airlocks and life support (rooms, room_air; S3),
+        // paint, dust and the swatches (kit_paint), saved and shared blueprints (blueprints; S4),
         // the one ghost function (ghost) and the overlap query (placement). Last in the
         // scene on purpose: its lateUpdate aims through the cursor after the camera
         // has placed itself for the frame.
@@ -3595,6 +3596,8 @@
                 ( kind: "struct_live", enabled: true, params: [] ),
                 ( kind: "rooms", enabled: true, params: [] ),
                 ( kind: "room_air", enabled: true, params: [] ),
+                ( kind: "kit_paint", enabled: true, params: [] ),
+                ( kind: "blueprints", enabled: true, params: [] ),
                 ( kind: "builder_history", enabled: true, params: [] ),
                 ( kind: "field_builder", enabled: true, params: [] ),
             ],

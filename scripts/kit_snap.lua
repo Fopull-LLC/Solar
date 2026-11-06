@@ -237,10 +237,12 @@ function face(q)
       cx = an > 0 and (hb[2] + phx) or (hb[1] - phx)
       cy, cz = 0, 0
     end
-  elseif S == "block" then
+  elseif S == "block" or S == "prop" then
+    -- (S4: a prop is a block on a finer grid: a monitor on a desk, a crate in a corner)
+    local g = S == "prop" and MOUNT_GRID or GRID
     if ax == "y" and an > 0 then
       cy = hd.deckTop or top
-      cx, cz = quantize(px, GRID), quantize(pz, GRID)
+      cx, cz = quantize(px, g), quantize(pz, g)
       dyaw = toward_yaw()
     elseif hit.part.id == q.id and ax ~= "y" then
       if ax == "x" then cx = an > 0 and (hb[2] + (nb[2] - nb[1]) / 2) or (hb[1] - (nb[2] - nb[1]) / 2); cz = 0
@@ -333,14 +335,16 @@ end
 -- The part of `rec` the new part `np` (def `nd`) would be inside, or nil.
 -- Mounts only meet mounts; everything else meets everything but mounts.
 -- (Wall-to-wall corners share their end 0.1 m: the margin lets them.)
+-- (S4: a film — a decal, grime — meets nothing: paint goes over paint.)
 OVERLAP_M = 0.11
 function overlapIn(rec, defs, np, nd, skip)
+  if nd.film then return nil end
   local a = solid(np, nd)
   local am = nd.snap == "mount"
   for _, p in ipairs(rec.bp or {}) do
     if not (skip and skip[p.uid]) then
       local d = defs(p.id)
-      if d and ((d.snap == "mount") == am) then
+      if d and not d.film and ((d.snap == "mount") == am) then
         local b = solid(p, d)
         if math.min(a.y1, b.y1) - math.max(a.y0, b.y0) > 0.03 and rectOverlap(a, b, OVERLAP_M) then return p, d end
       end
@@ -415,4 +419,62 @@ function fallsWith(rec, defs, uids)
     end
   end
   return out
+end
+
+-- ── S4: turning a mount on its face, and finding one under a click ──────────
+
+-- A mount's pose turned `spin` (quarter turns) about its own face normal:
+-- M = Ry(yaw)·Rx(pitch)·Ry(spin), back in the record's yaw, pitch, roll
+-- (M = Ry·Rx·Rz). On a wall (pitch 90°) a quarter spin is pitch 0 and a
+-- quarter roll: Rx(90)·Ry(s) = Rz(s)·Rx(90). → yaw, pitch, roll (quantised)
+function spinPose(yaw, pitch, spin)
+  if not spin or math.abs(spin) < 1e-6 then return yaw, pitch, 0 end
+  local function Ry(a) local c, s = math.cos(a), math.sin(a); return { { c, 0, s }, { 0, 1, 0 }, { -s, 0, c } } end
+  local function Rx(a) local c, s = math.cos(a), math.sin(a); return { { 1, 0, 0 }, { 0, c, -s }, { 0, s, c } } end
+  local function mul(A, B)
+    local C = {}
+    for i = 1, 3 do C[i] = {} for j = 1, 3 do C[i][j] = A[i][1] * B[1][j] + A[i][2] * B[2][j] + A[i][3] * B[3][j] end end
+    return C
+  end
+  local M = mul(mul(Ry(yaw), Rx(pitch)), Ry(spin))
+  -- M = Ry(a)Rx(b)Rz(c): M[2][3] = -sin b, M[1][3] = sin a cos b, M[3][3] = cos a cos b,
+  -- M[2][1] = cos b sin c, M[2][2] = cos b cos c
+  local sb = math.max(-1, math.min(1, -M[2][3]))
+  local b = math.asin(sb)
+  local a, c
+  if math.abs(math.cos(b)) > 1e-6 then
+    a = math.atan2(M[1][3], M[3][3])
+    c = math.atan2(M[2][1], M[2][2])
+  else
+    a = math.atan2(-M[3][1], M[1][1])
+    c = 0
+  end
+  return wrap(quantize(a, QUARTER / 6)), wrap(quantize(b, QUARTER / 6)), wrap(quantize(c, QUARTER / 6))
+end
+
+-- The mount of `rec` (a decal, a sign, a fitting: pieces with no collider of
+-- their own, so a ray goes through them to the wall) whose face holds the
+-- structure-local point (lx, ly, lz), nearest the face first; within `tol`
+-- (m) of its face. → part, def | nil
+function mountAt(rec, defs, lx, ly, lz, tol)
+  tol = tol or 0.06
+  local best, bd, bdef = nil, 1e9, nil
+  for _, p in ipairs(rec.bp or {}) do
+    local d = defs(p.id)
+    if d and d.snap == "mount" then
+      local b = boxOf(d)
+      local up, fw = localAxes(p.yaw or 0, p.pitch or 0, p.roll or 0)
+      local rt = { up[2] * fw[3] - up[3] * fw[2], up[3] * fw[1] - up[1] * fw[3], up[1] * fw[2] - up[2] * fw[1] }
+      local dx, dy, dz = lx - (p.x or 0), ly - (p.y or 0), lz - (p.z or 0)
+      local u = dx * rt[1] + dy * rt[2] + dz * rt[3]
+      local v = dx * up[1] + dy * up[2] + dz * up[3]
+      local w = dx * fw[1] + dy * fw[2] + dz * fw[3]
+      if u >= b[1] - 0.02 and u <= b[2] + 0.02 and w >= b[5] - 0.02 and w <= b[6] + 0.02 and v >= b[3] - tol and v <= b[4] + tol then
+        -- (the smallest one wins: a number on a hazard panel, a sign on grime)
+        local area = (b[2] - b[1]) * (b[6] - b[5]) + (d.film and 0 or -100)
+        if area < bd then best, bd, bdef = p, area, d end
+      end
+    end
+  end
+  return best, bdef
 end

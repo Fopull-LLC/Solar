@@ -197,7 +197,17 @@ function resolve(hit)
     if e then return { kind = "crate", id = e.id, entry = e, node = n, wx = hx, wy = hy, wz = hz } end
   end
   local rb = n.getcomponent and n:getcomponent("RigidBody")
-  return { kind = "prop", node = n, label = n.name, mass = rb and rb.mass or nil, wx = hx, wy = hy, wz = hz }
+  -- (the click point kept body-relative at once, as the pick's own frame read:
+  -- a provider asked a frame later finds the spot on a moving planet —
+  -- the kit's decals and signs, which a ray passes through to the wall)
+  local body, rx, ry, rz = nil, nil, nil, nil
+  if space and space.dominant and hx then
+    body = space.dominant(hx, hy, hz)
+    local b = body and space.body(body)
+    if b then rx, ry, rz = hx - b.x, hy - b.y, hz - b.z end
+  end
+  return { kind = "prop", node = n, label = n.name, mass = rb and rb.mass or nil, wx = hx, wy = hy, wz = hz,
+           body = body, rx = rx, ry = ry, rz = rz }
 end
 
 local function crosshair()
