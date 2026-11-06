@@ -298,7 +298,8 @@ function TP.perf_window(tag, secs)
   local ts = findScript("tracking_station")
   local ms, n = 0, 0
   local t1 = W() + secs
-  local s0 = { perf.scriptMs("tracking_station"), perf.scriptMs("fleet_view"), perf.scriptMs("orbit_map") }
+  local s0 = { perf.scriptMs("tracking_station"), perf.scriptMs("fleet_view"), perf.scriptMs("orbit_map"),
+               lists = ts.stats.lists, cards = ts.stats.cards, strips = ts.stats.strips, tops = ts.stats.tops, layouts = ts.stats.layouts }
   local acc = { 0, 0, 0 }
   local fr = 0
   while W() < t1 do
@@ -318,7 +319,148 @@ function TP.perf_window(tag, secs)
   local fs = findScript("fleet_view").stats or {}
   P("TP PERF %s snapshot (ms): fleetList %.3f, a build slice %.3f (the worst %.3f); anchors: %d projected, %d exact steps",
     tag, fs.list or 0, fs.slice or 0, fs.sliceMax or 0, st.n_proj or 0, st.n_prop or 0)
+  local pj = ts.proj or {}
+  P("TP PERF %s update split (ms, smoothed): snapshot %.3f (resume + stamp), hover %.3f, list signature %.3f", tag, st.u_snap or 0, st.u_hover or 0, st.u_sig or 0)
+  P("TP PERF %s anchors split (ms): before %.3f, gather %.3f, project %.3f, points %.3f, tracks %.3f", tag, (st.a_ms or 0) - (st.a_gather or 0) - (st.a_proj or 0) - (st.a_pts or 0) - (st.a_tracks or 0), st.a_gather or 0, st.a_proj or 0, st.a_pts or 0, st.a_tracks or 0)
+  P("TP PERF %s projection: mode %s, check error %.4f px, %d fallback frames so far; %d orbit lines; %s",
+    tag, tostring(pj.mode), pj.err or -1, pj.fallbacks or 0, st.tracks or 0, tostring(pj.dbg))
+  P("TP PERF %s makes over the window: list %d, card %d, strip %d, top %d, layouts %d (%d frames)", tag,
+    st.lists - (s0.lists or 0), st.cards - (s0.cards or 0), st.strips - (s0.strips or 0), st.tops - (s0.tops or 0),
+    st.layouts - (s0.layouts or 0), fr)
   return out
+end
+
+-- ── P3 / P4: filters, search, an opened cluster, the menu, the orbit lines ──
+function TP.click(x, y, button)
+  button = button or 0
+  input.simulate({ mouse = { x, y } }); yield(); yield()
+  input.simulate({ button = button, down = true }); yield(); yield()
+  input.simulate({ button = button, down = false }); yield(); yield()
+end
+function TP.anchor_kinds(ts, fv)
+  local S = fv.current()
+  local n, deb, other = 0, 0, 0
+  for id in pairs(ts.anchorsNow()) do
+    local e = S.byId[id]
+    n = n + 1
+    if e and e.kind == "debris" then deb = deb + 1 elseif id ~= ts.selectedId() then other = other + 1 end
+  end
+  return n, deb, other
+end
+function TP.p3p4(ts, fv, om, b)
+  om.setZoom(b.radius * 6); wait(1.5)
+  -- the orbit lines: the ones that matter (default) against every one
+  TP.shot("station_orbits_key")
+  local key_tracks = ts.stats.tracks or 0
+  ts.mapopt.orbits = "all"; ts.dirty_all = true; wait(1.0)
+  local all_tracks = ts.stats.tracks or 0
+  TP.shot("station_orbits_all")
+  ts.mapopt.orbits = "key"; ts.dirty_all = true; wait(1.0)
+  TP.check("orbits", key_tracks >= 1 and key_tracks < all_tracks, "orbit lines: %d that matter by default, %d with Orbits · all", key_tracks, all_tracks)
+  -- the debris LOD: specks close in, nothing projected far out
+  local _, deb_mid = TP.anchor_kinds(ts, fv)
+  om.setZoom(b.radius * 40); wait(2.0)
+  local _, deb_far = TP.anchor_kinds(ts, fv)
+  om.setZoom(b.radius * 6); wait(1.5)
+  TP.check("debris_lod", deb_mid > 50 and deb_far == 0, "debris projected: %d at mid zoom, %d far out (disc under %d px)", deb_mid, deb_far, ts.DEBRIS_DISC)
+  -- the kind filter, on the list and the map
+  ts.filter.kind = "craft"; ts.dirty_all = true; wait(1.0)
+  local n1, d1 = TP.anchor_kinds(ts, fv)
+  local V = ts.listView()
+  TP.check("filter_craft", d1 == 0 and V.n >= 45 and V.n <= 52, "Craft: %d in the list, %d anchors, %d debris on the map", V.n, n1, d1)
+  ts.filter.kind = "all"; ts.dirty_all = true; wait(0.5)
+  -- the search, typed into the real field (the engine's text path) when it can be found
+  local fld = find and (find("FieldStationSearch") or find("srch"))
+  local typed = false
+  if fld and ui and ui.focus then
+    pcall(ui.focus, fld); yield(); yield()
+    input.simulate({ text = "Comsat" }); wait(0.6)
+    typed = ts.filter.q == "Comsat"
+    P("TP search field: found, focused %s, typing() %s, filter.q '%s'", tostring(ts.typing()), tostring(ts.typing()), tostring(ts.filter.q))
+  end
+  if not typed then ts.filter.q = "Comsat"; ts.dirty_all = true; wait(0.6) end
+  local stray, tags = 0, 0
+  for _, l in ipairs(ts.labelsNow()) do
+    local e = fv.current().byId[l.id]
+    tags = tags + 1
+    if e and not tostring(e.name):find("Comsat", 1, true) and l.id ~= ts.selectedId() then stray = stray + 1 end
+  end
+  V = ts.listView()
+  TP.check("search", V.n >= 10 and V.n <= 20 and stray == 0, "search 'Comsat' (%s): %d rows, %d tags, %d on others",
+    typed and "typed into the field" or "set", V.n, tags, stray)
+  TP.shot("station_search")
+  if ui and ui.focus then pcall(ui.focus, nil) end
+  ts.filter.q = ""; ts.dirty_all = true; wait(0.6)
+  -- an opened cluster: a click on a disc, then a click on a name in it
+  local A, pick_c
+  for _, zf in ipairs({ 2.2, 6, 3.5, 12 }) do
+    if not pick_c then
+      om.setZoom(b.radius * zf); wait(2.0)
+      A = ts.anchorsNow()
+      for _, c in ipairs(ts.clustersNow()) do
+        local s = A[c.seed]
+        if s and not ts.ownsPointer(s[1] + c.ox, s[2] + c.oy) and (not pick_c or c.n > pick_c.n) then pick_c = c end
+      end
+    end
+  end
+  if pick_c then
+    local s = A[pick_c.seed]
+    local cx, cy = s[1] + pick_c.ox, s[2] + pick_c.oy
+    TP.click(cx, cy, 0)
+    wait(0.3)
+    local F, R = ts.fanNow()
+    TP.check("fan_open", F ~= nil and R ~= nil, "a click on a cluster of %d opens its column (%s)", pick_c.n, F and (#F.members .. " names") or "none")
+    if F and R then
+      local k = (select(2, camera.screenSize()) or 720) / ts.uiDesignH()
+      local row_h = 12 * k * 1.55
+      local want = F.members[2]
+      input.simulate({ mouse = { R[1] + R[3] / 2, R[2] + row_h * 2 + 2 * k + row_h * 0.5 } }); wait(0.4)
+      TP.shot("station_fan")
+      TP.click(R[1] + R[3] / 2, R[2] + row_h * 2 + 2 * k + row_h * 0.5, 0)
+      wait(0.3)
+      TP.check("fan_pick", ts.selectedId() == want and ts.fanNow() == nil, "a click on a name selects it (%s, wanted %s)", tostring(ts.selectedId()), tostring(want))
+    end
+  else
+    TP.check("fan_open", false, "no cluster on screen at close zoom")
+  end
+  -- the shared menu: a right-button tap on a lone icon
+  om.setZoom(b.radius * 6); wait(1.5)
+  A = ts.anchorsNow()
+  local mem = {}
+  for _, c in ipairs(ts.clustersNow()) do for _, id in ipairs(c.members) do mem[id] = true end end
+  local ids = {}
+  for id in pairs(A) do ids[#ids + 1] = id end
+  table.sort(ids)
+  local lone
+  for _, id in ipairs(ids) do
+    local e = fv.current().byId[id]
+    local a = A[id]
+    if e and e.craft and not mem[id] and not ts.ownsPointer(a[1], a[2]) then
+      local clear = true
+      for _, j in ipairs(ids) do
+        local q = A[j]
+        if j ~= id and (q[1] - a[1]) ^ 2 + (q[2] - a[2]) ^ 2 < 24 ^ 2 then clear = false break end
+      end
+      if clear then lone = id break end
+    end
+  end
+  local cm = findScript("context_menu")
+  if lone and cm then
+    TP.click(A[lone][1], A[lone][2], 1)
+    wait(0.5)
+    local t = cm.target
+    local lt = ts.lastTap or {}
+    P("TP menu tap: moved %.1f px, %.3f s, id %s, cluster %s", lt.moved or -1, lt.dt or -1, tostring(lt.id), tostring(lt.cl))
+    TP.check("menu", cm.open and t and t.kind == "fleet" and t.id == lone, "a right-click on %s opens the fleet menu (%s)", lone,
+      cm.open and tostring(t and t.kind) or "shut")
+    TP.shot("station_menu")
+    if cm.close then cm.close() end
+    wait(0.3)
+  else
+    TP.check("menu", false, "no lone craft icon to right-click (%s)", tostring(cm ~= nil))
+  end
+  input.simulate({ mouse = { 4, 4 } }); wait(0.3)
+  ts.selectCraft("tp9"); wait(0.5)
 end
 
 function TP.run()
@@ -339,6 +481,8 @@ function TP.run()
     TP.labels("z" .. i, true)
     TP.shot("station_z" .. i)
   end
+  om.setZoom(b.radius * 6); wait(1.0)
+  TP.p3p4(ts, fv, om, b)
   om.setZoom(b.radius * 6); wait(1.0)
   -- ── perf: STATION against CHART ──
   local ps = TP.perf_window("station", 6)

@@ -118,10 +118,14 @@ local function piloted()
 end
 
 local function typing()
+  local ts = ref("tracking_station")
+  if ts and ts.typing and ts.typing() then return true end
   if not (ui and ui.focused) then return false end
   local f = ui.focused()
   return f ~= nil and type(f.name) == "string" and f.name:find("^Field") ~= nil
 end
+-- Is a name or a search being typed? (. and , are letters then, not warp keys.)
+function typingNow() return typing() end
 
 local function galaxy_cap()
   local gx = ref("galaxy")
@@ -177,12 +181,9 @@ local function foot_tick(pw, dt)
     if capped then
       say(why and ("Warp limited · " .. why) or string.format("Warp limited to ×%d out here", math.floor(cap)))
     elseif nxt > warp then
-      local s, al, inj = foot_state(pw, warp > 1.001 and HOLD_SPEED or START_SPEED)
-      local block = footBlock(s, al, inj)
-      if block then
-        say("Warp limited · " .. block)
-        nxt = warp
-      end
+      -- the one warp gate (request below): footBlock, said when it refuses
+      if request(nxt) then warp = nxt end
+      nxt = warp
     end
     if nxt ~= warp then
       space.warp(nxt)
@@ -261,6 +262,7 @@ function update(node, dt)
   local on_foot = pw ~= nil and pw.onFoot == true and not flying and not busy
   local w = space and space.warp and space.warp() or 1
   watch_drop(w)
+  if warping and WARP_TO_TICK then WARP_TO_TICK(dt or 0) end
   if on_foot and space and space.warp then w = foot_tick(pw, dt or 0); seen_warp = w end
   foot.shown = false
   local pc = ref("planet_camera")
@@ -294,10 +296,13 @@ function update(node, dt)
   drawn = true
 end
 
--- ── one warp request from a screen (the Tracking Station's rungs) ───────────
--- The same refusals the keys have (the flight console's in vessel_controller,
--- footBlock on foot, the galaxy's ceiling), said with warpSay/say so a rung
--- that does nothing says why. → ok, why. (P3 routes the keys through here.)
+-- ── THE ONE WARP GATE ───────────────────────────────────────────────────────
+-- Every request to warp faster goes through request(w): the flight console's
+-- , . keys (vessel_controller), the same keys on foot (foot_tick above), the
+-- Tracking Station's rungs and its warp to the next event (warpTo below).
+-- The refusals — the galaxy's ceiling, the throttle, EVA in space, the 40 m
+-- rule, footBlock on foot — are said with say() so a key or a rung that does
+-- nothing says why. Going DOWN is never refused. → ok, why.
 function capNow() return (galaxy_cap()) end
 function request(w)
   if not (space and space.warp) then return false, "no warp here" end
@@ -313,7 +318,10 @@ function request(w)
     local ok, eva = pcall(function() return vc.evaBlocksWarp and vc.evaBlocksWarp() end)
     if ok and eva then return no("crew on EVA in space") end
     local info = assembly and assembly.info and vc.node and assembly.info(vc.node)
-    if info and not (info.grounded or info.anchored) and info.origin then
+    if vc.warpAltOk then
+      local oka, alt_ok = pcall(vc.warpAltOk)
+      if oka and alt_ok == false then return no("too low to coast (under 40 m)") end
+    elseif info and not (info.grounded or info.anchored) and info.origin then
       local o = info.origin
       local d = space.dominant(o.x, o.y, o.z)
       local b = d and space.body(d)
@@ -331,3 +339,80 @@ function request(w)
   space.warp(w)
   return true
 end
+
+-- ── WARP TO A TIME (the Tracking Station's TO NEXT EVENT) ──────────────────
+-- orbit_map.warpToNode's landing rule, generalised: up the ladder through the
+-- gate above, then back down as the time comes, to land WARP_LEAD game
+-- seconds before it. Any drop nobody here asked for (the , key, the stick, a
+-- refusal, the physics) ends it: the warp is theirs then. Game time
+-- (space.time), so it holds at any rung.
+WARP_LEAD = 10.0     -- s of game time left when it lands
+WARP_REAL = 0.5      -- s of REAL time a rung must still have to stay on it
+warping = nil        -- { t, label, set, last } while it runs (published)
+
+-- The rung to sit on with `remaining` game seconds to go: the highest one
+-- (under `cap`) that still has more than WARP_REAL real seconds (and four
+-- frames) at it. 1 = arrived. Pure (orbit_map's MNV.warpStep, same rule).
+function warpStep(remaining, cap, dt)
+  local best = 1
+  local real = math.max(WARP_REAL, 4 * (dt or 0))
+  for _, w in ipairs(LADDER) do
+    if w <= (cap or math.huge) + 0.001 and remaining > w * real and w > best then best = w end
+  end
+  return best
+end
+
+-- Start: warp until `t` (game time) less WARP_LEAD. → ok, why.
+function warpTo(t, label)
+  if not (space and space.time and space.warp) then return false, "no warp here" end
+  label = label or "the event"
+  local left = (t or 0) - WARP_LEAD - space.time()
+  if left < 1.0 then
+    say(string.format("Warp to %s · it is under %d s away", label, math.floor(WARP_LEAD)))
+    return false, "it is under " .. math.floor(WARP_LEAD) .. " s away"
+  end
+  local w = warpStep(left, capNow(), 1 / 60)
+  if w <= 1 then return false, "it is too close to warp to" end
+  local ok, why = request(w)
+  if not ok then return false, why end
+  warping = { t = t, label = label, set = w, last = nil }
+  say(string.format("Warp to %s · ×%d", label, w))
+  return true
+end
+
+function warpCancel(why)
+  if not warping then return end
+  local W = warping
+  warping = nil
+  if space.warp() > 1.001 then space.warp(1) end
+  say(string.format("Warp to %s · %s", W.label, why or "stopped"))
+end
+
+-- Each frame (update): step the ladder down as the time comes.
+local function warp_to_tick(dt)
+  local W = warping
+  if not W then return end
+  local cur = space.warp() or 1
+  -- dropped by someone else: a fall we did not ask for ends it
+  if W.last and cur < W.last - 0.001 and W.set >= W.last - 0.001 then
+    warping = nil
+    say(string.format("Warp to %s · stopped", W.label))
+    return
+  end
+  W.last = cur
+  -- (our own steps down are not "stopped by the physics": watch_drop)
+  said = true
+  local left = W.t - WARP_LEAD - space.time()
+  local w = warpStep(left, capNow(), dt)
+  if w <= 1 then
+    warping = nil
+    if cur > 1.001 then space.warp(1) end
+    say(string.format("Warp ×1 · %s in %.0f s", W.label, math.max(0, W.t - space.time())))
+    return
+  end
+  if math.abs(w - W.set) > 0.001 then
+    if w < cur then space.warp(w) else request(w) end
+    W.set = w
+  end
+end
+WARP_TO_TICK = warp_to_tick

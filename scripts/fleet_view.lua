@@ -36,7 +36,7 @@ GLYPHS = { crew = "◉", rocket = "◆", probe = "◇", plane = "✈", rover = "
 PRIO = { crew = 70, rocket = 66, station = 64, plane = 62, rover = 60, bike = 60, probe = 50, base = 46, outpost = 46,
          relay = 40, flag = 38, structure = 36, remains = 30, debris = 10 }
 GROUPS = { "ATTENTION", "CREW", "CREWED", "PROBES", "LANDED", "DEBRIS", "RELAYS", "FLAGS", "BASES", "STRUCTURES" }
-RATE = 1.0          -- s between rebuilds while nothing says it changed (a source
+RATE = 2.0          -- s between rebuilds while nothing says it changed (a source
                     -- that changes rebuilds it at once; live craft are placed
                     -- from their nodes every frame anyway)
 MIN_GAP = 0.1       -- s: never rebuilt twice inside this
@@ -86,17 +86,39 @@ fmtDist = fmt_dist
 
 local function pct(f) return math.floor(math.max(0, math.min(1, f or 0)) * 100 + 0.5) end
 
--- The worst alert on an entry: { level, text, all = { {level, text}… } } | nil.
---   craft: cap, charge, comms (has an antenna), link, probe, crewed
---   crew:  o2, hp, downed (seconds left)
+-- The countdown inside an alert: "4:12", "1h 03m".
+local function mmss(s)
+  s = math.max(0, math.floor((s or 0) + 0.5))
+  if s >= 3600 then return string.format("%dh %02dm", math.floor(s / 3600), math.floor(s % 3600 / 60)) end
+  return string.format("%d:%02d", math.floor(s / 60), s % 60)
+end
+
+-- THE ATTENTION TABLE (docs/tracking-station.md §3.1). The worst alert on an
+-- entry: { level, text, all = { {level, text}… } } | nil.
+--   craft: cap, charge (power) · comms (has an antenna), link, probe, crewed
+--          (signal) · heat (0..1, the reactor's T), scram (scrammed) · cabin
+--          (the weakest crewed seat's hp 0..1) · tImpact (s, sub-orbital),
+--          landed, chutes (open) · crewAlerts (the members aboard)
+--   crew:  o2, hp, downed (s left), dose (0..1), doseRising, lastAir (the
+--          left-behind's record alert { level, text }, crew.recordAlerts)
+HEAT_WARN, HEAT_SCRAM = 0.75, 0.90      -- thermal.lua's scram line is 0.90
+CABIN_FAIL = 0.35
+DOSE_WARN, DOSE_DANGER = 0.50, 0.80
+IMPACT_DANGER = 120                     -- s: an impact closer than this is red
 function attention(e)
   local all = {}
   local function add(level, text) all[#all + 1] = { level = level, text = text } end
   if e.kind == "crew" then
     if e.downed then add("danger", string.format("DOWN · %d s", math.floor(e.downed + 0.5))) end
-    if e.o2 and e.o2 < 0.10 then add("danger", string.format("O2 %d %%", pct(e.o2)))
+    if e.lastAir and e.lastAir.text then add(e.lastAir.level or "danger", e.lastAir.text)
+    elseif e.o2 and e.o2 < 0.10 then add("danger", string.format("O2 %d %%", pct(e.o2)))
     elseif e.o2 and e.o2 < 0.25 then add("warn", string.format("O2 %d %%", pct(e.o2))) end
     if e.hp and e.hp < 0.5 and not e.downed then add("warn", string.format("HP %d %%", pct(e.hp))) end
+    local d = e.dose or 0
+    if d >= DOSE_DANGER then add("danger", string.format("DOSE %d %%%s", pct(d), e.doseRising and " ▲" or ""))
+    elseif d >= DOSE_WARN or (e.doseRising and d >= 0.05) then
+      add("warn", string.format("DOSE %d %%%s", pct(d), e.doseRising and " ▲" or ""))
+    end
   elseif e.craft then
     if (e.cap or 0) > 0 then
       if (e.charge or 0) <= 0 then add("danger", "NO POWER")
@@ -106,12 +128,94 @@ function attention(e)
       if e.probe and not e.crewed then add("danger", "NO SIGNAL · no path home")
       elseif e.crewed then add("warn", "NO SIGNAL") end
     end
+    if e.scram or (e.heat or 0) >= HEAT_SCRAM then add("danger", string.format("HEAT %d %% · SCRAM", pct(e.heat)))
+    elseif (e.heat or 0) >= HEAT_WARN then add("warn", string.format("HEAT %d %%", pct(e.heat))) end
+    if e.cabin and e.cabin < CABIN_FAIL then add("danger", "CABIN FAILING") end
+    if e.crewed and e.tImpact and not e.landed and not e.chutes then
+      add(e.tImpact < IMPACT_DANGER and "danger" or "warn", "IMPACT in " .. mmss(e.tImpact))
+    end
     for _, m in ipairs(e.crewAlerts or {}) do add(m.level, m.text) end
   end
   if #all == 0 then return nil end
   local best = all[1]
   for _, a in ipairs(all) do if a.level == "danger" and best.level ~= "danger" then best = a end end
   return { level = best.level, text = best.text, all = all }
+end
+
+-- ── FILTERS, SEARCH AND SORT (the FLEET column's header; pure) ─────────────
+-- F = { kind = "all"|"craft"|"crew"|"infra"|"debris", body = nil|name,
+--       crewed = bool, attn = bool, q = "search text", sort = SORTS key }
+-- The filters hide what fails them, on the list and on the map; the search
+-- only dims the map (what it does not match stays where it is, faint).
+KINDS = { "all", "craft", "crew", "infra", "debris" }
+KIND_LABEL = { all = "All", craft = "Craft", crew = "Crew", infra = "Infra", debris = "Debris" }
+SORTS = { "name", "world", "alt", "base", "alert" }
+SORT_LABEL = { name = "A–Z", world = "World", alt = "Altitude", base = "From base", alert = "Alerts" }
+local INFRA = { relay = true, flag = true, remains = true, structure = true, base = true, outpost = true }
+-- The bases (the spaceport and every tower's base) are always on the map:
+-- no filter hides them and they never fold into a cluster (the station).
+ALWAYS = { base = true, outpost = true }
+
+function kindClass(e)
+  if e.craft then return "craft" end
+  if e.kind == "crew" then return "crew" end
+  if e.kind == "debris" then return "debris" end
+  if INFRA[e.kind] then return "infra" end
+  return "craft"
+end
+
+-- Does the entry pass the filters (the search is searchHit)?
+function passes(e, F)
+  if not F then return true end
+  if F.kind and F.kind ~= "all" and kindClass(e) ~= F.kind then return false end
+  if F.body and e.body ~= F.body then return false end
+  if F.crewed and not (e.crewed or e.kind == "crew") then return false end
+  if F.attn and not e.attn then return false end
+  return true
+end
+
+-- Does the entry match the search text? Its name, world, kind, situation
+-- line, alert and the names of the crew aboard; case-blind, plain text.
+function searchHit(e, q)
+  if not q or q == "" then return true end
+  local hay = e._hay
+  if not hay then
+    local parts = { tostring(e.name or ""), tostring(e.body or ""), tostring(e.kind or ""), tostring(e.sub or "") }
+    for _, m in ipairs(e.crew or {}) do parts[#parts + 1] = tostring(m.name or "") end
+    if e.attn then parts[#parts + 1] = tostring(e.attn.text or "") end
+    hay = table.concat(parts, "\1"):lower()
+    e._hay = hay
+  end
+  return hay:find(q:lower(), 1, true) ~= nil
+end
+
+-- The order inside a group; the flown craft (or you) first, ties by name.
+local LEVEL = { danger = 2, warn = 1 }
+local function sort_val(e, by)
+  if by == "world" then return tostring(e.body or "~") end
+  if by == "alt" then return e.alt or (e.landed and 0) or math.huge end
+  if by == "base" then return e.dist or math.huge end
+  if by == "alert" then return -(e.attn and (LEVEL[e.attn.level] or 0) or 0) end
+  return nil
+end
+function sortList(list, by)
+  table.sort(list, function(a, b)
+    if (a.piloted or a.active or false) ~= (b.piloted or b.active or false) then return (a.piloted or a.active) == true end
+    if by and by ~= "name" then
+      local va, vb = sort_val(a, by), sort_val(b, by)
+      if va ~= nil and vb ~= nil and va ~= vb then return va < vb end
+    end
+    if a.name ~= b.name then return tostring(a.name) < tostring(b.name) end
+    return tostring(a.id) < tostring(b.id)
+  end)
+  return list
+end
+
+-- The filters as one string (cache keys).
+function filterSig(F)
+  F = F or {}
+  return string.format("%s|%s|%s|%s|%s|%s", tostring(F.kind or "all"), tostring(F.body or ""), F.crewed and 1 or 0,
+    F.attn and 1 or 0, tostring(F.q or ""), tostring(F.sort or "name"))
 end
 
 -- The situation line, in words: "orbiting Naolol", "landed · 4.1 km from base".
@@ -307,11 +411,12 @@ end
 
 local function member_alerts(C, id, r)
   local o2, hp, downed = r.o2 or 1, r.hp or 1, r.downed and (r.downed.left or 0) or nil
+  local rising = false
   if C and C.alerts and C.activeId and id == C.activeId() then
     local ok, a = pcall(C.alerts, id)
-    if ok and a then o2, hp, downed = a.o2 or o2, a.hp or hp, a.downed or downed end
+    if ok and a then o2, hp, downed, rising = a.o2 or o2, a.hp or hp, a.downed or downed, a.dose_rising == true end
   end
-  return o2, hp, downed
+  return o2, hp, downed, rising
 end
 
 local function craft_entries(out)
@@ -355,7 +460,12 @@ local function craft_entries(out)
       c.role = C and C.roleLetter and C.roleLetter(r) or nil
       local o2, hp = member_alerts(C, c.id, r)
       c.o2, c.hp = o2, hp
+      c.dose = tonumber(r.dose) or 0
       if hp < 0.5 then alerts[#alerts + 1] = { level = "warn", text = string.format("%s HP %d %%", c.name or "crew", pct(hp)) } end
+      if c.dose >= DOSE_WARN then
+        alerts[#alerts + 1] = { level = c.dose >= DOSE_DANGER and "danger" or "warn",
+                                text = string.format("%s DOSE %d %%", c.name or "crew", pct(c.dose)) }
+      end
     end
     local in_orbit = not f.landed and f.pe ~= nil and f.pe > 0
     local e = { id = f.fid, craft = true, fleet = f, name = f.name, body = f.body,
@@ -381,6 +491,24 @@ local function craft_entries(out)
     if e.body then
       local hd = home_dist(e.body, e.rx, e.ry, e.rz)
       e.homeWorld, e.dist = hd ~= nil, hd
+    end
+    -- (the rest of the attention table: the reactor's heat, the cabin, and a
+    -- crewed craft coming down without its chutes open)
+    if v then
+      local okh, hud = pcall(function() return v.thermalHud and v.thermalHud() end)
+      if okh and hud then e.heat, e.scram = hud.T or 0, hud.scrammed == true end
+      if v.partHp and #m.seats > 0 then
+        for _, s in ipairs(m.seats) do
+          local okp, hp = pcall(v.partHp, s.uid)
+          if okp and hp and (not e.cabin or hp < e.cabin) then e.cabin = hp end
+        end
+      end
+      e.chutes = v.chutes_deployed == true
+    end
+    if e.crewed and not e.landed and e.pe and e.pe < 0 and e.body and space and space.body then
+      local b = space.body(e.body)
+      local T = b and orbitTimes(e.rx, e.ry, e.rz, e.vx, e.vy, e.vz, b.mu, b.radius)
+      if T and T.tImpact then e.tImpact = T.tImpact - math.max(0, (space.time and space.time() or e.st) - e.st) end
     end
     -- (debris that is ours: a lost craft with no command part left)
     if e.kind == "debris" then e.kind = "probe" end
@@ -412,10 +540,12 @@ local function crew_entries(out)
   local ride = C.avatarCraft and C.avatarCraft() or nil
   for _, r in ipairs(C.roster()) do
     if r.status == "afoot" or r.status == "base" then
-      local o2, hp, downed = member_alerts(C, r.id, r)
+      local o2, hp, downed, rising = member_alerts(C, r.id, r)
       local e = { id = "m:" .. tostring(r.id), member = r.id, kind = "crew", name = r.name, status = r.status,
+                  doseRising = rising,
                   body = r.body, rx = r.x, ry = r.y, rz = r.z, vx = 0, vy = 0, vz = 0, st = 0,
                   o2 = o2, hp = hp, downed = downed, active = (r.id == active and not ride) or false,
+                  dose = tonumber(r.dose) or 0, lastAir = C.recordAlerts and C.recordAlerts[r.id] or nil,
                   role = C.roleLetter and C.roleLetter(r) or nil, busy = C.busy and C.busy(r) or nil }
       local node = C.bodyOf and C.bodyOf(r.id) or nil
       if node and node.valid ~= false then e.node = node end

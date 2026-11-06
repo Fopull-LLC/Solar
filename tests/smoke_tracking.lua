@@ -218,7 +218,12 @@ OM = { valid = true,
   setMode = function(m) OM.mode = m end,
   focusOn = function(fn) MODE.focus = fn end, setZoom = function(z) MODE.zoom = z end,
   mode = "chart" }
-local WC = { valid = true, request = function(w) calls[#calls + 1] = "warp:" .. w return true end, capNow = function() return 1e9 end }
+local WC = { valid = true, request = function(w) calls[#calls + 1] = "warp:" .. w return true end, capNow = function() return 1e9 end,
+  warpTo = function(t, label) calls[#calls + 1] = "warpto:" .. tostring(label) return true end }
+local MENU = { opened = nil, reg = {} }
+local CM = { valid = true, actorNow = function() return { kind = "crew", id = 1 } end,
+  openFor = function(t, who, x, y) MENU.opened = { t = t, x = x, y = y } return true end }
+local CREG = { valid = true, register = function(kind, fn, opts) MENU.reg[kind] = fn end }
 local TG = { valid = true, targetCraft = function(v) calls[#calls + 1] = "target:" .. tostring(v and v.craftName) return true end }
 local TREES = {}
 local NODES = {}
@@ -228,7 +233,7 @@ for _, nm in ipairs({ "Tracking Station", "Station Fleet", "Station Card", "Stat
 end
 local DRAWN = { rect = 0, text = 0, circle = 0, line = 0 }
 local MOUSE = { 0, 0 }
-local LMB = false
+local LMB, RMB, FOCUSED = false, false, nil
 local SCR = {}
 local env = {
   time = 0,
@@ -240,9 +245,11 @@ local env = {
             time = function() return T end, warp = function() return 1 end,
             elements = function(x, y, z) return { periapsis = 1000, apoapsis = 1100 } end,
             propagate = function(x, y, z, vx, vy, vz, mu, dt) return x + vx * dt, y + vy * dt, z + vz * dt, vx, vy, vz end },
-  ui = { make = function(n, t) TREES[n.name] = t end, hovered = function() return nil end, focus = function() end },
+  ui = { make = function(n, t) TREES[n.name] = t end, hovered = function() return nil end, focus = function() end,
+         focused = function() return FOCUSED end },
   input = { setMouseLocked = function() end, mouse = function() return MOUSE[1], MOUSE[2] end,
-            button = function(b) return b == 0 and LMB end, pressed = function() return false end },
+            button = function(b) if b == 1 then return RMB end return b == 0 and LMB end, pressed = function() return false end,
+            scroll = function() return 0 end },
   camera = { screenSize = function() return 1600, 900 end,
              worldToScreen = function(x, y, z) return 800 + x * 0.25, 450 - y * 0.25, 1, true end },
   draw = { rect = function() DRAWN.rect = DRAWN.rect + 1 end, rectOutline = function() DRAWN.rect = DRAWN.rect + 1 end,
@@ -254,7 +261,8 @@ local FV = loadin("solar/scripts/fleet_view.lua", setmetatable({}, { __index = e
 local ML = loadin("solar/scripts/map_labels.lua", setmetatable({}, { __index = env }))
 local TS
 SCR = { flight_ops = FO, electronics = E, orbit_map = OM, comms = NET, company = CO, base_facilities = BF, crew = CR,
-        fleet_view = FV, map_labels = ML, deployables = DEP, debris_pack = DP, structures = STC, warp_chip = WC, targeting = TG }
+        fleet_view = FV, map_labels = ML, deployables = DEP, debris_pack = DP, structures = STC, warp_chip = WC, targeting = TG,
+        context_menu = CM, context_registry = CREG }
 env.findScript = function(k) if k == "tracking_station" then return TS end return SCR[k] end
 FV.findScript, ML.findScript = env.findScript, env.findScript
 FV.findScripts = env.findScripts
@@ -424,23 +432,296 @@ local sel_tag = false
 for _, l in ipairs(L) do if l.id == "c1" then sel_tag = true end end
 check(sel_tag, "the selected craft has its tag")
 check(DRAWN.text < 140, "draw.text calls bounded with 260 entries (" .. DRAWN.text .. ")")
--- a click on an icon selects it
-local ac = A.c3 or A.c4 or A.c5
-local target_id = A.c4 and "c4" or (A.c5 and "c5" or "c3")
-ac = A[target_id]
-MOUSE = { ac[1], ac[2] }
-LMB = false
-TS.drawMap({ bodies = BODIES, px_at = function(_, _, _, px) return px end, ppu = function(d) return 900 / (0.7 * d) end,
-             cam = { x = 0, y = 0, z = 4000 }, lk = 1.25, sw = 1600, sh = 900, placed = {}, blocked = {}, show = { orbits = false },
-             ppuFocus = 0.2, cine = false })
-LMB = true
-TS.drawMap({ bodies = BODIES, px_at = function(_, _, _, px) return px end, ppu = function(d) return 900 / (0.7 * d) end,
-             cam = { x = 0, y = 0, z = 4000 }, lk = 1.25, sw = 1600, sh = 900, placed = {}, blocked = {}, show = { orbits = false },
-             ppuFocus = 0.2, cine = false })
-LMB = false
-check(TS.selectedId() == target_id or TS.selectedId():sub(1, 2) == "k:" or TS.selectedId() ~= "c1",
-  "a click on an icon on the map selects it (" .. tostring(TS.selectedId()) .. ")")
-check(TS.pointerBusy() == true, "...and the map leaves that click alone (no node placed)")
+-- ── the pointer on the map (P4): icons, clusters that open, the menu ───────
+local function ctx_at(camz, extra)
+  local c = { bodies = BODIES, px_at = function(_, _, _, px) return px end, ppu = function(d) return 900 / (0.7 * d) end,
+              cam = { x = 0, y = 0, z = camz or 4000 }, lk = 1.25, sw = 1600, sh = 900, placed = {}, blocked = {}, yaw = 0, pitch = 0,
+              ppuFocus = 0.2, show = { orbits = false }, cine = false }
+  for k2, v in pairs(extra or {}) do c[k2] = v end
+  return c
+end
+local function frame(c)
+  T = T + 0.05
+  tick(0.05)
+  TS.drawMap(c or ctx_at())
+end
+local function member_set()
+  local m = {}
+  for _, c in ipairs(TS.clustersNow()) do for _, id in ipairs(c.members) do m[id] = c end end
+  return m
+end
+-- A lone icon: not in a cluster, not under a plate, not the selection, and
+-- nothing else drawn within 24 px (so the pointer can only mean it). Sorted:
+-- the same one every run (pairs' order is not).
+local function find_lone(A2, mem2)
+  local ids = {}
+  for id in pairs(A2) do ids[#ids + 1] = id end
+  table.sort(ids)
+  for _, id in ipairs(ids) do
+    local a = A2[id]
+    local e = FV.current().byId[id]
+    if e and e.kind ~= "debris" and not mem2[id] and id ~= TS.selectedId() and not TS.ownsPointer(a[1], a[2]) then
+      local clear = true
+      for _, j in ipairs(ids) do
+        local b = A2[j]
+        if j ~= id and (b[1] - a[1]) ^ 2 + (b[2] - a[2]) ^ 2 < 24 ^ 2 then clear = false break end
+      end
+      for _, c in ipairs(TS.clustersNow()) do
+        local s = A2[c.seed]
+        if s and (s[1] + c.ox - a[1]) ^ 2 + (s[2] + c.oy - a[2]) ^ 2 < 24 ^ 2 then clear = false end
+      end
+      if clear then return id end
+    end
+  end
+end
+MOUSE = { 5, 5 }
+frame(); frame()
+A = TS.anchorsNow()
+local mem = member_set()
+-- a lone icon: a click selects it
+local lone = find_lone(A, mem)
+check(lone ~= nil, "a lone icon on the map to click")
+if lone then
+  MOUSE = { A[lone][1], A[lone][2] }
+  LMB = false; frame()
+  LMB = true; frame()
+  LMB = false; frame()
+  check(TS.selectedId() == lone, "a click on an icon selects it (" .. tostring(TS.selectedId()) .. " for " .. lone .. ")")
+  check(TS.pointerBusy() == true, "...and the map leaves that click alone (no node placed)")
+end
+-- a cluster: a click opens it as a column of names, a click on a name picks it
+local cl = TS.clustersNow()[1]
+check(cl ~= nil and cl.n >= 3, "the landed yard near the base makes a cluster (" .. tostring(cl and cl.n) .. ")")
+if cl then
+  local sa = A[cl.seed]
+  local cx, cy = sa[1] + cl.ox, sa[2] + cl.oy
+  MOUSE = { cx, cy }
+  LMB = false; frame()
+  check(TS.pointerBusy() == true and TS.claimsTap(cx, cy), "hovering a cluster: the map and targeting's menu leave it alone")
+  LMB = true; frame()
+  LMB = false; frame()
+  local F, R = TS.fanNow()
+  check(F ~= nil and R ~= nil and #F.members == cl.n, "a click on a cluster opens it: a column of its " .. cl.n .. " names")
+  if F and R then
+    check(TS.ownsPointer(R[1] + 4, R[2] + 4) == true, "...whose column owns the pointer (the wheel scrolls it, no zoom)")
+    -- the third name: rows start one row (the heading) down
+    local fs = 12 * 1.25
+    local row_h = fs * 1.55
+    local want = F.members[3]
+    MOUSE = { R[1] + R[3] / 2, R[2] + row_h * 3 + 2 * 1.25 + row_h * 0.5 }
+    LMB = false; frame()
+    check(TS.fanNow() and TS.fanNow().hot == want, "hovering a name lights it (and rings where that member is)")
+    LMB = true; frame()
+    LMB = false; frame()
+    check(TS.selectedId() == want and TS.fanNow() == nil, "a click on a name selects that member and folds the column (" .. tostring(TS.selectedId()) .. ")")
+  end
+  -- the right button on a cluster opens it too; Esc folds it
+  frame(); frame()
+  local cl2 = TS.clustersNow()[1]
+  local sa2 = cl2 and TS.anchorsNow()[cl2.seed]
+  if sa2 then cx, cy = sa2[1] + cl2.ox, sa2[2] + cl2.oy end
+  MOUSE = { cx, cy }
+  RMB = false; frame(); RMB = true; frame(); RMB = false; frame()
+  check(TS.fanNow() ~= nil, "a right-click on a cluster opens it")
+  check(TS.escape() == true and TS.fanNow() == nil, "Esc folds an opened cluster first")
+end
+-- THE SHARED MENU: a right-button tap on an icon opens the "fleet" menu
+MOUSE = { 5, 5 }
+frame(); frame()
+A = TS.anchorsNow()
+mem = member_set()
+lone = find_lone(A, mem)
+check(lone ~= nil, "a lone icon to right-click")
+if lone then
+  MENU.opened = nil
+  MOUSE = { A[lone][1], A[lone][2] }
+  RMB = false; frame(); RMB = true; frame(); RMB = false; frame()
+  check(MENU.opened and MENU.opened.t.kind == "fleet" and MENU.opened.t.id == lone and MENU.opened.t.map == true,
+    "a right-click on an icon opens the fleet menu on it (a map menu: it stays up over the map)")
+  check(MENU.reg.fleet ~= nil, "the station registers one 'fleet' provider (the list and the map share it)")
+end
+do
+  local rows = TS.fleetRows({ id = "c9" })
+  local have = {}
+  for _, r in ipairs(rows) do have[r.id] = r end
+  check(have.fly and have.focus and have.target and have.warp and have.rename and have["end"] and have["end"].type == "sub",
+    "the fleet menu: Fly, Focus, Target, Warp, Rename, Terminate behind a confirm")
+  check(have.warp.enabled == true and have.warp.label:find("^Warp to %a"), "...Warp names its next event (" .. tostring(have.warp.label) .. ")")
+  have.warp.act()
+  check(calls[#calls]:find("^warpto:Sat 09"), "...and warps there through warp_chip.warpTo (" .. calls[#calls] .. ")")
+  local sub = have["end"].sub()
+  check(sub[2] and sub[2].danger and sub[2].label:find("Terminate Sat 09"), "Terminate asks once more, in red")
+  local mrows = TS.fleetRows({ id = "m:3" })
+  local sw2
+  for _, r in ipairs(mrows) do if r.id == "switch" then sw2 = r end end
+  check(sw2 and sw2.enabled == true, "a member: Switch to")
+end
+-- ── FILTERS, SEARCH, SORT AND PAGES (P3/P4) ─────────────────────────────────
+TS.selectCraft("c1")
+tick(0.2)
+local tr = all_trees()
+check(by_key(tr, "srch") and by_key(tr, "kall") and by_key(tr, "kdebris") and by_key(tr, "wb") and by_key(tr, "cr")
+  and by_key(tr, "at") and by_key(tr, "so"), "the FLEET header: search, the kind keys, world, crewed, alerts, sort")
+bad = {}
+validate(tr, "filters")
+check(#bad == 0, "the header is valid ui.make: " .. table.concat(bad, ", "))
+MOUSE = { 5, 5 }
+by_key(tr, "kdebris").onClicked()
+tick(0.2)
+tr = all_trees()
+check(by_key(tr, "GDEBRIS") and not by_key(tr, "GPROBES") and not by_key(tr, "GCREWED"), "Debris: only the DEBRIS group")
+check(type(SAVE.opt_trackFilter) == "table" and SAVE.opt_trackFilter.kind == "debris", "the filters are kept in the save")
+frame(); frame()
+local nd, nother = 0, 0
+for id in pairs(TS.anchorsNow()) do
+  local e = FV.current().byId[id]
+  if e and e.kind == "debris" then nd = nd + 1 elseif id ~= TS.selectedId() and not (e and FV.ALWAYS[e.kind]) then nother = nother + 1 end
+end
+check(nd > 100 and nother == 0, string.format("...and the map shows only debris too (%d debris, %d else)", nd, nother))
+-- pages: the 200-row group shows PAGE rows and a pager
+by_key(all_trees(), "GDEBRIS").onClicked()
+tick(0.2)
+tr = all_trees()
+local nrows = 0
+for _, el in ipairs(each(tr)) do if type(el.key) == "string" and el.key:find("^rd:") then nrows = nrows + 1 end end
+local pg = by_key(tr, "pgDEBRIS")
+check(nrows == TS.PAGE and pg ~= nil and has_text(pg, "1–40 of 200"), string.format("a long group pages: %d rows and the pager", nrows))
+by_key(pg, "nx").onClicked()
+tick(0.2)
+tr = all_trees()
+check(has_text(by_key(tr, "pgDEBRIS"), "41–80 of 200") and by_key(tr, "rd:d41") ~= nil or by_key(tr, "pgDEBRIS") and has_text(by_key(tr, "pgDEBRIS"), "41–80"),
+  "▸ shows the next page")
+-- a row picked from the map opens its page
+TS.selectCraft("d:d150")
+tick(0.2)
+check(by_key(all_trees(), "rd:d150") ~= nil, "a row picked from the map is put on screen (its page)")
+by_key(all_trees(), "kall").onClicked()
+tick(0.2)
+-- the search: the list narrows, the map dims what it does not match
+by_key(all_trees(), "srch").onChanged({ text = "sat 1" })
+tick(0.2)
+tr = all_trees()
+check(by_key(tr, "rc10") and by_key(tr, "rc19") and not by_key(tr, "rc20") and not by_key(tr, "rc3"), "the search narrows the list (Sat 1x)")
+check(by_key(tr, "srch").text == "sat 1" and by_key(tr, "sx"), "the field keeps the text, with a ✕ to clear it")
+TS.selectCraft("c10")
+frame(); frame()
+local stray = 0
+for _, l in ipairs(TS.labelsNow()) do
+  local e = FV.current().byId[l.id]
+  if e and not tostring(e.name):lower():find("sat 1", 1, true) then stray = stray + 1 end
+end
+check(stray == 0 and #TS.labelsNow() > 0, "on the map only the matches are named; the rest are dimmed (" .. stray .. " stray tags)")
+FOCUSED = { name = "FieldStationSearch" }
+check(TS.typing() == true, "typing in the search: the map's keys and the warp keys stand down (typing())")
+check(TS.escape() == true, "Esc leaves the field first")
+FOCUSED = nil
+check(TS.escape() == true and TS.filter.q == "", "...then clears the search")
+tick(0.2)
+-- sort, crewed, alerts
+by_key(all_trees(), "so").onClicked()
+check(TS.filter.sort == "world", "the sort key steps: A–Z → World")
+TS.filter.sort = "name"
+by_key(all_trees(), "at").onClicked()
+tick(0.2)
+tr = all_trees()
+check(by_key(tr, "GATTENTION") and not by_key(tr, "GPROBES"), "Alerts: only ATTENTION")
+by_key(tr, "at").onClicked()
+by_key(all_trees(), "wb").onClicked()
+check(TS.filter.body == "Home", "the world key steps through the worlds that have something of ours")
+by_key(all_trees(), "wb").onClicked()
+by_key(all_trees(), "wb").onClicked()
+check(TS.filter.body == nil, "...and back to every world")
+tick(0.2)
+-- ── the debris LOD and the orbit lines (P4 clutter) ─────────────────────────
+TS.selectCraft("c1")
+frame(); frame()
+local function count_debris()
+  local n = 0
+  for id in pairs(TS.anchorsNow()) do if id:sub(1, 2) == "d:" then n = n + 1 end end
+  return n
+end
+check(count_debris() > 100, "close in, the debris are specks (" .. count_debris() .. ")")
+frame(ctx_at(40000)); frame(ctx_at(40000))
+check(count_debris() == 0, "far out, a world's debris are not projected at all (its disc under " .. TS.DEBRIS_DISC .. " px)")
+by_key(all_trees(), "deb").onClicked()
+tick(0.2)
+frame(); frame()
+check(count_debris() == 0 and TS.mapopt.debris == false, "the Debris key takes the specks off the map")
+by_key(all_trees(), "deb").onClicked()
+tick(0.2)
+local tracks = 0
+local tctx = function() return ctx_at(4000, { show = { orbits = true, markers = false }, TRAJ = { track = function() return {} end },
+  drawTrack = function(_, _, hi, _, _, _, _, _, fade) tracks = tracks + 1 end }) end
+tracks = 0; frame(tctx())
+local key_tracks = tracks
+by_key(all_trees(), "orb").onClicked()
+tick(0.2)
+for _ = 1, 8 do tracks = 0; frame(tctx()) end
+local all_tracks = tracks
+check(key_tracks >= 1 and key_tracks <= 4 and all_tracks > 40,
+  string.format("orbit lines: only the ones that matter by default (%d), every one with Orbits · all (%d)", key_tracks, all_tracks))
+by_key(all_trees(), "orb").onClicked()
+tick(0.2)
+for _ = 1, 30 do tracks = 0; frame(tctx()) end
+check(tracks == key_tracks, "...and back to the ones that matter, the rest faded out (" .. tracks .. ")")
+-- ── ONE PROJECTION FUNCTION (card 0650's shape) ─────────────────────────────
+-- A pinhole camera at (0, 0, 4000) looking at the origin: the station's Lua
+-- camera must agree with it, and ask the engine for only a few points.
+local TANH = math.tan(0.35)
+local w2s_calls = 0
+local pin = function(x, y, z)
+  w2s_calls = w2s_calls + 1
+  local d = 4000 - z
+  if d <= 0 then return 0, 0, d, false end
+  local f = 900 / (2 * TANH)
+  local sx, sy = 800 + f * x / d, 450 - f * y / d
+  return sx, sy, d, sx >= 0 and sx <= 1600 and sy >= 0 and sy <= 900
+end
+local old_w2s = env.camera.worldToScreen
+env.camera.worldToScreen = pin
+env.camera.screenRect = function() return 0, 0, 1600, 900 end
+local pctx = ctx_at(4000, { look = { x = 0, y = 0, z = 0 }, tanh = TANH })
+frame(pctx)
+w2s_calls = 0
+frame(pctx)
+A = TS.anchorsNow()
+local worst, nA = 0, 0
+for id, a in pairs(A) do
+  local sx, sy = pin(a[3], a[4], a[5])
+  worst = math.max(worst, math.abs(sx - a[1]), math.abs(sy - a[2]))
+  nA = nA + 1
+end
+check(TS.proj.mode == "lua" and worst < 1e-6 and nA > 100,
+  string.format("the Lua camera projects every anchor exactly (%s, %d anchors, worst %.2g px)", TS.proj.mode, nA, worst))
+check(w2s_calls - nA <= 4, "...asking the engine for 3 checks a frame, not one call a point (" .. (w2s_calls - nA) .. ")")
+-- a lens or a viewport the map does not know (a centre 3 px off, a 2 % zoom):
+-- the gains and centres are fitted to the engine's answers, and still exact
+env.camera.worldToScreen = function(x, y, z) local a, b, c2, d = pin(x, y, z) return 800 + (a - 800) * 1.02 + 3, b - 2, c2, d end
+frame(pctx)
+A = TS.anchorsNow()
+worst = 0
+for _, a in pairs(A) do
+  local sx, sy = env.camera.worldToScreen(a[3], a[4], a[5])
+  worst = math.max(worst, math.abs(sx - a[1]), math.abs(sy - a[2]))
+end
+check(TS.proj.mode == "lua-fit" and worst < 1e-6, string.format("a lens it was not told of: fitted to the engine, exact (%s, %.2g px)", TS.proj.mode, worst))
+-- a camera that is not this pinhole at all: the frame falls back to the engine a point
+env.camera.worldToScreen = function(x, y, z) local a, b, c2, d = pin(x, y, z) return a + 0.004 * (a - 800) ^ 2 / 10, b, c2, d end
+frame(pctx)
+check(TS.proj.mode == "single", "a camera it cannot match: that frame falls back to the engine a point (" .. TS.proj.mode .. ")")
+local flat, out = { 1, 2, 3, 4, 5, 6 }, {}
+env.camera.worldToScreenMany = function(p, o) for i = 1, #p / 3 do o[4 * i - 3], o[4 * i - 2], o[4 * i - 1], o[4 * i] = i, i, i, true end return o end
+TS.project_many(flat, 2, out, pctx)
+check(TS.proj.mode == "engine" and out[5] == 2 and out[8] == true, "the engine's batched call (card 0650) is used as is when it exists")
+env.camera.worldToScreenMany = nil
+env.camera.worldToScreen = old_w2s
+env.camera.screenRect = nil
+-- TO NEXT EVENT on the strip
+tick(0.3)
+local tn = by_key(all_trees(), "tn")
+check(tn and not tn.disabled, "the strip has ▸▸ To next event")
+if tn then tn.onClicked() end
+check(calls[#calls]:find("^warpto:"), "...which warps through warp_chip.warpTo (" .. tostring(calls[#calls]) .. ")")
 TS.close()
 tick()
 check(not NODES["Station Fleet"].el.visible, "closing puts the plates away")

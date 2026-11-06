@@ -105,6 +105,65 @@ check(W.lastNotice == "Warp limited · moving", "say keeps the last notice")
 W.say(nil)
 check(W.lastNotice == "Warp limited · moving", "say(nil) is ignored")
 
+-- ── THE ONE WARP GATE (warp_chip.request) and warp to a time ────────────────
+-- The keys (vessel_controller's , . and the foot keys) and the Tracking
+-- Station's rungs and TO NEXT EVENT all ask request(); its refusals are said.
+local SIM = { t = 1000, w = 1 }
+local VC = { piloting = true, throttle = 0, node = { valid = true }, alt_ok = true }
+VC.warpAltOk = function() return VC.alt_ok end
+VC.evaBlocksWarp = function() return false end
+local TSX = { typing = function() return SIM.typing == true end }
+W.space = { warp = function(w) if w then SIM.w = w end return SIM.w end, time = function() return SIM.t end,
+            dominant = function() return nil end, body = function() return nil end }
+W.findScripts = function(k) if k == "vessel_controller" then return { VC } end return {} end
+W.findScript = function(k) if k == "tracking_station" then return TSX end return nil end
+W.assembly = { info = function() return { grounded = false, origin = { x = 0, y = 0, z = 0 } } end }
+check(W.request(10) == true and SIM.w == 10, "request: up the ladder when nothing refuses")
+VC.throttle = 0.5
+local okq, whyq = W.request(50)
+check(okq == false and whyq:find("throttle") and SIM.w == 10 and W.lastNotice:find("throttle"), "request: the throttle open refuses, and says so")
+VC.throttle = 0
+VC.alt_ok = false
+okq, whyq = W.request(50)
+check(okq == false and whyq:find("40 m"), "request: the craft's own 40 m rule (warpAltOk) refuses")
+VC.alt_ok = true
+check(W.request(1) == true and SIM.w == 1, "request: going down is never refused")
+SIM.typing = true
+check(W.typingNow() == true, "typing in the station's search: . and , are letters, not warp keys")
+SIM.typing = false
+check(W.typingNow() == false, "...and keys again when the field lets go")
+-- the stepping rule (orbit_map's MNV.warpStep): the highest rung with more
+-- than half a second of real time left at it
+check(W.warpStep(100000, math.huge, 1 / 60) == 10000, "far off: the top rung")
+check(W.warpStep(300, math.huge, 1 / 60) == 100, "300 s to go: ×100 (3 s real at ×100, 0.3 s at ×1000)")
+check(W.warpStep(0.4, math.huge, 1 / 60) == 1, "under the real-time margin: arrived")
+check(W.warpStep(100000, 50, 1 / 60) == 50, "never above the cap")
+-- warp to a time: up, then down the ladder as it comes, landing 10 s early
+local okt = W.warpTo(SIM.t + 5000, "Kestrel 09 · Pe 98 km")
+check(okt == true and SIM.w == 1000 and W.warping ~= nil, "warpTo: up the ladder through the gate (×" .. SIM.w .. ")")
+local frames, steps = 0, {}
+while W.warping and frames < 100000 do
+  SIM.t = SIM.t + SIM.w / 60
+  W.WARP_TO_TICK(1 / 60)
+  if steps[#steps] ~= SIM.w then steps[#steps + 1] = SIM.w end
+  frames = frames + 1
+end
+local land = 1000 + 5000 - SIM.t
+-- (the last rung, ×5, is left with half a second of real time on it: up to
+-- 2.5 game seconds early, the rule warp to node has)
+check(W.warping == nil and SIM.w == 1 and land >= 10 and land < 13,
+  string.format("warpTo lands ×1 10–13 s before the time (%.2f s; rungs %s)", land, table.concat(steps, " ")))
+check(W.warpTo(SIM.t + 5, "soon") == false, "warpTo refuses what is under 10 s away")
+okt = W.warpTo(SIM.t + 5000, "later")
+W.WARP_TO_TICK(1 / 60)
+SIM.w = 10            -- someone pressed , (a drop nobody here asked for)
+W.WARP_TO_TICK(1 / 60)
+check(W.warping == nil and W.lastNotice:find("stopped"), "a drop by anyone else ends the warp to it, and says so")
+VC.throttle = 0.5
+SIM.w = 1
+check(W.warpTo(SIM.t + 5000, "refused") == false and SIM.w == 1, "warpTo goes through the gate: the throttle refuses it")
+VC.throttle = 0
+
 if #failures > 0 then
   for _, f in ipairs(failures) do print("FAIL " .. f) end
   print(string.format("smoke_warp: %d passed, %d FAILED", passed, #failures))

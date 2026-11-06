@@ -1683,11 +1683,9 @@ local function update_map3d(node, dt)
   -- Every craft's own conic: the one flown (or opened from the Tracking
   -- Station) bright, the rest dimmed.
   local picked_ = focus_override
-  if mode == "station" then
-    local ts = station_ref()
-    picked_ = ts and ts.pickedNode and ts.pickedNode() or nil
-  end
-  drawCraftTracks(craft_flying and vc or nil, picked_, px_at, label, lk, map_show)
+  -- (In STATION mode the station draws the craft's lines itself, only the
+  -- ones that matter: tracking_station.lua draw_tracks.)
+  if mode ~= "station" then drawCraftTracks(craft_flying and vc or nil, picked_, px_at, label, lk, map_show) end
   if map_show.markers then
     draw_cross(node.x, node.y, node.z, px_at(node.x, node.y, node.z, 6), 0.6, 1.0, 0.7)
   end
@@ -1701,6 +1699,7 @@ local function update_map3d(node, dt)
     if ts and ts.drawMap then
       local sw_ = camera and camera.screenSize and select(1, camera.screenSize()) or 1280
       ts.drawMap({ bodies = bodies, px_at = px_at, ppu = ppu, cam = { x = ccx, y = ccy, z = ccz }, lk = lk,
+                   look = { x = focus.x + map_offx, y = focus.y + map_offy, z = focus.z + map_offz }, tanh = TANH,
                    sw = sw_, sh = sh, placed = placed, blocked = blocked, yaw = map_yaw2, pitch = map_pitch2,
                    ppuFocus = ppu(map_zoom), show = map_show, drawTrack = drawTrack, TRAJ = TRAJ, label = label,
                    cine = cineHidden(), busy = gizmoBusy or (input.button(1) == true) })
@@ -2534,11 +2533,18 @@ function cineHidden()
 end
 
 -- Draw one craft's track (TRAJ.track) about body `b`. `hi` = emphasised.
+-- `fade` (optional, default 1) scales its alpha: the Tracking Station fades
+-- the lines that do not matter in and out.
 local TRACK_HI = { 0.35, 0.85, 1.0, 1.0 }       -- the craft you fly: the map's own trajectory cyan
 local TRACK_LO = { 0.55, 0.68, 0.74, 0.38 }     -- every other craft: a quiet grey-blue
-function drawTrack(t, b, hi, px_at, label, lk, show, name)
+local TRACK_F = { 0, 0, 0, 0 }
+function drawTrack(t, b, hi, px_at, label, lk, show, name, fade)
   if not t or t.kind == "landed" then return end
   local c = hi and TRACK_HI or TRACK_LO
+  if fade and fade ~= 1 then
+    TRACK_F[1], TRACK_F[2], TRACK_F[3], TRACK_F[4] = c[1], c[2], c[3], math.min(1, c[4] * fade)
+    c = TRACK_F
+  end
   local cx, cy, cz = b.x, b.y, b.z
   if t.kind == "falling" then return end
   if show.orbits then
@@ -2554,7 +2560,7 @@ function drawTrack(t, b, hi, px_at, label, lk, show, name)
     end
   end
   if not show.markers then return end
-  local a = hi and 1.0 or 0.45
+  local a = (hi and 1.0 or 0.45) * math.min(1, fade or 1)
   local function mark(nu, px, r, g, bb, text)
     local x, y, z = TRAJ.point(t, nu)
     x, y, z = cx + x, cy + y, cz + z

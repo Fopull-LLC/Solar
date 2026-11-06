@@ -6114,6 +6114,22 @@ function warpSay(msg)
   if wc and wc.say then pcall(wc.say, msg) end
 end
 
+-- KSP's altitude rule for rails warp: parked, on its wheels, anchored, or high
+-- enough (40 m) that the conic can't clip the ground this instant. Asked by
+-- warp_chip.request, the one warp gate the keys and the screens go through.
+function warpAltOk()
+  local node = dock.node
+  if not (node and node.valid) then return true end
+  local info = assembly.info(node)
+  if not info then return true end
+  if info.grounded or info.anchored or R2.onWheels then return true end
+  local o = info.origin
+  local d0 = space.dominant(o.x, o.y, o.z)
+  local b0 = d0 and space.body(d0)
+  if not b0 then return true end
+  return math.sqrt((o.x - b0.x) ^ 2 + (o.y - b0.y) ^ 2 + (o.z - b0.z) ^ 2) - b0.radius > 40.0
+end
+
 -- Rails warp waits while anyone is on EVA in space (§5.7).
 function evaBlocksWarp()
   local c = findScript("crew")
@@ -14890,7 +14906,9 @@ function fixedUpdate(node, dt)
       warp = down
     end
   end
-  if input.pressed(".") or input.pressed(",") then
+  -- (a global, not a local: this function sits at LuaJIT's upvalue ceiling)
+  if not wc_ref or not wc_ref.valid then wc_ref = findScript("warp_chip") end
+  if (input.pressed(".") or input.pressed(",")) and not (wc_ref and wc_ref.typingNow and wc_ref.typingNow()) then
     local dir = input.pressed(".") and 1 or -1
     local idx = 1
     for i, w in ipairs(WARP_STEPS) do
@@ -14904,7 +14922,13 @@ function fixedUpdate(node, dt)
         or string.format("Warp limited to ×%d out here", math.floor(warp_cap)))
       nxt = warp
     end
-    if nxt > warp then
+    if nxt > warp and wc_ref and wc_ref.request then
+      -- THE ONE WARP GATE (warp_chip.request): the throttle, EVA in space and
+      -- the 40 m rule (warpAltOk), said on the chip when it refuses — the
+      -- same answer the Tracking Station's rungs get.
+      if wc_ref.request(nxt) then warp = nxt end
+      nxt = warp
+    elseif nxt > warp then
       -- KSP rules: no thrust, and either parked or high enough that the
       -- conic can't clip terrain this instant.
       local alt_ok = info.grounded or info.anchored or R2.onWheels

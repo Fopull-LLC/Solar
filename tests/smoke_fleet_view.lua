@@ -66,6 +66,73 @@ check(a and a.level == "danger" and a.text == "DOWN · 74 s", "DOWN with the sec
 a = FV.attention({ craft = true, cap = 100, charge = 5, comms = true, link = false, probe = true })
 check(a and a.level == "danger" and #a.all == 2, "two alerts: the worst leads, both listed")
 
+-- the rest of the table (P3): heat, cabin, a crewed craft coming down, dose,
+-- the left-behind's LAST AIR
+a = FV.attention({ craft = true, heat = 0.80 })
+check(a and a.level == "warn" and a.text == "HEAT 80 %", "the reactor at 80 %: HEAT (amber)")
+a = FV.attention({ craft = true, heat = 0.93 })
+check(a and a.level == "danger" and a.text == "HEAT 93 % · SCRAM", "past the scram line: red, SCRAM")
+a = FV.attention({ craft = true, heat = 0.4, scram = true })
+check(a and a.level == "danger" and a.text:find("SCRAM"), "a scrammed reactor is red whatever its heat")
+check(FV.attention({ craft = true, heat = 0.5 }) == nil, "a warm reactor is not an alert")
+a = FV.attention({ craft = true, crewed = true, cabin = 0.3 })
+check(a and a.level == "danger" and a.text == "CABIN FAILING", "a crewed part under 35 %: CABIN FAILING")
+a = FV.attention({ craft = true, crewed = true, tImpact = 252, pe = -500 })
+check(a and a.level == "warn" and a.text == "IMPACT in 4:12", "crewed and coming down: IMPACT in 4:12 (amber)")
+a = FV.attention({ craft = true, crewed = true, tImpact = 40 })
+check(a and a.level == "danger", "...red inside two minutes")
+check(FV.attention({ craft = true, crewed = true, tImpact = 40, chutes = true }) == nil, "chutes open: not an alert")
+check(FV.attention({ craft = true, crewed = false, tImpact = 40 }) == nil, "an empty probe coming down: not ATTENTION")
+a = FV.attention({ kind = "crew", o2 = 1, hp = 1, dose = 0.61, doseRising = true })
+check(a and a.level == "warn" and a.text == "DOSE 61 % ▲", "dose over half, rising: DOSE 61 % ▲")
+a = FV.attention({ kind = "crew", o2 = 1, hp = 1, dose = 0.85 })
+check(a and a.level == "danger", "dose past 80 %: red")
+a = FV.attention({ kind = "crew", o2 = 1, hp = 1, dose = 0.1, doseRising = true })
+check(a and a.level == "warn", "a dose climbing now is amber even while low")
+a = FV.attention({ kind = "crew", o2 = 0.02, hp = 1, lastAir = { level = "danger", text = "LAST AIR" } })
+check(a and a.text == "LAST AIR", "the member left behind: LAST AIR from the record clock")
+
+-- ── filters, search, sort (pure) ────────────────────────────────────────────
+local L = {
+  { id = "a", name = "Kestrel 09", craft = true, kind = "rocket", body = "Naolol", crewed = true, alt = 300, dist = 9000, crew = { { name = "Dana Okafor" } } },
+  { id = "b", name = "Comsat 04", craft = true, kind = "probe", body = "Naolol", alt = 900, dist = 2000, attn = { level = "warn", text = "POWER 6 %" } },
+  { id = "c", name = "Relay 1", kind = "relay", body = "Iru" },
+  { id = "d", name = "debris", kind = "debris", body = "Naolol" },
+  { id = "e", name = "Mira Hale", kind = "crew", body = "Iru" },
+  { id = "f", name = "Alpha", craft = true, kind = "probe", body = "Naolol", alt = 50, dist = 100, attn = { level = "danger", text = "NO POWER" } },
+}
+local function ids(F, q)
+  local o = {}
+  for _, e in ipairs(L) do if FV.passes(e, F) and FV.searchHit(e, q) then o[#o + 1] = e.id end end
+  return table.concat(o)
+end
+check(ids({ kind = "all" }) == "abcdef", "All: everything")
+check(ids({ kind = "craft" }) == "abf" and ids({ kind = "crew" }) == "e" and ids({ kind = "infra" }) == "c"
+  and ids({ kind = "debris" }) == "d", "the kind keys: craft, crew, infra, debris")
+check(ids({ kind = "all", body = "Iru" }) == "ce", "one world")
+check(ids({ kind = "all", crewed = true }) == "ae", "crewed: the craft with someone aboard and the crew")
+check(ids({ kind = "all", attn = true }) == "bf", "alerts only")
+check(ids({ kind = "all" }, "okafor") == "a", "the search finds a craft by the name of its crew")
+check(ids({ kind = "all" }, "IRU") == "ce", "...a world, case-blind")
+check(ids({ kind = "all" }, "power") == "bf", "...and an alert's words")
+check(ids({ kind = "craft" }, "comsat") == "b", "filters and the search together")
+local function order(by)
+  local l = {}
+  for _, e in ipairs(L) do if e.craft then l[#l + 1] = e end end
+  FV.sortList(l, by)
+  local o = {}
+  for _, e in ipairs(l) do o[#o + 1] = e.id end
+  return table.concat(o)
+end
+check(order("name") == "fba", "sort A–Z")
+check(order("alt") == "fab", "sort by altitude")
+check(order("base") == "fba", "sort by distance from the base")
+check(order("alert") == "fba", "sort by alerts: red, then amber, then none")
+L[1].piloted = true
+check(order("alt"):sub(1, 1) == "a", "the craft you fly stays first whatever the sort")
+L[1].piloted = nil
+check(FV.filterSig({ kind = "craft", q = "x" }) ~= FV.filterSig({ kind = "craft", q = "y" }), "the filter signature changes with the search")
+
 -- ── words ───────────────────────────────────────────────────────────────────
 check(FV.situation({ craft = true, body = "Naolol", pe = 98000, ap = 412000 }) == "orbiting Naolol", "orbiting")
 check(FV.situation({ craft = true, body = "Naolol", landed = true, homeWorld = true, dist = 4100 }) == "landed · 4.1 km from base", "landed near home")

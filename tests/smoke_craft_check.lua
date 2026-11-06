@@ -610,7 +610,7 @@ do
   -- another process's burst says nothing about this code)
   local function per_edit(f, K)
     local best = math.huge
-    for _ = 1, 5 do
+    for _ = 1, 9 do
       local t0 = os.clock()
       for _ = 1, K do env.craftVersion = env.craftVersion + 1; f() end
       best = math.min(best, (os.clock() - t0) * 1000 / K)

@@ -1333,7 +1333,11 @@ function update(node, dt)
   local om = ref("orbit_map")
   if om and om.isOpen and om.isOpen() and input then
     local tap = map_tap()
-    -- (a tap on the maneuver node is the node's menu: orbit_map opens it)
+    -- (a tap on the maneuver node is the node's menu: orbit_map opens it;
+    -- one on the Tracking Station's icons, clusters or plates is the
+    -- station's own "fleet" menu)
+    local ts = tap and ref("tracking_station")
+    if tap and ts and ts.claimsTap and ts.claimsTap(tap.x, tap.y) then tap = nil end
     if tap and not (om.mnvAt and om.mnvAt(tap.x, tap.y)) then
       local pick = mapPick(tap.x, tap.y)
       if pick then openMapMenu(pick, tap.x, tap.y) end
