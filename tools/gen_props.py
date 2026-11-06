@@ -42,13 +42,19 @@ MATS["Wood"] = lambda: ('(\n                color: (0.78, 0.62, 0.42),\n'
 # models/parts/cargo.glb's own slots, in the base's enamel and signal orange.
 MATS["Paint"] = lambda: mat_ron("paint", color=(0.97, 0.55, 0.22), hull=False)
 MATS["Metal"] = lambda: mat_ron("metal", color=(0.42, 0.47, 0.55), rough=0.85, metal=0.5, hull=False)
+# the decal atlas's maps (tools/detail_maps.py)
+MARKINGS_MAPS = "".join(f"                {k}: {v},\n" for k, v in (
+    ("normal_map", 'Some("textures/parts/markings_normal.png")'), ("normal_strength", "1.0"),
+    ("roughness_map", 'Some("textures/parts/markings_orm.png")'), ("roughness", "1.0"),
+    ("metallic_map", 'Some("textures/parts/markings_orm.png")'), ("metallic", "1.0"),
+    ("ao_map", 'Some("textures/parts/markings_orm.png")')))
 MATS["Decal"] = lambda: ('(\n                color: (1.0, 1.0, 1.0),\n'
                          '                texture: Some("textures/parts/markings.png"),\n'
-                         '                roughness: 0.55,\n                metallic: 0.0,\n'
+                         + MARKINGS_MAPS +
                          '                shading: Physical,\n            )')
 MATS["Stencil"] = lambda: ('(\n                color: (0.06, 0.06, 0.07),\n'
                            '                texture: Some("textures/parts/markings.png"),\n'
-                           '                roughness: 0.6,\n                metallic: 0.0,\n'
+                           + MARKINGS_MAPS +
                            '                shading: Physical,\n            )')
 MATS["Crystal"] = lambda: ('(\n                color: (0.55, 0.85, 1.0),\n'
                            '                emissive: (0.35, 0.75, 1.0),\n'

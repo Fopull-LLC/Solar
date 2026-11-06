@@ -827,10 +827,18 @@ NEAR_K = {"ML": 0.12, "Shop": 0.6, "Racks": 0.6, "Store": 0.6, "Booth": 0.6, "Ki
 
 # ── the prefab ──────────────────────────────────────────────────────────────
 
+# the sign atlas's maps (tools/detail_maps.py)
+MAPS_VAB = "".join(f"                {k}: {v},\n" for k, v in (
+    ("normal_map", 'Some("textures/vab/signs_normal.png")'), ("normal_strength", "1.0"),
+    ("roughness_map", 'Some("textures/vab/signs_orm.png")'), ("roughness", "1.0"),
+    ("metallic_map", 'Some("textures/vab/signs_orm.png")'), ("metallic", "1.0"),
+    ("ao_map", 'Some("textures/vab/signs_orm.png")')))
+
+
 def material(name):
     if name == SIGN:
         ron = ('(\n                color: (1.0, 1.0, 1.0),\n                texture: Some("textures/vab/signs.png"),\n'
-               '                roughness: 0.62,\n                metallic: 0.05,\n                shading: Physical,\n            )')
+               + MAPS_VAB + '                shading: Physical,\n            )')
     else:
         ron = MATERIALS[name]()
     return dithered(ron)

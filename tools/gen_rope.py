@@ -19,7 +19,8 @@ Models (models/items/):
                      the over-the-shoulder carry (item_hand grip "shoulder").
 
 Textures (textures/items/):
-    rope_static_albedo.png, rope_static_normal.png
+    rope_static_albedo.png, rope_static_normal.png (rope_static_orm / _height:
+                     tools/detail_maps.py, from the same braid)
                      a kernmantle sheath: 32 carriers braided two over two,
                      cream with one black tracer pair, grimed. Tiles: u once
                      round the rope, v once every ROPE_V_M metres of length.
@@ -67,7 +68,10 @@ ROPE_MAT = ('(\n                color: (1.0, 1.0, 1.0),\n'
             '                texture: Some("textures/items/rope_static_albedo.png"),\n'
             '                normal_map: Some("textures/items/rope_static_normal.png"),\n'
             '                normal_strength: 1.0,\n'
-            '                roughness: 0.95,\n                metallic: 0.0,\n'
+            '                roughness_map: Some("textures/items/rope_static_orm.png"),\n'
+            '                roughness: 1.0,\n                metallic: 0.0,\n'
+            '                metallic_map: Some("textures/items/rope_static_orm.png"),\n'
+            '                ao_map: Some("textures/items/rope_static_orm.png"),\n'
             '                shading: Physical,\n            )')
 MATS = {
     # safety-yellow davit paint, chipped (the hand tools' worn enamel)
@@ -251,11 +255,11 @@ def centred(m):
 
 
 # ── the static line's texture ───────────────────────────────────────────────
-def rope_textures(W=64, H=256, carriers=16, turns=4):
+def _braid(W=64, H=256, carriers=16, turns=4):
     """A kernmantle sheath: `carriers` strands each way round the rope, each
     making `turns` turns per texture height, two over two under (a 2/2 twill
-    braid). Height → normal map."""
-    rng = np.random.default_rng(7)
+    braid). Returns the height (0..1, a strand's crown 1), the strand ids, the
+    over mask, ia and ib (the strand indices each way)."""
     y, x = np.mgrid[0:H, 0:W].astype(float)
     u, v = x / W, y / H
     a = (u * carriers + v * carriers * turns / 2.0)      # strands winding one way
@@ -271,6 +275,21 @@ def rope_textures(W=64, H=256, carriers=16, turns=4):
     # fibre streaks along each strand
     streak = np.where(over, np.sin(fb * math.pi * 14 + ia), np.sin(fa * math.pi * 14 + ib)) * 0.06
     h = np.clip(h + streak, 0, 1)
+    return h, strand, over, ia, ib
+
+
+def rope_height(W=64, H=256, carriers=16, turns=4):
+    """The braid's height (0..1) and its tracer mask, for tools/detail_maps.py (the rope's ORM
+    and height come from the same braid as its albedo and normal)."""
+    h, strand, over, ia, ib = _braid(W, H, carriers, turns)
+    is_tracer = over & ((ia % carriers) == 3) | over & ((ia % carriers) == 11)
+    return h, is_tracer
+
+
+def rope_textures(W=64, H=256, carriers=16, turns=4):
+    """The sheath's albedo and normal (tools/detail_maps.py adds its ORM and height)."""
+    rng = np.random.default_rng(7)
+    h, strand, over, ia, ib = _braid(W, H, carriers, turns)
     # colour: cream sheath, one black tracer pair winding one way
     base = np.array([0.80, 0.76, 0.66])
     tracer = np.array([0.10, 0.10, 0.11])

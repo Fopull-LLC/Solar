@@ -23,7 +23,8 @@ defaults = {
 local SIDES = 6
 local V_M = 0.12          -- m of line per texture repeat (tools/gen_rope.py ROPE_V_M)
 local MAT = { texture = "textures/items/rope_static_albedo.png", normalMap = "textures/items/rope_static_normal.png",
-              shading = "physical", roughness = 0.95, metallic = 0.0, color = { 1, 1, 1 } }
+              roughnessMap = "textures/items/rope_static_orm.png", occlusionMap = "textures/items/rope_static_orm.png",
+              shading = "physical", roughness = 1.0, metallic = 0.0, color = { 1, 1, 1 } }
 
 local id = nil
 local built = nil         -- { ver, node, mesh, free }

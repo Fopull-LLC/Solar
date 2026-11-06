@@ -2075,9 +2075,14 @@ local MATS = {
                color = { 1, 1, 1 }, roughness = 1.0, metallic = 0.0, shading = "physical" },
   fixtures = { texture = "textures/base/steel_albedo.png", normalMap = "textures/base/steel_normal.png",
                roughnessMap = "textures/base/steel_orm.png", metallicMap = "textures/base/steel_orm.png",
+               occlusionMap = "textures/base/steel_orm.png",
                color = { 1, 1, 1 }, roughness = 1.0, metallic = 1.0, shading = "physical" },
   lamps = { texture = "textures/base/lens.png", color = { 1, 1, 1 }, unlit = true, fog = false },
-  signs = { texture = "textures/base/signs.png", color = { 1, 1, 1 }, roughness = 0.62, metallic = 0.05, shading = "physical" },
+  -- the plates' maps (tools/detail_maps.py): the ORM carries the enamel's 0.62 and the legend's film
+  signs = { texture = "textures/base/signs.png", normalMap = "textures/base/signs_normal.png",
+            roughnessMap = "textures/base/signs_orm.png", metallicMap = "textures/base/signs_orm.png",
+            occlusionMap = "textures/base/signs_orm.png",
+            color = { 1, 1, 1 }, roughness = 1.0, metallic = 1.0, shading = "physical" },
 }
 local NAMES = { asphalt = "Base Asphalt", concrete = "Base Concrete", fixtures = "Base Fixtures", lamps = "Base Lamps",
                 signs = "Base Signs" }

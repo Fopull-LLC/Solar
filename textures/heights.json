@@ -1,0 +1,194 @@
+{
+ "_about": "Height maps beside the normal maps (tools/detail_maps.py). Black = lowest, white = highest; depth_mm is the real relief between them, texel_mm the size of one pixel. Not bound to any material yet: the engine's parallax for regular materials is stage 8.",
+ "models/iva/tex/cushion_height.png": {
+  "depth_mm": 1.182,
+  "texel_mm": 1.953,
+  "method": "integrated from cushion_normal.png x1",
+  "tile_m": 1.0
+ },
+ "models/iva/tex/padding_height.png": {
+  "depth_mm": 2.009,
+  "texel_mm": 1.953,
+  "method": "integrated from padding_normal.png x1",
+  "tile_m": 1.0
+ },
+ "models/iva/tex/panel_height.png": {
+  "depth_mm": 0.852,
+  "texel_mm": 3.906,
+  "method": "integrated from panel_normal.png x0.6",
+  "tile_m": 2.0
+ },
+ "models/iva/tex/strap_height.png": {
+  "depth_mm": 1.375,
+  "texel_mm": 0.977,
+  "method": "integrated from strap_normal.png x1",
+  "tile_m": 0.5
+ },
+ "textures/base/asphalt_height.png": {
+  "depth_mm": 18.157,
+  "texel_mm": 7.812,
+  "method": "integrated from asphalt_normal.png x1",
+  "tile_m": 4.0
+ },
+ "textures/base/cladding_height.png": {
+  "depth_mm": 50.585,
+  "texel_mm": 3.906,
+  "method": "integrated from cladding_normal.png x1.2",
+  "tile_m": 2.0
+ },
+ "textures/base/concrete_height.png": {
+  "depth_mm": 11.635,
+  "texel_mm": 7.812,
+  "method": "integrated from concrete_normal.png x1",
+  "tile_m": 4.0
+ },
+ "textures/base/signs_height.png": {
+  "depth_mm": 4.391,
+  "texel_mm": 4.0,
+  "method": "plate regions from the generator; ink from the plate's two paints"
+ },
+ "textures/base/steel_height.png": {
+  "depth_mm": 2.268,
+  "texel_mm": 1.953,
+  "method": "integrated from steel_normal.png x1",
+  "tile_m": 1.0
+ },
+ "textures/faces/skin_height.png": {
+  "depth_mm": 0.543,
+  "texel_mm": 0.488,
+  "method": "integrated from skin_normal.png x0.5",
+  "tile_m": 0.25
+ },
+ "textures/items/rope_static_height.png": {
+  "depth_mm": 0.774,
+  "texel_mm": 0.54,
+  "method": "tools/gen_rope.py braid height"
+ },
+ "textures/lab/cloth_height.png": {
+  "depth_mm": 1.039,
+  "texel_mm": 0.977,
+  "method": "integrated from cloth_normal.png x1",
+  "tile_m": 0.5
+ },
+ "textures/lab/knit_height.png": {
+  "depth_mm": 2.008,
+  "texel_mm": 0.977,
+  "method": "integrated from knit_normal.png x1",
+  "tile_m": 0.25
+ },
+ "textures/lab/signs_height.png": {
+  "depth_mm": 0.482,
+  "texel_mm": 3.0,
+  "method": "plate regions from the generator; ink from the plate's two paints"
+ },
+ "textures/lab/steel_height.png": {
+  "depth_mm": 0.891,
+  "texel_mm": 1.953,
+  "method": "integrated from steel_normal.png x0.5",
+  "tile_m": 1.0
+ },
+ "textures/lab/wall_height.png": {
+  "depth_mm": 0.314,
+  "texel_mm": 1.953,
+  "method": "integrated from wall_normal.png x1",
+  "tile_m": 1.0
+ },
+ "textures/parts/ablative_height.png": {
+  "depth_mm": 5.367,
+  "texel_mm": 1.309,
+  "method": "integrated from ablative_normal.png x1",
+  "tile_m": 0.67
+ },
+ "textures/parts/bell_height.png": {
+  "depth_mm": 7.345,
+  "texel_mm": 1.953,
+  "method": "integrated from bell_normal.png x1",
+  "tile_m": 1.0
+ },
+ "textures/parts/foil_height.png": {
+  "depth_mm": 4.519,
+  "texel_mm": 0.977,
+  "method": "integrated from foil_normal.png x1",
+  "tile_m": 0.5
+ },
+ "textures/parts/interior_height.png": {
+  "depth_mm": 7.199,
+  "texel_mm": 1.953,
+  "method": "integrated from interior_normal.png x1",
+  "tile_m": 1.0
+ },
+ "textures/parts/markings_height.png": {
+  "depth_mm": 0.232,
+  "texel_mm": 2.0,
+  "method": "decal alpha as a paint film over the hull paint's grain"
+ },
+ "textures/parts/metal_height.png": {
+  "depth_mm": 3.231,
+  "texel_mm": 0.977,
+  "method": "integrated from metal_normal.png x1",
+  "tile_m": 0.5
+ },
+ "textures/parts/paint_height.png": {
+  "depth_mm": 3.549,
+  "texel_mm": 1.953,
+  "method": "integrated from paint_normal.png x1",
+  "tile_m": 1.0
+ },
+ "textures/parts/rubber_height.png": {
+  "depth_mm": 3.708,
+  "texel_mm": 0.977,
+  "method": "integrated from rubber_normal.png x1",
+  "tile_m": 0.5
+ },
+ "textures/parts/solar_height.png": {
+  "depth_mm": 2.509,
+  "texel_mm": 1.953,
+  "method": "integrated from solar_normal.png x1",
+  "tile_m": 1.0
+ },
+ "textures/parts/tiles_height.png": {
+  "depth_mm": 2.981,
+  "texel_mm": 0.977,
+  "method": "integrated from tiles_normal.png x1",
+  "tile_m": 0.5
+ },
+ "textures/parts/tread_height.png": {
+  "depth_mm": 11.835,
+  "texel_mm": 0.977,
+  "method": "integrated from tread_normal.png x1",
+  "tile_m": 0.5
+ },
+ "textures/props/rock_height.png": {
+  "depth_mm": 34.146,
+  "texel_mm": 1.221,
+  "method": "Rock051 displacement (CC0)",
+  "tile_m": 0.625
+ },
+ "textures/suit/decals_height.png": {
+  "depth_mm": 0.525,
+  "texel_mm": 1.0,
+  "method": "elements from their ground colour; a plain-weave ground"
+ },
+ "textures/suit/fabric_height.png": {
+  "depth_mm": 2.046,
+  "texel_mm": 0.488,
+  "method": "integrated from fabric_normal.png x1",
+  "tile_m": 0.25
+ },
+ "textures/suit/shell_height.png": {
+  "depth_mm": 0.452,
+  "texel_mm": 1.953,
+  "method": "integrated from shell_normal.png x0.7",
+  "tile_m": 0.5
+ },
+ "textures/tools/tool_decals_height.png": {
+  "depth_mm": 0.23,
+  "texel_mm": 1.2,
+  "method": "decal alpha as a paint film over the hull paint's grain"
+ },
+ "textures/vab/signs_height.png": {
+  "depth_mm": 11.337,
+  "texel_mm": 4.0,
+  "method": "plate regions from the generator; ink from the plate's two paints"
+ }
+}

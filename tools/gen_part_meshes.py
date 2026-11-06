@@ -1689,6 +1689,12 @@ def mat_ron(tex, color=(1, 1, 1), rough=1.0, metal=1.0, normal=1.0, extra="", hu
             f'                shading: Physical,\n            )')
 
 
+# the decal atlas's maps (tools/detail_maps.py): its roughness is the map's (0.58 over the paint)
+MARKINGS_MAPS = "".join(f"                {k}: {v},\n" for k, v in (
+    ("normal_map", f'Some("{TEX}markings_normal.png")'), ("normal_strength", "1.0"),
+    ("roughness_map", f'Some("{TEX}markings_orm.png")'), ("roughness", "1.0"),
+    ("metallic_map", f'Some("{TEX}markings_orm.png")'), ("metallic", "1.0"), ("ao_map", f'Some("{TEX}markings_orm.png")')))
+
 MATERIALS = {
     "Paint":    lambda: mat_ron("paint"),
     "Paint2":   lambda: mat_ron("paint", color=(0.9, 0.9, 0.88)),
@@ -1721,9 +1727,9 @@ MATERIALS = {
                       '                metallic: 0.0,\n                alpha: 0.32,\n'
                       '                shading: Physical,\n            )'),
     "Stencil": lambda: (f'(\n                color: (0.06, 0.06, 0.07),\n                texture: Some("{TEX}markings.png"),\n'
-                        '                roughness: 0.6,\n                metallic: 0.0,\n                shading: Physical,\n            )'),
+                        f'{MARKINGS_MAPS}                shading: Physical,\n            )'),
     "Decal": lambda: (f'(\n                color: (1.0, 1.0, 1.0),\n                texture: Some("{TEX}markings.png"),\n'
-                      '                roughness: 0.55,\n                metallic: 0.0,\n                shading: Physical,\n            )'),
+                      f'{MARKINGS_MAPS}                shading: Physical,\n            )'),
     "Cabin": lambda: mat_ron("interior", metal=0.0, hull=False),
     "Screen": lambda: (f'(\n                color: (1.0, 1.0, 1.0),\n                texture: Some("{TEX}interior_albedo.png"),\n'
                        '                unlit: true,\n                fog: false,\n            )'),

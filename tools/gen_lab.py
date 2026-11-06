@@ -1279,20 +1279,30 @@ def capsule():
 # the prefab
 # ═════════════════════════════════════════════════════════════════════════════
 
+def _maps(stem):
+    """A drawn surface's maps (tools/detail_maps.py, parts_pbr.py): roughness and metal are the ORM's."""
+    return "".join(f"                {k}: {v},\n" for k, v in (
+        ("normal_map", f'Some("{stem}_normal.png")'), ("normal_strength", "1.0"),
+        ("roughness_map", f'Some("{stem}_orm.png")'), ("roughness", "1.0"),
+        ("metallic_map", f'Some("{stem}_orm.png")'), ("metallic", "1.0"), ("ao_map", f'Some("{stem}_orm.png")')))
+
+
 def _mat(name):
     t = TEX
     M = {
         "LabWall": f'(\n                color: (1.0, 1.0, 1.0),\n                texture: Some("{t}wall_albedo.png"),\n'
-                   '                roughness: 0.42,\n                metallic: 0.0,\n                reflectivity: 0.35,\n'
+                   f'{_maps(t + "wall")}                reflectivity: 0.35,\n'
                    '                shading: Physical,\n            )',
         "LabFloor": f'(\n                color: (1.0, 1.0, 1.0),\n                texture: Some("{t}floor_albedo.png"),\n'
                     f'                normal_map: Some("{t}floor_normal.png"),\n                normal_strength: 0.6,\n'
                     f'                roughness_map: Some("{t}floor_orm.png"),\n                roughness: 1.0,\n'
+                    f'                metallic_map: Some("{t}floor_orm.png"),\n                ao_map: Some("{t}floor_orm.png"),\n'
                     '                metallic: 0.0,\n                reflectivity: 0.6,\n                shading: Physical,\n            )',
         "LabSteel": f'(\n                color: (1.0, 1.0, 1.0),\n                texture: Some("{t}steel_albedo.png"),\n'
                     f'                normal_map: Some("{t}steel_normal.png"),\n                normal_strength: 0.5,\n'
                     f'                roughness_map: Some("{t}steel_orm.png"),\n                roughness: 1.0,\n'
                     f'                metallic_map: Some("{t}steel_orm.png"),\n                metallic: 0.85,\n'
+                    f'                ao_map: Some("{t}steel_orm.png"),\n'
                     '                reflectivity: 0.6,\n                shading: Physical,\n            )',
         "LabResin": '(\n                color: (1.0, 1.0, 1.0),\n                roughness: 0.24,\n                metallic: 0.0,\n'
                     '                reflectivity: 0.7,\n                shading: Physical,\n            )',
@@ -1303,7 +1313,7 @@ def _mat(name):
         "LabScreen": f'(\n                color: (1.0, 1.0, 1.0),\n                texture: Some("{t}signs.png"),\n'
                      '                unlit: true,\n            )',
         "LabSign": f'(\n                color: (1.0, 1.0, 1.0),\n                texture: Some("{t}signs.png"),\n'
-                   '                roughness: 0.5,\n                metallic: 0.0,\n                reflectivity: 0.3,\n'
+                   f'{_maps(t + "signs")}                reflectivity: 0.3,\n'
                    '                shading: Physical,\n            )',
         "LabCapsuleCore": '(\n                color: (0.6, 0.6, 0.6),\n                roughness: 0.8,\n                metallic: 0.0,\n'
                           '                shading: Physical,\n            )',

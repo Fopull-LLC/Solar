@@ -79,8 +79,11 @@
                 texture: Some("textures/items/rope_static_albedo.png"),
                 normal_map: Some("textures/items/rope_static_normal.png"),
                 normal_strength: 1.0,
-                roughness: 0.95,
+                roughness_map: Some("textures/items/rope_static_orm.png"),
+                roughness: 1.0,
                 metallic: 0.0,
+                metallic_map: Some("textures/items/rope_static_orm.png"),
+                ao_map: Some("textures/items/rope_static_orm.png"),
                 shading: Physical,
             ),
             "Rubber": (

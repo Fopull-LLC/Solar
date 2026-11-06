@@ -268,6 +268,7 @@ SUIT_MATS = """            "SuitFabric": (
                 roughness: 0.7,
                 metallic_map: Some("textures/parts/metal_orm.png"),
                 metallic: 0.6,
+                ao_map: Some("textures/parts/metal_orm.png"),
                 shading: Physical,
             ),
             "SuitHead": (
@@ -280,8 +281,13 @@ SUIT_MATS = """            "SuitFabric": (
             "SuitDecal": (
                 color: (1.0, 1.0, 1.0),
                 texture: Some("textures/suit/decals.png"),
-                roughness: 0.8,
-                metallic: 0.0,
+                normal_map: Some("textures/suit/decals_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/suit/decals_orm.png"),
+                roughness: 1.0,
+                metallic_map: Some("textures/suit/decals_orm.png"),
+                metallic: 1.0,
+                ao_map: Some("textures/suit/decals_orm.png"),
                 shading: Physical,
             )"""
 

@@ -50,7 +50,7 @@ committed; nothing is written to textures/env_local and no local overlay is need
   parts/foil     0.5 m   512           crinkles, tape seam            Metal048C gold, its spots
   parts/tread    0.5 m   512           (the photo's own lozenges)     DiamondPlate008C, whole
   parts/rubber   tyre    512           chevron lugs, sipes, dust      Road010A fine grain
-  lab/wall       1 m     512 (albedo)  -                              Metal050A white enamel,
+  lab/wall       1 m     512           -                              Metal050A white enamel,
                                                                       Metal052C faint mottle
   lab/floor      1 m     512           -                              Road010A chips as a vinyl's
                                                                       fleck, Metal052C scuffs
@@ -368,7 +368,15 @@ def lab_wall():
     scr = np.clip(highpass(a["rough"], 1.2), 0, 4) / 4
     v = d * mot * (1 - 0.03 * scr)
     alb = np.stack([v, v, v * 0.995], 2)
-    return grade(alb, LAB_MEAN["wall"], 1.0), None, None, None, None
+    # its maps are the enamel set's own (tools/detail_maps.py, the maps pass): Metal050A's relief at
+    # its real size, its roughness held round the satin 0.42 the wall always had (the material's
+    # constant before it had a map), its AO; enamel is a dielectric
+    # (x6: the set is a polished enamel at 0.2 degrees median tilt, below an 8-bit map's step and flatter
+    # than every painted surface round it; x6 puts it with the paint: "nothing flatter than its neighbour")
+    nxy = fine(a["nxy"], N / 8) * 6.0
+    rough = match(0.42 + (a["rough"] - a["rough"].mean()) * 0.5 + 0.03 * scr, 0.42, 0.3, 0.6)
+    ao = 1 - 0.5 * (1 - a["ao"])
+    return grade(alb, LAB_MEAN["wall"], 1.0), nxy, ao, rough, np.zeros_like(rough)
 
 
 def lab_floor():
@@ -422,7 +430,7 @@ def lab_steel():
 # ── main ─────────────────────────────────────────────────────────────────────
 
 # (group, name, recipe, normal px, orm px): albedo sizes are the old ones (paint 1024, bell
-# 512 x 1024, the rest 512); paint keeps its 512 orm, the lab wall has no other maps
+# 512 x 1024, the rest 512); paint keeps its 512 orm
 PLAN = [
     ("parts", "paint", paint, 1024, 512),
     ("parts", "metal", metal, 512, 512),
@@ -432,7 +440,7 @@ PLAN = [
     ("parts", "foil", foil, 512, 512),
     ("parts", "tread", tread, 512, 512),
     ("parts", "rubber", rubber, 512, 512),
-    ("lab", "wall", lab_wall, None, None),
+    ("lab", "wall", lab_wall, 512, 512),
     ("lab", "floor", lab_floor, 512, 512),
     ("lab", "steel", lab_steel, 512, 512),
 ]

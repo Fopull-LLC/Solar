@@ -47,6 +47,7 @@
                 roughness: 1.0,
                 metallic_map: Some("textures/lab/steel_orm.png"),
                 metallic: 0.85,
+                ao_map: Some("textures/lab/steel_orm.png"),
                 reflectivity: 0.6,
                 shading: Physical,
             ),

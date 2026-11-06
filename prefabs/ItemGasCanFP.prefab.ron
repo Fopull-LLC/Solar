@@ -94,6 +94,7 @@
                 roughness: 0.7,
                 metallic_map: Some("textures/parts/metal_orm.png"),
                 metallic: 0.6,
+                ao_map: Some("textures/parts/metal_orm.png"),
                 shading: Physical,
             ),
         },

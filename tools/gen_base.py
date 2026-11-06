@@ -144,8 +144,14 @@ MATERIALS = {
     # Screens: font-rendered displays from the sign atlas, unlit.
     "Screen":   lambda: (f'(\n                color: (1.0, 1.0, 1.0),\n                texture: Some("{TEX}signs.png"),\n'
                          '                unlit: true,\n            )'),
+    # the plates' maps (tools/detail_maps.py): enamel 0.62, the legend's film, pressed edges
     "Sign":     lambda: (f'(\n                color: (1.0, 1.0, 1.0),\n                texture: Some("{TEX}signs.png"),\n'
-                         '                roughness: 0.62,\n                metallic: 0.05,\n                shading: Physical,\n            )'),
+                         + "".join(f"                {k}: {v},\n" for k, v in (
+                             ("normal_map", f'Some("{TEX}signs_normal.png")'), ("normal_strength", "1.0"),
+                             ("roughness_map", f'Some("{TEX}signs_orm.png")'), ("roughness", "1.0"),
+                             ("metallic_map", f'Some("{TEX}signs_orm.png")'), ("metallic", "1.0"),
+                             ("ao_map", f'Some("{TEX}signs_orm.png")')))
+                         + '                shading: Physical,\n            )'),
     # The intake's conveyor belt: worn rubber with chevron cleats that scroll
     # toward the hole (shaders/conveyor_belt.flsl; material_intake.lua feeds
     # `phase`, the metres the belt has run, so the cleats move with the load).

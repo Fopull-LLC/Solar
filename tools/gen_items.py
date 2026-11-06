@@ -49,7 +49,13 @@ MATS = {
                            '                shading: Physical,\n            )'),
     "ToolDecal":  lambda: ('(\n                color: (1.0, 1.0, 1.0),\n'
                            '                texture: Some("textures/tools/tool_decals.png"),\n'
-                           '                roughness: 0.6,\n                metallic: 0.0,\n'
+                           '                normal_map: Some("textures/tools/tool_decals_normal.png"),\n'
+                           '                normal_strength: 1.0,\n'
+                           '                roughness_map: Some("textures/tools/tool_decals_orm.png"),\n'
+                           '                roughness: 1.0,\n'
+                           '                metallic_map: Some("textures/tools/tool_decals_orm.png"),\n'
+                           '                metallic: 1.0,\n'
+                           '                ao_map: Some("textures/tools/tool_decals_orm.png"),\n'
                            '                shading: Physical,\n            )'),
 }
 
