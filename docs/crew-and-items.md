@@ -542,7 +542,7 @@ Crew aboard are reached through their craft's portraits, not the list.
 | Portrait right-click | The context menu for that member: helmet, pack, hand. The same `astro` provider, now with the member as its target. |
 | On-foot chip → **CONTROL** | `crew.control(id)`. A click on the chip does the same. |
 | `\` | Crew strip size: small → large → hidden. Saved in `opt_crewStrip`. |
-| Tracking Station ▸ crew row ▸ **GO TO** | Take control of an on-foot member out of range: the loading curtain, the same path as the game's scene restore. |
+| Tracking Station ▸ crew row ▸ **GO TO** | Take control of an on-foot member out of range: the loading curtain, the same path as the game's scene restore. **Built 2026-11-05**: `crew.switchToMember(id)` from the station card, the strip's **CREW ▸** picker, the pause menu's *Switch crew member…* and the roster's *Go to*; see docs/tracking-station.md §4. |
 
 The pause menu's key list gets these rows. Digits stay action groups in flight and the
 tool belt on foot. No modifier+digit chords are used, because Ctrl is held for
@@ -1375,10 +1375,11 @@ in full at the top of `scripts/crew.lua`.
   - Share O2;
   - the remains' "Recover the body";
   - the rep refund for bringing them home;
-  - the out-of-range Tracking Station GO TO;
+  - the out-of-range Tracking Station GO TO (built 2026-11-05: docs/tracking-station.md §4);
   - the "no hatch" refusal for a buried cabin (a blocked hatch falls back to
     the clear spot round the hull);
-  - the 0.35 s camera blend (WS2's planet_camera).
+  - the 0.35 s camera blend (WS2's planet_camera; built 2026-11-05 as
+    `planet_camera.handoff`).
 - **Proof**:
   - luajit: `smoke_crew_seats`, `smoke_crew_death` and `smoke_crew_migrate`;
   - in the engine: `tools/perf/crewprobe.sh` (crewpod, crewrover, crewsplit,

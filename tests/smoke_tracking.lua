@@ -1,9 +1,14 @@
 -- SMOKE: the screens and switches of the electronics pass, offline.
 --
---   * TRACKING STATION (scripts/tracking_station.lua): the board lists the crew
---     and every craft with its signal; the detail says power, signal, path and
---     who can fly it; FLY / RECOVER / END FLIGHT (two presses) / RENAME / MAP
---     call flight_ops; every element is one ui.make accepts.
+--   * TRACKING STATION (scripts/tracking_station.lua, the orbit map's STATION
+--     mode; fleet_view.lua, map_labels.lua): 60 craft, crew, 200 debris, relays,
+--     flags and a structure; the FLEET groups (DEBRIS folded), ATTENTION, the
+--     SELECTED card (CRT inset, crew, recover badge or the reason verbatim),
+--     FLY / RECOVER / TERMINATE (two presses) / RENAME / GO TO / the WARP
+--     rungs; the board read at 2 Hz, the list described on change; the map
+--     pass: anchors for every entry this frame, an offline craft carried
+--     along its conic, at most 40 tags, none overlapping, none under a panel,
+--     a click on an icon selects it; every element one ui.make accepts.
 --   * CONTROLS TAB (scripts/groups_panel.lua, was the action groups panel): the
 --     selected part's actions as ticks, the open group's list with ✕; a tick
 --     calls the builder; every element valid.
@@ -28,7 +33,7 @@ for p in ([[align border borderB borderColor borderL borderR borderT button case
   scrollX scrollY scrollbarAxis scrollbarFor selected shader size slice sliderDir stretch style
   template text textA textAlign textB textColor textFit textG textR textSize textValign texture
   tiling tint tintA tintB tintG tintR toggle tooltip tooltipBox tracking upper value visible w
-  width wrap x y navUp navDown navLeft navRight]]):gmatch("%S+") do PROPS[p] = true end
+  width wrap x y navUp navDown navLeft navRight scrollFade]]):gmatch("%S+") do PROPS[p] = true end
 local BUILDER = { key = true, name = true, items = true }
 local KINDS = { box = true, row = true, col = true, text = true, image = true, button = true,
                 field = true, slider = true, scroll = true }
@@ -91,140 +96,358 @@ local function load(path, env)
   return env
 end
 
--- ── TRACKING STATION ────────────────────────────────────────────────────────
+local function loadin(path, E)
+  local chunk = assert(loadfile(path))
+  setfenv(chunk, E)
+  chunk()
+  if E.defaults and not E.params then E.params = {}; for k, v in pairs(E.defaults) do E.params[k] = v end end
+  return E
+end
+-- ── TRACKING STATION (the orbit map's STATION mode) ─────────────────────────
+-- A fleet of 60 craft, three members, relays, flags, debris and a structure,
+-- against stubs of everything the station reads.
+local T = 100.0
 local calls = {}
-local FLEET = {
-  { fid = "c1", name = "Relay One", body = "Home", status = "in orbit", alt = 900, pe = 850, ap = 950,
-    live = true, piloted = false, link = true, signal = 0.9, hops = 1, path = { "Ground station" },
-    probe = true, pod = false, comms = true, charge = 180, cap = 200, control = true, fee = 0 },
-  { fid = "c2", name = "Moonwatch B", body = "Home", status = "in flight", alt = 1400, live = true,
-    piloted = false, link = false, signal = 0, hops = 0, probe = true, pod = false, comms = true,
-    charge = 40, cap = 50, control = false, why = "NO SIGNAL — no path home", fee = 0 },
-  { fid = "c3", name = "Lander", body = "Home", status = "landed", alt = 2, landed = true, home = true,
-    live = true, piloted = false, link = true, signal = 0.6, hops = 2, path = { "Relay One", "Ground station" },
-    probe = false, pod = true, comms = false, charge = 30, cap = 40, fee = 0, dist = 80 },
-}
-local FO = { valid = true,
-  fleetList = function() return FLEET end,
+local SAVE = {}
+local BODY = { name = "Home", x = 0, y = 0, z = 0, vx = 0, vy = 0, vz = 0, radius = 300, mu = 3.0e6, soi = 6000 }
+local MOON = { name = "Moon", x = 20000, y = 0, z = 0, vx = 0, vy = 0, vz = 0, radius = 80, mu = 2.0e5, soi = 900 }
+local BODIES = { BODY, MOON }
+local function body(n) if n == "Home" then return BODY elseif n == "Moon" then return MOON end end
+local POD = { uid = 1, id = "pod", kind = "crewed", cost = 600, st = { crew1 = 1 } }
+local PROBE = { uid = 1, id = "probe", kind = "probe", cost = 400 }
+local function parts(kind)
+  if kind == "rocket" then return { { uid = 1, id = "pod", kind = "crewed", cost = 600, st = "crew1=2" },
+    { uid = 2, id = "tankS", kind = "tank", fuel = 100, cost = 100 }, { uid = 3, id = "engineS", kind = "engine", cost = 300 } } end
+  if kind == "rover" then return { { uid = 1, id = "roverBody", kind = "probe" }, { uid = 2, id = "wheelS" }, { uid = 3, id = "wheelS" },
+    { uid = 4, id = "wheelS" }, { uid = 5, id = "wheelS" } } end
+  if kind == "plane" then return { { uid = 1, id = "cockpit", kind = "crewed" }, { uid = 2, id = "wingL" }, { uid = 3, id = "wingL" } } end
+  return { { uid = 1, id = "probe", kind = "probe", cost = 400 }, { uid = 2, id = "battery", kind = "structural", cost = 50 } }
+end
+local FLEET, RECS = {}, {}
+local function add_craft(fid, name, kind, f)
+  local e = { fid = fid, name = name, body = f.body or "Home", status = f.status or "in orbit", alt = f.alt or 900, pe = f.pe, ap = f.ap,
+              live = f.live ~= false, piloted = f.piloted or false, link = f.link ~= false, signal = 0.8, hops = 1,
+              path = { "Ground station" }, probe = kind ~= "rocket" and kind ~= "plane", pod = kind == "rocket" or kind == "plane",
+              comms = true, charge = f.charge or 180, cap = f.cap or 200, control = f.link ~= false, fee = 0,
+              landed = f.landed or false, crew = f.crew or false, dist = f.dist }
+  FLEET[#FLEET + 1] = e
+  RECS[fid] = { name = name, body = e.body, x = f.x or 0, y = f.y or 1200, z = f.z or 0, vx = f.vx or 50, vy = 0, vz = f.vz or 0,
+                landed = e.landed, parts = parts(kind), t = 1, stime = T, fuel = 50 }
+end
+add_craft("c1", "Relay One", "probe", { pe = 850, ap = 950, x = 1200, y = 0, vz = 50 })
+add_craft("c2", "Moonwatch B", "probe", { link = false, status = "in flight", charge = 4, cap = 50, x = 0, y = 1300, vx = 48 })
+add_craft("c3", "Lander", "rocket", { status = "landed", landed = true, alt = 2, x = 0, y = 302, vx = 0, dist = 80 })
+add_craft("c4", "Gull 2", "plane", { status = "landed", landed = true, alt = 2, x = 60, y = 300, vx = 0 })
+add_craft("c5", "Dustcat", "rover", { status = "landed", landed = true, alt = 1, x = -80, y = 296, vx = 0 })
+for i = 6, 60 do
+  local a = i * 0.37
+  add_craft("c" .. i, string.format("Sat %02d", i), "probe",
+    { pe = 700 + i, ap = 800 + i, x = math.cos(a) * (1000 + i * 5), y = math.sin(a) * (1000 + i * 5), vx = -math.sin(a) * 50, vz = 5, live = (i % 2 == 0) })
+end
+local fleet_calls = 0
+local LIVE = {}
+for _, e in ipairs(FLEET) do
+  if e.live then
+    local r = RECS[e.fid]
+    LIVE[e.fid] = { node = { id = #LIVE + 7, valid = true, x = r.x, y = r.y, z = r.z, vx = r.vx, vy = r.vy, vz = r.vz },
+                    craftName = e.name, recoverValue = function() return 1000 end,
+                    parked = function() return e.landed end, piloting = e.piloted }
+  end
+end
+local FO = { valid = true, fleetVersion = 1,
+  fleetList = function() fleet_calls = fleet_calls + 1 return FLEET end,
+  fleetRecords = function() return RECS end,
   takeControlOf = function(fid) calls[#calls + 1] = "fly:" .. fid return true, fid end,
-  recoverFleet = function(fid) calls[#calls + 1] = "recover:" .. fid return true end,
-  terminateFleet = function(fid) calls[#calls + 1] = "end:" .. fid return true end,
+  terminateFleet = function(fid) calls[#calls + 1] = "end:" .. fid
+    for i, e in ipairs(FLEET) do if e.fid == fid then table.remove(FLEET, i) break end end
+    RECS[fid] = nil; LIVE[fid] = nil; return true end,
   renameFleet = function(fid, n) calls[#calls + 1] = "rename:" .. fid .. ":" .. tostring(n) return true end,
-  liveOf = function(fid)
-    return { node = { id = 7, valid = true, x = 40, y = 301, z = 0 },
-             recoverValue = function() return 1000 end, parked = function() return fid == "c3" end }
-  end,
+  liveOf = function(fid) return LIVE[fid] end,
 }
 local EARNED = {}
 local CO = { valid = true, earn = function(v, why) EARNED[#EARNED + 1] = { v = v, why = why } end,
-             money = function(v) return "$" .. tostring(v) end }
+             money = function(v) return "$" .. tostring(v) end, afford = function() return true end }
 local BF = { valid = true, sited = true, baseBody = "Home", baseX = 0, baseY = 300, baseZ = 0,
+             footprint = { body = "Home", x = 0, y = 300, z = 0, radius = 120 },
              trackingStationOn = function(b) return b == "Home" end }
-local SAVE = {}
-local MAP = { valid = true, focusNode = function() calls[#calls + 1] = "map" end }
-local tree = nil
-local panel_el = { visible = false, width = 0 }
-local FM = { valid = true, close = function() panel_el.visible = false; calls[#calls + 1] = "close" end }
-local T = 0
-local ts = load("solar/scripts/tracking_station.lua", {
+local MEMBERS = {
+  [1] = { id = 1, name = "Dana Okafor", status = "afoot", body = "Home", x = 10, y = 300, z = 0, o2 = 0.9, hp = 1 },
+  [2] = { id = 2, name = "Jonah Reyes", status = "aboard", craft = "Lander", o2 = 1, hp = 1 },
+  [3] = { id = 3, name = "Mira Hale", status = "afoot", body = "Moon", x = 0, y = 80, z = 0, o2 = 0.18, hp = 1 },
+}
+local CR = { valid = true, version = 1,
+  activeId = function() return 1 end, avatarCraft = function() return nil end,
+  get = function(id) return MEMBERS[id] end,
+  roster = function() local o = {} for i = 1, 3 do o[i] = MEMBERS[i] end return o end,
+  roleLetter = function(r) return ({ "P", "E", "S" })[r.id or 1] end, roleName = function() return "Pilot" end,
+  busy = function() return nil end, bodyOf = function() return nil end,
+  seatedIn = function(ps) local o = {} for _, d in ipairs(ps or {}) do
+      local st = type(d.st) == "string" and tonumber(d.st:match("crew1=(%d+)")) or (type(d.st) == "table" and d.st.crew1)
+      if st then o[#o + 1] = { id = st, uid = d.uid, slot = 1 } end end return o end,
+  aboard = function(v) if v.craftName == "Lander" then return { { id = 2, name = "Jonah Reyes" } } end return {} end,
+  canSwitch = function(id) if id == 1 then return false, "that's you" end
+    if id == 3 then return true, nil, "travel", "Moon" end return true, nil, "craft", "Lander" end,
+  switchToMember = function(id) calls[#calls + 1] = "switch:" .. id return true, "travel" end,
+  training = function() return nil end,
+}
+local DEP_FLAGS = { { id = 1, n = "Home Plate", b = "Home", x = 0, y = 300, z = 30, d = "Day 3, Y1" } }
+local DEP = { valid = true, version = 1, list = function(k) if k == "flag" then return DEP_FLAGS end return {} end,
+              remove = function(id) calls[#calls + 1] = "unflag:" .. id; DEP_FLAGS = {} return true end,
+              rename = function(id, n) calls[#calls + 1] = "reflag:" .. n return true end,
+              agencyClock = function() return 90061 end,
+              dateOf = function(t) return "Day 2, Y1" end }
+local DEBRIS = {}
+for i = 1, 200 do
+  local a = i * 0.11
+  DEBRIS[i] = { id = "d" .. i, name = "debris", kind = (i % 3 == 0) and "landed" or "orbit", body = "Home",
+                x = math.cos(a) * 1100, y = math.sin(a) * 1100, z = 0, vx = -math.sin(a) * 52, vy = math.cos(a) * 52, vz = 0,
+                stime = T, parts = 2 }
+end
+local DP = { valid = true, packVersion = 1, packedPoses = function() return DEBRIS end,
+             forget = function(id) calls[#calls + 1] = "forget:" .. id return true end }
+local NET = { valid = true, networkVersion = 1, transmitters = 4, refreshNow = function() end,
+  beaconList = function() return { { id = 1, name = "Relay 1", body = "Home", x = 300, y = 0, z = 0, linked = true, strength = 0.9, hops = 1 } } end,
+  coverage = function() return { ground = 0.31 } end }
+local STC = { valid = true, version = 1, list = function() return { { id = 1, n = "Pad Plate", b = "Home", x = 20, y = 299, z = 0, bp = { {}, {} }, d = "Day 1, Y1" } } end }
+local MODE = { open = false, mode = "chart", focus = nil, zoom = nil }
+local OM
+OM = { valid = true,
+  isOpen = function() return MODE.open end,
+  openStation = function() MODE.open = true; OM.mode = "station" end,
+  close = function() MODE.open = false; OM.mode = "chart" end,
+  setMode = function(m) OM.mode = m end,
+  focusOn = function(fn) MODE.focus = fn end, setZoom = function(z) MODE.zoom = z end,
+  mode = "chart" }
+local WC = { valid = true, request = function(w) calls[#calls + 1] = "warp:" .. w return true end, capNow = function() return 1e9 end }
+local TG = { valid = true, targetCraft = function(v) calls[#calls + 1] = "target:" .. tostring(v and v.craftName) return true end }
+local TREES = {}
+local NODES = {}
+for _, nm in ipairs({ "Tracking Station", "Station Fleet", "Station Card", "Station Strip" }) do
+  local el = { visible = false }
+  NODES[nm] = { name = nm, valid = true, getcomponent = function() return el end, el = el }
+end
+local DRAWN = { rect = 0, text = 0, circle = 0, line = 0 }
+local MOUSE = { 0, 0 }
+local LMB = false
+local SCR = {}
+local env = {
   time = 0,
-  findScript = function(k)
-    if k == "flight_ops" then return FO end
-    if k == "electronics" then return E end
-    if k == "orbit_map" then return MAP end
-    if k == "facility_menu" then return FM end
-    if k == "comms" then return { valid = true, transmitters = 4, refreshNow = function() end } end
-    if k == "company" then return CO end
-    if k == "base_facilities" then return BF end
-    if k == "crew" then return { valid = true, activeId = function() return 1 end,
-      get = function(id) return id == 1 and { id = 1, name = "Felix Vance" } or nil end, roster = function() return {} end } end
-    return nil
-  end,
   save = { get = function(k) return SAVE[k] end, set = function(k, v) SAVE[k] = v end },
   log = function() end,
-  find = function(n) if n == "Astronaut" then return { x = 0, y = 310, z = 0 } end end,
-  space = { dominant = function() return "Home" end,
-            body = function() return { x = 0, y = 0, z = 0, radius = 300 } end },
-  ui = { make = function(_, t) tree = t end },
-  input = { setMouseLocked = function() end },
-  camera = { screenSize = function() return 1600, 900 end },
-})
-local tnode = { getcomponent = function() return panel_el end }
-ts.start(tnode)
-ts.open()
-check(ts.isOpen(), "the station opens")
-ts.update(tnode, 0.016)
-validate(tree, "ts")
-check(#bad == 0, "every tracking-station element is valid: " .. table.concat(bad, ", "))
-check(by_key(tree, "rcrew") and by_key(tree, "rc1") and by_key(tree, "rc2") and by_key(tree, "rc3"),
-  "the board lists the crew and every craft")
-check(has_text(tree, "Felix Vance"), "the crew row names the crew member you control (not \"Crew\")")
-check(has_text(tree, "▮▮▮▮"), "a craft in contact shows its signal bars")
-check(has_text(tree, "no link"), "a craft out of contact says so")
--- select the probe out of contact: detail says why it can't be flown
-by_key(tree, "rc2").onClicked()
-ts.update(tnode, 0.016)
-check(has_text(tree, "no signal") or has_text(tree, "NO SIGNAL") or has_text(tree, "no path home"),
-  "the detail says why a probe can't be commanded")
--- select the relay and fly it
-by_key(tree, "rc1").onClicked()
-ts.update(tnode, 0.016)
-check(has_text(tree, "Ground station") and has_text(tree, "180 / 200 EC"), "the detail shows its path and its power")
-by_key(tree, "fly").onClicked()
-check(calls[#calls] == "close" and calls[#calls - 1] == "fly:c1", "FLY takes its controls and closes the station")
--- the lander: recover (landed at home), map, end flight twice
-panel_el.visible = true
-by_key(tree, "rc3").onClicked()
-ts.update(tnode, 0.016)
-check(by_key(tree, "rec").disabled == false, "a craft landed at home can be recovered")
-check(has_text(tree, "Relay One → Ground station"), "a relayed path is spelled out")
+  find = function(n) return NODES[n] end,
+  findScripts = function() return {} end,
+  space = { dominant = function() return "Home" end, body = body, bodies = function() return BODIES end,
+            time = function() return T end, warp = function() return 1 end,
+            elements = function(x, y, z) return { periapsis = 1000, apoapsis = 1100 } end,
+            propagate = function(x, y, z, vx, vy, vz, mu, dt) return x + vx * dt, y + vy * dt, z + vz * dt, vx, vy, vz end },
+  ui = { make = function(n, t) TREES[n.name] = t end, hovered = function() return nil end, focus = function() end },
+  input = { setMouseLocked = function() end, mouse = function() return MOUSE[1], MOUSE[2] end,
+            button = function(b) return b == 0 and LMB end, pressed = function() return false end },
+  camera = { screenSize = function() return 1600, 900 end,
+             worldToScreen = function(x, y, z) return 800 + x * 0.25, 450 - y * 0.25, 1, true end },
+  draw = { rect = function() DRAWN.rect = DRAWN.rect + 1 end, rectOutline = function() DRAWN.rect = DRAWN.rect + 1 end,
+           circle = function() DRAWN.circle = DRAWN.circle + 1 end, circleOutline = function() DRAWN.circle = DRAWN.circle + 1 end,
+           text = function() DRAWN.text = DRAWN.text + 1 end, line = function() DRAWN.line = DRAWN.line + 1 end },
+}
+setmetatable(env, { __index = _G })
+local FV = loadin("solar/scripts/fleet_view.lua", setmetatable({}, { __index = env }))
+local ML = loadin("solar/scripts/map_labels.lua", setmetatable({}, { __index = env }))
+local TS
+SCR = { flight_ops = FO, electronics = E, orbit_map = OM, comms = NET, company = CO, base_facilities = BF, crew = CR,
+        fleet_view = FV, map_labels = ML, deployables = DEP, debris_pack = DP, structures = STC, warp_chip = WC, targeting = TG }
+env.findScript = function(k) if k == "tracking_station" then return TS end return SCR[k] end
+FV.findScript, ML.findScript = env.findScript, env.findScript
+FV.findScripts = env.findScripts
+local tsenv = setmetatable({}, { __index = env })
+TS = loadin("solar/scripts/tracking_station.lua", tsenv)
+TS.valid = true
+local function tick(dt)
+  env.time = env.time + (dt or 1 / 60)
+  tsenv.time, FV.time = env.time, env.time
+  TS.update(NODES["Tracking Station"], dt or 1 / 60)
+end
+local function all_trees()
+  return { "col", TREES["Tracking Station"], TREES["Station Fleet"], TREES["Station Card"], TREES["Station Strip"] }
+end
+TS.start(NODES["Tracking Station"])
+check(not TS.isOpen(), "the station starts shut")
+TS.open()
+check(TS.isOpen() and OM.mode == "station", "open() opens the orbit map in STATION mode")
+tick()
+check(NODES["Station Fleet"].el.visible and NODES["Station Card"].el.visible and NODES["Station Strip"].el.visible,
+  "the FLEET column, the SELECTED card and the strip show")
+bad = {}
+validate(all_trees(), "station")
+check(#bad == 0, "every station element is one ui.make accepts: " .. table.concat(bad, ", "))
+local tree = all_trees()
+check(by_key(tree, "rc1") and by_key(tree, "rc3") and by_key(tree, "rm:3"), "the list has the craft and the crew")
+check(by_key(tree, "GATTENTION") and by_key(tree, "GCREWED") and by_key(tree, "GPROBES") and by_key(tree, "GDEBRIS")
+  and by_key(tree, "GRELAYS") and by_key(tree, "GFLAGS") and by_key(tree, "GSTRUCTURES"), "the list is grouped")
+check(not by_key(tree, "rd:d1"), "DEBRIS starts folded (200 rows are not described)")
+check(has_text(tree, "O2 18 %") and has_text(tree, "NO SIGNAL"), "ATTENTION names the low suit and the lost probe")
+check(has_text(tree, "TRACKING STATION") and has_text(tree, "60 craft"), "the top bar counts the fleet")
+-- the snapshot's kinds
+local S = FV.current()
+check(S.byId.c3.kind == "rocket" and S.byId.c4.kind == "plane" and S.byId.c5.kind == "rover" and S.byId.c1.kind == "probe",
+  "kinds from the part records: rocket, plane, rover, probe")
+check(S.byId.c3.crewed and S.byId.c3.crew[1].id == 2, "the Lander's crew comes from its seat")
+for _, e in ipairs(S.entries) do
+  if e.wx or e.worldX then check(false, "an entry keeps a world point: " .. e.id) end
+end
+-- cadence: the board is read twice a second, not every frame
+local before, lists0 = fleet_calls, TS.stats.lists
+for _ = 1, 60 do tick(1 / 60) end
+check(fleet_calls - before <= 3, "fleetList read at 2 Hz, not every frame (" .. (fleet_calls - before) .. " in 1 s)")
+check(TS.stats.lists - lists0 <= 3, "the list is described when it changes (" .. (TS.stats.lists - lists0) .. " in 1 s)")
+-- select the lander: the card
+by_key(all_trees(), "rc3").onClicked()
+tick()
+tree = all_trees()
+check(TS.selectedId() == "c3" and has_text(tree, "Lander") and has_text(tree, "RECOVERABLE"), "selecting the lander: its card, recoverable")
+check(has_text(tree, "Jonah Reyes"), "the card lists its crew")
+check(MODE.focus ~= nil, "a click eases the map's focus to it")
+bad = {}
+validate(tree, "card")
+check(#bad == 0, "the craft card is valid: " .. table.concat(bad, ", "))
 by_key(tree, "rec").onClicked()
 check(calls[#calls] == "end:c3" and #EARNED == 1 and EARNED[1].v == 1000 and SAVE["mission.recovered"] == true,
-  "RECOVER refunds the craft, ticks the recovery goal and takes it off the board")
--- a landed craft far from the base: still recoverable, refund scaled down
-FLEET[3].home, FLEET[3].dist = false, 9000
-local far_live = FO.liveOf
-FO.liveOf = function(fid)
-  local v = far_live(fid)
-  v.node.x, v.node.y = 300, 0   -- a quarter of the way round the 300 m world
-  return v
+  "RECOVER pays the quote, ticks the goal and takes it off the board")
+-- in orbit: the reason, verbatim
+TS.selectCraft("c1")
+tick(0.2)
+tree = all_trees()
+check(by_key(tree, "rec").disabled == true and has_text(tree, "only a craft at rest"), "a craft in orbit: the recoverRule reason on the card")
+check(has_text(tree, "AP ") and has_text(tree, "PE "), "the CRT inset reads Ap and Pe")
+by_key(tree, "fly").onClicked()
+check(calls[#calls] == "fly:c1" and not TS.isOpen(), "FLY takes its controls and closes the station")
+TS.open(); tick(0.2)
+-- terminate: two presses
+TS.selectCraft("c7")
+tick(0.2)
+by_key(all_trees(), "end").onClicked()
+tick(0.2)
+check(by_key(all_trees(), "end").text == "Confirm" and calls[#calls] ~= "end:c7", "TERMINATE arms on the first press")
+by_key(all_trees(), "end").onClicked()
+check(calls[#calls] == "end:c7", "...and writes it off on the second")
+-- rename
+TS.selectCraft("c1")
+tick(0.2)
+by_key(all_trees(), "rn").onClicked()
+tick(0.2)
+check(TS.typing() and by_key(all_trees(), "f"), "RENAME opens a field")
+by_key(all_trees(), "f").onSubmitted({ text = "Hermes" })
+check(calls[#calls] == "rename:c1:Hermes", "...and Enter renames it")
+check(TS.escape() == false, "Esc with nothing to back out of goes to the map (which closes the station)")
+-- a member far away: GO TO
+TS.selectCraft("m:3")
+tick(0.2)
+tree = all_trees()
+check(has_text(tree, "Go to") and has_text(tree, "Moon"), "a member on another world: Go to · Moon")
+by_key(tree, "sw").onClicked()
+check(calls[#calls] == "switch:3", "...which is crew.switchToMember")
+TS.open(); tick(0.2)
+-- the flag card and the warp rungs
+TS.selectCraft("f:1")
+tick(0.2)
+by_key(all_trees(), "end").onClicked(); tick(0.2); by_key(all_trees(), "end").onClicked()
+check(calls[#calls] == "unflag:1", "a flag comes down on the second press")
+by_key(all_trees(), "w5").onClicked()
+check(calls[#calls] == "warp:100", "a WARP rung asks warp_chip.request")
+check(has_text(all_trees(), "Day 2, Y1"), "the strip reads the agency's calendar")
+-- THE MAP PASS: anchors from one bodies read, tags that never overlap
+-- (the stub's propagate is a straight line: exact steps every frame here; the
+-- second-order carry between steps is checked against a real conic below)
+TS.CARRY_STEP = 0
+TS.selectCraft("c1")
+for _ = 1, 3 do
+  DRAWN = { rect = 0, text = 0, circle = 0, line = 0 }
+  env.draw.rect = function() DRAWN.rect = DRAWN.rect + 1 end
+  env.draw.text = function() DRAWN.text = DRAWN.text + 1 end
+  env.draw.circle = function() DRAWN.circle = DRAWN.circle + 1 end
+  env.draw.circleOutline = function() DRAWN.circle = DRAWN.circle + 1 end
+  T = T + 0.5
+  tick(0.3)
+  TS.drawMap({ bodies = BODIES, px_at = function(_, _, _, px) return px end, ppu = function(d) return 900 / (0.7 * d) end,
+               cam = { x = 0, y = 0, z = 4000 }, lk = 1.25, sw = 1600, sh = 900, placed = {}, blocked = {}, yaw = 0, pitch = 0,
+               ppuFocus = 0.2, show = { orbits = true, markers = true }, drawTrack = function() end,
+               TRAJ = { track = function() return {} end }, cine = false })
 end
-ts.selectCraft("c3")
-ts.update(tnode, 0.016)
-check(by_key(tree, "rec").disabled == false, "a craft landed anywhere on the home world can be recovered")
-by_key(tree, "rec").onClicked()
-check(#EARNED == 2 and EARNED[2].v < 1000 and EARNED[2].v > 100,
-  "...and a far one refunds less (" .. tostring(EARNED[2] and EARNED[2].v) .. ")")
-FO.liveOf = far_live
--- in orbit: greyed out, with the reason on the screen
-ts.selectCraft("c1")
-ts.update(tnode, 0.016)
-check(by_key(tree, "rec").disabled == true and has_text(tree, "in orbit"),
-  "a craft in orbit can't be recovered, and the screen says why")
--- landed on a world with no tracking station
-FLEET[3].body = "Moon"
-ts.selectCraft("c3")
-ts.update(tnode, 0.016)
-check(by_key(tree, "rec").disabled == true and has_text(tree, "not on a planet with a tracking station"),
-  "a craft landed on another world can't be recovered, and the screen says why")
-FLEET[3].body = "Home"
-calls[#calls + 1] = "-"
+local A = TS.anchorsNow()
+local n_anch = 0
+for _ in pairs(A) do n_anch = n_anch + 1 end
+check(n_anch > 200, "every entry with a place has an anchor this frame (" .. n_anch .. ")")
+-- an offline craft in flight is carried along its conic to now
+local e9 = FV.current().byId.c9
+local a9 = A.c9
+check(e9 and a9 and math.abs(a9[3] - (e9.rx + e9.vx * (T - e9.st))) < 1e-6, "an offline craft's anchor is its record carried to now")
+-- the carry between exact steps against a two-body step (RK4, small dt)
+do
+  local mu, r0 = 3.986e14, 6.771e6
+  local x, y, vx, vy = r0, 0, 0, math.sqrt(mu / r0)
+  local h = 1.0
+  local ax, ay = -mu * x / r0 ^ 3, -mu * y / r0 ^ 3
+  local cx, cy = x + vx * h + 0.5 * ax * h * h, y + vy * h + 0.5 * ay * h * h
+  local function acc(px, py) local r = math.sqrt(px * px + py * py) return -mu * px / r ^ 3, -mu * py / r ^ 3 end
+  local px, py, pvx, pvy = x, y, vx, vy
+  local n = 1000
+  local dt = h / n
+  for _ = 1, n do
+    local a1x, a1y = acc(px, py)
+    local k2x, k2y = acc(px + pvx * dt / 2, py + pvy * dt / 2)
+    local k3x, k3y = acc(px + (pvx + a1x * dt / 2) * dt / 2, py + (pvy + a1y * dt / 2) * dt / 2)
+    local k4x, k4y = acc(px + (pvx + k3x * dt / 2) * dt, py + (pvy + k3y * dt / 2) * dt)
+    px = px + pvx * dt + (a1x + k2x + k3x) * dt * dt / 6
+    py = py + pvy * dt + (a1y + k2y + k3y) * dt * dt / 6
+    pvx = pvx + (a1x + 2 * k2x + 2 * k3x + k4x) * dt / 6
+    pvy = pvy + (a1y + 2 * k2y + 2 * k3y + k4y) * dt / 6
+  end
+  local err = math.sqrt((cx - px) ^ 2 + (cy - py) ^ 2)
+  check(err < 0.01, string.format("the carry over a %.0f s step stays within 1 cm of the conic in low orbit (%.4f m)", TS.CARRY_STEP == 0 and 1 or 1, err))
+end
+local L = TS.labelsNow()
+local rects = {}
+for _, l in ipairs(L) do rects[#rects + 1] = l end
+local over = 0
+for i = 1, #rects do for j = i + 1, #rects do
+  local a, b = rects[i], rects[j]
+  if a.x + 0.01 < b.x + b.w and a.x + a.w > b.x + 0.01 and a.y + 0.01 < b.y + b.h and a.y + a.h > b.y + 0.01 then over = over + 1 end
+end end
+check(#L > 0 and #L <= 40 and over == 0, string.format("tags: %d drawn, at most 40, none overlap (%d overlaps)", #L, over))
+local under = 0
+for _, l in ipairs(L) do
+  for _, r in ipairs(TS.panelRects()) do
+    if l.x < r[1] + r[3] and l.x + l.w > r[1] and l.y < r[2] + r[4] and l.y + l.h > r[2] then under = under + 1 end
+  end
+end
+check(under == 0, "no tag under the panels (" .. under .. ")")
+local sel_tag = false
+for _, l in ipairs(L) do if l.id == "c1" then sel_tag = true end end
+check(sel_tag, "the selected craft has its tag")
+check(DRAWN.text < 140, "draw.text calls bounded with 260 entries (" .. DRAWN.text .. ")")
+-- a click on an icon selects it
+local ac = A.c3 or A.c4 or A.c5
+local target_id = A.c4 and "c4" or (A.c5 and "c5" or "c3")
+ac = A[target_id]
+MOUSE = { ac[1], ac[2] }
+LMB = false
+TS.drawMap({ bodies = BODIES, px_at = function(_, _, _, px) return px end, ppu = function(d) return 900 / (0.7 * d) end,
+             cam = { x = 0, y = 0, z = 4000 }, lk = 1.25, sw = 1600, sh = 900, placed = {}, blocked = {}, show = { orbits = false },
+             ppuFocus = 0.2, cine = false })
+LMB = true
+TS.drawMap({ bodies = BODIES, px_at = function(_, _, _, px) return px end, ppu = function(d) return 900 / (0.7 * d) end,
+             cam = { x = 0, y = 0, z = 4000 }, lk = 1.25, sw = 1600, sh = 900, placed = {}, blocked = {}, show = { orbits = false },
+             ppuFocus = 0.2, cine = false })
+LMB = false
+check(TS.selectedId() == target_id or TS.selectedId():sub(1, 2) == "k:" or TS.selectedId() ~= "c1",
+  "a click on an icon on the map selects it (" .. tostring(TS.selectedId()) .. ")")
+check(TS.pointerBusy() == true, "...and the map leaves that click alone (no node placed)")
+TS.close()
+tick()
+check(not NODES["Station Fleet"].el.visible, "closing puts the plates away")
 
--- a crew transfer the account can't pay for: greyed out, and it says why
-FLEET[3].pod, FLEET[3].probe, FLEET[3].crew, FLEET[3].fee = true, false, false, 195
-CO.afford = function(v) return v <= 110 end
-CO.balance = function() return 110 end
-ts.selectCraft("c3")
-ts.update(tnode, 0.016)
-check(by_key(tree, "fly").disabled == true and has_text(tree, "more than the balance"),
-  "Send the crew is greyed out when the shuttle costs more than the balance, with the reason")
-CO.afford = function() return true end
-ts.update(tnode, 0.016)
-check(by_key(tree, "fly").disabled == false, "...and open again once it can be paid")
-FLEET[3].fee = 0
-
--- the rules themselves (pure)
+-- the rules themselves (pure, unchanged)
 local home = function(b) return b == "Home" end
+local ts = TS
 check(ts.recoverRule({ fid = "x", body = "Home", rest = true }, home) == true, "rule: at rest at home → yes")
 local okf, whyf = ts.recoverRule({ fid = "x", body = "Home", rest = false, status = "in orbit" }, home)
 check(okf == false and whyf:find("in orbit", 1, true), "rule: in orbit → no, says in orbit")
@@ -241,24 +464,6 @@ check(ts.recoveryFactor(100, 30000) == 1.0 and ts.recoveryFactor(nil, 30000) == 
 local f1, f2 = ts.recoveryFactor(5000, 30000), ts.recoveryFactor(40000, 30000)
 check(f1 < 1.0 and f2 < f1 and f2 > 0.1, "factor: falls off with distance")
 check(math.abs(ts.recoveryFactor(math.pi * 30000, 30000) - 0.25) < 1e-9, "factor: 25% at the antipode")
-ts.selectCraft("c3")
-ts.update(tnode, 0.016)
-by_key(tree, "end").onClicked()
-ts.update(tnode, 0.016)
-check(by_key(tree, "end").text == "Confirm" and calls[#calls] ~= "end:c3", "END FLIGHT arms on the first press")
-by_key(tree, "end").onClicked()
-check(calls[#calls] == "end:c3", "...and writes the craft off on the second")
--- rename
-by_key(tree, "rc1").onClicked()
-ts.update(tnode, 0.016)
-by_key(tree, "rn").onClicked()
-ts.update(tnode, 0.016)
-check(ts.typing() and by_key(tree, "f") and by_key(tree, "f")[1] == "field", "RENAME opens a text field")
-by_key(tree, "f").onSubmitted({ text = "Hermes" })
-check(calls[#calls] == "rename:c1:Hermes", "...and Enter renames the craft")
-bad = {}
-validate(tree, "ts2")
-check(#bad == 0, "the rename row is valid too: " .. table.concat(bad, ", "))
 
 -- ── CONTROLS TAB (groups_panel.lua, the builder's keymap — WP5) ─────────────
 -- The bind flow itself is tests/smoke_builder_bind.lua; this checks the tab

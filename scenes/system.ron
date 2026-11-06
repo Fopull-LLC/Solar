@@ -2893,6 +2893,8 @@
             ],
             id: Some(90),
         ),
+        // the Tracking Station: the orbit map's STATION mode (F2, the dish) — its top bar,
+        // the fleet snapshot and the tag layout (docs/tracking-station.md); its other plates follow
         (
             name: "Tracking Station",
             transform: (
@@ -2907,25 +2909,105 @@
                     enabled: true,
                     params: [],
                 ),
+                (
+                    kind: "fleet_view",
+                    enabled: true,
+                    params: [],
+                ),
+                (
+                    kind: "map_labels",
+                    enabled: true,
+                    params: [],
+                ),
             ],
             id: Some(91),
             parent_id: Some(16),
             parent: Some(15),
             ui: Some((
-                place: Pin(
-                    anchor: Center,
-                    offset: (0.0, 0.0),
+                place: Stretch(
+                    min: (0.0, 0.0),
+                    max: (1.0, 1.0),
+                    margin: (0.0, 0.0, 0.0, 0.0),
                 ),
-                size: (Fixed(900.0), Fit),
-                stack: Some((
-                    dir: Column,
-                    gap: 0.0,
-                    pad: 0.0,
-                    align: Start,
-                    justify: Start,
-                )),
+                size: (Pct(1.0), Pct(1.0)),
                 visible: false,
                 opacity: 1.0,
+                order: 2,
+            )),
+        ),
+        (
+            name: "Station Fleet",
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Empty,
+            scripts: [
+            ],
+            id: Some(653),
+            parent_id: Some(16),
+            parent: Some(15),
+            ui: Some((
+                place: Stretch(
+                    min: (0.0, 0.0),
+                    max: (1.0, 1.0),
+                    margin: (0.0, 0.0, 0.0, 0.0),
+                ),
+                size: (Pct(1.0), Pct(1.0)),
+                visible: false,
+                opacity: 1.0,
+                order: 2,
+            )),
+        ),
+        (
+            name: "Station Card",
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Empty,
+            scripts: [
+            ],
+            id: Some(654),
+            parent_id: Some(16),
+            parent: Some(15),
+            ui: Some((
+                place: Stretch(
+                    min: (0.0, 0.0),
+                    max: (1.0, 1.0),
+                    margin: (0.0, 0.0, 0.0, 0.0),
+                ),
+                size: (Pct(1.0), Pct(1.0)),
+                visible: false,
+                opacity: 1.0,
+                order: 2,
+            )),
+        ),
+        (
+            name: "Station Strip",
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Empty,
+            scripts: [
+            ],
+            id: Some(655),
+            parent_id: Some(16),
+            parent: Some(15),
+            ui: Some((
+                place: Stretch(
+                    min: (0.0, 0.0),
+                    max: (1.0, 1.0),
+                    margin: (0.0, 0.0, 0.0, 0.0),
+                ),
+                size: (Pct(1.0), Pct(1.0)),
+                visible: false,
+                opacity: 1.0,
+                order: 2,
             )),
         ),
         (

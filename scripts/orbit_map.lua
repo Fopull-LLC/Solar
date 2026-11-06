@@ -146,6 +146,24 @@ local function subject_vessel()
 end
 
 map_view = false -- published: planet_camera stands down while this is true
+-- The map's two densities (docs/tracking-station.md §0): "chart" (M: the
+-- legend, the conics, the node) or "station" (F2: the Tracking Station —
+-- scripts/tracking_station.lua draws its icons, tags and panels in this pass).
+mode = "chart"
+-- The station's hooks, kept in one global table (update_map3d is near Lua's
+-- upvalue ceiling): fn = the focus provider (this frame's point), ex/ey/ez =
+-- the focus ease (an offset that decays to zero), last = last frame's focus.
+ST = { fn = nil, ex = 0, ey = 0, ez = 0, last = nil, ease = false, ts = nil, miss = -10 }
+local function station_ref()
+  local t = ST.ts
+  if t and t.valid ~= false then return t end
+  if (time or 0) - ST.miss < 2.0 then return nil end
+  t = findScript and findScript("tracking_station") or nil
+  ST.ts = t
+  if not t then ST.miss = time or 0 end
+  return t
+end
+STATION_REF = station_ref
 local map_focus, map_zoom = 1, nil -- focus 1 = THE SHIP, 2.. = bodies
 local map_hud_t = -10.0
 -- The SOI ring that is on but bigger than the view this frame (the legend says so).
@@ -1107,6 +1125,10 @@ function mnvFrame(bodies, px_at, lk, oe, vref)
   local mx, my = input.mouse()
   local cm = gz_ref("context_menu")
   local ui_busy = (cm and cm.ownsMouse and cm.ownsMouse()) or false
+  if not ui_busy and mode == "station" then
+    local ts = STATION_REF()
+    ui_busy = (ts and ts.pointerBusy and ts.pointerBusy()) or false
+  end
   local now = space.time()
   local G = gizmo_geo(bodies, px_at, lk)
   local hot = (not ui_busy) and gizmo_hit(G, mx, my) or nil
@@ -1356,16 +1378,20 @@ local function update_map3d(node, dt)
   if not cam_node then cam_node = find("Camera 1") end
   local bodies = space.bodies()
   local nf = #bodies + 1 -- focus slots: the SHIP first, then every body
-  if input.pressed("tab") then
+  local typing_ = mode == "station" and ST.ts and ST.ts.valid ~= false and ST.ts.typing and ST.ts.typing()
+  if input.pressed("tab") and not typing_ then
+    ST.fn = nil
     map_focus = map_focus % nf + 1
     zoom_target = nil -- re-fit, and ease there from where the view is now
     map_offx, map_offy, map_offz = 0.0, 0.0, 0.0
   end
   if map_focus > nf then map_focus = 1 end
-  if input.pressed("1") then map_show.orbits = not map_show.orbits end
-  if input.pressed("2") then map_show.soi = not map_show.soi end
-  if input.pressed("3") then map_show.markers = not map_show.markers end
-  if input.pressed("4") then map_show.links = not map_show.links end
+  if not typing_ then
+    if input.pressed("1") then map_show.orbits = not map_show.orbits end
+    if input.pressed("2") then map_show.soi = not map_show.soi end
+    if input.pressed("3") then map_show.markers = not map_show.markers end
+    if input.pressed("4") then map_show.links = not map_show.links end
+  end
 
   -- Focusing a body (TAB) used to stream ITS real terrain in (terrain.warm),
   -- a full background generation for a look. far_bodies' impostor now draws
@@ -1380,7 +1406,13 @@ local function update_map3d(node, dt)
   if fb_ref and fb_ref.valid ~= false and fb_ref.focus then fb_ref.focus(fbody) end
   local focus, fname, fradius
   if focus_override and not focus_override.valid then focus_override = nil end
-  if map_focus == 1 and focus_override then
+  local sfx_, sfy_, sfz_, sfn_ = nil, nil, nil, nil
+  if map_focus == 1 and ST.fn and mode == "station" then sfx_, sfy_, sfz_, sfn_ = ST.fn(bodies) end
+  if sfx_ then
+    focus = { x = sfx_, y = sfy_, z = sfz_ }
+    fname = sfn_ or "SELECTED"
+    fradius = 6
+  elseif map_focus == 1 and focus_override then
     focus = { x = focus_override.x, y = focus_override.y, z = focus_override.z }
     fname = focus_override.name or "CRAFT"
     fradius = 6
@@ -1397,6 +1429,22 @@ local function update_map3d(node, dt)
     focus = bodies[map_focus - 1]
     fname, fradius = focus.name, focus.radius
   end
+  -- The station's focus EASES to a new selection: the jump becomes an offset
+  -- (this frame's two points) that decays to nothing (rule 7: smooth the
+  -- offset, never a world point).
+  local ek = math.exp(-7 * dt)
+  ST.ex, ST.ey, ST.ez = ST.ex * ek, ST.ey * ek, ST.ez * ek
+  if ST.ease and ST.last then
+    ST.ex, ST.ey, ST.ez = ST.last.x - focus.x, ST.last.y - focus.y, ST.last.z - focus.z
+    -- (a jump across worlds is a cut, not a glide: rule 7's snap)
+    if math.sqrt(ST.ex ^ 2 + ST.ey ^ 2 + ST.ez ^ 2) > (map_zoom or 1e9) * 4 then ST.ex, ST.ey, ST.ez = 0, 0, 0 end
+  end
+  ST.ease = false
+  if math.abs(ST.ex) + math.abs(ST.ey) + math.abs(ST.ez) > 1e-3 then
+    focus = { x = focus.x + ST.ex, y = focus.y + ST.ey, z = focus.z + ST.ez, name = focus.name, radius = focus.radius,
+              soi = focus.soi, mu = focus.mu }
+  end
+  ST.last = { x = focus.x, y = focus.y, z = focus.z }
   -- The world the comms coverage tint is drawn on: the focused body, else the
   -- one the focus (you, your craft) is in.
   if map_focus > 1 then
@@ -1459,7 +1507,8 @@ local function update_map3d(node, dt)
   end
   local sc = input.scroll()
   -- (the wheel over the node's gizmo is the node's: mnvFrame, GZ.hot)
-  if sc and sc ~= 0 and not GZ.hot then zoom_target = zoom_target * math.exp(-sc * 0.12) end
+  local st_busy = mode == "station" and ST.ts and ST.ts.valid ~= false and ST.ts.ownsPointer and ST.ts.ownsPointer()
+  if sc and sc ~= 0 and not GZ.hot and not st_busy then zoom_target = zoom_target * math.exp(-sc * 0.12) end
   if input.key("up") then zoom_target = zoom_target * math.exp(-1.5 * dt) end
   if input.key("down") then zoom_target = zoom_target * math.exp(1.5 * dt) end
   zoom_target = math.max(fradius * 1.6, math.min(zoom_target, zoom_max()))
@@ -1518,6 +1567,13 @@ local function update_map3d(node, dt)
     if n and n.uiRect then
       local x, y, w, h = n:uiRect()
       if x then blocked[#blocked + 1] = { x - 6, y - 6, w + 12, h + 12 } end
+    end
+  end
+  -- (and the Tracking Station's plates, in its mode: draw.* paints over the UI)
+  if mode == "station" then
+    local ts = station_ref()
+    if ts and ts.panelRects then
+      for _, r in ipairs(ts.panelRects()) do blocked[#blocked + 1] = { r[1] - 4, r[2] - 4, r[3] + 8, r[4] + 8 } end
     end
   end
   -- (and an open right-click menu: a world's tag drew over its rows)
@@ -1626,7 +1682,12 @@ local function update_map3d(node, dt)
   end
   -- Every craft's own conic: the one flown (or opened from the Tracking
   -- Station) bright, the rest dimmed.
-  drawCraftTracks(craft_flying and vc or nil, focus_override, px_at, label, lk, map_show)
+  local picked_ = focus_override
+  if mode == "station" then
+    local ts = station_ref()
+    picked_ = ts and ts.pickedNode and ts.pickedNode() or nil
+  end
+  drawCraftTracks(craft_flying and vc or nil, picked_, px_at, label, lk, map_show)
   if map_show.markers then
     draw_cross(node.x, node.y, node.z, px_at(node.x, node.y, node.z, 6), 0.6, 1.0, 0.7)
   end
@@ -1635,6 +1696,16 @@ local function update_map3d(node, dt)
   mapComms(node, px_at, label, lk, map_show)
   -- THE TARGET (scripts/targeting.lua): its ring, distance, closest approach.
   if map_show.markers then mapTarget(node, px_at, label, lk) end
+  if mode == "station" then
+    local ts = station_ref()
+    if ts and ts.drawMap then
+      local sw_ = camera and camera.screenSize and select(1, camera.screenSize()) or 1280
+      ts.drawMap({ bodies = bodies, px_at = px_at, ppu = ppu, cam = { x = ccx, y = ccy, z = ccz }, lk = lk,
+                   sw = sw_, sh = sh, placed = placed, blocked = blocked, yaw = map_yaw2, pitch = map_pitch2,
+                   ppuFocus = ppu(map_zoom), show = map_show, drawTrack = drawTrack, TRAJ = TRAJ, label = label,
+                   cine = cineHidden(), busy = gizmoBusy or (input.button(1) == true) })
+    end
+  end
 
   -- ---- maneuver-node planning (KSP) --------------------------------------
   -- Plan a burn and watch the resulting orbit — and where it drops you into
@@ -1753,7 +1824,10 @@ local function update_map3d(node, dt)
   if craft_flying then mnvDraw(bodies, px_at, lk, vc) end
 
   -- Focused-body info panel (the flight HUD stands down while the map is open).
-  if time - map_hud_t >= 0.1 then
+  -- (In STATION mode the legend's keys live on the station's bottom strip.)
+  if mode == "station" then
+    if map_hud_t > -5 then set_hud(nil, nil); map_hud_t = -10.0 end
+  elseif time - map_hud_t >= 0.1 then
     map_hud_t = time
     local lines = {}
     -- Which mode has the stick, said first and said plainly. In FLY the six
@@ -2262,6 +2336,7 @@ end
 
 function mapComms(subject, px_at, label, lk, show)
   if not show.links and not show.markers then return end
+  local station = mode == "station"   -- (the station draws craft, relays and flags itself)
   if not comms_ref or not comms_ref.valid then comms_ref = findScript("comms") end
   local net = comms_ref
   if not net then return end
@@ -2291,9 +2366,9 @@ function mapComms(subject, px_at, label, lk, show)
     end
     depth(true)
   end
-  local cov = show.links and map_coverage(net, px_at) or nil
-  if show.links then map_relay_sats(net, px_at, label, lk, at) end
-  if cov and label and camera and camera.screenSize then
+  local cov = (show.links and not station) and map_coverage(net, px_at) or nil
+  if show.links and not station then map_relay_sats(net, px_at, label, lk, at) end
+  if cov and label and not station and camera and camera.screenSize then
     local sw, sh = camera.screenSize()
     if sw then
       local held = ""
@@ -2325,7 +2400,7 @@ function mapComms(subject, px_at, label, lk, show)
   end
   -- RELAY BEACONS: a small upright triangle each, teal with a path home,
   -- red without, and its name.
-  if (show.markers or show.links) and net.beaconList and camera and camera.worldToScreen then
+  if not station and (show.markers or show.links) and net.beaconList and camera and camera.worldToScreen then
     for _, e in ipairs(net.beaconList()) do
       if e.x then
         local s = px_at(e.x, e.y, e.z, 6)
@@ -2349,7 +2424,7 @@ function mapComms(subject, px_at, label, lk, show)
   -- THE AGENCY'S FLAGS (scripts/deployables.lua): a short pole with a pennant
   -- in signal orange, and its name — the Tracking Station's MAP lands here.
   local dep = findScript and findScript("deployables")
-  if show.markers and dep and dep.list and camera and camera.worldToScreen then
+  if show.markers and not station and dep and dep.list and camera and camera.worldToScreen then
     for _, f in ipairs(dep.list("flag")) do
       if f.gx then
         local gb = space.body(f.b)
@@ -2378,7 +2453,7 @@ function mapComms(subject, px_at, label, lk, show)
       draw.ring(sx, sy, sz, 0, 1, 0, px_at(sx, sy, sz, 7), 0.35, 0.95, 0.85, 1.0)
     end
     for id, n in pairs(live) do
-      if not flown[id] then
+      if not flown[id] and not station then
         local s = px_at(n.x, n.y, n.z, 5)
         local st = net.statusOf and net.statusOf(id)
         local c = (st and st.connected) and { 0.55, 0.95, 0.85 } or { 1.0, 0.55, 0.45 }
@@ -2500,10 +2575,41 @@ function focusNode(n)
   map_offx, map_offy, map_offz = 0.0, 0.0, 0.0
 end
 
+-- THE STATION (F2, the pause menu, the dish): the map in STATION mode,
+-- opened if it is shut. setMode swaps the density with the map up.
+function openStation()
+  if not map_view then toggle() end
+  setMode("station")
+end
+function setMode(m)
+  m = (m == "station") and "station" or "chart"
+  if m == mode then return end
+  mode = m
+  planning = planning and m == "chart"
+  if m == "chart" then ST.fn = nil; map_hud_t = -10.0 else set_hud(nil, nil) end
+  local ts = STATION_REF and STATION_REF()
+  if ts and ts.modeChanged then pcall(ts.modeChanged, m == "station") end
+end
+function close() if map_view then toggle() end end
+-- Focus the view on whatever `fn(bodies)` answers this frame (x, y, z, name),
+-- easing there from where it is now.
+function focusOn(fn)
+  ST.fn = fn
+  ST.ease = true
+  map_focus = 1
+  map_offx, map_offy, map_offz = 0.0, 0.0, 0.0
+end
+
 -- Open or close. Called by the M key and by anything that needs the screen
 -- back (a scene change, ending a flight).
 function toggle()
   focus_override = nil
+  ST.fn, ST.ex, ST.ey, ST.ez, ST.last, ST.ease = nil, 0, 0, 0, nil, false
+  if map_view and mode == "station" then
+    mode = "chart"
+    local ts = STATION_REF and STATION_REF()
+    if ts and ts.modeChanged then pcall(ts.modeChanged, false) end
+  end
   if not astronaut or not astronaut.valid then astronaut = find("Astronaut") end
   map_view = not map_view
   map_zoom, zoom_target = nil, nil -- re-fit to the focus every time it opens
@@ -2534,9 +2640,11 @@ function toggle()
   end
 end
 
+escTakenAt = -1
 function start(_)
   map_view = false
   planning = false
+  mode = "chart"
 end
 
 -- The map runs in lateUpdate — the CAMERA pass. Driven from fixedUpdate it
@@ -2551,11 +2659,42 @@ function lateUpdate(node, dt)
   -- warp to node runs with the map shut too (the flight readout's WARP key)
   warpDrive(dt)
   mnvRegister()
-  if input.pressed("m") then toggle() end
+  -- (a name being typed into the station's field is not a key press)
+  local ts = mode == "station" and map_view and STATION_REF() or nil
+  local typing = ts and ts.typing and ts.typing() or false
+  local gm_busy = gm_ref and (gm_ref.loading or gm_ref.curtain)
+  if not typing then
+    -- M: the chart (and M while the station is up closes it); F2: the station
+    -- (F2 again closes it, F2 over the chart swaps to it)
+    if input.pressed("m") then toggle() end
+    if input.pressed("f2") and not gm_busy then
+      if map_view and mode == "station" then toggle()
+      elseif map_view then setMode("station")
+      else openStation() end
+    end
+  end
   if not map_view then return end
+  -- ESC backs out one rung (pause_menu's ladder sees the map open and leaves
+  -- the press to us): a right-click menu first, then the station's field and
+  -- arming, then PLAN mode, then the map itself.
+  if input.pressed("escape") then
+    local cm = gz_ref("context_menu")
+    if cm and cm.isOpen and (cm.isOpen() or cm.escTakenAt == time) then
+      -- the menu's
+    elseif ts and ts.escape and ts.escape() then
+      escTakenAt = time
+    elseif planning then
+      planning = false
+      escTakenAt = time
+    else
+      escTakenAt = time
+      toggle()
+      return
+    end
+  end
   -- N enters and leaves PLAN mode, but only for a craft that has a trajectory
   -- to plan on: on foot there is nothing to burn.
-  if input.pressed("n") and subject_vessel() then planning = not planning end
+  if not typing and input.pressed("n") and subject_vessel() then planning = not planning end
   depth(true)
   update_map3d(node, dt)
   depth(false)

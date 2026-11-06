@@ -537,10 +537,17 @@ local function fleet_view()
   if not fview or (time or 0) - fview_t > 0.5 then fview, fview_t = fleet(), time or 0 end
   return fview
 end
+-- Bumped whenever this script writes the fleet key (fleet_view's snapshot
+-- rebuilds on a change rather than waiting for its cadence).
+fleetVersion = 0
 local function fleet_put(f)
   save.set(FLEET_KEY, f)
   fview, fview_t = f, time or 0
+  fleetVersion = fleetVersion + 1
 end
+-- The records, read only (the Tracking Station's snapshot decodes kinds and
+-- crews from the part lists, cached by each record's `t`).
+function fleetRecords() return fleet_view() end
 
 local function next_fid()
   local n = (save.get("fleet.next") or 0) + 1
@@ -999,6 +1006,17 @@ end
 -- One restore pass (update runs it every frame); global for tests and probes.
 function fleetRestore() fleet_restore() end
 
+-- Put a record back on the restore list (a GO TO is travelling to a craft on
+-- a world whose ground never loaded while the scene ran, so its first
+-- restore gave up). → true when it is waiting now.
+function requestRestore(fid)
+  local rec = fleet_view()[fid]
+  if type(rec) ~= "table" or not rec.parts or live_of(fid) then return false end
+  restore = restore or {}
+  restore[fid] = { tries = 0 }
+  return true
+end
+
 -- Does this craft have a live link home? (the comms.ships heartbeat a powered,
 -- deployed dish posts; vessel_controller's tracker_heartbeat)
 local function linked(v)
@@ -1036,6 +1054,8 @@ function fleetOffline()
   return out
 end
 
+local power_cache = {}   -- fid → { t, n, cap, charge, off } (fleetList's decode, per record)
+fleetDecodes = 0         -- (tests: how many records fleetList decoded)
 -- What the Tracking Station shows: every craft in the fleet, live or waiting
 -- to be rebuilt. Sorted by name so rows don't jump between refreshes.
 function fleetList()
@@ -1062,8 +1082,13 @@ function fleetList()
       -- own, synced once a second), or the live bus for a craft in the scene.
       -- (a saved record holds each part's state as a string: decode it, never
       -- index it — `("…").charge` is nil, which once read as "full")
+      -- (decoded once per written record: keyed by the record's `t`, so a
+      -- board asking twice a second never decodes 5,000 states again)
       local cap, charge, core_off = 0, 0, false
-      if E then
+      local pc = power_cache[fid]
+      if pc and pc.t == rec.t and pc.n == #(rec.parts or {}) then
+        cap, charge, core_off = pc.cap, pc.charge, pc.off
+      elseif E then
         for _, d in ipairs(rec.parts or {}) do
           local st = (type(d.st) == "string" and E.decodeState(d.st)) or (type(d.st) == "table" and d.st) or {}
           local m = E.modOf(d, "battery")
@@ -1073,6 +1098,8 @@ function fleetList()
           end
           if E.modOf(d, "command") and st.hibernate then core_off = true end
         end
+        fleetDecodes = fleetDecodes + 1
+        power_cache[fid] = { t = rec.t, n = #(rec.parts or {}), cap = cap, charge = charge, off = core_off }
       end
       e.linkWhy = ls and ls.why or nil
       if v and v.controlState then
@@ -1504,8 +1531,10 @@ function update(node, dt)
   -- the ops board, the pack); the card waits behind it rather than under it.
   local pm, fm, ob, ip = ref("pause_menu"), ref("facility_menu"), ref("ops_board"),
     ref("inventory_panel")
+  local ts = ref("tracking_station")
   local covered = (pm and pm.open) or (ip and ip.open)
     or (fm and fm.isOpen and fm.isOpen()) or (ob and ob.isOpen and ob.isOpen())
+    or (ts and ts.isOpen and ts.isOpen())
   -- In flight the cockpit owns the screen; the card comes back when you're down.
   if not st or covered or st.mode == "flying" then
     if el then el.visible = false end

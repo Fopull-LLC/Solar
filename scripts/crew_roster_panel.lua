@@ -264,12 +264,24 @@ local function roster_rows(c, rows)
                 st.focusNext = true
               end
             end),
-          small_button("go", "Go to", not afoot_away or r.downed or type(c and c.control) ~= "function",
-            (afoot_away and r.downed and "They're down: bring a Medkit") or (afoot_away and "Take control of them")
-              or "Only someone on foot elsewhere", function()
-              local ok, why = call(c, "control", r.id)
-              if ok then sfx("click"); close() else say("can't switch — " .. tostring(why or "no answer")) end
-            end),
+          (function()
+            -- one verb for every case: on foot near, seated, at base, far (crew.canSwitch)
+            local can, why, mode, det = false, "no crew library", nil, nil
+            if c and c.canSwitch then can, why, mode, det = c.canSwitch(r.id)
+            elseif c and c.control then
+              -- (an older crew library: on foot elsewhere only)
+              can = afoot_away and not r.downed
+              why = (afoot_away and r.downed and "They're down: bring a Medkit") or "Only someone on foot elsewhere"
+            end
+            local tip = can and ((mode == "travel" and ("Travel to them: " .. tostring(det or "far"))) or
+              (mode == "base" and "They stand up at the base and you are them") or
+              (mode == "craft" and ("Fly " .. tostring(det or "their craft") .. " as them")) or "Take control of them") or why
+            return small_button("go", "Go to", not can, tip, function()
+              local ok, w2
+              if c.switchToMember then ok, w2 = call(c, "switchToMember", r.id) else ok, w2 = call(c, "control", r.id) end
+              if ok then sfx("click"); close() else say("can't switch — " .. tostring(w2 or "no answer")) end
+            end)
+          end)(),
           small_button("rc", armed and ("Confirm · " .. money(fee or 0)) or "Recall", not afoot_away or not fee,
             afoot_away and string.format("Bring them home on the shuttle: %s", money(fee or 0)) or "Only someone on foot elsewhere",
             function()

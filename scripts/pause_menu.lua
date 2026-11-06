@@ -83,7 +83,8 @@ local CONTROLS = {
     { keys = { "tab", "i" }, shown = "TAB  or  I", what = "the suit pack  ·  at the depot, its buy and sell counters" },
   } },
   { group = "Everywhere", col = 1, rows = {
-    { keys = { "m" }, shown = "M", what = "the orbit map" },
+    { keys = { "f2" }, shown = "F2", what = "the Tracking Station: the map with the fleet, the crew and the events" },
+    { keys = { "m" }, shown = "M", what = "the orbit map (chart)" },
     { keys = { "o" }, shown = "O", what = "hide the objectives card" },
     { keys = { "/" }, shown = "/", what = "the next objective: the contract, a milestone, a suit pack to recover  ·  or ◂ ▸ on the card" },
     { keys = { "escape" }, shown = "ESC", what = "back out of whatever is in front of you" },
@@ -114,6 +115,7 @@ local CONTROLS = {
   } },
   { group = "Crew", col = 2, rows = {
     { keys = { "`" }, shown = "`", what = "quick swap: back to the craft or crew member you had before" },
+    { keys = {}, shown = "CREW ▸", what = "on the crew strip (bottom left): switch to any crew member, or travel to one far away  ·  also Esc ▸ Switch crew member" },
     { keys = { "[", "]" }, shown = "[  /  ]", what = "step through the crew on foot nearby and the craft" },
     { keys = { "f" }, shown = "F", what = "flying: the commander steps out  ·  on foot: board the nearest free seat" },
     { keys = {}, shown = "PORTRAIT", what = "hover a crew portrait (bottom left): EVA steps them out, ⇄ moves them to a free seat; SHIFT-click EVA keeps you on the craft" },
@@ -134,6 +136,11 @@ local CONTROLS = {
     { keys = { "w", "s", "a", "d", "q", "e" }, shown = "W S  A D  Q E", what = "in plan: prograde  ·  radial  ·  normal" },
     { keys = { "left", "right" }, shown = "← →", what = "in plan: slide the burn along the orbit" },
     { keys = { "x", "backspace" }, shown = "X  /  ⌫", what = "in plan: zero the burn  /  delete it" },
+  } },
+  { group = "Tracking Station", col = 3, rows = {
+    { keys = {}, shown = "CLICK A ROW · AN ICON", what = "select  ·  double-click frames it on the map" },
+    { keys = { ",", "." }, shown = ",  /  .  ·  RUNGS", what = "time warp; the rungs on the bottom strip too" },
+    { keys = { "escape" }, shown = "ESC", what = "the rename field, then the station" },
   } },
   { group = "Pictures", col = 3, rows = {
     { keys = { "f4" }, shown = "F4", what = "hide the interface (cinematic mode)" },
@@ -285,6 +292,13 @@ local function menu_page()
     heading("PAUSED"),
     rule(),
     row_button("resume", "Resume", function() close() end),
+    -- the station from anywhere: the world resumes (it is the map, which never pauses)
+    row_button("station", "Tracking Station", function()
+      close()
+      local ts = ref("tracking_station")
+      if ts and ts.open then ts.open() end
+    end),
+    row_button("crew", "Switch crew member…", function() page = "crew" end),
     row_button("settings", "Settings", function() page = "settings" end),
     row_button("controls", "Controls", function() page = "controls" end),
   }
@@ -444,9 +458,42 @@ local function settings_page(w)
   return rows
 end
 
+-- SWITCH CREW MEMBER: everyone, with what a click does (crew.switchTargets).
+-- The switch is queued and runs on the first tick after the menu closes.
+local function crew_page()
+  local C = ref("crew")
+  local rows = { heading("SWITCH CREW MEMBER"), rule() }
+  for _, m in ipairs((C and C.switchTargets and C.switchTargets()) or {}) do
+    rows[#rows + 1] = { "button", key = "m" .. m.id, style = m.you and "panel/rowActive" or "panel/row", w = "100%", h = 40,
+      dir = "row", gap = 8, align = "center", disabled = (not m.ok) or nil, tooltip = (not m.ok) and m.why or nil,
+      { "text", key = "r", style = "panel/role", w = 20, h = 20, text = m.role or "?", textAlign = "center", textValign = "center" },
+      { "col", key = "nm", w = "grow", h = "fit", gap = 0, pad = 0,
+        { "text", key = "n", style = "panel/cellStrong", w = "100%", h = "fit", maxLines = 1, overflow = "ellipsis", text = m.name or "?" },
+        { "text", key = "w", style = "panel/cellMuted", w = "100%", h = "fit", maxLines = 1, overflow = "ellipsis",
+          text = (m.alert and (m.alert.text .. " · ") or "") .. (m.where or "") } },
+      { "text", key = "k", style = m.ok and "panel/keys" or "panel/cellMuted", w = 150, h = "fit", maxLines = 2, wrap = true,
+        textAlign = "end", text = m.label or "" },
+      onClicked = function()
+        if not m.ok then return end
+        local ok, why = C.switchToMember(m.id)
+        if ok then close() elseif log then log("pause menu: switch refused — " .. tostring(why)) end
+      end }
+  end
+  rows[#rows + 1] = rule("rule2")
+  rows[#rows + 1] = { "row", key = "foot", w = "100%", h = "fit", gap = 12, pad = 0, align = "center",
+    items = {
+      { "button", key = "back", style = "panel/secondary", w = 120, h = 32, textAlign = "center", text = "Back",
+        onClicked = function() page = "menu" end },
+      { "text", key = "hint", style = "panel/hint", w = "grow", h = "fit", wrap = true,
+        text = "GO TO travels behind a curtain; the one you leave stays where they stand." },
+    }, function(x) return x end }
+  return rows
+end
+
 local function page_width()
   if page == "controls" then return math.min(1200, design_width() - M * 2) end
   if page == "settings" then return math.min(SETTINGS_W, design_width() - M * 2) end
+  if page == "crew" then return 520 end
   return NARROW_W
 end
 
@@ -454,6 +501,7 @@ local function describe(w)
   local rows
   if page == "controls" then rows = controls_page(w)
   elseif page == "settings" then rows = settings_page(w)
+  elseif page == "crew" then rows = crew_page()
   else rows = menu_page() end
   -- (The world behind is dimmed by facility_menu's scrim, which every
   -- reading panel shares.)
@@ -464,7 +512,7 @@ end
 
 -- Published for the UI probe and anything else that wants a page open.
 function showPage(name)
-  if name == "controls" or name == "settings" or name == "menu" then page = name end
+  if name == "controls" or name == "settings" or name == "menu" or name == "crew" then page = name end
 end
 
 -- ── the notice toast ────────────────────────────────────────────────────────

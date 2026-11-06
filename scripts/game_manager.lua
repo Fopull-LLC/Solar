@@ -745,7 +745,97 @@ local function launch_site()
   return x + ux / l * 3.0, y + uy / l * 3.0, z + uz / l * 3.0
 end
 
+
+-- ── TRAVEL (crew.goTo: the far switch, docs/tracking-station.md §2.4) ───────
+-- travelTo(body, rx, ry, rz, label, done, opts) raises the loading curtain
+-- ("Travelling to Dana Okafor · Iru"), holds the Astronaut 40 m over that
+-- body-relative spot (its LIVE place, re-read every frame: the destination is
+-- a body and an offset, never a world point kept), lets the world there
+-- stream in, waits for its ground (terrain.query at the spot) and for
+-- `opts.wait()` (the member's craft being rebuilt), then calls done(true) and
+-- drops the curtain. Nothing pauses; the warp goes to ×1. TRAVEL_MAX seconds
+-- at most: done(false) then, the curtain down all the same.
+-- Published: `travel` (the trip, or nil) for probes and the HUD.
+travel = nil
+TRAVEL_MAX = 60.0
+local TRAVEL_HOVER = 40.0
+
+function travelTo(body, rx, ry, rz, label, done, opts)
+  if loading or travel then return false, "already on the way" end
+  local b = space.body(body or "")
+  if not b then return false, "no such world" end
+  opts = opts or {}
+  travel = { body = body, x = rx or 0, y = ry or 0, z = rz or 0, label = label or body, done = done,
+             wait = opts.wait, t0 = time, ground_t = nil }
+  curtain = true
+  if space.warp and space.warp() > 1.001 then space.warp(1) end
+  local om = findScript("orbit_map")
+  if om and om.isOpen and om.isOpen() and om.close then pcall(om.close) end
+  local _, bg = ui_of("Loading Screen")
+  local _, tx = ui_of("Loading Text")
+  for _, e in ipairs({ bg, tx }) do if e then e.visible = true; e.opacity = 1.0 end end
+  log(string.format("travel: to %s (%s)", tostring(label), tostring(body)))
+  return true
+end
+
+local function travel_tree(T, el)
+  local dots = string.rep(".", 1 + math.floor(el * 2) % 3)
+  local frac = math.min(0.95, 0.15 + 0.8 * (1 - math.exp(-el / 3.0)))
+  return { "col", key = "load", w = "100%", h = "fit", gap = 10, pad = 0, align = "center",
+    { "row", key = "head", w = "fit", h = "fit", gap = 0, pad = 0, align = "end",
+      { "text", key = "h", w = "fit", h = "fit", textSize = 24, textColor = { 0.86, 0.93, 1.0 }, text = "Travelling to " .. tostring(T.label) },
+      { "text", key = "d", w = 30, h = "fit", textSize = 24, textColor = { 0.86, 0.93, 1.0 }, text = dots } },
+    { "row", key = "bar", w = LOAD_W, h = 4, pad = 0, gap = 0, radius = 2, fill = { 0.10, 0.16, 0.22 },
+      { "box", key = "f", w = math.max(4, math.floor(LOAD_W * frac + 0.5)), h = 4, radius = 2, fill = { 0.28, 0.86, 0.74 } } },
+    { "text", key = "s", w = LOAD_W, h = "fit", textSize = 15, textAlign = "center", textColor = { 0.70, 0.80, 0.89 },
+      text = T.ground_t and (T.wait and "Bringing their craft back" or "Arriving") or "Bringing the ground in" } }
+end
+
+local function travel_tick()
+  local T = travel
+  local b = space.body(T.body)
+  local n = find("Astronaut")
+  local el = time - T.t0
+  if not (b and n) then
+    travel = nil
+    curtain = false
+    if T.done then pcall(T.done, false) end
+    return
+  end
+  local l = math.sqrt(T.x * T.x + T.y * T.y + T.z * T.z)
+  local ux, uy, uz = 0, 1, 0
+  if l > 1e-6 then ux, uy, uz = T.x / l, T.y / l, T.z / l end
+  local sx, sy, sz = b.x + T.x, b.y + T.y, b.z + T.z
+  n.x, n.y, n.z = sx + ux * TRAVEL_HOVER, sy + uy * TRAVEL_HOVER, sz + uz * TRAVEL_HOVER
+  n.vx, n.vy, n.vz = 0, 0, 0
+  n.visible = false
+  if terrain.warm then terrain.warm(T.body) end
+  local tn = find("Loading Text")
+  if tn and ui and ui.make then
+    local bg = find("Loading Screen")
+    if bg and bg.style ~= "load/backdrop" then bg.style = "load/backdrop" end
+    if tn.text ~= "" then tn.text = "" end
+    ui.make(tn, travel_tree(T, el))
+  end
+  -- the ground at the spot answers (a world with no surface: at once)
+  local d = terrain.query and terrain.query(sx, sy, sz) or nil
+  local has_ground = (b.soi or -1) > 0 and (b.radius or 0) > 0
+  if not T.ground_t and (not has_ground or (d and math.abs(d) < 25.0 and el > 0.8)) then T.ground_t = time end
+  local ready = T.ground_t ~= nil and time - T.ground_t > 0.5 and (not T.wait or T.wait())
+  if ready or el > TRAVEL_MAX then
+    travel = nil
+    n.x, n.y, n.z = sx + ux * 0.2, sy + uy * 0.2, sz + uz * 0.2
+    n.vx, n.vy, n.vz = 0, 0, 0
+    if T.done then pcall(T.done, ready) end
+    log(string.format("travel: %s in %.1f s%s", ready and "arrived" or "gave up", el, ready and "" or " (the ground never answered)"))
+    ready_t = time
+    reveal()
+  end
+end
+
 function update(node, dt)
+  -- a trip behind the curtain (crew.goTo) holds the frame's work
+  if travel then travel_tick() return end
   if not slot then return end
 
   if world_pending then

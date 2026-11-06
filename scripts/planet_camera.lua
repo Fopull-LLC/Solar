@@ -1727,6 +1727,58 @@ local function hold_tick(node)
   return true
 end
 
+-- ── THE HANDOFF (crew switching: docs/tracking-station.md §2.5) ────────────
+-- crew.lua calls handoff(from, to) (world points, this tick) as you become
+-- someone else. Under 60 m the view sweeps from where it was to the new
+-- placement over 0.35 s — the old camera kept BODY-RELATIVE, so the sweep
+-- rides the moving planet (rule 7: smooth in the body frame); past 60 m it is
+-- a 0.2 s fade from black. A GO TO is behind the travel curtain anyway.
+local ho = nil
+function handoff(ax, ay, az, bx, by, bz)
+  local node = main_node
+  if not (node and node.pos and space and space.dominant) then return false end
+  local d = math.sqrt((bx - ax) ^ 2 + (by - ay) ^ 2 + (bz - az) ^ 2)
+  if d >= 60 then ho = { fade = true, t = 0, secs = 0.2 } return true end
+  local p = node.pos
+  local dn = space.dominant(p.x, p.y, p.z)
+  local b = dn and space.body(dn)
+  if not b then return false end
+  ho = { fade = false, t = 0, secs = 0.35, body = dn, cx = p.x - b.x, cy = p.y - b.y, cz = p.z - b.z,
+         fx = fwd_x, fy = fwd_y, fz = fwd_z }
+  return true
+end
+function handingOff() return ho ~= nil end
+
+local function handoff_tick(node, dt)
+  if not ho then return end
+  ho.t = ho.t + (dt or 0)
+  local w = 1 - math.min(1, ho.t / ho.secs)
+  if w <= 0 then ho = nil return end
+  if ho.fade then
+    if draw and draw.rect and camera and camera.screenSize then
+      local sw, sh = camera.screenSize()
+      if sw then draw.rect(0, 0, sw, sh, 0, 0, 0, w) end
+    end
+    return
+  end
+  local b = space.body(ho.body)
+  if not b then ho = nil return end
+  w = w * w * (3 - 2 * w)
+  local c0 = node.pos
+  local ox, oy, oz = b.x + ho.cx, b.y + ho.cy, b.z + ho.cz
+  local c = vec3(c0.x + (ox - c0.x) * w, c0.y + (oy - c0.y) * w, c0.z + (oz - c0.z) * w)
+  local fx, fy, fz = fwd_x + (ho.fx - fwd_x) * w, fwd_y + (ho.fy - fwd_y) * w, fwd_z + (ho.fz - fwd_z) * w
+  local fl = math.sqrt(fx * fx + fy * fy + fz * fz)
+  if fl < 1e-4 then return end
+  fx, fy, fz = fx / fl, fy / fl, fz / fl
+  local ux, uy, uz = c.x - b.x, c.y - b.y, c.z - b.z
+  local ul = math.max(1e-6, math.sqrt(ux * ux + uy * uy + uz * uz))
+  node.pos = c
+  node:lookAt(vec3(c.x + fx * 10, c.y + fy * 10, c.z + fz * 10), vec3(ux / ul, uy / ul, uz / ul))
+  fwd_x, fwd_y, fwd_z = fx, fy, fz
+  cam_x, cam_y, cam_z = c.x, c.y, c.z
+end
+
 function lateUpdate(node, dt)
   -- The interiors and parked nodes are never the main camera's to draw.
   if main_mask_set == nil or (main_mask_set == "iva" and not (cockpit and seatView and not seatView.open)) then
@@ -1747,6 +1799,7 @@ function lateUpdate(node, dt)
     if not (sv_ref and sv_ref.valid) then sv_ref = findScript("surveyor", { quiet = true }) end
     if sv_ref and sv_ref.valid and sv_ref.cameraFollow then sv_ref.cameraFollow(node, dt) end
     shot_tick(node, dt)
+    handoff_tick(node, dt)
   end
   -- The camera mode / pivot line, for a couple of seconds after a change
   -- (never in cinematic mode: that is for pictures).

@@ -5,8 +5,9 @@
 --     hasFlagOn / flagBodies; the missions board hears of a plant; the date
 --     comes off the agency's own clock (kept in the save across sessions);
 --     snapshot and restore for a revert to launch; a reload reads it all back
---   * THE TRACKING STATION lists the flags under FLAGS, its detail has the
---     photo slot, VIEW, MAP, RENAME and REMOVE (twice)
+--   * THE TRACKING STATION (the map's STATION mode) lists the flags under
+--     FLAGS and on the map; the card says where and who; RENAME (also from
+--     deployables' Rename…) and REMOVE (twice)
 --
 --   luajit solar/tests/smoke_flags.lua
 
@@ -119,7 +120,7 @@ for p in ([[align border borderB borderColor borderL borderR borderT button case
   scrollX scrollY scrollbarAxis scrollbarFor selected shader size slice sliderDir stretch style
   template text textA textAlign textB textColor textFit textG textR textSize textValign texture
   tiling tint tintA tintB tintG tintR toggle tooltip tooltipBox tracking upper value visible w
-  width wrap x y navUp navDown navLeft navRight]]):gmatch("%S+") do PROPS[p] = true end
+  width wrap x y navUp navDown navLeft navRight scrollFade]]):gmatch("%S+") do PROPS[p] = true end
 local KINDS = { box = true, row = true, col = true, text = true, image = true, button = true,
                 field = true, slider = true, scroll = true }
 local bad = {}
@@ -148,61 +149,82 @@ local function by_key(tree, key) for _, e in ipairs(each(tree)) do if e.key == k
 local function has_text(tree, needle)
   for _, e in ipairs(each(tree)) do if type(e.text) == "string" and e.text:find(needle, 1, true) then return e end end
 end
-local tree
-local panel = { visible = false, width = 0 }
-local closed = 0
-local mapped = nil
+local trees = {}
+local NODES = {}
+for _, nm in ipairs({ "Tracking Station", "Station Fleet", "Station Card", "Station Strip" }) do
+  local el = { visible = false }
+  NODES[nm] = { name = nm, valid = true, getcomponent = function() return el end }
+end
 local EM = { valid = true, tex = function() return "img:9" end, name = function() return "Polaris Works" end }
-local ts = load("solar/scripts/tracking_station.lua", {
-  time = 0,
-  findScript = function(k)
-    if k == "deployables" then return D2 end
-    if k == "emblem" then return EM end
-    if k == "flight_ops" then return { valid = true, fleetList = function() return {} end } end
-    if k == "base_facilities" then return { valid = true, sited = true, baseBody = "Home", baseX = 1000, baseY = 300, baseZ = 0 } end
-    if k == "orbit_map" then return { valid = true, focusNode = function(n) mapped = n end } end
-    if k == "facility_menu" then return { valid = true, close = function() closed = closed + 1 end } end
-    if k == "crew" then return CREW end
-    return nil
-  end,
-  save = env.save, log = function() end,
-  find = function(n) if n == "Moon" then return { name = "Moon" } end end,
-  space = { body = function(n) return BODIES[n] end, dominant = function() return "Home" end },
-  ui = { make = function(_, t) tree = t end },
-  input = { setMouseLocked = function() end },
+local OMS = { open = false }
+local OM = { valid = true, mode = "chart" }
+OM.isOpen = function() return OMS.open end
+OM.openStation = function() OMS.open = true; OM.mode = "station" end
+OM.close = function() OMS.open = false; OM.mode = "chart" end
+OM.focusOn = function(fn) OMS.focus = fn end
+OM.setZoom = function() end
+local SCR = {
+  deployables = D2, emblem = EM, orbit_map = OM,
+  flight_ops = { valid = true, fleetList = function() return {} end, fleetRecords = function() return {} end },
+  base_facilities = { valid = true, sited = true, baseBody = "Home", baseX = 1000, baseY = 300, baseZ = 0,
+                      footprint = { body = "Home", x = 0, y = 300, z = 0 } },
+  crew = CREW,
+}
+local senv = setmetatable({
+  time = 0, save = env.save, log = function() end,
+  find = function(n) return NODES[n] end, findScripts = function() return {} end,
+  space = { body = function(n) return BODIES[n] end, dominant = function() return "Home" end,
+            bodies = function() return { BODIES.Home, BODIES.Moon } end, time = function() return SIM end },
+  ui = { make = function(n, t) trees[n.name] = t end, hovered = function() return nil end, focus = function() end },
+  input = { setMouseLocked = function() end, pressed = function() return false end, mouse = function() return 0, 0 end },
   camera = { screenSize = function() return 1600, 900 end },
-})
-ts.start({ getcomponent = function() return panel end })
-ts.open()
-ts.update({ getcomponent = function() return panel end }, 0.016)
+}, { __index = _G })
+local function fresh(path)
+  local E = setmetatable({}, { __index = senv })
+  local chunk = assert(loadfile(path))
+  setfenv(chunk, E)
+  chunk()
+  return E
+end
+local FV = fresh("solar/scripts/fleet_view.lua")
+local TS
+SCR.fleet_view = FV
+senv.findScript = function(k) if k == "tracking_station" then return TS end return SCR[k] end
+TS = fresh("solar/scripts/tracking_station.lua")
+local function all() return { "col", trees["Tracking Station"], trees["Station Fleet"], trees["Station Card"], trees["Station Strip"] } end
+local function tick() senv.time = senv.time + 0.3; TS.update(NODES["Tracking Station"], 0.3) end
+TS.start(NODES["Tracking Station"])
+TS.open()
+tick()
+local tree = all()
 validate(tree)
-check(by_key(tree, "LFlags") and by_key(tree, "rf:1") and by_key(tree, "rf:2"), "the station lists the flags under FLAGS")
-check(has_text(tree, "Polaris Works") and by_key(tree, "emb").texture == "img:9", "its header wears the agency's emblem and name")
-check(has_text(tree, "2 flags"), "...and counts the flags")
+check(by_key(tree, "GFLAGS") and by_key(tree, "rf:1") and by_key(tree, "rf:2"), "the station lists the flags under FLAGS")
+check(has_text(tree, "Polaris Works") and by_key(tree, "emb").texture == "img:9", "its top bar wears the agency's emblem and name")
+local S = FV.current()
+check(S.byId["f:1"] and S.byId["f:1"].kind == "flag" and S.byId["f:1"].glyph == "▮" and S.byId["f:1"].rx ~= nil,
+  "a flag is a map entry: its pennant glyph, its place body-relative")
 by_key(tree, "rf:2").onClicked()
-ts.update({ getcomponent = function() return panel end }, 0.016)
+tick()
+tree = all()
 validate(tree)
-check(has_text(tree, "Agency flag") and has_text(tree, "Moon") and has_text(tree, "°N"), "the detail says where it stands")
-check(has_text(tree, "no photo"), "a flag without a photo says so")
+check(has_text(tree, "MOON") and has_text(tree, "°N"), "the card says where it stands")
 check(has_text(tree, "Val Orbison"), "...and who planted it")
-check(has_text(tree, "world to world"), "a flag on another world is measured world to world")
-by_key(tree, "map").onClicked()
-check(mapped and mapped.name == "Moon" and closed == 1, "MAP opens the orbit map on its world")
-by_key(tree, "rf:1").onClicked()
-ts.update({ getcomponent = function() return panel end }, 0.016)
-check(has_text(tree, "From base"), "a flag on the home world is measured from the base")
-by_key(tree, "rn").onClicked()
-ts.update({ getcomponent = function() return panel end }, 0.016)
+check(OMS.focus ~= nil, "selecting it eases the map's focus to it")
+TS.renameFlag(1)
+tick()
+tree = all()
+check(TS.typing() and by_key(tree, "f"), "deployables' Rename… opens the station renaming that flag")
 by_key(tree, "f").onSubmitted({ text = "Home Plate" })
 check(D2.get(1).n == "Home Plate", "RENAME renames it")
-ts.update({ getcomponent = function() return panel end }, 0.016)
-by_key(tree, "rm").onClicked()
+tick()
+by_key(all(), "end").onClicked()
 check(D2.get(1) ~= nil, "REMOVE asks first")
-ts.update({ getcomponent = function() return panel end }, 0.016)
-check(has_text(tree, "Press again"), "...and says so")
-by_key(tree, "rm").onClicked()
+tick()
+check(has_text(all(), "Press again"), "...and says so")
+by_key(all(), "end").onClicked()
 check(D2.get(1) == nil, "...and the second press takes it down")
 check(#bad == 0, "every element is one ui.make accepts: " .. table.concat(bad, ", "))
+
 
 if #failures > 0 then
   print("FLAGS SMOKE FAILURES:")

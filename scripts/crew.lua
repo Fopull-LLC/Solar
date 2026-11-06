@@ -677,7 +677,7 @@ end
 -- Merge fields into a record (other crew scripts use this; panels poll
 -- `version`). `nil` can't be merged, so a field is cleared with `false`.
 local CLEAR = { task = true, hand = true, craft = true, died = true, body = true, x = true, y = true, z = true,
-                yaw = true, anchor = true, face = true, downed = true, retrain = true }
+                yaw = true, anchor = true, face = true, downed = true, retrain = true, leftAt = true, blackout = true }
 function patch(id, fields)
   local r = get(id)
   if not r then return false end
@@ -1519,7 +1519,12 @@ local function park_avatar_member(id)
   local a = astro()
   if not (a and id) then return end
   suit_out(id)
-  local d, x, y, z = rel(a.x, a.y, a.z)
+  -- (this runs in the physics tick: the TICK pose against the tick's body
+  -- read — node.x is the drawn pose, a rails carry behind; frames doc rule 3)
+  local ax, ay, az = a.x, a.y, a.z
+  local tp = a.tickPos
+  if tp and tp.x then ax, ay, az = tp.x, tp.y, tp.z end
+  local d, x, y, z = rel(ax, ay, az)
   -- the way they face: the suit model's (the rig looks along its node's +Z)
   local face = false
   for _, ch in ipairs(a.children and a:children() or {}) do
@@ -1528,8 +1533,9 @@ local function park_avatar_member(id)
       face = { x = -f.x, y = -f.y, z = -f.z }
     end
   end
-  patch(id, { status = "afoot", craft = false, body = d, x = x, y = y, z = z, face = face, anchor = false })
-  spawn_body(id, a.x, a.y, a.z)
+  patch(id, { status = "afoot", craft = false, body = d, x = x, y = y, z = z, face = face, anchor = false,
+              leftAt = clock() })
+  spawn_body(id, ax, ay, az)
 end
 
 -- ── dolls (§3.4) ───────────────────────────────────────────────────────────
@@ -1860,6 +1866,275 @@ function step(dir)
   return t.name .. " · " .. (t.can and "remote" or ("no control — " .. tostring(t.why or ""))):lower()
 end
 
+
+-- ── SWITCH TO ANY MEMBER (docs/tracking-station.md §2) ─────────────────────
+-- One verb for the crew strip's CREW ▸ picker, the pause menu, the roster's
+-- Go to and the Tracking Station's card:
+--   canSwitch(id) → ok, why, mode, detail
+--       mode "near"   on foot within body_range: control() (instant)
+--            "craft"  seated in a craft in the scene: takeCraft()
+--            "base"   at the base, the base within body_range: spawnAtBase()
+--            "travel" anywhere else (out of range, another world, a craft
+--                     not rebuilt): goTo() behind the travel curtain
+--   switchToMember(id) → ok, why | true, "travel"
+--   spawnAtBase(id) / goTo(id) → ok, why
+--   switchTargets() → { {id, name, role, mode, ok, why, label, where}… }
+--   recordStep(rec, dt, amb) (pure) / recordTick()   the left-behind's air
+
+-- The fleet record that has member `id` in a seat: fid, record.
+local function seated_record(id)
+  local fo = ref("flight_ops")
+  local recs = fo and fo.fleetRecords and fo.fleetRecords() or (save.get("fleet.craft") or {})
+  for fid, rec in pairs(recs) do
+    if type(rec) == "table" and rec.parts then
+      for _, s in ipairs(seatedIn(rec.parts)) do if s.id == id then return fid, rec end end
+    end
+  end
+  return nil, nil
+end
+seatedRecord = seated_record
+
+local function focus_pos()
+  return pos_of_current(current())
+end
+
+-- Where a far place is, said short: "4.1 km" on the world you are on, else
+-- the world's name.
+local function far_label(body, wx, wy, wz)
+  local fx, fy, fz = focus_pos()
+  local here = fx and space and space.dominant and space.dominant(fx, fy, fz)
+  if here == body and wx and fx then
+    local d = len(wx - fx, wy - fy, wz - fz)
+    if d >= 1000 then return string.format("%.1f km", d / 1000) end
+    return string.format("%.0f m", d)
+  end
+  return tostring(body or "far")
+end
+
+-- The base's crew home, body-relative (the station's own rule).
+local function home_spot()
+  local ts = ref("tracking_station")
+  local x, y, z = nil, nil, nil
+  if ts and ts.crewHome then x, y, z = ts.crewHome() end
+  if not x then return nil end
+  local d, rx, ry, rz = rel(x, y, z)
+  if not d then return nil end
+  return d, rx, ry, rz
+end
+
+function canSwitch(id)
+  local r = get(id)
+  if not r then return false, "no such crew member" end
+  if r.status == "dead" then return false, (r.name or "they") .. " is lost" end
+  local active = activeId()
+  local ride = avatarCraft()
+  if id == active then
+    if ride then return false, "that's you" end
+    if current().kind == "vessel" then return true, nil, "near", "on foot" end
+    return false, "that's you"
+  end
+  if r.downed then return false, r.name .. " is down — bring a Medkit" end
+  local b = busy(r)
+  if b then return false, b end
+  if r.status == "aboard" then
+    local v = craftOf(id)
+    if v then
+      if v.isLost and v.isLost() then return false, "lost with " .. tostring(v.craftName or r.craft or "their craft") end
+      return true, nil, "craft", v.craftName or r.craft
+    end
+    local fid, rec = seated_record(id)
+    if not fid then return false, (r.craft and (tostring(r.craft) .. " is not on the board")) or "their craft is gone" end
+    return true, nil, "travel", tostring(rec.body or "far")
+  end
+  if r.status == "afoot" then
+    local bd = bodies[id]
+    if bd and bd.valid ~= false then
+      -- (a body is "near" only within range of what you control now: one
+      -- left standing by a craft that has since flown off is a trip)
+      local fx, fy, fz = focus_pos()
+      local d = fx and len(bd.x - fx, bd.y - fy, bd.z - fz) or nil
+      -- (and on the same world: a member on a moon you are flying past is a
+      -- trip, so the curtain brings their ground in before you stand on it)
+      local same = fx and space and space.dominant and space.dominant(fx, fy, fz) == r.body
+      if d and d <= P("body_range") and same then return true, nil, "near", string.format("%.0f m", d) end
+    end
+    local wx, wy, wz = world_of(r)
+    if not wx then return false, "nowhere to be found" end
+    return true, nil, "travel", far_label(r.body, wx, wy, wz)
+  end
+  if r.status == "base" then
+    local bf = ref("base_facilities")
+    if not (bf and bf.sited) then return false, "there is no base" end
+    local fx, fy, fz = focus_pos()
+    if fx and len(bf.baseX - fx, bf.baseY - fy, bf.baseZ - fz) <= P("body_range") then
+      return true, nil, "base", "the base"
+    end
+    return true, nil, "travel", far_label(bf.baseBody, bf.baseX, bf.baseY, bf.baseZ)
+  end
+  return false, "not available"
+end
+
+-- A member at the base stands up at the crew home and you are them.
+function spawnAtBase(id)
+  local r = get(id)
+  if not (r and r.status == "base") then return false, "not at the base" end
+  local d, rx, ry, rz = home_spot()
+  if not d then return false, "the base isn't there yet" end
+  queue[#queue + 1] = { kind = "base", id = id, body = d, x = rx, y = ry, z = rz }
+  return true, nil
+end
+
+-- THE FAR SWITCH: the one you are is left where they stand, a travel
+-- curtain goes up (game_manager.travelTo), the world under the member comes
+-- in (and their craft is rebuilt, when they are seated), then you are them.
+-- The destination is a body and an offset: nothing world-positioned is kept
+-- across the wait.
+function goTo(id)
+  local r = get(id)
+  if not r then return false, "no such crew member" end
+  local gm = ref("game_manager")
+  if not (gm and gm.travelTo) then return false, "no travel from here" end
+  local item = { kind = "leave", id = id, name = r.name }
+  if r.status == "aboard" then
+    local fid, rec = seated_record(id)
+    if not (fid and rec and rec.body) then return false, "their craft is not on the board" end
+    item.body, item.x, item.y, item.z, item.fid, item.where = rec.body, rec.x or 0, rec.y or 0, rec.z or 0, fid, rec.name
+  elseif r.status == "afoot" then
+    if not (r.body and r.x) then return false, "nowhere to be found" end
+    item.body, item.x, item.y, item.z, item.where = r.body, r.x, r.y, r.z, r.body
+  elseif r.status == "base" then
+    local bf = ref("base_facilities")
+    local fp = bf and bf.footprint
+    if not fp then return false, "there is no base" end
+    item.body, item.x, item.y, item.z, item.base, item.where = fp.body, fp.x, fp.y, fp.z, true, "the base"
+  else
+    return false, "not available"
+  end
+  queue[#queue + 1] = item
+  return true, "travel"
+end
+
+function switchToMember(id)
+  local ok, why, mode = canSwitch(id)
+  if not ok then return false, why end
+  remember()
+  if mode == "near" then return control(id) end
+  if mode == "craft" then
+    local v = craftOf(id)
+    if not v then return false, "their craft is gone" end
+    return takeCraft(v, id)
+  end
+  if mode == "base" then return spawnAtBase(id) end
+  return goTo(id)
+end
+
+-- Everyone, for a picker: what pressing their row does, or why not.
+function switchTargets()
+  local out = {}
+  for _, r in ipairs(roster()) do
+    if r.status ~= "dead" then
+      local ok, why, mode, detail = canSwitch(r.id)
+      local label
+      if r.id == activeId() and not ok then label = "YOU"
+      elseif not ok then label = why
+      elseif mode == "near" then label = "SWITCH" .. (detail and (" · " .. detail) or "")
+      elseif mode == "craft" then label = "FLY · " .. tostring(detail or "their craft")
+      elseif mode == "base" then label = "AT BASE · SWITCH"
+      else label = "GO TO · " .. tostring(detail or "far") end
+      local st, det = where(r.id)
+      local wtxt = (st == "aboard" and ("aboard " .. tostring(det or "a craft"))) or (st == "afoot" and ("on foot · " .. tostring(det or "?")))
+        or (st == "base" and "at the base") or tostring(st or "")
+      out[#out + 1] = { id = r.id, name = r.name, role = roleLetter(r), mode = mode, ok = ok, why = why, label = label,
+                        where = wtxt, o2 = r.o2 or 1, hp = r.hp or 1, you = r.id == activeId(),
+                        alert = recordAlerts and recordAlerts[r.id] or nil }
+    end
+  end
+  return out
+end
+
+-- ── the one left behind, out of range (§2.2) ───────────────────────────────
+-- A record on foot with no body breathes too, coarsely: at 1 Hz, by the
+-- agency clock (game seconds, warp included), in CLOSED FORM, so a 10,000x
+-- warp lands where 1x would. Pure: recordStep(rec, dt, amb) →
+--   { o2, hp, tank (seconds drawn from the pack's tanks), blackout (s left)
+--     | nil, dead = cause | nil }
+--   amb: breathable (the air there), helmet, tanks (s of reserve in the pack),
+--        rest (aboard or at the base: heals)
+function recordStep(rec, dt, amb)
+  amb = amb or {}
+  local o2, hp = rec.o2 or 1.0, rec.hp or 1.0
+  local out = { o2 = o2, hp = hp, tank = 0, blackout = rec.blackout }
+  if dt <= 0 then return out end
+  if amb.rest then
+    out.hp = math.min(1.0, hp + P("heal_per_min") * dt / 60)
+    out.blackout = nil
+    return out
+  end
+  if airSource(amb.helmet ~= false, false, amb.breathable == true) ~= "suit" then
+    out.blackout = nil
+    return out
+  end
+  local left = dt
+  if out.blackout then
+    out.blackout = out.blackout - left
+    if out.blackout <= 0 then out.blackout, out.dead = 0, "air" end
+    return out
+  end
+  -- tanks first (drawAir's order), then the suit's own supply
+  local tk = math.min(left, amb.tanks or 0)
+  out.tank, left = tk, left - tk
+  local secs = o2 * SUIT_AIR_SECS
+  if left < secs then
+    out.o2 = o2 - left / SUIT_AIR_SECS
+    return out
+  end
+  out.o2 = 0
+  local over = left - secs
+  local grace = P("grace_suit")
+  if over >= grace then out.blackout, out.dead = 0, "air"
+  else out.blackout = grace - over end
+  return out
+end
+
+local rt_t = -10
+recordAlerts = {}    -- id → { level, text } (the station and the picker read these)
+function recordTick(force)
+  if not force and now() - rt_t < 1.0 then return end
+  rt_t = now()
+  local t = clock()
+  local su = ref("suit")
+  local active = activeId()
+  for _, r in ipairs(roster()) do
+    if r.status == "afoot" and r.id ~= active and not (bodies[r.id] and bodies[r.id].valid ~= false) then
+      local dt = t - (tonumber(r.leftAt) or t)
+      if dt >= 1.0 or (force and dt > 0) then
+        local wx, wy, wz = world_of(r)
+        local breathable = false
+        if su and su.breathableAt and wx then
+          local ok, b = pcall(su.breathableAt, wx, wy, wz)
+          breathable = ok and b == true
+        end
+        local tanks = tanksOf(packOf(r.id))
+        local st = recordStep(r, dt, { breathable = breathable, helmet = r.helmet ~= false, tanks = tanks.reserve() })
+        if st.tank > 0 then tanks.draw(st.tank) end
+        r.o2, r.hp, r.blackout, r.leftAt = st.o2, st.hp, st.blackout, t
+        save.set(key(r.id), r)
+        bump()
+        if st.o2 < 0.10 or st.blackout then
+          recordAlerts[r.id] = { level = "danger", text = st.blackout and "LAST AIR" or string.format("O2 %d %%", math.floor(st.o2 * 100 + 0.5)) }
+        elseif st.o2 < 0.25 then
+          recordAlerts[r.id] = { level = "warn", text = string.format("O2 %d %%", math.floor(st.o2 * 100 + 0.5)) }
+        else
+          recordAlerts[r.id] = nil
+        end
+        if st.dead then kill(r.id, "air", "the suit ran out where they were left") end
+      elseif not r.leftAt then
+        patch(r.id, { leftAt = t })
+      end
+    end
+  end
+end
+
 -- ── the queued switches (run in fixedUpdate) ───────────────────────────────
 local hold_imp = 0       -- the impact monitor waits after a teleport
 -- (a switch: half a second; a set-down at the base, `secs`: the crew's
@@ -1867,6 +2142,13 @@ local hold_imp = 0       -- the impact monitor waits after a teleport
 local function quiet_monitors(secs) hold_imp = math.max(hold_imp, now() + (secs or 0.5)) end
 -- Teleports (the walker's ground net and field floor) say so: the snap is no fall.
 function quietMonitors(secs) quiet_monitors(secs) end
+
+-- Put the avatar at a world point in the physics tick: its TICK pose (frames
+-- doc rule 3; planet_walker does the same), at rest.
+local function place_avatar(a, x, y, z)
+  if a.tickPos ~= nil and vec3 then a.tickPos = vec3(x, y, z) else a.x, a.y, a.z = x, y, z end
+  a.vx, a.vy, a.vz = 0, 0, 0
+end
 
 local function do_control(q)
   local id = q.id
@@ -1886,7 +2168,10 @@ local function do_control(q)
   end
   free_avatar(nil)
   despawn_body(id)
-  a.x, a.y, a.z = bx, by, bz
+  -- the view blends there (a swept move under 60 m, a short fade past it)
+  local pc = ref("planet_camera")
+  if pc and pc.handoff then pcall(pc.handoff, a.x, a.y, a.z, bx, by, bz) end
+  place_avatar(a, bx, by, bz)
   a.vx, a.vy, a.vz = bvx, bvy, bvz
   a.visible = true
   set_active(id)
@@ -1965,12 +2250,87 @@ local function do_eva(q)
   dollSync(true)
 end
 
+
+-- A base member stands up at the crew home (spawnAtBase).
+local function do_base(q)
+  local a = astro()
+  local b = space and space.body and space.body(q.body)
+  if not (a and b) then return end
+  free_avatar(nil)
+  despawn_body(q.id)
+  local pc = ref("planet_camera")
+  if pc and pc.handoff then pcall(pc.handoff, a.x, a.y, a.z, b.x + q.x, b.y + q.y, b.z + q.z) end
+  place_avatar(a, b.x + q.x, b.y + q.y, b.z + q.z)
+  a.visible = true
+  set_active(q.id)
+  patch(q.id, { status = "afoot", craft = false, body = q.body, x = q.x, y = q.y, z = q.z, anchor = false })
+  suit_in(q.id)
+  quiet_monitors(2.5)
+  local r = get(q.id)
+  caption((r and r.name or "crew") .. " · at the base")
+  log_(string.format("crew: control → %s (#%d) at the base", r and r.name or "?", q.id))
+end
+
+-- Arrived behind the travel curtain: become them where they are.
+local function do_arrive(q)
+  local r = get(q.id)
+  if not r then return end
+  if q.fid then
+    local fo = ref("flight_ops")
+    local v = fo and fo.liveOf and fo.liveOf(q.fid)
+    if v then
+      queue[#queue + 1] = { kind = "craft", nid = v.node.id, id = q.id }
+    else
+      caption(tostring(q.where or "their craft") .. " could not be put back yet")
+    end
+    return
+  end
+  if r.status == "base" then
+    local d, rx, ry, rz = home_spot()
+    if d then do_base({ id = q.id, body = d, x = rx, y = ry, z = rz }) end
+    return
+  end
+  local a = astro()
+  local wx, wy, wz = world_of(r)
+  if not (a and wx) then return end
+  despawn_body(q.id)
+  place_avatar(a, wx, wy, wz)
+  a.visible = true
+  set_active(q.id)
+  patch(q.id, { status = "afoot", craft = false, anchor = false })
+  suit_in(q.id)
+  hold_imp = now() + 3.0
+  caption((r.name or "crew") .. " · on foot")
+  log_(string.format("crew: arrived as %s (#%d) on %s", r.name or "?", q.id, tostring(r.body)))
+end
+
+-- Leave for a far member: the one you are stays where they stand, then the curtain.
+local function do_leave(q)
+  local gm = ref("game_manager")
+  if not (gm and gm.travelTo) then return end
+  free_avatar(nil)
+  hold_imp = now() + 120.0
+  local fo = ref("flight_ops")
+  if q.fid and fo and fo.requestRestore then pcall(fo.requestRestore, q.fid) end
+  local wait = nil
+  if q.fid then wait = function() return fo ~= nil and fo.liveOf ~= nil and fo.liveOf(q.fid) ~= nil end end
+  local label = string.format("%s · %s", tostring(q.name or "crew"), tostring(q.where or q.body))
+  local ok, why = gm.travelTo(q.body, q.x, q.y, q.z, label, function(arrived)
+    queue[#queue + 1] = { kind = "arrive", id = q.id, fid = q.fid, where = q.where }
+    if not arrived then caption("The ground there never came in · " .. label) end
+  end, { wait = wait, base = q.base })
+  if not ok then caption("Can't travel: " .. tostring(why)); hold_imp = now() + 1.0 end
+end
+
 local function run_queue()
   if #queue == 0 then return end
   local q = table.remove(queue, 1)
   if q.kind == "control" then do_control(q)
   elseif q.kind == "craft" then do_craft(q)
-  elseif q.kind == "eva" then do_eva(q) end
+  elseif q.kind == "eva" then do_eva(q)
+  elseif q.kind == "base" then do_base(q)
+  elseif q.kind == "leave" then do_leave(q)
+  elseif q.kind == "arrive" then do_arrive(q) end
 end
 
 -- ── status bookkeeping the controller calls ────────────────────────────────
@@ -1979,7 +2339,7 @@ function noteAboard(id, craft)
 end
 function noteAfoot(id)
   local a = astro()
-  local f = { status = "afoot", craft = false }
+  local f = { status = "afoot", craft = false, leftAt = clock() }
   if a and space and space.dominant then
     local d = space.dominant(a.x, a.y, a.z)
     local b = d and space.body(d)
@@ -2987,7 +3347,7 @@ local function body_sync()
       if b and b.valid ~= false then
         if len(b.x - fx, b.y - fy, b.z - fz) > P("body_range") then
           local d, x, y, z = rel(b.x, b.y, b.z)
-          patch(r.id, { body = d, x = x, y = y, z = z })
+          patch(r.id, { body = d, x = x, y = y, z = z, leftAt = clock() })
           despawn_body(r.id)
         end
       else
@@ -3069,6 +3429,7 @@ function fixedUpdate(node, dt)
     elseif not r and living() == 0 and #roster() > 0 then handoff(nil, nil) end
   end
   run_queue()
+  recordTick()
   avatar_monitor(dt or 0.016)
   heat_monitor(dt or 0.016)
   down_monitor(dt or 0.016)

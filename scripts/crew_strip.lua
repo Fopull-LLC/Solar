@@ -486,7 +486,10 @@ local function describe(v, list, L, afoot, chips_any, cap_in)
     rows[#rows + 1] = { "row", key = "head", w = L.inner_w, h = 18, gap = 8, pad = 0, align = "center",
                         { "text", key = "ht", style = "hud/micro", w = "grow", h = 18, maxLines = 1, overflow = "ellipsis",
                           text = string.format("CREW · %s · %d/%d", tostring(v.craftName or "Craft"), #list,
-                            math.max(total, #list)) } }
+                            math.max(total, #list)) },
+                        { "button", key = "pick", style = "hud/button", w = 58, h = 18, text = "CREW ▸", textAlign = "center",
+                          selected = pickerOpen or nil, tooltip = "Switch to another crew member, or travel to one far away",
+                          onClicked = function() togglePicker() end } }
     local ph = port_h(L, chips_any)
     if #list == 0 then
       rows[#rows + 1] = { "text", key = "empty", style = "hud/micro", w = "fit", h = 18, text = "NOBODY ABOARD" }
@@ -507,15 +510,19 @@ local function describe(v, list, L, afoot, chips_any, cap_in)
       rows[#rows + 1] = prow
     end
   end
-  if #afoot > 0 then
-    rows[#rows + 1] = { "text", key = "afh", style = "hud/micro", w = "fit", h = 14, text = v and "ON FOOT" or "CREW" }
+  if #afoot > 0 or (not v and (C and C.living and C.living() or 0) > 1) then
+    rows[#rows + 1] = { "row", key = "afh", w = "fit", h = 18, gap = 8, pad = 0, align = "center",
+      { "text", key = "t", style = "hud/micro", w = "fit", h = 14, text = v and "ON FOOT" or "CREW" },
+      (not v) and { "button", key = "pick", style = "hud/button", w = 58, h = 18, text = "CREW ▸", textAlign = "center",
+        selected = pickerOpen or nil, tooltip = "Switch to another crew member, or travel to one far away",
+        onClicked = function() togglePicker() end } or nil }
     local est, shown = 0, {}
     for i, e in ipairs(afoot) do
       if i > 6 then break end
       shown[#shown + 1] = e
       est = est + chip_w(e.label) + (i > 1 and 4 or 0)
     end
-    local row = { "row", key = "afoot", w = math.min(cap_in, est), h = "fit", gap = 4, pad = 0, align = "center", wrap = true }
+    local row = { "row", key = "afoot", w = math.max(1, math.min(cap_in, est)), h = "fit", gap = 4, pad = 0, align = "center", wrap = true }
     for i, e in ipairs(shown) do
       row[#row + 1] = { "button", key = "af" .. i, style = "hud/button", w = "fit", h = 20,
                         text = e.label, textAlign = "center", onClicked = e.act }
@@ -544,8 +551,50 @@ local function describe(v, list, L, afoot, chips_any, cap_in)
                         overflow = "ellipsis", text = msg }
   end
   local root = { "col", key = "strip", style = "hud/card", w = "fit", h = "fit", gap = 4, pad = CARD_PAD, align = "start" }
+  if pickerOpen then
+    for _, r in ipairs(picker_rows(C, cap_in)) do root[#root + 1] = r end
+  end
   for _, r in ipairs(rows) do root[#root + 1] = r end
   return root
+end
+
+-- THE CREW PICKER (CREW ▸ on the strip's heading; docs/tracking-station.md
+-- §2.3): every living member with what a click does — SWITCH (on foot in
+-- range), FLY · <craft> (seated), AT BASE · SWITCH, GO TO · 4.1 km / · Iru
+-- (behind the travel curtain) — or, greyed, why not (retraining, down, lost
+-- with a craft). One verb underneath: crew.switchToMember.
+pickerOpen = false
+function togglePicker(on)
+  if on == nil then on = not pickerOpen end
+  pickerOpen = on == true
+end
+
+local function picker_rows(C, cap_in)
+  local rows = {}
+  local list = (C and C.switchTargets and C.switchTargets()) or {}
+  rows[#rows + 1] = { "row", key = "pkh", w = math.min(cap_in, 420), h = 18, gap = 6, pad = 0, align = "center",
+    { "text", key = "t", style = "hud/micro", w = "grow", h = 18, text = "SWITCH TO" },
+    { "button", key = "pkx", style = "hud/button", w = 22, h = 18, text = "✕", textAlign = "center",
+      onClicked = function() pickerOpen = false end } }
+  for i, m in ipairs(list) do
+    if i > 12 then break end
+    local tip = m.ok and nil or m.why
+    rows[#rows + 1] = { "button", key = "pk" .. m.id, style = m.you and "panel/rowActive" or "hud/button",
+      w = math.min(cap_in, 420), h = 24, dir = "row", gap = 6, pad = 3, align = "center",
+      disabled = (not m.ok) or nil, tooltip = tip,
+      { "text", key = "r", style = "panel/role", w = 18, h = 18, text = m.role or "?", textAlign = "center", textValign = "center" },
+      { "text", key = "n", style = "panel/cellStrong", w = 112, h = "fit", maxLines = 1, overflow = "ellipsis", text = m.name or "?" },
+      { "text", key = "w", style = "panel/cellMuted", w = "grow", h = "fit", maxLines = 1, overflow = "ellipsis",
+        text = (m.alert and (m.alert.text .. " · ") or "") .. (m.where or "") },
+      { "text", key = "k", style = m.ok and "panel/keys" or "panel/cellMuted", w = 132, h = "fit", maxLines = 1,
+        overflow = "ellipsis", textAlign = "end", text = m.label or "" },
+      onClicked = function()
+        if not m.ok then return end
+        local ok, why = C.switchToMember(m.id)
+        if ok then pickerOpen = false else say(why or "can't") end
+      end }
+  end
+  return rows
 end
 
 -- The on-foot chips: members on foot in range (CONTROL), and on foot, the
@@ -617,7 +666,8 @@ function lateUpdate(node, dt)
   if mode == "hidden" or blocked() or not C then return hide(node) end
   local list = (v and C.aboard and C.aboard(v)) or {}
   local afoot = afoot_entries(v)
-  if #list == 0 and #afoot == 0 and not confirm then return hide(node) end
+  local others = (C.living and C.living() or 0) > 1
+  if #list == 0 and #afoot == 0 and not confirm and not (others or pickerOpen) then return hide(node) end
   if not el.visible then el.visible = true end
   local maxW = cap()
   local S = SIZES[mode] or SIZES.small

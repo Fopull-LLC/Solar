@@ -293,3 +293,41 @@ function update(node, dt)
   ui.make(node, tree)
   drawn = true
 end
+
+-- ── one warp request from a screen (the Tracking Station's rungs) ───────────
+-- The same refusals the keys have (the flight console's in vessel_controller,
+-- footBlock on foot, the galaxy's ceiling), said with warpSay/say so a rung
+-- that does nothing says why. → ok, why. (P3 routes the keys through here.)
+function capNow() return (galaxy_cap()) end
+function request(w)
+  if not (space and space.warp) then return false, "no warp here" end
+  local cur = space.warp() or 1
+  w = math.max(1, w or 1)
+  if w <= cur + 0.001 then space.warp(w) return true end
+  local cap, why = galaxy_cap()
+  local function no(text) say("Warp limited · " .. text) return false, "Warp limited · " .. text end
+  if w > cap + 0.001 then return no(why or string.format("×%d out here", math.floor(cap))) end
+  local vc = piloted()
+  if vc then
+    if (vc.throttle or 0) > 0.01 then return no("cut the throttle first") end
+    local ok, eva = pcall(function() return vc.evaBlocksWarp and vc.evaBlocksWarp() end)
+    if ok and eva then return no("crew on EVA in space") end
+    local info = assembly and assembly.info and vc.node and assembly.info(vc.node)
+    if info and not (info.grounded or info.anchored) and info.origin then
+      local o = info.origin
+      local d = space.dominant(o.x, o.y, o.z)
+      local b = d and space.body(d)
+      if b and math.sqrt((o.x - b.x) ^ 2 + (o.y - b.y) ^ 2 + (o.z - b.z) ^ 2) - b.radius <= 40.0 then
+        return no("too low to coast (under 40 m)")
+      end
+    end
+  else
+    local pw = ref("planet_walker")
+    if not (pw and pw.onFoot) then return no("nobody to warp") end
+    local s, al, inj = foot_state(pw, cur > 1.001 and HOLD_SPEED or START_SPEED)
+    local block = footBlock(s, al, inj)
+    if block then return no(block) end
+  end
+  space.warp(w)
+  return true
+end

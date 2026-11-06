@@ -851,10 +851,8 @@ function crew_button(on)
     onClicked = function() sfx("click"); openRoster("ROSTER") end } } or {})
 end
 
--- The Tracking Station has a screen of its own (scripts/tracking_station.lua):
--- the whole fleet with its power, signal and control, and the actions on it.
--- This menu still owns "a facility is open" (E/Esc, walking away, the scrim);
--- the station only draws.
+-- The Tracking Station is the orbit map's STATION mode
+-- (scripts/tracking_station.lua): the dish only opens it.
 local function station()
   local ts = ref("tracking_station")
   return (ts and ts.open and ts.close) and ts or nil
@@ -877,11 +875,14 @@ function openMenu(name)
   open_fac = name
   sfx("open")
   if prompt_el then prompt_el.visible = false end
+  -- The dish opens the Tracking Station: the orbit map in STATION mode, the
+  -- same screen F2 opens anywhere. It is the map's from here on (Esc, F2, M;
+  -- E again closes what the dish opened), so no facility stays "open".
   local ts = FAC[name].kind == "tracking" and station() or nil
   if ts then
+    open_fac = nil
     if panel_el then panel_el.visible = false end
-    ts.open()
-    scrim(true)
+    ts.open({ from = "dish" })
     return
   end
   if panel_el then panel_el.visible = true end

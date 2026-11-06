@@ -79,6 +79,7 @@ local function put()
     for i = 1, #ids - PACK_MAX do store[ids[i]] = nil end
   end
   save.set(KEY, store)
+  packVersion = (packVersion or 0) + 1
 end
 
 local seq = 0
@@ -274,6 +275,31 @@ function packedList()
   for id, rec in pairs(packed()) do out[#out + 1] = { id = id, name = rec.name, kind = rec.kind, body = rec.body, parts = #rec.parts } end
   table.sort(out, function(a, b) return a.id < b.id end)
   return out
+end
+-- Every packed piece with its pose as written (body-relative, the game time
+-- it was written, and whether it rides a conic): the Tracking Station
+-- carries an orbiting one to now itself, against the frame's own body read.
+-- Changes only when a piece packs or unpacks (`packVersion`).
+packVersion = 0
+function packedPoses()
+  local out = {}
+  for id, rec in pairs(packed()) do
+    out[#out + 1] = { id = id, name = rec.name, kind = rec.kind, body = rec.body, parts = #(rec.parts or {}),
+                      x = rec.x, y = rec.y, z = rec.z, vx = rec.vx or 0, vy = rec.vy or 0, vz = rec.vz or 0,
+                      stime = rec.stime or 0, prefab = rec.parts and rec.parts[1] and rec.parts[1].prefab or nil }
+  end
+  table.sort(out, function(a, b) return a.id < b.id end)
+  return out
+end
+-- Probes: read the packed records from the save again (one written by hand).
+function reloadStore() store = nil; packVersion = (packVersion or 0) + 1 end
+-- The Tracking Station's FORGET: a packed piece's record goes (it is never
+-- built again). → ok, why
+function forget(id)
+  if not packed()[id] then return false, "no such piece" end
+  packed()[id] = nil
+  put()
+  return true
 end
 -- A revert takes back what its flight shed, packed or not.
 function forgetTag(tag)
