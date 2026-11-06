@@ -296,6 +296,19 @@ function screenLines(sid)
       L("BATTERY   none on this grid", true)
     end
     if s and (s.short or 0) > 0 then L(string.format("SHORT     %.2f EC/s: loads shed", s.short), true) end
+    -- (S5) the network: what the cables and transformers lose, what limits it
+    if s and (s.loss or 0) > 0.0005 then
+      local out_ = (M and M.need or 0) + s.loss
+      L(string.format("LOSSES    %.2f kW · %.1f %% of the draw", s.loss, 100 * s.loss / math.max(1e-9, out_)), s.loss / math.max(1e-9, out_) > 0.1)
+    end
+    if s and s.limited then L("LIMIT     " .. s.limited, (s.limitShare or 0) > 1) end
+    local BP = ref("base_power")
+    local tr = BP and BP.lastTrips and BP.lastTrips[#BP.lastTrips]
+    if tr and M and M.breakers then
+      for _, b in ipairs(M.breakers) do
+        if b.state == "tripped" then L(string.format("TRIPPED   breaker %d A · reset it by hand", b.pw.amps or 63), true) break end
+      end
+    end
   end
   local n, on = lightsOf(sid)
   L(string.format("LIGHTS    %d of %d on", on, n))
@@ -406,7 +419,74 @@ function setSignWords(sid, uid, text)
 end
 function signText(sid, uid) local e = E[key(sid, uid)]; return e and e.words or nil end
 
-local INK = { 0.92, 0.89, 0.81 }
+-- (S5 polish: signs readable at 8 m.) The words are set from the fonts' own
+-- advance widths (tools: fontTools on fonts/SolarStencil.ttf and
+-- SolarLabel.ttf, em units), so the capitals fill the plate: one line, or two
+-- when that sets them bigger, and the plate narrows to the words (its Mesh
+-- and Face scaled along their width; never under its `fit` share). Light ink
+-- on a near-black enamel (ui-style signage: ink on dark enamel).
+local ADV = {
+  stencil = { [" "] = 0.26, ["!"] = 0.363, ["'"] = 0.3, ["("] = 0.374, [")"] = 0.374, ["+"] = 0.54, [","] = 0.33, ["-"] = 0.379, ["."] = 0.33,
+    ["/"] = 0.429, ["0"] = 0.66, ["1"] = 0.402, ["2"] = 0.614, ["3"] = 0.61, ["4"] = 0.654, ["5"] = 0.628, ["6"] = 0.662, ["7"] = 0.576,
+    ["8"] = 0.676, ["9"] = 0.662, [":"] = 0.33, ["<"] = 0.541, [">"] = 0.541, ["?"] = 0.521, ["&"] = 0.739, ["#"] = 0.7, ["%"] = 0.898,
+    A = 0.687, B = 0.67, C = 0.568, D = 0.68, E = 0.616, F = 0.576, G = 0.66, H = 0.716, I = 0.33, J = 0.425, K = 0.683, L = 0.541,
+    M = 0.885, N = 0.716, O = 0.698, P = 0.645, Q = 0.698, R = 0.674, S = 0.612, T = 0.581, U = 0.69, V = 0.663, W = 0.996, X = 0.678,
+    Y = 0.633, Z = 0.618, other = 0.62 },
+  label = { [" "] = 0.2, ["!"] = 0.302, ["'"] = 0.153, ["("] = 0.298, [")"] = 0.298, ["+"] = 0.465, [","] = 0.232, ["-"] = 0.364, ["."] = 0.242,
+    ["/"] = 0.417, ["0"] = 0.509, ["1"] = 0.313, ["2"] = 0.488, ["3"] = 0.478, ["4"] = 0.522, ["5"] = 0.478, ["6"] = 0.479, ["7"] = 0.44,
+    ["8"] = 0.484, ["9"] = 0.48, [":"] = 0.304, ["<"] = 0.465, [">"] = 0.465, ["?"] = 0.456, ["&"] = 0.635, ["#"] = 0.642, ["%"] = 0.802,
+    A = 0.552, B = 0.542, C = 0.533, D = 0.545, E = 0.513, F = 0.489, G = 0.537, H = 0.557, I = 0.243, J = 0.512, K = 0.549, L = 0.493,
+    M = 0.627, N = 0.588, O = 0.544, P = 0.526, Q = 0.521, R = 0.537, S = 0.513, T = 0.516, U = 0.557, V = 0.54, W = 0.771, X = 0.538,
+    Y = 0.528, Z = 0.48, other = 0.52 },
+}
+-- The width of `s` in ems in a face ("stencil" | "label"), UTF-8 aware.
+-- (×1.15: the engine sets a run wider than the bare advances add up to; the
+-- probe's first plate ran ~10 % over its estimate and lost a letter)
+TEXT_SLACK = 1.15
+function textEm(s, face)
+  local A = ADV[face] or ADV.label
+  local w = 0
+  for ch in tostring(s):gmatch("[%z\1-\127\194-\244][\128-\191]*") do w = w + (A[ch] or A.other) end
+  return w * TEXT_SLACK
+end
+-- How a sign's words sit on it (pure): S = the piece's `sign`, words in
+-- capitals. → { lines = { … }, size (px), W, H (the picture), f (the plate's
+-- share of its full width), m, pad }
+function signLayout(S, words)
+  local face = (S.style == "plate") and "label" or "stencil"
+  local W0 = S.px or 512
+  local H = math.max(32, math.floor(W0 * S.h / S.w + 0.5))
+  local stencil = S.style == "stencil"
+  local m = stencil and 0 or math.floor(H * 0.06)
+  local pad = math.floor(H * 0.06)
+  local Wt, Ht = W0 - 2 * (m + pad), H - 2 * (m + pad)
+  local w1 = math.max(0.5, textEm(words, face))
+  local size1 = math.min(Ht * 0.95, Wt / w1)
+  local best = { lines = { words }, size = size1, w = w1 }
+  -- two lines, split at the space that balances them best
+  local bestSplit = nil
+  for i = 2, #words - 1 do
+    if words:sub(i, i) == " " then
+      local a, b = words:sub(1, i - 1), words:sub(i + 1)
+      local wa, wb = textEm(a, face), textEm(b, face)
+      local wm = math.max(wa, wb)
+      if not bestSplit or wm < bestSplit.w then bestSplit = { lines = { a, b }, w = wm } end
+    end
+  end
+  if bestSplit then
+    local size2 = math.min(Ht * 0.95 / 2.1, Wt / bestSplit.w)
+    if size2 > size1 * 1.15 then best = { lines = bestSplit.lines, size = size2, w = bestSplit.w } end
+  end
+  -- the plate narrowed to the words (a plate, a board; paint has no plate)
+  local f = 1
+  if not stencil and S.fit then
+    f = math.max(S.fit, math.min(1, (best.w * best.size + 2 * (m + pad) + H * 0.12) / W0))
+  end
+  return { lines = best.lines, size = best.size, W = math.max(32, math.floor(W0 * f + 0.5)), H = H, f = f, m = m, pad = pad, face = face }
+end
+
+local INK = { 0.95, 0.94, 0.89 }
+local ENAMEL = { 0.085, 0.09, 0.085 }
 paint_sign = function(e)
   local S = e.def.sign
   if not (S and image and image.new and valid(e.face)) then return end
@@ -414,32 +494,39 @@ paint_sign = function(e)
   words = string.upper(words)
   if e.words == words and e.tex then return end
   e.words = words
-  local W = S.px or 512
-  local H = math.max(32, math.floor(W * S.h / S.w + 0.5))
+  local Lt = signLayout(S, words)
+  local W, H = Lt.W, Lt.H
   local stencil = S.style == "stencil"
   local img = e.img
-  if not img or img.width ~= W then
+  if not img or img.width ~= W or img.height ~= H then
+    if img and assets and assets.release and e.tex then pcall(assets.release, e.tex); e.tex = nil end
     local ok, im = pcall(image.new, W, H)
     if not ok or not im then return end
     img, e.img = im, im
   end
   pcall(img.clear, img)
   local font = (S.style == "plate") and "fonts/SolarLabel.ttf" or "fonts/SolarStencil.ttf"
-  local k = (S.style == "plate") and 0.52 or 0.62
   if not stencil then
-    -- dark enamel, a ruled inner border; the board gets a second rule
-    pcall(img.fill, img, 0, 0, W, H, 0.16, 0.17, 0.155, 1)
-    local m = math.floor(H * 0.07)
-    pcall(img.fill, img, m, m, W - 2 * m, 3, INK[1], INK[2], INK[3], 0.85)
-    pcall(img.fill, img, m, H - m - 3, W - 2 * m, 3, INK[1], INK[2], INK[3], 0.85)
-    pcall(img.fill, img, m, m, 3, H - 2 * m, INK[1], INK[2], INK[3], 0.85)
-    pcall(img.fill, img, W - m - 3, m, 3, H - 2 * m, INK[1], INK[2], INK[3], 0.85)
+    -- near-black enamel, a light-from-above sheen, a ruled inner border
+    pcall(img.fill, img, 0, 0, W, H, ENAMEL[1], ENAMEL[2], ENAMEL[3], 1)
+    pcall(img.blend, img, 0, 0, W, math.floor(H * 0.35), 1, 1, 1, 0.035)
+    local m = Lt.m
+    local t = math.max(3, math.floor(H * 0.014))
+    pcall(img.fill, img, m, m, W - 2 * m, t, INK[1], INK[2], INK[3], 0.9)
+    pcall(img.fill, img, m, H - m - t, W - 2 * m, t, INK[1], INK[2], INK[3], 0.9)
+    pcall(img.fill, img, m, m, t, H - 2 * m, INK[1], INK[2], INK[3], 0.9)
+    pcall(img.fill, img, W - m - t, m, t, H - 2 * m, INK[1], INK[2], INK[3], 0.9)
   end
-  local size = math.min(H * (stencil and 0.78 or 0.6), (W * 0.86) / math.max(1, #words * k))
-  pcall(img.text, img, W / 2, (H - size * 1.12) / 2, words, size, INK[1], INK[2], INK[3], 1, "center", font)
+  local size = Lt.size
+  local n = #Lt.lines
+  local lh = size * 1.05
+  local y0 = (H - (n - 1) * lh - size * 1.12) / 2
+  for i, line in ipairs(Lt.lines) do
+    pcall(img.text, img, W / 2, y0 + (i - 1) * lh, line, size, INK[1], INK[2], INK[3], 1, "center", font)
+  end
   -- wear: a few rubbed spots, softer on a plate than on sprayed paint
   local seed = (e.uid or 1) * 7919 + #words * 104729
-  for i = 1, (stencil and 28 or 10) do
+  for _ = 1, (stencil and 28 or 10) do
     seed = (seed * 1103515245 + 12345) % 2147483648
     local x = seed % W
     local y = math.floor(seed / W) % H
@@ -447,6 +534,15 @@ paint_sign = function(e)
     if stencil then pcall(img.fill, img, x, y, r, r, 0, 0, 0, 0)
     else pcall(img.blend, img, x, y, r * 2, r, 0.30, 0.29, 0.26, 0.5) end
   end
+  -- the plate as wide as its words
+  if e.fitf ~= Lt.f then
+    e.fitf = Lt.f
+    for _, nm in ipairs({ "Face", "Mesh" }) do
+      local c = child(e.node, nm)
+      if c then c.scale_x = Lt.f end
+    end
+  end
+  e.layout = Lt
   local ok, tex = pcall(img.texture, img)
   if ok and tex then
     if e.tex ~= tex then

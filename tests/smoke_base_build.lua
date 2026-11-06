@@ -66,7 +66,7 @@ end
 -- ── parts_base ──────────────────────────────────────────────────────────────
 local PB = load_script("parts_base.lua", env({}, {}))
 local cat = PB.catalogue()
-check(#cat == 1 and cat[1].title == "BASE" and #cat[1].ids == 10, "one BASE section with ten parts (the stand: step 6; the tower and its two sources: step 7; the Battery Bank, the Shield Wall and the Power Cable: step 8)")
+check(#cat == 1 and cat[1].title == "BASE" and #cat[1].ids == 13, "one BASE section with thirteen parts (the stand: step 6; the tower and its two sources: step 7; the Battery Bank, the Shield Wall and the Power Cable: step 8; three more cable drums: S5)")
 for _, id in ipairs(cat[1].ids) do
   local d = PB.partInfo(id)
   check(d and d.fieldOnly == true, id .. ": fieldOnly (the VAB never lists it)")
@@ -83,7 +83,7 @@ end
 check(near(PB.partInfo("padPlate").mass, 4 * 4 * 0.30 * 2.4, 0.05), "the Pad Plate weighs its concrete (4 x 4 x 0.30 m at 2.4 t/m³)")
 check(PB.partInfo("shed").hull == "subShape" and PB.partInfo("hab").hull == "shell", "flat walls → subShapes, the curved can → a shell")
 local REG, CATL = {}, {}
-check(PB.register(REG, CATL) == 10 and REG.padPlate and CATL[1][1] == "BASE", "register() adds the BASE section to a registry")
+check(PB.register(REG, CATL) == 13 and REG.padPlate and CATL[1][1] == "BASE", "register() adds the BASE section to a registry")
 
 -- ── base_economy ────────────────────────────────────────────────────────────
 local EC = load_script("base_economy.lua", env({}, {}))

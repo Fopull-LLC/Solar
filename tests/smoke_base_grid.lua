@@ -70,7 +70,8 @@ check(slurp("solar/prefabs/BaseBattery.prefab.ron") and slurp("solar/prefabs/Bas
   "...their prefabs on disk")
 check((slurp("solar/prefabs/BaseShieldWall.prefab.ron") or ""):find('name: "Wall 1"', 1, true) ~= nil, "the wall's collider box")
 local cat = PB.catalogue()[1].ids
-check(#cat == 10 and cat[8] == "batteryBank" and cat[9] == "shieldWall" and cat[10] == "powerCable", "the BASE column: ten parts")
+check(#cat == 13 and cat[8] == "batteryBank" and cat[9] == "shieldWall" and cat[10] == "powerCable" and cat[13] == "hvCable",
+  "the BASE column: ten parts and S5's three more cable drums")
 
 -- ── a small solar system on a real conic ────────────────────────────────────
 local MU, RS = 9.75e10, 2.0e5

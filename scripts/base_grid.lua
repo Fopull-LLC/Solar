@@ -44,6 +44,16 @@
 -- year that comes back to where it started repeats, and one that never
 -- touches full or empty adds the same every year until it would.
 --
+-- ── S5: THE NETWORK (base_power.lua; docs/base-building.md §16) ─────────────
+-- A grid is also a network: each structure a bus (a tower's 150 m share one),
+-- its live cables the edges (a breaker open or tripped at an end, or a burn,
+-- takes a cable out, and may split the grid). base_power solves the flow of
+-- every slot of the year once, on a rebuild: the losses (`lossP`) are one
+-- more load in `advance`, and a slot that trips a breaker or burns a cable
+-- (`trip`) stops the step at its start: `advance_all` opens what tripped,
+-- rebuilds the grids (each keeps its own clock while it catches up) and goes
+-- on. Without base_power in the scene the grid is lossless, as before.
+--
 -- ── SAVE ────────────────────────────────────────────────────────────────────
 --
 --   grid.a0   the agency clock the slots are anchored on
@@ -100,18 +110,25 @@ local function dist(ax, ay, az, bx, by, bz) return math.sqrt((ax - bx) ^ 2 + (ay
 function buildGrids(structs, bases, cables, defs, pose, radius)
   radius = radius or RADIUS
   local U = uf_new()
+  -- (S5) the BUSES: the same union without the cables, so each structure
+  -- knows the lossless bus it sits on (a tower's 150 m share one)
+  local Bu = uf_new()
   local byId = {}
-  for _, r in ipairs(structs or {}) do byId[r.id] = r; uf_find(U, "s" .. tostring(r.id)) end
+  for _, r in ipairs(structs or {}) do byId[r.id] = r; uf_find(U, "s" .. tostring(r.id)); uf_find(Bu, "s" .. tostring(r.id)) end
   -- the radius: a structure with any part within it of a tower joins the base
   for _, b in ipairs(bases or {}) do
     local bk = "b" .. string.format("%06d", b.id)
     uf_find(U, bk)
-    if b.sid and byId[b.sid] then uf_join(U, bk, "s" .. tostring(b.sid)) end
+    if b.sid and byId[b.sid] then uf_join(U, bk, "s" .. tostring(b.sid)); uf_join(Bu, bk, "s" .. tostring(b.sid)) end
     for _, r in ipairs(structs or {}) do
-      if r.b == b.b then
+      -- (S5) a structure of network gear alone (a pole, a junction) is on
+      -- the line its cables make, never on the tower's low-voltage ring
+      local gearOnly = #(r.bp or {}) > 0
+      for _, p in ipairs(r.bp or {}) do local d = defs(p.id); if not (d and d.netgear and not d.power) then gearOnly = false break end end
+      if r.b == b.b and not gearOnly then
         for _, p in ipairs(r.bp or {}) do
           local x, y, z = pose(r, p, 0)
-          if dist(x, y, z, b.x, b.y, b.z) <= radius then uf_join(U, bk, "s" .. tostring(r.id)) break end
+          if dist(x, y, z, b.x, b.y, b.z) <= radius then uf_join(U, bk, "s" .. tostring(r.id)); uf_join(Bu, bk, "s" .. tostring(r.id)) break end
         end
       end
     end
@@ -125,7 +142,7 @@ function buildGrids(structs, bases, cables, defs, pose, radius)
   local function grid_of(root)
     local g = roots[root]
     if not g then
-      g = { id = root, sids = {}, bases = {}, parts = {}, cables = 0 }
+      g = { id = root, sids = {}, bases = {}, parts = {}, cables = 0, bus = {}, cableList = {} }
       roots[root] = g
       out[#out + 1] = g
     end
@@ -138,6 +155,7 @@ function buildGrids(structs, bases, cables, defs, pose, radius)
   for _, r in ipairs(structs or {}) do
     local g = grid_of(uf_find(U, "s" .. tostring(r.id)))
     g.sids[#g.sids + 1] = r.id
+    g.bus[r.id] = uf_find(Bu, "s" .. tostring(r.id))
     bySid[r.id] = g
     for _, p in ipairs(r.bp or {}) do
       local d = defs(p.id)
@@ -146,7 +164,7 @@ function buildGrids(structs, bases, cables, defs, pose, radius)
   end
   for _, c in ipairs(cables or {}) do
     local g = c.a and bySid[c.a.sid]
-    if g and c.z and bySid[c.z.sid] == g then g.cables = g.cables + 1 end
+    if g and c.z and bySid[c.z.sid] == g then g.cables = g.cables + 1; g.cableList[#g.cableList + 1] = c end
   end
   -- (a grid with nothing on it that makes, stores or draws power is dropped)
   local keep = {}
@@ -172,12 +190,31 @@ end
 --         loads = { { kind, bid?, need, label } }, need, stores = { { key, cap, eff, fill } },
 --         C, eff, sources = n, body }
 -- `towerNeed` = the tower's draw (parts_base tower.draw).
-function gridModel(g, pose, towerNeed)
-  local M = { base = 0, arrays = {}, loads = {}, need = 0, stores = {}, C = 0, eff = 1, sources = 0, rtg = 0, body = nil }
+function gridModel(g, pose, towerNeed, opts)
+  opts = opts or {}
+  local M = { base = 0, arrays = {}, loads = {}, need = 0, stores = {}, C = 0, eff = 1, sources = 0, rtg = 0, body = nil,
+              rtgs = {}, breakers = {}, xfmrs = {}, mainsOff = {} }
   local effw, capw = 0, 0
+  -- (S5) a breaker with no cable at all is its structure's MAIN: open or
+  -- tripped, that structure's own loads are off the grid
+  for _, e in ipairs(g.parts) do
+    local pw = e.def.power
+    if pw and pw.kind == "breaker" then
+      local key = tostring(e.rec.id) .. ":" .. tostring(e.p.uid)
+      local main = not (opts.cablesAt and (opts.cablesAt[key] or 0) > 0)
+      local st = opts.state and opts.state(e.rec.id, e.p.uid) or "closed"
+      M.breakers[#M.breakers + 1] = { key = key, sid = e.rec.id, uid = e.p.uid, pw = pw, main = main, state = st, kW = breakerKW_(pw) }
+      if main and st ~= "closed" then M.mainsOff[e.rec.id] = true end
+    elseif pw and pw.kind == "xfmr" then
+      M.xfmrs[#M.xfmrs + 1] = { key = tostring(e.rec.id) .. ":" .. tostring(e.p.uid), sid = e.rec.id, uid = e.p.uid, pw = pw }
+    end
+  end
   for _, bid in ipairs(g.bases) do
-    M.loads[#M.loads + 1] = { kind = "tower", bid = bid, need = towerNeed or 2.0, label = "tower" }
-    M.need = M.need + (towerNeed or 2.0)
+    local bsid = opts.baseSid and opts.baseSid(bid) or nil
+    if not (bsid and M.mainsOff[bsid]) then
+      M.loads[#M.loads + 1] = { kind = "tower", bid = bid, need = towerNeed or 2.0, label = "tower", sid = bsid }
+      M.need = M.need + (towerNeed or 2.0)
+    end
   end
   for _, e in ipairs(g.parts) do
     local pw, r, p = e.def.power, e.rec, e.p
@@ -187,27 +224,72 @@ function gridModel(g, pose, towerNeed)
       M.base = M.base + (pw.gen or 0)
       M.rtg = M.rtg + (pw.gen or 0)
       M.sources = M.sources + 1
+      M.rtgs[#M.rtgs + 1] = { sid = r.id, gen = pw.gen or 0 }
     elseif pw and pw.kind == "solar" then
       local gx, gy, gz, U, F = pose(r, p, pw.lift or 1.0)
       -- the cells track about the part's +X (= up × front)
       local ax, ay, az = U.y * F.z - U.z * F.y, U.z * F.x - U.x * F.z, U.x * F.y - U.y * F.x
       M.arrays[#M.arrays + 1] = { key = string.format("%s|%.2f|%.2f|%.2f|%.3f|%.3f|%.3f", key, gx, gy, gz, ax, ay, az),
-                                  gen = pw.gen or 0, x = gx, y = gy, z = gz, ax = ax, ay = ay, az = az, b = r.b }
+                                  gen = pw.gen or 0, x = gx, y = gy, z = gz, ax = ax, ay = ay, az = az, b = r.b, sid = r.id }
       M.sources = M.sources + 1
     elseif pw and pw.kind == "store" then
       -- (J6: `effk` on the part = the installing Engineer's bonus, fixed at placement)
       local eff = pw.eff or 1
       if tonumber(p.effk) then eff = math.max(eff, math.min(0.99, eff + tonumber(p.effk))) end
-      M.stores[#M.stores + 1] = { key = key, cap = pw.cap or 0, eff = eff, fill = pw.fill or 0 }
+      M.stores[#M.stores + 1] = { key = key, cap = pw.cap or 0, eff = eff, fill = pw.fill or 0, sid = r.id }
       M.C = M.C + (pw.cap or 0)
       effw, capw = effw + eff * (pw.cap or 0), capw + (pw.cap or 0)
-    elseif pw and pw.kind == "load" then
-      M.loads[#M.loads + 1] = { kind = "load", need = pw.use or 0, label = e.def.label }
+    elseif pw and pw.kind == "load" and not M.mainsOff[r.id] then
+      M.loads[#M.loads + 1] = { kind = "load", need = pw.use or 0, label = e.def.label, sid = r.id }
       M.need = M.need + (pw.use or 0)
     end
   end
   M.eff = capw > 0 and effw / capw or 1
   return M
+end
+-- (a breaker's rating in kW at 400 V: base_power.breakerKW's figure)
+function breakerKW_(pw) return (pw and pw.amps or 63) * 400 / 1000 end
+
+-- (S5) THE NETWORK SPEC of a grid for base_power.network: its buses, where
+-- each source, load and store sits, its live cables (`cables` = the grid's,
+-- every one on a closed path) with their guards and transformers.
+-- prof(arr) = an array's year of slots (or nil). → spec
+function netSpec(g, M, prof, defsAt)
+  local idx, buses = {}, {}
+  local function busOf(sid)
+    local k = g.bus[sid] or ("s" .. tostring(sid))
+    local i = idx[k]
+    if not i then buses[#buses + 1] = k; i = #buses; idx[k] = i end
+    return i
+  end
+  for _, sid in ipairs(g.sids) do busOf(sid) end
+  local spec = { buses = buses, gen = {}, arrays = {}, loads = {}, stores = {}, edges = {}, mains = {}, xfmrs = {} }
+  for i = 1, #buses do spec.gen[i] = 0 end
+  for _, r in ipairs(M.rtgs or {}) do local b = busOf(r.sid); spec.gen[b] = spec.gen[b] + r.gen end
+  for _, a in ipairs(M.arrays) do spec.arrays[#spec.arrays + 1] = { bus = busOf(a.sid), prof = prof and prof(a) or nil, kW = 0 } end
+  local bySid = {}
+  for _, l in ipairs(M.loads) do
+    local b = l.sid and busOf(l.sid) or 1
+    spec.loads[#spec.loads + 1] = { bus = b, kW = l.need, sid = l.sid }
+    if l.sid then bySid[l.sid] = (bySid[l.sid] or 0) + l.need end
+  end
+  for _, st in ipairs(M.stores) do spec.stores[#spec.stores + 1] = { bus = busOf(st.sid), cap = st.cap } end
+  local brk, xf = {}, {}
+  for _, b in ipairs(M.breakers) do
+    brk[b.key] = b
+    if b.main and b.state == "closed" then spec.mains[#spec.mains + 1] = { key = b.key, kW = b.kW, sid = b.sid, load = bySid[b.sid] or 0 } end
+  end
+  for _, x in ipairs(M.xfmrs) do xf[x.key] = x; spec.xfmrs[#spec.xfmrs + 1] = { key = x.key, pw = x.pw } end
+  for _, c in ipairs(g.cableList or {}) do
+    local ka, kz = tostring(c.a.sid) .. ":" .. tostring(c.a.uid), tostring(c.z.sid) .. ":" .. tostring(c.z.uid)
+    local e = { id = c.id, a = busOf(c.a.sid), z = busOf(c.z.sid), ty = c.ty or "lv16", len = c.len or 1, guard = {}, xf = {} }
+    for _, k in ipairs({ ka, kz }) do
+      if brk[k] then e.guard[#e.guard + 1] = { key = k, kW = brk[k].kW } end
+      if xf[k] then e.xf[#e.xf + 1] = { key = k, pw = xf[k].pw } end
+    end
+    spec.edges[#spec.edges + 1] = e
+  end
+  return spec
 end
 
 -- ── pure: the year's light ──────────────────────────────────────────────────
@@ -252,16 +334,27 @@ function slotLight(arr, ctx)
 end
 
 -- ── pure: the store over time (exact) ───────────────────────────────────────
--- M (gridModel plus): prof = { [1..N] solar EC/s } | nil, N, L, A0.
+-- M (gridModel plus): prof = { [1..N] solar EC/s } | nil, N, L, A0; (S5)
+-- lossP = { [1..N] kW lost in the cables and transformers } | nil (a load on
+-- top of `need`), trip = { [1..N] events } | nil (the slots that trip a
+-- breaker or burn a cable).
 -- st = { e }. Steps st from agency time a0 to a1. → st, rep
--- rep = { short (s with loads shed), slots (slots crossed), years (skipped) }
+-- rep = { short (s with loads shed), slots (slots crossed), years (skipped),
+--         trip (the events, when a slot that trips was reached), stopAt (the
+--         agency time it stopped there: the caller opens what tripped, rebuilds
+--         the grid and goes on from there) }
 local function supply_in(M, k)
   local s = M.base
   if M.prof then s = s + M.prof[(k % M.N) + 1] end
   return s
 end
-local function seg(st, sup, M, d, rep)
-  local P = sup - M.need
+local function need_in(M, k)
+  if M.lossP then return M.need + (M.lossP[(k % M.N) + 1] or 0) end
+  return M.need
+end
+function needAt(M, k) return need_in(M, k) end
+local function seg(st, sup, need, M, d, rep)
+  local P = sup - need
   if P >= 0 then
     if M.C > 0 then
       local e = st.e + P * M.eff * d
@@ -288,12 +381,18 @@ local function slot_of(M, a) return math.floor((a - M.A0) / M.L + 1e-12) end
 function advance(st, M, a0, a1, rep)
   rep = rep or { short = 0, slots = 0, years = 0 }
   rep.short, rep.slots, rep.years = rep.short or 0, rep.slots or 0, rep.years or 0
-  if not (a1 and a0) or a1 <= a0 then return st, rep end
+  if not (a1 and a0) or a1 < a0 then return st, rep end
   st.e = math.max(0, math.min(M.C, st.e or 0))
   local L, N = M.L or 1e9, M.N or 1
   local Y = L * N
   local a = a0
   local guard = 0
+  -- (S5) a slot that trips stops the step at its start (or at a0 when the
+  -- grid is already in it): the same moment for one long step or many short
+  if M.trip then
+    local ev = M.trip[(slot_of(M, a) % N) + 1]
+    if ev then rep.trip, rep.stopAt = ev, a return st, rep end
+  end
   while a < a1 - EPS do
     guard = guard + 1
     if guard > 5e6 then error(string.format("advance stuck at %.17g (to %.17g, L %.17g, A0 %.17g)", a, a1, L, M.A0)) end
@@ -301,13 +400,15 @@ function advance(st, M, a0, a1, rep)
     local edge = M.A0 + (k + 1) * L
     -- (an edge that rounds onto `a` itself: the next one)
     if edge <= a then k = k + 1; edge = M.A0 + (k + 1) * L end
-    -- whole years at once when there are many left (from a slot edge)
-    if M.prof and a1 - a > 2 * Y and math.abs(a - (M.A0 + k * L)) < 1e-6 then
+    if M.trip and M.trip[(k % N) + 1] then rep.trip, rep.stopAt = M.trip[(k % N) + 1], a return st, rep end
+    -- whole years at once when there are many left (from a slot edge; never
+    -- across a slot that trips: that stops the step within its first year)
+    if M.prof and not M.trip and a1 - a > 2 * Y and math.abs(a - (M.A0 + k * L)) < 1e-6 then
       local e0, s0 = st.e, rep.short
       local lo, hi = 0, 0
       rep.clamp = false
       for i = 0, N - 1 do
-        seg(st, supply_in(M, k + i), M, L, rep)
+        seg(st, supply_in(M, k + i), need_in(M, k + i), M, L, rep)
         local de = st.e - e0
         if de < lo then lo = de end
         if de > hi then hi = de end
@@ -337,7 +438,7 @@ function advance(st, M, a0, a1, rep)
 
     else
       local b = math.min(edge, a1)
-      seg(st, supply_in(M, k), M, b - a, rep)
+      seg(st, supply_in(M, k), need_in(M, k), M, b - a, rep)
       rep.slots = rep.slots + 1
       a = b
     end
@@ -346,20 +447,23 @@ function advance(st, M, a0, a1, rep)
 end
 
 -- The grid as it is at agency time `a` with store st: → supply, need, served
--- (load index → true), powered (all served), short (some shed)
+-- (load index → true), powered (all served), short (some shed), loss (kW)
 function statusAt(M, st, a)
-  local sup = (M.L and M.A0) and supply_in(M, slot_of(M, a)) or M.base
+  local k = (M.L and M.A0) and slot_of(M, a) or 0
+  local sup = (M.L and M.A0) and supply_in(M, k) or M.base
+  local loss = (M.L and M.A0) and (need_in(M, k) - M.need) or 0
   local served, all = {}, true
-  if (st.e or 0) > EPS or sup + 1e-9 >= M.need then
+  if (st.e or 0) > EPS or sup + 1e-9 >= M.need + loss then
     for i in ipairs(M.loads) do served[i] = true end
   else
-    local left = sup
+    local left = sup - loss
     for i, l in ipairs(M.loads) do
       if l.need <= left + 1e-9 then served[i] = true; left = left - l.need else all = false end
     end
   end
-  return sup, M.need, served, all
+  return sup, M.need, served, all, loss
 end
+function slotOf(M, a) return slot_of(M, a) end
 
 -- ── the scene half ──────────────────────────────────────────────────────────
 
@@ -377,7 +481,8 @@ local function agency_now()
 end
 local function wall() return (app and app.wallClock) and app.wallClock() or nil end
 
-local G = { list = {}, byId = {}, bySid = {}, byBase = {}, models = {}, st = {}, status = {} }
+local G = { list = {}, byId = {}, bySid = {}, byBase = {}, models = {}, st = {}, status = {}, flow = {}, short = {}, edgeOf = {}, dead = {} }
+trips = 0                 -- probes: breakers tripped and cables burnt since the start
 local vers = { st = nil, bs = nil, cb = nil }
 local dirty, last_rebuild, last_adv = true, -10, -10
 local slot = nil          -- { A0, L, N, Y, body, ref }
@@ -468,7 +573,68 @@ local function write_save(a)
   save.set("grid.a", a)
 end
 
--- Every grid to agency time `a` (exact; capped for a catch-up). → max dt
+-- (S5) which cables carry power: not burnt through, and no open or tripped
+-- breaker at either end. → live (list), dead = { [id] = why }
+local function breaker_state(sid, uid)
+  local BP = ref("base_power")
+  if BP and BP.breakerState then return BP.breakerState(sid, uid) end
+  return "closed"
+end
+local function split_cables(all)
+  local live, dead, at = {}, {}, {}
+  local ST = ref("structures")
+  for _, c in ipairs(all) do
+    local ka, kz = tostring(c.a.sid) .. ":" .. tostring(c.a.uid), tostring(c.z.sid) .. ":" .. tostring(c.z.uid)
+    at[ka] = (at[ka] or 0) + 1
+    at[kz] = (at[kz] or 0) + 1
+    local why = nil
+    if c.burnt then why = "burnt through" end
+    if not why and ST then
+      for _, e in ipairs({ c.a, c.z }) do
+        local p = ST.getPart(e.sid, e.uid)
+        local d = p and defs(p.id)
+        if d and d.power and d.power.kind == "breaker" then
+          local s = breaker_state(e.sid, e.uid)
+          if s ~= "closed" then why = (s == "tripped") and "breaker tripped" or "breaker open" end
+        end
+      end
+    end
+    if why then dead[c.id] = why else live[#live + 1] = c end
+  end
+  return live, dead, at
+end
+
+-- Every grid to agency time `a` (exact; capped for a catch-up). A breaker
+-- that trips (or a cable that burns) on the way stops its grid there: what
+-- tripped is opened, the grids are rebuilt (that grid may split in two, each
+-- half keeping its banks' charge) and the halves go on from that moment.
+-- → max dt
+local topology
+local function apply_events(events)
+  local BP, CB = ref("base_power"), ref("base_cable")
+  for _, x in ipairs(events) do
+    for _, ev in ipairs(x.ev) do
+      if ev.kind == "trip" then
+        local sid, uid = ev.key:match("^(.-):(.+)$")
+        sid, uid = tonumber(sid) or sid, tonumber(uid) or uid
+        if BP and BP.setBreaker then BP.setBreaker(sid, uid, false, "trip") end
+      elseif ev.kind == "burn" and CB and CB.setBurnt then
+        CB.setBurnt(ev.id, x.t)
+      end
+      ev.t = x.t
+      if BP then
+        BP.lastTrips = BP.lastTrips or {}
+        BP.lastTrips[#BP.lastTrips + 1] = ev
+        while #BP.lastTrips > 20 do table.remove(BP.lastTrips, 1) end
+      end
+      trips = trips + 1
+      local msg = (ev.kind == "burn") and string.format("Cable %s burnt through: it carried %.1f kW, rated %.1f kW", tostring(ev.id), ev.kW, ev.rating)
+        or string.format("A breaker tripped%s: %.1f kW through a %.1f kW rating", ev.main and " (a structure's main)" or "", ev.kW, ev.rating)
+      if caption and now() > 1 then pcall(caption, msg) end
+      if log then log("base_grid: " .. msg) end
+    end
+  end
+end
 local function advance_all(a)
   local a_last = tonumber(save.get("grid.a"))
   if not a_last or a_last > a then a_last = a end
@@ -476,17 +642,48 @@ local function advance_all(a)
   local a0 = a - dt
   local w0 = wall()
   local nslots = 0
+  local clk = {}            -- sid → the agency time its grid has reached
+  for _ = 1, 24 do
+    local events = {}
+    for _, g in ipairs(G.list) do
+      local M, st = G.models[g.id], G.st[g.id]
+      if M and st then
+        local t0 = clk[g.sids[1] or -1] or a0
+        local rep = { short = 0, slots = 0, years = 0 }
+        advance(st, M, t0, a, rep)
+        local t1 = rep.stopAt or a
+        for _, sid in ipairs(g.sids) do clk[sid] = t1 end
+        nslots = nslots + rep.slots
+        spread(g, M, st.e)
+        if rep.trip then events[#events + 1] = { ev = rep.trip, t = t1, gid = g.id } end
+        if dt > 60 and not rep.trip then caught = { dt = dt, years = rep.years, short = rep.short, grid = g.id } end
+        G.short[g.id] = (G.short[g.id] or 0) + rep.short
+      end
+    end
+    if #events == 0 then break end
+    apply_events(events)
+    topology(a, clk)
+  end
+  -- the status of each grid now, and its flows (the overlay and menus read them)
   for _, g in ipairs(G.list) do
     local M, st = G.models[g.id], G.st[g.id]
     if M and st then
-      local rep = { short = 0, slots = 0, years = 0 }
-      if dt > 0 then advance(st, M, a0, a, rep) end
-      nslots = nslots + rep.slots
-      spread(g, M, st.e)
-      local sup, need, served, all = statusAt(M, st, a)
-      G.status[g.id] = { supply = sup, need = need, served = served, powered = all, stored = st.e, cap = M.C,
-                         short = rep.short, dt = dt, years = rep.years, t = a }
-      if dt > 60 then caught = { dt = dt, years = rep.years, short = rep.short, grid = g.id } end
+      local sup, need, served, all, loss = statusAt(M, st, a)
+      local s = { supply = sup, need = need, served = served, powered = all, stored = st.e, cap = M.C,
+                  short = G.short[g.id] or 0, dt = dt, t = a, loss = loss or 0 }
+      G.short[g.id] = 0
+      local BP = ref("base_power")
+      if M.net and BP then
+        local k = (slotOf(M, a) % M.N) + 1
+        local F = BP.flowsAt(M.net, k)
+        G.flow[g.id] = { F = F, k = k }
+        s.loss = F.loss
+        s.limited, s.limitEl = BP.limitedBy(M.net, F)
+        s.limitShare = s.limitEl and s.limitEl.share or 0
+      else
+        G.flow[g.id] = nil
+      end
+      G.status[g.id] = s
     end
   end
   write_save(a)
@@ -497,15 +694,17 @@ local function advance_all(a)
   return dt
 end
 
--- Rebuild the grids from the records (the old ones first advanced to now).
-local function rebuild()
+-- Build the grids from the records as they are (the old ones already
+-- advanced): each store's charge from grid.e. `clk` (sid → agency time a
+-- grid has reached, mid-advance) carries over to the grids they are in now.
+topology = function(a, clk)
   local ST, B = ref("structures"), ref("bases")
-  if not (ST and B and ST.list and ST.partPose) then return false end
   local w0 = wall()
-  local a = agency_now()
-  if #G.list > 0 then advance_all(a) end
   local bodies = space and space.bodies and space.bodies() or {}
-  local grids, bySid = buildGrids(ST.list(), B.list(), cables_list(), defs, ST.partPose, RADIUS)
+  local all = cables_list()
+  local live, dead, at = split_cables(all)
+  local blist = B.list()
+  local grids, bySid = buildGrids(ST.list(), blist, live, defs, ST.partPose, RADIUS)
   -- the slots: once per session, on the home world (off-world building is
   -- step 13's: a moon's light needs its own slots)
   if not slot then
@@ -516,10 +715,14 @@ local function rebuild()
     end
     if bn or hb then slot = slots_for(bodies, bn or hb) end
   end
+  local bsid = {}
+  for _, b in ipairs(blist) do bsid[b.id] = b.sid end
+  local opts = { cablesAt = at, state = breaker_state, baseSid = function(bid) return bsid[bid] end }
+  local BP = ref("base_power")
   local t = read_e()
-  local models, sts, byId, byBase = {}, {}, {}, {}
+  local models, sts, byId, byBase, edgeOf = {}, {}, {}, {}, {}
   for _, g in ipairs(grids) do
-    local M = gridModel(g, ST.partPose, towers_need())
+    local M = gridModel(g, ST.partPose, towers_need(), opts)
     if slot then
       M.A0, M.L, M.N = slot.A0, slot.L, slot.N
       M.prof = profile_of(M, bodies)
@@ -527,6 +730,16 @@ local function rebuild()
       -- (no sun to slot: the light now, held)
       M.A0, M.L, M.N = 0, 1e9, 1
       M.prof = nil
+    end
+    -- (S5) the network: losses by slot, the slots that trip something
+    if BP and BP.network then
+      local spec = netSpec(g, M, function(arr) return light_cache[arr.key] end)
+      local ok, net = pcall(BP.network, spec)
+      if ok and net then
+        M.net = net
+        M.lossP, M.trip, M.peak, M.xpeak = BP.yearOf(net, M.N)
+        for i, e in ipairs(net.edges) do edgeOf[e.id] = { gid = g.id, i = i } end
+      elseif log then log("base_grid: the network of " .. tostring(g.id) .. " failed: " .. tostring(net)) end
     end
     local e = 0
     for _, s in ipairs(M.stores) do
@@ -538,13 +751,32 @@ local function rebuild()
     sts[g.id] = { e = e }
     byId[g.id] = g
     for _, bid in ipairs(g.bases) do byBase[bid] = g end
+    if clk then
+      local c = nil
+      for _, sid in ipairs(g.sids) do if clk[sid] then c = c and math.min(c, clk[sid]) or clk[sid] end end
+      for _, sid in ipairs(g.sids) do clk[sid] = c or a end
+    end
   end
   G.list, G.bySid, G.models, G.st, G.byId, G.byBase = grids, bySid, models, sts, byId, byBase
-  G.status = {}
+  G.edgeOf, G.dead = edgeOf, dead
+  G.status, G.flow = {}, {}
+  local CB = ref("base_cable")
+  vers.st, vers.bs, vers.cb = ST.version, B.version, CB and CB.version or 0
+  version = version + 1
+  if w0 then PROF.topo_ms = (wall() - w0) * 1000 end
+end
+
+-- Rebuild the grids from the records (the old ones first advanced to now).
+local function rebuild()
+  local ST, B = ref("structures"), ref("bases")
+  if not (ST and B and ST.list and ST.partPose) then return false end
+  local w0 = wall()
+  local a = agency_now()
+  if #G.list > 0 then advance_all(a) end
+  topology(a)
   advance_all(a)
   last_rebuild = now()
   dirty = false
-  version = version + 1
   if w0 then PROF.rebuild_ms = (wall() - w0) * 1000 end
   PROF.n_rebuild = PROF.n_rebuild + 1
   return true
@@ -566,6 +798,60 @@ local function fresh()
   if dirty then rebuild() end
 end
 function gridOf(bid) fresh() return G.byBase[bid] end
+-- (S5) A cable's flow now: → { P (kW, + from its a end to its z end), share
+-- (of its rating), loss (kW), cap (kW), dead, why, burnt, grid } | nil
+function cableFlow(id)
+  fresh()
+  local why = G.dead and G.dead[id]
+  if why then return { dead = true, why = why, burnt = why == "burnt through", P = 0, share = 0, loss = 0 } end
+  local eo = G.edgeOf and G.edgeOf[id]
+  if not eo then return nil end
+  local M, f = G.models[eo.gid], G.flow[eo.gid]
+  if not (M and M.net and f) then return nil end
+  local P = f.F.P[eo.i] or 0
+  local cap = M.net.cap[eo.i]
+  return { P = P, share = math.abs(P) / cap, loss = f.F.cl[eo.i] or 0, cap = cap, grid = eo.gid,
+           peak = M.peak and M.peak[eo.i] or nil }
+end
+-- (S5) A breaker's or a transformer's state and flow now:
+-- breaker → { state, kW, rating, share, main, cables }; transformer →
+-- { kW, share, loss, cables } | {}
+function partFlow(sid, uid)
+  fresh()
+  local g = G.bySid[sid]
+  local key = tostring(sid) .. ":" .. tostring(uid)
+  local M = g and G.models[g.id]
+  local f = g and G.flow[g.id]
+  local out = { state = breaker_state(sid, uid), cables = 0 }
+  local CB = ref("base_cable")
+  local mine = (CB and CB.at) and CB.at(sid, uid) or {}
+  out.cables = #mine
+  if not (M and M.net) then return out end
+  for _, b in ipairs(M.breakers or {}) do
+    if b.key == key then
+      out.rating, out.main = b.kW, b.main
+      local kw = 0
+      if b.main then
+        for _, m in ipairs(M.net.mains or {}) do if m.key == key then kw = m.load end end
+      elseif f then
+        for i, e in ipairs(M.net.edges) do
+          for _, gd in ipairs(e.guard or {}) do if gd.key == key then kw = math.max(kw, math.abs(f.F.P[i] or 0)) end end
+        end
+      end
+      out.kW, out.share = kw, kw / b.kW
+    end
+  end
+  for _, x in ipairs(M.xfmrs or {}) do
+    if x.key == key then
+      local S = f and f.F.xl[key] or 0
+      out.kW, out.share = S, S / (x.pw.kva or 100)
+      local BP = ref("base_power")
+      out.loss = BP and BP.xfmrLossKW(x.pw, S) or 0
+    end
+  end
+  return out
+end
+
 function gridOfStruct(sid) fresh() return G.bySid[sid] end
 function model(gid) return G.models[gid] end
 -- { supply, need, powered, stored, cap, short, served, t } | nil
@@ -598,14 +884,16 @@ function towerPower(bid)
   end
   return { supply = s and s.supply or 0, need = M.need, draw = d, powered = powered, stored = s and s.stored or 0,
            cap = M.C, grid = g.id, src = src, short = s and s.short or 0, structures = #g.sids, towers = #g.bases,
-           cables = g.cables, sources = M.sources, solar = s and (s.supply - M.base) or 0, rtg = M.base }
+           cables = g.cables, sources = M.sources, solar = s and (s.supply - M.base) or 0, rtg = M.base,
+           loss = s and s.loss or 0, limited = s and s.limited or nil, limitShare = s and s.limitShare or 0,
+           breakers = #(M.breakers or {}), xfmrs = #(M.xfmrs or {}) }
 end
 
 -- How long the store lasts at this draw with no sun (s; nil = forever).
 function nightLeft(gid)
   local M, s = G.models[gid], G.status[gid]
   if not (M and s) then return 0 end
-  local net = M.base - M.need
+  local net = M.base - M.need - (s.loss or 0)
   if net >= 0 then return nil end
   return s.stored / -net
 end
@@ -615,8 +903,9 @@ function start(node)
     local all = findScripts("base_grid")
     if #all > 1 and all[1].node and all[1].node.id ~= node.id then node:destroy() return end
   end
-  G = { list = {}, byId = {}, bySid = {}, byBase = {}, models = {}, st = {}, status = {} }
+  G = { list = {}, byId = {}, bySid = {}, byBase = {}, models = {}, st = {}, status = {}, flow = {}, short = {}, edgeOf = {}, dead = {} }
   vers = { st = nil, bs = nil, cb = nil }
+  trips = 0
   dirty, last_rebuild, last_adv, slot, light_cache, e_saved, caught = true, -10, -10, nil, {}, nil, nil
 end
 

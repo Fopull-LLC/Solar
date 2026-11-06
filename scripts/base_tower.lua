@@ -213,6 +213,8 @@ function gridLine(pw)
   end
   if pw.structures then bits[#bits + 1] = string.format("%d structure%s", pw.structures, pw.structures == 1 and "" or "s") end
   if (pw.cables or 0) > 0 then bits[#bits + 1] = string.format("%d cable%s", pw.cables, pw.cables == 1 and "" or "s") end
+  if (pw.breakers or 0) > 0 then bits[#bits + 1] = string.format("%d breaker%s", pw.breakers, pw.breakers == 1 and "" or "s") end
+  if (pw.xfmrs or 0) > 0 then bits[#bits + 1] = string.format("%d transformer%s", pw.xfmrs, pw.xfmrs == 1 and "" or "s") end
   if (pw.towers or 0) > 1 then bits[#bits + 1] = string.format("%d towers", pw.towers) end
   return table.concat(bits, " · ")
 end

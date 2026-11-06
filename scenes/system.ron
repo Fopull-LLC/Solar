@@ -3565,6 +3565,7 @@
         // for VAB parts placed live (parts_kit, kit_snap, kit_live, struct_live; sandbox S1/S2),
         // the rooms the pieces close and their air, airlocks and life support (rooms, room_air; S3),
         // paint, dust and the swatches (kit_paint), saved and shared blueprints (blueprints; S4),
+        // cables with losses and ratings, breakers, transformers, the POWER overlay (base_power; S5),
         // the one ghost function (ghost) and the overlap query (placement). Last in the
         // scene on purpose: its lateUpdate aims through the cursor after the camera
         // has placed itself for the frame.
@@ -3585,6 +3586,7 @@
                 ( kind: "base_tower", enabled: true, params: [] ),
                 ( kind: "base_cable", enabled: true, params: [] ),
                 ( kind: "base_grid", enabled: true, params: [] ),
+                ( kind: "base_power", enabled: true, params: [] ),
                 ( kind: "base_shield", enabled: true, params: [] ),
                 ( kind: "craft_orient", enabled: true, params: [] ),
                 ( kind: "ghost", enabled: true, params: [] ),

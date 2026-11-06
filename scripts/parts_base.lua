@@ -145,13 +145,29 @@ PARTS = {
   -- placed part to another (base_cable.lua): `cable` = the longest run (m), its
   -- mass and price a metre, how high it leaves a part. The prefab is the
   -- drum, for the card.
-  powerCable = { prefab = "BaseCableDrum", label = "Power Cable", h = 1.45, rx = 0.65, rz = 0.65, mass = 0.0014, cost = 3,
+  powerCable = { prefab = "BaseCableDrum", label = "Power Cable 16 mm²", h = 1.45, rx = 0.65, rz = 0.65, mass = 0.0014, cost = 3,
                kind = "structural", fieldOnly = true, seat = 0.7250,
-               cable = { max = 1500, kgm = 1.4, perm = 3.0, lift = 0.6, r = 0.018 },
-               desc = "4-core 16 mm² armoured cable · 1.4 kg/m · $3 a metre · joins two grids, up to 1.5 km a run" },
+               cable = { type = "lv16", max = 1500, kgm = 1.4, perm = 3.0, lift = 0.6, r = 0.018, label = "Power Cable 16 mm²" },
+               desc = "4-core 16 mm² armoured cable, 400 V · 80 A (32 kW) · 1.4 kg/m · $3 a metre · up to 1.5 km a run" },
+  -- S5 (power networks II, base_power.lua): heavier gauges carry more and
+  -- lose less; the 11 kV cable runs between two Transformers, where a long
+  -- line loses a thousandth of what 400 V would (P²R/V²)
+  powerCable35 = { prefab = "BaseCableDrum", label = "Power Cable 35 mm²", h = 1.45, rx = 0.65, rz = 0.65, mass = 0.0026, cost = 6,
+               kind = "structural", fieldOnly = true, seat = 0.7250,
+               cable = { type = "lv35", max = 1500, kgm = 2.6, perm = 6.0, lift = 0.6, r = 0.020, label = "Power Cable 35 mm²" },
+               desc = "4-core 35 mm² armoured cable, 400 V · 125 A (50 kW) · 2.6 kg/m · $6 a metre · up to 1.5 km a run" },
+  powerCable95 = { prefab = "BaseCableDrum", label = "Power Cable 95 mm²", h = 1.45, rx = 0.65, rz = 0.65, mass = 0.0058, cost = 14,
+               kind = "structural", fieldOnly = true, seat = 0.7250,
+               cable = { type = "lv95", max = 1500, kgm = 5.8, perm = 14.0, lift = 0.6, r = 0.027, label = "Power Cable 95 mm²" },
+               desc = "4-core 95 mm² armoured cable, 400 V · 230 A (92 kW) · 5.8 kg/m · $14 a metre · up to 1.5 km a run" },
+  hvCable    = { prefab = "BaseCableDrum", label = "HV Cable 11 kV", h = 1.45, rx = 0.65, rz = 0.65, mass = 0.0023, cost = 9,
+               kind = "structural", fieldOnly = true, seat = 0.7250,
+               cable = { type = "hv35", max = 6000, kgm = 2.3, perm = 9.0, lift = 0.6, r = 0.022, label = "HV Cable 11 kV" },
+               desc = "3-core 35 mm² 11 kV cable · 140 A (1.5 MW) · 2.3 kg/m · $9 a metre · Transformer to Transformer, up to 6 km" },
 }
 
-ORDER = { "padPlate", "shed", "hab", "stand", "tower", "solarArray", "isotopeSkid", "batteryBank", "shieldWall", "powerCable" }
+ORDER = { "padPlate", "shed", "hab", "stand", "tower", "solarArray", "isotopeSkid", "batteryBank", "shieldWall", "powerCable",
+          "powerCable35", "powerCable95", "hvCable" }
 
 -- The panel's sections: { { title, ids } } (catalog_panel's host shape).
 function catalogue()

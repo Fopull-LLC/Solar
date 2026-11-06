@@ -1319,6 +1319,11 @@ base_card = function(e, rows)
   if left and (pw.cap or 0) > 0 then
     gl[#gl + 1] = string.format("NO SUN  %s ON THE BATTERY", left >= 3600 and string.format("%.1f H", left / 3600) or string.format("%d MIN", math.floor(left / 60)))
   end
+  -- (S5) the network: its losses and what limits it
+  if (pw.loss or 0) > 0.0005 then
+    gl[#gl + 1] = string.format("LOSS %.2f KW  %.1f %% OF THE DRAW", pw.loss, 100 * pw.loss / math.max(1e-9, (pw.need or 0) + pw.loss))
+  end
+  if pw.limited then gl[#gl + 1] = "LIMIT " .. string.upper(pw.limited) end
   rows[#rows + 1] = crt("grid", gl)
   local bits = {}
   if bt and bt.gridLine then bits[#bits + 1] = bt.gridLine(pw) end

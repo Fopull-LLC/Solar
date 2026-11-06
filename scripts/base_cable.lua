@@ -32,14 +32,25 @@
 --
 -- RECORDS (in the save; every point in its body's frame):
 --   cable.list, cable.seq
---   cable.<id> = { id, b, a = { sid, uid }, z = { sid, uid }, len (m),
+--   cable.<id> = { id, b, a = { sid, uid }, z = { sid, uid }, len (m), ty, burnt,
 --                  h = { radius at each ground sample, m (every `step` between
 --                  the ends; v = 2, before it every 3 m between the old
 --                  touchdowns) }, v, rk = { { x, y, z, r } rocks }, t, d, by,
 --                  paid = { cost, ship, total, t, supplier, by } }
 --
+-- S5 (power networks II; docs/base-building.md §16): a cable has a TYPE, the
+-- drum it was laid from (`ty`: lv16 / lv35 / lv95 at 400 V, hv35 at 11 kV;
+-- base_power.CABLES has their copper, rating, mass and price), and carries
+-- real losses and a rating in base_grid's network. An 11 kV cable runs only
+-- between two Transformers; a transformer takes nothing else. A cable made
+-- off at a Power Pole leaves the pole's crossarm and is STRUNG (pulled tight:
+-- its sag about 2.5 % of the span) instead of laid slack on the ground. A
+-- cable driven far past its rating with no breaker at either end BURNS
+-- THROUGH (`burnt`, base_grid): it carries nothing until it is spliced.
+--
 -- Probes: list(), get(id), version, pending, lastLay, ends(rec), path(rec),
--- validity(end, hit), lay(a, z), takeUp(id), nodeOf(id), quote(len).
+-- pathOf(id), validity(end, hit, body, ty), lay(a, z), takeUp(id), nodeOf(id),
+-- quote(len, by, ty), setBurnt(id), splice(id).
 
 defaults = {
   --@range 0.25 3 --@units m
@@ -73,7 +84,21 @@ local function agency_now()
   return tonumber(save and save.get and save.get("agency.clock")) or 0
 end
 local function defs(id) local pb = ref("parts_base"); return pb and pb.partInfo(id) or nil end
-local function cdef() local d = defs("powerCable"); return d and d.cable or { max = 1500, kgm = 1.4, perm = 3.0, lift = 0.6, r = 0.018 } end
+-- A cable type's figures: base_power.CABLES (the copper, the rating) over
+-- the drum's own card (max, kgm, perm, lift, r). `ty` nil = the 16 mm² drum.
+local DRUM = { lv16 = "powerCable", lv35 = "powerCable35", lv95 = "powerCable95", hv35 = "hvCable" }
+local function cdef(ty)
+  local d = defs(DRUM[ty or "lv16"] or "powerCable")
+  local C = d and d.cable or { max = 1500, kgm = 1.4, perm = 3.0, lift = 0.6, r = 0.018 }
+  return C
+end
+function typeOf(r) return (r and r.ty) or "lv16" end
+-- (a held drum's cable type)
+function heldType()
+  local fb = ref("field_builder")
+  local d = fb and fb.heldPart and defs(fb.heldPart)
+  return d and d.cable and (d.cable.type or "lv16") or nil
+end
 local function money(v) local E = ref("base_economy"); return E and E.money(v) or ("$" .. tostring(v)) end
 local function len3(x, y, z) return math.sqrt(x * x + y * y + z * z) end
 local function norm(x, y, z)
@@ -84,7 +109,7 @@ end
 
 -- ── the records ─────────────────────────────────────────────────────────────
 local recs, order = nil, {}
-local KEEP = { "id", "b", "a", "z", "len", "h", "v", "rk", "t", "d", "by", "paid" }
+local KEEP = { "id", "b", "a", "z", "len", "h", "v", "rk", "t", "d", "by", "paid", "ty", "burnt" }
 local function plain(r) local o = {} for _, k in ipairs(KEEP) do o[k] = r[k] end return o end
 local function load()
   recs, order = {}, {}
@@ -171,6 +196,12 @@ function endPoint(ST, rec, p, def, tx, ty, tz, lift)
   end
   local ox, oy, oz = gx + R.x * sx + F.x * sz, gy + R.y * sx + F.y * sz, gz + R.z * sx + F.z * sz
   local up = math.min(lift or 0.6, ((def and def.h) or 1.0) * 0.8)
+  -- (S5) a part that names where cables leave it: a pole's crossarm, a
+  -- transformer's bushings: on its own axis at that height
+  if def and def.cableAt then
+    up = def.cableAt
+    if def.pole then ox, oy, oz = gx, gy, gz end
+  end
   -- (a part on a raised deck: the end leaves at its own base, p.y over the plate)
   return ox + U.x * up, oy + U.y * up, oz + U.z * up, U, ox, oy, oz
 end
@@ -223,7 +254,7 @@ function ends(r)
   local pa, pz = ra and ST.getPart(r.a.sid, r.a.uid), rz and ST.getPart(r.z.sid, r.z.uid)
   if not (pa and pz) then return nil, "an end is gone" end
   local da, dz = defs(pa.id), defs(pz.id)
-  local C = cdef()
+  local C = cdef(r.ty)
   local gax, gay, gaz = ST.partPose(ra, pa, 0)
   local gzx, gzy, gzz = ST.partPose(rz, pz, 0)
   local ax, ay, az, Ua, oax, oay, oaz = endPoint(ST, ra, pa, da, gzx, gzy, gzz, C.lift)
@@ -238,7 +269,8 @@ function ends(r)
   local tax, tay, taz = out(oax, oay, oaz, Ua, gzx, gzy, gzz)
   local tzx, tzy, tzz = out(ozx, ozy, ozz, Uz, gax, gay, gaz)
   return { ax = ax, ay = ay, az = az, zx = zx, zy = zy, zz = zz, tax = tax, tay = tay, taz = taz, tzx = tzx, tzy = tzy, tzz = tzz,
-           la = da and da.label or "part", lz = dz and dz.label or "part" }
+           la = da and da.label or "part", lz = dz and dz.label or "part",
+           strung = (da and da.pole) or (dz and dz.pole) or false }
 end
 
 -- ── the settle: how a heavy cable lies (playtest 2026-11-06) ───────────────
@@ -369,6 +401,18 @@ end
 -- 1.5 m out from a part's side, about where a hand lays it), its weight a metre and the world's gravity.
 -- → a = H / (λ g), m
 PULL = 30.0
+-- (S5) a cable strung from a Power Pole is pulled tight: its catenary's a is
+-- STRUNG times the span (a sag of span / (8·STRUNG): 2.5 %), never less than
+-- the hand's lay
+STRUNG = 5.0
+function tensionA(b, C, E)
+  local a = catenaryA(b, C)
+  if E and E.strung then
+    local d = len3(E.ax - E.zx, E.ay - E.zy, E.az - E.zz)
+    a = math.max(a, STRUNG * d)
+  end
+  return a
+end
 function catenaryA(b, C)
   local g = 9.81
   if b and b.mu and b.radius and b.radius > 0 then g = b.mu / (b.radius * b.radius) end
@@ -523,7 +567,7 @@ end
 local LIFT = 0.006      -- m between the ground and the sheath
 function polyline(E, h, R, opts)
   opts = opts or {}
-  local C = cdef()
+  local C = cdef(opts.ty)
   local rad = C.r or 0.016
   local ax, ay, az, bx, by, bz = line_dirs(E)
   local hax, hay, haz, hbx, hby, hbz = line_dirs(E, opts.old)
@@ -584,8 +628,8 @@ function layerWhyNot(id)
 end
 -- The layer's price a metre: an Engineer from level 2 wastes less of the
 -- drum (crew.perk "cable_cost": ×0.9, ×0.8 at level 3).
-local function perm_for(by)
-  local C = cdef()
+local function perm_for(by, ty)
+  local C = cdef(ty)
   local c = ref("crew")
   local k = 1
   if c and c.perk then
@@ -598,13 +642,13 @@ local function perm_for(by)
   return (C.perm or 3) * k, k
 end
 
-function quote(L, by)
+function quote(L, by, ty)
   local E = ref("base_economy")
-  local perm, k = perm_for(by)
+  local perm, k = perm_for(by, ty)
   local cost = math.ceil((L or 0) * perm)
   local q = E and E.quote({ cost = cost, label = "Power Cable" }, "BASE", nil, nil, 0)
                  or { mode = "money", cost = cost, ship = 0, foot = 0, total = cost }
-  local C = cdef()
+  local C = cdef(ty)
   q.mass = (L or 0) * (C.kgm or 1.4) / 1000
   q.perk = k < 1 and k or nil
   return q
@@ -613,7 +657,8 @@ end
 -- ── the placement rules ─────────────────────────────────────────────────────
 -- `e1` = the end made off ({ sid, uid }) or nil; `hit` = { rec, part } under
 -- the cursor (structures.partOfNode) or nil, `body`. → { bad, len, quote, E }
-function validity(e1, hit, body)
+function validity(e1, hit, body, ty)
+  ty = ty or (e1 and e1.ty) or heldType() or "lv16"
   local ST, BG = ref("structures"), ref("base_grid")
   local home = save and save.get and save.get("base.body")
   local r = {}
@@ -624,27 +669,53 @@ function validity(e1, hit, body)
     r.bad = e1 and "aim at a part on another structure to make the far end off" or "aim at a placed part to make the cable off there"
     return r
   end
+  local hv = (ty == "hv35")
+  -- (an 11 kV line runs from a Transformer to a Transformer, over Power
+  -- Poles between; a transformer's high side takes nothing else; a pole
+  -- carries one voltage)
+  local function endWhy(d, sid, uid)
+    local xf = d and d.power and d.power.kind == "xfmr"
+    if hv and not (xf or (d and d.pole)) then
+      return "an 11 kV cable runs between Transformers, over Power Poles (this end is a " .. tostring(d and d.label or "part") .. ")"
+    end
+    if xf and not hv then return "a Transformer's high side takes the HV Cable 11 kV, not a 400 V cable" end
+    if d and d.pole and sid then
+      for _, c in ipairs(at(sid, uid)) do
+        if (typeOf(c) == "hv35") ~= hv then return hv and "this pole carries 400 V lines: 11 kV needs its own poles" or "this pole carries an 11 kV line: a 400 V cable needs its own poles" end
+      end
+    end
+    return nil
+  end
   if not e1 then
     local d = defs(hit.part.id)
     r.label = d and d.label
+    r.bad = endWhy(d, hit.rec.id, hit.part.uid)
     return r
   end
   if hit.rec.id == e1.sid then r.bad = "the same structure: its parts already share a grid" return r end
+  local dz = defs(hit.part.id)
+  r.bad = endWhy(dz, hit.rec.id, hit.part.uid)
+  if r.bad then return r end
+  -- (S5) poles, junctions, breakers and transformers may close a loop or
+  -- double a line; anything else joins two grids that aren't one yet
+  local pa = ST and ST.getPart(e1.sid, e1.uid)
+  local da = pa and defs(pa.id)
+  local gear = (da and da.netgear) or (dz and dz.netgear)
   local ga = BG and BG.gridOfStruct and BG.gridOfStruct(e1.sid)
   local gz = BG and BG.gridOfStruct and BG.gridOfStruct(hit.rec.id)
-  if ga and gz and ga == gz then r.bad = "those two are already on one grid" return r end
-  local rec = { a = { sid = e1.sid, uid = e1.uid }, z = { sid = hit.rec.id, uid = hit.part.uid } }
+  if ga and gz and ga == gz and not gear then r.bad = "those two are already on one grid (a breaker, pole or junction may close a loop)" return r end
+  local rec = { a = { sid = e1.sid, uid = e1.uid }, z = { sid = hit.rec.id, uid = hit.part.uid }, ty = ty }
   local E, why = ends(rec)
   if not E then r.bad = why return r end
   local b = space and space.body and space.body(hit.rec.b)
   local R = b and b.radius
   local _, _, d = span({ x = E.tax, y = E.tay, z = E.taz }, { x = E.tzx, y = E.tzy, z = E.tzz }, R, 1)
   local L = d + 2 * HANG + 1.2
-  r.len, r.E = L, E
-  r.quote = quote(L)
-  local C = cdef()
+  r.len, r.E, r.ty = L, E, ty
+  r.quote = quote(L, nil, ty)
+  local C = cdef(ty)
   if L > (C.max or 1500) then
-    r.bad = string.format("%.2f km: a run is at most %.1f km (set a Pad Plate between and run two)", L / 1000, (C.max or 1500) / 1000)
+    r.bad = string.format("%.2f km: a run is at most %.1f km (a Power Pole or a Junction Box between, and run two)", L / 1000, (C.max or 1500) / 1000)
     return r
   end
   local co = ref("company")
@@ -656,6 +727,7 @@ end
 -- Lay a cable from end a to end z ({ sid, uid } each). → id | nil, why
 function lay(a, z, opts)
   opts = opts or {}
+  local ty = opts.ty or a.ty or heldType() or "lv16"
   local gate = layerWhyNot()
   if gate then return nil, gate end
   local ST, co, EC = ref("structures"), ref("company"), ref("base_economy")
@@ -663,22 +735,22 @@ function lay(a, z, opts)
   local ra = ST.get(a.sid)
   if not ra then return nil, "that structure is gone" end
   local pz = ST.getPart(z.sid, z.uid)
-  local v = validity(a, { rec = ST.get(z.sid), part = pz }, ra.b)
+  local v = validity(a, { rec = ST.get(z.sid), part = pz }, ra.b, ty)
   if v.bad then return nil, v.bad end
   local b = space.body(ra.b)
   if not b then return nil, "not on a world" end
   local c0 = ref("crew")
   local h = sampleGround(b, v.E, b.radius, groundStep(v.len))
   local rk = rocksAlong(b, v.E, b.radius)
-  local rec0 = { b = ra.b, a = a, z = z }
-  local pts, L = polyline(v.E, h, b.radius, { boxes = obstaclesFor(rec0, v.E), rocks = rk, a = catenaryA(b, cdef()) })
-  local q = quote(L, c0 and c0.activeId and c0.activeId() or nil)
+  local rec0 = { b = ra.b, a = a, z = z, ty = ty }
+  local pts, L = polyline(v.E, h, b.radius, { boxes = obstaclesFor(rec0, v.E), rocks = rk, a = tensionA(b, cdef(ty), v.E), ty = ty })
+  local q = quote(L, c0 and c0.activeId and c0.activeId() or nil, ty)
   if not co.spend(q.total, EC.ledgerWhy("Power Cable", q) .. string.format(" · %.0f m", L)) then return nil, "can't afford it: " .. money(q.total) end
   local t = agency_now()
   local c = ref("crew")
   local by = c and c.activeId and c.activeId() or nil
   local dp = ref("deployables")
-  local rec = { id = opts.id, b = ra.b, a = { sid = a.sid, uid = a.uid }, z = { sid = z.sid, uid = z.uid }, len = L, h = h,
+  local rec = { id = opts.id, b = ra.b, a = { sid = a.sid, uid = a.uid }, z = { sid = z.sid, uid = z.uid }, len = L, h = h, ty = ty,
                 v = 2, rk = (#rk > 0) and rk or nil, t = t, d = dp and dp.dateOf and dp.dateOf(t) or nil, by = by,
                 paid = { cost = q.cost, ship = q.ship, foot = 0, total = q.total, t = t, supplier = q.supplier, by = by } }
   local id = add(rec)
@@ -688,7 +760,7 @@ function lay(a, z, opts)
   -- the ring: undo = a full refund within the minute; redo = lay it again
   local fb = ref("field_builder")
   if fb and fb.pushHistory and not opts.noHistory then
-    local e = { label = "lay the Power Cable", kind = "cable", t = t, cable = id }
+    local e = { label = "lay the " .. tostring(cdef(ty).label or "Power Cable"), kind = "cable", t = t, cable = id }
     e.undo = function()
       local r2 = get(e.cable)
       if not r2 then e.res, e.why = nil, "it's gone" return end
@@ -699,7 +771,7 @@ function lay(a, z, opts)
       e.res = amt
     end
     e.redo = function()
-      local id2, w = lay(a, z, { id = e.cable, noHistory = true })
+      local id2, w = lay(a, z, { id = e.cable, noHistory = true, ty = ty })
       if not id2 then e.res, e.why = nil, w return end
       e.t = agency_now()
       e.res = lastLay and lastLay.total or 0
@@ -785,7 +857,7 @@ end
 function path(r)
   local E, b, boxes = settle_inputs(r)
   if not E then return nil end
-  return polyline(E, r.h, b.radius, { old = (r.v or 1) < 2, boxes = boxes, rocks = r.rk, a = catenaryA(b, cdef()) })
+  return polyline(E, r.h, b.radius, { old = (r.v or 1) < 2, boxes = boxes, rocks = r.rk, a = tensionA(b, cdef(r.ty), E), ty = r.ty })
 end
 
 drop_mesh = function(id)
@@ -806,9 +878,9 @@ spawn_mesh = function(r, force)
   if not E then return end
   local pts = path(r)
   if not pts then return end
-  local m = tube_mesh(pts, cdef().r or 0.016)
+  local m = tube_mesh(pts, cdef(r.ty).r or 0.016)
   if not m then return end
-  local L = { making = true, key = boxesKey(boxes), old = prev and (prev.node or prev.old) or nil }
+  local L = { making = true, key = boxesKey(boxes), old = prev and (prev.node or prev.old) or nil, pts = pts }
   live[r.id] = L
   local o = pts[1]
   createNode("PowerCable", planet, function(n)
@@ -832,7 +904,7 @@ function aimTick(hit)
   local hrec, hpart = nil, nil
   if hit and hit.node and ST and ST.partOfNode then hrec, hpart = ST.partOfNode(hit.node) end
   local body = hit and space.dominant(hit.x, hit.y, hit.z) or nil
-  local v = validity(pending, hrec and { rec = hrec, part = hpart } or nil, body)
+  local v = validity(pending, hrec and { rec = hrec, part = hpart } or nil, body, pending and pending.ty or heldType())
   v.hitRec, v.hitPart, v.body = hrec, hpart, body
   -- the preview line: from the end made off to the cursor (body-relative;
   -- re-sampled when the cursor moves a metre or every 0.3 s)
@@ -845,7 +917,7 @@ function aimTick(hit)
       local pa = ra and ST.getPart(pending.sid, pending.uid)
       if pa then
         local hx, hy, hz = hit.x - b.x, hit.y - b.y, hit.z - b.z
-        local ax, ay, az = endPoint(ST, ra, pa, defs(pa.id), hx, hy, hz, cdef().lift)
+        local ax, ay, az = endPoint(ST, ra, pa, defs(pa.id), hx, hy, hz, cdef(pending.ty).lift)
         local n, dir, d = span({ x = ax, y = ay, z = az }, { x = hx, y = hy, z = hz }, b.radius, 25)
         local pts = { { x = ax, y = ay, z = az } }
         local r = len3(ax, ay, az)
@@ -883,7 +955,7 @@ function clearPending() pending, preview, pv.key = nil, nil, nil end
 -- The first end (a click on a part with the drum in hand).
 function makeOff(rec, part)
   local d = defs(part.id)
-  pending = { sid = rec.id, uid = part.uid, b = rec.b, label = d and d.label or "part" }
+  pending = { sid = rec.id, uid = part.uid, b = rec.b, label = d and d.label or "part", ty = heldType() or "lv16" }
   pv.key = nil
   return pending
 end
@@ -907,10 +979,33 @@ local function provider(t, ctx)
     local g = BG and BG.gridOfStruct and BG.gridOfStruct(other.sid)
     local bname = nil
     if g and g.bases and g.bases[1] and BS then local br = BS.get(g.bases[1]); bname = br and br.n end
-    out[#out + 1] = { id = "cb_info" .. i, type = "info", label = "Power Cable", group = "Cable", value = function()
+    out[#out + 1] = { id = "cb_info" .. i, type = "info", label = tostring(cdef(c.ty).label or "Power Cable") .. " " .. tostring(cid), group = "Cable", value = function()
         return string.format("to the %s%s · %.0f m · %.1f t", odef and odef.label or "part", bname and (" (" .. bname .. ")") or "",
-          c.len or 0, (c.len or 0) * cdef().kgm / 1000)
+          c.len or 0, (c.len or 0) * cdef(c.ty).kgm / 1000)
       end }
+    -- (S5) what it carries now, against its rating
+    out[#out + 1] = { id = "cb_load" .. i, type = "info", label = "Load", group = "Cable", value = function()
+        local f = BG and BG.cableFlow and BG.cableFlow(cid)
+        if not f then return "no grid on it" end
+        if f.dead then return string.upper(f.why or "off") end
+        local BP = ref("base_power")
+        local kw = BP and BP.fmtKW or function(v) return string.format("%.1f kW", v) end
+        return string.format("%s · %d %% of %s · loss %s", kw(f.P), math.floor(f.share * 100 + 0.5), kw(f.cap), kw(f.loss))
+      end }
+    if c.burnt then
+      out[#out + 1] = { id = "cb_splice" .. i, type = "action", label = "Splice the burnt cable", group = "Cable",
+        value = function() return money(spliceCost(c)) end, hint = "4 s",
+        enabled = function() return layerWhyNot() == nil end,
+        why = function() return layerWhyNot() and "Engineers only" or nil end,
+        job = { secs = 4.0, label = "Splicing the cable",
+          check = function() if not get(cid) then return false, "it's gone" end return true end,
+          tick = function() end,
+          done = function()
+            local ok, w = splice(cid)
+            if ctx and ctx.toast then ctx.toast(ok and "cable spliced" or tostring(w), not ok) end
+            return ok, w
+          end } }
+    end
     out[#out + 1] = { id = "cb_up" .. i, type = "action", label = "Take up the cable", group = "Cable", danger = true,
       value = function()
         local EC = ref("base_economy")
@@ -931,6 +1026,32 @@ local function provider(t, ctx)
   return out, "Power Cable"
 end
 providerFn = provider
+
+-- (S5) the drawn path of a cable as it was last built (body-relative
+-- points; the POWER overlay draws over it), or nil while it isn't spawned
+function pathOf(id) local L = live[id]; return L and L.pts or nil end
+-- A cable burnt through by base_grid (the agency time), or spliced (nil).
+function setBurnt(id, t)
+  local r = get(id)
+  if not r then return false end
+  r.burnt = t
+  write(r)
+  bump()
+  return true
+end
+-- What a splice costs: a quarter of what the run cost.
+function spliceCost(r) return math.max(20, math.floor(((r.paid and r.paid.cost) or (r.len or 0) * 3) * 0.25 + 0.5)) end
+function splice(id)
+  local r = get(id)
+  if not (r and r.burnt) then return false, "it isn't burnt" end
+  local co = ref("company")
+  local amt = spliceCost(r)
+  if co and co.spend and not co.spend(amt, string.format("splice: %s %s", tostring(cdef(r.ty).label or "cable"), tostring(id))) then
+    return false, "can't afford it: " .. money(amt)
+  end
+  setBurnt(id, nil)
+  return true
+end
 local provider_on, provider_t = false, -10
 local function register_provider()
   if provider_on or now() - provider_t < 1.0 then return end
@@ -1050,7 +1171,7 @@ function update(node, dt)
   -- the drum put away: the end made off is let go
   if pending then
     local fb = ref("field_builder")
-    if not (fb and fb.heldPart == "powerCable" and fb.isOpen and fb.isOpen()) then clearPending() end
+    if not (fb and fb.isOpen and fb.isOpen() and heldType() == pending.ty) then clearPending() end
   end
   local t = now()
   if t - check_t < 1.0 or #order == 0 then return end

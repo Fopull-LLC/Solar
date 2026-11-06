@@ -98,10 +98,32 @@ do
   local w = defs("wall.steel")
   local t = KP.tintFor("orange", w)
   local ok = true
-  for i = 1, 3 do if not near(t[i] * KP.BASE.steel[i], KP.PALETTE[9].rgb[i], 1e-9) then ok = false end end
-  check(ok and KP.PALETTE[9].key == "orange", "paint is the tint that turns the steel's average into the swatch (its stains and seams show through)")
+  for i = 1, 3 do if not near(t[i] * KP.BASE.steel[i], KP.swatch("orange").rgb[i], 1e-9) then ok = false end end
+  check(ok, "paint is the tint that turns the steel's average into the swatch (its stains and seams show through)")
   local c = KP.tintFor("hull", defs("wall.concrete"))
   check(c[1] > 1 and c[1] <= KP.TINT_MAX, "white paint on dark concrete lifts it, within the tint's ceiling")
+  -- (S5 polish) the tint never crushes a swatch: on every kit material each
+  -- swatch lands on its own albedo (no channel clamped), and the palette
+  -- spans light to dark: three swatches over 0.5 luminance, two under 0.07
+  local crushed = {}
+  for _, m in ipairs({ "steel", "concrete", "regocrete" }) do
+    for _, sw in ipairs(KP.PALETTE) do
+      local tt = KP.tintFor(sw.key, { kit = true, mat = m })
+      for i = 1, 3 do
+        if math.abs(tt[i] * KP.BASE[m][i] - sw.rgb[i]) > 1e-9 then crushed[#crushed + 1] = sw.key .. " on " .. m end
+      end
+    end
+  end
+  check(#crushed == 0, "no swatch is clamped by the tint on any material: " .. table.concat(crushed, ", "))
+  local light, dark, lums = 0, 0, {}
+  for _, sw in ipairs(KP.PALETTE) do
+    local Y = 0.2126 * sw.rgb[1] + 0.7152 * sw.rgb[2] + 0.0722 * sw.rgb[3]
+    if Y > 0.5 then light = light + 1 end
+    if Y < 0.07 then dark = dark + 1 end
+    lums[#lums + 1] = string.format("%s %.2f", sw.key, Y)
+  end
+  check(light >= 3 and dark >= 2, "the palette has real value range (light " .. light .. ", dark " .. dark .. "): " .. table.concat(lums, ", "))
+  check(KP.swatch("sand") == KP.swatch("bone"), "a key from the first palette still resolves (sand is cream now)")
   check(KP.tintFor(nil, w) == nil and KP.tintFor("nope", w) == nil, "no swatch, no tint")
   KP.setAgency({ 0.85, 0.20, 0.10 })
   local a = KP.rgbOf("agency")

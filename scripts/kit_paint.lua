@@ -39,22 +39,41 @@
 -- props and fittings stay clean). The level is quantised to DUST_STEPS, so a
 -- structure is re-tinted only when its level steps (a few times a game month).
 
+-- (S5 polish, from the S4 screenshots: the first palette was picked as if
+-- its numbers were screen colours, but they are LINEAR albedo, so every
+-- swatch came out a pale mid-tone pastel (Gunmetal 0.27 linear is a light
+-- grey on screen, Oxide Red a salmon) and they read alike. Each swatch is
+-- now named by the sRGB colour a real enamel shows (RAL-like: 9010 pure
+-- white, 9001 cream, 7035 light grey, 1003 signal yellow, 2004 orange, 3009
+-- oxide red, 6011 reseda green, 6003 olive, 5015 sky blue, 7037 dust grey,
+-- 7016 anthracite) and converted to linear once: three light swatches and a
+-- yellow, the saturated signal colours, the mids and two darks, so a painted
+-- base has a real value range. Still a little dirty: no swatch is a pure
+-- primary or brighter than a weathered white.)
+local function lin(c)
+  if c <= 0.04045 then return c / 12.92 end
+  return ((c + 0.055) / 1.055) ^ 2.4
+end
 PALETTE = {
-  { key = "hull",     label = "Hull White",       rgb = { 0.83, 0.82, 0.78 }, token = "bezel" },
-  { key = "bone",     label = "Bone",             rgb = { 0.80, 0.75, 0.64 }, token = "ink" },
-  { key = "primer",   label = "Primer Grey",      rgb = { 0.55, 0.56, 0.55 }, token = "muted" },
-  { key = "gunmetal", label = "Gunmetal",         rgb = { 0.27, 0.28, 0.28 }, token = "plateHi" },
-  { key = "olive",    label = "Enamel Olive",     rgb = { 0.40, 0.41, 0.31 }, token = "panel" },
-  { key = "habgreen", label = "Hab Green",        rgb = { 0.53, 0.62, 0.50 }, token = "phosDim" },
-  { key = "signal",   label = "Signal Grey-Blue", rgb = { 0.50, 0.59, 0.63 }, token = "signal" },
-  { key = "sand",     label = "Regolith Tan",     rgb = { 0.68, 0.58, 0.45 }, token = "soft" },
-  { key = "orange",   label = "Signal Orange",    rgb = { 0.91, 0.50, 0.21 }, token = "accent" },
-  { key = "oxide",    label = "Oxide Red",        rgb = { 0.50, 0.24, 0.15 }, token = "accentDim" },
-  { key = "safety",   label = "Safety Yellow",    rgb = { 0.90, 0.72, 0.22 }, token = "warn" },
-  { key = "agency",   label = "Agency Colour",    rgb = { 0.20, 0.32, 0.34 }, token = "agency", agency = true },
+  { key = "hull",      label = "Hull White",    srgb = { 0.93, 0.92, 0.88 }, token = "bezel" },
+  { key = "bone",      label = "Cream",         srgb = { 0.92, 0.86, 0.72 }, token = "ink" },
+  { key = "lightgrey", label = "Light Grey",    srgb = { 0.76, 0.77, 0.76 }, token = "plate" },
+  { key = "safety",    label = "Safety Yellow", srgb = { 0.96, 0.74, 0.07 }, token = "warn" },
+  { key = "orange",    label = "Signal Orange", srgb = { 0.90, 0.38, 0.08 }, token = "accent" },
+  { key = "oxide",     label = "Oxide Red",     srgb = { 0.52, 0.14, 0.10 }, token = "accentDim" },
+  { key = "habgreen",  label = "Hab Green",     srgb = { 0.36, 0.55, 0.38 }, token = "phosDim" },
+  { key = "olive",     label = "Olive Drab",    srgb = { 0.34, 0.36, 0.21 }, token = "panel" },
+  { key = "signal",    label = "Signal Blue",   srgb = { 0.18, 0.40, 0.62 }, token = "signal" },
+  { key = "primer",    label = "Primer Grey",   srgb = { 0.48, 0.49, 0.48 }, token = "muted" },
+  { key = "gunmetal",  label = "Anthracite",    srgb = { 0.18, 0.19, 0.20 }, token = "plateHi" },
+  { key = "agency",    label = "Agency Colour", srgb = { 0.16, 0.38, 0.42 }, token = "agency", agency = true },
 }
+for _, s in ipairs(PALETTE) do s.rgb = { lin(s.srgb[1]), lin(s.srgb[2]), lin(s.srgb[3]) } end
+-- keys a save may hold from the first palette, and the swatch they became
+ALIAS = { sand = "bone" }
 BY_KEY = {}
 for i, s in ipairs(PALETTE) do s.i = i; BY_KEY[s.key] = s end
+for k, v in pairs(ALIAS) do BY_KEY[k] = BY_KEY[v] end
 
 -- What each kit material's surface averages (linear albedo: the texture's
 -- mean × the generator's paint colour, tools/gen_kit_parts.py look()):
@@ -67,7 +86,9 @@ BASE = {
   film      = { 0.70, 0.70, 0.70 },
   prop      = { 0.42, 0.42, 0.41 },
 }
-TINT_MAX = 3.0
+-- (a white coat on dark regocrete multiplies its blue by ~6.6: S5 raised
+-- the ceiling from 3, which had clamped light paint on dark materials grey)
+TINT_MAX = 8.0
 -- what a coat of paint costs a piece, by its share of a 2 x 2.2 m wall face
 PAINT_COST = 30
 

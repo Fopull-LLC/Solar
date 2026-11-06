@@ -416,9 +416,11 @@ def pieces(K):
             return m, sh, [("Face", "mesh", (fm, (0, 0.003, 0)))]
         return fn
 
-    out["signPlate"] = (sign_fn(0.9, 0.3), ["steel"])
-    out["signBoard"] = (sign_fn(2.0, 0.5), ["steel"])
-    out["signStencil"] = (sign_fn(1.6, 0.32, plate=False), ["film"])
+    # (S5 polish: readable at 8 m: a plate's capitals ~0.15 m tall; kit_live
+    # wraps the words and shrinks the plate to fit them)
+    out["signPlate"] = (sign_fn(1.4, 0.45), ["steel"])
+    out["signBoard"] = (sign_fn(2.4, 0.6), ["steel"])
+    out["signStencil"] = (sign_fn(2.0, 0.4, plate=False), ["film"])
 
     def emblem_fn(_mat):
         m, sh = CModel(seed=521), Shell()

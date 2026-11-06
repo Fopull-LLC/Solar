@@ -1330,8 +1330,9 @@ local function cable_click()
     if req.bad then play("denied"); say(req.bad) return end
     CB.makeOff(req.hitRec, req.hitPart)
     play("pick", 0.5)
-    say(string.format("Power Cable made off at the %s · walk it out to a part on another structure and click it (up to %.1f km)",
-      tostring(req.label or "part"), ((partInfo("powerCable") or {}).cable or {}).max and (partInfo("powerCable").cable.max / 1000) or 1.5))
+    local cd = (req.def and req.def.cable) or ((partInfo("powerCable") or {}).cable) or {}
+    say(string.format("%s made off at the %s · walk it out to a part on another structure and click it (up to %.1f km)",
+      tostring(req.def and req.def.label or "Power Cable"), tostring(req.label or "part"), (cd.max or 1500) / 1000))
     return
   end
   if req.bad then play("denied"); say(req.bad) return end
@@ -1339,8 +1340,8 @@ local function cable_click()
   if not id then play("denied"); say(why or "it wouldn't lay there") return end
   CB.clearPending()
   play("place", 0.6)
-  say(string.format("Power Cable laid · %.0f m, %.1f t · %s (%s + %s shipping) · Ctrl+Z within a minute takes it up",
-    L or 0, (q and q.mass) or 0, money(q.total), money(q.cost), money(q.ship)))
+  say(string.format("%s laid · %.0f m, %.1f t · %s (%s + %s shipping) · Ctrl+Z within a minute takes it up",
+    tostring(req.def and req.def.label or "Power Cable"), L or 0, (q and q.mass) or 0, money(q.total), money(q.cost), money(q.ship)))
   heldPart = nil
 end
 
@@ -2007,7 +2008,7 @@ end
 local MODE_TXT = { edge = "EDGE TO EDGE", deck = "ON THE DECK", grid = "GRID 0.5 m", free = "FREE" }
 function hintLine()
   if not open_ then return "Build Kit  ·  B opens it" end
-  local keys = (collapsed and "B unfolds the parts" or "B folds the parts") .. "  ·  Esc " .. (heldPart and "drops the part" or "closes the kit") .. "  ·  Ctrl+Z undo  ·  F1 rooms"
+  local keys = (collapsed and "B unfolds the parts" or "B folds the parts") .. "  ·  Esc " .. (heldPart and "drops the part" or "closes the kit") .. "  ·  Ctrl+Z undo  ·  F1 rooms  ·  F2 power"
   if not heldPart then return "Build Kit  ·  pick a part  ·  RMB tap a placed part to take it down  ·  " .. keys end
   local hdef = partInfo(heldPart)
   -- (S4) paint and the eyedropper
@@ -2022,12 +2023,20 @@ function hintLine()
   if hdef and hdef.cable then
     local CB = ref("base_cable")
     local pend = CB and CB.pending
-    if not req then return string.format("Power Cable  ·  %s", aim_why or "aim at a placed part") end
-    if req.bad then return string.format("Power Cable  ·  %s  ·  RMB tap drops it", req.bad) end
-    if not pend then return string.format("Power Cable  ·  LMB makes it off at the %s  ·  then walk it out to another structure", tostring(req.label or "part")) end
+    local nm = hdef.label or "Power Cable"
+    if not req then return string.format("%s  ·  %s", nm, aim_why or "aim at a placed part") end
+    if req.bad then return string.format("%s  ·  %s  ·  RMB tap drops it", nm, req.bad) end
+    if not pend then return string.format("%s  ·  LMB makes it off at the %s  ·  then walk it out to another structure", nm, tostring(req.label or "part")) end
     local q = req.quote or {}
-    return string.format("Power Cable from the %s  ·  %.0f m, %.1f t  ·  LMB lays it for %s (%s + %s shipping)",
-      tostring(pend.label), req.len or 0, q.mass or 0, money(q.total or 0), money(q.cost or 0), money(q.ship or 0))
+    -- (S5) what the run would lose at the grid's load now: the loss of a
+    -- 10 kW draw over its length at its voltage, so the gauge is chosen
+    local BP = ref("base_power")
+    local lossTxt = ""
+    if BP and BP.lossShare and req.len then
+      lossTxt = string.format("  ·  loses %.1f %% at 10 kW", 100 * BP.lossShare(10, hdef.cable.type or "lv16", req.len))
+    end
+    return string.format("%s from the %s  ·  %.0f m, %.1f t%s  ·  LMB lays it for %s (%s + %s shipping)",
+      nm, tostring(pend.label), req.len or 0, q.mass or 0, lossTxt, money(q.total or 0), money(q.cost or 0), money(q.ship or 0))
   end
   local turn = "scroll turns  ·  R quarter  ·  PgUp/PgDn raise  ·  Shift frees"
   local hk = partInfo(heldPart)
@@ -2202,6 +2211,11 @@ function update(node, dt)
     if input.pressed("f1") then
       local RA = ref("room_air")
       if RA then RA.overlay = not RA.overlay; say(RA.overlay and "ROOMS: each room's outline and air · green sealed with air, amber sealed and thin, red open or venting" or "ROOMS overlay off") end
+    end
+    -- S5: F2 shows the POWER overlay (each cable's load and flow, breakers, the grid's card)
+    if input.pressed("f2") then
+      local BP = ref("base_power")
+      if BP then BP.overlay = not BP.overlay; say(BP.overlay and "POWER: each cable's flow and load · green under half its rating, amber to full, red over it or tripped, grey off" or "POWER overlay off") end
     end
     if input.key("ctrl") then
       if input.pressed("c") then copy_now() end

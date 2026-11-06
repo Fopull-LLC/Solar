@@ -1022,8 +1022,8 @@ grid automatically; a Power Cable joins grids beyond that.**
   `cable.<id> = { id, b, a = { sid, uid }, z = { sid, uid }, len, h = { radius … }, v, rk, t, d, by, paid }`
   (`h` the ground's radii every 0.5 m between the ends, `v` = 2 since the
   settle, `rk` the rocks it lies over: `{ x, y, z, r }` body-relative).
-- **Not modelled:** line losses. A 1.5 km low-voltage run would lose real
-  power; the grid treats a cable as lossless.
+- **Line losses** came with S5 (§16): every cable has a type, a rating and
+  P²R/V² losses; breakers, transformers and poles are kit pieces.
 
 ### The Shield Wall (M6c; `scripts/base_shield.lua`)
 
@@ -1488,16 +1488,17 @@ tabs in the kit's column: **PAINT**, **PROPS**, **DECALS** and **BLUEPRINTS**.
 ### Paint (`scripts/kit_paint.lua`, pure + a small driver)
 
 - **The palette:** twelve enamels drawn from the UI tokens
-  (`ui/solar.tokens.ron`): Hull White (bezel), Bone (ink), Primer Grey,
-  Gunmetal, Enamel Olive, Hab Green (phosDim), Signal Grey-Blue (signal),
-  Regolith Tan, Signal Orange (accent), Oxide Red (accentDim), Safety Yellow
-  (warn), and the **Agency Colour**, the company emblem's field colour worn to
-  an enamel (it follows a new emblem). Each swatch is the albedo the painted
-  surface should average, in linear light, already a little dusty.
+  (`ui/solar.tokens.ron`), reworked in S5 for real value and hue range (§16,
+  "S4 polish"): Hull White (bezel), Cream (ink), Light Grey, Safety Yellow
+  (warn), Signal Orange (accent), Oxide Red (accentDim), Hab Green (phosDim),
+  Olive Drab, Signal Blue (signal), Primer Grey, Anthracite, and the **Agency
+  Colour**, the company emblem's field colour worn to an enamel (it follows a
+  new emblem). Each swatch is named by its sRGB colour and kept as the linear
+  albedo the painted surface should average.
 - **How it sits:** `node:setTint` multiplies over what a node draws and keeps
   its textures, so paint is the tint that turns the piece's material average
   into the swatch (`tintFor` = swatch / `BASE[mat]`, per channel, at most
-  3×). The normal, roughness and AO maps and the albedo's own stains, seams
+  8×). The normal, roughness and AO maps and the albedo's own stains, seams
   and pitting all show through: an orange coat on concrete still looks like
   concrete under paint. Tint never splits a draw (engine `perf.counts`), so a
   painted wall row still batches; the probe measures it (below).
@@ -1573,8 +1574,9 @@ the warm Desk Lamp and the 5,000 K Work Light, pooled with the kit's lights
   `kit_snap.spinPose` composes Ry(yaw)·Rx(pitch)·Ry(spin) back into the
   record's yaw, pitch and roll (on a wall a quarter spin is pitch 0 and a
   quarter roll).
-- **Signs:** Sign Plate (riveted, 0.9 × 0.3 m), Name Board (2 × 0.5 m) and
-  Stencilled Words (sprayed on, cut out). `kit_live` draws each into a picture
+- **Signs:** Sign Plate (riveted, 1.4 × 0.45 m since S5), Name Board
+  (2.4 × 0.6 m) and Stencilled Words (2 × 0.4 m, sprayed on, cut out); the
+  words fill them and a plate narrows to its words (§16, "S4 polish"). `kit_live` draws each into a picture
   (`img:text` in SolarStencil / SolarLabel) once: the part state's `text`, or
   with none **the base's name** (`bases.baseAt`), redrawn when either changes
   (a rename reaches the board within 2 s while the crew is near). Right-click:
@@ -1635,3 +1637,198 @@ the warm Desk Lamp and the 5,000 K Work Light, pooled with the kit's lights
   base + 100 props + 20 decals in view painted and then bare (tint keeps the
   batches), save and reload. Pictures `save/user/buildshots/c*.png`; numbers
   in `work/sandbox_s4/NOTES.md`.
+
+## 16. Sandbox S5: power networks II and cables
+
+The plan is `work/sandbox/PLAN.md` §3.2, §3.6, §4 and §12 (S5). A base's
+grid stops being one lossless pool: the cables carry real I²R losses and have
+ratings, breakers trip on overload and need a hand to reset them, and a long
+line wants a transformer at each end and 11 kV between. The base grid's
+closed-form battery step (§12) is unchanged: the losses are one more load on
+it, slot by slot.
+
+### Units
+
+A base reads **1 EC/s as 1 kW**: a strip light's 0.03 EC/s is 30 W, a
+tower's 2 EC/s 2 kW, a Solar Array a 3 kW array, an O2 generator 1.5 kW. The
+network's readouts (the POWER overlay, the cable and breaker menus, the
+screen's LOSSES line, the station card's LOSS line) are in kW.
+
+### The network of a grid (`scripts/base_power.lua`, pure + the overlay)
+
+- **Buses.** A structure is one bus: its parts share its busbar. Structures
+  within 150 m of a tower share the tower's bus (the base's own low-voltage
+  ring, lossless as before): `base_grid.buildGrids` keeps a second union for
+  that, without the cables (`g.bus[sid]`). A structure of network gear
+  alone (a pole, a junction) never joins a tower's ring: it is on the line
+  its cables make (the probe caught a pole 40 m from the tower swallowing
+  its HV spans' flow).
+- **Edges** are the grid's live cables between two buses: R = ρL/A (annealed
+  copper, ρ = 1.72e-8 Ω·m, per conductor), at their voltage, with a rating
+  V·I. A cable is live unless it is burnt through or a breaker at either end
+  is open or tripped (`split_cables`).
+- **Sources and loads** sit at their structure's bus; the **batteries are
+  the slack**: they take a surplus and cover a shortfall, shared by size.
+  With no battery the sources are turned down to what is drawn, or the loads
+  are shed in proportion.
+- **The flow** is a DC load flow in per-unit: each edge's admittance is
+  V²/R (a transformer adds its 4 % impedance in series at each end it is
+  plugged into), the reduced Laplacian is factored once (dense LU with
+  partial pivoting) and back-substituted for each slot. On a tree that is
+  exactly "push the loads up to the sources"; on a cycle the flow splits by
+  conductance (the smoke checks a 2 : 1 split). The losses are drawn where
+  the loads are and the slack covers them; the solve repeats until they
+  settle (to 1e-9 kW, warm-started from the last slot's).
+- **Losses:** each cable P²R/V²; each transformer P0 + Pk·(S/S_rated)²
+  (0.25 kW idle, 1.6 kW more at its full 100 kVA). 1 km of 16 mm² at 400 V
+  carrying 20 kW loses 13 %; the same at 11 kV loses about 2 W.
+- **The year** (`yearOf`): each slot of the light's year is solved once
+  (slots whose arrays give the same, the nights, share one solve), giving
+  `M.lossP[k]` (the kW lost in slot k), `M.trip[k]` (what trips in it) and
+  each cable's peak. `base_grid.advance` adds `lossP` to the slot's draw, so
+  one long step still equals many short ones (smoke: 37 years to 1e-6).
+- **When it is solved:** with the grid, on change and on the 2 s clock,
+  never in a frame. The flows of the current slot are kept for the overlay
+  and the menus (`base_grid.cableFlow(id)`, `partFlow(sid, uid)`).
+
+### The cables and their types (`base_cable.lua`, `parts_base` drums)
+
+| Drum | Cable | Rating | Mass | Price | Longest run |
+|---|---|---|---|---|---|
+| Power Cable 16 mm² | 4-core SWA, 400 V | 80 A, 32 kW | 1.4 kg/m | $3/m | 1.5 km |
+| Power Cable 35 mm² | 4-core SWA, 400 V | 125 A, 50 kW | 2.6 kg/m | $6/m | 1.5 km |
+| Power Cable 95 mm² | 4-core SWA, 400 V | 230 A, 92 kW | 5.8 kg/m | $14/m | 1.5 km |
+| HV Cable 11 kV | 3-core 35 mm² XLPE | 140 A, 1.5 MW | 2.3 kg/m | $9/m | 6 km |
+
+- A cable's record carries `ty` (nil = 16 mm², every cable before S5) and
+  `burnt`. The drum in hand decides the type; the hint shows what the run
+  would lose at 10 kW, so the gauge is a choice.
+- **The 11 kV cable** runs only between Transformers, over Power Poles
+  between; a transformer's high side takes nothing else, and a pole carries
+  one voltage (`validity`).
+- **Loops:** a cable to a pole, a junction, a breaker or a transformer
+  (`netgear`) may close a loop or double a line; anything else still joins
+  only two grids that aren't one yet.
+- **Strung from a pole:** a cable made off at a Power Pole leaves its
+  crossarm (`cableAt`, 7.7 m) and is pulled tight: its catenary's a is 5× the
+  span (`tensionA`, a sag of 2.5 %), never less than the hand's lay. The
+  settle (§12) is otherwise the same: where even the tight line would dip
+  into the ground it lies on it.
+- **Burnt through:** a cable with no breaker at either end driven past 125 %
+  of its rating burns through at the start of that slot. It carries nothing
+  until it is spliced: right-click its end → **Splice the burnt cable** (4 s,
+  a quarter of its price). Between 100 and 125 % it only runs hot (the
+  overlay is red and the limit line names it).
+- The end part's menu gains the cable's **Load** (kW, % of its rating, loss).
+
+### The POWER pieces (`parts_kit` POWER section, `tools/gen_kit_parts.py`)
+
+| Piece | Size | Mass | Price | What it does |
+|---|---|---|---|---|
+| Breaker Panel 63 A | 0.4 × 0.5 × 0.14 m, wall-hung | 14 kg | $180 | guards the cables plugged into it: trips past 25.2 kW; with none, its structure's main |
+| Breaker Panel 160 A | 0.56 × 0.72 × 0.2 m | 32 kg | $420 | the same at 64 kW |
+| Transformer 100 kVA | 1.44 × 1.12 × 1.66 m pad-mount | 0.8 t | $2,400 | 400 V ↔ 11 kV; three HV bushings on top where the HV cable lands (1.62 m) |
+| Power Pole 8 m | steel tube or spun concrete, 1.4 m crossarm | 0.24 / 0.95 t | $650 / $480 | a cable made off at it is strung overhead |
+| Junction Box | feeder pillar, 0.64 × 1.0 × 0.44 m | 45 kg | $150 | a cheap part to branch or splice runs at |
+
+- **Breakers.** A cable plugged into a breaker is **guarded** by it: the
+  breaker opens (a TRIP) at the start of the first slot whose flow on that
+  cable passes its rating, and stays open until a hand resets it. A breaker
+  with no cable is its structure's **main**: open, the structure's own loads
+  are off the grid; it trips when they draw more than its rating. Open or
+  tripped, a guarded cable carries nothing, so the grid may split in two;
+  each half keeps its banks' charge (every bank at the grid's state of
+  charge). A trip is logged (`base_power.lastTrips`), captioned, and clacks.
+  Its lamp (a `Lens` child) is green, amber past 80 %, red tripped, dark open.
+- **The menu:** Breaker (its load of its rating, what it guards), **Breaker
+  closed** (a toggle), **Reset the breaker** when tripped. Transformer: its
+  load of 100 kVA, its loss, its HV lines.
+- **The logic seam (S8):** `base_power.setBreaker(sid, uid, closed, by)`
+  with `by` = "hand" | "logic" | "trip"; hooks in `base_power.onBreaker`
+  hear every change (fn(sid, uid, state, by)). S8's actuators call the one
+  and sensors read `breakerState` / `base_grid.partFlow`.
+- **Trips in time.** `base_grid.advance` stops a grid at the start of a slot
+  that trips (or at once when it is already in one: a load added, a reset
+  under load); `advance_all` opens what tripped, rebuilds the grids (keeping
+  each grid's own clock) and goes on from that moment, so a long catch-up and
+  a series of 2 s steps trip at the same instant (smoke, to 1e-9 s).
+
+### The readouts
+
+- **POWER overlay** (F2 with the kit open; `base_power.drawOverlay`, in
+  `lateUpdate` from body-relative cable paths and this frame's body read):
+  each cable within 700 m drawn over its settled path, green under half its
+  rating, amber to full, red over it, grey off; chevrons along it the way the
+  power flows; a label at its middle (`CABLE 3 · 35 mm² · 18.4 kW · 37 % ·
+  loss 0.6 kW`, or `OFF (breaker tripped)`, or `BURNT THROUGH`); each breaker
+  and transformer's load; and each grid's card over its first structure:
+  `GRID b1 · IN · OUT · LOSS · BATTERY`, with the **LIMITED BY** line under it.
+- **Limited by** (`base_power.limitedBy`): the element nearest its limit
+  when one is past 80 % ("cable 3 at 140 % — upgrade the gauge to 35 mm²",
+  "breaker at 96 % of its rating — near its trip", "transformer at 120 % — a
+  second line, or shed load", "main breaker at …"), else the line losing the
+  most when it loses 5 % or more ("cable 3 loses 14 % — a transformer at each
+  end (11 kV)").
+- **The wall screen** gains LOSSES (kW and % of the draw), LIMIT and TRIPPED
+  lines; **the station's base card** LOSS and LIMIT lines in its CRT block;
+  the tower's grid line counts breakers and transformers.
+
+### Cost
+
+- Per frame: nothing new but the overlay while it is on, and the breaker
+  lamps once a second (a tint only when a lamp's state changes).
+- On change: the topology, then each network's year (one LU, one
+  back-substitution per distinct slot). The smoke's three networks with 40
+  cables and 10 breakers rebuild in 3–7 ms in luajit (light profiles
+  included when cold), a 2 s step 0.05–0.08 ms. The probe's numbers are in
+  `work/sandbox_s5/NOTES.md`.
+
+### Tests and the probe
+
+- `luajit solar/tests/smoke_netpower.lua`: the cable maths (R, P²R/V², the
+  plan's 1 km figures, ratings, gauges, breaker and transformer figures); a
+  tree's flow and its balance at every bus; a cycle's 2 : 1 split; a trip, a
+  burn, a main breaker, the limit lines; a year of losses on the battery step
+  (one step = many to 1e-6) and a noon trip at the same moment either way;
+  two bases 1.2 km apart at 400 V and then at 11 kV through two
+  transformers, the HV rules, a far breaker tripped by the overload (the grid
+  splits), reset under load (trips again), the load cut (holds), opened by
+  logic (the hook), a main breaker, a cable burnt and spliced, the save; and
+  the cost of 3 networks, 40 cables and 10 breakers.
+- `smoke_base_grid` / `smoke_base_build`: the BASE column's three new drums.
+- `tools/perf/kitprobe.sh <engine> power` (PATCHES=funds.patch;
+  `tools/perf/powerprobe_modes.lua`): base A built and painted in the light
+  swatches, a 1.1 km 11 kV line over two poles to base B, a plant fed through
+  a breaker and overloaded until it trips, reset, held; the overlay at both
+  ends and over the line (two angles); the inside, a plate and a board read
+  from 8 m, the palette; 3 networks / 40 cables / 10 breakers measured; save
+  and reload. `interior` is the diagnostic behind the polish below.
+
+### S4 polish (from the screenshot review)
+
+- **The palette** (`kit_paint.PALETTE`) was picked as if its numbers were
+  screen colours, but they are linear albedo, so every swatch came out a pale
+  mid-tone pastel and they read alike. Each swatch is now named by the sRGB
+  colour a real enamel shows (RAL-like) and converted to linear once: Hull
+  White, Cream (key `bone`), Light Grey, Safety Yellow, Signal Orange, Oxide
+  Red, Hab Green, Olive Drab, Signal Blue, Primer Grey, Anthracite (key
+  `gunmetal`) and the Agency Colour: luminance 0.03 to 0.83. A key from the
+  first palette (`sand`) resolves to Cream (`ALIAS`). The tint's ceiling went
+  from 3 to 8, so white on dark regocrete is no longer clamped grey (the smoke
+  checks no swatch is clamped on any material).
+- **Inside colour.** The probe's diagnostic (`interior`): with the new paint
+  the lamp-lit walls already read clean; the pink and the blue ceiling came
+  from the **sky reflection** (a physical surface reflects the sky map, whose
+  lower half is the red ground). On a world on rails a reflection probe would
+  re-capture every frame (its key is its world position), so the room can't
+  be captured instead; the generator writes `reflectivity: 0.12` on every
+  `MeshIn` (a wall's or hab can's inside) and 0.35 on floor and roof panels
+  (their undersides are ceilings). A material in the prefab, so it batches.
+  The strip light is a neutral 4,300 K white as the eye adapted to it sees it
+  (1.0, 0.91, 0.79), cooler than before.
+- **Signs** (`kit_live.signLayout`, pure): the plates grew (Sign Plate
+  1.4 × 0.45 m, Name Board 2.4 × 0.6 m, Stencilled Words 2.0 × 0.4 m); the
+  words are set from the fonts' own advance widths, on one line or two when
+  that sets them bigger, in light ink on a near-black enamel; the plate
+  narrows to its words (its Mesh and Face scaled along their width, never
+  under `fit`). "HAB 1 · CREW 2" on a plate is ~0.13 m capitals.

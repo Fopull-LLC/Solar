@@ -34,7 +34,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gen_part_meshes import ROOT, PREFABS, box, disk, lathe, rot_x, rot_y, rot_z, tube  # noqa: E402
-from base_models import (CModel, CONC, DARK, GREY, LIGHT, PAINT, RUBBER, SAFETY, Shell, SLATE, WARM,  # noqa: E402
+from base_models import (CModel, CONC, CONC_DARK, DARK, GREY, LIGHT, PAINT, RUBBER, SAFETY, Shell, SLATE, WARM,  # noqa: E402
                          LAMP_WARM, zcheck, stair, quat_from_basis)
 import gen_base  # noqa: E402
 
@@ -1047,6 +1047,120 @@ def p_airTank(mat):
     return m, sh, []
 
 
+# ── power networks II (S5: scripts/base_power.lua) ──────────────────────────
+
+def breaker_panel(w, h, d, amps, seed):
+    """A wall-hung breaker enclosure (mount: +Y out of the face): a grey steel
+    box, its door with a window over the breaker's handle, a rating plate, a
+    cable gland under it for each way, and its state lamp (a "Lens" child
+    base_power lights green, amber or red)."""
+    def fn(mat):
+        m, sh = CModel(seed=seed), Shell()
+        m.ground = False
+        bx(m, "Steel", (0.56, 0.58, 0.58), -w / 2, w / 2, 0, d * 0.82, -h / 2, h / 2)
+        # the door, a hair proud, with its hinge side and latch
+        bx(m, "Steel", (0.60, 0.62, 0.62), -w / 2 + 0.01, w / 2 - 0.01, d * 0.82, d * 0.86, -h / 2 + 0.01, h / 2 - 0.01)
+        bx(m, "Steel", DARK, w / 2 - 0.05, w / 2 - 0.02, d * 0.86, d * 0.9, -0.04, 0.04)
+        # the window over the breaker row, and the handles behind it
+        bx(m, "Steel", DARK, -w / 2 + 0.05, w / 2 - 0.08, d * 0.86, d * 0.87, 0.02, h / 2 - 0.08)
+        n = 3 if amps < 100 else 4
+        for k in range(n):
+            x = -w / 2 + 0.08 + k * (w - 0.2) / max(1, n - 1)
+            bx(m, "Steel", (0.12, 0.12, 0.13) if k else SAFETY, x - 0.012, x + 0.012, d * 0.87, d * 0.9, h / 2 - 0.2, h / 2 - 0.12)
+        # the rating plate and the hazard flash
+        bx(m, "Steel", LIGHT, -w / 2 + 0.05, -w / 2 + 0.18, d * 0.86, d * 0.865, -h / 2 + 0.05, -h / 2 + 0.11)
+        bx(m, "Steel", SAFETY, -0.03, 0.03, d * 0.86, d * 0.865, -0.03, 0.03)
+        # the glands under it
+        for k in range(2):
+            x = -w / 4 + k * w / 2
+            tb(m, "Rubber", RUBBER, (x, d * 0.4, -h / 2), (x, d * 0.4, -h / 2 - 0.05), 0.02, segs=8)
+        lm = CModel(seed=seed + 1)
+        lm.ground = False
+        bx(lm, "Lamp", (0.4, 1.0, 0.45), -0.015, 0.015, 0, 0.012, -0.015, 0.015)
+        return m, sh, [("Lens", "mesh", (lm, (w / 2 - 0.07, d * 0.87, h / 2 - 0.05)))]
+    return fn
+
+
+def p_transformer(mat):
+    """A 100 kVA pad-mounted transformer: its tank in a green-grey enclosure on
+    a plinth, cooling fins down both sides, three HV bushings on top (porcelain
+    sheds) where the 11 kV cable lands, the LV cable box on its front, the
+    rating and danger plates."""
+    m, sh = CModel(seed=131), Shell()
+    bx(m, "Concrete", CONC_DARK, -0.72, 0.72, 0.0, 0.12, -0.56, 0.56, sh=sh)
+    col = (0.38, 0.44, 0.38)
+    bx(m, "Steel", col, -0.55, 0.55, 0.12, 1.30, -0.40, 0.40, sh=sh)
+    bx(m, "Steel", (0.34, 0.40, 0.34), -0.58, 0.58, 1.30, 1.36, -0.43, 0.43)
+    for s in (-1, 1):
+        for k in range(7):
+            z = -0.33 + k * 0.11
+            bx(m, "Steel", col, s * 0.55, s * 0.69, 0.22, 1.20, z - 0.012, z + 0.012)
+    sh.add((0, 0.71, 0), (1.38, 0.98, 0.80))
+    # the bushings: a porcelain stack each and a copper stud
+    for x in (-0.3, 0.0, 0.3):
+        tb(m, "Steel", DARK, (x, 1.36, 0.1), (x, 1.40, 0.1), 0.06, segs=10)
+        for k in range(4):
+            y = 1.40 + k * 0.05
+            tb(m, "Steel", (0.62, 0.40, 0.28), (x, y, 0.1), (x, y + 0.03, 0.1), 0.05, segs=12)
+            tb(m, "Steel", (0.62, 0.40, 0.28), (x, y + 0.03, 0.1), (x, y + 0.05, 0.1), 0.032, segs=10)
+        tb(m, "Steel", (0.72, 0.45, 0.25), (x, 1.60, 0.1), (x, 1.66, 0.1), 0.012, segs=6)
+    # the LV cable box on the front, its conduit into the ground
+    bx(m, "Steel", (0.34, 0.40, 0.34), -0.35, 0.35, 0.18, 0.75, 0.40, 0.52, sh=sh)
+    tb(m, "Rubber", RUBBER, (0.0, 0.18, 0.47), (0.0, 0.02, 0.47), 0.05, segs=10)
+    # the plates
+    bx(m, "Steel", SAFETY, -0.12, 0.12, 0.90, 1.06, 0.40, 0.406)
+    bx(m, "Steel", LIGHT, 0.22, 0.46, 0.95, 1.10, 0.40, 0.405)
+    return m, sh, []
+
+
+def p_powerPole(mat):
+    """An 8 m distribution pole: a tapered galvanised tube (or a spun concrete
+    pole), a 1.4 m crossarm at 7.6 m with three pin insulators where the
+    strung cable lands, its earth wire and a stencilled number plate."""
+    m, sh = CModel(seed=141), Shell()
+    if mat == "concrete":
+        m.color = CONC
+        tube(m, "Concrete", (0, 0.0, 0), (0, 8.0, 0), 0.14, segs=12, uv_m=UVM["Concrete"], r1=0.09)
+    else:
+        m.color = LIGHT
+        tube(m, "Steel", (0, 0.0, 0), (0, 8.0, 0), 0.11, segs=12, uv_m=UVM["Steel"], r1=0.075)
+        tb(m, "Steel", GREY, (0, 0.0, 0), (0, 0.04, 0), 0.22, segs=12)
+    tb(m, "Steel", DARK, (0, 8.0, 0), (0, 8.04, 0), 0.10, segs=10)
+    sh.add((0, 4.0, 0), (0.26, 8.0, 0.26))
+    # the crossarm and its braces
+    bx(m, "Steel", GREY, -0.70, 0.70, 7.52, 7.60, -0.05, 0.05)
+    for s in (-1, 1):
+        tb(m, "Steel", GREY, (s * 0.06, 7.15, 0.0), (s * 0.5, 7.53, 0.0), 0.012, segs=5)
+    for x in (-0.6, 0.0, 0.6):
+        tb(m, "Steel", DARK, (x, 7.60, 0), (x, 7.66, 0), 0.008, segs=5)
+        for k in range(3):
+            y = 7.66 + k * 0.035
+            tb(m, "Steel", (0.62, 0.40, 0.28), (x, y, 0), (x, y + 0.025, 0), 0.03, segs=10)
+    # the earth wire down it and the number plate at eye height
+    tb(m, "Steel", (0.45, 0.32, 0.20), (0.12, 0.2, 0.0), (0.09, 7.5, 0.0), 0.004, segs=4)
+    bx(m, "Steel", SAFETY, -0.08, 0.08, 2.2, 2.42, 0.10 if mat == "concrete" else 0.08, 0.11 if mat == "concrete" else 0.09)
+    return m, sh, []
+
+
+def p_junctionBox(mat):
+    """A feeder pillar: a green steel cabinet on a buried root, its double
+    door and latch, a vent under its hood, the cable glands at its foot."""
+    m, sh = CModel(seed=151), Shell()
+    col = (0.24, 0.34, 0.26)
+    bx(m, "Steel", col, -0.30, 0.30, 0.0, 0.95, -0.18, 0.18, sh=sh)
+    bx(m, "Steel", (0.22, 0.31, 0.24), -0.32, 0.32, 0.95, 1.0, -0.20, 0.20)
+    bx(m, "Steel", (0.26, 0.37, 0.28), -0.28, -0.005, 0.08, 0.88, 0.18, 0.186)
+    bx(m, "Steel", (0.26, 0.37, 0.28), 0.005, 0.28, 0.08, 0.88, 0.18, 0.186)
+    bx(m, "Steel", DARK, -0.02, 0.02, 0.45, 0.55, 0.186, 0.196)
+    for k in range(5):
+        y = 0.78 + k * 0.02
+        bx(m, "Steel", DARK, -0.2, 0.2, y, y + 0.008, 0.186, 0.19)
+    bx(m, "Steel", SAFETY, -0.06, 0.06, 0.62, 0.70, 0.186, 0.19)
+    for x in (-0.18, 0.0, 0.18):
+        tb(m, "Rubber", RUBBER, (x, 0.05, -0.18), (x, 0.05, -0.24), 0.025, segs=8)
+    return m, sh, []
+
+
 # ── mirrored variants (a piece symmetric in neither of its planes) ─────────
 
 def reflect_model(m):
@@ -1132,6 +1246,11 @@ PIECES = {
     "scrubber": (p_scrubber, ["steel"]),
     "o2gen": (p_o2gen, ["steel"]),
     "airTank": (p_airTank, ["steel"]),
+    "breaker63": (breaker_panel(0.40, 0.50, 0.14, 63, 121), ["steel"]),
+    "breaker160": (breaker_panel(0.56, 0.72, 0.20, 160, 123), ["steel"]),
+    "transformer": (p_transformer, ["steel"]),
+    "powerPole": (p_powerPole, ["steel", "concrete"]),
+    "junctionBox": (p_junctionBox, ["steel"]),
 }
 
 
@@ -1212,8 +1331,24 @@ def f3(v):
     return f"({v[0]:.4f}, {v[1]:.4f}, {v[2]:.4f})"
 
 
-def mats_of(model):
-    return ",\n".join(f'            "{n}": {MATS[n]()}' for n in sorted(model.parts.keys()))
+def mats_of(model, refl=None):
+    def one(n):
+        t = MATS[n]()
+        if refl is not None and "shading: Physical" in t:
+            t = t.replace("shading: Physical", f"reflectivity: {refl},\n                shading: Physical")
+        return f'            "{n}": {t}'
+    return ",\n".join(one(n) for n in sorted(model.parts.keys()))
+
+
+# (S5 polish) how much of the sky a surface reflects (1 = all, the default):
+# a wall's or hab can's INSIDE (its MeshIn) sees the room, not the sky, so it
+# reflects little of the sky map (which shows the red ground and the blue
+# sky that turned white walls pink indoors); a floor or roof panel's
+# underside is a ceiling. On a moving world a reflection probe re-captures
+# every frame, so the room can't be captured instead (a note for E).
+INSIDE_REFL = 0.12
+FLOOR_REFL = 0.35
+FLOOR_LIKE = {"floor", "floor21", "floor11", "floorHatch", "roofPitch", "roofRidge"}
 
 
 def node_empty(name, at, parent, tags=None):
@@ -1232,7 +1367,7 @@ def node_empty(name, at, parent, tags=None):
 '''
 
 
-def node_mesh(name, glb, model, at, parent, cast=True):
+def node_mesh(name, glb, model, at, parent, cast=True, refl=None):
     shadow = "" if cast else "        cast_shadow: false,\n"
     return f'''    (
         name: "{name}",
@@ -1245,7 +1380,7 @@ def node_mesh(name, glb, model, at, parent, cast=True):
             asset_path: "{glb}",
         ),
         object_materials: {{
-{mats_of(model)},
+{mats_of(model, refl)},
         }},
         scripts: [],
         parent: Some({parent}),
@@ -1283,7 +1418,7 @@ def write_piece(piece, mat, fn, dry, fixture):
     small = (hi - lo).max() < 0.7 or mat == "film"
     mesh_lo, mesh_hi = lo.copy(), hi.copy()
     nodes = [node_empty(name, (0, 0, 0), None, tags=["base_part", "kit"]),
-             node_mesh("Mesh", f"{FOLDER}/{glb}", m, c, 0, cast=not small)]
+             node_mesh("Mesh", f"{FOLDER}/{glb}", m, c, 0, cast=not small, refl=FLOOR_REFL if piece in FLOOR_LIKE else None)]
     for i, (bc, bs, q) in enumerate(sh.boxes):
         nodes.append(node_box(f"Wall {i + 1}", bc, bs, q, 0))
     all_lo, all_hi = lo.copy(), hi.copy()
@@ -1297,7 +1432,8 @@ def write_piece(piece, mat, fn, dry, fixture):
             cc, clo, chi = centre(cm)
             # (S4: a wall's inside and a piece's glass are as much of it as its Mesh: they cast)
             cast = cname in ("MeshIn", "Glass") and not small
-            nodes.append(node_mesh(cname, f"{FOLDER}/{piece}_{mat}_{cname.lower()}.glb", cm, np.asarray(at) + cc, 0, cast=cast))
+            nodes.append(node_mesh(cname, f"{FOLDER}/{piece}_{mat}_{cname.lower()}.glb", cm, np.asarray(at) + cc, 0, cast=cast,
+                                   refl=INSIDE_REFL if cname == "MeshIn" else None))
             extra.append((f"{piece}_{mat}_{cname.lower()}.glb", cm))
             if True:   # (every drawn child is the piece's: the fixture's bounds hold them all)
                 mesh_lo = np.minimum(mesh_lo, np.asarray(at) + clo)

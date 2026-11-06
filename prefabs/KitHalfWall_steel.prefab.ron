@@ -97,6 +97,7 @@
                 metallic_map: Some("textures/base/cladding_orm.png"),
                 metallic: 1.0,
                 ao_map: Some("textures/base/cladding_orm.png"),
+                reflectivity: 0.12,
                 shading: Physical,
             ),
             "Steel": (
@@ -109,6 +110,7 @@
                 metallic_map: Some("textures/base/steel_orm.png"),
                 metallic: 1.0,
                 ao_map: Some("textures/base/steel_orm.png"),
+                reflectivity: 0.12,
                 shading: Physical,
             ),
         },

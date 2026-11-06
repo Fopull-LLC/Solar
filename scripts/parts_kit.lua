@@ -93,8 +93,18 @@
 --   faces2  a two-faced piece (a wall, a hab can): its "MeshIn" child is its
 --           inside, painted apart (kit_paint `paintIn`)
 --   exterior  dust gathers on it with age (structural sections only)
+--
+-- ── POWER (S5; scripts/base_power.lua, docs/base-building.md §16) ───────────
+--   power   = { kind = "breaker", amps }   guards the cables plugged into it
+--             (trips past its rating); with none, its structure's main
+--           = { kind = "xfmr", kva, p0, pk, z }   400 V ↔ 11 kV: the HV cable
+--             lands on it; it loses p0 kW always and pk at its full rating
+--   netgear a pole, a junction, a breaker or a transformer: a cable to it may
+--           close a loop or double a line (base_cable's rule)
+--   pole    the cable leaves its crossarm (`cableAt` m up) and is strung tight
+--   cableAt where a cable leaves the piece, m over its ground point
 
-SECTION_ORDER = { "FOUNDATION", "FLOOR", "WALL", "ROOF", "FRAME", "HAB", "SHIELD", "UTILITY", "LIFE", "FITTINGS", "PROPS", "DECALS" }
+SECTION_ORDER = { "FOUNDATION", "FLOOR", "WALL", "ROOF", "FRAME", "HAB", "SHIELD", "UTILITY", "POWER", "LIFE", "FITTINGS", "PROPS", "DECALS" }
 EXTERIOR = { FOUNDATION = true, FLOOR = true, WALL = true, ROOF = true, FRAME = true, HAB = true, SHIELD = true }
 FACES2 = { wall = true, halfWall = true, wall12 = true, doorWall = true, doorWallM = true, doubleDoor = true, windowWall = true,
            porthole = true, airlockWall = true, openFrame = true, ventWall = true, leadWall = true, gable = true,
@@ -280,8 +290,8 @@ PIECES = {
   -- ── UTILITY ──
   lightFitting = { label = "Light Fitting", section = "UTILITY", snap = "mount", box = B(-0.3, 0.3, 0, 0.09, -0.12, 0.12),
                 mats = { "steel" }, vol = 0.013, fill = "solid", cost = 60, fillk = { steel = 0.1 },
-                light = { color = { 1.0, 0.86, 0.66 }, intensity = 2.4, range = 9, draw = 0.03 },
-                desc = "a 3,200 K strip light · right-click switches it · draws 0.03 EC/s" },
+                light = { color = { 1.0, 0.91, 0.79 }, intensity = 2.4, range = 9, draw = 0.03 },
+                desc = "a 4,300 K strip light, neutral white · right-click switches it · draws 0.03 EC/s" },
   switchPlate = { label = "Switch Plate", section = "UTILITY", snap = "mount", box = B(-0.06, 0.06, 0, 0.03, -0.09, 0.09),
                 mats = { "steel" }, vol = 0.0006, fill = "solid", cost = 25, switch = true,
                 desc = "switches every light of its structure" },
@@ -295,6 +305,26 @@ PIECES = {
   floorDuct = { label = "Floor Duct", section = "UTILITY", snap = "block", box = B(-1, 1, 0, 0.12, -0.2, 0.2),
                 mats = { "steel" }, vol = 0.096, fill = "solid", cost = 70, fillk = { steel = 0.03 },
                 desc = "2 m covered duct for cable and pipe along a floor" },
+  -- ── POWER (S5: scripts/base_power.lua; the base grid's network) ──
+  breaker63 = { label = "Breaker Panel 63 A", section = "POWER", snap = "mount", box = B(-0.2, 0.2, 0, 0.14, -0.3, 0.25),
+                mats = { "steel" }, vol = 0.028, fill = "solid", mass = { steel = 0.014 }, cost = 180, netgear = true,
+                power = { kind = "breaker", amps = 63 }, lens = true,
+                desc = "a wall-hung breaker · guards the cables plugged into it: trips past 63 A (25 kW) · with none, its structure's main" },
+  breaker160 = { label = "Breaker Panel 160 A", section = "POWER", snap = "mount", box = B(-0.28, 0.28, 0, 0.19, -0.41, 0.36),
+                mats = { "steel" }, vol = 0.08, fill = "solid", mass = { steel = 0.032 }, cost = 420, netgear = true,
+                power = { kind = "breaker", amps = 160 }, lens = true,
+                desc = "a heavy breaker · trips past 160 A (64 kW) · guards its cables, or its structure's loads" },
+  transformer = { label = "Transformer 100 kVA", section = "POWER", snap = "block", box = B(-0.72, 0.72, 0, 1.66, -0.56, 0.56),
+                mats = { "steel" }, vol = 1.6, fill = "solid", mass = { steel = 0.8 }, cost = 2400, netgear = true, cableAt = 1.62,
+                power = { kind = "xfmr", kva = 100, p0 = 0.25, pk = 1.6, z = 0.04 },
+                desc = "400 V ↔ 11 kV, 100 kVA · the HV Cable lands on it · loses 0.25 kW always, 1.6 kW at full load · 0.8 t" },
+  powerPole = { label = "Power Pole 8 m", section = "POWER", snap = "post", box = B(-0.7, 0.7, 0, 8.04, -0.22, 0.22),
+                mats = { "steel", "concrete" }, vol = 0.4, fill = "solid", mass = { steel = 0.24, concrete = 0.95 },
+                costs = { steel = 650, concrete = 480 }, cost = 650, netgear = true, pole = true, cableAt = 7.7,
+                desc = "an 8 m pole with a crossarm · a cable made off at it is strung tight overhead · carry a line over a road or a crater" },
+  junctionBox = { label = "Junction Box", section = "POWER", snap = "block", box = B(-0.32, 0.32, 0, 1.0, -0.24, 0.2),
+                mats = { "steel" }, vol = 0.17, fill = "solid", mass = { steel = 0.045 }, cost = 150, netgear = true, cableAt = 0.5,
+                desc = "a feeder pillar · splits a line three ways, or splices two runs into one longer one" },
   -- ── LIFE (S3: a room's air, scripts/room_air.lua; on the base grid) ──
   -- rates in atm·m³ a second: a crew member breathes 6.8e-6 of O2 and makes
   -- 5.85e-6 of CO2 (0.84 and 1.0 kg a day); each machine serves four.
@@ -397,16 +427,20 @@ for d = 0, 9 do
   PIECES["decalNum" .. d] = film("Number " .. d, 154 / D, 205 / D, 10, "a 0.4 m stencilled numeral · door and bay numbers", { order = 100 + d })
 end
 -- signs: text kit_live draws (`sign`), or the agency's emblem (`emblem`)
-PIECES.signPlate   = { label = "Sign Plate", section = "DECALS", snap = "mount", box = B(-0.47, 0.47, 0, 0.014, -0.17, 0.17), order = 1,
-                       mats = { "steel" }, vol = 0.002, fill = "solid", mass = { steel = 0.004 }, cost = 60,
-                       sign = { w = 0.9, h = 0.3, style = "plate", px = 512 },
-                       desc = "a riveted plate · your words, or the base's name · right-click to write it" }
-PIECES.signBoard   = { label = "Name Board", section = "DECALS", snap = "mount", box = B(-1.02, 1.02, 0, 0.014, -0.27, 0.27), order = 2,
-                       mats = { "steel" }, vol = 0.006, fill = "solid", mass = { steel = 0.012 }, cost = 180,
-                       sign = { w = 2.0, h = 0.5, style = "board", px = 1024 },
-                       desc = "a 2 m board over a door · the base's name in stencil, or yours" }
-PIECES.signStencil = film("Stencilled Words", 1.6, 0.32, 40, "letters sprayed straight on the wall · right-click to write them",
-                          { sign = { w = 1.6, h = 0.32, style = "stencil", px = 1024 }, order = 3 })
+-- (S5 polish: readable at 8 m. The plates grew, kit_live sets the words in
+-- capitals ~0.15 m tall on a plate, wraps them onto two lines when that reads
+-- bigger, and narrows the plate to the words: `fit` = the narrowest share of
+-- its full width a short word may shrink it to)
+PIECES.signPlate   = { label = "Sign Plate", section = "DECALS", snap = "mount", box = B(-0.72, 0.72, 0, 0.014, -0.245, 0.245), order = 1,
+                       mats = { "steel" }, vol = 0.004, fill = "solid", mass = { steel = 0.009 }, cost = 60,
+                       sign = { w = 1.4, h = 0.45, style = "plate", px = 896, fit = 0.4 },
+                       desc = "a riveted plate · your words, or the base's name · sized to the words · right-click to write it" }
+PIECES.signBoard   = { label = "Name Board", section = "DECALS", snap = "mount", box = B(-1.22, 1.22, 0, 0.014, -0.32, 0.32), order = 2,
+                       mats = { "steel" }, vol = 0.009, fill = "solid", mass = { steel = 0.018 }, cost = 180,
+                       sign = { w = 2.4, h = 0.6, style = "board", px = 1024, fit = 0.45 },
+                       desc = "a 2.4 m board over a door · the base's name in stencil, or yours" }
+PIECES.signStencil = film("Stencilled Words", 2.0, 0.4, 40, "letters sprayed straight on the wall · right-click to write them",
+                          { sign = { w = 2.0, h = 0.4, style = "stencil", px = 1024 }, order = 3 })
 PIECES.decalEmblem = film("Agency Emblem", 0.8, 0.8, 50, "the company's own emblem, sprayed on", { emblem = true, order = 4 })
 
 -- ── FITTINGS: VAB parts placed live (S2) ─────────────────────────────────────
@@ -520,6 +554,8 @@ local function resolve(piece, mat)
     -- what takes paint on two faces and what gathers dust
     film = P.film, clutter = P.clutter, grime = P.grime, sign = P.sign, emblem = P.emblem, lens = P.lens,
     faces2 = FACES2[piece] == true, exterior = EXTERIOR[P.section] == true, noPaint = P.film or nil,
+    -- (S5) the power network's gear
+    netgear = P.netgear, pole = P.pole, cableAt = P.cableAt,
     script = (P.door or P.light or P.screen or P.switch or P.sign or P.emblem) and "kit_live" or nil,
     seals = (P.seals == "door" or P.seals == "ring" or P.seals == "y" or P.seals == "z") and P.seals or nil,
     u = M.u, matk = M.k, strength = M.strength,
@@ -534,6 +570,7 @@ local function resolve(piece, mat)
   end
   if d.light then d.power = { kind = "load", use = d.light.draw } end
   if P.use then d.power = { kind = "load", use = P.use } end
+  if P.power then d.power = P.power end
   return d
 end
 
