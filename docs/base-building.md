@@ -978,14 +978,34 @@ grid automatically; a Power Cable joins grids beyond that.**
     grid;
   - at most 1.5 km along the ground;
   - on the home world.
-- **The drawing** is one mesh per cable (`mesh.build`, a 6-sided tube in the
-  rubber set). It leaves each part's side 0.6 m up, hangs down to the ground
-  in a curve that meets it tangentially 1.6 m out, and lies along the great
-  circle between, 3 cm over the ground. The ground comes from the terrain's
-  distance field (`terrain.query`), sampled every 3 m when the cable is laid,
-  and the heights are kept in the record, so a load does no terrain work.
-  The mesh is parented to its planet and spawned while the focus is on that
-  world.
+- **The drawing** is one mesh per cable (`mesh.build`, an 8-sided tube in the
+  rubber set), parented to its planet and spawned while the focus is on that
+  world. It leaves each part's side 0.6 m up and **settles** (playtest
+  2026-11-06) along the great circle between its ends:
+  - **A catenary where it hangs free.** With the pull it is laid with
+    (`PULL`, 30 N: a hand's pull) and its weight (1.4 kg/m × the world's
+    gravity, `mu / R²`), every free span is y'' = √(1 + y'²) / a with
+    a = H / (λ g), about 2.2 m at 1 g: from a part's side it
+    meets the ground ~1.5 m out, tangentially; a span too short to touch down hangs free.
+  - **Lying on whatever holds it up where it touches:** the ground, sampled
+    from the terrain's distance field every 0.5 m along its whole length
+    (`sampleGround`; at most ~3,000 samples on a 1.5 km run), the boxes of
+    placed parts it crosses (a Pad Plate's top, a wall; not its own two
+    ends; `obstaclesFor`, read from the records), and the rocks that have
+    settled round the crew when it is laid (`rocksAlong`, kept in the
+    record). It never goes under any of them.
+  - **The solve** (`settle`) is projected Gauss-Seidel with over-relaxation
+    on fixed stations 0.25 m apart (at most ~2,000), coarse to fine: an
+    obstacle problem, exact to 2e-5 m, about a millisecond for a 150 m
+    cable and a few for the longest, run ONCE when the cable is laid, when
+    the ground under it is dug (`groundChanged`, forwarded by flora_field,
+    re-sampled after 1.5 s of quiet) or when a part is set down on or lifted
+    off its line (the structures' version, a key of the boxes it lies on).
+    Never per frame: the result is one static mesh, thinned to 4 mm
+    (`thin`). A GPU solver would only pay for a simulation run every frame,
+    which a cable lying still never needs.
+  - A record from before the settle (no `v`) has its ground every 3 m
+    between the old touchdowns and settles on that.
 - **Taking it up:**
   - Ctrl+Z within a minute takes it up for a full refund (a step in
     `field_builder`'s ring, through `pushHistory`), and Ctrl+Shift+Z lays it
@@ -994,7 +1014,9 @@ grid automatically; a Power Cable joins grids beyond that.**
     back past the minute, with the fee kept (`deconstructRefund`).
   - A part taken down takes its cables up with it, on the same rule.
 - **Records:** `cable.list`, `cable.seq`,
-  `cable.<id> = { id, b, a = { sid, uid }, z = { sid, uid }, len, h = { radius … }, t, d, by, paid }`.
+  `cable.<id> = { id, b, a = { sid, uid }, z = { sid, uid }, len, h = { radius … }, v, rk, t, d, by, paid }`
+  (`h` the ground's radii every 0.5 m between the ends, `v` = 2 since the
+  settle, `rk` the rocks it lies over: `{ x, y, z, r }` body-relative).
 - **Not modelled:** line losses. A 1.5 km low-voltage run would lose real
   power; the grid treats a cable as lossless.
 

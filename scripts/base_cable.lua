@@ -15,11 +15,13 @@
 --               metre) is on the card and the hint.
 --   THE DRAWING one mesh a cable (mesh.build, built once at load or lay): a
 --               4-core armoured cable 32 mm across, leaving each part 0.6 m up
---               its side, sagging down to the ground in a hanging curve and
---               laid along the great circle between, on the ground the
---               terrain's own distance field gives (terrain.query, sampled
---               every 3 m when it is laid; the heights are kept in its record,
---               so a load does no terrain work). Parented to its planet like
+--               its side and SETTLED along the great circle between (see "the
+--               settle"): a catenary of its pull and weight where it hangs
+--               free, lying on the ground (the terrain's distance field,
+--               sampled every 0.5 m when it is laid and kept in its record, so
+--               a load does no terrain work), on the parts it crosses and on
+--               the rocks. Solved again only when the ground under it is dug
+--               or a part is set down on its line. Parented to its planet like
 --               a structure's parts; spawned only while the focus is on that
 --               world (the same 1 Hz check as structures.lua).
 --   UNDO        Ctrl+Z within a minute takes it up for a full refund (it is a
@@ -31,16 +33,23 @@
 -- RECORDS (in the save; every point in its body's frame):
 --   cable.list, cable.seq
 --   cable.<id> = { id, b, a = { sid, uid }, z = { sid, uid }, len (m),
---                  h = { radius at each ground sample, m }, t, d, by,
+--                  h = { radius at each ground sample, m (every `step` between
+--                  the ends; v = 2, before it every 3 m between the old
+--                  touchdowns) }, v, rk = { { x, y, z, r } rocks }, t, d, by,
 --                  paid = { cost, ship, total, t, supplier, by } }
 --
 -- Probes: list(), get(id), version, pending, lastLay, ends(rec), path(rec),
 -- validity(end, hit), lay(a, z), takeUp(id), nodeOf(id), quote(len).
 
 defaults = {
-  --@range 1 10 --@units m
-  step = 3.0,
+  --@range 0.25 3 --@units m
+  step = 0.5,
 }
+-- The ground's sample spacing for a run of `L` m: `step`, at most ~3,000
+-- samples on the longest.
+function groundStep(L)
+  return math.max((params and params.step) or 0.5, (L or 0) / 3000)
+end
 
 version = 0
 pending = nil       -- the end made off, while the drum is in hand: { sid, uid, b, label }
@@ -75,7 +84,7 @@ end
 
 -- ── the records ─────────────────────────────────────────────────────────────
 local recs, order = nil, {}
-local KEEP = { "id", "b", "a", "z", "len", "h", "t", "d", "by", "paid" }
+local KEEP = { "id", "b", "a", "z", "len", "h", "v", "rk", "t", "d", "by", "paid" }
 local function plain(r) local o = {} for _, k in ipairs(KEEP) do o[k] = r[k] end return o end
 local function load()
   recs, order = {}, {}
@@ -203,48 +212,7 @@ function groundR(bx, by, bz, ux, uy, uz, r0, q)
   return r
 end
 
--- The polyline of a cable in its body's frame: the end on part A, its hang
--- down to the ground, the run along the samples' heights, the hang up to
--- part B. `ends` = { ax,ay,az (leaving A), gax.. (A's touchdown), zx.., gzx.. },
--- `h` the sample radii (n+1). → { {x,y,z} … }, length
-local HANG = 1.6        -- m from a part's side to where the cable touches the ground
-function polyline(E, h, R)
-  local pts = {}
-  local function push(q) pts[#pts + 1] = q end
-  local n = #h - 1
-  local LIFT = 0.03                      -- (its centre over the ground)
-  local ax, ay, az = norm(E.tax, E.tay, E.taz)
-  local bx, by, bz = norm(E.tzx, E.tzy, E.tzz)
-  local function d_at(i) return slerp(ax, ay, az, bx, by, bz, n > 0 and i / n or 0) end
-  -- the hang: from where it leaves a part down to its touchdown, meeting the
-  -- ground tangentially (radius r_ground + rise·(1 − t)²)
-  local function hang(px, py, pz, gx, gy, gz, r_ground)
-    local seq, K = {}, 6
-    local rp = len3(px, py, pz)
-    for k = 0, K do
-      local t = k / K
-      local ux, uy, uz = norm(px + (gx - px) * t, py + (gy - py) * t, pz + (gz - pz) * t)
-      local rr = r_ground + (rp - r_ground) * (1 - t) * (1 - t)
-      seq[#seq + 1] = { x = ux * rr, y = uy * rr, z = uz * rr }
-    end
-    return seq
-  end
-  local A = hang(E.ax, E.ay, E.az, E.tax, E.tay, E.taz, h[1] + LIFT)
-  for k = 1, #A - 1 do push(A[k]) end      -- (its touchdown is the run's first sample)
-  for i = 0, n do
-    local ux, uy, uz = d_at(i)
-    local r = h[i + 1] + LIFT
-    push({ x = ux * r, y = uy * r, z = uz * r })
-  end
-  local Z = hang(E.zx, E.zy, E.zz, E.tzx, E.tzy, E.tzz, h[n + 1] + LIFT)
-  for k = #Z - 1, 1, -1 do push(Z[k]) end
-  local Ltot = 0
-  for i = 2, #pts do
-    local a, b = pts[i - 1], pts[i]
-    Ltot = Ltot + len3(b.x - a.x, b.y - a.y, b.z - a.z)
-  end
-  return pts, Ltot
-end
+HANG = 1.6        -- m from a part's side to where the cable touches the ground (the rules' estimate)
 
 -- Both ends of a cable record: where it leaves each part and touches down.
 -- → E | nil, why
@@ -273,25 +241,333 @@ function ends(r)
            la = da and da.label or "part", lz = dz and dz.label or "part" }
 end
 
--- The ground heights for a cable between two ends (laying; terrain work).
--- → h = { radius … }, n, ground length | nil, why
+-- ── the settle: how a heavy cable lies (playtest 2026-11-06) ───────────────
+-- A laid cable is a catenary wherever it hangs free and lies on whatever holds
+-- it up where it touches: the ground (the terrain's distance field, sampled
+-- along its whole length), the parts it crosses (their boxes) and the rocks.
+-- With a horizontal pull H on a cable of λ kg/m under gravity g, every free
+-- span is y'' = √(1 + y'²) / a with a = H / (λ g); where the curve would dip
+-- into a support, the support carries it. That is an obstacle problem, solved
+-- ONCE when the cable is laid (or its ground or the parts under it change) by
+-- relaxation on fixed stations along the great circle between its ends:
+-- projected Gauss-Seidel with over-relaxation, coarse to fine (a long free span
+-- settles on the coarse levels, the touchdowns on the fine ones). Pure Lua on
+-- the CPU, a few milliseconds once, and nothing at all per frame afterwards:
+-- the result is one static mesh. (A GPU solver only pays for a simulation run
+-- every frame, which a cable lying still never needs.)
+--
+-- S = { support height at each station (m, the cable's centre may not go
+-- under it) }, ds the station spacing (m), yA / yZ the ends (held), a the
+-- catenary parameter (m). → y = { height at each station }, sweeps
+local SETTLE_TOL = 2e-5
+function settle(S, ds, yA, yZ, a, opts)
+  local n = #S
+  local y = {}
+  if n < 2 then return { yA }, 0 end
+  a = math.max(a or 3.0, 0.05)
+  local it_max = (opts and opts.iters) or 600
+  -- the levels: strides 2^k down to 1, the coarsest with ~16 stations
+  local stride = 1
+  while (n - 1) / (stride * 2) >= 16 do stride = stride * 2 end
+  -- the starting guess: a straight line between the ends, lifted onto the supports
+  for i = 1, n do
+    local f = (i - 1) / (n - 1)
+    y[i] = math.max(yA + (yZ - yA) * f, S[i])
+  end
+  y[1], y[n] = yA, yZ
+  local sweeps = 0
+  while true do
+    -- the stations on this level (and the last one, held)
+    local idx = {}
+    for i = 1, n, stride do idx[#idx + 1] = i end
+    if idx[#idx] ~= n then idx[#idx + 1] = n end
+    local m = #idx
+    -- a coarse station stands for its window: it may not go under any support in it
+    local Sc = {}
+    local hw = math.floor(stride / 2)
+    for j = 1, m do
+      local i0, i1 = math.max(1, idx[j] - hw), math.min(n, idx[j] + hw)
+      local top = S[idx[j]]
+      for i = i0, i1 do if S[i] > top then top = S[i] end end
+      Sc[j] = top
+    end
+    local w = 1.7
+    for _ = 1, it_max do
+      local most = 0
+      for j = 2, m - 1 do
+        local i, il, ir = idx[j], idx[j - 1], idx[j + 1]
+        local hl, hr = (i - il) * ds, (ir - i) * ds
+        local yl, yr = y[il], y[ir]
+        local slope = (yr - yl) / (hl + hr)
+        -- the catenary's equilibrium between its neighbours: y'' = √(1+y'²)/a
+        local free = (yl * hr + yr * hl) / (hl + hr) - (hl * hr / (2 * a)) * math.sqrt(1 + slope * slope)
+        local v = y[i] + w * (free - y[i])
+        if v < Sc[j] then v = Sc[j] end
+        local dv = v - y[i]
+        if dv < 0 then dv = -dv end
+        if dv > most then most = dv end
+        y[i] = v
+      end
+      sweeps = sweeps + 1
+      if most < SETTLE_TOL then break end
+    end
+    if stride == 1 then break end
+    -- down a level: the new stations between, on the line between their neighbours
+    local half = stride / 2
+    for j = 1, m - 1 do
+      local i0, i1 = idx[j], idx[j + 1]
+      local i = i0 + half
+      while i < i1 do
+        local f = (i - i0) / (i1 - i0)
+        y[i] = math.max(y[i0] + (y[i1] - y[i0]) * f, S[i])
+        i = i + half
+      end
+    end
+    stride = half
+  end
+  return y, sweeps
+end
+
+-- A polyline in (s, y) thinned where it is straight to within `tol` m
+-- (Douglas-Peucker): a cable lying on flat ground is a few long segments, the
+-- hangs and the bumps keep their stations; never a segment over `most` m
+-- (the ground under a long straight run still bends with the world).
+-- → { the indices kept, in order }
+function thin(y, ds, tol, most)
+  local n = #y
+  most = most or 8
+  local keep = { [1] = true, [n] = true }
+  local stack = { { 1, n } }
+  while #stack > 0 do
+    local seg = table.remove(stack)
+    local i0, i1 = seg[1], seg[2]
+    if i1 - i0 > 1 then
+      local x0, y0 = (i0 - 1) * ds, y[i0]
+      local dx, dy = (i1 - i0) * ds, y[i1] - y0
+      local L = math.sqrt(dx * dx + dy * dy)
+      local worst, wi = -1, nil
+      for i = i0 + 1, i1 - 1 do
+        local px, py = (i - 1) * ds - x0, y[i] - y0
+        local d = math.abs(px * dy - py * dx) / math.max(L, 1e-9)
+        if d > worst then worst, wi = d, i end
+      end
+      if worst > tol or dx > most then
+        if worst <= tol then wi = math.floor((i0 + i1) / 2) end
+        keep[wi] = true
+        stack[#stack + 1] = { i0, wi }
+        stack[#stack + 1] = { wi, i1 }
+      end
+    end
+  end
+  local out = {}
+  for i = 1, n do if keep[i] then out[#out + 1] = i end end
+  return out
+end
+
+-- The settle's knobs: the horizontal pull a cable is laid with (N: a hand's
+-- pull on a 32 mm armoured cable, so it lies slack and meets the ground about
+-- 1.5 m out from a part's side, about where a hand lays it), its weight a metre and the world's gravity.
+-- → a = H / (λ g), m
+PULL = 30.0
+function catenaryA(b, C)
+  local g = 9.81
+  if b and b.mu and b.radius and b.radius > 0 then g = b.mu / (b.radius * b.radius) end
+  if not (g > 0.05) then g = 0.05 end
+  return PULL / ((((C and C.kgm) or 1.4)) * g)
+end
+
+-- The line a cable's stations run along: from over where it leaves part A to
+-- over where it leaves part Z (unit directions from the body's centre); `old`:
+-- a record from before the settle, whose samples run between the touchdowns.
+local function line_dirs(E, old)
+  if old then
+    local ax, ay, az = norm(E.tax, E.tay, E.taz)
+    local bx, by, bz = norm(E.tzx, E.tzy, E.tzz)
+    return ax, ay, az, bx, by, bz
+  end
+  local ax, ay, az = norm(E.ax, E.ay, E.az)
+  local bx, by, bz = norm(E.zx, E.zy, E.zz)
+  return ax, ay, az, bx, by, bz
+end
+
+-- The ground radii under a cable between two ends (laying; terrain work):
+-- the distance field every `step` m along the line between its ends.
+-- → h = { radius … }, n, ground length
 function sampleGround(b, E, R, step)
-  local ga, gz = { x = E.tax, y = E.tay, z = E.taz }, { x = E.tzx, y = E.tzy, z = E.tzz }
-  local n, dir, d = span(ga, gz, R, step)
+  local ax, ay, az, bx, by, bz = line_dirs(E)
+  local n, dir, d = span({ x = ax, y = ay, z = az }, { x = bx, y = by, z = bz }, R, step)
   local h = {}
-  local r = len3(ga.x, ga.y, ga.z)
+  local ra, rb = len3(E.tax, E.tay, E.taz), len3(E.tzx, E.tzy, E.tzz)
+  local r = ra
   for i = 0, n do
     local ux, uy, uz = dir(i)
     local g = groundR(b.x, b.y, b.z, ux, uy, uz, r + 2.0)
-    if not g then
-      -- (no distance field here: the straight line between the touchdowns)
-      local ra, rb = len3(ga.x, ga.y, ga.z), len3(gz.x, gz.y, gz.z)
-      g = ra + (rb - ra) * i / n
-    end
+    -- (no distance field here: the straight line between the ends' ground)
+    if not g then g = ra + (rb - ra) * i / n end
     h[i + 1] = g
     r = g
   end
   return h, n, d
+end
+
+-- What else holds a cable up where it crosses: the placed parts' boxes (not
+-- the two it is made off at), from the structures' records (pure: no scene
+-- read), those within reach of the line between its ends.
+-- → { { gx.. (ground point), ux.. (up), rx.. fx.. (its axes), hx, hz, top, key } }
+function obstaclesFor(r, E)
+  local ST = ref("structures")
+  local boxes = {}
+  if not (ST and ST.list and ST.partPose) then return boxes end
+  local ax, ay, az, bx, by, bz = line_dirs(E)
+  local Rr = len3(E.ax, E.ay, E.az)
+  local th = math.acos(math.max(-1, math.min(1, ax * bx + ay * by + az * bz)))
+  local nx, ny, nz, nl = norm(ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx)
+  for _, rec in ipairs(ST.list()) do
+    if rec.b == r.b and type(rec.bp) == "table" then
+      for _, p in ipairs(rec.bp) do
+        local mine = (rec.id == r.a.sid and p.uid == r.a.uid) or (rec.id == r.z.sid and p.uid == r.z.uid)
+        local d = (not mine) and defs(p.id) or nil
+        if d and p.id ~= "powerCable" then
+          local gx, gy, gz, U, F = ST.partPose(rec, p, 0)
+          local hx = (d.half and d.half.x) or d.rx or 0.5
+          local hz = (d.half and d.half.z) or d.rz or 0.5
+          local reach = math.sqrt(hx * hx + hz * hz) + 0.5
+          local off = nl > 1e-9 and math.abs(gx * nx + gy * ny + gz * nz) or 0
+          local ux, uy, uz = norm(gx, gy, gz)
+          local ta = math.acos(math.max(-1, math.min(1, ux * ax + uy * ay + uz * az)))
+          local tb = math.acos(math.max(-1, math.min(1, ux * bx + uy * by + uz * bz)))
+          if off <= reach and (ta + tb - th) * Rr <= 2 * reach then
+            local Rx, Ry, Rz = U.y * F.z - U.z * F.y, U.z * F.x - U.x * F.z, U.x * F.y - U.y * F.x
+            boxes[#boxes + 1] = { gx = gx, gy = gy, gz = gz, ux = U.x, uy = U.y, uz = U.z, rx = Rx, ry = Ry, rz = Rz,
+                                  fx = F.x, fy = F.y, fz = F.z, hx = hx, hz = hz, top = d.h or 1.0,
+                                  key = tostring(rec.id) .. ":" .. tostring(p.uid) }
+          end
+        end
+      end
+    end
+  end
+  return boxes
+end
+-- A signature of the boxes a cable lies over (what changed under it).
+function boxesKey(boxes)
+  local ks = {}
+  for _, b in ipairs(boxes or {}) do ks[#ks + 1] = string.format("%s@%.2f,%.2f,%.2f", b.key, b.gx, b.gy, b.gz) end
+  table.sort(ks)
+  return table.concat(ks, ";")
+end
+
+-- The rocks along a cable (laying only: a rock is known where it has settled,
+-- round the crew). World points read once, kept body-relative.
+-- → { { x, y, z, r } }
+function rocksAlong(b, E, R)
+  local mf = ref("mineral_field")
+  local out = {}
+  if not (mf and mf.rocksNear and b) then return out end
+  local ax, ay, az, bx, by, bz = line_dirs(E)
+  local n, dir = span({ x = ax, y = ay, z = az }, { x = bx, y = by, z = bz }, R, 16)
+  local seen = {}
+  local m = math.min(n, 100)
+  for k = 0, m do
+    local ux, uy, uz = dir(math.floor(k * n / math.max(1, m) + 0.5))
+    local ok, list = pcall(mf.rocksNear, b.x + ux * R, b.y + uy * R, b.z + uz * R, 12)
+    if ok and type(list) == "table" then
+      for _, q in ipairs(list) do
+        if q.key and not seen[q.key] and #out < 96 and q.x then
+          seen[q.key] = true
+          out[#out + 1] = { x = q.x - b.x, y = q.y - b.y, z = q.z - b.z, r = q.r or 0.5 }
+        end
+      end
+    end
+  end
+  return out
+end
+
+-- The support under one station (unit direction u, ground radius g): the
+-- ground, or the top of a box or a rock it crosses.
+local function support_at(ux, uy, uz, g, boxes, rocks, rad)
+  local best = g
+  local px, py, pz = ux * g, uy * g, uz * g
+  if boxes then
+    for _, bx in ipairs(boxes) do
+      local dx, dy, dz = px - bx.gx, py - bx.gy, pz - bx.gz
+      local lx = dx * bx.rx + dy * bx.ry + dz * bx.rz
+      local lz = dx * bx.fx + dy * bx.fy + dz * bx.fz
+      if math.abs(lx) <= bx.hx + rad and math.abs(lz) <= bx.hz + rad then
+        local t = bx.gx * ux + bx.gy * uy + bx.gz * uz + bx.top * (bx.ux * ux + bx.uy * uy + bx.uz * uz)
+        if t > best then best = t end
+      end
+    end
+  end
+  if rocks then
+    for _, k in ipairs(rocks) do
+      local dot = k.x * ux + k.y * uy + k.z * uz
+      local hx, hy, hz = k.x - ux * dot, k.y - uy * dot, k.z - uz * dot
+      local dh = len3(hx, hy, hz)
+      local rr = k.r + rad
+      if dh < rr and dot > 0 then
+        -- a dome over where it settled (a boulder sits partly in the ground)
+        local t = dot + math.sqrt(rr * rr - dh * dh) * 0.85
+        if t > best then best = t end
+      end
+    end
+  end
+  return best
+end
+
+-- The polyline of a cable in its body's frame, settled: from where it leaves
+-- part A to where it leaves part Z, hanging free between supports and lying on
+-- them where it touches. `h`: the ground's radii every step along the line
+-- between the ends (sampleGround). opts = { old (h runs between the
+-- touchdowns: a record from before the settle), boxes, rocks, a }.
+-- → { {x,y,z} … } (thinned), length (m), { S, y, ds, n }
+local LIFT = 0.006      -- m between the ground and the sheath
+function polyline(E, h, R, opts)
+  opts = opts or {}
+  local C = cdef()
+  local rad = C.r or 0.016
+  local ax, ay, az, bx, by, bz = line_dirs(E)
+  local hax, hay, haz, hbx, hby, hbz = line_dirs(E, opts.old)
+  local th = math.acos(math.max(-1, math.min(1, ax * bx + ay * by + az * bz)))
+  local Rr = (len3(E.tax, E.tay, E.taz) + len3(E.tzx, E.tzy, E.tzz)) / 2
+  local D = th * Rr
+  -- the stations: 0.25 m apart on a short cable, ~2,000 on a long one
+  local n = math.max(2, math.ceil(D / math.max(0.25, D / 2000)))
+  local ds = D / n
+  local thh = math.acos(math.max(-1, math.min(1, hax * hbx + hay * hby + haz * hbz)))
+  local nh = #h - 1
+  local S, U = {}, {}
+  for i = 0, n do
+    local ux, uy, uz = slerp(ax, ay, az, bx, by, bz, i / n)
+    U[i + 1] = { ux, uy, uz }
+    -- the ground here: the sample line's radius at this station's place along it
+    local g
+    if nh < 1 then
+      g = h[1] or Rr
+    else
+      local ta = math.acos(math.max(-1, math.min(1, ux * hax + uy * hay + uz * haz)))
+      local tb = math.acos(math.max(-1, math.min(1, ux * hbx + uy * hby + uz * hbz)))
+      local f = (thh > 1e-12) and (ta / thh) or 0
+      if tb > thh then f = 0 end                     -- (before the line's start: its first sample)
+      local x = math.max(0, math.min(nh, f * nh))
+      local i0 = math.min(nh - 1, math.floor(x))
+      g = h[i0 + 1] + (h[i0 + 2] - h[i0 + 1]) * (x - i0)
+    end
+    S[i + 1] = support_at(ux, uy, uz, g, opts.boxes, opts.rocks, rad) + rad + LIFT
+  end
+  local yA, yZ = len3(E.ax, E.ay, E.az), len3(E.zx, E.zy, E.zz)
+  local y = settle(S, ds, yA, yZ, opts.a or 2.2)
+  local keep = thin(y, ds, 0.004)
+  local pts = {}
+  for _, i in ipairs(keep) do
+    local u = U[i]
+    pts[#pts + 1] = { x = u[1] * y[i], y = u[2] * y[i], z = u[3] * y[i] }
+  end
+  local Ltot = 0
+  for i = 2, n + 1 do
+    local dy = y[i] - y[i - 1]
+    Ltot = Ltot + math.sqrt(ds * ds + dy * dy)
+  end
+  return pts, Ltot, { S = S, y = y, ds = ds, n = n }
 end
 
 -- J6: a cable run is an Engineer's job (the kit is theirs already; this is
@@ -392,8 +668,10 @@ function lay(a, z, opts)
   local b = space.body(ra.b)
   if not b then return nil, "not on a world" end
   local c0 = ref("crew")
-  local h, n, d = sampleGround(b, v.E, b.radius, (params and params.step) or 3.0)
-  local pts, L = polyline(v.E, h, b.radius)
+  local h = sampleGround(b, v.E, b.radius, groundStep(v.len))
+  local rk = rocksAlong(b, v.E, b.radius)
+  local rec0 = { b = ra.b, a = a, z = z }
+  local pts, L = polyline(v.E, h, b.radius, { boxes = obstaclesFor(rec0, v.E), rocks = rk, a = catenaryA(b, cdef()) })
   local q = quote(L, c0 and c0.activeId and c0.activeId() or nil)
   if not co.spend(q.total, EC.ledgerWhy("Power Cable", q) .. string.format(" · %.0f m", L)) then return nil, "can't afford it: " .. money(q.total) end
   local t = agency_now()
@@ -401,7 +679,7 @@ function lay(a, z, opts)
   local by = c and c.activeId and c.activeId() or nil
   local dp = ref("deployables")
   local rec = { id = opts.id, b = ra.b, a = { sid = a.sid, uid = a.uid }, z = { sid = z.sid, uid = z.uid }, len = L, h = h,
-                t = t, d = dp and dp.dateOf and dp.dateOf(t) or nil, by = by,
+                v = 2, rk = (#rk > 0) and rk or nil, t = t, d = dp and dp.dateOf and dp.dateOf(t) or nil, by = by,
                 paid = { cost = q.cost, ship = q.ship, foot = 0, total = q.total, t = t, supplier = q.supplier, by = by } }
   local id = add(rec)
   if spawn_mesh then spawn_mesh(rec) end
@@ -455,7 +733,7 @@ local function tube_mesh(pts, rad)
   if not (mesh and mesh.build) or #pts < 2 then return nil end
   local P, N, UV, I = {}, {}, {}, {}
   local o = pts[1]
-  local S = 6
+  local S = 8
   local v = 0
   local px, py, pz = 0, 1, 0       -- a side vector carried along (no twist)
   for i, p in ipairs(pts) do
@@ -494,28 +772,43 @@ local function tube_mesh(pts, rad)
 end
 
 -- The drawn path of a record (body-relative points). → pts, L | nil
-function path(r)
+-- The settle's inputs for a record: its ends, its body, the boxes it crosses.
+-- A record from before the settle (no `v`) has its samples between the
+-- touchdowns and no rocks; it settles the same way on what it has.
+local function settle_inputs(r)
   local E = ends(r)
   local b = space and space.body and space.body(r.b)
   if not (E and b and type(r.h) == "table" and #r.h >= 2) then return nil end
-  return polyline(E, r.h, b.radius)
+  return E, b, obstaclesFor(r, E)
+end
+-- The drawn path of a record (body-relative points), settled. → pts, L, info | nil
+function path(r)
+  local E, b, boxes = settle_inputs(r)
+  if not E then return nil end
+  return polyline(E, r.h, b.radius, { old = (r.v or 1) < 2, boxes = boxes, rocks = r.rk, a = catenaryA(b, cdef()) })
 end
 
 drop_mesh = function(id)
   local L = live[id]
   if L and L.node and L.node.valid ~= false then L.node:destroy() end
+  if L and L.old and L.old.valid ~= false then L.old:destroy() end
   live[id] = nil
 end
 
-spawn_mesh = function(r)
-  if live[r.id] then return end
+-- (re)build a cable's mesh: once at load or lay, and again only when what it
+-- lies on changed (`force`: the old mesh stays until the new one is placed).
+spawn_mesh = function(r, force)
+  local prev = live[r.id]
+  if prev and not force then return end
   local planet = find and find(r.b)
   if not (planet and createNode) then return end
+  local E, _, boxes = settle_inputs(r)
+  if not E then return end
   local pts = path(r)
   if not pts then return end
-  local m = tube_mesh(pts, cdef().r or 0.018)
+  local m = tube_mesh(pts, cdef().r or 0.016)
   if not m then return end
-  local L = { making = true }
+  local L = { making = true, key = boxesKey(boxes), old = prev and (prev.node or prev.old) or nil }
   live[r.id] = L
   local o = pts[1]
   createNode("PowerCable", planet, function(n)
@@ -525,6 +818,8 @@ spawn_mesh = function(r)
     n.model = m
     pcall(n.setMaterial, n, CABLE_MAT)
     L.node = n
+    if L.old and L.old.valid ~= false then L.old:destroy() end
+    L.old = nil
   end)
 end
 function nodeOf(id) local L = live[id]; return L and L.node and L.node.valid ~= false and L.node or nil end
@@ -661,7 +956,79 @@ function reconcile()
   end
   for _, id in ipairs(gone) do takeUp(id, "taken up with the part it was made off at: Power Cable") end
   st_ver = ST.version
+  -- a part set down on a cable's line (or lifted off it): the cable settles again
+  for _, id in ipairs(order) do
+    local L, r = live[id], recs[id]
+    if L and not L.making and r then
+      local E = ends(r)
+      if E and boxesKey(obstaclesFor(r, E)) ~= L.key then spawn_mesh(r, true); resettled = resettled + 1 end
+    end
+  end
   return #gone
+end
+
+-- THE GROUND CHANGED (flora_field.groundChanged forwards every dig, crater
+-- and scrape: a world point and a radius). A cable whose line passes there is
+-- sampled again once the ground has been quiet for `QUIET` s, and settles on
+-- what is there now. → how many cables were marked
+resettled = 0
+local QUIET = 1.5
+local dirty = {}        -- id → time of the last edit near it
+function groundChanged(x, y, z, r)
+  ensure()
+  if #order == 0 or not (space and space.dominant and x) then return 0 end
+  local bname = space.dominant(x, y, z)
+  local b = bname and space.body(bname)
+  if not b then return 0 end
+  local px, py, pz = x - b.x, y - b.y, z - b.z
+  local ux, uy, uz, pr = norm(px, py, pz)
+  local n = 0
+  for _, id in ipairs(order) do
+    local rec = recs[id]
+    if rec.b == bname then
+      local E = ends(rec)
+      if E then
+        local ax, ay, az = norm(E.ax, E.ay, E.az)
+        local bx, by, bz = norm(E.zx, E.zy, E.zz)
+        local th = math.acos(math.max(-1, math.min(1, ax * bx + ay * by + az * bz)))
+        local ta = math.acos(math.max(-1, math.min(1, ux * ax + uy * ay + uz * az)))
+        local tb = math.acos(math.max(-1, math.min(1, ux * bx + uy * by + uz * bz)))
+        -- (near the line between its ends: within the edit's reach plus a hang)
+        local nx, ny, nz, nl = norm(ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx)
+        local off = nl > 1e-9 and math.abs(px * nx + py * ny + pz * nz) or 0
+        local reach = (r or 3) + 2.0
+        if off <= reach and (ta + tb - th) * pr <= 2 * reach then dirty[id] = now(); n = n + 1 end
+      end
+    end
+  end
+  return n
+end
+-- Cables whose ground has gone quiet: sampled again and settled. → count
+function settleDirty(force)
+  local n = 0
+  if terrain and terrain.pending and not force then
+    local ok, p = pcall(terrain.pending)
+    if ok and type(p) == "number" and p > 0 then return 0 end
+  end
+  for id, t in pairs(dirty) do
+    local rec = recs and recs[id]
+    if not rec then dirty[id] = nil
+    elseif force or now() - t >= QUIET then
+      dirty[id] = nil
+      local E = ends(rec)
+      local b = space.body(rec.b)
+      if E and b then
+        rec.h = sampleGround(b, E, b.radius, groundStep(rec.len))
+        rec.v = 2
+        write(rec)
+        if live[id] then spawn_mesh(rec, true) end
+        resettled = resettled + 1
+        n = n + 1
+      end
+    end
+  end
+  if n > 0 then bump() end
+  return n
 end
 
 local check_t = -10
@@ -671,6 +1038,7 @@ function start(node)
     if #all > 1 and all[1].node and all[1].node.id ~= node.id then node:destroy() return end
   end
   recs, live, pending, preview, st_ver = nil, {}, nil, nil, nil
+  for k in pairs(dirty) do dirty[k] = nil end
   load()
 end
 
@@ -687,6 +1055,7 @@ function update(node, dt)
   local t = now()
   if t - check_t < 1.0 or #order == 0 then return end
   check_t = t
+  if next(dirty) then settleDirty() end
   local a = find and find("Astronaut")
   local dom = a and space.dominant(a.x, a.y, a.z) or nil
   for _, id in ipairs(order) do

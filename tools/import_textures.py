@@ -175,10 +175,13 @@ TERRAIN = [
          cc0=("Rock058", G(make="copper", cover=0.48))),
     dict(slot=6, name="magma", was="cave_magma_veins", mat="uranium", scale=1.4, glow=True,
          cc0=("Rock058", G(make="magma"))),
-    dict(slot=7, name="amethyst", was="cave_amethyst", mat="crystal", scale=1.3, glow=True,
-         cc0=("ChristmasTreeOrnament021", G(make="crystal", tint=(0.62, 0.38, 1.0)))),
-    dict(slot=8, name="bluecrystal", was="cave_blue_crystal", mat="crystal", scale=1.3, glow=True,
-         cc0=("ChristmasTreeOrnament021", G(make="crystal", tint=(0.30, 0.62, 1.0)))),
+    # The crystal seams (resonant crystal, phasite, cryovolt): druzy crystal in its host
+    # rock, lit like stone (playtest 2026-11-06: the old self-lit faceted ornament band read as
+    # flat neon polygons). Not glow slots any more: they take maps, blend and anti-tiling.
+    dict(slot=7, name="amethyst", was="cave_amethyst", mat="crystal", scale=1.3, blend=0.8, rough=0.9,
+         rfloor=0.12, cc0=("Rock035", G(make="crystal", tint=(0.36, 0.22, 0.46), pale=(0.74, 0.71, 0.76), seed=7))),
+    dict(slot=8, name="bluecrystal", was="cave_blue_crystal", mat="crystal", scale=1.3, blend=0.8, rough=0.9,
+         rfloor=0.12, cc0=("Rock035", G(make="crystal", tint=(0.20, 0.32, 0.46), pale=(0.72, 0.76, 0.79), seed=8))),
     dict(slot=9, name="slate", was="moon_silver_slate", mat="slate", scale=1.6, blend=0.8, rough=0.7,
          cc0=("Rock058", G(sat=0.15, gain=2.0, contrast=1.1)), local=("Rock_Wall", G(sat=0.5))),
     dict(slot=10, name="gravelregolith", was="moon_gray_regolith", mat="regolith", scale=2.2, blend=1.2, rough=0.7,
@@ -728,29 +731,141 @@ def make_copper(alb, n, ao, g):
     return np.clip(c, 0, 1)
 
 
-def make_crystal(alb, n, g):
-    """The faceted band of ChristmasTreeOrnament021 (the user's Star Geode note) as a
-    crystal lining: its facets shaded from fixed lights through its normal map (the
-    tilt exaggerated, so neighbouring faces differ), each face reading as its own
-    plane, the edges between them catching light, in the slot's colour."""
-    h = alb.shape[0]
-    a, b = int(h * 0.30), int(h * 0.70)       # the faceted band (the ornament's equator)
-    band_n = n[a:b]
-    # Make a tileable square: the band and its mirror (rows), wrapping across (columns).
-    nn = np.concatenate([band_n, band_n[::-1] * np.array([1, -1, 1], np.float32)], axis=0)
-    nn = resize(nn * 0.5 + 0.5, h) * 2 - 1
-    nn = np.concatenate([nn[..., :2] * 3.0, nn[..., 2:]], axis=2)
-    nn /= np.maximum(np.linalg.norm(nn, axis=2, keepdims=True), 1e-6)
-    lights = [np.array(v, np.float32) / np.linalg.norm(v) for v in ((0.55, 0.55, 0.62), (-0.75, 0.15, 0.6), (0.1, -0.85, 0.5))]
-    shade = sum(np.clip((nn * l).sum(axis=2), 0, 1) ** p * w for l, p, w in zip(lights, (4, 2, 2), (0.85, 0.35, 0.25)))
-    tilt = 1 - np.clip(nn[..., 2], 0, 1)
-    gy, gx = np.gradient(nn[..., 0]), np.gradient(nn[..., 1])
-    edge = np.clip((np.hypot(*gy) + np.hypot(*gx)) * 3, 0, 1)
-    edge = np.clip(blur_wrap(edge, 1.2) * 1.3, 0, 1) ** 1.5
-    t = np.array(g.get("tint", (0.6, 0.4, 1.0)), np.float32)
-    c = t[None, None, :] * (0.035 + 0.75 * shade[..., None] ** 1.6) + edge[..., None] * (0.22 * t + 0.12)
-    c *= (1.0 - 0.5 * tilt)[..., None] + 0.5
-    return np.clip(c, 0, 1)
+def _worley(N, cells, rng):
+    """Tileable jittered-grid Voronoi on an N-square: for each pixel the nearest
+    seed's cell id, the distances to the nearest and second-nearest seed (pixels)
+    and the offset (dx, dy) from the nearest seed. One seed a grid cell, searched
+    over the 3x3 cells round each pixel's own, on the torus."""
+    cs = N / cells
+    jit = rng.random((cells, cells, 2))
+    yy, xx = np.mgrid[0:N, 0:N].astype(np.float32) + 0.5
+    ci, cj = np.floor(yy / cs).astype(int), np.floor(xx / cs).astype(int)
+    d1 = np.full((N, N), np.inf, np.float32)
+    d2 = np.full((N, N), np.inf, np.float32)
+    cid = np.zeros((N, N), int)
+    ox = np.zeros((N, N), np.float32)
+    oy = np.zeros((N, N), np.float32)
+    for di in (-1, 0, 1):
+        for dj in (-1, 0, 1):
+            gi, gj = ci + di, cj + dj
+            wi, wj = gi % cells, gj % cells
+            sy = (gi + jit[wi, wj, 0]) * cs
+            sx = (gj + jit[wi, wj, 1]) * cs
+            dy, dx = yy - sy, xx - sx
+            d = np.sqrt(dx * dx + dy * dy)
+            closer = d < d1
+            d2 = np.where(closer, d1, np.minimum(d2, d))
+            d1 = np.where(closer, d, d1)
+            cid = np.where(closer, wi * cells + wj, cid)
+            ox = np.where(closer, dx, ox)
+            oy = np.where(closer, dy, oy)
+    return cid, d1, d2, ox, oy
+
+
+def crystal_fields(alb, n, ao, g):
+    """A crystal seam as it is in the rock (slots 7 and 8; playtest 2026-11-06): druzy
+    crystal (a crust of small terminations with a few big points through it) grown
+    in vugs of a dark host rock (the set's own stone, graded to a basaltic grey),
+    the host stained round the vugs. Every crystal is a Voronoi cell with a
+    pyramidal tip: its faces (3-6, a random turn) tilt away from its apex, each
+    face its own flat normal, so a lamp catches some faces and not others. The
+    colour is zoned like amethyst: deep at the tips, paler and milky toward each
+    crystal's base, each crystal its own shade; the grain stays at every scale.
+    Tileable throughout. → colour (linear), normal (-1..1), ORM, height, all N-square."""
+    N = alb.shape[0]
+    rng = np.random.default_rng(int(g.get("seed", 7)) * 7919 + 11)
+    tint = srgb_to_lin(np.array(g.get("tint", (0.42, 0.20, 0.62)), np.float32))
+    pale = srgb_to_lin(np.array(g.get("pale", (0.80, 0.76, 0.84)), np.float32))
+
+    def noise(sigma):
+        f = blur_wrap(rng.standard_normal((N, N)), sigma)
+        return (f - f.mean()) / (f.std() + 1e-9)
+
+    # the host rock: the set's stone, dark and nearly grey, its own grain kept
+    host = grade(alb, n, ao, dict(sat=0.3, flatten=0.5))
+    host = host * (0.075 / max(1e-4, float(lum(host).mean())))
+    hn = n if n is not None else np.dstack([np.zeros((N, N)), np.zeros((N, N)), np.ones((N, N))])
+
+    # where the crystal grew: vugs from tileable noise, ~58 % of the tile, edged by grain
+    field = noise(N / 7) * 0.75 + noise(N / 22) * 0.4 + noise(N / 70) * 0.15
+    thr = np.percentile(field, 100 * (1 - g.get("cover", 0.58)))
+
+    col = host.copy()
+    nrm = hn.copy()
+    rough = np.full((N, N), 0.88, np.float32)
+    occ = np.clip(ao, 0, 1).astype(np.float32).copy()
+    hgt = np.clip(0.25 + 0.1 * noise(N / 40), 0, 1)
+    covered = np.zeros((N, N), bool)
+    # two generations: big points first, then the druzy crust between them
+    for cells, keep, lift in ((14, 0.4, 1.0), (46, 1.0, 0.6)):
+        cid, d1, d2, ox, oy = _worley(N, cells, rng)
+        ncell = cells * cells
+        cshade = rng.uniform(0.3, 1.3, ncell)[cid] * (0.75 + 0.25 * np.clip(noise(N / 10) * 0.5 + 0.5, 0, 1))  # each crystal its own depth of colour, in broad zones
+        chue = rng.uniform(-1, 1, ncell)[cid]              # and a small shift of hue
+        nface = rng.integers(3, 7, ncell)[cid]
+        turn = rng.uniform(0, 2 * np.pi, ncell)[cid]
+        tilt = rng.uniform(0.35, 0.75, ncell)[cid]          # how steep its faces (tan)
+        # a crystal of this generation stands here if the vug field holds it at its
+        # seed (sampled through the cell's own id: its whole body in or out)
+        seedfield = np.zeros(ncell, np.float32)
+        np.maximum.at(seedfield, cid.ravel(), np.where(d1.ravel() < 2.0, field.ravel(), -9))
+        here = (seedfield[cid] > thr) & (rng.random(ncell)[cid] < keep) & ~covered
+        if lift < 1.0:
+            here = (field > thr - 0.15) & ~covered                     # the crust fills the vugs
+        cs = N / cells
+        r = np.clip(d1 / (0.5 * (d1 + d2) + 1e-6), 0, 1)              # 0 at the apex, 1 at the crystal's edge
+        # the face this pixel is on: its angle about the apex, in nface sectors
+        ang = np.arctan2(oy, ox) - turn
+        sector = np.floor((ang % (2 * np.pi)) / (2 * np.pi) * nface)
+        mid = (sector + 0.5) / nface * 2 * np.pi + turn
+        fx, fy = np.cos(mid) * tilt, np.sin(mid) * tilt
+        fn = np.dstack([fx, -fy, np.ones((N, N))])
+        fn /= np.linalg.norm(fn, axis=2, keepdims=True)
+        # colour: zoned (deep at the tip, milky at the base), each crystal its own
+        zone = np.clip(1.0 - r ** 2.6, 0, 1)
+        deep = tint[None, None, :] * (0.35 + 0.9 * cshade[..., None]) \
+            * (1 + 0.18 * chue[..., None] * np.array([1.0, -0.4, -0.8], np.float32))
+        c = pale[None, None, :] * 0.16 * (1 - zone[..., None]) + deep * zone[..., None]
+        # inclusions and fractures inside the crystal, and its own faint grain
+        c *= (0.86 + 0.14 * np.clip(noise(1.4) * 0.5 + 0.5, 0, 1))[..., None]
+        c *= (0.9 + 0.1 * np.cos(sector * 2.1 + chue * 3))[..., None]
+        # the seams between crystals are dark and shadowed
+        seam = np.clip((d2 - d1) / (0.06 * cs + 1.0), 0, 1)
+        c *= (0.35 + 0.65 * seam ** 0.6)[..., None]
+        m = here[..., None]
+        col = np.where(m, c, col)
+        nrm = np.where(m, fn, nrm)
+        rough = np.where(here, 0.16 + 0.12 * rng.random(ncell)[cid] + (1 - seam) * 0.4, rough)
+        occ = np.where(here, np.clip(0.55 + 0.45 * seam, 0, 1), occ)
+        hgt = np.where(here, np.clip(0.35 + lift * 0.6 * (1 - r) * seam, 0, 1), hgt)
+        covered |= here
+    # the host rock round each vug: stained (iron, the fluids the crystal grew from)
+    # and shadowed at the lip, so the crystal sits IN the rock rather than on it
+    cov = covered.astype(np.float32)
+    halo = np.clip(blur_wrap(cov, N / 90) * 1.6, 0, 1) * (1 - cov)
+    stain = srgb_to_lin(np.array((0.36, 0.24, 0.16), np.float32))
+    col = col * (1 - 0.35 * halo[..., None]) + stain[None, None, :] * 0.12 * halo[..., None]
+    lip = np.clip(blur_wrap(cov, 1.6) - cov, 0, 1) * 2.5
+    col *= (1 - 0.5 * np.clip(lip, 0, 1))[..., None]
+    occ = occ * (1 - 0.4 * np.clip(lip, 0, 1))
+    # the faces' light baked in, most of it: the Classic-lit terrain turns a normal
+    # map's faces only a little (seen in the 2026-11-06 shots: flat purple), and
+    # far off the mips average the faces and only this keeps the crystal's texture.
+    # Each face lit from a soft sky and a key, so neighbouring faces differ.
+    rel = max(_RELIEF[0], 0.75)
+    lights = [np.array(v, np.float32) / np.linalg.norm(v) for v in ((0.45, 0.5, 0.74), (-0.6, -0.2, 0.77), (0.1, -0.7, 0.7))]
+    face = sum(np.clip((nrm * l).sum(axis=2), 0, 1) ** p * w for l, p, w in zip(lights, (3, 2, 2), (0.6, 0.3, 0.2)))
+    glint = sum(np.clip((nrm * l).sum(axis=2), 0, 1) ** 24 * w for l, w in zip(lights, (0.5, 0.25, 0.15)))
+    k = (1 - rel) + rel * (0.35 + 0.9 * face)
+    col = col * np.where(cov > 0.5, k, 1.0)[..., None] + (glint * cov * rel)[..., None] * (0.5 * tint + 0.08)
+    nrm /= np.maximum(np.linalg.norm(nrm, axis=2, keepdims=True), 1e-6)
+    orm = np.dstack([occ, np.clip(rough, 0, 1), np.zeros((N, N), np.float32)])
+    return np.clip(col, 0, 1), nrm, orm, np.clip(hgt, 0, 1)
+
+
+def make_crystal(alb, n, ao, g):
+    """The crystal seam's colour (crystal_fields)."""
+    return crystal_fields(alb, n, ao, g)[0]
 
 
 def make_patchy(alb, n, ao, g, sets, mask_only=False):
@@ -795,7 +910,7 @@ def _bake_colour(sets, src, loaded, relief):
         if mk == "magma":
             return make_veins(alb, n, ao, g, glow=True)
         if mk == "crystal":
-            return make_crystal(alb, n, g)
+            return make_crystal(alb, n, ao, g)
         if mk == "patchy":
             return make_patchy(alb, n, ao, g, sets)
         if mk == "copper":
@@ -881,7 +996,16 @@ def _set_maps(lib, s):
 def layer_maps(lib, sets, t, which):
     """The slot's normal (0..1 encoded), ORM and height (or None) at LAYER."""
     sid, g = t[which]
-    n, orm, h, c = _set_maps(lib, sets[sid])
+    if g.get("make") == "crystal":
+        # the crystal seam's own faces, roughness and heights (crystal_fields)
+        alb, sn, sao, _ = load_for_layer(lib, sets[sid])
+        _RELIEF[0] = RELIEF_MAPPED
+        try:
+            _, n, orm, h = crystal_fields(alb, sn, sao, g)
+        finally:
+            _RELIEF[0] = 1.0
+    else:
+        n, orm, h, c = _set_maps(lib, sets[sid])
     if g.get("make") == "patchy":
         # The cover's maps where the cover is, the ground's where it is worn through.
         _RELIEF[0] = RELIEF_MAPPED
@@ -928,7 +1052,7 @@ def layer_maps(lib, sets, t, which):
 
 def maps_hash():
     import inspect
-    src = "".join(inspect.getsource(f) for f in (layer_maps, _set_maps, ripple_field, whiteout, convert_set, make_patchy))
+    src = "".join(inspect.getsource(f) for f in (layer_maps, _set_maps, ripple_field, whiteout, convert_set, make_patchy, crystal_fields, _worley))
     return hashlib.sha1(src.encode()).hexdigest()[:12]
 
 
@@ -942,7 +1066,7 @@ def map_job(args):
     paths = {k: os.path.join(ROOT, map_path(root, t, which, k)) for k in MAP_KINDS}
     g = t[which][1]
     extra = [LAYER, BAKE, "maps", maps_hash(), RELIEF_MAPPED, RIPPLE_HEIGHT, t.get("nstr", 1.0), t.get("rfloor", ROUGH_FLOOR),
-             t["scale"] if g.get("ripples") else None, g if (g.get("make") == "patchy" or g.get("ripples")) else None]
+             t["scale"] if g.get("ripples") else None, g if (g.get("make") in ("patchy", "crystal") or g.get("ripples")) else None]
     st = stamp_of(s, extra)
     stf = os.path.join(os.path.dirname(paths["normal"]), ".import-" + map_stem(t, which))
     if not force and os.path.exists(paths["normal"]) and os.path.exists(stf) and open(stf).read().strip() == st:
@@ -1000,7 +1124,7 @@ LIB_PATH = [LIB]
 def RECIPE_HASH():
     """The layer recipes' own code, so changing one re-bakes its layers."""
     import inspect
-    src = "".join(inspect.getsource(f) for f in (grade, ripple_field, make_veins, make_crystal, make_patchy, _bake_colour, bake_layer, load_for_layer, convert_set))
+    src = "".join(inspect.getsource(f) for f in (grade, ripple_field, make_veins, make_crystal, crystal_fields, _worley, make_patchy, _bake_colour, bake_layer, load_for_layer, convert_set))
     return hashlib.sha1(src.encode()).hexdigest()[:12]
 
 

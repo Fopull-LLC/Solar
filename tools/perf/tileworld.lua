@@ -16,9 +16,12 @@
 -- the right: `_side_*`, where a normal map's bumps must light from the right),
 -- phys (1: the planet's Material Physical, as system_generator makeBody sets it;
 -- pcol its colour), loadwatch (1: log every frame over 40 ms, and shoot the planet
--- once a second while it fills: a palette arriving late shows grey or white).
+-- once a second while it fills: a palette arriving late shows grey or white),
+-- seam (1: slot borders up close, seam_a | seam_b and 1 | 13, from 0.3-1.7 m; night 1 also
+-- in the dark by a lamp), only (1: skip the feet/eye/far/high and slope views).
 defaults = { first = 1, last = 99, settle = 3, quit = 1, cave = 0, graze = 0,
-  smin = 0.55, smax = 0.85, dist = 0, phys = 0, pcol = 1, loadwatch = 0, trace = 0 }
+  smin = 0.55, smax = 0.85, dist = 0, phys = 0, pcol = 1, loadwatch = 0, trace = 0,
+  seam = 0, seam_a = 2, seam_b = 15, seam_c = 1, seam_d = 13, night = 1, only = 0 }
 
 local W = function() return app.wallClock and app.wallClock() or os.clock() end
 local W0 = W()
@@ -166,7 +169,7 @@ local function main()
         if side:cross(d):dot(SUN) < 0 then side = side * -1 end
         view(cam, eye, along(d, side, 2.5, R, top, 0), d, tag .. "_side_feet")
         view(cam, eye, along(d, side, 30, R, top, 0), d, tag .. "_side_d30")
-      else
+      elseif params.only == 0 then
       view(cam, eye, along(d, t, 2.5, R, top, 0), d, tag .. "_feet")
       view(cam, eye, along(d, t, 12, R, top, 0), d, tag .. "_eye")
       view(cam, eye, along(d, t, 80, R, top, 0), d, tag .. "_far")
@@ -174,6 +177,48 @@ local function main()
       end
       if params.graze > 0 then
         view(cam, along(d, t, 0, R, top, 0.6), along(d, t, 300, R, top, 0), d, tag .. "_graze")
+      end
+      if params.seam > 0 then
+        -- slot borders up close (playtest 2026-11-06 "odd blending lines"): two
+        -- discs of slots far apart in the palette (2 soil | 15 sandstone, 1 rust |
+        -- 13 basalt) painted side by side ahead, photographed from 0.25-1.7 m up.
+        -- An interpolated vertex slot crossing a whole number between them shows
+        -- that slot as a thin line (raster.wgsl terrain_splat's `whole` test).
+        local t2 = d:cross(t):normalized()
+        local function paint(p, slot, r)
+          terrain.paintTexture(p.x, p.y, p.z, r, slot, { hardness = 1.0, falloff = "linear" })
+        end
+        local A = along(d, t, 3.0, R, top, 0)
+        local B = along(d, t, 6.0, R, top, 0)
+        local C2 = along(d, t2, 8.0, R, top, 0)
+        local D2 = (C2 + t * 3.0)
+        paint(A, params.seam_a, 2.6); paint(B, params.seam_b, 2.0)
+        paint(C2, params.seam_c, 2.6); paint(D2, params.seam_d, 2.0)
+        yield(); wait_for(function() return not terrain.busy() end, 60)
+        hold(1.0)
+        local mid = along(d, t, 4.6, R, top, 0)
+        view(cam, along(d, t, 2.4, R, top, 0.30), mid, d, tag .. "_seam_030")
+        view(cam, along(d, t, 3.6, R, top, 0.12), mid, d, tag .. "_seam_012")
+        view(cam, along(d, t, 1.8, R, top, 0.70), mid, d, tag .. "_seam_070")
+        view(cam, along(d, t, 0.0, R, top, 1.70), mid, d, tag .. "_seam_170")
+        local mid2 = (C2 + t * 1.6)
+        view(cam, C2 - t * 0.6 + d * 0.35, mid2, d, tag .. "_seam2_035")
+        if params.night > 0 then
+          -- the same borders in the dark (a lamp at the knee): only self-lit slots show
+          local lamp
+          createNode("Lamp", nil, function(n) lamp = n end)
+          wait_for(function() return lamp end, 5)
+          local lp = along(d, t, 3.0, R, top, 0.8)
+          lamp.x, lamp.y, lamp.z = lp.x, lp.y, lp.z
+          lamp:setPointLight({ color = { 1.0, 0.93, 0.82 }, intensity = 0.6, range = 6 })
+          local L = find("Lighting"); L = L and L:getcomponent("Light")
+          local was = L and { L.intensity, L.ambientR, L.ambientG, L.ambientB }
+          if L then L.intensity = 0.0; L.ambientR, L.ambientG, L.ambientB = 0.004, 0.004, 0.005 end
+          view(cam, along(d, t, 2.4, R, top, 0.30), mid, d, tag .. "_seam_030_dark")
+          view(cam, C2 - t * 0.6 + d * 0.35, mid2, d, tag .. "_seam2_035_dark")
+          if L then L.intensity, L.ambientR, L.ambientG, L.ambientB = was[1], was[2], was[3], was[4] end
+          lamp:setPointLight({ intensity = 0 })
+        end
       end
       if params.cave > 0 then
         local g = ground(d, R, top) or R
@@ -200,12 +245,35 @@ local function main()
         view(cam, eye, c + t * 12, d, tag .. "_cave_seam")
         view(cam, eye, c + t2 * 12, d, tag .. "_cave_magma")
         view(cam, c + t * 3 + t2 * 3, c - t2 * 12, d, tag .. "_cave_crystal")
+        -- the crystal pocket up close, the lamp at the shoulder (the playtest's 8.png distance)
+        lamp.x, lamp.y, lamp.z = (c - t2 * 7 + t * 1.5).x, (c - t2 * 7 + t * 1.5).y, (c - t2 * 7 + t * 1.5).z
+        view(cam, c - t2 * 8.0, c - t2 * 12.5 - d * 1.0, d, tag .. "_cave_crystal_near")
+        lamp.x, lamp.y, lamp.z = c.x, c.y, c.z
         lamp.x, lamp.y, lamp.z = c.x + 0, c.y, c.z
         view(cam, c + d * 4, c - d * 9 + t * 4, t, tag .. "_cave_floor")
+        if params.seam > 0 then
+          -- two slots far apart in the palette side by side on a dug wall (a tunnel
+          -- face), the camera a hand from it: the playtest's 7.png distance
+          local hw = terrain.raycast(c, t * -1, 30)
+          if hw then
+            local w = hw.pos
+            terrain.paintTexture((w + t2 * -1.4).x, (w + t2 * -1.4).y, (w + t2 * -1.4).z, 1.8, params.seam_c, { hardness = 1.0, falloff = "linear" })
+            terrain.paintTexture((w + t2 * 1.4).x, (w + t2 * 1.4).y, (w + t2 * 1.4).z, 1.8, params.seam_d, { hardness = 1.0, falloff = "linear" })
+            yield(); wait_for(function() return not terrain.busy() end, 60)
+            hold(1.0)
+            local lp = w + t * 1.2 + d * 0.5
+            lamp.x, lamp.y, lamp.z = lp.x, lp.y, lp.z
+            lamp:setPointLight({ color = { 1.0, 0.93, 0.82 }, intensity = 1.2, range = 8 })
+            view(cam, w + t * 0.6, w, d, tag .. "_wall_060")
+            view(cam, w + t * 0.25 + d * 0.1, w - d * 0.1, d, tag .. "_wall_025")
+            lamp:setPointLight({ intensity = 0.0 })
+            view(cam, w + t * 0.25 + d * 0.1, w - d * 0.1, d, tag .. "_wall_025_dark")
+          end
+        end
         lamp:setPointLight({ intensity = 0 })
       end
     end
-    if steep then
+    if steep and params.only == 0 then
       local d = steep
       local t = (SUN - d * SUN:dot(d)):normalized()
       local aim = along(d, t, 0, R, top, 1.0)

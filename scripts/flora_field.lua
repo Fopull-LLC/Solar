@@ -1255,6 +1255,9 @@ end
 function groundChanged(x, y, z, r, force)
   local mf = ref("mineral_field")
   if mf and mf.groundChanged then pcall(mf.groundChanged, x, y, z, r, force) end
+  -- (a Power Cable lying there settles on the new ground: base_cable)
+  local bc = ref("base_cable")
+  if bc and bc.groundChanged then pcall(bc.groundChanged, x, y, z, r) end
   if ENGINE_RESETTLES_EDITS and not force then return false end
   local body = cur_body and space.body(cur_body)
   if not body or not x then return false end
@@ -1662,7 +1665,9 @@ local function touch_drive(astro, body, dt)
         if b.restored == nil then
           b.restored = time
           pcall(scatter.restore, b.src, b.inst)
-        elseif time - b.restored > 0.25 then
+        elseif time - b.restored > math.max(0.25, (params.appear or 0) + 0.1) then
+          -- (the instance comes back through scatter's `appear` dissolve: the
+          -- node stays till it is whole, or the plant blinks thin for a moment)
           b.node:destroy()
           touch.bent[key] = nil
           touch.n = touch.n - 1

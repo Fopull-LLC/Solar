@@ -278,8 +278,9 @@ end
 -- does not deliver, and nothing comes out of a hillside that isn't in it.
 --
 -- Slots 5–8 are what the generator lays as DEPOSITS: veinstone seams (a low
--- copper-bearing rock) and the glow slots its ore pockets and seams are painted in (6 magma veins:
--- uranite; 7 amethyst, 8 blue crystal: resonant crystal). Everything else is
+-- copper-bearing rock) and the slots its ore pockets and seams are painted in (6 magma veins,
+-- self-lit: uranite; 7 amethyst, 8 blue crystal: resonant crystal, druzy crystal in its host
+-- rock, lit like stone since the 2026-11-06 playtest). Everything else is
 -- the country rock and soil. The ore veins mineral_field paints near the
 -- surface use the slots in `VEIN_SLOTS`; a slot shared with a world's own
 -- ground (hematite deserts, sulfur plains) reads as that ground everywhere
