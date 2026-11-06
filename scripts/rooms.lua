@@ -178,7 +178,7 @@ function signatureOf(rec, defs)
   local t = {}
   for _, p in ipairs(rec.bp or {}) do
     local d = defs(p.id)
-    if d and d.kit and (d.seals or d.snap == "wall" or d.life) then
+    if d and d.kit and (d.seals or d.snap == "wall" or d.life or d.eqv) then
       t[#t + 1] = string.format("%d:%s:%.2f:%.2f:%.2f:%.3f:%.3f:%.3f", p.uid, p.id, p.x or 0, p.y or 0, p.z or 0, p.yaw or 0, p.pitch or 0, p.roll or 0)
     end
   end

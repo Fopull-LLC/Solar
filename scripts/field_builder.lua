@@ -2008,7 +2008,7 @@ end
 local MODE_TXT = { edge = "EDGE TO EDGE", deck = "ON THE DECK", grid = "GRID 0.5 m", free = "FREE" }
 function hintLine()
   if not open_ then return "Build Kit  ·  B opens it" end
-  local keys = (collapsed and "B unfolds the parts" or "B folds the parts") .. "  ·  Esc " .. (heldPart and "drops the part" or "closes the kit") .. "  ·  Ctrl+Z undo  ·  F1 rooms  ·  F2 power  ·  F3 nuclear"
+  local keys = (collapsed and "B unfolds the parts" or "B folds the parts") .. "  ·  Esc " .. (heldPart and "drops the part" or "closes the kit") .. "  ·  Ctrl+Z undo  ·  F1 rooms  ·  F2 power  ·  F3 nuclear  ·  F7 fluids"
   if not heldPart then return "Build Kit  ·  pick a part  ·  RMB tap a placed part to take it down  ·  " .. keys end
   local hdef = partInfo(heldPart)
   -- (S4) paint and the eyedropper
@@ -2221,6 +2221,11 @@ function update(node, dt)
     if input.pressed("f3") then
       local RP = ref("reactor_plant")
       if RP then RP.overlay = not RP.overlay; say(RP.overlay and "NUCLEAR: the loops by temperature, the way they flow, each component's heat · the dose field round each core, shielding counted" or "NUCLEAR overlay off") end
+    end
+    -- S7: F7 shows the FLUIDS overlay (F4 is the camera's cinematic mode) (each line by its substance and flow, levels, pressures, breaks)
+    if input.pressed("f7") then
+      local FN = ref("fluid_net")
+      if FN then FN.overlay = not FN.overlay; say(FN.overlay and "FLUIDS: each line by what it carries, chevrons the way it flows · tank levels, gauges, pumps · each network's LIMITED BY · a reactor's coolant and any break" or "FLUIDS overlay off") end
     end
     if input.key("ctrl") then
       if input.pressed("c") then copy_now() end

@@ -1898,6 +1898,9 @@ function fuelFill(total)
   fuelSync()
 end
 
+-- (S7) the fuel units the tanks have room for (fluid_net's Fuel Hose Stand)
+function fuelRoom() return math.max(0, fuel_cap - fuel) end
+
 -- Tonnes of propellant aboard.
 function fuelMass()
   local m = 0.0

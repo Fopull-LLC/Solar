@@ -354,6 +354,26 @@ def sep_puff():
     effect("SepPuff", 1.4, tracks, header="Decoupler firing / dock latch: pyro flash, gas puff, sparks and bolts.")
 
 
+def vent_burst():
+    """A door forced open on a pressure difference (room_air.ventBurst, S7): +Y is the gust's
+    way, out of the high side. A white blast of air and condensing moisture, grit and dust off
+    the floor carried with it, a few flecks of debris (the seal's bits), all riding the planet."""
+    tracks = [
+        T("Blast", TX + "smoke/soft.png", forces=[wind(3.0)], clips=burst(46, 0, 1.6, 0.4), shape=cone(28, 0.45),
+          vel=R((0, 6, 0), (0, 16, 0)), size=K([(0, 0.35), (0.25, 1.3), (1, 2.6)]),
+          rot=R((0, 0, 0), RAD), spin=R((0, 0, -1.5), (0, 0, 1.5)),
+          color=K([(0, (0.88, 0.89, 0.90, 0)), (0.04, (0.88, 0.89, 0.90, 0.55)), (0.5, (0.84, 0.85, 0.86, 0.25)), (1, (0.8, 0.8, 0.82, 0))]),
+          soft=0.4),
+        T("Grit", TX + "smoke/soft.png", forces=[wind(2.0)], gravity=0.3, clips=burst(26, 0.05, 2.2, 0.4), shape=cone(35, 0.6),
+          vel=R((0, 3, 0), (0, 9, 0)), size=K([(0, 0.25), (0.4, 0.9), (1, 1.6)]), rot=R((0, 0, 0), RAD),
+          color=K([(0, (0.55, 0.50, 0.44, 0)), (0.08, (0.55, 0.50, 0.44, 0.45)), (1, (0.5, 0.46, 0.4, 0))]), soft=0.4),
+        T("Flecks", mesh=ROCK, space="World", inherit=1.0, clips=burst(12, 0, 1.4, 0.4), shape=cone(30, 0.4),
+          vel=R((0, 7, 0), (0, 15, 0)), gravity=1.0, size=R(0.015, 0.04), rot=R((0, 0, 0), (6.28, 6.28, 6.28)),
+          spin=R((-14, -14, -14), (14, 14, 14)), color=C((0.30, 0.30, 0.31, 1)), lit=True),
+    ]
+    effect("VentBurst", 2.2, tracks, header="A door forced open against a pressure difference: the gust, grit and the seal's bits (room_air, S7).")
+
+
 def chute_puff():
     tracks = [
         T("Puff", TX + "smoke/billow_b.png", forces=[wind(3.0)], clips=burst(18, 0, 1.4, 0.3), shape=sphere(0.4, True),
@@ -1193,6 +1213,7 @@ def main():
     explosion("Explosion", 1.25, "A tank or engine detonating: flash, fireball, black smoke column, shock, sparks, burning streamers, debris.")
     explosion("ExplosionSmall", 0.6, "A structural part failing: a smaller flash, fire and smoke, fewer fragments.")
     sep_puff()
+    vent_burst()
     chute_puff()
     smoke_puff()
     reentry()

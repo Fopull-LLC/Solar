@@ -227,6 +227,15 @@ local swim_vup = 0
 -- Kept here rather than read back off the body: a contact's sideways shove is
 -- the solver's business for one frame, not a speed to hold.
 local mvx, mvy, mvz = 0.0, 0.0, 0.0
+-- (S7) a gust that pulls the walker (a door forced open on a pressure difference)
+local gust_x, gust_y, gust_z, gust_left, gust_secs = 0.0, 0.0, 0.0, 0.0, 0.8
+lastPull = nil
+function pull(vx, vy, vz, secs)
+  gust_x, gust_y, gust_z = vx or 0, vy or 0, vz or 0
+  gust_secs = math.max(0.1, secs or 0.8)
+  gust_left = gust_secs
+  lastPull = { x = gust_x, y = gust_y, z = gust_z, secs = gust_secs, t = time }
+end
 -- The slope's share of last frame's up speed, so this frame can tell the climb
 -- we asked for from the push a contact gave us.
 local slope_vup = 0.0
@@ -2287,6 +2296,14 @@ function update(node, dt)
     tx = mfx * along * k_along + lx * params.swim_side
     ty = mfy * along * k_along + ly * params.swim_side
     tz = mfz * along * k_along + lz * params.swim_side
+  end
+  -- (S7) a door forced open beside you: the gust's pull, along the ground,
+  -- fading over its time (room_air.ventBurst; pull() below)
+  if gust_left > 0 then
+    local f = gust_left / math.max(gust_secs, 1e-3)
+    local gd = gust_x * ux + gust_y * uy + gust_z * uz
+    tx, ty, tz = tx + (gust_x - ux * gd) * f, ty + (gust_y - uy * gd) * f, tz + (gust_z - uz * gd) * f
+    gust_left = math.max(0, gust_left - dt)
   end
   local md = mvx * ux + mvy * uy + mvz * uz
   mvx, mvy, mvz = mvx - ux * md, mvy - uy * md, mvz - uz * md

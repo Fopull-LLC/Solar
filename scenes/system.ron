@@ -3590,6 +3590,9 @@
                 ( kind: "base_power", enabled: true, params: [] ),
                 ( kind: "reactor", enabled: true, params: [] ),
                 ( kind: "reactor_plant", enabled: true, params: [] ),
+                // the fluid network: the rulebook and the scene (fluids, fluid_net; S7)
+                ( kind: "fluids", enabled: true, params: [] ),
+                ( kind: "fluid_net", enabled: true, params: [] ),
                 ( kind: "base_shield", enabled: true, params: [] ),
                 ( kind: "craft_orient", enabled: true, params: [] ),
                 ( kind: "ghost", enabled: true, params: [] ),

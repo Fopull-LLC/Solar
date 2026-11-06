@@ -129,9 +129,22 @@
 --   power   = { kind = "aux", use } a pump, heater or fan the plant runs from
 --             the grid; { kind = "plant", kwe } the turbine's generator
 --   tech    research that opens the piece (research.lua)
+--
+-- -- FLUID (S7; scripts/fluids.lua, fluid_net.lua; docs/base-building.md §17)
+--   fl      = { kind = "pipe" (len, bore) | "tank" (sub, V, A) | "bottle" (sub,
+--             V, pmax) | "pump" (q0 kg/s free, H0 Pa shut-off, kw) | "valve" |
+--             "check" | "reg" (pset) | "gauge" | "outlet" | "vent" |
+--             "consumer" (sub, V, A) }: a piece of the fluid network
+--   ports   as NUCLEAR's, at `y` (default PIPE_Y) over the ground point; on a
+--           piece without `fl`, a port with `fluid = true` is the network's
+--           (`role` = "consumer" an O2 Generator's water, "h2" its hydrogen,
+--           "primary" a pressuriser's makeup nozzle into its reactor's loop)
+--   eqv     = { C = m3/s per atm }  an Equalise Valve through its wall
+--   door.eq a door's own equalising valve (m3/s per atm); door.seal its seal's
+--           strength against forcing (0 weak ... 1 never damaged)
 PIPE_Y = 0.6
 
-SECTION_ORDER = { "FOUNDATION", "FLOOR", "WALL", "ROOF", "FRAME", "HAB", "SHIELD", "UTILITY", "POWER", "LIFE", "NUCLEAR", "FITTINGS", "PROPS", "DECALS" }
+SECTION_ORDER = { "FOUNDATION", "FLOOR", "WALL", "ROOF", "FRAME", "HAB", "SHIELD", "UTILITY", "POWER", "LIFE", "FLUID", "NUCLEAR", "FITTINGS", "PROPS", "DECALS" }
 EXTERIOR = { FOUNDATION = true, FLOOR = true, WALL = true, ROOF = true, FRAME = true, HAB = true, SHIELD = true }
 FACES2 = { wall = true, halfWall = true, wall12 = true, doorWall = true, doorWallM = true, doubleDoor = true, windowWall = true,
            porthole = true, airlockWall = true, openFrame = true, ventWall = true, leadWall = true, gable = true,
@@ -209,6 +222,10 @@ PIECES = {
                 mats = { "steel", "concrete" }, vol = 0.8, fill = "floor", cost = 900, seals = "door",
                 door = { slide = { 0.95, 0, 0 }, secs = 1.2, near = 1.6, vertical = 2.6 }, sym = "z",
                 desc = "a floor with a 0.9 m deck hatch · slides open as you come near" },
+  pressHatch = { label = "Pressure Hatch Floor 2 × 2", section = "FLOOR", snap = "floor", box = B(-1, 1, 0, 0.2, -1, 1),
+                mats = { "steel" }, vol = 0.8, fill = "floor", cost = 2800, fillk = { steel = 0.04 }, seals = "door",
+                door = { slide = { 0.95, 0, 0 }, secs = 2.2, near = 1.6, vertical = 2.6, heavy = true, eq = 0.4, seal = 0.4 }, sym = "z",
+                desc = "a floor with a heavy 0.9 m pressure hatch and its equalising valve · storeys of a station sealed apart" },
   -- ── WALL ──
   wall      = { label = "Wall", section = "WALL", snap = "wall", box = B(-1, 1, 0, WH, -WT / 2, WT / 2),
                 mats = { "steel", "concrete", "regocrete", "glass" }, vol = 0.88, fill = "panel", cost = 600, seals = "z",
@@ -241,7 +258,12 @@ PIECES = {
   airlockWall = { label = "Airlock Wall", section = "WALL", snap = "wall", box = B(-1, 1, 0, WH, -WT / 2, WT / 2),
                 mats = { "steel", "concrete" }, vol = 0.88, fill = "panel", cost = 3800, seals = "door",
                 door = { slide = { 0.94, 0, 0 }, secs = 2.4, near = 2.0, heavy = true, airlock = true }, sym = "z",
-                desc = "a pressure door · with a second door it makes an airlock: interlocked, it cycles" },
+                power = { kind = "aux", use = 2.5 },
+                desc = "a pressure door · with a second door it makes an airlock: interlocked, its pump (2.5 kW from the base grid) cycles it" },
+  bulkhead  = { label = "Pressure Bulkhead", section = "WALL", snap = "wall", box = B(-1, 1, 0, WH, -WT / 2, WT / 2),
+                mats = { "steel" }, vol = 0.88, fill = "panel", cost = 4600, fillk = { steel = 0.05 }, seals = "door",
+                door = { slide = { 0.94, 0, 0 }, secs = 2.8, near = 2.0, heavy = true, eq = 0.5, seal = 0.4 }, sym = "z",
+                desc = "a station bulkhead: a heavy hatch door with its own equalising valve and a stronger seal · held shut by pressure like any door" },
   openFrame = { label = "Open Frame", section = "WALL", snap = "wall", box = B(-1, 1, 0, WH, -WT / 2, WT / 2),
                 mats = { "steel", "concrete", "regocrete" }, vol = 0.88, fill = "panel", cost = 380,
                 fillk = { steel = 0.006, concrete = 0.3, regocrete = 0.3 },
@@ -364,12 +386,127 @@ PIECES = {
                 desc = "amine-bed CO2 scrubber for four crew · 0.4 EC/s from the base grid" },
   o2gen     = { label = "Oxygen Generator", section = "LIFE", snap = "block", box = B(-0.45, 0.45, 0, 1.6, -0.3, 0.3),
                 mats = { "steel" }, vol = 0.86, fill = "solid", cost = 5200, fillk = { steel = 0.03 },
-                life = { o2 = 2.8e-5 }, use = 1.5,
-                desc = "an electrolyser: O2 for four crew from its water · 1.5 EC/s from the base grid" },
+                life = { o2 = 2.8e-5, water = 20 }, use = 1.5,
+                -- (S7) its 20 L water cell is fed by a pipe (fluids); its hydrogen goes to a bottle or is vented
+                ports = { { name = "water", x = 0.2, y = 0.6, z = -0.3, nx = 0, nz = -1, fluid = true, role = "consumer", loop = "w" },
+                          { name = "h2", x = -0.2, y = 0.6, z = -0.3, nx = 0, nz = -1, fluid = true, role = "h2", loop = "h" } },
+                desc = "an electrolyser: O2 for four crew from water (2 H2O → 2 H2 + O2) · pipe water to its back · 1.5 EC/s from the base grid" },
   airTank   = { label = "Air Tank Rack", section = "LIFE", snap = "block", box = B(-0.6, 0.6, 0, 1.8, -0.25, 0.25),
                 mats = { "steel" }, vol = 1.08, fill = "solid", cost = 1800, fillk = { steel = 0.04 },
                 life = { store = 60, flow = 0.25, price = 4 },
                 desc = "three 200 bar cylinders of air on a regulator · fills a room to 1 atm · 60 m³" },
+  -- (S7: pressure mechanics, scripts/room_air.lua)
+  airReceiver = { label = "Airlock Receiver", section = "LIFE", snap = "block", box = B(-0.45, 0.45, 0, 2.0, -0.45, 0.45),
+                mats = { "steel" }, vol = 1.6, fill = "solid", mass = { steel = 0.32 }, cost = 3400,
+                life = { receiver = 24 },
+                desc = "a 1.2 m³ receiver to 20 bar for an airlock's air · in the chamber or the hab beside it, the airlock pumps its air into it and back instead of venting it" },
+  eqValve   = { label = "Equalise Valve", section = "LIFE", snap = "mount", box = B(-0.16, 0.16, 0, 0.18, -0.16, 0.16),
+                mats = { "steel" }, vol = 0.009, fill = "solid", mass = { steel = 0.012 }, cost = 320,
+                eqv = { C = 0.25 },
+                desc = "a 40 mm bleed valve through the wall it is on · open, it lets the two sides' pressures meet slowly, so a door between them can open · right-click opens it" },
+  -- ── FLUID (S7: pipes and tanks; scripts/fluids.lua, fluid_net.lua) ──
+  -- Ports at PIPE_Y (0.6 m) unless a riser's, on the 0.5 m grid; DN25
+  -- (33.7 mm OD) process line. Masses are the pieces' own, empty.
+  flPipe2   = { label = "Process Pipe 2 m", section = "FLUID", snap = "pipe", box = B(-0.08, 0.08, 0, 0.66, -1, 1),
+                mats = { "steel" }, vol = 0.05, fill = "solid", mass = { steel = 0.009 }, cost = 90, order = 1,
+                fl = { kind = "pipe", len = 2.0, bore = "DN25" },
+                ports = { { name = "a", x = 0, z = -1, nx = 0, nz = -1 }, { name = "b", x = 0, z = 1, nx = 0, nz = 1 } },
+                desc = "DN25 stainless on its stands · water, fuel or gas: whatever its tanks hold · 1.1 kg/s of water at 2 m/s" },
+  flPipe1   = { label = "Process Pipe 1 m", section = "FLUID", snap = "pipe", box = B(-0.08, 0.08, 0, 0.66, -0.5, 0.5),
+                mats = { "steel" }, vol = 0.025, fill = "solid", mass = { steel = 0.005 }, cost = 55, order = 2,
+                fl = { kind = "pipe", len = 1.0, bore = "DN25" },
+                ports = { { name = "a", x = 0, z = -0.5, nx = 0, nz = -1 }, { name = "b", x = 0, z = 0.5, nx = 0, nz = 1 } },
+                desc = "a 1 m length of DN25 process pipe" },
+  flElbow   = { label = "Process Elbow", section = "FLUID", snap = "pipe", box = B(-0.08, 0.5, 0, 0.66, -0.5, 0.08),
+                mats = { "steel" }, vol = 0.02, fill = "solid", mass = { steel = 0.004 }, cost = 60, order = 3,
+                fl = { kind = "pipe", len = 0.8, bore = "DN25" },
+                ports = { { name = "a", x = 0, z = -0.5, nx = 0, nz = -1 }, { name = "b", x = 0.5, z = 0, nx = 1, nz = 0 } },
+                desc = "a 90° bend · R turns which end goes on" },
+  flTee     = { label = "Process Tee", section = "FLUID", snap = "pipe", box = B(-0.08, 0.5, 0, 0.66, -0.5, 0.5),
+                mats = { "steel" }, vol = 0.03, fill = "solid", mass = { steel = 0.005 }, cost = 70, order = 4,
+                fl = { kind = "pipe", len = 1.2, bore = "DN25" },
+                ports = { { name = "a", x = 0, z = -0.5, nx = 0, nz = -1 }, { name = "b", x = 0, z = 0.5, nx = 0, nz = 1 }, { name = "c", x = 0.5, z = 0, nx = 1, nz = 0 } },
+                desc = "a branch: one line into two" },
+  flRiser   = { label = "Pipe Riser (one storey)", section = "FLUID", snap = "pipe", box = B(-0.08, 0.08, 0, 3.06, -0.5, 0.08),
+                mats = { "steel" }, vol = 0.05, fill = "solid", mass = { steel = 0.012 }, cost = 140, order = 5,
+                fl = { kind = "pipe", len = 3.4, bore = "DN25" },
+                ports = { { name = "low", x = 0, y = 0.6, z = -0.5, nx = 0, nz = -1 }, { name = "high", x = 0, y = 3.0, z = -0.5, nx = 0, nz = -1 } },
+                desc = "a pipe up a storey (2.4 m): its low port at this floor's pipe height, its high port at the next floor's · a pump lifts the water, a tank upstairs feeds down" },
+  flTankWater = { label = "Water Tank 2 m³", section = "FLUID", snap = "block", box = B(-0.7, 0.7, 0, 2.3, -1.0, 0.7),
+                mats = { "steel" }, vol = 3.0, fill = "solid", mass = { steel = 0.42 }, cost = 2200, order = 10,
+                fl = { kind = "tank", sub = "water", V = 2.0, A = 1.131 },
+                ports = { { name = "out", x = 0, z = -1.0, nx = 0, nz = -1 } },
+                desc = "a 1.2 m steel tank under a nitrogen blanket, 2 m³ (2 t of water) · its level drives what flows out by gravity · fill it from the base stores (right-click)" },
+  flTankCool = { label = "Coolant Tank 2 m³", section = "FLUID", snap = "block", box = B(-0.7, 0.7, 0, 2.3, -1.0, 0.7),
+                mats = { "steel" }, vol = 3.0, fill = "solid", mass = { steel = 0.42 }, cost = 2600, order = 11,
+                fl = { kind = "tank", sub = "coolant", V = 2.0, A = 1.131 },
+                ports = { { name = "out", x = 0, z = -1.0, nx = 0, nz = -1 } },
+                desc = "demineralised borated water for a reactor's primary · a charging pump from it to the pressuriser's makeup nozzle keeps the loop full" },
+  flTankFuel = { label = "Fuel Tank 2 m³", section = "FLUID", snap = "block", box = B(-0.7, 0.7, 0, 2.3, -1.0, 0.7),
+                mats = { "steel" }, vol = 3.0, fill = "solid", mass = { steel = 0.42 }, cost = 2400, order = 12,
+                fl = { kind = "tank", sub = "fuel", V = 2.0, A = 1.131 },
+                ports = { { name = "out", x = 0, z = -1.0, nx = 0, nz = -1 } },
+                desc = "RP-1 under a nitrogen blanket, 2 m³ (1.6 t, 162 units) · a pump to a Fuel Hose Stand fuels a craft on a stand" },
+  flBottleO2 = { label = "Oxygen Bottle Rack", section = "FLUID", snap = "block", box = B(-0.6, 0.6, 0, 1.8, -0.5, 0.25),
+                mats = { "steel" }, vol = 1.0, fill = "solid", mass = { steel = 0.24 }, cost = 1900, order = 20,
+                fl = { kind = "bottle", sub = "o2", V = 0.15, pmax = 200e5 },
+                ports = { { name = "out", x = 0, z = -0.5, nx = 0, nz = -1 } },
+                desc = "three 50 L cylinders of O2 at 200 bar (39 kg) on a manifold · a regulator to a Room Gas Outlet gives a room its oxygen" },
+  flBottleN2 = { label = "Nitrogen Bottle Rack", section = "FLUID", snap = "block", box = B(-0.6, 0.6, 0, 1.8, -0.5, 0.25),
+                mats = { "steel" }, vol = 1.0, fill = "solid", mass = { steel = 0.24 }, cost = 1500, order = 21,
+                fl = { kind = "bottle", sub = "n2", V = 0.15, pmax = 200e5 },
+                ports = { { name = "out", x = 0, z = -0.5, nx = 0, nz = -1 } },
+                desc = "three 50 L cylinders of N2 at 200 bar (34 kg) · the buffer gas of a room's air" },
+  flBottleH2 = { label = "Hydrogen Bottle Rack", section = "FLUID", snap = "block", box = B(-0.6, 0.6, 0, 1.8, -0.5, 0.25),
+                mats = { "steel" }, vol = 1.0, fill = "solid", mass = { steel = 0.26 }, cost = 2100, order = 22,
+                fl = { kind = "bottle", sub = "h2", V = 0.15, pmax = 200e5, empty = true },
+                ports = { { name = "in", x = 0, z = -0.5, nx = 0, nz = -1 } },
+                desc = "three 50 L cylinders for hydrogen to 200 bar (2.5 kg) · piped from an Oxygen Generator, it keeps the H2 it makes instead of venting it" },
+  flPump    = { label = "Process Pump", section = "FLUID", snap = "block", box = B(-0.3, 0.3, 0, 0.9, -0.5, 0.5),
+                mats = { "steel" }, vol = 0.3, fill = "solid", mass = { steel = 0.06 }, cost = 1400, order = 30,
+                fl = { kind = "pump", q0 = 2.0, H0 = 6e5, kw = 0.75 },
+                ports = { { name = "in", x = 0, z = -0.5, nx = 0, nz = -1 }, { name = "out", x = 0, z = 0.5, nx = 0, nz = 1 } },
+                desc = "a centrifugal pump: 2 kg/s free, nothing past 6 bar (its curve between) · 0.75 kW from the grid · in → out" },
+  flCharge  = { label = "Charging Pump", section = "FLUID", snap = "block", box = B(-0.45, 0.45, 0, 1.1, -0.75, 0.75),
+                mats = { "steel" }, vol = 0.9, fill = "solid", mass = { steel = 0.35 }, cost = 9800, order = 31, tech = "ember",
+                fl = { kind = "pump", q0 = 0.5, H0 = 18e6, kw = 4.0 },
+                ports = { { name = "in", x = 0, z = -0.75, nx = 0, nz = -1 }, { name = "out", x = 0, z = 0.75, nx = 0, nz = 1 } },
+                desc = "a triplex plunger pump to 18 MPa, 0.5 kg/s · the only pump that beats a pressurised primary · 4 kW" },
+  flValve   = { label = "Gate Valve", section = "FLUID", snap = "pipe", box = B(-0.1, 0.1, 0, 0.9, -0.25, 0.25),
+                mats = { "steel" }, vol = 0.01, fill = "solid", mass = { steel = 0.006 }, cost = 120, order = 40,
+                fl = { kind = "valve", len = 0.3 },
+                ports = { { name = "a", x = 0, z = -0.25, nx = 0, nz = -1 }, { name = "b", x = 0, z = 0.25, nx = 0, nz = 1 } },
+                desc = "open or shut, from its handwheel (right-click)" },
+  flCheck   = { label = "Check Valve", section = "FLUID", snap = "pipe", box = B(-0.08, 0.08, 0, 0.7, -0.25, 0.25),
+                mats = { "steel" }, vol = 0.008, fill = "solid", mass = { steel = 0.004 }, cost = 90, order = 41,
+                fl = { kind = "check", len = 0.3 },
+                ports = { { name = "a", x = 0, z = -0.25, nx = 0, nz = -1 }, { name = "b", x = 0, z = 0.25, nx = 0, nz = 1 } },
+                desc = "a swing check: passes a → b (the arrow), never back" },
+  flReg     = { label = "Pressure Regulator", section = "FLUID", snap = "pipe", box = B(-0.1, 0.1, 0, 0.85, -0.25, 0.25),
+                mats = { "steel" }, vol = 0.01, fill = "solid", mass = { steel = 0.005 }, cost = 260, order = 42,
+                fl = { kind = "reg", pset = 5e5, len = 0.3 },
+                ports = { { name = "in", x = 0, z = -0.25, nx = 0, nz = -1 }, { name = "out", x = 0, z = 0.25, nx = 0, nz = 1 } },
+                desc = "holds its outlet at its set pressure (5 bar; right-click sets it) while its inlet is over it · bottles to a line" },
+  flGauge   = { label = "Pressure Gauge", section = "FLUID", snap = "pipe", box = B(-0.1, 0.1, 0, 0.84, -0.25, 0.25),
+                mats = { "steel" }, vol = 0.006, fill = "solid", mass = { steel = 0.003 }, cost = 80, order = 43,
+                fl = { kind = "gauge", len = 0.3 },
+                ports = { { name = "a", x = 0, z = -0.25, nx = 0, nz = -1 }, { name = "b", x = 0, z = 0.25, nx = 0, nz = 1 } },
+                desc = "a 100 mm dial in the line · right-click (or the FLUIDS overlay) reads the pressure and the flow" },
+  flOutlet  = { label = "Room Gas Outlet", section = "FLUID", snap = "block", box = B(-0.2, 0.2, 0, 1.0, -0.5, 0.2),
+                mats = { "steel" }, vol = 0.04, fill = "solid", mass = { steel = 0.01 }, cost = 180, order = 44,
+                fl = { kind = "outlet", g = 2e-6 },
+                ports = { { name = "in", x = 0, z = -0.5, nx = 0, nz = -1 } },
+                desc = "a diffuser: the gas its line brings goes into the room it stands in, until the room is at 1 atm" },
+  flVent    = { label = "Vent Stack", section = "FLUID", snap = "block", box = B(-0.2, 0.2, 0, 2.6, -0.5, 0.2),
+                mats = { "steel" }, vol = 0.05, fill = "solid", mass = { steel = 0.015 }, cost = 150, order = 45,
+                fl = { kind = "vent", g = 2e-6 },
+                ports = { { name = "in", x = 0, z = -0.5, nx = 0, nz = -1 } },
+                desc = "a stack that vents its line to the outside · stands outdoors" },
+  flHose    = { label = "Fuel Hose Stand", section = "FLUID", snap = "block", box = B(-0.4, 0.4, 0, 1.6, -0.5, 0.4),
+                mats = { "steel" }, vol = 0.3, fill = "solid", mass = { steel = 0.09 }, cost = 1600, order = 50,
+                fl = { kind = "consumer", sub = "fuel", V = 0.05, A = 0.1, hose = 30 },
+                ports = { { name = "in", x = 0, z = -0.5, nx = 0, nz = -1 } },
+                desc = "a reel of fuel hose with a 50 L day tank · a craft held on a stand within 30 m fills from it (right-click)" },
   -- ── NUCLEAR (S6: a reactor built from components; scripts/reactor.lua) ──
   -- Every port is at PIPE_Y (0.6 m) over the piece's ground point, on the
   -- 0.5 m grid; a pipe's ends meet a component's nozzle exactly.
@@ -428,8 +565,9 @@ PIECES = {
   pressuriser = { label = "Pressuriser", section = "NUCLEAR", snap = "block", box = B(-0.5, 0.5, 0, 3.6, -1, 0.5),
                 mats = { "steel" }, vol = 2.9, fill = "solid", mass = { steel = 1.9 }, cost = 22000, tech = "ember", order = 21,
                 press = { kw = 0.8, tsat = 618 }, power = { kind = "aux", use = 0.8 },
-                ports = { { name = "surge", x = 0, z = -1, nx = 0, nz = -1, loop = "pri" } },
-                desc = "holds the primary at 15.5 MPa with its heaters (0.8 kW): the coolant runs at 300 °C without boiling · without one it boils at 100 °C" },
+                ports = { { name = "surge", x = 0, z = -1, nx = 0, nz = -1, loop = "pri" },
+                          { name = "makeup", x = 0.5, z = 0, nx = 1, nz = 0, loop = "mk", fluid = true, role = "primary", bore = "DN25" } },
+                desc = "holds the primary at 15.5 MPa with its heaters (0.8 kW): the coolant runs at 300 °C without boiling · without one it boils at 100 °C · its DN25 makeup nozzle (+X) takes water from a charging pump" },
   steamGen = { label = "Steam Generator", section = "NUCLEAR", snap = "block", box = B(-0.75, 0.75, 0, 3.8, -1, 1),
                 mats = { "steel" }, vol = 4.2, fill = "solid", mass = { steel = 4.2 }, cost = 38000, tech = "ember", order = 22,
                 hx = { ua = 30 },
@@ -680,6 +818,8 @@ local function resolve(piece, mat)
     -- (S6) the reactor's components: the core's lattice, ports, the loops' gear
     nuclear = P.nuclear, ports = P.ports, pipe = P.pipe, pump = P.pump, press = P.press, hx = P.hx, turbine = P.turbine,
     reject = P.reject, console = P.console, rad = P.rad, tech = P.tech,
+    -- (S7) the fluid network's pieces; an equalise valve
+    fl = P.fl, eqv = P.eqv,
     script = P.script or ((P.door or P.light or P.screen or P.switch or P.sign or P.emblem) and "kit_live" or nil),
     seals = (P.seals == "door" or P.seals == "ring" or P.seals == "y" or P.seals == "z") and P.seals or nil,
     u = M.u, matk = M.k, strength = M.strength,
@@ -693,6 +833,7 @@ local function resolve(piece, mat)
     d.shield = { k = M.k }
   end
   if d.light then d.power = { kind = "load", use = d.light.draw } end
+  if P.fl and P.fl.kind == "pump" then d.power = { kind = "aux", use = P.fl.kw } end
   if P.use then d.power = { kind = "load", use = P.use } end
   if P.power then d.power = P.power end
   return d

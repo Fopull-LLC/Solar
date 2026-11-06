@@ -149,13 +149,28 @@ local function run_of(e)
     local s = BG and BG.partServed and BG.partServed(e.sid, e.pl.pri.press.uid)
     run.press = run.press and s ~= false
   end
+  -- (S7) the primary's breaks (a pipe's part state `brk`: the share of its
+  -- bore opened; a guillotine break is both ends: twice the bore) and the
+  -- makeup fluid_net brings
+  local ST = ref("structures")
+  run.brkA, run.mk = 0, e.mk or 0
+  e.breaks = {}
+  for uid in pairs(e.pl.pri.parts or {}) do
+    local st = ST and ST.partState and ST.partState(e.sid, uid)
+    local sh = st and tonumber(st.brk) or 0
+    if sh > 0 then
+      local R = RX()
+      run.brkA = run.brkA + 2 * sh * ((R and R.PIPE_A) or 0.00745)
+      e.breaks[#e.breaks + 1] = { uid = uid, share = sh }
+    end
+  end
   return run
 end
 local function run_sig(run)
   local t = {}
   for uid, on in pairs(run.pumps) do t[#t + 1] = tostring(uid) .. (on and "+" or "-") end
   table.sort(t)
-  return table.concat(t, ",") .. (run.press and "P" or "p") .. (run.tower and "T" or "t") .. (run.turbine and "G" or "g")
+  return table.concat(t, ",") .. (run.press and "P" or "p") .. (run.tower and "T" or "t") .. (run.turbine and "G" or "g") .. string.format("B%.6f", run.brkA or 0)
 end
 local function rebuild_model(e, why)
   local R = RX()
@@ -281,6 +296,53 @@ function radOf(sid, uid)
   local tot = rad * share + (e.rel or 0)
   if tot <= 0 then return 0, 0 end
   return tot, 1
+end
+
+-- ── (S7) the primary as a fluid system (fluid_net asks) ─────────────────────
+-- The plant whose pressuriser is part uid: → { inv (0..1), mass (kg of water
+-- full), p (Pa), drain (kg/s boiled off and lost at a break) } | nil
+function primaryOf(sid, uid)
+  for _, e in pairs(PL) do
+    if e.sid == sid and e.pl and e.pl.pri.press and e.pl.pri.press.uid == uid and e.M then
+      local R = RX()
+      local o = e.o or {}
+      local M = e.M
+      local inv = e.S.y[R.IDX.inv]
+      local p
+      if M.broken then p = 101325 + 740 * 9.81 * 1.0
+      elseif M.tsat >= 600 then p = 15.5e6
+      else
+        local F = ref("fluids")
+        p = math.max(101325, F and F.psatWater and F.psatWater(o.Tp or 300) or 101325)
+      end
+      local boil = M.broken and (o.Qboil or 0) / R.HFG_REAL or (o.Qboil or 0) / (R.RX.hfg * math.max(M.Mp, 1)) * (M.Mw or 0)
+      return { inv = inv, mass = M.Mw or 1000, p = p, drain = (o.brk or 0) + boil, key = e.key }
+    end
+  end
+  return nil
+end
+function makeupTo(sid, uid, q)
+  for _, e in pairs(PL) do
+    if e.sid == sid and e.pl and e.pl.pri.press and e.pl.pri.press.uid == uid then
+      e.mk = q
+      if e.M then e.M.mk = q end
+    end
+  end
+end
+-- Break a pipe of a primary open (share of its bore: 1 = a guillotine break),
+-- or weld it (0). → true
+function breakPipe(sid, uid, share)
+  local ST = ref("structures")
+  if not (ST and ST.partState and ST.setPartState) then return false end
+  local st = ST.partState(sid, uid) or {}
+  local t = {}
+  for k, v in pairs(st) do t[k] = v end
+  t.brk = (share and share > 0) and share or nil
+  ST.setPartState(sid, uid, next(t) and t or nil)
+  local e = plantOfPart(sid, uid)
+  if e then e.next_t = 0; e.touched = now(); stepNow() end
+  if share and share > 0 then say(string.format("LOSS OF COOLANT: a pipe of the primary has broken (%.0f %% of its bore)", share * 100)) end
+  return true
 end
 
 -- ── the tick ────────────────────────────────────────────────────────────────
@@ -540,75 +602,154 @@ function consoleText(sid, uid)
 end
 
 -- ── the console's screen (CRT green on black, 1 Hz while crew is near) ─────
+-- (S7 polish: readable at 1.5 m and in a screenshot.) Four PAGES of at
+-- most five short lines in 52 px phosphor mono (56 mm on the 0.62 m
+-- screen; ≥ 13 px in a 720p picture from 1.5 m), a 44 px header naming the
+-- page, the annunciator (26 px) and the 24 h trend always under them: CORE
+-- (k, criticality, power, rods), POISONS (xenon, samarium, burnup, the
+-- restart forecast), LOOPS (fuel, primary, inventory, secondary, condenser)
+-- and POWER (turbine, net, dose, LIMITED BY). The page turns every PAGE_S
+-- s, or from the menu.
 local SW, SH = 1024, 576
 local F_MONO, F_LABEL = "fonts/SolarMono.ttf", "fonts/SolarLabel.ttf"
-local GREEN, AMBER, RED, DIM = { 0.45, 1.0, 0.55 }, { 1.0, 0.75, 0.25 }, { 1.0, 0.32, 0.25 }, { 0.20, 0.45, 0.25 }
+local GREEN, AMBER, RED, DIM = { 0.55, 1.0, 0.62 }, { 1.0, 0.78, 0.28 }, { 1.0, 0.36, 0.28 }, { 0.22, 0.50, 0.28 }
+PAGE_S = 6
+PAGE_NAMES = { "CORE", "POISONS", "LOOPS", "POWER" }
+CONSOLE_FONT = 52
+-- wrap `t` to lines of at most n characters
+local function wrap(t, n)
+  local out, line = {}, ""
+  for w in tostring(t):gmatch("%S+") do
+    if #line == 0 then line = w elseif #line + 1 + #w <= n then line = line .. " " .. w else out[#out + 1] = line; line = w end
+  end
+  if #line > 0 then out[#out + 1] = line end
+  return out
+end
+-- The console's pages for plant e: → { { title, lines = { { text, level } } } × 3 }, alarms, trend
+function consolePages(e)
+  local R = RX()
+  if not (R and e and e.M) then return { { title = "NO PLANT", lines = { { "no Reactor Vessel Base", 1 } } } }, {}, {} end
+  local M, S, o = e.M, e.S, e.o or R.derive(e.M, e.S, e.S.y, nil, {})
+  local pages = {}
+  local function page_(t) local P = { title = t, lines = {} }; pages[#pages + 1] = P; return function(s, lv) P.lines[#P.lines + 1] = { s, lv or 0 } end end
+  local per = (o.P or 0) > 1e-8 and R.period(M, S, S.y) or nil
+  local state = (o.k or 0) > 1.0005 and "SUPERCRITICAL" or ((o.k or 0) > 0.9995 and "CRITICAL" or "SUBCRITICAL")
+  local A = page_("CORE")
+  A(string.format("k %.5f %+.0f pcm", o.k or 0, (o.rho or 0) * 1e5), (per and per > 0 and per < 30) and 2 or 0)
+  A(string.format("%s %s", state, per and (math.abs(per) < 1e5 and string.format("T %.0f s", per)) or ""), (per and per > 0 and per < 30) and 2 or 0)
+  A(string.format("POWER %5.1f %%", (o.P or 0) * 100))
+  A(string.format("HEAT  %s th", kw(o.Qcore)))
+  A(string.format("RODS %d %%  SDM %.1f %%", math.floor((o.x or 0) * 100 + 0.5), R.shutdownMargin(M) * 100), R.shutdownMargin(M) < 0.02 and 2 or 0)
+  local h = e.hist
+  local tr = ""
+  if #h >= 2 then local d = (h[#h][3] or 0) - (h[math.max(1, #h - 6)][3] or 0); tr = (d > 1e-4) and " UP" or ((d < -1e-4) and " DN" or "") end
+  local X = page_("POISONS")
+  X(string.format("XENON  -%.2f %%%s", R.xenonWorth(M, S.y) * 100, tr))
+  X(string.format("Sm     -%.2f %%", R.samariumWorth(M, S.y) * 100))
+  X(string.format("BURNUP %.2f %% FIMA", R.burnup(M) * 100))
+  local cl = ref("crew")
+  local fore = cl and cl.bestPerk and cl.roster and cl.bestPerk(cl.roster(), "xe_forecast")
+  if (S.scram or (o.P or 0) < 0.01) and fore then
+    local hr = R.xenonForecast(M, S, S.y)
+    X(hr and (hr == 0 and "RESTART: now" or string.format("RESTART in ~%d h", hr)) or "RESTART: not in 4 d", hr == 0 and 0 or 1)
+  end
+  local B = page_("LOOPS")
+  B(string.format("FUEL    %4.0f K", o.Tf or 0), (o.Tf or 0) > 1150 and 2 or 0)
+  B(string.format("PRIMARY %4.0f K %.1f", o.Tp or 0, o.mpe or 0), (o.Tp or 0) > M.tsat - 25 and 2 or 0)
+  B(M.broken and "BOILS 373 K BROKEN" or string.format("BOILS   %4.0f K", M.tsat), M.broken and 2 or 0)
+  B(string.format("INVENTORY %3.0f %%%s", 100 * (o.inv or 0), (o.brk or 0) > 0.05 and string.format(" -%.0f", o.brk) or ((o.mk or 0) > 1e-3 and string.format(" +%.1f", o.mk) or "")),
+    (o.inv or 1) < 0.6 and 2 or ((o.brk or 0) > 0 and 1 or 0))
+  B(string.format("STEAM %3.0f K COND %3.0f", o.Ts or 0, o.Tk or 0), (o.Tk or 0) > 420 and 1 or 0)
+  local C = page_("POWER")
+  local aux = 0
+  for _, v in pairs(e.aux or {}) do aux = aux + v end
+  local eff = (o.Qcore or 0) > 1 and (o.Pe or 0) / o.Qcore or 0
+  C(string.format("TURBINE %s", kw(o.Pe)), (M.turb and not M.turb_on) and 1 or 0)
+  C(string.format("NET %.1f kW  %.0f %%", (o.Pe or 0) / 1000 - aux, eff * 100))
+  local rad, share = R.radOf(M, o)
+  local dose = rad * share + (e.rel or 0)
+  C(string.format("DOSE 5m %.1f %%/h", dose * 100), dose > 1 and 1 or 0)
+  local lim = wrap("LIMIT " .. tostring(R.limitedBy(M, S, o)), 26)
+  for i = 1, math.min(2, #lim) do C(lim[i], 1) end
+  return pages, R.alarms(M, S, o), h
+end
+CONSOLE_DEBUG = nil
 local function paint_console(c)
   if not (image and image.new and valid(c.screen)) then return end
   local e = plantOfPart(c.sid, c.uid)
   local pg = page(e)
+  local pages, alarms, trend = consolePages(e)
+  local n = #pages
+  local k = c.page or (math.floor(now() / PAGE_S) % n + 1)
+  if k > n then k = 1 end
+  local P = pages[k]
   local img = c.img
   if not img then
-    local ok, im = pcall(image.new, SW, SH, 0.01, 0.03, 0.015, 1)
+    local ok, im = pcall(image.new, SW, SH, 0.005, 0.02, 0.01, 1)
     if not ok or not im then return end
     img, c.img = im, im
   end
-  pcall(img.fill, img, 0, 0, SW, SH, 0.01, 0.03, 0.015, 1)
-  -- the bezel line and the header
-  pcall(img.fill, img, 0, 0, SW, 54, 0.02, 0.08, 0.04, 1)
-  pcall(img.fill, img, 0, 54, SW, 2, DIM[1], DIM[2], DIM[3], 1)
-  local hcol = (pg.alarms and #pg.alarms > 0 and pg.alarms[1][2] == 2) and RED or GREEN
-  pcall(img.text, img, 18, 12, pg.title, 30, hcol[1], hcol[2], hcol[3], 1, "left", F_LABEL)
-  local t = { pg.title }
-  local y = 66
-  for _, l in ipairs(pg.lines) do
-    if y > SH - 196 then break end
+  pcall(img.fill, img, 0, 0, SW, SH, 0.005, 0.02, 0.01, 1)
+  -- the header: the plant, its mode, the page
+  local mode = pg.title:match("· (.+)$") or ""
+  pcall(img.fill, img, 0, 0, SW, 64, 0.02, 0.09, 0.045, 1)
+  pcall(img.fill, img, 0, 64, SW, 3, DIM[1], DIM[2], DIM[3], 1)
+  local hcol = (alarms and #alarms > 0 and alarms[1][2] == 2) and RED or GREEN
+  pcall(img.text, img, 22, 8, string.format("%s  %s", P.title, mode), 44, hcol[1], hcol[2], hcol[3], 1, "left", F_LABEL)
+  pcall(img.text, img, SW - 22, 12, string.format("%d/%d", k, n), 38, DIM[1] * 2.4, DIM[2] * 1.9, DIM[3] * 2.4, 1, "right", F_MONO)
+  local t = { pg.title, "PAGE " .. P.title }
+  local y = 74
+  for i, l in ipairs(P.lines) do
+    if i > 5 then break end
     local col = l[2] == 2 and RED or (l[2] == 1 and AMBER or GREEN)
-    pcall(img.text, img, 18, y, l[1], 20, col[1], col[2], col[3], 1, "left", F_MONO)
+    pcall(img.text, img, 22, y, l[1], CONSOLE_FONT, col[1], col[2], col[3], 1, "left", F_MONO)
     t[#t + 1] = l[1]
-    y = y + 26
+    y = y + 60
   end
-
-  -- the annunciator: a band of tiles over the trend, two rows of three
+  -- the annunciator: two rows of three tiles over the trend
   -- (the desk's lamp strip stands in front of the screen's bottom 64 px: nothing drawn there)
-  local ax0, ay0 = 18, SH - 178
-  local ax, ay = ax0, ay0
-  for i, a in ipairs(pg.alarms or {}) do
-    if i > 6 then break end
-    ax, ay = ax0 + ((i - 1) % 3) * 330, ay0 + math.floor((i - 1) / 3) * 32
+  local ax0, ay0 = 18, 378
+  for i, a in ipairs(alarms or {}) do
+    if i > 4 then break end
+    local ax, ay = ax0 + ((i - 1) % 2) * 498, ay0 + math.floor((i - 1) / 2) * 40
     local col = a[2] == 2 and RED or AMBER
-    pcall(img.fill, img, ax, ay, 322, 28, col[1] * 0.25, col[2] * 0.25, col[3] * 0.25, 1)
-    pcall(img.text, img, ax + 6, ay + 4, a[1]:sub(1, 36), 16, col[1], col[2], col[3], 1, "left", F_MONO)
+    pcall(img.fill, img, ax, ay, 490, 36, col[1] * 0.3, col[2] * 0.3, col[3] * 0.3, 1)
+    pcall(img.text, img, ax + 8, ay + 3, a[1]:sub(1, 28), 28, col[1], col[2], col[3], 1, "left", F_MONO)
     t[#t + 1] = "ALARM " .. a[1]
-
   end
-  if #(pg.alarms or {}) == 0 then pcall(img.text, img, ax + 6, ay + 4, "NO ALARMS", 16, DIM[1] * 2, DIM[2] * 1.6, DIM[3] * 2, 1, "left", F_MONO) end
-  -- the 24 h trend: power (green) and xenon's worth (amber), along the bottom
-  local gx, gy, gw, gh = 18, SH - 110, SW - 36, 44
-  pcall(img.fill, img, gx, gy, gw, gh, 0.02, 0.06, 0.03, 1)
-  pcall(img.text, img, gx + 4, gy + 2, "24 h · POWER", 12, GREEN[1], GREEN[2], GREEN[3], 0.8, "left", F_MONO)
-  pcall(img.text, img, gx + 150, gy + 2, "XENON", 12, AMBER[1], AMBER[2], AMBER[3], 0.8, "left", F_MONO)
-  local h = pg.trend or {}
-  local n = #h
-  if n >= 2 then
+  if #(alarms or {}) == 0 then pcall(img.text, img, ax0 + 8, ay0 + 3, "NO ALARMS", 28, DIM[1] * 2, DIM[2] * 1.6, DIM[3] * 2, 1, "left", F_MONO) end
+  -- the 24 h trend: power (green) and xenon's worth (amber)
+  local gx, gy, gw, gh = 18, 462, SW - 36, 46
+  pcall(img.fill, img, gx, gy, gw, gh, 0.02, 0.07, 0.035, 1)
+  pcall(img.text, img, gx + 6, gy + 2, "24 h POWER", 16, GREEN[1], GREEN[2], GREEN[3], 0.9, "left", F_MONO)
+  pcall(img.text, img, gx + 170, gy + 2, "XENON", 16, AMBER[1], AMBER[2], AMBER[3], 0.9, "left", F_MONO)
+  local h = trend or {}
+  if #h >= 2 then
     local xmax = 0.001
     for _, s in ipairs(h) do if (s[3] or 0) > xmax then xmax = s[3] end end
     for i, s in ipairs(h) do
-      local x = gx + math.floor((i - 1) / math.max(1, HIST_N - 1) * (gw - 3))
-      local py = gy + gh - 3 - math.floor(math.min(1.2, s[2] or 0) / 1.2 * (gh - 16))
-      local xy = gy + gh - 3 - math.floor((s[3] or 0) / xmax * (gh - 16))
-      pcall(img.fill, img, x, py, 3, 3, GREEN[1], GREEN[2], GREEN[3], 1)
-      pcall(img.fill, img, x, xy, 3, 3, AMBER[1], AMBER[2], AMBER[3], 1)
+      local x = gx + math.floor((i - 1) / math.max(1, HIST_N - 1) * (gw - 4))
+      local py = gy + gh - 4 - math.floor(math.min(1.2, s[2] or 0) / 1.2 * (gh - 24))
+      local xy = gy + gh - 4 - math.floor((s[3] or 0) / xmax * (gh - 24))
+      pcall(img.fill, img, x, py, 4, 4, GREEN[1], GREEN[2], GREEN[3], 1)
+      pcall(img.fill, img, x, xy, 4, 4, AMBER[1], AMBER[2], AMBER[3], 1)
     end
   end
-  -- scan lines: a CRT's
-  -- (no scan-line pass: 144 blends a repaint cost more than the page)
+  -- (every page's lines in the text the probes read)
+  for j, Q in ipairs(pages) do if j ~= k then for _, l in ipairs(Q.lines) do t[#t + 1] = l[1] end end end
   c.text = table.concat(t, " | ")
+  c.shown = k
   local ok, tex = pcall(img.texture, img)
   if ok and tex and c.tex ~= tex then
     c.tex = tex
     pcall(c.screen.setMaterial, c.screen, { texture = tex, unlit = true, color = { 1, 1, 1 } })
   end
+end
+function consolePage(sid, uid, k)
+  local c = CONS[keyOf(sid, uid)]
+  if not c then return nil end
+  if k ~= nil then if k == 0 then c.page = nil else c.page = k end; paint_console(c) end
+  return c.shown, c.page
 end
 
 -- structures' hooks (the console piece names this script)
@@ -682,6 +823,11 @@ local function provider(t, ctx)
       out[#out + 1] = { id = "rx_in", type = "action", label = "Rods in 5 % (manual)", group = "Reactor", keep = true,
         act = function() return manualRods(key, 0.05) end }
     end
+    if d.console then
+      out[#out + 1] = { id = "rx_page", type = "action", label = "Console: next page", group = "Reactor", keep = true,
+        hint = function() local k = consolePage(sid, uid); return k and (PAGE_NAMES[k] or "") or nil end,
+        act = function() local k = consolePage(sid, uid) or 1; consolePage(sid, uid, k % #PAGE_NAMES + 1); return true end }
+    end
     out[#out + 1] = { id = "rx_prot", type = "toggle", label = "Protection (automatic trips)", group = "Reactor", keep = true,
       on = function() return e.S.prot ~= false end, act = function(want) setProtection(key, want) end }
     out[#out + 1] = { id = "rx_cool", type = "toggle", label = "Cool down (steam dump open)", group = "Reactor", keep = true,
@@ -695,6 +841,26 @@ local function provider(t, ctx)
     out[#out + 1] = { id = "rx_pump", type = "toggle", label = "Pump running", group = "Pump", keep = true,
       on = function() return pumpOn(sid, uid) end, act = function(want) setPump(sid, uid, want) end,
       hint = function() local BG = ref("base_grid"); return (BG and BG.partServed and BG.partServed(sid, uid) == false) and "no power" or nil end }
+  end
+  -- (S7) a primary pipe: the break (a cut for a test, a LOCA) and the weld
+  if d.pipe and e.pl.pri.parts and e.pl.pri.parts[uid] then
+    local stp = ST.partState and ST.partState(sid, uid)
+    local sh = stp and tonumber(stp.brk) or 0
+    if sh > 0 then
+      out[#out + 1] = { id = "rx_brk", type = "info", label = "BREAK", group = "Coolant Pipe",
+        value = function() local o = e.o or {}; return string.format("%.0f %% of the bore open · losing %.1f kg/s · inventory %.0f %%", sh * 100, o.brk or 0, 100 * (o.inv or 0)) end }
+      out[#out + 1] = { id = "rx_weld", type = "action", group = "Coolant Pipe", label = "Weld the break",
+        hint = "Engineer · 30 s",
+        enabled = function() return engineer() == true end, why = function() return (not engineer()) and "only an Engineer welds a primary pipe" or nil end,
+        act = function() return engineer() == true end,
+        job = { secs = 30, label = "Welding the break", check = function() return engineer() == true, "only an Engineer" end,
+          done = function() breakPipe(sid, uid, 0); return true end } }
+    else
+      out[#out + 1] = { id = "rx_cut", type = "action", group = "Coolant Pipe", label = "Cut it open (a loss-of-coolant test)",
+        hint = "8 s · it blows the loop down",
+        act = function() return true end,
+        job = { secs = 8, label = "Cutting the coolant pipe", done = function() breakPipe(sid, uid, 1); return true end } }
+    end
   end
   if d.turbine then
     out[#out + 1] = { id = "rx_turbinfo", type = "info", label = "Generator", group = "Turbine",
@@ -782,6 +948,50 @@ local function framed(rec)
   return function(lx, ly, lz)
     return rec.x + rx * lx + ux * ly + fx * lz, rec.y + ry * lx + uy * ly + fy * lz, rec.z + rz * lx + uz * ly + fz * lz
   end, { x = ux, y = uy, z = uz }, { x = fx, y = fy, z = fz }, { x = rx, y = ry, z = rz }
+end
+-- (S7) the FLUIDS overlay's part (fluid_net.drawOverlay calls it with its
+-- label drawer): each plant's primary as a fluid system, its inventory and
+-- pressure at the vessel, and every BREAK ringed red on its pipe with what it
+-- loses. Drawn poses: this frame's body read.
+drawnFluids = { breaks = 0, plants = 0 }
+function drawFluids(label)
+  drawnFluids = { breaks = 0, plants = 0 }
+  local ST = ref("structures")
+  if not (ST and ST.frame and space and space.body) then return end
+  local R = RX()
+  for _, e in pairs(PL) do
+    local rec = ST.get(e.sid)
+    local b = rec and space.body(rec.b)
+    if b and e.M and e.o then
+      local W, U = framed(rec)
+      local function Wb(x, y, z) local bx, by, bz = W(x, y, z); return b.x + bx, b.y + by, b.z + bz end
+      local o, M = e.o, e.M
+      for _, br in ipairs(e.breaks or {}) do
+        local part = nil
+        for _, q in ipairs(rec.bp) do if q.uid == br.uid then part = q end end
+        if part then
+          local bx, by, bz = Wb(part.x or 0, (part.y or 0) + (R and R.PIPE_Y or 0.6), part.z or 0)
+          if draw and draw.ring then
+            draw.ring(bx, by, bz, U.x, U.y, U.z, 0.55, 1.0, 0.25, 0.2, 1.0)
+            draw.ring(bx, by, bz, U.x, U.y, U.z, 0.75, 1.0, 0.25, 0.2, 0.7)
+          end
+          local d = defs(part.id)
+          label(bx, by + 0.9, bz, string.format("BREAK · %s", d and d.label or "pipe"),
+            string.format("%.0f %% of the bore · %.1f kg/s of coolant out", br.share * 100, o.brk or 0), { 1.0, 0.32, 0.25 })
+          drawnFluids.breaks = drawnFluids.breaks + 1
+        end
+      end
+      local inv = o.inv or 0
+      local x, y, z = Wb(e.pl.vx, e.pl.vy + 3.6, e.pl.vz)
+      local p = M.broken and "~0.1 MPa (BROKEN)" or (M.tsat >= 600 and "15.5 MPa" or "unpressurised")
+      local col = (M.broken or inv < 0.6) and { 1.0, 0.32, 0.25 } or { 0.35, 0.95, 0.95 }
+      label(x, y, z, string.format("PRIMARY COOLANT · %s", p),
+        string.format("inventory %.0f %% of %.0f kg%s%s", inv * 100, M.Mw or 0, (o.brk or 0) > 0 and string.format(" · LOSING %.1f kg/s", o.brk) or "",
+          (o.mk or 0) > 1e-4 and string.format(" · makeup %.2f kg/s", o.mk) or ""), col)
+      drawnFluids.plants = drawnFluids.plants + 1
+
+    end
+  end
 end
 -- the dose field's rays: per direction, the walls it crosses (entry fraction, k)
 local function seg_entry(ax, ay, az, bx, by, bz, box)

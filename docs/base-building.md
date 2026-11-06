@@ -1370,8 +1370,9 @@ the pieces, holds air only when it is truly closed, and the crew breathe it.
   | Air Tank Rack | 60 m³ of air at 200 bar on a regulator: opens under 0.97 atm, closes at 1 atm, 0.25 m³/s; refilled from its menu ($4 a m³) | none (a valve) |
 
   The machines run while their structure's base grid is up (a real grid not
-  short with its battery flat), their draw a grid load. The Oxygen Generator
-  has no water feed yet: it runs as if fed (fluids are S7).
+  short with its battery flat), their draw a grid load. Since S7 the Oxygen
+  Generator makes O2 only while its 20 L water cell has water, piped to its
+  back from the fluid network (§17).
 - **The closed form.** Between events every rate is constant, so the state is
   a straight line (venting the exponential). `advance(st, M, dt)` steps to the
   next event (O2 at 21 % or 105 %, the CO2 clear, the O2 gone, the regulator
@@ -1405,7 +1406,10 @@ forces it" and it stays shut. Its menu's **Force it open (vents Room 2)**
 frees it until it shuts again, and the room vents with the alarm. (Without
 this, walking past a door to the outside on a moon emptied the hab: the
 probe found it.) On a world whose air you can breathe, a room and the
-outside are at about the same pressure and doors open as before.
+outside are at about the same pressure and doors open as before. Since S7
+its menu also opens the door's own equalising valve (the slow, safe way),
+and forcing it is a timed job with a warning, a gust, a pull and a damaged
+seal (§17).
 
 ### The airlock
 
@@ -1419,7 +1423,9 @@ outside are at about the same pressure and doors open as before.
   between the chamber and the hab behind it (depressurising pumps the air
   back into the hab; repressurising draws it from the room ahead), with the
   pump's hiss looping and a seal hiss and chime at the end. A 2 × 2 m chamber
-  takes about 25 s. Its menu row reads "depressurising · 0.42 atm".
+  takes about 25 s. Its menu row reads "depressurising · 0.42 atm". (S7: the
+  pump now runs on the base grid, into an Airlock Receiver when there is one,
+  and the chamber vents when it can't: §17.)
 
 ### The ROOMS overlay
 
@@ -1832,3 +1838,251 @@ screen's LOSSES line, the station card's LOSS line) are in kW.
   that sets them bigger, in light ink on a near-black enamel; the plate
   narrows to its words (its Mesh and Face scaled along their width, never
   under `fit`). "HAB 1 · CREW 2" on a plate is ~0.13 m capitals.
+
+## 17. Sandbox S7: fluids, and pressure you can work with
+
+The plan is `work/sandbox/PLAN.md` §3.3, §3.6 and §8.3 (S7). Water, coolant,
+fuel and gases run in pipes between tanks, by pressure difference, through
+pumps, valves and regulators. The O2 Generator needs water, a reactor's loop
+has an inventory a break can lose, and the doors of §14 can be equalised,
+cycled without losing the air, or forced, at a price. Ty asked about
+pressurisation chambers as a mechanic: this is that.
+
+### The network (`scripts/fluids.lua`, pure)
+
+- **What flows**, by real density and molar mass: water (998 kg/m³),
+  coolant (demineralised borated water, 998), fuel (RP-1, 810; a fuel unit
+  is 10 kg), oxygen, nitrogen and hydrogen (ideal gases at 293 K). A network
+  carries the one substance its tanks hold. Two in one network is refused
+  and named ("it joins fuel and water: nothing flows until they're parted").
+- **Found** by union-find over the pieces' ports when the records change
+  (debounced 0.5 s, never in a frame). Ports that meet (the S6 port snap:
+  coincident, facing) are one node.
+  - Each fluid piece is an element between its nodes, or a node of its own.
+  - A piece without `fl` gives the network its ports flagged `fluid`, by
+    their `role`: the O2 Generator's water nozzle (a consumer) and its
+    hydrogen nozzle (kept apart, by its `loop` tag), and the pressuriser's
+    makeup nozzle (a reactor's primary).
+  - Ports carry a `bore`. The reactor's DN100 coolant nozzles meet only
+    DN100, the process line only DN25 (`kit_snap.boreOf`).
+- **The elements:**
+
+  | Element | Law |
+  |---|---|
+  | pipe, elbow, tee, riser | a conductance g = q_r / Δp_r: Darcy (f 0.022) at 2 m/s of water for its bore and length, linearised there; gases carry 1 % of the mass for the same drop |
+  | pump | q = g (p_in − p_out + H0) on a straight curve from its free delivery q0 to its shut-off head H0, in series with its casing; never backwards: it STALLS against more than H0; off, it blocks |
+  | valve | shut: blocks; open: a conductance |
+  | check valve | a conductance that never flows backwards |
+  | regulator | THROTTLING (its outlet pinned at its set pressure, the flow an unknown) while its inlet is over the set; WIDE OPEN under it; SHUT while its outlet is over it |
+  | gauge | an inline fitting that reads its node |
+  | room outlet, vent | into the room it stands in (at the room's pressure; shut while the room is at 1 atm), or to the outside |
+
+- **The nodes:** a liquid tank holds x kg under a nitrogen blanket, so its
+  outlet is at 1 atm + ρgh with h = x / ρA. A gas bottle rack is at x·R·T /
+  (M·V). A consumer is a small tank the scene drains. Liquids are solved in
+  piezometric pressure (p + ρgy), so a pump lifts water up a riser and a tank
+  a storey up feeds the floor below. Readouts show the static pressure.
+- **The closed form (E's rule).** For a given set of modes (each tank normal,
+  full, starved or dry; each pump running or stalled; each check valve open
+  or shut; each regulator throttling, open or shut), every flow is affine in
+  the tanks' contents, so x' = A·x + b exactly.
+  - `advance` takes that ODE's exact solution, the matrix exponential of
+    [[A, b], [0, 0]] by scaling and squaring.
+  - It samples every mode's guard along the trajectory, bisects the first
+    crossing to 1e-12 of the step, switches that mode and carries on.
+  - One call of any dt equals any number of small calls. `smoke_fluids`
+    checks a day in one step against 86,400 one-second steps, and 30 days
+    across a regulator's change against thirty one-day steps, to 1e-6.
+- **Limited by** (`limitedBy`): a starved consumer first, with why ("the
+  O2 Generator is starved (0.000 of 0.000045 kg/s): the Water Tank 2 m³ is
+  empty"); else a stalled pump ("the pump can't beat 154.0 bar (its shut-off
+  head is 6.0)"); else the pipe run dropping the most bar.
+
+### The scene (`scripts/fluid_net.lua`)
+
+- Each structure's networks are stepped at 5 Hz on the agency clock, and at
+  once on a change. A load catches them up in hour-long pieces, with the
+  rooms' air brought to the same moment between pieces, so a generator's
+  water cell is refilled as it would have been.
+- **The couplings:**
+  - **The O2 Generator** (§14) makes O2 only while its 20 L cell has water
+    (`room_air.advance` has a `water_out` event). Each atm·m³ of O2 takes
+    1.608 kg of water and makes 0.180 kg of hydrogen (2 H2O → 2 H2 + O2, by
+    mass). The network fills the cell (`fillCell`) by what flowed in. The
+    hydrogen goes to the bottles piped to its H2 nozzle, or is vented.
+  - **A reactor's primary** (`reactor_plant.primaryOf` / `makeupTo`) is a
+    node at the primary's pressure, holding its inventory in kg and drained
+    by what it boils off and loses at a break. What flows in is the makeup.
+  - **A Room Gas Outlet** brings O2 or N2 into its room (`room_air.setInject`,
+    with a `full` event at 1 atm).
+  - **The pumps** are base-grid loads while on (`gridAux`). A pump on a grid
+    that is short and flat stops.
+  - **A Fuel Hose Stand** fills a craft parked within 30 m (not one held on
+    a stand: the stand fuels that).
+- **The menus:** a tank's level, kg and outlet pressure, and "Fill from the
+  base stores" (water $0.6/kg, coolant $4, fuel $1.1). A bottle rack's charge
+  and its recharge (the H2 rack is emptied). A pump's or valve's switch and
+  its flow. A regulator's set ±1 bar. A gauge's reading. Each piece's
+  network and its LIMITED BY line.
+- **The FLUIDS overlay** (F7 with the kit open; F4 is the camera's
+  cinematic mode), `fluid_net.drawOverlay` in `lateUpdate` from this frame's
+  body read:
+  - each pipe in its substance's colour, amber where a valve is shut or a
+    pump is off or stalled;
+  - chevrons the way it flows, more of them the more it carries;
+  - each tank's level, kg and pressure, each pump's flow and its in and out
+    pressures, each gauge, a consumer's cell, and STARVED in red;
+  - each network's card with LIMITED BY;
+  - and from `reactor_plant.drawFluids`, each plant's primary as a fluid
+    system ("PRIMARY COOLANT · 15.5 MPa · inventory 100 % of 1661 kg") and
+    every BREAK ringed red on its pipe with what it loses.
+- **Save:** `fl.<sid>` = { a, x = { { u, x } … } } (each tank's and bottle's
+  contents, by part, as a list). A pump's off, a valve's shut and a
+  regulator's set are part states.
+
+### The FLUID pieces (`parts_kit` FLUID, `tools/gen_kit_fluids.py`)
+
+| Piece | Size | Mass | Price | What it is |
+|---|---|---|---|---|
+| Process Pipe 2 m / 1 m, Elbow, Tee | DN25 (33.7 mm) | 4–9 kg | $55–90 | stainless on stands, ports at 0.6 m |
+| Pipe Riser (one storey) | 3.06 m tall | 12 kg | $140 | its low port at this floor's pipe height, its high port 2.4 m up |
+| Water / Coolant / Fuel Tank 2 m³ | Ø1.2 × 2.3 m | 0.42 t | $2,200–2,600 | under a nitrogen blanket, a level glass; filled from the stores |
+| Oxygen / Nitrogen / Hydrogen Bottle Rack | 1.2 × 1.8 m | 0.24–0.26 t | $1,500–2,100 | three 50 L cylinders to 200 bar (39 kg O2, 34 kg N2, 2.5 kg H2); the H2 rack comes empty |
+| Process Pump | 0.6 × 0.9 × 1 m | 60 kg | $1,400 | 2 kg/s free, nothing past 6 bar, 0.75 kW |
+| Charging Pump | 0.9 × 1.1 × 1.5 m | 0.35 t | $9,800 | a triplex plunger pump to 18 MPa, 0.5 kg/s, 4 kW: the only pump that beats a pressurised primary |
+| Gate Valve, Check Valve, Pressure Regulator, Pressure Gauge | inline | 3–6 kg | $80–260 | the regulator set at 5 bar |
+| Room Gas Outlet, Vent Stack | | 10–15 kg | $150–180 | into the room it stands in / to the outside |
+| Fuel Hose Stand | 0.8 × 1.6 m | 90 kg | $1,600 | a reel of hose and a 50 L day tank |
+
+The Pressuriser gains a DN25 makeup nozzle on its +X (its model too). The O2
+Generator gains its water and H2 nozzles at its back.
+
+### The reactor's coolant, a fluid system (`reactor.lua`, `reactor_plant.lua`)
+
+S6's loops keep their thermal-hydraulics (`reactor.derive`, unchanged with
+no break and no makeup: `smoke_reactor` still passes all 59 checks). What S7
+adds is the coolant as a substance in the loop:
+
+- **Inventory in kg:** the primary's real water from its parts: the pipes'
+  DN100 bore, the vessel's plenum (0.6 m³), 0.019 m³ a fuel channel, 0.35 m³
+  a steam generator, the pressuriser's 1.0 m³, 0.05 m³ a pump, all at 740
+  kg/m³ (hot, 15.5 MPa). The fixture plant holds 1,661 kg. S6's boil-off
+  keeps its rating-scaled figure (`BOIL_S`) while the loop is whole; once
+  broken, what boils off is real water (2.26 MJ/kg against the real kg).
+- **A break** (a pipe's part state `brk`, the share of its bore; both ends
+  of a guillotine break flow):
+  - Over 1 cm² of bore it loses the pressuriser, so the primary boils at
+    373 K and the subcooling trip fires at once.
+  - The water leaves at two-phase critical flow while it is hot (10⁴
+    kg/m²·s), then drains (2,500 kg/m²·s).
+  - It drains what lies above the break. The pipes run at 0.6 m and the
+    core stands on the vessel base above them, so a pipe-level break drains
+    all but the 15 % in the lower plenum and uncovers the core (in ~10 s for
+    a guillotine break).
+  - Uncovered, the fuel heats on its decay heat. This 320 kW core, 12 h at
+    power, peaks at 1,210 K, just under the cladding's 1,300 K, cooled by
+    the steam and its own glow. A bigger or longer-run core, with more
+    decay heat, is damaged.
+  - A primary pipe's menu has "Cut it open (a loss-of-coolant test)" (8 s)
+    and, for an Engineer, "Weld the break" (30 s).
+- **Makeup** through the pressuriser's nozzle refills it, cut off as it
+  fills. A process pump stalls against 15.5 MPa, and a Charging Pump gets
+  in at 0.07 kg/s. After a break the same process pump injects ~2 kg/s, as
+  a low-pressure injection would. That keeps a 5 % break's core covered
+  (it drains 1.9 kg/s cold) but not a guillotine break's (37 kg/s): bigger
+  breaks want bigger injection.
+- The console's LOOPS page reads INVENTORY (with the break's kg/s) and
+  BROKEN. `smoke_fluids` measures the trip, the blowdown to the break's
+  level, the uncovered heat-up, and a small break kept covered by its
+  makeup.
+
+### The pressure mechanics (`scripts/room_air.lua`; §14's doors)
+
+- **Equalise valves.**
+  - Every door that isn't an airlock's has its own equalising valve:
+    0.1 m³/s per atm for a door, 0.5 for a Pressure Bulkhead, 0.4 for a
+    Pressure Hatch. Its menu opens it, and it shuts with the door.
+  - The **Equalise Valve** piece (LIFE, 0.25 m³/s per atm) is mounted on a
+    wall and joins the rooms either side of it (or the outside).
+  - Open, the two sides' pressures meet as e^(−k t), k = C (1/Va + 1/Vb), with
+    the gas leaving with its side's mix (`equalise`, exact).
+  - The door can open once the difference is under 0.1 atm: after
+    `equaliseTime` = ln(Δp/0.1) / k, which the menu shows ("~243 s").
+  - Between two networks a valve is a link, stepped after each network's
+    own closed form. To the outside it is a slow leak.
+- **Leaks and the regulator.** A network venting only through valves and
+  seal leaks that its regulators can match at 1 atm keeps them feeding: the
+  slow-leak closed form with its `full`, `feed_on` and `tank_empty` events.
+  A breach (an open door, a gap, a blown seal) trips their excess-flow
+  valves and they shut, so a door left open doesn't empty the racks.
+- **The airlock keeps its air.**
+  - Its pump draws the chamber at 0.5 m³/s at the chamber's own pressure:
+    p(t) = p0 e^(−S t / V). A bigger chamber takes longer; 9 m³ takes ~41 s
+    to 0.1 atm.
+  - The air goes into the chamber's **Airlock Receivers** (LIFE: 1.2 m³ to
+    20 bar, 24 atm·m³; in the chamber or the room behind it) while they have
+    room. With none, it goes back into the hab, as in S3.
+  - Under its 0.1 atm floor the rest is vented, so about 90 % is kept.
+  - The pump is a 2.5 kW load on the base grid while it runs.
+  - Coming back, the receiver bleeds back through its check valve (REC_C)
+    and the hab tops the chamber up through the chamber's valve (CYC_C).
+  - **No power, or the receivers full:** the cycle vents the chamber
+    through its vent valve, and the airlock says so ("airlock: NO POWER for
+    its pump: venting the chamber, its air is lost"; "the receiver is FULL").
+- **Forcing has consequences.**
+  - "Force it open" is a timed job with the menu's progress bar:
+    max(5 s, 3 s + 6 s per atm across it).
+  - Its first tick warns the crew in the room about to vent (VENTING IN
+    N s · Helmets on, the alarm).
+  - When it is through, the door opens. A VentBurst effect (`vfx/VentBurst`:
+    the blast, grit, the seal's flecks) leaves the high side, and the planet
+    carries it. Crew on foot within 8 m are pulled toward the opening, a
+    gentle 2.5 m/s per atm that fades over 0.8 s (`planet_walker.pull`).
+  - The seal is damaged by Δp (1 − its strength) (0.25…0.55): a door forced
+    once against 1 atm leaks. A Pressure Bulkhead's seal is 0.4 strong.
+  - The leak is SEAL_C × the damage (0.03 m³/s per atm at worst) while the
+    door is shut, named in the alarm.
+  - "Re-seat the seal" is a 24 s job, halved for an Engineer, times the
+    `repair_time` perk.
+- **A failing door.** A seal damaged past 60 % with 0.5 atm or more across
+  it fails. First comes the warning ("VENTING IN 5 s · the Door Wall's seal
+  is failing"), then it BLOWS (a breach of 1 m³/s per atm) with the gust,
+  until it is re-seated.
+- **Bulkheads and hatches:** the **Pressure Bulkhead** (WALL) and the
+  **Pressure Hatch Floor 2 × 2** (FLOOR). Each is a heavy door with its own
+  equalising valve and a stronger seal, under the same rules. They are
+  rooms' doors like any other, so they work on any structure. Stations wait
+  on interiors Stage 2 for walking inside a moving one.
+- **The suit rule.** Crew on foot with the helmet off (no sealed suit) don't
+  pass a door to low pressure (its far side under 0.5 atm). This holds even
+  forced, and inside an airlock its cycle to vacuum won't start. A SUIT
+  caption says "Helmet off: the far side of the Pressure Bulkhead is at 0.00
+  atm. Put your helmet on first."
+- **Save:** `air.<sid>` gains `cells` (the generators' water) and `recv` (the
+  receivers' air). A door's `seal`, `blown` and `eq` and a valve's `open`
+  are part states.
+
+### Tests and the probe
+
+- `luajit solar/tests/smoke_fluids.lua` (36): flow is conductance × Δp; the
+  pump's curve, its stall against 15.5 MPa, off blocks; a day in one step =
+  86,400; pumped dry at the same moment either way; a check valve, a valve;
+  the regulator holding 5 bar from 200, then wide open, 30 days one step = 30
+  one-day steps; electrolysis's ratios; the cell filled, then starved, the
+  limited-by line; the pieces into one network, the riser's lift, gravity
+  from upstairs, two substances refused, the bores; the LOCA (the inventory
+  from the parts, the trip, the blowdown to the break's level, the
+  uncovered heat-up, a 5 % break kept covered by 2 kg/s); a process pump
+  stalls at 15.5 MPa, the charging pump gets in, after the break the
+  process pump injects.
+- `luajit solar/tests/smoke_pressure.lua` (52): the slow leak with its
+  regulator (one step = many), a breach shutting it; the valve's closed form;
+  the door's equalising valve opening the door at the formula's time; an
+  Equalise Valve piece; the airlock into its receiver (90 % kept, the time
+  from its volume, back on the way in); vents with no power or a full
+  receiver; the suit rule (in the chamber and at a door); forcing (the
+  warning, the gust, the pull, the seal, the leak, the repair); a failing
+  seal; the generator's water.
+- `tools/perf/kitprobe.sh <engine> fluids` (`tools/perf/fluidsprobe_modes.lua`):
+  the whole of it in the engine. The numbers are in
+  `work/sandbox_s7/NOTES.md`; the pictures are `save/user/buildshots/f*.png`.

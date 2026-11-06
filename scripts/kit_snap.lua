@@ -118,7 +118,12 @@ end
 function portPose(p, pt)
   local dx, dz = prot(p.yaw, pt.x, pt.z)
   local nx, nz = prot(p.yaw, pt.nx, pt.nz)
-  return (p.x or 0) + dx, (p.y or 0) + PIPE_Y, (p.z or 0) + dz, nx, nz
+  return (p.x or 0) + dx, (p.y or 0) + (pt.y or PIPE_Y), (p.z or 0) + dz, nx, nz
+end
+-- (S7) a port's bore: the reactor's DN100 coolant nozzles meet only DN100,
+-- the fluid network's DN25 process line only DN25
+function boreOf(def, pt)
+  return pt.bore or ((def and def.fl) and (def.fl.bore or "DN25")) or (pt.fluid and "DN25") or "DN100"
 end
 -- Is there a port of `rec` at (x, y, z) facing (nx, nz)'s opposite (already joined)?
 local function port_taken(rec, defs, skipUid, x, y, z, nx, nz)
@@ -139,19 +144,21 @@ end
 function portSnap(q, fr, part, hd, hx, hy, hz)
   local def, rec = q.def, q.hit.rec
   local best, bd = nil, 1.6
+  local n = #def.ports
+  local k = (math.floor((q.yawOff or 0) / QUARTER + 0.5) % n) + 1
+  local hp = def.ports[k]
+  local hb = boreOf(def, hp)
   for _, pt in ipairs(hd.ports) do
     local x, y, z, nx, nz = portPose(part, pt)
+    if boreOf(hd, pt) ~= hb then x = 1e9 end
     local d = math.sqrt((x - hx) ^ 2 + (y - hy) ^ 2 + (z - hz) ^ 2)
     if d < bd and not port_taken(rec, q.defs, part.uid, x, y, z, nx, nz) then best, bd = { x = x, y = y, z = z, nx = nx, nz = nz, name = pt.name }, d end
   end
   if not best then return nil end
-  local n = #def.ports
-  local k = (math.floor((q.yawOff or 0) / QUARTER + 0.5) % n) + 1
-  local hp = def.ports[k]
   -- the yaw that turns the held port's direction onto the hit port's opposite
   local yaw = quantize(wrap(math.atan2(-best.nx, -best.nz) - math.atan2(hp.nx, hp.nz)), QUARTER)
   local ox, oz = prot(yaw, hp.x, hp.z)
-  local lx, ly, lz = best.x - ox, best.y - PIPE_Y, best.z - oz
+  local lx, ly, lz = best.x - ox, best.y - (hp.y or PIPE_Y), best.z - oz
   local x, y, z = toBody(fr, lx, ly, lz)
   local lu, lf = localAxes(yaw, 0, 0)
   local function bodyv(v) return V(fr.R.x * v[1] + fr.U.x * v[2] + fr.F.x * v[3], fr.R.y * v[1] + fr.U.y * v[2] + fr.F.y * v[3],

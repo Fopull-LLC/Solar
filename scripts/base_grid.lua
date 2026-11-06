@@ -737,7 +737,13 @@ topology = function(a, clk)
   for _, b in ipairs(blist) do bsid[b.id] = b.sid end
   local RP = ref("reactor_plant")
   local opts = { cablesAt = at, state = breaker_state, baseSid = function(bid) return bsid[bid] end,
-                 plantKW = RP and RP.gridGen or nil, auxKW = RP and RP.gridAux or nil }
+                 plantKW = RP and RP.gridGen or nil,
+                 -- (S7) a plant's pumps, the fluid network's pumps and the airlocks' pumps
+                 auxKW = function(sid, uid)
+                   local FN, RA = ref("fluid_net"), ref("room_air")
+                   return (RP and RP.gridAux and RP.gridAux(sid, uid) or 0) + (FN and FN.gridAux and FN.gridAux(sid, uid) or 0)
+                          + (RA and RA.gridAux and RA.gridAux(sid, uid) or 0)
+                 end }
   local BP = ref("base_power")
   local t = read_e()
   local models, sts, byId, byBase, edgeOf = {}, {}, {}, {}, {}

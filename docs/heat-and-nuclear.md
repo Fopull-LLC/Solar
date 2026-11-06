@@ -502,19 +502,23 @@ works as follows:
   - `plant_trim` +3 % of Carnot at level 3, for the plant the Engineer
     founded
 - **Readouts:**
-  - **The console** is a 1024 × 576 CRT page, repainted at 1 Hz with crew
-    within 25 m. It shows:
-    - k, ρ (pcm), the period
-    - power, with fission and decay split
-    - rods and the shutdown margin
-    - xenon ▲/▼, Sm and burnup
-    - fuel, primary (flow, boiling point), secondary and condenser
-      temperatures
-    - the turbine, its efficiency and Carnot share
-    - pumps and net power
-    - the dose at 5 m
-    - LIMITED BY, with warnings and the annunciator
-    - a 24 h trend of power and xenon
+  - **The console** is a 1024 × 576 CRT screen, repainted at 1 Hz with crew
+    within 25 m. Since S7 it is made to be read at 1.5 m, in a screenshot
+    too: four PAGES of at most five short lines in 52 px phosphor mono
+    (56 mm of text on the 0.62 m screen, ≥ 13 px in a 720p picture from
+    1.5 m), a 44 px header naming the page and its number, bright green,
+    amber and red on near-black. The page turns every 6 s, or from the menu
+    ("Console: next page"):
+    - CORE: k and ρ (pcm), critical or not and the period, power, heat,
+      rods and the shutdown margin
+    - POISONS: xenon (UP/DN), samarium, burnup, the restart forecast
+    - LOOPS: fuel, primary (and its flow), its boiling point (BROKEN), the
+      coolant INVENTORY (with a break's loss or the makeup), steam and
+      condenser
+    - POWER: the turbine, net power and efficiency, the dose at 5 m,
+      LIMITED BY (wrapped to two lines)
+    - always: the annunciator (two rows of two tiles, 28 px) and the 24 h
+      trend of power and xenon
   - **Menus** on every piece:
     - the controls: start up (AUTO 50 %), setpoint ±10 %, rods by hand,
       SCRAM / reset, protection, cool down, turbine online
@@ -541,11 +545,27 @@ works as follows:
 - **Catch-up.** A load's catch-up (or the probe's ten days) is taken 300
   solver steps a tick: 240 h in 1.3 s, one engine tick at a time.
 
-### 8.10 Open
+### 8.10 The coolant as a fluid (sandbox S7)
 
-- **S7 takes the loops over** as fluid systems. Coolant inventory and
-  makeup, a LOCA by a broken pipe, a secondary that boils dry, and the
-  moderator tanks' fill all wait for it.
+`docs/base-building.md` §17. The primary's inventory is real kg from its
+parts (1,661 kg in the fixture plant). A pipe broken open (its menu's "Cut
+it open", or `reactor_plant.breakPipe`) loses the pressuriser. The primary
+boils at 373 K, trips on subcooling at once, and blows down at two-phase
+critical flow to the break's level. The core stands above the pipes, so it
+uncovers. Once broken, what boils off is real water.
+
+The fixture's 320 kW core, 12 h at power, peaks uncovered at 1,210 K on its
+decay heat, just under damage. The pressuriser's DN25 makeup nozzle takes
+water from the fluid network. A process pump stalls against 15.5 MPa, and a
+Charging Pump gets in. After a break the process pump injects ~2 kg/s,
+enough for a 5 % break but not a guillotine. The FLUIDS overlay shows the
+primary's inventory and rings the break.
+
+### 8.11 Open
+
+- **Still to take over:** the secondary boiling dry is S6's own model (a
+  steam generator whose feed pump has stopped). The moderator tanks' fill
+  and the secondary's makeup are not fluid systems yet.
 - **Vessels side by side** could make one big lattice (a natural-uranium
   graphite pile needs it). Each vessel is its own core today.
 - **Pipe risers** between storeys (all ports are at one level today).

@@ -151,6 +151,16 @@ BOIL_S = 100           -- s of rated power that boils the primary's water off (T
 SHELL_LOSS = 0.0003    -- share of the rating the lagged vessels lose, at the design ΔT
 LAGGED_LOSS = 0.00004  -- a lagged metre of pipe (bare: the piece's own, 0.25 %)
 DT_DESIGN = 265        -- K: the primary over the room at the design temperature
+-- (S7) the primary's water (m³ of each part) at its hot density, and a break
+WATER_HOT = 740        -- kg/m³ at 556 K, 15.5 MPa
+PIPE_A = 0.00745       -- m²: DN100 schedule 80's bore (97.2 mm)
+PLENUM_V, CHANNEL_V, SG_V, PRESS_V, PUMP_V = 0.6, 0.019, 0.35, 1.0, 0.05
+GC_HOT = 1.0e4         -- kg/(m²·s): critical two-phase flow out of a break, flashing
+GC_COLD = 2.5e3        -- …and the drain once the water is under 100 °C
+BREAK_DEP = 1.0e-4     -- m²: a break this big loses the pressuriser (a small one it rides out)
+BREAK_FLOOR = 0.15     -- the share of the water below the loop's pipes (the vessel base's lower plenum, under its
+                       -- nozzles): a break at pipe height drains everything above it, the core included
+HFG_REAL = 2.26e6      -- J/kg at 1 atm: once broken, what boils off is real water
 -- The rods the press and the Depot make: the U-235 share of their uranium.
 RODS = { fuelRodNU = 0.0072, fuelRod = 0.03, fuelRodHALEU = 0.1975 }
 ROD_LABEL = { fuelRodNU = "natural U", fuelRod = "LEU 3 %", fuelRodHALEU = "HALEU 19.75 %" }
@@ -213,7 +223,7 @@ end
 function portAt(p, pt)
   local dx, dz = rot(p.yaw, pt.x, pt.z)
   local nx, nz = rot(p.yaw, pt.nx, pt.nz)
-  return (p.x or 0) + dx, (p.y or 0) + PIPE_Y, (p.z or 0) + dz, nx, nz
+  return (p.x or 0) + dx, (p.y or 0) + (pt.y or PIPE_Y), (p.z or 0) + dz, nx, nz
 end
 
 -- The cells of the core on vessel V: → { [key "i,j,l"] = { i, j, l, uid, role, mod } }
@@ -246,13 +256,16 @@ local function port_graph(rec, defs)
   local ports, byUid = {}, {}
   for _, p in ipairs(rec.bp or {}) do
     local d = defs(p.id)
-    if d and d.ports and math.abs(p.pitch or 0) < 1e-3 then
+    -- (S7: the fluid network's DN25 pieces and nozzles are fluids.lua's, never a loop's)
+    if d and d.ports and not d.fl and math.abs(p.pitch or 0) < 1e-3 then
       local list = {}
       for k, pt in ipairs(d.ports) do
+        if not pt.fluid then
         local x, y, z, nx, nz = portAt(p, pt)
         local P = { uid = p.uid, name = pt.name, loop = pt.loop, x = x, y = y, z = z, nx = nx, nz = nz, part = p, def = d, k = #ports + 1 }
         ports[#ports + 1] = P
         list[#list + 1] = P
+        end
       end
       byUid[p.uid] = { part = p, def = d, ports = list }
     end
@@ -685,6 +698,19 @@ function model(pl, ch, env, run)
   M.ULp = ((P.loss or 0) + SHELL_LOSS) * Pr / DT_DESIGN
   M.press = P.press ~= nil
   M.tsat = (M.press and run.press ~= false) and (P.press.def.press.tsat or 618) or (M.press and 540 or 373)
+  -- (S7) THE COOLANT INVENTORY, a fluid system: the primary's real water
+  -- (its pipes' bore, the vessel's plenum and channels, the steam generators'
+  -- tubes, the pressuriser's water, the pumps' casings) in kg at its hot
+  -- density; a BREAK (run.brkA, m² of the bore opened) blows it down and
+  -- depressurises it (it boils at 100 °C); MAKEUP (M.mk, kg/s, set by
+  -- fluid_net through the pressuriser's nozzle) refills it. Boil-off keeps
+  -- S6's rating-scaled figure (BOIL_S): the break and the makeup are real kg.
+  local nch = 0
+  for _, cell in pairs(pl.cells or {}) do if cell.role == "fuel" then nch = nch + 1 end end
+  M.Mw = WATER_HOT * (PIPE_A * (P.pipes or 0) + PLENUM_V + CHANNEL_V * nch + SG_V * #(P.sgs or {}) + (P.press and PRESS_V or 0) + PUMP_V * #(P.pumps or {}))
+  M.brkA = run.brkA or 0
+  M.mk = run.mk or 0
+  if M.brkA > BREAK_DEP then M.tsat = 373; M.broken = true end
   local ua = 0
   for _, sg in ipairs(P.sgs or {}) do ua = ua + (sg.def.hx.ua or 30) * 1000 end
   M.UAhx = P.closed and ua or 0
@@ -813,6 +839,11 @@ function derive(M, S, y, dy, out, lite)
   local Qpump = (M.mp_target > 0) and M.Qpump * math.min(1, mp / M.mp_target) or 0
   local Qboil = M.Gb * 2 * softplus((Tp - M.tsat) / 2)
   local Cp = M.Cp_w * math.max(inv, 0.05) + M.Cp_s
+  -- (S7) the break: two-phase critical flow while the water is hot, a drain
+  -- once it isn't; the makeup, cut off as the loop fills
+  local brk, mk = 0, 0
+  if (M.brkA or 0) > 0 then brk = (GC_HOT * smooth01((Tp - 380) / 60) + GC_COLD) * M.brkA * smooth01((inv - BREAK_FLOOR) / 0.03) end
+  if (M.mk or 0) > 0 then mk = M.mk * smooth01((1.0005 - inv) / 0.002) end
   -- the secondary: steam to the turbine (or its bypass) and the condenser
   -- (no feedwater, no steam: a steam generator its feed pump has stopped boils
   -- dry and carries nothing on, the loss of heat sink; a trickle keeps it defined)
@@ -867,13 +898,16 @@ function derive(M, S, y, dy, out, lite)
     dy[IE] = P * C.fluxK
     dy[IMP] = (M.mp_target - mp) / RX.tau_pump
     dy[IMS] = (M.ms_target - ms) / RX.tau_pump
-    dy[IINV] = -Qboil / (RX.hfg * math.max(M.Mp, 1))
+    -- (S6's boil-off is rating-scaled (BOIL_S); a broken loop's water is real kg)
+    local boilI = M.broken and Qboil / (HFG_REAL * math.max(M.Mw or 1, 1)) or Qboil / (RX.hfg * math.max(M.Mp, 1))
+    dy[IINV] = -boilI + (mk - brk) / math.max(M.Mw or 1, 1)
     dy[IDMG] = dmgRate
   end
   out.rho, out.k, out.kinf, out.parts, out.beta = rho, k, kinf, parts, beta
   out.P, out.Qfis, out.Qdec, out.Qcore, out.Qfc, out.Qhx, out.Qlp, out.Qboil = P, Qfis, Qdec, Qcore, Qfc, Qhx, Qlp, Qboil
   out.Qst, out.Qls, out.Qt, out.Pe, out.Qrej, out.Qrad, out.Qtow = Qst, Qls, Qt, Pe, Qrej, Qrad, Qtow
   out.Qpump = Qpump
+  out.brk, out.mk = brk, mk
   out.mp, out.mpe, out.ms, out.mnc, out.UAfc, out.phi, out.inv, out.x = mp, mpe, ms, mnc, UAfc, phi, inv, x
   out.Tf, out.Tp, out.Ts, out.Tk, out.melt, out.dmg = Tf, Tp, Ts, Tk, melt, y[IDMG]
   return out, dy

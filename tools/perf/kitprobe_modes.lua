@@ -826,7 +826,11 @@ function KIT.run_rooms()
   local ents = BK.menu(ST.nodeOf(sid, U.far))
   local fo = BK.entry(ents, "ra_force")
   P("KIT ROOMS far door menu: %s", fo and tostring(fo.label) or "no force row")
-  if fo and fo.act then fo.act() end
+  -- (S7: the suit rule: helmet off, the crew won't go through a door to the
+  -- moon, forced or not, so it goes back on first; forcing is a timed job)
+  su.setHelmet(true, { instant = true })
+  wait(0.5)
+  if fo then BK.run_entry(fo) end
   local vent = wait_for(function() local q = RA.airOf(sid, hab.id); return q and q.venting and q.p < 0.6 end, 30, "the hab venting")
   local q = RA.airOf(sid, hab.id)
   local al = RA.lastAlarm
@@ -836,9 +840,17 @@ function KIT.run_rooms()
   KIT.oview("r5_leak_overlay", rec, { 7.5, 2.6, 2.5 }, { 3.5, 1.1, 0.0 })
   BK.check("helmet_back", su.helmetOn() and pw.airSource == "suit", "the helmet went back on, the suit's air (%s)", tostring(pw.airSource))
   KIT.walk(rec, 2.2, 0.0, 6, 0.3)
-  local back = wait_for(function() local q2 = RA.airOf(sid, hab.id); return q2 and not q2.venting and q2.p > 0.97 end, 120, "the hab refilled")
+  -- (S7: forcing damaged the door's seal: it leaks, the regulator holding the
+  -- hab against it, until the seal is re-seated from the door's menu)
+  local held2 = wait_for(function() local q2 = RA.airOf(sid, hab.id); return q2 and q2.p > 0.9 end, 120, "the hab refilled")
+  local q1 = RA.airOf(sid, hab.id)
+  local seal = RA.sealOf and RA.sealOf(sid, U.far) or 0
+  P("KIT ROOMS after forcing: seal %.0f %%, hab %.2f atm, venting %s (%s)", seal * 100, q1.p, tostring(q1.venting), tostring(q1.causes and q1.causes[1]))
+  local rp = BK.entry(BK.menu(ST.nodeOf(sid, U.far)), "ra_repair")
+  if rp then BK.run_entry(rp) end
+  local back = held2 and wait_for(function() local q2 = RA.airOf(sid, hab.id); return q2 and not q2.venting and q2.p > 0.96 end, 120, "the hab refilled, the seal re-seated")
   local q2 = RA.airOf(sid, hab.id)
-  BK.check("refill", back, "the far door shut behind the crew: the tank brought the hab back (%.2f atm, tank %.1f m³)", q2.p, RA.state(sid).tanks[U.tank] or -1)
+  BK.check("refill", back, "the far door shut behind the crew, its forced seal re-seated: the tank brought the hab back (%.2f atm, tank %.1f m³)", q2.p, RA.state(sid).tanks[U.tank] or -1)
   local st_txt = KL.screenText(sid, U.screen)
   BK.check("screen_rooms", st_txt and st_txt:find("ROOMS", 1, true) and st_txt:find("AIR", 1, true), "the screen reads the rooms: %s", tostring(st_txt))
   KIT.view("r6_screen", rec, { 3.7, 1.65, 0.55 }, { 3.0, 1.55, -0.9 })
