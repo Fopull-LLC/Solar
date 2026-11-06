@@ -18,10 +18,13 @@
 -- pcol its colour), loadwatch (1: log every frame over 40 ms, and shoot the planet
 -- once a second while it fills: a palette arriving late shows grey or white),
 -- seam (1: slot borders up close, seam_a | seam_b and 1 | 13, from 0.3-1.7 m; night 1 also
--- in the dark by a lamp), only (1: skip the feet/eye/far/high and slope views).
+-- in the dark by a lamp), only (1: skip the feet/eye/far/high and slope views),
+-- border (1: painted slot pairs br_rock | br_soil, br_sand | br_rock2, br_snow | br_rock
+-- and a br_crystal seam in br_host rock, from 0.6, 1.5, 3 and 30 m: `_b<pair>_*`).
 defaults = { first = 1, last = 99, settle = 3, quit = 1, cave = 0, graze = 0,
   smin = 0.55, smax = 0.85, dist = 0, phys = 0, pcol = 1, loadwatch = 0, trace = 0,
-  seam = 0, seam_a = 2, seam_b = 15, seam_c = 1, seam_d = 13, night = 1, only = 0 }
+  seam = 0, seam_a = 2, seam_b = 15, seam_c = 1, seam_d = 13, night = 1, only = 0,
+  border = 0, br_rock = 14, br_soil = 20, br_sand = 16, br_rock2 = 15, br_snow = 22, br_host = 13, br_crystal = 7 }
 
 local W = function() return app.wallClock and app.wallClock() or os.clock() end
 local W0 = W()
@@ -219,6 +222,44 @@ local function main()
           if L then L.intensity, L.ambientR, L.ambientG, L.ambientB = was[1], was[2], was[3], was[4] end
           lamp:setPointLight({ intensity = 0 })
         end
+      end
+      if params.border > 0 then
+        -- slot borders as the generator and veins make them (engine terrain stage 2,
+        -- height blending): pairs painted as two discs side by side, so a border runs
+        -- straight ahead through Q, photographed from 0.6, 1.5 and 3 m and 30 m back;
+        -- then a crystal seam (a line of small default-brush discs, as mineral_field
+        -- paints one) across a disc of host rock. Off to the side of the seam test.
+        local t2 = d:cross(t):normalized() * -1
+        local function at(a, b, h)
+          local v = t * a + t2 * b
+          local m = v:length()
+          if m < 1e-6 then return along(d, t, 0, R, top, h) end
+          return along(d, v * (1 / m), m, R, top, h)
+        end
+        local function paint(p, slot, r, brush)
+          if brush then terrain.paintTexture(p.x, p.y, p.z, r, slot, brush)
+          else terrain.paintTexture(p.x, p.y, p.z, r, slot) end
+        end
+        local function settle() yield(); wait_for(function() return not terrain.busy() end, 60); hold(1.0) end
+        local function views(name)
+          view(cam, at(4.2, 9.0, 0.6), at(5.0, 10.5, 0), d, tag .. "_b" .. name .. "_06")
+          view(cam, at(3.5, 9.6, 1.5), at(5.4, 10.5, 0), d, tag .. "_b" .. name .. "_15")
+          view(cam, at(2.0, 10.0, 3.0), at(5.6, 10.5, 0), d, tag .. "_b" .. name .. "_30")
+          view(cam, at(-24.0, 10.5, 10.0), at(5.0, 10.5, 0), d, tag .. "_b" .. name .. "_d30")
+        end
+        local bpairs = { { "rocksoil", params.br_rock, params.br_soil }, { "sandrock", params.br_sand, params.br_rock2 },
+          { "snowrock", params.br_snow, params.br_rock } }
+        for _, pr in ipairs(bpairs) do
+          -- A on the near side of the border line (b < 10.5), B beyond it
+          paint(at(5.0, 7.5, 0), pr[2], 3.2); paint(at(5.0, 13.5, 0), pr[3], 3.2)
+          settle(); views(pr[1])
+        end
+        -- the crystal deposit: host rock, then a seam of 0.9 m discs across it
+        paint(at(5.0, 10.5, 0), params.br_host, 5.0)
+        for k = -5, 5 do
+          paint(at(5.0 + k * 0.55, 10.5 + 0.25 * math.sin(k * 0.9), -0.2), params.br_crystal, 0.9 + 0.15 * math.cos(k * 1.3))
+        end
+        settle(); views("crystal")
       end
       if params.cave > 0 then
         local g = ground(d, R, top) or R

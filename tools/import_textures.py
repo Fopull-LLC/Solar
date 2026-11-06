@@ -1138,15 +1138,87 @@ MACRO = 0.35
 MACRO_SIZE = 60
 
 
-def palette_line(t, path, maps=None):
+# Engine terrain stage 2 (dev .1455): a border between two slots can be decided
+# by their height maps (|heightblend= k, 0-1, the pair takes the larger): each
+# slot's height there, (h - 0.5) * |contrast= + |heightbias=, pushes it up and
+# the higher one shows, so sand fills the cracks between stones, rock tops poke
+# out of snow, and a crystal vein's points stand out of its host rock rather
+# than ending on the voxel mesh's polygon. Pairs of photographic maps have very
+# different means and spreads (0.36-0.77, sd 0.08-0.21), so the flags are set
+# from each slot's own height map: its ROLE gives the height the slot should
+# have at a border (mean) and how far its relief should count (sd), and
+# height_flags() turns the map's measured mean and spread into bias and
+# contrast that give exactly that. Read in raster.wgsl terrain_height_t:
+# diff = (2t - 1) + k (h_hi - h_lo), so k * (sd_a + sd_b) ~ 0.5-0.8 spreads
+# the patches over most of a blend's width, and a higher mean settles over a
+# lower one. The glow slots keep their look (no flags; magma has no height
+# map and counts as 0.5, i.e. bias 0, against its neighbours).
+#   k     |heightblend= (crisper the higher: the engine's fade is 0.5 (1 - k) + 0.02;
+#         0.5-0.6 here, see CONTRAST_MAX)
+#   mean  where the slot sits against others (rock tops above loose ground,
+#         snow and ice over rock, sand lowest)
+#   sd    how much its relief counts (stones and crystal points, a lot; snow,
+#         sand and ice are smooth)
+HEIGHT_ROLES = {
+    "rock":    dict(k=0.5, mean=0.0, sd=0.60),     # bedrock: stones and ledges stand proud of their own mean
+    "loose":   dict(k=0.55, mean=-0.08, sd=0.25),  # soil, gravel, regolith, ash: pebbles poke up a little
+    "veg":     dict(k=0.55, mean=-0.06, sd=0.28),  # moss, tundra, litter, peat: tufts between the stones
+    "sand":    dict(k=0.55, mean=-0.15, sd=0.12),  # sand and salt: fills the cracks, lies flat
+    "snow":    dict(k=0.55, mean=0.18, sd=0.15),   # settles over rock first, the tallest rock pokes through
+    "ice":     dict(k=0.5, mean=0.12, sd=0.20),    # glacier and banded ice
+    "ore":     dict(k=0.6, mean=0.10, sd=0.50),    # painted veins (hematite, veinstone, sulfur): ragged, but a
+                                                   # thin seam keeps its painted width against the host rock
+    "crystal": dict(k=0.6, mean=0.10, sd=0.60),    # druzy points stand out of the host rock at a deposit's rim
+}
+# A glow slot (magma) keeps its look and has no height map, so it counts as half
+# height plus its bias: against a height-blended rock a small pocket was overrun
+# whole (the rock's relief won every pixel). The bias alone holds it to its
+# painted size; nothing else on its line changes.
+GLOW_HEIGHT_BIAS = 0.3
+# Soft, not crisp (2026-11-06 shots): k 0.7-0.8 made each border a near-hard
+# line (fade 0.5 (1 - k) + 0.02 of the pair's diff), and a contrast of 6 on the
+# smooth maps (onyx, sandstone, hematite, sd ~0.1) amplified their 8-bit steps.
+# k 0.5-0.6 and contrast at most 3.5 keep the borders height-decided and soft.
+CONTRAST_MAX = 3.5
+HEIGHT_ROLE = {
+    "rust": "rock", "flagstone": "rock", "onyx": "rock", "slate": "rock", "basalt": "rock", "granite": "rock",
+    "sandstone": "rock", "limestone": "rock", "pahoehoe": "rock", "shale": "rock",
+    "soil": "loose", "gravelregolith": "loose", "dust": "loose", "regolith": "loose", "mudcrack": "loose",
+    "ash": "loose", "scree": "loose",
+    "moss": "veg", "tundra": "veg", "litter": "veg", "peat": "veg",
+    "sand": "sand", "salt": "sand",
+    "snow": "snow", "bandedice": "ice", "glacier": "ice",
+    "veinstone": "ore", "sulfur": "ore", "hematite": "ore",
+    "amethyst": "crystal", "bluecrystal": "crystal",
+}
+
+
+def height_flags(t, height_file):
+    """The |heightblend= |heightbias= |contrast= suffix for slot t, from its own
+    height map (absolute path): '' for a glow slot or one without a role or map."""
+    role = HEIGHT_ROLES.get(HEIGHT_ROLE.get(t["name"], ""))
+    if t.get("glow") or not role or not height_file or not os.path.exists(height_file):
+        return ""
+    h = np.asarray(Image.open(height_file).convert("L"), dtype=np.float32) / 255.0
+    m, sd = float(h.mean()), max(float(h.std()), 0.02)
+    contrast = min(CONTRAST_MAX, role["sd"] / sd)
+    bias = max(-1.0, min(1.0, role["mean"] - (m - 0.5) * contrast))
+    return "|heightblend=%g|heightbias=%.2f|contrast=%.2f" % (role["k"], bias, contrast)
+
+
+def palette_line(t, path, maps=None, root_dir=None):
     line = path
     if t.get("glow"):
         line += "|glow"
     line += "|scale=%g" % t["scale"]
-    if not t.get("glow"):
+    if t.get("glow"):
+        line += "|heightbias=%g" % GLOW_HEIGHT_BIAS
+    else:
         line += "|blend=%g|rough=%g" % (t.get("blend", 0.8), t.get("rough", 0.7))
         line += "|antitile=%g|macro=%g|macrosize=%g" % (
             t.get("antitile", ANTITILE_LOW.get(t["name"], 1.0)), t.get("macro", MACRO), t.get("macrosize", MACRO_SIZE))
+        if maps and maps.get("height"):
+            line += height_flags(t, os.path.join(root_dir or ROOT, maps["height"]))
     for k in MAP_KINDS:   # after every other flag (engine 0637)
         if maps and maps.get(k):
             line += "|%s=%s" % (k, maps[k])
@@ -1172,7 +1244,7 @@ def write_palettes(dry, root_dir=None, local=False):
         path, which = layer_path(OUT_CC0, t), "cc0"
         if local and t.get("local") and os.path.exists(os.path.join(root_dir, layer_path(OUT_LOCAL, t))):
             path, which = layer_path(OUT_LOCAL, t), "local"
-        lines.append(palette_line(t, path, slot_maps(t, which, root_dir)))
+        lines.append(palette_line(t, path, slot_maps(t, which, root_dir), root_dir))
     out = {"terrain/system.palette": "\n".join(lines),
            "terrain/planetoid.palette": "\n".join(lines[:PLANETOID_SLOTS])}
     for rel, text in out.items():
