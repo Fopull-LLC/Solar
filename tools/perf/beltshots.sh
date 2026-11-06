@@ -10,6 +10,7 @@
 # "RESULT" lines). The scratch project gets REAL save/ and saves/ folders;
 # its probe slot is deleted afterwards. Solar's own saves are never touched.
 set -u
+for _lp in "$(dirname "$0")/lockpool.sh" /mnt/disks/3tb/GithubRepositories/Solar/tools/perf/lockpool.sh; do [ -f "$_lp" ] && { . "$_lp"; break; }; done
 HERE=$(cd "$(dirname "$0")" && pwd)
 SOL=${SOLAR:-$(cd "$HERE/../.." && pwd)}
 WORK=${WORK:?WORK}

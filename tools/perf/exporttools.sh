@@ -9,6 +9,7 @@
 #   WORK=$SCRATCH LOCK=/mnt/disks/3tb/.floptle-shared/engine.lock tools/perf/exporttools.sh <build dir> [binary name]
 #   (tools/perf/exportcheck.sh with KEEP=1 leaves a build in $WORK/xc-out)
 set -u
+for _lp in "$(dirname "$0")/lockpool.sh" /mnt/disks/3tb/GithubRepositories/Solar/tools/perf/lockpool.sh; do [ -f "$_lp" ] && { . "$_lp"; break; }; done
 SOL=$(cd "$(dirname "$0")/../.." && pwd)
 BUILD=${1:?build dir}; BIN=${2:-Solar}
 WORK=${WORK:?WORK}; LOCK=${LOCK:?LOCK}

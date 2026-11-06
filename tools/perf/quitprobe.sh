@@ -9,6 +9,7 @@
 #     tools/perf/quitprobe.sh <build dir> [title|pause] [binary name]
 #   pause: CONTINUE on a COPY of the player's save/slot1 (put in the scratch data dir).
 set -u
+for _lp in "$(dirname "$0")/lockpool.sh" /mnt/disks/3tb/GithubRepositories/Solar/tools/perf/lockpool.sh; do [ -f "$_lp" ] && { . "$_lp"; break; }; done
 SOL=$(cd "$(dirname "$0")/../.." && pwd)
 BUILD=${1:?build dir}; MODE=${2:-title}; BIN=${3:-Solar}
 WORK=${WORK:?WORK}; LOCK=${LOCK:?LOCK}

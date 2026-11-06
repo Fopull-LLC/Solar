@@ -11,6 +11,7 @@
 #
 # Lines "POP " in $WORK/pop/<TAG>/run.log; frames under frames/, pop.py's table in pops.txt.
 set -u
+for _lp in "$(dirname "$0")/lockpool.sh" /mnt/disks/3tb/GithubRepositories/Solar/tools/perf/lockpool.sh; do [ -f "$_lp" ] && { . "$_lp"; break; }; done
 HERE=$(cd "$(dirname "$0")" && pwd)
 SOL=${SOLAR:-$(cd "$HERE/../.." && pwd)}
 WORK=${WORK:?WORK}

@@ -7,6 +7,7 @@
 # twice: with the build's .floptle/textures.ron and without it (the old export).
 #   WORK=$SCRATCH/export LOCK=/mnt/disks/3tb/.floptle-shared/engine.lock tools/perf/exportshot.sh <build dir> <binary name>
 set -u
+for _lp in "$(dirname "$0")/lockpool.sh" /mnt/disks/3tb/GithubRepositories/Solar/tools/perf/lockpool.sh; do [ -f "$_lp" ] && { . "$_lp"; break; }; done
 SOL=$(cd "$(dirname "$0")/../.." && pwd)
 BUILD=${1:?build dir}; BIN=${2:-Solar}
 WORK=${WORK:?WORK}; LOCK=${LOCK:?LOCK}

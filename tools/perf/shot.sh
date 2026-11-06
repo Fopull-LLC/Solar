@@ -10,6 +10,7 @@
 # copy of save/slot1), then `floptle shot --after N` plays it that long on the
 # fixed clock and draws the frame. Solar's own save is never written.
 set -u
+for _lp in "$(dirname "$0")/lockpool.sh" /mnt/disks/3tb/GithubRepositories/Solar/tools/perf/lockpool.sh; do [ -f "$_lp" ] && { . "$_lp"; break; }; done
 HERE=$(cd "$(dirname "$0")" && pwd)
 SOL=${SOLAR:-$(cd "$HERE/../.." && pwd)}
 S=${WORK:-${TMPDIR:-/tmp}/solar-perf}

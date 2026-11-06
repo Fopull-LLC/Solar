@@ -21,6 +21,7 @@
 # textures/, prefabs/ ... that the archive itself dropped is named here, since
 # that is where the 2026-10-28 loss happened (a bare `tools export-ignore`).
 set -u
+for _lp in "$(dirname "$0")/lockpool.sh" /mnt/disks/3tb/GithubRepositories/Solar/tools/perf/lockpool.sh; do [ -f "$_lp" ] && { . "$_lp"; break; }; done
 SOL=$(cd "$(dirname "$0")/../.." && pwd)
 VER=${1:-0.117.1-dev.1377.6ac1c98}
 ENG=${ENGINE:-$HOME/.local/share/floptle/versions/$VER/floptle}

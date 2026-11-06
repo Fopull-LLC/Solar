@@ -12,6 +12,7 @@
 # are never touched. The probe deletes its slot (14) when it finishes a full
 # run; delete $WORK/evaproj/save* after a shot run.
 set -u
+for _lp in "$(dirname "$0")/lockpool.sh" /mnt/disks/3tb/GithubRepositories/Solar/tools/perf/lockpool.sh; do [ -f "$_lp" ] && { . "$_lp"; break; }; done
 HERE=$(cd "$(dirname "$0")" && pwd)
 SOL=${SOLAR:-$(cd "$HERE/../.." && pwd)}
 S=${WORK:?WORK}

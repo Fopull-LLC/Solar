@@ -5,6 +5,7 @@
 #   WORK=$SCRATCH LOCK=/mnt/disks/3tb/.floptle-shared/engine.lock tools/perf/alienhome.sh <engine> <TAG>
 #   AH_PARAMS='("alien", 1.0), ("homeseed", 55555.0)'   probe params (see alienhome.lua)
 set -u
+for _lp in "$(dirname "$0")/lockpool.sh" /mnt/disks/3tb/GithubRepositories/Solar/tools/perf/lockpool.sh; do [ -f "$_lp" ] && { . "$_lp"; break; }; done
 SOL=$(cd "$(dirname "$0")/../.." && pwd)
 VER=${1:?engine version or binary}; TAG=${2:-home}
 if [ -x "$VER" ]; then F=$VER; else F=$HOME/.local/share/floptle/versions/$VER/floptle; fi

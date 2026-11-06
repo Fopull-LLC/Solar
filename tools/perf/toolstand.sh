@@ -10,6 +10,7 @@
 #   XWAYLAND=   run on native Wayland (the default is XWayland, for frame timing;
 #               XWayland would not make a GPU device while the screen was locked)
 set -u
+for _lp in "$(dirname "$0")/lockpool.sh" /mnt/disks/3tb/GithubRepositories/Solar/tools/perf/lockpool.sh; do [ -f "$_lp" ] && { . "$_lp"; break; }; done
 SOL=$(cd "$(dirname "$0")/../.." && pwd)
 VER=${1:?engine version or binary}; TAG=${2:-stand}
 if [ -x "$VER" ]; then F=$VER; else F=$HOME/.local/share/floptle/versions/$VER/floptle; fi

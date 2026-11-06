@@ -9,6 +9,7 @@
 #   AP_PARAMS='("first", 1.0), ("last", 4.0)'   probe params (see tileworld.lua)
 # Pictures land in $WORK/tworld/<TAG>/png, the log in $WORK/tworld/<TAG>/run.log.
 set -u
+for _lp in "$(dirname "$0")/lockpool.sh" /mnt/disks/3tb/GithubRepositories/Solar/tools/perf/lockpool.sh; do [ -f "$_lp" ] && { . "$_lp"; break; }; done
 SOL=$(cd "$(dirname "$0")/../.." && pwd)
 VER=${1:?engine version or binary}; TAG=${2:-tw}; LIST=${3:-regolith:x:moon,steppe:x:home,alpine:x:home}
 if [ -x "$VER" ]; then F=$VER; else F=$HOME/.local/share/floptle/versions/$VER/floptle; fi

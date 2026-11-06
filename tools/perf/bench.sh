@@ -21,6 +21,7 @@
 #   $H/results/<TAG>/bench.jsonl   one JSON object per scenario (+ uptime)
 #   $H/results/<TAG>/table.md      the scenario table, buckets and top scripts
 set -u
+for _lp in "$(dirname "$0")/lockpool.sh" /mnt/disks/3tb/GithubRepositories/Solar/tools/perf/lockpool.sh; do [ -f "$_lp" ] && { . "$_lp"; break; }; done
 HERE=$(cd "$(dirname "$0")" && pwd)
 SOL=${SOLAR:-$(cd "$HERE/../.." && pwd)}
 # WORK: where the scratch project and results live (never inside the repo).

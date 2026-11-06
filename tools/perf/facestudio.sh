@@ -4,6 +4,7 @@
 #   case: lineup | expr | rig | perf.  Pictures: $WORK/facestudio/<case>/*.png
 #   env: LOCK (the shared engine lock), ALSA (the silent config), ACTOR (expr/rig)
 set -u
+for _lp in "$(dirname "$0")/lockpool.sh" /mnt/disks/3tb/GithubRepositories/Solar/tools/perf/lockpool.sh; do [ -f "$_lp" ] && { . "$_lp"; break; }; done
 SOL=$(cd "$(dirname "$0")/../.." && pwd)
 VER=${1:?engine}; CASE=${2:-lineup}; N=${3:-8}
 if [ -x "$VER" ]; then F=$VER; else F=$HOME/.local/share/floptle/versions/$VER/floptle; fi

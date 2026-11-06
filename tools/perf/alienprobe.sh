@@ -7,6 +7,7 @@
 #   AP_PARAMS='("first", 1.0), ("last", 4.0)'   probe params (see alienprobe.lua)
 # Pictures land in $WORK/alien/<TAG>/png, the log in $WORK/alien/<TAG>/run.log.
 set -u
+for _lp in "$(dirname "$0")/lockpool.sh" /mnt/disks/3tb/GithubRepositories/Solar/tools/perf/lockpool.sh; do [ -f "$_lp" ] && { . "$_lp"; break; }; done
 SOL=$(cd "$(dirname "$0")/../.." && pwd)
 VER=${1:?engine version or binary}; WHEN=${2:-after}; TAG=${3:-$WHEN}; LIST=${4:-}
 if [ -x "$VER" ]; then F=$VER; else F=$HOME/.local/share/floptle/versions/$VER/floptle; fi

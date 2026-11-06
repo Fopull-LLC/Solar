@@ -7,6 +7,7 @@
 #   env: WORK, LOCK, SOLAR as bench.sh; OUT (png dir, default $WORK/shots); SIZE (default 1920x1052);
 #        USERSAVE=1 the player's save at its spawn; BENCH_STRS extra strs, e.g. '("gfx", "Medium")'
 set -u
+for _lp in "$(dirname "$0")/lockpool.sh" /mnt/disks/3tb/GithubRepositories/Solar/tools/perf/lockpool.sh; do [ -f "$_lp" ] && { . "$_lp"; break; }; done
 HERE=$(cd "$(dirname "$0")" && pwd)
 SOL=${SOLAR:-$(cd "$HERE/../.." && pwd)}
 S=${WORK:-${TMPDIR:-/tmp}/solar-perf}

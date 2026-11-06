@@ -6,6 +6,7 @@
 #   PATCHES="a.patch b.patch"   applied to the scratch copy (A/B a change without touching Solar)
 #   EDITOR=1   run `floptle <proj> --auto-play` (the editor, as the player plays) instead of `play`
 set -u
+for _lp in "$(dirname "$0")/lockpool.sh" /mnt/disks/3tb/GithubRepositories/Solar/tools/perf/lockpool.sh; do [ -f "$_lp" ] && { . "$_lp"; break; }; done
 SOL=$(cd "$(dirname "$0")/../.." && pwd)
 VER=${1:?engine version or binary}; TAG=${2:-digblend}
 if [ -x "$VER" ]; then F=$VER; else F=$HOME/.local/share/floptle/versions/$VER/floptle; fi
