@@ -1320,7 +1320,7 @@ function groundBusy() return #gw_regions + #gw_queue end
 -- stand's hundreds of props a few decimetres off the collision mesh asked for
 -- the whole stand again, one after another, every pass), and only for a prop
 -- more than AUDIT.redrop off the field.
-AUDIT = { every = 3.0, radius = 60.0, ms = 0.35, tol = 0.35, redrop = 0.8 }
+AUDIT = { every = 3.0, radius = 60.0, ms = 0.35, tol = 0.35, redrop = 0.8, struct = 0.1 }
 local au = { t = -1e9, job = nil, tried = {} }
 auditRemoved, auditRedropped = 0, 0
 local function audit_take(sid, it)
@@ -1331,6 +1331,101 @@ local function audit_take(sid, it)
   if p and s.sp then keep_cleared(p, s.sp.id, it.id) end
   auditRemoved = auditRemoved + 1
 end
+-- ── nothing grows inside a placed floor (sandbox S1) ────────────────────────
+-- A plant rooted in the ground under a kit floor or slab, or under the Shed's
+-- or the Hab's footprint, pokes up through it. Every STRUCT_CLEAR.every s,
+-- for each structure within STRUCT_CLEAR.radius of the observer: one
+-- scatter.near per source over the structure's ground-level footprint, and
+-- every prop whose root lies inside one of those parts' boxes (in the
+-- structure's frame, from its records) is taken off as the audit takes one.
+-- It comes back on a redeclaration and is taken again here. The near
+-- queries are a job worked off under STRUCT_CLEAR.ms a frame, never a burst.
+STRUCT_CLEAR = { every = 3.0, radius = 60.0, low = 0.35, ms = 0.25 }
+structClearRemoved = 0
+local sc_t = -1e9
+local sc_job = nil       -- { items = { { sid, cx, cy, cz (body-relative), R, U, F, boxes, reach } … }, i }
+local function struct_clear(obs)
+  if not (obs and cur_body and scatter and scatter.near) then return end
+  local body = space.body(cur_body)
+  if not body then return end
+  if not sc_job then
+    if time < sc_t + STRUCT_CLEAR.every then return end
+    sc_t = time
+    local ST, PB = ref("structures"), ref("parts_base")
+    if not (ST and PB and ST.list) then return end
+    local items = {}
+    for _, rec in ipairs(ST.list()) do
+      if rec.b == cur_body then
+        local dx, dy, dz = body.x + rec.x - obs.x, body.y + rec.y - obs.y, body.z + rec.z - obs.z
+        if dx * dx + dy * dy + dz * dz < STRUCT_CLEAR.radius * STRUCT_CLEAR.radius then
+          -- the structure's frame (structures.frame), and its ground-level footprint
+          local ux, uy, uz = rec.ux or 0, rec.uy or 1, rec.uz or 0
+          local ul = math.sqrt(ux * ux + uy * uy + uz * uz); ux, uy, uz = ux / ul, uy / ul, uz / ul
+          local fx, fy, fz = rec.fx or 0, rec.fy or 0, rec.fz or 1
+          local fd = fx * ux + fy * uy + fz * uz
+          fx, fy, fz = fx - ux * fd, fy - uy * fd, fz - uz * fd
+          local fl = math.sqrt(fx * fx + fy * fy + fz * fz)
+          if fl > 1e-6 then
+            fx, fy, fz = fx / fl, fy / fl, fz / fl
+            local boxes, reach = {}, 0
+            for _, p in ipairs(rec.bp or {}) do
+              local d = PB.partInfo(p.id)
+              local floorish = d and d.half and ((d.kit and (d.snap == "slab" or d.snap == "floor") and (p.y or 0) <= STRUCT_CLEAR.low)
+                                                 or d.hull ~= nil or d.deck ~= nil)
+              if floorish then
+                boxes[#boxes + 1] = { x = p.x or 0, z = p.z or 0, c = math.cos(p.yaw or 0), s = math.sin(p.yaw or 0),
+                                      hx = d.half.x + 0.05, hz = d.half.z + 0.05 }
+                local r = math.sqrt((p.x or 0) ^ 2 + (p.z or 0) ^ 2) + math.sqrt(d.half.x ^ 2 + d.half.z ^ 2)
+                if r > reach then reach = r end
+              end
+            end
+            if #boxes > 0 then
+              local F = { ux = ux, uy = uy, uz = uz, fx = fx, fy = fy, fz = fz,
+                          rx = uy * fz - uz * fy, ry = uz * fx - ux * fz, rz = ux * fy - uy * fx }
+              for sid, sr in pairs(srcs) do
+                if sr.part ~= "bark" then
+                  items[#items + 1] = { sid = sid, x = rec.x, y = rec.y, z = rec.z, F = F, boxes = boxes, reach = reach }
+                end
+              end
+            end
+          end
+        end
+      end
+    end
+    if #items == 0 then return end
+    sc_job = { items = items, i = 1 }
+  end
+  -- a few near queries a frame, never a burst (the walk's stutter)
+  local t0 = clear_wall()
+  while sc_job and sc_job.i <= #sc_job.items do
+    local it = sc_job.items[sc_job.i]
+    sc_job.i = sc_job.i + 1
+    if srcs[it.sid] then
+      local F = it.F
+      local cx, cy, cz = body.x + it.x, body.y + it.y, body.z + it.z
+      for _, h in ipairs(scatter.near(it.sid, vec3(cx, cy, cz), it.reach + 0.5) or {}) do
+        if h.pos and h.settled ~= false then
+          local qx, qy, qz = h.pos.x - cx, h.pos.y - cy, h.pos.z - cz
+          local lx, ly, lz = qx * F.rx + qy * F.ry + qz * F.rz, qx * F.ux + qy * F.uy + qz * F.uz, qx * F.fx + qy * F.fy + qz * F.fz
+          if ly > -1.0 and ly < 1.0 then
+            for _, b in ipairs(it.boxes) do
+              local ox, oz = lx - b.x, lz - b.z
+              local px, pz = ox * b.c - oz * b.s, ox * b.s + oz * b.c
+              if math.abs(px) <= b.hx and math.abs(pz) <= b.hz then
+                audit_take(it.sid, { id = h.id })
+                structClearRemoved = structClearRemoved + 1
+                break
+              end
+            end
+          end
+        end
+      end
+    end
+    if (clear_wall() - t0) * 1000 >= STRUCT_CLEAR.ms then return end
+  end
+  sc_job = nil
+end
+
 local function audit_tick(obs)
   if not (obs and cur_body and scatter and scatter.near and AUDIT.every > 0) then return end
   local body = space.body(cur_body)
@@ -1371,7 +1466,11 @@ local function audit_tick(obs)
           local it = { id = F.ids[k] }
           local px, py, pz = body.x + F.rx[k], body.y + F.ry[k], body.z + F.rz[k]
           local d = terrain.query(px, py, pz)
-          if d and math.abs(d) > AUDIT.tol then
+          -- (sandbox S1: a kit floor or slab stands only 0.2 m proud of the
+          -- ground, under AUDIT.tol: a prop that high is looked under too, and
+          -- taken off only if a placed structure piece is what it stands on)
+          local low = d and d > AUDIT.struct and d <= AUDIT.tol
+          if d and (math.abs(d) > AUDIT.tol or low) then
             -- (flat answers carry no `up`: ask for this one prop)
             local up = F.up and F.up[k]
             if not up and d > 0 and scatter.instance then
@@ -1390,7 +1489,10 @@ local function audit_tick(obs)
             local hn = hit and hit.node
             local solid = hn and hn.valid ~= false and hn.name and not space.body(hn.name)
             local hq = solid and terrain.query(hit.x, hit.y, hit.z)
-            if hq and hq > 0.15 then
+            if low then
+              local ST = ref("structures")
+              if solid and ST and ST.partOfNode and ST.partOfNode(hn) then audit_take(sid, it) end   -- on a kit floor
+            elseif hq and hq > 0.15 then
               audit_take(sid, it)             -- on a roof, a craft, debris
             elseif not au.tried[key] and math.abs(d) > AUDIT.redrop then
               au.tried[key] = true
@@ -1768,7 +1870,7 @@ end
 
 function update(node, dt)
   clear_tick()
-  if params.enabled ~= 0 and cur_body then audit_tick(observer()) end
+  if params.enabled ~= 0 and cur_body then audit_tick(observer()); struct_clear(observer()) end
   if params.rare > 0 then rare_tick(dt) end
   if params.touch > 0 and params.enabled ~= 0 and scatter and scatter.near then touch_tick(dt) end
   if params.enabled == 0 then

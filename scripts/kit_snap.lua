@@ -1,0 +1,418 @@
+-- KIT_SNAP — where a modular kit piece in the Engineer's hand goes, and the
+-- kit's record rules: overlap, support, what comes down with a piece
+-- (sandbox plan S1 §1.2, §1.4; docs/base-building.md §13).
+--
+-- A pure RULEBOOK on the Build Kit node beside base_snap.lua (which keeps the
+-- step-5 edge / deck / grid / free rules): no scene access, its globals are
+-- its API, it loads from disk in a luajit test (tests/smoke_kit.lua).
+-- field_builder.pose asks `face` first with a kit piece in hand; nil means
+-- the old rules apply (the ground, a slab's edge, Shift's free).
+-- Everything is in a STRUCTURE's frame (structures.lua: +X right, +Y up, +Z
+-- front at its founding ground point) or its body's (docs/positions-and-
+-- frames.md rule 1); nothing here is a world point.
+--
+-- ── FACE: the hit face and point pick the adjoining place ───────────────────
+-- In the HIT PART's frame (its yaw), on a 0.5 m grid from its own edges. By
+-- the piece's `snap` class (parts_kit.lua):
+--   wall   on a floor/slab top: along its nearest edge (centred on the edge
+--          line, its outside out) within EDGE_NEAR, else across it at the
+--          cursor (a partition); on a wall's end: the line continued; on its
+--          top: stacked; on its face: square off it
+--   floor  beside a floor/slab: level with it; on a top: laid on it; on a
+--          wall: on the wall's top, its edge on the wall's centre line, out
+--          over the side you face (the top face: away from you — a roof from
+--          outside); a pitched panel rises away from that wall
+--   post   on a top: on the nearest corner (within CORNER_NEAR) or the grid;
+--          on a post: stacked; on a wall's end: a corner post
+--   block  on a top: on the grid, square toward you; beside one of its kind
+--   mount  flush on the face hit, facing out of it (pitch 90° on a wall, 180°
+--          under a ceiling), on a 0.25 m grid in that face
+--   hab    on a can's end: the next ring (a cap or bulkhead turned to face
+--          out); on a top: on the grid, square toward you
+--
+-- ── SUPPORT (Career; Creative skips it) ─────────────────────────────────────
+-- A piece is held if it stands on its structure's ground, rests on another
+-- piece's top (or a hab's or catwalk's deck), or — a floor, a hab ring — sits
+-- level beside one that rests (one module of cantilever). A mount is held by
+-- its face. No stress sim: a check on the records, run on a placement.
+-- `fallsWith(rec, uids)` is what is no longer held once uids are gone: what a
+-- Deconstruct takes down with the piece.
+
+GRID = 0.5
+QUARTER = math.pi / 2
+EDGE_NEAR = 0.6
+CORNER_NEAR = 0.5
+MOUNT_GRID = 0.25
+
+local function dot(a, b) return a.x * b.x + a.y * b.y + a.z * b.z end
+local function V(x, y, z) return { x = x, y = y, z = z } end
+local function norm(x, y, z)
+  local l = math.sqrt(x * x + y * y + z * z)
+  if l < 1e-9 then return 0, 1, 0, 0 end
+  return x / l, y / l, z / l, l
+end
+function quantize(a, step) return math.floor(a / step + 0.5) * step end
+function wrap(a) a = (a + math.pi) % (2 * math.pi); return a - math.pi end
+local function sgn(v) return v >= 0 and 1 or -1 end
+
+-- a structure's frame { O, U, F, R } (structures.frame / base_snap.frameOf)
+function frameOf(r)
+  local ux, uy, uz = norm(r.ux or 0, r.uy or 1, r.uz or 0)
+  local fx, fy, fz = r.fx or 0, r.fy or 0, r.fz or 1
+  local d = fx * ux + fy * uy + fz * uz
+  fx, fy, fz = fx - ux * d, fy - uy * d, fz - uz * d
+  local _, _, _, l = norm(fx, fy, fz)
+  if l < 1e-6 then fx, fy, fz = 1 - ux * ux, -ux * uy, -ux * uz end
+  fx, fy, fz = norm(fx, fy, fz)
+  local rx, ry, rz = uy * fz - uz * fy, uz * fx - ux * fz, ux * fy - uy * fx
+  return { O = V(r.x, r.y, r.z), U = V(ux, uy, uz), F = V(fx, fy, fz), R = V(rx, ry, rz) }
+end
+local function toLocal(fr, x, y, z)
+  local d = V(x - fr.O.x, y - fr.O.y, z - fr.O.z)
+  return dot(d, fr.R), dot(d, fr.U), dot(d, fr.F)
+end
+local function toBody(fr, lx, ly, lz)
+  return fr.O.x + fr.R.x * lx + fr.U.x * ly + fr.F.x * lz,
+         fr.O.y + fr.R.y * lx + fr.U.y * ly + fr.F.y * lz,
+         fr.O.z + fr.R.z * lx + fr.U.z * ly + fr.F.z * lz
+end
+
+-- up and front of yaw, pitch, roll in a structure frame (structures.localAxes)
+function localAxes(yaw, pitch, roll)
+  local cy, sy = math.cos(yaw), math.sin(yaw)
+  local cp, sp = math.cos(pitch), math.sin(pitch)
+  local cr, sr = math.cos(roll), math.sin(roll)
+  local function ry(v) return { cy * v[1] + sy * v[3], v[2], -sy * v[1] + cy * v[3] } end
+  return ry({ -sr, cr * cp, cr * sp }), ry({ 0, -sp, cp })
+end
+
+-- A part's nominal solid in its own frame { x0, x1, y0, y1, z0, z1 }: a kit
+-- piece's `box`; another part's from its footprint (a deck part's top is its deck).
+function boxOf(d)
+  if d.box then return d.box end
+  local h = d.half or { x = 0.5, y = 0.5, z = 0.5 }
+  if d.deck then return { -h.x, h.x, d.deck - 2 * h.y, d.deck, -h.z, h.z } end
+  return { -h.x, h.x, 0, 2 * h.y, -h.z, h.z }
+end
+function classOf(d)
+  if d.snap then return d.snap end
+  if d.deck then return "slab" end
+  return "block"
+end
+local function cq(v, lo, hi)
+  if lo > hi + 1e-9 then return (lo + hi) / 2 end
+  return math.max(lo, math.min(hi, quantize(v, GRID)))
+end
+
+-- q = { def (in hand), P, N (body-relative hit point and its normal),
+--       toward (body frame, toward the Engineer), hit = { rec, part },
+--       defs = fn(id) → def, yawOff }
+-- → pose { mode = "face", rec, lx, ly, lz, yaw, pitch, roll, x, y, z (body
+--          ground point), up, fwd (the piece's axes, body frame), anchor,
+--          face = "y+" … } | nil
+function face(q)
+  local def, defs = q.def, q.defs
+  local hit = q.hit
+  if not (def and def.kit and hit and hit.part and hit.rec and q.N and q.P) then return nil end
+  local hd = defs(hit.part.id)
+  if not hd then return nil end
+  local S, H = classOf(def), classOf(hd)
+  local rec, part = hit.rec, hit.part
+  local fr = frameOf(rec)
+  local hx, hy, hz = toLocal(fr, q.P.x, q.P.y, q.P.z)
+  local nx, ny, nz = dot(q.N, fr.R), dot(q.N, fr.U), dot(q.N, fr.F)
+  local tw = q.toward or V(0, 0, 1)
+  local tx, tz = dot(tw, fr.R), dot(tw, fr.F)
+  local yaw0 = part.yaw or 0
+  local c, s = math.cos(yaw0), math.sin(yaw0)
+  -- into the hit part's frame (its yaw; its pitch is a mount's, never snapped to)
+  local dx, dz = hx - (part.x or 0), hz - (part.z or 0)
+  local px, pz, py = dx * c - dz * s, dx * s + dz * c, hy - (part.y or 0)
+  local pnx, pnz = nx * c - nz * s, nx * s + nz * c
+  local ptx, ptz = tx * c - tz * s, tx * s + tz * c
+  local hb = boxOf(hd)
+  local ax, an
+  if math.abs(ny) >= math.abs(pnx) and math.abs(ny) >= math.abs(pnz) then ax, an = "y", sgn(ny)
+  elseif math.abs(pnx) >= math.abs(pnz) then ax, an = "x", sgn(pnx)
+  else ax, an = "z", sgn(pnz) end
+  if H == "mount" and S ~= "mount" then return nil end
+  local nb = boxOf(def)
+  local cx, cy, cz, dyaw, pitch = nil, nil, nil, 0, 0
+  local top = hb[4]
+  local function toward_yaw() return quantize(math.atan2(ptx, ptz), QUARTER) end
+  if S == "mount" then
+    local g = MOUNT_GRID
+    if ax == "y" then
+      cy = an > 0 and hb[4] or hb[3]
+      cx, cz = quantize(px, g), quantize(pz, g)
+      pitch = an > 0 and 0 or math.pi
+    else
+      pitch = QUARTER
+      if ax == "z" then
+        cz = an > 0 and hb[6] or hb[5]
+        cx, cy = quantize(px, g), quantize(py, g)
+        dyaw = an > 0 and 0 or math.pi
+      else
+        cx = an > 0 and hb[2] or hb[1]
+        cz, cy = quantize(pz, g), quantize(py, g)
+        dyaw = an > 0 and QUARTER or -QUARTER
+      end
+    end
+  elseif S == "wall" then
+    local whx = (nb[2] - nb[1]) / 2
+    if ax == "y" and an > 0 and (H == "floor" or H == "slab" or H == "block") then
+      cy = hd.deckTop or top
+      local e = { { hb[2] - px, "x", 1 }, { px - hb[1], "x", -1 }, { hb[6] - pz, "z", 1 }, { pz - hb[5], "z", -1 } }
+      table.sort(e, function(a, b) return a[1] < b[1] end)
+      if e[1][1] <= EDGE_NEAR then
+        local which, side = e[1][2], e[1][3]
+        if which == "z" then
+          cz = side > 0 and hb[6] or hb[5]
+          cx = cq(px, hb[1] + whx, hb[2] - whx)
+          dyaw = side > 0 and 0 or math.pi
+        else
+          cx = side > 0 and hb[2] or hb[1]
+          cz = cq(pz, hb[5] + whx, hb[6] - whx)
+          dyaw = side > 0 and QUARTER or -QUARTER
+        end
+      else
+        cx, cz = quantize(px, GRID), quantize(pz, GRID)
+        dyaw = toward_yaw()
+      end
+    elseif H == "wall" then
+      if ax == "x" then
+        cx = an > 0 and (hb[2] + whx) or (hb[1] - whx)
+        cy, cz = 0, 0
+      elseif ax == "y" and an > 0 then
+        cy = top
+        cx = cq(px, hb[1] + whx, hb[2] - whx)
+        cz = 0
+      elseif ax == "z" then
+        cy = 0
+        cz = an > 0 and (hb[6] + whx) or (hb[5] - whx)
+        cx = cq(px, hb[1] + 0.1, hb[2] - 0.1)
+        dyaw = QUARTER
+      end
+    end
+  elseif S == "floor" then
+    local fhx, fhz, fh = (nb[2] - nb[1]) / 2, (nb[6] - nb[5]) / 2, nb[4] - nb[3]
+    if (H == "floor" or H == "slab") and ax ~= "y" then
+      local ftop = hd.deckTop or top
+      cy = ftop - (def.deckTop or fh)
+      if def.slopeZ then cy = ftop end
+      if ax == "x" then
+        cx = an > 0 and (hb[2] + fhx) or (hb[1] - fhx)
+        cz = cq(pz, hb[5] + fhz, hb[6] - fhz)
+      else
+        cz = an > 0 and (hb[6] + fhz) or (hb[5] - fhz)
+        cx = cq(px, hb[1] + fhx, hb[2] - fhx)
+      end
+    elseif ax == "y" and an > 0 and (H == "floor" or H == "slab" or H == "block" or H == "hab") then
+      cy = hd.deckTop or top
+      cx = cq(px, hb[1] + fhx, hb[2] - fhx)
+      cz = cq(pz, hb[5] + fhz, hb[6] - fhz)
+    elseif H == "wall" then
+      cy = top
+      local side
+      if ax == "z" then side = an else side = -sgn(ptz) end
+      cx = cq(px, hb[1] + fhx, hb[2] - fhx)
+      cz = side * fhz
+      if def.slopeZ then dyaw = side > 0 and math.pi or 0 end
+    elseif H == "post" and ax == "y" and an > 0 then
+      cy = top
+      cx, cz = -sgn(ptx) * fhx, -sgn(ptz) * fhz
+    end
+  elseif S == "post" then
+    local phx = (nb[2] - nb[1]) / 2
+    if ax == "y" and an > 0 then
+      cy = hd.deckTop or top
+      if H == "post" then cx, cz = 0, 0
+      else
+        local kx = math.abs(px - hb[1]) < math.abs(px - hb[2]) and hb[1] or hb[2]
+        local kz = math.abs(pz - hb[5]) < math.abs(pz - hb[6]) and hb[5] or hb[6]
+        if math.abs(px - kx) <= CORNER_NEAR and math.abs(pz - kz) <= CORNER_NEAR and H ~= "hab" then cx, cz = kx, kz
+        else cx, cz = quantize(px, GRID), quantize(pz, GRID) end
+      end
+    elseif H == "wall" and ax == "x" then
+      cx = an > 0 and (hb[2] + phx) or (hb[1] - phx)
+      cy, cz = 0, 0
+    end
+  elseif S == "block" then
+    if ax == "y" and an > 0 then
+      cy = hd.deckTop or top
+      cx, cz = quantize(px, GRID), quantize(pz, GRID)
+      dyaw = toward_yaw()
+    elseif hit.part.id == q.id and ax ~= "y" then
+      if ax == "x" then cx = an > 0 and (hb[2] + (nb[2] - nb[1]) / 2) or (hb[1] - (nb[2] - nb[1]) / 2); cz = 0
+      else cz = an > 0 and (hb[6] + (nb[6] - nb[5]) / 2) or (hb[5] - (nb[6] - nb[5]) / 2); cx = 0 end
+      cy = 0
+    end
+  elseif S == "hab" then
+    if H == "hab" and ax == "z" then
+      cy, cx = 0, 0
+      if an > 0 then dyaw = 0; cz = hb[6] - nb[5] else dyaw = math.pi; cz = hb[5] + nb[5] end
+    elseif ax == "y" and an > 0 and (H == "floor" or H == "slab" or H == "block") then
+      cy = top
+      cx, cz = quantize(px, GRID), quantize(pz, GRID)
+      dyaw = toward_yaw()
+    end
+  end
+  if cx == nil then return nil end
+  local lx = (part.x or 0) + cx * c + cz * s
+  local lz = (part.z or 0) - cx * s + cz * c
+  local ly = (part.y or 0) + cy
+  local yaw = wrap(yaw0 + dyaw + (q.yawOff or 0))
+  local x, y, z = toBody(fr, lx, ly, lz)
+  local lu, lf = localAxes(yaw, pitch, 0)
+  local function bodyv(v) return V(fr.R.x * v[1] + fr.U.x * v[2] + fr.F.x * v[3], fr.R.y * v[1] + fr.U.y * v[2] + fr.F.y * v[3],
+                                   fr.R.z * v[1] + fr.U.z * v[2] + fr.F.z * v[3]) end
+  return { mode = "face", rec = rec, lx = lx, ly = ly, lz = lz, yaw = yaw, pitch = pitch, roll = 0,
+           x = x, y = y, z = z, up = bodyv(lu), fwd = bodyv(lf), anchor = part, face = ax .. (an > 0 and "+" or "-") }
+end
+
+-- ── the records rules ───────────────────────────────────────────────────────
+
+-- A part's solid in its structure's frame { x, z, hx, hz, yaw, y0, y1 }.
+-- A mount on a wall (pitch 90°) stands its face's height along up and its
+-- depth along its facing; under a ceiling (180°) it hangs down.
+function solid(p, d)
+  local b = boxOf(d)
+  local pitch = p.pitch or 0
+  local c, s = math.cos(p.yaw or 0), math.sin(p.yaw or 0)
+  local cxl, czl = (b[1] + b[2]) / 2, (b[5] + b[6]) / 2
+  local x = (p.x or 0) + cxl * c + czl * s
+  local z = (p.z or 0) - cxl * s + czl * c
+  local y0, y1 = (p.y or 0) + b[3], (p.y or 0) + b[4]
+  local hx, hz = (b[2] - b[1]) / 2, (b[6] - b[5]) / 2
+  if d.live then pitch = 0 end   -- (a live part's box is already as it lies: a cockpit on its belly)
+  if math.abs(pitch) > 1e-3 and d.snap ~= "mount" then
+    -- (a piece turned a quarter about its X — a truss laid down: Rx(+90°)
+    -- takes y to z and z to -y; the half-turn stands it on its head)
+    local s1 = math.sin(pitch)
+    local y0, y1, z0, z1 = b[3], b[4], b[5], b[6]
+    local ny0, ny1, nz0, nz1
+    if math.abs(s1) > 0.7 then
+      if s1 > 0 then ny0, ny1, nz0, nz1 = -z1, -z0, y0, y1 else ny0, ny1, nz0, nz1 = z0, z1, -y1, -y0 end
+    else ny0, ny1, nz0, nz1 = -y1, -y0, -z1, -z0 end
+    local cz2 = (nz0 + nz1) / 2
+    return { x = (p.x or 0) + cxl * c + cz2 * s, z = (p.z or 0) - cxl * s + cz2 * c, hx = hx, hz = (nz1 - nz0) / 2,
+             yaw = p.yaw or 0, y0 = (p.y or 0) + ny0, y1 = (p.y or 0) + ny1 }
+  end
+  if math.abs(pitch) > 1e-3 then
+    local depth = b[4] - b[3]
+    if math.abs(math.abs(pitch) - math.pi) < 1e-3 then
+      y0, y1 = (p.y or 0) - depth, (p.y or 0)
+    else
+      x, z = (p.x or 0) + s * depth / 2, (p.z or 0) + c * depth / 2
+      y0, y1 = (p.y or 0) - hz, (p.y or 0) + hz
+      hz = depth / 2
+    end
+  end
+  return { x = x, z = z, hx = hx, hz = hz, yaw = p.yaw or 0, y0 = y0, y1 = y1 }
+end
+
+-- Do two yawed rectangles overlap by more than `m` (m)? (separating axes)
+function rectOverlap(a, b, m)
+  local function axes(r) local c, s = math.cos(r.yaw), math.sin(r.yaw); return { { c, -s }, { s, c } } end
+  local function proj(r, ax)
+    local A = axes(r)
+    local ctr = r.x * ax[1] + r.z * ax[2]
+    local e = math.abs(A[1][1] * ax[1] + A[1][2] * ax[2]) * r.hx + math.abs(A[2][1] * ax[1] + A[2][2] * ax[2]) * r.hz
+    return ctr - e, ctr + e
+  end
+  for _, r in ipairs({ a, b }) do
+    for _, ax in ipairs(axes(r)) do
+      local a0, a1 = proj(a, ax)
+      local b0, b1 = proj(b, ax)
+      if math.min(a1, b1) - math.max(a0, b0) <= m then return false end
+    end
+  end
+  return true
+end
+
+-- The part of `rec` the new part `np` (def `nd`) would be inside, or nil.
+-- Mounts only meet mounts; everything else meets everything but mounts.
+-- (Wall-to-wall corners share their end 0.1 m: the margin lets them.)
+OVERLAP_M = 0.11
+function overlapIn(rec, defs, np, nd, skip)
+  local a = solid(np, nd)
+  local am = nd.snap == "mount"
+  for _, p in ipairs(rec.bp or {}) do
+    if not (skip and skip[p.uid]) then
+      local d = defs(p.id)
+      if d and ((d.snap == "mount") == am) then
+        local b = solid(p, d)
+        if math.min(a.y1, b.y1) - math.max(a.y0, b.y0) > 0.03 and rectOverlap(a, b, OVERLAP_M) then return p, d end
+      end
+    end
+  end
+  return nil
+end
+
+-- Does part `np` rest on the ground level or on another part's top? (gone:
+-- a uid set taken away.) → true | "beside" (level beside `by`) | false
+local function rests(rec, defs, np, nd, gone)
+  if nd.snap == "mount" then return true end
+  local a = solid(np, nd)
+  -- the structure's own ground level (its founding part stands at y 0)
+  if a.y0 <= 0.06 then return true end
+  local beside = nil
+  for _, p in ipairs(rec.bp or {}) do
+    if p ~= np and p.uid ~= np.uid and not (gone and gone[p.uid]) then
+      local d = defs(p.id)
+      if d and d.snap ~= "mount" then
+        local b = solid(p, d)
+        if (math.abs(a.y0 - b.y1) <= 0.06 or (d.deckTop and math.abs(a.y0 - ((p.y or 0) + d.deckTop)) <= 0.06))
+           and rectOverlap(a, b, 0.02) then return true end
+        if not beside and (nd.snap == "floor" or nd.snap == "hab") and (classOf(d) == nd.snap or classOf(d) == "slab")
+           and math.abs(a.y1 - b.y1) <= 0.06 then
+          local grow = { x = a.x, z = a.z, hx = a.hx + 0.05, hz = a.hz + 0.05, yaw = a.yaw }
+          if rectOverlap(grow, b, 0.0) then beside = p end
+        end
+      end
+    end
+  end
+  if beside then return "beside", beside end
+  return false
+end
+
+-- Kit support (Career): held from below, or beside a part that is.
+function supported(rec, defs, np, nd, gone)
+  local r, by = rests(rec, defs, np, nd, gone)
+  if r == true then return true end
+  if r == "beside" then return rests(rec, defs, by, defs(by.id), gone) == true end
+  return false
+end
+
+-- What is no longer held once `uids` are gone (transitively): kit pieces
+-- only; a mount goes with the piece its face is on. → { uid … } (not uids)
+function fallsWith(rec, defs, uids)
+  local gone, out = {}, {}
+  for _, u in ipairs(uids) do gone[u] = true end
+  local changed = true
+  while changed do
+    changed = false
+    for _, p in ipairs(rec.bp or {}) do
+      local d = not gone[p.uid] and defs(p.id)
+      if d and d.kit then
+        local falls
+        if d.snap == "mount" then
+          falls = true
+          local a = solid(p, d)
+          for _, o in ipairs(rec.bp) do
+            local od = not gone[o.uid] and o.uid ~= p.uid and defs(o.id)
+            if od and od.snap ~= "mount" then
+              local b = solid(o, od)
+              local grow = { x = b.x, z = b.z, hx = b.hx + 0.06, hz = b.hz + 0.06, yaw = b.yaw }
+              if math.min(a.y1, b.y1 + 0.06) - math.max(a.y0, b.y0 - 0.06) > 0 and rectOverlap(a, grow, 0.0) then falls = false break end
+            end
+          end
+        else
+          falls = not supported(rec, defs, p, d, gone)
+        end
+        if falls then gone[p.uid] = true; out[#out + 1] = p.uid; changed = true end
+      end
+    end
+  end
+  return out
+end

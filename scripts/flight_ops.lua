@@ -272,6 +272,8 @@ end
 function survey()
   local v = piloted()
   if v then
+    -- (sandbox S2: a seat in a placed structure flies nothing)
+    if v.structureMode then return { v = v, mode = "seated" } end
     -- `hasFlown` is false only for a craft rolled out this session that has
     -- not yet left the pad; anything else got where it is by flying.
     -- A rover driven off its spot (`leftPad`) is past the pad even though
@@ -1335,7 +1337,7 @@ end
 
 function endFlight()
   local st = survey()
-  if not st or st.mode == "flying" or st.mode == "prelaunch" then return false end
+  if not st or st.mode == "flying" or st.mode == "prelaunch" or st.mode == "seated" then return false end
   if st.mode == "recover" then return sounded("recover", do_recover(st)) end
   if st.mode == "pickup" then return sounded("pickup", do_pickup(st)) end
   return sounded("leave", do_leave(st))
@@ -1367,7 +1369,11 @@ local function describe(st)
                         wrap = true, text = text }
   end
 
-  if st.mode == "prelaunch" then
+  if st.mode == "seated" then
+    row("label", "hud/label", "IN A BASE SEAT")
+    row("task", "hud/task", "[F]   STAND UP")
+    row("hint", "hud/hint", "Part of a structure: it flies nothing. Its lights (Y) and lockers work from here.", true)
+  elseif st.mode == "prelaunch" then
     row("label", "hud/label", "ON THE PAD")
     if st.clamped then
       row("task", "hud/task", st.ready and "[SPACE]   RELEASE CLAMPS" or "Assembling on the pad…")

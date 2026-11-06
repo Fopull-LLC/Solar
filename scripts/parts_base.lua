@@ -70,13 +70,19 @@ PARTS = {
                slope = 0.6, deck = 0.20, tile = 4.0, grade = 2.0, footPad = 0.15, skirt = 0.40,
                desc = "4 x 4 m precast slab · 11.5 t · a level deck to build on" },
   shed     = { prefab = "BaseShed", label = "Equipment Shed", h = 2.60, rx = 1.6, rz = 1.32, mass = 1.6, cost = 1400,
-               kind = "structural", fieldOnly = true, seat = 1.30, half = { x = 1.55, y = 1.30, z = 1.25 },
+               kind = "structural", fieldOnly = true, seat = 0, half = { x = 1.55, y = 1.30, z = 1.25 },
                slope = 0.6, onDeck = true, grade = 1.6, footPad = 0.20, hull = "subShape",
-               desc = "3.0 x 2.4 m steel shelter · 1.6 t · racks and a bench inside" },
+               -- (sandbox S1, Ty 11-06: kept one-click, and it works: its door
+               -- slides open, you walk in, its light is on: scripts/kit_live.lua)
+               script = "kit_live", door = { slide = { 0.95, 0, 0 }, secs = 1.1, near = 2.4 },
+               light = { color = { 1.0, 0.88, 0.70 }, intensity = 1.8, range = 6 },
+               desc = "3.0 x 2.4 m steel shelter · 1.6 t · a sliding door, racks and a bench inside, a light" },
   hab      = { prefab = "BaseHab", label = "Surface Hab", h = 4.36, rx = 3.5, rz = 2.2, mass = 7.5, cost = 6500,
-               kind = "structural", fieldOnly = true, seat = 2.104, half = { x = 3.45, y = 2.18, z = 2.05 },
+               kind = "structural", fieldOnly = true, seat = 0, half = { x = 3.45, y = 2.18, z = 2.05 },
                slope = 0.6, onDeck = true, grade = 2.0, footPad = 0.25, hull = "shell",
-               desc = "4 x 6 m pressure can on saddles · 7.5 t · a home for four, one day" },
+               script = "kit_live", door = { slide = { 1.22, 0, 0 }, secs = 1.8, near = 2.6, heavy = true },
+               light = { color = { 1.0, 0.86, 0.66 }, intensity = 2.2, range = 8 },
+               desc = "4 x 6 m pressure can on saddles · 7.5 t · its hatch slides open, steps up, bunks and racks inside, a light" },
   -- Step 6 (L1): a craft stand. Its deck's height is the part's own `h`
   -- (a bp field, copied from `fields` at placement); its behaviour is
   -- craft_stand.lua's (`script`).
@@ -154,7 +160,15 @@ function catalogue()
   return { { title = SECTION, ids = ids } }
 end
 
-function partInfo(id) return PARTS[id] end
+-- (sandbox S1/S2: a kit piece "<piece>.<mat>" or a live VAB part "vab.<id>"
+-- is parts_kit's: every reader of a structure's parts sees it as a part)
+local kit_ref = nil
+function partInfo(id)
+  local d = PARTS[id]
+  if d or type(id) ~= "string" or not id:find(".", 1, true) then return d end
+  if not kit_ref or kit_ref.valid == false then kit_ref = findScript and findScript("parts_kit") or nil end
+  return kit_ref and kit_ref.partInfo(id) or nil
+end
 
 -- parts_registry.extend's hook, for a shared catalogue one day: adds the
 -- BASE section (every entry flagged fieldOnly). Nothing calls it today.

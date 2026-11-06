@@ -444,6 +444,34 @@ local function pose_deck(key, def, h)
   if d then d.x, d.y, d.z = 0, deckY(def, h), 0 end
 end
 
+-- The display copy's look (S2): a cool blueprint blue with a blue rim.
+DISPLAY_TINT = { color = { 0.36, 0.60, 1.0 }, rim = { 0.30, 0.62, 1.0 }, rimStrength = 1.3, emissive = { 0.06, 0.16, 0.42 }, emissiveStrength = 0.45 }
+function tint_tree(n, depth)
+  if not valid(n) then return end
+  pcall(n.setTint, n, DISPLAY_TINT)
+  if depth < 3 then
+    local ok, kids = pcall(n.children, n)
+    for _, k in ipairs(ok and kids or {}) do tint_tree(k, depth + 1) end
+  end
+end
+-- F beside a craft that is only drawn: say why nothing happens (S2).
+function displayHint()
+  local a = find and find("Astronaut")
+  if not valid(a) then return nil end
+  for key, s in pairs(shown) do
+    if s and valid(s.node) then
+      local w = s.node.worldPos
+      if math.sqrt((w.x - a.x) ^ 2 + (w.y - a.y) ^ 2 + (w.z - a.z) ^ 2) < 5.0 then
+        local sid, uid = key:match("^(%d+):(%d+)$")
+        local st = sid and stateOf(tonumber(sid), tonumber(uid))
+        return string.format("%s is not commissioned yet: COMMISSION on the stand to use it", tostring(st and st.name or "This craft"))
+      end
+    end
+  end
+  return nil
+end
+lastHint = nil
+
 local function drop_display(key)
   local s = shown[key]
   if s and valid(s.node) then pcall(s.node.destroy, s.node) end
@@ -476,6 +504,9 @@ local function show_display(sid, uid)
           part.x, part.y, part.z = d.x or 0, d.y or 0, d.z or 0
           part:setAngles(d.yaw or 0, d.pitch or 0, d.roll or 0)
           if d.size and d.proc and PR and PR.dress then pcall(PR.dress, part, { def = d, size = d.size }) end
+          -- (S2: blueprint blue, so it reads as not yet real: setTint keeps
+          -- the part's textures and rides per instance, never splitting a batch)
+          tint_tree(part, 0)
         end, { parent = n, body = false })
         if not ok and log then log("stand: could not draw " .. tostring(d.prefab)) end
       end
@@ -994,6 +1025,7 @@ end
 -- → ok, why
 function returnWhy(v, sid, uid)
   if not (v and v.node and valid(v.node)) then return "no craft" end
+  if v.structureMode then return "part of a structure" end
   if v.piloting or v.crewAboard then return "the crew must step off first" end
   if v.isLost and v.isLost() then return "it's a wreck: recover it instead" end
   local i = assembly.info(v.node)
@@ -1207,6 +1239,14 @@ local function provider_tick() end
 
 function update(node, dt)
   provider_tick()
+  -- (S2: F beside a display copy says why nothing happens)
+  if next(shown) ~= nil and input and input.pressed and input.pressed("f") then
+    local pw = ref("planet_walker")
+    if not pw or pw.onFoot ~= false then
+      local h = displayHint()
+      if h then lastHint = h; if caption then pcall(caption, h) end; if log then log("stand: " .. h) end end
+    end
+  end
   if next(J) == nil then return end
   for key, E in pairs(J) do
     if E.node and not valid(E.node) then
@@ -1359,6 +1399,10 @@ local function stand_rows(sid, uid, def, ctx)
         return list, "PUT A CRAFT ON THE STAND"
       end }
   elseif st.s == STATE_BUILT then
+    -- (sandbox S2: Ty's dead cockpit — the craft on the deck is a blue display
+    -- copy until it is commissioned, and says so)
+    rows[#rows + 1] = { id = "cs_notyet", type = "info", label = tostring(st.name or "The craft"), group = "Stand",
+      value = "not commissioned yet: COMMISSION to use it" }
     rows[#rows + 1] = { id = "cs_com", type = "action", label = "Commission", group = "Stand", hint = "job",
       value = function() return "a live craft, held on the deck" end,
       enabled = function() return engineer() end, why = "Engineers only",

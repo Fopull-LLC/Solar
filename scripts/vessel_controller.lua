@@ -111,6 +111,12 @@ leftPad = true
 -- Held in a Build Stand's clamps (craft_stand.lua): not on a launch pad, so
 -- flight_ops does not take the stand's radius for the pad's.
 standHeld = false
+-- THE STRUCTURE MODE (sandbox S2, struct_live.lua): this vessel is the live
+-- parts of a placed structure (a cockpit in a hab, lockers, lights): anchored
+-- for good. No clamp release, no recovery, no navball; its seats, hatches,
+-- lockers, lights and part menus are a craft's. `structureSid` = its structure.
+structureMode = false
+structureSid = nil
 -- WHERE THE CREW SITS, apart from what COMMANDS the craft. `pod_uid` (below) is
 -- the command part: the keep-side of every staging cut, the part whose loss
 -- loses the craft, the rover's front. The crew can sit in any crewed part
@@ -1066,6 +1072,7 @@ local function find_instruments()
 end
 
 local function set_navball(on)
+  if structureMode then on = false end   -- (a seat in a base flies nothing)
   find_instruments()
   for _, inst in ipairs({ navball, tape_spd, tape_alt, txt_spd, txt_alt, txt_hdg }) do
     if inst then
@@ -5179,6 +5186,7 @@ end
 function recoverReady()
   local node = dock.node
   if destroyed or not node or not node.valid then return false, "no craft" end
+  if structureMode then return false, "part of a structure (Deconstruct it with the Build Kit)" end
   -- A craft still clamped to the pad has not flown: "recovering" it would be a
   -- refund for pressing Launch.
   if hasFlown == false then return false, "not launched yet" end
@@ -7065,6 +7073,7 @@ function start(node)
     -- the stand's clamps: it has not left its spot, so the fleet leaves it to
     -- the stand until it is released (releaseClamps sets leftPad).
     if handoff.held then leftPad, standHeld = false, true end
+    if handoff.structure then structureMode, structureSid = true, handoff.structure end
     log(string.format("%s: undocked module online (%d parts, %.0f fuel)",
       node.name or "vessel", part_total, fuel))
   else
@@ -7347,6 +7356,7 @@ end
 function releaseClamps()
   local node = dock.node
   if not node or not node.valid then return false end
+  if structureMode then caption("part of a structure: it stays where it was built") return false end
   local info = assembly.info(node)
   if not info then return false end
   if info.anchored then
@@ -14637,6 +14647,7 @@ DORM = { born = nil, check = -1e9, quiet = nil, light = nil, far = false, live =
 DORM_NEAR = 40.0      -- the crew within this: boarding prompts, the hatch ring
 DORM_LIVE = 750.0     -- the camera within this: the engine simulates the craft (~700)
 DORM_VIS = 60.0       -- the camera within this: a dormant craft checks every tick, its tyres drawn
+DORM_STRUCT = 6.0     -- (S2) a structure vessel: the crew this near one of its seats wakes it (F boards from 3.4 m)
 
 -- Should this craft be dormant now? → yes, the camera's distance.
 function dormWanted(node)
@@ -14648,7 +14659,19 @@ function dormWanted(node)
   local a = astronaut
   if a and a.valid then
     local dx, dy, dz = a.x - nx, a.y - ny, a.z - nz
-    if dx * dx + dy * dy + dz * dz < DORM_NEAR * DORM_NEAR then return false, 0 end
+    -- (S2: a structure's vessel wakes only for the crew at its seats and
+    -- lockers, DORM_STRUCT; it never moves, so physics never needs it)
+    if structureMode then
+      -- (measured from its seats, not its root: a big structure's cockpit
+      -- can stand 20 m from the structure's origin)
+      for _, cs in ipairs(crewSeats) do
+        local ok, w = pcall(node.toWorld, node, vec3(cs.x or 0, cs.y or 0, cs.z or 0))
+        if ok and w then
+          local sx, sy, sz = a.x - w.x, a.y - w.y, a.z - w.z
+          if sx * sx + sy * sy + sz * sz < DORM_STRUCT * DORM_STRUCT then return false, 0 end
+        end
+      end
+    elseif dx * dx + dy * dy + dz * dz < DORM_NEAR * DORM_NEAR then return false, 0 end
   end
   local c = DORM.cam
   if not (c and c.valid) and now - DORM.cam_t > 2.0 then
@@ -14663,7 +14686,7 @@ function dormWanted(node)
   end
   -- awake and inside the live-physics range: physics is moving it, and what
   -- this script does about that (damage, water, the wheels) has to happen
-  if cd < DORM_LIVE and not node.asleep then return false, cd end
+  if cd < DORM_LIVE and not node.asleep and not structureMode then return false, cd end
   return true, cd
 end
 
@@ -14717,7 +14740,7 @@ function dormTick(node)
   if dormant then
     -- woken: control taken, or physics moving it where physics runs (a bump,
     -- its ground going) — the full tick runs this very tick
-    if piloting or crewAboard or boarding or (DORM.live and not node.asleep) then return dormWake(node) end
+    if piloting or crewAboard or boarding or (DORM.live and not node.asleep and not structureMode) then return dormWake(node) end
     if not DORM.far and now - DORM.check < 0.5 then return true end
     DORM.check = now
     local want, cd = dormWanted(node)

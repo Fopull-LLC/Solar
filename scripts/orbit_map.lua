@@ -2734,7 +2734,9 @@ function lateUpdate(node, dt)
   if not typing then
     -- M: the chart (and M while the station is up closes it); F2: the station
     -- (F2 again closes it, F2 over the chart swaps to it)
-    if input.pressed("m") then toggle() end
+    -- (the Build Kit with a kit piece in hand: M is its material key)
+    local fbk = findScript("field_builder")
+    if input.pressed("m") and not (fbk and fbk.materialKey == true) then toggle() end
     if input.pressed("f2") and not gm_busy then
       if map_view and mode == "station" then toggle()
       elseif map_view then setMode("station")

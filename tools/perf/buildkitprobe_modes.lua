@@ -419,10 +419,10 @@ function BK.step5(fb, ST, co, cp)
   if ps then es, ns = BK.part_err(ST, sid_pad, ps.uid) end
   local n3 = p3 and ST.nodeOf(sid_pad, p3.uid)
   local over = (ns and n3) and dot(sub(ns.worldPos, n3.worldPos), unit(sub(n3.worldPos, home()))) or -1
-  -- (the shed's origin sits seat 1.30 over its ground, the plate's −0.0475 under its own: 0.20 + 1.30 + 0.0475)
-  BK.check("shed_on_plate", ps and ps.id == "shed" and es < 0.01 and math.abs(over - (0.20 + 1.30 + 0.0475)) < 0.02
+  -- (the shed's origin sits its seat over its ground — 0 since sandbox S1, the root is its ground point — and the plate's −0.0475 under its own)
+  BK.check("shed_on_plate", ps and ps.id == "shed" and es < 0.01 and math.abs(over - (0.20 + findScript("parts_base").partInfo("shed").seat + 0.0475)) < 0.02
     and math.abs(ps.x - p3.x) < 0.51 and math.abs(ps.z - p3.z) < 0.51,
-    "the shed stands on the plate: %.3f m over its origin (want 1.548), local (%.2f, %.2f) on a plate at (%.2f, %.2f)",
+    "the shed stands on the plate: %.3f m over its origin (want its seat + 0.2475), local (%.2f, %.2f) on a plate at (%.2f, %.2f)",
     over, ps and ps.x or -1, ps and ps.z or -1, p3 and p3.x or -1, p3 and p3.z or -1)
   -- a ray from above lands on the shed's roof, and the deck beside it on the plate
   if ns then
@@ -651,7 +651,7 @@ function BK.step5(fb, ST, co, cp)
   local _, np3 = BK.part_err(ST, sid_pad, p3 and p3.uid or 0)
   if nsh and np3 then
     local over2 = dot(sub(nsh.worldPos, np3.worldPos), unit(sub(np3.worldPos, b1)))
-    BK.check("reload_deck", math.abs(over2 - 1.5475) < 0.02, "...the shed still on its plate's deck (%.3f m over it)", over2)
+    BK.check("reload_deck", math.abs(over2 - (findScript("parts_base").partInfo("shed").seat + 0.2475)) < 0.02, "...the shed still on its plate's deck (%.3f m over it)", over2)
   end
   local n1r = ST.nodeOf(sid_pad, 1)
   if n1r then

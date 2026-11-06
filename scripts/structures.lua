@@ -154,9 +154,32 @@ function partPose(r, p, seat)
   local x = r.x + rx * lx + ux * ly + fx * lz
   local y = r.y + ry * lx + uy * ly + fy * lz
   local z = r.z + rz * lx + uz * ly + fz * lz
-  local c, s = math.cos(p.yaw or 0), math.sin(p.yaw or 0)
-  local pfx, pfy, pfz = fx * c + rx * s, fy * c + ry * s, fz * c + rz * s
-  return x, y, z, { x = ux, y = uy, z = uz }, { x = pfx, y = pfy, z = pfz }
+  local pitch, roll = p.pitch or 0, p.roll or 0
+  if pitch == 0 and roll == 0 then
+    local c, s = math.cos(p.yaw or 0), math.sin(p.yaw or 0)
+    local pfx, pfy, pfz = fx * c + rx * s, fy * c + ry * s, fz * c + rz * s
+    return x, y, z, { x = ux, y = uy, z = uz }, { x = pfx, y = pfy, z = pfz }
+  end
+  -- (the sandbox kit, S1: a piece turned in pitch and roll too — the
+  -- engine's own order, node:setAngles: yaw about up, then pitch about the
+  -- part's X, then roll about its Z; `seat` stays along the structure's up)
+  local lu, lf = localAxes(p.yaw or 0, pitch, roll)
+  local function body(v) return { x = rx * v[1] + ux * v[2] + fx * v[3], y = ry * v[1] + uy * v[2] + fy * v[3],
+                                   z = rz * v[1] + uz * v[2] + fz * v[3] } end
+  return x, y, z, body(lu), body(lf)
+end
+
+-- A part's up (+Y) and front (+Z) in its structure's frame for yaw, pitch,
+-- roll (rad; M = Ry(yaw)·Rx(pitch)·Rz(roll), its columns). (pure)
+function localAxes(yaw, pitch, roll)
+  local cy, sy = math.cos(yaw), math.sin(yaw)
+  local cp, sp = math.cos(pitch), math.sin(pitch)
+  local cr, sr = math.cos(roll), math.sin(roll)
+  -- Rx·Rz columns: Y' = (-sr, cr·cp, cr·sp), Z' = (0, -sp, cp); then Ry
+  local function ry(v) return { cy * v[1] + sy * v[3], v[2], -sy * v[1] + cy * v[3] } end
+  local up = ry({ -sr, cr * cp, cr * sp })
+  local fw = ry({ 0, -sp, cp })
+  return up, fw
 end
 
 -- A new one-part structure: the part `partId` on the ground point (x, y, z)
@@ -434,6 +457,15 @@ function setPartState(id, uid, t)
   return true
 end
 
+-- (S2) a node another script made for part `uid` of structure `sid` (a live
+-- part under the structure's vessel): partOfNode finds it, as a prefab's.
+function adopt(node, sid, uid)
+  if node and node.valid ~= false then owner[node.id] = { sid = sid, uid = uid } end
+end
+-- Is structure `id` spawned (its world in focus or within spawn_range)?
+function isLive(id) return live[id] ~= nil end
+function unadopt(node) if node then pcall(function() owner[node.id] = nil end) end end
+
 function nodesOf(id)
   local L = live[id]
   if not L then return nil end
@@ -505,6 +537,13 @@ spawn_part = function(r, L, p)
   local b = space and space.body and space.body(r.b)
   local def = pb and pb.partInfo(p.id)
   if not (def and def.prefab and planet and b and spawn) then return end
+  -- (S2: a live part — a VAB part placed with the kit — is drawn as a part of
+  -- its structure's anchored vessel, struct_live.lua: not a static prefab)
+  if def.live then
+    local SL = findScript and findScript("struct_live")
+    if SL and SL.changed then pcall(SL.changed, r.id) end
+    return
+  end
   local x, y, z, U, F = partPose(r, p, def.seat)
   local function mine() return live[r.id] == L and recs and recs[r.id] == r and part_in(r, p.uid) == p end
   L.spawning = L.spawning + 1

@@ -113,8 +113,13 @@ frame.
     collider boxes closes it.
   - **Both** carry their fit-out as an `Interior` child mesh: racks, bench,
     deck, bunks.
-  - **Doors are closed.** Nobody walks inside a placed module before EN1/EN2,
-    and there are no kinematic interior fakes.
+  - **Doors open (sandbox S1, §13).** The shed's door is a steel leaf on an
+    outside track and the hab's a pressure hatch in a collar cut through its
+    hull, each a `Door` child with its own colliders that `kit_live.lua`
+    slides open. Their interiors are static collider boxes on the planet
+    (floor, walls, racks, bunks; the hab's hull a ring of 16 thin boxes), so
+    the crew walks in as they do in the Research Lab. Static ground interiors
+    are not kinematic fakes; EN1/EN2 matter only for moving compounds.
 
 ## 3. The ghost and the aim (K4)
 
@@ -1109,3 +1114,188 @@ grid automatically; a Power Cable joins grids beyond that.**
 - **Battery Bank.** A bank set up by a level-2 Engineer charges at +3 points (level 3: +5),
   capped at 99 %. The bonus is written on the part as `effk` when it is placed, so the
   grid's closed-form step stays exact: nothing about it changes with who is standing near.
+
+## 13. Sandbox S1 and S2: habs from pieces, and anything placed works
+
+The plan is `work/sandbox/PLAN.md` (§1, §2, §8.3). Ty's answers, 11-06: 2 m
+modules on a 0.5 m grid; the Shed and the Hab stay as one-click prefabs
+beside the kit, and they must work; the support check is on in Career and
+off in Creative.
+
+### The kit (`scripts/parts_kit.lua`, `tools/gen_kit_parts.py`)
+
+- **A piece** is a part record like any other, its id `"<piece>.<mat>"`
+  (`wall.steel`). `parts_base.partInfo` falls back to the kit, so
+  `structures`, `base_snap`, `field_builder`, `base_grid` and `base_shield`
+  read a piece as one more part.
+- **Material is a property, not a part:** steel (a sandwich panel, the
+  cladding set), concrete, regocrete (the concrete set in regolith brown) and
+  glass (a laminated pane in a steel frame). Mass = gross volume × density ×
+  the material's fill for the piece's class; price = the steel price ×
+  `COSTK`. **M** cycles the material of the piece in hand and of the next
+  ones (the map's M stands down while a kit piece is in hand). Concrete and
+  regocrete walls, floors and slabs shield by record (`shield.k` = the
+  material's `k`).
+- **The grid:** a storey is 2.4 m: a 0.2 m floor and a 2.2 m wall, so a
+  0.9 × 2.05 m door fits under a lintel. Walls stand on the edge lines of the
+  floors and slabs, centred on them.
+- **The first release** (46 pieces, 88 prefabs, 103 models in `models/kit/`):
+  - FOUNDATION: Slab 2 × 2 (tiles edge to edge like the Pad Plate), Footing
+    Pier, Ramp 2 × 4, Stairs (one storey, 12 risers), Steps 0.8 m, Ship's
+    Ladder (a 47° stair: the walker climbs nothing steeper than 52°), Grating Deck.
+  - FLOOR: Floor 2 × 2 / 2 × 1 / 1 × 1, Hatch Floor (a 0.9 m deck hatch that
+    slides open).
+  - WALL: Wall, Half Wall, Wall 1 m, Door Wall (a pocket door), Double Door
+    Wall (4 m, two leaves), Window Wall (double glazed), Porthole Wall,
+    Airlock Wall (a heavy pressure door; its interlock and cycling are S3),
+    Open Frame, Vent Louvre Wall, Corner Post.
+  - ROOF: Pitched Roof 2 × 2 (30°, glass makes a skylight), Roof Ridge, Gable.
+  - FRAME: Pillar 2.2 / 4.4 m, Beam 2 / 4 m, Truss 2 / 4 / 6 m, Truss Node,
+    Catwalk 1 × 2, Handrail.
+  - HAB: the 2.5 m pressure can, along its Z on its saddles, a deck inside at
+    0.8 m: Hab Segment, Hab Window Segment, Hab End Cap, Hab Door Bulkhead
+    (a sliding door at deck level).
+  - SHIELD: Shield Block 1 × 1, Lead-lined Wall.
+  - UTILITY: Light Fitting, Switch Plate, Wall Screen, Wall Cable Tray, Floor Duct.
+  - FITTINGS: VAB parts placed live (below).
+- **A prefab** has an Empty root at the ground point (`seat` 0), a `Mesh`
+  child, its static colliders (`Wall N`) and what a live piece moves or
+  lights (`Door`, `Door2`, `Light`, `Screen`). One model per piece and
+  material, so identical pieces batch. `tests/fixtures/kit_shapes.lua` holds
+  each prefab's generated bounds; `smoke_kit` checks them against the boxes.
+
+### Snapping (`scripts/kit_snap.lua`)
+
+A pure rulebook beside `base_snap`. With a kit piece in hand,
+`field_builder.pose` asks `kit_snap.face` first. The hit face and point pick
+the adjoining place in the hit part's frame, on its 0.5 m grid:
+
+| Piece | Aimed at | Goes |
+|---|---|---|
+| wall | a floor's or slab's top, within 0.6 m of an edge | on the edge line, its outside out |
+| wall | a floor's middle | across it at the cursor, facing you (a partition) |
+| wall | a wall's end / top / face | the line continued / stacked / square off it |
+| floor | a floor's or slab's side | beside it, level |
+| floor | a top face | laid on it |
+| floor | a wall | on its top, its edge on the wall's centre line, out over the side you face (from outside, aimed at the top: the roof over the room) |
+| pitched roof | a wall | its eave on the wall, rising over the room |
+| post | a top | on the nearest corner, or the grid; on a post: stacked; at a wall's end: a corner post |
+| block (stairs, blocks, fittings) | a top | on the grid, square toward you |
+| mount (light, screen, switch, tray) | any face | flush, facing out of it (pitch 90° on a wall, 180° under a ceiling) |
+| hab | a ring's end / a top | the next ring (a cap or bulkhead turned to face out) / on the grid |
+
+- **R** turns a quarter, **Shift+R** pitches a quarter (a truss laid down),
+  **T** rolls, **PgUp / PgDn** lift a face-snapped piece a storey, **Shift**
+  frees it, **Backspace** resets them. `structures.partPose` turns a piece
+  in pitch and roll in the engine's own order (yaw, then pitch, then roll).
+- **The records rules** (`kit_snap.overlapIn`, `supported`, `fallsWith`):
+  a piece may not stand inside another piece of its structure (wall corners
+  may share their 0.1 m ends). In Career a piece must be held: on its
+  structure's ground, resting on another's top (or a deck), or one module
+  beside a held floor. A mount is held by its face. Deconstruct takes what
+  is no longer held down with the piece (`fallsWith`), so the wall goes with
+  its floor and the light with its wall. Creative (the sandbox save) skips
+  the support check.
+- **Anything else in the way** (the crew, a crate, a rover) is
+  `placement.overlapObb` on the piece's own box, skipping the structures.
+- **Ctrl+drag lays a run:** pieces go down as the snapped ghost moves along
+  the first one's line (a wall's) or level (a floor's), up to 64, as one step
+  in the undo ring (`pushGroup`).
+- **G mirrors:** off, then about the structure's X plane through the piece
+  under the cursor, then its Z plane. Each placement places its mirrored
+  twin in the same structure if it fits (`mirrorPose`, the VAB's mirror on a
+  structure). Asymmetric pieces (a gable) are turned, not reflected.
+- **Copy and paste:** Alt+click toggles pieces in a selection (tinted).
+  **Ctrl+C** copies them, or the piece under the cursor. **Ctrl+V** holds
+  the copy as a composite ghost (one `BuildGhost` root, a hologram per
+  piece), placed with one bill and one undo; pieces that wouldn't fit are
+  skipped and counted. **Ctrl+D** copies and holds. Blueprints in files are S4.
+
+### Doors, lights, screens (`scripts/kit_live.lua`)
+
+- structures calls `spawned` and `gone` for every piece whose def names
+  `kit_live`: doors, lights, switches, screens, the Shed and the Hab.
+- **Doors** slide open while a crew member on foot is near (in the door's
+  parent frame, drawn poses, this frame) and shut behind them, with the
+  servo and, for a pressure door, the seal's hiss. Their colliders follow
+  them, because a Collidable a script moves keeps its collider.
+- **Lights:** on/off is the part's state (`st.off`), switched from the
+  fitting's menu or a switch plate (every light of the structure). A pool of
+  the 8 nearest lit fittings within 45 m holds point lights; the rest give
+  their slot back and show by their lens (card 0656: 16 lights reach the
+  shader). On a grid that is short with its battery empty they drop to an
+  emergency glow. A fitting is a 0.03 EC/s load on the base grid.
+- **A wall screen** shows its base every 2 s while the crew is within 30 m:
+  the grid in and out, the battery, the hours with no sun, a short, the
+  lights, the crew, the funds. It is drawn with `img:text` in the project's
+  fonts.
+
+### Live placed parts (`scripts/struct_live.lua`; plan §2)
+
+- **FITTINGS** are VAB parts the kit places live: Pod Mk1 and Mk2, Crew
+  Cabin, Command Seat, Swift Cockpit (it lies on its belly), Stowage Locker
+  and Small Locker, Floodlight, Battery, Solar Panel, Isotope Cell.
+  `parts_kit.LIVE` copies their registry figures, because the world scene
+  carries no registry; `smoke_kit` checks every copied field.
+- **One anchored vessel per structure**, made the way a stand commissions:
+  a `Vessel` root at the structure's origin with its axes, the live parts
+  handed over as `dock.handoff.<id>` with `held = true, structure = sid`,
+  each spawned as its child, then `assembly.rebuild` and `setAnchored`.
+  Walls and floors are never in it.
+- **The `structure` mode** (vessel_controller `structureMode`,
+  `structureSid`): SPACE releases nothing, it can't be recovered or returned
+  to a stand, the navball stays off, and it is off the fleet board
+  (`standHeld`). It is dormant (a light tick a second) unless the crew is
+  within 6 m of one of its seats (`DORM_STRUCT`); it never moves, so physics
+  never needs it awake. Its seats, hatches, IVA, lockers, lights, electronics and
+  part menus are a craft's: **F boards a placed cockpit**, a locker's
+  Take / Put are its menu's, a floodlight switches from its menu or the
+  Lights group. Its part nodes are adopted by `structures`, so Deconstruct
+  finds them on their menu.
+- **Held** body-relative every frame while the crew is within 600 m
+  (`assembly.teleport`), as a stand holds its craft. **Rebuilt** when the
+  live parts change; their state (a locker's number and contents, charge) is
+  saved every 5 s and before a rebuild (`slive.<sid>`). A battery, panel,
+  cell or floodlight placed live is also a member of the base grid by its
+  record (`parts_kit.LIVE_POWER`). Not yet: an exchange between the
+  vessel's own pool and the grid's.
+- **The stand's uncommissioned craft** is drawn in blueprint blue
+  (`setTint` with a blue rim on every display node). F beside it says
+  "… is not commissioned yet: COMMISSION on the stand to use it", and so does
+  the stand's menu.
+
+### The Shed and the Hab
+
+Both stay one-click, and both now work: a door that opens, a walkable
+interior with its fit-out, and a light (§2). The hab is entered by a landing
+and six closed steps straight out from it, away from the hull; the stair's
+collider is a ramp along its nosings, as the spaceport's are, because the
+walker climbs a slope and stalls on a stack of step boxes. Both prefabs now
+have their root at the ground point (`seat` 0), as the kit's pieces do, so a
+model whose box is not centred on its footprint (the hab's steps) still
+stands where its record says.
+
+### Tests and the probe
+
+- `luajit solar/tests/smoke_kit.lua` (1,154 checks): every piece and
+  material, the generated bounds, the plan's masses and prices, the
+  FITTINGS against the registries, every snap rule, overlap, support,
+  `fallsWith`, a pitched pose, and, on the real `field_builder`, a group of
+  placements as one undo, the mirror twin, a copy turned, Creative, and a
+  Deconstruct with what falls.
+- `luajit solar/tests/smoke_struct_live.lua`: the structure vessel's
+  blueprint (root, parents, frame, modules, a locker's number kept), its
+  signature, the stub scene (spawned once, adopted, anchored, pinned as the
+  planet moves, rebuilt for a locker but not for a wall, gone with its last
+  live part), and kit_live's door, light pool, switch and screen.
+- `tools/perf/kitprobe.sh <engine> kit|kitperf` (PATCHES=funds.patch). Look
+  for `BK PASS|FAIL`, `KIT` and `BK RESULT`. Pictures go to
+  `save/user/buildshots/k*.png`. The numbers are in
+  `work/sandbox_s1/NOTES.md`.
+
+### Open for S3 and later
+
+Rooms and air (the `seals` field is the seam: "z", "y", "ring", "door"), the
+airlock's interlock, the ROOMS overlay, paint and decals, blueprints in
+files and the BLUEPRINTS tab, the whole VAB catalogue in the kit, the
+vessel's power pool exchanged with the grid, and bake-when-idle (card 0655).

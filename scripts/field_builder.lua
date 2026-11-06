@@ -84,6 +84,16 @@ sim = nil             -- probes: { lmb = bool, shift = bool, mouse = {x, y} }
 wantsScroll = false   -- planet_camera: the wheel turns the part, not the view
 yawOffset = 0.0       -- the turn dialled (rad)
 raise = 0.0           -- the stilts dialled (m)
+-- (sandbox S1: the modular kit)
+pitchOff = 0.0        -- Shift+R: quarter turns about the piece's X
+rollOff = 0.0         -- T: quarter turns about its Z
+storey = 0            -- PgUp / PgDn with a kit piece on a face: storeys (2.4 m) up
+sym = nil             -- X: mirror placements { axis = "x"|"z", sid, at } (structure frame)
+selection = {}        -- Alt+click: { ["sid:uid"] = { sid, uid } } (copy)
+clip = nil            -- Ctrl+C: { parts = { { id, dx, dy, dz, yaw, pitch, roll } … }, label, n }
+lastRun = nil         -- a Ctrl+drag run: { n, total, t }
+STOREY = 2.4
+RUN_CAP = 64
 
 local KIT = "buildkit"
 VEIN_CLEAR = 30        -- M8: no building this close to a vein being mined (m)
@@ -205,7 +215,17 @@ function isOpen() return open_ == true end
 -- ── the panel host (catalog_panel calls these) ──────────────────────────────
 local PB = nil
 local function parts() if not PB or PB.valid == false then PB = ref("parts_base") end return PB end
-function catalogue() local p = parts(); return p and p.catalogue() or {} end
+-- (S1: the modular kit's sections follow the BASE section, each piece in the
+-- material picked; S2: FITTINGS, the VAB parts that work where they're put)
+material = "steel"     -- the material the next kit pieces take (M cycles it)
+function catalogue()
+  local p = parts()
+  local out = {}
+  for _, s in ipairs(p and p.catalogue() or {}) do out[#out + 1] = s end
+  local K = ref("parts_kit")
+  if K and K.catalogue then for _, s in ipairs(K.catalogue(material)) do out[#out + 1] = s end end
+  return out
+end
 function partInfo(id) local p = parts(); return p and p.partInfo(id) or nil end
 function liveDef(id) return nil end
 function heldId() return heldPart end
@@ -271,11 +291,17 @@ function hold(id)
   if not partInfo(id) then return false end
   -- (a BASE part behind a craft part's research: the Isotope Skid's cells)
   local rs = ref("research")
-  if rs and rs.isUnlocked and not rs.isUnlocked(id) then
-    play("denied"); say((rs.labelOf and rs.labelOf(id) or id) .. ": " .. tostring(rs.lockLine and rs.lockLine(id) or "locked"))
+  local d0 = partInfo(id)
+  local rid = d0 and d0.vab or id   -- (a VAB part placed live: its own research)
+  if rs and rs.isUnlocked and not rs.isUnlocked(rid) then
+    play("denied"); say((rs.labelOf and rs.labelOf(rid) or rid) .. ": " .. tostring(rs.lockLine and rs.lockLine(rid) or "locked"))
     return false
   end
-  if heldPart ~= id then heldPart = id; play("pick", 0.35) end
+  if heldPart ~= id then
+    heldPart = id; play("pick", 0.35)
+    -- (a cockpit lies on its belly; everything else starts upright)
+    pitchOff, rollOff = (d0 and d0.lay) and (math.pi / 2) or 0, 0
+  end
   return true
 end
 function dropHeld() heldPart = nil end
@@ -375,7 +401,24 @@ function pose(hit, id)
   local hrec, hpart = nil, nil
   if hit.node and ST and ST.partOfNode then hrec, hpart = ST.partOfNode(hit.node) end
   local p
-  if def and SN and ST then
+  local KS = ref("kit_snap")
+  local kf = nil
+  if def and def.kit and KS and hrec and not shift_held() then
+    kf = KS.face({ def = def, id = id, P = { x = x, y = y, z = z }, N = { x = hit.nx or ux, y = hit.ny or uy, z = hit.nz or uz },
+      toward = { x = tx, y = ty, z = tz }, hit = { rec = hrec, part = hpart }, defs = partInfo, yawOff = yawOffset })
+  end
+  if kf then
+    -- (S1: a face snap, then the storeys and the pitch / roll dialled)
+    local yaw, pitch, roll = kf.yaw, kf.pitch + pitchOff, rollOff
+    local lx, ly, lz = kf.lx, kf.ly + storey * STOREY, kf.lz
+    local fr = KS.frameOf(hrec)
+    local lu, lf = KS.localAxes(yaw, pitch, roll)
+    local function bv(v) return { x = fr.R.x * v[1] + fr.U.x * v[2] + fr.F.x * v[3], y = fr.R.y * v[1] + fr.U.y * v[2] + fr.F.y * v[3],
+                                  z = fr.R.z * v[1] + fr.U.z * v[2] + fr.F.z * v[3] } end
+    p = { body = bname, x = fr.O.x + fr.R.x * lx + fr.U.x * ly + fr.F.x * lz, y = fr.O.y + fr.R.y * lx + fr.U.y * ly + fr.F.y * lz,
+          z = fr.O.z + fr.R.z * lx + fr.U.z * ly + fr.F.z * lz, up = bv(lu), fwd = bv(lf), sup = fr.U, mode = "face", sid = hrec.id,
+          lx = lx, ly = ly, lz = lz, yaw = yaw, pitch = pitch, roll = roll, anchor = kf.anchor, face = kf.face }
+  elseif def and SN and ST then
     local s = SN.snap({ def = def, P = { x = x, y = y, z = z }, U = { x = ux, y = uy, z = uz }, toward = { x = tx, y = ty, z = tz },
       hit = hrec and { rec = hrec, part = hpart } or nil, near = near_parts(ST, bname, x, y, z, SN.NEAR_R),
       defs = partInfo, free = shift_held(), yawOff = yawOffset, ref = layout_frame(bname) })
@@ -388,6 +431,19 @@ function pose(hit, id)
     p = { body = bname, x = x, y = y, z = z, up = { x = ux, y = uy, z = uz }, fwd = { x = fx, y = fy, z = fz }, mode = "free" }
   end
   p.hitRec, p.hitPart = hrec, hpart
+  -- (a kit piece on the ground or a deck, turned in pitch or roll: the record's
+  -- frame keeps the radial up, the piece carries the turn)
+  if def and def.kit and p.mode ~= "face" then
+    p.sup, p.fwd0 = p.up, p.fwd
+    if (pitchOff ~= 0 or rollOff ~= 0) and KS then
+      local U, F = p.up, p.fwd
+      local R = { x = U.y * F.z - U.z * F.y, y = U.z * F.x - U.x * F.z, z = U.x * F.y - U.y * F.x }
+      local lu, lf = KS.localAxes(0, pitchOff, rollOff)
+      local function bv(v) return { x = R.x * v[1] + U.x * v[2] + F.x * v[3], y = R.y * v[1] + U.y * v[2] + F.y * v[3], z = R.z * v[1] + U.z * v[2] + F.z * v[3] } end
+      p.up, p.fwd = bv(lu), bv(lf)
+      p.pitch, p.roll = pitchOff, rollOff
+    end
+  end
   p.nx, p.ny, p.nz, p.node = hit.nx or ux, hit.ny or uy, hit.nz or uz, hit.node
   -- (wx, wy, wz: the pose's ground point in this frame's world, for this
   -- frame's physics queries only: never kept past the frame)
@@ -397,7 +453,7 @@ end
 
 -- The part's own axes at a pose: right, up, front (body-frame vectors).
 local function axes(p)
-  local U, F = p.up, p.fwd
+  local U, F = p.sup or p.up, p.fwd0 or p.fwd
   return { x = U.y * F.z - U.z * F.y, y = U.z * F.x - U.x * F.z, z = U.x * F.y - U.y * F.x }, U, F
 end
 
@@ -409,8 +465,20 @@ local function sample_ground(def, p)
   if not (SN and b) then return nil end
   local R, U, F = axes(p)
   local cast = (terrain and terrain.raycast) and function(ox, oy, oz, dx, dy, dz, d)
-    local h = terrain.raycast(vec3(ox, oy, oz), vec3(dx, dy, dz), d)
-    return h and h.distance
+    local h, why, dd = terrain.raycast(vec3(ox, oy, oz), vec3(dx, dy, dz), d)
+    if h then return h.distance end
+    lastRayWhy = tostring(why) .. (dd and string.format(" at %.2f m", dd) or "")
+    -- (sandbox S1: a ray that reaches ground the world hasn't made at full
+    -- detail yet — stand-in ground round fresh edits and put-away chunks —
+    -- answers nil, "unknown", distance. That ground IS there, at that
+    -- distance: a stand set down near the hab read "no ground under most of
+    -- it" from nine such rays. The distance is the answer.)
+    if why == "unknown" and type(dd) == "number" and dd <= d then return dd end
+    -- (and the physics ray as the last word: the ground's own collider only,
+    -- never a part or a plant)
+    local ok, ph = pcall(raycast, ox, oy, oz, dx, dy, dz, d, { ignore = astro() })
+    if ok and ph and is_ground(ph.node, p.body) then return len(ph.x - ox, ph.y - oy, ph.z - oz) end
+    return nil
   end or function(ox, oy, oz, dx, dy, dz, d)
     local ok, h = pcall(raycast, ox, oy, oz, dx, dy, dz, d, { ignore = astro() })
     return ok and h and len(h.x - ox, h.y - oy, h.z - oz) or nil
@@ -425,6 +493,83 @@ local function sample_ground(def, p)
     out[i] = d and (top - d) or false
   end
   return out
+end
+sampleGround = sample_ground   -- (probes)
+
+-- ── the kit's rules (S1) ────────────────────────────────────────────────────
+KIT_WHERE = {
+  wall = "aim at a floor's edge, a wall's end or top",
+  floor = "aim beside a floor, on a slab, or at a wall's top",
+  post = "aim at a top face or a wall's end",
+  block = "aim at a floor's or slab's top",
+  mount = "aim at any face",
+  hab = "aim at a can's end, or a slab's top",
+  slab = "beside another slab, or on the ground",
+}
+-- The sandbox (Creative): no support check.
+function creative()
+  local co = ref("company")
+  return co ~= nil and co.isSandbox ~= nil and co.isSandbox() == true
+end
+-- The part record a face pose would write (for the records rules).
+local function as_part(id, p)
+  return { uid = -1, id = id, x = p.lx or 0, y = p.ly or 0, z = p.lz or 0, yaw = p.yaw or 0, pitch = p.pitch or 0, roll = p.roll or 0 }
+end
+-- A kit piece on another: inside a piece of its structure, or held by nothing
+-- (Career). `extra` = parts about to join with it (a paste). → nil | why
+function kitWhy(def, p, id, extra)
+  local ST, KS = ref("structures"), ref("kit_snap")
+  local rec = ST and p.sid and ST.get(p.sid)
+  if not (rec and KS) then return "that structure is gone" end
+  local np = as_part(id, p)
+  local probe = rec
+  if extra and #extra > 0 then
+    probe = { bp = {} }
+    for _, q in ipairs(rec.bp) do probe.bp[#probe.bp + 1] = q end
+    for _, q in ipairs(extra) do probe.bp[#probe.bp + 1] = q end
+  end
+  local o, od = KS.overlapIn(probe, partInfo, np, def)
+  if o then return string.format("the %s%s is there", tostring(od and od.label or "part"),
+    od and od.matLabel and (" (" .. od.matLabel:lower() .. ")") or "") end
+  if not creative() and not KS.supported(probe, partInfo, np, def) then
+    return "nothing holds that up: stand it on a floor, a wall or a slab"
+  end
+  return nil
+end
+-- Anything that is not its structure inside a face-snapped piece (the crew, a
+-- crate, a rover): placement.overlapObb on the piece's own box. → nil | why
+local kov = { key = nil, hit = nil, t = -10 }
+function kit_obstacle(def, p)
+  local pl, ST, KS = ref("placement"), ref("structures"), ref("kit_snap")
+  local b = space.body(p.body)
+  local rec = ST and ST.get(p.sid)
+  if not (pl and pl.overlapObb and KS and b and rec) then return nil end
+  local key = string.format("%s|%d|%.2f|%.2f|%.2f|%.2f|%.2f", def.prefab or "", p.sid, p.lx, p.ly, p.lz, p.yaw or 0, p.pitch or 0)
+  if key ~= kov.key or now() - kov.t > 0.5 then
+    local so = KS.solid(as_part("", p), def)
+    local fr = KS.frameOf(rec)
+    local my = (so.y0 + so.y1) / 2
+    local cx = fr.O.x + fr.R.x * so.x + fr.U.x * my + fr.F.x * so.z
+    local cy = fr.O.y + fr.R.y * so.x + fr.U.y * my + fr.F.y * so.z
+    local cz = fr.O.z + fr.R.z * so.x + fr.U.z * my + fr.F.z * so.z
+    local c, s = math.cos(so.yaw), math.sin(so.yaw)
+    local R = { x = fr.R.x * c - fr.F.x * s, y = fr.R.y * c - fr.F.y * s, z = fr.R.z * c - fr.F.z * s }
+    local F = { x = fr.F.x * c + fr.R.x * s, y = fr.F.y * c + fr.R.y * s, z = fr.F.z * c + fr.R.z * s }
+    local half = { x = math.max(0.03, so.hx - 0.06), y = math.max(0.03, (so.y1 - so.y0) / 2 - 0.06), z = math.max(0.03, so.hz - 0.04) }
+    local hit = pl.overlapObb({ x = b.x + cx, y = b.y + cy, z = b.z + cz }, half, { r = R, u = fr.U, f = F },
+      { skip = function(n)
+          if is_ground(n, p.body) or (ghost_node and n == ghost_node) then return true end
+          return ST.partOfNode(n) ~= nil
+        end })
+    kov.key, kov.hit, kov.t = key, hit, now()
+  end
+  local h = kov.hit
+  if not h then return nil end
+  local a = astro()
+  local n = h.node
+  if a and n and n.id == a.id then return "you're standing where it goes" end
+  if n and n.name == "CrewBody" then return "someone is standing where it goes" end
+  return "something's in the way" .. (n and n.name and (": " .. tostring(n.name)) or "")
 end
 
 -- THE ONE PLACE a placement is judged. → req { id, def, pose, quote, plan
@@ -445,7 +590,7 @@ function validity(id, p)
   local SN = ref("base_snap")
   local q0 = quote_of(id)
   r.quote = q0
-  local up = p.up
+  local up = p.sup or p.up
   if q0 and q0.mode == "away" then r.bad = q0.why return r end
   -- reach: the snapped spot, not only the cursor's
   local a = astro()
@@ -456,9 +601,11 @@ function validity(id, p)
   -- the ray stopped on something: a placed part is snapping's, anything else
   -- (a crate, a facility) is in the way
   local mode = p.mode or "free"
-  if p.hitRec and mode ~= "edge" and mode ~= "deck" then
+  if p.hitRec and mode ~= "edge" and mode ~= "deck" and mode ~= "face" then
     local hd = partInfo(p.hitPart.id) or {}
-    if def.tile and hd.tile == def.tile then r.bad = "no free edge on that " .. tostring(hd.label) .. " there"
+    if def.kit then r.bad = string.format("no place for a %s on the %s there: %s", def.label, tostring(hd.label),
+        KIT_WHERE[def.snap or "block"] or "aim at another face")
+    elseif def.tile and hd.tile == def.tile then r.bad = "no free edge on that " .. tostring(hd.label) .. " there"
     elseif def.onDeck and not hd.deck then r.bad = "the " .. tostring(hd.label) .. " has no deck to stand on"
     else r.bad = string.format("on the %s: a %s goes on the ground%s", tostring(hd.label), def.label,
       def.tile and " or beside another" or "") end
@@ -474,14 +621,18 @@ function validity(id, p)
     r.bad = "on the " .. nm
     return r
   end
-  if mode ~= "deck" then
+  if mode ~= "deck" and mode ~= "face" then
     local slope = p.nx * up.x + p.ny * up.y + p.nz * up.z
     if mode ~= "edge" and slope < (def.slope or 0.6) then
       r.bad = string.format("too steep for a %s (%.0f°)", def.label, math.deg(math.acos(math.max(-1, math.min(1, slope))))) return r
     end
   end
   -- THE GROUND (K7): standing on a deck, or levelled with a footing
-  if mode == "deck" then
+  if mode == "face" then
+    -- (S1: a kit piece on another: the records say whether it fits and is held)
+    local why = kitWhy(def, p, id)
+    if why then r.bad = why return r end
+  elseif mode == "deck" then
     local ST = ref("structures")
     local rec = ST and ST.get(p.sid)
     if not (SN and rec) then r.bad = "that structure is gone" return r end
@@ -532,7 +683,10 @@ function validity(id, p)
   end
   -- something in the way (placement.overlapObb; cached while the ghost holds still)
   local pl = ref("placement")
-  if pl and pl.overlapObb and def.half then
+  if mode == "face" then
+    local why = kit_obstacle(def, p)
+    if why then r.bad = why return r end
+  elseif pl and pl.overlapObb and def.half then
     local key = string.format("%s|%.1f|%.1f|%.1f|%.2f|%.2f|%.2f", id, p.x, p.y, p.z, p.fwd.x, p.fwd.z, r.base)
     if key ~= ov.key or now() - ov.t > 0.5 then
       local h = def.half
@@ -624,8 +778,81 @@ local function foot_want(body)
   end)
   return nil
 end
+-- THE PASTE'S COMPOSITE GHOST (S1): one BuildGhost root on the planet with a
+-- child hologram per copied piece past the first, posed in the anchor's frame.
+local PG = { root = nil, making = false, clip = nil, kids = {}, color = nil }
+local function paste_drop()
+  if PG.root and PG.root.valid ~= false then PG.root:destroy() end
+  PG.root, PG.clip, PG.kids, PG.color, PG.making = nil, nil, {}, nil, false
+end
+function paste_ghosts(p, col)
+  if not (pasting and clip and p) then
+    if PG.root then paste_drop() end
+    return
+  end
+  local planet = find and find(p.body)
+  if PG.clip ~= clip then
+    paste_drop()
+    if not (planet and createNode and spawn) then return end
+    PG.clip, PG.making = clip, true
+    local want = clip
+    createNode("BuildGhost", planet, function(root)
+      PG.making = false
+      if PG.clip ~= want then root:destroy() return end
+      PG.root = root
+      for i = 2, #want.parts do
+        local d = partInfo(want.parts[i].id)
+        if d and d.prefab then
+          spawn(d.prefab, vec3(planet.x, planet.y, planet.z), function(n)
+            if PG.clip ~= want or not (PG.root and PG.root.valid ~= false) then n:destroy() return end
+            PG.kids[i] = n
+            PG.color = nil
+          end, { parent = root, body = false })
+        end
+      end
+    end)
+    return
+  end
+  local root = PG.root
+  if not (root and root.valid ~= false) then return end
+  local KS, ST = ref("kit_snap"), ref("structures")
+  -- the anchor's frame: its structure's, or (a new one on the ground) the pose's own
+  local fr, anchor
+  if p.mode == "face" then
+    local rec = ST and ST.get(p.sid)
+    if not (KS and rec) then return end
+    fr, anchor = KS.frameOf(rec), { lx = p.lx, ly = p.ly, lz = p.lz, yaw = p.yaw }
+  else
+    local U, F = p.sup or p.up, p.fwd0 or p.fwd
+    local base = (req and req.base) or 0
+    fr = { O = { x = p.x + U.x * base, y = p.y + U.y * base, z = p.z + U.z * base }, U = U, F = F,
+           R = { x = U.y * F.z - U.z * F.y, y = U.z * F.x - U.x * F.z, z = U.x * F.y - U.y * F.x } }
+    anchor = { lx = 0, ly = 0, lz = 0, yaw = 0 }
+  end
+  root.x, root.y, root.z = 0, 0, 0
+  local gh = ref("ghost")
+  for i, n in pairs(PG.kids) do
+    if n and n.valid ~= false then
+      local e = clip.parts[i]
+      local d = partInfo(e.id)
+      local cp = clipPose(anchor, e)
+      local lu, lf = KS.localAxes(cp.yaw, cp.pitch or 0, cp.roll or 0)
+      local function bv(v) return vec3(fr.R.x * v[1] + fr.U.x * v[2] + fr.F.x * v[3], fr.R.y * v[1] + fr.U.y * v[2] + fr.F.y * v[3],
+                                       fr.R.z * v[1] + fr.U.z * v[2] + fr.F.z * v[3]) end
+      local u, f = bv(lu), bv(lf)
+      n:setUp(u, vec3(-f.x, -f.y, -f.z))
+      local sy = cp.ly + (d and d.seat or 0)
+      n.x = fr.O.x + fr.R.x * cp.lx + fr.U.x * sy + fr.F.x * cp.lz
+      n.y = fr.O.y + fr.R.y * cp.lx + fr.U.y * sy + fr.F.y * cp.lz
+      n.z = fr.O.z + fr.R.z * cp.lx + fr.U.z * sy + fr.F.z * cp.lz
+    end
+  end
+  if PG.color ~= col and gh and gh.apply then PG.color = col; gh.apply(root, col, 0.45) end
+end
+
 local function ghost_paint()
   if not (heldPart and req and (req.pose or req.cable) and open_) then
+    if PG.root or PG.making then paste_drop() end
     if ghost_node and ghost_node.valid ~= false and ghost_node.visible then ghost_node.visible = false end
     if ghost_foot and ghost_foot.valid ~= false and ghost_foot.visible then ghost_foot.visible = false end
     return
@@ -646,21 +873,24 @@ local function ghost_paint()
   local base = req.base or 0
   if g then
     local s = def.seat + base
+    local su = p.sup or p.up
     g:setUp(vec3(p.up.x, p.up.y, p.up.z), vec3(-p.fwd.x, -p.fwd.y, -p.fwd.z))
-    g.x, g.y, g.z = p.x + p.up.x * s, p.y + p.up.y * s, p.z + p.up.z * s
+    g.x, g.y, g.z = p.x + su.x * s, p.y + su.y * s, p.z + su.z * s
     if G.color ~= col then
       G.color = col
       if gh and gh.apply then gh.apply(g, col, req.bad and 0.55 or 0.6) end
     end
     if not g.visible then g.visible = true end
   end
+  paste_ghosts(p, col)
   local ft = req.plan and req.plan.footing
   if ft then
     local f = foot_want(p.body)
     if f then
       local c = base - ft.d / 2 - 0.02
-      f:setUp(vec3(p.up.x, p.up.y, p.up.z), vec3(-p.fwd.x, -p.fwd.y, -p.fwd.z))
-      f.x, f.y, f.z = p.x + p.up.x * c, p.y + p.up.y * c, p.z + p.up.z * c
+      local fu, ff = p.sup or p.up, p.fwd0 or p.fwd
+      f:setUp(vec3(fu.x, fu.y, fu.z), vec3(-ff.x, -ff.y, -ff.z))
+      f.x, f.y, f.z = p.x + fu.x * c, p.y + fu.y * c, p.z + fu.z * c
       f.scale_x, f.scale_y, f.scale_z = 2 * ft.hx, ft.d, 2 * ft.hz
       if G.fcolor ~= col then
         G.fcolor = col
@@ -767,7 +997,7 @@ end
 -- (a new one at p's ground point). p = a pose (body frame); p.base / p.plan
 -- = the judged ground (validity's r.base, r.plan) if any. payer = "money".
 -- → sid, nil, quote, uid | nil, why
-function place(sid, partId, p, payer)
+function place(sid, partId, p, payer, opts)
   local def = partInfo(partId)
   if not def then return nil, "no such part" end
   local E, ST, co = ref("base_economy"), ref("structures"), ref("company")
@@ -800,13 +1030,15 @@ function place(sid, partId, p, payer)
     return entry
   end
   if sid ~= nil then
-    uid = ST.addPart(sid, own({ id = partId, x = p.lx or 0, y = (p.ly or 0) + base, z = p.lz or 0, yaw = p.yaw or 0, paid = paid, ft = ft }))
+    uid = ST.addPart(sid, own({ id = partId, x = p.lx or 0, y = (p.ly or 0) + base, z = p.lz or 0, yaw = p.yaw or 0,
+      pitch = p.pitch or 0, roll = p.roll or 0, paid = paid, ft = ft }))
   else
     local dp = ref("deployables")
-    local up = p.up
-    local rec = ST.newRecord(nil, p.body, p.x + up.x * base, p.y + up.y * base, p.z + up.z * base, up, p.fwd, partId,
-      { by = by, t = t, d = dp and dp.dateOf and dp.dateOf(t) or nil, name = def.label, paid = paid })
+    local up, fw = p.sup or p.up, p.fwd0 or p.fwd
+    local rec = ST.newRecord(nil, p.body, p.x + up.x * base, p.y + up.y * base, p.z + up.z * base, up, fw, partId,
+      { by = by, t = t, d = dp and dp.dateOf and dp.dateOf(t) or nil, name = def.kit and "Structure" or def.label, paid = paid })
     rec.bp[1].paid, rec.bp[1].ft = paid, ft
+    rec.bp[1].pitch, rec.bp[1].roll = p.pitch or 0, p.roll or 0
     own(rec.bp[1])
     sid = ST.add(rec)
     uid = 1
@@ -840,9 +1072,42 @@ function place(sid, partId, p, payer)
     if c and c.credit and by then pcall(c.credit, by, "built", 1, { body = e.hdr.b }) end
     e.res = q2.total
   end
-  hist_push(e)
+  -- (a drag-run, a mirrored twin, a paste: one step in the ring for all of them)
+  if opts and opts.collect then opts.collect[#opts.collect + 1] = e else hist_push(e) end
   return sid, nil, q, uid
 end
+
+-- Several placements as ONE step of the ring (S1: a drag-run, a paste, a
+-- mirrored pair): undo takes them all back newest first, redo buys them again.
+local function push_group(list, label)
+  if #list == 0 then return end
+  if #list == 1 then hist_push(list[1]) return end
+  local g = { label = label or string.format("place %d pieces", #list), kind = "place", t = list[#list].t, sid = list[1].sid }
+  g.undo = function()
+    local total = 0
+    for i = #list, 1, -1 do
+      local e = list[i]
+      e.res = nil
+      e.undo()
+      if e.res == nil then g.res, g.why = nil, e.why return end
+      total = total + e.res
+    end
+    g.res = total
+  end
+  g.redo = function()
+    local total = 0
+    for _, e in ipairs(list) do
+      e.res = nil
+      e.redo()
+      if e.res == nil then g.res = nil return end
+      total = total + e.res
+    end
+    g.t = agency_now()
+    g.res = total
+  end
+  hist_push(g)
+end
+pushGroup = push_group
 
 -- K10: take part `uid` of structure `sid` down, with what stands on its deck.
 -- Refund each by base_economy.deconstructRefund. → refund, { uid … } | nil, why
@@ -854,6 +1119,8 @@ function deconstruct(sid, uid)
   if not part then return nil, "it's already gone" end
   local uids = { uid }
   for _, u in ipairs(SN.dependents(rec, partInfo, uid)) do uids[#uids + 1] = u end
+  -- (S1: kit pieces no longer held once these are gone come down with them)
+  do local KS = ref("kit_snap"); if KS and not creative() then for _, u in ipairs(KS.fallsWith(rec, partInfo, uids)) do uids[#uids + 1] = u end end end
   local held = removalBlocked(sid, uids)
   if held then return nil, held end
   local t = agency_now()
@@ -898,6 +1165,8 @@ function deconstructQuote(sid, uid)
   if not (E and rec and SN) then return 0, 0, false end
   local uids = { uid }
   for _, u in ipairs(SN.dependents(rec, partInfo, uid)) do uids[#uids + 1] = u end
+  -- (S1: kit pieces no longer held once these are gone come down with them)
+  do local KS = ref("kit_snap"); if KS and not creative() then for _, u in ipairs(KS.fallsWith(rec, partInfo, uids)) do uids[#uids + 1] = u end end end
   local total, full, t = 0, true, agency_now()
   for _, u in ipairs(uids) do
     local amt, rule = E.deconstructRefund((ST.getPart(sid, u) or {}).paid, t)
@@ -970,14 +1239,192 @@ local function do_place(keep)
   if req.bad then play("denied"); say(req.bad) return end
   local p = req.pose
   p.base, p.plan = req.base, req.plan
-  local sid, why, q = place(p.sid, heldPart, p, "money")
+  if clip and pasting then paste_click(p) return end
+  local list = {}
+  local sid, why, q = place(p.sid, heldPart, p, "money", { collect = run and run.list or list })
   if not sid then play("denied"); say(why or "it wouldn't go there") return end
+  local total = q.total
+  -- SYM (S1): the mirrored twin about the plane picked, in the same structure
+  local twin = mirror_twin(heldPart, req.def, p, sid)
+  if twin then
+    local s2, _, q2 = place(sid, heldPart, twin, "money", { collect = run and run.list or list })
+    if s2 then total = total + q2.total end
+  end
+  if run then run.n = run.n + 1 + (twin and 1 or 0); run.total = run.total + total; run.key = vmemo.key
+  else push_group(list, "place " .. req.def.label .. (twin and " (mirrored)" or "")) end
   play("place", 0.6)
-  say(string.format("%s placed · %s (%s + %s shipping%s) · Ctrl+Z within a minute returns it", req.def.label,
-    money(q.total), money(q.cost), money(q.ship), (q.foot or 0) > 0 and (" + " .. money(q.foot) .. " footing") or ""))
+  if run then
+    say(string.format("%s × %d · %s so far · release to finish the run (one undo)", req.def.label, run.n, money(run.total)))
+  else
+    say(string.format("%s placed%s · %s (%s + %s shipping%s) · Ctrl+Z within a minute returns it", req.def.label,
+      twin and " with its mirror" or "", money(total), money(q.cost), money(q.ship), (q.foot or 0) > 0 and (" + " .. money(q.foot) .. " footing") or ""))
+  end
   ov.key, vmemo.key = nil, nil
-  if not keep then heldPart = nil end
+  -- (kit pieces stay in hand: building is many of them)
+  if not keep and not (req.def and req.def.kit) then heldPart = nil end
 end
+
+-- ── SYM: mirror placements (S1 §1.4; the VAB's mirrorPose on a structure) ───
+-- X toggles: off → about the structure's X plane through the piece under the
+-- cursor → its Z plane → off. A twin is placed only in that structure, only
+-- if it fits (kitWhy), and never onto the piece itself (a piece on the plane).
+function mirrorPose(p, axis, at)
+  local m = {}
+  for k, v in pairs(p) do m[k] = v end
+  if axis == "x" then m.lx = 2 * at - (p.lx or 0); m.yaw = -(p.yaw or 0)
+  else m.lz = 2 * at - (p.lz or 0); m.yaw = math.pi - (p.yaw or 0) end
+  local KS = ref("kit_snap")
+  if KS then m.yaw = KS.wrap(m.yaw) end
+  return m
+end
+function mirror_twin(id, def, p, sid)
+  if not (sym and p.mode == "face" and sym.sid == sid and def and def.kit) then return nil end
+  local m = mirrorPose(p, sym.axis, sym.at)
+  if math.abs((m.lx or 0) - (p.lx or 0)) < 0.05 and math.abs((m.lz or 0) - (p.lz or 0)) < 0.05 then return nil end
+  local ST, KS = ref("structures"), ref("kit_snap")
+  local rec = ST and ST.get(sid)
+  if not (rec and KS) then return nil end
+  local fr = KS.frameOf(rec)
+  m.x = fr.O.x + fr.R.x * m.lx + fr.U.x * m.ly + fr.F.x * m.lz
+  m.y = fr.O.y + fr.R.y * m.lx + fr.U.y * m.ly + fr.F.y * m.lz
+  m.z = fr.O.z + fr.R.z * m.lx + fr.U.z * m.ly + fr.F.z * m.lz
+  if kitWhy(def, m, id) then return nil end
+  return m
+end
+local function toggle_sym()
+  local ST = ref("structures")
+  local h = aim()
+  local rec, part = nil, nil
+  if type(h) == "table" and h.node and ST then rec, part = ST.partOfNode(h.node) end
+  if not sym then
+    if not part then say("SYM: aim at a piece of the structure to mirror about") return end
+    sym = { axis = "x", sid = rec.id, at = part.x or 0 }
+  elseif sym.axis == "x" then
+    sym = { axis = "z", sid = sym.sid, at = (part and rec.id == sym.sid) and (part.z or 0) or 0 }
+  else sym = nil end
+  say(sym and string.format("SYM on: mirrored about the structure's %s plane at %.1f m", sym.axis:upper(), sym.at) or "SYM off")
+end
+
+-- ── SELECT / COPY / PASTE (S1 §1.4) ─────────────────────────────────────────
+-- Alt+click toggles a piece in the selection (tinted); Ctrl+C copies it (or
+-- the piece under the cursor); Ctrl+V holds the copy as a composite ghost,
+-- placed with one bill and one step in the ring; Ctrl+D copies and holds.
+local function sel_key(sid, uid) return tostring(sid) .. ":" .. tostring(uid) end
+local function sel_tint(sid, uid, on)
+  local ST = ref("structures")
+  local n = ST and ST.nodeOf(sid, uid)
+  if n and n.setTint then
+    if on then pcall(n.setTint, n, { color = { 0.6, 0.9, 1.0 }, rim = { 0.2, 0.7, 1.0 }, rimStrength = 0.8 })
+    else pcall(n.setTint, n) end
+  end
+end
+function selectToggle(sid, uid)
+  local k = sel_key(sid, uid)
+  if selection[k] then selection[k] = nil; sel_tint(sid, uid, false)
+  else
+    for kk, e in pairs(selection) do if e.sid ~= sid then selection[kk] = nil; sel_tint(e.sid, e.uid, false) end end
+    selection[k] = { sid = sid, uid = uid }; sel_tint(sid, uid, true)
+  end
+end
+function selectClear() for _, e in pairs(selection) do sel_tint(e.sid, e.uid, false) end selection = {} end
+-- Copy the selection (or the given pieces) of one structure. → n
+function copyParts(sid, uids)
+  local ST = ref("structures")
+  local rec = ST and ST.get(sid)
+  if not rec then return 0 end
+  local list = {}
+  for _, u in ipairs(uids) do local p = ST.getPart(sid, u); local d = p and partInfo(p.id); if d and d.kit then list[#list + 1] = p end end
+  if #list == 0 then return 0 end
+  -- the anchor: the lowest, then the first placed
+  table.sort(list, function(a, b) if math.abs((a.y or 0) - (b.y or 0)) > 0.05 then return (a.y or 0) < (b.y or 0) end return a.uid < b.uid end)
+  local a = list[1]
+  local c, s = math.cos(a.yaw or 0), math.sin(a.yaw or 0)
+  local out = {}
+  for _, p in ipairs(list) do
+    local dx, dz = (p.x or 0) - (a.x or 0), (p.z or 0) - (a.z or 0)
+    out[#out + 1] = { id = p.id, dx = dx * c - dz * s, dy = (p.y or 0) - (a.y or 0), dz = dx * s + dz * c,
+                      yaw = (p.yaw or 0) - (a.yaw or 0), pitch = p.pitch or 0, roll = p.roll or 0 }
+  end
+  clip = { parts = out, n = #out, label = (partInfo(a.id) or {}).label }
+  return #out
+end
+local function copy_now()
+  local uids, sid = {}, nil
+  for _, e in pairs(selection) do sid = sid or e.sid; if e.sid == sid then uids[#uids + 1] = e.uid end end
+  if #uids == 0 then
+    local h = aim()
+    local ST = ref("structures")
+    local rec, part = nil, nil
+    if type(h) == "table" and h.node and ST then rec, part = ST.partOfNode(h.node) end
+    if part then sid, uids = rec.id, { part.uid } end
+  end
+  local n = sid and copyParts(sid, uids) or 0
+  if n > 0 then play("pick", 0.4); say(string.format("copied %d piece%s · Ctrl+V holds them", n, n == 1 and "" or "s"))
+  else play("denied"); say("nothing to copy: Alt+click pieces, or aim at one") end
+  return n
+end
+pasting = false
+function pasteHold()
+  if not clip then return false end
+  heldPart, pasting = clip.parts[1].id, true
+  yawOffset, pitchOff, rollOff = 0, 0, 0
+  return true
+end
+-- Where clip entry `e` goes for an anchor pose `p`: { lx, ly, lz, yaw, pitch, roll }
+-- in the anchor's structure (dx.. turned by the anchor's yaw).
+function clipPose(p, e)
+  local c, s = math.cos(p.yaw or 0), math.sin(p.yaw or 0)
+  return { lx = (p.lx or 0) + e.dx * c + e.dz * s, ly = (p.ly or 0) + e.dy, lz = (p.lz or 0) - e.dx * s + e.dz * c,
+           yaw = (p.yaw or 0) + e.yaw, pitch = e.pitch, roll = e.roll }
+end
+function paste_click(p)
+  local ST, KS = ref("structures"), ref("kit_snap")
+  local list, placed, skipped, total = {}, 0, 0, 0
+  local sid, _, q = place(p.sid, clip.parts[1].id, p, "money", { collect = list })
+  if not sid then play("denied"); say("couldn't paste there") return end
+  total = total + q.total
+  placed = 1
+  local rec = ST.get(sid)
+  local anchor = p.mode == "face" and { lx = p.lx, ly = p.ly, lz = p.lz, yaw = p.yaw } or { lx = 0, ly = 0, lz = 0, yaw = 0 }
+  local fr = KS.frameOf(rec)
+  -- (lowest first: a wall goes on after the floor it stands on)
+  local order = {}
+  for i = 2, #clip.parts do order[#order + 1] = clip.parts[i] end
+  table.sort(order, function(a, b) return a.dy < b.dy end)
+  for _, e in ipairs(order) do
+    local def = partInfo(e.id)
+    local cp = clipPose(anchor, e)
+    local m = { body = p.body, mode = "face", sid = sid, lx = cp.lx, ly = cp.ly, lz = cp.lz, yaw = cp.yaw, pitch = cp.pitch, roll = cp.roll,
+                x = fr.O.x + fr.R.x * cp.lx + fr.U.x * cp.ly + fr.F.x * cp.lz, y = fr.O.y + fr.R.y * cp.lx + fr.U.y * cp.ly + fr.F.y * cp.lz,
+                z = fr.O.z + fr.R.z * cp.lx + fr.U.z * cp.ly + fr.F.z * cp.lz, up = fr.U, fwd = fr.F }
+    if def and not kitWhy(def, m, e.id) then
+      local s2, _, q2 = place(sid, e.id, m, "money", { collect = list })
+      if s2 then placed = placed + 1; total = total + q2.total else skipped = skipped + 1 end
+    else skipped = skipped + 1 end
+  end
+  push_group(list, string.format("paste %d pieces", placed))
+  lastPaste = { sid = sid, placed = placed, skipped = skipped, total = total }
+  play("place", 0.6)
+  say(string.format("pasted %d piece%s · %s%s · Ctrl+Z within a minute takes them back", placed, placed == 1 and "" or "s", money(total),
+    skipped > 0 and string.format(" · %d didn't fit", skipped) or ""))
+  ov.key, vmemo.key = nil, nil
+end
+lastPaste = nil
+
+-- ── a Ctrl+drag RUN (S1): pieces laid as the snapped ghost moves, one step ──
+run = nil
+local function run_begin() run = { list = {}, n = 0, total = 0, t = now() } end
+local function run_end()
+  if not run then return end
+  local r = run
+  run = nil
+  if r.n > 0 then
+    push_group(r.list, string.format("a run of %d", r.n))
+    lastRun = { n = r.n, total = r.total, t = now() }
+    say(string.format("a run of %d · %s · one Ctrl+Z takes it all back", r.n, money(r.total)))
+  end
+end
+runBegin, runEnd = run_begin, run_end
 
 -- A probe's way: put the held part at a world point (this frame's), as a click would.
 function placeAt(x, y, z, nx, ny, nz, node)
@@ -1034,6 +1481,9 @@ local function register_provider()
   local reg = ref("context_registry")
   if reg and reg.register then
     reg.register("prop", provider, { id = "field_builder", order = 6 })
+    -- (S2: a VAB part placed live is a part of its structure's vessel: the
+    -- same Deconstruct row on its part menu)
+    reg.register("part", provider, { id = "field_builder_live", order = 90 })
     provider_on = true
   end
 end
@@ -1056,12 +1506,23 @@ function hintLine()
       tostring(pend.label), req.len or 0, q.mass or 0, money(q.total or 0), money(q.cost or 0), money(q.ship or 0))
   end
   local turn = "scroll turns  ·  R quarter  ·  PgUp/PgDn raise  ·  Shift frees"
+  local hk = partInfo(heldPart)
+  if hk and hk.kit then
+    turn = (hk.live and "" or "M material  ·  ") .. "R quarter  ·  Shift+R pitch  ·  T roll  ·  PgUp storey  ·  Ctrl+drag a run  ·  G mirror  ·  Ctrl+C/V copy"
+  end
   if not req then return string.format("%s  ·  %s  ·  %s", partInfo(heldPart).label, aim_why or "aim at the ground", turn) end
   if req.bad then return string.format("%s  ·  %s  ·  RMB tap drops it", req.def.label, req.bad) end
   local q = req.quote
   local extra = {}
   local p = req.pose
-  extra[#extra + 1] = MODE_TXT[p.mode or "free"] or ""
+  if p.mode == "face" then
+    local ad = p.anchor and partInfo(p.anchor.id)
+    extra[#extra + 1] = "ON THE " .. string.upper(tostring(ad and ad.label or "PIECE"))
+  else extra[#extra + 1] = MODE_TXT[p.mode or "free"] or "" end
+  if req.def.kit and req.def.matLabel and not req.def.live then extra[#extra + 1] = req.def.matLabel:lower() .. string.format(" %.2f t", req.def.mass or 0) end
+  if storey > 0 then extra[#extra + 1] = string.format("+%d storey", storey) end
+  if sym then extra[#extra + 1] = "SYM " .. sym.axis:upper() end
+  if pasting and clip then extra[#extra + 1] = string.format("PASTE %d", clip.n) end
   if math.abs(yawOffset) > 1e-3 then extra[#extra + 1] = string.format("%+.0f°", math.deg(yawOffset)) end
   if raise > 1e-3 then extra[#extra + 1] = string.format("raised %.2f m", raise) end
   local pl = req.plan
@@ -1120,11 +1581,33 @@ local function turn_keys()
   local SN = ref("base_snap")
   local step = SN and (fine and SN.YAW_FINE or SN.YAW_STEP) or math.rad(15)
   if dz ~= 0 then yawOffset = SN.wrap(yawOffset + (dz > 0 and step or -step)) end
-  if input.pressed("r") then yawOffset = SN.wrap(yawOffset + SN.QUARTER) end
+  local hd = heldPart and partInfo(heldPart)
+  local kit = hd and hd.kit
+  if input.pressed("r") then
+    -- (S1: Shift+R pitches a kit piece a quarter — a truss laid down)
+    if kit and fine then pitchOff = SN.wrap(pitchOff + SN.QUARTER) else yawOffset = SN.wrap(yawOffset + SN.QUARTER) end
+  end
+  if kit and input.pressed("t") then rollOff = SN.wrap(rollOff + SN.QUARTER) end
+  -- M: the next material this piece comes in (and the kit's for the next ones)
+  if kit and not hd.live and input.pressed("m") then
+    local K = ref("parts_kit")
+    if K then
+      local m = material
+      for _ = 1, #K.MAT_ORDER do
+        m = K.nextMat(m)
+        if K.matFor(hd.piece, m) == m then break end
+      end
+      material = m
+      local nid = K.idOf(hd.piece, K.matFor(hd.piece, m))
+      if nid ~= heldPart then heldPart = nid; play("pick", 0.35) end
+      say(string.format("%s · %s", hd.label, (K.MATS[K.matFor(hd.piece, m)] or {}).label or m))
+    end
+  end
   local rs, rm = SN and SN.RAISE_STEP or 0.25, SN and SN.RAISE_MAX or 2.0
-  if input.pressed("pageup") then raise = math.min(rm, raise + rs) end
-  if input.pressed("pagedown") then raise = math.max(0, raise - rs) end
-  if input.pressed("backspace") then yawOffset, raise = 0, 0 end
+  local onface = kit and req and req.pose and req.pose.mode == "face"
+  if input.pressed("pageup") then if onface then storey = math.min(4, storey + 1) else raise = math.min(rm, raise + rs) end end
+  if input.pressed("pagedown") then if onface or storey > 0 then storey = math.max(0, storey - 1) else raise = math.max(0, raise - rs) end end
+  if input.pressed("backspace") then yawOffset, raise, pitchOff, rollOff, storey = 0, 0, 0, 0, 0 end
 end
 
 local closed_t = -10
@@ -1163,7 +1646,9 @@ function update(node, dt)
   -- Esc: the part in hand first, then the kit
   if input.pressed("escape") then
     escTakenAt = now()
-    if heldPart then heldPart = nil else close() return end
+    if heldPart then heldPart, pasting = nil, false
+    elseif next(selection) then selectClear()
+    else close() return end
   end
   -- Ctrl+Z / Ctrl+Shift+Z (Ctrl+Y)
   if input.key("ctrl") and not typing() then
@@ -1180,7 +1665,19 @@ function update(node, dt)
     end
   end
   wantsScroll = heldPart ~= nil and not over_panel()
+  do local hd = heldPart and partInfo(heldPart); materialKey = hd ~= nil and hd.kit == true and not hd.live end
   if heldPart and not input.key("ctrl") then turn_keys() end
+  -- S1: G mirrors placements; Ctrl+C / Ctrl+V / Ctrl+D copy, paste, duplicate
+  if not typing() then
+    if input.pressed("g") and not input.key("ctrl") then toggle_sym() end
+    if input.key("ctrl") then
+      if input.pressed("c") then copy_now() end
+      if input.pressed("v") then if pasteHold() then say(string.format("paste: %d piece%s in hand · LMB places them", clip.n, clip.n == 1 and "" or "s")) else say("nothing copied yet (Ctrl+C)") end end
+      if input.pressed("d") then if copy_now() > 0 then pasteHold() end end
+    end
+  end
+  if not heldPart then pasting = false end
+  if heldPart and pasting and clip and heldPart ~= clip.parts[1].id then pasting = false end
   -- RMB: a tap drops the ghost; held, the camera looks round
   local r_down = input.button and input.button(1) == true
   if r_down and not rmb.down then rmb.t = now(); rmb.x, rmb.y = mouse_xy() end
@@ -1233,8 +1730,42 @@ function lateUpdate(node, dt)
   ghost_paint()
   -- LMB (an edge, off the panel and the HUD's buttons)
   local l = (sim and sim.lmb) or (input.button and input.button(0) == true)
-  if l and not lmb_was and heldPart and not over_panel() and not typing() and not naming() then
-    do_place(shift_held() == true)
+  local ctrl = (sim and sim.ctrl) or (input.key and input.key("ctrl")) or false
+  local alt = (sim and sim.alt) or (input.key and input.key("alt")) or false
+  if l and not lmb_was and not over_panel() and not typing() and not naming() then
+    if alt then
+      -- (S1: Alt+click a piece: in or out of the selection)
+      local h = aim()
+      local ST = ref("structures")
+      local rec, part = nil, nil
+      if type(h) == "table" and h.node and ST then rec, part = ST.partOfNode(h.node) end
+      if part and (partInfo(part.id) or {}).kit then selectToggle(rec.id, part.uid); play("pick", 0.3) end
+    elseif heldPart then
+      local hd = partInfo(heldPart)
+      if ctrl and hd and hd.kit and not pasting then
+        run_begin()
+        local p = req and req.pose
+        if p then run.first = { yaw = p.yaw or 0, ly = p.ly or 0, lx = p.lx or 0, lz = p.lz or 0, sid = p.sid, snap = hd.snap }; run.done = {} end
+      end
+      do_place(shift_held() == true)
+      if run and req and req.pose then run.done[string.format("%.2f|%.2f|%.2f", req.pose.lx or 0, req.pose.ly or 0, req.pose.lz or 0)] = true end
+    end
+  elseif l and lmb_was and run and heldPart and req and not req.bad and req.pose and req.pose.mode == "face" and run.n < RUN_CAP then
+    -- the run goes on along its own line (a wall's) or level (a floor's)
+    local p, f = req.pose, run.first
+    local key = string.format("%.2f|%.2f|%.2f", p.lx or 0, p.ly or 0, p.lz or 0)
+    local ok = f and p.sid == f.sid and math.abs((p.ly or 0) - f.ly) < 0.05 and not run.done[key]
+    if ok and f.snap ~= "floor" then
+      local d = math.abs(((p.yaw or 0) - f.yaw + math.pi / 2) % math.pi - math.pi / 2)
+      local ex, ez = math.cos(f.yaw), -math.sin(f.yaw)     -- the line's X in the structure frame
+      local off = ((p.lx or 0) - f.lx) * (-ez) + ((p.lz or 0) - f.lz) * ex
+      ok = d < 0.01 and math.abs(off) < 0.05
+    end
+    if ok then
+      run.done[key] = true
+      do_place(true)
+    end
   end
+  if not l and run then run_end() end
   lmb_was = l == true
 end

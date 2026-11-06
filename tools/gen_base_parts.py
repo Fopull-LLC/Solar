@@ -46,7 +46,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gen_part_meshes import ROOT, PREFABS, box, disk, lathe, rot_x, rot_z, tube  # noqa: E402
 from base_models import (CModel, CONC, CONC_DARK, CONT_BLUE, DARK, GREY, LIGHT, PAINT, RUBBER, SAFETY, Shell,  # noqa: E402
-                         SLATE, WARM, LAMP_WARM, zcheck, lattice_column, dish, yagi, railing, obstruction, quat_x)
+                         SLATE, WARM, LAMP_WARM, zcheck, lattice_column, dish, yagi, railing, obstruction, quat_x, quat_from_basis)
 import gen_base  # noqa: E402
 
 MODELS = os.path.join(ROOT, "models", "base", "parts")
@@ -137,14 +137,22 @@ def shed_shell():
     for s in (-1, 1):
         bx(m, "Clad", col, (s * (door_w / 2 + fw / 2), (y0 + y1) / 2, d / 2 - t / 2), (fw, y1 - y0, t), sh=sh)
     bx(m, "Clad", col, (0, (y0 + door_h + y1) / 2, d / 2 - t / 2), (door_w, y1 - y0 - door_h, t), sh=sh)
-    # the door: closed, set 2 cm into its frame, with its frame, hinges and lever
-    bx(m, "Steel", SLATE, (0, y0 + door_h / 2, d / 2 - t / 2 - 0.005), (door_w - 0.02, door_h - 0.01, 0.04), sh=sh)
+    # the doorway (sandbox S1: the door is a sliding leaf on an outside track,
+    # the "Door" child scripts/kit_live.lua slides open): its frame and the
+    # track it hangs from, running over the right-hand panel it slides across
     for s in (-1, 1):
         bx(m, "Steel", DARK, (s * (door_w / 2 + 0.035), y0 + door_h / 2 + 0.03, d / 2 + 0.02), (0.06, door_h + 0.06, 0.03))
-        bx(m, "Steel", DARK, (-door_w / 2 + 0.02, y0 + 0.4 + s * 0.6 + 0.6, d / 2 + 0.03), (0.04, 0.14, 0.03))
     bx(m, "Steel", DARK, (0, y0 + door_h + 0.035, d / 2 + 0.021), (door_w + 0.14, 0.06, 0.032))
-    tb(m, "Steel", LIGHT, (door_w / 2 - 0.12, y0 + 1.0, d / 2 + 0.06), (door_w / 2 - 0.12, y0 + 1.18, d / 2 + 0.06), 0.012, segs=8)
-    tb(m, "Steel", LIGHT, (door_w / 2 - 0.12, y0 + 1.05, d / 2 + 0.02), (door_w / 2 - 0.12, y0 + 1.05, d / 2 + 0.06), 0.01, segs=6)
+    bx(m, "Steel", GREY, (0.48, y0 + door_h + 0.085, d / 2 + 0.075), (1.95, 0.05, 0.05))
+    for x in (-0.48, 0.48, 1.42):
+        bx(m, "Steel", DARK, (x, y0 + door_h + 0.085, d / 2 + 0.045), (0.05, 0.08, 0.04))
+    # a threshold plate and a stop
+    bx(m, "Steel", GREY, (0, y0 + 0.004, d / 2 - 0.02), (door_w, 0.008, 0.10))
+    bx(m, "Rubber", RUBBER, (1.43, y0 + 0.5, d / 2 + 0.06), (0.04, 0.12, 0.05))
+    # the interior's solids: the back racks and the bench walk-round (their
+    # look is the Interior child; the floor is the frame's box above)
+    sh.add((0, y0 + 0.95, -0.75), (2.6, 1.9, 0.5))
+    sh.add((-1.15, y0 + 0.47, 0.35), (0.6, 0.94, 1.3))
     # corner posts, the roof and its drip edge
     for sx in (-1, 1):
         for sz in (-1, 1):
@@ -188,6 +196,31 @@ def shed_interior():
     return m
 
 
+def shed_door():
+    """The shed's personnel door: a steel leaf hung from the track outside
+    the front wall, built about its own centre; (model, its colliders,
+    where it hangs closed in the ground frame)."""
+    m = CModel(seed=54)
+    m.ground = False
+    sh = Shell()
+    w, h, t = 0.98, 2.07, 0.04
+    bx(m, "Steel", SLATE, (0, 0, 0), (w, h, t))
+    sh.add((0, 0, 0), (w, h, t))
+    # stiffeners, a kick plate, the pull handles, the hangers at its head
+    for y in (-0.6, 0.15, 0.8):
+        bx(m, "Steel", DARK, (0, y, t / 2 + 0.006), (w - 0.1, 0.05, 0.012))
+    bx(m, "Steel", DARK, (0, -h / 2 + 0.14, t / 2 + 0.004), (w - 0.06, 0.24, 0.008))
+    for s in (-1, 1):
+        tb(m, "Steel", LIGHT, (-w / 2 + 0.1, -0.05, s * (t / 2 + 0.05)), (-w / 2 + 0.1, 0.25, s * (t / 2 + 0.05)), 0.012, segs=8)
+        for y in (-0.05, 0.25):
+            tb(m, "Steel", LIGHT, (-w / 2 + 0.1, y, s * t / 2), (-w / 2 + 0.1, y, s * (t / 2 + 0.05)), 0.01, segs=6)
+    for x in (-0.32, 0.32):
+        bx(m, "Steel", DARK, (x, h / 2 + 0.03, 0.02), (0.06, 0.08, 0.02))
+    S = SHED
+    at = (0.0, S["skid"] + 0.05 + h / 2 + 0.005, S["d"] / 2 + 0.05)
+    return m, sh, at
+
+
 # ── SURFACE HAB ──────────────────────────────────────────────────────────────
 # A 4.0 m-diameter, 6.0 m-long pressure can lying along X on two steel
 # saddles, its shallow end domes, a hatch with a closed door on the front
@@ -213,15 +246,73 @@ def hab_frame():
             Mr = np.array([[1, 0, 0], [0, c, sn], [0, -sn, c]])
             bx(m, "Steel", GREY, p, (0.26, 0.10, 1.05), M=Mr)
         bx(m, "Steel", SAFETY, (x, 0.165, 1.62), (0.3, 0.01, 0.04))
-    # the hatch frame on the front (+Z), its door closed, a step plate below
+    # THE ENTRY (sandbox S1): a rectangular door collar through the hull on
+    # the front (+Z), its sliding hatch the "Door" child (kit_live), a landing
+    # and six steps down along -X, a handrail. The hull is cut to the collar
+    # (hab_shell's HATCH cells).
+    fy = cy - r + 0.75
+    sill = fy + 0.03
+    top = cy + 0.77
+    z0, z1 = 1.42, 2.13
     hz = r + 0.02
-    bx(m, "Steel", GREY, (0, cy - 0.1, hz + 0.08), (1.2, 1.6, 0.14))
-    bx(m, "Steel", SLATE, (0, cy - 0.1, hz + 0.16), (0.95, 1.35, 0.04))
-    tb(m, "Steel", LIGHT, (0.3, cy - 0.1, hz + 0.19), (0.3, cy - 0.1, hz + 0.26), 0.02, segs=8)
-    tb(m, "Steel", LIGHT, (0.18, cy - 0.1, hz + 0.26), (0.42, cy - 0.1, hz + 0.26), 0.018, segs=8)
-    bx(m, "Steel", DARK, (0, 0.95, hz - 0.2), (1.0, 0.05, 0.6))
     for s in (-1, 1):
-        tb(m, "Steel", GREY, (s * 0.45, 0.16, hz - 0.45), (s * 0.45, 0.95, hz - 0.45), 0.03)
+        bx(m, "Steel", GREY, (s * 0.61, (sill + top) / 2, (z0 + z1) / 2), (0.12, top - sill, z1 - z0), sh=sh)
+    bx(m, "Steel", GREY, (0, top + 0.06, (z0 + z1) / 2), (1.34, 0.12, z1 - z0), sh=sh)
+    bx(m, "Steel", GREY, (0, sill - 0.04, (z0 + z1) / 2), (1.34, 0.08, z1 - z0), sh=sh)
+    for k in range(9):
+        y = sill + k * 0.22
+        if k % 2 == 0:
+            for s in (-1, 1):
+                bx(m, "Steel", SAFETY, (s * 0.61, min(top, y + 0.11), z1 + 0.003), (0.12, min(0.22, top - y), 0.006))
+    # the landing and the steps (their colliders are the treads)
+    lz0, lz1 = z1 + 0.02, z1 + 0.82
+    lc = (lz0 + lz1) / 2
+    # the landing: a deck on a closed steel skirt (its collider reaches into
+    # the ground, so nobody walks under it where the ground falls away)
+    bx(m, "Steel", DARK, (0, sill - 0.04, lc), (1.5, 0.08, lz1 - lz0))
+    for s in (-1, 1):
+        bx(m, "Steel", GREY, (s * 0.74, (sill - 0.08 - 0.3) / 2, lc), (0.02, sill - 0.08 + 0.3, lz1 - lz0 - 0.04))
+    sh.add((0, (sill - 0.3) / 2, lc), (1.5, sill + 0.3, lz1 - lz0))
+    # six closed steps straight out from the landing, away from the hull
+    # (alongside it the hull's curve overhung the crew's shoulders)
+    n, tr, sw = 6, 0.28, 1.1
+    for k in range(n):
+        ty = (n - k) * sill / (n + 1)            # k = 0 is the top step, by the landing
+        za = lz1 + k * tr
+        bx(m, "Steel", (0.50, 0.51, 0.52), (0, ty - 0.02, za + tr / 2), (sw, 0.04, tr))
+        bx(m, "Steel", SAFETY, (0, ty + 0.002, za + tr - 0.03), (sw - 0.04, 0.004, 0.04))
+        bx(m, "Steel", DARK, (0, (ty - 0.04 - 0.3) / 2, za + tr - 0.005), (sw - 0.02, ty - 0.04 + 0.3, 0.01))
+    zend = lz1 + n * tr
+    # its collider is a RAMP along the nosings, as the spaceport's stairs are:
+    # the walker climbs a slope, not a stack of boxes (it stalled on a riser)
+    run_, rise_ = zend - lz1 + 0.15, sill
+    L_ = math.hypot(run_, rise_)
+    a_ = math.atan2(rise_, run_)
+    ca, sa = math.cos(a_), math.sin(a_)
+    Mr = np.array([[1, 0, 0], [0, ca, -sa], [0, sa, ca]])     # rising toward -Z
+    mid = np.array([0.0, rise_ / 2, lz1 + run_ / 2])
+    upn = Mr @ np.array([0.0, 1.0, 0.0])
+    sh.add(tuple(mid - upn * 0.06), (sw, 0.12, L_ + 0.1), quat_from_basis(Mr))
+    # the stringer plates either side, cut to the flight's line, and the rails
+    for sx in (-1, 1):
+        xx = sx * (sw / 2 + 0.01)
+        sub_ = CModel(seed=66)
+        sub_.ground = False
+        pts = [(lz1, -0.3), (zend, -0.3), (zend, 0.12), (lz1, sill - 0.02)]
+        P_, N_, UV_, I_ = [], [], [], []
+        for (ox, nx) in ((xx + 0.006, 1.0), (xx - 0.006, -1.0)):
+            b0 = len(P_)
+            for (z_, y_) in pts:
+                P_.append((ox, y_, z_)); N_.append((nx, 0, 0)); UV_.append((z_, y_))
+            I_ += [(b0, b0 + 1, b0 + 2), (b0, b0 + 2, b0 + 3)]
+        sub_.color = GREY
+        sub_.add("Steel", P_, N_, UV_, I_)
+        m.merge(sub_)
+        tb(m, "Steel", SAFETY, (sx * 0.6, 1.16, zend - 0.05), (sx * 0.6, sill + 1.0, lz1), 0.022, segs=6)
+        tb(m, "Steel", SAFETY, (sx * 0.6, sill + 1.0, lz1), (sx * 0.75, sill + 1.0, lz0 + 0.05), 0.022, segs=6)
+        for (xp, zp, yb, yt) in ((0.6, zend - 0.05, 0.16, 1.16), (0.6, lz1, sill, sill + 1.0), (0.75, lz0 + 0.05, sill, sill + 1.0)):
+            tb(m, "Steel", SAFETY, (sx * xp, yb, zp), (sx * xp, yt, zp), 0.02, segs=6)
+        sh.add((sx * 0.64, (sill + 1.0) / 2 + 0.2, (lz0 + zend) / 2), (0.06, sill + 1.0, zend - lz0))
     # handrails along the top and lamps either side of the hatch
     for s in (-1, 1):
         for x in (-2.2, -0.8, 0.8, 2.2):
@@ -229,12 +320,59 @@ def hab_frame():
         tb(m, "Steel", SAFETY, (-2.3, cy + r * 0.86 + 0.12, s * r * 0.53), (2.3, cy + r * 0.86 + 0.12, s * r * 0.53), 0.018, segs=6)
         bx(m, "Steel", DARK, (s * 0.9, cy + 0.85, hz - 0.15), (0.18, 0.12, 0.12))
         bx(m, "Lamp", LAMP_WARM, (s * 0.9, cy + 0.786, hz - 0.15), (0.12, 0.012, 0.08))
-    # today's collider: an octagon of boxes round the can (the shell's place)
-    side = 2 * r * math.tan(math.pi / 8) * 1.04
-    for a in (0.0, math.pi / 4, math.pi / 2, 3 * math.pi / 4):
+    # THE HULL AS A HOLLOW (sandbox S1: walkable inside, static boxes on the
+    # planet as the Lab's are): 16 thin boxes round the axis (the front ones
+    # broken at the door collar), the end walls inside the domes, the deck,
+    # the racks and the bunks.
+    nseg = 16
+    t = HAB["wall"]
+    for k in range(nseg):
+        a = (k + 0.5) * 2 * math.pi / nseg       # from +Y about +X, toward +Z
+        c, s = math.cos(a), math.sin(a)
+        rr = r - t / 2
+        yc, zc = cy + rr * c, rr * s
+        w = 2 * r * math.sin(math.pi / nseg) * 1.08
         q = (math.sin(a / 2), 0.0, 0.0, math.cos(a / 2))
-        sh.add((0, cy, 0), (L + 2 * HAB["dome"] * 0.6, side, 2 * r), q)
+        front = zc > 0.9 and (yc - cy) > -1.4 and (yc - cy) < 0.9
+        if front:
+            for (xa, xb) in ((-L / 2, -0.67), (0.67, L / 2)):
+                sh.add(((xa + xb) / 2, yc, zc), (xb - xa, t + 0.04, w), q)
+        else:
+            sh.add((0, yc, zc), (L, t + 0.04, w), q)
+    for s in (-1, 1):
+        sh.add((s * (L / 2 + 0.12), cy, 0), (0.12, 2 * r, 2 * r))
+    half = math.sqrt(r * r - (fy - cy) ** 2) - 0.12
+    sh.add((0, fy - 0.06, 0), (L - 0.1, 0.12, 2 * half))
+    for s in (-1, 1):
+        sh.add((-1.85, fy + 0.95, s * (half - 0.3)), (2.1, 1.8, 0.55))
+    sh.add((2.0, fy + 0.7, -0.6), (1.9, 1.4, 0.85))
     return m, sh
+
+
+def hab_door():
+    """The hab's hatch: a pressure leaf that slides along the hull outside
+    the collar (+X), with its porthole and dogs. (model, colliders, at)"""
+    m = CModel(seed=65)
+    m.ground = False
+    sh = Shell()
+    r, cy = HAB["r"], HAB["cy"]
+    fy = cy - r + 0.75
+    w, h, t = 1.16, cy + 0.80 - (fy + 0.03), 0.05
+    bx(m, "Steel", (0.62, 0.60, 0.56), (0, 0, 0), (w, h, t))
+    sh.add((0, 0, 0), (w, h, t))
+    bx(m, "Steel", DARK, (0, 0, t / 2 + 0.01), (w - 0.12, h - 0.12, 0.02))
+    bx(m, "Steel", (0.62, 0.60, 0.56), (0, 0, t / 2 + 0.02), (w - 0.2, h - 0.2, 0.02))
+    m.color = GREY
+    tube(m, "Steel", (0, 0.45, t / 2), (0, 0.45, t / 2 + 0.05), 0.15, segs=16, uv_m=1.0)
+    m.color = (0.2, 0.24, 0.28)
+    tube(m, "Glass", (0, 0.45, t / 2 + 0.05), (0, 0.45, t / 2 + 0.055), 0.11, segs=16, uv_m=1.0)
+    for y in (-0.6, 0.0, 0.6):
+        bx(m, "Steel", DARK, (-w / 2 + 0.08, y, t / 2 + 0.04), (0.08, 0.1, 0.03))
+    tb(m, "Steel", LIGHT, (-w / 2 + 0.16, -0.1, t / 2 + 0.07), (-w / 2 + 0.16, 0.2, t / 2 + 0.07), 0.016, segs=8)
+    for k in range(6):
+        bx(m, "Steel", SAFETY if k % 2 == 0 else DARK, (w / 2 - 0.03, -h / 2 + (k + 0.5) * h / 6, t / 2 + 0.004), (0.05, h / 6, 0.008))
+    at = (0.0, fy + 0.03 + h / 2, 2.13 + 0.035)
+    return m, sh, at
 
 
 def hab_shell():
@@ -250,16 +388,19 @@ def hab_shell():
     for i in range(1, 7):
         a = i / 6 * (math.pi / 2)
         prof.append((r * math.sin(a) * 0.999 + 0.0, -L / 2 - dz * math.cos(a)))
-    prof += [(r, L / 2)]
+    # (the barrel in three bands: the middle one carries the door's cut, the
+    # cells HATCH leaves open on the front — hab_frame's collar covers its edges)
+    prof += [(r, -0.55), (r, 0.55), (r, L / 2)]
     for i in range(1, 7):
         a = (6 - i) / 6 * (math.pi / 2)
         prof.append((r * math.sin(a) * 0.999, L / 2 + dz * math.cos(a)))
     prof[-1] = (0.35, L / 2 + dz)
-    lathe(sub, "Clad", prof, segs=48, smooth=True, uv_m=0.5)
+    hatch = lambda i, k: k == 7 and 7 <= i <= 14
+    lathe(sub, "Clad", prof, segs=48, smooth=True, uv_m=0.5, skip=hatch)
     # the inner face, 0.10 m in (what the crew will see from inside)
     inner = [(max(rr - t, 0.25), y * (1 - t / (L / 2 + dz))) for (rr, y) in prof]
     sub.color = LIGHT
-    lathe(sub, "Clad", inner, segs=48, smooth=True, uv_m=0.5, inward=True)
+    lathe(sub, "Clad", inner, segs=48, smooth=True, uv_m=0.5, inward=True, skip=hatch)
     # the dome hubs (berthing rings, closed)
     sub.color = GREY
     for s in (-1, 1):
@@ -294,8 +435,8 @@ def hab_interior():
     bx(m, "Steel", GREY, (0, fy, 0), (L - 0.2, 0.04, 2 * half))
     # racks either side (one with a galley block), two bunks at the far end
     for s in (-1, 1):
-        bx(m, "Clad", LIGHT, (-1.2, fy + 0.95, s * (half - 0.3)), (2.2, 1.8, 0.55))
-    bx(m, "Steel", SLATE, (-1.2, fy + 0.9, -(half - 0.6)), (0.9, 0.04, 0.05))
+        bx(m, "Clad", LIGHT, (-1.85, fy + 0.95, s * (half - 0.3)), (2.1, 1.8, 0.55))
+    bx(m, "Steel", SLATE, (-1.85, fy + 0.9, -(half - 0.6)), (0.9, 0.04, 0.05))
     for k, yy in enumerate((0.45, 1.25)):
         bx(m, "Clad", WARM, (2.0, fy + yy, -0.6), (1.9, 0.18, 0.85))
         bx(m, "Steel", DARK, (2.0, fy + yy + 0.12, -0.6), (1.9, 0.04, 0.05))
@@ -822,16 +963,63 @@ def node_box(name, c, s, q, parent, friction=0.9):
 '''
 
 
-def write_part(name, about, root, shell, children, dry, folder="models/base/parts"):
-    """root: (glb, model); children: [(node name, glb, model)]; shell: Shell."""
+def node_empty(name, at, parent):
+    return f'''    (
+        name: "{name}",
+        transform: (
+            translation: {f3(at)},
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+        parent: Some({parent}),
+    ),
+'''
+
+
+def write_part(name, about, root, shell, children, dry, folder="models/base/parts", doors=(), empties=(), ground_root=False):
+    """root: (glb, model); children: [(node name, glb, model)]; shell: Shell;
+    doors: [(node name, glb, model, shell, at)] — a sliding leaf (its centre
+    `at` in the ground frame) whose colliders are its own children (sandbox
+    S1: scripts/kit_live.lua slides it); empties: [(node name, at)]."""
     rc, lo, hi = centre(root[1])
     seat = rc[1]
-    nodes = [node_mesh(name, f"{folder}/{root[0]}", root[1], (0, 0, 0), None, tags=["base_part"])]
+    if ground_root:
+        # (sandbox S1: the root is an Empty AT THE GROUND POINT, the model a
+        # child at its own box centre: a module whose box is not centred on its
+        # footprint — the hab's steps — still stands where its record says;
+        # its `seat` is 0)
+        nodes = [f'''    (
+        name: "{name}",
+        tags: ["base_part"],
+        transform: (
+            translation: (0.0000, 0.0000, 0.0000),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+    ),
+''', node_mesh("Mesh", f"{folder}/{root[0]}", root[1], rc, 0)]
+        rc = np.zeros(3)
+        seat = 0.0
+    else:
+        nodes = [node_mesh(name, f"{folder}/{root[0]}", root[1], (0, 0, 0), None, tags=["base_part"])]
     for (cname, cglb, cmodel) in children:
         cc, _, _ = centre(cmodel)
         nodes.append(node_mesh(cname, f"{folder}/{cglb}", cmodel, cc - rc, 0))
     for i, (c, s, q) in enumerate(shell.boxes if shell else []):
         nodes.append(node_box(f"Wall {i + 1}", np.asarray(c) - rc, s, q, 0))
+    for (dname, dglb, dmodel, dsh, at) in doors:
+        dc, _, _ = centre(dmodel)
+        di = len(nodes)
+        nodes.append(node_mesh(dname, f"{folder}/{dglb}", dmodel, np.asarray(at) + dc - rc, 0))
+        for k, (c, s, q) in enumerate(dsh.boxes):
+            nodes.append(node_box(f"{dname} Wall {k + 1}", np.asarray(c) - dc, s, q, di))
+        children = list(children) + [(dname, dglb, dmodel)]
+    for (ename, at) in empties:
+        nodes.append(node_empty(ename, np.asarray(at) - rc, 0))
     all_lo, all_hi = lo.copy(), hi.copy()
     for (_, _, cm) in children:
         l2, h2 = cm.bounds()
@@ -858,12 +1046,16 @@ def main():
     write_part("BasePadPlate", "PAD PLATE — a 4 x 4 m precast slab (BASE section, scripts/parts_base.lua).",
                ("pad_plate.glb", pm), psh, [], dry)
     sm, ssh = shed_shell()
-    write_part("BaseShed", "EQUIPMENT SHED — a 3.0 x 2.4 x 2.6 m steel shelter; walls are its future subShapes.",
-               ("shed.glb", sm), ssh, [("Interior", "shed_interior.glb", shed_interior())], dry)
+    sdm, sdsh, sdat = shed_door()
+    write_part("BaseShed", "EQUIPMENT SHED — a 3.0 x 2.4 x 2.6 m steel shelter: its sliding Door, a walkable interior, a Light (scripts/kit_live.lua).",
+               ("shed.glb", sm), ssh, [("Interior", "shed_interior.glb", shed_interior())], dry,
+               doors=[("Door", "shed_door.glb", sdm, sdsh, sdat)], empties=[("Light", (0.0, SHED["h"] - 0.3, 0.0))], ground_root=True)
     hm, hsh = hab_frame()
-    write_part("BaseHab", "SURFACE HAB — a 4 x 6 m pressure can on saddles; the Shell child is its future rb.shell.",
+    hdm, hdsh, hdat = hab_door()
+    write_part("BaseHab", "SURFACE HAB — a 4 x 6 m pressure can on saddles: its hatch Door, a walkable interior, a Light (scripts/kit_live.lua).",
                ("hab_frame.glb", hm), hsh,
-               [("Shell", "hab_shell.glb", hab_shell()), ("Interior", "hab_interior.glb", hab_interior())], dry)
+               [("Shell", "hab_shell.glb", hab_shell()), ("Interior", "hab_interior.glb", hab_interior())], dry,
+               doors=[("Door", "hab_door.glb", hdm, hdsh, hdat)], empties=[("Light", (0.0, HAB["cy"] + HAB["r"] - 0.6, 0.0))], ground_root=True)
     write_stand(dry)
     tm, tsh = tower()
     write_part("BaseTower", "BASE STATION TOWER — a 12 m lattice mast and a 3 m dish (BASE section; scripts/base_tower.lua).",
