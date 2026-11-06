@@ -628,3 +628,260 @@ function KIT.run_perf()
   spawnBudget(nil)
   BK.result()
 end
+
+-- ── rooms (sandbox S3): a sealed hab with an airlock, its air, a leak ────────
+-- On flat ground 150+ m out: three slabs edge to edge, an airlock chamber
+-- (an Airlock Wall out, a Door Wall in) and a 4 x 2 m hab beyond it (a
+-- window, a Door Wall at its far end to the outside), a roof; an Air Tank
+-- Rack, a CO2 Scrubber, an Isotope Cell (live: it powers the scrubber on the
+-- base grid), a seat, a light and a wall screen inside. The outside is made
+-- vacuum for the run (room_air.setVacuum: the home world breathes, the moons
+-- don't). Then: the rooms solved (two sealed, the chamber an airlock); the
+-- tank pressurises the hab; the ROOMS overlay from outside, two angles; the
+-- crew walks in through the airlock (outer door, cycle, inner door: never both
+-- open); in the hab they breathe its air (no suit air drawn), take the helmet
+-- off; the seat tick's cost by the seat; the far door opened: the hab vents,
+-- DEPRESSURISATION, the helmet goes back on; the door shut, the tank brings it
+-- back; save and reload: the rooms and their air from the save.
+-- a picture with the world's draw.line shapes and the screen text in it (the overlay)
+function KIT.oview(nm, rec, eye, tgt)
+  local b = home()
+  local e, t = KIT.w(rec, eye[1], eye[2], eye[3]), KIT.w(rec, tgt[1], tgt[2], tgt[3])
+  VP.cam_fixed(sub(e, b), sub(t, b))
+  wait(1.2)
+  local done = false
+  local ok, err = pcall(camera.capture, { w = 1280, h = 720, ui = true, draws = true }, function(bytes, why)
+    if bytes then assets.writeBytes("user://buildshots/" .. nm .. ".png", bytes); P("BK SHOT %s t=%.3f", nm, time)
+    else P("BK SHOT %s failed: %s", nm, tostring(why)) end
+    done = true
+  end)
+  if not ok then P("BK capture error %s", tostring(err)) end
+  wait_for(function() return done end, 5, "shot " .. nm)
+  VP.cam_off()
+  wait(0.3)
+end
+function KIT.run_rooms()
+  BK.tag = "rooms"
+  wait_ready(120)
+  wait(2)
+  local fb, ST, co, C = findScript("field_builder"), findScript("structures"), findScript("company"), findScript("crew")
+  local KL, RA, SL = findScript("kit_live"), findScript("room_air"), findScript("struct_live")
+  if not BK.check("scene", fb and ST and KL and RA and findScript("rooms"), "the rooms scripts are in the scene") then BK.result() return end
+  RA.setVacuum(true)
+  local spot = BK.flat_spot()
+  if not BK.check("spot", spot ~= nil, "flat ground %s m out", spot and spot.d or -1) then BK.result() return end
+  stand_at(spot)
+  BK.F = spot.t
+  wait(4)
+  key_down("w"); wait(0.6); key_up("w"); wait(1.5)
+  do
+    local pc0 = findScript("planet_camera")
+    local U = unit(sub(astro(), home()))
+    local f = { x = pc0.fwd_x or BK.F.x, y = pc0.fwd_y or BK.F.y, z = pc0.fwd_z or BK.F.z }
+    BK.F = unit(sub(f, scl(U, dot(f, U))))
+  end
+  BK.unlock()
+  C.patch(C.activeId(), { role = "engineer" })
+  wait(3.5)
+  tap("b"); wait(1.5)
+  BK.check("open", fb.isOpen(), "B opens the kit")
+  -- ── build ──
+  -- (a plant or a rock under the ray: the next spot)
+  local sid, why
+  for _, o in ipairs({ { 8, -2 }, { 7, 0 }, { 9, 2 }, { 6, -4 }, { 10, 0 }, { 8, 3 }, { 11, -3 } }) do
+    fb.hold("slab2.concrete")
+    yield()
+    local g = BK.ground_ahead(o[1], o[2])
+    if g then sid, why = fb.placeAt(g.x, g.y, g.z, g.nx, g.ny, g.nz, g.node) end
+    P("KIT ROOMS first slab at (%d, %d): %s", o[1], o[2], tostring(sid or why))
+    if sid then break end
+  end
+  if not BK.check("slab1", sid ~= nil, "the first slab founds a structure (%s)", tostring(why)) then BK.result() return end
+  wait(0.5)
+  local rec = ST.get(sid)
+  for _, x in ipairs({ 2, 4 }) do
+    fb.hold("slab2.concrete")
+    yield()
+    local h = KIT.ray(rec, { x, 4, 0 }, { x, -4, 0 })
+    local s2 = h and fb.placeAt(h.x, h.y, h.z, h.nx, h.ny, h.nz, h.node)
+    rec = ST.get(sid)
+    local last = rec.bp[#rec.bp]
+    BK.check("slab_" .. x, s2 == sid and math.abs(last.x - x) < 0.01 and math.abs(last.z) < 0.01, "a slab edge to edge at x %d", x)
+  end
+  fb.dropHeld()
+  local T = 0.2
+  local function put(id, x, y, z, yaw, pitch)
+    local p = { body = rec.b, mode = "face", sid = sid, lx = x, ly = y, lz = z, yaw = yaw or 0, pitch = pitch or 0, roll = 0 }
+    local s2, w2, q, uid = fb.place(sid, id, p, "money")
+    if not s2 then P("KIT ROOMS %s refused: %s", id, tostring(w2)) end
+    return uid
+  end
+  local H = math.pi / 2
+  local U = {}
+  U.outer = put("airlockWall.steel", -1, T, 0, H)
+  U.inner = put("doorWall.steel", 1, T, 0, H)
+  put("wall.steel", 0, T, -1, 0); put("wall.steel", 0, T, 1, 0)
+  put("wall.steel", 2, T, -1, 0); put("wall.steel", 4, T, -1, 0)
+  put("windowWall.steel", 2, T, 1, 0); put("wall.steel", 4, T, 1, 0)
+  U.far = put("doorWall.steel", 5, T, 0, H)
+  for _, x in ipairs({ 0, 2, 4 }) do put("floor.steel", x, T + 2.2, 0) end
+  -- (along the back wall, and the cell by the window: the walk from the
+  -- inner door to the far one along z 0.46 stays clear)
+  U.scrub = put("scrubber.steel", 1.6, T, -0.62, 0)
+  U.rtg = put("vab.rtg", 2.4, T, -0.55, 0)
+  U.seat = put("vab.seat", 3.25, T, -0.5, 0)
+  U.tank = put("airTank.steel", 4.35, T, -0.62, 0)
+  U.light = put("lightFitting.steel", 3.0, T + 2.2 - 0.001, 0, 0, math.pi)
+  U.screen = put("wallScreen.steel", 3.0, 1.6, -0.9, 0, H)
+  rec = ST.get(sid)
+  P("KIT ROOMS built: %d pieces · outer %s inner %s far %s tank %s scrubber %s", #rec.bp, tostring(U.outer), tostring(U.inner), tostring(U.far), tostring(U.tank), tostring(U.scrub))
+  KIT.close(fb)
+  wait(2.0)
+  -- ── the rooms ──
+  local st = RA.state(sid)
+  local R = st and st.R
+  local RL = findScript("rooms")
+  local ch = R and RL.roomAt(R, 0, 1.2, 0)
+  local hab = R and RL.roomAt(R, 3, 1.2, 0)
+  local nsealed = 0
+  for _, r in ipairs(R and R.rooms or {}) do if r.sealed then nsealed = nsealed + 1 end end
+  BK.check("rooms", R and #R.rooms == 2 and nsealed == 2 and ch and ch.airlock and hab and not hab.airlock,
+    "two sealed rooms: the chamber an airlock (%.1f m³), the hab (%.1f m³); solved in %.2f ms (%d cells)", ch and ch.m3 or -1, hab and hab.m3 or -1,
+    RA.PROF.solve_ms or -1, RA.PROF.cells or -1)
+  -- ── pressurise: the tank's regulator ──
+  local t0 = time
+  wait_for(function() local a = hab and RA.airOf(sid, hab.id); return a and a.p > 0.97 end, 90, "the hab pressurised")
+  local ah = hab and RA.airOf(sid, hab.id)
+  BK.check("pressurised", ah and ah.p > 0.97 and ah.breathable, "the Air Tank Rack pressurised the hab in %.0f s: %.2f atm, O2 %.0f %%, tank %.1f of 60 m³",
+    time - t0, ah and ah.p or -1, ah and 100 * ah.o2 / math.max(ah.p, 1e-6) or -1, st and st.tanks[U.tank] or -1)
+  P("KIT ROOMS power: scrubber on the grid %s (struct %s grid up %s)", tostring(st and st.pow), tostring(sid), tostring(SL.grid_up and SL.grid_up(sid)))
+  -- ── the overlay from outside ──
+  RA.overlay, RA.overlayAlways = true, true
+  KIT.oview("r1_rooms_overlay_front", rec, { -2.5, 4.5, 8.5 }, { 2, 1.0, 0 })
+  KIT.oview("r2_rooms_overlay_corner", rec, { 8.5, 5.5, -5.5 }, { 2, 1.0, 0 })
+  -- ── in through the airlock ──
+  local both, maxo = false, { o = 0, i = 0 }
+  local function watch()
+    local o, i = KL.doorOpen(sid, U.outer) or 0, KL.doorOpen(sid, U.inner) or 0
+    if o > 0.02 and i > 0.02 then both = true end
+    maxo.o, maxo.i = math.max(maxo.o, o), math.max(maxo.i, i)
+  end
+  KIT.tp(rec, -4, 0)
+  -- (the doorways of these walls, turned a quarter, are at z 0 .. 0.92)
+  local DZ = 0.46
+  KIT.walk(rec, -2.0, DZ, 8, 0.3, watch)
+  local opened = wait_for(function() watch(); return (KL.doorOpen(sid, U.outer) or 0) > 0.95 end, 60, "the outer door")
+  BK.check("outer_open", opened, "outside, the outer door opens (the chamber at the moon's vacuum: %.2f atm)", RA.airOf(sid, ch.id).p)
+  KIT.view("r3_airlock_outer_open", rec, { -4.5, 1.9, 2.8 }, { -0.5, 1.1, 0 })
+  KIT.walk(rec, 0.0, DZ, 8, 0.3, watch)
+  local x, y, z = KIT.at(rec)
+  local _, crid = RA.crewRoom()
+  BK.check("in_chamber", crid == ch.id, "in the chamber (%.2f, %.2f, %.2f)", x, y, z)
+  local pmin, cyc_seen = 1, false
+  local inner = wait_for(function()
+    watch()
+    local c = RA.chamberOf(sid, ch.id)
+    if c and c.cyc then cyc_seen = true end
+    return (KL.doorOpen(sid, U.inner) or 0) > 0.95
+  end, 90, "the inner door")
+  local cp, hp = RA.airOf(sid, ch.id).p, RA.airOf(sid, hab.id).p
+  BK.check("cycle", inner and cyc_seen and cp > 0.75 and math.abs(cp - hp) < 0.06,
+    "the outer door shut, the chamber pressurised from the hab's air to the hab's pressure (%.2f / %.2f atm), the inner door opened", cp, hp)
+  BK.check("interlock", not both, "never both airlock doors open (outer max %.2f, inner max %.2f)", maxo.o, maxo.i)
+  KIT.walk(rec, 2.4, DZ, 8, 0.3, watch)
+  KIT.walk(rec, 2.6, -0.1, 6, 0.3, watch)
+  wait(1.5)
+  local _, hrid = RA.crewRoom()
+  local a = astro()
+  local okA = RA.airAt(a.x, a.y, a.z)
+  local pw, su = findScript("planet_walker"), findScript("suit")
+  local s0 = pw.suitO2
+  wait(4)
+  BK.check("breathe_room", hrid == hab.id and okA == true and pw.airSource == "ambient" and math.abs((pw.suitO2 or 0) - (s0 or 0)) < 1e-6,
+    "in the hab the crew breathe its air: room %s, airAt %s, the walker's air %s, suit O2 %.4f → %.4f",
+    tostring(hrid), tostring(okA), tostring(pw.airSource), s0 or -1, pw.suitO2 or -1)
+  local okh, whyh = su.canRemoveHelmet()
+  local offd = okh and su.setHelmet(false, { instant = true })
+  wait(1.0)
+  local _, hr2 = RA.crewRoom()
+  BK.check("helmet_off", okh and not su.helmetOn() and hr2 == hab.id, "the helmet comes off in the room's air (in room %s; %s)", tostring(hr2), tostring(whyh))
+  KIT.oview("r4_inside_hab_overlay", rec, { 4.4, 1.75, 0.6 }, { 0.2, 1.1, -0.2 })
+  -- the seat tick: the crew by the seat, the vessel dormant
+  KIT.walk(rec, 3.25, 0.25, 6, 0.3)
+  wait(2.5)
+  local vc = SL.controllerOf(sid)
+  P("KIT ROOMS seat: vessel dormant %s, seat tick %s, prompt shown %s", tostring(vc and vc.dormant), tostring(vc and vc.DORM and vc.DORM.seat), tostring(vc and vc.DORM and vc.DORM.seatShown))
+  KIT.cost("by the seat (S2 follow-up: the seat tick)", 4)
+  BK.check("seat_tick", vc and vc.dormant == true and vc.DORM.seat == true, "the structure vessel stays dormant with the crew by its seat (vessel_controller %.4f ms/frame)",
+    perf.scriptMs("vessel_controller") or -1)
+  KIT.cost("rooms: crew inside, air ticking", 3)
+  P("KIT ROOMS cost: room_air %.4f, rooms %.4f ms/frame · air step %.3f ms", perf.scriptMs("room_air") or -1, perf.scriptMs("rooms") or -1, RA.PROF.air_ms or -1)
+  -- ── the far door: a leak ──
+  KIT.walk(rec, 3.9, DZ, 6, 0.3)
+  wait(3.0)
+  local ax, ay, az = KIT.at(rec)
+  local held = (KL.doorOpen(sid, U.far) or 1) < 0.02 and RA.airOf(sid, hab.id).p > 0.9
+  BK.check("held", held, "the far door, to the moon, is held shut by the pressure with the crew beside it (crew at %.2f, %.2f; door %.2f; hab %.2f atm)",
+    ax, az, KL.doorOpen(sid, U.far) or -1, RA.airOf(sid, hab.id).p)
+  local ents = BK.menu(ST.nodeOf(sid, U.far))
+  local fo = BK.entry(ents, "ra_force")
+  P("KIT ROOMS far door menu: %s", fo and tostring(fo.label) or "no force row")
+  if fo and fo.act then fo.act() end
+  local vent = wait_for(function() local q = RA.airOf(sid, hab.id); return q and q.venting and q.p < 0.6 end, 30, "the hab venting")
+  local q = RA.airOf(sid, hab.id)
+  local al = RA.lastAlarm
+  BK.check("leak", vent and al and al.kind == "depress" and tostring(al.cause):find("Door Wall", 1, true),
+    "forced open from its menu: the hab vents to the moon (%.2f atm), DEPRESSURISATION: %s", q.p, al and tostring(al.cause) or "no alarm")
+  wait(1.0)
+  KIT.oview("r5_leak_overlay", rec, { 7.5, 2.6, 2.5 }, { 3.5, 1.1, 0.0 })
+  BK.check("helmet_back", su.helmetOn() and pw.airSource == "suit", "the helmet went back on, the suit's air (%s)", tostring(pw.airSource))
+  KIT.walk(rec, 2.2, 0.0, 6, 0.3)
+  local back = wait_for(function() local q2 = RA.airOf(sid, hab.id); return q2 and not q2.venting and q2.p > 0.97 end, 120, "the hab refilled")
+  local q2 = RA.airOf(sid, hab.id)
+  BK.check("refill", back, "the far door shut behind the crew: the tank brought the hab back (%.2f atm, tank %.1f m³)", q2.p, RA.state(sid).tanks[U.tank] or -1)
+  local st_txt = KL.screenText(sid, U.screen)
+  BK.check("screen_rooms", st_txt and st_txt:find("ROOMS", 1, true) and st_txt:find("AIR", 1, true), "the screen reads the rooms: %s", tostring(st_txt))
+  KIT.view("r6_screen", rec, { 3.7, 1.65, 0.55 }, { 3.0, 1.55, -0.9 })
+  -- ── save and reload ──
+  wait(3)
+  -- (the air kept: every room's and the tank's, the inner door may be open)
+  local function total(R_, sid_)
+    local st_ = R_.state(sid_)
+    local n, parts = 0, {}
+    for _, r in ipairs(st_ and st_.R and st_.R.rooms or {}) do
+      local a_ = R_.airOf(sid_, r.id)
+      n = n + a_.p * r.m3
+      parts[#parts + 1] = string.format("room %d %.3f atm", r.id, a_.p)
+    end
+    for _, q in pairs(st_ and st_.tanks or {}) do n = n + q end
+    return n, table.concat(parts, ", ")
+  end
+  RA.saveNow()
+  q2 = RA.airOf(sid, hab.id)
+  local p0 = q2.p
+  local tq0 = RA.state(sid).tanks[U.tank]
+  local n0, d0 = total(RA, sid)
+  if save.flush then save.flush() end
+  scene.load("system")
+  yield()
+  wait_for(function()
+    local pw2, gm, bf = findScript("planet_walker"), findScript("game_manager"), findScript("base_facilities")
+    return pw2 and gm and bf and bf.sited and not gm.loading and not gm.curtain
+  end, 300, "the reload")
+  wait(5)
+  RA, ST, KL = findScript("room_air"), findScript("structures"), findScript("kit_live")
+  RA.setVacuum(true)
+  wait(2)
+  local st2 = RA.state(sid)
+  local R2 = st2 and st2.R
+  local hab2 = R2 and findScript("rooms").roomAt(R2, 3, 1.2, 0)
+  local q3 = hab2 and RA.airOf(sid, hab2.id)
+  local n3, d3 = total(RA, sid)
+  BK.check("reload", q3 and math.abs(n3 - n0) < 0.2 and q3.p > 0.95 and #R2.rooms == 2,
+    "after a reload: %d rooms, the hab at %.3f atm (was %.3f), the tank %.2f m³ (was %.2f): all the air %.2f → %.2f m³ (%s → %s)", R2 and #R2.rooms or -1,
+    q3 and q3.p or -1, p0, st2 and st2.tanks[U.tank] or -1, tq0 or -1, n0, n3, d0, d3)
+  rec = ST.get(sid)
+  RA.overlay, RA.overlayAlways = true, true
+  KIT.oview("r7_after_reload", rec, { -2.5, 4.5, 8.5 }, { 2, 1.0, 0 })
+  BK.result()
+end

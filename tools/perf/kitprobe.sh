@@ -8,7 +8,13 @@
 #                                    and Hab prefabs entered, the stand's blue
 #                                    display copy, save and reload), kitperf
 #                                    (500 / 2,000 / 6,000 pieces in view: counts,
-#                                    draws, the render bucket, script ms)
+#                                    draws, the render bucket, script ms), rooms
+#                                    (S3: a sealed hab with an airlock built,
+#                                    pressurised by its tank, the ROOMS overlay,
+#                                    walked in through the airlock, its air
+#                                    breathed helmet off, the seat tick's cost,
+#                                    a far door opened: the leak alarm; refilled;
+#                                    save and reload)
 #   env: WORK LOCK SOLAR TAG PATCHES BENCH_PARAMS as bench.sh
 #
 # Splices vfxprobe_modes.lua (its freecam), buildkitprobe_modes.lua (the BK
@@ -29,7 +35,7 @@ s = open(p).read()
 i = s.index('-- ── main ──')
 s = s[:i] + m + s[i:]
 s = s.replace('    elseif MODE == "plane" then run_plane()',
-              '    elseif MODE == "plane" then run_plane()\n    elseif MODE == "kit" then KIT.run()\n    elseif MODE == "kitperf" then KIT.run_perf()')
+              '    elseif MODE == "plane" then run_plane()\n    elseif MODE == "kit" then KIT.run()\n    elseif MODE == "kitperf" then KIT.run_perf()\n    elseif MODE == "rooms" then KIT.run_rooms()')
 open(p, 'w').write(s)
 PY
 rm -rf $S/proj/save/user/buildshots

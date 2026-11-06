@@ -14647,7 +14647,7 @@ DORM = { born = nil, check = -1e9, quiet = nil, light = nil, far = false, live =
 DORM_NEAR = 40.0      -- the crew within this: boarding prompts, the hatch ring
 DORM_LIVE = 750.0     -- the camera within this: the engine simulates the craft (~700)
 DORM_VIS = 60.0       -- the camera within this: a dormant craft checks every tick, its tyres drawn
-DORM_STRUCT = 6.0     -- (S2) a structure vessel: the crew this near one of its seats wakes it (F boards from 3.4 m)
+DORM_STRUCT = 6.0     -- (S2) a structure vessel: the crew this near one of its seats runs its SEAT TICK (F boards from 3.4 m)
 
 -- Should this craft be dormant now? → yes, the camera's distance.
 function dormWanted(node)
@@ -14663,14 +14663,19 @@ function dormWanted(node)
     -- lockers, DORM_STRUCT; it never moves, so physics never needs it)
     if structureMode then
       -- (measured from its seats, not its root: a big structure's cockpit
-      -- can stand 20 m from the structure's origin)
+      -- can stand 20 m from the structure's origin). S2 follow-up: the crew by
+      -- a seat no longer wakes the whole controller (0.12-0.20 ms a frame for
+      -- a vessel that never moves); it stays dormant and runs the SEAT TICK
+      -- (structSeatTick: the board prompt, F, the ring) until F boards it.
+      local near_ = false
       for _, cs in ipairs(crewSeats) do
         local ok, w = pcall(node.toWorld, node, vec3(cs.x or 0, cs.y or 0, cs.z or 0))
         if ok and w then
           local sx, sy, sz = a.x - w.x, a.y - w.y, a.z - w.z
-          if sx * sx + sy * sy + sz * sz < DORM_STRUCT * DORM_STRUCT then return false, 0 end
+          if sx * sx + sy * sy + sz * sz < DORM_STRUCT * DORM_STRUCT then near_ = true break end
         end
       end
+      DORM.seat = near_
     elseif dx * dx + dy * dy + dz * dz < DORM_NEAR * DORM_NEAR then return false, 0 end
   end
   local c = DORM.cam
@@ -14701,6 +14706,30 @@ function dormLight(node)
   if einfo then power_tick(node, einfo, el) end
 end
 
+-- THE SEAT TICK (S2 follow-up, plan §7's 0.05 ms): what a dormant structure
+-- vessel does while the crew stands by one of its seats: F boards (boardNow
+-- wakes it), and ten times a second the prompt and the ring's station from
+-- board_dist. Nothing else of the full tick: a base's cockpit never moves.
+function structSeatTick(node)
+  if not astronaut or not astronaut.valid then astronaut = find("Astronaut") end
+  if not astronaut then return end
+  if input.pressed("f") then
+    if boardNow(node) then DORM.seatShown, DORM.ringQ = nil, nil return end
+  end
+  local now = time or 0
+  if now - (DORM.seat_t or -1) < 0.1 then return end
+  DORM.seat_t = now
+  local bd, bst = nil, nil
+  if podCrewed and not crewAboard then bd, bst = board_dist(node, astronaut, assembly.info(node)) end
+  if bd and bd <= params.board_range + 1.4 and crewOnFoot(node.id) then
+    set_prompt(boardPrompt(bst))
+    DORM.seatShown, DORM.ringQ = true, bst or pod
+  elseif DORM.seatShown then
+    DORM.seatShown, DORM.ringQ = nil, nil
+    set_prompt("")
+  end
+end
+
 -- Back to the full tick (this tick runs it).
 function dormWake(node)
   if DORM.light then dormLight(node) end
@@ -14725,7 +14754,8 @@ function dormPlace(node, cd)
   -- (Even an early return costs the engine's hook call, twice a tick: 50 µs a
   -- craft a frame.) Inside the live range a quarter of a second at a time, so
   -- a bump from something else is answered within it; beyond, half a second.
-  DORM.far = cd >= DORM_VIS
+  -- (a structure vessel with the crew at its seats is never slept: F is read each tick)
+  DORM.far = cd >= DORM_VIS and not DORM.seat
   if DORM.far and script and script.sleep then
     -- (a little uneven, so a fleet left together doesn't all wake on one tick)
     local secs = (cd > DORM_LIVE + 50.0) and 0.45 or 0.22
@@ -14741,6 +14771,14 @@ function dormTick(node)
     -- woken: control taken, or physics moving it where physics runs (a bump,
     -- its ground going) — the full tick runs this very tick
     if piloting or crewAboard or boarding or (DORM.live and not node.asleep and not structureMode) then return dormWake(node) end
+    -- (S2 follow-up) a structure vessel's seats, dormant: F boards, the prompt says what
+    if structureMode and DORM.seat then
+      structSeatTick(node)
+      if piloting then return dormWake(node) end
+    elseif DORM.seatShown then
+      DORM.seatShown, DORM.ringQ = nil, nil
+      set_prompt("")
+    end
     if not DORM.far and now - DORM.check < 0.5 then return true end
     DORM.check = now
     local want, cd = dormWanted(node)
@@ -15716,6 +15754,15 @@ function lateUpdate(node, dt)
     if DORM.vis then
       if R2.live then r2TyreVisuals(node, dt) end
       if #R2.wheels > 0 and AUTO.lib then motoVisuals(node, dt) end
+    end
+    -- (a structure vessel's seat tick: the ring on the station F boards, as drawn)
+    local q = DORM.ringQ
+    if q and structureMode and not cinematicUp() then
+      local rx, up, rz = basis(node)
+      local px = node.x + rx.x * q.x + up.x * q.y + rz.x * q.z
+      local py = node.y + rx.y * q.x + up.y * q.y + rz.y * q.z
+      local pz = node.z + rx.z * q.x + up.z * q.y + rz.z * q.z
+      draw.ring(px, py, pz, up.x, up.y, up.z, 0.75, 0.3, 0.95, 1.0, 0.9)
     end
     return
   end

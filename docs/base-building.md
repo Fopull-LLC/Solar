@@ -1204,7 +1204,9 @@ the adjoining place in the hit part's frame, on its 0.5 m grid:
 - **G mirrors:** off, then about the structure's X plane through the piece
   under the cursor, then its Z plane. Each placement places its mirrored
   twin in the same structure if it fits (`mirrorPose`, the VAB's mirror on a
-  structure). Asymmetric pieces (a gable) are turned, not reflected.
+  structure). Since S3 it is a true reflection (§14): a piece symmetric
+  left-right or front-back is its own reflection turned, and the Door Wall,
+  symmetric in neither, is placed as its mirrored variant.
 - **Copy and paste:** Alt+click toggles pieces in a selection (tinted).
   **Ctrl+C** copies them, or the piece under the cursor. **Ctrl+V** holds
   the copy as a composite ghost (one `BuildGhost` root, a hologram per
@@ -1245,8 +1247,9 @@ the adjoining place in the hit part's frame, on its 0.5 m grid:
 - **The `structure` mode** (vessel_controller `structureMode`,
   `structureSid`): SPACE releases nothing, it can't be recovered or returned
   to a stand, the navball stays off, and it is off the fleet board
-  (`standHeld`). It is dormant (a light tick a second) unless the crew is
-  within 6 m of one of its seats (`DORM_STRUCT`); it never moves, so physics
+  (`standHeld`). It is dormant (a light tick a second); with the crew within
+  6 m of one of its seats (`DORM_STRUCT`) it stays dormant and runs the SEAT
+  TICK (S3 follow-up, §14), and only F wakes it. It never moves, so physics
   never needs it awake. Its seats, hatches, IVA, lockers, lights, electronics and
   part menus are a craft's: **F boards a placed cockpit**, a locker's
   Take / Put are its menu's, a floodlight switches from its menu or the
@@ -1256,9 +1259,9 @@ the adjoining place in the hit part's frame, on its 0.5 m grid:
   (`assembly.teleport`), as a stand holds its craft. **Rebuilt** when the
   live parts change; their state (a locker's number and contents, charge) is
   saved every 5 s and before a rebuild (`slive.<sid>`). A battery, panel,
-  cell or floodlight placed live is also a member of the base grid by its
-  record (`parts_kit.LIVE_POWER`). Not yet: an exchange between the
-  vessel's own pool and the grid's.
+  cell or floodlight placed live is a member of the base grid by its record
+  (`parts_kit.LIVE_POWER`), and since S3 it counts ONCE: the vessel carries
+  it without that module (§14).
 - **The stand's uncommissioned craft** is drawn in blueprint blue
   (`setTint` with a blue rim on every display node). F beside it says
   "… is not commissioned yet: COMMISSION on the stand to use it", and so does
@@ -1293,9 +1296,184 @@ stands where its record says.
   `save/user/buildshots/k*.png`. The numbers are in
   `work/sandbox_s1/NOTES.md`.
 
-### Open for S3 and later
+### Open for S4 and later
 
-Rooms and air (the `seals` field is the seam: "z", "y", "ring", "door"), the
-airlock's interlock, the ROOMS overlay, paint and decals, blueprints in
-files and the BLUEPRINTS tab, the whole VAB catalogue in the kit, the
-vessel's power pool exchanged with the grid, and bake-when-idle (card 0655).
+Paint and decals, blueprints in files and the BLUEPRINTS tab, the whole VAB
+catalogue in the kit, and bake-when-idle (card 0655). Rooms and air are §14.
+
+## 14. Sandbox S3: rooms and air
+
+The plan is `work/sandbox/PLAN.md` §1.5 and §8.3 (S3). A room is found from
+the pieces, holds air only when it is truly closed, and the crew breathe it.
+
+### The rooms (`scripts/rooms.lua`, pure)
+
+- **The cell grid.** Each structure has its own grid in its frame: 1 m
+  columns in X and Z, and in Y the LAYERS between the planes its floors,
+  slabs and roofs lie in (a storey is 2.4 m, so a fixed 1 m Y step would cut
+  every room in half). The X and Z grids sit at 0 or 0.5 m, whichever puts
+  more walls on cell faces.
+- **What a piece closes** is its `seals` field as flat quads in its own
+  frame, turned by its yaw, pitch and roll (90° steps only; a piece turned
+  off the grid seals nothing):
+
+  | `seals` | closes |
+  |---|---|
+  | `"z"` | a wall: its middle plane, its width by its height |
+  | `"y"` | a floor or slab: its middle plane (a pitched roof: its eave's) |
+  | `"door"` | as its class, while its door is shut (a door wall, the Hatch Floor, a Hab Door Bulkhead) |
+  | `"ring"` | a hab segment: its four sides along its length (the can held as a 2.5 × 2.5 m tube); a cap: its section |
+  | nil | nothing. A wall-class piece that doesn't seal (an Open Frame, a Vent Louvre) is kept to name the leak |
+
+  A wall closes a cell face when it spans at least half the cell and stands
+  floor to ceiling in that layer (within 0.3 m: walls stand on a floor's top
+  and stop under the next one). A Half Wall stops short of the ceiling: it
+  closes nothing, and the leak says so.
+- **The fill, doors shut.** The outside is filled first from the grid's
+  border and any open face at its lowest and highest planes. What it can't
+  reach are the SEALED rooms. Then the LEAKY rooms: outside cells with a floor
+  under and a roof over them, filled among themselves, closed on more than
+  twice as many faces as they are open on (a box with a wall missing; a
+  canopy on posts is no room). Their open faces are their LEAKS, each named
+  ("a gap in the wall", "Vent Louvre Wall lets air through", "the Half Wall
+  stops short of the ceiling").
+- **Doors** join the two rooms (or a room and the outside) either side of
+  them; the air opens them. An **airlock** is a sealed room of at most 24 m³
+  with two doors or more, one of them an Airlock Wall's.
+- **When:** a structure is solved when its seal signature (`signatureOf`: the
+  pieces that seal, name an opening or carry life support, where they stand)
+  changes, compared when `structures.version` moves, 0.5 s after the last
+  change. A light switched or a locker opened changes nothing. Cost, warm:
+  a hab is well under 0.1 ms; 676 pieces in 169 one-tile rooms (the worst
+  case) 2.0 ms; 2,700 pieces 7.8 ms.
+
+### The air (`scripts/room_air.lua`)
+
+- **Per room** in atm·m³ (a cubic metre at one atmosphere): N (nitrogen and
+  the rest), x (O2), c (CO2). p = (N + x + c) / V. A crew member breathes
+  6.8e-6 of O2 a second and makes 5.85e-6 of CO2 (0.84 and 1.0 kg a day).
+  A NETWORK is rooms joined by open doors (they mix at once).
+- **Breathable:** p ≥ 0.5 atm, O2 ≥ 0.16 atm, CO2 ≤ 0.02 atm.
+- **A new room holds the air it closed round:** vacuum on a moon, the
+  world's air on the home world. A rebuilt room keeps its air by the cells it
+  shares with the old rooms.
+- **Leaks vent:** a network with an open door to the outside, or a leaky room
+  in it, relaxes to the outside's air, e^(-t/τ), τ = 0.5 s × V / openings (a
+  9 m³ room loses 95 % in about 13 s through one door: the plan's D6). The
+  machines and the regulator stand down while it does.
+- **Life support (the LIFE section; on the base grid):**
+
+  | Piece | Does | Power |
+  |---|---|---|
+  | CO2 Scrubber | takes CO2 out up to 2.4e-5 atm·m³/s (four crew), down to none | 0.4 EC/s |
+  | Oxygen Generator | makes O2 up to 2.8e-5 atm·m³/s (four crew) while under 21 % of an atmosphere, holds it there, idles over 105 % | 1.5 EC/s |
+  | Air Tank Rack | 60 m³ of air at 200 bar on a regulator: opens under 0.97 atm, closes at 1 atm, 0.25 m³/s; refilled from its menu ($4 a m³) | none (a valve) |
+
+  The machines run while their structure's base grid is up (a real grid not
+  short with its battery flat), their draw a grid load. The Oxygen Generator
+  has no water feed yet: it runs as if fed (fluids are S7).
+- **The closed form.** Between events every rate is constant, so the state is
+  a straight line (venting the exponential). `advance(st, M, dt)` steps to the
+  next event (O2 at 21 % or 105 %, the CO2 clear, the O2 gone, the regulator
+  opening or closing, a tank empty), applies it and carries on: one call of
+  any dt equals any number of small ones (`smoke_rooms` checks an hour against
+  3,600 steps, and 30 h of a regulator cycling against 108,000, to 1e-6). The
+  air advances every second on the agency clock, at once when a door opens or
+  shuts, the crew moves room or the power changes, and a structure loading is
+  caught up in one call per network (capped at 30 game days). Never per frame.
+- **The crew** in a breathable room breathe it: `suit.breathableAt` asks
+  `room_air.airAt` first, so the helmet may come off there (even on an
+  airless moon), `planet_walker` draws no suit air, and a room whose air goes
+  puts the helmet back on at once. Crew records off-screen (`crew.recordTick`)
+  ask the same.
+- **Alarms.** A room that held air (0.8 atm or more) and vents sounds
+  DEPRESSURISATION with its cause ("the Door Wall is open", the gap), the
+  caption and the crew alarm every 2.5 s within 45 m, until it is down to the
+  outside's pressure or sealed again. Air going bad with the crew in a sealed
+  room is said once ("CO2 2.3 %: the scrubbers aren't keeping up").
+- **SAVE:** `air.<sid>` = { a (agency clock), rooms = { { k, N, x, c, V, f } … },
+  tanks = { { u, q } … } }, every 5 s and on a solve; a room's key `k` is its
+  lowest cell's. Lists, not tables keyed by number (the save does not hand a
+  12-digit string key back as one).
+
+### Doors hold against pressure
+
+Any door that is not an airlock's is **held shut** while more than 0.1 atm
+stands across it (19 kN on the leaf; a room at 1 atm against vacuum is
+190 kN): walking up to it says "held shut: 1.00 atm against 0.00 · its menu
+forces it" and it stays shut. Its menu's **Force it open (vents Room 2)**
+frees it until it shuts again, and the room vents with the alarm. (Without
+this, walking past a door to the outside on a moon emptied the hab: the
+probe found it.) On a world whose air you can breathe, a room and the
+outside are at about the same pressure and doors open as before.
+
+### The airlock
+
+- Its doors are **interlocked**: kit_live asks `room_air.gate(sid, uid, want)`
+  for each, every frame it steps it, and only the chamber's chosen door may
+  open, with every other door of the chamber shut and the chamber at the
+  pressure on that door's far side.
+- **Which door:** a crew member outside by a door asks for it; in the chamber,
+  for the door they did not come in by.
+- **The cycle:** while the pressures differ, a pump moves 0.35 atm·m³/s
+  between the chamber and the hab behind it (depressurising pumps the air
+  back into the hab; repressurising draws it from the room ahead), with the
+  pump's hiss looping and a seal hiss and chime at the end. A 2 × 2 m chamber
+  takes about 25 s. Its menu row reads "depressurising · 0.42 atm".
+
+### The ROOMS overlay
+
+F1 with the kit open. Each room's outline on its floor and under its
+ceiling, drawn from this frame's body read (the planet moves), green sealed
+with air, amber sealed and thin, red unsealed or venting, a label at its
+middle ("ROOM 2 SEALED · AIR · 17.6 m³ · 1.00 atm · O2 21 % · CO2 0.0 %",
+"AIRLOCK"), and a red ring and "GAP · …" on every leak. The wall screen's
+ROOMS, AIR, LEAK and LIFE SUPP lines read the same.
+
+### S1/S2 follow-ups
+
+- **The seat tick.** A structure vessel with the crew within 6 m of a seat
+  no longer runs the whole controller (0.12–0.20 ms a frame for a vessel
+  that never moves). It stays dormant and runs `structSeatTick` each tick: F
+  boards (`boardNow` wakes it), and ten times a second the prompt and the
+  ring's station from `board_dist`; `lateUpdate` draws the ring from the
+  drawn pose. It is never script-slept while the crew is at a seat.
+- **Power counted once.** A battery, panel or cell placed live is the base
+  grid's by record; the vessel carries it without that module
+  (`struct_live.GRID_MODS`). A floodlight's and a crewed part's draw are grid
+  loads (`LIVE_POWER`: pod 0.05, Mk2 0.08, cockpit 0.04 EC/s), so their
+  modules draw nothing in the vessel, and the vessel's own cells (a pod's
+  battery) are topped up every 5 s while the grid is up.
+- **Mirror (G) reflects.** The twin of a piece at Ry(yaw)·Rx(pitch)·Rz(roll)
+  reflected in the structure's X plane is Ry(-yaw)·Rx(pitch)·Rz(-roll) on the
+  piece flipped left for right; in its Z plane Ry(-yaw)·Rx(-pitch)·Rz(roll)
+  on it flipped front for back. A piece's `sym` says which of its own planes
+  it is symmetric in ("x" default; "z" the gable, Airlock Wall, Hab Door
+  Bulkhead, Hatch Floor, pods and the cabin), and one symmetric in the other
+  is that flip turned half round. The Door Wall is symmetric in neither (its
+  door at one end, its lamp outside): G places `doorWallM`, a hidden variant
+  the generator builds reflected (`mirrored()` in `tools/gen_kit_parts.py`).
+  `smoke_kit` checks every point of the twin is the mirror image of a point
+  of the piece, for both planes and turned poses.
+
+### Tests and the probe
+
+- `luajit solar/tests/smoke_rooms.lua`: the flood fill (a sealed box of
+  8.8 m³, a door shut and its door to the outside, the mirrored door, a
+  window and a glass wall, a gap, an open frame, a vent louvre, a half wall,
+  no roof, a canopy, two rooms and their door, an airlock, a hab of three
+  segments and two caps, an open can, a bulkhead, the box turned, a 10 × 10 m
+  hall, the signature), the closed form (one step against many, the
+  regulator, venting, a breathable world's air, the O2 running out), and the
+  scene half on a stub engine (solved once, a tank pressurises a moon's
+  room, the crew breathe it, the airlock out and back in never both doors
+  open with the air pumped back, a door to the moon held shut by the
+  pressure until forced, then venting with the alarm, the regulator refilling
+  it, the save, a capped catch-up).
+- `tools/perf/kitprobe.sh <engine> rooms` (PATCHES=funds.patch): a sealed
+  hab with an airlock built through the kit, pressurised, the overlay from
+  outside, walked into through the airlock, the room's air breathed with the
+  helmet off, the seat tick's cost, the far door held shut by the pressure,
+  then forced open from its menu (the leak alarm, the helmet back on),
+  refilled, save and reload. Pictures
+  `save/user/buildshots/r*.png`; numbers in `work/sandbox_s3/NOTES.md`.

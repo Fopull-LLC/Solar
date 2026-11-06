@@ -7,7 +7,8 @@
 -- Visor" and "Helmet Lamps"), so taking the helmet off is hiding a node —
 -- and under it is the crew's own head in a comm cap.
 --
--- WHEN IT MAY COME OFF. Only in air a person can breathe: on foot, not under
+-- WHEN IT MAY COME OFF. Only in air a person can breathe (a sealed room's own
+-- air first, room_air.airAt, sandbox S3): on foot, not under
 -- water, on a world whose air has oxygen (aero.lua `oxygen`: a living world,
 -- and the home world always), thick enough where the crew stands (the air's
 -- share at this height, aero.lua `airShare`, at least `thin_air`), and
@@ -151,6 +152,15 @@ local function len(x, y, z) return math.sqrt(x * x + y * y + z * z) end
 -- The air where the crew stands: ok, reason. `x, y, z` the crew's world
 -- position (the walker's node).
 function breathableAt(x, y, z)
+  -- (sandbox S3) inside a room a structure's pieces close, its air, not the
+  -- world's: a sealed, pressurised room is breathable on an airless moon (the
+  -- helmet may come off, planet_walker draws no suit air), and a room whose
+  -- air has gone (a door open, the scrubbers off) is not, wherever it is
+  local RA = ref("room_air")
+  if RA and RA.airAt then
+    local ok, why = RA.airAt(x, y, z)
+    if ok ~= nil then return ok == true, why end
+  end
   local dom = space and space.dominant and space.dominant(x, y, z)
   local cl = ref("climate")
   local w = dom and cl and cl.worldOf and cl.worldOf(dom)

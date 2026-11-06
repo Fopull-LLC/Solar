@@ -306,6 +306,52 @@ do
   local twin = FB.mirror_twin("wall.steel", defs("wall.steel"), sp, sid)
   check(twin and near(twin.lx, -1) and near(twin.yaw, -math.pi / 2), "SYM: the wall on +X mirrors to -X, facing out")
   FB.sym = nil
+  -- (S3 follow-up) a TRUE reflection: every point of the twin is the mirror
+  -- image of a point of the piece, for a piece symmetric left-right ("x"),
+  -- front-back ("z": the gable, an airlock wall, a pod), or neither (the Door
+  -- Wall: its mirrored variant, built reflected in its own X), at any yaw,
+  -- pitch and roll
+  do
+    local function mat(yaw, pitch, roll)
+      local u, f = STs.localAxes(yaw, pitch, roll)
+      local x = { u[2] * f[3] - u[3] * f[2], u[3] * f[1] - u[1] * f[3], u[1] * f[2] - u[2] * f[1] }
+      return { x, u, f }
+    end
+    local function apply(M, o, v) local r = {}; for k = 1, 3 do r[k] = o[k] + M[1][k] * v[1] + M[2][k] * v[2] + M[3][k] * v[3] end; return r end
+    local worst, cases = 0, 0
+    for _, case in ipairs({ { "wall.steel", { -1, 1, 1 } }, { "gable.steel", { 1, 1, -1 } }, { "airlockWall.steel", { 1, 1, -1 } },
+                            { "doorWall.steel", { -1, 1, 1 }, "doorWallM.steel" }, { "vab.pod", { 1, 1, -1 } } }) do
+      local d = defs(case[1])
+      for _, axis in ipairs({ "x", "z" }) do
+        for _, pose in ipairs({ { 0.3, 0, 0 }, { math.pi / 2, 0, 0 }, { 0.7, math.pi / 2, 0 }, { -1.1, 0.4, math.pi / 2 }, { 2.0, -math.pi / 2, 0.3 } }) do
+          local p0 = { lx = 1.5, ly = 0.7, lz = -2.0, yaw = pose[1], pitch = pose[2], roll = pose[3] }
+          local m, vid = FB.mirrorPose(p0, axis, 0.25, d)
+          cases = cases + 1
+          if case[3] and vid ~= case[3] then worst = math.huge end
+          if not case[3] and vid ~= nil then worst = math.huge end
+          local M0, M1 = mat(p0.yaw, p0.pitch, p0.roll), mat(m.yaw, m.pitch, m.roll)
+          local L = case[2]
+          for _, f in ipairs({ { 0.3, 0.9, 0.07 }, { -0.8, 0.1, -0.05 }, { 0.6, 2.0, 0.1 } }) do
+            local w = apply(M0, { p0.lx, p0.ly, p0.lz }, f)
+            if axis == "x" then w[1] = 2 * 0.25 - w[1] else w[3] = 2 * 0.25 - w[3] end
+            local t = apply(M1, { m.lx, m.ly, m.lz }, { L[1] * f[1], L[2] * f[2], L[3] * f[3] })
+            worst = math.max(worst, math.abs(t[1] - w[1]) + math.abs(t[2] - w[2]) + math.abs(t[3] - w[3]))
+          end
+        end
+      end
+    end
+    check(worst < 1e-9, string.format("SYM reflects (%d cases: walls, a gable, an airlock wall, the Door Wall's variant, a pod; turned in yaw, pitch and roll): worst %.2g m", cases, worst))
+    local dv = defs("doorWallM.steel")
+    check(dv and dv.hidden and dv.door and dv.door.slide[1] < 0 and dv.mirror == "doorWall", "the Door Wall's mirrored variant: hidden from the column, its door the other way")
+    local listed = false
+    for _, s in ipairs(K.catalogue("steel")) do for _, id in ipairs(s.ids) do if id:find("doorWallM", 1, true) then listed = true end end end
+    check(not listed, "the variant isn't in the parts column")
+    FB.sym = { axis = "x", sid = sid, at = 0 }
+    local dp = { body = "Home", mode = "face", sid = sid, lx = 1, ly = 0.2, lz = 0, yaw = math.pi / 2, pitch = 0, roll = 0 }
+    local dt = FB.mirror_twin("doorWall.steel", defs("doorWall.steel"), dp, sid)
+    check(dt and dt.id == "doorWallM.steel" and near(dt.lx, -1), "SYM with a Door Wall places its mirrored variant opposite")
+    FB.sym = nil
+  end
   -- copy and paste
   local n = FB.copyParts(sid, { 1, 2 })
   check(n == 2 and FB.clip and FB.clip.parts[1].id == "floor.steel" and near(FB.clip.parts[2].dz, 1), "copy: the floor and its wall, relative to the floor")

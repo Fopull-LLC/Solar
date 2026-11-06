@@ -56,8 +56,29 @@
 --           (sealed when shut), nil = never (open frames, vents, rails)
 --   u, k    the material's heat leak (S3 room heat) and radiation share (by
 --           record, thermal.shieldFactor: concrete walls shield)
+--
+-- ── ROOMS AND AIR (S3; scripts/rooms.lua, scripts/room_air.lua) ─────────────
+--   seals   is read by the flood fill (above)
+--   door.airlock   an Airlock Wall: the small room it closes with a second
+--           door is an airlock (interlocked, cycled)
+--   life    LIFE SUPPORT, run from the base grid (`use` = its load, EC/s):
+--           { o2 = atm·m³ of O2 a second }   the O2 Generator
+--           { scrub = atm·m³ of CO2 a second }   the CO2 Scrubber
+--           { store = atm·m³, flow = atm·m³/s, price = $ a m³ }   the Air Tank
+--           Rack (a regulator: no power)
+--
+-- ── MIRROR (G; field_builder.mirrorPose) ────────────────────────────────────
+--   sym     which of its own planes a piece is symmetric in: "x" (default:
+--           left and right alike: a wall, a floor), "z" (front and back alike,
+--           its left and right not: a gable, an airlock wall, a pod with its
+--           hatch on one side). A mirror reflects about the structure's plane;
+--           a piece symmetric in one of its own planes IS that reflection,
+--           turned (yaw, pitch, roll worked out in field_builder.mirrorPose).
+--   mirror  a piece symmetric in neither (the Door Wall: its door at one end,
+--           its lamp outside) is placed as its MIRRORED VARIANT, a hidden
+--           piece of its own built reflected (tools/gen_kit_parts.py)
 
-SECTION_ORDER = { "FOUNDATION", "FLOOR", "WALL", "ROOF", "FRAME", "HAB", "SHIELD", "UTILITY", "FITTINGS" }
+SECTION_ORDER = { "FOUNDATION", "FLOOR", "WALL", "ROOF", "FRAME", "HAB", "SHIELD", "UTILITY", "LIFE", "FITTINGS" }
 
 MATS = {
   steel     = { label = "Steel", kgm3 = 7850, strength = 180, k = 0.9, u = 1.4, seal = true,
@@ -123,7 +144,7 @@ PIECES = {
                 desc = "a quarter module · infill" },
   floorHatch = { label = "Hatch Floor 2 × 2", section = "FLOOR", snap = "floor", box = B(-1, 1, 0, 0.2, -1, 1),
                 mats = { "steel", "concrete" }, vol = 0.8, fill = "floor", cost = 900, seals = "door",
-                door = { slide = { 0.95, 0, 0 }, secs = 1.2, near = 1.6, vertical = 2.6 },
+                door = { slide = { 0.95, 0, 0 }, secs = 1.2, near = 1.6, vertical = 2.6 }, sym = "z",
                 desc = "a floor with a 0.9 m deck hatch · slides open as you come near" },
   -- ── WALL ──
   wall      = { label = "Wall", section = "WALL", snap = "wall", box = B(-1, 1, 0, WH, -WT / 2, WT / 2),
@@ -137,8 +158,13 @@ PIECES = {
                 desc = "1 x 2.2 m · closes an odd metre" },
   doorWall  = { label = "Door Wall", section = "WALL", snap = "wall", box = B(-1, 1, 0, WH, -WT / 2, WT / 2),
                 mats = { "steel", "concrete", "regocrete" }, vol = 0.88, fill = "panel", cost = 1100, seals = "door",
-                door = { slide = { 0.92, 0, 0 }, secs = 1.0, near = 2.2 },
+                door = { slide = { 0.92, 0, 0 }, secs = 1.0, near = 2.2 }, mirror = "doorWallM",
                 desc = "0.9 x 2.05 m pocket door · opens as you come near" },
+  -- (its mirrored variant: the door at the other end; G places it, the column doesn't list it)
+  doorWallM = { label = "Door Wall", section = "WALL", snap = "wall", box = B(-1, 1, 0, WH, -WT / 2, WT / 2),
+                mats = { "steel", "concrete", "regocrete" }, vol = 0.88, fill = "panel", cost = 1100, seals = "door",
+                door = { slide = { -0.92, 0, 0 }, secs = 1.0, near = 2.2 }, mirror = "doorWall", hidden = true,
+                desc = "0.9 x 2.05 m pocket door, handed the other way · opens as you come near" },
   doubleDoor = { label = "Double Door Wall", section = "WALL", snap = "wall", box = B(-2, 2, 0, WH, -WT / 2, WT / 2),
                 mats = { "steel", "concrete", "regocrete" }, vol = 1.76, fill = "panel", cost = 2000, seals = "door",
                 door = { slide = { 0.9, 0, 0 }, pair = true, secs = 1.3, near = 3.0 },
@@ -151,8 +177,8 @@ PIECES = {
                 desc = "a 0.5 m pressure porthole at eye height" },
   airlockWall = { label = "Airlock Wall", section = "WALL", snap = "wall", box = B(-1, 1, 0, WH, -WT / 2, WT / 2),
                 mats = { "steel", "concrete" }, vol = 0.88, fill = "panel", cost = 3800, seals = "door",
-                door = { slide = { 0.94, 0, 0 }, secs = 2.4, near = 2.0, heavy = true },
-                desc = "a pressure door with its seals · the interlock and cycling come with rooms (S3)" },
+                door = { slide = { 0.94, 0, 0 }, secs = 2.4, near = 2.0, heavy = true, airlock = true }, sym = "z",
+                desc = "a pressure door · with a second door it makes an airlock: interlocked, it cycles" },
   openFrame = { label = "Open Frame", section = "WALL", snap = "wall", box = B(-1, 1, 0, WH, -WT / 2, WT / 2),
                 mats = { "steel", "concrete", "regocrete" }, vol = 0.88, fill = "panel", cost = 380,
                 fillk = { steel = 0.006, concrete = 0.3, regocrete = 0.3 },
@@ -171,7 +197,7 @@ PIECES = {
                 mats = { "steel" }, vol = 0.1, fill = "solid", cost = 120, fillk = { steel = 0.03 },
                 desc = "a ridge cap for two pitched panels back to back" },
   gable     = { label = "Gable 2 m", section = "ROOF", snap = "wall", box = B(-1, 1, 0, 1.155, -WT / 2, WT / 2), triangle = true,
-                mats = { "steel", "concrete", "regocrete", "glass" }, vol = 0.23, fill = "panel", cost = 300, seals = "z",
+                mats = { "steel", "concrete", "regocrete", "glass" }, vol = 0.23, fill = "panel", cost = 300, seals = "z", sym = "z",
                 desc = "the triangle under a pitched roof's end · high at its right" },
   -- ── FRAME ──
   pillar2   = { label = "Pillar 2.2 m", section = "FRAME", snap = "post", box = B(-0.15, 0.15, 0, 2.2, -0.15, 0.15),
@@ -219,7 +245,7 @@ PIECES = {
                 desc = "a closed dome for a can's end" },
   habBulkhead = { label = "Hab Door Bulkhead", section = "HAB", snap = "hab", box = B(-1.35, 1.35, 0, 2.9, -0.2, 0.2),
                 mats = { "steel" }, vol = 0.2, fill = "solid", cost = 2600, fillk = { steel = 0.2548 }, seals = "door",
-                door = { slide = { 0.86, 0, 0 }, secs = 1.6, near = 2.2, heavy = true },
+                door = { slide = { 0.86, 0, 0 }, secs = 1.6, near = 2.2, heavy = true }, sym = "z",
                 desc = "a flat end with a 0.8 x 1.8 m door at deck level (Steps 0.8 m reach it)" },
   -- ── SHIELD ──
   shieldBlock = { label = "Shield Block 1 × 1", section = "SHIELD", snap = "block", box = B(-0.5, 0.5, 0, 1, -0.25, 0.25),
@@ -246,6 +272,21 @@ PIECES = {
   floorDuct = { label = "Floor Duct", section = "UTILITY", snap = "block", box = B(-1, 1, 0, 0.12, -0.2, 0.2),
                 mats = { "steel" }, vol = 0.096, fill = "solid", cost = 70, fillk = { steel = 0.03 },
                 desc = "2 m covered duct for cable and pipe along a floor" },
+  -- ── LIFE (S3: a room's air, scripts/room_air.lua; on the base grid) ──
+  -- rates in atm·m³ a second: a crew member breathes 6.8e-6 of O2 and makes
+  -- 5.85e-6 of CO2 (0.84 and 1.0 kg a day); each machine serves four.
+  scrubber  = { label = "CO2 Scrubber", section = "LIFE", snap = "block", box = B(-0.35, 0.35, 0, 1.4, -0.25, 0.25),
+                mats = { "steel" }, vol = 0.49, fill = "solid", cost = 2600, fillk = { steel = 0.022 },
+                life = { scrub = 2.4e-5 }, use = 0.4,
+                desc = "amine-bed CO2 scrubber for four crew · 0.4 EC/s from the base grid" },
+  o2gen     = { label = "Oxygen Generator", section = "LIFE", snap = "block", box = B(-0.45, 0.45, 0, 1.6, -0.3, 0.3),
+                mats = { "steel" }, vol = 0.86, fill = "solid", cost = 5200, fillk = { steel = 0.03 },
+                life = { o2 = 2.8e-5 }, use = 1.5,
+                desc = "an electrolyser: O2 for four crew from its water · 1.5 EC/s from the base grid" },
+  airTank   = { label = "Air Tank Rack", section = "LIFE", snap = "block", box = B(-0.6, 0.6, 0, 1.8, -0.25, 0.25),
+                mats = { "steel" }, vol = 1.08, fill = "solid", cost = 1800, fillk = { steel = 0.04 },
+                life = { store = 60, flow = 0.25, price = 4 },
+                desc = "three 200 bar cylinders of air on a regulator · fills a room to 1 atm · 60 m³" },
 }
 
 -- ── FITTINGS: VAB parts placed live (S2) ─────────────────────────────────────
@@ -253,16 +294,16 @@ PIECES = {
 -- parts_nuclear's), copied here because the world scene carries no registry;
 -- smoke_kit checks every copied field against the real one.
 LIVE = {
-  pod     = { prefab = "PartPod", label = "Pod Mk1", h = 0.80, rx = 0.50, rz = 0.50, mass = 1.3, cost = 500, kind = "crewed", strength = 600,
+  pod     = { prefab = "PartPod", label = "Pod Mk1", sym = "z", h = 0.80, rx = 0.50, rz = 0.50, mass = 1.3, cost = 500, kind = "crewed", strength = 600,
               mods = { { type = "command", crew = 1, draw = 0.05 }, { type = "wheel", torque = 1.0, draw = 0.5 }, { type = "battery", ec = 40 } },
               seats = { { x = 0.0, y = -0.22, z = 0.16, yaw = 1.5708 } },
               hatch = { x = 0.47, y = -0.02, z = 0.0, nx = 1, ny = 0, nz = 0 }, iva = "IvaPodMk1" },
-  podMk2  = { prefab = "PartPodMk2", label = "Pod Mk2", h = 1.15, rx = 0.50, rz = 0.50, mass = 2.4, cost = 1400, kind = "crewed", strength = 720,
+  podMk2  = { prefab = "PartPodMk2", label = "Pod Mk2", sym = "z", h = 1.15, rx = 0.50, rz = 0.50, mass = 2.4, cost = 1400, kind = "crewed", strength = 720,
               mods = { { type = "command", crew = 3, draw = 0.08 }, { type = "wheel", torque = 1.6, draw = 0.6 }, { type = "battery", ec = 80 } },
               seats = { { x = 0.0, y = -0.28, z = 0.22, yaw = 1.5708 }, { x = -0.66, y = -0.28, z = 0.16, yaw = 1.8708 },
                         { x = 0.66, y = -0.28, z = 0.16, yaw = 1.2708 } },
               hatch = { x = 0.49, y = -0.06, z = 0.0, nx = 1, ny = 0, nz = 0 }, iva = "IvaPodMk2" },
-  cabin   = { prefab = "PartCabin", label = "Crew Cabin", h = 1.30, rx = 0.50, rz = 0.50, mass = 1.6, cost = 900, kind = "structural", strength = 650,
+  cabin   = { prefab = "PartCabin", label = "Crew Cabin", sym = "z", h = 1.30, rx = 0.50, rz = 0.50, mass = 1.6, cost = 900, kind = "structural", strength = 650,
               mods = { { type = "cabin", crew = 4 } },
               seats = { { x = -0.44, y = -0.3, z = 0.64, yaw = 1.5708 }, { x = 0.44, y = -0.3, z = 0.64, yaw = 1.5708 },
                         { x = 0.44, y = -0.3, z = -0.64, yaw = -1.5708 }, { x = -0.44, y = -0.3, z = -0.64, yaw = -1.5708 } },
@@ -289,12 +330,19 @@ LIVE = {
               mods = { { type = "rtg", gen = 0.5, heat = 0.25, sink = 0.6, cap = 30, half = 1440000 } } },
 }
 -- What a live part is to the base grid, by its record (base_grid.lua):
--- the same figures as its electronics module.
+-- the same figures as its electronics module. COUNTED ONCE (S2 follow-up):
+-- a battery, panel, cell or floodlight placed live is the grid's, and the
+-- structure vessel carries it without that module (struct_live.GRID_MODS); a
+-- crewed part's command draw is a grid load too, and the vessel's own cells
+-- are kept topped up from the grid while the grid is up.
 LIVE_POWER = {
   battery = { kind = "store", cap = 150, eff = 0.92, fill = 0.5 },
   solar   = { kind = "solar", gen = 1.0, lift = 0.5 },
   rtg     = { kind = "rtg", gen = 0.5 },
   light   = { kind = "load", use = 0.2 },
+  pod     = { kind = "load", use = 0.05 },
+  podMk2  = { kind = "load", use = 0.08 },
+  cockpit = { kind = "load", use = 0.04 },
 }
 LIVE_ORDER = { "pod", "podMk2", "cabin", "seat", "cockpit", "locker", "lockerS", "light", "battery", "solar", "rtg" }
 -- (which registry each copy is checked against: smoke_kit)
@@ -346,7 +394,8 @@ local function resolve(piece, mat)
     half = { x = hx, y = hy, z = hz }, base0 = b[3],
     slope = 0.6, onDeck = P.snap ~= "slab", grade = P.grade or 1.2, footPad = P.footPad or 0.15, skirt = P.skirt,
     tile = P.tile, deck = P.deck, deckTop = P.deckTop, slopeZ = P.slopeZ, triangle = P.triangle,
-    door = P.door, light = P.light, screen = P.screen, switch = P.switch,
+    door = P.door, light = P.light, screen = P.screen, switch = P.switch, life = P.life,
+    sym = P.sym or "x", mirror = P.mirror, hidden = P.hidden,
     script = (P.door or P.light or P.screen or P.switch) and "kit_live" or nil,
     seals = (P.seals == "door" or P.seals == "ring" or P.seals == "y" or P.seals == "z") and P.seals or nil,
     u = M.u, matk = M.k, strength = M.strength,
@@ -360,6 +409,7 @@ local function resolve(piece, mat)
     d.shield = { k = M.k }
   end
   if d.light then d.power = { kind = "load", use = d.light.draw } end
+  if P.use then d.power = { kind = "load", use = P.use } end
   return d
 end
 
@@ -377,7 +427,7 @@ local function live_def(id)
     kind = "structural", fieldOnly = true, seat = hy, half = { x = hx, y = hy, z = hz }, base0 = 0,
     slope = 0.6, onDeck = true, grade = 1.0, footPad = 0.15, lay = lay, reg = L,
     desc = string.format("%s · live: %s", L.label, (L.seats and "you can sit in it") or (L.store and "it opens") or "it works here"),
-    power = LIVE_POWER[id],
+    power = LIVE_POWER[id], sym = L.sym or "x",
   }
   return d
 end
@@ -403,7 +453,7 @@ function catalogue(mat)
   local by = {}
   for _, s in ipairs(SECTION_ORDER) do by[s] = {} end
   local names = {}
-  for k in pairs(PIECES) do names[#names + 1] = k end
+  for k, P in pairs(PIECES) do if not P.hidden then names[#names + 1] = k end end
   table.sort(names, function(a, b)
     local pa, pb = PIECES[a], PIECES[b]
     if pa.section ~= pb.section then return a < b end

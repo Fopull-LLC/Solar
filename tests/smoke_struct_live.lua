@@ -83,6 +83,27 @@ check(hasCmd and hasBat, "the cockpit's modules: command and battery")
 local lm = by[5] and by[5].mods
 check(type(lm) == "table" and lm[1] and lm[1].type == "light", "the floodlight's light module")
 check(bp.name == "Outpost hab", "named for its structure")
+-- (S2 follow-up) COUNTED ONCE: a battery, a panel, a cell placed live are the
+-- base grid's (by record), so the vessel carries them without those modules;
+-- the floodlight's and the cockpit's draws are grid loads, so draw 0 here
+do
+  local r2 = { id = 4, b = "Home", x = 0, y = 600, z = 0, ux = 0, uy = 1, uz = 0, fx = 0, fy = 0, fz = 1,
+    bp = { P(1, "vab.cockpit", 0, 0.2, 0, 0, math.pi / 2), P(2, "vab.battery", 1, 0.2, 0), P(3, "vab.solar", 2, 0.2, 0),
+           P(4, "vab.rtg", 3, 0.2, 0), P(5, "vab.light", 0, 2.2, 0, 0, math.pi) } }
+  local b2 = SL.blueprintOf(r2, defs, nil, S.electronics)
+  local by2 = {}
+  for _, d in ipairs(b2 and b2.parts or {}) do by2[d.uid] = d end
+  local function has(d, ty) for _, m in ipairs(type(d and d.mods) == "table" and d.mods or {}) do if m.type == ty then return m end end return nil end
+  check(by2[2] and not has(by2[2], "battery") and by2[2].ec == 0 and by2[2].power == 0, "a battery placed live: the grid's 150 EC, not the vessel's too")
+  check(by2[3] and not has(by2[3], "solar") and has(by2[3], "deploy") and by2[3].gen == 0, "a panel placed live: the grid's output; it still unfolds")
+  check(by2[4] and not has(by2[4], "rtg"), "an isotope cell placed live: the grid's")
+  check(by2[5] and has(by2[5], "light") and (has(by2[5], "light").draw or 0) == 0, "the floodlight switches in the vessel, its 0.2 EC/s drawn on the grid")
+  local cmd = has(by2[1], "command")
+  check(cmd and (cmd.draw or 0) == 0 and has(by2[1], "battery"), "the cockpit's command draw is the grid's; its own cell stays (kept topped up)")
+  local nb = 0
+  for _, id in ipairs({ "vab.battery", "vab.solar", "vab.rtg", "vab.light", "vab.cockpit" }) do if defs(id).power then nb = nb + 1 end end
+  check(nb == 5, "each of them is on the grid by its record (parts_kit.LIVE_POWER)")
+end
 local sig = SL.signatureOf(rec, defs)
 rec.bp[#rec.bp + 1] = P(6, "wall.steel", 1, 0.2, 0, math.pi / 2)
 check(SL.signatureOf(rec, defs) == sig, "a wall added: the live parts are the same")

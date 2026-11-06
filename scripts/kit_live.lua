@@ -24,6 +24,12 @@
 --           give their slot back (intensity 0) and show by their emissive
 --           lens. On a base grid that is short with its battery empty the
 --           lights drop to an emergency glow.
+--           AIRLOCKS AND PRESSURE (S3): a door opens only when room_air.gate
+--           lets it: an airlock chamber's are interlocked (one at a time, at
+--           the pressure behind it), and any other door is held shut by a
+--           pressure difference across it until its menu forces it; a door
+--           opening or shutting past room_air's OPEN_T tells room_air
+--           (doorMoved), so the air vents from then.
 --   SWITCH  a switch plate's menu switches every light of its structure.
 --   SCREEN  a wall screen's "Screen" quad shows its base: the grid's in/out,
 --           the battery, the crew there, what's wrong. Drawn into a picture
@@ -222,10 +228,19 @@ local function step_door(e, dt, pts)
       end
     end
   end
+  -- (S3) an airlock's doors are interlocked: room_air says which may open
+  if not forceDoors then
+    local RA = ref("room_air")
+    if RA and RA.gate then want = RA.gate(e.sid, e.uid, want) end
+  end
   local was = e.open
   local rate = dt / math.max(0.2, D.secs or 1.0)
   if want > e.open then e.open = math.min(1, e.open + rate) elseif want < e.open then e.open = math.max(0, e.open - rate) end
   if e.open ~= was then
+    if (was > 0.02) ~= (e.open > 0.02) then
+      local RA = ref("room_air")
+      if RA and RA.doorMoved then RA.doorMoved(e.sid, e.uid) end
+    end
     if (was == 0 or was == 1) and audio and audio.play and valid(e.node) then
       local w = e.node.worldPos
       pcall(audio.play, D.heavy and SND.heavy or SND.open, w.x, w.y, w.z, { maxDistance = 25, track = "SFX", volume = 0.5 })
@@ -289,7 +304,34 @@ function screenLines(sid)
   L(string.format("CREW HERE %d", here))
   local co = ref("company")
   if co and co.funds then local ok, f = pcall(co.funds); if ok and f then L("FUNDS     " .. money(math.floor(f))) end end
-  L(string.format("ROOMS     (S3)  ·  %d pieces", #rec.bp))
+  local RA = ref("room_air")
+  local rs = RA and RA.summary and RA.summary(sid)
+  if rs and rs.n > 0 then
+    L(string.format("ROOMS     %d · sealed %d · %.0f m³", rs.n, rs.sealed, rs.m3), rs.sealed < rs.n)
+    if rs.pmin then
+      -- (the room the crew are in, else the biggest sealed one; a leak anywhere)
+      local a, best, leak = nil, -1, nil
+      local st = RA.state and RA.state(sid)
+      if st and st.R then
+        for _, r in ipairs(st.R.rooms) do
+          local q = RA.airOf(sid, r.id)
+          if q and r.sealed then
+            local score = r.m3 + ((q.crew or 0) > 0 and 1e6 or 0)
+            if score > best then a, best = q, score end
+          end
+          if q and q.venting and not leak and q.p > 0.05 then leak = q.causes[1] or "venting" end
+        end
+      end
+      if a then
+        L(string.format("AIR       %.2f atm · O2 %.0f %% · CO2 %.1f %%", a.p, 100 * a.o2 / math.max(a.p, 1e-6), 100 * a.co2 / math.max(a.p, 1e-6)),
+          not a.breathable or a.venting)
+      end
+      if leak then L("LEAK      " .. tostring(leak), true) end
+    end
+    if rs.life > 0 then L(rs.powered and "LIFE SUPP on the base grid" or "LIFE SUPP NO POWER", not rs.powered) end
+  else
+    L(string.format("ROOMS     none sealed  ·  %d pieces", #rec.bp))
+  end
   return out
 end
 function screenText(sid, uid) local e = E[key(sid, uid)]; return e and e.text or nil end
@@ -313,7 +355,8 @@ local function paint_screen(e)
   local t = {}
   for i, l in ipairs(info.lines) do
     local c = l[2] and { 1.0, 0.55, 0.25 } or { 0.62, 0.88, 0.82 }
-    pcall(img.text, img, 16, 56 + (i - 1) * 25, l[1], 20, c[1], c[2], c[3], 1, "left", F)
+    local many = #info.lines > 9
+    pcall(img.text, img, 16, 54 + (i - 1) * (many and 20 or 25), l[1], many and 16 or 20, c[1], c[2], c[3], 1, "left", F)
     t[#t + 1] = l[1]
   end
   e.text = info.title .. " | " .. table.concat(t, " | ")

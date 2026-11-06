@@ -42,6 +42,9 @@ return {
   KitDoorWall_steel = { lo = { -1.000, 0.000, -0.160 }, hi = { 1.000, 2.200, 0.200 }, colliders = 4, tris = 312, children = { "Door" } },
   KitDoorWall_concrete = { lo = { -1.000, 0.000, -0.160 }, hi = { 1.000, 2.206, 0.200 }, colliders = 4, tris = 252, children = { "Door" } },
   KitDoorWall_regocrete = { lo = { -1.000, 0.000, -0.160 }, hi = { 1.000, 2.206, 0.200 }, colliders = 4, tris = 252, children = { "Door" } },
+  KitDoorWallM_steel = { lo = { -1.000, 0.000, -0.160 }, hi = { 1.000, 2.200, 0.200 }, colliders = 4, tris = 312, children = { "Door" } },
+  KitDoorWallM_concrete = { lo = { -1.000, 0.000, -0.160 }, hi = { 1.000, 2.206, 0.200 }, colliders = 4, tris = 252, children = { "Door" } },
+  KitDoorWallM_regocrete = { lo = { -1.000, 0.000, -0.160 }, hi = { 1.000, 2.206, 0.200 }, colliders = 4, tris = 252, children = { "Door" } },
   KitDoubleDoor_steel = { lo = { -2.000, 0.000, -0.112 }, hi = { 2.000, 2.200, 0.112 }, colliders = 5, tris = 300, children = { "Door", "Door2" } },
   KitDoubleDoor_concrete = { lo = { -2.000, 0.000, -0.112 }, hi = { 2.000, 2.206, 0.112 }, colliders = 5, tris = 240, children = { "Door", "Door2" } },
   KitDoubleDoor_regocrete = { lo = { -2.000, 0.000, -0.112 }, hi = { 2.000, 2.206, 0.112 }, colliders = 5, tris = 240, children = { "Door", "Door2" } },
@@ -89,4 +92,7 @@ return {
   KitWallScreen_steel = { lo = { -0.450, 0.000, -0.280 }, hi = { 0.450, 0.045, 0.280 }, colliders = 0, tris = 26, children = { "Screen" } },
   KitWallTray_steel = { lo = { -1.000, 0.000, -0.110 }, hi = { 1.000, 0.100, 0.110 }, colliders = 0, tris = 216, children = {  } },
   KitFloorDuct_steel = { lo = { -1.000, 0.000, -0.200 }, hi = { 1.000, 0.123, 0.200 }, colliders = 1, tris = 48, children = {  } },
+  KitScrubber_steel = { lo = { -0.350, 0.000, -0.340 }, hi = { 0.350, 1.393, 0.268 }, colliders = 2, tris = 660, children = {  } },
+  KitO2gen_steel = { lo = { -0.450, 0.000, -0.300 }, hi = { 0.445, 1.640, 0.326 }, colliders = 2, tris = 420, children = {  } },
+  KitAirTank_steel = { lo = { -0.600, 0.000, -0.250 }, hi = { 0.600, 1.750, 0.250 }, colliders = 4, tris = 1200, children = {  } },
 }

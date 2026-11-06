@@ -1247,7 +1247,7 @@ local function do_place(keep)
   -- SYM (S1): the mirrored twin about the plane picked, in the same structure
   local twin = mirror_twin(heldPart, req.def, p, sid)
   if twin then
-    local s2, _, q2 = place(sid, heldPart, twin, "money", { collect = run and run.list or list })
+    local s2, _, q2 = place(sid, twin.id or heldPart, twin, "money", { collect = run and run.list or list })
     if s2 then total = total + q2.total end
   end
   if run then run.n = run.n + 1 + (twin and 1 or 0); run.total = run.total + total; run.key = vmemo.key
@@ -1265,21 +1265,49 @@ local function do_place(keep)
 end
 
 -- ── SYM: mirror placements (S1 §1.4; the VAB's mirrorPose on a structure) ───
--- X toggles: off → about the structure's X plane through the piece under the
+-- G toggles: off → about the structure's X plane through the piece under the
 -- cursor → its Z plane → off. A twin is placed only in that structure, only
 -- if it fits (kitWhy), and never onto the piece itself (a piece on the plane).
-function mirrorPose(p, axis, at)
+--
+-- A TRUE REFLECTION (S3 follow-up: it used to turn asymmetric pieces). The
+-- twin of a piece at R = Ry(yaw)·Rx(pitch)·Rz(roll) reflected in the
+-- structure's plane S is S·R·S applied to the piece reflected in its own
+-- matching plane: about X that is Ry(-yaw)·Rx(pitch)·Rz(-roll) on the piece
+-- flipped left for right, about Z Ry(-yaw)·Rx(-pitch)·Rz(roll) on it flipped
+-- front for back. A piece symmetric in that plane IS its flip; one symmetric
+-- in the other plane is its flip turned half round (Ry(pi)), which moves the
+-- signs through: `sym` (parts_kit) says which. A piece symmetric in neither
+-- has a mirrored variant (`mirror`, built reflected) placed instead.
+-- → the twin pose, and the part id to place (the variant's, or nil = the same)
+function mirrorPose(p, axis, at, def)
   local m = {}
   for k, v in pairs(p) do m[k] = v end
-  if axis == "x" then m.lx = 2 * at - (p.lx or 0); m.yaw = -(p.yaw or 0)
-  else m.lz = 2 * at - (p.lz or 0); m.yaw = math.pi - (p.yaw or 0) end
+  local y, pi_, r = p.yaw or 0, p.pitch or 0, p.roll or 0
+  local sym = (def and def.sym) or "x"
+  local variant = def and def.mirror
+  local id = nil
+  if axis == "x" then
+    m.lx = 2 * at - (p.lx or 0)
+    -- (flipped left for right: Ry(-y)·Rx(p)·Rz(-r))
+    if variant or sym == "x" then m.yaw, m.pitch, m.roll = -y, pi_, -r
+    else m.yaw, m.pitch, m.roll = math.pi - y, -pi_, r end
+  else
+    m.lz = 2 * at - (p.lz or 0)
+    -- (flipped front for back: Ry(-y)·Rx(-p)·Rz(r))
+    if sym == "z" and not variant then m.yaw, m.pitch, m.roll = -y, -pi_, r
+    else m.yaw, m.pitch, m.roll = math.pi - y, pi_, -r end
+  end
+  if variant then
+    local K = ref("parts_kit")
+    id = K and K.idOf and K.idOf(variant, def.mat) or nil
+  end
   local KS = ref("kit_snap")
-  if KS then m.yaw = KS.wrap(m.yaw) end
-  return m
+  if KS then m.yaw, m.pitch, m.roll = KS.wrap(m.yaw), KS.wrap(m.pitch), KS.wrap(m.roll) end
+  return m, id
 end
 function mirror_twin(id, def, p, sid)
   if not (sym and p.mode == "face" and sym.sid == sid and def and def.kit) then return nil end
-  local m = mirrorPose(p, sym.axis, sym.at)
+  local m, vid = mirrorPose(p, sym.axis, sym.at, def)
   if math.abs((m.lx or 0) - (p.lx or 0)) < 0.05 and math.abs((m.lz or 0) - (p.lz or 0)) < 0.05 then return nil end
   local ST, KS = ref("structures"), ref("kit_snap")
   local rec = ST and ST.get(sid)
@@ -1288,7 +1316,10 @@ function mirror_twin(id, def, p, sid)
   m.x = fr.O.x + fr.R.x * m.lx + fr.U.x * m.ly + fr.F.x * m.lz
   m.y = fr.O.y + fr.R.y * m.lx + fr.U.y * m.ly + fr.F.y * m.lz
   m.z = fr.O.z + fr.R.z * m.lx + fr.U.z * m.ly + fr.F.z * m.lz
-  if kitWhy(def, m, id) then return nil end
+  local tid = vid or id
+  local tdef = vid and partInfo(vid) or def
+  if not tdef or kitWhy(tdef, m, tid) then return nil end
+  m.id = vid
   return m
 end
 local function toggle_sym()
@@ -1492,7 +1523,7 @@ end
 local MODE_TXT = { edge = "EDGE TO EDGE", deck = "ON THE DECK", grid = "GRID 0.5 m", free = "FREE" }
 function hintLine()
   if not open_ then return "Build Kit  ·  B opens it" end
-  local keys = (collapsed and "B unfolds the parts" or "B folds the parts") .. "  ·  Esc " .. (heldPart and "drops the part" or "closes the kit") .. "  ·  Ctrl+Z undo"
+  local keys = (collapsed and "B unfolds the parts" or "B folds the parts") .. "  ·  Esc " .. (heldPart and "drops the part" or "closes the kit") .. "  ·  Ctrl+Z undo  ·  F1 rooms"
   if not heldPart then return "Build Kit  ·  pick a part  ·  RMB tap a placed part to take it down  ·  " .. keys end
   local hdef = partInfo(heldPart)
   if hdef and hdef.cable then
@@ -1670,6 +1701,11 @@ function update(node, dt)
   -- S1: G mirrors placements; Ctrl+C / Ctrl+V / Ctrl+D copy, paste, duplicate
   if not typing() then
     if input.pressed("g") and not input.key("ctrl") then toggle_sym() end
+    -- S3: F1 shows the ROOMS overlay (each room's outline and its air)
+    if input.pressed("f1") then
+      local RA = ref("room_air")
+      if RA then RA.overlay = not RA.overlay; say(RA.overlay and "ROOMS: each room's outline and air · green sealed with air, amber sealed and thin, red open or venting" or "ROOMS overlay off") end
+    end
     if input.key("ctrl") then
       if input.pressed("c") then copy_now() end
       if input.pressed("v") then if pasteHold() then say(string.format("paste: %d piece%s in hand · LMB places them", clip.n, clip.n == 1 and "" or "s")) else say("nothing copied yet (Ctrl+C)") end end

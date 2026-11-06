@@ -31,9 +31,13 @@
 --   STATE       every SAVE_EVERY s and before a rebuild, the vessel's records
 --               (fleetParts) go to the save as `slive.<sid>` = { st = { [uid]
 --               = part state }, charge } — what the next build starts with.
---   THE GRID    a battery, a panel or a cell placed live is ALSO a member of
---               the base grid by its record (parts_kit gives it a `power`
---               figure base_grid reads), so the structure's sources count.
+--   THE GRID    a battery, a panel or a cell placed live is a member of the
+--               base grid by its record (parts_kit gives it a `power` figure
+--               base_grid reads), and it counts ONCE: the vessel carries it
+--               without that module (GRID_MODS); a floodlight's and a crewed
+--               part's draw are grid loads, their modules here draw nothing,
+--               and the vessel's own cells are topped up from the grid every
+--               SAVE_EVERY s while it is up (grid_up).
 --
 -- COST. A structure with no live part: nothing. With some: the vessel's own
 -- dormant controller plus one teleport a frame while the crew is near.
@@ -79,6 +83,27 @@ local function copy(t)
   return o
 end
 local CMD = { crewed = 2, probe = 1 }
+-- COUNTED ONCE (S2 follow-up): a battery, panel or cell placed live is the
+-- base grid's (parts_kit.LIVE_POWER, base_grid reads it by record), so the
+-- vessel carries it WITHOUT that module; a floodlight's and a crewed part's
+-- draw are grid loads, so the vessel's modules draw nothing. (Before, a placed
+-- battery was 150 EC in the grid and another 150 in the vessel.)
+GRID_MODS = { battery = true, solar = true, rtg = true }
+local function grid_mods(mods, pw)
+  if not pw or type(mods) ~= "table" then return mods end
+  local out = {}
+  for _, m in ipairs(mods) do
+    if pw.kind ~= "load" and GRID_MODS[m.type] then
+      -- (the grid holds it)
+    else
+      local c = {}
+      for k, v in pairs(m) do c[k] = v end
+      if pw.kind == "load" and c.draw then c.draw = 0 end
+      out[#out + 1] = c
+    end
+  end
+  return out
+end
 -- The live parts of `rec` as launch-format blueprint parts, in the structure
 -- frame. `saved` = { [uid] = st } carried over; El = the electronics rulebook.
 -- → bp { parts, root, v = 2, name } | nil (no live part)
@@ -91,7 +116,9 @@ function blueprintOf(rec, defs, saved, El)
       local R = d.reg
       local mods = R.mods
       if El and El.deriveMods then mods = El.deriveMods(R, R.mods) end
+      mods = grid_mods(mods, d.power)
       if El and El.encodeMods then mods = El.encodeMods(mods) end
+      local onGrid = d.power ~= nil and d.power.kind ~= "load"
       local rec_ = {
         uid = p.uid, id = d.vab, prefab = R.prefab, label = R.label,
         x = p.x or 0, y = (p.y or 0) + (d.seat or 0), z = p.z or 0,
@@ -100,7 +127,8 @@ function blueprintOf(rec, defs, saved, El)
         h = R.h, mass = R.mass, cost = R.cost, kind = R.kind, rx = R.rx or 0, rz = R.rz or 0,
         strength = R.strength or 0, maxq = 0, thrust = 0, burn = 0, fuel = 0, ve = 0, fuel_t = 0,
         decouple = 0, legs = 0, radial = 0, chute = 0, comms = 0, aero = 0, af = R.af,
-        power = R.power and 1 or 0, solar = R.solar and 1 or 0, ec = R.ec or 0, gen = R.gen or 0,
+        power = (R.power and not onGrid) and 1 or 0, solar = (R.solar and not onGrid) and 1 or 0,
+        ec = onGrid and 0 or (R.ec or 0), gen = onGrid and 0 or (R.gen or 0),
         dock = 0, rcs = 0, rcs_thrust = 0, cargo = 0, store = R.store or 0,
         front = 0, wheel = "", fairing = 0, seat = R.seat and 1 or 0, robo = "", claw = 0, mir = "",
         mods = mods,
@@ -232,6 +260,16 @@ function start(node)
 end
 
 local check_t = -10
+-- Is structure sid on a real base grid that is up (not short with its battery flat)?
+function grid_up(sid)
+  local BG = ref("base_grid")
+  local g = BG and BG.gridOfStruct and BG.gridOfStruct(sid)
+  if not g then return false end
+  local M = BG.model and BG.model(g.id)
+  if not (#(g.bases or {}) > 0 or (M and ((M.sources or 0) > 0 or (M.C or 0) > 0))) then return false end
+  local s = BG.status and BG.status(g.id)
+  return not (s and (s.short or 0) > 0 and (s.stored or 0) <= 0)
+end
 local function crew_far(e)
   local a = find and find("Astronaut")
   if not valid(a) then return false end
@@ -292,7 +330,16 @@ function update(node, dt)
         if i and not i.anchored then assembly.setAnchored(e.node, true) end
         assembly.teleport(e.node, vec3(b.x + e.relv.x, b.y + e.relv.y, b.z + e.relv.z))
       end
-      if t - (e.saved_t or 0) >= SAVE_EVERY then e.saved_t = t; save_state(sid, e) end
+      if t - (e.saved_t or 0) >= SAVE_EVERY then
+        e.saved_t = t
+        -- (the vessel's own cells, a pod's battery, are kept full from the
+        -- base grid while it is up: their draw is the grid's load)
+        if grid_up(sid) then
+          local v = controllerOf(sid)
+          if v and v.elecSetCharge then pcall(v.elecSetCharge, 1e9) end
+        end
+        save_state(sid, e)
+      end
     end
   end
 end

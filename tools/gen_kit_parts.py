@@ -967,6 +967,116 @@ def p_floorDuct(mat):
     return m, sh, []
 
 
+# ── life support (S3: scripts/room_air.lua): floor-standing machines ─────────
+
+def p_scrubber(mat):
+    """An amine-bed CO2 scrubber: a steel cabinet, an intake grille, two beds
+    behind an access panel, a fan housing on top, its status lamp."""
+    m, sh = CModel(seed=91), Shell()
+    bx(m, "Steel", (0.58, 0.60, 0.60), -0.35, 0.35, 0.0, 1.30, -0.25, 0.25, sh=sh)
+    bx(m, "Steel", DARK, -0.33, 0.33, 0.0, 0.08, -0.23, 0.23)
+    # the intake grille (front, low) and the beds' panel (front, high)
+    for k in range(9):
+        y = 0.16 + k * 0.045
+        bx(m, "Steel", DARK, -0.27, 0.27, y, y + 0.022, 0.25, 0.262)
+    bx(m, "Steel", (0.50, 0.52, 0.52), -0.28, 0.28, 0.66, 1.18, 0.25, 0.258)
+    for x in (-0.26, 0.26):
+        for y in (0.68, 1.16):
+            tb(m, "Steel", LIGHT, (x, y, 0.258), (x, y, 0.268), 0.01, segs=6)
+    bx(m, "Steel", SAFETY, -0.28, 0.28, 1.19, 1.215, 0.25, 0.258)
+    # the fan on top, its guard
+    tb(m, "Steel", GREY, (0, 1.30, 0), (0, 1.38, 0), 0.20, segs=16)
+    for k in range(6):
+        a = k * TAU / 6
+        tb(m, "Steel", DARK, (0, 1.385, 0), (0.18 * math.cos(a), 1.385, 0.18 * math.sin(a)), 0.008, segs=5)
+    sh.add((0, 1.34, 0), (0.42, 0.08, 0.42))
+    # the lamp and a duct stub out of its back
+    bx(m, "Lamp", (0.35, 1.0, 0.45), 0.18, 0.26, 1.24, 1.27, 0.25, 0.256)
+    tb(m, "Steel", GREY, (0, 0.95, -0.25), (0, 0.95, -0.34), 0.07, segs=12)
+    return m, sh, []
+
+
+def p_o2gen(mat):
+    """An electrolyser: a white cabinet with a stack window, its water tank on
+    the side, a gas manifold and the O2 line, hazard placards."""
+    m, sh = CModel(seed=92), Shell()
+    bx(m, "Clad", STEELWALL, -0.45, 0.30, 0.0, 1.55, -0.30, 0.30, sh=sh)
+    bx(m, "Steel", DARK, -0.43, 0.28, 0.0, 0.07, -0.28, 0.28)
+    # the cell stack behind its window
+    bx(m, "Steel", DARK, -0.36, 0.20, 0.55, 1.25, 0.30, 0.31)
+    for k in range(10):
+        x = -0.32 + k * 0.05
+        bx(m, "Steel", (0.62, 0.48, 0.30) if k % 2 == 0 else GREY, x, x + 0.03, 0.62, 1.18, 0.30, 0.314)
+    bx(m, "Pane", (1, 1, 1), -0.36, 0.20, 0.55, 1.25, 0.318, 0.326)
+    # the water tank on its side
+    tb(m, "Steel", (0.30, 0.42, 0.55), (0.37, 0.05, 0.0), (0.37, 1.25, 0.0), 0.075, segs=14)
+    sh.add((0.37, 0.65, 0), (0.15, 1.2, 0.15))
+    # the manifold and the O2 line up and over
+    tb(m, "Steel", LIGHT, (-0.30, 1.55, 0.05), (-0.30, 1.62, 0.05), 0.03, segs=8)
+    tb(m, "Steel", LIGHT, (-0.30, 1.62, 0.05), (0.20, 1.62, 0.05), 0.02, segs=8)
+    tb(m, "Steel", (0.20, 0.45, 0.85), (0.20, 1.62, 0.05), (0.20, 1.62, -0.30), 0.02, segs=8)
+    bx(m, "Steel", SAFETY, -0.40, -0.25, 1.32, 1.45, 0.30, 0.306)
+    bx(m, "Lamp", (0.35, 1.0, 0.45), 0.05, 0.13, 1.36, 1.40, 0.30, 0.306)
+    return m, sh, []
+
+
+def p_airTank(mat):
+    """Three 200 bar air cylinders strapped in a rack, a manifold, a regulator
+    with its gauge."""
+    m, sh = CModel(seed=93), Shell()
+    bx(m, "Steel", DARK, -0.6, 0.6, 0.0, 0.06, -0.25, 0.25, sh=sh)
+    for x in (-0.58, 0.58):
+        bx(m, "Steel", GREY, x - 0.02, x + 0.02, 0.0, 1.75, -0.24, -0.20)
+    bx(m, "Steel", GREY, -0.6, 0.6, 1.70, 1.75, -0.24, -0.20)
+    for k, x in enumerate((-0.38, 0.0, 0.38)):
+        tb(m, "Steel", (0.18, 0.34, 0.22), (x, 0.06, 0.0), (x, 1.42, 0.0), 0.17, segs=18)
+        m.color = (0.18, 0.34, 0.22)
+        tube(m, "Steel", (x, 1.42, 0.0), (x, 1.52, 0.0), 0.17, segs=18, uv_m=UVM["Steel"], r1=0.06)
+        tb(m, "Steel", LIGHT, (x, 1.52, 0.0), (x, 1.60, 0.0), 0.035, segs=8)
+        for y in (0.4, 1.1):
+            tb(m, "Steel", DARK, (x - 0.18, y, 0.0), (x + 0.18, y, 0.0), 0.01, segs=5)
+        bx(m, "Steel", PAINT, x - 0.06, x + 0.06, 1.0, 1.2, 0.165, 0.175)
+        sh.add((x, 0.8, 0), (0.34, 1.5, 0.34))
+    tb(m, "Steel", LIGHT, (-0.38, 1.62, 0.0), (0.38, 1.62, 0.0), 0.02, segs=8)
+    bx(m, "Steel", DARK, 0.42, 0.56, 1.52, 1.68, -0.05, 0.08)
+    tb(m, "Steel", PAINT, (0.49, 1.60, 0.08), (0.49, 1.60, 0.10), 0.05, segs=14)
+    return m, sh, []
+
+
+# ── mirrored variants (a piece symmetric in neither of its planes) ─────────
+
+def reflect_model(m):
+    out = CModel(seed=990)
+    out.ground = m.ground
+    out.merge(m, M=np.diag([-1.0, 1.0, 1.0]))
+    return out
+
+
+def reflect_shell(sh):
+    out = Shell()
+    for (c, s, q) in sh.boxes:
+        out.add((-c[0], c[1], c[2]), s, (q[0], -q[1], -q[2], q[3]))
+    return out
+
+
+def mirrored(fn):
+    """fn reflected in its own X: the model, its colliders, its children."""
+    def g(mat):
+        m, sh, children = fn(mat)
+        kids = []
+        for (name, kind, data) in children:
+            if kind == "empty":
+                kids.append((name, kind, (-data[0], data[1], data[2])))
+            elif kind == "mesh":
+                cm, at = data
+                kids.append((name, kind, (reflect_model(cm), (-at[0], at[1], at[2]))))
+            elif kind == "door":
+                dm, dsh, at = data
+                kids.append((name, kind, (reflect_model(dm), reflect_shell(dsh), (-at[0], at[1], at[2]))))
+        return reflect_model(m), reflect_shell(sh), kids
+    return g
+
+
 PIECES = {
     "slab2": (p_slab2, ["concrete", "regocrete"]),
     "pier": (p_pier, ["concrete", "steel"]),
@@ -983,6 +1093,7 @@ PIECES = {
     "halfWall": (p_halfWall, ["steel", "concrete", "regocrete", "glass"]),
     "wall12": (p_wall12, ["steel", "concrete", "regocrete", "glass"]),
     "doorWall": (p_doorWall, ["steel", "concrete", "regocrete"]),
+    "doorWallM": (mirrored(p_doorWall), ["steel", "concrete", "regocrete"]),
     "doubleDoor": (p_doubleDoor, ["steel", "concrete", "regocrete"]),
     "windowWall": (p_windowWall, ["steel", "concrete", "regocrete"]),
     "porthole": (p_porthole, ["steel", "concrete"]),
@@ -1014,6 +1125,9 @@ PIECES = {
     "wallScreen": (p_wallScreen, ["steel"]),
     "wallTray": (p_wallTray, ["steel"]),
     "floorDuct": (p_floorDuct, ["steel"]),
+    "scrubber": (p_scrubber, ["steel"]),
+    "o2gen": (p_o2gen, ["steel"]),
+    "airTank": (p_airTank, ["steel"]),
 }
 
 
