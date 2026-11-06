@@ -666,6 +666,25 @@ end
 
 -- ── placing ─────────────────────────────────────────────────────────────────
 
+-- May these parts of structure `sid` come down? A part with behaviour says
+-- (its parts_base `script`'s canRemove: a stand with a craft on it can't).
+-- → nil (they may) | why
+function removalBlocked(sid, uids)
+  local ST = ref("structures")
+  local rec = ST and ST.get(sid)
+  if not rec then return nil end
+  for _, u in ipairs(uids or {}) do
+    local p = ST.getPart(sid, u)
+    local def = p and partInfo(p.id)
+    local s = def and def.script and ref(def.script)
+    if s and s.canRemove then
+      local ok, yes, why = pcall(s.canRemove, rec, p)
+      if ok and yes == false then return why or ("the " .. tostring(def.label) .. " is in use") end
+    end
+  end
+  return nil
+end
+
 -- THE PLACEMENT (K12's shape: a function of what, where and who pays).
 -- sid = the structure it joins (a snap: p.lx/ly/lz/yaw in its frame) or nil
 -- (a new one at p's ground point). p = a pose (body frame); p.base / p.plan
@@ -687,14 +706,20 @@ function place(sid, partId, p, payer)
   local base = p.base or 0
   local ft = plan and plan.footing and { d = plan.footing.d, hx = plan.footing.hx, hz = plan.footing.hz } or nil
   local uid
+  -- (a part's own fields, as it starts: a stand's deck height)
+  local function own(entry)
+    for k, v in pairs(def.fields or {}) do if entry[k] == nil then entry[k] = v end end
+    return entry
+  end
   if sid ~= nil then
-    uid = ST.addPart(sid, { id = partId, x = p.lx or 0, y = (p.ly or 0) + base, z = p.lz or 0, yaw = p.yaw or 0, paid = paid, ft = ft })
+    uid = ST.addPart(sid, own({ id = partId, x = p.lx or 0, y = (p.ly or 0) + base, z = p.lz or 0, yaw = p.yaw or 0, paid = paid, ft = ft }))
   else
     local dp = ref("deployables")
     local up = p.up
     local rec = ST.newRecord(nil, p.body, p.x + up.x * base, p.y + up.y * base, p.z + up.z * base, up, p.fwd, partId,
       { by = by, t = t, d = dp and dp.dateOf and dp.dateOf(t) or nil, name = def.label, paid = paid })
     rec.bp[1].paid, rec.bp[1].ft = paid, ft
+    own(rec.bp[1])
     sid = ST.add(rec)
     uid = 1
     if ST.spawnNow then ST.spawnNow(sid) end
@@ -709,6 +734,8 @@ function place(sid, partId, p, payer)
   local e = { label = "place " .. def.label, kind = "place", t = t, sid = sid, uid = uid, partId = partId,
               hdr = rec and header(rec) or nil, part = part and copy(part) or nil }
   e.undo = function()
+    local held = removalBlocked(e.sid, { e.uid })
+    if held then e.res, e.why = nil, held return end
     local amount = math.floor((e.part and e.part.paid and e.part.paid.total) or 0)
     ST.removeParts(e.sid, { e.uid })
     if co.refund then co.refund(amount, "returned: " .. def.label .. " (undone within a minute)") else co.earn(amount, "returned: " .. def.label) end
@@ -739,6 +766,8 @@ function deconstruct(sid, uid)
   if not part then return nil, "it's already gone" end
   local uids = { uid }
   for _, u in ipairs(SN.dependents(rec, partInfo, uid)) do uids[#uids + 1] = u end
+  local held = removalBlocked(sid, uids)
+  if held then return nil, held end
   local t = agency_now()
   local total, full = 0, true
   for _, u in ipairs(uids) do
@@ -806,7 +835,9 @@ function undo()
   H:undo()
   if e.res == nil then
     H.index = H.index + 1   -- (it could not be undone: the ring stays as it was)
-    return nil, "couldn't undo " .. e.label .. " (can't afford to put it back)"
+    local w = e.why
+    e.why = nil
+    return nil, "couldn't undo " .. e.label .. " (" .. (w or "can't afford to put it back") .. ")"
   end
   lastUndo = { sid = e.sid, refund = e.res, kind = e.kind, t = agency_now() }
   return e.res, e
@@ -868,7 +899,8 @@ local function provider(t, ctx)
         return string.format("structure %d · %d part%s", sid, r and #r.bp or 0, (r and #r.bp or 0) == 1 and "" or "s")
       end, group = "Base" },
     { id = "bk_decon", type = "action", label = "Deconstruct", group = "Base", danger = true, value = ask,
-      hint = "3 s", enabled = function() return isEngineer() end, why = "Engineers only",
+      hint = "3 s", enabled = function() return isEngineer() and removalBlocked(sid, { uid }) == nil end,
+      why = function() return isEngineer() and (removalBlocked(sid, { uid }) or "in use") or "Engineers only" end,
       job = { secs = 3.0, label = "Taking the " .. tostring(def.label) .. " down",
         check = function()
           if not ST.getPart(sid, uid) then return false, "it's gone" end

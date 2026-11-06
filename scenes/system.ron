@@ -3464,6 +3464,7 @@
         // THE BUILD KIT (deep-space addendum K1-K4, K8, K13, N1; docs/base-building.md):
         // the Engineer's build mode on foot (field_builder), the BASE parts (parts_base),
         // what a placement costs (base_economy), the structures it leaves (structures),
+        // the Build Stand and the craft on it (craft_stand, step 6),
         // the one ghost function (ghost) and the overlap query (placement). Last in the
         // scene on purpose: its lateUpdate aims through the cursor after the camera
         // has placed itself for the frame.
@@ -3479,6 +3480,8 @@
                 ( kind: "parts_base", enabled: true, params: [] ),
                 ( kind: "base_economy", enabled: true, params: [] ),
                 ( kind: "structures", enabled: true, params: [] ),
+                ( kind: "craft_stand", enabled: true, params: [] ),
+                ( kind: "craft_orient", enabled: true, params: [] ),
                 ( kind: "ghost", enabled: true, params: [] ),
                 ( kind: "placement", enabled: true, params: [] ),
                 ( kind: "base_snap", enabled: true, params: [] ),

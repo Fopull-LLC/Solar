@@ -730,7 +730,24 @@ RATING_VERSION = 3
 RATING_KEEP = { [2] = true, [3] = true }
 local STARTER = { "pod", "chute", "tankS", "engineS" }
 
+-- WHO HOSTS THE BUILDER (work/standeditor/PLAN.md §1.1): nil in the VAB and
+-- the standalone builder; at a Build Stand, build_host's stand context:
+-- { kind = "stand", sid, uid, body, world, baseline, afford(delta),
+--   escape(), commission(), info(), version(), release() }.
+function hostContext()
+  local bh = W.bhost
+  if bh == nil or (bh and bh.valid == false) then
+    bh = findScript and findScript("build_host") or nil
+    W.bhost = bh or false
+  end
+  if not bh then return nil end
+  return bh.standContext and bh.standContext() or nil
+end
+
 function launchWorld()
+  -- (at a stand: the stand's own world — TWR, Δv, jets and the air read for here)
+  local hc = hostContext()
+  if hc and hc.world then return hc.world end
   local w = save.get("launch.world")
   if type(w) == "table" and (w.g or 0) > 0 and (w.r or 0) > 0 then
     return { name = w.name, g = w.g, r = w.r, soi = (w.soi or 0) > w.r and w.soi or w.r * 7.5 }
@@ -1863,7 +1880,13 @@ function launchCheck()
   if CC and CC.sortRows then CC.sortRows(rows) else checkSort(rows) end
   local sorted = {}
   for _, r in ipairs(rows) do if r.sev == "warn" then sorted[#sorted + 1] = r.head end end
-  return { warn = sorted, has = has, hints = hints, rows = rows, kind = res and res.kind or nil, check = res }
+  -- (at a stand its own blocks — S6 the stand can't hold it, S7 off-world
+  -- parts — keep COMMISSION shut, as a VAB block keeps LAUNCH shut)
+  local sblock = nil
+  if hostContext() then
+    for _, r in ipairs(rows) do if r.sev == "block" and r.kind == "stand" then sblock = r.text or r.head break end end
+  end
+  return { block = sblock, warn = sorted, has = has, hints = hints, rows = rows, kind = res and res.kind or nil, check = res }
 end
 
 -- ── THE CRAFT CHECK (scripts/craft_check.lua on the CraftCheckLib node) ─────
@@ -1958,9 +1981,20 @@ function checkContext()
   end
   local fx, fz = craftFront()
   local ok, items = pcall(sync_stage_order)
+  -- (at a stand the rules read the release as the site: a craft let down onto
+  -- its wheels rolls away as from the runway, anything else lifts off the deck
+  -- as from the pad; ctx.stand carries the stand's own figures)
+  local hc = hostContext()
+  local site = launchSite()
+  local release, sinfo = nil, nil
+  if hc then
+    sinfo = hc.info and hc.info() or nil
+    release = (sinfo and sinfo.wheeled) and "roll" or "lift"
+    site = release == "roll" and "runway" or "pad"
+  end
   return {
     parts = cp, world = w, worldRec = w.name and save.get("world." .. w.name) or nil, sigma = padAir(w),
-    site = launchSite(), fuel_t = FUEL_T_PER_UNIT, rk = rating().thrust,
+    site = site, release = release, stand = sinfo, atStand = hc ~= nil, fuel_t = FUEL_T_PER_UNIT, rk = rating().thrust,
     stageIdx = ok and STAGEM.index(stage_order, items or {}) or nil,
     drops = function(u)
       local d = dmemo[u]
@@ -2025,11 +2059,13 @@ function checkRun()
   local lw = save.get("launch.world")
   local wk = type(lw) == "table" and lw.name or save.get("g_scale")
   local k = c.chk_k
+  local hc = hostContext()
+  local hv = hc and hc.version and hc.version() or 0
   if c.chk and k and k[1] == craftVersion and k[2] == W.sv and k[3] == (W.shape_v or 0) and k[4] == partCount
-    and k[5] == launchSiteChoice and k[6] == wk and k[7] == csig and k[8] == (ctrlLib() ~= nil) then
+    and k[5] == launchSiteChoice and k[6] == wk and k[7] == csig and k[8] == (ctrlLib() ~= nil) and k[9] == hv then
     return c.chk
   end
-  local key = { craftVersion, W.sv, W.shape_v or 0, partCount, launchSiteChoice, wk, csig, ctrlLib() ~= nil }
+  local key = { craftVersion, W.sv, W.shape_v or 0, partCount, launchSiteChoice, wk, csig, ctrlLib() ~= nil, hv }
   local t0 = libClock()
   local ok, res = pcall(function() return CC.run(checkContext()) end)
   if not ok then
@@ -2703,6 +2739,8 @@ end
 -- else to the pad. vessel_spawner reads `shipyard.site`.
 launchSiteChoice = nil
 function launchSite()
+  -- (at a Build Stand the craft is commissioned where it stands)
+  if hostContext() then return "stand" end
   if launchSiteChoice then return launchSiteChoice end
   for _, p in pairs(parts) do
     if p.def and p.def.wheel then return "runway" end
@@ -2710,6 +2748,7 @@ function launchSite()
   return "pad"
 end
 function toggleLaunchSite()
+  if hostContext() then hint("at a Build Stand the craft is commissioned where it stands: COMMISSION ▸", 3.0) return end
   launchSiteChoice = launchSite() == "pad" and "runway" or "pad"
   if launchSiteChoice == "runway" and save.get("base.runway") == false then
     hint("this spaceport has NO RUNWAY (water lies across its line): the craft rolls out on the pad   ·   L for the pad", 4.0)
@@ -2718,6 +2757,17 @@ function toggleLaunchSite()
   hint(launchSiteChoice == "runway"
     and "launch site: RUNWAY — the craft rolls out at the threshold, facing down it   ·   L for the pad"
     or "launch site: PAD — Launch Complex 1, on the hold-downs   ·   L for the runway", 3.0)
+end
+
+-- The launch key's words and the sites the toolbar latches (none at a stand).
+function launchLabel()
+  local s = launchSite()
+  if s == "stand" then return "COMMISSION  ▸" end
+  return s == "runway" and "RUNWAY  ▸" or "PAD  ▸"
+end
+function launchSiteChoices()
+  if hostContext() then return {} end
+  return { "pad", "runway" }
 end
 
 local launch_btn_el = nil
@@ -2732,7 +2782,7 @@ function paint_launch_button(chk)
     if launch_btn_el.disabled ~= want then launch_btn_el.disabled = want end
   end
   if launch_btn_n and launch_btn_n.valid ~= false then
-    local label = launchSite() == "runway" and "RUNWAY  ▸" or "PAD  ▸"
+    local label = launchLabel()
     if launch_btn_n.text ~= label then launch_btn_n.text = label end
   end
 end
@@ -2782,6 +2832,12 @@ function refreshStatsNow()
   if bal then
     money = string.format("cost %s   ·   budget %s%s", co.money(cost), co.money(bal),
       (cost > bal) and "   ⚠ OVER BUDGET" or "")
+  end
+  local hcs = hostContext()
+  if hcs and bal then
+    local d = math.max(0, cost - (hcs.baseline or 0))
+    money = string.format("on the stand: %s to pay as you leave (+ shipping)   ·   craft %s   ·   budget %s%s", co.money(d),
+      co.money(cost), co.money(bal), (d > bal) and "   ⚠ OVER BUDGET" or "")
   end
   -- What to do next while it's still being built; once it's a whole rocket,
   -- the first thing LAUNCH would ask you about (too heavy, escapes).
@@ -4998,6 +5054,13 @@ local function place_ghost(x, y, z, parent, att, sym)
     end
     if g.tx then tx_commit(g.tx) end
   else
+    -- (at a Build Stand the parts are bought as you leave: one the agency
+    -- can't pay for doesn't go down — exit can never be refused)
+    local hc = hostContext()
+    if hc and hc.afford then
+      local okA, whyA = hc.afford(g.def.cost or 0)
+      if not okA then hint(whyA, 3.0); ui("tool", 0.7); return nil end
+    end
     -- The ghost node BECOMES the placed part. (Spawning a second node here
     -- was the great twin bug.)
     local u = next_uid
@@ -5454,6 +5517,9 @@ local function make_blueprint()
   -- exactly as before.
   bp.v = 2
   bp.name = W.craft
+  -- the craft's KIND (the CRAFT tab's choice; nil = Auto): it seeds craft_orient and rides the
+  -- library, a stand's key and the handoff untouched
+  bp.kind = W.kind
   bp.root = craft_root()
   local G, L = graph(), lib("builder_graph")
   if G and L then
@@ -5502,6 +5568,9 @@ local function make_blueprint()
   finishBlueprint(bp)
   return bp, i
 end
+-- The craft as a launch-format blueprint, now (a Build Stand's host keeps it
+-- on the stand: the autosave, LEAVE and COMMISSION).
+function blueprintNow() return (make_blueprint()) end
 
 local function save_blueprint(noflush)
   -- An autosave still in flight (craftSave quiet, over four frames) lands
@@ -5599,6 +5668,7 @@ local function load_blueprint(bp)
     end
     W.reg_wait, W.load_bp = nil, nil
   end
+  W.kind = (type(bp.kind) == "string" and bp.kind ~= "auto") and bp.kind or nil
   refit_chutes(bp.parts)
   -- A rover rolled out turned 90° (finishBlueprint: wheel axles on Z) comes
   -- back onto the stand the way it was built.
@@ -7246,6 +7316,16 @@ function frameTick()
   ensure_hash()
   rehash_if_needed()
   spawnQueueTick()
+  -- OPEN at a stand: the craft just opened turned to stand on the deck
+  local ao = W.auto_orient
+  if ao and not W.load_wait and next(orientRecs()) ~= nil then
+    W.auto_orient = nil
+    local ok, what = cmd("orient", { auto = true, quiet = true })
+    hint(ok and string.format("opened “%s” — %s (CTRL+Z keeps it as saved)", ao.name, what)
+      or string.format("opened “%s” — it already stands the right way up", ao.name), 4.0)
+  elseif ao and time - ao.t > 10 then
+    W.auto_orient = nil
+  end
 end
 
 -- The dirty-flag readout: at most once a frame, and at most twice a second
@@ -7562,7 +7642,10 @@ function keysTick(cam_busy)
   if panelsOwnKeys() then return false end
   local ctrl, shift, alt = input.key("ctrl"), input.key("shift"), input.key("alt")
   if input.pressed("escape") then
-    escapeLadder()
+    -- (at a Build Stand a bare ESC, with nothing left to back out of, saves
+    -- the craft on the stand and steps back to the Engineer; the VAB's ESC
+    -- never leaves it)
+    if escapeLadder() == nil and hostContext() then doLeave() end
     return true
   end
   -- tools 1–4 (never while holding or dragging)
@@ -8722,7 +8805,38 @@ partClicks = 0        -- parts clicked in the view (builder_inspector: a click i
 -- start from without reading 1,000 parts back out of the save (build_host
 -- hands it to vessel_spawner.launchNow). nil once anything else is saved.
 function launchBlueprint() return W.launch_bp end
+-- COMMISSION at a Build Stand (work/standeditor/PLAN.md §6.3): the check (a
+-- block refuses, warnings arm the two-press confirm as LAUNCH does), then
+-- the host saves the craft on the stand, charges the diff, takes the
+-- overlay down and commissions it there.
+function standCommission(hc)
+  local chk = launchCheck()
+  if chk.block then
+    hint("can't commission — " .. chk.block, 4.0)
+    ui("tool", 0.7)
+    return false
+  end
+  local inway = hc.info and hc.info() and hc.info().inWay
+  if inway then
+    hint("can't commission — " .. inway, 4.0)
+    ui("tool", 0.7)
+    return false
+  end
+  if #chk.warn > 0 and not (launchArmedAt and time - launchArmedAt <= LAUNCH_CONFIRM) then
+    launchArmedAt = time
+    hint("⚠ " .. chk.warn[1] .. (#chk.warn > 1 and string.format("  ·  +%d more in CRAFT CHECK", #chk.warn - 1) or "")
+      .. "  —  press COMMISSION again to make it anyway", LAUNCH_CONFIRM)
+    ui("tool", 0.7)
+    return false
+  end
+  launchArmedAt = nil
+  ui("launch", 1.0)
+  save_blueprint(true)
+  return hc.commission()
+end
 function doLaunch()
+  local hc = hostContext()
+  if hc then return standCommission(hc) end
   W.launch_bp = nil
   local chk = launchCheck()
   if chk.block then
@@ -8932,6 +9046,10 @@ function stats()
     cot = (th > 0) and { x = tx / th, y = ty / th, z = tz / th } or nil,
     launch = launchCheck(), version = craftVersion, islands = #(comps or {}), loose = nl,
   }
+  -- (at a Build Stand COST is what leaving would charge: the parts added since
+  -- the last commit, before shipping; `hull` is the craft's whole price)
+  local hc = hostContext()
+  if hc then out.hull = cost; out.cost = math.max(0, cost - (hc.baseline or 0)) end
   -- (until the craft check's and the mode's libraries have come up — they
   -- are spawned on the first ask and answer a frame later — the answer is
   -- not kept, so the first craft on the stand gets its check too)
@@ -9692,6 +9810,9 @@ function craftOpen(name, mode)
   if mode == "merge" then return hold_fragment(fragment_of_bp(bp)) end
   load_blueprint(bp)
   W.craft = name
+  -- (at a Build Stand a saved craft is turned to stand on the deck: wheels
+  -- down, nose to the stand's front; frameTick does it once its parts are in)
+  if hostContext() then W.auto_orient = { name = name, t = time } end
   save.set("shipyard.current", name)
   -- the craft's own kit comes with it (a craft saved before kit: none)
   save.set("shipyard.lockerPlan", type(bp.lockers) == "table" and tcopy(bp.lockers) or {})
@@ -10236,6 +10357,111 @@ CMD.stage = function(a)
   sync_stage_order()
   refresh_stats()
   return true
+end
+
+-- ═══ ORIENTATION AND THE CRAFT'S KIND (work/standeditor/PLAN.md §3) ═════════
+-- craft_orient.lua (a rulebook on the CraftOrientLib node) says which way is
+-- up; CMD.orient turns the WHOLE craft as one, about its centre of mass, then
+-- sets it down on the floor centred on it — one history step (Ctrl+Z puts it
+-- back as it was).
+function orientLib()
+  local L = lib("craft_orient")
+  if not L and not W.orient_asked and spawn then
+    W.orient_asked = true
+    pcall(spawn, "CraftOrientLib", vec3(0, 0, 0))
+  end
+  if L and type(L.basisFor) ~= "function" then return nil end
+  return L
+end
+-- The parts as flat blueprint-shaped records, in the frame (craft_orient's
+-- and the stand host's input).
+function orientRecs()
+  local out = {}
+  for u, p in pairs(parts) do
+    if not p.carried then
+      local d = p.def
+      out[u] = { uid = u, id = p.id, x = p.x, y = p.y, z = p.z, yaw = p.yaw or 0, pitch = p.pitch or 0, roll = p.roll or 0,
+                 h = d.h, rx = d.rx, rz = d.rz, mass = d.mass, cost = d.cost, kind = d.kind, wheel = d.wheel or "",
+                 af = type(d.af) == "string" and d.af or nil, front = d.front and 1 or 0, seat = d.seat and 1 or 0,
+                 thrust = d.thrust or 0 }
+    end
+  end
+  return out
+end
+-- A part in hand or a gizmo drag under way (the stand host waits for it).
+function editBusy() return ghost ~= nil or gizmo_drag ~= nil end
+-- The CHECK again, now (the stand's figures changed without the craft).
+function checkRefresh()
+  W.cache.chk = nil
+  API.stats = nil
+  refresh_stats()
+end
+-- THE KIND: nil = Auto, or one of craft_orient.KINDS.
+CRAFT_KINDS = { "auto", "rocket", "plane", "rover", "probe", "station", "boat" }
+function craftKind() return W.kind or "auto" end
+function setCraftKind(k)
+  k = (k ~= "auto" and k) or nil
+  if W.kind == k then return false end
+  W.kind = k
+  craftVersion = craftVersion + 1
+  refresh_stats()
+  return true
+end
+
+-- a = { Q | axis = "x"|"y"|"z", sign = ±1 | auto = true | wheelsDown = true |
+--       noseLevel = true, quiet }  → true, what | false, why
+function CMD.orient(a)
+  a = a or {}
+  local CO = orientLib()
+  if not CO then return false, "the orientation rules aren't up yet" end
+  if ghost then cancel_ghost() end
+  local list = {}
+  for _, r in pairs(orientRecs()) do list[#list + 1] = r end
+  if #list == 0 then return false, "nothing to turn" end
+  local Q, what = a.Q, nil
+  if not Q and a.axis then
+    Q = CO.axisTurn(a.axis, a.sign or 1)
+    what = string.format("turned 90° about %s%s", string.upper(a.axis), (a.sign or 1) < 0 and " (back)" or "")
+  end
+  if not Q and (a.auto or a.wheelsDown or a.noseLevel) then
+    local kind = CO.kindOf(list, W.kind, ctrlLib())
+    Q = CO.basisFor(list, kind, { wheelsDown = a.wheelsDown, noseLevel = a.noseLevel })
+    if not Q then
+      if not a.quiet then hint("it already stands the right way up", 2.0) end
+      return false, "already upright"
+    end
+    what = (kind == "rover" and "turned wheels down, nose to the front")
+      or (kind == "aircraft" and "laid level, nose to the front")
+      or "stood upright"
+  end
+  if not Q then return false, "no turn given" end
+  local c = CO.comOf(list)
+  local set = {}
+  for u in pairs(parts) do set[u] = true end
+  if W.hist then W.hist:seal() end
+  edit_begin(next(set), set)
+  for u in pairs(set) do
+    local q = parts[u]
+    local v = basisApply(Q, { x = q.x - c.x, y = q.y - c.y, z = q.z - c.z })
+    set_part_pos(q, c.x + v.x, c.y + v.y, c.z + v.z)
+    set_part_rot(q, basisEuler(basisMul(Q, basisOf(q.yaw or 0, q.pitch or 0, q.roll or 0))))
+  end
+  -- set it down on the floor, centred on it
+  local lo, sx, sz, n = math.huge, 0.0, 0.0, 0
+  for _, q in pairs(parts) do
+    local _, ey = part_box(q)
+    lo = math.min(lo, q.y - ey)
+    sx, sz, n = sx + q.x, sz + q.z, n + 1
+  end
+  local dy = (lo < math.huge) and (params.floor_y - lo) or 0
+  local dx, dz = -sx / math.max(1, n), -sz / math.max(1, n)
+  for _, q in pairs(parts) do set_part_pos(q, q.x + dx, q.y + dy, q.z + dz) end
+  if W.hist then W.hist:seal() end
+  publish_center(); refresh_stats()
+  ui("place", 0.7)
+  if not a.quiet and what then hint(what .. "   ·   CTRL+Z keeps it as it was", 3.0) end
+  W.last_orient = { what = what, t = time }
+  return true, what
 end
 
 function cmd(name, args)

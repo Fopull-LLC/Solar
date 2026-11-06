@@ -136,7 +136,7 @@ check(C.cursorWant({ fly = true }, true, true) == false, "want: typing")
 -- 9. build_host lets go on enter and on teardown (source check: the engine
 -- half of build_host is not stubbable here)
 local bh = io.open("solar/scripts/build_host.lua"):read("*a")
-local enter = bh:match("function enter%(%).-\nend")
+local enter = bh:match("function enter%(.-%).-\nend")
 local teardown = bh:match("local function teardown%(.-\nend")
 check(enter and enter:find("setMouseLocked%(false%)") ~= nil, "build_host.enter frees the cursor")
 check(teardown and teardown:find("setMouseLocked%(false%)") ~= nil, "build_host teardown frees the cursor")

@@ -135,8 +135,12 @@ local function note(msg) log("build host: " .. msg) end
 LEAN_HIDE = { "FacTracking", "BaseFuel", "BasePad", "Pad Flood 1", "Pad Flood 2", "Pad Flood 3", "Pad Flood 4" }
 leanOn = false
 local lean = nil      -- what was changed: { w_particles, fl_interval, hidden = { node… } }
+-- WHO HOSTS THE BUILDER NOW: "vab" (E at the Vehicle Assembly) or "stand"
+-- (Build here on a Build Stand, work/standeditor/PLAN.md); nil when idle.
+hostKind = nil
+local stand = nil     -- the stand session (see enter_stand)
 local function lean_apply()
-  if lean or mode ~= "world" or (params.lean or 1) == 0 then return end
+  if lean or mode ~= "world" or (params.lean or 1) == 0 or hostKind == "stand" then return end
   lean = { hidden = {} }
   local w = ref("weather")
   if w and w.params then lean.w = w; lean.w_particles = w.params.particles; w.params.particles = false end
@@ -174,6 +178,9 @@ local function fader() return ref("vab_fade") end
 -- Feed the fade the craft: its box from the builder camera (frame-local),
 -- turned into the world through the frame (the identity in standalone).
 local function drive_fade(on)
+  -- (at a stand there is no hall to fade: a stand beside the VAB must not
+  -- start fading its walls toward a craft 40 m away)
+  if hostKind == "stand" and on then return end
   local f = fader()
   if not f then return end
   if not on then
@@ -202,6 +209,7 @@ end
 -- THE AUTOSAVE: the stand goes to the craft library once it has sat still
 -- for `autosave` seconds after a change (builder.craftSave, WP1's library), so
 -- a crash or a quit mid-build loses nothing. Quiet: no hint.
+local stand_autosave
 local function autosave_tick()
   local b = ref("builder")
   if not (b and b.craftVersion and b.craftSave) then return end
@@ -213,7 +221,9 @@ local function autosave_tick()
   elseif pending_save and time - save_t >= (params.autosave or 2.0) then
     pending_save = false
     local name = b.craftName and b.craftName() or nil
-    pcall(b.craftSave, name, true)
+    -- (at a stand the work in progress is the stand's, not the library's:
+    -- SAVE / Ctrl+S still puts it in the library)
+    if hostKind == "stand" then pcall(stand_autosave, b) else pcall(b.craftSave, name, true) end
   end
 end
 
@@ -248,15 +258,17 @@ local function set_active(n, on)
   if c then c.active = on end
 end
 
-local function park_crew()
+-- `show` keeps them in view (at a stand there is no console to vanish into:
+-- they stand where they were, and the orbit camera sees the spot).
+local function park_crew(show)
   local a = astronaut()
   if not a then return end
   local d = space.dominant(a.x, a.y, a.z)
   local b = d and space.body(d)
   if not b then return end
-  park = { body = d, x = a.x - b.x, y = a.y - b.y, z = a.z - b.z }
+  park = { body = d, x = a.x - b.x, y = a.y - b.y, z = a.z - b.z, show = show == true }
   a.vx, a.vy, a.vz = 0, 0, 0
-  a.visible = false
+  a.visible = show == true
 end
 
 local function pin_crew()
@@ -266,8 +278,10 @@ local function pin_crew()
   if not b then return end
   a.x, a.y, a.z = b.x + park.x, b.y + park.y, b.z + park.z
   a.vx, a.vy, a.vz = 0, 0, 0
-  if a.visible then a.visible = false end
+  if a.visible and not park.show then a.visible = false end
 end
+-- The parked astronaut (body-relative), for probes and the stand's checks.
+function parkPoint() return park end
 
 local function unpark_crew(show)
   local a = astronaut()
@@ -295,12 +309,14 @@ end
 
 -- The BuildFrame under VabInterior. Made fresh on every enter (the last one
 -- went with its parts); `cb` runs once it exists.
-local function make_frame(cb)
+local function make_frame(cb, parent)
   if valid(frame) then frame:destroy() end
   frame = nil
-  createNode("BuildFrame", vab, function(n)
-    n.x, n.y, n.z = 0, FRAME_Y, 0
-    n.yaw, n.pitch, n.roll = 0, 0, 0
+  createNode("BuildFrame", parent or vab, function(n)
+    if not parent then
+      n.x, n.y, n.z = 0, FRAME_Y, 0
+      n.yaw, n.pitch, n.roll = 0, 0, 0
+    end
     frame = n
     cb(n)
   end)
@@ -331,13 +347,17 @@ end
 -- E AT THE VAB. True when the builder is on its way (facility_menu then
 -- closes its own panel); false when it can't open here, and facility_menu
 -- falls back to the separate builder scene.
-function enter()
+local enter_stand
+function enter(opts)
+  if type(opts) == "table" and opts.stand then return enter_stand(opts.stand) end
   if mode ~= "world" or state ~= "idle" or fx then return false end
   local gm = ref("game_manager")
   if gm and gm.loading then return false end
+  hostKind = "vab"
   vab = find("VabInterior")
   if not valid(vab) then
     note("no VabInterior standing — the builder opens as its own scene")
+    hostKind = nil
     return false
   end
   enter_t = time
@@ -364,14 +384,418 @@ function frameNode() if mode == "world" and valid(frame) then return frame end r
 
 -- LEAVE: the builder has saved the craft; take the overlay away. Instant: no
 -- loading screen, the astronaut stands where they pressed E.
+local leave_stand
 function leave()
   if mode ~= "world" or state == "idle" or state == "rollout" then return false end
+  if hostKind == "stand" then return leave_stand(false) end
+  hostKind = nil
   teardown(true)
   state = "idle"
   local s = ref("sfx")
   if s and s.play then s.play("close") end
   note("left the builder")
   return true
+end
+
+-- ═══ THE EDITOR AT A BUILD STAND (work/standeditor/PLAN.md) ════════════════
+--
+-- enter{ stand = { sid, uid } } is the VAB flow with the frame elsewhere: the
+-- BuildFrame is a child of the stand's PLANET, posed every frame from
+-- craft_stand.framePose (body frame: the planet only translates), so the
+-- whole builder — camera, parts column, inspector, staging, CHECK, symmetry,
+-- undo, the library — runs on the deck. Its +X (the builder's craft front)
+-- is the stand's front, its +Y the stand's up, and its floor (frame y 0.11)
+-- is set so that the craft's BELLY rests on the deck as Commission will seat
+-- it: floor = deck top − (belly − lowest) + clear. The deck raises itself as
+-- the craft grows (≤ 2 Hz, never during a drag). The astronaut stays in view,
+-- pinned where they stood; a hit saves and exits. ESC (with nothing to back
+-- out of) or LEAVE saves the work on the stand and charges the DIFF since the
+-- last commit (craft_stand.commitQuote: one truck); COMMISSION does the same
+-- and then makes it a live, held craft. The VAB's own save keys
+-- (shipyard.current / blueprint / lockerPlan / site / kit) are put back
+-- exactly as they were.
+FLOOR_Y_BUILDER = 0.11
+STASH_KEYS = { "shipyard.current", "shipyard.blueprint", "shipyard.lockerPlan", "shipyard.site", "shipyard.kit" }
+lastStandExit = nil   -- { quote, paid, ok, why, commission, t } (probes)
+
+local function deepc(t)
+  if type(t) ~= "table" then return t end
+  local o = {}
+  for k, v in pairs(t) do o[k] = deepc(v) end
+  return o
+end
+local function agency_now()
+  local CS = ref("craft_stand")
+  return (CS and CS.agencyNow and CS.agencyNow()) or time or 0
+end
+local function say(msg)
+  note(msg)
+  if caption then pcall(caption, msg) end
+end
+
+-- The frame on the deck: origin = G + U·(h + clear − fo − 0.11), +Y = U,
+-- +X = F (craft_stand.vesselAxes with the builder's front +X).
+local function pin_frame()
+  if not (stand and valid(frame)) then return end
+  local CS = ref("craft_stand")
+  local fp = CS and CS.framePose(stand.sid, stand.uid)
+  if not fp then return end
+  local X, U, Z = CS.vesselAxes(fp.R, fp.U, fp.F, 1, 0)
+  local off = fp.h + (stand.clear or 0.02) - (stand.fo or 0) - FLOOR_Y_BUILDER
+  frame:setUp(vec3(U.x, U.y, U.z), vec3(-Z.x, -Z.y, -Z.z))
+  frame.x, frame.y, frame.z = fp.G.x + U.x * off, fp.G.y + U.y * off, fp.G.z + U.z * off
+  stand.h = fp.h
+  stand.U, stand.X, stand.Z = U, X, Z
+  -- (the camera's floor: 0.3 m over the stand's ground plane, frame y −off)
+  local bc = state == "building" and ref("builder_camera") or nil
+  if bc and bc.setWorldClip then bc.setWorldClip(true, -off + 0.3) end
+end
+
+-- The world the stand stands on, for the builder's launchWorld().
+local function stand_world(name)
+  local b = name and space.body(name)
+  if not b then return nil end
+  local r = b.radius or 0
+  local mu = b.mu or 0
+  local g = (r > 0 and mu > 0) and mu / (r * r) or (b.gravity or 9.8)
+  return { name = name, g = g, r = r, soi = (b.soi or 0) > r and b.soi or r * 7.5 }
+end
+
+-- THE HOST CONTEXT the builder reads (builder.hostContext()).
+-- The stand session as it stands (probes): { sid, uid, h, fo, info, … } | nil
+function standState() return stand end
+-- The frame's planet-local origin the session wants now (probes compare it).
+function standFrameWant()
+  if not stand then return nil end
+  local CS = ref("craft_stand")
+  local fp = CS and CS.framePose(stand.sid, stand.uid)
+  if not fp then return nil end
+  local off = fp.h + (stand.clear or 0.02) - (stand.fo or 0) - FLOOR_Y_BUILDER
+  return { x = fp.G.x + fp.U.x * off, y = fp.G.y + fp.U.y * off, z = fp.G.z + fp.U.z * off, body = fp.body }
+end
+function standContext()
+  if hostKind ~= "stand" or not stand then return nil end
+  return stand.ctx
+end
+
+enter_stand = function(sp)
+  if mode ~= "world" then return false, "the builder isn't in this scene" end
+  if state ~= "idle" or fx then return false, "the builder is busy" end
+  local gm = ref("game_manager")
+  if gm and gm.loading then return false, "still loading" end
+  local CS, ST = ref("craft_stand"), ref("structures")
+  if not (CS and ST and sp and sp.sid and sp.uid) then return false, "no stand there" end
+  local fp = CS.framePose(sp.sid, sp.uid)
+  if not fp then return false, "no stand there" end
+  local sn = (CS.standNodeOf and CS.standNodeOf(sp.sid, sp.uid)) or ST.nodeOf(sp.sid, sp.uid)
+  if not (sn and sn.valid ~= false) then return false, "walk closer" end
+  local st = CS.stateOf(sp.sid, sp.uid)
+  if st and st.s == "held" then return false, "release the craft first" end
+  local planet = find(fp.body)
+  if not valid(planet) then return false, "no world there" end
+  -- (any VabInterior from an earlier session's frame is not ours)
+  vab = nil
+  local bp = CS.blueprint(sp.sid, sp.uid)
+  local committed = deepc(CS.committedOf(sp.sid, sp.uid))
+  local base = 0
+  for _, c in pairs(committed) do base = base + (c or 0) end
+  local cr = ref("crew")
+  local aid = cr and cr.activeId and cr.activeId() or nil
+  local lh = cr and cr.lastHit and aid and cr.lastHit[aid]
+  stand = { sid = sp.sid, uid = sp.uid, body = fp.body, h0 = fp.h, clear = 0.02, fo = 0,
+            stash = {}, committed = committed, baseline = base,
+            paid = st and { cost = st.cost or 0, ship = st.ship or 0, total = st.total or 0, t = st.t } or { cost = 0, ship = 0, total = 0 },
+            name = (st and st.name) or (bp and bp.name) or string.format("Stand %s craft", tostring(sp.sid)),
+            hit0 = lh and lh.t or nil, fit_v = nil, fit_t = -10, info_t = -10, v = 0, info = nil, t0 = time }
+  for _, k in ipairs(STASH_KEYS) do stand.stash[k] = { v = deepc(save.get(k)) } end
+  local load = bp and deepc(bp) or { parts = {}, v = 2 }
+  load.name = stand.name
+  save.set("shipyard.blueprint", load)
+  save.set("shipyard.current", stand.name)
+  save.set("shipyard.lockerPlan", type(load.lockers) == "table" and deepc(load.lockers) or {})
+  save.set("shipyard.kit", false)
+  local S = stand
+  S.ctx = {
+    kind = "stand", sid = sp.sid, uid = sp.uid, body = fp.body, world = stand_world(fp.body),
+    baseline = base,
+    -- what the diff would cost with `delta` more of parts on it (the placement guard)
+    afford = function(delta)
+      local co, E = ref("company"), ref("base_economy")
+      local b = ref("builder")
+      local hull = (b and b.build_cost and b.build_cost()) or 0
+      local add = math.max(0, hull + (delta or 0) - S.baseline)
+      local ship = (add > 0 and E and E.shipping) and E.shipping(add) or 0
+      if co and co.afford and not co.afford(add + ship) then
+        return false, string.format("can't afford this build — the parts on the stand cost %s with shipping and the budget is %s",
+          co.money and co.money(add + ship) or tostring(add + ship), co.money and co.money(co.balance()) or "?")
+      end
+      return true
+    end,
+    escape = function() return leave_stand(false) end,
+    commission = function() return leave_stand(true) end,
+    info = function() return S.info end,
+    version = function() return S.v end,
+    release = function() return S.info and S.info.wheeled and "roll" or "lift" end,
+  }
+  CS.setEditing(sp.sid, sp.uid)
+  enter_t = time
+  enterMs = nil
+  hostKind = "stand"
+  if input and input.setMouseLocked then input.setMouseLocked(false) end
+  set_owner("builder")
+  push_ctx(true)
+  park_crew(true)
+  state = "frame"
+  make_frame(function()
+    pin_frame()
+    state = "loading"
+    scene.load(OVERLAY, { additive = true, replicate = false })
+  end, planet)
+  note(string.format("Build here: stand %s on %s, deck %.1f m", tostring(sp.sid), fp.body, fp.h))
+  return true
+end
+
+-- The craft's records as craft_orient reads them (the builder's, frame coords).
+local function recs_now(b)
+  return (b and b.orientRecs and b.orientRecs()) or {}
+end
+
+-- THE DECK AND THE SITE, ≤ 2 Hz and only when the craft changed (never during
+-- a drag): how far the belly sits over the lowest part (the frame's floor),
+-- the deck height the craft needs (raised, never lowered while building), and
+-- the stand's CHECK figures (ctx.stand).
+local function stand_fit(b)
+  if not stand then return end
+  local CS, CO = ref("craft_stand"), ref("craft_orient")
+  if not (CS and CO) then return end
+  if b.editBusy and b.editBusy() then return end
+  local v = b.craftVersion
+  if v == stand.fit_v and time - stand.info_t < 2.0 then return end
+  if time - stand.fit_t < 0.5 then return end
+  stand.fit_t = time
+  local recs = recs_now(b)
+  local rec, p, def = nil, nil, nil
+  local ST = ref("structures")
+  if ST then rec = ST.get(stand.sid); p = rec and ST.getPart(stand.sid, stand.uid) end
+  local pb = ref("parts_base")
+  def = pb and p and pb.partInfo(p.id)
+  if not def then return end
+  local S = def.stand
+  local list = {}
+  for _, d in pairs(recs) do list[#list + 1] = d end
+  local fit = CO.deckFit(list, S, CS)
+  local need, why = nil, fit.why
+  if #list > 0 and fit.belly then
+    need, why = CS.needFor(stand.sid, stand.uid, { parts = list }, astronaut())
+  end
+  if v ~= stand.fit_v then
+    stand.fit_v = v
+    local fo = (#list > 0) and CO.floorOffset(list, S, CS) or 0
+    if math.abs(fo - (stand.fo or 0)) > 0.005 then stand.fo = fo end
+    if need and need > (stand.h or 0) + 1e-6 then
+      local ok = CS.setHeight(stand.sid, stand.uid, need)
+      if ok then note(string.format("the deck rises to %.1f m for the craft", need)) end
+    end
+    pin_frame()
+  end
+  -- the site's figures (ctx.stand), what the CHECK's stand rows read
+  stand.info_t = time
+  local fp = CS.framePose(stand.sid, stand.uid)
+  local info = { body = stand.body, home = save.get("base.body"), h = fp and fp.h, need = need, needWhy = why,
+                 deckR = S.deck, wheeled = CS.wheeled({ parts = list }) }
+  local w = stand.ctx.world
+  info.g = w and w.g
+  local wr = save.get("world." .. tostring(stand.body))
+  info.air = type(wr) == "table" and wr.atmo or nil
+  local hull = 0
+  for _, d in ipairs(list) do
+    hull = hull + (d.cost or 0)
+    if (d.thrust or 0) > 0 then info.thrust = true end
+  end
+  info.added = math.max(0, hull - stand.baseline)
+  info.away = info.home ~= nil and stand.body ~= info.home
+  local bb = space.body(stand.body)
+  if fp and bb and raycast then
+    -- S1: the ground's slope at the stand (a ray past the stand)
+    local skip = {}
+    local sn = CS.standNodeOf and CS.standNodeOf(stand.sid, stand.uid)
+    if sn then skip[#skip + 1] = sn; for _, c in ipairs(sn:children() or {}) do skip[#skip + 1] = c; for _, c2 in ipairs(c:children() or {}) do skip[#skip + 1] = c2 end end end
+    local a = astronaut()
+    if a then skip[#skip + 1] = a end
+    local U, F, R = fp.U, fp.F, fp.R
+    local gx, gy, gz = bb.x + fp.G.x, bb.y + fp.G.y, bb.z + fp.G.z
+    local okh, h = pcall(raycast, gx + U.x * 6, gy + U.y * 6, gz + U.z * 6, -U.x, -U.y, -U.z, 14, { ignore = skip })
+    if okh and h and h.nx then
+      local c = h.nx * U.x + h.ny * U.y + h.nz * U.z
+      info.slope = math.deg(math.acos(math.max(-1, math.min(1, c))))
+      local tx, tz = h.nx * R.x + h.ny * R.y + h.nz * R.z, h.nx * F.x + h.ny * F.y + h.nz * F.z
+      if info.slope > 1 then
+        local dirs = { "front", "right", "back", "left" }
+        local ang = math.atan2(-tx, -tz)
+        info.slopeDir = dirs[(math.floor((ang + math.pi / 4) / (math.pi / 2)) % 4) + 1]
+      end
+    end
+    -- S3: the release path ahead (the craft's front is the stand's front)
+    if info.wheeled and spherecast then
+      local top = fp.h + 0.5
+      local ox, oy, oz = gx + U.x * top + F.x * 1.5, gy + U.y * top + F.y * 1.5, gz + U.z * top + F.z * 1.5
+      local okc, hc = pcall(spherecast, vec3(ox, oy, oz), vec3(F.x, F.y, F.z), 0.4, 10.0, { ignore = skip })
+      if okc and hc and hc.node and hc.distance then
+        local nm = hc.node.name
+        local _, part = ST.partOfNode(hc.node)
+        if part then nm = (pb.partInfo(part.id) or {}).label or nm end
+        local terr = false
+        pcall(function() terr = hc.node.terrain ~= nil and hc.node.terrain ~= false end)
+        if not terr and hc.node.name ~= stand.body then info.front = { name = "the " .. tostring(nm), d = hc.distance + 1.5 } end
+      end
+    end
+    -- S4: anything built within 6 m of a craft that lifts off
+    if not info.wheeled and info.thrust then
+      for _, e in ipairs(ST.partsNear(stand.body, fp.G.x, fp.G.y, fp.G.z, 6.0)) do
+        if not (e.rec.id == stand.sid and e.part.uid == stand.uid) then
+          info.plume = { name = "The " .. tostring((pb.partInfo(e.part.id) or {}).label or "structure"), d = e.d }
+          break
+        end
+      end
+    end
+    -- S5: the Engineer in the craft's box
+    if #list > 0 and CS.inTheWay then
+      local w2 = CS.inTheWay(stand.sid, stand.uid, { parts = list })
+      info.standing = w2 ~= nil and w2:find("you're standing", 1, true) ~= nil
+      info.inWay = w2
+    end
+  end
+  local key = string.format("%s|%s|%s|%s|%s|%s", tostring(info.need), tostring(info.standing), tostring(info.front and info.front.name),
+    tostring(info.plume and info.plume.name), tostring(info.slope and math.floor(info.slope)), tostring(info.added > 0))
+  if key ~= stand.info_key then
+    stand.info_key = key
+    stand.v = stand.v + 1
+    if b.checkRefresh then pcall(b.checkRefresh) end
+  end
+  stand.info = info
+end
+
+-- Save the editor's craft on the stand as it stands (no charge).
+stand_autosave = function(b)
+  if not stand then return end
+  local CS = ref("craft_stand")
+  local bp = b.blueprintNow and b.blueprintNow()
+  if not (CS and bp) then return end
+  CS.saveWip(stand.sid, stand.uid, bp, { committed = stand.committed, paid = stand.paid, name = b.craftName and b.craftName() or stand.name,
+    wip = true, noDisplay = true })
+end
+
+-- LEAVE / ESC / COMMISSION at a stand: the craft saved on the stand, the
+-- diff charged, the VAB's keys back, the world back; `commission` then makes
+-- it a live craft. → ok, why
+leave_stand = function(commission)
+  if not stand then return false, "not at a stand" end
+  local S = stand
+  local CS, E = ref("craft_stand"), ref("base_economy")
+  local b = ref("builder")
+  local bp = b and b.blueprintNow and b.blueprintNow() or nil
+  local name = (b and b.craftName and b.craftName()) or S.name
+  if name == "Untitled" then name = S.name end
+  local now = agency_now()
+  local q, ok, why = nil, true, nil
+  if CS and bp then
+    q = CS.commitQuote(S.committed, bp, E, now, S.paid)
+    q.name = name
+    ok, why = CS.payFor(S.sid, S.uid, q)
+    local committed, paid
+    if ok then
+      committed = q.committed
+      local moved = q.total ~= 0 or q.n_add > 0 or q.n_rem > 0
+      paid = { cost = q.cost, ship = (S.paid.ship or 0) + q.ship, total = (S.paid.total or 0) + q.total,
+               t = moved and now or S.paid.t }
+    else
+      committed, paid = S.committed, S.paid
+    end
+    CS.setEditing(nil)
+    local wip = (not ok) or (CS.commandWhy(bp) ~= nil)
+    local sok = CS.saveWip(S.sid, S.uid, bp, { committed = committed, paid = paid, name = name, wip = wip })
+    if not sok then CS.saveWip(S.sid, S.uid, bp, { committed = committed, paid = paid, name = name, wip = true }) end
+  elseif CS then
+    CS.setEditing(nil)
+  end
+  -- the VAB's keys, exactly as they were
+  for k, e in pairs(S.stash) do
+    if e.v == nil then if save.delete then save.delete(k) else save.set(k, false) end else save.set(k, e.v) end
+  end
+  teardown(true)
+  state = "idle"
+  hostKind = nil
+  stand = nil
+  -- the deck's colliders where the deck now is
+  local fp = CS and CS.framePose(S.sid, S.uid)
+  if fp and math.abs((fp.h or 0) - (S.h0 or 0)) > 1e-6 and CS.respawnStand then CS.respawnStand(S.sid, S.uid) end
+  local co = ref("company")
+  local m = function(v) return (co and co.money) and co.money(v) or ("$" .. tostring(v)) end
+  local msg
+  if not ok then msg = "not paid: " .. tostring(why) .. " — it stays on the stand, unfinished"
+  elseif q and q.total > 0 then msg = string.format("on the stand · %s charged (%s of parts + %s shipping)", m(q.total), m(q.added), m(q.ship))
+  elseif q and q.total < 0 then msg = string.format("on the stand · %s back for the parts taken off", m(-q.total))
+  else msg = "on the stand · $0 — nothing changed" end
+  local cok, cwhy = nil, nil
+  if commission and ok and CS then
+    cok, cwhy = CS.commission(S.sid, S.uid)
+    msg = cok and (msg .. " · commissioned: held on the stand, Release lets it go") or (msg .. " · not commissioned: " .. tostring(cwhy))
+  end
+  say(msg)
+  lastStandExit = { quote = q, ok = ok, why = why, commission = commission, commissioned = cok, cwhy = cwhy, t = time, sid = S.sid, uid = S.uid }
+  local s = ref("sfx")
+  if s and s.play then s.play("close") end
+  return ok, why
+end
+
+-- The overlay has landed at a stand: the builder learns where it is, the
+-- camera starts from where the Engineer stood looking at the deck, clipped by
+-- the world, and the CHECK tab is up with the stand's rows.
+function stand_landed(bcn)
+  if not stand then return end
+  local bc = ref("builder_camera")
+  local CS = ref("craft_stand")
+  local fp = CS and CS.framePose(stand.sid, stand.uid)
+  if bc and fp then
+    if bc.setWorldClip then bc.setWorldClip(true, -((stand.h or fp.h) + 0.02 - (stand.fo or 0) - FLOOR_Y_BUILDER) + 0.3) end
+    -- the Engineer's bearing in the frame (+X = F, +Z = −R)
+    local a = astronaut()
+    local bb = space.body(fp.body)
+    local yaw = 0.35
+    if a and bb then
+      local dx, dy, dz = a.x - bb.x - fp.G.x, a.y - bb.y - fp.G.y, a.z - bb.z - fp.G.z
+      local lx = dx * fp.F.x + dy * fp.F.y + dz * fp.F.z
+      local lz = -(dx * fp.R.x + dy * fp.R.y + dz * fp.R.z)
+      -- builder_camera.viewBasis: forward = (−sin yaw, ·, −cos yaw); the camera
+      -- sits behind the pivot, so it looks from (sin yaw, cos yaw)
+      -- (a little to one side, so the Engineer is in the picture and not in front of the deck)
+      if lx * lx + lz * lz > 0.01 then yaw = math.atan2(lx, lz) + 0.65 end
+    end
+    if bc.setCamState then bc.setCamState({ P = { x = 0, y = 0.9, z = 0 }, yaw = yaw, pitch = -0.32, d = 6.5 }) end
+  end
+  local b = ref("builder")
+  local CO = ref("craft_orient")
+  if b and CO and b.checkHook then b.checkHook("stand", CO.standRules) end
+  if b and b.hint then pcall(b.hint, string.format("Build Stand %s  ·  ESC saves and steps back  ·  COMMISSION makes it a craft", tostring(stand.sid)), 5.0) end
+  local ins = ref("builder_inspector")
+  if ins and ins.setTab then pcall(ins.setTab, "INSPECT") end
+end
+
+-- (each frame while building at a stand)
+local function stand_tick(dt)
+  pin_frame()
+  local b = ref("builder")
+  if b then stand_fit(b) end
+  -- a hit while building: the work is saved and the Engineer is back
+  local cr = ref("crew")
+  local aid = cr and cr.activeId and cr.activeId() or nil
+  local lh = cr and cr.lastHit and aid and cr.lastHit[aid]
+  if stand and lh and lh.t ~= stand.hit0 then
+    stand.hit0 = lh.t
+    note("the Engineer was hit while building (" .. tostring(lh.cause) .. ") — out of the editor")
+    leave_stand(false)
+    say("you were hit (" .. tostring(lh.cause or "something") .. ") — the work is saved on the stand")
+  end
 end
 
 -- The full-screen black for the rollout ("Build Host" is a UI node on the
@@ -688,6 +1112,7 @@ function update(node, dt)
     return
   end
   pin_crew()
+  if hostKind == "stand" then stand_tick(dt) if state == "idle" then return end end
   if state == "loading" then
     -- The overlay is in once its builder node is: hand it the view.
     local bn = find("Builder")
@@ -702,10 +1127,11 @@ function update(node, dt)
       building = true
       lean_apply()
       enterMs = (time - enter_t) * 1000
-      note(string.format("building in the VAB (%.0f ms from E)", enterMs))
+      if hostKind == "stand" then stand_landed(bc) end
+      note(string.format("building %s (%.0f ms from E)", hostKind == "stand" and "at a Build Stand" or "in the VAB", enterMs))
     elseif time - enter_t > 5.0 then
       note("the builder overlay never arrived — back to the world")
-      teardown(true)
+      if hostKind == "stand" then leave_stand(false) else teardown(true) end
       state = "idle"
     end
     return
@@ -714,7 +1140,7 @@ function update(node, dt)
     -- The overlay went away under us (unloaded by someone else): clean up.
     local bn = find("Builder")
     if not valid(bn) then
-      teardown(true)
+      if hostKind == "stand" then leave_stand(false) else teardown(true) end
       state = "idle"
       return
     end

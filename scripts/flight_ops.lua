@@ -1472,7 +1472,7 @@ local function publish_world()
   -- Best of all is the pad itself: a craft sitting in the clamps stands at
   -- exactly the radius every launch starts from. Remembered per body.
   local v = piloted()
-  if v and v.hasFlown == false and v.tele and v.tele.anchored and v.node and v.node.valid then
+  if v and v.hasFlown == false and v.standHeld ~= true and v.tele and v.tele.anchored and v.node and v.node.valid then
     local pr = len(v.node.x - b.x, v.node.y - b.y, v.node.z - b.z)
     if pr > b.radius * 0.5 and pr < b.radius * 1.5 then
       save.set("launch.pad", { body = b.name or name, r = pr })

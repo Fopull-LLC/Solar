@@ -36,6 +36,12 @@ focusing = false      -- legacy: the old builder read this; always false now
 local MIN_D, MAX_D = 0.5, 160.0
 local PITCH_MAX = math.pi * 0.5 - 0.02
 local FLOOR = 0.3               -- the camera never goes under the deck (frame y)
+-- At a Build Stand (build_host sets these): the floor is the stand's GROUND
+-- plane, not the deck, and the view is clipped by the world (hills, sheds).
+floorY = nil
+worldClip = false
+clipD = nil                     -- the drawn distance this frame (probes)
+function setWorldClip(on, floor) worldClip = on == true; floorY = floor end
 local DRAG_PX = 4
 local PHOTO_RATE = math.rad(9)
 local ORTHO_FOV = 0.12          -- the "orthographic" view is a long lens
@@ -151,7 +157,7 @@ local function set_from(C, P)
 end
 -- No look up so steep that the camera sinks under the deck.
 local function floor_clamp()
-  local lim = (S.P.y - FLOOR) / math.max(S.d, 1e-3)
+  local lim = (S.P.y - (floorY or FLOOR)) / math.max(S.d, 1e-3)
   if lim < 1 then
     local pmax = math.asin(clamp(lim, -1, 1))
     if S.pitch > pmax then S.pitch = math.max(-PITCH_MAX, pmax) end
@@ -522,7 +528,7 @@ function update(node, dt)
         if key("q") then mv = sub(mv, v(0, 1, 0)) end
         local sp = (params.speed or 8) * (key("shift") and 4 or 1) * dt
         C = add(C, mul(mv, sp))
-        if C.y < FLOOR then C.y = FLOOR end
+        if C.y < (floorY or FLOOR) then C.y = (floorY or FLOOR) end
         S.P = add(C, mul(f, S.d))
       else
         orbit(dx, dy, R.Q)
@@ -591,6 +597,55 @@ end
 -- leaves the cursor locked behind it.
 function onDestroy(node) cursor_assert(false) end
 
+-- THE WORLD CLIP (a Build Stand: work/standeditor/PLAN.md §2.1). The orbit
+-- camera outdoors is swept from the pivot toward where it wants to be: a
+-- ball (planet_camera's 0.25 m) that meets a hill, a shed or a craft stops it
+-- short, and a camera that still ends inside rock (terrain.query) is brought
+-- back along the line to the last point outside. The player's zoom (S.d) is
+-- kept: the view springs back when the obstacle passes. The drawn distance is
+-- smoothed in the frame (rule 7: exp, snapping on a jump over 2 m) with 0.3 m
+-- of hysteresis before it lets go. Both ends are read in this pass, through
+-- the frame as it stands now.
+local clip = { d = nil, held = false }
+function world_clip(fr, C, dt)
+  local f = viewBasis(S.yaw, S.pitch)
+  local want = S.d
+  local px, py, pz = fr.toWorld(S.P.x, S.P.y, S.P.z)
+  local cx, cy, cz = fr.toWorld(C.x, C.y, C.z)
+  local dx, dy, dz = cx - px, cy - py, cz - pz
+  local L = math.sqrt(dx * dx + dy * dy + dz * dz)
+  local room = want
+  if L > 1e-3 and spherecast then
+    local a = find and find("Astronaut")
+    local ok, hit = pcall(spherecast, vec3(px, py, pz), vec3(dx / L, dy / L, dz / L), 0.25, L + 0.3,
+      a and { ignore = { a } } or nil)
+    if ok and hit and hit.distance then room = math.min(room, math.max(MIN_D, hit.distance - 0.1)) end
+  end
+  if terrain and terrain.query and L > 1e-3 then
+    local q = terrain.query(px + dx / L * room, py + dy / L * room, pz + dz / L * room)
+    if q and q < 0.35 then
+      local lo, hi = 0.0, room
+      for _ = 1, 6 do
+        local mid = (lo + hi) * 0.5
+        local qm = terrain.query(px + dx / L * mid, py + dy / L * mid, pz + dz / L * mid)
+        if qm == nil or qm >= 0.35 then lo = mid else hi = mid end
+      end
+      room = math.max(MIN_D, lo)
+    end
+  end
+  -- hysteresis: once clipped, let go only with 0.3 m to spare
+  local target = room
+  if clip.held and room > (clip.d or want) and room < (clip.d or want) + 0.3 then target = clip.d end
+  clip.held = target < want - 1e-3
+  if not clip.d or math.abs(target - clip.d) > 2.0 or target < clip.d then
+    clip.d = target   -- (in at once: never inside the hill for a frame; out smoothly)
+  else
+    clip.d = clip.d + (target - clip.d) * (1 - math.exp(-12 * (dt or 0.016)))
+  end
+  clipD = clip.d
+  return sub(S.P, mul(f, clip.d))
+end
+
 function lateUpdate(node, dt)
   local b = B()
   local fr = b and b.frame and b.frame() or nil
@@ -599,6 +654,7 @@ function lateUpdate(node, dt)
   -- camera pass, or the view sits a frame's travel (several metres) off.
   if fr and not fr.identity and fr.refresh then fr.refresh() end
   local C = cam_pos()
+  if worldClip and fr and not fr.identity and fr.toWorld then C = world_clip(fr, C, dt) end
   local wx, wy, wz = C.x, C.y, C.z
   local px, py, pz = S.P.x, S.P.y, S.P.z
   local ux, uy, uz = 0, 1, 0

@@ -303,6 +303,126 @@ def hab_interior():
     return m
 
 
+# ── BUILD STAND (deep-space step 6, L1) ──────────────────────────────────────
+# A craft stand: a 0.90 m square steel base plate, bolted down at its corners,
+# with a short collar housing a telescoping column, and a 0.90 m square deck on
+# top with four rubber pads the craft rests on. The deck and its column are
+# ONE child node ("Deck") that slides along the base's up: the deck's height
+# is a per-part field (scripts/craft_stand.lua), 0.5-4.0 m, and the stand
+# lowers to STAND["low"] to let a wheeled craft down. The column is 3.9 m
+# long, so at the top setting it is still in its collar and at the bottom it
+# runs down into the ground through the collar (a real ground sleeve).
+# Its deck is the Deck node's own collider (a child box of it: a script that
+# moves the Deck moves it); 0.4 t of steel, like the addendum's.
+
+STAND = dict(base=0.90, deck=0.90, plate=0.03, collar=0.13, col_r=0.10, col_len=3.90, low=0.28, default=1.0)
+
+
+def stand_base():
+    m = CModel(seed=81)
+    sh = Shell()
+    b, t = STAND["base"], STAND["plate"]
+    bx(m, "Steel", DARK, (0, t / 2, 0), (b, t, b), sh=sh)
+    # the collar the column runs in, and its ground sleeve below the plate
+    m.color = GREY
+    tube(m, "Steel", (0, t, 0), (0, STAND["collar"], 0), 0.135, segs=20, uv_m=1.0)
+    tube(m, "Steel", (0, STAND["collar"], 0), (0, STAND["collar"] + 0.02, 0), 0.155, segs=20, uv_m=1.0)
+    m.color = DARK
+    tube(m, "Steel", (0, -0.6, 0), (0, -0.002, 0), 0.12, segs=16, caps=False, uv_m=1.0)
+    sh.add((0, STAND["collar"] / 2 + 0.01, 0), (0.30, STAND["collar"] + 0.02, 0.30))
+    # four gussets from the plate to the collar, on the diagonals (clear of the gearbox)
+    for a in range(4):
+        c, s = math.cos(a * math.pi / 2 + math.pi / 4), math.sin(a * math.pi / 2 + math.pi / 4)
+        M = np.array([[c, 0, -s], [0, 1, 0], [s, 0, c]])
+        bx(m, "Steel", GREY, (0.25 * c, t + 0.045, 0.25 * s), (0.24, 0.09, 0.02), M=M)
+    # corner anchors (a pad and its bolt) and the safety-yellow corner marks
+    for sx in (-1, 1):
+        for sz in (-1, 1):
+            cx, cz = sx * (b / 2 - 0.10), sz * (b / 2 - 0.10)
+            bx(m, "Steel", GREY, (cx, t + 0.006, cz), (0.12, 0.012, 0.12))
+            m.color = LIGHT
+            tube(m, "Steel", (cx, t + 0.012, cz), (cx, t + 0.05, cz), 0.018, segs=6, uv_m=4.0)
+            bx(m, "Steel", SAFETY, (sx * (b / 2 - 0.03), t + 0.002, sz * (b / 2 - 0.22)), (0.05, 0.004, 0.30))
+            bx(m, "Steel", SAFETY, (sx * (b / 2 - 0.22), t + 0.003, sz * (b / 2 - 0.03)), (0.30, 0.004, 0.05))
+    # the jack's gearbox on the collar's +X side and its crank
+    bx(m, "Steel", SAFETY, (0.24, 0.10, 0), (0.16, 0.12, 0.14))
+    m.color = DARK
+    tube(m, "Steel", (0.32, 0.10, 0), (0.37, 0.10, 0), 0.016, segs=8, uv_m=4.0)
+    tube(m, "Steel", (0.37, 0.10, 0), (0.37, 0.10, 0.14), 0.012, segs=8, uv_m=4.0)
+    m.color = RUBBER
+    tube(m, "Rubber", (0.37, 0.10, 0.14), (0.43, 0.10, 0.14), 0.02, segs=8, uv_m=4.0)
+    return m, sh
+
+
+def stand_deck():
+    """The deck and its column, in a frame whose y = 0 is the deck's top (the
+    rubber pads the craft rests on)."""
+    m = CModel(seed=82)
+    m.ground = False
+    sh = Shell()
+    d = STAND["deck"]
+    # the plate (top at -0.015, under the pads), its edge angle, two beams under it
+    bx(m, "Steel", GREY, (0, -0.045, 0), (d, 0.06, d), sh=sh)
+    for s in (-1, 1):
+        bx(m, "Steel", DARK, (0, -0.045, s * (d / 2 + 0.006)), (d + 0.024, 0.07, 0.012))
+        bx(m, "Steel", DARK, (s * (d / 2 + 0.006), -0.045, 0), (0.012, 0.07, d))
+        bx(m, "Steel", DARK, (s * 0.18, -0.115, 0), (0.08, 0.08, d - 0.1))
+        bx(m, "Steel", DARK, (0, -0.112, s * 0.18), (d - 0.1, 0.074, 0.08))
+        # safety-yellow edge stripes
+        bx(m, "Steel", SAFETY, (0, -0.0135, s * (d / 2 - 0.04)), (d - 0.1, 0.003, 0.05))
+    # the rubber pads the craft rests on (their tops are the deck's top)
+    for sx in (-1, 1):
+        for sz in (-1, 1):
+            bx(m, "Rubber", RUBBER, (sx * 0.215, -0.0075, sz * 0.215), (0.38, 0.015, 0.38))
+    # the column: a flange under the beams, then 3.9 m of tube with a height
+    # band every half metre (painted yellow, so the setting reads at a glance)
+    m.color = GREY
+    tube(m, "Steel", (0, -0.157, 0), (0, -0.177, 0), 0.16, segs=20, uv_m=1.0)
+    top, L, r = -0.177, STAND["col_len"], STAND["col_r"]
+    m.color = LIGHT
+    tube(m, "Steel", (0, top - L, 0), (0, top, 0), r, segs=16, uv_m=1.0)
+    for k in range(1, 8):
+        y = top - k * 0.5
+        m.color = SAFETY
+        tube(m, "Steel", (0, y - 0.02, 0), (0, y + 0.02, 0), r + 0.003, segs=16, caps=False, uv_m=4.0)
+    sh.add((0, top - L / 2, 0), (2 * r, L, 2 * r))
+    return m, sh
+
+
+def write_stand(dry):
+    """The stand's prefab: the base (root, its collider boxes as "Wall N"), the
+    Deck child at the default height, and the deck's collider boxes as ITS
+    children ("Deck Wall N"), so moving the Deck moves its colliders."""
+    bm, bsh = stand_base()
+    dm, dsh = stand_deck()
+    rc, lo, hi = centre(bm)
+    dc, dlo, dhi = centre(dm)
+    seat = rc[1]
+    deck_off = -dc[1]                 # the deck's top over the Deck node's origin
+    at = np.array([0.0, STAND["default"] - deck_off - seat, 0.0])
+    folder = "models/base/parts"
+    nodes = [node_mesh("BaseStand", f"{folder}/stand_base.glb", bm, (0, 0, 0), None, tags=["base_part"]),
+             node_mesh("Deck", f"{folder}/stand_deck.glb", dm, at, 0)]
+    for i, (c, s, q) in enumerate(bsh.boxes):
+        nodes.append(node_box(f"Wall {i + 1}", np.asarray(c) - rc, s, q, 0))
+    for i, (c, s, q) in enumerate(dsh.boxes):
+        nodes.append(node_box(f"Deck Wall {i + 1}", np.asarray(c) - dc, s, q, 1))
+    print(f"BaseStand      seat {seat:+.4f}  deck_off {deck_off:+.4f}  base box {f3(hi - lo)}  deck box {f3(dhi - dlo)}"
+          f"  tris {bm.tris() + dm.tris()}  colliders {len(bsh.boxes) + len(dsh.boxes)}")
+    if dry:
+        return seat, deck_off
+    for (glb, model) in (("stand_base.glb", bm), ("stand_deck.glb", dm)):
+        zcheck(model, glb, verbose=True)
+        gen_base.write_glb(model.shifted(np.zeros(3)), os.path.join(ROOT, folder, glb))
+    with open(os.path.join(PREFABS, "BaseStand.prefab.ron"), "w") as f:
+        f.write("// BUILD STAND — a 0.9 m deck on a telescoping column (BASE section; scripts/craft_stand.lua).\n"
+                "// The Deck child (and its \"Deck Wall\" colliders) slides along up with the stand's height.\n"
+                "// Written by tools/gen_base_parts.py — edit the generator, not this file.\n[\n")
+        f.write("".join(nodes))
+        f.write("]\n")
+    return seat, deck_off
+
+
 # ── BUILD KIT (the item) ─────────────────────────────────────────────────────
 # A rugged field tablet in a hard carry frame: 0.30 x 0.22 x 0.035 m with
 # rubber corner bumpers and a top carry handle, 1.6 kg. Carried by the handle
@@ -435,6 +555,7 @@ def main():
     write_part("BaseHab", "SURFACE HAB — a 4 x 6 m pressure can on saddles; the Shell child is its future rb.shell.",
                ("hab_frame.glb", hm), hsh,
                [("Shell", "hab_shell.glb", hab_shell()), ("Interior", "hab_interior.glb", hab_interior())], dry)
+    write_stand(dry)
     km = build_kit()
     write_part("ItemBuildKit", "BUILD KIT — the Engineer's field tablet, carried by its handle (scripts/field_builder.lua).",
                ("build_kit.glb", km), None, [], dry, folder="models/items")

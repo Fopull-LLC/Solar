@@ -1,0 +1,22 @@
+// CRAFT ORIENT LIBRARY — scripts/craft_orient.lua (which way up a craft goes,
+// how it sits on a Build Stand, the stand's CHECK rows). Spawned by the builder
+// and the stand host when the scene carries no node running it; reached with
+// findScript("craft_orient").
+[
+    (
+        name: "CraftOrientLib",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [
+            (
+                kind: "craft_orient",
+                enabled: true,
+                params: [],
+            ),
+        ],
+    ),
+]

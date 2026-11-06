@@ -470,7 +470,7 @@ local function check_rows(B, s, out)
     out[#out + 1] = { "row", key = "lok", w = "100%", h = "fit", gap = 7, pad = 0, align = "center",
       { "box", key = "lamp", style = "hud/lampOn", w = 9, h = 9 },
       { "text", key = "t", style = "panel/cellStrong", w = "grow", h = "fit", wrap = true,
-        text = "Nothing to report. Press LAUNCH." } }
+        text = (B.launchSite and B.launchSite() == "stand") and "Nothing to report. Press COMMISSION." or "Nothing to report. Press LAUNCH." } }
   end
   for i, r in ipairs(warn) do check_row(B, r, i, i <= CHECK_FULL, out) end
   if #note > 0 then
@@ -483,8 +483,40 @@ function checkHoverTick(B)
   if st.chk and B.checkHighlight then B.checkHighlight(st.chk.uids, st.chk.tone) end
 end
 
+-- THE CRAFT'S KIND (bp.kind; work/standeditor/PLAN.md §3.4) and the ORIENT
+-- keys: what the craft is (Auto reads it), and turning the whole craft so it
+-- stands the way that kind should — wheels down, nose to the front, level.
+local KIND_LABEL = { auto = "AUTO", rocket = "ROCKET", plane = "PLANE", rover = "ROVER", probe = "PROBE", station = "STATION", boat = "BOAT" }
+local function kind_rows(B, out)
+  if not (B.craftKind and B.setCraftKind) then return end
+  out[#out + 1] = sublabel("kdh", "CRAFT KIND")
+  local cur = B.craftKind()
+  local row
+  for k, m in ipairs(B.CRAFT_KINDS or { "auto", "rocket", "plane", "rover", "probe", "station", "boat" }) do
+    if (k - 1) % 4 == 0 then
+      row = { "row", key = "kd" .. k, w = "100%", h = 22, gap = 3, pad = 0, align = "center" }
+      out[#out + 1] = row
+    end
+    row[#row + 1] = { "button", key = m, style = "panel/choice", selected = cur == m, w = "grow", h = 22,
+      text = KIND_LABEL[m] or m, textAlign = "center", textValign = "center",
+      tooltip = m == "auto" and "Read from the parts (wings, wheels, engines)" or ("It is a " .. m .. ": ORIENT stands it that way"),
+      onClicked = function() B.setCraftKind(m) end }
+  end
+  out[#out + 1] = { "row", key = "orr", w = "100%", h = 22, gap = 3, pad = 0, align = "center",
+    { "button", key = "wd", style = "panel/secondary", w = "grow", h = 22, text = "WHEELS ▾", textAlign = "center", textValign = "center",
+      tooltip = "Turn the whole craft so its wheels are down   ·   CTRL+Z undoes it",
+      onClicked = function() B.cmd("orient", { wheelsDown = true }) end },
+    { "button", key = "nl", style = "panel/secondary", w = "grow", h = 22, text = "NOSE →", textAlign = "center", textValign = "center",
+      tooltip = "Turn it about up so its nose points to the front",
+      onClicked = function() B.cmd("orient", { noseLevel = true }) end },
+    { "button", key = "au", style = "panel/secondary", w = "grow", h = 22, text = "AUTO", textAlign = "center", textValign = "center",
+      tooltip = "Wheels down and nose to the front (a rover), level (a plane), upright (a rocket)",
+      onClicked = function() B.cmd("orient", { auto = true }) end } }
+end
+
 local function ctrl_rows(B, out)
   if not (B.ctrlMode and B.cmd) then return end
+  kind_rows(B, out)
   local c = B.ctrlMode() or {}
   local labels, tips = c.labels or CTRL_SHORT, c.tips or {}
   out[#out + 1] = sublabel("cmh", "CONTROL MODE")

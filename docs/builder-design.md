@@ -1125,6 +1125,34 @@ How it works:
 | Two copies of manager scripts (company, research, electronics) when overlaid on `system.ron` | the overlay scene carries none: the builder finds the system scene's (`findScript`). In standalone `builder.ron` they come from a sub-tree the overlay strips (WP6 builds two variants from one file, or `build_host` disables duplicates) |
 | A save mid-build | the stand is saved to `shipyard.crafts[current]` on every change (debounced 2 s), so a crash or quit loses nothing |
 
+### 9.5 A second host: the Build Stand
+
+The same overlay opens outdoors on a Build Stand
+(`build_host.enter{ stand = { sid, uid } }`; docs/base-building.md §10 has the
+details). The builder never asks where it is, except through
+`builder.hostContext()`:
+- it is nil in the VAB;
+- at a stand it is the host's table `{ kind = "stand", world, baseline, afford, escape, commission, info, version }`.
+
+What changes at a stand:
+- `launchWorld()` reads the stand's world.
+- `launchSite()` is "stand". LAUNCH reads COMMISSION ▸, the PAD | RUNWAY latch
+  is hidden (`launchSiteChoices()` is empty), and `doLaunch` hands the craft
+  to the host (`standCommission`).
+- A bare ESC with nothing left to back out of leaves (`doLeave`). The VAB's
+  ESC still never leaves.
+- COST on the status bar is the diff since the last commit.
+- A placement the agency can't pay for is refused (`afford`).
+- The CHECK carries the stand's rows (`checkHook("stand", craft_orient.standRules)`)
+  and `ctx.stand`.
+
+Shared with the VAB:
+- the ORIENT keys (row 2: ↻X ↻Y ↻Z AUTO; the CRAFT tab: WHEELS ▾, NOSE →,
+  AUTO), `cmd("orient", …)`, one history step, turning the whole craft about
+  its centre of mass and setting it down on the floor;
+- the CRAFT KIND chooser (`bp.kind`);
+- A3's LAY IT LEVEL fix.
+
 ---
 
 ## 10. A competitive look

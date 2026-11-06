@@ -17,14 +17,14 @@ S=${WORK:-${TMPDIR:-/tmp}/solar-buildkit}
 eng=${1:?usage: buildkitprobe.sh <engine> [modes]}; shift
 mkdir -p $S/tools
 cp $HERE/bench.sh $HERE/table.py $HERE/perfbench.lua $S/tools/
-python3 - "$S/tools/perfbench.lua" "$HERE/vfxprobe_modes.lua" "$HERE/buildkitprobe_modes.lua" <<'PY'
+python3 - "$S/tools/perfbench.lua" "$HERE/vfxprobe_modes.lua" "$HERE/buildkitprobe_modes.lua" "$HERE/standeditprobe_modes.lua" <<'PY'
 import sys
-p, m1, m2 = sys.argv[1], open(sys.argv[2]).read(), open(sys.argv[3]).read()
+p, m1, m2 = sys.argv[1], open(sys.argv[2]).read(), open(sys.argv[3]).read() + open(sys.argv[4]).read()
 s = open(p).read()
 i = s.index('-- ── main ──')
 s = s[:i] + m1 + m2 + s[i:]
 s = s.replace('    elseif MODE == "plane" then run_plane()',
-              '    elseif MODE == "plane" then run_plane()\n    elseif MODE == "buildkit" then BK.run()')
+              '    elseif MODE == "plane" then run_plane()\n    elseif MODE == "buildkit" then BK.run()\n    elseif MODE == "stand" then BK.run_stand()\n    elseif MODE == "standedit" then BK.run_standedit()')
 open(p, 'w').write(s)
 PY
 rm -rf $S/proj/save/user/buildshots

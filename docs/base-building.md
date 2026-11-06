@@ -6,8 +6,10 @@ click to buy it, ship it out and set it down. This doc covers **deep-space
 steps 4 and 5**: addendum items K1–K10, K13 and N1. Step 4 opened the kit and
 placed single parts; step 5 (§7) snaps parts to each other, lays them on a
 grid, levels the ground and casts footings, judges every placement in full,
-keeps an undo ring and takes parts down for a refund. Steps 6–8 (stands, the
-tower, the base grid) build on the hooks named at the end.
+keeps an undo ring and takes parts down for a refund. Step 6 (§9) adds the
+Build Stand: a craft put on it, commissioned into a live craft, released,
+driven off and returned to it (L1, L2, L4). Steps 7–8 (the tower, the base
+grid) build on the hooks named at the end.
 
 Read `docs/positions-and-frames.md` first. Everything here is kept in a body's
 frame.
@@ -89,6 +91,7 @@ frame.
 | Pad Plate | `BasePadPlate` | 4 × 4 m precast slab, 0.30 m | 11.5 t | $900 | none |
 | Equipment Shed | `BaseShed` | 3.0 × 2.4 × 2.6 m steel shelter on skids | 1.6 t | $1,400 | `subShape`: its `Wall N` boxes |
 | Surface Hab | `BaseHab` | 4 m × 6 m pressure can on saddles | 7.5 t | $6,500 | `shell`: its `Shell` child mesh |
+| Build Stand (step 6) | `BaseStand` | 0.9 m deck on a telescoping column, 0.5–4.0 m | 0.4 t | $650 | none |
 
 - **Every BASE part is `fieldOnly`.** The VAB never lists them, because the
   builder doesn't extend its registry with `parts_base`. `register(REG,
@@ -217,8 +220,9 @@ struct.<id> = { id, b = body, x, y, z (body-relative ground point), ux, uy, uz (
                 fx, fy, fz (front = the parts' +Z), n, by, t (agency clock), d,
                 bp = { { uid, id, x, y, z, yaw, pitch, roll, parent, att, sym, mir, stage,
                          paid = { cost, ship, foot, total, t, supplier, by },   -- step 5
-                         ft = { d, hx, hz } } },                                -- step 5: a footing
-                st = { [uid] = {} }, paid = { … the founding part's … } }
+                         ft = { d, hx, hz },                                    -- step 5: a footing
+                         h, lo } },                                             -- step 6: a stand's deck
+                st = { ["<uid>"] = { … } }, paid = { … the founding part's … } }   -- st: a part's state (step 6)
 ```
 
 - **Step 5: parts join and leave.** `addPart(id, part)` and
@@ -395,20 +399,15 @@ open, `pose` does one cell-index lookup when the cursor crosses a 0.5 m cell
 (memoised), and `validity` casts 9 terrain rays when the snapped pose
 changes. A snapped pose only moves when the cursor crosses a grid cell.
 
-## 8. Hooks for step 6 (L1–L2, L4: craft stands)
+## 8. Step 5's hooks (used by step 6, §9)
 
-- **A stand is a BASE part with a deck and a height** (L1). It can be another
-  `tile` (stands edge to edge) or `deck` part in `parts_base`, which gets
-  snapping, footings, the ring and deconstruct for free. Its height (L1's
-  slider) is a per-part `bp` field like `ft`.
-- **`field_builder.place(sid, partId, pose, payer)`** takes `pose.lx/ly/lz/yaw`
-  in a structure's frame. A craft under construction (L2) can be a structure
-  part whose `st[uid]` holds the blueprint.
-- **`structures.partOfNode` / `nodeOf` / `partsNear`** are the lookups a
-  stand's "build here" needs.
-- **`placement.overlapObb`** becomes EN12's one call; `ghost.apply` becomes
-  EN10's.
-- **Open from step 5:**
+- A stand is a BASE part (`onDeck`, so it stands on the ground or on a Pad
+  Plate), and gets snapping, footings, the ring and Deconstruct for free.
+  Its height is a per-part `bp` field (`h`), like `ft`.
+- `structures.partOfNode` / `nodeOf` / `partsNear` are the lookups the stand
+  and Return to stand use.
+- `placement.overlapObb` becomes EN12's one call; `ghost.apply` becomes EN10's.
+- **Still open from step 5:**
   - the mineral-vein keep-out;
   - pitch and roll for parts that may lie down;
   - a "crew in the footprint" check, which only covers bodies with colliders
@@ -417,3 +416,295 @@ changes. A snapped pose only moves when the cursor crosses a grid cell.
 - **Machines and power (M6, N4):** a structure whose parts carry electronics
   becomes an anchored assembly with a 10 Hz power step. Static prefabs stay
   for slabs and sheds.
+
+## 9. Step 6: the Build Stand (L1, L2, L4; `scripts/craft_stand.lua`)
+
+### The stand (L1)
+
+- **A BASE part** (`parts_base` `stand`, prefab `BaseStand`, 0.4 t, $650):
+  - a 0.9 m steel base plate bolted down at its corners;
+  - a collar with a ground sleeve, a jack gearbox and its crank;
+  - a telescoping column under a 0.9 m deck with four rubber pads. The
+    column has a yellow band every half metre.
+- **Built 1:1** in `tools/gen_base_parts.py` (`write_stand`). The deck and its
+  column are one child node, `Deck`, and its colliders ("Deck Wall N") are
+  that node's own children. Moving the Deck moves them.
+- **The deck height is the part's `h`** (0.5–4.0 m in 0.1 m steps; 1.0 m
+  when it is placed, from `parts_base` `fields`).
+  - `lo = true` means it is lowered to 0.28 m after letting a wheeled craft
+    down.
+  - When the stand's node lands, the Deck child is put at `h − deckOff − seat`
+    (`craft_stand.spawned`).
+- **Why 0.9 m, not the addendum's 1.2 m.** A small rover's tyres stand 0.5 m
+  either side of its centre line, so a 1.2 m deck would sit under their
+  corners. A 0.9 m deck fits between them.
+- **Placed with the Build Kit** like any BASE part: on the ground (on the grid,
+  with a footing on a slope) or on a Pad Plate's deck. The undo ring and
+  Deconstruct work on it, but **not while a craft is on it**:
+  `field_builder.removalBlocked` asks the part's script (`canRemove`), and the
+  menu row greys out with the reason.
+- **Parts with behaviour, in general.** A `parts_base` entry may name a
+  `script`. `structures.lua` calls that script's `spawned(rec, part, node)` as
+  the part's node lands and `gone(sid, uid)` as it goes. It also adds
+  `partState` / `setPartState` (`rec.st[tostring(uid)]`) and `respawnPart`.
+  The tower (step 7) and machines (N4) use the same hooks.
+
+### A craft on the stand (L2)
+
+- **The source is the VAB's library** (the stand's menu: Truck a saved craft out (as is)…; the editor, §10, is the main way).
+  These are the launch-format blueprints `builder.make_blueprint` writes
+  (`user://library/<slot>/<slug>.json`). `craft_stand.readDesign` decodes
+  them the way `builder.libDecode` does.
+- **The price** is the hull's (the VAB's `build_cost`), plus **one truck**:
+  shipping at 10 % + $50 on the whole hull (N1). It is charged when the craft
+  goes on, through `company.spend`, and the ledger says "on a Build Stand".
+- **Kept in the save:**
+  - the blueprint under its own key, `stand.bp.<sid>.<uid>` (the save holds
+    four tables deep; a structure record is already three);
+  - the stand's part state: `{ s = "built"|"held", key, name, n, cost, ship,
+    total, t, by, ret, wheeled }`.
+- **Where it rests:**
+  - its centre of mass (the parts' masses in x and z) over the deck's centre;
+  - its front along the stand's front (vessel_spawner's `craft_front` rule:
+    a cockpit's nose, then a rover body, a seat, the command part);
+  - its **belly**, the lowest part over the deck (`bounds`), 2 cm over the
+    pads.
+- **The stand raises itself to what the craft needs.** Whatever hangs below
+  the belly (tyres, gear, legs) must clear the ground by 10 cm, plus however
+  far the ground under the craft's footprint rises over the stand's base (five
+  rays, `needFor`). A craft that would need more than 4 m is refused, and so
+  is a craft nothing can command or one that rests on nothing.
+- **Drawn, not simulated.** The parts are display copies: `spawn body = false`,
+  the VAB's `prefabs/vis/` variants where they exist. They hang under one
+  `StandCraft` node parented to the planet at the vessel's pose. There is no
+  body and no script, so **an idle craft on a stand costs nothing a tick.**
+- **Clear the stand** gives the parts back: all of it within a minute, the
+  price after (`base_economy.deconstructRefund`). A craft that came back to
+  the stand (below) returns what recovering it was worth.
+- **The deck's height** steps from the menu (Raise / Lower the deck, 0.1 m a
+  click). It never goes under what the craft on it needs. (The world's menu
+  has no drag slider; Alt+scroll is not bound yet.)
+
+### Commission, release, return (L4)
+
+- **Commission** (Engineer, a job of 4 s + 0.15 s a part, capped at 20 s):
+  - **The checks:** something aboard commands it (a pod, a seat or a probe
+    core), the stand is in the scene, and nothing is in the craft's box from
+    its belly up (`placement.overlapObb`, past the stand and the ground).
+  - **The craft is made by the fleet's own rebuild path.** A `Vessel` root is
+    spawned at the pose, the blueprint is handed over as
+    `dock.handoff.<id>` (with `flown = false, held = true`), the parts are
+    spawned as its children, then `assembly.rebuild` and
+    `assembly.setAnchored(true)`.
+  - **It is seated by its real colliders:** the RigidBody half-extents
+    replace the blueprint's boxes for the belly.
+  - **It is a normal vessel**, with its controller, fuel, charge and seats.
+    It is **held**: each frame while the crew is within 600 m, its
+    body-relative pin is re-applied (`assembly.teleport`), as the spawner
+    does for a pad.
+  - **The fleet board leaves it to the stand.** The handoff's `held` sets
+    vessel_controller `leftPad = false` and `standHeld = true`, so
+    `fleetSync` skips it. On a reload the stand puts it back (`spawned` sees
+    `s = "held"`), so it is never built twice. `standHeld` also keeps
+    flight_ops from taking the stand's radius for the launch pad's.
+- **Release:**
+  - **A craft on wheels or gear is jacked down.** The craft and the deck go
+    down together at 0.35 m/s, `vessel_spawner.seatShift` measuring how far
+    is left (rays under its lowest parts, looking past the craft, the crew
+    and the stand). The deck stops at 0.28 m and the craft goes on to its
+    wheels. Then the stand is made again lowered (`respawnPart`: its
+    colliders are made down there), and `releaseClamps` lets it go.
+  - **Anything else is let go where it stands** (a rocket lifts off the deck).
+  - **SPACE in the cockpit** releases a held craft as it releases a pad's
+    clamps. On wheels, the stand then drops its deck away.
+  - `releaseClamps` skips the rover's roll-out beside the pad
+    (`r2Rollout`) for a craft from a stand: it is already on its wheels.
+  - Released, it is a craft in the world, and the fleet board keeps it.
+- **Return to stand** (the craft's own menu; Engineer; a 4 s job): the craft
+  must be landed, stopped and empty, with any of its parts within 3 m of an
+  empty stand's deck.
+  - It is put back on the stand as an uncommissioned craft. Its records go
+    through `electronics.packRecord`, keeping its fuel, charge, wear,
+    groups, controls and the parts it lost.
+  - Its worth is `recoverValue` (85 % of its parts by their health); that is
+    what Clear pays for it.
+  - The live craft goes, and so does its fleet record (`flight_ops.forgetNodes`).
+  - Commission makes it a craft again, with the fuel it had. This is the
+    field Repair Bay's first half; refits come with L3.
+
+### Cost
+
+- **An empty stand, or one with a craft not commissioned:** static prefabs
+  and display nodes. `craft_stand.update` returns at once when nothing is
+  held; the menu's provider registration is looked up at most once a second.
+- **A held craft:** the vessel's own costs (a dormant controller), plus one
+  `assembly.teleport` a frame while the crew is near.
+- **A release** casts its `seatShift` rays every 0.25 s while it comes down.
+- The probe's numbers are in step 6's NOTES.
+
+### The hook for L3 (step 17: the detail editor at a stand)
+
+- `craft_stand.framePose(sid, uid)` is the deck as a body-frame pose:
+  `{ G, R, U, F, h, top }`. `build_host.enter{ frame = stand }` puts its
+  BuildFrame there.
+- `craft_stand.blueprint(sid, uid)` is the craft to load into the builder.
+  `putOn(sid, uid, bp, opts)` takes the edited one back (L3's diff charging
+  goes in `opts.paid`).
+- `bp.kind` rides in the blueprint untouched, through the library, the stand
+  key and the handoff.
+
+### Tests and the probe
+
+- `luajit solar/tests/smoke_stand.lua` (60 checks) runs on the real
+  `parts_registry` rover, with the real `structures`, `field_builder` and
+  `base_economy` and a stub craft controller.
+- `tools/perf/buildkitprobe.sh <engine> stand` (PATCHES=funds.patch) runs the
+  whole flow in the engine:
+  1. the VAB's rover is saved to the library;
+  2. a stand is placed with the kit (its deck where its record says, a ray
+     landing on it);
+  3. the rover goes on from the stand's menu (charged, drawn), and the deck is
+     lowered to what it needs;
+  4. Commission (anchored, six parts, held within 2 cm while the planet moves,
+     off the fleet board);
+  5. Release (jacked down onto its wheels, the stand lowered, the clamps off);
+  6. the rover is boarded, driven 14 m off and backed up to the stand;
+  7. Return to stand from the rover's menu;
+  8. commissioned again, saved and reloaded (held on its stand again, once);
+  9. released once more.
+
+  Look for `BK PASS|FAIL` and `BK RESULT stand`.
+
+## 10. The editor at a stand (L3 pulled forward; work/standeditor/PLAN.md)
+
+**Build here** is the stand's first menu row (Engineers; any stand that isn't
+holding a commissioned craft). It opens the real VAB overlay (the camera, the
+parts column, the inspector, staging, the CHECK, symmetry, undo, the library)
+on the deck. **ESC** with nothing left to back out of, or LEAVE, saves the
+work and steps back to the Engineer. "Truck a saved craft out (as is)…" stays
+as the quick path.
+
+### The host (`build_host.enter{ stand = { sid, uid } }`)
+
+- **The BuildFrame is a child of the stand's PLANET**, not of the VAB. It is
+  posed every frame from `craft_stand.framePose` (body frame: planets only
+  translate), so nothing world-space is kept.
+  - +Y is the stand's up and +X (the builder's craft front) is the stand's
+    front (`craft_stand.vesselAxes(R, U, F, 1, 0)`), so a rover built facing
+    the builder's front faces the stand's front when commissioned.
+  - The builder's floor (frame y 0.11) sits at `deck + clear − fo`, where `fo`
+    is how far the craft's belly sits over its lowest part
+    (`craft_orient.floorOffset`). A rover built with its tyres on the floor
+    therefore has its body resting on the deck, as Commission will seat it.
+- **The deck raises itself.** At most twice a second, only when the craft
+  changed and never during a drag, the host asks `craft_stand.needFor` (which
+  counts the ground under the footprint) and raises the deck to that height
+  (`setHeight`). It never lowers it while building. Past 4 m the CHECK blocks
+  (S6).
+- **No VAB dressing:** no lean, no fade (gated on `hostKind`, not on whether
+  `vab_fade` exists).
+- **The world's numbers:** `builder.hostContext().world` gives the stand's
+  world (g from μ/r²), so TWR, Δv, jets and the air are read for here.
+- **The astronaut** is pinned where they stood and stays **in view**. A hit
+  (`crew.lastHit`) saves the work and exits.
+- **The VAB's keys are untouched.** `shipyard.current / blueprint / lockerPlan
+  / site / kit` are stashed on entry and put back on exit. The autosave goes
+  to the stand (`craft_stand.saveWip`), never the library; SAVE / Ctrl+S
+  still files the craft in the library.
+
+### The camera (`builder_camera`)
+
+- **The floor** (`floorY`) is 0.3 m over the stand's ground plane, not the
+  deck.
+- **The world clip** (`setWorldClip`):
+  - a 0.25 m spherecast from the pivot toward the camera stops it 0.1 m
+    short of a hill, a shed or a craft;
+  - a camera still inside rock (`terrain.query`) is brought back along the
+    line;
+  - the drawn distance is smoothed in the frame (in at once, out at
+    exp 12/s, 0.3 m hysteresis), and the player's zoom is kept.
+- **The entry framing** is from where the Engineer stood, looking at the
+  deck.
+
+### Orientation (`scripts/craft_orient.lua`, shared with the VAB)
+
+- **A pure rulebook:**
+  - `kindOf`: a set `bp.kind` wins, then craft_mode.autoOf;
+  - `upAxis`:
+    - a rover: the normal of its wheel plane, away from the wheels (a bike:
+      square to its wheel line);
+    - a plane: its gear plane, else its wings;
+    - a rocket: the command part's +Y;
+  - `noseAxis`: a cockpit's +Y, then a rover body's or a seat's +X, then the
+    command part's;
+  - `basisFor` gives nil within 5°, so a craft that already stands right is
+    left alone.
+- **`cmd("orient", { axis = "x"|"y"|"z", sign } | { auto } | { wheelsDown } |
+  { noseLevel })`** is one history step:
+  - it turns every part about the craft's centre of mass;
+  - then sets the lowest box on the floor, centred on it.
+- **Where it is in the UI:**
+  - toolbar row 2: ORIENT ↻X ↻Y ↻Z AUTO (Shift: the other way);
+  - the CRAFT tab: CRAFT KIND (AUTO, ROCKET, PLANE, ROVER, PROBE, STATION,
+    BOAT → `bp.kind`) and WHEELS ▾, NOSE →, AUTO;
+  - the CHECK's A3 has a LAY IT LEVEL fix.
+- **OPEN at a stand** turns the craft it opens AUTO and says so. Ctrl+Z keeps
+  it as saved.
+
+### The site in the CHECK (`checkHook("stand", craft_orient.standRules)`)
+
+`ctx.stand` is filled by the host at most twice a second. `ctx.site` reads the
+release: a craft on wheels as the runway, anything else as the pad.
+
+| Row | Severity | When |
+|---|---|---|
+| S1 | warn | the ground under the stand tilts more than 3° (rocket) or 12° (rover) |
+| S2 | note | built on another world: g and the air |
+| S3 | warn | a craft on wheels: something within 10 m ahead (spherecast; a structure is named) |
+| S4 | warn | a craft that lifts off: a structure within 6 m |
+| S5 | warn r0 | the Engineer in the craft's box: COMMISSION refuses |
+| S6 | block | the stand can't hold it (`needHeight`'s sentence) |
+| S7 | block | off the home world with parts added |
+
+### Money (`craft_stand.commitQuote` / `payFor`)
+
+- **Nothing is charged while editing.** COST shows the diff since the last
+  commit, and a part that would take it past the budget is refused at
+  placement.
+- **On every exit** (ESC, LEAVE, COMMISSION):
+  - parts added are charged once, with one truck (10 % + $50);
+  - parts taken off come back by the deconstruct rule: all of it, their share
+    of the truck included, within a minute of the last commit, otherwise the
+    price;
+  - a part whose price changed counts as off and on again;
+  - no change costs $0.
+- **What is paid for** is kept beside the blueprint (`bp.committed`, uid →
+  cost). The hint says what was charged.
+- **Off the home world** `payFor` refuses added parts (the step-13 hook).
+
+### COMMISSION
+
+The toolbar's LAUNCH reads COMMISSION ▸.
+1. `launchCheck`: a stand block refuses, and S5 refuses; warnings arm the
+   two-press confirm.
+2. The craft is saved on the stand, the diff is charged, and the overlay
+   comes down.
+3. `craft_stand.commission` follows at once: the same held craft as step 6.
+
+### Cost
+
+- The editor adds `pin_frame` (one `partPose`) a frame, one spherecast and up
+  to seven `terrain.query`s for the camera, and the site's few rays at
+  ≤ 2 Hz.
+- An idle WIP on a stand is the same static display copy as step 6: nothing a
+  tick.
+- Exit destroys the frame and every part under it.
+
+### Tests and the probe
+
+- `luajit solar/tests/smoke_stand_editor.lua` (74 checks) covers orientation,
+  deckFit, commitQuote/payFor, WIP, the S rows and the host's flow on a stub
+  engine.
+- `tools/perf/buildkitprobe.sh <engine> standedit` (PATCHES=funds.patch,
+  `tools/perf/standeditprobe_modes.lua`) writes pictures se1..se12 and logs
+  `BK RESULT standedit`.

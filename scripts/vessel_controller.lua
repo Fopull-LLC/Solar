@@ -108,6 +108,9 @@ flown = { air = 0.0, alt0 = nil }  -- the latch's own state (see fixedUpdate)
 -- parked 100 m out used to be gone after a reload). A craft that arrived any
 -- other way (restored, undocked) has left it by definition.
 leftPad = true
+-- Held in a Build Stand's clamps (craft_stand.lua): not on a launch pad, so
+-- flight_ops does not take the stand's radius for the pad's.
+standHeld = false
 -- WHERE THE CREW SITS, apart from what COMMANDS the craft. `pod_uid` (below) is
 -- the command part: the keep-side of every staging cut, the part whose loss
 -- loses the craft, the rover's front. The crew can sit in any crewed part
@@ -6942,6 +6945,10 @@ function start(node)
     -- A craft saved before it ever flew (released on the pad, a rover driven
     -- off it) is still one that hasn't: no recovery refund for a launch.
     if handoff.flown == false then hasFlown = false end
+    -- A craft commissioned on a Build Stand (craft_stand.lua) wakes held in
+    -- the stand's clamps: it has not left its spot, so the fleet leaves it to
+    -- the stand until it is released (releaseClamps sets leftPad).
+    if handoff.held then leftPad, standHeld = false, true end
     log(string.format("%s: undocked module online (%d parts, %.0f fuel)",
       node.name or "vessel", part_total, fuel))
   else
@@ -7240,7 +7247,10 @@ function releaseClamps()
   leftPad = true   -- off the clamps: a craft in the world (the fleet keeps it)
   integ.release_t, integ.prev, integ.af = time, nil, nil
   assembly.setAnchored(node, false)
-  r2Rollout(node, info)
+  -- (a rover from a Build Stand is let down where it stands: the stand jacks
+  -- it onto its wheels, or drops its deck away; no roll-out beside a pad)
+  if not standHeld then r2Rollout(node, info) end
+  standHeld = false
   local bx, by, bz = base_of(node, info)
   sfx3(SFX.clamp, bx, by, bz, 0.9, 1.0) -- the clamps let go with a clank
   caption("the launch clamps release")

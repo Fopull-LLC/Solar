@@ -149,7 +149,7 @@ local function row1(B, s)
     { "lift", "5 MOVE", 58, "Pick up a placed part (and what hangs on it), put it down anywhere it attaches   ·   5 · ESC puts it back" },
   }
   local r = { "row", key = "r1", w = "100%", h = 26, gap = 4, pad = 0, align = "center",
-    { "text", key = "vab", style = "panel/heading", w = 44, h = 24, text = "VAB", textValign = "center" },
+    { "text", key = "vab", style = "panel/heading", w = (s.site == "stand") and 70 or 44, h = 24, text = (s.site == "stand") and "STAND" or "VAB", textValign = "center" },
     { "field", key = "name", name = "FieldCraftName", style = "menu/field", w = 108, h = 24, textSize = 13,
       text = (not s.typing) and s.name or nil,
       placeholder = "craft name", maxLen = 40, textValign = "center", tooltip = "The craft's name — Enter saves it under this name",
@@ -193,9 +193,20 @@ local function row1(B, s)
     or (s.over and ("Can't launch — the craft costs more than the agency's funds (" .. s.over .. ")"))
     or (s.warn and #s.warn > 0 and ("⚠ " .. table.concat(s.warn, " · ", 1, math.min(4, #s.warn))
       .. (#s.warn > 4 and string.format(" · +%d more in CRAFT CHECK", #s.warn - 4) or "")) or "Buy the hull and roll it out")
-  r[#r + 1] = key("launch", "LAUNCH ▸", 84, { style = "panel/action", disabled = s.block ~= nil, tip = launch_tip,
-    click = function() if B.doLaunch then B.doLaunch() end end })
+  -- (at a Build Stand: COMMISSION, no site to choose — it is made where it stands)
+  local at_stand = s.site == "stand"
+  if at_stand then
+    launch_tip = s.block and ("Can't commission — " .. s.block)
+      or (s.over and ("Can't commission — the parts cost more than the agency's funds (" .. s.over .. ")"))
+      or "Save it on the stand, pay for what was added, and make it a live craft held on the deck"
+  end
+  r[#r + 1] = key("launch", at_stand and "COMMISSION ▸" or "LAUNCH ▸", at_stand and 118 or 84, { style = "panel/action",
+    disabled = s.block ~= nil, tip = launch_tip, click = function() if B.doLaunch then B.doLaunch() end end })
+  local choices = (B.launchSiteChoices and B.launchSiteChoices()) or { "pad", "runway" }
+  local shown = {}
+  for _, c in ipairs(choices) do shown[c] = true end
   for _, site in ipairs({ { "pad", "PAD", 40 }, { "runway", "RUNWAY", 60 } }) do
+   if shown[site[1]] then
     r[#r + 1] = key("site" .. site[1], site[2], site[3], { selected = s.site == site[1],
       tip = (site[1] == "runway" and save.get("base.runway") == false)
         and "Launch site: RUNWAY — this spaceport has none (water across its line), so the craft goes to the pad"
@@ -205,6 +216,7 @@ local function row1(B, s)
           if B.setLaunchSite then B.setLaunchSite(site[1]) elseif B.toggleLaunchSite then B.toggleLaunchSite() end
         end
       end })
+   end
   end
   return r
 end
@@ -244,6 +256,22 @@ local function row2(B, s)
   r[#r + 1] = key("ovl", "V " .. (OVERLAYS[s.overlay or 0] or "OFF"), 84, { selected = (s.overlay or 0) > 0,
     disabled = not B.setOverlayMode, tip = "Overlays: CoM and CoT, then CoL, then aero vectors   ·   V",
     click = function() if B.setOverlayMode then B.setOverlayMode(((s.overlay or 0) + 1) % 4) end end })
+  -- ORIENT (work/standeditor/PLAN.md §3.3): the whole craft as one, about
+  -- its centre of mass, set back down on the floor — 90° about the frame's
+  -- axes (SHIFT: back), or AUTO (wheels down, nose to the front)
+  r[#r + 1] = spacer("g35", 8)
+  r[#r + 1] = label("lori", "ORIENT", 46)
+  for _, ax in ipairs({ "x", "y", "z" }) do
+    r[#r + 1] = key("or" .. ax, "↻" .. string.upper(ax), 30, { disabled = not B.cmd,
+      tip = "Turn the whole craft 90° about " .. string.upper(ax) .. "   ·   SHIFT: the other way   ·   CTRL+Z undoes it",
+      click = function()
+        local back = input and input.key and input.key("shift")
+        if B.cmd then B.cmd("orient", { axis = ax, sign = back and -1 or 1 }) end
+      end })
+  end
+  r[#r + 1] = key("orauto", "AUTO", 44, { disabled = not B.cmd,
+    tip = "Stand it the right way up: wheels down and nose to the front (a rover), level (a plane), upright (a rocket)",
+    click = function() if B.cmd then B.cmd("orient", { auto = true }) end end })
   r[#r + 1] = spacer("g4")
   r[#r + 1] = key("undo", "↶ UNDO", 60, { style = "panel/secondary", disabled = not s.canUndo, tip = "Undo   ·   CTRL+Z",
     click = function() if B.undo then B.undo() end end })

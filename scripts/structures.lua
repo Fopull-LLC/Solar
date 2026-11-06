@@ -47,7 +47,13 @@
 --                                       a 32 m cell index kept on add/remove
 --                                       (never a scan of every structure)
 --   nodeOf(id, uid)                     a part's live node
--- A bp entry may carry `paid` (what placing it charged: its undo and
+-- Step 6 (L1, L2): parts with behaviour (parts_base `script`).
+--   partState(id, uid) / setPartState(id, uid, t)   rec.st[tostring(uid)]
+--   respawnPart(id, uid)                a part's node made again (its fields
+--                                       changed: a stand's height)
+--   the part's script hears `spawned(rec, part, node)` as its node lands and
+--   `gone(sid, uid)` as it goes (unloaded or taken out).
+-- A bp entry may carry `h` (a stand's deck height, step 6), `paid` (what placing it charged: its undo and
 -- deconstruct read it) and `ft` = { d, hx, hz } (a cast footing under it: a
 -- concrete block from its ground point d m down, hx × hz half-size).
 --
@@ -282,6 +288,7 @@ function removeParts(id, uids)
       index_part(r, p, false)
       if despawn_part then despawn_part(id, u) end
       table.remove(r.bp, i)
+      if r.st then r.st[tostring(u)] = nil end
       out[#out + 1] = p
     end
   end
@@ -363,10 +370,25 @@ local function drop_node(n)
   if n.valid then n:destroy() end
 end
 
+-- A part with behaviour (parts_base `script`, e.g. the Build Stand's
+-- craft_stand): its script hears when the part's node lands and goes.
+local function hook_of(p)
+  local pb = parts_lib()
+  local def = pb and p and pb.partInfo(p.id)
+  local s = def and def.script and findScript and findScript(def.script) or nil
+  return s
+end
+local function hook_gone(id, uid)
+  local r = recs and recs[id]
+  local p = r and part_in(r, uid)
+  local h = p and hook_of(p)
+  if h and h.gone then pcall(h.gone, id, uid) end
+end
+
 despawn = function(id)
   local L = live[id]
   if not L then return end
-  for _, n in pairs(L.nodes) do drop_node(n) end
+  for uid, n in pairs(L.nodes) do drop_node(n); hook_gone(id, uid) end
   for _, n in pairs(L.feet or {}) do drop_node(n) end
   live[id] = nil
 end
@@ -374,8 +396,42 @@ end
 despawn_part = function(id, uid)
   local L = live[id]
   if not L then return end
+  if L.nodes[uid] then hook_gone(id, uid) end
   drop_node(L.nodes[uid]); L.nodes[uid] = nil
   if L.feet then drop_node(L.feet[uid]); L.feet[uid] = nil end
+end
+
+-- Spawn a part's node again (its bp fields changed: a stand's height). The
+-- old node goes at once; the new one lands a frame later.
+function respawnPart(id, uid)
+  ensure()
+  local r, L = recs[id], live[id]
+  local p = r and part_in(r, uid)
+  if not (p and L and spawn_part) then return false end
+  despawn_part(id, uid)
+  spawn_part(r, L, p)
+  return true
+end
+
+-- A part's own state (machines, a stand's craft): rec.st[tostring(uid)], a
+-- plain table of plain values (the save holds four tables deep: rec → st →
+-- the part's → one more). → table | nil
+function partState(id, uid)
+  ensure()
+  local r = recs[id]
+  local st = r and r.st
+  return st and st[tostring(uid)] or nil
+end
+-- Write (t) or clear (nil) a part's state; saved at once. → ok
+function setPartState(id, uid, t)
+  ensure()
+  local r = recs[id]
+  if not (r and part_in(r, uid)) then return false end
+  r.st = r.st or {}
+  r.st[tostring(uid)] = t
+  write(r)
+  bump()
+  return true
 end
 
 function nodesOf(id)
@@ -461,6 +517,13 @@ spawn_part = function(r, L, p)
     inst.name = def.prefab
     L.nodes[p.uid] = inst
     owner[inst.id] = { sid = r.id, uid = p.uid }
+    if def.script then
+      local h = findScript and findScript(def.script)
+      if h and h.spawned then
+        local okh, err = pcall(h.spawned, r, p, inst)
+        if not okh and log then log("structures: " .. tostring(def.script) .. ".spawned: " .. tostring(err)) end
+      end
+    end
   end, planet)
   if not ok then L.spawning = L.spawning - 1 end
   local ft = p.ft

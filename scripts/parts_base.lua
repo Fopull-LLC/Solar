@@ -41,6 +41,18 @@
 --   Pad Plate       4 x 4 m precast slab, 0.30 m: 11.5 t of concrete
 --   Equipment Shed  3.0 x 2.4 x 2.6 m steel shelter on skids: 1.6 t fitted
 --   Surface Hab     a 4 m x 6 m pressure can on saddles: 7.5 t dry
+--   Build Stand     a 0.9 m steel deck on a telescoping column, 0.5-4.0 m: 0.4 t
+--
+-- Step 6 (L1) adds, for parts with behaviour:
+--   script     the scene script that owns the part's state (craft_stand for
+--              the stand): structures.lua calls its `spawned(rec, part, node)`
+--              and `gone(sid, uid)`; field_builder asks its `canRemove(rec,
+--              part)` before the part comes down.
+--   fields     per-part bp fields a placement starts with (the stand's `h`).
+--   stand      the stand's numbers: the deck's settable height (min..max,
+--              step), how low it goes to let a wheeled craft down (`low`),
+--              the deck's half-width, and `deckOff` = the deck's top over the
+--              Deck child's origin (tools/gen_base_parts.py prints it).
 -- Prices sit with the ground tier (parts_registry.lua): a base is something
 -- you can afford to start, and shipping (base_economy.lua, N1) rides on top.
 
@@ -59,9 +71,21 @@ PARTS = {
                kind = "structural", fieldOnly = true, seat = 2.104, half = { x = 3.45, y = 2.18, z = 2.05 },
                slope = 0.6, onDeck = true, grade = 2.0, footPad = 0.25, hull = "shell",
                desc = "4 x 6 m pressure can on saddles · 7.5 t · a home for four, one day" },
+  -- Step 6 (L1): a craft stand. Its deck's height is the part's own `h`
+  -- (a bp field, copied from `fields` at placement); its behaviour is
+  -- craft_stand.lua's (`script`).
+  -- (the addendum asked for a 1.2 m deck; a small rover's tyres stand 0.5 m
+  -- either side of its centre line and would sit on that deck's corners, so
+  -- the deck is 0.9 m: it fits between them)
+  stand    = { prefab = "BaseStand", label = "Build Stand", h = 1.0, rx = 0.45, rz = 0.45, mass = 0.4, cost = 650,
+               kind = "structural", fieldOnly = true, seat = -0.2200, half = { x = 0.45, y = 0.30, z = 0.45 },
+               slope = 0.6, onDeck = true, grade = 1.0, footPad = 0.15, script = "craft_stand",
+               fields = { h = 1.0 },
+               stand = { min = 0.5, max = 4.0, step = 0.1, low = 0.28, deck = 0.45, deckOff = 2.0385 },
+               desc = "0.9 m deck on a telescoping column · 0.5–4.0 m · 0.4 t · build a craft on it" },
 }
 
-ORDER = { "padPlate", "shed", "hab" }
+ORDER = { "padPlate", "shed", "hab", "stand" }
 
 -- The panel's sections: { { title, ids } } (catalog_panel's host shape).
 function catalogue()

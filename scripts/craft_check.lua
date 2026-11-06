@@ -278,6 +278,8 @@ local KIND_WORD = { aircraft = "AIRCRAFT", rover = "ROVER", rocket = "ROCKET" }
 local function rule_kind(ctx, out, k)
   local mode = ctx.mode or {}
   local site = ctx.site == "runway" and "rolls out to the RUNWAY" or "stands on the PAD"
+  -- (at a Build Stand: what the release does there)
+  if ctx.atStand then site = ctx.release == "roll" and "let down off the STAND onto its wheels" or "lifts off the STAND" end
   local word = KIND_WORD[k.kind] or tostring(k.kind):upper()
   local pinned = mode.set ~= nil
   row(out, { id = "C1", sev = "note", rank = 2, kind = "any",
@@ -445,11 +447,11 @@ local function rule_upright(ctx, out, k)
   local uids = { fr.uid }
   for _, u in ipairs(k.gear) do uids[#uids + 1] = u end
   if #k.gear > 0 then
-    row(out, { id = "A3", rank = 1, kind = "aircraft", uids = uids,
+    row(out, { id = "A3", rank = 1, kind = "aircraft", uids = uids, fix = { label = "LAY IT LEVEL", cmd = "orient", args = { auto = true } },
       head = "Built standing up: the gear can't spring or steer",
       text = fmt("The nose points %.0f° up at the roof. Laid on the runway, each tyre is turned so it can roll (r2UprightGear), but the leg stays stiff along the nose and does not steer: a one-leg touchdown kicks hard. Build runway planes lying down: select everything (Ctrl+A) and turn the nose along the floor (W/S). (Until engine card 0562 gives wheels their own axle.)", ang) })
   elseif ctx.site == "runway" then
-    row(out, { id = "A3", rank = 1, kind = "aircraft", uids = uids,
+    row(out, { id = "A3", rank = 1, kind = "aircraft", uids = uids, fix = { label = "LAY IT LEVEL", cmd = "orient", args = { auto = true } },
       head = "Built standing up, no gear: it rolls out on its tail",
       text = fmt("The nose points %.0f° up, and the runway sets a craft on its lowest parts. Lay it along the floor (Ctrl+A, then W/S) and give it landing gear.", ang) })
   end

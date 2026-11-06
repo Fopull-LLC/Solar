@@ -207,7 +207,7 @@ function BK.run()
   BK.check("panel", catn ~= nil, "the parts column is up (Field Catalogue node)")
   local cp = findScript("catalog_panel")
   local list = cp and cp.listFor and cp.listFor(fb, "ALL", "") or {}
-  BK.check("cards", #list == 3 and list[1].id == "padPlate", "ALL lists the BASE parts: %d", #list)
+  BK.check("cards", #list == 4 and list[1].id == "padPlate", "ALL lists the BASE parts: %d", #list)
   local p1, p2 = fb.cardLines("padPlate", fb.partInfo("padPlate"), false)
   BK.check("price", p1 == "$1,040" and p2 == "$900 + $140 shipping · Pell Groundworks", "the Pad Plate card: %s / %s", tostring(p1), tostring(p2))
   wait(4)
@@ -693,4 +693,366 @@ function BK.icon_ab()
   fr.y = y0
   wait(0.3)
   findScript("field_builder").heldPart = nil
+end
+
+-- ════ STEP 6 (L1, L2, L4): the Build Stand ═════════════════════════════════
+-- `buildkitprobe.sh <engine> stand`: the VAB's rover saved to the library;
+-- a Build Stand placed with the kit (its deck where its record says, solid);
+-- the rover put on it from the stand's menu (charged, drawn, nothing a tick),
+-- the deck lowered to what it needs; Commission (a live craft, held on the
+-- deck while the planet moves, off the fleet board); Release (jacked down onto
+-- its wheels, the stand lowered, the clamps off); boarded and driven off and
+-- back; Return to stand (the craft lifted back on, off the board); commissioned
+-- again, saved, reloaded (held on the stand again, once); released again.
+-- Pictures: s1..s7 in save/user/buildshots/.
+
+-- the context menu's entries on a node (a stand's, a craft part's)
+function BK.menu(node)
+  local reg, cm = findScript("context_registry"), findScript("context_menu")
+  if not (reg and cm and node and node.valid ~= false) then return {}, nil end
+  local w = node.worldPos
+  local tgt = cm.resolve({ node = node, x = w.x, y = w.y, z = w.z })
+  local ctx = { actor = { kind = "crew", id = findScript("crew").activeId() },
+                toast = function(m, bad) P("BK toast %s%s", bad and "(bad) " or "", tostring(m)) end }
+  return (tgt and reg.entriesFor(tgt, ctx)) or {}, tgt, ctx
+end
+function BK.entry(list, id)
+  for _, e in ipairs(list or {}) do if tostring(e.id):find(id, 1, true) then return e end end
+  return nil
+end
+-- run an entry the way the menu does (a job: its seconds, then done)
+function BK.run_entry(e, secs)
+  if not e then return false, "no entry" end
+  local reg = findScript("context_registry")
+  local ok, why, job = reg.press(e)
+  if job then
+    wait(math.min(secs or job.secs or 1, job.secs or 1))
+    if job.check then local c, w = job.check(); if c == false then return false, w end end
+    return job.done()
+  end
+  return ok, why
+end
+-- the stand's deck top (world, this frame), its up, its node and frame pose
+function BK.stand_top(ST, CS, sid)
+  local n = ST.nodeOf(sid, 1)
+  local fp = CS.framePose(sid, 1)
+  local b = home()
+  if not (n and fp and b) then return nil end
+  return { x = b.x + fp.top.x, y = b.y + fp.top.y, z = b.z + fp.top.z }, fp.U, n, fp
+end
+-- the held craft's origin vs its pin (m), worst over `secs` while the planet moves
+function BK.held_drift(CS, sid, secs)
+  local worst, n = 0, 0
+  local t_end = time + secs
+  while time < t_end do
+    yield()
+    local E = CS.heldOf(sid, 1)
+    local b = home()
+    if E and E.node and E.node.valid and b then
+      local i = assembly.info(E.node)
+      if i and i.origin then
+        worst = math.max(worst, len(i.origin.x - b.x - E.relv.x, i.origin.y - b.y - E.relv.y, i.origin.z - b.z - E.relv.z))
+        n = n + 1
+      end
+    end
+  end
+  return worst, n
+end
+function BK.fleet_has(name)
+  local f = save.get("fleet.craft") or {}
+  for _, r in pairs(f) do if type(r) == "table" and r.name == name then return true end end
+  return false
+end
+function BK.ctl_of(node)
+  for _, v in ipairs(findScripts("vessel_controller")) do
+    if node and v.node and v.node.valid and v.node.id == node.id then return v end
+  end
+  return nil
+end
+-- a fixed camera `back` m behind a world point along F, `side` to its right, `up` over it
+function BK.view(nm, wpt, U, F, back, side, up)
+  local b = home()
+  local w = sub(wpt, b)
+  local Rr = unit(cross(F, U))
+  local eye = { x = w.x - F.x * back + Rr.x * side + U.x * up, y = w.y - F.y * back + Rr.y * side + U.y * up, z = w.z - F.z * back + Rr.z * side + U.z * up }
+  VP.cam_fixed(eye, { x = w.x + U.x * 0.5, y = w.y + U.y * 0.5, z = w.z + U.z * 0.5 })
+  wait(1.2)
+  BK.shot(nm, false)
+  VP.cam_off()
+  wait(0.3)
+end
+-- Bring a rover to a stop by driving against its roll (drive 0 only coasts).
+function BK.stop_rover(vc, vn, tmo)
+  local t0 = time
+  local dir = ((vc.R2 and vc.R2.drive) or 0) >= 0 and -1 or 1   -- against the way it was driven
+  while time - t0 < (tmo or 10) do
+    local ii = assembly.info(vn)
+    if not ii then break end
+    local sp = len(ii.vel.x, ii.vel.y, ii.vel.z)
+    if sp < 0.25 then break end
+    vc.R2.cmd = { drive = dir, steer = 0 }
+    yield()
+  end
+  vc.R2.cmd = { drive = 0, steer = 0 }
+end
+function BK.cost(tag, secs)
+  local fr0 = FRAME
+  wait(secs or 3)
+  P("BK COST %s: craft_stand %.4f ms/frame, structures %.4f, vessel_controller %.4f (%d frames)", tag,
+    perf.scriptMs and perf.scriptMs("craft_stand") or -1, perf.scriptMs and perf.scriptMs("structures") or -1,
+    perf.scriptMs and perf.scriptMs("vessel_controller") or -1, FRAME - fr0)
+end
+
+function BK.run_stand()
+  BK.tag = params.tag or "stand"
+  wait_ready(120)
+  wait(2)
+  local fb, ST, co, C, CS = findScript("field_builder"), findScript("structures"), findScript("company"), findScript("crew"), findScript("craft_stand")
+  if not BK.check("scene", fb and ST and co and C and CS, "field_builder %s structures %s craft_stand %s",
+    tostring(fb ~= nil), tostring(ST ~= nil), tostring(CS ~= nil)) then BK.result() return end
+  C.patch(C.activeId(), { role = "engineer" })
+  -- 1. THE VAB'S ROVER INTO THE LIBRARY
+  local BH = enter_vab("stand_vab")
+  local B = findScript("builder")
+  if BH and B then
+    wait(1.0)
+    load_bp(B, "stand_rover_bp", ROVER)
+    B.craftSave("Stand Rover")
+    wait(1.0)
+    BH.leave(); wait(3)
+  end
+  local ds = CS.designs()
+  local des = nil
+  for _, d in ipairs(ds) do if d.name == "Stand Rover" then des = d end end
+  if not BK.check("library", des ~= nil and CS.readDesign(des.slug) ~= nil, "the VAB's rover is in the library (%d designs; %s parts)",
+    #ds, des and tostring(des.parts) or "-") then BK.result() return end
+  -- 2. OUT TO FLAT GROUND, THE KIT, A STAND
+  local spot = BK.flat_spot()
+  if not BK.check("spot", spot ~= nil, "flat ground %s m out", spot and spot.d or -1) then BK.result() return end
+  stand_at(spot)
+  BK.F = spot.t
+  wait(4)
+  key_down("w"); wait(0.6); key_up("w"); wait(1.5)
+  do
+    local pc0 = findScript("planet_camera")
+    local U = unit(sub(astro(), home()))
+    local f = { x = pc0.fwd_x or BK.F.x, y = pc0.fwd_y or BK.F.y, z = pc0.fwd_z or BK.F.z }
+    BK.F = unit(sub(f, scl(U, dot(f, U))))
+  end
+  wait(1.0)
+  tap("b"); wait(1.5)
+  BK.check("open", fb.isOpen(), "B opens the kit (gate %s)", tostring(fb.gate))
+  local cp = findScript("catalog_panel")
+  local list = cp and cp.listFor and cp.listFor(fb, "ALL", "") or {}
+  local has = false
+  for _, e in ipairs(list) do if e.id == "stand" then has = true end end
+  BK.check("card", #list == 4 and has, "the BASE column lists the Build Stand (%d cards)", #list)
+  cp.pickPart("stand")
+  BK.aim_at(8, 0)
+  BK.settle(30)
+  local rq = fb.req
+  BK.check("stand_ghost", rq and not rq.bad, "the stand's ghost on the ground: %s", rq and tostring(rq.bad or "valid") or "no req")
+  BK.shot("s1_stand_ghost")
+  local f0 = co.balance()
+  BK.click(false)
+  wait(1.5)
+  local sid = fb.lastPlace and fb.lastPlace.sid
+  local sp = sid and ST.getPart(sid, 1)
+  BK.check("stand_placed", sp and sp.id == "stand" and sp.h == 1.0 and f0 - co.balance() >= 650 + 115,
+    "the stand placed: %s charged, deck %.1f m", tostring(f0 - co.balance()), sp and sp.h or -1)
+  fb.heldPart = nil
+  tap("escape"); wait(0.5)
+  if not sid then BK.result() return end
+  -- its deck where its record says, and solid there
+  local function deck_check(tag, want, noray)
+    local top, U, n, fp = BK.stand_top(ST, CS, sid)
+    if not top then BK.check(tag, false, "no stand node") return end
+    local d = n:getChild("Deck")
+    local dw = d and d.worldPos
+    local off = fp.def.stand.deckOff
+    local e = dw and len(dw.x + U.x * off - top.x, dw.y + U.y * off - top.y, dw.z + U.z * off - top.z) or 99
+    local h = raycast(top.x + U.x * 3, top.y + U.y * 3, top.z + U.z * 3, -U.x, -U.y, -U.z, 6, { ignore = astro() })
+    local hit = h and (3 - h.distance) or -99
+    BK.check(tag, e < 0.01 and (noray or math.abs(hit) < 0.03) and math.abs(fp.h - want) < 1e-6,
+      "the deck at %.2f m: drawn %.4f m off its record, a ray lands %+.3f m from its top (on %s)", fp.h, e, hit,
+      h and h.node and tostring(h.node.name) or "none")
+  end
+  deck_check("deck", 1.0)
+  -- 3. THE ROVER ON THE STAND (its menu)
+  local ents, tgt = BK.menu(ST.nodeOf(sid, 1))
+  local put = BK.entry(ents, "cs_put")
+  BK.check("menu", tgt and tgt.kind == "prop" and put ~= nil and BK.entry(ents, "bk_decon") ~= nil,
+    "RMB on the stand: %d rows (Put a craft on it…, Deconstruct, …)", #ents)
+  local pick = nil
+  for _, e in ipairs(put and put.sub and put.sub() or {}) do if e.label == "Stand Rover" then pick = e end end
+  local fq = co.balance()
+  local okp, wp = BK.run_entry(pick, 1.0)
+  local st = CS.stateOf(sid, 1)
+  local q = CS.quote(CS.blueprint(sid, 1) or {}, findScript("base_economy"))
+  BK.check("put", okp and st and st.s == "built" and fq - co.balance() == q.total and st.n == 6,
+    "Stand Rover on the stand: %s charged ($%d + $%d shipping), %s parts (%s)", tostring(fq - co.balance()), q.cost, q.ship,
+    st and tostring(st.n) or "-", tostring(wp))
+  local decon = BK.entry(BK.menu(ST.nodeOf(sid, 1)), "bk_decon")
+  local reg = findScript("context_registry")
+  BK.check("no_decon", decon and not reg.usable(decon), "with a craft on it the stand's Deconstruct is greyed out")
+  wait(1.0)
+  local disp = find("StandCraft")
+  BK.check("drawn", disp ~= nil and #disp:children() == 6, "drawn on the deck: %d display parts, no bodies", disp and #disp:children() or -1)
+  local need = CS.needFor(sid, 1, CS.blueprint(sid, 1))
+  -- lower the deck to what it needs, a step a click; one more is refused
+  local steps = 0
+  for _ = 1, 10 do
+    local e2 = BK.entry(BK.menu(ST.nodeOf(sid, 1)), "cs_dn")
+    if not e2 then break end
+    local ok2 = BK.run_entry(e2)
+    if not ok2 then break end
+    steps = steps + 1
+    yield()
+  end
+  local sp2 = ST.getPart(sid, 1)
+  BK.check("lowered", need and math.abs(sp2.h - need) < 1e-6, "Lower the deck ×%d: down to %.1f m, what the rover needs (%s m), and no lower",
+    steps, sp2.h, tostring(need))
+  wait(0.5)
+  deck_check("deck_low", need or 0)
+  local top, U = BK.stand_top(ST, CS, sid)
+  BK.view("s2_on_stand", top, U, BK.F, 5.5, 3.0, 1.6)
+  wait(1)
+  BK.cost("a craft on a stand, not commissioned", 3)
+  -- 4. COMMISSION
+  local okc, wc = BK.run_entry(BK.entry(BK.menu(ST.nodeOf(sid, 1)), "cs_com"), 1.0)
+  local E = wait_for(function() local e = CS.heldOf(sid, 1); return e and e.phase == "held" and e end, 20, "the craft commissioned")
+  wait(1.0)   -- (the controller reads its handoff on its first frame)
+  local vn = E and E.node
+  local vc = BK.ctl_of(vn)
+  local inf = vn and assembly.info(vn)
+  BK.check("commission", okc and E and inf and inf.anchored and #inf.parts == 6 and vc and vc.leftPad == false and vc.standHeld == true
+    and find("StandCraft") == nil,
+    "Commission: a live craft, %d parts, anchored %s, leftPad %s, standHeld %s, the display gone (%s)", inf and #inf.parts or -1,
+    tostring(inf and inf.anchored), tostring(vc and vc.leftPad), tostring(vc and vc.standHeld), tostring(wc))
+  wait(1.0)
+  local drift, nd = BK.held_drift(CS, sid, 3.0)
+  BK.check("held", nd > 30 and drift < 0.02, "held on the deck while the planet moves: worst %.4f m off its pin over %d frames", drift, nd)
+  if E then
+    local cp2 = CS.craftPose(sid, 1, CS.blueprint(sid, 1))
+    P("BK held origin vs the blueprint's estimate: %.3f m (the colliders' seat)", len(E.relv.x - cp2.O.x, E.relv.y - cp2.O.y, E.relv.z - cp2.O.z))
+  end
+  local FO = findScript("flight_ops")
+  if FO and FO.fleetSync then FO.fleetSync(true) end
+  BK.check("off_board", not BK.fleet_has("Stand Rover"), "while it is held the fleet board leaves it to the stand")
+  top, U = BK.stand_top(ST, CS, sid)
+  BK.view("s3_commissioned", top, U, BK.F, 5.5, -3.0, 1.4)
+  BK.cost("a commissioned craft, held", 3)
+  -- 5. RELEASE: jacked down onto its wheels
+  BK.run_entry(BK.entry(BK.menu(ST.nodeOf(sid, 1)), "cs_rel"))
+  local shot_mid = false
+  local released = wait_for(function()
+    local e = CS.heldOf(sid, 1)
+    if e and e.phase == "jack" and (e.down or 0) > 0.10 and not shot_mid then
+      shot_mid = true
+      P("BK jacking: %.2f m down, %.2f m to go", e.down or 0, -(e.left or 0))
+    end
+    return e == nil
+  end, 30, "the release")
+  local down = E and E.down or -1
+  wait(2.0)
+  local i2 = vn and vn.valid and assembly.info(vn)
+  local sp3 = ST.getPart(sid, 1)
+  local v2 = i2 and len(i2.vel.x, i2.vel.y, i2.vel.z) or 99
+  local onw = vc and vc.r2OnWheels and vc.r2OnWheels()
+  BK.check("release", released and i2 and not i2.anchored and v2 < 0.4 and sp3.lo == true and vc.leftPad == true and down > 0.05 and down < 0.4,
+    "Release: let down %.2f m onto its wheels (on wheels %s), |v| %.2f m/s two seconds on, the stand lowered %s, leftPad %s",
+    down, tostring(onw), v2, tostring(sp3.lo), tostring(vc and vc.leftPad))
+  deck_check("deck_stowed", sp3.lo and findScript("parts_base").partInfo("stand").stand.low or need, true)
+  top, U = BK.stand_top(ST, CS, sid)
+  BK.view("s4_released", top, U, BK.F, 6.0, 3.5, 1.8)
+  -- 6. BOARD AND DRIVE OFF, AND BACK
+  local boarded = vc and vc.boardNow and vc.boardNow()
+  for _ = 1, 120 do
+    if boarded or not (vc and vn and vn.valid) then break end
+    local ii = assembly.info(vn)
+    local aa = astro()
+    aa.x, aa.y, aa.z = ii.com.x, ii.com.y, ii.com.z
+    yield()
+    boarded = vc.boardNow()
+  end
+  BK.check("board", boarded and vc.piloting, "the Engineer boards it (piloting %s)", tostring(vc and vc.piloting))
+  local function dist_from_stand()
+    local t2 = BK.stand_top(ST, CS, sid)
+    local ii = vn and vn.valid and assembly.info(vn)
+    return (t2 and ii) and len(ii.com.x - t2.x, ii.com.y - t2.y, ii.com.z - t2.z) or -1
+  end
+  local t0, far = time, 0
+  while time - t0 < 25 do
+    vc.R2.cmd = { drive = 1, steer = 0 }
+    yield()
+    far = math.max(far, dist_from_stand())
+    if far >= 14 then break end
+  end
+  BK.stop_rover(vc, vn)
+  BK.check("drive", far >= 14, "driven off the stand: %.1f m in %.1f s", far, time - t0)
+  wait_for(function() local ii = assembly.info(vn); return ii and len(ii.vel.x, ii.vel.y, ii.vel.z) < 0.3 end, 15, "the rover to stop")
+  if FO and FO.fleetSync then FO.fleetSync(true) end
+  BK.check("on_board", BK.fleet_has("Stand Rover"), "released, it is on the fleet board")
+  -- back to the stand, at a crawl, until it is in reach of it
+  local back = BK.approach(vc, vn, function() return BK.stand_top(ST, CS, sid) end, 2.5, 60) and CS.standFor(vc) == sid
+  P("BK back at the stand: %s (%.1f m off)", tostring(back), dist_from_stand())
+  vc.R2.cmd = nil
+  tap("f"); yield(); yield()
+  if vc.crewAboard and vc.evaNow then vc.evaNow() end
+  wait(2)
+  -- 7. RETURN TO STAND (the craft's menu)
+  local kids = vn.valid and vn:children() or {}
+  local pnode = kids[1]
+  local pents, ptgt = BK.menu(pnode)
+  local eret = BK.entry(pents, "cs_ret")
+  BK.check("ret_menu", ptgt and ptgt.kind == "part" and eret ~= nil, "RMB on the rover by the stand offers Return to stand (%d rows, target %s; %s)",
+    #pents, ptgt and ptgt.kind or "none", eret and tostring(reg.usable(eret)) or "-")
+  local okr, wr = BK.run_entry(eret, 1.0)
+  wait(1.5)
+  local st4 = CS.stateOf(sid, 1)
+  if FO and FO.fleetSync then FO.fleetSync(true) end
+  BK.check("returned", okr and st4 and st4.s == "built" and st4.ret and not vn.valid and not BK.fleet_has("Stand Rover")
+    and find("StandCraft") ~= nil and ST.getPart(sid, 1).lo == nil,
+    "Return to stand: back on the deck (%s, worth $%s), the live craft gone, off the board, the deck back up to %.1f m (%s)",
+    st4 and st4.s or "-", st4 and tostring(st4.cost) or "-", ST.getPart(sid, 1).h, tostring(wr))
+  wait(1.0)
+  top, U = BK.stand_top(ST, CS, sid)
+  BK.view("s5_returned", top, U, BK.F, 5.0, -2.5, 2.2)
+  -- 8. COMMISSION AGAIN, SAVE, RELOAD
+  BK.run_entry(BK.entry(BK.menu(ST.nodeOf(sid, 1)), "cs_com"), 1.0)
+  local E2 = wait_for(function() local e = CS.heldOf(sid, 1); return e and e.phase == "held" and e end, 20, "commissioned again")
+  local vc2 = E2 and BK.ctl_of(E2.node)
+  wait(1.0)
+  BK.check("again", E2 ~= nil and vc2 ~= nil and vc2.standHeld == true, "commissioned again from its records (held %s)", tostring(vc2 and vc2.standHeld))
+  local b0 = home()
+  local bp0 = { x = b0.x, y = b0.y, z = b0.z }
+  if save.flush then save.flush() end
+  scene.load("system")
+  yield()
+  wait_for(function()
+    local pw, gm, bf = findScript("planet_walker"), findScript("game_manager"), findScript("base_facilities")
+    return pw and gm and bf and bf.sited and not gm.loading and not gm.curtain
+  end, 300, "the reload")
+  wait(4)
+  ST, CS = findScript("structures"), findScript("craft_stand")
+  local E3 = wait_for(function() local e = CS.heldOf(sid, 1); return e and e.phase == "held" and e end, 30, "the held craft back on its stand")
+  local nrov = 0
+  for _, v in ipairs(findScripts("vessel_controller")) do
+    if v.node and v.node.valid and v.craftName == "Stand Rover" then nrov = nrov + 1 end
+  end
+  local drift3, nd3 = BK.held_drift(CS, sid, 2.0)
+  local b1 = home()
+  BK.check("reload", E3 and nrov == 1 and drift3 < 0.02 and CS.stateOf(sid, 1).s == "held",
+    "after a reload the held craft is on its stand again, once (%d live), worst %.4f m off its pin over %d frames; the planet moved %.0f m",
+    nrov, drift3, nd3, len(b1.x - bp0.x, b1.y - bp0.y, b1.z - bp0.z))
+  top, U = BK.stand_top(ST, CS, sid)
+  if top then BK.view("s6_after_reload", top, U, BK.F, 5.5, 3.0, 1.5) end
+  BK.run_entry(BK.entry(BK.menu(ST.nodeOf(sid, 1)), "cs_rel"))
+  local gone2 = wait_for(function() return CS.heldOf(sid, 1) == nil end, 30, "the second release")
+  wait(1.5)
+  BK.check("release2", gone2 and CS.stateOf(sid, 1) == nil, "released after the reload: the stand is empty")
+  top, U = BK.stand_top(ST, CS, sid)
+  if top then BK.view("s7_released_again", top, U, BK.F, 6.0, -3.5, 1.8) end
+  BK.cost("an empty stand", 3)
+  BK.result()
 end
