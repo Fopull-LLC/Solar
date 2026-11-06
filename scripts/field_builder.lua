@@ -391,7 +391,7 @@ function hold(id)
   -- (a BASE part behind a craft part's research: the Isotope Skid's cells)
   local rs = ref("research")
   local d0 = partInfo(id)
-  local rid = d0 and d0.vab or id   -- (a VAB part placed live: its own research)
+  local rid = d0 and (d0.vab or d0.tech) or id   -- (a VAB part placed live: its own research; S6: a reactor component its tech's)
   if rs and rs.isUnlocked and not rs.isUnlocked(rid) then
     play("denied"); say((rs.labelOf and rs.labelOf(rid) or rid) .. ": " .. tostring(rs.lockLine and rs.lockLine(rid) or "locked"))
     return false
@@ -2008,7 +2008,7 @@ end
 local MODE_TXT = { edge = "EDGE TO EDGE", deck = "ON THE DECK", grid = "GRID 0.5 m", free = "FREE" }
 function hintLine()
   if not open_ then return "Build Kit  ·  B opens it" end
-  local keys = (collapsed and "B unfolds the parts" or "B folds the parts") .. "  ·  Esc " .. (heldPart and "drops the part" or "closes the kit") .. "  ·  Ctrl+Z undo  ·  F1 rooms  ·  F2 power"
+  local keys = (collapsed and "B unfolds the parts" or "B folds the parts") .. "  ·  Esc " .. (heldPart and "drops the part" or "closes the kit") .. "  ·  Ctrl+Z undo  ·  F1 rooms  ·  F2 power  ·  F3 nuclear"
   if not heldPart then return "Build Kit  ·  pick a part  ·  RMB tap a placed part to take it down  ·  " .. keys end
   local hdef = partInfo(heldPart)
   -- (S4) paint and the eyedropper
@@ -2216,6 +2216,11 @@ function update(node, dt)
     if input.pressed("f2") then
       local BP = ref("base_power")
       if BP then BP.overlay = not BP.overlay; say(BP.overlay and "POWER: each cable's flow and load · green under half its rating, amber to full, red over it or tripped, grey off" or "POWER overlay off") end
+    end
+    -- S6: F3 shows the NUCLEAR overlay (the loops' heat and flow, the dose field)
+    if input.pressed("f3") then
+      local RP = ref("reactor_plant")
+      if RP then RP.overlay = not RP.overlay; say(RP.overlay and "NUCLEAR: the loops by temperature, the way they flow, each component's heat · the dose field round each core, shielding counted" or "NUCLEAR overlay off") end
     end
     if input.key("ctrl") then
       if input.pressed("c") then copy_now() end

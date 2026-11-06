@@ -1087,12 +1087,19 @@ PERKS = {
   node_lead   = { pilot = { false, false, 5.0 } },
   -- J5 (step 16): × the RP of a lot a Scientist studies at a bench
   study_mult  = { scientist = { 1.5, 2.0, 3.0 } },
+  -- S6: × the seconds a fuel rod takes in or out of a reactor's channel
+  refuel_time = { engineer = { 1.0, 0.7, 0.5 } },
+  -- S6 L2: the console's xenon forecast (when a restart can reach critical)
+  xe_forecast = { engineer = { false, true, true } },
+  -- S6 L3: + the share of Carnot a turbine makes, for the plant they set up
+  plant_trim  = { engineer = { 0.0, 0.0, 0.03 } },
 }
 PERK_NONE = { repair_time = 1.0, wear_read = false, cable_cost = 1.0, battery_eff = 0.0, salvage = 0.8,
-              rcs_dv = 1.0, dock_ladder = 1.0, node_lead = false, study_mult = 1.0 }
+              rcs_dv = 1.0, dock_ladder = 1.0, node_lead = false, study_mult = 1.0,
+              refuel_time = 1.0, xe_forecast = false, plant_trim = 0.0 }
 -- Which way is better, for bestPerk over a crew: "low" (a time, a price) or
 -- "high" (everything else; true beats false).
-PERK_LOW = { repair_time = true, cable_cost = true }
+PERK_LOW = { repair_time = true, cable_cost = true, refuel_time = true }
 
 -- Pure: the perk `name` for `role_` at `lvl`. → value (nil for "none")
 function perkOf(role_, lvl, name)

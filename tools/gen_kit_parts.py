@@ -1257,6 +1257,11 @@ PIECES = {
 # ── S4: the character pieces (tools/gen_kit_props.py) ────────────────────────
 PIECES.update(gen_kit_props.pieces(sys.modules[__name__]))
 
+# ── S6: the reactor's components (tools/gen_kit_nuclear.py) ─────────────────
+import gen_kit_nuclear  # noqa: E402
+MATS.update(gen_kit_nuclear.MATERIALS)
+PIECES.update(gen_kit_nuclear.pieces(sys.modules[__name__]))
+
 # ── S4: PAINT SURFACES. node:setTint tints everything a node draws, so what
 # paint must not touch, and a wall's second face, are split into children of
 # their own after the piece is built (no piece function changes):

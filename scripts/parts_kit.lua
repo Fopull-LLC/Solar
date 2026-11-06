@@ -103,8 +103,35 @@
 --           close a loop or double a line (base_cable's rule)
 --   pole    the cable leaves its crossarm (`cableAt` m up) and is strung tight
 --   cableAt where a cable leaves the piece, m over its ground point
+--
+-- ── NUCLEAR (S6; scripts/reactor.lua, reactor_plant.lua; docs/heat-and-nuclear.md §8)
+-- A reactor is a LAYOUT, not a part. Columns stand on a Reactor Vessel Base's
+-- top, one to a 0.5 m cell (its 5 × 5 lattice), and the cells next to each
+-- other decide the neutronics; pipes and components join by their PORTS.
+--   nuclear = { role = "vessel" | "fuel" | "mod" | "rod", mod = "graphite" |
+--             "water" | "heavy", rods = n (a fuel channel's slots) }
+--   ports   = { { name, x, z, nx, nz, loop } }  piece-frame nozzles, all at
+--             PIPE_Y over the ground point, on the 0.5 m grid; ports of one
+--             piece with the same `loop` tag are joined inside it (a steam
+--             generator's primary side and its secondary side are not)
+--   pipe    = { len, loss, lagged }  m of run; the share of the plant's rated
+--             heat a metre loses to the room at its design temperature (bare
+--             0.25 %, lagged 0.004 %); a fitting between lagged runs is lagged
+--   pump    = { flow, kw }  kg/s at its rating and its motor's kW (a grid load)
+--   press   = { kw, tsat }  a pressuriser: heaters' kW, the loop's boiling point (K)
+--   hx      = { ua }        a steam generator's kW/K
+--   turbine = { kwe, eta, qmax, min }  rated kW(e), its share of the Carnot
+--             limit, the most heat it admits (kW), the least it spins on
+--   reject  = { kind = "rad", area, eps } | { kind = "tower", g, kw }  the
+--             secondary loop's heat sink (radiators work anywhere, a tower
+--             only in air)
+--   console = { w, h }      the control desk's screen (reactor_plant paints it)
+--   power   = { kind = "aux", use } a pump, heater or fan the plant runs from
+--             the grid; { kind = "plant", kwe } the turbine's generator
+--   tech    research that opens the piece (research.lua)
+PIPE_Y = 0.6
 
-SECTION_ORDER = { "FOUNDATION", "FLOOR", "WALL", "ROOF", "FRAME", "HAB", "SHIELD", "UTILITY", "POWER", "LIFE", "FITTINGS", "PROPS", "DECALS" }
+SECTION_ORDER = { "FOUNDATION", "FLOOR", "WALL", "ROOF", "FRAME", "HAB", "SHIELD", "UTILITY", "POWER", "LIFE", "NUCLEAR", "FITTINGS", "PROPS", "DECALS" }
 EXTERIOR = { FOUNDATION = true, FLOOR = true, WALL = true, ROOF = true, FRAME = true, HAB = true, SHIELD = true }
 FACES2 = { wall = true, halfWall = true, wall12 = true, doorWall = true, doorWallM = true, doubleDoor = true, windowWall = true,
            porthole = true, airlockWall = true, openFrame = true, ventWall = true, leadWall = true, gable = true,
@@ -119,6 +146,9 @@ MATS = {
                 desc = "regolith concrete mixed on site · the cheapest wall there is" },
   glass     = { label = "Glass", kgm3 = 2500, strength = 60, k = 0.95, u = 2.8, seal = true, blend = true,
                 desc = "laminated pane in a steel frame · light comes in" },
+  -- (S6: reactor-grade graphite, the moderator column's own; not in MAT_ORDER)
+  graphite  = { label = "Graphite", kgm3 = 1700, strength = 30, k = 0.6, u = 1.0, seal = false,
+                desc = "nuclear-grade graphite bricks" },
   -- (S4: a decal's own "material": a film of paint, nothing structural)
   film      = { label = "Paint", kgm3 = 1200, strength = 1, k = 1.0, u = 0, seal = false,
                 desc = "a film of paint on a face" },
@@ -340,6 +370,97 @@ PIECES = {
                 mats = { "steel" }, vol = 1.08, fill = "solid", cost = 1800, fillk = { steel = 0.04 },
                 life = { store = 60, flow = 0.25, price = 4 },
                 desc = "three 200 bar cylinders of air on a regulator · fills a room to 1 atm · 60 m³" },
+  -- ── NUCLEAR (S6: a reactor built from components; scripts/reactor.lua) ──
+  -- Every port is at PIPE_Y (0.6 m) over the piece's ground point, on the
+  -- 0.5 m grid; a pipe's ends meet a component's nozzle exactly.
+  reactorBase = { label = "Reactor Vessel Base 5 × 5", section = "NUCLEAR", snap = "block", box = B(-1.25, 1.25, 0, 1.0, -1.5, 1.5),
+                mats = { "steel" }, vol = 6.25, fill = "solid", mass = { steel = 9.5 }, cost = 48000, tech = "ember", order = 1,
+                nuclear = { role = "vessel", cells = 5, top = 1.0 },
+                ports = { { name = "in", x = 0, z = -1.5, nx = 0, nz = -1, loop = "pri" }, { name = "out", x = 0, z = 1.5, nx = 0, nz = 1, loop = "pri" } },
+                rad = { rad = 0, omni = true, dynamic = true, up = 1.7 },
+                desc = "the lower head, inlet plenum and grid plate of a pressure-tube core · stand fuel channels, moderator and control rods on its 5 × 5 lattice · coolant in at −Z, out at +Z" },
+  fuelChannel = { label = "Fuel Channel", section = "NUCLEAR", snap = "block", box = B(-0.25, 0.25, 0, 2.4, -0.25, 0.25),
+                mats = { "steel" }, vol = 0.6, fill = "solid", mass = { steel = 0.18 }, cost = 6500, tech = "ember", order = 2,
+                nuclear = { role = "fuel", rods = 8 },
+                desc = "a zircaloy pressure tube for eight fuel rods · cooled by the primary loop · the moderator beside it slows its neutrons" },
+  modGraphite = { label = "Graphite Moderator Column", section = "NUCLEAR", snap = "block", box = B(-0.25, 0.25, 0, 2.4, -0.25, 0.25),
+                mats = { "graphite" }, vol = 0.6, fill = "solid", cost = 3200, tech = "ember", order = 3,
+                nuclear = { role = "mod", mod = "graphite" },
+                desc = "stacked graphite bricks · moderates well, absorbs little · a graphite core wants to be big: its neutrons wander far" },
+  modWater = { label = "Light Water Moderator Column", section = "NUCLEAR", snap = "block", box = B(-0.25, 0.25, 0, 2.4, -0.25, 0.25),
+                mats = { "steel" }, vol = 0.6, fill = "solid", mass = { steel = 0.67 }, cost = 1400, tech = "ember", order = 4,
+                nuclear = { role = "mod", mod = "water" },
+                desc = "a steel tank of ordinary water · the strongest moderator, but it absorbs: it needs enriched fuel · compact cores" },
+  modHeavy = { label = "Heavy Water Moderator Column", section = "NUCLEAR", snap = "block", box = B(-0.25, 0.25, 0, 2.4, -0.25, 0.25),
+                mats = { "steel" }, vol = 0.6, fill = "solid", mass = { steel = 0.73 }, cost = 38000, tech = "ember", order = 5,
+                nuclear = { role = "mod", mod = "heavy" },
+                desc = "a tank of D2O · moderates and hardly absorbs: natural uranium goes critical with it · costly" },
+  controlRod = { label = "Control Rod Column", section = "NUCLEAR", snap = "block", box = B(-0.25, 0.25, 0, 3.0, -0.25, 0.25),
+                mats = { "steel" }, vol = 0.75, fill = "solid", mass = { steel = 0.42 }, cost = 9000, tech = "ember", order = 6,
+                nuclear = { role = "rod" },
+                desc = "a boron carbide rod in its guide tube, its drive on top · worth most among fuel · drops in on a SCRAM" },
+  pipe2 = { label = "Coolant Pipe 2 m", section = "NUCLEAR", snap = "pipe", box = B(-0.12, 0.12, 0, 0.72, -1, 1),
+                mats = { "steel" }, vol = 0.35, fill = "solid", mass = { steel = 0.06 }, cost = 260, tech = "ember", order = 10,
+                pipe = { len = 2.0, loss = 0.0025 }, ports = { { name = "a", x = 0, z = -1, nx = 0, nz = -1, loop = "p" }, { name = "b", x = 0, z = 1, nx = 0, nz = 1, loop = "p" } },
+                desc = "DN100 schedule 80 steel on its stanchions · bare, it loses 0.25 % of the plant's heat a metre to the room (insulate a long run)" },
+  pipe1 = { label = "Coolant Pipe 1 m", section = "NUCLEAR", snap = "pipe", box = B(-0.12, 0.12, 0, 0.72, -0.5, 0.5),
+                mats = { "steel" }, vol = 0.17, fill = "solid", mass = { steel = 0.03 }, cost = 150, tech = "ember", order = 11,
+                pipe = { len = 1.0, loss = 0.0025 }, ports = { { name = "a", x = 0, z = -0.5, nx = 0, nz = -1, loop = "p" }, { name = "b", x = 0, z = 0.5, nx = 0, nz = 1, loop = "p" } },
+                desc = "a 1 m length of DN100 coolant pipe" },
+  pipeElbow = { label = "Pipe Elbow", section = "NUCLEAR", snap = "pipe", box = B(-0.12, 0.5, 0, 0.72, -0.5, 0.12),
+                mats = { "steel" }, vol = 0.1, fill = "solid", mass = { steel = 0.03 }, cost = 180, tech = "ember", order = 12,
+                pipe = { len = 0.8, loss = 0.0025 }, ports = { { name = "a", x = 0, z = -0.5, nx = 0, nz = -1, loop = "p" }, { name = "b", x = 0.5, z = 0, nx = 1, nz = 0, loop = "p" } },
+                desc = "a 90° long-radius bend · R turns which end goes on" },
+  pipeTee = { label = "Pipe Tee", section = "NUCLEAR", snap = "pipe", box = B(-0.12, 0.5, 0, 0.72, -0.5, 0.5),
+                mats = { "steel" }, vol = 0.12, fill = "solid", mass = { steel = 0.04 }, cost = 220, tech = "ember", order = 13,
+                pipe = { len = 1.2, loss = 0.0025 }, ports = { { name = "a", x = 0, z = -0.5, nx = 0, nz = -1, loop = "p" }, { name = "b", x = 0, z = 0.5, nx = 0, nz = 1, loop = "p" },
+                         { name = "c", x = 0.5, z = 0, nx = 1, nz = 0, loop = "p" } },
+                desc = "a branch · where the pressuriser's surge line joins the loop" },
+  pipeIns2 = { label = "Insulated Pipe 2 m", section = "NUCLEAR", snap = "pipe", box = B(-0.17, 0.17, 0, 0.8, -1, 1),
+                mats = { "steel" }, vol = 0.45, fill = "solid", mass = { steel = 0.08 }, cost = 520, tech = "ember", order = 14,
+                pipe = { len = 2.0, loss = 0.00004, lagged = true }, ports = { { name = "a", x = 0, z = -1, nx = 0, nz = -1, loop = "p" }, { name = "b", x = 0, z = 1, nx = 0, nz = 1, loop = "p" } },
+                desc = "DN100 under 80 mm of mineral wool in an aluminium jacket · loses a sixtieth of a bare pipe's heat · a fitting between two lagged runs is lagged with them" },
+  coolantPump = { label = "Coolant Pump", section = "NUCLEAR", snap = "block", box = B(-0.5, 0.5, 0, 1.5, -1, 1),
+                mats = { "steel" }, vol = 1.0, fill = "solid", mass = { steel = 0.65 }, cost = 14000, tech = "ember", order = 20,
+                pump = { flow = 4.0, kw = 1.5 }, power = { kind = "aux", use = 1.5 },
+                ports = { { name = "in", x = 0, z = -1, nx = 0, nz = -1, loop = "p" }, { name = "out", x = 0, z = 1, nx = 0, nz = 1, loop = "p" } },
+                desc = "a canned-motor pump: 4 kg/s round its loop · 1.5 kW from the grid · it pushes in → out (the arrow on its casing) · two in a loop ride out one failing" },
+  pressuriser = { label = "Pressuriser", section = "NUCLEAR", snap = "block", box = B(-0.5, 0.5, 0, 3.6, -1, 0.5),
+                mats = { "steel" }, vol = 2.9, fill = "solid", mass = { steel = 1.9 }, cost = 22000, tech = "ember", order = 21,
+                press = { kw = 0.8, tsat = 618 }, power = { kind = "aux", use = 0.8 },
+                ports = { { name = "surge", x = 0, z = -1, nx = 0, nz = -1, loop = "pri" } },
+                desc = "holds the primary at 15.5 MPa with its heaters (0.8 kW): the coolant runs at 300 °C without boiling · without one it boils at 100 °C" },
+  steamGen = { label = "Steam Generator", section = "NUCLEAR", snap = "block", box = B(-0.75, 0.75, 0, 3.8, -1, 1),
+                mats = { "steel" }, vol = 4.2, fill = "solid", mass = { steel = 4.2 }, cost = 38000, tech = "ember", order = 22,
+                hx = { ua = 30 },
+                ports = { { name = "pri_in", x = -0.5, z = -1, nx = 0, nz = -1, loop = "pri" }, { name = "pri_out", x = 0.5, z = -1, nx = 0, nz = -1, loop = "pri" },
+                          { name = "sec_in", x = 0.5, z = 1, nx = 0, nz = 1, loop = "sec" }, { name = "sec_out", x = -0.5, z = 1, nx = 0, nz = 1, loop = "sec" } },
+                desc = "a U-tube heat exchanger, 30 kW/K · the primary loop (its −Z nozzles) boils the secondary (its +Z nozzles) · the radioactive water stays inside" },
+  turbineSet = { label = "Turbine-Generator 100 kW", section = "NUCLEAR", snap = "block", box = B(-1.75, 1.75, 0, 1.7, -1.0, 0.75),
+                mats = { "steel" }, vol = 8.0, fill = "solid", mass = { steel = 3.6 }, cost = 65000, tech = "ember", order = 23,
+                turbine = { kwe = 100, eta = 0.65, qmax = 420, min = 0.1 }, power = { kind = "plant", kwe = 100 },
+                ports = { { name = "steam", x = -1.0, z = -1.0, nx = 0, nz = -1, loop = "sec" }, { name = "exhaust", x = 1.0, z = -1.0, nx = 0, nz = -1, loop = "sec" } },
+                desc = "a small steam turbine and its generator, 100 kW(e) · it makes 65 % of the Carnot limit between its steam and its condenser · on the base grid" },
+  radiatorPanel = { label = "Radiator Panel 2 × 4 m", section = "NUCLEAR", snap = "block", box = B(-1.5, 1.5, 0, 4.4, -0.3, 0.3),
+                mats = { "steel" }, vol = 2.0, fill = "solid", mass = { steel = 0.32 }, cost = 6800, tech = "ember", order = 24,
+                reject = { kind = "rad", area = 16, eps = 0.88 },
+                ports = { { name = "in", x = -1.5, z = 0, nx = -1, nz = 0, loop = "c" }, { name = "out", x = 1.5, z = 0, nx = 1, nz = 0, loop = "c" } },
+                desc = "a condensing radiator, 16 m² both faces · sheds by εσT⁴: run it hotter and it sheds far more, but the turbine makes less · rows chain end to end" },
+  coolingTower = { label = "Cooling Tower Cell", section = "NUCLEAR", snap = "block", box = B(-1.5, 1.5, 0, 5.2, -2.0, 1.5),
+                mats = { "steel" }, vol = 15, fill = "solid", mass = { steel = 6.5 }, cost = 30000, tech = "ember", order = 25,
+                reject = { kind = "tower", g = 14, kw = 2 }, power = { kind = "aux", use = 2.0 },
+                ports = { { name = "in", x = -0.5, z = -2.0, nx = 0, nz = -1, loop = "c" }, { name = "out", x = 0.5, z = -2.0, nx = 0, nz = -1, loop = "c" } },
+                desc = "a forced-draft cell, 14 kW/K to the air · its fan draws 2 kW · nothing to blow on an airless world" },
+  reactorConsole = { label = "Reactor Control Console", section = "NUCLEAR", snap = "block", box = B(-0.8, 0.8, 0, 1.45, -0.45, 0.45),
+                mats = { "steel" }, vol = 1.0, fill = "solid", mass = { steel = 0.25 }, cost = 12000, tech = "ember", order = 30,
+                console = { w = 1.1, h = 0.62 }, script = "reactor_plant",
+                desc = "the plant's desk: k, power, rods, xenon, the loops, the turbine, the dose and what limits it · right-click to run the reactor" },
+  shieldHeavy = { label = "Heavy Shield Block 1 × 1", section = "SHIELD", snap = "block", box = B(-0.5, 0.5, 0, 1, -0.5, 0.5),
+                mats = { "concrete" }, vol = 1.0, fill = "solid", mass = { concrete = 3.6 }, cost = 2200, shieldk = 0.02,
+                desc = "1 m of magnetite concrete · lets 2 % of a dose through · stacks into a reactor's shield" },
+  waterShield = { label = "Water Shield Tank", section = "SHIELD", snap = "block", box = B(-0.5, 0.5, 0, 2.0, -0.25, 0.25),
+                mats = { "steel" }, vol = 1.0, fill = "solid", mass = { steel = 1.08 }, cost = 700, shieldk = 0.25,
+                desc = "a steel tank of water, 0.5 m thick · light and cheap · lets a quarter through" },
 }
 
 -- ── PROPS (S4: clutter and character; tools/gen_kit_props.py) ───────────────
@@ -556,7 +677,10 @@ local function resolve(piece, mat)
     faces2 = FACES2[piece] == true, exterior = EXTERIOR[P.section] == true, noPaint = P.film or nil,
     -- (S5) the power network's gear
     netgear = P.netgear, pole = P.pole, cableAt = P.cableAt,
-    script = (P.door or P.light or P.screen or P.switch or P.sign or P.emblem) and "kit_live" or nil,
+    -- (S6) the reactor's components: the core's lattice, ports, the loops' gear
+    nuclear = P.nuclear, ports = P.ports, pipe = P.pipe, pump = P.pump, press = P.press, hx = P.hx, turbine = P.turbine,
+    reject = P.reject, console = P.console, rad = P.rad, tech = P.tech,
+    script = P.script or ((P.door or P.light or P.screen or P.switch or P.sign or P.emblem) and "kit_live" or nil),
     seals = (P.seals == "door" or P.seals == "ring" or P.seals == "y" or P.seals == "z") and P.seals or nil,
     u = M.u, matk = M.k, strength = M.strength,
     desc = string.format("%s · %s · %.2f t", P.desc or "", M.label, massOf(piece, mat)),

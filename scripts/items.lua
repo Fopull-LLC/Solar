@@ -137,6 +137,19 @@ ITEMS.fuelRod = { name = "Fuel Rod", kind = "consumable", kg = 40.0, L = 14, cos
                   hold = { prefab = "ItemFuelRod", grip = "shoulder" }, body = "FuelRodBody",
                   use = { target = "part", provider = "rods" },
                   about = "a reactor fuel rod in its carry frame: hold it at a reactor and right-click to load it" }
+-- (S6) the same cartridge at two more enrichments, for reactors built from
+-- components (scripts/reactor.lua RODS): natural uranium (0.72 % U-235: only
+-- heavy water or a big graphite pile takes it critical) and HALEU (19.75 %:
+-- a compact core). The Fuel Rod above is LEU at 3 %. The Depot sells both
+-- once the Ember's research is done; the press makes the 3 % rod.
+ITEMS.fuelRodNU = { name = "Fuel Rod (natural U)", kind = "consumable", kg = 40.0, L = 14, cost = 900, shop = true, tech = "ember",
+                    hold = { prefab = "ItemFuelRod", grip = "shoulder" }, body = "FuelRodBody",
+                    use = { target = "prop", provider = "reactor_plant" },
+                    about = "natural uranium, 0.72 % U-235 · goes critical only with heavy water, or in a big graphite pile · load it into a Fuel Channel" }
+ITEMS.fuelRodHALEU = { name = "Fuel Rod (HALEU 19.75 %)", kind = "consumable", kg = 40.0, L = 14, cost = 7500, shop = true, tech = "ember",
+                       hold = { prefab = "ItemFuelRod", grip = "shoulder" }, body = "FuelRodBody",
+                       use = { target = "prop", provider = "reactor_plant" },
+                       about = "high-assay low-enriched uranium · a small core goes critical on little moderator, and its fuel lasts · load it into a Fuel Channel" }
 ITEMS.spentRod = { name = "Spent Rod", kind = "consumable", kg = 40.0, L = 14, cost = 0, hot = true,
                    hold = { prefab = "ItemSpentRod", grip = "shoulder" }, body = "SpentRodBody",
                    about = "a burnt-out fuel rod, hot with fission products: don't carry it in a pack for long. The Materials Intake takes it back" }
@@ -156,7 +169,7 @@ ITEMS.buildkit = { name = "Build Kit", kind = "device", kg = 1.6, L = 3, cost = 
 
 -- The belt's order: tools first, then devices and deployables, then
 -- consumables with a hold. (Worn items are never on the belt.)
-ORDER = { "gravgun", "laser", "surveyor", "buildkit", "beacon", "flag", "rope", "repairkit", "medkit", "gascan", "fuelRod", "spentRod", "rcspack", "o2tank", "flashlight" }
+ORDER = { "gravgun", "laser", "surveyor", "buildkit", "beacon", "flag", "rope", "repairkit", "medkit", "gascan", "fuelRod", "fuelRodNU", "fuelRodHALEU", "spentRod", "rcspack", "o2tank", "flashlight" }
 
 -- The Medkit's work (crew.lua runs it): seconds held at it, what it gives,
 -- and the reach from the medic to the patient (m).

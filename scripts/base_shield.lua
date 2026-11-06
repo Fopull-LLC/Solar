@@ -71,8 +71,12 @@ function scan(ST, defs)
       end
       if d and d.rad then
         local b = partBox(ST, rec, p, d)
-        S[#S + 1] = { b = rec.b, x = b.x, y = b.y, z = b.z, ax = b.Y.x, ay = b.Y.y, az = b.Y.z, rad = d.rad.rad or 0,
-                      omni = d.rad.omni == true, share = 1, sid = rec.id, uid = p.uid, label = d.label }
+        -- (S6: a reactor vessel's source is its core, `up` over the box's
+        -- centre; `dynamic`: its strength is the plant's, asked each pass)
+        local up = d.rad.up or 0
+        S[#S + 1] = { b = rec.b, x = b.x + b.Y.x * up, y = b.y + b.Y.y * up, z = b.z + b.Y.z * up, ax = b.Y.x, ay = b.Y.y, az = b.Y.z,
+                      rad = d.rad.rad or 0, omni = d.rad.omni == true, share = d.rad.dynamic and 0 or 1, dyn = d.rad.dynamic == true,
+                      sid = rec.id, uid = p.uid, label = d.rad.dynamic and "reactor" or d.label }
       end
     end
   end
@@ -164,6 +168,17 @@ function pass(gs)
   end
   local rep = { traced = 0, hit = 0, out = {} }
   local bodyCache = {}
+  -- (S6) the reactors' strength now: their heat over their rating, and any release
+  local RP = ref("reactor_plant")
+  local live_n = 0
+  for _, s in ipairs(SRCS) do
+    if s.dyn then
+      if RP and RP.radOf then s.rad, s.share = RP.radOf(s.sid, s.uid) else s.share = 0 end
+      s.rad, s.share = s.rad or 0, s.share or 0
+    end
+    if (s.share or 0) > 0 and (s.rad or 0) > 0 then live_n = live_n + 1 end
+  end
+  if live_n == 0 then last_pass = rep return rep end
   for _, id in ipairs(P.afoot) do
     local nb = cl.bodyOf and cl.bodyOf(id)
     if nb and nb.valid ~= false then
@@ -260,7 +275,7 @@ function drawFields()
   local function body(nm) local b = bodyc[nm]; if b == nil then b = space.body(nm) or false; bodyc[nm] = b end return b or nil end
   for _, s in ipairs(SRCS) do
     local b = body(s.b)
-    if b and len3(b.x + s.x - a.x, b.y + s.y - a.y, b.z + s.z - a.z) < 80 then
+    if b and not s.dyn and len3(b.x + s.x - a.x, b.y + s.y - a.y, b.z + s.z - a.z) < 80 then
       n = n + 1
       if s.omni then
         -- where the field falls to a share an hour: 1 %, 0.5 %, 0.2 % of a lethal dose

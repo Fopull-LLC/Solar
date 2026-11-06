@@ -104,6 +104,62 @@ local function cq(v, lo, hi)
   return math.max(lo, math.min(hi, quantize(v, GRID)))
 end
 
+-- ── S6: PORTS (a pipe, a pump, a steam generator: parts_kit `ports`) ───────
+-- A piece with ports aimed at a piece with ports goes nozzle to nozzle: on
+-- the hit piece's free port nearest the cursor, the held piece's port k (R
+-- steps k: which end of a pipe, which way an elbow turns) on it, facing it.
+-- All ports are at PIPE_Y over their piece's ground point, so the pieces
+-- stand on one floor. reactor.lua's port graph reads the same positions.
+PIPE_Y = 0.6
+local function prot(yaw, x, z)
+  local c, s = math.cos(yaw or 0), math.sin(yaw or 0)
+  return x * c + z * s, -x * s + z * c
+end
+function portPose(p, pt)
+  local dx, dz = prot(p.yaw, pt.x, pt.z)
+  local nx, nz = prot(p.yaw, pt.nx, pt.nz)
+  return (p.x or 0) + dx, (p.y or 0) + PIPE_Y, (p.z or 0) + dz, nx, nz
+end
+-- Is there a port of `rec` at (x, y, z) facing (nx, nz)'s opposite (already joined)?
+local function port_taken(rec, defs, skipUid, x, y, z, nx, nz)
+  for _, p in ipairs(rec.bp or {}) do
+    if p.uid ~= skipUid then
+      local d = defs(p.id)
+      if d and d.ports then
+        for _, pt in ipairs(d.ports) do
+          local px, py, pz, qx, qz = portPose(p, pt)
+          if math.abs(px - x) < 0.06 and math.abs(pz - z) < 0.06 and math.abs(py - y) < 0.06 and qx * nx + qz * nz < -0.9 then return true end
+        end
+      end
+    end
+  end
+  return false
+end
+-- → a face() pose on the nearest free port, or nil
+function portSnap(q, fr, part, hd, hx, hy, hz)
+  local def, rec = q.def, q.hit.rec
+  local best, bd = nil, 1.6
+  for _, pt in ipairs(hd.ports) do
+    local x, y, z, nx, nz = portPose(part, pt)
+    local d = math.sqrt((x - hx) ^ 2 + (y - hy) ^ 2 + (z - hz) ^ 2)
+    if d < bd and not port_taken(rec, q.defs, part.uid, x, y, z, nx, nz) then best, bd = { x = x, y = y, z = z, nx = nx, nz = nz, name = pt.name }, d end
+  end
+  if not best then return nil end
+  local n = #def.ports
+  local k = (math.floor((q.yawOff or 0) / QUARTER + 0.5) % n) + 1
+  local hp = def.ports[k]
+  -- the yaw that turns the held port's direction onto the hit port's opposite
+  local yaw = quantize(wrap(math.atan2(-best.nx, -best.nz) - math.atan2(hp.nx, hp.nz)), QUARTER)
+  local ox, oz = prot(yaw, hp.x, hp.z)
+  local lx, ly, lz = best.x - ox, best.y - PIPE_Y, best.z - oz
+  local x, y, z = toBody(fr, lx, ly, lz)
+  local lu, lf = localAxes(yaw, 0, 0)
+  local function bodyv(v) return V(fr.R.x * v[1] + fr.U.x * v[2] + fr.F.x * v[3], fr.R.y * v[1] + fr.U.y * v[2] + fr.F.y * v[3],
+                                   fr.R.z * v[1] + fr.U.z * v[2] + fr.F.z * v[3]) end
+  return { mode = "face", rec = rec, lx = lx, ly = ly, lz = lz, yaw = wrap(yaw), pitch = 0, roll = 0,
+           x = x, y = y, z = z, up = bodyv(lu), fwd = bodyv(lf), anchor = part, face = "port", port = best.name, portK = k }
+end
+
 -- q = { def (in hand), P, N (body-relative hit point and its normal),
 --       toward (body frame, toward the Engineer), hit = { rec, part },
 --       defs = fn(id) → def, yawOff }
@@ -120,6 +176,11 @@ function face(q)
   local rec, part = hit.rec, hit.part
   local fr = frameOf(rec)
   local hx, hy, hz = toLocal(fr, q.P.x, q.P.y, q.P.z)
+  -- (S6) nozzle to nozzle first
+  if def.ports and hd.ports and math.abs(part.pitch or 0) < 1e-3 then
+    local pp = portSnap(q, fr, part, hd, hx, hy, hz)
+    if pp then return pp end
+  end
   local nx, ny, nz = dot(q.N, fr.R), dot(q.N, fr.U), dot(q.N, fr.F)
   local tw = q.toward or V(0, 0, 1)
   local tx, tz = dot(tw, fr.R), dot(tw, fr.F)
@@ -237,7 +298,7 @@ function face(q)
       cx = an > 0 and (hb[2] + phx) or (hb[1] - phx)
       cy, cz = 0, 0
     end
-  elseif S == "block" or S == "prop" then
+  elseif S == "block" or S == "prop" or S == "pipe" then
     -- (S4: a prop is a block on a finer grid: a monitor on a desk, a crate in a corner)
     local g = S == "prop" and MOUNT_GRID or GRID
     if ax == "y" and an > 0 then

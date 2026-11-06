@@ -572,3 +572,27 @@ end
 
 -- ── one line for the HUD / the inspector ────────────────────────────────────
 function pct(x) return math.floor(math.max(0, x or 0) * 100 + 0.5) end
+
+-- ── S6: THE PLANT'S HEAT NETWORK (scripts/reactor.lua; heat-and-nuclear §8) ─
+-- A craft keeps its ONE loop above. A reactor built from components is a
+-- chain of NODES in real kelvin (fuel, primary, secondary, condenser) joined
+-- by LINKS, each a heat flow in watts from the two temperatures it joins:
+--   conduction   G · (Ta − Tb)                       (a film, a lagged shell)
+--   exchanger    ε · ṁc · (Thot − Tcold), ε = 1 − e^(−UA/ṁc)   (one side boils)
+--   radiation    ε σ A (T⁴ − T_sky⁴)                 (a radiator panel)
+--   the work a heat engine takes out of Q between Th and Tc: η (1 − Tc/Th) Q
+-- The plant steps its nodes with reactor.lua's stiff solver (its kinetics
+-- couple them); these are the link laws it calls, shared with anything
+-- else that will run on the heat network (S9's furnace, S7's coolant).
+HEATNET = { sigma = 5.670374e-8 }
+function linkConduct(G, Ta, Tb) return G * (Ta - Tb) end
+function exchangerEff(UA, mc)
+  if mc <= 1e-12 or UA <= 0 then return 0 end
+  return 1 - math.exp(-UA / mc)
+end
+function linkExchange(UA, mdot, cp, Thot, Tcold)
+  local mc = mdot * cp
+  return exchangerEff(UA, mc) * mc * (Thot - Tcold)
+end
+function linkRadiate(eps, A, T, Tsky) return eps * HEATNET.sigma * A * (T ^ 4 - Tsky ^ 4) end
+function carnot(Th, Tc) if Th <= 0 then return 0 end return math.max(0, 1 - Tc / Th) end

@@ -26,7 +26,13 @@
 #                                    with transformers, a breaker tripped by
 #                                    overload and reset, the POWER overlay, the
 #                                    new swatches, a sign read at 8 m, save and
-#                                    reload)
+#                                    reload), reactor (S6: a reactor assembled
+#                                    from components on a slab floor, fuelled,
+#                                    taken critical on real warp, its turbine on
+#                                    the base grid, the NUCLEAR overlay and the
+#                                    console, SCRAM, the xenon pit blocking a
+#                                    restart, the pumps cut: the overheat
+#                                    alarm; save and reload)
 #   env: WORK LOCK SOLAR TAG PATCHES BENCH_PARAMS as bench.sh
 #
 # Splices vfxprobe_modes.lua (its freecam), buildkitprobe_modes.lua (the BK
@@ -39,7 +45,7 @@ S=${WORK:-${TMPDIR:-/tmp}/solar-kit}
 eng=${1:?usage: kitprobe.sh <engine> [modes]}; shift
 mkdir -p $S/tools
 cp $HERE/bench.sh $HERE/table.py $HERE/perfbench.lua $S/tools/
-python3 - "$S/tools/perfbench.lua" "$HERE/vfxprobe_modes.lua" "$HERE/buildkitprobe_modes.lua" "$HERE/kitprobe_modes.lua" "$HERE/charprobe_modes.lua" "$HERE/powerprobe_modes.lua" <<'PY'
+python3 - "$S/tools/perfbench.lua" "$HERE/vfxprobe_modes.lua" "$HERE/buildkitprobe_modes.lua" "$HERE/kitprobe_modes.lua" "$HERE/charprobe_modes.lua" "$HERE/powerprobe_modes.lua" "$HERE/reactorprobe_modes.lua" <<'PY'
 import sys
 p = sys.argv[1]
 m = "".join(open(a).read() for a in sys.argv[2:])
@@ -47,7 +53,7 @@ s = open(p).read()
 i = s.index('-- ── main ──')
 s = s[:i] + m + s[i:]
 s = s.replace('    elseif MODE == "plane" then run_plane()',
-              '    elseif MODE == "plane" then run_plane()\n    elseif MODE == "kit" then KIT.run()\n    elseif MODE == "kitperf" then KIT.run_perf()\n    elseif MODE == "rooms" then KIT.run_rooms()\n    elseif MODE == "character" then CH.run()\n    elseif MODE == "tint" then CH.run_tint()\n    elseif MODE == "interior" then PW.run_interior()\n    elseif MODE == "power" then PW.run()')
+              '    elseif MODE == "plane" then run_plane()\n    elseif MODE == "kit" then KIT.run()\n    elseif MODE == "kitperf" then KIT.run_perf()\n    elseif MODE == "rooms" then KIT.run_rooms()\n    elseif MODE == "character" then CH.run()\n    elseif MODE == "tint" then CH.run_tint()\n    elseif MODE == "interior" then PW.run_interior()\n    elseif MODE == "power" then PW.run()\n    elseif MODE == "reactor" then RXP.run()')
 open(p, 'w').write(s)
 PY
 rm -rf $S/proj/save/user/buildshots

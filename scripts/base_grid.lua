@@ -193,7 +193,7 @@ end
 function gridModel(g, pose, towerNeed, opts)
   opts = opts or {}
   local M = { base = 0, arrays = {}, loads = {}, need = 0, stores = {}, C = 0, eff = 1, sources = 0, rtg = 0, body = nil,
-              rtgs = {}, breakers = {}, xfmrs = {}, mainsOff = {} }
+              rtgs = {}, breakers = {}, xfmrs = {}, mainsOff = {}, plant = 0, plants = {} }
   local effw, capw = 0, 0
   -- (S5) a breaker with no cable at all is its structure's MAIN: open or
   -- tripped, that structure's own loads are off the grid
@@ -242,6 +242,24 @@ function gridModel(g, pose, towerNeed, opts)
     elseif pw and pw.kind == "load" and not M.mainsOff[r.id] then
       M.loads[#M.loads + 1] = { kind = "load", need = pw.use or 0, label = e.def.label, sid = r.id }
       M.need = M.need + (pw.use or 0)
+    elseif pw and pw.kind == "plant" then
+      -- (S6) a turbine-generator: what its plant makes now (reactor_plant
+      -- publishes it; held over each step, the grid rebuilt when it moves)
+      local kw = opts.plantKW and opts.plantKW(r.id, p.uid) or 0
+      M.plants[#M.plants + 1] = { sid = r.id, uid = p.uid, kw = kw }
+      if kw > 0 then
+        M.base = M.base + kw
+        M.plant = M.plant + kw
+        M.sources = M.sources + 1
+        M.rtgs[#M.rtgs + 1] = { sid = r.id, gen = kw }
+      end
+    elseif pw and pw.kind == "aux" and not M.mainsOff[r.id] then
+      -- (S6) a plant's pump, heater or fan, while it runs
+      local kw = opts.auxKW and opts.auxKW(r.id, p.uid) or 0
+      if kw > 0 then
+        M.loads[#M.loads + 1] = { kind = "aux", need = kw, label = e.def.label, sid = r.id, uid = p.uid }
+        M.need = M.need + kw
+      end
     end
   end
   M.eff = capw > 0 and effw / capw or 1
@@ -717,7 +735,9 @@ topology = function(a, clk)
   end
   local bsid = {}
   for _, b in ipairs(blist) do bsid[b.id] = b.sid end
-  local opts = { cablesAt = at, state = breaker_state, baseSid = function(bid) return bsid[bid] end }
+  local RP = ref("reactor_plant")
+  local opts = { cablesAt = at, state = breaker_state, baseSid = function(bid) return bsid[bid] end,
+                 plantKW = RP and RP.gridGen or nil, auxKW = RP and RP.gridAux or nil }
   local BP = ref("base_power")
   local t = read_e()
   local models, sts, byId, byBase, edgeOf = {}, {}, {}, {}, {}
@@ -853,6 +873,15 @@ function partFlow(sid, uid)
 end
 
 function gridOfStruct(sid) fresh() return G.bySid[sid] end
+-- (S6) Is a part's load served now? (a plant's pump on a grid short and
+-- flat drops out.) → true | false | nil (not on a grid, or no load)
+function partServed(sid, uid)
+  local g = G.bySid[sid]
+  local M, s = g and G.models[g.id], g and G.status[g.id]
+  if not (M and s and s.served) then return nil end
+  for i, l in ipairs(M.loads) do if l.sid == sid and l.uid == uid then return s.served[i] == true end end
+  return nil
+end
 function model(gid) return G.models[gid] end
 -- { supply, need, powered, stored, cap, short, served, t } | nil
 function status(gid) return G.status[gid] end
@@ -886,7 +915,7 @@ function towerPower(bid)
            cap = M.C, grid = g.id, src = src, short = s and s.short or 0, structures = #g.sids, towers = #g.bases,
            cables = g.cables, sources = M.sources, solar = s and (s.supply - M.base) or 0, rtg = M.base,
            loss = s and s.loss or 0, limited = s and s.limited or nil, limitShare = s and s.limitShare or 0,
-           breakers = #(M.breakers or {}), xfmrs = #(M.xfmrs or {}) }
+           breakers = #(M.breakers or {}), xfmrs = #(M.xfmrs or {}), plant = M.plant or 0 }
 end
 
 -- How long the store lasts at this draw with no sun (s; nil = forever).
