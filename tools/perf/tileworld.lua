@@ -10,12 +10,48 @@
 -- 14 m under the flat ground, paint seam / magma / crystal pockets on its walls and
 -- photograph them by a lamp at the camera: the depth layers and the glow slots),
 -- graze (1: a low view along the flat ground to the horizon, the tiling at a
--- grazing angle).
-defaults = { first = 1, last = 99, settle = 3, quit = 1, cave = 0, graze = 0 }
+-- grazing angle), smin/smax (the sun's height at the spot, as sin(elevation): the
+-- default 0.55-0.85 is a high sun; 0.2-0.34 a low one), dist (1: the flat ground
+-- at the feet and 30, 100 and 300 m out, then the feet and 30 m with the sun from
+-- the right: `_side_*`, where a normal map's bumps must light from the right),
+-- phys (1: the planet's Material Physical, as system_generator makeBody sets it;
+-- pcol its colour), loadwatch (1: log every frame over 40 ms, and shoot the planet
+-- once a second while it fills: a palette arriving late shows grey or white).
+defaults = { first = 1, last = 99, settle = 3, quit = 1, cave = 0, graze = 0,
+  smin = 0.55, smax = 0.85, dist = 0, phys = 0, pcol = 1, loadwatch = 0, trace = 0 }
 
 local W = function() return app.wallClock and app.wallClock() or os.clock() end
 local W0 = W()
-local function P(fmt, ...) print(string.format("TW %7.2f " .. fmt, W() - W0, ...)) end
+-- trace (1: perf on; every frame's ms, terrain bucket and parts, chunk counts and
+-- terrain.busy into user://twtrace/frames.tsv, a perf.counts() dump at each mark
+-- into counts.txt: for the engine, around a world's arrival and a cold load)
+local TR, TRC = {}, {}
+local MARK = ""
+local function P(fmt, ...)
+  local line = string.format("TW %7.2f " .. fmt, W() - W0, ...)
+  print(line)
+  if params and params.trace and params.trace > 0 then MARK = MARK .. line:gsub("\t", " ") .. "; " end
+end
+local function ser(v, ind)
+  ind = ind or ""
+  if type(v) ~= "table" then return tostring(v) end
+  local ks = {}
+  for k in pairs(v) do ks[#ks + 1] = k end
+  table.sort(ks, function(a, b) return tostring(a) < tostring(b) end)
+  local o = {}
+  for _, k in ipairs(ks) do o[#o + 1] = ind .. "  " .. tostring(k) .. " = " .. ser(v[k], ind .. "  ") end
+  return "{\n" .. table.concat(o, "\n") .. "\n" .. ind .. "}"
+end
+local function countsDump(label)
+  if not (params.trace > 0) then return end
+  TRC[#TRC + 1] = string.format("== %s at %.2f s\n%s\n", label, W() - W0, ser(perf.counts()))
+end
+local function traceFlush()
+  if params.trace > 0 then
+    assets.writeBytes("user://twtrace/frames.tsv", table.concat(TR))
+    assets.writeBytes("user://twtrace/counts.txt", table.concat(TRC))
+  end
+end
 local function yield() coroutine.yield() end
 local function hold(secs) local t = W() + secs; while W() < t do yield() end end
 local function wait_for(fn, tmo)
@@ -28,7 +64,7 @@ local SUN = vec3(0.4, 0.9, 0.45):normalized()
 local function shot(name)
   local done = false
   local ok = pcall(camera.capture, { w = 1280, h = 720, ui = false, draws = false }, function(bytes, why)
-    if bytes then assets.writeBytes("user://tworld/" .. name .. ".png", bytes); P("SHOT %s", name)
+    if bytes then assets.writeBytes("user://tworld/" .. name .. ".png", bytes); P("SHOT %s", name); countsDump("shot " .. name)
     else P("SHOT %s failed %s", name, tostring(why)) end
     done = true
   end)
@@ -64,6 +100,10 @@ end
 
 local function main()
   local cam = find("Camera")
+  if params.phys > 0 then
+    local k = params.pcol   -- the Material colour (1 = white)
+    find("Planet"):setMaterial { color = { k, k, k }, shading = "physical", roughness = 1.0, metallic = 0.0 }
+  end
   for wi = params.first, math.min(params.last, #WORLDS) do
     local w = WORLDS[wi]
     local o = w.opts
@@ -73,9 +113,19 @@ local function main()
     cam.x, cam.y, cam.z = far.x, far.y, far.z
     cam:lookAt(vec3(0, 0, 0), vec3(0, 1, 0))
     yield()
+    countsDump("world " .. wi .. " before generatePlanet")
+    P("GENERATE %s", w.name)
     terrain.generatePlanet(1, o)
     yield(); yield()
+    if params.loadwatch > 0 and wi == params.first then
+      -- the palette's arrival: the planet from afar, a shot a second while it fills
+      for k = 1, 8 do
+        if not terrain.busy() then break end
+        shot(string.format("%s_lw_orbit%d", tag, k)); hold(1.0)
+      end
+    end
     wait_for(function() return not terrain.busy() end, 240)
+    P("FILLED %s", w.name); countsDump("world " .. wi .. " filled")
     local top = (w.peak or 100) + 60
     -- slope over ~6 m at directions 35-60 deg from the sun
     local flat, flat_s, steep, steep_s
@@ -83,7 +133,7 @@ local function main()
     for i = 0, N - 1 do
       local d = fib(i, N)
       local s = d:dot(SUN)
-      if s > 0.55 and s < 0.85 then
+      if s > params.smin and s < params.smax then
         local h0 = ground(d, R, top)
         local t1 = d:cross(vec3(0, 1, 0)):normalized()
         local t2 = d:cross(t1)
@@ -104,10 +154,24 @@ local function main()
       local d = flat
       local t = (SUN - d * SUN:dot(d)):normalized() * -1
       local eye = along(d, t, 0, R, top, 1.7)
+      if params.dist > 0 then
+        P("SUN elevation %.1f deg", math.deg(math.asin(SUN:dot(d))))
+        view(cam, eye, along(d, t, 2.5, R, top, 0), d, tag .. "_feet")
+        for _, m in ipairs({ 30, 100, 300 }) do
+          view(cam, eye, along(d, t, m, R, top, 0), d, tag .. "_d" .. m)
+        end
+        -- the sun on the right: look a quarter turn from it (the camera's right is
+        -- forward x up, so turn until that leans toward the sun)
+        local side = d:cross(t):normalized()
+        if side:cross(d):dot(SUN) < 0 then side = side * -1 end
+        view(cam, eye, along(d, side, 2.5, R, top, 0), d, tag .. "_side_feet")
+        view(cam, eye, along(d, side, 30, R, top, 0), d, tag .. "_side_d30")
+      else
       view(cam, eye, along(d, t, 2.5, R, top, 0), d, tag .. "_feet")
       view(cam, eye, along(d, t, 12, R, top, 0), d, tag .. "_eye")
       view(cam, eye, along(d, t, 80, R, top, 0), d, tag .. "_far")
       view(cam, along(d, t, 0, R, top, 25), along(d, t, 60, R, top, 0), d, tag .. "_high")
+      end
       if params.graze > 0 then
         view(cam, along(d, t, 0, R, top, 0.6), along(d, t, 300, R, top, 0), d, tag .. "_graze")
       end
@@ -153,10 +217,39 @@ local function main()
     end
   end
   P("DONE")
+  countsDump("done"); traceFlush()
   if params.quit > 0 then app.quit() end
 end
 
+local HT, NF, TRON = 0, 0, false
+local TPART = { "terrainMeshing", "terrainStreaming", "terrainPalette", "terrainShadow", "assetDecode", "assetUpload" }
 function lateUpdate(node, dt)
+  if params.trace > 0 then
+    if not TRON then perf.enable(true); TRON = true
+      TR[1] = "t\tframe\tms\tterrain_bucket\tuntimed\trender\tgpuWait\tpresent\tassets\tscripts\tphysics\tpaced\t" .. table.concat(TPART, "\t") .. "\tchunks\tfieldChunks\tfieldStandIns\tbusy\tmark\n" end
+    local f = perf.frames(1)
+    f = f and f[1]
+    if f then
+      local b, pt, c = f.buckets or {}, f.parts or {}, f.counts or {}
+      local row = { string.format("%.3f", W() - W0), tostring(f.frame), string.format("%.2f", f.ms or 0),
+        string.format("%.2f", b.terrain or 0), string.format("%.2f", b.untimed or 0), string.format("%.2f", b.render or 0),
+        string.format("%.2f", b.gpuWait or 0), string.format("%.2f", b.present or 0), string.format("%.2f", b.assets or 0),
+        string.format("%.2f", b.scripts or 0), string.format("%.2f", b.physics or 0), tostring(f.paced or "") }
+      for _, k in ipairs(TPART) do row[#row + 1] = string.format("%.2f", pt[k] or 0) end
+      row[#row + 1] = tostring(c.chunks or ""); row[#row + 1] = tostring(c.fieldChunks or ""); row[#row + 1] = tostring(c.fieldStandIns or "")
+      row[#row + 1] = terrain.busy() and "1" or "0"; row[#row + 1] = MARK
+      TR[#TR + 1] = table.concat(row, "\t") .. "\n"
+      MARK = ""
+    end
+    -- written once at the end: rewriting a growing file every few hundred frames
+    -- was itself a 0.2-1.2 s script stall (the first traces, 2026-11-05)
+  end
+  NF = NF + (params.loadwatch > 0 and 0 or 1)
+  -- loadwatch: every frame over 40 ms from the start (the palette build, the fill)
+  if params.loadwatch > 0 then
+    NF = NF + 1
+    if dt > 0.040 then HT = HT + 1; P("HITCH frame %d dt %.1f ms", NF, dt * 1000) end
+  end
   if not CO then CO = coroutine.create(main) end
   if coroutine.status(CO) ~= "dead" then
     local ok, err = coroutine.resume(CO)

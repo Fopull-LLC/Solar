@@ -2605,6 +2605,12 @@ local function makeBody(sys, b)
     n:setTerrain(b.id)
     n:setTerrainGen(b.opts)
     n:setCelestial(b.cel)
+    -- No Material: the ground shades Classic. Its palette's normal and AO maps
+    -- light under Classic as well (engine 0637). Physical was tried (2026-11-05,
+    -- work/terrainpbr): its key light is N.L/pi against Classic's N.L, so sunlit
+    -- ground drew 54 % darker under the same sun, and a colour raised to win it
+    -- back raised the shade's ambient and sky reflection with it (shadowed rock
+    -- 3x brighter, washed grey). Waits on an engine answer (NOTES there).
     n.x, n.y, n.z = b.pos[1], b.pos[2], b.pos[3]
     n.tags = { "genbody" }
     local hot = (b.opts.corePaint and b.opts.corePaint.slot == 6)

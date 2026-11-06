@@ -1,5 +1,5 @@
 {
- "about": "Solar's environment texture library, converted by tools/import_textures.py. CC0 output (textures/env) is committed; commercial output (textures/env_local) is git-ignored and must never be committed. Each set: albedo.png (sRGB), normal.png (OpenGL), orm.png (R AO, G rough, B metal), height.png.",
+ "about": "Solar's environment texture library, converted by tools/import_textures.py. CC0 output (textures/env) is committed; commercial output (textures/env_local) is git-ignored and must never be committed. Each set: albedo.png (sRGB), normal.png (OpenGL), orm.png (R AO, G rough, B metal), height.png. Each terrain layer (but the glow slots) also has maps/<set or slot>_{normal,orm,height}.png at the layer size, named on its palette line.",
  "library": "gametexturesdotcom (a local folder: --lib)",
  "sets": [
   {
@@ -2230,13 +2230,23 @@
    "was_psx": "planet_rust_rock",
    "cc0": {
     "set": "Rocks011",
-    "file": "textures/env/terrain/01_rust.png"
+    "file": "textures/env/terrain/01_rust.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/Rocks011_normal.png",
+     "orm": "textures/env/terrain/maps/Rocks011_orm.png",
+     "height": "textures/env/terrain/maps/Rocks011_height.png"
+    }
    },
    "local": {
     "set": "MarsSmoothRock",
-    "file": "textures/env_local/terrain/01_rust.png"
+    "file": "textures/env_local/terrain/01_rust.png",
+    "maps": {
+     "normal": "textures/env_local/terrain/maps/MarsSmoothRock_normal.png",
+     "orm": "textures/env_local/terrain/maps/MarsSmoothRock_orm.png",
+     "height": "textures/env_local/terrain/maps/MarsSmoothRock_height.png"
+    }
    },
-   "size": 256,
+   "size": 512,
    "scale": 1.6,
    "glow": false
   },
@@ -2247,10 +2257,15 @@
    "was_psx": "planet_purple_dirt",
    "cc0": {
     "set": "Ground039",
-    "file": "textures/env/terrain/02_soil.png"
+    "file": "textures/env/terrain/02_soil.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/Ground039_normal.png",
+     "orm": "textures/env/terrain/maps/Ground039_orm.png",
+     "height": "textures/env/terrain/maps/Ground039_height.png"
+    }
    },
    "local": null,
-   "size": 256,
+   "size": 512,
    "scale": 2.2,
    "glow": false
   },
@@ -2261,13 +2276,23 @@
    "was_psx": "planet_purple_slate",
    "cc0": {
     "set": "Rocks011",
-    "file": "textures/env/terrain/03_flagstone.png"
+    "file": "textures/env/terrain/03_flagstone.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/Rocks011_normal.png",
+     "orm": "textures/env/terrain/maps/Rocks011_orm.png",
+     "height": "textures/env/terrain/maps/Rocks011_height.png"
+    }
    },
    "local": {
     "set": "Old_Rocks",
-    "file": "textures/env_local/terrain/03_flagstone.png"
+    "file": "textures/env_local/terrain/03_flagstone.png",
+    "maps": {
+     "normal": "textures/env_local/terrain/maps/Old_Rocks_normal.png",
+     "orm": "textures/env_local/terrain/maps/Old_Rocks_orm.png",
+     "height": "textures/env_local/terrain/maps/Old_Rocks_height.png"
+    }
    },
-   "size": 256,
+   "size": 512,
    "scale": 1.4,
    "glow": false
   },
@@ -2278,10 +2303,15 @@
    "was_psx": "planet_banded_onyx",
    "cc0": {
     "set": "Onyx006",
-    "file": "textures/env/terrain/04_onyx.png"
+    "file": "textures/env/terrain/04_onyx.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/Onyx006_normal.png",
+     "orm": "textures/env/terrain/maps/Onyx006_orm.png",
+     "height": "textures/env/terrain/maps/Onyx006_height.png"
+    }
    },
    "local": null,
-   "size": 256,
+   "size": 512,
    "scale": 1.2,
    "glow": false
   },
@@ -2292,10 +2322,15 @@
    "was_psx": "cave_orange_veinstone",
    "cc0": {
     "set": "Rock058",
-    "file": "textures/env/terrain/05_veinstone.png"
+    "file": "textures/env/terrain/05_veinstone.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/Rock058_normal.png",
+     "orm": "textures/env/terrain/maps/Rock058_orm.png",
+     "height": "textures/env/terrain/maps/Rock058_height.png"
+    }
    },
    "local": null,
-   "size": 256,
+   "size": 512,
    "scale": 1.6,
    "glow": false
   },
@@ -2306,10 +2341,11 @@
    "was_psx": "cave_magma_veins",
    "cc0": {
     "set": "Rock058",
-    "file": "textures/env/terrain/06_magma.png"
+    "file": "textures/env/terrain/06_magma.png",
+    "maps": null
    },
    "local": null,
-   "size": 256,
+   "size": 512,
    "scale": 1.4,
    "glow": true
   },
@@ -2320,10 +2356,11 @@
    "was_psx": "cave_amethyst",
    "cc0": {
     "set": "ChristmasTreeOrnament021",
-    "file": "textures/env/terrain/07_amethyst.png"
+    "file": "textures/env/terrain/07_amethyst.png",
+    "maps": null
    },
    "local": null,
-   "size": 256,
+   "size": 512,
    "scale": 1.3,
    "glow": true
   },
@@ -2334,10 +2371,11 @@
    "was_psx": "cave_blue_crystal",
    "cc0": {
     "set": "ChristmasTreeOrnament021",
-    "file": "textures/env/terrain/08_bluecrystal.png"
+    "file": "textures/env/terrain/08_bluecrystal.png",
+    "maps": null
    },
    "local": null,
-   "size": 256,
+   "size": 512,
    "scale": 1.3,
    "glow": true
   },
@@ -2348,13 +2386,23 @@
    "was_psx": "moon_silver_slate",
    "cc0": {
     "set": "Rock058",
-    "file": "textures/env/terrain/09_slate.png"
+    "file": "textures/env/terrain/09_slate.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/Rock058_normal.png",
+     "orm": "textures/env/terrain/maps/Rock058_orm.png",
+     "height": "textures/env/terrain/maps/Rock058_height.png"
+    }
    },
    "local": {
     "set": "Rock_Wall",
-    "file": "textures/env_local/terrain/09_slate.png"
+    "file": "textures/env_local/terrain/09_slate.png",
+    "maps": {
+     "normal": "textures/env_local/terrain/maps/Rock_Wall_normal.png",
+     "orm": "textures/env_local/terrain/maps/Rock_Wall_orm.png",
+     "height": "textures/env_local/terrain/maps/Rock_Wall_height.png"
+    }
    },
-   "size": 256,
+   "size": 512,
    "scale": 1.6,
    "glow": false
   },
@@ -2365,10 +2413,15 @@
    "was_psx": "moon_gray_regolith",
    "cc0": {
     "set": "Ground110",
-    "file": "textures/env/terrain/10_gravelregolith.png"
+    "file": "textures/env/terrain/10_gravelregolith.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/Ground110_normal.png",
+     "orm": "textures/env/terrain/maps/Ground110_orm.png",
+     "height": "textures/env/terrain/maps/Ground110_height.png"
+    }
    },
    "local": null,
-   "size": 256,
+   "size": 512,
    "scale": 2.2,
    "glow": false
   },
@@ -2379,10 +2432,15 @@
    "was_psx": "moon_crater_dust",
    "cc0": {
     "set": "Ground093B",
-    "file": "textures/env/terrain/11_dust.png"
+    "file": "textures/env/terrain/11_dust.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/Ground093B_normal.png",
+     "orm": "textures/env/terrain/maps/Ground093B_orm.png",
+     "height": "textures/env/terrain/maps/Ground093B_height.png"
+    }
    },
    "local": null,
-   "size": 256,
+   "size": 512,
    "scale": 2.0,
    "glow": false
   },
@@ -2393,10 +2451,15 @@
    "was_psx": "moon_teal_ice",
    "cc0": {
     "set": "Onyx006",
-    "file": "textures/env/terrain/12_bandedice.png"
+    "file": "textures/env/terrain/12_bandedice.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/12_bandedice_normal.png",
+     "orm": "textures/env/terrain/maps/12_bandedice_orm.png",
+     "height": "textures/env/terrain/maps/12_bandedice_height.png"
+    }
    },
    "local": null,
-   "size": 256,
+   "size": 512,
    "scale": 1.2,
    "glow": false
   },
@@ -2407,10 +2470,15 @@
    "was_psx": "geo_basalt",
    "cc0": {
     "set": "Rock035",
-    "file": "textures/env/terrain/13_basalt.png"
+    "file": "textures/env/terrain/13_basalt.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/Rock035_normal.png",
+     "orm": "textures/env/terrain/maps/Rock035_orm.png",
+     "height": "textures/env/terrain/maps/Rock035_height.png"
+    }
    },
    "local": null,
-   "size": 256,
+   "size": 512,
    "scale": 1.5,
    "glow": false
   },
@@ -2421,13 +2489,23 @@
    "was_psx": "geo_granite",
    "cc0": {
     "set": "Rock060",
-    "file": "textures/env/terrain/14_granite.png"
+    "file": "textures/env/terrain/14_granite.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/Rock060_normal.png",
+     "orm": "textures/env/terrain/maps/Rock060_orm.png",
+     "height": "textures/env/terrain/maps/Rock060_height.png"
+    }
    },
    "local": {
     "set": "Rock_05",
-    "file": "textures/env_local/terrain/14_granite.png"
+    "file": "textures/env_local/terrain/14_granite.png",
+    "maps": {
+     "normal": "textures/env_local/terrain/maps/Rock_05_normal.png",
+     "orm": "textures/env_local/terrain/maps/Rock_05_orm.png",
+     "height": "textures/env_local/terrain/maps/Rock_05_height.png"
+    }
    },
-   "size": 256,
+   "size": 512,
    "scale": 1.8,
    "glow": false
   },
@@ -2438,13 +2516,23 @@
    "was_psx": "geo_sandstone",
    "cc0": {
     "set": "Onyx010",
-    "file": "textures/env/terrain/15_sandstone.png"
+    "file": "textures/env/terrain/15_sandstone.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/Onyx010_normal.png",
+     "orm": "textures/env/terrain/maps/Onyx010_orm.png",
+     "height": "textures/env/terrain/maps/Onyx010_height.png"
+    }
    },
    "local": {
     "set": "Mossy_Rock",
-    "file": "textures/env_local/terrain/15_sandstone.png"
+    "file": "textures/env_local/terrain/15_sandstone.png",
+    "maps": {
+     "normal": "textures/env_local/terrain/maps/Mossy_Rock_normal.png",
+     "orm": "textures/env_local/terrain/maps/Mossy_Rock_orm.png",
+     "height": "textures/env_local/terrain/maps/Mossy_Rock_height.png"
+    }
    },
-   "size": 256,
+   "size": 512,
    "scale": 1.0,
    "glow": false
   },
@@ -2455,10 +2543,15 @@
    "was_psx": "geo_sand",
    "cc0": {
     "set": "Ground093B",
-    "file": "textures/env/terrain/16_sand.png"
+    "file": "textures/env/terrain/16_sand.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/16_sand_normal.png",
+     "orm": "textures/env/terrain/maps/16_sand_orm.png",
+     "height": "textures/env/terrain/maps/16_sand_height.png"
+    }
    },
    "local": null,
-   "size": 256,
+   "size": 512,
    "scale": 2.0,
    "glow": false
   },
@@ -2469,10 +2562,15 @@
    "was_psx": "geo_regolith",
    "cc0": {
     "set": "Ground039",
-    "file": "textures/env/terrain/17_regolith.png"
+    "file": "textures/env/terrain/17_regolith.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/Ground039_normal.png",
+     "orm": "textures/env/terrain/maps/Ground039_orm.png",
+     "height": "textures/env/terrain/maps/Ground039_height.png"
+    }
    },
    "local": null,
-   "size": 256,
+   "size": 512,
    "scale": 2.0,
    "glow": false
   },
@@ -2483,13 +2581,23 @@
    "was_psx": "geo_salt",
    "cc0": {
     "set": "Snow014",
-    "file": "textures/env/terrain/18_salt.png"
+    "file": "textures/env/terrain/18_salt.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/Snow014_normal.png",
+     "orm": "textures/env/terrain/maps/Snow014_orm.png",
+     "height": "textures/env/terrain/maps/Snow014_height.png"
+    }
    },
    "local": {
     "set": "Cracked_Asphalt",
-    "file": "textures/env_local/terrain/18_salt.png"
+    "file": "textures/env_local/terrain/18_salt.png",
+    "maps": {
+     "normal": "textures/env_local/terrain/maps/Cracked_Asphalt_normal.png",
+     "orm": "textures/env_local/terrain/maps/Cracked_Asphalt_orm.png",
+     "height": "textures/env_local/terrain/maps/Cracked_Asphalt_height.png"
+    }
    },
-   "size": 256,
+   "size": 512,
    "scale": 1.2,
    "glow": false
   },
@@ -2500,13 +2608,23 @@
    "was_psx": "geo_mudcrack",
    "cc0": {
     "set": "Ground039",
-    "file": "textures/env/terrain/19_mudcrack.png"
+    "file": "textures/env/terrain/19_mudcrack.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/Ground039_normal.png",
+     "orm": "textures/env/terrain/maps/Ground039_orm.png",
+     "height": "textures/env/terrain/maps/Ground039_height.png"
+    }
    },
    "local": {
     "set": "MarsSmoothRock",
-    "file": "textures/env_local/terrain/19_mudcrack.png"
+    "file": "textures/env_local/terrain/19_mudcrack.png",
+    "maps": {
+     "normal": "textures/env_local/terrain/maps/MarsSmoothRock_normal.png",
+     "orm": "textures/env_local/terrain/maps/MarsSmoothRock_orm.png",
+     "height": "textures/env_local/terrain/maps/MarsSmoothRock_height.png"
+    }
    },
-   "size": 256,
+   "size": 512,
    "scale": 1.6,
    "glow": false
   },
@@ -2517,13 +2635,23 @@
    "was_psx": "geo_moss",
    "cc0": {
     "set": "Ground037",
-    "file": "textures/env/terrain/20_moss.png"
+    "file": "textures/env/terrain/20_moss.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/Ground037_normal.png",
+     "orm": "textures/env/terrain/maps/Ground037_orm.png",
+     "height": "textures/env/terrain/maps/Ground037_height.png"
+    }
    },
    "local": {
     "set": "MossAndSmallFerns",
-    "file": "textures/env_local/terrain/20_moss.png"
+    "file": "textures/env_local/terrain/20_moss.png",
+    "maps": {
+     "normal": "textures/env_local/terrain/maps/MossAndSmallFerns_normal.png",
+     "orm": "textures/env_local/terrain/maps/MossAndSmallFerns_orm.png",
+     "height": "textures/env_local/terrain/maps/MossAndSmallFerns_height.png"
+    }
    },
-   "size": 256,
+   "size": 512,
    "scale": 1.8,
    "glow": false
   },
@@ -2534,10 +2662,15 @@
    "was_psx": "geo_ash",
    "cc0": {
     "set": "Ground110",
-    "file": "textures/env/terrain/21_ash.png"
+    "file": "textures/env/terrain/21_ash.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/Ground110_normal.png",
+     "orm": "textures/env/terrain/maps/Ground110_orm.png",
+     "height": "textures/env/terrain/maps/Ground110_height.png"
+    }
    },
    "local": null,
-   "size": 256,
+   "size": 512,
    "scale": 2.2,
    "glow": false
   },
@@ -2548,10 +2681,15 @@
    "was_psx": "geo_snow",
    "cc0": {
     "set": "Snow014",
-    "file": "textures/env/terrain/22_snow.png"
+    "file": "textures/env/terrain/22_snow.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/Snow014_normal.png",
+     "orm": "textures/env/terrain/maps/Snow014_orm.png",
+     "height": "textures/env/terrain/maps/Snow014_height.png"
+    }
    },
    "local": null,
-   "size": 256,
+   "size": 512,
    "scale": 1.8,
    "glow": false
   },
@@ -2562,10 +2700,15 @@
    "was_psx": "geo_glacier",
    "cc0": {
     "set": "Snow008A",
-    "file": "textures/env/terrain/23_glacier.png"
+    "file": "textures/env/terrain/23_glacier.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/23_glacier_normal.png",
+     "orm": "textures/env/terrain/maps/23_glacier_orm.png",
+     "height": "textures/env/terrain/maps/23_glacier_height.png"
+    }
    },
    "local": null,
-   "size": 256,
+   "size": 512,
    "scale": 1.0,
    "glow": false
   },
@@ -2576,10 +2719,15 @@
    "was_psx": "geo_scree",
    "cc0": {
     "set": "Ground110",
-    "file": "textures/env/terrain/24_scree.png"
+    "file": "textures/env/terrain/24_scree.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/Ground110_normal.png",
+     "orm": "textures/env/terrain/maps/Ground110_orm.png",
+     "height": "textures/env/terrain/maps/Ground110_height.png"
+    }
    },
    "local": null,
-   "size": 256,
+   "size": 512,
    "scale": 1.8,
    "glow": false
   },
@@ -2590,13 +2738,23 @@
    "was_psx": "geo_limestone",
    "cc0": {
     "set": "Rock051",
-    "file": "textures/env/terrain/25_limestone.png"
+    "file": "textures/env/terrain/25_limestone.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/Rock051_normal.png",
+     "orm": "textures/env/terrain/maps/Rock051_orm.png",
+     "height": "textures/env/terrain/maps/Rock051_height.png"
+    }
    },
    "local": {
     "set": "Rock_04",
-    "file": "textures/env_local/terrain/25_limestone.png"
+    "file": "textures/env_local/terrain/25_limestone.png",
+    "maps": {
+     "normal": "textures/env_local/terrain/maps/Rock_04_normal.png",
+     "orm": "textures/env_local/terrain/maps/Rock_04_orm.png",
+     "height": "textures/env_local/terrain/maps/Rock_04_height.png"
+    }
    },
-   "size": 256,
+   "size": 512,
    "scale": 1.5,
    "glow": false
   },
@@ -2607,13 +2765,23 @@
    "was_psx": "geo_sulfur",
    "cc0": {
     "set": "Rocks011",
-    "file": "textures/env/terrain/26_sulfur.png"
+    "file": "textures/env/terrain/26_sulfur.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/Rocks011_normal.png",
+     "orm": "textures/env/terrain/maps/Rocks011_orm.png",
+     "height": "textures/env/terrain/maps/Rocks011_height.png"
+    }
    },
    "local": {
     "set": "Potato",
-    "file": "textures/env_local/terrain/26_sulfur.png"
+    "file": "textures/env_local/terrain/26_sulfur.png",
+    "maps": {
+     "normal": "textures/env_local/terrain/maps/Potato_normal.png",
+     "orm": "textures/env_local/terrain/maps/Potato_orm.png",
+     "height": "textures/env_local/terrain/maps/Potato_height.png"
+    }
    },
-   "size": 256,
+   "size": 512,
    "scale": 1.6,
    "glow": false
   },
@@ -2624,10 +2792,15 @@
    "was_psx": "geo_hematite",
    "cc0": {
     "set": "Ground085",
-    "file": "textures/env/terrain/27_hematite.png"
+    "file": "textures/env/terrain/27_hematite.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/Ground085_normal.png",
+     "orm": "textures/env/terrain/maps/Ground085_orm.png",
+     "height": "textures/env/terrain/maps/Ground085_height.png"
+    }
    },
    "local": null,
-   "size": 256,
+   "size": 512,
    "scale": 2.0,
    "glow": false
   },
@@ -2638,13 +2811,23 @@
    "was_psx": "geo_tundra",
    "cc0": {
     "set": "Grass004",
-    "file": "textures/env/terrain/28_tundra.png"
+    "file": "textures/env/terrain/28_tundra.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/28_tundra_normal.png",
+     "orm": "textures/env/terrain/maps/28_tundra_orm.png",
+     "height": "textures/env/terrain/maps/28_tundra_height.png"
+    }
    },
    "local": {
     "set": "Dirty_Grass",
-    "file": "textures/env_local/terrain/28_tundra.png"
+    "file": "textures/env_local/terrain/28_tundra.png",
+    "maps": {
+     "normal": "textures/env_local/terrain/maps/Dirty_Grass_normal.png",
+     "orm": "textures/env_local/terrain/maps/Dirty_Grass_orm.png",
+     "height": "textures/env_local/terrain/maps/Dirty_Grass_height.png"
+    }
    },
-   "size": 256,
+   "size": 512,
    "scale": 1.6,
    "glow": false
   },
@@ -2655,10 +2838,15 @@
    "was_psx": "geo_pahoehoe",
    "cc0": {
     "set": "Rock058",
-    "file": "textures/env/terrain/29_pahoehoe.png"
+    "file": "textures/env/terrain/29_pahoehoe.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/Rock058_normal.png",
+     "orm": "textures/env/terrain/maps/Rock058_orm.png",
+     "height": "textures/env/terrain/maps/Rock058_height.png"
+    }
    },
    "local": null,
-   "size": 256,
+   "size": 512,
    "scale": 1.25,
    "glow": false
   },
@@ -2669,13 +2857,23 @@
    "was_psx": "geo_shale",
    "cc0": {
     "set": "Rock051",
-    "file": "textures/env/terrain/30_shale.png"
+    "file": "textures/env/terrain/30_shale.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/Rock051_normal.png",
+     "orm": "textures/env/terrain/maps/Rock051_orm.png",
+     "height": "textures/env/terrain/maps/Rock051_height.png"
+    }
    },
    "local": {
     "set": "Rock_03",
-    "file": "textures/env_local/terrain/30_shale.png"
+    "file": "textures/env_local/terrain/30_shale.png",
+    "maps": {
+     "normal": "textures/env_local/terrain/maps/Rock_03_normal.png",
+     "orm": "textures/env_local/terrain/maps/Rock_03_orm.png",
+     "height": "textures/env_local/terrain/maps/Rock_03_height.png"
+    }
    },
-   "size": 256,
+   "size": 512,
    "scale": 1.5,
    "glow": false
   },
@@ -2686,10 +2884,15 @@
    "was_psx": "geo_peat",
    "cc0": {
     "set": "Rock063",
-    "file": "textures/env/terrain/31_peat.png"
+    "file": "textures/env/terrain/31_peat.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/Rock063_normal.png",
+     "orm": "textures/env/terrain/maps/Rock063_orm.png",
+     "height": "textures/env/terrain/maps/Rock063_height.png"
+    }
    },
    "local": null,
-   "size": 256,
+   "size": 512,
    "scale": 1.4,
    "glow": false
   },
@@ -2700,10 +2903,15 @@
    "was_psx": "geo_litter",
    "cc0": {
     "set": "Grass004",
-    "file": "textures/env/terrain/32_litter.png"
+    "file": "textures/env/terrain/32_litter.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/32_litter_normal.png",
+     "orm": "textures/env/terrain/maps/32_litter_orm.png",
+     "height": "textures/env/terrain/maps/32_litter_height.png"
+    }
    },
    "local": null,
-   "size": 256,
+   "size": 512,
    "scale": 2.0,
    "glow": false
   }

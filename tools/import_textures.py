@@ -47,16 +47,20 @@ Older sets have no roughness: it comes from the specular map (1 - spec),
 else a constant by kind. No AO map: one is worked out from the height.
 
 THE TERRAIN (textures/env{,_local}/terrain/, TERRAIN below). The engine's
-terrain palette (terrain/<scene>.palette) is 32 slots of ONE 256x256 sRGB
-albedo layer each, one mip level, projected triplanar and multiplied by the
-voxel's tint x 1.6 (floptle-render raster.wgsl `terrain_triplanar`,
-raymarch.rs TERRAIN_TEX_SIZE). It has no normal, roughness or AO channel, so
-each layer is baked here: the set's albedo, darkened by its AO and by how far
-its normal map tilts from the surface (cavities and the sides of grains read
-darker, from any light direction), its broad light-and-dark blotches flattened
-(the thing that makes a photo's tile repeat visibly across a hillside), graded
-for the slot, and reduced to 256 in linear light. Slot numbers are what
-mining reads (materials.lua SLOT), so each slot keeps its geology.
+terrain palette (terrain/<scene>.palette) is 32 slots of one LAYER-square sRGB
+colour layer each (project.ron terrain_layer_size, 512), with mips, projected
+triplanar and multiplied by the voxel's tint x 1.6 (floptle-render raster.wgsl
+`terrain_triplanar`). Since engine 0637 (dev .1438) a slot can also name a
+normal, ORM and height map (`|normal= |orm= |height=`), which the engine lights
+when the terrain's Material is Physical (system_generator makeBody). Each layer
+is baked here: the set's albedo, darkened by part of its AO and of how far its
+normal map tilts from the surface (RELIEF_MAPPED: the engine lights the rest
+from the sun's side), its broad light-and-dark blotches flattened (the thing
+that makes a photo's tile repeat visibly across a hillside), graded for the
+slot, reduced to LAYER in linear light and kept at the fully baked layer's mean.
+Its maps (maps/, layer_maps) come from the same set at the same size. Slot
+numbers are what mining reads (materials.lua SLOT), so each slot keeps its
+geology.
 
 Idempotent: each output folder holds a `.import` stamp (the source's size and
 time, the recipe, this file's IMPORTER_VERSION); a set whose stamp matches is
@@ -82,7 +86,19 @@ LIB = "/mnt/disks/3tb/Art+Assets/AAA_TEXTURES/gametexturesdotcom"
 OUT_CC0 = "textures/env"            # committed
 OUT_LOCAL = "textures/env_local"    # git-ignored
 MANIFEST = "textures/env/manifest.json"
-LAYER = 256                         # the engine's terrain palette layer size
+LAYER = 512                         # the terrain palette's layer size: project.ron terrain_layer_size
+# The unsharp mask that gives a layer its grain back after the reduction
+# (bake_layer). Its strength follows the reduction: 0.8 suited 256 (a 2048
+# photo reduced 8x); at 512 (4x) half of it, measured (work/t1437 REPORT.md).
+SHARPEN = 0.8 * 256 / LAYER
+SHARPEN_MADE = 0.3 * 256 / LAYER    # the made layers (veins, copper, crystal, patchy)
+# How much of the baked relief (AO and the normal's tilt darkening the colour,
+# the ripple shading) a slot keeps once the engine lights its own normal and
+# ORM maps (engine 0637, dev .1438): the rest the engine now draws from the sun's
+# side, so baking it all as well would darken every crevice twice. The layer is
+# then scaled back to the mean of the fully baked one, so its average colour
+# (far_bodies PAL, the map, the mining tints) stays what it was.
+RELIEF_MAPPED = 0.35
 
 Image.MAX_IMAGE_PIXELS = 20000 * 20000
 
@@ -169,7 +185,7 @@ TERRAIN = [
          cc0=("Ground110", G(sat=0.12, gain=0.9))),
     dict(slot=11, name="dust", was="moon_crater_dust", mat="regolith", scale=2.0, blend=1.2, rough=0.7,
          cc0=("Ground093B", G(sat=0.25, contrast=1.6, flatten=0.3))),
-    dict(slot=12, name="bandedice", was="moon_teal_ice", mat="ice", scale=1.2, blend=0.8, rough=0.7,
+    dict(slot=12, name="bandedice", was="moon_teal_ice", mat="ice", scale=1.2, blend=0.8, rough=0.7, rfloor=0.3,
          cc0=("Onyx006", G(sat=0.25, tint=(0.75, 0.95, 1.0), gain=1.9, contrast=0.6))),
     # 13–32: the geology set.
     dict(slot=13, name="basalt", was="geo_basalt", mat="basalt", scale=1.5, blend=0.8, rough=0.7,
@@ -194,7 +210,7 @@ TERRAIN = [
          cc0=("Ground110", G(sat=0.2, gain=0.6, contrast=1.1))),
     dict(slot=22, name="snow", was="geo_snow", mat="ice", scale=1.8, blend=1.2, rough=0.7,
          cc0=("Snow014", G(contrast=1.3))),
-    dict(slot=23, name="glacier", was="geo_glacier", mat="ice", scale=1.0, blend=0.8, rough=0.7,
+    dict(slot=23, name="glacier", was="geo_glacier", mat="ice", scale=1.0, blend=0.8, rough=0.7, rfloor=0.25,
          cc0=("Snow008A", G(sat=1.0, tint=(0.82, 0.93, 1.0), gain=0.6, contrast=3.0, flatten=0.0))),
     dict(slot=24, name="scree", was="geo_scree", mat="gravel", scale=1.8, blend=1.2, rough=0.7,
          cc0=("Ground110", G(sat=0.7))),
@@ -586,33 +602,47 @@ def load_for_layer(lib, s):
     return alb, n, c["orm"][..., 0], c["height"]
 
 
+_RELIEF = [1.0]   # the share of the baked relief grade() lays (1, or RELIEF_MAPPED)
+
+
+def ripple_field(N, rp):
+    """The wind ripples' field on an N-square tile: (height, its slope along the
+    rows' phase, fade), all tileable. The ripples run across the rows: an
+    integer count down the tile, the phase bent by wrap noise."""
+    rng = np.random.default_rng(11)
+    warp = blur_wrap(rng.standard_normal((N, N)), N / 10)
+    warp = warp / (warp.std() + 1e-9)
+    fine = blur_wrap(rng.standard_normal((N, N)), N / 60)
+    fine = fine / (fine.std() + 1e-9)
+    yy = np.arange(N)[:, None] / N
+    phase = 2 * np.pi * (rp["count"] * yy + rp.get("bend", 0.25) * warp + 0.05 * fine)
+    # h = sin + a quarter of the second harmonic: a long stoss slope, a short lee;
+    # dh its slope (shaded by it: light across the ripples), faded in and out by noise
+    h = np.sin(phase) + 0.25 * np.sin(2 * phase)
+    dh = np.cos(phase) + 0.5 * np.cos(2 * phase)
+    fade = np.clip(0.65 + 0.35 * fine, 0.2, 1.0)
+    return h, dh, fade
+
+
 def grade(alb, n, ao, g):
     """The plain layer bake, in linear light."""
     c = alb.copy()
-    # Relief that the engine can't light: AO and the normal's tilt, darkening.
-    c *= (1 - g.get("ao", 0.6)) + g.get("ao", 0.6) * ao[..., None]
+    # Relief baked into the colour: AO and the normal's tilt, darkening. A slot
+    # with surface maps keeps only RELIEF_MAPPED of it (_RELIEF; see bake_layer).
+    r = _RELIEF[0]
+    k_ao, k_cav = g.get("ao", 0.6) * r, g.get("cav", 0.5) * r
+    c *= (1 - k_ao) + k_ao * ao[..., None]
     if n is not None:
         tilt = np.clip(n[..., 2], 0, 1)
-        c *= ((1 - g.get("cav", 0.5)) + g.get("cav", 0.5) * tilt ** 2)[..., None]
+        c *= ((1 - k_cav) + k_cav * tilt ** 2)[..., None]
     # Wind ripples (sand): none of the library's sands has them, and on a dune
     # world they are what says "sand" from ten metres. A tileable ripple field
     # (an integer count across the tile, its phase bent by wrap noise) shaded as
     # relief: the lee slopes darker, the crests a little lighter.
     rp = g.get("ripples")
     if rp:
-        N = c.shape[0]
-        rng = np.random.default_rng(11)
-        warp = blur_wrap(rng.standard_normal((N, N)), N / 10)
-        warp = warp / (warp.std() + 1e-9)
-        fine = blur_wrap(rng.standard_normal((N, N)), N / 60)
-        fine = fine / (fine.std() + 1e-9)
-        yy = np.arange(N)[:, None] / N
-        phase = 2 * np.pi * (rp["count"] * yy + rp.get("bend", 0.25) * warp + 0.05 * fine)
-        # h = sin + a quarter of the second harmonic: a long stoss slope, a short lee;
-        # shaded by its slope (light across the ripples), faded in and out by noise
-        dh = np.cos(phase) + 0.5 * np.cos(2 * phase)
-        fade = np.clip(0.65 + 0.35 * fine, 0.2, 1.0)
-        shade = 1 + rp.get("amp", 0.1) * dh / 1.5 * fade
+        _, dh, fade = ripple_field(c.shape[0], rp)
+        shade = 1 + rp.get("amp", 0.1) * r * dh / 1.5 * fade
         c *= shade[..., None]
     # Flatten the broad blotches (wrap blur at a sixth of the tile): the low
     # frequencies are what repeat visibly when a tile is laid 50 times.
@@ -723,15 +753,13 @@ def make_crystal(alb, n, g):
     return np.clip(c, 0, 1)
 
 
-def make_patchy(alb, n, ao, g, sets):
+def make_patchy(alb, n, ao, g, sets, mask_only=False):
     """A cover worn through in patches to the ground under it (tundra: dry sedge over
     stony soil): a lawn-like cover alone is one flat colour from ten metres. The patch
     mask is tileable noise at a third of the tile, edged by the cover's own luminance
-    so the boundary follows the blades, not a smooth curve."""
+    so the boundary follows the blades, not a smooth curve. `mask_only`: the mask
+    (1 = cover), for the slot's surface maps."""
     top = grade(alb, n, ao, g)
-    us, ug = g["under"]
-    ualb, un, uao, _ = load_for_layer(LIB_PATH[0], sets[us])
-    bot = grade(ualb, un, uao, ug)
     rng = np.random.default_rng(7)
     a = blur_wrap(rng.standard_normal(alb.shape[:2]), alb.shape[0] / 30)
     b = blur_wrap(rng.standard_normal(alb.shape[:2]), alb.shape[0] / 90)
@@ -741,33 +769,195 @@ def make_patchy(alb, n, ao, g, sets):
     edge = (L - L.mean()) / (L.std() + 1e-6)
     thr = np.quantile(noise, 1 - g.get("cover", 0.6))
     m = np.clip((noise - thr) * 3.0 + edge * 0.6 + 0.5, 0, 1)[..., None]
+    if mask_only:
+        return m[..., 0]
+    us, ug = g["under"]
+    ualb, un, uao, _ = load_for_layer(LIB_PATH[0], sets[us])
+    bot = grade(ualb, un, uao, ug)
     return np.clip(top * m + bot * (1 - m), 0, 1)
 
 
-def bake_layer(lib, sets, src):
+def slot_mapped(t):
+    """Does this slot carry surface maps? Every photographic slot does; the glow
+    slots (self-lit: magma, the crystals) keep their look."""
+    return not t.get("glow") and t.get("maps", True)
+
+
+def _bake_colour(sets, src, loaded, relief):
+    """A layer's colour in linear light at BAKE, with `relief` of the baked relief."""
     sid, g = src
-    s = sets[sid]
-    alb, n, ao, height = load_for_layer(lib, s)
+    alb, n, ao, height = loaded
     mk = g.get("make")
-    if mk == "veins":
-        c = make_veins(alb, n, ao, g)
-    elif mk == "magma":
-        c = make_veins(alb, n, ao, g, glow=True)
-    elif mk == "crystal":
-        c = make_crystal(alb, n, g)
-    elif mk == "patchy":
-        c = make_patchy(alb, n, ao, g, sets)
+    _RELIEF[0] = relief
+    try:
+        if mk == "veins":
+            return make_veins(alb, n, ao, g)
+        if mk == "magma":
+            return make_veins(alb, n, ao, g, glow=True)
+        if mk == "crystal":
+            return make_crystal(alb, n, g)
+        if mk == "patchy":
+            return make_patchy(alb, n, ao, g, sets)
+        if mk == "copper":
+            return make_copper(alb, n, ao, g)
+        return grade(alb, n, ao, g)
+    finally:
+        _RELIEF[0] = 1.0
+
+
+def bake_layer(lib, sets, src, mapped=False):
+    sid, g = src
+    loaded = load_for_layer(lib, sets[sid])
+    mk = g.get("make")
+    ref = _bake_colour(sets, src, loaded, 1.0)
+    # Less baked relief on a slot with maps (the engine lights them).
+    c = _bake_colour(sets, src, loaded, RELIEF_MAPPED) if mapped else ref
+    # Grain back: a 2048 photo reduced to the layer loses the micro-contrast that
+    # reads as grit at the player's feet (the layer is magnified 3-5x there). A
+    # small wrap-around unsharp mask restores it. The palette has mips since
+    # engine .1437, so its far speckle averages away; the strength follows the
+    # reduction (SHARPEN).
+    def reduce(c, size, k):
+        out = resize(lin_to_srgb(c), size, linear=True)
+        if k > 0:
+            out = np.clip(out + k * (out - blur_wrap(out, 0.9)), 0, 1)
+        return out
+    out = reduce(c, LAYER, g.get("sharpen", SHARPEN_MADE if mk else SHARPEN))
+    # Kept at the mean of the layer as it was baked before the maps (256, fully
+    # baked relief, its sharpening then): the slot's average colour does not move
+    # (far_bodies PAL, the map, the mining tints, the far ground).
+    was = reduce(ref, 256, g.get("sharpen", (0.3 if mk else 0.8)))
+    m_was, m_now = lum(srgb_to_lin(was)).mean(), lum(srgb_to_lin(out)).mean()
+    return lin_to_srgb(srgb_to_lin(out) * (m_was / max(1e-6, m_now)))
+
+
+# ── a slot's surface maps (engine 0637: palette |normal= |orm= |height=) ──────
+# The engine lights them: the normal (OpenGL, +Y up the picture, lying on the
+# ground as the colour does), the ORM (glTF: R occlusion of the sky's light,
+# G roughness times the terrain Material's, B metalness) and the height (kept for
+# height blending). Each at LAYER, from the same set at the same orientation as
+# the colour, so every bump sits under its own pixel. A slot whose maps come
+# straight from its set shares one file per set (maps/<set>_*.png); a slot that
+# changes them (patchy cover, ripples, its own normal strength) has its own
+# (maps/<slot>_<name>_*.png): its own roughness floor too.
+MAP_KINDS = ("normal", "orm", "height")
+RIPPLE_HEIGHT = 0.0035  # m: a wind ripple's half-height (crest to trough ~7 mm on a ~14 cm wavelength; 5 mm read busy from 30 m on)
+# Ground is rough. Several sets' roughness maps are of polished or sealed stone
+# (Onyx006/010 0.04-0.10, a studio-lit Ground039 0.49), which under the Physical
+# terrain Material would turn a hillside into a mirror at a low sun. Each slot's
+# roughness is lifted onto [floor, 1] (r' = floor + (1 - floor) r), so it keeps
+# its own variation; ice may be smoother (rfloor per slot).
+ROUGH_FLOOR = 0.6
+
+
+def map_stem(t, which):
+    sid, g = t[which]
+    if g.get("make") == "patchy" or g.get("ripples") or t.get("nstr", 1.0) != 1.0 or "rfloor" in t:
+        return "%02d_%s" % (t["slot"], t["name"])
+    return sid
+
+
+def map_path(root, t, which, kind):
+    return "%s/terrain/maps/%s_%s.png" % (root, map_stem(t, which), kind)
+
+
+def whiteout(a, b):
+    """Two tangent normals (-1..1) combined, each keeping its own bumps."""
+    n = np.concatenate([a[..., :2] + b[..., :2], (a[..., 2] * b[..., 2])[..., None]], axis=2)
+    return n / np.maximum(np.linalg.norm(n, axis=2, keepdims=True), 1e-6)
+
+
+def _set_maps(lib, s):
+    """A set's normal (-1..1), ORM and height (or None) at BAKE."""
+    c = convert_set(lib, s, BAKE)
+    if c["normal"] is not None:
+        n = c["normal"] * 2 - 1
     else:
-        c = grade(alb, n, ao, g)
-    out = resize(lin_to_srgb(c), LAYER, linear=True)
-    # Grain back: a 2048 photo reduced 8x loses the micro-contrast that reads as
-    # grit at the player's feet (the layer is magnified 3-5x there). A small
-    # wrap-around unsharp mask restores it; measured, the far ground's per-pixel
-    # speckle stays well under the old procedural layers' (the palette has no mips).
-    k = g.get("sharpen", 0.3 if mk else 0.8)
-    if k > 0:
-        out = np.clip(out + k * (out - blur_wrap(out, 0.9)), 0, 1)
-    return out
+        n = np.zeros((BAKE, BAKE, 3), np.float32)
+        n[..., 2] = 1
+    return n, c["orm"].copy(), c["height"], c
+
+
+def layer_maps(lib, sets, t, which):
+    """The slot's normal (0..1 encoded), ORM and height (or None) at LAYER."""
+    sid, g = t[which]
+    n, orm, h, c = _set_maps(lib, sets[sid])
+    if g.get("make") == "patchy":
+        # The cover's maps where the cover is, the ground's where it is worn through.
+        _RELIEF[0] = RELIEF_MAPPED
+        try:
+            m = make_patchy(srgb_to_lin(c["albedo"]), n, orm[..., 0], g, sets, mask_only=True)
+        finally:
+            _RELIEF[0] = 1.0
+        un, uorm, uh, _ = _set_maps(lib, sets[g["under"][0]])
+        n = n * m[..., None] + un * (1 - m[..., None])
+        n /= np.maximum(np.linalg.norm(n, axis=2, keepdims=True), 1e-6)
+        orm = orm * m[..., None] + uorm * (1 - m[..., None])
+        if h is not None or uh is not None:
+            h = (h if h is not None else 0.5) * m + (uh if uh is not None else 0.5) * (1 - m)
+    rp = g.get("ripples")
+    if rp:
+        # The ripples as relief (the colour keeps only RELIEF_MAPPED of their shading):
+        # their height in texels of a tile 4.5 m / scale across, so the slopes are true.
+        N = n.shape[0]
+        hr, _, fade = ripple_field(N, rp)
+        texel = (4.5 / t["scale"]) / N
+        hp = hr * fade * (RIPPLE_HEIGHT / texel)
+        dy = (np.roll(hp, -1, 0) - np.roll(hp, 1, 0)) * 0.5
+        dx = (np.roll(hp, -1, 1) - np.roll(hp, 1, 1)) * 0.5
+        rn = np.stack([-dx, dy, np.ones_like(hp)], axis=2)
+        rn /= np.linalg.norm(rn, axis=2, keepdims=True)
+        n = whiteout(n, rn)
+        hn = (hr * fade - (hr * fade).min()) / max(1e-6, np.ptp(hr * fade))
+        h = hn if h is None else h * 0.5 + hn * 0.5
+    k = t.get("nstr", 1.0)
+    if k != 1.0:
+        n = np.concatenate([n[..., :2] * k, n[..., 2:]], axis=2)
+        n /= np.maximum(np.linalg.norm(n, axis=2, keepdims=True), 1e-6)
+    n = resize(n * 0.5 + 0.5, LAYER) * 2 - 1
+    n /= np.maximum(np.linalg.norm(n, axis=2, keepdims=True), 1e-6)
+    orm = resize(orm, LAYER)
+    fl = t.get("rfloor", ROUGH_FLOOR)
+    orm[..., 1] = fl + (1 - fl) * orm[..., 1]
+    orm[..., 2] = 0.0            # ground is not metal (no terrain slot is)
+    if h is not None:
+        h = resize(h, LAYER)
+        h = (h - h.min()) / max(1e-6, h.max() - h.min())
+    return n * 0.5 + 0.5, orm, h
+
+
+def maps_hash():
+    import inspect
+    src = "".join(inspect.getsource(f) for f in (layer_maps, _set_maps, ripple_field, whiteout, convert_set, make_patchy))
+    return hashlib.sha1(src.encode()).hexdigest()[:12]
+
+
+def map_job(args):
+    lib, sets, t, which, dry, force = args
+    sid = t[which][0]
+    s = sets.get(sid)
+    if s is None:
+        return map_stem(t, which), which, "missing set " + sid
+    root = OUT_CC0 if which == "cc0" else OUT_LOCAL
+    paths = {k: os.path.join(ROOT, map_path(root, t, which, k)) for k in MAP_KINDS}
+    g = t[which][1]
+    extra = [LAYER, BAKE, "maps", maps_hash(), RELIEF_MAPPED, RIPPLE_HEIGHT, t.get("nstr", 1.0), t.get("rfloor", ROUGH_FLOOR),
+             t["scale"] if g.get("ripples") else None, g if (g.get("make") == "patchy" or g.get("ripples")) else None]
+    st = stamp_of(s, extra)
+    stf = os.path.join(os.path.dirname(paths["normal"]), ".import-" + map_stem(t, which))
+    if not force and os.path.exists(paths["normal"]) and os.path.exists(stf) and open(stf).read().strip() == st:
+        return map_stem(t, which), which, "up to date"
+    if dry:
+        return map_stem(t, which), which, "would bake"
+    n, orm, h = layer_maps(LIB_PATH[0], sets, t, which)
+    save_png(n, paths["normal"], "RGB")
+    save_png(orm, paths["orm"], "RGB")
+    if h is not None:
+        save_png(h, paths["height"], "L")
+    elif os.path.exists(paths["height"]):
+        os.remove(paths["height"])
+    open(stf, "w").write(st + "\n")
+    return map_stem(t, which), which, "baked"
 
 
 def layer_path(root, t):
@@ -787,7 +977,8 @@ def layer_job(args):
         raise SystemExit("slot %d: cc0 layer from a commercial set (%s)" % (t["slot"], src[0]))
     rel = layer_path(root, t)
     p = os.path.join(ROOT, rel)
-    extra = [LAYER, BAKE, src[1], RECIPE_HASH()]
+    mapped = slot_mapped(t)
+    extra = [LAYER, BAKE, src[1], RECIPE_HASH(), SHARPEN, SHARPEN_MADE, RELIEF_MAPPED if mapped else None]
     if src[1].get("make") == "copper":
         import inspect
         extra.append(hashlib.sha1(inspect.getsource(make_copper).encode()).hexdigest()[:12])
@@ -797,12 +988,7 @@ def layer_job(args):
         return t["slot"], which, "up to date", rel
     if dry:
         return t["slot"], which, "would bake", rel
-    if src[1].get("make") == "copper":   # its own recipe (outside RECIPE_HASH, so no other layer re-bakes)
-        alb, n, ao, _ = load_for_layer(LIB_PATH[0], s)
-        a = resize(lin_to_srgb(make_copper(alb, n, ao, src[1])), LAYER, linear=True)
-        a = np.clip(a + 0.3 * (a - blur_wrap(a, 0.9)), 0, 1)
-    else:
-        a = bake_layer(LIB_PATH[0], sets, src)
+    a = bake_layer(LIB_PATH[0], sets, src, mapped)
     save_png(a, p, "RGB")
     open(stf, "w").write(st + "\n")
     return t["slot"], which, "baked", rel
@@ -814,7 +1000,7 @@ LIB_PATH = [LIB]
 def RECIPE_HASH():
     """The layer recipes' own code, so changing one re-bakes its layers."""
     import inspect
-    src = "".join(inspect.getsource(f) for f in (grade, make_veins, make_crystal, make_patchy, bake_layer, load_for_layer, convert_set))
+    src = "".join(inspect.getsource(f) for f in (grade, ripple_field, make_veins, make_crystal, make_patchy, _bake_colour, bake_layer, load_for_layer, convert_set))
     return hashlib.sha1(src.encode()).hexdigest()[:12]
 
 
@@ -828,7 +1014,7 @@ MACRO = 0.35
 MACRO_SIZE = 60
 
 
-def palette_line(t, path):
+def palette_line(t, path, maps=None):
     line = path
     if t.get("glow"):
         line += "|glow"
@@ -837,7 +1023,20 @@ def palette_line(t, path):
         line += "|blend=%g|rough=%g" % (t.get("blend", 0.8), t.get("rough", 0.7))
         line += "|antitile=%g|macro=%g|macrosize=%g" % (
             t.get("antitile", ANTITILE_LOW.get(t["name"], 1.0)), t.get("macro", MACRO), t.get("macrosize", MACRO_SIZE))
+    for k in MAP_KINDS:   # after every other flag (engine 0637)
+        if maps and maps.get(k):
+            line += "|%s=%s" % (k, maps[k])
     return line
+
+
+def slot_maps(t, which, root_dir):
+    """The surface maps a palette line names for slot t's `which` layer: those of
+    its own set that are there (none for a slot that has none)."""
+    if not slot_mapped(t) or not t.get(which):
+        return None
+    root = OUT_CC0 if which == "cc0" else OUT_LOCAL
+    return {k: map_path(root, t, which, k) for k in MAP_KINDS
+            if os.path.exists(os.path.join(root_dir, map_path(root, t, which, k)))}
 
 
 def write_palettes(dry, root_dir=None, local=False):
@@ -846,10 +1045,10 @@ def write_palettes(dry, root_dir=None, local=False):
     root_dir = root_dir or ROOT
     lines = []
     for t in TERRAIN:
-        path = layer_path(OUT_CC0, t)
+        path, which = layer_path(OUT_CC0, t), "cc0"
         if local and t.get("local") and os.path.exists(os.path.join(root_dir, layer_path(OUT_LOCAL, t))):
-            path = layer_path(OUT_LOCAL, t)
-        lines.append(palette_line(t, path))
+            path, which = layer_path(OUT_LOCAL, t), "local"
+        lines.append(palette_line(t, path, slot_maps(t, which, root_dir)))
     out = {"terrain/system.palette": "\n".join(lines),
            "terrain/planetoid.palette": "\n".join(lines[:PLANETOID_SLOTS])}
     for rel, text in out.items():
@@ -925,15 +1124,21 @@ def write_manifest(sets, results, dry):
             maps=sorted(k for k in s["members"]), conversion=r or None,
             use=uses.get(sid) or [PLANNED.get(s["kind"], "reserve")],
         ))
+    def maps_of(t, which):
+        m = slot_maps(t, which, ROOT) if which == "cc0" else (
+            {k: map_path(OUT_LOCAL, t, which, k) for k in MAP_KINDS} if slot_mapped(t) else None)
+        return m or None
     layers = [dict(slot=t["slot"], name=t["name"], material=t["mat"], was_psx=t["was"],
-                   cc0=dict(set=t["cc0"][0], file=layer_path(OUT_CC0, t)),
-                   local=dict(set=t["local"][0], file=layer_path(OUT_LOCAL, t)) if t.get("local") else None,
+                   cc0=dict(set=t["cc0"][0], file=layer_path(OUT_CC0, t), maps=maps_of(t, "cc0")),
+                   local=dict(set=t["local"][0], file=layer_path(OUT_LOCAL, t), maps=maps_of(t, "local"))
+                   if t.get("local") else None,
                    size=LAYER, scale=t["scale"], glow=bool(t.get("glow"))) for t in TERRAIN]
     doc = dict(
         about="Solar's environment texture library, converted by tools/import_textures.py. CC0 output "
               "(textures/env) is committed; commercial output (textures/env_local) is git-ignored and must "
               "never be committed. Each set: albedo.png (sRGB), normal.png (OpenGL), orm.png (R AO, G rough, "
-              "B metal), height.png.",
+              "B metal), height.png. Each terrain layer (but the glow slots) also has maps/<set or slot>_{normal,orm,height}.png "
+              "at the layer size, named on its palette line.",
         library=os.path.basename(LIB_PATH[0].rstrip("/")) + " (a local folder: --lib)", sets=rows, terrain=layers)
     text = json.dumps(doc, indent=1, ensure_ascii=False) + "\n"
     p = os.path.join(ROOT, MANIFEST)
@@ -1079,6 +1284,14 @@ def main():
                 if t.get(w) and (not a.only or t[w][0] in a.only)]
         for slot, which, what, rel in ex.map(layer_job, jobs):
             print("  layer %2d %-5s %-12s %s" % (slot, which, what, rel or ""))
+        seen, mjobs = set(), []
+        for t in TERRAIN:
+            for w in ("cc0", "local"):
+                if t.get(w) and slot_mapped(t) and (not a.only or t[w][0] in a.only) and (w, map_stem(t, w)) not in seen:
+                    seen.add((w, map_stem(t, w)))
+                    mjobs.append((a.lib, sets, t, w, a.dry, a.force))
+        for stem, which, what in ex.map(map_job, mjobs):
+            print("  maps  %-5s %-12s %s" % (which, what, stem))
     for sid in sets:
         if sid not in results:
             p = os.path.join(ROOT, out_root(sets[sid]), "sets", sid, "info.json")
