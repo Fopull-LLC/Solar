@@ -158,6 +158,8 @@ PLANNED = {
 #   scale         the palette's |scale= (4.5 m / scale per tile)
 #   blend, rough  the palette's edge blend width (m) and its noise
 #   glow          a self-lit slot (the cave-visibility channel)
+#   drift         the slot's height map for blending is reshaped (drift_height): snow
+#                 and ice thin out over a band with a soft fringe instead of a stencil
 #   make          a special recipe instead of the plain bake
 G = dict  # shorthand
 TERRAIN = [
@@ -188,7 +190,8 @@ TERRAIN = [
          cc0=("Ground110", G(sat=0.12, gain=0.9))),
     dict(slot=11, name="dust", was="moon_crater_dust", mat="regolith", scale=2.0, blend=1.2, rough=0.7,
          cc0=("Ground093B", G(sat=0.25, contrast=1.6, flatten=0.3))),
-    dict(slot=12, name="bandedice", was="moon_teal_ice", mat="ice", scale=1.2, blend=0.8, rough=0.7, rfloor=0.3,
+    dict(slot=12, name="bandedice", was="moon_teal_ice", mat="ice", scale=1.2, blend=1.6, rough=0.7, rfloor=0.3,
+         drift=G(own=1.0, soften=0.012, lobew=0.6, finew=0.0),
          cc0=("Onyx006", G(sat=0.25, tint=(0.75, 0.95, 1.0), gain=1.9, contrast=0.6))),
     # 13–32: the geology set.
     dict(slot=13, name="basalt", was="geo_basalt", mat="basalt", scale=1.5, blend=0.8, rough=0.7,
@@ -211,9 +214,10 @@ TERRAIN = [
          cc0=("Ground037", G()), local=("MossAndSmallFerns", G(contrast=1.15))),
     dict(slot=21, name="ash", was="geo_ash", mat="ash", scale=2.2, blend=1.2, rough=0.7,
          cc0=("Ground110", G(sat=0.2, gain=0.6, contrast=1.1))),
-    dict(slot=22, name="snow", was="geo_snow", mat="ice", scale=1.8, blend=1.2, rough=0.7,
+    dict(slot=22, name="snow", was="geo_snow", mat="ice", scale=1.8, blend=3.0, rough=0.7, drift=G(own=1.0, soften=0.008, finew=0.5),
          cc0=("Snow014", G(contrast=1.3))),
-    dict(slot=23, name="glacier", was="geo_glacier", mat="ice", scale=1.0, blend=0.8, rough=0.7, rfloor=0.25,
+    dict(slot=23, name="glacier", was="geo_glacier", mat="ice", scale=1.0, blend=2.0, rough=0.7, rfloor=0.25,
+         drift=G(own=1.0, soften=0.012, lobew=0.5, finew=0.2),
          cc0=("Snow008A", G(sat=1.0, tint=(0.82, 0.93, 1.0), gain=0.6, contrast=3.0, flatten=0.0))),
     dict(slot=24, name="scree", was="geo_scree", mat="gravel", scale=1.8, blend=1.2, rough=0.7,
          cc0=("Ground110", G(sat=0.7))),
@@ -965,15 +969,25 @@ RIPPLE_HEIGHT = 0.0035  # m: a wind ripple's half-height (crest to trough ~7 mm 
 ROUGH_FLOOR = 0.6
 
 
-def map_stem(t, which):
-    sid, g = t[which]
-    if g.get("make") == "patchy" or g.get("ripples") or t.get("nstr", 1.0) != 1.0 or "rfloor" in t:
+def own_maps(t, which):
+    g = t[which][1]
+    return bool(g.get("make") == "patchy" or g.get("ripples") or t.get("nstr", 1.0) != 1.0 or "rfloor" in t)
+
+
+def drift_only(t, which):
+    """A slot whose only change to its set's maps is its drift height: it names the
+    set's shared normal and ORM, and only its height is its own."""
+    return "drift" in t and not own_maps(t, which)
+
+
+def map_stem(t, which, kind="height"):
+    if own_maps(t, which) or ("drift" in t and kind == "height"):
         return "%02d_%s" % (t["slot"], t["name"])
-    return sid
+    return t[which][0]
 
 
 def map_path(root, t, which, kind):
-    return "%s/terrain/maps/%s_%s.png" % (root, map_stem(t, which), kind)
+    return "%s/terrain/maps/%s_%s.png" % (root, map_stem(t, which, kind), kind)
 
 
 def whiteout(a, b):
@@ -1034,6 +1048,8 @@ def layer_maps(lib, sets, t, which):
         n = whiteout(n, rn)
         hn = (hr * fade - (hr * fade).min()) / max(1e-6, np.ptp(hr * fade))
         h = hn if h is None else h * 0.5 + hn * 0.5
+    if "drift" in t and h is not None:
+        h = drift_height(h, t["drift"])
     k = t.get("nstr", 1.0)
     if k != 1.0:
         n = np.concatenate([n[..., :2] * k, n[..., 2:]], axis=2)
@@ -1050,9 +1066,34 @@ def layer_maps(lib, sets, t, which):
     return n * 0.5 + 0.5, orm, h
 
 
+# Snow and ice at a border (Ty 2026-11-06: snow meeting rock or grass read as a
+# cut-out). Real snow thins out over a band: it lies on in hollows and in the
+# cracks between stones, the stones' tops poke through, and the edge is a soft
+# lobed fringe. The rock's relief already decides the pokes (it is the other
+# slot's height); what the snow's own photo height adds is crusty grain a few
+# centimetres across, which turned each patch edge into a crisp ragged line.
+# The height the border reads is instead the snow's depth: its own height
+# blurred to the size of a footprint, under drifts and scoured hollows of
+# tileable noise (lobes `lobe` of a tile across, a finer `fine` octave). A depth
+# that is smooth spreads the fade over its own gentle slope, so the edge goes
+# thin and grey before it goes, and wanders in lobes rather than following the
+# grain.
+def drift_height(h, d):
+    N = h.shape[0]
+    rng = np.random.default_rng(d.get("seed", 22))
+
+    def noise(cells):
+        f = blur_wrap(rng.standard_normal((N, N)), N / cells / 2.5)
+        return (f - f.mean()) / (f.std() + 1e-9)
+    own = blur_wrap(h.astype(np.float64), N * d.get("soften", 0.025))
+    own = (own - own.mean()) / (own.std() + 1e-9)
+    out = own * d.get("own", 0.5) + noise(d.get("lobe", 3.0)) * d.get("lobew", 1.0) + noise(d.get("fine", 9.0)) * d.get("finew", 0.4)
+    return ((out - out.min()) / max(1e-9, np.ptp(out))).astype(np.float32)
+
+
 def maps_hash():
     import inspect
-    src = "".join(inspect.getsource(f) for f in (layer_maps, _set_maps, ripple_field, whiteout, convert_set, make_patchy, crystal_fields, _worley))
+    src = "".join(inspect.getsource(f) for f in (layer_maps, drift_height, _set_maps, ripple_field, whiteout, convert_set, make_patchy, crystal_fields, _worley))
     return hashlib.sha1(src.encode()).hexdigest()[:12]
 
 
@@ -1065,7 +1106,7 @@ def map_job(args):
     root = OUT_CC0 if which == "cc0" else OUT_LOCAL
     paths = {k: os.path.join(ROOT, map_path(root, t, which, k)) for k in MAP_KINDS}
     g = t[which][1]
-    extra = [LAYER, BAKE, "maps", maps_hash(), RELIEF_MAPPED, RIPPLE_HEIGHT, t.get("nstr", 1.0), t.get("rfloor", ROUGH_FLOOR),
+    extra = [LAYER, BAKE, "maps", maps_hash(), RELIEF_MAPPED, RIPPLE_HEIGHT, t.get("nstr", 1.0), t.get("rfloor", ROUGH_FLOOR), t.get("drift"),
              t["scale"] if g.get("ripples") else None, g if (g.get("make") in ("patchy", "crystal") or g.get("ripples")) else None]
     st = stamp_of(s, extra)
     stf = os.path.join(os.path.dirname(paths["normal"]), ".import-" + map_stem(t, which))
@@ -1074,8 +1115,9 @@ def map_job(args):
     if dry:
         return map_stem(t, which), which, "would bake"
     n, orm, h = layer_maps(LIB_PATH[0], sets, t, which)
-    save_png(n, paths["normal"], "RGB")
-    save_png(orm, paths["orm"], "RGB")
+    if not drift_only(t, which):   # else the set's own job writes the shared normal and ORM
+        save_png(n, paths["normal"], "RGB")
+        save_png(orm, paths["orm"], "RGB")
     if h is not None:
         save_png(h, paths["height"], "L")
     elif os.path.exists(paths["height"]):
@@ -1154,7 +1196,7 @@ MACRO_SIZE = 60
 # lower one. The glow slots keep their look (no flags; magma has no height
 # map and counts as 0.5, i.e. bias 0, against its neighbours).
 #   k     |heightblend= (crisper the higher: the engine's fade is 0.5 (1 - k) + 0.02;
-#         0.5-0.6 here, see CONTRAST_MAX)
+#         0.5-0.6 here, see CONTRAST_MAX; snow and ice higher, over a wide blend)
 #   mean  where the slot sits against others (rock tops above loose ground,
 #         snow and ice over rock, sand lowest)
 #   sd    how much its relief counts (stones and crystal points, a lot; snow,
@@ -1164,8 +1206,9 @@ HEIGHT_ROLES = {
     "loose":   dict(k=0.55, mean=-0.08, sd=0.25),  # soil, gravel, regolith, ash: pebbles poke up a little
     "veg":     dict(k=0.55, mean=-0.06, sd=0.28),  # moss, tundra, litter, peat: tufts between the stones
     "sand":    dict(k=0.55, mean=-0.15, sd=0.12),  # sand and salt: fills the cracks, lies flat
-    "snow":    dict(k=0.55, mean=0.18, sd=0.15),   # settles over rock first, the tallest rock pokes through
-    "ice":     dict(k=0.5, mean=0.12, sd=0.20),    # glacier and banded ice
+    "snow":    dict(k=0.62, mean=0.15, sd=0.35),   # settles over rock first, the tallest rock pokes through;
+                                                   # its height is its depth (drift_height), lobes and hollows
+    "ice":     dict(k=0.65, mean=0.12, sd=0.30),   # glacier and banded ice (their own relief, softened)
     "ore":     dict(k=0.6, mean=0.10, sd=0.50),    # painted veins (hematite, veinstone, sulfur): ragged, but a
                                                    # thin seam keeps its painted width against the host rock
     "crystal": dict(k=0.6, mean=0.10, sd=0.60),    # druzy points stand out of the host rock at a deposit's rim
@@ -1179,6 +1222,14 @@ GLOW_HEIGHT_BIAS = 0.3
 # line (fade 0.5 (1 - k) + 0.02 of the pair's diff), and a contrast of 6 on the
 # smooth maps (onyx, sandstone, hematite, sd ~0.1) amplified their 8-bit steps.
 # k 0.5-0.6 and contrast at most 3.5 keep the borders height-decided and soft.
+# Snow and ice are the exception (2026-11-06 snow pass): on a 0.8-1.2 m blend their
+# edge read as a stencil, and a lower k only smeared it into a veil. They get a
+# wide blend instead (snow 3 m, glacier 2 m, banded ice 1.6 m: a band where the
+# cover thins out) with a higher k (0.62-0.65), so inside that band the heights
+# decide crisply pixel by pixel: rock tops and grass poke through, snow lies on in
+# the cracks and hollows, and the snow's own height is its smooth drift depth
+# (drift_height), so the fringe wanders in soft lobes. The pair takes the larger
+# k, so this touches only borders with snow or ice.
 CONTRAST_MAX = 3.5
 HEIGHT_ROLE = {
     "rust": "rock", "flagstone": "rock", "onyx": "rock", "slate": "rock", "basalt": "rock", "granite": "rock",

@@ -20,11 +20,14 @@
 -- seam (1: slot borders up close, seam_a | seam_b and 1 | 13, from 0.3-1.7 m; night 1 also
 -- in the dark by a lamp), only (1: skip the feet/eye/far/high and slope views),
 -- border (1: painted slot pairs br_rock | br_soil, br_sand | br_rock2, br_snow | br_rock
--- and a br_crystal seam in br_host rock, from 0.6, 1.5, 3 and 30 m: `_b<pair>_*`).
+-- and a br_crystal seam in br_host rock, from 0.6, 1.5, 3 and 30 m: `_b<pair>_*`; snowice 1
+-- adds br_snow | br_grass `snowgrass` and br_ice | br_rock `icerock`), snowice 2: only the snow
+-- and ice pairs.
 defaults = { first = 1, last = 99, settle = 3, quit = 1, cave = 0, graze = 0,
   smin = 0.55, smax = 0.85, dist = 0, phys = 0, pcol = 1, loadwatch = 0, trace = 0,
   seam = 0, seam_a = 2, seam_b = 15, seam_c = 1, seam_d = 13, night = 1, only = 0,
-  border = 0, br_rock = 14, br_soil = 20, br_sand = 16, br_rock2 = 15, br_snow = 22, br_host = 13, br_crystal = 7 }
+  border = 0, br_rock = 14, br_soil = 20, br_sand = 16, br_rock2 = 15, br_snow = 22, br_host = 13, br_crystal = 7,
+  snowice = 0, br_grass = 28, br_ice = 23 }
 
 local W = function() return app.wallClock and app.wallClock() or os.clock() end
 local W0 = W()
@@ -249,17 +252,24 @@ local function main()
         end
         local bpairs = { { "rocksoil", params.br_rock, params.br_soil }, { "sandrock", params.br_sand, params.br_rock2 },
           { "snowrock", params.br_snow, params.br_rock } }
+        if params.snowice > 0 then
+          if params.snowice > 1 then bpairs = { bpairs[3] } end
+          bpairs[#bpairs + 1] = { "snowgrass", params.br_snow, params.br_grass }
+          bpairs[#bpairs + 1] = { "icerock", params.br_ice, params.br_rock }
+        end
         for _, pr in ipairs(bpairs) do
           -- A on the near side of the border line (b < 10.5), B beyond it
           paint(at(5.0, 7.5, 0), pr[2], 3.2); paint(at(5.0, 13.5, 0), pr[3], 3.2)
           settle(); views(pr[1])
         end
         -- the crystal deposit: host rock, then a seam of 0.9 m discs across it
+        if params.snowice < 2 then
         paint(at(5.0, 10.5, 0), params.br_host, 5.0)
         for k = -5, 5 do
           paint(at(5.0 + k * 0.55, 10.5 + 0.25 * math.sin(k * 0.9), -0.2), params.br_crystal, 0.9 + 0.15 * math.cos(k * 1.3))
         end
         settle(); views("crystal")
+        end
       end
       if params.cave > 0 then
         local g = ground(d, R, top) or R

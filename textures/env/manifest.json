@@ -2694,7 +2694,7 @@
     "maps": {
      "normal": "textures/env/terrain/maps/Snow014_normal.png",
      "orm": "textures/env/terrain/maps/Snow014_orm.png",
-     "height": "textures/env/terrain/maps/Snow014_height.png"
+     "height": "textures/env/terrain/maps/22_snow_height.png"
     }
    },
    "local": null,
