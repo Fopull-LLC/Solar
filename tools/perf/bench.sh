@@ -95,7 +95,7 @@ RON
   fi
   tmo=${TMO:-330}; [ "$m" = gameplay ] && tmo=${TMO:-900}
   start=$(date +%s)
-  flock $LOCK bash -c "uptime > $OUT/$m.uptime; $ENVX ALSA_CONFIG_PATH=$S/silent-alsa.conf timeout $tmo $F play $PJ > $OUT/$m.log 2>&1; echo \$? > $OUT/$m.exit; uptime >> $OUT/$m.uptime"
+  flock $LOCK bash -c "date +%s > $OUT/$m.start; uptime > $OUT/$m.uptime; $ENVX ALSA_CONFIG_PATH=$S/silent-alsa.conf timeout $tmo $F play $PJ > $OUT/$m.log 2>&1; echo \$? > $OUT/$m.exit; uptime >> $OUT/$m.uptime"
   echo "  $m: exit $(cat $OUT/$m.exit) after $(( $(date +%s) - start )) s (incl. lock wait); load $(head -1 $OUT/$m.uptime | sed 's/.*load average: //')"
   grep -a "PB .*\(RESULT \[\|RESULT SMOKE\|SETTLE\|SLEEP\|PACING\|TIMEOUT\|ERROR\|DONE\|ROCKET\|PLANE\|ROVER\|GPU\|ORBIT\|MECO\|DIG\|BIG\|GROUND96\|FIELDS\|MEADOW\|PARK\|usersave\)\|watchdog\|without returning" $OUT/$m.log | grep -v "worst #\|counts mean\|scripts/frame\|buckets/frame\|frames over" | head -60
   python3 - "$OUT" "$m" <<'PY'

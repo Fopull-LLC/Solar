@@ -943,6 +943,21 @@ end
 -- The kinds of plant that give way to a walker (bent in the draw or swapped
 -- for a node, see "touch"); trunks, cacti and succulents do not.
 local BEND_KIND = { grass = true, fern = true, reed = true, bush = true, shrub = true, moss = true }
+-- WHO CASTS INTO THE SUN MAP (engine card 0661, per-source castShadow and
+-- shadowDistance; GPU pass 2026-11-09, tools/perf/gpusweep.sh). The sun map
+-- draws every visible card, and a meadow's grass is hundreds of alpha-cut
+-- cards whose shadow is lost in the ground's own shading; trees are worth a
+-- shadow near the crew, not on the far tree line. A kind missing here keeps
+-- the engine's default (it casts). Until the engine knows the two options,
+-- scatter.create refuses them once and the field stops sending them.
+SHADOW_KIND = {
+  grass = { cast = false }, moss = { cast = false }, reed = { cast = false },
+  fern = { cast = true, dist = 25 }, succulent = { cast = true, dist = 25 },
+  bush = { cast = true, dist = 40 }, shrub = { cast = true, dist = 40 },
+  broadleaf = { cast = true, dist = 60 }, conifer = { cast = true, dist = 60 }, palm = { cast = true, dist = 60 },
+  bulb = { cast = true, dist = 60 }, coral = { cast = true, dist = 60 }, cactus = { cast = true, dist = 40 },
+}
+shadowOpts = nil      -- nil: not tried yet; false: this engine refuses them
 
 function make_source(p, sp, fg, w)
   local rows = p.rows
@@ -1000,7 +1015,20 @@ function make_source(p, sp, fg, w)
         opts.emissive, opts.emissiveStrength = sp.emissive, sp.emissiveStrength
       end
     end
+    local sh = shadowOpts ~= false and SHADOW_KIND[sp.kind]
+    if sh then
+      opts.castShadow = sh.cast
+      if sh.cast and sh.dist then opts.shadowDistance = sh.dist end
+    end
     local ok, id = pcall(scatter.create, opts)
+    if not ok and sh and shadowOpts == nil then
+      -- an engine before 0661: the same source without the two options
+      shadowOpts = false
+      opts.castShadow, opts.shadowDistance = nil, nil
+      ok, id = pcall(scatter.create, opts)
+    elseif ok and sh then
+      shadowOpts = true
+    end
     if not ok then
       diag("scatter.create refused: " .. tostring(id))
       return nil

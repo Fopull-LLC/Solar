@@ -931,6 +931,14 @@ do
   API.mesh = nil
 end
 
+-- Per-source sun-map casting (engine card 0661): this stub, like engines
+-- before it, refuses castShadow/shadowDistance, so the field asked once and
+-- stopped sending them (every stand above was still made).
+check("an engine without per-source shadows: the field stops sending castShadow", ff.shadowOpts == false,
+  tostring(ff.shadowOpts))
+check("grass casts no sun shadow and trees only to 60 m, once the engine takes it",
+  ff.SHADOW_KIND.grass.cast == false and ff.SHADOW_KIND.broadleaf.dist == 60 and ff.SHADOW_KIND.conifer.dist == 60)
+
 -- ── report ──────────────────────────────────────────────────────────────────
 local bad = {}
 for _, c in ipairs(checks) do

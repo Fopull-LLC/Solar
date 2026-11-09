@@ -95,17 +95,17 @@ LEVELS = { "Low", "Medium", "High", "Ultra" }
 --   dof        the depth of field: max px at 1080p, and taps; nil = off
 local PRESETS = {
   Low    = { scale = 0.60, sharpen = 0.6, shadows = true, shadowDistance = 70,  volumetric = false, shafts = false, fogSteps = 8,
-             bloom = { 1.6, 0.30 }, flare = false, dof = nil,
-             text = "For older or integrated graphics. Softer image, short shadows, plain haze." },
-  Medium = { scale = 0.90, sharpen = 0.25, shadows = true, shadowDistance = 140, volumetric = false, shafts = false, fogSteps = 12,
+             bloom = { 1.6, 0.30 }, flare = false, dof = { 3.0, 8 },
+             text = "For older or integrated graphics. 720 lines, short shadows, plain haze." },
+  Medium = { scale = 0.90, sharpen = 0.25, shadows = true, shadowDistance = 140, volumetric = false, shafts = false, fogSteps = 8,
              bloom = { 1.6, 0.35 }, flare = true, dof = { 3.25, 10 },
-             text = "Balanced. Sharp enough for most screens, holds 60 fps on a mid-range card." },
-  High   = { scale = 1.00, shadows = true, shadowDistance = 220, volumetric = true,  shafts = false, fogSteps = 12,
+             text = "Balanced: 900 lines on any screen, sharpened up. Plain haze instead of volumetric air." },
+  High   = { scale = 1.00, shadows = true, shadowDistance = 220, volumetric = true,  shafts = false, fogSteps = 8,
              bloom = { 1.6, 0.35 }, flare = true, dof = { 4.0, 14 },
-             text = "Full resolution, volumetric air and a soft far distance. Wants a strong graphics card." },
-  Ultra  = { scale = 1.00, shadows = true, shadowDistance = 400, volumetric = true,  shafts = true,  fogSteps = 16,
+             text = "1080 lines on any screen, volumetric air and a soft far distance. Wants a strong graphics card." },
+  Ultra  = { scale = 1.00, shadows = true, shadowDistance = 400, volumetric = true,  shafts = true,  fogSteps = 12,
              bloom = { 1.6, 0.35 }, flare = true, dof = { 4.5, 16 },
-             text = "Adds sun shafts through the air. Very expensive at high resolutions." },
+             text = "The screen's own resolution and sun shafts through the air. Very expensive at high resolutions." },
 }
 local DEFAULT = "Medium"
 
@@ -205,9 +205,37 @@ end
 -- after every apply.
 local dynamic = false
 
+-- AUTO RENDER SCALE (2026-11-09, tools/perf/gpusweep.sh). Almost every GPU
+-- pass is paid per pixel, so a fixed scale made each level cost 1.8x as much
+-- on a 2560x1440 screen as on 1920x1080: High at 1440p measured 28-33 ms of
+-- GPU where it was 15-22 at 1080p, and Ty (fullscreen 1440p) found every
+-- level unplayable. Auto renders each level at a set number of lines: Low
+-- 720, Medium 900, High 1080, Ultra the screen's own (up to 1440), never
+-- above native and never under half of it. On 1080p that is 67 / 83 / 100 /
+-- 100 % (Low and Medium as before, give or take); on 1440p 50 / 63 / 75 /
+-- 100 %, so a level costs about the same on either screen. A fixed scale
+-- in the Render scale row is the player's and is kept as it is.
+AUTO_LINES = { Low = 720, Medium = 900, High = 1080, Ultra = 1440 }
+local auto_h = nil         -- the screen height the auto scale was worked out for
+local function screen_h()
+  if camera and camera.screenSize then
+    local _, h = camera.screenSize()
+    if h and h > 0 then return h end
+  end
+  return 1080
+end
+function autoScale(name, h)
+  local lines = AUTO_LINES[name or level()] or AUTO_LINES.Medium
+  h = h or screen_h()
+  return math.max(0.5, math.min(1.0, lines / h))
+end
 -- The render scale in force (the Render scale row, else the level's).
-local function scale_of(p)
-  local s = tonumber(opt("render_scale")) or p.scale
+local function scale_of(p, name)
+  local v = opt("render_scale", name)
+  local s = tonumber(v)
+  if not s then
+    if v == "auto" then s = autoScale(name) else s = p.scale end
+  end
   return math.max(0.25, math.min(1.0, s))
 end
 -- The upscale's sharpening for a scale: the player's, or Auto: the level's at
@@ -216,6 +244,10 @@ end
 local function sharpen_of(p, s)
   local v = opt("sharpen")
   if type(v) == "number" then return math.max(0, math.min(1, v)) end
+  if opt("render_scale") == "auto" then
+    if s >= 0.999 then return 0.0 end
+    return math.max(0.2, math.min(0.6, 0.25 + (0.9 - s) * (0.35 / 0.3)))
+  end
   if math.abs(s - p.scale) < 1e-3 then return p.sharpen or (s >= 0.999 and 0.0 or 0.4) end
   if s >= 0.999 then return 0.0 end
   return math.max(0.2, math.min(0.7, 0.25 + (0.9 - s) * (0.35 / 0.3)))
@@ -546,7 +578,8 @@ local function apply(name)
   volumetric, shafts = opt("volumetric") == true, opt("shafts") == true
   flare, dof = opt("flare") == true, opt("dof") == true
   post_level = nil
-  local sc = scale_of(p)
+  local sc = scale_of(p, current)
+  auto_h = screen_h()
   if app.setRenderScale and math.abs((app.renderScale and app.renderScale() or -1) - sc) > 1e-3 then
     app.setRenderScale(sc)
   end
@@ -598,7 +631,7 @@ end
 
 function describe(name) return (PRESETS[name] or PRESETS[DEFAULT]).text end
 
-function scaleOf(name) return scale_of(PRESETS[name or level()] or PRESETS[DEFAULT]) end
+function scaleOf(name) return scale_of(PRESETS[name or level()] or PRESETS[DEFAULT], name) end
 
 -- Called by settings.lua (the Render scale row). The value itself is read
 -- through opt("render_scale"); this only applies it now.
@@ -654,7 +687,11 @@ function update(node, dt)
   post()
   if not post_level then apply_post(p) end
   apply_dof(p)
-  if time - world_t > 1.0 then world_t = time; post_level = nil; apply_world() end
+  if time - world_t > 1.0 then
+    world_t = time; post_level = nil; apply_world()
+    -- the window or the monitor changed size: the auto scale follows it
+    if auto_h and screen_h() ~= auto_h and opt("render_scale") == "auto" then apply(level()) end
+  end
 
   if not params.autoLower or lowered then return end
   ema = ema and (ema + (dt - ema) * math.min(1, dt * 2)) or dt

@@ -57,13 +57,14 @@ local flare_on = nil
 local sunflare = { valid = true, setOn = function(on) flare_on = on end }
 
 local scripts = {}
+SCR = { 1920, 1080 }     -- the screen the graphics script sees (camera.screenSize)
 local function env_for(file)
   local env
   env = setmetatable({
     save = save, assets = assets, app = app, time = 0, params = {},
     decals = { setMax = function(n) decal_max = n end },
     terrain = { busy = function() return false end, setBudget = function(b) tbudget = b end },
-    space = {}, camera = { screenSize = function() return 1920, 1080 end },
+    space = {}, camera = { screenSize = function() return SCR[1], SCR[2] end },
     find = function(name)
       if name == "Lighting" then return lnode end
       if name == "Post Processing" then return pnode end
@@ -115,22 +116,22 @@ ok(gx.level() == "High" and st.get("vol_Master") == 0.5, "...and reads the same 
 st.set("gfx_level", "Ultra"); frames(3)
 ok(not st.gfxCustom(), "a preset is not Custom (the old Off blur is cleared with it)")
 ok(light.contactShadows == true and light.reflections == true, "Ultra: contact shadows and reflections on")
-ok(light.fogSteps == 16 and gx.volumetric == true and gx.shafts == true, "Ultra: volumetric air, 16 steps, shafts")
+ok(light.fogSteps == 12 and gx.volumetric == true and gx.shafts == true, "Ultra: volumetric air, 12 steps, shafts")
 ok(math.abs(light.shadowDistance - 400) < 1, "Ultra: 400 m of shadow (got " .. light.shadowDistance .. ")")
 ok(decal_max == 2048, "Ultra: 2,048 ground marks (got " .. decal_max .. ")")
 ok(math.abs(flora.params.reach - 1.2) < 1e-6 and flora.params.max_props == 9000, "Ultra: plants reach 1.2, 9,000 of them")
 ok(math.abs(rocks.params.reach - 1.0) < 1e-6, "Ultra: rocks reach 1.0 (got " .. rocks.params.reach .. ")")
 ok(vfx.params.tier == "Ultra" and strip.RT_BUDGET == 20, "Ultra: vehicle effects Ultra, portraits 20/s")
 st.set("gfx_level", "Low"); frames(3)
-ok(A.scale == 0.6 and light.contactShadows == false and gx.volumetric == false, "Low: 60% scale, no contact shadows, flat haze")
-ok(flare_on == false, "Low: no flare (got " .. tostring(flare_on) .. ")"); ok(gx.dof == false, "Low: no distance blur (got " .. tostring(gx.dof) .. ")")
+ok(math.abs(A.scale - 720 / 1080) < 1e-6 and light.contactShadows == false and gx.volumetric == false, "Low: Auto scale (720 lines of 1080), no contact shadows, flat haze")
+ok(flare_on == false, "Low: no flare (got " .. tostring(flare_on) .. ")"); ok(gx.dof == true, "Low: distance blur on, it hides the far crawl (got " .. tostring(gx.dof) .. ")")
 ok(math.abs(flora.params.reach - 0.65) < 1e-6 and flora.params.max_props == 3000, "Low: plants nearer and fewer")
-ok(math.abs(post.aoStrength - 0.85 * 0.5) < 1e-6, "Low: AO at half the scene's strength")
+ok(math.abs(post.aoStrength - 0.85) < 1e-6, "Low: AO at the scene's full strength (it costs the same)")
 ok(gx.levelFor("rain") == "Low", "rain_fx's tier follows the Rain and snow row")
 -- one change
 st.set("gfx_shadow_distance", 600); frames(2)
 ok(st.gfxCustom() and math.abs(light.shadowDistance - 600) < 1, "one option changed: Custom, and applied live")
-ok(A.scale == 0.6, "...the rest of the level stays")
+ok(math.abs(A.scale - 720 / 1080) < 1e-6, "...the rest of the level stays")
 st.set("gfx_motion_blur", 0.3); st.set("gfx_bloom", false); st.set("gfx_antialias", "Off"); frames(2)
 ok(post.motionBlur == 0.3 and post.bloom == false and A.aa == "Off", "motion blur, bloom and anti-aliasing reach the engine")
 st.set("gfx_terrain_memory", 1536); frames(3)
@@ -141,6 +142,19 @@ st.set("gfx_level", "Medium"); frames(3)
 ok(not st.gfxCustom() and math.abs(light.shadowDistance - 140) < 1 and post.bloom == true and A.aa == "Fxaa",
   "a preset puts every changed option back")
 ok(tbudget == nil, "...the terrain budget too (no limit)")
+-- AUTO RENDER SCALE: each level a set number of lines, whatever the screen
+ok(math.abs(A.scale - 900 / 1080) < 1e-6, "Medium on 1080p: 900 lines (got " .. A.scale .. ")")
+SCR = { 2560, 1440 }
+st.set("gfx_level", "High"); frames(3)
+ok(math.abs(A.scale - 0.75) < 1e-6, "High on 1440p: 1080 lines, 75% (got " .. A.scale .. ")")
+st.set("gfx_level", "Ultra"); frames(3)
+ok(A.scale == 1.0, "Ultra on 1440p: native")
+st.set("gfx_level", "Low"); frames(3)
+ok(A.scale == 0.5, "Low on 1440p: 720 lines, 50%")
+st.set("render_scale", 1.0); frames(2)
+ok(A.scale == 1.0 and st.gfxCustom(), "a fixed scale in the row is the player's, kept as it is")
+SCR = { 1920, 1080 }
+st.set("gfx_level", "Medium"); frames(3)
 
 -- ── 4. SOMEONE ELSE'S VALUE is left alone ────────────────────────────────────
 vfx.params.tier = "Low"           -- a probe pinned the effects tier

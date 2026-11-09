@@ -82,11 +82,14 @@ local function onoff() return { { label = "On", value = true }, { label = "Off",
 GFX_OPTIONS = {
   -- resolution
   { key = "render_scale", group = "res", label = "Render scale", store = "render_scale", cost = "the strongest lever",
-    opts = { { label = "100%", value = 1.0 }, { label = "90%", value = 0.9 }, { label = "75%", value = 0.75 },
-             { label = "60%", value = 0.6 }, { label = "50%", value = 0.5 } },
-    preset = { Low = 0.6, Medium = 0.9, High = 1.0, Ultra = 1.0 },
+    opts = { { label = "Auto", value = "auto" }, { label = "100%", value = 1.0 }, { label = "90%", value = 0.9 },
+             { label = "75%", value = 0.75 }, { label = "67%", value = 0.67 }, { label = "50%", value = 0.5 } },
+    -- Auto: each level draws a set number of lines whatever the screen
+    -- (graphics.lua AUTO_LINES: Low 720, Medium 900, High 1080, Ultra native)
+    preset = { Low = "auto", Medium = "auto", High = "auto", Ultra = "auto" },
     desc = "The share of the screen the world is drawn at, then sharpened up; the interface stays sharp. "
-      .. "75% cuts the GPU's work by about a third, 60% by half." },
+      .. "Auto draws each level at the same detail on any screen (High: 1080 lines, so 75% on a 1440p screen). "
+      .. "75% cuts the GPU's work by about 40%, 50% by three quarters." },
   { key = "sharpen", group = "res", label = "Upscale sharpening", cost = "free",
     opts = { { label = "Auto", value = "auto" }, { label = "Off", value = 0.0 }, { label = "Soft", value = 0.25 },
              { label = "Firm", value = 0.5 }, { label = "Strong", value = 0.75 } },
@@ -108,7 +111,8 @@ GFX_OPTIONS = {
   { key = "shadow_map", group = "light", label = "Shadow sharpness", cost = "low (GPU memory)",
     opts = { { label = "Soft (512)", value = 512 }, { label = "Medium (1024)", value = 1024 },
              { label = "Sharp (2048)", value = 2048 }, { label = "Crisp (4096)", value = 4096 } },
-    preset = { Low = 1024, Medium = 2048, High = 2048, Ultra = 4096 },
+    -- the map size and the reach cost no measurable GPU (1440p meadow: 1024 -0.2 ms, 4096 -0.6, 70 m +0.8, 400 m +0.6)
+    preset = { Low = 2048, Medium = 2048, High = 2048, Ultra = 4096 },
     desc = "The sun shadow map's resolution: crisper shadow edges up close at a higher size." },
   { key = "contact_shadows", group = "light", label = "Contact shadows", cost = "low (0.4–0.9 ms)", opts = onoff(),
     preset = { Low = false, Medium = false, High = false, Ultra = true },
@@ -118,16 +122,19 @@ GFX_OPTIONS = {
     desc = "Shiny floors and hulls reflect what stands on them, not only the sky." },
   { key = "ao", group = "light", label = "Ambient occlusion", cost = "low (saved when Off)",
     opts = { { label = "Full", value = 1.0 }, { label = "Light", value = 0.5 }, { label = "Off", value = 0.0 } },
-    preset = { Low = 0.5, Medium = 1.0, High = 1.0, Ultra = 1.0 },
+    -- the pass is half resolution and costs the same at any strength (~2-3 ms at 1440p): Low keeps it whole
+    preset = { Low = 1.0, Medium = 1.0, High = 1.0, Ultra = 1.0 },
     desc = "Soft shade in corners and under overhangs. Off skips the pass entirely." },
   -- atmosphere
-  { key = "volumetric", group = "air", label = "Volumetric air", cost = "high (6–20 ms)", opts = onoff(),
+  { key = "volumetric", group = "air", label = "Volumetric air", cost = "high (15–30 ms in a meadow)", opts = onoff(),
     preset = { Low = false, Medium = false, High = true, Ultra = true },
     desc = "Real fog in the air: valleys fill with mist and hills stand out of it. Off draws the same haze as distance fog." },
-  { key = "fog_quality", group = "air", label = "Volumetric quality", cost = "medium (3–10 ms)",
+  { key = "fog_quality", group = "air", label = "Volumetric quality", cost = "medium (about 2 ms a step at 1440p)",
     opts = { { label = "Low", value = 8 }, { label = "Medium", value = 12 }, { label = "High", value = 16 },
              { label = "Max", value = 24 } },
-    preset = { Low = 8, Medium = 12, High = 12, Ultra = 16 },
+    -- 2026-11-09 (gpusweep): each step costs ~1.9 ms on a 1440p meadow at High
+    -- (12 -> 8: -7.9 ms, 12 -> 16: +7.3); 8 until the engine grids its fog
+    preset = { Low = 8, Medium = 8, High = 8, Ultra = 12 },
     desc = "Samples along each ray of volumetric air. Lower is cheaper and thins thick mist a little." },
   { key = "shafts", group = "air", label = "Sun shafts", cost = "low to high", opts = onoff(),
     preset = { Low = false, Medium = false, High = false, Ultra = true },
@@ -148,8 +155,8 @@ GFX_OPTIONS = {
   { key = "flare", group = "lens", label = "Sun lens flare", store = "lens_flare", cost = "low (0.5 ms)", opts = onoff(),
     preset = { Low = false, Medium = true, High = true, Ultra = true },
     desc = "Glare, rays and ghosts from the sun when it is in view (stronger in space)." },
-  { key = "dof", group = "lens", label = "Distance blur", store = "far_blur", cost = "low (0.4 ms)", opts = onoff(),
-    preset = { Low = false, Medium = true, High = true, Ultra = true },
+  { key = "dof", group = "lens", label = "Distance blur", store = "far_blur", cost = "low (0.5–1.5 ms at 1440p)", opts = onoff(),
+    preset = { Low = true, Medium = true, High = true, Ultra = true },
     desc = "Softens the far ground so its texture does not crawl. Nothing near you is blurred." },
   { key = "motion_blur", group = "lens", label = "Motion blur", cost = "low",
     opts = { { label = "Off", value = 0.0 }, { label = "Light", value = 0.3 }, { label = "Strong", value = 0.6 } },

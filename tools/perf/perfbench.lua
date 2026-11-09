@@ -199,7 +199,7 @@ local function measure()
   local c = nil
   if FRAME % 10 == 0 then c = perf.counts() end
   local g = nil
-  if FRAME % (MODE == "gpu" and 2 or 10) == 0 then local ok, gg = pcall(perf.gpu); if ok and gg and gg.total then g = gg end end
+  if FRAME % ((MODE == "gpu" or MODE == "gpusweep") and 2 or 10) == 0 then local ok, gg = pcall(perf.gpu); if ok and gg and gg.total then g = gg end end
   if not dtw then return end
   for _, name in ipairs(ORDER) do
     local r = RECS[name]
@@ -326,7 +326,7 @@ local function sc_end(name)
     partsMax = topk(r.pmax, 10), worst = r.hw or {}, bodies = topk(r.bod or {}, 8, math.max(n, 1)),
     lines = topk(r.smp or {}, 12, math.max(n, 1)), worstInverted = r.worst,
     hitchMs = r.hms or 0, hitchBuckets = topk(r.hb or {}, 8), hitchParts = topk(r.hp or {}, 8), counts = cm, countsMax = r.cmax, gpu = r.gn > 0 and r.gpu / r.gn or -1,
-    gpuPasses = topk(r.gp or {}, MODE == "gpu" and 32 or 8, math.max(r.gn, 1)), gpuRes = r.res, luaFns = lpd, notes = notes, ticks = (r.tk or 0) / math.max(r.tf or 0, 1), physTick = (r.b.physics or 0) / math.max(r.tk or 0, 1) }))
+    gpuPasses = topk(r.gp or {}, (MODE == "gpu" or MODE == "gpusweep") and 32 or 8, math.max(r.gn, 1)), gpuRes = r.res, luaFns = lpd, notes = notes, ticks = (r.tk or 0) / math.max(r.tf or 0, 1), physTick = (r.b.physics or 0) / math.max(r.tk or 0, 1) }))
 end
 local function finish_all() for _, name in ipairs(ORDER) do sc_end(name) end end
 
@@ -3059,6 +3059,19 @@ local TOGGLES = {
   shadowdist150 = LT{ shadowDistance = 150 },
   shadowdist336 = LT{ shadowDistance = 336 },
   shadowsoft0  = LT{ shadowSoftness = 0 },
+  -- E's GPU plan §5 (2026-11-09): the fog's map taps off, the sun map's size, the reach, SSR on, FXAA off
+  fogshaftsmap0 = LT{ fogShaftsMap = false },
+  shadowdist70  = LT{ shadowDistance = 70 },
+  shadowdist220 = LT{ shadowDistance = 220 },
+  shadowdist400 = LT{ shadowDistance = 400 },
+  ssr1         = LT{ reflections = true },
+  map1024      = { on = function(c) c.map = env.shadowMapSize; env.shadowMapSize = 1024 end, off = function(c) env.shadowMapSize = c.map or 2048 end },
+  map2048      = { on = function(c) c.map = env.shadowMapSize; env.shadowMapSize = 2048 end, off = function(c) env.shadowMapSize = c.map or 2048 end },
+  map4096      = { on = function(c) c.map = env.shadowMapSize; env.shadowMapSize = 4096 end, off = function(c) env.shadowMapSize = c.map or 2048 end },
+  fxaa0        = { on = function(c) app.setAntialias("Off") end, off = function(c) app.setAntialias("Fxaa") end },
+  ao0          = { on = function(c) if c.PP then c.aom = c.PP.aoMode; c.PP.aoMode = 0 end end, off = function(c) if c.PP and c.aom then c.PP.aoMode = c.aom end end },
+  dof0         = { on = function(c) if c.PP then c.dofb = c.PP.dofBlur; c.PP.dofBlur = 0 end end, off = function(c) if c.PP and c.dofb then c.PP.dofBlur = c.dofb end end },
+  flare0       = { on = function(c) local f = findScript("sun_flare"); if f and f.setOn then f.setOn(false) end end, off = function(c) local f = findScript("sun_flare"); if f and f.setOn then f.setOn(true) end end },
   ssr0         = LT{ reflections = false },
   post0        = { on = function(c) if c.PP then c.PP.enabled = false end end, off = function(c) if c.PP then c.PP.enabled = true end end },
   bloom0       = { on = function(c) if c.PP then c.PP.bloom = false end end, off = function(c) if c.PP then c.PP.bloom = true end end },
