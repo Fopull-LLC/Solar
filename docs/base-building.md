@@ -2086,3 +2086,237 @@ adds is the coolant as a substance in the loop:
 - `tools/perf/kitprobe.sh <engine> fluids` (`tools/perf/fluidsprobe_modes.lua`):
   the whole of it in the engine. The numbers are in
   `work/sandbox_s7/NOTES.md`; the pictures are `save/user/buildshots/f*.png`.
+
+## 18. Sandbox S8: logic and automation
+
+The plan is `work/sandbox/PLAN.md` §3.4 and §8.3 (S8). Minecraft redstone
+meets real industrial controls: sensors, buttons and gates in DIN boxes on the
+walls, a Signal Cable run from pin to pin, a small PLC with a 16-rung ladder,
+and terminals on the doors, lights, pumps, valves, breakers and reactor
+controls the earlier steps built. Ty, 11-06: cables by default, radio
+channels for the runs a cable can't make.
+
+### The rules (`scripts/logic.lua`, pure)
+
+- **A signal** is a boolean with a value: a sensor's reading, a counter's
+  count (a gate's value is 1 or 0). An input pin fed by several cables is
+  their OR (redstone's wired-OR), its value the largest.
+- **The network** is built from the pieces and the cables. The nodes are
+  sorted by key, the strongly connected parts found (Tarjan), and the nodes
+  ranked in the topological order of the parts. Anything without a loop
+  settles in one pass.
+- **Evaluated on change, never per frame.**
+  - A node whose inputs or reading changed is marked. `evaluate` runs the
+    marked nodes in rank order and marks what each changed output feeds.
+  - A loop is iterated, but a node is evaluated at most `MAX_VISITS` (8)
+    times a call. A loop that never settles (a NOT fed back into itself)
+    stops there and is flagged `osc` (the overlay and the menu say "DOESN'T
+    SETTLE"). It goes on at the next call, ticking like a redstone clock.
+  - Nothing loops forever, and the answer never depends on the order the
+    pieces came in. A latch made of two gates settles.
+- **Time is game time.** `advance(net, st, a)` takes every timed event (a
+  timer's delay, a button's pulse, a rung's delay) in time order up to agency
+  time `a`, each evaluated at its own moment. One step of any length equals
+  any number of short ones: an hour of a 10 s clock into a counter counts 361
+  edges either way, and two delays in a chain end at their sum inside one
+  five-hour step. At most `MAX_EVENTS` (2,000) events a call; past that the
+  clocks jump to their phase (flagged `ff`). A load is caught up the same way.
+- **Kinds:**
+  - sensor: its reading against its setpoint, `above` or `below`, with
+    hysteresis (on above `set`, off under `set − hys`);
+  - AND, OR, XOR, NOT; timer (on-delay, off-delay, pulse, clock); latch (S, R;
+    R wins); comparator (A's value against B's, or its setpoint); counter
+    (IN's rising edges to its preset, R clears);
+  - button and keypad (a pulse), lever, radio tx/rx, the ladder controller,
+    and the devices (below).
+- **The ladder (PLC):**
+  - X1–X8 in, Y1–Y8 out, M1–M8 inner relays; 16 rungs `IF a [AND|OR b] THEN
+    coil [after d s]`, each contact normally open or closed, each coil OUT,
+    SET or RST.
+  - A scan runs the rungs top to bottom on the registers as they change, as
+    a real PLC's does. Scans repeat until nothing moves (at most 4 a call,
+    else flagged). A rung's delay is an on-delay on its condition.
+  - A rung is kept as text (`X1,0,AND,M2,1,SET,Y3,5`) in the part's state.
+- **The save:** `pack` writes flat records (latches, counts, levers, timers'
+  clocks, the relays as bit strings, what each device was last told), lists
+  only, never deeper than the save holds.
+
+### The pieces (`parts_kit` LOGIC, `tools/gen_kit_logic.py`)
+
+| Piece | What it does |
+|---|---|
+| Signal Cable | the drum: 2-core 1.5 mm² screened control cable, $1.20 a metre, 45 g/m, up to 150 m a run |
+| AND, OR, XOR, NOT Module | one function each in an 18 × 22 cm DIN enclosure (RAL 7035, a colour stripe per function), 0.8–0.9 kg |
+| Timer Relay | on-delay, off-delay, pulse or clock, 0.5 s to an hour |
+| Latching Relay | S sets, R resets; it holds through a power cut and a reload |
+| Comparator | A's value against B's or its setpoint, with hysteresis |
+| Counter Module | IN's pulses to its preset; R clears |
+| Pressure Switch | the room it faces into, atm |
+| Gas Analyser | the room's O2 or CO2 in % of an atmosphere |
+| Temperature Transmitter | within 8 m of a reactor: its primary loop (or the fuel); else the outside air |
+| Flow Switch | within 4 m: a reactor loop's coolant flow, or a pipe's, kg/s |
+| Level Switch | the nearest tank, bottle rack or air tank within 4 m, % full |
+| Battery Monitor | its base grid's charge, % |
+| Area Radiation Monitor | the dose rate where it hangs, % of a lethal dose an hour, walls counted (`base_shield.doseAt`) |
+| Presence Detector | the nearest crew member on foot, m |
+| Daylight Sensor | the sun's height over its horizon, % of overhead light |
+| Reactor Power Monitor | within 30 m: the plant's power % or k |
+| Door Contact | the nearest door within 2.5 m, % open |
+| Push Button, Lever Switch, Keypad | a 1 s pulse; a position; a 3 s pulse for the right code (an Engineer sets it) |
+| Indicator Lamp | a 22 mm pilot lamp: green, amber, red or white |
+| Alarm Beacon | a rotating red beacon and a klaxon |
+| Radio Transmitter, Receiver | channel 1–16, to every receiver on it within 2 km |
+| Ladder Controller | the PLC on its desk: its CRT, the 16-rung editor, X1–X8 and Y1–Y8 on a terminal rail at its back |
+
+Wall-hung gear is a `mount`. Its cable glands, and so its pins, are on its +Z
+end (down, on a wall): inputs left, outputs right.
+
+**The old pieces' terminals** (`lg.kind = "device"`):
+
+| Piece | In | Out |
+|---|---|---|
+| Door Wall, Double Door, Bulkhead, Hab Door Bulkhead, hatches | `open` (held open; still interlocked and pressure-held), `lock` (kept shut whoever walks up) | `state` |
+| Airlock Wall | `cycle` (the chamber asked to cycle to this door while on), `lock` | `ready` (the chamber at this door's far side, every other door shut), `state` |
+| Light Fitting | `on` | |
+| Process Pump, Charging Pump | `run` | |
+| Gate Valve | `open` | |
+| Breaker Panel | `close` (off opens it; on recloses it, but never a TRIP: that waits for a hand) | `tripped` |
+| Coolant Pump | `run` | |
+| Reactor Control Console | `scram` (a rising edge), `setback` (while on, the setpoint drops to the console's setback %) | `tripped` |
+| O2 Generator, CO2 Scrubber | `run` (off, it makes nothing and draws nothing: `room_air.setMachine`) | |
+
+Pins are in the piece's frame. `logic_net.pinLocal` turns one into its
+structure's frame through the piece's yaw, pitch and roll.
+
+### The scene (`scripts/logic_net.lua`)
+
+- **Built** when the logic signature changes: the logic pieces, their place
+  and settings, and the cables. A light switched or a door opening never
+  rebuilds it. Debounced 0.3 s; the state is kept by piece across a rebuild.
+  A sensor's target (its room, the plant, the pipe, the tank, the door) is
+  found once at the build, from the records.
+- **The clock:** sensors are read every 0.25 s, and a reading that crosses
+  nothing marks nothing. The network is stepped at most ten times a second,
+  and only when something is due or marked. Idle, nothing is evaluated.
+- **Devices:** a command goes out when an input changes.
+  - Doors (`open`, `lock`) are LEVELS that kit_live asks every step it moves a
+    door (`doorCmd`). A door a signal holds open is stepped wherever the crew is.
+  - An airlock's `cycle` keeps `room_air.requestDoor` alive while it is on,
+    as a crew member at that door would. `room_air.airlockReady` is its `ready`.
+  - Lamps and beacons are levels (a beacon's lens flashes at 2 Hz, its klaxon
+    loops).
+  - Lights, pumps, valves, breakers (`base_power.setBreaker(…, "logic")`),
+    reactor pumps and SCRAM (`reactor_plant`) are edges: a hand may switch
+    them between edges.
+  - A cable laid to a device applies its level once (it takes over); a cable
+    taken up lets the hold go.
+- **SAVE:** `lg.wires` (each cable's ends, its frame's structure, its settled
+  points, the ground under it, what it cost), `lg.seq`, `lg.st` (the packed
+  state) and `lg.a`. A piece's settings (`lp`: setpoint, mode, delay, preset,
+  channel, colour, code) and a ladder's rungs (`prog`) are its part state.
+
+### The Signal Cable
+
+- **Laid as a Power Cable is.** With the drum in hand the cursor picks the
+  piece and the pin nearest the cursor (`pinNear`; the far end must be the
+  other kind: out → in). LMB makes it off; LMB on the other pin lays it. It is
+  one step in the undo ring, refunded in full within the minute. A piece taken
+  down takes its cables up; "Take up its signal cables" is on every piece's menu.
+- **It settles the way base_cable's do** (`base_cable.settle`, `thin`):
+  - in the frame of the structure its output end is on, with stations every
+    0.1 m along the line between its pins;
+  - a catenary laid slack by hand (`a` = 0.35 × the span, never stiffer than
+    a 3 N pull in this gravity);
+  - lying on what is under it: the tops of the floors, slabs, decks, blocks
+    and props of any structure within reach (by record, the two end pieces
+    skipped), and the ground sampled once at laying.
+  - A 6 m run between two wall pins hangs from both and lies along the floor
+    between. It is settled again when the floors under it change (a
+    per-structure signature), never in a frame.
+- **Drawn** as one mesh per structure (a 6-sided 9 mm tube, dark blue PVC),
+  body-relative, spawned while the crew is on its world.
+
+### The LOGIC overlay
+
+F5 with the kit open (`drawOverlay` in `lateUpdate`, this frame's body read):
+
+- every cable over its settled path, **orange while its signal is on** with
+  chevrons running from the output to the input, grey-green while off, yellow
+  in a loop that doesn't settle;
+- a lamp at every pin, lit or dark;
+- each piece's tag: its reading against its setpoint ("GAS ANALYSER · ON /
+  18.5 % · < 19.0 %"), a timer's time left, a count, a radio's channel, the
+  PLC's Y register, a device's wired terminals;
+- dashed lines between radios on one channel.
+
+### The Ladder Controller
+
+- **Its CRT** (`img:text` in SolarMono on its Screen quad, the reactor
+  console's way) shows the run state and X, Y, M as bits in the header, then
+  the 16 rungs as ladder text (`-[ X1]---AND-[/M2]---(SET Y1) 5s`) between two
+  power rails, an energised rung lit. It is repainted when the network moved,
+  at most twice a second, while the crew is within 30 m.
+- **The editor** (right-click → Program the ladder…; `LogicLadderPanel`, a
+  `panel/frame` over a `hud/instrument` well of `crt/row` keys) shows the
+  registers as lamps, then one row a rung: contact A, NO/NC, AND/OR, contact
+  B, NO/NC, OUT/SET/RST, the coil, the delay, the rung in words, and ✕.
+  **A click steps a cell, Shift+click steps it back**, each with a key
+  strike, and the edit is live at once. Run/Stop; Esc or Done closes it.
+
+### The examples (tested in `smoke_logic`, run in the probe)
+
+- **Auto-airlock** on a Ladder Controller:
+  - wiring: the button outside → X1, the outer door's `state` → X2, its
+    `ready` → X3, the inner door's `state` → X4; Y1 → the outer door's
+    `cycle`, Y2 → the READY lamp, Y3 → the inner door's `lock`, Y4 → the
+    outer door's `lock`;
+  - rungs: `X1 SET M1`, `X2 RST M1`, `M1 → Y1`, `X3 → Y2`, `X2 → Y3`,
+    `X4 → Y4`;
+  - pressed, the chamber pumps down and the lamp lights (and stays lit while
+    the chamber is at the outside's pressure). An airlock cycled to a door
+    opens it as soon as it is ready for crew within 6 m (as for crew who walk
+    up), so the door opening is what serves the request (rung 02). The inner
+    door is locked meanwhile; room_air's own interlock stands behind it.
+- **Low O2:** a Gas Analyser (O2 under 19 %) → the O2 Generator's `run` and
+  an Alarm Beacon.
+- **Reactor protection:** a Temperature Transmitter on the primary → the
+  console's `scram`; a Flow Switch (under 2 kg/s) → a standby Coolant Pump's
+  `run`; both through an OR into a beacon. In a real plant put a Latching
+  Relay between the switch and the standby pump (the probe does): the switch
+  sees the flow the standby pump brings back, so wired straight the pump
+  stops again and hunts round the switch's hysteresis.
+- **Day/night lights:** a Daylight Sensor (under 5 %) → the lights' `on`.
+- **Load shedding:** a Battery Monitor (on above 30 %, off under 25 %) → a
+  Breaker Panel's `close`.
+
+### Cost
+
+- Idle: the sensors read every 0.25 s and one comparison a frame with the
+  next timer's due time; nothing is evaluated.
+- 200 gates switching: 0.02–0.05 ms an evaluation in luajit. The probe's
+  numbers are in `work/sandbox_s8/NOTES.md`.
+
+### Tests and the probe
+
+- `luajit solar/tests/smoke_logic.lua`:
+  - the gates, wired-OR, the comparator's and a sensor's hysteresis, the
+    counter;
+  - timers on game time: on-delay, off-delay, pulse, a chain of delays inside
+    one long step, an hour of a clock in one step = 3,600 steps, the
+    fast-forward bound;
+  - pack/unpack and a rebuild in another order (a latch, a count, a lever, a
+    timer half way);
+  - loops: a NOT on itself bounded and flagged, a two-gate latch settling,
+    order independence;
+  - the ladder: text and back, NO/NC, AND/OR, SET/RST, a delayed rung, the
+    editor's clicks, stop;
+  - the Signal Cable: its pins, the price, lying on the floor, taken up with
+    its piece;
+  - the five examples on stub doors, rooms, plant and grid; a timer under
+    1,000× warp; save and reload in the middle of a cycle (the relay, the
+    airlock's hold, a half-run delay ending on time, the cables where they lay);
+  - radio (channel, 2 km); 200 gates' cost; idle.
+- `tools/perf/kitprobe.sh <engine> logic` (`tools/perf/logicprobe_modes.lua`):
+  the examples built and triggered in the engine, the overlay, the CRT and the
+  editor, the cost, save and reload. Pictures `save/user/buildshots/l*.png`;
+  numbers in `work/sandbox_s8/NOTES.md`.

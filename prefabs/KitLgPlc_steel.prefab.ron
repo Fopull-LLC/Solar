@@ -1,0 +1,138 @@
+// KIT PIECE — lgPlc in steel (the modular structure kit; scripts/parts_kit.lua).
+// Root = the ground point; Mesh, its colliders (Wall N) and its live children.
+// Written by tools/gen_kit_parts.py — edit the generator, not this file.
+[
+    (
+        name: "KitLgPlc_steel",
+        tags: ["base_part", "kit"],
+        transform: (
+            translation: (0.0000, 0.0000, 0.0000),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+    ),
+    (
+        name: "Mesh",
+        transform: (
+            translation: (0.0000, 0.7250, -0.0010),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Mesh(
+            asset_path: "models/kit/lgPlc_steel.glb",
+        ),
+        object_materials: {
+            "Steel": (
+                color: (1.0, 1.0, 1.0),
+                texture: Some("textures/base/steel_albedo.png"),
+                normal_map: Some("textures/base/steel_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/base/steel_orm.png"),
+                roughness: 1.0,
+                metallic_map: Some("textures/base/steel_orm.png"),
+                metallic: 1.0,
+                ao_map: Some("textures/base/steel_orm.png"),
+                shading: Physical,
+            ),
+        },
+        scripts: [],
+        parent: Some(0),
+    ),
+    (
+        name: "Wall 1",
+        transform: (
+            translation: (0.0000, 0.3700, -0.0500),
+            rotation: (0.00000, 0.00000, 0.00000, 1.00000),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+        parent: Some(0),
+        cast_shadow: false,
+        rigidbody: Some((
+            boxed: true,
+            mode: Static,
+            radius: 0.5,
+            height: 1.0,
+            half_extents: (0.5800, 0.3700, 0.3300),
+            restitution: 0.0,
+            friction: 0.9,
+            gravity: false,
+            lock_pos: (false, false, false),
+            lock_rot: (false, false, false),
+        )),
+    ),
+    (
+        name: "Wall 2",
+        transform: (
+            translation: (0.0000, 0.7600, 0.0000),
+            rotation: (0.00000, 0.00000, 0.00000, 1.00000),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+        parent: Some(0),
+        cast_shadow: false,
+        rigidbody: Some((
+            boxed: true,
+            mode: Static,
+            radius: 0.5,
+            height: 1.0,
+            half_extents: (0.6000, 0.0200, 0.4000),
+            restitution: 0.0,
+            friction: 0.9,
+            gravity: false,
+            lock_pos: (false, false, false),
+            lock_rot: (false, false, false),
+        )),
+    ),
+    (
+        name: "Wall 3",
+        transform: (
+            translation: (0.0000, 1.1250, -0.3500),
+            rotation: (0.00000, 0.00000, 0.00000, 1.00000),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+        parent: Some(0),
+        cast_shadow: false,
+        rigidbody: Some((
+            boxed: true,
+            mode: Static,
+            radius: 0.5,
+            height: 1.0,
+            half_extents: (0.5600, 0.3250, 0.0500),
+            restitution: 0.0,
+            friction: 0.9,
+            gravity: false,
+            lock_pos: (false, false, false),
+            lock_rot: (false, false, false),
+        )),
+    ),
+    (
+        name: "Screen",
+        transform: (
+            translation: (0.0000, 1.1250, -0.2980),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Mesh(
+            asset_path: "models/kit/lgPlc_steel_screen.glb",
+        ),
+        object_materials: {
+            "Screen": (
+                color: (0.05, 0.07, 0.08),
+                roughness: 0.2,
+                metallic: 0.0,
+                emissive: (0.02, 0.05, 0.07),
+                shading: Physical,
+            ),
+        },
+        scripts: [],
+        parent: Some(0),
+        cast_shadow: false,
+    ),
+]

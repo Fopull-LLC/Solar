@@ -235,6 +235,23 @@ local function step_door(e, dt, pts)
       end
     end
   end
+  -- (S8) a signal on the door's terminals: `open` holds it open, `lock`
+  -- keeps it shut whoever walks up (logic_net); the interlock below still rules
+  if not forceDoors then
+    local LN = ref("logic_net")
+    local c = LN and LN.doorCmd and LN.doorCmd(e.sid, e.uid)
+    if c then
+      if c.lock then
+        if want > 0 and not e.lock_said then
+          e.lock_said = true
+          local fx = ref("sfx")
+          if fx and fx.caption then fx.caption(string.format("the %s is locked by its control signal", e.def.label or "door")) end
+        end
+        want = 0
+      elseif c.open then want = 1 end
+    end
+    if not (c and c.lock) then e.lock_said = nil end
+  end
   -- (S3) an airlock's doors are interlocked: room_air says which may open
   if not forceDoors then
     local RA = ref("room_air")
@@ -655,7 +672,13 @@ function update(node, dt)
           local w = e.node.worldPos
           d = math.sqrt((w.x - a.x) ^ 2 + (w.y - a.y) ^ 2 + (w.z - a.z) ^ 2)
         end
-        if (#e.doors > 0) and (d < REACH or e.open > 0) then near[#near + 1] = e end
+        -- (S8: a door a signal holds open is stepped wherever the crew is)
+        local held = false
+        if #e.doors > 0 and d >= REACH and e.open <= 0 then
+          local LN = ref("logic_net")
+          held = LN ~= nil and LN.holding ~= nil and LN.holding(e.sid, e.uid)
+        end
+        if (#e.doors > 0) and (d < REACH or e.open > 0 or held) then near[#near + 1] = e end
         if e.screen and d < SCREEN_R and t - (e.scr_t or -10) >= SCREEN_EVERY then e.scr_t = t; paint_screen(e) end
         -- (S4) a sign showing the base's name follows a rename; the emblem a new one
         if e.face and d < SCREEN_R and t - (e.sign_t or -10) >= NAME_EVERY then

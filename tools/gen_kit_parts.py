@@ -1268,6 +1268,11 @@ MATS.update(gen_kit_fluids.MATERIALS)
 PIECES.update(gen_kit_fluids.pieces(sys.modules[__name__]))
 PIECES["pressuriser"] = (gen_kit_fluids.pressuriser_wrap(sys.modules[__name__], PIECES["pressuriser"][0]), PIECES["pressuriser"][1])
 
+# ── S8: the logic pieces: sensors, gates, inputs, outputs, radios, the PLC (tools/gen_kit_logic.py) ──
+import gen_kit_logic  # noqa: E402
+MATS.update(gen_kit_logic.MATERIALS)
+PIECES.update(gen_kit_logic.pieces(sys.modules[__name__]))
+
 # ── S4: PAINT SURFACES. node:setTint tints everything a node draws, so what
 # paint must not touch, and a wall's second face, are split into children of
 # their own after the piece is built (no piece function changes):
@@ -1282,6 +1287,7 @@ FACES2 = {
     "ring": {"habSeg", "habWindow"},
 }
 NO_PAINT = {"lightFitting", "wallScreen", "switchPlate", "lampDesk", "lampFloor"}
+NO_PAINT |= gen_kit_logic.NO_PAINT   # (S8: control gear is never painted)
 UNPAINTED = {"Pane", "Lamp", "Screen"}
 
 

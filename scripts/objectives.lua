@@ -935,6 +935,9 @@ local function panel_up()
   -- Talking to a Research Lab scientist: the close-up and its plates.
   local lt = ref("lab_talk")
   if lt and lt.isOpen and lt.isOpen() then return true end
+  -- A Ladder Controller's editor (logic_net.editorOpen() with no piece asks if one is up).
+  local ln = ref("logic_net")
+  if ln and ln.editorOpen and ln.editorOpen() then return true end
   return false
 end
 

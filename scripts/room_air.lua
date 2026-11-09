@@ -506,7 +506,8 @@ local function solve(sid)
       local cy = (p.y or 0) + (b[3] + b[4]) / 2
       local r = R_.roomAt(R, p.x or 0, cy, p.z or 0)
       local L = d.life
-      s.life[#s.life + 1] = { uid = p.uid, rid = r and r.id or nil, life = L, label = d.label }
+      local pst = part_state(sid, p.uid)
+      s.life[#s.life + 1] = { uid = p.uid, rid = r and r.id or nil, life = L, label = d.label, off = (pst and pst.off) and true or nil }
       if L.store then
         local q = old and old.tanks and old.tanks[p.uid]
         for _, e in ipairs(q == nil and saved and type(saved.tanks) == "table" and saved.tanks or {}) do
@@ -636,9 +637,10 @@ local function nets_of(sid, s)
   for _, L in ipairs(s.life) do
     local n = L.rid and byRoom[L.rid]
     if n then
-      if L.life.o2 and pow then n.G = n.G + L.life.o2 end
-      if L.life.o2 and L.life.water then n.gens = n.gens or {}; n.gens[#n.gens + 1] = L end
-      if L.life.scrub and pow then n.S = n.S + L.life.scrub end
+      -- (S8: a machine switched off by its run terminal makes nothing)
+      if L.life.o2 and pow and not L.off then n.G = n.G + L.life.o2 end
+      if L.life.o2 and L.life.water and not L.off then n.gens = n.gens or {}; n.gens[#n.gens + 1] = L end
+      if L.life.scrub and pow and not L.off then n.S = n.S + L.life.scrub end
       if L.life.store then n.F = n.F + (L.life.flow or 0); n.tanks[#n.tanks + 1] = L end
     end
   end
@@ -930,6 +932,49 @@ function door_dp(s, uid)
   return math.abs(pa - pb), pa, pb
 end
 function forceOpen(sid, uid) local s = S[sid]; if s then s.forced[uid] = true end end
+-- (S8, logic_net) an airlock asked to cycle to door uid: as a crew member at
+-- that door asks (kept alive while the signal is on: the chamber forgets a
+-- request 0.3 s old)
+function requestDoor(sid, uid)
+  local s = S[sid]
+  local rid = s and s.dch and s.dch[uid]
+  local C = rid and s.cham[rid]
+  if not C then return false end
+  C.wants[uid] = now()
+  return true
+end
+-- Is door uid's airlock ready for it: every other door of the chamber shut and
+-- the chamber at the pressure beyond it (the door may open)? → bool | nil (no airlock)
+function airlockReady(sid, uid)
+  local s = S[sid]
+  local rid = s and s.dch and s.dch[uid]
+  local C = rid and s.cham[rid]
+  if not (C and s.R and s.R.byId[C.rid] and s.air[C.rid]) then return nil end
+  if C.allow == uid then return true end
+  for _, u in ipairs(C.doors) do if u ~= uid and door_open(sid, u) then return false end end
+  local r, A = s.R.byId[C.rid], s.air[C.rid]
+  local pc = (A.N + A.x + A.c) / r.m3
+  local d = s.R.doors[uid]
+  if not d then return false end
+  local other = (d.a == C.rid) and d.b or d.a
+  local pT = side_pressure(s, other)
+  return math.abs(pc - pT) <= 0.04
+end
+-- (S8, logic_net) a life-support machine's run terminal: off, it makes nothing
+-- and draws nothing (its part state `off`)
+function setMachine(sid, uid, on)
+  local s = S[sid]
+  if s then advance_struct(sid, s, agency_now()) end
+  set_part_state(sid, uid, "off", (not on) or nil)
+  if s then
+    for _, L in ipairs(s.life) do if L.uid == uid then L.off = (not on) or nil end end
+    s.netsDirty = true
+  end
+  local BG = ref("base_grid")
+  if BG and BG.markDirty then BG.markDirty() end
+  return true
+end
+function machineOn(sid, uid) local st = part_state(sid, uid); return not (st and st.off) end
 function isInterlocked(sid, uid) local s = S[sid]; return s ~= nil and s.dch[uid] ~= nil end
 
 local function side_p(s, C, uid)
@@ -1819,7 +1864,7 @@ function genDraw(sid, uid)
     if L.uid == uid and L.rid then
       local n = byRoom[L.rid]
       local A = s.air[L.rid]
-      if not (n and A and s.pow and (s.cells[uid] or 0) > 0) then return 0 end
+      if not (n and A and s.pow and (s.cells[uid] or 0) > 0) or L.off then return 0 end
       local r = s.R.byId[L.rid]
       local x = A.x * n.V / math.max(r.m3, 1e-9)
       local xs = O2N * n.V

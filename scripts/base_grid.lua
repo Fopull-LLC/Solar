@@ -239,7 +239,9 @@ function gridModel(g, pose, towerNeed, opts)
       M.stores[#M.stores + 1] = { key = key, cap = pw.cap or 0, eff = eff, fill = pw.fill or 0, sid = r.id }
       M.C = M.C + (pw.cap or 0)
       effw, capw = effw + eff * (pw.cap or 0), capw + (pw.cap or 0)
-    elseif pw and pw.kind == "load" and not M.mainsOff[r.id] then
+    elseif pw and pw.kind == "load" and not M.mainsOff[r.id]
+           and not (e.def.life and r.st and type(r.st[tostring(p.uid)]) == "table" and r.st[tostring(p.uid)].off) then
+      -- (S8: a life-support machine switched off by its run terminal draws nothing)
       M.loads[#M.loads + 1] = { kind = "load", need = pw.use or 0, label = e.def.label, sid = r.id }
       M.need = M.need + (pw.use or 0)
     elseif pw and pw.kind == "plant" then

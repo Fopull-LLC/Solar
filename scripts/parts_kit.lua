@@ -142,9 +142,22 @@
 --   eqv     = { C = m3/s per atm }  an Equalise Valve through its wall
 --   door.eq a door's own equalising valve (m3/s per atm); door.seal its seal's
 --           strength against forcing (0 weak ... 1 never damaged)
+--
+-- ── LOGIC (S8; scripts/logic.lua, logic_net.lua; docs/base-building.md §18) ─
+--   lg      = { kind, pins = { { n, io = "in" | "out", x, y, z } … }, … }  what
+--           a piece is to the signals: a sensor (`sense`, its setpoint `set`,
+--           `mode` above | below, hysteresis `hys`, `step`, `unit`), a gate
+--           (and, or, xor, not, timer, latch, cmp, counter), an input
+--           (button, lever, keypad), an output (lamp, alarm), a radio (tx,
+--           rx; channel `ch`), the ladder controller (plc), or an existing
+--           piece's terminals (kind "device", `dev` = door, airlock, light,
+--           pump, valve, breaker, rxpump, rxconsole, machine). Pins are in
+--           the piece's frame: where a Signal Cable is made off.
+--   wire    the Signal Cable's drum (laid pin to pin by logic_net and settled
+--           the way base_cable settles a power cable): { max m, kgm, perm $/m, r m }
 PIPE_Y = 0.6
 
-SECTION_ORDER = { "FOUNDATION", "FLOOR", "WALL", "ROOF", "FRAME", "HAB", "SHIELD", "UTILITY", "POWER", "LIFE", "FLUID", "NUCLEAR", "FITTINGS", "PROPS", "DECALS" }
+SECTION_ORDER = { "FOUNDATION", "FLOOR", "WALL", "ROOF", "FRAME", "HAB", "SHIELD", "UTILITY", "POWER", "LIFE", "FLUID", "LOGIC", "NUCLEAR", "FITTINGS", "PROPS", "DECALS" }
 EXTERIOR = { FOUNDATION = true, FLOOR = true, WALL = true, ROOF = true, FRAME = true, HAB = true, SHIELD = true }
 FACES2 = { wall = true, halfWall = true, wall12 = true, doorWall = true, doorWallM = true, doubleDoor = true, windowWall = true,
            porthole = true, airlockWall = true, openFrame = true, ventWall = true, leadWall = true, gable = true,
@@ -702,6 +715,154 @@ PIECES.signStencil = film("Stencilled Words", 2.0, 0.4, 40, "letters sprayed str
                           { sign = { w = 2.0, h = 0.4, style = "stencil", px = 1024 }, order = 3 })
 PIECES.decalEmblem = film("Agency Emblem", 0.8, 0.8, 50, "the company's own emblem, sprayed on", { emblem = true, order = 4 })
 
+-- ── LOGIC (S8: signals, sensors, gates, the ladder controller; logic.lua) ───
+-- Wall-hung control gear is modelled lying on a floor, its face +Y out (a
+-- mount): on a wall its +Z points down, so the cable glands are on the box's
+-- +Z end, inputs to the left of it and outputs to the right. Masses are the
+-- things' own (a DIN enclosure with its relay board ~1 kg).
+local function glands(b, ins, outs)
+  local pins = {}
+  local n = #ins + #outs
+  local w = b[2] - b[1]
+  local y = (b[4] - b[3]) * 0.5
+  for k = 1, n do
+    local x = b[1] + w * (k - 0.5) / n
+    local io, nm = "in", ins[k]
+    if k > #ins then io, nm = "out", outs[k - #ins] end
+    pins[#pins + 1] = { n = nm, io = io, x = x, y = y, z = b[6] }
+  end
+  return pins
+end
+local function lgp(t)
+  t.section = "LOGIC"
+  t.snap = t.snap or "mount"
+  t.mats = { "steel" }
+  t.fill = "solid"
+  t.vol = t.vol or 0.003
+  t.script = "logic_net"
+  t.lg.pins = t.lg.pins or glands(t.box, t.lg.ins or {}, t.lg.outs or {})
+  return t
+end
+local KG = function(kg) return { steel = kg / 1000 } end
+for k, t in pairs({
+  -- the drum: not set down, laid pin to pin (logic_net) as a power cable is
+  sigCable = { label = "Signal Cable", order = 1, snap = "block", box = B(-0.25, 0.25, 0, 0.42, -0.21, 0.21), mass = KG(6), cost = 40, clutter = true,
+               wire = { max = 150, kgm = 0.045, perm = 1.2, r = 0.0045, label = "Signal Cable" }, lg = { kind = "wire", pins = {} },
+               desc = "2-core 1.5 mm² screened control cable on a reel · LMB makes it off at a pin, LMB on another pin lays it · it hangs and lies like any cable · $1.20 a metre, up to 150 m" },
+  -- ── gates: one function to a DIN enclosure, 18 × 22 cm ──
+  lgAnd   = { label = "AND Module", order = 10, box = B(-0.09, 0.09, 0, 0.1, -0.11, 0.11), mass = KG(0.9), cost = 90,
+              lg = { kind = "and", ins = { "A", "B" }, outs = { "Q" } }, desc = "Q is on while A and B both are" },
+  lgOr    = { label = "OR Module", order = 11, box = B(-0.09, 0.09, 0, 0.1, -0.11, 0.11), mass = KG(0.9), cost = 90,
+              lg = { kind = "or", ins = { "A", "B" }, outs = { "Q" } }, desc = "Q is on while A or B is (a pin with two wires already ORs them)" },
+  lgXor   = { label = "XOR Module", order = 12, box = B(-0.09, 0.09, 0, 0.1, -0.11, 0.11), mass = KG(0.9), cost = 110,
+              lg = { kind = "xor", ins = { "A", "B" }, outs = { "Q" } }, desc = "Q is on while exactly one of A and B is · a two-way light switch" },
+  lgNot   = { label = "NOT Module", order = 13, box = B(-0.09, 0.09, 0, 0.1, -0.11, 0.11), mass = KG(0.8), cost = 80,
+              lg = { kind = "not", ins = { "A" }, outs = { "Q" } }, desc = "Q is on while A is off · fed back into itself it ticks like a clock" },
+  lgTimer = { label = "Timer Relay", order = 14, box = B(-0.09, 0.09, 0, 0.1, -0.11, 0.11), mass = KG(1.1), cost = 160,
+              lg = { kind = "timer", ins = { "IN" }, outs = { "Q" }, mode = "on", T = 5 },
+              desc = "on-delay, off-delay, pulse or clock, 0.5 s to an hour (right-click sets it) · runs on game time, so it keeps time under warp" },
+  lgLatch = { label = "Latching Relay", order = 15, box = B(-0.09, 0.09, 0, 0.1, -0.11, 0.11), mass = KG(1.0), cost = 130,
+              lg = { kind = "latch", ins = { "S", "R" }, outs = { "Q" } }, desc = "S sets it, R resets it (R wins) · it holds through a power cut and a reload" },
+  lgCmp   = { label = "Comparator", order = 16, box = B(-0.09, 0.09, 0, 0.1, -0.11, 0.11), mass = KG(1.0), cost = 150,
+              lg = { kind = "cmp", ins = { "A", "B" }, outs = { "Q" }, set = 0.5, mode = "above", hys = 0.02, step = 0.05 },
+              desc = "compares the value on A (a sensor's reading) with B's, or with its own setpoint · hysteresis so it doesn't chatter" },
+  lgCounter = { label = "Counter Module", order = 17, box = B(-0.09, 0.09, 0, 0.1, -0.11, 0.11), mass = KG(1.0), cost = 140,
+              lg = { kind = "counter", ins = { "IN", "R" }, outs = { "Q" }, n = 3 }, desc = "counts IN's pulses; Q once it reaches its preset; R clears it" },
+  -- ── sensors: each reads what it is mounted at; Q against its setpoint ──
+  lsPress = { label = "Pressure Switch", order = 30, box = B(-0.07, 0.07, 0, 0.11, -0.09, 0.09), mass = KG(0.6), cost = 220,
+              lg = { kind = "sensor", sense = "press", outs = { "Q" }, set = 0.9, mode = "above", hys = 0.02, step = 0.05, unit = "atm" },
+              desc = "reads the room it faces into (atm) · Q above or below its setpoint" },
+  lsGas   = { label = "Gas Analyser", order = 31, box = B(-0.08, 0.08, 0, 0.09, -0.11, 0.11), mass = KG(1.4), cost = 640,
+              lg = { kind = "sensor", sense = "gas", gas = "o2", outs = { "Q" }, set = 19, mode = "below", hys = 0.3, step = 0.5, unit = "%" },
+              desc = "an electrochemical cell for O2 and an infrared one for CO2 · reads the room's air in % of an atmosphere" },
+  lsTemp  = { label = "Temperature Transmitter", order = 32, box = B(-0.06, 0.06, 0, 0.16, -0.08, 0.08), mass = KG(0.8), cost = 260,
+              lg = { kind = "sensor", sense = "temp", src = "primary", outs = { "Q" }, set = 600, mode = "above", hys = 5, step = 10, unit = "K" },
+              desc = "a thermocouple head · mounted within 8 m of a reactor it reads its primary loop (or the fuel), else the outside air" },
+  lsFlow  = { label = "Flow Switch", order = 33, box = B(-0.07, 0.07, 0, 0.1, -0.09, 0.09), mass = KG(0.9), cost = 300,
+              lg = { kind = "sensor", sense = "flow", outs = { "Q" }, set = 2.0, mode = "below", hys = 0.1, step = 0.25, unit = "kg/s" },
+              desc = "reads the nearest line within 4 m: a reactor loop's coolant flow, or a pipe's (kg/s)" },
+  lsLevel = { label = "Level Switch", order = 34, box = B(-0.07, 0.07, 0, 0.1, -0.09, 0.09), mass = KG(0.7), cost = 240,
+              lg = { kind = "sensor", sense = "level", outs = { "Q" }, set = 20, mode = "below", hys = 2, step = 5, unit = "%" },
+              desc = "the nearest tank, bottle rack or air tank within 4 m, in % full" },
+  lsPower = { label = "Battery Monitor", order = 35, box = B(-0.07, 0.07, 0, 0.07, -0.09, 0.09), mass = KG(0.5), cost = 180,
+              lg = { kind = "sensor", sense = "battery", outs = { "Q" }, set = 25, mode = "below", hys = 5, step = 5, unit = "%" },
+              desc = "its base grid's battery charge in % · shed load before the batteries go flat" },
+  lsDose  = { label = "Area Radiation Monitor", order = 36, box = B(-0.08, 0.08, 0, 0.1, -0.1, 0.1), mass = KG(1.6), cost = 900,
+              lg = { kind = "sensor", sense = "dose", outs = { "Q" }, set = 5, mode = "above", hys = 0.5, step = 1, unit = "%/h" },
+              desc = "the dose rate where it hangs, in % of a lethal dose an hour, walls counted" },
+  lsProx  = { label = "Presence Detector", order = 37, box = B(-0.06, 0.06, 0, 0.05, -0.06, 0.06), mass = KG(0.2), cost = 120,
+              lg = { kind = "sensor", sense = "prox", outs = { "Q" }, set = 3, mode = "below", hys = 0.3, step = 0.5, unit = "m" },
+              desc = "a PIR head: the nearest crew member on foot (m) · Q while someone is within its setpoint" },
+  lsDay   = { label = "Daylight Sensor", order = 38, box = B(-0.05, 0.05, 0, 0.07, -0.07, 0.07), mass = KG(0.2), cost = 60,
+              lg = { kind = "sensor", sense = "light", outs = { "Q" }, set = 5, mode = "below", hys = 2, step = 5, unit = "%" },
+              desc = "a photocell: the sun's height over its horizon as % of overhead light · Q when it's dark" },
+  lsReactor = { label = "Reactor Power Monitor", order = 39, box = B(-0.08, 0.08, 0, 0.09, -0.1, 0.1), mass = KG(1.2), cost = 1400, tech = "ember",
+              lg = { kind = "sensor", sense = "reactor", src = "power", outs = { "Q" }, set = 105, mode = "above", hys = 1, step = 5, unit = "%" },
+              desc = "the nearest plant within 30 m: its power (% of rated) or k · an overpower trip in one box" },
+  lsDoor  = { label = "Door Contact", order = 40, box = B(-0.05, 0.05, 0, 0.04, -0.08, 0.08), mass = KG(0.1), cost = 35,
+              lg = { kind = "sensor", sense = "door", outs = { "Q" }, set = 50, mode = "above", hys = 5, step = 10, unit = "% open" },
+              desc = "a reed contact on the nearest door within 2.5 m · Q while it is open (every door also has its own state terminal)" },
+  -- ── inputs ──
+  liButton = { label = "Push Button", order = 50, box = B(-0.06, 0.06, 0, 0.1, -0.08, 0.08), mass = KG(0.3), cost = 45,
+              lg = { kind = "button", outs = { "Q" }, T = 1.0 }, desc = "a red mushroom button in a yellow box · right-click presses it: a 1 s pulse" },
+  liLever = { label = "Lever Switch", order = 51, box = B(-0.06, 0.06, 0, 0.14, -0.09, 0.09), mass = KG(0.5), cost = 55,
+              lg = { kind = "lever", outs = { "Q" } }, desc = "a heavy two-position lever · stays where it is thrown" },
+  liKeypad = { label = "Keypad", order = 52, box = B(-0.07, 0.07, 0, 0.04, -0.1, 0.1), mass = KG(0.4), cost = 190,
+              lg = { kind = "keypad", outs = { "Q" }, T = 3.0, code = "1234" }, desc = "a 12-key pad · the right code gives a 3 s pulse · an Engineer sets the code" },
+  -- ── outputs ──
+  loLamp  = { label = "Indicator Lamp", order = 60, box = B(-0.05, 0.05, 0, 0.08, -0.05, 0.05), mass = KG(0.15), cost = 30,
+              lg = { kind = "lamp", ins = { "IN" }, col = "green" }, desc = "a 22 mm pilot lamp: lit while IN is on · green, amber, red or white (right-click)" },
+  loAlarm = { label = "Alarm Beacon", order = 61, box = B(-0.1, 0.1, 0, 0.22, -0.1, 0.1), mass = KG(1.8), cost = 260,
+              lg = { kind = "alarm", ins = { "IN" } }, desc = "a rotating red beacon and a klaxon · while IN is on" },
+  -- ── radio channels: for runs a cable can't make ──
+  lwTx    = { label = "Radio Transmitter", order = 70, box = B(-0.07, 0.07, 0, 0.08, -0.36, 0.09), mass = KG(0.6), cost = 380,
+              lg = { kind = "tx", ins = { "IN" }, ch = 1 }, desc = "sends IN on one of 16 channels to every receiver on it within 2 km" },
+  lwRx    = { label = "Radio Receiver", order = 71, box = B(-0.07, 0.07, 0, 0.08, -0.36, 0.09), mass = KG(0.6), cost = 380,
+              lg = { kind = "rx", outs = { "Q" }, ch = 1 }, desc = "Q while any transmitter on its channel within 2 km is on" },
+}) do PIECES[k] = lgp(t) end
+-- the ladder controller: a desk with its CRT, its terminal rail at the back
+do
+  local pins = {}
+  for k = 1, 8 do pins[#pins + 1] = { n = "X" .. k, io = "in", x = -0.52 + (k - 1) * 0.06, y = 0.55, z = -0.40 } end
+  for k = 1, 8 do pins[#pins + 1] = { n = "Y" .. k, io = "out", x = 0.10 + (k - 1) * 0.06, y = 0.55, z = -0.40 } end
+  PIECES.lgPlc = lgp({ label = "Ladder Controller", order = 80, snap = "block", box = B(-0.6, 0.6, 0, 1.45, -0.4, 0.4), mass = KG(95), cost = 4800, vol = 0.5,
+    lg = { kind = "plc", pins = pins, screen = { w = 1.1, h = 0.55 } },
+    desc = "a small PLC on its desk: 8 inputs, 8 outputs, 8 relays and 16 ladder rungs you edit on its screen · right-click to program it" })
+end
+
+-- (S8) the terminals of pieces that were here before: what a cable may drive
+-- or read on them. Each sits where its control box would (piece frame).
+local function devpins(name, dev, list)
+  local P = PIECES[name]
+  if not P then return end
+  local pins = {}
+  for _, q in ipairs(list) do pins[#pins + 1] = { n = q[1], io = q[2], x = q[3], y = q[4], z = q[5] } end
+  P.lg = { kind = "device", dev = dev, pins = pins }
+end
+local function doorpins(name, dev, x, y, z)
+  local L = { { "open", "in", x - 0.08, y, z }, { "lock", "in", x, y, z }, { "state", "out", x + 0.08, y, z } }
+  if dev == "airlock" then L = { { "cycle", "in", x - 0.12, y, z }, { "lock", "in", x - 0.04, y, z }, { "ready", "out", x + 0.04, y, z }, { "state", "out", x + 0.12, y, z } } end
+  devpins(name, dev, L)
+end
+doorpins("doorWall", "door", -0.55, 1.35, -0.11)
+doorpins("doorWallM", "door", 0.55, 1.35, -0.11)
+doorpins("doubleDoor", "door", 1.45, 1.35, -0.11)
+doorpins("bulkhead", "door", 0.55, 1.35, -0.11)
+doorpins("airlockWall", "airlock", 0.55, 1.35, -0.11)
+doorpins("habBulkhead", "door", 1.0, 1.5, -0.21)
+doorpins("floorHatch", "door", 0.4, 0.2, 0.8)
+doorpins("pressHatch", "door", 0.4, 0.2, 0.8)
+devpins("lightFitting", "light", { { "on", "in", 0.3, 0.045, 0 } })
+devpins("flPump", "pump", { { "run", "in", 0.2, 0.8, 0 } })
+devpins("flCharge", "pump", { { "run", "in", 0.3, 1.0, 0 } })
+devpins("flValve", "valve", { { "open", "in", 0.08, 0.85, 0 } })
+devpins("breaker63", "breaker", { { "close", "in", -0.05, 0.07, 0.25 }, { "tripped", "out", 0.05, 0.07, 0.25 } })
+devpins("breaker160", "breaker", { { "close", "in", -0.06, 0.1, 0.36 }, { "tripped", "out", 0.06, 0.1, 0.36 } })
+devpins("coolantPump", "rxpump", { { "run", "in", 0.45, 1.2, 0 } })
+devpins("reactorConsole", "rxconsole", { { "scram", "in", -0.2, 0.5, -0.43 }, { "setback", "in", -0.1, 0.5, -0.43 }, { "tripped", "out", 0.0, 0.5, -0.43 } })
+devpins("o2gen", "machine", { { "run", "in", 0.35, 1.0, -0.3 } })
+devpins("scrubber", "machine", { { "run", "in", 0.3, 1.0, -0.25 } })
+
 -- ── FITTINGS: VAB parts placed live (S2) ─────────────────────────────────────
 -- The registry figures they carry are parts_registry's (and parts_aero's,
 -- parts_nuclear's), copied here because the world scene carries no registry;
@@ -812,7 +973,7 @@ local function resolve(piece, mat)
     -- (S4) character: films, clutter, signs, the emblem, a lamp's own lens;
     -- what takes paint on two faces and what gathers dust
     film = P.film, clutter = P.clutter, grime = P.grime, sign = P.sign, emblem = P.emblem, lens = P.lens,
-    faces2 = FACES2[piece] == true, exterior = EXTERIOR[P.section] == true, noPaint = P.film or nil,
+    faces2 = FACES2[piece] == true, exterior = EXTERIOR[P.section] == true, noPaint = P.film or (P.section == "LOGIC") or nil,
     -- (S5) the power network's gear
     netgear = P.netgear, pole = P.pole, cableAt = P.cableAt,
     -- (S6) the reactor's components: the core's lattice, ports, the loops' gear
@@ -820,6 +981,8 @@ local function resolve(piece, mat)
     reject = P.reject, console = P.console, rad = P.rad, tech = P.tech,
     -- (S7) the fluid network's pieces; an equalise valve
     fl = P.fl, eqv = P.eqv,
+    -- (S8) logic: its pins and what it is to the signals; the Signal Cable's drum
+    lg = P.lg, wire = P.wire,
     script = P.script or ((P.door or P.light or P.screen or P.switch or P.sign or P.emblem) and "kit_live" or nil),
     seals = (P.seals == "door" or P.seals == "ring" or P.seals == "y" or P.seals == "z") and P.seals or nil,
     u = M.u, matk = M.k, strength = M.strength,

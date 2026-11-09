@@ -240,6 +240,32 @@ function pass(gs)
   return rep
 end
 function lastPass() return last_pass end
+-- (S8, an Area Radiation Monitor) the dose rate at a body-relative point from
+-- the ground sources now (lethal shares a game second), the walls counted by
+-- record as for the crew; no terrain ray (a monitor hangs in the open of its
+-- room). The reactors' strength is the last dose pass's.
+function doseAt(bname, px, py, pz)
+  local TH = ref("thermal")
+  if not (TH and #SRCS > 0) then return 0 end
+  local TP = TH.THERMAL
+  local sum = 0
+  local RP = ref("reactor_plant")
+  for _, s in ipairs(SRCS) do
+    if s.dyn and s.b == bname and RP and RP.radOf then s.rad, s.share = RP.radOf(s.sid, s.uid); s.rad, s.share = s.rad or 0, s.share or 0 end
+    if s.b == bname and (s.rad or 0) > 0 and (s.share == nil or s.share > 0) then
+      local r = len3(px - s.x, py - s.y, pz - s.z)
+      if r <= TP.dose_range then
+        local bare
+        if s.omni then bare = omniRate(s, r, TP) else local _, rr = TH.coneAt(s, px, py, pz); bare = rr or 0 end
+        if bare > 0 then
+          local bl = blockersIn(WALLS, bname, s.x, s.y, s.z, px, py, pz)
+          sum = sum + bare * ((#bl > 0) and TH.shieldFactor(s.x, s.y, s.z, px, py, pz, bl, nil) or 1)
+        end
+      end
+    end
+  end
+  return sum
+end
 -- (probes) a member's dose rate from the ground sources now, a game hour's share
 function doseNow(id) local e = noted(id); return e and e.rate * 3600 or 0, e and e.bare * 3600 or 0 end
 

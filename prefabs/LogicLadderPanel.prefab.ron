@@ -1,0 +1,31 @@
+[
+    (
+        // THE LADDER EDITOR (sandbox S8): scripts/logic_net.lua spawns this under
+        // the Ship HUD when a Ladder Controller's "Program the ladder…" is picked,
+        // draws its 16 rungs with ui.make while it is open and destroys it on Done / Esc.
+        name: "Logic Ladder Panel",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+        ui: Some((
+            place: Pin(
+                anchor: Center,
+                offset: (0.0, 0.0),
+            ),
+            size: (Fixed(980.0), Fit),
+            stack: Some((
+                dir: Column,
+                gap: 0.0,
+                pad: 0.0,
+                align: Start,
+                justify: Start,
+            )),
+            visible: true,
+            opacity: 1.0,
+        )),
+    ),
+]

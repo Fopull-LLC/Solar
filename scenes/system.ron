@@ -3593,6 +3593,9 @@
                 // the fluid network: the rulebook and the scene (fluids, fluid_net; S7)
                 ( kind: "fluids", enabled: true, params: [] ),
                 ( kind: "fluid_net", enabled: true, params: [] ),
+                // signals: the rulebook and the scene (logic, logic_net; S8)
+                ( kind: "logic", enabled: true, params: [] ),
+                ( kind: "logic_net", enabled: true, params: [] ),
                 ( kind: "base_shield", enabled: true, params: [] ),
                 ( kind: "craft_orient", enabled: true, params: [] ),
                 ( kind: "ghost", enabled: true, params: [] ),

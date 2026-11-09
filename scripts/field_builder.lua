@@ -363,6 +363,11 @@ function cardLines(id, def, locked)
     return string.format("$%g a metre", def.cable.perm or 3),
       string.format("%.1f kg/m · up to %.1f km a run · + shipping", def.cable.kgm or 1.4, (def.cable.max or 1500) / 1000)
   end
+  -- (S8) the Signal Cable: by the metre, pin to pin
+  if def and def.wire then
+    return string.format("$%.2f a metre", def.wire.perm or 1.2),
+      string.format("%.0f g/m · pin to pin · up to %.0f m a run", (def.wire.kgm or 0.045) * 1000, def.wire.max or 150)
+  end
   return E.cardLines(quote_of(id))
 end
 function footText()
@@ -965,7 +970,7 @@ local function ghost_paint()
     -- (a cable has no ghost: its run is drawn, base_cable.drawPreview)
     if ghost_node and ghost_node.valid ~= false and ghost_node.visible then ghost_node.visible = false end
     if ghost_foot and ghost_foot.valid ~= false and ghost_foot.visible then ghost_foot.visible = false end
-    local CB = ref("base_cable")
+    local CB = (req.def and req.def.wire) and ref("logic_net") or ref("base_cable")
     if CB and CB.drawPreview then CB.drawPreview() end
     return
   end
@@ -1324,6 +1329,15 @@ end
 -- B9b: the Power Cable in hand. The first click makes it off at a part, the
 -- second (on another structure's part) lays the run and bills it.
 local function cable_click()
+  -- (S8) a Signal Cable: pin to pin, logic_net's rules; the drum stays in hand
+  if req and req.def and req.def.wire then
+    local LN = ref("logic_net")
+    if not (LN and LN.click) then return end
+    local ok, msg = LN.click(req)
+    if ok then play(LN.pending and "pick" or "place", 0.5) else play("denied") end
+    if msg then say(msg) end
+    return
+  end
   local CB = ref("base_cable")
   if not (CB and req) then return end
   if not CB.pending then
@@ -2008,7 +2022,7 @@ end
 local MODE_TXT = { edge = "EDGE TO EDGE", deck = "ON THE DECK", grid = "GRID 0.5 m", free = "FREE" }
 function hintLine()
   if not open_ then return "Build Kit  ·  B opens it" end
-  local keys = (collapsed and "B unfolds the parts" or "B folds the parts") .. "  ·  Esc " .. (heldPart and "drops the part" or "closes the kit") .. "  ·  Ctrl+Z undo  ·  F1 rooms  ·  F2 power  ·  F3 nuclear  ·  F7 fluids"
+  local keys = (collapsed and "B unfolds the parts" or "B folds the parts") .. "  ·  Esc " .. (heldPart and "drops the part" or "closes the kit") .. "  ·  Ctrl+Z undo  ·  F1 rooms  ·  F2 power  ·  F3 nuclear  ·  F5 logic  ·  F7 fluids"
   if not heldPart then return "Build Kit  ·  pick a part  ·  RMB tap a placed part to take it down  ·  " .. keys end
   local hdef = partInfo(heldPart)
   -- (S4) paint and the eyedropper
@@ -2019,6 +2033,18 @@ function hintLine()
     if r and r.bad then return string.format("%s  ·  %s  ·  %s", hdef.label, what, r.bad) end
     return string.format("%s  ·  %s  ·  LMB paints %s%s  ·  Shift both faces  ·  Ctrl every one of its kind  ·  Alt-selected: all of them  ·  hold I + LMB picks a colour",
       hdef.label, what, (r and r.def.faces2) and "this side" or "it", hdef.strip and "" or (creative() and " (free)" or (" for " .. money(hdef.cost))))
+  end
+  if hdef and hdef.wire then
+    local LN = ref("logic_net")
+    local pend = LN and LN.pending
+    local nm = hdef.label or "Signal Cable"
+    if not req then return string.format("%s  ·  %s", nm, aim_why or "aim at a pin") end
+    if req.bad then return string.format("%s  ·  %s  ·  RMB tap drops it", nm, req.bad) end
+    if not pend then return string.format("%s  ·  LMB makes it off at the %s's %s %s  ·  then a pin of the other kind", nm, tostring(req.label or "piece"),
+      req.io == "out" and "output" or "input", tostring(req.pin)) end
+    local q = req.quote or {}
+    return string.format("%s from the %s's %s  ·  to the %s's %s  ·  %.1f m  ·  LMB lays it for %s", nm, tostring(pend.label), tostring(pend.pin),
+      tostring(req.label or "piece"), tostring(req.pin), req.len or 0, money(q.total or 0))
   end
   if hdef and hdef.cable then
     local CB = ref("base_cable")
@@ -2222,6 +2248,11 @@ function update(node, dt)
       local RP = ref("reactor_plant")
       if RP then RP.overlay = not RP.overlay; say(RP.overlay and "NUCLEAR: the loops by temperature, the way they flow, each component's heat · the dose field round each core, shielding counted" or "NUCLEAR overlay off") end
     end
+    -- S8: F5 shows the LOGIC overlay (every signal cable lit or dark, each pin's lamp, each piece's state)
+    if input.pressed("f5") then
+      local LN = ref("logic_net")
+      if LN then LN.overlay = not LN.overlay; say(LN.overlay and "LOGIC: every signal cable, lit orange while its signal is on, chevrons the way it runs · each pin's lamp · each piece's reading and state" or "LOGIC overlay off") end
+    end
     -- S7: F7 shows the FLUIDS overlay (F4 is the camera's cinematic mode) (each line by its substance and flow, levels, pressures, breaks)
     if input.pressed("f7") then
       local FN = ref("fluid_net")
@@ -2247,7 +2278,20 @@ end
 function lateUpdate(node, dt)
   if not open_ then ghost_paint() return end
   local hdef = heldPart and partInfo(heldPart)
-  if hdef and hdef.cable then
+  if hdef and hdef.wire then
+    -- (S8) the Signal Cable's drum: logic_net picks the pin under the cursor
+    local h, w = aim()
+    local LN = ref("logic_net")
+    if h == "keep" then
+    elseif h and LN and LN.aimTick then
+      req = LN.aimTick(h)
+      req.cable, req.id, req.def = true, heldPart, hdef
+      aim_why = nil
+    else
+      req, aim_why = nil, w
+      if LN and LN.pending and LN.drawPreview then LN.drawPreview() end
+    end
+  elseif hdef and hdef.cable then
     local h, w = aim()
     local CB = ref("base_cable")
     if h == "keep" then
