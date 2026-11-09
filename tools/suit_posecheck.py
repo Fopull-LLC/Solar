@@ -124,9 +124,11 @@ CLOSE = {
 MAT_TEX = {   # material: (albedo, normal map, roughness, metallic)
     "SuitFabric": ("textures/suit/fabric_albedo.png", "textures/suit/fabric_normal.png", 0.9, 0.0),
     "SuitShell": ("textures/suit/shell_albedo.png", "textures/suit/shell_normal.png", 0.5, 0.0),
-    "SuitMetal": ("textures/parts/metal_albedo.png", "textures/parts/metal_normal.png", 0.5, 0.6),
+    "SuitMetal": ("textures/suit/metal_albedo.png", "textures/suit/metal_normal.png", 0.4, 0.9),
+    "SuitRubber": ("textures/suit/rubber_albedo.png", "textures/suit/rubber_normal.png", 0.8, 0.0),
+    "SuitEmblem": ("textures/suit/emblem.png", None, 0.85, 0.0),
     "SuitHead": ("textures/suit/head.png", None, 0.6, 0.0),
-    "SuitDecal": ("textures/suit/decals.png", None, 0.8, 0.0),
+    "SuitDecal": ("textures/suit/decals.png", "textures/suit/decals_normal.png", 0.8, 0.0),
     "SuitVisor": ("textures/suit/visor.png", None, 0.15, 0.6),
 }
 

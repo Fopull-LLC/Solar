@@ -723,6 +723,86 @@ def _apply(M, side, V, N):
 _CACHE = {}
 
 
+def _ring_loft(m, mat, c0, u, prof_t, rad, segs, ref=None, tile=0.25):
+    """A tube along u from c0 through stations prof_t (metres along u), each
+    ring's radius rad(t, a) (a the angle round it), smooth normals from the
+    surface itself, UVs in `tile`-metre tiles (u round, v along)."""
+    u = _n(u)
+    if ref is None:
+        ref = np.array([0.0, 0.0, 1.0]) if abs(u[2]) < 0.9 else np.array([1.0, 0.0, 0.0])
+    e1 = _n(ref - u * (ref @ u))
+    e2 = np.cross(u, e1)
+    T = np.asarray(prof_t, float)
+    A = np.linspace(0, 2 * math.pi, segs + 1)
+    R = np.array([[rad(t, a) for a in A] for t in T])
+    P = (c0[None, None, :] + T[:, None, None] * u[None, None, :]
+         + R[..., None] * (np.cos(A)[None, :, None] * e1 + np.sin(A)[None, :, None] * e2))
+    dt = np.gradient(P, axis=0)
+    da = np.gradient(P, axis=1)
+    da[:, 0] = da[:, -1] = (P[:, 1] - P[:, -2]) * 0.5
+    N = np.cross(da, dt)
+    out = P - (c0[None, None, :] + T[:, None, None] * u[None, None, :])
+    flip = (N * out).sum(-1) < 0
+    N[flip] *= -1
+    N /= np.maximum(np.linalg.norm(N, axis=-1, keepdims=True), 1e-12)
+    circ = 2 * math.pi * float(R.mean())
+    UV = np.stack(np.meshgrid(A / (2 * math.pi) * max(1, round(circ / tile)), T / tile), -1)
+    nt, na = len(T), segs + 1
+    I = []
+    for i in range(nt - 1):
+        for j in range(segs):
+            a, b, c, d = i * na + j, i * na + j + 1, (i + 1) * na + j + 1, (i + 1) * na + j
+            I += [(a, b, c), (a, c, d)]
+    m.add(mat, P.reshape(-1, 3), N.reshape(-1, 3), UV.reshape(-1, 2), np.array(I))
+
+
+def _wnoise(t, a, seed):
+    """A cheap smooth noise of the station and the angle (both periodic in a)."""
+    return (0.5 * math.sin(3 * a + seed + 7.1 * t) + 0.3 * math.sin(5 * a - 1.3 * seed + 13.7 * t)
+            + 0.2 * math.sin(2 * a + 2.1 * seed - 23.0 * t))
+
+
+def wrist_bearing(m, b0, u_m, side):
+    """The wrist disconnect as the third-person suit has it (gen_suit_blender
+    ring_piece): two anodised races with chamfered edges, a sunk groove
+    between, the outer race coloured by side (blue left, red right), and the
+    bore's lip rolled toward the glove."""
+    from gen_part_meshes import lathe, frame_to
+    ri, ro, w = 0.041, 0.0505, 0.026
+    cw, g, gw = 0.0022, 0.0016, 0.0018
+    sub = Model()
+    lathe(sub, "SuitMetal", [(ri - 0.0015, cw), (ri + cw, 0.0), (ro - cw, 0.0), (ro, cw), (ro, w / 2 - gw),
+                             (ro - g, w / 2 - gw * 0.4)], segs=40, uv_m=4.0)
+    lathe(sub, "WristBlue" if side == "L" else "WristRed",
+          [(ro - g, w / 2 - gw * 0.4), (ro, w / 2 + gw), (ro, w - cw), (ro - cw, w)], segs=40, uv_m=4.0)
+    lathe(sub, "SuitMetal", [(ro - cw, w), (ri + cw, w), (ri - 0.0015, w - cw)], segs=40, uv_m=4.0)
+    m.merge(sub, frame_to(u_m), b0)
+    return b0 + u_m * w
+
+
+def folded_sleeve(m, start, elbow, u_m, side):
+    """The suit's sleeve from the wrist disconnect back past the elbow, as the
+    third-person suit's (gen_suit_blender arm_disp): bunched in rings above
+    the disconnect, long shallow diagonals down the forearm, never quite
+    round; then on toward the shoulder, out of the view's frame."""
+    e = np.asarray(elbow, float)
+    L = float(np.linalg.norm(e - start))
+    sd = 1.7 if side == "L" else 4.3
+
+    def rad(t, a):
+        base = 0.0445 + (0.060 - 0.0445) * min(1.0, t / L) ** 1.3
+        bun = max(0.0, 1.0 - t / 0.11) ** 0.8 * min(1.0, t / 0.012)
+        r = base + 0.0034 * bun * math.sin(2 * math.pi * t / 0.019 + 1.6 * _wnoise(t, a, sd))
+        dr = math.sin(2 * math.pi * t / 0.085 + 1.6 * a + 2.0 * _wnoise(t, a, sd + 1))
+        r += 0.0022 * (math.copysign(abs(dr) ** 1.6, dr)) * min(1.0, t / 0.06)
+        r += 0.0012 * _wnoise(t * 0.5, a, sd + 2)
+        return r
+    ts = list(np.arange(0.0, 0.12, 0.0035)) + list(np.arange(0.12, L + 0.01, 0.008))
+    _ring_loft(m, "Suit", start, u_m, ts, rad, 32)
+    # on past the elbow toward the shoulder (plain: out of frame)
+    tube(m, "Suit", e - u_m * 0.01, e + u_m * 0.40, 0.060, segs=18, r1=0.066)
+
+
 def wrist_of(M):
     """The wrist's point in the model's frame for a hand placed by M."""
     return M[:3, :3] @ np.array([0.0, 0.006, -0.001]) + M[:3, 3]
@@ -732,7 +812,8 @@ def glove(m, M, pose, side="R", elbow=None, tris=4200, sleeve=True, cuff=0.050, 
     """Add a gloved hand (and its wrist bearing and sleeve to `elbow`) to the
     Model m: M the hand frame → model matrix (on_cylinder), pose its joints.
     Materials: "Glove" (the cloth), "Palm" (the dark grip), and for the
-    bearing and sleeve "SuitMetal", "Dark", "Suit". Returns the wrist point."""
+    bearing and sleeve "SuitMetal", "WristBlue" / "WristRed", "Suit". Returns
+    the wrist point."""
     wrist_m = M[:3, :3] @ np.array([0.0, 0.006, -0.001]) + M[:3, 3]
     if isinstance(elbow, (int, float)):
         # the elbow a forearm's length down the hand's own line, the wrist in
@@ -776,17 +857,13 @@ def glove(m, M, pose, side="R", elbow=None, tris=4200, sleeve=True, cuff=0.050, 
         UV = box_uv(P, np.repeat(fn, 3, axis=0))
         m.add(mat, P, Nn, UV, np.arange(len(P)).reshape(-1, 3))
     if bearing:
-        # the wrist disconnect: a bright bearing and its darker lock collar,
-        # then the suit's sleeve back to the elbow
+        # the wrist disconnect (the suit's: two races, the outer one blue on
+        # the left, red on the right), then the suit's folded sleeve back past
+        # the elbow (2026-11-09: the third-person suit's revamp)
         b0 = cut_c - u_m * 0.004
-        tube(m, "SuitMetal", b0, b0 + u_m * 0.021, 0.0465, segs=24)
-        tube(m, "Dark", b0 + u_m * 0.021, b0 + u_m * 0.029, 0.0430, segs=24)
+        top = wrist_bearing(m, b0, u_m, side)
         if sleeve and elbow is not None:
-            e = np.asarray(elbow, float)
-            tube(m, "Suit", b0 + u_m * 0.029, e, 0.043, segs=18, r1=0.060, caps=False)
-            # on past the elbow toward the shoulder, so the sleeve's end is
-            # always out of the view's frame
-            tube(m, "Suit", e - u_m * 0.01, e + u_m * 0.40, 0.060, segs=18, r1=0.066)
+            folded_sleeve(m, top - u_m * 0.006, elbow, u_m, side)
     return wrist_m
 
 

@@ -270,6 +270,39 @@ local function run_crewrover()
   end
   local cam = findScript("planet_camera")
   CP.shot("1two_riders")
+  -- the doll close (the suit at its LOD: scripts/suit_look.lua), from a free
+  -- camera placed afresh every frame from the doll and the planet as they are
+  -- this frame (both move metres a tick)
+  if doll and cam and cam.setFreecam then
+    local bname = save.get("base.body")
+    local function frame_doll(side, fwd, up)
+      local bn = find(bname)
+      local am
+      for _, ch in ipairs(doll:children() or {}) do if ch.name == "AstroModel" then am = ch end end
+      if not (bn and am) then return end
+      local t = am:bonePos("Back") or doll.worldPos
+      local u = vec3(t.x - bn.x, t.y - bn.y, t.z - bn.z):normalized()
+      local l = (am:bonePos("Upperarm.Left") - am:bonePos("Upperarm.Right")):normalized()
+      local f = l:cross(u):normalized()
+      local pos = t + l * side + f * fwd + u * up
+      cam.setFreecam(true)
+      local fc = cam.freecamState()
+      fc.body = bname
+      fc.rel = pos - vec3(bn.x, bn.y, bn.z)
+      local d = t - pos
+      local h = d:flatten(u)
+      fc.ref = h:normalized()
+      fc.pitch = math.atan2(d:dot(u), h:length())
+    end
+    for _, v in ipairs({ { "2doll_quarter", 1.3, 1.5, 0.4 }, { "3doll_side", 1.8, 0.2, 0.3 } }) do
+      for _ = 1, 20 do frame_doll(v[2], v[3], v[4]); coroutine.yield() end
+      CP.shot(v[1])
+    end
+    for _, ch in ipairs(doll:children() or {}) do
+      if ch.name == "AstroModel" then P("CP the doll draws %s", tostring(ch.model)) end
+    end
+    cam.setFreecam(false)
+  end
   CP.result()
 end
 

@@ -8,7 +8,8 @@
 -- GPU passes and the CPU's render and animation buckets with the astronaut
 -- framed, shown against hidden (`perf`). Pictures to user://suitshots/,
 -- lines "SUS ".
-defaults = { quit = 1, slot = 7, seed = 4242, scale = 4, sweep = 1, walk = 1, seat = 1, perf = 1, crouch = 1, onlyperf = 0 }
+defaults = { quit = 1, slot = 7, seed = 4242, scale = 4, sweep = 1, walk = 1, seat = 1, perf = 1, crouch = 1, onlyperf = 0,
+             lod = 1, fptool = 1, night = 1 }
 
 local W = function() return app.wallClock and app.wallClock() or os.clock() end
 local W0 = W()
@@ -248,6 +249,32 @@ local function main()
     input.simulate { key = "w", down = false }
     hold(1.0)
   end
+  -- ── LOD: the suit at LOD 1 and LOD 2 by a model swap mid-walk (the pose,
+  -- the walk and the attachments must carry over), then LOD 0 again ──
+  if params.lod > 0 then
+    local m = model()
+    local look = nil
+    for _, c in ipairs(m:children() or {}) do if c.name == "Helmet" then look = c end end
+    for _, l in ipairs({ 1, 2, 0 }) do
+      m.model = (l == 0) and "models/astronaut/astronaut_male.glb" or ("models/astronaut/astronaut_male_lod" .. l .. ".glb")
+      input.simulate { key = "w", down = true }
+      hold(0.6)
+      local h0 = bone("Hand.Left") - bone("Back")
+      hold(0.25)
+      local h1 = bone("Hand.Left") - bone("Back")
+      P("LOD %d: model %s, the left hand moved %.3f m against the back in 0.25 s (walking)", l, tostring(m.model),
+        (h1 - h0):length())
+      view("lod" .. l .. "_walk", "Back", 1.6, 1.6, 0.4, -0.3, 6)
+      view("lod" .. l .. "_far", "Back", 9.0, 9.0, 1.5, -0.3, 4)
+      input.simulate { key = "w", down = false }
+      hold(0.6)
+    end
+    local sl = nil
+    for _, sc in ipairs(findScripts("suit_look") or {}) do sl = sc end
+    P("suit_look: lod %s emblem painted %s (emblem version %s)", tostring(sl and sl.lodNow and sl.lodNow()),
+      tostring(sl and sl.emblemPainted and sl.emblemPainted()), tostring(findScript("emblem") and findScript("emblem").version))
+  end
+
   -- ── back on, visor raised: the face through the bubble ──
   local ok4, why4 = su.setHelmet(true)
   P("setHelmet(true): %s %s", tostring(ok4), tostring(why4))
@@ -255,6 +282,71 @@ local function main()
   su.setVisor(false)
   view("visorup_close", "Head", 0.30, 0.95, 0.05, 0.12)
   su.setVisor(true)
+  view("on_close2", "Head", 0.42, 0.85, -0.05, 0.02)
+  view("on_torso", "Back", 0.25, 1.15, 0.05, -0.15)
+  view("on_back_close", "Back", -0.35, -1.25, 0.25, -0.15)
+  -- ── first person, holding a tool (the gloves and sleeves in view) ──
+  if params.fptool > 0 then
+    local ih = findScript("item_hand")
+    for _, id in ipairs({ "laser", "gravgun" }) do
+      if ih and ih.hold then
+        local ok, why = ih.hold(id)
+        if not ok then P("hold %s refused: %s", id, tostring(why)) end
+      end
+      hold(1.2)
+      cam.setFreecam(false)
+      cam.firstPerson = true
+      hold(1.5)
+      shot("fp_" .. id)
+      hold(0.3)
+      cam.firstPerson = false
+      hold(0.6)
+      view("tp_" .. id, "Back", 1.3, 1.6, 0.3, -0.2)
+    end
+    if ih and ih.hold then pcall(ih.hold, nil) end
+    if ih and ih.stow then pcall(ih.stow) end
+    hold(0.8)
+  end
+  -- ── night: warp until the sun is well down, the helmet lamps and the
+  -- torch on ──
+  if params.night > 0 then
+    local function star_up()
+      local best, bmu = nil, -1
+      for _, bb in ipairs(space.bodies() or {}) do
+        local key = ((bb.soi or 0) < 0 and 1e30 or 0) + (bb.mu or 0)
+        if key > bmu then best, bmu = bb.name, key end
+      end
+      local st = best and space.body(best)
+      if not st then return 1 end
+      local a = crew()
+      local bn = find(b.name)
+      local U = vec3(a.x - bn.x, a.y - bn.y, a.z - bn.z):normalized()
+      return U:dot(vec3(st.x - a.x, st.y - a.y, st.z - a.z):normalized())
+    end
+    local t0 = W()
+    local s0 = star_up()
+    if s0 > -0.25 then
+      space.warp(500)
+      while W() - t0 < 120 do
+        hold(0.25)
+        if space.warp() < 2 then space.warp(500) end
+        if star_up() < -0.30 then break end
+      end
+      space.warp(1)
+      hold(2.0)
+    end
+    P("night: sun elevation %.2f (was %.2f)", star_up(), s0)
+    su.setLamps(true)
+    local fl = findScript("flashlight")
+    local inv = findScript("inventory")
+    if inv and inv.addGear then pcall(inv.addGear, "astro", "flashlight", 1) end
+    hold(0.5)
+    if fl and fl.setOn then pcall(fl.setOn, true) end
+    hold(1.0)
+    view("night_front", "Back", 0.6, 2.6, 0.3, -0.2)
+    view("night_quarter", "Back", 1.8, 2.0, 0.5, -0.2)
+    view("night_close", "Head", 0.45, 0.95, 0.0, 0.08)
+  end
   -- ── seated: a rover with an open seat, launched as the builder does it;
   -- the helmet taken off first, so the scene reload shows it kept ──
   if params.seat > 0 then

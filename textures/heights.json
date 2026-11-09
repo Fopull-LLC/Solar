@@ -180,15 +180,27 @@
   "method": "elements from their ground colour; a plain-weave ground"
  },
  "textures/suit/fabric_height.png": {
-  "depth_mm": 2.046,
+  "depth_mm": 1.285,
   "texel_mm": 0.488,
-  "method": "integrated from fabric_normal.png x1",
+  "method": "ortho-fabric: plain weave 1 mm, ripstop 5.9 mm, crinkle, a double-needle seam (tools/suit_textures.py)",
+  "tile_m": 0.25
+ },
+ "textures/suit/metal_height.png": {
+  "depth_mm": 0.064,
+  "texel_mm": 0.488,
+  "method": "hard-anodised aluminium, brushed along u, dings (tools/suit_textures.py)",
+  "tile_m": 0.25
+ },
+ "textures/suit/rubber_height.png": {
+  "depth_mm": 0.293,
+  "texel_mm": 0.488,
+  "method": "RTV silicone grip dots on a matte grain (tools/suit_textures.py)",
   "tile_m": 0.25
  },
  "textures/suit/shell_height.png": {
-  "depth_mm": 0.452,
-  "texel_mm": 1.953,
-  "method": "integrated from shell_normal.png x0.7",
+  "depth_mm": 0.116,
+  "texel_mm": 0.977,
+  "method": "painted composite: orange peel, sanding, scratches, scuffs, chips (tools/suit_textures.py)",
   "tile_m": 0.5
  },
  "textures/tools/tool_decals_height.png": {

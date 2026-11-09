@@ -1,43 +1,73 @@
 #!/usr/bin/env python3
 """Generate the crew's EVA SUIT on the existing astronaut rig.
 
-    python3 tools/gen_suit.py            # textures, both suits and their helmets
-    python3 tools/gen_suit.py --scene    # … and the AstroModel's materials and
-                                         #   helmet nodes in scenes/system.ron
+    python3 tools/gen_suit.py            # textures, both suits (3 LODs each), their helmets
+    python3 tools/gen_suit.py --scene    # … and the AstroModel's materials, its
+                                         #   helmet nodes and its suit_look in
+                                         #   scenes/system.ron, and the suit's
+                                         #   materials, LOD and suit_look in the
+                                         #   CrewDoll, CrewBody and Remains prefabs
     python3 tools/gen_suit.py --dry      # print the budget, write nothing
+    python3 tools/gen_suit.py --lod0     # LOD 0 only (quicker, while modelling)
 
 The geometry is MODELLED in Blender (tools/gen_suit_blender.py, run headless
 from here: Blender is found through $BLENDER, then the Steam install, then
-PATH); this file makes the textures, takes Blender's pieces back to the rig's
-bind space, colours the wear into them, and writes the files.
+PATH) once per level of detail; this file makes the textures, takes Blender's
+pieces back to the rig's bind space, colours the wear into them, and writes
+the files. tools/suit_posecheck.py renders the result in Blender (`--look`
+with the game's textures) through the joints' ranges; tools/perf/suitshots.sh
+photographs it in the game.
 
 Writes
-    models/astronaut/astronaut_{male,female}.glb   the suit, skinned to each rig
-    models/astronaut/helmet_{male,female}.glb      the helmet: bubble, EVVA
-                                                   shell, ring, lamp housings
-    models/astronaut/visor_{male,female}.glb       the gold sun visor
+    models/astronaut/astronaut_{male,female}.glb   the suit, skinned to each rig (LOD 0)
+    models/astronaut/astronaut_{sex}_lod{1,2}.glb  the same suit, coarser (LOD 1, 2)
+    models/astronaut/helmet_{male,female}.glb      the helmet: bubble, EVVA,
+                                                   ring, lamp housings, camera
+    models/astronaut/visor_{male,female}.glb       the gold sun visor and its tab
     models/astronaut/lamps_{male,female}.glb       the helmet lamps' lenses
-    textures/suit/fabric_{albedo,normal,orm}.png   the TMG's ortho-fabric (512²)
-    textures/suit/shell_{albedo,normal,orm}.png    the hard parts' paint (256²)
-    textures/suit/decals.png                       patches, tapes, plates (512×256)
+    textures/suit/{fabric,shell,metal,rubber}_{albedo,normal,orm,height}.png
+                                                   the tiling PBR sets
+                                                   (tools/suit_textures.py)
+    textures/suit/decals.png                       patches, tapes, plates (512×256;
+                                                   its normal and ORM: tools/detail_maps.py
+                                                   --only suitdecals)
+    textures/suit/emblem.png                       the shoulder patch's default emblem
     textures/suit/visor.png                        the gold visor (128²)
     textures/suit/head.png                         the face under the cap (256²)
 
-LOOK. An ISS EMU with Apollo A7L touches, grounded and worn: a cast hard upper
-torso (HUT) — chest full, back flat for the pack, shoulders sloping to a
-forward-tilted neck ring, scye bearings set into canted housings at its upper
-corners — a display-and-control module on the lower chest with its control
-face tipped up to the eyes; the PLSS high on the back, its top level with the
-neck ring, a rounded top housing and the SOP under it; an EVVA over a clear
-bubble with a gold visor, twin lamps and a camera at the temples; bearings at
-the neck, waist, scyes, upper arms, thighs, wrists and ankles; gathered cloth
-at the shoulders, pleats at the elbows and knees, a brief that hangs; gloves
-with four fingers and RTV grip pads; boots that are one cast-looking shoe on a
-dark sole. Signal orange three times only: the purge valve, the pack's grab
-handles and the commander's thigh bands. Wear is coloured in per vertex
-(`wear`): regolith on the boots, shins, knees and seat, grime on the gloves'
-grips, scuffs on the hard parts. Under the helmet: a plain head in a comm cap
-with its ear cups and mic booms.
+LOOK (the 2026-11-09 revamp: "the suit looks cartoony"). A near-future EVA
+suit from the ISS EMU, the xEMU and the Orlan, used and grounded: a cast hard
+upper torso (HUT), chest full, back flat for the pack, shoulders sloping to a
+forward-tilted neck ring with three helmet latches, scye bearings set into
+canted housings on eight screws each; a display-and-control module (DCM) on
+the lower chest, a moulded housing on two brackets, its control face tipped
+up to the eyes with the display in a bezel, four rotary controls, three
+toggles behind a guard and the orange purge valve, the SCU connector on its
+right side, two corrugated umbilicals from its underside into the HUT's front
+ports and the purge hose's loop to a clip; the PLSS high on the back, a
+moulded case with its access panel on ten screws and the serial plate, ribs,
+the vent grille over the SOP, grab handles on blocks, an antenna and a beacon,
+bumpers, and on the SOP its actuator, gauge and fill port; an EVVA over a
+clear bubble with the gold visor on pivot hubs, lamp housings with fins and
+glowing LED lenses on clamp arms, an HD camera on the right; anodised
+bearings (two races, a groove, chamfers) at the neck, waist, scyes, upper
+arms, thighs, wrists (blue left, red right) and ankles; the cloth's folds on
+the subdivided surface (bunched above the wrists and boots, compression folds
+in the crooks of the elbows and behind the knees, long diagonals down the
+limbs); gloves with five articulated fingers, RTV palms, finger grips and
+fingertip caps and a knuckle bar; boots with a tall upper, a rubber toe cap
+and heel counter, two buckled straps, a thick midsole and lugs. Signal
+orange: the purge valve, the pack's grab handles, the beacon. Ambient
+occlusion is BAKED into the vertex colours in Blender (gen_suit_blender
+bake_ao); wear is coloured in per vertex (`wear`): regolith on the boots,
+shins, knees and seat, grime on the gloves' grips, scuffs on the hard parts.
+
+THE PAINT AND TINT SLOTS. Every surface's albedo is near white and its shade
+a vertex colour, so a material's `color` tints it (node:material("SuitFabric")
+is the suit-colour slot); the agency's emblem is the "SuitEmblem" material on
+the left shoulder patch, which scripts/suit_look.lua paints with emblem.tex()
+live; the crew's face behind the visor is scripts/face.lua's (the suit keeps
+only the neck, "SuitHead", which takes the skin tone).
 
 THE HELMET COMES OFF. The helmet, its visor and its lamps are separate static
 models, not part of the skinned suit: the scene hangs them on the Back bone
@@ -72,15 +102,19 @@ tools/gen_suit_blender.py's soft-suit notes. tools/suit_posecheck.py renders
 the suit through the joints' ranges (and the hands open, in a fist, the wrist
 bent) in Blender.
 
-BUDGET. About 15,400 triangles for the suit (the head under the helmet
-included; the two arms 3,000 each, the lower body 1,900) and 2,150 for the
-helmet, visor and lamps; five materials on the
-suit (SuitFabric, SuitShell, SuitMetal, SuitHead, SuitDecal) and four on the
-helmet's models (SuitShell, SuitMetal, SuitBubble; SuitVisor; SuitLamp).
-Textures: the cloth set 512², the shell set 256², decals 512×256, the face
-256², the visor 128². Colour
-within a material is a vertex colour (glTF COLOR_0), as the base's buildings
-do it.
+BUDGET (triangles). LOD 0 about 51,300 (the arms 9,800 each: two levels of
+subdivision for the folds, the glove thinned by a masked decimation; the
+lower body 6,800, the HUT 3,200), LOD 1 about 24,000, LOD 2 about 11,700;
+the helmet, visor and lamps about 6,700 together (one LOD: the dolls and
+bodies wear no helmet). Seven materials on the suit (SuitFabric, SuitRubber,
+SuitShell, SuitMetal, SuitHead, SuitDecal, SuitEmblem) and five on the
+helmet's models (SuitShell, SuitMetal, SuitBubble; SuitVisor, SuitShell;
+SuitLamp). Textures: fabric and rubber 1024² (0.25 m tiles), shell 1024²
+(0.5 m), metal 512², decals 512×256, the emblem 256², the face 256², the
+visor 128². Colour within a material is a vertex colour (glTF COLOR_0), as
+the base's buildings do it. LODs: scripts/suit_look.lua swaps a crew doll's,
+a crew body's or remains' model by distance (LOD 0 within 9 m, LOD 1 to
+24 m, LOD 2 beyond); the player's own suit stays at LOD 0.
 
 LICENCE. The rig (bones, rest pose, bind matrices) comes from Clint
 Bellanger's "human.blend" (CC-BY-SA / GPL); the suit's geometry, weights and
@@ -317,6 +351,17 @@ def tex_decals():
     ImageDraw.Draw(mask).ellipse([0, 0, s - 11, s - 11], fill=255)
     patch.paste(em, (5, 5), mask)
     img.paste(patch, (x0, y0))
+    # … and the same patch on its own at 256 px: the SuitEmblem material's
+    # default (scripts/suit.lua swaps in the agency's emblem.tex() live)
+    S2 = 256
+    p2 = Image.new("RGB", (S2, S2), CLOTH_RGB)
+    d2 = ImageDraw.Draw(p2)
+    d2.ellipse([2, 2, S2 - 3, S2 - 3], fill=(40, 44, 58))
+    em2 = base_tex.emblem(S2 - 20, seed=11)
+    m2 = Image.new("L", (S2 - 20, S2 - 20), 0)
+    ImageDraw.Draw(m2).ellipse([0, 0, S2 - 21, S2 - 21], fill=255)
+    p2.paste(em2, (10, 10), m2)
+    base_tex.wear(p2, 7, amount=0.08).save(os.path.join(TEXDIR, "emblem.png"), optimize=True)
     # The name tape: printed capitals on an off-white tape, an orange tab.
     x0, y0, x1, y1 = px(REG["placard"])
     d.rectangle([x0, y0, x1 - 1, y1 - 1], fill=(222, 216, 200))
@@ -366,9 +411,13 @@ def tex_decals():
 
 
 def textures():
+    """The tiling PBR sets (fabric, shell, metal, rubber) in physical units
+    (tools/suit_textures.py), then the painted ones: the visor, the old face
+    and the decal atlas (whose normal and ORM tools/detail_maps.py makes:
+    `--only suitdecals`)."""
     os.makedirs(TEXDIR, exist_ok=True)
-    tex_fabric()
-    tex_shell()
+    import suit_textures
+    suit_textures.all_sets()
     tex_visor()
     tex_head()
     tex_decals()
@@ -494,7 +543,7 @@ def wear(C, P, N, kind, rig):
     blot = np.clip((n1 * 0.7 + n2 * 0.3 - 0.45) * 2.2, 0, 1)
     a = np.zeros(len(P))
     if kind in ("leg", "boot", "seat", "body", "arm", "cap"):
-        a += 0.10 * blot                                         # general grime
+        a += 0.06 * blot                                         # general grime
     if kind in ("leg", "boot"):
         a += np.clip((0.62 - y) / 0.62, 0, 1) ** 1.3 * (0.65 + 0.45 * blot)     # up the shins
         knee = (rig.p("Shin.Left")[1] + rig.p("Shin.Right")[1]) / 2 / k
@@ -538,9 +587,9 @@ def blender_bin():
     sys.exit("gen_suit: Blender not found (set $BLENDER)")
 
 
-def run_blender(rig_path, out):
+def run_blender(rig_path, out, lod=0):
     cmd = [blender_bin(), "--background", "--factory-startup", "--python",
-           os.path.join(ROOT, "tools", "gen_suit_blender.py"), "--", rig_path, out]
+           os.path.join(ROOT, "tools", "gen_suit_blender.py"), "--", rig_path, out, str(lod)]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(out):
         sys.stderr.write(r.stdout[-4000:] + r.stderr[-4000:])
@@ -595,7 +644,8 @@ def pin_centre(sk, want):
 # writing
 # ═════════════════════════════════════════════════════════════════════════════
 
-MAT_ORDER = ["SuitFabric", "SuitShell", "SuitMetal", "SuitHead", "SuitDecal", "SuitBubble", "SuitVisor", "SuitLamp"]
+MAT_ORDER = ["SuitFabric", "SuitRubber", "SuitShell", "SuitMetal", "SuitHead", "SuitDecal", "SuitEmblem", "SuitBubble",
+             "SuitVisor", "SuitLamp"]
 
 
 class GlbWriter:
@@ -665,6 +715,7 @@ class GlbWriter:
 
 
 COPYRIGHT = "Rig: Clint Bellanger 2009, CC-BY-SA 3.0. Suit: Solar, CC-BY-SA 3.0."
+LODS = (0, 1, 2)     # astronaut_<sex>.glb, astronaut_<sex>_lod1.glb, _lod2.glb (see gen_suit_blender.py LOD)
 
 
 def write_suit(sk, rig, path):
@@ -720,19 +771,26 @@ def _set(name, normal=1.0, rough=1.0, metal=1.0):
 SUIT_MATS = {
     "SuitFabric": lambda: _set("fabric", normal=1.0),
     "SuitShell":  lambda: _set("shell", normal=0.7),
-    "SuitMetal":  lambda: ('(\n                color: (1.0, 1.0, 1.0),\n'
-                           '                texture: Some("textures/parts/metal_albedo.png"),\n'
-                           '                normal_map: Some("textures/parts/metal_normal.png"),\n'
-                           '                roughness_map: Some("textures/parts/metal_orm.png"),\n'
-                           '                roughness: 0.7,\n'
-                           '                metallic_map: Some("textures/parts/metal_orm.png"),\n'
-                           '                metallic: 0.6,\n'
-                           '                shading: Physical,\n            )'),
+    "SuitRubber": lambda: _set("rubber", normal=1.0),
+    "SuitMetal":  lambda: _set("metal", normal=1.0),
     "SuitHead":   lambda: (f'(\n                color: (1.0, 1.0, 1.0),\n                texture: Some("{TEX}head.png"),\n'
                            '                roughness: 0.7,\n                metallic: 0.0,\n'
                            '                shading: Physical,\n            )'),
     "SuitDecal":  lambda: (f'(\n                color: (1.0, 1.0, 1.0),\n                texture: Some("{TEX}decals.png"),\n'
-                           '                roughness: 0.8,\n                metallic: 0.0,\n'
+                           f'                normal_map: Some("{TEX}decals_normal.png"),\n'
+                           '                normal_strength: 1.0,\n'
+                           f'                roughness_map: Some("{TEX}decals_orm.png"),\n                roughness: 1.0,\n'
+                           f'                metallic_map: Some("{TEX}decals_orm.png"),\n                metallic: 1.0,\n'
+                           f'                ao_map: Some("{TEX}decals_orm.png"),\n'
+                           '                shading: Physical,\n            )'),
+    # the agency's emblem patch on the left shoulder: its own material, so
+    # scripts/suit.lua can paint emblem.tex() on it live (the default is the
+    # emblem the decal atlas was drawn with); a stitched patch's weave from
+    # the fabric set
+    "SuitEmblem": lambda: (f'(\n                color: (1.0, 1.0, 1.0),\n                texture: Some("{TEX}emblem.png"),\n'
+                           f'                normal_map: Some("{TEX}fabric_normal.png"),\n'
+                           '                normal_strength: 0.5,\n'
+                           '                roughness: 0.85,\n                metallic: 0.0,\n'
                            '                shading: Physical,\n            )'),
     "SuitBubble": lambda: ('(\n                color: (0.86, 0.90, 0.94),\n                alpha: 0.16,\n'
                            '                roughness: 0.06,\n                metallic: 0.0,\n'
@@ -746,10 +804,10 @@ SUIT_MATS = {
                            '                texture: Some("textures/base/lens.png"),\n'
                            '                unlit: true,\n                fog: false,\n            )'),
 }
-SUIT_ONLY = ["SuitFabric", "SuitShell", "SuitMetal", "SuitHead", "SuitDecal"]
+SUIT_ONLY = ["SuitFabric", "SuitRubber", "SuitShell", "SuitMetal", "SuitHead", "SuitDecal", "SuitEmblem"]
 HELMET_PARTS = {   # part: (node name, materials)
     "helmet": ("Helmet", ["SuitShell", "SuitMetal", "SuitBubble"]),
-    "visor": ("Helmet Visor", ["SuitVisor"]),
+    "visor": ("Helmet Visor", ["SuitVisor", "SuitShell"]),
     "lamps": ("Helmet Lamps", ["SuitLamp"]),
 }
 
@@ -761,6 +819,54 @@ def mats_block(names, indent="            "):
         return t.replace("\n", "\n    ")
     body = ",\n".join(f'{indent}    "{n}": {deeper(SUIT_MATS[n]())}' for n in names)
     return f"{indent}object_materials: {{\n{body},\n{indent}}},\n"
+
+
+# The prefabs that wear the suit, and which LOD each draws by default
+# (scripts/suit_lod.lua then moves a crew member between the LODs by its
+# distance from the camera). The player's own AstroModel (scenes/system.ron)
+# always draws LOD 0.
+SUIT_PREFABS = {"CrewDoll": 1, "CrewBody": 0, "Remains": 1}
+
+
+def look_script(ind, lod):
+    """The suit_look entry (scripts/suit_look.lua: the emblem patch, the LOD)
+    for a node's scripts list at indent `ind`."""
+    return (f"{ind}scripts: [\n{ind}    (\n{ind}        kind: \"suit_look\",\n{ind}        enabled: true,\n"
+            f"{ind}        params: [(\"lod\", {float(lod)})],\n{ind}    ),\n{ind}],\n")
+
+
+def with_look(r, a, ind, lod):
+    """The suit node's scripts (the first `scripts:` line at indent `ind`
+    after offset a) as just suit_look, whatever was there."""
+    s0 = r.index(f"\n{ind}scripts: [", a) + 1
+    if r.startswith(f"{ind}scripts: [],\n", s0):
+        e0 = s0 + len(f"{ind}scripts: [],\n")
+    else:
+        e0 = r.index(f"\n{ind}],\n", s0) + len(f"\n{ind}],\n")
+        if 'kind: "suit_look"' not in r[s0:e0]:
+            raise SystemExit("gen_suit: the suit node already has scripts; add suit_look by hand")
+    return r[:s0] + look_script(ind, lod) + r[e0:]
+
+
+def write_prefabs():
+    """The suit's object_materials (and its LOD's model) in every prefab that
+    wears it — the node whose model is models/astronaut/astronaut_male*.glb."""
+    for name, lod in SUIT_PREFABS.items():
+        path = os.path.join(ROOT, "prefabs", f"{name}.prefab.ron")
+        r = open(path).read()
+        i = r.index('asset_path: "models/astronaut/astronaut_male')
+        j = r.index('.glb"', i)
+        want = "astronaut_male.glb" if lod == 0 else f"astronaut_male_lod{lod}.glb"
+        r = r[:i] + f'asset_path: "models/astronaut/{want}"' + r[j + len('.glb"'):]
+        a = r.index("        object_materials: {", i)
+        # its closing line: the first "        }," at the same depth
+        b = r.index("\n        },\n", a) + len("\n        },\n")
+        body = ",\n".join(f'            "{n}": {SUIT_MATS[n]()}' for n in SUIT_ONLY)
+        r = r[:a] + f"        object_materials: {{\n{body},\n        }},\n" + r[b:]
+        r = with_look(r, a, "        ", lod=1)
+        with open(path, "w") as f:
+            f.write(r)
+        print(f"prefabs/{name}.prefab.ron: the suit's materials, LOD {lod}")
 
 
 def helmet_offset(rig, centre):
@@ -801,6 +907,7 @@ def write_scene(rig, centres, path=os.path.join(ROOT, "scenes", "system.ron")):
     a = r.find("            object_materials: {", i, end)
     a = end if a < 0 else a
     r = r[:a] + mats_block(SUIT_ONLY) + r[end:]
+    r = with_look(r, a, "            ", lod=0)
     # the AstroModel's scene id, for the helmet's parent link
     blk = r[i:r.index("\n        ),\n", i)]
     astro_id = int(blk.split("id: Some(")[1].split(")")[0])
@@ -874,25 +981,32 @@ def main():
     tmp = tempfile.mkdtemp(prefix="gen_suit_")
     centres = {}
     rig_male = None
+    lods = [0] if "--lod0" in sys.argv else LODS
     try:
         for sex in ("male", "female"):
             path = os.path.join(MODELS, f"astronaut_{sex}.glb")
             rig = Rig(path)
             if sex == "male":
                 rig_male = rig
-            npz = os.path.join(tmp, f"{sex}.npz")
-            run_blender(path, npz)
-            suit, statics, man = assemble(rig, npz)
-            c = pin_centre(suit, REST_CENTRE[sex])
-            mn, mx = suit.bounds()
-            per = {m: len(suit.faces(m)) for m in suit.parts}
-            print(f"{sex:6s} suit tris {suit.tris()} {per} box {np.round(mn, 3).tolist()}..{np.round(mx, 3).tolist()} "
-                  f"centre {np.round(c, 5).tolist()} (want {np.round(REST_CENTRE[sex], 5).tolist()})")
-            if "--pieces" in sys.argv:
-                for m in sorted(man, key=lambda m: -m["tris"]):
-                    print(f"    {m['tris']:6d}  {m['name']:24s} {m['mat']:11s} {m['part']}")
-            if not dry:
-                write_suit(suit, rig, path)
+            for lod in lods:
+                npz = os.path.join(tmp, f"{sex}_{lod}.npz")
+                run_blender(path, npz, lod)
+                suit, st_, man = assemble(rig, npz)
+                if lod == 0:
+                    statics = st_
+                c = pin_centre(suit, REST_CENTRE[sex])
+                mn, mx = suit.bounds()
+                per = {m: len(suit.faces(m)) for m in suit.parts}
+                print(f"{sex:6s} LOD{lod} suit tris {suit.tris()} {per} box {np.round(mn, 3).tolist()}.."
+                      f"{np.round(mx, 3).tolist()} centre {np.round(c, 5).tolist()} "
+                      f"(want {np.round(REST_CENTRE[sex], 5).tolist()})")
+                if "--pieces" in sys.argv and lod == 0:
+                    for m in sorted(man, key=lambda m: -m["tris"]):
+                        print(f"    {m['tris']:6d}  {m['name']:24s} {m['mat']:11s} {m['part']}")
+                if not dry:
+                    # every LOD on the same rig, its box pinned to the same
+                    # centre, so a model swap never moves the crew member
+                    write_suit(suit, rig, path if lod == 0 else os.path.join(MODELS, f"astronaut_{sex}_lod{lod}.glb"))
             for part in HELMET_PARTS:
                 out = os.path.join(MODELS, f"{part}_{sex}.glb")
                 if dry:
@@ -905,6 +1019,7 @@ def main():
         shutil.rmtree(tmp, ignore_errors=True)
     if "--scene" in sys.argv and not dry:
         write_scene(rig_male, centres)
+        write_prefabs()
 
 
 if __name__ == "__main__":

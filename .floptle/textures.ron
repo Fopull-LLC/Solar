@@ -406,4 +406,12 @@
     "textures/kit/grime_normal.png": (filter: SmoothMipmaps, wrap: Repeat),
     "textures/kit/grime_orm.png": (filter: SmoothMipmaps, wrap: Repeat),
     "textures/kit/grime_height.png": (filter: SmoothMipmaps, wrap: Repeat),
+    "textures/suit/metal_albedo.png": (filter: SmoothMipmaps, wrap: Repeat),
+    "textures/suit/metal_normal.png": (filter: SmoothMipmaps, wrap: Repeat),
+    "textures/suit/metal_orm.png": (filter: SmoothMipmaps, wrap: Repeat),
+    "textures/suit/metal_height.png": (filter: SmoothMipmaps, wrap: Repeat),
+    "textures/suit/rubber_albedo.png": (filter: SmoothMipmaps, wrap: Repeat),
+    "textures/suit/rubber_normal.png": (filter: SmoothMipmaps, wrap: Repeat),
+    "textures/suit/rubber_orm.png": (filter: SmoothMipmaps, wrap: Repeat),
+    "textures/suit/rubber_height.png": (filter: SmoothMipmaps, wrap: Repeat),
 }

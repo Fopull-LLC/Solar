@@ -1,4 +1,5 @@
-astronaut_male.glb / astronaut_female.glb — the crew's EVA suit
+astronaut_male.glb / astronaut_female.glb — the crew's EVA suit (LOD 0)
+astronaut_*_lod1.glb / astronaut_*_lod2.glb — the same suit, coarser (LOD 1, 2)
 helmet_*.glb / visor_*.glb / lamps_*.glb — its helmet, gold visor and lamps
 Written by tools/gen_suit.py, which models the geometry in Blender through
 tools/gen_suit_blender.py (regenerate there; don't edit the files).
@@ -10,7 +11,7 @@ Dual-licensed: Creative Commons CC-BY-SA / GPL (as stated in the source file).
 Attribution required.
 
 THE SUIT (the mesh, the head under the helmet, its skin weights, and
-textures/suit/*.png)
+textures/suit/*.png — the tiling PBR sets from tools/suit_textures.py)
 New geometry built by tools/gen_suit.py / tools/gen_suit_blender.py on the rig
 above (no vertex of the original body is used), for Solar. Because each suit
 file carries the CC-BY-SA rig, the files as a whole remain CC-BY-SA

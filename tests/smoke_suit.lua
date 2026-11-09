@@ -14,7 +14,9 @@
 --   * the soft suit is SKINNED, not pieces: the gloves are weighted to the
 --     finger chain and the thumb bones, every limb joint blends its two bones
 --     somewhere (no rigid piece per bone), and the suit keeps its budget
---     (at most 16,500 triangles, five materials);
+--     per level of detail (LOD 0 at most 52,000 triangles, LOD 1 26,000,
+--     LOD 2 13,000; seven materials), every LOD on the same rig and the same
+--     box centre (scripts/suit_look.lua swaps them by distance);
 --   * the HELMET that comes off: helmet / visor / lamps are plain (unskinned)
 --     models, the scene hangs the Helmet on the AstroModel's Back bone (an
 --     attachment) with the Visor and the Lamps under it, each dressed for the
@@ -62,8 +64,11 @@ local BONES = { "Back", "Hip", "Thigh.Right", "Shin.Right", "Foot.Right", "Toes.
 local CENTRE = { male = { -0.5, 0.93782, -0.00412 }, female = { 0.50126, 0.89694, -0.02316 } }
 
 local MATS = {}
-for _, sex in ipairs({ "male", "female" }) do
-  local path = "models/astronaut/astronaut_" .. sex .. ".glb"
+local BUDGET = { [""] = 52000, ["_lod1"] = 26000, ["_lod2"] = 13000 }
+for _, job in ipairs({ { "male", "" }, { "female", "" }, { "male", "_lod1" }, { "male", "_lod2" },
+                       { "female", "_lod1" }, { "female", "_lod2" } }) do
+  local sex, lodsuf = job[1], job[2]
+  local path = "models/astronaut/astronaut_" .. sex .. lodsuf .. ".glb"
   local js = glb_json(path)
   ok(js ~= nil, path .. ": not a glb")
   if js then
@@ -138,8 +143,8 @@ for _, sex in ipairs({ "male", "female" }) do
         end
       end
     end
-    ok(tris > 0 and tris <= 16500, string.format("%s: %d triangles, the budget is 16,500", path, tris))
-    ok(prims <= 5, string.format("%s: %d materials, the budget is five", path, prims))
+    ok(tris > 0 and tris <= BUDGET[lodsuf], string.format("%s: %d triangles, the budget is %d", path, tris, BUDGET[lodsuf]))
+    ok(prims <= 7, string.format("%s: %d materials, the budget is seven", path, prims))
     for _, sd in ipairs({ "Left", "Right" }) do
       for _, b in ipairs({ "Fingers1", "Fingers2", "Thumb1", "Thumb2" }) do
         ok((used[b .. "." .. sd] or 0) > 40, string.format("%s: the glove isn't skinned to %s.%s", path, b, sd))
@@ -147,7 +152,9 @@ for _, sex in ipairs({ "male", "female" }) do
       for _, pj in ipairs({ { "Upperarm", "Forearm" }, { "Forearm", "Hand" }, { "Hand", "Fingers1" },
                             { "Fingers1", "Fingers2" }, { "Thigh", "Shin" }, { "Shin", "Foot" } }) do
         local a, b = pj[1] .. "." .. sd, pj[2] .. "." .. sd
-        ok((pair[a .. "|" .. b] or 0) > 20, string.format("%s: nothing blends %s into %s (a joint of rigid pieces)", path, a, b))
+        -- (LOD 2 is the unsubdivided cage: a joint's blend has its rings' vertices only)
+        ok((pair[a .. "|" .. b] or 0) > (lodsuf == "_lod2" and 8 or 20),
+           string.format("%s: nothing blends %s into %s (a joint of rigid pieces)", path, a, b))
       end
       ok((pair["Hip|Thigh." .. sd] or 0) > 20, path .. ": nothing blends the hip into Thigh." .. sd)
     end

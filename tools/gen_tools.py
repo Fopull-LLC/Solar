@@ -88,9 +88,11 @@ MODELS = os.path.join(ROOT, "models", "tools")
 # view models keep their look while the suit's generator changes: warm
 # off-white beta cloth, light-grey gloves with dark grip palms, an anodised
 # wrist bearing. Their cloth is the suit's own texture set (textures/suit/).
-CLOTH = (0.80, 0.785, 0.745)     # the suit's TMG (gen_suit_blender.py CLOTH)
-GLOVE = (0.62, 0.615, 0.60)      # its gloves, with the grime they carry
-PALM = (0.16, 0.16, 0.17)        # RTV grip
+CLOTH = (0.92, 0.915, 0.895)     # the suit's TMG (gen_suit_blender.py CLOTH)
+GLOVE = (0.72, 0.715, 0.70)      # its gloves, with the grime they carry
+PALM = (0.15, 0.15, 0.155)       # RTV grip (the suit's rubber set)
+BLUE_A = (0.16, 0.26, 0.48)      # the wrist disconnects' anodising, left
+RED_A = (0.52, 0.15, 0.12)       # … and right
 
 
 def suit_cloth(col):
@@ -103,15 +105,18 @@ def suit_cloth(col):
             f'                ao_map: Some("{t}_orm.png"),\n                shading: Physical,\n            )')
 
 
+def suit_set(name, col=(1.0, 1.0, 1.0)):
+    """One of the suit's tiling PBR sets (tools/suit_textures.py) in a colour."""
+    t = "textures/suit/" + name
+    return (f'(\n                color: {tuple(col)},\n                texture: Some("{t}_albedo.png"),\n'
+            f'                normal_map: Some("{t}_normal.png"),\n                normal_strength: 1.0,\n'
+            f'                roughness_map: Some("{t}_orm.png"),\n                roughness: 1.0,\n'
+            f'                metallic_map: Some("{t}_orm.png"),\n                metallic: 1.0,\n'
+            f'                ao_map: Some("{t}_orm.png"),\n                shading: Physical,\n            )')
+
+
 def suit_metal():
-    return ('(\n                color: (1.0, 1.0, 1.0),\n'
-            '                texture: Some("textures/parts/metal_albedo.png"),\n'
-            '                normal_map: Some("textures/parts/metal_normal.png"),\n'
-            '                roughness_map: Some("textures/parts/metal_orm.png"),\n'
-            '                roughness: 0.7,\n'
-            '                metallic_map: Some("textures/parts/metal_orm.png"),\n'
-            '                metallic: 0.6,\n'
-            '                shading: Physical,\n            )')
+    return suit_set("metal", (0.60, 0.61, 0.62))
 
 
 def glow(r, g, b, s=2.6):
@@ -131,7 +136,9 @@ TOOL_MATS = {
     # The EVA suit (tools/gen_suit.py), for the first-person sleeves and
     # gloves: its cloth in its own colours, and its bearing metal.
     "Glove":     lambda: suit_cloth(GLOVE),
-    "Palm":      lambda: suit_cloth(PALM),
+    "Palm":      lambda: suit_set("rubber", PALM),
+    "WristBlue": lambda: suit_set("metal", BLUE_A),
+    "WristRed":  lambda: suit_set("metal", RED_A),
     "Suit":      lambda: suit_cloth(CLOTH),
     "SuitMetal": suit_metal,
     "Hazard":    lambda: mat_ron("paint", color=(0.95, 0.72, 0.12), hull=False),

@@ -1,7 +1,7 @@
 """Model the crew's EVA suit in Blender (headless) — the geometry half of
 tools/gen_suit.py, which runs this and writes the glbs.
 
-    blender --background --factory-startup --python tools/gen_suit_blender.py -- RIG.glb OUT.npz
+    blender --background --factory-startup --python tools/gen_suit_blender.py -- RIG.glb OUT.npz [LOD]
 
 RIG.glb is the suit being replaced (only its skeleton is read). OUT.npz holds
 every piece's triangles in the AUTHORING pose (see gen_suit.py): positions,
@@ -19,6 +19,20 @@ the soft parts are subdivided lofts with the cloth's own irregularity built
 into each ring (gathers at the shoulders, sag under the elbows and knees, a
 seat that hangs). Skin weights ride the cages as vertex groups, which
 subdivision interpolates, so the weighting is designed per ring, not painted.
+
+THE 2026-11-09 REVAMP ("cartoony"): the soft parts are subdivided twice
+(arms) and once (the lower body) and the CLOTH'S FOLDS are laid on the
+finished surface (arm_disp, leg_disp: bunching, compression folds in the
+crooks, diagonal drape, unevenness), the glove's region thinned by a masked
+decimation (Piece.thin) so the sleeves keep their edge loops; the bearings
+are lathed profiles (two races, a groove, chamfers); the hardware is
+modelled (rbox, bolt, knob, hose, connector: the DCM's controls, the
+umbilicals, the PLSS's panel, grille and SOP, the helmet's lamp housings and
+camera, the boots' straps and lugs); one surface may carry several materials
+(`mats` / `fmat`: the glove's RTV, the boot's rubber) with its normals kept
+whole; ambient occlusion is baked into the vertex colours by Blender's ray
+tracer (bake_ao). Argument 3 is the LOD (0, 1, 2): the same build with fewer
+subdivisions and segments and the smallest hardware left off.
 
 COORDINATES are the glTF bind space throughout: +X the crew's left, +Y up, +Z
 forward, metres, the 1.87 m male rig (every length scales with the rig, `k`).
@@ -47,11 +61,27 @@ TAU = 2 * math.pi
 X, Y, Z = np.eye(3)
 argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
 RIG_PATH, OUT_PATH = argv[0], argv[1]
+# LEVEL OF DETAIL: 0 the full suit (the player, close crew), 1 and 2 coarser
+# builds of the SAME surfaces (fewer subdivision levels and ring segments,
+# the smallest hardware left off) for crew seen farther away and in numbers:
+# the dolls in their seats, the bodies, the remains. Same rig, same weights
+# (painted by the same functions), so every LOD bends alike.
+LOD = int(argv[2]) if len(argv) > 2 else 0
 
 AUTHOR_ABDUCT = 50.0      # the arms are modelled this far down from the rig's T
 AUTHOR_ELBOW = 35.0       # … with the elbows this far bent
 AUTHOR_KNEE = 25.0        # … and the knees (see the soft suit's notes)
 SCYE_BORE = 0.088         # the scye bearing's bore (radius, m on the male rig)
+
+
+def lod(*v):
+    """The value for this LOD (v[0] the full suit, v[1], v[2] coarser)."""
+    return v[min(LOD, len(v) - 1)]
+
+
+def segs_(n):
+    """Ring segments for hardware at this LOD (a multiple of 4, at least 8)."""
+    return max(8, int(round(n * lod(1.0, 0.6, 0.4) / 4)) * 4)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -104,6 +134,36 @@ def smooth01(a, b, x):
     return t * t * (3 - 2 * t)
 
 
+def vnoise(P, seed, freq):
+    """Smooth 3-D value noise in [0, 1] at points P (N x 3)."""
+    P = np.asarray(P, float) * freq
+    i = np.floor(P).astype(np.int64)
+    f = P - i
+    f = f * f * (3 - 2 * f)
+
+    def h(ix, iy, iz):
+        n = (ix * 73856093) ^ (iy * 19349663) ^ (iz * 83492791) ^ (seed * 2654435761)
+        n = (n ^ (n >> 13)) * 1274126177
+        return ((n ^ (n >> 16)) & 0xFFFF) / 65535.0
+    out = 0.0
+    for dx in (0, 1):
+        for dy in (0, 1):
+            for dz in (0, 1):
+                w = (f[:, 0] if dx else 1 - f[:, 0]) * (f[:, 1] if dy else 1 - f[:, 1]) * (f[:, 2] if dz else 1 - f[:, 2])
+                out = out + w * h(i[:, 0] + dx, i[:, 1] + dy, i[:, 2] + dz)
+    return out
+
+
+def fbm(P, seed, freq, octaves=3):
+    """Fractal noise, centred on 0 (about +-0.5)."""
+    out, amp, tot = 0.0, 1.0, 0.0
+    for o in range(octaves):
+        out = out + amp * (vnoise(P, seed + o * 17, freq * 2 ** o) - 0.5)
+        tot += amp
+        amp *= 0.5
+    return out / tot * 2
+
+
 def lerp(a, b, t):
     return np.asarray(a, float) + (np.asarray(b, float) - np.asarray(a, float)) * t
 
@@ -133,14 +193,26 @@ class Piece:
     tiles of `tile` metres. `part` names the glb: suit, helmet, visor, lamps."""
 
     def __init__(self, name, mat, V, F, W, C, UVc=None, part="suit", tile=0.25, dirt="body",
-                 sharp=None, smooth=True, mods=()):
+                 sharp=None, smooth=True, mods=(), mats=None, fmat=None, ao=True):
         self.name, self.mat, self.part, self.tile, self.dirt = name, mat, part, tile, dirt
         self.W, self.C = W, C
         self.sharp = sharp
+        # one surface, several materials: `mats` names them, `fmat` gives each
+        # face's index (subdivision carries it to the faces it makes); the
+        # export splits the triangles by it but keeps the normals of the
+        # whole, so the cloth and the rubber meet with no shading seam
+        self.mats = mats
+        self.mat_col = {}            # material index -> the colour its faces take
+        self.ao_on = ao
         V = np.asarray(V, float)
         me = bpy.data.meshes.new(name)
         me.from_pydata(V.tolist(), [], [list(map(int, f)) for f in F])
         me.update()
+        if mats:
+            for mn in mats:
+                me.materials.append(bpy.data.materials.get(mn) or bpy.data.materials.new(mn))
+            me.polygons.foreach_set("material_index", np.asarray(fmat, np.int32))
+            me.update()
         if UVc is not None:
             uv = me.uv_layers.new(name="uv")
             flat = [c for f in UVc for c in f]
@@ -220,6 +292,51 @@ class Piece:
             m.object = a[1].ob
             m.solver = "EXACT"
         self.apply()
+
+    def displace(self, fn):
+        """Move every vertex by fn(P, N, G) (N×3 metres): the cloth's folds,
+        laid on after subdivision. G is the vertex groups as dicts."""
+        self.apply()
+        me = self.ob.data
+        nv = len(me.vertices)
+        P = np.zeros(nv * 3)
+        me.vertices.foreach_get("co", P)
+        P = P.reshape(-1, 3)
+        N = np.zeros(nv * 3)
+        me.vertices.foreach_get("normal", N)
+        N = N.reshape(-1, 3)
+        names = {g.index: g.name for g in self.ob.vertex_groups}
+        G = [{names[g.group]: g.weight for g in v.groups} for v in me.vertices]
+        d = np.asarray(fn(P, N, G), float)
+        me.vertices.foreach_set("co", (P + d).reshape(-1))
+        me.update()
+
+    def thin(self, mask, cut):
+        """Collapse-decimate only where mask(P) is 1 (a vertex group drives the
+        modifier), removing about `cut` of the triangles there: the glove's
+        fingers and palm, small and densely subdivided, give up triangles the
+        eye can't find, the sleeve keeps its quads and edge loops."""
+        self.apply()
+        me = self.ob.data
+        nv = len(me.vertices)
+        P = np.zeros(nv * 3)
+        me.vertices.foreach_get("co", P)
+        m = np.asarray(mask(P.reshape(-1, 3)), float)
+        vg = self.ob.vertex_groups.new(name="_dec")
+        for w in np.unique(np.round(m, 2)):
+            ids = np.nonzero(np.round(m, 2) == w)[0].tolist()
+            if w > 0 and ids:
+                vg.add(ids, float(w), "REPLACE")
+        tri = sum(len(p.vertices) - 2 for p in me.polygons)
+        sel = sum(len(p.vertices) - 2 for p in me.polygons if m[list(p.vertices)].mean() > 0.5)
+        md = self.ob.modifiers.new("thin", "DECIMATE")
+        md.decimate_type = "COLLAPSE"
+        md.ratio = max(0.05, 1.0 - cut * sel / max(tri, 1))
+        md.vertex_group = "_dec"
+        md.vertex_group_factor = 1.0
+        md.use_collapse_triangulate = True
+        self.apply()
+        self.ob.vertex_groups.remove(self.ob.vertex_groups["_dec"])
 
     def apply(self):
         ob = self.ob
@@ -417,64 +534,179 @@ def frame_to(d, ref=None):
     return np.column_stack([xx, d, zz])
 
 
-def ring_piece(name, mat, c, axis, ri, ro, w, bone, col, segs=16, part="suit", dirt="metal", band=None):
-    """A bearing: a flat-faced annulus about `axis` at `c`, flat shaded (its
-    four faces meet at hard edges). `band` colours its outer face."""
+def lathe_piece(name, mat, c, axis, prof, W, segs, part="suit", dirt="metal", sharp=35, ref=None, a0=0.0, **kw):
+    """A solid of revolution about `axis` through `c` from a closed profile
+    [(rho, h, colour), …] (h along the axis), smooth-shaded with hard edges
+    where the profile turns more than `sharp` degrees. A profile point listed
+    twice with two colours splits the surface there, so a colour change is a
+    clean line, not a blur across a vertex. UVs: u round (4 tiles), v along
+    the profile's length."""
     axis = unit(axis)
-    ref = X if abs(axis @ X) < 0.9 else Z
-    e1 = unit(ref - axis * (axis @ ref))
+    if ref is None:
+        ref = X if abs(axis @ X) < 0.9 else Z
+    e1 = unit(np.asarray(ref, float) - axis * (axis @ ref))
     e2 = np.cross(axis, e1)
     c = np.asarray(c, float)
-    prof = [(ri, -w / 2), (ro, -w / 2), (ro, w / 2), (ri, w / 2)]
-    V, C = [], []
-    for k_, (rho, h) in enumerate(prof):
+    V, C, vs = [], [], [0.0]
+    for k_, (rho, h, col) in enumerate(prof):
+        if k_:
+            vs.append(vs[-1] + math.hypot(rho - prof[k_ - 1][0], h - prof[k_ - 1][1]) / 0.1)
         for i in range(segs):
-            a = TAU * i / segs
+            a = a0 + TAU * i / segs
             V.append(c + axis * h + (e1 * math.cos(a) + e2 * math.sin(a)) * rho)
             C.append(col)
+    np_ = len(prof)
     F, UVc = [], []
-    for k_ in range(4):
-        k2 = (k_ + 1) % 4
+    for k_ in range(np_):
+        k2 = (k_ + 1) % np_
+        if math.hypot(prof[k_][0] - prof[k2][0], prof[k_][1] - prof[k2][1]) < 1e-9:
+            continue                                  # a colour split: no face
+        v0, v1 = vs[k_], (vs[k2] if k2 else vs[-1] + 0.1)
         for i in range(segs):
             j = (i + 1) % segs
             f = (k_ * segs + i, k_ * segs + j, k2 * segs + j, k2 * segs + i)
-            P0, P1, P2 = V[f[0]], V[f[1]], V[f[2]]
-            m = (P0 + P1 + P2) / 3 - c
-            rad = m - axis * (m @ axis)
-            want = [-axis, unit(rad), axis, -unit(rad)][k_]
-            if np.cross(P1 - P0, P2 - P0) @ want < 0:
-                f = tuple(reversed(f))
-            F.append(f)
+            P0, P1, P2, P3 = V[f[0]], V[f[1]], V[f[2]], V[f[3]]
+            # outward: away from the solid's inside (the profile's centroid)
+            cen = np.mean([[p[0], p[1]] for p in prof], axis=0)
+            m = (P0 + P1 + P2 + P3) / 4 - c
+            hh = m @ axis
+            rr = np.linalg.norm(m - axis * hh)
+            want = unit(m - axis * hh) * (rr - cen[0]) + axis * (hh - cen[1])
+            nrm = np.cross(P1 - P0, P3 - P0) + np.cross(P2 - P1, P0 - P1)
             u0, u1 = i / segs * 4, (i + 1) / segs * 4
-            UVc.append([(u0, k_ * 0.25), (u1, k_ * 0.25), (u1, k_ * 0.25 + 0.25), (u0, k_ * 0.25 + 0.25)])
-    C = np.asarray(C, float)
-    if band is not None:
-        # the outer face's own colour: split it off with its own vertices
-        n0 = len(V)
-        for i in range(segs):
-            F[segs + i] = tuple(q + n0 - segs if segs <= q < 3 * segs else q for q in F[segs + i])
-        V = V + V[segs:3 * segs]
-        C = np.vstack([C, np.tile(band, (2 * segs, 1))])
-    return Piece(name, mat, V, F, {bone: 1}, C, UVc=UVc, part=part, dirt=dirt, smooth=False, sharp=30)
+            uv = [(u0, v0), (u1, v0), (u1, v1), (u0, v1)]
+            if nrm @ want < 0:
+                f, uv = tuple(reversed(f)), uv[::-1]
+            F.append(f)
+            UVc.append(uv)
+    return Piece(name, mat, V, F, W, np.asarray(C, float), UVc=UVc, part=part, dirt=dirt, smooth=True, sharp=sharp,
+                 **kw)
+
+
+def ring_piece(name, mat, c, axis, ri, ro, w, bone, col, segs=16, part="suit", dirt="metal", band=None):
+    """A BEARING (or a disconnect, or the neck ring): two races of anodised
+    aluminium about `axis`, each with chamfered edges, the split between them
+    a sunk groove, the bore's lip rolled in toward the cloth. `band` colours
+    the outer race's face (the wrist disconnects' blue and red, the EMU's way
+    of telling left from right). The ring is wider than the cloth it covers on
+    both sides, so the cloth always disappears into it."""
+    cw = min(0.0025 * (ro / 0.08), w * 0.16)          # the chamfers
+    g = min(0.0018, (ro - ri) * 0.18)                  # the groove's depth
+    gw = w * 0.07
+    bc = band if band is not None else col
+    lip = ri - 0.0015
+    prof = [
+        (lip, -w / 2 + cw, col), (ri + cw, -w / 2, col), (ro - cw, -w / 2, col), (ro, -w / 2 + cw, col),
+        (ro, -gw, col), (ro - g, -gw * 0.4, col),
+        (ro - g, -gw * 0.4, bc), (ro, gw, bc), (ro, w / 2 - cw, bc), (ro - cw, w / 2, bc),
+        (ro - cw, w / 2, col), (ri + cw, w / 2, col), (lip, w / 2 - cw, col),
+    ]
+    if LOD >= 2:          # far away: one chamfered race, no groove
+        prof = [(lip, -w / 2 + cw, col), (ro - cw, -w / 2, col), (ro, -w / 2 + cw, col), (ro, w / 2 - cw, bc),
+                (ro - cw, w / 2, col), (lip, w / 2 - cw, col)]
+    return lathe_piece(name, mat, c, axis, prof, {bone: 1}, segs_(max(int(segs * 1.25), 16)),
+                       part=part, dirt=dirt, sharp=35)
+
+
+def rbox(name, mat, c, size, M=None, W=None, col=None, r=0.003, seg=2, part="suit", dirt="hard", tile=0.5,
+         sharp=40, angle=40):
+    """A box with its edges rounded over `r` in `seg` segments (a bevel by
+    angle), smooth-shaded so the rounds catch the light and the faces stay
+    flat: machined and moulded hardware."""
+    V, F = box_mesh(c, size, M)
+    seg = lod(seg, max(1, seg - 1), 1)
+    mods = [("bevel", r, seg, angle)] if r > 0 else []
+    return Piece(name, mat, V, F, W or {"Back": 1}, col if col is not None else SHELL_G, tile=tile, part=part,
+                 dirt=dirt, mods=mods, sharp=sharp)
+
+
+def bolt(name, p, n, r, h, W, col=None, part="suit", dirt="metal", mat="SuitMetal"):
+    """A hex-head cap screw standing `h` proud along `n` at `p` (its washer a
+    touch wider, the head chamfered)."""
+    if LOD >= 2:
+        return None
+    c = col if col is not None else METAL_D
+    prof = [(1e-4, -0.0004, c), (r * 1.15, -0.0004, c), (r * 1.15, h * 0.75, c), (r * 0.8, h, c), (1e-4, h, c)]
+    return lathe_piece(name, mat, p, n, prof, W, 6, part=part, dirt=dirt, sharp=30)
+
+
+def knob(name, p, n, r, h, W, col, mat="SuitShell", flutes=True, part="suit", dirt="hard", ref=None):
+    """A control knob along `n` at `p`: a skirt, a fluted grip (the flutes
+    as a 3-to-1 ripple round it), a domed cap."""
+    segs = lod(16, 12, 8)
+    prof = [(1e-4, 0.0, col), (r * 1.08, 0.0, col), (r * 1.08, h * 0.18, col), (r, h * 0.24, col),
+            (r, h * 0.86, col), (r * 0.82, h, col), (1e-4, h * 1.04, col)]
+    pc = lathe_piece(name, mat, p, n, prof, W, segs, part=part, dirt=dirt, sharp=35, ref=ref)
+    if flutes and LOD == 0:
+        me = pc.ob.data
+        n_ = unit(n)
+        P = np.zeros(len(me.vertices) * 3)
+        me.vertices.foreach_get("co", P)
+        P = P.reshape(-1, 3)
+        rel = P - np.asarray(p)
+        hh = rel @ n_
+        rad = rel - np.outer(hh, n_)
+        rr = np.linalg.norm(rad, axis=1)
+        ref_ = unit(np.cross(n_, X if abs(n_ @ X) < 0.9 else Z))
+        ang = np.arctan2(rad @ np.cross(n_, ref_), rad @ ref_)
+        grip = (hh > h * 0.26) & (hh < h * 0.84) & (rr > r * 0.9)
+        f = 1.0 - 0.10 * (np.cos(ang * segs / 2) > 0) * grip
+        P = np.asarray(p) + np.outer(hh, n_) + rad * f[:, None]
+        me.vertices.foreach_set("co", P.reshape(-1))
+        me.update()
+    return pc
+
+
+def hose(name, pts, r, W, col, pitch=0.012, segs=8, part="suit", dirt="hard", mat="SuitRubber", n=None):
+    """A corrugated hose along a Catmull-Rom path through `pts`: ribs every
+    `pitch` metres (crests r, troughs 0.86 r), 10 sides; ends capped."""
+    P = np.array(bezier_path(pts, 200))
+    L = np.concatenate([[0.0], np.cumsum([np.linalg.norm(P[i + 1] - P[i]) for i in range(len(P) - 1)])])
+    step = pitch / 2 if LOD == 0 else pitch * 1.5
+    ns = max(4, int(L[-1] / step))
+    ts = np.linspace(0, L[-1], ns + 1)
+    cs = [np.array([np.interp(t, L, P[:, a]) for a in range(3)]) for t in ts]
+    rings = []
+    for i, c in enumerate(cs):
+        rr = r if (i % 2 == 0 or LOD > 0) else r * 0.86
+        if i in (0, ns):
+            rr = r * 1.05
+        rings.append(dict(c=c, r=rr, w=W, col=col))
+    V, F, UVc, Wl, C = loft(limb(rings, Z if n is None else n), lod(segs, 8, 6), cap0=True, cap1=True, tile=0.1)
+    return Piece(name, mat, V, F, Wl, C, UVc=UVc, part=part, dirt=dirt)
+
+
+def connector(name, p, n, r, L, W, col=None, band=None, part="suit"):
+    """A fluid / electrical quick-disconnect along `n` at `p`: a mounting
+    flange, the body, a knurled locking collar and the nose."""
+    c = col if col is not None else METAL
+    b = band if band is not None else METAL_D
+    prof = [(1e-4, 0.0, c), (r * 1.45, 0.0, c), (r * 1.45, L * 0.10, c), (r * 1.05, L * 0.16, c),
+            (r * 1.05, L * 0.35, c), (r * 1.05, L * 0.35, b), (r * 1.28, L * 0.40, b), (r * 1.28, L * 0.72, b),
+            (r * 0.9, L * 0.78, b), (r * 0.9, L * 0.78, c), (r * 0.9, L, c), (1e-4, L, c)]
+    return lathe_piece(name, "SuitMetal", p, n, prof, W, lod(12, 10, 8), part=part, dirt="metal", sharp=35)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
 # palette (albedo multipliers; the textures carry the grain)
 # ═════════════════════════════════════════════════════════════════════════════
 
-CLOTH = (0.80, 0.785, 0.745)      # ortho-fabric TMG, warm and a little tired
-CLOTH_SH = (0.70, 0.685, 0.645)   # the same in a fold
-SHELL = (0.86, 0.855, 0.83)       # painted composite (the PLSS cover, DCM, EVVA)
+CLOTH = (0.92, 0.915, 0.895)      # ortho-fabric TMG, a white a little tired
+CLOTH_SH = (0.87, 0.865, 0.845)   # the same in a fold (the baked AO does the rest)
+SHELL = (0.94, 0.94, 0.93)        # painted composite (the PLSS cover, DCM, EVVA)
 SHELL_G = (0.55, 0.555, 0.55)     # grey hardware
 SHELL_D = (0.17, 0.17, 0.18)      # dark hardware, rubber
-ORANGE = (0.92, 0.47, 0.16)       # signal orange, used three times
-METAL = (0.80, 0.80, 0.78)        # anodised bearings
-METAL_D = (0.42, 0.43, 0.45)
-GLOVE = (0.66, 0.655, 0.64)       # the glove's TMG, greyer than the suit
+ORANGE = (0.86, 0.42, 0.14)       # signal orange, used three times
+METAL = (0.60, 0.61, 0.62)        # hard-anodised bearings, a matte grey
+METAL_D = (0.33, 0.34, 0.36)
+BLUE_A = (0.16, 0.26, 0.48)       # the left wrist disconnect's anodising
+RED_A = (0.52, 0.15, 0.12)        # the right's
+RUBBER = (0.15, 0.15, 0.155)      # RTV grip, sole rubber
+GLOVE = (0.78, 0.775, 0.76)       # the glove's TMG, greyer than the suit
 GLOVE_D = (0.52, 0.515, 0.50)     # under the gauntlet's lip
 PALM = (0.16, 0.16, 0.17)         # RTV grip
 SOLE = (0.14, 0.14, 0.145)
-BOOT_W = (0.74, 0.73, 0.70)       # the boot's TMG, greyer and more used than the suit's
+BOOT_W = (0.80, 0.79, 0.76)       # the boot's TMG, greyer and more used than the suit's
 BOOT_RUB = (0.36, 0.36, 0.37)     # rubberised toe cap and heel counter
 SKIN = (0.70, 0.52, 0.42)
 CAP_W = (0.86, 0.85, 0.82)
@@ -547,7 +779,8 @@ def build(rig):
         C[(P[:, 1] > neck_top - 0.012 * k) & (rr < 0.115 * k)] = SHELL_D
         return C
     hut = Piece("HUT", "SuitShell", V, F, {"Back": 1}, hut_col, tile=0.5, dirt="hut",
-                mods=[("remesh", 0.0055 * k), ("smooth", 0.6, 6), ("decimate", 820)], sharp=44)
+                mods=[("remesh", lod(0.0042, 0.0055, 0.007) * k), ("smooth", 0.6, 6), ("decimate", lod(3200, 1500, 800))],
+                sharp=44)
     tree = bvh(hut)
 
     # The body seal closure: a metal band round the lower edge.
@@ -572,43 +805,108 @@ def build(rig):
         ring_piece("Scye." + side, "SuitMetal", P + n * (d + 0.009 * k), n, SCYE_BORE * k, 0.112 * k, 0.020 * k,
                    "Back", METAL, segs=18, band=METAL_D)
 
+    # ── HUT hardware: the scye housings' screws, the neck ring's latches ──
+    for side, (P, n, d) in scye.items():
+        e1 = unit(np.cross(n, Z))
+        e2 = np.cross(n, e1)
+        for i in range(8):
+            a = TAU * (i + 0.5) / 8
+            bp = P + n * d + (e1 * math.cos(a) + e2 * math.sin(a)) * 0.1175 * k
+            bolt("ScyeBolt", bp, n, 0.0032 * k, 0.0035 * k, {"Back": 1})
+    # the helmet's latches on the neck ring: three housings round it (front
+    # two and the back), each with its lever
+    ne1 = X
+    ne2 = np.cross(nax, ne1)
+    for a_deg in (55, 125, 270):
+        a = math.radians(a_deg)
+        rdir = ne1 * math.cos(a) + ne2 * math.sin(a)
+        Ml = np.column_stack([np.cross(nax, rdir), nax, rdir])
+        lc = nc + nax * 0.010 * k + rdir * 0.140 * k
+        rbox("NeckLatch", "SuitMetal", lc, (0.028 * k, 0.022 * k, 0.014 * k), Ml, col=METAL_D, r=0.0025 * k,
+             dirt="metal", tile=0.25)
+        if LOD < 2:
+            rbox("NeckLatchLever", "SuitShell", lc + rdir * 0.009 * k + nax * 0.002 * k,
+                 (0.020 * k, 0.006 * k, 0.006 * k), Ml, col=ORANGE if a_deg == 270 else SHELL_D, r=0.0015 * k)
+
     # ── DCM: the display and control module on the lower chest ─────────────
+    # A moulded housing with rounded edges; its control face tipped up to the
+    # eyes carries the display behind a raised bezel, four rotary controls
+    # (fan, water, and the two comm volumes), three toggles behind a guard
+    # (power, comm mode, the alarm test), and at its right end the orange
+    # purge valve; the SCU's multiple connector on its right side; two
+    # brackets back to the HUT and two short corrugated umbilicals from its
+    # underside into the HUT's front ports.
     dy = hut_y0 + 0.125 * k
     hit, _ = surf_point(tree, (x0, dy, zh + 0.5), (0, 0, -1), (x0, dy, zh + 0.15 * k))
     dz = hit[2]
-    tiltd = math.radians(-16)                   # the control face tips up to the eyes
+    tiltd = math.radians(-16)
     Md = np.array([[1, 0, 0], [0, math.cos(tiltd), -math.sin(tiltd)], [0, math.sin(tiltd), math.cos(tiltd)]])
-    dc = np.array([x0, dy, dz + 0.036 * k])
-    V, F = box_mesh(dc, (0.240 * k, 0.100 * k, 0.090 * k), Md)
-    Piece("DCM", "SuitShell", V, F, {"Back": 1}, SHELL_G, tile=0.5, dirt="hard",
-          mods=[("bevel", 0.012 * k, 2, 35)], sharp=40)
-    # its mounting brackets back to the HUT
-    for sx in (-1, 1):
-        V, F = box_mesh((x0 + sx * 0.085 * k, dy + 0.01 * k, dz + 0.004 * k), (0.03 * k, 0.07 * k, 0.04 * k))
-        Piece("DCMbracket", "SuitShell", V, F, {"Back": 1}, SHELL_D, tile=0.5, dirt="hard", smooth=False, sharp=30)
+    dc = np.array([x0, dy, dz + 0.042 * k])
+    DW, DH, DD = 0.250 * k, 0.092 * k, 0.086 * k
+    rbox("DCM", "SuitShell", dc, (DW, DH, DD), Md, col=(0.80, 0.80, 0.78), r=0.011 * k, seg=3, dirt="hard",
+         angle=35)
     up_d = Md @ Y
     fw_d = Md @ Z
-    top_c = dc + up_d * 0.050 * k
-    # knobs on the control face: fan, water, comm volume ×2, and the purge
-    # valve (the accent)
-    for i, (dx, r, h, col) in enumerate(((-0.085, 0.013, 0.014, METAL_D), (-0.045, 0.011, 0.012, METAL_D),
-                                          (0.005, 0.009, 0.016, SHELL_D), (0.035, 0.009, 0.016, SHELL_D),
-                                          (0.085, 0.015, 0.020, ORANGE))):
-        p0 = top_c + X * dx * k - fw_d * 0.018 * k
-        V, F = cyl_mesh(p0, p0 + up_d * h * k, r * k, segs=8)
-        Piece("DCMknob", "SuitShell", V, F, {"Back": 1}, col, tile=0.2, dirt="hard", smooth=False, sharp=30)
-    # the display window on the front edge of the control face
+    top_c = dc + up_d * DH / 2
+    # the display: a dark window in a raised bezel on the face's front half
     dw, dh = 0.105 * k, 0.034 * k
-    dpc = top_c + fw_d * 0.030 * k + up_d * 0.0008
+    dpc = top_c + fw_d * 0.018 * k
+    for (ox, oz, sx, sz) in ((0, dh / 2 + 0.004 * k, dw + 0.016 * k, 0.008 * k),
+                             (0, -dh / 2 - 0.004 * k, dw + 0.016 * k, 0.008 * k),
+                             (dw / 2 + 0.004 * k, 0, 0.008 * k, dh), (-dw / 2 - 0.004 * k, 0, 0.008 * k, dh)):
+        rbox("DCMbezel", "SuitShell", dpc + X * ox + fw_d * oz + up_d * 0.002 * k, (sx, 0.005 * k, sz), Md,
+             col=SHELL_D, r=0.0012 * k, seg=1)
 
     def disp(su, tv):
-        return dpc + X * (-dw / 2 + dw * su) + fw_d * (dh / 2 - dh * tv)
+        return dpc + up_d * 0.0012 * k + X * (-dw / 2 + dw * su) + fw_d * (dh / 2 - dh * tv)
     decal_piece("DCMdisplay", "display", disp, up_d, "Back")
-    # the umbilical connectors on the DCM's sides
+    # the rotary controls along the back half of the face
+    kb = top_c - fw_d * 0.022 * k
+    for i, (dx, r, h, col) in enumerate(((-0.098, 0.0125, 0.016, SHELL_D), (-0.064, 0.0110, 0.014, SHELL_D),
+                                          (0.050, 0.0090, 0.013, SHELL_D), (0.074, 0.0090, 0.013, SHELL_D))):
+        knob("DCMknob", kb + X * dx * k, up_d, r * k, h * k, {"Back": 1}, col)
+    # the toggles behind their guard
+    if LOD < 2:
+        for i, dx in enumerate((-0.022, 0.0, 0.022)):
+            p0 = kb + X * dx * k
+            bolt("DCMtoggle", p0, up_d, 0.0055 * k, 0.004 * k, {"Back": 1}, col=METAL)
+            tip = p0 + up_d * 0.016 * k + fw_d * (0.004 if i != 1 else -0.004) * k
+            V, F = cyl_mesh(p0 + up_d * 0.003 * k, tip, 0.0018 * k, segs=8, r1=0.0024 * k)
+            Piece("DCMlever", "SuitMetal", V, F, {"Back": 1}, METAL, tile=0.1, dirt="metal", sharp=40)
+        gpts = [kb + X * -0.036 * k - fw_d * 0.004 * k, kb + X * -0.034 * k - fw_d * 0.004 * k + up_d * 0.022 * k,
+                kb + X * 0.034 * k - fw_d * 0.004 * k + up_d * 0.022 * k, kb + X * 0.036 * k - fw_d * 0.004 * k]
+        gr = [dict(c=q, r=0.0022 * k, w={"Back": 1}, col=METAL) for q in bezier_path(gpts, 12)]
+        V, F, UVc, W, C = loft(limb(gr, fw_d), 6, cap0=True, cap1=True, tile=0.1)
+        Piece("DCMguard", "SuitMetal", V, F, W, C, UVc=UVc, dirt="metal")
+    # the purge valve: the one orange control, big enough for a glove
+    knob("PurgeValve", top_c + X * 0.105 * k + fw_d * 0.004 * k, up_d, 0.0165 * k, 0.020 * k, {"Back": 1}, ORANGE)
+    # the SCU's multiple connector on the right side, and the left side's
+    # comm connector
+    connector("SCUconnector", dc - X * DW / 2 + up_d * 0.004 * k, -X, 0.017 * k, 0.034 * k, {"Back": 1})
+    connector("CommConnector", dc + X * DW / 2 + up_d * 0.008 * k, X, 0.010 * k, 0.022 * k, {"Back": 1},
+              band=(0.22, 0.24, 0.27))
+    # the brackets back to the HUT, and their screws
     for sx in (-1, 1):
-        p0 = dc + X * sx * 0.12 * k - up_d * 0.012 * k
-        V, F = cyl_mesh(p0, p0 + X * sx * 0.03 * k, 0.019 * k, segs=12)
-        Piece("DCMport", "SuitMetal", V, F, {"Back": 1}, METAL_D, tile=0.2, dirt="metal", smooth=False, sharp=30)
+        bc = np.array([x0 + sx * 0.082 * k, dy - 0.006 * k, (dz + dc[2] - DD / 2) / 2 + 0.002 * k])
+        blen = (dc[2] - DD / 2) - dz + 0.010 * k
+        rbox("DCMbracket", "SuitMetal", bc, (0.034 * k, 0.060 * k, max(blen, 0.01 * k)), None, col=METAL_D,
+             r=0.003 * k, dirt="metal", tile=0.25)
+        for oy in (-0.018, 0.018):
+            bolt("DCMbolt", np.array([bc[0], bc[1] + oy * k, dz + 0.001 * k]) + Z * 0.0, Z, 0.0028 * k, 0.003 * k,
+                 {"Back": 1})
+    # the two umbilicals: out of the underside's corners, a slack loop down,
+    # and into the HUT's front ports (the cooling water, the vent loop)
+    for sx in (-1, 1):
+        a = dc + X * sx * 0.088 * k - up_d * DH / 2 + fw_d * 0.010 * k
+        portp, nrm = surf_point(tree, (x0 + sx * 0.112 * k, hut_y0 + 0.040 * k, zh + 0.5), (0, 0, -1),
+                                (x0 + sx * 0.112 * k, hut_y0 + 0.040 * k, zh + 0.15 * k))
+        pts = [a, a - up_d * 0.030 * k + X * sx * 0.012 * k, portp + nrm * 0.050 * k + Y * -0.035 * k + X * sx * 0.02 * k,
+               portp + nrm * 0.030 * k, portp + nrm * 0.004 * k]
+        hose("Umbilical", pts, 0.0105 * k, {"Back": 1}, RUBBER, pitch=0.012 * k)
+        lathe_piece("UmbilicalPort", "SuitMetal", portp - nrm * 0.004 * k, nrm,
+                    [(0.010 * k, 0.0, METAL), (0.018 * k, 0.0, METAL), (0.018 * k, 0.006 * k, METAL),
+                     (0.014 * k, 0.010 * k, METAL), (0.010 * k, 0.010 * k, METAL)], {"Back": 1}, lod(14, 10, 8))
+        connector("UmbilicalFitting", a + up_d * 0.004 * k, -up_d, 0.011 * k, 0.016 * k, {"Back": 1})
 
     # the name tape on the right breast, sewn on above the DCM
     pw_, ph_ = 0.115 * k, 0.028 * k
@@ -621,22 +919,16 @@ def build(rig):
         return p + Z * 0.0018
     decal_piece("Placard", "placard", placard, Z, "Back", nu=4, nv=1)
 
-    # ── the cooling hose: from the DCM's right port, a slack loop down and
-    # round to the HUT's side, where it goes in through a grommet (A7L-style
-    # plumbing); all on Back, so the waist never drags it
-    hp0 = dc + X * -0.15 * k - up_d * 0.012 * k
-    hp1, nrm = surf_point(tree, (x0 - 0.5, hut_y0 + 0.05 * k, zh + 0.03 * k), (1, 0, 0),
-                          (x0 - 0.172 * k, hut_y0 + 0.05 * k, zh + 0.03 * k))
-    # a cubic: out of the port, sagging, into the grommet along its normal
-    c0, c3 = hp0, hp1
-    c1 = c0 + np.array([-0.06, -0.09, 0.0]) * k
-    c2 = c3 + nrm * 0.07 * k + np.array([0, -0.06, 0]) * k
-    pts = [(1 - t) ** 3 * c0 + 3 * (1 - t) ** 2 * t * c1 + 3 * (1 - t) * t * t * c2 + t ** 3 * c3
-           for t in np.linspace(0, 1, 11)]
-    hrings = [dict(c=p, r=0.0115 * k, w={"Back": 1}, col=SHELL_D) for p in pts]
-    V, F, UVc, W, C = loft(limb(hrings, Z), 6, cap0=True, cap1=True, tile=0.1)
-    Piece("Hose", "SuitShell", V, F, W, C, UVc=UVc, dirt="hard")
-    ring_piece("Grommet", "SuitMetal", hp1, nrm, 0.010 * k, 0.020 * k, 0.010 * k, "Back", METAL_D, segs=10)
+    # the purge hose's stub from the SCU connector, looping down to a clip low
+    # on the HUT's front, right of centre (on Back: the waist never drags it;
+    # in front: clear of the arm, which hangs and swings at the side)
+    sc0 = dc - X * (DW / 2 + 0.034 * k) + up_d * 0.004 * k
+    hp1, nrm = surf_point(tree, (x0 - 0.158 * k, hut_y0 + 0.018 * k, zh + 0.5), (0, 0, -1),
+                          (x0 - 0.158 * k, hut_y0 + 0.018 * k, zh + 0.15 * k))
+    hose("SCUhose", [sc0, sc0 - X * 0.024 * k - Y * 0.022 * k + Z * 0.006 * k,
+                     hp1 + nrm * 0.040 * k + Y * 0.012 * k - X * 0.006 * k, hp1 + nrm * 0.012 * k],
+         0.0115 * k, {"Back": 1}, RUBBER, pitch=0.013 * k)
+    connector("SCUclip", hp1, nrm, 0.012 * k, 0.014 * k, {"Back": 1})
 
     # ── the WAIST and the BRIEF are the top of the lower body's one surface
     # (lower_body, after the arms) ─────────────────────────────────────────
@@ -644,65 +936,100 @@ def build(rig):
     crotch = J("Thigh.Left")[1] - 0.090 * k
 
     # ── PLSS: the pack, rigid on Back, high on the back ────────────────────
+    # A moulded composite case (its corners generously radiused, as a
+    # moulding is) on the HUT's flat back; the top housing rolls over toward
+    # the helmet; the SOP is the narrower step under it. On the back face:
+    # the access panel on its screws with the serial plate, two stiffening
+    # ribs, the vent grille over the SOP, the grab handles (orange) on their
+    # blocks, the antenna and the beacon on top, bumpers at the bottom
+    # corners; on the SOP its actuator, its gauge and the fill port.
     hit, _ = surf_point(tree, (x0, hut_y0 + 0.22 * k, zh - 0.5), (0, 0, 1), (x0, 0, zh - 0.14 * k))
     back_z = hit[2]
     Wp, Hp, Dp = 0.500 * k, 0.560 * k, 0.175 * k
     top = neck_top + 0.020 * k
-    pz = back_z - 0.012 * k - Dp / 2
-    pc = np.array([x0, top - Hp / 2, pz])
-    # Sections up the pack (plan superellipses): the SOP at the bottom, a
-    # step, the case, and the top housing that is deeper than the case and
-    # rolls over to the front.
     zf = back_z - 0.010 * k                       # the pack's front face, on the HUT
     yb = top - Hp - 0.11 * k
     SEC = [  # y over the bottom, half-width, depth, sq
-        (0.000, 0.205, 0.150, 4.0), (0.010, 0.222, 0.180, 4.0), (0.100, 0.226, 0.186, 4.0),
-        (0.112, 0.236, 0.168, 4.5), (0.135, 0.250, 0.176, 5.0), (0.380, 0.252, 0.178, 5.0),
+        (0.000, 0.200, 0.140, 3.6), (0.006, 0.214, 0.168, 3.8), (0.020, 0.222, 0.180, 4.0), (0.090, 0.226, 0.186, 4.0),
+        (0.104, 0.229, 0.180, 4.2), (0.112, 0.238, 0.170, 4.5), (0.130, 0.250, 0.176, 5.0), (0.380, 0.252, 0.178, 5.0),
         (0.520, 0.250, 0.196, 4.5), (0.600, 0.244, 0.205, 3.6), (0.640, 0.228, 0.190, 3.0),
         (0.662, 0.196, 0.150, 2.6), (0.670, 0.150, 0.100, 2.4)]
     prings = []
     for y, hw, dp, sq in SEC:
         prings.append(dict(c=(x0, yb + y * k, zf - dp / 2 * k), e1=X, e2=Z, r1=hw * k, r2=dp / 2 * k, sq=sq,
-                           w={"Back": 1}, col=SHELL if y > 0.105 else (0.78, 0.775, 0.75)))
-    V, F, UVc, W, C = loft(prings, 24, cap0=True, cap1=True, tile=0.5)
+                           w={"Back": 1}, col=SHELL if y > 0.105 else (0.80, 0.795, 0.77)))
+    V, F, UVc, W, C = loft(prings, lod(40, 28, 20), cap0=True, cap1=True, tile=0.5)
     pl = Piece("PLSS", "SuitShell", V, F, W, C, UVc=UVc, dirt="pack", sharp=50)
     Dp = 0.178 * k
     pz = zf - Dp / 2
     pc = np.array([x0, yb + 0.11 * k + Hp / 2, pz])
     ptree = bvh(pl)
-    pb = pz - Dp / 2                              # the pack's back face (−z)
-    # the TMG cover's lacing seam round the case, a dark line of hardware
-    for sy in (Hp / 2 - 0.15 * k, -Hp / 2 + 0.05 * k):
-        V, F = box_mesh(pc + np.array([0, sy, -Dp / 2 - 0.002 * k]), (Wp - 0.06 * k, 0.012 * k, 0.012 * k))
-        Piece("PLSSseam", "SuitShell", V, F, {"Back": 1}, SHELL_G, tile=0.5, dirt="hard", smooth=False, sharp=30)
-    # the SOP's actuator and gauge, and the pack's lower access plate
-    sop_c = np.array([x0, yb + 0.055 * k, zf - 0.186 * k])
-    for i, dx in enumerate((-0.12, 0.12)):
-        p0 = sop_c + X * dx * k
-        V, F = cyl_mesh(p0, p0 - Z * 0.022 * k, 0.024 * k if i == 0 else 0.018 * k, segs=14)
-        Piece("SOPknob", "SuitShell", V, F, {"Back": 1}, METAL_D if i == 0 else SHELL_D, tile=0.2, dirt="hard",
-              smooth=False, sharp=30)
-    V, F = box_mesh(sop_c + np.array([0, 0.005 * k, -0.004 * k]), (0.14 * k, 0.06 * k, 0.012 * k))
-    Piece("SOPplate", "SuitShell", V, F, {"Back": 1}, SHELL_G, tile=0.5, dirt="hard", mods=[("bevel", 0.003 * k, 1)],
-          sharp=30)
-    # the radio antenna on the top left
-    at = pc + np.array([0.17 * k, Hp / 2 - 0.02 * k, -0.03 * k])
-    hit, _ = surf_point(ptree, at + Y * 0.3, (0, -1, 0), at)
-    V, F = cyl_mesh(hit - Y * 0.01 * k, hit + Y * 0.06 * k, 0.010 * k, segs=10, r1=0.006 * k)
-    Piece("Antenna", "SuitShell", V, F, {"Back": 1}, SHELL_D, tile=0.2, dirt="hard")
-    # the plate
+
+    def back_at(x, y):
+        """The pack's back surface at (x, y), and its normal."""
+        p, nn = surf_point(ptree, (x, y, pz - 0.6), (0, 0, 1), (x, y, pz - Dp / 2))
+        return p, unit(nn)
+    pb = pz - Dp / 2
+    Mb = np.column_stack([-X, Y, -Z])               # a frame facing out of the back
+    # the access panel on its screws
+    apc, _ = back_at(x0, pc[1] + 0.035 * k)
+    rbox("PLSSpanel", "SuitShell", apc - Z * 0.003 * k, (0.330 * k, 0.300 * k, 0.012 * k), Mb, col=(0.83, 0.83, 0.81),
+         r=0.005 * k, seg=2)
+    for i in range(10):
+        bx_ = (-0.150, -0.050, 0.050, 0.150, 0.150, 0.150, 0.050, -0.050, -0.150, -0.150)[i]
+        by_ = (0.135, 0.135, 0.135, 0.135, 0.0, -0.135, -0.135, -0.135, -0.135, 0.0)[i]
+        bolt("PLSSbolt", apc + np.array([bx_ * k, by_ * k, -0.0092 * k]), -Z, 0.0034 * k, 0.003 * k, {"Back": 1})
     decal_piece("PLSSplate", "plss",
-                lambda su, tv: np.array([x0 + 0.11 * k - 0.22 * k * su, pc[1] + 0.08 * k - 0.11 * k * tv,
-                                         pb - 0.0015]), -Z, "Back")
-    # two grab handles on the sides (orange: the second accent)
+                lambda su, tv: np.array([x0 + 0.11 * k - 0.22 * k * su, apc[1] + 0.065 * k - 0.11 * k * tv,
+                                         apc[2] - 0.0098 * k]), -Z, "Back")
+    # stiffening ribs down the sides of the back face
+    for sx in (-1, 1):
+        rp, _ = back_at(x0 + sx * 0.200 * k, pc[1] + 0.02 * k)
+        rbox("PLSSrib", "SuitShell", rp - Z * 0.002 * k, (0.016 * k, 0.400 * k, 0.012 * k), Mb, col=SHELL, r=0.004 * k)
+    # the vent grille over the SOP
+    gp, _ = back_at(x0, yb + 0.150 * k)
+    rbox("PLSSgrilleFrame", "SuitShell", gp - Z * 0.001 * k, (0.250 * k, 0.062 * k, 0.010 * k), Mb, col=SHELL_D,
+         r=0.003 * k)
+    if LOD < 2:
+        for i in range(5):
+            rbox("PLSSslat", "SuitShell", gp + np.array([0, (-0.022 + i * 0.011) * k, -0.006 * k]),
+                 (0.232 * k, 0.004 * k, 0.006 * k), Mb, col=SHELL_G, r=0.0012 * k, seg=1)
+    # grab handles on their blocks (orange: the second accent)
     for sx in (-1, 1):
         hx = x0 + sx * (Wp / 2 + 0.028 * k)
-        pts = [np.array([x0 + sx * (Wp / 2 - 0.004 * k), pc[1] + 0.10 * k, pz - 0.02 * k]),
-               np.array([hx, pc[1] + 0.09 * k, pz - 0.02 * k]), np.array([hx, pc[1] - 0.05 * k, pz - 0.02 * k]),
-               np.array([x0 + sx * (Wp / 2 - 0.004 * k), pc[1] - 0.06 * k, pz - 0.02 * k])]
-        hr = [dict(c=p, r=0.0085 * k, w={"Back": 1}, col=ORANGE) for p in bezier_path(pts, 8)]
-        V, F, UVc, W, C = loft(limb(hr, Z), 6, cap0=True, cap1=True, tile=0.1)
+        yt, ybm = pc[1] + 0.10 * k, pc[1] - 0.06 * k
+        pts = [np.array([x0 + sx * (Wp / 2 - 0.004 * k), yt, pz - 0.02 * k]),
+               np.array([hx, yt - 0.01 * k, pz - 0.02 * k]), np.array([hx, ybm + 0.01 * k, pz - 0.02 * k]),
+               np.array([x0 + sx * (Wp / 2 - 0.004 * k), ybm, pz - 0.02 * k])]
+        hr = [dict(c=q, r=0.0085 * k, w={"Back": 1}, col=ORANGE) for q in bezier_path(pts, 14)]
+        V, F, UVc, W, C = loft(limb(hr, Z), lod(10, 8, 6), cap0=True, cap1=True, tile=0.1)
         Piece("PLSShandle", "SuitShell", V, F, W, C, UVc=UVc, dirt="hard")
+        for yy_ in (yt, ybm):
+            rbox("PLSShandleBlock", "SuitShell", np.array([x0 + sx * (Wp / 2 + 0.002 * k), yy_, pz - 0.02 * k]),
+                 (0.022 * k, 0.026 * k, 0.030 * k), None, col=SHELL_G, r=0.004 * k)
+    # the antenna, the beacon
+    at = pc + np.array([0.17 * k, Hp / 2 - 0.02 * k, -0.03 * k])
+    hit, _ = surf_point(ptree, at + Y * 0.3, (0, -1, 0), at)
+    connector("AntennaBase", hit - Y * 0.004 * k, Y, 0.009 * k, 0.014 * k, {"Back": 1}, col=SHELL_G)
+    V, F = cyl_mesh(hit + Y * 0.010 * k, hit + Y * 0.075 * k, 0.0055 * k, segs=lod(10, 8, 6), r1=0.0035 * k)
+    Piece("Antenna", "SuitRubber", V, F, {"Back": 1}, RUBBER, tile=0.2, dirt="hard")
+    bt = pc + np.array([-0.15 * k, Hp / 2 - 0.02 * k, -0.04 * k])
+    hit, _ = surf_point(ptree, bt + Y * 0.3, (0, -1, 0), bt)
+    knob("Beacon", hit - Y * 0.003 * k, Y, 0.016 * k, 0.018 * k, {"Back": 1}, (0.85, 0.42, 0.14), flutes=False)
+    # bumpers at the bottom corners
+    for sx in (-1, 1):
+        rbox("PLSSbumper", "SuitRubber", np.array([x0 + sx * 0.205 * k, yb + 0.012 * k, zf - 0.155 * k]),
+             (0.040 * k, 0.030 * k, 0.050 * k), None, col=RUBBER, r=0.008 * k, seg=2, dirt="hard", tile=0.25)
+    # the SOP: actuator, gauge, fill port
+    sop_y = yb + 0.055 * k
+    sp, sn = surf_point(ptree, (x0 + 0.12 * k, sop_y, pz - 0.6), (0, 0, 1), (x0, sop_y, zf - 0.186 * k))
+    knob("SOPactuator", sp - Z * 0.001, unit(sn), 0.024 * k, 0.026 * k, {"Back": 1}, METAL_D, mat="SuitMetal")
+    gp2, gn = surf_point(ptree, (x0 - 0.12 * k, sop_y, pz - 0.6), (0, 0, 1), (x0, sop_y, zf - 0.186 * k))
+    gprof = [(1e-4, 0.0, SHELL_D), (0.024 * k, 0.0, SHELL_D), (0.024 * k, 0.012 * k, SHELL_D),
+             (0.021 * k, 0.014 * k, SHELL_D), (0.021 * k, 0.014 * k, (0.80, 0.80, 0.76)), (1e-4, 0.0135 * k, (0.80, 0.80, 0.76))]
+    lathe_piece("SOPgauge", "SuitShell", gp2, unit(gn), gprof, {"Back": 1}, lod(24, 16, 10), dirt="hard")
+    fp_, fn = surf_point(ptree, (x0, sop_y - 0.01 * k, pz - 0.6), (0, 0, 1), (x0, sop_y, zf - 0.186 * k))
+    connector("SOPfill", fp_, unit(fn), 0.008 * k, 0.018 * k, {"Back": 1})
 
     # ── ARMS ──────────────────────────────────────────────────────────────
     for side, s in (("Left", 1.0), ("Right", -1.0)):
@@ -733,10 +1060,11 @@ REG = {
     "plss": (320 / 512, 64 / 256, 512 / 512, 160 / 256),
     "flag": (384 / 512, 0 / 256, 512 / 512, 64 / 256),
     "cuff": (0 / 512, 128 / 256, 128 / 512, 256 / 256),
+    "full": (0.0, 0.0, 1.0, 1.0),       # a material of its own (the emblem patch)
 }
 
 
-def decal_piece(name, region, pos, normal, bone, nu=1, nv=1, part="suit"):
+def decal_piece(name, region, pos, normal, bone, nu=1, nv=1, part="suit", mat="SuitDecal"):
     u0, v0, u1, v1 = REG[region]
     V, UVv = [], []
     for j in range(nv + 1):
@@ -755,7 +1083,7 @@ def decal_piece(name, region, pos, normal, bone, nu=1, nv=1, part="suit"):
                 f = tuple(reversed(f))
             F.append(f)
             UVc.append([UVv[q] for q in f])
-    return Piece(name, "SuitDecal", V, F, bone if isinstance(bone, dict) else {bone: 1}, (1, 1, 1), UVc=UVc,
+    return Piece(name, mat, V, F, bone if isinstance(bone, dict) else {bone: 1}, (1, 1, 1), UVc=UVc,
                  part=part, dirt="decal")
 
 
@@ -853,7 +1181,10 @@ class Cage:
             u0, u1 = i / n * ut, (i + 1) / n * ut
             self.face((ra[i], ra[j], rb[j], rb[i]), [(u0, va), (u1, va), (u1, vb), (u0, vb)])
 
-    def piece(self, name, mat, dirt, part="suit", subsurf=0):
+    def piece(self, name, mat, dirt, part="suit", subsurf=0, mats=None, face_mat=None, disp=None):
+        """The cage as a Piece, subdivided `subsurf` levels. With `mats`, each
+        face's material index is face_mat(its vertices' colours); with
+        `disp`, the folds are laid on after the subdivision."""
         UVc = []
         for f, uv in zip(self.F, self.UV):
             if uv is None:
@@ -864,8 +1195,13 @@ class Cage:
                 q = [a for a in range(3) if a != ax]
                 uv = [(p[q[0]] / self.tile, p[q[1]] / self.tile) for p in P]
             UVc.append(uv)
+        fmat = None
+        if mats:
+            fmat = [face_mat([self.C[i] for i in f]) for f in self.F]
         pc = Piece(name, mat, np.array(self.P), self.F, self.G, np.array(self.C, float), UVc=UVc, part=part,
-                   dirt=dirt, mods=[("recalc",)] + ([("subsurf", subsurf)] if subsurf else []))
+                   dirt=dirt, mods=[("recalc",)] + ([("subsurf", subsurf)] if subsurf else []), mats=mats, fmat=fmat)
+        if disp is not None:
+            pc.displace(disp)
         return pc
 
 
@@ -1007,7 +1343,7 @@ def arm(rig, D, Ja, J, side, s, k, sc):
     ex_s = hfw
     # a shoulder convolute: concentric pleats round the arm's axis, so the
     # dome the bearing shows when the arm is high reads as gathered cloth
-    for i, th in enumerate((165, 142, 124, 106, 90, 74, 58, 46)):
+    for i, th in enumerate((165, 124, 106, 90, 74, 58, 46)):
         a = math.radians(th)
         pl = 1.0 if i % 2 == 0 else 0.90                  # ridge, fold
         R_ = Rb * (pl if th < 160 else 1.0)
@@ -1149,8 +1485,10 @@ def arm(rig, D, Ja, J, side, s, k, sc):
             pts = []
             for qi, (sx, sy) in enumerate(((1, 1), (-1, 1), (-1, -1), (1, -1))):
                 pts.append(cur + lat_ax * sx * hw_ * hk * 1.06 + fup * (sy * hh_ * hk * 1.06 + (bump * hk if sy > 0 else 0)))
-            dark = si >= 4
-            ids = cg.ring(pts, g, lambda q, dark=dark: PALM if (dark and q >= 2) else GLOVE)
+            # the RTV grip: the finger's palm side from the knuckle out, and a
+            # cap over the whole fingertip (the Phase VI glove's)
+            cap = si >= len(steps) - 3
+            ids = cg.ring(pts, g, lambda q, cap=cap, si=si: PALM if (cap or (si >= 1 and q >= 2)) else GLOVE)
             for q in range(4):
                 cg.face((prev_i[q], prev_i[(q + 1) % 4], ids[(q + 1) % 4], ids[q]))
             prev_i = ids
@@ -1174,17 +1512,77 @@ def arm(rig, D, Ja, J, side, s, k, sc):
     prev_pts, prev_c, prev_i = [cg.P[q] for q in q0], base, q0
     for ti, (c, t, rx, ry) in enumerate(th_rings):
         pts = follow_ring(prev_pts, prev_c, c, t, rx * hk * CAGE, ry * hk * CAGE, tex)
-        dark = ti >= 3
+        dark = ti >= 2
+        cap = ti >= len(th_rings) - 2
 
         def tcol(q, pts=pts, c=c, dark=dark):
-            return PALM if (dark and (pts[q] - c) @ (-hup + hfw * 0.3) > 0.0) else GLOVE
+            return PALM if (cap or (dark and (pts[q] - c) @ (-hup + hfw * 0.3) > 0.0)) else GLOVE
         ids = cg.ring(pts, {"_th": 1.0, "_ko": 0.5, "_po": 0.5}, tcol)
         for q in range(6):
             cg.face((prev_i[q], prev_i[(q + 1) % 6], ids[(q + 1) % 6], ids[q]))
         prev_pts, prev_c, prev_i = pts, c, ids
     cg.face(prev_i)
 
-    pc = cg.piece("Arm." + side, "SuitFabric", "arm", subsurf=1)
+    # ── the cloth's folds, laid on the subdivided surface ──────────────────
+    # A pressurised sleeve is not a smooth tube: it bunches in rings above
+    # the wrist disconnect, folds across the crook of the elbow (sharp on the
+    # inside, where it is compressed; barely on the outside, where it is
+    # pulled), drapes in long shallow diagonals down the upper arm and the
+    # forearm, and is never quite round. The glove (past the wrist) keeps
+    # only a little of it; the fingers none.
+    def arm_disp(Pv, Nv, G):
+        rel_h = (Pv - H) @ axf
+        sleeve = 1.0 - smooth01(-0.080 * k, -0.058 * k, rel_h)           # 1 up the sleeve, 0 at the disconnect
+        glove = smooth01(-0.050 * k, -0.035 * k, rel_h) * (1 - smooth01(0.010 * k, 0.030 * k, rel_h))
+        # around each segment: the angle from the back of the hand
+        d = np.zeros(len(Pv))
+        # (1) the cloth's own unevenness, everywhere on the sleeve
+        d += 0.0022 * k * fbm(Pv, 11 + int(s > 0), 9.0 / k) * sleeve
+        # (2) the elbow: compression folds on the crease side
+        se = (Pv - E) @ nb_e
+        rad = Pv - E - np.outer(se, nb_e)
+        rn = np.maximum(np.linalg.norm(rad, axis=1), 1e-9)
+        cr = (rad @ crease_e) / rn
+        env = np.exp(-(se / (0.055 * k)) ** 2) * smooth01(-0.35, 0.75, cr)
+        ph = 2 * math.pi * se / (0.021 * k) + 2.5 * fbm(Pv, 21, 14.0 / k)
+        d += 0.0058 * k * env * np.sin(ph) * sleeve
+        # (3) diagonal drape folds down the upper arm and the forearm
+        for c0, ax, La, Lb, sd in ((S, axu, 0.10, L1 / k - 0.06, 31), (E, axf, 0.05, L2 / k - 0.09, 41)):
+            t = (Pv - c0) @ ax
+            r_ = Pv - c0 - np.outer(t, ax)
+            ang = np.arctan2(r_ @ np.cross(ax, hup), r_ @ hup)
+            band = smooth01(La * k, La * k + 0.03 * k, t) * (1 - smooth01(Lb * k - 0.03 * k, Lb * k, t))
+            wob = fbm(Pv, sd, 8.0 / k)
+            dr = np.sin(2 * math.pi * t / (0.085 * k) + 1.6 * ang + 3.0 * wob)
+            d += 0.0030 * k * band * np.sign(dr) * np.abs(dr) ** 1.6 * (0.5 + wob) * sleeve
+        # (4) the cloth bunched in rings above the wrist disconnect
+        bun = smooth01(-0.180 * k, -0.120 * k, rel_h) * (1 - smooth01(-0.082 * k, -0.066 * k, rel_h))
+        ph = 2 * math.pi * rel_h / (0.019 * k) + 2.2 * fbm(Pv, 51, 18.0 / k)
+        d += 0.0040 * k * bun * np.sin(ph)
+        # (5) the gauntlet: a few soft creases round the wrist
+        d += 0.0012 * k * glove * np.sin(2 * math.pi * rel_h / (0.012 * k) + 3 * fbm(Pv, 61, 25.0 / k))
+        return Nv * d[:, None]
+
+    pc = cg.piece("Arm." + side, "SuitFabric", "arm", subsurf=lod(2, 1, 0), mats=["SuitFabric", "SuitRubber"],
+                  face_mat=lambda cs: 1 if all(tuple(c) == PALM for c in cs) else 0,
+                  disp=arm_disp if LOD < 2 else None)
+    pc.mat_col = {1: RUBBER}
+    pc.dirt2 = "glove"
+    if LOD == 0:
+        pc.thin(lambda Pv: smooth01(-0.010 * k, 0.004 * k, (Pv - H) @ axf), 0.45)
+
+    # ── the knuckle bar: a padded strip across the back of the knuckles
+    # (an EVA glove's metacarpal bar), rigid on the hand, laid on the glove's
+    # finished surface ────────────────────────────────────────────────────
+    if LOD < 2:
+        gt = bvh(pc)
+        kb_r = []
+        for lx in np.linspace(-0.036, 0.036, 7):
+            q = H + hax * (kn - 0.016 * hk) + hfw * lx * hk
+            sp_, _ = surf_point(gt, q + hup * 0.08, -hup, q + hup * t_)
+            kb_r.append(dict(c=sp_ + hup * 0.0022 * hk, r=0.0040 * hk, r2=0.0095 * hk, w={hd: 1}, col=(0.34, 0.34, 0.35)))
+        V, F, UVc, W, C = loft(limb(kb_r, hup), lod(10, 8, 6), cap0=True, cap1=True, tile=0.1)
+        Piece("KnuckleBar." + side, "SuitRubber", V, F, W, C, UVc=UVc, dirt="glove")
 
     # ── the weights, painted on the subdivided surface ──────────────────────
     hin_e, hout_e = 0.014 * k, 0.050 * k
@@ -1223,13 +1621,13 @@ def arm(rig, D, Ja, J, side, s, k, sc):
 
     # ── hardware on the arm: rigid, each where the cloth under it is ────────
     up_c = lambda t: S + axu * t                         # noqa: E731
-    ring_piece("UpperArmBearing." + side, "SuitMetal", up_c(s_ub), axu, 0.072 * k, 0.084 * k, 0.020 * k, ua, METAL,
+    ring_piece("UpperArmBearing." + side, "SuitMetal", up_c(s_ub), axu, 0.072 * k, 0.088 * k, 0.020 * k, ua, METAL,
                segs=16, band=METAL_D)
     wc = E + axf * wr
     ring_piece("Wrist." + side, "SuitMetal", wc, axf, 0.046 * k, 0.061 * k, 0.022 * k, fa, METAL, segs=16,
-               band=(0.24, 0.34, 0.56) if s > 0 else (0.62, 0.22, 0.18))
+               band=BLUE_A if s > 0 else RED_A)
     # the emblem on the left upper arm, the flag on the right
-    r_p = 0.077 * k * 0.985 + 0.0025
+    r_p = 0.077 * k * 0.985 + 0.0050
     ph = 0.075 * k
     span = ph / r_p
     sc_ = s_ub + 0.085 * k
@@ -1238,7 +1636,10 @@ def arm(rig, D, Ja, J, side, s, k, sc):
     def patch(su, tv, sc_=sc_, across=across, span=span, ph=ph):
         a = (su - 0.5) * span * s
         return up_c(sc_ + (tv - 0.5) * ph) + (out * math.cos(a) + across * math.sin(a)) * r_p
-    decal_piece("Emblem." + side, "emblem" if s > 0 else "flag", patch, out, ua, nu=4, nv=1)
+    if s > 0:
+        decal_piece("Emblem." + side, "full", patch, out, ua, nu=6, nv=2, mat="SuitEmblem")
+    else:
+        decal_piece("Emblem." + side, "flag", patch, out, ua, nu=6, nv=2)
 
     # the CUFF CHECKLIST on the left forearm, a wrist mirror on the right,
     # each on a strap
@@ -1276,6 +1677,14 @@ def lower_body(rig, D, J, Jp, k, x0, zc, hut_y0, waist_y, crotch):
     a crotch line of seven points both legs share."""
     cg = Cage(tile=0.25)
     TS = 24
+    # one level of subdivision pulls the 16- and 24-point rings in by about
+    # 3.5 %: the cage is drawn that much fuller (LOD 0 only; the coarser LODs
+    # draw the cage itself)
+    LC = lod(1.035, 1.0, 1.0)
+    # EMU legs are bulky: the cloth stands off the leg by the comfort gap and
+    # the restraint layer, more at the shin (the boot's tongue and the LCVG's
+    # tubes under it) than at the thigh
+    FAT_T, FAT_K, FAT_S = 1.05, 1.07, 1.09
 
     def trunk_ring(y, hd, hw, zoff=0.0, sq=2.5, rad=None):
         out = []
@@ -1285,7 +1694,7 @@ def lower_body(rig, D, J, Jp, k, x0, zc, hut_y0, waist_y, crotch):
             x = math.copysign(abs(sa) ** (2.0 / sq), sa)
             z = math.copysign(abs(ca) ** (2.0 / sq), ca)
             r = 1.0 + (rad(a) if rad else 0.0)
-            out.append(np.array([x0 + hw * x * r, y, zc + zoff + hd * z * r]))
+            out.append(np.array([x0 + hw * x * r * LC, y, zc + zoff + hd * z * r * LC]))
         return out
 
     rings, vs, ys = [], [], []
@@ -1358,13 +1767,12 @@ def lower_body(rig, D, J, Jp, k, x0, zc, hut_y0, waist_y, crotch):
         lr, lv = [], []
         # the thigh, out of the brief: the thigh bearing, the EV1 band
         prof = [(0.118, 0.104, 0.098, 0.006, CLOTH), (0.160, 0.105, 0.103, 0.003, CLOTH),
-                (0.205, 0.103, 0.101, 0.0, CLOTH), (0.225, 0.102, 0.100, 0.0, CLOTH),
-                (0.2252, 0.102, 0.100, 0.0, ORANGE), (0.258, 0.101, 0.099, 0.0, ORANGE),
-                (0.2582, 0.101, 0.099, 0.0, CLOTH), (0.320, 0.097, 0.095, 0.0, CLOTH),
-                (LT / k - 0.075, 0.092, 0.090, 0.0, CLOTH)]
+                (0.205, 0.103, 0.101, 0.0, CLOTH), (0.250, 0.101, 0.099, 0.0, CLOTH),
+                (0.320, 0.097, 0.095, 0.0, CLOTH), (LT / k - 0.075, 0.092, 0.090, 0.0, CLOTH)]
         for dd, r1, r2, cl_, col in prof:
             c = Tp + axt * dd * k
-            lr.append(lring(c, axt, r1 * k, r2 * k, col, cen_lat=cl_ * k,
+            f_ = LC * (1.0 + (FAT_T - 1.0) * smooth01(0.11, 0.20, dd))
+            lr.append(lring(c, axt, r1 * k * f_, r2 * k * f_, col, cen_lat=cl_ * k,
                             bump=lambda a, dd=dd: 0.03 * math.sin(5 * a + dd * 30)
                             + 0.04 * max(0.0, -math.cos(a)) * math.sin(math.pi * min(1.0, dd / 0.4))))
             lv.append(dd * k)
@@ -1377,7 +1785,7 @@ def lower_body(rig, D, J, Jp, k, x0, zc, hut_y0, waist_y, crotch):
                 c, t = K + axs * dd * k, axs if dd > 0.03 else unit(axs + nb_k)
             else:
                 c, t = K, nb_k
-            lr.append(lring(c, t, r * k, r * k * 0.97, col,
+            lr.append(lring(c, t, r * k * LC * FAT_K, r * k * 0.97 * LC * FAT_K, col,
                             bump=lambda a, dd=dd: 0.035 * max(0.0, math.cos(a)) * (1.0 if dd == 0 else 0.4)
                             + 0.02 * math.sin(3 * a + dd * 120)))
             lv.append(LT + dd * k)
@@ -1385,7 +1793,9 @@ def lower_body(rig, D, J, Jp, k, x0, zc, hut_y0, waist_y, crotch):
         for dd, r in ((0.11, 0.088), (0.20, 0.085), (0.28, 0.078), (LS / k - 0.12, 0.068), (LS / k - 0.085, 0.064),
                       (LS / k - 0.060, 0.063)):
             c = K + axs * dd * k
-            lr.append(lring(c, axs, r * k, r * k * 0.98, CLOTH, bump=lambda a, dd=dd: 0.03 * math.sin(4 * a + dd * 50)))
+            f_ = LC * (FAT_S if dd < LS / k - 0.10 else 1.0)
+            lr.append(lring(c, axs, r * k * f_, r * k * 0.98 * f_, CLOTH,
+                            bump=lambda a, dd=dd: 0.03 * math.sin(4 * a + dd * 50)))
             lv.append(LT + dd * k)
         ut_l = max(1, round(TAU * 0.10 * k / 0.25))
         # the crotch band: the 20 of the first ring down to the leg's 16
@@ -1394,7 +1804,42 @@ def lower_body(rig, D, J, Jp, k, x0, zc, hut_y0, waist_y, crotch):
         for a_, b_, va, vb in zip(lr[:-1], lr[1:], lv[:-1], lv[1:]):
             cg.band(a_, b_, ut_l, va / 0.25, vb / 0.25)
 
-    pc = cg.piece("LowerBody", "SuitFabric", "leg")
+    # ── the folds (as the arms'): behind the knee, bunched above the boot,
+    # long diagonals down the thigh from the crotch, the brief's own sag ──
+    def leg_disp(Pv, Nv, G):
+        d = 0.0026 * k * fbm(Pv, 71, 7.0 / k)
+        sd = smooth01(x0 - 0.02 * k, x0 + 0.02 * k, Pv[:, 0])
+        for side, f in (("Left", sd), ("Right", 1 - sd)):
+            L = legs[side]
+            # behind the knee: compression folds; in front: a little
+            se = (Pv - L["K"]) @ L["nb_k"]
+            rad = Pv - L["K"] - np.outer(se, L["nb_k"])
+            rn = np.maximum(np.linalg.norm(rad, axis=1), 1e-9)
+            back = unit(-Z + L["nb_k"] * (Z @ L["nb_k"]))
+            cr = (rad @ back) / rn
+            env = np.exp(-(se / (0.065 * k)) ** 2)
+            ph = 2 * math.pi * se / (0.024 * k) + 2.4 * fbm(Pv, 81, 12.0 / k)
+            d = d + f * env * (0.0062 * k * smooth01(-0.3, 0.8, cr) + 0.0015 * k) * np.sin(ph)
+            # bunched in rings above the boot
+            ha = (L["A"] - Pv) @ L["axs"]
+            bun = smooth01(0.200 * k, 0.130 * k, ha) * (1 - smooth01(0.085 * k, 0.065 * k, ha))
+            ph = 2 * math.pi * ha / (0.023 * k) + 2.0 * fbm(Pv, 91, 15.0 / k)
+            d = d + f * 0.0048 * k * bun * np.sin(ph)
+            # diagonal drape down the thigh and the shin
+            for c0, ax, a0_, a1_, sd_ in ((L["T"], L["axt"], 0.08, L["LT"] / k - 0.08, 101),
+                                          (L["K"], L["axs"], 0.08, L["LS"] / k - 0.20, 111)):
+                t = (Pv - c0) @ ax
+                r_ = Pv - c0 - np.outer(t, ax)
+                ang = np.arctan2(r_ @ (L["s"] * X), r_ @ Z)
+                band = smooth01(a0_ * k, a0_ * k + 0.04 * k, t) * (1 - smooth01(a1_ * k - 0.04 * k, a1_ * k, t))
+                wob = fbm(Pv, sd_, 6.0 / k)
+                dr = np.sin(2 * math.pi * t / (0.11 * k) + 1.3 * ang + 3.0 * wob)
+                d = d + f * 0.0034 * k * band * np.sign(dr) * np.abs(dr) ** 1.6 * (0.5 + wob)
+        # nothing on the waist's convolutes (they are their own folds)
+        d = d * (1 - smooth01(waist_y - 0.03 * k, waist_y + 0.01 * k, Pv[:, 1]))
+        return Nv * d[:, None]
+
+    pc = cg.piece("LowerBody", "SuitFabric", "leg", subsurf=lod(1, 0, 0), disp=leg_disp if LOD < 2 else None)
 
     # ── the weights ─────────────────────────────────────────────────────────
     w_lo, w_hi = yw[-1] + 0.012 * k, yw[0] - 0.012 * k        # the waist's blend, Hip below → Back above
@@ -1453,18 +1898,20 @@ def lower_body(rig, D, J, Jp, k, x0, zc, hut_y0, waist_y, crotch):
     Piece("WaistRing", "SuitMetal", V, F, W, np.tile(METAL, (len(V), 1)), UVc=UVc, dirt="metal", smooth=False,
           sharp=30)
     for side, L in legs.items():
-        ring_piece("ThighBearing." + side, "SuitMetal", L["T"] + L["axt"] * 0.160 * k, L["axt"], 0.100 * k,
-                   0.112 * k, 0.020 * k, "Thigh." + side, METAL, segs=16, band=METAL_D)
+        ring_piece("ThighBearing." + side, "SuitMetal", L["T"] + L["axt"] * 0.160 * k, L["axt"], 0.104 * k,
+                   0.122 * k, 0.022 * k, "Thigh." + side, METAL, segs=16, band=METAL_D)
     return legs
 
 
 def boot(rig, D, J, side, s, k):
-    """The BOOT: one cast-looking shoe on a dark sole — an upper lofted from
-    heel to toe (high at the ankle, low and rounded at the toe), the sole a
-    slab a little proud of it; rigid on Foot, the toe box on Toes with a flex
-    line at the ball of the foot; grey rubber round the toe and heel. Built
-    in the bind pose and carried into the authoring pose by the Foot's own
-    turn (the knees are modelled bent)."""
+    """The BOOT, an EVA boot after the EMU's and the xEMU's: a tall, stiff
+    upper of the suit's TMG (greyer, more used) high round the ankle to the
+    ankle bearing, a raised toe box, a moulded rubber toe cap and heel
+    counter, two buckled straps over the instep; under it a thick midsole and
+    an outsole of square lugs with a heel block. Rigid on Foot, the toe box
+    on Toes with a flex line at the ball of the foot. Built in the bind pose
+    and carried into the authoring pose by the Foot's own turn (the knees are
+    modelled bent)."""
     A, Tp = J("Foot." + side), J("Toes." + side)
     ft, to = "Foot." + side, "Toes." + side
     Mf = D[rig.index[ft]]
@@ -1473,47 +1920,74 @@ def boot(rig, D, J, side, s, k):
         V = np.asarray(V, float)
         return (np.hstack([V, np.ones((len(V), 1))]) @ Mf.T)[:, :3]
     bx = A[0] + s * 0.004 * k
-    heel_z, toe_z = A[2] - 0.090 * k, Tp[2] + 0.112 * k
-    sole_t = 0.030 * k
+    heel_z, toe_z = A[2] - 0.094 * k, Tp[2] + 0.118 * k
+    sole_t = 0.034 * k                        # midsole + outsole
+    lug_t = 0.007 * k
     ty = Tp[2]
-    SEC = [  # z, half-width, top
-        (heel_z, 0.040, 0.085), (heel_z + 0.012 * k, 0.054, 0.140), (heel_z + 0.045 * k, 0.060, 0.170),
-        (A[2] + 0.040 * k, 0.061, 0.168), (ty - 0.045 * k, 0.062, 0.122), (ty - 0.005 * k, 0.061, 0.100),
-        (ty + 0.040 * k, 0.057, 0.086), (toe_z - 0.030 * k, 0.050, 0.074), (toe_z - 0.008 * k, 0.040, 0.062),
-        (toe_z, 0.022, 0.050)]
+    y0 = sole_t - 0.004 * k                   # the upper's foot, tucked into the midsole
+    SEC = [  # z, half-width, top, sq
+        (heel_z, 0.046, 0.110, 3.0), (heel_z + 0.010 * k, 0.060, 0.175, 3.0), (heel_z + 0.035 * k, 0.068, 0.205, 2.8),
+        (A[2] + 0.010 * k, 0.070, 0.210, 2.6), (A[2] + 0.050 * k, 0.069, 0.190, 2.6), (ty - 0.060 * k, 0.067, 0.150, 2.8),
+        (ty - 0.025 * k, 0.066, 0.122, 3.0), (ty + 0.010 * k, 0.064, 0.102, 3.2), (ty + 0.045 * k, 0.060, 0.092, 3.2),
+        (toe_z - 0.035 * k, 0.054, 0.084, 3.0), (toe_z - 0.015 * k, 0.046, 0.076, 2.8), (toe_z - 0.004 * k, 0.034, 0.066, 2.6),
+        (toe_z, 0.018, 0.056, 2.4)]
 
     def bw(z):
         return blend(ft, to, float(smooth01(ty - 0.030 * k, ty + 0.012 * k, z)))
-    up_, so_ = [], []
-    for i, (z, hw, tp) in enumerate(SEC):
-        y0 = sole_t - 0.004 * k
+    up_ = []
+    for i, (z, hw, tp, sq) in enumerate(SEC):
         tp = tp * k
 
         def ucol(a, z=z):
-            low = math.sin(a) < -0.35
-            return BOOT_RUB if (low and (z > ty - 0.005 * k or z < heel_z + 0.05 * k)) else BOOT_W
-        up_.append(dict(c=(bx, (y0 + tp) / 2, z), e1=X, e2=Y, r1=hw * k, r2=(tp - y0) / 2, sq=2.8, w=bw(z),
-                        col=ucol, rad=lambda a, i=i: 0.0015 * k * math.sin(5 * a + i)))
-        so_.append(dict(c=(bx, sole_t / 2, z), e1=X, e2=Y, r1=(hw + 0.007) * k * (0.9 if i in (0, 9) else 1.0),
-                        r2=sole_t / 2, sq=6.0, w=bw(z), col=SOLE))
-    V, F, UVc, W, C = loft(up_, 14, cap0=True, cap1=True, tile=0.25)
-    Piece("Boot." + side, "SuitFabric", posed(V), F, W, C, UVc=UVc, dirt="boot", sharp=60)
-    V, F, UVc, W, C = loft(so_, 8, cap0=True, cap1=True, tile=0.25)
-    Piece("Sole." + side, "SuitFabric", posed(V), F, W, C, UVc=UVc, dirt="boot", sharp=45)
-    # the strap over the instep, buckled on the outside
-    sp_ = []
-    zst = A[2] + 0.075 * k
+            # the toe cap and heel counter: moulded rubber over the low part
+            low = math.sin(a) < (-0.15 if z > ty else -0.45)
+            return BOOT_RUB if (low and (z > ty - 0.020 * k or z < heel_z + 0.045 * k)) else BOOT_W
+        up_.append(dict(c=(bx, (y0 + tp) / 2, z), e1=X, e2=Y, r1=hw * k, r2=(tp - y0) / 2, sq=sq, w=bw(z),
+                        col=ucol, rad=lambda a, i=i: 0.0012 * k * math.sin(5 * a + i * 1.7)))
+    V, F, UVc, W, C = loft(up_, lod(28, 20, 14), cap0=True, cap1=True, tile=0.25)
+    fm = [1 if all(tuple(C[q]) == BOOT_RUB for q in f) else 0 for f in F]
+    pc = Piece("Boot." + side, "SuitFabric", posed(V), F, W, C, UVc=UVc, dirt="boot", sharp=60,
+               mats=["SuitFabric", "SuitRubber"], fmat=fm)
+    pc.mat_col = {1: BOOT_RUB}
+    pc.dirt2 = "boot"
+    # the midsole: a slab a little proud of the upper all round, its edge
+    # rounded; the outsole's lugs and heel block under it
+    so_ = []
+    for i, (z, hw, tp, sq) in enumerate(SEC):
+        so_.append(dict(c=(bx, lug_t + (sole_t - lug_t) / 2, z), e1=X, e2=Y,
+                        r1=(hw + 0.008) * k * (0.92 if i in (0, len(SEC) - 1) else 1.0),
+                        r2=(sole_t - lug_t) / 2, sq=5.0, w=bw(z), col=SOLE))
+    V, F, UVc, W, C = loft(so_, lod(20, 14, 10), cap0=True, cap1=True, tile=0.25)
+    Piece("Sole." + side, "SuitRubber", posed(V), F, W, C, UVc=UVc, dirt="boot", sharp=50)
+    if LOD < 2:
+        zs = np.linspace(heel_z + 0.016 * k, toe_z - 0.022 * k, lod(9, 6, 0))
+        for j, z in enumerate(zs):
+            if heel_z + 0.075 * k < z < heel_z + 0.110 * k:
+                continue                                   # the arch between heel block and forefoot
+            hw = float(np.interp(z, [q[0] for q in SEC], [q[1] for q in SEC])) * k
+            for sx in (-1, 1):
+                lc = np.array([bx + sx * hw * 0.48, lug_t / 2 + 0.0005, z])
+                V, F = box_mesh(lc, (hw * 0.80, lug_t + 0.001, 0.020 * k))
+                Piece("Lug." + side, "SuitRubber", posed(V), F, bw(z), SOLE, tile=0.25, dirt="boot", smooth=False,
+                      sharp=30)
+    # two straps over the instep, each buckled on the outside
     zs_, hw_, tp_ = [q[0] for q in SEC], [q[1] for q in SEC], [q[2] for q in SEC]
-    for z in (zst - 0.012 * k, zst + 0.012 * k):
-        hw, tp = float(np.interp(z, zs_, hw_)) * k, float(np.interp(z, zs_, tp_)) * k
-        y0 = sole_t - 0.004 * k
-        sp_.append(dict(c=(bx, (y0 + tp) / 2, z), e1=X, e2=Y, r1=hw + 0.004 * k, r2=(tp - y0) / 2 + 0.004 * k,
-                        sq=2.8, w={ft: 1}, col=SHELL_D))
-    V, F, UVc, W, C = loft(sp_, 14, tile=0.1)
-    Piece("BootStrap." + side, "SuitFabric", posed(V), F, W, C, UVc=UVc, dirt="boot")
+    for zst in (A[2] + 0.050 * k, A[2] + 0.095 * k):
+        sp_ = []
+        for z in (zst - 0.011 * k, zst + 0.011 * k):
+            hw, tp = float(np.interp(z, zs_, hw_)) * k, float(np.interp(z, zs_, tp_)) * k
+            sp_.append(dict(c=(bx, (y0 + tp) / 2 + 0.002 * k, z), e1=X, e2=Y, r1=hw + 0.0035 * k,
+                            r2=(tp - y0) / 2 + 0.0035 * k, sq=2.8, w={ft: 1}, col=(0.30, 0.30, 0.31)))
+        V, F, UVc, W, C = loft(sp_, lod(28, 20, 14), tile=0.1)
+        Piece("BootStrap." + side, "SuitRubber", posed(V), F, W, C, UVc=UVc, dirt="boot")
+        hw, tp = float(np.interp(zst, zs_, hw_)) * k, float(np.interp(zst, zs_, tp_)) * k
+        bc = np.array([bx + s * (hw + 0.006 * k), y0 + (tp - y0) * 0.55, zst])
+        V, F = box_mesh(bc, (0.008 * k, 0.026 * k, 0.030 * k))
+        Piece("Buckle." + side, "SuitMetal", posed(V), F, {ft: 1}, METAL, tile=0.25, dirt="metal",
+              mods=[("bevel", 0.002 * k, lod(2, 1, 1), 40)], sharp=40)
     # the ankle bearing on the boot's collar
-    pc = ring_piece("Ankle." + side, "SuitMetal", np.array([bx, 0.170 * k, A[2] - 0.004 * k]), Y, 0.058 * k,
-                    0.071 * k, 0.020 * k, ft, METAL, segs=16, band=METAL_D)
+    pc = ring_piece("Ankle." + side, "SuitMetal", np.array([bx, 0.190 * k, A[2] - 0.006 * k]), Y, 0.062 * k,
+                    0.082 * k, 0.032 * k, ft, METAL, segs=16, band=METAL_D)
     me = pc.ob.data
     Vb = np.zeros(len(me.vertices) * 3)
     me.vertices.foreach_get("co", Vb)
@@ -1737,32 +2211,34 @@ def helmet(J, k, x0, zh, neck_ring):
     # helmet is a bubble on a collar, not a ball). Clear: its own material.
     def bubble_rings(scale, skip_front=False):
         prof = []
-        for a in np.linspace(0, 104, 8):
+        for a in np.linspace(0, 104, lod(11, 9, 8)):
             r = math.radians(a)
             prof.append((R * scale * math.sin(r), R * scale * math.cos(r)))
         # the skirt to the ring
         prof.append((0.140 * k * scale, base[1] + 0.012 * k - hc[1]))
         return prof
-    brings = lathe_pts(bubble_rings(1.0)[1:], hc, Y, Z, 20)
+    nb_ = lod(32, 24, 16)
+    brings = lathe_pts(bubble_rings(1.0)[1:], hc, Y, Z, nb_)
     for r in brings:
         r["w"] = {"Back": 1}
     # the skirt ring sits on the neck ring (the bubble is forward of it)
     brings[-1]["c"] = base + nax * 0.012 * k
-    V, F, UVc, W, C = loft(brings, 20, cap0=True, tile=0.5)
+    V, F, UVc, W, C = loft(brings, nb_, cap0=True, tile=0.5)
     Piece("Bubble", "SuitBubble", V, F, W, (1, 1, 1), UVc=UVc, part="helmet", dirt="none")
 
     # The EVVA shell over the top, back and sides, with the visor opening
     # cut from its front: a thick shell, its edge rolled.
     Re = R * 1.075
     shell_prof = []
-    for a in np.linspace(0, 112, 10):
+    for a in np.linspace(0, 112, lod(14, 10, 8)):
         r = math.radians(a)
         shell_prof.append((Re * math.sin(r), Re * math.cos(r)))
-    srings = lathe_pts(shell_prof[1:], hc, Y, Z, 24)
+    ns_ = lod(40, 28, 20)
+    srings = lathe_pts(shell_prof[1:], hc, Y, Z, ns_)
     for r in srings:
         r["w"] = {"Back": 1}
         r["col"] = SHELL
-    V, F, UVc, W, C = loft(srings, 24, cap0=True, tile=0.5)
+    V, F, UVc, W, C = loft(srings, ns_, cap0=True, tile=0.5)
     # the opening: front faces between brow and chin, ±62° either side
     keep = []
     for f, uv in zip(F, UVc):
@@ -1787,17 +2263,17 @@ def helmet(J, k, x0, zh, neck_ring):
         r = math.radians(a)
         st.append(dict(c=hc + np.array([0, Re * 1.06 * math.cos(r), -Re * 1.06 * math.sin(r)]),
                        r=0.0035 * k, w={"Back": 1}, col=SHELL_G))
-    V, F, UVc, W, C = loft(limb(st, X), 5, tile=0.1)
+    V, F, UVc, W, C = loft(limb(st, X), 6, tile=0.1)
     Piece("EVVAseam", "SuitShell", V, F, W, C, UVc=UVc, part="helmet", dirt="evva")
 
     # The gold sun visor: a spherical cap filling the opening, standing just
     # off the bubble and tucked under the EVVA's front edge.
     Rv = R * 1.035
     vr = []
-    for el_ in np.linspace(-50, 38, 9):
+    for el_ in np.linspace(-50, 38, lod(13, 9, 7)):
         vr.append(el_)
     Vv, UVv = [], []
-    azs = np.linspace(-68, 68, 17)
+    azs = np.linspace(-68, 68, lod(25, 17, 13))
     for el_ in vr:
         for az in azs:
             e, a = math.radians(el_), math.radians(az)
@@ -1816,32 +2292,67 @@ def helmet(J, k, x0, zh, neck_ring):
             UVc.append([UVv[q] for q in f])
     Piece("Visor", "SuitVisor", Vv, F, {"Back": 1}, (1, 1, 1), UVc=UVc, part="visor", dirt="none")
 
-    # The lamps (EHIP-style): a housing at each temple on a bracket, a lens
-    # forward; the camera on the left one.
+    # The helmet lights and camera (after the EMU's EHIP): at each temple a
+    # cylindrical lamp housing, its back rounded and its front a bezel round
+    # the LED lens (the lens is the "lamps" model, which glows), carried on a
+    # clamp arm whose foot is screwed to the EVVA's side; the HD camera rides
+    # the right housing, its lens barrel forward. Twin pivot hubs carry the
+    # visor at the sides, and a pull tab sits on its top edge.
     for sx in (-1, 1):
-        lc = hc + np.array([sx * (Re + 0.022 * k), 0.028 * k, 0.040 * k])
-        V, F = box_mesh(lc, (0.040 * k, 0.046 * k, 0.110 * k))
-        Piece("LampHousing", "SuitShell", V, F, {"Back": 1}, SHELL_G, tile=0.5, part="helmet", dirt="evva",
-              mods=[("bevel", 0.006 * k, 2, 35)], sharp=40)
-        V, F = box_mesh(lc - np.array([sx * 0.024, 0.0, 0.03]) * k, (0.022 * k, 0.026 * k, 0.03 * k))
-        Piece("LampBracket", "SuitShell", V, F, {"Back": 1}, SHELL_D, tile=0.5, part="helmet", dirt="evva",
-              smooth=False, sharp=30)
-        for dy in (0.010, -0.011):
-            p0 = lc + np.array([0, dy, 0.055]) * k
-            V, F = cyl_mesh(p0 - Z * 0.004 * k, p0 + Z * 0.004 * k, 0.0105 * k, segs=8)
-            Piece("LampBezel", "SuitShell", V, F, {"Back": 1}, SHELL_D, tile=0.2, part="helmet", dirt="none",
-                  smooth=False, sharp=30)
-            V, F = cyl_mesh(p0 + Z * 0.0035 * k, p0 + Z * 0.0055 * k, 0.0085 * k, segs=8)
-            Piece("LampLens", "SuitLamp", V, F, {"Back": 1}, (1, 1, 1), tile=0.2, part="lamps", dirt="none",
-                  smooth=False, sharp=30)
-        if sx > 0:
-            cc = lc + np.array([0.0, 0.040, 0.012]) * k
-            V, F = box_mesh(cc, (0.036 * k, 0.034 * k, 0.07 * k))
-            Piece("Camera", "SuitShell", V, F, {"Back": 1}, SHELL_D, tile=0.5, part="helmet", dirt="evva",
-                  mods=[("bevel", 0.003 * k, 1)], sharp=30)
-            V, F = cyl_mesh(cc + Z * 0.035 * k, cc + Z * 0.045 * k, 0.011 * k, segs=12)
-            Piece("CameraLens", "SuitShell", V, F, {"Back": 1}, (0.05, 0.05, 0.06), tile=0.2, part="helmet",
-                  dirt="none", smooth=False, sharp=30)
+        side_dir = np.array([sx, 0.0, 0.0])
+        lc = hc + np.array([sx * (Re + 0.030 * k), 0.026 * k, 0.030 * k])
+        Lh, rh = 0.105 * k, 0.019 * k
+        hprof = [(1e-4, -Lh / 2, SHELL_G), (rh * 0.55, -Lh / 2, SHELL_G), (rh * 0.92, -Lh / 2 + 0.008 * k, SHELL_G),
+                 (rh, -Lh / 2 + 0.018 * k, SHELL_G), (rh, Lh / 2 - 0.016 * k, SHELL_G),
+                 (rh, Lh / 2 - 0.016 * k, SHELL_D), (rh * 1.12, Lh / 2 - 0.012 * k, SHELL_D), (rh * 1.12, Lh / 2, SHELL_D),
+                 (rh * 0.80, Lh / 2, SHELL_D), (rh * 0.78, Lh / 2 - 0.004 * k, SHELL_D), (1e-4, Lh / 2 - 0.004 * k, SHELL_D)]
+        lathe_piece("LampHousing", "SuitShell", lc, Z, hprof, {"Back": 1}, lod(16, 12, 8), part="helmet",
+                    dirt="evva", sharp=40, ref=Y)
+        # the lens (glows; the "lamps" model) and the reflector's rings
+        lathe_piece("LampLens", "SuitLamp", lc + Z * (Lh / 2 - 0.005 * k), Z,
+                    [(1e-4, 0.0, (1, 1, 1)), (rh * 0.80, 0.0, (1, 1, 1)), (rh * 0.80, 0.0015 * k, (1, 1, 1)),
+                     (1e-4, 0.0025 * k, (1, 1, 1))], {"Back": 1}, lod(24, 16, 10), part="lamps", dirt="none", ao=False)
+        # cooling fins on the housing's back half
+        if LOD < 2:
+            for i in range(2):
+                fz = -Lh / 2 + 0.024 * k + i * 0.009 * k
+                lathe_piece("LampFin", "SuitShell", lc + Z * fz, Z,
+                            [(rh * 0.95, 0.0, SHELL_G), (rh * 1.14, 0.0, SHELL_G), (rh * 1.14, 0.0035 * k, SHELL_G),
+                             (rh * 0.95, 0.0035 * k, SHELL_G)], {"Back": 1}, lod(16, 12, 8), part="helmet",
+                            dirt="evva", sharp=40, ref=Y)
+        # the clamp arm and its foot on the EVVA
+        foot, nn = hc + side_dir * Re * 0.99 + np.array([0, 0.030 * k, -0.010 * k]), side_dir
+        arm_c = (foot + lc) / 2 - Z * 0.020 * k
+        rbox("LampArm", "SuitShell", arm_c, (np.linalg.norm(lc - foot) + 0.010 * k, 0.016 * k, 0.020 * k), None,
+             col=SHELL_D, r=0.003 * k, part="helmet", dirt="evva")
+        rbox("LampFoot", "SuitShell", foot + side_dir * 0.004 * k - Z * 0.020 * k, (0.010 * k, 0.040 * k, 0.050 * k),
+             None, col=SHELL_D, r=0.003 * k, part="helmet", dirt="evva")
+        for oy, oz in ((0.012, -0.034), (-0.012, -0.006)):
+            bolt("LampFootBolt", foot + side_dir * 0.009 * k + np.array([0, oy * k, oz * k]), side_dir, 0.0026 * k,
+                 0.0025 * k, {"Back": 1}, part="helmet")
+        # the visor's pivot hub
+        pivot = hc + side_dir * Re * 1.0 + np.array([0, -0.006 * k, 0.018 * k])
+        lathe_piece("VisorPivot", "SuitMetal", pivot - side_dir * 0.004 * k, side_dir,
+                    [(1e-4, 0.0, METAL_D), (0.017 * k, 0.0, METAL_D), (0.017 * k, 0.005 * k, METAL_D),
+                     (0.013 * k, 0.008 * k, METAL_D), (0.006 * k, 0.008 * k, METAL_D), (0.006 * k, 0.010 * k, METAL),
+                     (1e-4, 0.010 * k, METAL)], {"Back": 1}, lod(14, 10, 8), part="helmet", dirt="metal", sharp=35)
+        if sx < 0:
+            # (the right side: the clip-on torch, items "flashlight", straps
+            # over the left housing — scripts/flashlight.lua MOUNT)
+            # the camera: a body with rounded edges on the housing, a lens
+            # barrel and its dark glass
+            cc = lc + np.array([0.0, rh + 0.017 * k, 0.004 * k])
+            rbox("Camera", "SuitShell", cc, (0.032 * k, 0.030 * k, 0.074 * k), None, col=(0.20, 0.20, 0.21),
+                 r=0.004 * k, part="helmet", dirt="evva")
+            lathe_piece("CameraLens", "SuitShell", cc + Z * 0.037 * k, Z,
+                        [(1e-4, 0.0, SHELL_D), (0.011 * k, 0.0, SHELL_D), (0.011 * k, 0.010 * k, SHELL_D),
+                         (0.009 * k, 0.012 * k, SHELL_D), (0.009 * k, 0.012 * k, (0.03, 0.035, 0.05)),
+                         (1e-4, 0.010 * k, (0.03, 0.035, 0.05))], {"Back": 1}, lod(20, 14, 10), part="helmet",
+                        dirt="none", sharp=40, ref=Y)
+    # the visor's pull tab
+    tab = hc + Rv * np.array([0.0, math.sin(math.radians(36)), math.cos(math.radians(36))]) * 1.01
+    rbox("VisorTab", "SuitShell", tab, (0.030 * k, 0.010 * k, 0.012 * k), frame_to(unit(tab - hc), Z), col=SHELL_D,
+         r=0.002 * k, part="visor", dirt="none")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1851,7 +2362,7 @@ def helmet(J, k, x0, zh, neck_ring):
 def export(rig, D, path):
     arrays = {"D": D}
     manifest = []
-    for idx, pc in enumerate(PIECES):
+    for pc in PIECES:
         pc.apply()
         ob = pc.ob
         me = ob.data
@@ -1933,26 +2444,104 @@ def export(rig, D, path):
             pp = P[cv] / pc.tile
             UV = np.where((ax == 0)[:, None], pp[:, [2, 1]], np.where((ax == 1)[:, None], pp[:, [0, 2]], pp[:, [0, 1]]))
         N = cn[corners]
-        # weld identical corners into vertices
-        key = np.hstack([cv[:, None].astype(float), np.round(N * 1e4), np.round(UV * 1e5)])
-        _, first, inv = np.unique(key, axis=0, return_index=True, return_inverse=True)
-        inv = inv.reshape(-1)
-        vid = cv[first]
-        I = inv.reshape(-1, 3)
-        arrays[f"{idx}_P"] = P[vid]
-        arrays[f"{idx}_N"] = N[first]
-        arrays[f"{idx}_UV"] = UV[first]
-        arrays[f"{idx}_C"] = Cv[vid]
-        arrays[f"{idx}_J"] = Jn[vid]
-        arrays[f"{idx}_W"] = Wn[vid]
-        arrays[f"{idx}_I"] = I
-        manifest.append(dict(name=pc.name, mat=pc.mat, part=pc.part, dirt=pc.dirt, tris=int(len(I))))
+        ao = getattr(pc, "ao", None)
+        if pc.mats:
+            tm = np.zeros(len(me.loop_triangles), np.int64)
+            me.loop_triangles.foreach_get("material_index", tm)
+            groups = [(q, np.nonzero(tm == q)[0]) for q in range(len(pc.mats))]
+        else:
+            groups = [(None, np.arange(len(tris)))]
+        for q, sel in groups:
+            if len(sel) == 0:
+                continue
+            cs = (sel[:, None] * 3 + np.arange(3)[None, :]).reshape(-1)     # this group's corners
+            cvq, Nq, UVq = cv[cs], N[cs], UV[cs]
+            # weld identical corners into vertices
+            key = np.hstack([cvq[:, None].astype(float), np.round(Nq * 1e4), np.round(UVq * 1e5)])
+            _, first, inv = np.unique(key, axis=0, return_index=True, return_inverse=True)
+            inv = inv.reshape(-1)
+            vid = cvq[first]
+            I = inv.reshape(-1, 3)
+            Cq = Cv[vid].copy()
+            if q is not None and q in pc.mat_col:
+                Cq[:] = pc.mat_col[q]
+            if ao is not None:
+                Cq *= ao[vid][:, None]
+            n_ = len(manifest)
+            arrays[f"{n_}_P"] = P[vid]
+            arrays[f"{n_}_N"] = Nq[first]
+            arrays[f"{n_}_UV"] = UVq[first]
+            arrays[f"{n_}_C"] = Cq
+            arrays[f"{n_}_J"] = Jn[vid]
+            arrays[f"{n_}_W"] = Wn[vid]
+            arrays[f"{n_}_I"] = I
+            mat = pc.mat if q is None else pc.mats[q]
+            dirt = pc.dirt if q is None or q == 0 else getattr(pc, "dirt2", pc.dirt)
+            manifest.append(dict(name=pc.name, mat=mat, part=pc.part, dirt=dirt, tris=int(len(I))))
     arrays["manifest"] = np.frombuffer(json.dumps(manifest).encode(), np.uint8)
     np.savez_compressed(path, **arrays)
     tot = {}
     for m in manifest:
         tot[m["part"]] = tot.get(m["part"], 0) + m["tris"]
     print("SUIT_BLENDER", json.dumps(tot))
+
+
+def bake_ao(k):
+    """AMBIENT OCCLUSION, baked into the vertex colours with Blender's own
+    ray tracer (a BVH of the finished pieces in the authoring pose): from each
+    vertex, 24 cosine-weighted rays over its normal's hemisphere, each that
+    hits something within 9 cm counted by how near it hit. So the creases of
+    the cloth, the skirt under a bearing, the gaps between the fingers, the
+    pack's seam on the back and the boot's welt darken by their own geometry,
+    as a texture bake would darken them, without a unique UV set (the suit's
+    textures tile). The suit is traced on its own (the helmet comes off); the
+    helmet against the suit and itself. Clear and glowing parts take none."""
+    dist = 0.09 * k
+    n_r = lod(24, 14, 8)
+    gold = math.pi * (3 - math.sqrt(5))
+    dirs = []
+    for i in range(n_r):
+        z = math.sqrt(1 - (i + 0.5) / n_r)               # cosine-weighted
+        r = math.sqrt(max(0.0, 1 - z * z))
+        dirs.append((r * math.cos(i * gold), r * math.sin(i * gold), z))
+    dirs = np.array(dirs)
+    groups = (("suit", ("suit",)), ("helmet", ("suit", "helmet", "visor", "lamps")))
+    for target, occl in groups:
+        V, Fs = [], []
+        for pc in PIECES:
+            if pc.part not in occl or pc.mat in ("SuitBubble",):
+                continue
+            pc.apply()
+            me = pc.ob.data
+            o = len(V)
+            V += [v.co.copy() for v in me.vertices]
+            Fs += [[o + i for i in p.vertices] for p in me.polygons]
+        tree = BVHTree.FromPolygons(V, Fs)
+        for pc in PIECES:
+            if pc.part != target and not (target == "helmet" and pc.part in ("visor", "lamps")):
+                continue
+            if not pc.ao_on or pc.mat in ("SuitBubble", "SuitVisor", "SuitLamp", "SuitDecal"):
+                continue
+            me = pc.ob.data
+            nv = len(me.vertices)
+            P = np.zeros(nv * 3); me.vertices.foreach_get("co", P); P = P.reshape(-1, 3)
+            N = np.zeros(nv * 3); me.vertices.foreach_get("normal", N); N = N.reshape(-1, 3)
+            ao = np.ones(nv)
+            for i in range(nv):
+                n = N[i]
+                t1 = np.cross(n, X if abs(n[0]) < 0.9 else Y)
+                t1 /= max(np.linalg.norm(t1), 1e-9)
+                t2 = np.cross(n, t1)
+                D = dirs[:, :1] * t1 + dirs[:, 1:2] * t2 + dirs[:, 2:] * n
+                o = Vector(P[i] + n * 0.0012 * k)
+                occ = 0.0
+                for d in D:
+                    hit = tree.ray_cast(o, Vector(d), dist)
+                    if hit[0] is not None:
+                        occ += 1.0 - (hit[3] / dist) ** 1.5
+                ao[i] = 1.0 - occ / n_r
+            pc.ao = np.clip(0.42 + 0.58 * ao ** 1.2, 0.42, 1.0)
+    print("SUIT_AO done")
 
 
 def main():
@@ -1962,6 +2551,7 @@ def main():
     bpy.context.scene.collection.children.link(COL)
     rig = Rig(RIG_PATH)
     D = build(rig)
+    bake_ao(rig.p("Head")[1] / 1.575)
     export(rig, D, OUT_PATH)
 
 

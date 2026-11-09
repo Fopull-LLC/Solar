@@ -236,7 +236,7 @@ is used everywhere:
 - the flag cloth (§7);
 - an **emblem plate** on every crewed part (Pod Mk1/Mk2, cabin, cockpit, Command Seat
   back);
-- the suit's shoulder patch;
+- the suit's shoulder patch (the "SuitEmblem" material, painted by `suit_look.lua`);
 - the crew strip header, the Tracking Station and Astronaut Complex headers;
 - the save-slot card on the main menu;
 - the memorial plaque;
