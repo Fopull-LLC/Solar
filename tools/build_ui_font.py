@@ -64,6 +64,7 @@ DEJAVU_MONO = Path("/usr/share/fonts/TTF/DejaVuSansMono.ttf")
 # taken, so nothing the base already draws changes.
 BLOCKS = [
     (0x0370, 0x03FF),  # Greek (Δv, μ)
+    (0x2070, 0x209F),  # superscripts and subscripts (O₂, CO₂, m²)
     (0x2190, 0x21FF),  # arrows
     (0x2200, 0x22FF),  # mathematical operators
     (0x2300, 0x23FF),  # miscellaneous technical (⌂ ⌫ ⏎)
