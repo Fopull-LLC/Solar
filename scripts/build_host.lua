@@ -140,7 +140,7 @@ local lean = nil      -- what was changed: { w_particles, fl_interval, hidden = 
 hostKind = nil
 local stand = nil     -- the stand session (see enter_stand)
 local function lean_apply()
-  if lean or mode ~= "world" or (params.lean or 1) == 0 or hostKind == "stand" then return end
+  if lean or mode ~= "world" or (params.lean or 1) == 0 or hostKind == "stand" or hostKind == "hub" then return end
   lean = { hidden = {} }
   local w = ref("weather")
   if w and w.params then lean.w = w; lean.w_particles = w.params.particles; w.params.particles = false end
@@ -180,7 +180,7 @@ local function fader() return ref("vab_fade") end
 local function drive_fade(on)
   -- (at a stand there is no hall to fade: a stand beside the VAB must not
   -- start fading its walls toward a craft 40 m away)
-  if hostKind == "stand" and on then return end
+  if (hostKind == "stand" or hostKind == "hub") and on then return end
   local f = fader()
   if not f then return end
   if not on then
@@ -211,6 +211,8 @@ end
 -- a crash or a quit mid-build loses nothing. Quiet: no hint.
 local stand_autosave
 local function autosave_tick()
+  -- (at a Base Hub the base changes only when you leave: BUILD IT, LEAVE, ESC)
+  if hostKind == "hub" then return end
   local b = ref("builder")
   if not (b and b.craftVersion and b.craftSave) then return end
   local v = b.craftVersion
@@ -347,9 +349,10 @@ end
 -- E AT THE VAB. True when the builder is on its way (facility_menu then
 -- closes its own panel); false when it can't open here, and facility_menu
 -- falls back to the separate builder scene.
-local enter_stand
+local enter_stand, enter_hub
 function enter(opts)
   if type(opts) == "table" and opts.stand then return enter_stand(opts.stand) end
+  if type(opts) == "table" and opts.hub then return enter_hub(opts.hub) end
   if mode ~= "world" or state ~= "idle" or fx then return false end
   local gm = ref("game_manager")
   if gm and gm.loading then return false end
@@ -384,10 +387,11 @@ function frameNode() if mode == "world" and valid(frame) then return frame end r
 
 -- LEAVE: the builder has saved the craft; take the overlay away. Instant: no
 -- loading screen, the astronaut stands where they pressed E.
-local leave_stand
+local leave_stand, leave_hub
 function leave()
   if mode ~= "world" or state == "idle" or state == "rollout" then return false end
   if hostKind == "stand" then return leave_stand(false) end
+  if hostKind == "hub" then return leave_hub() end
   hostKind = nil
   teardown(true)
   state = "idle"
@@ -728,7 +732,8 @@ leave_stand = function(commission)
   stand = nil
   -- the deck's colliders where the deck now is
   local fp = CS and CS.framePose(S.sid, S.uid)
-  if fp and math.abs((fp.h or 0) - (S.h0 or 0)) > 1e-6 and CS.respawnStand then CS.respawnStand(S.sid, S.uid) end
+  local respawned = false
+  if fp and math.abs((fp.h or 0) - (S.h0 or 0)) > 1e-6 and CS.respawnStand then respawned = CS.respawnStand(S.sid, S.uid) end
   local co = ref("company")
   local m = function(v) return (co and co.money) and co.money(v) or ("$" .. tostring(v)) end
   local msg
@@ -738,8 +743,16 @@ leave_stand = function(commission)
   else msg = "on the stand · $0 — nothing changed" end
   local cok, cwhy = nil, nil
   if commission and ok and CS then
-    cok, cwhy = CS.commission(S.sid, S.uid)
-    msg = cok and (msg .. " · commissioned: held on the stand, Release lets it go") or (msg .. " · not commissioned: " .. tostring(cwhy))
+    -- (playtest 11-09, found by the full-builder probe: a deck that rose
+    -- while building is made again, and its node lands a frame later — a
+    -- commission straight away read "the stand isn't here". It waits for it.)
+    if respawned then
+      pending_commission = { sid = S.sid, uid = S.uid, t = time, msg = msg }
+      cok, cwhy = nil, "waiting for the deck"
+    else
+      cok, cwhy = CS.commission(S.sid, S.uid)
+      msg = cok and (msg .. " · commissioned: held on the stand, Release lets it go") or (msg .. " · not commissioned: " .. tostring(cwhy))
+    end
   end
   say(msg)
   lastStandExit = { quote = q, ok = ok, why = why, commission = commission, commissioned = cok, cwhy = cwhy, t = time, sid = S.sid, uid = S.uid }
@@ -800,6 +813,198 @@ end
 
 -- The full-screen black for the rollout ("Build Host" is a UI node on the
 -- HUD layer, drawn over the builder's own layer).
+
+-- ═══ THE BASE HUB (playtest 11-09; scripts/base_hub.lua) ═══════════════════
+--
+-- enter{ hub = { sid, uid } } is the stand's flow with the base as the work:
+-- the BuildFrame is the hub's STRUCTURE frame on its planet (+X right, +Y up,
+-- +Z front; frame y FLOOR_Y_BUILDER is the structure's ground plane), posed
+-- every frame from the record (body frame: the planet only translates), so a
+-- builder coordinate is a structure coordinate. The structure is held out of
+-- the world while you build (structures.suspend: the builder's copies are the
+-- only ones drawn, its vessel stands down); every part of it is on the stand
+-- for editing, and the catalogue has every part (builder.registry joins
+-- base_hub's sections at a stand or a hub). LEAVE, ESC or BUILD IT commits:
+-- base_hub.commit charges what was added (one truck), refunds what came off,
+-- moves what moved, and the structure is spawned again from its records.
+local hub = nil       -- { sid, uid, body, stash, baseline, ctx, hit0 }
+lastHubExit = nil     -- { ok, why, q, t, sid } (probes)
+function hubState() return hub end
+function hubContext()
+  if hostKind ~= "hub" or not hub then return nil end
+  return hub.ctx
+end
+local function hub_frame()
+  local ST, KS = ref("structures"), ref("kit_snap")
+  local rec = hub and ST and ST.get(hub.sid)
+  if not (rec and KS) then return nil end
+  return KS.frameOf(rec), rec
+end
+local function pin_hub()
+  if not (hub and valid(frame)) then return end
+  local fr = hub_frame()
+  if not fr then return end
+  local U, F = fr.U, fr.F
+  frame:setUp(vec3(U.x, U.y, U.z), vec3(-F.x, -F.y, -F.z))
+  frame.x, frame.y, frame.z = fr.O.x - U.x * FLOOR_Y_BUILDER, fr.O.y - U.y * FLOOR_Y_BUILDER, fr.O.z - U.z * FLOOR_Y_BUILDER
+end
+-- (probes) the frame's planet-local origin the session wants now
+function hubFrameWant()
+  local fr = hub and hub_frame()
+  if not fr then return nil end
+  return { x = fr.O.x - fr.U.x * FLOOR_Y_BUILDER, y = fr.O.y - fr.U.y * FLOOR_Y_BUILDER, z = fr.O.z - fr.U.z * FLOOR_Y_BUILDER, body = hub.body }
+end
+
+enter_hub = function(hp)
+  if mode ~= "world" then return false, "the builder isn't in this scene" end
+  if state ~= "idle" or fx then return false, "the builder is busy" end
+  local gm = ref("game_manager")
+  if gm and gm.loading then return false, "still loading" end
+  local ST, BH = ref("structures"), ref("base_hub")
+  local rec = ST and BH and hp and ST.get(hp.sid)
+  if not rec then return false, "no base there" end
+  local planet = find(rec.b)
+  if not valid(planet) then return false, "no world there" end
+  vab = nil
+  local bp = BH.toBuilder(rec)
+  local base = 0
+  for _, d in ipairs(bp.parts) do base = base + (d.cost or 0) end
+  local cr = ref("crew")
+  local aid = cr and cr.activeId and cr.activeId() or nil
+  local lh = cr and cr.lastHit and aid and cr.lastHit[aid]
+  hub = { sid = hp.sid, uid = hp.uid, body = rec.b, stash = {}, baseline = base, hit0 = lh and lh.t or nil, t0 = time,
+          name = rec.n or ("Base " .. tostring(hp.sid)) }
+  for _, k in ipairs(STASH_KEYS) do hub.stash[k] = { v = deepc(save.get(k)) } end
+  bp.name = hub.name
+  save.set("shipyard.blueprint", bp)
+  save.set("shipyard.current", hub.name)
+  save.set("shipyard.lockerPlan", {})
+  save.set("shipyard.kit", false)
+  local H = hub
+  H.ctx = {
+    kind = "hub", sid = hp.sid, uid = hp.uid, body = rec.b, world = stand_world(rec.b), baseline = base,
+    afford = function(delta)
+      local co, E = ref("company"), ref("base_economy")
+      local b = ref("builder")
+      local hull = (b and b.build_cost and b.build_cost()) or 0
+      local add = math.max(0, hull + (delta or 0) - H.baseline)
+      local ship = (add > 0 and E and E.shipping) and E.shipping(add) or 0
+      if co and co.afford and not co.afford(add + ship) then
+        return false, string.format("can't afford it — what you've added to the base costs %s with shipping and the budget is %s",
+          co.money and co.money(add + ship) or tostring(add + ship), co.money and co.money(co.balance()) or "?")
+      end
+      return true
+    end,
+    escape = function() return leave_hub() end,
+    commission = function() return leave_hub() end,
+    info = function() return nil end,
+    version = function() return 0 end,
+    release = function() return "lift" end,
+  }
+  ST.suspend(hp.sid, true)
+  enter_t = time
+  enterMs = nil
+  hostKind = "hub"
+  if input and input.setMouseLocked then input.setMouseLocked(false) end
+  set_owner("builder")
+  push_ctx(true)
+  park_crew(true)
+  state = "frame"
+  make_frame(function()
+    pin_hub()
+    state = "loading"
+    scene.load(OVERLAY, { additive = true, replicate = false })
+  end, planet)
+  note(string.format("Build the base: hub %s:%s on %s, %d parts", tostring(hp.sid), tostring(hp.uid), rec.b, #bp.parts))
+  return true
+end
+
+-- LEAVE / ESC / BUILD IT at a hub: the builder's parts committed to the base,
+-- the VAB's keys back, the base back in the world. `abandon` (the overlay
+-- never came, or went away under us) commits nothing. → ok, why
+leave_hub = function(abandon)
+  if not hub then return false, "not at a hub" end
+  local H = hub
+  local BH, ST = ref("base_hub"), ref("structures")
+  local b = ref("builder")
+  local ok, why, q = true, nil, nil
+  if not abandon and BH and b and b.hubParts then
+    local list = b.hubParts()
+    local lib = ref("parts_registry")
+    local entries = BH.fromBuilder(list, lib and lib.REG)
+    local cr = ref("crew")
+    ok, why, q = BH.commit(H.sid, entries, { hubUid = H.uid, by = cr and cr.activeId and cr.activeId() or nil, t = agency_now() })
+  end
+  for k, e in pairs(H.stash) do
+    if e.v == nil then if save.delete then save.delete(k) else save.set(k, false) end else save.set(k, e.v) end
+  end
+  teardown(true)
+  state = "idle"
+  hostKind = nil
+  hub = nil
+  if ST and ST.suspend then ST.suspend(H.sid, false) end
+  local co = ref("company")
+  local m = function(v) return (co and co.money) and co.money(v) or ("$" .. tostring(v)) end
+  local msg
+  if abandon then msg = "the base builder closed — nothing changed"
+  elseif not ok then msg = "not built: " .. tostring(why)
+  elseif q and q.unpaid then msg = "the base can't pay for what you added — it is left off; what you moved and took off stands"
+  elseif q and q.total > 0 then msg = string.format("the base is built · %s charged (%s of parts + %s shipping)", m(q.total), m(q.added), m(q.ship))
+  elseif q and q.total < 0 then msg = string.format("the base is built · %s back for the parts taken off", m(-q.total))
+  else msg = "the base is built · $0 — nothing to pay" end
+  if q and (q.n_add + q.n_rem + q.n_move) > 0 then
+    msg = msg .. string.format(" · %d added, %d moved, %d taken off", q.n_add, q.n_move, q.n_rem)
+  end
+  if q and (q.kept or 0) > 0 then msg = msg .. string.format(" · %d kept where they were (the hub, a stand holding a craft)", q.kept) end
+  say(msg)
+  lastHubExit = { ok = ok, why = why, q = q, t = time, sid = H.sid, abandon = abandon == true, msg = msg }
+  local s = ref("sfx")
+  if s and s.play then s.play("close") end
+  return ok, why
+end
+
+-- The overlay has landed at a hub: the camera starts from where the Engineer
+-- stood, looking at the hub, clipped by the world.
+function hub_landed(bcn)
+  if not hub then return end
+  local bc = ref("builder_camera")
+  local fr, rec = hub_frame()
+  if bc and fr and rec then
+    if bc.setWorldClip then bc.setWorldClip(true, FLOOR_Y_BUILDER - 3.0) end
+    local hp = nil
+    for _, p in ipairs(rec.bp) do if p.uid == hub.uid then hp = p end end
+    local px, py, pz = hp and hp.x or 0, (hp and hp.y or 0) + FLOOR_Y_BUILDER + 1.0, hp and hp.z or 0
+    local a = astronaut()
+    local bb = space.body(hub.body)
+    local yaw = 0.6
+    if a and bb then
+      local dx, dy, dz = a.x - bb.x - fr.O.x, a.y - bb.y - fr.O.y, a.z - bb.z - fr.O.z
+      local lx = dx * fr.R.x + dy * fr.R.y + dz * fr.R.z - px
+      local lz = dx * fr.F.x + dy * fr.F.y + dz * fr.F.z - pz
+      if lx * lx + lz * lz > 0.01 then yaw = math.atan2(lx, lz) + 0.55 end
+    end
+    if bc.setCamState then bc.setCamState({ P = { x = px, y = py, z = pz }, yaw = yaw, pitch = -0.42, d = 13.0 }) end
+  end
+  local b = ref("builder")
+  if b and b.hint then pcall(b.hint, string.format("Base Hub · %s  ·  every part: the kit, the BASE parts, any VAB part  ·  BUILD IT, LEAVE or ESC builds it into the base", tostring(hub.name)), 6.0) end
+  local ins = ref("builder_inspector")
+  if ins and ins.setTab then pcall(ins.setTab, "INSPECT") end
+end
+
+-- (each frame while building at a hub)
+function hub_tick(dt)
+  pin_hub()
+  local cr = ref("crew")
+  local aid = cr and cr.activeId and cr.activeId() or nil
+  local lh = cr and cr.lastHit and aid and cr.lastHit[aid]
+  if hub and lh and lh.t ~= hub.hit0 then
+    hub.hit0 = lh.t
+    note("the Engineer was hit while building the base (" .. tostring(lh.cause) .. ") — out of the builder")
+    leave_hub()
+    say("you were hit (" .. tostring(lh.cause or "something") .. ") — what you built is in the base")
+  end
+end
+
 local function fade_box()
   if fade_el then return fade_el end
   fade_el = host and host:getcomponent("UiElement") or nil
@@ -1096,7 +1301,22 @@ function kit_craft_ready()
   return type(kit) == "table" and type(kit.lockers) == "table" and kit_craft(kit) ~= nil
 end
 
+pending_commission = nil   -- { sid, uid, t, msg }: a COMMISSION waiting for its stand's new node
+local function pending_tick()
+  local pc = pending_commission
+  local CS = ref("craft_stand")
+  if not (pc and CS) then return end
+  local n = CS.standNodeOf and CS.standNodeOf(pc.sid, pc.uid)
+  if valid(n) or time - pc.t > 3.0 then
+    pending_commission = nil
+    local cok, cwhy = CS.commission(pc.sid, pc.uid)
+    if lastStandExit and lastStandExit.sid == pc.sid then lastStandExit.commissioned, lastStandExit.cwhy = cok, cwhy end
+    say(cok and "commissioned: held on the stand, Release lets it go" or ("not commissioned: " .. tostring(cwhy)))
+  end
+end
+
 function update(node, dt)
+  if pending_commission then pending_tick() end
   if mode == "world" and (state == "idle" or state == "rollout") then kit_tick() end
   if mode == "standalone" then
     if not valid(vab) then vab = find("VabInterior") end
@@ -1113,6 +1333,7 @@ function update(node, dt)
   end
   pin_crew()
   if hostKind == "stand" then stand_tick(dt) if state == "idle" then return end end
+  if hostKind == "hub" then hub_tick(dt) if state == "idle" then return end end
   if state == "loading" then
     -- The overlay is in once its builder node is: hand it the view.
     local bn = find("Builder")
@@ -1128,10 +1349,12 @@ function update(node, dt)
       lean_apply()
       enterMs = (time - enter_t) * 1000
       if hostKind == "stand" then stand_landed(bc) end
-      note(string.format("building %s (%.0f ms from E)", hostKind == "stand" and "at a Build Stand" or "in the VAB", enterMs))
+      if hostKind == "hub" then hub_landed(bc) end
+      note(string.format("building %s (%.0f ms from E)", hostKind == "stand" and "at a Build Stand"
+        or (hostKind == "hub" and "a base from its hub") or "in the VAB", enterMs))
     elseif time - enter_t > 5.0 then
       note("the builder overlay never arrived — back to the world")
-      if hostKind == "stand" then leave_stand(false) else teardown(true) end
+      if hostKind == "stand" then leave_stand(false) elseif hostKind == "hub" then leave_hub(true) else teardown(true) end
       state = "idle"
     end
     return
@@ -1140,7 +1363,7 @@ function update(node, dt)
     -- The overlay went away under us (unloaded by someone else): clean up.
     local bn = find("Builder")
     if not valid(bn) then
-      if hostKind == "stand" then leave_stand(false) else teardown(true) end
+      if hostKind == "stand" then leave_stand(false) elseif hostKind == "hub" then leave_hub(true) else teardown(true) end
       state = "idle"
       return
     end

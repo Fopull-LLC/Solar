@@ -439,9 +439,14 @@ local function over_panel()
   if cp and cp.ownsMouse then local ok, r = pcall(cp.ownsMouse); return ok and r == true end
   return false
 end
+-- (playtest 11-09: any focused text field — every "Field…" node — has the
+-- keys; input_guard.lua blocks the raw readers for every script, this keeps
+-- the kit's own clicks and simulated keys out too)
 local function typing()
+  local IG = ref("input_guard")
+  if IG and IG.typing then return IG.typing() end
   local f = ui and ui.focused and ui.focused()
-  return f ~= nil and (f.name == "FieldPartSearch" or f.name == "FieldBaseName" or f.name == "FieldKitText" or f.name == "FieldKitCode")
+  return f ~= nil and type(f.name) == "string" and f.name:sub(1, 5) == "Field"
 end
 -- A new base's name field is up (base_tower.lua), or the kit's own prompt (a
 -- blueprint's name, a sign's words, a code: blueprints.lua): keys and clicks wait.
@@ -1040,6 +1045,17 @@ end
 
 -- ── the history (K9) ────────────────────────────────────────────────────────
 local HIST = nil
+-- (playtest 11-09) the ground under a part levelled to its base, as a
+-- placement does (the Base Hub's commit asks it for what it set on the ground)
+function levelPart(sid, uid)
+  local ST = ref("structures")
+  local rec = ST and ST.get(sid)
+  local part = rec and ST.getPart(sid, uid)
+  local def = part and partInfo(part.id)
+  if not (def and def.half) then return 0 end
+  return level_ground(def, rec, part)
+end
+
 function history()
   if HIST then return HIST end
   local bh = ref("builder_history")
@@ -1145,16 +1161,20 @@ function place(sid, partId, p, payer, opts)
     for k, v in pairs((opts and opts.fields) or {}) do entry[k] = v end
     return entry
   end
+  -- (11-09: a part set on the terrain — the ground grid, Shift's free, a slab
+  -- edge to edge — is held by the ground whatever its height in the
+  -- structure's frame: kit_snap's support graph starts from it)
+  local gnd = (p.mode == "grid" or p.mode == "free" or p.mode == "edge") or nil
   if sid ~= nil then
     uid = ST.addPart(sid, own({ id = partId, x = p.lx or 0, y = (p.ly or 0) + base, z = p.lz or 0, yaw = p.yaw or 0,
-      pitch = p.pitch or 0, roll = p.roll or 0, paid = paid, ft = ft }))
+      pitch = p.pitch or 0, roll = p.roll or 0, paid = paid, ft = ft, gnd = gnd }))
   else
     local dp = ref("deployables")
     local up, fw = p.sup or p.up, p.fwd0 or p.fwd
     local rec = ST.newRecord(nil, p.body, p.x + up.x * base, p.y + up.y * base, p.z + up.z * base, up, fw, partId,
       { by = by, t = t, d = dp and dp.dateOf and dp.dateOf(t) or nil, name = def.kit and "Structure" or def.label, paid = paid })
     rec.bp[1].paid, rec.bp[1].ft = paid, ft
-    rec.bp[1].pitch, rec.bp[1].roll = p.pitch or 0, p.roll or 0
+    rec.bp[1].pitch, rec.bp[1].roll, rec.bp[1].gnd = p.pitch or 0, p.roll or 0, gnd
     own(rec.bp[1])
     sid = ST.add(rec)
     uid = 1
@@ -1585,6 +1605,15 @@ function paste_click(p)
   local function fields(e) return { paint = e.paint, paintIn = e.paintIn } end
   local function words(s2, uid, e)
     if e.text and uid then ST.setPartState(s2, uid, { text = e.text }) end
+    -- (a VAB part from the Base Hub: its launch record beside the structure)
+    if type(e.lp) == "table" and uid then
+      local t = save.get("slivebp." .. tostring(s2))
+      t = type(t) == "table" and t or {}
+      t[tostring(uid)] = e.lp
+      save.set("slivebp." .. tostring(s2), t)
+      local SL = ref("struct_live")
+      if SL and SL.changed then SL.changed(s2) end
+    end
   end
   local a0 = clip.parts[1]
   local sid, _, q, uid0 = place(p.sid, a0.id, p, "money", { collect = list, prepaid = pre(a0.id), fields = fields(a0) })
@@ -1708,8 +1737,9 @@ function saveBlueprint(sid, uids, name)
   end
   local rec = sid and ST.get(sid)
   if not rec then play("denied"); say("Save as Blueprint: Alt+click pieces to choose them, or stand at a structure") return false, "nothing chosen" end
+  local lps = save and save.get and save.get("slivebp." .. tostring(sid))
   local bp, why = BP.fromParts(rec, uids, partInfo, { name = (rec.n and rec.n ~= "Structure") and rec.n or "My Build", by = member(), made = agency_now(),
-    texts = function(uid) local st = ST.partState(sid, uid); return st and st.text or nil end })
+    texts = function(uid) local st = ST.partState(sid, uid); return st and st.text or nil end, lps = type(lps) == "table" and lps or nil })
   if not bp then play("denied"); say("Save as Blueprint: " .. tostring(why)) return false, why end
   local b = blueprintBill(bp)
   local function finish(text)

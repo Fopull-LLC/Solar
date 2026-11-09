@@ -98,8 +98,7 @@ local function key_row(B, C, E, r, i)
   local name
   if renaming == r.gid then
     name = { "field", key = "nf", style = "menu/field", w = "grow", h = 22, text = r.name, maxLen = 24,
-      onSubmitted = function(n)
-        cmd(B, C, "unbind", { gid = r.gid, rename = (n and n.text) or r.name })
+      onSubmitted = function(n) if input.spaceSubmit and input.spaceSubmit(n) then return end         cmd(B, C, "unbind", { gid = r.gid, rename = (n and n.text) or r.name })
         renaming = nil
       end,
       onCancelled = function() renaming = nil end }

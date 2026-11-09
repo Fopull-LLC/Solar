@@ -80,6 +80,7 @@ local order = {}      -- ids, in building order
 local live = {}       -- id → { nodes = { [uid] = node }, feet = { [uid] = node }, spawning = n }
 local owner = {}      -- live node id → { sid, uid }
 local cells = {}      -- index cell key → { [sid .. ":" .. uid] = { sid, uid } }
+local held = {}       -- id → true: suspended (the Base Hub's builder has it; suspend)
 local CELL = 32.0
 
 local function S() return save end
@@ -601,7 +602,27 @@ local function spawn_rec(r)
 end
 
 -- Spawn this one now (a placement: no waiting for the 1 Hz check).
-function spawnNow(id) ensure() local r = recs[id]; if r then spawn_rec(r) end end
+function spawnNow(id) ensure() local r = recs[id]; if r and not held[id] then spawn_rec(r) end end
+
+-- (playtest 11-09: the Base Hub's builder) A structure held out of the world
+-- while the full builder edits it: its nodes (and its live vessel, which
+-- struct_live drops when isLive goes false) go, so the builder's copies are
+-- the only ones drawn and the camera meets no invisible walls; released, it
+-- is spawned again from its records as they now stand. → ok
+function suspend(id, on)
+  ensure()
+  if not recs[id] then held[id] = nil return false end
+  if on then
+    held[id] = true
+    despawn(id)
+  else
+    held[id] = nil
+    spawn_rec(recs[id])
+  end
+  bump()
+  return true
+end
+function suspended(id) return held[id] == true end
 
 local check_t = -10
 local function focus()
@@ -639,6 +660,6 @@ function update(node, dt)
         if b then want = math.sqrt((b.x + r.x - fx) ^ 2 + (b.y + r.y - fy) ^ 2 + (b.z + r.z - fz) ^ 2) < range end
       end
     end
-    if want then spawn_rec(r) elseif live[id] then despawn(id) end
+    if want and not held[id] then spawn_rec(r) elseif live[id] and not want then despawn(id) end
   end
 end

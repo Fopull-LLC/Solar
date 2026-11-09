@@ -84,7 +84,7 @@ local function slurp(p) local f = io.open(p); if not f then return nil end local
 -- ── parts_base ──────────────────────────────────────────────────────────────
 local PB = load_script("parts_base.lua", env({}, {}))
 local T = PB.partInfo("tower")
-check(T and T.script == "base_tower" and T.onDeck and T.fieldOnly and T.tower and T.tower.draw == 2.0 and T.tower.spacing == 1000
+check(T and T.script == "base_tower" and T.onDeck and T.fieldOnly and T.tower and T.tower.draw == 2.0 and T.tower.spacing == 300
   and T.tower.radius == 150 and T.tower.mast > 10, "the tower: a BASE part with a script; 2 EC/s, 1 km apart, a 150 m base")
 check(near(T.mass, 1.5) and T.cost == 4000, "1.5 t, $4,000 (the addendum's)")
 local ron = slurp("solar/prefabs/BaseTower.prefab.ron") or ""
@@ -117,21 +117,21 @@ check(near(B.groundDist(R, 0, R, 0, R, 0, 0), math.pi / 2 * R, 1e-6), "groundDis
 check(near(B.groundDist(nil, 0, 0, 0, 3, 4, 0), 5), "...no radius: the straight line")
 -- spacing: the home base's station, and the other towers
 local home = { b = "Vever", x = R, y = 0, z = 0 }
-local a = 0.9 * 1000 / R
+local a = 250 / R
 local w = B.spacingWhy("Vever", R * math.cos(a), R * math.sin(a), 0, R, home)
-check(w and w:find("Tracking Station", 1, true), "a tower 900 m from the spaceport's station is refused: " .. tostring(w))
-local a2 = 1.2 * 1000 / R
+check(w and w:find("Tracking Station", 1, true) and w:find("50 m further", 1, true), "a tower 250 m from the spaceport's station is refused: " .. tostring(w))
+local a2 = 400 / R
 check(B.spacingWhy("Vever", R * math.cos(a2), 0, R * math.sin(a2), R, home) == nil
   or B.spacingWhy("Vever", R * math.cos(a2), 0, R * math.sin(a2), R, home):find("Far Side") == nil,
-  "...1.2 km from it the station doesn't stand in the way")
-local w2 = B.spacingWhy("Vever", 0, R * math.cos(0.5 / R * 1000), R * math.sin(0.5 / R * 1000), R, nil)
-check(w2 and w2:find("Far Side", 1, true), "a tower 500 m from Far Side's is refused: " .. tostring(w2))
+  "...400 m from it the station doesn't stand in the way")
+local w2 = B.spacingWhy("Vever", 0, R * math.cos(250 / R), R * math.sin(250 / R), R, nil)
+check(w2 and w2:find("Far Side", 1, true), "a tower 250 m from Far Side's is refused: " .. tostring(w2))
 check(B.spacingWhy("Nami", 0, R, 0, R, home) == nil, "...on another world nothing is near")
 local br, bd = B.baseAt("Vever", 0, R * math.cos(0.1), R * math.sin(0.1), R)
 check(br and br.id == 1 and near(bd, 80, 1e-6), "a structure 80 m off belongs to Far Side")
 check(B.baseAt("Vever", 0, R * math.cos(0.2), R * math.sin(0.2), R) == nil, "...one 160 m off to no base")
 B.setDown(1, true)
-check(#B.list() == 1 and #B.list(true) == 2 and B.spacingWhy("Vever", 0, R * math.cos(0.5 / R * 1000), R * math.sin(0.5 / R * 1000), R, nil) == nil,
+check(#B.list() == 1 and #B.list(true) == 2 and B.spacingWhy("Vever", 0, R * math.cos(250 / R), R * math.sin(250 / R), R, nil) == nil,
   "a base whose tower is down leaves the list and the spacing rule")
 B.setDown(1, false)
 local B2 = load_script("bases.lua", env(store, {}))

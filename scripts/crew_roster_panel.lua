@@ -233,8 +233,7 @@ local function roster_rows(c, rows)
       if st.renaming == r.id then
         name = { "field", key = "nf", name = "FieldCrewRename", style = "menu/field", w = "grow", h = 26, maxLen = 32,
           text = nil, placeholder = r.name,
-          onSubmitted = function(node)
-            local s = node and node.text
+          onSubmitted = function(node) if input.spaceSubmit and input.spaceSubmit(node) then return end             local s = node and node.text
             if s and #s > 0 then
               local ok, why = call(c, "rename", r.id, s)
               if ok then say("renamed: " .. s) else say("can't rename — " .. tostring(why or "no answer")) end

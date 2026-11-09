@@ -201,6 +201,19 @@ local function registry()
       R.nuke = true
     end
   end
+  -- EVERY BASE PART (playtest 11-09: "the base building parts should all be in
+  -- the vab categories"): at a Build Stand or a Base Hub — the overlay on the
+  -- world, where the Build Kit's scripts are — the BASE section and every kit
+  -- category join the catalogue (scripts/base_hub.lua register, after the
+  -- VAB's own sections so a clashing title reads "BASE …"). The VAB itself
+  -- builds launch vehicles from the agency's yard and keeps its list.
+  if R.lib and R.aero and R.auto and R.nuke and not R.base and hostContext() then
+    local bh = findScript and findScript("base_hub") or nil
+    if bh and bh.register and R.lib.extend then
+      R.lib.extend(bh)
+      R.base = true
+    end
+  end
   return R.lib
 end
 local REG = setmetatable({}, { __index = function(_, id)
@@ -541,13 +554,29 @@ local function hash_put(uid, p)
   W.H:set(uid, p.x - ex, p.y - ey, p.z - ez, p.x + ex, p.y + ey, p.z + ez)
 end
 
+-- (playtest 11-09) A BASE PIECE's prefab has its root at its ground point (a
+-- kit piece) or its seat over it (a BASE part), not at the box centre every
+-- rule here works in: its node stands at centre + R·npiv (base_hub.builderDef).
+function nodeAt(node, def, x, y, z, yaw, pitch, roll)
+  local v = def and def.npiv
+  if v then
+    local cy, sy = math.cos(yaw or 0), math.sin(yaw or 0)
+    local cx, sx = math.cos(pitch or 0), math.sin(pitch or 0)
+    local cz, sz = math.cos(roll or 0), math.sin(roll or 0)
+    x = x + (cy * cz + sy * sx * sz) * v.x + (-cy * sz + sy * sx * cz) * v.y + (sy * cx) * v.z
+    y = y + (cx * sz) * v.x + (cx * cz) * v.y - sx * v.z
+    z = z + (-sy * cz + cy * sx * sz) * v.x + (sy * sz + cy * sx * cz) * v.y + (cy * cx) * v.z
+  end
+  node.x, node.y, node.z = x, y, z
+end
+
 -- A part in hand (p.carried) is a preview: its moves don't bump craftVersion
 -- (panels would rebuild every frame of a drag); putting it down does.
 local function set_part_pos(p, x, y, z)
   if not p.carried then craftVersion = craftVersion + 1; W.dirty = true end
   p.x, p.y, p.z = x, y, z
   p.pv = (p.pv or 0) + 1
-  if p.node then p.node.x, p.node.y, p.node.z = x, y, z end
+  if p.node then nodeAt(p.node, p.def, x, y, z, p.yaw, p.pitch, p.roll) end
   if p.uid then hash_put(p.uid, p) end
 end
 
@@ -556,7 +585,10 @@ local function set_part_rot(p, yaw, pitch, roll)
   if not p.carried then craftVersion = craftVersion + 1; W.dirty = true end
   p.yaw, p.pitch, p.roll = yaw, pitch, roll
   p.pv = (p.pv or 0) + 1
-  if p.node then p.node.yaw, p.node.pitch, p.node.roll = yaw, pitch, roll end
+  if p.node then
+    p.node.yaw, p.node.pitch, p.node.roll = yaw, pitch, roll
+    if p.def and p.def.npiv then nodeAt(p.node, p.def, p.x, p.y, p.z, yaw, pitch, roll) end
+  end
   if p.uid then hash_put(p.uid, p) end
 end
 
@@ -741,7 +773,12 @@ function hostContext()
     W.bhost = bh or false
   end
   if not bh then return nil end
-  return bh.standContext and bh.standContext() or nil
+  return (bh.standContext and bh.standContext()) or (bh.hubContext and bh.hubContext()) or nil
+end
+-- (playtest 11-09) Is this the Base Hub's builder? (the base, not a craft)
+function hubMode()
+  local hc = hostContext()
+  return hc ~= nil and hc.kind == "hub"
 end
 
 function launchWorld()
@@ -1734,7 +1771,7 @@ function launchCheck()
   -- loose islands (§5.2): only the root's island is the craft
   if islands then
     local comps = islands()
-    if comps and #comps > 1 then
+    if comps and #comps > 1 and not hubMode() then
       rank[#warn + 1] = 0
       local lu = {}
       for _, k in ipairs(comps) do if not k.root then for _, u in ipairs(k) do if #lu < 200 then lu[#lu + 1] = u end end end end
@@ -2049,6 +2086,8 @@ end
 -- The craft check's answer for the craft as it stands: run once per edit.
 -- (perfCounters().check_ms: what the last run cost)
 function checkRun()
+  -- (playtest 11-09: a base is not a craft; the craft check has nothing to say at a hub)
+  if hubMode() then return { rows = {}, total_ms = 0 } end
   local CC = checkLib()
   if not (CC and lib("aero")) then return nil end
   local c = W.cache
@@ -2762,7 +2801,7 @@ end
 -- The launch key's words and the sites the toolbar latches (none at a stand).
 function launchLabel()
   local s = launchSite()
-  if s == "stand" then return "COMMISSION  ▸" end
+  if s == "stand" then return hubMode() and "BUILD IT  ▸" or "COMMISSION  ▸" end
   return s == "runway" and "RUNWAY  ▸" or "PAD  ▸"
 end
 function launchSiteChoices()
@@ -2836,7 +2875,8 @@ function refreshStatsNow()
   local hcs = hostContext()
   if hcs and bal then
     local d = math.max(0, cost - (hcs.baseline or 0))
-    money = string.format("on the stand: %s to pay as you leave (+ shipping)   ·   craft %s   ·   budget %s%s", co.money(d),
+    money = string.format("%s: %s to pay as you leave (+ shipping)   ·   %s %s   ·   budget %s%s",
+      hcs.kind == "hub" and "the base" or "on the stand", co.money(d), hcs.kind == "hub" and "base" or "craft",
       co.money(cost), co.money(bal), (d > bal) and "   ⚠ OVER BUDGET" or "")
   end
   -- What to do next while it's still being built; once it's a whole rocket,
@@ -2906,7 +2946,7 @@ local function dress_node(node, p)
   if W.F and not W.F.identity and W.F.node and node.setParent then
     node:setParent(W.F.node, { keepWorld = false })
   end
-  node.x, node.y, node.z = p.x, p.y, p.z
+  nodeAt(node, p.def, p.x, p.y, p.z, p.yaw, p.pitch, p.roll)
   node.yaw, node.pitch, node.roll = p.yaw or 0, p.pitch or 0, p.roll or 0
   if p.hidden then node.visible = false end
   if node.id and p.uid then W.bynode[node.id] = p.uid end
@@ -2927,7 +2967,7 @@ local function spawn_now(u, p)
     else
       destroy(node)
     end
-  end)
+  end, p.def.base and { body = false } or nil)
 end
 
 local function request_node(u, p)
@@ -4594,9 +4634,18 @@ end
 -- posed — a carried stack moves RIGIDLY with its root, turns included.
 -- Returns snap, x, y, z.
 function ghostFollow()
-  local snap = find_snap()
+  -- (playtest 11-09) a kit piece aimed at a base piece snaps as the Build Kit's
+  -- do (kit_snap.face): exact, on the 0.5 m grid, quarter turns
+  local ks, kx, ky, kz, kyaw, kpitch, kroll = kitSnap()
+  local snap = ks or find_snap()
   local x, y, z
-  if snap and snap.wp3 then
+  if ks then
+    ghost.A, ghost.n = IDENT, nil
+    ghost.yaw, ghost.pitch, ghost.roll = kyaw, kpitch, kroll
+    ghost.B = basisOf(kyaw, kpitch, kroll)
+    x, y, z = kx, ky, kz
+    ghost.on_floor = false
+  elseif snap and snap.wp3 then
     -- WP3: the candidate IS the pose
     local c = snap.wp3
     ghost.B = c.B
@@ -4614,6 +4663,7 @@ function ghostFollow()
     ghost.B = basisClean(ghost.off or IDENT)
     ghost.yaw, ghost.pitch, ghost.roll = basisEuler(ghost.B)
     x, y, z, ghost.on_floor = free_pos()
+    if ghost.def.base and ghost.on_floor then x, y, z = baseFloorPose(x, y, z) end
   end
   if ghost.carried then
     for _, m in ipairs(ghost.carried) do
@@ -4625,10 +4675,98 @@ function ghostFollow()
       end
     end
   elseif ghost.node then
-    ghost.node.x, ghost.node.y, ghost.node.z = x, y, z
+    nodeAt(ghost.node, ghost.def, x, y, z, ghost.yaw, ghost.pitch, ghost.roll)
     ghost.node.yaw, ghost.node.pitch, ghost.node.roll = ghost.yaw, ghost.pitch, ghost.roll
   end
   return snap, x, y, z
+end
+
+-- ── BASE PIECES IN THE BUILDER (playtest 11-09; scripts/base_hub.lua) ──────
+-- The base pieces on the stand, as a structure record in the builder's frame
+-- (each at its ground point, y from the floor): what kit_snap reads. Kept per
+-- craftVersion; parts in hand are left out.
+function baseRec(exclude)
+  local key = craftVersion
+  if W.brec and W.brec_k == key and W.brec_x == exclude then return W.brec end
+  local rec = { id = 0, b = "", x = 0, y = 0, z = 0, ux = 0, uy = 1, uz = 0, fx = 0, fy = 0, fz = 1, bp = {}, byUid = {} }
+  local fy = params.floor_y
+  for u, p in pairs(parts) do
+    local d = p.def
+    if d.base and d.baseId and d.npiv and not p.carried and not (exclude and exclude[u]) then
+      local v = d.npiv
+      local X, Y, Z = rot_basis(p.yaw, p.pitch, p.roll)
+      local e = { uid = u, id = d.baseId, yaw = p.yaw or 0, pitch = p.pitch or 0, roll = p.roll or 0,
+                  x = p.x + X.x * v.x + Y.x * v.y + Z.x * v.z,
+                  y = p.y + X.y * v.x + Y.y * v.y + Z.y * v.z - (d.seat or 0) - fy,
+                  z = p.z + X.z * v.x + Y.z * v.y + Z.z * v.z }
+      rec.bp[#rec.bp + 1] = e
+      rec.byUid[u] = e
+    end
+  end
+  W.brec, W.brec_k, W.brec_x = rec, key, exclude
+  return rec
+end
+-- A centre for `def` whose ground point is (gx, gy, gz) (builder frame, y
+-- from the floor) at yaw, pitch, roll.
+function baseCentre(def, gx, gy, gz, yaw, pitch, roll)
+  local v = def.npiv
+  local X, Y, Z = rot_basis(yaw, pitch, roll)
+  local ny = gy + (def.seat or 0) + params.floor_y
+  return gx - (X.x * v.x + Y.x * v.y + Z.x * v.z), ny - (X.y * v.x + Y.y * v.y + Z.y * v.z), gz - (X.z * v.x + Y.z * v.y + Z.z * v.z)
+end
+-- The player's turn of the part in hand in clean steps: quarter turns of yaw,
+-- pitch and roll read off ghost.off (playtest 11-09: "rotation snaps to clean
+-- steps").
+function quarterTurns()
+  local yaw, pitch, roll = basisEuler(basisClean(ghost.off or IDENT))
+  local Q = math.pi / 2
+  local function q(a) return math.floor(a / Q + 0.5) * Q end
+  return q(yaw), q(pitch), q(roll)
+end
+-- → snap, x, y, z, yaw, pitch, roll | nil
+function kitSnap()
+  local g = ghost
+  local def = g and g.def
+  if not (def and def.base and def.kitSnap and def.baseId) or g.carried then return nil end
+  local KS, PB = findScript and findScript("kit_snap"), findScript and findScript("parts_base")
+  if not (KS and KS.face and PB and PB.partInfo) then return nil end
+  local mx, my = input.mouse()
+  local ox, oy, oz, dx, dy, dz = camera.screenToRay(mx, my)
+  local hu, _, hP, hn = ray_craft(ox, oy, oz, dx, dy, dz, g.exclude)
+  local hp = hu and parts[hu]
+  if not (hp and hp.def.base and hp.def.baseId) then return nil end
+  local rec = baseRec(g.exclude)
+  local part = rec.byUid[hu]
+  local kd = PB.partInfo(def.baseId)
+  if not (part and kd) then return nil end
+  local qy, qp, qr = quarterTurns()
+  local fy = params.floor_y
+  local f = KS.face({ def = kd, id = def.baseId, P = { x = hP.x, y = hP.y - fy, z = hP.z }, N = { x = hn.x, y = hn.y, z = hn.z },
+    toward = { x = -dx, y = -dy, z = -dz }, hit = { rec = rec, part = part }, defs = PB.partInfo, yawOff = qy })
+  if not f then return nil end
+  local yaw, pitch, roll = f.yaw, f.pitch + (kd.snap == "mount" and 0 or qp), f.roll + (kd.snap == "mount" and 0 or qr)
+  local cx, cy, cz = baseCentre(def, f.lx, f.ly, f.lz, yaw, pitch, roll)
+  local np = { uid = -1, id = def.baseId, x = f.lx, y = f.ly, z = f.lz, yaw = yaw, pitch = pitch, roll = roll }
+  local o, od = KS.overlapIn(rec, PB.partInfo, np, kd)
+  local why = o and string.format("the %s is there", tostring(od and od.label or "piece")) or nil
+  return { kit = { blocked = why, face = f.face }, uid = hu, side = "surface", x = hP.x, y = hP.y, z = hP.z, dx = hn.x, dy = hn.y, dz = hn.z },
+    cx, cy, cz, yaw, pitch, roll
+end
+-- A base piece on the floor: its ground point on the 0.5 m grid (Shift frees
+-- it), turned in quarter turns, its foot on the floor.
+function baseFloorPose(x, y, z)
+  local def = ghost.def
+  if not def.npiv then return x, y, z end
+  local yaw, pitch, roll = quarterTurns()
+  ghost.yaw, ghost.pitch, ghost.roll = yaw, pitch, roll
+  ghost.B = basisOf(yaw, pitch, roll)
+  local X, Y, Z = rot_basis(yaw, pitch, roll)
+  local v = def.npiv
+  local gx = x + X.x * v.x + Y.x * v.y + Z.x * v.z
+  local gz = z + X.z * v.x + Y.z * v.y + Z.z * v.z
+  if not input.key("shift") then gx, gz = math.floor(gx / 0.5 + 0.5) * 0.5, math.floor(gz / 0.5 + 0.5) * 0.5 end
+  -- (its ground point on the floor: a slab's skirt goes into the ground under it)
+  return baseCentre(def, gx, 0, gz, yaw, pitch, roll)
 end
 
 -- Preview every copy symmetry would make (amber boxes, the part's own turn).
@@ -4908,7 +5046,9 @@ function pick(id)
   -- click names the price and arms the card (the catalogue shows "confirm");
   -- the second, on the same card within RESEARCH_CONFIRM seconds, buys it.
   local rs = findScript("research")
-  if rs and not rs.isUnlocked(id) then
+  local rid = (REG[id] and REG[id].base and REG[id].tech) or id
+  if rs and not rs.isUnlocked(rid) then
+    id = rid
     local why_not = rs.blockedBy and rs.blockedBy(id)
     if why_not then
       researchArmed = nil
@@ -4953,7 +5093,7 @@ function pick(id)
     else
       destroy(node)
     end
-  end)
+  end, def.base and { body = false } or nil)
 end
 
 -- LIFT parts into the hand (a drag-move, tool 4's old grab, hold({uid…})).
@@ -5571,6 +5711,21 @@ end
 -- The craft as a launch-format blueprint, now (a Build Stand's host keeps it
 -- on the stand: the autosave, LEAVE and COMMISSION).
 function blueprintNow() return (make_blueprint()) end
+-- (playtest 11-09) The Base Hub's: every part with its launch-format record,
+-- at its own pose in the frame (x, y, z = its box centre, y from the floor;
+-- make_blueprint's recentring and a rover's quarter turn undone). → list
+function hubParts()
+  local bp = make_blueprint()
+  local out = {}
+  for _, d in ipairs(bp.parts or {}) do
+    local p = parts[d.uid]
+    if p then
+      out[#out + 1] = { uid = d.uid, id = p.id, x = p.x, y = p.y - params.floor_y, z = p.z,
+                        yaw = p.yaw or 0, pitch = p.pitch or 0, roll = p.roll or 0, lp = (not p.def.base) and d or nil }
+    end
+  end
+  return out
+end
 
 local function save_blueprint(noflush)
   -- An autosave still in flight (craftSave quiet, over four frames) lands
@@ -5657,7 +5812,8 @@ local function load_blueprint(bp)
   do
     local R = REGISTRY
     registry()
-    if not (R.reg and R.aero and R.auto) and (W.reg_wait or 0) < 120 then
+    -- (at a stand or a hub the base parts join too: wait for them as well)
+    if not (R.reg and R.aero and R.auto and (R.base or not hostContext())) and (W.reg_wait or 0) < 120 then
       local missing = false
       for _, d in pairs(bp.parts) do if not REG[d.id] then missing = true break end end
       if missing then
@@ -7407,6 +7563,8 @@ function islands()
   if c.isl_v == W.sv then return c.isl end
   local G, L = graph(), lib("builder_graph")
   local comps = (G and L) and L.components(G, alive_set(), craft_root(), is_command) or {}
+  -- (playtest 11-09: a base is many things standing on the ground; none is loose)
+  if hubMode() then for _, k in ipairs(comps) do k.root = true end end
   local loose = {}
   for _, k in ipairs(comps) do
     if not k.root then for _, u in ipairs(k) do loose[u] = true end end
@@ -7828,14 +7986,15 @@ function ghostTick(dt, clicked, released, cam_busy)
     -- a surface or flank mount hugs the hull by design: never overlap-gated
     -- (the old rule; builder_attach.blockedBy reads registry boxes, and an
     -- engine's rx is its plume clearance)
-    if snap.wp3 then blocked = snap.wp3.blocked ~= nil and snap.wp3.kind ~= "surface"
+    if snap.kit then blocked = snap.kit.blocked ~= nil
+    elseif snap.wp3 then blocked = snap.wp3.blocked ~= nil and snap.wp3.kind ~= "surface"
     elseif snap.insert then blocked = false -- the far side moves out of the way
     else
       blocked = snap.side ~= "radial" and snap.side ~= "surface"
         and overlaps(ghost.def, x, y, z, ex2, ghost.yaw, ghost.pitch, ghost.roll)
     end
     if blocked then
-      can_place, why = false, "that spot is buried inside another part"
+      can_place, why = false, (snap.kit and snap.kit.blocked) or "that spot is buried inside another part"
       draw.sphere(x, y, z, 0.35, 1.0, 0.25, 0.2, 1.0)
     else
       can_place = true
@@ -8836,6 +8995,11 @@ function standCommission(hc)
 end
 function doLaunch()
   local hc = hostContext()
+  if hc and hc.kind == "hub" then
+    ui("launch", 1.0)
+    save_blueprint(true)
+    return hc.commission()
+  end
   if hc then return standCommission(hc) end
   W.launch_bp = nil
   local chk = launchCheck()
@@ -9812,7 +9976,7 @@ function craftOpen(name, mode)
   W.craft = name
   -- (at a Build Stand a saved craft is turned to stand on the deck: wheels
   -- down, nose to the stand's front; frameTick does it once its parts are in)
-  if hostContext() then W.auto_orient = { name = name, t = time } end
+  if hostContext() and not hubMode() then W.auto_orient = { name = name, t = time } end
   save.set("shipyard.current", name)
   -- the craft's own kit comes with it (a craft saved before kit: none)
   save.set("shipyard.lockerPlan", type(bp.lockers) == "table" and tcopy(bp.lockers) or {})
@@ -9903,7 +10067,7 @@ function CMD.place(a)
   local id = a.id
   if not (id and REG[id]) then return false end
   local rs = findScript and findScript("research")
-  if rs and rs.isUnlocked and not rs.isUnlocked(id) then return false end
+  if rs and rs.isUnlocked and not rs.isUnlocked((REG[id].base and REG[id].tech) or id) then return false end
   local u = next_uid
   local around = {}
   if a.parent and parts[a.parent] then around[a.parent] = true end

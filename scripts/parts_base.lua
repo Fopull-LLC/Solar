@@ -95,16 +95,23 @@ PARTS = {
                fields = { h = 1.0 },
                stand = { min = 0.5, max = 4.0, step = 0.1, low = 0.28, deck = 0.45, deckOff = 2.0385 },
                desc = "0.9 m deck on a telescoping column · 0.5–4.0 m · 0.4 t · build a craft on it" },
+  -- Playtest 11-09: the Base Hub, a site operations console whose menu opens
+  -- the full freecam builder on its structure (scripts/base_hub.lua): every
+  -- part — the kit, the BASE parts, any VAB part — built as the base.
+  baseHub  = { prefab = "BaseHub", label = "Base Hub", h = 2.10, rx = 1.3, rz = 0.95, mass = 0.9, cost = 2500,
+               kind = "structural", fieldOnly = true, seat = 0, half = { x = 1.30, y = 1.05, z = 0.95 },
+               slope = 0.6, onDeck = true, grade = 1.2, footPad = 0.15, script = "base_hub", hub = true,
+               desc = "site operations console · 0.9 t · its menu opens the full builder on the base: every part, kit and VAB" },
   -- Step 7 (M1): the Base Station Tower founds a base (scripts/bases.lua) and
   -- is a ground relay (scripts/base_tower.lua, comms.lua). `tower`: its
   -- antenna's height over the ground point (`mast`), what it draws to be a
   -- ground station (`draw`, EC/s), and the spacing and base radius the
-  -- addendum sets (1 km between towers; every structure within 150 m belongs
-  -- to its base). Unpowered it is a mast: a beacon-class relay.
+  -- addendum sets (300 m between towers since playtest 11-09, was 1 km; every
+  -- structure within 150 m belongs to its base). Unpowered it is a mast: a beacon-class relay.
   tower    = { prefab = "BaseTower", label = "Base Station Tower", h = 13.51, rx = 1.3, rz = 1.3, mass = 1.5, cost = 4000,
                kind = "structural", fieldOnly = true, seat = 6.7540, half = { x = 1.30, y = 6.6, z = 1.30 },
                slope = 0.6, onDeck = true, grade = 1.5, footPad = 0.25, script = "base_tower",
-               tower = { mast = 11.6, draw = 2.0, spacing = 1000, radius = 150 },
+               tower = { mast = 11.6, draw = 2.0, spacing = 300, radius = 150 },
                desc = "12 m lattice mast, 3 m dish · 1.5 t · founds a base; powered (2 EC/s) it is a ground station" },
   -- Step 7: the tower's power. Until the base grid (M6, step 8) its sources
   -- are the ones on its own STRUCTURE (the same pads). `power`: kind "solar"
@@ -166,7 +173,7 @@ PARTS = {
                desc = "3-core 35 mm² 11 kV cable · 140 A (1.5 MW) · 2.3 kg/m · $9 a metre · Transformer to Transformer, up to 6 km" },
 }
 
-ORDER = { "padPlate", "shed", "hab", "stand", "tower", "solarArray", "isotopeSkid", "batteryBank", "shieldWall", "powerCable",
+ORDER = { "padPlate", "shed", "hab", "stand", "baseHub", "tower", "solarArray", "isotopeSkid", "batteryBank", "shieldWall", "powerCable",
           "powerCable35", "powerCable95", "hvCable" }
 
 -- The panel's sections: { { title, ids } } (catalog_panel's host shape).

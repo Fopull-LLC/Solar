@@ -284,7 +284,7 @@ local function describe_agency(e)
         maxLen = HSEED_MAX, placeholder = "seed: random", text = typing and nil or hseed_str, textValign = "center",
         tooltip = "The world's seed (digits): the same seed always makes the same world. Blank picks one at random",
         onChanged = function(n) hseed_str = ((n and n.text) or ""):gsub("%D", ""):sub(1, HSEED_MAX) end,
-        onSubmitted = function(n) hseed_str = ((n and n.text) or ""):gsub("%D", ""):sub(1, HSEED_MAX) end }
+        onSubmitted = function(n) if input.spaceSubmit and input.spaceSubmit(n) then return end hseed_str = ((n and n.text) or ""):gsub("%D", ""):sub(1, HSEED_MAX) end }
     end
     rows[#rows + 1] = row
     rows[#rows + 1] = { "text", key = "home_h", style = "panel/hint", w = "100%", h = "fit", wrap = true,

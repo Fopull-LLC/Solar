@@ -95,6 +95,7 @@ frame.
 | Equipment Shed | `BaseShed` | 3.0 × 2.4 × 2.6 m steel shelter on skids | 1.6 t | $1,400 | `subShape`: its `Wall N` boxes |
 | Surface Hab | `BaseHab` | 4 m × 6 m pressure can on saddles | 7.5 t | $6,500 | `shell`: its `Shell` child mesh |
 | Build Stand (step 6) | `BaseStand` | 0.9 m deck on a telescoping column, 0.5–4.0 m | 0.4 t | $650 | none |
+| Base Hub (playtest 11-09, §19) | `BaseHub` | 2.6 × 1.8 m operations console on a skid: a sloped desk with two displays, a rack, a 3.4 m beacon pole | 0.9 t | $2,500 | none |
 
 - **Every BASE part is `fieldOnly`.** The VAB never lists them, because the
   builder doesn't extend its registry with `parts_base`. `register(REG,
@@ -772,9 +773,13 @@ bases.<id> = { id, b, x, y, z (the tower's ground point, body-relative), n, t, d
 
 ### The rules (M8, and the addendum's spacing)
 
-- **Towers stand 1 km apart along the ground**, the spaceport's Tracking
-  Station included (`base_tower.placeWhy`). This is the red ghost's reason:
-  "14 m from Far Side's tower: towers stand 1.0 km apart".
+- **Towers stand 300 m apart along the ground** (twice a base's 150 m, so
+  two bases never overlap), the spaceport's Tracking Station included
+  (`base_tower.placeWhy`, `bases.SPACING`). This is the red ghost's reason:
+  "14 m from Far Side's tower: towers stand 300 m apart (286 m further
+  away)". (Until playtest 11-09 it was 1 km: on a 922 m world no tower could
+  stand within a kilometre of home, so to a player it could be placed
+  nowhere; §19.)
 - **No building within 30 m of a vein being mined.**
   - A vein is "being mined" once a cut has paid ore from it. That sets
     `veins2.<body>.<patch>.w[<vein>]`, which is saved.
@@ -1190,12 +1195,13 @@ the adjoining place in the hit part's frame, on its 0.5 m grid:
   in pitch and roll in the engine's own order (yaw, then pitch, then roll).
 - **The records rules** (`kit_snap.overlapIn`, `supported`, `fallsWith`):
   a piece may not stand inside another piece of its structure (wall corners
-  may share their 0.1 m ends). In Career a piece must be held: on its
-  structure's ground, resting on another's top (or a deck), or one module
-  beside a held floor. A mount is held by its face. Deconstruct takes what
-  is no longer held down with the piece (`fallsWith`), so the wall goes with
-  its floor and the light with its wall. Creative (the sandbox save) skips
-  the support check.
+  may share their 0.1 m ends). In Career a piece must be held through what
+  it touches (since playtest 11-09 a structural graph, §19): on its
+  structure's ground, resting on a held piece's top (or a deck), or within
+  two modules of one side to side. A mount is held by its face. Deconstruct
+  takes what is no longer held down with the piece (`fallsWith`), so the
+  wall goes with its floor and the light with its wall. Creative (the
+  sandbox save) skips the support check.
 - **Anything else in the way** (the crew, a crate, a rover) is
   `placement.overlapObb` on the piece's own box, skipping the structures.
 - **Ctrl+drag lays a run:** pieces go down as the snapped ghost moves along
@@ -2320,3 +2326,177 @@ F5 with the kit open (`drawOverlay` in `lateUpdate`, this frame's body read):
   the examples built and triggered in the engine, the overlay, the CRT and the
   editor, the cost, save and reload. Pictures `save/user/buildshots/l*.png`;
   numbers in `work/sandbox_s8/NOTES.md`.
+
+## 19. Playtest 11-09: the builder fixes, and the full builder for bases
+
+Ty's playtest of the 11-06b build (3dd2f19): floors that touch what holds
+them were refused, the tower could be placed nowhere, snaps were sometimes a
+few degrees off, typing in the search drove the game, and the direction:
+"the base building parts should all be in the vab categories … a main base
+hub … full access builder so people can build their wildest creations".
+
+### Support through connections (`kit_snap.supportMap`)
+
+- **A structural graph.** Every piece of a structure is a node; two pieces
+  are joined when their solids touch:
+  - **on**: a rests on b's top (or a deck): it takes b's hang as it is;
+  - **side**: they touch side to side (a floor beside a floor, a floor at a
+    wall's face, wall corners): either takes the other's hang + 1;
+  - **under**: a hangs under b: + 1.
+- **Hang 0** is a piece on the structure's ground: its base at the
+  structure's plane, or set on the terrain (`gnd`, written by every ground
+  placement: the grid, Shift's free, a slab edge to edge; or a footing). A
+  piece is held when its hang is at most `MAX_HANG` = 2: a floor, a slab, a
+  hab ring, a laid beam or a block may reach two modules (4 m) from what
+  holds it from below, so an 8 m room roofs over without a pillar and a
+  balcony stands 4 m out (the old rule allowed one module beside a floor
+  that rested, and nothing else). A wall only stands on something or hangs
+  under it: a panel bolted at one end over air is still refused. Mounts are
+  held by their face and hold nothing up.
+- **Cost:** a 0-1 breadth-first search from the grounded pieces over a 2 m
+  cell index (never all pairs), kept per structure until its parts change.
+- `fallsWith` reads the same map, so a mezzanine floor hung on one wall
+  comes down with that wall, but not when a pillar under it holds it too.
+
+### Snaps exact
+
+- **A joined piece turns in quarter turns** (`kit_snap.face`): the wheel's
+  15° (5° with Shift) no longer adds to a wall on a floor's edge, a floor on
+  a wall, a post, a hab ring; a block or a prop on a top keeps clean 15°
+  steps. (The wheel's degrees went straight into the joined yaw: the "a bit
+  off".)
+- **Ground near a structure joins it** (`base_snap.snap`, `JOIN_R` = 12 m):
+  laid in that structure's frame (its up exactly, its 0.5 m grid, quarter
+  turns square to it) at the ground's height there; the foundation adds the
+  cut and fill. A new structure of its own stood on the radial up a few
+  metres on, tilted against its neighbour by the world's curvature (0.7° at
+  10 m on a 775 m world), and its pieces could never hold the other's up.
+  Farther out, a new structure square to the nearest as before; Shift still
+  frees it.
+
+### The tower
+
+The rule was 1 km between towers, the Tracking Station included. Measured
+(`fullbuildprobe.sh fbdiag`): a 922 m world; 210–230 m from the spaceport
+every spot read "223 m from the spaceport's Tracking Station: towers stand
+1.0 km apart", and 2.7 km round on the far side every spot was valid. So to
+a player building near home it could go nowhere. Now 300 m (twice the base
+radius), and the reason says how much further.
+
+### Typing keeps its keys (`scripts/input_guard.lua`)
+
+The step-7 fix asked each reader whether a "Field…" node had focus; the
+inventory's Tab and I, the jump action, the belt's Q and R and the kit's
+own keys never asked. The guard wraps the shared `input` table's readers
+once (on the Build Kit node, the menu and the standalone builder): while a
+text field is focused every raw key but Escape and Enter answers "not
+pressed", and every keyboard action (Jump, Move, Interact, Sprint, Crouch,
+Fly, Turn, ShiftLock, Context) answers nothing; the mouse's (Look,
+LookEnable, LookFree, Zoom, Fire) and Pause still answer. `input.rawKey /
+rawPressed / rawReleased` are the unwrapped readers. The focus is read once
+a frame.
+
+The root of "it selects previously selected parts": the engine's UI
+navigation counts **Space as submit** even in a focused text field, so a
+space typed into the part search fired its `submitted`, which picked the
+first card and dropped the focus; every key after it drove the game. Every
+field's `onSubmitted` now starts with `input.spaceSubmit(node)` (true when
+Space, not Enter, fired it: ignored, the field keeps the focus). The engine
+card is in work/fullbuilder/NOTES.md. Measured (`fbfix`): with the search
+focused, I, Space, E, B, 3, W, M, G, R, Backspace and Tab leave the field
+focused, the inventory shut, the crew on the ground, the kit open and the
+part in hand.
+
+### Two from the S8 probe
+
+- **Grass through slabs after a reload** (`flora_field` struct_clear): the
+  first 30 s of a scene pass every second instead of every 3 s, a plant still
+  settling after the load counts by where it is (up to 3 m over the floor),
+  and a slab or floor set on the terrain (`gnd`, joined at the ground's own
+  height) counts at its own height, not only at the structure's plane.
+- **Crew on the roof after a reload** came from the probes' `KIT.tp`: its ray
+  started 4 m up and met a hab's roof first. It now starts 1.2 m over the
+  floor asked for. The game's own restore (`game_manager` `p_*`) puts the
+  crew back exactly where `saveGame` found them; a probe that reloads with
+  `save.flush` alone gets the last autosave's spot.
+
+### Every part in the builder
+
+At a Build Stand or a Base Hub (the overlay on the world, where the Build
+Kit's scripts are) `builder.registry()` joins `base_hub.register`: the BASE
+section and every kit category, each piece in every material it comes in
+("Wall · Concrete"), one section per category as `parts_kit.catalogue`
+gives them, so a new category (S8's logic) appears without a change; a title
+the VAB already uses reads "BASE FRAME", "BASE NUCLEAR" (tab "B·FRAM"). The
+VAB itself keeps its list. A base piece's builder entry carries `base`, its
+structure id and `npiv`: the prefab's root (its ground point, plus a BASE
+part's seat) from the box centre the builder works in (`builder.nodeAt`),
+and it is drawn without its colliders (`spawn{ body = false }`). A reactor
+piece is behind its research as on the Build Kit.
+
+In the builder a kit piece aimed at a base piece snaps as the Build Kit's do
+(`builder.kitSnap` → `kit_snap.face`: exact, on the grid, quarter turns from
+the part's keys, the kit's own overlap rule naming what is there); on the
+floor its ground point goes on the 0.5 m grid (Shift frees it); on a VAB
+part it surface-attaches like any part.
+
+### The Base Hub (`scripts/base_hub.lua`, `build_host` hub session)
+
+- **A BASE part** (`baseHub`, prefab `BaseHub`, 0.9 t, $2,500), placed with
+  the Build Kit. Its menu's **Build the base** (Engineers) opens the VAB
+  overlay anchored to the hub's structure: the BuildFrame is the structure's
+  own frame (+X right, +Y up, +Z front; frame y 0.11 is its ground plane),
+  posed every frame from the record, so a builder coordinate is a structure
+  coordinate. Stands keep building crafts; the hub builds the base.
+- **While you build** the structure is held out of the world
+  (`structures.suspend`): its nodes go (the builder's copies are the only
+  ones drawn and the camera meets no invisible walls), its live vessel
+  stands down; every part of it is on the stand to edit. The camera starts
+  from where the Engineer stood, looking at the hub. Nothing is loose in a
+  base (every group stands on the ground), and the CHECK's craft rules don't
+  gate anything.
+- **In and out.** `base_hub.toBuilder(rec)` is the structure as a
+  launch-format blueprint, its uids kept; `fromBuilder` turns the builder's
+  parts back into entries (`builder.hubParts`: each at its own pose, the
+  VAB's recentring and a rover's quarter turn undone). A base piece goes to
+  its ground point. **Any VAB part** (struts, beams, engines, tanks, a
+  cockpit, dishes, robotics) becomes a live part `vab.<id>` whose whole
+  launch record is kept beside the structure (`slivebp.<sid>`), and whose
+  figures are learned once (`vabdefs`, `parts_kit.learnVab`) for the world
+  that carries no registry; struct_live builds the anchored structure vessel
+  from those records (a drawn strut at its size, a cockpit turned as it was
+  built, the crewed part its root): S2's rule, for every part.
+- **LEAVE, ESC or BUILD IT ▸** commits (`base_hub.commit`): parts added are
+  charged once, with one truck; parts taken off come back by the deconstruct
+  rule (their own `paid`); moved parts are free; the hub never moves or
+  goes, nor a part whose script refuses (a stand holding a craft). A part
+  the agency can't pay for is refused at placement (`ctx.afford`), as at a
+  stand. The structure is then spawned again from its records.
+- **Blueprints** carry a hub-placed VAB part's launch record in the file
+  (not in the code), and a paste writes it back.
+
+### Tests and the probe
+
+- `luajit solar/tests/smoke_fullbuild.lua` (50): support through
+  connections (a mezzanine, two modules out but not three, an 8 m roof, a
+  wall on air, `gnd`, what falls with a wall), snaps exact (quarter turns
+  whatever the wheel, 15° blocks, the 12 m join in the frame, 20 m a new
+  structure, Shift free), the input guard (keys, actions, the mouse, a
+  button, installed once), the 300 m spacing, the hub's catalogue (sections,
+  "BASE …" titles, materials, no fitting twice, hidden pieces, npiv), the
+  round trip (to 1e-9 m, a laid truss, a seated tower), the diff, the commit
+  (one truck, the refund, the records and the learned part), the structure
+  vessel from the records, `suspend`.
+- `tools/perf/fullbuildprobe.sh <engine> fbdiag|fbfix|fbhub|fbmake`
+  (PATCHES=funds.patch; `tools/perf/fullbuildprobe_modes.lua`): the tower's
+  reasons near and far; the fixes through the Build Kit's own path (a wall
+  dialled 15° placed square, a slab 6 m off joining, a balcony three
+  modules out in Career and a fourth refused, typing in the search with the
+  keys that leaked, a tower 360 m out); the hub (placed, opened from its
+  menu, every section, pieces through the builder's command and one through
+  the ghost and a click, an I-beam, a cockpit, an engine and a dish,
+  BUILD IT, the structure vessel, opened again and left for $0); and five
+  creations (`params.set` 1: outpost, hab, reactor shed; 2: contraption,
+  masts), each pictured and saved as a blueprint. Pictures
+  `save/user/buildshots/fx*`, `fh*`, `m*`; the numbers in
+  `work/fullbuilder/NOTES.md`.

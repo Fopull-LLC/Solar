@@ -31,10 +31,11 @@
 --          out); on a top: on the grid, square toward you
 --
 -- ── SUPPORT (Career; Creative skips it) ─────────────────────────────────────
--- A piece is held if it stands on its structure's ground, rests on another
--- piece's top (or a hab's or catwalk's deck), or — a floor, a hab ring — sits
--- level beside one that rests (one module of cantilever). A mount is held by
--- its face. No stress sim: a check on the records, run on a placement.
+-- A piece is held if a chain of pieces it touches reaches the structure's
+-- ground (supportMap below): resting on a top passes the hold on as it is,
+-- touching side to side or hanging under adds one module of reach, and a
+-- floor may reach MAX_HANG modules (4 m) from what holds it. A mount is held
+-- by its face. No stress sim: a check on the records, run on a placement.
 -- `fallsWith(rec, uids)` is what is no longer held once uids are gone: what a
 -- Deconstruct takes down with the piece.
 
@@ -331,7 +332,13 @@ function face(q)
   local lx = (part.x or 0) + cx * c + cz * s
   local lz = (part.z or 0) - cx * s + cz * c
   local ly = (part.y or 0) + cy
-  local yaw = wrap(yaw0 + dyaw + (q.yawOff or 0))
+  -- (playtest 11-09: "sometimes things are rotated a bit off". A joined
+  -- piece turns only in quarter turns with its neighbour, so the wheel's 15°
+  -- or 5° can't leave a wall a few degrees off its edge; a block or a prop on
+  -- a top keeps the wheel's clean 15° steps.)
+  local yo = q.yawOff or 0
+  if S == "block" or S == "prop" then yo = quantize(yo, math.rad(15)) else yo = quantize(yo, QUARTER) end
+  local yaw = wrap(yaw0 + dyaw + yo)
   local x, y, z = toBody(fr, lx, ly, lz)
   local lu, lf = localAxes(yaw, pitch, 0)
   local function bodyv(v) return V(fr.R.x * v[1] + fr.U.x * v[2] + fr.F.x * v[3], fr.R.y * v[1] + fr.U.y * v[2] + fr.F.y * v[3],
@@ -421,39 +428,156 @@ function overlapIn(rec, defs, np, nd, skip)
   return nil
 end
 
--- Does part `np` rest on the ground level or on another part's top? (gone:
--- a uid set taken away.) → true | "beside" (level beside `by`) | false
-local function rests(rec, defs, np, nd, gone)
-  if nd.snap == "mount" then return true end
-  local a = solid(np, nd)
-  -- the structure's own ground level (its founding part stands at y 0)
-  if a.y0 <= 0.06 then return true end
-  local beside = nil
+-- ── SUPPORT AS A STRUCTURAL GRAPH (playtest 11-09: "floating floors aren't
+-- allowed even when touching parts connected to the floor") ────────────────
+-- Every piece of the structure is a node; two pieces are joined when their
+-- solids touch:
+--   ON     a rests on b's top (or a deck): a takes b's hang as it is
+--   SIDE   they touch side to side (a floor beside a floor, a floor at a
+--          wall's face, wall corners): either takes the other's hang + 1
+--   UNDER  a hangs under b (a's top on b's bottom): a takes b's hang + 1
+-- A piece on the structure's ground (y0 at its plane, or placed on the
+-- terrain: `gnd`, a footing) has hang 0. A piece is HELD when its hang is at
+-- most MAX_HANG: a floor, a slab, a hab ring or a laid beam may reach two
+-- modules (4 m) from what holds it from below, so an 8 m room roofs over
+-- without a pillar and a balcony stands 4 m out; a wall only stands ON
+-- something or hangs under it (a panel bolted at one end over air is not a
+-- wall). Mounts are held by their face and hold nothing. The hang is found by
+-- a 0-1 breadth-first search from the grounded pieces, over a 2 m cell index
+-- (no all-pairs scan), and kept per structure until its parts change.
+MAX_HANG = 2
+local SIDE_OK = { floor = true, slab = true, hab = true, post = true, block = true, prop = true, pipe = true }
+local function grounded(p, a) return p.gnd == true or p.ft ~= nil or a.y0 <= 0.06 end
+local function side_ok(p, d)
+  local c = classOf(d)
+  -- (a wall laid flat — pitched a quarter — is a deck panel, and a laid post a beam)
+  if c == "wall" then return math.abs(p.pitch or 0) > 1e-3 or math.abs(p.roll or 0) > 1e-3 end
+  return SIDE_OK[c] == true
+end
+-- How solid a (part p, def d) touches solid b (part q, def e):
+-- "on" | "under" | "side" | nil
+local function contact(p, a, q, b, e)
+  if rectOverlap(a, b, 0.02) then
+    if math.abs(a.y0 - b.y1) <= 0.06 or (e.deckTop and math.abs(a.y0 - ((q.y or 0) + e.deckTop)) <= 0.06) then return "on" end
+    if math.abs(b.y0 - a.y1) <= 0.06 then return "under" end
+    if math.min(a.y1, b.y1) - math.max(a.y0, b.y0) > 0.03 then return "side" end
+    return nil
+  end
+  if math.min(a.y1, b.y1) - math.max(a.y0, b.y0) > 0.03 then
+    local grow = { x = a.x, z = a.z, hx = a.hx + 0.06, hz = a.hz + 0.06, yaw = a.yaw }
+    if rectOverlap(grow, b, 0.0) then return "side" end
+  end
+  return nil
+end
+local CELL = 2.0
+-- the graph's nodes: { p, d, a (solid), r (xz reach) } and a cell index
+local function nodes_of(rec, defs, gone)
+  local list, cells = {}, {}
   for _, p in ipairs(rec.bp or {}) do
-    if p ~= np and p.uid ~= np.uid and not (gone and gone[p.uid]) then
+    if not (gone and gone[p.uid]) then
       local d = defs(p.id)
-      if d and d.snap ~= "mount" then
-        local b = solid(p, d)
-        if (math.abs(a.y0 - b.y1) <= 0.06 or (d.deckTop and math.abs(a.y0 - ((p.y or 0) + d.deckTop)) <= 0.06))
-           and rectOverlap(a, b, 0.02) then return true end
-        if not beside and (nd.snap == "floor" or nd.snap == "hab") and (classOf(d) == nd.snap or classOf(d) == "slab")
-           and math.abs(a.y1 - b.y1) <= 0.06 then
-          local grow = { x = a.x, z = a.z, hx = a.hx + 0.05, hz = a.hz + 0.05, yaw = a.yaw }
-          if rectOverlap(grow, b, 0.0) then beside = p end
+      if d and d.snap ~= "mount" and not d.film then
+        local a = solid(p, d)
+        local n = { p = p, d = d, a = a, r = math.sqrt(a.hx * a.hx + a.hz * a.hz) + 0.1 }
+        list[#list + 1] = n
+        for i = math.floor((a.x - n.r) / CELL), math.floor((a.x + n.r) / CELL) do
+          for k = math.floor((a.z - n.r) / CELL), math.floor((a.z + n.r) / CELL) do
+            local key = i * 65536 + k
+            local c = cells[key]
+            if not c then c = {}; cells[key] = c end
+            c[#c + 1] = n
+          end
         end
       end
     end
   end
-  if beside then return "beside", beside end
-  return false
+  return list, cells
+end
+local function near_nodes(cells, a, r, f)
+  local seen = {}
+  for i = math.floor((a.x - r) / CELL), math.floor((a.x + r) / CELL) do
+    for k = math.floor((a.z - r) / CELL), math.floor((a.z + r) / CELL) do
+      for _, n in ipairs(cells[i * 65536 + k] or {}) do
+        if not seen[n] then seen[n] = true; f(n) end
+      end
+    end
+  end
+end
+-- the weight of the link that gives node `n` support from `m` (nil: none)
+local function weight(n, m)
+  local k = contact(n.p, n.a, m.p, m.a, m.d)
+  if k == "on" then return 0 end
+  if k == "under" then return 1 end
+  if k == "side" and side_ok(n.p, n.d) then return 1 end
+  return nil
+end
+local map_cache = setmetatable({}, { __mode = "k" })
+local function sig_of(rec)
+  local n, s = 0, 0
+  for _, p in ipairs(rec.bp or {}) do
+    n = n + 1
+    s = s + (p.uid or 0) * 7 + (p.x or 0) * 13 + (p.y or 0) * 17 + (p.z or 0) * 19 + (p.yaw or 0) * 23 + (p.pitch or 0) * 29
+      + (p.gnd and 31 or 0) + #tostring(p.id or "")
+  end
+  return n .. ":" .. string.format("%.6f", s)
+end
+-- uid → hang for every piece of `rec` that is held from the ground somehow
+-- (absent: nothing reaches it). `gone` = uids taken away (not cached).
+function supportMap(rec, defs, gone)
+  local sig = not gone and sig_of(rec) or nil
+  local c = sig and map_cache[rec]
+  if c and c.sig == sig then return c.map, c.list, c.cells end
+  local list, cells = nodes_of(rec, defs, gone)
+  local hang = {}
+  local dq, head, tail = {}, 0, 0   -- a deque: 0-weight links in front
+  local function push_front(n) head = head - 1; dq[head] = n end
+  local function push_back(n) dq[tail] = n; tail = tail + 1 end
+  for _, n in ipairs(list) do
+    if grounded(n.p, n.a) then hang[n] = 0; push_back(n) end
+  end
+  while head < tail do
+    local m = dq[head]
+    dq[head] = nil
+    head = head + 1
+    local hm = hang[m]
+    near_nodes(cells, m.a, m.r + 0.2, function(n)
+      if n ~= m then
+        local w = weight(n, m)
+        if w and (hang[n] == nil or hm + w < hang[n]) and hm + w <= MAX_HANG then
+          hang[n] = hm + w
+          if w == 0 then push_front(n) else push_back(n) end
+        end
+      end
+    end)
+  end
+  local map = {}
+  for n, h in pairs(hang) do map[n.p.uid] = h end
+  if sig then map_cache[rec] = { sig = sig, map = map, list = list, cells = cells } end
+  return map, list, cells
+end
+-- The hang the new part `np` (def `nd`) would have in `rec`: 0 grounded, nil
+-- held by nothing within MAX_HANG.
+function hangOf(rec, defs, np, nd, gone)
+  if nd.snap == "mount" or nd.film then return 0 end
+  local a = solid(np, nd)
+  if grounded(np, a) then return 0 end
+  local map, _, cells = supportMap(rec, defs, gone)
+  local me = { p = np, d = nd, a = a, r = math.sqrt(a.hx * a.hx + a.hz * a.hz) + 0.1 }
+  local best = nil
+  near_nodes(cells, a, me.r + 4.0, function(m)
+    if m.p.uid ~= np.uid then
+      local hm = map[m.p.uid]
+      local w = hm and weight(me, m)
+      if w and hm + w <= MAX_HANG and (not best or hm + w < best) then best = hm + w end
+    end
+  end)
+  return best
 end
 
--- Kit support (Career): held from below, or beside a part that is.
+-- Kit support (Career): held through what it touches (above). → bool, hang
 function supported(rec, defs, np, nd, gone)
-  local r, by = rests(rec, defs, np, nd, gone)
-  if r == true then return true end
-  if r == "beside" then return rests(rec, defs, by, defs(by.id), gone) == true end
-  return false
+  local h = hangOf(rec, defs, np, nd, gone)
+  return h ~= nil, h
 end
 
 -- What is no longer held once `uids` are gone (transitively): kit pieces
@@ -464,6 +588,7 @@ function fallsWith(rec, defs, uids)
   local changed = true
   while changed do
     changed = false
+    local map = supportMap(rec, defs, gone)
     for _, p in ipairs(rec.bp or {}) do
       local d = not gone[p.uid] and defs(p.id)
       if d and d.kit then
@@ -479,8 +604,10 @@ function fallsWith(rec, defs, uids)
               if math.min(a.y1, b.y1 + 0.06) - math.max(a.y0, b.y0 - 0.06) > 0 and rectOverlap(a, grow, 0.0) then falls = false break end
             end
           end
+        elseif d.film then
+          falls = false
         else
-          falls = not supported(rec, defs, p, d, gone)
+          falls = map[p.uid] == nil
         end
         if falls then gone[p.uid] = true; out[#out + 1] = p.uid; changed = true end
       end

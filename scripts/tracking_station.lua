@@ -1038,7 +1038,7 @@ local function filter_header(V)
           local t = n.text or ""
           if t ~= filter.q then filter.q = t; pages = {} end
         end,
-        onSubmitted = function() if ui and ui.focus then pcall(ui.focus, nil) end end },
+        onSubmitted = function() if input.spaceSubmit and input.spaceSubmit(nil) then return end if ui and ui.focus then pcall(ui.focus, nil) end end },
       filter.q ~= "" and key_btn("sx", "panel/secondary", "✕", 26, 26, false, "Clear the search (Esc)",
         function() filter.q = ""; pages = {}; dirty_all = true end) or nil,
       key_btn("so", "panel/secondary", ((fv.SORT_LABEL or {})[filter.sort] or "A–Z") .. " ▾", 80, 26, false,
@@ -1160,7 +1160,7 @@ local function header(e, rows, can_rename)
       { "field", key = "f", name = "FieldStationRename", style = "menu/field", w = "grow", h = 30, textSize = 14,
         placeholder = e.name, maxLen = 32,
         onChanged = function(n) rename_text = n.text or "" end,
-        onSubmitted = function(n) rename_submit(e, n.text or rename_text) end },
+        onSubmitted = function(n) if input.spaceSubmit and input.spaceSubmit(n) then return end rename_submit(e, n.text or rename_text) end },
       key_btn("ok", "panel/action", "Save", 54, 30, false, nil, function() rename_submit(e, rename_text) end),
       key_btn("no", "panel/secondary", "✕", 30, 30, false, "Cancel", function() renaming = nil; dirty_all = true end) }
     return

@@ -2382,6 +2382,12 @@
                     enabled: true,
                     params: [],
                 ),
+                // a focused text field keeps every key (scripts/input_guard.lua)
+                (
+                    kind: "input_guard",
+                    enabled: true,
+                    params: [],
+                ),
                 (
                     kind: "soundscape",
                     enabled: true,

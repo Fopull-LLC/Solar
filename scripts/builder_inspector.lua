@@ -105,8 +105,7 @@ local function numfield(k, name, value, fmt, applyfn, tip)
     { "text", key = "l", style = "panel/label", w = 12, h = 24, text = k:sub(-1):upper(), textValign = "center" },
     { "field", key = "f", name = name, style = "menu/field", w = "grow", h = 24, numeric = true, maxLen = 10, textSize = 12,
       text = (not typing) and string.format(fmt, value) or nil, tooltip = tip,
-      onSubmitted = function(n)
-        local x = n and tonumber(n.text)
+      onSubmitted = function(n) if input.spaceSubmit and input.spaceSubmit(n) then return end         local x = n and tonumber(n.text)
         if x then applyfn(x) end
         if ui and ui.focus then ui.focus(nil) end
       end } }

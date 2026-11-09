@@ -105,17 +105,48 @@ local function grid_mods(mods, pw)
   return out
 end
 -- The live parts of `rec` as launch-format blueprint parts, in the structure
--- frame. `saved` = { [uid] = st } carried over; El = the electronics rulebook.
--- → bp { parts, root, v = 2, name } | nil (no live part)
-function blueprintOf(rec, defs, saved, El)
+-- frame. `saved` = { [uid] = st } carried over; El = the electronics rulebook;
+-- `lps` = { ["<uid>"] = launch-format record } (playtest 11-09: any VAB part
+-- the Base Hub's builder placed — a strut, an engine, a cockpit, a hinge —
+-- keeps its full record there, slivebp.<sid>, and is built from it as it
+-- was in the builder). → bp { parts, root, v = 2, name } | nil (no live part)
+local function decode(El, mods)
+  if type(mods) == "string" and El and El.decodeMods then
+    local ok, m = pcall(El.decodeMods, mods)
+    if ok and type(m) == "table" then return m end
+  end
+  return type(mods) == "table" and mods or nil
+end
+function blueprintOf(rec, defs, saved, El, lps)
   local parts = {}
   local root, rank = nil, -1
   for _, p in ipairs(rec.bp or {}) do
     local d = defs(p.id)
-    if d and d.live and d.reg then
+    local lp = d and d.live and lps and lps[tostring(p.uid)]
+    if type(lp) == "table" and lp.prefab then
+      local r = copy(lp)
+      r.uid, r.id = p.uid, d.vab or r.id
+      r.x, r.y, r.z = p.x or 0, (p.y or 0) + (d.seat or 0), p.z or 0
+      r.yaw, r.pitch, r.roll = p.yaw or 0, p.pitch or 0, p.roll or 0
+      r.parent, r.att, r.sym, r.stage = 0, "", 0, 0
+      -- (a battery, panel or cell the grid holds by its record counts once)
+      if d.power then
+        local m = decode(El, r.mods)
+        if m then
+          m = grid_mods(m, d.power)
+          r.mods = (El and El.encodeMods) and El.encodeMods(m) or m
+          if d.power.kind ~= "load" then r.ec, r.gen, r.power, r.solar = 0, 0, 0, 0 end
+        end
+      end
+      if saved and saved[p.uid] then r.st = copy(saved[p.uid]) end
+      parts[#parts + 1] = r
+      local rk = CMD[r.kind] or 0
+      if rk > rank then root, rank = p.uid, rk end
+    elseif d and d.live and d.reg then
       local R = d.reg
       local mods = R.mods
-      if El and El.deriveMods then mods = El.deriveMods(R, R.mods) end
+      if type(mods) == "string" then mods = decode(El, mods) or {} end
+      if El and El.deriveMods then mods = El.deriveMods(R, mods) end
       mods = grid_mods(mods, d.power)
       if El and El.encodeMods then mods = El.encodeMods(mods) end
       local onGrid = d.power ~= nil and d.power.kind ~= "load"
@@ -149,7 +180,8 @@ function signatureOf(rec, defs)
   for _, p in ipairs(rec.bp or {}) do
     local d = defs(p.id)
     if d and d.live then
-      t[#t + 1] = string.format("%d:%s:%.2f:%.2f:%.2f:%.3f:%.3f:%.3f", p.uid, p.id, p.x or 0, p.y or 0, p.z or 0, p.yaw or 0, p.pitch or 0, p.roll or 0)
+      t[#t + 1] = string.format("%d:%s:%.2f:%.2f:%.2f:%.3f:%.3f:%.3f:%d", p.uid, p.id, p.x or 0, p.y or 0, p.z or 0, p.yaw or 0, p.pitch or 0,
+        p.roll or 0, p.lpv or 0)
     end
   end
   table.sort(t)
@@ -202,7 +234,8 @@ local function build(rec)
   local sid = rec.id
   local El = ref("electronics")
   local saved, charge = saved_of(sid)
-  local bp = blueprintOf(rec, defOf, saved, El)
+  local lps = save and save.get and save.get("slivebp." .. tostring(sid))
+  local bp = blueprintOf(rec, defOf, saved, El, type(lps) == "table" and lps or nil)
   if not bp then return end
   local b = space and space.body and space.body(rec.b)
   local SN = ref("kit_snap") or ref("base_snap")
@@ -229,6 +262,12 @@ local function build(rec)
         part.x, part.y, part.z = d.x, d.y, d.z
         part:setAngles(d.yaw or 0, d.pitch or 0, d.roll or 0)
         if part.addTag then part:addTag("craftpart") end
+        -- (a drawn strut, beam or panel from the hub: its mesh and collider for its size)
+        local PR = (d.proc or d.joints) and ref("builder_proc") or nil
+        if PR then
+          if d.size and d.proc and PR.dress then pcall(PR.dress, part, { def = d, size = d.size }) end
+          for _, j in ipairs(d.joints or {}) do if PR.dressJoint then pcall(PR.dressJoint, part, j) end end
+        end
         local ST = ref("structures")
         if ST and ST.adopt then ST.adopt(part, sid, d.uid) end
         e.placed[#e.placed + 1] = { part = part, d = d }

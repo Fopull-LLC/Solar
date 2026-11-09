@@ -85,11 +85,18 @@ function KIT.walk(rec, lx, lz, secs, stop, watch)
   return reached
 end
 -- put the crew on their feet at a structure-local (x, z) (the ground under it)
-function KIT.tp(rec, lx, lz)
+function KIT.tp(rec, lx, lz, ly)
+  -- (11-09: from 4 m up the ray met a hab's ROOF first and the crew stood on
+  -- it — the S8 probe's "on the roof after a reload". It starts 1.2 m over
+  -- the floor asked for, under any ceiling, and only then from above.)
   local a = astro()
-  local top = KIT.w(rec, lx, 4, lz)
+  local top = KIT.w(rec, lx, (ly or 0) + 1.2, lz)
   local up = unit(sub(top, home()))
   local h = raycast(top.x, top.y, top.z, -up.x, -up.y, -up.z, 12, { ignore = a })
+  if not h then
+    top = KIT.w(rec, lx, 4, lz)
+    h = raycast(top.x, top.y, top.z, -up.x, -up.y, -up.z, 12, { ignore = a })
+  end
   local g = h or KIT.w(rec, lx, 0, lz)
   a.x, a.y, a.z = g.x + up.x * 1.0, g.y + up.y * 1.0, g.z + up.z * 1.0
   a.vx, a.vy, a.vz = 0, 0, 0

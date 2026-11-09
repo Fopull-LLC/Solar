@@ -2206,7 +2206,7 @@ function editorRows(ed, W, sfx)
   add({ "field", key = "name", name = "FieldAgencyName", style = "menu/field", w = "100%", h = 32, maxLen = NAME_MAX,
     placeholder = DEFAULT_NAME, text = typing and nil or ed.typed, textValign = "center",
     onChanged = function(n) editorSetName(ed, n and n.text or "") end,
-    onSubmitted = function(n) editorSetName(ed, n and n.text or "") end })
+    onSubmitted = function(n) if input.spaceSubmit and input.spaceSubmit(n) then return end editorSetName(ed, n and n.text or "") end })
   -- the previews: the emblem and the flag it makes
   add({ "row", key = "pv", w = "100%", h = "fit", gap = 10, pad = 0, align = "center",
     { "image", key = "em", w = 132, h = 132, texture = ed.tex or "textures/parts/emblem_default.png", imageFit = "contain" },

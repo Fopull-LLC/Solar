@@ -149,12 +149,11 @@ local function row1(B, s)
     { "lift", "5 MOVE", 58, "Pick up a placed part (and what hangs on it), put it down anywhere it attaches   ·   5 · ESC puts it back" },
   }
   local r = { "row", key = "r1", w = "100%", h = 26, gap = 4, pad = 0, align = "center",
-    { "text", key = "vab", style = "panel/heading", w = (s.site == "stand") and 70 or 44, h = 24, text = (s.site == "stand") and "STAND" or "VAB", textValign = "center" },
+    { "text", key = "vab", style = "panel/heading", w = (s.site == "stand") and 70 or 44, h = 24, text = (s.site == "stand") and ((B.hubMode and B.hubMode()) and "BASE" or "STAND") or "VAB", textValign = "center" },
     { "field", key = "name", name = "FieldCraftName", style = "menu/field", w = 108, h = 24, textSize = 13,
       text = (not s.typing) and s.name or nil,
       placeholder = "craft name", maxLen = 40, textValign = "center", tooltip = "The craft's name — Enter saves it under this name",
-      onSubmitted = function(n)
-        local t = n and n.text
+      onSubmitted = function(n) if input.spaceSubmit and input.spaceSubmit(n) then return end         local t = n and n.text
         if t and t ~= "" and B.craftSave then B.craftSave(t) end
       end },
     key("new", "NEW", 46, { style = "panel/secondary", disabled = not B.craftNew, tip = "A new craft   ·   CTRL+N",
@@ -195,13 +194,18 @@ local function row1(B, s)
       .. (#s.warn > 4 and string.format(" · +%d more in CRAFT CHECK", #s.warn - 4) or "")) or "Buy the hull and roll it out")
   -- (at a Build Stand: COMMISSION, no site to choose — it is made where it stands)
   local at_stand = s.site == "stand"
-  if at_stand then
+  -- (playtest 11-09: at a Base Hub the work is the base: BUILD IT commits it)
+  local at_hub = at_stand and B.hubMode ~= nil and B.hubMode() == true
+  if at_hub then
+    launch_tip = (s.over and ("Can't build it — what you added costs more than the agency's funds (" .. s.over .. ")"))
+      or "Build it into the base: pay for what was added (one truck), get back what came off, and step back out"
+  elseif at_stand then
     launch_tip = s.block and ("Can't commission — " .. s.block)
       or (s.over and ("Can't commission — the parts cost more than the agency's funds (" .. s.over .. ")"))
       or "Save it on the stand, pay for what was added, and make it a live craft held on the deck"
   end
-  r[#r + 1] = key("launch", at_stand and "COMMISSION ▸" or "LAUNCH ▸", at_stand and 118 or 84, { style = "panel/action",
-    disabled = s.block ~= nil, tip = launch_tip, click = function() if B.doLaunch then B.doLaunch() end end })
+  r[#r + 1] = key("launch", at_hub and "BUILD IT ▸" or (at_stand and "COMMISSION ▸" or "LAUNCH ▸"), at_stand and 118 or 84, { style = "panel/action",
+    disabled = (not at_hub) and s.block ~= nil, tip = launch_tip, click = function() if B.doLaunch then B.doLaunch() end end })
   local choices = (B.launchSiteChoices and B.launchSiteChoices()) or { "pad", "runway" }
   local shown = {}
   for _, c in ipairs(choices) do shown[c] = true end

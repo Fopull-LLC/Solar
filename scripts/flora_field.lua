@@ -1343,13 +1343,21 @@ end
 STRUCT_CLEAR = { every = 3.0, radius = 60.0, low = 0.35, ms = 0.25 }
 structClearRemoved = 0
 local sc_t = -1e9
+local sc_first = nil     -- (11-09) when this scene's first pass ran: the first 30 s go every second
 local sc_job = nil       -- { items = { { sid, cx, cy, cz (body-relative), R, U, F, boxes, reach } … }, i }
 local function struct_clear(obs)
   if not (obs and cur_body and scatter and scatter.near) then return end
   local body = space.body(cur_body)
   if not body then return end
   if not sc_job then
-    if time < sc_t + STRUCT_CLEAR.every then return end
+    -- (S8 probe, 11-09: "grass pokes through kit slabs again after a reload".
+    -- After a load the plants are declared and dropped over the first seconds;
+    -- a pass every 3 s that skipped the ones still settling left them standing
+    -- in the floor for the first look round. The first 30 s of a scene pass
+    -- every second, and a plant still settling counts by where it is.)
+    sc_first = sc_first or time
+    local every = (time - sc_first < 30) and 1.0 or STRUCT_CLEAR.every
+    if time < sc_t + every then return end
     sc_t = time
     local ST, PB = ref("structures"), ref("parts_base")
     if not (ST and PB and ST.list) then return end
@@ -1370,10 +1378,13 @@ local function struct_clear(obs)
             local boxes, reach = {}, 0
             for _, p in ipairs(rec.bp or {}) do
               local d = PB.partInfo(p.id)
-              local floorish = d and d.half and ((d.kit and (d.snap == "slab" or d.snap == "floor") and (p.y or 0) <= STRUCT_CLEAR.low)
+              -- (11-09: a slab or floor set on the terrain — `gnd`, joined to a
+              -- structure at the ground's own height — is at the ground wherever
+              -- its height in the frame)
+              local floorish = d and d.half and ((d.kit and (d.snap == "slab" or d.snap == "floor") and ((p.y or 0) <= STRUCT_CLEAR.low or p.gnd))
                                                  or d.hull ~= nil or d.deck ~= nil)
               if floorish then
-                boxes[#boxes + 1] = { x = p.x or 0, z = p.z or 0, c = math.cos(p.yaw or 0), s = math.sin(p.yaw or 0),
+                boxes[#boxes + 1] = { x = p.x or 0, y = p.y or 0, z = p.z or 0, c = math.cos(p.yaw or 0), s = math.sin(p.yaw or 0),
                                       hx = d.half.x + 0.05, hz = d.half.z + 0.05 }
                 local r = math.sqrt((p.x or 0) ^ 2 + (p.z or 0) ^ 2) + math.sqrt(d.half.x ^ 2 + d.half.z ^ 2)
                 if r > reach then reach = r end
@@ -1404,14 +1415,16 @@ local function struct_clear(obs)
       local F = it.F
       local cx, cy, cz = body.x + it.x, body.y + it.y, body.z + it.z
       for _, h in ipairs(scatter.near(it.sid, vec3(cx, cy, cz), it.reach + 0.5) or {}) do
-        if h.pos and h.settled ~= false then
+        if h.pos then
           local qx, qy, qz = h.pos.x - cx, h.pos.y - cy, h.pos.z - cz
           local lx, ly, lz = qx * F.rx + qy * F.ry + qz * F.rz, qx * F.ux + qy * F.uy + qz * F.uz, qx * F.fx + qy * F.fy + qz * F.fz
-          if ly > -1.0 and ly < 1.0 then
+          do
             for _, b in ipairs(it.boxes) do
               local ox, oz = lx - b.x, lz - b.z
               local px, pz = ox * b.c - oz * b.s, ox * b.s + oz * b.c
-              if math.abs(px) <= b.hx and math.abs(pz) <= b.hz then
+              -- (rooted within a metre under or over that floor; still dropping: up to 3 m over it)
+              local dy = ly - (b.y or 0)
+              if math.abs(px) <= b.hx and math.abs(pz) <= b.hz and dy > -1.0 and dy < ((h.settled == false) and 3.0 or 1.0) then
                 audit_take(it.sid, { id = h.id })
                 structClearRemoved = structClearRemoved + 1
                 break

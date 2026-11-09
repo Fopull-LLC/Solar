@@ -25,7 +25,7 @@
 --   byTower(sid, uid) → rec             setDown(id, down)   forget(id)
 --   defaultName() → "Outpost <n>"       cleanName(s) → s | nil, why
 --   groundDist(R, a, b) → m along the ground of a world of radius R (pure)
---   spacingWhy(body, x, y, z, R, home, skipId) → nil | why   (towers 1 km apart,
+--   spacingWhy(body, x, y, z, R, home, skipId) → nil | why   (towers 300 m apart,
 --                                       the home base's Tracking Station too)
 --   baseAt(body, x, y, z, R) → rec, d   the base a body-relative point belongs to
 --   version                             bumps on every change
@@ -34,7 +34,11 @@
 -- what each tower is doing: power, link, coverage), not this file.
 
 RADIUS = 150.0       -- every structure within this of a tower belongs to its base
-SPACING = 1000.0     -- towers at least this far apart, along the ground
+-- (playtest 11-09: "the base station can't be placed anywhere". It was 1 km,
+-- the spaceport's Tracking Station included, so no tower could stand within a
+-- kilometre of home: on a 922 m world that is most of the ground a player
+-- builds on first. Two bases only need to keep their 150 m from overlapping.)
+SPACING = 2 * RADIUS -- towers at least this far apart, along the ground (300 m)
 NAME_MAX = 32
 
 version = 0
@@ -190,7 +194,7 @@ function spacingWhy(body, x, y, z, R, home, skipId)
   if home and home.b == body then
     local d = groundDist(R, x, y, z, home.x, home.y, home.z)
     if d < sp then
-      return string.format("%s from the spaceport's Tracking Station: towers stand %s apart", fmt(d), fmt(sp))
+      return string.format("%s from the spaceport's Tracking Station: towers stand %s apart (%s further out)", fmt(d), fmt(sp), fmt(sp - d))
     end
   end
   for _, id in ipairs(order) do
@@ -198,7 +202,7 @@ function spacingWhy(body, x, y, z, R, home, skipId)
     if r.id ~= skipId and not r.down and r.b == body then
       local d = groundDist(R, x, y, z, r.x, r.y, r.z)
       if d < sp then
-        return string.format("%s from %s's tower: towers stand %s apart", fmt(d), r.n, fmt(sp))
+        return string.format("%s from %s's tower: towers stand %s apart (%s further away)", fmt(d), r.n, fmt(sp), fmt(sp - d))
       end
     end
   end

@@ -42,6 +42,7 @@ YAW_STEP = math.rad(15)
 YAW_FINE = math.rad(5)
 GRID = 0.5
 NEAR_R = 30.0
+JOIN_R = 12.0            -- ground this near a placed part joins its structure
 EDGE_CAPTURE = 0.8       -- of a tile: how near the cursor must be to a free slot
 DECK_INSET = 0.25        -- footprint samples sit this far inside its edge
 FOOTING_FROM = 0.30
@@ -247,6 +248,26 @@ function snap(q)
       local a = yawOf(fr, q.toward)
       if not q.free then lx, lz, a = quantize(lx, GRID), quantize(lz, GRID), quantize(a, QUARTER) end
       return joined("deck", rec, fr, lx, top, lz, wrap(a + yawOff), q.hit.part)
+    end
+  end
+  -- GROUND NEAR A STRUCTURE (playtest 11-09: "not always snapping together
+  -- cleanly, sometimes things are rotated a bit off"): within JOIN_R of a
+  -- placed part the new part JOINS that structure, laid in its frame — its
+  -- up, its 0.5 m grid, quarter turns square to it — at the ground's height
+  -- there (the foundation adds the cut and fill). A new structure of its own
+  -- would stand on the radial up a few metres on, tilted against its
+  -- neighbour by the world's curvature (0.7° at 10 m on a 775 m world), and
+  -- its pieces could never hold each other up.
+  if not q.free then
+    local e = (q.near or {})[1]
+    if e and e.rec and (e.d or 0) <= JOIN_R then
+      local fr = frameOf(e.rec)
+      local lx, ly, lz = toLocal(fr, P.x, P.y, P.z)
+      lx, lz = quantize(lx, GRID), quantize(lz, GRID)
+      local a = quantize(yawOf(fr, q.toward), QUARTER)
+      local pz = joined("grid", e.rec, fr, lx, ly, lz, wrap(a + yawOff), nil)
+      pz.join = true
+      return pz
     end
   end
   -- GROUND: a new structure, on the grid of the nearest one (or the layout's)

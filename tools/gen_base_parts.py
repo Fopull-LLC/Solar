@@ -46,7 +46,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gen_part_meshes import ROOT, PREFABS, box, disk, lathe, rot_x, rot_z, tube  # noqa: E402
 from base_models import (CModel, CONC, CONC_DARK, CONT_BLUE, DARK, GREY, LIGHT, PAINT, RUBBER, SAFETY, Shell,  # noqa: E402
-                         SLATE, WARM, LAMP_WARM, zcheck, lattice_column, dish, yagi, railing, obstruction, quat_x, quat_from_basis)
+                         SLATE, WARM, LAMP_WARM, LAMP_COOL, zcheck, lattice_column, dish, yagi, railing, obstruction, quat_x, quat_from_basis)
 import gen_base  # noqa: E402
 
 MODELS = os.path.join(ROOT, "models", "base", "parts")
@@ -840,6 +840,91 @@ def shield_wall():
     return m, sh
 
 
+# ── BASE HUB (playtest 11-09: "a main base hub … what you interact with to go
+# full build mode for your actual base") ─────────────────────────────────────
+# A site operations console on a steel skid, 2.6 (x) x 1.8 (z) m: a sloped
+# control desk on the front (+Z) with two inclined displays and a keyboard
+# ledge, a 19-inch equipment rack behind it, a 3.4 m pole with an amber
+# beacon and a whip antenna on the back left corner, a document box, a
+# handrail along the back and a grounding rod. 0.9 t fitted out. Its menu
+# opens the full freecam builder anchored to the base (scripts/base_hub.lua).
+
+def base_hub():
+    m = CModel(seed=103)
+    sh = Shell()
+    L, D, k = 2.6, 1.8, 0.14
+    # the skid: two runners, three cross members, a chequer deck plate
+    for s in (-1, 1):
+        bx(m, "Steel", DARK, (0, k / 2, s * (D / 2 - 0.08)), (L, k, 0.16))
+    for x in (-1.1, 0.0, 1.1):
+        bx(m, "Steel", DARK, (x, k / 2, 0), (0.12, k, D - 0.32))
+    bx(m, "Steel", GREY, (0, k + 0.01, 0), (L - 0.04, 0.02, D - 0.04))
+    for s in (-1, 1):
+        for e in (-1, 1):
+            bx(m, "Steel", SAFETY, (s * (L / 2 - 0.12), k + 0.022, e * (D / 2 - 0.12)), (0.18, 0.004, 0.18))
+    sh.add((0, k / 2 + 0.01, 0), (L, k + 0.02, D))
+    y0 = k + 0.02
+    # THE DESK: a cabinet 2.0 x 0.75 x 0.78 m, its top sloped 20 deg toward the operator (+Z)
+    dw, dd, dh = 2.0, 0.75, 0.78
+    dz = D / 2 - 0.15 - dd / 2
+    bx(m, "Clad", PAINT, (0, y0 + dh / 2, dz), (dw, dh, dd))
+    slope = math.radians(20)
+    M = np.array([[1, 0, 0], [0, math.cos(slope), -math.sin(slope)], [0, math.sin(slope), math.cos(slope)]])
+    bx(m, "Steel", DARK, (0, y0 + dh + 0.03, dz), (dw + 0.04, 0.04, dd + 0.02), M=M)
+    # the keyboard ledge and two keyboards
+    bx(m, "Steel", GREY, (0, y0 + dh - 0.02, dz + dd / 2 + 0.12), (dw - 0.1, 0.03, 0.26))
+    for x in (-0.45, 0.45):
+        bx(m, "Steel", (0.12, 0.12, 0.13), (x, y0 + dh + 0.005, dz + dd / 2 + 0.12), (0.46, 0.018, 0.16))
+    # two displays, inclined, in dark bezels, glowing a cool blue
+    ty = y0 + dh + 0.05
+    for x in (-0.48, 0.48):
+        Mi = np.array([[1, 0, 0], [0, math.cos(-0.25), -math.sin(-0.25)], [0, math.sin(-0.25), math.cos(-0.25)]])
+        bx(m, "Steel", DARK, (x, ty + 0.30, dz - 0.12), (0.86, 0.54, 0.05), M=Mi)
+        bx(m, "Lamp", (0.30, 0.55, 0.90), (x, ty + 0.30 + 0.004, dz - 0.12 + 0.028), (0.78, 0.46, 0.006), M=Mi)
+        tb(m, "Steel", GREY, (x, ty, dz - 0.18), (x, ty + 0.2, dz - 0.16), 0.03, segs=6)
+    # the front: two doors, their handles, a vent strip and a placard
+    for s in (-1, 1):
+        bx(m, "Clad", WARM, (s * dw / 4, y0 + dh / 2 - 0.02, dz + dd / 2 + 0.006), (dw / 2 - 0.06, dh - 0.16, 0.012))
+        tb(m, "Steel", LIGHT, (s * 0.12, y0 + 0.30, dz + dd / 2 + 0.03), (s * 0.12, y0 + 0.52, dz + dd / 2 + 0.03), 0.012, segs=6)
+    for i in range(10):
+        bx(m, "Steel", DARK, (-0.8 + i * 0.178, y0 + 0.08, dz + dd / 2 + 0.008), (0.14, 0.03, 0.006))
+    bx(m, "Steel", SAFETY, (0.75, y0 + 0.62, dz + dd / 2 + 0.014), (0.22, 0.10, 0.004))
+    sh.add((0, y0 + dh / 2 + 0.02, dz), (dw + 0.04, dh + 0.08, dd + 0.02))
+    # THE RACK behind: 0.6 x 0.8 x 1.9 m, a glass door, its fan vents and status lamps
+    rx, rz, rh = 0.55, -D / 2 + 0.5, 1.9
+    bx(m, "Clad", (0.22, 0.24, 0.26), (rx, y0 + rh / 2, rz - 0.02), (0.62, rh, 0.76))
+    bx(m, "Steel", GREY, (rx, y0 + rh + 0.02, rz), (0.66, 0.04, 0.84))
+    bx(m, "Glass", (0.35, 0.40, 0.42), (rx, y0 + rh / 2, rz + 0.412), (0.54, rh - 0.12, 0.01))
+    for i in range(7):
+        bx(m, "Steel", DARK, (rx, y0 + 0.25 + i * 0.22, rz + 0.37), (0.48, 0.09, 0.04))
+        bx(m, "Lamp", LAMP_COOL if i % 3 else (0.40, 0.95, 0.45), (rx + 0.18, y0 + 0.25 + i * 0.22, rz + 0.392), (0.03, 0.015, 0.004))
+    for j in range(4):
+        bx(m, "Steel", DARK, (rx + 0.312, y0 + 1.2 + j * 0.08, rz), (0.012, 0.04, 0.5))
+    sh.add((rx, y0 + rh / 2 + 0.02, rz), (0.66, rh + 0.04, 0.84))
+    # a cable tray from the rack down into the desk
+    tb(m, "Steel", GREY, (rx - 0.2, y0 + 0.10, rz + 0.30), (-0.2, y0 + 0.10, dz - dd / 2 + 0.02), 0.04, segs=6)
+    # THE POLE on the back left corner: an amber beacon and a whip
+    px, pz, ph = -L / 2 + 0.22, -D / 2 + 0.22, 3.4
+    bx(m, "Steel", DARK, (px, y0 + 0.02, pz), (0.28, 0.04, 0.28))
+    tb(m, "Steel", LIGHT, (px, y0 + 0.04, pz), (px, y0 + ph, pz), 0.045, segs=10)
+    tb(m, "Steel", DARK, (px, y0 + ph, pz), (px, y0 + ph + 0.06, pz), 0.07, segs=12)
+    sub = CModel(); sub.color = (1.0, 0.62, 0.12); sub.ground = False
+    prof = [(0.07 * math.cos(a), 0.12 * math.sin(a)) for a in np.linspace(0, math.pi / 2, 7)]
+    lathe(sub, "Lamp", prof, segs=14, smooth=True)
+    m.merge(sub, None, (px, y0 + ph + 0.065, pz))
+    tb(m, "Steel", DARK, (px + 0.12, y0 + ph - 0.6, pz), (px + 0.12, y0 + ph + 0.9, pz), 0.008, segs=5)
+    tb(m, "Steel", GREY, (px, y0 + ph - 0.6, pz), (px + 0.12, y0 + ph - 0.6, pz), 0.015, segs=5)
+    sh.add((px, y0 + ph / 2, pz), (0.14, ph, 0.14))
+    # a weatherproof document box on the skid's right end
+    bx(m, "Clad", SAFETY, (L / 2 - 0.25, y0 + 0.55, 0.2), (0.30, 0.42, 0.22))
+    tb(m, "Steel", GREY, (L / 2 - 0.25, y0, 0.2), (L / 2 - 0.25, y0 + 0.34, 0.2), 0.03, segs=6)
+    # the handrail along the back
+    railing(m, SAFETY, (-L / 2 + 0.45, y0, -D / 2 + 0.06), (L / 2 - 0.1, y0, -D / 2 + 0.06), h=1.0, posts=1.0)
+    # a grounding rod and its strap
+    tb(m, "Steel", WARM, (L / 2 - 0.12, -0.3, -D / 2 + 0.12), (L / 2 - 0.12, y0 + 0.25, -D / 2 + 0.12), 0.012, segs=6)
+    return m, sh
+
+
 # ── CABLE DRUM (B9b: the Power Cable's card and hold model) ─────────────────
 # A 500 m drum of 4-core 16 mm2 steel-wire-armoured cable: two 1.3 m plywood
 # flanges on a steel barrel, the black cable wound between, its end tied off,
@@ -1042,6 +1127,11 @@ def write_part(name, about, root, shell, children, dry, folder="models/base/part
 def main():
     dry = "--dry" in sys.argv
     os.makedirs(MODELS, exist_ok=True)
+    if "--only-hub" in sys.argv:
+        hm, hsh = base_hub()
+        write_part("BaseHub", "BASE HUB — a site operations console; its menu opens the full builder on the base (scripts/base_hub.lua).",
+                   ("base_hub.glb", hm), hsh, [], dry, ground_root=True)
+        return
     pm, psh = pad_plate()
     write_part("BasePadPlate", "PAD PLATE — a 4 x 4 m precast slab (BASE section, scripts/parts_base.lua).",
                ("pad_plate.glb", pm), psh, [], dry)
@@ -1072,6 +1162,9 @@ def main():
     wm, wsh = shield_wall()
     write_part("BaseShieldWall", "SHIELD WALL — a 2 x 2 x 0.5 m precast shielding block (BASE section; blocks the radiation cone by its record, scripts/base_shield.lua).",
                ("shield_wall.glb", wm), wsh, [], dry)
+    hbm, hbsh = base_hub()
+    write_part("BaseHub", "BASE HUB — a site operations console; its menu opens the full builder on the base (scripts/base_hub.lua).",
+               ("base_hub.glb", hbm), hbsh, [], dry, ground_root=True)
     dm, _ = cable_drum()
     write_part("BaseCableDrum", "CABLE DRUM — the Power Cable's card and hold model (BASE section; the cable itself is a mesh, scripts/base_cable.lua).",
                ("cable_drum.glb", dm), None, [], dry)

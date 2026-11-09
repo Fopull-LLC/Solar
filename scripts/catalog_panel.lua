@@ -67,7 +67,12 @@ local SHORT = { COMMAND = "CMD", PROPULSION = "PROP", AIRCRAFT = "AERO", STRUCTU
                 ELECTRICAL = "ELEC", ROVER = "ROV", ROBOTICS = "ROBO", PAYLOAD = "PAY",
                 -- (the Build Kit's character sections, sandbox S4)
                 PROPS = "PROPS", DECALS = "DECAL", PAINT = "PAINT", BLUEPRINTS = "BLUEPRINTS" }
-local function short(title) return SHORT[title] or title:sub(1, 4) end
+local function short(title)
+  if SHORT[title] then return SHORT[title] end
+  -- (playtest 11-09: the base's sections in the builder; "BASE FRAME" → "B·FRAM")
+  if title:sub(1, 5) == "BASE " then return "B·" .. title:sub(6, 9) end
+  return title:sub(1, 4)
+end
 
 -- ── state (favourites and recents ride in the save slot) ────────────────────
 local st = { tab = "ALL", query = "", favs = nil, recent = nil, dirty = true, sig = nil, t = 0 }
@@ -613,8 +618,7 @@ function describe(B, L)
     { "field", key = "q", name = "FieldPartSearch", style = "menu/field", w = "100%", h = 26, textSize = 13,
       placeholder = "/ search parts…", maxLen = 32,
       onChanged = function(n) if n then setQuery(n.text) end end,
-      onSubmitted = function(n)
-        local id = firstMatch(B, n and n.text or st.query)
+      onSubmitted = function(n) if input.spaceSubmit and input.spaceSubmit(n) then return end         local id = firstMatch(B, n and n.text or st.query)
         if id then pickPart(id) end
         if ui and ui.focus then ui.focus(nil) end
       end },

@@ -72,6 +72,9 @@ function fromParts(rec, uids, defs, opts)
                 yaw = r2(wrapA((p.yaw or 0) - (a.yaw or 0))), pitch = r2(p.pitch or 0), roll = r2(p.roll or 0),
                 paint = p.paint, paintIn = p.paintIn }
     if opts.texts then local t = opts.texts(p.uid); if type(t) == "string" and t ~= "" then e.text = t end end
+    -- (playtest 11-09: a VAB part the Base Hub placed keeps its launch record
+    -- in the file — a strut's size, an engine's figures — not in the code)
+    if opts.lps then local lp = opts.lps[tostring(p.uid)]; if type(lp) == "table" then e.lp = lp end end
     out[#out + 1] = e
     local d = defs(p.id)
     mass = mass + (d.mass or 0)
@@ -87,7 +90,7 @@ function toClip(bp)
   local parts = {}
   for _, e in ipairs(bp.pieces or {}) do
     parts[#parts + 1] = { id = e.id, dx = e.x or 0, dy = e.y or 0, dz = e.z or 0, yaw = e.yaw or 0, pitch = e.pitch or 0, roll = e.roll or 0,
-                          paint = e.paint, paintIn = e.paintIn, text = e.text }
+                          paint = e.paint, paintIn = e.paintIn, text = e.text, lp = e.lp }
   end
   return { parts = parts, n = #parts, label = bp.name, bp = bp }
 end
@@ -511,7 +514,7 @@ local function tree()
   if not o.readOnly then
     rows[#rows + 1] = { "field", key = "f", name = "FieldKitText", style = "menu/field", w = "100%", h = 32, maxLen = o.maxLen or NAME_MAX,
       placeholder = o.placeholder or "", onChanged = function(n) P.text = n.text or "" end,
-      onSubmitted = function(n) commit((n and n.text) or P.text) end }
+      onSubmitted = function(n) if input.spaceSubmit and input.spaceSubmit(n) then return end commit((n and n.text) or P.text) end }
   end
   if o.code then
     rows[#rows + 1] = { "field", key = "c", name = "FieldKitCode", style = "menu/field", w = "100%", h = 32, maxLen = CODE_MAX,

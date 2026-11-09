@@ -426,7 +426,7 @@ local function prompt_tree()
     { "text", key = "w", style = "panel/cellMuted", w = "100%", h = "fit", wrap = true,
       text = line .. "  ·  every structure within 150 m belongs to it" },
     { "field", key = "f", name = "FieldBaseName", style = "menu/field", w = "100%", h = 32, maxLen = (B and B.NAME_MAX) or 32,
-      placeholder = r and r.n or "Outpost", onChanged = function(n) prompt.text = n.text or "" end, onSubmitted = submit },
+      placeholder = r and r.n or "Outpost", onChanged = function(n) prompt.text = n.text or "" end, onSubmitted = function(n) if input.spaceSubmit and input.spaceSubmit(n) then return end submit(n) end },
     { "text", key = "t", style = prompt.err and "panel/hintWarn" or "panel/hint", w = "100%", h = "fit", wrap = true,
       text = prompt.err or ("Its tower is " .. tier .. ".") },
     { "row", key = "b", w = "100%", h = 32, gap = 8, pad = 0, align = "center",

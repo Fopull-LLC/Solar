@@ -3534,6 +3534,10 @@
                 ( kind: "blueprints", enabled: true, params: [] ),
                 ( kind: "builder_history", enabled: true, params: [] ),
                 ( kind: "field_builder", enabled: true, params: [] ),
+                // a focused text field keeps every key (playtest 11-09)
+                ( kind: "input_guard", enabled: true, params: [] ),
+                // the Base Hub: the full builder anchored to a base (playtest 11-09)
+                ( kind: "base_hub", enabled: true, params: [] ),
             ],
             id: Some(652),
         ),

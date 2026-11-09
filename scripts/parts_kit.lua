@@ -953,7 +953,7 @@ function costOf(piece, mat)
   return math.floor(P.cost * (COSTK[mat] or 1) / 10 + 0.5) * 10
 end
 
-local cache = {}
+cache = {}
 local function resolve(piece, mat)
   local P = PIECES[piece]
   local b = P.box
@@ -1002,9 +1002,43 @@ local function resolve(piece, mat)
   return d
 end
 
+-- (playtest 11-09) ANY VAB part placed live through the Base Hub's builder:
+-- its registry figures, learned when it was placed (base_hub.commit) and kept
+-- in the save (`vabdefs`), because the world scene carries no registry. Its
+-- box is centred on its origin (seat 0): the hub stores its centre.
+VABDEFS = {}
+local LEARN_KEEP = { "prefab", "label", "h", "rx", "rz", "mass", "cost", "kind", "store", "mods", "af", "proc" }
+function learnVab(id, rec)
+  if type(id) ~= "string" or type(rec) ~= "table" or LIVE[id] then return end
+  local d = {}
+  for _, k in ipairs(LEARN_KEEP) do if type(rec[k]) ~= "table" then d[k] = rec[k] end end
+  VABDEFS[id] = d
+  if cache then cache["vab." .. id] = nil end
+end
+function vabDefs() return VABDEFS end
+local function learned(id)
+  local d = VABDEFS[id]
+  if d then return d end
+  local all = save and save.get and save.get("vabdefs")
+  if type(all) == "table" and type(all[id]) == "table" then VABDEFS[id] = all[id]; return all[id] end
+  return nil
+end
+local function learned_def(id)
+  local L = learned(id)
+  if not L then return nil end
+  local hx, hy, hz = math.max(0.05, L.rx or 0.5), math.max(0.05, (L.h or 1) / 2), math.max(0.05, L.rz or L.rx or 0.5)
+  return {
+    kit = true, live = true, vab = id, piece = "vab", mat = id, prefab = L.prefab, label = L.label or id, section = "FITTINGS",
+    snap = "block", box = { -hx, hx, -hy, hy, -hz, hz }, h = 2 * hy, rx = hx, rz = hz, mass = L.mass or 0.1, cost = L.cost or 0,
+    kind = "structural", fieldOnly = true, seat = 0, half = { x = hx, y = hy, z = hz }, base0 = -hy,
+    slope = 0.6, onDeck = true, grade = 1.0, footPad = 0.15, reg = L, hub = true,
+    desc = string.format("%s · live: built from the Base Hub", L.label or id), sym = "x",
+  }
+end
+
 local function live_def(id)
   local L = LIVE[id]
-  if not L then return nil end
+  if not L then return learned_def(id) end
   local lay = L.lay == true
   -- the box it stands in, on the ground point: upright, or lying on its belly
   -- (a cockpit: its +Y nose along the structure's front)
@@ -1026,7 +1060,10 @@ function partInfo(id)
   local d = cache[id]
   if d ~= nil then return d or nil end
   local a, b = split(id)
-  if a == "vab" then d = live_def(b)
+  if a == "vab" then
+    d = live_def(b)
+    -- (a hub-placed part not learned yet: asked again, not cached as nothing)
+    if not d then return nil end
   elseif a and PIECES[a] and MATS[b] then
     local ok = false
     for _, m in ipairs(PIECES[a].mats) do if m == b then ok = true end end
