@@ -16,6 +16,21 @@
 --   Air Tank Rack  compressed air on a regulator: it feeds air at its flow
 --                  from FEED_ON (97 %) of an atmosphere up to 1 atm. It is a
 --                  valve, not a pump: it needs no power. (A leak shuts it.)
+--   N2 Compressor  (expansion X2) pulls the OUTSIDE air through a membrane and
+--                  feeds the room its inert gas, up to 1 atm, as the makeup a
+--                  bottle rack would: what the outside holds besides O2 comes
+--                  in with it, so on a CO2 world it brings CO2 and the room
+--                  needs its scrubbers running (`n2`, atm·m³/s; powered;
+--                  nothing to pull under N2_PMIN of outside air)
+--   O2 Concentrator (X2) a pressure-swing unit: it makes O2 from the outside
+--                  air like the O2 Generator does from water, holding the
+--                  room at 21 %, wherever the outside holds O2C_MIN of O2
+--                  (`o2c`, atm·m³/s; powered; no water)
+-- THE OUTSIDE (X2): a world's rolled air (world.<name>.air, scripts/atmo.lua)
+-- gives the outside's pressure, O2 and CO2 (`c` counts CO2 and the acid gases
+-- a scrubber also takes, SO2); a room that closes round it starts as it is,
+-- and a vent relaxes every amount to it. An OLD save's worlds (no air, or
+-- `legacy`) keep the yes/no outside they had: O2N or none, no CO2.
 -- A network open to the outside (an open door to it, a leaky room, a gap)
 -- VENTS: every amount relaxes to the outside's, e^(-t/τ), τ = VENT_S · V /
 -- openings (a 9 m³ room loses 95 % in about 13 s through one door: PLAN D6's
@@ -104,7 +119,8 @@ local min, max, abs, exp, sqrt, ln = math.min, math.max, math.abs, math.exp, mat
 -- ── pure: one network's air ─────────────────────────────────────────────────
 -- st = { N, x, c, q (the tanks' store), feed (the regulator open) }
 -- M  = { V, crew, G (O2 a second), S (CO2 a second), F (the regulator's flow),
---        tau (nil = sealed), pout, xout (the outside's pressure and O2 share) }
+--        tau (nil = sealed), pout, xout, cout (the outside's pressure, O2 and
+--        CO2 shares), Jc (X2: CO2 a compressor brings in with the inert gas) }
 -- → st, rep = { segs, events = { name … } }
 -- (S7) M also carries: W (the generators' water cells hold st.w kg: O2 is
 -- made only while there is water, KW kg an atm·m³, and st.h2 gathers the
@@ -118,8 +134,11 @@ function advance(st, M, dt, rep)
   if not dt or dt <= 0 then return st, rep end
   local V = M.V
   local Jx, JN = M.Jx or 0, M.JN or 0
+  local Jc = M.Jc or 0
   if M.tau then
-    local Nt, xt = V * (M.pout or 0) * (1 - (M.xout or 0)), V * (M.pout or 0) * (M.xout or 0)
+    local co = M.cout or 0
+    local Nt, xt = V * (M.pout or 0) * (1 - (M.xout or 0) - co), V * (M.pout or 0) * (M.xout or 0)
+    local ct = V * (M.pout or 0) * co
     local F = M.slow and (M.F or 0) or 0
     if not M.slow then st.feed = false end
     local left, guard = dt, 0
@@ -136,11 +155,12 @@ function advance(st, M, dt, rep)
       local tau = M.tau
       -- dA/dt = -(A - A_out)/τ + s_A: A(t) = A_eq + (A - A_eq) e^(-t/τ), A_eq = A_out + s_A τ
       local Neq, xeq = Nt + sN * tau, xt + sx * tau
-      local neq = Neq + xeq
+      local ceq = ct + (jon and Jc or 0) * tau
+      local neq = Neq + xeq + ceq
       local te, ev = left, nil
       local function at(t, e) if t >= 0 and t < te then te, ev = t, e end end
       if f > 0 then at(st.q / f, "tank_empty") end
-      if (f > 0 or (jon and (Jx + JN) > 0)) and neq > V and n < V then
+      if (f > 0 or (jon and (Jx + JN + Jc) > 0)) and neq > V and n < V then
         at(-tau * ln((V - neq) / (n - neq)), "full")
       end
       if not st.feed and st.q > EPS and F > 0 and neq < FEED_ON * V and n > FEED_ON * V then
@@ -149,7 +169,7 @@ function advance(st, M, dt, rep)
       local k = exp(-te / tau)
       st.N = Neq + (st.N - Neq) * k
       st.x = xeq + (st.x - xeq) * k
-      st.c = st.c * k
+      st.c = ceq + (st.c - ceq) * k
       st.q = max(0, st.q - f * te)
       left = left - te
       rep.segs = rep.segs + 1
@@ -188,11 +208,11 @@ function advance(st, M, dt, rep)
     end
     local f = (st.feed and st.q > EPS and F > 0) and F or 0
     local jon = st.jon ~= false
-    local jx, jN = jon and Jx or 0, jon and JN or 0
+    local jx, jN, jc = jon and Jx or 0, jon and JN or 0, jon and Jc or 0
     local dx = g - use + O2N * f + jx
     local s = 0
-    if S > 0 then if st.c > EPS then s = S else s = min(S, make) end end
-    local dc = make - s
+    if S > 0 then if st.c > EPS then s = S else s = min(S, make + jc) end end
+    local dc = make + jc - s
     local dN = (1 - O2N) * f + jN
     local dn = dN + dx + dc
     local te, ev = left, nil
@@ -203,14 +223,14 @@ function advance(st, M, dt, rep)
     if dx < 0 and st.x > EPS then at(st.x / -dx, "o2_out") end
     if st.c > EPS and dc < 0 then at(st.c / -dc, "co2_clear") end
     if water and g > 0 then at(st.w / (g * KW), "water_out") end
-    if f > 0 or jx + jN > 0 then
+    if f > 0 or jx + jN + jc > 0 then
       if dn > 0 then at((V - n) / dn, "full") end
       if f > 0 then at(st.q / f, "tank_empty") end
     end
     if not st.feed and st.q > EPS and F > 0 and dn < 0 then
       at((n - FEED_ON * V) / -dn, "feed_on")
     end
-    if st.jon == false and dn < 0 and (Jx + JN) > 0 then at((n - 0.99 * V) / -dn, "inj_on") end
+    if st.jon == false and dn < 0 and (Jx + JN + Jc) > 0 then at((n - 0.99 * V) / -dn, "inj_on") end
     st.N = max(0, st.N + dN * te)
     st.x = max(0, st.x + dx * te)
     st.c = max(0, st.c + dc * te)
@@ -229,7 +249,7 @@ function advance(st, M, dt, rep)
       elseif ev == "o2_band" then st.x = xh
       elseif ev == "o2_out" then st.x = 0
       elseif ev == "co2_clear" then st.c = 0
-      elseif ev == "full" then st.feed = false; if jx + jN > 0 then st.jon = false end
+      elseif ev == "full" then st.feed = false; if jx + jN + jc > 0 then st.jon = false end
       elseif ev == "tank_empty" then st.q = 0
       elseif ev == "water_out" then st.w = 0
       elseif ev == "inj_on" then st.jon = true
@@ -245,7 +265,7 @@ end
 -- pressures meet as e^(-k t), k = C (1/Va + 1/Vb) (Vb nil: the outside, held).
 -- The gas goes from the high side with that side's mix (an outflow does not
 -- change a well-mixed room's mix), so the amounts are exact. → the amount moved
-function equalise(A, Va, B, Vb, C, dt, pout, xout)
+function equalise(A, Va, B, Vb, C, dt, pout, xout, cout)
   if C <= 0 or dt <= 0 then return 0 end
   local pa = (A.N + A.x + A.c) / Va
   local pb = B and ((B.N + B.x + B.c) / Vb) or (pout or 0)
@@ -268,7 +288,7 @@ function equalise(A, Va, B, Vb, C, dt, pout, xout)
       A.N, A.x, A.c = A.N + mN, A.x + mx, A.c + mc
     else
       local o = -dn
-      A.N, A.x = A.N + o * (1 - (xout or 0)), A.x + o * (xout or 0)
+      A.N, A.x, A.c = A.N + o * (1 - (xout or 0) - (cout or 0)), A.x + o * (xout or 0), A.c + o * (cout or 0)
     end
   end
   return dn
@@ -301,8 +321,21 @@ function o2Left(st, V, crew, G)
 end
 
 -- A room's air as the outside's (a room closed round air that was there).
-function outsideAir(V, pout, xout)
-  return { N = V * pout * (1 - xout), x = V * pout * xout, c = 0 }
+function outsideAir(V, pout, xout, cout)
+  cout = cout or 0
+  return { N = V * pout * (1 - xout - cout), x = V * pout * xout, c = V * pout * cout }
+end
+
+-- (X2) The outside's pressure (atm), O2 and CO2 shares from a world's rolled
+-- air at `share` of its datum density (pure; atmo.lua's record). CO2 counts
+-- the acid gases too (a scrubber's amine takes SO2 as well).
+N2_PMIN = 0.05                   -- atm of outside air a compressor needs
+O2C_MIN = 0.05                   -- the O2 share of the outside a concentrator needs
+function outsideOf(air, share)
+  if type(air) ~= "table" then return 0, 0, 0 end
+  local p = math.max(0, math.min(1.5, (air.p0 or 0) * math.max(0, share or 1)))
+  local g = air.gases or {}
+  return p, g.O2 or 0, (g.CO2 or 0) + (g.SO2 or 0)
 end
 
 -- ── the scene half ──────────────────────────────────────────────────────────
@@ -354,13 +387,24 @@ function alarms() return alarms_ end
 function crewRoom() return crew.sid, crew.rid end
 function setVacuum(on) forceVacuum = on == true; for _, s in pairs(S) do s.out = nil end end
 
--- The outside where structure `rec` stands: p (atm), O2 share. (suit.lua's
--- rules: a world's air, its oxygen, how thick it is here.)
+-- The outside where structure `rec` stands: p (atm), O2 share, CO2 share.
+-- (suit.lua's rules: a world's air, its oxygen, how thick it is here.)
 local function outside_of(rec)
-  if forceVacuum then return 0, 0 end
+  if forceVacuum then return 0, 0, 0 end
   local cl, ae = ref("climate"), ref("aero")
   local w = cl and cl.worldOf and cl.worldOf(rec.b)
-  if not w or (w.atmo or 0) < 0.05 then return 0, 0 end
+  if not w or (w.atmo or 0) < 0.05 then return 0, 0, 0 end
+  if type(w.air) == "table" and not w.air.legacy then
+    local b = space and space.body and space.body(rec.b)
+    local share = 1
+    if b and ae and ae.airShare then
+      local alt = sqrt(rec.x * rec.x + rec.y * rec.y + rec.z * rec.z) - (w.radius or b.radius or 0)
+      local H = (w.atmoHeight or 0) > 0 and w.atmoHeight or 0.35 * (w.radius or b.radius or 800)
+      local ok, sh = pcall(ae.airShare, math.max(alt, -0.25 * H), H, w.atmoScaleH)
+      share = ok and sh or 1
+    end
+    return outsideOf(w.air, share)
+  end
   local oxy = 0
   if ae and ae.oxygen then local ok, o = pcall(ae.oxygen, w); oxy = ok and (o or 0) or 0 end
   local b = space and space.body and space.body(rec.b)
@@ -377,11 +421,11 @@ local function outside_of(rec)
     end
   end
   local p = math.max(0, math.min(1.2, share * math.min(1.5, (w.atmo or 0) / 0.45)))
-  return p, (oxy >= 0.5) and O2N or 0
+  return p, (oxy >= 0.5) and O2N or 0, 0
 end
 local function out_of(s, rec)
-  if not s.out then local p, xo = outside_of(rec); s.out = { p = p, x = xo } end
-  return s.out.p, s.out.x
+  if not s.out then local p, xo, co = outside_of(rec); s.out = { p = p, x = xo, c = co or 0 } end
+  return s.out.p, s.out.x, s.out.c
 end
 
 -- Is structure sid's base grid up? (a real grid, not short with its battery flat)
@@ -452,7 +496,7 @@ local function solve(sid)
               -- air ({ N, x, c }), what the outlets bring each room, the H2 made
               cells = {}, recv = {}, inject = old and old.inject or {}, h2 = old and old.h2 or {}, made = old and old.made or {},
               fail = old and old.fail or {}, warn = old and old.warn or {} }
-  local pout, xout = out_of(s, rec)
+  local pout, xout, cout = out_of(s, rec)
   -- the air the new rooms hold: the old rooms' by the cells they share, the
   -- outside's in a cell no room held (a wall closed round open air)
   local conc = {}
@@ -485,7 +529,7 @@ local function solve(sid)
         local v = R_.cellV(R, cl)
         local k = conc[R_.cellKey(R, cl)]
         if k then N, x, c = N + k[1] * v, x + k[2] * v, c + k[3] * v; f = f or k[4]
-        else N, x, c = N + v * pout * (1 - xout), x + v * pout * xout, c end
+        else N, x, c = N + v * pout * (1 - xout - cout), x + v * pout * xout, c + v * pout * cout end
       end
     end
     s.air[r.id] = { N = N, x = x, c = c, f = f }
@@ -642,6 +686,17 @@ local function nets_of(sid, s)
       if L.life.o2 and L.life.water and not L.off then n.gens = n.gens or {}; n.gens[#n.gens + 1] = L end
       if L.life.scrub and pow and not L.off then n.S = n.S + L.life.scrub end
       if L.life.store then n.F = n.F + (L.life.flow or 0); n.tanks[#n.tanks + 1] = L end
+      -- (X2) the compressor's makeup is the outside's mix less its O2; the
+      -- concentrator makes O2 where the outside has it
+      if (L.life.n2 or L.life.o2c) and pow then
+        local po, xo, co = out_of(s, s.rec)
+        if L.life.n2 and po >= N2_PMIN and xo < 1 then
+          local q = L.life.n2
+          n.JN = (n.JN or 0) + q * math.max(0, 1 - xo - co) / (1 - xo)
+          n.Jc = (n.Jc or 0) + q * co / (1 - xo)
+        end
+        if L.life.o2c and xo >= O2C_MIN and po * xo >= 0.01 then n.G = n.G + L.life.o2c end
+      end
     end
   end
   -- (S7) the valves: to the outside (or a leaky room) they vent the network
@@ -695,7 +750,7 @@ local function advance_struct(sid, s, a)
   s.a = a
   if dt <= 0 then return end
   if dt > 60 then PROF.catch = dt end
-  local pout, xout = out_of(s, s.rec)
+  local pout, xout, cout = out_of(s, s.rec)
   local all = nets(sid, s)
   local sts = {}
   for _, n in ipairs(all) do
@@ -713,7 +768,7 @@ local function advance_struct(sid, s, a)
     st.w, st.h2 = W, 0
     if n.V > 0 then
       advance(st, { V = n.V, crew = n.crew, G = n.G, S = n.S, F = (st.q > EPS) and n.F or 0, tau = n.tau, slow = n.slow, pout = pout, xout = xout,
-                    W = W, Jx = n.Jx, JN = n.JN }, dt)
+                    cout = cout, W = W, Jx = n.Jx, JN = n.JN, Jc = n.Jc }, dt)
     end
     n.jon = st.jon
     sts[#sts + 1] = st

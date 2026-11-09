@@ -224,4 +224,9 @@ return {
   KitLwTx_steel = { lo = { -0.070, 0.000, -0.360 }, hi = { 0.070, 0.074, 0.090 }, colliders = 0, tris = 420, children = {  } },
   KitLwRx_steel = { lo = { -0.070, 0.000, -0.360 }, hi = { 0.070, 0.074, 0.090 }, colliders = 0, tris = 420, children = {  } },
   KitLgPlc_steel = { lo = { -0.600, 0.000, -0.402 }, hi = { 0.600, 1.450, 0.400 }, colliders = 3, tris = 1418, children = { "Screen" } },
+  KitN2comp_steel = { lo = { -0.500, 0.000, -0.350 }, hi = { 0.500, 1.296, 0.350 }, colliders = 3, tris = 1284, children = { "Glass" } },
+  KitO2conc_steel = { lo = { -0.380, 0.000, -0.280 }, hi = { 0.380, 1.500, 0.328 }, colliders = 1, tris = 984, children = { "Glass" } },
+  KitTelescope_steel = { lo = { -0.420, 0.000, -0.379 }, hi = { 0.390, 1.862, 0.739 }, colliders = 3, tris = 1488, children = { "Glass" } },
+  KitTelescope1m_steel = { lo = { -1.100, 0.000, -1.100 }, hi = { 1.300, 4.043, 1.231 }, colliders = 4, tris = 3456, children = { "Glass" } },
+  KitSurveyStation_steel = { lo = { -0.860, -0.011, -0.670 }, hi = { 0.600, 2.610, 0.548 }, colliders = 2, tris = 1044, children = { "Glass" } },
 }

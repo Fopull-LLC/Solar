@@ -86,6 +86,13 @@ ITEMS = {
                 worn = { prefab = "ItemO2Tank", bone = "Back" },
                 fill = { cap = 900, what = "o2" },     -- 15 minutes of suit air, full
                 about = "a spare bottle of breathing oxygen for the suit: +15 min of air on a long EVA or a dive" },
+  -- THE O2 MASK (expansion X2; scripts/atmo.lua): a nasal cannula and a soft
+  -- mask on a hose to the suit's own oxygen. Bare-headed in THIN air (O2
+  -- between 0.10 and 0.16 bar) it keeps the crew from hypoxia at a sixth of
+  -- the suit's draw; without it they lose a little health a minute there.
+  -- Having it in the pack is wearing it (no model: it rides inside the neck ring).
+  o2mask    = { name = "O2 Mask",       kind = "worn",       kg = 0.4,  L = 1,  cost = 120,  shop = true, show = "ItemO2Mask",
+                about = "a cannula and soft mask on a hose to the suit's oxygen: breathe bare-headed in thin air (a sixth of the suit's draw)" },
   -- THE FLASHLIGHT (scripts/flashlight.lua): a clamp-on torch strapped to the
   -- helmet's side while it is in the pack; L switches it, on foot, whatever
   -- is in the hands. Light and cheap on purpose (0.3 kg, $35): a thing you
@@ -169,7 +176,7 @@ ITEMS.buildkit = { name = "Build Kit", kind = "device", kg = 1.6, L = 3, cost = 
 
 -- The belt's order: tools first, then devices and deployables, then
 -- consumables with a hold. (Worn items are never on the belt.)
-ORDER = { "gravgun", "laser", "surveyor", "buildkit", "beacon", "flag", "rope", "repairkit", "medkit", "gascan", "fuelRod", "fuelRodNU", "fuelRodHALEU", "spentRod", "rcspack", "o2tank", "flashlight" }
+ORDER = { "gravgun", "laser", "surveyor", "buildkit", "beacon", "flag", "rope", "repairkit", "medkit", "gascan", "fuelRod", "fuelRodNU", "fuelRodHALEU", "spentRod", "rcspack", "o2tank", "o2mask", "flashlight" }
 
 -- The Medkit's work (crew.lua runs it): seconds held at it, what it gives,
 -- and the reach from the medic to the patient (m).
@@ -365,7 +372,7 @@ function card(id, live)
   row("Price", string.format("$%d", d.cost or 0))
   row("Sells back", string.format("$%d (%s)", sellPrice(id), pct(SELL_BACK)))
   return { id = id, name = d.name, kind = KIND_WORD[d.kind] or d.kind, about = d.about or "", rows = rows,
-           prefab = d.hold and d.hold.prefab or (d.worn and d.worn.prefab) or nil }
+           prefab = d.hold and d.hold.prefab or (d.worn and d.worn.prefab) or d.show or nil }
 end
 
 -- ── repair (docs §6.2) ──────────────────────────────────────────────────────

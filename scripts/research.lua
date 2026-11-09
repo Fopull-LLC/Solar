@@ -81,6 +81,11 @@ TECH = {
   radTruss     = { cost = 3200, label = "Truss Radiator", after = "radPanel", rep = 6 },
   ember        = { cost = 9000, label = "Ember Reactor",  mat = "uranium", after = "radPanel", rep = 6 },
   shadowShield = { cost = 1800, label = "Shadow Shield",  after = "ember" },
+  -- THE SURVEY PARTS (expansion X1; scripts/parts_survey.lua): the scanner
+  -- after the probe core (it rides a satellite), the telescope wants silica
+  -- (its mirror). RP prices join in X6.
+  telescopeS   = { cost = 3200, label = "Space Telescope", mat = "silica" },
+  scanner      = { cost = 4500, label = "Orbital Scanner", after = "probe" },
   -- THE BUILD KIT (deep-space M3): not bought, GIVEN: the Relay Network's
   -- first goal (10 % of the ground linked) grants it (missions.lua), and from
   -- then the Depot stocks it and every Engineer is issued one at the base
@@ -344,6 +349,18 @@ function study(mat, qty, origin)
   if log then log(string.format("research: studied %s ×%s → +%d RP%s (total %d)", tostring(mat), tostring(qty),
     gained, first and " (a new kind)" or "", points())) end
   return gained, first
+end
+
+-- (expansion X1) Points earned by NEW SURVEY DATA (scripts/survey.lua): a
+-- layer of a world's record filled for the first time. Whole points onto
+-- the lab's tally; `why` goes to the log. → the points added.
+function addPoints(n, why)
+  n = math.floor((n or 0) + 0.5)
+  if n <= 0 then return 0 end
+  save.set("res.pts", points() + n)
+  save.set("res.survey", (save.get("res.survey") or 0) + n)
+  if log then log(string.format("research: +%d RP (%s), total %d", n, tostring(why or "survey"), points())) end
+  return n
 end
 
 -- The studied kinds as a list, most recent first: { mat, n, rp, t }.

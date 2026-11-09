@@ -156,8 +156,17 @@
 --   wire    the Signal Cable's drum (laid pin to pin by logic_net and settled
 --           the way base_cable settles a power cable): { max m, kgm, perm $/m, r m }
 PIPE_Y = 0.6
+--
+-- ── AIR AND SURVEY (expansion X1/X2) ────────────────────────────────────────
+--   life.n2   the N2 Compressor: atm·m³/s of the outside's inert gas fed to the
+--             room as makeup (room_air: needs power and outside air)
+--   life.o2c  the O2 Concentrator: atm·m³/s of O2 made from the outside air
+--   survey    a SCIENCE instrument (scripts/survey.lua): { kind = "telescope",
+--             ap (aperture, m), crew (a Scientist must run it) } or
+--             { kind = "station" } (the Survey Station: weather, seismometer,
+--             magnetometer; fills its body's layers while it stands there)
 
-SECTION_ORDER = { "FOUNDATION", "FLOOR", "WALL", "ROOF", "FRAME", "HAB", "SHIELD", "UTILITY", "POWER", "LIFE", "FLUID", "LOGIC", "NUCLEAR", "FITTINGS", "PROPS", "DECALS" }
+SECTION_ORDER = { "FOUNDATION", "FLOOR", "WALL", "ROOF", "FRAME", "HAB", "SHIELD", "UTILITY", "POWER", "LIFE", "FLUID", "LOGIC", "NUCLEAR", "SCIENCE", "FITTINGS", "PROPS", "DECALS" }
 EXTERIOR = { FOUNDATION = true, FLOOR = true, WALL = true, ROOF = true, FRAME = true, HAB = true, SHIELD = true }
 FACES2 = { wall = true, halfWall = true, wall12 = true, doorWall = true, doorWallM = true, doubleDoor = true, windowWall = true,
            porthole = true, airlockWall = true, openFrame = true, ventWall = true, leadWall = true, gable = true,
@@ -408,6 +417,15 @@ PIECES = {
                 mats = { "steel" }, vol = 1.08, fill = "solid", cost = 1800, fillk = { steel = 0.04 },
                 life = { store = 60, flow = 0.25, price = 4 },
                 desc = "three 200 bar cylinders of air on a regulator · fills a room to 1 atm · 60 m³" },
+  -- (X2: the outside's air as the room's, scripts/room_air.lua)
+  n2comp    = { label = "N2 Compressor", section = "LIFE", snap = "block", box = B(-0.5, 0.5, 0, 1.3, -0.35, 0.35),
+                mats = { "steel" }, vol = 0.91, fill = "solid", mass = { steel = 0.16 }, cost = 4200,
+                life = { n2 = 0.004 }, use = 1.2,
+                desc = "a membrane nitrogen generator: pulls the outside air and feeds the room its inert gas up to 1 atm (14 m³ an hour) · what the outside holds besides O2 comes in too: on a CO2 world run the scrubbers · 1.2 EC/s" },
+  o2conc    = { label = "O2 Concentrator", section = "LIFE", snap = "block", box = B(-0.4, 0.4, 0, 1.5, -0.3, 0.34),
+                mats = { "steel" }, vol = 0.72, fill = "solid", mass = { steel = 0.11 }, cost = 4800,
+                life = { o2c = 2.8e-5 }, use = 2.0,
+                desc = "a pressure-swing O2 concentrator for four crew: makes oxygen from any outside air with 5 % of it, no water · 2 EC/s" },
   -- (S7: pressure mechanics, scripts/room_air.lua)
   airReceiver = { label = "Airlock Receiver", section = "LIFE", snap = "block", box = B(-0.45, 0.45, 0, 2.0, -0.45, 0.45),
                 mats = { "steel" }, vol = 1.6, fill = "solid", mass = { steel = 0.32 }, cost = 3400,
@@ -417,6 +435,19 @@ PIECES = {
                 mats = { "steel" }, vol = 0.009, fill = "solid", mass = { steel = 0.012 }, cost = 320,
                 eqv = { C = 0.25 },
                 desc = "a 40 mm bleed valve through the wall it is on · open, it lets the two sides' pressures meet slowly, so a door between them can open · right-click opens it" },
+  -- ── SCIENCE (expansion X1: the survey's instruments, scripts/survey.lua) ──
+  telescope = { label = "Telescope 0.3 m", section = "SCIENCE", snap = "block", box = B(-0.45, 0.42, 0, 1.9, -0.4, 0.76),
+                mats = { "steel" }, vol = 0.2, fill = "solid", mass = { steel = 0.065 }, cost = 8000,
+                survey = { kind = "telescope", ap = 0.3, crew = true }, use = 0.15,
+                desc = "a 0.3 m reflector on a pier and an equatorial mount · a Scientist at its eyepiece sweeps a world: temperature and air from its light · night or vacuum, the target above the horizon · 0.15 EC/s" },
+  telescope1m = { label = "Telescope 1 m", section = "SCIENCE", snap = "block", box = B(-1.12, 1.32, 0, 4.07, -1.12, 1.25),
+                mats = { "steel" }, vol = 2.6, fill = "solid", mass = { steel = 2.4 }, cost = 48000,
+                survey = { kind = "telescope", ap = 1.0, crew = true }, use = 1.2,
+                desc = "a 1 m truss telescope on a fork mount with its spectrograph · resolves a world's air by its spectrum · a Scientist runs it · 1.2 EC/s" },
+  surveyStation = { label = "Survey Station", section = "SCIENCE", snap = "block", box = B(-0.88, 0.62, 0, 2.63, -0.69, 0.57),
+                mats = { "steel" }, vol = 0.3, fill = "solid", mass = { steel = 0.12 }, cost = 6000,
+                survey = { kind = "station" },
+                desc = "a landed science package on its own panel: weather mast, buried seismometer, magnetometer boom · reads its world's temperature, air, interior and field over a day" },
   -- ── FLUID (S7: pipes and tanks; scripts/fluids.lua, fluid_net.lua) ──
   -- Ports at PIPE_Y (0.6 m) unless a riser's, on the 0.5 m grid; DN25
   -- (33.7 mm OD) process line. Masses are the pieces' own, empty.
@@ -983,6 +1014,8 @@ local function resolve(piece, mat)
     fl = P.fl, eqv = P.eqv,
     -- (S8) logic: its pins and what it is to the signals; the Signal Cable's drum
     lg = P.lg, wire = P.wire,
+    -- (X1) a survey instrument
+    survey = P.survey,
     script = P.script or ((P.door or P.light or P.screen or P.switch or P.sign or P.emblem) and "kit_live" or nil),
     seals = (P.seals == "door" or P.seals == "ring" or P.seals == "y" or P.seals == "z") and P.seals or nil,
     u = M.u, matk = M.k, strength = M.strength,

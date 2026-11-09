@@ -480,6 +480,7 @@ local function rim_of(e)
   if k == "flag" then return C.accent end
   if k == "crew" or k == "structure" or k == "base" then return C.ink end
   if k == "relay" then return e.link and C.signal or C.danger end
+  if k == "body" then return e.surveyed and C.done or C.soft end
   if e.craft then
     if e.link then return C.signal end
     return e.comms and C.danger or C.soft
@@ -677,7 +678,8 @@ local function focus_on(e, frame)
   if frame and om.setZoom then
     local r = 400
     local b = e.body and space.body(e.body)
-    if e.craft and not e.landed and e.ap and b then r = (e.ap + b.radius) * 2.6
+    if e.kind == "body" and b then r = b.radius * 3.2
+    elseif e.craft and not e.landed and e.ap and b then r = (e.ap + b.radius) * 2.6
     elseif e.craft and not e.landed and b then r = math.max(b.radius * 2.0, (e.alt or 0) * 4)
     elseif e.kind == "debris" and e.conic and b then r = b.radius * 3 end
     om.setZoom(r)
@@ -1381,6 +1383,68 @@ local function card_other(e, rows, co)
   if armed_on(e.id) then rows[#rows + 1] = txt("warn", "panel/hintWarn", "Press again: it cannot be undone.") end
 end
 
+-- THE BODY CARD (expansion X1, scripts/survey.lua): a world of the home
+-- system. Where it is (radius, SOI, distance), the bases there, then its six
+-- survey layers, each a bar, the value (or the band of what is not yet known)
+-- and, while unfilled, the instruments that would fill it; SURVEYED when all
+-- six are full. Focus / Target / Plan.
+local function layer_row(i, r)
+  local W = 96
+  local full = r.v >= 1 - 1e-9
+  local col = { "col", key = "L" .. i, w = "100%", h = "fit", gap = 1, pad = 0, align = "start",
+    { "row", key = "h", w = "100%", h = 16, gap = 8, pad = 0, align = "center",
+      { "text", key = "l", style = "panel/label", w = 104, h = "fit", text = r.label },
+      { "row", key = "m", w = W, h = 6, radius = 1, pad = 0, gap = 0, fill = { 0.02, 0.03, 0.025 }, border = 1,
+        borderColor = { 0, 0, 0, 0.8 },
+        { "box", key = "f", w = math.max(2, math.floor(W * math.max(0, math.min(1, r.v)) + 0.5)), h = 6, radius = 1,
+          fill = full and C.done or C.warn } },
+      { "text", key = "p", style = "panel/cellMuted", w = "grow", h = "fit", textAlign = "end", maxLines = 1,
+        text = full and "✓" or string.format("%d %%", math.floor(r.v * 100 + 0.5)) } },
+    { "text", key = "v", style = r.text and "panel/cell" or "panel/cellMuted", w = "100%", h = "fit", wrap = true,
+      text = r.text or "unknown" } }
+  if not full then
+    col[#col + 1] = { "text", key = "n", style = "panel/hint", w = "100%", h = "fit", wrap = true, text = "learn: " .. (r.learn or "") }
+  end
+  return col
+end
+
+local function card_body(e, rows, S)
+  header(e, rows, false)
+  local b = space.body and space.body(e.name)
+  local lines = {}
+  if b then
+    lines[#lines + 1] = string.format("R %s   SOI %s", fmt_alt(b.radius or 0), fmt_alt(b.soi or 0))
+    local a = find and find("Astronaut")
+    if a then lines[#lines + 1] = "FROM YOU " .. fmt_alt(math.max(0, math.sqrt((a.x - b.x) ^ 2 + (a.y - b.y) ^ 2 + (a.z - b.z) ^ 2) - (b.radius or 0))) end
+  end
+  if #lines > 0 then rows[#rows + 1] = crt("crt", lines) end
+  -- our bases there
+  local nb = 0
+  for _, x in ipairs(S.entries) do if (x.kind == "outpost" or x.kind == "base") and x.body == e.name then nb = nb + 1 end end
+  if nb > 0 then rows[#rows + 1] = txt("bases", "panel/cell", string.format("⌂ %d base%s here", nb, nb == 1 and "" or "s")) end
+  local sv = ref("survey")
+  local list, rec = {}, nil
+  if sv and sv.rows then
+    local ok, l, r = pcall(sv.rows, e.name)
+    if ok then list, rec = l or {}, r end
+  end
+  rows[#rows + 1] = rule("rs")
+  local done = sv and sv.surveyed and rec and sv.surveyed(rec)
+  rows[#rows + 1] = { "row", key = "svh", w = "100%", h = "fit", gap = 6, pad = 0, align = "center",
+    { "text", key = "t", style = "panel/label", w = "grow", h = "fit", text = "SURVEY" },
+    { "text", key = "b", style = done and "panel/keys" or "panel/cellMuted", w = "fit", h = "fit",
+      text = done and "◆ SURVEYED" or string.format("%d %% known", math.floor((e.known or 0) * 100 + 0.5)) } }
+  for i, r in ipairs(list) do rows[#rows + 1] = layer_row(i, r) end
+  if rec and (rec.rp or 0) >= 1 then
+    rows[#rows + 1] = txt("rp", "panel/cellMuted", string.format("%d RP earned here", math.floor(rec.rp + 0.5)))
+  end
+  rows[#rows + 1] = rule("r2")
+  rows[#rows + 1] = { "row", key = "a1", w = "100%", h = 30, gap = 6, pad = 0,
+    key_btn("foc", "panel/secondary", "Focus", "grow", 30, false, nil, function() focus_on(e, true) end),
+    key_btn("tgt", "panel/secondary", "Target", "grow", 30, false, "Make it the target", function() target(e) end),
+    key_btn("pln", "panel/secondary", "Plan", "grow", 30, false, "Plan a manoeuvre on the chart", function() plan(e) end) }
+end
+
 local function describe_card(S, dh)
   local co = ref("company")
   local e = sel_entry(S)
@@ -1390,6 +1454,7 @@ local function describe_card(S, dh)
     rows[#rows + 1] = txt("none", "panel/body", "Click a row, or an icon on the map.")
   elseif e.craft then card_craft(e, rows, co)
   elseif e.kind == "crew" then card_crew(e, rows)
+  elseif e.kind == "body" then card_body(e, rows, S)
   else card_other(e, rows, co) end
   if msg ~= "" and now() - msg_t < msg_dur then rows[#rows + 1] = txt("msg", "panel/hintWarn", "» " .. msg) end
   return { "col", key = "card", style = "panel/frame", pin = "topRight", x = -M, y = COL_Y, w = CARD_W, h = col_h(dh),
@@ -2091,6 +2156,8 @@ function drawMap(ctx)
     local keep = id == selected or id == hover or (fanset ~= nil and fanset[id] == true)
     -- (the bases are always on the map: no filter hides them)
     local show = keep or all_pass or (always ~= nil and always[e.kind] == true) or not passes or passes(e, filter)
+    -- (X1: the worlds are drawn by the map itself: no icon at a body's centre)
+    if e.kind == "body" then show = false end
     if show and not keep then
       local dsc = disc[e.body] or 99
       if dsc < 2 then show = false

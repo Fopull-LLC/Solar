@@ -23,6 +23,12 @@
 -- homeKindFor / alienHomeWorld), with a seed of its own to type (blank = a
 -- random one, kept in the save). Saved as `g_homeKind = "alien"` and
 -- `g_homeSeed`; an Earth-like save writes neither, so it is the save it was.
+-- And a fourth, AIR (expansion X2, scripts/atmo.lua): what the home world's
+-- air is — Earth (0.21 bar O2: helmet off) · Rich (0.35 bar) · Thin (0.12
+-- bar: a mask outdoors) · None (no oxygen: a suit world) · Random (Ty: 60 %
+-- breathable). An Earth-like home defaults to Earth, an alien one to Random.
+-- Saved as `g_air` on every new save (a save without it is an OLD save: its
+-- worlds keep the yes/no air they had).
 
 open = false -- published: menu_slot opens the panel, buttons check it
 
@@ -51,11 +57,14 @@ local seed_str = ""
 
 -- The agency column.
 local AG_X, AG_W, PANEL_W, GAL_W = 604, 336, 960, 600
+local PANEL_H = 672        -- (X2) the scene's 612 + the AIR row
 local ed = nil             -- scripts/emblem.lua's editor state
 local mode = "career"      -- GAME MODE: "career" | "sandbox"
 local safety = "death"     -- CREW SAFETY: "death" | "rescue" | "invincible"
 local home = "earth"       -- HOME WORLD: "earth" | "alien"
 local hseed_str = ""       -- the alien world's seed as typed ("" = random)
+local air = "earth"        -- AIR: "earth" | "rich" | "thin" | "alien" | "random"
+local air_set = false      -- the player picked one (else it follows the home)
 
 local MODES = {
   { "career", "Career", "Earn every dollar and build a name: contracts, research and standing gate the way up" },
@@ -69,6 +78,13 @@ local SAFETIES = {
 local HOMES = {
   { "earth", "Earth-like", "Recommended: the mild, living world built for the colony" },
   { "alien", "Alien", "A challenge: some contracts may need another world" },
+}
+local AIRS = {
+  { "earth", "Earth", "Earth-like N₂/O₂, 0.21 bar of oxygen: the helmet comes off outdoors" },
+  { "rich", "Rich", "Oxygen-rich, 0.35 bar: the helmet comes off; fires burn hot" },
+  { "thin", "Thin", "Thin, 0.12 bar of oxygen: an O₂ Mask outdoors, the helmet up high" },
+  { "alien", "None", "No oxygen: the helmet stays on outdoors; your habs make your air" },
+  { "random", "Random", "Rolled from the world's seed: breathable 60 % of the time" },
 }
 local HSEED_MAX = 9
 local function blurb(list, v)
@@ -86,6 +102,12 @@ function homeOptions() return home, hseed_str end
 function setHome(k, seedText)
   if k == "earth" or k == "alien" then home = k end
   if seedText ~= nil then hseed_str = tostring(seedText):gsub("%D", ""):sub(1, HSEED_MAX) end
+  if not air_set then air = (home == "alien") and "random" or "earth" end
+end
+-- …and the AIR choice (X2): what CREATE writes as `g_air`.
+function airOption() return air end
+function setAir(k)
+  for _, o in ipairs(AIRS) do if o[1] == k then air, air_set = k, true end end
 end
 local panel_node = nil
 
@@ -152,6 +174,7 @@ function openFor(n)
   open = true
   mode, safety = "career", "death"
   home, hseed_str = "earth", ""
+  air, air_set = "earth", false
   local e = emblem_lib()
   ed = e and e.newEditor and e.newEditor(nil, nil) or nil
   local lbl = find("NG Slot Label")
@@ -238,6 +261,8 @@ function press(role)
       save.set("g_homeKind", "alien")
       save.set("g_homeSeed", math.floor(hs))
     end
+    -- AIR (X2): every new save names its air (system_generator airChoiceFor)
+    save.set("g_air", air)
     -- A new galaxy is made at the CURRENT world scale, and keeps it for life
     -- (system_generator SCALES; game_manager reads it back). The sliders above
     -- are already in that scale's units.
@@ -275,7 +300,11 @@ local function describe_agency(e)
     for _, o in ipairs(HOMES) do
       row[#row + 1] = { "button", key = o[1], style = "panel/choice", w = "grow", h = 26, text = o[2],
         selected = (o[1] == home), textAlign = "center", textValign = "center", tooltip = o[3],
-        onClicked = function() if o[1] ~= home then sfx("click") end; home = o[1] end }
+        onClicked = function()
+          if o[1] ~= home then sfx("click") end
+          home = o[1]
+          if not air_set then air = (home == "alien") and "random" or "earth" end
+        end }
     end
     if home == "alien" then
       local f = ui and ui.focused and ui.focused()
@@ -290,8 +319,10 @@ local function describe_agency(e)
     rows[#rows + 1] = { "text", key = "home_h", style = "panel/hint", w = "100%", h = "fit", wrap = true,
                         text = blurb(HOMES, home) }
   end
+  -- AIR (X2): the same segmented keys, five short ones
+  pick("air", "Air", AIRS, air, function(v) air, air_set = v, true end)
   return {
-    { "box", key = "vr", pin = "topLeft", x = GAL_W - 2, y = 24, w = 1, h = 564, style = "panel/rule" },
+    { "box", key = "vr", pin = "topLeft", x = GAL_W - 2, y = 24, w = 1, h = PANEL_H - 48, style = "panel/rule" },
     { "col", key = "agency", pin = "topLeft", x = AG_X, y = 22, w = AG_W, h = "fit", gap = 4, pad = 0,
       align = "start", items = rows, function(x) return x end },
   }
@@ -301,6 +332,7 @@ end
 local function widen(node)
   local _, ng = ui_of("NG Panel")
   if ng and ng.width ~= PANEL_W then ng.width = PANEL_W end
+  if ng and ng.height ~= PANEL_H then ng.height = PANEL_H end
   -- (the title, slot label and seed hint are GAL_W wide in the scene: they
   -- stay centred over the galaxy half, clear of the agency column)
 end

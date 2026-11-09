@@ -2048,16 +2048,27 @@ function homeKindFor(p)
   return "alien", nil
 end
 
--- The alien home's type, from its stream.
-local function alien_type(q)
+-- (X2) The types a BREATHABLE alien home is rolled from: the ones whose
+-- temperatures reach the suit's band and whose ground is not made by its air
+-- (a greenhouse, a hydrocarbon or a sulfur world is what it is because of
+-- the gas). An old save, or an unbreathable choice, rolls ALIEN_TYPES.
+BREATHE_TYPES = { ironred = true, crystal = true, dune = true, canyon = true, saltflat = true, glacial = true,
+                  tundra = true, alpine = true, steppe = true, verdant = true }
+
+-- The alien home's type, from its stream (`only`: a set to keep to).
+local function alien_type(q, only)
   local total = 0
-  for _, t in ipairs(ALIEN_TYPES) do total = total + t[2] end
+  for _, t in ipairs(ALIEN_TYPES) do if not only or only[t[1]] then total = total + t[2] end end
   local x = q:next() * total
+  local last = nil
   for _, t in ipairs(ALIEN_TYPES) do
-    x = x - t[2]
-    if x <= 0 then return t[1] end
+    if not only or only[t[1]] then
+      last = t[1]
+      x = x - t[2]
+      if x <= 0 then return t[1] end
+    end
   end
-  return ALIEN_TYPES[#ALIEN_TYPES][1]
+  return last or ALIEN_TYPES[#ALIEN_TYPES][1]
 end
 
 -- Turn the rolled first planet into an alien home (see above). `spec` is what
@@ -2068,10 +2079,19 @@ local function alienHomeWorld(spec, p, sc, seed)
   -- so seeds 1, 7, 42 would all pick the first type)
   local q = rng((seed * 2654435761 + 0x5BD1E995) % 4294967291 + 1)
   for _ = 1, 4 do q:next() end
-  local id = alien_type(q)
+  local A = atmoLib()
+  local breathe = A and A.breathableChoice and A.breathableChoice(AIR_CTX.choice)
+  local id = alien_type(q, breathe and BREATHE_TYPES or nil)
   local T = GEO_TYPES[id].T
   local lo, hi = math.max(T[1], ALIEN_T[1]), math.min(T[2], ALIEN_T[2])
   if hi < lo then lo, hi = ALIEN_T[1], ALIEN_T[2] end
+  -- (X2) a breathable AIR choice keeps the world inside the suit's band (a
+  -- breathable 110 K world would still keep the helmet on)
+  if breathe then
+    local B = A.BREATHE_T or { 240, 315 }
+    lo, hi = math.max(lo, B[1]), math.min(hi, B[2])
+    if hi < lo then lo, hi = B[1], B[2] end
+  end
   local Tk = q:range(lo, hi)
   local radius = q:range(p.radiusMin, p.radiusMax)
   local g = q:range(ALIEN_G[1], ALIEN_G[2])
@@ -2127,10 +2147,20 @@ function homeFeatures(name)
   if not (aero_ref and aero_ref.valid ~= false) then aero_ref = findScript and findScript("aero") or nil end
   local ae = aero_ref
   local oxy = (ae and ae.oxygen) and ae.oxygen(w) or (geo.home and 1 or 0)
+  local breathable = air and (oxy or 0) >= 0.5
+  -- (X2) a world with chosen air: what it is made of decides (atmo.verdict),
+  -- and the suit's temperature band
+  local A = atmoLib()
+  local verdict = (A and A.verdict and type(w.air) == "table") and A.verdict(w.air) or nil
+  if type(w.air) == "table" and not w.air.legacy and verdict then
+    local tk = tonumber(bio.tempK)
+    breathable = air and (verdict == "BREATHABLE" or verdict == "THIN") and not (tk and (tk < 228 or tk > 330))
+  end
   return {
     kind = kind, type = geo.type, label = geo.label,
     air = air,
-    breathable = air and (oxy or 0) >= 0.5,
+    breathable = breathable,
+    airVerdict = verdict,
     sea = (w.sea or 0) > 0,
     rivers = layers.rivers == true,
     lakes = w.hydro == true,
@@ -2368,8 +2398,62 @@ end
 -- and where its sea sits (water, shorelines, what grows). Rolled once here —
 -- the generator is the only thing that knows these facts — and published to
 -- `save.world.<name>`, which survives the scene hop and rides the save slot.
+-- (expansion X2) THE AIR a world holds (scripts/atmo.lua roll): the gases
+-- and the pressure, for the suit, the rooms, the jets and the survey. The
+-- save's AIR choice (`g_air`, AIR_CTX) overrides the home world's oxygen; a
+-- save without one is an OLD save (`legacy`: every reader keeps the yes/no
+-- rule it had). atmo.lua rides this node (findScript), or is read from disk
+-- under luajit; without it no world has `air` and every reader falls back.
+AIR_CTX = { raw = nil, choice = nil, legacy = true }
+local atmo_lib = nil
+function atmoLib()
+  if atmo_lib then return atmo_lib end
+  local h = findScript and findScript("atmo") or nil
+  if h and h.valid == false then h = nil end
+  if not h and loadfile and setfenv then
+    local f = loadfile("solar/scripts/atmo.lua") or loadfile("scripts/atmo.lua")
+    if f then
+      local e = setmetatable({}, { __index = _G })
+      setfenv(f, e)
+      if pcall(f) then h = e end
+    end
+  end
+  atmo_lib = h
+  return h
+end
+-- The save's AIR choice: explicit (`p.air`), else the save's `g_air`; nil on
+-- a save made before the choice (an old save).
+function airChoiceFor(p)
+  local c = p and p.air
+  if c == nil and save and save.get then c = save.get("g_air") end
+  if type(c) ~= "string" or c == "" then return nil end
+  return c
+end
+local function air_of(b)
+  local A = atmoLib()
+  if not (A and A.roll) then return nil end
+  local geo = b.geo or {}
+  local ok, air = pcall(A.roll, { type = geo.type, atmo = b.cel and b.cel.atmoDensity or 0, tempK = geo.Tk,
+    home = geo.home == true, choice = b.homeWorld and AIR_CTX.choice or nil, legacy = AIR_CTX.legacy })
+  return ok and air or nil
+end
+-- (expansion X1) THE MAGNETIC FIELD at the surface, µT: a generated trait
+-- (no magnetosphere existed before), from what a dynamo needs — a molten,
+-- metal-rich interior (the family), size and a spin we do not model (the
+-- seed's jitter). A moon's is 0; the built home world's Earth-like.
+MAG_FAMILY = { lava = 42, canyon = 30, crystal = 22, dune = 16, ice = 9, frost = 0.8, barren = 1.5 }
+function magOf(b)
+  if b.parentMu then return 0 end
+  local geo = b.geo or {}
+  local R = (b.opts and b.opts.radius) or 800
+  local base = geo.home and 48 or (MAG_FAMILY[geo.family or b.kind or ""] or 10)
+  local s = ((b.opts and b.opts.seed) or 1) % 1000 / 1000
+  return math.floor(base * math.min(1.4, math.max(0.4, R / 800)) * (0.65 + 0.7 * s) * 10 + 0.5) / 10
+end
 local function publishWorld(b, kind, insol, sea)
   save.set("world." .. b.name, {
+    air = air_of(b),
+    mag = magOf(b),
     name = b.name,
     kind = kind,
     seed = b.opts.seed or 1,
@@ -2854,11 +2938,22 @@ local function buildSystem(r, p, cfg)
           hs = opts.seed or 1
           if save and save.set then save.set("g_homeSeed", hs) end
         end
+        -- (X2) the AIR choice, rolled from the home seed when it is Random
+        local A = atmoLib()
+        AIR_CTX.choice = A and A.resolveChoice and A.resolveChoice(AIR_CTX.raw, math.floor(hs)) or nil
         spec, radius = alienHomeWorld(spec, p, sc, math.floor(hs))
         kind, sea, temp, opts, cel = spec.kind, spec.sea, spec.temp, spec.opts, spec.cel
       elseif pi == 1 and cfg.home and sc.layers and (p.homeGen or 1) >= 2 then
         spec = homeWorld(spec, p, sc, radius)
         kind, sea, temp, opts, cel = spec.kind, spec.sea, spec.temp, spec.opts, spec.cel
+      end
+      if pi == 1 and cfg.home then
+        spec.homeWorld = true
+        if AIR_CTX.choice == nil and AIR_CTX.raw ~= nil then
+          local A = atmoLib()
+          AIR_CTX.choice = A and A.resolveChoice and A.resolveChoice(AIR_CTX.raw, opts.seed or 1) or AIR_CTX.raw
+        end
+        lastAirChoice = AIR_CTX.choice
       end
     end
     specs[#specs + 1] = spec
@@ -3117,6 +3212,8 @@ local function roll(p)
   site_wait, homeSitePending = nil, false
   lastHomeGen = tonumber(p.homeGen) or 1
   lastHomeKind = (p.homeKind == "alien") and "alien" or "earth"
+  AIR_CTX = { raw = p.air, choice = nil, legacy = p.air == nil }
+  lastAirChoice = nil
   homeGravGen = tonumber(p.gravGen) or 1
   homeScale = tonumber(p.scale) or 1
   scaleVersion, scale = homeScale, scaleOf(homeScale)
@@ -3172,5 +3269,6 @@ function regenerate(seed, opts)
   p.homeGen = homeGenFor(p)
   p.gravGen = gravGenFor(p)
   p.homeKind, p.homeSeed = homeKindFor(p)
+  p.air = airChoiceFor(p)
   roll(p)
 end

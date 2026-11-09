@@ -126,10 +126,18 @@ end
 -- Worlds with life breathe oxygen; a greenhouse or a hydrocarbon world does
 -- not, and a thin dry world's air is mostly CO2 (Mars). The home world always
 -- does (it is where the jets are built).
+-- (expansion X2) A world whose air was rolled with a save's AIR choice
+-- carries `w.air` (scripts/atmo.lua): its oxygen is its partial pressure at
+-- the datum against Earth's 0.21 bar, capped at 1. A world without it, or an
+-- OLD save's (`air.legacy`), keeps this table: the yes/no rule it had.
 OXY = { archipelago = 1, verdant = 1, alpine = 1, steppe = 1, tundra = 1, dune = 0.8,
         greenhouse = 0, titan = 0 }
 function oxygen(w)
   if type(w) ~= "table" or (w.atmo or 0) < 0.05 then return 0 end
+  local a = w.air
+  if type(a) == "table" and not a.legacy and a.p0 then
+    return clamp((a.p0 or 0) * (a.o2 or 0) / 0.21, 0, 1)
+  end
   local geo = w.geo
   if type(geo) == "table" then
     if geo.home then return 1 end
@@ -148,6 +156,9 @@ end
 -- 2026-11-05: "my jets arent thrusting anymore even though my throttle is
 -- on"). Its air stays unbreathable for the suit: suit.lua reads oxygen().
 -- `home`: this world is the save's home (system.home's first body).
+-- (X2) The home rule holds whatever the AIR choice made of the home's air:
+-- an "alien" (oxygen-free) home still flies the agency's jets. Every other
+-- world's jets burn what is there: oxygen() from its rolled air.
 function jetOxygen(w, home)
   if home and type(w) == "table" and (w.atmo or 0) > 0.005 then return 1 end
   return oxygen(w)

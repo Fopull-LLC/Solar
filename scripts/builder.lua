@@ -201,6 +201,15 @@ local function registry()
       R.nuke = true
     end
   end
+  -- THE SURVEY PARTS (expansion X1, scripts/parts_survey.lua, beside
+  -- parts_nuclear): the SCIENCE section.
+  if R.lib and not R.survey then
+    local ps = findScript and findScript("parts_survey") or nil
+    if ps and ps.register and R.lib.extend then
+      R.lib.extend(ps)
+      R.survey = true
+    end
+  end
   -- EVERY BASE PART (playtest 11-09: "the base building parts should all be in
   -- the vab categories"): at a Build Stand or a Base Hub — the overlay on the
   -- world, where the Build Kit's scripts are — the BASE section and every kit

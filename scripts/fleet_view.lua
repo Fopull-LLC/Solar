@@ -20,6 +20,12 @@
 --   fleet   the flight_ops board entry (craft); crew = { {id, name, role}… }
 --   recover = { ok, why, value, factor, dist, near }   (craft at rest)
 --
+-- (expansion X1) THE WORLDS: every planet and moon of the home system is an
+-- entry too, "w:<name>", kind `body`, group WORLDS, at its body's centre
+-- (rx = ry = rz = 0): its card is the BODY card (the survey's six layers,
+-- scripts/survey.lua). The map draws the bodies itself, so the station puts
+-- no icon on them; `known` is the share of the six layers filled.
+--
 -- snapshot() rebuilds at 2 Hz, or as soon as one of the sources says it
 -- changed (flight_ops.fleetVersion, comms.networkVersion, structures.version,
 -- deployables.version, debris_pack.packVersion; crew.version at most 4 Hz).
@@ -31,11 +37,11 @@
 
 GLYPHS = { crew = "◉", rocket = "◆", probe = "◇", plane = "✈", rover = "⊡", bike = "⊚", station = "⊕",
            debris = "✕", relay = "▲", flag = "▮", remains = "◌", structure = "⌂", base = "⌂", outpost = "⌂", target = "◎",
-           recover = "↺" }
+           recover = "↺", body = "●" }
 -- Layout priority (map_labels): the selected and hovered are lifted above these.
 PRIO = { crew = 70, rocket = 66, station = 64, plane = 62, rover = 60, bike = 60, probe = 50, base = 46, outpost = 46,
-         relay = 40, flag = 38, structure = 36, remains = 30, debris = 10 }
-GROUPS = { "ATTENTION", "CREW", "CREWED", "PROBES", "LANDED", "DEBRIS", "RELAYS", "FLAGS", "BASES", "STRUCTURES" }
+         relay = 40, flag = 38, structure = 36, remains = 30, debris = 10, body = 5 }
+GROUPS = { "ATTENTION", "CREW", "CREWED", "PROBES", "LANDED", "DEBRIS", "RELAYS", "FLAGS", "BASES", "STRUCTURES", "WORLDS" }
 RATE = 2.0          -- s between rebuilds while nothing says it changed (a source
                     -- that changes rebuilds it at once; live craft are placed
                     -- from their nodes every frame anyway)
@@ -157,6 +163,7 @@ local INFRA = { relay = true, flag = true, remains = true, structure = true, bas
 ALWAYS = { base = true, outpost = true }
 
 function kindClass(e)
+  if e.kind == "body" then return "world" end
   if e.craft then return "craft" end
   if e.kind == "crew" then return "crew" end
   if e.kind == "debris" then return "debris" end
@@ -201,6 +208,8 @@ end
 function sortList(list, by)
   table.sort(list, function(a, b)
     if (a.piloted or a.active or false) ~= (b.piloted or b.active or false) then return (a.piloted or a.active) == true end
+    -- (the worlds keep the roster's order: planets outward, each with its moons)
+    if a.kind == "body" and b.kind == "body" and (a.ord or 0) ~= (b.ord or 0) then return (a.ord or 0) < (b.ord or 0) end
     if by and by ~= "name" then
       local va, vb = sort_val(a, by), sort_val(b, by)
       if va ~= nil and vb ~= nil and va ~= vb then return va < vb end
@@ -232,6 +241,11 @@ function situation(e)
   if e.kind == "remains" then return "remains" end
   if e.kind == "structure" then return "structure" .. (e.date and (" · " .. e.date) or "") end
   if e.kind == "base" then return "spaceport" end
+  if e.kind == "body" then
+    local what = e.home and "home world" or (e.parent and ("moon of " .. e.parent) or "planet")
+    if e.surveyed then return what .. " · surveyed" end
+    return string.format("%s · %d %% known", what, math.floor((e.known or 0) * 100 + 0.5))
+  end
   if e.kind == "outpost" then return "base · " .. (e.tier or "mast") end
   if e.kind == "debris" then
     if e.dkind == "landed" then return "debris · down on " .. tostring(e.body) end
@@ -252,6 +266,7 @@ end
 
 -- The one number that matters for its state.
 function keyNumber(e)
+  if e.kind == "body" then return e.surveyed and "SURVEYED" or string.format("%d %%", math.floor((e.known or 0) * 100 + 0.5)) end
   if e.kind == "crew" then
     if e.status == "afoot" and e.o2 then return string.format("O2 %d %%", pct(e.o2)) end
     return ""
@@ -276,6 +291,7 @@ function groupOf(e)
   if e.kind == "relay" then return "RELAYS" end
   if e.kind == "flag" or e.kind == "remains" then return "FLAGS" end
   if e.kind == "outpost" then return "BASES" end
+  if e.kind == "body" then return "WORLDS" end
   return "STRUCTURES"
 end
 
@@ -386,13 +402,15 @@ decodes = 0            -- (tests: how many records were decoded)
 local function stamp_now()
   local fo, net, stc, dep, dp, cr = ref("flight_ops"), ref("comms"), ref("structures"), ref("deployables"),
     ref("debris_pack"), ref("crew")
+  local sv = ref("survey")
   return { fo and fo.fleetVersion or 0, net and net.networkVersion or 0, stc and stc.version or 0,
-           dep and dep.version or 0, dp and dp.packVersion or 0, cr and cr.version or 0 }
+           dep and dep.version or 0, dp and dp.packVersion or 0, cr and cr.version or 0, sv and sv.version or 0 }
 end
 
 local function changed(a, b)
   if not (a and b) then return true end
   for i = 1, 5 do if a[i] ~= b[i] then return true end end
+  if a[7] ~= b[7] then return true end
   return false
 end
 
@@ -641,6 +659,27 @@ base_entries = function(out)
   end
 end
 
+-- THE WORLDS (X1): one entry a body of the home system, its survey summary.
+local function world_entries(out)
+  local sv = ref("survey")
+  local h = save and save.get and save.get("system.home")
+  local list = type(h) == "table" and type(h.bodies) == "table" and h.bodies or {}
+  local home = (save and save.get and save.get("base.body")) or (list[1] and list[1].name)
+  local layers = (sv and sv.LAYERS) or {}
+  for i, b in ipairs(list) do
+    if type(b.name) == "string" then
+      local r = sv and sv.record and sv.record(b.name) or nil
+      local known, n = 0, 0
+      for _, l in ipairs(layers) do n = n + 1; known = known + ((r and r.L and r.L[l]) or 0) end
+      known = n > 0 and known / n or 0
+      local parent = (b.parent and b.parent ~= h.star) and b.parent or nil
+      out[#out + 1] = { id = "w:" .. b.name, kind = "body", name = b.name, body = b.name, rx = 0, ry = 0, rz = 0, st = 0,
+                        world = true, ord = i, home = b.name == home, parent = parent, known = known,
+                        surveyed = known >= 1 - 1e-9, visited = r and r.visited ~= nil, landedOn = r and r.landed ~= nil }
+    end
+  end
+end
+
 local GROUP_ORDER = {}
 for i, g in ipairs(GROUPS) do GROUP_ORDER[g] = i end
 
@@ -654,6 +693,7 @@ local function build()
   pause()
   debris_entries(out)
   infra_entries(out)
+  world_entries(out)
   local by = {}
   local counts = { craft = 0, linked = 0, relays = 0, debris = 0, crew = 0, attention = 0 }
   for _, e in ipairs(out) do
@@ -673,6 +713,7 @@ local function build()
     local ga, gb = GROUP_ORDER[a.group] or 99, GROUP_ORDER[b.group] or 99
     if ga ~= gb then return ga < gb end
     if (a.piloted or a.active) ~= (b.piloted or b.active) then return (a.piloted or a.active) == true end
+    if a.kind == "body" and b.kind == "body" then return (a.ord or 0) < (b.ord or 0) end
     if a.name ~= b.name then return tostring(a.name) < tostring(b.name) end
     return tostring(a.id) < tostring(b.id)
   end)

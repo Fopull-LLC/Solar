@@ -1272,6 +1272,10 @@ PIECES["pressuriser"] = (gen_kit_fluids.pressuriser_wrap(sys.modules[__name__], 
 import gen_kit_logic  # noqa: E402
 MATS.update(gen_kit_logic.MATERIALS)
 PIECES.update(gen_kit_logic.pieces(sys.modules[__name__]))
+# ── X1/X2: the air and survey pieces (tools/gen_kit_survey.py) ──────────────
+import gen_kit_survey  # noqa: E402
+MATS.update(gen_kit_survey.MATERIALS)
+PIECES.update(gen_kit_survey.pieces(sys.modules[__name__]))
 
 # ── S4: PAINT SURFACES. node:setTint tints everything a node draws, so what
 # paint must not touch, and a wall's second face, are split into children of

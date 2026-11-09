@@ -801,6 +801,14 @@
             ),
             matter: Empty,
             scripts: [
+                // what each world's air is made of, and the suit's air
+                // rules outside (scripts/atmo.lua, expansion X2); before the
+                // generator, which rolls every world's air with it
+                (
+                    kind: "atmo",
+                    enabled: true,
+                    params: [],
+                ),
                 (
                     kind: "system_generator",
                     enabled: true,
@@ -2287,6 +2295,12 @@
                     enabled: true,
                     params: [],
                 ),
+                // what the agency knows about each world (scripts/survey.lua, expansion X1)
+                (
+                    kind: "survey",
+                    enabled: true,
+                    params: [],
+                ),
             ],
             id: Some(67),
         ),
@@ -2904,6 +2918,12 @@
                 ),
                 (
                     kind: "parts_nuclear",
+                    enabled: true,
+                    params: [],
+                ),
+                // the SURVEY parts (parts_survey.lua) — expansion X1
+                (
+                    kind: "parts_survey",
                     enabled: true,
                     params: [],
                 ),

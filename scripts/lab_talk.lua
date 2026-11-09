@@ -18,6 +18,13 @@
 --   ESC or "◂ Back" returns to the list; ESC again (or walking off, or
 --   "Close") ends the talk.
 --
+-- BODIES (expansion X1, scripts/survey.lua): a second page beside MATERIALS,
+-- one row per world of the home system with what the agency knows (SURVEYED
+-- or the share of its six layers). Click one: the close-up shows the world
+-- as a GLOBE turning on the stand (a 0.3 m sphere in its ground's colour
+-- under a shell of its air's), and under it the six layers — the value, or
+-- the band and the instrument that would fill it — and the RP earned there.
+--
 -- COST. The stand (the sample, its key/fill/rim lights and a render-target
 -- camera at 256² × 30 Hz, on the "offstage" layer the main camera never
 -- draws, 400 m over the lab) exists only while a material is open; the
@@ -42,7 +49,9 @@ local function valid(n) return n ~= nil and n.valid ~= false end
 local function len(x, y, z) return math.sqrt(x * x + y * y + z * z) end
 
 local el, self_node
-local S = { open = false, sci = nil, staff = nil, mat = nil, t0 = 0, talk_until = 0, last_v = nil, scroll = 0 }
+local S = { open = false, sci = nil, staff = nil, mat = nil, t0 = 0, talk_until = 0, last_v = nil, scroll = 0,
+            page = "mats", body = nil }
+viewBody = nil            -- (probes) the world open in the close-up
 escTakenAt = -1
 openedAt = -10
 viewMat = nil             -- (probes) the material open in the close-up
@@ -312,6 +321,7 @@ SAMPLE_FIT = {
 local function stand_sample(mat)
   if st.sample_mat == mat and valid(st.sample) then return end
   if valid(st.sample) then st.sample:destroy() end
+  if valid(st.shell) then st.shell:destroy(); st.shell = nil end
   st.sample, st.sample_mat = nil, mat
   local planet = planet_of_lab()
   local p = stand_point(0, 0, 0)
@@ -340,13 +350,72 @@ local function stand_sample(mat)
   end, { body = false })
 end
 
+-- (X1) THE GLOBE: the world on the stand, a sphere in its ground's colour
+-- and a thin shell of its air's (no air: none), turning like a sample.
+local function stand_globe(name)
+  if st.sample_mat == "body:" .. name and valid(st.sample) then return end
+  if valid(st.sample) then st.sample:destroy() end
+  if valid(st.shell) then st.shell:destroy() end
+  st.sample, st.shell, st.sample_mat = nil, nil, "body:" .. name
+  local planet = planet_of_lab()
+  if not (planet and createNode) then return end
+  local w = save and save.get and save.get("world." .. name) or {}
+  local pal = type(w.bio) == "table" and type(w.bio.palette) == "table" and w.bio.palette or {}
+  local g = (type(w.ground) == "table" and w.ground) or pal.low or pal.rock or { 0.45, 0.42, 0.38 }
+  local col = { g[1] or 0.45, g[2] or 0.42, g[3] or 0.38 }
+  local key = st.sample_mat
+  createNode("LabGlobe", planet, function(n)
+    if st.sample_mat ~= key then n:destroy() return end
+    st.sample = n
+    pcall(function()
+      n:setPrimitive("Sphere", col)
+      -- the world's own ground: its terrain slot's material (the photo set,
+      -- its normals and roughness), else its colour
+      local mats = type(w.bio) == "table" and type(w.bio.mats) == "table" and w.bio.mats or {}
+      local slot = mats.high or mats.low or mats.rock
+      local m = slot and terrain and terrain.slotMaterial and terrain.slotMaterial(slot)
+      if type(m) == "table" and m.texture then
+        m.shading = m.shading or "physical"
+        n:setMaterial(m)
+      else
+        n:setMaterial { color = { col[1] * 0.7, col[2] * 0.7, col[3] * 0.7 }, roughness = 0.9, shading = "physical",
+                        texture = "textures/props/rock_albedo.png", normalMap = "textures/props/rock_normal.png" }
+      end
+    end)
+    n.scale_x, n.scale_y, n.scale_z = 0.36, 0.36, 0.36
+    set_layer(n)
+    n.castShadow = false
+    n.enabled = st.on
+  end)
+  if (w.atmo or 0) > 0.05 and w.atmoR then
+    createNode("LabGlobeAir", planet, function(n)
+      if st.sample_mat ~= key then n:destroy() return end
+      st.shell = n
+      local a = math.min(0.35, 0.12 + 0.25 * (w.atmo or 0))
+      pcall(function()
+        n:setPrimitive("Sphere", { w.atmoR, w.atmoG, w.atmoB })
+        n:setMaterial { color = { w.atmoR, w.atmoG, w.atmoB }, alpha = a, unlit = true }
+      end)
+      n.scale_x, n.scale_y, n.scale_z = 0.385, 0.385, 0.385
+      set_layer(n)
+      n.castShadow = false
+      n.enabled = st.on
+    end)
+  end
+  STAND.dist = 1.15
+end
+
 local function stand_tick(dt, on)
   st.on = on
   if on then stand_make() end
   local planet = planet_of_lab()
   if not planet then return end
-  for _, n in ipairs({ st.cam, st.nodes[1], st.nodes[2], st.nodes[3], st.nodes[4], st.sample }) do
+  for _, n in ipairs({ st.cam, st.nodes[1], st.nodes[2], st.nodes[3], st.nodes[4], st.sample, st.shell }) do
     if valid(n) and n.enabled ~= on then n.enabled = on end
+  end
+  if valid(st.shell) then
+    local p = stand_point(0, 0, 0)
+    if p then st.shell.x, st.shell.y, st.shell.z = p.x, p.y, p.z end
   end
   if not on then return end
   st.spin = (st.spin + (dt or 0) * 0.45) % (2 * math.pi)
@@ -496,6 +565,44 @@ function wrapH(text, per, lh)
   return math.max(1, lines) * lh + 4
 end
 
+-- MATERIALS | BODIES (X1): the two pages of the list
+local function page_tabs()
+  return { "row", key = "tabs", w = "100%", h = 24, gap = 4, pad = 0, align = "center",
+    { "button", key = "tm", style = "panel/choice", w = "grow", h = 24, text = "Materials", textAlign = "center",
+      textValign = "center", selected = S.page ~= "bodies" or nil, onClicked = function() S.page = "mats" end },
+    { "button", key = "tb", name = "LabTalkBodies", style = "panel/choice", w = "grow", h = 24, text = "Bodies",
+      textAlign = "center", textValign = "center", selected = S.page == "bodies" or nil,
+      onClicked = function() S.page = "bodies" end } }
+end
+
+-- The BODIES list: a row a world of the home system.
+local function bodies_rows(sc, H)
+  local sv = ref("survey")
+  local list = sv and sv.bodies and sv.bodies() or {}
+  if #list == 0 then
+    local t = "No worlds on record yet."
+    sc[#sc + 1] = { "text", key = "none", style = "panel/hint", w = "100%", h = wrapH(t, 62, 15.5), wrap = true, text = t }
+  end
+  for i, b in ipairs(list) do
+    local r = sv.record and sv.record(b.name)
+    local k, n = 0, 0
+    for _, l in ipairs(sv.LAYERS or {}) do n = n + 1; k = k + ((r and r.L and r.L[l]) or 0) end
+    local known = n > 0 and k / n or 0
+    local done = known >= 1 - 1e-9
+    local name = b.name
+    sc[#sc + 1] = { "button", key = "b" .. i, name = i == 1 and "LabTalkBody1" or nil, style = "panel/row", w = "100%", h = 26,
+      dir = "row", gap = 6, pad = 4, align = "center",
+      onClicked = function() openBody(name) end,
+      { "text", key = "n", style = "panel/cell", w = "grow", h = 18, text = (b.parent and "   " or "") .. name, textValign = "center",
+        maxLines = 1, overflow = "ellipsis" },
+      { "text", key = "p", style = done and "panel/keys" or "panel/cellMuted", w = 92, h = 18,
+        text = done and "◆ SURVEYED" or string.format("%d %% known", math.floor(known * 100 + 0.5)),
+        textAlign = "end", textValign = "center" },
+      { "text", key = "r", style = "panel/keys", w = 54, h = 18, text = (r and (r.rp or 0) >= 1) and string.format("+%d RP", math.floor(r.rp + 0.5)) or "",
+        textAlign = "end", textValign = "center" } }
+  end
+end
+
 local function list_tree(W, H)
   local rs, mats = ref("research"), ref("materials")
   local pts = rs and rs.points and rs.points() or 0
@@ -512,11 +619,16 @@ local function list_tree(W, H)
       { "text", key = "v", style = "hud/valueLg", w = "100%", h = 30, text = money(pts) .. " RP" },
       { "text", key = "l2", style = "hud/micro", w = "100%", h = 14,
         text = string.format("%d KIND%s STUDIED", #list, #list == 1 and "" or "S") } },
-    { "text", key = "ml", style = "panel/label", w = "100%", h = 16, text = "MATERIALS STUDIED  ·  click one to ask about it",
+    page_tabs(),
+    { "text", key = "ml", style = "panel/label", w = "100%", h = 16,
+      text = S.page == "bodies" and "WORLDS ON RECORD  ·  click one for its survey" or "MATERIALS STUDIED  ·  click one to ask about it",
       textValign = "end" },
   }
-  local sc = { "scroll", key = "list", w = "100%", h = "fit", maxH = math.max(120, H - 360), gap = 2, pad = 0, dir = "column" }
-  if #list == 0 then
+  local sc = { "scroll", key = "list", w = "100%", h = "fit", maxH = math.max(120, H - 380), gap = 2, pad = 0, dir = "column" }
+  if S.page == "bodies" then
+    bodies_rows(sc, H)
+    list = {}
+  elseif #list == 0 then
     local t = "Nothing yet. Drop rocks, logs or scrap on the Materials Intake's belt and a sample comes up the tube."
     sc[#sc + 1] = { "text", key = "none", style = "panel/hint", w = "100%", h = wrapH(t, 62, 15.5), wrap = true, text = t }
   end
@@ -582,12 +694,57 @@ local function detail_tree(W, H)
     gap = 5, pad = 12, align = "stretch", items = rows, function(r) return r end }
 end
 
+-- The close-up of a world (X1): the globe, its six layers, the RP earned.
+local function detail_body(W, H)
+  local sv = ref("survey")
+  local list, rec, t = {}, nil, nil
+  if sv and sv.rows then
+    local ok, l, r, tr = pcall(sv.rows, S.body)
+    if ok then list, rec, t = l or {}, r, tr end
+  end
+  local PW = 380
+  local img = 260
+  local done = sv and sv.surveyed and rec and sv.surveyed(rec)
+  local facts = { "scroll", key = "facts", w = "100%", h = "fit", maxH = math.max(140, H - img - 220), gap = 4, pad = 0, dir = "column" }
+  for i, r in ipairs(list) do
+    local full = r.v >= 1 - 1e-9
+    local line = r.text or "unknown"
+    local head = string.format("%s  ·  %s", r.label, full and "measured" or string.format("%d %%", math.floor(r.v * 100 + 0.5)))
+    facts[#facts + 1] = { "text", key = "h" .. i, style = "panel/label", w = "100%", h = 15, text = head }
+    facts[#facts + 1] = { "text", key = "f" .. i, style = r.text and "panel/body" or "panel/hint", w = "100%", h = wrapH(line, 50, 18.5),
+                          wrap = true, text = line }
+    if not full then
+      local ln = "learn: " .. (r.learn or "")
+      facts[#facts + 1] = { "text", key = "l" .. i, style = "panel/hint", w = "100%", h = wrapH(ln, 62, 15.5), wrap = true, text = ln }
+    end
+  end
+  local sub = (t and t.type) and string.format("%s  ·  %s", t.type, done and "SURVEYED" or "being surveyed") or ""
+  local rows = {
+    { "col", key = "screen", style = "hud/instrument", w = "100%", h = "fit", pad = 6, align = "center",
+      { "image", key = "img", texture = "rt:labsample", w = img, h = img } },
+    { "text", key = "name", style = "panel/heading", w = "100%", h = 22, text = string.upper(S.body or "") },
+    { "text", key = "stat", style = "panel/label", w = "100%", h = 14,
+      text = string.upper(sub) .. ((rec and (rec.rp or 0) >= 1) and string.format("  ·  +%d RP", math.floor(rec.rp + 0.5)) or "") },
+    { "box", key = "rule0", style = "panel/rule", w = "100%", h = 1 },
+    facts,
+    { "box", key = "rule1", style = "panel/rule", w = "100%", h = 1 },
+    { "row", key = "foot", w = "100%", h = 26, gap = 6, pad = 0,
+      { "button", key = "back", name = "LabTalkBack", style = "panel/secondary", w = 100, h = 24, text = "◂ Back", textAlign = "center",
+        textValign = "center", onClicked = function() back() end },
+      { "text", key = "k", style = "panel/hint", w = "grow", h = 22, text = "ESC  back to the list", textValign = "center",
+        textAlign = "end" } },
+  }
+  return { "col", key = "labbody", style = "panel/frame", pin = "topLeft", x = 24, y = 40, w = PW, h = "fit",
+    gap = 5, pad = 12, align = "stretch", items = rows, function(r) return r end }
+end
+
 local function redraw(force)
   if not (el and self_node and ui and ui.make) then return end
   local W, H = layer_size()
   local rs = ref("research")
+  local sv = ref("survey")
   local v = table.concat({ tostring(S.open), tostring(S.mat), tostring(rs and rs.points and rs.points() or 0),
-    math.floor(W), math.floor(H) }, "|")
+    math.floor(W), math.floor(H), tostring(S.page), tostring(S.body), tostring(sv and sv.version or 0) }, "|")
   if v == S.last_v and not force then return end
   S.last_v = v
   if math.abs((el.width or 0) - W) > 0.5 then el.width = W end
@@ -596,7 +753,7 @@ local function redraw(force)
     ui.make(self_node, {})
     return
   end
-  ui.make(self_node, { S.mat and detail_tree(W, H) or list_tree(W, H) })
+  ui.make(self_node, { (S.body and detail_body(W, H)) or (S.mat and detail_tree(W, H)) or list_tree(W, H) })
 end
 
 -- ── opening and closing ─────────────────────────────────────────────────────
@@ -604,7 +761,8 @@ function open(sci)
   if not (sci and valid(sci.node)) then return false end
   local lab = ref("lab")
   if lab then lab.forceInside = true end
-  S.open, S.sci, S.staff, S.mat = true, sci, sci.staff, nil
+  S.open, S.sci, S.staff, S.mat, S.body = true, sci, sci.staff, nil, nil
+  viewBody = nil
   S.t0 = time or 0
   S.talk_until = (time or 0) + 2.2         -- a greeting
   openedAt = time or 0
@@ -637,9 +795,25 @@ function openMaterial(mat)
   redraw(true)
 end
 
+-- (X1) a world's close-up: the globe on the stand, its survey beside it
+function openBody(name)
+  if not S.open or not name then return end
+  S.body, S.mat, S.page = name, nil, "bodies"
+  viewBody, viewMat = name, nil
+  S.t0 = time or 0
+  S.talk_until = (time or 0) + 6
+  local pc = ref("planet_camera")
+  if pc and pc.setShot then pc.setShot(shot_for(true), params.blend or 0.9) end
+  stand_globe(name)
+  redraw(true)
+end
+-- (probes) the BODIES page
+function showBodies() if S.open then S.page = "bodies"; S.mat, S.body = nil, nil; redraw(true) end end
+
 function back()
   if not S.open then return end
   S.mat, viewMat = nil, nil
+  S.body, viewBody = nil, nil
   S.talk_until = (time or 0) + 0.8
   local pc = ref("planet_camera")
   if pc and pc.setShot then pc.setShot(shot_for(false), params.blend or 0.9) end
@@ -651,6 +825,7 @@ function close()
   local f = face_of(S.sci)
   if f then f.override = nil end
   S.open, S.mat, viewMat = false, nil, nil
+  S.body, viewBody = nil, nil
   local lab = ref("lab")
   if lab then lab.forceInside = false end
   local pc = ref("planet_camera")
@@ -683,7 +858,7 @@ end
 function update(node, dt)
   self_node = node
   if not el then el = node:getcomponent("UiElement") end
-  stand_tick(dt, S.open and S.mat ~= nil)
+  stand_tick(dt, S.open and (S.mat ~= nil or S.body ~= nil))
   fill_tick(S.open)
   if not S.open then return end
   talk_tick()
@@ -697,7 +872,7 @@ function update(node, dt)
   if gm and gm.inputOwner == "builder" then close() return end
   if input and input.pressed and input.pressed("escape") then
     escTakenAt = time
-    if S.mat then back() else close() end
+    if S.mat or S.body then back() else close() end
     return
   end
   redraw(false)

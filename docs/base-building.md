@@ -2500,3 +2500,41 @@ part it surface-attaches like any part.
   masts), each pictured and saved as a blueprint. Pictures
   `save/user/buildshots/fx*`, `fh*`, `m*`; the numbers in
   `work/fullbuilder/NOTES.md`.
+## 20. Expansion X1/X2: the outside's air in a room, and the survey pieces
+
+Built 2026-11-09 (`work/expansion/PLAN.md` §6.3, §7.2). The air itself is
+`scripts/atmo.lua` (`docs/crew-and-items.md` §11).
+
+### The outside (`scripts/room_air.lua`)
+
+- On a world whose air was chosen (`world.<name>.air`, not an old save's),
+  the outside is that air: pressure `p0 · share` (the aero model's density
+  share at the structure's height), its O₂ share and its **CO₂ share** (CO₂
+  plus SO₂, which an amine bed also takes). `outsideOf(air, share)` is the
+  pure rule. An old save's outside is what it was (O₂N or none, no CO₂).
+- A room that closes round the outside starts as it is: on a CO₂ world it is
+  full of CO₂ and unbreathable (`CO2_MAX` 0.02 atm). A vent relaxes every
+  amount, CO₂ included, to the outside's, exactly (`advance`'s `cout`; one
+  step = many to 1e-6 in smoke_atmo).
+- **Flushing is the work**: ten scrubbers take two days to clear a 30 m³ room
+  of a CO₂ world's air; venting it to the chamber's receiver and refilling it
+  from an Air Tank Rack or an N₂ Compressor plus an O₂ source is quicker.
+
+### The new LIFE pieces
+
+| piece | does | power | mass |
+|---|---|---|---|
+| N2 Compressor | pulls the outside air through a membrane: feeds the room the outside's mix less its O₂, 0.004 atm·m³/s (14 m³ an hour) up to 1 atm, as an outlet does (`life.n2`; `JN`, `Jc`). On an N₂ or N₂/CH₄ world that is inert makeup; on a CO₂ world it is mostly CO₂ and the scrubbers must run. Nothing under 0.05 atm outside. | 1.2 kW | 160 kg |
+| O2 Concentrator | a pressure-swing unit: makes O₂ like the O2 Generator, holding the room at 21 %, from any outside air with 5 % O₂ and 0.01 atm of it: no water (`life.o2c`, added to the room's `G`) | 2 kW | 110 kg |
+
+### The SCIENCE section (`scripts/survey.lua`)
+
+| piece | does | power |
+|---|---|---|
+| Telescope 0.3 m | a reflector on a pier and an equatorial mount; a Scientist at it sweeps a world (right-click → Sweep): temperature and air 0.3 | 0.15 kW |
+| Telescope 1 m | a Serrurier truss on a fork mount with a spectrograph: 0.6 | 1.2 kW |
+| Survey Station | a weather mast, a buried seismometer and a magnetometer boom on its own panel: fills its world's composition (10 min), temperature and air (6 h) and field (a day) | its own |
+
+Models: `tools/gen_kit_survey.py` (imported by `gen_kit_parts.py`:
+`python3 tools/gen_kit_parts.py n2comp o2conc telescope telescope1m
+surveyStation`); the bounds are in `tests/fixtures/kit_shapes.lua`.

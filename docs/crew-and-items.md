@@ -1650,3 +1650,118 @@ The merge order follows the in-flight agents: ctxmenu → WS3 takes `context_pro
 spawner → WS1 takes `vessel_spawner`/`build_host`; tools → WS3 takes `tool_belt`; suit →
 WS1 takes `planet_walker`. Each workstream ends with the luajit sweep from the Floptle
 root and `floptle check` at the 6-warning baseline, as `agent_rules.md` requires.
+
+## 11. The air you breathe and what you know of each world (expansion X1/X2, built 2026-11-09)
+
+The plan is `work/expansion/PLAN.md` §6 (air) and §7 (survey), with Ty's
+answers in §14 (alien air: random, 60 % breathable, plus a choice at world
+creation).
+
+### 11.1 What a world's air is made of (`scripts/atmo.lua`, pure + a 1 Hz scene half)
+
+- Every world with air publishes `world.<name>.air = { p0 (bar), T0, gases =
+  { N2, O2, CO2, Ar, CH4, SO2, H2O, NH3, … }, o2, choice, legacy }`
+  (`system_generator.publishWorld`, rolled by `atmo.roll` from the planet
+  type's template). `p0 = atmo / 0.75`: the density decides the pressure by
+  the one formula; nothing sets it twice.
+- **Earth-like** templates hold their oxygen by partial pressure (0.21 bar at
+  the datum, a dune sea 0.18), so a thick or thin Earth-like world breathes the
+  same at sea level. A greenhouse is CO₂ with SO₂, a hydrocarbon world N₂ and
+  CH₄, a red desert Mars's CO₂, a sulfur plain SO₂, a crystal world carries a
+  trace of NH₃.
+- **Breathable** (`atmo.breathable(air, share)`): under 0.05 bar no air; SO₂
+  over 10 µbar, NH₃ over 50 µbar, CO₂ over 0.02 bar or CH₄ over 0.03 bar is
+  TOXIC with the gas named; O₂ over 0.5 bar poisons; under 0.10 bar of O₂ the
+  helmet stays on; between 0.10 and 0.16 bar the air is **THIN**: the helmet
+  may come off, but see the mask. `share` is the aero model's density share at
+  that height, so mountains thin the air as the jets feel it.
+- **The readers**: `suit.breathableAt` (its reason is atmo's `why`),
+  `room_air`'s outside (pressure, O₂ and CO₂: §18 of base-building.md),
+  `system_generator.homeFeatures().breathable` (+ `airVerdict`), and
+  `aero.oxygen` (the jets: ppO₂ against Earth's, capped at 1). The home
+  world's jets fly whatever its air (`aero.jetOxygen`'s home rule stands:
+  the agency's jets are built for home).
+- **Old saves** (no `g_air`) publish the same records marked `legacy`, and
+  every reader keeps the yes/no rule it had (aero's `OXY` table, suit.lua's
+  thin-air share): no world stops being breathable under a player's feet.
+  smoke_atmo checks every world of four old-save galaxies.
+
+### 11.2 The AIR choice (`menu_newsave`)
+
+A fourth row under HOME WORLD: **Earth** (0.21 bar of O₂: helmet off) ·
+**Rich** (0.35 bar) · **Thin** (0.12 bar: a mask outdoors, the helmet up
+high) · **None** (no oxygen: a suit world) · **Random**. An Earth-like home
+defaults to Earth, an alien home to Random. CREATE writes `g_air` on every new
+save. Random resolves from the home seed (`atmo.resolveChoice`): 60 % of seeds
+give a breathable air (70 % Earth, 15 % Rich, 15 % Thin of those), the rest
+the world's own mix (or an inert N₂/Ar one if its own would breathe). The
+choice changes only the home world's oxygen. A breathable choice on an alien
+home also keeps the world in the suit's band: its type is rolled from the
+types whose temperatures reach 240–315 K and whose ground is not made by its
+air (`BREATHE_TYPES`; no greenhouse, hydrocarbon or sulfur world), and its
+temperature is clamped there. The same seed and choice always make the same
+world.
+
+### 11.3 The O2 Mask, hypoxia, the spaceport's air
+
+- **O2 Mask** (`items.lua o2mask`, worn, 0.4 kg, $120 at the depot; model
+  `ItemO2Mask`, `tools/gen_o2mask.py`): bare-headed in THIN air it feeds a
+  cannula from the suit at a sixth of the suit's draw. Without one the crew
+  lose 1 % of their health a minute ("THIN AIR · MASK"). With the helmet on,
+  or in a room, the rule stands down.
+- **The spaceport refills the suit**: within 6 m of the Command building's
+  walls (or inside it) the suit's air is topped up once a second, as a craft
+  does. An alien start with no oxygen still has its air at home.
+- All three run in atmo's scene half at 1 Hz on the System Generator node.
+
+### 11.4 What the agency knows (`scripts/survey.lua`, pure + a 1 Hz scene half)
+
+Six layers per body, 0 to 1: **gravity**, **atmosphere**, **temperature**,
+**composition**, **magnetosphere** (a generated trait, `world.<name>.mag` in
+µT: dense, molten families highest, moons none), **resources**. A layer at 1
+shows its number; below that a band as wide as what is not known.
+
+| source | fills | rule |
+|---|---|---|
+| sphere of influence | grav 1 | the active crew or any craft in it |
+| one full orbit | temp 0.5, atmo 0.4, res 0.1 | a closed conic above the ground for one period |
+| landing | temp 1, atmo 0.8, comp 0.3 | a craft landed or the crew on foot; FIRST LANDING caption with its RP |
+| Telescope 0.3 m (kit) | temp 0.3, atmo 0.3 | a Scientist within 5 m starts a sweep (right-click → Sweep <world>); base-grid power, night or an airless site, the target above the horizon; 10 game minutes on the agency clock |
+| Telescope 1 m (kit) | temp 0.6, atmo 0.6 | the same, with its spectrograph |
+| Space Telescope (VAB) | temp 0.3, atmo 0.3 | on a craft with power and a link: sweeps the least-known world in its sky by itself, 10 min each |
+| Orbital Scanner (VAB) | comp 0.7, atmo 0.9, res by coverage | in orbit 0.1–1.5 radii up, powered and linked: coverage 1 − e^(−orbits) of what the orbit's tilt reaches (40° or more: all; equatorial: 35 %) |
+| Survey Station (kit) | comp 1 after 10 min, temp and atmo 1 after 6 h, mag 1 after a day | standing on the world |
+| home | every layer 1 | the home world starts known (old saves too) |
+
+**RP for new data**: each rise earns RP[layer] × the rise (grav 10, temp 15,
+atmo 25, comp 40, mag 30, res 60), × 2 off the home world, × the Scientist's
+`study_mult` on a kit sweep; `research.addPoints` adds whole points to the
+lab's tally (the fraction carried per body; `res.survey` totals them). A body
+full in every layer is SURVEYED (a caption). Spending RP is X6.
+
+**Where it shows**: the Tracking Station's WORLDS group and BODY card
+(`docs/tracking-station.md` §6) and the lab's **BODIES** page (`lab_talk`):
+one row per world with SURVEYED or its share known and the RP earned; a click
+opens the close-up, the world as a globe turning on the sample stand (a 0.36 m
+sphere in its ground's colour under a shell of its air's colour) beside its
+six layers with their "learn:" lines.
+
+**Save**: `survey.<body> = { seen, visited, orbited, landed, L, by, rp, rf,
+sta, cov }`, `survey.jobs` (the kit telescopes' sweeps).
+
+### 11.5 Tests and the probe
+
+- `luajit solar/tests/smoke_atmo.lua` (139): templates, choices, Random's
+  60 % over 2,000 seeds and over 30 alien homes through the real generator,
+  toxic gases named, old saves' verdicts unchanged (aero and the suit), the
+  jets, the rooms' outside CO₂ (vent closed form to 1e-6, scrubbers, the
+  compressor), the mask, hypoxia and the Command building's refill.
+- `luajit solar/tests/smoke_survey.lua` (72): sources and RP, coverage (one
+  step = 3,000 to 1e-6), the telescope rules, the card's words, the scene
+  half (orbit, scanner, landing, space telescope, kit telescope with a
+  Scientist on the agency clock, the Survey Station, a reload) and the WORLDS
+  group.
+- `tools/perf/airprobe.sh <engine> airalien|airtoxic` (`airprobe_modes.lua`):
+  an alien home with Earth air (helmet off, the BODY cards, the lab's BODIES
+  page, the refill, save and reload, the menu's AIR row) and one with no
+  oxygen (the helmet stays on, TOXIC on the card).

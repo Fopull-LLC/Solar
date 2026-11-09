@@ -1204,6 +1204,12 @@
                     enabled: true,
                     params: [],
                 ),
+                // the SURVEY parts (parts_survey.lua) — expansion X1
+                (
+                    kind: "parts_survey",
+                    enabled: true,
+                    params: [],
+                ),
             ],
         ),
         // The ACTION GROUPS editor (tool 5): its frame only; the contents are

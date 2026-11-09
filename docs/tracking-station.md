@@ -35,7 +35,7 @@ layers, invisible until the station opens).
 ```
 
 - **FLEET** is grouped in this order: ATTENTION, CREW, CREWED, PROBES,
-  LANDED, DEBRIS, RELAYS, FLAGS, STRUCTURES. An entry appears in the first
+  LANDED, DEBRIS, RELAYS, FLAGS, BASES, STRUCTURES, WORLDS (§6). An entry appears in the first
   group that claims it.
   - **The header** (P3), three rows:
     - the search field and the sort key (A–Z · World · Altitude · From base ·
@@ -343,7 +343,36 @@ records. `crew.active` and the avatar pose are saved as before.
   - Label checks, the perf windows (station against chart), 30 open/close
     cycles, recovery, and the four crew-switch cases.
 
-## 6. Left for later
+## 6. The worlds: WORLDS and the BODY card (expansion X1)
+
+Every planet and moon of the home system is an entry, `w:<name>`, kind
+`body`, group **WORLDS** (the last group, open, in roster order: each planet
+followed by its moons). Its situation line is "planet · 63 % known", "moon of
+Naolol · surveyed" or "home world · surveyed"; the right column is the share
+known or SURVEYED. A body is its own kind class (`world`): only **All** shows
+it, and the world key filters to its own entry with everything on it.
+
+- **The map** draws the bodies itself, so the station puts no icon at a
+  body's centre (`drawMap` skips kind `body`). Focus frames the whole body
+  (3.2 radii); Target makes it the target (`targeting.targetBody`).
+- **The BODY card** (`card_body`): radius, SOI and the distance from you in
+  the CRT inset; "⌂ 2 bases here" when the spaceport or a tower's base is on
+  it; then **SURVEY** with the six layers of `survey.rows(name)`:
+  - the label, a bar (green when full, amber while filling) and the share;
+  - the value when full ("0.98 g · 9.6 m/s²", "0.94 bar · BREATHABLE · N₂ 78 %
+    · O₂ 22 % · Ar 1 %", "288 K · 15 °C", "46 µT", "iron 41 % · copper 28 % ·
+    …"), or the band of what is not yet known ("about 0.7–1.2 g"), which
+    narrows as the layer fills;
+  - while unfilled, a "learn:" line naming the instruments that fill it;
+  - ◆ SURVEYED when all six are full, and the RP earned there.
+  - Focus / Target / Plan.
+- `survey.rows` caches its answer per survey version (the card asks five times
+  a second); the snapshot rebuilds when `survey.version` moves (the seventh
+  stamp).
+- What the layers are, how they fill and what they earn: `scripts/survey.lua`
+  and `docs/crew-and-items.md` §11.
+
+## 7. Left for later
 
 - **P5**: the VAB board, EN6/EN14 swaps (cards 0651, 0652), per-craft nodes
   in NEXT, contract deadlines, tower-as-station recovery, and the ☰ TRACKING

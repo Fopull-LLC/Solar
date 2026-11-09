@@ -168,8 +168,26 @@ function breathableAt(x, y, z)
     return false, "There is no air here. The helmet stays on."
   end
   local ae = ref("aero")
+  -- (expansion X2) a world whose air was chosen (world.<name>.air, not an old
+  -- save's): what it is made of decides, by scripts/atmo.lua — toxic gases
+  -- named, thin air allowed bare-headed (atmo's scene half wants the mask)
+  local at = type(w.air) == "table" and not w.air.legacy and ref("atmo") or nil
+  if at and at.breathable then
+    local b = space.body and space.body(dom)
+    local share = 1
+    if b then
+      local alt = len(x - b.x, y - b.y, z - b.z) - (w.radius or b.radius or 0)
+      local H = (w.atmoHeight or 0) > 0 and w.atmoHeight or 0.35 * (w.radius or b.radius or 800)
+      if ae and ae.airShare then share = ae.airShare(math.max(alt, -0.25 * H), H, w.atmoScaleH)
+      else local f = math.max(0, 1 - math.max(alt, 0) / H); share = f * f end
+    end
+    local ok, why = at.breathable(w.air, share)
+    if not ok then return false, why end
+  end
   local oxy
-  if ae and ae.oxygen then
+  if at then
+    oxy = 1
+  elseif ae and ae.oxygen then
     oxy = ae.oxygen(w)
   else
     -- (aero's rule, for a scene without the AeroLib: the home world and the
@@ -181,7 +199,7 @@ function breathableAt(x, y, z)
   if (oxy or 0) < 0.5 then
     return false, "This air has no oxygen to breathe. The helmet stays on."
   end
-  local b = space.body and space.body(dom)
+  local b = (not at) and space.body and space.body(dom)
   if b then
     local alt = len(x - b.x, y - b.y, z - b.z) - (w.radius or b.radius or 0)
     local H = (w.atmoHeight or 0) > 0 and w.atmoHeight or 0.35 * (w.radius or b.radius or 800)
