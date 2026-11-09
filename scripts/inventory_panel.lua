@@ -223,6 +223,9 @@ end
 -- puts it in, a click on a crate row takes it out. Items one at a time,
 -- materials a stack at a time; what doesn't fit stays where it was.
 local function is_crate(cid) return type(cid) == "string" and cid:sub(1, 6) == "crate:" end
+-- (expansion X4) a craft's hold holds crated parts and gear as a crate does:
+-- items go in and come out of it here too
+local function is_store(cid) return is_crate(cid) or (type(cid) == "string" and cid:sub(1, 5) == "hold:") end
 local function item_name(inv, id)
   local g = inv and inv.GEAR and inv.GEAR[id]
   return g and g.name or id
@@ -237,32 +240,40 @@ function putItem(id)
   if v and v.holdApplyMass then v.holdApplyMass(v.node) end
   return n
 end
+-- (a hold that gave something up flies lighter at once)
+local function reweigh()
+  local v = vessel_of(targetId)
+  if v and v.holdApplyMass then v.holdApplyMass(v.node) end
+end
 function takeItem(id)
   local inv = ref("inventory")
-  if not (inv and is_crate(targetId) and inv.moveItem) then return 0 end
+  if not (inv and is_store(targetId) and inv.moveItem) then return 0 end
   local n, why = inv.moveItem(targetId, "astro", id, 1)
   if n > 0 then say(string.format("took the %s — %s", item_name(inv, id), inv.line("astro")))
   else say(string.format("can't take the %s: %s", item_name(inv, id), why or "no room in the pack"), true) end
+  reweigh()
   return n
 end
 function takeStack(mat, origin)
   local inv, mats = ref("inventory"), ref("materials")
-  if not (inv and is_crate(targetId)) then return 0 end
+  if not (inv and is_store(targetId)) then return 0 end
   local have = inv.count(targetId, mat, origin)
   local moved = inv.transfer(targetId, "astro", mat, have, origin)
   local nm = (inv.stackLabel and inv.stackLabel(mat, origin)) or (mats and mats.label(mat)) or mat
   if moved == 0 then say(string.format("no room in the pack for %s", nm), true)
   elseif moved < have then say(string.format("%d of %d %s taken — the pack is full", moved, have, nm), true)
   else say(string.format("%d × %s → the pack", moved, nm)) end
+  reweigh()
   return moved
 end
 function takeAll()
   local inv = ref("inventory")
-  if not (inv and is_crate(targetId)) then return 0 end
+  if not (inv and is_store(targetId)) then return 0 end
   local n, why = inv.moveAllItems(targetId, "astro")
   local m = inv.transferAll(targetId, "astro")
   if n + m == 0 then say(why or "nothing fits in the pack", true)
   else say(string.format("%d item(s), %d unit(s) into the pack%s", n, m, why and ("  ·  " .. why) or ""), why ~= nil) end
+  reweigh()
   return n + m
 end
 
@@ -328,7 +339,7 @@ local function stack_row(entry, mats, co)
     -- The tint rides the row and its cells inherit it (they set no colour).
     textR = ink[1], textG = ink[2], textB = ink[3],
     { "text", key = "n", style = "panel/cell", w = 34, h = "fit", textAlign = "end",
-      text = string.format("%d ×", entry.n) },
+      text = (mats and mats.isRefined and mats.isRefined(entry.mat)) and "" or string.format("%d ×", entry.n) },
     { "text", key = "name", style = "panel/cell", w = "grow", h = "fit", maxLines = 1, overflow = "ellipsis",
       text = entry.label or (mats and mats.label(entry.mat)) or entry.mat },
     { "text", key = "kg", style = "panel/cell", w = 64, h = "fit", textAlign = "end",
@@ -792,7 +803,7 @@ local function describe(astro)
     for _, g in ipairs(gear) do
       local about = inv.GEAR[g.id] and inv.GEAR[g.id].about or ""
       local what = g.kind == "worn" and "worn" or (g.tool and "tool" or "")
-      local into = is_crate(targetId)
+      local into = is_store(targetId)
       rows[#rows + 1] = { into and "button" or "row", key = "gear_" .. g.id, style = "panel/row", w = "100%", h = 32,
         dir = "row", gap = 10, align = "center",
         onClicked = into and function() putItem(g.id) end or nil,
@@ -839,7 +850,7 @@ local function describe(astro)
     end
   end
 
-  if is_crate(targetId) then
+  if is_store(targetId) then
     for _, r in ipairs(crate_rows(inv, mats, co)) do rows[#rows + 1] = r end
   end
 

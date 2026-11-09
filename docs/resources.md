@@ -322,3 +322,36 @@ the home materials.
   what spacecraft do with them, and missions.
 - Phasite and cryovolt glass are fictional, flagged `fictional = true`. They
   keep to codex.lua's rules: Vey's law, sympathy and phase density.
+
+## 7. Refined materials (expansion X4; `scripts/materials.lua`, `scripts/recipes.lua`)
+
+What a refinery makes out of the ore, and what a Fabricator makes parts from
+(deep-space addendum N3). Six materials and the propellant; nothing else.
+
+- **Counted in kilograms.** A unit of a refined material is one kilogram
+  (`kg = 1`), so 780 Steel is 780 kg. `materials.amountText(id, n)` writes
+  "780 kg" for these and "12 ×" for everything counted in units; the pack's
+  rows show the kilograms.
+- **Real densities** (`density`, kg/m³): what a silo or a hopper gives them
+  (`materials.litresOf(id, n)`). For ground, ore and ice `density(id)` is the
+  unit's kg × 1000, because a unit is a litre.
+- **Propellant and the gas live in tanks** (`store = "tank"`,
+  `materials.inTank`): a pack, a crate, a locker and a salvage drop refuse
+  them (`inventory.whyNot`). A tank's fuel unit is 10 kg of Propellant
+  (`PROP_KG_PER_UNIT`).
+- **They teach the lab nothing**: `researchValue` is 0 for a refined
+  material. The depot buys them at `value`.
+
+| id | Name | kg/m³ | $/kg | Made from (N3; the machines are X6) |
+|---|---|---|---|---|
+| steel | Steel | 7,850 | 3 | iron ore |
+| alloy | Alloy Steel | 7,900 | 9 | kamacite, or iron ore with ilmenite (3:1) |
+| wiring | Copper Wire | 8,960 | 11 | copper ore |
+| glass | Glass | 2,500 | 5 | silica |
+| regocrete | Regocrete | 2,200 | 1 | regolith with water (5:1) |
+| propellant | Propellant (LOX/LH2) | 360 | 2 | water |
+| gas | Propellant Gas | 230 | 6 | ammonia ice or methane clathrate |
+
+Each has a codex entry with real facts (in `ORE_CODEX`, which codex.lua lists;
+`codexInto` still copies only the ores). What a part is made of is
+`recipes.recipeFor` (docs/base-building.md §22).

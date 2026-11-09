@@ -255,6 +255,43 @@ local function tag_of(origin)
   return origin
 end
 
+-- ── container kinds the material chain adds (deep-space N8; expansion X4) ──
+-- A Fabricator's store "fab:<id>", a silo "silo:<id>" (ONE material at a
+-- time) and a hopper "hopper:<id>": their kilograms and litres when nothing
+-- registered its own (recipes.CONTAINERS is the same table).
+KINDS = {
+  fab    = { kg = 2000, L = 4000 },
+  silo   = { kg = 8000, L = math.huge, one = true },
+  hopper = { kg = 4000, L = math.huge },
+}
+function kindOf(cid)
+  if type(cid) ~= "string" then return nil end
+  local k = cid:match("^(%a+):")
+  return (k and KINDS[k]) and k or nil
+end
+-- Why `mat` can't go into `cid` at all (whatever the room), or nil:
+-- Propellant and the gas live in tanks (materials.inTank), never in a pack,
+-- a crate or a locker; a silo holds one material at a time.
+function whyNot(cid, mat)
+  cid = R(cid)
+  local m = mats()
+  if m and m.inTank and m.inTank(mat) then
+    if is_pack(cid) or cid:sub(1, 6) == "crate:" or cid:sub(1, 7) == "locker:" or cid:sub(1, 8) == "salvage:" then
+      return ((m.label and m.label(mat)) or mat) .. " is kept in a tank"
+    end
+  end
+  local k = kindOf(cid)
+  if k and KINDS[k].one then
+    for other, n in pairs(bag(cid)) do
+      if other ~= mat and (n or 0) > 0 then
+        return string.format("a silo holds one material: it has %s in it", (m and m.label and m.label(other)) or other)
+      end
+    end
+  end
+  return nil
+end
+function refuses(cid, mat) return whyNot(cid, mat) ~= nil end
+
 -- ── capacity ────────────────────────────────────────────────────────────────
 -- Suit and warehouse are fixed by the params; a vessel registers its hold when
 -- it spawns (the sum of its Cargo Bay parts), so capacity follows the craft you
@@ -273,6 +310,9 @@ function cap(cid)
   if cid == "base" then return params.base_kg end
   local caps = save.get("inv.cap") or {}
   if caps[cid] then return caps[cid] end
+  -- (X4) a Fabricator's store, a silo, a hopper
+  local kk = kindOf(cid)
+  if kk then return KINDS[kk].kg end
   -- a base supply crate (scripts/supply_crates.lua): the registry's size
   if cid:sub(1, 6) == "crate:" then
     local I = registry()
@@ -408,6 +448,7 @@ end
 -- by nothing, so they're treated as weightless-but-finite (the offer, whole).
 function roomFor(cid, mat, want)
   cid = R(cid)
+  if refuses(cid, mat) then return 0 end
   local k = kg_of(mat)
   if k <= 0 then return want or 0 end
   return math.min(want or 0, math.floor(free(cid) / k + 1e-9))
@@ -686,6 +727,8 @@ function volCap(cid)
   if caps[cid] then return caps[cid] end
   if cid:sub(1, 7) == "locker:" then return V.locker end
   if cid:sub(1, 6) == "crate:" then return V.crate or 480 end
+  local kk = kindOf(cid)
+  if kk then return KINDS[kk].L end
   if cid:sub(1, 5) == "hold:" then
     -- a hold's litres follow its Cargo Bays (250 kg each): 1000 L a bay
     return math.max(1, math.ceil(cap(cid) / 250 - 1e-9)) * V.bay

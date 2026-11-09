@@ -500,12 +500,20 @@ local function preview_plate(B, L)
   if not (id and pv.ready) then return nil end
   local def = B.partInfo(id) or {}
   local r = L.left
-  return { "col", key = "pv", style = "panel/frame", pin = "topLeft", x = r.x + r.w + 8, y = r.y, w = 196, h = "fit",
+  local plate = { "col", key = "pv", style = "panel/frame", pin = "topLeft", x = r.x + r.w + 8, y = r.y, w = 196, h = "fit",
     gap = 4, pad = 8, align = "stretch",
     { "image", key = "img", texture = "rt:" .. PREVIEW_TARGET, w = 180, h = 180 },
     { "text", key = "n", style = "cat/name", w = "100%", h = 16, text = (st.held == id and "IN HAND  ·  " or "") .. (def.label or id),
       maxLines = 1, overflow = "ellipsis" },
     { "text", key = "r", style = "cat/role", w = "100%", h = "fit", text = role(def), wrap = true, maxLines = 3 } }
+  -- (expansion X4) a host's extra lines under the role: the Build Kit's
+  -- recipe, what is in reach and the crate key. { { text, style?, head? } … }
+  local extra = B.plateRows and B.plateRows(id) or nil
+  for i, e in ipairs(extra or {}) do
+    plate[#plate + 1] = { "text", key = "x" .. i, style = e.style or (e.head and "panel/label" or "cat/role"), w = "100%", h = "fit",
+      text = e.text or "", wrap = true, maxLines = e.lines or 3 }
+  end
+  return plate
 end
 
 -- ── the plate ───────────────────────────────────────────────────────────────

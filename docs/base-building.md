@@ -213,8 +213,8 @@ In this order; the first that fails is the red ghost's reason.
   per section, for step 13's part items: Marrow & Vance Propulsion, Teller
   Tankage, Halden Structural, Orbis Electrics, Kestrel Airframes, Burrow
   Automotive, Lindqvist Robotics, and Pell Groundworks for BASE.
-- **Off the home world** (later steps), these rules are already written and
-  tested:
+- **Off the home world** a part is a crated part drawn from a container in
+  reach (expansion X4, §22). The rules it runs on:
   - fittings cost 20 % of the price (Q22);
   - a part is drawn from any container within 30 m, nearest first, the pack
     last (Q16, `containersInReach`).
@@ -2705,3 +2705,121 @@ one dashed line for the selected one. Measured in `tools/perf/runprobe.sh`
   reload, cancel), the respawn clock fix, the RUNS group.
 - `tools/perf/runprobe.sh <engine>` (PATCHES=funds.patch): the whole slice in
   the engine; `RN PASS|FAIL` lines, pictures in `save/user/runshots/`.
+
+## 22. Expansion X4: materials and crated parts (N2, N3, N5, N6, N8)
+
+The material layer the quarries and belts (X5) and the refineries and the
+Fabricator (X6) stand on. Nothing here refines or fabricates: it says what
+things are made of, makes a part a thing you can carry, and lets an Engineer
+build off the home world from what was carried there.
+
+### What a player can do
+
+- **At home, order a part crated.** In the Build Kit, with a part in hand,
+  **K** buys it crated: the same price + shipping as placing it (the ledger
+  says "Wall, crated · $600 + $110 shipping (shipped by …)"). The crate is
+  loaded into the nearest container within 30 m with room: a craft's hold, a
+  locker, a supply crate; the pack last. Nowhere with room: refused, nothing
+  charged.
+- **Carry it.** A crated part is an item, `part:<part id>` (kind `"part"`):
+  it weighs the part's dry mass and takes `recipes.crateLitres` of room (the
+  part knocked down to a quarter of its standing box, never lighter than
+  0.25 kg a litre of crate). So a suit pack takes a light fitting, a supply
+  crate (400 kg / 480 L) three steel walls, and a pod or a slab needs a
+  lander's holds. The inventory panel puts items into and takes them out of
+  a craft's hold as it does a crate's.
+- **Build off the home world from it.** On any other world a placement draws
+  one crated part from any container within 30 m of the Engineer, nearest
+  first, the pack last (N8, Q16). The card reads "2 crated · in reach · Supply
+  drop"; the hint "LMB places it from …". Only a footing's concrete is paid
+  for. **Ctrl+Z** within the minute and **Deconstruct** later put the part
+  back in its crate: into the container it came from if that is still in
+  reach, else the nearest with room (refused, with the reason, when nothing
+  in reach has room).
+- **See what it is made of.** The parts column's preview plate shows the
+  recipe: at home "CRATED · K ships one to you: $710 · 111 kg, 220 L" and
+  "OFF-WORLD IT IS MADE OF 111 kg Steel + $60"; off-world "IN REACH" or "NONE
+  IN REACH" and "A FABRICATOR MAKES IT FROM Steel 40 kg/119 kg + $48
+  fittings", the have counting every container in reach. With no crate in
+  reach the card says "no crate · made of …" and the ghost is red with the
+  reason.
+- Pastes and blueprints are one delivery: home world only. In the sandbox
+  money is no object and the kit builds anywhere for money, as at home.
+
+### The recipe (`scripts/recipes.lua`, pure)
+
+`recipeFor(def, section, id)` → `{ kg, mats = { { mat, kg } … }, fittings,
+secs, perMetre, shipOnly }`, in kg of the part's dry mass m (N5):
+
+- **structure**: 60 % of m as Steel; Alloy for AIRCRAFT, ROVER and AUTO parts
+  and engines; tanks 40 %; the Pad Plate and the Shield Wall all Regocrete.
+- **Wiring** 10 % for anything with a command, battery, antenna, solar,
+  light, drive, servo, claw, drill or RTG module, a power source or store,
+  a door or a screen, and engines.
+- **Glass** 10 % for crewed parts (not a bare seat), solar panels, kit pieces
+  with a window or porthole, the Surface Hab and the Base Hub.
+- **fittings** in money, 20 % of the price (Q22); 10 % for structural kit
+  pieces and the BASE concrete.
+- **A kit piece** is its own material (its mass is its material): steel →
+  Steel, concrete and regocrete → Regocrete, glass → Glass; a wired piece
+  gives 10 % to Wiring.
+- A cable's recipe is a metre's (copper cores and steel armour).
+- **Made at home only** (`shipOnly`): the Isotope Skid and Cell, graphite.
+- A Fabricator's time (for X6): 10 s + 20 s a tonne.
+
+N6's worked numbers hold: Pod Mk1 780 kg Steel · 130 Wiring · 130 Glass +
+$100; the FT-S tank 80 kg Steel; the Anvil 540 kg Alloy · 90 Wiring; the
+Shield Wall 4.6 t of Regocrete. `luajit solar/tests/smoke_recipes.lua -v`
+prints all 311 recipes.
+
+### The containers (N8)
+
+`inventory.KINDS`: a Fabricator's store `fab:<id>` (2,000 kg, 4,000 L), a
+silo `silo:<id>` (8,000 kg, one material at a time), a hopper `hopper:<id>`
+(4,000 kg). Nothing makes them yet (X5, X6); the rules and capacities are in.
+`recipes.reachOrder` and `recipes.drawFrom` are the reach rule as pure
+functions, for runs that load at a stand without a chute (X5).
+
+### Save keys and old saves
+
+- Crated parts ride the existing item bags (`inv.gear.<cid>`) under
+  `part:<id>`. `items.partdefs` remembers each one's name, kg and litres, so
+  a scene without the Build Kit's scripts (the VAB) still weighs a hold of
+  them.
+- A part placed from a crate carries `paid.item` (the container it came
+  from) in its structure record.
+- Nothing old changes: no key is renamed, and a save without these keys
+  loads as before (no crated parts, no refined stock).
+
+### Cost
+
+Nothing a frame while the kit is closed. While it is open off the home world
+the reach scan runs at most twice a second (node-to-node distances, one item
+list a container); recipes are memoised per part, and the column's section
+lookup is now one table read (it scanned the catalogue for every card).
+Measured in `tools/perf/matprobe.sh` (numbers in the X4 notes).
+
+### Left for later
+
+- The Fabricator and the refineries (X6) make crated parts and refined
+  materials off-world; nothing makes refined stock yet, so it shows only in
+  recipes, the plate's have and the codex.
+- A footing off-world is still a shipped dry mix (money), not Regocrete.
+- Cables and signal wire are still bought by the metre off-world.
+- The full Base Hub builder and the stand editor still charge money
+  everywhere; they don't draw crated parts.
+- Placed Cargo Crate props are not containers yet.
+
+### Tests and the probe
+
+- `tests/smoke_recipes.lua` (luajit): the refined registry, every recipe
+  names real materials, N6's numbers, part items through the real items.lua
+  and inventory.lua (a hold weighs them, a pack refuses a wall, a scene
+  without the parts reads the save), the containers, the reach order and the
+  off-world quotes.
+- `tools/perf/matprobe.sh <engine>` (PATCHES=funds.patch): crated at home
+  into the Depot's crates, the crate's panel, then on the nearest moon: the
+  reach (a supply drop and the pack), the cards and the plate, a red ghost, a
+  wall placed out of its crate, undone back into it, placed and taken down;
+  pictures from two angles; `MX PASS|FAIL` lines, pictures in
+  `save/user/matshots/`.

@@ -3536,6 +3536,8 @@
             scripts: [
                 ( kind: "parts_base", enabled: true, params: [] ),
                 ( kind: "base_economy", enabled: true, params: [] ),
+                // what a part is made of and the crated part as an item (recipes; expansion X4)
+                ( kind: "recipes", enabled: true, params: [] ),
                 ( kind: "structures", enabled: true, params: [] ),
                 ( kind: "craft_stand", enabled: true, params: [] ),
                 ( kind: "bases", enabled: true, params: [] ),

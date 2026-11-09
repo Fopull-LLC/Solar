@@ -174,6 +174,60 @@ ITEMS.buildkit = { name = "Build Kit", kind = "device", kg = 1.6, L = 3, cost = 
                    hold = { prefab = "ItemBuildKit", grip = "left" }, hintFrom = "field_builder", role = "engineer",
                    about = "an Engineer's field tablet: pick a part, see its ghost on the ground, click to buy and ship it out (B)" }
 
+-- ── CRATED PARTS (deep-space addendum N2; expansion X4; scripts/recipes.lua) ──
+-- A part in its crate is an item of kind "part", id "part:<part id>"
+-- ("part:wall.steel", "part:padPlate", "part:vab.locker"): it weighs the part's
+-- dry mass and takes recipes.crateLitres of room, so a suit pack carries a
+-- light fitting and a hold carries walls. It is never on the belt (no hold);
+-- the Build Kit places it off the home world from any container within 30 m
+-- (field_builder, the reach rule N8). The entries are not in ITEMS' own keys:
+-- `ITEMS["part:…"]` resolves through the part's record (parts_base.partInfo)
+-- and recipes.partItemDef, and what was resolved is kept in the save
+-- (`items.partdefs`), so a scene without the Build Kit's scripts (the VAB)
+-- still weighs a crated part in a hold. `pairs(ITEMS)`, the shop and the belt
+-- never see them.
+PART_PREFIX = "part:"
+local part_cache = {}
+local part_source = nil        -- (tests) function(partId) → def, itemDef
+function setPartSource(fn) part_source = fn; part_cache = {} end
+function isPart(id) return type(id) == "string" and id:sub(1, #PART_PREFIX) == PART_PREFIX end
+function partOf(id) if isPart(id) then return id:sub(#PART_PREFIX + 1) end return nil end
+function partItemId(partId) return PART_PREFIX .. tostring(partId) end
+local function resolve_part(id)
+  local c = part_cache[id]
+  if c ~= nil then return c or nil end
+  local pid = id:sub(#PART_PREFIX + 1)
+  local d
+  if part_source then
+    local _, it = part_source(pid)
+    d = it
+  else
+    local R = findScript and findScript("recipes") or nil
+    local PB = findScript and findScript("parts_base") or nil
+    local pd = PB and PB.partInfo and PB.partInfo(pid) or nil
+    if R and R.partItemDef and pd then d = R.partItemDef(pid, pd) end
+    local all = save and save.get and save.get("items.partdefs")
+    all = type(all) == "table" and all or {}
+    if d then
+      local had = all[id]
+      if type(had) ~= "table" or had.kg ~= d.kg or had.L ~= d.L or had.name ~= d.name then
+        all[id] = { name = d.name, kind = "part", part = pid, kg = d.kg, L = d.L, cost = d.cost, about = d.about }
+        if save and save.set then pcall(save.set, "items.partdefs", all) end
+      end
+    elseif type(all[id]) == "table" then
+      d = all[id]
+      d.kind, d.part = "part", pid
+    end
+  end
+  -- (a miss is not cached: the Build Kit's scripts may arrive a frame later)
+  if d then part_cache[id] = d end
+  return d
+end
+setmetatable(ITEMS, { __index = function(_, k)
+  if type(k) == "string" and k:sub(1, #PART_PREFIX) == PART_PREFIX then return resolve_part(k) end
+  return nil
+end })
+
 -- The belt's order: tools first, then devices and deployables, then
 -- consumables with a hold. (Worn items are never on the belt.)
 ORDER = { "gravgun", "laser", "surveyor", "buildkit", "beacon", "flag", "rope", "repairkit", "medkit", "gascan", "fuelRod", "fuelRodNU", "fuelRodHALEU", "spentRod", "rcspack", "o2tank", "o2mask", "flashlight" }
@@ -181,7 +235,7 @@ ORDER = { "gravgun", "laser", "surveyor", "buildkit", "beacon", "flag", "rope", 
 -- The Medkit's work (crew.lua runs it): seconds held at it, what it gives,
 -- and the reach from the medic to the patient (m).
 MEDKIT = { heal = 0.5, heal_secs = 4.0, revive_hp = 0.25, revive_secs = 6.0, reach = 2.6 }
-local KIND_RANK = { tool = 1, device = 2, deployable = 3, consumable = 4, worn = 9 }
+local KIND_RANK = { tool = 1, device = 2, deployable = 3, consumable = 4, part = 6, worn = 9 }
 
 -- Litres by container family (docs §5.1). A cargo hold's litres come from its
 -- Cargo Bays (1000 L each, set by the vessel); the base and a salvage crate
@@ -295,7 +349,7 @@ end
 -- the card never quotes a number the game doesn't use. Without them the
 -- figures below are those scripts' defaults.
 KIND_WORD = { tool = "Tool · two hands", consumable = "Consumable · one use", deployable = "Deployable · planted",
-              worn = "Worn · on the suit", device = "Device · in one hand" }
+              worn = "Worn · on the suit", device = "Device · in one hand", part = "Part · in its crate" }
 local LIVE_DEFAULT = {
   laser_reach = 24, grav_reach = 16, yield = 1.0,
   bolt_speed = 380, bolt_range = 450, full_range = 60, cell_cost = { 5, 10 }, recharge = 4,
@@ -363,6 +417,10 @@ function card(id, live)
     row("Beam", string.format("a %.0f° warm-white spot, about %.0f m of throw", d.lamp.cone, d.lamp.range))
     row("Switch", string.format("%s, on foot; it rides strapped to the helmet", d.lamp.key))
     row("Battery", string.format("%.0f h of light; dims under 10%%; charges aboard or at the base", d.lamp.hours))
+  elseif d.kind == "part" then
+    row("Part", tostring(d.part or partOf(id)))
+    row("Placed", "with the Build Kit, off the home world, from any container within 30 m (the pack last)")
+    row("Made", "at home, crated by its supplier (K with the part in hand); a Fabricator makes it on site later")
   elseif id == "rope" then
     row("Line", "30 m of 11 mm static line over a sheave on a 1.4 m edge davit")
     row("Climb", "a powered ascender: about 0.8 m/s up at 1 g with a full pack, faster on light worlds")

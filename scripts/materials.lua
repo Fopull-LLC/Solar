@@ -103,7 +103,62 @@ REG = {
   -- (fictional, under scripts/codex.lua's rules of this universe)
   phasite     = { name = "Phasite",              kg = 2.1, value = 220, tier = 4, class = "ore" },
   cryovolt    = { name = "Cryovolt Glass",       kg = 1.4, value = 180, tier = 4, class = "ore" },
+
+  -- REFINED (deep-space addendum N3; expansion X4; docs/resources.md §7):
+  -- what a refinery makes out of the ore and what a Fabricator makes parts
+  -- from (scripts/recipes.lua). COUNTED IN KILOGRAMS: a unit of a refined
+  -- material is one kilogram (kg = 1), so "780 Steel" is 780 kg of it,
+  -- whatever shape it ships in (plate, wire on a spool, block). `density`
+  -- (kg/m³) is the material's own, for the volume a silo or a hopper gives it
+  -- (`litresOf`); `store = "tank"` marks the two that live in a tank, not a
+  -- pack (a pack refuses them: inventory.lua). `from` names what each is made
+  -- of (N3; the machines that do it are expansion X6's). Six materials and
+  -- the propellant; nothing else (N3).
+  steel      = { name = "Steel",             kg = 1.0, value = 3,  tier = 1, class = "refined", density = 7850,
+                 from = "iron ore" },
+  alloy      = { name = "Alloy Steel",       kg = 1.0, value = 9,  tier = 2, class = "refined", density = 7900,
+                 from = "kamacite, or iron ore with ilmenite (3:1)" },
+  wiring     = { name = "Copper Wire",       kg = 1.0, value = 11, tier = 2, class = "refined", density = 8960,
+                 from = "copper ore" },
+  glass      = { name = "Glass",             kg = 1.0, value = 5,  tier = 1, class = "refined", density = 2500,
+                 from = "silica" },
+  regocrete  = { name = "Regocrete",         kg = 1.0, value = 1,  tier = 0, class = "refined", density = 2200,
+                 from = "regolith with water (5:1)" },
+  propellant = { name = "Propellant",        kg = 1.0, value = 2,  tier = 1, class = "refined", density = 360, store = "tank",
+                 from = "water (electrolysed and liquefied: LOX/LH2)" },
+  gas        = { name = "Propellant Gas",    kg = 1.0, value = 6,  tier = 2, class = "refined", density = 230, store = "tank",
+                 from = "ammonia ice or methane clathrate" },
 }
+
+-- The refined materials in the order a recipe and a card name them.
+REFINED = { "steel", "alloy", "wiring", "glass", "regocrete", "propellant", "gas" }
+-- A tank's fuel unit (builder.lua FUEL_T_PER_UNIT = 0.01 t) in kg of Propellant.
+PROP_KG_PER_UNIT = 10
+
+function isRefined(id) local d = REG[id]; return d ~= nil and d.class == "refined" end
+-- Kept in a tank (Propellant, the gas), never in a pack or a crate.
+function inTank(id) local d = REG[id]; return d ~= nil and d.store == "tank" end
+-- kg/m³: the registry's own for a refined material; for ground, ore and ice
+-- a unit is a litre, so its kg per unit is its density in kg/L (×1000).
+function density(id)
+  local d = REG[id]
+  if not d then return 1000 end
+  return d.density or (d.kg or 1) * 1000
+end
+-- The litres `n` units take: kg / density.
+function litresOf(id, n)
+  return (kg(id) * (n or 0)) / density(id) * 1000
+end
+-- How a count of it reads: "780 kg" (refined: a unit is a kilogram), "12 ×"
+-- for everything counted in units.
+function amountText(id, n)
+  n = n or 0
+  if isRefined(id) then
+    if n >= 10000 then return string.format("%.1f t", n / 1000) end
+    return string.format("%d kg", math.floor(n + 0.5))
+  end
+  return string.format("%d ×", math.floor(n + 0.5))
+end
 
 -- The DISCOVERY PREMIUM: what the depot adds the first time a material is ever
 -- sold. Paid once per material per company, so it is the opening's money — six
@@ -632,7 +687,9 @@ function researchValue(mat, originBody, firstTime)
   local o = ORE[mat]
   local base
   if o then base = o.research or RESEARCH_BY_RARITY[o.rarity or 1]
-  elseif grade(mat) == "bulk" then base = 0
+  -- (a refined material is counted by the kilogram and is ours: it teaches
+  -- the lab nothing new, X4)
+  elseif grade(mat) == "bulk" or grade(mat) == "refined" then base = 0
   else base = tier(mat) end
   if base <= 0 then return 0 end
   local home = save and save.get and save.get("base.body")
@@ -748,6 +805,70 @@ ORE_CODEX = {
     } },
 }
 
+-- The refined materials' entries (expansion X4): real metallurgy and real
+-- in-situ resource work, in the same shape.
+local REFINED_CODEX = {
+  steel = { name = "Steel",
+    summary = "Iron with a little carbon: the plate, section and sheet most of a base and a rocket's structure is made of.",
+    facts = {
+      "Structural steel is iron with roughly 0.1 to 0.3 percent carbon; it weighs about 7,850 kg a cubic metre.",
+      "Hematite and magnetite are reduced to iron by carbon monoxide in a blast furnace, or by hydrogen in direct-reduction plants, which give off water instead of carbon dioxide.",
+      "Hydrogen reduction is the route proposed for lunar and Martian iron, where there is no coal but water can be split for hydrogen.",
+      "Falcon 9's propellant tanks are aluminium-lithium; SpaceX's Starship went to stainless steel for its strength when cold and its heat tolerance.",
+    } },
+  alloy = { name = "Alloy Steel",
+    summary = "Steel alloyed with nickel or titanium for strength at low weight: the stock for engines, aircraft and rovers.",
+    facts = {
+      "Kamacite from iron meteorites is already a nickel-iron alloy of about 5 to 7.5 percent nickel, so it melts straight into a nickel steel.",
+      "Maraging steels (18 percent nickel with cobalt and molybdenum) are several times as strong as structural steel and have been used for solid rocket motor cases.",
+      "Titanium is won from ilmenite (FeTiO3); a little titanium in steel refines its grain and makes it tougher.",
+      "Rocket engine hot sections use nickel superalloys such as Inconel 718, which keep their strength up to about 650 degrees C.",
+    } },
+  wiring = { name = "Copper Wire",
+    summary = "Drawn copper conductor: the harnesses, windings and cables everything electrical needs.",
+    facts = {
+      "Copper conducts electricity better than any metal but silver; annealed copper is the 100 percent reference of the IACS conductivity scale.",
+      "Copper ore is concentrated by froth flotation, smelted to matte, converted to blister copper and refined by electrolysis to 99.99 percent.",
+      "Wire is drawn cold through a series of ever-smaller dies, then annealed so it bends without cracking.",
+      "A modern airliner carries over 100 km of wiring; spacecraft harnesses are often several percent of dry mass.",
+    } },
+  glass = { name = "Glass",
+    summary = "Melted silica: windows, solar cell cover glass and portholes.",
+    facts = {
+      "Fused silica glass is nearly pure silicon dioxide melted at about 2,000 degrees C; soda-lime glass adds sodium and calcium to melt it at about 1,500.",
+      "Glass weighs about 2,200 to 2,500 kg a cubic metre.",
+      "Each window of the ISS Cupola is several panes in layers: a debris pane outside two fused-silica pressure panes.",
+      "Lunar regolith can be melted into glass directly; experiments have made glass fibre and bricks from lunar simulant.",
+    } },
+  regocrete = { name = "Regocrete",
+    summary = "Concrete made of regolith: cheap walls, slabs and shielding from the ground you stand on.",
+    facts = {
+      "Regolith concretes bind loose ground with cement made on site, with molten sulfur (sulfur concrete), or by sintering it with heat.",
+      "Sulfur concrete needs no water: 30 to 35 percent sulfur by mass, melted at about 130 degrees C and mixed with regolith.",
+      "Half a metre to a metre of regolith over a habitat cuts the dose from galactic cosmic rays and solar storms substantially.",
+      "ESA and NASA have printed building blocks from lunar regolith simulant by sintering it with concentrated sunlight and microwaves.",
+    } },
+  propellant = { name = "Propellant (LOX/LH2)",
+    summary = "Liquid oxygen and liquid hydrogen split from water: rocket fuel made where you land.",
+    facts = {
+      "Electrolysis splits water into hydrogen and oxygen; roughly 50 kWh of electricity per kilogram of hydrogen.",
+      "Burned at an oxidiser-to-fuel ratio of about 6:1 by mass, nine kilograms of water make about eight of oxygen and one of hydrogen.",
+      "Liquid hydrogen boils at 20 K and weighs only 71 kg a cubic metre, so hydrogen tanks are big and need insulation.",
+      "Mining water ice at the lunar poles for propellant is the core of most plans for refuelling in cislunar space.",
+    } },
+  gas = { name = "Propellant Gas",
+    summary = "Gas propellant from ammonia ice or methane clathrate, kept under pressure for electric thrusters.",
+    facts = {
+      "Ion and Hall thrusters ionise a gas and accelerate it electrically; xenon, krypton and argon are the usual choices.",
+      "Ammonia has been flown in resistojets and arcjets, and decomposes into hydrogen and nitrogen.",
+      "Methane from clathrate is also a chemical rocket fuel, burned with liquid oxygen in engines such as Raptor and BE-4.",
+      "Stored at 200 bar, nitrogen weighs about 230 kg a cubic metre.",
+    } },
+}
+-- (in ORE_CODEX too, the table codex.lua lists and reads off-world entries
+-- from, so the lab's codex shows a refined material once it has been held)
+for id, e in pairs(REFINED_CODEX) do ORE_CODEX[id] = e end
+
 function codex(mat)
   local cx = findScript and findScript("codex")
   local e = cx and cx.CODEX and cx.CODEX[mat]
@@ -755,12 +876,13 @@ function codex(mat)
 end
 
 -- Copy the ore entries into the lab's codex (any script may add entries
--- there): the ones it does not already have.
+-- there): the ones it does not already have. (The ores only: codex.lua reads
+-- the refined entries from ORE_CODEX itself.)
 function codexInto(cx)
   if not (cx and cx.CODEX) then return 0 end
   local n = 0
   for id, e in pairs(ORE_CODEX) do
-    if not cx.CODEX[id] then cx.CODEX[id] = e; n = n + 1 end
+    if not cx.CODEX[id] and not REFINED_CODEX[id] then cx.CODEX[id] = e; n = n + 1 end
   end
   return n
 end

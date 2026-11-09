@@ -51,8 +51,16 @@
 --               it, later the price: the fee and footing are kept).
 --
 -- Gated: the active member is an Engineer (crew.hasRole), on foot, on a world
--- (EVA building is K11), with no other panel up. Off the home world nothing is
--- placed yet (materials and the Fabricator are step 13): the card says why.
+-- (EVA building is K11), with no other panel up.
+--
+-- CRATED PARTS (expansion X4; deep-space N2, N8): at home, K with a part in
+-- hand orders it CRATED (price + shipping), loaded into the nearest container
+-- within 30 m with room (a hold, a locker, a supply crate; the pack last).
+-- Off the home world a placement draws one crated part from any container
+-- within 30 m, nearest first, the pack last (the reach rule, `reachScan`);
+-- undo and Deconstruct put it back in its crate. With none in reach the card
+-- and the plate say what a Fabricator (X6) would make it from (recipes.lua).
+-- Pastes and blueprints (one delivery) stay home-world only.
 --
 -- THE HOOKS: `pose(hit)` is the one place a hit becomes a pose (snapping);
 -- `validity(id, pose)` the one place a placement is judged; `place(sid,
@@ -335,17 +343,250 @@ function frameNodeOrNil()
 end
 -- The parts column: the VAB's left column, below the HUD's top-left chips.
 function layout(W, H) return { W = W, H = H, left = { x = 8, y = 112, w = 228, h = math.max(240, H - 252) } } end
+-- (X4: memoised: every card asks it every time the column is drawn; the
+-- catalogue changes only with the kit's material or the blueprints)
+local sec_memo = { key = nil, map = nil }
 local function section_of(id)
-  for _, s in ipairs(catalogue()) do for _, x in ipairs(s.ids) do if x == id then return s.title end end end
+  local BP = ref("blueprints")
+  local key = tostring(material) .. "|" .. tostring(BP and BP.version or 0)
+  if sec_memo.key ~= key or not sec_memo.map then
+    local map = {}
+    for _, s in ipairs(catalogue()) do for _, x in ipairs(s.ids) do if map[x] == nil then map[x] = s.title end end end
+    sec_memo.key, sec_memo.map = key, map
+  end
+  local s = sec_memo.map[id]
+  if s == nil then
+    -- (an id the column doesn't list now, e.g. another material's piece)
+    for _, t in ipairs(catalogue()) do for _, x in ipairs(t.ids) do if x == id then sec_memo.map[id] = t.title return t.title end end end
+    sec_memo.map[id] = false
+    return nil
+  end
+  return s or nil
+end
+-- ── THE REACH RULE (deep-space N8, Q16; expansion X4) ───────────────────────
+-- Off the home world a part is a CRATED PART (items "part:<id>") drawn from
+-- any container within REACH m of the Engineer, nearest first, the pack last:
+-- a craft's hold and its lockers, a supply crate, a salvage drop. The scan is
+-- node to node (`node:distanceTo`, the same read: no world point is kept), at
+-- most twice a second and only while the kit is open; what it found is a
+-- table of counts (crated parts and refined kilograms) the cards and the
+-- plate read without touching the save again.
+REACH = 30.0
+local reach_st = { t = -10, order = {}, label = {}, crated = {}, first = {}, mats = {}, body = nil }
+local recipe_memo = {}
+local function recipe_of(id)
+  local m = recipe_memo[id]
+  if m ~= nil then return m or nil end
+  local R, def = ref("recipes"), partInfo(id)
+  m = (R and def) and R.recipeFor(def, section_of(id), id) or nil
+  recipe_memo[id] = m or false
+  return m
+end
+recipeOf = recipe_of
+local function item_of(id) local R = ref("recipes"); return R and R.partItemId(id) or ("part:" .. tostring(id)) end
+local function here_body()
+  local a = astro()
+  return a and space.dominant(a.x, a.y, a.z) or home_body()
+end
+-- off the home world (and not in the sandbox, where money is no object)
+function awayNow()
+  local h, b = home_body(), here_body()
+  return h ~= nil and b ~= nil and b ~= h and not creative()
+end
+local function vessel_of_cid(cid)
+  for _, v in ipairs(findScripts and findScripts("vessel_controller") or {}) do
+    if v.holdId == cid then return v end
+    for _, l in ipairs(v.LOCKERS or {}) do if l.cid == cid then return v end end
+  end
   return nil
 end
+-- Rescan now (after a placement or a crate moved) or when the memo is old.
+function reachScan(force)
+  if not force and now() - reach_st.t < 0.5 then return reach_st end
+  local a, V, E = astro(), ref("inventory"), ref("base_economy")
+  local st = { t = now(), order = {}, label = {}, crated = {}, first = {}, mats = {}, body = here_body() }
+  reach_st = st
+  if not (a and V and E) then return st end
+  local raw = {}
+  local function add(cid, d, lbl)
+    if cid and d and d <= REACH and not st.label[cid] then raw[#raw + 1] = { id = cid, d = d }; st.label[cid] = lbl end
+  end
+  for _, v in ipairs(findScripts and findScripts("vessel_controller") or {}) do
+    local n = v.node
+    if n and n.valid ~= false and a.distanceTo then
+      local d = a:distanceTo(n)
+      if d and d <= REACH then
+        local nm = v.craftName or "craft"
+        if v.holdId then add(v.holdId, d, nm .. " hold") end
+        for i, l in ipairs(v.LOCKERS or {}) do add(l.cid, d, string.format("%s locker %d", nm, i)) end
+      end
+    end
+  end
+  local sc = ref("supply_crates")
+  for _, c in ipairs((sc and sc.list) and sc.list() or {}) do
+    if c.node and c.node.valid ~= false and a.distanceTo then add(c.cid, a:distanceTo(c.node), c.name or "supply crate") end
+  end
+  local sv = ref("salvage")
+  if sv and sv.list and sv.containerOf then
+    for _, e in ipairs(sv.list()) do
+      if e.x then add(sv.containerOf(e.id), len(e.x - a.x, e.y - a.y, e.z - a.z), e.n and (tostring(e.n) .. " (salvage)") or "salvage drop") end
+    end
+  end
+  local pack = V.resolve and V.resolve("astro") or "astro"
+  raw[#raw + 1] = { id = pack, pack = true }
+  st.label[pack] = "your pack"
+  st.order = E.containersInReach(raw, 0, 0, 0, REACH)
+  local M = ref("materials")
+  local refined = (M and M.REFINED) or {}
+  for _, cid in ipairs(st.order) do
+    for _, g in ipairs(V.itemList and V.itemList(cid) or {}) do
+      if type(g.id) == "string" and g.id:sub(1, 5) == "part:" then
+        st.crated[g.id] = (st.crated[g.id] or 0) + g.n
+        st.first[g.id] = st.first[g.id] or cid
+      end
+    end
+    for _, mat in ipairs(refined) do
+      local n = V.count(cid, mat)
+      if n > 0 then st.mats[mat] = (st.mats[mat] or 0) + n end
+    end
+  end
+  return st
+end
+-- How many crated `id` are in reach, and the nearest one's container label.
+function cratedInReach(id)
+  local st = reachScan()
+  local it = item_of(id)
+  local n = st.crated[it] or 0
+  return n, n > 0 and st.label[st.first[it]] or nil
+end
+-- (the quote's off-world options: what is in reach, and the recipe)
+local function away_opts(id)
+  local n, from = cratedInReach(id)
+  return { crated = n, from = from, recipe = recipe_of(id) }
+end
+-- Take one crated `id` from the containers in reach (nearest first, the pack
+-- last). → the container it came from | nil
+local function take_crated(id)
+  local V, R = ref("inventory"), ref("recipes")
+  if not (V and R) then return nil end
+  local st = reachScan(true)
+  local it = item_of(id)
+  local got, from = R.drawFrom(st.order, it, 1, function(c, i) return V.itemCount(c, i) end,
+    function(c, i, k) return (V.removeItem(c, i, k)) end)
+  if got < 1 then return nil end
+  local cid = from[1].cid
+  local v = vessel_of_cid(cid)
+  if v and v.holdApplyMass then pcall(v.holdApplyMass, v.node) end
+  reach_st.t = -10
+  return cid, st.label[cid]
+end
+-- Put a crated `id` back: into `prefer` if it is still in reach (it held it a
+-- moment ago: no room check), else the first container in reach with room
+-- (the pack last; a salvage drop only gives things back). → cid | nil, why
+local function return_crated(id, prefer, dry)
+  local V = ref("inventory")
+  if not V then return nil, "no inventory in this scene" end
+  local st = reachScan(true)
+  local it = item_of(id)
+  local dest = nil
+  if prefer then for _, c in ipairs(st.order) do if c == prefer then dest = c break end end end
+  if not dest then
+    for _, c in ipairs(st.order) do
+      if c:sub(1, 8) ~= "salvage:" and (V.roomForItem(c, it, 1)) >= 1 then dest = c break end
+    end
+  end
+  -- (a crate never vanishes: past the dry check, the nearest container takes
+  -- it over its limit rather than lose it)
+  if not dest and not dry then
+    for _, c in ipairs(st.order) do if c:sub(1, 8) ~= "salvage:" then dest = c break end end
+  end
+  if not dest then
+    local I = ref("items")
+    local d = I and I.def and I.def(it)
+    return nil, string.format("no container within %.0f m has room for the crated %s (%.0f kg, %.0f L): bring a hold or a crate", REACH,
+      tostring((partInfo(id) or {}).label or id), d and d.kg or 0, d and d.L or 0)
+  end
+  if dry then return dest end
+  V.addItem(dest, it, 1, { force = true })
+  local v = vessel_of_cid(dest)
+  if v and v.holdApplyMass then pcall(v.holdApplyMass, v.node) end
+  reach_st.t = -10
+  return dest
+end
+returnCrated = return_crated
+
 local function quote_of(id, footVol)
   local E = ref("base_economy")
   local def = partInfo(id)
   if not (E and def) then return nil end
-  local a = astro()
-  local body = a and space.dominant(a.x, a.y, a.z) or home_body()
-  return E.quote(def, section_of(id), body, home_body(), footVol)
+  local body = here_body()
+  if creative() then body = home_body() end
+  return E.quote(def, section_of(id), body, home_body(), footVol, (body ~= home_body()) and away_opts(id) or nil)
+end
+
+-- K at home: order the part in hand CRATED, price + shipping, loaded into the
+-- nearest container in reach with room (a hold, a locker, a supply crate;
+-- the pack last). → cid, quote | nil, why
+function crateHeld()
+  local id = heldPart
+  if not id then return nil, "nothing in hand" end
+  local def = partInfo(id)
+  local E, co, V, R = ref("base_economy"), ref("company"), ref("inventory"), ref("recipes")
+  if not (def and E and co and V and R) then return nil, "the building rules aren't in this scene" end
+  if def.tool or def.cable or def.wire then return nil, "only a part ships in a crate" end
+  if awayNow() then return nil, "crated parts are ordered on the home world: here the Fabricator makes them (later)" end
+  local it = R.partItemId(id)
+  local dest, why = return_crated(id, nil, true)
+  if not dest then return nil, why end
+  local q = E.crateQuote(def, section_of(id))
+  if not co.spend(q.total, E.crateLedgerWhy(def.label, q)) then return nil, "can't afford it: " .. E.money(q.total) end
+  V.addItem(dest, it, 1, { force = true })
+  local v = vessel_of_cid(dest)
+  if v and v.holdApplyMass then pcall(v.holdApplyMass, v.node) end
+  reach_st.t = -10
+  lastCrate = { id = id, cid = dest, total = q.total, t = now() }
+  return dest, q, reach_st.label[dest] or dest
+end
+lastCrate = nil
+
+-- (the parts column's preview plate: catalog_panel's B.plateRows) the recipe
+-- and what is in reach, under the part's picture
+function plateRows(id)
+  local def = partInfo(id)
+  if not def or def.tool then return nil end
+  local R, E = ref("recipes"), ref("base_economy")
+  local r = recipe_of(id)
+  if not (R and r) then return nil end
+  local out = {}
+  if awayNow() then
+    local n, from = cratedInReach(id)
+    if n > 0 then
+      out[#out + 1] = { text = string.format("IN REACH  ·  %d crated · %s", n, from or "?"), head = true }
+    else
+      out[#out + 1] = { text = string.format("NONE IN REACH  ·  no crated one within %.0f m", REACH), head = true }
+    end
+    if r.shipOnly then out[#out + 1] = { text = "made at home only: " .. r.shipOnly }
+    else
+      local st = reachScan()
+      local rows = R.needHave(r, function(m) return st.mats[m] or 0 end)
+      local bits = {}
+      for _, e in ipairs(rows) do bits[#bits + 1] = string.format("%s %s/%s", e.label, R.kgString(e.have), R.kgString(e.need)) end
+      out[#out + 1] = { text = "A FABRICATOR MAKES IT FROM", head = true }
+      out[#out + 1] = { text = (#bits > 0 and table.concat(bits, " · ") or "no materials") ..
+        ((r.fittings or 0) > 0 and (" + " .. money(r.fittings) .. " fittings") or ""), lines = 4 }
+    end
+  else
+    if not (def.cable or def.wire) then
+      local q = E and E.crateQuote(def, section_of(id))
+      local I = ref("items")
+      local d = I and I.def and I.def(R.partItemId(id))
+      out[#out + 1] = { text = string.format("CRATED  ·  K ships one to you: %s · %s, %s", q and money(q.total) or "?",
+        d and R.kgString(d.kg) or "?", d and string.format("%.0f L", d.L) or "?"), head = true, lines = 2 }
+    end
+    out[#out + 1] = { text = (r.perMetre and "MADE OF" or "OFF-WORLD IT IS MADE OF"), head = true }
+    out[#out + 1] = { text = r.shipOnly and ("made at home only: " .. r.shipOnly) or R.lineOf(r, true), lines = 4 }
+  end
+  return out
 end
 function cardLines(id, def, locked)
   local E = ref("base_economy")
@@ -1129,18 +1370,35 @@ function place(sid, partId, p, payer, opts)
   if not (E and ST and co) then return nil, "the building rules aren't in this scene" end
   local plan = p.plan
   if not isEngineer() then return nil, def.shield and "Engineers only: a Shield Wall is set by an Engineer" or "Engineers only" end
-  local q = E.quote(def, section_of(partId), p.body, home_body(), plan and plan.vol or 0)
-  if q.mode ~= "money" or payer ~= "money" then return nil, q.why or "nothing to pay with" end
+  -- (X4: off the home world a crated part in reach is the payment; the
+  -- sandbox builds anywhere for money, as at home)
+  local qbody = creative() and home_body() or p.body
+  local q = E.quote(def, section_of(partId), qbody, home_body(), plan and plan.vol or 0,
+    (qbody ~= home_body()) and away_opts(partId) or nil)
+  local pre = opts and opts.prepaid
+  if pre and q.mode ~= "money" then return nil, "a paste or a blueprint ships as one delivery: on the home world only" end
+  if (q.mode ~= "money" and q.mode ~= "item") or payer ~= "money" then return nil, q.why or "nothing to pay with" end
   if sid ~= nil and not ST.get(sid) then return nil, "that structure is gone" end
   -- (S4: a paste or a blueprint is ONE bill, paid before its pieces go down;
   -- each piece's record carries its share, so an undo refunds the bill)
-  local pre = opts and opts.prepaid
+  local took = nil
   if pre then
     q = { mode = "money", cost = pre.cost, ship = pre.ship, foot = 0, total = pre.cost + pre.ship, supplier = q.supplier }
+  elseif q.mode == "item" then
+    -- the footing's concrete is still bought (a dry mix shipped out), then
+    -- the crate is opened: one crated part out of the nearest container
+    if (q.foot or 0) > 0 and not co.spend(q.foot, string.format("%s · %s footing (dry mix)", def.label, E.money(q.foot))) then
+      return nil, "can't afford the footing: " .. E.money(q.foot)
+    end
+    took = take_crated(partId)
+    if not took then
+      if (q.foot or 0) > 0 then if co.refund then co.refund(q.foot, "footing not cast") else co.earn(q.foot, "footing not cast") end end
+      return nil, "the crated " .. tostring(def.label) .. " is no longer in reach"
+    end
   elseif not co.spend(q.total, E.ledgerWhy(def.label, q)) then return nil, "can't afford it: " .. E.money(q.total) end
   local t = agency_now()
   local by = member()
-  local paid = { cost = q.cost, ship = q.ship, foot = q.foot, total = q.total, t = t, supplier = q.supplier, by = by }
+  local paid = { cost = q.cost, ship = q.ship, foot = q.foot, total = q.total, t = t, supplier = q.supplier, by = by, item = took }
   local base = p.base or 0
   local ft = plan and plan.footing and { d = plan.footing.d, hx = plan.footing.hx, hz = plan.footing.hz } or nil
   local uid
@@ -1192,17 +1450,34 @@ function place(sid, partId, p, payer, opts)
   e.undo = function()
     local held = removalBlocked(e.sid, { e.uid })
     if held then e.res, e.why = nil, held return end
-    local amount = math.floor((e.part and e.part.paid and e.part.paid.total) or 0)
+    local pd = e.part and e.part.paid
+    -- (X4) a crated part goes back in its crate first: refused if nothing
+    -- in reach has room for it
+    if pd and pd.item then
+      local dest, why = return_crated(partId, pd.item, true)
+      if not dest then e.res, e.why = nil, why return end
+    end
+    local amount = math.floor((pd and pd.total) or 0)
     ST.removeParts(e.sid, { e.uid })
-    if co.refund then co.refund(amount, "returned: " .. def.label .. " (undone within a minute)") else co.earn(amount, "returned: " .. def.label) end
+    if pd and pd.item then return_crated(partId, pd.item) end
+    if amount > 0 then
+      if co.refund then co.refund(amount, "returned: " .. def.label .. " (undone within a minute)") else co.earn(amount, "returned: " .. def.label) end
+    end
     if c and c.credit and by then pcall(c.credit, by, "built", -1) end
     e.res = amount
   end
   e.redo = function()
-    local q2 = E.quote(def, section_of(partId), e.hdr.b, home_body(), (e.part.ft and plan and plan.vol) or 0)
-    if not co.spend(q2.total, E.ledgerWhy(def.label, q2)) then e.res = nil return end
+    local qb = creative() and home_body() or e.hdr.b
+    local q2 = E.quote(def, section_of(partId), qb, home_body(), (e.part.ft and plan and plan.vol) or 0,
+      (qb ~= home_body()) and away_opts(partId) or nil)
+    local took2 = nil
+    if q2.mode == "item" then
+      if (q2.foot or 0) > 0 and not co.spend(q2.foot, def.label .. " footing (dry mix)") then e.res = nil return end
+      took2 = take_crated(partId)
+      if not took2 then e.res, e.why = nil, "no crated " .. tostring(def.label) .. " in reach" return end
+    elseif q2.mode ~= "money" or not co.spend(q2.total, E.ledgerWhy(def.label, q2)) then e.res, e.why = nil, q2.why return end
     local t2 = agency_now()
-    e.part.paid = { cost = q2.cost, ship = q2.ship, foot = q2.foot, total = q2.total, t = t2, supplier = q2.supplier, by = by }
+    e.part.paid = { cost = q2.cost, ship = q2.ship, foot = q2.foot, total = q2.total, t = t2, supplier = q2.supplier, by = by, item = took2 }
     e.t = t2
     restore(e.sid, e.hdr, { e.part })
     if c and c.credit and by then pcall(c.credit, by, "built", 1, { body = e.hdr.b }) end
@@ -1261,32 +1536,58 @@ function deconstruct(sid, uid)
   if held then return nil, held end
   local t = agency_now()
   local total, full = 0, true
+  local crates = {}      -- (X4) the crated parts that go back in their crates
   for _, u in ipairs(uids) do
     local p = ST.getPart(sid, u)
     local amt, rule = E.deconstructRefund(p and p.paid, t)
     total = total + amt
     if rule ~= "full" then full = false end
+    if p and p.paid and p.paid.item then crates[#crates + 1] = { id = p.id, prefer = p.paid.item } end
+  end
+  for _, cr in ipairs(crates) do
+    local dest, why = return_crated(cr.id, cr.prefer, true)
+    if not dest then return nil, why end
   end
   local hdr = header(rec)
   local taken = ST.removeParts(sid, uids)
   local saved = {}
   for _, p in ipairs(taken) do saved[#saved + 1] = copy(p) end
+  for _, cr in ipairs(crates) do cr.cid = return_crated(cr.id, cr.prefer) end
   local lbl = label_of(part.id)
   local why = string.format("taken down: %s%s · %s", lbl, #uids > 1 and string.format(" and %d on it", #uids - 1) or "",
-    full and "all of it back (within a minute)" or "the price back, fee kept")
-  if co.refund then co.refund(total, why) else co.earn(total, why) end
-  lastDecon = { sid = sid, uids = uids, refund = total, full = full, t = t }
+    #crates > 0 and string.format("%d crated part%s back in reach", #crates, #crates == 1 and "" or "s")
+    or (full and "all of it back (within a minute)" or "the price back, fee kept"))
+  if total > 0 then if co.refund then co.refund(total, why) else co.earn(total, why) end end
+  lastDecon = { sid = sid, uids = uids, refund = total, full = full, t = t, crates = #crates > 0 and crates or nil }
   local e = { label = "take down " .. lbl, kind = "decon", t = t, sid = sid, hdr = hdr, parts = saved, refund = total }
   e.undo = function()
-    if not co.spend(e.refund, "put back: " .. lbl .. " (undone within a minute)") then e.res = nil return end
+    -- (the crated parts come out of their crates again first)
+    local back = {}
+    for _, cr in ipairs(crates) do
+      local c2 = take_crated(cr.id)
+      if not c2 then
+        for _, b in ipairs(back) do return_crated(b.id, b.cid) end
+        e.res, e.why = nil, "the crated " .. label_of(cr.id) .. " is no longer in reach" return
+      end
+      back[#back + 1] = { id = cr.id, cid = c2 }
+    end
+    if e.refund > 0 and not co.spend(e.refund, "put back: " .. lbl .. " (undone within a minute)") then
+      for _, b in ipairs(back) do return_crated(b.id, b.cid) end
+      e.res = nil return
+    end
     restore(e.sid, e.hdr, e.parts)
     e.res = e.refund
   end
   e.redo = function()
     local us = {}
     for _, p in ipairs(e.parts) do us[#us + 1] = p.uid end
+    for _, cr in ipairs(crates) do
+      local dest, why = return_crated(cr.id, cr.prefer, true)
+      if not dest then e.res, e.why = nil, why return end
+    end
     ST.removeParts(e.sid, us)
-    co.refund(e.refund, "taken down again: " .. lbl)
+    for _, cr in ipairs(crates) do return_crated(cr.id, cr.prefer) end
+    if e.refund > 0 then co.refund(e.refund, "taken down again: " .. lbl) end
     e.t = agency_now()
     e.res = e.refund
   end
@@ -1303,13 +1604,15 @@ function deconstructQuote(sid, uid)
   for _, u in ipairs(SN.dependents(rec, partInfo, uid)) do uids[#uids + 1] = u end
   -- (S1: kit pieces no longer held once these are gone come down with them)
   do local KS = ref("kit_snap"); if KS and not creative() then for _, u in ipairs(KS.fallsWith(rec, partInfo, uids)) do uids[#uids + 1] = u end end end
-  local total, full, t = 0, true, agency_now()
+  local total, full, t, crates = 0, true, agency_now(), 0
   for _, u in ipairs(uids) do
-    local amt, rule = E.deconstructRefund((ST.getPart(sid, u) or {}).paid, t)
+    local pd = (ST.getPart(sid, u) or {}).paid
+    local amt, rule = E.deconstructRefund(pd, t)
     total = total + amt
     if rule ~= "full" then full = false end
+    if type(pd) == "table" and pd.item then crates = crates + 1 end
   end
-  return total, #uids, full
+  return total, #uids, full, crates
 end
 
 -- Ctrl+Z: the newest step in the ring, if it is under a minute old.
@@ -1401,6 +1704,9 @@ local function do_place(keep)
   play("place", 0.6)
   if run then
     say(string.format("%s × %d · %s so far · release to finish the run (one undo)", req.def.label, run.n, money(run.total)))
+  elseif q.mode == "item" then
+    say(string.format("%s placed%s · out of its crate (%s) · Ctrl+Z within a minute crates it again", req.def.label,
+      twin and " with its mirror" or "", tostring(q.from or "in reach")))
   else
     say(string.format("%s placed%s · %s (%s + %s shipping%s) · Ctrl+Z within a minute returns it", req.def.label,
       twin and " with its mirror" or "", money(total), money(q.cost), money(q.ship), (q.foot or 0) > 0 and (" + " .. money(q.foot) .. " footing") or ""))
@@ -1589,6 +1895,8 @@ function paste_click(p)
   local ST, KS, co = ref("structures"), ref("kit_snap"), ref("company")
   local BP = ref("blueprints")
   local list, placed, skipped, total = {}, 0, 0, 0
+  -- (X4) one delivery is a home-world thing: off it, crated parts one by one
+  if awayNow() then play("denied"); say("a paste or a blueprint ships as one delivery: on the home world only (here, place crated parts one by one)") return end
   -- the bill, paid once, before anything goes down
   local b = clip_bill(clip)
   local what = (heldBp and clip.label) and ("blueprint " .. tostring(clip.label)) or string.format("paste of %d pieces", clip.n)
@@ -1996,7 +2304,11 @@ local function provider(t, ctx)
   local def = partInfo(part.id) or {}
   local sid, uid = rec.id, part.uid
   local function ask()
-    local amt, n, full = deconstructQuote(sid, uid)
+    local amt, n, full, crates = deconstructQuote(sid, uid)
+    if (crates or 0) > 0 then
+      return string.format("%s back in %s crate%s%s", crates == 1 and "it goes" or (crates .. " go"), crates == 1 and "its" or "their",
+        crates == 1 and "" or "s", amt > 0 and (" · " .. money(amt)) or "")
+    end
     return string.format("%s back%s%s", money(amt), full and "" or " (fee kept)",
       n > 1 and string.format(" · takes %d part%s with it", n - 1, n > 2 and "s" or "") or "")
   end
@@ -2016,7 +2328,9 @@ local function provider(t, ctx)
         tick = function() end,
         done = function()
           local amt, w = deconstruct(sid, uid)
-          if ctx and ctx.toast then ctx.toast(amt and string.format("taken down · %s back", money(amt)) or tostring(w), amt == nil) end
+          local cr = amt and lastDecon and lastDecon.crates
+          if ctx and ctx.toast then ctx.toast(amt and (cr and string.format("taken down · back in its crate (%s)", tostring(reach_st.label[cr[1].cid] or cr[1].cid))
+            or string.format("taken down · %s back", money(amt))) or tostring(w), amt == nil) end
           if amt then play("undo", 0.6) end
           return amt ~= nil, w
         end } },
@@ -2120,6 +2434,12 @@ function hintLine()
   local pl = req.plan
   if pl and pl.footing then extra[#extra + 1] = string.format("footing %.1f m", pl.footing.d)
   elseif pl and pl.level then extra[#extra + 1] = "levelled" end
+  if q and q.mode == "item" then
+    return string.format("%s  ·  %s  ·  LMB places it from %s (%d crated in reach%s)  ·  %s",
+      req.def.label, table.concat(extra, " · "), tostring(q.from or "a crate"), q.n or 0,
+      (q.foot or 0) > 0 and (" · " .. money(q.foot) .. " footing") or "", turn)
+  end
+  turn = turn .. "  ·  K crates it"
   return string.format("%s  ·  %s  ·  LMB place for %s (%s + %s shipping%s)  ·  %s",
     req.def.label, table.concat(extra, " · "), money(q.total), money(q.cost), money(q.ship),
     (q.foot or 0) > 0 and (" + " .. money(q.foot) .. " footing") or "", turn)
@@ -2263,6 +2583,15 @@ function update(node, dt)
   -- S1: G mirrors placements; Ctrl+C / Ctrl+V / Ctrl+D copy, paste, duplicate
   if not typing() then
     if input.pressed("g") and not input.key("ctrl") then toggle_sym() end
+    -- X4: K orders the part in hand crated (home world)
+    if heldPart and not heldBp and not input.key("ctrl") and input.pressed("k") then
+      local cid, q, lbl = crateHeld()
+      if cid then
+        play("place", 0.5)
+        say(string.format("%s crated · %s (%s + %s shipping) · loaded into %s", tostring((partInfo(heldPart) or {}).label),
+          money(q.total), money(q.cost), money(q.ship), tostring(lbl)))
+      else play("denied"); say(tostring(q)) end
+    end
     -- S3: F1 shows the ROOMS overlay (each room's outline and its air)
     if input.pressed("f1") then
       local RA = ref("room_air")

@@ -1765,3 +1765,23 @@ sta, cov }`, `survey.jobs` (the kit telescopes' sweeps).
   an alien home with Earth air (helmet off, the BODY cards, the lab's BODIES
   page, the refill, save and reload, the menu's AIR row) and one with no
   oxygen (the helmet stays on, TOXIC on the card).
+
+## 12. Crated parts: a part as an item (expansion X4, built 2026-11-09)
+
+A part in its crate is an item of a fifth kind, `"part"`, with id
+`part:<part id>` (`part:wall.steel`, `part:padPlate`, `part:vab.locker`;
+docs/base-building.md §22).
+
+- **Not in `ITEMS`' own keys.** `ITEMS["part:…"]` resolves through the part's
+  record (`parts_base.partInfo`) and `recipes.partItemDef`; `pairs(ITEMS)`,
+  the shop and the belt never see one. It has no `hold`, so it is never on the
+  belt.
+- **Mass and bulk**: the part's dry mass, and `recipes.crateLitres` litres. A
+  pack (90 kg, 60 L) takes the small fittings only.
+- **Remembered in the save** (`items.partdefs`: name, kg, L, price), so the
+  VAB scene, which has no Build Kit scripts, still weighs a hold of crates.
+- **Its card**: "Part · in its crate", where it is placed and how it is made.
+  The depot buys it back at 60 % like any gear.
+- **Moved like any item**: the inventory panel puts it into and takes it out
+  of a crate or a craft's hold; the Build Kit draws it from a container in
+  reach off the home world and puts it back on an undo or a Deconstruct.
