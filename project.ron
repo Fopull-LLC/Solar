@@ -7,7 +7,7 @@
     matter: true,
     title: Some("Floptle Solar"),
     entry_scene: Some("scenes/menu.ron"),
-    engine_version: Some("0.117.1-dev.1455.4dce2c9"),
+    engine_version: Some("0.117.1-dev.1458.7e35f43"),
     data_id: Some("solar"),
     layers: [
         "entity",
@@ -17,7 +17,7 @@
         "offstage",
     ],
     ui_font: "fonts/SolarUI.ttf",
-    terrain_generator: Some(3),
+    terrain_generator: Some(4),
     script_vec3: Some(Exact),
     model_texture_filter: Some(Smooth),
     glass_refraction: Some(Auto),
