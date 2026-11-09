@@ -28,20 +28,28 @@
 -- coordinates are parent-local, so a moving parent would double-apply).
 
 defaults = {
-  distance = 7.0,
+  -- THE ON-FOOT ORBIT (playtest 2026-11-09: "makes my character feel extremely
+  -- tiny and maybe appears a little too high up above my head"). It was 7 m
+  -- out, orbiting a point 0.3 m OVER the helmet: at the 66° field of view the
+  -- crew filled a fifth of the screen and the view looked down on the top of
+  -- the head. Now 4.5 m out (about a third of the screen) round a point at the
+  -- shoulders, a touch off the right shoulder (`shoulder_idle`).
+  distance = 4.5,
   min_distance = 1.5,
   max_distance = 14.0,
-  height = 1.2,        -- look-at point above the character's origin, along up
-  -- FIRST PERSON: where the eyes are, along up. The astronaut's capsule is
-  -- 2.0 m TIP TO TIP about its origin (`Body::capsule` — "total standing
-  -- height"), so the crown is at +1.0 and the eyes sit just under it. Reusing
-  -- `height` here would have put the camera 0.2 m ABOVE the head: fine as an
-  -- orbit pivot, which is what it is for, and a floating drone in first person.
-  eye_height = 0.85,
+  -- the orbit's pivot over the capsule's centre, along up: the shoulders
+  -- (the soles are 0.94 m under the centre; the suited crew is 1.82 m)
+  height = 0.5,
+  -- FIRST PERSON: where the eyes are over the capsule's centre, along up. The
+  -- capsule is 1.9 m TIP TO TIP about its origin, the soles 0.94 m under it,
+  -- and the eyes are the model's (HUMAN SCALE 0.95 of the rig's 1.76 m:
+  -- 1.67 m over the soles; tests/smoke_human_scale.lua checks the sum).
+  -- Reusing `height` here would put the camera at the shoulders.
+  eye_height = 0.73,
   -- Indoors (a roof within `ceiling_probe` over the crew) the orbit comes in to
   -- this, and the view may not look down from above the head: a building's
   -- ceiling is lower than a third-person camera's normal perch.
-  indoor_distance = 3.5,
+  indoor_distance = 3.0,
   ceiling_probe = 4.5,
   -- How quickly the pivot follows the crew UP AND DOWN while walking. A kerb
   -- pops the capsule up a few centimetres in one frame; followed exactly, the
@@ -52,11 +60,15 @@ defaults = {
   follow_yaw = 0.5,
   sensitivity = 0.3,
   zoom_speed = 1.0,
-  start_pitch = -0.3,
+  start_pitch = -0.22,
   -- OVER THE SHOULDER: while a tool is in use the pivot slides this far to the
   -- crew's right, so the body stops standing between the camera and the rock
   -- face or plant being worked. Eased in and out; 0 = never.
   shoulder = 0.6,
+  -- …and while no tool is in use, this much (m): the crew stands a little
+  -- left of the middle, the way a third-person view frames a walker, so the
+  -- path ahead is not behind their back.
+  shoulder_idle = 0.3,
   -- The view's vertical field of view (radians; the system scene's Camera),
   -- for framing a whole craft (`zoomRange`).
   fov_y = 1.1519173,
@@ -1092,10 +1104,16 @@ function feel_tick(node, dt, shake_k, on_foot)
       if d < reach then addShake((lb.big and 0.9 or 0.5) * (1 - d / reach) ^ 2) end
     end
   end
-  -- the dip's spring (critically damped-ish: down fast, back in ~0.35 s)
+  -- the dip's spring (critically damped-ish: down fast, back in ~0.35 s),
+  -- in steps of 1/120 s at most: one explicit step of it is unstable past
+  -- ~90 ms, so a hitch on landing bounced the view (tool_belt's sway, 2026-11-09)
   local k, c = 140.0, 17.0
-  feel.dipv = feel.dipv + (-k * feel.dip - c * feel.dipv) * dt
-  feel.dip = math.max(-0.32, math.min(0.06, feel.dip + feel.dipv * dt))
+  local nsub = math.min(30, math.max(1, math.ceil(dt * 120)))
+  local h = dt / nsub
+  for _ = 1, nsub do
+    feel.dipv = feel.dipv + (-k * feel.dip - c * feel.dipv) * h
+    feel.dip = math.max(-0.32, math.min(0.06, feel.dip + feel.dipv * h))
+  end
   feel.trauma = math.max(0.0, feel.trauma - 1.4 * dt)
   shakeTrauma = feel.trauma
   -- the field of view
@@ -1497,8 +1515,13 @@ local function place_camera(node, dt)
     local tb = script_ref("tool_belt")
     if tb and tb.inUse then shoulder_t = time end
   end
-  local want = (not piloting and not firstPerson and time - shoulder_t < 1.5)
-    and (params.shoulder or 0) or 0.0
+  local want = 0.0
+  if not piloting and not firstPerson then
+    want = (time - shoulder_t < 1.5) and (params.shoulder or 0) or (params.shoulder_idle or 0)
+    -- (zoomed far out the offset means nothing; zoomed right in it would put
+    -- the crew at the screen's edge)
+    want = want * math.clamp((room_d - params.min_distance) / 2.0, 0.0, 1.0)
+  end
   shoulder_now = shoulder_now + (want - shoulder_now) * (1 - math.exp(-5 * dt))
   if shoulder_now > 0.01 and not piloting then
     local right = fwd:cross(up):normalized()

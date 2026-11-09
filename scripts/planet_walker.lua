@@ -836,7 +836,12 @@ local function resolve_model(node)
     for _, c in ipairs(node:children()) do
       if c.name == "AstroModel" then model = c end
     end
-    if model then model_y = model.y or 0.0 end
+    if model then
+      model_y = model.y or 0.0
+      local sc = model.scale
+      HS = (type(sc) == "number" and sc) or (sc and sc.x) or 1.0
+      if not (HS > 0.2 and HS < 5) then HS = 1.0 end
+    end
   end
   if model and not anim then
     local a = model:animator()
@@ -1022,6 +1027,13 @@ end
 -- forward is a YAW of MaleArm. Back and Hip sit near 180° about X: pitch keeps
 -- its sign on them, yaw and roll flip. The numbers are the rest pose's, from
 -- tools/gen_astronaut_anims.py.
+-- HUMAN SCALE. The AstroModel node's scale (scenes/system.ron and the
+-- CrewBody / CrewDoll / Remains prefabs; tests/smoke_human_scale.lua keeps them
+-- equal): the rig is built 1:1 (soles at 0, the helmet's top at 1.92 m) and
+-- this shrinks it to the crew's real height. Everything below is SKELETON
+-- space; what plant() mixes with world points (raycasts, the body's place) is
+-- multiplied by HS, and a world length written to a bone is divided by it.
+HS = 1.0
 local MA_UP = 1.61496       -- MaleArm's origin over the soles (skeleton space)
 local HIP_Y, HIP_Z = -0.30701, 0.01622   -- the Hip joint from Back's origin
 local ANKLE = 0.0722        -- the ankle over the sole, standing flat
@@ -1178,7 +1190,7 @@ feet = { plant = 0, stride = 0, drop = 0, left = 0, right = 0 }
 local function foot_ground(node, over, up, fwd, out_dir)
   local pts = {}
   for i, o in ipairs(PROBE) do
-    local q = over + fwd * o[1] + out_dir * o[2]
+    local q = over + fwd * (o[1] * HS) + out_dir * (o[2] * HS)
     local h = raycast(q + up * REACH_UP, -up, REACH_UP + REACH_DOWN, node)
     if not (h and h.x) then pts = nil break end
     pts[i] = vec3(h.x, h.y, h.z)
@@ -1268,8 +1280,9 @@ local function plant(node, dt, up, stand_want, stride_want)
   -- (0.117.0-rc3, card 0413), so only this frame's `ma_dy` comes off.
   local ma = anim:boneWorld("MaleArm")
   if not ma then return end
-  ma = ma - up * ma_dy
-  local base = node.pos + up * ((ma - node.pos):dot(up) - MA_UP)
+  ma = ma - up * (ma_dy * HS)
+  local base = node.pos + up * ((ma - node.pos):dot(up) - MA_UP * HS)
+  local ANK = ANKLE * HS
   local frame = ground_frame(node)
   local k = 1 - math.exp(-FOOT_EASE * dt)
   -- A body shoved along the ground (a contact pushing it out of a slope) takes
@@ -1284,7 +1297,7 @@ local function plant(node, dt, up, stand_want, stride_want)
     local st = STANCE[side]
     local stand_pos, stand_n, clip_ankle, stride_off, stride_n
     if plant_w >= 0.01 then
-      local p = ma + left * st.x + fwd * st.z
+      local p = ma + left * (st.x * HS) + fwd * (st.z * HS)
       local over = base + (p - base) - up * (p - base):dot(up)
       local gp, gn = foot_ground(node, over, up, fwd, out_dir)
       if gp then
@@ -1311,8 +1324,8 @@ local function plant(node, dt, up, stand_want, stride_want)
           stand_pos = frame:toWorld(fs.p)
           stand_n = (frame:toWorld(fs.p + fs.n) - stand_pos):normalized()
         end
-        stand_pos = stand_pos + stand_n * ANKLE
-        low = math.min(low, (stand_pos - stand_n * ANKLE - over):dot(up) * (1 - sw))
+        stand_pos = stand_pos + stand_n * ANK
+        low = math.min(low, (stand_pos - stand_n * ANK - over):dot(up) * (1 - sw))
       else
         foot_s[side] = nil
       end
@@ -1340,7 +1353,7 @@ local function plant(node, dt, up, stand_want, stride_want)
         -- A foot that is down (near the soles) is the one the hips must
         -- reach for; a foot swinging through the air is lifted with the
         -- ground under it but does not pull the hips down.
-        local down = 1 - smoothstep(ANKLE + 0.04, ANKLE + 0.14, hc)
+        local down = 1 - smoothstep(ANK + 0.04, ANK + 0.14, hc)
         low = math.min(low, stride_off * down * sw)
       end
     end
@@ -1351,13 +1364,14 @@ local function plant(node, dt, up, stand_want, stride_want)
   -- CROUCHED the hips go down on top of that, and the legs, still reaching
   -- for the same ground, fold (the knees bend forward over the toes);
   -- a slide sits lower still.
-  local cd = crouchAmount * (sliding and CROUCH_DROP + 0.1 or CROUCH_DROP) * wsum
+  local cd = crouchAmount * (sliding and CROUCH_DROP + 0.1 or CROUCH_DROP) * HS * wsum
   local drop = plant_drop * wsum + cd
-  anim:addBonePos("MaleArm", vec3(0, -drop, 0))
-  ma_dy = ma_dy - drop
+  -- (a world drop, written in skeleton units)
+  anim:addBonePos("MaleArm", vec3(0, -drop / HS, 0))
+  ma_dy = ma_dy - drop / HS
   feet.plant, feet.stride, feet.drop = plant_w, stride_w, drop
   -- The hip joints, after that drop: what each leg can reach from.
-  local hips = ma - up * drop - up * (MA_UP - 0.974)
+  local hips = ma - up * drop - up * ((MA_UP - 0.974) * HS)
   for _, side in ipairs(SIDES) do
     local h = hits[side]
     local out_dir = left * (side == "Left" and 1 or -1)
@@ -1375,12 +1389,12 @@ local function plant(node, dt, up, stand_want, stride_want)
     if target then
       -- Beyond the leg (from its hip joint, which stands out to its side):
       -- let the clip have the foot rather than straighten toward a hole.
-      local hip = hips + out_dir * 0.1 + fwd * -0.045
+      local hip = hips + out_dir * (0.1 * HS) + fwd * (-0.045 * HS)
       local reach = (target - hip):length()
       -- (Standing straight, the ankle is 0.90 m from the hip: the rest leg is
       -- all but straight, so the fade starts past the leg, with slack for the
       -- hip joint being an estimate.)
-      w = w * (1 - smoothstep(LEG * 1.05, LEG * 1.25, reach))
+      w = w * (1 - smoothstep(LEG * HS * 1.05, LEG * HS * 1.25, reach))
       feet[side == "Left" and "left" or "right"] = w
       if w > 0.005 then
         anim:reach("Foot." .. side, target, { pole = knee_pole(hip, target, up, fwd, out_dir), weight = w })
@@ -1389,11 +1403,11 @@ local function plant(node, dt, up, stand_want, stride_want)
         local sole_w = w
         if h.clip and sw > 0.5 then
           local hc = (h.clip - base):dot(up)
-          sole_w = w * (1 - smoothstep(ANKLE + 0.02, ANKLE + 0.1, hc)) * 0.8
+          sole_w = w * (1 - smoothstep(ANK + 0.02, ANK + 0.1, hc)) * 0.8
         end
         if sole_w > 0.01 then
           local along = (fwd - n * fwd:dot(n)):normalized()
-          anim:lookAt({ "Foot." .. side }, target + along * TOE.z + n * TOE.y,
+          anim:lookAt({ "Foot." .. side }, target + along * (TOE.z * HS) + n * (TOE.y * HS),
             { axis = TOE, limit = 35, weight = sole_w })
         end
       end
@@ -1588,7 +1602,7 @@ local function swim_pose(dt)
   -- moved so the turn is about the body's middle rather than its own origin.
   local p, b, L = sw_pitch, sw_bank, SWIM_PIVOT
   anim:addBoneRot("MaleArm", b, p, 0)
-  local dy = L * math.cos(p) * math.cos(b) - L + sw_lift
+  local dy = L * math.cos(p) * math.cos(b) - L + sw_lift / HS
   anim:addBonePos("MaleArm", vec3(-L * math.cos(p) * math.sin(b), dy, L * math.sin(p)))
   ma_dy = ma_dy + dy
 end
@@ -2024,6 +2038,55 @@ function walls(node, dt, ux, uy, uz, vup, airborne)
   return vup
 end
 
+-- STEP UP (playtest 2026-11-09: "i cant go up stairs right now how you would
+-- expect"). A step used to be climbed only if the solver happened to push the
+-- capsule up its edge (the kerb's pop keeps that push, up to `step_pop`): on
+-- a flight of plain 0.2 m risers it pushed straight back instead, and the
+-- crew stopped dead on the third step at a sprint, the tenth at a walk
+-- (walkprobe stairs, lane "boxes"). Now, with the feet down and the walk
+-- pressing a face that is a riser — the ground a capsule's radius ahead is
+-- higher than the soles by no more than `step_h`, walkable, with room over
+-- the head and in front of the shins at the new height — the body is lifted
+-- onto it in the tick channel (shift_up: frame-safe on a moving world), and
+-- the snap-down leaves it alone for a moment while it walks on. The camera's
+-- pivot is eased (planet_camera `pivot_follow`), so the view rises smoothly.
+stepState = { t = -10.0, h = 0.0, n = 0 }   -- the last step: when, how high; how many (probes)
+function stepUp(node, ux, uy, uz)
+  if not (raycast and spherecast) or (params.step_h or 0) <= 0 then return false end
+  local hl = math.sqrt(mvx * mvx + mvy * mvy + mvz * mvz)
+  if hl < 0.3 then return false end
+  local wn = node.wallNormal
+  if not (wn and wn.x) then return false end
+  local dx, dy, dz = mvx / hl, mvy / hl, mvz / hl
+  local wu = wn.x * ux + wn.y * uy + wn.z * uz
+  local hx, hy, hz = wn.x - ux * wu, wn.y - uy * wu, wn.z - uz * wu
+  local hn = math.sqrt(hx * hx + hy * hy + hz * hz)
+  -- a face across the walk (its normal against it), not a slope or a floor
+  if hn < 0.5 or (hx * dx + hy * dy + hz * dz) / hn > -0.35 then return false end
+  local half, r, sh = body_h(node) * 0.5, (WALK_R or 0.33), params.step_h
+  -- the top of what is in front: straight down from a step's height over the
+  -- soles, a radius and a little ahead of the centre
+  local a, top = r + 0.12, -half + sh + 0.05
+  local ox, oy, oz = node.x + dx * a + ux * top, node.y + dy * a + uy * top, node.z + dz * a + uz * top
+  local h = raycast(ox, oy, oz, -ux, -uy, -uz, sh + 0.07, node)
+  if not (h and h.distance) then return false end
+  local rise = sh + 0.05 - h.distance
+  if rise < 0.03 or rise > sh then return false end
+  if h.nx and (h.nx * ux + h.ny * uy + h.nz * uz) < WALK_SLOPE_COS then return false end
+  -- room over the head for the rise
+  local cx, cy, cz = node.x, node.y, node.z
+  local up_hit = spherecast(vec3(cx, cy, cz), vec3(ux, uy, uz), r - 0.03, half - r + rise + 0.03, node)
+  if up_hit and up_hit.distance and not (up_hit.node and up_hit.node.id == node.id) then return false end
+  -- and in front of the shins at the new height (a wall behind the step)
+  local lz = -half + r + rise + 0.04
+  local fh = spherecast(vec3(cx + ux * lz, cy + uy * lz, cz + uz * lz), vec3(dx, dy, dz), r - 0.03, 0.15, node)
+  if fh and fh.distance and not (fh.node and fh.node.id == node.id) then return false end
+  shift_up(node, ux, uy, uz, rise + 0.01)
+  local ss = stepState
+  ss.t, ss.h, ss.n = time, rise, ss.n + 1
+  return true
+end
+
 function update(node, dt)
   if not cam then cam = ref("planet_camera") end
   -- The character model rides as a child; keep its visibility mirrored to us so
@@ -2366,6 +2429,11 @@ function update(node, dt)
   local impact = -vup
   local airborne = (not on_ground) or (time - jump_t) < JUMP_LOCKOUT
   local jumped = false
+  -- (lifted onto a step, the walk goes on at the speed asked for: the riser
+  -- took it out this tick, and easing back up would stall every tread)
+  if not airborne and not swimming and not sliding and contact and stepUp(node, ux, uy, uz) then
+    mvx, mvy, mvz = tx, ty, tz
+  end
   if swimming then
     -- Buoyancy pulls you toward the surface, hard when you're deep and gently
     -- as you reach it, so floating is the resting state rather than a fight.
@@ -2446,7 +2514,7 @@ function update(node, dt)
     -- (Not while falling: a fall the probe sees coming is no crest, and the
     -- pull added on top of it nearly doubled the speed of the last half
     -- metre of every drop.)
-    if not contact and ground_hit and vup > -3.0 then
+    if not contact and ground_hit and vup > -3.0 and time - stepState.t > 0.2 then
       local gap = ground_hit.distance - body_h(node) * 0.5
       if gap > 0.02 and (was_contact or gap < 0.35) then
         slope = math.min(slope, -math.min(8.0, gap / math.max(dt, 1e-3)))

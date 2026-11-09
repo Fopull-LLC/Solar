@@ -37,7 +37,7 @@ defaults = {
   reach = 2.6,       -- m: the crew's reach, plus the part's half size
   max_rel = 1.0,     -- m/s relative to the part, to start
   hold_secs = 2.0,   -- the RCS Pack's HOLD after a release in space
-  half_h = 1.0,      -- the suit capsule's half height (planet_walker's 2 m)
+  half_h = 0.95,     -- the suit capsule's half height (planet_walker's 1.9 m)
 }
 
 local function P(k) return (params and params[k]) or defaults[k] end

@@ -769,8 +769,11 @@ cam.face(0, 0, -1)
 tick(60)
 check("...not the instant the trigger lets go", side_offset() > 0.3, string.format("%.2f m", side_offset()))
 tick(120)
-check("...and back behind the crew once the tool has rested", math.abs(side_offset()) < 0.05,
-  string.format("%.2f m", side_offset()))
+-- (at rest the view keeps a small offset of its own, `shoulder_idle`, 0.3 m:
+-- playtest 2026-11-09's third-person framing)
+local idle = cam.params.shoulder_idle or 0
+check("...and back to the resting offset once the tool has rested", math.abs(side_offset() - idle) < 0.05,
+  string.format("%.2f m (resting %.2f)", side_offset(), idle))
 
 -- LEAN. Setting off leans the chest forward; stopping sits it back.
 keys.w = true

@@ -128,7 +128,7 @@
         name: "Wall 4",
         transform: (
             translation: (1.1868, 1.8861, 0.0000),
-            rotation: (0.00000, 0.00000, 0.00000, 0.70711),
+            rotation: (0.00000, 0.00000, -0.63439, 0.77301),
             scale: (1.0, 1.0, 1.0),
         ),
         matter: Empty,
@@ -152,7 +152,7 @@
         name: "Wall 5",
         transform: (
             translation: (1.0061, 2.3222, 0.0000),
-            rotation: (0.00000, 0.00000, 0.00000, 0.70711),
+            rotation: (0.00000, 0.00000, -0.47140, 0.88192),
             scale: (1.0, 1.0, 1.0),
         ),
         matter: Empty,
@@ -176,7 +176,7 @@
         name: "Wall 6",
         transform: (
             translation: (0.6722, 2.6561, 0.0000),
-            rotation: (0.00000, 0.00000, 0.00000, 0.70711),
+            rotation: (0.00000, 0.00000, -0.29028, 0.95694),
             scale: (1.0, 1.0, 1.0),
         ),
         matter: Empty,
@@ -200,7 +200,7 @@
         name: "Wall 7",
         transform: (
             translation: (0.2361, 2.8368, 0.0000),
-            rotation: (0.00000, 0.00000, 0.00000, 0.70711),
+            rotation: (0.00000, 0.00000, -0.09802, 0.99518),
             scale: (1.0, 1.0, 1.0),
         ),
         matter: Empty,
@@ -224,7 +224,7 @@
         name: "Wall 8",
         transform: (
             translation: (-0.2361, 2.8368, 0.0000),
-            rotation: (0.00000, 0.00000, 0.00000, 0.70711),
+            rotation: (0.00000, 0.00000, 0.09802, 0.99518),
             scale: (1.0, 1.0, 1.0),
         ),
         matter: Empty,
@@ -248,7 +248,7 @@
         name: "Wall 9",
         transform: (
             translation: (-0.6722, 2.6561, 0.0000),
-            rotation: (0.00000, 0.00000, 0.00000, 0.70711),
+            rotation: (0.00000, 0.00000, 0.29028, 0.95694),
             scale: (1.0, 1.0, 1.0),
         ),
         matter: Empty,
@@ -272,7 +272,7 @@
         name: "Wall 10",
         transform: (
             translation: (-1.0061, 2.3222, 0.0000),
-            rotation: (0.00000, 0.00000, 0.00000, 0.70711),
+            rotation: (0.00000, 0.00000, 0.47140, 0.88192),
             scale: (1.0, 1.0, 1.0),
         ),
         matter: Empty,
@@ -296,7 +296,7 @@
         name: "Wall 11",
         transform: (
             translation: (-1.1868, 1.8861, 0.0000),
-            rotation: (0.00000, 0.00000, 0.00000, 0.70711),
+            rotation: (0.00000, 0.00000, 0.63439, 0.77301),
             scale: (1.0, 1.0, 1.0),
         ),
         matter: Empty,
@@ -320,7 +320,7 @@
         name: "Wall 12",
         transform: (
             translation: (-1.1868, 1.4139, 0.0000),
-            rotation: (0.00000, 0.00000, 0.00000, 0.70711),
+            rotation: (0.00000, 0.00000, 0.77301, 0.63439),
             scale: (1.0, 1.0, 1.0),
         ),
         matter: Empty,
@@ -344,7 +344,7 @@
         name: "Wall 13",
         transform: (
             translation: (-1.0061, 0.9778, 0.0000),
-            rotation: (0.00000, 0.00000, 0.00000, 0.70711),
+            rotation: (0.00000, 0.00000, 0.88192, 0.47140),
             scale: (1.0, 1.0, 1.0),
         ),
         matter: Empty,
@@ -368,7 +368,7 @@
         name: "Wall 14",
         transform: (
             translation: (-0.6722, 0.6439, 0.0000),
-            rotation: (0.00000, 0.00000, 0.00000, 0.70711),
+            rotation: (0.00000, 0.00000, 0.95694, 0.29028),
             scale: (1.0, 1.0, 1.0),
         ),
         matter: Empty,
@@ -392,7 +392,7 @@
         name: "Wall 15",
         transform: (
             translation: (-0.2361, 0.4632, 0.0000),
-            rotation: (0.00000, 0.00000, 0.00000, 0.70711),
+            rotation: (0.00000, 0.00000, 0.99518, 0.09802),
             scale: (1.0, 1.0, 1.0),
         ),
         matter: Empty,
@@ -416,7 +416,7 @@
         name: "Wall 16",
         transform: (
             translation: (0.2361, 0.4632, 0.0000),
-            rotation: (0.00000, 0.00000, 0.00000, 0.70711),
+            rotation: (0.00000, 0.00000, 0.99518, -0.09802),
             scale: (1.0, 1.0, 1.0),
         ),
         matter: Empty,
@@ -440,7 +440,7 @@
         name: "Wall 17",
         transform: (
             translation: (0.6722, 0.6439, 0.0000),
-            rotation: (0.00000, 0.00000, 0.00000, 0.70711),
+            rotation: (0.00000, 0.00000, 0.95694, -0.29028),
             scale: (1.0, 1.0, 1.0),
         ),
         matter: Empty,
@@ -464,7 +464,7 @@
         name: "Wall 18",
         transform: (
             translation: (1.0061, 0.9778, 0.0000),
-            rotation: (0.00000, 0.00000, 0.00000, 0.70711),
+            rotation: (0.00000, 0.00000, 0.88192, -0.47140),
             scale: (1.0, 1.0, 1.0),
         ),
         matter: Empty,
@@ -488,7 +488,7 @@
         name: "Wall 19",
         transform: (
             translation: (1.1868, 1.4139, 0.0000),
-            rotation: (0.00000, 0.00000, 0.00000, 0.70711),
+            rotation: (0.00000, 0.00000, -0.77301, 0.63439),
             scale: (1.0, 1.0, 1.0),
         ),
         matter: Empty,

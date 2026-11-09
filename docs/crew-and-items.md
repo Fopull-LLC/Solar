@@ -583,6 +583,41 @@ No member aboard has a rigid body. Each one is a **CrewDoll**: the suit model
 None of the 35 `find("Astronaut")` callers change. Callers that need to know *who*
 ask `crew.activeId()`.
 
+### 4.1.1 Body size: HUMAN SCALE (2026-11-09)
+
+Ty's playtest: "makes my character feel extremely tiny … can maybe make the
+humans slightly smaller … always just barely able to fit through doorways".
+
+| | Before | Now |
+|---|---|---|
+| Suit rig (models/astronaut, built 1:1) | soles 0, head 1.876, helmet top 1.918 | unchanged: the model is not edited |
+| **HUMAN SCALE**: the `AstroModel` node's scale | 1.0 | **0.95** |
+| Suited height (helmet top) | 1.92 m | **1.82 m** |
+| Capsule (Astronaut, CrewBody) | r 0.33, 2.0 m | **r 0.31, 1.9 m** |
+| First-person eye over the soles (`planet_camera.eye_height` + 0.94) | 1.85 m (in the helmet's crown) | **1.67 m** (the model's eyes) |
+| Room over the helmet in a kit door (2.05 m) | 0.13 m | **0.23 m** |
+| Width left in a 0.9 m door | 0.12 m a side | 0.14 m a side |
+
+- **Where it lives:** the scale of the `AstroModel` node in `scenes/system.ron`
+  (the Astronaut) and of the suit node in `prefabs/CrewBody`, `CrewDoll` and
+  `Remains`. `tests/smoke_human_scale.lua` keeps all four equal. It also checks
+  the capsule against the suited height and the door, the kinematic half
+  heights (`crew_body`, `crew_task` `half_h`), and the eye.
+- **planet_walker reads it** (`HS`, from the node at bind) for everything its
+  foot and hip IK mixes with world points. Skeleton-space numbers (bone writes,
+  MA_UP in the lean) stay unscaled, and world lengths written to a bone are
+  divided by it. Bone-driven code (IK targets, held items as children of the
+  model) needs nothing.
+- **A new suit model** (the realistic-suit pass): build it on the same rig at
+  1:1, with soles at 0, MaleArm's origin at 1.615 and the helmet top at about
+  1.92, and HUMAN SCALE does the rest. A suit built at its final size instead
+  (about 1.82 m to the helmet top) sets the scale to 1.0 in all four places.
+  The test then says whether the eye and the capsule still fit.
+- **The third-person view** (planet_camera): 4.5 m out (was 7) round a pivot at
+  the shoulders, 0.5 m over the capsule's centre (was 1.2: over the helmet,
+  2.2 m over the soles, which is higher than a kit door's 2.05 m lintel), 0.3 m
+  off the right shoulder at rest (`shoulder_idle`), and a start pitch of −0.22.
+
 ### 4.2 What is switchable
 
 The **switch list** contains:

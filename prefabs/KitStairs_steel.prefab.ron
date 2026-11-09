@@ -44,7 +44,7 @@
         name: "Wall 1",
         transform: (
             translation: (0.0000, 1.1501, -0.0333),
-            rotation: (0.00000, 0.00000, 0.00000, 0.70711),
+            rotation: (-0.00000, 0.95709, 0.28978, 0.00000),
             scale: (1.0, 1.0, 1.0),
         ),
         matter: Empty,
@@ -68,7 +68,7 @@
         name: "Wall 2",
         transform: (
             translation: (-0.8300, 1.7500, 0.0000),
-            rotation: (0.00000, 0.00000, 0.00000, 0.70711),
+            rotation: (-0.00000, 0.95709, 0.28978, 0.00000),
             scale: (1.0, 1.0, 1.0),
         ),
         matter: Empty,
@@ -92,7 +92,7 @@
         name: "Wall 3",
         transform: (
             translation: (0.8300, 1.7500, 0.0000),
-            rotation: (0.00000, 0.00000, 0.00000, 0.70711),
+            rotation: (-0.00000, 0.95709, 0.28978, 0.00000),
             scale: (1.0, 1.0, 1.0),
         ),
         matter: Empty,

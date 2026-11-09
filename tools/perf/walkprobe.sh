@@ -3,7 +3,11 @@
 # a low ceiling, on a yard of static boxes 130 m out from the base
 # (walkprobe_modes.lua; playtest 2026-11-05 "super slidy … fall damage").
 #
-#   walkprobe.sh <engine> [modes]   modes: walk walkshots (pictures: $WORK/proj/save/user/walkshots/)
+#   walkprobe.sh <engine> [modes]   modes: walk walkshots stairs (pictures: $WORK/proj/save/user/walkshots/)
+#   stairs: up and down the kit's stairs, ladder and steps and a plain box flight
+#   (`WP R stair` lines; BENCH_PARAMS='("stairshots", 1.0)' adds a picture)
+#   tpshots: the third-person view at its defaults in a doorway, by a rover body,
+#   on open ground, the doorway in first person, and the crew's measured size (`WP SIZE`)
 #   env: WORK LOCK SOLAR TAG PATCHES BENCH_PARAMS as bench.sh (TMO defaults to 300 s a mode)
 #
 # It splices walkprobe_modes.lua into a copy of perfbench.lua (before its
@@ -24,7 +28,9 @@ s = s[:i] + m + s[i:]
 s = s.replace('    elseif MODE == "plane" then run_plane()',
               '    elseif MODE == "plane" then run_plane()\n'
               '    elseif MODE == "walk" then run_walk()\n'
-              '    elseif MODE == "walkshots" then run_walkshots()')
+              '    elseif MODE == "walkshots" then run_walkshots()\n'
+              '    elseif MODE == "stairs" then run_stairs()\n'
+              '    elseif MODE == "tpshots" then run_tpshots()')
 open(p, 'w').write(s)
 PY
 luajit -e "assert(loadfile('$S/tools/perfbench.lua'))" || exit 3

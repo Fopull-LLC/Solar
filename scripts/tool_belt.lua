@@ -1033,15 +1033,33 @@ local function show_models(node, dt, carrying)
     local ddx, ddy, ddz = fx - view.lfx, fy - view.lfy, fz - view.lfz
     local yaw_rate = (ddx * r.x + ddy * r.y + ddz * r.z) / math.max(dt, 1e-3)
     local pit_rate = (ddx * u.x + ddy * u.y + ddz * u.z) / math.max(dt, 1e-3)
-    view.vx = view.vx - math.max(-6, math.min(6, yaw_rate)) * 0.008
-    view.vy = view.vy - math.max(-6, math.min(6, pit_rate)) * 0.008
+    -- (a push per SECOND of turning, not per frame: it was 0.008 a frame,
+    -- so the same flick swung the hands four times as far at 120 fps as at 30)
+    view.vx = view.vx - math.max(-6, math.min(6, yaw_rate)) * 0.48 * dt
+    view.vy = view.vy - math.max(-6, math.min(6, pit_rate)) * 0.48 * dt
   end
   view.lfx, view.lfy, view.lfz = fx, fy, fz
+  -- THE SPRINGS IN SMALL STEPS (playtest 2026-11-09: "first person models
+  -- jitter, worse the longer you play"). One explicit step of these springs
+  -- is unstable past ~90 ms (k 110 / c 17: a 100 ms frame multiplies the
+  -- swing by 1.3 and flips it, 150 ms by 3.5; the kick's k 160 by 1.8 and
+  -- 4.7): every hitch kicked the hands, and as a long session's frames grew
+  -- longer the hands shook. Stepped at 1/120 s at most they settle the same
+  -- way whatever the frame rate.
   local k, c = 110.0, 17.0
-  view.vx = view.vx + (-k * view.sx - c * view.vx) * dt
-  view.vy = view.vy + (-k * view.sy - c * view.vy) * dt
-  view.sx = math.max(-0.035, math.min(0.035, view.sx + view.vx * dt))
-  view.sy = math.max(-0.03, math.min(0.03, view.sy + view.vy * dt))
+  local nsub = math.min(30, math.max(1, math.ceil(dt * 120)))
+  local hs = dt / nsub
+  local kick_in = recoil * 9.0
+  recoil = 0.0
+  for _ = 1, nsub do
+    view.vx = view.vx + (-k * view.sx - c * view.vx) * hs
+    view.vy = view.vy + (-k * view.sy - c * view.vy) * hs
+    view.sx = math.max(-0.035, math.min(0.035, view.sx + view.vx * hs))
+    view.sy = math.max(-0.03, math.min(0.03, view.sy + view.vy * hs))
+    view.kickv = view.kickv + (-160 * view.kick - 18 * view.kickv) * hs + kick_in
+    kick_in = 0.0
+    view.kick = math.max(-0.02, math.min(0.07, view.kick + view.kickv * hs))
+  end
   -- Bob: a figure-eight with the stride, from the crew's speed over the
   -- ground (the planet's own motion taken out), at the walker's step rate.
   local sp = 0
@@ -1051,14 +1069,11 @@ local function show_models(node, dt, carrying)
     sp = math.min(9, len(v.x, v.y, v.z))
     if pw and pw.grounded == false then sp = 0 end
   end
-  view.bob = view.bob + dt * (sp / 1.6) * math.pi
+  view.bob = (view.bob + dt * (sp / 1.6) * math.pi) % (2 * math.pi)
   local bob = math.min(1, sp / 5)
   local bx = math.sin(view.bob) * 0.006 * bob
   local by = math.abs(math.cos(view.bob)) * 0.008 * bob
-  -- Recoil: a damped kick back and up.
-  view.kickv = view.kickv + (-160 * view.kick - 18 * view.kickv) * dt + recoil * 9.0
-  recoil = 0.0
-  view.kick = math.max(-0.02, math.min(0.07, view.kick + view.kickv * dt))
+  -- (Recoil, a damped kick back and up: stepped with the sway, above.)
   -- A swap drops the tool out of the bottom of the view and brings the new
   -- one up; a held trigger brings the tool in a touch toward the middle.
   local dip = swap_dip()
@@ -1293,10 +1308,16 @@ local function articulate(dt)
     mech.kickv = mech.kickv + 1.1
     mech.clawv = mech.clawv + 9.0
   end
-  mech.clawv = mech.clawv + ((want - mech.claw) * 320 - mech.clawv * 24) * dt
-  mech.claw = math.max(-0.2, math.min(0.95, mech.claw + mech.clawv * dt))
-  mech.kickv = mech.kickv + (-mech.kick * 300 - mech.kickv * 26) * dt
-  mech.kick = math.max(-0.01, math.min(0.06, mech.kick + mech.kickv * dt))
+  -- (in steps of 1/120 s at most: one explicit step of these stiff springs
+  -- is unstable past ~75 ms, and a hitch flapped the claws; see the sway)
+  local nsub = math.min(30, math.max(1, math.ceil(dt * 120)))
+  local h = dt / nsub
+  for _ = 1, nsub do
+    mech.clawv = mech.clawv + ((want - mech.claw) * 320 - mech.clawv * 24) * h
+    mech.claw = math.max(-0.2, math.min(0.95, mech.claw + mech.clawv * h))
+    mech.kickv = mech.kickv + (-mech.kick * 300 - mech.kickv * 26) * h
+    mech.kick = math.max(-0.01, math.min(0.06, mech.kick + mech.kickv * h))
+  end
   if id == "gravgun" then
     local r = mech_of(set, "gravgun")
     if r and r.ids then

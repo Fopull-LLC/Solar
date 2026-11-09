@@ -548,3 +548,251 @@ local function run_walkshots()
   end
   WPL("DONE")
 end
+
+-- ── stairs: up and down kit stairs and a plain flight (playtest 2026-11-09) ──
+-- "i cant go up stairs right now how you would expect i just get pushed off to
+-- the side". Lanes beside the yard's start, every flight rising toward +F from
+-- its foot, a solid landing at its head:
+--   steel     the kit's Stairs (one storey), steel: 12 risers of 0.2 m, 3.6 m run
+--   concrete  the same in concrete
+--   boxes     a PLAIN flight of 12 static boxes (0.2 m risers, 0.3 m treads,
+--             1.6 m wide): no Solar collider generator in it (the engine repro)
+--   ladder    the kit's Ship's Ladder (47°, 2.4 m over 2.2 m)
+--   steps     the kit's Steps 0.8 m (four risers)
+-- Each lane: walk and sprint up from 1.5 m before the foot, walk and sprint
+-- down from 2 m onto the landing; first person (the view holds its heading);
+-- and the steel flight once in third person. `WP R stair` lines: whether it
+-- reached the top (or the bottom), the time, the most sideways offset from the
+-- lane's centre (m) and the most sideways speed (m/s), the most up speed, the
+-- longest time airborne, the fall monitor's Δv.
+local STAIRS = {}
+local function kit_piece(prefab, fc, l, name)
+  local c = yard(fc, l, 0)
+  local w = W_(c)
+  -- setUp's forward is the node's -Z: the piece's -Z toward +F puts its +Z
+  -- (a stair's foot, a wall's outside) toward -F, so a flight rises along +F
+  local fw = { x = Y.F.x, y = Y.F.y, z = Y.F.z }
+  spawn(prefab, vec3(w.x, w.y, w.z), function(inst)
+    inst:setUp(vec3(Y.U.x, Y.U.y, Y.U.z), vec3(fw.x, fw.y, fw.z))
+    inst.x, inst.y, inst.z = c.x, c.y, c.z
+    inst.name = "WP " .. name
+    SLABS[#SLABS + 1] = inst
+  end, Y.pn)
+end
+local function build_stairs()
+  local fc = 3.0
+  -- lane = { name, l, foot f, head f, rise }
+  local function lane(name, l, foot, head, rise) STAIRS[#STAIRS + 1] = { name = name, l = l, foot = foot, head = head, rise = rise } end
+  kit_piece("KitStairs_steel", fc, 10, "stairs steel")
+  lane("steel", 10, fc - 1.8, fc + 1.8, 2.4)
+  kit_piece("KitStairs_concrete", fc, 14, "stairs concrete")
+  lane("concrete", 14, fc - 1.8, fc + 1.8, 2.4)
+  -- the plain flight: step k is a box from the floor to 0.2 k, 0.3 m deep
+  local foot = fc - 1.8
+  for k = 1, 12 do
+    box("step" .. k, foot + (k - 0.5) * 0.3, 18, 0.1 * k, 1.6, 0.2 * k, 0.3, 0, { 0.5, 0.5, 0.48 })
+  end
+  lane("boxes", 18, foot, foot + 3.6, 2.4)
+  kit_piece("KitLadder_steel", fc, -12, "ladder")
+  lane("ladder", -12, fc - 1.1, fc + 1.1, 2.4)
+  kit_piece("KitSteps_steel", fc, -16, "steps")
+  lane("steps", -16, fc - 0.5, fc + 0.5, 0.8)
+  -- the landings: solid blocks at each head, 4 m deep, 3 m wide
+  for _, s in ipairs(STAIRS) do
+    box("landing " .. s.name, s.head + 2.0, s.l, s.rise / 2, 3.0, s.rise, 4.0, 0, { 0.4, 0.4, 0.4 })
+  end
+  wait(1.5)
+end
+local function stair_run(s, dir, sprint, tp)
+  local pw, pc = walker(), findScript("planet_camera")
+  pc.firstPerson = not tp
+  local up = dir > 0
+  local f0 = up and (s.foot - 1.5) or (s.head + 2.0)
+  local u0 = (up and 0 or s.rise) + 1.05
+  put(f0, s.l, u0)
+  face(up and Y.F or { x = -Y.F.x, y = -Y.F.y, z = -Y.F.z }, -0.15)
+  settle()
+  local t_done, lmax, vlmax, air_run, air_max, prev_t = nil, 0, 0, 0, 0, nil
+  local secs = sprint and 4.0 or 6.0
+  local st = run("stair", secs, function(t)
+    if t_done and t > t_done + 0.4 then pw.steer(0, 0, false) else pw.steer(1, 0, sprint) end
+  end, { trace = true, on = function(h, t)
+    -- only while on the flight (between its foot and head)
+    if h.f > s.foot - 0.3 and h.f < s.head + 0.3 then
+      lmax = math.max(lmax, math.abs(h.l - s.l))
+      vlmax = math.max(vlmax, math.abs(h.vl))
+    end
+    if h.g then air_run = 0 else air_run = air_run + (h.t - (prev_t or h.t)); air_max = math.max(air_max, air_run) end
+    prev_t = h.t
+    if not t_done and ((up and h.u >= s.rise + 0.7 and h.f > s.head + 0.3) or (not up and h.u <= 1.3 and h.f < s.foot - 0.3)) then t_done = t end
+  end })
+  local tag = string.format("%s %s %s%s", s.name, up and "up" or "down", sprint and "sprint" or "walk", tp and " tp" or "")
+  WPL("R stair %-24s %s in %s s | side max %.2f m, side speed max %.2f m/s | vu max %.2f | end f %.2f l %.2f u %.2f | air max %.2f s | dv %.1f",
+    tag, t_done and (up and "TOP" or "BOTTOM") or "FAILED", t_done and string.format("%.2f", t_done) or "-",
+    lmax, vlmax, st.vu_max, st.last.f, st.last.l - s.l, st.last.u, air_max, st.dv)
+  if not t_done or lmax > 0.25 then trace_line(tag:gsub(" ", "_"), st, 8) end
+  return t_done ~= nil, lmax
+end
+local function run_stairs()
+  wait_ready(90)
+  wait(2)
+  clear_weather()
+  local C = crew()
+  if C and C.setSafety then C.setSafety("invincible") end
+  if C and C.impactRule then
+    local orig = C.impactRule
+    C.impactRule = function(dv)
+      if dv > DV.max then DV.max = dv end
+      return orig(dv)
+    end
+  end
+  local pw = walker()
+  if pw.bump then pw.bump = function() end end
+  if not build_yard() then return end
+  build_stairs()
+  WPL("stairs built: %d lanes; walker step_h %.2f, step_pop %.2f, walk %.1f, run %.1f", #STAIRS, pw.params.step_h or -1,
+    pw.params.step_pop or -1, pw.params.walk, pw.params.run)
+  local ok_n, n = 0, 0
+  for _, s in ipairs(STAIRS) do
+    for _, dir in ipairs({ 1, -1 }) do
+      for _, sp in ipairs({ false, true }) do
+        local ok, lm = stair_run(s, dir, sp, false)
+        n = n + 1
+        if ok and lm <= 0.25 then ok_n = ok_n + 1 end
+      end
+    end
+  end
+  stair_run(STAIRS[1], 1, false, true)
+  stair_run(STAIRS[1], -1, false, true)
+  WPL("R stairs summary: %d of %d first-person runs reached the end with < 0.25 m sideways", ok_n, n)
+  if (params.stairshots or 0) > 0 then
+    local pc = findScript("planet_camera")
+    pc.firstPerson = false
+    put(STAIRS[1].foot - 3.0, STAIRS[1].l + 4.0, 1.05)
+    pc.face(Y.F.x - Y.L.x * 0.8, Y.F.y - Y.L.y * 0.8, Y.F.z - Y.L.z * 0.8, -0.25)
+    wait(1.0)
+    wshot("stairs_lanes")
+  end
+  WPL("DONE")
+end
+
+-- ── tpshots: the crew's size and the third-person view (playtest 2026-11-09) ──
+-- "makes my character feel extremely tiny and maybe appears a little too high
+-- up above my head ... always just barely able to fit through doorways".
+-- Pictures at the camera's DEFAULT distance and pitch (user://walkshots/):
+-- in a kit Door Wall's open door, beside a rover body, on open ground, and the
+-- doorway in first person. Logs the crew's measured size: the soles, the Head
+-- bone, the helmet node and the eye over the capsule's bottom.
+local function crew_size(tag)
+  local A, b = astro(), home()
+  local pc = findScript("planet_camera")
+  local u = unit({ x = A.x - b.x, y = A.y - b.y, z = A.z - b.z })
+  local function over(p) return (p.x - A.x) * u.x + (p.y - A.y) * u.y + (p.z - A.z) * u.z end
+  local m
+  for _, c in ipairs(A:children() or {}) do if c.name == "AstroModel" then m = c end end
+  local an = m and m:animator()
+  local head = an and an:boneWorld("Head")
+  local foot = an and an:boneWorld("Foot.Left")
+  local helm
+  for _, c in ipairs((m and m:children()) or {}) do if c.name == "Helmet" then helm = c end end
+  local pw = walker()
+  local hh = (pw.WALK_H or 2.0) * 0.5
+  local sc = m and m.scale
+  WPL("SIZE %s: capsule h %.2f r %.2f | model scale %s y %.3f | Head bone %.3f over the capsule's bottom, left ankle %.3f, helmet node %s, camera eye %.3f (%s) | distance %.2f height %.2f",
+    tag, hh * 2, pw.WALK_R or -1, tostring(type(sc) == "number" and sc or (sc and sc.x)), m and m.y or -9,
+    head and over(head) + hh or -1, foot and over(foot) + hh or -1, helm and string.format("%.3f", over(helm.worldPos) + hh) or "-",
+    over({ x = pc.cam_x, y = pc.cam_y, z = pc.cam_z }) + hh, tostring(pc.firstPerson), pc.params.distance or -1, pc.params.height or -1)
+end
+local function run_tpshots()
+  wait_ready(90)
+  wait(2)
+  clear_weather()
+  local C = crew()
+  if C and C.setSafety then C.setSafety("invincible") end
+  local pw = walker()
+  local pc = findScript("planet_camera")
+  if pw.bump then pw.bump = function() end end
+  if not build_yard() then return end
+  local F, L, U = Y.F, Y.L, Y.U
+  -- (the yard's open strip: f -8..9 is clear of its test pieces)
+  -- a Door Wall across F at f = 6, l = 5, its door slid open; a wall either side
+  kit_piece("KitDoorWall_steel", 6, 5, "doorwall")
+  kit_piece("KitWall_steel", 6, 7, "wallL")
+  kit_piece("KitWall_steel", 6, 3, "wallR")
+  -- a rover (the gameplay probe's 4-wheel rover, as display copies): its body
+  -- along F at f = 3, l = -6
+  local X = cross(U, L)                       -- the body's +X (U x L)
+  local function disp(prefab, f, l, u, fw, name)
+    local c = yard(f, l, u)
+    local w = W_(c)
+    spawn(prefab, vec3(w.x, w.y, w.z), function(inst)
+      inst:setUp(vec3(U.x, U.y, U.z), vec3(fw.x, fw.y, fw.z))
+      inst.x, inst.y, inst.z = c.x, c.y, c.z
+      inst.name = "WP " .. name
+    end, { parent = Y.pn, body = false })
+  end
+  local xf, xl = dot(X, F), dot(X, L)          -- the body's X in the yard's axes
+  local function rv(bx, by, bz)                -- body-local -> yard (f, l, u)
+    return 3 + xf * bx + 0 * bz, -6 + xl * bx + bz, by
+  end
+  disp("PartRoverBody", 3, -6, 0.62, L, "rover")
+  for _, w in ipairs({ { 0.66, 0.7 }, { 0.66, -0.7 }, { -0.66, 0.7 }, { -0.66, -0.7 } }) do
+    local f, l, u = rv(w[1], 0.42, w[2])
+    disp("PartWheelM", f, l, u, X, "wheel")
+  end
+  wait(1.5)
+  local dl = 5.0
+  for _, n in ipairs(SLABS) do
+    if n.name == "WP doorwall" then
+      for _, c in ipairs(n:children() or {}) do
+        if c.name == "Door" then
+          c.x = c.x + 0.92
+          WPL("door leaf slid open")
+        end
+      end
+    end
+  end
+  pc.firstPerson = false
+  local P0 = pc.params.start_pitch or -0.3
+  -- 1. open ground (the pitch the view starts with, along F)
+  put(0, 0, 1.0); settle()
+  pc.face(F.x, F.y, F.z, P0)
+  wait(1.5)
+  crew_size("open")
+  wshot("tp_open")
+  -- 2. beside the rover, looking along it
+  put(1.0, -4.4, 1.0); settle()
+  pc.face(F.x - L.x * 0.35, F.y - L.y * 0.35, F.z - L.z * 0.35, P0)
+  wait(1.5)
+  wshot("tp_rover")
+  -- 3. in the doorway, walking through; the opening is the leaf's old place
+  local s = nil
+  for _, sign in ipairs({ 1, -1 }) do
+    if not s then
+      local l0 = 5 + sign * 0.46
+      put(3.5, l0, 1.0); settle()
+      pc.face(F.x, F.y, F.z, P0)
+      local r = run("door_walk", 1.6, function() pw.steer(1, 0, false) end)
+      if r.last.f > 6.6 then s = r; dl = l0 end
+      pw.steer(0, 0, false)
+    end
+  end
+  WPL("R door_walk: %s at l %.2f, side %.2f m", s and "THROUGH" or "BLOCKED", dl, s and (s.last.l - dl) or 0)
+  put(5.85, dl, 1.0); settle()
+  pc.face(F.x, F.y, F.z, P0)
+  wait(1.5)
+  crew_size("door")
+  wshot("tp_door")
+  put(4.0, dl, 1.0); settle()
+  pc.face(F.x, F.y, F.z, P0)
+  wait(1.5)
+  wshot("tp_door_approach")
+  pc.firstPerson = true
+  put(4.6, dl, 1.0); settle()
+  pc.face(F.x, F.y, F.z, 0.0)
+  wait(1.0)
+  crew_size("door_fp")
+  wshot("fp_door")
+  pc.firstPerson = false
+  WPL("DONE")
+end

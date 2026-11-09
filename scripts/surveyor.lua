@@ -693,8 +693,13 @@ local function sway_tick(dt, moving)
   local dp = S.drift * 0.7 * (0.55 * math.sin(tau * 0.47 * t + 1.7) + 0.45 * math.sin(tau * 1.13 * t))
   -- the kick: a damped spring (it overshoots a hair and settles)
   local w, z = 13.0, 0.55
-  sway.kickv = sway.kickv + (-w * w * sway.kick - 2 * z * w * sway.kickv) * dt
-  sway.kick = sway.kick + sway.kickv * dt
+  -- (in steps of 1/120 s at most: one explicit step is unstable past ~0.1 s)
+  local nsub = math.min(30, math.max(1, math.ceil(dt * 120)))
+  local h = dt / nsub
+  for _ = 1, nsub do
+    sway.kickv = sway.kickv + (-w * w * sway.kick - 2 * z * w * sway.kickv) * h
+    sway.kick = sway.kick + sway.kickv * h
+  end
   local oy, op = sway.yaw, sway.pitch
   sway.yaw = amp * dy
   sway.pitch = amp * (breath + dp) + sway.kick

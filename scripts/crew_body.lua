@@ -19,7 +19,7 @@
 -- bindDoll(id) for a doll. They take no input.
 
 defaults = {
-  half_h = 1.0,        -- the capsule's half height (planet_walker's 2 m suit)
+  half_h = 0.95,       -- the capsule's half height (planet_walker's 1.9 m suit capsule)
   model_yaw = 3.14159265,
   down_roll = 0.35,    -- downed: rad rolled from flat on the back onto a side
   down_lift = 0.38,    -- downed: the capsule's centre this far off the ground (the pack under them)

@@ -547,6 +547,13 @@ def quat_x(a):
 def quat_from_basis(M):
     """A rotation matrix (columns = the box's local x, y, z) → (x, y, z, w)."""
     m = np.asarray(M, float)
+    # A MIRRORED basis (det -1: e.g. columns side, up, along with side = along x up)
+    # has no quaternion; the formulas below then return garbage (the kit stairs'
+    # ramp came out as (0, 0, 0, 0.707), a flat slab at mid-height, 2026-11-09).
+    # A box is symmetric, so flipping its x axis gives the same solid.
+    if np.linalg.det(m) < 0:
+        m = m.copy()
+        m[:, 0] = -m[:, 0]
     t = m[0, 0] + m[1, 1] + m[2, 2]
     if t > 0:
         s = math.sqrt(t + 1.0) * 2
