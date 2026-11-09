@@ -82,11 +82,13 @@ function GS.regrow(why)
   if mf and mf.clearAll then mf.clearAll() end
   wait(2)
   local last, lastT = "", time
-  while time - t0 < 35 do
+  -- (the field adds patches a few rows at a time and can sit still for seconds between them:
+  -- 3.5 s of quiet stopped Ultra at 9 of ~45 sources, so wait for 10 s of quiet, up to 70 s)
+  while time - t0 < 70 do
     local c = perf.counts() or {}
     local k = string.format("%s/%s/%s", tostring(ff and ff.sources), tostring(ff and ff.count), tostring(c.chunks))
     if k ~= last then last, lastT = k, time end
-    if time - lastT > 3.5 and not (terrain.busy and terrain.busy()) then break end
+    if time - lastT > 10 and not (terrain.busy and terrain.busy()) then break end
     wait(0.5)
   end
   P("GS regrown (%s) in %.0f s: flora sources %s props %s, chunks %s", why, time - t0, tostring(ff and ff.sources),
@@ -210,6 +212,8 @@ function GS.presets(scene)
   local key = GS.world_key()
   for _, lv in ipairs(GS.list(params.presets, "Low,Medium,High,Ultra")) do
     GS.set_level(lv)
+    -- gsfog: every level at this many volumetric fog steps (the Volumetric quality row, as a player sets it)
+    if (params.gsfog or 0) > 0 then local st = findScript("settings"); if st and st.set then st.set("gfx_fog_quality", math.floor(params.gsfog)) end end
     wait(1.3)                       -- graphics.apply_world runs once a second
     local k2 = GS.world_key()
     if k2 ~= key then GS.regrow(lv .. ": " .. k2); key = k2 else wait(1.0) end
@@ -271,7 +275,8 @@ function GS.scene(sc)
     -- the spaceport as a new save starts it: the crew by the hangar, the
     -- lamps, the glass and the buildings all round
     local a = astro()
-    local rel = sub(a, b)
+    -- (the spawn as the run found it, body-relative: an earlier scene has moved the crew)
+    local rel = GS.spawnRel or sub(a, b)
     local d = unit(rel)
     GS.go({ dir = d, r = len(rel.x, rel.y, rel.z) - 0.9, t = unit(cross(d, { x = 0.3, y = 0.9, z = 0.1 })) })
     P("GS at the base spawn")
@@ -390,9 +395,65 @@ function GS.kt(match)
   return { on = function(c) P("GPU kit hidden (%s): %d nodes", tostring(match), GS.kit_vis(match, false)) end, off = function(c) GS.kit_vis(match, true) end }
 end
 TOGGLES.kit0, TOGGLES.kitglass0, TOGGLES.kitwalls0, TOGGLES.kitfloor0 = GS.kt(nil), GS.kt("[Ww]indow"), GS.kt("[Ww]all"), GS.kt("[Ff]loor")
+-- A picture every 0.25 s for 3 s (960x540): what the frame does right after a
+-- teleport or a level switch (the Grid fog's dark wedge, 2026-11-09).
+function GS.burst(tag)
+  local n = 0
+  for i = 0, 12 do
+    local nm = string.format("burst_%s_%02d", tag, i)
+    n = n + 1
+    local ok = pcall(camera.capture, { w = 960, h = 540, ui = false, draws = false, format = "jpeg", quality = 85 }, function(bytes)
+      if bytes then assets.writeBytes("user://gpusweep/" .. nm .. ".jpg", bytes) end
+      n = n - 1
+    end)
+    if not ok then n = n - 1 end
+    wait(0.25)
+  end
+  wait_for(function() return n <= 0 end, 10, "burst shots")
+  P("GS BURST %s done", tag)
+end
+function GS.run_burst()
+  -- the meadow, on High, straight after the teleport; then Medium for 6 s and
+  -- High again with no teleport
+  GS.set_level("Medium"); wait(1.5)
+  GS.view = { mode = "eye", head = 0, h = 1.7, pitch = -3 }
+  local spot = find_meadow(params.gpu_walk or 120)
+  GS.cam_on()
+  stand_at(spot); GS.fwd = spot.t
+  GS.set_level("High")
+  GS.burst("teleport_high")
+  wait(4)
+  GS.burst("settled_high")
+  GS.set_level("Medium"); wait(6)
+  GS.set_level("High")
+  GS.burst("switch_high")
+  GS.set_level("Medium")
+  GS.burst("switch_medium")
+end
+-- every LightProbes volume in the scene switched off (E's GI-ambient question)
+TOGGLES.probes0 = {
+  on = function(c)
+    c.probes = {}
+    for _, nm in ipairs({ "LightProbes", "Light Probes", "Probes", "GI", "Lighting" }) do
+      for _, nd in ipairs(findAll and findAll(nm) or {}) do
+        local lp = nd.valid and nd:getcomponent("LightProbes")
+        if lp then c.probes[#c.probes + 1] = lp; lp.enabled = false end
+      end
+    end
+    P("GPU probes0: %d LightProbes volumes switched off", #c.probes)
+  end,
+  off = function(c) for _, lp in ipairs(c.probes or {}) do pcall(function() lp.enabled = true end) end end,
+}
 function GS.run()
   wait_ready(120)
   GS.key0 = GS.world_key()
+  do local a0, b0 = astro(), home(); if a0 and b0 then GS.spawnRel = sub(a0, b0) end end
+  if (params.gsburst or 0) > 0 then
+    local okb, eb = pcall(GS.run_burst)
+    if not okb then P("GS ERROR burst %s", tostring(eb)) end
+    GS.cam_off()
+    return
+  end
   local gx = findScript("graphics")
   if gx and gx.params then gx.params.autoLower = false end
   local st = findScript("settings")
@@ -428,7 +489,24 @@ function GS.run()
       if GS.view.mode ~= "over" or sc == "bigbase" then GS.cam_on() end
       wait(1.5)
       local ok2, e2
-      if params.gstoggles then
+      if params.gsvariants then
+        -- variants at one level, each measured like a preset row and photographed
+        -- (strs gsvariants = "base,foglight0,…": TOGGLES names, "base" = untouched)
+        GS.set_level(tostring(params.gfx or "High")); wait(1.5)
+        if GS.world_key() ~= GS.key0 then GS.regrow("level") end
+        local c = { L = light(), PP = post(), gx = findScript("graphics"), at = findScript("atmosphere"),
+                    fl = findScript("flora_field"), fb = findScript("far_bodies") }
+        ok2 = true
+        for _, v in ipairs(GS.list(params.gsvariants)) do
+          local T = TOGGLES[v]
+          if T then pcall(T.on, c) end
+          wait(2)
+          local okm, em = pcall(GS.measure, sc, tostring(params.gfx or "High") .. "_" .. v)
+          if not okm then P("GS ERROR variant %s: %s", v, tostring(em)) end
+          if T then pcall(T.off, c) end
+          wait(1.5)
+        end
+      elseif params.gstoggles then
         -- the toggle A/B (perfbench gpu mode's) at this scene, at one level
         GS.set_level(tostring(params.gfx or "High")); wait(1.5)
         if (params.gsnovol or 0) > 0 then local at = findScript("atmosphere"); if at then at.params.volumetric = false end; P("GS volumetric OFF for this run"); wait(1) end

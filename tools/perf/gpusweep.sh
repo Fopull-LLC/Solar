@@ -77,7 +77,8 @@ else
   MODE=gpusweep
   SCP=""; [ -n "${SCALE:-}" ] && SCP=", (\"gsscale\", $SCALE)"
   BP="(\"gssecs\", ${SECS:-8}.0), (\"gpusecs\", ${SECS:-6}.0), (\"shots\", ${SHOTS:-0}.0), (\"gsshots\", ${GSSHOTS:-0}.0), (\"coverage\", ${COVER:-0}.0), (\"fov\", ${FOV:-75}.0)$SCP$AL${GSX:+, $GSX}"
-  GT=""; [ -n "${GSTOG:-}" ] && GT=", (\"gstoggles\", \"1\"), (\"toggles\", \"$GSTOG\"), (\"gfx\", \"${GFX:-High}\")"
+  [ -n "${GSV:-}" ] && GT=", (\"gsvariants\", \"$GSV\"), (\"gfx\", \"${GFX:-High}\")"
+  [ -n "${GSV:-}" ] || GT=""; [ -n "${GSTOG:-}" ] && GT=", (\"gstoggles\", \"1\"), (\"toggles\", \"$GSTOG\"), (\"gfx\", \"${GFX:-High}\")"
   BS="(\"scenes\", \"$SC\")$GT, (\"presets\", \"${PRESETS:-Low,Medium,High,Ultra}\"), (\"res\", \"${RES:-1920x1080}\"), (\"tag\", \"$TAG\")"
 fi
 if [ "${EXCL:-0}" = 1 ]; then

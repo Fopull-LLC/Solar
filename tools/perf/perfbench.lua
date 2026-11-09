@@ -3244,7 +3244,7 @@ local MAIN = function()
   if params.res and app.setDisplayMode then
     local w, h = tostring(params.res):match("(%d+)x(%d+)")
     if w then
-      local ok, err = pcall(app.setDisplayMode, { width = tonumber(w), height = tonumber(h), fullscreen = params.fullscreen > 0 })
+      local ok, err = pcall(app.setDisplayMode, { width = tonumber(w), height = tonumber(h), fullscreen = params.fullscreen > 0, monitor = params.monitor or (tonumber(h) > 1100 and 1 or nil) })
       P("GPU display mode %sx%s fullscreen %s: %s %s", w, h, tostring(params.fullscreen > 0), tostring(ok), tostring(err))
       wait(1)
     end

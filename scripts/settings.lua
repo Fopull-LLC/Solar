@@ -126,15 +126,15 @@ GFX_OPTIONS = {
     preset = { Low = 1.0, Medium = 1.0, High = 1.0, Ultra = 1.0 },
     desc = "Soft shade in corners and under overhangs. Off skips the pass entirely." },
   -- atmosphere
-  { key = "volumetric", group = "air", label = "Volumetric air", cost = "high (15–30 ms in a meadow)", opts = onoff(),
-    preset = { Low = false, Medium = false, High = true, Ultra = true },
+  { key = "volumetric", group = "air", label = "Volumetric air", cost = "low (about 1–1.5 ms, grid fog)", opts = onoff(),
+    preset = { Low = false, Medium = true, High = true, Ultra = true },
     desc = "Real fog in the air: valleys fill with mist and hills stand out of it. Off draws the same haze as distance fog." },
-  { key = "fog_quality", group = "air", label = "Volumetric quality", cost = "medium (about 2 ms a step at 1440p)",
+  { key = "fog_quality", group = "air", label = "Volumetric quality", cost = "low (0.1–0.3 ms a step at 1440p)",
     opts = { { label = "Low", value = 8 }, { label = "Medium", value = 12 }, { label = "High", value = 16 },
              { label = "Max", value = 24 } },
-    -- 2026-11-09 (gpusweep): each step costs ~1.9 ms on a 1440p meadow at High
-    -- (12 -> 8: -7.9 ms, 12 -> 16: +7.3); 8 until the engine grids its fog
-    preset = { Low = 8, Medium = 8, High = 8, Ultra = 12 },
+    -- 2026-11-09 (gpusweep, engine .1461 grid fog): a step costs ~0.1-0.3 ms on a
+    -- 1440p meadow at High (8/12/16: 14.9/15.4/16.0 ms); the march cost ~1.9 ms a step
+    preset = { Low = 8, Medium = 8, High = 12, Ultra = 16 },
     desc = "Samples along each ray of volumetric air. Lower is cheaper and thins thick mist a little." },
   { key = "shafts", group = "air", label = "Sun shafts", cost = "low to high", opts = onoff(),
     preset = { Low = false, Medium = false, High = false, Ultra = true },

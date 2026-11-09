@@ -116,7 +116,7 @@ ok(gx.level() == "High" and st.get("vol_Master") == 0.5, "...and reads the same 
 st.set("gfx_level", "Ultra"); frames(3)
 ok(not st.gfxCustom(), "a preset is not Custom (the old Off blur is cleared with it)")
 ok(light.contactShadows == true and light.reflections == true, "Ultra: contact shadows and reflections on")
-ok(light.fogSteps == 12 and gx.volumetric == true and gx.shafts == true, "Ultra: volumetric air, 12 steps, shafts")
+ok(light.fogSteps == 16 and gx.volumetric == true and gx.shafts == true, "Ultra: volumetric air, 16 steps, shafts")
 ok(math.abs(light.shadowDistance - 400) < 1, "Ultra: 400 m of shadow (got " .. light.shadowDistance .. ")")
 ok(decal_max == 2048, "Ultra: 2,048 ground marks (got " .. decal_max .. ")")
 ok(math.abs(flora.params.reach - 1.2) < 1e-6 and flora.params.max_props == 9000, "Ultra: plants reach 1.2, 9,000 of them")
