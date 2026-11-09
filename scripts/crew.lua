@@ -1239,6 +1239,13 @@ function busy(m)
     local h = math.ceil(t.left / 3600)
     return string.format("retraining as %s (%d h left)", ROLE_NAME[t.to] or "?", h)
   end
+  -- (expansion X3: a member who goes with an automated run is away on it)
+  local ro = ref("route_ops")
+  if ro and ro.memberBusy then
+    local r = rec_of(m)
+    local ok, b = pcall(ro.memberBusy, r and r.id or m)
+    if ok and b then return b end
+  end
   return nil
 end
 

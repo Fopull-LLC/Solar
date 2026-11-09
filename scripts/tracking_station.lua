@@ -608,6 +608,20 @@ end
 local function anchor(e, B, now, tol)
   local n = e.node
   if n and n.valid ~= false then return n.x, n.y, n.z end
+  if e.route and e.run then
+    -- (X3: a run's craft where its schedule puts it NOW — body-relative,
+    -- placed against this frame's body read; once per game time)
+    if e._pt ~= now then
+      local ro = ref("route_ops")
+      local bn, x, y, z
+      if ro and ro.poseNow then bn, x, y, z = ro.poseNow(e.run) end
+      if bn then e.body, e.rx, e.ry, e.rz = bn, x, y, z end
+      e._pt = now
+    end
+    local rb = e.body and B[e.body]
+    if not (rb and e.rx) then return nil end
+    return rb.x + e.rx, rb.y + e.ry, rb.z + e.rz
+  end
   local b = e.body and B[e.body]
   if not (b and e.rx) then return nil end
   if e.conic and (b.mu or 0) > 0 and space.propagate then
@@ -1086,6 +1100,13 @@ local function describe_fleet(S, dh)
       end
     end
   end
+  -- (X3, the discovery hint: until the first run, the RUNS heading says how)
+  if not (V.groups.RUNS and #V.groups.RUNS > 0) and (filter.kind == "all" or filter.kind == "craft") and #rows > 0 then
+    rows[#rows + 1] = { "row", key = "Gruns", w = "100%", h = 22, gap = 6, pad = 4, align = "center",
+      { "text", key = "t", style = "panel/label", w = "fit", h = "fit", text = "RUNS" },
+      { "text", key = "n", style = "panel/cellMuted", w = "grow", h = "fit", maxLines = 1, overflow = "ellipsis",
+        text = "none yet · fly a cargo flight from a Build Stand and back" } }
+  end
   if #rows == 0 then
     if #S.entries > 0 then
       rows[1] = txt("empty", "panel/body", "Nothing matches. Clear the search, or pick All.")
@@ -1445,6 +1466,75 @@ local function card_body(e, rows, S)
     key_btn("pln", "panel/secondary", "Plan", "grow", 30, false, "Plan a manoeuvre on the chart", function() plan(e) end) }
 end
 
+-- THE RUN CARD (expansion X3, scripts/route_ops.lua): where it is in its
+-- cycle, the manifest (what it loads and unloads, where), the fuel a cycle
+-- and where it comes from, the crew or PROBE, the cycles done, what it has
+-- moved and the RP the Intake earned from it; Pause / Resume, Cancel.
+local function run_action(e, what)
+  local ro = ref("route_ops")
+  if not ro then return end
+  local ok, w
+  if what == "pause" then ok, w = ro.pauseRun(e.runId)
+  elseif what == "resume" then ok, w = ro.resumeRun(e.runId)
+  else ok, w = ro.cancelRun(e.runId) end
+  if ok then sfx("click"); say(what == "cancel" and ("the run ends " .. (w == "now" and "now" or "when it is back on its stand")) or (what == "pause" and "paused" or "running again"))
+  else say(w) end
+  local fv = ref("fleet_view")
+  if fv and fv.snapshot then fv.snapshot(true) end
+  dirty_all = true
+end
+local function card_route(e, rows)
+  local ro = ref("route_ops")
+  local r = e.run
+  header(e, rows, false)
+  if not (ro and r) then return end
+  local ph = r.phases and r.phases[r.ph]
+  local lines = {}
+  lines[#lines + 1] = string.format("CYCLE %d   %s A CYCLE", (r.cycles or 0) + 1, string.upper(ro.fmtTime(r.dur or 0)))
+  lines[#lines + 1] = string.format("FUEL %d kg A CYCLE · THE STAND REFILLS IT", math.floor((r.fuel or 0) + 0.5))
+  if e.body and e.rx then lines[#lines + 1] = string.format("%s  %s", string.upper(e.body), latlon(e.rx, e.ry, e.rz)) end
+  rows[#rows + 1] = crt("crt", lines)
+  rows[#rows + 1] = txt("sit2", r.state == "waiting" and "panel/hintWarn" or "panel/cell", ro.situationOf(r))
+  rows[#rows + 1] = rule("rm")
+  rows[#rows + 1] = txt("mh", "panel/label", "MANIFEST · EVERY CYCLE, EXACTLY AS FLOWN")
+  for i, m in ipairs(ro.manifestOf(r)) do
+    rows[#rows + 1] = txt("m" .. i, "panel/cell", m.where .. ": " .. m.text)
+  end
+  rows[#rows + 1] = txt("crew", "panel/cellMuted", r.crewed and ("CREW · " .. table.concat(ro.crewNames(r), ", ") .. " (they go with it)") or "PROBE · no crew aboard")
+  local moved = {}
+  for m, n in pairs(r.moved or {}) do moved[#moved + 1] = string.format("%d %s", n, (ref("materials") and ref("materials").label(m)) or m) end
+  table.sort(moved)
+  rows[#rows + 1] = txt("done", "panel/cell", string.format("%d cycle%s done%s%s", r.cycles or 0, (r.cycles or 0) == 1 and "" or "s",
+    #moved > 0 and (" · moved " .. table.concat(moved, ", ")) or "", (r.rp or 0) > 0 and string.format(" · %d RP", math.floor(r.rp + 0.5)) or ""))
+  rows[#rows + 1] = txt("never", "panel/hint", "An automated run never fails on its own: it repeats the flight you flew. It waits, and says why, when a store runs short.")
+  rows[#rows + 1] = rule("r2")
+  local paused = r.state == "paused"
+  local acts = { "row", key = "a1", w = "100%", h = 30, gap = 6, pad = 0,
+    key_btn("foc", "panel/secondary", "Focus", "grow", 30, false, nil, function() focus_on(e, true) end),
+    key_btn("pz", "panel/secondary", paused and "Resume" or "Pause", "grow", 30, r.state == "cancelled", nil,
+      function() run_action(e, paused and "resume" or "pause") end) }
+  local a = armed_on(e.id)
+  acts[#acts + 1] = key_btn("end", "panel/danger", a and "Confirm" or "Cancel run", "grow", 30, r.cancel == true,
+    "End the run: the craft stays on its stand (on the way, it comes back first). Twice to confirm.",
+    function()
+      if armed_on(e.id) then armed = nil; run_action(e, "cancel")
+      else armed = { id = e.id, t = now() + 4.0 } end
+      dirty_all = true
+    end, { selected = a or nil })
+  rows[#rows + 1] = acts
+  if r.cancel then rows[#rows + 1] = txt("cx", "panel/hintWarn", "Cancelling: it ends when it is back on its stand.") end
+  if ph and r.state == "run" then
+    local ev = ro.events and ro.events() or {}
+    for _, x in ipairs(ev) do
+      if x.id == e.id then
+        local fv = ref("fleet_view")
+        rows[#rows + 1] = txt("nx", "panel/cellMuted", string.format("NEXT  %s  %s", fv and fv.clockText and fv.clockText(x.t) or "", x.what))
+        break
+      end
+    end
+  end
+end
+
 local function describe_card(S, dh)
   local co = ref("company")
   local e = sel_entry(S)
@@ -1452,6 +1542,7 @@ local function describe_card(S, dh)
   rows[#rows + 1] = { "text", key = "ttl", style = "panel/label", w = "100%", h = "fit", text = "SELECTED" }
   if not e then
     rows[#rows + 1] = txt("none", "panel/body", "Click a row, or an icon on the map.")
+  elseif e.kind == "route" then card_route(e, rows)
   elseif e.craft then card_craft(e, rows, co)
   elseif e.kind == "crew" then card_crew(e, rows)
   elseif e.kind == "body" then card_body(e, rows, S)
@@ -1500,6 +1591,12 @@ events_now = function(S)
     for _, e in ipairs(S.entries) do if e.piloted then fl = e end end
     extra[#extra + 1] = { t = m.lead, id = fl and fl.id, glyph = fl and fl.glyph or "◆", name = fl and fl.name or "your craft",
                           what = string.format("maneuver node · Δv %.0f m/s", m.dv or 0) }
+  end
+  -- (X3: each run's next departure and arrival, on the agency clock — a
+  -- difference, so the same seconds as the sim's)
+  local ro = ref("route_ops")
+  if ro and ro.events then
+    for _, x in ipairs(ro.events() or {}) do extra[#extra + 1] = x end
   end
   if cr and cr.roster and cr.training then
     for _, r in ipairs(cr.roster()) do
@@ -1759,6 +1856,30 @@ local function fleet_rows(t, _ctx)
   local co = ref("company")
   out[#out + 1] = { type = "info", id = "where", label = "WHERE", value = e.sub or "" }
   if e.attn then out[#out + 1] = { type = "info", id = "attn", label = "ALERT", value = e.attn.text } end
+  if e.kind == "route" and e.run then
+    -- (X3: a run's rows — its card, focus, its next event, pause, cancel)
+    local r = e.run
+    local paused = r.state == "paused"
+    if r.state == "waiting" then out[#out + 1] = { type = "info", id = "why", label = "WAITING", value = tostring(r.why or "") } end
+    out[#out + 1] = { type = "action", id = "select", label = "Show its card", act = function() pick(e.id) return true end }
+    out[#out + 1] = { type = "action", id = "focus", label = "Focus", hint = "frame", act = function() pick(e.id); focus_on(e, true) return true end }
+    local ro = ref("route_ops")
+    local ev = nil
+    for _, x in ipairs(ro and ro.events and ro.events() or {}) do if x.id == e.id and not ev then ev = x end end
+    local fv = ref("fleet_view")
+    out[#out + 1] = { type = "action", id = "warp", label = ev and ("Warp to: " .. tostring(ev.what)) or "Warp to its next event",
+                      hint = ev and fv and fv.clockText and fv.clockText(ev.t) or nil, enabled = ev ~= nil, why = "nothing ahead for it",
+                      act = function() return warp_to_event(ev) end }
+    out[#out + 1] = { type = "action", id = paused and "resume" or "pause", label = paused and "Resume the run" or "Pause the run",
+                      act = function() run_action(e, paused and "resume" or "pause") return true end }
+    out[#out + 1] = { type = "sub", id = "end", label = "Cancel the run…", danger = true, enabled = not r.cancel, why = "it is cancelling",
+                      sub = function()
+                        return { { type = "info", id = "sure", label = "THE CRAFT STAYS ON ITS STAND", value = "" },
+                                 { type = "action", id = "confirm", label = "Cancel " .. tostring(e.name), danger = true,
+                                   act = function() run_action(e, "cancel") return true end } }, "CANCEL THE RUN"
+                      end }
+    return out, string.upper(tostring(e.name or "?")), e.sub
+  end
   if e.craft then
     local label, ok, why = fly_state(e, co)
     if label then
@@ -2208,6 +2329,36 @@ function drawMap(ctx)
   local tA35 = wall()
   -- 2. the orbit lines that matter
   if ctx.drawTrack and ctx.TRAJ and ctx.show and ctx.show.orbits then draw_tracks(ctx, S, B, tnow, dt, k, fv) end
+  -- (X3: the selected or hovered run's leg, dashed: its recorded samples,
+  -- body-relative, placed against this frame's body read — rule 2)
+  if draw and draw.line then
+    -- (a ground route lies on the terrain: drawn through it, not hidden by it)
+    local was_dt = draw.depthTest and draw.depthTest()
+    if was_dt then draw.depthTest(false) end
+    for _, id in ipairs({ selected, hover ~= selected and hover or nil }) do
+      local e = id and S.byId[id]
+      local r = e and e.route and e.run
+      local ph = r and r.phases and r.phases[r.ph]
+      if ph and ph.k == "leg" and ph.path then
+        local col = id == selected and C.accent or C.lit
+        local P = ph.path
+        for i = 1, #P - 1 do
+          local a, b2 = P[i], P[i + 1]
+          local ba, bb = B[a.body], B[b2.body]
+          if ba and bb and a.body == b2.body then
+            -- each segment in 6 dashes, every other one drawn
+            for d = 0, 5, 2 do
+              local u0, u1 = d / 6, (d + 1) / 6
+              draw.line(ba.x + a.x + (b2.x - a.x) * u0, ba.y + a.y + (b2.y - a.y) * u0, ba.z + a.z + (b2.z - a.z) * u0,
+                        ba.x + a.x + (b2.x - a.x) * u1, ba.y + a.y + (b2.y - a.y) * u1, ba.z + a.z + (b2.z - a.z) * u1,
+                        col[1], col[2], col[3], 0.85)
+            end
+          end
+        end
+      end
+    end
+    if was_dt then draw.depthTest(true) end
+  end
   local tA4 = wall()
   ema("a_gather", (tA2 - tA1) * 1000); ema("a_proj", (tA3 - tA2) * 1000); ema("a_pts", (tA35 - tA3) * 1000); ema("a_tracks", (tA4 - tA35) * 1000)
   if ctx.cine then stats.ms = (wall() - t0) * 1000 return end

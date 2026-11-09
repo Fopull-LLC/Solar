@@ -37,11 +37,11 @@
 
 GLYPHS = { crew = "◉", rocket = "◆", probe = "◇", plane = "✈", rover = "⊡", bike = "⊚", station = "⊕",
            debris = "✕", relay = "▲", flag = "▮", remains = "◌", structure = "⌂", base = "⌂", outpost = "⌂", target = "◎",
-           recover = "↺", body = "●" }
+           recover = "↺", body = "●", route = "⇄" }
 -- Layout priority (map_labels): the selected and hovered are lifted above these.
 PRIO = { crew = 70, rocket = 66, station = 64, plane = 62, rover = 60, bike = 60, probe = 50, base = 46, outpost = 46,
-         relay = 40, flag = 38, structure = 36, remains = 30, debris = 10, body = 5 }
-GROUPS = { "ATTENTION", "CREW", "CREWED", "PROBES", "LANDED", "DEBRIS", "RELAYS", "FLAGS", "BASES", "STRUCTURES", "WORLDS" }
+         relay = 40, flag = 38, structure = 36, remains = 30, debris = 10, body = 5, route = 55 }
+GROUPS = { "ATTENTION", "CREW", "CREWED", "PROBES", "RUNS", "LANDED", "DEBRIS", "RELAYS", "FLAGS", "BASES", "STRUCTURES", "WORLDS" }
 RATE = 2.0          -- s between rebuilds while nothing says it changed (a source
                     -- that changes rebuilds it at once; live craft are placed
                     -- from their nodes every frame anyway)
@@ -164,6 +164,7 @@ ALWAYS = { base = true, outpost = true }
 
 function kindClass(e)
   if e.kind == "body" then return "world" end
+  if e.kind == "route" then return "craft" end
   if e.craft then return "craft" end
   if e.kind == "crew" then return "crew" end
   if e.kind == "debris" then return "debris" end
@@ -247,6 +248,7 @@ function situation(e)
     return string.format("%s · %d %% known", what, math.floor((e.known or 0) * 100 + 0.5))
   end
   if e.kind == "outpost" then return "base · " .. (e.tier or "mast") end
+  if e.kind == "route" then return e.rsub or "automated run" end
   if e.kind == "debris" then
     if e.dkind == "landed" then return "debris · down on " .. tostring(e.body) end
     if e.dkind == "orbit" then return "debris · orbiting " .. tostring(e.body) end
@@ -266,6 +268,7 @@ end
 
 -- The one number that matters for its state.
 function keyNumber(e)
+  if e.kind == "route" then return string.format("cycle %d", (e.cycles or 0) + 1) end
   if e.kind == "body" then return e.surveyed and "SURVEYED" or string.format("%d %%", math.floor((e.known or 0) * 100 + 0.5)) end
   if e.kind == "crew" then
     if e.status == "afoot" and e.o2 then return string.format("O2 %d %%", pct(e.o2)) end
@@ -281,6 +284,7 @@ end
 -- The FLEET list heading that claims it (ATTENTION first, by the caller).
 function groupOf(e)
   if e.attn then return "ATTENTION" end
+  if e.kind == "route" then return "RUNS" end
   if e.kind == "crew" then return "CREW" end
   if e.craft then
     if e.crewed then return "CREWED" end
@@ -402,15 +406,16 @@ decodes = 0            -- (tests: how many records were decoded)
 local function stamp_now()
   local fo, net, stc, dep, dp, cr = ref("flight_ops"), ref("comms"), ref("structures"), ref("deployables"),
     ref("debris_pack"), ref("crew")
-  local sv = ref("survey")
+  local sv, ro = ref("survey"), ref("route_ops")
   return { fo and fo.fleetVersion or 0, net and net.networkVersion or 0, stc and stc.version or 0,
-           dep and dep.version or 0, dp and dp.packVersion or 0, cr and cr.version or 0, sv and sv.version or 0 }
+           dep and dep.version or 0, dp and dp.packVersion or 0, cr and cr.version or 0, sv and sv.version or 0,
+           ro and ro.version or 0 }
 end
 
 local function changed(a, b)
   if not (a and b) then return true end
   for i = 1, 5 do if a[i] ~= b[i] then return true end end
-  if a[7] ~= b[7] then return true end
+  if a[7] ~= b[7] or a[8] ~= b[8] then return true end
   return false
 end
 
@@ -489,7 +494,7 @@ local function craft_entries(out)
     local e = { id = f.fid, craft = true, fleet = f, name = f.name, body = f.body,
                 kind = in_orbit and m.kindOrbit or m.kindFlat,
                 rx = rec.x or 0, ry = rec.y or 0, rz = rec.z or 0, vx = rec.vx or 0, vy = rec.vy or 0, vz = rec.vz or 0,
-                st = rec.stime or 0, conic = not f.landed and v == nil,
+                st = (fo.simTimeOf and fo.simTimeOf(rec)) or rec.stime or 0, conic = not f.landed and v == nil,
                 node = v and v.node or nil, live = v ~= nil, piloted = f.piloted, landed = f.landed,
                 splashed = rec.splashed == true, escaping = f.escaping, pe = f.pe, ap = f.ap, alt = f.alt,
                 cap = f.cap, charge = f.charge, comms = f.comms, link = f.link, signal = f.signal, hops = f.hops,
@@ -680,6 +685,29 @@ local function world_entries(out)
   end
 end
 
+-- THE RUNS (expansion X3, scripts/route_ops.lua): one entry a run, "R:<id>",
+-- kind `route`, group RUNS, anchored where the run puts its craft now
+-- (routes.poseAt: the stand, a stop, or along the leg's recorded path —
+-- body-relative; the map re-places it each frame from `run`). A waiting run
+-- is an ATTENTION entry (amber) with the reason.
+local function route_entries(out)
+  local ro = ref("route_ops")
+  if not (ro and ro.list) then return end
+  for _, r in ipairs(ro.list() or {}) do
+    local body, x, y, z = ro.poseNow(r)
+    if body then
+      local e = { id = "R:" .. tostring(r.id), kind = "route", route = true, run = r, runId = r.id, name = r.name, body = body,
+                  rx = x, ry = y, rz = z, st = 0, cycles = r.cycles or 0, crewed = r.crewed == true, probe = not r.crewed,
+                  rsub = ro.situationOf(r) }
+      if r.state == "waiting" then
+        e.attn = { level = "warn", text = "WAITING", all = { { level = "warn", text = tostring(r.why or "waiting") } } }
+      end
+      e.dist = home_dist(body, x, y, z)
+      out[#out + 1] = e
+    end
+  end
+end
+
 local GROUP_ORDER = {}
 for i, g in ipairs(GROUPS) do GROUP_ORDER[g] = i end
 
@@ -693,6 +721,7 @@ local function build()
   pause()
   debris_entries(out)
   infra_entries(out)
+  route_entries(out)
   world_entries(out)
   local by = {}
   local counts = { craft = 0, linked = 0, relays = 0, debris = 0, crew = 0, attention = 0 }

@@ -501,6 +501,26 @@ function remove(cid, mat, n, origin)
   return took, out
 end
 
+-- THE MOVE RING (expansion X3): every transfer that moved something, in
+-- order, so a flight log can tell where a hold's cargo came from and went
+-- (route_ops traces it through the crew's packs). `moveSeq` counts them;
+-- movesSince(seq) → the moves after `seq` still in the ring (MOVE_RING).
+MOVE_RING = 256
+moveSeq = 0
+local moves = {}
+local function note_move(from, to, mat, n)
+  moveSeq = moveSeq + 1
+  moves[(moveSeq - 1) % MOVE_RING + 1] = { seq = moveSeq, from = from, to = to, mat = mat, n = n }
+end
+function movesSince(seq)
+  local out = {}
+  for s = math.max((seq or 0) + 1, moveSeq - MOVE_RING + 1), moveSeq do
+    local m = moves[(s - 1) % MOVE_RING + 1]
+    if m and m.seq == s then out[#out + 1] = m end
+  end
+  return out
+end
+
 -- Move what fits (with `origin`: only that body's stack). Every unit keeps
 -- its origin on the way. Nothing is destroyed in transit: whatever the
 -- destination can't take stays in the source.
@@ -517,6 +537,7 @@ function transfer(from, to, mat, n, origin)
     end
     if k < p.n then break end
   end
+  if moved > 0 then note_move(from, to, mat, moved) end
   return moved
 end
 

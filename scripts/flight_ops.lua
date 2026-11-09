@@ -557,6 +557,34 @@ local function next_fid()
   return "c" .. n
 end
 
+-- THE AGENCY CLOCK (deployables): game seconds since the save began, warp
+-- included, kept in the save. space.time() restarts at 0 every session.
+function agency_now()
+  local dp = ref("deployables")
+  if dp and dp.agencyClock then
+    local ok, t = pcall(dp.agencyClock)
+    if ok and type(t) == "number" then return t end
+  end
+  return tonumber(save.get("agency.clock")) or 0
+end
+-- How long ago (game s) a record was written, for carrying it along its
+-- conic: by the agency clock when the record has it (`at`); an older record
+-- only has `stime` (space.time then), which is right within its session and
+-- meaningless after a reload — those are carried only forward. (The respawn
+-- clock fix, expansion X3: the plan's F1 caveat.)
+function carryDt(rec, now_agency, now_sim)
+  if type(rec.at) == "number" then return (now_agency or agency_now()) - rec.at end
+  if type(rec.stime) == "number" then return (now_sim or (space.time and space.time()) or 0) - rec.stime end
+  return 0
+end
+-- The record's write time as a space.time() of THIS session (fleet_view and
+-- comms carry by `now - st` in sim time): its agency age taken off now.
+function simTimeOf(rec)
+  local now = space and space.time and space.time() or 0
+  if type(rec.at) == "number" then return now - (agency_now() - rec.at) end
+  return rec.stime or 0
+end
+
 -- A live craft as a record. nil when it can't be described (no manifest, no
 -- body under it, mid-assembly).
 local function describe_craft(v)
@@ -658,6 +686,9 @@ local function describe_craft(v)
     -- the command part it is flown from ("Control from here")
     from = man.from,
     stime = space.time and space.time() or 0,
+    -- (the agency clock then: space.time restarts at 0 every session, so a
+    -- record carried to now across a reload is carried by this — X3)
+    at = agency_now(),
     pod = (function()
       for _, r in ipairs(recs) do if r.kind == "crewed" or r.id == "pod" then return true end end
       return false
@@ -913,8 +944,8 @@ local function respawn(fid, rec)
   -- In flight, the record is carried along its conic to NOW: where the craft
   -- has got to since it was written, and how fast it is going there.
   local fvx, fvy, fvz = rec.vx or 0, rec.vy or 0, rec.vz or 0
-  if not rec.landed and space.propagate and space.time and rec.stime and (b.mu or 0) > 0 then
-    local dt = space.time() - rec.stime
+  if not rec.landed and space.propagate and space.time and (rec.at or rec.stime) and (b.mu or 0) > 0 then
+    local dt = carryDt(rec)
     if dt > 0 and dt < 1e7 then
       local px, py, pz, pvx, pvy, pvz = space.propagate(rec.x, rec.y, rec.z, fvx, fvy, fvz, b.mu, dt)
       if pvx then
@@ -1049,7 +1080,7 @@ function fleetOffline()
         -- down: comms carries a craft in flight along its conic to now)
         out[#out + 1] = { fid = fid, name = rec.name, parts = rec.parts, charge = rec.charge,
                           wx = b.x + (rec.x or 0), wy = b.y + (rec.y or 0), wz = b.z + (rec.z or 0),
-                          vx = rec.vx, vy = rec.vy, vz = rec.vz, stime = rec.stime, landed = rec.landed == true }
+                          vx = rec.vx, vy = rec.vy, vz = rec.vz, stime = simTimeOf(rec), landed = rec.landed == true }
       end
     end
   end

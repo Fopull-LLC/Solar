@@ -30,9 +30,13 @@
 --                          The handoff's `held` keeps it off the fleet board
 --                          (vessel_controller leftPad = false) until it is
 --                          released: the stand rebuilds it on a reload.
+--   { s = "run", … }       AUTOMATED (expansion X3, scripts/route_ops.lua): the
+--                          craft belongs to a run (`run` = its id). It is
+--                          drawn on the deck (untinted) only while the run
+--                          dwells there; nothing else may use the stand.
 --   fields: s, key, name, n (parts), cost, ship, total, t (agency clock when
 --           paid), by, ret (it came back to the stand: `cost` is what
---           recovering it was worth), wheeled
+--           recovering it was worth), wheeled, run
 --
 -- WHERE IT GOES. The craft's centre of mass (its parts' masses, x and z) is
 -- over the deck's centre, its front (the spawner's craft_front rule: a
@@ -87,7 +91,7 @@ defaults = {
   sound = 1.0,
 }
 
-STATE_BUILT, STATE_HELD = "built", "held"
+STATE_BUILT, STATE_HELD, STATE_RUN = "built", "held", "run"
 COMMISSION_SECS = { base = 4.0, per = 0.15, max = 20.0 }
 RETURN_SECS = 4.0
 PUT_SECS = { base = 3.0, per = 0.1, max = 12.0 }
@@ -481,7 +485,7 @@ end
 -- The uncommissioned craft, drawn: one node on the planet at the vessel's
 -- pose, the parts its children at their blueprint poses (no bodies).
 local editing = nil      -- the stand the editor is open on (its key): no display copy there
-local function show_display(sid, uid)
+local function show_display(sid, uid, plain)
   local key = keyOf(sid, uid)
   if shown[key] or editing == key then return end
   local bp = blueprint(sid, uid)
@@ -505,8 +509,9 @@ local function show_display(sid, uid)
           part:setAngles(d.yaw or 0, d.pitch or 0, d.roll or 0)
           if d.size and d.proc and PR and PR.dress then pcall(PR.dress, part, { def = d, size = d.size }) end
           -- (S2: blueprint blue, so it reads as not yet real: setTint keeps
-          -- the part's textures and rides per instance, never splitting a batch)
-          tint_tree(part, 0)
+          -- the part's textures and rides per instance, never splitting a batch;
+          -- a run's craft on its stand is real and keeps its own look)
+          if not plain then tint_tree(part, 0) end
         end, { parent = n, body = false })
         if not ok and log then log("stand: could not draw " .. tostring(d.prefab)) end
       end
@@ -629,6 +634,7 @@ function setHeight(sid, uid, h)
   if not rec then return false, "no stand there" end
   local st = stateOf(sid, uid)
   if st and st.s == STATE_HELD then return false, "release the craft first" end
+  if st and st.s == STATE_RUN then return false, "an automated run uses this stand" end
   h = clampHeight(def.stand, h)
   if st and st.s == STATE_BUILT then
     local bp = blueprint(sid, uid)
@@ -794,6 +800,26 @@ function poseDeck(sid, uid, h)
   if rec then pose_deck(keyOf(sid, uid), def, h or heightOf(p, def)) end
 end
 function hideDisplay(sid, uid) drop_display(keyOf(sid, uid)) end
+-- (X3, route_ops) The stand serves run `id` (nil: the run is over and the
+-- craft is the stand's again, as a returned craft).
+function setRun(sid, uid, id)
+  local st = stateOf(sid, uid)
+  if not st then return false end
+  if id then st.s, st.run = STATE_RUN, id else st.s, st.run = STATE_BUILT, nil end
+  set_state(sid, uid, st)
+  drop_display(keyOf(sid, uid))
+  if not id then show_display(sid, uid) end
+  return true
+end
+-- (X3) The run's craft drawn on its deck (the dwell) or not (out on a leg).
+function showRunCraft(sid, uid, on)
+  local key = keyOf(sid, uid)
+  if on then
+    if not shown[key] then show_display(sid, uid, true) end
+  else
+    drop_display(key)
+  end
+end
 -- The editor is open on this stand (nil: closed): its parts are the
 -- builder's, so the display copy stays down.
 function setEditing(sid, uid)
@@ -814,6 +840,7 @@ function clear(sid, uid)
   local st = stateOf(sid, uid)
   if not st then return nil, "the stand is empty" end
   if st.s == STATE_HELD then return nil, "it's commissioned: release it, or return it to the stand first" end
+  if st.s == STATE_RUN then return nil, "an automated run uses it: cancel the run first" end
   local E, co = ref("base_economy"), ref("company")
   local amt, rule = 0, "price"
   if E and E.deconstructRefund then amt, rule = E.deconstructRefund({ cost = st.cost, total = st.total, t = st.t }, agency_now()) end
@@ -895,6 +922,7 @@ function commission(sid, uid, opts)
   local st = stateOf(sid, uid)
   if not st then return false, "the stand is empty" end
   if J[key] then return false, "it is commissioned already" end
+  if st.s == STATE_RUN then return false, "an automated run uses it: cancel the run first" end
   if st.s ~= STATE_BUILT and not (opts.reload and st.s == STATE_HELD) then return false, "it is commissioned already" end
   local bp = blueprint(sid, uid)
   if not bp then return false, "the craft's blueprint is missing" end
@@ -974,6 +1002,9 @@ function commission(sid, uid, opts)
     set_state(sid, uid, st)
     lastCommission = { sid = sid, uid = uid, name = bp.name, n = total, t = now() }
     play("place", 0.6)
+    -- (X3: the flight log starts here)
+    local RO = ref("route_ops")
+    if RO and RO.onCommission then pcall(RO.onCommission, sid, uid, bp, bp.name or st.name) end
   end
   return true
 end
@@ -998,6 +1029,8 @@ local function let_go(E, how)
   forget_bp(E.sid, E.uid)
   set_state(E.sid, E.uid, nil)
   lastRelease = { sid = E.sid, uid = E.uid, how = how, t = now(), node = E.node }
+  local RO = ref("route_ops")
+  if RO and RO.onRelease then pcall(RO.onRelease, E.sid, E.uid, E.name) end
   if log then log(string.format("stand: %s released (%s)", tostring(E.name or "the craft"), how)) end
 end
 
@@ -1116,6 +1149,13 @@ function returnTo(v, sid, uid)
   pcall(node.destroy, node)
   lastReturn = { sid = sid, uid = uid, name = name, n = #parts, worth = worth, t = now() }
   play("place", 0.6)
+  -- (X3: the flight log closes, and is judged: can it be automated?)
+  local RO = ref("route_ops")
+  if RO and RO.onReturn then
+    local okr, run, why = pcall(RO.onReturn, sid, uid, name, fp, commandWhy(bp) == nil)
+    lastReturn.auto = okr and run ~= nil or false
+    lastReturn.why = okr and why or nil
+  end
   return true
 end
 
@@ -1135,6 +1175,10 @@ function spawned(rec, p, inst)
   if st.s == STATE_BUILT then
     drop_display(key)
     show_display(rec.id, p.uid)
+  elseif st.s == STATE_RUN then
+    drop_display(key)
+    local RO = ref("route_ops")
+    if RO and RO.standShows and RO.standShows(rec.id, p.uid) then show_display(rec.id, p.uid, true) end
   elseif st.s == STATE_HELD and not J[key] then
     -- (a reload: the held craft is the stand's to put back, not the fleet's;
     -- saved mid-release, it goes back up on the deck's setting)
@@ -1155,6 +1199,7 @@ function canRemove(rec, p)
   local st = stateOf(rec.id, p.uid)
   if st then
     return false, st.s == STATE_HELD and "a commissioned craft stands on it: release it first"
+      or (st.s == STATE_RUN and "an automated run uses it: cancel the run first")
       or "a craft is on the stand: clear it first"
   end
   return true
@@ -1252,6 +1297,8 @@ function update(node, dt)
     if E.node and not valid(E.node) then
       -- the craft went (recovered, wrecked, reverted): the stand is empty
       J[key] = nil
+      local RO = ref("route_ops")
+      if RO and RO.onGone then pcall(RO.onGone, E.sid, E.uid, E.name) end
       if stateOf(E.sid, E.uid) then forget_bp(E.sid, E.uid); set_state(E.sid, E.uid, nil) end
     elseif E.phase == "assembling" then
       if now() - E.t0 > 20 and E.node and #E.placed > 0 then
@@ -1324,12 +1371,12 @@ local function stand_rows(sid, uid, def, ctx)
       local h = p and heightOf(p, def) or 0
       if not st then return string.format("empty · deck %.1f m%s", h, p and p.lo and " (lowered)" or "") end
       return string.format("%s · %d parts · %s · deck %.1f m", tostring(st.name or "craft"), st.n or 0,
-        st.s == STATE_HELD and "commissioned, held" or "not commissioned", h)
+        st.s == STATE_HELD and "commissioned, held" or (st.s == STATE_RUN and "on an automated run" or "not commissioned"), h)
     end }
   -- BUILD HERE (the editor at the stand: the VAB's camera and overlay, its
   -- frame on this deck; work/standeditor/PLAN.md §6.1)
   local st0 = stateOf(sid, uid)
-  if not (st0 and st0.s == STATE_HELD) then
+  if not (st0 and (st0.s == STATE_HELD or st0.s == STATE_RUN)) then
     rows[#rows + 1] = { id = "cs_build", type = "action", label = "Build here", group = "Stand", hint = "▸",
       value = function() local s2 = stateOf(sid, uid); return s2 and "edit the craft on the deck" or "the VAB, on this deck" end,
       enabled = function()
@@ -1352,7 +1399,7 @@ local function stand_rows(sid, uid, def, ctx)
   end
   -- (the deck's height, a step a click: the world's menu has no drag slider)
   local function setting() local _, p = standAt(sid, uid); return p and clampHeight(S, p.h or S.min) or S.min end
-  local function can_set() local st = stateOf(sid, uid); return engineer() and not (st and st.s == STATE_HELD) end
+  local function can_set() local st = stateOf(sid, uid); return engineer() and not (st and (st.s == STATE_HELD or st.s == STATE_RUN)) end
   local function set_why() return engineer() and "release the craft first" or "Engineers only" end
   for _, dir in ipairs({ 1, -1 }) do
     rows[#rows + 1] = { id = dir > 0 and "cs_up" or "cs_dn", type = "action", keep = true, group = "Stand",
@@ -1429,6 +1476,18 @@ local function stand_rows(sid, uid, def, ctx)
         toast(amt and ("cleared · " .. money(amt) .. " back") or tostring(w), amt == nil)
         return amt ~= nil
       end }
+    -- (X3: the flight it came back from, and Automate)
+    local RO = ref("route_ops")
+    if RO and RO.standRows then
+      local okr, extra = pcall(RO.standRows, sid, uid, st, ctx)
+      if okr then for _, r in ipairs(extra or {}) do rows[#rows + 1] = r end end
+    end
+  elseif st.s == STATE_RUN then
+    local RO = ref("route_ops")
+    if RO and RO.standRows then
+      local okr, extra = pcall(RO.standRows, sid, uid, st, ctx)
+      if okr then for _, r in ipairs(extra or {}) do rows[#rows + 1] = r end end
+    end
   else
     rows[#rows + 1] = { id = "cs_rel", type = "action", label = "Release", group = "Stand", hint = "▾",
       value = function() local E = J[keyOf(sid, uid)]; return E and E.wheeled and "let it down onto its wheels" or "let the clamps go" end,

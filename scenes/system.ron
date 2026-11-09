@@ -2301,6 +2301,18 @@
                     enabled: true,
                     params: [],
                 ),
+                // automated runs: the rules (scripts/routes.lua) and the flight
+                // log, the schedule and the stand's Automate (route_ops.lua, X3)
+                (
+                    kind: "routes",
+                    enabled: true,
+                    params: [],
+                ),
+                (
+                    kind: "route_ops",
+                    enabled: true,
+                    params: [],
+                ),
             ],
             id: Some(67),
         ),

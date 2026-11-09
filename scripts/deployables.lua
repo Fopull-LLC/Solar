@@ -125,7 +125,7 @@ end
 -- THE AGENCY'S CLOCK: game seconds since the save began, warp included. The
 -- sim clock (space.time) starts at 0 every session, so it is accumulated
 -- here and kept in the save (`agency.clock`); a flag's date is read off it.
-local clock_s, clock_last, clock_saved = nil, nil, -100
+local clock_s, clock_last, clock_saved, clock_saved_s = nil, nil, -100, -1e18
 local function agency_clock()
   if clock_s == nil then clock_s = tonumber(save and save.get and save.get("agency.clock")) or 0 end
   return clock_s
@@ -139,10 +139,17 @@ local function tick_clock()
   if clock_last and now > clock_last then clock_s = clock_s + math.min(now - clock_last, 86400 * 30) end
   clock_last = now
   local t = time or 0
-  if t - clock_saved > 5 and save and save.set then
-    clock_saved = t
+  -- (every 5 real seconds, and every 30 game seconds under warp: at ×100 a
+  -- save taken between two writes lost up to 500 s, and a reload ran the
+  -- clock back — the automated runs' schedules stood still till it caught up)
+  if (t - clock_saved > 5 or clock_s - clock_saved_s >= 30) and save and save.set then
+    clock_saved, clock_saved_s = t, clock_s
     save.set("agency.clock", math.floor(clock_s))
   end
+end
+-- A scene change (a reload, a trip to the builder): the clock as it is.
+function onDestroy(node)
+  if clock_s and save and save.set then save.set("agency.clock", math.floor(clock_s)) end
 end
 
 -- "Day 41, Y2": 24-hour days, 365-day years, from the agency's clock.

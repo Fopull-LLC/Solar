@@ -2538,3 +2538,170 @@ Built 2026-11-09 (`work/expansion/PLAN.md` §6.3, §7.2). The air itself is
 Models: `tools/gen_kit_survey.py` (imported by `gen_kit_parts.py`:
 `python3 tools/gen_kit_parts.py n2comp o2conc telescope telescope1m
 surveyStation`); the bounds are in `tests/fixtures/kit_shapes.lua`.
+
+## 21. Expansion X3: runs — fly it once, then automate it
+
+Built 2026-11-09 (`work/expansion/PLAN.md` §2, with Ty's answers in §14,
+which override §2 where they differ). The rules are `scripts/routes.lua`
+(pure); the scene half is `scripts/route_ops.lua`.
+
+### Ty's rules
+
+- **An automated run never fails on its own.** There is no failure roll: a
+  run replays a flight you flew, exactly. Each cycle costs what that flight
+  cost (its time, its fuel, what it took from stores) and delivers what it
+  delivered, so a better-flown route pays.
+- **Only a flight that closed can be automated**: it came back to the stand it
+  left from, whole, and it can start again from what it came back with.
+  Anything else is refused, and the stand says why in plain words.
+- A flight you fly by hand that goes wrong costs what it costs, as always.
+- **Crewed runs need a Pilot** among the crew who flew it, and the crew go
+  with the run. Their air and suits restock at home, so a crewed run's stand
+  is on the home world.
+
+### The flight log
+
+Every craft commissioned on a Build Stand is logged (craft_stand calls
+`route_ops.onCommission`, `onRelease`, `onReturn` and `onGone`). The log keeps
+events, not telemetry, at 4 Hz while the craft is out:
+
+- **stops**: down and still for 5 s, more than 30 m from the stand (they end
+  when it moves over 1 m/s or 25 m), with the time and the fuel at each end;
+- **who rides it** (seated crew make it a crewed flight);
+- **every transfer into or out of its hold**: inventory.lua now keeps a move
+  ring (`moveSeq`, `movesSince`), and `routes.ledger` traces each move through
+  the crew's packs. A crate → pack → hold load is the crate's; ore dug into
+  the pack and put in the hold is "by hand"; hold → pack → crate is an unload
+  into the crate; the depot's crane is an unload into the warehouse;
+- up to 16 **map samples** (body-relative) for the station's dashed track.
+
+Points are body-relative (`docs/positions-and-frames.md` rule 1). The log of a
+craft out in the field is kept in the save by its name (`rlog.live`), so a
+reload mid-flight keeps it; a closed log is kept on its stand
+(`rlog.<sid>.<uid>`). A log stops at 64 stops and transfers and says so.
+
+### Repeatable or not (`routes.fromLog`, `routes.check`)
+
+| refused when | the stand says |
+|---|---|
+| it isn't back on a stand, or came back to another one | a run starts and ends on the same stand |
+| it came back without parts (stages dropped, parts lost) | "it came back with 5 of its 7 parts: …a run repeats only a craft that comes back whole" |
+| it never stopped away from the stand | a run needs a stop to load or unload at |
+| a **probe** flight loaded ore dug by hand | "…came out of the crew's pack (gathered by hand): a probe run can only load from a store that stays there…" |
+| it refuelled off the home world | a run can't draw on a base's tanks yet |
+| a crewed flight's stand is off the home world | a crewed run's air and suits restock at home |
+| it came back with more or less in the hold, away from the spaceport | unload it into a store first (only a stand by the spaceport trades with the Intake and the warehouse) |
+| nothing was delivered | a run has to carry something from one place to another |
+| cargo left the hold by hand and wasn't put in a store | a run can only unload into a store or the Intake |
+| (live) no Pilot flew a crewed run; you are playing one of its crew; a store it used is gone; its stand is gone | said by name |
+
+The stand's own rule refuels a craft it holds (vessel_controller: an anchored
+craft fills from the stand), so fuel restocks on the stand; the fuel a cycle
+burns is shown on the card and the Automate row.
+
+### The run
+
+A run is a cycle of phases: the **dwell** on the stand (120 s), then each
+**leg** and **stop** as flown (their recorded durations). The transfers happen
+where they were made: a stop's at its end, the departure's (a load at the
+stand) as the dwell ends; and when it is back on the stand by the spaceport,
+whatever it brought home goes through **the Intake** (the warehouse, the
+freight count, `research.study`'s RP, the lab's capsule: material_intake's
+own path) and what it took out of the hold is restocked from the warehouse.
+
+`routes.advance(run, W, now)` walks the phases on the agency clock, in closed
+form: one long call equals many short ones exactly (30 days in one call =
+2,592,000 one-second calls, smoke_routes). route_ops calls it once a second
+and on load, so a run keeps going while you are anywhere else, and catches up
+in one call. If a store is short when a transfer is due, the run **waits**
+there and says so ("waiting for Depot crate A: 10 of 20 Iron Ore"), and goes
+on once it can: that is never a failure. A cycle a run does is a real
+`inventory.transfer`: the crate empties, the warehouse fills.
+
+**Where the craft is.** On the stand during the dwell: the stand draws it
+(its display copy, untinted: no body, no script, nothing a tick). On a leg or
+a stop it is only on the map, where `routes.poseAt` places it (the stop, or
+the leg's samples interpolated in the body frame: map only, never physics).
+The stand is the run's while it lasts (state `run`): nothing else goes on it,
+it can't be cleared, raised or removed.
+
+### On the stand's right-click
+
+- **FLIGHT LOG · This flight can be automated ▸** and **Automate ⇄** with the
+  cycle's numbers ("4 m 33 s · 30 kg fuel · 25 Iron Ore a cycle"), or
+  **Why it can't be automated ▸** (the reason, in full) and Automate greyed
+  (its tooltip says why).
+- While it runs: **RUN** (where it is in its cycle), **CYCLES** (done, and
+  what it has moved), **Pause the run / Resume the run**, **Cancel the run**
+  (at once while it is on the stand; otherwise when it is back there; a run
+  waiting at a stop skips what it can't do there and comes home).
+- The first automatable flight in a save gets Ops' caption: "That's a route
+  now. Put it on the stand and I can run it for you." Until the first run the
+  station's list says "RUNS · none yet · fly a cargo flight from a Build
+  Stand and back".
+
+### In the Tracking Station (`docs/tracking-station.md` §3)
+
+- A **RUNS** group (glyph ⇄, kind `route`, between PROBES and LANDED), one
+  entry a run, `R:<id>`, anchored each frame where `poseAt` puts it, with its
+  situation line: "Leg 1/2 · to stop 1 · 1 m 12 s", "At stop 1 · loading 25
+  Iron Ore · 40 s", "On the stand · departs in 1 m 30 s", "WAITING · …",
+  "PAUSED · …". A waiting run is in ATTENTION.
+- The selected or hovered run's leg is drawn dashed (its samples against this
+  frame's body read).
+- **NEXT** lists each run's next two events (departs the stand, arrives at
+  stop 1, leaves it, back on its stand), so **▸▸ To next event** warps to one.
+- **The card**: the cycle and its length, the fuel a cycle, where it is, the
+  manifest by place ("At stop 1: load 25 Iron Ore from Depot crate A", "Back
+  on the stand: unload 25 Iron Ore at the Intake"), PROBE or the crew, the
+  cycles done, what it has moved and the RP, and Focus · Pause/Resume ·
+  Cancel run (twice). The right-click on its icon or row has the same.
+- The crew of a crewed run are busy while it lasts (`crew.busy`: "on an
+  automated run (…)"): no switching to them, no seating them elsewhere.
+
+### The respawn clock fix
+
+`space.time()` restarts at 0 every session, and `flight_ops.respawn` carried
+a craft in flight along its conic by `space.time() − rec.stime`: wrong after
+a reload. A fleet record now carries `at` (the agency clock) and is carried by
+`carryDt` (the agency difference); the station's and the comms network's
+carries get the record's time as this session's sim time (`simTimeOf`).
+Records written before keep the old rule.
+
+The agency clock itself (deployables) was saved every 5 real seconds; at
+×100 a save taken between two writes lost up to 500 game seconds, and a
+reload ran the clock back behind the runs' schedules. It is now also saved
+every 30 game seconds and when the scene changes, and a run whose clock went
+back carries on from the clock rather than standing still.
+
+### Cost
+
+Nothing a frame while no craft is logged and no run exists (two table looks).
+With runs: one `advance` a run a second; the station adds one entry a run and
+one dashed line for the selected one. Measured in `tools/perf/runprobe.sh`
+(the numbers below).
+
+### Left for later
+
+- Refuelling off the home world from a base's tanks (a hose stand's network),
+  and loading from silos and chutes (X5) — today a probe run loads only from
+  stores that stay put (the spaceport's supply crates, a locker, the
+  warehouse).
+- Re-record (fly the next cycle by hand and replace the legs) and "trim to
+  the best of N cycles"; today: cancel, fly it again, Automate again.
+- The live held craft during the dwell (hoses on, the silo emptying): the
+  dwell draws the display copy, which costs nothing.
+- The PROGRAMME's "Reach" stage naming runs.
+- A run moves one craft between its stand and its stops; two runs can't share
+  a stand.
+
+### Tests and the probe
+
+- `tests/smoke_routes.lua` (luajit): the ledger on the real inventory.lua, a
+  hand-written log to a run, every refusal, check(), 30 days in one call
+  against one-second calls, waiting and refilled, pause, poseAt, NEXT, the
+  scene half against stubs (a flight through the hooks, Automate, the
+  Intake's RP equal to `research.study`'s, three cycles, the JSON save and a
+  reload, cancel), the respawn clock fix, the RUNS group.
+- `tools/perf/runprobe.sh <engine>` (PATCHES=funds.patch): the whole slice in
+  the engine; `RN PASS|FAIL` lines, pictures in `save/user/runshots/`.
