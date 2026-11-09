@@ -222,6 +222,23 @@ local function main()
     end
     for _, d in ipairs({ 0, 45, 90, 135, 170 }) do drive("abd", d) end
     for _, d in ipairs({ -40, 0, 60, 120, 170 }) do drive("flex", d) end
+    -- the left arm ACROSS the chest (a tool held two-handed, a hand to the
+    -- right hip): the DCM's hoses must stay behind the forearm
+    local function across(name, l, u, f)
+      for _ = 1, 28 do
+        su.probeArm = { kind = "at", l = l, u = u, f = f }
+        local l_, u_, f_ = frame()
+        local t = bone("Back")
+        cam_at(t - l_ * 0.35 + f_ * 1.10 + u_ * 0.05, t - u_ * 0.12)
+        yield()
+      end
+      su.probeArm = { kind = "at", l = l, u = u, f = f }
+      shot(name)
+      yield()
+    end
+    across("cross_dcm", -0.30, -0.22, 0.26)
+    across("cross_low", -0.32, -0.34, 0.22)
+    across("cross_hip", -0.42, -0.50, 0.16)
   end
   -- ── a crouch: the root lowered, the walker's foot IK bends the knees ──
   if params.crouch > 0 then
@@ -337,6 +354,75 @@ local function main()
     end
     P("night: sun elevation %.2f (was %.2f)", star_up(), s0)
     su.setLamps(true)
+    -- the helmet lamps' own beam (scripts/suit.lua), the torch still off, and
+    -- what it costs: the GPU with the lamps on against off, same framing
+    hold(0.6)
+    P("night: helmet beam lit %.2f (lamps %s, helmet %s)", su.beamLit or -1, tostring(su.lampsOn()), tostring(su.helmetOn()))
+    view("night_lamps_front", "Back", 0.6, 2.6, 0.3, -0.2)
+    view("night_lamps_close", "Head", 0.45, 0.95, 0.0, 0.08)
+    -- the beam's pose against the crew's frame, and whether the engine took it
+    do
+      local l, u, f = frame()
+      local hb = bone("Head")
+      if su.beamDX then
+        local d = vec3(su.beamDX, su.beamDY, su.beamDZ)
+        local o = vec3(su.beamX, su.beamY, su.beamZ) - hb
+        P("beam: dir . fwd %.2f . up %.2f . left %.2f; origin from the head: fwd %.2f up %.2f left %.2f",
+          d:dot(f), d:dot(u), d:dot(l), o:dot(f), o:dot(u), o:dot(l))
+      else
+        P("beam: no pose published")
+      end
+      perf.enable(true)
+      for _ = 1, 3 do yield() end
+      local pc_ = perf.counts and perf.counts() or {}
+      P("beam: lights %s, dropped %s", tostring(pc_.lights), tostring(pc_.lightsDropped))
+      perf.enable(false)
+      su.setLamps(false)
+      view("night_nolamps_front", "Back", 0.6, 2.6, 0.3, -0.2)
+      su.setLamps(true)
+      -- the apron's floodlights switched off for a moment: the helmet lamps
+      -- alone, on and off (what the player sees on the dark side of a world)
+      local floods = {}
+      for _, fnode in ipairs(findAll and findAll("BaseFlood") or {}) do
+        local lcf = fnode.getcomponent and fnode:getcomponent("PointLight")
+        if lcf then floods[#floods + 1] = { lcf, lcf.intensity }; lcf.intensity = 0 end
+      end
+      P("floods off: %d", #floods)
+      view("dark_lamps_front", "Back", 0.6, 2.6, 0.3, -0.2)
+      view("dark_lamps_side", "Back", 2.6, 1.2, 0.4, -0.3)
+      su.setLamps(false)
+      view("dark_nolamps_front", "Back", 0.6, 2.6, 0.3, -0.2)
+      view("dark_nolamps_side", "Back", 2.6, 1.2, 0.4, -0.3)
+      su.setLamps(true)
+      for _, fl_ in ipairs(floods) do fl_[1].intensity = fl_[2] end
+    end
+    if params.perf > 0 then
+      local function gsample(tag, n)
+        perf.enable(false); perf.enable(true)
+        local tot, cnt, ps = 0, 0, {}
+        for _ = 1, n do
+          local l, u, f = frame()
+          local t = bone("Back") + u * -0.2
+          cam_at(t + l * 0.6 + f * 2.6 + u * 0.3, t)
+          yield()
+          local g = perf.gpu and perf.gpu()
+          if g and g.total then
+            tot, cnt = tot + g.total, cnt + 1
+            for _, p in ipairs(g.passes) do ps[p.name] = (ps[p.name] or 0) + p.ms end
+          end
+        end
+        local parts = {}
+        for k_, v in pairs(ps) do parts[#parts + 1] = string.format("%s=%.3f", k_, v / math.max(cnt, 1)) end
+        table.sort(parts)
+        P("PERF %s n=%d gpu=%.3f beam=%.2f %s", tag, cnt, tot / math.max(cnt, 1), su.beamLit or -1, table.concat(parts, " "))
+      end
+      for rep_ = 1, 2 do
+        su.setLamps(true); hold(0.3); gsample("lamps_on" .. rep_, 120)
+        su.setLamps(false); hold(0.3); gsample("lamps_off" .. rep_, 120)
+      end
+      su.setLamps(true)
+      perf.enable(false)
+    end
     local fl = findScript("flashlight")
     local inv = findScript("inventory")
     if inv and inv.addGear then pcall(inv.addGear, "astro", "flashlight", 1) end

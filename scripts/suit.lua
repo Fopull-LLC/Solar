@@ -69,6 +69,32 @@ defaults = {
   cold_k = 228,
   --@range 280 400
   hot_k = 330,
+  --- The helmet lamps' beam (one spot light, the player's only): its cone,
+  --- the soft share of its edge, its throw and its strength.
+  --@range 20 120 --@units deg
+  lamp_cone = 70.0,
+  --@range 0 1
+  lamp_soft = 0.65,
+  --@range 4 60 --@units m
+  lamp_range = 24.0,
+  --@range 0 8
+  lamp_intensity = 2.4,
+  --- The beam lights only when the star is this low (atmosphere.sun_now, the
+  --- cosine of its elevation) or lower: by day it would light nothing a
+  --- player could see and still take a light and its shadow map.
+  --@range -0.3 0.5
+  lamp_dark = 0.12,
+  --- Degrees the beam is tipped down from the helmet's forward (the lamps
+  --- are aimed at the work in front of the chest).
+  --@range 0 40 --@units deg
+  lamp_tilt = 24.0,
+  --- How far ahead of the lamps' centre the light sits (m, the helmet's
+  --- frame): clear of the bubble and the visor, which would shade it.
+  --@range 0 0.6 --@units m
+  lamp_ahead = 0.30,
+  --- 1: the beam casts shadows (walls stop it); 0: none.
+  --@range 0 1
+  lamp_shadows = 1,
 }
 
 local P = setmetatable({}, { __index = function(_, k) return (params and params[k]) or defaults[k] end })
@@ -414,7 +440,8 @@ function update(node, dt)
 end
 
 -- For a probe (tools/perf/suitshots.lua): drive the left arm through the
--- shoulder's range, { kind = "abd" | "flex", deg = 0..170 } from arms-down,
+-- shoulder's range, { kind = "abd" | "flex", deg = 0..170 } from arms-down (or
+-- { kind = "at", l, u, f }: the hand to a point off the shoulder),
 -- built here from the bones in the frame it is used (the planet moves between
 -- a probe's update and this). Cleared after each frame.
 probeArm = nil
@@ -437,12 +464,111 @@ local function probe_arm()
     local d = -up[i] * math.cos(r) + side[i] * math.sin(r)
     t[i] = sl[i] + d * L
     pole[i] = sl[i] - fwd[i] * 0.4 - up[i] * 0.1
+    if pa.kind == "at" then
+      -- the hand to a point off the left shoulder: { l, u, f } metres along
+      -- the crew's left, up and forward (an arm across the chest: l < 0),
+      -- the elbow out and down
+      t[i] = sl[i] + left[i] * (pa.l or 0) + up[i] * (pa.u or 0) + fwd[i] * (pa.f or 0)
+      pole[i] = sl[i] + left[i] * 0.45 - up[i] * 0.35 + fwd[i] * 0.10
+    end
   end
   a:reach("Hand.Left", vec3(t[1], t[2], t[3]), { weight = 1, pole = vec3(pole[1], pole[2], pole[3]) })
+end
+
+-- ── the helmet lamps' beam ───────────────────────────────────────────────
+-- The lamp housings on the helmet are fixed to it, and the helmet to the
+-- HUT, so their light goes where the torso faces, tipped down at the work
+-- (the clip-on flashlight is the light that follows the eyes). ONE spot
+-- light for both lamps, on the player only (crew carry none: the base's
+-- floodlights already take most of the engine's sixteen), a child of the
+-- Helmet Lamps node (rule 2, docs/positions-and-frames.md: the engine draws
+-- it with the helmet as drawn). It is lit only while it can matter: the
+-- lamps on, the helmet on, on foot, the star low (`lamp_dark`), and the
+-- flashlight not lit (then the torch is the one light). Otherwise its
+-- intensity is 0, which takes no light slot and no shadow map.
+beamLit = 0                      -- (probes) the beam's intensity this frame
+beamX, beamY, beamZ, beamDX, beamDY, beamDZ = nil, nil, nil, nil, nil, nil   -- (probes) where and which way
+local beam = { node = nil, making = false, aimed = false }
+
+-- The light is a CHILD of the Helmet Lamps node at a fixed local offset, so
+-- the engine carries it with the helmet as drawn: a world point written on a
+-- root node goes stale by the planet's travel each tick (metres; the first
+-- try lit nothing it was aimed at). Only its direction is set each frame, and
+-- a direction does not go stale.
+local function beam_node(L)
+  if beam.node and beam.node.valid and beam.parent == L then return beam.node end
+  if beam.node and beam.node.valid then pcall(function() beam.node:destroy() end) end
+  beam.node = nil
+  if beam.making or not createNode then return nil end
+  beam.making = true
+  createNode("Helmet Lamp Beam", L, function(n)
+    beam.making = false
+    beam.node = n
+    beam.parent = L
+    -- just ahead of the visor (the lamps' frame is the rig's bind space,
+    -- +Z ahead), so the helmet never shades its own beam
+    n.x, n.y, n.z = 0.0, 0.0, P.lamp_ahead
+    pcall(n.setPointLight, n, { color = { 0.92, 0.96, 1.0 }, intensity = 0, range = P.lamp_range })
+    beam.aimed = false
+  end)
+  return nil
+end
+
+local function beam_set(I)
+  local n = beam.node
+  if not (n and n.valid) then beamLit = 0 return end
+  local l = n.getcomponent and n:getcomponent("PointLight")
+  if not l then beamLit = 0 return end
+  -- the cone, edge and shadows once the component answers (a light made
+  -- this frame has none until the engine applies it)
+  if not beam.aimed or (l.spotAngle or 180) >= 179 then
+    pcall(function() l.spotAngle = P.lamp_cone end)
+    pcall(function() l.spotSoftness = P.lamp_soft end)
+    pcall(function() l.shadows = (P.lamp_shadows or 1) > 0 and 1 or 0 end)
+    pcall(function() l.range = P.lamp_range end)
+    beam.aimed = true
+  end
+  if math.abs((l.intensity or 0) - I) > 0.005 then l.intensity = I end
+  beamLit = I
+end
+
+local function beam_update()
+  local wk = ref("planet_walker")
+  local want = lamps and helmet and nodes.lamps and nodes.lamps.valid and wk and wk.onFoot == true and not wk.downed
+  local k = 0
+  if want then
+    local at = ref("atmosphere")
+    local sun = (at and at.sun_now) or 1
+    -- fade in over the last of the dusk, so it never pops on at a threshold
+    k = math.max(0, math.min(1, (P.lamp_dark - sun) / 0.08 + 0.5))
+    local fl = ref("flashlight")
+    if fl and (fl.lit or 0) > 0 then k = 0 end
+  end
+  if k <= 0 then
+    if beam.node and beam.node.valid then beam_set(0) end
+    beamLit = 0
+    return
+  end
+  local L = nodes.lamps
+  local n = beam_node(L)
+  if not n then return end
+  -- the lamps' centre, the helmet's forward and up, as drawn this frame (the
+  -- glb is in the rig's bind space: +Z ahead, +Y up)
+  local o = L:toWorld(vec3(0, 0, 0))
+  local f = (L:toWorld(vec3(0, 0, 1)) - o):normalized()
+  local u = (L:toWorld(vec3(0, 1, 0)) - o):normalized()
+  local t = math.rad(P.lamp_tilt)
+  local dir = (f * math.cos(t) - u * math.sin(t)):normalized()
+  local up = (u * math.cos(t) + f * math.sin(t)):normalized()
+  n:setUp(up, dir)
+  local p = n:toWorld(vec3(0, 0, 0))
+  beamX, beamY, beamZ, beamDX, beamDY, beamDZ = p.x, p.y, p.z, dir.x, dir.y, dir.z
+  beam_set(P.lamp_intensity * k)
 end
 
 function lateUpdate(node, dt)
   if busy then hands(dt or 0) end
   if probeArm then probe_arm() end
   show()
+  beam_update()
 end

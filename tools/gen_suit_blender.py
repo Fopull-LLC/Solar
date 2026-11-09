@@ -583,7 +583,7 @@ def lathe_piece(name, mat, c, axis, prof, W, segs, part="suit", dirt="metal", sh
                  **kw)
 
 
-def ring_piece(name, mat, c, axis, ri, ro, w, bone, col, segs=16, part="suit", dirt="metal", band=None):
+def ring_piece(name, mat, c, axis, ri, ro, w, bone, col, segs=16, part="suit", dirt="metal", band=None, covered=False):
     """A BEARING (or a disconnect, or the neck ring): two races of anodised
     aluminium about `axis`, each with chamfered edges, the split between them
     a sunk groove, the bore's lip rolled in toward the cloth. `band` colours
@@ -591,6 +591,23 @@ def ring_piece(name, mat, c, axis, ri, ro, w, bone, col, segs=16, part="suit", d
     of telling left from right). The ring is wider than the cloth it covers on
     both sides, so the cloth always disappears into it."""
     cw = min(0.0025 * (ro / 0.08), w * 0.16)          # the chamfers
+    if covered:
+        # Under the TMG (second pass, 2026-11-09): the EMU's arm, waist and
+        # thigh bearings are not bare metal hoops but cloth-covered rings,
+        # read as a soft bulge with the cover's stitched seam round its
+        # middle. Bare anodised rings everywhere were what made the limbs
+        # look like a toy's; the wrist disconnects, the neck ring and the
+        # scyes stay metal, as on the real suit.
+        lip = ri - 0.003
+        e = w * 0.5 + 0.010
+        prof = [(lip, -e, col), (ri + 0.25 * (ro - ri), -e * 0.80, col), (ro - 0.002, -e * 0.45, col),
+                (ro + 0.002, -e * 0.12, col), (ro + 0.0005, 0.0, CLOTH_SH), (ro + 0.002, e * 0.12, col),
+                (ro - 0.002, e * 0.45, col), (ri + 0.25 * (ro - ri), e * 0.80, col), (lip, e, col)]
+        if LOD >= 2:
+            prof = [(lip, -e, col), (ro, -e * 0.3, col), (ro, e * 0.3, col), (lip, e, col)]
+        pc = lathe_piece(name, "SuitFabric", c, axis, prof, {bone: 1}, segs_(max(int(segs * 1.25), 16)),
+                         part=part, dirt=(dirt if dirt != "metal" else "body"), sharp=70)
+        return pc
     g = min(0.0018, (ro - ri) * 0.18)                  # the groove's depth
     gw = w * 0.07
     bc = band if band is not None else col
@@ -773,23 +790,30 @@ def build(rig):
     V, F = merge(*parts)
 
     def hut_col(P, N):
-        C = np.tile(SHELL, (len(P), 1))
+        C = np.tile(CLOTH, (len(P), 1))
         # inside the neck ring: the dark well the neck rises from
         rr = np.hypot(P[:, 0] - x0, (P[:, 2] - zh) * 1.1)
         C[(P[:, 1] > neck_top - 0.012 * k) & (rr < 0.115 * k)] = SHELL_D
         return C
-    hut = Piece("HUT", "SuitShell", V, F, {"Back": 1}, hut_col, tile=0.5, dirt="hut",
+    # (second pass: the HUT is under the TMG, as on the EMU and the xEMU: the
+    # cast shell keeps its shape, but what is seen is the cover's cloth, so
+    # the torso reads as one suit with the arms and legs, not a plastic
+    # breastplate)
+    hut = Piece("HUT", "SuitFabric", V, F, {"Back": 1}, hut_col, tile=0.25, dirt="hut",
                 mods=[("remesh", lod(0.0042, 0.0055, 0.007) * k), ("smooth", 0.6, 6), ("decimate", lod(3200, 1500, 800))],
-                sharp=44)
+                sharp=62)
     tree = bvh(hut)
 
     # The body seal closure: a metal band round the lower edge.
+    # (second pass: under the TMG too, a stitched cloth band where the upper
+    # torso's cover meets the lower's)
     bsc = []
-    for y, g in ((-0.014, 0.0), (-0.006, 0.006), (0.010, 0.006), (0.016, 0.0)):
+    for y, g, col in ((-0.016, 0.0, CLOTH), (-0.008, 0.005, CLOTH), (0.0, 0.0065, CLOTH), (0.006, 0.005, CLOTH_SH),
+                      (0.012, 0.0055, CLOTH), (0.018, 0.0, CLOTH)):
         bsc.append(dict(c=(x0, hut_y0 + y * k, zh + 0.004 * k), e1=X, e2=Z, r1=(0.172 + g) * k, r2=(0.126 + g) * k,
-                        sq=2.7, w={"Back": 1}))
-    V, F, UVc, W, C = loft(bsc, 24, tile=0.1)
-    Piece("BSC", "SuitMetal", V, F, W, np.tile(METAL, (len(V), 1)), UVc=UVc, dirt="metal", smooth=False, sharp=30)
+                        sq=2.7, w={"Back": 1}, col=col))
+    V, F, UVc, W, C = loft(bsc, lod(32, 24, 16), tile=0.25)
+    Piece("BSC", "SuitFabric", V, F, W, C, UVc=UVc, dirt="body", sharp=70)
 
     # The neck ring the helmet locks onto, tilted forward as on the HUT.
     tilt = math.radians(10)
@@ -802,17 +826,11 @@ def build(rig):
     # The scye bearings, set into the housings, and the cloth balls behind
     # them (see the arms).
     for side, (P, n, d) in scye.items():
-        ring_piece("Scye." + side, "SuitMetal", P + n * (d + 0.009 * k), n, SCYE_BORE * k, 0.112 * k, 0.020 * k,
-                   "Back", METAL, segs=18, band=METAL_D)
+        ring_piece("Scye." + side, "SuitFabric", P + n * (d + 0.009 * k), n, SCYE_BORE * k, 0.110 * k, 0.020 * k,
+                   "Back", CLOTH, segs=18, covered=True)
 
-    # ── HUT hardware: the scye housings' screws, the neck ring's latches ──
-    for side, (P, n, d) in scye.items():
-        e1 = unit(np.cross(n, Z))
-        e2 = np.cross(n, e1)
-        for i in range(8):
-            a = TAU * (i + 0.5) / 8
-            bp = P + n * d + (e1 * math.cos(a) + e2 * math.sin(a)) * 0.1175 * k
-            bolt("ScyeBolt", bp, n, 0.0032 * k, 0.0035 * k, {"Back": 1})
+    # ── HUT hardware: the neck ring's latches (the scye housings' screws
+    # are under the TMG since the second pass; none drawn) ──
     # the helmet's latches on the neck ring: three housings round it (front
     # two and the back), each with its lever
     ne1 = X
@@ -857,8 +875,12 @@ def build(rig):
         rbox("DCMbezel", "SuitShell", dpc + X * ox + fw_d * oz + up_d * 0.002 * k, (sx, 0.005 * k, sz), Md,
              col=SHELL_D, r=0.0012 * k, seg=1)
 
+    # (second pass: the display reads the right way round for the WEARER,
+    # looking down at it, as the EMU's does; it is the DCM's printed labels
+    # that are reversed for the wrist mirror, not the screen. From the front
+    # it reads mirrored)
     def disp(su, tv):
-        return dpc + up_d * 0.0012 * k + X * (-dw / 2 + dw * su) + fw_d * (dh / 2 - dh * tv)
+        return dpc + up_d * 0.0012 * k + X * (dw / 2 - dw * su) + fw_d * (dh / 2 - dh * tv)
     decal_piece("DCMdisplay", "display", disp, up_d, "Back")
     # the rotary controls along the back half of the face
     kb = top_c - fw_d * 0.022 * k
@@ -894,15 +916,21 @@ def build(rig):
         for oy in (-0.018, 0.018):
             bolt("DCMbolt", np.array([bc[0], bc[1] + oy * k, dz + 0.001 * k]) + Z * 0.0, Z, 0.0028 * k, 0.003 * k,
                  {"Back": 1})
-    # the two umbilicals: out of the underside's corners, a slack loop down,
-    # and into the HUT's front ports (the cooling water, the vent loop)
+    # the two umbilicals: out of the underside's corners, a short tucked bend
+    # back and down into the HUT's front ports just under the DCM (the
+    # cooling water, the vent loop). Second pass (2026-11-09): they stay
+    # inside the DCM's shadow, behind its front face and above the HUT's
+    # lower edge, so a forearm swung across the chest (a tool held two-handed,
+    # the hands at the neck ring) rests on the DCM and never passes through a
+    # loop hanging out in front of it.
     for sx in (-1, 1):
         a = dc + X * sx * 0.088 * k - up_d * DH / 2 + fw_d * 0.010 * k
-        portp, nrm = surf_point(tree, (x0 + sx * 0.112 * k, hut_y0 + 0.040 * k, zh + 0.5), (0, 0, -1),
-                                (x0 + sx * 0.112 * k, hut_y0 + 0.040 * k, zh + 0.15 * k))
-        pts = [a, a - up_d * 0.030 * k + X * sx * 0.012 * k, portp + nrm * 0.050 * k + Y * -0.035 * k + X * sx * 0.02 * k,
-               portp + nrm * 0.030 * k, portp + nrm * 0.004 * k]
-        hose("Umbilical", pts, 0.0105 * k, {"Back": 1}, RUBBER, pitch=0.012 * k)
+        py_ = dy - DH / 2 - 0.040 * k
+        portp, nrm = surf_point(tree, (x0 + sx * 0.094 * k, py_, zh + 0.5), (0, 0, -1),
+                                (x0 + sx * 0.094 * k, py_, zh + 0.15 * k))
+        pts = [a, a - up_d * 0.016 * k + X * sx * 0.003 * k, portp + nrm * 0.026 * k + Y * 0.006 * k + X * sx * 0.004 * k,
+               portp + nrm * 0.012 * k, portp + nrm * 0.004 * k]
+        hose("Umbilical", pts, 0.0100 * k, {"Back": 1}, RUBBER, pitch=0.011 * k)
         lathe_piece("UmbilicalPort", "SuitMetal", portp - nrm * 0.004 * k, nrm,
                     [(0.010 * k, 0.0, METAL), (0.018 * k, 0.0, METAL), (0.018 * k, 0.006 * k, METAL),
                      (0.014 * k, 0.010 * k, METAL), (0.010 * k, 0.010 * k, METAL)], {"Back": 1}, lod(14, 10, 8))
@@ -922,12 +950,15 @@ def build(rig):
     # the purge hose's stub from the SCU connector, looping down to a clip low
     # on the HUT's front, right of centre (on Back: the waist never drags it;
     # in front: clear of the arm, which hangs and swings at the side)
+    # (second pass: a short stub that turns straight back to the HUT and runs
+    # down it, flat against the shell, to a clip beside the DCM's lower right
+    # corner; no loop stands out where the left forearm crosses)
     sc0 = dc - X * (DW / 2 + 0.034 * k) + up_d * 0.004 * k
-    hp1, nrm = surf_point(tree, (x0 - 0.158 * k, hut_y0 + 0.018 * k, zh + 0.5), (0, 0, -1),
-                          (x0 - 0.158 * k, hut_y0 + 0.018 * k, zh + 0.15 * k))
-    hose("SCUhose", [sc0, sc0 - X * 0.024 * k - Y * 0.022 * k + Z * 0.006 * k,
-                     hp1 + nrm * 0.040 * k + Y * 0.012 * k - X * 0.006 * k, hp1 + nrm * 0.012 * k],
-         0.0115 * k, {"Back": 1}, RUBBER, pitch=0.013 * k)
+    hy = dy - DH / 2 - 0.030 * k
+    hp1, nrm = surf_point(tree, (x0 - 0.150 * k, hy, zh + 0.5), (0, 0, -1), (x0 - 0.150 * k, hy, zh + 0.15 * k))
+    hose("SCUhose", [sc0, sc0 - X * 0.010 * k - Y * 0.010 * k - Z * 0.012 * k,
+                     hp1 + nrm * 0.022 * k + Y * 0.020 * k, hp1 + nrm * 0.012 * k],
+         0.0105 * k, {"Back": 1}, RUBBER, pitch=0.012 * k)
     connector("SCUclip", hp1, nrm, 0.012 * k, 0.014 * k, {"Back": 1})
 
     # ── the WAIST and the BRIEF are the top of the lower body's one surface
@@ -1621,8 +1652,8 @@ def arm(rig, D, Ja, J, side, s, k, sc):
 
     # ── hardware on the arm: rigid, each where the cloth under it is ────────
     up_c = lambda t: S + axu * t                         # noqa: E731
-    ring_piece("UpperArmBearing." + side, "SuitMetal", up_c(s_ub), axu, 0.072 * k, 0.088 * k, 0.020 * k, ua, METAL,
-               segs=16, band=METAL_D)
+    ring_piece("UpperArmBearing." + side, "SuitFabric", up_c(s_ub), axu, 0.072 * k, 0.084 * k, 0.020 * k, ua, CLOTH,
+               segs=16, covered=True)
     wc = E + axf * wr
     ring_piece("Wrist." + side, "SuitMetal", wc, axf, 0.046 * k, 0.061 * k, 0.022 * k, fa, METAL, segs=16,
                band=BLUE_A if s > 0 else RED_A)
@@ -1890,16 +1921,18 @@ def lower_body(rig, D, J, Jp, k, x0, zc, hut_y0, waist_y, crotch):
 
     # the waist bearing (Hip) and the thigh bearings (Thigh), where the cloth
     # under each is wholly on its bone
+    # (second pass: the waist bearing under the TMG, a soft cloth roll with
+    # its cover's seam round the middle, not a bare metal hoop)
     bring = []
-    for y, g in ((-0.012, 0.0), (-0.006, 0.006), (0.006, 0.006), (0.012, 0.0)):
+    for y, g, col in ((-0.018, 0.0, CLOTH), (-0.011, 0.006, CLOTH), (-0.004, 0.009, CLOTH), (0.0, 0.0075, CLOTH_SH),
+                      (0.004, 0.009, CLOTH), (0.011, 0.006, CLOTH), (0.018, 0.0, CLOTH)):
         bring.append(dict(c=(x0, waist_y - 0.009 * k + y * k, zc), e1=X, e2=Z, r1=(0.181 + g) * k, r2=(0.135 + g) * k,
-                          sq=2.4, w={"Hip": 1}))
-    V, F, UVc, W, C = loft(bring, 24, tile=0.1)
-    Piece("WaistRing", "SuitMetal", V, F, W, np.tile(METAL, (len(V), 1)), UVc=UVc, dirt="metal", smooth=False,
-          sharp=30)
+                          sq=2.4, w={"Hip": 1}, col=col))
+    V, F, UVc, W, C = loft(bring, lod(32, 24, 16), tile=0.25)
+    Piece("WaistRing", "SuitFabric", V, F, W, C, UVc=UVc, dirt="body", sharp=70)
     for side, L in legs.items():
-        ring_piece("ThighBearing." + side, "SuitMetal", L["T"] + L["axt"] * 0.160 * k, L["axt"], 0.104 * k,
-                   0.122 * k, 0.022 * k, "Thigh." + side, METAL, segs=16, band=METAL_D)
+        ring_piece("ThighBearing." + side, "SuitFabric", L["T"] + L["axt"] * 0.160 * k, L["axt"], 0.104 * k,
+                   0.118 * k, 0.022 * k, "Thigh." + side, CLOTH, segs=16, covered=True)
     return legs
 
 
@@ -1985,9 +2018,10 @@ def boot(rig, D, J, side, s, k):
         V, F = box_mesh(bc, (0.008 * k, 0.026 * k, 0.030 * k))
         Piece("Buckle." + side, "SuitMetal", posed(V), F, {ft: 1}, METAL, tile=0.25, dirt="metal",
               mods=[("bevel", 0.002 * k, lod(2, 1, 1), 40)], sharp=40)
-    # the ankle bearing on the boot's collar
-    pc = ring_piece("Ankle." + side, "SuitMetal", np.array([bx, 0.190 * k, A[2] - 0.006 * k]), Y, 0.062 * k,
-                    0.082 * k, 0.032 * k, ft, METAL, segs=16, band=METAL_D)
+    # the ankle bearing on the boot's collar (second pass: under the boot's
+    # TMG gaiter, a cloth roll, not a metal hoop)
+    pc = ring_piece("Ankle." + side, "SuitFabric", np.array([bx, 0.190 * k, A[2] - 0.006 * k]), Y, 0.062 * k,
+                    0.080 * k, 0.026 * k, ft, BOOT_W, segs=16, covered=True, dirt="boot")
     me = pc.ob.data
     Vb = np.zeros(len(me.vertices) * 3)
     me.vertices.foreach_get("co", Vb)

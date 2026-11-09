@@ -105,8 +105,13 @@ def fabric(n=1024, tile_m=0.25):
     # the cloth's crinkle: creases at a few lengths, mostly along v (the
     # limbs' length: a sleeve crumples across, a seat along), and the
     # insulation's soft unevenness under it
-    cr = (_creases(n, rng, 420, (18, 70), (1.2, 2.6), 0.45, 0.10)
-          + _creases(n, rng, 110, (70, 260), (3.0, 7.0), 0.35, 0.22))
+    # (second pass: deeper, as a used TMG is at arm's length and from the
+    # third-person camera's 4.5 m: the first pass's 0.1-0.2 mm read as a
+    # smooth plastic skin; the broad soft wrinkles are the insulation's
+    # layers buckling under the cover)
+    cr = (_creases(n, rng, 420, (18, 70), (1.2, 2.6), 0.45, 0.16)
+          + _creases(n, rng, 130, (70, 260), (3.0, 7.0), 0.35, 0.42)
+          + _creases(n, rng, 46, (260, 620), (9.0, 18.0), 0.30, 0.65))
     puff = DM.noise((n, n), rng, 60)
     mott = DM.noise((n, n), rng, 90)
     fib = DM.noise((n, n), rng, 1.2)
@@ -165,7 +170,7 @@ def shell(n=1024, tile_m=0.5):
     alb = np.stack([v, v * 0.997, v * 0.99], -1)
     primer = np.array([0.62, 0.63, 0.64])
     alb = alb * (1 - chips[..., None]) + primer * chips[..., None]
-    rough = 0.40 + 0.03 * mott + 0.20 * scuff + 0.18 * scr + 0.25 * chips + 0.03 * sand
+    rough = 0.56 + 0.04 * mott + 0.16 * scuff + 0.14 * scr + 0.22 * chips + 0.03 * sand
     _save(os.path.join(TEXDIR, "shell"), alb, h, texel, rough, np.zeros_like(v),
           "painted composite: orange peel, sanding, scratches, scuffs, chips (tools/suit_textures.py)", tile_m)
 
@@ -187,9 +192,9 @@ def metal(n=512, tile_m=0.25):
     mott = DM.noise((n, n), rng, 50)
     rings = 0.5 + 0.5 * np.sin(TAU * yy / 9.0 + 0.6 * DM.noise((n, n), rng, 30))
     h = 0.004 * streak + 0.002 * rings - 0.05 * ding
-    v = 0.90 + 0.025 * streak + 0.015 * mott - 0.08 * ding
+    v = 0.80 + 0.025 * streak + 0.015 * mott - 0.08 * ding
     alb = np.stack([v, v, v * 1.005], -1)
-    rough = 0.34 + 0.05 * streak + 0.04 * mott + 0.20 * ding
+    rough = 0.50 + 0.06 * streak + 0.05 * mott + 0.18 * ding
     met = np.full_like(v, 0.9)
     _save(os.path.join(TEXDIR, "metal"), alb, h, texel, rough, met,
           "hard-anodised aluminium, brushed along u, dings (tools/suit_textures.py)", tile_m, ao_k=0.3)

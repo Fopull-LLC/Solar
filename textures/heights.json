@@ -180,7 +180,7 @@
   "method": "elements from their ground colour; a plain-weave ground"
  },
  "textures/suit/fabric_height.png": {
-  "depth_mm": 1.285,
+  "depth_mm": 1.696,
   "texel_mm": 0.488,
   "method": "ortho-fabric: plain weave 1 mm, ripstop 5.9 mm, crinkle, a double-needle seam (tools/suit_textures.py)",
   "tile_m": 0.25

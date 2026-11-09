@@ -17,8 +17,11 @@ WHAT IS MADE
 
     models/iva/<iva>.glb          the cabin: walls, windows, hatch, seats,
                                   consoles, stowage — one mesh, few materials
-    models/iva/self.glb           the wearer's own legs and gloves, seen
-                                  when you look down from the eye seat
+    models/iva/self.glb           NOT made here since the suit's second pass
+                                  (2026-11-09): tools/gen_suit.py poses the
+                                  suit itself seated and writes it (and the
+                                  prefabs' Self<k> nodes); this reads its box
+                                  and materials
     models/iva/tex/*.png          padding (quilted beta cloth), the panel
                                   atlas (labels, gauges, placards) and the
                                   screen atlas (lit displays)
@@ -777,43 +780,6 @@ if IN_BLENDER:
             yy = y + 0.05 + k * (h - 0.08) / max(rungs - 1, 1)
             cyl(name + "Rung", "Yellow", (-r_open * 0.6, yy, r_open * 0.82), (r_open * 0.6, yy, r_open * 0.82), 0.01, segs=8)
 
-    # ── the wearer (the eye seat's own legs, arms and gloves) ───────────────
-    def self_body():
-        """Seen only from the eye seat: thighs, knees, shins and boots down to
-        the footrest, forearms to gloves on the controllers, the chest's
-        control box. Hip at the origin, facing -Z."""
-        node = "Self"
-        for s in (-1, 1):
-            hip, knee = Vector((s * 0.10, -0.02, 0.02)), Vector((s * 0.12, 0.0, -0.40))
-            ankle = Vector((s * 0.12, -0.48, -0.44))
-            tube_path("SelfThigh", "Suit", [hip, (hip + knee) / 2 + Vector((0, 0.02, 0)), knee], 0.085, sides=12)
-            bm = bmesh.new()
-            bmesh.ops.create_uvsphere(bm, u_segments=10, v_segments=6, radius=0.075)
-            place(bm, knee + Vector((0, 0.01, -0.01)))
-            finish(bm, "SelfKnee", "Suit", node=node, smooth=True)
-            tube_path("SelfShin", "Suit", [knee, (knee + ankle) / 2, ankle], 0.065, sides=12)
-            box("SelfBoot", "Rubber", ankle + Vector((0, -0.07, -0.06)), (0.12, 0.12, 0.27), bevel=0.03)
-            box("SelfSole", "Dark", ankle + Vector((0, -0.13, -0.06)), (0.13, 0.03, 0.29), bevel=0.01)
-            box("SelfStrapA", "Strap", ankle + Vector((0, -0.02, -0.02)), (0.13, 0.03, 0.13))
-            sh, el = Vector((s * 0.21, 0.42, 0.10)), Vector((s * 0.30, 0.10, 0.06))
-            wr = Vector((s * 0.30, 0.16, -0.08))
-            tube_path("SelfUpper", "Suit", [sh, el], 0.06, sides=10)
-            tube_path("SelfFore", "Suit", [el, (el + wr) / 2, wr], 0.052, sides=10)
-            ring("SelfCuff", "Metal", wr, (0, 0.2, -1), 0.04, 0.058, 0.03, segs=14)
-            cushion("SelfGlove", "Rubber", wr + Vector((0, -0.01, -0.06)), (0.085, 0.07, 0.11), round_=0.025)
-            for k in range(4):
-                cyl("SelfFinger", "Rubber", wr + Vector((s * 0.0 + (k - 1.5) * 0.018, 0.02, -0.12)),
-                    wr + Vector(((k - 1.5) * 0.018, -0.01, -0.16)), 0.009, segs=6)
-        box("SelfChestBox", "PanelPaint", Vector((0, 0.36, -0.17)), (0.20, 0.10, 0.07), bevel=0.012)
-        plate("SelfChestPanel", "Panel", Vector((0, 0.38, -0.21)), (0, 0.3, -1), 0.17, 0.05, "flight", (PANEL, PANEL_SIZE))
-        knobs("SelfChestKnob", Vector((0, 0.335, -0.21)), (0, 0.3, -1), 0.14, 3, r=0.008)
-        tube_path("SelfHose", "Hose", [Vector((0.08, 0.34, -0.17)), Vector((0.16, 0.25, -0.12)), Vector((0.22, 0.30, 0.05))], 0.016, sides=8)
-        tube_path("SelfHose", "Hose", [Vector((-0.08, 0.34, -0.17)), Vector((-0.16, 0.25, -0.12)), Vector((-0.22, 0.30, 0.05))], 0.016, sides=8)
-        cushion("SelfTorso", "Suit", Vector((0, 0.30, 0.06)), (0.40, 0.42, 0.26), round_=0.08)
-        # everything built here belongs to the Self node
-        for i, (ob, nd, uvm) in enumerate(OBJS):
-            OBJS[i] = (ob, "Self", uvm)
-
     # ── the interiors ───────────────────────────────────────────────────────
     def common_seat_dressing(key, seats, controller_slots=(0,)):
         for i, (x, y, z, yaw) in enumerate(seats):
@@ -1291,10 +1257,6 @@ if IN_BLENDER:
             res[name] = geo
             tris = sum(len(m["P"]) // 9 for n in geo.values() for m in n.values())
             print(f"IVA {name}: {tris} tris, nodes {list(geo.keys())}, mats {sorted(geo.get('Shell', {}).keys())}")
-        reset()
-        self_body()
-        res["self"] = export()
-        print("IVA self:", sum(len(m["P"]) // 9 for n in res["self"].values() for m in n.values()), "tris")
         with open(path, "w") as f:
             json.dump(res, f)
         print("IVA wrote", path)
@@ -1790,7 +1752,12 @@ else:
     def materials_block(names, indent=8):
         lines = []
         for m in sorted(names):
-            body = MATS.get(m, MATS["Dark"])()
+            if m.startswith("Suit"):           # the self model wears the suit's own (gen_suit.py)
+                sys.path.insert(0, HERE)
+                import gen_suit
+                body = gen_suit.SUIT_MATS[m]()
+            else:
+                body = MATS.get(m, MATS["Dark"])()
             lines.append(f'                "{m}": {body},')
         return "object_materials: {\n" + "\n".join(lines) + "\n            },"
 
@@ -1862,6 +1829,21 @@ else:
             f.write("\n".join(out) + "\n")
         return path
 
+    def read_self(path):
+        """The wearer's body (tools/gen_suit.py write_self: the suit posed
+        seated, in the seat frame): its box and its materials' names."""
+        if not os.path.exists(path):
+            sys.exit("gen_iva: models/iva/self.glb is missing: run python3 tools/gen_suit.py --scene first")
+        b = open(path, "rb").read()
+        jl = struct.unpack("<I", b[12:16])[0]
+        j = json.loads(b[20:20 + jl])
+        lo, hi = np.array([1e9] * 3), np.array([-1e9] * 3)
+        for a in j["accessors"]:
+            if "min" in a and a.get("type") == "VEC3":
+                lo = np.minimum(lo, np.asarray(a["min"], float))
+                hi = np.maximum(hi, np.asarray(a["max"], float))
+        return lo, hi, [m["name"] for m in j["materials"]]
+
     def py_main():
         args = sys.argv[1:]
         if "--no-tex" not in args:
@@ -1880,12 +1862,11 @@ else:
         with open(tmp) as f:
             res = json.load(f)
         os.remove(tmp)
-        sg = res.pop("self")["Self"]
-        slo, shi = write_glb(sg, os.path.join(OUT_MODELS, "self.glb"))
+        slo, shi, smats = read_self(os.path.join(OUT_MODELS, "self.glb"))
         for name, geo in res.items():
             shell = geo["Shell"]
             lo, hi = write_glb(shell, os.path.join(OUT_MODELS, name.lower() + ".glb"))
-            p = write_prefab(name, IVAS[name], lo, hi, shell.keys(), slo, shi, sg.keys())
+            p = write_prefab(name, IVAS[name], lo, hi, shell.keys(), slo, shi, smats)
             tris = sum(len(m["P"]) // 9 for m in shell.values())
             print(f"{name}: {tris} tris, {len(shell)} materials, box {np.round(hi - lo, 2)} -> {os.path.relpath(p, ROOT)}")
 

@@ -21,6 +21,9 @@ photographs it in the game.
 Writes
     models/astronaut/astronaut_{male,female}.glb   the suit, skinned to each rig (LOD 0)
     models/astronaut/astronaut_{sex}_lod{1,2}.glb  the same suit, coarser (LOD 1, 2)
+    models/iva/self.glb                            the suit posed seated, the IVA seat's
+                                                   own body (and, with --scene, the IVA
+                                                   prefabs' Self<k> nodes)
     models/astronaut/helmet_{male,female}.glb      the helmet: bubble, EVVA,
                                                    ring, lamp housings, camera
     models/astronaut/visor_{male,female}.glb       the gold sun visor and its tab
@@ -62,6 +65,22 @@ occlusion is BAKED into the vertex colours in Blender (gen_suit_blender
 bake_ao); wear is coloured in per vertex (`wear`): regolith on the boots,
 shins, knees and seat, grime on the gloves' grips, scuffs on the hard parts.
 
+THE SECOND PASS (2026-11-09, still "toy-like"). What read as a toy was bare
+metal and gloss: chrome hoops round every limb and a glossy plastic
+breastplate. On the EMU nearly everything is under the TMG, so here: the HUT,
+the scye, upper-arm, waist, thigh and ankle bearings and the body seal
+closure are cloth-covered (SuitFabric; a covered bearing is a soft roll with
+its cover's seam, ring_piece `covered`), the scye screws are gone with them;
+the bare metal left is the neck ring, its latches, the wrist disconnects and
+the small hardware, hard-anodised (rougher and darker than polished); the
+painted shell (PLSS, DCM, EVVA) is a matte paint; the fabric's crinkle is
+deeper, with a broad layer of the insulation buckling under the cover. The
+DCM's umbilicals and the SCU hose are tucked under the DCM, inside its
+shadow, so a forearm across the chest meets the DCM, never a hose. The DCM's
+display reads the right way round for the wearer (from the front it reads
+mirrored, as on the real suit). The IVA self model (models/iva/self.glb) is
+this suit posed seated (`write_self`), not tubes.
+
 THE PAINT AND TINT SLOTS. Every surface's albedo is near white and its shade
 a vertex colour, so a material's `color` tints it (node:material("SuitFabric")
 is the suit-colour slot); the agency's emblem is the "SuitEmblem" material on
@@ -102,9 +121,9 @@ tools/gen_suit_blender.py's soft-suit notes. tools/suit_posecheck.py renders
 the suit through the joints' ranges (and the hands open, in a fist, the wrist
 bent) in Blender.
 
-BUDGET (triangles). LOD 0 about 51,300 (the arms 9,800 each: two levels of
+BUDGET (triangles). LOD 0 about 49,400 (the arms 9,800 each: two levels of
 subdivision for the folds, the glove thinned by a masked decimation; the
-lower body 6,800, the HUT 3,200), LOD 1 about 24,000, LOD 2 about 11,700;
+lower body 6,800, the HUT 3,200), LOD 1 about 22,600, LOD 2 about 11,300;
 the helmet, visor and lamps about 6,700 together (one LOD: the dolls and
 bodies wear no helmet). Seven materials on the suit (SuitFabric, SuitRubber,
 SuitShell, SuitMetal, SuitHead, SuitDecal, SuitEmblem) and five on the
@@ -974,6 +993,203 @@ def write_scene(rig, centres, path=os.path.join(ROOT, "scenes", "system.ron")):
     print("scenes/system.ron: the AstroModel's object_materials and the helmet's nodes written")
 
 
+# ── the wearer's own body in the IVA seat (models/iva/self.glb) ─────────────
+#
+# What you see of yourself looking down from an eye seat: the suit itself,
+# posed seated, not a stand-in of tubes. The male suit's pieces (the npz
+# Blender wrote, in the authoring pose, taken back to bind space as the suit
+# is) are skinned here into a seated pose by linear blend skinning: the torso
+# reclined against the couch, the thighs forward, the shins down to the
+# footrest, the upper arms down and a little out, the forearms forward to the
+# controllers, the wrists rolled thumb-up and the fingers curled on the grips.
+# What the eye can never see goes: the head and its cap, the neck ring and its
+# latches, the PLSS and everything on it. Static (the seat never moves the
+# body), written in gen_iva's SEAT frame (+X the crew's right, +Y up, -Z
+# ahead), its origin the seat's hip point (the thighs' pivot), at the rig's own
+# size (gen_iva builds its cabins round the unscaled 1.88 m rig: EYE_UP 0.77 m
+# over this point is the rig's eye). gen_iva.py reads its box and materials;
+# this writes the glb and the Self<k> nodes of the IVA prefabs.
+
+SELF_DROP = ("Head", "Neck", "Collar", "EarCup", "Boom", "Mic", "ChinStrap", "NeckRing", "NeckLatch", "PLSS",
+             "Antenna", "Beacon", "SOP")
+SELF_RECLINE = 10.0        # degrees the torso leans back into the couch
+SELF_WRIST = (0.30, 0.16, -0.08)   # the wrist on the hand controller, in the seat frame (x for the right hand)
+SELF_LOD = 0              # the suit's LOD it is posed from (the gloves are a hand's length from the eye)
+
+
+def _rot_between(a, b):
+    a = np.asarray(a, float) / np.linalg.norm(a)
+    b = np.asarray(b, float) / np.linalg.norm(b)
+    v = np.cross(a, b)
+    c = float(a @ b)
+    if np.linalg.norm(v) < 1e-9:
+        return np.eye(3) if c > 0 else -np.eye(3)
+    vx = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
+    return np.eye(3) + vx + vx @ vx * (1 / (1 + c))
+
+
+def _axis_angle(ax, deg):
+    ax = np.asarray(ax, float) / np.linalg.norm(ax)
+    a = math.radians(deg)
+    K = np.array([[0, -ax[2], ax[1]], [ax[2], 0, -ax[0]], [-ax[1], ax[0], 0]])
+    return np.eye(3) + math.sin(a) * K + (1 - math.cos(a)) * K @ K
+
+
+def seated_pose(rig):
+    """{joint: 4×4} world-space deltas from the bind pose to the seated pose,
+    and the seat's hip point (bind space, which the Hip bone does not move)."""
+    J = rig.p
+    O = (J("Thigh.Left") + J("Thigh.Right")) / 2
+    T = {}
+
+    def rigid(R, h_old, h_new):
+        M = np.eye(4)
+        M[:3, :3] = R
+        M[:3, 3] = np.asarray(h_new) - R @ np.asarray(h_old)
+        return M
+
+    def app(M, p):
+        return (M @ np.append(p, 1.0))[:3]
+    T["Hip"] = np.eye(4)
+    Rb = _axis_angle([1, 0, 0], -SELF_RECLINE)
+    T["Back"] = rigid(Rb, O, O)
+    T["Head"] = T["Back"]
+    for side, s in (("Left", 1.0), ("Right", -1.0)):
+        # the leg: the thigh forward, a touch down and out; the shin down to
+        # the footrest; the foot flat as it stands
+        th, sh, ft, to = (n + "." + side for n in ("Thigh", "Shin", "Foot", "Toes"))
+        L1 = np.linalg.norm(J(sh) - J(th))
+        L2 = np.linalg.norm(J(ft) - J(sh))
+        d1 = np.array([s * 0.07, -0.10, 1.0])
+        d1 /= np.linalg.norm(d1)
+        T[th] = rigid(_rot_between(J(sh) - J(th), d1), J(th), J(th))
+        knee = J(th) + d1 * L1
+        d2 = np.array([s * 0.02, -1.0, 0.10])
+        d2 /= np.linalg.norm(d2)
+        T[sh] = rigid(_rot_between(J(ft) - J(sh), d2), J(sh), knee)
+        ankle = knee + d2 * L2
+        T[ft] = rigid(np.eye(3), J(ft), ankle)
+        T[to] = rigid(np.eye(3), J(ft), ankle)
+        # the arm: down and a little out and forward, the forearm forward to
+        # the controller, rolled thumb-up, the hand on the grip
+        ua, fa, hd = (n + "." + side for n in ("Upperarm", "Forearm", "Hand"))
+        sh_new = app(T["Back"], J(ua))
+        A1 = np.linalg.norm(J(fa) - J(ua))
+        A2 = np.linalg.norm(J(hd) - J(fa))
+        # two-bone IK: the wrist on the couch's hand controller (gen_iva's
+        # controllers sit at the seat's (±0.30, 0.16, -0.08)), the elbow out,
+        # down and back
+        Wt = O + np.array([s * SELF_WRIST[0], SELF_WRIST[1], -SELF_WRIST[2]])
+        u_ = Wt - sh_new
+        dd = min(np.linalg.norm(u_), (A1 + A2) * 0.995)
+        u_ /= np.linalg.norm(u_)
+        pole = np.array([s * 0.8, -0.5, -0.4])
+        pole = pole - u_ * (pole @ u_)
+        pole /= np.linalg.norm(pole)
+        a_ = (A1 * A1 - A2 * A2 + dd * dd) / (2 * dd)
+        elbow = sh_new + u_ * a_ + pole * math.sqrt(max(A1 * A1 - a_ * a_, 0.0))
+        e1 = (elbow - sh_new) / np.linalg.norm(elbow - sh_new)
+        T[ua] = rigid(_rot_between(J(fa) - J(ua), e1), J(ua), sh_new)
+        e2 = sh_new + u_ * dd - elbow
+        e2 /= np.linalg.norm(e2)
+        # roll the forearm about its own axis so the thumb comes up (the sign
+        # chosen by where the thumb lands)
+        R0 = _rot_between(J(hd) - J(fa), e2)
+        best = None
+        for roll in (55.0, -55.0):
+            R = _axis_angle(e2, roll) @ R0
+            wrist = elbow + e2 * A2
+            thumb = wrist + R @ (J("Thumb1." + side) - J(hd))
+            if best is None or thumb[1] > best[0]:
+                best = (thumb[1], R)
+        Rf = best[1]
+        T[fa] = rigid(Rf, J(fa), elbow)
+        wrist = elbow + e2 * A2
+        # the wrist bent down a little onto the grip
+        down_ax = np.cross(e2, [0, 1, 0])
+        Rh = _axis_angle(down_ax, -12.0) @ Rf
+        T[hd] = rigid(Rh, J(hd), wrist)
+        # the fingers curled round it, the thumb over it
+        hand_dir = Rh @ (J("Fingers1." + side) - J(hd))
+        palm = Rh @ np.array([0, -1.0, 0])                      # the palm's side (bind: palm down)
+        curl_ax = np.cross(hand_dir, palm)
+        f1 = app(T[hd], J("Fingers1." + side))
+        R1 = _axis_angle(curl_ax, 45.0) @ Rh
+        T["Fingers1." + side] = rigid(R1, J("Fingers1." + side), f1)
+        f2 = f1 + R1 @ (J("Fingers2." + side) - J("Fingers1." + side))
+        T["Fingers2." + side] = rigid(_axis_angle(curl_ax, 55.0) @ R1, J("Fingers2." + side), f2)
+        t1 = app(T[hd], J("Thumb1." + side))
+        Rt = _axis_angle(curl_ax, 20.0) @ Rh
+        T["Thumb1." + side] = rigid(Rt, J("Thumb1." + side), t1)
+        t2 = t1 + Rt @ (J("Thumb2." + side) - J("Thumb1." + side))
+        T["Thumb2." + side] = rigid(_axis_angle(curl_ax, 20.0) @ Rt, J("Thumb2." + side), t2)
+    D = np.stack([T.get(n, np.eye(4)) for n in rig.names])
+    return D, O
+
+
+def write_self(rig, npz, path=os.path.join(ROOT, "models", "iva", "self.glb")):
+    """Pose the suit seated and write it as the IVA's self model (see above).
+    Returns its box (lo, hi) in the seat frame and the materials it uses."""
+    z = np.load(npz)
+    Da = z["D"]
+    man = json.loads(bytes(z["manifest"]).decode())
+    D, O = seated_pose(rig)
+    parts = {}
+    for i, m in enumerate(man):
+        if m["part"] != "suit" or m["name"].startswith(SELF_DROP):
+            continue
+        P, N, UV, C = z[f"{i}_P"], z[f"{i}_N"], z[f"{i}_UV"], z[f"{i}_C"]
+        Jn, W, I = z[f"{i}_J"], z[f"{i}_W"], z[f"{i}_I"]
+        P, N = unpose(P, N, Jn, W, Da)
+        C = wear(C, P, N, m["dirt"], rig)
+        M = np.einsum("nk,nkij->nij", W, D[Jn])
+        P = np.einsum("nij,nj->ni", M[:, :3, :3], P) + M[:, :3, 3]
+        N = np.einsum("nij,nj->ni", M[:, :3, :3], N)
+        # the bind space (+X left, +Z ahead) to the seat frame (+X right,
+        # -Z ahead): half a turn about +Y, round the hip point
+        P = (P - O) * np.array([-1.0, 1.0, -1.0])
+        N = N * np.array([-1.0, 1.0, -1.0])
+        e = parts.setdefault(m["mat"], {"P": [], "N": [], "UV": [], "C": [], "I": [], "n": 0})
+        e["P"].append(P); e["N"].append(N); e["UV"].append(UV); e["C"].append(C)
+        e["I"].append(I + e["n"]); e["n"] += len(P)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    cen, ntri = write_static(parts, path, "Self")
+    P = np.vstack([np.vstack(e["P"]) for e in parts.values()]).astype(np.float32).astype(np.float64)
+    lo, hi = P.min(0), P.max(0)
+    print(f"IVA self: {ntri} tris, box {np.round(lo, 3).tolist()}..{np.round(hi, 3).tolist()} -> "
+          f"{os.path.relpath(path, ROOT)}")
+    return lo, hi, [m for m in MAT_ORDER if m in parts]
+
+
+def write_iva_selves(lo, hi, mats):
+    """The Self<k> nodes of every IVA prefab: the new box centre (the engine
+    centres a mesh on its box) and the suit's materials. Nothing else in
+    the prefabs is touched (tools/gen_iva.py writes the same when it runs)."""
+    import glob
+    import re
+    c = (np.asarray(lo) + np.asarray(hi)) / 2
+    body = ",\n".join(f'                "{n}": {SUIT_MATS[n]()}' for n in mats)
+    block = f"object_materials: {{\n{body},\n            }},"
+    for path in sorted(glob.glob(os.path.join(ROOT, "prefabs", "Iva*.prefab.ron"))):
+        r = open(path).read()
+        out, pos, n = [], 0, 0
+        for mt in re.finditer(r'\n        name: "Self\d+",', r):
+            s0 = mt.start()
+            e0 = r.index("\n    ),", s0)
+            node = r[s0:e0]
+            node = re.sub(r"translation: \([^)]*\)", f"translation: ({c[0]:.4f}, {c[1]:.4f}, {c[2]:.4f})", node, count=1)
+            a = node.index("object_materials: {")
+            b = node.index("\n            },", a) + len("\n            },")
+            node = node[:a] + block + node[b:]
+            out.append(r[pos:s0]); out.append(node); pos = e0
+            n += 1
+        out.append(r[pos:])
+        if n:
+            with open(path, "w") as f:
+                f.write("".join(out))
+            print(f"{os.path.relpath(path, ROOT)}: {n} Self node(s)")
+
+
 def main():
     dry = "--dry" in sys.argv
     if not dry:
@@ -981,6 +1197,7 @@ def main():
     tmp = tempfile.mkdtemp(prefix="gen_suit_")
     centres = {}
     rig_male = None
+    self_box = None
     lods = [0] if "--lod0" in sys.argv else LODS
     try:
         for sex in ("male", "female"):
@@ -1007,6 +1224,8 @@ def main():
                     # every LOD on the same rig, its box pinned to the same
                     # centre, so a model swap never moves the crew member
                     write_suit(suit, rig, path if lod == 0 else os.path.join(MODELS, f"astronaut_{sex}_lod{lod}.glb"))
+                if sex == "male" and lod == SELF_LOD and not dry:
+                    self_box = write_self(rig, npz)
             for part in HELMET_PARTS:
                 out = os.path.join(MODELS, f"{part}_{sex}.glb")
                 if dry:
@@ -1020,6 +1239,8 @@ def main():
     if "--scene" in sys.argv and not dry:
         write_scene(rig_male, centres)
         write_prefabs()
+        if self_box is not None:
+            write_iva_selves(*self_box)
 
 
 if __name__ == "__main__":
