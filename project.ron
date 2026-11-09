@@ -18,6 +18,7 @@
     ],
     ui_font: "fonts/SolarUI.ttf",
     terrain_generator: Some(4),
+    fog_method: Some(Grid),
     script_vec3: Some(Exact),
     model_texture_filter: Some(Smooth),
     glass_refraction: Some(Auto),
